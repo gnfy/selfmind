@@ -8,6 +8,7 @@ import (
 
 	"selfmind/internal/kernel/memory"
 	"selfmind/internal/platform/config"
+	"selfmind/internal/platform/log"
 )
 
 // InitStorage loads config, creates the data directory, and wires up the
@@ -35,7 +36,7 @@ func InitStorage(cfg *config.Config) (*memory.MemoryManager, string, error) {
 
 	storage, err := memory.NewSQLiteProvider(dataDir)
 	if err != nil {
-		fmt.Printf("[WARN] Failed to init SQLite, using nil storage: %s\n", err)
+		log.Warn("failed to init SQLite, using nil storage", "error", err)
 		return nil, dataDir, nil
 	}
 

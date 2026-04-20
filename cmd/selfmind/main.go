@@ -7,8 +7,10 @@ import (
 
 	"selfmind/internal/app"
 	"selfmind/internal/gateway/cli"
+	"selfmind/internal/kernel"
 	"selfmind/internal/kernel/memory"
 	"selfmind/internal/platform/config"
+	"selfmind/internal/platform/log"
 	"selfmind/internal/tools"
 )
 
@@ -18,39 +20,44 @@ func main() {
 		cfg = &config.Config{}
 	}
 
+	log.Init(log.Options{Level: cfg.Agent.LogLevel})
+
 	mem, dataDir, err := app.InitStorage(cfg)
 	if err != nil {
-		println("[FATAL] app.InitStorage:", err.Error())
-		os.Exit(1)
+		log.Fatal("app.InitStorage failed", "error", err)
 	}
 
 	agent, err := app.InitAgent(mem, cfg)
 	if err != nil {
-		println("[FATAL] app.InitAgent:", err.Error())
-		os.Exit(1)
+		log.Fatal("app.InitAgent failed", "error", err)
 	}
 
-	disp, err := app.InitTools(mem, cfg, agent)
+	skillStore := kernel.NewSkillStore(mem)
+	disp, err := app.InitTools(mem, cfg, agent, skillStore)
 	if err != nil {
-		println("[FATAL] app.InitTools:", err.Error())
-		os.Exit(1)
+		log.Fatal("app.InitTools failed", "error", err)
 	}
 
 	agent.SetBackend(disp)
 
-	gwDeps, err := app.InitGateway(dataDir, mem, agent, cfg)
+	gwDeps, err := app.InitGateway(dataDir, mem, agent, cfg, skillStore)
 	if err != nil {
-		println("[FATAL] app.InitGateway:", err.Error())
-		os.Exit(1)
+		log.Fatal("app.InitGateway failed", "error", err)
 	}
 	app.RegisterCronTool(disp, gwDeps.CronScheduler)
 
 	app.InitMCP(disp, cfg)
 
-	ctrl := cli.NewControllerWithGateway(gwDeps.Gateway, agent, nil, cfg.Agent.Provider, cfg.Agent.Model)
+	// CLI 默认租户：从环境变量读取，支持多实例隔离
+	tenantID := os.Getenv("SELF_TENANT_ID")
+	if tenantID == "" {
+		tenantID = "user1"
+	}
+
+	ctrl := cli.NewControllerWithGateway(gwDeps.Gateway, agent, nil, cfg.Agent.Provider, cfg.Agent.Model, cfg)
 	ctrl.SetSessionSearchFn(mem.SearchFn("default"))
 
-	memFn := func() (*memory.MemoryManager, string, string) { return mem, "user1", "cli" }
+	memFn := func() (*memory.MemoryManager, string, string) { return mem, tenantID, "cli" }
 	msgFn := func() ([]byte, error) {
 		msgs, err := cli.GetCheckpointMessages()
 		if err != nil || msgs == nil {

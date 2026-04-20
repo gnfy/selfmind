@@ -27,6 +27,15 @@ type ProcessRecord struct {
 	FinishedAt time.Time `json:"finished_at"`
 }
 
+// SkillMetric tracks usage metrics for a skill per tenant.
+type SkillMetric struct {
+	SkillName string    `json:"skill_name"`
+	TenantID  string    `json:"tenant_id"`
+	CallCount int       `json:"call_count"`
+	FailCount int       `json:"fail_count"`
+	LastUsed  time.Time `json:"last_used"`
+}
+
 // StorageProvider 定义存储后端接口，以支持 SQLite, Postgres, MySQL 等
 type StorageProvider interface {
 	SaveTrajectory(ctx context.Context, tenantID, channel string, traj []byte) error
@@ -57,6 +66,13 @@ type StorageProvider interface {
 	UpdateProcessStatus(ctx context.Context, tenantID, id, status string, exitCode int) error
 	ListProcesses(ctx context.Context, tenantID string) ([]ProcessRecord, error)
 	GetProcess(ctx context.Context, tenantID, id string) (*ProcessRecord, error)
+
+	// Skill metrics operations
+	RecordSkillCall(ctx context.Context, tenantID, skillName string) error
+	RecordSkillFailure(ctx context.Context, tenantID, skillName string) error
+	ListSkillMetrics(ctx context.Context, tenantID string) ([]SkillMetric, error)
+	PruneSkills(ctx context.Context, tenantID string, thresholdDays int) (int, error)
+	GetSkillMetric(ctx context.Context, tenantID, skillName string) (*SkillMetric, error)
 }
 
 // MemoryManager 管理存储后端并处理租户上下文
@@ -243,4 +259,44 @@ func (m *MemoryManager) GetProcess(ctx context.Context, tenantID, id string) (*P
 		return nil, nil
 	}
 	return m.provider.GetProcess(ctx, tenantID, id)
+}
+
+// RecordSkillCall increments the call count for a skill.
+func (m *MemoryManager) RecordSkillCall(ctx context.Context, tenantID, skillName string) error {
+	if m.provider == nil {
+		return nil
+	}
+	return m.provider.RecordSkillCall(ctx, tenantID, skillName)
+}
+
+// RecordSkillFailure increments the failure count for a skill.
+func (m *MemoryManager) RecordSkillFailure(ctx context.Context, tenantID, skillName string) error {
+	if m.provider == nil {
+		return nil
+	}
+	return m.provider.RecordSkillFailure(ctx, tenantID, skillName)
+}
+
+// ListSkillMetrics returns all skill metrics for a tenant.
+func (m *MemoryManager) ListSkillMetrics(ctx context.Context, tenantID string) ([]SkillMetric, error) {
+	if m.provider == nil {
+		return nil, nil
+	}
+	return m.provider.ListSkillMetrics(ctx, tenantID)
+}
+
+// PruneSkills removes low-value skill metrics based on call count and recency thresholds.
+func (m *MemoryManager) PruneSkills(ctx context.Context, tenantID string, thresholdDays int) (int, error) {
+	if m.provider == nil {
+		return 0, nil
+	}
+	return m.provider.PruneSkills(ctx, tenantID, thresholdDays)
+}
+
+// GetSkillMetric returns the metric record for a single skill.
+func (m *MemoryManager) GetSkillMetric(ctx context.Context, tenantID, skillName string) (*SkillMetric, error) {
+	if m.provider == nil {
+		return nil, nil
+	}
+	return m.provider.GetSkillMetric(ctx, tenantID, skillName)
 }

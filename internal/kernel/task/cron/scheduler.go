@@ -4,13 +4,13 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"log"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/robfig/cron/v3"
 	"selfmind/internal/kernel/memory"
+	"selfmind/internal/platform/log"
 	"selfmind/internal/tools"
 )
 
@@ -32,10 +32,16 @@ type CronJob struct {
 type Scheduler struct {
 	db     *sql.DB
 	mem    *memory.MemoryManager
+	pruner SkillPruner // optional; used for skill-pruner jobs
 	parser cron.Parser
 	cron   *cron.Cron
 	mu     sync.RWMutex
 	stopCh chan struct{}
+}
+
+// SkillPruner is the interface for skill pruning, implemented by SkillStore.
+type SkillPruner interface {
+	Prune(ctx context.Context, tenantID string, thresholdDays int) (int, error)
 }
 
 // NewScheduler creates a new cron scheduler backed by a dedicated SQLite DB.
@@ -47,6 +53,12 @@ func NewScheduler(db *sql.DB, mem *memory.MemoryManager) *Scheduler {
 		cron:   cron.New(cron.WithParser(cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow))),
 		stopCh: make(chan struct{}),
 	}
+}
+
+// SetSkillPruner configures the skill pruner for skill-pruner cron jobs.
+// Must be called before Scheduler.Start().
+func (s *Scheduler) SetSkillPruner(pruner SkillPruner) {
+	s.pruner = pruner
 }
 
 // InitSchema creates the cron_jobs table if it doesn't exist.
@@ -181,7 +193,7 @@ func (s *Scheduler) Start(ctx context.Context) error {
 			return err
 		}
 		if err := s.scheduleJobLocked(j.ID, &j); err != nil {
-			log.Printf("cron: failed to schedule job %d (%s): %v", j.ID, j.Name, err)
+			log.Debug("cron: failed to schedule job", "job_id", j.ID, "job_name", j.Name, "error", err)
 		}
 	}
 	s.mu.Unlock()
@@ -209,7 +221,7 @@ func (s *Scheduler) scheduleJobLocked(id int64, job *CronJob) error {
 	}
 	if int64(entryID) != id {
 		// Entry ID mismatch — SQLite id and cron entry id should align
-		log.Printf("cron: warning: job %d entry id %v mismatch", id, entryID)
+		log.Debug("cron: warning: job %d entry id %v mismatch", id, entryID)
 	}
 	return nil
 }
@@ -227,7 +239,7 @@ func (s *Scheduler) runJob(ctx context.Context, job *CronJob) {
 		return
 	}
 
-	log.Printf("cron: running job %d (%s) for tenant %s", job.ID, job.Name, job.TenantID)
+	log.Debug("cron: running job %d (%s) for tenant %s", job.ID, job.Name, job.TenantID)
 
 	// Update last_run
 	now := time.Now()
@@ -235,16 +247,30 @@ func (s *Scheduler) runJob(ctx context.Context, job *CronJob) {
 		"UPDATE cron_jobs SET last_run = ? WHERE id = ?",
 		now.Unix(), job.ID)
 
-	// Build a task-like prompt and hand off to memory/gateway
-	// For now: index a marker so the agent picks it up on next conversation
-	// A full implementation would spawn a sub-agent goroutine here
+	// Handle built-in skill prune job
+	if strings.HasPrefix(job.Prompt, "skill_prune:") {
+		tenantID := strings.TrimPrefix(job.Prompt, "skill_prune:")
+		tenantID = strings.TrimSpace(tenantID)
+		if s.pruner != nil {
+			pruned, err := s.pruner.Prune(ctx, tenantID, 30)
+			if err != nil {
+				log.Debug("cron: skill prune failed for %s: %v", tenantID, err)
+			} else {
+				log.Debug("cron: pruned %d low-value skill records for tenant %s", pruned, tenantID)
+			}
+		}
+		log.Debug("cron: job %d (%s) completed", job.ID, job.Name)
+		return
+	}
+
+	// Default: index a marker so the agent picks it up on next conversation
 	trajectoryData := fmt.Sprintf(`[cron job "%s" triggered at %s] %s`,
 		job.Name, now.Format(time.RFC3339), job.Prompt)
 
 	_ = s.mem.IndexSession(ctx, job.TenantID, job.Channel,
 		fmt.Sprintf("cron-%d-%d", job.ID, now.Unix()), []byte(trajectoryData))
 
-	log.Printf("cron: job %d (%s) completed", job.ID, job.Name)
+	log.Debug("cron: job %d (%s) completed", job.ID, job.Name)
 }
 
 // btoi converts bool to int (SQLite integer).

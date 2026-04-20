@@ -59,6 +59,12 @@ delegation:
 
 cron:
   enabled: true
+
+editor:
+  # 粘贴内容超过此字符数时显示占位符（0=禁用）
+  large_paste_chars: 1000
+  # 粘贴内容超过此行数时显示占位符（0=禁用）
+  large_paste_lines: 10
 `
 
 type Config struct {
@@ -69,6 +75,12 @@ type Config struct {
 	MCP        MCPConfig         `mapstructure:"mcp"`
 	Delegation DelegationConfig  `mapstructure:"delegation"`
 	Cron       CronConfig        `mapstructure:"cron"`
+	Editor     EditorConfig      `mapstructure:"editor"`
+}
+
+type EditorConfig struct {
+	LargePasteChars int `mapstructure:"large_paste_chars"`
+	LargePasteLines int `mapstructure:"large_paste_lines"`
 }
 
 // MCPConfig MCP 服务器配置
@@ -93,6 +105,7 @@ type EvolutionConfig struct {
 	Mode                   string  `mapstructure:"mode"`
 	MinComplexityThreshold int     `mapstructure:"min_complexity_threshold"`
 	AutoArchiveConfidence  float64 `mapstructure:"auto_archive_confidence"`
+	NudgeInterval         int     `mapstructure:"nudge_interval"`
 }
 
 type AgentConfig struct {
@@ -152,6 +165,8 @@ func LoadConfig() (*Config, error) {
 	v.SetDefault("agent.log_level", "INFO")
 	v.SetDefault("storage.type", "sqlite")
 	v.SetDefault("storage.data_dir", "~/.selfmind/data")
+	v.SetDefault("editor.large_paste_chars", 1000)
+	v.SetDefault("editor.large_paste_lines", 10)
 
 	// 2. 加载配置文件
 	home, _ := os.UserHomeDir()

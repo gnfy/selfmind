@@ -23,6 +23,20 @@ func (m *mockStorage) GetFacts(ctx context.Context, tenantID string, target stri
 func (m *mockStorage) RemoveFact(ctx context.Context, tenantID string, id string) error { return nil }
 func (m *mockStorage) Close() error { return nil }
 
+func (m *mockStorage) GetPermission(ctx context.Context, tenantID, toolName string) (bool, error) { return true, nil }
+func (m *mockStorage) SetPermission(ctx context.Context, tenantID, toolName string, allowed bool) error { return nil }
+func (m *mockStorage) SetSecret(ctx context.Context, tenantID, keyName, value string) error { return nil }
+func (m *mockStorage) GetSecret(ctx context.Context, tenantID, keyName string) (string, error) { return "", nil }
+func (m *mockStorage) SaveProcess(ctx context.Context, tenantID string, proc memory.ProcessRecord) error { return nil }
+func (m *mockStorage) UpdateProcessStatus(ctx context.Context, tenantID, id, status string, exitCode int) error { return nil }
+func (m *mockStorage) ListProcesses(ctx context.Context, tenantID string) ([]memory.ProcessRecord, error) { return nil, nil }
+func (m *mockStorage) GetProcess(ctx context.Context, tenantID, id string) (*memory.ProcessRecord, error) { return nil, nil }
+func (m *mockStorage) RecordSkillCall(ctx context.Context, tenantID, skillName string) error { return nil }
+func (m *mockStorage) RecordSkillFailure(ctx context.Context, tenantID, skillName string) error { return nil }
+func (m *mockStorage) ListSkillMetrics(ctx context.Context, tenantID string) ([]memory.SkillMetric, error) { return nil, nil }
+func (m *mockStorage) PruneSkills(ctx context.Context, tenantID string, thresholdDays int) (int, error) { return 0, nil }
+func (m *mockStorage) GetSkillMetric(ctx context.Context, tenantID, skillName string) (*memory.SkillMetric, error) { return nil, nil }
+
 type mockLLMProvider struct{}
 func (p *mockLLMProvider) ChatCompletion(ctx context.Context, messages []llm.Message) (string, error) {
 	return "mock response", nil
@@ -41,6 +55,9 @@ func (p *mockLLMProvider) StreamChat(ctx context.Context, req llm.ChatRequest) (
 type mockBackend struct{}
 func (b *mockBackend) Dispatch(name string, args map[string]interface{}) (string, error) {
 	return "mock dispatch: " + name, nil
+}
+func (b *mockBackend) GetToolDefinitions() []map[string]interface{} {
+	return []map[string]interface{}{}
 }
 
 func TestAgentRun(t *testing.T) {

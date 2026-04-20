@@ -20,7 +20,7 @@ import (
 	"selfmind/internal/kernel"
 	"selfmind/internal/kernel/llm"
 	"selfmind/internal/kernel/memory"
-
+	"selfmind/internal/platform/config"
 	"selfmind/internal/tools"
 	"selfmind/internal/ui/common"
 	"selfmind/internal/ui/components"
@@ -91,7 +91,7 @@ type uiModel struct {
 
 type MsgClearStatus struct{}
 
-func NewController(a *kernel.Agent, provider llm.Provider) *Controller {
+func NewController(a *kernel.Agent, provider llm.Provider, cfg *config.Config) *Controller {
 	c := &common.Common{
 		Styles: common.DefaultStyles(),
 	}
@@ -99,16 +99,20 @@ func NewController(a *kernel.Agent, provider llm.Provider) *Controller {
 	sp.Spinner = spinner.Dot
 	sp.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
 
+	var editorCfg *config.EditorConfig
+	if cfg != nil {
+		editorCfg = &cfg.Editor
+	}
+
 	return &Controller{
 		model: &uiModel{
 			common:       c,
 			sidebar:      sidebar.New(c),
 			status:       status.New(c),
-			editor:       components.NewEditor(c),
+			editor:       components.NewEditor(c, editorCfg),
 			messages:     []ChatMessage{},
 			thinking:     false,
 			provider:     provider,
-			agent:        a,
 			tenantID:     "user1",
 			channel:      "cli",
 			spinner:      sp,
@@ -121,7 +125,7 @@ func NewController(a *kernel.Agent, provider llm.Provider) *Controller {
 	}
 }
 
-func NewControllerWithGateway(gw *router.Gateway, agent *kernel.Agent, provider llm.Provider, providerName, modelName string) *Controller {
+func NewControllerWithGateway(gw *router.Gateway, agent *kernel.Agent, provider llm.Provider, providerName, modelName string, cfg *config.Config) *Controller {
 	c := &common.Common{
 		Styles: common.DefaultStyles(),
 	}
@@ -129,12 +133,17 @@ func NewControllerWithGateway(gw *router.Gateway, agent *kernel.Agent, provider 
 	sp.Spinner = spinner.Dot
 	sp.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
 
+	var editorCfg *config.EditorConfig
+	if cfg != nil {
+		editorCfg = &cfg.Editor
+	}
+
 	return &Controller{
 		model: &uiModel{
 			common:       c,
 			sidebar:      sidebar.New(c),
 			status:       status.New(c),
-			editor:       components.NewEditor(c),
+			editor:       components.NewEditor(c, editorCfg),
 			messages:     []ChatMessage{},
 			thinking:     false,
 			provider:     provider,
@@ -188,10 +197,33 @@ func (c *Controller) checkMigration() {
 func (c *Controller) Start() {
 	c.checkMigration()
 	tools.RegisterClarifyCallback()
-	p := tea.NewProgram(c.model, tea.WithAltScreen(), tea.WithMouseCellMotion())
+	p := tea.NewProgram(c.model,
+		tea.WithAltScreen(),
+		tea.WithMouseCellMotion(),
+	)
 	c.model.program = p
-	if _, err := p.Run(); err != nil {
-		fmt.Printf("Error: %v\n", err)
+
+	// Wrap p.Run() in a recovered goroutine so panics print to stderr and restore alt screen
+	type result struct {
+		model tea.Model
+		err   error
+	}
+	resCh := make(chan result, 1)
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				os.Stderr.WriteString("\x1b[?1049l")
+				os.Stderr.WriteString(fmt.Sprintf("panic: %v\n", r))
+				os.Exit(1)
+			}
+		}()
+		val, err := p.Run()
+		resCh <- result{val, err}
+	}()
+	res := <-resCh
+	if res.err != nil {
+		os.Stderr.WriteString("\x1b[?1049l")
+		os.Stderr.WriteString(fmt.Sprintf("Error: %v\n", res.err))
 		os.Exit(1)
 	}
 	if c.cleanupFn != nil {
@@ -595,41 +627,60 @@ func (m *uiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *uiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "ctrl+c":
-		if m.thinking || m.toolExecuting != "" {
-			if m.cancelFn != nil {
-				m.cancelFn()
-				m.thinking = false
-				m.toolExecuting = ""
-				m.statusMsg = "Task cancelled by user."
-				return m, tea.Tick(time.Second*3, func(t time.Time) tea.Msg {
-					return MsgClearStatus{}
-				})
-			}
-			return m, nil
-		}
-		return m, tea.Quit
-	case "ctrl+l":
-		m.messages = []ChatMessage{}
-		m.viewport.SetContent("")
-		return m, nil
-	case "enter":
-		input := m.editor.Value()
-		if input == "" {
-			return m, nil
-		}
+	switch msg.Type {
 
-		if strings.HasPrefix(input, "/") {
-			return m, m.handleCommand(input)
+	// Alt+Enter or Ctrl+J inserts a newline (multi-line input)
+	case tea.KeyCtrlJ:
+		m.editor.Update(msg)
+		return m, nil
+
+	default:
+		switch msg.String() {
+		case "ctrl+c":
+			// Priority 1: if input has content, clear it (don't quit)
+			if input := m.editor.Value(); input != "" {
+				m.editor.Reset()
+				return m, nil
+			}
+			// Priority 2: if agent is thinking or tool running, cancel it
+			if m.thinking || m.toolExecuting != "" {
+				if m.cancelFn != nil {
+					m.cancelFn()
+					m.thinking = false
+					m.toolExecuting = ""
+					m.statusMsg = "Task cancelled by user."
+					return m, tea.Tick(time.Second*3, func(t time.Time) tea.Msg {
+						return MsgClearStatus{}
+					})
+				}
+				return m, nil
+			}
+			// Priority 3: quit
+			return m, tea.Quit
+		case "ctrl+l":
+			m.messages = []ChatMessage{}
+			m.viewport.SetContent("")
+			return m, nil
+		case "enter":
+			// Alt+Enter / Ctrl+J already handled above via KeyCtrlJ
+			// Here plain Enter submits
+			// Use ExpandValue() to replace paste placeholders with actual content.
+			input := m.editor.ExpandValue()
+			if input == "" {
+				return m, nil
+			}
+
+			if strings.HasPrefix(input, "/") {
+				return m, m.handleCommand(input)
+			}
+			m.addMessage("user", input)
+			m.editor.Reset()
+			m.thinking = true
+			m.thinkingStart = time.Now()
+			ctx, cancel := context.WithCancel(context.Background())
+			m.cancelFn = cancel
+			return m, tea.Batch(m.runAgent(ctx, input), m.spinner.Tick)
 		}
-		m.addMessage("user", input)
-		m.thinking = true
-		m.thinkingStart = time.Now()
-		ctx, cancel := context.WithCancel(context.Background())
-		m.cancelFn = cancel
-		// FIXED: Return spinner.Tick to ensure the animation starts immediately
-		return m, tea.Batch(m.runAgent(ctx, input), m.spinner.Tick)
 	}
 	m.editor.Update(msg)
 	return m, nil
@@ -652,6 +703,8 @@ func (m *uiModel) handleCommand(input string) tea.Cmd {
 		return m.handleStatus()
 	case "/tasks":
 		return m.handleTasks()
+	case "/skills":
+		return m.handleSkills(parts[1:])
 	case "/checkpoint":
 		if len(parts) < 2 {
 			m.addMessage("assistant", "Usage: /checkpoint [list|save|load] [name]")
@@ -733,6 +786,50 @@ func (m *uiModel) handleTasks() tea.Cmd {
 				status, t.ID, t.Title, t.CreatedAt.Format("01-02 15:04")))
 		}
 		return MsgAgentDone{Response: sb.String()}
+	}
+}
+
+func (m *uiModel) handleSkills(args []string) tea.Cmd {
+	return func() tea.Msg {
+		if m.agent == nil || m.agent.Reflector == nil {
+			return MsgAgentDone{Response: "Agent or reflection engine not initialized."}
+		}
+
+		// /skills list
+		if len(args) == 0 || args[0] == "list" {
+			skills, err := m.agent.Reflector.ListSkills()
+			if err != nil {
+				return MsgAgentDone{Response: fmt.Sprintf("Error listing skills: %v", err)}
+			}
+			if len(skills) == 0 {
+				return MsgAgentDone{Response: "No skills found. Skills are created automatically when you complete complex tasks."}
+			}
+			var sb strings.Builder
+			sb.WriteString(fmt.Sprintf("## Skills (%d)\n\n", len(skills)))
+			for _, s := range skills {
+				desc := s.Description
+				if desc == "" {
+					desc = "(no description)"
+				}
+				sb.WriteString(fmt.Sprintf("- **%s**: %s\n  _%s_\n", s.Name, desc, s.FilePath))
+			}
+			sb.WriteString("\n_Delete with: /skills delete <name>_")
+			return MsgAgentDone{Response: sb.String()}
+		}
+
+		// /skills delete <name>
+		if args[0] == "delete" {
+			if len(args) < 2 {
+				return MsgAgentDone{Response: "Usage: /skills delete <name>"}
+			}
+			name := args[1]
+			if err := m.agent.Reflector.DeleteSkill(name); err != nil {
+				return MsgAgentDone{Response: fmt.Sprintf("Error deleting skill '%s': %v", name, err)}
+			}
+			return MsgAgentDone{Response: fmt.Sprintf("Skill '%s' deleted.", name)}
+		}
+
+		return MsgAgentDone{Response: "Usage: /skills [list|delete <name>]"}
 	}
 }
 
@@ -1035,10 +1132,11 @@ const helpText = `Available commands:
   /clear      - Clear conversation history
   /status     - Show system status and background processes
   /tasks      - List global tasks
+  /skills     - List or delete managed skills
   /checkpoint - Conversation snapshot (list|save|load)
   /migrate    - Migrate skills from Hermes Agent
   /exit       - Exit (or Ctrl+C)
-  
+
 Shortcuts:
   Ctrl+C      - Cancel running task or Exit
   Ctrl+L      - Clear screen`

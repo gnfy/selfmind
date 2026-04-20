@@ -2,8 +2,8 @@ package wechat
 
 import (
 	"context"
-	"fmt"
 	"selfmind/internal/gateway/channel"
+	"selfmind/internal/platform/log"
 )
 
 // Adapter implements the WeChat platform logic.
@@ -23,6 +23,6 @@ func (a *Adapter) HandleRequest(ctx context.Context, openID, content string) (st
 
 // SendMessage is used for asynchronous replies (Customer Service API).
 func (a *Adapter) SendMessage(ctx context.Context, openID, text string) error {
-	fmt.Printf("[WeChat] Sending to %s: %s\n", openID, text)
+	log.Info("wechat message sent", "openID", openID, "text", text)
 	return nil
 }

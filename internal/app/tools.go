@@ -11,11 +11,11 @@ import (
 )
 
 // InitTools wires up the dispatcher, built-in tools, extended tools,
-// the skill loader, and injects the session search function.
-func InitTools(mem *memory.MemoryManager, cfg *config.Config, ag *kernel.Agent) (*tools.Dispatcher, error) {
+// the skill loader, the skill metrics middleware, and injects the session search function.
+func InitTools(mem *memory.MemoryManager, cfg *config.Config, ag *kernel.Agent, skillStore *kernel.SkillStore) (*tools.Dispatcher, error) {
 	disp := tools.NewDispatcher()
 
-	// 1. 注册认证中间件（从持久化层加载权限）
+	// 1. Register auth middleware (load permissions from persistent layer)
 	disp.InjectMiddleware(tools.AuthMiddleware(mem))
 
 	tools.RegisterBuiltins(disp)
@@ -34,12 +34,17 @@ func InitTools(mem *memory.MemoryManager, cfg *config.Config, ag *kernel.Agent) 
 
 	disp.InjectDelegateFn(MakeDelegateFn(mem, disp, cfg.Delegation))
 
-	// Register Approval Middleware
+	// 2. Register approval middleware
 	root, _ := os.Getwd()
 	disp.InjectMiddleware(tools.SmartApprovalMiddleware(root))
 
-	// Register Vision LLM
+	// 3. Register Vision LLM
 	disp.InjectVisionLLM(ag)
+
+	// 4. Register skill metrics middleware (tracks call/fail counts for skill:* tools)
+	if skillStore != nil {
+		disp.InjectMiddleware(tools.SkillMetricsMiddleware(skillStore))
+	}
 
 	return disp, nil
 }

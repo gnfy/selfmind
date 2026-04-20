@@ -1,17 +1,19 @@
 package tools
 
 import (
+	"context"
 	"fmt"
 	"testing"
 )
 
 func TestAuthMiddleware(t *testing.T) {
-	// Middleware applies in reverse order: outermost runs first
-	// TenantIsolationMiddleware sets _tenant_id, then AuthMiddleware checks it
+	// Middleware chain: TenantIsolationMiddleware -> AuthMiddleware -> inner executor
+	// Applied in reverse: TenantIsolationMiddleware wraps AuthMiddleware, which wraps the inner ToolExecutor
+	inner := func(args map[string]interface{}) (string, error) {
+		return "ok", nil
+	}
 	exec := TenantIsolationMiddleware("test-tenant")(
-		AuthMiddleware(func(args map[string]interface{}) (string, error) {
-			return "ok", nil
-		}),
+		AuthMiddleware(&mockPermStorage{})(inner),
 	)
 
 	result, err := exec(map[string]interface{}{})
@@ -21,6 +23,12 @@ func TestAuthMiddleware(t *testing.T) {
 	if result != "ok" {
 		t.Errorf("expected 'ok', got %q", result)
 	}
+}
+
+// mockPermStorage implements the permission getter for AuthMiddleware
+type mockPermStorage struct{}
+func (m *mockPermStorage) GetPermission(ctx context.Context, tenantID, toolName string) (bool, error) {
+	return true, nil
 }
 
 func TestApprovalMiddleware_DryRun(t *testing.T) {

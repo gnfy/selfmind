@@ -69,6 +69,71 @@ func ToToolDefinition(t Tool) map[string]interface{} {
 	}
 }
 
+// ValidateArgs checks that all required fields are present and types match.
+// Returns an error describing the first validation failure.
+func ValidateArgs(schema ToolSchema, args map[string]interface{}) error {
+	if schema.Properties == nil {
+		return nil
+	}
+
+	// Check required fields
+	for _, required := range schema.Required {
+		if _, ok := args[required]; !ok {
+			return fmt.Errorf("missing required parameter: %s", required)
+		}
+	}
+
+	// Type-check present arguments
+	for param, val := range args {
+		def, ok := schema.Properties[param]
+		if !ok {
+			// Unknown parameter — skip, don't error (forward-compat)
+			continue
+		}
+		if err := validateType(param, val, def.Type); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func validateType(param string, val interface{}, expectedType string) error {
+	switch expectedType {
+	case "string":
+		if _, ok := val.(string); !ok {
+			return fmt.Errorf("parameter %s must be a string, got %T", param, val)
+		}
+	case "integer":
+		switch val.(type) {
+		case int, int8, int16, int32, int64, float64:
+			// numeric coercion OK
+		default:
+			return fmt.Errorf("parameter %s must be an integer, got %T", param, val)
+		}
+	case "number":
+		switch val.(type) {
+		case int, int8, int16, int32, int64, float64:
+			// numeric OK
+		default:
+			return fmt.Errorf("parameter %s must be a number, got %T", param, val)
+		}
+	case "boolean":
+		if _, ok := val.(bool); !ok {
+			return fmt.Errorf("parameter %s must be a boolean, got %T", param, val)
+		}
+	case "array":
+		if _, ok := val.([]interface{}); !ok {
+			return fmt.Errorf("parameter %s must be an array, got %T", param, val)
+		}
+	case "object":
+		if _, ok := val.(map[string]interface{}); !ok {
+			return fmt.Errorf("parameter %s must be an object, got %T", param, val)
+		}
+	}
+	return nil
+}
+
 // CoerceArgs 将 string/bool/int 等动态类型强制转换为 schema 声明的类型
 func CoerceArgs(schema ToolSchema, args map[string]interface{}) (map[string]interface{}, error) {
 	coerced := make(map[string]interface{})

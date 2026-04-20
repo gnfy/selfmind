@@ -3,10 +3,11 @@ package tools
 import (
 	"context"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"selfmind/internal/platform/log"
 )
 
 // AuthMiddleware 检查执行权限
@@ -41,9 +42,10 @@ func ApprovalMiddleware(dryRun bool) Middleware {
 	return func(next ToolExecutor) ToolExecutor {
 		return func(args map[string]interface{}) (string, error) {
 			if dryRun {
+				log.Warn("approval middleware: dry_run=true, tool execution pending")
 				return "", fmt.Errorf("[Approval] dry_run=true, tool execution pending approval")
 			}
-			log.Printf("[Approval] Running tool\n")
+			log.Debug("approval middleware executing")
 			return next(args)
 		}
 	}
@@ -72,12 +74,17 @@ func (r *RateLimitMiddleware) Middleware(next ToolExecutor) ToolExecutor {
 // LoggingMiddleware 记录工具执行的日志中间件
 func LoggingMiddleware(next ToolExecutor) ToolExecutor {
 	return func(args map[string]interface{}) (string, error) {
-		log.Printf("[Tools] Executing with args: %s\n", MarshalArgs(args))
+		log.Debug("tool executing", "args", MarshalArgs(args))
 		result, err := next(args)
 		if err != nil {
-			log.Printf("[Tools] Error: %v\n", err)
+			log.Debug("tool error", "error", err)
 		} else {
-			log.Printf("[Tools] Result: %s\n", result)
+			log.Debug("tool result", "result", func() string {
+				if len(result) > 200 {
+					return result[:200] + "..."
+				}
+				return result
+			}())
 		}
 		return result, err
 	}
@@ -151,6 +158,36 @@ func SmartApprovalMiddleware(projectRoot string) Middleware {
 			}
 
 			return next(args)
+		}
+	}
+}
+
+// SkillMetricsMiddleware records skill execution results (call count and failure count).
+// It only tracks tools whose name starts with "skill:".
+// The skillStore must be non-nil to enable metrics collection.
+func SkillMetricsMiddleware(skillStore interface {
+	RecordResult(ctx context.Context, tenantID, skillName string, success bool) error
+}) Middleware {
+	return func(next ToolExecutor) ToolExecutor {
+		return func(args map[string]interface{}) (string, error) {
+			toolName, _ := args["_tool_name"].(string)
+			tenantID, _ := args["_tenant_id"].(string)
+
+			// Only track skill:* tools
+			if !strings.HasPrefix(toolName, "skill:") || skillStore == nil || tenantID == "" {
+				return next(args)
+			}
+
+			skillName := strings.TrimPrefix(toolName, "skill:")
+			ctx := context.Background()
+
+			result, err := next(args)
+
+			// Record exactly once: success if no error, failure otherwise
+			success := err == nil
+			_ = skillStore.RecordResult(ctx, tenantID, skillName, success)
+
+			return result, err
 		}
 	}
 }

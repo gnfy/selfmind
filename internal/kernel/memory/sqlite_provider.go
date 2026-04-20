@@ -295,7 +295,7 @@ func (p *SQLiteProvider) worker() {
 				err := db.QueryRow(`SELECT id, command, cwd, pid, status, exit_code, started_at, finished_at FROM processes WHERE id = ?`, id).
 					Scan(&p.ID, &p.Command, &p.CWD, &p.PID, &p.Status, &p.ExitCode, &started, &finished)
 				if err != nil {
-					res = dbResult{err: err}
+					res = dbResult{val: nil, err: err}
 				} else {
 					if started.Valid {
 						p.StartedAt, _ = time.Parse("2006-01-02 15:04:05", started.String)
@@ -304,6 +304,71 @@ func (p *SQLiteProvider) worker() {
 						p.FinishedAt, _ = time.Parse("2006-01-02 15:04:05", finished.String)
 					}
 					res = dbResult{val: &p}
+				}
+
+			case "RecordSkillCall":
+				skillName := op.args[1].(string)
+				tenantID := op.args[2].(string)
+				_, err := db.Exec(`INSERT INTO skill_metrics (skill_name, tenant_id, call_count, fail_count, last_used)
+					VALUES (?, ?, 1, 0, CURRENT_TIMESTAMP)
+					ON CONFLICT(skill_name, tenant_id) DO UPDATE SET
+						call_count = call_count + 1,
+						last_used = CURRENT_TIMESTAMP`,
+					skillName, tenantID)
+				res = dbResult{err: err}
+
+			case "RecordSkillFailure":
+				skillName := op.args[1].(string)
+				tenantID := op.args[2].(string)
+				_, err := db.Exec(`UPDATE skill_metrics SET fail_count = fail_count + 1 WHERE skill_name = ? AND tenant_id = ?`,
+					skillName, tenantID)
+				res = dbResult{err: err}
+
+			case "ListSkillMetrics":
+				tenantID := op.args[1].(string)
+				rows, err := db.Query(`SELECT skill_name, tenant_id, call_count, fail_count, last_used FROM skill_metrics WHERE tenant_id = ?`, tenantID)
+				if err != nil {
+					res = dbResult{err: err}
+				} else {
+					var results []SkillMetric
+					for rows.Next() {
+						var m SkillMetric
+						var lastUsed string
+						if err := rows.Scan(&m.SkillName, &m.TenantID, &m.CallCount, &m.FailCount, &lastUsed); err != nil {
+							continue
+						}
+						m.LastUsed, _ = time.Parse("2006-01-02 15:04:05", lastUsed)
+						results = append(results, m)
+					}
+					rows.Close()
+					res = dbResult{val: results}
+				}
+
+			case "PruneSkills":
+				tenantID := op.args[1].(string)
+				thresholdDays := op.args[2].(int)
+				// 淘汰：call_count < 3 AND 超过 thresholdDays 未使用
+				cutoff := time.Now().AddDate(0, 0, -thresholdDays).Format("2006-01-02 15:04:05")
+				result, err := db.Exec(`DELETE FROM skill_metrics WHERE tenant_id = ? AND call_count < 3 AND last_used < ?`, tenantID, cutoff)
+				if err != nil {
+					res = dbResult{val: 0, err: err}
+				} else {
+					n, _ := result.RowsAffected()
+					res = dbResult{val: int(n)}
+				}
+
+			case "GetSkillMetric":
+				skillName := op.args[1].(string)
+				tenantID := op.args[2].(string)
+				var m SkillMetric
+				var lastUsed string
+				err := db.QueryRow(`SELECT skill_name, tenant_id, call_count, fail_count, last_used FROM skill_metrics WHERE skill_name = ? AND tenant_id = ?`,
+					skillName, tenantID).Scan(&m.SkillName, &m.TenantID, &m.CallCount, &m.FailCount, &lastUsed)
+				if err != nil {
+					res = dbResult{val: nil, err: err}
+				} else {
+					m.LastUsed, _ = time.Parse("2006-01-02 15:04:05", lastUsed)
+					res = dbResult{val: &m}
 				}
 			}
 
@@ -374,6 +439,16 @@ func (p *SQLiteProvider) initSchema(db *sql.DB) {
 		exit_code INTEGER DEFAULT 0,
 		started_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 		finished_at DATETIME
+	);`)
+
+	// 7. 技能调用指标表
+	db.Exec(`CREATE TABLE IF NOT EXISTS skill_metrics (
+		skill_name TEXT NOT NULL,
+		tenant_id  TEXT NOT NULL,
+		call_count INTEGER DEFAULT 0,
+		fail_count INTEGER DEFAULT 0,
+		last_used  DATETIME,
+		PRIMARY KEY(skill_name, tenant_id)
 	);`)
 }
 
@@ -541,4 +616,44 @@ func (p *SQLiteProvider) GetProcess(ctx context.Context, tenantID, id string) (*
 		return nil, nil
 	}
 	return val.(*ProcessRecord), nil
+}
+
+func (p *SQLiteProvider) RecordSkillCall(ctx context.Context, tenantID, skillName string) error {
+	_, err := p.call("RecordSkillCall", skillName, tenantID)
+	return err
+}
+
+func (p *SQLiteProvider) RecordSkillFailure(ctx context.Context, tenantID, skillName string) error {
+	_, err := p.call("RecordSkillFailure", skillName, tenantID)
+	return err
+}
+
+func (p *SQLiteProvider) ListSkillMetrics(ctx context.Context, tenantID string) ([]SkillMetric, error) {
+	val, err := p.call("ListSkillMetrics", tenantID)
+	if err != nil {
+		return nil, err
+	}
+	if val == nil {
+		return nil, nil
+	}
+	return val.([]SkillMetric), nil
+}
+
+func (p *SQLiteProvider) PruneSkills(ctx context.Context, tenantID string, thresholdDays int) (int, error) {
+	val, err := p.call("PruneSkills", tenantID, thresholdDays)
+	if err != nil {
+		return 0, err
+	}
+	return val.(int), nil
+}
+
+func (p *SQLiteProvider) GetSkillMetric(ctx context.Context, tenantID, skillName string) (*SkillMetric, error) {
+	val, err := p.call("GetSkillMetric", skillName, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	if val == nil {
+		return nil, nil
+	}
+	return val.(*SkillMetric), nil
 }

@@ -9,24 +9,45 @@ import (
 	"selfmind/internal/kernel/llm"
 	"selfmind/internal/kernel/memory"
 	"selfmind/internal/platform/config"
+	"selfmind/internal/platform/log"
 )
 
 // mockProvider is used when no LLM API key is configured.
 type mockProvider struct{}
 
+const mockSetupGuide = `SelfMind 尚未配置 API Key，无法进行 AI 对话。
+
+请按以下步骤配置：
+
+1. 编辑配置文件：
+   nano ~/.selfmind/config.yaml
+
+2. 在 providers 区块添加你的 API Key，例如：
+   providers:
+     anthropic_api_key: "sk-ant-your-key-here"
+   （或使用 openai_api_key / gemini_api_key / minimax_api_key）
+
+3. 重启 SelfMind
+
+获取 API Key：
+  - Anthropic: https://console.anthropic.com/
+  - OpenAI: https://platform.openai.com/
+  - Gemini: https://aistudio.google.com/
+  - MiniMax: https://platform.minimaxi.com/
+
+配置完成后，SelfMind 将自动使用配置的模型。`
+
 func (m *mockProvider) ChatCompletion(ctx context.Context, messages []llm.Message) (string, error) {
-	return "Mock response: configure an API key in ~/.selfmind/config.yaml to enable LLM inference", nil
+	return mockSetupGuide, nil
 }
 
 func (m *mockProvider) Chat(ctx context.Context, req llm.ChatRequest) (*llm.ChatResponse, error) {
-	return &llm.ChatResponse{
-		Content: "Mock response: configure an API key in ~/.selfmind/config.yaml to enable LLM inference",
-	}, nil
+	return &llm.ChatResponse{Content: mockSetupGuide}, nil
 }
 
 func (m *mockProvider) StreamChat(ctx context.Context, req llm.ChatRequest) (<-chan llm.StreamEvent, error) {
 	ch := make(chan llm.StreamEvent, 1)
-	ch <- llm.StreamEvent{Content: "Mock response: configure an API key in ~/.selfmind/config.yaml to enable LLM inference"}
+	ch <- llm.StreamEvent{Content: mockSetupGuide}
 	close(ch)
 	return ch, nil
 }
@@ -98,7 +119,7 @@ func buildLLMProvider(cfg *config.Config) llm.Provider {
 	case cfg.Providers.OpenRouterAPIKey != "":
 		return llm.NewOpenRouterAdapter(cfg.Providers.OpenRouterAPIKey)
 	default:
-		println("[WARN] No LLM API key configured. Set anthropic_api_key, gemini_api_key, openai_api_key, minimax_api_key or openrouter_api_key in ~/.selfmind/config.yaml")
+		log.Warn("no LLM API key configured, using mock provider", "hint", "set anthropic_api_key in ~/.selfmind/config.yaml")
 		return &mockProvider{}
 	}
 }
@@ -172,15 +193,16 @@ func InitAgent(mem *memory.MemoryManager, cfg *config.Config) (*kernel.Agent, er
 		}
 	}
 
-	refl := &kernel.ReflectionEngine{
-		Provider: provider,
-		Config: kernel.EvolutionConfig{
-			Enabled:                cfg.Evolution.Enabled,
-			Mode:                   cfg.Evolution.Mode,
-			MinComplexityThreshold: cfg.Evolution.MinComplexityThreshold,
-			AutoArchiveConfidence:  cfg.Evolution.AutoArchiveConfidence,
-		},
-	}
+	refl := kernel.NewReflectionEngine(provider, kernel.EvolutionConfig{
+		Enabled:               cfg.Evolution.Enabled,
+		Mode:                  cfg.Evolution.Mode,
+		MinComplexityThreshold: cfg.Evolution.MinComplexityThreshold,
+		AutoArchiveConfidence:  cfg.Evolution.AutoArchiveConfidence,
+		NudgeInterval:         cfg.Evolution.NudgeInterval,
+	})
+
+	// 设置 evolution notify channel（暂时传 nil，后续由 TUI 层注入）
+	refl.SetNotifyChannel(nil)
 
 	maxIter := cfg.Agent.MaxIterations
 	if maxIter == 0 {
@@ -192,5 +214,11 @@ func InitAgent(mem *memory.MemoryManager, cfg *config.Config) (*kernel.Agent, er
 	}
 
 	agent := kernel.NewAgent(mem, nil, provider, cfg.Agent.Soul, maxIter, maxRetries, refl)
+
+	// 设置 nudge interval
+	if cfg.Evolution.NudgeInterval > 0 {
+		agent.SetNudgeInterval(cfg.Evolution.NudgeInterval)
+	}
+
 	return agent, nil
 }

@@ -174,20 +174,32 @@ func TestListTools(t *testing.T) {
 	reg := NewRegistry()
 	disp := &Dispatcher{registry: reg}
 
-	reg.Register(NewListFilesTool())
-	reg.Register(NewReadFileTool())
+	// Register two tools with different names
+	tool1 := &MockTool{BaseTool: BaseTool{
+		name:        "tool_alpha",
+		description: "First tool",
+		schema:      ToolSchema{Type: "object", Properties: map[string]PropertyDef{}},
+		handler:     func(args map[string]interface{}) (string, error) { return "alpha", nil },
+	}}
+	tool2 := &MockTool{BaseTool: BaseTool{
+		name:        "tool_beta",
+		description: "Second tool",
+		schema:      ToolSchema{Type: "object", Properties: map[string]PropertyDef{}},
+		handler:     func(args map[string]interface{}) (string, error) { return "beta", nil },
+	}}
+	reg.Register(tool1)
+	reg.Register(tool2)
 
 	tools := disp.ListTools()
 	if len(tools) != 2 {
 		t.Errorf("expected 2 tools, got %d: %v", len(tools), tools)
 	}
-	// Verify both tools are present
 	found := make(map[string]bool)
 	for _, n := range tools {
 		found[n] = true
 	}
-	if !found["list_files"] || !found["read_file"] {
-		t.Errorf("expected list_files and read_file, got %v", tools)
+	if !found["tool_alpha"] || !found["tool_beta"] {
+		t.Errorf("expected tool_alpha and tool_beta, got %v", tools)
 	}
 }
 

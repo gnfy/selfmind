@@ -13,6 +13,7 @@ import (
 	"selfmind/internal/kernel/task"
 	"selfmind/internal/kernel/task/cron"
 	"selfmind/internal/platform/config"
+	"selfmind/internal/platform/log"
 	"selfmind/internal/tools"
 )
 
@@ -27,7 +28,7 @@ type GatewayDeps struct {
 
 // InitGateway builds the identity mapper, task manager, cron scheduler
 // (optional), and the unified gateway.
-func InitGateway(dataDir string, mem *memory.MemoryManager, agent *kernel.Agent, cfg *config.Config) (*GatewayDeps, error) {
+func InitGateway(dataDir string, mem *memory.MemoryManager, agent *kernel.Agent, cfg *config.Config, skillStore *kernel.SkillStore) (*GatewayDeps, error) {
 	idMapper := identity.NewIdentityMapper(dataDir)
 	taskMgr := task.NewManager(dataDir)
 
@@ -41,10 +42,31 @@ func InitGateway(dataDir string, mem *memory.MemoryManager, agent *kernel.Agent,
 		if err := cronSched.InitSchema(context.Background()); err != nil {
 			return nil, fmt.Errorf("init cron schema: %w", err)
 		}
+
+		// Register skill-pruner cron job: runs daily at 03:00 UTC
+		// Prunes skill metrics where call_count < 3 AND last_used > 30 days
+		if skillStore != nil {
+			cronSched.SetSkillPruner(skillStore)
+			tenants := []string{"default", "user1"}
+			for _, tenantID := range tenants {
+				job := &cron.CronJob{
+					Name:     "skill-pruner-" + tenantID,
+					CronExpr: "0 3 * * *",
+					Prompt:   fmt.Sprintf("skill_prune:%s", tenantID),
+					TenantID: tenantID,
+					Channel:  "cli",
+					Enabled:  true,
+				}
+				if _, err := cronSched.AddJob(context.Background(), job); err != nil {
+					// Non-fatal: log and continue
+					log.Warn("gateway: skipped skill-pruner", "tenant", tenantID, "error", err)
+				}
+			}
+		}
+
 		if err := cronSched.Start(context.Background()); err != nil {
 			return nil, fmt.Errorf("start cron scheduler: %w", err)
 		}
-
 	}
 
 	gw := router.NewGateway(idMapper, taskMgr, agent, nil)

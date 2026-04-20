@@ -22,15 +22,20 @@ type AgentBackend interface {
 
 // Agent 核心推理循环
 type Agent struct {
-	memory         *memory.MemoryManager
-	backend        AgentBackend
-	llm            llm.Provider
-	soul           string
-	maxIterations  int
-	maxRetries     int
-	Reflector      *ReflectionEngine
-	contextEngine  *ContextEngine
-	EventChannel   chan string // emits "tool_start:name" and "tool_end:name:result" events
+	memory          *memory.MemoryManager
+	backend         AgentBackend
+	llm             llm.Provider
+	soul            string
+	maxIterations   int
+	maxRetries      int
+	Reflector       *ReflectionEngine
+	contextEngine   *ContextEngine
+	EventChannel    chan string // emits "tool_start:name" and "tool_end:name:result" events
+
+	// Evolution 配置
+	toolCallCount     int           // 当前任务的工具调用计数
+	nudgeInterval     int           // 每 N 次工具调用触发一次 evolution review
+	evolutionNotifyCh chan string   // evolution 事件通知 channel（连接到 TUI）
 }
 
 func NewAgent(mem *memory.MemoryManager, backend AgentBackend, provider llm.Provider, soul string, maxIter, maxRetries int, refl *ReflectionEngine) *Agent {
@@ -39,15 +44,32 @@ func NewAgent(mem *memory.MemoryManager, backend AgentBackend, provider llm.Prov
 		memory:         mem,
 		backend:        backend,
 		llm:            provider,
-		soul:           soul,
+		soul:            soul,
 		maxIterations:  maxIter,
 		maxRetries:     maxRetries,
 		Reflector:      refl,
 		contextEngine:  NewContextEngine(128000, 512),
-		EventChannel:  ch,
+		EventChannel:   ch,
+		toolCallCount:  0,
+		nudgeInterval:  10, // 默认每 10 次工具调用触发一次
 	}
 	ag.contextEngine.SetProvider(provider)
 	return ag
+}
+
+// SetNudgeInterval sets how often evolution review triggers (every N tool calls)
+func (a *Agent) SetNudgeInterval(n int) {
+	if n > 0 {
+		a.nudgeInterval = n
+	}
+}
+
+// SetEvolutionNotifyChannel sets the channel for evolution notifications to TUI
+func (a *Agent) SetEvolutionNotifyChannel(ch chan string) {
+	a.evolutionNotifyCh = ch
+	if a.Reflector != nil {
+		a.Reflector.SetNotifyChannel(ch)
+	}
 }
 
 const MaxRetries = 3
@@ -289,17 +311,19 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 				history.Steps = append(history.Steps, res.step)
 				messages = append(messages, res.msg)
 			}
+
+			// Evolution review: 工具调用计数触发（非阻塞）
+			a.toolCallCount += len(calls)
+			if a.toolCallCount >= a.nudgeInterval && a.Reflector != nil {
+				a.toolCallCount = 0
+				a.triggerEvolutionReview(history)
+			}
+
 			continue
 		}
 
-		// No tool calls — task complete, attempt reflection
+		// No tool calls — task complete
 		history.Outcome = resp
-		if a.Reflector != nil {
-			should, content, _ := a.Reflector.Reflect(ctx, history)
-			if should {
-				a.Reflector.ArchiveSkill(content)
-			}
-		}
 
 		// Save trajectory to memory
 		a.saveHistory(ctx, tenantID, channel, messages)
@@ -308,6 +332,45 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 	}
 
 	return "max iterations reached", totalUsage, nil
+}
+
+// triggerEvolutionReview 异步触发 evolution review（不阻塞主会话）
+func (a *Agent) triggerEvolutionReview(history TaskHistory) {
+	if a.Reflector == nil {
+		return
+	}
+
+	// 深拷贝数据，避免竞态
+	historyCopy := TaskHistory{
+		Goal:    history.Goal,
+		Context: history.Context,
+		Outcome: history.Outcome,
+		Steps:   append([]string{}, history.Steps...),
+	}
+
+	go func() {
+		bgCtx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
+
+		result, err := a.Reflector.Reflect(bgCtx, historyCopy)
+		if err != nil || result == nil || result.Action == "skip" {
+			return
+		}
+
+		if err := a.Reflector.ArchiveSkill(bgCtx, result); err != nil {
+			return
+		}
+
+		// 发送通知到 TUI
+		if a.evolutionNotifyCh != nil && result.Action != "skip" {
+			action := map[string]string{"create": "created", "update": "updated"}[result.Action]
+			msg := fmt.Sprintf("💾 skill %s %s", result.SkillName, action)
+			select {
+			case a.evolutionNotifyCh <- msg:
+			default:
+			}
+		}
+	}()
 }
 
 func (a *Agent) autoRecall(ctx context.Context, tenantID, query string) string {

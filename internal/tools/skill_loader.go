@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"selfmind/internal/platform/log"
 )
 
 // SkillDefinition 定义一个技能的元数据（从 front matter 解析）
@@ -50,7 +52,7 @@ func (sl *SkillLoader) LoadAll() ([]SkillDefinition, error) {
 		path := filepath.Join(sl.skillsDir, entry.Name())
 		def, err := sl.LoadFile(path)
 		if err != nil {
-			fmt.Printf("[SkillLoader] WARN: failed to load %s: %v\n", path, err)
+			log.Warn("failed to load skill file", "path", path, "error", err)
 			continue
 		}
 		loaded = append(loaded, def)

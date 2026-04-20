@@ -160,6 +160,20 @@ func (d *Dispatcher) Dispatch(name string, args map[string]interface{}) (string,
 	if !ok {
 		return "", fmt.Errorf("tool %s not found", name)
 	}
+
+	// Coerce types first (LLMs often pass numbers as strings), then validate
+	if len(t.Schema().Properties) > 0 {
+		coerced, coerceErr := CoerceArgs(t.Schema(), args)
+		if coerceErr != nil {
+			return "", fmt.Errorf("failed to coerce arguments for %s: %w", name, coerceErr)
+		}
+		args = coerced
+	}
+
+	if err := ValidateArgs(t.Schema(), args); err != nil {
+		return "", fmt.Errorf("argument validation failed for %s: %w", name, err)
+	}
+
 	exec := globalRegistry.Wrap(t, globalRegistry.middleware)
 	return exec(args)
 }

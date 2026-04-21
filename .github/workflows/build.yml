@@ -1,0 +1,90 @@
+name: Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version tag (e.g. v0.1.0)'
+        required: false
+        type: string
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GO_VERSION: '1.26'
+  CGO_ENABLED: '0'
+  GOARCH: '' # set per matrix
+
+jobs:
+  build:
+    name: Build ${{ matrix.os }}-${{ matrix.arch }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: linux
+            arch: amd64
+            artifact: selfmind-linux-amd64
+          - os: linux
+            arch: arm64
+            artifact: selfmind-linux-arm64
+          - os: darwin
+            arch: amd64
+            artifact: selfmind-darwin-amd64
+          - os: darwin
+            arch: arm64
+            artifact: selfmind-darwin-arm64
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Build
+        env:
+          GOOS: ${{ matrix.os }}
+          GOARCH: ${{ matrix.arch }}
+          CGO_ENABLED: ${{ env.CGO_ENABLED }}
+        run: |
+          echo "Building selfmind for ${{ matrix.os }}/${{ matrix.arch }}"
+          go build -ldflags="-s -w" -o dist/${{ matrix.artifact }} ./cmd/selfmind
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: dist/${{ matrix.artifact }}
+          retention-days: 30
+
+  checksum:
+    name: Generate checksums
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Generate SHA256 checksums
+        run: |
+          cd dist
+          sha256sum * > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Upload checksums artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: checksums
+          path: dist/SHA256SUMS
+          retention-days: 30

@@ -93,6 +93,40 @@ SELF_TENANT_ID=user2 ./selfmind
 
 ---
 
+## 模型推荐
+
+SelfMind 支持多模型混搭，以下是各场景的推荐搭配，帮助你快速上手：
+
+### 推荐配置
+
+| 场景 | 推荐模型 | 推荐理由 |
+|------|---------|---------|
+| 主力推理（日常对话、代码、写作） | **MiniMax M2.7** | 性价比极高，支持超长上下文，响应速度快 |
+| 复杂 Agent 任务（多步推理、工具调用） | **MiniMax M2.7-highspeed** | 高速度版本，适合高频调用 |
+| 备用 / 精准任务 | **Anthropic Claude Sonnet 4** | 推理能力强，工具调用稳定 |
+| 成本敏感场景 | **Google Gemini 2.5** | 免费额度充足，API 价格低 |
+
+### 获取 MiniMax API Key
+
+推荐使用 MiniMax，**新用户有免费 token 额度**：
+
+👉 [https://platform.minimaxi.com/subscribe/token-plan?code=9Yt7HxCaov&source=link](https://platform.minimaxi.com/subscribe/token-plan?code=9Yt7HxCaov&source=link)
+
+注册后在控制台创建 API Key，填入 `config.yaml` 的 `minimax_api_key` 字段即可。
+
+### 配置示例
+
+```yaml
+providers:
+  minimax_api_key: "eyJ..."   # MiniMax（推荐，新用户有免费额度）
+
+agent:
+  provider: "minimax"          # 默认使用 MiniMax
+  model: "MiniMax-M2.7-highspeed"  # 推荐速度优先版本
+```
+
+---
+
 ## 配置参考
 
 **文件**: `~/.selfmind/config.yaml`

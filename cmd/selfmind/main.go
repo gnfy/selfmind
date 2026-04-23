@@ -27,13 +27,19 @@ func main() {
 		log.Fatal("app.InitStorage failed", "error", err)
 	}
 
-	agent, err := app.InitAgent(mem, cfg)
+	// CLI 默认租户：从环境变量读取，支持多实例隔离
+	tenantID := os.Getenv("SELF_TENANT_ID")
+	if tenantID == "" {
+		tenantID = "default"
+	}
+
+	agent, err := app.InitAgent(mem, cfg, tenantID)
 	if err != nil {
 		log.Fatal("app.InitAgent failed", "error", err)
 	}
 
 	skillStore := kernel.NewSkillStore(mem)
-	disp, err := app.InitTools(mem, cfg, agent, skillStore)
+	disp, err := app.InitTools(mem, cfg, agent, skillStore, tenantID)
 	if err != nil {
 		log.Fatal("app.InitTools failed", "error", err)
 	}
@@ -48,13 +54,7 @@ func main() {
 
 	app.InitMCP(disp, cfg)
 
-	// CLI 默认租户：从环境变量读取，支持多实例隔离
-	tenantID := os.Getenv("SELF_TENANT_ID")
-	if tenantID == "" {
-		tenantID = "user1"
-	}
-
-	ctrl := cli.NewControllerWithGateway(gwDeps.Gateway, agent, nil, cfg.Agent.Provider, cfg.Agent.Model, cfg)
+	ctrl := cli.NewControllerWithGateway(gwDeps.Gateway, agent, nil, cfg.Agent.Provider, cfg.Agent.Model, cfg, tenantID)
 	ctrl.SetSessionSearchFn(mem.SearchFn("default"))
 
 	memFn := func() (*memory.MemoryManager, string, string) { return mem, tenantID, "cli" }

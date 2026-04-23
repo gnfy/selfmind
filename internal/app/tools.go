@@ -12,7 +12,7 @@ import (
 
 // InitTools wires up the dispatcher, built-in tools, extended tools,
 // the skill loader, the skill metrics middleware, and injects the session search function.
-func InitTools(mem *memory.MemoryManager, cfg *config.Config, ag *kernel.Agent, skillStore *kernel.SkillStore) (*tools.Dispatcher, error) {
+func InitTools(mem *memory.MemoryManager, cfg *config.Config, ag *kernel.Agent, skillStore *kernel.SkillStore, tenantID string) (*tools.Dispatcher, error) {
 	disp := tools.NewDispatcher()
 
 	// 1. Register auth middleware (load permissions from persistent layer)
@@ -20,15 +20,20 @@ func InitTools(mem *memory.MemoryManager, cfg *config.Config, ag *kernel.Agent, 
 
 	tools.RegisterBuiltins(disp)
 	tools.RegisterExtendedTools(disp)
+	disp.RegisterTool(tools.NewSkillManageTool())
 
 	if mem != nil {
 		disp.InjectSessionSearch(mem.SearchFn("default"))
 		disp.RegisterTool(tools.NewMemoryTool(mem))
-		tools.GetProcessRegistry().Init(mem)
+		tools.GetProcessRegistry().Init(mem, tenantID)
 	}
 
 	home, _ := os.UserHomeDir()
-	skillsDir := filepath.Join(home, ".selfmind", "skills")
+	baseSkillsDir := filepath.Join(home, ".selfmind")
+	if tenantID == "" {
+		tenantID = "default"
+	}
+	skillsDir := tools.SkillsDirForTenant(baseSkillsDir, tenantID)
 	skillLoader := tools.NewSkillLoader(skillsDir, tools.GlobalRegistry())
 	skillLoader.LoadAll()
 

@@ -77,11 +77,12 @@ type StorageProvider interface {
 
 // MemoryManager 管理存储后端并处理租户上下文
 type MemoryManager struct {
-	provider StorageProvider
+	provider  StorageProvider
+	providers map[string]MemoryProvider
 }
 
 func NewMemoryManager(p StorageProvider) *MemoryManager {
-	return &MemoryManager{provider: p}
+	return &MemoryManager{provider: p, providers: make(map[string]MemoryProvider)}
 }
 
 // SaveTrajectory 保存一次完整的交互轨迹

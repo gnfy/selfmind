@@ -55,7 +55,7 @@ func (t *MemoryTool) Execute(args map[string]interface{}) (string, error) {
 
 	tenantID, _ := args["_tenant_id"].(string)
 	if tenantID == "" {
-		tenantID = "user1" // Fallback for testing
+		tenantID = "default"
 	}
 	ctx := context.Background()
 

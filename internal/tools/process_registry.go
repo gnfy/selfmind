@@ -33,16 +33,19 @@ type ProcessRegistry struct {
 
 var globalProcessRegistry = &ProcessRegistry{
 	processes: make(map[string]*ProcessInfo),
-	tenantID:  "user1",
+	tenantID:  "default",
 }
 
 func GetProcessRegistry() *ProcessRegistry {
 	return globalProcessRegistry
 }
 
-func (r *ProcessRegistry) Init(mem *memory.MemoryManager) {
+func (r *ProcessRegistry) Init(mem *memory.MemoryManager, tenantID string) {
 	r.mu.Lock()
 	r.mem = mem
+	if tenantID != "" {
+		r.tenantID = tenantID
+	}
 	r.mu.Unlock()
 	r.Recover()
 }

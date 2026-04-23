@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"os"
 
 	"selfmind/internal/gateway/channel"
 	"selfmind/internal/gateway/router"
@@ -47,7 +48,17 @@ func InitGateway(dataDir string, mem *memory.MemoryManager, agent *kernel.Agent,
 		// Prunes skill metrics where call_count < 3 AND last_used > 30 days
 		if skillStore != nil {
 			cronSched.SetSkillPruner(skillStore)
-			tenants := []string{"default", "user1"}
+			var tenants []string
+			if entries, err := os.ReadDir(dataDir); err == nil {
+				for _, e := range entries {
+					if e.IsDir() {
+						tenants = append(tenants, e.Name())
+					}
+				}
+			}
+			if len(tenants) == 0 {
+				tenants = []string{"default"}
+			}
 			for _, tenantID := range tenants {
 				job := &cron.CronJob{
 					Name:     "skill-pruner-" + tenantID,

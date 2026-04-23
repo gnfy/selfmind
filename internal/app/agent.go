@@ -3,6 +3,8 @@ package app
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"selfmind/internal/kernel"
@@ -10,6 +12,7 @@ import (
 	"selfmind/internal/kernel/memory"
 	"selfmind/internal/platform/config"
 	"selfmind/internal/platform/log"
+	"selfmind/internal/tools"
 )
 
 // mockProvider is used when no LLM API key is configured.
@@ -151,7 +154,7 @@ func buildKeyGetter(mem *memory.MemoryManager, tenantID, provider string) func()
 }
 
 // InitAgent creates the LLM provider, reflection engine, and agent core.
-func InitAgent(mem *memory.MemoryManager, cfg *config.Config) (*kernel.Agent, error) {
+func InitAgent(mem *memory.MemoryManager, cfg *config.Config, tenantID string) (*kernel.Agent, error) {
 	provider := buildLLMProvider(cfg)
 	if provider == nil {
 		return nil, fmt.Errorf("no LLM provider available")
@@ -166,7 +169,9 @@ func InitAgent(mem *memory.MemoryManager, cfg *config.Config) (*kernel.Agent, er
 	*/
 
 	// 关键修复：将动态 Key 加载器注入适配器
-	tenantID := "user1" // 默认租户，后续可从 Context 获取
+	if tenantID == "" {
+		tenantID = "default"
+	}
 	pName := strings.ToLower(cfg.Agent.Provider)
 	if pName == "" {
 		// 回退探测逻辑
@@ -193,12 +198,20 @@ func InitAgent(mem *memory.MemoryManager, cfg *config.Config) (*kernel.Agent, er
 		}
 	}
 
+	skillsBaseDir := cfg.Evolution.SkillsDir
+	if skillsBaseDir == "" {
+		home, _ := os.UserHomeDir()
+		skillsBaseDir = filepath.Join(home, ".selfmind")
+	}
+	skillsDir := tools.SkillsDirForTenant(skillsBaseDir, tenantID)
+
 	refl := kernel.NewReflectionEngine(provider, kernel.EvolutionConfig{
 		Enabled:               cfg.Evolution.Enabled,
 		Mode:                  cfg.Evolution.Mode,
 		MinComplexityThreshold: cfg.Evolution.MinComplexityThreshold,
 		AutoArchiveConfidence:  cfg.Evolution.AutoArchiveConfidence,
 		NudgeInterval:         cfg.Evolution.NudgeInterval,
+		SkillsDir:             skillsDir,
 	})
 
 	// 设置 evolution notify channel（暂时传 nil，后续由 TUI 层注入）
@@ -219,6 +232,21 @@ func InitAgent(mem *memory.MemoryManager, cfg *config.Config) (*kernel.Agent, er
 	if cfg.Evolution.NudgeInterval > 0 {
 		agent.SetNudgeInterval(cfg.Evolution.NudgeInterval)
 	}
+
+	// 注入自动事实提取器（默认开启，使用当前 provider）
+	fe := kernel.NewFactExtractor(provider, true)
+	agent.SetFactExtractor(fe)
+
+	// 注入每轮轻量提取器（频率控制，使用当前 provider）
+	te := kernel.NewTurnExtractor(provider, true, cfg.Memory.AutoExtractInterval, cfg.Memory.AutoExtractMinChars)
+	agent.SetTurnExtractor(te)
+
+	// 注入语义查询扩展器
+	se := memory.NewSemanticExpander(provider, cfg.Memory.SemanticRecall)
+	agent.SetSemanticExpander(se)
+
+	// 设置记忆注入格式
+	agent.SetUseMemoryFence(cfg.Memory.UseMemoryFence)
 
 	return agent, nil
 }

@@ -76,11 +76,19 @@ type Config struct {
 	Delegation DelegationConfig  `mapstructure:"delegation"`
 	Cron       CronConfig        `mapstructure:"cron"`
 	Editor     EditorConfig      `mapstructure:"editor"`
+	Memory     MemoryConfig      `mapstructure:"memory"`
 }
 
 type EditorConfig struct {
 	LargePasteChars int `mapstructure:"large_paste_chars"`
 	LargePasteLines int `mapstructure:"large_paste_lines"`
+}
+
+type MemoryConfig struct {
+	AutoExtractInterval int  `mapstructure:"auto_extract_interval"` // 每 N 轮提取一次
+	AutoExtractMinChars int  `mapstructure:"auto_extract_min_chars"` // 最小内容长度
+	SemanticRecall      bool `mapstructure:"semantic_recall"`        // 是否启用语义召回
+	UseMemoryFence      bool `mapstructure:"use_memory_fence"`       // 是否用 fence 格式注入记忆
 }
 
 // MCPConfig MCP 服务器配置
@@ -106,6 +114,7 @@ type EvolutionConfig struct {
 	MinComplexityThreshold int     `mapstructure:"min_complexity_threshold"`
 	AutoArchiveConfidence  float64 `mapstructure:"auto_archive_confidence"`
 	NudgeInterval         int     `mapstructure:"nudge_interval"`
+	SkillsDir              string  `mapstructure:"skills_dir"`
 }
 
 type AgentConfig struct {
@@ -167,6 +176,10 @@ func LoadConfig() (*Config, error) {
 	v.SetDefault("storage.data_dir", "~/.selfmind/data")
 	v.SetDefault("editor.large_paste_chars", 1000)
 	v.SetDefault("editor.large_paste_lines", 10)
+	v.SetDefault("memory.auto_extract_interval", 5)
+	v.SetDefault("memory.auto_extract_min_chars", 80)
+	v.SetDefault("memory.semantic_recall", true)
+	v.SetDefault("memory.use_memory_fence", true)
 
 	// 2. 加载配置文件
 	home, _ := os.UserHomeDir()

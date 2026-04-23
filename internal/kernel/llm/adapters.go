@@ -54,6 +54,14 @@ func NewAnthropicAdapter(apiKey string) *AnthropicAdapter {
 	}
 }
 
+func (a *AnthropicAdapter) SetModel(model string) {
+	a.Model = model
+}
+
+func (a *AnthropicAdapter) GetModel() string {
+	return a.Model
+}
+
 func (a *AnthropicAdapter) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, error) {
 	apiKey := a.APIKey
 	if a.KeyGetter != nil {
@@ -197,6 +205,14 @@ func NewOpenAIAdapter(apiKey string) *OpenAIAdapter {
 		Model:   "gpt-4o",
 		BaseURL: "https://api.openai.com/v1/chat/completions",
 	}
+}
+
+func (a *OpenAIAdapter) SetModel(model string) {
+	a.Model = model
+}
+
+func (a *OpenAIAdapter) GetModel() string {
+	return a.Model
 }
 
 func (a *OpenAIAdapter) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, error) {
@@ -488,6 +504,14 @@ func NewMiniMaxAdapter(apiKey string) *MiniMaxAdapter {
 	}
 }
 
+func (a *MiniMaxAdapter) SetModel(model string) {
+	a.Model = model
+}
+
+func (a *MiniMaxAdapter) GetModel() string {
+	return a.Model
+}
+
 func (a *MiniMaxAdapter) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, error) {
 	// MiniMax V2 API 也是 OpenAI 兼容格式
 	adapter := &OpenAIAdapter{
@@ -556,6 +580,14 @@ func NewOpenRouterAdapter(apiKey string) *OpenRouterAdapter {
 			Timeout: 120 * time.Second,
 		},
 	}
+}
+
+func (a *OpenRouterAdapter) SetModel(model string) {
+	a.Model = model
+}
+
+func (a *OpenRouterAdapter) GetModel() string {
+	return a.Model
 }
 
 func (a *OpenRouterAdapter) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, error) {

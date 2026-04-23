@@ -91,7 +91,7 @@ type uiModel struct {
 
 type MsgClearStatus struct{}
 
-func NewController(a *kernel.Agent, provider llm.Provider, cfg *config.Config) *Controller {
+func NewController(a *kernel.Agent, provider llm.Provider, cfg *config.Config, tenantID string) *Controller {
 	c := &common.Common{
 		Styles: common.DefaultStyles(),
 	}
@@ -102,6 +102,9 @@ func NewController(a *kernel.Agent, provider llm.Provider, cfg *config.Config) *
 	var editorCfg *config.EditorConfig
 	if cfg != nil {
 		editorCfg = &cfg.Editor
+	}
+	if tenantID == "" {
+		tenantID = "default"
 	}
 
 	return &Controller{
@@ -113,7 +116,7 @@ func NewController(a *kernel.Agent, provider llm.Provider, cfg *config.Config) *
 			messages:     []ChatMessage{},
 			thinking:     false,
 			provider:     provider,
-			tenantID:     "user1",
+			tenantID:     tenantID,
 			channel:      "cli",
 			spinner:      sp,
 			inputHistory: []string{},
@@ -125,7 +128,7 @@ func NewController(a *kernel.Agent, provider llm.Provider, cfg *config.Config) *
 	}
 }
 
-func NewControllerWithGateway(gw *router.Gateway, agent *kernel.Agent, provider llm.Provider, providerName, modelName string, cfg *config.Config) *Controller {
+func NewControllerWithGateway(gw *router.Gateway, agent *kernel.Agent, provider llm.Provider, providerName, modelName string, cfg *config.Config, tenantID string) *Controller {
 	c := &common.Common{
 		Styles: common.DefaultStyles(),
 	}
@@ -136,6 +139,9 @@ func NewControllerWithGateway(gw *router.Gateway, agent *kernel.Agent, provider 
 	var editorCfg *config.EditorConfig
 	if cfg != nil {
 		editorCfg = &cfg.Editor
+	}
+	if tenantID == "" {
+		tenantID = "default"
 	}
 
 	return &Controller{
@@ -151,7 +157,7 @@ func NewControllerWithGateway(gw *router.Gateway, agent *kernel.Agent, provider 
 			modelName:    modelName,
 			agent:        agent,
 			gateway:      gw,
-			tenantID:     "user1",
+			tenantID:     tenantID,
 			channel:      "cli",
 			spinner:      sp,
 			inputHistory: []string{},
@@ -711,6 +717,13 @@ func (m *uiModel) handleCommand(input string) tea.Cmd {
 			return nil
 		}
 		return m.handleCheckpoint(parts[1:])
+	case "/model":
+		if len(parts) < 2 {
+			m.addMessage("assistant", fmt.Sprintf("Current model: %s", m.agent.CurrentModel()))
+			m.addMessage("assistant", "Usage: /model <model-name>  (e.g. /model claude-3-5-haiku-20241022)")
+			return nil
+		}
+		return m.handleModelSwitch(parts[1])
 	}
 	return nil
 }
@@ -830,6 +843,21 @@ func (m *uiModel) handleSkills(args []string) tea.Cmd {
 		}
 
 		return MsgAgentDone{Response: "Usage: /skills [list|delete <name>]"}
+	}
+}
+
+func (m *uiModel) handleModelSwitch(modelName string) tea.Cmd {
+	return func() tea.Msg {
+		if m.agent == nil {
+			return MsgAgentDone{Response: "Agent not initialized."}
+		}
+		oldModel := m.agent.CurrentModel()
+		if ok := m.agent.SwitchModel(modelName); !ok {
+			return MsgAgentDone{Response: fmt.Sprintf("Provider does not support runtime model switching. Current model: %s", oldModel)}
+		}
+		m.modelName = modelName
+		m.providerName = modelName
+		return MsgAgentDone{Response: fmt.Sprintf("Model switched: %s → %s", oldModel, modelName)}
 	}
 }
 
@@ -1136,6 +1164,8 @@ const helpText = `Available commands:
   /checkpoint - Conversation snapshot (list|save|load)
   /migrate    - Migrate skills from Hermes Agent
   /exit       - Exit (or Ctrl+C)
+
+  /model      - Show current model or switch model
 
 Shortcuts:
   Ctrl+C      - Cancel running task or Exit

@@ -437,18 +437,20 @@ func (r *ReflectionEngine) ArchiveSkill(ctx context.Context, result *ReviewResul
 		return nil
 	}
 
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return fmt.Errorf("get home dir: %w", err)
+	skillDir := r.Config.SkillsDir
+	if skillDir == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return fmt.Errorf("get home dir: %w", err)
+		}
+		skillDir = filepath.Join(home, ".selfmind", "skills")
 	}
-
-	skillDir := filepath.Join(home, ".selfmind", "skills")
 	if err := os.MkdirAll(skillDir, 0755); err != nil {
 		return fmt.Errorf("create skill dir: %w", err)
 	}
 
 	// 安全扫描（P0）
-	if err := r.scanForDangers(result.Content); err != nil {
+	if err := ScanSkillForDangers(result.Content); err != nil {
 		// 危险内容，不写入，发送通知
 		if r.notifyCh != nil {
 			select {
@@ -472,7 +474,7 @@ func (r *ReflectionEngine) ArchiveSkill(ctx context.Context, result *ReviewResul
 
 	if targetPath == "" {
 		// 新建
-		safeName := sanitizeSkillName(result.SkillName)
+		safeName := SanitizeSkillName(result.SkillName)
 		targetPath = filepath.Join(skillDir, safeName+".md")
 	}
 
@@ -502,7 +504,9 @@ func (r *ReflectionEngine) ArchiveSkill(ctx context.Context, result *ReviewResul
 }
 
 // scanForDangers performs security scan on skill content
-func (r *ReflectionEngine) scanForDangers(content string) error {
+// ScanSkillForDangers checks skill content for dangerous patterns (credentials,
+// destructive commands, sensitive paths). It is exported so tools/skill_manage can reuse it.
+func ScanSkillForDangers(content string) error {
 	dangerousPatterns := []struct {
 		pattern *regexp.Regexp
 		msg     string
@@ -543,8 +547,9 @@ func (r *ReflectionEngine) scanForDangers(content string) error {
 	return nil
 }
 
-// sanitizeSkillName converts a skill name to a safe filename
-func sanitizeSkillName(name string) string {
+// SanitizeSkillName converts a skill name to a safe filename.
+// Exported so tools/skill_manage can reuse it.
+func SanitizeSkillName(name string) string {
 	name = strings.ToLower(name)
 	name = strings.Map(func(r rune) rune {
 		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {

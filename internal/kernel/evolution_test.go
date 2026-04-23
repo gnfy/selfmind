@@ -135,9 +135,9 @@ func TestSkillNameSanitization(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
-			got := sanitizeSkillName(tt.input)
+			got := SanitizeSkillName(tt.input)
 			if got != tt.expected {
-				t.Errorf("sanitizeSkillName(%q) = %q, want %q", tt.input, got, tt.expected)
+				t.Errorf("SanitizeSkillName(%q) = %q, want %q", tt.input, got, tt.expected)
 			}
 		})
 	}

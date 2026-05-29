@@ -227,6 +227,15 @@ func InitAgent(mem *memory.MemoryManager, cfg *config.Config, tenantID string) (
 	}
 
 	agent := kernel.NewAgent(mem, nil, provider, cfg.Agent.Soul, maxIter, maxRetries, refl)
+	reviewEngine := kernel.NewBackgroundReviewEngine(mem, nil, provider, kernel.EvolutionConfig{
+		Enabled:               cfg.Evolution.Enabled,
+		Mode:                  cfg.Evolution.Mode,
+		MinComplexityThreshold: cfg.Evolution.MinComplexityThreshold,
+		AutoArchiveConfidence:  cfg.Evolution.AutoArchiveConfidence,
+		NudgeInterval:         cfg.Evolution.NudgeInterval,
+		SkillsDir:             skillsDir,
+	}, 8, maxRetries)
+	agent.SetBackgroundReviewEngine(reviewEngine)
 
 	// 设置 nudge interval
 	if cfg.Evolution.NudgeInterval > 0 {

@@ -29,6 +29,7 @@ type Agent struct {
 	maxIterations   int
 	maxRetries      int
 	Reflector       *ReflectionEngine
+	ReviewEngine    *BackgroundReviewEngine
 	contextEngine   *ContextEngine
 	contextScanner  *ContextScanner
 	factExtractor   *FactExtractor
@@ -37,10 +38,11 @@ type Agent struct {
 	useMemoryFence   bool
 	EventChannel    chan string // emits "tool_start:name" and "tool_end:name:result" events
 
-	// Evolution 配置
-	toolCallCount     int           // 当前任务的工具调用计数
-	nudgeInterval     int           // 每 N 次工具调用触发一次 evolution review
-	evolutionNotifyCh chan string   // evolution 事件通知 channel（连接到 TUI）
+	// Evolution config.
+	toolCallCount     int
+	nudgeInterval     int
+	turnReviewCount   int
+	evolutionNotifyCh chan string
 }
 
 func NewAgent(mem *memory.MemoryManager, backend AgentBackend, provider llm.Provider, soul string, maxIter, maxRetries int, refl *ReflectionEngine) *Agent {
@@ -72,6 +74,15 @@ func (a *Agent) SetNudgeInterval(n int) {
 	}
 }
 
+func (a *Agent) SetBackgroundReviewEngine(engine *BackgroundReviewEngine) {
+	a.ReviewEngine = engine
+	if engine != nil {
+		engine.SetBackend(a.backend)
+		engine.SetNotifyChannel(a.evolutionNotifyCh)
+		engine.SetUseMemoryFence(a.useMemoryFence)
+	}
+}
+
 // SetEvolutionNotifyChannel sets the channel for evolution notifications to TUI
 // SetFactExtractor injects the auto-fact-extractor. Called by app layer after agent creation.
 func (a *Agent) SetFactExtractor(fe *FactExtractor) {
@@ -91,6 +102,9 @@ func (a *Agent) SetSemanticExpander(se *memory.SemanticExpander) {
 // SetUseMemoryFence enables/disables the <memory-context> fence format in system prompt.
 func (a *Agent) SetUseMemoryFence(enabled bool) {
 	a.useMemoryFence = enabled
+	if a.ReviewEngine != nil {
+		a.ReviewEngine.SetUseMemoryFence(enabled)
+	}
 }
 
 // SwitchModel changes the underlying LLM model at runtime if the provider supports it.
@@ -107,6 +121,9 @@ func (a *Agent) SetEvolutionNotifyChannel(ch chan string) {
 	a.evolutionNotifyCh = ch
 	if a.Reflector != nil {
 		a.Reflector.SetNotifyChannel(ch)
+	}
+	if a.ReviewEngine != nil {
+		a.ReviewEngine.SetNotifyChannel(ch)
 	}
 }
 
@@ -175,6 +192,9 @@ func (a *Agent) streamChatWithRetry(ctx context.Context, messages []llm.Message)
 // SetBackend updates the agent's execution backend
 func (a *Agent) SetBackend(b AgentBackend) {
 	a.backend = b
+	if a.ReviewEngine != nil {
+		a.ReviewEngine.SetBackend(b)
+	}
 }
 
 // Dispatcher returns the tool dispatch backend for gateway handlers and skill tools.
@@ -380,10 +400,7 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 
 			// Evolution review: 工具调用计数触发（非阻塞）
 			a.toolCallCount += len(calls)
-			if a.toolCallCount >= a.nudgeInterval && a.Reflector != nil {
-				a.toolCallCount = 0
-				a.triggerEvolutionReview(history)
-			}
+			// The review itself runs after the final answer, once the outcome is known.
 
 			continue
 		}
@@ -399,6 +416,8 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 			go a.factExtractor.Extract(context.Background(), tenantID, a.memory, messages)
 		}
 
+		a.maybeTriggerBackgroundReview(tenantID, channel, messages, history)
+
 		return resp, totalUsage, nil
 	}
 
@@ -406,6 +425,32 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 }
 
 // triggerEvolutionReview 异步触发 evolution review（不阻塞主会话）
+func (a *Agent) maybeTriggerBackgroundReview(tenantID, channel string, messages []llm.Message, history TaskHistory) {
+	interval := a.nudgeInterval
+	if interval <= 0 {
+		interval = 10
+	}
+	a.turnReviewCount++
+	reviewMemory := a.turnReviewCount >= interval
+	reviewSkills := a.toolCallCount >= interval
+	if !reviewMemory && !reviewSkills {
+		return
+	}
+	if reviewMemory {
+		a.turnReviewCount = 0
+	}
+	if reviewSkills {
+		a.toolCallCount = 0
+	}
+	if a.ReviewEngine != nil {
+		a.ReviewEngine.SpawnReview(tenantID, channel, messages, reviewMemory, reviewSkills)
+		return
+	}
+	if reviewSkills && a.Reflector != nil {
+		a.triggerEvolutionReview(history)
+	}
+}
+
 func (a *Agent) triggerEvolutionReview(history TaskHistory) {
 	if a.Reflector == nil {
 		return
@@ -600,6 +645,7 @@ func (a *Agent) BuildSystemPrompt(ctx context.Context, tenantID string) (string,
 	if a.soul != "" {
 		parts = append(parts, a.soul)
 	}
+	parts = append(parts, selfImprovementGuidance())
 
 			// 2. Tool Instructions - 增强指令强度
 	if a.backend != nil {
@@ -611,7 +657,7 @@ func (a *Agent) BuildSystemPrompt(ctx context.Context, tenantID string) (string,
 			sb.WriteString("To call a tool, you MUST use the exact format: [TOOL:tool_name:{\"arg\": \"val\"}]\n")
 			sb.WriteString("The ONLY valid tool names are: ")
 			for i, d := range defs {
-				sb.WriteString(fmt.Sprintf("'%s'", d["name"]))
+				sb.WriteString(fmt.Sprintf("'%s'", toolDefinitionName(d)))
 				if i < len(defs)-1 {
 					sb.WriteString(", ")
 				}
@@ -621,8 +667,8 @@ func (a *Agent) BuildSystemPrompt(ctx context.Context, tenantID string) (string,
 			sb.WriteString("DO NOT explain that you are using a tool, just output the [TOOL:...] tag.\n\n")
 			sb.WriteString("## Available Tools\n")
 			for _, d := range defs {
-				sb.WriteString(fmt.Sprintf("### %s\n%s\n", d["name"], d["description"]))
-				if params, ok := d["parameters"].(map[string]interface{}); ok {
+				sb.WriteString(fmt.Sprintf("### %s\n%s\n", toolDefinitionName(d), toolDefinitionDescription(d)))
+				if params := toolDefinitionParameters(d); params != nil {
 					if props, ok := params["properties"].(map[string]interface{}); ok {
 						sb.WriteString("Parameters:\n")
 						for pName, pDef := range props {

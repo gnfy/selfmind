@@ -92,6 +92,9 @@ type uiModel struct {
 type MsgClearStatus struct{}
 
 func NewController(a *kernel.Agent, provider llm.Provider, cfg *config.Config, tenantID string) *Controller {
+	if a != nil {
+		a.SetEvolutionNotifyChannel(a.EventChannel)
+	}
 	c := &common.Common{
 		Styles: common.DefaultStyles(),
 	}
@@ -116,6 +119,7 @@ func NewController(a *kernel.Agent, provider llm.Provider, cfg *config.Config, t
 			messages:     []ChatMessage{},
 			thinking:     false,
 			provider:     provider,
+			agent:        a,
 			tenantID:     tenantID,
 			channel:      "cli",
 			spinner:      sp,
@@ -129,6 +133,9 @@ func NewController(a *kernel.Agent, provider llm.Provider, cfg *config.Config, t
 }
 
 func NewControllerWithGateway(gw *router.Gateway, agent *kernel.Agent, provider llm.Provider, providerName, modelName string, cfg *config.Config, tenantID string) *Controller {
+	if agent != nil {
+		agent.SetEvolutionNotifyChannel(agent.EventChannel)
+	}
 	c := &common.Common{
 		Styles: common.DefaultStyles(),
 	}
@@ -622,6 +629,11 @@ func (m *uiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, spinnerCmd
 
+	case MsgLearningEvent:
+		m.statusMsg = msg.Content
+		m.addMessage("system", msg.Content)
+		return m, nil
+
 	case MsgClearStatus:
 		m.statusMsg = ""
 		return m, nil
@@ -711,6 +723,10 @@ func (m *uiModel) handleCommand(input string) tea.Cmd {
 		return m.handleTasks()
 	case "/skills":
 		return m.handleSkills(parts[1:])
+	case "/memory":
+		return m.handleMemory(parts[1:])
+	case "/curator":
+		return m.handleCurator(parts[1:])
 	case "/checkpoint":
 		if len(parts) < 2 {
 			m.addMessage("assistant", "Usage: /checkpoint [list|save|load] [name]")
@@ -804,45 +820,174 @@ func (m *uiModel) handleTasks() tea.Cmd {
 
 func (m *uiModel) handleSkills(args []string) tea.Cmd {
 	return func() tea.Msg {
-		if m.agent == nil || m.agent.Reflector == nil {
-			return MsgAgentDone{Response: "Agent or reflection engine not initialized."}
+		action := "list"
+		if len(args) > 0 {
+			action = args[0]
 		}
-
-		// /skills list
-		if len(args) == 0 || args[0] == "list" {
-			skills, err := m.agent.Reflector.ListSkills()
+		switch action {
+		case "list":
+			skills, err := tools.ListSkillsForTenant(m.tenantID, false)
 			if err != nil {
 				return MsgAgentDone{Response: fmt.Sprintf("Error listing skills: %v", err)}
 			}
 			if len(skills) == 0 {
-				return MsgAgentDone{Response: "No skills found. Skills are created automatically when you complete complex tasks."}
+				return MsgAgentDone{Response: "No skills found. Skills are created automatically after reusable work is discovered."}
 			}
 			var sb strings.Builder
 			sb.WriteString(fmt.Sprintf("## Skills (%d)\n\n", len(skills)))
 			for _, s := range skills {
-				desc := s.Description
-				if desc == "" {
-					desc = "(no description)"
+				pin := ""
+				if s.Pinned {
+					pin = " pinned"
 				}
-				sb.WriteString(fmt.Sprintf("- **%s**: %s\n  _%s_\n", s.Name, desc, s.FilePath))
+				sb.WriteString(fmt.Sprintf("- **%s** [%s/%s%s]: %s\n  _%s_\n", s.Name, s.State, s.Source, pin, valueOr(s.Description, "(no description)"), s.Path))
 			}
-			sb.WriteString("\n_Delete with: /skills delete <name>_")
+			sb.WriteString("\nCommands: /skills view <name>, /skills search <query>, /skills archive <name>, /skills pin <name>, /skills stats")
 			return MsgAgentDone{Response: sb.String()}
-		}
-
-		// /skills delete <name>
-		if args[0] == "delete" {
+		case "view":
+			if len(args) < 2 {
+				return MsgAgentDone{Response: "Usage: /skills view <name>"}
+			}
+			content, err := tools.ReadSkillForTenant(m.tenantID, args[1])
+			if err != nil {
+				return MsgAgentDone{Response: fmt.Sprintf("Error reading skill: %v", err)}
+			}
+			return MsgAgentDone{Response: content}
+		case "search":
+			if len(args) < 2 {
+				return MsgAgentDone{Response: "Usage: /skills search <query>"}
+			}
+			skills, err := tools.SearchSkillsForTenant(m.tenantID, strings.Join(args[1:], " "))
+			if err != nil {
+				return MsgAgentDone{Response: fmt.Sprintf("Error searching skills: %v", err)}
+			}
+			var sb strings.Builder
+			sb.WriteString(fmt.Sprintf("## Skill Search (%d)\n\n", len(skills)))
+			for _, s := range skills {
+				sb.WriteString(fmt.Sprintf("- **%s**: %s\n", s.Name, valueOr(s.Description, "(no description)")))
+			}
+			return MsgAgentDone{Response: sb.String()}
+		case "delete":
 			if len(args) < 2 {
 				return MsgAgentDone{Response: "Usage: /skills delete <name>"}
 			}
-			name := args[1]
-			if err := m.agent.Reflector.DeleteSkill(name); err != nil {
-				return MsgAgentDone{Response: fmt.Sprintf("Error deleting skill '%s': %v", name, err)}
+			resp, err := m.agent.Dispatcher().Dispatch("skill_manage", map[string]interface{}{"action": "delete", "name": args[1], "_tenant_id": m.tenantID})
+			if err != nil {
+				return MsgAgentDone{Response: fmt.Sprintf("Error deleting skill: %v", err)}
 			}
-			return MsgAgentDone{Response: fmt.Sprintf("Skill '%s' deleted.", name)}
+			return MsgAgentDone{Response: resp}
+		case "archive":
+			if len(args) < 2 {
+				return MsgAgentDone{Response: "Usage: /skills archive <name>"}
+			}
+			resp, err := tools.ArchiveSkillForTenant(m.tenantID, args[1])
+			if err != nil {
+				return MsgAgentDone{Response: fmt.Sprintf("Error archiving skill: %v", err)}
+			}
+			return MsgAgentDone{Response: resp}
+		case "pin", "unpin":
+			if len(args) < 2 {
+				return MsgAgentDone{Response: "Usage: /skills " + action + " <name>"}
+			}
+			resp, err := m.agent.Dispatcher().Dispatch("skill_manage", map[string]interface{}{"action": action, "name": args[1], "_tenant_id": m.tenantID})
+			if err != nil {
+				return MsgAgentDone{Response: fmt.Sprintf("Error updating pin: %v", err)}
+			}
+			return MsgAgentDone{Response: resp}
+		case "stats":
+			if m.agent == nil || m.agent.Memory() == nil {
+				return MsgAgentDone{Response: "Memory not initialized."}
+			}
+			store := kernel.NewSkillStore(m.agent.Memory())
+			stats, err := store.FormatStats(context.Background(), m.tenantID)
+			if err != nil {
+				return MsgAgentDone{Response: fmt.Sprintf("Error loading skill stats: %v", err)}
+			}
+			return MsgAgentDone{Response: stats}
+		default:
+			return MsgAgentDone{Response: "Usage: /skills [list|view|search|delete|archive|pin|unpin|stats]"}
 		}
+	}
+}
 
-		return MsgAgentDone{Response: "Usage: /skills [list|delete <name>]"}
+func (m *uiModel) handleMemory(args []string) tea.Cmd {
+	return func() tea.Msg {
+		if m.agent == nil || m.agent.Memory() == nil {
+			return MsgAgentDone{Response: "Memory not initialized."}
+		}
+		action := "list"
+		if len(args) > 0 {
+			action = args[0]
+		}
+		mem := m.agent.Memory()
+		switch action {
+		case "list":
+			userFacts, _ := mem.GetFacts(context.Background(), m.tenantID, "user")
+			memFacts, _ := mem.GetFacts(context.Background(), m.tenantID, "memory")
+			var sb strings.Builder
+			sb.WriteString("## Memory\n\n### User\n")
+			if len(userFacts) == 0 {
+				sb.WriteString("- (empty)\n")
+			}
+			for _, f := range userFacts {
+				sb.WriteString(fmt.Sprintf("- `%s` %s\n", f.ID, f.Content))
+			}
+			sb.WriteString("\n### Project / Environment\n")
+			if len(memFacts) == 0 {
+				sb.WriteString("- (empty)\n")
+			}
+			for _, f := range memFacts {
+				sb.WriteString(fmt.Sprintf("- `%s` %s\n", f.ID, f.Content))
+			}
+			sb.WriteString("\nRemove with: /memory remove <user|memory> <id-or-text>")
+			return MsgAgentDone{Response: sb.String()}
+		case "remove":
+			if len(args) < 3 {
+				return MsgAgentDone{Response: "Usage: /memory remove <user|memory> <id-or-text>"}
+			}
+			target := args[1]
+			needle := strings.Join(args[2:], " ")
+			facts, err := mem.GetFacts(context.Background(), m.tenantID, target)
+			if err != nil {
+				return MsgAgentDone{Response: fmt.Sprintf("Memory error: %v", err)}
+			}
+			for _, f := range facts {
+				if f.ID == needle || strings.Contains(f.Content, needle) {
+					if err := mem.RemoveFact(context.Background(), m.tenantID, f.ID); err != nil {
+						return MsgAgentDone{Response: fmt.Sprintf("Remove failed: %v", err)}
+					}
+					return MsgAgentDone{Response: fmt.Sprintf("Removed memory `%s`.", f.ID)}
+				}
+			}
+			return MsgAgentDone{Response: "No matching memory found."}
+		default:
+			return MsgAgentDone{Response: "Usage: /memory [list|remove <user|memory> <id-or-text>]"}
+		}
+	}
+}
+
+func (m *uiModel) handleCurator(args []string) tea.Cmd {
+	return func() tea.Msg {
+		action := "status"
+		if len(args) > 0 {
+			action = args[0]
+		}
+		switch action {
+		case "status":
+			resp, err := tools.CuratorStatusForTenant(m.tenantID)
+			if err != nil {
+				return MsgAgentDone{Response: fmt.Sprintf("Curator status error: %v", err)}
+			}
+			return MsgAgentDone{Response: resp}
+		case "run":
+			resp, err := tools.RunCuratorForTenant(m.tenantID, 30, 90)
+			if err != nil {
+				return MsgAgentDone{Response: fmt.Sprintf("Curator run error: %v", err)}
+			}
+			return MsgAgentDone{Response: resp}
+		default:
+			return MsgAgentDone{Response: "Usage: /curator [status|run]"}
+		}
 	}
 }
 
@@ -869,8 +1014,9 @@ func (m *uiModel) handleCheckpoint(args []string) tea.Cmd {
 	}
 	return func() tea.Msg {
 		resp, err := m.agent.Dispatcher().Dispatch("checkpoint", map[string]interface{}{
-			"action": action,
-			"name":   name,
+			"action":     action,
+			"name":       name,
+			"_tenant_id": m.tenantID,
 		})
 		if err != nil {
 			return MsgAgentDone{Response: fmt.Sprintf("Checkpoint error: %v", err)}
@@ -1020,6 +1166,10 @@ func (m *uiModel) pumpAgentEvents() {
 				if m.program != nil {
 					m.program.Send(MsgToolDone{ToolName: name, Result: result, Err: err, Duration: duration})
 				}
+			case strings.HasPrefix(event, "review:"):
+				if m.program != nil {
+					m.program.Send(MsgLearningEvent{Content: strings.TrimPrefix(event, "review:")})
+				}
 			}
 		}
 	}
@@ -1045,6 +1195,13 @@ func formatDuration(d time.Duration) string {
 		return fmt.Sprintf("%dh %dm", h, m)
 	}
 	return fmt.Sprintf("%dm", m)
+}
+
+func valueOr(v, fallback string) string {
+	if v == "" {
+		return fallback
+	}
+	return v
 }
 
 func renderProgressBar(progress float64, width int) string {
@@ -1155,12 +1312,18 @@ type MsgToolDone struct {
 	Duration float64
 }
 
+type MsgLearningEvent struct {
+	Content string
+}
+
 const helpText = `Available commands:
   /help       - Show this help
   /clear      - Clear conversation history
   /status     - Show system status and background processes
   /tasks      - List global tasks
-  /skills     - List or delete managed skills
+  /skills     - List, view, search, archive, pin, or delete managed skills
+  /memory     - List or remove durable memory
+  /curator    - Show or run skill lifecycle maintenance
   /checkpoint - Conversation snapshot (list|save|load)
   /migrate    - Migrate skills from Hermes Agent
   /exit       - Exit (or Ctrl+C)

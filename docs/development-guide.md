@@ -469,19 +469,21 @@ d.RegisterTool(NewMyTool())
 Agent 完成一个复杂任务（≥3步，多工具）
     │
     ▼
-triggerEvolutionReview() [goroutine, 不阻塞]
+最终回答返回给用户
     │
-    ├─ scanExistingSkills()  ──► 扫描 ~/.selfmind/skills/
-    ├─ buildReviewPrompt(task_history, existing_skills)
-    │     └─ 告知 LLM 已有哪些 skills，要求避免重复
-    ├─ LLM.ChatCompletion(prompt)
-    │     └─ 返回：SKIP / CREATE|skill-name|content / UPDATE|skill-name|content
-    ├─ parseReviewResponse()
-    └─ ArchiveSkill(result)
-          ├─ scanForDangers(content)  ──► 凭证泄露 / 危险命令
-          ├─ 原子写入（先写 .tmp，再 rename）
-          └─ notifyCh ──► TUI 显示 "💾 skill xxx created"
+    ├─ saveHistory()  ──► trajectories + sessions_fts + session_messages
+    ├─ FactExtractor  ──► 异步抽取 durable memory
+    └─ maybeTriggerBackgroundReview()
+          ├─ turnReviewCount >= nudge_interval  → reviewMemory
+          ├─ toolCallCount >= nudge_interval    → reviewSkills
+          └─ BackgroundReviewEngine.SpawnReview()
+                ├─ fork 一个受限 review Agent
+                ├─ 只允许 memory / skill_manage / session_search
+                ├─ 根据对话快照保存 memory 或 patch/create skill
+                └─ EventChannel 发送 "review:..."
 ```
+
+旧的 `ReflectionEngine` 仍保留为 fallback：如果未配置 `BackgroundReviewEngine`，复杂任务仍可走 `triggerEvolutionReview()` 的单次 review 链路。
 
 ### 7.2 复杂度评估
 
@@ -549,6 +551,49 @@ examples:
 - 目录格式：`SkillName/SKILL.md`
 
 解析 YAML front matter 提取 `triggers`，将匹配的工具注册到 dispatcher。LLM 调用时通过正则匹配触发词决定是否激活 skill。
+
+### 7.6 当前已实现的“越用越智能”闭环
+
+本轮实现把 SelfMind 从“任务后可能归档 skill”升级为可持续学习闭环：
+
+| 能力 | 实现位置 | 说明 |
+|------|----------|------|
+| 学习规则注入 | `internal/kernel/prompt_guidance.go` + `agent.go` | system prompt 明确 memory / session_search / skill_manage 的边界 |
+| 后台复盘 | `internal/kernel/background_review.go` | 最终回复后异步运行受限 review Agent，不阻塞用户 |
+| Skill CRUD | `internal/tools/skill_manage.go` | 支持 `list/search/read/create/edit/patch/delete/archive/write_file/remove_file/pin/unpin` |
+| Skill 目录格式 | `internal/tools/skill_loader.go` | 同时兼容旧 `.md` 和新 `SkillName/SKILL.md` |
+| Usage sidecar | `internal/tools/skill_usage.go` | `.usage.json` 记录 `source/state/last_used/patch_count/pinned` |
+| Curator | `internal/tools/skill_curator.go` | 只治理 `agent-created` skill，支持 stale / archive / pinned |
+| 历史检索增强 | `session_search.go` + `memory/sqlite_provider.go` | 支持最近会话浏览、message 级展开、FTS5 搜索 |
+| 用户管理入口 | `gateway/cli/controller.go` | 新增 `/memory`、`/curator`，扩展 `/skills` |
+
+`skill_manage` 的新 skill 默认写入：
+
+```text
+~/.selfmind/<tenant>/skills/<skill-name>/
+  SKILL.md
+  references/
+  templates/
+  scripts/
+  assets/
+```
+
+后台复盘的工具白名单是强约束：review Agent 只能调用 `memory`、`skill_manage`、`session_search`，避免后台学习过程执行文件写入、terminal 等高风险工具。
+
+### 7.7 CLI 管理命令
+
+| 命令 | 作用 |
+|------|------|
+| `/skills list` | 列出 active skill，显示 state/source/pinned/path |
+| `/skills view <name>` | 查看 `SKILL.md` 和支持文件列表 |
+| `/skills search <query>` | 搜索 skill 名称、描述和内容 |
+| `/skills archive <name>` | 归档未 pinned 的 skill |
+| `/skills pin <name>` / `/skills unpin <name>` | 保护或解除保护 skill |
+| `/skills stats` | 查看 skill 调用指标 |
+| `/memory list` | 查看 user / memory facts |
+| `/memory remove <user|memory> <id-or-text>` | 删除记忆 |
+| `/curator status` | 查看 skill 生命周期状态 |
+| `/curator run` | 运行 stale/archive 维护 |
 
 ---
 
@@ -643,7 +688,7 @@ tenantID := "user1"
 | 缺口 | 描述 | 修复位置 | 状态 |
 |------|------|---------|------|
 | **零启动引导** | 缺 API key 时 TUI 亮起但用户收到 mock response，不知道要配置 | `app/agent.go` mockProvider 返回引导文本 | ✅ 完成 |
-| **无 Skill 管理命令** | 自进化创建的 skill 用户完全看不到，无法 list/delete | `controller.go` 添加 `/skills` 命令 | ✅ 完成 |
+| **Skill 管理入口不足** | 用户需要查看、搜索、归档、pin/unpin、统计 agent 学到的技能 | `controller.go` 扩展 `/skills`，新增 `/memory`、`/curator` | ✅ 完成 |
 | **多租户空壳** | `tenantID := "user1"` hardcoded，CLI 无法使用真实租户隔离 | `main.go` 从 `SELF_TENANT_ID` 环境变量读取 | ✅ 完成 |
 
 ### P1 — 影响生产使用的
@@ -694,14 +739,20 @@ go build ./... && go test ./... && go vet ./...
 | 文件 | 行数 | 职责 |
 |------|------|------|
 | `cmd/selfmind/main.go` | ~100 | 入口，组装所有组件 |
-| `internal/kernel/agent.go` | ~450 | 推理循环，事件通道 |
+| `internal/kernel/agent.go` | ~700 | 推理循环，事件通道，后台复盘触发 |
+| `internal/kernel/background_review.go` | ~200 | 受限后台 review Agent |
+| `internal/kernel/prompt_guidance.go` | ~30 | memory / session_search / skill_manage 学习规则 |
 | `internal/kernel/context_engine.go` | ~200 | Token 预算，消息截断 |
-| `internal/kernel/reflection.go` | ~500 | 自进化决策，Skill 归档 |
-| `internal/kernel/memory/sqlite_provider.go` | ~400 | SQLite + FTS5，提供商 |
-| `internal/gateway/cli/controller.go` | ~550 | Bubble Tea TUI 控制器 |
+| `internal/kernel/reflection.go` | ~500 | legacy 自进化决策，Skill 归档 fallback |
+| `internal/kernel/memory/sqlite_provider.go` | ~800 | SQLite + FTS5 + message 级会话索引 |
+| `internal/gateway/cli/controller.go` | ~1300 | Bubble Tea TUI 控制器，slash command 管理入口 |
 | `internal/gateway/router/gateway.go` | ~250 | 统一消息处理器 |
 | `internal/tools/dispatcher.go` | ~300 | 工具注册表 + Middleware 管道 |
 | `internal/tools/builtin.go` | ~200 | 内置工具实现 |
+| `internal/tools/skill_manage.go` | ~700 | Skill CRUD、目录格式、支持文件、pin/archive |
+| `internal/tools/skill_usage.go` | ~180 | `.usage.json` 生命周期元数据 |
+| `internal/tools/skill_curator.go` | ~100 | stale/archive curator |
+| `internal/tools/session_search.go` | ~200 | 历史搜索、最近会话浏览、message 展开 |
 | `internal/platform/config/loader.go` | ~200 | 配置加载 + 默认模板 |
 
 ## 附录 C：Hermes 对比要点
@@ -709,13 +760,14 @@ go build ./... && go test ./... && go vet ./...
 | 维度 | Hermes (Python) | SelfMind (Go) |
 |------|----------------|---------------|
 | 代码组织 | 单文件 8K-12K 行 | 模块化（69 个 .go 文件） |
-| 自进化 | 每轮结束同步，8 次迭代，无去重 | 异步，复杂度触发，带去重 |
+| 自进化 | 后台 review Agent + memory/skill 工具闭环 | 最终回复后异步 review，受限工具白名单 |
 | 工具生态 | 40+ 工具，MCP 自动发现 | 基础工具集， MCP 支持 |
 | 多租户 | Profiles 进程隔离 | SQLite per-tenant |
 | 日志系统 | 三层日志 + RedactingFormatter | 残缺，log_level 未实现 |
-| Skill 管理 | `hermes skills list/delete` | ❌ 暂无命令 |
+| Skill 管理 | `skills_list` / `skill_view` / `skill_manage` / curator | `/skills` + `skill_manage` + usage sidecar + curator |
+| 历史检索 | `session_search` 支持搜索、最近会话、上下文展开 | `session_search` 支持搜索、最近会话、message 展开 |
 | TUI | React/Ink + JSON-RPC | Bubble Tea/Lip Gloss（更现代） |
 
 ---
 
-*文档版本：2026-04-20 | SelfMind v0.1*
+*文档版本：2026-05-29 | SelfMind v0.1*

@@ -14,6 +14,9 @@ import (
 // the skill loader, the skill metrics middleware, and injects the session search function.
 func InitTools(mem *memory.MemoryManager, cfg *config.Config, ag *kernel.Agent, skillStore *kernel.SkillStore, tenantID string) (*tools.Dispatcher, error) {
 	disp := tools.NewDispatcher()
+	if tenantID == "" {
+		tenantID = "default"
+	}
 
 	// 1. Register auth middleware (load permissions from persistent layer)
 	disp.InjectMiddleware(tools.AuthMiddleware(mem))
@@ -23,16 +26,13 @@ func InitTools(mem *memory.MemoryManager, cfg *config.Config, ag *kernel.Agent, 
 	disp.RegisterTool(tools.NewSkillManageTool())
 
 	if mem != nil {
-		disp.InjectSessionSearch(mem.SearchFn("default"))
+		disp.InjectSessionAccess(mem.SearchFn(tenantID), mem.RecentSessionsFn(tenantID), mem.SessionMessagesFn(tenantID))
 		disp.RegisterTool(tools.NewMemoryTool(mem))
 		tools.GetProcessRegistry().Init(mem, tenantID)
 	}
 
 	home, _ := os.UserHomeDir()
 	baseSkillsDir := filepath.Join(home, ".selfmind")
-	if tenantID == "" {
-		tenantID = "default"
-	}
 	skillsDir := tools.SkillsDirForTenant(baseSkillsDir, tenantID)
 	skillLoader := tools.NewSkillLoader(skillsDir, tools.GlobalRegistry())
 	skillLoader.LoadAll()

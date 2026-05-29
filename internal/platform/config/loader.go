@@ -49,6 +49,7 @@ evolution:
   enabled: true
   min_complexity_threshold: 5
   auto_archive_confidence: 0.8
+  nudge_interval: 10
 
 delegation:
   provider: ""
@@ -180,6 +181,8 @@ func LoadConfig() (*Config, error) {
 	v.SetDefault("memory.auto_extract_min_chars", 80)
 	v.SetDefault("memory.semantic_recall", true)
 	v.SetDefault("memory.use_memory_fence", true)
+	v.SetDefault("evolution.enabled", true)
+	v.SetDefault("evolution.nudge_interval", 10)
 
 	// 2. 加载配置文件
 	home, _ := os.UserHomeDir()

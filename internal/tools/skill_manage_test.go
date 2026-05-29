@@ -26,12 +26,12 @@ func TestSkillManageTool_CreateUpdateDelete(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create failed: %v", err)
 	}
-	if !strings.Contains(result, "created successfully") {
+	if !strings.Contains(result, "created") {
 		t.Errorf("Expected success message, got: %s", result)
 	}
 
 	// Verify file exists and has front matter
-	skillPath := filepath.Join(tmpDir, ".selfmind", "default", "skills", "docker-debug.md")
+	skillPath := filepath.Join(tmpDir, ".selfmind", "default", "skills", "docker-debug", "SKILL.md")
 	data, err := os.ReadFile(skillPath)
 	if err != nil {
 		t.Fatalf("skill file not found: %v", err)
@@ -53,8 +53,37 @@ func TestSkillManageTool_CreateUpdateDelete(t *testing.T) {
 	if err != nil {
 		t.Fatalf("update failed: %v", err)
 	}
-	if !strings.Contains(result, "updated successfully") {
+	if !strings.Contains(result, "edited") {
 		t.Errorf("Expected update success, got: %s", result)
+	}
+
+	// 2b. Patch
+	result, err = tool.Execute(map[string]interface{}{
+		"action":   "patch",
+		"name":     "docker-debug",
+		"old_text": "Always check",
+		"new_text": "First check",
+	})
+	if err != nil {
+		t.Fatalf("patch failed: %v", err)
+	}
+	if !strings.Contains(result, "patched") {
+		t.Errorf("Expected patch success, got: %s", result)
+	}
+
+	// 2c. Support file
+	result, err = tool.Execute(map[string]interface{}{
+		"action":       "write_file",
+		"name":         "docker-debug",
+		"file_path":    "references/example.md",
+		"file_content": "example",
+	})
+	if err != nil {
+		t.Fatalf("write_file failed: %v", err)
+	}
+	supportPath := filepath.Join(tmpDir, ".selfmind", "default", "skills", "docker-debug", "references", "example.md")
+	if _, err := os.Stat(supportPath); err != nil {
+		t.Fatalf("support file not found: %v", err)
 	}
 
 	// 3. Delete
@@ -65,13 +94,14 @@ func TestSkillManageTool_CreateUpdateDelete(t *testing.T) {
 	if err != nil {
 		t.Fatalf("delete failed: %v", err)
 	}
-	if !strings.Contains(result, "deleted successfully") {
+	if !strings.Contains(result, "deleted") {
 		t.Errorf("Expected delete success, got: %s", result)
 	}
 
 	// Verify file removed
-	if _, err := os.Stat(skillPath); !os.IsNotExist(err) {
-		t.Error("Expected skill file to be deleted")
+	skillDir := filepath.Dir(skillPath)
+	if _, err := os.Stat(skillDir); !os.IsNotExist(err) {
+		t.Error("Expected skill directory to be deleted")
 	}
 }
 

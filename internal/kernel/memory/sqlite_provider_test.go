@@ -35,6 +35,22 @@ func TestSQLiteProvider_FTS5(t *testing.T) {
 		t.Errorf("expected session_id sess-001, got %s", sessions[0].SessionID)
 	}
 
+	recent, err := p.ListRecentSessions(tenantID, 5)
+	if err != nil {
+		t.Fatalf("ListRecentSessions: %v", err)
+	}
+	if len(recent) == 0 || recent[0].SessionID != "sess-001" {
+		t.Fatalf("expected recent session sess-001, got %#v", recent)
+	}
+
+	messages, err := p.GetSessionMessages(tenantID, "sess-001", 1, 1)
+	if err != nil {
+		t.Fatalf("GetSessionMessages: %v", err)
+	}
+	if len(messages) == 0 || messages[0].Role != "user" || messages[0].MessageID != 1 {
+		t.Fatalf("expected indexed user message, got %#v", messages)
+	}
+
 	sessions, err = p.SearchSessions(tenantID, "xyznonexistent", 5)
 	if err != nil {
 		t.Fatalf("SearchSessions: %v", err)

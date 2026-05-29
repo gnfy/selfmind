@@ -107,7 +107,7 @@ func NewEditor(c *common.Common, editorCfg *config.EditorConfig) *Editor {
 		common:          c,
 		textarea:        t,
 		textinput:       i,
-		commands:        []string{"/help", "/status", "/new", "/clear", "/exit", "/model", "/models", "/config", "/tasks", "/sessions", "/retry", "/undo", "/title", "/stop"},
+		commands:        []string{"/help", "/status", "/new", "/clear", "/exit", "/model", "/models", "/config", "/tasks", "/sessions", "/skills", "/memory", "/curator", "/retry", "/undo", "/title", "/stop"},
 		largePasteChars: chars,
 		largePasteLines: lines,
 	}

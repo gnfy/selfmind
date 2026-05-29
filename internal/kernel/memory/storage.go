@@ -15,6 +15,16 @@ type FTS5Session struct {
 	Timestamp int64  `json:"timestamp"`
 }
 
+// SessionMessage is a single indexed message inside a historical session.
+type SessionMessage struct {
+	SessionID string `json:"session_id"`
+	MessageID int    `json:"message_id"`
+	Channel   string `json:"channel"`
+	Role      string `json:"role"`
+	Content   string `json:"content"`
+	Timestamp int64  `json:"timestamp"`
+}
+
 // ProcessRecord 用于持久化后台进程状态
 type ProcessRecord struct {
 	ID         string    `json:"id"`
@@ -42,6 +52,8 @@ type StorageProvider interface {
 	GetLatestContext(ctx context.Context, tenantID, channel string) ([][]byte, error)
 	IndexMessagesFromTrajectory(ctx context.Context, tenantID, channel, sessionID string, messagesJSON []byte) error
 	SearchSessions(tenantID, query string, limit int) ([]FTS5Session, error)
+	ListRecentSessions(tenantID string, limit int) ([]FTS5Session, error)
+	GetSessionMessages(tenantID, sessionID string, aroundMessageID, window int) ([]SessionMessage, error)
 	// Checkpoint operations
 	SaveCheckpoint(ctx context.Context, tenantID, channel, name string, messages []byte) error
 	ListCheckpoints(ctx context.Context, tenantID, channel string) ([]Checkpoint, error)
@@ -117,6 +129,20 @@ func (m *MemoryManager) SearchSessions(tenantID, query string, limit int) ([]FTS
 	return m.provider.SearchSessions(tenantID, query, limit)
 }
 
+func (m *MemoryManager) ListRecentSessions(tenantID string, limit int) ([]FTS5Session, error) {
+	if m.provider == nil {
+		return nil, nil
+	}
+	return m.provider.ListRecentSessions(tenantID, limit)
+}
+
+func (m *MemoryManager) GetSessionMessages(tenantID, sessionID string, aroundMessageID, window int) ([]SessionMessage, error) {
+	if m.provider == nil {
+		return nil, nil
+	}
+	return m.provider.GetSessionMessages(tenantID, sessionID, aroundMessageID, window)
+}
+
 // Close 关闭存储后端
 func (m *MemoryManager) Close() error {
 	if m.provider == nil {
@@ -139,6 +165,24 @@ func (m *MemoryManager) SearchFn(tenantID string) func(query string, limit int) 
 			return nil, err
 		}
 		return sessions, nil
+	}
+}
+
+func (m *MemoryManager) RecentSessionsFn(tenantID string) func(limit int) (interface{}, error) {
+	return func(limit int) (interface{}, error) {
+		if m.provider == nil {
+			return nil, fmt.Errorf("memory provider not initialized")
+		}
+		return m.provider.ListRecentSessions(tenantID, limit)
+	}
+}
+
+func (m *MemoryManager) SessionMessagesFn(tenantID string) func(sessionID string, aroundMessageID, window int) (interface{}, error) {
+	return func(sessionID string, aroundMessageID, window int) (interface{}, error) {
+		if m.provider == nil {
+			return nil, fmt.Errorf("memory provider not initialized")
+		}
+		return m.provider.GetSessionMessages(tenantID, sessionID, aroundMessageID, window)
 	}
 }
 

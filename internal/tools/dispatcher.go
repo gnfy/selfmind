@@ -238,6 +238,20 @@ func (d *Dispatcher) InjectSessionSearch(fn func(query string, limit int) (inter
 	}
 }
 
+func (d *Dispatcher) InjectSessionAccess(
+	searchFn func(query string, limit int) (interface{}, error),
+	recentFn func(limit int) (interface{}, error),
+	messagesFn func(sessionID string, aroundMessageID, window int) (interface{}, error),
+) {
+	t, ok := globalRegistry.Get("session_search")
+	if !ok {
+		return
+	}
+	if sst, ok := t.(*SessionSearchTool); ok {
+		sst.RegisterAccessFns(searchFn, recentFn, messagesFn)
+	}
+}
+
 // InjectDelegateFn 将 delegate_fn 注入到 DelegateTool
 func (d *Dispatcher) InjectDelegateFn(fn func(goal, context string, toolsets []string) (string, llm.UsageStats, error)) {
 	t, ok := globalRegistry.Get("delegate_task")

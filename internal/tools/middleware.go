@@ -186,6 +186,9 @@ func SkillMetricsMiddleware(skillStore interface {
 			// Record exactly once: success if no error, failure otherwise
 			success := err == nil
 			_ = skillStore.RecordResult(ctx, tenantID, skillName, success)
+			if success {
+				_ = MarkSkillUsed(tenantID, skillName)
+			}
 
 			return result, err
 		}

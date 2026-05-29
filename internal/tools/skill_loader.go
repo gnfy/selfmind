@@ -46,10 +46,20 @@ func (sl *SkillLoader) LoadAll() ([]SkillDefinition, error) {
 	}
 
 	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".md") {
+		if strings.HasPrefix(entry.Name(), ".") {
 			continue
 		}
-		path := filepath.Join(sl.skillsDir, entry.Name())
+		var path string
+		if entry.IsDir() {
+			path = filepath.Join(sl.skillsDir, entry.Name(), "SKILL.md")
+			if _, err := os.Stat(path); err != nil {
+				continue
+			}
+		} else if strings.HasSuffix(entry.Name(), ".md") {
+			path = filepath.Join(sl.skillsDir, entry.Name())
+		} else {
+			continue
+		}
 		def, err := sl.LoadFile(path)
 		if err != nil {
 			log.Warn("failed to load skill file", "path", path, "error", err)
@@ -73,6 +83,16 @@ func (sl *SkillLoader) LoadFile(path string) (SkillDefinition, error) {
 		return SkillDefinition{}, fmt.Errorf("front matter parse error: %w", err)
 	}
 	def.Source = path
+	if def.Name == "" {
+		if filepath.Base(path) == "SKILL.md" {
+			def.Name = filepath.Base(filepath.Dir(path))
+		} else {
+			def.Name = strings.TrimSuffix(filepath.Base(path), ".md")
+		}
+	}
+	if def.Description == "" {
+		def.Description = def.Name
+	}
 
 	// 动态注册为工具
 	if def.ToolName == "" {
@@ -241,6 +261,7 @@ func (t *SkillTool) SetSkillSteps(steps []string) {
 
 // Execute 解析 markdown 中的 code block 并依次执行每个步骤
 func (t *SkillTool) Execute(args map[string]interface{}) (string, error) {
+	tenantID, _ := args["_tenant_id"].(string)
 	// 如果没有预解析的 steps，则延迟解析
 	if len(t.steps) == 0 {
 		t.steps = extractSkillSteps(t.content)
@@ -263,7 +284,8 @@ func (t *SkillTool) Execute(args map[string]interface{}) (string, error) {
 
 		// 通过 terminal 工具执行 shell 命令
 		result, err := globalRegistry.Dispatch("terminal", map[string]interface{}{
-			"command": cmd,
+			"command":    cmd,
+			"_tenant_id": tenantID,
 		})
 		if err != nil {
 			results = append(results, fmt.Sprintf("步骤 %d 执行失败: %v", i+1, err))

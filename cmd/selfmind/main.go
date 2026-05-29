@@ -55,7 +55,7 @@ func main() {
 	app.InitMCP(disp, cfg)
 
 	ctrl := cli.NewControllerWithGateway(gwDeps.Gateway, agent, nil, cfg.Agent.Provider, cfg.Agent.Model, cfg, tenantID)
-	ctrl.SetSessionSearchFn(mem.SearchFn("default"))
+	ctrl.SetSessionSearchFn(mem.SearchFn(tenantID))
 
 	memFn := func() (*memory.MemoryManager, string, string) { return mem, tenantID, "cli" }
 	msgFn := func() ([]byte, error) {

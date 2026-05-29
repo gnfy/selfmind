@@ -14,6 +14,8 @@ func (m *mockStorage) SaveTrajectory(ctx context.Context, tenantID, channel stri
 func (m *mockStorage) GetLatestContext(ctx context.Context, tenantID, channel string) ([][]byte, error) { return nil, nil }
 func (m *mockStorage) IndexMessagesFromTrajectory(ctx context.Context, tenantID, channel, sessionID string, messagesJSON []byte) error { return nil }
 func (m *mockStorage) SearchSessions(tenantID, query string, limit int) ([]memory.FTS5Session, error) { return nil, nil }
+func (m *mockStorage) ListRecentSessions(tenantID string, limit int) ([]memory.FTS5Session, error) { return nil, nil }
+func (m *mockStorage) GetSessionMessages(tenantID, sessionID string, aroundMessageID, window int) ([]memory.SessionMessage, error) { return nil, nil }
 func (m *mockStorage) SaveCheckpoint(ctx context.Context, tenantID, channel, name string, messages []byte) error { return nil }
 func (m *mockStorage) ListCheckpoints(ctx context.Context, tenantID, channel string) ([]memory.Checkpoint, error) { return nil, nil }
 func (m *mockStorage) LoadCheckpoint(ctx context.Context, tenantID, channel, name string) ([]byte, error) { return nil, nil }

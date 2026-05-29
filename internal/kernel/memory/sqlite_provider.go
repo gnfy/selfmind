@@ -108,6 +108,38 @@ func (p *SQLiteProvider) worker() {
 				)
 				res = dbResult{err: err}
 
+			case "IndexSessionMessages":
+				sessionID := op.args[1].(string)
+				messages := op.args[2].([]SessionMessage)
+				tx, err := db.Begin()
+				if err != nil {
+					res = dbResult{err: err}
+					break
+				}
+				if _, err = tx.Exec(`DELETE FROM session_messages WHERE session_id = ?`, sessionID); err != nil {
+					_ = tx.Rollback()
+					res = dbResult{err: err}
+					break
+				}
+				stmt, err := tx.Prepare(`INSERT INTO session_messages (session_id, message_id, channel, role, content, timestamp) VALUES (?, ?, ?, ?, ?, ?)`)
+				if err != nil {
+					_ = tx.Rollback()
+					res = dbResult{err: err}
+					break
+				}
+				for _, msg := range messages {
+					if _, err = stmt.Exec(msg.SessionID, msg.MessageID, msg.Channel, msg.Role, msg.Content, msg.Timestamp); err != nil {
+						break
+					}
+				}
+				_ = stmt.Close()
+				if err != nil {
+					_ = tx.Rollback()
+					res = dbResult{err: err}
+				} else {
+					res = dbResult{err: tx.Commit()}
+				}
+
 			case "SearchSessions":
 				query := op.args[1].(string)
 				limit := op.args[2].(int)
@@ -129,6 +161,71 @@ func (p *SQLiteProvider) worker() {
 						var s FTS5Session
 						rows.Scan(&s.SessionID, &s.Channel, &s.Content, &s.Summary, &s.Timestamp)
 						results = append(results, s)
+					}
+					rows.Close()
+					res = dbResult{val: results}
+				}
+
+			case "ListRecentSessions":
+				limit := op.args[1].(int)
+				if limit <= 0 {
+					limit = 10
+				}
+				rows, err := db.Query(
+					`SELECT session_id, channel, content, summary, timestamp
+					 FROM sessions_fts
+					 ORDER BY timestamp DESC
+					 LIMIT ?`,
+					limit,
+				)
+				if err != nil {
+					res = dbResult{err: err}
+				} else {
+					var results []FTS5Session
+					for rows.Next() {
+						var s FTS5Session
+						rows.Scan(&s.SessionID, &s.Channel, &s.Content, &s.Summary, &s.Timestamp)
+						results = append(results, s)
+					}
+					rows.Close()
+					res = dbResult{val: results}
+				}
+
+			case "GetSessionMessages":
+				sessionID := op.args[1].(string)
+				around := op.args[2].(int)
+				window := op.args[3].(int)
+				if window <= 0 {
+					window = 10
+				}
+				var rows *sql.Rows
+				var err error
+				if around > 0 {
+					rows, err = db.Query(
+						`SELECT session_id, message_id, channel, role, content, timestamp
+						 FROM session_messages
+						 WHERE session_id = ? AND message_id BETWEEN ? AND ?
+						 ORDER BY message_id ASC`,
+						sessionID, around-window, around+window,
+					)
+				} else {
+					rows, err = db.Query(
+						`SELECT session_id, message_id, channel, role, content, timestamp
+						 FROM session_messages
+						 WHERE session_id = ?
+						 ORDER BY message_id ASC
+						 LIMIT ?`,
+						sessionID, window*2+1,
+					)
+				}
+				if err != nil {
+					res = dbResult{err: err}
+				} else {
+					var results []SessionMessage
+					for rows.Next() {
+						var msg SessionMessage
+						rows.Scan(&msg.SessionID, &msg.MessageID, &msg.Channel, &msg.Role, &msg.Content, &msg.Timestamp)
+						results = append(results, msg)
 					}
 					rows.Close()
 					res = dbResult{val: results}
@@ -307,8 +404,8 @@ func (p *SQLiteProvider) worker() {
 				}
 
 			case "RecordSkillCall":
+				tenantID := op.args[0].(string)
 				skillName := op.args[1].(string)
-				tenantID := op.args[2].(string)
 				_, err := db.Exec(`INSERT INTO skill_metrics (skill_name, tenant_id, call_count, fail_count, last_used)
 					VALUES (?, ?, 1, 0, CURRENT_TIMESTAMP)
 					ON CONFLICT(skill_name, tenant_id) DO UPDATE SET
@@ -318,14 +415,14 @@ func (p *SQLiteProvider) worker() {
 				res = dbResult{err: err}
 
 			case "RecordSkillFailure":
+				tenantID := op.args[0].(string)
 				skillName := op.args[1].(string)
-				tenantID := op.args[2].(string)
 				_, err := db.Exec(`UPDATE skill_metrics SET fail_count = fail_count + 1 WHERE skill_name = ? AND tenant_id = ?`,
 					skillName, tenantID)
 				res = dbResult{err: err}
 
 			case "ListSkillMetrics":
-				tenantID := op.args[1].(string)
+				tenantID := op.args[0].(string)
 				rows, err := db.Query(`SELECT skill_name, tenant_id, call_count, fail_count, last_used FROM skill_metrics WHERE tenant_id = ?`, tenantID)
 				if err != nil {
 					res = dbResult{err: err}
@@ -345,8 +442,8 @@ func (p *SQLiteProvider) worker() {
 				}
 
 			case "PruneSkills":
-				tenantID := op.args[1].(string)
-				thresholdDays := op.args[2].(int)
+				tenantID := op.args[0].(string)
+				thresholdDays := op.args[1].(int)
 				// 淘汰：call_count < 3 AND 超过 thresholdDays 未使用
 				cutoff := time.Now().AddDate(0, 0, -thresholdDays).Format("2006-01-02 15:04:05")
 				result, err := db.Exec(`DELETE FROM skill_metrics WHERE tenant_id = ? AND call_count < 3 AND last_used < ?`, tenantID, cutoff)
@@ -358,8 +455,8 @@ func (p *SQLiteProvider) worker() {
 				}
 
 			case "GetSkillMetric":
+				tenantID := op.args[0].(string)
 				skillName := op.args[1].(string)
-				tenantID := op.args[2].(string)
 				var m SkillMetric
 				var lastUsed string
 				err := db.QueryRow(`SELECT skill_name, tenant_id, call_count, fail_count, last_used FROM skill_metrics WHERE skill_name = ? AND tenant_id = ?`,
@@ -400,6 +497,16 @@ func (p *SQLiteProvider) initSchema(db *sql.DB) {
 	db.Exec(`CREATE VIRTUAL TABLE IF NOT EXISTS sessions_fts USING fts5(
 		session_id UNINDEXED, channel UNINDEXED, content, summary, timestamp UNINDEXED
 	);`)
+	db.Exec(`CREATE TABLE IF NOT EXISTS session_messages (
+		session_id TEXT NOT NULL,
+		message_id INTEGER NOT NULL,
+		channel TEXT DEFAULT 'cli',
+		role TEXT,
+		content TEXT,
+		timestamp INTEGER,
+		PRIMARY KEY(session_id, message_id)
+	);`)
+	db.Exec(`CREATE INDEX IF NOT EXISTS idx_session_messages_session ON session_messages(session_id, message_id);`)
 
 	// 3. 检查点表
 	db.Exec(`CREATE TABLE IF NOT EXISTS checkpoints (
@@ -499,6 +606,28 @@ func (p *SQLiteProvider) SearchSessions(tenantID, query string, limit int) ([]FT
 	return val.([]FTS5Session), nil
 }
 
+func (p *SQLiteProvider) ListRecentSessions(tenantID string, limit int) ([]FTS5Session, error) {
+	val, err := p.call("ListRecentSessions", tenantID, limit)
+	if err != nil {
+		return nil, err
+	}
+	if val == nil {
+		return nil, nil
+	}
+	return val.([]FTS5Session), nil
+}
+
+func (p *SQLiteProvider) GetSessionMessages(tenantID, sessionID string, aroundMessageID, window int) ([]SessionMessage, error) {
+	val, err := p.call("GetSessionMessages", tenantID, sessionID, aroundMessageID, window)
+	if err != nil {
+		return nil, err
+	}
+	if val == nil {
+		return nil, nil
+	}
+	return val.([]SessionMessage), nil
+}
+
 func (p *SQLiteProvider) IndexMessagesFromTrajectory(ctx context.Context, tenantID, channel, sessionID string, messagesJSON []byte) error {
 	var record struct {
 		Messages []struct {
@@ -525,8 +654,18 @@ func (p *SQLiteProvider) IndexMessagesFromTrajectory(ctx context.Context, tenant
 	summary := strings.Join(summaryParts, " | ")
 
 	var contentBuilder strings.Builder
-	for _, m := range record.Messages {
+	var indexed []SessionMessage
+	now := time.Now().Unix()
+	for i, m := range record.Messages {
 		contentBuilder.WriteString(m.Role + ": " + m.Content + "\n")
+		indexed = append(indexed, SessionMessage{
+			SessionID: sessionID,
+			MessageID: i + 1,
+			Channel:   channel,
+			Role:      m.Role,
+			Content:   m.Content,
+			Timestamp: now + int64(i),
+		})
 	}
 
 	sess := FTS5Session{
@@ -534,9 +673,13 @@ func (p *SQLiteProvider) IndexMessagesFromTrajectory(ctx context.Context, tenant
 		Channel:   channel,
 		Content:   contentBuilder.String(),
 		Summary:   summary,
-		Timestamp: time.Now().Unix(),
+		Timestamp: now,
 	}
-	return p.IndexSession(tenantID, sess)
+	if err := p.IndexSession(tenantID, sess); err != nil {
+		return err
+	}
+	_, err := p.call("IndexSessionMessages", tenantID, sessionID, indexed)
+	return err
 }
 
 func (p *SQLiteProvider) AddFact(ctx context.Context, tenantID string, target, content string) error {
@@ -619,12 +762,12 @@ func (p *SQLiteProvider) GetProcess(ctx context.Context, tenantID, id string) (*
 }
 
 func (p *SQLiteProvider) RecordSkillCall(ctx context.Context, tenantID, skillName string) error {
-	_, err := p.call("RecordSkillCall", skillName, tenantID)
+	_, err := p.call("RecordSkillCall", tenantID, skillName)
 	return err
 }
 
 func (p *SQLiteProvider) RecordSkillFailure(ctx context.Context, tenantID, skillName string) error {
-	_, err := p.call("RecordSkillFailure", skillName, tenantID)
+	_, err := p.call("RecordSkillFailure", tenantID, skillName)
 	return err
 }
 
@@ -648,7 +791,7 @@ func (p *SQLiteProvider) PruneSkills(ctx context.Context, tenantID string, thres
 }
 
 func (p *SQLiteProvider) GetSkillMetric(ctx context.Context, tenantID, skillName string) (*SkillMetric, error) {
-	val, err := p.call("GetSkillMetric", skillName, tenantID)
+	val, err := p.call("GetSkillMetric", tenantID, skillName)
 	if err != nil {
 		return nil, err
 	}

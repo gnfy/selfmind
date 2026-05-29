@@ -3,6 +3,7 @@ package tools
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 )
 
 // Tool 是所有工具的统一接口
@@ -137,6 +138,11 @@ func validateType(param string, val interface{}, expectedType string) error {
 // CoerceArgs 将 string/bool/int 等动态类型强制转换为 schema 声明的类型
 func CoerceArgs(schema ToolSchema, args map[string]interface{}) (map[string]interface{}, error) {
 	coerced := make(map[string]interface{})
+	for param, val := range args {
+		if strings.HasPrefix(param, "_") {
+			coerced[param] = val
+		}
+	}
 	for param, def := range schema.Properties {
 		val, exists := args[param]
 		if !exists {

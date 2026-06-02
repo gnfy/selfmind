@@ -18,6 +18,26 @@ import (
 // mockProvider is used when no LLM API key is configured.
 type mockProvider struct{}
 
+const mockSetupGuide = `SelfMind has not been configured with an AI model yet.
+
+Run:
+  selfmind model
+
+Or edit:
+  ~/.selfmind/config.yaml
+
+Example:
+  model:
+    provider: "openai"
+    default: "gpt-4o"
+  providers:
+    openai:
+      api_key: "${OPENAI_API_KEY}"
+      base_url: "https://api.openai.com/v1"
+
+SelfMind also supports Anthropic, Google, and custom OpenAI-compatible endpoints.`
+
+/*
 const mockSetupGuide = `SelfMind 尚未配置 API Key，无法进行 AI 对话。
 
 请按以下步骤配置：
@@ -40,6 +60,10 @@ const mockSetupGuide = `SelfMind 尚未配置 API Key，无法进行 AI 对话�
 
 配置完成后，SelfMind 将自动使用配置的模型。`
 
+`
+
+*/
+
 func (m *mockProvider) ChatCompletion(ctx context.Context, messages []llm.Message) (string, error) {
 	return mockSetupGuide, nil
 }
@@ -56,47 +80,52 @@ func (m *mockProvider) StreamChat(ctx context.Context, req llm.ChatRequest) (<-c
 }
 
 func buildLLMProvider(cfg *config.Config) llm.Provider {
-	pType := strings.ToLower(cfg.Agent.Provider)
-	
+	providerName := cfg.EffectiveProvider()
+	modelName := cfg.EffectiveModel()
+	pType := strings.ToLower(providerName)
+
 	// 1. 如果显式指定了供应商，优先使用
 	switch pType {
 	case "anthropic":
-		if cfg.Providers.AnthropicAPIKey != "" {
-			ad := llm.NewAnthropicAdapter(cfg.Providers.AnthropicAPIKey)
-			if cfg.Agent.Model != "" {
-				ad.Model = cfg.Agent.Model
+		if cfg.Providers.Anthropic.APIKey != "" {
+			ad := llm.NewAnthropicAdapter(cfg.Providers.Anthropic.APIKey)
+			if modelName != "" {
+				ad.Model = modelName
 			}
+			ad.BaseURL = anthropicMessagesURL(cfg.Providers.Anthropic.BaseURL)
 			return ad
 		}
 	case "openai":
-		if cfg.Providers.OpenAIAPIKey != "" {
-			ad := llm.NewOpenAIAdapter(cfg.Providers.OpenAIAPIKey)
-			if cfg.Agent.Model != "" {
-				ad.Model = cfg.Agent.Model
+		if cfg.Providers.OpenAI.APIKey != "" {
+			ad := llm.NewOpenAIAdapter(cfg.Providers.OpenAI.APIKey)
+			if modelName != "" {
+				ad.Model = modelName
 			}
+			ad.BaseURL = chatCompletionsURL(cfg.Providers.OpenAI.BaseURL)
 			return ad
 		}
 	case "openrouter":
 		if cfg.Providers.OpenRouterAPIKey != "" {
 			ad := llm.NewOpenRouterAdapter(cfg.Providers.OpenRouterAPIKey)
-			if cfg.Agent.Model != "" {
-				ad.Model = cfg.Agent.Model
+			if modelName != "" {
+				ad.Model = modelName
 			}
 			return ad
 		}
-	case "gemini":
-		if cfg.Providers.GeminiAPIKey != "" {
-			ad := llm.NewGeminiAdapter(cfg.Providers.GeminiAPIKey)
-			if cfg.Agent.Model != "" {
-				ad.Model = cfg.Agent.Model
+	case "gemini", "google":
+		if cfg.Providers.Google.APIKey != "" {
+			ad := llm.NewGeminiAdapter(cfg.Providers.Google.APIKey)
+			if modelName != "" {
+				ad.Model = modelName
 			}
+			ad.BaseURL = googleChatCompletionsURL(cfg.Providers.Google.BaseURL)
 			return ad
 		}
 	case "minimax":
 		if cfg.Providers.MiniMaxAPIKey != "" {
 			ad := llm.NewMiniMaxAdapter(cfg.Providers.MiniMaxAPIKey)
-			if cfg.Agent.Model != "" {
-				ad.Model = cfg.Agent.Model
+			if modelName != "" {
+				ad.Model = modelName
 			}
 			return ad
 		}
@@ -104,27 +133,186 @@ func buildLLMProvider(cfg *config.Config) llm.Provider {
 
 	// 2. 检查自定义动态供应商
 	for _, cp := range cfg.Providers.Custom {
-		if strings.EqualFold(cp.Name, cfg.Agent.Provider) {
-			return llm.NewGenericOpenAIAdapter(cp.Name, cp.BaseURL, cp.APIKey, cp.Model)
+		if customProviderMatches(cp.Name, providerName) {
+			selectedModel := firstNonEmpty(modelName, cp.Model)
+			return llm.NewGenericOpenAIAdapter(cp.Name, chatCompletionsURL(cp.BaseURL), cp.APIKey, selectedModel)
 		}
 	}
 
 	// 3. 自动匹配可用供应商 (Fallback 逻辑)
 	switch {
-	case cfg.Providers.AnthropicAPIKey != "":
-		return llm.NewAnthropicAdapter(cfg.Providers.AnthropicAPIKey)
-	case cfg.Providers.GeminiAPIKey != "":
-		return llm.NewGeminiAdapter(cfg.Providers.GeminiAPIKey)
-	case cfg.Providers.OpenAIAPIKey != "":
-		return llm.NewOpenAIAdapter(cfg.Providers.OpenAIAPIKey)
+	case cfg.Providers.Anthropic.APIKey != "":
+		ad := llm.NewAnthropicAdapter(cfg.Providers.Anthropic.APIKey)
+		ad.BaseURL = anthropicMessagesURL(cfg.Providers.Anthropic.BaseURL)
+		return ad
+	case cfg.Providers.Google.APIKey != "":
+		ad := llm.NewGeminiAdapter(cfg.Providers.Google.APIKey)
+		ad.BaseURL = googleChatCompletionsURL(cfg.Providers.Google.BaseURL)
+		return ad
+	case cfg.Providers.OpenAI.APIKey != "":
+		ad := llm.NewOpenAIAdapter(cfg.Providers.OpenAI.APIKey)
+		ad.BaseURL = chatCompletionsURL(cfg.Providers.OpenAI.BaseURL)
+		return ad
 	case cfg.Providers.MiniMaxAPIKey != "":
 		return llm.NewMiniMaxAdapter(cfg.Providers.MiniMaxAPIKey)
 	case cfg.Providers.OpenRouterAPIKey != "":
 		return llm.NewOpenRouterAdapter(cfg.Providers.OpenRouterAPIKey)
 	default:
-		log.Warn("no LLM API key configured, using mock provider", "hint", "set anthropic_api_key in ~/.selfmind/config.yaml")
+		log.Warn("no LLM API key configured, using mock provider", "hint", "run `selfmind model` or edit config.yaml")
 		return &mockProvider{}
 	}
+}
+
+func defaultProviderName(cfg *config.Config) string {
+	pName := strings.ToLower(strings.TrimSpace(cfg.EffectiveProvider()))
+	if pName != "" {
+		return pName
+	}
+	switch {
+	case cfg.Providers.Anthropic.APIKey != "":
+		return "anthropic"
+	case cfg.Providers.Google.APIKey != "":
+		return "google"
+	case cfg.Providers.OpenAI.APIKey != "":
+		return "openai"
+	case cfg.Providers.MiniMaxAPIKey != "":
+		return "minimax"
+	case cfg.Providers.OpenRouterAPIKey != "":
+		return "openrouter"
+	default:
+		return "mock"
+	}
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if strings.TrimSpace(v) != "" {
+			return strings.TrimSpace(v)
+		}
+	}
+	return ""
+}
+
+func buildProviderForSelection(cfg *config.Config, providerName, model, baseURL, apiKey string) llm.Provider {
+	pType := strings.ToLower(strings.TrimSpace(providerName))
+	switch pType {
+	case "anthropic":
+		key := firstNonEmpty(apiKey, cfg.Providers.Anthropic.APIKey)
+		if key == "" {
+			return nil
+		}
+		ad := llm.NewAnthropicAdapter(key)
+		if model != "" {
+			ad.Model = model
+		}
+		ad.BaseURL = anthropicMessagesURL(firstNonEmpty(baseURL, cfg.Providers.Anthropic.BaseURL))
+		return ad
+	case "openai":
+		key := firstNonEmpty(apiKey, cfg.Providers.OpenAI.APIKey)
+		if key == "" {
+			return nil
+		}
+		ad := llm.NewOpenAIAdapter(key)
+		if model != "" {
+			ad.Model = model
+		}
+		ad.BaseURL = chatCompletionsURL(firstNonEmpty(baseURL, cfg.Providers.OpenAI.BaseURL))
+		return ad
+	case "openrouter":
+		key := firstNonEmpty(apiKey, cfg.Providers.OpenRouterAPIKey)
+		if key == "" {
+			return nil
+		}
+		ad := llm.NewOpenRouterAdapter(key)
+		if model != "" {
+			ad.Model = model
+		}
+		if baseURL != "" {
+			ad.BaseURL = baseURL
+		}
+		return ad
+	case "gemini", "google":
+		key := firstNonEmpty(apiKey, cfg.Providers.Google.APIKey)
+		if key == "" {
+			return nil
+		}
+		ad := llm.NewGeminiAdapter(key)
+		if model != "" {
+			ad.Model = model
+		}
+		ad.BaseURL = googleChatCompletionsURL(firstNonEmpty(baseURL, cfg.Providers.Google.BaseURL))
+		return ad
+	case "minimax":
+		key := firstNonEmpty(apiKey, cfg.Providers.MiniMaxAPIKey)
+		if key == "" {
+			return nil
+		}
+		ad := llm.NewMiniMaxAdapter(key)
+		if model != "" {
+			ad.Model = model
+		}
+		if baseURL != "" {
+			ad.BaseURL = baseURL
+		}
+		return ad
+	}
+
+	for _, cp := range cfg.Providers.Custom {
+		if customProviderMatches(cp.Name, providerName) {
+			key := firstNonEmpty(apiKey, cp.APIKey)
+			selectedURL := firstNonEmpty(baseURL, cp.BaseURL)
+			selectedModel := firstNonEmpty(model, cp.Model)
+			return llm.NewGenericOpenAIAdapter(cp.Name, chatCompletionsURL(selectedURL), key, selectedModel)
+		}
+	}
+	return nil
+}
+
+func customProviderMatches(name, requested string) bool {
+	name = strings.TrimSpace(name)
+	requested = strings.TrimSpace(requested)
+	if strings.EqualFold(name, requested) {
+		return true
+	}
+	return strings.EqualFold("custom:"+name, requested)
+}
+
+func chatCompletionsURL(baseURL string) string {
+	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	if baseURL == "" {
+		return "https://api.openai.com/v1/chat/completions"
+	}
+	if strings.HasSuffix(strings.ToLower(baseURL), "/chat/completions") {
+		return baseURL
+	}
+	return baseURL + "/chat/completions"
+}
+
+func anthropicMessagesURL(baseURL string) string {
+	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	if baseURL == "" {
+		return "https://api.anthropic.com/v1/messages"
+	}
+	lower := strings.ToLower(baseURL)
+	if strings.HasSuffix(lower, "/v1/messages") || strings.HasSuffix(lower, "/messages") {
+		return baseURL
+	}
+	return baseURL + "/v1/messages"
+}
+
+func googleChatCompletionsURL(baseURL string) string {
+	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	if baseURL == "" {
+		return "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
+	}
+	lower := strings.ToLower(baseURL)
+	if strings.HasSuffix(lower, "/chat/completions") {
+		return baseURL
+	}
+	if strings.Contains(lower, "generativelanguage.googleapis.com") && !strings.Contains(lower, "/openai") {
+		return baseURL + "/openai/chat/completions"
+	}
+	return chatCompletionsURL(baseURL)
 }
 
 func getEffectiveAPIKey(mem *memory.MemoryManager, tenantID, provider string, systemKey string) string {
@@ -134,7 +322,7 @@ func getEffectiveAPIKey(mem *memory.MemoryManager, tenantID, provider string, sy
 	// 优先从数据库加载该租户的 Key
 	userKey, err := mem.GetPermission(context.Background(), tenantID, provider+"_api_key")
 	// 这里目前复用了 GetPermission 的 bool 返回作为演示
-	_ = userKey 
+	_ = userKey
 	_ = err
 	return systemKey
 }
@@ -151,6 +339,66 @@ func buildKeyGetter(mem *memory.MemoryManager, tenantID, provider string) func()
 		}
 		return val
 	}
+}
+
+func applyDynamicKeyGetter(provider llm.Provider, mem *memory.MemoryManager, tenantID, providerName string) {
+	if provider == nil || providerName == "" {
+		return
+	}
+	getter := buildKeyGetter(mem, tenantID, strings.ToLower(providerName))
+	switch p := provider.(type) {
+	case *llm.AnthropicAdapter:
+		p.KeyGetter = getter
+	case *llm.OpenAIAdapter:
+		p.KeyGetter = getter
+	case *llm.GeminiAdapter:
+		p.KeyGetter = getter
+	case *llm.MiniMaxAdapter:
+		p.KeyGetter = getter
+	case *llm.GenericOpenAIAdapter:
+		p.KeyGetter = getter
+	case *llm.OpenRouterAdapter:
+		p.KeyGetter = getter
+	}
+}
+
+func buildModelGateway(cfg *config.Config, mem *memory.MemoryManager, tenantID string, fallbackProvider llm.Provider) *llm.PolicyGateway {
+	pName := defaultProviderName(cfg)
+	applyDynamicKeyGetter(fallbackProvider, mem, tenantID, pName)
+
+	fallbackProfile := llm.ProviderProfile{
+		Name:         "default",
+		ProviderName: pName,
+		Model:        firstNonEmpty(cfg.EffectiveModel(), llm.GetModelName(fallbackProvider)),
+		Provider:     fallbackProvider,
+	}
+	gateway := llm.NewPolicyGateway(fallbackProfile)
+
+	for roleName, roleCfg := range cfg.Models.Roles {
+		roleName = strings.TrimSpace(roleName)
+		if roleName == "" {
+			continue
+		}
+		if roleCfg.Provider == "" && roleCfg.Model == "" && roleCfg.BaseURL == "" && roleCfg.APIKey == "" {
+			continue
+		}
+
+		roleProviderName := firstNonEmpty(roleCfg.Provider, pName)
+		roleProvider := buildProviderForSelection(cfg, roleProviderName, roleCfg.Model, roleCfg.BaseURL, roleCfg.APIKey)
+		if roleProvider == nil {
+			log.Warn("model role skipped: provider unavailable", "role", roleName, "provider", roleProviderName)
+			continue
+		}
+		applyDynamicKeyGetter(roleProvider, mem, tenantID, roleProviderName)
+
+		gateway.RegisterRoleProfile(llm.ModelRole(roleName), llm.ProviderProfile{
+			Name:         roleName,
+			ProviderName: roleProviderName,
+			Model:        firstNonEmpty(roleCfg.Model, llm.GetModelName(roleProvider)),
+			Provider:     roleProvider,
+		})
+	}
+	return gateway
 }
 
 // InitAgent creates the LLM provider, reflection engine, and agent core.
@@ -172,14 +420,14 @@ func InitAgent(mem *memory.MemoryManager, cfg *config.Config, tenantID string) (
 	if tenantID == "" {
 		tenantID = "default"
 	}
-	pName := strings.ToLower(cfg.Agent.Provider)
+	pName := strings.ToLower(cfg.EffectiveProvider())
 	if pName == "" {
 		// 回退探测逻辑
-		if cfg.Providers.AnthropicAPIKey != "" {
+		if cfg.Providers.Anthropic.APIKey != "" {
 			pName = "anthropic"
-		} else if cfg.Providers.GeminiAPIKey != "" {
-			pName = "gemini"
-		} else if cfg.Providers.OpenAIAPIKey != "" {
+		} else if cfg.Providers.Google.APIKey != "" {
+			pName = "google"
+		} else if cfg.Providers.OpenAI.APIKey != "" {
 			pName = "openai"
 		}
 	}
@@ -198,6 +446,13 @@ func InitAgent(mem *memory.MemoryManager, cfg *config.Config, tenantID string) (
 		}
 	}
 
+	modelGateway := buildModelGateway(cfg, mem, tenantID, provider)
+	codingProvider := modelGateway.ProviderForRole(llm.RoleCodingAgent)
+	reviewProvider := modelGateway.ProviderForRole(llm.RoleBackgroundReview)
+	memoryExtractProvider := modelGateway.ProviderForRole(llm.RoleMemoryExtract)
+	skillCuratorProvider := modelGateway.ProviderForRole(llm.RoleSkillCurator)
+	semanticRecallProvider := modelGateway.ProviderForRole(llm.RoleSemanticRecall)
+
 	skillsBaseDir := cfg.Evolution.SkillsDir
 	if skillsBaseDir == "" {
 		home, _ := os.UserHomeDir()
@@ -205,13 +460,13 @@ func InitAgent(mem *memory.MemoryManager, cfg *config.Config, tenantID string) (
 	}
 	skillsDir := tools.SkillsDirForTenant(skillsBaseDir, tenantID)
 
-	refl := kernel.NewReflectionEngine(provider, kernel.EvolutionConfig{
-		Enabled:               cfg.Evolution.Enabled,
-		Mode:                  cfg.Evolution.Mode,
+	refl := kernel.NewReflectionEngine(skillCuratorProvider, kernel.EvolutionConfig{
+		Enabled:                cfg.Evolution.Enabled,
+		Mode:                   cfg.Evolution.Mode,
 		MinComplexityThreshold: cfg.Evolution.MinComplexityThreshold,
 		AutoArchiveConfidence:  cfg.Evolution.AutoArchiveConfidence,
-		NudgeInterval:         cfg.Evolution.NudgeInterval,
-		SkillsDir:             skillsDir,
+		NudgeInterval:          cfg.Evolution.NudgeInterval,
+		SkillsDir:              skillsDir,
 	})
 
 	// 设置 evolution notify channel（暂时传 nil，后续由 TUI 层注入）
@@ -226,14 +481,14 @@ func InitAgent(mem *memory.MemoryManager, cfg *config.Config, tenantID string) (
 		maxRetries = 3
 	}
 
-	agent := kernel.NewAgent(mem, nil, provider, cfg.Agent.Soul, maxIter, maxRetries, refl)
-	reviewEngine := kernel.NewBackgroundReviewEngine(mem, nil, provider, kernel.EvolutionConfig{
-		Enabled:               cfg.Evolution.Enabled,
-		Mode:                  cfg.Evolution.Mode,
+	agent := kernel.NewAgent(mem, nil, codingProvider, cfg.Agent.Soul, maxIter, maxRetries, refl)
+	reviewEngine := kernel.NewBackgroundReviewEngine(mem, nil, reviewProvider, kernel.EvolutionConfig{
+		Enabled:                cfg.Evolution.Enabled,
+		Mode:                   cfg.Evolution.Mode,
 		MinComplexityThreshold: cfg.Evolution.MinComplexityThreshold,
 		AutoArchiveConfidence:  cfg.Evolution.AutoArchiveConfidence,
-		NudgeInterval:         cfg.Evolution.NudgeInterval,
-		SkillsDir:             skillsDir,
+		NudgeInterval:          cfg.Evolution.NudgeInterval,
+		SkillsDir:              skillsDir,
 	}, 8, maxRetries)
 	agent.SetBackgroundReviewEngine(reviewEngine)
 
@@ -243,15 +498,15 @@ func InitAgent(mem *memory.MemoryManager, cfg *config.Config, tenantID string) (
 	}
 
 	// 注入自动事实提取器（默认开启，使用当前 provider）
-	fe := kernel.NewFactExtractor(provider, true)
+	fe := kernel.NewFactExtractor(memoryExtractProvider, true)
 	agent.SetFactExtractor(fe)
 
 	// 注入每轮轻量提取器（频率控制，使用当前 provider）
-	te := kernel.NewTurnExtractor(provider, true, cfg.Memory.AutoExtractInterval, cfg.Memory.AutoExtractMinChars)
+	te := kernel.NewTurnExtractor(memoryExtractProvider, true, cfg.Memory.AutoExtractInterval, cfg.Memory.AutoExtractMinChars)
 	agent.SetTurnExtractor(te)
 
 	// 注入语义查询扩展器
-	se := memory.NewSemanticExpander(provider, cfg.Memory.SemanticRecall)
+	se := memory.NewSemanticExpander(semanticRecallProvider, cfg.Memory.SemanticRecall)
 	agent.SetSemanticExpander(se)
 
 	// 设置记忆注入格式

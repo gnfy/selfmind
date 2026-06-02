@@ -20,6 +20,7 @@ func InitTools(mem *memory.MemoryManager, cfg *config.Config, ag *kernel.Agent, 
 
 	// 1. Register auth middleware (load permissions from persistent layer)
 	disp.InjectMiddleware(tools.AuthMiddleware(mem))
+	disp.InjectMiddleware(tools.WorkspaceScopeMiddleware())
 
 	tools.RegisterBuiltins(disp)
 	tools.RegisterExtendedTools(disp)
@@ -27,6 +28,17 @@ func InitTools(mem *memory.MemoryManager, cfg *config.Config, ag *kernel.Agent, 
 
 	if mem != nil {
 		disp.InjectSessionAccess(mem.SearchFn(tenantID), mem.RecentSessionsFn(tenantID), mem.SessionMessagesFn(tenantID))
+		disp.InjectTenantSessionAccess(
+			func(tenantID, query string, limit int) (interface{}, error) {
+				return mem.SearchSessions(tenantID, query, limit)
+			},
+			func(tenantID string, limit int) (interface{}, error) {
+				return mem.ListRecentSessions(tenantID, limit)
+			},
+			func(tenantID, sessionID string, aroundMessageID, window int) (interface{}, error) {
+				return mem.GetSessionMessages(tenantID, sessionID, aroundMessageID, window)
+			},
+		)
 		disp.RegisterTool(tools.NewMemoryTool(mem))
 		tools.GetProcessRegistry().Init(mem, tenantID)
 	}

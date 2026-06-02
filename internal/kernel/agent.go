@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
-	"sync"
 	"time"
 
 	"selfmind/internal/kernel/llm"
@@ -22,21 +21,21 @@ type AgentBackend interface {
 
 // Agent 核心推理循环
 type Agent struct {
-	memory          *memory.MemoryManager
-	backend         AgentBackend
-	llm             llm.Provider
-	soul            string
-	maxIterations   int
-	maxRetries      int
-	Reflector       *ReflectionEngine
-	ReviewEngine    *BackgroundReviewEngine
-	contextEngine   *ContextEngine
-	contextScanner  *ContextScanner
-	factExtractor   *FactExtractor
-	turnExtractor   *TurnExtractor
+	memory           *memory.MemoryManager
+	backend          AgentBackend
+	llm              llm.Provider
+	soul             string
+	maxIterations    int
+	maxRetries       int
+	Reflector        *ReflectionEngine
+	ReviewEngine     *BackgroundReviewEngine
+	contextEngine    *ContextEngine
+	contextScanner   *ContextScanner
+	factExtractor    *FactExtractor
+	turnExtractor    *TurnExtractor
 	semanticExpander *memory.SemanticExpander
 	useMemoryFence   bool
-	EventChannel    chan string // emits "tool_start:name" and "tool_end:name:result" events
+	EventChannel     chan string // emits "tool_start:name" and "tool_end:name:result" events
 
 	// Evolution config.
 	toolCallCount     int
@@ -51,7 +50,7 @@ func NewAgent(mem *memory.MemoryManager, backend AgentBackend, provider llm.Prov
 		memory:         mem,
 		backend:        backend,
 		llm:            provider,
-		soul:            soul,
+		soul:           soul,
 		maxIterations:  maxIter,
 		maxRetries:     maxRetries,
 		Reflector:      refl,
@@ -60,8 +59,8 @@ func NewAgent(mem *memory.MemoryManager, backend AgentBackend, provider llm.Prov
 		EventChannel:   ch,
 		// factExtractor is set via SetFactExtractor after agent creation
 		// so the caller can decide whether to enable auto-extraction.
-		toolCallCount:  0,
-		nudgeInterval:  10, // 默认每 10 次工具调用触发一次
+		toolCallCount: 0,
+		nudgeInterval: 10, // 默认每 10 次工具调用触发一次
 	}
 	ag.contextEngine.SetProvider(provider)
 	return ag
@@ -138,7 +137,7 @@ func (a *Agent) chatWithRetry(ctx context.Context, messages []llm.Message) (stri
 		max = 1
 	}
 	for attempt := 0; attempt < max; attempt++ {
-		req := llm.ChatRequest{Messages: messages}
+		req := llm.ChatRequest{Messages: messages, Tools: a.llmToolDefinitions()}
 		resp, err := a.llm.Chat(ctx, req)
 		if err == nil {
 			return resp.Content, resp.Usage, nil
@@ -169,7 +168,7 @@ func (a *Agent) streamChatWithRetry(ctx context.Context, messages []llm.Message)
 		max = 1
 	}
 	for attempt := 0; attempt < max; attempt++ {
-		req := llm.ChatRequest{Messages: messages}
+		req := llm.ChatRequest{Messages: messages, Tools: a.llmToolDefinitions()}
 		ch, err := a.llm.StreamChat(ctx, req)
 		if err == nil {
 			return ch, nil
@@ -243,10 +242,15 @@ func emitToolEndEventWithDuration(ch chan string, name, result string, duration 
 func emitToolEndEvent(ch chan string, name, result string, err error) {
 	emitToolEndEventWithDuration(ch, name, result, 0, err)
 }
+
 // RunConversation 执行 Agent 推理循环
 // channel 用于渠道隔离的历史记录（如 'cli'、'wechat'、'dingtalk'）
 func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, initialPrompt string) (string, llm.UsageStats, error) {
 	var totalUsage llm.UsageStats
+	ctx = llm.WithModelContext(ctx, llm.ModelContext{
+		TenantID: tenantID,
+		Role:     llm.RoleCodingAgent,
+	})
 
 	// 0. Build dynamic system prompt (including facts + project context)
 	systemPrompt, _ := a.BuildSystemPrompt(ctx, tenantID)
@@ -295,6 +299,7 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 		}
 
 		var fullResp strings.Builder
+		var nativeCalls []llm.ToolCall
 		for event := range streamCh {
 			if event.Err != nil {
 				return "", totalUsage, fmt.Errorf("stream error: %w", event.Err)
@@ -309,17 +314,22 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 				totalUsage.InputTokens += event.Usage.InputTokens
 				totalUsage.OutputTokens += event.Usage.OutputTokens
 			}
+			if len(event.ToolCalls) > 0 {
+				nativeCalls = append(nativeCalls, event.ToolCalls...)
+			}
 		}
 		resp := fullResp.String()
+		nativeCalls = normalizeToolCallIDs(nativeCalls, i)
+		calls := nativeCalls
+		if len(calls) == 0 {
+			calls = legacyToolCallsToLLM(ExtractToolCalls(resp), i)
+		}
 
-		messages = append(messages, llm.Message{Role: "assistant", Content: resp})
+		messages = append(messages, llm.Message{Role: "assistant", Content: resp, ToolCalls: calls})
 		history.Steps = append(history.Steps, resp)
 
 		// Sync turn to external memory providers after each assistant response
 		a.syncTurn(ctx, tenantID, messages)
-
-		// Extract and dispatch tool calls using regex
-		calls := ExtractToolCalls(resp)
 
 		// Turn-level lightweight fact extraction (frequency controlled)
 		if a.turnExtractor != nil {
@@ -331,66 +341,7 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 		}
 
 		if len(calls) > 0 {
-			var wg sync.WaitGroup
-			results := make([]struct {
-				index int
-				step  string
-				msg   llm.Message
-			}, len(calls))
-
-			for idx, call := range calls {
-				wg.Add(1)
-				go func(i int, c ToolCall) {
-					defer wg.Done()
-					
-					args := make(map[string]interface{})
-					if c.Args != "" {
-						json.Unmarshal([]byte(c.Args), &args)
-					}
-					if args == nil {
-						args = make(map[string]interface{})
-					}
-					args["_tenant_id"] = tenantID
-
-					// Emit tool start event
-					if a.EventChannel != nil {
-						a.EventChannel <- fmt.Sprintf("tool_start:%s:%s", c.Name, c.Args)
-					}
-
-					startTime := time.Now()
-					result, err := a.backend.Dispatch(c.Name, args)
-					duration := time.Since(startTime).Seconds()
-
-					// Emit tool end event
-					if a.EventChannel != nil {
-						emitToolEndEventWithDuration(a.EventChannel, c.Name, result, duration, err)
-					}
-
-					var step string
-					var msg llm.Message
-					if err != nil {
-						errorMsg := fmt.Sprintf("Error executing %s: %v", c.Name, err)
-						if len(errorMsg) > 2000 {
-							errorMsg = errorMsg[:2000] + "...(error message truncated)"
-						}
-						step = errorMsg
-						msg = llm.Message{Role: "tool", Content: step}
-					} else {
-						llmResult := result
-						if len(llmResult) > 10000 {
-							llmResult = fmt.Sprintf("%s\n\n... (Content truncated: total %d chars) ...\n\n%s",
-								llmResult[:5000], len(llmResult), llmResult[len(llmResult)-5000:])
-						}
-						step = fmt.Sprintf("Executed tool: %s, result: %s", c.Name, llmResult)
-						msg = llm.Message{Role: "tool", Content: llmResult}
-					}
-					
-					results[i].index = i
-					results[i].step = step
-					results[i].msg = msg
-				}(idx, call)
-			}
-			wg.Wait()
+			results := a.executeToolCalls(ctx, tenantID, calls)
 
 			// Append results in order
 			for _, res := range results {
@@ -447,11 +398,11 @@ func (a *Agent) maybeTriggerBackgroundReview(tenantID, channel string, messages 
 		return
 	}
 	if reviewSkills && a.Reflector != nil {
-		a.triggerEvolutionReview(history)
+		a.triggerEvolutionReview(tenantID, history)
 	}
 }
 
-func (a *Agent) triggerEvolutionReview(history TaskHistory) {
+func (a *Agent) triggerEvolutionReview(tenantID string, history TaskHistory) {
 	if a.Reflector == nil {
 		return
 	}
@@ -467,6 +418,10 @@ func (a *Agent) triggerEvolutionReview(history TaskHistory) {
 	go func() {
 		bgCtx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 		defer cancel()
+		bgCtx = llm.WithModelContext(bgCtx, llm.ModelContext{
+			TenantID: tenantID,
+			Role:     llm.RoleSkillCurator,
+		})
 
 		result, err := a.Reflector.Reflect(bgCtx, historyCopy)
 		if err != nil || result == nil || result.Action == "skip" {
@@ -647,14 +602,14 @@ func (a *Agent) BuildSystemPrompt(ctx context.Context, tenantID string) (string,
 	}
 	parts = append(parts, selfImprovementGuidance())
 
-			// 2. Tool Instructions - 增强指令强度
+	// 2. Tool Instructions - 增强指令强度
 	if a.backend != nil {
 		defs := a.backend.GetToolDefinitions()
 		if len(defs) > 0 {
 			var sb strings.Builder
-			sb.WriteString("\n# CRITICAL: TOOL USE INSTRUCTIONS\n")
-			sb.WriteString("You MUST use local tools whenever the user asks about local files, directories, or system status.\n")
-			sb.WriteString("To call a tool, you MUST use the exact format: [TOOL:tool_name:{\"arg\": \"val\"}]\n")
+			sb.WriteString("\n# TOOL USE INSTRUCTIONS\n")
+			sb.WriteString("Use local tools whenever the user asks about local files, directories, command output, project state, or system status.\n")
+			sb.WriteString("Prefer native tool calls when the model interface supports them. If native tool calls are unavailable, use the exact fallback format: [TOOL:tool_name:{\"arg\": \"val\"}]\n")
 			sb.WriteString("The ONLY valid tool names are: ")
 			for i, d := range defs {
 				sb.WriteString(fmt.Sprintf("'%s'", toolDefinitionName(d)))
@@ -664,7 +619,7 @@ func (a *Agent) BuildSystemPrompt(ctx context.Context, tenantID string) (string,
 			}
 			sb.WriteString(".\n")
 			sb.WriteString("DO NOT use tools like 'ls', 'cat', 'read', 'run_command', or 'sh' which do not exist. Use the specific tools listed above.\n")
-			sb.WriteString("DO NOT explain that you are using a tool, just output the [TOOL:...] tag.\n\n")
+			sb.WriteString("Do not invent tool names. If you use the fallback tag format, output only the [TOOL:...] tag for that step.\n\n")
 			sb.WriteString("## Available Tools\n")
 			for _, d := range defs {
 				sb.WriteString(fmt.Sprintf("### %s\n%s\n", toolDefinitionName(d), toolDefinitionDescription(d)))

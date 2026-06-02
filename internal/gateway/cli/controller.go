@@ -86,6 +86,7 @@ type uiModel struct {
 	statusMsg          string    // Transient status message
 	thinkingDots       int       // Counter for "..." animation
 	thinkingStart      time.Time // When current thinking started
+	runStatus          string    // ready | working | done | error | cancelled
 	migrationHint      string    // Hint for migrating Hermes skills
 }
 
@@ -126,6 +127,7 @@ func NewController(a *kernel.Agent, provider llm.Provider, cfg *config.Config, t
 			inputHistory: []string{},
 			historyIndex: -1,
 			startTime:    time.Now(),
+			runStatus:    "ready",
 			tokenLimit:   1000000,
 			viewport:     viewport.New(0, 0),
 		},
@@ -170,6 +172,7 @@ func NewControllerWithGateway(gw *router.Gateway, agent *kernel.Agent, provider 
 			inputHistory: []string{},
 			historyIndex: -1,
 			startTime:    time.Now(),
+			runStatus:    "ready",
 			tokenLimit:   1000000,
 			viewport:     viewport.New(0, 0),
 		},
@@ -267,24 +270,18 @@ func (m *uiModel) viewModel() string {
 	mainW := m.width
 	st := m.common.Styles
 
-	headerText := st.Header.Title.Render(" SelfMind ") +
-		st.Header.Separator.Render("│") + " " +
-		st.Header.Subtitle.Render("Agent Core")
-	header := lipgloss.NewStyle().Width(m.width).Render(headerText)
-
 	fullContent := m.renderAllMessages()
 
-	// ── Input area ───────────────────────────────────────────────────
 	suggestion := m.editor.GetSuggestion()
-	inputH := 3
+	inputH := 1
 	if suggestion != "" {
-		inputH = 4
+		inputH = 2
 	}
 	inputRect := layout.Rect{W: m.width, H: inputH}
 	inputArea := m.editor.Draw(inputRect)
 
-	// Adjust viewport height: height - header(1) - inputArea(inputH) - status(1)
-	visibleH := m.height - inputH - 2
+	// Codex-cli style: transcript + composer + one-line footer.
+	visibleH := m.height - inputH - 1
 	if m.migrationHint != "" {
 		visibleH--
 	}
@@ -298,7 +295,7 @@ func (m *uiModel) viewModel() string {
 
 	mainStr := st.Main.Width(mainW).Height(visibleH).Render(m.viewport.View())
 
-	// Transient status/notification area
+	// Transient status/notification area, rendered as transcript-adjacent text.
 	var notification string
 	if m.statusMsg != "" {
 		notification = lipgloss.NewStyle().
@@ -320,7 +317,7 @@ func (m *uiModel) viewModel() string {
 
 	statusBar := st.Status.Panel.Width(m.width).Render(m.statusLine())
 
-	return lipgloss.JoinVertical(lipgloss.Left, header, mainStr, notification, migrationHint, inputArea, statusBar)
+	return lipgloss.JoinVertical(lipgloss.Left, mainStr, notification, migrationHint, inputArea, statusBar)
 }
 
 func (m *uiModel) statusLine() string {
@@ -332,29 +329,35 @@ func (m *uiModel) statusLine() string {
 	if modelName == "" {
 		modelName = "active"
 	}
-	header := modelName
-
-	usageStr := formatUsage(m.totalTokens, m.tokenLimit)
-
-	elapsed := time.Since(m.startTime)
-	timeStr := formatDuration(elapsed)
+	header := modelName + " default"
+	cwd := currentWorkingDir()
 
 	parts := []string{
 		st.Status.Value.Render(header),
-		st.Status.Label.Render(usageStr),
-		st.Status.Value.Render(timeStr),
+		st.Status.Value.Render(cwd),
+		st.Status.Label.Render(formatUsage(m.totalTokens, m.tokenLimit)),
 	}
 
+	state := m.runStatus
 	if m.thinking {
-		dots := strings.Repeat(".", (m.thinkingDots%3)+1)
 		elapsed := time.Since(m.thinkingStart).Seconds()
-		parts = append(parts, st.Status.Good.Render(fmt.Sprintf("Thinking%s (%.1fs)", dots, elapsed)))
+		state = fmt.Sprintf("working %.1fs", elapsed)
 	}
+	parts = append(parts, st.Status.Good.Render(state))
+
 	if m.toolExecuting != "" {
-		parts = append(parts, st.Status.Warning.Render("⚙ "+m.toolExecuting))
+		parts = append(parts, st.Status.Warning.Render(m.toolExecuting))
 	}
 
-	return strings.Join(parts, "  •  ")
+	ctrlHint := "Ctrl+C exit"
+	if m.thinking || m.toolExecuting != "" {
+		ctrlHint = "Ctrl+C cancel"
+	} else if strings.TrimSpace(m.editor.Value()) != "" {
+		ctrlHint = "Ctrl+C clear"
+	}
+	parts = append(parts, st.Status.Label.Render(ctrlHint), st.Status.Label.Render("/help"))
+
+	return strings.Join(parts, " · ")
 }
 
 func (m *uiModel) renderAllMessages() string {
@@ -371,7 +374,7 @@ func (m *uiModel) renderAllMessages() string {
 	if startY > endY {
 		startY, endY = endY, startY
 	}
-	viewportTop := 1
+	viewportTop := 0
 	scrollOffset := m.viewport.YOffset
 	lineStart := scrollOffset + (startY - viewportTop)
 	lineEnd := scrollOffset + (endY - viewportTop)
@@ -396,7 +399,7 @@ func (m *uiModel) renderAllMessages() string {
 	}
 
 	if len(m.messages) == 0 && !m.thinking {
-		welcomeLines := strings.Split(st.Welcome, "\n")
+		welcomeLines := m.renderStartupCard(w)
 		welcomeLines = processLines(welcomeLines, 0)
 		allLines = append(allLines, welcomeLines...)
 	}
@@ -405,76 +408,14 @@ func (m *uiModel) renderAllMessages() string {
 		var rendered string
 		switch msg.Role {
 		case "user":
-			header := st.Chat.UserBubble.Render("You")
-			body := st.Chat.UserText.Width(w).Render(stripANSI(msg.Content))
-			rendered = header + "\n" + body + "\n"
+			rendered = renderUserMessage(stripANSI(msg.Content), w)
 		case "assistant":
-			header := st.Chat.AssistantBubble.Render("SelfMind")
 			body := renderMarkdown(stripANSI(msg.Content), w)
-			rendered = header + "\n" + body + "\n"
+			rendered = strings.TrimRight(body, "\n") + "\n"
 		case "tool":
-			label := msg.ToolName
-			if label == "" {
-				label = "tool"
-			}
-			
-			// Icon and Action mapping
-			emoji := "⚡"
-			action := label
-			detail := ""
-			
-			// Parse JSON args for human readable display
-			var args map[string]interface{}
-			json.Unmarshal([]byte(msg.ToolArgs), &args)
-			
-			switch label {
-			case "ls_r", "list_files", "search_files", "grep":
-				emoji = "🔍"
-				action = "search"
-				if v, ok := args["path"].(string); ok { detail = v }
-				if v, ok := args["pattern"].(string); ok { detail = v }
-			case "cat", "read_file":
-				emoji = "📖"
-				action = "read"
-				if v, ok := args["path"].(string); ok { detail = v }
-			case "terminal", "execute_command", "shell":
-				emoji = "💻"
-				action = "$"
-				if v, ok := args["command"].(string); ok { detail = v }
-			case "patch":
-				emoji = "🔧"
-				action = "patch"
-				if v, ok := args["path"].(string); ok { detail = v }
-			case "write_file":
-				emoji = "✍️"
-				action = "write"
-				if v, ok := args["path"].(string); ok { detail = v }
-			}
-
-			prefix := lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Render("  ┊ ")
-
-			if msg.Content == "" {
-				rendered = fmt.Sprintf("%s%s %-9s preparing %s…\n", prefix, emoji, "", label)
-			} else {
-				dur := fmt.Sprintf("%.1fs", msg.Duration)
-				if msg.Duration == 0 {
-					dur = "0.1s"
-				}
-
-				if detail == "" {
-					detail = "..."
-				}
-
-				errorSuffix := ""
-				if msg.IsError {
-					errorSuffix = lipgloss.NewStyle().Foreground(lipgloss.Color("203")).Render(" [error]")
-				}
-
-				mainLine := fmt.Sprintf("%s%s %-9s %s  %s%s\n", prefix, emoji, action, detail, dur, errorSuffix)
-				rendered = mainLine
-			}
+			rendered = renderToolMessage(msg, w)
 		case "system":
-			rendered = st.Chat.ToolBubble.BorderForeground(lipgloss.Color("203")).Width(w - 2).Render("! SYSTEM: "+stripANSI(msg.Content)) + "\n"
+			rendered = renderSystemMessage(stripANSI(msg.Content), w)
 		}
 
 		msgLines := strings.Split(rendered, "\n")
@@ -485,13 +426,7 @@ func (m *uiModel) renderAllMessages() string {
 	if m.thinking {
 		spinnerView := m.spinner.View()
 		dots := strings.Repeat(".", (m.thinkingDots%3)+1)
-		rendered := st.Chat.Thinking.Render(spinnerView + " Thinking" + dots)
-		lines := processLines([]string{rendered}, len(allLines))
-		allLines = append(allLines, lines...)
-	}
-
-	if m.toolExecuting != "" {
-		rendered := st.Chat.ToolBubble.Width(w - 2).Render("⚙ Executing: " + m.toolExecuting)
+		rendered := st.Chat.Thinking.Render(spinnerView + " Working" + dots)
 		lines := processLines([]string{rendered}, len(allLines))
 		allLines = append(allLines, lines...)
 	}
@@ -510,6 +445,234 @@ func (m *uiModel) renderAllMessages() string {
 	}
 
 	return strings.Join(allLines, "\n")
+}
+
+func (m *uiModel) renderStartupCard(width int) []string {
+	cardW := width - 2
+	if cardW > 72 {
+		cardW = 72
+	}
+	if cardW < 44 {
+		cardW = width
+	}
+	if cardW < 20 {
+		return []string{m.common.Styles.Welcome}
+	}
+
+	modelName := m.modelName
+	if modelName == "" {
+		modelName = m.providerName
+	}
+	if modelName == "" {
+		modelName = "active"
+	}
+	tenant := m.tenantID
+	if tenant == "" {
+		tenant = "default"
+	}
+
+	title := " SelfMind (v0.1.0) "
+	topFill := cardW - 2 - runewidth.StringWidth(title)
+	if topFill < 0 {
+		topFill = 0
+	}
+
+	return []string{
+		"┌─" + title + strings.Repeat("─", topFill) + "┐",
+		renderBoxLine("model:     "+modelName+"      /model to change", cardW),
+		renderBoxLine("directory: "+currentWorkingDir(), cardW),
+		renderBoxLine("tenant:    "+tenant, cardW),
+		"└" + strings.Repeat("─", cardW-2) + "┘",
+		"",
+		"Tip: Tell SelfMind what to inspect, change, test, or remember.",
+		"",
+	}
+}
+
+func renderUserMessage(content string, width int) string {
+	content = strings.TrimRight(content, "\n")
+	if content == "" {
+		return "›\n"
+	}
+	wrapped := wrapText(content, width-2)
+	lines := strings.Split(wrapped, "\n")
+	for i, line := range lines {
+		if i == 0 {
+			lines[i] = "› " + line
+		} else {
+			lines[i] = "  " + line
+		}
+	}
+	return strings.Join(lines, "\n") + "\n"
+}
+
+func renderToolMessage(msg ChatMessage, width int) string {
+	label := msg.ToolName
+	if label == "" {
+		label = "tool"
+	}
+
+	var args map[string]interface{}
+	_ = json.Unmarshal([]byte(msg.ToolArgs), &args)
+	if args == nil {
+		args = map[string]interface{}{}
+	}
+
+	done := msg.Content != ""
+	action := toolAction(label, args, done)
+	if !done {
+		return "• " + action + "\n"
+	}
+
+	dur := fmt.Sprintf("%.1fs", msg.Duration)
+	if msg.Duration == 0 {
+		dur = "0.1s"
+	}
+
+	status := ""
+	if msg.IsError {
+		status = " failed"
+	}
+
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("• %s%s  %s\n", action, status, dur))
+	if result := firstResultLine(msg.Content, width-6); result != "" {
+		sb.WriteString("  └─ " + result + "\n")
+	}
+	return sb.String()
+}
+
+func renderSystemMessage(content string, width int) string {
+	content = strings.TrimSpace(content)
+	if content == "" {
+		return ""
+	}
+	var sb strings.Builder
+	sb.WriteString("• Learning\n")
+	if line := firstResultLine(content, width-6); line != "" {
+		sb.WriteString("  └─ " + line + "\n")
+	}
+	return sb.String()
+}
+
+func toolAction(label string, args map[string]interface{}, done bool) string {
+	detail := toolDetail(args, "path", "pattern", "query", "command", "name", "action")
+	switch label {
+	case "terminal", "execute_command", "shell":
+		if done {
+			return "Ran " + valueOr(detail, label)
+		}
+		return "Running " + valueOr(detail, label)
+	case "cat", "read_file":
+		if done {
+			return "Read " + valueOr(detail, label)
+		}
+		return "Reading " + valueOr(detail, label)
+	case "ls_r", "list_files", "search_files", "grep":
+		if done {
+			return "Searched " + valueOr(detail, label)
+		}
+		return "Searching " + valueOr(detail, label)
+	case "patch":
+		if done {
+			return "Edited with patch"
+		}
+		return "Applying patch"
+	case "write_file":
+		if done {
+			return "Wrote " + valueOr(detail, label)
+		}
+		return "Writing " + valueOr(detail, label)
+	case "skill_manage":
+		if done {
+			return "Managed skill " + valueOr(detail, "")
+		}
+		return "Managing skill " + valueOr(detail, "")
+	case "memory":
+		if done {
+			return "Updated memory"
+		}
+		return "Updating memory"
+	case "session_search":
+		if done {
+			return "Searched sessions"
+		}
+		return "Searching sessions"
+	default:
+		if done {
+			return "Ran " + label
+		}
+		return "Running " + label
+	}
+}
+
+func toolDetail(args map[string]interface{}, keys ...string) string {
+	for _, key := range keys {
+		if v, ok := args[key].(string); ok && strings.TrimSpace(v) != "" {
+			return strings.TrimSpace(v)
+		}
+	}
+	return ""
+}
+
+func firstResultLine(content string, width int) string {
+	content = stripANSI(content)
+	for _, line := range strings.Split(content, "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			return truncateToWidth(line, width)
+		}
+	}
+	return ""
+}
+
+func renderBoxLine(content string, width int) string {
+	inner := width - 4
+	if inner < 1 {
+		return content
+	}
+	text := truncateToWidth(content, inner)
+	return "│ " + padRightWidth(text, inner) + " │"
+}
+
+func padRightWidth(s string, width int) string {
+	pad := width - runewidth.StringWidth(stripANSI(s))
+	if pad < 0 {
+		pad = 0
+	}
+	return s + strings.Repeat(" ", pad)
+}
+
+func truncateToWidth(s string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	if runewidth.StringWidth(s) <= width {
+		return s
+	}
+	if width <= 3 {
+		return strings.Repeat(".", width)
+	}
+	limit := width - 3
+	var sb strings.Builder
+	used := 0
+	for _, r := range s {
+		rw := runewidth.RuneWidth(r)
+		if used+rw > limit {
+			break
+		}
+		sb.WriteRune(r)
+		used += rw
+	}
+	return sb.String() + "..."
+}
+
+func currentWorkingDir() string {
+	cwd, err := os.Getwd()
+	if err != nil || cwd == "" {
+		return "."
+	}
+	return cwd
 }
 
 func (m *uiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -599,9 +762,13 @@ func (m *uiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.toolExecuting = ""
 		m.totalTokens += msg.Usage.InputTokens + msg.Usage.OutputTokens
 		if msg.Err != nil {
+			m.runStatus = "error"
 			m.addMessage("assistant", fmt.Sprintf("Error: %v", msg.Err))
-		} else {
+		} else if strings.TrimSpace(msg.Response) != "" {
+			m.runStatus = "done"
 			m.addMessage("assistant", msg.Response)
+		} else {
+			m.runStatus = "done"
 		}
 		return m, spinnerCmd
 
@@ -647,7 +814,7 @@ func (m *uiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m *uiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.Type {
 
-	// Alt+Enter or Ctrl+J inserts a newline (multi-line input)
+	// Shift+Enter or Ctrl+J inserts a newline (multi-line input).
 	case tea.KeyCtrlJ:
 		m.editor.Update(msg)
 		return m, nil
@@ -666,6 +833,7 @@ func (m *uiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 					m.cancelFn()
 					m.thinking = false
 					m.toolExecuting = ""
+					m.runStatus = "cancelled"
 					m.statusMsg = "Task cancelled by user."
 					return m, tea.Tick(time.Second*3, func(t time.Time) tea.Msg {
 						return MsgClearStatus{}
@@ -680,12 +848,26 @@ func (m *uiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.viewport.SetContent("")
 			return m, nil
 		case "enter":
-			// Alt+Enter / Ctrl+J already handled above via KeyCtrlJ
+			// Shift+Enter / Ctrl+J already handled above via KeyCtrlJ.
 			// Here plain Enter submits
 			// Use ExpandValue() to replace paste placeholders with actual content.
 			input := m.editor.ExpandValue()
 			if input == "" {
 				return m, nil
+			}
+
+			if m.clarifyMode {
+				response := m.resolveClarifyResponse(input)
+				m.addMessage("user", response)
+				m.editor.Reset()
+				tools.SubmitClarifyResponse(m.clarifyReq, response)
+				m.clarifyMode = false
+				m.clarifyChoices = nil
+				m.clarifyReq = tools.ClarifyRequest{}
+				m.thinking = true
+				m.runStatus = "working"
+				m.thinkingStart = time.Now()
+				return m, m.spinner.Tick
 			}
 
 			if strings.HasPrefix(input, "/") {
@@ -694,6 +876,7 @@ func (m *uiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.addMessage("user", input)
 			m.editor.Reset()
 			m.thinking = true
+			m.runStatus = "working"
 			m.thinkingStart = time.Now()
 			ctx, cancel := context.WithCancel(context.Background())
 			m.cancelFn = cancel
@@ -702,6 +885,16 @@ func (m *uiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	m.editor.Update(msg)
 	return m, nil
+}
+
+func (m *uiModel) resolveClarifyResponse(input string) string {
+	cleaned := strings.TrimSpace(input)
+	for i, choice := range m.clarifyChoices {
+		if cleaned == fmt.Sprintf("%d", i+1) {
+			return choice
+		}
+	}
+	return cleaned
 }
 
 func (m *uiModel) handleCommand(input string) tea.Cmd {
@@ -763,8 +956,8 @@ func (m *uiModel) handleStatus() tea.Cmd {
 	return func() tea.Msg {
 		elapsed := time.Since(m.startTime)
 		usage := formatUsage(m.totalTokens, m.tokenLimit)
-		
-		status := fmt.Sprintf("## System Status\n\n- **Provider**: %s\n- **Model**: %s\n- **Uptime**: %s\n- **Token Usage**: %s\n", 
+
+		status := fmt.Sprintf("## System Status\n\n- **Provider**: %s\n- **Model**: %s\n- **Uptime**: %s\n- **Token Usage**: %s\n",
 			m.providerName, m.modelName, formatDuration(elapsed), usage)
 
 		// Current task
@@ -784,7 +977,9 @@ func (m *uiModel) handleStatus() tea.Cmd {
 			status += "\n### Background Processes\n"
 			for _, p := range procs {
 				idStr := p["id"].(string)
-				if len(idStr) > 8 { idStr = idStr[:8] }
+				if len(idStr) > 8 {
+					idStr = idStr[:8]
+				}
 				status += fmt.Sprintf("- `%s`: %s (%s)\n", idStr, p["command"], p["status"])
 			}
 		}
@@ -809,9 +1004,13 @@ func (m *uiModel) handleTasks() tea.Cmd {
 		sb.WriteString("## Global Tasks\n\n")
 		for _, t := range tasks {
 			status := "⏳"
-			if t.Status == "done" { status = "✅" }
-			if t.Status == "cancelled" { status = "❌" }
-			sb.WriteString(fmt.Sprintf("%s [%d] %s (Created: %s)\n", 
+			if t.Status == "done" {
+				status = "✅"
+			}
+			if t.Status == "cancelled" {
+				status = "❌"
+			}
+			sb.WriteString(fmt.Sprintf("%s [%d] %s (Created: %s)\n",
 				status, t.ID, t.Title, t.CreatedAt.Format("01-02 15:04")))
 		}
 		return MsgAgentDone{Response: sb.String()}
@@ -1031,8 +1230,8 @@ func (m *uiModel) copySelection() tea.Cmd {
 	if start > end {
 		start, end = end, start
 	}
-	// Viewport offset adjustment: header(1)
-	viewportTop := 1
+	// Viewport starts at the first rendered transcript line.
+	viewportTop := 0
 	fullLines := m.renderAllMessagesLines()
 	scrollOffset := m.viewport.YOffset
 	lineStart := scrollOffset + (start - viewportTop)
@@ -1083,21 +1282,21 @@ func (m *uiModel) renderAllMessagesLines() []string {
 func (m *uiModel) runAgent(ctx context.Context, input string) tea.Cmd {
 	return func() tea.Msg {
 		go m.pumpAgentEvents()
-		
+
 		// Use Gateway instead of calling Agent directly
 		if m.gateway != nil {
 			resp, err := m.gateway.Handle(ctx, m.tenantID, m.channel, input)
 			if err != nil {
 				return MsgAgentDone{Err: err}
 			}
-			
+
 			if !resp.IsStreaming {
 				return MsgAgentDone{Response: resp.Content, Usage: resp.Usage, Err: nil}
 			}
 
-			// For streaming, we wait for the stream to close in pumpAgentEvents 
-			// or handle it here. Since gateway.Handle already launched a goroutine 
-			// that calls agent.RunConversation, and agent.RunConversation emits 
+			// For streaming, we wait for the stream to close in pumpAgentEvents
+			// or handle it here. Since gateway.Handle already launched a goroutine
+			// that calls agent.RunConversation, and agent.RunConversation emits
 			// events to EventChannel, pumpAgentEvents will catch them.
 			// We just need to wait for the final completion event from the stream.
 			for event := range resp.Stream {
@@ -1183,9 +1382,23 @@ func (m *uiModel) View() string {
 }
 
 func formatUsage(usage, limit int) string {
-	u := float64(usage) / 1000.0
-	l := float64(limit) / 1000.0
-	return fmt.Sprintf("%.0fK/%.0fK", u, l)
+	return fmt.Sprintf("%s/%s tokens", compactCount(usage), compactCount(limit))
+}
+
+func compactCount(n int) string {
+	if n >= 1_000_000 {
+		if n%1_000_000 == 0 {
+			return fmt.Sprintf("%dM", n/1_000_000)
+		}
+		return fmt.Sprintf("%.1fM", float64(n)/1_000_000)
+	}
+	if n >= 1000 {
+		if n%1000 == 0 {
+			return fmt.Sprintf("%dK", n/1000)
+		}
+		return fmt.Sprintf("%.1fK", float64(n)/1000)
+	}
+	return fmt.Sprintf("%d", n)
 }
 
 func formatDuration(d time.Duration) string {
@@ -1317,21 +1530,24 @@ type MsgLearningEvent struct {
 }
 
 const helpText = `Available commands:
-  /help       - Show this help
-  /clear      - Clear conversation history
-  /status     - Show system status and background processes
-  /tasks      - List global tasks
-  /skills     - List, view, search, archive, pin, or delete managed skills
-  /memory     - List or remove durable memory
-  /curator    - Show or run skill lifecycle maintenance
-  /checkpoint - Conversation snapshot (list|save|load)
-  /migrate    - Migrate skills from Hermes Agent
-  /exit       - Exit (or Ctrl+C)
-
-  /model      - Show current model or switch model
+  /help                             - Show this help
+  /clear                            - Clear conversation history
+  /status                           - Show system status and background processes
+  /tasks                            - List global tasks
+  /skills [list|view|search|delete|archive|pin|unpin|stats]
+  /memory [list|remove <user|memory> <id-or-text>]
+  /curator [status|run]
+  /checkpoint [list|save|load|delete] [name]
+  /migrate                          - Migrate skills from Hermes Agent
+  /model [model-name]               - Show or switch model
+  /exit                             - Exit
 
 Shortcuts:
-  Ctrl+C      - Cancel running task or Exit
-  Ctrl+L      - Clear screen`
+  Enter       - Submit
+  Shift+Enter - Insert newline
+  Ctrl+J      - Insert newline
+  Ctrl+C      - Clear input, cancel running task, or exit
+  Ctrl+L      - Clear screen
+  Mouse drag  - Copy selected transcript text`
 
 var _ tea.Model = (*uiModel)(nil)

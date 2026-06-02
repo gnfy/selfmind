@@ -1,0 +1,753 @@
+package control
+
+import (
+	"context"
+	"database/sql"
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"github.com/google/uuid"
+	_ "modernc.org/sqlite"
+)
+
+const DefaultTenantID = "default"
+
+type Store struct {
+	db *sql.DB
+}
+
+type IdentityContext struct {
+	TenantID       string `json:"tenant_id"`
+	PersonID       string `json:"person_id"`
+	AccountID      string `json:"account_id"`
+	Platform       string `json:"platform"`
+	PlatformUserID string `json:"platform_user_id"`
+	DisplayName    string `json:"display_name,omitempty"`
+}
+
+type Workspace struct {
+	ID            string    `json:"id"`
+	TenantID      string    `json:"tenant_id"`
+	OwnerPersonID string    `json:"owner_person_id"`
+	Name          string    `json:"name"`
+	RepoURL       string    `json:"repo_url,omitempty"`
+	LocalPath     string    `json:"local_path"`
+	DefaultBranch string    `json:"default_branch,omitempty"`
+	AllowedRoots  []string  `json:"allowed_roots,omitempty"`
+	Status        string    `json:"status"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
+}
+
+type Task struct {
+	ID             string    `json:"id"`
+	TenantID       string    `json:"tenant_id"`
+	PersonID       string    `json:"person_id"`
+	WorkspaceID    string    `json:"workspace_id,omitempty"`
+	Title          string    `json:"title"`
+	Status         string    `json:"status"`
+	CurrentSummary string    `json:"current_summary,omitempty"`
+	NextSteps      []string  `json:"next_steps,omitempty"`
+	BlockedReason  string    `json:"blocked_reason,omitempty"`
+	ActiveRunID    string    `json:"active_run_id,omitempty"`
+	LastChannel    string    `json:"last_channel,omitempty"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
+}
+
+type Run struct {
+	ID           string     `json:"id"`
+	TaskID       string     `json:"task_id"`
+	TenantID     string     `json:"tenant_id"`
+	PersonID     string     `json:"person_id"`
+	WorkspaceID  string     `json:"workspace_id,omitempty"`
+	Channel      string     `json:"channel"`
+	InputSummary string     `json:"input_summary,omitempty"`
+	Status       string     `json:"status"`
+	StartedAt    time.Time  `json:"started_at"`
+	FinishedAt   *time.Time `json:"finished_at,omitempty"`
+}
+
+type Event struct {
+	ID         string          `json:"id"`
+	TaskID     string          `json:"task_id"`
+	RunID      string          `json:"run_id,omitempty"`
+	Type       string          `json:"type"`
+	Visibility string          `json:"visibility"`
+	Channel    string          `json:"channel,omitempty"`
+	Payload    json.RawMessage `json:"payload_json,omitempty"`
+	CreatedAt  time.Time       `json:"created_at"`
+}
+
+type Handoff struct {
+	ID           string    `json:"id"`
+	TaskID       string    `json:"task_id"`
+	Summary      string    `json:"summary"`
+	DoneItems    []string  `json:"done_items,omitempty"`
+	NextSteps    []string  `json:"next_steps,omitempty"`
+	ChangedFiles []string  `json:"changed_files,omitempty"`
+	TestStatus   string    `json:"test_status,omitempty"`
+	Risks        []string  `json:"risks,omitempty"`
+	CreatedAt    time.Time `json:"created_at"`
+}
+
+type TaskCreate struct {
+	TenantID    string
+	PersonID    string
+	WorkspaceID string
+	Title       string
+	Channel     string
+}
+
+func OpenStore(dataDir string) (*Store, error) {
+	if dataDir == "" {
+		return nil, fmt.Errorf("data dir is required")
+	}
+	if err := os.MkdirAll(dataDir, 0755); err != nil {
+		return nil, fmt.Errorf("create data dir: %w", err)
+	}
+	db, err := sql.Open("sqlite", filepath.Join(dataDir, "control.db")+"?_journal=WAL&_sync=NORMAL")
+	if err != nil {
+		return nil, err
+	}
+	db.SetMaxOpenConns(1)
+	store := &Store{db: db}
+	if err := store.InitSchema(context.Background()); err != nil {
+		db.Close()
+		return nil, err
+	}
+	return store, nil
+}
+
+func (s *Store) Close() error {
+	if s == nil || s.db == nil {
+		return nil
+	}
+	return s.db.Close()
+}
+
+func (s *Store) InitSchema(ctx context.Context) error {
+	schema := `
+CREATE TABLE IF NOT EXISTS tenants (
+	id TEXT PRIMARY KEY,
+	name TEXT NOT NULL,
+	mode TEXT NOT NULL DEFAULT 'personal',
+	created_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS persons (
+	id TEXT PRIMARY KEY,
+	tenant_id TEXT NOT NULL,
+	display_name TEXT,
+	default_workspace_id TEXT,
+	created_at INTEGER NOT NULL,
+	updated_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS accounts (
+	id TEXT PRIMARY KEY,
+	tenant_id TEXT NOT NULL,
+	person_id TEXT NOT NULL,
+	platform TEXT NOT NULL,
+	platform_user_id TEXT NOT NULL,
+	display_name TEXT,
+	status TEXT NOT NULL DEFAULT 'active',
+	created_at INTEGER NOT NULL,
+	updated_at INTEGER NOT NULL,
+	UNIQUE(tenant_id, platform, platform_user_id)
+);
+CREATE TABLE IF NOT EXISTS workspaces (
+	id TEXT PRIMARY KEY,
+	tenant_id TEXT NOT NULL,
+	owner_person_id TEXT NOT NULL,
+	name TEXT NOT NULL,
+	repo_url TEXT,
+	local_path TEXT NOT NULL,
+	default_branch TEXT,
+	allowed_roots_json TEXT,
+	status TEXT NOT NULL DEFAULT 'active',
+	created_at INTEGER NOT NULL,
+	updated_at INTEGER NOT NULL,
+	UNIQUE(tenant_id, owner_person_id, local_path)
+);
+CREATE TABLE IF NOT EXISTS current_workspace (
+	tenant_id TEXT NOT NULL,
+	person_id TEXT NOT NULL,
+	workspace_id TEXT NOT NULL,
+	updated_at INTEGER NOT NULL,
+	PRIMARY KEY(tenant_id, person_id)
+);
+CREATE TABLE IF NOT EXISTS tasks (
+	id TEXT PRIMARY KEY,
+	tenant_id TEXT NOT NULL,
+	person_id TEXT NOT NULL,
+	workspace_id TEXT,
+	title TEXT NOT NULL,
+	status TEXT NOT NULL,
+	current_summary TEXT,
+	next_steps_json TEXT,
+	blocked_reason TEXT,
+	active_run_id TEXT,
+	last_channel TEXT,
+	created_at INTEGER NOT NULL,
+	updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_tasks_owner ON tasks(tenant_id, person_id, updated_at);
+CREATE TABLE IF NOT EXISTS current_task (
+	tenant_id TEXT NOT NULL,
+	person_id TEXT NOT NULL,
+	task_id TEXT NOT NULL,
+	updated_at INTEGER NOT NULL,
+	PRIMARY KEY(tenant_id, person_id)
+);
+CREATE TABLE IF NOT EXISTS task_runs (
+	id TEXT PRIMARY KEY,
+	task_id TEXT NOT NULL,
+	tenant_id TEXT NOT NULL,
+	person_id TEXT NOT NULL,
+	workspace_id TEXT,
+	channel TEXT NOT NULL,
+	input_summary TEXT,
+	status TEXT NOT NULL,
+	started_at INTEGER NOT NULL,
+	finished_at INTEGER
+);
+CREATE TABLE IF NOT EXISTS task_events (
+	id TEXT PRIMARY KEY,
+	task_id TEXT NOT NULL,
+	run_id TEXT,
+	type TEXT NOT NULL,
+	visibility TEXT NOT NULL DEFAULT 'task',
+	channel TEXT,
+	payload_json TEXT,
+	created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_task_events_task ON task_events(task_id, created_at);
+CREATE TABLE IF NOT EXISTS channel_messages (
+	id TEXT PRIMARY KEY,
+	tenant_id TEXT NOT NULL,
+	person_id TEXT NOT NULL,
+	account_id TEXT,
+	channel TEXT NOT NULL,
+	task_id TEXT,
+	role TEXT NOT NULL,
+	content TEXT NOT NULL,
+	created_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS task_handoffs (
+	id TEXT PRIMARY KEY,
+	task_id TEXT NOT NULL,
+	summary TEXT NOT NULL,
+	done_items_json TEXT,
+	next_steps_json TEXT,
+	changed_files_json TEXT,
+	test_status TEXT,
+	risks_json TEXT,
+	created_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS approval_requests (
+	id TEXT PRIMARY KEY,
+	tenant_id TEXT NOT NULL,
+	person_id TEXT NOT NULL,
+	task_id TEXT,
+	run_id TEXT,
+	action_type TEXT NOT NULL,
+	payload_json TEXT,
+	status TEXT NOT NULL,
+	requested_channel TEXT,
+	approved_channel TEXT,
+	created_at INTEGER NOT NULL,
+	updated_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS notifications (
+	id TEXT PRIMARY KEY,
+	tenant_id TEXT NOT NULL,
+	person_id TEXT NOT NULL,
+	channel TEXT NOT NULL,
+	task_id TEXT,
+	event_id TEXT,
+	status TEXT NOT NULL,
+	created_at INTEGER NOT NULL
+);`
+	_, err := s.db.ExecContext(ctx, schema)
+	return err
+}
+
+func (s *Store) EnsureTenant(ctx context.Context, tenantID, name string) error {
+	tenantID = normalizeTenant(tenantID)
+	if strings.TrimSpace(name) == "" {
+		name = tenantID
+	}
+	now := time.Now().Unix()
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO tenants (id, name, mode, created_at)
+		 VALUES (?, ?, 'personal', ?)
+		 ON CONFLICT(id) DO NOTHING`,
+		tenantID, name, now)
+	return err
+}
+
+func (s *Store) ResolveOrCreateAccount(ctx context.Context, tenantID, platform, platformUserID, displayName string) (*IdentityContext, error) {
+	tenantID = normalizeTenant(tenantID)
+	platform = normalizeName(platform, "cli")
+	platformUserID = normalizeName(platformUserID, "local")
+	if err := s.EnsureTenant(ctx, tenantID, tenantID); err != nil {
+		return nil, err
+	}
+
+	var out IdentityContext
+	err := s.db.QueryRowContext(ctx, `
+		SELECT id, tenant_id, person_id, platform, platform_user_id, display_name
+		FROM accounts
+		WHERE tenant_id = ? AND platform = ? AND platform_user_id = ?`,
+		tenantID, platform, platformUserID).
+		Scan(&out.AccountID, &out.TenantID, &out.PersonID, &out.Platform, &out.PlatformUserID, &out.DisplayName)
+	if err == nil {
+		return &out, nil
+	}
+	if err != sql.ErrNoRows {
+		return nil, err
+	}
+
+	now := time.Now().Unix()
+	personID := "person_" + uuid.NewString()
+	accountID := "acct_" + uuid.NewString()
+	if strings.TrimSpace(displayName) == "" {
+		displayName = platform + ":" + platformUserID
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.ExecContext(ctx,
+		`INSERT INTO persons (id, tenant_id, display_name, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?)`,
+		personID, tenantID, displayName, now, now); err != nil {
+		return nil, err
+	}
+	if _, err := tx.ExecContext(ctx,
+		`INSERT INTO accounts (id, tenant_id, person_id, platform, platform_user_id, display_name, status, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?)`,
+		accountID, tenantID, personID, platform, platformUserID, displayName, now, now); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return &IdentityContext{
+		TenantID:       tenantID,
+		PersonID:       personID,
+		AccountID:      accountID,
+		Platform:       platform,
+		PlatformUserID: platformUserID,
+		DisplayName:    displayName,
+	}, nil
+}
+
+func (s *Store) BindAccount(ctx context.Context, tenantID, personID, platform, platformUserID, displayName string) (*IdentityContext, error) {
+	tenantID = normalizeTenant(tenantID)
+	platform = normalizeName(platform, "cli")
+	platformUserID = normalizeName(platformUserID, "local")
+	if personID == "" {
+		return nil, fmt.Errorf("person id is required")
+	}
+	if err := s.EnsureTenant(ctx, tenantID, tenantID); err != nil {
+		return nil, err
+	}
+	now := time.Now().Unix()
+	accountID := "acct_" + uuid.NewString()
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO accounts (id, tenant_id, person_id, platform, platform_user_id, display_name, status, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?)
+		 ON CONFLICT(tenant_id, platform, platform_user_id) DO UPDATE SET
+		   person_id = excluded.person_id,
+		   display_name = excluded.display_name,
+		   updated_at = excluded.updated_at`,
+		accountID, tenantID, personID, platform, platformUserID, displayName, now, now)
+	if err != nil {
+		return nil, err
+	}
+	return s.ResolveOrCreateAccount(ctx, tenantID, platform, platformUserID, displayName)
+}
+
+func (s *Store) RegisterWorkspace(ctx context.Context, ws Workspace) (*Workspace, error) {
+	ws.TenantID = normalizeTenant(ws.TenantID)
+	if ws.OwnerPersonID == "" {
+		return nil, fmt.Errorf("owner person id is required")
+	}
+	if ws.LocalPath == "" {
+		return nil, fmt.Errorf("local path is required")
+	}
+	if ws.Name == "" {
+		ws.Name = filepath.Base(ws.LocalPath)
+	}
+	if ws.Status == "" {
+		ws.Status = "active"
+	}
+	now := time.Now()
+	if len(ws.AllowedRoots) == 0 {
+		ws.AllowedRoots = []string{ws.LocalPath}
+	}
+	roots, _ := json.Marshal(ws.AllowedRoots)
+
+	var existingID string
+	err := s.db.QueryRowContext(ctx,
+		`SELECT id FROM workspaces WHERE tenant_id = ? AND owner_person_id = ? AND local_path = ?`,
+		ws.TenantID, ws.OwnerPersonID, ws.LocalPath).Scan(&existingID)
+	if err != nil && err != sql.ErrNoRows {
+		return nil, err
+	}
+	if existingID == "" {
+		existingID = "ws_" + uuid.NewString()
+	}
+	ws.ID = existingID
+	_, err = s.db.ExecContext(ctx,
+		`INSERT INTO workspaces
+		   (id, tenant_id, owner_person_id, name, repo_url, local_path, default_branch, allowed_roots_json, status, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 ON CONFLICT(tenant_id, owner_person_id, local_path) DO UPDATE SET
+		   name = excluded.name,
+		   repo_url = excluded.repo_url,
+		   default_branch = excluded.default_branch,
+		   allowed_roots_json = excluded.allowed_roots_json,
+		   status = excluded.status,
+		   updated_at = excluded.updated_at`,
+		ws.ID, ws.TenantID, ws.OwnerPersonID, ws.Name, ws.RepoURL, ws.LocalPath, ws.DefaultBranch, string(roots), ws.Status, now.Unix(), now.Unix())
+	if err != nil {
+		return nil, err
+	}
+	if err := s.SetCurrentWorkspace(ctx, ws.TenantID, ws.OwnerPersonID, ws.ID); err != nil {
+		return nil, err
+	}
+	return s.GetWorkspace(ctx, ws.TenantID, ws.ID)
+}
+
+func (s *Store) SetCurrentWorkspace(ctx context.Context, tenantID, personID, workspaceID string) error {
+	if workspaceID == "" {
+		return fmt.Errorf("workspace id is required")
+	}
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO current_workspace (tenant_id, person_id, workspace_id, updated_at)
+		 VALUES (?, ?, ?, ?)
+		 ON CONFLICT(tenant_id, person_id) DO UPDATE SET
+		   workspace_id = excluded.workspace_id,
+		   updated_at = excluded.updated_at`,
+		normalizeTenant(tenantID), personID, workspaceID, time.Now().Unix())
+	return err
+}
+
+func (s *Store) CurrentWorkspace(ctx context.Context, tenantID, personID string) (*Workspace, error) {
+	var workspaceID string
+	err := s.db.QueryRowContext(ctx,
+		`SELECT workspace_id FROM current_workspace WHERE tenant_id = ? AND person_id = ?`,
+		normalizeTenant(tenantID), personID).Scan(&workspaceID)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return s.GetWorkspace(ctx, tenantID, workspaceID)
+}
+
+func (s *Store) GetWorkspace(ctx context.Context, tenantID, workspaceID string) (*Workspace, error) {
+	var ws Workspace
+	var roots string
+	var created, updated int64
+	err := s.db.QueryRowContext(ctx,
+		`SELECT id, tenant_id, owner_person_id, name, COALESCE(repo_url, ''), local_path,
+		        COALESCE(default_branch, ''), COALESCE(allowed_roots_json, '[]'),
+		        status, created_at, updated_at
+		 FROM workspaces WHERE tenant_id = ? AND id = ?`,
+		normalizeTenant(tenantID), workspaceID).
+		Scan(&ws.ID, &ws.TenantID, &ws.OwnerPersonID, &ws.Name, &ws.RepoURL, &ws.LocalPath, &ws.DefaultBranch, &roots, &ws.Status, &created, &updated)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	_ = json.Unmarshal([]byte(roots), &ws.AllowedRoots)
+	ws.CreatedAt = time.Unix(created, 0)
+	ws.UpdatedAt = time.Unix(updated, 0)
+	return &ws, nil
+}
+
+func (s *Store) ListWorkspaces(ctx context.Context, tenantID, personID string) ([]Workspace, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, tenant_id, owner_person_id, name, COALESCE(repo_url, ''), local_path,
+		        COALESCE(default_branch, ''), COALESCE(allowed_roots_json, '[]'),
+		        status, created_at, updated_at
+		 FROM workspaces WHERE tenant_id = ? AND owner_person_id = ? ORDER BY updated_at DESC`,
+		normalizeTenant(tenantID), personID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Workspace
+	for rows.Next() {
+		var ws Workspace
+		var roots string
+		var created, updated int64
+		if err := rows.Scan(&ws.ID, &ws.TenantID, &ws.OwnerPersonID, &ws.Name, &ws.RepoURL, &ws.LocalPath, &ws.DefaultBranch, &roots, &ws.Status, &created, &updated); err != nil {
+			return nil, err
+		}
+		_ = json.Unmarshal([]byte(roots), &ws.AllowedRoots)
+		ws.CreatedAt = time.Unix(created, 0)
+		ws.UpdatedAt = time.Unix(updated, 0)
+		out = append(out, ws)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) CreateTask(ctx context.Context, req TaskCreate) (*Task, error) {
+	req.TenantID = normalizeTenant(req.TenantID)
+	if req.PersonID == "" {
+		return nil, fmt.Errorf("person id is required")
+	}
+	if strings.TrimSpace(req.Title) == "" {
+		req.Title = "Untitled task"
+	}
+	now := time.Now().Unix()
+	id := "task_" + uuid.NewString()
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO tasks (id, tenant_id, person_id, workspace_id, title, status, last_channel, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, 'running', ?, ?, ?)`,
+		id, req.TenantID, req.PersonID, req.WorkspaceID, req.Title, req.Channel, now, now)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.SetCurrentTask(ctx, req.TenantID, req.PersonID, id); err != nil {
+		return nil, err
+	}
+	return s.GetTask(ctx, req.TenantID, id)
+}
+
+func (s *Store) SetCurrentTask(ctx context.Context, tenantID, personID, taskID string) error {
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO current_task (tenant_id, person_id, task_id, updated_at)
+		 VALUES (?, ?, ?, ?)
+		 ON CONFLICT(tenant_id, person_id) DO UPDATE SET
+		   task_id = excluded.task_id,
+		   updated_at = excluded.updated_at`,
+		normalizeTenant(tenantID), personID, taskID, time.Now().Unix())
+	return err
+}
+
+func (s *Store) CurrentTask(ctx context.Context, tenantID, personID string) (*Task, error) {
+	var taskID string
+	err := s.db.QueryRowContext(ctx,
+		`SELECT task_id FROM current_task WHERE tenant_id = ? AND person_id = ?`,
+		normalizeTenant(tenantID), personID).Scan(&taskID)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return s.GetTask(ctx, tenantID, taskID)
+}
+
+func (s *Store) GetTask(ctx context.Context, tenantID, taskID string) (*Task, error) {
+	var t Task
+	var nextSteps string
+	var created, updated int64
+	err := s.db.QueryRowContext(ctx,
+		`SELECT id, tenant_id, person_id, COALESCE(workspace_id, ''), title, status,
+		        COALESCE(current_summary, ''), COALESCE(next_steps_json, '[]'),
+		        COALESCE(blocked_reason, ''), COALESCE(active_run_id, ''),
+		        COALESCE(last_channel, ''), created_at, updated_at
+		 FROM tasks WHERE tenant_id = ? AND id = ?`,
+		normalizeTenant(tenantID), taskID).
+		Scan(&t.ID, &t.TenantID, &t.PersonID, &t.WorkspaceID, &t.Title, &t.Status, &t.CurrentSummary,
+			&nextSteps, &t.BlockedReason, &t.ActiveRunID, &t.LastChannel, &created, &updated)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	_ = json.Unmarshal([]byte(nextSteps), &t.NextSteps)
+	t.CreatedAt = time.Unix(created, 0)
+	t.UpdatedAt = time.Unix(updated, 0)
+	return &t, nil
+}
+
+func (s *Store) ListTasks(ctx context.Context, tenantID, personID string, limit int) ([]Task, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, tenant_id, person_id, COALESCE(workspace_id, ''), title, status,
+		        COALESCE(current_summary, ''), COALESCE(next_steps_json, '[]'),
+		        COALESCE(blocked_reason, ''), COALESCE(active_run_id, ''),
+		        COALESCE(last_channel, ''), created_at, updated_at
+		 FROM tasks WHERE tenant_id = ? AND person_id = ? ORDER BY updated_at DESC LIMIT ?`,
+		normalizeTenant(tenantID), personID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Task
+	for rows.Next() {
+		var t Task
+		var nextSteps string
+		var created, updated int64
+		if err := rows.Scan(&t.ID, &t.TenantID, &t.PersonID, &t.WorkspaceID, &t.Title, &t.Status, &t.CurrentSummary,
+			&nextSteps, &t.BlockedReason, &t.ActiveRunID, &t.LastChannel, &created, &updated); err != nil {
+			return nil, err
+		}
+		_ = json.Unmarshal([]byte(nextSteps), &t.NextSteps)
+		t.CreatedAt = time.Unix(created, 0)
+		t.UpdatedAt = time.Unix(updated, 0)
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) UpdateTaskStatus(ctx context.Context, tenantID, taskID, status, summary string, nextSteps []string) error {
+	nextStepsJSON, _ := json.Marshal(nextSteps)
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE tasks SET status = ?, current_summary = COALESCE(NULLIF(?, ''), current_summary),
+		 next_steps_json = ?, updated_at = ? WHERE tenant_id = ? AND id = ?`,
+		status, summary, string(nextStepsJSON), time.Now().Unix(), normalizeTenant(tenantID), taskID)
+	return err
+}
+
+func (s *Store) StartRun(ctx context.Context, task *Task, channel, inputSummary string) (*Run, error) {
+	if task == nil {
+		return nil, fmt.Errorf("task is required")
+	}
+	run := &Run{
+		ID:           "run_" + uuid.NewString(),
+		TaskID:       task.ID,
+		TenantID:     task.TenantID,
+		PersonID:     task.PersonID,
+		WorkspaceID:  task.WorkspaceID,
+		Channel:      normalizeName(channel, "cli"),
+		InputSummary: inputSummary,
+		Status:       "running",
+		StartedAt:    time.Now(),
+	}
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO task_runs (id, task_id, tenant_id, person_id, workspace_id, channel, input_summary, status, started_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		run.ID, run.TaskID, run.TenantID, run.PersonID, run.WorkspaceID, run.Channel, run.InputSummary, run.Status, run.StartedAt.Unix())
+	if err != nil {
+		return nil, err
+	}
+	_, _ = s.db.ExecContext(ctx,
+		`UPDATE tasks SET active_run_id = ?, status = 'running', last_channel = ?, updated_at = ? WHERE id = ?`,
+		run.ID, run.Channel, time.Now().Unix(), run.TaskID)
+	return run, nil
+}
+
+func (s *Store) FinishRun(ctx context.Context, tenantID, runID, status string) error {
+	if status == "" {
+		status = "done"
+	}
+	now := time.Now().Unix()
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE task_runs SET status = ?, finished_at = ? WHERE tenant_id = ? AND id = ?`,
+		status, now, normalizeTenant(tenantID), runID)
+	if err == nil {
+		_, _ = s.db.ExecContext(ctx,
+			`UPDATE tasks SET active_run_id = '', updated_at = ? WHERE tenant_id = ? AND active_run_id = ?`,
+			now, normalizeTenant(tenantID), runID)
+	}
+	return err
+}
+
+func (s *Store) AppendEvent(ctx context.Context, event Event) (*Event, error) {
+	if event.TaskID == "" {
+		return nil, fmt.Errorf("task id is required")
+	}
+	if event.Type == "" {
+		event.Type = "note"
+	}
+	if event.Visibility == "" {
+		event.Visibility = "task"
+	}
+	event.ID = "event_" + uuid.NewString()
+	event.CreatedAt = time.Now()
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO task_events (id, task_id, run_id, type, visibility, channel, payload_json, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		event.ID, event.TaskID, event.RunID, event.Type, event.Visibility, event.Channel, string(event.Payload), event.CreatedAt.Unix())
+	if err != nil {
+		return nil, err
+	}
+	return &event, nil
+}
+
+func (s *Store) RecordChannelMessage(ctx context.Context, identity IdentityContext, channel, taskID, role, content string) error {
+	if role == "" {
+		role = "user"
+	}
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO channel_messages (id, tenant_id, person_id, account_id, channel, task_id, role, content, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		"msg_"+uuid.NewString(), normalizeTenant(identity.TenantID), identity.PersonID, identity.AccountID,
+		normalizeName(channel, identity.Platform), taskID, role, content, time.Now().Unix())
+	return err
+}
+
+func (s *Store) SaveHandoff(ctx context.Context, handoff Handoff) (*Handoff, error) {
+	if handoff.TaskID == "" {
+		return nil, fmt.Errorf("task id is required")
+	}
+	handoff.ID = "handoff_" + uuid.NewString()
+	handoff.CreatedAt = time.Now()
+	doneJSON, _ := json.Marshal(handoff.DoneItems)
+	nextJSON, _ := json.Marshal(handoff.NextSteps)
+	filesJSON, _ := json.Marshal(handoff.ChangedFiles)
+	risksJSON, _ := json.Marshal(handoff.Risks)
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO task_handoffs (id, task_id, summary, done_items_json, next_steps_json, changed_files_json, test_status, risks_json, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		handoff.ID, handoff.TaskID, handoff.Summary, string(doneJSON), string(nextJSON), string(filesJSON), handoff.TestStatus, string(risksJSON), handoff.CreatedAt.Unix())
+	if err != nil {
+		return nil, err
+	}
+	return &handoff, nil
+}
+
+func (s *Store) LatestHandoff(ctx context.Context, taskID string) (*Handoff, error) {
+	var h Handoff
+	var doneJSON, nextJSON, filesJSON, risksJSON string
+	var created int64
+	err := s.db.QueryRowContext(ctx,
+		`SELECT id, task_id, summary, done_items_json, next_steps_json, changed_files_json, test_status, risks_json, created_at
+		 FROM task_handoffs WHERE task_id = ? ORDER BY created_at DESC LIMIT 1`,
+		taskID).
+		Scan(&h.ID, &h.TaskID, &h.Summary, &doneJSON, &nextJSON, &filesJSON, &h.TestStatus, &risksJSON, &created)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	_ = json.Unmarshal([]byte(doneJSON), &h.DoneItems)
+	_ = json.Unmarshal([]byte(nextJSON), &h.NextSteps)
+	_ = json.Unmarshal([]byte(filesJSON), &h.ChangedFiles)
+	_ = json.Unmarshal([]byte(risksJSON), &h.Risks)
+	h.CreatedAt = time.Unix(created, 0)
+	return &h, nil
+}
+
+func normalizeTenant(tenantID string) string {
+	return normalizeName(tenantID, DefaultTenantID)
+}
+
+func normalizeName(value, fallback string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return fallback
+	}
+	return value
+}

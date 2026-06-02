@@ -1,10 +1,10 @@
 package tools
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -213,6 +213,10 @@ func (t *ExecuteCommandTool) Execute(args map[string]interface{}) (string, error
 		cwd = "."
 	}
 	background, _ := args["background"].(bool)
+	timeoutSeconds, _ := args["timeout"].(int)
+	if timeoutSeconds <= 0 {
+		timeoutSeconds = 30
+	}
 
 	if background {
 		registry := GetProcessRegistry()
@@ -223,9 +227,15 @@ func (t *ExecuteCommandTool) Execute(args map[string]interface{}) (string, error
 		return fmt.Sprintf("Started background process with ID: %s", id), nil
 	}
 
-	cmd := exec.Command("sh", "-c", cmdStr)
+	runCtx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutSeconds)*time.Second)
+	defer cancel()
+
+	cmd := shellCommandContext(runCtx, cmdStr)
 	cmd.Dir = cwd
 	out, err := cmd.CombinedOutput()
+	if runCtx.Err() == context.DeadlineExceeded {
+		return string(out), fmt.Errorf("command timed out after %d seconds", timeoutSeconds)
+	}
 	if err != nil {
 		return string(out), fmt.Errorf("command failed: %v", err)
 	}

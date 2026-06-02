@@ -1,0 +1,207 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag, for example v0.1.0"
+        required: true
+        type: string
+      prerelease:
+        description: "Mark the GitHub release as a prerelease"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref_name || inputs.tag }}
+  cancel-in-progress: false
+
+env:
+  BINARY_NAME: selfmind
+  CGO_ENABLED: "0"
+  GOWORK: "off"
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Run tests
+        run: go test ./...
+
+  build:
+    name: Build linux-${{ matrix.goarch }}
+    needs: test
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goarch: amd64
+          - goarch: arm64
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Resolve release tag
+        id: meta
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            tag="${{ inputs.tag }}"
+          else
+            tag="${GITHUB_REF_NAME}"
+          fi
+
+          if [[ -z "${tag}" ]]; then
+            echo "release tag is required" >&2
+            exit 1
+          fi
+
+          echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
+
+      - name: Build binary
+        env:
+          GOOS: linux
+          GOARCH: ${{ matrix.goarch }}
+        shell: bash
+        run: |
+          package_name="${BINARY_NAME}-${{ steps.meta.outputs.tag }}-${GOOS}-${GOARCH}"
+          package_dir="dist/${package_name}"
+          binary_path="${package_dir}/${BINARY_NAME}"
+
+          mkdir -p "${package_dir}"
+          go build -trimpath -ldflags="-s -w" -o "${binary_path}" ./cmd/selfmind
+
+          cp README.md "${package_dir}/"
+          if [[ -d docs ]]; then
+            cp -R docs "${package_dir}/docs"
+          fi
+          cp packaging/linux/install.sh "${package_dir}/install.sh"
+          cp packaging/linux/uninstall.sh "${package_dir}/uninstall.sh"
+          cp packaging/linux/selfmind.service "${package_dir}/selfmind.service"
+          chmod +x "${package_dir}/install.sh" "${package_dir}/uninstall.sh"
+
+      - name: Package
+        shell: bash
+        run: |
+          package_name="${BINARY_NAME}-${{ steps.meta.outputs.tag }}-linux-${{ matrix.goarch }}"
+          mkdir -p release-assets
+
+          tar -C dist -czf "release-assets/${package_name}.tar.gz" "${package_name}"
+
+      - name: Upload package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: selfmind-linux-${{ matrix.goarch }}
+          path: release-assets/*
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    name: Publish GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve release tag
+        id: meta
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            tag="${{ inputs.tag }}"
+            prerelease="${{ inputs.prerelease }}"
+          else
+            tag="${GITHUB_REF_NAME}"
+            prerelease="false"
+          fi
+
+          if [[ "${tag}" == *"-"* ]]; then
+            prerelease="true"
+          fi
+
+          echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
+          echo "prerelease=${prerelease}" >> "${GITHUB_OUTPUT}"
+
+      - name: Download package artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: downloaded-artifacts
+
+      - name: Prepare release assets
+        shell: bash
+        run: |
+          mkdir -p release-assets
+          find downloaded-artifacts -type f -name "*.tar.gz" -exec cp {} release-assets/ \;
+
+          cd release-assets
+          sha256sum * > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Write release notes
+        shell: bash
+        run: |
+          {
+            echo "SelfMind ${{ steps.meta.outputs.tag }}"
+            echo
+            echo "Official Linux server binaries:"
+            find release-assets -maxdepth 1 -type f \
+              -name "*.tar.gz" \
+              -printf "- %f\n" | sort
+            echo
+            echo "Each package includes:"
+            echo "- selfmind"
+            echo "- install.sh / uninstall.sh"
+            echo "- selfmind.service for systemd"
+            echo "- README.md and docs/"
+            echo
+            echo "Verify downloads with SHA256SUMS.txt."
+          } > RELEASE_NOTES.md
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          tag="${{ steps.meta.outputs.tag }}"
+
+          release_args=(
+            --title "SelfMind ${tag}"
+            --notes-file RELEASE_NOTES.md
+            --target "${GITHUB_SHA}"
+          )
+
+          if [[ "${{ steps.meta.outputs.prerelease }}" == "true" ]]; then
+            release_args+=(--prerelease)
+          fi
+
+          if gh release view "${tag}" >/dev/null 2>&1; then
+            gh release upload "${tag}" release-assets/* --clobber
+          else
+            gh release create "${tag}" release-assets/* "${release_args[@]}"
+          fi

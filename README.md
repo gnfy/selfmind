@@ -1,71 +1,170 @@
 # SelfMind
 
-**生产级多租户 AI Agent 内核**，使用 Go 1.26+ 编写，支持自主自我进化、动态 Skill 加载和现代化 Bubble Tea TUI。
+[中文说明](README.zh-CN.md) · [中文开发指南](docs/development-guide.zh-CN.md)
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│   CLI   /   WeChat   /   DingTalk   /   Telegram   /  Web  │
-└──────────────────────────┬──────────────────────────────────┘
-                           │
-                  ┌────────▼──────────┐
-                  │  Gateway          │  意图分类 · 身份映射 · 任务路由
-                  │  (gateway/)      │  多渠道统一响应
-                  └────────┬──────────┘
-                           │
-                  ┌────────▼──────────┐
-                  │  Kernel            │  Agent 推理循环 · Token 预算管理
-                  │  (kernel/)        │  自进化引擎 · FTS5 记忆系统
-                  └────────┬──────────┘
-                           │
-                  ┌────────▼──────────┐
-                  │  Tools            │  中间件链 (Auth → Tenant → Approval → Rate)
-                  │  (tools/)        │  内置工具 · MCP 客户端 · Skill 加载器
-                  └───────────────────┘
-```
+SelfMind is a Go-based personal AI agent runtime. The current product direction is not a one-off chatbot, but a long-running work agent that can be used from a local TUI, a local gateway, and IM/webhook channels while sharing identity, task state, workspace scope, memory, and skills.
 
-## 核心特性
+The short version: run `selfmind` for local interactive work, run `selfmind gateway start` when you want a 24/7 local agent, and use `selfmind model` to configure OpenAI, Anthropic, Google, or a custom OpenAI-compatible endpoint without rebuilding the binary.
 
-| 类别 | 详情 |
-|------|------|
-| **多租户记忆** | 每个租户独立 SQLite + FTS5 + 语义召回，Skill 目录按租户隔离 |
-| **记忆自动化** | 每 N 轮自动提取 durable facts，LLM 语义扩展召回历史会话 |
-| **自进化** | ≥3 工具调用的复杂任务完成后，自动异步归档新 Skill（非阻塞） |
-| **动态 Skill** | 运行时加载 `.md` Skill 文件，Agent 可主动 CRUD 管理 |
-| **上下文压缩** | tiktoken 精确计数 + 结构化迭代摘要 + 失败冷却期 + 智能工具裁剪 |
-| **MCP 客户端** | 通过 stdio 或 HTTP 连接任意 MCP 服务器 |
-| **多渠道** | CLI / 微信 / 钉钉 / Telegram — 统一身份 + 任务上下文 |
-| **Bubble Tea TUI** | 高密度终端 UI，斜杠命令、流式渲染、智能粘贴 |
-| **纯 Go 构建** | `CGO_ENABLED=0`，静态二进制，零运行时依赖 |
-| **LLM 提供商** | Anthropic · OpenAI · OpenRouter · Gemini · MiniMax，配置即插拔 |
-| **中间件链** | Auth → TenantIsolation → Approval → RateLimit → Logging |
-| **崩溃恢复** | Agent 状态检查点持久化到 SQLite，重启后恢复 |
+## Current Capabilities
 
----
+Available for daily personal use:
 
-## 快速开始
+- Local terminal UI with slash commands, tool-call status, memory, skills, checkpoints, and curator controls.
+- Single user-facing binary: `selfmind`.
+- Long-running gateway lifecycle: `selfmind gateway start/run/status/stop/restart`.
+- Gateway client commands: `send`, `status`, `stop`, `tasks`, `workspaces`, `workspace add`, `workspace use`, `new`, `id`.
+- Generic IM webhook entrypoint: `POST /v1/im/{platform}`.
+- Account binding API so CLI, WeChat, Feishu, QQ-like relays, and other channels can resolve to the same `person_id`.
+- Workspace isolation for file, search, patch, and terminal tools.
+- Long-term memory, session search, skill management, background review, and skill curator.
+- Hermes-style native tool calling for OpenAI-compatible providers, with legacy text-tool fallback.
+- Role-based model routing through `models.roles`, so coding, memory extraction, background review, skill curation, and semantic recall can use different models.
 
-### 构建
+Still first-version or planned:
+
+- Official Feishu, WeChat, and QQ SDK adapters are not complete yet.
+- IM outbound sending, retry, long-message splitting, and native approval buttons still need production hardening.
+- SaaS admin console, tenant model-secret custody, billing policy, and queue/worker scaling are planned but not complete.
+
+## Requirements
+
+- Go 1.26+ for local development.
+- At least one configured model provider for real AI responses.
+- Official release packaging currently targets Linux server deployments: `linux-amd64` and `linux-arm64`.
+- Windows and macOS can be used for local development and debugging, but are not the current release targets.
+
+## Build And Run
+
+Build the user-facing binary:
 
 ```sh
-git clone https://github.com/your-org/selfmind.git
-cd selfmind
 go build -ldflags="-s -w" -o selfmind ./cmd/selfmind
 ```
 
-### 配置
+On Windows:
+
+```powershell
+go build -ldflags="-s -w" -o selfmind.exe ./cmd/selfmind
+```
+
+Development run:
 
 ```sh
-mkdir -p ~/.selfmind
-cat > ~/.selfmind/config.yaml << 'EOF'
+GOWORK=off go run ./cmd/selfmind
+```
+
+Do not use:
+
+```sh
+go run cmd/selfmind/main.go
+```
+
+That command compiles only one file and can make Go treat `selfmind/internal/...` as a standard-library path. Use `go run ./cmd/selfmind` or `go build ./cmd/selfmind`.
+
+`cmd/selfmindd` is kept only as a hidden compatibility wrapper. Users should build and run `selfmind`.
+
+## Configuration
+
+SelfMind uses one YAML config file. No `.env` file is required.
+
+Default path:
+
+```text
+~/.selfmind/config.yaml
+```
+
+Use a custom path with `-f` / `--config`:
+
+```sh
+./selfmind -f ./config/config.yaml
+./selfmind --config ./config/config.yaml gateway start
+./selfmind -f ./config/config.yaml model
+```
+
+`SELF_CONFIG` is also supported for process managers and containers:
+
+```sh
+SELF_CONFIG=/etc/selfmind/config.yaml ./selfmind gateway run
+```
+
+When the config file is missing, SelfMind creates the default config automatically. For an explicit `-f` path, commands that need to create config, such as `selfmind model`, can initialize it.
+
+### Configure A Model
+
+Interactive provider and model picker:
+
+```sh
+selfmind model
+```
+
+The flow is Hermes-like:
+
+1. Choose a provider: OpenAI, Anthropic, Google, saved custom endpoints, or `Custom endpoint (enter URL manually)`.
+2. Enter or keep the API key.
+3. SelfMind tries to load the provider model list live.
+4. Choose a model, or enter one manually if the list cannot be loaded.
+5. The choice is saved to `config.yaml`.
+
+Useful non-interactive commands:
+
+```sh
+selfmind model current
+selfmind model list
+selfmind model set openai gpt-4o
+selfmind model set custom:local-llm qwen2.5-coder
+```
+
+### Config Example
+
+```yaml
+model:
+  provider: "openai"
+  default: "gpt-4o"
+
 providers:
-  anthropic_api_key: "sk-ant-..."
+  openai:
+    api_key: "${OPENAI_API_KEY}"
+    base_url: "https://api.openai.com/v1"
+    protocol: "openai_chat"
+  anthropic:
+    api_key: "${ANTHROPIC_API_KEY}"
+    base_url: "https://api.anthropic.com"
+    protocol: "anthropic_messages"
+  google:
+    api_key: "${GOOGLE_API_KEY}"
+    base_url: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
+    protocol: "openai_compatible"
+  custom:
+    - name: "ollama"
+      base_url: "http://localhost:11434/v1"
+      api_key: ""
+      protocol: "openai_compatible"
+      model: "llama3"
+      models:
+        llama3:
+          context_length: 8192
+
+storage:
+  type: "sqlite"
+  data_dir: "~/.selfmind/data"
+
+gateway:
+  addr: "127.0.0.1:8765"
+  token: ""
+  drain_timeout: "30s"
 
 agent:
   soul: "You are SelfMind, a helpful AI assistant."
-  provider: "anthropic"
-  model: "claude-sonnet-4-7"
   max_iterations: 90
   max_retries: 3
+  log_level: "INFO"
+
+memory:
+  auto_extract_interval: 5
+  auto_extract_min_chars: 80
+  semantic_recall: true
+  use_memory_fence: true
 
 evolution:
   enabled: true
@@ -74,611 +173,285 @@ evolution:
   auto_archive_confidence: 0.8
   nudge_interval: 10
 
-storage:
-  data_dir: "~/.selfmind/data"
-
-# ── 记忆系统 ──────────────────────────────────────────
-memory:
-  # 每 N 轮 assistant 响应后触发一次轻量事实提取
-  auto_extract_interval: 5
-  # 单轮内容少于 N 字符且无 tool calls，跳过提取（避免寒暄）
-  auto_extract_min_chars: 80
-  # 语义召回：用 LLM 扩展查询同义词后再 FTS5 搜索
-  semantic_recall: true
-  # 记忆注入格式：true = <memory-context> fence，false = 纯文本
-  use_memory_fence: true
+models:
+  source: "local"
+  roles:
+    coding_agent:
+      provider: "openai"
+      model: "gpt-4o"
+    memory_extract:
+      provider: "google"
+      model: "gemini-1.5-flash"
+    background_review:
+      provider: "google"
+      model: "gemini-1.5-flash"
+    skill_curator:
+      provider: "google"
+      model: "gemini-1.5-flash"
+    semantic_recall:
+      provider: "google"
+      model: "gemini-1.5-flash"
 
 mcp:
   servers: []
 
 cron:
-  enabled: false
-EOF
-```
-
-### 运行
-
-```sh
-./selfmind
-# 或指定租户 ID（用于多租户隔离）
-SELF_TENANT_ID=user2 ./selfmind
-```
-
----
-
-## 模型推荐
-
-SelfMind 支持多模型混搭，以下是各场景的推荐搭配，帮助你快速上手：
-
-### 推荐配置
-
-| 场景 | 推荐模型 | 推荐理由 |
-|------|---------|---------|
-| 主力推理（日常对话、代码、写作） | **MiniMax M2.7** | 性价比极高，支持超长上下文，响应速度快 |
-| 复杂 Agent 任务（多步推理、工具调用） | **MiniMax M2.7-highspeed** | 高速度版本，适合高频调用 |
-| 备用 / 精准任务 | **Anthropic Claude Sonnet 4** | 推理能力强，工具调用稳定 |
-| 成本敏感场景 | **Google Gemini 2.5** | 免费额度充足，API 价格低 |
-
-### 获取 MiniMax API Key
-
-推荐使用 MiniMax，**新用户有免费 token 额度**：
-
-👉 [https://platform.minimaxi.com/subscribe/token-plan?code=9Yt7HxCaov&source=link](https://platform.minimaxi.com/subscribe/token-plan?code=9Yt7HxCaov&source=link)
-
-注册后在控制台创建 API Key，填入 `config.yaml` 的 `minimax_api_key` 字段即可。
-
-### 配置示例
-
-```yaml
-providers:
-  minimax_api_key: "eyJ..."   # MiniMax（推荐，新用户有免费额度）
-
-agent:
-  provider: "minimax"          # 默认使用 MiniMax
-  model: "MiniMax-M2.7-highspeed"  # 推荐速度优先版本
-```
-
----
-
-## 配置参考
-
-**文件**: `~/.selfmind/config.yaml`
-
-```yaml
-# ── API 密钥（至少配置一个）─────────────────────────────
-providers:
-  anthropic_api_key: ""       # Anthropic (Claude)
-  openai_api_key: ""          # OpenAI (GPT-4)
-  openrouter_api_key: ""      # OpenRouter (聚合)
-  gemini_api_key: ""          # Google Gemini
-  minimax_api_key: ""         # MiniMax
-  # 自定义 Provider（如本地 Ollama）
-  custom:
-    - name: "ollama"
-      base_url: "http://localhost:11434/v1"
-      api_key: "ollama"
-      model: "llama3"
-
-# ── Agent 行为 ────────────────────────────────────────
-agent:
-  soul: "You are SelfMind, a helpful AI assistant."  # 系统提示词
-  provider: "anthropic"     # 默认提供商名称
-  model: "claude-sonnet-4-7"
-  max_iterations: 90        # 单次任务最大推理循环
-  max_retries: 3            # LLM 调用重试次数
-  log_level: "INFO"          # DEBUG | INFO | WARN | ERROR
-
-# ── 自进化配置 ────────────────────────────────────────
-evolution:
   enabled: true
-  mode: "auto"              # auto | nudge | manual
-  min_complexity_threshold: 3  # 触发 review 的最小工具调用数
-  auto_archive_confidence: 0.8 # 自动归档置信度阈值
-  nudge_interval: 10         # 每 N 次工具调用触发一次 review
 
-# ── 存储 ──────────────────────────────────────────────
-storage:
-  data_dir: "~/.selfmind/data"
-
-# ── MCP 服务器 ───────────────────────────────────────
-mcp:
-  servers: []
-  # 示例 — stdio 模式:
-  # - name: "filesystem"
-  #   transport: "stdio"
-  #   command: "npx"
-  #   args: ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
-  # 示例 — HTTP 模式:
-  # - name: "my-server"
-  #   transport: "http"
-  #   url: "http://localhost:8080"
-  #   headers:
-  #     Authorization: "Bearer token"
-  #   env_filter: ["API_KEY", "TOKEN"]  # 日志中脱敏的环境变量
-
-# ── Cron 调度器 ──────────────────────────────────────
-cron:
-  enabled: false
-
-# ── 子 Agent 委托 ─────────────────────────────────────
 delegation:
-  provider: "anthropic"
-  model: "claude-sonnet-4-7"
+  provider: ""
+  model: ""
   api_key: ""
+  max_retries: 3
+  max_iterations: 50
+
+editor:
+  large_paste_chars: 1000
+  large_paste_lines: 10
 ```
 
----
+Old flat provider keys such as `providers.openai_api_key` and legacy `agent.provider` / `agent.model` are still read for compatibility, but new saves use the `model` and nested `providers` schema.
 
-## 架构详解
+### Model Routing
 
-### 请求生命周期
+The default model is configured under `model`. Role routing is configured under `models.roles`.
 
-```
-用户输入
-  │
-  ▼
-Gateway.Handle(unifiedUID, channel, input)
-  │
-  ├─ IntentClassifier ──► 闲聊/快捷问题（直接回复，不走 Agent）
-  │
-  ├─ IdentityMapper ─────► 平台 ID → 统一 UID 映射
-  │
-  └─ Agent.RunConversation ────────────────────────────────┐
-       │                                                    │
-       ├─ ContextEngine.BuildMessages()                    │
-       │     ├─ memory.GetFacts()                        │
-       │     ├─ memory.SearchSessions() (FTS5 + 语义扩展) │
-       │     └─ 构建 system prompt + 记忆上下文          │
-       │                                                    │
-       ├─ LLM.Chat() ──► 流式响应                        │
-       │     │                                         │
-       │     └─ ExtractToolCalls() ──► Dispatch         │
-       │              │                    │            │
-       │              │        中间件管道                   │
-       │              │      Auth → Tenant →             │
-       │              │       Approval → Rate            │
-       │              │                    │            │
-       │              │        Tool.Execute()           │
-       │              └────► 工具结果 ──────────────────┘
-       │                                                    │
-       ├─ turnExtractor.Extract() [async goroutine]      │
-       │     └─ 每 N 轮轻量提取 durable facts              │
-       │                                                    │
-       ├─ tool_call_count >= nudge_interval?              │
-       │     └─ triggerEvolutionReview() [async goroutine] │
-       │                                                    │
-       └─ return 响应
-```
+Current role names:
 
-### 目录结构
+- `coding_agent`: main agent loop.
+- `memory_extract`: fact and turn extraction.
+- `background_review`: after-turn learning review.
+- `skill_curator`: skill review and curation.
+- `semantic_recall`: semantic session recall.
 
-```
-cmd/selfmind/
-    main.go                  # 入口，仅做组件组装
-internal/
-    kernel/                  # 核心推理引擎（无外部依赖）
-        agent.go             # Agent 推理循环 + 事件通道 + 每轮记忆同步
-        backend.go           # AgentBackend 接口（kernel ↔ tools 唯一耦合点）
-        context_engine.go    # Token 预算管理（tiktoken 精确计数 + 迭代摘要）
-        context_scanner.go   # 项目上下文文件扫描器（.selfmind.md / AGENTS.md）
-        fact_extractor.go    # 任务级自动事实提取器（完整对话分析）
-        turn_extractor.go    # 轮次级轻量事实提取器（频率控制）
-        tokenizer.go         # tiktoken 封装（cl100k_base）
-        reflection.go        # 自进化决策引擎
-        skill_store.go       # Skill 注册表 + 归档存储
-        evolution_test.go    # 自进化逻辑测试
-        llm/                 # LLM 适配器（Anthropic · OpenAI · OpenRouter · Gemini · MiniMax）
-        memory/              # SQLite FTS5 记忆系统 + 语义扩展召回
-            sqlite_provider.go   # 存储引擎
-            storage.go           # Storage 接口 + MemoryProvider 插件
-            fact.go              # 事实存储
-            expander.go          # 语义查询扩展器（LLM 同义词扩展）
-            provider.go          # 外部记忆插件接口
-        task/
-            manager.go           # 全局任务管理器
-            cron/scheduler.go   # Cron 调度器
-        identity/            # 平台 ID → 统一 UID 映射
+In personal mode these are read from local YAML. In the future SaaS mode, the same role names can be resolved from a database-backed tenant/person/workspace model policy.
 
-    gateway/                # 平台适配层（接收外部消息）
-        router/
-            gateway.go       # 统一网关：意图分类 + 任务路由
-        cli/
-            controller.go    # Bubble Tea TUI 控制器（输入/渲染/快捷键）
-        wechat/              # 微信适配器（桩实现）
-        telegram/            # Telegram 适配器（桩实现）
-        channel/
-            bridge.go        # 跨平台桥接
+## Local TUI
 
-    tools/                  # 工具系统
-        tool.go              # Tool 接口 + BaseTool + 参数校验/类型转换
-        dispatcher.go        # 工具注册表 + 中间件管道
-        builtin.go           # 内置工具（terminal · read_file · write_file · list_files · search_files · patch · glob · get_current_time）
-        extended.go          # 扩展工具（web_search · web_extract · vision · execute_code · session_search · todo · delegate_task）
-        middleware.go        # 中 中间件（Auth · TenantIsolation · Approval · RateLimit · Logging）
-        skill_loader.go      # SKILL.md 解析器 + 运行时工具注册
-        mcp_client.go        # MCP 客户端（stdio + HTTP）
-        tool_backend.go      # tools 包对 kernel.AgentBackend 的具体实现
-        delegate.go          # 子 Agent 委托
-        memory.go            # 记忆工具
-        process.go           # 进程/管道工具
-        process_registry.go  # 进程注册表
-        web_extract.go       # 网页内容提取
-        vision.go            # 图像分析
-
-    app/                     # 应用层初始化
-        agent.go             # Agent 初始化
-        gateway.go           # Gateway 初始化
-        tools.go             # 工具注册
-        storage.go           # 存储初始化
-        migration.go         # Hermes → SelfMind 数据迁移
-        delegation.go        # 委托初始化
-        multi_agent.go       # 多 Agent 协调
-
-    platform/                # 平台工具
-        config/loader.go     # YAML 配置加载器
-        log/log.go          # 结构化日志
-        adapter.go          # 通用平台接口
-internal/ui/
-    components/
-        editor.go            # 输入框（支持大粘贴占位符 · Paste 事件拦截）
-    common/common.go        # 通用样式
-    layout/layout.go        # 布局系统
-
-docs/
-    development-guide.md     # 开发指南
-    selfmind-evolution-design.md  # 自进化设计文档
-    selfmind-evolution-roadmap.md # 自进化路线图
-```
-
----
-
-## 记忆系统
-
-SelfMind 的记忆系统包含三层：
-
-### 1. 短期记忆（当前会话）
-- `ContextEngine` 管理 128K token 窗口
-- tiktoken 精确计数，结构化迭代摘要压缩历史
-- 超长对话时保留 system + 最近消息，中间内容增量摘要
-
-### 2. 中期记忆（跨会话召回）
-- SQLite FTS5 全文索引所有历史会话
-- `SemanticExpander` 用 LLM 将查询扩展为同义词后再搜索
-  - 例如：用户输入"并发问题" → 扩展为 "concurrency race condition goroutine sync mutex"
-  - FTS5 用 OR 关系搜索所有扩展词，匹配到旧对话里的 "race condition"
-
-### 3. 长期记忆（持久化 Facts）
-- `TurnExtractor`：每 N 轮 assistant 响应后，异步提取本轮的 durable facts
-- `FactExtractor`：任务完成后，用完整对话提取高密度事实
-- Facts 分两类：
-  - `user`：用户偏好、习惯、沟通风格
-  - `memory`：项目惯例、技术选型、目录结构
-
-### 记忆注入格式
-
-当 `use_memory_fence: true` 时，记忆以 `<memory-context>` 标签注入 system prompt：
-
-```markdown
-<memory-context>
-[System note: The following is recalled memory context, NOT new user input. Treat as informational background data.]
-
-## User Preferences
-- prefers pnpm over npm
-- likes error-handling focused code reviews
-
-## Environment Facts
-- project root: /work/projects
-- uses Go 1.26+
-</memory-context>
-```
-
-### 配置
-
-```yaml
-memory:
-  auto_extract_interval: 5      # 每 5 轮提取一次
-  auto_extract_min_chars: 80    # 低于 80 字符且无 tool calls 的轮次跳过
-  semantic_recall: true         # 启用语义扩展召回
-  use_memory_fence: true        # 使用 fence 格式注入记忆
-```
-
----
-
-## 工具系统
-
-### 工具接口
-
-```go
-// internal/tools/tool.go
-type Tool interface {
-    Name() string
-    Description() string
-    Schema() ToolSchema          // OpenAI tool schema 格式
-    Execute(args map[string]interface{}) (string, error)
-}
-```
-
-### 内置工具
-
-| 工具 | 说明 | 关键参数 |
-|------|------|----------|
-| `terminal` | 执行 Shell 命令 | `command: string` |
-| `read_file` | 读取文件 | `path: string`, `offset: int`, `limit: int` |
-| `write_file` | 写入文件 | `path: string`, `content: string` |
-| `list_files` | 列出目录 | `path: string` |
-| `search_files` | 文件内容搜索 | `pattern: string`, `path: string`, `file_glob?: string` |
-| `patch` | 查找替换编辑 | `path: string`, `old_string: string`, `new_string: string` |
-| `glob` | Glob 模式匹配 | `pattern: string`, `path: string` |
-| `get_current_time` | 当前时间戳 | `format?: string` |
-| `web_search` | 网页搜索 | `query: string` |
-| `web_extract` | 提取页面内容 | `url: string`, `question: string` |
-| `vision_analyze` | 图像分析 | `image_url: string`, `question: string` |
-| `execute_code` | 执行 Python 代码 | `code: string` |
-| `session_search` | 搜索会话历史 | `query: string`, `limit?: int` |
-| `todo` | 任务列表 CRUD | `action: string`, `todos: []` |
-| `delegate_task` | 派生子 Agent | `goal: string`, `context: string`, `toolsets: []string` |
-
-### 中间件管道
-
-```
-AuthMiddleware              → 验证 API Key / 租户凭证
-        ↓
-TenantIsolationMiddleware   → 自动注入 _tenant_id 参数
-        ↓
-ApprovalMiddleware          → 高危命令（rm -rf 等）人工审批
-        ↓
-RateLimitMiddleware         → 按租户限流
-        ↓
-LoggingMiddleware           → 记录所有调用输入/输出
-        ↓
-Tool.Execute(args)          → 工具实际逻辑
-```
-
-### 编写新工具
-
-**Step 1: 实现 Tool 接口**
-
-```go
-// internal/tools/my_tool.go
-package tools
-
-type MyTool struct {
-    BaseTool
-}
-
-func NewMyTool() *MyTool {
-    return &MyTool{
-        BaseTool{
-            name:        "my_tool",
-            description: "对输入文本执行有用的处理",
-            schema: ToolSchema{
-                Type: "object",
-                Properties: map[string]PropertyDef{
-                    "input": {Type: "string", Description: "要处理的输入文本"},
-                },
-                Required: []string{"input"},
-            },
-        },
-    }
-}
-
-func (t *MyTool) Execute(args map[string]interface{}) (string, error) {
-    input, ok := args["input"].(string)
-    if !ok || input == "" {
-        return "", fmt.Errorf("input 必须是非空字符串")
-    }
-    return "result: " + input, nil
-}
-```
-
-**Step 2: 注册到 `internal/app/tools.go`**
-
-```go
-// 在 InitTools() 函数中追加：
-d.RegisterTool(NewMyTool())
-```
-
-**Step 3: 重新编译运行**
+Start the TUI:
 
 ```sh
-go build -o selfmind ./cmd/selfmind && ./selfmind
+selfmind
 ```
 
----
-
-## Skill 系统
-
-Skill 是 `~/.selfmind/skills/` 目录下的 `.md` 文件，使用 YAML front matter 定义元数据：
-
-```markdown
----
-name: my-skill
-description: "何时使用此 Skill 及其作用"
-trigger: ["/my-skill", "/ms"]
-parameters: ["input"]
-confidence: 0.85
----
-
-# My Skill
-
-LLM 执行此 Skill 的步骤指导。
-包含具体操作步骤、示例和边界情况处理。
-```
-
-Skills 在启动时由 `SkillLoader` 加载，也可以被自进化引擎自动归档。
-
-### 自进化流程
-
-```
-Agent 完成复杂任务（≥3 工具调用，≥4 步）
-    │
-    ▼
-triggerEvolutionReview() [goroutine — 不阻塞用户]
-    │
-    ├─ scanExistingSkills() ──► 注入已有 Skill 列表到 prompt
-    ├─ buildReviewPrompt(task_history, existing_skills)
-    ├─ LLM.ChatCompletion() ──► 返回: SKIP | CREATE|name|content | UPDATE|name|content
-    ├─ parseReviewResponse()
-    └─ ArchiveSkill(result)
-          ├─ scanForDangers(content) ──► 检查凭证泄露、危险命令
-          ├─ 原子写入（临时文件 → rename）
-          └─ notifyCh ──► TUI 显示 "💾 skill xxx created"
-```
-
----
-
-## 添加新 LLM Provider
-
-在 `internal/kernel/llm/` 下实现 `Provider` 接口：
-
-```go
-// internal/kernel/llm/provider.go
-type Provider interface {
-    ChatCompletion(ctx context.Context, messages []Message) (string, error)
-    Chat(ctx context.Context, req ChatRequest) (*ChatResponse, error)
-    StreamChat(ctx context.Context, req ChatRequest) (<-chan StreamEvent, error)
-}
-```
-
-然后在 `internal/platform/config/loader.go` 的工厂函数中注册即可。参考 `adapters.go` 中已有的 Anthropic / OpenAI / OpenRouter / Gemini / MiniMax 适配器实现。
-
----
-
-## 添加新平台渠道
-
-以添加 DingTalk 为例：
-
-**Step 1: 创建适配器**
-
-```go
-// internal/gateway/myding/adapter.go
-package myding
-
-type Adapter struct {
-    gateway *router.Gateway
-}
-
-func NewAdapter(gw *router.Gateway) *Adapter {
-    return &Adapter{gateway: gw}
-}
-
-// HandleMessage 接收平台消息，返回 Agent 回复
-func (a *Adapter) HandleMessage(platformUserID, content string) (string, error) {
-    ctx := context.Background()
-    unifiedUID, err := a.gateway.ResolveUID(ctx, "myding", platformUserID)
-    if err != nil {
-        return "", err
-    }
-    resp, err := a.gateway.Handle(ctx, unifiedUID, "myding", content)
-    if err != nil {
-        return "", err
-    }
-    if !resp.IsStreaming {
-        return resp.Content, nil
-    }
-    var fullText string
-    for event := range resp.Stream {
-        if event.Err != nil {
-            return fullText, event.Err
-        }
-        fullText += event.Content
-    }
-    return fullText, nil
-}
-```
-
-**Step 2: 在 `cmd/selfmind/main.go` 中接入**
-
-```go
-mydingAdapter := myding.NewAdapter(gwDeps.Gateway)
-go func() {
-    http.ListenAndServe(":8080", mydingAdapter.HTTPHandler())
-}()
-```
-
-**Step 3: 实现 `HandleRawMessage(body []byte)` 解析平台 webhook 格式（XML/JSON）**
-
----
-
-## TUI 使用
-
-### 输入快捷键
-
-| 快捷键 | 行为 |
-|--------|------|
-| `Enter` | 提交输入（自动展开粘贴占位符） |
-| `Shift+Enter` 或 `Ctrl+J` | 插入换行（多行输入） |
-| `Ctrl+C` | **有输入内容：** 清空输入缓冲区。**Agent 工作中：** 取消当前任务。**空闲状态：** 退出程序 |
-| **粘贴** | 多行粘贴（≥80 行或 ≥8000 字符）显示 `[[ ...N lines... ]]` 占位符，按 `Enter` 展开并提交完整内容 |
-| `Ctrl+L` | 清空所有聊天消息 |
-| `↑ / ↓` | 导航输入历史 |
-
-### 斜杠命令
-
-| 命令 | 说明 |
-|------|------|
-| `/help` | 显示所有可用命令 |
-| `/status` | 显示 Agent 状态和配置 |
-| `/model <name>` | 切换 LLM 模型 |
-| `/models` | 列出所有可用模型 |
-| `/config` | 显示当前配置 |
-| `/tasks` | 列出所有任务（含 cron 和活跃任务） |
-| `/sessions` | 列出所有会话 |
-| `/retry` | 重试上一次失败的操作 |
-| `/undo` | 撤销上一次输入 |
-| `/title` | 为当前会话生成标题 |
-| `/stop` | 停止当前 Agent 推理 |
-| `/clear` | 清空聊天消息 |
-| `/exit` | 退出 TUI |
-
----
-
-## 开发
-
-### 运行测试
+With a custom config:
 
 ```sh
-go test ./...                          # 所有测试
-go test ./internal/kernel              # kernel 包
-go test -v ./internal/tools -run TestDispatcher
+selfmind -f ./config/config.yaml
 ```
 
-### 项目约定
+Common slash commands:
 
-- **依赖单向**：依赖只能从外向内。`kernel` 不依赖 `gateway` 或 `tools`。
-- **多租户隔离**：每个数据操作都必须携带 `tenantID`，`TenantIsolationMiddleware` 自动注入。
-- **工具调用格式**：LLM 输出 `[TOOL:tool_name:{"arg":"val"}]`，由 `kernel/agent.go` 中的正则提取。
-- **无硬编码 Provider**：所有 LLM Provider 都在 `config.yaml` 中配置。新增 Provider 只需在 `internal/kernel/llm/` 实现 `Provider` 接口。
-- **异步自进化**：自进化在 goroutine 中运行，不阻塞 Agent 响应流。
-- **AgentBackend 接口**：这是 `kernel` 和 `tools` 之间的唯一耦合点，允许替换整个工具层（如用于测试）而不影响 Agent 逻辑。
+| Command | Purpose |
+|---|---|
+| `/help` | Show available TUI commands. |
+| `/status` | Show provider, model, runtime, token usage, task, and gateway status. |
+| `/tasks` | Show local gateway tasks. |
+| `/skills` | Skill list/view/search/archive/pin/unpin/delete/stats. |
+| `/memory` | List or remove long-term memory. |
+| `/curator` | Check or run skill curator. |
+| `/checkpoint` | Save, load, list, or delete conversation checkpoints. |
+| `/migrate` | Migrate Hermes Agent skills. |
+| `/model` | Show or switch the current model inside the TUI. |
+| `/clear` | Clear the screen. |
+| `/exit` | Exit. |
 
-### 调试
+Useful keys:
+
+| Key | Behavior |
+|---|---|
+| `Enter` | Submit input. |
+| `Shift+Enter` | Insert newline. |
+| `Ctrl+C` | Cancel the current run or exit. |
+| `Ctrl+V` | Paste. Large paste is converted into a readable attachment-style block. |
+
+## Gateway Mode
+
+Start a long-running local gateway:
 
 ```sh
-# 查看详细日志
-GOLOG_LEVEL=DEBUG ./selfmind
-
-# 查看 Agent 推理过程（JSON 格式）
-GOLOG_LEVEL=DEBUG GOLOG_FORMAT=json ./selfmind 2>&1 | jq .
+selfmind gateway start
 ```
 
----
+Run in the foreground:
 
-## 设计决策
+```sh
+selfmind gateway run
+```
 
-**为什么用 SQLite 而不是纯内存？**
-多租户隔离需要持久化。每个租户独立数据库文件（`dataDir/tenantID/memory.db`），FTS5 支持跨会话上下文召回。Cron 任务和后台进程也需要持久化状态。
+Manage the gateway:
 
-**为什么工具不分文件？**
-Go 没有 Python 那样的运行时工具发现机制。按类别分组（`builtin.go` · `extended.go`）更实用，也便于管理包数量。
+```sh
+selfmind gateway status
+selfmind gateway stop
+selfmind gateway restart
+```
 
-**为什么需要 AgentBackend 接口？**
-它是 `kernel` 和 `tools` 之间唯一的耦合点。可以替换整个工具层（如测试场景）而不触碰 Agent 逻辑。
+Use the gateway from CLI:
 
-**为什么不直接在输入框显示完整多行内容？**
-Hermes 的做法是大粘贴显示占位符（因为完整的代码/内容会破坏 TUI 布局），按 Enter 展开后提交。这样既保证了终端UI的整洁，又确保了内容的完整性。
+```sh
+selfmind send "what is the current task status?"
+selfmind send --async "run tests and fix failures"
+selfmind status
+selfmind tasks
+selfmind stop
+selfmind workspaces
+selfmind workspace add .
+selfmind workspace use <workspace_id>
+selfmind new "implement the checkout page"
+```
 
----
+Run as a simple gateway-backed REPL:
+
+```sh
+SELF_USE_GATEWAY=1 selfmind
+```
+
+Gateway runtime files are stored under:
+
+```text
+<storage.data_dir>/gateway/
+```
+
+Files include `gateway.pid`, `gateway_state.json`, `gateway.lock`, and `gateway.log`.
+
+### Gateway HTTP API
+
+If the gateway is exposed beyond localhost, set `gateway.token` in `config.yaml`. Clients can send it as `Authorization: Bearer <token>` or `X-SelfMind-Token`.
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/health` | Liveness check. |
+| `POST` | `/v1/message` | Send a CLI/IM/Web message. |
+| `POST` | `/v1/im/{platform}` | Generic IM webhook entrypoint. |
+| `POST` | `/v1/accounts/bind` | Bind another platform account to an existing person. |
+| `GET` | `/v1/tasks` | List tasks for an account. |
+| `GET` | `/v1/tasks/current` | Get current task and active run. |
+| `POST` | `/v1/workspaces/register` | Register a local workspace. |
+| `GET` | `/v1/workspaces` | List workspaces. |
+| `GET` | `/v1/gateway/status` | Inspect process state and active runs. |
+| `POST` | `/v1/gateway/shutdown` | Request graceful shutdown. |
+
+Channel chats are not mirrored automatically. CLI messages are not pushed to IM, and IM messages are not pushed to CLI. Shared state is task/run/workspace/memory/skill state.
+
+## Linux Release
+
+The GitHub Actions release workflow lives at:
+
+```text
+.github/workflows/release.yml
+```
+
+It supports automatic tag releases and manual `workflow_dispatch` runs. Current release artifacts:
+
+- `selfmind-<tag>-linux-amd64.tar.gz`
+- `selfmind-<tag>-linux-arm64.tar.gz`
+- `SHA256SUMS.txt`
+
+The package includes `selfmind`, install/uninstall scripts, a systemd service template, README, and docs.
+
+## Development
+
+Run tests:
+
+```sh
+GOWORK=off go test ./...
+```
+
+If you use the local bundled Go toolchain from this workspace on Windows:
+
+```powershell
+$env:PATH="$env:USERPROFILE\.cache\selfmind-tools\go1.26.3\go\bin;" + $env:PATH
+$env:GOWORK='off'
+go test ./...
+```
+
+Important directories:
+
+```text
+cmd/selfmind/              user-facing binary entrypoint
+cmd/selfmindd/             hidden compatibility wrapper
+internal/cliapp/           selfmind command router, model command, gateway/client commands
+internal/app/              application wiring for storage, agent, tools, gateway
+internal/platform/config/  YAML config loading, defaults, save, compatibility
+internal/kernel/           agent loop, memory/review, native tool calls
+internal/kernel/llm/       provider adapters and model gateway
+internal/tools/            built-in tools and tool middleware
+internal/gateway/          TUI, HTTP API, router, channel adapters
+internal/control/          durable identity/workspace/task/run state
+internal/runtime/gateway/  gateway pid/lock/state/start/stop runner
+docs/                      architecture and development docs
+packaging/                 Linux install scripts and service templates
+```
+
+### Add A Tool
+
+1. Implement `tools.Tool` in `internal/tools`.
+2. Register it in `internal/app/tools.go` or the relevant tool bundle.
+3. Add workspace/approval/process middleware coverage if the tool touches files, shell, network, memory, or skills.
+4. Add tests for the tool and any dispatcher behavior.
+
+### Add A Model Provider
+
+Most new OpenAI-compatible providers do not need code changes. Run:
+
+```sh
+selfmind model
+```
+
+Then choose `Custom endpoint (enter URL manually)`.
+
+Only add a Go provider adapter when the provider has a different protocol family. The current core families are:
+
+- OpenAI Chat Completions and OpenAI-compatible endpoints.
+- Anthropic Messages API.
+- Google Gemini via OpenAI-compatible endpoint.
+- Generic OpenAI-compatible custom endpoints.
+
+For a new protocol family:
+
+1. Implement `llm.Provider` in `internal/kernel/llm`.
+2. Extend `internal/platform/config/loader.go` only if the generic endpoint schema is not enough.
+3. Wire construction in `internal/app/agent.go`.
+4. Add tests for streaming, native tool calls if supported, and `models.roles` routing.
+
+### Add An IM Platform
+
+Keep the boundary Hermes-like:
+
+```text
+platform adapter
+  verify signature
+  parse platform payload
+  normalize inbound message
+  optionally send outbound message
+        |
+        v
+gateway
+  identity binding
+  workspace/task/run state
+  agent dispatch
+```
+
+Do not store task state or memory ownership inside the platform adapter. The gateway owns identity, workspace, task, run, handoff, and approval state.
+
+### Add A Gateway Command
+
+1. Add model-free control behavior in `internal/gateway/httpapi/server.go` when possible.
+2. Add a CLI wrapper in `internal/cliapp` for common user commands.
+3. Keep DTOs in `internal/gateway/api`.
+4. Update README and `docs/development-guide.md`.
+5. Add HTTP and CLI tests.
+
+## Design Constraints
+
+- `kernel` should not depend on `tools`, `gateway`, or `server`.
+- Agent accesses tools through `AgentBackend`.
+- Workspace-scoped tools must honor `allowed_roots`.
+- Gateway task and identity state is stored in `control.db`.
+- Memory/session state is stored under `storage.data_dir`.
+- Skills are tenant-scoped under `~/.selfmind/<tenant>/skills`.
+- Personal mode uses local YAML. SaaS mode should keep the same model-role concepts but move tenant/person/workspace provider policy and secrets into a database-backed store.
 
 ## License
 

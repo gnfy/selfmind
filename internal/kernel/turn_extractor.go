@@ -15,12 +15,12 @@ import (
 // It is cheaper than FactExtractor because it only looks at the current turn,
 // not the entire conversation history.
 type TurnExtractor struct {
-	provider  llm.Provider
-	enabled   bool
-	interval  int // extract every N assistant turns
-	minChars  int // skip turns shorter than this with no tool calls
+	provider llm.Provider
+	enabled  bool
+	interval int // extract every N assistant turns
+	minChars int // skip turns shorter than this with no tool calls
 
-	turnCounter   int           // number of assistant turns since last extraction
+	turnCounter   int // number of assistant turns since last extraction
 	lastExtracted time.Time
 }
 
@@ -96,6 +96,10 @@ func (te *TurnExtractor) Extract(ctx context.Context, tenantID string, mem *memo
 	go func() {
 		bgCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
+		bgCtx = llm.WithModelContext(bgCtx, llm.ModelContext{
+			TenantID: tenantID,
+			Role:     llm.RoleMemoryExtract,
+		})
 
 		prompt := fmt.Sprintf(turnExtractPrompt, truncate(turn.User, 800), truncate(turn.Assistant, 800))
 		resp, err := te.provider.ChatCompletion(bgCtx, []llm.Message{
@@ -165,5 +169,3 @@ func isDuplicateFact(newFact string, existing []memory.Fact) bool {
 	}
 	return false
 }
-
-

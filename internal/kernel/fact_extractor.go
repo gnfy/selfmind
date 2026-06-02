@@ -57,6 +57,10 @@ func (fe *FactExtractor) Extract(ctx context.Context, tenantID string, mem *memo
 	if !fe.enabled || mem == nil || len(messages) < 2 {
 		return nil
 	}
+	ctx = llm.WithModelContext(ctx, llm.ModelContext{
+		TenantID: tenantID,
+		Role:     llm.RoleMemoryExtract,
+	})
 
 	// Trigger if the conversation involved tool calls (substantive task)
 	// or has at least 2 turns of back-and-forth.

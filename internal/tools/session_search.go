@@ -13,6 +13,10 @@ type SessionSearchTool struct {
 	searchFn   func(query string, limit int) (interface{}, error)
 	recentFn   func(limit int) (interface{}, error)
 	messagesFn func(sessionID string, aroundMessageID, window int) (interface{}, error)
+
+	searchTenantFn   func(tenantID, query string, limit int) (interface{}, error)
+	recentTenantFn   func(tenantID string, limit int) (interface{}, error)
+	messagesTenantFn func(tenantID, sessionID string, aroundMessageID, window int) (interface{}, error)
 }
 
 func NewSessionSearchTool() *SessionSearchTool {
@@ -66,14 +70,32 @@ func (t *SessionSearchTool) RegisterAccessFns(
 	t.messagesFn = messagesFn
 }
 
+func (t *SessionSearchTool) RegisterTenantAccessFns(
+	searchFn func(tenantID, query string, limit int) (interface{}, error),
+	recentFn func(tenantID string, limit int) (interface{}, error),
+	messagesFn func(tenantID, sessionID string, aroundMessageID, window int) (interface{}, error),
+) {
+	t.searchTenantFn = searchFn
+	t.recentTenantFn = recentFn
+	t.messagesTenantFn = messagesFn
+}
+
 func (t *SessionSearchTool) Execute(args map[string]interface{}) (string, error) {
 	query, _ := args["query"].(string)
 	sessionID, _ := args["session_id"].(string)
+	tenantID, _ := args["_tenant_id"].(string)
 	limit := intArg(args, "limit", 10)
 	window := intArg(args, "window", 10)
 	around := intArg(args, "around_message_id", 0)
 
 	if sessionID != "" {
+		if tenantID != "" && t.messagesTenantFn != nil {
+			raw, err := t.messagesTenantFn(tenantID, sessionID, around, window)
+			if err != nil {
+				return "", err
+			}
+			return formatSessionMessages(sessionID, raw), nil
+		}
 		if t.messagesFn == nil {
 			return "", fmt.Errorf("session message browsing not initialized")
 		}
@@ -85,6 +107,13 @@ func (t *SessionSearchTool) Execute(args map[string]interface{}) (string, error)
 	}
 
 	if strings.TrimSpace(query) == "" {
+		if tenantID != "" && t.recentTenantFn != nil {
+			raw, err := t.recentTenantFn(tenantID, limit)
+			if err != nil {
+				return "", err
+			}
+			return formatSessions("Recent sessions", raw), nil
+		}
 		if t.recentFn == nil {
 			return "", fmt.Errorf("recent session browsing not initialized")
 		}
@@ -95,6 +124,13 @@ func (t *SessionSearchTool) Execute(args map[string]interface{}) (string, error)
 		return formatSessions("Recent sessions", raw), nil
 	}
 
+	if tenantID != "" && t.searchTenantFn != nil {
+		raw, err := t.searchTenantFn(tenantID, query, limit)
+		if err != nil {
+			return "", fmt.Errorf("search failed: %w", err)
+		}
+		return formatSessions(fmt.Sprintf("Results for %q", query), raw), nil
+	}
 	if t.searchFn == nil {
 		return "", fmt.Errorf("session search not initialized")
 	}

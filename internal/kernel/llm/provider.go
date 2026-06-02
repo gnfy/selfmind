@@ -6,19 +6,22 @@ import (
 
 // ChatRequest 是模型调用的统一标准结构
 type ChatRequest struct {
-	Model      string
-	Messages   []Message
-	Tools      []ToolDefinition
-	MaxTokens  int
+	Model        string
+	Messages     []Message
+	Tools        []ToolDefinition
+	MaxTokens    int
 	SystemPrompt string
-	Options    map[string]interface{}
+	Options      map[string]interface{}
 }
 
 // Message 定义对话条目
 type Message struct {
-	Role         string 
+	Role         string
 	Content      string
 	MultiContent []ContentPart
+	Name         string
+	ToolCallID   string
+	ToolCalls    []ToolCall
 }
 
 // ContentPart 定义多模态内容块
@@ -57,9 +60,10 @@ type UsageStats struct {
 
 // StreamEvent 定义流式响应事件
 type StreamEvent struct {
-	Content string
-	Usage   *UsageStats
-	Err     error
+	Content   string
+	ToolCalls []ToolCall
+	Usage     *UsageStats
+	Err       error
 }
 
 // Provider 定义 LLM 调用接口

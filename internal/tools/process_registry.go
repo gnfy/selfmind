@@ -6,7 +6,6 @@ import (
 	"io"
 	"os/exec"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/google/uuid"
@@ -52,7 +51,7 @@ func (r *ProcessRegistry) Init(mem *memory.MemoryManager, tenantID string) {
 
 func (r *ProcessRegistry) StartProcess(command string, cwd string) (string, error) {
 	id := uuid.New().String()
-	cmd := exec.Command("sh", "-c", command)
+	cmd := shellCommand(command)
 	cmd.Dir = cwd
 
 	output := &bytes.Buffer{}
@@ -120,15 +119,8 @@ func (r *ProcessRegistry) Recover() {
 
 	for _, rec := range records {
 		if rec.Status == "running" {
-			// Check if PID is still alive
-			process, err := syscall.Getpgid(rec.PID)
-			if err != nil {
-				// Process not found, mark as lost
+			if !processAlive(rec.PID) {
 				r.mem.UpdateProcessStatus(context.Background(), r.tenantID, rec.ID, "lost", -1)
-			} else {
-				_ = process // PID is alive, but we can't easily re-attach to capture output/Wait
-				// For now, we leave it as "running" in DB but it won't be in r.processes (memory)
-				// until we implement a better re-attach logic (e.g. using a wrapper script + log file)
 			}
 		}
 	}
@@ -139,7 +131,7 @@ func (r *ProcessRegistry) List() []map[string]interface{} {
 	defer r.mu.RUnlock()
 
 	var list []map[string]interface{}
-	
+
 	// Add currently running in-memory processes
 	for id, p := range r.processes {
 		status := "running"
@@ -193,12 +185,12 @@ func (r *ProcessRegistry) Poll(id string) (string, string, error) {
 
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	
+
 	status := "running"
 	if p.Cmd.ProcessState != nil && p.Cmd.ProcessState.Exited() {
 		status = "exited"
 	}
-	
+
 	return p.Output.String(), status, nil
 }
 

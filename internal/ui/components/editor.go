@@ -7,8 +7,8 @@ import (
 
 	"github.com/charmbracelet/bubbles/cursor"
 	"github.com/charmbracelet/bubbles/key"
-	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/textarea"
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"selfmind/internal/platform/config"
@@ -35,14 +35,14 @@ var wsRe = regexp.MustCompile(`\s+`)
 // Call Value() to get the display value (with placeholders).
 // Call ExpandValue() to get the real content with placeholders replaced.
 type Editor struct {
-	common           *common.Common
-	textarea         textarea.Model
-	textinput        textinput.Model
-	secure           bool
-	commands         []string
-	snippets         []PasteSnippet           // stored snippets for large pastes
-	largePasteChars  int                      // threshold in characters (from config, 0=disabled)
-	largePasteLines  int                      // threshold in lines (from config, 0=disabled)
+	common          *common.Common
+	textarea        textarea.Model
+	textinput       textinput.Model
+	secure          bool
+	commands        []string
+	snippets        []PasteSnippet // stored snippets for large pastes
+	largePasteChars int            // threshold in characters (from config, 0=disabled)
+	largePasteLines int            // threshold in lines (from config, 0=disabled)
 }
 
 // NewEditor creates a new Editor component.
@@ -51,7 +51,7 @@ func NewEditor(c *common.Common, editorCfg *config.EditorConfig) *Editor {
 	t := textarea.New()
 	t.SetHeight(1)
 	t.ShowLineNumbers = false
-	t.Placeholder = "  Type your message or / for commands  |  Shift+Enter for multi-line  |  Ctrl+C to clear"
+	t.Placeholder = " Message SelfMind"
 	t.Prompt = "" // Handled manually in Draw
 
 	// Reset base styles to ensure no background blocks
@@ -107,7 +107,7 @@ func NewEditor(c *common.Common, editorCfg *config.EditorConfig) *Editor {
 		common:          c,
 		textarea:        t,
 		textinput:       i,
-		commands:        []string{"/help", "/status", "/new", "/clear", "/exit", "/model", "/models", "/config", "/tasks", "/sessions", "/skills", "/memory", "/curator", "/retry", "/undo", "/title", "/stop"},
+		commands:        []string{"/help", "/status", "/clear", "/exit", "/migrate", "/model", "/tasks", "/skills", "/memory", "/curator", "/checkpoint"},
 		largePasteChars: chars,
 		largePasteLines: lines,
 	}

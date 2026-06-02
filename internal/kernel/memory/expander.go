@@ -16,13 +16,13 @@ type SemanticExpander struct {
 	enabled  bool
 
 	// simple cache to avoid repeated expansions for the same query within a short window
-	cache     map[string]cacheEntry
-	cacheTTL  time.Duration
+	cache    map[string]cacheEntry
+	cacheTTL time.Duration
 }
 
 type cacheEntry struct {
-	result    string
-	cachedAt  time.Time
+	result   string
+	cachedAt time.Time
 }
 
 // NewSemanticExpander creates an expander. If provider is nil, expansion is disabled.
@@ -50,6 +50,9 @@ func (se *SemanticExpander) Expand(ctx context.Context, query string) string {
 	if query == "" {
 		return query
 	}
+	mc := llm.ModelContextFrom(ctx)
+	mc.Role = llm.RoleSemanticRecall
+	ctx = llm.WithModelContext(ctx, mc)
 
 	// cache check
 	if entry, ok := se.cache[query]; ok && time.Since(entry.cachedAt) < se.cacheTTL {

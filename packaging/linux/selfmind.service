@@ -1,0 +1,28 @@
+[Unit]
+Description=SelfMind gateway
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=selfmind
+Group=selfmind
+WorkingDirectory=/var/lib/selfmind
+Environment=HOME=/var/lib/selfmind
+Environment=SELF_GATEWAY_ADDR=127.0.0.1:8765
+EnvironmentFile=-/etc/selfmind/selfmind.env
+ExecStart=/usr/local/bin/selfmind gateway run
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=45s
+KillSignal=SIGINT
+StateDirectory=selfmind
+LogsDirectory=selfmind
+ConfigurationDirectory=selfmind
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ReadWritePaths=/var/lib/selfmind /var/log/selfmind /etc/selfmind
+
+[Install]
+WantedBy=multi-user.target

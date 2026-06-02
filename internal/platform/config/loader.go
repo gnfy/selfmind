@@ -7,43 +7,36 @@ import (
 	"strings"
 
 	"github.com/spf13/viper"
+	"go.yaml.in/yaml/v3"
 )
 
 const defaultConfigTemplate = `
-agent:
-  # 当前使用的主供应商名称 (可选: anthropic, gemini, openai, minimax, openrouter 或自定义名称)
-  provider: "gemini"
-  
-  # 对话最大迭代次数
-  max_iterations: 90
-  
-  # 请求重试次数
-  max_retries: 3
-  
-  # 运行日志级别 (DEBUG, INFO, WARN, ERROR)
-  log_level: "INFO"
-  
-  # Agent 的“灵魂”或人格设定
-  soul: "helpful"
+model:
+  provider: ""
+  default: ""
 
 providers:
-  # 各大主流供应商的 API 密钥
-  anthropic_api_key: ""
-  openai_api_key: ""
-  gemini_api_key: ""
-  minimax_api_key: ""
-  openrouter_api_key: ""
-
-  # 自定义供应商列表
-  custom:
-    - name: "deepseek"
-      base_url: "https://api.deepseek.com/v1"
-      api_key: ""
-      model: "deepseek-chat"
+  openai:
+    api_key: ""
+    base_url: "https://api.openai.com/v1"
+    protocol: "openai_chat"
+  anthropic:
+    api_key: ""
+    base_url: "https://api.anthropic.com"
+    protocol: "anthropic_messages"
+  google:
+    api_key: ""
+    base_url: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
+    protocol: "openai_compatible"
+  custom: []
 
 storage:
   type: "sqlite"
   data_dir: "~/.selfmind/data"
+
+gateway:
+  addr: "127.0.0.1:8765"
+  token: ""
 
 evolution:
   enabled: true
@@ -58,123 +51,266 @@ delegation:
   max_retries: 3
   max_iterations: 50
 
+models:
+  source: "local"
+  roles: {}
+
 cron:
   enabled: true
 
 editor:
-  # 粘贴内容超过此字符数时显示占位符（0=禁用）
   large_paste_chars: 1000
-  # 粘贴内容超过此行数时显示占位符（0=禁用）
   large_paste_lines: 10
 `
 
+type Options struct {
+	Path            string
+	CreateIfMissing bool
+}
+
 type Config struct {
-	Agent      AgentConfig       `mapstructure:"agent"`
-	Storage    StorageConfig     `mapstructure:"storage"`
-	Providers  ProvidersConfig   `mapstructure:"providers"`
-	Evolution  EvolutionConfig   `mapstructure:"evolution"`
-	MCP        MCPConfig         `mapstructure:"mcp"`
-	Delegation DelegationConfig  `mapstructure:"delegation"`
-	Cron       CronConfig        `mapstructure:"cron"`
-	Editor     EditorConfig      `mapstructure:"editor"`
-	Memory     MemoryConfig      `mapstructure:"memory"`
+	Path       string           `mapstructure:"-" yaml:"-"`
+	Model      ModelConfig      `mapstructure:"model" yaml:"model,omitempty"`
+	Agent      AgentConfig      `mapstructure:"agent" yaml:"agent,omitempty"`
+	Storage    StorageConfig    `mapstructure:"storage" yaml:"storage,omitempty"`
+	Gateway    GatewayConfig    `mapstructure:"gateway" yaml:"gateway,omitempty"`
+	Providers  ProvidersConfig  `mapstructure:"providers" yaml:"providers,omitempty"`
+	Evolution  EvolutionConfig  `mapstructure:"evolution" yaml:"evolution,omitempty"`
+	MCP        MCPConfig        `mapstructure:"mcp" yaml:"mcp,omitempty"`
+	Delegation DelegationConfig `mapstructure:"delegation" yaml:"delegation,omitempty"`
+	Cron       CronConfig       `mapstructure:"cron" yaml:"cron,omitempty"`
+	Editor     EditorConfig     `mapstructure:"editor" yaml:"editor,omitempty"`
+	Memory     MemoryConfig     `mapstructure:"memory" yaml:"memory,omitempty"`
+	Models     ModelsConfig     `mapstructure:"models" yaml:"models,omitempty"`
+}
+
+type ModelConfig struct {
+	Provider string `mapstructure:"provider" yaml:"provider,omitempty"`
+	Default  string `mapstructure:"default" yaml:"default,omitempty"`
 }
 
 type EditorConfig struct {
-	LargePasteChars int `mapstructure:"large_paste_chars"`
-	LargePasteLines int `mapstructure:"large_paste_lines"`
+	LargePasteChars int `mapstructure:"large_paste_chars" yaml:"large_paste_chars,omitempty"`
+	LargePasteLines int `mapstructure:"large_paste_lines" yaml:"large_paste_lines,omitempty"`
 }
 
 type MemoryConfig struct {
-	AutoExtractInterval int  `mapstructure:"auto_extract_interval"` // 每 N 轮提取一次
-	AutoExtractMinChars int  `mapstructure:"auto_extract_min_chars"` // 最小内容长度
-	SemanticRecall      bool `mapstructure:"semantic_recall"`        // 是否启用语义召回
-	UseMemoryFence      bool `mapstructure:"use_memory_fence"`       // 是否用 fence 格式注入记忆
+	AutoExtractInterval int  `mapstructure:"auto_extract_interval" yaml:"auto_extract_interval,omitempty"`
+	AutoExtractMinChars int  `mapstructure:"auto_extract_min_chars" yaml:"auto_extract_min_chars,omitempty"`
+	SemanticRecall      bool `mapstructure:"semantic_recall" yaml:"semantic_recall,omitempty"`
+	UseMemoryFence      bool `mapstructure:"use_memory_fence" yaml:"use_memory_fence,omitempty"`
 }
 
-// MCPConfig MCP 服务器配置
 type MCPConfig struct {
-	Servers []MCP_SERVER `mapstructure:"servers"`
+	Servers []MCP_SERVER `mapstructure:"servers" yaml:"servers,omitempty"`
 }
 
-// MCP_SERVER MCP 服务器定义
 type MCP_SERVER struct {
-	Name      string            `mapstructure:"name"`
-	Transport string            `mapstructure:"transport"` // "stdio" or "http"
-	Command   string            `mapstructure:"command,omitempty"`
-	Args      []string          `mapstructure:"args,omitempty"`
-	URL       string            `mapstructure:"url,omitempty"`
-	Headers   map[string]string `mapstructure:"headers,omitempty"`
-	Auth      map[string]string `mapstructure:"auth,omitempty"`
-	EnvFilter []string          `mapstructure:"env_filter,omitempty"`
+	Name      string            `mapstructure:"name" yaml:"name,omitempty"`
+	Transport string            `mapstructure:"transport" yaml:"transport,omitempty"`
+	Command   string            `mapstructure:"command,omitempty" yaml:"command,omitempty"`
+	Args      []string          `mapstructure:"args,omitempty" yaml:"args,omitempty"`
+	URL       string            `mapstructure:"url,omitempty" yaml:"url,omitempty"`
+	Headers   map[string]string `mapstructure:"headers,omitempty" yaml:"headers,omitempty"`
+	Auth      map[string]string `mapstructure:"auth,omitempty" yaml:"auth,omitempty"`
+	EnvFilter []string          `mapstructure:"env_filter,omitempty" yaml:"env_filter,omitempty"`
 }
 
 type EvolutionConfig struct {
-	Enabled                bool    `mapstructure:"enabled"`
-	Mode                   string  `mapstructure:"mode"`
-	MinComplexityThreshold int     `mapstructure:"min_complexity_threshold"`
-	AutoArchiveConfidence  float64 `mapstructure:"auto_archive_confidence"`
-	NudgeInterval         int     `mapstructure:"nudge_interval"`
-	SkillsDir              string  `mapstructure:"skills_dir"`
+	Enabled                bool    `mapstructure:"enabled" yaml:"enabled,omitempty"`
+	Mode                   string  `mapstructure:"mode" yaml:"mode,omitempty"`
+	MinComplexityThreshold int     `mapstructure:"min_complexity_threshold" yaml:"min_complexity_threshold,omitempty"`
+	AutoArchiveConfidence  float64 `mapstructure:"auto_archive_confidence" yaml:"auto_archive_confidence,omitempty"`
+	NudgeInterval          int     `mapstructure:"nudge_interval" yaml:"nudge_interval,omitempty"`
+	SkillsDir              string  `mapstructure:"skills_dir" yaml:"skills_dir,omitempty"`
 }
 
 type AgentConfig struct {
-	Soul          string `mapstructure:"soul"`
-	Provider      string `mapstructure:"provider"`
-	Model         string `mapstructure:"model"`
-	MaxIterations int    `mapstructure:"max_iterations"`
-	MaxRetries    int    `mapstructure:"max_retries"`
-	LogLevel      string `mapstructure:"log_level"`
+	Soul          string `mapstructure:"soul" yaml:"soul,omitempty"`
+	Provider      string `mapstructure:"provider" yaml:"-"`
+	Model         string `mapstructure:"model" yaml:"-"`
+	MaxIterations int    `mapstructure:"max_iterations" yaml:"max_iterations,omitempty"`
+	MaxRetries    int    `mapstructure:"max_retries" yaml:"max_retries,omitempty"`
+	LogLevel      string `mapstructure:"log_level" yaml:"log_level,omitempty"`
 }
 
 type StorageConfig struct {
-	Type    string `mapstructure:"type"`
-	DataDir string `mapstructure:"data_dir"`
+	Type    string `mapstructure:"type" yaml:"type,omitempty"`
+	DataDir string `mapstructure:"data_dir" yaml:"data_dir,omitempty"`
+}
+
+type GatewayConfig struct {
+	Addr         string `mapstructure:"addr" yaml:"addr,omitempty"`
+	URL          string `mapstructure:"url" yaml:"url,omitempty"`
+	Token        string `mapstructure:"token" yaml:"token,omitempty"`
+	DrainTimeout string `mapstructure:"drain_timeout" yaml:"drain_timeout,omitempty"`
 }
 
 type ProvidersConfig struct {
-	AnthropicAPIKey  string `mapstructure:"anthropic_api_key"`
-	OpenAIAPIKey     string `mapstructure:"openai_api_key"`
-	OpenRouterAPIKey string `mapstructure:"openrouter_api_key"`
-	GeminiAPIKey     string `mapstructure:"gemini_api_key"`
-	MiniMaxAPIKey    string `mapstructure:"minimax_api_key"`
-	Custom           []CustomProvider `mapstructure:"custom"`
+	OpenAI    ProviderEndpoint `mapstructure:"openai" yaml:"openai,omitempty"`
+	Anthropic ProviderEndpoint `mapstructure:"anthropic" yaml:"anthropic,omitempty"`
+	Google    ProviderEndpoint `mapstructure:"google" yaml:"google,omitempty"`
+
+	AnthropicAPIKey  string `mapstructure:"anthropic_api_key" yaml:"-"`
+	OpenAIAPIKey     string `mapstructure:"openai_api_key" yaml:"-"`
+	OpenRouterAPIKey string `mapstructure:"openrouter_api_key" yaml:"-"`
+	GeminiAPIKey     string `mapstructure:"gemini_api_key" yaml:"-"`
+	MiniMaxAPIKey    string `mapstructure:"minimax_api_key" yaml:"-"`
+
+	Custom []CustomProvider `mapstructure:"custom" yaml:"custom,omitempty"`
+}
+
+type ProviderEndpoint struct {
+	APIKey   string `mapstructure:"api_key" yaml:"api_key,omitempty"`
+	BaseURL  string `mapstructure:"base_url" yaml:"base_url,omitempty"`
+	Protocol string `mapstructure:"protocol" yaml:"protocol,omitempty"`
+	Model    string `mapstructure:"model" yaml:"model,omitempty"`
+}
+
+type ModelsConfig struct {
+	Source string                     `mapstructure:"source" yaml:"source,omitempty"`
+	Roles  map[string]ModelRoleConfig `mapstructure:"roles" yaml:"roles,omitempty"`
+}
+
+type ModelRoleConfig struct {
+	Provider  string `mapstructure:"provider" yaml:"provider,omitempty"`
+	Model     string `mapstructure:"model" yaml:"model,omitempty"`
+	BaseURL   string `mapstructure:"base_url" yaml:"base_url,omitempty"`
+	APIKey    string `mapstructure:"api_key" yaml:"api_key,omitempty"`
+	MaxTokens int    `mapstructure:"max_tokens" yaml:"max_tokens,omitempty"`
 }
 
 type CustomProvider struct {
-	Name    string `mapstructure:"name"`
-	BaseURL string `mapstructure:"base_url"`
-	APIKey  string `mapstructure:"api_key"`
-	Model   string `mapstructure:"model"`
+	Name     string                           `mapstructure:"name" yaml:"name,omitempty"`
+	BaseURL  string                           `mapstructure:"base_url" yaml:"base_url,omitempty"`
+	APIKey   string                           `mapstructure:"api_key" yaml:"api_key,omitempty"`
+	Protocol string                           `mapstructure:"protocol" yaml:"protocol,omitempty"`
+	Model    string                           `mapstructure:"model" yaml:"model,omitempty"`
+	Models   map[string]CustomModelProperties `mapstructure:"models" yaml:"models,omitempty"`
 }
 
-// DelegationConfig 子 Agent 委托配置
+type CustomModelProperties struct {
+	ContextLength int `mapstructure:"context_length" yaml:"context_length,omitempty"`
+}
+
 type DelegationConfig struct {
-	Provider      string `mapstructure:"provider"` // "anthropic", "openai", "openrouter"
-	Model         string `mapstructure:"model"`
-	APIKey        string `mapstructure:"api_key"`
-	MaxRetries    int    `mapstructure:"max_retries"`
-	MaxIterations int    `mapstructure:"max_iterations"`
+	Provider      string `mapstructure:"provider" yaml:"provider,omitempty"`
+	Model         string `mapstructure:"model" yaml:"model,omitempty"`
+	APIKey        string `mapstructure:"api_key" yaml:"api_key,omitempty"`
+	MaxRetries    int    `mapstructure:"max_retries" yaml:"max_retries,omitempty"`
+	MaxIterations int    `mapstructure:"max_iterations" yaml:"max_iterations,omitempty"`
 }
 
-// CronConfig cron 调度器配置
 type CronConfig struct {
-	Enabled bool `mapstructure:"enabled"`
+	Enabled bool `mapstructure:"enabled" yaml:"enabled,omitempty"`
 }
 
-func LoadConfig() (*Config, error) {
-	// 0. 确保配置文件存在
-	ensureConfigExists()
+func LoadConfig(options ...Options) (*Config, error) {
+	opts := Options{}
+	if len(options) > 0 {
+		opts = options[0]
+	}
+	path, isDefault := ResolveConfigPath(opts.Path)
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		if isDefault || opts.CreateIfMissing {
+			if err := EnsureConfigExists(path); err != nil {
+				return nil, err
+			}
+		} else {
+			return nil, fmt.Errorf("config file does not exist: %s", path)
+		}
+	}
 
 	v := viper.New()
+	setDefaults(v)
+	v.SetConfigFile(path)
+	v.SetConfigType("yaml")
+	v.SetEnvPrefix("SELF")
+	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
+	v.AutomaticEnv()
 
-	// 1. 设置默认值
+	if err := v.ReadInConfig(); err != nil {
+		if _, ok := err.(viper.ConfigFileNotFoundError); !ok {
+			return nil, fmt.Errorf("error reading config file %s: %w", path, err)
+		}
+	}
+
+	var cfg Config
+	if err := v.Unmarshal(&cfg); err != nil {
+		return nil, fmt.Errorf("unable to decode config %s: %w", path, err)
+	}
+	cfg.Path = path
+	cfg.Normalize()
+	return &cfg, nil
+}
+
+func SaveConfig(path string, cfg *Config) error {
+	if cfg == nil {
+		return fmt.Errorf("config is nil")
+	}
+	if strings.TrimSpace(path) == "" {
+		path = cfg.Path
+	}
+	if strings.TrimSpace(path) == "" {
+		path, _ = ResolveConfigPath("")
+	}
+	cfg.Path = path
+	cfg.Normalize()
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return err
+	}
+	data, err := yaml.Marshal(cfg)
+	if err != nil {
+		return err
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
+}
+
+func ResolveConfigPath(explicit string) (string, bool) {
+	if path := strings.TrimSpace(explicit); path != "" {
+		return cleanPath(path), false
+	}
+	if path := strings.TrimSpace(os.Getenv("SELF_CONFIG")); path != "" {
+		return cleanPath(path), false
+	}
+	return DefaultConfigPath(), true
+}
+
+func DefaultConfigPath() string {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return filepath.Join(".selfmind", "config.yaml")
+	}
+	return filepath.Join(home, ".selfmind", "config.yaml")
+}
+
+func EnsureConfigExists(path string) error {
+	if strings.TrimSpace(path) == "" {
+		path = DefaultConfigPath()
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return fmt.Errorf("failed to create config directory: %w", err)
+	}
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		if err := os.WriteFile(path, []byte(defaultConfigTemplate), 0600); err != nil {
+			return fmt.Errorf("failed to write default config: %w", err)
+		}
+	}
+	return nil
+}
+
+func setDefaults(v *viper.Viper) {
 	v.SetDefault("agent.max_iterations", 90)
 	v.SetDefault("agent.max_retries", 3)
 	v.SetDefault("delegation.max_iterations", 50)
 	v.SetDefault("agent.log_level", "INFO")
 	v.SetDefault("storage.type", "sqlite")
 	v.SetDefault("storage.data_dir", "~/.selfmind/data")
+	v.SetDefault("gateway.addr", "127.0.0.1:8765")
 	v.SetDefault("editor.large_paste_chars", 1000)
 	v.SetDefault("editor.large_paste_lines", 10)
 	v.SetDefault("memory.auto_extract_interval", 5)
@@ -183,55 +319,124 @@ func LoadConfig() (*Config, error) {
 	v.SetDefault("memory.use_memory_fence", true)
 	v.SetDefault("evolution.enabled", true)
 	v.SetDefault("evolution.nudge_interval", 10)
-
-	// 2. 加载配置文件
-	home, _ := os.UserHomeDir()
-	v.AddConfigPath(filepath.Join(home, ".selfmind"))
-	v.SetConfigName("config")
-	v.SetConfigType("yaml")
-
-	// 3. 环境变量支持 (e.g., SELF_AGENT_MAX_ITERATIONS)
-	v.SetEnvPrefix("SELF")
-	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
-	v.AutomaticEnv()
-
-	if err := v.ReadInConfig(); err != nil {
-		if _, ok := err.(viper.ConfigFileNotFoundError); !ok {
-			return nil, fmt.Errorf("error reading config file: %w", err)
-		}
-	} else {
-
-	}
-
-	var config Config
-	if err := v.Unmarshal(&config); err != nil {
-		return nil, fmt.Errorf("unable to decode into struct: %w", err)
-	}
-
-	return &config, nil
+	v.SetDefault("models.source", "local")
 }
 
-func ensureConfigExists() error {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return err
+func (c *Config) Normalize() {
+	if c.Models.Roles == nil {
+		c.Models.Roles = make(map[string]ModelRoleConfig)
 	}
-	configDir := filepath.Join(home, ".selfmind")
-	configPath := filepath.Join(configDir, "config.yaml")
+	if strings.TrimSpace(c.Models.Source) == "" {
+		c.Models.Source = "local"
+	}
 
-	// 检查目录是否存在
-	if _, err := os.Stat(configDir); os.IsNotExist(err) {
-		if err := os.MkdirAll(configDir, 0755); err != nil {
-			return fmt.Errorf("failed to create config directory: %w", err)
+	c.Model.Provider = expandEnvRef(c.Model.Provider)
+	c.Model.Default = expandEnvRef(c.Model.Default)
+	c.Agent.Provider = expandEnvRef(c.Agent.Provider)
+	c.Agent.Model = expandEnvRef(c.Agent.Model)
+	c.Agent.Soul = expandEnvRef(c.Agent.Soul)
+	c.Storage.DataDir = expandEnvRef(c.Storage.DataDir)
+	c.Gateway.Addr = expandEnvRef(c.Gateway.Addr)
+	c.Gateway.URL = expandEnvRef(c.Gateway.URL)
+	c.Gateway.Token = expandEnvRef(c.Gateway.Token)
+	c.Gateway.DrainTimeout = expandEnvRef(c.Gateway.DrainTimeout)
+	c.Delegation.Provider = expandEnvRef(c.Delegation.Provider)
+	c.Delegation.Model = expandEnvRef(c.Delegation.Model)
+	c.Delegation.APIKey = expandEnvRef(c.Delegation.APIKey)
+
+	c.Providers.OpenAI = normalizeEndpoint(c.Providers.OpenAI, c.Providers.OpenAIAPIKey, "https://api.openai.com/v1", "openai_chat")
+	c.Providers.Anthropic = normalizeEndpoint(c.Providers.Anthropic, c.Providers.AnthropicAPIKey, "https://api.anthropic.com", "anthropic_messages")
+	c.Providers.Google = normalizeEndpoint(c.Providers.Google, c.Providers.GeminiAPIKey, "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", "openai_compatible")
+
+	c.Providers.OpenAIAPIKey = firstNonEmpty(c.Providers.OpenAIAPIKey, c.Providers.OpenAI.APIKey)
+	c.Providers.AnthropicAPIKey = firstNonEmpty(c.Providers.AnthropicAPIKey, c.Providers.Anthropic.APIKey)
+	c.Providers.GeminiAPIKey = firstNonEmpty(c.Providers.GeminiAPIKey, c.Providers.Google.APIKey)
+	c.Providers.OpenRouterAPIKey = expandEnvRef(c.Providers.OpenRouterAPIKey)
+	c.Providers.MiniMaxAPIKey = expandEnvRef(c.Providers.MiniMaxAPIKey)
+
+	for i := range c.Providers.Custom {
+		c.Providers.Custom[i].Name = strings.TrimSpace(c.Providers.Custom[i].Name)
+		c.Providers.Custom[i].BaseURL = expandEnvRef(c.Providers.Custom[i].BaseURL)
+		c.Providers.Custom[i].APIKey = expandEnvRef(c.Providers.Custom[i].APIKey)
+		c.Providers.Custom[i].Protocol = firstNonEmpty(c.Providers.Custom[i].Protocol, "openai_compatible")
+		c.Providers.Custom[i].Model = expandEnvRef(c.Providers.Custom[i].Model)
+	}
+	for name, role := range c.Models.Roles {
+		role.Provider = expandEnvRef(role.Provider)
+		role.Model = expandEnvRef(role.Model)
+		role.BaseURL = expandEnvRef(role.BaseURL)
+		role.APIKey = expandEnvRef(role.APIKey)
+		c.Models.Roles[name] = role
+	}
+
+	if strings.TrimSpace(c.Model.Provider) == "" {
+		c.Model.Provider = c.Agent.Provider
+	}
+	if strings.TrimSpace(c.Model.Default) == "" {
+		c.Model.Default = c.Agent.Model
+	}
+	if strings.TrimSpace(c.Agent.Provider) == "" {
+		c.Agent.Provider = c.Model.Provider
+	}
+	if strings.TrimSpace(c.Agent.Model) == "" {
+		c.Agent.Model = c.Model.Default
+	}
+}
+
+func (c *Config) EffectiveProvider() string {
+	if c == nil {
+		return ""
+	}
+	return strings.TrimSpace(firstNonEmpty(c.Model.Provider, c.Agent.Provider))
+}
+
+func (c *Config) EffectiveModel() string {
+	if c == nil {
+		return ""
+	}
+	return strings.TrimSpace(firstNonEmpty(c.Model.Default, c.Agent.Model))
+}
+
+func (c *Config) SetDefaultModel(provider, model string) {
+	c.Model.Provider = strings.TrimSpace(provider)
+	c.Model.Default = strings.TrimSpace(model)
+	c.Agent.Provider = c.Model.Provider
+	c.Agent.Model = c.Model.Default
+}
+
+func normalizeEndpoint(ep ProviderEndpoint, legacyKey, defaultBaseURL, defaultProtocol string) ProviderEndpoint {
+	ep.APIKey = expandEnvRef(firstNonEmpty(ep.APIKey, legacyKey))
+	ep.BaseURL = expandEnvRef(firstNonEmpty(ep.BaseURL, defaultBaseURL))
+	ep.Protocol = firstNonEmpty(ep.Protocol, defaultProtocol)
+	ep.Model = expandEnvRef(ep.Model)
+	return ep
+}
+
+func cleanPath(path string) string {
+	path = expandEnvRef(path)
+	if path == "~" {
+		home, _ := os.UserHomeDir()
+		return home
+	}
+	if strings.HasPrefix(path, "~/") {
+		home, _ := os.UserHomeDir()
+		return filepath.Join(home, path[2:])
+	}
+	return filepath.Clean(path)
+}
+
+func expandEnvRef(value string) string {
+	if strings.Contains(value, "${") {
+		return os.ExpandEnv(value)
+	}
+	return value
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if strings.TrimSpace(v) != "" {
+			return strings.TrimSpace(v)
 		}
 	}
-
-	// 检查文件是否存在
-	if _, err := os.Stat(configPath); os.IsNotExist(err) {
-
-		if err := os.WriteFile(configPath, []byte(defaultConfigTemplate), 0644); err != nil {
-			return fmt.Errorf("failed to write default config: %w", err)
-		}
-	}
-	return nil
+	return ""
 }

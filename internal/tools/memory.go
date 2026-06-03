@@ -3,8 +3,8 @@ package tools
 import (
 	"context"
 	"fmt"
-	"strings"
 	"selfmind/internal/kernel/memory"
+	"strings"
 )
 
 // MemoryTool allows the agent to save durable information.
@@ -112,7 +112,7 @@ func (t *MemoryTool) Execute(args map[string]interface{}) (string, error) {
 		if targetID == "" {
 			return "", fmt.Errorf("could not find memory entry matching %q", oldText)
 		}
-		// In SQLite, we can just remove and add, or implement UpdateFact. 
+		// In SQLite, we can just remove and add, or implement UpdateFact.
 		// For simplicity, we use Remove + Add.
 		err = t.mem.RemoveFact(ctx, tenantID, targetID)
 		if err != nil {

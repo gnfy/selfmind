@@ -204,4 +204,71 @@ func TestIMAsyncFlagAndControlDetection(t *testing.T) {
 	if !isControlCommand("/status") || !isControlCommand("/stop") || !isControlCommand("/workspace ws_1") {
 		t.Fatal("expected common daemon commands to be detected")
 	}
+	if !isControlCommand("/events") {
+		t.Fatal("expected /events to be detected")
+	}
+}
+
+func TestTaskEventsEndpoint(t *testing.T) {
+	t.Setenv("SELF_GATEWAY_TOKEN", "")
+	store, err := control.OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	ctx := httptest.NewRequest(http.MethodGet, "/", nil).Context()
+	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Local User")
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := store.CreateTask(ctx, control.TaskCreate{
+		TenantID: identity.TenantID,
+		PersonID: identity.PersonID,
+		Title:    "Events",
+		Channel:  "cli",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AppendEvent(ctx, control.Event{TaskID: task.ID, Type: "tool.started", Payload: mustJSON(map[string]string{"tool": "read_file"})}); err != nil {
+		t.Fatal(err)
+	}
+	daemon := &Server{Control: store, DefaultTenantID: "default"}
+	req := httptest.NewRequest(http.MethodGet, "/v1/tasks/events?platform=cli&platform_user_id=local", nil)
+	rec := httptest.NewRecorder()
+	daemon.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var payload struct {
+		Events []control.Event `json:"events"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&payload); err != nil {
+		t.Fatal(err)
+	}
+	if len(payload.Events) != 1 || payload.Events[0].Type != "tool.started" {
+		t.Fatalf("events payload = %+v", payload.Events)
+	}
+}
+
+func TestInferTaskStatusConservative(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+		want    string
+	}{
+		{name: "clear done", content: "All done - tests pass.", want: "done"},
+		{name: "clear chinese done", content: "\u4efb\u52a1\u5df2\u5b8c\u6210", want: "done"},
+		{name: "plain success wording", content: "The success criteria are listed below.", want: "running"},
+		{name: "not done", content: "Not done yet; remaining work is listed below.", want: "running"},
+		{name: "chinese not done", content: "\u8fd8\u6ca1\u5b8c\u6210\uff0c\u9700\u8981\u7ee7\u7eed", want: "running"},
+		{name: "blocked", content: "Blocked: need your input before I can continue.", want: "blocked"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := inferTaskStatus(tt.content); got != tt.want {
+				t.Fatalf("inferTaskStatus() = %q, want %q", got, tt.want)
+			}
+		})
+	}
 }

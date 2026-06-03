@@ -36,7 +36,7 @@ internal/platform/config/  YAML 配置 schema、默认值、兼容、保存
 internal/kernel/           agent loop、memory、review、native tool calls
 internal/kernel/llm/       provider adapters 和 role-based model gateway
 internal/tools/            内置工具和工具 middleware
-internal/gateway/          TUI、HTTP API、router、channel adapters
+internal/gateway/          TUI、HTTP API、router、delivery、channel adapters
 internal/control/          control.db 身份/workspace/task/run 状态
 internal/runtime/gateway/  gateway 进程 runner、pid、lock、state、start/stop
 packaging/                 Linux 打包脚本和 systemd 模板
@@ -112,6 +112,11 @@ gateway:
   addr: "127.0.0.1:8765"
   token: ""
   drain_timeout: "30s"
+  outbound_webhook_url: ""
+  outbound_webhook_token: ""
+  telegram_token: "${TELEGRAM_BOT_TOKEN}"
+  delivery_max_message_chars: 3500
+  delivery_retry_attempts: 3
 
 models:
   source: "local"
@@ -237,6 +242,7 @@ gateway:
 |---|---|---|
 | `GET` | `/v1/gateway/status` | 查看进程状态和 active runs |
 | `POST` | `/v1/gateway/shutdown` | 请求优雅 draining shutdown |
+| `GET` | `/v1/tasks/events` | 查看当前任务或指定 task 的最近事件 |
 
 停机时 gateway 会进入 draining 状态，拒绝新 run，等待 active run 完成；CLI 可在需要时 force stop。
 
@@ -255,6 +261,13 @@ task_id         持久化任务状态
 run_id          一次 Agent 执行
 event_id        可审计任务事件
 ```
+
+运行时状态规则：
+
+- `task_runs.heartbeat_at` 由 gateway 每 10 秒刷新，异常重启后 `MarkInterruptedRuns` 会把遗留 running run 标记为 `interrupted`。
+- `task_events` 记录 `run.started`、`tool.started`、`tool.completed`、`learning.review`、`run.finished`、`run.cancelled` 等事件。
+- `outbound_messages` 是 IM 回发队列。没有 sender 时保持 `pending`；配置 sender 后由 delivery worker 重试发送。
+- `/status` 面向摘要，`/events` 面向最近运行事件。
 
 触碰文件、搜索、补丁、终端或进程的工具必须遵守 `allowed_roots`，不要绕过 `WorkspaceScopeMiddleware`。
 
@@ -275,6 +288,39 @@ SelfMind 当前采用 Hermes 风格的 native tool-call contract：
 - `internal/kernel/agent.go`
 - `internal/kernel/llm/adapters.go`
 - `internal/tools/dispatcher.go`
+- `internal/tools/guardrails.go`
+- `internal/tools/security.go`
+
+工具稳定性规则：
+
+- `ToolGuardrails` 按 run 维度阻止同一工具/同一参数的连续重复失败。
+- 对只读工具会检测“相同参数得到相同结果”的无进展循环。
+- 工具日志、gateway delivery 错误和事件 payload 应通过 `tools.RedactSensitive` 脱敏。
+- mutating、terminal、memory、skill、delegation、process-control 和 patch 工具必须保持顺序执行，不要加入并行白名单。
+
+### 工具运行时隔离
+
+新的应用路径应创建独立 registry：
+
+```go
+registry := tools.NewRegistry()
+dispatcher := tools.NewDispatcherWithRegistry(registry)
+```
+
+规则：
+
+- `tools.NewDispatcher()` 和 `tools.GlobalRegistry()` 只作为旧兼容入口保留。
+- 租户、workspace、MCP、动态加载的 skill 工具都应通过当前 dispatcher/registry 注册。
+- `MCPToolManager` 连接和断开工具时必须操作自己的 dispatcher，不要操作全局 registry。
+- `Registry.Dispatch` 和 `Dispatcher.Dispatch` 都会先做参数类型转换和校验，再执行工具。
+- 参数转换是严格的：非法 integer、number、boolean 会直接报错。
+- `ClarifyFn` 仍作为 TUI 兼容 fallback 保留，新审批/clarify 接入应优先通过 dispatcher registry 注入 handler。
+
+### Agent 并发
+
+一个 `Agent` 实例目前用 `runMu` 串行执行，因为它只拥有一个 `EventChannel`。如果 gateway 后续需要真正并行的 active runs，应为每个 run 创建独立 agent，或先引入 per-run event sink，再移除这个锁。
+
+`syncTurn` 使用有界后台队列，不再每轮 assistant 响应都创建无上限 goroutine。高频对话下宁愿丢弃旧的 sync 快照，也不要堆积大量 memory-sync worker。
 
 ## “越用越智能”学习闭环
 
@@ -306,6 +352,8 @@ conversation/task
 - 可复用流程、步骤、检查清单进入 skills。
 - 临时任务进度不要写入长期 memory。
 - 使用 skill 后发现过时或被用户纠正，优先 patch 原 skill，避免重复创建。
+- 临时 provider outage、一次性 tool failure、猜测性的失败原因不要沉淀为 memory/skill。
+- 创建 skill 时默认使用 `source=agent-created`，session 细节放到 `references/`，不要写进主 `SKILL.md`。
 - Curator 默认只治理 agent-created skills，除非用户明确要求。
 
 ## 新增工具
@@ -343,16 +391,17 @@ platform adapter
   验证签名
   解析平台 payload
   归一化 inbound message
-  可选发送 outbound message
+  实现平台 sender（可选）
         |
         v
 gateway
   身份绑定
   workspace/task/run 状态
   agent dispatch
+  delivery enqueue/retry/split
 ```
 
-gateway 拥有 person identity、task state、workspace binding、active run policy、memory 和 skills。平台 adapter 不应拥有这些概念。
+gateway 拥有 person identity、task state、workspace binding、active run policy、memory、skills 和 outbound 队列。平台 adapter 不应拥有这些概念。
 
 通用 webhook 入口：
 
@@ -360,14 +409,13 @@ gateway 拥有 person identity、task state、workspace binding、active run pol
 POST /v1/im/{platform}
 ```
 
-生产平台 adapter 还需要补：
+生产平台 adapter 需要按这个顺序补：
 
-- 签名验证。
-- 出站 sender。
-- 重试和幂等。
-- 长消息拆分。
-- 平台支持时接入原生审批按钮。
-- 长任务默认 async 行为。
+1. 入站签名/解密/去重。
+2. payload 归一化为 `api.MessageRequest`。
+3. sender 实现 `delivery.Sender`，注册到 `delivery.Router`。
+4. 复用 delivery 的长消息拆分、重试和 pending 队列。
+5. 平台支持时再接入原生审批按钮和富媒体附件。
 
 ## 新增 Gateway 命令
 
@@ -417,6 +465,12 @@ selfmind -f ./tmp/config.yaml gateway stop
 - `linux-arm64`
 
 支持 tag 自动发布和手动 workflow dispatch。
+
+Linux 安装脚本会创建 `/etc/selfmind/config.yaml`，systemd 服务使用下面的命令启动：
+
+```sh
+/usr/local/bin/selfmind -f /etc/selfmind/config.yaml gateway run
+```
 
 ## SaaS 演进方向
 

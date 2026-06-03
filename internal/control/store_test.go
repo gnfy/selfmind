@@ -4,6 +4,7 @@ import (
 	"context"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestStoreIdentityWorkspaceTaskFlow(t *testing.T) {
@@ -97,5 +98,84 @@ func TestStoreIdentityWorkspaceTaskFlow(t *testing.T) {
 	}
 	if handoff == nil || handoff.Summary != "handoff summary" {
 		t.Fatalf("handoff mismatch: %+v", handoff)
+	}
+}
+
+func TestStoreRuntimeDeliveryAndInterruptFlow(t *testing.T) {
+	ctx := context.Background()
+	store, err := OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("OpenStore failed: %v", err)
+	}
+	defer store.Close()
+
+	identity, err := store.ResolveOrCreateAccount(ctx, "tenant-a", "cli", "local", "Alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := store.CreateTask(ctx, TaskCreate{
+		TenantID: identity.TenantID,
+		PersonID: identity.PersonID,
+		Title:    "Long run",
+		Channel:  "telegram",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := store.StartRun(ctx, task, "telegram", "do work")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.UpdateRunHeartbeat(ctx, identity.TenantID, run.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RequestRunCancel(ctx, identity.TenantID, run.ID); err != nil {
+		t.Fatal(err)
+	}
+	cancelled, err := store.RunCancelRequested(ctx, identity.TenantID, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cancelled {
+		t.Fatal("expected cancel flag")
+	}
+
+	delivery, err := store.EnqueueDelivery(ctx, Delivery{
+		TenantID:    identity.TenantID,
+		PersonID:    identity.PersonID,
+		Platform:    "telegram",
+		Channel:     "123",
+		TaskID:      task.ID,
+		RunID:       run.ID,
+		Content:     "done",
+		MaxAttempts: 2,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	due, err := store.ListDueDeliveries(ctx, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(due) != 1 || due[0].ID != delivery.ID {
+		t.Fatalf("due deliveries = %+v", due)
+	}
+	if err := store.MarkDeliveryAttempt(ctx, delivery.ID, false, "network token=secret", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+
+	count, err := store.MarkInterruptedRuns(ctx, -time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("interrupted count = %d, want 1", count)
+	}
+	updated, err := store.GetTask(ctx, identity.TenantID, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.ActiveRunID != "" || updated.Status != "interrupted" {
+		t.Fatalf("task after interrupt = %+v", updated)
 	}
 }

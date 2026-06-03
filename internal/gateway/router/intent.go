@@ -10,11 +10,11 @@ type Intent int
 
 const (
 	IntentContinue Intent = iota // 继续当前任务
-	IntentTask                  // 需要执行、创建任务
-	IntentSkill                 // 调用 skill（以 /skill 或 skill 名开头）
-	IntentQuery                 // 知识库/历史查询
-	IntentRoute                 // 平台路由指令（如切到微信）
-	IntentCasual                // 闲聊、问答
+	IntentTask                   // 需要执行、创建任务
+	IntentSkill                  // 调用 skill（以 /skill 或 skill 名开头）
+	IntentQuery                  // 知识库/历史查询
+	IntentRoute                  // 平台路由指令（如切到微信）
+	IntentCasual                 // 闲聊、问答
 )
 
 // IntentClassifier 轻量级意图分类器（规则 + 简单正则）

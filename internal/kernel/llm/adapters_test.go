@@ -125,6 +125,69 @@ func TestOpenAIAdapterStreamAccumulatesToolCalls(t *testing.T) {
 	}
 }
 
+func TestAnthropicAdapterStreamChat(t *testing.T) {
+	var got AnthropicRequest
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		w.Header().Set("content-type", "text/event-stream")
+		writeSSE(t, w, map[string]interface{}{
+			"type": "message_start",
+			"message": map[string]interface{}{
+				"usage": map[string]interface{}{"input_tokens": 7},
+			},
+		})
+		writeSSE(t, w, map[string]interface{}{
+			"type":  "content_block_delta",
+			"delta": map[string]interface{}{"type": "text_delta", "text": "hello "},
+		})
+		writeSSE(t, w, map[string]interface{}{
+			"type":  "content_block_delta",
+			"delta": map[string]interface{}{"type": "text_delta", "text": "world"},
+		})
+		writeSSE(t, w, map[string]interface{}{
+			"type":  "message_delta",
+			"usage": map[string]interface{}{"output_tokens": 3},
+		})
+		writeSSE(t, w, map[string]interface{}{"type": "message_stop"})
+	}))
+	defer server.Close()
+
+	adapter := NewAnthropicAdapter("test-key")
+	adapter.BaseURL = server.URL
+
+	ch, err := adapter.StreamChat(context.Background(), ChatRequest{
+		Messages: []Message{{Role: "user", Content: "say hello"}},
+	})
+	if err != nil {
+		t.Fatalf("StreamChat failed: %v", err)
+	}
+
+	var content string
+	var usage UsageStats
+	for event := range ch {
+		if event.Err != nil {
+			t.Fatalf("stream event error: %v", event.Err)
+		}
+		content += event.Content
+		if event.Usage != nil {
+			usage.InputTokens += event.Usage.InputTokens
+			usage.OutputTokens += event.Usage.OutputTokens
+		}
+	}
+
+	if !got.Stream {
+		t.Fatal("stream flag was not sent")
+	}
+	if content != "hello world" {
+		t.Fatalf("content = %q, want %q", content, "hello world")
+	}
+	if usage.InputTokens != 7 || usage.OutputTokens != 3 {
+		t.Fatalf("usage = %+v", usage)
+	}
+}
+
 func writeSSE(t *testing.T, w http.ResponseWriter, payload map[string]interface{}) {
 	t.Helper()
 	b, err := json.Marshal(payload)

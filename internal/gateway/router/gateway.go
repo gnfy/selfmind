@@ -13,11 +13,11 @@ import (
 
 // Gateway 统一消息处理入口，整合 identity + intent + task + agent
 type Gateway struct {
-	identityMapper *identity.IdentityMapper
-	taskManager    *task.Manager
+	identityMapper   *identity.IdentityMapper
+	taskManager      *task.Manager
 	intentClassifier *IntentClassifier
-	agent           *kernel.Agent
-	llmProvider     llm.Provider
+	agent            *kernel.Agent
+	llmProvider      llm.Provider
 }
 
 // NewGateway 创建一个统一网关
@@ -104,21 +104,21 @@ func (g *Gateway) handleTaskStreaming(ctx context.Context, unifiedUID, channel, 
 	// 3. 构建 Agent 专用的 EventChannel
 	// 注意：这里的 EventChannel 会由 Agent 写入，我们需要转发或消费它
 	// 对于 Gateway.Handle，我们返回一个包装好的 Response
-	
+
 	// 这里我们需要稍微修改 Agent 的 RunConversation 或者提供一个新的流式方法
 	// 既然 Agent 已经支持了 EventChannel 里的 "stream:" 事件，我们可以直接利用
-	
+
 	// 我们在协程中运行 Agent
 	respChan := make(chan llm.StreamEvent, 20)
-	
+
 	go func() {
 		defer close(respChan)
-		
+
 		// 监听 Agent 的事件并转发到流式通道
 		// 这里由于 Agent.RunConversation 是阻塞的，我们需要在它运行的同时监听 EventChannel
 		// 但 Agent 实例只有一个，其 EventChannel 是共享的吗？
 		// 是的，目前的实现中 Agent 结构体里有一个 EventChannel
-		
+
 		resp, usage, err := g.agent.RunConversation(ctx, unifiedUID, channel, input)
 		if err != nil {
 			respChan <- llm.StreamEvent{Err: err}
@@ -135,6 +135,9 @@ func (g *Gateway) handleTaskStreaming(ctx context.Context, unifiedUID, channel, 
 		}
 
 		// 发送最终 Usage
+		if resp != "" {
+			respChan <- llm.StreamEvent{Content: resp}
+		}
 		respChan <- llm.StreamEvent{Usage: &usage}
 	}()
 
@@ -205,7 +208,7 @@ func (g *Gateway) handleQuery(ctx context.Context, unifiedUID, channel, input st
 		}
 	}
 	query = strings.TrimSpace(query)
-	
+
 	resp, err := g.agent.Dispatcher().Dispatch("session_search", map[string]interface{}{
 		"query":      query,
 		"limit":      10,
@@ -235,11 +238,61 @@ func (g *Gateway) GetCurrentTaskInfo(ctx context.Context, unifiedUID string) (*t
 	return tt, err
 }
 
-// isTaskDone 简单判断任务是否完成
+// isTaskDone conservatively detects whether an assistant response closed the task.
 func isTaskDone(response string) bool {
-	doneKeywords := []string{"完成", "done", "已完成", "success", "成功", "搞定", "好了"}
-	for _, kw := range doneKeywords {
-		if len(response) > 10 && strings.Contains(response, kw) {
+	return taskResponseLooksComplete(response)
+}
+
+func taskResponseLooksComplete(response string) bool {
+	trimmed := strings.TrimSpace(response)
+	lower := strings.ToLower(trimmed)
+	if lower == "" {
+		return false
+	}
+	if taskResponseContainsAny(lower, []string{
+		"not done",
+		"not completed",
+		"not finished",
+		"remaining work",
+		"still need",
+		"need to continue",
+		"next steps",
+		"todo:",
+		"blocked",
+	}) || taskResponseContainsAny(trimmed, []string{
+		"\u672a\u5b8c\u6210",
+		"\u8fd8\u6ca1\u5b8c\u6210",
+		"\u6ca1\u6709\u5b8c\u6210",
+		"\u5f85\u5b8c\u6210",
+		"\u9700\u8981\u7ee7\u7eed",
+		"\u963b\u585e",
+	}) {
+		return false
+	}
+	if lower == "done" || lower == "completed" || lower == "finished" || lower == "all done" {
+		return true
+	}
+	return taskResponseContainsAny(lower, []string{
+		"task complete",
+		"task completed",
+		"completed successfully",
+		"finished successfully",
+		"all done",
+		"implementation complete",
+		"tests pass",
+	}) || taskResponseContainsAny(trimmed, []string{
+		"\u5df2\u5b8c\u6210",
+		"\u4efb\u52a1\u5b8c\u6210",
+		"\u5904\u7406\u5b8c\u6210",
+		"\u5df2\u5904\u7406\u5b8c",
+		"\u5df2\u7ecf\u5b8c\u6210",
+		"\u641e\u5b9a",
+	})
+}
+
+func taskResponseContainsAny(value string, needles []string) bool {
+	for _, needle := range needles {
+		if strings.Contains(value, needle) {
 			return true
 		}
 	}

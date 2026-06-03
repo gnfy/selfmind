@@ -37,6 +37,11 @@ storage:
 gateway:
   addr: "127.0.0.1:8765"
   token: ""
+  outbound_webhook_url: ""
+  outbound_webhook_token: ""
+  telegram_token: ""
+  delivery_max_message_chars: 3500
+  delivery_retry_attempts: 3
 
 evolution:
   enabled: true
@@ -140,10 +145,15 @@ type StorageConfig struct {
 }
 
 type GatewayConfig struct {
-	Addr         string `mapstructure:"addr" yaml:"addr,omitempty"`
-	URL          string `mapstructure:"url" yaml:"url,omitempty"`
-	Token        string `mapstructure:"token" yaml:"token,omitempty"`
-	DrainTimeout string `mapstructure:"drain_timeout" yaml:"drain_timeout,omitempty"`
+	Addr                    string `mapstructure:"addr" yaml:"addr,omitempty"`
+	URL                     string `mapstructure:"url" yaml:"url,omitempty"`
+	Token                   string `mapstructure:"token" yaml:"token,omitempty"`
+	DrainTimeout            string `mapstructure:"drain_timeout" yaml:"drain_timeout,omitempty"`
+	OutboundWebhookURL      string `mapstructure:"outbound_webhook_url" yaml:"outbound_webhook_url,omitempty"`
+	OutboundWebhookToken    string `mapstructure:"outbound_webhook_token" yaml:"outbound_webhook_token,omitempty"`
+	TelegramToken           string `mapstructure:"telegram_token" yaml:"telegram_token,omitempty"`
+	DeliveryMaxMessageChars int    `mapstructure:"delivery_max_message_chars" yaml:"delivery_max_message_chars,omitempty"`
+	DeliveryRetryAttempts   int    `mapstructure:"delivery_retry_attempts" yaml:"delivery_retry_attempts,omitempty"`
 }
 
 type ProvidersConfig struct {
@@ -311,6 +321,8 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("storage.type", "sqlite")
 	v.SetDefault("storage.data_dir", "~/.selfmind/data")
 	v.SetDefault("gateway.addr", "127.0.0.1:8765")
+	v.SetDefault("gateway.delivery_max_message_chars", 3500)
+	v.SetDefault("gateway.delivery_retry_attempts", 3)
 	v.SetDefault("editor.large_paste_chars", 1000)
 	v.SetDefault("editor.large_paste_lines", 10)
 	v.SetDefault("memory.auto_extract_interval", 5)
@@ -340,6 +352,9 @@ func (c *Config) Normalize() {
 	c.Gateway.URL = expandEnvRef(c.Gateway.URL)
 	c.Gateway.Token = expandEnvRef(c.Gateway.Token)
 	c.Gateway.DrainTimeout = expandEnvRef(c.Gateway.DrainTimeout)
+	c.Gateway.OutboundWebhookURL = expandEnvRef(c.Gateway.OutboundWebhookURL)
+	c.Gateway.OutboundWebhookToken = expandEnvRef(c.Gateway.OutboundWebhookToken)
+	c.Gateway.TelegramToken = expandEnvRef(c.Gateway.TelegramToken)
 	c.Delegation.Provider = expandEnvRef(c.Delegation.Provider)
 	c.Delegation.Model = expandEnvRef(c.Delegation.Model)
 	c.Delegation.APIKey = expandEnvRef(c.Delegation.APIKey)

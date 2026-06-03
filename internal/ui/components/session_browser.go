@@ -14,12 +14,12 @@ import (
 
 // SessionBrowser is a modal overlay for browsing past sessions.
 type SessionBrowser struct {
-	common     *common.Common
-	viewport   viewport.Model
-	sessions   []memory.FTS5Session
-	searchQuery string
-	selected   int
-	closed     bool
+	common        *common.Common
+	viewport      viewport.Model
+	sessions      []memory.FTS5Session
+	searchQuery   string
+	selected      int
+	closed        bool
 	width, height int
 
 	// External search function injected at creation time
@@ -42,13 +42,13 @@ func NewSessionBrowser(c *common.Common, width, height int, opts ...SessionBrows
 		Padding(0, 1)
 
 	sb := &SessionBrowser{
-		common:     c,
-		viewport:   vp,
-		sessions:   []memory.FTS5Session{},
+		common:      c,
+		viewport:    vp,
+		sessions:    []memory.FTS5Session{},
 		searchQuery: "",
-		selected:   0,
-		width:      width,
-		height:     height,
+		selected:    0,
+		width:       width,
+		height:      height,
 	}
 	for _, opt := range opts {
 		opt(sb)

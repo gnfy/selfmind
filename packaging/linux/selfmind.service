@@ -9,9 +9,7 @@ User=selfmind
 Group=selfmind
 WorkingDirectory=/var/lib/selfmind
 Environment=HOME=/var/lib/selfmind
-Environment=SELF_GATEWAY_ADDR=127.0.0.1:8765
-EnvironmentFile=-/etc/selfmind/selfmind.env
-ExecStart=/usr/local/bin/selfmind gateway run
+ExecStart=/usr/local/bin/selfmind -f /etc/selfmind/config.yaml gateway run
 Restart=on-failure
 RestartSec=5s
 TimeoutStopSec=45s

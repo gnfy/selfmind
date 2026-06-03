@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"selfmind/internal/kernel/llm"
@@ -36,12 +37,19 @@ type Agent struct {
 	semanticExpander *memory.SemanticExpander
 	useMemoryFence   bool
 	EventChannel     chan string // emits "tool_start:name" and "tool_end:name:result" events
+	runMu            sync.Mutex
+	syncQueue        chan syncTurnRequest
 
 	// Evolution config.
 	toolCallCount     int
 	nudgeInterval     int
 	turnReviewCount   int
 	evolutionNotifyCh chan string
+}
+
+type syncTurnRequest struct {
+	tenantID string
+	data     []byte
 }
 
 func NewAgent(mem *memory.MemoryManager, backend AgentBackend, provider llm.Provider, soul string, maxIter, maxRetries int, refl *ReflectionEngine) *Agent {
@@ -57,12 +65,14 @@ func NewAgent(mem *memory.MemoryManager, backend AgentBackend, provider llm.Prov
 		contextEngine:  NewContextEngine(128000, 512),
 		contextScanner: NewContextScanner(),
 		EventChannel:   ch,
+		syncQueue:      make(chan syncTurnRequest, 16),
 		// factExtractor is set via SetFactExtractor after agent creation
 		// so the caller can decide whether to enable auto-extraction.
 		toolCallCount: 0,
 		nudgeInterval: 10, // 默认每 10 次工具调用触发一次
 	}
 	ag.contextEngine.SetProvider(provider)
+	go ag.runSyncWorker()
 	return ag
 }
 
@@ -246,6 +256,9 @@ func emitToolEndEvent(ch chan string, name, result string, err error) {
 // RunConversation 执行 Agent 推理循环
 // channel 用于渠道隔离的历史记录（如 'cli'、'wechat'、'dingtalk'）
 func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, initialPrompt string) (string, llm.UsageStats, error) {
+	a.runMu.Lock()
+	defer a.runMu.Unlock()
+
 	var totalUsage llm.UsageStats
 	ctx = llm.WithModelContext(ctx, llm.ModelContext{
 		TenantID: tenantID,
@@ -528,7 +541,7 @@ func (a *Agent) saveHistory(ctx context.Context, tenantID, channel string, messa
 // syncTurn persists the current turn to external memory providers.
 // Called after every assistant response (including tool-calling turns).
 func (a *Agent) syncTurn(ctx context.Context, tenantID string, messages []llm.Message) {
-	if a.memory == nil {
+	if a.memory == nil || a.syncQueue == nil {
 		return
 	}
 	// Serialize full messages for providers that need complete context
@@ -539,12 +552,30 @@ func (a *Agent) syncTurn(ctx context.Context, tenantID string, messages []llm.Me
 	if err != nil {
 		return
 	}
-	// Non-blocking: run in background so we don't stall the conversation loop
-	go func() {
+	req := syncTurnRequest{tenantID: tenantID, data: data}
+	select {
+	case a.syncQueue <- req:
+	default:
+		select {
+		case <-a.syncQueue:
+		default:
+		}
+		select {
+		case a.syncQueue <- req:
+		default:
+		}
+	}
+}
+
+func (a *Agent) runSyncWorker() {
+	for req := range a.syncQueue {
+		if a.memory == nil {
+			continue
+		}
 		bgCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		a.memory.SyncMessagesAll(bgCtx, tenantID, data)
-	}()
+		a.memory.SyncMessagesAll(bgCtx, req.tenantID, req.data)
+		cancel()
+	}
 }
 
 // extractLastTurn extracts the most recent user-assistant pair from messages.

@@ -179,4 +179,3 @@ func SetSkillState(tenantID, name, state string) error {
 		rec.UpdatedAt = nowRFC3339()
 	})
 }
-

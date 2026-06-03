@@ -12,15 +12,15 @@ import (
 
 // SkillDefinition 定义一个技能的元数据（从 front matter 解析）
 type SkillDefinition struct {
-	Name        string   `json:"name"`                   // skill name
-	Description string   `json:"description"`            // skill description for LLM
-	Trigger     []string `json:"trigger,omitempty"`      // slash command aliases, e.g. ["/skill", "/s"]
-	Parameters  []string `json:"parameters,omitempty"`   // required parameter names
-	Examples    []string `json:"examples,omitempty"`     // usage examples
-	Confidence  float64  `json:"confidence,omitempty"`   // 0.0-1.0, auto-archive threshold
-	Source      string   `json:"source,omitempty"`       // source file path
-	ToolName    string   `json:"tool_name,omitempty"`    // 对应的工具名（如果有）
-	Handler     string   `json:"handler,omitempty"`      // Go function reference (for codegen)
+	Name        string   `json:"name"`                 // skill name
+	Description string   `json:"description"`          // skill description for LLM
+	Trigger     []string `json:"trigger,omitempty"`    // slash command aliases, e.g. ["/skill", "/s"]
+	Parameters  []string `json:"parameters,omitempty"` // required parameter names
+	Examples    []string `json:"examples,omitempty"`   // usage examples
+	Confidence  float64  `json:"confidence,omitempty"` // 0.0-1.0, auto-archive threshold
+	Source      string   `json:"source,omitempty"`     // source file path
+	ToolName    string   `json:"tool_name,omitempty"`  // 对应的工具名（如果有）
+	Handler     string   `json:"handler,omitempty"`    // Go function reference (for codegen)
 }
 
 // SkillLoader 动态加载 skills 目录下的 YAML + Markdown 文件
@@ -250,7 +250,7 @@ func (sl *SkillLoader) registerSkillTool(def SkillDefinition, body string, steps
 // SkillTool 是从 Markdown skill 文件生成的工具
 type SkillTool struct {
 	BaseTool
-	content string // Markdown body 作为 skill 的执行逻辑
+	content string   // Markdown body 作为 skill 的执行逻辑
 	steps   []string // 从 body 中提取的步骤（代码块）
 }
 
@@ -283,7 +283,11 @@ func (t *SkillTool) Execute(args map[string]interface{}) (string, error) {
 		}
 
 		// 通过 terminal 工具执行 shell 命令
-		result, err := globalRegistry.Dispatch("terminal", map[string]interface{}{
+		registry, _ := args["_registry"].(*Registry)
+		if registry == nil {
+			registry = GlobalRegistry()
+		}
+		result, err := registry.Dispatch("terminal", map[string]interface{}{
 			"command":    cmd,
 			"_tenant_id": tenantID,
 		})

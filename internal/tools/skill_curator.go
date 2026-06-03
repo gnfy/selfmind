@@ -104,4 +104,3 @@ func parseSkillActivityTime(s SkillInfo) time.Time {
 	}
 	return t
 }
-

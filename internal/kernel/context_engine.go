@@ -14,13 +14,13 @@ import (
 
 // ContextEngine 负责构建 LLM 消息、token 预算管理和上下文窗口
 type ContextEngine struct {
-	maxTokens         int
-	reserveTokens     int // 保留给响应的 tokens
-	summaryThreshold  int // 当可用 tokens 低于此值时触发压缩（默认 maxTokens*3/4）
-	provider          llm.Provider
-	tokenizer         *TokenEstimator
+	maxTokens          int
+	reserveTokens      int // 保留给响应的 tokens
+	summaryThreshold   int // 当可用 tokens 低于此值时触发压缩（默认 maxTokens*3/4）
+	provider           llm.Provider
+	tokenizer          *TokenEstimator
 	lastSummaryFailure time.Time
-	summaryCooldown   time.Duration
+	summaryCooldown    time.Duration
 }
 
 // NewContextEngine 创建一个上下文引擎

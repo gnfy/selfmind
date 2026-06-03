@@ -33,12 +33,12 @@ type ReviewResult struct {
 
 // EvolutionConfig defines the agent's autonomous learning behavior
 type EvolutionConfig struct {
-	Enabled               bool    `mapstructure:"enabled"`
-	Mode                  string  `mapstructure:"mode"`
+	Enabled                bool    `mapstructure:"enabled"`
+	Mode                   string  `mapstructure:"mode"`
 	MinComplexityThreshold int     `mapstructure:"min_complexity_threshold"`
-	AutoArchiveConfidence float64 `mapstructure:"auto_archive_confidence"`
-	NudgeInterval         int     `mapstructure:"nudge_interval"` // 每 N 次工具调用触发一次
-	SkillsDir             string  `mapstructure:"skills_dir"`
+	AutoArchiveConfidence  float64 `mapstructure:"auto_archive_confidence"`
+	NudgeInterval          int     `mapstructure:"nudge_interval"` // 每 N 次工具调用触发一次
+	SkillsDir              string  `mapstructure:"skills_dir"`
 }
 
 // ReflectionEngine handles the autonomous reflection and skill generation logic

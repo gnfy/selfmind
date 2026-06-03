@@ -148,7 +148,7 @@ func (t *TTSTool) ttsElevenLabs(text, voiceID string) ([]byte, error) {
 	payload := map[string]interface{}{
 		"text":           text,
 		"model_id":       "eleven_monolingual_v1",
-		"voice_settings":  map[string]float64{"stability": 0.5, "similarity_boost": 0.75},
+		"voice_settings": map[string]float64{"stability": 0.5, "similarity_boost": 0.75},
 	}
 	body, _ := json.Marshal(payload)
 

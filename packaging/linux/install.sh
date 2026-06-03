@@ -59,27 +59,43 @@ fi
 
 install -m 0755 "${binary_src}" /usr/local/bin/selfmind
 install -d -o selfmind -g selfmind -m 0750 /var/lib/selfmind
+install -d -o selfmind -g selfmind -m 0750 /var/lib/selfmind/data
 install -d -o selfmind -g selfmind -m 0750 /var/log/selfmind
 install -d -o root -g selfmind -m 0750 /etc/selfmind
 
-if [[ ! -f /etc/selfmind/selfmind.env ]]; then
-  install -o root -g selfmind -m 0640 /dev/null /etc/selfmind/selfmind.env
-  cat > /etc/selfmind/selfmind.env <<'EOF'
-# SelfMind gateway settings.
-# Keep this file readable only by root and the selfmind group.
+if [[ ! -f /etc/selfmind/config.yaml ]]; then
+  install -o root -g selfmind -m 0640 /dev/null /etc/selfmind/config.yaml
+  cat > /etc/selfmind/config.yaml <<'EOF'
+model:
+  provider: ""
+  default: ""
 
-SELF_TENANT_ID=default
-SELF_GATEWAY_ADDR=127.0.0.1:8765
+providers:
+  openai:
+    api_key: ""
+    base_url: "https://api.openai.com/v1"
+    protocol: "openai_chat"
+  anthropic:
+    api_key: ""
+    base_url: "https://api.anthropic.com"
+    protocol: "anthropic_messages"
+  google:
+    api_key: ""
+    base_url: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
+    protocol: "openai_compatible"
+  custom: []
 
-# Recommended when exposing the gateway to anything beyond local trusted tools.
-# SELF_GATEWAY_TOKEN=change-me
+storage:
+  type: "sqlite"
+  data_dir: "/var/lib/selfmind/data"
 
-# Put provider keys here only if you do not use /var/lib/selfmind/.selfmind/config.yaml.
-# ANTHROPIC_API_KEY=
-# OPENAI_API_KEY=
-# GEMINI_API_KEY=
-# OPENROUTER_API_KEY=
-# MINIMAX_API_KEY=
+gateway:
+  addr: "127.0.0.1:8765"
+  token: ""
+  drain_timeout: "30s"
+
+cron:
+  enabled: true
 EOF
 fi
 
@@ -95,8 +111,8 @@ cat <<'EOF'
 SelfMind installed.
 
 Next steps:
-  1. Edit /etc/selfmind/selfmind.env if you want gateway env overrides.
-  2. Put normal SelfMind config at /var/lib/selfmind/.selfmind/config.yaml.
+  1. Edit /etc/selfmind/config.yaml and configure a model provider.
+  2. Keep /etc/selfmind/config.yaml readable only by root and the selfmind group.
   3. Start the gateway:
        sudo systemctl start selfmind
   4. Check status and logs:

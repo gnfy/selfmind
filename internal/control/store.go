@@ -212,7 +212,10 @@ CREATE TABLE IF NOT EXISTS task_runs (
 	input_summary TEXT,
 	status TEXT NOT NULL,
 	started_at INTEGER NOT NULL,
-	finished_at INTEGER
+	finished_at INTEGER,
+	heartbeat_at INTEGER,
+	cancel_requested INTEGER NOT NULL DEFAULT 0,
+	last_error TEXT
 );
 CREATE TABLE IF NOT EXISTS task_events (
 	id TEXT PRIMARY KEY,
@@ -270,8 +273,72 @@ CREATE TABLE IF NOT EXISTS notifications (
 	event_id TEXT,
 	status TEXT NOT NULL,
 	created_at INTEGER NOT NULL
-);`
-	_, err := s.db.ExecContext(ctx, schema)
+);
+CREATE TABLE IF NOT EXISTS outbound_messages (
+	id TEXT PRIMARY KEY,
+	tenant_id TEXT NOT NULL,
+	person_id TEXT NOT NULL,
+	platform TEXT NOT NULL,
+	channel TEXT NOT NULL,
+	task_id TEXT,
+	run_id TEXT,
+	content TEXT NOT NULL,
+	status TEXT NOT NULL,
+	attempts INTEGER NOT NULL DEFAULT 0,
+	max_attempts INTEGER NOT NULL DEFAULT 3,
+	next_attempt_at INTEGER NOT NULL,
+	last_error TEXT,
+	part_index INTEGER NOT NULL DEFAULT 1,
+	part_total INTEGER NOT NULL DEFAULT 1,
+	idempotency_key TEXT,
+	created_at INTEGER NOT NULL,
+	updated_at INTEGER NOT NULL,
+	delivered_at INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_outbound_due ON outbound_messages(status, next_attempt_at);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_outbound_idempotency ON outbound_messages(idempotency_key) WHERE idempotency_key IS NOT NULL AND idempotency_key != '';`
+	if _, err := s.db.ExecContext(ctx, schema); err != nil {
+		return err
+	}
+	for _, col := range []struct {
+		table string
+		name  string
+		def   string
+	}{
+		{"task_runs", "heartbeat_at", "INTEGER"},
+		{"task_runs", "cancel_requested", "INTEGER NOT NULL DEFAULT 0"},
+		{"task_runs", "last_error", "TEXT"},
+	} {
+		if err := s.ensureColumn(ctx, col.table, col.name, col.def); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Store) ensureColumn(ctx context.Context, table, name, definition string) error {
+	rows, err := s.db.QueryContext(ctx, fmt.Sprintf("PRAGMA table_info(%s)", table))
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var colName, colType string
+		var notNull int
+		var defaultValue interface{}
+		var pk int
+		if err := rows.Scan(&cid, &colName, &colType, &notNull, &defaultValue, &pk); err != nil {
+			return err
+		}
+		if colName == name {
+			return nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	_, err = s.db.ExecContext(ctx, fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", table, name, definition))
 	return err
 }
 
@@ -635,9 +702,9 @@ func (s *Store) StartRun(ctx context.Context, task *Task, channel, inputSummary 
 		StartedAt:    time.Now(),
 	}
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO task_runs (id, task_id, tenant_id, person_id, workspace_id, channel, input_summary, status, started_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		run.ID, run.TaskID, run.TenantID, run.PersonID, run.WorkspaceID, run.Channel, run.InputSummary, run.Status, run.StartedAt.Unix())
+		`INSERT INTO task_runs (id, task_id, tenant_id, person_id, workspace_id, channel, input_summary, status, started_at, heartbeat_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		run.ID, run.TaskID, run.TenantID, run.PersonID, run.WorkspaceID, run.Channel, run.InputSummary, run.Status, run.StartedAt.Unix(), run.StartedAt.Unix())
 	if err != nil {
 		return nil, err
 	}
@@ -653,8 +720,8 @@ func (s *Store) FinishRun(ctx context.Context, tenantID, runID, status string) e
 	}
 	now := time.Now().Unix()
 	_, err := s.db.ExecContext(ctx,
-		`UPDATE task_runs SET status = ?, finished_at = ? WHERE tenant_id = ? AND id = ?`,
-		status, now, normalizeTenant(tenantID), runID)
+		`UPDATE task_runs SET status = ?, finished_at = ?, heartbeat_at = ? WHERE tenant_id = ? AND id = ?`,
+		status, now, now, normalizeTenant(tenantID), runID)
 	if err == nil {
 		_, _ = s.db.ExecContext(ctx,
 			`UPDATE tasks SET active_run_id = '', updated_at = ? WHERE tenant_id = ? AND active_run_id = ?`,

@@ -10,8 +10,9 @@ import (
 
 // Registry 是全局工具注册表
 type Registry struct {
-	mu    sync.RWMutex
-	tools map[string]Tool
+	mu        sync.RWMutex
+	tools     map[string]Tool
+	clarifyFn ClarifyHandler
 	// middleware 链
 	middleware []Middleware
 }
@@ -72,7 +73,17 @@ func (r *Registry) Dispatch(name string, args map[string]interface{}) (string, e
 	if !ok {
 		return "", fmt.Errorf("tool %s not found", name)
 	}
-	exec := r.Wrap(t, r.middleware)
+	if len(t.Schema().Properties) > 0 {
+		coerced, coerceErr := CoerceArgs(t.Schema(), args)
+		if coerceErr != nil {
+			return "", fmt.Errorf("failed to coerce arguments for %s: %w", name, coerceErr)
+		}
+		args = coerced
+	}
+	if err := ValidateArgs(t.Schema(), args); err != nil {
+		return "", fmt.Errorf("argument validation failed for %s: %w", name, err)
+	}
+	exec := r.Wrap(t, r.Middlewares())
 	return exec(args)
 }
 
@@ -110,6 +121,10 @@ func (r *Registry) Wrap(t Tool, mw []Middleware) ToolExecutor {
 			args = make(map[string]interface{})
 		}
 		args["_tool_name"] = t.Name()
+		args["_registry"] = r
+		if clarifyFn := r.ClarifyHandler(); clarifyFn != nil {
+			args["_clarify_fn"] = clarifyFn
+		}
 		return exec(args)
 	}
 }
@@ -119,6 +134,25 @@ func (r *Registry) UseMiddleware(mw Middleware) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.middleware = append(r.middleware, mw)
+}
+
+func (r *Registry) SetClarifyHandler(fn ClarifyHandler) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.clarifyFn = fn
+}
+
+func (r *Registry) ClarifyHandler() ClarifyHandler {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.clarifyFn
+}
+
+// Middlewares returns a stable snapshot of the registry middleware chain.
+func (r *Registry) Middlewares() []Middleware {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return append([]Middleware{}, r.middleware...)
 }
 
 // ---- Dispatcher ----
@@ -133,12 +167,15 @@ func NewDispatcher() *Dispatcher {
 }
 
 func NewDispatcherWithRegistry(r *Registry) *Dispatcher {
+	if r == nil {
+		r = NewRegistry()
+	}
 	return &Dispatcher{registry: r}
 }
 
 // Register implements legacy handler-based registration by wrapping into BaseTool
 func (d *Dispatcher) Register(name string, handler func(args string) (string, error)) {
-	globalRegistry.Register(&BaseTool{
+	d.registry.Register(&BaseTool{
 		name:        name,
 		description: fmt.Sprintf("Tool registered as %s", name),
 		schema:      ToolSchema{Type: "object"},
@@ -151,12 +188,17 @@ func (d *Dispatcher) Register(name string, handler func(args string) (string, er
 
 // RegisterTool 注册一个 Tool 接口实现
 func (d *Dispatcher) RegisterTool(t Tool) {
-	globalRegistry.Register(t)
+	d.registry.Register(t)
+}
+
+// UnregisterTool removes a tool from this dispatcher's registry.
+func (d *Dispatcher) UnregisterTool(name string) {
+	d.registry.Unregister(name)
 }
 
 // Dispatch 调用已注册的工具，自动执行 middleware 链
 func (d *Dispatcher) Dispatch(name string, args map[string]interface{}) (string, error) {
-	t, ok := globalRegistry.Get(name)
+	t, ok := d.registry.Get(name)
 	if !ok {
 		return "", fmt.Errorf("tool %s not found", name)
 	}
@@ -174,7 +216,7 @@ func (d *Dispatcher) Dispatch(name string, args map[string]interface{}) (string,
 		return "", fmt.Errorf("argument validation failed for %s: %w", name, err)
 	}
 
-	exec := globalRegistry.Wrap(t, globalRegistry.middleware)
+	exec := d.registry.Wrap(t, d.registry.Middlewares())
 	return exec(args)
 }
 
@@ -194,7 +236,7 @@ func (d *Dispatcher) RegisterSkill(name string, handler func(args string) (strin
 
 // CoerceArgs 将动态类型强制转换为 tool schema 声明的类型
 func (d *Dispatcher) CoerceArgs(toolName string, args map[string]interface{}) (map[string]interface{}, error) {
-	t, ok := globalRegistry.Get(toolName)
+	t, ok := d.registry.Get(toolName)
 	if !ok {
 		return nil, fmt.Errorf("tool %s not found", toolName)
 	}
@@ -219,17 +261,21 @@ func (d *Dispatcher) ListTools() []string {
 
 // GetToolDefinitions returns all tools as LLM tool definitions
 func (d *Dispatcher) GetToolDefinitions() []map[string]interface{} {
-	return globalRegistry.ToolDefinitions()
+	return d.registry.ToolDefinitions()
 }
 
 // InjectMiddleware adds a middleware to the dispatcher (for Approval/Auth chain)
 func (d *Dispatcher) InjectMiddleware(mw Middleware) {
-	globalRegistry.UseMiddleware(mw)
+	d.registry.UseMiddleware(mw)
+}
+
+func (d *Dispatcher) InjectClarifyHandler(fn ClarifyHandler) {
+	d.registry.SetClarifyHandler(fn)
 }
 
 // InjectSessionSearch 将 memory 模块的 searchFn 注入到 SessionSearchTool
 func (d *Dispatcher) InjectSessionSearch(fn func(query string, limit int) (interface{}, error)) {
-	t, ok := globalRegistry.Get("session_search")
+	t, ok := d.registry.Get("session_search")
 	if !ok {
 		return
 	}
@@ -243,7 +289,7 @@ func (d *Dispatcher) InjectSessionAccess(
 	recentFn func(limit int) (interface{}, error),
 	messagesFn func(sessionID string, aroundMessageID, window int) (interface{}, error),
 ) {
-	t, ok := globalRegistry.Get("session_search")
+	t, ok := d.registry.Get("session_search")
 	if !ok {
 		return
 	}
@@ -257,7 +303,7 @@ func (d *Dispatcher) InjectTenantSessionAccess(
 	recentFn func(tenantID string, limit int) (interface{}, error),
 	messagesFn func(tenantID, sessionID string, aroundMessageID, window int) (interface{}, error),
 ) {
-	t, ok := globalRegistry.Get("session_search")
+	t, ok := d.registry.Get("session_search")
 	if !ok {
 		return
 	}
@@ -268,7 +314,7 @@ func (d *Dispatcher) InjectTenantSessionAccess(
 
 // InjectDelegateFn 将 delegate_fn 注入到 DelegateTool
 func (d *Dispatcher) InjectDelegateFn(fn func(goal, context string, toolsets []string) (string, llm.UsageStats, error)) {
-	t, ok := globalRegistry.Get("delegate_task")
+	t, ok := d.registry.Get("delegate_task")
 	if !ok {
 		return
 	}
@@ -279,7 +325,7 @@ func (d *Dispatcher) InjectDelegateFn(fn func(goal, context string, toolsets []s
 
 // InjectVisionLLM 将视觉分析所需的 LLM 接口注入到 VisionTool
 func (d *Dispatcher) InjectVisionLLM(provider VisionLLM) {
-	t, ok := globalRegistry.Get("vision_analyze")
+	t, ok := d.registry.Get("vision_analyze")
 	if !ok {
 		return
 	}

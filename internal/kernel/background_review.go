@@ -162,12 +162,19 @@ func buildBackgroundReviewPrompt(messages []llm.Message, reviewMemory, reviewSki
 		sb.WriteString("Memory rules:\n")
 		sb.WriteString("- Save user preferences, stable project facts, recurring corrections, and environment conventions with the memory tool.\n")
 		sb.WriteString("- Do not save temporary task status, one-off outcomes, PR numbers, file counts, or facts likely to be stale within a week.\n")
+		sb.WriteString("- Do not save transient tool failures, provider outages, or guesses about a tool being broken unless the user confirms a durable rule.\n")
+		sb.WriteString("- If the user corrects style, naming, environment, or workflow expectations, save the durable preference in memory.\n")
 	}
 	if reviewSkills {
 		sb.WriteString("Skill rules:\n")
 		sb.WriteString("- Save reusable workflows, non-trivial debugging paths, or user workflow corrections with skill_manage.\n")
 		sb.WriteString("- Prefer search/read/patch of an existing skill before creating a new class-level skill.\n")
 		sb.WriteString("- Put session-specific detail in references/ via skill_manage action=write_file.\n")
+		sb.WriteString("- Do not create duplicate skills for the same workflow. Search first, then patch the closest existing skill.\n")
+		sb.WriteString("- When creating skills, set source=agent-created and include concise front matter name/description.\n")
+		sb.WriteString("- If a used skill was incomplete, stale, or contradicted by the user, patch that skill instead of writing a new one.\n")
+		sb.WriteString("- Avoid archiving/deleting skills during ordinary review unless the evidence is strong; pinned or manual skills should not be archived by review.\n")
+		sb.WriteString("- Do not encode secrets, one-off file paths, issue numbers, or temporary command output in SKILL.md; put durable examples in references/ only when they generalize.\n")
 	}
 	sb.WriteString("\nConversation snapshot:\n")
 	for _, m := range messages {
@@ -177,7 +184,8 @@ func buildBackgroundReviewPrompt(messages []llm.Message, reviewMemory, reviewSki
 		}
 		sb.WriteString(fmt.Sprintf("\n[%s]\n%s\n", m.Role, content))
 	}
-	sb.WriteString("\nUse tools if there is durable learning. Otherwise reply: Nothing to save.")
+	sb.WriteString("\nUse tools if there is durable learning. Otherwise reply: Nothing to save.\n")
+	sb.WriteString("After tool use, summarize exactly what changed in one short sentence, for example: memory saved: <topic>, skill updated: <name>, or skill created: <name>.")
 	return sb.String()
 }
 

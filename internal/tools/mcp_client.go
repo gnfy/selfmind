@@ -329,11 +329,11 @@ func (c *MCPClient) Close() error {
 // =============================================================================
 
 type JSONRPCMessage struct {
-	ID      interface{}    `json:"id,omitempty"`
+	ID      interface{}   `json:"id,omitempty"`
 	JSONRPC string        `json:"jsonrpc"`
-	Method  string         `json:"method,omitempty"`
-	Params  interface{}    `json:"params,omitempty"`
-	Result  interface{}    `json:"result,omitempty"`
+	Method  string        `json:"method,omitempty"`
+	Params  interface{}   `json:"params,omitempty"`
+	Result  interface{}   `json:"result,omitempty"`
 	Error   *JSONRPCError `json:"error,omitempty"`
 }
 
@@ -627,8 +627,7 @@ func (m *MCPToolManager) Disconnect(name string) error {
 	}
 
 	for _, def := range client.GetTools() {
-		// Unregister from dispatcher - use the registry directly
-		globalRegistry.Unregister(def.Name)
+		m.dispatcher.UnregisterTool(def.Name)
 	}
 
 	client.Close()
@@ -725,9 +724,8 @@ func sanitizeFTS5Query(query string) string {
 	return s
 }
 
-// ---- Fix dispatcher.Unregister -> globalRegistry.Unregister ----
-// MCP client can't call dispatcher.Unregister directly since Dispatcher wraps
-// globalRegistry. We expose it via globalRegistry instead.
+// Legacy global registry helpers. New application code should use
+// Dispatcher methods so tools stay scoped to the active registry.
 
 // UnregisterTool 注销一个工具（供 MCP 使用）
 func UnregisterTool(name string) {

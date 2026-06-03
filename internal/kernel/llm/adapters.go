@@ -32,6 +32,7 @@ type AnthropicRequest struct {
 	Messages     []AnthropicMessage `json:"messages"`
 	MaxTokens    int                `json:"max_tokens"`
 	SystemPrompt string             `json:"system,omitempty"`
+	Stream       bool               `json:"stream,omitempty"`
 }
 
 // AnthropicResponse Anthropic API 响应体
@@ -625,17 +626,152 @@ func (a *OpenAIAdapter) ChatCompletion(ctx context.Context, messages []Message) 
 }
 
 func (a *AnthropicAdapter) StreamChat(ctx context.Context, req ChatRequest) (<-chan StreamEvent, error) {
-	// TODO: Implement Anthropic SSE streaming
-	// For now, fallback to non-streaming behavior wrapped in a channel
-	ch := make(chan StreamEvent, 1)
-	go func() {
-		defer close(ch)
-		resp, err := a.Chat(ctx, req)
-		if err != nil {
-			ch <- StreamEvent{Err: err}
-			return
+	apiKey := a.APIKey
+	if a.KeyGetter != nil {
+		if k := a.KeyGetter(); k != "" {
+			apiKey = k
 		}
-		ch <- StreamEvent{Content: resp.Content, Usage: &resp.Usage}
+	}
+
+	anthropicReq := AnthropicRequest{
+		Model:        a.Model,
+		MaxTokens:    a.MaxTokens,
+		SystemPrompt: req.SystemPrompt,
+		Stream:       true,
+	}
+	for _, m := range req.Messages {
+		var content interface{}
+		if len(m.MultiContent) > 0 {
+			var parts []interface{}
+			for _, p := range m.MultiContent {
+				switch p.Type {
+				case "text":
+					parts = append(parts, map[string]interface{}{
+						"type": "text",
+						"text": p.Text,
+					})
+				case "image_base64":
+					parts = append(parts, map[string]interface{}{
+						"type": "image",
+						"source": map[string]interface{}{
+							"type":       "base64",
+							"media_type": p.MimeType,
+							"data":       p.Data,
+						},
+					})
+				}
+			}
+			content = parts
+		} else {
+			content = m.Content
+		}
+
+		role := m.Role
+		if role == "tool" {
+			role = "user"
+			content = "TOOL_RESULT: " + contentString(content)
+		}
+		anthropicReq.Messages = append(anthropicReq.Messages, AnthropicMessage{Role: role, Content: content})
+	}
+
+	body, err := json.Marshal(anthropicReq)
+	if err != nil {
+		return nil, fmt.Errorf("marshal request: %w", err)
+	}
+
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, a.BaseURL, bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("create request: %w", err)
+	}
+	httpReq.Header.Set("x-api-key", apiKey)
+	httpReq.Header.Set("anthropic-version", "2023-06-01")
+	httpReq.Header.Set("content-type", "application/json")
+
+	resp, err := http.DefaultClient.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("anthropic stream request failed: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		return nil, fmt.Errorf("anthropic API error %d: %s", resp.StatusCode, string(b))
+	}
+
+	ch := make(chan StreamEvent, 10)
+	go func() {
+		defer resp.Body.Close()
+		defer close(ch)
+
+		reader := io.Reader(resp.Body)
+		buf := make([]byte, 4096)
+		var leftover []byte
+		inputTokensSent := false
+		lastOutputTokens := 0
+
+		for {
+			n, err := reader.Read(buf)
+			if n > 0 {
+				data := append(leftover, buf[:n]...)
+				lines := bytes.Split(data, []byte("\n"))
+				if !bytes.HasSuffix(data, []byte("\n")) {
+					leftover = lines[len(lines)-1]
+					lines = lines[:len(lines)-1]
+				} else {
+					leftover = nil
+				}
+				for _, line := range lines {
+					line = bytes.TrimSpace(line)
+					if len(line) == 0 || !bytes.HasPrefix(line, []byte("data: ")) {
+						continue
+					}
+					dataPart := line[6:]
+					var chunk struct {
+						Type  string `json:"type"`
+						Delta struct {
+							Type string `json:"type"`
+							Text string `json:"text"`
+						} `json:"delta"`
+						Message struct {
+							Usage struct {
+								InputTokens  int `json:"input_tokens"`
+								OutputTokens int `json:"output_tokens"`
+							} `json:"usage"`
+						} `json:"message"`
+						Usage struct {
+							OutputTokens int `json:"output_tokens"`
+						} `json:"usage"`
+					}
+					if err := json.Unmarshal(dataPart, &chunk); err != nil {
+						continue
+					}
+					switch chunk.Type {
+					case "content_block_delta":
+						if chunk.Delta.Text != "" {
+							ch <- StreamEvent{Content: chunk.Delta.Text}
+						}
+					case "message_start":
+						if !inputTokensSent && chunk.Message.Usage.InputTokens > 0 {
+							inputTokensSent = true
+							ch <- StreamEvent{Usage: &UsageStats{InputTokens: chunk.Message.Usage.InputTokens}}
+						}
+					case "message_delta":
+						if chunk.Usage.OutputTokens > lastOutputTokens {
+							delta := chunk.Usage.OutputTokens - lastOutputTokens
+							lastOutputTokens = chunk.Usage.OutputTokens
+							ch <- StreamEvent{Usage: &UsageStats{OutputTokens: delta}}
+						}
+					case "message_stop":
+						return
+					}
+				}
+			}
+			if err != nil {
+				if err != io.EOF {
+					ch <- StreamEvent{Err: err}
+				}
+				break
+			}
+		}
 	}()
 	return ch, nil
 }

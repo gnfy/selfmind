@@ -15,16 +15,18 @@ Available for daily personal use:
 - Long-running gateway lifecycle: `selfmind gateway start/run/status/stop/restart`.
 - Gateway client commands: `send`, `status`, `stop`, `tasks`, `workspaces`, `workspace add`, `workspace use`, `new`, `id`.
 - Generic IM webhook entrypoint: `POST /v1/im/{platform}`.
+- IM outbound foundation: generic webhook/Telegram delivery, long-message splitting, retry, and a durable outbound queue.
 - Account binding API so CLI, WeChat, Feishu, QQ-like relays, and other channels can resolve to the same `person_id`.
+- Durable task runtime state with run heartbeat, interrupted-run recovery, recent task events, and the `/events` control command.
 - Workspace isolation for file, search, patch, and terminal tools.
 - Long-term memory, session search, skill management, background review, and skill curator.
-- Hermes-style native tool calling for OpenAI-compatible providers, with legacy text-tool fallback.
+- Hermes-style native tool calling for OpenAI-compatible providers, with legacy text-tool fallback, repeated-failure/no-progress guardrails, and secret redaction.
 - Role-based model routing through `models.roles`, so coding, memory extraction, background review, skill curation, and semantic recall can use different models.
 
 Still first-version or planned:
 
 - Official Feishu, WeChat, and QQ SDK adapters are not complete yet.
-- IM outbound sending, retry, long-message splitting, and native approval buttons still need production hardening.
+- Native approval buttons, official enterprise IM SDKs, rich media attachments, and full platform signing/encryption modes still need production hardening.
 - SaaS admin console, tenant model-secret custody, billing policy, and queue/worker scaling are planned but not complete.
 
 ## Requirements
@@ -153,6 +155,11 @@ gateway:
   addr: "127.0.0.1:8765"
   token: ""
   drain_timeout: "30s"
+  outbound_webhook_url: ""
+  outbound_webhook_token: ""
+  telegram_token: "${TELEGRAM_BOT_TOKEN}"
+  delivery_max_message_chars: 3500
+  delivery_retry_attempts: 3
 
 agent:
   soul: "You are SelfMind, a helpful AI assistant."
@@ -327,12 +334,20 @@ If the gateway is exposed beyond localhost, set `gateway.token` in `config.yaml`
 | `POST` | `/v1/accounts/bind` | Bind another platform account to an existing person. |
 | `GET` | `/v1/tasks` | List tasks for an account. |
 | `GET` | `/v1/tasks/current` | Get current task and active run. |
+| `GET` | `/v1/tasks/events` | List recent run/tool/learning events for the current or specified task. |
 | `POST` | `/v1/workspaces/register` | Register a local workspace. |
 | `GET` | `/v1/workspaces` | List workspaces. |
 | `GET` | `/v1/gateway/status` | Inspect process state and active runs. |
 | `POST` | `/v1/gateway/shutdown` | Request graceful shutdown. |
 
 Channel chats are not mirrored automatically. CLI messages are not pushed to IM, and IM messages are not pushed to CLI. Shared state is task/run/workspace/memory/skill state.
+
+When an async IM task finishes, the gateway sends the result back to the source channel if an outbound sender is configured. Otherwise the message remains pending in `control.db` until a sender is configured. Built-in senders:
+
+- `gateway.telegram_token`: send Telegram `sendMessage` replies to the inbound `channel/chat_id`.
+- `gateway.outbound_webhook_url`: POST the normalized JSON payload to a custom relay.
+
+Long messages are split by `gateway.delivery_max_message_chars`; failed deliveries retry up to `gateway.delivery_retry_attempts`. Use `/status` for a task summary and `/events` for recent runtime events.
 
 ## Linux Release
 
@@ -349,6 +364,14 @@ It supports automatic tag releases and manual `workflow_dispatch` runs. Current 
 - `SHA256SUMS.txt`
 
 The package includes `selfmind`, install/uninstall scripts, a systemd service template, README, and docs.
+
+The Linux installer creates `/etc/selfmind/config.yaml`, `/var/lib/selfmind/data`, and a `selfmind` system user. The systemd unit starts the gateway with:
+
+```sh
+/usr/local/bin/selfmind -f /etc/selfmind/config.yaml gateway run
+```
+
+Edit `/etc/selfmind/config.yaml` to configure the model provider before starting the service.
 
 ## Development
 
@@ -390,6 +413,13 @@ packaging/                 Linux install scripts and service templates
 2. Register it in `internal/app/tools.go` or the relevant tool bundle.
 3. Add workspace/approval/process middleware coverage if the tool touches files, shell, network, memory, or skills.
 4. Add tests for the tool and any dispatcher behavior.
+
+Tool runtime rules:
+
+- Prefer `tools.NewRegistry()` plus `tools.NewDispatcherWithRegistry(...)` for application paths. `tools.NewDispatcher()` and `tools.GlobalRegistry()` are legacy compatibility paths.
+- Do not register tenant, workspace, MCP, or skill tools into the global registry from new code.
+- Dispatcher argument coercion is strict. Invalid integers, numbers, or booleans should return an error instead of silently becoming `0` or `false`.
+- Clarify and approval callbacks should be injected through the dispatcher/registry context when possible.
 
 ### Add A Model Provider
 

@@ -1,8 +1,8 @@
 package tools
 
 import (
-	"selfmind/internal/kernel/llm"
 	"fmt"
+	"selfmind/internal/kernel/llm"
 	"strings"
 )
 

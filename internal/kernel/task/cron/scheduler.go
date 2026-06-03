@@ -297,7 +297,7 @@ type ToolAdapter struct {
 	CronTool *CronTool
 }
 
-func (a *ToolAdapter) Name() string    { return "cron" }
+func (a *ToolAdapter) Name() string { return "cron" }
 func (a *ToolAdapter) Description() string {
 	return "Manage scheduled cron jobs. Sub-commands: list, add <name> <cron_expr> <prompt>, remove <id>, enable <id> <true|false>"
 }

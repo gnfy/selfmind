@@ -12,6 +12,7 @@ import (
 
 	"selfmind/internal/control"
 	"selfmind/internal/gateway/api"
+	"selfmind/internal/gateway/delivery"
 	"selfmind/internal/gateway/router"
 	"selfmind/internal/kernel/llm"
 	"selfmind/internal/tools"
@@ -20,6 +21,7 @@ import (
 type Server struct {
 	Control           *control.Store
 	Gateway           *router.Gateway
+	Delivery          *delivery.Service
 	DefaultTenantID   string
 	DrainTimeout      time.Duration
 	ShutdownFunc      func()
@@ -50,6 +52,7 @@ func (d *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/message", d.handleMessage)
 	mux.HandleFunc("/v1/im/", d.handleIMWebhook)
 	mux.HandleFunc("/v1/accounts/bind", d.handleAccountBind)
+	mux.HandleFunc("/v1/tasks/events", d.handleTaskEvents)
 	mux.HandleFunc("/v1/tasks", d.handleTasks)
 	mux.HandleFunc("/v1/tasks/current", d.handleCurrentTask)
 	mux.HandleFunc("/v1/workspaces/register", d.handleWorkspaceRegister)
@@ -150,6 +153,8 @@ func (d *Server) runMessage(ctx context.Context, identity *control.IdentityConte
 	if err != nil {
 		return api.MessageResponse{Identity: identity, Task: task, Error: err.Error()}, http.StatusInternalServerError
 	}
+	stopHeartbeat := d.startRunHeartbeat(ctx, run)
+	defer stopHeartbeat()
 	d.updateActive(identity.PersonID, task, run)
 	_, _ = d.Control.AppendEvent(ctx, control.Event{
 		TaskID:     task.ID,
@@ -173,7 +178,7 @@ func (d *Server) runMessage(ctx context.Context, identity *control.IdentityConte
 	}
 
 	d.agentMu.Lock()
-	resp, err := d.Gateway.Handle(ctx, identity.PersonID, req.Channel, agentInput)
+	resp, err := d.Gateway.HandleWithEvents(ctx, identity.PersonID, req.Channel, agentInput)
 	if err != nil {
 		d.agentMu.Unlock()
 		status := "failed"
@@ -187,7 +192,7 @@ func (d *Server) runMessage(ctx context.Context, identity *control.IdentityConte
 		return api.MessageResponse{Identity: identity, Task: task, Run: run, Error: err.Error()}, http.StatusOK
 	}
 
-	content, usage, err := aggregateGatewayResponse(resp)
+	content, usage, err := d.aggregateGatewayResponse(ctx, req.Channel, task, run, resp)
 	d.agentMu.Unlock()
 	if err != nil {
 		status := "failed"
@@ -237,7 +242,8 @@ func (d *Server) startAsyncRun(identity *control.IdentityContext, req api.Messag
 	go func() {
 		defer d.endActive(identity.PersonID)
 		defer runCancel()
-		_, _ = d.runMessage(runCtx, identity, req)
+		resp, _ := d.runMessage(runCtx, identity, req)
+		d.deliverAsyncResult(context.Background(), identity, req, resp)
 	}()
 
 	return api.MessageResponse{
@@ -404,6 +410,52 @@ func (d *Server) handleTasks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{"identity": identity, "tasks": tasks})
+}
+
+func (d *Server) handleTaskEvents(w http.ResponseWriter, r *http.Request) {
+	if !d.authorized(r) {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	identity, err := d.identityFromQuery(r)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	taskID := strings.TrimSpace(r.URL.Query().Get("task_id"))
+	if taskID == "" {
+		task, err := d.Control.CurrentTask(r.Context(), identity.TenantID, identity.PersonID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		if task != nil {
+			taskID = task.ID
+		}
+	}
+	if taskID == "" {
+		writeJSON(w, http.StatusOK, map[string]interface{}{"identity": identity, "events": []control.Event{}})
+		return
+	}
+	task, err := d.Control.GetTask(r.Context(), identity.TenantID, taskID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if task == nil || task.PersonID != identity.PersonID {
+		http.Error(w, "task not found", http.StatusNotFound)
+		return
+	}
+	events, err := d.Control.ListTaskEvents(r.Context(), taskID, 100)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{"identity": identity, "task": task, "events": events})
 }
 
 func (d *Server) handleCurrentTask(w http.ResponseWriter, r *http.Request) {
@@ -625,6 +677,7 @@ func (d *Server) stopAllActive(reason string) {
 
 	for _, active := range runs {
 		if active.RunID != "" && d.Control != nil {
+			_ = d.Control.RequestRunCancel(context.Background(), active.TenantID, active.RunID)
 			_ = d.Control.FinishRun(context.Background(), active.TenantID, active.RunID, "cancelled")
 		}
 		if active.TaskID != "" && d.Control != nil {
@@ -763,6 +816,7 @@ func (d *Server) tryHandleControlCommand(ctx context.Context, identity *control.
 			return true, "No active run to stop.", nil
 		}
 		if active.RunID != "" {
+			_ = d.Control.RequestRunCancel(context.Background(), identity.TenantID, active.RunID)
 			_ = d.Control.FinishRun(context.Background(), identity.TenantID, active.RunID, "cancelled")
 		}
 		if active.TaskID != "" {
@@ -843,6 +897,19 @@ func (d *Server) tryHandleControlCommand(ctx context.Context, identity *control.
 			return true, "", err
 		}
 		return true, formatWorkspaces(workspaces), nil
+	case lower == "/events" || lower == "events":
+		task, err := d.Control.CurrentTask(ctx, identity.TenantID, identity.PersonID)
+		if err != nil {
+			return true, "", err
+		}
+		if task == nil {
+			return true, "No active task.", nil
+		}
+		events, err := d.Control.ListTaskEvents(ctx, task.ID, 20)
+		if err != nil {
+			return true, "", err
+		}
+		return true, formatEvents(events), nil
 	case lower == "/task status" || lower == "task status" || lower == "/status" || lower == "status" || strings.Contains(lower, "进度"):
 		task, err := d.Control.CurrentTask(ctx, identity.TenantID, identity.PersonID)
 		if err != nil {
@@ -1028,6 +1095,8 @@ func isControlCommand(content string) bool {
 		return true
 	case lower == "/workspaces" || lower == "workspaces":
 		return true
+	case lower == "/events" || lower == "events":
+		return true
 	case lower == "/status" || lower == "status" || lower == "/task status" || lower == "task status":
 		return true
 	case strings.HasPrefix(lower, "/new"):
@@ -1048,7 +1117,72 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
-func aggregateGatewayResponse(resp *router.HandleResponse) (string, llm.UsageStats, error) {
+func (d *Server) startRunHeartbeat(ctx context.Context, run *control.Run) func() {
+	if d == nil || d.Control == nil || run == nil {
+		return func() {}
+	}
+	done := make(chan struct{})
+	go func() {
+		ticker := time.NewTicker(10 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				_ = d.Control.UpdateRunHeartbeat(context.Background(), run.TenantID, run.ID)
+			}
+		}
+	}()
+	return func() {
+		close(done)
+		_ = d.Control.UpdateRunHeartbeat(context.Background(), run.TenantID, run.ID)
+	}
+}
+
+func (d *Server) deliverAsyncResult(ctx context.Context, identity *control.IdentityContext, req api.MessageRequest, resp api.MessageResponse) {
+	if d == nil || d.Delivery == nil || identity == nil {
+		return
+	}
+	if req.Platform == "cli" && req.Channel == "cli" {
+		return
+	}
+	content := strings.TrimSpace(resp.Content)
+	if resp.Error != "" {
+		content = "SelfMind task failed: " + tools.RedactSensitive(resp.Error)
+	}
+	if content == "" {
+		content = "SelfMind task finished."
+	}
+	_ = d.Delivery.EnqueueAndTry(ctx, delivery.Message{
+		TenantID:       identity.TenantID,
+		PersonID:       identity.PersonID,
+		Platform:       req.Platform,
+		PlatformUserID: identity.PlatformUserID,
+		Channel:        req.Channel,
+		TaskID:         taskIDForResponse(resp),
+		RunID:          runIDForResponse(resp),
+		Content:        content,
+	})
+}
+
+func taskIDForResponse(resp api.MessageResponse) string {
+	if resp.Task == nil {
+		return ""
+	}
+	return resp.Task.ID
+}
+
+func runIDForResponse(resp api.MessageResponse) string {
+	if resp.Run == nil {
+		return ""
+	}
+	return resp.Run.ID
+}
+
+func (d *Server) aggregateGatewayResponse(ctx context.Context, channel string, task *control.Task, run *control.Run, resp *router.HandleResponse) (string, llm.UsageStats, error) {
 	if resp == nil {
 		return "", llm.UsageStats{}, nil
 	}
@@ -1057,16 +1191,69 @@ func aggregateGatewayResponse(resp *router.HandleResponse) (string, llm.UsageSta
 	}
 	var content strings.Builder
 	var usage llm.UsageStats
+	sawStream := false
 	for event := range resp.Stream {
+		if event.EventType != "" {
+			d.recordStreamEvent(ctx, channel, task, run, event)
+			if event.EventType == "stream" {
+				sawStream = true
+				content.WriteString(event.Content)
+			}
+			if event.Usage != nil {
+				usage = *event.Usage
+			}
+			continue
+		}
 		if event.Err != nil {
 			return content.String(), usage, event.Err
 		}
-		content.WriteString(event.Content)
+		if event.Content != "" && !sawStream {
+			content.WriteString(event.Content)
+		}
 		if event.Usage != nil {
 			usage = *event.Usage
 		}
 	}
 	return content.String(), usage, nil
+}
+
+func (d *Server) recordStreamEvent(ctx context.Context, channel string, task *control.Task, run *control.Run, event llm.StreamEvent) {
+	if d == nil || d.Control == nil || task == nil {
+		return
+	}
+	eventType := event.EventType
+	if eventType == "stream" || eventType == "" {
+		return
+	}
+	payload := map[string]interface{}{}
+	switch eventType {
+	case "tool.started":
+		payload["tool"] = event.ToolName
+		payload["args"] = tools.RedactSensitive(event.ToolArgs)
+	case "tool.completed":
+		payload["tool"] = event.ToolName
+		payload["result"] = tools.RedactSensitive(truncate(event.ToolResult, 1000))
+		payload["duration_seconds"] = event.DurationSeconds
+		if event.Err != nil {
+			payload["error"] = tools.RedactSensitive(event.Err.Error())
+		}
+	case "learning.review":
+		payload["message"] = tools.RedactSensitive(event.Content)
+	default:
+		payload["message"] = tools.RedactSensitive(event.Content)
+	}
+	runID := ""
+	if run != nil {
+		runID = run.ID
+	}
+	_, _ = d.Control.AppendEvent(ctx, control.Event{
+		TaskID:     task.ID,
+		RunID:      runID,
+		Type:       eventType,
+		Visibility: "task",
+		Channel:    channel,
+		Payload:    mustJSON(payload),
+	})
 }
 
 func writeJSON(w http.ResponseWriter, status int, value interface{}) {
@@ -1108,14 +1295,86 @@ func titleFromInput(input string) string {
 }
 
 func inferTaskStatus(content string) string {
-	lower := strings.ToLower(content)
-	if strings.Contains(lower, "blocked") || strings.Contains(content, "阻塞") {
+	if looksTaskBlocked(content) {
 		return "blocked"
 	}
-	if strings.Contains(lower, "done") || strings.Contains(lower, "completed") || strings.Contains(content, "完成") {
+	if looksTaskComplete(content) {
 		return "done"
 	}
 	return "running"
+
+}
+
+func looksTaskBlocked(content string) bool {
+	lower := strings.ToLower(strings.TrimSpace(content))
+	return containsAny(lower, []string{
+		"blocked",
+		"cannot proceed",
+		"can't proceed",
+		"need your input",
+		"needs your input",
+		"waiting for you",
+		"requires approval",
+	}) || containsAny(content, []string{
+		"\u963b\u585e",
+		"\u65e0\u6cd5\u7ee7\u7eed",
+		"\u9700\u8981\u4f60\u63d0\u4f9b",
+		"\u9700\u8981\u4f60\u786e\u8ba4",
+	})
+}
+
+func looksTaskComplete(content string) bool {
+	trimmed := strings.TrimSpace(content)
+	lower := strings.ToLower(trimmed)
+	if lower == "" {
+		return false
+	}
+	if containsAny(lower, []string{
+		"not done",
+		"not completed",
+		"not finished",
+		"remaining work",
+		"still need",
+		"need to continue",
+		"next steps",
+		"todo:",
+	}) || containsAny(trimmed, []string{
+		"\u672a\u5b8c\u6210",
+		"\u8fd8\u6ca1\u5b8c\u6210",
+		"\u6ca1\u6709\u5b8c\u6210",
+		"\u5f85\u5b8c\u6210",
+		"\u9700\u8981\u7ee7\u7eed",
+	}) {
+		return false
+	}
+	if lower == "done" || lower == "completed" || lower == "finished" || lower == "all done" {
+		return true
+	}
+	return containsAny(lower, []string{
+		"task complete",
+		"task completed",
+		"completed successfully",
+		"finished successfully",
+		"all done",
+		"implementation complete",
+		"tests pass",
+	}) || containsAny(trimmed, []string{
+		"\u5df2\u5b8c\u6210",
+		"\u4efb\u52a1\u5b8c\u6210",
+		"\u5904\u7406\u5b8c\u6210",
+		"\u5df2\u5904\u7406\u5b8c",
+		"\u5df2\u7ecf\u5b8c\u6210",
+		"\u641e\u5b9a",
+	})
+}
+
+func containsAny(value string, needles []string) bool {
+	for _, needle := range needles {
+		if strings.Contains(value, needle) {
+			return true
+		}
+	}
+	return false
 }
 
 func formatTasks(tasks []control.Task) string {
@@ -1138,6 +1397,34 @@ func formatWorkspaces(workspaces []control.Workspace) string {
 		fmt.Fprintf(&sb, "%d. %s (%s)\n   %s\n", i+1, ws.Name, ws.ID, ws.LocalPath)
 	}
 	return strings.TrimSpace(sb.String())
+}
+
+func formatEvents(events []control.Event) string {
+	if len(events) == 0 {
+		return "No recent task events."
+	}
+	var sb strings.Builder
+	sb.WriteString("Recent events:\n")
+	for i, event := range events {
+		fmt.Fprintf(&sb, "%d. %s", i+1, event.Type)
+		if event.Channel != "" {
+			fmt.Fprintf(&sb, " [%s]", event.Channel)
+		}
+		if len(event.Payload) > 0 && string(event.Payload) != "{}" {
+			fmt.Fprintf(&sb, " %s", truncate(toOneLine(string(event.Payload)), 160))
+		}
+		sb.WriteString("\n")
+	}
+	return strings.TrimSpace(sb.String())
+}
+
+func toOneLine(value string) string {
+	value = strings.ReplaceAll(value, "\n", " ")
+	value = strings.ReplaceAll(value, "\r", " ")
+	for strings.Contains(value, "  ") {
+		value = strings.ReplaceAll(value, "  ", " ")
+	}
+	return strings.TrimSpace(value)
 }
 
 func formatIdentity(identity *control.IdentityContext) string {

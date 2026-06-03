@@ -40,7 +40,7 @@ func MakeDelegateFn(mem *memory.MemoryManager, backend kernel.AgentBackend, cfg 
 			return "", llm.UsageStats{}, fmt.Errorf("unsupported delegation provider: %s", cfg.Provider)
 		}
 
-		// Create a sub-agent. 
+		// Create a sub-agent.
 		// Note: We use the same backend (tools) but a fresh Agent instance.
 		// We can also limit iterations for sub-agents.
 		maxRetries := cfg.MaxRetries
@@ -95,7 +95,7 @@ func MakeDelegateFn(mem *memory.MemoryManager, backend kernel.AgentBackend, cfg 
 		subAgent := kernel.NewAgent(mem, subBackend, provider, "You are a specialized sub-agent helping with a task.", maxIter, maxRetries, nil)
 
 		fullPrompt := fmt.Sprintf("Target Goal: %s\nContext: %s\nAvailable Toolsets: %v\n\nPlease complete the task and return the final result.", goal, contextStr, toolsets)
-		
+
 		// Execute in a sub-context
 		return subAgent.RunConversation(context.Background(), "system", "delegation", fullPrompt)
 	}

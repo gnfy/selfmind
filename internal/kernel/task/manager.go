@@ -21,11 +21,11 @@ type Task struct {
 
 // Message 表示任务上下文中的单条消息
 type Message struct {
-	ID        int64
-	TaskID    int64
-	Channel   string // 'cli' | 'wechat' | 'dingtalk' | 'web'
-	Role      string // 'user' | 'assistant' | 'tool'
-	Content   string
+	ID      int64
+	TaskID  int64
+	Channel string // 'cli' | 'wechat' | 'dingtalk' | 'web'
+	Role    string // 'user' | 'assistant' | 'tool'
+	Content string
 }
 
 // Manager 管理全局任务

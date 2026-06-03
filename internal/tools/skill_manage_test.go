@@ -18,9 +18,9 @@ func TestSkillManageTool_CreateUpdateDelete(t *testing.T) {
 
 	// 1. Create
 	result, err := tool.Execute(map[string]interface{}{
-		"action":  "create",
-		"name":    "docker-debug",
-		"content": "Use `docker logs -f <container>` to stream logs. Use `docker exec -it <container> sh` for shell access.",
+		"action":      "create",
+		"name":        "docker-debug",
+		"content":     "Use `docker logs -f <container>` to stream logs. Use `docker exec -it <container> sh` for shell access.",
 		"description": "Docker debugging workflow",
 	})
 	if err != nil {

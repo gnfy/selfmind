@@ -3,6 +3,8 @@ package tools
 import (
 	"encoding/json"
 	"fmt"
+	"math"
+	"strconv"
 	"strings"
 )
 
@@ -36,9 +38,9 @@ type BaseTool struct {
 	handler     func(args map[string]interface{}) (string, error)
 }
 
-func (b *BaseTool) Name() string         { return b.name }
-func (b *BaseTool) Description() string  { return b.description }
-func (b *BaseTool) Schema() ToolSchema   { return b.schema }
+func (b *BaseTool) Name() string        { return b.name }
+func (b *BaseTool) Description() string { return b.description }
+func (b *BaseTool) Schema() ToolSchema  { return b.schema }
 
 func (b *BaseTool) Execute(args map[string]interface{}) (string, error) {
 	if b.handler == nil {
@@ -148,46 +150,61 @@ func CoerceArgs(schema ToolSchema, args map[string]interface{}) (map[string]inte
 		if !exists {
 			continue
 		}
-		coerced[param] = coerceValue(val, def.Type)
+		coercedValue, err := coerceValue(param, val, def.Type)
+		if err != nil {
+			return nil, err
+		}
+		coerced[param] = coercedValue
 	}
 	return coerced, nil
 }
 
-func coerceValue(val interface{}, targetType string) interface{} {
+func coerceValue(param string, val interface{}, targetType string) (interface{}, error) {
 	switch targetType {
 	case "integer":
 		switch v := val.(type) {
 		case float64:
-			return int(v)
+			if math.Trunc(v) != v {
+				return nil, fmt.Errorf("parameter %s must be an integer, got %v", param, v)
+			}
+			return int(v), nil
 		case string:
-			var i int
-			fmt.Sscanf(v, "%d", &i)
-			return i
+			i, err := strconv.Atoi(strings.TrimSpace(v))
+			if err != nil {
+				return nil, fmt.Errorf("parameter %s must be an integer: %w", param, err)
+			}
+			return i, nil
 		default:
-			return v
+			return v, nil
 		}
 	case "number":
 		switch v := val.(type) {
 		case int:
-			return float64(v)
+			return float64(v), nil
 		case string:
-			var f float64
-			fmt.Sscanf(v, "%f", &f)
-			return f
+			f, err := strconv.ParseFloat(strings.TrimSpace(v), 64)
+			if err != nil {
+				return nil, fmt.Errorf("parameter %s must be a number: %w", param, err)
+			}
+			return f, nil
 		default:
-			return v
+			return v, nil
 		}
 	case "boolean":
 		switch v := val.(type) {
 		case string:
-			return v == "true" || v == "1"
+			b, err := strconv.ParseBool(strings.TrimSpace(v))
+			if err != nil {
+				return nil, fmt.Errorf("parameter %s must be a boolean: %w", param, err)
+			}
+			return b, nil
 		default:
-			return v
+			return v, nil
 		}
 	case "string":
-		return fmt.Sprintf("%v", val)
+		return fmt.Sprintf("%v", val), nil
 	default:
-		return val
+		return val, nil
 	}
 }
 

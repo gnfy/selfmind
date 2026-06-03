@@ -158,7 +158,7 @@ func (h *MultiAgentHost) runSubAgent(ctx context.Context, task Task, taskID stri
 		h.provider,
 		h.soul,
 		h.maxIterations,
-		3, // maxRetries
+		3,   // maxRetries
 		nil, // no reflector for subagents
 	)
 

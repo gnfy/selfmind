@@ -15,6 +15,7 @@ import (
 	"selfmind/internal/app"
 	"selfmind/internal/control"
 	"selfmind/internal/gateway/api"
+	"selfmind/internal/gateway/delivery"
 	"selfmind/internal/gateway/httpapi"
 	"selfmind/internal/kernel"
 	"selfmind/internal/platform/config"
@@ -77,6 +78,9 @@ func Run(ctx context.Context, opts Options) error {
 		return fmt.Errorf("control.OpenStore failed: %w", err)
 	}
 	defer controlStore.Close()
+	if interrupted, err := controlStore.MarkInterruptedRuns(context.Background(), 30*time.Second); err == nil && interrupted > 0 {
+		log.Warn("gateway: marked stale running tasks as interrupted", "count", interrupted)
+	}
 
 	agent, err := app.InitAgent(mem, cfg, defaultTenantID)
 	if err != nil {
@@ -101,8 +105,13 @@ func Run(ctx context.Context, opts Options) error {
 	gatewayAPI := &httpapi.Server{
 		Control:         controlStore,
 		Gateway:         gwDeps.Gateway,
+		Delivery:        newDeliveryService(controlStore, cfg),
 		DefaultTenantID: defaultTenantID,
 		DrainTimeout:    drainTimeout,
+	}
+	if gatewayAPI.Delivery != nil {
+		gatewayAPI.Delivery.Start(ctx)
+		defer gatewayAPI.Delivery.Stop()
 	}
 	stopCh := make(chan struct{})
 	var stopOnce sync.Once
@@ -179,6 +188,27 @@ func applyGatewayRuntimeEnv(cfg *config.Config) {
 	setEnvIfEmpty("SELF_GATEWAY_ADDR", cfg.Gateway.Addr)
 	setEnvIfEmpty("SELF_GATEWAY_URL", cfg.Gateway.URL)
 	setEnvIfEmpty("SELF_GATEWAY_DRAIN_TIMEOUT", cfg.Gateway.DrainTimeout)
+}
+
+func newDeliveryService(store *control.Store, cfg *config.Config) *delivery.Service {
+	if store == nil || cfg == nil {
+		return nil
+	}
+	var defaultSender delivery.Sender
+	if strings.TrimSpace(cfg.Gateway.OutboundWebhookURL) != "" {
+		defaultSender = &delivery.WebhookSender{
+			URL:   cfg.Gateway.OutboundWebhookURL,
+			Token: cfg.Gateway.OutboundWebhookToken,
+		}
+	}
+	router := delivery.NewRouter(defaultSender)
+	if strings.TrimSpace(cfg.Gateway.TelegramToken) != "" {
+		router.Register("telegram", &delivery.TelegramSender{Token: cfg.Gateway.TelegramToken})
+	}
+	return delivery.NewService(store, router, delivery.Options{
+		MaxMessageChars: cfg.Gateway.DeliveryMaxMessageChars,
+		RetryAttempts:   cfg.Gateway.DeliveryRetryAttempts,
+	})
 }
 
 func resolveDrainTimeout(configValue string) time.Duration {

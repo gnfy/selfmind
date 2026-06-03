@@ -13,6 +13,20 @@ const MaxChoices = 4
 // Set by RegisterClarifyCallback() called from the controller's Start().
 var ClarifyFn func(question string, choices []string) string
 
+type ClarifyHandler func(question string, choices []string) string
+
+func clarifyHandlerFromArgs(args map[string]interface{}) ClarifyHandler {
+	if args != nil {
+		if fn, ok := args["_clarify_fn"].(ClarifyHandler); ok && fn != nil {
+			return fn
+		}
+		if fn, ok := args["_clarify_fn"].(func(string, []string) string); ok && fn != nil {
+			return fn
+		}
+	}
+	return ClarifyFn
+}
+
 // ClarifyTool asks the user a question with optional multiple-choice answers.
 type ClarifyTool struct {
 	BaseTool
@@ -59,16 +73,17 @@ func (t *ClarifyTool) Execute(args map[string]interface{}) (string, error) {
 		}
 	}
 
-	if ClarifyFn == nil {
+	clarifyFn := clarifyHandlerFromArgs(args)
+	if clarifyFn == nil {
 		return "", fmt.Errorf("clarify tool is not available in this execution context")
 	}
 
-	userResponse := ClarifyFn(question, choices)
+	userResponse := clarifyFn(question, choices)
 
 	result, err := json.Marshal(map[string]interface{}{
-		"question":       question,
+		"question":        question,
 		"choices_offered": choices,
-		"user_response":  strings.TrimSpace(userResponse),
+		"user_response":   strings.TrimSpace(userResponse),
 	})
 	if err != nil {
 		return "", err

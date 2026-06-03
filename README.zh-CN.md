@@ -20,16 +20,18 @@ SelfMind 是一个用 Go 编写的个人 AI Agent 运行时。它的目标不是
 - 常驻 gateway：`selfmind gateway start/run/status/stop/restart`。
 - gateway 客户端命令：`send`、`status`、`stop`、`tasks`、`workspaces`、`workspace add`、`workspace use`、`new`、`id`。
 - 通用 IM Webhook：`POST /v1/im/{platform}`。
+- IM outbound 基础层：支持通用 webhook/Telegram 回发、长消息拆分、失败重试和持久 outbound 队列。
 - 账号绑定 API：CLI、微信、飞书、QQ relay 等渠道可以绑定到同一个 `person_id`。
+- 持久任务运行状态：run heartbeat、异常重启标记 interrupted、最近事件查询和 `/events` 控制命令。
 - workspace 隔离：文件、搜索、补丁、终端工具会限制在允许的工作目录内。
 - 长期记忆、历史会话检索、Skill 管理、后台复盘、Skill curator。
-- Hermes 风格的原生工具调用：OpenAI-compatible provider 优先使用 native tool calls，失败后回退到旧文本工具调用格式。
+- Hermes 风格的原生工具调用：OpenAI-compatible provider 优先使用 native tool calls，失败后回退到旧文本工具调用格式；工具层包含重复失败/无进展 guardrail 和敏感信息脱敏。
 - `models.roles` 模型路由：编码、记忆提取、后台复盘、Skill 整理、语义召回可以使用不同模型。
 
 仍属于第一版或后续规划：
 
 - 官方飞书、微信、QQ SDK adapter 还没有完整接入。
-- IM 出站发送、失败重试、长消息拆分、原生审批按钮还需要生产级加固。
+- IM 原生审批按钮、企业平台官方 SDK、富媒体附件和更完整的平台签名/加密模式还需要生产级加固。
 - SaaS 管理后台、租户模型密钥托管、计费策略、队列/worker 横向扩展还未完成。
 
 ## 运行要求
@@ -158,6 +160,11 @@ gateway:
   addr: "127.0.0.1:8765"
   token: ""
   drain_timeout: "30s"
+  outbound_webhook_url: ""
+  outbound_webhook_token: ""
+  telegram_token: "${TELEGRAM_BOT_TOKEN}"
+  delivery_max_message_chars: 3500
+  delivery_retry_attempts: 3
 
 agent:
   soul: "You are SelfMind, a helpful AI assistant."
@@ -343,12 +350,20 @@ gateway 运行时文件位于：
 | `POST` | `/v1/accounts/bind` | 将平台账号绑定到已有 person。 |
 | `GET` | `/v1/tasks` | 查看任务列表。 |
 | `GET` | `/v1/tasks/current` | 查看当前任务和 active run。 |
+| `GET` | `/v1/tasks/events` | 查看当前任务或指定 `task_id` 的最近 run/tool/learning 事件。 |
 | `POST` | `/v1/workspaces/register` | 注册本地 workspace。 |
 | `GET` | `/v1/workspaces` | 查看 workspace。 |
 | `GET` | `/v1/gateway/status` | 查看 gateway 进程状态和 active runs。 |
 | `POST` | `/v1/gateway/shutdown` | 请求 gateway 优雅停机。 |
 
 聊天消息不会跨渠道自动镜像。CLI 里的聊天不会自动发到 IM，IM 消息也不会自动显示到 CLI。共享的是任务、run、workspace、memory 和 skill 状态。
+
+IM 异步任务完成后，如果配置了 outbound sender，gateway 会把结果回发到原渠道；否则消息会保留在 `control.db` 的 outbound 队列中，等待后续配置 sender 后重试。当前内置 sender：
+
+- `gateway.telegram_token`：使用 Telegram `sendMessage` 回发到 inbound 的 `channel/chat_id`。
+- `gateway.outbound_webhook_url`：把统一 JSON payload POST 到自定义 relay。
+
+长消息会按 `gateway.delivery_max_message_chars` 拆分，失败会按 `gateway.delivery_retry_attempts` 重试。任务进度可以用 `/status`，最近事件可以用 `/events`。
 
 ## Linux 发布
 
@@ -370,6 +385,14 @@ GitHub Actions release workflow：
 - `install.sh` / `uninstall.sh`
 - `selfmind.service`
 - README 和 docs
+
+Linux 安装脚本会创建 `/etc/selfmind/config.yaml`、`/var/lib/selfmind/data` 和 `selfmind` 系统用户。systemd 服务会使用下面的命令启动 gateway：
+
+```sh
+/usr/local/bin/selfmind -f /etc/selfmind/config.yaml gateway run
+```
+
+启动服务前，先编辑 `/etc/selfmind/config.yaml` 配置模型供应商。
 
 ## 二次开发入口
 
@@ -395,6 +418,13 @@ internal/runtime/gateway/  gateway 进程、pid、lock、state、start/stop
 2. 在 `internal/app/tools.go` 注册。
 3. 如果工具触碰文件、终端、网络、记忆或 skill，补 workspace/approval/process middleware。
 4. 添加工具和 dispatcher 测试。
+
+工具运行时规则：
+
+- 新应用路径优先使用 `tools.NewRegistry()` 和 `tools.NewDispatcherWithRegistry(...)`。`tools.NewDispatcher()` / `tools.GlobalRegistry()` 只作为旧兼容入口保留。
+- 新代码不要把租户、workspace、MCP 或 skill 工具注册到全局 registry。
+- dispatcher 参数转换是严格的；非法 integer、number、boolean 应返回错误，不要静默变成 `0` 或 `false`。
+- clarify 和审批回调优先通过 dispatcher/registry 上下文注入。
 
 新增模型厂商：
 

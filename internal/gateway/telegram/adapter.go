@@ -17,10 +17,10 @@ import (
 // Adapter Telegram 消息适配器
 // 负责接收 Telegram 消息、解析 user id、调用统一 Gateway 处理
 type Adapter struct {
-	gateway   *router.Gateway
-	token     string
+	gateway    *router.Gateway
+	token      string
 	webhookURL string
-	client    *http.Client
+	client     *http.Client
 	// Long polling state
 	longPollMu   sync.Mutex
 	longPollStop chan struct{}
@@ -30,8 +30,8 @@ type Adapter struct {
 // NewAdapter 创建一个 Telegram 适配器
 func NewAdapter(gw *router.Gateway, token, webhookURL string) *Adapter {
 	return &Adapter{
-		gateway:     gw,
-		token:       token,
+		gateway:    gw,
+		token:      token,
 		webhookURL: webhookURL,
 		client: &http.Client{
 			Timeout: 30 * time.Second,
@@ -292,19 +292,19 @@ func (a *Adapter) WebhookHandler(w http.ResponseWriter, r *http.Request) {
 
 // Update 表示 Telegram API 的 update 对象
 type Update struct {
-	UpdateID int64  `json:"update_id"`
+	UpdateID int64    `json:"update_id"`
 	Message  *Message `json:"message,omitempty"`
 }
 
 // Message 表示 Telegram API 的 message 对象
 type Message struct {
-	MessageID int64  `json:"message_id"`
-	Chat     struct {
+	MessageID int64 `json:"message_id"`
+	Chat      struct {
 		ID int64 `json:"id"`
 	} `json:"chat"`
-	From    *User  `json:"from,omitempty"`
-	Text    string `json:"text,omitempty"`
-	Date    int64  `json:"date"`
+	From *User  `json:"from,omitempty"`
+	Text string `json:"text,omitempty"`
+	Date int64  `json:"date"`
 }
 
 // User 表示 Telegram API 的 user 对象

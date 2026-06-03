@@ -53,8 +53,8 @@ func (o OperationType) String() string {
 
 // HunkLine represents a single line within a hunk
 type HunkLine struct {
-	Prefix   string // ' ', '-', '+'
-	Content  string
+	Prefix  string // ' ', '-', '+'
+	Content string
 }
 
 // Hunk represents a group of changes within a file
@@ -67,9 +67,9 @@ type Hunk struct {
 type PatchOperation struct {
 	Operation OperationType
 	FilePath  string
-	NewPath   string   // For move operations
-	Hunks     []Hunk   // For update/add operations
-	Content   string   // For add operations (inline content)
+	NewPath   string // For move operations
+	Hunks     []Hunk // For update/add operations
+	Content   string // For add operations (inline content)
 }
 
 // PatchResult represents the result of applying a patch

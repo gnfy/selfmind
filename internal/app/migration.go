@@ -31,7 +31,7 @@ func NeedsMigration() bool {
 		return false
 	}
 	selfmindSkillsDir := filepath.Join(home, ".selfmind", "skills")
-	
+
 	entries, err := os.ReadDir(selfmindSkillsDir)
 	// If the directory doesn't exist or is empty, we need migration
 	if err != nil || len(entries) == 0 {
@@ -73,7 +73,7 @@ func MigrateHermesSkills(hermesDir string) (int, error) {
 		// Hermes use snake_case mostly, SelfMind too.
 		// One common change might be read_file -> read_file (already matches).
 		// We can add more complex logic here later.
-		
+
 		destPath := filepath.Join(selfmindSkillsDir, info.Name())
 		if _, err := os.Stat(destPath); err == nil {
 			// Skip if exists

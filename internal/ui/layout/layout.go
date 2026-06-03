@@ -7,11 +7,11 @@ type Rect struct {
 
 // Layout defines the layout structure for the SelfMind TUI.
 type Layout struct {
-	Header   Rect
-	Sidebar  Rect
-	Main     Rect
-	Input    Rect
-	Status   Rect
+	Header  Rect
+	Sidebar Rect
+	Main    Rect
+	Input   Rect
+	Status  Rect
 }
 
 // CalculateLayout computes the layout based on terminal dimensions.

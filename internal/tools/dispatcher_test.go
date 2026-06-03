@@ -58,6 +58,25 @@ func TestCoerceArgs(t *testing.T) {
 	}
 }
 
+func TestCoerceArgsRejectsInvalidNumbers(t *testing.T) {
+	tool := NewMockTool()
+	_, err := CoerceArgs(tool.Schema(), map[string]interface{}{
+		"age":  "not-a-number",
+		"rate": "10.5",
+	})
+	if err == nil {
+		t.Fatal("expected invalid integer to fail")
+	}
+
+	_, err = CoerceArgs(tool.Schema(), map[string]interface{}{
+		"age":  "25",
+		"rate": "not-a-number",
+	})
+	if err == nil {
+		t.Fatal("expected invalid number to fail")
+	}
+}
+
 func TestDispatcherRegister(t *testing.T) {
 	// 每个测试用独立的 registry 避免污染
 	reg := NewRegistry()
@@ -76,6 +95,43 @@ func TestDispatcherRegister(t *testing.T) {
 	}
 	if result == "" {
 		t.Error("expected non-empty result")
+	}
+}
+
+func TestDispatcherUsesItsOwnRegistry(t *testing.T) {
+	regA := NewRegistry()
+	regB := NewRegistry()
+	dispA := NewDispatcherWithRegistry(regA)
+	dispB := NewDispatcherWithRegistry(regB)
+
+	dispA.RegisterTool(NewMockTool())
+
+	if !dispA.ToolExists("test_tool") {
+		t.Fatal("tool should exist in dispatcher A")
+	}
+	if dispB.ToolExists("test_tool") {
+		t.Fatal("tool should not leak into dispatcher B")
+	}
+	if _, err := dispB.Dispatch("test_tool", map[string]interface{}{"age": 30}); err == nil {
+		t.Fatal("dispatch should fail on isolated dispatcher B")
+	}
+}
+
+func TestDispatcherUnregisterIsScoped(t *testing.T) {
+	regA := NewRegistry()
+	regB := NewRegistry()
+	dispA := NewDispatcherWithRegistry(regA)
+	dispB := NewDispatcherWithRegistry(regB)
+
+	dispA.RegisterTool(NewMockTool())
+	dispB.RegisterTool(NewMockTool())
+	dispA.UnregisterTool("test_tool")
+
+	if dispA.ToolExists("test_tool") {
+		t.Fatal("tool should be removed from dispatcher A")
+	}
+	if !dispB.ToolExists("test_tool") {
+		t.Fatal("tool should remain in dispatcher B")
 	}
 }
 

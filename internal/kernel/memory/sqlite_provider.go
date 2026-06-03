@@ -17,10 +17,10 @@ import (
 // SQLiteProvider 实现 StorageProvider 接口
 // 所有 DB 操作通过单 worker goroutine 串行访问，彻底避免 database/sql 连接池冲突
 type SQLiteProvider struct {
-	baseDir   string
-	opCh      chan dbOp       // 操作通道
-	resultCh  chan dbResult   // 结果通道
-	stopCh    chan struct{}
+	baseDir  string
+	opCh     chan dbOp     // 操作通道
+	resultCh chan dbResult // 结果通道
+	stopCh   chan struct{}
 }
 
 // dbOp 表示一个待执行的数据库操作

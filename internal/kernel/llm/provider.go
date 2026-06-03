@@ -60,10 +60,15 @@ type UsageStats struct {
 
 // StreamEvent 定义流式响应事件
 type StreamEvent struct {
-	Content   string
-	ToolCalls []ToolCall
-	Usage     *UsageStats
-	Err       error
+	Content         string
+	ToolCalls       []ToolCall
+	Usage           *UsageStats
+	Err             error
+	EventType       string
+	ToolName        string
+	ToolArgs        string
+	ToolResult      string
+	DurationSeconds float64
 }
 
 // Provider 定义 LLM 调用接口

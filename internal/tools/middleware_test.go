@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 )
 
@@ -27,6 +28,7 @@ func TestAuthMiddleware(t *testing.T) {
 
 // mockPermStorage implements the permission getter for AuthMiddleware
 type mockPermStorage struct{}
+
 func (m *mockPermStorage) GetPermission(ctx context.Context, tenantID, toolName string) (bool, error) {
 	return true, nil
 }
@@ -130,5 +132,29 @@ func TestEnvVarMiddleware_Set(t *testing.T) {
 	}
 	if result != "ok" {
 		t.Errorf("expected 'ok', got %q", result)
+	}
+}
+
+func TestToolGuardrailsBlockRepeatedFailure(t *testing.T) {
+	guard := NewToolGuardrails()
+	exec := guard.Middleware(func(args map[string]interface{}) (string, error) {
+		return "", fmt.Errorf("same failure")
+	})
+	args := map[string]interface{}{"_tool_name": "read_file", "_tenant_id": "tenant-a", "path": "missing.txt"}
+	for i := 0; i < 2; i++ {
+		if _, err := exec(args); err == nil {
+			t.Fatalf("call %d should fail", i+1)
+		}
+	}
+	if _, err := exec(args); err == nil || !strings.Contains(err.Error(), "guardrail blocked") {
+		t.Fatalf("expected guardrail block, got %v", err)
+	}
+}
+
+func TestRedactSensitive(t *testing.T) {
+	input := `Authorization: Bearer abcdefghijklmnop token=secret-value api_key: sk-testsecret123456789`
+	out := RedactSensitive(input)
+	if strings.Contains(out, "secret-value") || strings.Contains(out, "abcdefghijklmnop") || strings.Contains(out, "sk-testsecret") {
+		t.Fatalf("sensitive data was not redacted: %s", out)
 	}
 }

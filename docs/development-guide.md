@@ -36,7 +36,7 @@ internal/platform/config/  YAML config schema, defaults, compatibility, save
 internal/kernel/           agent loop, memory, review, native tool calls
 internal/kernel/llm/       provider adapters and role-based model gateway
 internal/tools/            built-in tools and tool middleware
-internal/gateway/          TUI, HTTP API, router, channel adapters
+internal/gateway/          TUI, HTTP API, router, delivery, channel adapters
 internal/control/          control.db identity/workspace/task/run state
 internal/runtime/gateway/  gateway process runner, pid, lock, state, start/stop
 packaging/                 Linux package scripts and systemd templates
@@ -112,6 +112,11 @@ gateway:
   addr: "127.0.0.1:8765"
   token: ""
   drain_timeout: "30s"
+  outbound_webhook_url: ""
+  outbound_webhook_token: ""
+  telegram_token: "${TELEGRAM_BOT_TOKEN}"
+  delivery_max_message_chars: 3500
+  delivery_retry_attempts: 3
 
 models:
   source: "local"
@@ -237,6 +242,7 @@ Gateway HTTP control endpoints:
 |---|---|---|
 | `GET` | `/v1/gateway/status` | process state and active runs |
 | `POST` | `/v1/gateway/shutdown` | graceful draining shutdown |
+| `GET` | `/v1/tasks/events` | recent events for the current or specified task |
 
 Shutdown enters draining state, rejects new runs, waits for active runs, and can be force-stopped by CLI when requested.
 
@@ -255,6 +261,13 @@ task_id         durable task state
 run_id          one agent execution attempt
 event_id        auditable task transition
 ```
+
+Runtime state rules:
+
+- `task_runs.heartbeat_at` is refreshed every 10 seconds; `MarkInterruptedRuns` marks stale running runs as `interrupted` after a gateway restart.
+- `task_events` stores events such as `run.started`, `tool.started`, `tool.completed`, `learning.review`, `run.finished`, and `run.cancelled`.
+- `outbound_messages` is the IM delivery queue. Without a sender, messages remain `pending`; with a sender, the delivery worker retries them.
+- `/status` is for a compact task summary; `/events` is for recent runtime events.
 
 Workspace-scoped tools must honor `allowed_roots`. Do not bypass `WorkspaceScopeMiddleware` for file, search, patch, terminal, or process tools.
 
@@ -275,6 +288,39 @@ Key files:
 - `internal/kernel/agent.go`
 - `internal/kernel/llm/adapters.go`
 - `internal/tools/dispatcher.go`
+- `internal/tools/guardrails.go`
+- `internal/tools/security.go`
+
+Tool stability rules:
+
+- `ToolGuardrails` blocks repeated same-tool/same-argument failures within a run.
+- Read-only tools also get no-progress detection when the same arguments keep returning the same result.
+- Tool logs, gateway delivery errors, and event payloads should pass through `tools.RedactSensitive`.
+- Mutating, terminal, memory, skill, delegation, process-control, and patch tools must stay sequential and should not be added to the parallel-safe allowlist.
+
+### Tool Runtime Isolation
+
+New application paths should create an isolated registry:
+
+```go
+registry := tools.NewRegistry()
+dispatcher := tools.NewDispatcherWithRegistry(registry)
+```
+
+Rules:
+
+- `tools.NewDispatcher()` and `tools.GlobalRegistry()` are legacy compatibility paths only.
+- Per-tenant, per-workspace, MCP, and dynamically loaded skill tools should be registered through the active dispatcher/registry.
+- `MCPToolManager` must connect and disconnect tools through its dispatcher, not the global registry.
+- `Registry.Dispatch` and `Dispatcher.Dispatch` both coerce and validate arguments before execution.
+- Argument coercion is intentionally strict: malformed integers, numbers, and booleans fail fast.
+- `ClarifyFn` remains as a TUI compatibility fallback, but new approval/clarify integrations should inject a handler through the dispatcher registry.
+
+### Agent Concurrency
+
+An `Agent` instance is serialized with `runMu` because it owns one `EventChannel`. Gateway paths that need true parallel active runs should construct separate agent instances per run or introduce a per-run event sink before removing that lock.
+
+`syncTurn` uses a bounded background queue instead of spawning an unbounded goroutine for every assistant turn. High-frequency conversations should prefer dropping stale sync snapshots over piling up memory-sync workers.
 
 ## Learning Loop
 
@@ -306,6 +352,8 @@ Rules to preserve:
 - Reusable workflows, checklists, and procedures belong in skills.
 - Temporary task progress should not become long-term memory.
 - If a used skill is stale or corrected by the user, patch that skill instead of creating duplicates.
+- Transient provider outages, one-off tool failures, and speculative failure causes should not become memory or skills.
+- New skills created by the agent should use `source=agent-created`; session-specific details belong in `references/`, not the main `SKILL.md`.
 - Curator should manage only agent-created skills unless explicitly told otherwise.
 
 ## Add A Tool
@@ -343,16 +391,17 @@ platform adapter
   verify signature
   parse platform payload
   normalize inbound message
-  optionally send outbound message
+  optionally implement sender
         |
         v
 gateway
   identity binding
   workspace/task/run state
   agent dispatch
+  delivery enqueue/retry/split
 ```
 
-The gateway owns person identity, task state, workspace binding, active run policy, memory, and skills. Platform adapters should not own those concepts.
+The gateway owns person identity, task state, workspace binding, active run policy, memory, skills, and the outbound queue. Platform adapters should not own those concepts.
 
 The generic webhook entrypoint is:
 
@@ -360,14 +409,13 @@ The generic webhook entrypoint is:
 POST /v1/im/{platform}
 ```
 
-Production platform adapters still need:
+Production platform adapters should be added in this order:
 
-- Signature verification.
-- Outbound sender.
-- Retry and idempotency.
-- Long-message splitting.
-- Native approval buttons when supported.
-- Default async behavior for long-running work.
+1. Inbound signature/decryption/deduplication.
+2. Payload normalization into `api.MessageRequest`.
+3. A sender that implements `delivery.Sender` and is registered in `delivery.Router`.
+4. Reuse delivery long-message splitting, retry, and pending queue behavior.
+5. Add native approval buttons and rich media attachments when the platform supports them.
 
 ## Add A Gateway Command
 
@@ -417,6 +465,12 @@ It builds only `selfmind` for Linux:
 - `linux-arm64`
 
 It supports both tag-triggered release and manual workflow dispatch.
+
+Linux install scripts create `/etc/selfmind/config.yaml` and the systemd unit runs:
+
+```sh
+/usr/local/bin/selfmind -f /etc/selfmind/config.yaml gateway run
+```
 
 ## Future SaaS Notes
 

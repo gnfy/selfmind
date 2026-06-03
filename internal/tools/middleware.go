@@ -74,16 +74,16 @@ func (r *RateLimitMiddleware) Middleware(next ToolExecutor) ToolExecutor {
 // LoggingMiddleware 记录工具执行的日志中间件
 func LoggingMiddleware(next ToolExecutor) ToolExecutor {
 	return func(args map[string]interface{}) (string, error) {
-		log.Debug("tool executing", "args", MarshalArgs(args))
+		log.Debug("tool executing", "args", RedactSensitive(MarshalArgs(args)))
 		result, err := next(args)
 		if err != nil {
-			log.Debug("tool error", "error", err)
+			log.Debug("tool error", "error", RedactSensitive(err.Error()))
 		} else {
 			log.Debug("tool result", "result", func() string {
 				if len(result) > 200 {
-					return result[:200] + "..."
+					return RedactSensitive(result[:200]) + "..."
 				}
-				return result
+				return RedactSensitive(result)
 			}())
 		}
 		return result, err
@@ -149,9 +149,10 @@ func SmartApprovalMiddleware(projectRoot string) Middleware {
 				}
 			}
 
-			if dangerous && ClarifyFn != nil {
+			clarifyFn := clarifyHandlerFromArgs(args)
+			if dangerous && clarifyFn != nil {
 				question := fmt.Sprintf("⚠️ 发现危险操作提示！\n工具: %s\n参数: %v\n原因: %s\n是否确认执行？", toolName, MarshalArgs(args), reason)
-				response := ClarifyFn(question, []string{"Yes", "No"})
+				response := clarifyFn(question, []string{"Yes", "No"})
 				if strings.ToLower(response) != "yes" {
 					return "", fmt.Errorf("操作已被用户取消")
 				}

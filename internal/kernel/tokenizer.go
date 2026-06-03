@@ -1,8 +1,8 @@
 package kernel
 
 import (
-	"selfmind/internal/kernel/llm"
 	"github.com/tiktoken-go/tokenizer"
+	"selfmind/internal/kernel/llm"
 )
 
 // TokenEstimator wraps tiktoken-go for precise token counting.

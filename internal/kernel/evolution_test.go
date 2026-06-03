@@ -29,10 +29,10 @@ func (m *mockProvider) StreamChat(ctx context.Context, req llm.ChatRequest) (<-c
 
 func TestEvolutionIntegration(t *testing.T) {
 	cfg := EvolutionConfig{
-		Enabled:               true,
-		Mode:                  "silent",
+		Enabled:                true,
+		Mode:                   "silent",
 		MinComplexityThreshold: 2,
-		NudgeInterval:         5,
+		NudgeInterval:          5,
 	}
 	reflector := NewReflectionEngine(&mockProvider{}, cfg)
 

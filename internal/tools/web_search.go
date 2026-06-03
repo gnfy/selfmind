@@ -159,8 +159,8 @@ func (t *WebSearchTool) searchFirecrawl(query string, numResults int) (string, e
 
 	endpoint := "https://api.firecrawl.dev/v0/search"
 	payload := map[string]interface{}{
-		"query":      query,
-		"pageLimit":  numResults,
+		"query":     query,
+		"pageLimit": numResults,
 		"scrapeOptions": map[string]interface{}{
 			"formats": []string{"markdown", "html"},
 		},
@@ -201,9 +201,9 @@ func (t *WebSearchTool) searchTavily(query string, numResults int) (string, erro
 
 	endpoint := "https://api.tavily.com/search"
 	payload := map[string]interface{}{
-		"query":       query,
+		"query":        query,
 		"search_depth": "basic",
-		"max_results": numResults,
+		"max_results":  numResults,
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {

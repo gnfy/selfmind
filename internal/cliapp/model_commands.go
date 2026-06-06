@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"selfmind/internal/modelruntime"
 	"selfmind/internal/platform/config"
 )
 
@@ -89,10 +90,23 @@ func (a *App) runInteractiveModelPicker(cfg *config.Config) int {
 }
 
 func (a *App) modelChoices(cfg *config.Config) []modelChoice {
+	// Keep the interactive order close to Hermes: first major providers, then
+	// manual custom endpoints, then auth-reuse/coding-plan profiles.
 	choices := []modelChoice{
 		{ID: "openai", Label: "OpenAI", Kind: "builtin"},
 		{ID: "anthropic", Label: "Anthropic", Kind: "builtin"},
 		{ID: "google", Label: "Google", Kind: "builtin"},
+		{ID: "custom", Label: "Custom endpoint (enter URL manually)", Kind: "custom_new"},
+		{ID: "codex-cli", Label: "Codex CLI (reuse login)", Kind: "builtin"},
+		{ID: "claude-code", Label: "Claude Code (reuse login)", Kind: "builtin"},
+		{ID: "gemini-cli", Label: "Gemini CLI (reuse login)", Kind: "builtin"},
+		{ID: "qwen-cli", Label: "Qwen CLI (reuse login)", Kind: "builtin"},
+		{ID: "minimax", Label: "MiniMax", Kind: "builtin"},
+		{ID: "kimi-coding", Label: "Kimi Coding Plan", Kind: "builtin"},
+		{ID: "openrouter", Label: "OpenRouter", Kind: "builtin"},
+		{ID: "deepseek", Label: "DeepSeek", Kind: "builtin"},
+		{ID: "zai", Label: "Z.AI / GLM", Kind: "builtin"},
+		{ID: "alibaba-coding-plan", Label: "Alibaba Coding Plan", Kind: "builtin"},
 	}
 	for i, cp := range cfg.Providers.Custom {
 		name := strings.TrimSpace(cp.Name)
@@ -106,7 +120,6 @@ func (a *App) modelChoices(cfg *config.Config) []modelChoice {
 			CustomIndex: i,
 		})
 	}
-	choices = append(choices, modelChoice{ID: "custom", Label: "Custom endpoint (enter URL manually)", Kind: "custom_new"})
 	if len(cfg.Providers.Custom) > 0 {
 		choices = append(choices, modelChoice{ID: "remove_custom", Label: "Remove a custom endpoint", Kind: "remove_custom"})
 	}
@@ -115,32 +128,75 @@ func (a *App) modelChoices(cfg *config.Config) []modelChoice {
 }
 
 func (a *App) configureBuiltinProvider(cfg *config.Config, provider string) int {
-	endpoint := builtinEndpoint(cfg, provider)
-	key, err := a.promptAPIKey(provider, endpoint.APIKey)
-	if err != nil {
-		fmt.Fprintln(a.stderr, err)
+	resolver := modelruntime.NewResolver(cfg)
+	profile, ok := resolver.Registry().Resolve(provider)
+	if !ok {
+		fmt.Fprintf(a.stderr, "unknown provider: %s\n", provider)
 		return 1
 	}
-	endpoint.APIKey = key
 
-	models, err := fetchProviderModels(a.ctx, provider, endpoint.BaseURL, key)
+	endpoint := providerEndpointForModelCommand(cfg, profile.ID)
+	endpoint.BaseURL = firstNonEmpty(endpoint.BaseURL, profile.BaseURL)
+	endpoint.Protocol = modelruntime.NormalizeProtocol(firstNonEmpty(endpoint.Protocol, profile.Protocol))
+
+	key := endpoint.APIKey
+	if profile.AuthType == modelruntime.AuthExternalOAuth {
+		// Reused CLI logins stay owned by their source tool, so SelfMind stores
+		// the model/base URL choice but not the discovered OAuth token.
+		rt, err := resolver.Resolve(a.ctx, modelruntime.Selection{
+			Provider: profile.ID,
+			Model:    firstNonEmpty(endpoint.Model, cfg.EffectiveModel()),
+			BaseURL:  endpoint.BaseURL,
+		})
+		if err == nil {
+			key = rt.APIKey
+			endpoint.BaseURL = firstNonEmpty(endpoint.BaseURL, rt.BaseURL)
+			endpoint.Model = firstNonEmpty(endpoint.Model, rt.Model)
+			endpoint.Protocol = modelruntime.NormalizeProtocol(firstNonEmpty(endpoint.Protocol, rt.Protocol))
+			fmt.Fprintf(a.stdout, "Using %s credentials from %s\n", profile.DisplayName, rt.CredentialSource)
+		} else {
+			fmt.Fprintf(a.stdout, "Could not find reusable %s login: %v\n", profile.DisplayName, err)
+			fmt.Fprintln(a.stdout, externalLoginHint(profile.ID))
+		}
+	} else {
+		var err error
+		key, err = a.promptAPIKey(profile.DisplayName, endpoint.APIKey)
+		if err != nil {
+			fmt.Fprintln(a.stderr, err)
+			return 1
+		}
+		endpoint.APIKey = key
+	}
+
+	rt := modelruntime.Runtime{
+		Provider: profile.ID,
+		Model:    firstNonEmpty(endpoint.Model, cfg.EffectiveModel(), firstModelChoice(profile.FallbackModels)),
+		Protocol: endpoint.Protocol,
+		BaseURL:  endpoint.BaseURL,
+		APIKey:   key,
+		AuthType: profile.AuthType,
+	}
+	models, err := modelruntime.NewCatalog(modelruntime.DefaultCatalogPath()).Models(a.ctx, profile, rt, false)
 	if err != nil {
 		fmt.Fprintf(a.stdout, "Could not load remote model list: %v\n", err)
 	}
-	model, err := a.promptModel(models, firstNonEmpty(endpoint.Model, cfg.EffectiveModel(), fallbackModels(provider)[0]))
+	model, err := a.promptModel(models, firstNonEmpty(endpoint.Model, cfg.EffectiveModel(), firstModelChoice(profile.FallbackModels)))
 	if err != nil {
 		fmt.Fprintln(a.stderr, err)
 		return 1
 	}
 	endpoint.Model = model
+	if profile.AuthType == modelruntime.AuthExternalOAuth {
+		endpoint.APIKey = ""
+	}
 
-	setBuiltinEndpoint(cfg, provider, endpoint)
-	cfg.SetDefaultModel(provider, model)
+	setProviderEndpointForModelCommand(cfg, profile.ID, endpoint)
+	cfg.SetDefaultModel(profile.ID, model)
 	if err := config.SaveConfig(cfg.Path, cfg); err != nil {
 		fmt.Fprintln(a.stderr, err)
 		return 1
 	}
-	fmt.Fprintf(a.stdout, "Saved model: %s / %s\nConfig: %s\n", provider, model, cfg.Path)
+	fmt.Fprintf(a.stdout, "Saved model: %s / %s\nConfig: %s\n", profile.ID, model, cfg.Path)
 	return 0
 }
 
@@ -319,6 +375,13 @@ func (a *App) setModelFromArgs(cfg *config.Config, args []string) int {
 					break
 				}
 			}
+		} else if profile, ok := modelruntime.NewResolver(cfg).Registry().Resolve(provider); ok {
+			endpoint := providerEndpointForModelCommand(cfg, profile.ID)
+			endpoint.Model = model
+			endpoint.BaseURL = firstNonEmpty(endpoint.BaseURL, profile.BaseURL)
+			endpoint.Protocol = modelruntime.NormalizeProtocol(firstNonEmpty(endpoint.Protocol, profile.Protocol))
+			setProviderEndpointForModelCommand(cfg, profile.ID, endpoint)
+			provider = profile.ID
 		}
 	}
 
@@ -342,6 +405,15 @@ func (a *App) printConfiguredProviders(cfg *config.Config) {
 	fmt.Fprintf(a.stdout, "OpenAI: %s %s\n", configuredMark(cfg.Providers.OpenAI.APIKey), cfg.Providers.OpenAI.BaseURL)
 	fmt.Fprintf(a.stdout, "Anthropic: %s %s\n", configuredMark(cfg.Providers.Anthropic.APIKey), cfg.Providers.Anthropic.BaseURL)
 	fmt.Fprintf(a.stdout, "Google: %s %s\n", configuredMark(cfg.Providers.Google.APIKey), cfg.Providers.Google.BaseURL)
+	if cfg.Providers.OpenRouterAPIKey != "" {
+		fmt.Fprintf(a.stdout, "OpenRouter legacy: %s\n", configuredMark(cfg.Providers.OpenRouterAPIKey))
+	}
+	if cfg.Providers.MiniMaxAPIKey != "" {
+		fmt.Fprintf(a.stdout, "MiniMax legacy: %s\n", configuredMark(cfg.Providers.MiniMaxAPIKey))
+	}
+	for name, ep := range cfg.ProviderProfiles {
+		fmt.Fprintf(a.stdout, "Provider %s: %s %s model=%s protocol=%s\n", name, configuredMark(ep.APIKey), ep.BaseURL, ep.Model, ep.Protocol)
+	}
 	for _, cp := range cfg.Providers.Custom {
 		fmt.Fprintf(a.stdout, "Custom %s: %s %s\n", cp.Name, configuredMark(cp.APIKey), cp.BaseURL)
 	}
@@ -420,52 +492,8 @@ func (a *App) promptInput(label, defaultValue string) (string, error) {
 	return raw, nil
 }
 
-func fetchProviderModels(ctx context.Context, provider, baseURL, apiKey string) ([]string, error) {
-	switch strings.ToLower(strings.TrimSpace(provider)) {
-	case "openai":
-		return fetchOpenAICompatibleModels(ctx, baseURL, apiKey)
-	case "anthropic":
-		return fetchAnthropicModels(ctx, baseURL, apiKey)
-	case "google", "gemini":
-		return fetchGoogleModels(ctx, baseURL, apiKey)
-	default:
-		return nil, fmt.Errorf("unsupported provider: %s", provider)
-	}
-}
-
 func fetchOpenAICompatibleModels(ctx context.Context, baseURL, apiKey string) ([]string, error) {
 	return fetchModelIDs(ctx, openAIModelsURL(baseURL), apiKey, map[string]string{})
-}
-
-func fetchAnthropicModels(ctx context.Context, baseURL, apiKey string) ([]string, error) {
-	root := strings.TrimRight(strings.TrimSpace(baseURL), "/")
-	if root == "" {
-		root = "https://api.anthropic.com"
-	}
-	lower := strings.ToLower(root)
-	if strings.HasSuffix(lower, "/v1/messages") {
-		root = root[:len(root)-len("/v1/messages")]
-	} else if strings.HasSuffix(lower, "/messages") {
-		root = root[:len(root)-len("/messages")]
-	}
-	headers := map[string]string{"anthropic-version": "2023-06-01"}
-	return fetchModelIDs(ctx, root+"/v1/models", apiKey, headers)
-}
-
-func fetchGoogleModels(ctx context.Context, baseURL, apiKey string) ([]string, error) {
-	root := strings.TrimRight(strings.TrimSpace(baseURL), "/")
-	if root == "" {
-		root = "https://generativelanguage.googleapis.com/v1beta"
-	}
-	lower := strings.ToLower(root)
-	if idx := strings.Index(lower, "/v1beta"); idx >= 0 {
-		root = root[:idx+len("/v1beta")]
-	}
-	modelURL := root + "/models"
-	if apiKey != "" {
-		modelURL += "?key=" + url.QueryEscape(apiKey)
-	}
-	return fetchModelIDs(ctx, modelURL, "", map[string]string{})
 }
 
 func fetchModelIDs(ctx context.Context, modelURL, apiKey string, headers map[string]string) ([]string, error) {
@@ -545,37 +573,79 @@ func normalizeOpenAIRoot(baseURL string) string {
 	return strings.TrimRight(root, "/")
 }
 
-func builtinEndpoint(cfg *config.Config, provider string) config.ProviderEndpoint {
-	switch strings.ToLower(provider) {
-	case "anthropic":
-		return cfg.Providers.Anthropic
-	case "google", "gemini":
-		return cfg.Providers.Google
-	default:
+func providerEndpointForModelCommand(cfg *config.Config, provider string) config.ProviderEndpoint {
+	// The model command reads old flat keys and new provider_profiles through
+	// the same view so users can upgrade config.yaml gradually.
+	switch modelruntime.NormalizeProviderID(provider) {
+	case "openai":
 		return cfg.Providers.OpenAI
+	case "anthropic", "claude-code":
+		return cfg.Providers.Anthropic
+	case "google", "gemini", "gemini-cli":
+		return cfg.Providers.Google
+	case "openrouter":
+		if ep, ok := cfg.ProviderProfiles["openrouter"]; ok {
+			return ep
+		}
+		return config.ProviderEndpoint{APIKey: cfg.Providers.OpenRouterAPIKey}
+	case "minimax":
+		if ep, ok := cfg.ProviderProfiles["minimax"]; ok {
+			return ep
+		}
+		return config.ProviderEndpoint{APIKey: cfg.Providers.MiniMaxAPIKey}
+	default:
+		if ep, ok := cfg.ProviderProfiles[modelruntime.NormalizeProviderID(provider)]; ok {
+			return ep
+		}
+		return config.ProviderEndpoint{}
 	}
 }
 
-func setBuiltinEndpoint(cfg *config.Config, provider string, endpoint config.ProviderEndpoint) {
-	switch strings.ToLower(provider) {
+func setProviderEndpointForModelCommand(cfg *config.Config, provider string, endpoint config.ProviderEndpoint) {
+	id := modelruntime.NormalizeProviderID(provider)
+	switch id {
+	case "openai":
+		cfg.Providers.OpenAI = endpoint
+		return
 	case "anthropic":
 		cfg.Providers.Anthropic = endpoint
+		return
 	case "google", "gemini":
 		cfg.Providers.Google = endpoint
+		return
+	case "openrouter":
+		cfg.Providers.OpenRouterAPIKey = endpoint.APIKey
+	case "minimax":
+		cfg.Providers.MiniMaxAPIKey = endpoint.APIKey
+	}
+	// Non-core providers are persisted as profiles, which lets new model vendors
+	// be added locally without another binary release.
+	if cfg.ProviderProfiles == nil {
+		cfg.ProviderProfiles = make(map[string]config.ProviderEndpoint)
+	}
+	cfg.ProviderProfiles[id] = endpoint
+}
+
+func externalLoginHint(provider string) string {
+	switch modelruntime.NormalizeProviderID(provider) {
+	case "codex-cli":
+		return "Run `codex` and sign in first, or set CODEX_ACCESS_TOKEN."
+	case "claude-code":
+		return "Run Claude Code login first, or set CLAUDE_CODE_OAUTH_TOKEN / ANTHROPIC_TOKEN."
+	case "gemini-cli":
+		return "Run Gemini CLI login first, or set GEMINI_OAUTH_ACCESS_TOKEN."
+	case "qwen-cli":
+		return "Run `qwen auth qwen-oauth` first, or set QWEN_ACCESS_TOKEN."
 	default:
-		cfg.Providers.OpenAI = endpoint
+		return "Sign in with the matching CLI first, or configure an API key."
 	}
 }
 
-func fallbackModels(provider string) []string {
-	switch strings.ToLower(provider) {
-	case "anthropic":
-		return []string{"claude-3-5-sonnet-20241022", "claude-3-5-haiku-20241022"}
-	case "google", "gemini":
-		return []string{"gemini-1.5-pro", "gemini-1.5-flash"}
-	default:
-		return []string{"gpt-4o", "gpt-4o-mini"}
+func firstModelChoice(models []string) string {
+	if len(models) == 0 {
+		return ""
 	}
+	return strings.TrimSpace(models[0])
 }
 
 func upsertCustomProvider(cfg *config.Config, cp config.CustomProvider) {

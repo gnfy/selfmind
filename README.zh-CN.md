@@ -22,11 +22,12 @@ SelfMind 是一个用 Go 编写的个人 AI Agent 运行时。它的目标不是
 - 通用 IM Webhook：`POST /v1/im/{platform}`。
 - IM outbound 基础层：支持通用 webhook/Telegram 回发、长消息拆分、失败重试和持久 outbound 队列。
 - 账号绑定 API：CLI、微信、飞书、QQ relay 等渠道可以绑定到同一个 `person_id`。
-- 持久任务运行状态：run heartbeat、异常重启标记 interrupted、最近事件查询和 `/events` 控制命令。
+- 持久任务运行状态：run heartbeat、异常重启标记 interrupted、最近事件查询和 gateway `/events` 控制响应。
 - workspace 隔离：文件、搜索、补丁、终端工具会限制在允许的工作目录内。
 - 长期记忆、历史会话检索、Skill 管理、后台复盘、Skill curator。
 - Hermes 风格的原生工具调用：OpenAI-compatible provider 优先使用 native tool calls，失败后回退到旧文本工具调用格式；工具层包含重复失败/无进展 guardrail 和敏感信息脱敏。
 - `models.roles` 模型路由：编码、记忆提取、后台复盘、Skill 整理、语义召回可以使用不同模型。
+- 动态模型 runtime：支持 `provider_profiles`、实时模型列表、本地模型列表缓存，以及 Codex CLI、Claude Code、Gemini CLI、Qwen CLI 的 best-effort 登录复用。
 
 仍属于第一版或后续规划：
 
@@ -107,10 +108,10 @@ selfmind model
 
 交互流程参考 Hermes：
 
-1. 选择供应商：OpenAI、Anthropic、Google、已保存的自定义 endpoint，或 `Custom endpoint (enter URL manually)`。
-2. 输入或保留 API key。
-3. SelfMind 尝试实时拉取供应商模型列表。
-4. 选择模型；如果拉取失败，可以手动输入模型名。
+1. 选择供应商：OpenAI、Anthropic、Google、`Custom endpoint (enter URL manually)`、Coding CLI 登录复用入口，或其它内置 provider profile。
+2. 输入或保留 API key；Codex CLI、Claude Code、Gemini CLI、Qwen CLI 会尝试复用已有 CLI 登录。
+3. SelfMind 尝试实时拉取供应商模型列表并写入本地缓存。
+4. 选择模型；如果实时列表不可用，会使用 fallback 列表或允许手动输入模型名。
 5. 选择结果写入 `config.yaml`。
 
 常用非交互命令：
@@ -125,12 +126,15 @@ selfmind model set custom:local-llm qwen2.5-coder
 ### 配置示例
 
 ```yaml
+# 默认对话模型。model.provider 可以指向 providers、providers.custom 或 provider_profiles。
 model:
   provider: "openai"
   default: "gpt-4o"
 
+# 核心 provider 配置区，适合 OpenAI / Anthropic / Google 这类一等公民供应商。
 providers:
   openai:
+    # 支持 ${ENV_NAME}，运行时会从环境变量展开。
     api_key: "${OPENAI_API_KEY}"
     base_url: "https://api.openai.com/v1"
     protocol: "openai_chat"
@@ -142,42 +146,71 @@ providers:
     api_key: "${GOOGLE_API_KEY}"
     base_url: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
     protocol: "openai_compatible"
+  # 一次性或本地自定义 endpoint，例如 Ollama、本地模型网关、临时企业代理。
+  # 使用时把 model.provider 设置为 custom:ollama。
   custom:
     - name: "ollama"
       base_url: "http://localhost:11434/v1"
       api_key: ""
       protocol: "openai_compatible"
       model: "llama3"
+      # 可选：给本地模型补充上下文长度等元信息。
       models:
         llama3:
           context_length: 8192
 
+# 可扩展 provider 注册表。适合 MiniMax、Kimi、DeepSeek、Z.AI、OpenRouter、
+# 企业内部模型网关，以及未来协议兼容的新厂商。
+provider_profiles:
+  minimax:
+    api_key: "${MINIMAX_API_KEY}"
+    base_url: "https://api.minimax.io/anthropic"
+    protocol: "anthropic_messages"
+    model: "MiniMax-M2.7"
+  kimi-coding:
+    api_key: "${KIMI_CODING_API_KEY}"
+    base_url: "https://api.kimi.com/coding/v1"
+    protocol: "openai_compatible"
+    model: "kimi-for-coding"
+
+# 可选：SelfMind 自己的 JSON 凭证文件，用来把密钥从 config.yaml 拆出去。
+auth:
+  credentials_file: "~/.selfmind/auth.json"
+
+# 本地数据目录，SQLite 会保存会话、记忆、任务、运行状态等数据。
 storage:
   type: "sqlite"
   data_dir: "~/.selfmind/data"
 
+# 常驻 gateway 配置。CLI、IM/Webhook 会通过它共享任务状态。
 gateway:
   addr: "127.0.0.1:8765"
+  # 为空时默认本机使用；部署到服务器或开放网络时建议设置 token。
   token: ""
   drain_timeout: "30s"
+  # 通用 outbound webhook，可用于自定义 IM relay 回发。
   outbound_webhook_url: ""
   outbound_webhook_token: ""
+  # Telegram 回发 token；其它平台可以接入 gateway webhook。
   telegram_token: "${TELEGRAM_BOT_TOKEN}"
   delivery_max_message_chars: 3500
   delivery_retry_attempts: 3
 
+# Agent 主循环配置。
 agent:
   soul: "You are SelfMind, a helpful AI assistant."
   max_iterations: 90
   max_retries: 3
   log_level: "INFO"
 
+# 长期记忆和语义召回配置。
 memory:
   auto_extract_interval: 5
   auto_extract_min_chars: 80
   semantic_recall: true
   use_memory_fence: true
 
+# 后台学习/复盘相关配置，用于沉淀 memory 和 skill。
 evolution:
   enabled: true
   mode: "auto"
@@ -185,31 +218,40 @@ evolution:
   auto_archive_confidence: 0.8
   nudge_interval: 10
 
+# 角色模型路由。不同后台任务可以使用更便宜或更快的模型。
 models:
   source: "local"
   roles:
+    # 主编码/任务执行模型。
     coding_agent:
       provider: "openai"
       model: "gpt-4o"
+    # 记忆抽取模型。
     memory_extract:
       provider: "google"
       model: "gemini-1.5-flash"
+    # 任务结束后的后台复盘模型。
     background_review:
       provider: "google"
       model: "gemini-1.5-flash"
+    # Skill 整理、归档、治理模型。
     skill_curator:
       provider: "google"
       model: "gemini-1.5-flash"
+    # 历史会话语义召回模型。
     semantic_recall:
       provider: "google"
       model: "gemini-1.5-flash"
 
+# MCP server 列表，默认关闭。
 mcp:
   servers: []
 
+# 定时任务入口，个人版可先保持默认。
 cron:
   enabled: true
 
+# 多 Agent 委派配置；为空时使用默认模型策略。
 delegation:
   provider: ""
   model: ""
@@ -217,12 +259,109 @@ delegation:
   max_retries: 3
   max_iterations: 50
 
+# 大段粘贴识别阈值，用于 TUI 输入体验。
 editor:
   large_paste_chars: 1000
   large_paste_lines: 10
 ```
 
-旧配置仍兼容：`providers.openai_api_key`、`providers.anthropic_api_key`、`providers.gemini_api_key`、`agent.provider`、`agent.model` 仍会读取，但新的保存格式会使用 `model` 和嵌套 `providers`。
+### 模型配置字段说明
+
+`model` 是当前默认模型选择：
+
+| 字段 | 说明 |
+|---|---|
+| `model.provider` | 默认 provider ID，可以是 `openai`、`anthropic`、`google`，也可以是 `custom:<name>` 或 `provider_profiles` 里的 ID。 |
+| `model.default` | 默认模型名，例如 `gpt-4o`、`kimi-for-coding`、`MiniMax-M2.7`。 |
+
+`providers` 是核心 provider 配置区，适合放 SelfMind 内置的一等公民供应商：
+
+| 字段 | 说明 |
+|---|---|
+| `providers.openai` | OpenAI 官方接口配置。默认协议通常是 `openai_chat`。 |
+| `providers.anthropic` | Anthropic Messages API 配置。默认协议通常是 `anthropic_messages`。 |
+| `providers.google` | Google Gemini 的 OpenAI-compatible endpoint 配置。 |
+| `providers.custom` | 一次性或本地自定义 endpoint 列表，例如 Ollama、本地网关、临时企业代理。使用时 `model.provider` 写成 `custom:<name>`。 |
+
+`provider_profiles` 是可扩展 provider 注册表，适合放 MiniMax、Kimi、DeepSeek、Z.AI、OpenRouter、企业内部模型网关，或未来新增但协议兼容的厂商：
+
+| 字段 | 说明 |
+|---|---|
+| `provider_profiles.<id>` | `<id>` 会成为 provider ID，例如 `kimi-coding`、`minimax`。 |
+| `api_key` | API key，支持 `${ENV_NAME}` 环境变量展开。也可以留空，改用环境变量或 `auth.credentials_file`。 |
+| `base_url` | 供应商 endpoint。OpenAI-compatible 通常以 `/v1` 结尾；Anthropic-compatible 通常填供应商的 Anthropic 网关根地址。 |
+| `protocol` | 协议族：`openai_chat`、`openai_compatible`、`anthropic_messages`、`codex_responses`。只要新厂商兼容这些协议，就不需要改代码。 |
+| `model` | 该 profile 的默认模型名。 |
+
+`auth.credentials_file` 是可选的本地 JSON 凭证文件，用来把密钥从 `config.yaml` 里拆出去：
+
+```yaml
+auth:
+  credentials_file: "~/.selfmind/auth.json"
+```
+
+凭证解析优先级是：命令行/角色显式传入的 key、`config.yaml` 中的 `api_key`、`auth.credentials_file`、环境变量、外部 CLI 登录复用。外部 CLI 登录复用只覆盖 Codex CLI、Claude Code、Gemini CLI、Qwen CLI，并且不会刷新 OAuth token。
+
+推荐选择：
+
+- OpenAI、Anthropic、Google：优先写 `providers`。
+- Ollama、本地模型、临时 OpenAI-compatible endpoint：写 `providers.custom`。
+- MiniMax、Kimi、DeepSeek、Z.AI、OpenRouter、企业内部模型网关：优先写 `provider_profiles`。
+- 不想把密钥写进 YAML：写 `auth.credentials_file` 或用环境变量。
+
+### Provider Profiles 与认证复用
+
+SelfMind 当前的模型解析走 `internal/modelruntime`。它支持：
+
+- 内置 provider：`openai`、`anthropic`、`google`、`codex-cli`、`claude-code`、`gemini-cli`、`qwen-cli`、`openrouter`、`minimax`、`kimi-coding`、`deepseek`、`zai`、`alibaba-coding-plan`。
+- 自定义 OpenAI-compatible endpoint：运行 `selfmind model`，选择 `Custom endpoint (enter URL manually)`。
+- `provider_profiles`：当厂商只是 base URL、协议、模型名变化时，直接在 YAML 中配置，不需要重新构建。
+- P2 认证复用只覆盖 Codex CLI、Claude Code、Gemini CLI、Qwen CLI。其它厂商使用 API key、环境变量展开或 `auth.credentials_file`。
+
+示例：
+
+```yaml
+model:
+  provider: "kimi-coding"
+  default: "kimi-for-coding"
+
+provider_profiles:
+  kimi-coding:
+    api_key: "${KIMI_CODING_API_KEY}"
+    base_url: "https://api.kimi.com/coding/v1"
+    protocol: "openai_compatible"
+    model: "kimi-for-coding"
+  minimax:
+    api_key: "${MINIMAX_API_KEY}"
+    base_url: "https://api.minimax.io/anthropic"
+    protocol: "anthropic_messages"
+    model: "MiniMax-M2.7"
+
+auth:
+  credentials_file: "~/.selfmind/auth.json"
+```
+
+`auth.credentials_file` 是 SelfMind 自己的 JSON 凭证文件，格式如下：
+
+```json
+{
+  "providers": {
+    "codex-cli": { "access_token": "..." },
+    "kimi-coding": { "api_key": "..." }
+  }
+}
+```
+
+如果复用外部 CLI 登录，SelfMind 会尝试读取常见本地认证文件，例如 `~/.codex/auth.json`、Claude Code、Gemini CLI、Qwen CLI 的 OAuth 文件。当前不会刷新 OAuth token；过期后需要回到原 CLI 重新登录。
+
+MiniMax 和 Kimi Coding Plan 接入：
+
+- MiniMax Coding Plan：使用 `provider: "minimax"`，`base_url: "https://api.minimax.io/anthropic"`，`protocol: "anthropic_messages"`，模型用 `MiniMax-M2.7` 或 `MiniMax-M2.7-highspeed`。
+- Kimi Coding Plan：使用 `provider: "kimi-coding"`，`base_url: "https://api.kimi.com/coding/v1"`，`protocol: "openai_compatible"`，模型固定用 `kimi-for-coding`。
+- 如果要走 Kimi Code 的 Anthropic-compatible endpoint，把 `provider_profiles.kimi-coding.base_url` 设置为 `https://api.kimi.com/coding`，`protocol` 设置为 `anthropic_messages`，模型仍然使用 `kimi-for-coding`。
+- 如果要用普通 Kimi Open Platform API，而不是 Coding Plan 额度，使用自定义 OpenAI-compatible endpoint，`base_url` 设置为 `https://api.moonshot.ai/v1`。
+
+旧配置仍兼容：`providers.openai_api_key`、`providers.anthropic_api_key`、`providers.gemini_api_key`、`providers.openrouter_api_key`、`providers.minimax_api_key`、`agent.provider`、`agent.model` 仍会读取，但新的保存格式会使用 `model`、嵌套 `providers` 和 `provider_profiles`。
 
 ## 模型路由
 
@@ -449,7 +588,7 @@ IM 异步任务完成后，如果配置了 outbound sender，gateway 会把结�
 - `gateway.telegram_token`：使用 Telegram `sendMessage` 回发到 inbound 的 `channel/chat_id`。
 - `gateway.outbound_webhook_url`：把统一 JSON payload POST 到自定义 relay。
 
-长消息会按 `gateway.delivery_max_message_chars` 拆分，失败会按 `gateway.delivery_retry_attempts` 重试。任务进度可以用 `/status`，最近事件可以用 `/events`。
+长消息会按 `gateway.delivery_max_message_chars` 拆分，失败会按 `gateway.delivery_retry_attempts` 重试。gateway 任务进度可以用 `/status`，最近事件可以用 `/events`。
 
 ## Linux 发布
 
@@ -492,6 +631,7 @@ internal/app/              storage、agent、tools、gateway 组装
 internal/platform/config/  YAML 配置加载、默认值、兼容和保存
 internal/kernel/           Agent 循环、记忆、复盘、原生工具调用
 internal/kernel/llm/       模型适配器和模型路由
+internal/modelruntime/     provider profiles、credentials、model catalog/cache
 internal/tools/            内置工具和工具中间件
 internal/gateway/          TUI、HTTP API、router、渠道 adapter
 internal/control/          身份、workspace、task、run 状态
@@ -514,8 +654,19 @@ internal/runtime/gateway/  gateway 进程、pid、lock、state、start/stop
 
 新增模型厂商：
 
-- OpenAI-compatible 厂商：优先用 `selfmind model` 的自定义 endpoint，不需要写代码。
-- 新协议族：在 `internal/kernel/llm` 实现新的 adapter，并在 `internal/app/agent.go` 接入。
+大多数新厂商不需要改代码。
+
+- 一次性 OpenAI-compatible endpoint：运行 `selfmind model`，选择 `Custom endpoint (enter URL manually)`。
+- 可复用的本地配置：在 `provider_profiles.<id>` 里添加 `base_url`、`protocol`、`api_key` 和可选 `model`。
+- 新协议族才需要新增 Go adapter。当前核心协议族包括 OpenAI Chat Completions、OpenAI-compatible、Anthropic Messages、Google Gemini 的 OpenAI-compatible endpoint、OpenAI/Codex Responses-compatible endpoint。
+
+新增协议族时：
+
+1. 在 `internal/kernel/llm` 实现 `llm.Provider`。
+2. 在 `internal/modelruntime` 增加 protocol/runtime metadata。
+3. credential discovery 和 model-list fetching 仍放在 `internal/modelruntime`，不要塞进 `internal/app`。
+4. `internal/app/agent.go` 只做 protocol 到 adapter 的装配。
+5. 补 streaming、native tool calls、认证解析、模型列表和 `models.roles` 路由测试。
 
 新增 IM 平台：
 

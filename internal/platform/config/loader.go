@@ -30,6 +30,11 @@ providers:
     protocol: "openai_compatible"
   custom: []
 
+provider_profiles: {}
+
+auth:
+  credentials_file: "~/.selfmind/auth.json"
+
 storage:
   type: "sqlite"
   data_dir: "~/.selfmind/data"
@@ -74,19 +79,21 @@ type Options struct {
 }
 
 type Config struct {
-	Path       string           `mapstructure:"-" yaml:"-"`
-	Model      ModelConfig      `mapstructure:"model" yaml:"model,omitempty"`
-	Agent      AgentConfig      `mapstructure:"agent" yaml:"agent,omitempty"`
-	Storage    StorageConfig    `mapstructure:"storage" yaml:"storage,omitempty"`
-	Gateway    GatewayConfig    `mapstructure:"gateway" yaml:"gateway,omitempty"`
-	Providers  ProvidersConfig  `mapstructure:"providers" yaml:"providers,omitempty"`
-	Evolution  EvolutionConfig  `mapstructure:"evolution" yaml:"evolution,omitempty"`
-	MCP        MCPConfig        `mapstructure:"mcp" yaml:"mcp,omitempty"`
-	Delegation DelegationConfig `mapstructure:"delegation" yaml:"delegation,omitempty"`
-	Cron       CronConfig       `mapstructure:"cron" yaml:"cron,omitempty"`
-	Editor     EditorConfig     `mapstructure:"editor" yaml:"editor,omitempty"`
-	Memory     MemoryConfig     `mapstructure:"memory" yaml:"memory,omitempty"`
-	Models     ModelsConfig     `mapstructure:"models" yaml:"models,omitempty"`
+	Path             string                      `mapstructure:"-" yaml:"-"`
+	Model            ModelConfig                 `mapstructure:"model" yaml:"model,omitempty"`
+	Agent            AgentConfig                 `mapstructure:"agent" yaml:"agent,omitempty"`
+	Storage          StorageConfig               `mapstructure:"storage" yaml:"storage,omitempty"`
+	Gateway          GatewayConfig               `mapstructure:"gateway" yaml:"gateway,omitempty"`
+	Providers        ProvidersConfig             `mapstructure:"providers" yaml:"providers,omitempty"`
+	ProviderProfiles map[string]ProviderEndpoint `mapstructure:"provider_profiles" yaml:"provider_profiles,omitempty"`
+	Auth             AuthConfig                  `mapstructure:"auth" yaml:"auth,omitempty"`
+	Evolution        EvolutionConfig             `mapstructure:"evolution" yaml:"evolution,omitempty"`
+	MCP              MCPConfig                   `mapstructure:"mcp" yaml:"mcp,omitempty"`
+	Delegation       DelegationConfig            `mapstructure:"delegation" yaml:"delegation,omitempty"`
+	Cron             CronConfig                  `mapstructure:"cron" yaml:"cron,omitempty"`
+	Editor           EditorConfig                `mapstructure:"editor" yaml:"editor,omitempty"`
+	Memory           MemoryConfig                `mapstructure:"memory" yaml:"memory,omitempty"`
+	Models           ModelsConfig                `mapstructure:"models" yaml:"models,omitempty"`
 }
 
 type ModelConfig struct {
@@ -97,6 +104,10 @@ type ModelConfig struct {
 type EditorConfig struct {
 	LargePasteChars int `mapstructure:"large_paste_chars" yaml:"large_paste_chars,omitempty"`
 	LargePasteLines int `mapstructure:"large_paste_lines" yaml:"large_paste_lines,omitempty"`
+}
+
+type AuthConfig struct {
+	CredentialsFile string `mapstructure:"credentials_file" yaml:"credentials_file,omitempty"`
 }
 
 type MemoryConfig struct {
@@ -323,6 +334,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("gateway.addr", "127.0.0.1:8765")
 	v.SetDefault("gateway.delivery_max_message_chars", 3500)
 	v.SetDefault("gateway.delivery_retry_attempts", 3)
+	v.SetDefault("auth.credentials_file", "~/.selfmind/auth.json")
 	v.SetDefault("editor.large_paste_chars", 1000)
 	v.SetDefault("editor.large_paste_lines", 10)
 	v.SetDefault("memory.auto_extract_interval", 5)
@@ -337,6 +349,9 @@ func setDefaults(v *viper.Viper) {
 func (c *Config) Normalize() {
 	if c.Models.Roles == nil {
 		c.Models.Roles = make(map[string]ModelRoleConfig)
+	}
+	if c.ProviderProfiles == nil {
+		c.ProviderProfiles = make(map[string]ProviderEndpoint)
 	}
 	if strings.TrimSpace(c.Models.Source) == "" {
 		c.Models.Source = "local"
@@ -355,6 +370,7 @@ func (c *Config) Normalize() {
 	c.Gateway.OutboundWebhookURL = expandEnvRef(c.Gateway.OutboundWebhookURL)
 	c.Gateway.OutboundWebhookToken = expandEnvRef(c.Gateway.OutboundWebhookToken)
 	c.Gateway.TelegramToken = expandEnvRef(c.Gateway.TelegramToken)
+	c.Auth.CredentialsFile = cleanPath(firstNonEmpty(c.Auth.CredentialsFile, "~/.selfmind/auth.json"))
 	c.Delegation.Provider = expandEnvRef(c.Delegation.Provider)
 	c.Delegation.Model = expandEnvRef(c.Delegation.Model)
 	c.Delegation.APIKey = expandEnvRef(c.Delegation.APIKey)
@@ -375,6 +391,21 @@ func (c *Config) Normalize() {
 		c.Providers.Custom[i].APIKey = expandEnvRef(c.Providers.Custom[i].APIKey)
 		c.Providers.Custom[i].Protocol = firstNonEmpty(c.Providers.Custom[i].Protocol, "openai_compatible")
 		c.Providers.Custom[i].Model = expandEnvRef(c.Providers.Custom[i].Model)
+	}
+	for name, endpoint := range c.ProviderProfiles {
+		trimmed := strings.TrimSpace(name)
+		if trimmed == "" {
+			delete(c.ProviderProfiles, name)
+			continue
+		}
+		endpoint.APIKey = expandEnvRef(endpoint.APIKey)
+		endpoint.BaseURL = expandEnvRef(endpoint.BaseURL)
+		endpoint.Protocol = expandEnvRef(endpoint.Protocol)
+		endpoint.Model = expandEnvRef(endpoint.Model)
+		if trimmed != name {
+			delete(c.ProviderProfiles, name)
+		}
+		c.ProviderProfiles[strings.ToLower(trimmed)] = endpoint
 	}
 	for name, role := range c.Models.Roles {
 		role.Provider = expandEnvRef(role.Provider)

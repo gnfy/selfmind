@@ -10,6 +10,7 @@ import (
 	"selfmind/internal/kernel"
 	"selfmind/internal/kernel/llm"
 	"selfmind/internal/kernel/memory"
+	"selfmind/internal/modelruntime"
 	"selfmind/internal/platform/config"
 	"selfmind/internal/platform/log"
 	"selfmind/internal/tools"
@@ -80,90 +81,28 @@ func (m *mockProvider) StreamChat(ctx context.Context, req llm.ChatRequest) (<-c
 }
 
 func buildLLMProvider(cfg *config.Config) llm.Provider {
-	providerName := cfg.EffectiveProvider()
-	modelName := cfg.EffectiveModel()
-	pType := strings.ToLower(providerName)
-
-	// 1. 如果显式指定了供应商，优先使用
-	switch pType {
-	case "anthropic":
-		if cfg.Providers.Anthropic.APIKey != "" {
-			ad := llm.NewAnthropicAdapter(cfg.Providers.Anthropic.APIKey)
-			if modelName != "" {
-				ad.Model = modelName
-			}
-			ad.BaseURL = anthropicMessagesURL(cfg.Providers.Anthropic.BaseURL)
-			return ad
-		}
-	case "openai":
-		if cfg.Providers.OpenAI.APIKey != "" {
-			ad := llm.NewOpenAIAdapter(cfg.Providers.OpenAI.APIKey)
-			if modelName != "" {
-				ad.Model = modelName
-			}
-			ad.BaseURL = chatCompletionsURL(cfg.Providers.OpenAI.BaseURL)
-			return ad
-		}
-	case "openrouter":
-		if cfg.Providers.OpenRouterAPIKey != "" {
-			ad := llm.NewOpenRouterAdapter(cfg.Providers.OpenRouterAPIKey)
-			if modelName != "" {
-				ad.Model = modelName
-			}
-			return ad
-		}
-	case "gemini", "google":
-		if cfg.Providers.Google.APIKey != "" {
-			ad := llm.NewGeminiAdapter(cfg.Providers.Google.APIKey)
-			if modelName != "" {
-				ad.Model = modelName
-			}
-			ad.BaseURL = googleChatCompletionsURL(cfg.Providers.Google.BaseURL)
-			return ad
-		}
-	case "minimax":
-		if cfg.Providers.MiniMaxAPIKey != "" {
-			ad := llm.NewMiniMaxAdapter(cfg.Providers.MiniMaxAPIKey)
-			if modelName != "" {
-				ad.Model = modelName
-			}
-			return ad
+	// All normal provider construction starts from modelruntime so config,
+	// provider profiles, auth reuse, and legacy compatibility share one path.
+	rt, err := modelruntime.NewResolver(cfg).Resolve(context.Background(), modelruntime.Selection{})
+	if err == nil {
+		if provider := buildProviderFromRuntime(rt); provider != nil {
+			return provider
 		}
 	}
-
-	// 2. 检查自定义动态供应商
-	for _, cp := range cfg.Providers.Custom {
-		if customProviderMatches(cp.Name, providerName) {
-			selectedModel := firstNonEmpty(modelName, cp.Model)
-			return llm.NewGenericOpenAIAdapter(cp.Name, chatCompletionsURL(cp.BaseURL), cp.APIKey, selectedModel)
-		}
+	if err != nil {
+		log.Warn("no LLM provider resolved, using mock provider", "error", err, "hint", "run `selfmind model` or edit config.yaml")
+	} else {
+		log.Warn("no LLM provider adapter available, using mock provider", "hint", "run `selfmind model` or edit config.yaml")
 	}
-
-	// 3. 自动匹配可用供应商 (Fallback 逻辑)
-	switch {
-	case cfg.Providers.Anthropic.APIKey != "":
-		ad := llm.NewAnthropicAdapter(cfg.Providers.Anthropic.APIKey)
-		ad.BaseURL = anthropicMessagesURL(cfg.Providers.Anthropic.BaseURL)
-		return ad
-	case cfg.Providers.Google.APIKey != "":
-		ad := llm.NewGeminiAdapter(cfg.Providers.Google.APIKey)
-		ad.BaseURL = googleChatCompletionsURL(cfg.Providers.Google.BaseURL)
-		return ad
-	case cfg.Providers.OpenAI.APIKey != "":
-		ad := llm.NewOpenAIAdapter(cfg.Providers.OpenAI.APIKey)
-		ad.BaseURL = chatCompletionsURL(cfg.Providers.OpenAI.BaseURL)
-		return ad
-	case cfg.Providers.MiniMaxAPIKey != "":
-		return llm.NewMiniMaxAdapter(cfg.Providers.MiniMaxAPIKey)
-	case cfg.Providers.OpenRouterAPIKey != "":
-		return llm.NewOpenRouterAdapter(cfg.Providers.OpenRouterAPIKey)
-	default:
-		log.Warn("no LLM API key configured, using mock provider", "hint", "run `selfmind model` or edit config.yaml")
-		return &mockProvider{}
-	}
+	return &mockProvider{}
 }
 
 func defaultProviderName(cfg *config.Config) string {
+	rt, err := modelruntime.NewResolver(cfg).Resolve(context.Background(), modelruntime.Selection{})
+	if err == nil && strings.TrimSpace(rt.Provider) != "" {
+		return rt.Provider
+	}
+
 	pName := strings.ToLower(strings.TrimSpace(cfg.EffectiveProvider()))
 	if pName != "" {
 		return pName
@@ -193,7 +132,64 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
+func buildProviderFromRuntime(rt modelruntime.Runtime) llm.Provider {
+	// Keep this switch as the narrow app-layer boundary: modelruntime resolves
+	// metadata and credentials, while llm adapters only speak provider protocols.
+	model := strings.TrimSpace(rt.Model)
+	switch modelruntime.NormalizeProtocol(rt.Protocol) {
+	case modelruntime.ProtocolAnthropic:
+		ad := llm.NewAnthropicAdapter(rt.APIKey)
+		if model != "" {
+			ad.Model = model
+		}
+		ad.BaseURL = anthropicMessagesURL(rt.BaseURL)
+		return ad
+	case modelruntime.ProtocolResponses:
+		return llm.NewResponsesAdapter(rt.APIKey, rt.BaseURL, model)
+	case modelruntime.ProtocolOpenAIChat:
+		ad := llm.NewOpenAIAdapter(rt.APIKey)
+		if model != "" {
+			ad.Model = model
+		}
+		ad.BaseURL = chatCompletionsURL(rt.BaseURL)
+		return ad
+	case modelruntime.ProtocolOpenAICompatible:
+		provider := strings.ToLower(strings.TrimSpace(rt.Provider))
+		if provider == "openrouter" {
+			ad := llm.NewOpenRouterAdapter(rt.APIKey)
+			if model != "" {
+				ad.Model = model
+			}
+			ad.BaseURL = chatCompletionsURL(rt.BaseURL)
+			return ad
+		}
+		if provider == "google" || provider == "gemini" || provider == "gemini-cli" {
+			ad := llm.NewGeminiAdapter(rt.APIKey)
+			if model != "" {
+				ad.Model = model
+			}
+			ad.BaseURL = googleChatCompletionsURL(rt.BaseURL)
+			return ad
+		}
+		return llm.NewGenericOpenAIAdapter(rt.Provider, chatCompletionsURL(rt.BaseURL), rt.APIKey, model)
+	default:
+		return nil
+	}
+}
+
 func buildProviderForSelection(cfg *config.Config, providerName, model, baseURL, apiKey string) llm.Provider {
+	// Model roles and CLI overrides use the same resolver as the default agent;
+	// the legacy switch below exists only for older config shapes.
+	rt, err := modelruntime.NewResolver(cfg).Resolve(context.Background(), modelruntime.Selection{
+		Provider: providerName,
+		Model:    model,
+		BaseURL:  baseURL,
+		APIKey:   apiKey,
+	})
+	if err == nil {
+		return buildProviderFromRuntime(rt)
+	}
+
 	pType := strings.ToLower(strings.TrimSpace(providerName))
 	switch pType {
 	case "anthropic":
@@ -342,6 +338,8 @@ func buildKeyGetter(mem *memory.MemoryManager, tenantID, provider string) func()
 }
 
 func applyDynamicKeyGetter(provider llm.Provider, mem *memory.MemoryManager, tenantID, providerName string) {
+	// SaaS/user-level secrets can override process config at call time without
+	// rebuilding adapters or leaking tenant-specific keys into global state.
 	if provider == nil || providerName == "" {
 		return
 	}
@@ -359,10 +357,14 @@ func applyDynamicKeyGetter(provider llm.Provider, mem *memory.MemoryManager, ten
 		p.KeyGetter = getter
 	case *llm.OpenRouterAdapter:
 		p.KeyGetter = getter
+	case *llm.ResponsesAdapter:
+		p.KeyGetter = getter
 	}
 }
 
 func buildModelGateway(cfg *config.Config, mem *memory.MemoryManager, tenantID string, fallbackProvider llm.Provider) *llm.PolicyGateway {
+	// Role profiles let expensive/slow jobs such as review or memory extraction
+	// use different models while the main coding agent keeps its default model.
 	pName := defaultProviderName(cfg)
 	applyDynamicKeyGetter(fallbackProvider, mem, tenantID, pName)
 
@@ -420,31 +422,8 @@ func InitAgent(mem *memory.MemoryManager, cfg *config.Config, tenantID string) (
 	if tenantID == "" {
 		tenantID = "default"
 	}
-	pName := strings.ToLower(cfg.EffectiveProvider())
-	if pName == "" {
-		// 回退探测逻辑
-		if cfg.Providers.Anthropic.APIKey != "" {
-			pName = "anthropic"
-		} else if cfg.Providers.Google.APIKey != "" {
-			pName = "google"
-		} else if cfg.Providers.OpenAI.APIKey != "" {
-			pName = "openai"
-		}
-	}
-
-	// 注入 KeyGetter
-	if pName != "" {
-		getter := buildKeyGetter(mem, tenantID, pName)
-		if a, ok := provider.(*llm.AnthropicAdapter); ok {
-			a.KeyGetter = getter
-		} else if o, ok := provider.(*llm.OpenAIAdapter); ok {
-			o.KeyGetter = getter
-		} else if g, ok := provider.(*llm.GeminiAdapter); ok {
-			g.KeyGetter = getter
-		} else if m, ok := provider.(*llm.MiniMaxAdapter); ok {
-			m.KeyGetter = getter
-		}
-	}
+	pName := defaultProviderName(cfg)
+	applyDynamicKeyGetter(provider, mem, tenantID, pName)
 
 	modelGateway := buildModelGateway(cfg, mem, tenantID, provider)
 	codingProvider := modelGateway.ProviderForRole(llm.RoleCodingAgent)

@@ -78,6 +78,20 @@ Read the full local architecture note first:
 - Model/provider choice should go through role-based routing. Keep roles such
   as `coding_agent`, `memory_extract`, `background_review`, `skill_curator`,
   and `semantic_recall` stable so they can become SaaS policy keys later.
+- Provider discovery, credential resolution, model-list fetching, and profile
+  overrides belong in `internal/modelruntime`. Do not add vendor auth probing
+  or model-list fetch logic directly to `internal/app/agent.go` or LLM
+  adapters.
+- When adding or changing core runtime code, add concise intent/boundary
+  comments for exported types, non-obvious control flow, compatibility paths,
+  and invariants. This especially applies to `internal/modelruntime`, agent
+  wiring, gateway runner/control, tool dispatch, and memory/skill learning.
+  Comments should explain why the boundary exists or what must stay true; do
+  not restate simple assignments, and do not leave mojibake or hidden-encoding
+  comments.
+- P2 auth reuse is intentionally limited to Codex CLI, Claude Code, Gemini
+  CLI, and Qwen CLI. Other model vendors should use API keys, custom
+  OpenAI-compatible endpoints, or `provider_profiles`.
 - Tool calling should stay Hermes-like: pass tool schemas as native LLM
   `tool_calls` where the provider supports it, preserve `tool_call_id` on
   tool result messages, and keep `[TOOL:...]` only as a compatibility fallback.
@@ -121,6 +135,8 @@ Read the full local architecture note first:
   task status, handoff, and IM/CLI status cards.
 - `internal/kernel/llm/model_gateway.go`: role-based model routing.
 - `internal/kernel/llm/anthropic_adapter.go`: Anthropic Messages adapter.
+- `internal/modelruntime/`: provider metadata, credential resolution, external
+  CLI auth reuse, and live model catalog/cache.
 - `internal/kernel/native_tool_call.go`: native/fallback tool-call conversion,
   structured result messages, and safe parallel execution policy.
 - `internal/tools/session_search.go`: tenant-aware history search.

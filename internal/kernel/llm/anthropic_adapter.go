@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 )
 
 type AnthropicAdapter struct {
@@ -72,6 +73,11 @@ func (a *AnthropicAdapter) Chat(ctx context.Context, req ChatRequest) (*ChatResp
 		return nil, fmt.Errorf("create request: %w", err)
 	}
 	httpReq.Header.Set("x-api-key", apiKey)
+	if isAnthropicOAuthToken(apiKey) {
+		httpReq.Header.Del("x-api-key")
+		httpReq.Header.Set("Authorization", "Bearer "+apiKey)
+		httpReq.Header.Set("anthropic-beta", "oauth-2025-04-20")
+	}
 	httpReq.Header.Set("anthropic-version", "2023-06-01")
 	httpReq.Header.Set("content-type", "application/json")
 
@@ -121,6 +127,11 @@ func (a *AnthropicAdapter) StreamChat(ctx context.Context, req ChatRequest) (<-c
 		return nil, fmt.Errorf("create request: %w", err)
 	}
 	httpReq.Header.Set("x-api-key", apiKey)
+	if isAnthropicOAuthToken(apiKey) {
+		httpReq.Header.Del("x-api-key")
+		httpReq.Header.Set("Authorization", "Bearer "+apiKey)
+		httpReq.Header.Set("anthropic-beta", "oauth-2025-04-20")
+	}
 	httpReq.Header.Set("anthropic-version", "2023-06-01")
 	httpReq.Header.Set("content-type", "application/json")
 
@@ -233,6 +244,11 @@ func (a *AnthropicAdapter) apiKey() string {
 		}
 	}
 	return apiKey
+}
+
+func isAnthropicOAuthToken(token string) bool {
+	token = strings.TrimSpace(token)
+	return strings.HasPrefix(token, "sk-ant-oat") || strings.HasPrefix(token, "cc-")
 }
 
 func (a *AnthropicAdapter) requestFromChat(req ChatRequest, stream bool) AnthropicRequest {

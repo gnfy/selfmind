@@ -35,6 +35,7 @@ internal/app/              应用组装层
 internal/platform/config/  YAML 配置 schema、默认值、兼容、保存
 internal/kernel/           agent loop、memory、review、native tool calls
 internal/kernel/llm/       provider adapters 和 role-based model gateway
+internal/modelruntime/     provider profiles、credential resolution、model catalog/cache
 internal/tools/            内置工具和工具 middleware
 internal/gateway/          TUI、HTTP API、router、delivery、channel adapters
 internal/control/          control.db 身份/workspace/task/run 状态
@@ -119,6 +120,21 @@ providers:
         llama3:
           context_length: 8192
 
+provider_profiles:
+  minimax:
+    api_key: "${MINIMAX_API_KEY}"
+    base_url: "https://api.minimax.io/anthropic"
+    protocol: "anthropic_messages"
+    model: "MiniMax-M2.7"
+  kimi-coding:
+    api_key: "${KIMI_CODING_API_KEY}"
+    base_url: "https://api.kimi.com/coding/v1"
+    protocol: "openai_compatible"
+    model: "kimi-for-coding"
+
+auth:
+  credentials_file: "~/.selfmind/auth.json"
+
 storage:
   type: "sqlite"
   data_dir: "~/.selfmind/data"
@@ -187,9 +203,23 @@ selfmind model set openai gpt-4o
 | OpenAI | Chat Completions / native tools | `llm.OpenAIAdapter` |
 | Anthropic | Messages API | `llm.AnthropicAdapter` |
 | Google | OpenAI-compatible Gemini endpoint | `llm.GeminiAdapter` |
+| Codex CLI | Responses-compatible Codex endpoint | `llm.ResponsesAdapter` |
+| Claude Code | Anthropic Messages + external OAuth | `llm.AnthropicAdapter` |
+| Gemini CLI | OpenAI-compatible Gemini endpoint + external OAuth | `llm.GeminiAdapter` |
+| Qwen CLI | OpenAI-compatible endpoint + external OAuth | `llm.GenericOpenAIAdapter` |
+| Provider profile | OpenAI-compatible / Anthropic Messages / Responses | 由 `modelruntime.Runtime.Protocol` 选择 |
 | Custom | OpenAI-compatible endpoint | `llm.GenericOpenAIAdapter` |
 
 大多数新厂商如果提供 OpenAI-compatible API，都应该直接通过自定义 endpoint 接入，不需要改代码。只有遇到真正不同的协议族时，才新增 Go adapter。
+
+模型 runtime 边界：
+
+- `internal/modelruntime/profile.go` 管内置 provider 元数据、别名、协议族、环境变量、模型列表方式和 fallback models。
+- `internal/modelruntime/resolver.go` 把 YAML、环境变量、SelfMind auth JSON、外部 CLI 登录解析成 `Runtime`。
+- `internal/modelruntime/catalog.go` 拉取并缓存模型列表，不负责创建 LLM adapter。
+- `internal/app/agent.go` 只把 `Runtime` 转成 adapter 并组装 role routing，不再写厂商级认证探测逻辑。
+- `internal/cliapp/model_commands.go` 管用户交互式 provider/model picker；`Custom endpoint (enter URL manually)` 保持第 4 项，兼容脚本输入。
+- P2 外部认证复用只覆盖 Codex CLI、Claude Code、Gemini CLI、Qwen CLI。其它厂商走 API key、自定义 endpoint 或 `provider_profiles`。
 
 ### Role-Based Model Routing
 
@@ -412,7 +442,9 @@ skill_manage    -> skill mutation and hot reload
 
 先判断是否真的需要改代码：
 
-- OpenAI-compatible 厂商：使用 `selfmind model` 自定义 endpoint。
+- 一次性 OpenAI-compatible 厂商：使用 `selfmind model` 自定义 endpoint。
+- 可复用且只有 base URL、协议、模型名变化的厂商：优先新增或文档化 `provider_profiles.<id>` YAML 配置。
+- 内置厂商元数据、认证环境变量、实时模型列表：更新 `internal/modelruntime/profile.go` 和 `catalog.go`。
 - 新协议族：新增 Go adapter。
 
 新增 adapter 流程：
@@ -420,9 +452,10 @@ skill_manage    -> skill mutation and hot reload
 1. 实现 `llm.Provider`。
 2. 支持 `Chat`、`StreamChat`、`ChatCompletion`。
 3. provider 支持工具调用时，保留 native tool-call 行为。
-4. 在 `internal/app/agent.go` 接入构造逻辑。
-5. 只有通用 `ProviderEndpoint` 不够时，才扩展 config schema。
-6. 添加 streaming、错误处理、native tools、role routing 测试。
+4. 在 `internal/modelruntime` 增加 runtime/profile 元数据和认证解析测试。
+5. 在 `internal/app/agent.go` 只接入协议到 adapter 的构造逻辑。
+6. 只有 `ProviderEndpoint` / `provider_profiles` 不够时，才扩展 config schema。
+7. 添加 streaming、错误处理、native tools、认证解析、model catalog、role routing 测试。
 
 ## 新增 IM 平台
 

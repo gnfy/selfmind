@@ -4,7 +4,7 @@
 
 SelfMind is a Go-based personal AI agent runtime. The current product direction is not a one-off chatbot, but a long-running work agent that can be used from a local TUI, a local gateway, and IM/webhook channels while sharing identity, task state, workspace scope, memory, and skills.
 
-The short version: run `selfmind` for local interactive work, run `selfmind gateway start` when you want a 24/7 local agent, and use `selfmind model` to configure OpenAI, Anthropic, Google, or a custom OpenAI-compatible endpoint without rebuilding the binary.
+The short version: run `selfmind` for local interactive work, run `selfmind gateway start` when you want a 24/7 local agent, and use `selfmind model` to configure built-in providers, reuse selected coding-CLI logins, or add a custom OpenAI-compatible endpoint without rebuilding the binary.
 
 ## Current Capabilities
 
@@ -17,13 +17,14 @@ Available for daily personal use:
 - Generic IM webhook entrypoint: `POST /v1/im/{platform}`.
 - IM outbound foundation: generic webhook/Telegram delivery, long-message splitting, retry, and a durable outbound queue.
 - Account binding API so CLI, WeChat, Feishu, QQ-like relays, and other channels can resolve to the same `person_id`.
-- Durable task runtime state with run heartbeat, interrupted-run recovery, recent task events, and the `/events` control command.
+- Durable task runtime state with run heartbeat, interrupted-run recovery, recent task events, and gateway `/events` control responses.
 - Structured run outcomes and handoffs for compact `/status` task cards across CLI and IM channels.
 - Workspace isolation for file, search, patch, and terminal tools.
 - Long-term memory, session search, skill management, background review, and skill curator.
 - Tenant learning audit records for memory and skill mutations, including skill/memory history and basic undo.
 - Hermes-style native tool calling for OpenAI-compatible providers, with legacy text-tool fallback, repeated-failure/no-progress guardrails, and secret redaction.
 - Role-based model routing through `models.roles`, so coding, memory extraction, background review, skill curation, and semantic recall can use different models.
+- Dynamic model runtime with provider profiles, live model-list fetching, local model-list cache, and best-effort auth reuse for Codex CLI, Claude Code, Gemini CLI, and Qwen CLI.
 
 Still first-version or planned:
 
@@ -104,9 +105,9 @@ selfmind model
 
 The flow is Hermes-like:
 
-1. Choose a provider: OpenAI, Anthropic, Google, saved custom endpoints, or `Custom endpoint (enter URL manually)`.
-2. Enter or keep the API key.
-3. SelfMind tries to load the provider model list live.
+1. Choose a provider: OpenAI, Anthropic, Google, `Custom endpoint (enter URL manually)`, coding-CLI login reuse entries, or other built-in provider profiles.
+2. Enter or keep the API key. For Codex CLI, Claude Code, Gemini CLI, and Qwen CLI entries, SelfMind tries to reuse the existing CLI login instead.
+3. SelfMind tries to load the provider model list live and caches the list locally.
 4. Choose a model, or enter one manually if the list cannot be loaded.
 5. The choice is saved to `config.yaml`.
 
@@ -122,12 +123,17 @@ selfmind model set custom:local-llm qwen2.5-coder
 ### Config Example
 
 ```yaml
+# Default chat model. model.provider can point to providers,
+# providers.custom, or provider_profiles.
 model:
   provider: "openai"
   default: "gpt-4o"
 
+# Core provider config for first-class providers such as OpenAI, Anthropic,
+# and Google.
 providers:
   openai:
+    # ${ENV_NAME} values are expanded from the process environment.
     api_key: "${OPENAI_API_KEY}"
     base_url: "https://api.openai.com/v1"
     protocol: "openai_chat"
@@ -139,42 +145,71 @@ providers:
     api_key: "${GOOGLE_API_KEY}"
     base_url: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
     protocol: "openai_compatible"
+  # One-off or local custom endpoints, such as Ollama, a local model gateway,
+  # or a temporary enterprise proxy. Use with model.provider: "custom:ollama".
   custom:
     - name: "ollama"
       base_url: "http://localhost:11434/v1"
       api_key: ""
       protocol: "openai_compatible"
       model: "llama3"
+      # Optional model metadata for local or custom endpoints.
       models:
         llama3:
           context_length: 8192
 
+# Extensible provider registry for MiniMax, Kimi, DeepSeek, Z.AI, OpenRouter,
+# internal model gateways, and future compatible vendors.
+provider_profiles:
+  minimax:
+    api_key: "${MINIMAX_API_KEY}"
+    base_url: "https://api.minimax.io/anthropic"
+    protocol: "anthropic_messages"
+    model: "MiniMax-M2.7"
+  kimi-coding:
+    api_key: "${KIMI_CODING_API_KEY}"
+    base_url: "https://api.kimi.com/coding/v1"
+    protocol: "openai_compatible"
+    model: "kimi-for-coding"
+
+# Optional SelfMind-owned JSON credential file that keeps secrets out of YAML.
+auth:
+  credentials_file: "~/.selfmind/auth.json"
+
+# Local data directory. SQLite stores sessions, memory, tasks, and run state.
 storage:
   type: "sqlite"
   data_dir: "~/.selfmind/data"
 
+# Long-running gateway. CLI and IM/webhook channels share task state through it.
 gateway:
   addr: "127.0.0.1:8765"
+  # Empty is fine for local-only use. Set a token for servers or exposed ports.
   token: ""
   drain_timeout: "30s"
+  # Generic outbound webhook for custom IM relays.
   outbound_webhook_url: ""
   outbound_webhook_token: ""
+  # Telegram reply token. Other platforms can integrate through gateway webhooks.
   telegram_token: "${TELEGRAM_BOT_TOKEN}"
   delivery_max_message_chars: 3500
   delivery_retry_attempts: 3
 
+# Main agent loop settings.
 agent:
   soul: "You are SelfMind, a helpful AI assistant."
   max_iterations: 90
   max_retries: 3
   log_level: "INFO"
 
+# Long-term memory and semantic recall.
 memory:
   auto_extract_interval: 5
   auto_extract_min_chars: 80
   semantic_recall: true
   use_memory_fence: true
 
+# Background learning/review settings for memory and skill evolution.
 evolution:
   enabled: true
   mode: "auto"
@@ -182,31 +217,40 @@ evolution:
   auto_archive_confidence: 0.8
   nudge_interval: 10
 
+# Role-based model routing. Background jobs can use cheaper or faster models.
 models:
   source: "local"
   roles:
+    # Main coding/task execution model.
     coding_agent:
       provider: "openai"
       model: "gpt-4o"
+    # Memory extraction model.
     memory_extract:
       provider: "google"
       model: "gemini-1.5-flash"
+    # After-task background review model.
     background_review:
       provider: "google"
       model: "gemini-1.5-flash"
+    # Skill curation, archival, and governance model.
     skill_curator:
       provider: "google"
       model: "gemini-1.5-flash"
+    # Semantic session recall model.
     semantic_recall:
       provider: "google"
       model: "gemini-1.5-flash"
 
+# MCP servers. Empty by default.
 mcp:
   servers: []
 
+# Cron entrypoint. Personal mode can keep the default.
 cron:
   enabled: true
 
+# Multi-agent delegation settings. Empty values use the default model policy.
 delegation:
   provider: ""
   model: ""
@@ -214,12 +258,86 @@ delegation:
   max_retries: 3
   max_iterations: 50
 
+# Large-paste detection thresholds for the TUI editor.
 editor:
   large_paste_chars: 1000
   large_paste_lines: 10
 ```
 
-Old flat provider keys such as `providers.openai_api_key` and legacy `agent.provider` / `agent.model` are still read for compatibility, but new saves use the `model` and nested `providers` schema.
+### Model Config Fields
+
+`model` selects the default provider and model:
+
+| Field | Purpose |
+|---|---|
+| `model.provider` | Default provider ID. It can be a built-in provider such as `openai`, `anthropic`, or `google`, a custom endpoint such as `custom:<name>`, or an ID from `provider_profiles`. |
+| `model.default` | Default model name, such as `gpt-4o`, `kimi-for-coding`, or `MiniMax-M2.7`. |
+
+`providers` is the core provider config area for first-class built-in providers:
+
+| Field | Purpose |
+|---|---|
+| `providers.openai` | Official OpenAI API settings. The default protocol is usually `openai_chat`. |
+| `providers.anthropic` | Anthropic Messages API settings. The default protocol is usually `anthropic_messages`. |
+| `providers.google` | Google Gemini through its OpenAI-compatible endpoint. |
+| `providers.custom` | One-off or local custom endpoints, such as Ollama, a local gateway, or a temporary enterprise proxy. Use them with `model.provider: "custom:<name>"`. |
+
+`provider_profiles` is the extensible provider registry for MiniMax, Kimi, DeepSeek, Z.AI, OpenRouter, internal model gateways, or future compatible vendors:
+
+| Field | Purpose |
+|---|---|
+| `provider_profiles.<id>` | `<id>` becomes the provider ID, such as `kimi-coding` or `minimax`. |
+| `api_key` | API key. `${ENV_NAME}` values are expanded from the environment. You can leave it empty and use env vars or `auth.credentials_file` instead. |
+| `base_url` | Provider endpoint. OpenAI-compatible endpoints usually end in `/v1`; Anthropic-compatible endpoints usually use the vendor's Anthropic gateway root. |
+| `protocol` | Protocol family: `openai_chat`, `openai_compatible`, `anthropic_messages`, or `codex_responses`. Compatible new vendors do not need code changes. |
+| `model` | Default model for this profile. |
+
+`auth.credentials_file` is an optional SelfMind-owned JSON credential file that keeps secrets out of reusable YAML:
+
+```yaml
+auth:
+  credentials_file: "~/.selfmind/auth.json"
+```
+
+Credential precedence is: explicit key from a command/model role, `api_key` in `config.yaml`, `auth.credentials_file`, environment variables, then external CLI login reuse. External CLI reuse is limited to Codex CLI, Claude Code, Gemini CLI, and Qwen CLI, and SelfMind does not refresh their OAuth tokens.
+
+Recommended usage:
+
+- OpenAI, Anthropic, Google: use `providers`.
+- Ollama, local models, temporary OpenAI-compatible endpoints: use `providers.custom`.
+- MiniMax, Kimi, DeepSeek, Z.AI, OpenRouter, internal model gateways: use `provider_profiles`.
+- Secrets that should not live in YAML: use `auth.credentials_file` or environment variables.
+
+Old flat provider keys such as `providers.openai_api_key`, `providers.openrouter_api_key`, `providers.minimax_api_key`, and legacy `agent.provider` / `agent.model` are still read for compatibility, but new saves use the `model`, nested `providers`, and `provider_profiles` schema.
+
+### Provider Profiles And Auth Reuse
+
+SelfMind resolves models through `internal/modelruntime`:
+
+- Built-ins: `openai`, `anthropic`, `google`, `codex-cli`, `claude-code`, `gemini-cli`, `qwen-cli`, `openrouter`, `minimax`, `kimi-coding`, `deepseek`, `zai`, and `alibaba-coding-plan`.
+- Custom OpenAI-compatible endpoints: use `selfmind model`, then choose `Custom endpoint (enter URL manually)`.
+- Configurable provider profiles: add entries under `provider_profiles` when a provider has a stable base URL/protocol but you do not want a code change.
+- Auth reuse is intentionally limited to Codex CLI, Claude Code, Gemini CLI, and Qwen CLI. Other providers should use API keys in YAML, environment-expanded YAML values, or `auth.credentials_file`.
+
+`auth.credentials_file` is a SelfMind-owned JSON credential store. The shape is:
+
+```json
+{
+  "providers": {
+    "kimi-coding": { "api_key": "..." },
+    "codex-cli": { "access_token": "..." }
+  }
+}
+```
+
+For external CLI reuse, SelfMind also scans common local auth files and env vars, such as `~/.codex/auth.json`, Claude Code credentials, Gemini CLI OAuth files, and Qwen CLI OAuth files. OAuth refresh is not implemented; if an external token expires, re-login with the source CLI.
+
+MiniMax and Kimi Coding Plan:
+
+- MiniMax Coding Plan should use the Anthropic-compatible profile: `provider: "minimax"`, `base_url: "https://api.minimax.io/anthropic"`, `protocol: "anthropic_messages"`, and model `MiniMax-M2.7` or `MiniMax-M2.7-highspeed`.
+- Kimi Coding Plan should use `provider: "kimi-coding"`, `base_url: "https://api.kimi.com/coding/v1"`, `protocol: "openai_compatible"`, and model `kimi-for-coding`.
+- If you want the Kimi Code Anthropic-compatible endpoint instead, set `provider_profiles.kimi-coding.base_url` to `https://api.kimi.com/coding`, `protocol` to `anthropic_messages`, and keep the model as `kimi-for-coding`.
+- If you want the normal Kimi Open Platform API instead of the Coding Plan quota, add a custom OpenAI-compatible endpoint with `base_url: "https://api.moonshot.ai/v1"`.
 
 ### Model Routing
 
@@ -435,7 +553,7 @@ When an async IM task finishes, the gateway sends the result back to the source 
 - `gateway.telegram_token`: send Telegram `sendMessage` replies to the inbound `channel/chat_id`.
 - `gateway.outbound_webhook_url`: POST the normalized JSON payload to a custom relay.
 
-Long messages are split by `gateway.delivery_max_message_chars`; failed deliveries retry up to `gateway.delivery_retry_attempts`. Use `/status` for a task summary and `/events` for recent runtime events.
+Long messages are split by `gateway.delivery_max_message_chars`; failed deliveries retry up to `gateway.delivery_retry_attempts`. Use gateway `/status` for a task summary and `/events` for recent runtime events.
 
 ## Linux Release
 
@@ -494,6 +612,7 @@ internal/app/              application wiring for storage, agent, tools, gateway
 internal/platform/config/  YAML config loading, defaults, save, compatibility
 internal/kernel/           agent loop, memory/review, native tool calls
 internal/kernel/llm/       provider adapters and model gateway
+internal/modelruntime/     provider profiles, credentials, model catalog/cache
 internal/tools/            built-in tools and tool middleware
 internal/gateway/          TUI, HTTP API, router, channel adapters
 internal/control/          durable identity/workspace/task/run state
@@ -518,7 +637,9 @@ Tool runtime rules:
 
 ### Add A Model Provider
 
-Most new OpenAI-compatible providers do not need code changes. Run:
+Most new providers do not need code changes.
+
+For one-off OpenAI-compatible endpoints, run:
 
 ```sh
 selfmind model
@@ -526,19 +647,23 @@ selfmind model
 
 Then choose `Custom endpoint (enter URL manually)`.
 
+For reusable local config, add `provider_profiles.<id>` with `base_url`, `protocol`, `api_key`, and optional `model`.
+
 Only add a Go provider adapter when the provider has a different protocol family. The current core families are:
 
 - OpenAI Chat Completions and OpenAI-compatible endpoints.
 - Anthropic Messages API.
 - Google Gemini via OpenAI-compatible endpoint.
-- Generic OpenAI-compatible custom endpoints.
+- OpenAI/Codex Responses-compatible endpoints.
+- Generic provider profiles and custom endpoints.
 
 For a new protocol family:
 
 1. Implement `llm.Provider` in `internal/kernel/llm`.
-2. Extend `internal/platform/config/loader.go` only if the generic endpoint schema is not enough.
-3. Wire construction in `internal/app/agent.go`.
-4. Add tests for streaming, native tool calls if supported, and `models.roles` routing.
+2. Add protocol/runtime metadata in `internal/modelruntime`.
+3. Keep credential discovery and model-list fetching in `internal/modelruntime`, not in `internal/app`.
+4. Wire only the protocol-to-adapter conversion in `internal/app/agent.go`.
+5. Add tests for streaming, native tool calls if supported, auth resolution, model catalog, and `models.roles` routing.
 
 ### Add An IM Platform
 

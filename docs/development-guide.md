@@ -35,6 +35,7 @@ internal/app/              application wiring
 internal/platform/config/  YAML config schema, defaults, compatibility, save
 internal/kernel/           agent loop, memory, review, native tool calls
 internal/kernel/llm/       provider adapters and role-based model gateway
+internal/modelruntime/     provider profiles, credential resolution, model catalog/cache
 internal/tools/            built-in tools and tool middleware
 internal/gateway/          TUI, HTTP API, router, delivery, channel adapters
 internal/control/          control.db identity/workspace/task/run state
@@ -119,6 +120,21 @@ providers:
         llama3:
           context_length: 8192
 
+provider_profiles:
+  minimax:
+    api_key: "${MINIMAX_API_KEY}"
+    base_url: "https://api.minimax.io/anthropic"
+    protocol: "anthropic_messages"
+    model: "MiniMax-M2.7"
+  kimi-coding:
+    api_key: "${KIMI_CODING_API_KEY}"
+    base_url: "https://api.kimi.com/coding/v1"
+    protocol: "openai_compatible"
+    model: "kimi-for-coding"
+
+auth:
+  credentials_file: "~/.selfmind/auth.json"
+
 storage:
   type: "sqlite"
   data_dir: "~/.selfmind/data"
@@ -156,8 +172,8 @@ models:
 Compatibility rules in `internal/platform/config/loader.go`:
 
 - Legacy `agent.provider` and `agent.model` are read and normalized into `model.provider` and `model.default`.
-- Legacy flat provider keys such as `providers.openai_api_key` are read into nested providers.
-- New saves write the nested provider schema and do not write the legacy flat keys.
+- Legacy flat provider keys such as `providers.openai_api_key`, `providers.openrouter_api_key`, and `providers.minimax_api_key` are still read.
+- New saves write the nested provider schema or `provider_profiles`, and do not write the legacy flat keys.
 - `LoadConfig(config.Options{Path: ...})` accepts explicit paths.
 - `LoadConfig(config.Options{Path: ..., CreateIfMissing: true})` is used by commands that can initialize a new file, such as `selfmind model`.
 
@@ -174,9 +190,9 @@ selfmind model set openai gpt-4o
 
 Interactive flow:
 
-1. Show provider list: OpenAI, Anthropic, Google, saved custom endpoints, and `Custom endpoint (enter URL manually)`.
-2. Prompt for API key.
-3. Fetch remote model list when the provider exposes one.
+1. Show provider list: OpenAI, Anthropic, Google, `Custom endpoint (enter URL manually)`, coding-CLI auth reuse entries, saved custom endpoints, and built-in provider profiles.
+2. Prompt for API key, except for external auth reuse providers.
+3. Fetch remote model list when the provider exposes one, using a local cache and static fallback list.
 4. Let the user choose a model or enter one manually.
 5. Save to `config.yaml`.
 
@@ -187,9 +203,24 @@ Implemented provider protocol families:
 | OpenAI | Chat Completions / native tools | `llm.OpenAIAdapter` |
 | Anthropic | Messages API | `llm.AnthropicAdapter` |
 | Google | OpenAI-compatible Gemini endpoint | `llm.GeminiAdapter` |
+| Codex CLI | Responses-compatible Codex endpoint | `llm.ResponsesAdapter` |
+| Claude Code | Anthropic Messages with external OAuth | `llm.AnthropicAdapter` |
+| Gemini CLI | OpenAI-compatible Gemini endpoint with external OAuth | `llm.GeminiAdapter` |
+| Qwen CLI | OpenAI-compatible endpoint with external OAuth | `llm.GenericOpenAIAdapter` |
+| Provider profile | OpenAI-compatible, Anthropic Messages, or Responses | selected by `modelruntime.Runtime.Protocol` |
 | Custom | OpenAI-compatible endpoint | `llm.GenericOpenAIAdapter` |
 
-Most new vendors should use the custom OpenAI-compatible entry and should not require a code change. Add a new Go adapter only for a genuinely different protocol family.
+Most new vendors should use either the custom OpenAI-compatible entry or a `provider_profiles` entry and should not require a code change. Add a new Go adapter only for a genuinely different protocol family.
+
+Implementation boundary:
+
+- `internal/modelruntime/profile.go` owns built-in provider metadata, aliases, protocol family, env var names, model-list mode, and fallback models.
+- `internal/modelruntime/resolver.go` converts YAML, env vars, SelfMind auth JSON, and selected external CLI auth into a resolved `Runtime`.
+- `internal/modelruntime/catalog.go` fetches/caches model lists. It must not construct LLM adapters.
+- `internal/app/agent.go` only converts a resolved `Runtime` into an adapter and wires role routing. Do not add provider-specific credential discovery there.
+- `internal/cliapp/model_commands.go` owns the user-facing provider/model picker. Keep `Custom endpoint (enter URL manually)` as the fourth option for backwards-compatible scripted input.
+
+External auth reuse is P2 and intentionally limited to Codex CLI, Claude Code, Gemini CLI, and Qwen CLI. Do not add best-effort reuse for random vendor apps unless there is a stable local auth format and a product decision to support it.
 
 ### Role-Based Model Routing
 
@@ -415,7 +446,9 @@ Tool schemas should be structured JSON-friendly objects. Avoid ad hoc string par
 
 First decide whether code is actually needed:
 
-- OpenAI-compatible vendor: use `selfmind model` and custom endpoint.
+- One-off OpenAI-compatible vendor: use `selfmind model` and custom endpoint.
+- Reusable vendor with known base URL/protocol: add or document a `provider_profiles.<id>` YAML entry.
+- Built-in vendor metadata, auth env vars, and live model-list behavior: update `internal/modelruntime/profile.go` and `catalog.go`.
 - New protocol family: add a Go adapter.
 
 For a new adapter:
@@ -423,9 +456,10 @@ For a new adapter:
 1. Implement `llm.Provider`.
 2. Support `Chat`, `StreamChat`, and `ChatCompletion`.
 3. Preserve tool-call behavior if the provider supports tools.
-4. Add construction in `internal/app/agent.go`.
-5. Extend config only if nested `ProviderEndpoint` is not enough.
-6. Add tests for streaming, errors, native tools, and role routing.
+4. Add runtime/profile metadata and credential resolution tests in `internal/modelruntime`.
+5. Add only protocol-to-adapter construction in `internal/app/agent.go`.
+6. Extend config only if `ProviderEndpoint` / `provider_profiles` is not enough.
+7. Add tests for streaming, errors, native tools, auth resolution, model catalog, and role routing.
 
 ## Add An IM Platform
 

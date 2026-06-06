@@ -41,6 +41,8 @@ This document is for maintainers and future AI coding tools. It defines the guar
 ## Model And Tool Constraints
 
 - Model selection goes through role-based routing such as `coding_agent`, `memory_extract`, `background_review`, `skill_curator`, and `semantic_recall`.
+- Provider discovery, credential resolution, live model listing, and provider profile overrides belong in `internal/modelruntime`. Do not add new vendor credential probing or model-list fetch logic directly to `internal/app` or LLM adapters.
+- P2 external auth reuse is currently limited to Codex CLI, Claude Code, Gemini CLI, and Qwen CLI. Other vendors should use API keys, custom OpenAI-compatible endpoints, or `provider_profiles`.
 - New provider adapters should not be packed into one large file. Split protocol handling, providers, model listing, and streaming behavior.
 - Prefer provider-native tool calls. Text `[TOOL:...]` remains only a compatibility fallback.
 - Clearly read-only tools may run in parallel. File writes, patches, terminals, memory/skill mutations, process control, and unknown tools run sequentially by default.

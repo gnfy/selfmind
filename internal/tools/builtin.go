@@ -219,7 +219,7 @@ func (t *ExecuteCommandTool) Execute(args map[string]interface{}) (string, error
 	}
 
 	if background {
-		registry := GetProcessRegistry()
+		registry := ProcessRegistryForArgs(args)
 		id, err := registry.StartProcess(cmdStr, cwd)
 		if err != nil {
 			return "", err

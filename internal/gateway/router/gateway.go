@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 
 	"selfmind/internal/kernel"
 	"selfmind/internal/kernel/identity"
@@ -17,6 +18,7 @@ type Gateway struct {
 	taskManager      *task.Manager
 	intentClassifier *IntentClassifier
 	agent            *kernel.Agent
+	agentEventMu     sync.Mutex
 	llmProvider      llm.Provider
 }
 

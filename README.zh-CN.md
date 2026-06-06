@@ -18,7 +18,7 @@ SelfMind 是一个用 Go 编写的个人 AI Agent 运行时。它的目标不是
 - 单一用户入口 binary：`selfmind`。
 - 本地终端 TUI：支持 slash commands、工具调用状态、记忆、Skills、checkpoint、curator。
 - 常驻 gateway：`selfmind gateway start/run/status/stop/restart`。
-- gateway 客户端命令：`send`、`status`、`stop`、`tasks`、`workspaces`、`workspace add`、`workspace use`、`new`、`id`。
+- gateway 客户端命令：`send`、`status`、`stop`、`tasks`、`workspaces`、`approvals`、`approve`、`reject`、`workspace add`、`workspace use`、`new`、`id`。
 - 通用 IM Webhook：`POST /v1/im/{platform}`。
 - IM outbound 基础层：支持通用 webhook/Telegram 回发、长消息拆分、失败重试和持久 outbound 队列。
 - 账号绑定 API：CLI、微信、飞书、QQ relay 等渠道可以绑定到同一个 `person_id`。
@@ -265,9 +265,13 @@ selfmind -f ./config/config.yaml
 | `/help` | 查看 TUI 命令。 |
 | `/status` | 查看 provider、model、运行时间、token、任务和 gateway 状态。 |
 | `/tasks` | 查看本地 gateway 任务。 |
-| `/skills` | Skill 的 list/view/search/archive/pin/unpin/delete/stats。 |
-| `/memory` | 查看或删除长期记忆。 |
-| `/curator` | 查看或运行 Skill curator。 |
+| `/skills` | Skill 的 list/view/search/catalog/install/audit/archive/pin/unpin/delete/stats/reload。 |
+| `/skills history <name>` | 查看某个 Skill 的学习审计记录。 |
+| `/skills undo <change_id>` | 撤销支持回滚的 Skill 学习变更。 |
+| `/bundles` | 查看、创建、删除 Skill bundle。 |
+| `/reload-skills` | 不重启进程，重新加载磁盘上的 Skill。 |
+| `/memory` | 查看、审计、删除或撤销长期记忆。 |
+| `/curator` | 查看、预览、生成报告、运行或恢复 Skill curator 操作。 |
 | `/checkpoint` | 保存、读取、列出或删除会话 checkpoint。 |
 | `/migrate` | 从 Hermes Agent 迁移 Skills。 |
 | `/model` | 在 TUI 内查看或切换当前模型。 |
@@ -282,6 +286,83 @@ selfmind -f ./config/config.yaml
 | `Shift+Enter` | 插入换行。 |
 | `Ctrl+C` | 取消当前 run 或退出。 |
 | `Ctrl+V` | 粘贴；大段粘贴会转换成更易读的块。 |
+
+## Skills
+
+Skills 是 SelfMind 的“过程记忆”：可复用的工作流、检查清单、项目约定和踩坑经验。它们按租户存放在：
+
+```text
+~/.selfmind/<tenant>/skills/
+```
+
+新的 Skill 默认使用目录结构：
+
+```text
+<skill-name>/
+  SKILL.md
+  references/
+  templates/
+  scripts/
+  assets/
+```
+
+旧的扁平 `.md` Skill 仍然兼容。安装、创建或修改 Skill 后，可以通过 `/skills reload` 或 `/reload-skills` 热加载，不需要重启 SelfMind。
+
+常用命令：
+
+```sh
+/skills list
+/skills view codebase-inspection
+/skills search docker
+/skills catalog
+/skills install official/codebase-inspection
+/skills install ./my-skill --name my-skill
+/skills install https://raw.githubusercontent.com/org/repo/main/path/SKILL.md
+/skills audit
+/skills history codebase-inspection
+/skills undo <change_id>
+/skills reload
+/reload-skills
+```
+
+可以像 Hermes 一样用 slash command 直接调用某个 Skill：
+
+```text
+/codebase-inspection 帮我先检查这个仓库
+```
+
+Skill bundle 可以一次加载多个 Skill。Bundle 文件是 YAML，存放在 `~/.selfmind/<tenant>/skill-bundles/`。
+
+```sh
+/bundles create backend-dev codebase-inspection,test-driven-change
+/bundles list
+/backend-dev 按这个组合工作流实现需求
+```
+
+Curator 命令：
+
+```sh
+/curator status
+/curator run --dry-run --report
+/curator run --report
+/curator restore old-skill
+```
+
+Curator 默认只治理 `agent-created` 的 Skill；被 pin 的 Skill 不会被自动归档或删除；手写和 catalog 安装的 Skill 默认不参与自动治理。
+
+## Memory
+
+Memory 用于保存长期有效的用户偏好、项目事实和环境约定，不应该保存一次性任务进度。
+
+```sh
+/memory list
+/memory history
+/memory history user
+/memory remove user "喜欢简洁回答"
+/memory undo <change_id>
+```
+
+Memory 和 Skill 的学习变更会写入 `~/.selfmind/<tenant>/learning/`。当学错、过期或不想保留时，先用 history 找到 `change_id`，再用 undo 回滚。
 
 ## Gateway 模式
 
@@ -314,6 +395,9 @@ selfmind status
 selfmind tasks
 selfmind stop
 selfmind workspaces
+selfmind approvals
+selfmind approve <approval_id>
+selfmind reject <approval_id>
 selfmind workspace add .
 selfmind workspace use <workspace_id>
 selfmind new "实现 checkout 页面"
@@ -348,6 +432,8 @@ gateway 运行时文件位于：
 | `POST` | `/v1/message` | 发送 CLI/IM/Web 消息。 |
 | `POST` | `/v1/im/{platform}` | 通用 IM Webhook 入口。 |
 | `POST` | `/v1/accounts/bind` | 将平台账号绑定到已有 person。 |
+| `GET` | `/v1/approvals` | 查看 pending 或指定状态的审批请求。 |
+| `POST` | `/v1/approvals/respond` | 批准或拒绝审批请求。 |
 | `GET` | `/v1/tasks` | 查看任务列表。 |
 | `GET` | `/v1/tasks/current` | 查看当前任务和 active run。 |
 | `GET` | `/v1/tasks/events` | 查看当前任务或指定 `task_id` 的最近 run/tool/learning 事件。 |

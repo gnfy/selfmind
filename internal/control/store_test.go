@@ -179,3 +179,64 @@ func TestStoreRuntimeDeliveryAndInterruptFlow(t *testing.T) {
 		t.Fatalf("task after interrupt = %+v", updated)
 	}
 }
+
+func TestStoreApprovalFlow(t *testing.T) {
+	ctx := context.Background()
+	store, err := OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("OpenStore failed: %v", err)
+	}
+	defer store.Close()
+
+	identity, err := store.ResolveOrCreateAccount(ctx, "tenant-a", "cli", "local", "Alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := store.CreateTask(ctx, TaskCreate{
+		TenantID: identity.TenantID,
+		PersonID: identity.PersonID,
+		Title:    "Needs approval",
+		Channel:  "cli",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	approval, err := store.CreateApprovalRequest(ctx, ApprovalRequest{
+		TenantID:         identity.TenantID,
+		PersonID:         identity.PersonID,
+		TaskID:           task.ID,
+		ActionType:       "shell",
+		Payload:          []byte(`{"command":"rm file"}`),
+		RequestedChannel: "cli",
+	})
+	if err != nil {
+		t.Fatalf("CreateApprovalRequest failed: %v", err)
+	}
+	if approval.ID == "" || approval.Status != "pending" {
+		t.Fatalf("unexpected approval: %+v", approval)
+	}
+	pending, err := store.ListApprovalRequests(ctx, identity.TenantID, identity.PersonID, "pending", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 1 || pending[0].ID != approval.ID {
+		t.Fatalf("pending approvals = %+v", pending)
+	}
+	approved, err := store.RespondApprovalRequest(ctx, identity.TenantID, identity.PersonID, approval.ID, "approved", "wechat")
+	if err != nil {
+		t.Fatalf("RespondApprovalRequest failed: %v", err)
+	}
+	if approved.Status != "approved" || approved.ApprovedChannel != "wechat" {
+		t.Fatalf("unexpected approved request: %+v", approved)
+	}
+	pending, err = store.ListApprovalRequests(ctx, identity.TenantID, identity.PersonID, "pending", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 0 {
+		t.Fatalf("expected no pending approvals, got %+v", pending)
+	}
+	if _, err := store.RespondApprovalRequest(ctx, identity.TenantID, identity.PersonID, approval.ID, "rejected", "cli"); err == nil {
+		t.Fatal("expected duplicate response to fail")
+	}
+}

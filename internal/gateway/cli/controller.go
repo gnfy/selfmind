@@ -2,7 +2,6 @@ package cli
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -57,6 +56,7 @@ type uiModel struct {
 	viewport           viewport.Model
 	sessionBrowser     *components.SessionBrowser
 	sessionBrowserOpen bool
+	pager              *components.Pager
 	messages           []ChatMessage
 	thinking           bool
 	toolExecuting      string
@@ -74,6 +74,7 @@ type uiModel struct {
 	inputHistory       []string
 	historyIndex       int
 	sessionSearchFn    func(query string, limit int) (interface{}, error)
+	clarifyBridge      *tools.ClarifyBridge
 	cancelFn           context.CancelFunc
 	clarifyMode        bool
 	clarifyChoices     []string
@@ -110,26 +111,29 @@ func NewController(a *kernel.Agent, provider llm.Provider, cfg *config.Config, t
 	if tenantID == "" {
 		tenantID = "default"
 	}
+	editor := components.NewEditor(c, editorCfg)
+	editor.SetCommandHints(slashCommandHints())
 
 	return &Controller{
 		model: &uiModel{
-			common:       c,
-			sidebar:      sidebar.New(c),
-			status:       status.New(c),
-			editor:       components.NewEditor(c, editorCfg),
-			messages:     []ChatMessage{},
-			thinking:     false,
-			provider:     provider,
-			agent:        a,
-			tenantID:     tenantID,
-			channel:      "cli",
-			spinner:      sp,
-			inputHistory: []string{},
-			historyIndex: -1,
-			startTime:    time.Now(),
-			runStatus:    "ready",
-			tokenLimit:   1000000,
-			viewport:     viewport.New(0, 0),
+			common:        c,
+			sidebar:       sidebar.New(c),
+			status:        status.New(c),
+			editor:        editor,
+			messages:      []ChatMessage{},
+			thinking:      false,
+			provider:      provider,
+			agent:         a,
+			tenantID:      tenantID,
+			channel:       "cli",
+			spinner:       sp,
+			inputHistory:  []string{},
+			historyIndex:  -1,
+			startTime:     time.Now(),
+			runStatus:     "ready",
+			tokenLimit:    1000000,
+			viewport:      viewport.New(0, 0),
+			clarifyBridge: tools.NewClarifyBridge(),
 		},
 	}
 }
@@ -152,29 +156,32 @@ func NewControllerWithGateway(gw *router.Gateway, agent *kernel.Agent, provider 
 	if tenantID == "" {
 		tenantID = "default"
 	}
+	editor := components.NewEditor(c, editorCfg)
+	editor.SetCommandHints(slashCommandHints())
 
 	return &Controller{
 		model: &uiModel{
-			common:       c,
-			sidebar:      sidebar.New(c),
-			status:       status.New(c),
-			editor:       components.NewEditor(c, editorCfg),
-			messages:     []ChatMessage{},
-			thinking:     false,
-			provider:     provider,
-			providerName: providerName,
-			modelName:    modelName,
-			agent:        agent,
-			gateway:      gw,
-			tenantID:     tenantID,
-			channel:      "cli",
-			spinner:      sp,
-			inputHistory: []string{},
-			historyIndex: -1,
-			startTime:    time.Now(),
-			runStatus:    "ready",
-			tokenLimit:   1000000,
-			viewport:     viewport.New(0, 0),
+			common:        c,
+			sidebar:       sidebar.New(c),
+			status:        status.New(c),
+			editor:        editor,
+			messages:      []ChatMessage{},
+			thinking:      false,
+			provider:      provider,
+			providerName:  providerName,
+			modelName:     modelName,
+			agent:         agent,
+			gateway:       gw,
+			tenantID:      tenantID,
+			channel:       "cli",
+			spinner:       sp,
+			inputHistory:  []string{},
+			historyIndex:  -1,
+			startTime:     time.Now(),
+			runStatus:     "ready",
+			tokenLimit:    1000000,
+			viewport:      viewport.New(0, 0),
+			clarifyBridge: tools.NewClarifyBridge(),
 		},
 	}
 }
@@ -202,6 +209,13 @@ func (c *Controller) SetCleanupFn(fn func()) {
 	c.cleanupFn = fn
 }
 
+func (c *Controller) ClarifyHandler() tools.ClarifyHandler {
+	if c == nil || c.model == nil || c.model.clarifyBridge == nil {
+		return nil
+	}
+	return c.model.clarifyBridge.Handler()
+}
+
 func (c *Controller) checkMigration() {
 	if !app.NeedsMigration() {
 		return
@@ -212,7 +226,6 @@ func (c *Controller) checkMigration() {
 
 func (c *Controller) Start() {
 	c.checkMigration()
-	tools.RegisterClarifyCallback()
 	p := tea.NewProgram(c.model,
 		tea.WithAltScreen(),
 		tea.WithMouseCellMotion(),
@@ -242,6 +255,9 @@ func (c *Controller) Start() {
 		os.Stderr.WriteString(fmt.Sprintf("Error: %v\n", res.err))
 		os.Exit(1)
 	}
+	if c.model.clarifyBridge != nil {
+		c.model.clarifyBridge.Drain()
+	}
 	if c.cleanupFn != nil {
 		c.cleanupFn()
 	}
@@ -267,16 +283,17 @@ func (m *uiModel) addMessage(role, content string) {
 }
 
 func (m *uiModel) viewModel() string {
+	if m.pager != nil {
+		return m.pager.View()
+	}
+
 	mainW := m.width
 	st := m.common.Styles
 
 	fullContent := m.renderAllMessages()
+	stickToBottom := m.viewport.AtBottom() || m.viewport.PastBottom() || strings.TrimSpace(m.editor.Value()) != "" || m.thinking
 
-	suggestion := m.editor.GetSuggestion()
-	inputH := 1
-	if suggestion != "" {
-		inputH = 2
-	}
+	inputH := m.editor.PreferredHeight()
 	inputRect := layout.Rect{W: m.width, H: inputH}
 	inputArea := m.editor.Draw(inputRect)
 
@@ -291,7 +308,14 @@ func (m *uiModel) viewModel() string {
 
 	m.viewport.Width = mainW
 	m.viewport.Height = visibleH
+	showStartup := len(m.messages) == 0 && !m.thinking
 	m.viewport.SetContent(fullContent)
+	if showStartup {
+		m.viewport.GotoTop()
+		m.viewport.YOffset = 0
+	} else if stickToBottom {
+		m.viewport.GotoBottom()
+	}
 
 	mainStr := st.Main.Width(mainW).Height(visibleH).Render(m.viewport.View())
 
@@ -299,10 +323,9 @@ func (m *uiModel) viewModel() string {
 	var notification string
 	if m.statusMsg != "" {
 		notification = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("203")).
-			Italic(true).
+			Foreground(lipgloss.Color("244")).
 			PaddingLeft(2).
-			Render("! " + m.statusMsg)
+			Render(m.statusMsg)
 	}
 
 	// Migration Hint area
@@ -318,6 +341,58 @@ func (m *uiModel) viewModel() string {
 	statusBar := st.Status.Panel.Width(m.width).Render(m.statusLine())
 
 	return lipgloss.JoinVertical(lipgloss.Left, mainStr, notification, migrationHint, inputArea, statusBar)
+}
+
+func (m *uiModel) openHelp() {
+	width := m.width
+	if width <= 0 {
+		width = 80
+	}
+	m.pager = components.NewPager(m.common, width, m.height, m.renderHelpContent)
+}
+
+func (m *uiModel) renderHelpContent(width int) string {
+	if width < 40 {
+		width = 40
+	}
+	title := lipgloss.NewStyle().Foreground(lipgloss.Color("255")).Bold(true)
+	section := lipgloss.NewStyle().Foreground(lipgloss.Color("255")).Bold(true)
+	keyStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Bold(true)
+	cmdStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("75")).Bold(true)
+	descStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
+	muted := lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
+
+	lines := []string{
+		"",
+		title.Render("SelfMind help"),
+		muted.Render("Send tasks, inspect code, run tools, and manage what SelfMind learns."),
+		"",
+		section.Render("Keyboard shortcuts:"),
+	}
+
+	for _, row := range shortcutHelpRows {
+		lines = append(lines, renderHelpRow(row.Left, row.Right, keyStyle, descStyle, width))
+	}
+
+	lines = append(lines, "", section.Render("Slash commands:"))
+	for _, cmd := range slashCommandMetas {
+		lines = append(lines, renderHelpRow(cmd.Usage, cmd.Description, cmdStyle, descStyle, width))
+	}
+
+	lines = append(lines, "", muted.Render("Press q or Esc to close this page."))
+	return strings.Join(lines, "\n")
+}
+
+func renderHelpRow(left, right string, leftStyle, rightStyle lipgloss.Style, width int) string {
+	leftW := 30
+	if width < 72 {
+		leftW = 24
+	}
+	descW := width - leftW - 5
+	if descW < 12 {
+		descW = 12
+	}
+	return "  " + leftStyle.Copy().Width(leftW).Render(left) + " " + rightStyle.Render(truncateToWidth(right, descW))
 }
 
 func (m *uiModel) statusLine() string {
@@ -360,289 +435,6 @@ func (m *uiModel) statusLine() string {
 	return strings.Join(parts, " · ")
 }
 
-func (m *uiModel) renderAllMessages() string {
-	st := m.common.Styles
-	w := m.viewport.Width
-	if w <= 0 {
-		w = 60
-	}
-
-	var allLines []string
-
-	// Calculate selection range
-	startY, endY := m.selectionStart, m.selectionEnd
-	if startY > endY {
-		startY, endY = endY, startY
-	}
-	viewportTop := 0
-	scrollOffset := m.viewport.YOffset
-	lineStart := scrollOffset + (startY - viewportTop)
-	lineEnd := scrollOffset + (endY - viewportTop)
-
-	processLines := func(lines []string, baseIdx int) []string {
-		if !m.isSelecting {
-			return lines
-		}
-		for i := range lines {
-			globalLineIdx := baseIdx + i
-			if globalLineIdx >= lineStart && globalLineIdx <= lineEnd {
-				plain := stripANSI(lines[i])
-				// Hermes-style: ensure the line fills the viewport width with the selection background
-				display := plain
-				if display == "" {
-					display = " "
-				}
-				lines[i] = st.Chat.Selected.Copy().Width(w).Render(display)
-			}
-		}
-		return lines
-	}
-
-	if len(m.messages) == 0 && !m.thinking {
-		welcomeLines := m.renderStartupCard(w)
-		welcomeLines = processLines(welcomeLines, 0)
-		allLines = append(allLines, welcomeLines...)
-	}
-
-	for _, msg := range m.messages {
-		var rendered string
-		switch msg.Role {
-		case "user":
-			rendered = renderUserMessage(stripANSI(msg.Content), w)
-		case "assistant":
-			body := renderMarkdown(stripANSI(msg.Content), w)
-			rendered = strings.TrimRight(body, "\n") + "\n"
-		case "tool":
-			rendered = renderToolMessage(msg, w)
-		case "system":
-			rendered = renderSystemMessage(stripANSI(msg.Content), w)
-		}
-
-		msgLines := strings.Split(rendered, "\n")
-		msgLines = processLines(msgLines, len(allLines))
-		allLines = append(allLines, msgLines...)
-	}
-
-	if m.thinking {
-		spinnerView := m.spinner.View()
-		dots := strings.Repeat(".", (m.thinkingDots%3)+1)
-		rendered := st.Chat.Thinking.Render(spinnerView + " Working" + dots)
-		lines := processLines([]string{rendered}, len(allLines))
-		allLines = append(allLines, lines...)
-	}
-
-	// Pad with empty selectable lines up to viewport height if needed
-	minLines := m.viewport.Height + m.viewport.YOffset
-	for len(allLines) < minLines {
-		line := ""
-		if m.isSelecting {
-			idx := len(allLines)
-			if idx >= lineStart && idx <= lineEnd {
-				line = st.Chat.Selected.Copy().Width(w).Render(" ")
-			}
-		}
-		allLines = append(allLines, line)
-	}
-
-	return strings.Join(allLines, "\n")
-}
-
-func (m *uiModel) renderStartupCard(width int) []string {
-	cardW := width - 2
-	if cardW > 72 {
-		cardW = 72
-	}
-	if cardW < 44 {
-		cardW = width
-	}
-	if cardW < 20 {
-		return []string{m.common.Styles.Welcome}
-	}
-
-	modelName := m.modelName
-	if modelName == "" {
-		modelName = m.providerName
-	}
-	if modelName == "" {
-		modelName = "active"
-	}
-	tenant := m.tenantID
-	if tenant == "" {
-		tenant = "default"
-	}
-
-	title := " SelfMind (v0.1.0) "
-	topFill := cardW - 2 - runewidth.StringWidth(title)
-	if topFill < 0 {
-		topFill = 0
-	}
-
-	return []string{
-		"┌─" + title + strings.Repeat("─", topFill) + "┐",
-		renderBoxLine("model:     "+modelName+"      /model to change", cardW),
-		renderBoxLine("directory: "+currentWorkingDir(), cardW),
-		renderBoxLine("tenant:    "+tenant, cardW),
-		"└" + strings.Repeat("─", cardW-2) + "┘",
-		"",
-		"Tip: Tell SelfMind what to inspect, change, test, or remember.",
-		"",
-	}
-}
-
-func renderUserMessage(content string, width int) string {
-	content = strings.TrimRight(content, "\n")
-	if content == "" {
-		return "›\n"
-	}
-	wrapped := wrapText(content, width-2)
-	lines := strings.Split(wrapped, "\n")
-	for i, line := range lines {
-		if i == 0 {
-			lines[i] = "› " + line
-		} else {
-			lines[i] = "  " + line
-		}
-	}
-	return strings.Join(lines, "\n") + "\n"
-}
-
-func renderToolMessage(msg ChatMessage, width int) string {
-	label := msg.ToolName
-	if label == "" {
-		label = "tool"
-	}
-
-	var args map[string]interface{}
-	_ = json.Unmarshal([]byte(msg.ToolArgs), &args)
-	if args == nil {
-		args = map[string]interface{}{}
-	}
-
-	done := msg.Content != ""
-	action := toolAction(label, args, done)
-	if !done {
-		return "• " + action + "\n"
-	}
-
-	dur := fmt.Sprintf("%.1fs", msg.Duration)
-	if msg.Duration == 0 {
-		dur = "0.1s"
-	}
-
-	status := ""
-	if msg.IsError {
-		status = " failed"
-	}
-
-	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("• %s%s  %s\n", action, status, dur))
-	if result := firstResultLine(msg.Content, width-6); result != "" {
-		sb.WriteString("  └─ " + result + "\n")
-	}
-	return sb.String()
-}
-
-func renderSystemMessage(content string, width int) string {
-	content = strings.TrimSpace(content)
-	if content == "" {
-		return ""
-	}
-	var sb strings.Builder
-	sb.WriteString("• Learning\n")
-	if line := firstResultLine(content, width-6); line != "" {
-		sb.WriteString("  └─ " + line + "\n")
-	}
-	return sb.String()
-}
-
-func toolAction(label string, args map[string]interface{}, done bool) string {
-	detail := toolDetail(args, "path", "pattern", "query", "command", "name", "action")
-	switch label {
-	case "terminal", "execute_command", "shell":
-		if done {
-			return "Ran " + valueOr(detail, label)
-		}
-		return "Running " + valueOr(detail, label)
-	case "cat", "read_file":
-		if done {
-			return "Read " + valueOr(detail, label)
-		}
-		return "Reading " + valueOr(detail, label)
-	case "ls_r", "list_files", "search_files", "grep":
-		if done {
-			return "Searched " + valueOr(detail, label)
-		}
-		return "Searching " + valueOr(detail, label)
-	case "patch":
-		if done {
-			return "Edited with patch"
-		}
-		return "Applying patch"
-	case "write_file":
-		if done {
-			return "Wrote " + valueOr(detail, label)
-		}
-		return "Writing " + valueOr(detail, label)
-	case "skill_manage":
-		if done {
-			return "Managed skill " + valueOr(detail, "")
-		}
-		return "Managing skill " + valueOr(detail, "")
-	case "memory":
-		if done {
-			return "Updated memory"
-		}
-		return "Updating memory"
-	case "session_search":
-		if done {
-			return "Searched sessions"
-		}
-		return "Searching sessions"
-	default:
-		if done {
-			return "Ran " + label
-		}
-		return "Running " + label
-	}
-}
-
-func toolDetail(args map[string]interface{}, keys ...string) string {
-	for _, key := range keys {
-		if v, ok := args[key].(string); ok && strings.TrimSpace(v) != "" {
-			return strings.TrimSpace(v)
-		}
-	}
-	return ""
-}
-
-func firstResultLine(content string, width int) string {
-	content = stripANSI(content)
-	for _, line := range strings.Split(content, "\n") {
-		line = strings.TrimSpace(line)
-		if line != "" {
-			return truncateToWidth(line, width)
-		}
-	}
-	return ""
-}
-
-func renderBoxLine(content string, width int) string {
-	inner := width - 4
-	if inner < 1 {
-		return content
-	}
-	text := truncateToWidth(content, inner)
-	return "│ " + padRightWidth(text, inner) + " │"
-}
-
-func padRightWidth(s string, width int) string {
-	pad := width - runewidth.StringWidth(stripANSI(s))
-	if pad < 0 {
-		pad = 0
-	}
-	return s + strings.Repeat(" ", pad)
-}
-
 func truncateToWidth(s string, width int) string {
 	if width <= 0 {
 		return ""
@@ -676,9 +468,9 @@ func currentWorkingDir() string {
 }
 
 func (m *uiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if tools.ClarifyEventChan != nil {
+	if events := m.clarifyBridge.Events(); events != nil {
 		select {
-		case req := <-tools.ClarifyEventChan:
+		case req := <-events:
 			m.thinking = false
 			m.toolExecuting = ""
 			m.clarifyMode = true
@@ -716,12 +508,29 @@ func (m *uiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.common.Width, m.common.Height = msg.Width, msg.Height
 		m.viewport.Width = msg.Width
 		m.viewport.Height = msg.Height - 5
+		if m.pager != nil {
+			m.pager.Resize(msg.Width, msg.Height)
+		}
 		return m, nil
 
 	case tea.KeyMsg:
+		if m.pager != nil {
+			closed, cmd := m.pager.Update(msg)
+			if closed {
+				m.pager = nil
+			}
+			return m, cmd
+		}
 		return m.handleKey(msg)
 
 	case tea.MouseMsg:
+		if m.pager != nil {
+			closed, cmd := m.pager.Update(msg)
+			if closed {
+				m.pager = nil
+			}
+			return m, cmd
+		}
 		if msg.Button == tea.MouseButtonLeft {
 			if msg.Action == tea.MouseActionPress {
 				m.isSelecting = true
@@ -860,7 +669,7 @@ func (m *uiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				response := m.resolveClarifyResponse(input)
 				m.addMessage("user", response)
 				m.editor.Reset()
-				tools.SubmitClarifyResponse(m.clarifyReq, response)
+				m.clarifyBridge.Submit(m.clarifyReq, response)
 				m.clarifyMode = false
 				m.clarifyChoices = nil
 				m.clarifyReq = tools.ClarifyRequest{}
@@ -895,483 +704,6 @@ func (m *uiModel) resolveClarifyResponse(input string) string {
 		}
 	}
 	return cleaned
-}
-
-func (m *uiModel) handleCommand(input string) tea.Cmd {
-	parts := strings.Fields(input)
-	cmd := parts[0]
-	switch cmd {
-	case "/help":
-		m.addMessage("assistant", helpText)
-	case "/clear":
-		m.messages = []ChatMessage{}
-		m.viewport.SetContent("")
-	case "/exit":
-		return tea.Quit
-	case "/migrate":
-		return m.handleMigration()
-	case "/status":
-		return m.handleStatus()
-	case "/tasks":
-		return m.handleTasks()
-	case "/skills":
-		return m.handleSkills(parts[1:])
-	case "/memory":
-		return m.handleMemory(parts[1:])
-	case "/curator":
-		return m.handleCurator(parts[1:])
-	case "/checkpoint":
-		if len(parts) < 2 {
-			m.addMessage("assistant", "Usage: /checkpoint [list|save|load] [name]")
-			return nil
-		}
-		return m.handleCheckpoint(parts[1:])
-	case "/model":
-		if len(parts) < 2 {
-			m.addMessage("assistant", fmt.Sprintf("Current model: %s", m.agent.CurrentModel()))
-			m.addMessage("assistant", "Usage: /model <model-name>  (e.g. /model claude-3-5-haiku-20241022)")
-			return nil
-		}
-		return m.handleModelSwitch(parts[1])
-	}
-	return nil
-}
-
-func (m *uiModel) handleMigration() tea.Cmd {
-	return func() tea.Msg {
-		dir, exists := app.CheckHermesSkills()
-		if !exists {
-			return MsgAgentDone{Response: "No Hermes skills found to migrate."}
-		}
-		count, err := app.MigrateHermesSkills(dir)
-		if err != nil {
-			return MsgAgentDone{Response: fmt.Sprintf("Migration error: %v", err)}
-		}
-		m.migrationHint = "" // Clear hint after success
-		return MsgAgentDone{Response: fmt.Sprintf("Successfully migrated %d skills from Hermes!", count)}
-	}
-}
-
-func (m *uiModel) handleStatus() tea.Cmd {
-	return func() tea.Msg {
-		elapsed := time.Since(m.startTime)
-		usage := formatUsage(m.totalTokens, m.tokenLimit)
-
-		status := fmt.Sprintf("## System Status\n\n- **Provider**: %s\n- **Model**: %s\n- **Uptime**: %s\n- **Token Usage**: %s\n",
-			m.providerName, m.modelName, formatDuration(elapsed), usage)
-
-		// Current task
-		if m.gateway != nil {
-			t, err := m.gateway.GetCurrentTaskInfo(context.Background(), m.tenantID)
-			if err == nil && t != nil {
-				status += fmt.Sprintf("- **Current Task**: [%d] %s\n", t.ID, t.Title)
-			} else {
-				status += "- **Current Task**: None\n"
-			}
-		}
-
-		// Background processes
-		registry := tools.GetProcessRegistry()
-		procs := registry.List()
-		if len(procs) > 0 {
-			status += "\n### Background Processes\n"
-			for _, p := range procs {
-				idStr := p["id"].(string)
-				if len(idStr) > 8 {
-					idStr = idStr[:8]
-				}
-				status += fmt.Sprintf("- `%s`: %s (%s)\n", idStr, p["command"], p["status"])
-			}
-		}
-
-		return MsgAgentDone{Response: status}
-	}
-}
-
-func (m *uiModel) handleTasks() tea.Cmd {
-	return func() tea.Msg {
-		if m.gateway == nil {
-			return MsgAgentDone{Response: "Gateway not initialized, cannot list tasks."}
-		}
-		tasks, err := m.gateway.ListTasks(context.Background(), m.tenantID)
-		if err != nil {
-			return MsgAgentDone{Response: fmt.Sprintf("Error fetching tasks: %v", err)}
-		}
-		if len(tasks) == 0 {
-			return MsgAgentDone{Response: "No tasks found."}
-		}
-		var sb strings.Builder
-		sb.WriteString("## Global Tasks\n\n")
-		for _, t := range tasks {
-			status := "⏳"
-			if t.Status == "done" {
-				status = "✅"
-			}
-			if t.Status == "cancelled" {
-				status = "❌"
-			}
-			sb.WriteString(fmt.Sprintf("%s [%d] %s (Created: %s)\n",
-				status, t.ID, t.Title, t.CreatedAt.Format("01-02 15:04")))
-		}
-		return MsgAgentDone{Response: sb.String()}
-	}
-}
-
-func (m *uiModel) handleSkills(args []string) tea.Cmd {
-	return func() tea.Msg {
-		action := "list"
-		if len(args) > 0 {
-			action = args[0]
-		}
-		switch action {
-		case "list":
-			skills, err := tools.ListSkillsForTenant(m.tenantID, false)
-			if err != nil {
-				return MsgAgentDone{Response: fmt.Sprintf("Error listing skills: %v", err)}
-			}
-			if len(skills) == 0 {
-				return MsgAgentDone{Response: "No skills found. Skills are created automatically after reusable work is discovered."}
-			}
-			var sb strings.Builder
-			sb.WriteString(fmt.Sprintf("## Skills (%d)\n\n", len(skills)))
-			for _, s := range skills {
-				pin := ""
-				if s.Pinned {
-					pin = " pinned"
-				}
-				sb.WriteString(fmt.Sprintf("- **%s** [%s/%s%s]: %s\n  _%s_\n", s.Name, s.State, s.Source, pin, valueOr(s.Description, "(no description)"), s.Path))
-			}
-			sb.WriteString("\nCommands: /skills view <name>, /skills search <query>, /skills archive <name>, /skills pin <name>, /skills stats")
-			return MsgAgentDone{Response: sb.String()}
-		case "view":
-			if len(args) < 2 {
-				return MsgAgentDone{Response: "Usage: /skills view <name>"}
-			}
-			content, err := tools.ReadSkillForTenant(m.tenantID, args[1])
-			if err != nil {
-				return MsgAgentDone{Response: fmt.Sprintf("Error reading skill: %v", err)}
-			}
-			return MsgAgentDone{Response: content}
-		case "search":
-			if len(args) < 2 {
-				return MsgAgentDone{Response: "Usage: /skills search <query>"}
-			}
-			skills, err := tools.SearchSkillsForTenant(m.tenantID, strings.Join(args[1:], " "))
-			if err != nil {
-				return MsgAgentDone{Response: fmt.Sprintf("Error searching skills: %v", err)}
-			}
-			var sb strings.Builder
-			sb.WriteString(fmt.Sprintf("## Skill Search (%d)\n\n", len(skills)))
-			for _, s := range skills {
-				sb.WriteString(fmt.Sprintf("- **%s**: %s\n", s.Name, valueOr(s.Description, "(no description)")))
-			}
-			return MsgAgentDone{Response: sb.String()}
-		case "delete":
-			if len(args) < 2 {
-				return MsgAgentDone{Response: "Usage: /skills delete <name>"}
-			}
-			resp, err := m.agent.Dispatcher().Dispatch("skill_manage", map[string]interface{}{"action": "delete", "name": args[1], "_tenant_id": m.tenantID})
-			if err != nil {
-				return MsgAgentDone{Response: fmt.Sprintf("Error deleting skill: %v", err)}
-			}
-			return MsgAgentDone{Response: resp}
-		case "archive":
-			if len(args) < 2 {
-				return MsgAgentDone{Response: "Usage: /skills archive <name>"}
-			}
-			resp, err := tools.ArchiveSkillForTenant(m.tenantID, args[1])
-			if err != nil {
-				return MsgAgentDone{Response: fmt.Sprintf("Error archiving skill: %v", err)}
-			}
-			return MsgAgentDone{Response: resp}
-		case "pin", "unpin":
-			if len(args) < 2 {
-				return MsgAgentDone{Response: "Usage: /skills " + action + " <name>"}
-			}
-			resp, err := m.agent.Dispatcher().Dispatch("skill_manage", map[string]interface{}{"action": action, "name": args[1], "_tenant_id": m.tenantID})
-			if err != nil {
-				return MsgAgentDone{Response: fmt.Sprintf("Error updating pin: %v", err)}
-			}
-			return MsgAgentDone{Response: resp}
-		case "stats":
-			if m.agent == nil || m.agent.Memory() == nil {
-				return MsgAgentDone{Response: "Memory not initialized."}
-			}
-			store := kernel.NewSkillStore(m.agent.Memory())
-			stats, err := store.FormatStats(context.Background(), m.tenantID)
-			if err != nil {
-				return MsgAgentDone{Response: fmt.Sprintf("Error loading skill stats: %v", err)}
-			}
-			return MsgAgentDone{Response: stats}
-		default:
-			return MsgAgentDone{Response: "Usage: /skills [list|view|search|delete|archive|pin|unpin|stats]"}
-		}
-	}
-}
-
-func (m *uiModel) handleMemory(args []string) tea.Cmd {
-	return func() tea.Msg {
-		if m.agent == nil || m.agent.Memory() == nil {
-			return MsgAgentDone{Response: "Memory not initialized."}
-		}
-		action := "list"
-		if len(args) > 0 {
-			action = args[0]
-		}
-		mem := m.agent.Memory()
-		switch action {
-		case "list":
-			userFacts, _ := mem.GetFacts(context.Background(), m.tenantID, "user")
-			memFacts, _ := mem.GetFacts(context.Background(), m.tenantID, "memory")
-			var sb strings.Builder
-			sb.WriteString("## Memory\n\n### User\n")
-			if len(userFacts) == 0 {
-				sb.WriteString("- (empty)\n")
-			}
-			for _, f := range userFacts {
-				sb.WriteString(fmt.Sprintf("- `%s` %s\n", f.ID, f.Content))
-			}
-			sb.WriteString("\n### Project / Environment\n")
-			if len(memFacts) == 0 {
-				sb.WriteString("- (empty)\n")
-			}
-			for _, f := range memFacts {
-				sb.WriteString(fmt.Sprintf("- `%s` %s\n", f.ID, f.Content))
-			}
-			sb.WriteString("\nRemove with: /memory remove <user|memory> <id-or-text>")
-			return MsgAgentDone{Response: sb.String()}
-		case "remove":
-			if len(args) < 3 {
-				return MsgAgentDone{Response: "Usage: /memory remove <user|memory> <id-or-text>"}
-			}
-			target := args[1]
-			needle := strings.Join(args[2:], " ")
-			facts, err := mem.GetFacts(context.Background(), m.tenantID, target)
-			if err != nil {
-				return MsgAgentDone{Response: fmt.Sprintf("Memory error: %v", err)}
-			}
-			for _, f := range facts {
-				if f.ID == needle || strings.Contains(f.Content, needle) {
-					if err := mem.RemoveFact(context.Background(), m.tenantID, f.ID); err != nil {
-						return MsgAgentDone{Response: fmt.Sprintf("Remove failed: %v", err)}
-					}
-					return MsgAgentDone{Response: fmt.Sprintf("Removed memory `%s`.", f.ID)}
-				}
-			}
-			return MsgAgentDone{Response: "No matching memory found."}
-		default:
-			return MsgAgentDone{Response: "Usage: /memory [list|remove <user|memory> <id-or-text>]"}
-		}
-	}
-}
-
-func (m *uiModel) handleCurator(args []string) tea.Cmd {
-	return func() tea.Msg {
-		action := "status"
-		if len(args) > 0 {
-			action = args[0]
-		}
-		switch action {
-		case "status":
-			resp, err := tools.CuratorStatusForTenant(m.tenantID)
-			if err != nil {
-				return MsgAgentDone{Response: fmt.Sprintf("Curator status error: %v", err)}
-			}
-			return MsgAgentDone{Response: resp}
-		case "run":
-			resp, err := tools.RunCuratorForTenant(m.tenantID, 30, 90)
-			if err != nil {
-				return MsgAgentDone{Response: fmt.Sprintf("Curator run error: %v", err)}
-			}
-			return MsgAgentDone{Response: resp}
-		default:
-			return MsgAgentDone{Response: "Usage: /curator [status|run]"}
-		}
-	}
-}
-
-func (m *uiModel) handleModelSwitch(modelName string) tea.Cmd {
-	return func() tea.Msg {
-		if m.agent == nil {
-			return MsgAgentDone{Response: "Agent not initialized."}
-		}
-		oldModel := m.agent.CurrentModel()
-		if ok := m.agent.SwitchModel(modelName); !ok {
-			return MsgAgentDone{Response: fmt.Sprintf("Provider does not support runtime model switching. Current model: %s", oldModel)}
-		}
-		m.modelName = modelName
-		m.providerName = modelName
-		return MsgAgentDone{Response: fmt.Sprintf("Model switched: %s → %s", oldModel, modelName)}
-	}
-}
-
-func (m *uiModel) handleCheckpoint(args []string) tea.Cmd {
-	action := args[0]
-	name := ""
-	if len(args) > 1 {
-		name = args[1]
-	}
-	return func() tea.Msg {
-		resp, err := m.agent.Dispatcher().Dispatch("checkpoint", map[string]interface{}{
-			"action":     action,
-			"name":       name,
-			"_tenant_id": m.tenantID,
-		})
-		if err != nil {
-			return MsgAgentDone{Response: fmt.Sprintf("Checkpoint error: %v", err)}
-		}
-		return MsgAgentDone{Response: resp}
-	}
-}
-
-func (m *uiModel) copySelection() tea.Cmd {
-	start := m.selectionStart
-	end := m.selectionEnd
-	if start > end {
-		start, end = end, start
-	}
-	// Viewport starts at the first rendered transcript line.
-	viewportTop := 0
-	fullLines := m.renderAllMessagesLines()
-	scrollOffset := m.viewport.YOffset
-	lineStart := scrollOffset + (start - viewportTop)
-	lineEnd := scrollOffset + (end - viewportTop)
-	if lineStart < 0 {
-		lineStart = 0
-	}
-	if lineEnd >= len(fullLines) {
-		lineEnd = len(fullLines) - 1
-	}
-	if lineStart > lineEnd {
-		return nil
-	}
-	selectedText := ""
-	var cleanLines []string
-	for _, line := range fullLines[lineStart : lineEnd+1] {
-		// Trim only trailing UI padding spaces, preserve leading indentation
-		clean := strings.TrimRight(stripANSI(line), " ")
-		cleanLines = append(cleanLines, clean)
-	}
-	selectedText = strings.Join(cleanLines, "\n")
-
-	if selectedText == "" {
-		return nil
-	}
-
-	return func() tea.Msg {
-		// OSC 52 Copy to Clipboard
-		b64 := base64.StdEncoding.EncodeToString([]byte(selectedText))
-		fmt.Printf("\x1b]52;c;%s\a", b64)
-
-		m.statusMsg = "Selected text copied to clipboard!"
-		go func() {
-			time.Sleep(2 * time.Second)
-			if m.program != nil {
-				m.program.Send(MsgClearStatus{})
-			}
-		}()
-		return nil
-	}
-}
-
-func (m *uiModel) renderAllMessagesLines() []string {
-	content := m.renderAllMessages()
-	return strings.Split(content, "\n")
-}
-
-func (m *uiModel) runAgent(ctx context.Context, input string) tea.Cmd {
-	return func() tea.Msg {
-		go m.pumpAgentEvents()
-
-		// Use Gateway instead of calling Agent directly
-		if m.gateway != nil {
-			resp, err := m.gateway.Handle(ctx, m.tenantID, m.channel, input)
-			if err != nil {
-				return MsgAgentDone{Err: err}
-			}
-
-			if !resp.IsStreaming {
-				return MsgAgentDone{Response: resp.Content, Usage: resp.Usage, Err: nil}
-			}
-
-			// For streaming, we wait for the stream to close in pumpAgentEvents
-			// or handle it here. Since gateway.Handle already launched a goroutine
-			// that calls agent.RunConversation, and agent.RunConversation emits
-			// events to EventChannel, pumpAgentEvents will catch them.
-			// We just need to wait for the final completion event from the stream.
-			for event := range resp.Stream {
-				if event.Err != nil {
-					return MsgAgentDone{Err: event.Err}
-				}
-				if event.Usage != nil {
-					// Final usage stats
-					return MsgAgentDone{Usage: *event.Usage}
-				}
-			}
-			return nil // Result already sent via events
-		}
-
-		// Fallback for direct agent access (backward compatibility)
-		resp, usage, err := m.agent.RunConversation(ctx, m.tenantID, m.channel, input)
-		return MsgAgentDone{Response: resp, Usage: usage, Err: err}
-	}
-}
-
-func (m *uiModel) pumpAgentEvents() {
-	if m.agent == nil || m.agent.EventChannel == nil {
-		return
-	}
-	for {
-		select {
-		case event, ok := <-m.agent.EventChannel:
-			if !ok {
-				return
-			}
-			switch {
-			case strings.HasPrefix(event, "stream:"):
-				content := strings.TrimPrefix(event, "stream:")
-				if m.program != nil {
-					m.program.Send(MsgStream{Content: content})
-				}
-			case strings.HasPrefix(event, "tool_start:"):
-				parts := strings.SplitN(event[11:], ":", 2)
-				name := parts[0]
-				args := ""
-				if len(parts) > 1 {
-					args = parts[1]
-				}
-				if m.program != nil {
-					m.program.Send(MsgToolStart{ToolName: name, Args: args})
-				}
-			case strings.HasPrefix(event, "tool_end:"):
-				rest := strings.TrimPrefix(event, "tool_end:")
-				parts := strings.SplitN(rest, ":", 3)
-				name := parts[0]
-				durationStr := "0"
-				result := ""
-				var err error
-				if len(parts) >= 2 {
-					if parts[1] == "error" {
-						errParts := strings.SplitN(parts[2], ":", 2)
-						durationStr = errParts[0]
-						err = fmt.Errorf("%s", errParts[1])
-					} else {
-						durationStr = parts[1]
-						result = parts[2]
-					}
-				}
-				var duration float64
-				fmt.Sscanf(durationStr, "%f", &duration)
-				if m.program != nil {
-					m.program.Send(MsgToolDone{ToolName: name, Result: result, Err: err, Duration: duration})
-				}
-			case strings.HasPrefix(event, "review:"):
-				if m.program != nil {
-					m.program.Send(MsgLearningEvent{Content: strings.TrimPrefix(event, "review:")})
-				}
-			}
-		}
-	}
 }
 
 func (m *uiModel) View() string {
@@ -1529,25 +861,18 @@ type MsgLearningEvent struct {
 	Content string
 }
 
-const helpText = `Available commands:
-  /help                             - Show this help
-  /clear                            - Clear conversation history
-  /status                           - Show system status and background processes
-  /tasks                            - List global tasks
-  /skills [list|view|search|delete|archive|pin|unpin|stats]
-  /memory [list|remove <user|memory> <id-or-text>]
-  /curator [status|run]
-  /checkpoint [list|save|load|delete] [name]
-  /migrate                          - Migrate skills from Hermes Agent
-  /model [model-name]               - Show or switch model
-  /exit                             - Exit
+type helpRow struct {
+	Left  string
+	Right string
+}
 
-Shortcuts:
-  Enter       - Submit
-  Shift+Enter - Insert newline
-  Ctrl+J      - Insert newline
-  Ctrl+C      - Clear input, cancel running task, or exit
-  Ctrl+L      - Clear screen
-  Mouse drag  - Copy selected transcript text`
+var shortcutHelpRows = []helpRow{
+	{Left: "Enter", Right: "Submit the current message"},
+	{Left: "Shift+Enter", Right: "Insert a newline"},
+	{Left: "Ctrl+J", Right: "Insert a newline"},
+	{Left: "Ctrl+C", Right: "Clear input, cancel a running task, close help, or exit"},
+	{Left: "Ctrl+L", Right: "Clear the current transcript view"},
+	{Left: "Mouse drag", Right: "Copy selected transcript text"},
+}
 
 var _ tea.Model = (*uiModel)(nil)

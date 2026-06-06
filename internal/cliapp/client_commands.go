@@ -24,6 +24,20 @@ func (a *App) runGatewayClientIfRequested() (bool, int) {
 			return true, a.sendGatewayMessage("/tasks")
 		case "workspaces":
 			return true, a.sendGatewayMessage("/workspaces")
+		case "approvals":
+			return true, a.sendGatewayMessage("/approvals")
+		case "approve":
+			if len(a.args) < 3 {
+				fmt.Fprintln(a.stderr, "usage: selfmind approve <approval_id>")
+				return true, 2
+			}
+			return true, a.sendGatewayMessage("/approve " + a.args[2])
+		case "reject":
+			if len(a.args) < 3 {
+				fmt.Fprintln(a.stderr, "usage: selfmind reject <approval_id>")
+				return true, 2
+			}
+			return true, a.sendGatewayMessage("/reject " + a.args[2])
 		case "stop":
 			return true, a.sendGatewayMessage("/stop")
 		case "id":

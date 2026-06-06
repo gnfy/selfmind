@@ -38,7 +38,7 @@ func (t *ProcessTool) Execute(args map[string]interface{}) (string, error) {
 	action, _ := args["action"].(string)
 	id, _ := args["id"].(string)
 
-	registry := GetProcessRegistry()
+	registry := ProcessRegistryForArgs(args)
 
 	switch action {
 	case "list":

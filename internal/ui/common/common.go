@@ -59,12 +59,12 @@ func DefaultStyles() *Styles {
 	s.Chat.ToolName = lipgloss.NewStyle().Foreground(primary).Bold(true)
 	s.Chat.ToolResult = lipgloss.NewStyle().Foreground(fgMuted).Background(bg)
 	s.Chat.Thinking = lipgloss.NewStyle().Foreground(fgMuted).Italic(true)
-	s.Chat.Selected = lipgloss.NewStyle().Background(accent).Foreground(bg)
+	s.Chat.Selected = lipgloss.NewStyle().Background(lipgloss.Color("238")).Foreground(fg)
 
-	// Codex-cli style: transcript stays plain, composer is the only filled band.
-	s.Editor.Panel = lipgloss.NewStyle().Background(surface).Padding(0, 1)
-	s.Editor.Prompt = lipgloss.NewStyle().Foreground(fg).Bold(false)
-	s.Editor.Text = lipgloss.NewStyle().Foreground(fg)
+	// Codex-cli style: transcript stays plain, composer is a relaxed filled band.
+	s.Editor.Panel = lipgloss.NewStyle().Background(surface).Padding(1, 1)
+	s.Editor.Prompt = lipgloss.NewStyle().Foreground(fg).Background(surface).Bold(false)
+	s.Editor.Text = lipgloss.NewStyle().Foreground(fg).Background(surface)
 	s.Editor.Cursor = lipgloss.NewStyle().Background(lipgloss.Color("255")).Foreground(lipgloss.Color("0"))
 
 	s.Status.Panel = lipgloss.NewStyle().Foreground(fgMuted).Padding(0, 1)

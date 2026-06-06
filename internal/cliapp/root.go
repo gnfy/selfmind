@@ -117,6 +117,7 @@ func (a *App) runTUI() int {
 	appcore.InitMCP(disp, cfg)
 
 	ctrl := tui.NewControllerWithGateway(gwDeps.Gateway, agent, nil, cfg.EffectiveProvider(), cfg.EffectiveModel(), cfg, tenantID)
+	disp.InjectClarifyHandler(ctrl.ClarifyHandler())
 	ctrl.SetSessionSearchFn(mem.SearchFn(tenantID))
 
 	memFn := func() (*memory.MemoryManager, string, string) { return mem, tenantID, "cli" }

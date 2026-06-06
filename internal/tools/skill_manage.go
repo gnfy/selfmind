@@ -46,8 +46,8 @@ func NewSkillManageTool() *SkillManageTool {
 				Properties: map[string]PropertyDef{
 					"action": {
 						Type:        "string",
-						Description: "Action: list, search, read, create, update, edit, patch, delete, archive, write_file, remove_file, pin, or unpin.",
-						Enum:        []string{"list", "search", "read", "create", "update", "edit", "patch", "delete", "archive", "write_file", "remove_file", "pin", "unpin"},
+						Description: "Action: list, search, read, history, undo, create, update, edit, patch, delete, archive, write_file, remove_file, pin, unpin, or reload.",
+						Enum:        []string{"list", "search", "read", "history", "undo", "create", "update", "edit", "patch", "delete", "archive", "write_file", "remove_file", "pin", "unpin", "reload"},
 					},
 					"name": {
 						Type:        "string",
@@ -73,6 +73,10 @@ func NewSkillManageTool() *SkillManageTool {
 						Type:        "string",
 						Description: "Replacement text for action=patch.",
 					},
+					"replace_all": {
+						Type:        "boolean",
+						Description: "For action=patch, replace all matches instead of requiring a single match.",
+					},
 					"file_path": {
 						Type:        "string",
 						Description: "Support file path under references/, templates/, scripts/, or assets/.",
@@ -84,6 +88,10 @@ func NewSkillManageTool() *SkillManageTool {
 					"source": {
 						Type:        "string",
 						Description: "Optional skill source metadata, usually agent-created or manual.",
+					},
+					"change_id": {
+						Type:        "string",
+						Description: "Learning history change id to undo.",
 					},
 				},
 				Required: []string{"action"},
@@ -100,9 +108,11 @@ func (t *SkillManageTool) Execute(args map[string]interface{}) (string, error) {
 	description, _ := args["description"].(string)
 	oldText, _ := args["old_text"].(string)
 	newText, _ := args["new_text"].(string)
+	replaceAll, _ := args["replace_all"].(bool)
 	filePath, _ := args["file_path"].(string)
 	fileContent, _ := args["file_content"].(string)
 	source, _ := args["source"].(string)
+	changeID, _ := args["change_id"].(string)
 
 	tenantID, _ := args["_tenant_id"].(string)
 	if tenantID == "" {
@@ -130,20 +140,50 @@ func (t *SkillManageTool) Execute(args map[string]interface{}) (string, error) {
 			return "", fmt.Errorf("name is required for read")
 		}
 		return ReadSkillForTenant(tenantID, name)
+	case "history":
+		if name == "" {
+			return "", fmt.Errorf("name is required for history")
+		}
+		changes, err := ListSkillLearningChanges(tenantID, name, 20)
+		if err != nil {
+			return "", err
+		}
+		return formatSkillLearningChanges(changes), nil
+	case "undo":
+		if changeID == "" {
+			return "", fmt.Errorf("change_id is required for undo")
+		}
+		result, err := UndoSkillLearningChangeForTenant(tenantID, changeID)
+		reloadSkillToolsFromArgs(tenantID, args)
+		return result, err
 	case "create":
-		return createSkill(tenantID, name, content, description, source)
+		result, err := createSkill(tenantID, name, content, description, source)
+		reloadSkillToolsFromArgs(tenantID, args)
+		return result, err
 	case "update", "edit":
-		return editSkill(tenantID, name, content, description)
+		result, err := editSkill(tenantID, name, content, description)
+		reloadSkillToolsFromArgs(tenantID, args)
+		return result, err
 	case "patch":
-		return patchSkill(tenantID, name, oldText, newText, filePath)
+		result, err := patchSkill(tenantID, name, oldText, newText, filePath, replaceAll)
+		reloadSkillToolsFromArgs(tenantID, args)
+		return result, err
 	case "delete":
-		return deleteSkill(tenantID, name)
+		result, err := deleteSkill(tenantID, name)
+		reloadSkillToolsFromArgs(tenantID, args)
+		return result, err
 	case "archive":
-		return ArchiveSkillForTenant(tenantID, name)
+		result, err := ArchiveSkillForTenant(tenantID, name)
+		reloadSkillToolsFromArgs(tenantID, args)
+		return result, err
 	case "write_file":
-		return writeSkillSupportFile(tenantID, name, filePath, fileContent)
+		result, err := writeSkillSupportFile(tenantID, name, filePath, fileContent)
+		reloadSkillToolsFromArgs(tenantID, args)
+		return result, err
 	case "remove_file":
-		return removeSkillSupportFile(tenantID, name, filePath)
+		result, err := removeSkillSupportFile(tenantID, name, filePath)
+		reloadSkillToolsFromArgs(tenantID, args)
+		return result, err
 	case "pin":
 		if name == "" {
 			return "", fmt.Errorf("name is required for pin")
@@ -155,6 +195,7 @@ func (t *SkillManageTool) Execute(args map[string]interface{}) (string, error) {
 		if err := SetSkillPinned(tenantID, info.Name, true); err != nil {
 			return "", err
 		}
+		recordSkillLearningChange(tenantID, info.Name, "pin", "", "pinned", info.Source)
 		return fmt.Sprintf("Skill %q pinned.", info.Name), nil
 	case "unpin":
 		if name == "" {
@@ -167,9 +208,23 @@ func (t *SkillManageTool) Execute(args map[string]interface{}) (string, error) {
 		if err := SetSkillPinned(tenantID, info.Name, false); err != nil {
 			return "", err
 		}
+		recordSkillLearningChange(tenantID, info.Name, "unpin", "pinned", "unpinned", info.Source)
 		return fmt.Sprintf("Skill %q unpinned.", info.Name), nil
+	case "reload":
+		registry, _ := args["_registry"].(*Registry)
+		loaded, err := ReloadSkillToolsForTenant(tenantID, registry)
+		if err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("Reloaded %d skill tools.", len(loaded)), nil
 	default:
 		return "", fmt.Errorf("unknown action: %s", action)
+	}
+}
+
+func reloadSkillToolsFromArgs(tenantID string, args map[string]interface{}) {
+	if registry, _ := args["_registry"].(*Registry); registry != nil {
+		_, _ = ReloadSkillToolsForTenant(tenantID, registry)
 	}
 }
 
@@ -225,6 +280,7 @@ func createSkill(tenantID, name, content, description, source string) (string, e
 		source = SkillSourceAgentCreated
 	}
 	_ = MarkSkillCreated(tenantID, safeName, source, "skill_manage")
+	recordSkillLearningChange(tenantID, safeName, "create", "", content, source)
 	return fmt.Sprintf("Skill %q created at %s", safeName, target), nil
 }
 
@@ -247,14 +303,16 @@ func editSkill(tenantID, name, content, description string) (string, error) {
 	if info.Format == "dir" {
 		target = filepath.Join(info.Path, "SKILL.md")
 	}
+	beforeData, _ := os.ReadFile(target)
 	if err := atomicWriteFile(target, content); err != nil {
 		return "", err
 	}
 	_ = MarkSkillPatched(tenantID, info.Name)
+	recordSkillLearningChange(tenantID, info.Name, "edit", string(beforeData), content, info.Source)
 	return fmt.Sprintf("Skill %q edited at %s", info.Name, target), nil
 }
 
-func patchSkill(tenantID, name, oldText, newText, filePath string) (string, error) {
+func patchSkill(tenantID, name, oldText, newText, filePath string, replaceAll bool) (string, error) {
 	if name == "" {
 		return "", fmt.Errorf("name is required for patch")
 	}
@@ -266,6 +324,7 @@ func patchSkill(tenantID, name, oldText, newText, filePath string) (string, erro
 		return "", err
 	}
 	target := info.Path
+	auditAction := "patch"
 	if info.Format == "dir" {
 		target = filepath.Join(info.Path, "SKILL.md")
 	}
@@ -278,16 +337,17 @@ func patchSkill(tenantID, name, oldText, newText, filePath string) (string, erro
 		if err != nil {
 			return "", err
 		}
+		auditAction = "patch:" + filepath.ToSlash(filePath)
 	}
 	data, err := os.ReadFile(target)
 	if err != nil {
 		return "", err
 	}
 	current := string(data)
-	if !strings.Contains(current, oldText) {
-		return "", fmt.Errorf("old_text not found in %s", target)
+	updated, matches, strategy, err := fuzzyReplace(current, oldText, newText, replaceAll)
+	if err != nil {
+		return "", fmt.Errorf("%w\n\n%s", err, patchFailureHint(current, oldText, target))
 	}
-	updated := strings.Replace(current, oldText, newText, 1)
 	if err := kernel.ScanSkillForDangers(updated); err != nil {
 		return "", fmt.Errorf("security scan failed: %w", err)
 	}
@@ -295,7 +355,8 @@ func patchSkill(tenantID, name, oldText, newText, filePath string) (string, erro
 		return "", err
 	}
 	_ = MarkSkillPatched(tenantID, info.Name)
-	return fmt.Sprintf("Skill %q patched at %s", info.Name, target), nil
+	recordSkillLearningChange(tenantID, info.Name, auditAction, current, updated, info.Source)
+	return fmt.Sprintf("Skill %q patched at %s (%d replacement, strategy=%s)", info.Name, target, matches, strategy), nil
 }
 
 func deleteSkill(tenantID, name string) (string, error) {
@@ -309,6 +370,7 @@ func deleteSkill(tenantID, name string) (string, error) {
 	if info.Pinned {
 		return "", fmt.Errorf("skill %q is pinned; unpin it before deleting", info.Name)
 	}
+	before, _ := readSkillContent(info)
 	if info.Format == "dir" {
 		err = os.RemoveAll(info.Path)
 	} else {
@@ -318,6 +380,7 @@ func deleteSkill(tenantID, name string) (string, error) {
 		return "", err
 	}
 	_ = SetSkillState(tenantID, info.Name, SkillStateArchived)
+	recordSkillLearningChange(tenantID, info.Name, "delete", before, "", info.Source)
 	return fmt.Sprintf("Skill %q deleted.", info.Name), nil
 }
 
@@ -345,10 +408,12 @@ func ArchiveSkillForTenant(tenantID, name string) (string, error) {
 	if _, err := os.Stat(dest); err == nil {
 		dest = filepath.Join(archiveDir, fmt.Sprintf("%s-%d", destName, time.Now().Unix()))
 	}
+	before, _ := readSkillContent(info)
 	if err := os.Rename(info.Path, dest); err != nil {
 		return "", err
 	}
 	_ = SetSkillState(tenantID, info.Name, SkillStateArchived)
+	recordSkillLearningChange(tenantID, info.Name, "archive", before, "archived to "+dest, info.Source)
 	return fmt.Sprintf("Skill %q archived to %s", info.Name, dest), nil
 }
 
@@ -377,10 +442,12 @@ func writeSkillSupportFile(tenantID, name, filePath, fileContent string) (string
 	if err := kernel.ScanSkillForDangers(fileContent); err != nil {
 		return "", fmt.Errorf("security scan failed: %w", err)
 	}
+	beforeData, _ := os.ReadFile(target)
 	if err := atomicWriteFile(target, fileContent); err != nil {
 		return "", err
 	}
 	_ = MarkSkillPatched(tenantID, info.Name)
+	recordSkillLearningChange(tenantID, info.Name, "write_file:"+filepath.ToSlash(filePath), string(beforeData), fileContent, info.Source)
 	return fmt.Sprintf("Wrote support file for skill %q: %s", info.Name, target), nil
 }
 
@@ -402,11 +469,170 @@ func removeSkillSupportFile(tenantID, name, filePath string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	beforeData, _ := os.ReadFile(target)
 	if err := os.Remove(target); err != nil {
 		return "", err
 	}
 	_ = MarkSkillPatched(tenantID, info.Name)
+	recordSkillLearningChange(tenantID, info.Name, "remove_file:"+filepath.ToSlash(filePath), string(beforeData), "", info.Source)
 	return fmt.Sprintf("Removed support file for skill %q: %s", info.Name, target), nil
+}
+
+func UndoSkillLearningChangeForTenant(tenantID, changeID string) (string, error) {
+	change, err := GetLearningChangeByID(tenantID, changeID)
+	if err != nil {
+		return "", err
+	}
+	if change.Kind != "skill" {
+		return "", fmt.Errorf("learning change %s is %s, not skill", change.ID, change.Kind)
+	}
+	if strings.HasPrefix(change.Action, "undo:") {
+		return "", fmt.Errorf("learning change %s is already an undo record", change.ID)
+	}
+	name := kernel.SanitizeSkillName(change.Target)
+	if name == "" {
+		return "", fmt.Errorf("skill name is missing from learning change %s", change.ID)
+	}
+	switch {
+	case change.Action == "create":
+		info, err := findSkill(tenantID, name)
+		if err != nil {
+			return "", err
+		}
+		current, _ := readSkillContent(info)
+		if strings.TrimSpace(change.After) != "" && current != change.After {
+			return "", fmt.Errorf("skill %q changed after %s; refusing to undo create", info.Name, change.ID)
+		}
+		if info.Format == "dir" {
+			err = os.RemoveAll(info.Path)
+		} else {
+			err = os.Remove(info.Path)
+		}
+		if err != nil {
+			return "", err
+		}
+		_ = SetSkillState(tenantID, info.Name, SkillStateArchived)
+		recordSkillLearningChange(tenantID, info.Name, "undo:create", current, "", info.Source)
+		return fmt.Sprintf("Undid skill create `%s`: removed %q.", change.ID, info.Name), nil
+	case change.Action == "edit" || change.Action == "patch":
+		if strings.TrimSpace(change.Before) == "" {
+			return "", fmt.Errorf("learning change %s has no previous skill content to restore", change.ID)
+		}
+		info, err := findSkill(tenantID, name)
+		if err != nil {
+			return "", err
+		}
+		target := skillMainFilePath(info)
+		current, _ := os.ReadFile(target)
+		if err := kernel.ScanSkillForDangers(change.Before); err != nil {
+			return "", fmt.Errorf("security scan failed: %w", err)
+		}
+		if err := atomicWriteFile(target, change.Before); err != nil {
+			return "", err
+		}
+		_ = MarkSkillPatched(tenantID, info.Name)
+		recordSkillLearningChange(tenantID, info.Name, "undo:"+change.Action, string(current), change.Before, info.Source)
+		return fmt.Sprintf("Undid skill %s `%s`: restored %q.", change.Action, change.ID, info.Name), nil
+	case strings.HasPrefix(change.Action, "patch:"):
+		filePath := strings.TrimPrefix(change.Action, "patch:")
+		return undoSkillSupportFileChange(tenantID, name, change, filePath, true)
+	case strings.HasPrefix(change.Action, "write_file:"):
+		filePath := strings.TrimPrefix(change.Action, "write_file:")
+		return undoSkillSupportFileChange(tenantID, name, change, filePath, true)
+	case strings.HasPrefix(change.Action, "remove_file:"):
+		filePath := strings.TrimPrefix(change.Action, "remove_file:")
+		return undoSkillSupportFileChange(tenantID, name, change, filePath, true)
+	case change.Action == "delete" || change.Action == "archive":
+		if strings.TrimSpace(change.Before) == "" {
+			return "", fmt.Errorf("learning change %s has no previous skill content to restore", change.ID)
+		}
+		target, info, err := activeSkillMainPathForRestore(tenantID, name)
+		if err != nil {
+			return "", err
+		}
+		current, _ := os.ReadFile(target)
+		if err := kernel.ScanSkillForDangers(change.Before); err != nil {
+			return "", fmt.Errorf("security scan failed: %w", err)
+		}
+		if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
+			return "", err
+		}
+		if err := atomicWriteFile(target, change.Before); err != nil {
+			return "", err
+		}
+		_ = MarkSkillCreated(tenantID, name, emptyDefault(info.Source, change.Source), "learning_undo")
+		_ = SetSkillState(tenantID, name, SkillStateActive)
+		recordSkillLearningChange(tenantID, name, "undo:"+change.Action, string(current), change.Before, emptyDefault(info.Source, change.Source))
+		return fmt.Sprintf("Undid skill %s `%s`: restored %q.", change.Action, change.ID, name), nil
+	case change.Action == "pin":
+		if err := SetSkillPinned(tenantID, name, false); err != nil {
+			return "", err
+		}
+		recordSkillLearningChange(tenantID, name, "undo:pin", "pinned", "unpinned", change.Source)
+		return fmt.Sprintf("Undid skill pin `%s`: unpinned %q.", change.ID, name), nil
+	case change.Action == "unpin":
+		if err := SetSkillPinned(tenantID, name, true); err != nil {
+			return "", err
+		}
+		recordSkillLearningChange(tenantID, name, "undo:unpin", "unpinned", "pinned", change.Source)
+		return fmt.Sprintf("Undid skill unpin `%s`: pinned %q.", change.ID, name), nil
+	default:
+		return "", fmt.Errorf("skill learning action %q cannot be undone", change.Action)
+	}
+}
+
+func undoSkillSupportFileChange(tenantID, name string, change *LearningChange, filePath string, restoreBefore bool) (string, error) {
+	info, err := findSkill(tenantID, name)
+	if err != nil {
+		return "", err
+	}
+	skillDir, err := ensureDirectorySkill(tenantID, info)
+	if err != nil {
+		return "", err
+	}
+	target, err := safeSupportPath(skillDir, filePath)
+	if err != nil {
+		return "", err
+	}
+	current, _ := os.ReadFile(target)
+	if restoreBefore && strings.TrimSpace(change.Before) != "" {
+		if err := kernel.ScanSkillForDangers(change.Before); err != nil {
+			return "", fmt.Errorf("security scan failed: %w", err)
+		}
+		if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
+			return "", err
+		}
+		if err := atomicWriteFile(target, change.Before); err != nil {
+			return "", err
+		}
+		recordSkillLearningChange(tenantID, info.Name, "undo:"+change.Action, string(current), change.Before, info.Source)
+		return fmt.Sprintf("Undid skill support-file change `%s`: restored %s.", change.ID, filepath.ToSlash(filePath)), nil
+	}
+	if err := os.Remove(target); err != nil && !os.IsNotExist(err) {
+		return "", err
+	}
+	recordSkillLearningChange(tenantID, info.Name, "undo:"+change.Action, string(current), "", info.Source)
+	return fmt.Sprintf("Undid skill support-file change `%s`: removed %s.", change.ID, filepath.ToSlash(filePath)), nil
+}
+
+func skillMainFilePath(info SkillInfo) string {
+	if info.Format == "dir" {
+		return filepath.Join(info.Path, "SKILL.md")
+	}
+	return info.Path
+}
+
+func activeSkillMainPathForRestore(tenantID, name string) (string, SkillInfo, error) {
+	if info, err := findSkill(tenantID, name); err == nil {
+		return skillMainFilePath(info), info, nil
+	}
+	dir, err := getSkillsDir(tenantID)
+	if err != nil {
+		return "", SkillInfo{}, err
+	}
+	safeName := kernel.SanitizeSkillName(name)
+	path := filepath.Join(dir, safeName, "SKILL.md")
+	return path, SkillInfo{Name: safeName, Path: filepath.Dir(path), Format: "dir", Source: SkillSourceAgentCreated}, nil
 }
 
 func ListSkillsForTenant(tenantID string, includeArchived bool) ([]SkillInfo, error) {

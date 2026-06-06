@@ -71,6 +71,48 @@ func TestSkillManageTool_CreateUpdateDelete(t *testing.T) {
 		t.Errorf("Expected patch success, got: %s", result)
 	}
 
+	history, err := tool.Execute(map[string]interface{}{
+		"action": "history",
+		"name":   "docker-debug",
+	})
+	if err != nil {
+		t.Fatalf("history failed: %v", err)
+	}
+	if !strings.Contains(history, "create docker-debug") || !strings.Contains(history, "patch docker-debug") {
+		t.Fatalf("expected create and patch history, got:\n%s", history)
+	}
+	changes, err := ListSkillLearningChanges("default", "docker-debug", 10)
+	if err != nil {
+		t.Fatalf("ListSkillLearningChanges failed: %v", err)
+	}
+	patchID := ""
+	for _, change := range changes {
+		if change.Action == "patch" {
+			patchID = change.ID
+			break
+		}
+	}
+	if patchID == "" {
+		t.Fatalf("patch history id not found: %+v", changes)
+	}
+	result, err = tool.Execute(map[string]interface{}{
+		"action":    "undo",
+		"change_id": patchID,
+	})
+	if err != nil {
+		t.Fatalf("undo patch failed: %v", err)
+	}
+	if !strings.Contains(result, "Undid skill patch") {
+		t.Fatalf("unexpected undo result: %s", result)
+	}
+	data, err = os.ReadFile(skillPath)
+	if err != nil {
+		t.Fatalf("read skill after undo failed: %v", err)
+	}
+	if !strings.Contains(string(data), "Always check") {
+		t.Fatalf("expected patch undo to restore old text, got:\n%s", data)
+	}
+
 	// 2c. Support file
 	result, err = tool.Execute(map[string]interface{}{
 		"action":       "write_file",

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -81,6 +82,83 @@ func TestAccountBindEndpoint(t *testing.T) {
 	}
 	if resolved.PersonID != identity.PersonID {
 		t.Fatalf("bound person = %q, want %q", resolved.PersonID, identity.PersonID)
+	}
+}
+
+func TestApprovalsEndpoints(t *testing.T) {
+	t.Setenv("SELF_GATEWAY_TOKEN", "")
+	store, err := control.OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	ctx := httptest.NewRequest(http.MethodGet, "/", nil).Context()
+	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Local User")
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := store.CreateTask(ctx, control.TaskCreate{
+		TenantID: identity.TenantID,
+		PersonID: identity.PersonID,
+		Title:    "Approval task",
+		Channel:  "cli",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	approval, err := store.CreateApprovalRequest(ctx, control.ApprovalRequest{
+		TenantID:   identity.TenantID,
+		PersonID:   identity.PersonID,
+		TaskID:     task.ID,
+		ActionType: "shell",
+		Payload:    []byte(`{"command":"touch ok"}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	daemon := &Server{Control: store, DefaultTenantID: "default"}
+	req := httptest.NewRequest(http.MethodGet, "/v1/approvals?platform=cli&platform_user_id=local", nil)
+	rec := httptest.NewRecorder()
+	daemon.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var listed api.ApprovalListResponse
+	if err := json.NewDecoder(rec.Body).Decode(&listed); err != nil {
+		t.Fatal(err)
+	}
+	if len(listed.Approvals) != 1 || listed.Approvals[0].ID != approval.ID {
+		t.Fatalf("approval list = %+v", listed.Approvals)
+	}
+
+	body, _ := json.Marshal(api.ApprovalRespondRequest{
+		Platform:       "cli",
+		PlatformUserID: "local",
+		ApprovalID:     approval.ID,
+		Decision:       "approved",
+		Channel:        "cli",
+	})
+	req = httptest.NewRequest(http.MethodPost, "/v1/approvals/respond", bytes.NewReader(body))
+	rec = httptest.NewRecorder()
+	daemon.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("respond status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var responded api.ApprovalRespondResponse
+	if err := json.NewDecoder(rec.Body).Decode(&responded); err != nil {
+		t.Fatal(err)
+	}
+	if responded.Approval == nil || responded.Approval.Status != "approved" {
+		t.Fatalf("approval response = %+v", responded.Approval)
+	}
+	events, err := store.ListTaskEvents(ctx, task.ID, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) == 0 || events[0].Type != "approval.approved" {
+		t.Fatalf("approval event missing: %+v", events)
 	}
 }
 
@@ -270,5 +348,39 @@ func TestInferTaskStatusConservative(t *testing.T) {
 				t.Fatalf("inferTaskStatus() = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestBuildRunOutcomeExtractsStatusAndDetails(t *testing.T) {
+	content := `Implementation complete.
+
+Done:
+- Updated internal/gateway/httpapi/server.go
+- Added internal/gateway/httpapi/outcome.go
+
+Tests:
+- go test ./... passed
+
+Next steps:
+- Wire IM approval buttons
+
+Risks:
+- Feishu signing is not implemented yet
+`
+	outcome := buildRunOutcome(content)
+	if outcome.Status != "running" {
+		t.Fatalf("status = %q", outcome.Status)
+	}
+	if len(outcome.NextSteps) != 1 || outcome.NextSteps[0] != "Wire IM approval buttons" {
+		t.Fatalf("next steps = %+v", outcome.NextSteps)
+	}
+	if len(outcome.Tests) == 0 || !strings.Contains(outcome.Tests[0], "go test") {
+		t.Fatalf("tests = %+v", outcome.Tests)
+	}
+	if len(outcome.Files) < 2 {
+		t.Fatalf("files = %+v", outcome.Files)
+	}
+	if len(outcome.Risks) != 1 {
+		t.Fatalf("risks = %+v", outcome.Risks)
 	}
 }

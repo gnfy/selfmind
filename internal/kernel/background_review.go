@@ -67,6 +67,8 @@ func (e *BackgroundReviewEngine) SpawnReview(tenantID, channel string, messages 
 			allowed: map[string]bool{
 				"memory":         true,
 				"skill_manage":   true,
+				"skills_list":    true,
+				"skill_view":     true,
 				"session_search": true,
 			},
 		}
@@ -168,7 +170,7 @@ func buildBackgroundReviewPrompt(messages []llm.Message, reviewMemory, reviewSki
 	if reviewSkills {
 		sb.WriteString("Skill rules:\n")
 		sb.WriteString("- Save reusable workflows, non-trivial debugging paths, or user workflow corrections with skill_manage.\n")
-		sb.WriteString("- Prefer search/read/patch of an existing skill before creating a new class-level skill.\n")
+		sb.WriteString("- Prefer skills_list/skill_view and patch of an existing skill before creating a new class-level skill.\n")
 		sb.WriteString("- Put session-specific detail in references/ via skill_manage action=write_file.\n")
 		sb.WriteString("- Do not create duplicate skills for the same workflow. Search first, then patch the closest existing skill.\n")
 		sb.WriteString("- When creating skills, set source=agent-created and include concise front matter name/description.\n")

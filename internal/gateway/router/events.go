@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 
+	"selfmind/internal/kernel"
 	"selfmind/internal/kernel/llm"
 )
 
@@ -14,12 +15,10 @@ func (g *Gateway) HandleWithEvents(ctx context.Context, unifiedUID, channel, inp
 		return g.Handle(ctx, unifiedUID, channel, input)
 	}
 	eventCh := make(chan string, 100)
-	oldCh := g.agent.EventChannel
-	g.agent.EventChannel = eventCh
+	ctx = kernel.WithEventChannel(ctx, eventCh)
 
 	resp, err := g.Handle(ctx, unifiedUID, channel, input)
 	if err != nil || resp == nil || !resp.IsStreaming {
-		g.agent.EventChannel = oldCh
 		return resp, err
 	}
 
@@ -28,9 +27,6 @@ func (g *Gateway) HandleWithEvents(ctx context.Context, unifiedUID, channel, inp
 	resp.Stream = out
 	go func() {
 		defer close(out)
-		defer func() {
-			g.agent.EventChannel = oldCh
-		}()
 		origOpen := true
 		for origOpen {
 			select {

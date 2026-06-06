@@ -19,15 +19,19 @@ const (
 // SkillUsageRecord stores operational metadata outside SKILL.md so user-authored
 // skill content does not fight with lifecycle bookkeeping.
 type SkillUsageRecord struct {
-	Name       string `json:"name"`
-	Source     string `json:"source"`
-	CreatedBy  string `json:"created_by"`
-	State      string `json:"state"`
-	CreatedAt  string `json:"created_at"`
-	UpdatedAt  string `json:"updated_at"`
-	LastUsed   string `json:"last_used"`
-	PatchCount int    `json:"patch_count"`
-	Pinned     bool   `json:"pinned"`
+	Name        string `json:"name"`
+	Source      string `json:"source"`
+	CreatedBy   string `json:"created_by"`
+	State       string `json:"state"`
+	CreatedAt   string `json:"created_at"`
+	UpdatedAt   string `json:"updated_at"`
+	LastUsed    string `json:"last_used"`
+	LastViewed  string `json:"last_viewed,omitempty"`
+	LastPatched string `json:"last_patched,omitempty"`
+	UseCount    int    `json:"use_count,omitempty"`
+	ViewCount   int    `json:"view_count,omitempty"`
+	PatchCount  int    `json:"patch_count"`
+	Pinned      bool   `json:"pinned"`
 }
 
 func usageFilePath(skillsDir string) string {
@@ -138,6 +142,7 @@ func MarkSkillPatched(tenantID, name string) error {
 	return updateSkillUsageForDir(dir, name, func(rec *SkillUsageRecord) {
 		now := nowRFC3339()
 		rec.PatchCount++
+		rec.LastPatched = now
 		rec.State = SkillStateActive
 		rec.UpdatedAt = now
 	})
@@ -151,6 +156,23 @@ func MarkSkillUsed(tenantID, name string) error {
 	return updateSkillUsageForDir(dir, name, func(rec *SkillUsageRecord) {
 		now := nowRFC3339()
 		rec.LastUsed = now
+		rec.UseCount++
+		rec.UpdatedAt = now
+		if rec.State == SkillStateStale {
+			rec.State = SkillStateActive
+		}
+	})
+}
+
+func MarkSkillViewed(tenantID, name string) error {
+	dir, err := getSkillsDir(tenantID)
+	if err != nil {
+		return err
+	}
+	return updateSkillUsageForDir(dir, name, func(rec *SkillUsageRecord) {
+		now := nowRFC3339()
+		rec.LastViewed = now
+		rec.ViewCount++
 		rec.UpdatedAt = now
 		if rec.State == SkillStateStale {
 			rec.State = SkillStateActive

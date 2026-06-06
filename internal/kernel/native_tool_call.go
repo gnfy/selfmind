@@ -69,7 +69,7 @@ func normalizeToolCallIDs(calls []llm.ToolCall, iteration int) []llm.ToolCall {
 	return out
 }
 
-func (a *Agent) executeToolCalls(ctx context.Context, tenantID string, calls []llm.ToolCall) []toolExecutionResult {
+func (a *Agent) executeToolCalls(ctx context.Context, tenantID string, eventCh chan string, calls []llm.ToolCall) []toolExecutionResult {
 	results := make([]toolExecutionResult, len(calls))
 	if shouldParallelizeToolCalls(calls) {
 		var wg sync.WaitGroup
@@ -77,7 +77,7 @@ func (a *Agent) executeToolCalls(ctx context.Context, tenantID string, calls []l
 			wg.Add(1)
 			go func(i int, c llm.ToolCall) {
 				defer wg.Done()
-				results[i] = a.executeSingleToolCall(ctx, tenantID, i, c)
+				results[i] = a.executeSingleToolCall(ctx, tenantID, eventCh, i, c)
 			}(idx, call)
 		}
 		wg.Wait()
@@ -85,12 +85,12 @@ func (a *Agent) executeToolCalls(ctx context.Context, tenantID string, calls []l
 	}
 
 	for idx, call := range calls {
-		results[idx] = a.executeSingleToolCall(ctx, tenantID, idx, call)
+		results[idx] = a.executeSingleToolCall(ctx, tenantID, eventCh, idx, call)
 	}
 	return results
 }
 
-func (a *Agent) executeSingleToolCall(ctx context.Context, tenantID string, idx int, call llm.ToolCall) toolExecutionResult {
+func (a *Agent) executeSingleToolCall(ctx context.Context, tenantID string, eventCh chan string, idx int, call llm.ToolCall) toolExecutionResult {
 	name := call.Function
 	if call.ID == "" {
 		call.ID = fmt.Sprintf("toolcall-%d", idx)
@@ -127,16 +127,16 @@ func (a *Agent) executeSingleToolCall(ctx context.Context, tenantID string, idx 
 	args := parseToolCallArgs(call.Args)
 	args["_tenant_id"] = tenantID
 
-	if a.EventChannel != nil {
-		a.EventChannel <- fmt.Sprintf("tool_start:%s:%s", name, call.Args)
+	if eventCh != nil {
+		eventCh <- fmt.Sprintf("tool_start:%s:%s", name, call.Args)
 	}
 
 	startTime := time.Now()
 	result, err := a.backend.Dispatch(name, args)
 	duration := time.Since(startTime).Seconds()
 
-	if a.EventChannel != nil {
-		emitToolEndEventWithDuration(a.EventChannel, name, result, duration, err)
+	if eventCh != nil {
+		emitToolEndEventWithDuration(eventCh, name, result, duration, err)
 	}
 
 	if err != nil {

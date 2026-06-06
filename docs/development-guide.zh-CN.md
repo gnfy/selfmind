@@ -51,6 +51,21 @@ docs/                      架构和开发文档
 - `cliapp` 负责命令路由和用户可见 CLI 行为。
 - `gateway/httpapi` 负责 HTTP handler 和 model-free 控制命令。
 
+## 架构约束
+
+后续开发和 AI 辅助修改必须先阅读：
+
+- [SelfMind 架构约束](architecture-constraints.zh-CN.md)
+- [SelfMind Architecture Constraints](architecture-constraints.md)
+
+重点约束：
+
+- `internal/gateway/cli/controller.go` 只做 TUI 状态编排，不继续承载新的大块 UI 逻辑。
+- `/help`、详情页、列表页、搜索页等临时页面使用 `internal/ui/components/Pager` 或同类可复用 surface。
+- slash command 的执行、帮助文案和输入提示要逐步收敛到统一 registry。
+- 避免新增跨租户、跨测试共享的全局 mutable 状态。
+- 新 provider、工具、HTTP handler、TUI 组件应按职责拆分，不把逻辑堆进已有大文件。
+
 ## 配置系统
 
 默认配置路径：
@@ -242,6 +257,8 @@ gateway:
 |---|---|---|
 | `GET` | `/v1/gateway/status` | 查看进程状态和 active runs |
 | `POST` | `/v1/gateway/shutdown` | 请求优雅 draining shutdown |
+| `GET` | `/v1/approvals` | 查看 pending 或指定状态的审批请求 |
+| `POST` | `/v1/approvals/respond` | 批准或拒绝审批请求 |
 | `GET` | `/v1/tasks/events` | 查看当前任务或指定 task 的最近事件 |
 
 停机时 gateway 会进入 draining 状态，拒绝新 run，等待 active run 完成；CLI 可在需要时 force stop。
@@ -265,7 +282,8 @@ event_id        可审计任务事件
 运行时状态规则：
 
 - `task_runs.heartbeat_at` 由 gateway 每 10 秒刷新，异常重启后 `MarkInterruptedRuns` 会把遗留 running run 标记为 `interrupted`。
-- `task_events` 记录 `run.started`、`tool.started`、`tool.completed`、`learning.review`、`run.finished`、`run.cancelled` 等事件。
+- `task_events` 记录 `run.started`、`tool.started`、`tool.completed`、`learning.review`、`learning.memory.saved`、`learning.skill.updated`、`approval.approved`、`approval.rejected`、`run.finished`、`run.cancelled` 等事件。
+- `approval_requests` 记录持久化审批请求；gateway 控制命令和 HTTP handler 应读写这张表，不要把审批状态放进 IM adapter。
 - `outbound_messages` 是 IM 回发队列。没有 sender 时保持 `pending`；配置 sender 后由 delivery worker 重试发送。
 - `/status` 面向摘要，`/events` 面向最近运行事件。
 
@@ -342,7 +360,12 @@ conversation/task
 - `internal/kernel/turn_extractor.go`
 - `internal/kernel/reflection.go`
 - `internal/kernel/background_review.go`
+- `internal/tools/learning_audit.go`
 - `internal/tools/skill_manage.go`
+- `internal/tools/skill_runtime.go`
+- `internal/tools/skill_bundles.go`
+- `internal/tools/skill_catalog.go`
+- `internal/tools/skill_curator.go`
 - `internal/tools/session_search.go`
 - `internal/kernel/memory/sqlite_provider.go`
 
@@ -355,6 +378,25 @@ conversation/task
 - 临时 provider outage、一次性 tool failure、猜测性的失败原因不要沉淀为 memory/skill。
 - 创建 skill 时默认使用 `source=agent-created`，session 细节放到 `references/`，不要写进主 `SKILL.md`。
 - Curator 默认只治理 agent-created skills，除非用户明确要求。
+- Skill 发现必须保持渐进加载：`skills_list` 只返回紧凑元数据，`skill_view` 才加载完整 `SKILL.md` 或 linked file，`skill_manage` 只负责修改。
+- Skill 修改应尽量热加载当前 registry；`create`、`install`、`archive`、`restore` 后不要要求用户重启。
+- Skill slash command 先解析 bundle，再解析单个 skill。Bundle 存放在 `~/.selfmind/<tenant>/skill-bundles/`。
+- Catalog 安装的 skill 默认视为 manual，curator 不应自动治理，除非显式标记为 `agent-created`。
+- Patch 操作应支持 fuzzy matching，并在失败时返回可行动的上下文，而不是只有 `not found`。
+- Memory 和 Skill 修改必须写入 `~/.selfmind/<tenant>/learning/` 下的租户级学习审计记录。
+- `skill_manage(action=history|undo, ...)` 和 `memory(action=history|undo, ...)` 是用户可见的审计和撤销入口；不要在 TUI 或 IM 中绕过工具层实现私有 history/undo。
+
+Skill 相关入口：
+
+```text
+skill_catalog   -> official/local/url install and audit
+skills_list     -> compact metadata only
+skill_view      -> SKILL.md or linked file content
+skill_bundle    -> bundle CRUD
+skill_manage    -> skill mutation and hot reload
+/skill-name     -> user-facing direct invocation
+/bundle-name    -> user-facing multi-skill invocation
+```
 
 ## 新增工具
 

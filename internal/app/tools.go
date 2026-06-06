@@ -23,16 +23,14 @@ func InitTools(mem *memory.MemoryManager, cfg *config.Config, ag *kernel.Agent, 
 	disp.InjectMiddleware(tools.AuthMiddleware(mem))
 	disp.InjectMiddleware(tools.WorkspaceScopeMiddleware())
 	disp.InjectMiddleware(tools.NewToolGuardrails().Middleware)
-	disp.InjectClarifyHandler(func(question string, choices []string) string {
-		if tools.ClarifyFn == nil {
-			return ""
-		}
-		return tools.ClarifyFn(question, choices)
-	})
 
 	tools.RegisterBuiltins(disp)
 	tools.RegisterExtendedTools(disp)
 	disp.RegisterTool(tools.NewSkillManageTool())
+	disp.RegisterTool(tools.NewSkillsListTool())
+	disp.RegisterTool(tools.NewSkillViewTool())
+	disp.RegisterTool(tools.NewSkillBundleTool())
+	disp.RegisterTool(tools.NewSkillCatalogTool())
 
 	if mem != nil {
 		disp.InjectSessionAccess(mem.SearchFn(tenantID), mem.RecentSessionsFn(tenantID), mem.SessionMessagesFn(tenantID))
@@ -48,7 +46,7 @@ func InitTools(mem *memory.MemoryManager, cfg *config.Config, ag *kernel.Agent, 
 			},
 		)
 		disp.RegisterTool(tools.NewMemoryTool(mem))
-		tools.GetProcessRegistry().Init(mem, tenantID)
+		tools.GetProcessRegistryForTenant(tenantID).Init(mem, tenantID)
 	}
 
 	home, _ := os.UserHomeDir()

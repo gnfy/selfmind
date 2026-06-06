@@ -51,6 +51,21 @@ Dependency direction should stay simple:
 - `cliapp` owns command routing and user-facing CLI behavior.
 - `gateway/httpapi` owns HTTP request handling and model-free control commands.
 
+## Architecture Constraints
+
+Future development and AI-assisted edits must read:
+
+- [SelfMind Architecture Constraints](architecture-constraints.md)
+- [SelfMind 架构约束](architecture-constraints.zh-CN.md)
+
+Key rules:
+
+- `internal/gateway/cli/controller.go` only orchestrates TUI state. Do not keep adding large UI logic there.
+- Temporary pages such as `/help`, detail pages, list pages, and search pages should use `internal/ui/components/Pager` or a similar reusable surface.
+- Slash command dispatch, help text, and editor hints should move toward one shared registry.
+- Avoid new global mutable state shared across tenants or tests.
+- New providers, tools, HTTP handlers, and TUI components should be split by responsibility instead of being packed into existing large files.
+
 ## Configuration
 
 Default config path:
@@ -265,9 +280,11 @@ event_id        auditable task transition
 Runtime state rules:
 
 - `task_runs.heartbeat_at` is refreshed every 10 seconds; `MarkInterruptedRuns` marks stale running runs as `interrupted` after a gateway restart.
-- `task_events` stores events such as `run.started`, `tool.started`, `tool.completed`, `learning.review`, `run.finished`, and `run.cancelled`.
+- `task_events` stores events such as `run.started`, `tool.started`, `tool.completed`, `learning.review`, `learning.memory.saved`, `learning.skill.updated`, `approval.approved`, `approval.rejected`, `run.finished`, and `run.cancelled`.
+- `approval_requests` stores durable approval records. Gateway control commands and HTTP handlers should read/write this table rather than storing approval state in IM adapters.
 - `outbound_messages` is the IM delivery queue. Without a sender, messages remain `pending`; with a sender, the delivery worker retries them.
-- `/status` is for a compact task summary; `/events` is for recent runtime events.
+- `/status` is for a compact task card backed by `api.RunOutcome` and the latest handoff; `/events` is for recent runtime events.
+- Run completion should save a structured handoff: summary, done items, next steps, changed files, test status, and risks. Do not make IM or CLI status cards parse arbitrary assistant prose directly.
 
 Workspace-scoped tools must honor `allowed_roots`. Do not bypass `WorkspaceScopeMiddleware` for file, search, patch, terminal, or process tools.
 
@@ -318,7 +335,9 @@ Rules:
 
 ### Agent Concurrency
 
-An `Agent` instance is serialized with `runMu` because it owns one `EventChannel`. Gateway paths that need true parallel active runs should construct separate agent instances per run or introduce a per-run event sink before removing that lock.
+An `Agent` instance is still serialized with `runMu`, but gateway event streaming no longer mutates the shared `Agent.EventChannel`. Gateway paths must install a per-run event sink with `kernel.WithEventChannel(ctx, ch)` and then consume the resulting stream events through `router.HandleWithEvents`.
+
+`Agent.EventChannel` remains a legacy fallback for local TUI paths. Do not temporarily replace it in gateway, IM, or future Web code. Gateway paths that need true parallel active runs should construct separate agent instances per run or introduce a worker pool after the per-run event sink contract is preserved.
 
 `syncTurn` uses a bounded background queue instead of spawning an unbounded goroutine for every assistant turn. High-frequency conversations should prefer dropping stale sync snapshots over piling up memory-sync workers.
 
@@ -342,7 +361,12 @@ Current pieces:
 - `internal/kernel/turn_extractor.go`
 - `internal/kernel/reflection.go`
 - `internal/kernel/background_review.go`
+- `internal/tools/learning_audit.go`
 - `internal/tools/skill_manage.go`
+- `internal/tools/skill_runtime.go`
+- `internal/tools/skill_bundles.go`
+- `internal/tools/skill_catalog.go`
+- `internal/tools/skill_curator.go`
 - `internal/tools/session_search.go`
 - `internal/kernel/memory/sqlite_provider.go`
 
@@ -355,6 +379,27 @@ Rules to preserve:
 - Transient provider outages, one-off tool failures, and speculative failure causes should not become memory or skills.
 - New skills created by the agent should use `source=agent-created`; session-specific details belong in `references/`, not the main `SKILL.md`.
 - Curator should manage only agent-created skills unless explicitly told otherwise.
+- Skill discovery should be progressive: use `skills_list` for compact metadata, `skill_view` for full `SKILL.md` or linked files, and `skill_manage` only for mutation.
+- Skill mutation should hot-reload the active registry when possible. Do not require a restart after `create`, `install`, `archive`, or `restore`.
+- Skill slash commands use bundle-first resolution, then skill resolution. Bundles live under `~/.selfmind/<tenant>/skill-bundles/`.
+- Catalog installs are treated as manual skills by default; curator must not auto-govern them unless explicitly marked `agent-created`.
+- Patch operations should provide fuzzy matching and actionable failure context rather than returning a bare "not found".
+- Memory and skill mutations should write tenant-scoped learning audit records under `~/.selfmind/<tenant>/learning/`. Use the shared audit helpers instead of creating one-off history files in individual tools.
+- `skill_manage(action=history, name=...)` should read from the learning audit history and remain the first user-facing view for skill change history.
+- `skill_manage(action=undo, change_id=...)` and `memory(action=undo, change_id=...)` are the supported rollback surfaces for durable learning changes. Do not add channel-specific undo logic that bypasses these tools.
+- TUI commands such as `/skills history`, `/skills undo`, `/memory history`, `/memory remove`, and `/memory undo` should dispatch through the same tools so manual user actions still produce audit records.
+
+Skill surfaces:
+
+```text
+skill_catalog   -> official/local/url install and audit
+skills_list     -> compact metadata only
+skill_view      -> SKILL.md or linked file content
+skill_bundle    -> bundle CRUD
+skill_manage    -> skill mutation and hot reload
+/skill-name     -> user-facing direct invocation
+/bundle-name    -> user-facing multi-skill invocation
+```
 
 ## Add A Tool
 

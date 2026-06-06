@@ -260,6 +260,7 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 	defer a.runMu.Unlock()
 
 	var totalUsage llm.UsageStats
+	eventCh := eventChannelFromContext(ctx, a.EventChannel)
 	ctx = llm.WithModelContext(ctx, llm.ModelContext{
 		TenantID: tenantID,
 		Role:     llm.RoleCodingAgent,
@@ -319,8 +320,8 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 			}
 			if event.Content != "" {
 				fullResp.WriteString(event.Content)
-				if a.EventChannel != nil {
-					a.EventChannel <- "stream:" + event.Content
+				if eventCh != nil {
+					eventCh <- "stream:" + event.Content
 				}
 			}
 			if event.Usage != nil {
@@ -354,7 +355,7 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 		}
 
 		if len(calls) > 0 {
-			results := a.executeToolCalls(ctx, tenantID, calls)
+			results := a.executeToolCalls(ctx, tenantID, eventCh, calls)
 
 			// Append results in order
 			for _, res := range results {

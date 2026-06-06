@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"selfmind/internal/kernel/memory"
-	"strings"
 )
 
 // MemoryTool allows the agent to save durable information.
@@ -23,12 +22,12 @@ func NewMemoryTool(mem *memory.MemoryManager) *MemoryTool {
 				Properties: map[string]PropertyDef{
 					"action": {
 						Type:        "string",
-						Description: "The action to perform: 'add', 'replace', or 'remove'.",
-						Enum:        []string{"add", "replace", "remove"},
+						Description: "The action to perform: add, replace, remove, history, or undo.",
+						Enum:        []string{"add", "replace", "remove", "history", "undo"},
 					},
 					"target": {
 						Type:        "string",
-						Description: "Which memory store: 'user' for user preferences/profile, 'memory' for technical notes/environment facts.",
+						Description: "Which memory store: 'user' for user preferences/profile, 'memory' for technical notes/environment facts. Optional for history and undo.",
 						Enum:        []string{"user", "memory"},
 					},
 					"content": {
@@ -39,8 +38,12 @@ func NewMemoryTool(mem *memory.MemoryManager) *MemoryTool {
 						Type:        "string",
 						Description: "Short unique substring identifying the entry to replace or remove.",
 					},
+					"change_id": {
+						Type:        "string",
+						Description: "Learning history change id to undo.",
+					},
 				},
-				Required: []string{"action", "target"},
+				Required: []string{"action"},
 			},
 		},
 		mem: mem,
@@ -52,6 +55,7 @@ func (t *MemoryTool) Execute(args map[string]interface{}) (string, error) {
 	target, _ := args["target"].(string)
 	content, _ := args["content"].(string)
 	oldText, _ := args["old_text"].(string)
+	changeID, _ := args["change_id"].(string)
 
 	tenantID, _ := args["_tenant_id"].(string)
 	if tenantID == "" {
@@ -61,6 +65,9 @@ func (t *MemoryTool) Execute(args map[string]interface{}) (string, error) {
 
 	switch action {
 	case "add":
+		if target == "" {
+			return "", fmt.Errorf("target is required for add")
+		}
 		if content == "" {
 			return "", fmt.Errorf("content is required for add")
 		}
@@ -68,9 +75,13 @@ func (t *MemoryTool) Execute(args map[string]interface{}) (string, error) {
 		if err != nil {
 			return "", err
 		}
+		recordMemoryLearningChange(tenantID, target, "add", "", content, "memory_tool")
 		return fmt.Sprintf("Added to %s memory: %s", target, content), nil
 
 	case "remove":
+		if target == "" {
+			return "", fmt.Errorf("target is required for remove")
+		}
 		if oldText == "" {
 			return "", fmt.Errorf("old_text is required for remove")
 		}
@@ -78,23 +89,21 @@ func (t *MemoryTool) Execute(args map[string]interface{}) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		var targetID string
-		for _, f := range facts {
-			if strings.Contains(f.Content, oldText) {
-				targetID = f.ID
-				break
-			}
-		}
-		if targetID == "" {
+		fact, ok := findMatchingMemoryFact(facts, oldText)
+		if !ok {
 			return "", fmt.Errorf("could not find memory entry matching %q", oldText)
 		}
-		err = t.mem.RemoveFact(ctx, tenantID, targetID)
+		err = t.mem.RemoveFact(ctx, tenantID, fact.ID)
 		if err != nil {
 			return "", err
 		}
-		return fmt.Sprintf("Removed from %s memory: (matched %q)", target, oldText), nil
+		recordMemoryLearningChange(tenantID, target, "remove", fact.Content, "", "memory_tool")
+		return fmt.Sprintf("Removed from %s memory: %s", target, fact.Content), nil
 
 	case "replace":
+		if target == "" {
+			return "", fmt.Errorf("target is required for replace")
+		}
 		if content == "" || oldText == "" {
 			return "", fmt.Errorf("content and old_text are required for replace")
 		}
@@ -102,19 +111,13 @@ func (t *MemoryTool) Execute(args map[string]interface{}) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		var targetID string
-		for _, f := range facts {
-			if strings.Contains(f.Content, oldText) {
-				targetID = f.ID
-				break
-			}
-		}
-		if targetID == "" {
+		fact, ok := findMatchingMemoryFact(facts, oldText)
+		if !ok {
 			return "", fmt.Errorf("could not find memory entry matching %q", oldText)
 		}
 		// In SQLite, we can just remove and add, or implement UpdateFact.
 		// For simplicity, we use Remove + Add.
-		err = t.mem.RemoveFact(ctx, tenantID, targetID)
+		err = t.mem.RemoveFact(ctx, tenantID, fact.ID)
 		if err != nil {
 			return "", err
 		}
@@ -122,7 +125,21 @@ func (t *MemoryTool) Execute(args map[string]interface{}) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		return fmt.Sprintf("Replaced in %s memory: (matched %q) with %s", target, oldText, content), nil
+		recordMemoryLearningChange(tenantID, target, "replace", fact.Content, content, "memory_tool")
+		return fmt.Sprintf("Replaced in %s memory: %s -> %s", target, fact.Content, content), nil
+
+	case "history":
+		changes, err := ListMemoryLearningChanges(tenantID, target, 20)
+		if err != nil {
+			return "", err
+		}
+		return FormatMemoryLearningChanges(changes), nil
+
+	case "undo":
+		if changeID == "" {
+			return "", fmt.Errorf("change_id is required for undo")
+		}
+		return UndoMemoryLearningChange(ctx, t.mem, tenantID, changeID)
 
 	default:
 		return "", fmt.Errorf("unknown action: %s", action)

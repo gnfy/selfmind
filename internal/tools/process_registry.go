@@ -5,6 +5,7 @@ import (
 	"context"
 	"io"
 	"os/exec"
+	"strings"
 	"sync"
 	"time"
 
@@ -30,13 +31,40 @@ type ProcessRegistry struct {
 	mu        sync.RWMutex
 }
 
-var globalProcessRegistry = &ProcessRegistry{
-	processes: make(map[string]*ProcessInfo),
-	tenantID:  "default",
+func NewProcessRegistry(tenantID string) *ProcessRegistry {
+	tenantID = strings.TrimSpace(tenantID)
+	if tenantID == "" {
+		tenantID = "default"
+	}
+	return &ProcessRegistry{
+		processes: make(map[string]*ProcessInfo),
+		tenantID:  tenantID,
+	}
 }
 
+var processRegistries sync.Map
+
 func GetProcessRegistry() *ProcessRegistry {
-	return globalProcessRegistry
+	return GetProcessRegistryForTenant("default")
+}
+
+func GetProcessRegistryForTenant(tenantID string) *ProcessRegistry {
+	tenantID = strings.TrimSpace(tenantID)
+	if tenantID == "" {
+		tenantID = "default"
+	}
+	registry, _ := processRegistries.LoadOrStore(tenantID, NewProcessRegistry(tenantID))
+	return registry.(*ProcessRegistry)
+}
+
+func ProcessRegistryForArgs(args map[string]interface{}) *ProcessRegistry {
+	if scope, ok := currentExecutionScope(args); ok && scope.TenantID != "" {
+		return GetProcessRegistryForTenant(scope.TenantID)
+	}
+	if tenantID, _ := args["_tenant_id"].(string); strings.TrimSpace(tenantID) != "" {
+		return GetProcessRegistryForTenant(tenantID)
+	}
+	return GetProcessRegistry()
 }
 
 func (r *ProcessRegistry) Init(mem *memory.MemoryManager, tenantID string) {

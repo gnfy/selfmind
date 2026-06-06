@@ -163,6 +163,10 @@ type Dispatcher struct {
 }
 
 func NewDispatcher() *Dispatcher {
+	return &Dispatcher{registry: NewRegistry()}
+}
+
+func NewGlobalDispatcher() *Dispatcher {
 	return &Dispatcher{registry: globalRegistry}
 }
 

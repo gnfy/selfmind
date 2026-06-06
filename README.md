@@ -13,13 +13,15 @@ Available for daily personal use:
 - Local terminal UI with slash commands, tool-call status, memory, skills, checkpoints, and curator controls.
 - Single user-facing binary: `selfmind`.
 - Long-running gateway lifecycle: `selfmind gateway start/run/status/stop/restart`.
-- Gateway client commands: `send`, `status`, `stop`, `tasks`, `workspaces`, `workspace add`, `workspace use`, `new`, `id`.
+- Gateway client commands: `send`, `status`, `stop`, `tasks`, `workspaces`, `approvals`, `approve`, `reject`, `workspace add`, `workspace use`, `new`, `id`.
 - Generic IM webhook entrypoint: `POST /v1/im/{platform}`.
 - IM outbound foundation: generic webhook/Telegram delivery, long-message splitting, retry, and a durable outbound queue.
 - Account binding API so CLI, WeChat, Feishu, QQ-like relays, and other channels can resolve to the same `person_id`.
 - Durable task runtime state with run heartbeat, interrupted-run recovery, recent task events, and the `/events` control command.
+- Structured run outcomes and handoffs for compact `/status` task cards across CLI and IM channels.
 - Workspace isolation for file, search, patch, and terminal tools.
 - Long-term memory, session search, skill management, background review, and skill curator.
+- Tenant learning audit records for memory and skill mutations, including skill/memory history and basic undo.
 - Hermes-style native tool calling for OpenAI-compatible providers, with legacy text-tool fallback, repeated-failure/no-progress guardrails, and secret redaction.
 - Role-based model routing through `models.roles`, so coding, memory extraction, background review, skill curation, and semantic recall can use different models.
 
@@ -254,9 +256,13 @@ Common slash commands:
 | `/help` | Show available TUI commands. |
 | `/status` | Show provider, model, runtime, token usage, task, and gateway status. |
 | `/tasks` | Show local gateway tasks. |
-| `/skills` | Skill list/view/search/archive/pin/unpin/delete/stats. |
-| `/memory` | List or remove long-term memory. |
-| `/curator` | Check or run skill curator. |
+| `/skills` | Skill list/view/search/catalog/install/audit/archive/pin/unpin/delete/stats/reload. |
+| `/skills history <name>` | View learning audit history for a skill. |
+| `/skills undo <change_id>` | Undo a supported skill learning change. |
+| `/bundles` | List, view, create, or delete skill bundles. |
+| `/reload-skills` | Reload skill tools from disk without restarting. |
+| `/memory` | List, inspect history, remove, or undo long-term memory. |
+| `/curator` | Check, dry-run, report, run, or restore skill curator actions. |
 | `/checkpoint` | Save, load, list, or delete conversation checkpoints. |
 | `/migrate` | Migrate Hermes Agent skills. |
 | `/model` | Show or switch the current model inside the TUI. |
@@ -271,6 +277,83 @@ Useful keys:
 | `Shift+Enter` | Insert newline. |
 | `Ctrl+C` | Cancel the current run or exit. |
 | `Ctrl+V` | Paste. Large paste is converted into a readable attachment-style block. |
+
+## Skills
+
+Skills are procedural memory: reusable workflows, checklists, and project-specific ways of working. They live under:
+
+```text
+~/.selfmind/<tenant>/skills/
+```
+
+New skills use a directory layout:
+
+```text
+<skill-name>/
+  SKILL.md
+  references/
+  templates/
+  scripts/
+  assets/
+```
+
+Legacy flat `.md` skills are still loaded. Installed or learned skills are hot-reloadable; newly created skills become callable in the current session.
+
+Common commands:
+
+```sh
+/skills list
+/skills view codebase-inspection
+/skills search docker
+/skills catalog
+/skills install official/codebase-inspection
+/skills install ./my-skill --name my-skill
+/skills install https://raw.githubusercontent.com/org/repo/main/path/SKILL.md
+/skills audit
+/skills history codebase-inspection
+/skills undo <change_id>
+/skills reload
+/reload-skills
+```
+
+Invoke a skill directly with a slash command:
+
+```text
+/codebase-inspection inspect this repository
+```
+
+Skill bundles load multiple skills together. Bundle files are YAML under `~/.selfmind/<tenant>/skill-bundles/`.
+
+```sh
+/bundles create backend-dev codebase-inspection,test-driven-change
+/bundles list
+/backend-dev implement this change
+```
+
+Curator commands:
+
+```sh
+/curator status
+/curator run --dry-run --report
+/curator run --report
+/curator restore old-skill
+```
+
+Curator only manages `agent-created` skills by default. Pinned skills are protected from archive/delete. Manual and catalog-installed skills are left alone unless you explicitly manage them.
+
+## Memory
+
+Memory stores durable user preferences and project/environment facts. It should not be used for temporary task status.
+
+```sh
+/memory list
+/memory history
+/memory history user
+/memory remove user "prefers concise answers"
+/memory undo <change_id>
+```
+
+Memory and skill changes are written to `~/.selfmind/<tenant>/learning/`. Use history first, then undo the specific `change_id` when a learned item is wrong or stale.
 
 ## Gateway Mode
 
@@ -303,6 +386,9 @@ selfmind status
 selfmind tasks
 selfmind stop
 selfmind workspaces
+selfmind approvals
+selfmind approve <approval_id>
+selfmind reject <approval_id>
 selfmind workspace add .
 selfmind workspace use <workspace_id>
 selfmind new "implement the checkout page"
@@ -332,6 +418,8 @@ If the gateway is exposed beyond localhost, set `gateway.token` in `config.yaml`
 | `POST` | `/v1/message` | Send a CLI/IM/Web message. |
 | `POST` | `/v1/im/{platform}` | Generic IM webhook entrypoint. |
 | `POST` | `/v1/accounts/bind` | Bind another platform account to an existing person. |
+| `GET` | `/v1/approvals` | List pending or filtered approval requests. |
+| `POST` | `/v1/approvals/respond` | Approve or reject an approval request. |
 | `GET` | `/v1/tasks` | List tasks for an account. |
 | `GET` | `/v1/tasks/current` | Get current task and active run. |
 | `GET` | `/v1/tasks/events` | List recent run/tool/learning events for the current or specified task. |
@@ -388,6 +476,13 @@ $env:PATH="$env:USERPROFILE\.cache\selfmind-tools\go1.26.3\go\bin;" + $env:PATH
 $env:GOWORK='off'
 go test ./...
 ```
+
+Architecture notes:
+
+- [Development Guide](docs/development-guide.md)
+- [Architecture Constraints](docs/architecture-constraints.md)
+- [Gateway / IM / SaaS Architecture](docs/daemon-im-saas-architecture.md)
+- [P0/P1 Development Notes 中文](docs/p0-p1-development-plan.zh-CN.md)
 
 Important directories:
 

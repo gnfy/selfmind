@@ -52,10 +52,42 @@ type MessageResponse struct {
 	Identity *control.IdentityContext `json:"identity"`
 	Task     *control.Task            `json:"task,omitempty"`
 	Run      *control.Run             `json:"run,omitempty"`
+	Outcome  *RunOutcome              `json:"outcome,omitempty"`
 	Content  string                   `json:"content"`
 	Usage    llm.UsageStats           `json:"usage"`
 	Error    string                   `json:"error,omitempty"`
 	Accepted bool                     `json:"accepted,omitempty"`
+}
+
+type ApprovalListResponse struct {
+	Identity  *control.IdentityContext  `json:"identity"`
+	Approvals []control.ApprovalRequest `json:"approvals"`
+}
+
+type ApprovalRespondRequest struct {
+	TenantID       string `json:"tenant_id"`
+	Platform       string `json:"platform"`
+	PlatformUserID string `json:"platform_user_id"`
+	DisplayName    string `json:"display_name"`
+	Channel        string `json:"channel"`
+	ApprovalID     string `json:"approval_id"`
+	Decision       string `json:"decision"`
+}
+
+type ApprovalRespondResponse struct {
+	Identity *control.IdentityContext `json:"identity"`
+	Approval *control.ApprovalRequest `json:"approval"`
+}
+
+type RunOutcome struct {
+	Status      string   `json:"status"`
+	Summary     string   `json:"summary,omitempty"`
+	Done        []string `json:"done,omitempty"`
+	NextSteps   []string `json:"next_steps,omitempty"`
+	Files       []string `json:"files,omitempty"`
+	Tests       []string `json:"tests,omitempty"`
+	Risks       []string `json:"risks,omitempty"`
+	NeedApprove bool     `json:"need_approve,omitempty"`
 }
 
 type WorkspaceRegisterRequest struct {

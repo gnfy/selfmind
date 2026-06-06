@@ -11,6 +11,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/mattn/go-runewidth"
 	"selfmind/internal/platform/config"
 	"selfmind/internal/ui/common"
 	"selfmind/internal/ui/layout"
@@ -29,6 +30,8 @@ var pasteTokenRe = regexp.MustCompile(`\[\[ paste:\d[^\]]*\]\]`)
 // wsRe collapses whitespace in previews.
 var wsRe = regexp.MustCompile(`\s+`)
 
+const maxComposerInputLines = 4
+
 // Editor wraps textarea + textinput with large-paste detection.
 // When a multi-line paste exceeds the configured thresholds, the actual
 // content is stored here and a placeholder token is shown in the textarea.
@@ -39,10 +42,15 @@ type Editor struct {
 	textarea        textarea.Model
 	textinput       textinput.Model
 	secure          bool
-	commands        []string
+	commands        []CommandHint
 	snippets        []PasteSnippet // stored snippets for large pastes
 	largePasteChars int            // threshold in characters (from config, 0=disabled)
 	largePasteLines int            // threshold in lines (from config, 0=disabled)
+}
+
+type CommandHint struct {
+	Name        string
+	Description string
 }
 
 // NewEditor creates a new Editor component.
@@ -51,19 +59,24 @@ func NewEditor(c *common.Common, editorCfg *config.EditorConfig) *Editor {
 	t := textarea.New()
 	t.SetHeight(1)
 	t.ShowLineNumbers = false
-	t.Placeholder = " Message SelfMind"
+	t.Placeholder = "Ask SelfMind to inspect, change, test, or remember"
 	t.Prompt = "" // Handled manually in Draw
 
-	// Reset base styles to ensure no background blocks
-	t.FocusedStyle.Base = lipgloss.NewStyle()
-	t.BlurredStyle.Base = lipgloss.NewStyle()
+	editorBG := lipgloss.Color("236")
+	baseStyle := lipgloss.NewStyle().Background(editorBG)
+	placeholderStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("244")).Background(editorBG)
+
+	// Keep the textarea visually merged with the filled composer band.
+	t.FocusedStyle.Base = baseStyle
+	t.BlurredStyle.Base = baseStyle
 	t.FocusedStyle.Text = c.Styles.Editor.Text
 	t.BlurredStyle.Text = c.Styles.Editor.Text
-	t.FocusedStyle.Placeholder = c.Styles.Subtle
-	t.BlurredStyle.Placeholder = c.Styles.Subtle
-	t.FocusedStyle.Prompt = lipgloss.NewStyle() // Prompt handled manually
-	t.BlurredStyle.Prompt = lipgloss.NewStyle()
-	t.FocusedStyle.CursorLine = lipgloss.NewStyle() // Remove background on cursor line
+	t.FocusedStyle.Placeholder = placeholderStyle
+	t.BlurredStyle.Placeholder = placeholderStyle
+	t.FocusedStyle.Prompt = baseStyle // Prompt handled manually
+	t.BlurredStyle.Prompt = baseStyle
+	t.FocusedStyle.CursorLine = baseStyle
+	t.BlurredStyle.CursorLine = baseStyle
 
 	t.Cursor.Style = c.Styles.Editor.Cursor
 	t.Cursor.SetMode(cursor.CursorStatic)
@@ -107,10 +120,14 @@ func NewEditor(c *common.Common, editorCfg *config.EditorConfig) *Editor {
 		common:          c,
 		textarea:        t,
 		textinput:       i,
-		commands:        []string{"/help", "/status", "/clear", "/exit", "/migrate", "/model", "/tasks", "/skills", "/memory", "/curator", "/checkpoint"},
 		largePasteChars: chars,
 		largePasteLines: lines,
 	}
+}
+
+// SetCommandHints sets slash-command suggestions supplied by the application.
+func (e *Editor) SetCommandHints(commands []CommandHint) {
+	e.commands = append([]CommandHint(nil), commands...)
 }
 
 // Update handles messages, intercepting paste events (both bracketed paste
@@ -263,19 +280,23 @@ func (e *Editor) IsSecure() bool {
 
 // GetSuggestion returns slash-command completions for the current input.
 func (e *Editor) GetSuggestion() string {
-	val := e.textarea.Value()
-	if strings.HasPrefix(val, "/") {
-		var matches []string
-		for _, cmd := range e.commands {
-			if strings.HasPrefix(cmd, val) {
-				matches = append(matches, cmd)
-			}
-		}
-		if len(matches) > 0 {
-			return strings.Join(matches, " | ")
-		}
+	matches := e.matchingCommands()
+	if len(matches) == 0 {
+		return ""
 	}
-	return ""
+	rows := make([]string, 0, len(matches))
+	for _, cmd := range matches {
+		rows = append(rows, cmd.Name+" "+cmd.Description)
+	}
+	return strings.Join(rows, "\n")
+}
+
+// PreferredHeight returns the number of terminal rows the composer needs.
+func (e *Editor) PreferredHeight() int {
+	if e.secure {
+		return 3
+	}
+	return e.visibleInputLineCount() + 2 + len(e.matchingCommands())
 }
 
 // Draw renders the editor into the given layout rect.
@@ -286,26 +307,193 @@ func (e *Editor) Draw(rect layout.Rect) string {
 	}
 
 	if e.secure {
-		prompt := e.common.Styles.Editor.Prompt.Render(" secret > ")
-		e.textinput.Width = availableW - 10
+		prompt := e.common.Styles.Editor.Prompt.Render(" secret › ")
+		inputW := availableW - 10
+		if inputW < 1 {
+			inputW = 1
+		}
+		e.textinput.Width = inputW
 		return e.common.Styles.Editor.Panel.
 			Width(rect.W).
 			Render(lipgloss.JoinHorizontal(lipgloss.Top, prompt, e.textinput.View()))
 	}
 
-	prompt := e.common.Styles.Editor.Prompt.Render("> ")
-	e.textarea.SetWidth(availableW - 2)
-	suggestion := e.GetSuggestion()
-	view := e.textarea.View()
-	if suggestion != "" {
-		view += "\n" + e.common.Styles.Subtle.PaddingLeft(2).Render(suggestion)
+	inputH := e.visibleInputLineCount()
+	prompt := e.common.Styles.Editor.Prompt.Render("› ")
+	e.textarea.SetHeight(inputH)
+	textW := availableW - 2
+	if textW < 1 {
+		textW = 1
 	}
-	return e.common.Styles.Editor.Panel.
+	e.textarea.SetWidth(textW)
+	view := renderEditorValue(e.textarea.Value(), e.textarea.Placeholder, inputH, textW, e.common.Styles.Editor.Cursor)
+
+	input := e.common.Styles.Editor.Panel.
 		Width(rect.W).
 		Render(lipgloss.JoinHorizontal(lipgloss.Top, prompt, view))
+
+	suggestions := e.renderSuggestions(rect.W)
+	if suggestions == "" {
+		return input
+	}
+	return lipgloss.JoinVertical(lipgloss.Left, input, suggestions)
 }
 
 // ─── Helpers ───────────────────────────────────────────────────────────────
+
+func (e *Editor) visibleInputLineCount() int {
+	lines := strings.Count(e.textarea.Value(), "\n") + 1
+	if lines < 1 {
+		return 1
+	}
+	if lines > maxComposerInputLines {
+		return maxComposerInputLines
+	}
+	return lines
+}
+
+func (e *Editor) matchingCommands() []CommandHint {
+	val := strings.TrimSpace(e.textarea.Value())
+	if val == "" || !strings.HasPrefix(val, "/") || strings.Contains(val, " ") || strings.Contains(val, "\n") {
+		return nil
+	}
+
+	var matches []CommandHint
+	for _, cmd := range e.commands {
+		if strings.HasPrefix(cmd.Name, val) {
+			matches = append(matches, cmd)
+			if len(matches) >= 8 {
+				break
+			}
+		}
+	}
+	return matches
+}
+
+func (e *Editor) renderSuggestions(width int) string {
+	matches := e.matchingCommands()
+	if len(matches) == 0 {
+		return ""
+	}
+
+	nameStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("75")).Bold(true).Width(14)
+	descStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
+	innerW := width - 2
+	if innerW < 1 {
+		innerW = 1
+	}
+	descW := innerW - 16
+	if descW < 12 {
+		descW = 12
+	}
+
+	rows := make([]string, 0, len(matches))
+	for _, cmd := range matches {
+		desc := truncateASCII(cmd.Description, descW)
+		rows = append(rows, lipgloss.JoinHorizontal(lipgloss.Top, nameStyle.Render(cmd.Name), descStyle.Render(desc)))
+	}
+
+	return lipgloss.NewStyle().
+		Width(innerW).
+		PaddingLeft(2).
+		Render(strings.Join(rows, "\n"))
+}
+
+func renderEditorValue(value, placeholder string, height, width int, cursorStyle lipgloss.Style) string {
+	if height < 1 {
+		height = 1
+	}
+	if width < 1 {
+		width = 1
+	}
+	if value == "" {
+		return renderEmptyEditorLine(placeholder, width, cursorStyle)
+	}
+
+	lines := strings.Split(value, "\n")
+	start := 0
+	if len(lines) > height {
+		start = len(lines) - height
+	}
+	visible := append([]string{}, lines[start:]...)
+	for len(visible) < height {
+		visible = append(visible, "")
+	}
+
+	bg := lipgloss.Color("236")
+	lineStyle := lipgloss.NewStyle().Background(bg).Width(width)
+	textStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("255")).Background(bg)
+
+	for i, line := range visible {
+		globalLine := start + i
+		isCursorLine := globalLine == len(lines)-1
+		textWidth := width
+		if isCursorLine {
+			textWidth--
+		}
+		if textWidth < 0 {
+			textWidth = 0
+		}
+
+		line = truncateDisplayWidth(line, textWidth)
+		rendered := textStyle.Render(line)
+		if isCursorLine {
+			rendered += cursorStyle.Render(" ")
+		}
+		visible[i] = lineStyle.Render(rendered)
+	}
+	return strings.Join(visible, "\n")
+}
+
+func renderEmptyEditorLine(placeholder string, width int, cursorStyle lipgloss.Style) string {
+	if width < 1 {
+		width = 1
+	}
+	bg := lipgloss.Color("236")
+	lineStyle := lipgloss.NewStyle().Background(bg).Width(width)
+	placeholderStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("244")).Background(bg)
+
+	cursor := cursorStyle.Render(" ")
+	available := width - 1
+	if available < 0 {
+		available = 0
+	}
+	text := truncateASCII(placeholder, available)
+	return lineStyle.Render(cursor + placeholderStyle.Render(text))
+}
+
+func truncateDisplayWidth(s string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	if runewidth.StringWidth(s) <= width {
+		return s
+	}
+	var sb strings.Builder
+	used := 0
+	for _, r := range s {
+		rw := runewidth.RuneWidth(r)
+		if used+rw > width {
+			break
+		}
+		sb.WriteRune(r)
+		used += rw
+	}
+	return sb.String()
+}
+
+func truncateASCII(s string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	if len(s) <= width {
+		return s
+	}
+	if width <= 3 {
+		return strings.Repeat(".", width)
+	}
+	return s[:width-3] + "..."
+}
 
 // stripTrailingPasteNewlines removes trailing newlines from pasted text,
 // but only if there's actual content (not just whitespace/newlines).

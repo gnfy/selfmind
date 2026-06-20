@@ -148,6 +148,7 @@ func (s *Service) EnqueueAndTry(ctx context.Context, msg Message) error {
 			TenantID:       msg.TenantID,
 			PersonID:       msg.PersonID,
 			Platform:       msg.Platform,
+			PlatformUserID: msg.PlatformUserID,
 			Channel:        msg.Channel,
 			TaskID:         msg.TaskID,
 			RunID:          msg.RunID,
@@ -199,15 +200,16 @@ func (s *Service) tryDelivery(ctx context.Context, d *control.Delivery) error {
 		return ErrNoSender
 	}
 	msg := Message{
-		TenantID:  d.TenantID,
-		PersonID:  d.PersonID,
-		Platform:  d.Platform,
-		Channel:   d.Channel,
-		TaskID:    d.TaskID,
-		RunID:     d.RunID,
-		Content:   d.Content,
-		PartIndex: d.PartIndex,
-		PartTotal: d.PartTotal,
+		TenantID:       d.TenantID,
+		PersonID:       d.PersonID,
+		Platform:       d.Platform,
+		PlatformUserID: d.PlatformUserID,
+		Channel:        d.Channel,
+		TaskID:         d.TaskID,
+		RunID:          d.RunID,
+		Content:        d.Content,
+		PartIndex:      d.PartIndex,
+		PartTotal:      d.PartTotal,
 	}
 	err := s.sender.Send(ctx, msg)
 	if err == nil {
@@ -259,8 +261,8 @@ func splitMessage(content string, max int) []string {
 }
 
 func idempotencyKey(msg Message) string {
-	base := fmt.Sprintf("%s|%s|%s|%s|%s|%s|%d|%s",
-		msg.TenantID, msg.PersonID, msg.Platform, msg.Channel, msg.TaskID, msg.RunID, msg.PartIndex, msg.Content)
+	base := fmt.Sprintf("%s|%s|%s|%s|%s|%s|%s|%d|%s",
+		msg.TenantID, msg.PersonID, msg.Platform, msg.PlatformUserID, msg.Channel, msg.TaskID, msg.RunID, msg.PartIndex, msg.Content)
 	sum := sha256.Sum256([]byte(base))
 	return fmt.Sprintf("%x", sum[:])
 }

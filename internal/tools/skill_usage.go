@@ -13,6 +13,7 @@ const (
 	SkillStateArchived = "archived"
 
 	SkillSourceAgentCreated = "agent-created"
+	SkillSourceCatalog      = "catalog-installed"
 	SkillSourceManual       = "manual"
 )
 

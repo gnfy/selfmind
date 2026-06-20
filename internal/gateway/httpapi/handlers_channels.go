@@ -119,7 +119,53 @@ func messageRequestFromIM(platform string, payload map[string]interface{}) api.M
 	req.PlatformUserID = firstNonEmpty(mapString(payload, "FromUserName"), req.PlatformUserID)
 	req.Channel = firstNonEmpty(mapString(payload, "ToUserName"), req.Channel)
 	req.Content = firstNonEmpty(mapString(payload, "Content"), req.Content)
+	req.Attachments = attachmentsFromIM(payload)
 	return req
+}
+
+func attachmentsFromIM(payload map[string]interface{}) []api.MessageAttachment {
+	var out []api.MessageAttachment
+	if value, ok := payload["attachments"]; ok {
+		out = append(out, attachmentsFromValue(value)...)
+	}
+	if value, ok := payload["media_paths"]; ok {
+		out = append(out, attachmentsFromValue(value)...)
+	}
+	return out
+}
+
+func attachmentsFromValue(value interface{}) []api.MessageAttachment {
+	var out []api.MessageAttachment
+	switch v := value.(type) {
+	case []interface{}:
+		for _, item := range v {
+			out = append(out, attachmentsFromValue(item)...)
+		}
+	case []string:
+		for _, item := range v {
+			if item = strings.TrimSpace(item); item != "" {
+				out = append(out, api.MessageAttachment{Path: item})
+			}
+		}
+	case string:
+		if trimmed := strings.TrimSpace(v); trimmed != "" {
+			out = append(out, api.MessageAttachment{Path: trimmed})
+		}
+	case map[string]interface{}:
+		att := api.MessageAttachment{
+			Kind:     mapString(v, "kind"),
+			Path:     firstNonEmpty(mapString(v, "path"), mapString(v, "url")),
+			MimeType: firstNonEmpty(mapString(v, "mime_type"), mapString(v, "mime")),
+			Name:     mapString(v, "name"),
+		}
+		if size := mapString(v, "size"); size != "" {
+			fmt.Sscanf(size, "%d", &att.Size)
+		}
+		if att.Path != "" || att.Name != "" {
+			out = append(out, att)
+		}
+	}
+	return out
 }
 
 func contentText(value interface{}) string {

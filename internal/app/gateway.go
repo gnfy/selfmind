@@ -81,6 +81,8 @@ func InitGateway(dataDir string, mem *memory.MemoryManager, agent *kernel.Agent,
 	}
 
 	gw := router.NewGateway(idMapper, taskMgr, agent, nil)
+	displayProvider, displayModel, _ := ResolveModelDisplay(cfg)
+	gw.SetModelDisplay(displayProvider, displayModel)
 	bridge := channel.NewBridge(gw)
 
 	return &GatewayDeps{

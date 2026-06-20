@@ -417,6 +417,8 @@ New skills use a directory layout:
 
 Legacy flat `.md` skills are still loaded. Installed or learned skills are hot-reloadable; newly created skills become callable in the current session.
 
+Catalog installs follow Hermes-style provenance rules. `skill_catalog` writes install metadata to `~/.selfmind/<tenant>/skills/.catalog/lock.json`, marks installed skills as `catalog-installed`, and refuses to overwrite an existing directory or legacy `.md` skill unless you pass `--force`. Forced reinstalls first move the previous copy into `~/.selfmind/<tenant>/skills/.catalog/backups/`. Curator never auto-archives catalog-installed, manual, bundled, or pinned skills.
+
 Common commands:
 
 ```sh
@@ -427,6 +429,7 @@ Common commands:
 /skills install official/codebase-inspection
 /skills install ./my-skill --name my-skill
 /skills install https://raw.githubusercontent.com/org/repo/main/path/SKILL.md
+/skills install ./my-skill --name my-skill --force
 /skills audit
 /skills history codebase-inspection
 /skills undo <change_id>

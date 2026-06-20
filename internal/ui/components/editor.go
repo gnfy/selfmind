@@ -326,7 +326,7 @@ func (e *Editor) Draw(rect layout.Rect) string {
 		textW = 1
 	}
 	e.textarea.SetWidth(textW)
-	view := renderEditorValue(e.textarea.Value(), e.textarea.Placeholder, inputH, textW, e.common.Styles.Editor.Cursor)
+	view := renderEditorValue(e.textarea.Value(), e.textarea.Placeholder, inputH, textW, e.common.Styles.Editor.Cursor, e.textarea.Line(), e.textarea.LineInfo())
 
 	input := e.common.Styles.Editor.Panel.
 		Width(rect.W).
@@ -399,7 +399,7 @@ func (e *Editor) renderSuggestions(width int) string {
 		Render(strings.Join(rows, "\n"))
 }
 
-func renderEditorValue(value, placeholder string, height, width int, cursorStyle lipgloss.Style) string {
+func renderEditorValue(value, placeholder string, height, width int, cursorStyle lipgloss.Style, cursorLine int, lineInfo textarea.LineInfo) string {
 	if height < 1 {
 		height = 1
 	}
@@ -414,6 +414,15 @@ func renderEditorValue(value, placeholder string, height, width int, cursorStyle
 	start := 0
 	if len(lines) > height {
 		start = len(lines) - height
+		if cursorLine < start {
+			start = cursorLine
+		}
+		if cursorLine >= start+height {
+			start = cursorLine - height + 1
+		}
+		if start < 0 {
+			start = 0
+		}
 	}
 	visible := append([]string{}, lines[start:]...)
 	for len(visible) < height {
@@ -426,23 +435,73 @@ func renderEditorValue(value, placeholder string, height, width int, cursorStyle
 
 	for i, line := range visible {
 		globalLine := start + i
-		isCursorLine := globalLine == len(lines)-1
-		textWidth := width
+		isCursorLine := globalLine == cursorLine
+		var rendered string
 		if isCursorLine {
-			textWidth--
-		}
-		if textWidth < 0 {
-			textWidth = 0
-		}
-
-		line = truncateDisplayWidth(line, textWidth)
-		rendered := textStyle.Render(line)
-		if isCursorLine {
-			rendered += cursorStyle.Render(" ")
+			rendered = renderEditorCursorLine(line, width, textStyle, cursorStyle, lineInfo)
+		} else {
+			rendered = textStyle.Render(truncateDisplayWidth(line, width))
 		}
 		visible[i] = lineStyle.Render(rendered)
 	}
 	return strings.Join(visible, "\n")
+}
+
+func renderEditorCursorLine(line string, width int, textStyle, cursorStyle lipgloss.Style, lineInfo textarea.LineInfo) string {
+	before, cursorText, after := editorCursorParts(line, width, lineInfo)
+	return textStyle.Render(before) + cursorStyle.Render(cursorText) + textStyle.Render(after)
+}
+
+func editorCursorParts(line string, width int, lineInfo textarea.LineInfo) (string, string, string) {
+	if width < 1 {
+		width = 1
+	}
+	runes := []rune(line)
+	start := lineInfo.StartColumn
+	if start < 0 {
+		start = 0
+	}
+	if start > len(runes) {
+		start = len(runes)
+	}
+	cursorOffset := lineInfo.ColumnOffset
+	if cursorOffset < 0 {
+		cursorOffset = 0
+	}
+	if start+cursorOffset > len(runes) {
+		cursorOffset = len(runes) - start
+	}
+	segment := runes[start:]
+	if cursorOffset > len(segment) {
+		cursorOffset = len(segment)
+	}
+
+	before := string(segment[:cursorOffset])
+	beforeWidth := runewidth.StringWidth(before)
+	if beforeWidth >= width {
+		before = ""
+		beforeWidth = 0
+	}
+
+	cursorText := " "
+	afterStart := cursorOffset
+	if cursorOffset < len(segment) {
+		cursorText = string(segment[cursorOffset])
+		afterStart = cursorOffset + 1
+	}
+	cursorWidth := runewidth.StringWidth(cursorText)
+	if cursorWidth < 1 {
+		cursorWidth = 1
+	}
+	afterWidth := width - beforeWidth - cursorWidth
+	if afterWidth < 0 {
+		afterWidth = 0
+	}
+	after := ""
+	if afterStart < len(segment) {
+		after = truncateDisplayWidth(string(segment[afterStart:]), afterWidth)
+	}
+	return before, cursorText, after
 }
 
 func renderEmptyEditorLine(placeholder string, width int, cursorStyle lipgloss.Style) string {

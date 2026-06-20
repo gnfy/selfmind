@@ -56,6 +56,28 @@ func (g *Gateway) HandleWithEvents(ctx context.Context, unifiedUID, channel, inp
 }
 
 func agentEventToStream(event string) llm.StreamEvent {
+	if structured, ok := kernel.DecodeAgentEvent(event); ok {
+		payload := structured.Payload
+		if payload == nil {
+			payload = map[string]interface{}{}
+		}
+		if len(structured.Plan) > 0 {
+			payload["plan"] = structured.Plan
+		}
+		stream := llm.StreamEvent{
+			EventType:       structured.Type,
+			Content:         structured.Content,
+			ToolName:        structured.ToolName,
+			ToolArgs:        structured.ToolArgs,
+			ToolResult:      structured.ToolResult,
+			DurationSeconds: structured.DurationSeconds,
+			Payload:         payload,
+		}
+		if structured.Error != "" {
+			stream.Err = fmt.Errorf("%s", structured.Error)
+		}
+		return stream
+	}
 	switch {
 	case strings.HasPrefix(event, "stream:"):
 		return llm.StreamEvent{EventType: "stream", Content: strings.TrimPrefix(event, "stream:")}

@@ -125,11 +125,11 @@ provider_profiles:
     api_key: "${MINIMAX_API_KEY}"
     base_url: "https://api.minimax.io/anthropic"
     protocol: "anthropic_messages"
-    model: "MiniMax-M2.7"
+    model: "MiniMax-M3"
   kimi-coding:
     api_key: "${KIMI_CODING_API_KEY}"
-    base_url: "https://api.kimi.com/coding/v1"
-    protocol: "openai_compatible"
+    base_url: "https://api.kimi.com/coding"
+    protocol: "anthropic_messages"
     model: "kimi-for-coding"
 
 auth:
@@ -179,6 +179,8 @@ models:
 
 ## 模型 Provider 系统
 
+新增或调整模型服务商前，先阅读 [Provider Runtime 规范](provider-runtime.zh-CN.md)。当前模型接入采用 `ProviderProfile + Resolver + Adapter + ProviderQuirks` 四层边界，Kimi、MiniMax、OpenAI、Anthropic、OpenRouter、Google、DeepSeek、Z.AI、Alibaba Coding Plan 都按这套规则接入。
+
 用户命令：
 
 ```sh
@@ -210,7 +212,7 @@ selfmind model set openai gpt-4o
 | Provider profile | OpenAI-compatible / Anthropic Messages / Responses | 由 `modelruntime.Runtime.Protocol` 选择 |
 | Custom | OpenAI-compatible endpoint | `llm.GenericOpenAIAdapter` |
 
-大多数新厂商如果提供 OpenAI-compatible API，都应该直接通过自定义 endpoint 接入，不需要改代码。只有遇到真正不同的协议族时，才新增 Go adapter。
+大多数新厂商如果提供 OpenAI-compatible 或 Anthropic-compatible API，都应该优先通过 `provider_profiles` 或新增 `ProviderProfile` 接入，不要直接在 app、CLI、IM adapter 中硬编码厂商逻辑。只有遇到真正不同的协议族时，才新增 Go adapter。
 
 模型 runtime 边界：
 
@@ -218,6 +220,7 @@ selfmind model set openai gpt-4o
 - `internal/modelruntime/resolver.go` 把 YAML、环境变量、SelfMind auth JSON、外部 CLI 登录解析成 `Runtime`。
 - `internal/modelruntime/catalog.go` 拉取并缓存模型列表，不负责创建 LLM adapter。
 - `internal/app/agent.go` 只把 `Runtime` 转成 adapter 并组装 role routing，不再写厂商级认证探测逻辑。
+- `ProviderQuirks` 负责认证头、tool schema、thinking、system message、User-Agent 等厂商差异。
 - `internal/cliapp/model_commands.go` 管用户交互式 provider/model picker；`Custom endpoint (enter URL manually)` 保持第 4 项，兼容脚本输入。
 - P2 外部认证复用只覆盖 Codex CLI、Claude Code、Gemini CLI、Qwen CLI。其它厂商走 API key、自定义 endpoint 或 `provider_profiles`。
 
@@ -411,7 +414,8 @@ conversation/task
 - Skill 发现必须保持渐进加载：`skills_list` 只返回紧凑元数据，`skill_view` 才加载完整 `SKILL.md` 或 linked file，`skill_manage` 只负责修改。
 - Skill 修改应尽量热加载当前 registry；`create`、`install`、`archive`、`restore` 后不要要求用户重启。
 - Skill slash command 先解析 bundle，再解析单个 skill。Bundle 存放在 `~/.selfmind/<tenant>/skill-bundles/`。
-- Catalog 安装的 skill 默认视为 manual，curator 不应自动治理，除非显式标记为 `agent-created`。
+- Catalog 安装的 skill 标记为 `catalog-installed`，并记录到 `~/.selfmind/<tenant>/skills/.catalog/lock.json`；curator 不应自动治理，除非显式标记为 `agent-created`。
+- Catalog 安装默认拒绝同名目录和旧版 `.md` 冲突；只有用户显式传入 `--force` 才能替换，且替换前必须先把旧副本备份到 `skills/.catalog/backups/`。
 - Patch 操作应支持 fuzzy matching，并在失败时返回可行动的上下文，而不是只有 `not found`。
 - Memory 和 Skill 修改必须写入 `~/.selfmind/<tenant>/learning/` 下的租户级学习审计记录。
 - `skill_manage(action=history|undo, ...)` 和 `memory(action=history|undo, ...)` 是用户可见的审计和撤销入口；不要在 TUI 或 IM 中绕过工具层实现私有 history/undo。

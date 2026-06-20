@@ -95,6 +95,18 @@ type Handoff struct {
 	CreatedAt    time.Time `json:"created_at"`
 }
 
+type Artifact struct {
+	ID        string          `json:"id"`
+	TaskID    string          `json:"task_id"`
+	RunID     string          `json:"run_id,omitempty"`
+	Kind      string          `json:"kind"`
+	Name      string          `json:"name,omitempty"`
+	URI       string          `json:"uri"`
+	MimeType  string          `json:"mime_type,omitempty"`
+	Metadata  json.RawMessage `json:"metadata_json,omitempty"`
+	CreatedAt time.Time       `json:"created_at"`
+}
+
 type TaskCreate struct {
 	TenantID    string
 	PersonID    string
@@ -250,6 +262,18 @@ CREATE TABLE IF NOT EXISTS task_handoffs (
 	risks_json TEXT,
 	created_at INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS task_artifacts (
+	id TEXT PRIMARY KEY,
+	task_id TEXT NOT NULL,
+	run_id TEXT,
+	kind TEXT NOT NULL,
+	name TEXT,
+	uri TEXT NOT NULL,
+	mime_type TEXT,
+	metadata_json TEXT,
+	created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_task_artifacts_task ON task_artifacts(task_id, created_at);
 CREATE TABLE IF NOT EXISTS approval_requests (
 	id TEXT PRIMARY KEY,
 	tenant_id TEXT NOT NULL,
@@ -279,6 +303,7 @@ CREATE TABLE IF NOT EXISTS outbound_messages (
 	tenant_id TEXT NOT NULL,
 	person_id TEXT NOT NULL,
 	platform TEXT NOT NULL,
+	platform_user_id TEXT,
 	channel TEXT NOT NULL,
 	task_id TEXT,
 	run_id TEXT,
@@ -308,6 +333,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_outbound_idempotency ON outbound_messages(
 		{"task_runs", "heartbeat_at", "INTEGER"},
 		{"task_runs", "cancel_requested", "INTEGER NOT NULL DEFAULT 0"},
 		{"task_runs", "last_error", "TEXT"},
+		{"outbound_messages", "platform_user_id", "TEXT"},
 	} {
 		if err := s.ensureColumn(ctx, col.table, col.name, col.def); err != nil {
 			return err

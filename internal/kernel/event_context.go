@@ -22,3 +22,9 @@ func eventChannelFromContext(ctx context.Context, fallback chan string) chan str
 	}
 	return fallback
 }
+
+// EventChannelFromContext returns the per-run event channel installed in ctx.
+// Tool packages use this to emit progress without depending on Agent internals.
+func EventChannelFromContext(ctx context.Context) chan string {
+	return eventChannelFromContext(ctx, nil)
+}

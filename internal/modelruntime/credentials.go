@@ -13,6 +13,7 @@ type Credential struct {
 	Token     string
 	Source    string
 	ExpiresAt time.Time
+	Getter    func() string
 }
 
 // CredentialStore is SelfMind's own optional credential file. It is separate

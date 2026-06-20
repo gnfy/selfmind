@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -16,18 +17,25 @@ type toolExecutionResult struct {
 	msg   llm.Message
 }
 
-func (a *Agent) llmToolDefinitions() []llm.ToolDefinition {
+type parallelToolSupport interface {
+	SupportsParallelTool(name string) bool
+}
+
+func (a *Agent) llmToolDefinitions(excluded map[string]bool) []llm.ToolDefinition {
 	if a.backend == nil {
 		return nil
 	}
-	return toolDefinitionsForLLM(a.backend.GetToolDefinitions())
+	return toolDefinitionsForLLM(a.backend.GetToolDefinitions(), excluded)
 }
 
-func toolDefinitionsForLLM(defs []map[string]interface{}) []llm.ToolDefinition {
+func toolDefinitionsForLLM(defs []map[string]interface{}, excluded map[string]bool) []llm.ToolDefinition {
 	out := make([]llm.ToolDefinition, 0, len(defs))
 	for _, d := range defs {
 		name := toolDefinitionName(d)
 		if name == "" {
+			continue
+		}
+		if excluded != nil && excluded[name] {
 			continue
 		}
 		params := toolDefinitionParameters(d)
@@ -71,7 +79,7 @@ func normalizeToolCallIDs(calls []llm.ToolCall, iteration int) []llm.ToolCall {
 
 func (a *Agent) executeToolCalls(ctx context.Context, tenantID string, eventCh chan string, calls []llm.ToolCall) []toolExecutionResult {
 	results := make([]toolExecutionResult, len(calls))
-	if shouldParallelizeToolCalls(calls) {
+	if shouldParallelizeToolCalls(calls, a.backend) {
 		var wg sync.WaitGroup
 		for idx, call := range calls {
 			wg.Add(1)
@@ -126,9 +134,14 @@ func (a *Agent) executeSingleToolCall(ctx context.Context, tenantID string, even
 
 	args := parseToolCallArgs(call.Args)
 	args["_tenant_id"] = tenantID
+	args["_context"] = ctx
 
 	if eventCh != nil {
-		eventCh <- fmt.Sprintf("tool_start:%s:%s", name, call.Args)
+		EmitAgentEvent(eventCh, AgentEvent{
+			Type:     "tool.started",
+			ToolName: name,
+			ToolArgs: call.Args,
+		})
 	}
 
 	startTime := time.Now()
@@ -137,6 +150,7 @@ func (a *Agent) executeSingleToolCall(ctx context.Context, tenantID string, even
 
 	if eventCh != nil {
 		emitToolEndEventWithDuration(eventCh, name, result, duration, err)
+		emitStructuredToolEvent(eventCh, name, args, result, err)
 	}
 
 	if err != nil {
@@ -188,16 +202,27 @@ func parseToolCallArgs(raw string) map[string]interface{} {
 	return args
 }
 
-func shouldParallelizeToolCalls(calls []llm.ToolCall) bool {
+func shouldParallelizeToolCalls(calls []llm.ToolCall, backends ...AgentBackend) bool {
 	if len(calls) <= 1 {
 		return false
 	}
+	var backend AgentBackend
+	if len(backends) > 0 {
+		backend = backends[0]
+	}
 	for _, call := range calls {
-		if !parallelSafeTool(call.Function) {
+		if !toolSupportsParallel(call.Function, backend) {
 			return false
 		}
 	}
 	return true
+}
+
+func toolSupportsParallel(name string, backend AgentBackend) bool {
+	if support, ok := backend.(parallelToolSupport); ok {
+		return support.SupportsParallelTool(name)
+	}
+	return parallelSafeTool(name)
 }
 
 func parallelSafeTool(name string) bool {
@@ -209,4 +234,59 @@ func parallelSafeTool(name string) bool {
 	default:
 		return false
 	}
+}
+
+func emitStructuredToolEvent(eventCh chan string, name string, args map[string]interface{}, result string, err error) {
+	if err != nil {
+		return
+	}
+	switch name {
+	case "update_plan":
+		EmitAgentEvent(eventCh, AgentEvent{
+			Type: "plan.updated",
+			Plan: planItemsFromArgs(args),
+			Payload: map[string]interface{}{
+				"explanation": stringArg(args, "explanation"),
+			},
+		})
+	case "finish_run":
+		payload := map[string]interface{}{}
+		if err := json.Unmarshal([]byte(result), &payload); err != nil {
+			for k, v := range args {
+				if !strings.HasPrefix(k, "_") {
+					payload[k] = v
+				}
+			}
+		}
+		EmitAgentEvent(eventCh, AgentEvent{
+			Type:    "run.outcome",
+			Payload: payload,
+		})
+	}
+}
+
+func planItemsFromArgs(args map[string]interface{}) []PlanItem {
+	raw, ok := args["plan"].([]interface{})
+	if !ok {
+		return nil
+	}
+	items := make([]PlanItem, 0, len(raw))
+	for _, item := range raw {
+		obj, ok := item.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		items = append(items, PlanItem{
+			Step:   fmt.Sprintf("%v", obj["step"]),
+			Status: fmt.Sprintf("%v", obj["status"]),
+		})
+	}
+	return items
+}
+
+func stringArg(args map[string]interface{}, key string) string {
+	if value, ok := args[key].(string); ok {
+		return value
+	}
+	return ""
 }

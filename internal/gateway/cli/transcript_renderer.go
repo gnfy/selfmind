@@ -18,30 +18,7 @@ func (m *uiModel) renderAllMessages() string {
 
 	var allLines []string
 
-	// Calculate selection range.
-	startY, endY := m.selectionStart, m.selectionEnd
-	if startY > endY {
-		startY, endY = endY, startY
-	}
-	viewportTop := 0
-	scrollOffset := m.viewport.YOffset
-	lineStart := scrollOffset + (startY - viewportTop)
-	lineEnd := scrollOffset + (endY - viewportTop)
-
 	processLines := func(lines []string, baseIdx int) []string {
-		if !m.isSelecting {
-			return lines
-		}
-		for i := range lines {
-			globalLineIdx := baseIdx + i
-			if globalLineIdx >= lineStart && globalLineIdx <= lineEnd {
-				plain := stripANSI(lines[i])
-				if strings.TrimSpace(plain) == "" {
-					continue
-				}
-				lines[i] = st.Chat.Selected.Render(plain)
-			}
-		}
 		return lines
 	}
 
@@ -77,7 +54,9 @@ func (m *uiModel) renderAllMessages() string {
 
 	minLines := m.viewport.Height + m.viewport.YOffset
 	for len(allLines) < minLines {
-		allLines = append(allLines, "")
+		idx := len(allLines)
+		line := processLines([]string{""}, idx)
+		allLines = append(allLines, line[0])
 	}
 
 	return strings.Join(allLines, "\n")
@@ -92,19 +71,24 @@ func (m *uiModel) renderStartupCard(width int) []string {
 		return []string{m.common.Styles.Welcome}
 	}
 
-	modelName := m.modelName
+	modelName := strings.TrimSpace(m.modelName)
 	if modelName == "" {
-		modelName = m.providerName
+		modelName = strings.TrimSpace(m.providerName)
 	}
 	if modelName == "" {
 		modelName = "active"
 	}
+	providerName := strings.TrimSpace(m.providerName)
 	title := ">_ SelfMind (v0.1.0)"
 	modelLine := "model:     " + modelName + "      /model to change"
+	providerLine := ""
+	if providerName != "" && providerName != modelName && providerName != "active" {
+		providerLine = "provider:  " + providerName
+	}
 	dirLine := "directory: " + currentWorkingDir()
 
 	needed := runewidth.StringWidth(title)
-	for _, line := range []string{modelLine, dirLine} {
+	for _, line := range []string{modelLine, providerLine, dirLine} {
 		if w := runewidth.StringWidth(line); w > needed {
 			needed = w
 		}
@@ -118,17 +102,23 @@ func (m *uiModel) renderStartupCard(width int) []string {
 		cardW = maxCardW
 	}
 
-	return []string{
+	lines := []string{
 		"┌" + strings.Repeat("─", cardW-2) + "┐",
 		renderBoxLine(title, cardW),
 		renderBoxLine("", cardW),
 		renderBoxLine(modelLine, cardW),
+	}
+	if providerLine != "" {
+		lines = append(lines, renderBoxLine(providerLine, cardW))
+	}
+	lines = append(lines,
 		renderBoxLine(dirLine, cardW),
-		"└" + strings.Repeat("─", cardW-2) + "┘",
+		"└"+strings.Repeat("─", cardW-2)+"┘",
 		"",
 		"Tip: Tell SelfMind what to inspect, change, test, or remember.",
 		"",
-	}
+	)
+	return lines
 }
 
 func renderUserMessage(content string, width int) string {
@@ -171,11 +161,7 @@ func renderAssistantMessage(content string, width int) string {
 			lines[i] = ""
 			continue
 		}
-		if i == 0 {
-			lines[i] = "• " + line
-		} else {
-			lines[i] = "  " + line
-		}
+		lines[i] = "  " + line
 	}
 	return "\n" + strings.Join(lines, "\n")
 }
@@ -192,10 +178,15 @@ func renderToolMessage(msg ChatMessage, width int) string {
 		args = map[string]interface{}{}
 	}
 
-	done := msg.Content != ""
+	done := !msg.IsRunning && (msg.Content != "" || msg.Duration > 0)
 	action := toolAction(label, args, done)
 	if !done {
-		return "• " + action + "\n"
+		var sb strings.Builder
+		sb.WriteString("• " + action + "\n")
+		if result := toolResultLine(label, msg.Content, width-6); result != "" {
+			sb.WriteString("  └─ " + result + "\n")
+		}
+		return sb.String()
 	}
 
 	dur := fmt.Sprintf("%.1fs", msg.Duration)
@@ -210,7 +201,7 @@ func renderToolMessage(msg ChatMessage, width int) string {
 
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("• %s%s  %s\n", action, status, dur))
-	if result := firstResultLine(msg.Content, width-6); result != "" {
+	if result := toolResultLine(label, msg.Content, width-6); result != "" {
 		sb.WriteString("  └─ " + result + "\n")
 	}
 	return sb.String()
@@ -272,6 +263,16 @@ func toolAction(label string, args map[string]interface{}, done bool) string {
 			return "Searched sessions"
 		}
 		return "Searching sessions"
+	case "update_plan":
+		if done {
+			return "Updated plan"
+		}
+		return "Updating plan"
+	case "finish_run":
+		if done {
+			return "Finished run"
+		}
+		return "Finishing run"
 	default:
 		if done {
 			return "Ran " + label
@@ -287,6 +288,66 @@ func toolDetail(args map[string]interface{}, keys ...string) string {
 		}
 	}
 	return ""
+}
+
+func toolResultLine(label, content string, width int) string {
+	switch label {
+	case "update_plan":
+		return truncateToWidth(formatPlanToolResult(content), width)
+	case "finish_run":
+		return truncateToWidth(formatFinishRunResult(content), width)
+	default:
+		return firstResultLine(content, width)
+	}
+}
+
+func formatPlanToolResult(content string) string {
+	var payload struct {
+		Explanation string `json:"explanation"`
+		Plan        []struct {
+			Step   string `json:"step"`
+			Status string `json:"status"`
+		} `json:"plan"`
+	}
+	if err := json.Unmarshal([]byte(content), &payload); err != nil || len(payload.Plan) == 0 {
+		return "plan updated"
+	}
+	inProgress := ""
+	completed := 0
+	for _, step := range payload.Plan {
+		switch step.Status {
+		case "in_progress":
+			inProgress = strings.TrimSpace(step.Step)
+		case "completed":
+			completed++
+		}
+	}
+	if inProgress != "" {
+		return fmt.Sprintf("%d steps · now: %s", len(payload.Plan), inProgress)
+	}
+	return fmt.Sprintf("%d steps · %d completed", len(payload.Plan), completed)
+}
+
+func formatFinishRunResult(content string) string {
+	var payload struct {
+		Status  string `json:"status"`
+		Summary string `json:"summary"`
+	}
+	if err := json.Unmarshal([]byte(content), &payload); err != nil {
+		return ""
+	}
+	status := strings.TrimSpace(payload.Status)
+	summary := strings.TrimSpace(payload.Summary)
+	switch {
+	case status != "" && summary != "":
+		return status + " · " + summary
+	case summary != "":
+		return summary
+	case status != "":
+		return status
+	default:
+		return ""
+	}
 }
 
 func firstResultLine(content string, width int) string {

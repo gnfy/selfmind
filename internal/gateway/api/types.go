@@ -37,15 +37,24 @@ type GatewayStatusResponse struct {
 }
 
 type MessageRequest struct {
-	TenantID       string `json:"tenant_id"`
-	Platform       string `json:"platform"`
-	PlatformUserID string `json:"platform_user_id"`
-	DisplayName    string `json:"display_name"`
-	Channel        string `json:"channel"`
-	Content        string `json:"content"`
-	WorkspaceID    string `json:"workspace_id"`
-	TaskID         string `json:"task_id"`
-	Async          bool   `json:"async"`
+	TenantID       string              `json:"tenant_id"`
+	Platform       string              `json:"platform"`
+	PlatformUserID string              `json:"platform_user_id"`
+	DisplayName    string              `json:"display_name"`
+	Channel        string              `json:"channel"`
+	Content        string              `json:"content"`
+	WorkspaceID    string              `json:"workspace_id"`
+	TaskID         string              `json:"task_id"`
+	Async          bool                `json:"async"`
+	Attachments    []MessageAttachment `json:"attachments,omitempty"`
+}
+
+type MessageAttachment struct {
+	Kind     string `json:"kind,omitempty"`
+	Path     string `json:"path,omitempty"`
+	MimeType string `json:"mime_type,omitempty"`
+	Name     string `json:"name,omitempty"`
+	Size     int64  `json:"size,omitempty"`
 }
 
 type MessageResponse struct {

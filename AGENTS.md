@@ -19,6 +19,29 @@ Read the full local architecture note first:
 - `docs/daemon-im-saas-architecture.md`
 - `docs/architecture-constraints.md`
 - `docs/architecture-constraints.zh-CN.md`
+- `docs/provider-runtime.md`
+- `docs/provider-runtime.zh-CN.md`
+
+## Handoff Runbook
+
+Use this checklist whenever a future AI/coding agent picks up work in this
+repo:
+
+1. Read this file, then read the specific docs linked above for the area being
+   changed. For provider/model work, `docs/provider-runtime.md` is mandatory.
+2. Inspect `git status --short` before editing. The worktree is often dirty;
+   do not revert unrelated changes or generated output you did not create.
+3. Locate the current boundary before changing code. Prefer `rg` and focused
+   file reads over broad guessing.
+4. For analysis-only user requests, do not edit code. For implementation
+   requests, carry the work through code, tests, and, when relevant, a WSL
+   binary build.
+5. Keep changes scoped to the requested behavior. If a fix exposes a larger
+   architectural problem, document the follow-up instead of silently doing a
+   risky refactor.
+6. After touching core runtime, provider, gateway, task, tool, or TUI behavior,
+   update this file or the relevant document when the rule for future
+   development has changed.
 
 ## Architecture Rules
 
@@ -72,6 +95,17 @@ Read the full local architecture note first:
 - User-visible task state should be derived from structured run outcomes
   (`api.RunOutcome`) and handoffs, not from ad hoc status text spread across
   handlers.
+- Hard tasks should not appear stalled. Long-running runs must emit visible
+  progress through events, status text, or outbound channel notifications. A
+  timeout, failed tool call, or model error should lead to diagnosis, retry or a
+  clear handoff, not silent abandonment.
+- CLI and IM have different feedback contracts. CLI/TUI should stream assistant
+  text and tool progress when possible. IM channels such as Weixin should not
+  stream every token; instead they should send concise "working" notices,
+  important tool/approval milestones, and a final answer or handoff.
+- Keep channel UX channel-specific, but task semantics shared. A CLI run,
+  Weixin message, Telegram message, or future web request should all create or
+  resume the same account/person/task/run/event/approval/artifact lifecycle.
 - File and terminal tools must run inside the active workspace scope. Preserve
   `WorkspaceScopeMiddleware` and extend it when adding tools that touch files,
   processes, or paths.
@@ -82,6 +116,44 @@ Read the full local architecture note first:
   overrides belong in `internal/modelruntime`. Do not add vendor auth probing
   or model-list fetch logic directly to `internal/app/agent.go` or LLM
   adapters.
+- Provider integration must follow the Provider Runtime boundary documented in
+  `docs/provider-runtime.md`: `ProviderProfile` describes a vendor, `Resolver`
+  produces a resolved `Runtime`, app wiring turns the runtime into an
+  `llm.Provider`, and adapters only implement protocol transports.
+- Prefer existing protocol adapters (`openai_chat`, `openai_compatible`,
+  `anthropic_messages`, `codex_responses`) when adding model vendors. Add a new
+  Go adapter only when the wire protocol is genuinely different.
+- Put provider-specific behavior in `ProviderQuirks` first: auth header,
+  tool-schema repair, system-message mode, thinking behavior, User-Agent, and
+  capability metadata. Do not scatter provider-name checks across CLI, gateway,
+  IM adapters, or app setup.
+- User YAML `provider_profiles.*.quirks` currently supports
+  `auth_header`, `tool_schema`, `system_message_mode`, `thinking_mode`, and
+  `user_agent`. Capability flags such as tool/streaming/vision support belong
+  in built-in Go profiles.
+- Kimi Coding Plan should default to `kimi-coding` +
+  `anthropic_messages` + `https://api.kimi.com/coding` +
+  `kimi-for-coding`, with Moonshot tool schema repair, no Anthropic `thinking`
+  field on that path, `max_tokens=32000`, `User-Agent: claude-code/0.1.0`,
+  and HTTP/2 disabled for the Kimi /coding transport. The transport must also
+  restrict TLS ALPN to `http/1.1`; otherwise the server can negotiate `h2`,
+  send HTTP/2 frames, and Go will report `unexpected EOF` or a malformed
+  HTTP/1.x response. This mirrors Hermes' HTTP/1.1 client behavior.
+- MiniMax Coding Plan should default to Anthropic-compatible endpoints
+  (`https://api.minimax.io/anthropic` or `https://api.minimaxi.com/anthropic`),
+  Bearer auth, and fallback models `MiniMax-M3`, `MiniMax-M2.7`,
+  `MiniMax-M2.7-highspeed`, `MiniMax-M2.5`. MiniMax OAuth token refresh belongs
+  in `internal/modelruntime`, not in LLM adapters.
+- Role-based model overrides must pass the same runtime fields as the default
+  provider: headers, max tokens, reasoning effort, thinking, service tier, and
+  quirks. CLI, gateway, IM, and future SaaS policy should all resolve providers
+  through the same `modelruntime.Resolver`.
+- Keep `context_length` and `max_tokens` separate. `context_length` is the
+  model's total input+output context window and drives UI usage display,
+  context budgeting, and future compression policy. `max_tokens` is only the
+  single-response output cap sent to a provider. Do not display `max_tokens` as
+  the model context size, and do not hardcode fake windows such as `1M` in CLI
+  or IM status surfaces.
 - When adding or changing core runtime code, add concise intent/boundary
   comments for exported types, non-obvious control flow, compatibility paths,
   and invariants. This especially applies to `internal/modelruntime`, agent
@@ -95,6 +167,10 @@ Read the full local architecture note first:
 - Tool calling should stay Hermes-like: pass tool schemas as native LLM
   `tool_calls` where the provider supports it, preserve `tool_call_id` on
   tool result messages, and keep `[TOOL:...]` only as a compatibility fallback.
+- Tool and command output shown in CLI/TUI should be human-readable. Do not dump
+  raw JSON payloads into the transcript unless the user explicitly asked for
+  raw protocol details. Summarize plan updates, tool calls, and errors in a
+  compact form.
 - Only execute clearly read-only tool batches in parallel. Terminal, memory,
   skill mutation, file writes, patches, process control, delegation, and unknown
   tools should run sequentially unless a dedicated safety policy says otherwise.
@@ -106,6 +182,15 @@ Read the full local architecture note first:
 - Curator automation should only govern `agent-created` skills by default.
   Manual, catalog-installed, bundled, and pinned skills must not be archived
   automatically.
+- Catalog installs must preserve Hermes-style provenance. Store install
+  records under `~/.selfmind/<tenant>/skills/.catalog/lock.json`, mark usage
+  source as `catalog-installed`, reject same-name directory or legacy `.md`
+  collisions by default, and only overwrite when the user explicitly passes
+  `--force`.
+- Forced catalog reinstalls must move the previous copy into
+  `~/.selfmind/<tenant>/skills/.catalog/backups/` before writing the new copy.
+  Do not silently replace user-installed or hand-written skills without a
+  backup and explicit force.
 - Memory and skill mutations should write learning audit records under the
   tenant learning log. Do not add one-off history files in individual tools.
 - User-facing learning history and undo should go through the shared
@@ -133,8 +218,14 @@ Read the full local architecture note first:
 - `internal/kernel/event_context.go`: per-run agent event sink injection.
 - `internal/gateway/httpapi/outcome.go`: structured run outcome extraction for
   task status, handoff, and IM/CLI status cards.
+- `internal/gateway/cli/controller.go`: Bubble Tea state orchestration. Keep
+  new visual behavior in smaller renderer/component files when possible.
 - `internal/kernel/llm/model_gateway.go`: role-based model routing.
+- `docs/provider-runtime.md` and `docs/provider-runtime.zh-CN.md`: mandatory
+  provider integration rules and checklist for future model vendors.
 - `internal/kernel/llm/anthropic_adapter.go`: Anthropic Messages adapter.
+- `internal/kernel/llm/adapters.go`: OpenAI-compatible, OpenRouter, MiniMax
+  legacy, and generic OpenAI-compatible adapters.
 - `internal/modelruntime/`: provider metadata, credential resolution, external
   CLI auth reuse, and live model catalog/cache.
 - `internal/kernel/native_tool_call.go`: native/fallback tool-call conversion,
@@ -163,3 +254,44 @@ go test ./...
 ```
 
 `GOWORK=off` avoids the parent workspace file excluding this module.
+
+When working from WSL in this checkout, the equivalent command is:
+
+```sh
+cd /mnt/d/wwwroot/ai/selfmind
+GOWORK=off /usr/local/go/bin/go test ./...
+```
+
+For provider-runtime changes, always run at least:
+
+```sh
+GOWORK=off /usr/local/go/bin/go test ./internal/modelruntime ./internal/kernel/llm ./internal/app
+```
+
+## WSL Build And Smoke Test
+
+When the user expects to try the result in WSL, build the Linux amd64 binary and
+copy it into the user's local path:
+
+```sh
+cd /mnt/d/wwwroot/ai/selfmind
+GOWORK=off CGO_ENABLED=0 GOOS=linux GOARCH=amd64 /usr/local/go/bin/go build -trimpath -ldflags="-s -w" -o dist/selfmind-linux-amd64/selfmind ./cmd/selfmind
+cp dist/selfmind-linux-amd64/selfmind ~/.local/bin/selfmind.new
+chmod +x ~/.local/bin/selfmind.new
+mv -f ~/.local/bin/selfmind.new ~/.local/bin/selfmind
+~/.local/bin/selfmind --help
+~/.local/bin/selfmind model check
+```
+
+Do this after changes to CLI/TUI, model runtime, gateway startup, provider
+configuration, or anything the user is actively testing through
+`~/.local/bin/selfmind`.
+
+## Documentation Maintenance
+
+- Update `AGENTS.md` when a new invariant, workflow, or "future AI must know"
+  rule is introduced.
+- Update `docs/development-guide*.md` for broader engineering explanations.
+- Update `docs/provider-runtime*.md` for model provider rules, provider quirks,
+  Kimi/MiniMax behavior, OAuth behavior, or new model-vendor checklists.
+- Keep user-facing README changes separate from internal development rules.

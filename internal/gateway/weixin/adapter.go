@@ -1,0 +1,489 @@
+package weixin
+
+import (
+	"context"
+	"fmt"
+	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"time"
+
+	"selfmind/internal/control"
+	"selfmind/internal/gateway/api"
+	"selfmind/internal/gateway/delivery"
+	"selfmind/internal/gateway/router"
+	"selfmind/internal/platform/log"
+	"selfmind/internal/tools"
+)
+
+type MessageHandler func(context.Context, api.MessageRequest) (api.MessageResponse, int)
+
+type Adapter struct {
+	cfg     RuntimeConfig
+	client  *Client
+	store   *control.Store
+	handler MessageHandler
+
+	mu     sync.Mutex
+	seen   map[string]time.Time
+	cancel context.CancelFunc
+	done   chan struct{}
+}
+
+func NewAdapter(cfg RuntimeConfig, store *control.Store, handler MessageHandler) *Adapter {
+	return &Adapter{
+		cfg:     cfg,
+		client:  NewClient(cfg),
+		store:   store,
+		handler: handler,
+		seen:    map[string]time.Time{},
+		done:    make(chan struct{}),
+	}
+}
+
+func (a *Adapter) Start(ctx context.Context) error {
+	if a == nil {
+		return nil
+	}
+	if !a.cfg.Enabled {
+		return nil
+	}
+	if strings.TrimSpace(a.cfg.AccountID) == "" {
+		return fmt.Errorf("gateway.weixin.account_id is required")
+	}
+	if strings.TrimSpace(a.cfg.Token) == "" {
+		return fmt.Errorf("gateway.weixin.token is required")
+	}
+	if a.handler == nil {
+		return fmt.Errorf("weixin message handler is required")
+	}
+	a.client.RestoreContextTokens()
+	pollCtx, cancel := context.WithCancel(ctx)
+	a.cancel = cancel
+	go a.pollLoop(pollCtx)
+	log.Info("weixin gateway started", "account_id", safeID(a.cfg.AccountID), "base_url", a.cfg.BaseURL)
+	return nil
+}
+
+func (a *Adapter) Stop() {
+	if a == nil {
+		return
+	}
+	if a.cancel != nil {
+		a.cancel()
+	}
+	select {
+	case <-a.done:
+	case <-time.After(3 * time.Second):
+	}
+}
+
+func (a *Adapter) Send(ctx context.Context, msg delivery.Message) error {
+	if a == nil || a.client == nil {
+		return delivery.ErrNoSender
+	}
+	target := firstNonEmpty(msg.Channel, msg.PlatformUserID)
+	if target == "" {
+		return fmt.Errorf("weixin delivery target is empty")
+	}
+	return a.client.Send(ctx, target, msg.Content)
+}
+
+func (a *Adapter) pollLoop(ctx context.Context) {
+	defer close(a.done)
+	syncBuf := a.loadSyncBuf()
+	backoff := time.Second
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+		resp, err := a.client.GetUpdates(ctx, syncBuf, 50*time.Second)
+		if err != nil {
+			log.Warn("weixin getupdates failed", "error", tools.RedactSensitive(err.Error()))
+			wait := backoff
+			if wait > 30*time.Second {
+				wait = 30 * time.Second
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(wait):
+			}
+			if backoff < 30*time.Second {
+				backoff *= 2
+			}
+			continue
+		}
+		backoff = time.Second
+		if next := firstNonEmpty(stringFromMap(resp, "get_updates_buf"), stringFromMap(resp, "sync_buf")); next != "" {
+			syncBuf = next
+			a.saveSyncBuf(syncBuf)
+		}
+		for _, msg := range extractMessages(resp) {
+			if err := a.processMessage(ctx, msg); err != nil {
+				log.Warn("weixin message processing failed", "error", tools.RedactSensitive(err.Error()))
+			}
+		}
+		if len(extractMessages(resp)) == 0 {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(500 * time.Millisecond):
+			}
+		}
+	}
+}
+
+func (a *Adapter) processMessage(ctx context.Context, raw map[string]interface{}) error {
+	msg := normalizeRawMessage(raw)
+	if msg == nil {
+		return nil
+	}
+	msgID := messageID(msg)
+	if msgID != "" && a.isDuplicate(msgID) {
+		return nil
+	}
+	sender := senderID(msg, a.cfg.AccountID)
+	chatID := chatID(msg, sender, a.cfg.AccountID)
+	if sender == "" || chatID == "" {
+		return nil
+	}
+	if sender == a.cfg.AccountID {
+		return nil
+	}
+	isGroup := isGroupChat(msg, chatID)
+	if !a.allowed(sender, chatID, isGroup) {
+		log.Warn("weixin message ignored by policy", "sender", safeID(sender), "chat", safeID(chatID), "group", isGroup)
+		return nil
+	}
+	if token := stringFromMap(msg, "context_token"); token != "" {
+		a.client.SaveContextToken(chatID, token)
+	}
+	a.client.FetchTypingTicket(ctx, chatID, stringFromMap(msg, "context_token"))
+
+	text := extractMessageText(msg)
+	attachments := a.extractAttachments(ctx, msg)
+	if strings.TrimSpace(text) == "" && len(attachments) == 0 {
+		return nil
+	}
+	if strings.TrimSpace(text) == "" {
+		text = summarizeAttachments(attachments)
+	}
+	displayName := firstNonEmpty(stringFromMap(msg, "sender_nick"), stringFromMap(msg, "display_name"), safeID(sender))
+	tenantID := firstNonEmpty(a.cfg.DefaultTenantID, control.DefaultTenantID)
+	if a.cfg.OwnerPersonID != "" && a.store != nil {
+		if _, err := a.store.BindAccount(ctx, tenantID, a.cfg.OwnerPersonID, "weixin", sender, displayName); err != nil {
+			return err
+		}
+	}
+	_ = a.client.SendTyping(ctx, chatID, true)
+	defer a.client.SendTyping(context.Background(), chatID, false)
+
+	req := api.MessageRequest{
+		TenantID:       tenantID,
+		Platform:       "weixin",
+		PlatformUserID: sender,
+		DisplayName:    displayName,
+		Channel:        chatID,
+		Content:        text,
+		Async:          !isControlCommand(text),
+		Attachments:    attachments,
+	}
+	resp, status := a.handler(ctx, req)
+	if status >= http.StatusBadRequest || strings.TrimSpace(resp.Error) != "" {
+		errText := firstNonEmpty(resp.Error, fmt.Sprintf("weixin request failed: HTTP %d", status))
+		_ = a.client.Send(context.Background(), chatID, "SelfMind error: "+errText)
+		return nil
+	}
+	if strings.TrimSpace(resp.Content) != "" {
+		return a.client.Send(context.Background(), chatID, resp.Content)
+	}
+	if resp.Accepted {
+		return a.client.Send(context.Background(), chatID, router.WorkingNotice("weixin"))
+	}
+	return nil
+}
+
+func (a *Adapter) extractAttachments(ctx context.Context, msg map[string]interface{}) []api.MessageAttachment {
+	items := interfaceSlice(msg["item_list"])
+	if len(items) == 0 {
+		items = interfaceSlice(msg["items"])
+	}
+	var out []api.MessageAttachment
+	for _, itemValue := range items {
+		item, _ := itemValue.(map[string]interface{})
+		if item == nil {
+			continue
+		}
+		if intFromMap(item, "type") == itemText {
+			continue
+		}
+		att, err := a.client.DownloadAttachment(ctx, item, a.cfg.DataDir)
+		if err != nil {
+			log.Warn("weixin media download failed", "error", tools.RedactSensitive(err.Error()))
+			continue
+		}
+		if att != nil && att.Path != "" {
+			out = append(out, *att)
+		}
+	}
+	return out
+}
+
+func (a *Adapter) allowed(sender, chat string, isGroup bool) bool {
+	if isGroup {
+		switch strings.ToLower(firstNonEmpty(a.cfg.GroupPolicy, "disabled")) {
+		case "disabled", "off", "deny":
+			return false
+		case "allowlist", "allow_list":
+			return stringInList(chat, a.cfg.GroupAllowFrom) || stringInList(sender, a.cfg.GroupAllowFrom)
+		default:
+			return true
+		}
+	}
+	switch strings.ToLower(firstNonEmpty(a.cfg.DMPolicy, "open")) {
+	case "disabled", "off", "deny":
+		return false
+	case "allowlist", "allow_list":
+		return stringInList(sender, a.cfg.AllowFrom) || stringInList(chat, a.cfg.AllowFrom)
+	default:
+		return len(a.cfg.AllowFrom) == 0 || stringInList(sender, a.cfg.AllowFrom) || stringInList(chat, a.cfg.AllowFrom)
+	}
+}
+
+func (a *Adapter) isDuplicate(id string) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	now := time.Now()
+	for key, at := range a.seen {
+		if now.Sub(at) > 24*time.Hour {
+			delete(a.seen, key)
+		}
+	}
+	if _, ok := a.seen[id]; ok {
+		return true
+	}
+	a.seen[id] = now
+	return false
+}
+
+func (a *Adapter) syncBufPath() string {
+	return SyncBufFilePath(a.cfg.HomeDir, a.cfg.AccountID)
+}
+
+func (a *Adapter) loadSyncBuf() string {
+	data, err := os.ReadFile(a.syncBufPath())
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(data))
+}
+
+func (a *Adapter) saveSyncBuf(value string) {
+	if strings.TrimSpace(value) == "" {
+		return
+	}
+	path := a.syncBufPath()
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		return
+	}
+	_ = os.WriteFile(path, []byte(value), 0600)
+}
+
+func extractMessages(resp map[string]interface{}) []map[string]interface{} {
+	var out []map[string]interface{}
+	for _, key := range []string{"msgs", "messages", "msg_list", "message_list"} {
+		for _, item := range interfaceSlice(resp[key]) {
+			if m, ok := item.(map[string]interface{}); ok {
+				out = append(out, m)
+			}
+		}
+	}
+	if nested := nestedMap(resp, "data"); nested != nil {
+		out = append(out, extractMessages(nested)...)
+	}
+	return out
+}
+
+func normalizeRawMessage(raw map[string]interface{}) map[string]interface{} {
+	if raw == nil {
+		return nil
+	}
+	if msg := nestedMap(raw, "msg"); msg != nil {
+		return msg
+	}
+	if msg := nestedMap(raw, "message"); msg != nil {
+		return msg
+	}
+	return raw
+}
+
+func messageID(msg map[string]interface{}) string {
+	return firstNonEmpty(
+		stringFromMap(msg, "msgid"),
+		stringFromMap(msg, "msg_id"),
+		stringFromMap(msg, "message_id"),
+		stringFromMap(msg, "client_id"),
+	)
+}
+
+func senderID(msg map[string]interface{}, accountID string) string {
+	from := firstNonEmpty(stringFromMap(msg, "from_user_id"), stringFromMap(msg, "sender"), stringFromMap(msg, "sender_id"))
+	if from != "" && from != accountID {
+		return from
+	}
+	return firstNonEmpty(stringFromMap(msg, "actual_user_id"), stringFromMap(msg, "talker"), from)
+}
+
+func chatID(msg map[string]interface{}, sender, accountID string) string {
+	room := firstNonEmpty(stringFromMap(msg, "room_id"), stringFromMap(msg, "chat_room_id"), stringFromMap(msg, "chat_id"))
+	if room != "" {
+		return room
+	}
+	to := stringFromMap(msg, "to_user_id")
+	if to != "" && to != accountID {
+		return to
+	}
+	return sender
+}
+
+func isGroupChat(msg map[string]interface{}, chatID string) bool {
+	if strings.Contains(chatID, "@chatroom") {
+		return true
+	}
+	if stringFromMap(msg, "room_id") != "" || stringFromMap(msg, "chat_room_id") != "" {
+		return true
+	}
+	return strings.EqualFold(stringFromMap(msg, "chat_type"), "group")
+}
+
+func extractMessageText(msg map[string]interface{}) string {
+	var parts []string
+	if text := firstNonEmpty(stringFromMap(msg, "content"), stringFromMap(msg, "text")); text != "" {
+		parts = append(parts, text)
+	}
+	items := interfaceSlice(msg["item_list"])
+	if len(items) == 0 {
+		items = interfaceSlice(msg["items"])
+	}
+	for _, itemValue := range items {
+		item, _ := itemValue.(map[string]interface{})
+		if item == nil {
+			continue
+		}
+		switch intFromMap(item, "type") {
+		case itemText:
+			textItem := nestedMap(item, "text_item")
+			if text := firstNonEmpty(stringFromMap(textItem, "text"), stringFromMap(item, "text")); text != "" {
+				parts = append(parts, text)
+			}
+		case itemVoice:
+			voice := nestedMap(item, "voice_item")
+			if text := firstNonEmpty(stringFromMap(voice, "voice_text"), stringFromMap(voice, "transcript"), stringFromMap(voice, "text")); text != "" {
+				parts = append(parts, "[voice transcript]\n"+text)
+			}
+		}
+	}
+	return strings.TrimSpace(strings.Join(uniqueStrings(parts), "\n"))
+}
+
+func summarizeAttachments(attachments []api.MessageAttachment) string {
+	if len(attachments) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("Received attachments:")
+	for _, att := range attachments {
+		b.WriteString("\n- ")
+		b.WriteString(firstNonEmpty(att.Kind, "file"))
+		if att.Name != "" {
+			b.WriteString(" ")
+			b.WriteString(att.Name)
+		}
+		if att.Path != "" {
+			b.WriteString(" ")
+			b.WriteString(att.Path)
+		}
+	}
+	return b.String()
+}
+
+func isControlCommand(content string) bool {
+	lower := strings.ToLower(strings.TrimSpace(content))
+	if lower == "" {
+		return false
+	}
+	commands := []string{
+		"/id", "id",
+		"/stop", "stop",
+		"/tasks", "tasks",
+		"/workspaces", "workspaces",
+		"/events", "events",
+		"/approvals", "approvals",
+		"/status", "status",
+		"/task", "task ",
+		"/workspace", "workspace ",
+		"/new", "new ",
+		"/resume", "resume ",
+		"/approve ", "approve ",
+		"/reject ", "reject ",
+	}
+	for _, cmd := range commands {
+		if strings.HasSuffix(cmd, " ") {
+			if strings.HasPrefix(lower, cmd) {
+				return true
+			}
+			continue
+		}
+		if lower == cmd {
+			return true
+		}
+	}
+	return false
+}
+
+func interfaceSlice(value interface{}) []interface{} {
+	switch v := value.(type) {
+	case []interface{}:
+		return v
+	case []map[string]interface{}:
+		out := make([]interface{}, 0, len(v))
+		for _, item := range v {
+			out = append(out, item)
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
+func stringInList(value string, list []string) bool {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return false
+	}
+	for _, item := range list {
+		if strings.EqualFold(strings.TrimSpace(item), value) {
+			return true
+		}
+	}
+	return false
+}
+
+func uniqueStrings(values []string) []string {
+	seen := map[string]bool{}
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" || seen[value] {
+			continue
+		}
+		seen[value] = true
+		out = append(out, value)
+	}
+	return out
+}

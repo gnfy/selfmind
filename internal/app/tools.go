@@ -56,6 +56,7 @@ func InitTools(mem *memory.MemoryManager, cfg *config.Config, ag *kernel.Agent, 
 	skillLoader.LoadAll()
 
 	disp.InjectDelegateFn(MakeDelegateFn(mem, disp, cfg.Delegation))
+	disp.InjectDelegateBatchFn(MakeDelegateBatchFn(mem, disp, cfg.Delegation))
 
 	// 2. Register approval middleware
 	root, _ := os.Getwd()

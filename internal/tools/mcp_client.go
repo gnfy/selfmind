@@ -199,7 +199,7 @@ func (c *MCPClient) handleMessage(msg *JSONRPCMessage) {
 // ---- Protocol Operations ----
 
 func (c *MCPClient) initialize() {
-	_, err := c.sendRequest("initialize", map[string]interface{}{
+	params := map[string]interface{}{
 		"protocolVersion": "2024-11-05",
 		"capabilities": map[string]interface{}{
 			"tools":    map[string]interface{}{},
@@ -210,12 +210,21 @@ func (c *MCPClient) initialize() {
 			"name":    "selfmind",
 			"version": "1.0.0",
 		},
-	}, nil)
+	}
+	var err error
+	switch c.server.transport {
+	case "stdio":
+		_, err = c.sendRequest("initialize", params, nil)
+	case "http":
+		_, err = c.callHTTP("initialize", params, nil)
+	}
 	if err != nil && c.server != nil && c.server.errCh != nil {
 		c.server.errCh <- fmt.Errorf("initialize: %w", err)
 		return
 	}
-	c.sendNotification("initialized", nil)
+	if c.server.transport == "stdio" {
+		c.sendNotification("initialized", nil)
+	}
 	c.listTools()
 }
 
@@ -513,11 +522,25 @@ type MCPTool struct {
 }
 
 func (c *MCPClient) WrapTool(def MCPToolDef) *MCPTool {
+	return c.WrapToolNamed(def, def.Name)
+}
+
+func (c *MCPClient) WrapToolNamed(def MCPToolDef, localName string) *MCPTool {
 	return &MCPTool{
 		BaseTool: BaseTool{
-			name:        def.Name,
+			name:        localName,
 			description: def.Description,
 			schema:      convertJSONSchema(def.InputSchema),
+			metadata: ToolMetadata{
+				Category:  "mcp",
+				RiskLevel: ToolRiskMedium,
+				SearchText: fmt.Sprintf(
+					"mcp server %s tool %s %s",
+					c.config.Name,
+					def.Name,
+					def.Description,
+				),
+			},
 		},
 		serverName:  c.config.Name,
 		toolName:    def.Name,
@@ -612,7 +635,7 @@ func (m *MCPToolManager) Connect(config MCPServerConfig) error {
 	time.Sleep(500 * time.Millisecond)
 
 	for _, def := range client.GetTools() {
-		m.dispatcher.RegisterTool(client.WrapTool(def))
+		m.dispatcher.RegisterTool(client.WrapToolNamed(def, MCPToolLocalName(config.Name, def.Name)))
 	}
 	return nil
 }
@@ -627,7 +650,7 @@ func (m *MCPToolManager) Disconnect(name string) error {
 	}
 
 	for _, def := range client.GetTools() {
-		m.dispatcher.UnregisterTool(def.Name)
+		m.dispatcher.UnregisterTool(MCPToolLocalName(name, def.Name))
 	}
 
 	client.Close()
@@ -690,6 +713,33 @@ func filterEnv(whitelist []string) []string {
 		}
 	}
 	return result
+}
+
+func MCPToolLocalName(serverName, toolName string) string {
+	return "mcp_" + sanitizeMCPName(serverName) + "_" + sanitizeMCPName(toolName)
+}
+
+func sanitizeMCPName(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	var b strings.Builder
+	lastUnderscore := false
+	for _, r := range value {
+		valid := (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9')
+		if valid {
+			b.WriteRune(r)
+			lastUnderscore = false
+			continue
+		}
+		if !lastUnderscore {
+			b.WriteByte('_')
+			lastUnderscore = true
+		}
+	}
+	out := strings.Trim(b.String(), "_")
+	if out == "" {
+		return "tool"
+	}
+	return out
 }
 
 // =============================================================================

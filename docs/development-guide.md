@@ -125,11 +125,11 @@ provider_profiles:
     api_key: "${MINIMAX_API_KEY}"
     base_url: "https://api.minimax.io/anthropic"
     protocol: "anthropic_messages"
-    model: "MiniMax-M2.7"
+    model: "MiniMax-M3"
   kimi-coding:
     api_key: "${KIMI_CODING_API_KEY}"
-    base_url: "https://api.kimi.com/coding/v1"
-    protocol: "openai_compatible"
+    base_url: "https://api.kimi.com/coding"
+    protocol: "anthropic_messages"
     model: "kimi-for-coding"
 
 auth:
@@ -179,6 +179,8 @@ Compatibility rules in `internal/platform/config/loader.go`:
 
 ## Model Provider System
 
+Read [SelfMind Provider Runtime](provider-runtime.md) before adding or changing model providers. Provider integration now follows the `ProviderProfile + Resolver + Adapter + ProviderQuirks` boundary. Kimi, MiniMax, OpenAI, Anthropic, OpenRouter, Google, DeepSeek, Z.AI, and Alibaba Coding Plan all use the same pattern.
+
 User-facing command:
 
 ```sh
@@ -210,7 +212,7 @@ Implemented provider protocol families:
 | Provider profile | OpenAI-compatible, Anthropic Messages, or Responses | selected by `modelruntime.Runtime.Protocol` |
 | Custom | OpenAI-compatible endpoint | `llm.GenericOpenAIAdapter` |
 
-Most new vendors should use either the custom OpenAI-compatible entry or a `provider_profiles` entry and should not require a code change. Add a new Go adapter only for a genuinely different protocol family.
+Most new vendors should use either `provider_profiles` or a built-in `ProviderProfile` on an existing OpenAI-compatible or Anthropic-compatible protocol family. Do not hardcode vendor logic in app, CLI, or IM adapters. Add a new Go adapter only for a genuinely different protocol family.
 
 Implementation boundary:
 
@@ -218,6 +220,7 @@ Implementation boundary:
 - `internal/modelruntime/resolver.go` converts YAML, env vars, SelfMind auth JSON, and selected external CLI auth into a resolved `Runtime`.
 - `internal/modelruntime/catalog.go` fetches/caches model lists. It must not construct LLM adapters.
 - `internal/app/agent.go` only converts a resolved `Runtime` into an adapter and wires role routing. Do not add provider-specific credential discovery there.
+- `ProviderQuirks` carries provider-specific wire behavior such as auth header, tool schema, thinking mode, system message mode, and User-Agent.
 - `internal/cliapp/model_commands.go` owns the user-facing provider/model picker. Keep `Custom endpoint (enter URL manually)` as the fourth option for backwards-compatible scripted input.
 
 External auth reuse is P2 and intentionally limited to Codex CLI, Claude Code, Gemini CLI, and Qwen CLI. Do not add best-effort reuse for random vendor apps unless there is a stable local auth format and a product decision to support it.
@@ -413,7 +416,8 @@ Rules to preserve:
 - Skill discovery should be progressive: use `skills_list` for compact metadata, `skill_view` for full `SKILL.md` or linked files, and `skill_manage` only for mutation.
 - Skill mutation should hot-reload the active registry when possible. Do not require a restart after `create`, `install`, `archive`, or `restore`.
 - Skill slash commands use bundle-first resolution, then skill resolution. Bundles live under `~/.selfmind/<tenant>/skill-bundles/`.
-- Catalog installs are treated as manual skills by default; curator must not auto-govern them unless explicitly marked `agent-created`.
+- Catalog installs are marked `catalog-installed` and tracked in `~/.selfmind/<tenant>/skills/.catalog/lock.json`; curator must not auto-govern them unless explicitly marked `agent-created`.
+- Catalog install must reject existing directory and legacy `.md` collisions unless the user explicitly passes `--force`; force must back up the previous copy under `skills/.catalog/backups/` before replacing it.
 - Patch operations should provide fuzzy matching and actionable failure context rather than returning a bare "not found".
 - Memory and skill mutations should write tenant-scoped learning audit records under `~/.selfmind/<tenant>/learning/`. Use the shared audit helpers instead of creating one-off history files in individual tools.
 - `skill_manage(action=history, name=...)` should read from the learning audit history and remain the first user-facing view for skill change history.

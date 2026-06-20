@@ -16,8 +16,12 @@ import (
 	"selfmind/internal/tools"
 )
 
-// mockProvider is used when no LLM API key is configured.
-type mockProvider struct{}
+// mockProvider is used when no LLM provider can be resolved. It returns the
+// setup diagnostic as a normal assistant response so the TUI can surface the
+// actual configuration problem instead of failing silently.
+type mockProvider struct {
+	message string
+}
 
 const mockSetupGuide = `SelfMind has not been configured with an AI model yet.
 
@@ -66,18 +70,25 @@ const mockSetupGuide = `SelfMind 尚未配置 API Key，无法进行 AI 对话�
 */
 
 func (m *mockProvider) ChatCompletion(ctx context.Context, messages []llm.Message) (string, error) {
-	return mockSetupGuide, nil
+	return m.response(), nil
 }
 
 func (m *mockProvider) Chat(ctx context.Context, req llm.ChatRequest) (*llm.ChatResponse, error) {
-	return &llm.ChatResponse{Content: mockSetupGuide}, nil
+	return &llm.ChatResponse{Content: m.response()}, nil
 }
 
 func (m *mockProvider) StreamChat(ctx context.Context, req llm.ChatRequest) (<-chan llm.StreamEvent, error) {
 	ch := make(chan llm.StreamEvent, 1)
-	ch <- llm.StreamEvent{Content: mockSetupGuide}
+	ch <- llm.StreamEvent{Content: m.response()}
 	close(ch)
 	return ch, nil
+}
+
+func (m *mockProvider) response() string {
+	if m != nil && strings.TrimSpace(m.message) != "" {
+		return m.message
+	}
+	return mockSetupGuide
 }
 
 func buildLLMProvider(cfg *config.Config) llm.Provider {
@@ -94,7 +105,63 @@ func buildLLMProvider(cfg *config.Config) llm.Provider {
 	} else {
 		log.Warn("no LLM provider adapter available, using mock provider", "hint", "run `selfmind model` or edit config.yaml")
 	}
-	return &mockProvider{}
+	return &mockProvider{message: modelSetupDiagnostic(cfg, err)}
+}
+
+// ResolveModelDisplay returns the runtime model metadata that the TUI should
+// show. It intentionally uses the resolver instead of raw config values so the
+// UI does not claim a model is active when provider construction fell back to
+// the setup diagnostic.
+func ResolveModelDisplay(cfg *config.Config) (provider, model string, configured bool) {
+	rt, err := modelruntime.NewResolver(cfg).Resolve(context.Background(), modelruntime.Selection{})
+	if err != nil {
+		return "not configured", "", false
+	}
+	if buildProviderFromRuntime(rt) == nil {
+		if rt.Provider != "" {
+			return rt.Provider, firstNonEmpty(rt.Model, "unsupported"), false
+		}
+		return "unsupported", firstNonEmpty(rt.Model, ""), false
+	}
+	return firstNonEmpty(rt.Provider, "default"), firstNonEmpty(rt.Model, "active"), true
+}
+
+func modelSetupDiagnostic(cfg *config.Config, resolveErr error) string {
+	provider := ""
+	model := ""
+	path := ""
+	if cfg != nil {
+		provider = cfg.EffectiveProvider()
+		model = cfg.EffectiveModel()
+		path = cfg.Path
+	}
+	if strings.TrimSpace(provider) == "" && strings.TrimSpace(model) == "" && resolveErr == nil {
+		return mockSetupGuide
+	}
+
+	var sb strings.Builder
+	sb.WriteString("SelfMind could not start the configured AI model.\n\n")
+	if provider != "" || model != "" {
+		sb.WriteString(fmt.Sprintf("Configured: provider=%s model=%s\n", valueOrDash(provider), valueOrDash(model)))
+	}
+	if path != "" {
+		sb.WriteString("Config: " + path + "\n")
+	}
+	if resolveErr != nil {
+		sb.WriteString("Reason: " + resolveErr.Error() + "\n")
+	} else {
+		sb.WriteString("Reason: provider resolved, but no adapter was available for this protocol.\n")
+	}
+	sb.WriteString("\nRun:\n  selfmind model check\n\n")
+	sb.WriteString("If the check succeeds, make sure the TUI is launched with the same binary and config path.")
+	return sb.String()
+}
+
+func valueOrDash(value string) string {
+	if strings.TrimSpace(value) == "" {
+		return "-"
+	}
+	return strings.TrimSpace(value)
 }
 
 func defaultProviderName(cfg *config.Config) string {
@@ -132,6 +199,47 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
+func firstPositive(values ...int) int {
+	for _, v := range values {
+		if v > 0 {
+			return v
+		}
+	}
+	return 0
+}
+
+func llmQuirks(q modelruntime.ProviderQuirks) llm.ProviderQuirks {
+	return llm.ProviderQuirks{
+		AuthHeader:        q.AuthHeader,
+		ToolSchema:        q.ToolSchema,
+		SystemMessageMode: q.SystemMessageMode,
+		ThinkingMode:      q.ThinkingMode,
+		UserAgent:         q.UserAgent,
+		DisableHTTP2:      q.DisableHTTP2,
+		SupportsTools:     q.SupportsTools,
+		SupportsStreaming: q.SupportsStreaming,
+		SupportsVision:    q.SupportsVision,
+	}
+}
+
+func runtimeQuirksFromConfig(q config.ProviderQuirks) modelruntime.ProviderQuirks {
+	return modelruntime.ProviderQuirks{
+		AuthHeader:        q.AuthHeader,
+		ToolSchema:        q.ToolSchema,
+		SystemMessageMode: q.SystemMessageMode,
+		ThinkingMode:      q.ThinkingMode,
+		UserAgent:         q.UserAgent,
+	}
+}
+
+func emptyConfigQuirks(q config.ProviderQuirks) bool {
+	return strings.TrimSpace(q.AuthHeader) == "" &&
+		strings.TrimSpace(q.ToolSchema) == "" &&
+		strings.TrimSpace(q.SystemMessageMode) == "" &&
+		strings.TrimSpace(q.ThinkingMode) == "" &&
+		strings.TrimSpace(q.UserAgent) == ""
+}
+
 func buildProviderFromRuntime(rt modelruntime.Runtime) llm.Provider {
 	// Keep this switch as the narrow app-layer boundary: modelruntime resolves
 	// metadata and credentials, while llm adapters only speak provider protocols.
@@ -143,6 +251,13 @@ func buildProviderFromRuntime(rt modelruntime.Runtime) llm.Provider {
 			ad.Model = model
 		}
 		ad.BaseURL = anthropicMessagesURL(rt.BaseURL)
+		ad.KeyGetter = rt.TokenGetter
+		ad.Headers = rt.Headers
+		ad.MaxTokens = firstPositive(rt.MaxTokens, ad.MaxTokens)
+		ad.ReasoningEffort = rt.ReasoningEffort
+		ad.Thinking = rt.Thinking
+		ad.ServiceTier = rt.ServiceTier
+		ad.Quirks = llmQuirks(rt.Quirks)
 		return ad
 	case modelruntime.ProtocolResponses:
 		return llm.NewResponsesAdapter(rt.APIKey, rt.BaseURL, model)
@@ -152,6 +267,13 @@ func buildProviderFromRuntime(rt modelruntime.Runtime) llm.Provider {
 			ad.Model = model
 		}
 		ad.BaseURL = chatCompletionsURL(rt.BaseURL)
+		ad.KeyGetter = rt.TokenGetter
+		ad.Headers = rt.Headers
+		ad.MaxTokens = rt.MaxTokens
+		ad.ReasoningEffort = rt.ReasoningEffort
+		ad.Thinking = rt.Thinking
+		ad.ServiceTier = rt.ServiceTier
+		ad.Quirks = llmQuirks(rt.Quirks)
 		return ad
 	case modelruntime.ProtocolOpenAICompatible:
 		provider := strings.ToLower(strings.TrimSpace(rt.Provider))
@@ -161,6 +283,13 @@ func buildProviderFromRuntime(rt modelruntime.Runtime) llm.Provider {
 				ad.Model = model
 			}
 			ad.BaseURL = chatCompletionsURL(rt.BaseURL)
+			ad.KeyGetter = rt.TokenGetter
+			ad.Headers = rt.Headers
+			ad.MaxTokens = rt.MaxTokens
+			ad.ReasoningEffort = rt.ReasoningEffort
+			ad.Thinking = rt.Thinking
+			ad.ServiceTier = rt.ServiceTier
+			ad.Quirks = llmQuirks(rt.Quirks)
 			return ad
 		}
 		if provider == "google" || provider == "gemini" || provider == "gemini-cli" {
@@ -169,27 +298,62 @@ func buildProviderFromRuntime(rt modelruntime.Runtime) llm.Provider {
 				ad.Model = model
 			}
 			ad.BaseURL = googleChatCompletionsURL(rt.BaseURL)
+			ad.KeyGetter = rt.TokenGetter
+			ad.Headers = rt.Headers
+			ad.MaxTokens = rt.MaxTokens
+			ad.ReasoningEffort = rt.ReasoningEffort
+			ad.Thinking = rt.Thinking
+			ad.ServiceTier = rt.ServiceTier
+			ad.Quirks = llmQuirks(rt.Quirks)
 			return ad
 		}
-		return llm.NewGenericOpenAIAdapter(rt.Provider, chatCompletionsURL(rt.BaseURL), rt.APIKey, model)
+		ad := llm.NewGenericOpenAIAdapter(rt.Provider, chatCompletionsURL(rt.BaseURL), rt.APIKey, model)
+		ad.KeyGetter = rt.TokenGetter
+		ad.Headers = rt.Headers
+		ad.MaxTokens = rt.MaxTokens
+		ad.ReasoningEffort = rt.ReasoningEffort
+		ad.Thinking = rt.Thinking
+		ad.ServiceTier = rt.ServiceTier
+		ad.Quirks = llmQuirks(rt.Quirks)
+		return ad
 	default:
 		return nil
 	}
 }
 
 func buildProviderForSelection(cfg *config.Config, providerName, model, baseURL, apiKey string) llm.Provider {
-	// Model roles and CLI overrides use the same resolver as the default agent;
-	// the legacy switch below exists only for older config shapes.
-	rt, err := modelruntime.NewResolver(cfg).Resolve(context.Background(), modelruntime.Selection{
+	return buildProviderForSelectionWithRuntime(cfg, modelruntime.Selection{
 		Provider: providerName,
 		Model:    model,
 		BaseURL:  baseURL,
 		APIKey:   apiKey,
 	})
+}
+
+func buildProviderForSelectionWithRuntime(cfg *config.Config, selection modelruntime.Selection) llm.Provider {
+	// Model roles and CLI overrides use the same resolver as the default agent;
+	// the legacy switch below exists only for older config shapes.
+	rt, err := modelruntime.NewResolver(cfg).Resolve(context.Background(), modelruntime.Selection{
+		Provider:        selection.Provider,
+		Model:           selection.Model,
+		BaseURL:         selection.BaseURL,
+		APIKey:          selection.APIKey,
+		Headers:         selection.Headers,
+		ContextLength:   selection.ContextLength,
+		MaxTokens:       selection.MaxTokens,
+		ReasoningEffort: selection.ReasoningEffort,
+		Thinking:        selection.Thinking,
+		ServiceTier:     selection.ServiceTier,
+		Quirks:          selection.Quirks,
+	})
 	if err == nil {
 		return buildProviderFromRuntime(rt)
 	}
 
+	providerName := selection.Provider
+	model := selection.Model
+	baseURL := selection.BaseURL
+	apiKey := selection.APIKey
 	pType := strings.ToLower(strings.TrimSpace(providerName))
 	switch pType {
 	case "anthropic":
@@ -293,6 +457,9 @@ func anthropicMessagesURL(baseURL string) string {
 	if strings.HasSuffix(lower, "/v1/messages") || strings.HasSuffix(lower, "/messages") {
 		return baseURL
 	}
+	if strings.HasSuffix(lower, "/v1") {
+		return baseURL + "/messages"
+	}
 	return baseURL + "/v1/messages"
 }
 
@@ -346,19 +513,33 @@ func applyDynamicKeyGetter(provider llm.Provider, mem *memory.MemoryManager, ten
 	getter := buildKeyGetter(mem, tenantID, strings.ToLower(providerName))
 	switch p := provider.(type) {
 	case *llm.AnthropicAdapter:
-		p.KeyGetter = getter
+		p.KeyGetter = chainKeyGetter(p.KeyGetter, getter)
 	case *llm.OpenAIAdapter:
-		p.KeyGetter = getter
+		p.KeyGetter = chainKeyGetter(p.KeyGetter, getter)
 	case *llm.GeminiAdapter:
-		p.KeyGetter = getter
+		p.KeyGetter = chainKeyGetter(p.KeyGetter, getter)
 	case *llm.MiniMaxAdapter:
-		p.KeyGetter = getter
+		p.KeyGetter = chainKeyGetter(p.KeyGetter, getter)
 	case *llm.GenericOpenAIAdapter:
-		p.KeyGetter = getter
+		p.KeyGetter = chainKeyGetter(p.KeyGetter, getter)
 	case *llm.OpenRouterAdapter:
-		p.KeyGetter = getter
+		p.KeyGetter = chainKeyGetter(p.KeyGetter, getter)
 	case *llm.ResponsesAdapter:
-		p.KeyGetter = getter
+		p.KeyGetter = chainKeyGetter(p.KeyGetter, getter)
+	}
+}
+
+func chainKeyGetter(existing, override func() string) func() string {
+	if existing == nil {
+		return override
+	}
+	return func() string {
+		if override != nil {
+			if value := override(); value != "" {
+				return value
+			}
+		}
+		return existing()
 	}
 }
 
@@ -381,12 +562,24 @@ func buildModelGateway(cfg *config.Config, mem *memory.MemoryManager, tenantID s
 		if roleName == "" {
 			continue
 		}
-		if roleCfg.Provider == "" && roleCfg.Model == "" && roleCfg.BaseURL == "" && roleCfg.APIKey == "" {
+		if roleCfg.Provider == "" && roleCfg.Model == "" && roleCfg.BaseURL == "" && roleCfg.APIKey == "" && roleCfg.ContextLength <= 0 && roleCfg.MaxTokens <= 0 && len(roleCfg.Headers) == 0 && roleCfg.ReasoningEffort == "" && len(roleCfg.Thinking) == 0 && roleCfg.ServiceTier == "" && emptyConfigQuirks(roleCfg.Quirks) {
 			continue
 		}
 
 		roleProviderName := firstNonEmpty(roleCfg.Provider, pName)
-		roleProvider := buildProviderForSelection(cfg, roleProviderName, roleCfg.Model, roleCfg.BaseURL, roleCfg.APIKey)
+		roleProvider := buildProviderForSelectionWithRuntime(cfg, modelruntime.Selection{
+			Provider:        roleProviderName,
+			Model:           roleCfg.Model,
+			BaseURL:         roleCfg.BaseURL,
+			APIKey:          roleCfg.APIKey,
+			Headers:         roleCfg.Headers,
+			ContextLength:   roleCfg.ContextLength,
+			MaxTokens:       roleCfg.MaxTokens,
+			ReasoningEffort: roleCfg.ReasoningEffort,
+			Thinking:        roleCfg.Thinking,
+			ServiceTier:     roleCfg.ServiceTier,
+			Quirks:          runtimeQuirksFromConfig(roleCfg.Quirks),
+		})
 		if roleProvider == nil {
 			log.Warn("model role skipped: provider unavailable", "role", roleName, "provider", roleProviderName)
 			continue

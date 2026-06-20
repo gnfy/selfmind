@@ -160,6 +160,144 @@ func TestSkillCatalogInstallOfficialAndAudit(t *testing.T) {
 	if !strings.Contains(audit, `"status": "ok"`) {
 		t.Fatalf("unexpected audit response:\n%s", audit)
 	}
+	usage, err := LoadSkillUsage("default")
+	if err != nil {
+		t.Fatalf("load usage: %v", err)
+	}
+	if usage["codebase-inspection"].Source != SkillSourceCatalog {
+		t.Fatalf("official catalog install should be catalog source, got %+v", usage["codebase-inspection"])
+	}
+	skillsDir, err := getSkillsDir("default")
+	if err != nil {
+		t.Fatalf("skills dir: %v", err)
+	}
+	lock, err := loadSkillCatalogLockForDir(skillsDir)
+	if err != nil {
+		t.Fatalf("load catalog lock: %v", err)
+	}
+	entry := lock.Skills["codebase-inspection"]
+	if entry.SourceKind != "official" || entry.ContentHash == "" || len(entry.Files) == 0 {
+		t.Fatalf("unexpected catalog lock entry: %+v", entry)
+	}
+}
+
+func TestSkillCatalogInstallProtectsUserSkills(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	sourceA := writeSkillFixture(t, "catalog-flow", "first body", map[string]string{
+		"references/note.md": "first reference",
+	})
+	sourceB := writeSkillFixture(t, "catalog-flow", "second body", nil)
+
+	if _, err := InstallSkillFromSource("default", sourceA, "", false); err != nil {
+		t.Fatalf("install first fixture: %v", err)
+	}
+	if _, err := InstallSkillFromSource("default", sourceB, "", false); err == nil || !strings.Contains(err.Error(), "already exists") {
+		t.Fatalf("duplicate install should require force, got: %v", err)
+	}
+	view, err := ReadSkillForTenant("default", "catalog-flow")
+	if err != nil {
+		t.Fatalf("read skill: %v", err)
+	}
+	if !strings.Contains(view, "first body") || strings.Contains(view, "second body") {
+		t.Fatalf("duplicate install overwrote content:\n%s", view)
+	}
+
+	resp, err := InstallSkillFromSource("default", sourceB, "", true)
+	if err != nil {
+		t.Fatalf("force install: %v", err)
+	}
+	if !strings.Contains(resp, "backed up") {
+		t.Fatalf("force install should report backup path, got: %s", resp)
+	}
+	view, err = ReadSkillForTenant("default", "catalog-flow")
+	if err != nil {
+		t.Fatalf("read forced skill: %v", err)
+	}
+	if !strings.Contains(view, "second body") || strings.Contains(view, "first body") {
+		t.Fatalf("force install did not replace content:\n%s", view)
+	}
+	skillsDir, err := getSkillsDir("default")
+	if err != nil {
+		t.Fatalf("skills dir: %v", err)
+	}
+	lock, err := loadSkillCatalogLockForDir(skillsDir)
+	if err != nil {
+		t.Fatalf("load catalog lock: %v", err)
+	}
+	entry := lock.Skills["catalog-flow"]
+	if entry.SourceKind != "local" || entry.LastBackupPath == "" {
+		t.Fatalf("force install should update local lock with backup path: %+v", entry)
+	}
+	backupSkill := filepath.Join(entry.LastBackupPath, "catalog-flow", "SKILL.md")
+	data, err := os.ReadFile(backupSkill)
+	if err != nil {
+		t.Fatalf("read backup skill: %v", err)
+	}
+	if !strings.Contains(string(data), "first body") {
+		t.Fatalf("backup should contain old skill, got:\n%s", data)
+	}
+}
+
+func TestSkillCatalogInstallDetectsLegacyCollision(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	skillsDir, err := getSkillsDir("default")
+	if err != nil {
+		t.Fatalf("skills dir: %v", err)
+	}
+	legacyPath := filepath.Join(skillsDir, "legacy-flow.md")
+	if err := atomicWriteFile(legacyPath, ensureFrontMatter("legacy body", "legacy-flow", "legacy")); err != nil {
+		t.Fatalf("write legacy skill: %v", err)
+	}
+	source := writeSkillFixture(t, "legacy-flow", "new body", nil)
+	if _, err := InstallSkillFromSource("default", source, "", false); err == nil || !strings.Contains(err.Error(), "legacy-file") {
+		t.Fatalf("legacy collision should require force, got: %v", err)
+	}
+	if _, err := InstallSkillFromSource("default", source, "", true); err != nil {
+		t.Fatalf("force install over legacy: %v", err)
+	}
+	if _, err := os.Stat(legacyPath); !os.IsNotExist(err) {
+		t.Fatalf("legacy file should be moved into backup, stat err=%v", err)
+	}
+	view, err := ReadSkillForTenant("default", "legacy-flow")
+	if err != nil {
+		t.Fatalf("read new skill: %v", err)
+	}
+	if !strings.Contains(view, "new body") {
+		t.Fatalf("new directory skill not installed:\n%s", view)
+	}
+}
+
+func TestCuratorSkipsCatalogInstalledSkills(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	source := writeSkillFixture(t, "catalog-old", "durable body", nil)
+	if _, err := InstallSkillFromSource("default", source, "", false); err != nil {
+		t.Fatalf("install catalog skill: %v", err)
+	}
+	skillsDir, err := getSkillsDir("default")
+	if err != nil {
+		t.Fatalf("skills dir: %v", err)
+	}
+	old := time.Now().UTC().AddDate(0, 0, -120).Format(time.RFC3339)
+	if err := updateSkillUsageForDir(skillsDir, "catalog-old", func(rec *SkillUsageRecord) {
+		rec.Source = SkillSourceCatalog
+		rec.LastUsed = old
+	}); err != nil {
+		t.Fatalf("usage update: %v", err)
+	}
+	resp, err := RunCuratorForTenantWithOptions("default", CuratorOptions{})
+	if err != nil {
+		t.Fatalf("run curator: %v", err)
+	}
+	if strings.Contains(resp, "archived catalog-old") || strings.Contains(resp, "marked stale catalog-old") {
+		t.Fatalf("curator should skip catalog skill, got:\n%s", resp)
+	}
+	info, err := findSkill("default", "catalog-old")
+	if err != nil {
+		t.Fatalf("catalog skill should remain active: %v", err)
+	}
+	if info.Source != SkillSourceCatalog || info.State != SkillStateActive {
+		t.Fatalf("unexpected catalog skill state: %+v", info)
+	}
 }
 
 func createTestSkill(t *testing.T, tenantID, name, body string) {
@@ -176,4 +314,22 @@ func createTestSkill(t *testing.T, tenantID, name, body string) {
 	if err := atomicWriteFile(filepath.Join(skillDir, "SKILL.md"), content); err != nil {
 		t.Fatalf("write skill: %v", err)
 	}
+}
+
+func writeSkillFixture(t *testing.T, name, body string, support map[string]string) string {
+	t.Helper()
+	dir := t.TempDir()
+	if err := atomicWriteFile(filepath.Join(dir, "SKILL.md"), ensureFrontMatter(body, name, "fixture skill")); err != nil {
+		t.Fatalf("write fixture SKILL.md: %v", err)
+	}
+	for rel, content := range support {
+		target := filepath.Join(dir, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
+			t.Fatalf("create fixture support dir: %v", err)
+		}
+		if err := atomicWriteFile(target, content); err != nil {
+			t.Fatalf("write fixture support file: %v", err)
+		}
+	}
+	return dir
 }

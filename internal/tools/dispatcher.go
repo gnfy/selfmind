@@ -258,6 +258,14 @@ func (d *Dispatcher) GetTool(name string) (Tool, bool) {
 	return d.registry.Get(name)
 }
 
+func (d *Dispatcher) SupportsParallelTool(name string) bool {
+	t, ok := d.registry.Get(name)
+	if !ok {
+		return false
+	}
+	return ToolMetadataFor(t).SupportsParallel
+}
+
 // ListTools returns all registered tool names
 func (d *Dispatcher) ListTools() []string {
 	return d.registry.List()
@@ -328,6 +336,16 @@ func (d *Dispatcher) InjectDelegateFn(fn func(goal, context string, toolsets []s
 }
 
 // InjectVisionLLM 将视觉分析所需的 LLM 接口注入到 VisionTool
+func (d *Dispatcher) InjectDelegateBatchFn(fn func(tasks []DelegateTaskSpec) ([]DelegateTaskResult, error)) {
+	t, ok := d.registry.Get("delegate_task")
+	if !ok {
+		return
+	}
+	if dt, ok := t.(*DelegateTool); ok {
+		dt.RegisterBatchDelegateFn(fn)
+	}
+}
+
 func (d *Dispatcher) InjectVisionLLM(provider VisionLLM) {
 	t, ok := d.registry.Get("vision_analyze")
 	if !ok {

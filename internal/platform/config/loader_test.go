@@ -77,3 +77,29 @@ func TestResolveConfigPathPrefersEnv(t *testing.T) {
 		t.Fatal("SELF_CONFIG path should not be treated as default")
 	}
 }
+
+func TestWeixinConfigReadsHermesStyleEnvironment(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	t.Setenv("WEIXIN_ACCOUNT_ID", "wx-account")
+	t.Setenv("WEIXIN_TOKEN", "wx-token")
+	t.Setenv("WEIXIN_BASE_URL", "https://example.weixin")
+	t.Setenv("WEIXIN_CDN_BASE_URL", "https://cdn.weixin")
+	t.Setenv("WEIXIN_DM_POLICY", "allowlist")
+	t.Setenv("WEIXIN_ALLOWED_USERS", "alice,bob")
+	t.Setenv("WEIXIN_SPLIT_MULTILINE_MESSAGES", "true")
+
+	cfg, err := LoadConfig(Options{Path: path, CreateIfMissing: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wx := cfg.Gateway.Weixin
+	if wx.AccountID != "wx-account" || wx.Token != "wx-token" {
+		t.Fatalf("weixin credentials = %+v", wx)
+	}
+	if wx.BaseURL != "https://example.weixin" || wx.CDNBaseURL != "https://cdn.weixin" {
+		t.Fatalf("weixin URLs = %+v", wx)
+	}
+	if wx.DMPolicy != "allowlist" || len(wx.AllowFrom) != 2 || wx.AllowFrom[0] != "alice" || !wx.SplitMultilineMessages {
+		t.Fatalf("weixin policy = %+v", wx)
+	}
+}

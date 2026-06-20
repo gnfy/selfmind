@@ -19,6 +19,7 @@ import (
 	"selfmind/internal/kernel"
 	"selfmind/internal/kernel/llm"
 	"selfmind/internal/kernel/memory"
+	"selfmind/internal/modelruntime"
 	"selfmind/internal/platform/config"
 	"selfmind/internal/tools"
 	"selfmind/internal/ui/common"
@@ -43,6 +44,7 @@ type ChatMessage struct {
 	ToolArgs  string  // Fix: add ToolArgs to store call arguments
 	Duration  float64 // Fix: add Duration for performance display
 	IsError   bool    // Fix: add IsError flag
+	IsRunning bool
 }
 
 // uiModel is the main TUI model. It holds all conversation state.
@@ -73,6 +75,7 @@ type uiModel struct {
 	spinner            spinner.Model
 	inputHistory       []string
 	historyIndex       int
+	historyDraft       string
 	sessionSearchFn    func(query string, limit int) (interface{}, error)
 	clarifyBridge      *tools.ClarifyBridge
 	cancelFn           context.CancelFunc
@@ -81,9 +84,6 @@ type uiModel struct {
 	clarifyReq         tools.ClarifyRequest
 	secretMode         bool
 	secretKey          string
-	selectionStart     int // Y coordinate of drag start
-	selectionEnd       int // Y coordinate of drag end
-	isSelecting        bool
 	statusMsg          string    // Transient status message
 	thinkingDots       int       // Counter for "..." animation
 	thinkingStart      time.Time // When current thinking started
@@ -92,6 +92,13 @@ type uiModel struct {
 }
 
 type MsgClearStatus struct{}
+type MsgWorkingTick time.Time
+
+func workingTick() tea.Cmd {
+	return tea.Tick(200*time.Millisecond, func(t time.Time) tea.Msg {
+		return MsgWorkingTick(t)
+	})
+}
 
 func NewController(a *kernel.Agent, provider llm.Provider, cfg *config.Config, tenantID string) *Controller {
 	if a != nil {
@@ -131,7 +138,7 @@ func NewController(a *kernel.Agent, provider llm.Provider, cfg *config.Config, t
 			historyIndex:  -1,
 			startTime:     time.Now(),
 			runStatus:     "ready",
-			tokenLimit:    1000000,
+			tokenLimit:    resolveUITokenLimit(cfg, "", ""),
 			viewport:      viewport.New(0, 0),
 			clarifyBridge: tools.NewClarifyBridge(),
 		},
@@ -179,7 +186,7 @@ func NewControllerWithGateway(gw *router.Gateway, agent *kernel.Agent, provider 
 			historyIndex:  -1,
 			startTime:     time.Now(),
 			runStatus:     "ready",
-			tokenLimit:    1000000,
+			tokenLimit:    resolveUITokenLimit(cfg, providerName, modelName),
 			viewport:      viewport.New(0, 0),
 			clarifyBridge: tools.NewClarifyBridge(),
 		},
@@ -228,7 +235,6 @@ func (c *Controller) Start() {
 	c.checkMigration()
 	p := tea.NewProgram(c.model,
 		tea.WithAltScreen(),
-		tea.WithMouseCellMotion(),
 	)
 	c.model.program = p
 
@@ -282,6 +288,60 @@ func (m *uiModel) addMessage(role, content string) {
 	m.viewport.GotoBottom()
 }
 
+func (m *uiModel) addErrorMessage(content string) {
+	m.messages = append(m.messages, ChatMessage{
+		Role:      "assistant",
+		Content:   content,
+		Timestamp: time.Now(),
+		IsError:   true,
+	})
+	m.viewport.GotoBottom()
+}
+
+func (m *uiModel) appendToolOutput(toolName, content string) {
+	content = strings.TrimRight(content, "\n")
+	if content == "" {
+		return
+	}
+	if len(m.messages) == 0 || m.messages[len(m.messages)-1].Role != "tool" {
+		m.addMessage("tool", "")
+	}
+	last := &m.messages[len(m.messages)-1]
+	if toolName != "" {
+		last.ToolName = toolName
+	}
+	last.IsRunning = true
+	if strings.TrimSpace(last.Content) == "" {
+		last.Content = content
+		return
+	}
+	last.Content += "\n" + content
+}
+
+func (m *uiModel) appendAssistantResponse(content string) {
+	content = strings.TrimSpace(content)
+	if content == "" {
+		return
+	}
+	if len(m.messages) > 0 {
+		last := &m.messages[len(m.messages)-1]
+		if last.Role == "assistant" && !last.IsError {
+			existing := strings.TrimSpace(last.Content)
+			switch {
+			case existing == "":
+				last.Content = content
+				m.viewport.GotoBottom()
+				return
+			case existing == content:
+				return
+			case strings.HasSuffix(existing, content):
+				return
+			}
+		}
+	}
+	m.addMessage("assistant", content)
+}
+
 func (m *uiModel) viewModel() string {
 	if m.pager != nil {
 		return m.pager.View()
@@ -290,16 +350,21 @@ func (m *uiModel) viewModel() string {
 	mainW := m.width
 	st := m.common.Styles
 
-	fullContent := m.renderAllMessages()
-	stickToBottom := m.viewport.AtBottom() || m.viewport.PastBottom() || strings.TrimSpace(m.editor.Value()) != "" || m.thinking
+	wasAtBottom := m.viewport.AtBottom() || m.viewport.PastBottom()
 
 	inputH := m.editor.PreferredHeight()
 	inputRect := layout.Rect{W: m.width, H: inputH}
 	inputArea := m.editor.Draw(inputRect)
 
+	notification := m.notificationBar(mainW)
+	migrationHint := m.migrationHintBar(mainW)
+
 	// Codex-cli style: transcript + composer + one-line footer.
 	visibleH := m.height - inputH - 1
-	if m.migrationHint != "" {
+	if notification != "" {
+		visibleH--
+	}
+	if migrationHint != "" {
 		visibleH--
 	}
 	if visibleH < 1 {
@@ -308,6 +373,8 @@ func (m *uiModel) viewModel() string {
 
 	m.viewport.Width = mainW
 	m.viewport.Height = visibleH
+	fullContent := m.renderAllMessages()
+	stickToBottom := wasAtBottom || strings.TrimSpace(m.editor.Value()) != "" || m.thinking
 	showStartup := len(m.messages) == 0 && !m.thinking
 	m.viewport.SetContent(fullContent)
 	if showStartup {
@@ -319,28 +386,38 @@ func (m *uiModel) viewModel() string {
 
 	mainStr := st.Main.Width(mainW).Height(visibleH).Render(m.viewport.View())
 
-	// Transient status/notification area, rendered as transcript-adjacent text.
-	var notification string
-	if m.statusMsg != "" {
-		notification = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("244")).
-			PaddingLeft(2).
-			Render(m.statusMsg)
-	}
-
-	// Migration Hint area
-	var migrationHint string
-	if m.migrationHint != "" {
-		migrationHint = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("212")).
-			Italic(true).
-			PaddingLeft(2).
-			Render("✨ " + m.migrationHint)
-	}
-
 	statusBar := st.Status.Panel.Width(m.width).Render(m.statusLine())
 
 	return lipgloss.JoinVertical(lipgloss.Left, mainStr, notification, migrationHint, inputArea, statusBar)
+}
+
+func (m *uiModel) notificationBar(width int) string {
+	if width <= 0 || strings.TrimSpace(m.statusMsg) == "" {
+		return ""
+	}
+	text := strings.TrimSpace(m.statusMsg)
+	style := lipgloss.NewStyle().
+		Width(width).
+		Padding(0, 1).
+		Foreground(lipgloss.Color("255")).
+		Background(lipgloss.Color("236"))
+	if strings.Contains(strings.ToLower(text), "copied") {
+		style = style.Foreground(lipgloss.Color("0")).Background(lipgloss.Color("82")).Bold(true)
+	}
+	return style.Render(truncateToWidth(text, width-2))
+}
+
+func (m *uiModel) migrationHintBar(width int) string {
+	if width <= 0 || m.migrationHint == "" {
+		return ""
+	}
+	return lipgloss.NewStyle().
+		Width(width).
+		Padding(0, 1).
+		Foreground(lipgloss.Color("212")).
+		Background(lipgloss.Color("236")).
+		Italic(true).
+		Render(truncateToWidth("✨ "+m.migrationHint, width-2))
 }
 
 func (m *uiModel) openHelp() {
@@ -397,14 +474,7 @@ func renderHelpRow(left, right string, leftStyle, rightStyle lipgloss.Style, wid
 
 func (m *uiModel) statusLine() string {
 	st := m.common.Styles
-	modelName := m.modelName
-	if modelName == "" {
-		modelName = m.providerName
-	}
-	if modelName == "" {
-		modelName = "active"
-	}
-	header := modelName + " default"
+	header := m.displayModelName() + " default"
 	cwd := currentWorkingDir()
 
 	parts := []string{
@@ -433,6 +503,21 @@ func (m *uiModel) statusLine() string {
 	parts = append(parts, st.Status.Label.Render(ctrlHint), st.Status.Label.Render("/help"))
 
 	return strings.Join(parts, " · ")
+}
+
+func (m *uiModel) displayModelName() string {
+	modelName := strings.TrimSpace(m.modelName)
+	providerName := strings.TrimSpace(m.providerName)
+	if modelName == "" {
+		modelName = providerName
+	}
+	if modelName == "" {
+		modelName = "active"
+	}
+	if providerName != "" && providerName != modelName && providerName != "active" && providerName != "not configured" {
+		return providerName + "/" + modelName
+	}
+	return modelName
 }
 
 func truncateToWidth(s string, width int) string {
@@ -513,6 +598,16 @@ func (m *uiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case spinner.TickMsg:
+		return m, spinnerCmd
+
+	case MsgWorkingTick:
+		if m.thinking || m.toolExecuting != "" {
+			m.thinkingDots++
+			return m, workingTick()
+		}
+		return m, nil
+
 	case tea.KeyMsg:
 		if m.pager != nil {
 			closed, cmd := m.pager.Update(msg)
@@ -530,21 +625,6 @@ func (m *uiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.pager = nil
 			}
 			return m, cmd
-		}
-		if msg.Button == tea.MouseButtonLeft {
-			if msg.Action == tea.MouseActionPress {
-				m.isSelecting = true
-				m.selectionStart = msg.Y
-				m.selectionEnd = msg.Y
-			} else if msg.Action == tea.MouseActionRelease {
-				if m.isSelecting {
-					m.selectionEnd = msg.Y
-					m.isSelecting = false
-					return m, m.copySelection()
-				}
-			} else {
-				m.selectionEnd = msg.Y
-			}
 		}
 		var cmd tea.Cmd
 		m.viewport, cmd = m.viewport.Update(msg)
@@ -572,12 +652,13 @@ func (m *uiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.totalTokens += msg.Usage.InputTokens + msg.Usage.OutputTokens
 		if msg.Err != nil {
 			m.runStatus = "error"
-			m.addMessage("assistant", fmt.Sprintf("Error: %v", msg.Err))
+			m.addErrorMessage(fmt.Sprintf("Error: %v", msg.Err))
 		} else if strings.TrimSpace(msg.Response) != "" {
 			m.runStatus = "done"
-			m.addMessage("assistant", msg.Response)
+			m.appendAssistantResponse(msg.Response)
 		} else {
-			m.runStatus = "done"
+			m.runStatus = "error"
+			m.addErrorMessage("Error: model returned an empty response without any error details. Check the provider credentials and endpoint, then retry.")
 		}
 		return m, spinnerCmd
 
@@ -587,6 +668,7 @@ func (m *uiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		last := &m.messages[len(m.messages)-1]
 		last.ToolName = msg.ToolName
 		last.ToolArgs = msg.Args
+		last.IsRunning = true
 		return m, spinnerCmd
 
 	case MsgToolDone:
@@ -595,14 +677,36 @@ func (m *uiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			last := &m.messages[len(m.messages)-1]
 			last.ToolName = msg.ToolName
 			last.Duration = msg.Duration
+			last.IsRunning = false
 			if msg.Err != nil {
-				last.Content = fmt.Sprintf("%s error: %v", msg.ToolName, msg.Err)
+				existing := strings.TrimSpace(last.Content)
+				errText := fmt.Sprintf("%s error: %v", msg.ToolName, msg.Err)
+				if existing != "" {
+					last.Content = existing + "\n" + errText
+				} else {
+					last.Content = errText
+				}
 				last.IsError = true
 			} else {
-				last.Content = msg.Result
+				if strings.TrimSpace(msg.Result) != "" {
+					last.Content = msg.Result
+				}
 				last.IsError = false
 			}
 		}
+		return m, spinnerCmd
+
+	case MsgToolOutput:
+		m.thinking = false
+		m.appendToolOutput(msg.ToolName, msg.Content)
+		m.viewport.GotoBottom()
+		return m, spinnerCmd
+
+	case MsgToolHeartbeat:
+		if msg.ToolName != "" {
+			m.toolExecuting = msg.ToolName
+		}
+		m.statusMsg = msg.Content
 		return m, spinnerCmd
 
 	case MsgLearningEvent:
@@ -627,9 +731,23 @@ func (m *uiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case tea.KeyCtrlJ:
 		m.editor.Update(msg)
 		return m, nil
+	case tea.KeyUp:
+		if m.navigateInputHistory(-1) {
+			return m, nil
+		}
+		m.editor.Update(msg)
+		return m, nil
+	case tea.KeyDown:
+		if m.navigateInputHistory(1) {
+			return m, nil
+		}
+		m.editor.Update(msg)
+		return m, nil
 
 	default:
 		switch msg.String() {
+		case "esc":
+			return m, nil
 		case "ctrl+c":
 			// Priority 1: if input has content, clear it (don't quit)
 			if input := m.editor.Value(); input != "" {
@@ -660,10 +778,12 @@ func (m *uiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			// Shift+Enter / Ctrl+J already handled above via KeyCtrlJ.
 			// Here plain Enter submits
 			// Use ExpandValue() to replace paste placeholders with actual content.
+			displayInput := m.editor.Value()
 			input := m.editor.ExpandValue()
 			if input == "" {
 				return m, nil
 			}
+			m.recordInputHistory(displayInput)
 
 			if m.clarifyMode {
 				response := m.resolveClarifyResponse(input)
@@ -676,7 +796,8 @@ func (m *uiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.thinking = true
 				m.runStatus = "working"
 				m.thinkingStart = time.Now()
-				return m, m.spinner.Tick
+				m.thinkingDots = 0
+				return m, tea.Batch(m.spinner.Tick, workingTick())
 			}
 
 			if strings.HasPrefix(input, "/") {
@@ -687,9 +808,10 @@ func (m *uiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.thinking = true
 			m.runStatus = "working"
 			m.thinkingStart = time.Now()
+			m.thinkingDots = 0
 			ctx, cancel := context.WithCancel(context.Background())
 			m.cancelFn = cancel
-			return m, tea.Batch(m.runAgent(ctx, input), m.spinner.Tick)
+			return m, tea.Batch(m.runAgent(ctx, input), m.spinner.Tick, workingTick())
 		}
 	}
 	m.editor.Update(msg)
@@ -714,7 +836,20 @@ func (m *uiModel) View() string {
 }
 
 func formatUsage(usage, limit int) string {
+	if limit <= 0 {
+		return fmt.Sprintf("%s/? tokens", compactCount(usage))
+	}
 	return fmt.Sprintf("%s/%s tokens", compactCount(usage), compactCount(limit))
+}
+
+func resolveUITokenLimit(cfg *config.Config, providerName, modelName string) int {
+	if cfg != nil {
+		rt, err := modelruntime.NewResolver(cfg).Resolve(context.Background(), modelruntime.Selection{})
+		if err == nil && rt.ContextLength > 0 {
+			return rt.ContextLength
+		}
+	}
+	return modelruntime.KnownContextLength(providerName, modelName)
 }
 
 func compactCount(n int) string {
@@ -806,18 +941,21 @@ var (
 )
 
 func renderMarkdown(s string, width int) string {
-	codeStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("212")).Background(lipgloss.Color("235"))
+	if width < 8 {
+		width = 8
+	}
+	codeStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
 	var result strings.Builder
 	lines := strings.Split(s, "\n")
 	inCodeBlock := false
 	for _, line := range lines {
-		if strings.HasPrefix(line, "```") {
-			result.WriteString(codeStyle.Render("```\n"))
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "```") {
 			inCodeBlock = !inCodeBlock
 			continue
 		}
 		if inCodeBlock {
-			result.WriteString(codeStyle.Render("  " + line + "\n"))
+			result.WriteString(codeStyle.Render(line) + "\n")
 			continue
 		}
 		line = inlineCodeRegex.ReplaceAllStringFunc(line, func(match string) string {
@@ -850,6 +988,16 @@ type MsgToolStart struct {
 	Args     string
 }
 
+type MsgToolOutput struct {
+	ToolName string
+	Content  string
+}
+
+type MsgToolHeartbeat struct {
+	ToolName string
+	Content  string
+}
+
 type MsgToolDone struct {
 	ToolName string
 	Result   string
@@ -872,7 +1020,7 @@ var shortcutHelpRows = []helpRow{
 	{Left: "Ctrl+J", Right: "Insert a newline"},
 	{Left: "Ctrl+C", Right: "Clear input, cancel a running task, close help, or exit"},
 	{Left: "Ctrl+L", Right: "Clear the current transcript view"},
-	{Left: "Mouse drag", Right: "Copy selected transcript text"},
+	{Left: "Mouse drag", Right: "Use your terminal's native text selection"},
 }
 
 var _ tea.Model = (*uiModel)(nil)

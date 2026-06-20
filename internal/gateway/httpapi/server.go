@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -53,6 +54,8 @@ func (d *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/approvals", d.handleApprovals)
 	mux.HandleFunc("/v1/approvals/respond", d.handleApprovalRespond)
 	mux.HandleFunc("/v1/tasks/events", d.handleTaskEvents)
+	mux.HandleFunc("/v1/tasks/events/stream", d.handleTaskEventsStream)
+	mux.HandleFunc("/v1/tasks/artifacts", d.handleTaskArtifacts)
 	mux.HandleFunc("/v1/tasks", d.handleTasks)
 	mux.HandleFunc("/v1/tasks/current", d.handleCurrentTask)
 	mux.HandleFunc("/v1/workspaces/register", d.handleWorkspaceRegister)
@@ -168,7 +171,7 @@ func (d *Server) runMessage(ctx context.Context, identity *control.IdentityConte
 	workspace, _ := d.workspaceForTask(ctx, identity, task, req)
 	cleanupScope := d.installExecutionScope(identity, task, run, workspace)
 	defer cleanupScope()
-	agentInput := d.withGatewayContext(req.Content, identity, task, workspace)
+	agentInput := d.withGatewayContext(req.Content, identity, task, workspace, req.Attachments)
 
 	if d.Gateway == nil {
 		err := fmt.Errorf("gateway is not configured")
@@ -204,6 +207,12 @@ func (d *Server) runMessage(ctx context.Context, identity *control.IdentityConte
 	}
 
 	outcome := buildRunOutcome(content)
+	if structured, ok := d.latestStructuredRunOutcome(ctx, task.ID, run.ID); ok {
+		outcome = structured
+		if outcome.Summary == "" {
+			outcome.Summary = buildRunOutcome(content).Summary
+		}
+	}
 	_ = d.Control.RecordChannelMessage(ctx, *identity, req.Channel, task.ID, "assistant", content)
 	_ = d.Control.FinishRun(ctx, identity.TenantID, run.ID, outcome.Status)
 	_ = d.Control.UpdateTaskStatus(ctx, identity.TenantID, task.ID, outcome.Status, outcome.Summary, outcome.NextSteps)
@@ -216,6 +225,7 @@ func (d *Server) runMessage(ctx context.Context, identity *control.IdentityConte
 		TestStatus:   strings.Join(outcome.Tests, "\n"),
 		Risks:        outcome.Risks,
 	})
+	d.recordOutcomeArtifacts(ctx, task, run, req.Channel, outcome.Files)
 	_, _ = d.Control.AppendEvent(ctx, control.Event{
 		TaskID:     task.ID,
 		RunID:      run.ID,
@@ -226,6 +236,80 @@ func (d *Server) runMessage(ctx context.Context, identity *control.IdentityConte
 	})
 	task, _ = d.Control.GetTask(ctx, identity.TenantID, task.ID)
 	return api.MessageResponse{Identity: identity, Task: task, Run: run, Outcome: &outcome, Content: content, Usage: usage}, http.StatusOK
+}
+
+func (d *Server) recordOutcomeArtifacts(ctx context.Context, task *control.Task, run *control.Run, channel string, files []string) {
+	if d == nil || d.Control == nil || task == nil {
+		return
+	}
+	seen := map[string]struct{}{}
+	for _, uri := range files {
+		uri = strings.TrimSpace(uri)
+		if uri == "" {
+			continue
+		}
+		if _, ok := seen[uri]; ok {
+			continue
+		}
+		seen[uri] = struct{}{}
+		artifact := control.Artifact{
+			TaskID: task.ID,
+			Kind:   artifactKind(uri),
+			Name:   artifactName(uri),
+			URI:    uri,
+			Metadata: mustJSON(map[string]interface{}{
+				"source": "run_outcome",
+			}),
+		}
+		if run != nil {
+			artifact.RunID = run.ID
+		}
+		saved, err := d.Control.SaveArtifact(ctx, artifact)
+		if err != nil {
+			continue
+		}
+		runID := ""
+		if run != nil {
+			runID = run.ID
+		}
+		_, _ = d.Control.AppendEvent(ctx, control.Event{
+			TaskID:     task.ID,
+			RunID:      runID,
+			Type:       "artifact.created",
+			Visibility: "task",
+			Channel:    channel,
+			Payload: mustJSON(map[string]interface{}{
+				"artifact": saved,
+			}),
+		})
+	}
+}
+
+func artifactKind(uri string) string {
+	lower := strings.ToLower(strings.TrimSpace(uri))
+	if strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://") {
+		return "link"
+	}
+	return "file"
+}
+
+func artifactName(uri string) string {
+	clean := strings.TrimSpace(uri)
+	if clean == "" {
+		return ""
+	}
+	if strings.Contains(clean, "://") {
+		parts := strings.Split(strings.TrimRight(clean, "/"), "/")
+		if len(parts) > 0 && parts[len(parts)-1] != "" {
+			return parts[len(parts)-1]
+		}
+		return clean
+	}
+	name := filepath.Base(filepath.FromSlash(clean))
+	if name == "." || name == string(filepath.Separator) {
+		return clean
+	}
+	return name
 }
 
 func (d *Server) startAsyncRun(identity *control.IdentityContext, req api.MessageRequest) api.MessageResponse {
@@ -242,16 +326,22 @@ func (d *Server) startAsyncRun(identity *control.IdentityContext, req api.Messag
 
 	runCtx, runCancel := context.WithCancel(context.Background())
 	active.Cancel = runCancel
+	stopProgressNotices := d.startAsyncProgressNotices(runCtx, identity, req)
 	go func() {
 		defer d.endActive(identity.PersonID)
 		defer runCancel()
+		defer stopProgressNotices()
 		resp, _ := d.runMessage(runCtx, identity, req)
 		d.deliverAsyncResult(context.Background(), identity, req, resp)
 	}()
 
+	notice := router.WorkingNotice(req.Channel)
+	if notice == "" {
+		notice = "Started in the background. Use /status to check progress or /stop to cancel."
+	}
 	return api.MessageResponse{
 		Identity: identity,
-		Content:  "Started in the background. Use /status to check progress or /stop to cancel.",
+		Content:  notice,
 		Accepted: true,
 	}
 }
@@ -297,37 +387,175 @@ func (d *Server) workspaceForTask(ctx context.Context, identity *control.Identit
 }
 
 func (d *Server) installExecutionScope(identity *control.IdentityContext, task *control.Task, run *control.Run, workspace *control.Workspace) func() {
-	if identity == nil || workspace == nil || workspace.LocalPath == "" {
+	if identity == nil {
 		return func() {}
 	}
 	scope := tools.ExecutionScope{
-		TenantID:      identity.TenantID,
-		PersonID:      identity.PersonID,
-		WorkspaceID:   workspace.ID,
-		WorkspaceRoot: workspace.LocalPath,
-		AllowedRoots:  workspace.AllowedRoots,
+		TenantID: identity.TenantID,
+		PersonID: identity.PersonID,
+	}
+	if workspace != nil {
+		scope.WorkspaceID = workspace.ID
+		scope.WorkspaceRoot = workspace.LocalPath
+		scope.AllowedRoots = workspace.AllowedRoots
 	}
 	if task != nil {
 		scope.TaskID = task.ID
 	}
 	if run != nil {
 		scope.RunID = run.ID
+		scope.Channel = run.Channel
 	}
+	scope.Approval = d.toolApprovalHandler(identity, task, run, scope.Channel)
 	return tools.SetExecutionScope(identity.PersonID, scope)
 }
 
-func (d *Server) withGatewayContext(input string, identity *control.IdentityContext, task *control.Task, workspace *control.Workspace) string {
-	if workspace == nil || workspace.LocalPath == "" || task == nil {
+func (d *Server) toolApprovalHandler(identity *control.IdentityContext, task *control.Task, run *control.Run, channel string) tools.ToolApprovalHandler {
+	return func(ctx context.Context, req tools.ToolApprovalRequest) (tools.ToolApprovalDecision, error) {
+		if d == nil || d.Control == nil || identity == nil {
+			return tools.ToolApprovalDecision{}, fmt.Errorf("approval store is not available")
+		}
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		waitCtx, cancel := context.WithTimeout(ctx, 30*time.Minute)
+		defer cancel()
+
+		taskID := req.TaskID
+		runID := req.RunID
+		if taskID == "" && task != nil {
+			taskID = task.ID
+		}
+		if runID == "" && run != nil {
+			runID = run.ID
+		}
+		approval, err := d.Control.CreateApprovalRequest(waitCtx, control.ApprovalRequest{
+			TenantID:         identity.TenantID,
+			PersonID:         identity.PersonID,
+			TaskID:           taskID,
+			RunID:            runID,
+			ActionType:       "tool_call",
+			RequestedChannel: fallback(channel, identity.Platform),
+			Payload: mustJSON(map[string]interface{}{
+				"tool":   req.ToolName,
+				"reason": req.Reason,
+				"args":   redactApprovalArgs(req.Args),
+			}),
+		})
+		if err != nil {
+			return tools.ToolApprovalDecision{}, err
+		}
+		if taskID != "" {
+			_, _ = d.Control.AppendEvent(waitCtx, control.Event{
+				TaskID:     taskID,
+				RunID:      runID,
+				Type:       "approval.requested",
+				Visibility: "task",
+				Channel:    fallback(channel, identity.Platform),
+				Payload: mustJSON(map[string]interface{}{
+					"approval_id": approval.ID,
+					"action_type": approval.ActionType,
+					"tool":        req.ToolName,
+					"reason":      req.Reason,
+				}),
+			})
+		}
+		d.notifyApprovalRequested(context.Background(), identity, taskID, runID, fallback(channel, identity.Platform), approval, req)
+
+		ticker := time.NewTicker(time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-waitCtx.Done():
+				return tools.ToolApprovalDecision{ApprovalID: approval.ID, Reason: waitCtx.Err().Error()}, waitCtx.Err()
+			case <-ticker.C:
+				current, err := d.Control.GetApprovalRequest(waitCtx, identity.TenantID, approval.ID)
+				if err != nil {
+					return tools.ToolApprovalDecision{ApprovalID: approval.ID}, err
+				}
+				if current == nil {
+					return tools.ToolApprovalDecision{ApprovalID: approval.ID}, fmt.Errorf("approval request disappeared: %s", approval.ID)
+				}
+				switch current.Status {
+				case "approved":
+					return tools.ToolApprovalDecision{Approved: true, ApprovalID: approval.ID}, nil
+				case "rejected":
+					return tools.ToolApprovalDecision{Approved: false, ApprovalID: approval.ID, Reason: "rejected"}, nil
+				}
+			}
+		}
+	}
+}
+
+func redactApprovalArgs(args map[string]interface{}) map[string]interface{} {
+	out := make(map[string]interface{})
+	for k, v := range args {
+		out[k] = tools.RedactSensitive(fmt.Sprintf("%v", v))
+	}
+	return out
+}
+
+func (d *Server) notifyApprovalRequested(ctx context.Context, identity *control.IdentityContext, taskID, runID, channel string, approval *control.ApprovalRequest, req tools.ToolApprovalRequest) {
+	if d == nil || d.Delivery == nil || identity == nil || approval == nil {
+		return
+	}
+	if identity.Platform == "cli" && channel == "cli" {
+		return
+	}
+	content := fmt.Sprintf("Approval required for %s: %s\nApproval: %s\nReply with /approve %s or /reject %s.", req.ToolName, req.Reason, approval.ID, approval.ID, approval.ID)
+	_ = d.Delivery.EnqueueAndTry(ctx, delivery.Message{
+		TenantID:       identity.TenantID,
+		PersonID:       identity.PersonID,
+		Platform:       identity.Platform,
+		PlatformUserID: identity.PlatformUserID,
+		Channel:        channel,
+		TaskID:         taskID,
+		RunID:          runID,
+		Content:        content,
+	})
+}
+
+func (d *Server) withGatewayContext(input string, identity *control.IdentityContext, task *control.Task, workspace *control.Workspace, attachments []api.MessageAttachment) string {
+	if (workspace == nil || workspace.LocalPath == "" || task == nil) && len(attachments) == 0 {
 		return input
 	}
 	var sb strings.Builder
 	sb.WriteString("[SelfMind daemon context]\n")
-	fmt.Fprintf(&sb, "person_id: %s\n", identity.PersonID)
-	fmt.Fprintf(&sb, "channel: %s\n", identity.Platform)
-	fmt.Fprintf(&sb, "task_id: %s\n", task.ID)
-	fmt.Fprintf(&sb, "workspace_id: %s\n", workspace.ID)
-	fmt.Fprintf(&sb, "workspace_root: %s\n", workspace.LocalPath)
-	sb.WriteString("Use workspace_root as the default cwd. Do not access files outside workspace allowed roots.\n")
+	if identity != nil {
+		fmt.Fprintf(&sb, "person_id: %s\n", identity.PersonID)
+		fmt.Fprintf(&sb, "platform: %s\n", identity.Platform)
+		fmt.Fprintf(&sb, "platform_user_id: %s\n", identity.PlatformUserID)
+	}
+	if task != nil {
+		fmt.Fprintf(&sb, "task_id: %s\n", task.ID)
+	}
+	if workspace != nil && workspace.LocalPath != "" {
+		fmt.Fprintf(&sb, "workspace_id: %s\n", workspace.ID)
+		fmt.Fprintf(&sb, "workspace_root: %s\n", workspace.LocalPath)
+		sb.WriteString("Use workspace_root as the default cwd. Do not access files outside workspace allowed roots.\n")
+	}
+	if len(attachments) > 0 {
+		sb.WriteString("attachments:\n")
+		for i, att := range attachments {
+			fmt.Fprintf(&sb, "- index: %d\n", i+1)
+			if att.Kind != "" {
+				fmt.Fprintf(&sb, "  kind: %s\n", att.Kind)
+			}
+			if att.Path != "" {
+				fmt.Fprintf(&sb, "  path: %s\n", att.Path)
+			}
+			if att.MimeType != "" {
+				fmt.Fprintf(&sb, "  mime_type: %s\n", att.MimeType)
+			}
+			if att.Name != "" {
+				fmt.Fprintf(&sb, "  name: %s\n", att.Name)
+			}
+			if att.Size > 0 {
+				fmt.Fprintf(&sb, "  size: %d\n", att.Size)
+			}
+		}
+		sb.WriteString("When useful, inspect attachment paths with local tools before answering.\n")
+	}
 	sb.WriteString("[/SelfMind daemon context]\n\n")
 	sb.WriteString(input)
 	return sb.String()
@@ -475,7 +703,8 @@ func (d *Server) tryHandleControlCommand(ctx context.Context, identity *control.
 			return true, "No active task.", nil
 		}
 		handoff, _ := d.Control.LatestHandoff(ctx, task.ID)
-		return true, formatTaskStatus(task, handoff, d.currentActive(identity.PersonID)), nil
+		plan := d.latestPlanForTask(ctx, task.ID)
+		return true, formatTaskStatus(task, handoff, d.currentActive(identity.PersonID), plan), nil
 	default:
 		return false, "", nil
 	}
@@ -743,7 +972,7 @@ func formatActiveRunStatus(active *activeRun) *api.ActiveRunStatus {
 	}
 }
 
-func formatTaskStatus(task *control.Task, handoff *control.Handoff, active *activeRun) string {
+func formatTaskStatus(task *control.Task, handoff *control.Handoff, active *activeRun, plan []taskPlanStep) string {
 	if task == nil {
 		return "No active task."
 	}
@@ -757,6 +986,21 @@ func formatTaskStatus(task *control.Task, handoff *control.Handoff, active *acti
 	}
 	if task.CurrentSummary != "" {
 		fmt.Fprintf(&sb, "\nSummary: %s\n", task.CurrentSummary)
+	}
+	if len(plan) > 0 {
+		sb.WriteString("\nPlan:\n")
+		for _, step := range plan {
+			marker := "[ ]"
+			switch step.Status {
+			case "completed":
+				marker = "[x]"
+			case "in_progress":
+				marker = "[>]"
+			case "cancelled":
+				marker = "[-]"
+			}
+			fmt.Fprintf(&sb, "- %s %s\n", marker, step.Step)
+		}
 	}
 	if handoff != nil {
 		if len(handoff.DoneItems) > 0 {

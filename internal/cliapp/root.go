@@ -44,6 +44,10 @@ func Run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	if stderr == nil {
 		stderr = os.Stderr
 	}
+	if isTopLevelHelp(args) {
+		printTopLevelHelp(stdout)
+		return 0
+	}
 
 	app := &App{
 		ctx:    ctx,
@@ -70,10 +74,35 @@ func Run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	if handled, exitCode := app.runModelCommandIfRequested(); handled {
 		return exitCode
 	}
+	if handled, exitCode := app.runAuthCommandIfRequested(); handled {
+		return exitCode
+	}
+	if handled, exitCode := app.runWeixinCommandIfRequested(); handled {
+		return exitCode
+	}
 	if handled, exitCode := app.runGatewayClientIfRequested(); handled {
 		return exitCode
 	}
 	return app.runTUI()
+}
+
+func isTopLevelHelp(args []string) bool {
+	if len(args) < 2 {
+		return false
+	}
+	arg := args[1]
+	return arg == "-h" || arg == "--help" || arg == "help"
+}
+
+func printTopLevelHelp(stdout io.Writer) {
+	fmt.Fprintln(stdout, "SelfMind")
+	fmt.Fprintln(stdout)
+	fmt.Fprintln(stdout, "Usage:")
+	fmt.Fprintln(stdout, "  selfmind [--config PATH]")
+	fmt.Fprintln(stdout, "  selfmind model [current|check|list|set <provider> <model>]")
+	fmt.Fprintln(stdout, "  selfmind auth [login|status|logout] ...")
+	fmt.Fprintln(stdout, "  selfmind gateway ...")
+	fmt.Fprintln(stdout, "  selfmind weixin ...")
 }
 
 func (a *App) runTUI() int {
@@ -116,7 +145,8 @@ func (a *App) runTUI() int {
 
 	appcore.InitMCP(disp, cfg)
 
-	ctrl := tui.NewControllerWithGateway(gwDeps.Gateway, agent, nil, cfg.EffectiveProvider(), cfg.EffectiveModel(), cfg, tenantID)
+	displayProvider, displayModel, _ := appcore.ResolveModelDisplay(cfg)
+	ctrl := tui.NewControllerWithGateway(gwDeps.Gateway, agent, nil, displayProvider, displayModel, cfg, tenantID)
 	disp.InjectClarifyHandler(ctrl.ClarifyHandler())
 	ctrl.SetSessionSearchFn(mem.SearchFn(tenantID))
 

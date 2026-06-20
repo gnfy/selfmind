@@ -27,21 +27,12 @@ func (a *Adapter) HandleMessage(openid, content string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("resolve uid: %w", err)
 	}
-	resp, err := a.gateway.Handle(ctx, unifiedUID, "wechat", content)
+	resp, err := a.gateway.HandleWithEvents(ctx, unifiedUID, "wechat", content)
 	if err != nil {
 		return "", fmt.Errorf("gateway handle: %w", err)
 	}
-	if !resp.IsStreaming {
-		return resp.Content, nil
-	}
-	var fullText strings.Builder
-	for event := range resp.Stream {
-		if event.Err != nil {
-			return fullText.String(), event.Err
-		}
-		fullText.WriteString(event.Content)
-	}
-	return fullText.String(), nil
+	reply, _, err := router.AggregateFinalResponse(resp)
+	return reply, err
 }
 
 func (a *Adapter) HandleRawMessage(body []byte) ([]byte, error) {

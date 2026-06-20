@@ -128,6 +128,9 @@ func InstallSkillFromSource(tenantID, source, name string, force bool) (string, 
 	if source == "" {
 		return "", fmt.Errorf("source is required for install")
 	}
+	originalSource := source
+	sourceKind := skillInstallSourceKind(source)
+	normalizedSource := source
 	var content string
 	var support map[string]string
 	var err error
@@ -135,6 +138,7 @@ func InstallSkillFromSource(tenantID, source, name string, force bool) (string, 
 	case strings.HasPrefix(source, "official/"):
 		content, err = readOfficialSkill(strings.TrimPrefix(source, "official/"))
 	case isHTTPURL(source):
+		normalizedSource = normalizeSkillURL(source)
 		content, err = readSkillFromURL(source)
 	default:
 		content, support, err = readSkillFromLocalPath(source)
@@ -165,12 +169,24 @@ func InstallSkillFromSource(tenantID, source, name string, force bool) (string, 
 		return "", err
 	}
 	skillDir := filepath.Join(dir, safeName)
-	if _, err := os.Stat(skillDir); err == nil && !force {
-		return "", fmt.Errorf("skill %q already exists; pass force=true to overwrite", safeName)
+	collisions := existingSkillInstallCollisions(dir, safeName)
+	if len(collisions) > 0 && !force {
+		return "", formatInstallCollisionError(safeName, collisions)
 	}
+	before := readInstallCollisionContent(collisions)
+	backupDir := ""
 	if force {
-		_ = os.RemoveAll(skillDir)
+		backupDir, err = backupSkillInstallCollisions(dir, safeName, collisions)
+		if err != nil {
+			return "", err
+		}
 	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = restoreSkillInstallBackup(dir, backupDir)
+		}
+	}()
 	if err := os.MkdirAll(skillDir, 0755); err != nil {
 		return "", err
 	}
@@ -189,8 +205,51 @@ func InstallSkillFromSource(tenantID, source, name string, force bool) (string, 
 			return "", err
 		}
 	}
-	_ = MarkSkillCreated(tenantID, safeName, SkillSourceManual, "skill_catalog")
+	contentHash, files, err := hashSkillDirectory(skillDir)
+	if err != nil {
+		return "", err
+	}
+	committed = true
+	if err := recordSkillCatalogInstall(tenantID, SkillCatalogLockEntry{
+		Name:           safeName,
+		Source:         normalizedSource,
+		SourceKind:     sourceKind,
+		OriginalSource: originalSource,
+		InstallPath:    skillDir,
+		ContentHash:    contentHash,
+		Files:          files,
+		LastBackupPath: backupDir,
+	}); err != nil {
+		return "", err
+	}
+	if err := MarkSkillCreated(tenantID, safeName, SkillSourceCatalog, "skill_catalog"); err != nil {
+		return "", err
+	}
+	action := "install"
+	if force {
+		action = "install:force"
+	}
+	recordSkillLearningChange(tenantID, safeName, action, before, content, SkillSourceCatalog)
+	if backupDir != "" {
+		return fmt.Sprintf("Installed skill %q from %s. Previous copy backed up to %s.", safeName, source, backupDir), nil
+	}
 	return fmt.Sprintf("Installed skill %q from %s.", safeName, source), nil
+}
+
+func readInstallCollisionContent(collisions []skillInstallCollision) string {
+	var parts []string
+	for _, c := range collisions {
+		path := c.Path
+		if c.Kind == "directory" {
+			path = filepath.Join(c.Path, "SKILL.md")
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		parts = append(parts, fmt.Sprintf("## %s\n%s", filepath.Base(c.Path), string(data)))
+	}
+	return strings.Join(parts, "\n\n")
 }
 
 func AuditSkillsForTenant(tenantID, name string) (string, error) {

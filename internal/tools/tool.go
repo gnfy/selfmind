@@ -16,6 +16,36 @@ type Tool interface {
 	Schema() ToolSchema
 }
 
+type ToolExposure string
+
+const (
+	ToolExposureDirect   ToolExposure = "direct"
+	ToolExposureDeferred ToolExposure = "deferred"
+	ToolExposureHidden   ToolExposure = "hidden"
+)
+
+type ToolRiskLevel string
+
+const (
+	ToolRiskLow    ToolRiskLevel = "low"
+	ToolRiskMedium ToolRiskLevel = "medium"
+	ToolRiskHigh   ToolRiskLevel = "high"
+)
+
+type ToolMetadata struct {
+	Exposure         ToolExposure  `json:"exposure,omitempty"`
+	SupportsParallel bool          `json:"supports_parallel,omitempty"`
+	ReadOnly         bool          `json:"read_only,omitempty"`
+	RiskLevel        ToolRiskLevel `json:"risk_level,omitempty"`
+	Category         string        `json:"category,omitempty"`
+	TimeoutSeconds   int           `json:"timeout_seconds,omitempty"`
+	SearchText       string        `json:"search_text,omitempty"`
+}
+
+type MetadataProvider interface {
+	Metadata() ToolMetadata
+}
+
 // ToolSchema 定义工具的参数 schema（兼容 OpenAI tool schema）
 type ToolSchema struct {
 	Type       string                 `json:"type"`
@@ -24,10 +54,13 @@ type ToolSchema struct {
 }
 
 type PropertyDef struct {
-	Type        string      `json:"type"`
-	Description string      `json:"description,omitempty"`
-	Default     interface{} `json:"default,omitempty"`
-	Enum        []string    `json:"enum,omitempty"`
+	Type        string                 `json:"type"`
+	Description string                 `json:"description,omitempty"`
+	Default     interface{}            `json:"default,omitempty"`
+	Enum        []string               `json:"enum,omitempty"`
+	Items       *PropertyDef           `json:"items,omitempty"`
+	Properties  map[string]PropertyDef `json:"properties,omitempty"`
+	Required    []string               `json:"required,omitempty"`
 }
 
 // BaseTool 提供工具的默认实现基类
@@ -35,12 +68,22 @@ type BaseTool struct {
 	name        string
 	description string
 	schema      ToolSchema
+	metadata    ToolMetadata
 	handler     func(args map[string]interface{}) (string, error)
 }
 
 func (b *BaseTool) Name() string        { return b.name }
 func (b *BaseTool) Description() string { return b.description }
 func (b *BaseTool) Schema() ToolSchema  { return b.schema }
+func (b *BaseTool) Metadata() ToolMetadata {
+	if b.metadata.Exposure == "" {
+		b.metadata.Exposure = ToolExposureDirect
+	}
+	if b.metadata.RiskLevel == "" {
+		b.metadata.RiskLevel = ToolRiskMedium
+	}
+	return b.metadata
+}
 
 func (b *BaseTool) Execute(args map[string]interface{}) (string, error) {
 	if b.handler == nil {
@@ -53,12 +96,9 @@ func (b *BaseTool) Execute(args map[string]interface{}) (string, error) {
 func ToToolDefinition(t Tool) map[string]interface{} {
 	props := make(map[string]interface{})
 	for k, v := range t.Schema().Properties {
-		props[k] = map[string]interface{}{
-			"type":        v.Type,
-			"description": v.Description,
-		}
+		props[k] = propertyDefinition(v)
 	}
-	return map[string]interface{}{
+	def := map[string]interface{}{
 		"type": "function",
 		"function": map[string]interface{}{
 			"name":        t.Name(),
@@ -69,6 +109,107 @@ func ToToolDefinition(t Tool) map[string]interface{} {
 				"required":   t.Schema().Required,
 			},
 		},
+	}
+	meta := ToolMetadataFor(t)
+	def["selfmind"] = map[string]interface{}{
+		"exposure":          meta.Exposure,
+		"supports_parallel": meta.SupportsParallel,
+		"read_only":         meta.ReadOnly,
+		"risk_level":        meta.RiskLevel,
+		"category":          meta.Category,
+	}
+	return def
+}
+
+func propertyDefinition(def PropertyDef) map[string]interface{} {
+	out := map[string]interface{}{
+		"type":        def.Type,
+		"description": def.Description,
+	}
+	if def.Default != nil {
+		out["default"] = def.Default
+	}
+	if len(def.Enum) > 0 {
+		out["enum"] = def.Enum
+	}
+	if def.Items != nil {
+		out["items"] = propertyDefinition(*def.Items)
+	}
+	if len(def.Properties) > 0 {
+		props := make(map[string]interface{})
+		for k, v := range def.Properties {
+			props[k] = propertyDefinition(v)
+		}
+		out["properties"] = props
+	}
+	if len(def.Required) > 0 {
+		out["required"] = def.Required
+	}
+	return out
+}
+
+func ToolMetadataFor(t Tool) ToolMetadata {
+	if t == nil {
+		return ToolMetadata{Exposure: ToolExposureHidden, RiskLevel: ToolRiskHigh}
+	}
+	if provider, ok := t.(MetadataProvider); ok {
+		return normalizeMetadata(t, provider.Metadata())
+	}
+	return normalizeMetadata(t, ToolMetadata{})
+}
+
+func normalizeMetadata(t Tool, meta ToolMetadata) ToolMetadata {
+	if meta.Exposure == "" {
+		meta.Exposure = ToolExposureDirect
+	}
+	if meta.RiskLevel == "" {
+		meta.RiskLevel = defaultRiskLevel(t.Name())
+	}
+	if meta.Category == "" {
+		meta.Category = defaultToolCategory(t.Name())
+	}
+	if meta.SearchText == "" {
+		meta.SearchText = t.Name() + " " + t.Description()
+	}
+	if isDefaultParallelSafe(t.Name()) {
+		meta.SupportsParallel = true
+		meta.ReadOnly = true
+	}
+	return meta
+}
+
+func defaultRiskLevel(name string) ToolRiskLevel {
+	switch name {
+	case "terminal", "execute_command", "write_file", "patch", "skill_manage":
+		return ToolRiskHigh
+	case "update_plan", "finish_run", "tool_search", "session_search", "web_search", "web_extract":
+		return ToolRiskLow
+	default:
+		return ToolRiskMedium
+	}
+}
+
+func defaultToolCategory(name string) string {
+	switch {
+	case strings.HasPrefix(name, "skill:") || strings.HasPrefix(name, "skill_"):
+		return "skill"
+	case strings.HasPrefix(name, "mcp_"):
+		return "mcp"
+	case name == "update_plan" || name == "finish_run":
+		return "task"
+	default:
+		return "general"
+	}
+}
+
+func isDefaultParallelSafe(name string) bool {
+	switch name {
+	case "read_file", "cat", "ls_r", "list_files", "search_files", "grep",
+		"web_search", "web_extract", "session_search", "get_current_time",
+		"process_list", "process_poll", "tool_search":
+		return true
+	default:
+		return false
 	}
 }
 
@@ -203,9 +344,26 @@ func coerceValue(param string, val interface{}, targetType string) (interface{},
 		}
 	case "string":
 		return fmt.Sprintf("%v", val), nil
+	case "array":
+		if s, ok := val.(string); ok {
+			var out []interface{}
+			if err := json.Unmarshal([]byte(strings.TrimSpace(s)), &out); err != nil {
+				return nil, fmt.Errorf("parameter %s must be an array: %w", param, err)
+			}
+			return out, nil
+		}
+	case "object":
+		if s, ok := val.(string); ok {
+			var out map[string]interface{}
+			if err := json.Unmarshal([]byte(strings.TrimSpace(s)), &out); err != nil {
+				return nil, fmt.Errorf("parameter %s must be an object: %w", param, err)
+			}
+			return out, nil
+		}
 	default:
 		return val, nil
 	}
+	return val, nil
 }
 
 // MarshalArgs 将 args 序列化为 JSON 字符串（用于日志/调试）

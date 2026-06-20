@@ -1,13 +1,18 @@
 package tools
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
+
+	"selfmind/internal/kernel"
 )
 
 // ---- 内置工具实现 ----
@@ -227,19 +232,125 @@ func (t *ExecuteCommandTool) Execute(args map[string]interface{}) (string, error
 		return fmt.Sprintf("Started background process with ID: %s", id), nil
 	}
 
-	runCtx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutSeconds)*time.Second)
+	parentCtx := contextFromArgs(args)
+	runCtx, cancel := context.WithTimeout(parentCtx, time.Duration(timeoutSeconds)*time.Second)
 	defer cancel()
 
 	cmd := shellCommandContext(runCtx, cmdStr)
 	cmd.Dir = cwd
-	out, err := cmd.CombinedOutput()
+
+	out, err := runCommandStreaming(runCtx, cmd, cmdStr)
 	if runCtx.Err() == context.DeadlineExceeded {
-		return string(out), fmt.Errorf("command timed out after %d seconds", timeoutSeconds)
+		return out, fmt.Errorf("command timed out after %d seconds", timeoutSeconds)
+	}
+	if runCtx.Err() == context.Canceled {
+		return out, fmt.Errorf("command cancelled")
 	}
 	if err != nil {
-		return string(out), fmt.Errorf("command failed: %v", err)
+		return out, fmt.Errorf("command failed: %v", err)
 	}
-	return string(out), nil
+	return out, nil
+}
+
+func runCommandStreaming(ctx context.Context, cmd commandRunner, command string) (string, error) {
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return "", err
+	}
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		return "", err
+	}
+	if err := cmd.Start(); err != nil {
+		return "", err
+	}
+
+	eventCh := kernel.EventChannelFromContext(ctx)
+	var mu sync.Mutex
+	var output strings.Builder
+	var wg sync.WaitGroup
+
+	appendLine := func(stream, line string) {
+		mu.Lock()
+		if output.Len() > 0 {
+			output.WriteByte('\n')
+		}
+		output.WriteString(line)
+		mu.Unlock()
+		emitToolProgress(eventCh, "tool.output", map[string]interface{}{
+			"tool_name": "terminal",
+			"stream":    stream,
+			"command":   command,
+			"line":      line,
+		}, line)
+	}
+
+	wg.Add(2)
+	go scanCommandOutput(stdout, "stdout", appendLine, &wg)
+	go scanCommandOutput(stderr, "stderr", appendLine, &wg)
+
+	done := make(chan error, 1)
+	go func() {
+		err := cmd.Wait()
+		wg.Wait()
+		done <- err
+	}()
+
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	start := time.Now()
+	for {
+		select {
+		case err := <-done:
+			mu.Lock()
+			result := output.String()
+			mu.Unlock()
+			return result, err
+		case <-ticker.C:
+			emitToolProgress(eventCh, "tool.heartbeat", map[string]interface{}{
+				"tool_name":       "terminal",
+				"command":         command,
+				"elapsed_seconds": time.Since(start).Seconds(),
+			}, "")
+		case <-ctx.Done():
+			err := <-done
+			mu.Lock()
+			result := output.String()
+			mu.Unlock()
+			if err != nil {
+				return result, err
+			}
+			return result, ctx.Err()
+		}
+	}
+}
+
+type commandRunner interface {
+	StdoutPipe() (io.ReadCloser, error)
+	StderrPipe() (io.ReadCloser, error)
+	Start() error
+	Wait() error
+}
+
+func scanCommandOutput(r io.Reader, stream string, appendLine func(stream, line string), wg *sync.WaitGroup) {
+	defer wg.Done()
+	scanner := bufio.NewScanner(r)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	for scanner.Scan() {
+		appendLine(stream, scanner.Text())
+	}
+}
+
+func emitToolProgress(eventCh chan string, eventType string, payload map[string]interface{}, content string) {
+	if eventCh == nil {
+		return
+	}
+	kernel.EmitAgentEvent(eventCh, kernel.AgentEvent{
+		Type:     eventType,
+		Content:  content,
+		ToolName: "terminal",
+		Payload:  payload,
+	})
 }
 
 // SearchFilesTool 搜索文件内容

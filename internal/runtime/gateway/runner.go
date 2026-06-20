@@ -17,6 +17,7 @@ import (
 	"selfmind/internal/gateway/api"
 	"selfmind/internal/gateway/delivery"
 	"selfmind/internal/gateway/httpapi"
+	"selfmind/internal/gateway/weixin"
 	"selfmind/internal/kernel"
 	"selfmind/internal/platform/config"
 	"selfmind/internal/platform/log"
@@ -105,13 +106,25 @@ func Run(ctx context.Context, opts Options) error {
 	gatewayAPI := &httpapi.Server{
 		Control:         controlStore,
 		Gateway:         gwDeps.Gateway,
-		Delivery:        newDeliveryService(controlStore, cfg),
 		DefaultTenantID: defaultTenantID,
 		DrainTimeout:    drainTimeout,
 	}
+	var weixinAdapter *weixin.Adapter
+	if cfg.Gateway.Weixin.Enabled {
+		wxCfg := weixin.RuntimeConfigFrom(cfg.Gateway.Weixin, dataDir, defaultTenantID)
+		weixinAdapter = weixin.NewAdapter(wxCfg, controlStore, gatewayAPI.ProcessMessage)
+	}
+	gatewayAPI.Delivery = newDeliveryService(controlStore, cfg, weixinAdapter)
 	if gatewayAPI.Delivery != nil {
 		gatewayAPI.Delivery.Start(ctx)
 		defer gatewayAPI.Delivery.Stop()
+	}
+	if weixinAdapter != nil {
+		if err := weixinAdapter.Start(ctx); err != nil {
+			log.Warn("gateway: weixin adapter did not start", "error", err)
+		} else {
+			defer weixinAdapter.Stop()
+		}
 	}
 	stopCh := make(chan struct{})
 	var stopOnce sync.Once
@@ -190,7 +203,7 @@ func applyGatewayRuntimeEnv(cfg *config.Config) {
 	setEnvIfEmpty("SELF_GATEWAY_DRAIN_TIMEOUT", cfg.Gateway.DrainTimeout)
 }
 
-func newDeliveryService(store *control.Store, cfg *config.Config) *delivery.Service {
+func newDeliveryService(store *control.Store, cfg *config.Config, weixinSender delivery.Sender) *delivery.Service {
 	if store == nil || cfg == nil {
 		return nil
 	}
@@ -204,6 +217,9 @@ func newDeliveryService(store *control.Store, cfg *config.Config) *delivery.Serv
 	router := delivery.NewRouter(defaultSender)
 	if strings.TrimSpace(cfg.Gateway.TelegramToken) != "" {
 		router.Register("telegram", &delivery.TelegramSender{Token: cfg.Gateway.TelegramToken})
+	}
+	if weixinSender != nil {
+		router.Register("weixin", weixinSender)
 	}
 	return delivery.NewService(store, router, delivery.Options{
 		MaxMessageChars: cfg.Gateway.DeliveryMaxMessageChars,

@@ -1,11 +1,18 @@
 package httpapi
 
 import (
+	"context"
+	"encoding/json"
 	"path/filepath"
 	"strings"
 
 	"selfmind/internal/gateway/api"
 )
+
+type taskPlanStep struct {
+	Step   string `json:"step"`
+	Status string `json:"status"`
+}
 
 func buildRunOutcome(content string) api.RunOutcome {
 	trimmed := strings.TrimSpace(content)
@@ -26,6 +33,65 @@ func buildRunOutcome(content string) api.RunOutcome {
 	out.Tests = extractTestLines(trimmed)
 	out.Files = extractFileMentions(trimmed)
 	return out
+}
+
+func (d *Server) latestPlanForTask(ctx context.Context, taskID string) []taskPlanStep {
+	if d == nil || d.Control == nil || taskID == "" {
+		return nil
+	}
+	events, err := d.Control.ListTaskEvents(ctx, taskID, 50)
+	if err != nil {
+		return nil
+	}
+	for _, event := range events {
+		if event.Type != "plan.updated" {
+			continue
+		}
+		var payload struct {
+			Plan []taskPlanStep `json:"plan"`
+		}
+		if err := json.Unmarshal(event.Payload, &payload); err != nil {
+			continue
+		}
+		if len(payload.Plan) > 0 {
+			return payload.Plan
+		}
+	}
+	return nil
+}
+
+func (d *Server) latestStructuredRunOutcome(ctx context.Context, taskID, runID string) (api.RunOutcome, bool) {
+	if d == nil || d.Control == nil || taskID == "" {
+		return api.RunOutcome{}, false
+	}
+	events, err := d.Control.ListTaskEvents(ctx, taskID, 50)
+	if err != nil {
+		return api.RunOutcome{}, false
+	}
+	for _, event := range events {
+		if event.Type != "run.outcome" {
+			continue
+		}
+		if runID != "" && event.RunID != "" && event.RunID != runID {
+			continue
+		}
+		var out api.RunOutcome
+		if err := json.Unmarshal(event.Payload, &out); err != nil {
+			continue
+		}
+		if out.Status == "" && out.Summary == "" {
+			continue
+		}
+		if out.Status == "needs_approval" {
+			out.Status = "blocked"
+			out.NeedApprove = true
+		}
+		if out.Status == "" {
+			out.Status = "running"
+		}
+		return out, true
+	}
+	return api.RunOutcome{}, false
 }
 
 func extractOutcomeSection(content string, headings []string) []string {

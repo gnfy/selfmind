@@ -19,6 +19,8 @@ type ExecutionScope struct {
 	AllowedRoots  []string
 	TaskID        string
 	RunID         string
+	Channel       string
+	Approval      ToolApprovalHandler
 }
 
 var executionScopes sync.Map // tenantID used by the agent -> ExecutionScope
@@ -36,6 +38,11 @@ func SetExecutionScope(tenantID string, scope ExecutionScope) func() {
 }
 
 func currentExecutionScope(args map[string]interface{}) (ExecutionScope, bool) {
+	scope, ok := currentExecutionScopeAny(args)
+	return scope, ok && strings.TrimSpace(scope.WorkspaceRoot) != ""
+}
+
+func currentExecutionScopeAny(args map[string]interface{}) (ExecutionScope, bool) {
 	tenantID, _ := args["_tenant_id"].(string)
 	if tenantID == "" {
 		return ExecutionScope{}, false
@@ -45,7 +52,7 @@ func currentExecutionScope(args map[string]interface{}) (ExecutionScope, bool) {
 		return ExecutionScope{}, false
 	}
 	scope, ok := value.(ExecutionScope)
-	return scope, ok && strings.TrimSpace(scope.WorkspaceRoot) != ""
+	return scope, ok
 }
 
 // WorkspaceScopeMiddleware normalizes path/cwd arguments into the active

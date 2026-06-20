@@ -26,25 +26,13 @@ func (b *Bridge) HandleInbound(ctx context.Context, platform, platformID, channe
 	}
 
 	// 2. Call Gateway
-	resp, err := b.gateway.Handle(ctx, uid, channel, content)
+	resp, err := b.gateway.HandleWithEvents(ctx, uid, channel, content)
 	if err != nil {
 		return "", err
 	}
 
-	// 3. Handle synchronous result
-	if !resp.IsStreaming {
-		return resp.Content, nil
-	}
-
-	// 4. Handle streaming (aggregate for platforms that don't support streams, like basic WeChat)
-	var fullText string
-	for event := range resp.Stream {
-		if event.Err != nil {
-			return fullText, event.Err
-		}
-		fullText += event.Content
-	}
-	return fullText, nil
+	reply, _, err := router.AggregateFinalResponse(resp)
+	return reply, err
 }
 
 // Message represents a generic message structure for adapters.

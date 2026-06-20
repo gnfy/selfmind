@@ -2,7 +2,6 @@ package router
 
 import (
 	"regexp"
-	"strings"
 )
 
 // Intent 表示用户意图分类
@@ -148,25 +147,18 @@ func (c *IntentClassifier) ClassifyWithReason(input string) (Intent, string) {
 
 // IsCasualShortQuestion 判断是否是简短的闲聊问题（不需要执行）
 func IsCasualShortQuestion(input string) bool {
-	lower := strings.ToLower(input)
+	lower := normalizeQuestionText(input)
 	shortCasual := []string{
 		"你好", "您好", "hi", "hello", "嗨", "hey",
-		"谢谢", "多谢", "谢了",
+		"谢谢", "多谢", "谢了", "thanks", "thankyou",
 		"再见", "拜拜", "bye", "晚安",
-		"你是谁", "你叫什么", "你干嘛的",
-		"今天天气", "现在几点",
+		"你是谁", "你叫什么", "你干嘛的", "whoareyou", "whatareyou",
 		"牛逼", "厉害", "真棒",
 	}
 	for _, kw := range shortCasual {
-		if lower == kw || strings.HasPrefix(lower, kw) {
+		if lower == kw {
 			return true
 		}
-	}
-	// 问"怎么样"、"如何"结尾的简单问句
-	if strings.HasSuffix(lower, "怎么样") ||
-		strings.HasSuffix(lower, "如何") ||
-		strings.HasSuffix(lower, "吗") {
-		return true
 	}
 	return false
 }

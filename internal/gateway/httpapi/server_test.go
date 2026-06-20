@@ -287,6 +287,56 @@ func TestIMAsyncFlagAndControlDetection(t *testing.T) {
 	}
 }
 
+func TestMessageRequestFromIMParsesAttachments(t *testing.T) {
+	payload := map[string]interface{}{
+		"platform_user_id": "u1",
+		"chat_id":          "c1",
+		"text":             "inspect this",
+		"attachments": []interface{}{
+			map[string]interface{}{
+				"kind":      "image",
+				"path":      "/tmp/selfmind/image.jpg",
+				"mime_type": "image/jpeg",
+				"name":      "image.jpg",
+				"size":      float64(123),
+			},
+		},
+	}
+	req := messageRequestFromIM("weixin", payload)
+	if len(req.Attachments) != 1 {
+		t.Fatalf("attachments = %+v", req.Attachments)
+	}
+	att := req.Attachments[0]
+	if att.Kind != "image" || att.Path != "/tmp/selfmind/image.jpg" || att.MimeType != "image/jpeg" || att.Size != 123 {
+		t.Fatalf("attachment = %+v", att)
+	}
+}
+
+func TestGatewayContextIncludesAttachments(t *testing.T) {
+	daemon := &Server{}
+	identity := &control.IdentityContext{
+		TenantID:       "default",
+		PersonID:       "person_1",
+		AccountID:      "acct_1",
+		Platform:       "weixin",
+		PlatformUserID: "wx_user",
+	}
+	task := &control.Task{ID: "task_1", WorkspaceID: "ws_1"}
+	workspace := &control.Workspace{ID: "ws_1", LocalPath: "/repo"}
+	content := daemon.withGatewayContext("please inspect", identity, task, workspace, []api.MessageAttachment{{
+		Kind:     "file",
+		Path:     "/tmp/report.pdf",
+		MimeType: "application/pdf",
+		Name:     "report.pdf",
+		Size:     4096,
+	}})
+	for _, want := range []string{"platform: weixin", "attachments:", "path: /tmp/report.pdf", "mime_type: application/pdf", "inspect attachment paths"} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("context missing %q:\n%s", want, content)
+		}
+	}
+}
+
 func TestTaskEventsEndpoint(t *testing.T) {
 	t.Setenv("SELF_GATEWAY_TOKEN", "")
 	store, err := control.OpenStore(t.TempDir())
@@ -326,6 +376,140 @@ func TestTaskEventsEndpoint(t *testing.T) {
 	}
 	if len(payload.Events) != 1 || payload.Events[0].Type != "tool.started" {
 		t.Fatalf("events payload = %+v", payload.Events)
+	}
+}
+
+func TestTaskEventsStreamEndpoint(t *testing.T) {
+	t.Setenv("SELF_GATEWAY_TOKEN", "")
+	store, err := control.OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	ctx := httptest.NewRequest(http.MethodGet, "/", nil).Context()
+	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Local User")
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := store.CreateTask(ctx, control.TaskCreate{
+		TenantID: identity.TenantID,
+		PersonID: identity.PersonID,
+		Title:    "Stream events",
+		Channel:  "cli",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AppendEvent(ctx, control.Event{TaskID: task.ID, Type: "plan.updated", Payload: mustJSON(map[string]interface{}{"plan": []string{"A"}})}); err != nil {
+		t.Fatal(err)
+	}
+
+	daemon := &Server{Control: store, DefaultTenantID: "default"}
+	req := httptest.NewRequest(http.MethodGet, "/v1/tasks/events/stream?platform=cli&platform_user_id=local&once=true", nil)
+	rec := httptest.NewRecorder()
+	daemon.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "event: ready") || !strings.Contains(body, "event: plan.updated") {
+		t.Fatalf("unexpected SSE body: %s", body)
+	}
+	if got := rec.Header().Get("Content-Type"); !strings.Contains(got, "text/event-stream") {
+		t.Fatalf("content type = %q", got)
+	}
+}
+
+func TestTaskArtifactsEndpoint(t *testing.T) {
+	t.Setenv("SELF_GATEWAY_TOKEN", "")
+	store, err := control.OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	ctx := httptest.NewRequest(http.MethodGet, "/", nil).Context()
+	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Local User")
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := store.CreateTask(ctx, control.TaskCreate{
+		TenantID: identity.TenantID,
+		PersonID: identity.PersonID,
+		Title:    "Artifacts",
+		Channel:  "cli",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.SaveArtifact(ctx, control.Artifact{TaskID: task.ID, Kind: "file", Name: "report.md", URI: "docs/report.md"}); err != nil {
+		t.Fatal(err)
+	}
+
+	daemon := &Server{Control: store, DefaultTenantID: "default"}
+	req := httptest.NewRequest(http.MethodGet, "/v1/tasks/artifacts?platform=cli&platform_user_id=local", nil)
+	rec := httptest.NewRecorder()
+	daemon.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var payload struct {
+		Artifacts []control.Artifact `json:"artifacts"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&payload); err != nil {
+		t.Fatal(err)
+	}
+	if len(payload.Artifacts) != 1 || payload.Artifacts[0].URI != "docs/report.md" {
+		t.Fatalf("artifacts payload = %+v", payload.Artifacts)
+	}
+}
+
+func TestRecordOutcomeArtifactsCreatesEvents(t *testing.T) {
+	store, err := control.OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	ctx := httptest.NewRequest(http.MethodGet, "/", nil).Context()
+	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Local User")
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := store.CreateTask(ctx, control.TaskCreate{
+		TenantID: identity.TenantID,
+		PersonID: identity.PersonID,
+		Title:    "Outcome artifacts",
+		Channel:  "cli",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := store.StartRun(ctx, task, "cli", "work")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	daemon := &Server{Control: store, DefaultTenantID: "default"}
+	daemon.recordOutcomeArtifacts(ctx, task, run, "cli", []string{"internal/app/tools.go", "https://example.com/report"})
+
+	artifacts, err := store.ListTaskArtifacts(ctx, task.ID, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(artifacts) != 2 {
+		t.Fatalf("artifacts = %+v", artifacts)
+	}
+	events, err := store.ListTaskEvents(ctx, task.ID, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	count := 0
+	for _, event := range events {
+		if event.Type == "artifact.created" {
+			count++
+		}
+	}
+	if count != 2 {
+		t.Fatalf("artifact.created events = %d, events=%+v", count, events)
 	}
 }
 

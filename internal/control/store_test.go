@@ -84,6 +84,16 @@ func TestStoreIdentityWorkspaceTaskFlow(t *testing.T) {
 	if _, err := store.SaveHandoff(ctx, Handoff{TaskID: task.ID, Summary: "handoff summary"}); err != nil {
 		t.Fatalf("SaveHandoff failed: %v", err)
 	}
+	artifact, err := store.SaveArtifact(ctx, Artifact{
+		TaskID: task.ID,
+		RunID:  run.ID,
+		Kind:   "file",
+		Name:   "server.go",
+		URI:    "internal/gateway/httpapi/server.go",
+	})
+	if err != nil {
+		t.Fatalf("SaveArtifact failed: %v", err)
+	}
 
 	currentTask, err := store.CurrentTask(ctx, identity.TenantID, identity.PersonID)
 	if err != nil {
@@ -98,6 +108,13 @@ func TestStoreIdentityWorkspaceTaskFlow(t *testing.T) {
 	}
 	if handoff == nil || handoff.Summary != "handoff summary" {
 		t.Fatalf("handoff mismatch: %+v", handoff)
+	}
+	artifacts, err := store.ListTaskArtifacts(ctx, task.ID, 10)
+	if err != nil {
+		t.Fatalf("ListTaskArtifacts failed: %v", err)
+	}
+	if len(artifacts) != 1 || artifacts[0].ID != artifact.ID {
+		t.Fatalf("artifacts mismatch: %+v", artifacts)
 	}
 }
 
@@ -141,14 +158,15 @@ func TestStoreRuntimeDeliveryAndInterruptFlow(t *testing.T) {
 	}
 
 	delivery, err := store.EnqueueDelivery(ctx, Delivery{
-		TenantID:    identity.TenantID,
-		PersonID:    identity.PersonID,
-		Platform:    "telegram",
-		Channel:     "123",
-		TaskID:      task.ID,
-		RunID:       run.ID,
-		Content:     "done",
-		MaxAttempts: 2,
+		TenantID:       identity.TenantID,
+		PersonID:       identity.PersonID,
+		Platform:       "weixin",
+		PlatformUserID: "wx-user",
+		Channel:        "wx-chat",
+		TaskID:         task.ID,
+		RunID:          run.ID,
+		Content:        "done",
+		MaxAttempts:    2,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -159,6 +177,9 @@ func TestStoreRuntimeDeliveryAndInterruptFlow(t *testing.T) {
 	}
 	if len(due) != 1 || due[0].ID != delivery.ID {
 		t.Fatalf("due deliveries = %+v", due)
+	}
+	if due[0].PlatformUserID != "wx-user" || due[0].Channel != "wx-chat" {
+		t.Fatalf("delivery recipient was not preserved: %+v", due[0])
 	}
 	if err := store.MarkDeliveryAttempt(ctx, delivery.ID, false, "network token=secret", time.Now()); err != nil {
 		t.Fatal(err)

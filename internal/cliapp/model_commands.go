@@ -45,13 +45,15 @@ func (a *App) runModelCommandIfRequested() (bool, int) {
 	case "current":
 		a.printCurrentModel(cfg)
 		return true, 0
+	case "check":
+		return true, a.checkCurrentModel(cfg)
 	case "list":
 		a.printConfiguredProviders(cfg)
 		return true, 0
 	case "set":
 		return true, a.setModelFromArgs(cfg, args[1:])
 	default:
-		fmt.Fprintln(a.stderr, "usage: selfmind model [current|list|set <provider> <model>]")
+		fmt.Fprintln(a.stderr, "usage: selfmind model [current|check|list|set <provider> <model>]")
 		return true, 2
 	}
 }
@@ -102,6 +104,7 @@ func (a *App) modelChoices(cfg *config.Config) []modelChoice {
 		{ID: "gemini-cli", Label: "Gemini CLI (reuse login)", Kind: "builtin"},
 		{ID: "qwen-cli", Label: "Qwen CLI (reuse login)", Kind: "builtin"},
 		{ID: "minimax", Label: "MiniMax", Kind: "builtin"},
+		{ID: "minimax-oauth", Label: "MiniMax OAuth", Kind: "builtin"},
 		{ID: "kimi-coding", Label: "Kimi Coding Plan", Kind: "builtin"},
 		{ID: "openrouter", Label: "OpenRouter", Kind: "builtin"},
 		{ID: "deepseek", Label: "DeepSeek", Kind: "builtin"},
@@ -140,7 +143,7 @@ func (a *App) configureBuiltinProvider(cfg *config.Config, provider string) int 
 	endpoint.Protocol = modelruntime.NormalizeProtocol(firstNonEmpty(endpoint.Protocol, profile.Protocol))
 
 	key := endpoint.APIKey
-	if profile.AuthType == modelruntime.AuthExternalOAuth {
+	if profile.AuthType == modelruntime.AuthExternalOAuth || profile.AuthType == modelruntime.AuthMiniMaxOAuth {
 		// Reused CLI logins stay owned by their source tool, so SelfMind stores
 		// the model/base URL choice but not the discovered OAuth token.
 		rt, err := resolver.Resolve(a.ctx, modelruntime.Selection{
@@ -186,7 +189,7 @@ func (a *App) configureBuiltinProvider(cfg *config.Config, provider string) int 
 		return 1
 	}
 	endpoint.Model = model
-	if profile.AuthType == modelruntime.AuthExternalOAuth {
+	if profile.AuthType == modelruntime.AuthExternalOAuth || profile.AuthType == modelruntime.AuthMiniMaxOAuth {
 		endpoint.APIKey = ""
 	}
 
@@ -399,6 +402,38 @@ func (a *App) printCurrentModel(cfg *config.Config) {
 	fmt.Fprintf(a.stdout, "Config: %s\n", cfg.Path)
 }
 
+func (a *App) checkCurrentModel(cfg *config.Config) int {
+	a.printCurrentModel(cfg)
+	rt, err := modelruntime.NewResolver(cfg).Resolve(a.ctx, modelruntime.Selection{})
+	if err != nil {
+		fmt.Fprintf(a.stderr, "Model check failed: %v\n", err)
+		fmt.Fprintln(a.stderr, "Hint: run `selfmind model` and enter the API key, or set the provider API key environment variable before starting SelfMind.")
+		return 1
+	}
+	fmt.Fprintf(a.stdout, "Resolved: provider=%s model=%s protocol=%s\n", rt.Provider, rt.Model, rt.Protocol)
+	fmt.Fprintf(a.stdout, "Base URL: %s\n", rt.BaseURL)
+	fmt.Fprintf(a.stdout, "Credential: %s\n", blankAsDash(rt.CredentialSource))
+	if rt.ContextLength > 0 {
+		fmt.Fprintf(a.stdout, "Context length: %d\n", rt.ContextLength)
+	} else {
+		fmt.Fprintln(a.stdout, "Context length: unknown")
+	}
+	fmt.Fprintf(a.stdout, "Quirks: auth=%s tool_schema=%s thinking=%s user_agent=%s disable_http2=%t\n",
+		blankAsDash(rt.Quirks.AuthHeader),
+		blankAsDash(rt.Quirks.ToolSchema),
+		blankAsDash(rt.Quirks.ThinkingMode),
+		blankAsDash(rt.Quirks.UserAgent),
+		rt.Quirks.DisableHTTP2,
+	)
+	if strings.Contains(strings.ToLower(rt.BaseURL), "api.kimi.com/coding") && rt.Quirks.DisableHTTP2 {
+		fmt.Fprintln(a.stdout, "Transport: TLS ALPN restricted to http/1.1")
+	}
+	if rt.TokenGetter != nil {
+		fmt.Fprintln(a.stdout, "Token getter: configured")
+	}
+	return 0
+}
+
 func (a *App) printConfiguredProviders(cfg *config.Config) {
 	a.printCurrentModel(cfg)
 	fmt.Fprintln(a.stdout)
@@ -593,6 +628,11 @@ func providerEndpointForModelCommand(cfg *config.Config, provider string) config
 			return ep
 		}
 		return config.ProviderEndpoint{APIKey: cfg.Providers.MiniMaxAPIKey}
+	case "minimax-cn", "minimax-oauth":
+		if ep, ok := cfg.ProviderProfiles[modelruntime.NormalizeProviderID(provider)]; ok {
+			return ep
+		}
+		return config.ProviderEndpoint{}
 	default:
 		if ep, ok := cfg.ProviderProfiles[modelruntime.NormalizeProviderID(provider)]; ok {
 			return ep
@@ -636,6 +676,8 @@ func externalLoginHint(provider string) string {
 		return "Run Gemini CLI login first, or set GEMINI_OAUTH_ACCESS_TOKEN."
 	case "qwen-cli":
 		return "Run `qwen auth qwen-oauth` first, or set QWEN_ACCESS_TOKEN."
+	case "minimax-oauth":
+		return "Run `selfmind auth login minimax-oauth` first, or set a MiniMax API key on the `minimax` provider."
 	default:
 		return "Sign in with the matching CLI first, or configure an API key."
 	}

@@ -138,25 +138,24 @@ func (a *Agent) SetEvolutionNotifyChannel(ch chan string) {
 
 const MaxRetries = 3
 
-// chatWithRetry 实现了运行时自动 Fallback 逻辑
-func (a *Agent) chatWithRetry(ctx context.Context, messages []llm.Message) (string, llm.UsageStats, error) {
+// chatResponseWithRetry implements retry for non-streaming model calls.
+func (a *Agent) chatResponseWithRetry(ctx context.Context, messages []llm.Message, excludedTools map[string]bool) (*llm.ChatResponse, error) {
 	var lastErr error
-	var usage llm.UsageStats
 	max := a.maxRetries
 	if max <= 0 {
 		max = 1
 	}
 	for attempt := 0; attempt < max; attempt++ {
-		req := llm.ChatRequest{Messages: messages, Tools: a.llmToolDefinitions()}
+		req := llm.ChatRequest{Messages: messages, Tools: a.llmToolDefinitions(excludedTools)}
 		resp, err := a.llm.Chat(ctx, req)
 		if err == nil {
-			return resp.Content, resp.Usage, nil
+			return resp, nil
 		}
 		lastErr = err
 
 		// 如果是上下文取消或超时，立即退出，不再重试
 		if ctx.Err() != nil {
-			return "", usage, err
+			return nil, err
 		}
 
 		// 如果是 401/403 等鉴权错误，说明 Key 坏了，重试也无意义
@@ -167,18 +166,27 @@ func (a *Agent) chatWithRetry(ctx context.Context, messages []llm.Message) (stri
 		// 指数退避
 		time.Sleep(time.Duration(attempt+1) * 500 * time.Millisecond)
 	}
-	return "", usage, fmt.Errorf("llm chat failed after %d attempts: %w", max, lastErr)
+	return nil, fmt.Errorf("llm chat failed after %d attempts: %w", max, lastErr)
+}
+
+// chatWithRetry 实现了运行时自动 Fallback 逻辑
+func (a *Agent) chatWithRetry(ctx context.Context, messages []llm.Message) (string, llm.UsageStats, error) {
+	resp, err := a.chatResponseWithRetry(ctx, messages, nil)
+	if err != nil {
+		return "", llm.UsageStats{}, err
+	}
+	return resp.Content, resp.Usage, nil
 }
 
 // streamChatWithRetry 实现了流式调用的自动 Fallback 逻辑
-func (a *Agent) streamChatWithRetry(ctx context.Context, messages []llm.Message) (<-chan llm.StreamEvent, error) {
+func (a *Agent) streamChatWithRetry(ctx context.Context, messages []llm.Message, excludedTools map[string]bool) (<-chan llm.StreamEvent, error) {
 	var lastErr error
 	max := a.maxRetries
 	if max <= 0 {
 		max = 1
 	}
 	for attempt := 0; attempt < max; attempt++ {
-		req := llm.ChatRequest{Messages: messages, Tools: a.llmToolDefinitions()}
+		req := llm.ChatRequest{Messages: messages, Tools: a.llmToolDefinitions(excludedTools)}
 		ch, err := a.llm.StreamChat(ctx, req)
 		if err == nil {
 			return ch, nil
@@ -239,13 +247,23 @@ func (a *Agent) Analyze(imageBase64, mimeType, question string) (string, error) 
 
 func emitToolEndEventWithDuration(ch chan string, name, result string, duration float64, err error) {
 	if err != nil {
-		ch <- fmt.Sprintf("tool_end:%s:error:%.3f:%v", name, duration, err)
+		EmitAgentEvent(ch, AgentEvent{
+			Type:            "tool.completed",
+			ToolName:        name,
+			DurationSeconds: duration,
+			Error:           err.Error(),
+		})
 	} else {
 		displayResult := result
 		if len(displayResult) > 200 {
 			displayResult = displayResult[:200] + "...(truncated)"
 		}
-		ch <- fmt.Sprintf("tool_end:%s:%.3f:%s", name, duration, displayResult)
+		EmitAgentEvent(ch, AgentEvent{
+			Type:            "tool.completed",
+			ToolName:        name,
+			ToolResult:      displayResult,
+			DurationSeconds: duration,
+		})
 	}
 }
 
@@ -261,13 +279,29 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 
 	var totalUsage llm.UsageStats
 	eventCh := eventChannelFromContext(ctx, a.EventChannel)
+	EmitAgentEvent(eventCh, AgentEvent{
+		Type: "turn.started",
+		Payload: map[string]interface{}{
+			"tenant_id": tenantID,
+			"channel":   channel,
+		},
+	})
 	ctx = llm.WithModelContext(ctx, llm.ModelContext{
 		TenantID: tenantID,
 		Role:     llm.RoleCodingAgent,
 	})
 
+	simpleRequest := isSimpleOneShotRequest(initialPrompt)
+	excludedTools := map[string]bool{}
+	if simpleRequest {
+		excludedTools["update_plan"] = true
+	}
+
 	// 0. Build dynamic system prompt (including facts + project context)
-	systemPrompt, _ := a.BuildSystemPrompt(ctx, tenantID)
+	systemPrompt, _ := a.buildSystemPrompt(ctx, tenantID, excludedTools)
+	if simpleRequest {
+		systemPrompt += "\n\n# CURRENT REQUEST SIZE\nThis appears to be a simple one-shot request. Do not call update_plan; answer directly after any truly necessary tool call.\n"
+	}
 
 	// 0.1 Inject project context files (.selfmind.md, AGENTS.md, etc.)
 	if a.contextScanner != nil {
@@ -307,29 +341,83 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 	}
 
 	for i := 0; i < a.maxIterations; i++ {
-		streamCh, err := a.streamChatWithRetry(ctx, messages)
-		if err != nil {
-			return "", totalUsage, fmt.Errorf("llm chat: %w", err)
-		}
-
 		var fullResp strings.Builder
 		var nativeCalls []llm.ToolCall
-		for event := range streamCh {
-			if event.Err != nil {
-				return "", totalUsage, fmt.Errorf("stream error: %w", event.Err)
-			}
-			if event.Content != "" {
-				fullResp.WriteString(event.Content)
+		var streamErr error
+
+		appendChatResponse := func(chatResp *llm.ChatResponse) {
+			if chatResp.Content != "" {
+				fullResp.WriteString(chatResp.Content)
 				if eventCh != nil {
-					eventCh <- "stream:" + event.Content
+					EmitAgentEvent(eventCh, AgentEvent{Type: "stream", Content: chatResp.Content})
 				}
 			}
-			if event.Usage != nil {
-				totalUsage.InputTokens += event.Usage.InputTokens
-				totalUsage.OutputTokens += event.Usage.OutputTokens
+			if chatResp.Usage.InputTokens != 0 || chatResp.Usage.OutputTokens != 0 {
+				totalUsage.InputTokens += chatResp.Usage.InputTokens
+				totalUsage.OutputTokens += chatResp.Usage.OutputTokens
+				EmitAgentEvent(eventCh, AgentEvent{
+					Type: "token.updated",
+					Payload: map[string]interface{}{
+						"input_tokens":  totalUsage.InputTokens,
+						"output_tokens": totalUsage.OutputTokens,
+					},
+				})
 			}
-			if len(event.ToolCalls) > 0 {
-				nativeCalls = append(nativeCalls, event.ToolCalls...)
+			if len(chatResp.ToolCalls) > 0 {
+				nativeCalls = append(nativeCalls, chatResp.ToolCalls...)
+			}
+		}
+
+		streamCh, err := a.streamChatWithRetry(ctx, messages, excludedTools)
+		if err != nil {
+			if ctx.Err() != nil {
+				return "", totalUsage, fmt.Errorf("llm chat: %w", err)
+			}
+			fallbackResp, fallbackErr := a.chatResponseWithRetry(ctx, messages, excludedTools)
+			if fallbackErr != nil {
+				return "", totalUsage, fmt.Errorf("llm chat: %w; non-stream fallback failed: %v", err, fallbackErr)
+			}
+			appendChatResponse(fallbackResp)
+		} else {
+			for event := range streamCh {
+				if event.Err != nil {
+					streamErr = event.Err
+					break
+				}
+				if event.Content != "" {
+					fullResp.WriteString(event.Content)
+					if eventCh != nil {
+						EmitAgentEvent(eventCh, AgentEvent{Type: "stream", Content: event.Content})
+					}
+				}
+				if event.Usage != nil {
+					totalUsage.InputTokens += event.Usage.InputTokens
+					totalUsage.OutputTokens += event.Usage.OutputTokens
+					EmitAgentEvent(eventCh, AgentEvent{
+						Type: "token.updated",
+						Payload: map[string]interface{}{
+							"input_tokens":  totalUsage.InputTokens,
+							"output_tokens": totalUsage.OutputTokens,
+						},
+					})
+				}
+				if len(event.ToolCalls) > 0 {
+					nativeCalls = append(nativeCalls, event.ToolCalls...)
+				}
+			}
+
+			if streamErr != nil {
+				if ctx.Err() != nil {
+					return "", totalUsage, fmt.Errorf("stream error: %w", streamErr)
+				}
+				if fullResp.Len() > 0 || len(nativeCalls) > 0 {
+					return "", totalUsage, fmt.Errorf("stream error after partial response: %w", streamErr)
+				}
+				fallbackResp, fallbackErr := a.chatResponseWithRetry(ctx, messages, excludedTools)
+				if fallbackErr != nil {
+					return "", totalUsage, fmt.Errorf("stream error: %w; non-stream fallback failed: %v", streamErr, fallbackErr)
+				}
+				appendChatResponse(fallbackResp)
 			}
 		}
 		resp := fullResp.String()
@@ -383,9 +471,23 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 
 		a.maybeTriggerBackgroundReview(tenantID, channel, messages, history)
 
+		EmitAgentEvent(eventCh, AgentEvent{
+			Type:    "turn.completed",
+			Content: resp,
+			Payload: map[string]interface{}{
+				"status": "completed",
+			},
+		})
 		return resp, totalUsage, nil
 	}
 
+	EmitAgentEvent(eventCh, AgentEvent{
+		Type:    "turn.completed",
+		Content: "max iterations reached",
+		Payload: map[string]interface{}{
+			"status": "max_iterations",
+		},
+	})
 	return "max iterations reached", totalUsage, nil
 }
 
@@ -626,6 +728,10 @@ func sha256Hash(s string) string {
 }
 
 func (a *Agent) BuildSystemPrompt(ctx context.Context, tenantID string) (string, error) {
+	return a.buildSystemPrompt(ctx, tenantID, nil)
+}
+
+func (a *Agent) buildSystemPrompt(ctx context.Context, tenantID string, excludedTools map[string]bool) (string, error) {
 	var parts []string
 
 	// 1. Core Persona (Soul)
@@ -636,12 +742,15 @@ func (a *Agent) BuildSystemPrompt(ctx context.Context, tenantID string) (string,
 
 	// 2. Tool Instructions - 增强指令强度
 	if a.backend != nil {
-		defs := a.backend.GetToolDefinitions()
+		defs := filterToolDefinitions(a.backend.GetToolDefinitions(), excludedTools)
 		if len(defs) > 0 {
 			var sb strings.Builder
 			sb.WriteString("\n# TOOL USE INSTRUCTIONS\n")
 			sb.WriteString("Use local tools whenever the user asks about local files, directories, command output, project state, or system status.\n")
 			sb.WriteString("Prefer native tool calls when the model interface supports them. If native tool calls are unavailable, use the exact fallback format: [TOOL:tool_name:{\"arg\": \"val\"}]\n")
+			sb.WriteString("Use update_plan only for non-trivial work: tasks with 3+ meaningful steps, multi-file changes, investigation/debugging, long-running verification, or explicit user requests for a plan. Do not use update_plan for one-shot answers, small code examples, simple commands, or direct explanations.\n")
+			sb.WriteString("Before the final user-facing answer, call finish_run with a structured outcome: status, summary, done, next_steps, files, tests, risks, and need_approve.\n")
+			sb.WriteString("Use tool_search when you need a capability but are unsure which registered tool fits.\n")
 			sb.WriteString("The ONLY valid tool names are: ")
 			for i, d := range defs {
 				sb.WriteString(fmt.Sprintf("'%s'", toolDefinitionName(d)))
@@ -707,4 +816,47 @@ func (a *Agent) BuildSystemPrompt(ctx context.Context, tenantID string) (string,
 	}
 
 	return strings.Join(parts, "\n\n"), nil
+}
+
+func filterToolDefinitions(defs []map[string]interface{}, excluded map[string]bool) []map[string]interface{} {
+	if len(excluded) == 0 {
+		return defs
+	}
+	out := make([]map[string]interface{}, 0, len(defs))
+	for _, def := range defs {
+		name := toolDefinitionName(def)
+		if name != "" && excluded[name] {
+			continue
+		}
+		out = append(out, def)
+	}
+	return out
+}
+
+func isSimpleOneShotRequest(prompt string) bool {
+	clean := strings.TrimSpace(prompt)
+	if clean == "" {
+		return false
+	}
+	lower := strings.ToLower(clean)
+	complexMarkers := []string{
+		"review", "debug", "fix", "refactor", "implement", "deploy", "ci", "cicd",
+		"test", "tests", "repo", "project", "multiple", "plan", "step by step",
+		"分析项目", "调试", "修复", "改造", "重构", "部署", "流水线", "仓库", "项目", "多文件", "计划",
+	}
+	for _, marker := range complexMarkers {
+		if strings.Contains(lower, marker) {
+			return false
+		}
+	}
+	simpleMarkers := []string{
+		"写一个", "写一下", "实现一个", "用go写", "用 go 写", "解释", "是什么", "怎么写",
+		"example", "snippet", "hello world", "binary search", "二分法", "二分查找",
+	}
+	for _, marker := range simpleMarkers {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return len([]rune(clean)) <= 80 && !strings.Contains(clean, "\n")
 }

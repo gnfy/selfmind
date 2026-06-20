@@ -15,29 +15,9 @@ import (
 // MakeDelegateFn returns a delegate function configured from config.
 func MakeDelegateFn(mem *memory.MemoryManager, backend kernel.AgentBackend, cfg config.DelegationConfig) func(goal, contextStr string, toolsets []string) (string, llm.UsageStats, error) {
 	return func(goal, contextStr string, toolsets []string) (string, llm.UsageStats, error) {
-		if cfg.APIKey == "" {
-			return "", llm.UsageStats{}, fmt.Errorf("delegation API key not configured")
-		}
-
-		// Create a specific provider for delegation if configured, otherwise use default
-		var provider llm.Provider
-		switch cfg.Provider {
-		case "anthropic":
-			provider = llm.NewAnthropicAdapter(cfg.APIKey)
-			if cfg.Model != "" {
-				if a, ok := provider.(*llm.AnthropicAdapter); ok {
-					a.Model = cfg.Model
-				}
-			}
-		case "openai":
-			provider = llm.NewOpenAIAdapter(cfg.APIKey)
-			if cfg.Model != "" {
-				if o, ok := provider.(*llm.OpenAIAdapter); ok {
-					o.Model = cfg.Model
-				}
-			}
-		default:
-			return "", llm.UsageStats{}, fmt.Errorf("unsupported delegation provider: %s", cfg.Provider)
+		provider, err := makeDelegationProvider(cfg)
+		if err != nil {
+			return "", llm.UsageStats{}, err
 		}
 
 		// Create a sub-agent.
@@ -98,5 +78,67 @@ func MakeDelegateFn(mem *memory.MemoryManager, backend kernel.AgentBackend, cfg 
 
 		// Execute in a sub-context
 		return subAgent.RunConversation(context.Background(), "system", "delegation", fullPrompt)
+	}
+}
+
+func MakeDelegateBatchFn(mem *memory.MemoryManager, backend kernel.AgentBackend, cfg config.DelegationConfig) func(tasks []tools.DelegateTaskSpec) ([]tools.DelegateTaskResult, error) {
+	return func(specs []tools.DelegateTaskSpec) ([]tools.DelegateTaskResult, error) {
+		provider, err := makeDelegationProvider(cfg)
+		if err != nil {
+			return nil, err
+		}
+		maxIter := cfg.MaxIterations
+		if maxIter == 0 {
+			maxIter = 50
+		}
+		host := NewMultiAgentHost(backend, provider, mem, 5, 2, maxIter)
+		defer host.Stop()
+
+		batch := make([]Task, 0, len(specs))
+		for _, spec := range specs {
+			batch = append(batch, Task{
+				Goal:     spec.Goal,
+				Context:  spec.Context,
+				Toolsets: spec.Toolsets,
+			})
+		}
+		results := host.RunBatch(context.Background(), batch)
+		out := make([]tools.DelegateTaskResult, 0, len(results))
+		for i, result := range results {
+			item := tools.DelegateTaskResult{
+				Response: result.Response,
+				Usage:    result.Usage,
+			}
+			if i < len(specs) {
+				item.Goal = specs[i].Goal
+			}
+			if result.Error != nil {
+				item.Error = result.Error.Error()
+			}
+			out = append(out, item)
+		}
+		return out, nil
+	}
+}
+
+func makeDelegationProvider(cfg config.DelegationConfig) (llm.Provider, error) {
+	if cfg.APIKey == "" {
+		return nil, fmt.Errorf("delegation API key not configured")
+	}
+	switch cfg.Provider {
+	case "anthropic":
+		provider := llm.NewAnthropicAdapter(cfg.APIKey)
+		if cfg.Model != "" {
+			provider.Model = cfg.Model
+		}
+		return provider, nil
+	case "openai":
+		provider := llm.NewOpenAIAdapter(cfg.APIKey)
+		if cfg.Model != "" {
+			provider.Model = cfg.Model
+		}
+		return provider, nil
+	default:
+		return nil, fmt.Errorf("unsupported delegation provider: %s", cfg.Provider)
 	}
 }

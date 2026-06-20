@@ -60,6 +60,42 @@ func TestApprovalMiddleware_Allow(t *testing.T) {
 	}
 }
 
+func TestSmartApprovalMiddlewareUsesExecutionScopeApproval(t *testing.T) {
+	cleanup := SetExecutionScope("person-a", ExecutionScope{
+		TenantID: "tenant-a",
+		PersonID: "person-a",
+		TaskID:   "task-a",
+		RunID:    "run-a",
+		Approval: func(ctx context.Context, req ToolApprovalRequest) (ToolApprovalDecision, error) {
+			if req.ToolName != "terminal" {
+				t.Fatalf("tool name = %q", req.ToolName)
+			}
+			if req.TaskID != "task-a" || req.RunID != "run-a" {
+				t.Fatalf("approval request scope = %+v", req)
+			}
+			return ToolApprovalDecision{Approved: true, ApprovalID: "apr-a"}, nil
+		},
+	})
+	defer cleanup()
+
+	called := false
+	exec := SmartApprovalMiddleware("")(func(args map[string]interface{}) (string, error) {
+		called = true
+		return "executed", nil
+	})
+	result, err := exec(map[string]interface{}{
+		"_tenant_id": "person-a",
+		"_tool_name": "terminal",
+		"command":    "rm -rf tmp",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result != "executed" || !called {
+		t.Fatalf("tool was not executed after approval: result=%q called=%v", result, called)
+	}
+}
+
 func TestRateLimitMiddleware(t *testing.T) {
 	rl := RateLimit(2)
 	mw := rl.Middleware

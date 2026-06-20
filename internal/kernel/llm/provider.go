@@ -40,6 +40,18 @@ type ToolDefinition struct {
 	Parameters  map[string]interface{}
 }
 
+type ProviderQuirks struct {
+	AuthHeader        string
+	ToolSchema        string
+	SystemMessageMode string
+	ThinkingMode      string
+	UserAgent         string
+	DisableHTTP2      bool
+	SupportsTools     bool
+	SupportsStreaming bool
+	SupportsVision    bool
+}
+
 // ChatResponse 是统一的标准响应
 type ChatResponse struct {
 	Content   string
@@ -69,6 +81,7 @@ type StreamEvent struct {
 	ToolArgs        string
 	ToolResult      string
 	DurationSeconds float64
+	Payload         map[string]interface{}
 }
 
 // Provider 定义 LLM 调用接口

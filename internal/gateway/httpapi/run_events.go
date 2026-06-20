@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
@@ -35,6 +36,40 @@ func (d *Server) startRunHeartbeat(ctx context.Context, run *control.Run) func()
 	return func() {
 		close(done)
 		_ = d.Control.UpdateRunHeartbeat(context.Background(), run.TenantID, run.ID)
+	}
+}
+
+func (d *Server) startAsyncProgressNotices(ctx context.Context, identity *control.IdentityContext, req api.MessageRequest) func() {
+	if d == nil || d.Delivery == nil || identity == nil || router.ShouldStreamToClient(req.Channel) {
+		return func() {}
+	}
+	done := make(chan struct{})
+	start := time.Now()
+	go func() {
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				elapsed := time.Since(start).Round(time.Second)
+				content := fmt.Sprintf("SelfMind 仍在处理，已用时 %s。完成后我会把结果发到这里。", elapsed)
+				_ = d.Delivery.EnqueueAndTry(context.Background(), delivery.Message{
+					TenantID:       identity.TenantID,
+					PersonID:       identity.PersonID,
+					Platform:       req.Platform,
+					PlatformUserID: identity.PlatformUserID,
+					Channel:        req.Channel,
+					Content:        content,
+				})
+			}
+		}
+	}()
+	return func() {
+		close(done)
 	}
 }
 
@@ -88,8 +123,10 @@ func (d *Server) aggregateGatewayResponse(ctx context.Context, channel string, t
 	var content strings.Builder
 	var usage llm.UsageStats
 	sawStream := false
+	var summary router.EventSummary
 	for event := range resp.Stream {
 		if event.EventType != "" {
+			summary.Observe(event)
 			d.recordStreamEvent(ctx, channel, task, run, event)
 			if event.EventType == "stream" {
 				sawStream = true
@@ -110,7 +147,7 @@ func (d *Server) aggregateGatewayResponse(ctx context.Context, channel string, t
 			usage = *event.Usage
 		}
 	}
-	return content.String(), usage, nil
+	return summary.WithContent(content.String()), usage, nil
 }
 
 func (d *Server) recordStreamEvent(ctx context.Context, channel string, task *control.Task, run *control.Run, event llm.StreamEvent) {
@@ -121,7 +158,15 @@ func (d *Server) recordStreamEvent(ctx context.Context, channel string, task *co
 	if eventType == "stream" || eventType == "" {
 		return
 	}
+	if eventType == "tool.heartbeat" {
+		return
+	}
 	payload := map[string]interface{}{}
+	if event.Payload != nil {
+		for k, v := range event.Payload {
+			payload[k] = v
+		}
+	}
 	switch eventType {
 	case "tool.started":
 		payload["tool"] = event.ToolName
@@ -136,6 +181,14 @@ func (d *Server) recordStreamEvent(ctx context.Context, channel string, task *co
 	case "learning.review":
 		payload["message"] = tools.RedactSensitive(event.Content)
 		eventType = classifyLearningReviewEvent(event.Content)
+	case "plan.updated":
+		eventType = "plan.updated"
+	case "run.outcome":
+		eventType = "run.outcome"
+	case "turn.started", "turn.completed", "token.updated":
+		if event.Content != "" {
+			payload["message"] = tools.RedactSensitive(event.Content)
+		}
 	default:
 		payload["message"] = tools.RedactSensitive(event.Content)
 	}

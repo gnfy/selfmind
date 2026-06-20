@@ -81,7 +81,12 @@ func fetchAnthropicModels(ctx context.Context, baseURL, apiKey string) ([]string
 	} else if strings.HasSuffix(lower, "/messages") {
 		root = root[:len(root)-len("/messages")]
 	}
-	return fetchModelIDs(ctx, root+"/v1/models", apiKey, map[string]string{"anthropic-version": "2023-06-01"})
+	headers := map[string]string{"anthropic-version": "2023-06-01"}
+	if isMiniMaxBaseURL(root) {
+		headers["X-Api-Key"] = apiKey
+		return fetchModelIDs(ctx, root+"/v1/models", "", headers)
+	}
+	return fetchModelIDs(ctx, root+"/v1/models", apiKey, headers)
 }
 
 func fetchGoogleModels(ctx context.Context, baseURL, apiKey string) ([]string, error) {
@@ -158,7 +163,7 @@ func fetchModelIDs(ctx context.Context, modelURL, apiKey string, headers map[str
 	if err != nil {
 		return nil, err
 	}
-	if apiKey != "" {
+	if apiKey != "" && !hasExplicitAuthHeader(headers) {
 		req.Header.Set("Authorization", "Bearer "+apiKey)
 		req.Header.Set("x-api-key", apiKey)
 	}
@@ -183,6 +188,21 @@ func fetchModelIDs(ctx context.Context, modelURL, apiKey string, headers map[str
 		return nil, fmt.Errorf("no models returned")
 	}
 	return ids, nil
+}
+
+func hasExplicitAuthHeader(headers map[string]string) bool {
+	for key := range headers {
+		switch strings.ToLower(strings.TrimSpace(key)) {
+		case "authorization", "x-api-key":
+			return true
+		}
+	}
+	return false
+}
+
+func isMiniMaxBaseURL(baseURL string) bool {
+	lower := strings.ToLower(strings.TrimSpace(baseURL))
+	return strings.Contains(lower, "api.minimax.io") || strings.Contains(lower, "api.minimaxi.com")
 }
 
 func collectModelIDs(value interface{}) []string {

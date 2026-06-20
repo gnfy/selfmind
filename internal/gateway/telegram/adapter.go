@@ -14,12 +14,15 @@ import (
 	"selfmind/internal/gateway/router"
 )
 
+const defaultTelegramAPIBaseURL = "https://api.telegram.org"
+
 // Adapter Telegram 消息适配器
 // 负责接收 Telegram 消息、解析 user id、调用统一 Gateway 处理
 type Adapter struct {
 	gateway    *router.Gateway
 	token      string
 	webhookURL string
+	apiBaseURL string
 	client     *http.Client
 	// Long polling state
 	longPollMu   sync.Mutex
@@ -33,6 +36,7 @@ func NewAdapter(gw *router.Gateway, token, webhookURL string) *Adapter {
 		gateway:    gw,
 		token:      token,
 		webhookURL: webhookURL,
+		apiBaseURL: defaultTelegramAPIBaseURL,
 		client: &http.Client{
 			Timeout: 30 * time.Second,
 		},
@@ -63,20 +67,8 @@ func (a *Adapter) HandleMessage(chatID int64, userID int64, username, content st
 		return "", fmt.Errorf("gateway handle: %w", err)
 	}
 
-	// 3. 处理流式输出聚合
-	if !resp.IsStreaming {
-		return resp.Content, nil
-	}
-
-	var fullText string
-	for event := range resp.Stream {
-		if event.Err != nil {
-			return fullText, event.Err
-		}
-		fullText += event.Content
-	}
-
-	return fullText, nil
+	reply, _, err := router.AggregateFinalResponse(resp)
+	return reply, err
 }
 
 // StartLongPolling 启动长轮询模式接收 Telegram 更新
@@ -124,6 +116,7 @@ func (a *Adapter) StartLongPolling(ctx context.Context) error {
 				}
 
 				go func(chatID int64, userID int64, username, text string) {
+					a.sendWorkingNotice(chatID)
 					reply, err := a.HandleMessage(chatID, userID, username, text)
 					if err != nil {
 						return
@@ -151,7 +144,7 @@ func (a *Adapter) StopLongPolling() {
 
 // getUpdates 获取 Telegram 更新（长轮询）
 func (a *Adapter) getUpdates(offset int64) ([]Update, error) {
-	url := fmt.Sprintf("https://api.telegram.org/bot%s/getUpdates?offset=%d&timeout=25", a.token, offset)
+	url := fmt.Sprintf("%s?offset=%d&timeout=25", a.apiURL("getUpdates"), offset)
 	req, err := http.NewRequest(http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err
@@ -186,7 +179,11 @@ func (a *Adapter) getUpdates(offset int64) ([]Update, error) {
 
 // sendMessage 发送消息到 Telegram
 func (a *Adapter) sendMessage(chatID int64, text string) error {
-	url := fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage", a.token)
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return nil
+	}
+	url := a.apiURL("sendMessage")
 
 	payload := map[string]interface{}{
 		"chat_id": chatID,
@@ -216,6 +213,22 @@ func (a *Adapter) sendMessage(chatID int64, text string) error {
 	return nil
 }
 
+func (a *Adapter) sendWorkingNotice(chatID int64) {
+	notice := router.WorkingNotice("telegram")
+	if notice == "" {
+		return
+	}
+	_ = a.sendMessage(chatID, notice)
+}
+
+func (a *Adapter) apiURL(method string) string {
+	base := strings.TrimRight(strings.TrimSpace(a.apiBaseURL), "/")
+	if base == "" {
+		base = defaultTelegramAPIBaseURL
+	}
+	return fmt.Sprintf("%s/bot%s/%s", base, a.token, method)
+}
+
 // SendText 发送文本消息（公开方法，供外部调用）
 func (a *Adapter) SendText(chatID int64, text string) error {
 	return a.sendMessage(chatID, text)
@@ -223,7 +236,7 @@ func (a *Adapter) SendText(chatID int64, text string) error {
 
 // SetWebhook 注册 webhook（用于生产环境）
 func (a *Adapter) SetWebhook(ctx context.Context, webhookURL string) error {
-	url := fmt.Sprintf("https://api.telegram.org/bot%s/setWebhook", a.token)
+	url := a.apiURL("setWebhook")
 	payload := map[string]string{"url": webhookURL}
 	body, _ := json.Marshal(payload)
 
@@ -280,6 +293,7 @@ func (a *Adapter) WebhookHandler(w http.ResponseWriter, r *http.Request) {
 	text := strings.TrimSpace(msg.Text)
 
 	go func() {
+		a.sendWorkingNotice(chatID)
 		reply, err := a.HandleMessage(chatID, userID, username, text)
 		if err != nil {
 			return

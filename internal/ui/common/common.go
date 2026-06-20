@@ -59,7 +59,7 @@ func DefaultStyles() *Styles {
 	s.Chat.ToolName = lipgloss.NewStyle().Foreground(primary).Bold(true)
 	s.Chat.ToolResult = lipgloss.NewStyle().Foreground(fgMuted).Background(bg)
 	s.Chat.Thinking = lipgloss.NewStyle().Foreground(fgMuted).Italic(true)
-	s.Chat.Selected = lipgloss.NewStyle().Background(lipgloss.Color("238")).Foreground(fg)
+	s.Chat.Selected = lipgloss.NewStyle().Foreground(lipgloss.Color("0")).Background(lipgloss.Color("15"))
 
 	// Codex-cli style: transcript stays plain, composer is a relaxed filled band.
 	s.Editor.Panel = lipgloss.NewStyle().Background(surface).Padding(1, 1)

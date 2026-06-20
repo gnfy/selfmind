@@ -447,6 +447,8 @@ Skills 是 SelfMind 的“过程记忆”：可复用的工作流、检查清单
 
 旧的扁平 `.md` Skill 仍然兼容。安装、创建或修改 Skill 后，可以通过 `/skills reload` 或 `/reload-skills` 热加载，不需要重启 SelfMind。
 
+Catalog 安装参考 Hermes 的 provenance 规则：`skill_catalog` 会把安装来源写入 `~/.selfmind/<tenant>/skills/.catalog/lock.json`，并把来源标记为 `catalog-installed`。同名目录 Skill 或旧版 `.md` Skill 默认不会被覆盖；只有显式使用 `--force` 才会替换。强制重装前，旧副本会先移动到 `~/.selfmind/<tenant>/skills/.catalog/backups/`。Curator 不会自动归档 catalog-installed、manual、bundled 或 pinned Skill。
+
 常用命令：
 
 ```sh
@@ -457,6 +459,7 @@ Skills 是 SelfMind 的“过程记忆”：可复用的工作流、检查清单
 /skills install official/codebase-inspection
 /skills install ./my-skill --name my-skill
 /skills install https://raw.githubusercontent.com/org/repo/main/path/SKILL.md
+/skills install ./my-skill --name my-skill --force
 /skills audit
 /skills history codebase-inspection
 /skills undo <change_id>

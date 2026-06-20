@@ -8,15 +8,22 @@ import (
 	"io"
 	"net/http"
 	"sort"
+	"strings"
 	"time"
 )
 
 // OpenAIAdapter 适配 OpenAI API
 type OpenAIAdapter struct {
-	APIKey    string
-	KeyGetter func() string
-	Model     string
-	BaseURL   string
+	APIKey          string
+	KeyGetter       func() string
+	Model           string
+	BaseURL         string
+	Headers         map[string]string
+	MaxTokens       int
+	ReasoningEffort string
+	Thinking        map[string]interface{}
+	ServiceTier     string
+	Quirks          ProviderQuirks
 }
 
 // OpenAIMessage OpenAI 格式的 message
@@ -56,6 +63,10 @@ type OpenAIRequest struct {
 	Tools             []map[string]interface{} `json:"tools,omitempty"`
 	ToolChoice        interface{}              `json:"tool_choice,omitempty"`
 	ParallelToolCalls *bool                    `json:"parallel_tool_calls,omitempty"`
+	MaxTokens         int                      `json:"max_tokens,omitempty"`
+	ReasoningEffort   string                   `json:"reasoning_effort,omitempty"`
+	Thinking          interface{}              `json:"thinking,omitempty"`
+	ServiceTier       string                   `json:"service_tier,omitempty"`
 	Stream            bool                     `json:"stream,omitempty"`
 	StreamOptions     map[string]interface{}   `json:"stream_options,omitempty"`
 }
@@ -176,6 +187,22 @@ func contentString(content interface{}) string {
 			return fmt.Sprint(v)
 		}
 		return string(b)
+	}
+}
+
+func intOption(value interface{}) (int, bool) {
+	switch v := value.(type) {
+	case int:
+		return v, true
+	case int64:
+		return int(v), true
+	case float64:
+		return int(v), true
+	case json.Number:
+		n, err := v.Int64()
+		return int(n), err == nil
+	default:
+		return 0, false
 	}
 }
 
@@ -301,7 +328,9 @@ func (a *OpenAIAdapter) Chat(ctx context.Context, req ChatRequest) (*ChatRespons
 		}
 	}
 
-	openaiReq := openAIRequestFromChat(a.Model, req, false)
+	wireReq := a.requestWithQuirks(req)
+	openaiReq := openAIRequestFromChat(a.Model, wireReq, false)
+	a.applyOptions(&openaiReq, wireReq)
 
 	body, err := json.Marshal(openaiReq)
 	if err != nil {
@@ -314,6 +343,7 @@ func (a *OpenAIAdapter) Chat(ctx context.Context, req ChatRequest) (*ChatRespons
 	}
 	httpReq.Header.Set("Authorization", "Bearer "+apiKey)
 	httpReq.Header.Set("content-type", "application/json")
+	a.applyHeaders(httpReq)
 
 	resp, err := http.DefaultClient.Do(httpReq)
 	if err != nil {
@@ -346,7 +376,9 @@ func (a *OpenAIAdapter) StreamChat(ctx context.Context, req ChatRequest) (<-chan
 		}
 	}
 
-	openaiReq := openAIRequestFromChat(a.Model, req, true)
+	wireReq := a.requestWithQuirks(req)
+	openaiReq := openAIRequestFromChat(a.Model, wireReq, true)
+	a.applyOptions(&openaiReq, wireReq)
 
 	body, err := json.Marshal(openaiReq)
 	if err != nil {
@@ -359,6 +391,7 @@ func (a *OpenAIAdapter) StreamChat(ctx context.Context, req ChatRequest) (<-chan
 	}
 	httpReq.Header.Set("Authorization", "Bearer "+apiKey)
 	httpReq.Header.Set("Content-Type", "application/json")
+	a.applyHeaders(httpReq)
 
 	resp, err := http.DefaultClient.Do(httpReq)
 	if err != nil {
@@ -368,8 +401,8 @@ func (a *OpenAIAdapter) StreamChat(ctx context.Context, req ChatRequest) (<-chan
 	if resp.StatusCode != http.StatusOK {
 		b, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		if len(req.Tools) > 0 {
-			legacyReq := req
+		if len(wireReq.Tools) > 0 {
+			legacyReq := wireReq
 			legacyReq.Tools = nil
 			return a.StreamChat(ctx, legacyReq)
 		}
@@ -400,15 +433,11 @@ func (a *OpenAIAdapter) StreamChat(ctx context.Context, req ChatRequest) (<-chan
 				}
 
 				for _, line := range lines {
-					line = bytes.TrimSpace(line)
-					if len(line) == 0 {
+					dataPart, ok := sseDataBytes(line)
+					if !ok {
 						continue
 					}
-					if !bytes.HasPrefix(line, []byte("data: ")) {
-						continue
-					}
-					dataPart := line[6:]
-					if string(dataPart) == "[DONE]" {
+					if bytes.Equal(dataPart, []byte("[DONE]")) {
 						if len(toolDeltas) > 0 {
 							ch <- StreamEvent{ToolCalls: orderedOpenAIToolCalls(toolDeltas)}
 						}
@@ -451,6 +480,48 @@ func (a *OpenAIAdapter) StreamChat(ctx context.Context, req ChatRequest) (<-chan
 	return ch, nil
 }
 
+func (a *OpenAIAdapter) applyOptions(openaiReq *OpenAIRequest, req ChatRequest) {
+	if req.MaxTokens > 0 {
+		openaiReq.MaxTokens = req.MaxTokens
+	} else if a.MaxTokens > 0 {
+		openaiReq.MaxTokens = a.MaxTokens
+	}
+	openaiReq.ReasoningEffort = a.ReasoningEffort
+	openaiReq.Thinking = a.Thinking
+	openaiReq.ServiceTier = a.ServiceTier
+	if req.Options == nil {
+		return
+	}
+	if value, ok := req.Options["reasoning_effort"].(string); ok && value != "" {
+		openaiReq.ReasoningEffort = value
+	}
+	if value, ok := req.Options["thinking"]; ok {
+		openaiReq.Thinking = value
+	}
+	if value, ok := req.Options["service_tier"].(string); ok && value != "" {
+		openaiReq.ServiceTier = value
+	}
+	if value, ok := intOption(req.Options["max_tokens"]); ok && value > 0 {
+		openaiReq.MaxTokens = value
+	}
+}
+
+func (a *OpenAIAdapter) requestWithQuirks(req ChatRequest) ChatRequest {
+	if !strings.EqualFold(strings.TrimSpace(a.Quirks.ToolSchema), "moonshot") || len(req.Tools) == 0 {
+		return req
+	}
+	req.Tools = sanitizeMoonshotToolDefinitions(req.Tools)
+	return req
+}
+
+func (a *OpenAIAdapter) applyHeaders(req *http.Request) {
+	for key, value := range a.Headers {
+		if key != "" {
+			req.Header.Set(key, value)
+		}
+	}
+}
+
 func (a *OpenAIAdapter) ChatCompletion(ctx context.Context, messages []Message) (string, error) {
 	req := ChatRequest{
 		Model:    a.Model,
@@ -466,10 +537,16 @@ func (a *OpenAIAdapter) ChatCompletion(ctx context.Context, messages []Message) 
 func (a *OpenRouterAdapter) StreamChat(ctx context.Context, req ChatRequest) (<-chan StreamEvent, error) {
 	// OpenRouter is OpenAI compatible for streaming
 	openai := &OpenAIAdapter{
-		APIKey:    a.APIKey,
-		KeyGetter: a.KeyGetter,
-		Model:     a.Model,
-		BaseURL:   a.BaseURL,
+		APIKey:          a.APIKey,
+		KeyGetter:       a.KeyGetter,
+		Model:           a.Model,
+		BaseURL:         a.BaseURL,
+		Headers:         a.Headers,
+		MaxTokens:       a.MaxTokens,
+		ReasoningEffort: a.ReasoningEffort,
+		Thinking:        a.Thinking,
+		ServiceTier:     a.ServiceTier,
+		Quirks:          a.Quirks,
 	}
 	return openai.StreamChat(ctx, req)
 }
@@ -566,11 +643,17 @@ func NewGenericOpenAIAdapter(name, baseURL, apiKey, model string) *GenericOpenAI
 
 // OpenRouterAdapter 通过 OpenRouter 路由到多个模型
 type OpenRouterAdapter struct {
-	APIKey    string
-	KeyGetter func() string
-	Model     string
-	BaseURL   string
-	Client    *http.Client
+	APIKey          string
+	KeyGetter       func() string
+	Model           string
+	BaseURL         string
+	Headers         map[string]string
+	MaxTokens       int
+	ReasoningEffort string
+	Thinking        map[string]interface{}
+	ServiceTier     string
+	Quirks          ProviderQuirks
+	Client          *http.Client
 }
 
 func NewOpenRouterAdapter(apiKey string) *OpenRouterAdapter {
@@ -602,7 +685,16 @@ func (a *OpenRouterAdapter) apiKey() string {
 }
 
 func (a *OpenRouterAdapter) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, error) {
-	openaiReq := openAIRequestFromChat(a.Model, req, false)
+	options := OpenAIAdapter{
+		MaxTokens:       a.MaxTokens,
+		ReasoningEffort: a.ReasoningEffort,
+		Thinking:        a.Thinking,
+		ServiceTier:     a.ServiceTier,
+		Quirks:          a.Quirks,
+	}
+	wireReq := options.requestWithQuirks(req)
+	openaiReq := openAIRequestFromChat(a.Model, wireReq, false)
+	options.applyOptions(&openaiReq, wireReq)
 
 	body, err := json.Marshal(openaiReq)
 	if err != nil {
@@ -617,6 +709,11 @@ func (a *OpenRouterAdapter) Chat(ctx context.Context, req ChatRequest) (*ChatRes
 	httpReq.Header.Set("content-type", "application/json")
 	httpReq.Header.Set("HTTP-Referer", "https://selfmind.dev")
 	httpReq.Header.Set("X-Title", "SelfMind Agent")
+	for key, value := range a.Headers {
+		if strings.TrimSpace(key) != "" {
+			httpReq.Header.Set(key, value)
+		}
+	}
 
 	resp, err := a.Client.Do(httpReq)
 	if err != nil {

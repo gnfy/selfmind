@@ -47,6 +47,20 @@ gateway:
   telegram_token: ""
   delivery_max_message_chars: 3500
   delivery_retry_attempts: 3
+  weixin:
+    enabled: false
+    owner_person_id: ""
+    account_id: ""
+    token: ""
+    base_url: "https://ilinkai.weixin.qq.com"
+    cdn_base_url: "https://novac2c.cdn.weixin.qq.com/c2c"
+    dm_policy: "open"
+    group_policy: "disabled"
+    allow_from: []
+    group_allow_from: []
+    split_multiline_messages: false
+    send_chunk_delay_seconds: 1.5
+    send_chunk_retries: 4
 
 evolution:
   enabled: true
@@ -97,8 +111,9 @@ type Config struct {
 }
 
 type ModelConfig struct {
-	Provider string `mapstructure:"provider" yaml:"provider,omitempty"`
-	Default  string `mapstructure:"default" yaml:"default,omitempty"`
+	Provider      string `mapstructure:"provider" yaml:"provider,omitempty"`
+	Default       string `mapstructure:"default" yaml:"default,omitempty"`
+	ContextLength int    `mapstructure:"context_length" yaml:"context_length,omitempty"`
 }
 
 type EditorConfig struct {
@@ -156,15 +171,32 @@ type StorageConfig struct {
 }
 
 type GatewayConfig struct {
-	Addr                    string `mapstructure:"addr" yaml:"addr,omitempty"`
-	URL                     string `mapstructure:"url" yaml:"url,omitempty"`
-	Token                   string `mapstructure:"token" yaml:"token,omitempty"`
-	DrainTimeout            string `mapstructure:"drain_timeout" yaml:"drain_timeout,omitempty"`
-	OutboundWebhookURL      string `mapstructure:"outbound_webhook_url" yaml:"outbound_webhook_url,omitempty"`
-	OutboundWebhookToken    string `mapstructure:"outbound_webhook_token" yaml:"outbound_webhook_token,omitempty"`
-	TelegramToken           string `mapstructure:"telegram_token" yaml:"telegram_token,omitempty"`
-	DeliveryMaxMessageChars int    `mapstructure:"delivery_max_message_chars" yaml:"delivery_max_message_chars,omitempty"`
-	DeliveryRetryAttempts   int    `mapstructure:"delivery_retry_attempts" yaml:"delivery_retry_attempts,omitempty"`
+	Addr                    string       `mapstructure:"addr" yaml:"addr,omitempty"`
+	URL                     string       `mapstructure:"url" yaml:"url,omitempty"`
+	Token                   string       `mapstructure:"token" yaml:"token,omitempty"`
+	DrainTimeout            string       `mapstructure:"drain_timeout" yaml:"drain_timeout,omitempty"`
+	OutboundWebhookURL      string       `mapstructure:"outbound_webhook_url" yaml:"outbound_webhook_url,omitempty"`
+	OutboundWebhookToken    string       `mapstructure:"outbound_webhook_token" yaml:"outbound_webhook_token,omitempty"`
+	TelegramToken           string       `mapstructure:"telegram_token" yaml:"telegram_token,omitempty"`
+	DeliveryMaxMessageChars int          `mapstructure:"delivery_max_message_chars" yaml:"delivery_max_message_chars,omitempty"`
+	DeliveryRetryAttempts   int          `mapstructure:"delivery_retry_attempts" yaml:"delivery_retry_attempts,omitempty"`
+	Weixin                  WeixinConfig `mapstructure:"weixin" yaml:"weixin,omitempty"`
+}
+
+type WeixinConfig struct {
+	Enabled                bool     `mapstructure:"enabled" yaml:"enabled,omitempty"`
+	OwnerPersonID          string   `mapstructure:"owner_person_id" yaml:"owner_person_id,omitempty"`
+	AccountID              string   `mapstructure:"account_id" yaml:"account_id,omitempty"`
+	Token                  string   `mapstructure:"token" yaml:"token,omitempty"`
+	BaseURL                string   `mapstructure:"base_url" yaml:"base_url,omitempty"`
+	CDNBaseURL             string   `mapstructure:"cdn_base_url" yaml:"cdn_base_url,omitempty"`
+	DMPolicy               string   `mapstructure:"dm_policy" yaml:"dm_policy,omitempty"`
+	GroupPolicy            string   `mapstructure:"group_policy" yaml:"group_policy,omitempty"`
+	AllowFrom              []string `mapstructure:"allow_from" yaml:"allow_from,omitempty"`
+	GroupAllowFrom         []string `mapstructure:"group_allow_from" yaml:"group_allow_from,omitempty"`
+	SplitMultilineMessages bool     `mapstructure:"split_multiline_messages" yaml:"split_multiline_messages,omitempty"`
+	SendChunkDelaySeconds  float64  `mapstructure:"send_chunk_delay_seconds" yaml:"send_chunk_delay_seconds,omitempty"`
+	SendChunkRetries       int      `mapstructure:"send_chunk_retries" yaml:"send_chunk_retries,omitempty"`
 }
 
 type ProvidersConfig struct {
@@ -182,10 +214,25 @@ type ProvidersConfig struct {
 }
 
 type ProviderEndpoint struct {
-	APIKey   string `mapstructure:"api_key" yaml:"api_key,omitempty"`
-	BaseURL  string `mapstructure:"base_url" yaml:"base_url,omitempty"`
-	Protocol string `mapstructure:"protocol" yaml:"protocol,omitempty"`
-	Model    string `mapstructure:"model" yaml:"model,omitempty"`
+	APIKey          string                 `mapstructure:"api_key" yaml:"api_key,omitempty"`
+	BaseURL         string                 `mapstructure:"base_url" yaml:"base_url,omitempty"`
+	Protocol        string                 `mapstructure:"protocol" yaml:"protocol,omitempty"`
+	Model           string                 `mapstructure:"model" yaml:"model,omitempty"`
+	ContextLength   int                    `mapstructure:"context_length" yaml:"context_length,omitempty"`
+	Headers         map[string]string      `mapstructure:"headers" yaml:"headers,omitempty"`
+	MaxTokens       int                    `mapstructure:"max_tokens" yaml:"max_tokens,omitempty"`
+	ReasoningEffort string                 `mapstructure:"reasoning_effort" yaml:"reasoning_effort,omitempty"`
+	Thinking        map[string]interface{} `mapstructure:"thinking" yaml:"thinking,omitempty"`
+	ServiceTier     string                 `mapstructure:"service_tier" yaml:"service_tier,omitempty"`
+	Quirks          ProviderQuirks         `mapstructure:"quirks" yaml:"quirks,omitempty"`
+}
+
+type ProviderQuirks struct {
+	AuthHeader        string `mapstructure:"auth_header" yaml:"auth_header,omitempty"`
+	ToolSchema        string `mapstructure:"tool_schema" yaml:"tool_schema,omitempty"`
+	SystemMessageMode string `mapstructure:"system_message_mode" yaml:"system_message_mode,omitempty"`
+	ThinkingMode      string `mapstructure:"thinking_mode" yaml:"thinking_mode,omitempty"`
+	UserAgent         string `mapstructure:"user_agent" yaml:"user_agent,omitempty"`
 }
 
 type ModelsConfig struct {
@@ -194,11 +241,17 @@ type ModelsConfig struct {
 }
 
 type ModelRoleConfig struct {
-	Provider  string `mapstructure:"provider" yaml:"provider,omitempty"`
-	Model     string `mapstructure:"model" yaml:"model,omitempty"`
-	BaseURL   string `mapstructure:"base_url" yaml:"base_url,omitempty"`
-	APIKey    string `mapstructure:"api_key" yaml:"api_key,omitempty"`
-	MaxTokens int    `mapstructure:"max_tokens" yaml:"max_tokens,omitempty"`
+	Provider        string                 `mapstructure:"provider" yaml:"provider,omitempty"`
+	Model           string                 `mapstructure:"model" yaml:"model,omitempty"`
+	BaseURL         string                 `mapstructure:"base_url" yaml:"base_url,omitempty"`
+	APIKey          string                 `mapstructure:"api_key" yaml:"api_key,omitempty"`
+	ContextLength   int                    `mapstructure:"context_length" yaml:"context_length,omitempty"`
+	MaxTokens       int                    `mapstructure:"max_tokens" yaml:"max_tokens,omitempty"`
+	Headers         map[string]string      `mapstructure:"headers" yaml:"headers,omitempty"`
+	ReasoningEffort string                 `mapstructure:"reasoning_effort" yaml:"reasoning_effort,omitempty"`
+	Thinking        map[string]interface{} `mapstructure:"thinking" yaml:"thinking,omitempty"`
+	ServiceTier     string                 `mapstructure:"service_tier" yaml:"service_tier,omitempty"`
+	Quirks          ProviderQuirks         `mapstructure:"quirks" yaml:"quirks,omitempty"`
 }
 
 type CustomProvider struct {
@@ -334,6 +387,12 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("gateway.addr", "127.0.0.1:8765")
 	v.SetDefault("gateway.delivery_max_message_chars", 3500)
 	v.SetDefault("gateway.delivery_retry_attempts", 3)
+	v.SetDefault("gateway.weixin.base_url", "https://ilinkai.weixin.qq.com")
+	v.SetDefault("gateway.weixin.cdn_base_url", "https://novac2c.cdn.weixin.qq.com/c2c")
+	v.SetDefault("gateway.weixin.dm_policy", "open")
+	v.SetDefault("gateway.weixin.group_policy", "disabled")
+	v.SetDefault("gateway.weixin.send_chunk_delay_seconds", 1.5)
+	v.SetDefault("gateway.weixin.send_chunk_retries", 4)
 	v.SetDefault("auth.credentials_file", "~/.selfmind/auth.json")
 	v.SetDefault("editor.large_paste_chars", 1000)
 	v.SetDefault("editor.large_paste_lines", 10)
@@ -370,6 +429,7 @@ func (c *Config) Normalize() {
 	c.Gateway.OutboundWebhookURL = expandEnvRef(c.Gateway.OutboundWebhookURL)
 	c.Gateway.OutboundWebhookToken = expandEnvRef(c.Gateway.OutboundWebhookToken)
 	c.Gateway.TelegramToken = expandEnvRef(c.Gateway.TelegramToken)
+	c.Gateway.Weixin = normalizeWeixin(c.Gateway.Weixin)
 	c.Auth.CredentialsFile = cleanPath(firstNonEmpty(c.Auth.CredentialsFile, "~/.selfmind/auth.json"))
 	c.Delegation.Provider = expandEnvRef(c.Delegation.Provider)
 	c.Delegation.Model = expandEnvRef(c.Delegation.Model)
@@ -402,6 +462,10 @@ func (c *Config) Normalize() {
 		endpoint.BaseURL = expandEnvRef(endpoint.BaseURL)
 		endpoint.Protocol = expandEnvRef(endpoint.Protocol)
 		endpoint.Model = expandEnvRef(endpoint.Model)
+		endpoint.Headers = normalizeHeaders(endpoint.Headers)
+		endpoint.ReasoningEffort = expandEnvRef(endpoint.ReasoningEffort)
+		endpoint.ServiceTier = expandEnvRef(endpoint.ServiceTier)
+		endpoint.Quirks = normalizeProviderQuirks(endpoint.Quirks)
 		if trimmed != name {
 			delete(c.ProviderProfiles, name)
 		}
@@ -412,6 +476,10 @@ func (c *Config) Normalize() {
 		role.Model = expandEnvRef(role.Model)
 		role.BaseURL = expandEnvRef(role.BaseURL)
 		role.APIKey = expandEnvRef(role.APIKey)
+		role.Headers = normalizeHeaders(role.Headers)
+		role.ReasoningEffort = expandEnvRef(role.ReasoningEffort)
+		role.ServiceTier = expandEnvRef(role.ServiceTier)
+		role.Quirks = normalizeProviderQuirks(role.Quirks)
 		c.Models.Roles[name] = role
 	}
 
@@ -426,6 +494,79 @@ func (c *Config) Normalize() {
 	}
 	if strings.TrimSpace(c.Agent.Model) == "" {
 		c.Agent.Model = c.Model.Default
+	}
+}
+
+func normalizeWeixin(wx WeixinConfig) WeixinConfig {
+	wx.OwnerPersonID = expandEnvRef(wx.OwnerPersonID)
+	wx.AccountID = firstNonEmpty(expandEnvRef(wx.AccountID), os.Getenv("WEIXIN_ACCOUNT_ID"))
+	wx.Token = firstNonEmpty(expandEnvRef(wx.Token), os.Getenv("WEIXIN_TOKEN"))
+	wx.BaseURL = strings.TrimRight(configOrEnvDefault(wx.BaseURL, "WEIXIN_BASE_URL", "https://ilinkai.weixin.qq.com"), "/")
+	wx.CDNBaseURL = strings.TrimRight(configOrEnvDefault(wx.CDNBaseURL, "WEIXIN_CDN_BASE_URL", "https://novac2c.cdn.weixin.qq.com/c2c"), "/")
+	wx.DMPolicy = normalizePolicy(configOrEnvDefault(wx.DMPolicy, "WEIXIN_DM_POLICY", "open"), "open")
+	wx.GroupPolicy = normalizePolicy(configOrEnvDefault(wx.GroupPolicy, "WEIXIN_GROUP_POLICY", "disabled"), "disabled")
+	wx.AllowFrom = normalizeStringList(firstNonEmpty(strings.Join(wx.AllowFrom, ","), os.Getenv("WEIXIN_ALLOWED_USERS")))
+	wx.GroupAllowFrom = normalizeStringList(firstNonEmpty(strings.Join(wx.GroupAllowFrom, ","), os.Getenv("WEIXIN_GROUP_ALLOWED_USERS")))
+	if env := strings.TrimSpace(os.Getenv("WEIXIN_SPLIT_MULTILINE_MESSAGES")); env != "" {
+		wx.SplitMultilineMessages = parseBool(env, wx.SplitMultilineMessages)
+	}
+	if wx.SendChunkDelaySeconds <= 0 {
+		wx.SendChunkDelaySeconds = 1.5
+	}
+	if wx.SendChunkRetries <= 0 {
+		wx.SendChunkRetries = 4
+	}
+	if wx.AccountID != "" || wx.Token != "" {
+		wx.Enabled = true
+	}
+	return wx
+}
+
+func configOrEnvDefault(configValue, envKey, defaultValue string) string {
+	configValue = expandEnvRef(configValue)
+	envValue := strings.TrimSpace(os.Getenv(envKey))
+	if envValue != "" && (strings.TrimSpace(configValue) == "" || strings.TrimSpace(configValue) == defaultValue) {
+		return envValue
+	}
+	return firstNonEmpty(configValue, envValue, defaultValue)
+}
+
+func normalizePolicy(value, fallbackValue string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "open", "allowlist", "disabled", "pairing":
+		return strings.ToLower(strings.TrimSpace(value))
+	default:
+		return fallbackValue
+	}
+}
+
+func normalizeStringList(value string) []string {
+	value = expandEnvRef(value)
+	parts := strings.Split(value, ",")
+	out := make([]string, 0, len(parts))
+	seen := map[string]struct{}{}
+	for _, part := range parts {
+		item := strings.TrimSpace(part)
+		if item == "" {
+			continue
+		}
+		if _, ok := seen[item]; ok {
+			continue
+		}
+		seen[item] = struct{}{}
+		out = append(out, item)
+	}
+	return out
+}
+
+func parseBool(value string, fallbackValue bool) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "1", "true", "yes", "on":
+		return true
+	case "0", "false", "no", "off":
+		return false
+	default:
+		return fallbackValue
 	}
 }
 
@@ -455,7 +596,38 @@ func normalizeEndpoint(ep ProviderEndpoint, legacyKey, defaultBaseURL, defaultPr
 	ep.BaseURL = expandEnvRef(firstNonEmpty(ep.BaseURL, defaultBaseURL))
 	ep.Protocol = firstNonEmpty(ep.Protocol, defaultProtocol)
 	ep.Model = expandEnvRef(ep.Model)
+	ep.Headers = normalizeHeaders(ep.Headers)
+	ep.ReasoningEffort = expandEnvRef(ep.ReasoningEffort)
+	ep.ServiceTier = expandEnvRef(ep.ServiceTier)
+	ep.Quirks = normalizeProviderQuirks(ep.Quirks)
 	return ep
+}
+
+func normalizeProviderQuirks(q ProviderQuirks) ProviderQuirks {
+	q.AuthHeader = strings.ToLower(strings.TrimSpace(expandEnvRef(q.AuthHeader)))
+	q.ToolSchema = strings.ToLower(strings.TrimSpace(expandEnvRef(q.ToolSchema)))
+	q.SystemMessageMode = strings.ToLower(strings.TrimSpace(expandEnvRef(q.SystemMessageMode)))
+	q.ThinkingMode = strings.ToLower(strings.TrimSpace(expandEnvRef(q.ThinkingMode)))
+	q.UserAgent = strings.TrimSpace(expandEnvRef(q.UserAgent))
+	return q
+}
+
+func normalizeHeaders(headers map[string]string) map[string]string {
+	if len(headers) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(headers))
+	for key, value := range headers {
+		key = strings.TrimSpace(key)
+		if key == "" {
+			continue
+		}
+		out[key] = expandEnvRef(value)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 func cleanPath(path string) string {

@@ -130,11 +130,10 @@ func (a *ResponsesAdapter) StreamChat(ctx context.Context, req ChatRequest) (<-c
 		scanner := bufio.NewScanner(resp.Body)
 		var toolCalls []ToolCall
 		for scanner.Scan() {
-			line := strings.TrimSpace(scanner.Text())
-			if !strings.HasPrefix(line, "data: ") {
+			data, ok := sseDataString(scanner.Text())
+			if !ok {
 				continue
 			}
-			data := strings.TrimSpace(strings.TrimPrefix(line, "data: "))
 			if data == "[DONE]" {
 				if len(toolCalls) > 0 {
 					ch <- StreamEvent{ToolCalls: toolCalls}

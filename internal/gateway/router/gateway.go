@@ -20,6 +20,8 @@ type Gateway struct {
 	agent            *kernel.Agent
 	agentEventMu     sync.Mutex
 	llmProvider      llm.Provider
+	modelProvider    string
+	modelName        string
 }
 
 // NewGateway 创建一个统一网关
@@ -38,6 +40,14 @@ func NewGateway(
 	}
 }
 
+func (g *Gateway) SetModelDisplay(provider, model string) {
+	if g == nil {
+		return
+	}
+	g.modelProvider = strings.TrimSpace(provider)
+	g.modelName = strings.TrimSpace(model)
+}
+
 // HandleResponse 统一响应结构，支持同步和流式
 type HandleResponse struct {
 	Content      string
@@ -50,6 +60,10 @@ type HandleResponse struct {
 
 // Handle 处理一条用户消息，返回响应内容
 func (g *Gateway) Handle(ctx context.Context, unifiedUID, channel, input string) (*HandleResponse, error) {
+	if isModelStatusQuestion(input) {
+		return &HandleResponse{Content: g.modelStatusReply(), Intent: IntentCasual, IntentReason: "model status question"}, nil
+	}
+
 	// 1. 意图分类
 	intent, reason := g.intentClassifier.ClassifyWithReason(input)
 
@@ -153,27 +167,105 @@ func (g *Gateway) handleTaskStreaming(ctx context.Context, unifiedUID, channel, 
 
 // handleCasual 闲聊：直接回答，存档闲聊摘要（不写 trajectory）
 func (g *Gateway) handleCasual(ctx context.Context, unifiedUID, channel, input string) (string, llm.UsageStats, error) {
-	reply := casualReply(input)
+	reply := g.casualReply(input)
 
 	// 保存闲聊摘要，供后续任务感知用户状态（不污染 trajectory）
 	summary := fmt.Sprintf("闲聊: %s", input)
-	_ = g.taskManager.SaveCasualSummary(ctx, unifiedUID, channel, summary)
+	if g.taskManager != nil {
+		_ = g.taskManager.SaveCasualSummary(ctx, unifiedUID, channel, summary)
+	}
 
 	return reply, llm.UsageStats{}, nil
 }
 
+func isModelStatusQuestion(input string) bool {
+	cleaned := normalizeQuestionText(input)
+	if cleaned == "" {
+		return false
+	}
+
+	hasModelWord := strings.Contains(cleaned, "模型") ||
+		strings.Contains(cleaned, "model") ||
+		strings.Contains(cleaned, "llm") ||
+		strings.Contains(cleaned, "后端")
+	if !hasModelWord {
+		return false
+	}
+
+	statusCues := []string{
+		"什么", "哪个", "哪一个", "当前", "现在", "目前", "正在用", "用的", "使用的", "连接的", "跑的",
+		"what", "which", "current", "using", "running", "active",
+	}
+	for _, cue := range statusCues {
+		if strings.Contains(cleaned, cue) {
+			return true
+		}
+	}
+	return false
+}
+
+func normalizeQuestionText(input string) string {
+	input = strings.ToLower(strings.TrimSpace(input))
+	replacer := strings.NewReplacer(
+		" ", "",
+		"\t", "",
+		"\n", "",
+		"\r", "",
+		"?", "",
+		"？", "",
+		"!", "",
+		"！", "",
+		"。", "",
+		".", "",
+		",", "",
+		"，", "",
+		":", "",
+		"：", "",
+	)
+	return replacer.Replace(input)
+}
+
+func (g *Gateway) modelStatusReply() string {
+	label := g.modelDisplayLabel()
+	if label == "" {
+		return "我是 SelfMind，目前没有解析到可用的 AI 模型配置。请运行 selfmind model check 查看原因。"
+	}
+	return fmt.Sprintf("我是 SelfMind，当前连接的模型是 %s。", label)
+}
+
+func (g *Gateway) modelDisplayLabel() string {
+	provider := strings.TrimSpace(g.modelProvider)
+	model := strings.TrimSpace(g.modelName)
+	switch {
+	case provider != "" && model != "" && provider != "not configured":
+		return provider + "/" + model
+	case model != "" && model != "not configured":
+		return model
+	case provider != "" && provider != "not configured":
+		return provider
+	default:
+		return ""
+	}
+}
+
 // casualReply 根据输入生成闲聊回复
-func casualReply(input string) string {
+func (g *Gateway) casualReply(input string) string {
 	// 简单规则回复
-	switch input {
-	case "你好", "您好", "hi", "hello", "Hi", "Hello":
+	switch normalizeQuestionText(input) {
+	case "你好", "您好", "hi", "hello", "嗨", "hey":
 		return "你好！有什么我可以帮你的吗？"
-	case "你是谁", "你叫什么":
-		return "我是 SelfMind，一个 AI 助手，可以在 CLI、微信、钉钉等多个平台使用。"
-	case "谢谢", "多谢":
+	case "你是谁", "你叫什么", "你干嘛的", "whoareyou", "whatareyou":
+		reply := "我是 SelfMind，一个面向开发任务和多端协同的 AI 工作助手。"
+		if label := g.modelDisplayLabel(); label != "" {
+			reply += " 当前连接的模型是 " + label + "。"
+		}
+		return reply
+	case "谢谢", "多谢", "谢了", "thanks", "thankyou":
 		return "不客气！有需要随时找我。"
-	case "再见", "拜拜", "bye":
+	case "再见", "拜拜", "bye", "晚安":
 		return "再见！有需要随时回来。"
+	case "牛逼", "厉害", "真棒":
+		return "谢谢认可。我会继续把任务处理得更稳一点。"
 	}
 	return "嗯，我明白了。如果有需要执行的任务，随时告诉我。"
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"strings"
 	"testing"
 
 	"selfmind/internal/kernel/llm"
@@ -191,6 +192,33 @@ func (p *nativeToolLLMProvider) StreamChat(ctx context.Context, req llm.ChatRequ
 	return ch, nil
 }
 
+type xmlFallbackToolProvider struct {
+	requests []llm.ChatRequest
+}
+
+func (p *xmlFallbackToolProvider) ChatCompletion(ctx context.Context, messages []llm.Message) (string, error) {
+	return "done", nil
+}
+
+func (p *xmlFallbackToolProvider) Chat(ctx context.Context, req llm.ChatRequest) (*llm.ChatResponse, error) {
+	return &llm.ChatResponse{Content: "done"}, nil
+}
+
+func (p *xmlFallbackToolProvider) StreamChat(ctx context.Context, req llm.ChatRequest) (<-chan llm.StreamEvent, error) {
+	p.requests = append(p.requests, req)
+	ch := make(chan llm.StreamEvent, 4)
+	if len(p.requests) == 1 {
+		ch <- llm.StreamEvent{Content: "I need to inspect it.\n"}
+		ch <- llm.StreamEvent{Content: "<tool>list_dir</tool>"}
+		ch <- llm.StreamEvent{Content: "\n<parameter>{\"path\":\"/repo\",\"recursive\":true}</parameter>"}
+		ch <- llm.StreamEvent{Content: "\nThis trailing text should not be streamed."}
+	} else {
+		ch <- llm.StreamEvent{Content: "done"}
+	}
+	close(ch)
+	return ch, nil
+}
+
 type recordingLLMProvider struct {
 	requests []llm.ChatRequest
 }
@@ -236,6 +264,22 @@ func (b *planningBackend) GetToolDefinitions() []map[string]interface{} {
 				"parameters":  map[string]interface{}{"type": "object", "properties": map[string]interface{}{}},
 			},
 		},
+		{
+			"type": "function",
+			"function": map[string]interface{}{
+				"name":        "web_search",
+				"description": "Search the web",
+				"parameters":  map[string]interface{}{"type": "object", "properties": map[string]interface{}{}},
+			},
+		},
+		{
+			"type": "function",
+			"function": map[string]interface{}{
+				"name":        "web_extract",
+				"description": "Extract a webpage",
+				"parameters":  map[string]interface{}{"type": "object", "properties": map[string]interface{}{}},
+			},
+		},
 	}
 }
 
@@ -257,11 +301,57 @@ func TestSimpleRequestDoesNotExposeUpdatePlan(t *testing.T) {
 	if len(provider.requests) == 0 {
 		t.Fatal("provider received no requests")
 	}
-	for _, tool := range provider.requests[0].Tools {
-		if tool.Name == "update_plan" {
-			t.Fatalf("update_plan should not be exposed for simple requests: %+v", provider.requests[0].Tools)
+	if requestHasTool(provider.requests[0], "update_plan") {
+		t.Fatalf("update_plan should not be exposed for simple requests: %+v", provider.requests[0].Tools)
+	}
+	if requestHasTool(provider.requests[0], "web_search") {
+		t.Fatalf("web_search should not be exposed for stable simple requests: %+v", provider.requests[0].Tools)
+	}
+}
+
+func TestStableCodingAdviceDoesNotExposeWebTools(t *testing.T) {
+	mem := memory.NewMemoryManager(&mockStorage{})
+	backend := &planningBackend{}
+	provider := &recordingLLMProvider{}
+	agent := NewAgent(mem, backend, provider, "helpful", 1, 1, nil)
+
+	_, _, err := agent.RunConversation(context.Background(), "user123", "cli", "给一个Go学习的方案，要求结合当前AI编程的情况。")
+	if err != nil {
+		t.Fatalf("Agent failed: %v", err)
+	}
+	if len(provider.requests) == 0 {
+		t.Fatal("provider received no requests")
+	}
+	if requestHasTool(provider.requests[0], "web_search") || requestHasTool(provider.requests[0], "web_extract") {
+		t.Fatalf("web tools should not be exposed for stable coding advice: %+v", provider.requests[0].Tools)
+	}
+}
+
+func TestExplicitLookupKeepsWebTools(t *testing.T) {
+	mem := memory.NewMemoryManager(&mockStorage{})
+	backend := &planningBackend{}
+	provider := &recordingLLMProvider{}
+	agent := NewAgent(mem, backend, provider, "helpful", 1, 1, nil)
+
+	_, _, err := agent.RunConversation(context.Background(), "user123", "cli", "查一下 Go 当前最新稳定版本。")
+	if err != nil {
+		t.Fatalf("Agent failed: %v", err)
+	}
+	if len(provider.requests) == 0 {
+		t.Fatal("provider received no requests")
+	}
+	if !requestHasTool(provider.requests[0], "web_search") {
+		t.Fatalf("web_search should be available for explicit lookup: %+v", provider.requests[0].Tools)
+	}
+}
+
+func requestHasTool(req llm.ChatRequest, name string) bool {
+	for _, tool := range req.Tools {
+		if tool.Name == name {
+			return true
 		}
 	}
+	return false
 }
 
 func (b *recordingBackend) Dispatch(name string, args map[string]interface{}) (string, error) {
@@ -354,7 +444,8 @@ func TestAgentRunNativeToolCall(t *testing.T) {
 	provider := &nativeToolLLMProvider{}
 	agent := NewAgent(mem, backend, provider, "helpful", 3, 1, nil)
 
-	ctx := memory.WithTenantID(context.Background(), "user123")
+	eventCh := make(chan string, 20)
+	ctx := WithEventChannel(memory.WithTenantID(context.Background(), "user123"), eventCh)
 	res, _, err := agent.RunConversation(ctx, "user123", "cli", "read the readme")
 	if err != nil {
 		t.Fatalf("Agent failed: %v", err)
@@ -388,4 +479,82 @@ func TestAgentRunNativeToolCall(t *testing.T) {
 	if toolMsg.ToolCallID != "call-1" || toolMsg.Name != "read_file" || toolMsg.Content != "file content" {
 		t.Fatalf("unexpected tool message: %+v", *toolMsg)
 	}
+
+	events := drainAgentEvents(eventCh)
+	if !agentEventsContain(events, "agent.thinking") {
+		t.Fatalf("agent.thinking event missing: %+v", events)
+	}
+	if !agentEventsContain(events, "tool.started") {
+		t.Fatalf("tool.started event missing: %+v", events)
+	}
+}
+
+func TestAgentRunXMLFallbackToolCallDoesNotStreamRawMarkup(t *testing.T) {
+	mem := memory.NewMemoryManager(&mockStorage{})
+	backend := &recordingBackend{}
+	provider := &xmlFallbackToolProvider{}
+	agent := NewAgent(mem, backend, provider, "helpful", 3, 1, nil)
+
+	eventCh := make(chan string, 20)
+	ctx := WithEventChannel(memory.WithTenantID(context.Background(), "user123"), eventCh)
+	res, _, err := agent.RunConversation(ctx, "user123", "cli", "inspect current project")
+	if err != nil {
+		t.Fatalf("Agent failed: %v", err)
+	}
+	if res != "done" {
+		t.Fatalf("response = %q, want done", res)
+	}
+	if backend.calledName != "ls_r" {
+		t.Fatalf("calledName = %q, want ls_r", backend.calledName)
+	}
+	if backend.calledArgs["path"] != "/repo" {
+		t.Fatalf("unexpected tool args: %+v", backend.calledArgs)
+	}
+	if len(provider.requests) < 2 {
+		t.Fatalf("expected second LLM request after tool call")
+	}
+	foundAssistantToolCall := false
+	for _, msg := range provider.requests[1].Messages {
+		if msg.Role != "assistant" || len(msg.ToolCalls) == 0 {
+			continue
+		}
+		foundAssistantToolCall = true
+		if strings.Contains(msg.Content, "<tool>") || strings.Contains(msg.Content, "<parameter>") {
+			t.Fatalf("assistant tool markup was not stripped: %+v", msg)
+		}
+	}
+	if !foundAssistantToolCall {
+		t.Fatalf("second request did not include assistant tool call: %+v", provider.requests[1].Messages)
+	}
+	for _, event := range drainAgentEvents(eventCh) {
+		if event.Type == "stream" && (strings.Contains(event.Content, "<tool>") || strings.Contains(event.Content, "<parameter>")) {
+			t.Fatalf("raw tool markup leaked to stream: %+v", event)
+		}
+		if event.Type == "stream" && strings.Contains(event.Content, "trailing text") {
+			t.Fatalf("post-tool text should not stream before tool execution: %+v", event)
+		}
+	}
+}
+
+func drainAgentEvents(ch <-chan string) []AgentEvent {
+	var events []AgentEvent
+	for {
+		select {
+		case raw := <-ch:
+			if event, ok := DecodeAgentEvent(raw); ok {
+				events = append(events, event)
+			}
+		default:
+			return events
+		}
+	}
+}
+
+func agentEventsContain(events []AgentEvent, eventType string) bool {
+	for _, event := range events {
+		if event.Type == eventType {
+			return true
+		}
+	}
+	return false
 }

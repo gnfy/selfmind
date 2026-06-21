@@ -15,12 +15,14 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/mattn/go-runewidth"
 	"selfmind/internal/app"
+	"selfmind/internal/gateway/api"
 	"selfmind/internal/gateway/router"
 	"selfmind/internal/kernel"
 	"selfmind/internal/kernel/llm"
 	"selfmind/internal/kernel/memory"
 	"selfmind/internal/modelruntime"
 	"selfmind/internal/platform/config"
+	"selfmind/internal/platform/textutil"
 	"selfmind/internal/tools"
 	"selfmind/internal/ui/common"
 	"selfmind/internal/ui/components"
@@ -35,16 +37,20 @@ type Controller struct {
 	cleanupFn func()
 }
 
+type MessageProcessor func(context.Context, api.MessageRequest) (api.MessageResponse, int)
+
 // ChatMessage represents a single message in the conversation history.
 type ChatMessage struct {
-	Role      string // "user", "assistant", "system", "tool"
-	Content   string
-	Timestamp time.Time
-	ToolName  string  // populated when Role == "tool"
-	ToolArgs  string  // Fix: add ToolArgs to store call arguments
-	Duration  float64 // Fix: add Duration for performance display
-	IsError   bool    // Fix: add IsError flag
-	IsRunning bool
+	Role          string // "user", "assistant", "system", "tool"
+	Content       string
+	Timestamp     time.Time
+	ToolName      string // populated when Role == "tool"
+	ToolCallID    string
+	ToolArgs      string  // Fix: add ToolArgs to store call arguments
+	Duration      float64 // Fix: add Duration for performance display
+	IsError       bool    // Fix: add IsError flag
+	IsRunning     bool
+	RunningDetail string
 }
 
 // uiModel is the main TUI model. It holds all conversation state.
@@ -70,6 +76,7 @@ type uiModel struct {
 	modelName          string
 	agent              *kernel.Agent
 	gateway            *router.Gateway
+	messageProcessor   MessageProcessor
 	tenantID           string
 	channel            string // 'cli' | 'wechat' | 'dingtalk' | 'web'
 	spinner            spinner.Model
@@ -87,16 +94,41 @@ type uiModel struct {
 	statusMsg          string    // Transient status message
 	thinkingDots       int       // Counter for "..." animation
 	thinkingStart      time.Time // When current thinking started
+	activityText       string    // Current model/tool phase shown in transcript
 	runStatus          string    // ready | working | done | error | cancelled
 	migrationHint      string    // Hint for migrating Hermes skills
+	cursorVisible      bool
+	mouseDragActive    bool
+	mouseAutoScrollDir int
+	mouseScrollTicking bool
+	mouseSelection     bool
+	mouseSelectAnchor  int
+	mouseSelectFocus   int
 }
 
 type MsgClearStatus struct{}
 type MsgWorkingTick time.Time
+type MsgCursorBlinkTick time.Time
+type MsgMouseAutoScrollTick time.Time
+type MsgAgentActivity struct {
+	Content string
+}
 
 func workingTick() tea.Cmd {
 	return tea.Tick(200*time.Millisecond, func(t time.Time) tea.Msg {
 		return MsgWorkingTick(t)
+	})
+}
+
+func cursorBlinkTick() tea.Cmd {
+	return tea.Tick(530*time.Millisecond, func(t time.Time) tea.Msg {
+		return MsgCursorBlinkTick(t)
+	})
+}
+
+func mouseAutoScrollTick() tea.Cmd {
+	return tea.Tick(80*time.Millisecond, func(t time.Time) tea.Msg {
+		return MsgMouseAutoScrollTick(t)
 	})
 }
 
@@ -129,6 +161,7 @@ func NewController(a *kernel.Agent, provider llm.Provider, cfg *config.Config, t
 			editor:        editor,
 			messages:      []ChatMessage{},
 			thinking:      false,
+			cursorVisible: true,
 			provider:      provider,
 			agent:         a,
 			tenantID:      tenantID,
@@ -174,6 +207,7 @@ func NewControllerWithGateway(gw *router.Gateway, agent *kernel.Agent, provider 
 			editor:        editor,
 			messages:      []ChatMessage{},
 			thinking:      false,
+			cursorVisible: true,
 			provider:      provider,
 			providerName:  providerName,
 			modelName:     modelName,
@@ -195,6 +229,13 @@ func NewControllerWithGateway(gw *router.Gateway, agent *kernel.Agent, provider 
 
 func (c *Controller) SetSessionSearchFn(fn func(query string, limit int) (interface{}, error)) {
 	c.model.sessionSearchFn = fn
+}
+
+func (c *Controller) SetMessageProcessor(processor MessageProcessor) {
+	if c == nil || c.model == nil {
+		return
+	}
+	c.model.messageProcessor = processor
 }
 
 func (c *Controller) SetCheckpointFns(memFn func() (*memory.MemoryManager, string, string), msgFn func() ([]byte, error)) {
@@ -235,6 +276,7 @@ func (c *Controller) Start() {
 	c.checkMigration()
 	p := tea.NewProgram(c.model,
 		tea.WithAltScreen(),
+		tea.WithMouseCellMotion(),
 	)
 	c.model.program = p
 
@@ -270,16 +312,17 @@ func (c *Controller) Start() {
 }
 
 func (m *uiModel) Init() tea.Cmd {
-	return m.spinner.Tick
+	return tea.Batch(m.spinner.Tick, cursorBlinkTick())
 }
 
 var ansiRegex = regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]`)
 
 func stripANSI(s string) string {
-	return ansiRegex.ReplaceAllString(s, "")
+	return textutil.CleanUTF8(ansiRegex.ReplaceAllString(s, ""))
 }
 
 func (m *uiModel) addMessage(role, content string) {
+	content = textutil.CleanUTF8(content)
 	m.messages = append(m.messages, ChatMessage{
 		Role:      role,
 		Content:   content,
@@ -289,6 +332,7 @@ func (m *uiModel) addMessage(role, content string) {
 }
 
 func (m *uiModel) addErrorMessage(content string) {
+	content = textutil.CleanUTF8(content)
 	m.messages = append(m.messages, ChatMessage{
 		Role:      "assistant",
 		Content:   content,
@@ -299,6 +343,7 @@ func (m *uiModel) addErrorMessage(content string) {
 }
 
 func (m *uiModel) appendToolOutput(toolName, content string) {
+	content = textutil.CleanUTF8(content)
 	content = strings.TrimRight(content, "\n")
 	if content == "" {
 		return
@@ -316,6 +361,54 @@ func (m *uiModel) appendToolOutput(toolName, content string) {
 		return
 	}
 	last.Content += "\n" + content
+}
+
+func (m *uiModel) findToolMessageIndex(toolCallID, toolName string) int {
+	if toolCallID != "" {
+		for i := len(m.messages) - 1; i >= 0; i-- {
+			msg := m.messages[i]
+			if msg.Role == "tool" && msg.ToolCallID == toolCallID {
+				return i
+			}
+		}
+	}
+	for i := len(m.messages) - 1; i >= 0; i-- {
+		msg := m.messages[i]
+		if msg.Role != "tool" || !msg.IsRunning {
+			continue
+		}
+		if toolName == "" || msg.ToolName == "" || msg.ToolName == toolName {
+			return i
+		}
+	}
+	if len(m.messages) > 0 && m.messages[len(m.messages)-1].Role == "tool" {
+		return len(m.messages) - 1
+	}
+	return -1
+}
+
+func (m *uiModel) anyToolRunning() bool {
+	for i := range m.messages {
+		if m.messages[i].Role == "tool" && m.messages[i].IsRunning {
+			return true
+		}
+	}
+	return false
+}
+
+func isGenericToolHeartbeat(toolName, content string) bool {
+	toolName = strings.ToLower(strings.TrimSpace(toolName))
+	content = strings.ToLower(strings.TrimSpace(content))
+	if content == "" {
+		return true
+	}
+	if content == "tool running" || content == "running" {
+		return true
+	}
+	if toolName != "" && (content == toolName+" running" || content == "running "+toolName) {
+		return true
+	}
+	return false
 }
 
 func (m *uiModel) appendAssistantResponse(content string) {
@@ -342,6 +435,44 @@ func (m *uiModel) appendAssistantResponse(content string) {
 	m.addMessage("assistant", content)
 }
 
+func (m *uiModel) transcriptAtBottom() bool {
+	return m.viewport.AtBottom() || m.viewport.PastBottom()
+}
+
+func (m *uiModel) restoreOrFollowTranscript(wasAtBottom bool, yOffset int) {
+	m.syncTranscriptContent()
+	if wasAtBottom {
+		m.viewport.GotoBottom()
+		return
+	}
+	m.viewport.SetYOffset(yOffset)
+}
+
+func (m *uiModel) transcriptVisibleHeight() int {
+	if m == nil {
+		return 1
+	}
+	inputH := 1
+	if m.editor != nil {
+		inputH = m.editor.PreferredHeight()
+	}
+	visibleH := m.height - inputH - 1
+	if m.notificationBar(m.width) != "" {
+		visibleH--
+	}
+	if m.migrationHintBar(m.width) != "" {
+		visibleH--
+	}
+	if visibleH < 1 {
+		visibleH = 1
+	}
+	return visibleH
+}
+
+func (m *uiModel) mouseInTranscript(msg tea.MouseMsg) bool {
+	return msg.Y >= 0 && msg.Y < m.transcriptVisibleHeight()
+}
+
 func (m *uiModel) viewModel() string {
 	if m.pager != nil {
 		return m.pager.View()
@@ -352,6 +483,7 @@ func (m *uiModel) viewModel() string {
 
 	wasAtBottom := m.viewport.AtBottom() || m.viewport.PastBottom()
 
+	m.editor.SetCursorVisible(m.cursorVisible)
 	inputH := m.editor.PreferredHeight()
 	inputRect := layout.Rect{W: m.width, H: inputH}
 	inputArea := m.editor.Draw(inputRect)
@@ -360,21 +492,12 @@ func (m *uiModel) viewModel() string {
 	migrationHint := m.migrationHintBar(mainW)
 
 	// Codex-cli style: transcript + composer + one-line footer.
-	visibleH := m.height - inputH - 1
-	if notification != "" {
-		visibleH--
-	}
-	if migrationHint != "" {
-		visibleH--
-	}
-	if visibleH < 1 {
-		visibleH = 1
-	}
+	visibleH := m.transcriptVisibleHeight()
 
 	m.viewport.Width = mainW
 	m.viewport.Height = visibleH
 	fullContent := m.renderAllMessages()
-	stickToBottom := wasAtBottom || strings.TrimSpace(m.editor.Value()) != "" || m.thinking
+	stickToBottom := wasAtBottom
 	showStartup := len(m.messages) == 0 && !m.thinking
 	m.viewport.SetContent(fullContent)
 	if showStartup {
@@ -484,15 +607,11 @@ func (m *uiModel) statusLine() string {
 	}
 
 	state := m.runStatus
-	if m.thinking {
+	if m.runStatus == "working" && !m.thinkingStart.IsZero() {
 		elapsed := time.Since(m.thinkingStart).Seconds()
 		state = fmt.Sprintf("working %.1fs", elapsed)
 	}
 	parts = append(parts, st.Status.Good.Render(state))
-
-	if m.toolExecuting != "" {
-		parts = append(parts, st.Status.Warning.Render(m.toolExecuting))
-	}
 
 	ctrlHint := "Ctrl+C exit"
 	if m.thinking || m.toolExecuting != "" {
@@ -608,6 +727,33 @@ func (m *uiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case MsgCursorBlinkTick:
+		m.cursorVisible = !m.cursorVisible
+		if m.editor != nil {
+			m.editor.SetCursorVisible(m.cursorVisible)
+		}
+		return m, cursorBlinkTick()
+
+	case MsgMouseAutoScrollTick:
+		m.mouseScrollTicking = false
+		if !m.mouseDragActive || m.mouseAutoScrollDir == 0 {
+			return m, nil
+		}
+		m.scrollTranscriptLines(m.mouseAutoScrollDir)
+		m.updateMouseSelectionAfterAutoScroll()
+		return m, m.ensureMouseAutoScroll()
+
+	case MsgAgentActivity:
+		wasAtBottom := m.transcriptAtBottom()
+		yOffset := m.viewport.YOffset
+		m.activityText = strings.TrimSpace(msg.Content)
+		m.thinking = true
+		if m.thinkingStart.IsZero() {
+			m.thinkingStart = time.Now()
+		}
+		m.restoreOrFollowTranscript(wasAtBottom, yOffset)
+		return m, spinnerCmd
+
 	case tea.KeyMsg:
 		if m.pager != nil {
 			closed, cmd := m.pager.Update(msg)
@@ -626,12 +772,14 @@ func (m *uiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, cmd
 		}
-		var cmd tea.Cmd
-		m.viewport, cmd = m.viewport.Update(msg)
-		return m, cmd
+		return m.handleMouse(msg)
 
 	case MsgStream:
+		msg.Content = textutil.CleanUTF8(msg.Content)
+		wasAtBottom := m.transcriptAtBottom()
+		yOffset := m.viewport.YOffset
 		m.thinking = false
+		m.activityText = ""
 		if len(m.messages) > 0 && m.messages[len(m.messages)-1].Role == "assistant" && !m.messages[len(m.messages)-1].IsError {
 			// 如果最后一条消息是助手回复，且不是错误，则追加
 			m.messages[len(m.messages)-1].Content += msg.Content
@@ -643,11 +791,15 @@ func (m *uiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				Timestamp: time.Now(),
 			})
 		}
-		m.viewport.GotoBottom()
+		m.restoreOrFollowTranscript(wasAtBottom, yOffset)
 		return m, nil
 
 	case MsgAgentDone:
+		msg.Response = textutil.CleanUTF8(msg.Response)
+		wasAtBottom := m.transcriptAtBottom()
+		yOffset := m.viewport.YOffset
 		m.thinking = false
+		m.activityText = ""
 		m.toolExecuting = ""
 		m.totalTokens += msg.Usage.InputTokens + msg.Usage.OutputTokens
 		if msg.Err != nil {
@@ -660,24 +812,38 @@ func (m *uiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.runStatus = "error"
 			m.addErrorMessage("Error: model returned an empty response without any error details. Check the provider credentials and endpoint, then retry.")
 		}
+		m.restoreOrFollowTranscript(wasAtBottom, yOffset)
 		return m, spinnerCmd
 
 	case MsgToolStart:
+		wasAtBottom := m.transcriptAtBottom()
+		yOffset := m.viewport.YOffset
+		m.thinking = false
+		m.activityText = ""
 		m.toolExecuting = msg.ToolName
 		m.addMessage("tool", "")
 		last := &m.messages[len(m.messages)-1]
 		last.ToolName = msg.ToolName
+		last.ToolCallID = msg.ToolCallID
 		last.ToolArgs = msg.Args
 		last.IsRunning = true
+		m.restoreOrFollowTranscript(wasAtBottom, yOffset)
 		return m, spinnerCmd
 
 	case MsgToolDone:
-		m.toolExecuting = ""
-		if len(m.messages) > 0 && m.messages[len(m.messages)-1].Role == "tool" {
-			last := &m.messages[len(m.messages)-1]
+		msg.Result = textutil.CleanUTF8(msg.Result)
+		wasAtBottom := m.transcriptAtBottom()
+		yOffset := m.viewport.YOffset
+		idx := m.findToolMessageIndex(msg.ToolCallID, msg.ToolName)
+		if idx >= 0 {
+			last := &m.messages[idx]
 			last.ToolName = msg.ToolName
+			if msg.ToolCallID != "" {
+				last.ToolCallID = msg.ToolCallID
+			}
 			last.Duration = msg.Duration
 			last.IsRunning = false
+			last.RunningDetail = ""
 			if msg.Err != nil {
 				existing := strings.TrimSpace(last.Content)
 				errText := fmt.Sprintf("%s error: %v", msg.ToolName, msg.Err)
@@ -694,24 +860,48 @@ func (m *uiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				last.IsError = false
 			}
 		}
+		if !m.anyToolRunning() {
+			m.toolExecuting = ""
+		}
+		m.restoreOrFollowTranscript(wasAtBottom, yOffset)
 		return m, spinnerCmd
 
 	case MsgToolOutput:
+		wasAtBottom := m.transcriptAtBottom()
+		yOffset := m.viewport.YOffset
 		m.thinking = false
+		m.activityText = ""
 		m.appendToolOutput(msg.ToolName, msg.Content)
-		m.viewport.GotoBottom()
+		m.restoreOrFollowTranscript(wasAtBottom, yOffset)
 		return m, spinnerCmd
 
 	case MsgToolHeartbeat:
 		if msg.ToolName != "" {
 			m.toolExecuting = msg.ToolName
 		}
-		m.statusMsg = msg.Content
+		idx := m.findToolMessageIndex(msg.ToolCallID, msg.ToolName)
+		if idx >= 0 {
+			last := &m.messages[idx]
+			if msg.ToolName == "" || last.ToolName == "" || last.ToolName == msg.ToolName {
+				if msg.ToolName != "" {
+					last.ToolName = msg.ToolName
+				}
+				if msg.ToolCallID != "" {
+					last.ToolCallID = msg.ToolCallID
+				}
+				if !isGenericToolHeartbeat(msg.ToolName, msg.Content) {
+					last.RunningDetail = msg.Content
+				}
+			}
+		}
 		return m, spinnerCmd
 
 	case MsgLearningEvent:
+		wasAtBottom := m.transcriptAtBottom()
+		yOffset := m.viewport.YOffset
 		m.statusMsg = msg.Content
 		m.addMessage("system", msg.Content)
+		m.restoreOrFollowTranscript(wasAtBottom, yOffset)
 		return m, nil
 
 	case MsgClearStatus:
@@ -730,6 +920,26 @@ func (m *uiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// Shift+Enter or Ctrl+J inserts a newline (multi-line input).
 	case tea.KeyCtrlJ:
 		m.editor.Update(msg)
+		return m, nil
+	case tea.KeyPgUp:
+		m.scrollTranscriptPage(-1)
+		return m, nil
+	case tea.KeyPgDown:
+		m.scrollTranscriptPage(1)
+		return m, nil
+	case tea.KeyCtrlUp:
+		m.scrollTranscriptLines(-3)
+		return m, nil
+	case tea.KeyCtrlDown:
+		m.scrollTranscriptLines(3)
+		return m, nil
+	case tea.KeyCtrlHome:
+		m.syncTranscriptContent()
+		m.viewport.GotoTop()
+		return m, nil
+	case tea.KeyCtrlEnd:
+		m.syncTranscriptContent()
+		m.viewport.GotoBottom()
 		return m, nil
 	case tea.KeyUp:
 		if m.navigateInputHistory(-1) {
@@ -759,6 +969,7 @@ func (m *uiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				if m.cancelFn != nil {
 					m.cancelFn()
 					m.thinking = false
+					m.activityText = ""
 					m.toolExecuting = ""
 					m.runStatus = "cancelled"
 					m.statusMsg = "Task cancelled by user."
@@ -797,6 +1008,7 @@ func (m *uiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.runStatus = "working"
 				m.thinkingStart = time.Now()
 				m.thinkingDots = 0
+				m.activityText = "Thinking about the response"
 				return m, tea.Batch(m.spinner.Tick, workingTick())
 			}
 
@@ -809,6 +1021,7 @@ func (m *uiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.runStatus = "working"
 			m.thinkingStart = time.Now()
 			m.thinkingDots = 0
+			m.activityText = "Thinking about the request"
 			ctx, cancel := context.WithCancel(context.Background())
 			m.cancelFn = cancel
 			return m, tea.Batch(m.runAgent(ctx, input), m.spinner.Tick, workingTick())
@@ -816,6 +1029,192 @@ func (m *uiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	m.editor.Update(msg)
 	return m, nil
+}
+
+func (m *uiModel) syncTranscriptContent() {
+	if m == nil {
+		return
+	}
+	m.viewport.SetContent(m.renderAllMessages())
+}
+
+func (m *uiModel) scrollTranscriptPage(direction int) {
+	m.syncTranscriptContent()
+	if direction < 0 {
+		m.viewport.PageUp()
+		return
+	}
+	if direction > 0 {
+		m.viewport.PageDown()
+	}
+}
+
+func (m *uiModel) scrollTranscriptLines(lines int) {
+	m.syncTranscriptContent()
+	if lines < 0 {
+		m.viewport.LineUp(-lines)
+		return
+	}
+	if lines > 0 {
+		m.viewport.LineDown(lines)
+	}
+}
+
+func (m *uiModel) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
+	switch msg.Button {
+	case tea.MouseButtonWheelUp:
+		if m.mouseInTranscript(msg) {
+			m.scrollTranscriptLines(-3)
+		}
+		return m, nil
+	case tea.MouseButtonWheelDown:
+		if m.mouseInTranscript(msg) {
+			m.scrollTranscriptLines(3)
+		}
+		return m, nil
+	}
+
+	switch msg.Action {
+	case tea.MouseActionPress:
+		switch {
+		case msg.Button == tea.MouseButtonLeft && m.mouseInTranscript(msg):
+			m.mouseDragActive = true
+			m.mouseAutoScrollDir = 0
+			m.mouseSelection = false
+			m.mouseSelectAnchor = m.transcriptLineAtMouseY(msg.Y)
+			m.mouseSelectFocus = m.mouseSelectAnchor
+		case msg.Button == tea.MouseButtonRight && m.mouseSelection:
+			return m, m.copyMouseSelection()
+		}
+		return m, nil
+	case tea.MouseActionMotion:
+		if !m.mouseDragActive {
+			return m, nil
+		}
+		m.updateMouseSelection(msg.Y)
+		m.mouseAutoScrollDir = m.mouseEdgeScrollDirection(msg.Y)
+		if m.mouseAutoScrollDir != 0 {
+			m.scrollTranscriptLines(m.mouseAutoScrollDir)
+			m.updateMouseSelectionAfterAutoScroll()
+			return m, m.ensureMouseAutoScroll()
+		}
+		return m, nil
+	case tea.MouseActionRelease:
+		m.mouseDragActive = false
+		m.mouseAutoScrollDir = 0
+		if m.mouseSelectAnchor == m.mouseSelectFocus {
+			m.mouseSelection = false
+		}
+		return m, nil
+	default:
+		return m, nil
+	}
+}
+
+func (m *uiModel) transcriptLineAtMouseY(y int) int {
+	height := m.transcriptVisibleHeight()
+	if y < 0 {
+		y = 0
+	}
+	if y >= height {
+		y = height - 1
+	}
+	return m.viewport.YOffset + y
+}
+
+func (m *uiModel) updateMouseSelection(y int) {
+	focus := m.transcriptLineAtMouseY(y)
+	m.mouseSelectFocus = focus
+	if focus != m.mouseSelectAnchor {
+		m.mouseSelection = true
+	}
+}
+
+func (m *uiModel) updateMouseSelectionAfterAutoScroll() {
+	if !m.mouseDragActive {
+		return
+	}
+	if m.mouseAutoScrollDir < 0 {
+		m.mouseSelectFocus = m.viewport.YOffset
+	} else if m.mouseAutoScrollDir > 0 {
+		m.mouseSelectFocus = m.viewport.YOffset + m.transcriptVisibleHeight() - 1
+	}
+	if m.mouseSelectFocus != m.mouseSelectAnchor {
+		m.mouseSelection = true
+	}
+}
+
+func (m *uiModel) mouseEdgeScrollDirection(y int) int {
+	height := m.transcriptVisibleHeight()
+	switch {
+	case y <= 0:
+		return -4
+	case y <= 2:
+		return -2
+	case y >= height-1:
+		return 4
+	case y >= height-3:
+		return 2
+	default:
+		return 0
+	}
+}
+
+func (m *uiModel) ensureMouseAutoScroll() tea.Cmd {
+	if m.mouseScrollTicking || !m.mouseDragActive || m.mouseAutoScrollDir == 0 {
+		return nil
+	}
+	m.mouseScrollTicking = true
+	return mouseAutoScrollTick()
+}
+
+func (m *uiModel) copyMouseSelection() tea.Cmd {
+	text := m.selectedTranscriptText()
+	if strings.TrimSpace(text) == "" {
+		m.mouseSelection = false
+		m.statusMsg = ""
+		return nil
+	}
+	if err := copyToClipboard(text); err != nil {
+		m.statusMsg = fmt.Sprintf("Copy failed: %v", err)
+	} else {
+		m.statusMsg = "Copied selection to clipboard."
+		m.mouseSelection = false
+	}
+	return tea.Tick(2*time.Second, func(t time.Time) tea.Msg {
+		return MsgClearStatus{}
+	})
+}
+
+func (m *uiModel) selectedTranscriptText() string {
+	if !m.mouseSelection {
+		return ""
+	}
+	start, end := m.mouseSelectionRange()
+	selectionWasActive := m.mouseSelection
+	m.mouseSelection = false
+	content := m.renderAllMessages()
+	m.mouseSelection = selectionWasActive
+
+	lines := strings.Split(stripANSI(content), "\n")
+	if start < 0 {
+		start = 0
+	}
+	if end >= len(lines) {
+		end = len(lines) - 1
+	}
+	if start > end || start >= len(lines) {
+		return ""
+	}
+	return strings.TrimRight(strings.Join(lines[start:end+1], "\n"), "\n")
+}
+
+func (m *uiModel) mouseSelectionRange() (int, int) {
+	start, end := m.mouseSelectAnchor, m.mouseSelectFocus
+	if start > end {
+		start, end = end, start
+	}
+	return start, end
 }
 
 func (m *uiModel) resolveClarifyResponse(input string) string {
@@ -984,8 +1383,9 @@ type MsgStream struct {
 }
 
 type MsgToolStart struct {
-	ToolName string
-	Args     string
+	ToolName   string
+	ToolCallID string
+	Args       string
 }
 
 type MsgToolOutput struct {
@@ -994,15 +1394,17 @@ type MsgToolOutput struct {
 }
 
 type MsgToolHeartbeat struct {
-	ToolName string
-	Content  string
+	ToolName   string
+	ToolCallID string
+	Content    string
 }
 
 type MsgToolDone struct {
-	ToolName string
-	Result   string
-	Err      error
-	Duration float64
+	ToolName   string
+	ToolCallID string
+	Result     string
+	Err        error
+	Duration   float64
 }
 
 type MsgLearningEvent struct {
@@ -1018,9 +1420,14 @@ var shortcutHelpRows = []helpRow{
 	{Left: "Enter", Right: "Submit the current message"},
 	{Left: "Shift+Enter", Right: "Insert a newline"},
 	{Left: "Ctrl+J", Right: "Insert a newline"},
+	{Left: "PageUp/PageDown", Right: "Scroll the transcript by one page"},
+	{Left: "Ctrl+Up/Ctrl+Down", Right: "Scroll the transcript by a few lines"},
+	{Left: "Ctrl+Home/Ctrl+End", Right: "Jump to the top or bottom of the transcript"},
+	{Left: "Mouse wheel", Right: "Scroll the transcript when the pointer is over chat"},
+	{Left: "Mouse drag edge", Right: "Auto-scroll while dragging near the transcript edge"},
 	{Left: "Ctrl+C", Right: "Clear input, cancel a running task, close help, or exit"},
 	{Left: "Ctrl+L", Right: "Clear the current transcript view"},
-	{Left: "Mouse drag", Right: "Use your terminal's native text selection"},
+	{Left: "Shift+mouse drag", Right: "Use terminal-native text selection when mouse mode is active"},
 }
 
 var _ tea.Model = (*uiModel)(nil)

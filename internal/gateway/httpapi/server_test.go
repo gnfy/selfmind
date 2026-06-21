@@ -11,6 +11,7 @@ import (
 
 	"selfmind/internal/control"
 	"selfmind/internal/gateway/api"
+	"selfmind/internal/gateway/router"
 )
 
 func TestMessageRequestFromFeishuEvent(t *testing.T) {
@@ -334,6 +335,221 @@ func TestGatewayContextIncludesAttachments(t *testing.T) {
 		if !strings.Contains(content, want) {
 			t.Fatalf("context missing %q:\n%s", want, content)
 		}
+	}
+}
+
+func TestPrepareRequestWorkspaceRegistersCLICWD(t *testing.T) {
+	store, err := control.OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	ctx := httptest.NewRequest(http.MethodGet, "/", nil).Context()
+	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Local User")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cwd := t.TempDir()
+	daemon := &Server{Control: store, DefaultTenantID: "default"}
+	req := api.MessageRequest{
+		Platform:       "cli",
+		PlatformUserID: "local",
+		Channel:        "cli",
+		ClientCWD:      cwd,
+	}
+
+	ws, err := daemon.prepareRequestWorkspace(ctx, identity, &req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ws == nil || ws.LocalPath != cwd || req.WorkspaceID == "" {
+		t.Fatalf("workspace = %+v, req = %+v", ws, req)
+	}
+	current, err := store.CurrentWorkspace(ctx, identity.TenantID, identity.PersonID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current == nil || current.ID != ws.ID {
+		t.Fatalf("current workspace = %+v, want %s", current, ws.ID)
+	}
+}
+
+func TestPrepareRequestWorkspaceIgnoresIMClientCWD(t *testing.T) {
+	store, err := control.OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	ctx := httptest.NewRequest(http.MethodGet, "/", nil).Context()
+	identity, err := store.ResolveOrCreateAccount(ctx, "default", "weixin", "wx_user", "Weixin User")
+	if err != nil {
+		t.Fatal(err)
+	}
+	daemon := &Server{Control: store, DefaultTenantID: "default"}
+	req := api.MessageRequest{
+		Platform:       "weixin",
+		PlatformUserID: "wx_user",
+		Channel:        "wx_chat",
+		ClientCWD:      t.TempDir(),
+	}
+
+	ws, err := daemon.prepareRequestWorkspace(ctx, identity, &req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ws != nil || req.WorkspaceID != "" {
+		t.Fatalf("IM should not register client cwd: ws=%+v req=%+v", ws, req)
+	}
+	workspaces, err := store.ListWorkspaces(ctx, identity.TenantID, identity.PersonID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(workspaces) != 0 {
+		t.Fatalf("unexpected workspaces: %+v", workspaces)
+	}
+}
+
+func TestResolveTaskBindsEmptyCurrentTaskToCLIWorkspace(t *testing.T) {
+	store, err := control.OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	ctx := httptest.NewRequest(http.MethodGet, "/", nil).Context()
+	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Local User")
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := store.CreateTask(ctx, control.TaskCreate{
+		TenantID: identity.TenantID,
+		PersonID: identity.PersonID,
+		Title:    "Existing task",
+		Channel:  "cli",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if task.WorkspaceID != "" {
+		t.Fatalf("test setup expected empty workspace: %+v", task)
+	}
+
+	daemon := &Server{Control: store, DefaultTenantID: "default"}
+	req := api.MessageRequest{
+		Platform:       "cli",
+		PlatformUserID: "local",
+		Channel:        "cli",
+		ClientCWD:      t.TempDir(),
+		Content:        "inspect current project",
+	}
+	if _, err := daemon.prepareRequestWorkspace(ctx, identity, &req); err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := daemon.resolveTask(ctx, identity, req, router.IntentResult{Intent: router.IntentTask})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved == nil || resolved.ID != task.ID || resolved.WorkspaceID != req.WorkspaceID {
+		t.Fatalf("resolved task = %+v, req workspace = %s", resolved, req.WorkspaceID)
+	}
+}
+
+func TestDirectCasualMessageDoesNotCreateTask(t *testing.T) {
+	store, err := control.OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	daemon := &Server{Control: store, DefaultTenantID: "default"}
+	resp, status := daemon.ProcessMessage(httptest.NewRequest(http.MethodPost, "/", nil).Context(), api.MessageRequest{
+		Platform:       "cli",
+		PlatformUserID: "local",
+		Channel:        "cli",
+		Content:        "\u4f60\u662f\u8c01\uff1f",
+	})
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, resp = %+v", status, resp)
+	}
+	if resp.Error != "" || !strings.Contains(resp.Content, "SelfMind") {
+		t.Fatalf("resp = %+v", resp)
+	}
+	current, err := store.CurrentTask(httptest.NewRequest(http.MethodGet, "/", nil).Context(), "default", resp.Identity.PersonID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current != nil {
+		t.Fatalf("casual message created task: %+v", current)
+	}
+}
+
+func TestContinueWithoutTaskReturnsUserMessage(t *testing.T) {
+	store, err := control.OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	daemon := &Server{Control: store, DefaultTenantID: "default"}
+	resp, status := daemon.ProcessMessage(httptest.NewRequest(http.MethodPost, "/", nil).Context(), api.MessageRequest{
+		Platform:       "cli",
+		PlatformUserID: "local",
+		Channel:        "cli",
+		Content:        "\u7ee7\u7eed",
+	})
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, resp = %+v", status, resp)
+	}
+	if resp.Error != "" || !strings.Contains(resp.Content, "no task to continue") {
+		t.Fatalf("resp = %+v", resp)
+	}
+}
+
+func TestResumeContextIncludesLatestHandoff(t *testing.T) {
+	store, err := control.OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	ctx := httptest.NewRequest(http.MethodGet, "/", nil).Context()
+	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Local User")
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := store.CreateTask(ctx, control.TaskCreate{
+		TenantID: identity.TenantID,
+		PersonID: identity.PersonID,
+		Title:    "Continue work",
+		Channel:  "cli",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.SaveHandoff(ctx, control.Handoff{
+		TaskID:       task.ID,
+		Summary:      "patched gateway",
+		DoneItems:    []string{"wired store"},
+		NextSteps:    []string{"run tests"},
+		ChangedFiles: []string{"internal/gateway/httpapi/server.go"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	daemon := &Server{Control: store, DefaultTenantID: "default"}
+	content := daemon.withResumeContext(ctx, identity, task, nil, router.IntentResult{Intent: router.IntentContinue, Confidence: 0.9, Reason: "test"}, "continue")
+	for _, want := range []string{"[SelfMind resume context]", "patched gateway", "wired store", "run tests", "internal/gateway/httpapi/server.go"} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("resume context missing %q:\n%s", want, content)
+		}
+	}
+	events, err := store.ListTaskEvents(ctx, task.ID, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) == 0 || events[0].Type != "run.resumed" {
+		t.Fatalf("run.resumed event missing: %+v", events)
 	}
 }
 

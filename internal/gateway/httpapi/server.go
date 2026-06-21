@@ -15,6 +15,8 @@ import (
 	"selfmind/internal/gateway/api"
 	"selfmind/internal/gateway/delivery"
 	"selfmind/internal/gateway/router"
+	"selfmind/internal/kernel"
+	"selfmind/internal/platform/textutil"
 	"selfmind/internal/tools"
 )
 
@@ -117,6 +119,14 @@ func (d *Server) ProcessMessage(ctx context.Context, req api.MessageRequest) (ap
 		}, http.StatusServiceUnavailable
 	}
 
+	intent := d.classifyIntent(ctx, req.Content, req.Channel)
+	if handled, resp := d.tryHandleIntentClarification(identity, intent); handled {
+		return resp, http.StatusOK
+	}
+	if handled, resp := d.tryHandleDirectIntent(ctx, identity, req, intent); handled {
+		return resp, http.StatusOK
+	}
+
 	if running := d.currentActive(identity.PersonID); running != nil {
 		return api.MessageResponse{
 			Identity: identity,
@@ -126,7 +136,7 @@ func (d *Server) ProcessMessage(ctx context.Context, req api.MessageRequest) (ap
 	}
 
 	if req.Async {
-		return d.startAsyncRun(identity, req), http.StatusOK
+		return d.startAsyncRun(identity, req, intent), http.StatusOK
 	}
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -142,12 +152,82 @@ func (d *Server) ProcessMessage(ctx context.Context, req api.MessageRequest) (ap
 	}
 	defer d.endActive(identity.PersonID)
 
-	return d.runMessage(runCtx, identity, req)
+	return d.runMessage(runCtx, identity, req, intent)
 }
 
-func (d *Server) runMessage(ctx context.Context, identity *control.IdentityContext, req api.MessageRequest) (api.MessageResponse, int) {
-	task, err := d.resolveTask(ctx, identity, req)
+func (d *Server) prepareRequestWorkspace(ctx context.Context, identity *control.IdentityContext, req *api.MessageRequest) (*control.Workspace, error) {
+	if d == nil || d.Control == nil || identity == nil || req == nil {
+		return nil, nil
+	}
+	if strings.TrimSpace(req.WorkspaceID) != "" {
+		return d.Control.GetWorkspace(ctx, identity.TenantID, req.WorkspaceID)
+	}
+	if !isLocalCLIRequest(*req) {
+		return nil, nil
+	}
+	cwd := cleanClientCWD(req.ClientCWD)
+	if cwd == "" {
+		return nil, nil
+	}
+	info, err := os.Stat(cwd)
+	if err != nil || !info.IsDir() {
+		return nil, nil
+	}
+	ws, err := d.Control.RegisterWorkspace(ctx, control.Workspace{
+		TenantID:      identity.TenantID,
+		OwnerPersonID: identity.PersonID,
+		Name:          filepath.Base(cwd),
+		LocalPath:     cwd,
+		AllowedRoots:  []string{cwd},
+	})
 	if err != nil {
+		return nil, err
+	}
+	if ws != nil {
+		req.WorkspaceID = ws.ID
+	}
+	return ws, nil
+}
+
+func cleanClientCWD(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" || strings.ContainsAny(raw, "\x00\r\n") {
+		return ""
+	}
+	clean := filepath.Clean(raw)
+	if !filepath.IsAbs(clean) {
+		abs, err := filepath.Abs(clean)
+		if err != nil {
+			return ""
+		}
+		clean = abs
+	}
+	return clean
+}
+
+func isLocalCLIRequest(req api.MessageRequest) bool {
+	platform := strings.ToLower(strings.TrimSpace(req.Platform))
+	channel := strings.ToLower(strings.TrimSpace(req.Channel))
+	switch platform {
+	case "cli", "terminal", "tui":
+		return true
+	}
+	switch channel {
+	case "cli", "terminal", "tui":
+		return true
+	}
+	return false
+}
+
+func (d *Server) runMessage(ctx context.Context, identity *control.IdentityContext, req api.MessageRequest, intent router.IntentResult) (api.MessageResponse, int) {
+	if _, err := d.prepareRequestWorkspace(ctx, identity, &req); err != nil {
+		return api.MessageResponse{Identity: identity, Error: err.Error()}, http.StatusInternalServerError
+	}
+	task, err := d.resolveTask(ctx, identity, req, intent)
+	if err != nil {
+		if strings.Contains(err.Error(), "no task to continue") {
+			return api.MessageResponse{Identity: identity, Content: err.Error()}, http.StatusOK
+		}
 		return api.MessageResponse{Identity: identity, Error: err.Error()}, http.StatusInternalServerError
 	}
 	_ = d.Control.RecordChannelMessage(ctx, *identity, req.Channel, task.ID, "user", req.Content)
@@ -171,7 +251,15 @@ func (d *Server) runMessage(ctx context.Context, identity *control.IdentityConte
 	workspace, _ := d.workspaceForTask(ctx, identity, task, req)
 	cleanupScope := d.installExecutionScope(identity, task, run, workspace)
 	defer cleanupScope()
+	if workspace != nil && workspace.LocalPath != "" {
+		ctx = kernel.WithWorkspaceContext(ctx, kernel.WorkspaceContext{
+			ID:   workspace.ID,
+			Root: workspace.LocalPath,
+		})
+	}
 	agentInput := d.withGatewayContext(req.Content, identity, task, workspace, req.Attachments)
+	agentInput = d.withResumeContext(ctx, identity, task, run, intent, agentInput)
+	ctx = kernel.WithTaskStrategy(ctx, taskStrategyForRequest(req, intent))
 
 	if d.Gateway == nil {
 		err := fmt.Errorf("gateway is not configured")
@@ -180,7 +268,7 @@ func (d *Server) runMessage(ctx context.Context, identity *control.IdentityConte
 		return api.MessageResponse{Identity: identity, Task: task, Run: run, Error: err.Error()}, http.StatusInternalServerError
 	}
 
-	resp, err := d.Gateway.HandleWithEvents(ctx, identity.PersonID, req.Channel, agentInput)
+	resp, err := d.Gateway.RunAgentWithEvents(ctx, identity.PersonID, req.Channel, agentInput)
 	if err != nil {
 		status := "failed"
 		taskStatus := "blocked"
@@ -312,7 +400,7 @@ func artifactName(uri string) string {
 	return name
 }
 
-func (d *Server) startAsyncRun(identity *control.IdentityContext, req api.MessageRequest) api.MessageResponse {
+func (d *Server) startAsyncRun(identity *control.IdentityContext, req api.MessageRequest, intent router.IntentResult) api.MessageResponse {
 	active := &activeRun{
 		TenantID:  identity.TenantID,
 		PersonID:  identity.PersonID,
@@ -331,7 +419,7 @@ func (d *Server) startAsyncRun(identity *control.IdentityContext, req api.Messag
 		defer d.endActive(identity.PersonID)
 		defer runCancel()
 		defer stopProgressNotices()
-		resp, _ := d.runMessage(runCtx, identity, req)
+		resp, _ := d.runMessage(runCtx, identity, req, intent)
 		d.deliverAsyncResult(context.Background(), identity, req, resp)
 	}()
 
@@ -346,19 +434,26 @@ func (d *Server) startAsyncRun(identity *control.IdentityContext, req api.Messag
 	}
 }
 
-func (d *Server) resolveTask(ctx context.Context, identity *control.IdentityContext, req api.MessageRequest) (*control.Task, error) {
+func (d *Server) resolveTask(ctx context.Context, identity *control.IdentityContext, req api.MessageRequest, intent router.IntentResult) (*control.Task, error) {
 	if req.TaskID != "" {
 		task, err := d.Control.GetTask(ctx, identity.TenantID, req.TaskID)
 		if err != nil || task != nil {
-			return task, err
+			return d.bindTaskWorkspaceIfMissing(ctx, identity, task, req, err)
 		}
+	}
+	if intent.Intent == router.IntentContinue {
+		task, err := d.resolveContinueTask(ctx, identity)
+		if err != nil || task != nil {
+			return d.bindTaskWorkspaceIfMissing(ctx, identity, task, req, err)
+		}
+		return nil, fmt.Errorf("no task to continue; start a new task or use /resume <task_id>")
 	}
 	task, err := d.Control.CurrentTask(ctx, identity.TenantID, identity.PersonID)
 	if err != nil {
 		return nil, err
 	}
 	if task != nil {
-		return task, nil
+		return d.bindTaskWorkspaceIfMissing(ctx, identity, task, req, nil)
 	}
 	workspaceID := req.WorkspaceID
 	if workspaceID == "" {
@@ -373,6 +468,23 @@ func (d *Server) resolveTask(ctx context.Context, identity *control.IdentityCont
 		Title:       titleFromInput(req.Content),
 		Channel:     req.Channel,
 	})
+}
+
+func (d *Server) bindTaskWorkspaceIfMissing(ctx context.Context, identity *control.IdentityContext, task *control.Task, req api.MessageRequest, priorErr error) (*control.Task, error) {
+	if priorErr != nil || task == nil || identity == nil {
+		return task, priorErr
+	}
+	if task.WorkspaceID != "" || strings.TrimSpace(req.WorkspaceID) == "" {
+		return task, nil
+	}
+	if err := d.Control.SetTaskWorkspace(ctx, identity.TenantID, task.ID, req.WorkspaceID); err != nil {
+		return nil, err
+	}
+	refreshed, err := d.Control.GetTask(ctx, identity.TenantID, task.ID)
+	if err != nil || refreshed == nil {
+		return task, err
+	}
+	return refreshed, nil
 }
 
 func (d *Server) workspaceForTask(ctx context.Context, identity *control.IdentityContext, task *control.Task, req api.MessageRequest) (*control.Workspace, error) {
@@ -532,7 +644,9 @@ func (d *Server) withGatewayContext(input string, identity *control.IdentityCont
 	if workspace != nil && workspace.LocalPath != "" {
 		fmt.Fprintf(&sb, "workspace_id: %s\n", workspace.ID)
 		fmt.Fprintf(&sb, "workspace_root: %s\n", workspace.LocalPath)
-		sb.WriteString("Use workspace_root as the default cwd. Do not access files outside workspace allowed roots.\n")
+		sb.WriteString("Use workspace_root as the default cwd for local file tools.\n")
+		sb.WriteString("When the user says current project, this repo, this codebase, or names a project without an explicit path, inspect workspace_root first.\n")
+		sb.WriteString("Resolve relative paths against workspace_root. Do not access files outside workspace allowed roots.\n")
 	}
 	if len(attachments) > 0 {
 		sb.WriteString("attachments:\n")
@@ -774,7 +888,7 @@ func truncate(value string, max int) string {
 	if len(value) <= max {
 		return value
 	}
-	return value[:max] + "..."
+	return textutil.TruncateBytes(value, max) + "..."
 }
 
 func titleFromInput(input string) string {

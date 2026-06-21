@@ -671,6 +671,21 @@ func (s *Store) GetTask(ctx context.Context, tenantID, taskID string) (*Task, er
 	return &t, nil
 }
 
+func (s *Store) SetTaskWorkspace(ctx context.Context, tenantID, taskID, workspaceID string) error {
+	if strings.TrimSpace(taskID) == "" {
+		return fmt.Errorf("task id is required")
+	}
+	if strings.TrimSpace(workspaceID) == "" {
+		return fmt.Errorf("workspace id is required")
+	}
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE tasks
+		 SET workspace_id = ?, updated_at = ?
+		 WHERE tenant_id = ? AND id = ? AND COALESCE(workspace_id, '') = ''`,
+		workspaceID, time.Now().Unix(), normalizeTenant(tenantID), taskID)
+	return err
+}
+
 func (s *Store) ListTasks(ctx context.Context, tenantID, personID string, limit int) ([]Task, error) {
 	if limit <= 0 {
 		limit = 20

@@ -8,6 +8,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"selfmind/internal/app"
+	"selfmind/internal/gateway/api"
 	"selfmind/internal/kernel"
 	"selfmind/internal/tools"
 )
@@ -71,7 +72,14 @@ func (m *uiModel) handleStatus() tea.Cmd {
 		status := fmt.Sprintf("## System Status\n\n- **Provider**: %s\n- **Model**: %s\n- **Uptime**: %s\n- **Token Usage**: %s\n",
 			m.providerName, m.modelName, formatDuration(elapsed), usage)
 
-		if m.gateway != nil {
+		if m.messageProcessor != nil {
+			resp, _ := m.messageProcessor(context.Background(), m.controlMessageRequest("/status"))
+			if resp.Error != "" {
+				status += fmt.Sprintf("- **Current Task**: error: %s\n", resp.Error)
+			} else if strings.TrimSpace(resp.Content) != "" {
+				status += "\n### Task Status\n\n" + resp.Content + "\n"
+			}
+		} else if m.gateway != nil {
 			t, err := m.gateway.GetCurrentTaskInfo(context.Background(), m.tenantID)
 			if err == nil && t != nil {
 				status += fmt.Sprintf("- **Current Task**: [%d] %s\n", t.ID, t.Title)
@@ -99,6 +107,13 @@ func (m *uiModel) handleStatus() tea.Cmd {
 
 func (m *uiModel) handleTasks() tea.Cmd {
 	return func() tea.Msg {
+		if m.messageProcessor != nil {
+			resp, _ := m.messageProcessor(context.Background(), m.controlMessageRequest("/tasks"))
+			if resp.Error != "" {
+				return MsgAgentDone{Response: fmt.Sprintf("Error fetching tasks: %s", resp.Error)}
+			}
+			return MsgAgentDone{Response: resp.Content}
+		}
 		if m.gateway == nil {
 			return MsgAgentDone{Response: "Gateway not initialized, cannot list tasks."}
 		}
@@ -123,6 +138,18 @@ func (m *uiModel) handleTasks() tea.Cmd {
 				status, t.ID, t.Title, t.CreatedAt.Format("01-02 15:04")))
 		}
 		return MsgAgentDone{Response: sb.String()}
+	}
+}
+
+func (m *uiModel) controlMessageRequest(content string) api.MessageRequest {
+	return api.MessageRequest{
+		TenantID:       m.tenantID,
+		Platform:       "cli",
+		PlatformUserID: cliPlatformUserID(),
+		DisplayName:    cliDisplayName(),
+		Channel:        m.channel,
+		Content:        content,
+		ClientCWD:      currentWorkingDir(),
 	}
 }
 

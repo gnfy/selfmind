@@ -44,6 +44,7 @@ type MessageRequest struct {
 	Channel        string              `json:"channel"`
 	Content        string              `json:"content"`
 	WorkspaceID    string              `json:"workspace_id"`
+	ClientCWD      string              `json:"client_cwd,omitempty"`
 	TaskID         string              `json:"task_id"`
 	Async          bool                `json:"async"`
 	Attachments    []MessageAttachment `json:"attachments,omitempty"`

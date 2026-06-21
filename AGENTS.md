@@ -167,6 +167,47 @@ repo:
 - Tool calling should stay Hermes-like: pass tool schemas as native LLM
   `tool_calls` where the provider supports it, preserve `tool_call_id` on
   tool result messages, and keep `[TOOL:...]` only as a compatibility fallback.
+- Tool exposure should be planned per turn, not left entirely to the model.
+  Stable coding examples, explanations, and learning/advice requests should not
+  expose `web_search`/`web_extract` unless the user explicitly asks to search,
+  browse, inspect a URL, check official docs, or retrieve current/latest
+  external information.
+- Per-turn tool policy is centralized in `internal/kernel/task_strategy.go`.
+  Future agent work should extend `TaskStrategy` classification, `ToolMode`,
+  `PlanPolicy`, and `WebPolicy` there instead of adding ad hoc keyword checks
+  in CLI, IM, provider adapters, or prompt-building code. The same strategy
+  must filter native tool schemas and legacy `[TOOL:...]` fallback calls before
+  execution.
+- Gateway intent routing is centralized in `internal/gateway/router/intent*.go`
+  and returns `router.IntentResult`. Keep rule-based cues configurable through
+  `intent.rules` in `config.yaml`; use `intent.mode: rules|hybrid|llm` to
+  control whether the lightweight LLM classifier participates. Do not add new
+  task/chat/continue keyword checks in TUI, IM adapters, or HTTP handlers.
+- Low-confidence intent should ask a short clarification question instead of
+  silently creating a task or dropping the message into casual chat. This is
+  especially important for IM/SaaS usage, where an accidental task can pollute a
+  shared person/task timeline.
+- The gateway must build `TaskStrategy` from the original user content before
+  adding daemon, workspace, attachment, task, or resume context. Pass it to the
+  agent with `kernel.WithTaskStrategy`; otherwise simple coding examples can be
+  misclassified as repo tasks just because the gateway prompt contains
+  `workspace_root` or `task_id`.
+- Use `update_plan` only when the selected `TaskStrategy.PlanPolicy` permits
+  it. Simple identity/model questions, one-shot code snippets, examples, and
+  stable explanations should answer directly. Repo inspection, debugging,
+  CI/CD, multi-file edits, and long verification tasks should expose local
+  tools and visible progress; debugging and CI/CD should require a plan.
+- Long-running agent work must emit structured progress events. Use
+  `agent.thinking` for model-decision phases, `tool.started`/`tool.output`/
+  `tool.completed` for tool execution, and `turn.completed` for final state.
+  CLI/TUI should show these steps live; IM channels should keep token streams
+  collapsed but preserve working notices, event records, and failure summaries.
+- Tool results must be packaged through the Agent result envelope before they
+  reach the model, TUI, run events, or future artifacts. Keep raw tool output,
+  model-bounded content, and user-visible preview as separate surfaces; do not
+  reuse one truncated string for all three. UI/event previews should be compact
+  and UTF-8 safe, while model content can use a bounded head/tail view with a
+  clear note when the full output is too large for context.
 - Tool and command output shown in CLI/TUI should be human-readable. Do not dump
   raw JSON payloads into the transcript unless the user explicitly asked for
   raw protocol details. Summarize plan updates, tool calls, and errors in a
@@ -216,6 +257,8 @@ repo:
 - `internal/gateway/cli/slash_commands.go`: slash command metadata and
   dispatcher registry shared by help/editor/dispatch.
 - `internal/kernel/event_context.go`: per-run agent event sink injection.
+- `internal/kernel/task_strategy.go`: per-turn task classification and tool,
+  plan, web, and progress policy shared by CLI/IM/web entrypoints.
 - `internal/gateway/httpapi/outcome.go`: structured run outcome extraction for
   task status, handoff, and IM/CLI status cards.
 - `internal/gateway/cli/controller.go`: Bubble Tea state orchestration. Keep

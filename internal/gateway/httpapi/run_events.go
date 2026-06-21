@@ -57,6 +57,7 @@ func (d *Server) startAsyncProgressNotices(ctx context.Context, identity *contro
 			case <-ticker.C:
 				elapsed := time.Since(start).Round(time.Second)
 				content := fmt.Sprintf("SelfMind 仍在处理，已用时 %s。完成后我会把结果发到这里。", elapsed)
+				content = fmt.Sprintf("SelfMind is still working (%s elapsed). I will send the result here when it finishes.", elapsed)
 				_ = d.Delivery.EnqueueAndTry(context.Background(), delivery.Message{
 					TenantID:       identity.TenantID,
 					PersonID:       identity.PersonID,
@@ -124,8 +125,12 @@ func (d *Server) aggregateGatewayResponse(ctx context.Context, channel string, t
 	var usage llm.UsageStats
 	sawStream := false
 	var summary router.EventSummary
+	observer := streamObserverFromContext(ctx)
 	for event := range resp.Stream {
 		if event.EventType != "" {
+			if observer != nil {
+				observer(event)
+			}
 			summary.Observe(event)
 			d.recordStreamEvent(ctx, channel, task, run, event)
 			if event.EventType == "stream" {
@@ -141,6 +146,9 @@ func (d *Server) aggregateGatewayResponse(ctx context.Context, channel string, t
 			return content.String(), usage, event.Err
 		}
 		if event.Content != "" && !sawStream {
+			if observer != nil {
+				observer(llm.StreamEvent{EventType: "stream", Content: event.Content})
+			}
 			content.WriteString(event.Content)
 		}
 		if event.Usage != nil {
@@ -170,9 +178,15 @@ func (d *Server) recordStreamEvent(ctx context.Context, channel string, task *co
 	switch eventType {
 	case "tool.started":
 		payload["tool"] = event.ToolName
+		if event.ToolCallID != "" {
+			payload["tool_call_id"] = event.ToolCallID
+		}
 		payload["args"] = tools.RedactSensitive(event.ToolArgs)
 	case "tool.completed":
 		payload["tool"] = event.ToolName
+		if event.ToolCallID != "" {
+			payload["tool_call_id"] = event.ToolCallID
+		}
 		payload["result"] = tools.RedactSensitive(truncate(event.ToolResult, 1000))
 		payload["duration_seconds"] = event.DurationSeconds
 		if event.Err != nil {
@@ -185,7 +199,7 @@ func (d *Server) recordStreamEvent(ctx context.Context, channel string, task *co
 		eventType = "plan.updated"
 	case "run.outcome":
 		eventType = "run.outcome"
-	case "turn.started", "turn.completed", "token.updated":
+	case "agent.thinking", "agent.step", "strategy.selected", "turn.started", "turn.completed", "token.updated":
 		if event.Content != "" {
 			payload["message"] = tools.RedactSensitive(event.Content)
 		}

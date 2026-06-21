@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"selfmind/internal/kernel"
+	"selfmind/internal/platform/textutil"
 )
 
 // ---- 内置工具实现 ----
@@ -40,6 +41,16 @@ func NewListFilesTool() *ListFilesTool {
 						Description: "Whether to list recursively",
 						Default:     false,
 					},
+					"max_entries": {
+						Type:        "integer",
+						Description: "Maximum entries to return before truncating",
+						Default:     300,
+					},
+					"timeout": {
+						Type:        "integer",
+						Description: "Timeout in seconds for recursive listing",
+						Default:     10,
+					},
 				},
 				Required: []string{},
 			},
@@ -53,29 +64,108 @@ func (t *ListFilesTool) Execute(args map[string]interface{}) (string, error) {
 		path = p
 	}
 	recursive, _ := args["recursive"].(bool)
+	maxEntries := intArg(args, "max_entries", 300)
+	if maxEntries <= 0 {
+		maxEntries = 300
+	}
+	timeoutSeconds := intArg(args, "timeout", 10)
+	if timeoutSeconds <= 0 {
+		timeoutSeconds = 10
+	}
+
+	parentCtx := contextFromArgs(args)
+	ctx, cancel := context.WithTimeout(parentCtx, time.Duration(timeoutSeconds)*time.Second)
+	defer cancel()
+	eventCh := kernel.EventChannelFromContext(ctx)
 
 	var entries []string
+	scanned := 0
+	skippedDirs := 0
+	truncated := false
+	start := time.Now()
+	lastHeartbeat := start
+
 	if recursive {
-		err := filepath.Walk(path, func(p string, info os.FileInfo, err error) error {
+		err := filepath.WalkDir(path, func(p string, entry os.DirEntry, err error) error {
 			if err != nil {
 				return err
 			}
-			entries = append(entries, p)
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			if entry.IsDir() && p != path && shouldSkipWalkDir(entry.Name()) {
+				skippedDirs++
+				return filepath.SkipDir
+			}
+			scanned++
+			if len(entries) < maxEntries {
+				entries = append(entries, p)
+			} else {
+				truncated = true
+			}
+			if time.Since(lastHeartbeat) >= time.Second {
+				lastHeartbeat = time.Now()
+				emitToolProgress(eventCh, "tool.heartbeat", map[string]interface{}{
+					"tool_name":       "ls_r",
+					"tool_call_id":    stringArg(args, "_tool_call_id"),
+					"path":            path,
+					"elapsed_seconds": time.Since(start).Seconds(),
+					"scanned_entries": scanned,
+					"entries":         len(entries),
+					"skipped_dirs":    skippedDirs,
+					"status":          fmt.Sprintf("scanned %d entries", scanned),
+				}, "")
+			}
+			if truncated && scanned >= maxEntries {
+				return filepath.SkipAll
+			}
 			return nil
 		})
 		if err != nil {
+			if err == context.DeadlineExceeded {
+				return "", fmt.Errorf("ls_r timed out after %d seconds", timeoutSeconds)
+			}
+			if err == context.Canceled {
+				return "", fmt.Errorf("ls_r cancelled")
+			}
 			return "", err
 		}
 	} else {
-		files, err := os.ReadDir(path)
+		dir, err := os.Open(path)
+		if err != nil {
+			return "", err
+		}
+		defer dir.Close()
+		files, err := dir.ReadDir(maxEntries + 1)
 		if err != nil {
 			return "", err
 		}
 		for _, f := range files {
-			entries = append(entries, f.Name())
+			if ctx.Err() != nil {
+				return "", fmt.Errorf("ls_r cancelled")
+			}
+			scanned++
+			if len(entries) < maxEntries {
+				name := f.Name()
+				if f.IsDir() {
+					name += string(os.PathSeparator)
+				}
+				entries = append(entries, name)
+			} else {
+				truncated = true
+			}
 		}
 	}
-	b, _ := json.Marshal(entries)
+	b, _ := json.Marshal(map[string]interface{}{
+		"path":         path,
+		"recursive":    recursive,
+		"entries":      entries,
+		"count":        len(entries),
+		"scanned":      scanned,
+		"truncated":    truncated,
+		"max_entries":  maxEntries,
+		"skipped_dirs": skippedDirs,
+	})
 	return string(b), nil
 }
 
@@ -101,6 +191,11 @@ func NewReadFileTool() *ReadFileTool {
 						Description: "Max lines to read, 0 for all",
 						Default:     0,
 					},
+					"max_bytes": {
+						Type:        "integer",
+						Description: "Maximum bytes to read before truncating",
+						Default:     1048576,
+					},
 				},
 				Required: []string{"path"},
 			},
@@ -113,20 +208,52 @@ func (t *ReadFileTool) Execute(args map[string]interface{}) (string, error) {
 	if !ok || path == "" {
 		return "", fmt.Errorf("path is required")
 	}
-	limit, _ := args["limit"].(int)
+	limit := intArg(args, "limit", 0)
+	maxBytes := intArg(args, "max_bytes", 1024*1024)
+	if maxBytes < 64*1024 {
+		maxBytes = 64 * 1024
+	}
 
-	data, err := os.ReadFile(path)
+	if limit > 0 {
+		return readFileLineLimited(path, limit, maxBytes)
+	}
+
+	file, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+	data, err := io.ReadAll(io.LimitReader(file, int64(maxBytes)+1))
 	if err != nil {
 		return "", err
 	}
 	content := string(data)
-	if limit > 0 {
-		lines := strings.Split(content, "\n")
-		if len(lines) > limit {
-			content = strings.Join(lines[:limit], "\n") + fmt.Sprintf("\n... (%d more lines)", len(lines)-limit)
-		}
+	if len(data) > maxBytes {
+		content = textutil.TruncateBytes(content, maxBytes) + fmt.Sprintf("\n... (file truncated after %d bytes)", maxBytes)
 	}
 	return content, nil
+}
+
+func readFileLineLimited(path string, limit, maxBytes int) (string, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	scanner.Buffer(make([]byte, 0, 64*1024), maxBytes)
+	var lines []string
+	for scanner.Scan() {
+		if len(lines) >= limit {
+			return strings.Join(lines, "\n") + fmt.Sprintf("\n... (file truncated after %d lines)", limit), nil
+		}
+		lines = append(lines, scanner.Text())
+	}
+	if err := scanner.Err(); err != nil {
+		return strings.Join(lines, "\n"), err
+	}
+	return strings.Join(lines, "\n"), nil
 }
 
 // WriteFileTool 写入文件内容
@@ -345,11 +472,22 @@ func emitToolProgress(eventCh chan string, eventType string, payload map[string]
 	if eventCh == nil {
 		return
 	}
+	toolName := "terminal"
+	toolCallID := ""
+	if payload != nil {
+		if name, ok := payload["tool_name"].(string); ok && strings.TrimSpace(name) != "" {
+			toolName = strings.TrimSpace(name)
+		}
+		if id, ok := payload["tool_call_id"].(string); ok && strings.TrimSpace(id) != "" {
+			toolCallID = strings.TrimSpace(id)
+		}
+	}
 	kernel.EmitAgentEvent(eventCh, kernel.AgentEvent{
-		Type:     eventType,
-		Content:  content,
-		ToolName: "terminal",
-		Payload:  payload,
+		Type:       eventType,
+		Content:    content,
+		ToolName:   toolName,
+		ToolCallID: toolCallID,
+		Payload:    payload,
 	})
 }
 
@@ -385,6 +523,16 @@ func NewSearchFilesTool() *SearchFilesTool {
 						Description: "Max results",
 						Default:     50,
 					},
+					"timeout": {
+						Type:        "integer",
+						Description: "Timeout in seconds",
+						Default:     15,
+					},
+					"max_file_bytes": {
+						Type:        "integer",
+						Description: "Skip files larger than this many bytes",
+						Default:     1048576,
+					},
 				},
 				Required: []string{"pattern"},
 			},
@@ -405,14 +553,57 @@ func (t *SearchFilesTool) Execute(args map[string]interface{}) (string, error) {
 	if glob == "" {
 		glob = "*"
 	}
+	limit := intArg(args, "limit", 50)
+	if limit <= 0 {
+		limit = 50
+	}
+	timeoutSeconds := intArg(args, "timeout", 15)
+	if timeoutSeconds <= 0 {
+		timeoutSeconds = 15
+	}
+	maxFileBytes := intArg(args, "max_file_bytes", 1024*1024)
+	if maxFileBytes <= 0 {
+		maxFileBytes = 1024 * 1024
+	}
 
 	var matches []string
-	err := filepath.Walk(path, func(p string, info os.FileInfo, err error) error {
-		if err != nil || info.IsDir() {
+	parentCtx := contextFromArgs(args)
+	ctx, cancel := context.WithTimeout(parentCtx, time.Duration(timeoutSeconds)*time.Second)
+	defer cancel()
+	eventCh := kernel.EventChannelFromContext(ctx)
+	start := time.Now()
+	lastHeartbeat := start
+	scanned := 0
+	skippedDirs := 0
+	skippedLarge := 0
+	truncated := false
+
+	err := filepath.WalkDir(path, func(p string, entry os.DirEntry, err error) error {
+		if err != nil {
 			return nil
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if entry.IsDir() {
+			if p != path && shouldSkipWalkDir(entry.Name()) {
+				skippedDirs++
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		scanned++
+		if len(matches) >= limit {
+			truncated = true
+			return filepath.SkipAll
 		}
 		matched, _ := filepath.Match(glob, filepath.Base(p))
 		if !matched {
+			return nil
+		}
+		info, statErr := entry.Info()
+		if statErr == nil && info.Size() > int64(maxFileBytes) {
+			skippedLarge++
 			return nil
 		}
 		data, err := os.ReadFile(p)
@@ -422,13 +613,66 @@ func (t *SearchFilesTool) Execute(args map[string]interface{}) (string, error) {
 		if strings.Contains(string(data), pattern) {
 			matches = append(matches, p)
 		}
+		if time.Since(lastHeartbeat) >= time.Second {
+			lastHeartbeat = time.Now()
+			emitToolProgress(eventCh, "tool.heartbeat", map[string]interface{}{
+				"tool_name":       "search_files",
+				"tool_call_id":    stringArg(args, "_tool_call_id"),
+				"path":            path,
+				"pattern":         pattern,
+				"elapsed_seconds": time.Since(start).Seconds(),
+				"scanned_files":   scanned,
+				"matches":         len(matches),
+				"skipped_dirs":    skippedDirs,
+				"skipped_large":   skippedLarge,
+				"status":          fmt.Sprintf("scanned %d files, %d matches", scanned, len(matches)),
+			}, "")
+		}
 		return nil
 	})
 	if err != nil {
+		if err == context.DeadlineExceeded {
+			return "", fmt.Errorf("search_files timed out after %d seconds", timeoutSeconds)
+		}
+		if err == context.Canceled {
+			return "", fmt.Errorf("search_files cancelled")
+		}
 		return "", err
 	}
-	b, _ := json.Marshal(matches)
+	b, _ := json.Marshal(map[string]interface{}{
+		"path":          path,
+		"pattern":       pattern,
+		"file_glob":     glob,
+		"matches":       matches,
+		"count":         len(matches),
+		"scanned_files": scanned,
+		"truncated":     truncated,
+		"limit":         limit,
+		"skipped_dirs":  skippedDirs,
+		"skipped_large": skippedLarge,
+	})
 	return string(b), nil
+}
+
+func shouldSkipWalkDir(name string) bool {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case ".git", ".hg", ".svn", "node_modules", "vendor", "dist", "build", "target",
+		".next", ".nuxt", ".cache", ".gocache", ".idea", ".vscode", "coverage",
+		"tmp", "temp", "__pycache__":
+		return true
+	default:
+		return false
+	}
+}
+
+func stringArg(args map[string]interface{}, key string) string {
+	if args == nil {
+		return ""
+	}
+	if value, ok := args[key].(string); ok {
+		return strings.TrimSpace(value)
+	}
+	return ""
 }
 
 // GetCurrentTimeTool 获取当前时间

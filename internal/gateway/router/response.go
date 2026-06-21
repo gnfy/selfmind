@@ -48,6 +48,7 @@ func AggregateFinalResponse(resp *HandleResponse) (string, llm.UsageStats, error
 }
 
 type EventSummary struct {
+	phases       []string
 	toolsStarted []string
 	toolFailures []string
 	lastOutputs  []string
@@ -55,6 +56,11 @@ type EventSummary struct {
 
 func (s *EventSummary) Observe(event llm.StreamEvent) {
 	switch event.EventType {
+	case "agent.thinking", "agent.step":
+		line := strings.TrimSpace(event.Content)
+		if line != "" {
+			s.phases = appendLimited(s.phases, line, 6)
+		}
 	case "tool.started":
 		label := event.ToolName
 		if detail := toolArgsDetail(event.ToolArgs); detail != "" {
@@ -88,6 +94,10 @@ func (s EventSummary) WithContent(content string) string {
 		b.WriteString("\n\n")
 	}
 	b.WriteString("处理过程摘要：")
+	if len(s.phases) > 0 {
+		b.WriteString("\n- 阶段：")
+		b.WriteString(strings.Join(s.phases, "；"))
+	}
 	if len(s.toolsStarted) > 0 {
 		b.WriteString("\n- 已尝试：")
 		b.WriteString(strings.Join(s.toolsStarted, "；"))

@@ -8,6 +8,7 @@ import (
 
 	"selfmind/internal/kernel/llm"
 	"selfmind/internal/kernel/memory"
+	"selfmind/internal/platform/textutil"
 )
 
 type BackgroundReviewEngine struct {
@@ -182,7 +183,7 @@ func buildBackgroundReviewPrompt(messages []llm.Message, reviewMemory, reviewSki
 	for _, m := range messages {
 		content := m.Content
 		if len(content) > 1200 {
-			content = content[:600] + "\n...[truncated]...\n" + content[len(content)-600:]
+			content = textutil.HeadTail(content, 600, "\n...[truncated]...\n")
 		}
 		sb.WriteString(fmt.Sprintf("\n[%s]\n%s\n", m.Role, content))
 	}
@@ -200,7 +201,7 @@ func summarizeReviewResult(resp string, err error) string {
 		return "review skipped: nothing durable"
 	}
 	if len(resp) > 200 {
-		resp = resp[:200] + "..."
+		resp = textutil.TruncateBytes(resp, 200) + "..."
 	}
 	return "learning review: " + resp
 }

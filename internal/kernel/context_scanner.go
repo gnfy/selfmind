@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"selfmind/internal/platform/textutil"
 )
 
 // ContextFile represents a discovered project context file.
@@ -45,6 +47,20 @@ func (cs *ContextScanner) Scan() ([]ContextFile, error) {
 	cwd, err := os.Getwd()
 	if err != nil {
 		return nil, fmt.Errorf("get working directory: %w", err)
+	}
+	return cs.ScanFrom(cwd)
+}
+
+// ScanFrom walks upward from root looking for context files. It stops at the
+// first Git repository root or the user's home dir.
+func (cs *ContextScanner) ScanFrom(root string) ([]ContextFile, error) {
+	root = strings.TrimSpace(root)
+	if root == "" {
+		return nil, fmt.Errorf("workspace root is required")
+	}
+	cwd, err := filepath.Abs(root)
+	if err != nil {
+		return nil, fmt.Errorf("resolve workspace root: %w", err)
 	}
 
 	home, _ := os.UserHomeDir()
@@ -111,7 +127,7 @@ func (cs *ContextScanner) BuildContextPrompt(files []ContextFile) string {
 		if total+len(block) > cs.maxTotalSize {
 			remaining := cs.maxTotalSize - total
 			if remaining > len(header)+50 {
-				truncated := f.Content[:remaining-len(header)-50]
+				truncated := textutil.TruncateBytes(f.Content, remaining-len(header)-50)
 				block = header + truncated + "\n...[truncated]\n\n"
 				sb.WriteString(block)
 			}

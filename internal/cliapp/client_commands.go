@@ -99,6 +99,7 @@ func (a *App) sendGatewayMessage(content string) int {
 func (a *App) sendGatewayMessageWithOptions(content string, async bool) int {
 	url := a.gatewayURL()
 	userID := platformUserID()
+	clientCWD, _ := os.Getwd()
 
 	req := api.MessageRequest{
 		TenantID:       os.Getenv("SELF_TENANT_ID"),
@@ -108,6 +109,7 @@ func (a *App) sendGatewayMessageWithOptions(content string, async bool) int {
 		Channel:        "cli",
 		Content:        content,
 		WorkspaceID:    os.Getenv("SELF_WORKSPACE_ID"),
+		ClientCWD:      clientCWD,
 		TaskID:         os.Getenv("SELF_TASK_ID"),
 		Async:          async,
 	}

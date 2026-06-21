@@ -10,6 +10,7 @@ import (
 
 	"selfmind/internal/kernel/llm"
 	"selfmind/internal/kernel/memory"
+	"selfmind/internal/platform/textutil"
 )
 
 // ContextEngine 负责构建 LLM 消息、token 预算管理和上下文窗口
@@ -320,7 +321,7 @@ func truncateForSummary(content string, maxLen int) string {
 	if len(content) <= maxLen {
 		return content
 	}
-	return content[:maxLen] + "...[truncated]"
+	return textutil.TruncateBytes(content, maxLen) + "...[truncated]"
 }
 
 // FormatToolDefinitions 将 tools 包的工具定义转换为 LLM 格式

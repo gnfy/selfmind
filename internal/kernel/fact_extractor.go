@@ -8,6 +8,7 @@ import (
 
 	"selfmind/internal/kernel/llm"
 	"selfmind/internal/kernel/memory"
+	"selfmind/internal/platform/textutil"
 )
 
 // FactExtractor automatically extracts durable facts from a completed
@@ -144,7 +145,7 @@ func buildTranscript(messages []llm.Message) string {
 			// Truncate long tool results
 			content := m.Content
 			if len(content) > 800 {
-				content = content[:400] + "\n...[truncated]...\n" + content[len(content)-400:]
+				content = textutil.HeadTail(content, 400, "\n...[truncated]...\n")
 			}
 			sb.WriteString("Tool result: ")
 			sb.WriteString(content)
@@ -183,10 +184,7 @@ func extractJSON(s string) string {
 }
 
 func truncate(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	return s[:n] + "..."
+	return textutil.Truncate(s, n)
 }
 
 // levenshteinRatio returns the similarity ratio (0.0-1.0) between two strings.

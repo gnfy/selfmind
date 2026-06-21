@@ -12,12 +12,33 @@ import (
 
 func (g *Gateway) HandleWithEvents(ctx context.Context, unifiedUID, channel, input string) (*HandleResponse, error) {
 	if g == nil || g.agent == nil {
+		if g == nil {
+			return nil, fmt.Errorf("gateway is not configured")
+		}
 		return g.Handle(ctx, unifiedUID, channel, input)
 	}
+	return g.withAgentEvents(ctx, func(ctx context.Context) (*HandleResponse, error) {
+		return g.Handle(ctx, unifiedUID, channel, input)
+	})
+}
+
+func (g *Gateway) RunAgentWithEvents(ctx context.Context, unifiedUID, channel, input string) (*HandleResponse, error) {
+	if g == nil {
+		return nil, fmt.Errorf("gateway is not configured")
+	}
+	if g.agent == nil {
+		return g.RunAgent(ctx, unifiedUID, channel, input)
+	}
+	return g.withAgentEvents(ctx, func(ctx context.Context) (*HandleResponse, error) {
+		return g.RunAgent(ctx, unifiedUID, channel, input)
+	})
+}
+
+func (g *Gateway) withAgentEvents(ctx context.Context, run func(context.Context) (*HandleResponse, error)) (*HandleResponse, error) {
 	eventCh := make(chan string, 100)
 	ctx = kernel.WithEventChannel(ctx, eventCh)
 
-	resp, err := g.Handle(ctx, unifiedUID, channel, input)
+	resp, err := run(ctx)
 	if err != nil || resp == nil || !resp.IsStreaming {
 		return resp, err
 	}
@@ -68,6 +89,7 @@ func agentEventToStream(event string) llm.StreamEvent {
 			EventType:       structured.Type,
 			Content:         structured.Content,
 			ToolName:        structured.ToolName,
+			ToolCallID:      structured.ToolCallID,
 			ToolArgs:        structured.ToolArgs,
 			ToolResult:      structured.ToolResult,
 			DurationSeconds: structured.DurationSeconds,

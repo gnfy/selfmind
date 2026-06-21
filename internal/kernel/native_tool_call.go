@@ -21,21 +21,21 @@ type parallelToolSupport interface {
 	SupportsParallelTool(name string) bool
 }
 
-func (a *Agent) llmToolDefinitions(excluded map[string]bool) []llm.ToolDefinition {
+func (a *Agent) llmToolDefinitions(strategy TaskStrategy) []llm.ToolDefinition {
 	if a.backend == nil {
 		return nil
 	}
-	return toolDefinitionsForLLM(a.backend.GetToolDefinitions(), excluded)
+	return toolDefinitionsForLLM(a.backend.GetToolDefinitions(), strategy)
 }
 
-func toolDefinitionsForLLM(defs []map[string]interface{}, excluded map[string]bool) []llm.ToolDefinition {
+func toolDefinitionsForLLM(defs []map[string]interface{}, strategy TaskStrategy) []llm.ToolDefinition {
 	out := make([]llm.ToolDefinition, 0, len(defs))
 	for _, d := range defs {
 		name := toolDefinitionName(d)
 		if name == "" {
 			continue
 		}
-		if excluded != nil && excluded[name] {
+		if !strategy.AllowsTool(name) {
 			continue
 		}
 		params := toolDefinitionParameters(d)
@@ -50,6 +50,19 @@ func toolDefinitionsForLLM(defs []map[string]interface{}, excluded map[string]bo
 			Description: toolDefinitionDescription(d),
 			Parameters:  params,
 		})
+	}
+	return out
+}
+
+func filterToolCallsByStrategy(calls []llm.ToolCall, strategy TaskStrategy) []llm.ToolCall {
+	if len(calls) == 0 {
+		return calls
+	}
+	out := make([]llm.ToolCall, 0, len(calls))
+	for _, call := range calls {
+		if strategy.AllowsTool(call.Function) {
+			out = append(out, call)
+		}
 	}
 	return out
 }
@@ -135,12 +148,14 @@ func (a *Agent) executeSingleToolCall(ctx context.Context, tenantID string, even
 	args := parseToolCallArgs(call.Args)
 	args["_tenant_id"] = tenantID
 	args["_context"] = ctx
+	args["_tool_call_id"] = call.ID
 
 	if eventCh != nil {
 		EmitAgentEvent(eventCh, AgentEvent{
-			Type:     "tool.started",
-			ToolName: name,
-			ToolArgs: call.Args,
+			Type:       "tool.started",
+			ToolName:   name,
+			ToolCallID: call.ID,
+			ToolArgs:   call.Args,
 		})
 	}
 
@@ -148,44 +163,50 @@ func (a *Agent) executeSingleToolCall(ctx context.Context, tenantID string, even
 	result, err := a.backend.Dispatch(name, args)
 	duration := time.Since(startTime).Seconds()
 
-	if eventCh != nil {
-		emitToolEndEventWithDuration(eventCh, name, result, duration, err)
-		emitStructuredToolEvent(eventCh, name, args, result, err)
-	}
-
 	if err != nil {
-		errorMsg := fmt.Sprintf("Error executing %s: %v", name, err)
-		if len(errorMsg) > 2000 {
-			errorMsg = errorMsg[:2000] + "...(error message truncated)"
+		packaged := packageToolError(name, err)
+		if eventCh != nil {
+			emitToolEndEventWithDuration(eventCh, name, call.ID, packaged, duration, err)
 		}
 		return toolExecutionResult{
 			index: idx,
-			step:  errorMsg,
+			step:  packaged.ModelContent,
 			msg: llm.Message{
 				Role:       "tool",
-				Content:    errorMsg,
+				Content:    packaged.ModelContent,
 				Name:       name,
 				ToolCallID: call.ID,
 			},
 		}
 	}
 
-	llmResult := result
-	if len(llmResult) > 10000 {
-		llmResult = fmt.Sprintf("%s\n\n... (Content truncated: total %d chars) ...\n\n%s",
-			llmResult[:5000], len(llmResult), llmResult[len(llmResult)-5000:])
+	packaged := packageToolResult(name, result)
+	if eventCh != nil {
+		emitToolEndEventWithDuration(eventCh, name, call.ID, packaged, duration, nil)
+		emitStructuredToolEvent(eventCh, name, args, result, nil)
 	}
 
 	return toolExecutionResult{
 		index: idx,
-		step:  fmt.Sprintf("Executed tool: %s, result: %s", name, llmResult),
+		step:  toolHistoryStep(name, packaged),
 		msg: llm.Message{
 			Role:       "tool",
-			Content:    llmResult,
+			Content:    packaged.ModelContent,
 			Name:       name,
 			ToolCallID: call.ID,
 		},
 	}
+}
+
+func toolHistoryStep(name string, result ToolResultEnvelope) string {
+	preview := strings.TrimSpace(result.Preview)
+	if preview == "" {
+		preview = "completed"
+	}
+	if result.Truncated {
+		return fmt.Sprintf("Executed tool: %s, preview: %s (model received bounded head/tail of %d-byte output)", name, preview, result.Bytes)
+	}
+	return fmt.Sprintf("Executed tool: %s, result: %s", name, preview)
 }
 
 func parseToolCallArgs(raw string) map[string]interface{} {

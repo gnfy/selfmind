@@ -10,6 +10,7 @@ import (
 	"selfmind/internal/gateway/router"
 	"selfmind/internal/kernel"
 	"selfmind/internal/kernel/identity"
+	"selfmind/internal/kernel/llm"
 	"selfmind/internal/kernel/memory"
 	"selfmind/internal/kernel/task"
 	"selfmind/internal/kernel/task/cron"
@@ -80,7 +81,17 @@ func InitGateway(dataDir string, mem *memory.MemoryManager, agent *kernel.Agent,
 		}
 	}
 
-	gw := router.NewGateway(idMapper, taskMgr, agent, nil)
+	var provider llm.Provider
+	if agent != nil {
+		provider = agent.Provider()
+	}
+	gw := router.NewGateway(idMapper, taskMgr, agent, provider)
+	gw.SetIntentClassifier(router.NewIntentClassifierWithRules(router.IntentRuleConfig{
+		Mode:            cfg.Intent.Mode,
+		Rules:           cfg.Intent.Rules,
+		DirectThreshold: cfg.Intent.Thresholds.Direct,
+		AskThreshold:    cfg.Intent.Thresholds.Ask,
+	}))
 	displayProvider, displayModel, _ := ResolveModelDisplay(cfg)
 	gw.SetModelDisplay(displayProvider, displayModel)
 	bridge := channel.NewBridge(gw)

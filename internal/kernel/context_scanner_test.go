@@ -63,6 +63,30 @@ func TestContextScanner_Scan(t *testing.T) {
 	}
 }
 
+func TestContextScanner_ScanFromWorkspaceRoot(t *testing.T) {
+	workspace := t.TempDir()
+	other := t.TempDir()
+	originalWd, _ := os.Getwd()
+	defer os.Chdir(originalWd)
+	os.Chdir(other)
+
+	if err := os.WriteFile(filepath.Join(workspace, "AGENTS.md"), []byte("Use workspace instructions."), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	scanner := NewContextScanner()
+	files, err := scanner.ScanFrom(workspace)
+	if err != nil {
+		t.Fatalf("ScanFrom failed: %v", err)
+	}
+	if len(files) == 0 {
+		t.Fatal("expected context files from workspace root")
+	}
+	if files[0].Name != "AGENTS.md" || !contains(files[0].Content, "workspace instructions") {
+		t.Fatalf("unexpected files: %+v", files)
+	}
+}
+
 func TestContextScanner_BuildContextPrompt(t *testing.T) {
 	scanner := NewContextScanner()
 	files := []ContextFile{

@@ -10,7 +10,9 @@ import (
 	"strings"
 
 	appcore "selfmind/internal/app"
+	"selfmind/internal/control"
 	tui "selfmind/internal/gateway/cli"
+	"selfmind/internal/gateway/httpapi"
 	"selfmind/internal/kernel"
 	"selfmind/internal/kernel/memory"
 	"selfmind/internal/platform/config"
@@ -143,10 +145,21 @@ func (a *App) runTUI() int {
 	}
 	appcore.RegisterCronTool(disp, gwDeps.CronScheduler)
 
+	controlStore, err := control.OpenStore(dataDir)
+	if err != nil {
+		log.Fatal("control.OpenStore failed", "error", err)
+	}
+
 	appcore.InitMCP(disp, cfg)
 
 	displayProvider, displayModel, _ := appcore.ResolveModelDisplay(cfg)
 	ctrl := tui.NewControllerWithGateway(gwDeps.Gateway, agent, nil, displayProvider, displayModel, cfg, tenantID)
+	localGateway := &httpapi.Server{
+		Control:         controlStore,
+		Gateway:         gwDeps.Gateway,
+		DefaultTenantID: tenantID,
+	}
+	ctrl.SetMessageProcessor(localGateway.ProcessMessage)
 	disp.InjectClarifyHandler(ctrl.ClarifyHandler())
 	ctrl.SetSessionSearchFn(mem.SearchFn(tenantID))
 
@@ -168,6 +181,9 @@ func (a *App) runTUI() int {
 
 	ctrl.SetCleanupFn(func() {
 		appcore.StopCron(gwDeps.CronScheduler)
+		if controlStore != nil {
+			controlStore.Close()
+		}
 		if mem != nil {
 			mem.Close()
 		}

@@ -78,6 +78,7 @@ type StreamEvent struct {
 	Err             error
 	EventType       string
 	ToolName        string
+	ToolCallID      string
 	ToolArgs        string
 	ToolResult      string
 	DurationSeconds float64

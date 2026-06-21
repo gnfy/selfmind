@@ -67,6 +67,159 @@ func TestWorkingTickKeepsAnimatingWhileThinking(t *testing.T) {
 	}
 }
 
+func TestAgentActivityReplacesGenericWorkingText(t *testing.T) {
+	model := NewController(nil, nil, nil, "").model
+	model.width = 80
+	model.height = 20
+	model.viewport.Width = 80
+	model.viewport.Height = 15
+
+	updated, _ := model.Update(MsgAgentActivity{Content: "Reading tool results and deciding the next step"})
+	model = updated.(*uiModel)
+
+	if !model.thinking {
+		t.Fatalf("agent activity should show a thinking indicator")
+	}
+	if model.activityText != "Reading tool results and deciding the next step" {
+		t.Fatalf("activityText = %q", model.activityText)
+	}
+	if view := stripANSI(model.renderAllMessages()); !strings.Contains(view, "Reading tool results and deciding the next step") {
+		t.Fatalf("activity text was not rendered: %q", view)
+	}
+}
+
+func TestToolStartClearsGenericActivityIndicator(t *testing.T) {
+	model := NewController(nil, nil, nil, "").model
+	model.thinking = true
+	model.activityText = "Thinking about the request"
+
+	updated, _ := model.Update(MsgToolStart{ToolName: "terminal", Args: `{"command":"go test ./..."}`})
+	model = updated.(*uiModel)
+
+	if model.thinking {
+		t.Fatalf("tool start should replace the generic thinking indicator")
+	}
+	if model.activityText != "" {
+		t.Fatalf("activityText = %q, want empty", model.activityText)
+	}
+	if len(model.messages) == 0 || model.messages[len(model.messages)-1].ToolName != "terminal" {
+		t.Fatalf("tool message was not appended: %+v", model.messages)
+	}
+}
+
+func TestRunningToolMessageShowsConciseProgress(t *testing.T) {
+	rendered := stripANSI(renderToolMessage(ChatMessage{
+		Role:          "tool",
+		ToolName:      "ls_r",
+		ToolArgs:      `{"path":"."}`,
+		Timestamp:     time.Now().Add(-2 * time.Second),
+		IsRunning:     true,
+		RunningDetail: "scanned 120 entries",
+	}, 120))
+
+	if !strings.Contains(rendered, "Listing .") {
+		t.Fatalf("running tool should render action: %q", rendered)
+	}
+	if !strings.Contains(rendered, "scanned 120 entries") {
+		t.Fatalf("running tool should render heartbeat detail: %q", rendered)
+	}
+	if strings.Contains(rendered, "2.0s") {
+		t.Fatalf("running tool should not render per-file elapsed time: %q", rendered)
+	}
+}
+
+func TestGenericToolHeartbeatDoesNotBecomeNotification(t *testing.T) {
+	model := NewController(nil, nil, nil, "").model
+	updated, _ := model.Update(MsgToolStart{
+		ToolName:   "terminal",
+		ToolCallID: "call-terminal",
+		Args:       `{"command":"go test ./..."}`,
+	})
+	model = updated.(*uiModel)
+
+	updated, _ = model.Update(MsgToolHeartbeat{
+		ToolName:   "terminal",
+		ToolCallID: "call-terminal",
+		Content:    "terminal running",
+	})
+	model = updated.(*uiModel)
+
+	if model.statusMsg != "" {
+		t.Fatalf("generic heartbeat should not set statusMsg: %q", model.statusMsg)
+	}
+	if len(model.messages) == 0 || model.messages[len(model.messages)-1].RunningDetail != "" {
+		t.Fatalf("generic heartbeat should not be rendered as detail: %+v", model.messages)
+	}
+}
+
+func TestToolDoneMatchesStartedToolByCallID(t *testing.T) {
+	model := NewController(nil, nil, nil, "").model
+	updated, _ := model.Update(MsgToolStart{
+		ToolName:   "read_file",
+		ToolCallID: "call-a",
+		Args:       `{"path":"a.go"}`,
+	})
+	model = updated.(*uiModel)
+	updated, _ = model.Update(MsgToolStart{
+		ToolName:   "read_file",
+		ToolCallID: "call-b",
+		Args:       `{"path":"b.go"}`,
+	})
+	model = updated.(*uiModel)
+
+	updated, _ = model.Update(MsgToolDone{
+		ToolName:   "read_file",
+		ToolCallID: "call-a",
+		Result:     "package a",
+		Duration:   0.2,
+	})
+	model = updated.(*uiModel)
+
+	if len(model.messages) < 2 {
+		t.Fatalf("messages len = %d, want at least 2", len(model.messages))
+	}
+	first := model.messages[len(model.messages)-2]
+	second := model.messages[len(model.messages)-1]
+	if first.ToolCallID != "call-a" || first.IsRunning {
+		t.Fatalf("first tool should be completed by call id: %+v", first)
+	}
+	if second.ToolCallID != "call-b" || !second.IsRunning {
+		t.Fatalf("second tool should still be running: %+v", second)
+	}
+}
+
+func TestCompletedToolMessageOmitsPerStepDuration(t *testing.T) {
+	rendered := stripANSI(renderToolMessage(ChatMessage{
+		Role:     "tool",
+		ToolName: "read_file",
+		ToolArgs: `{"path":"a.go"}`,
+		Content:  "package a",
+		Duration: 0.2,
+	}, 120))
+
+	if !strings.Contains(rendered, "Read a.go") {
+		t.Fatalf("completed tool should render action: %q", rendered)
+	}
+	if strings.Contains(rendered, "0.2s") {
+		t.Fatalf("completed tool should not render per-step duration: %q", rendered)
+	}
+}
+
+func TestStatusLineShowsTotalElapsedWhileToolRuns(t *testing.T) {
+	model := NewController(nil, nil, nil, "").model
+	model.runStatus = "working"
+	model.thinkingStart = time.Now().Add(-3 * time.Second)
+	model.toolExecuting = "ls_r"
+
+	line := stripANSI(model.statusLine())
+	if !strings.Contains(line, "working 3.") {
+		t.Fatalf("status line should show total elapsed time: %q", line)
+	}
+	if strings.Contains(line, " · ls_r · ") {
+		t.Fatalf("status line should not use current tool as the main progress indicator: %q", line)
+	}
+}
+
 func TestAssistantMessageDoesNotRenderAsBulletList(t *testing.T) {
 	rendered := stripANSI(renderAssistantMessage("hello\nworld", 80))
 
@@ -168,6 +321,95 @@ func TestMouseEventsDoNotCreateAppSelection(t *testing.T) {
 	for _, event := range events {
 		updated, _ := model.Update(event)
 		model = updated.(*uiModel)
+	}
+	if model.mouseDragActive {
+		t.Fatalf("mouse drag state should be cleared after release")
+	}
+}
+
+func TestCursorBlinkTickTogglesComposerCursor(t *testing.T) {
+	model := NewController(nil, nil, nil, "").model
+	model.cursorVisible = true
+
+	updated, cmd := model.Update(MsgCursorBlinkTick(time.Now()))
+	model = updated.(*uiModel)
+
+	if model.cursorVisible {
+		t.Fatalf("cursorVisible should toggle off")
+	}
+	if cmd == nil {
+		t.Fatalf("cursor blink should reschedule itself")
+	}
+}
+
+func TestMouseWheelScrollsTranscriptOnlyInChatArea(t *testing.T) {
+	model := scrollableTranscriptModel()
+	model.viewModel()
+	bottom := model.viewport.YOffset
+
+	updated, _ := model.Update(tea.MouseMsg{
+		Button: tea.MouseButtonWheelUp,
+		Action: tea.MouseActionPress,
+		X:      10,
+		Y:      4,
+	})
+	model = updated.(*uiModel)
+	if got := model.viewport.YOffset; got >= bottom {
+		t.Fatalf("wheel in transcript did not scroll up: got %d, bottom %d", got, bottom)
+	}
+
+	scrolled := model.viewport.YOffset
+	updated, _ = model.Update(tea.MouseMsg{
+		Button: tea.MouseButtonWheelUp,
+		Action: tea.MouseActionPress,
+		X:      10,
+		Y:      model.transcriptVisibleHeight() + 1,
+	})
+	model = updated.(*uiModel)
+	if got := model.viewport.YOffset; got != scrolled {
+		t.Fatalf("wheel outside transcript changed offset: got %d, want %d", got, scrolled)
+	}
+}
+
+func TestMouseDragAtTranscriptEdgeAutoScrolls(t *testing.T) {
+	model := scrollableTranscriptModel()
+	model.viewModel()
+	bottom := model.viewport.YOffset
+
+	updated, _ := model.Update(tea.MouseMsg{
+		Button: tea.MouseButtonLeft,
+		Action: tea.MouseActionPress,
+		X:      10,
+		Y:      5,
+	})
+	model = updated.(*uiModel)
+	if !model.mouseDragActive {
+		t.Fatalf("left press in transcript should start drag tracking")
+	}
+
+	updated, cmd := model.Update(tea.MouseMsg{
+		Button: tea.MouseButtonLeft,
+		Action: tea.MouseActionMotion,
+		X:      10,
+		Y:      0,
+	})
+	model = updated.(*uiModel)
+	if got := model.viewport.YOffset; got >= bottom {
+		t.Fatalf("dragging at top edge did not scroll up: got %d, bottom %d", got, bottom)
+	}
+	if cmd == nil {
+		t.Fatalf("edge drag should schedule continuous auto-scroll")
+	}
+
+	updated, _ = model.Update(tea.MouseMsg{
+		Button: tea.MouseButtonLeft,
+		Action: tea.MouseActionRelease,
+		X:      10,
+		Y:      0,
+	})
+	model = updated.(*uiModel)
+	if model.mouseDragActive || model.mouseAutoScrollDir != 0 {
+		t.Fatalf("release should clear drag auto-scroll state")
 	}
 }
 
@@ -276,6 +518,100 @@ func TestInputHistoryDoesNotStealMultilineArrowNavigation(t *testing.T) {
 	if model.historyIndex != -1 {
 		t.Fatalf("historyIndex = %d, want -1", model.historyIndex)
 	}
+}
+
+func TestTranscriptPageKeysScrollChatHistory(t *testing.T) {
+	model := scrollableTranscriptModel()
+	model.viewModel()
+	bottom := model.viewport.YOffset
+	if bottom <= 0 {
+		t.Fatalf("test transcript is not scrollable, bottom offset = %d", bottom)
+	}
+
+	updated, _ := model.handleKey(tea.KeyMsg{Type: tea.KeyPgUp})
+	model = updated.(*uiModel)
+
+	if got := model.viewport.YOffset; got >= bottom {
+		t.Fatalf("PageUp did not scroll transcript up: got offset %d, bottom %d", got, bottom)
+	}
+
+	updated, _ = model.handleKey(tea.KeyMsg{Type: tea.KeyPgDown})
+	model = updated.(*uiModel)
+
+	if got := model.viewport.YOffset; got != bottom {
+		t.Fatalf("PageDown offset = %d, want bottom %d", got, bottom)
+	}
+}
+
+func TestTranscriptScrollPositionSurvivesDraftAndWorkingRender(t *testing.T) {
+	model := scrollableTranscriptModel()
+	model.viewModel()
+	bottom := model.viewport.YOffset
+
+	updated, _ := model.handleKey(tea.KeyMsg{Type: tea.KeyPgUp})
+	model = updated.(*uiModel)
+	scrolled := model.viewport.YOffset
+	if scrolled >= bottom {
+		t.Fatalf("PageUp did not move away from bottom: got %d, bottom %d", scrolled, bottom)
+	}
+
+	model.editor.SetValue("draft while reading")
+	model.thinking = true
+	model.viewModel()
+
+	if got := model.viewport.YOffset; got != scrolled {
+		t.Fatalf("viewModel snapped to offset %d, want preserved offset %d", got, scrolled)
+	}
+}
+
+func TestStreamDoesNotSnapToBottomAfterManualTranscriptScroll(t *testing.T) {
+	model := scrollableTranscriptModel()
+	model.viewModel()
+
+	updated, _ := model.handleKey(tea.KeyMsg{Type: tea.KeyPgUp})
+	model = updated.(*uiModel)
+	scrolled := model.viewport.YOffset
+
+	updated, _ = model.Update(MsgStream{Content: "new chunk"})
+	model = updated.(*uiModel)
+
+	if got := model.viewport.YOffset; got != scrolled {
+		t.Fatalf("stream snapped to offset %d, want preserved offset %d", got, scrolled)
+	}
+}
+
+func TestCtrlArrowKeysScrollTranscriptAndKeepInputHistory(t *testing.T) {
+	model := scrollableTranscriptModel()
+	model.recordInputHistory("previous task")
+	model.viewModel()
+	bottom := model.viewport.YOffset
+
+	updated, _ := model.handleKey(tea.KeyMsg{Type: tea.KeyCtrlUp})
+	model = updated.(*uiModel)
+	if got := model.viewport.YOffset; got >= bottom {
+		t.Fatalf("Ctrl+Up did not scroll transcript up: got %d, bottom %d", got, bottom)
+	}
+
+	updated, _ = model.handleKey(tea.KeyMsg{Type: tea.KeyUp})
+	model = updated.(*uiModel)
+	if got := model.editor.Value(); got != "previous task" {
+		t.Fatalf("plain Up should still navigate input history, got %q", got)
+	}
+}
+
+func scrollableTranscriptModel() *uiModel {
+	model := NewController(nil, nil, nil, "").model
+	model.width = 80
+	model.height = 18
+	model.viewport.Width = 80
+	model.viewport.Height = 12
+	for i := 0; i < 40; i++ {
+		model.messages = append(model.messages, ChatMessage{
+			Role:    "assistant",
+			Content: strings.Repeat("line content ", 3),
+		})
+	}
+	return model
 }
 
 func testKimiConfig() *config.Config {

@@ -46,6 +46,7 @@ type Editor struct {
 	snippets        []PasteSnippet // stored snippets for large pastes
 	largePasteChars int            // threshold in characters (from config, 0=disabled)
 	largePasteLines int            // threshold in lines (from config, 0=disabled)
+	cursorVisible   bool
 }
 
 type CommandHint struct {
@@ -122,6 +123,7 @@ func NewEditor(c *common.Common, editorCfg *config.EditorConfig) *Editor {
 		textinput:       i,
 		largePasteChars: chars,
 		largePasteLines: lines,
+		cursorVisible:   true,
 	}
 }
 
@@ -261,6 +263,11 @@ func (e *Editor) SetValue(s string) {
 	}
 }
 
+// SetCursorVisible controls the manually rendered textarea cursor blink.
+func (e *Editor) SetCursorVisible(visible bool) {
+	e.cursorVisible = visible
+}
+
 // SetSecure toggles secure (password) input mode.
 func (e *Editor) SetSecure(secure bool) {
 	e.secure = secure
@@ -326,7 +333,7 @@ func (e *Editor) Draw(rect layout.Rect) string {
 		textW = 1
 	}
 	e.textarea.SetWidth(textW)
-	view := renderEditorValue(e.textarea.Value(), e.textarea.Placeholder, inputH, textW, e.common.Styles.Editor.Cursor, e.textarea.Line(), e.textarea.LineInfo())
+	view := renderEditorValue(e.textarea.Value(), e.textarea.Placeholder, inputH, textW, e.common.Styles.Editor.Cursor, e.cursorVisible, e.textarea.Line(), e.textarea.LineInfo())
 
 	input := e.common.Styles.Editor.Panel.
 		Width(rect.W).
@@ -399,7 +406,7 @@ func (e *Editor) renderSuggestions(width int) string {
 		Render(strings.Join(rows, "\n"))
 }
 
-func renderEditorValue(value, placeholder string, height, width int, cursorStyle lipgloss.Style, cursorLine int, lineInfo textarea.LineInfo) string {
+func renderEditorValue(value, placeholder string, height, width int, cursorStyle lipgloss.Style, cursorVisible bool, cursorLine int, lineInfo textarea.LineInfo) string {
 	if height < 1 {
 		height = 1
 	}
@@ -407,7 +414,7 @@ func renderEditorValue(value, placeholder string, height, width int, cursorStyle
 		width = 1
 	}
 	if value == "" {
-		return renderEmptyEditorLine(placeholder, width, cursorStyle)
+		return renderEmptyEditorLine(placeholder, width, cursorStyle, cursorVisible)
 	}
 
 	lines := strings.Split(value, "\n")
@@ -438,7 +445,7 @@ func renderEditorValue(value, placeholder string, height, width int, cursorStyle
 		isCursorLine := globalLine == cursorLine
 		var rendered string
 		if isCursorLine {
-			rendered = renderEditorCursorLine(line, width, textStyle, cursorStyle, lineInfo)
+			rendered = renderEditorCursorLine(line, width, textStyle, cursorStyle, cursorVisible, lineInfo)
 		} else {
 			rendered = textStyle.Render(truncateDisplayWidth(line, width))
 		}
@@ -447,8 +454,11 @@ func renderEditorValue(value, placeholder string, height, width int, cursorStyle
 	return strings.Join(visible, "\n")
 }
 
-func renderEditorCursorLine(line string, width int, textStyle, cursorStyle lipgloss.Style, lineInfo textarea.LineInfo) string {
+func renderEditorCursorLine(line string, width int, textStyle, cursorStyle lipgloss.Style, cursorVisible bool, lineInfo textarea.LineInfo) string {
 	before, cursorText, after := editorCursorParts(line, width, lineInfo)
+	if !cursorVisible {
+		return textStyle.Render(before + cursorText + after)
+	}
 	return textStyle.Render(before) + cursorStyle.Render(cursorText) + textStyle.Render(after)
 }
 
@@ -504,7 +514,7 @@ func editorCursorParts(line string, width int, lineInfo textarea.LineInfo) (stri
 	return before, cursorText, after
 }
 
-func renderEmptyEditorLine(placeholder string, width int, cursorStyle lipgloss.Style) string {
+func renderEmptyEditorLine(placeholder string, width int, cursorStyle lipgloss.Style, cursorVisible bool) string {
 	if width < 1 {
 		width = 1
 	}
@@ -512,7 +522,11 @@ func renderEmptyEditorLine(placeholder string, width int, cursorStyle lipgloss.S
 	lineStyle := lipgloss.NewStyle().Background(bg).Width(width)
 	placeholderStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("244")).Background(bg)
 
-	cursor := cursorStyle.Render(" ")
+	cursorStyleToUse := lipgloss.NewStyle().Background(bg)
+	if cursorVisible {
+		cursorStyleToUse = cursorStyle
+	}
+	cursor := cursorStyleToUse.Render(" ")
 	available := width - 1
 	if available < 0 {
 		available = 0

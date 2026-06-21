@@ -11,6 +11,7 @@ import (
 
 	"selfmind/internal/kernel/llm"
 	"selfmind/internal/kernel/memory"
+	"selfmind/internal/platform/textutil"
 )
 
 // AgentBackend is the interface for the agent's execution backend (tool dispatch + event channel).
@@ -126,6 +127,14 @@ func (a *Agent) CurrentModel() string {
 	return llm.GetModelName(a.llm)
 }
 
+// Provider exposes the agent's model transport for lightweight gateway routing.
+func (a *Agent) Provider() llm.Provider {
+	if a == nil {
+		return nil
+	}
+	return a.llm
+}
+
 func (a *Agent) SetEvolutionNotifyChannel(ch chan string) {
 	a.evolutionNotifyCh = ch
 	if a.Reflector != nil {
@@ -139,14 +148,14 @@ func (a *Agent) SetEvolutionNotifyChannel(ch chan string) {
 const MaxRetries = 3
 
 // chatResponseWithRetry implements retry for non-streaming model calls.
-func (a *Agent) chatResponseWithRetry(ctx context.Context, messages []llm.Message, excludedTools map[string]bool) (*llm.ChatResponse, error) {
+func (a *Agent) chatResponseWithRetry(ctx context.Context, messages []llm.Message, strategy TaskStrategy) (*llm.ChatResponse, error) {
 	var lastErr error
 	max := a.maxRetries
 	if max <= 0 {
 		max = 1
 	}
 	for attempt := 0; attempt < max; attempt++ {
-		req := llm.ChatRequest{Messages: messages, Tools: a.llmToolDefinitions(excludedTools)}
+		req := llm.ChatRequest{Messages: messages, Tools: a.llmToolDefinitions(strategy)}
 		resp, err := a.llm.Chat(ctx, req)
 		if err == nil {
 			return resp, nil
@@ -171,7 +180,7 @@ func (a *Agent) chatResponseWithRetry(ctx context.Context, messages []llm.Messag
 
 // chatWithRetry 实现了运行时自动 Fallback 逻辑
 func (a *Agent) chatWithRetry(ctx context.Context, messages []llm.Message) (string, llm.UsageStats, error) {
-	resp, err := a.chatResponseWithRetry(ctx, messages, nil)
+	resp, err := a.chatResponseWithRetry(ctx, messages, DefaultTaskStrategy())
 	if err != nil {
 		return "", llm.UsageStats{}, err
 	}
@@ -179,14 +188,14 @@ func (a *Agent) chatWithRetry(ctx context.Context, messages []llm.Message) (stri
 }
 
 // streamChatWithRetry 实现了流式调用的自动 Fallback 逻辑
-func (a *Agent) streamChatWithRetry(ctx context.Context, messages []llm.Message, excludedTools map[string]bool) (<-chan llm.StreamEvent, error) {
+func (a *Agent) streamChatWithRetry(ctx context.Context, messages []llm.Message, strategy TaskStrategy) (<-chan llm.StreamEvent, error) {
 	var lastErr error
 	max := a.maxRetries
 	if max <= 0 {
 		max = 1
 	}
 	for attempt := 0; attempt < max; attempt++ {
-		req := llm.ChatRequest{Messages: messages, Tools: a.llmToolDefinitions(excludedTools)}
+		req := llm.ChatRequest{Messages: messages, Tools: a.llmToolDefinitions(strategy)}
 		ch, err := a.llm.StreamChat(ctx, req)
 		if err == nil {
 			return ch, nil
@@ -245,30 +254,37 @@ func (a *Agent) Analyze(imageBase64, mimeType, question string) (string, error) 
 	return a.llm.ChatCompletion(context.Background(), []llm.Message{msg})
 }
 
-func emitToolEndEventWithDuration(ch chan string, name, result string, duration float64, err error) {
+func emitToolEndEventWithDuration(ch chan string, name, toolCallID string, result ToolResultEnvelope, duration float64, err error) {
 	if err != nil {
 		EmitAgentEvent(ch, AgentEvent{
 			Type:            "tool.completed",
 			ToolName:        name,
+			ToolCallID:      toolCallID,
 			DurationSeconds: duration,
-			Error:           err.Error(),
+			ToolResult:      result.Preview,
+			Error:           result.ModelContent,
 		})
 	} else {
-		displayResult := result
-		if len(displayResult) > 200 {
-			displayResult = displayResult[:200] + "...(truncated)"
-		}
 		EmitAgentEvent(ch, AgentEvent{
 			Type:            "tool.completed",
 			ToolName:        name,
-			ToolResult:      displayResult,
+			ToolCallID:      toolCallID,
+			ToolResult:      result.Preview,
 			DurationSeconds: duration,
+			Payload: map[string]interface{}{
+				"result_bytes":     result.Bytes,
+				"result_truncated": result.Truncated,
+			},
 		})
 	}
 }
 
 func emitToolEndEvent(ch chan string, name, result string, err error) {
-	emitToolEndEventWithDuration(ch, name, result, 0, err)
+	if err != nil {
+		emitToolEndEventWithDuration(ch, name, "", packageToolError(name, err), 0, err)
+		return
+	}
+	emitToolEndEventWithDuration(ch, name, "", packageToolResult(name, result), 0, nil)
 }
 
 // RunConversation 执行 Agent 推理循环
@@ -291,21 +307,34 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 		Role:     llm.RoleCodingAgent,
 	})
 
-	simpleRequest := isSimpleOneShotRequest(initialPrompt)
-	excludedTools := map[string]bool{}
-	if simpleRequest {
-		excludedTools["update_plan"] = true
+	strategy, ok := taskStrategyFromContext(ctx)
+	if !ok {
+		strategy = BuildTaskStrategy(initialPrompt, channel)
 	}
+	EmitAgentEvent(eventCh, AgentEvent{
+		Type:    "strategy.selected",
+		Content: strategy.Reason,
+		Payload: map[string]interface{}{
+			"class":       string(strategy.Class),
+			"tool_mode":   string(strategy.ToolMode),
+			"plan_policy": string(strategy.PlanPolicy),
+			"web_policy":  string(strategy.WebPolicy),
+			"channel":     strategy.ChannelMode,
+		},
+	})
 
 	// 0. Build dynamic system prompt (including facts + project context)
-	systemPrompt, _ := a.buildSystemPrompt(ctx, tenantID, excludedTools)
-	if simpleRequest {
-		systemPrompt += "\n\n# CURRENT REQUEST SIZE\nThis appears to be a simple one-shot request. Do not call update_plan; answer directly after any truly necessary tool call.\n"
-	}
+	systemPrompt, _ := a.buildSystemPrompt(ctx, tenantID, strategy)
+	systemPrompt += strategy.SystemPromptNote()
 
 	// 0.1 Inject project context files (.selfmind.md, AGENTS.md, etc.)
 	if a.contextScanner != nil {
-		ctxFiles, _ := a.contextScanner.Scan()
+		var ctxFiles []ContextFile
+		if workspace, ok := WorkspaceContextFromContext(ctx); ok {
+			ctxFiles, _ = a.contextScanner.ScanFrom(workspace.Root)
+		} else {
+			ctxFiles, _ = a.contextScanner.Scan()
+		}
 		if len(ctxFiles) > 0 {
 			ctxPrompt := a.contextScanner.BuildContextPrompt(ctxFiles)
 			if ctxPrompt != "" {
@@ -340,17 +369,61 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 		Steps: []string{},
 	}
 
-	for i := 0; i < a.maxIterations; i++ {
+	maxIterations := a.maxIterations
+	if strategy.MaxIterations > 0 && (maxIterations <= 0 || strategy.MaxIterations < maxIterations) {
+		maxIterations = strategy.MaxIterations
+	}
+	for i := 0; i < maxIterations; i++ {
 		var fullResp strings.Builder
 		var nativeCalls []llm.ToolCall
 		var streamErr error
+		var pendingStream strings.Builder
+		suppressLegacyToolStream := false
+		legacyToolSeen := false
+		legacyToolReady := false
+		emitAgentActivity(eventCh, activityForIteration(i), "thinking", i)
+		emitStream := func(content string) {
+			if strings.TrimSpace(content) == "" || eventCh == nil {
+				return
+			}
+			EmitAgentEvent(eventCh, AgentEvent{Type: "stream", Content: content})
+		}
+		handleStreamContent := func(content string) {
+			fullResp.WriteString(content)
+			if suppressLegacyToolStream {
+				return
+			}
+			pendingStream.WriteString(content)
+			pending := pendingStream.String()
+			if idx := legacyToolMarkerIndex(pending); idx >= 0 {
+				emitStream(pending[:idx])
+				pendingStream.Reset()
+				suppressLegacyToolStream = true
+				if !legacyToolSeen {
+					legacyToolSeen = true
+					emitAgentActivity(eventCh, "Preparing tool call", "tool_selection", i)
+				}
+				return
+			}
+			if len(pending) > 96 {
+				emit := pending[:len(pending)-32]
+				pendingStream.Reset()
+				pendingStream.WriteString(pending[len(pending)-32:])
+				emitStream(emit)
+			}
+		}
+		flushPendingStream := func() {
+			if suppressLegacyToolStream {
+				pendingStream.Reset()
+				return
+			}
+			emitStream(pendingStream.String())
+			pendingStream.Reset()
+		}
 
 		appendChatResponse := func(chatResp *llm.ChatResponse) {
 			if chatResp.Content != "" {
 				fullResp.WriteString(chatResp.Content)
-				if eventCh != nil {
-					EmitAgentEvent(eventCh, AgentEvent{Type: "stream", Content: chatResp.Content})
-				}
 			}
 			if chatResp.Usage.InputTokens != 0 || chatResp.Usage.OutputTokens != 0 {
 				totalUsage.InputTokens += chatResp.Usage.InputTokens
@@ -368,12 +441,14 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 			}
 		}
 
-		streamCh, err := a.streamChatWithRetry(ctx, messages, excludedTools)
+		streamCtx, streamCancel := context.WithCancel(ctx)
+		streamCh, err := a.streamChatWithRetry(streamCtx, messages, strategy)
 		if err != nil {
+			streamCancel()
 			if ctx.Err() != nil {
 				return "", totalUsage, fmt.Errorf("llm chat: %w", err)
 			}
-			fallbackResp, fallbackErr := a.chatResponseWithRetry(ctx, messages, excludedTools)
+			fallbackResp, fallbackErr := a.chatResponseWithRetry(ctx, messages, strategy)
 			if fallbackErr != nil {
 				return "", totalUsage, fmt.Errorf("llm chat: %w; non-stream fallback failed: %v", err, fallbackErr)
 			}
@@ -385,10 +460,7 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 					break
 				}
 				if event.Content != "" {
-					fullResp.WriteString(event.Content)
-					if eventCh != nil {
-						EmitAgentEvent(eventCh, AgentEvent{Type: "stream", Content: event.Content})
-					}
+					handleStreamContent(event.Content)
 				}
 				if event.Usage != nil {
 					totalUsage.InputTokens += event.Usage.InputTokens
@@ -404,31 +476,46 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 				if len(event.ToolCalls) > 0 {
 					nativeCalls = append(nativeCalls, event.ToolCalls...)
 				}
+				if len(nativeCalls) == 0 && len(ExtractReadyToolCalls(fullResp.String())) > 0 {
+					legacyToolReady = true
+					streamCancel()
+					break
+				}
 			}
+			streamCancel()
 
 			if streamErr != nil {
-				if ctx.Err() != nil {
+				if legacyToolReady {
+					streamErr = nil
+				} else if ctx.Err() != nil {
 					return "", totalUsage, fmt.Errorf("stream error: %w", streamErr)
 				}
-				if fullResp.Len() > 0 || len(nativeCalls) > 0 {
+				if streamErr != nil && (fullResp.Len() > 0 || len(nativeCalls) > 0) {
 					return "", totalUsage, fmt.Errorf("stream error after partial response: %w", streamErr)
 				}
-				fallbackResp, fallbackErr := a.chatResponseWithRetry(ctx, messages, excludedTools)
-				if fallbackErr != nil {
-					return "", totalUsage, fmt.Errorf("stream error: %w; non-stream fallback failed: %v", streamErr, fallbackErr)
+				if streamErr != nil {
+					fallbackResp, fallbackErr := a.chatResponseWithRetry(ctx, messages, strategy)
+					if fallbackErr != nil {
+						return "", totalUsage, fmt.Errorf("stream error: %w; non-stream fallback failed: %v", streamErr, fallbackErr)
+					}
+					appendChatResponse(fallbackResp)
 				}
-				appendChatResponse(fallbackResp)
 			}
 		}
+		flushPendingStream()
 		resp := fullResp.String()
 		nativeCalls = normalizeToolCallIDs(nativeCalls, i)
-		calls := nativeCalls
+		calls := filterToolCallsByStrategy(nativeCalls, strategy)
 		if len(calls) == 0 {
-			calls = legacyToolCallsToLLM(ExtractToolCalls(resp), i)
+			calls = filterToolCallsByStrategy(legacyToolCallsToLLM(ExtractToolCalls(resp), i), strategy)
+		}
+		assistantContent := resp
+		if len(calls) > 0 {
+			assistantContent = StripLegacyToolMarkup(resp)
 		}
 
-		messages = append(messages, llm.Message{Role: "assistant", Content: resp, ToolCalls: calls})
-		history.Steps = append(history.Steps, resp)
+		messages = append(messages, llm.Message{Role: "assistant", Content: assistantContent, ToolCalls: calls})
+		history.Steps = append(history.Steps, assistantContent)
 
 		// Sync turn to external memory providers after each assistant response
 		a.syncTurn(ctx, tenantID, messages)
@@ -443,6 +530,7 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 		}
 
 		if len(calls) > 0 {
+			emitAgentActivity(eventCh, toolCallActivity(calls), "tool_selection", i)
 			results := a.executeToolCalls(ctx, tenantID, eventCh, calls)
 
 			// Append results in order
@@ -489,6 +577,35 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 		},
 	})
 	return "max iterations reached", totalUsage, nil
+}
+
+func activityForIteration(iteration int) string {
+	if iteration <= 0 {
+		return "Thinking about the request"
+	}
+	return "Reading tool results and deciding the next step"
+}
+
+func toolCallActivity(calls []llm.ToolCall) string {
+	if len(calls) == 1 {
+		name := strings.TrimSpace(calls[0].Function)
+		if name == "" {
+			name = "tool"
+		}
+		return "Preparing to run " + name
+	}
+	return fmt.Sprintf("Preparing to run %d tools", len(calls))
+}
+
+func emitAgentActivity(eventCh chan string, content, phase string, iteration int) {
+	EmitAgentEvent(eventCh, AgentEvent{
+		Type:    "agent.thinking",
+		Content: content,
+		Payload: map[string]interface{}{
+			"phase":     phase,
+			"iteration": iteration + 1,
+		},
+	})
 }
 
 // triggerEvolutionReview 异步触发 evolution review（不阻塞主会话）
@@ -609,7 +726,7 @@ func (a *Agent) autoRecallWithBudget(ctx context.Context, tenantID, query string
 		snippet := s.Summary
 		if snippet == "" {
 			if len(s.Content) > 800 {
-				snippet = s.Content[:800] + "..."
+				snippet = textutil.TruncateBytes(s.Content, 800) + "..."
 			} else {
 				snippet = s.Content
 			}
@@ -712,7 +829,7 @@ func generateSessionID(messages []llm.Message) string {
 		if m.Role == "user" {
 			content := m.Content
 			if len(content) > 64 {
-				content = content[:64]
+				content = textutil.TruncateBytes(content, 64)
 			}
 			sum := sha256Hash(content)
 			return sum[:16]
@@ -728,10 +845,10 @@ func sha256Hash(s string) string {
 }
 
 func (a *Agent) BuildSystemPrompt(ctx context.Context, tenantID string) (string, error) {
-	return a.buildSystemPrompt(ctx, tenantID, nil)
+	return a.buildSystemPrompt(ctx, tenantID, DefaultTaskStrategy())
 }
 
-func (a *Agent) buildSystemPrompt(ctx context.Context, tenantID string, excludedTools map[string]bool) (string, error) {
+func (a *Agent) buildSystemPrompt(ctx context.Context, tenantID string, strategy TaskStrategy) (string, error) {
 	var parts []string
 
 	// 1. Core Persona (Soul)
@@ -740,14 +857,28 @@ func (a *Agent) buildSystemPrompt(ctx context.Context, tenantID string, excluded
 	}
 	parts = append(parts, selfImprovementGuidance())
 
+	if workspace, ok := WorkspaceContextFromContext(ctx); ok {
+		var sb strings.Builder
+		sb.WriteString("# CURRENT WORKSPACE\n")
+		if workspace.ID != "" {
+			sb.WriteString(fmt.Sprintf("workspace_id: %s\n", workspace.ID))
+		}
+		sb.WriteString(fmt.Sprintf("workspace_root: %s\n", workspace.Root))
+		sb.WriteString("Use workspace_root as the default directory for local tools and relative paths.\n")
+		sb.WriteString("When the user asks about this project, current repo, current codebase, or names a project without a path, inspect workspace_root first.\n")
+		sb.WriteString("If the request arrives from IM and no workspace is available, ask the user to select or bind a workspace instead of guessing a local path.")
+		parts = append(parts, sb.String())
+	}
+
 	// 2. Tool Instructions - 增强指令强度
 	if a.backend != nil {
-		defs := filterToolDefinitions(a.backend.GetToolDefinitions(), excludedTools)
+		defs := filterToolDefinitions(a.backend.GetToolDefinitions(), strategy)
 		if len(defs) > 0 {
 			var sb strings.Builder
 			sb.WriteString("\n# TOOL USE INSTRUCTIONS\n")
 			sb.WriteString("Use local tools whenever the user asks about local files, directories, command output, project state, or system status.\n")
 			sb.WriteString("Prefer native tool calls when the model interface supports them. If native tool calls are unavailable, use the exact fallback format: [TOOL:tool_name:{\"arg\": \"val\"}]\n")
+			sb.WriteString("Do not emit XML-style tool tags such as <tool> or <parameter>; they are only tolerated for compatibility and should not appear in user-facing answers.\n")
 			sb.WriteString("Use update_plan only for non-trivial work: tasks with 3+ meaningful steps, multi-file changes, investigation/debugging, long-running verification, or explicit user requests for a plan. Do not use update_plan for one-shot answers, small code examples, simple commands, or direct explanations.\n")
 			sb.WriteString("Before the final user-facing answer, call finish_run with a structured outcome: status, summary, done, next_steps, files, tests, risks, and need_approve.\n")
 			sb.WriteString("Use tool_search when you need a capability but are unsure which registered tool fits.\n")
@@ -818,45 +949,14 @@ func (a *Agent) buildSystemPrompt(ctx context.Context, tenantID string, excluded
 	return strings.Join(parts, "\n\n"), nil
 }
 
-func filterToolDefinitions(defs []map[string]interface{}, excluded map[string]bool) []map[string]interface{} {
-	if len(excluded) == 0 {
-		return defs
-	}
+func filterToolDefinitions(defs []map[string]interface{}, strategy TaskStrategy) []map[string]interface{} {
 	out := make([]map[string]interface{}, 0, len(defs))
 	for _, def := range defs {
 		name := toolDefinitionName(def)
-		if name != "" && excluded[name] {
+		if !strategy.AllowsTool(name) {
 			continue
 		}
 		out = append(out, def)
 	}
 	return out
-}
-
-func isSimpleOneShotRequest(prompt string) bool {
-	clean := strings.TrimSpace(prompt)
-	if clean == "" {
-		return false
-	}
-	lower := strings.ToLower(clean)
-	complexMarkers := []string{
-		"review", "debug", "fix", "refactor", "implement", "deploy", "ci", "cicd",
-		"test", "tests", "repo", "project", "multiple", "plan", "step by step",
-		"分析项目", "调试", "修复", "改造", "重构", "部署", "流水线", "仓库", "项目", "多文件", "计划",
-	}
-	for _, marker := range complexMarkers {
-		if strings.Contains(lower, marker) {
-			return false
-		}
-	}
-	simpleMarkers := []string{
-		"写一个", "写一下", "实现一个", "用go写", "用 go 写", "解释", "是什么", "怎么写",
-		"example", "snippet", "hello world", "binary search", "二分法", "二分查找",
-	}
-	for _, marker := range simpleMarkers {
-		if strings.Contains(lower, marker) {
-			return true
-		}
-	}
-	return len([]rune(clean)) <= 80 && !strings.Contains(clean, "\n")
 }

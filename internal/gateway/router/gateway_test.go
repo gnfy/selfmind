@@ -4,7 +4,28 @@ import (
 	"context"
 	"strings"
 	"testing"
+
+	"selfmind/internal/kernel/llm"
 )
+
+type intentLLMProvider struct {
+	content string
+}
+
+func (p *intentLLMProvider) ChatCompletion(ctx context.Context, messages []llm.Message) (string, error) {
+	return p.content, nil
+}
+
+func (p *intentLLMProvider) Chat(ctx context.Context, req llm.ChatRequest) (*llm.ChatResponse, error) {
+	return &llm.ChatResponse{Content: p.content}, nil
+}
+
+func (p *intentLLMProvider) StreamChat(ctx context.Context, req llm.ChatRequest) (<-chan llm.StreamEvent, error) {
+	ch := make(chan llm.StreamEvent, 1)
+	ch <- llm.StreamEvent{Content: p.content}
+	close(ch)
+	return ch, nil
+}
 
 func TestIsTaskDoneConservative(t *testing.T) {
 	tests := []struct {
@@ -51,6 +72,47 @@ func TestModelStatusQuestionUsesConfiguredRuntimeLabel(t *testing.T) {
 				t.Fatalf("response = %+v", resp)
 			}
 		})
+	}
+}
+
+func TestRealChineseModelAndIdentityQuestions(t *testing.T) {
+	gw := NewGateway(nil, nil, nil, nil)
+	gw.SetModelDisplay("kimi-coding", "kimi-for-coding")
+
+	modelResp, err := gw.Handle(context.Background(), "user1", "cli", "\u4f60\u662f\u4ec0\u4e48\u6a21\u578b\uff1f")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if modelResp == nil || !strings.Contains(modelResp.Content, "kimi-coding/kimi-for-coding") {
+		t.Fatalf("model response = %+v", modelResp)
+	}
+
+	identityResp, err := gw.Handle(context.Background(), "user1", "cli", "\u4f60\u662f\u8c01\uff1f")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if identityResp == nil || !strings.Contains(identityResp.Content, "SelfMind") || !strings.Contains(identityResp.Content, "kimi-coding/kimi-for-coding") {
+		t.Fatalf("identity response = %+v", identityResp)
+	}
+}
+
+func TestIntentLLMCanClassifyAmbiguousMessage(t *testing.T) {
+	gw := NewGateway(nil, nil, nil, &intentLLMProvider{content: `{"intent":"task","confidence":0.91,"reason":"asks to inspect work","signals":["inspect"],"should_create_task":true,"should_use_tools":true}`})
+	gw.SetIntentClassifier(NewIntentClassifierWithRules(IntentRuleConfig{Mode: "llm"}))
+
+	result := gw.ClassifyIntentWithContext(context.Background(), "\u5e2e\u6211\u770b\u770b\u8fd9\u4e2a\u60c5\u51b5", "cli")
+	if result.Intent != IntentTask || !result.ShouldCreateTask || !result.ShouldUseTools || result.Source != "llm" {
+		t.Fatalf("intent result = %+v", result)
+	}
+}
+
+func TestIntentLLMLowConfidenceAsksClarification(t *testing.T) {
+	gw := NewGateway(nil, nil, nil, &intentLLMProvider{content: `{"intent":"task","confidence":0.3,"reason":"ambiguous","needs_clarification":true,"clarifying_question":"Do you want a task?"}`})
+	gw.SetIntentClassifier(NewIntentClassifierWithRules(IntentRuleConfig{Mode: "llm", AskThreshold: 0.55}))
+
+	result := gw.ClassifyIntentWithContext(context.Background(), "maybe later", "cli")
+	if !result.NeedsClarification || result.ClarifyingQuestion == "" {
+		t.Fatalf("intent result = %+v", result)
 	}
 }
 

@@ -46,7 +46,8 @@ func TestAggregateFinalResponsePrefersStructuredStream(t *testing.T) {
 }
 
 func TestAggregateFinalResponseSummarizesToolFailureForIM(t *testing.T) {
-	stream := make(chan llm.StreamEvent, 5)
+	stream := make(chan llm.StreamEvent, 6)
+	stream <- llm.StreamEvent{EventType: "agent.thinking", Content: "Thinking about the request"}
 	stream <- llm.StreamEvent{EventType: "tool.started", ToolName: "terminal", ToolArgs: `{"command":"gh auth status"}`}
 	stream <- llm.StreamEvent{EventType: "tool.output", ToolName: "terminal", Content: "error connecting to api.github.com"}
 	stream <- llm.StreamEvent{EventType: "tool.completed", ToolName: "terminal", Err: fmt.Errorf("command timed out after 30 seconds")}
@@ -57,7 +58,7 @@ func TestAggregateFinalResponseSummarizesToolFailureForIM(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"我暂时无法确认", "处理过程摘要", "gh auth status", "command timed out", "error connecting"} {
+	for _, want := range []string{"我暂时无法确认", "处理过程摘要", "Thinking about the request", "gh auth status", "command timed out", "error connecting"} {
 		if !strings.Contains(content, want) {
 			t.Fatalf("content missing %q: %q", want, content)
 		}

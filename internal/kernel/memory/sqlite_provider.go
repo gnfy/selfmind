@@ -10,6 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"selfmind/internal/platform/textutil"
+
 	"github.com/google/uuid"
 	_ "modernc.org/sqlite"
 )
@@ -644,7 +646,7 @@ func (p *SQLiteProvider) IndexMessagesFromTrajectory(ctx context.Context, tenant
 	for _, m := range record.Messages {
 		if m.Role == "user" && msgCount < 2 {
 			if len(m.Content) > 80 {
-				summaryParts = append(summaryParts, m.Content[:80]+"...")
+				summaryParts = append(summaryParts, textutil.TruncateBytes(m.Content, 80)+"...")
 			} else {
 				summaryParts = append(summaryParts, m.Content)
 			}

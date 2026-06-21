@@ -23,6 +23,9 @@ type IntentClassifier struct {
 	skillPatterns    []*regexp.Regexp
 	queryPatterns    []*regexp.Regexp
 	routePatterns    []*regexp.Regexp
+	mode             string
+	directThreshold  float64
+	askThreshold     float64
 }
 
 func NewIntentClassifier() *IntentClassifier {
@@ -148,6 +151,13 @@ func (c *IntentClassifier) ClassifyWithReason(input string) (Intent, string) {
 // IsCasualShortQuestion 判断是否是简短的闲聊问题（不需要执行）
 func IsCasualShortQuestion(input string) bool {
 	lower := normalizeQuestionText(input)
+	switch lower {
+	case "\u4f60\u597d", "\u60a8\u597d", "hi", "hello", "\u55e8", "hey",
+		"\u8c22\u8c22", "\u591a\u8c22", "\u8c22\u4e86", "thanks", "thankyou",
+		"\u518d\u89c1", "\u62dc\u62dc", "bye", "\u665a\u5b89",
+		"\u4f60\u662f\u8c01", "\u4f60\u53eb\u4ec0\u4e48", "\u4f60\u662f\u5e72\u561b\u7684", "whoareyou", "whatareyou":
+		return true
+	}
 	shortCasual := []string{
 		"你好", "您好", "hi", "hello", "嗨", "hey",
 		"谢谢", "多谢", "谢了", "thanks", "thankyou",

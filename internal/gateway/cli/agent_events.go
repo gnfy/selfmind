@@ -3,15 +3,68 @@ package cli
 import (
 	"context"
 	"fmt"
+	"net/http"
+	"os"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"selfmind/internal/gateway/api"
+	"selfmind/internal/gateway/httpapi"
 	"selfmind/internal/kernel"
 	"selfmind/internal/kernel/llm"
 )
 
 func (m *uiModel) runAgent(ctx context.Context, input string) tea.Cmd {
 	return func() tea.Msg {
+		if m.messageProcessor != nil {
+			var full strings.Builder
+			var usage llm.UsageStats
+			ctx = httpapi.WithStreamObserver(ctx, func(event llm.StreamEvent) {
+				if event.EventType != "" {
+					m.forwardGatewayEvent(event)
+					if event.EventType == "stream" {
+						full.WriteString(event.Content)
+					}
+					if event.Usage != nil {
+						usage = *event.Usage
+					}
+					return
+				}
+				if event.Content != "" {
+					full.WriteString(event.Content)
+					if m.program != nil {
+						m.program.Send(MsgStream{Content: event.Content})
+					}
+				}
+				if event.Usage != nil {
+					usage = *event.Usage
+				}
+			})
+			resp, status := m.messageProcessor(ctx, api.MessageRequest{
+				TenantID:       m.tenantID,
+				Platform:       "cli",
+				PlatformUserID: cliPlatformUserID(),
+				DisplayName:    cliDisplayName(),
+				Channel:        m.channel,
+				Content:        input,
+				ClientCWD:      currentWorkingDir(),
+			})
+			if resp.Usage.InputTokens != 0 || resp.Usage.OutputTokens != 0 {
+				usage = resp.Usage
+			}
+			if resp.Error != "" {
+				return MsgAgentDone{Response: full.String(), Usage: usage, Err: fmt.Errorf("%s", resp.Error)}
+			}
+			if status >= http.StatusBadRequest {
+				return MsgAgentDone{Response: full.String(), Usage: usage, Err: fmt.Errorf("gateway returned HTTP %d", status)}
+			}
+			content := resp.Content
+			if strings.TrimSpace(content) == "" {
+				content = full.String()
+			}
+			return MsgAgentDone{Response: content, Usage: usage}
+		}
+
 		if m.gateway != nil {
 			resp, err := m.gateway.HandleWithEvents(ctx, m.tenantID, m.channel, input)
 			if err != nil {
@@ -62,6 +115,22 @@ func (m *uiModel) runAgent(ctx context.Context, input string) tea.Cmd {
 	}
 }
 
+func cliPlatformUserID() string {
+	for _, key := range []string{"SELFMIND_CLI_USER_ID", "SELF_CLI_USER_ID", "USER", "USERNAME"} {
+		if value := strings.TrimSpace(os.Getenv(key)); value != "" {
+			return value
+		}
+	}
+	return "local"
+}
+
+func cliDisplayName() string {
+	if value := strings.TrimSpace(os.Getenv("SELFMIND_CLI_DISPLAY_NAME")); value != "" {
+		return value
+	}
+	return cliPlatformUserID()
+}
+
 func (m *uiModel) forwardGatewayEvent(event llm.StreamEvent) {
 	if m.program == nil {
 		return
@@ -71,21 +140,26 @@ func (m *uiModel) forwardGatewayEvent(event llm.StreamEvent) {
 		if event.Content != "" {
 			m.program.Send(MsgStream{Content: event.Content})
 		}
+	case "agent.thinking", "agent.step", "strategy.selected":
+		if event.Content != "" {
+			m.program.Send(MsgAgentActivity{Content: displayActivityEvent(event.EventType, event.Content)})
+		}
 	case "tool.started":
-		m.program.Send(MsgToolStart{ToolName: event.ToolName, Args: event.ToolArgs})
+		m.program.Send(MsgToolStart{ToolName: event.ToolName, ToolCallID: event.ToolCallID, Args: event.ToolArgs})
 	case "tool.completed":
 		m.program.Send(MsgToolDone{
-			ToolName: event.ToolName,
-			Result:   event.ToolResult,
-			Err:      event.Err,
-			Duration: event.DurationSeconds,
+			ToolName:   event.ToolName,
+			ToolCallID: event.ToolCallID,
+			Result:     event.ToolResult,
+			Err:        event.Err,
+			Duration:   event.DurationSeconds,
 		})
 	case "tool.output":
 		if event.Content != "" {
 			m.program.Send(MsgToolOutput{ToolName: event.ToolName, Content: event.Content})
 		}
 	case "tool.heartbeat":
-		m.program.Send(MsgToolHeartbeat{ToolName: event.ToolName, Content: heartbeatStatus(event)})
+		m.program.Send(MsgToolHeartbeat{ToolName: event.ToolName, ToolCallID: event.ToolCallID, Content: heartbeatStatus(event)})
 	case "learning.review":
 		if event.Content != "" {
 			m.program.Send(MsgLearningEvent{Content: event.Content})
@@ -161,28 +235,34 @@ func (m *uiModel) handleStructuredAgentEvent(event kernel.AgentEvent) {
 	switch event.Type {
 	case "stream":
 		m.program.Send(MsgStream{Content: event.Content})
+	case "agent.thinking", "agent.step", "strategy.selected":
+		if event.Content != "" {
+			m.program.Send(MsgAgentActivity{Content: displayActivityEvent(event.Type, event.Content)})
+		}
 	case "tool.started":
-		m.program.Send(MsgToolStart{ToolName: event.ToolName, Args: event.ToolArgs})
+		m.program.Send(MsgToolStart{ToolName: event.ToolName, ToolCallID: event.ToolCallID, Args: event.ToolArgs})
 	case "tool.completed":
 		var err error
 		if event.Error != "" {
 			err = fmt.Errorf("%s", event.Error)
 		}
 		m.program.Send(MsgToolDone{
-			ToolName: event.ToolName,
-			Result:   event.ToolResult,
-			Err:      err,
-			Duration: event.DurationSeconds,
+			ToolName:   event.ToolName,
+			ToolCallID: event.ToolCallID,
+			Result:     event.ToolResult,
+			Err:        err,
+			Duration:   event.DurationSeconds,
 		})
 	case "tool.output":
 		if event.Content != "" {
 			m.program.Send(MsgToolOutput{ToolName: event.ToolName, Content: event.Content})
 		}
 	case "tool.heartbeat":
-		m.program.Send(MsgToolHeartbeat{ToolName: event.ToolName, Content: heartbeatStatus(llm.StreamEvent{
-			EventType: event.Type,
-			ToolName:  event.ToolName,
-			Payload:   event.Payload,
+		m.program.Send(MsgToolHeartbeat{ToolName: event.ToolName, ToolCallID: event.ToolCallID, Content: heartbeatStatus(llm.StreamEvent{
+			EventType:  event.Type,
+			ToolName:   event.ToolName,
+			ToolCallID: event.ToolCallID,
+			Payload:    event.Payload,
 		})})
 	case "plan.updated":
 		m.program.Send(MsgLearningEvent{Content: "Plan updated."})
@@ -193,15 +273,32 @@ func (m *uiModel) handleStructuredAgentEvent(event kernel.AgentEvent) {
 	}
 }
 
+func displayActivityEvent(eventType, content string) string {
+	content = strings.TrimSpace(content)
+	if content == "" {
+		return ""
+	}
+	if eventType == "strategy.selected" {
+		return "Strategy: " + content
+	}
+	return content
+}
+
 func heartbeatStatus(event llm.StreamEvent) string {
 	name := event.ToolName
 	if name == "" {
 		name = "tool"
 	}
+	detail := strings.TrimSpace(event.Content)
 	if event.Payload != nil {
-		if elapsed, ok := event.Payload["elapsed_seconds"].(float64); ok && elapsed > 0 {
-			return fmt.Sprintf("%s running %.1fs", name, elapsed)
+		if detail == "" {
+			if status, ok := event.Payload["status"].(string); ok {
+				detail = strings.TrimSpace(status)
+			}
 		}
+	}
+	if detail != "" {
+		return detail
 	}
 	return name + " running"
 }

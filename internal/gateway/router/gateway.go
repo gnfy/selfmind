@@ -48,6 +48,20 @@ func (g *Gateway) SetModelDisplay(provider, model string) {
 	g.modelName = strings.TrimSpace(model)
 }
 
+func (g *Gateway) SetIntentClassifier(classifier *IntentClassifier) {
+	if g == nil || classifier == nil {
+		return
+	}
+	g.intentClassifier = classifier
+}
+
+func (g *Gateway) ClassifyIntent(input string) IntentResult {
+	if g == nil || g.intentClassifier == nil {
+		return NewIntentClassifier().ClassifyDetailed(input)
+	}
+	return g.intentClassifier.ClassifyDetailed(input)
+}
+
 // HandleResponse 统一响应结构，支持同步和流式
 type HandleResponse struct {
 	Content      string
@@ -65,7 +79,8 @@ func (g *Gateway) Handle(ctx context.Context, unifiedUID, channel, input string)
 	}
 
 	// 1. 意图分类
-	intent, reason := g.intentClassifier.ClassifyWithReason(input)
+	result := g.ClassifyIntent(input)
+	intent, reason := result.Intent, result.Reason
 
 	switch intent {
 	case IntentSkill:
@@ -97,6 +112,12 @@ func (g *Gateway) Handle(ctx context.Context, unifiedUID, channel, input string)
 }
 
 func (g *Gateway) handleTaskStreaming(ctx context.Context, unifiedUID, channel, input string, intent Intent, reason string) (*HandleResponse, error) {
+	if g == nil || g.agent == nil {
+		return nil, fmt.Errorf("gateway agent is not configured")
+	}
+	if g.taskManager == nil {
+		return g.runAgentStreaming(ctx, unifiedUID, channel, input, intent, reason)
+	}
 	// 1. 任务管理
 	var taskID int64
 	var err error
@@ -178,8 +199,40 @@ func (g *Gateway) handleCasual(ctx context.Context, unifiedUID, channel, input s
 	return reply, llm.UsageStats{}, nil
 }
 
+func (g *Gateway) RunAgent(ctx context.Context, unifiedUID, channel, input string) (*HandleResponse, error) {
+	return g.runAgentStreaming(ctx, unifiedUID, channel, input, IntentTask, "agent-only")
+}
+
+func (g *Gateway) runAgentStreaming(ctx context.Context, unifiedUID, channel, input string, intent Intent, reason string) (*HandleResponse, error) {
+	if g == nil || g.agent == nil {
+		return nil, fmt.Errorf("gateway agent is not configured")
+	}
+	respChan := make(chan llm.StreamEvent, 20)
+	go func() {
+		defer close(respChan)
+		resp, usage, err := g.agent.RunConversation(ctx, unifiedUID, channel, input)
+		if err != nil {
+			respChan <- llm.StreamEvent{Err: err}
+			return
+		}
+		if resp != "" {
+			respChan <- llm.StreamEvent{Content: resp}
+		}
+		respChan <- llm.StreamEvent{Usage: &usage}
+	}()
+	return &HandleResponse{
+		IsStreaming:  true,
+		Stream:       respChan,
+		Intent:       intent,
+		IntentReason: reason,
+	}, nil
+}
+
 func isModelStatusQuestion(input string) bool {
 	cleaned := normalizeQuestionText(input)
+	if normalizedModelStatusQuestion(cleaned) {
+		return true
+	}
 	if cleaned == "" {
 		return false
 	}
@@ -204,8 +257,38 @@ func isModelStatusQuestion(input string) bool {
 	return false
 }
 
+func normalizedModelStatusQuestion(cleaned string) bool {
+	hasModelWord := strings.Contains(cleaned, "\u6a21\u578b") ||
+		strings.Contains(cleaned, "model") ||
+		strings.Contains(cleaned, "llm") ||
+		strings.Contains(cleaned, "\u540e\u7aef") ||
+		strings.Contains(cleaned, "\u5927\u6a21\u578b")
+	if !hasModelWord {
+		return false
+	}
+	for _, cue := range []string{
+		"\u4ec0\u4e48", "\u54ea\u4e2a", "\u54ea\u4e00\u4e2a", "\u5f53\u524d", "\u73b0\u5728", "\u76ee\u524d",
+		"\u6b63\u5728\u7528", "\u7528\u7684", "\u4f7f\u7528\u7684", "\u8fde\u63a5\u7684", "\u8dd1\u7684",
+		"what", "which", "current", "using", "running", "active",
+	} {
+		if strings.Contains(cleaned, cue) {
+			return true
+		}
+	}
+	return false
+}
+
 func normalizeQuestionText(input string) string {
 	input = strings.ToLower(strings.TrimSpace(input))
+	input = strings.NewReplacer(
+		"\u3000", "",
+		"\uff1f", "",
+		"\uff01", "",
+		"\u3002", "",
+		"\uff0c", "",
+		"\uff1a", "",
+		"\uff1b", "",
+	).Replace(input)
 	replacer := strings.NewReplacer(
 		" ", "",
 		"\t", "",
@@ -227,10 +310,14 @@ func normalizeQuestionText(input string) string {
 
 func (g *Gateway) modelStatusReply() string {
 	label := g.modelDisplayLabel()
-	if label == "" {
-		return "我是 SelfMind，目前没有解析到可用的 AI 模型配置。请运行 selfmind model check 查看原因。"
+	return modelStatusReplyText(label)
+}
+
+func modelStatusReplyText(label string) string {
+	if strings.TrimSpace(label) == "" {
+		return "\u6211\u662f SelfMind\uff0c\u76ee\u524d\u6ca1\u6709\u89e3\u6790\u5230\u53ef\u7528\u7684 AI \u6a21\u578b\u914d\u7f6e\u3002\u8bf7\u8fd0\u884c selfmind model check \u67e5\u770b\u539f\u56e0\u3002"
 	}
-	return fmt.Sprintf("我是 SelfMind，当前连接的模型是 %s。", label)
+	return fmt.Sprintf("\u6211\u662f SelfMind\uff0c\u5f53\u524d\u8fde\u63a5\u7684\u6a21\u578b\u662f %s\u3002", label)
 }
 
 func (g *Gateway) modelDisplayLabel() string {
@@ -250,6 +337,9 @@ func (g *Gateway) modelDisplayLabel() string {
 
 // casualReply 根据输入生成闲聊回复
 func (g *Gateway) casualReply(input string) string {
+	if reply, ok := g.directCasualReply(input); ok {
+		return reply
+	}
 	// 简单规则回复
 	switch normalizeQuestionText(input) {
 	case "你好", "您好", "hi", "hello", "嗨", "hey":
@@ -271,6 +361,25 @@ func (g *Gateway) casualReply(input string) string {
 }
 
 // handleSkill 处理 skill 调用
+func (g *Gateway) directCasualReply(input string) (string, bool) {
+	cleaned := normalizeQuestionText(input)
+	switch cleaned {
+	case "\u4f60\u597d", "\u60a8\u597d", "hi", "hello", "\u55e8", "hey":
+		return "\u4f60\u597d\uff01\u6211\u662f SelfMind\uff0c\u53ef\u4ee5\u5e2e\u4f60\u5904\u7406\u5f00\u53d1\u4efb\u52a1\u3001\u68c0\u67e5\u4ee3\u7801\u3001\u8dd1\u5de5\u5177\u548c\u8de8\u7aef\u534f\u540c\u3002", true
+	case "\u4f60\u662f\u8c01", "\u4f60\u53eb\u4ec0\u4e48", "\u4f60\u662f\u5e72\u561b\u7684", "whoareyou", "whatareyou":
+		reply := "\u6211\u662f SelfMind\uff0c\u4e00\u4e2a\u9762\u5411\u5f00\u53d1\u4efb\u52a1\u548c\u591a\u7aef\u534f\u540c\u7684 AI \u5de5\u4f5c\u52a9\u624b\u3002"
+		if label := g.modelDisplayLabel(); label != "" {
+			reply += " \u5f53\u524d\u8fde\u63a5\u7684\u6a21\u578b\u662f " + label + "\u3002"
+		}
+		return reply, true
+	case "\u8c22\u8c22", "\u591a\u8c22", "\u8c22\u4e86", "thanks", "thankyou":
+		return "\u4e0d\u5ba2\u6c14\uff0c\u9700\u8981\u7ee7\u7eed\u5904\u7406\u4efb\u52a1\u65f6\u76f4\u63a5\u53eb\u6211\u3002", true
+	case "\u518d\u89c1", "\u62dc\u62dc", "bye", "\u665a\u5b89":
+		return "\u518d\u89c1\uff0c\u9700\u8981\u65f6\u518d\u56de\u6765\u627e\u6211\u3002", true
+	}
+	return "", false
+}
+
 func (g *Gateway) handleSkill(ctx context.Context, unifiedUID, channel, input string) (string, llm.UsageStats, error) {
 	skillName := input
 	for _, prefix := range []string{"/skill ", "/s ", "调用技能 ", "用技能 ", "执行技能 ", "运行技能 "} {

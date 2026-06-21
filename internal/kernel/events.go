@@ -16,6 +16,7 @@ type AgentEvent struct {
 	Type            string                 `json:"type"`
 	Content         string                 `json:"content,omitempty"`
 	ToolName        string                 `json:"tool_name,omitempty"`
+	ToolCallID      string                 `json:"tool_call_id,omitempty"`
 	ToolArgs        string                 `json:"tool_args,omitempty"`
 	ToolResult      string                 `json:"tool_result,omitempty"`
 	DurationSeconds float64                `json:"duration_seconds,omitempty"`

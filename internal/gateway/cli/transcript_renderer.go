@@ -19,7 +19,19 @@ func (m *uiModel) renderAllMessages() string {
 	var allLines []string
 
 	processLines := func(lines []string, baseIdx int) []string {
-		return lines
+		if !m.mouseSelection {
+			return lines
+		}
+		start, end := m.mouseSelectionRange()
+		out := append([]string{}, lines...)
+		for i, line := range out {
+			idx := baseIdx + i
+			if idx < start || idx > end {
+				continue
+			}
+			out[i] = renderSelectedTranscriptLine(line, w, st.Chat.Selected)
+		}
+		return out
 	}
 
 	startupLines := append([]string{"", ""}, m.renderStartupCard(w)...)
@@ -47,7 +59,11 @@ func (m *uiModel) renderAllMessages() string {
 	if m.thinking {
 		spinnerView := m.spinner.View()
 		dots := strings.Repeat(".", (m.thinkingDots%3)+1)
-		rendered := st.Chat.Thinking.Render(spinnerView + " Working" + dots)
+		label := strings.TrimSpace(m.activityText)
+		if label == "" {
+			label = "Working"
+		}
+		rendered := st.Chat.Thinking.Render(spinnerView + " " + label + dots)
 		lines := processLines([]string{rendered}, len(allLines))
 		allLines = append(allLines, lines...)
 	}
@@ -60,6 +76,13 @@ func (m *uiModel) renderAllMessages() string {
 	}
 
 	return strings.Join(allLines, "\n")
+}
+
+func renderSelectedTranscriptLine(line string, width int, style lipgloss.Style) string {
+	if width < 1 {
+		width = 1
+	}
+	return style.Copy().Width(width).Render(truncateToWidth(stripANSI(line), width))
 }
 
 func (m *uiModel) renderStartupCard(width int) []string {
@@ -183,15 +206,13 @@ func renderToolMessage(msg ChatMessage, width int) string {
 	if !done {
 		var sb strings.Builder
 		sb.WriteString("• " + action + "\n")
+		if detail := strings.TrimSpace(msg.RunningDetail); detail != "" {
+			sb.WriteString("  └─ " + truncateToWidth(detail, width-6) + "\n")
+		}
 		if result := toolResultLine(label, msg.Content, width-6); result != "" {
 			sb.WriteString("  └─ " + result + "\n")
 		}
 		return sb.String()
-	}
-
-	dur := fmt.Sprintf("%.1fs", msg.Duration)
-	if msg.Duration == 0 {
-		dur = "0.1s"
 	}
 
 	status := ""
@@ -200,7 +221,7 @@ func renderToolMessage(msg ChatMessage, width int) string {
 	}
 
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("• %s%s  %s\n", action, status, dur))
+	sb.WriteString(fmt.Sprintf("• %s%s\n", action, status))
 	if result := toolResultLine(label, msg.Content, width-6); result != "" {
 		sb.WriteString("  └─ " + result + "\n")
 	}
@@ -224,16 +245,25 @@ func toolAction(label string, args map[string]interface{}, done bool) string {
 	detail := toolDetail(args, "path", "pattern", "query", "command", "name", "action")
 	switch label {
 	case "terminal", "execute_command", "shell":
+		detail = toolDetail(args, "command", "path")
 		if done {
 			return "Ran " + valueOr(detail, label)
 		}
 		return "Running " + valueOr(detail, label)
 	case "cat", "read_file":
+		detail = toolDetail(args, "path")
 		if done {
 			return "Read " + valueOr(detail, label)
 		}
 		return "Reading " + valueOr(detail, label)
-	case "ls_r", "list_files", "search_files", "grep":
+	case "ls_r", "list_files":
+		detail = toolDetail(args, "path")
+		if done {
+			return "Listed " + valueOr(detail, label)
+		}
+		return "Listing " + valueOr(detail, label)
+	case "search_files", "grep":
+		detail = toolDetail(args, "pattern", "query", "path")
 		if done {
 			return "Searched " + valueOr(detail, label)
 		}
@@ -292,6 +322,10 @@ func toolDetail(args map[string]interface{}, keys ...string) string {
 
 func toolResultLine(label, content string, width int) string {
 	switch label {
+	case "ls_r", "list_files":
+		return truncateToWidth(formatListFilesResult(content), width)
+	case "search_files", "grep":
+		return truncateToWidth(formatSearchFilesResult(content), width)
 	case "update_plan":
 		return truncateToWidth(formatPlanToolResult(content), width)
 	case "finish_run":
@@ -299,6 +333,56 @@ func toolResultLine(label, content string, width int) string {
 	default:
 		return firstResultLine(content, width)
 	}
+}
+
+func formatListFilesResult(content string) string {
+	var payload struct {
+		Count       int  `json:"count"`
+		Scanned     int  `json:"scanned"`
+		Truncated   bool `json:"truncated"`
+		SkippedDirs int  `json:"skipped_dirs"`
+	}
+	if err := json.Unmarshal([]byte(content), &payload); err != nil {
+		return firstResultLine(content, 80)
+	}
+	parts := []string{fmt.Sprintf("%d entries", payload.Count)}
+	if payload.Scanned > payload.Count {
+		parts = append(parts, fmt.Sprintf("%d scanned", payload.Scanned))
+	}
+	if payload.SkippedDirs > 0 {
+		parts = append(parts, fmt.Sprintf("%d dirs skipped", payload.SkippedDirs))
+	}
+	if payload.Truncated {
+		parts = append(parts, "truncated")
+	}
+	return strings.Join(parts, " · ")
+}
+
+func formatSearchFilesResult(content string) string {
+	var payload struct {
+		Count        int  `json:"count"`
+		ScannedFiles int  `json:"scanned_files"`
+		Truncated    bool `json:"truncated"`
+		SkippedDirs  int  `json:"skipped_dirs"`
+		SkippedLarge int  `json:"skipped_large"`
+	}
+	if err := json.Unmarshal([]byte(content), &payload); err != nil {
+		return firstResultLine(content, 80)
+	}
+	parts := []string{fmt.Sprintf("%d matches", payload.Count)}
+	if payload.ScannedFiles > 0 {
+		parts = append(parts, fmt.Sprintf("%d files scanned", payload.ScannedFiles))
+	}
+	if payload.SkippedDirs > 0 {
+		parts = append(parts, fmt.Sprintf("%d dirs skipped", payload.SkippedDirs))
+	}
+	if payload.SkippedLarge > 0 {
+		parts = append(parts, fmt.Sprintf("%d large files skipped", payload.SkippedLarge))
+	}
+	if payload.Truncated {
+		parts = append(parts, "truncated")
+	}
+	return strings.Join(parts, " · ")
 }
 
 func formatPlanToolResult(content string) string {

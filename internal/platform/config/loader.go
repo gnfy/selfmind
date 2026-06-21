@@ -79,6 +79,16 @@ models:
   source: "local"
   roles: {}
 
+intent:
+  mode: "hybrid"
+  rules:
+    continue: []
+    task: []
+    casual: []
+  thresholds:
+    direct: 0.8
+    ask: 0.55
+
 cron:
   enabled: true
 
@@ -108,12 +118,24 @@ type Config struct {
 	Editor           EditorConfig                `mapstructure:"editor" yaml:"editor,omitempty"`
 	Memory           MemoryConfig                `mapstructure:"memory" yaml:"memory,omitempty"`
 	Models           ModelsConfig                `mapstructure:"models" yaml:"models,omitempty"`
+	Intent           IntentConfig                `mapstructure:"intent" yaml:"intent,omitempty"`
 }
 
 type ModelConfig struct {
 	Provider      string `mapstructure:"provider" yaml:"provider,omitempty"`
 	Default       string `mapstructure:"default" yaml:"default,omitempty"`
 	ContextLength int    `mapstructure:"context_length" yaml:"context_length,omitempty"`
+}
+
+type IntentConfig struct {
+	Mode       string                 `mapstructure:"mode" yaml:"mode,omitempty"`
+	Rules      map[string][]string    `mapstructure:"rules" yaml:"rules,omitempty"`
+	Thresholds IntentThresholdsConfig `mapstructure:"thresholds" yaml:"thresholds,omitempty"`
+}
+
+type IntentThresholdsConfig struct {
+	Direct float64 `mapstructure:"direct" yaml:"direct,omitempty"`
+	Ask    float64 `mapstructure:"ask" yaml:"ask,omitempty"`
 }
 
 type EditorConfig struct {
@@ -403,6 +425,9 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("evolution.enabled", true)
 	v.SetDefault("evolution.nudge_interval", 10)
 	v.SetDefault("models.source", "local")
+	v.SetDefault("intent.mode", "hybrid")
+	v.SetDefault("intent.thresholds.direct", 0.8)
+	v.SetDefault("intent.thresholds.ask", 0.55)
 }
 
 func (c *Config) Normalize() {
@@ -411,6 +436,34 @@ func (c *Config) Normalize() {
 	}
 	if c.ProviderProfiles == nil {
 		c.ProviderProfiles = make(map[string]ProviderEndpoint)
+	}
+	if c.Intent.Rules == nil {
+		c.Intent.Rules = make(map[string][]string)
+	}
+	c.Intent.Mode = strings.ToLower(strings.TrimSpace(firstNonEmpty(c.Intent.Mode, "hybrid")))
+	if c.Intent.Thresholds.Direct <= 0 {
+		c.Intent.Thresholds.Direct = 0.8
+	}
+	if c.Intent.Thresholds.Ask <= 0 {
+		c.Intent.Thresholds.Ask = 0.55
+	}
+	for name, patterns := range c.Intent.Rules {
+		trimmed := strings.ToLower(strings.TrimSpace(name))
+		if trimmed == "" {
+			delete(c.Intent.Rules, name)
+			continue
+		}
+		normalized := make([]string, 0, len(patterns))
+		for _, pattern := range patterns {
+			pattern = expandEnvRef(strings.TrimSpace(pattern))
+			if pattern != "" {
+				normalized = append(normalized, pattern)
+			}
+		}
+		if trimmed != name {
+			delete(c.Intent.Rules, name)
+		}
+		c.Intent.Rules[trimmed] = normalized
 	}
 	if strings.TrimSpace(c.Models.Source) == "" {
 		c.Models.Source = "local"

@@ -6,7 +6,8 @@ import (
 )
 
 func CleanUTF8(s string) string {
-	return strings.ToValidUTF8(s, "")
+	s = strings.ToValidUTF8(s, "")
+	return strings.ReplaceAll(s, "\uFFFD", "")
 }
 
 func TruncateBytes(s string, max int) string {

@@ -9,6 +9,13 @@ import (
 	"github.com/mattn/go-runewidth"
 )
 
+const (
+	glyphBullet  = "\u2022"
+	glyphCorner  = "\u2514\u2500"
+	glyphChevron = "\u203a"
+	glyphDot     = " · "
+)
+
 func (m *uiModel) renderAllMessages() string {
 	st := m.common.Styles
 	w := m.viewport.Width
@@ -17,7 +24,6 @@ func (m *uiModel) renderAllMessages() string {
 	}
 
 	var allLines []string
-
 	processLines := func(lines []string, baseIdx int) []string {
 		if !m.mouseSelection {
 			return lines
@@ -50,13 +56,20 @@ func (m *uiModel) renderAllMessages() string {
 		case "system":
 			rendered = renderSystemMessage(stripANSI(msg.Content), w)
 		}
+		msgLines := strings.Split(rendered, "\n")
+		msgLines = processLines(msgLines, len(allLines))
+		allLines = append(allLines, msgLines...)
+	}
 
+	if strings.TrimSpace(m.liveStreamContent) != "" {
+		rendered := renderAssistantMessage(stripANSI(m.liveStreamContent), w)
 		msgLines := strings.Split(rendered, "\n")
 		msgLines = processLines(msgLines, len(allLines))
 		allLines = append(allLines, msgLines...)
 	}
 
 	if m.thinking {
+		allLines = append(allLines, "")
 		spinnerView := m.spinner.View()
 		dots := strings.Repeat(".", (m.thinkingDots%3)+1)
 		label := strings.TrimSpace(m.activityText)
@@ -74,7 +87,6 @@ func (m *uiModel) renderAllMessages() string {
 		line := processLines([]string{""}, idx)
 		allLines = append(allLines, line[0])
 	}
-
 	return strings.Join(allLines, "\n")
 }
 
@@ -112,11 +124,10 @@ func (m *uiModel) renderStartupCard(width int) []string {
 
 	needed := runewidth.StringWidth(title)
 	for _, line := range []string{modelLine, providerLine, dirLine} {
-		if w := runewidth.StringWidth(line); w > needed {
-			needed = w
+		if width := runewidth.StringWidth(line); width > needed {
+			needed = width
 		}
 	}
-
 	cardW := needed + 4
 	if cardW < 48 {
 		cardW = 48
@@ -126,7 +137,7 @@ func (m *uiModel) renderStartupCard(width int) []string {
 	}
 
 	lines := []string{
-		"┌" + strings.Repeat("─", cardW-2) + "┐",
+		"+" + strings.Repeat("-", cardW-2) + "+",
 		renderBoxLine(title, cardW),
 		renderBoxLine("", cardW),
 		renderBoxLine(modelLine, cardW),
@@ -136,7 +147,7 @@ func (m *uiModel) renderStartupCard(width int) []string {
 	}
 	lines = append(lines,
 		renderBoxLine(dirLine, cardW),
-		"└"+strings.Repeat("─", cardW-2)+"┘",
+		"+"+strings.Repeat("-", cardW-2)+"+",
 		"",
 		"Tip: Tell SelfMind what to inspect, change, test, or remember.",
 		"",
@@ -155,13 +166,13 @@ func renderUserMessage(content string, width int) string {
 		Padding(1, 1).
 		Width(width)
 	if content == "" {
-		return "\n" + style.Render("›")
+		return "\n" + style.Render(glyphChevron+" ")
 	}
 	wrapped := wrapText(content, width-4)
 	lines := strings.Split(wrapped, "\n")
 	for i, line := range lines {
 		if i == 0 {
-			lines[i] = "› " + line
+			lines[i] = glyphChevron + " " + line
 		} else {
 			lines[i] = "  " + line
 		}
@@ -194,7 +205,6 @@ func renderToolMessage(msg ChatMessage, width int) string {
 	if label == "" {
 		label = "tool"
 	}
-
 	var args map[string]interface{}
 	_ = json.Unmarshal([]byte(msg.ToolArgs), &args)
 	if args == nil {
@@ -203,14 +213,14 @@ func renderToolMessage(msg ChatMessage, width int) string {
 
 	done := !msg.IsRunning && (msg.Content != "" || msg.Duration > 0)
 	action := toolAction(label, args, done)
+	var sb strings.Builder
 	if !done {
-		var sb strings.Builder
-		sb.WriteString("• " + action + "\n")
+		sb.WriteString(glyphBullet + " " + action + "\n")
 		if detail := strings.TrimSpace(msg.RunningDetail); detail != "" {
-			sb.WriteString("  └─ " + truncateToWidth(detail, width-6) + "\n")
+			sb.WriteString("  " + glyphCorner + " " + truncateToWidth(detail, width-6) + "\n")
 		}
 		if result := toolResultLine(label, msg.Content, width-6); result != "" {
-			sb.WriteString("  └─ " + result + "\n")
+			sb.WriteString("  " + glyphCorner + " " + result + "\n")
 		}
 		return sb.String()
 	}
@@ -219,11 +229,13 @@ func renderToolMessage(msg ChatMessage, width int) string {
 	if msg.IsError {
 		status = " failed"
 	}
-
-	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("• %s%s\n", action, status))
+	sb.WriteString(fmt.Sprintf("%s %s%s", glyphBullet, action, status))
+	if msg.Duration > 0 {
+		sb.WriteString(fmt.Sprintf(" %.1fs", msg.Duration))
+	}
+	sb.WriteString("\n")
 	if result := toolResultLine(label, msg.Content, width-6); result != "" {
-		sb.WriteString("  └─ " + result + "\n")
+		sb.WriteString("  " + glyphCorner + " " + result + "\n")
 	}
 	return sb.String()
 }
@@ -234,9 +246,9 @@ func renderSystemMessage(content string, width int) string {
 		return ""
 	}
 	var sb strings.Builder
-	sb.WriteString("• Learning\n")
+	sb.WriteString(glyphBullet + " Learning\n")
 	if line := firstResultLine(content, width-6); line != "" {
-		sb.WriteString("  └─ " + line + "\n")
+		sb.WriteString("  " + glyphCorner + " " + line + "\n")
 	}
 	return sb.String()
 }
@@ -355,7 +367,7 @@ func formatListFilesResult(content string) string {
 	if payload.Truncated {
 		parts = append(parts, "truncated")
 	}
-	return strings.Join(parts, " · ")
+	return strings.Join(parts, glyphDot)
 }
 
 func formatSearchFilesResult(content string) string {
@@ -382,7 +394,7 @@ func formatSearchFilesResult(content string) string {
 	if payload.Truncated {
 		parts = append(parts, "truncated")
 	}
-	return strings.Join(parts, " · ")
+	return strings.Join(parts, glyphDot)
 }
 
 func formatPlanToolResult(content string) string {
@@ -407,9 +419,9 @@ func formatPlanToolResult(content string) string {
 		}
 	}
 	if inProgress != "" {
-		return fmt.Sprintf("%d steps · now: %s", len(payload.Plan), inProgress)
+		return fmt.Sprintf("%d steps%snow: %s", len(payload.Plan), glyphDot, inProgress)
 	}
-	return fmt.Sprintf("%d steps · %d completed", len(payload.Plan), completed)
+	return fmt.Sprintf("%d steps%s%d completed", len(payload.Plan), glyphDot, completed)
 }
 
 func formatFinishRunResult(content string) string {
@@ -424,7 +436,7 @@ func formatFinishRunResult(content string) string {
 	summary := strings.TrimSpace(payload.Summary)
 	switch {
 	case status != "" && summary != "":
-		return status + " · " + summary
+		return status + glyphDot + summary
 	case summary != "":
 		return summary
 	case status != "":
@@ -451,7 +463,7 @@ func renderBoxLine(content string, width int) string {
 		return content
 	}
 	text := truncateToWidth(content, inner)
-	return "│ " + padRightWidth(text, inner) + " │"
+	return "| " + padRightWidth(text, inner) + " |"
 }
 
 func padRightWidth(s string, width int) string {

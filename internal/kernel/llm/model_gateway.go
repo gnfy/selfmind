@@ -181,7 +181,7 @@ func (p *RoleProvider) StreamChat(ctx context.Context, req ChatRequest) (<-chan 
 		return nil, err
 	}
 
-	out := make(chan StreamEvent, 10)
+	out := make(chan StreamEvent, 256)
 	go func() {
 		defer close(out)
 		for ev := range ch {

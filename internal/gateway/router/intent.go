@@ -1,22 +1,21 @@
 package router
 
-import (
-	"regexp"
-)
+import "regexp"
 
-// Intent 表示用户意图分类
 type Intent int
 
 const (
-	IntentContinue Intent = iota // 继续当前任务
-	IntentTask                   // 需要执行、创建任务
-	IntentSkill                  // 调用 skill（以 /skill 或 skill 名开头）
-	IntentQuery                  // 知识库/历史查询
-	IntentRoute                  // 平台路由指令（如切到微信）
-	IntentCasual                 // 闲聊、问答
+	IntentContinue Intent = iota
+	IntentTask
+	IntentSkill
+	IntentQuery
+	IntentRoute
+	IntentCasual
 )
 
-// IntentClassifier 轻量级意图分类器（规则 + 简单正则）
+// IntentClassifier is intentionally lightweight. It handles hard commands and
+// high-confidence multilingual cues; ambiguous cases can be delegated to the
+// LLM classifier by the hybrid policy in intent_llm.go.
 type IntentClassifier struct {
 	continuePatterns []*regexp.Regexp
 	taskPatterns     []*regexp.Regexp
@@ -29,146 +28,91 @@ type IntentClassifier struct {
 }
 
 func NewIntentClassifier() *IntentClassifier {
-	// 编译一次，后续复用
 	return &IntentClassifier{
 		continuePatterns: compilePatterns([]string{
-			`继续`, `接着`, `上次的`, `刚才那个`,
-			`\bcontinue\b`, `\bkeep going\b`, `\bgo on\b`,
-			`再试`, `再搞`, `从头来`,
+			`继续`, `接着`, `往下`, `上次`, `刚才`, `刚刚`, `再试`, `重试`,
+			`\bcontinue\b`, `\bkeep going\b`, `\bgo on\b`, `\bresume\b`, `\btry again\b`,
 		}),
 		taskPatterns: compilePatterns([]string{
-			// 中文：帮我/请帮我 系列
-			`帮我`, `请帮我`, `帮我做`, `帮我查`, `帮我看看`, `帮我找`,
-			`帮我写`, `帮我改`, `帮我看看`, `帮我分析`,
-			// 中文：执行/操作类
-			`执行`, `创建`, `修改`, `写代码`, `写一个`,
-			`查进度`, `部署`, `构建`, `运行`, `检查`, `生成`,
-			`做一下`, `做完`, `搞一下`, `搞定`,
-			// 中文：运维类
-			`重启`, `停止`, `启动服务`, `查看日志`, `抓包`,
-			// 中文：文件操作
-			`新建文件`, `删除文件`, `编辑文件`, `读取文件`,
-			// 中文：开发类
-			`代码审查`, `跑测试`, `提交代码`, `合并分支`, `部署上线`,
-			// 英文
-			`\bcreate\b`, `\bexecute\b`, `\bdeploy\b`, `\brun\b`,
-			`\bbuild\b`, `\bcheck\b`, `\bmodify\b`, `\bwrite code\b`,
-			`\bgrep\b`, `\bgit\b`, `\bdocker\b`, `\bkubectl\b`,
-			`\banalyze\b`, `\breview\b`, `\bfix\b`, `\bdebug\b`,
-			// 问进度
-			`进度`, `完成了`, `好了吗`, `搞定没`,
+			`帮我`, `请帮我`, `看一下`, `检查`, `分析`, `实现`, `写一个`, `写一段`, `修改`, `修复`,
+			`重构`, `优化`, `运行`, `测试`, `部署`, `发布`, `打包`, `提交`, `推送`, `接入`, `配置`,
+			`\bcreate\b`, `\bexecute\b`, `\bdeploy\b`, `\brun\b`, `\bbuild\b`, `\bcheck\b`,
+			`\bmodify\b`, `\bwrite\b`, `\banalyze\b`, `\breview\b`, `\bfix\b`, `\bdebug\b`,
 		}),
 		skillPatterns: compilePatterns([]string{
-			`^/skill\b`, `^/s\b`, `调用技能`,
-			`用技能`, `执行技能`, `运行技能`,
+			`^/skill\b`, `^/s\b`, `调用技能`, `用技能`, `执行技能`, `运行技能`,
 		}),
 		queryPatterns: compilePatterns([]string{
-			`^/query\b`, `^/search\b`, `查一下`,
-			`搜索.*历史`, `查历史`, `找之前的`,
-			`记得.*吗`, `之前.*说过`,
+			`^/query\b`, `^/search\b`, `搜索.*历史`, `查历史`, `找之前`, `之前.*说过`,
 		}),
 		routePatterns: compilePatterns([]string{
-			`^/route\b`, `切换到`, `切到`,
-			`跳到微信`, `转到钉钉`,
+			`^/route\b`, `切换到`, `切到`, `转到`, `路由到`,
 		}),
+		mode:            "hybrid",
+		directThreshold: 0.8,
+		askThreshold:    0.55,
 	}
 }
 
 func compilePatterns(patterns []string) []*regexp.Regexp {
-	var result []*regexp.Regexp
+	result := make([]*regexp.Regexp, 0, len(patterns))
 	for _, p := range patterns {
 		if p == "" {
 			continue
 		}
-		// 不区分大小写
-		re := regexp.MustCompile(`(?i)` + p)
-		result = append(result, re)
+		result = append(result, regexp.MustCompile(`(?i)`+p))
 	}
 	return result
 }
 
-// Classify 根据关键词+正则判断用户意图
 func (c *IntentClassifier) Classify(input string) Intent {
-	// 1. 优先判断 Skill（显式 skill 命令）
+	intent, _ := c.ClassifyWithReason(input)
+	return intent
+}
+
+func (c *IntentClassifier) ClassifyWithReason(input string) (Intent, string) {
+	if c == nil {
+		c = NewIntentClassifier()
+	}
 	for _, re := range c.skillPatterns {
 		if re.MatchString(input) {
-			return IntentSkill
+			return IntentSkill, "matched skill pattern"
 		}
 	}
-
-	// 2. 判断 Query（搜索历史/知识库）
 	for _, re := range c.queryPatterns {
 		if re.MatchString(input) {
-			return IntentQuery
+			return IntentQuery, "matched query pattern"
 		}
 	}
-
-	// 3. 判断 Route（平台切换指令）
 	for _, re := range c.routePatterns {
 		if re.MatchString(input) {
-			return IntentRoute
+			return IntentRoute, "matched route pattern"
 		}
 	}
-
-	// 4. 判断"继续"类
 	for _, re := range c.continuePatterns {
 		if re.MatchString(input) {
-			return IntentContinue
+			return IntentContinue, "matched continue pattern"
 		}
 	}
-
-	// 5. 判断"任务"类
+	if IsCasualShortQuestion(input) {
+		return IntentCasual, "matched casual short question"
+	}
 	for _, re := range c.taskPatterns {
 		if re.MatchString(input) {
-			return IntentTask
+			return IntentTask, "matched task pattern"
 		}
 	}
-
-	// 默认为闲聊
-	return IntentCasual
+	return IntentCasual, "no hard pattern matched"
 }
 
-// ClassifyWithReason 返回意图和简要说明
-func (c *IntentClassifier) ClassifyWithReason(input string) (Intent, string) {
-	intent := c.Classify(input)
-	switch intent {
-	case IntentSkill:
-		return intent, "matched skill pattern"
-	case IntentQuery:
-		return intent, "matched query pattern"
-	case IntentRoute:
-		return intent, "matched route pattern"
-	case IntentContinue:
-		return intent, "matched continue pattern"
-	case IntentTask:
-		return intent, "matched task pattern"
-	case IntentCasual:
-		return intent, "no pattern matched, defaulting to casual"
-	}
-	return intent, "unknown"
-}
-
-// IsCasualShortQuestion 判断是否是简短的闲聊问题（不需要执行）
 func IsCasualShortQuestion(input string) bool {
-	lower := normalizeQuestionText(input)
-	switch lower {
-	case "\u4f60\u597d", "\u60a8\u597d", "hi", "hello", "\u55e8", "hey",
-		"\u8c22\u8c22", "\u591a\u8c22", "\u8c22\u4e86", "thanks", "thankyou",
-		"\u518d\u89c1", "\u62dc\u62dc", "bye", "\u665a\u5b89",
-		"\u4f60\u662f\u8c01", "\u4f60\u53eb\u4ec0\u4e48", "\u4f60\u662f\u5e72\u561b\u7684", "whoareyou", "whatareyou":
-		return true
-	}
-	shortCasual := []string{
-		"你好", "您好", "hi", "hello", "嗨", "hey",
+	switch normalizeQuestionText(input) {
+	case "你好", "您好", "hi", "hello", "嗨", "hey",
 		"谢谢", "多谢", "谢了", "thanks", "thankyou",
 		"再见", "拜拜", "bye", "晚安",
-		"你是谁", "你叫什么", "你干嘛的", "whoareyou", "whatareyou",
-		"牛逼", "厉害", "真棒",
+		"你是谁", "你叫什么", "你是干嘛的", "whoareyou", "whatareyou":
+		return true
+	default:
+		return false
 	}
-	for _, kw := range shortCasual {
-		if lower == kw {
-			return true
-		}
-	}
-	return false
 }

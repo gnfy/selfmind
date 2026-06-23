@@ -27,3 +27,13 @@ func TestHeadTailKeepsValidUTF8(t *testing.T) {
 		t.Fatalf("HeadTail should include marker: %q", got)
 	}
 }
+
+func TestCleanUTF8RemovesReplacementRune(t *testing.T) {
+	got := CleanUTF8("推理���循环")
+	if strings.ContainsRune(got, utf8.RuneError) {
+		t.Fatalf("CleanUTF8 should remove replacement runes: %q", got)
+	}
+	if got != "推理循环" {
+		t.Fatalf("CleanUTF8 = %q, want replacement runes removed", got)
+	}
+}

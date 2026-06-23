@@ -250,11 +250,13 @@ type ProviderEndpoint struct {
 }
 
 type ProviderQuirks struct {
-	AuthHeader        string `mapstructure:"auth_header" yaml:"auth_header,omitempty"`
-	ToolSchema        string `mapstructure:"tool_schema" yaml:"tool_schema,omitempty"`
-	SystemMessageMode string `mapstructure:"system_message_mode" yaml:"system_message_mode,omitempty"`
-	ThinkingMode      string `mapstructure:"thinking_mode" yaml:"thinking_mode,omitempty"`
-	UserAgent         string `mapstructure:"user_agent" yaml:"user_agent,omitempty"`
+	AuthHeader             string `mapstructure:"auth_header" yaml:"auth_header,omitempty"`
+	ToolSchema             string `mapstructure:"tool_schema" yaml:"tool_schema,omitempty"`
+	SystemMessageMode      string `mapstructure:"system_message_mode" yaml:"system_message_mode,omitempty"`
+	ThinkingMode           string `mapstructure:"thinking_mode" yaml:"thinking_mode,omitempty"`
+	UserAgent              string `mapstructure:"user_agent" yaml:"user_agent,omitempty"`
+	ResponsesStoreFalse    bool   `mapstructure:"responses_store_false" yaml:"responses_store_false,omitempty"`
+	ResponsesRequireStream bool   `mapstructure:"responses_require_stream" yaml:"responses_require_stream,omitempty"`
 }
 
 type ModelsConfig struct {

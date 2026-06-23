@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"io"
 	"strings"
 	"testing"
 	"time"
@@ -51,6 +52,112 @@ func TestAgentDoneDoesNotDuplicateStreamedResponse(t *testing.T) {
 	}
 }
 
+func TestStreamBuffersPartialLineUntilFlush(t *testing.T) {
+	model := NewController(nil, nil, nil, "").model
+	model.width = 80
+	model.height = 20
+	model.viewport.Width = 80
+	model.viewport.Height = 15
+
+	updated, cmd := model.Update(MsgStream{Content: "hello"})
+	model = updated.(*uiModel)
+
+	if len(model.messages) != 0 {
+		t.Fatalf("stream chunk should not be committed to history yet: %+v", model.messages)
+	}
+	if model.liveStreamContent != "" {
+		t.Fatalf("partial line should wait for flush, got %q", model.liveStreamContent)
+	}
+	if cmd == nil {
+		t.Fatalf("partial line should schedule a stream flush")
+	}
+
+	updated, _ = model.Update(MsgStreamFlush(time.Now()))
+	model = updated.(*uiModel)
+	if model.liveStreamContent != "hello" {
+		t.Fatalf("liveStreamContent = %q, want hello", model.liveStreamContent)
+	}
+	if view := stripANSI(model.renderAllMessages()); !strings.Contains(view, "hello") {
+		t.Fatalf("live stream was not rendered: %q", view)
+	}
+}
+
+func TestStreamCommitsCompleteLineImmediately(t *testing.T) {
+	model := NewController(nil, nil, nil, "").model
+	model.width = 80
+	model.height = 20
+	model.viewport.Width = 80
+	model.viewport.Height = 15
+
+	updated, _ := model.Update(MsgStream{Content: "hello\nnext"})
+	model = updated.(*uiModel)
+
+	if model.liveStreamContent != "hello\n" {
+		t.Fatalf("liveStreamContent = %q, want completed line", model.liveStreamContent)
+	}
+	if len(model.messages) != 0 {
+		t.Fatalf("complete stream line should still be live, not history: %+v", model.messages)
+	}
+}
+
+func TestAgentDoneFinalizesLiveStreamOnce(t *testing.T) {
+	model := NewController(nil, nil, nil, "").model
+
+	updated, _ := model.Update(MsgStream{Content: "streamed answer\n"})
+	model = updated.(*uiModel)
+	updated, _ = model.Update(MsgAgentDone{Response: "streamed answer"})
+	model = updated.(*uiModel)
+
+	if len(model.messages) != 1 {
+		t.Fatalf("messages len = %d, want 1", len(model.messages))
+	}
+	if model.messages[0].Content != "streamed answer" {
+		t.Fatalf("content = %q", model.messages[0].Content)
+	}
+	if model.liveStreamContent != "" {
+		t.Fatalf("live stream should be cleared, got %q", model.liveStreamContent)
+	}
+}
+
+func TestToolStartFinalizesLiveStreamBeforeToolCell(t *testing.T) {
+	model := NewController(nil, nil, nil, "").model
+
+	updated, _ := model.Update(MsgStream{Content: "I will inspect it.\n"})
+	model = updated.(*uiModel)
+	updated, _ = model.Update(MsgToolStart{ToolName: "read_file", ToolCallID: "call-1", Args: `{"path":"README.md"}`})
+	model = updated.(*uiModel)
+
+	if len(model.messages) != 2 {
+		t.Fatalf("messages len = %d, want assistant plus tool", len(model.messages))
+	}
+	if model.messages[0].Role != "assistant" || model.messages[0].Content != "I will inspect it." {
+		t.Fatalf("first message not finalized assistant: %+v", model.messages[0])
+	}
+	if model.messages[1].Role != "tool" || model.messages[1].ToolName != "read_file" {
+		t.Fatalf("second message not tool cell: %+v", model.messages[1])
+	}
+}
+
+func TestAgentDoneErrorKeepsPartialResponse(t *testing.T) {
+	model := NewController(nil, nil, nil, "").model
+
+	updated, _ := model.Update(MsgAgentDone{Response: "partial answer", Err: io.ErrUnexpectedEOF})
+	got := updated.(*uiModel)
+
+	if got.runStatus != "error" {
+		t.Fatalf("runStatus = %q, want error", got.runStatus)
+	}
+	if len(got.messages) != 2 {
+		t.Fatalf("messages len = %d, want partial response plus error", len(got.messages))
+	}
+	if got.messages[0].Content != "partial answer" || got.messages[0].IsError {
+		t.Fatalf("partial response was not preserved: %+v", got.messages[0])
+	}
+	if !got.messages[1].IsError {
+		t.Fatalf("second message should be the error: %+v", got.messages[1])
+	}
+}
+
 func TestWorkingTickKeepsAnimatingWhileThinking(t *testing.T) {
 	model := NewController(nil, nil, nil, "").model
 	model.thinking = true
@@ -85,6 +192,35 @@ func TestAgentActivityReplacesGenericWorkingText(t *testing.T) {
 	}
 	if view := stripANSI(model.renderAllMessages()); !strings.Contains(view, "Reading tool results and deciding the next step") {
 		t.Fatalf("activity text was not rendered: %q", view)
+	}
+}
+
+func TestThinkingIndicatorHasGapAfterTranscript(t *testing.T) {
+	model := NewController(nil, nil, nil, "").model
+	model.width = 100
+	model.height = 24
+	model.viewport.Width = 100
+	model.viewport.Height = 18
+	model.messages = append(model.messages, ChatMessage{
+		Role:    "user",
+		Content: "analyze this project",
+	})
+	model.thinking = true
+	model.activityText = "Thinking about the request"
+
+	lines := strings.Split(stripANSI(model.renderAllMessages()), "\n")
+	activityLine := -1
+	for i, line := range lines {
+		if strings.Contains(line, "Thinking about the request") {
+			activityLine = i
+			break
+		}
+	}
+	if activityLine <= 0 {
+		t.Fatalf("activity line not found in rendered transcript: %q", strings.Join(lines, "\n"))
+	}
+	if strings.TrimSpace(lines[activityLine-1]) != "" {
+		t.Fatalf("activity line should have a blank gap above it, previous line = %q", lines[activityLine-1])
 	}
 }
 
@@ -188,7 +324,7 @@ func TestToolDoneMatchesStartedToolByCallID(t *testing.T) {
 	}
 }
 
-func TestCompletedToolMessageOmitsPerStepDuration(t *testing.T) {
+func TestCompletedToolMessageShowsPerStepDuration(t *testing.T) {
 	rendered := stripANSI(renderToolMessage(ChatMessage{
 		Role:     "tool",
 		ToolName: "read_file",
@@ -200,8 +336,8 @@ func TestCompletedToolMessageOmitsPerStepDuration(t *testing.T) {
 	if !strings.Contains(rendered, "Read a.go") {
 		t.Fatalf("completed tool should render action: %q", rendered)
 	}
-	if strings.Contains(rendered, "0.2s") {
-		t.Fatalf("completed tool should not render per-step duration: %q", rendered)
+	if !strings.Contains(rendered, "0.2s") {
+		t.Fatalf("completed tool should render per-step duration: %q", rendered)
 	}
 }
 
@@ -228,6 +364,21 @@ func TestAssistantMessageDoesNotRenderAsBulletList(t *testing.T) {
 	}
 	if !strings.Contains(rendered, "  hello") || !strings.Contains(rendered, "  world") {
 		t.Fatalf("assistant message did not render expected body: %q", rendered)
+	}
+}
+
+func TestComposerGapKeepsProgressAwayFromInput(t *testing.T) {
+	model := NewController(nil, nil, nil, "").model
+	model.width = 100
+	model.height = 24
+
+	if got := model.composerGapHeight(); got != 1 {
+		t.Fatalf("composer gap = %d, want 1 for normal-height terminal", got)
+	}
+
+	model.height = 10
+	if got := model.composerGapHeight(); got != 0 {
+		t.Fatalf("composer gap = %d, want 0 for compact terminal", got)
 	}
 }
 
@@ -288,7 +439,7 @@ func TestDisplayModelNameShowsProviderAndModel(t *testing.T) {
 }
 
 func TestFormatUsageUnknownLimit(t *testing.T) {
-	if got := formatUsage(42, 0); got != "42/? tokens" {
+	if got := formatUsage(42, 0); got != "42 run · ctx ?" {
 		t.Fatalf("formatUsage = %q", got)
 	}
 }
@@ -300,7 +451,7 @@ func TestControllerUsesResolvedContextLength(t *testing.T) {
 	if model.tokenLimit != 262144 {
 		t.Fatalf("tokenLimit = %d, want Kimi context length", model.tokenLimit)
 	}
-	if got := formatUsage(0, model.tokenLimit); got != "0/262.1K tokens" {
+	if got := formatUsage(0, model.tokenLimit); got != "0 run · 262.1K ctx" {
 		t.Fatalf("usage = %q", got)
 	}
 }

@@ -3,6 +3,7 @@ package kernel
 import (
 	"encoding/json"
 	"strings"
+	"time"
 )
 
 const agentEventPrefix = "event:"
@@ -52,8 +53,27 @@ func EmitAgentEvent(ch chan string, event AgentEvent) {
 	if ch == nil {
 		return
 	}
+	encoded := EncodeAgentEvent(event)
 	select {
-	case ch <- EncodeAgentEvent(event):
+	case ch <- encoded:
 	default:
+		if !isCriticalAgentEvent(event.Type) {
+			return
+		}
+		timer := time.NewTimer(50 * time.Millisecond)
+		defer timer.Stop()
+		select {
+		case ch <- encoded:
+		case <-timer.C:
+		}
+	}
+}
+
+func isCriticalAgentEvent(eventType string) bool {
+	switch strings.TrimSpace(eventType) {
+	case "stream", "tool.started", "tool.completed", "tool.output", "turn.completed", "token.updated":
+		return true
+	default:
+		return false
 	}
 }

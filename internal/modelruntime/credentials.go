@@ -14,6 +14,7 @@ type Credential struct {
 	Source    string
 	ExpiresAt time.Time
 	Getter    func() string
+	Refresher func() string
 }
 
 // CredentialStore is SelfMind's own optional credential file. It is separate
@@ -53,8 +54,8 @@ func (s *CredentialStore) Resolve(provider string) Credential {
 
 type ExternalCredentialResolver struct{}
 
-// Resolve performs best-effort reuse for selected coding CLIs only. It never
-// refreshes OAuth tokens; the source CLI remains the owner of login lifecycle.
+// Resolve performs best-effort reuse for selected coding CLIs only. OAuth
+// refresh stays in modelruntime so protocol adapters can remain transport-only.
 func (ExternalCredentialResolver) Resolve(source string) Credential {
 	switch NormalizeProviderID(source) {
 	case "codex-cli":
@@ -78,8 +79,8 @@ func resolveCodexCLI() Credential {
 		filepath.Join(firstNonEmpty(os.Getenv("CODEX_HOME"), filepath.Join(homeDir(), ".codex")), "auth.json"),
 		filepath.Join(homeDir(), ".codex", "auth.json"),
 	} {
-		if token := tokenFromJSONFile(path); token != "" {
-			return Credential{Token: token, Source: path}
+		if cred := codexCredentialFromFile(path); cred.Token != "" {
+			return cred
 		}
 	}
 	return Credential{}

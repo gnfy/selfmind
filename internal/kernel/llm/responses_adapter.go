@@ -4,19 +4,27 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha1"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 )
 
 // ResponsesAdapter talks to OpenAI/Codex Responses-compatible endpoints.
 type ResponsesAdapter struct {
-	APIKey    string
-	KeyGetter func() string
-	Model     string
-	BaseURL   string
+	APIKey         string
+	KeyGetter      func() string
+	TokenRefresher func() string
+	Model          string
+	BaseURL        string
+	Store          *bool
+	RequireStream  bool
+	mu             sync.RWMutex
+	toolNameAlias  map[string]string
 }
 
 type responsesRequest struct {
@@ -24,19 +32,28 @@ type responsesRequest struct {
 	Input  []responsesInputItem     `json:"input"`
 	Tools  []map[string]interface{} `json:"tools,omitempty"`
 	Stream bool                     `json:"stream,omitempty"`
+	Store  *bool                    `json:"store,omitempty"`
 }
 
 type responsesInputItem struct {
-	Role    string      `json:"role,omitempty"`
-	Content interface{} `json:"content,omitempty"`
-	Type    string      `json:"type,omitempty"`
-	CallID  string      `json:"call_id,omitempty"`
-	Output  string      `json:"output,omitempty"`
+	ID        string      `json:"id,omitempty"`
+	Role      string      `json:"role,omitempty"`
+	Content   interface{} `json:"content,omitempty"`
+	Type      string      `json:"type,omitempty"`
+	CallID    string      `json:"call_id,omitempty"`
+	Name      string      `json:"name,omitempty"`
+	Arguments string      `json:"arguments,omitempty"`
+	Output    string      `json:"output,omitempty"`
 }
 
 type responsesResponse struct {
-	OutputText string `json:"output_text"`
-	Output     []struct {
+	OutputText        string `json:"output_text"`
+	Status            string `json:"status"`
+	IncompleteDetails struct {
+		Reason string `json:"reason"`
+	} `json:"incomplete_details"`
+	Output []struct {
+		ID        string `json:"id"`
 		Type      string `json:"type"`
 		CallID    string `json:"call_id"`
 		Name      string `json:"name"`
@@ -77,30 +94,73 @@ func (a *ResponsesAdapter) ChatCompletion(ctx context.Context, messages []Messag
 }
 
 func (a *ResponsesAdapter) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, error) {
+	if a.RequireStream {
+		return a.chatViaStream(ctx, req)
+	}
 	wire := a.requestFromChat(req, false)
 	body, err := json.Marshal(wire)
 	if err != nil {
 		return nil, fmt.Errorf("marshal responses request: %w", err)
 	}
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, a.BaseURL, bytes.NewReader(body))
-	if err != nil {
-		return nil, err
-	}
-	a.setHeaders(httpReq)
-	resp, err := http.DefaultClient.Do(httpReq)
+	resp, err := a.doRequest(ctx, body, a.apiKey())
 	if err != nil {
 		return nil, fmt.Errorf("responses request failed: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
 		b, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("responses API error %d: %s", resp.StatusCode, string(b))
+		if isAuthFailureStatus(resp.StatusCode, b) {
+			resp.Body.Close()
+			if key, ok := refreshedAPIKey(a.TokenRefresher); ok {
+				resp, err = a.doRequest(ctx, body, key)
+				if err != nil {
+					return nil, fmt.Errorf("responses request failed after token refresh: %w", err)
+				}
+				defer resp.Body.Close()
+				if resp.StatusCode < 400 {
+					var payload responsesResponse
+					if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+						return nil, fmt.Errorf("decode responses payload: %w", err)
+					}
+					return a.chatResponseFromResponses(payload), nil
+				}
+				b, _ = io.ReadAll(resp.Body)
+			}
+		}
+		return nil, responsesAPIError(resp.StatusCode, b)
 	}
 	var payload responsesResponse
 	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
 		return nil, fmt.Errorf("decode responses payload: %w", err)
 	}
-	return chatResponseFromResponses(payload), nil
+	return a.chatResponseFromResponses(payload), nil
+}
+
+func (a *ResponsesAdapter) chatViaStream(ctx context.Context, req ChatRequest) (*ChatResponse, error) {
+	ch, err := a.StreamChat(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	resp := &ChatResponse{}
+	for event := range ch {
+		if event.Err != nil {
+			return nil, event.Err
+		}
+		if event.EventType == "" || event.EventType == "stream" {
+			resp.Content += event.Content
+		}
+		if len(event.ToolCalls) > 0 {
+			resp.ToolCalls = append(resp.ToolCalls, event.ToolCalls...)
+		}
+		if event.Usage != nil {
+			resp.Usage.InputTokens += event.Usage.InputTokens
+			resp.Usage.OutputTokens += event.Usage.OutputTokens
+		}
+		if event.FinishReason != "" {
+			resp.FinishReason = event.FinishReason
+		}
+	}
+	return resp, nil
 }
 
 func (a *ResponsesAdapter) StreamChat(ctx context.Context, req ChatRequest) (<-chan StreamEvent, error) {
@@ -109,35 +169,67 @@ func (a *ResponsesAdapter) StreamChat(ctx context.Context, req ChatRequest) (<-c
 	if err != nil {
 		return nil, err
 	}
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, a.BaseURL, bytes.NewReader(body))
-	if err != nil {
-		return nil, err
-	}
-	a.setHeaders(httpReq)
-	resp, err := http.DefaultClient.Do(httpReq)
+	resp, err := a.doRequest(ctx, body, a.apiKey())
 	if err != nil {
 		return nil, err
 	}
 	if resp.StatusCode >= 400 {
 		b, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		return nil, fmt.Errorf("responses API error %d: %s", resp.StatusCode, string(b))
+		if isAuthFailureStatus(resp.StatusCode, b) {
+			if key, ok := refreshedAPIKey(a.TokenRefresher); ok {
+				resp, err = a.doRequest(ctx, body, key)
+				if err != nil {
+					return nil, err
+				}
+				if resp.StatusCode < 400 {
+					return a.streamResponse(resp), nil
+				}
+				b, _ = io.ReadAll(resp.Body)
+				resp.Body.Close()
+			}
+		}
+		return nil, responsesAPIError(resp.StatusCode, b)
 	}
-	ch := make(chan StreamEvent, 10)
+	return a.streamResponse(resp), nil
+}
+
+func (a *ResponsesAdapter) streamResponse(resp *http.Response) <-chan StreamEvent {
+	ch := make(chan StreamEvent, 256)
 	go func() {
 		defer resp.Body.Close()
 		defer close(ch)
 		scanner := bufio.NewScanner(resp.Body)
-		var toolCalls []ToolCall
+		scanner.Buffer(make([]byte, 0, 64*1024), 10*1024*1024)
+		var emittedText strings.Builder
+		emittedToolCalls := map[string]struct{}{}
+		emitText := func(text string) {
+			if text == "" {
+				return
+			}
+			emittedText.WriteString(text)
+			ch <- StreamEvent{Content: text}
+		}
+		emitToolCall := func(call ToolCall) {
+			if strings.TrimSpace(call.Function) == "" {
+				return
+			}
+			key := call.ID
+			if key == "" {
+				key = call.Function + ":" + call.Args
+			}
+			if _, ok := emittedToolCalls[key]; ok {
+				return
+			}
+			emittedToolCalls[key] = struct{}{}
+			ch <- StreamEvent{ToolCalls: []ToolCall{call}}
+		}
 		for scanner.Scan() {
 			data, ok := sseDataString(scanner.Text())
 			if !ok {
 				continue
 			}
 			if data == "[DONE]" {
-				if len(toolCalls) > 0 {
-					ch <- StreamEvent{ToolCalls: toolCalls}
-				}
 				return
 			}
 			var ev map[string]interface{}
@@ -145,19 +237,41 @@ func (a *ResponsesAdapter) StreamChat(ctx context.Context, req ChatRequest) (<-c
 				continue
 			}
 			switch stringValue(ev["type"]) {
+			case "response.output_item.added":
+				if item, ok := ev["item"].(map[string]interface{}); ok {
+					if name := stringValue(item["name"]); name != "" && stringValue(item["type"]) == "function_call" {
+						ch <- StreamEvent{EventType: "agent.thinking", Content: "Preparing to run " + a.originalToolName(name)}
+					}
+				}
 			case "response.output_text.delta":
 				if delta := stringValue(ev["delta"]); delta != "" {
-					ch <- StreamEvent{Content: delta}
+					emitText(delta)
 				}
 			case "response.output_item.done":
 				if item, ok := ev["item"].(map[string]interface{}); ok {
-					if call := toolCallFromResponsesItem(item); call.Function != "" {
-						toolCalls = append(toolCalls, call)
+					if call := a.toolCallFromResponsesItem(item); call.Function != "" {
+						emitToolCall(call)
+						continue
+					}
+					if emittedText.Len() == 0 {
+						emitText(responsesTextFromItem(item))
 					}
 				}
 			case "response.completed":
-				if len(toolCalls) > 0 {
-					ch <- StreamEvent{ToolCalls: toolCalls}
+				if response, ok := ev["response"].(map[string]interface{}); ok {
+					payload := responsesResponseFromMap(response)
+					if emittedText.Len() == 0 {
+						emitText(responsesTextFromPayload(payload))
+					}
+					for _, call := range a.toolCallsFromResponses(payload) {
+						emitToolCall(call)
+					}
+					if payload.Usage.InputTokens != 0 || payload.Usage.OutputTokens != 0 {
+						ch <- StreamEvent{Usage: &UsageStats{InputTokens: payload.Usage.InputTokens, OutputTokens: payload.Usage.OutputTokens}}
+					}
+					if reason := responsesFinishReason(payload); reason != "" {
+						ch <- StreamEvent{FinishReason: reason}
+					}
 				}
 				return
 			}
@@ -166,12 +280,12 @@ func (a *ResponsesAdapter) StreamChat(ctx context.Context, req ChatRequest) (<-c
 			ch <- StreamEvent{Err: err}
 		}
 	}()
-	return ch, nil
+	return ch
 }
 
 func (a *ResponsesAdapter) requestFromChat(req ChatRequest, stream bool) responsesRequest {
 	model := firstNonEmptyString(req.Model, a.Model)
-	wire := responsesRequest{Model: model, Stream: stream}
+	wire := responsesRequest{Model: model, Stream: stream, Store: a.Store}
 	for _, m := range req.Messages {
 		if m.Role == "tool" {
 			wire.Input = append(wire.Input, responsesInputItem{
@@ -185,74 +299,315 @@ func (a *ResponsesAdapter) requestFromChat(req ChatRequest, stream bool) respons
 		if role == "" {
 			role = "user"
 		}
-		wire.Input = append(wire.Input, responsesInputItem{
-			Role:    role,
-			Content: contentString(openAIContentFromMessage(m)),
-		})
+		content := contentString(openAIContentFromMessage(m))
+		if role != "assistant" || strings.TrimSpace(content) != "" || len(m.ToolCalls) == 0 {
+			wire.Input = append(wire.Input, responsesInputItem{
+				Role:    role,
+				Content: content,
+			})
+		}
+		if role == "assistant" {
+			for _, call := range m.ToolCalls {
+				if strings.TrimSpace(call.Function) == "" {
+					continue
+				}
+				wire.Input = append(wire.Input, responsesInputItem{
+					ID:        responsesFunctionCallItemID(call),
+					Type:      "function_call",
+					CallID:    responsesCallID(call),
+					Name:      responsesSafeToolName(call.Function),
+					Arguments: responsesCallArguments(call.Args),
+				})
+			}
+		}
 	}
 	if len(req.Tools) > 0 {
-		wire.Tools = responsesTools(req.Tools)
+		wire.Tools = a.responsesTools(req.Tools)
 	}
 	return wire
 }
 
-func (a *ResponsesAdapter) setHeaders(req *http.Request) {
-	key := a.APIKey
-	if a.KeyGetter != nil {
-		if k := a.KeyGetter(); k != "" {
-			key = k
-		}
+func responsesCallID(call ToolCall) string {
+	if strings.TrimSpace(call.ID) != "" {
+		return strings.TrimSpace(call.ID)
 	}
+	return "call_" + strings.NewReplacer(" ", "_", "-", "_", ".", "_").Replace(strings.TrimSpace(call.Function))
+}
+
+func responsesFunctionCallItemID(call ToolCall) string {
+	id := responsesCallID(call)
+	if strings.HasPrefix(id, "fc_") {
+		return id
+	}
+	return "fc_" + strings.TrimPrefix(id, "call_")
+}
+
+func responsesCallArguments(args string) string {
+	args = strings.TrimSpace(args)
+	if args == "" {
+		return "{}"
+	}
+	return args
+}
+
+func (a *ResponsesAdapter) doRequest(ctx context.Context, body []byte, key string) (*http.Response, error) {
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, a.BaseURL, bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	a.setHeaders(httpReq, key)
+	return http.DefaultClient.Do(httpReq)
+}
+
+func (a *ResponsesAdapter) apiKey() string {
+	return apiKeyFrom(a.APIKey, a.KeyGetter)
+}
+
+func (a *ResponsesAdapter) setHeaders(req *http.Request, key string) {
 	req.Header.Set("Authorization", "Bearer "+key)
 	req.Header.Set("Content-Type", "application/json")
 }
 
-func responsesTools(tools []ToolDefinition) []map[string]interface{} {
+func (a *ResponsesAdapter) responsesTools(tools []ToolDefinition) []map[string]interface{} {
 	out := make([]map[string]interface{}, 0, len(tools))
+	aliases := make(map[string]string)
 	for _, tool := range tools {
+		name := responsesSafeToolName(tool.Name)
+		if name != tool.Name {
+			aliases[name] = tool.Name
+		}
 		out = append(out, map[string]interface{}{
 			"type":        "function",
-			"name":        tool.Name,
+			"name":        name,
 			"description": tool.Description,
-			"parameters":  tool.Parameters,
+			"parameters":  responsesToolParameters(tool.Parameters),
 			"strict":      false,
 		})
+	}
+	a.setToolNameAliases(aliases)
+	return out
+}
+
+func (a *ResponsesAdapter) setToolNameAliases(aliases map[string]string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.toolNameAlias = aliases
+}
+
+func (a *ResponsesAdapter) originalToolName(name string) string {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	if a.toolNameAlias == nil {
+		return name
+	}
+	if original, ok := a.toolNameAlias[name]; ok {
+		return original
+	}
+	return name
+}
+
+func responsesToolParameters(params map[string]interface{}) map[string]interface{} {
+	if len(params) == 0 {
+		return map[string]interface{}{
+			"type":       "object",
+			"properties": map[string]interface{}{},
+			"required":   []interface{}{},
+		}
+	}
+	out, ok := sanitizeResponsesSchema(params).(map[string]interface{})
+	if !ok {
+		out = map[string]interface{}{}
+	}
+	if strings.TrimSpace(stringValue(out["type"])) == "" {
+		out["type"] = "object"
+	}
+	if stringValue(out["type"]) == "object" {
+		if _, ok := out["properties"].(map[string]interface{}); !ok {
+			out["properties"] = map[string]interface{}{}
+		}
+		if !requiredIsJSONArray(out["required"]) {
+			out["required"] = []interface{}{}
+		}
 	}
 	return out
 }
 
-func chatResponseFromResponses(payload responsesResponse) *ChatResponse {
-	content := payload.OutputText
-	var calls []ToolCall
-	for _, item := range payload.Output {
-		if item.Type == "message" {
-			for _, part := range item.Content {
-				if part.Text != "" {
-					content += part.Text
+func sanitizeResponsesSchema(value interface{}) interface{} {
+	switch v := value.(type) {
+	case map[string]interface{}:
+		out := make(map[string]interface{}, len(v))
+		for key, child := range v {
+			if key == "required" {
+				if requiredIsJSONArray(child) {
+					out[key] = child
+				} else {
+					out[key] = []interface{}{}
 				}
+				continue
 			}
-			continue
+			if key == "properties" && child == nil {
+				out[key] = map[string]interface{}{}
+				continue
+			}
+			out[key] = sanitizeResponsesSchema(child)
 		}
-		if item.Type == "function_call" && item.Name != "" {
-			calls = append(calls, ToolCall{ID: item.CallID, Function: item.Name, Args: item.Arguments})
+		return out
+	case []interface{}:
+		out := make([]interface{}, len(v))
+		for i, child := range v {
+			out[i] = sanitizeResponsesSchema(child)
 		}
-	}
-	return &ChatResponse{
-		Content:   content,
-		ToolCalls: calls,
-		Usage:     UsageStats{InputTokens: payload.Usage.InputTokens, OutputTokens: payload.Usage.OutputTokens},
+		return out
+	default:
+		return value
 	}
 }
 
-func toolCallFromResponsesItem(item map[string]interface{}) ToolCall {
+func requiredIsJSONArray(value interface{}) bool {
+	switch v := value.(type) {
+	case []interface{}:
+		return v != nil
+	case []string:
+		return v != nil
+	default:
+		return false
+	}
+}
+
+func (a *ResponsesAdapter) chatResponseFromResponses(payload responsesResponse) *ChatResponse {
+	content := responsesTextFromPayload(payload)
+	calls := a.toolCallsFromResponses(payload)
+	return &ChatResponse{
+		Content:      content,
+		ToolCalls:    calls,
+		Usage:        UsageStats{InputTokens: payload.Usage.InputTokens, OutputTokens: payload.Usage.OutputTokens},
+		FinishReason: responsesFinishReason(payload),
+	}
+}
+
+func (a *ResponsesAdapter) toolCallsFromResponses(payload responsesResponse) []ToolCall {
+	var calls []ToolCall
+	for _, item := range payload.Output {
+		if item.Type == "function_call" && item.Name != "" {
+			calls = append(calls, ToolCall{ID: item.CallID, Function: a.originalToolName(item.Name), Args: item.Arguments})
+		}
+	}
+	return calls
+}
+
+func (a *ResponsesAdapter) toolCallFromResponsesItem(item map[string]interface{}) ToolCall {
 	if stringValue(item["type"]) != "function_call" {
 		return ToolCall{}
 	}
+	name := stringValue(item["name"])
 	return ToolCall{
 		ID:       stringValue(item["call_id"]),
-		Function: stringValue(item["name"]),
+		Function: a.originalToolName(name),
 		Args:     stringValue(item["arguments"]),
 	}
+}
+
+func responsesResponseFromMap(value map[string]interface{}) responsesResponse {
+	var payload responsesResponse
+	data, err := json.Marshal(value)
+	if err != nil {
+		return payload
+	}
+	_ = json.Unmarshal(data, &payload)
+	return payload
+}
+
+func responsesTextFromPayload(payload responsesResponse) string {
+	if strings.TrimSpace(payload.OutputText) != "" {
+		return payload.OutputText
+	}
+	var content strings.Builder
+	for _, item := range payload.Output {
+		if item.Type != "message" {
+			continue
+		}
+		for _, part := range item.Content {
+			if part.Text != "" {
+				content.WriteString(part.Text)
+			}
+		}
+	}
+	return content.String()
+}
+
+func responsesTextFromItem(item map[string]interface{}) string {
+	if stringValue(item["type"]) != "message" {
+		return ""
+	}
+	if text := stringValue(item["text"]); text != "" {
+		return text
+	}
+	var content strings.Builder
+	parts, ok := item["content"].([]interface{})
+	if !ok {
+		return ""
+	}
+	for _, raw := range parts {
+		part, ok := raw.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if text := stringValue(part["text"]); text != "" {
+			content.WriteString(text)
+		}
+	}
+	return content.String()
+}
+
+func responsesFinishReason(payload responsesResponse) string {
+	if reason := strings.TrimSpace(payload.IncompleteDetails.Reason); reason != "" {
+		return reason
+	}
+	status := strings.TrimSpace(payload.Status)
+	if status == "" || status == "completed" {
+		return ""
+	}
+	return status
+}
+
+func responsesSafeToolName(name string) string {
+	original := strings.TrimSpace(name)
+	if responsesToolNameValid(original) {
+		return original
+	}
+	var b strings.Builder
+	for _, r := range original {
+		if isResponsesToolNameRune(r) {
+			b.WriteRune(r)
+		} else {
+			b.WriteByte('_')
+		}
+	}
+	base := strings.Trim(b.String(), "_")
+	if base == "" {
+		base = "tool"
+	}
+	sum := sha1.Sum([]byte(original))
+	return base + "_" + hex.EncodeToString(sum[:])[:8]
+}
+
+func responsesToolNameValid(name string) bool {
+	if strings.TrimSpace(name) == "" {
+		return false
+	}
+	for _, r := range name {
+		if !isResponsesToolNameRune(r) {
+			return false
+		}
+	}
+	return true
+}
+
+func isResponsesToolNameRune(r rune) bool {
+	return r >= 'a' && r <= 'z' ||
+		r >= 'A' && r <= 'Z' ||
+		r >= '0' && r <= '9' ||
+		r == '_' || r == '-'
 }
 
 func responsesURL(baseURL string) string {
@@ -264,6 +619,35 @@ func responsesURL(baseURL string) string {
 		return baseURL
 	}
 	return baseURL + "/responses"
+}
+
+func responsesAPIError(status int, body []byte) error {
+	text := strings.TrimSpace(string(body))
+	code := ""
+	message := ""
+	var payload map[string]interface{}
+	if err := json.Unmarshal(body, &payload); err == nil {
+		if errObj, ok := payload["error"].(map[string]interface{}); ok {
+			code = stringValue(errObj["code"])
+			message = stringValue(errObj["message"])
+		}
+		if message == "" {
+			message = stringValue(payload["detail"])
+		}
+		if message == "" {
+			message = stringValue(payload["message"])
+		}
+	}
+	if status == http.StatusUnauthorized && (strings.EqualFold(code, "token_expired") || strings.Contains(strings.ToLower(message), "signing in again")) {
+		return fmt.Errorf("Codex login expired (responses API 401). Run `codex login` or open Codex and sign in again, then retry")
+	}
+	if message != "" {
+		return fmt.Errorf("responses API error %d: %s", status, message)
+	}
+	if text == "" {
+		text = http.StatusText(status)
+	}
+	return fmt.Errorf("responses API error %d: %s", status, text)
 }
 
 func stringValue(value interface{}) string {

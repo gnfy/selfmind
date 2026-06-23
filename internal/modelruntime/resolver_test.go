@@ -42,6 +42,12 @@ func TestResolverReusesCodexCLIAuthFromSelfMindStore(t *testing.T) {
 	if rt.BaseURL != "https://chatgpt.example.test/backend-api/codex" {
 		t.Fatalf("baseURL = %q", rt.BaseURL)
 	}
+	if !rt.Quirks.ResponsesStoreFalse {
+		t.Fatalf("ResponsesStoreFalse = false, want true for codex-cli")
+	}
+	if !rt.Quirks.ResponsesRequireStream {
+		t.Fatalf("ResponsesRequireStream = false, want true for codex-cli")
+	}
 }
 
 func TestResolverKeepsLegacyOpenRouterKeyCompatible(t *testing.T) {

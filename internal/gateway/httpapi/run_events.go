@@ -56,8 +56,7 @@ func (d *Server) startAsyncProgressNotices(ctx context.Context, identity *contro
 				return
 			case <-ticker.C:
 				elapsed := time.Since(start).Round(time.Second)
-				content := fmt.Sprintf("SelfMind 仍在处理，已用时 %s。完成后我会把结果发到这里。", elapsed)
-				content = fmt.Sprintf("SelfMind is still working (%s elapsed). I will send the result here when it finishes.", elapsed)
+				content := fmt.Sprintf("SelfMind is still working (%s elapsed). I will send the result here when it finishes.", elapsed)
 				_ = d.Delivery.EnqueueAndTry(context.Background(), delivery.Message{
 					TenantID:       identity.TenantID,
 					PersonID:       identity.PersonID,
@@ -163,10 +162,7 @@ func (d *Server) recordStreamEvent(ctx context.Context, channel string, task *co
 		return
 	}
 	eventType := event.EventType
-	if eventType == "stream" || eventType == "" {
-		return
-	}
-	if eventType == "tool.heartbeat" {
+	if eventType == "stream" || eventType == "" || eventType == "tool.heartbeat" {
 		return
 	}
 	payload := map[string]interface{}{}

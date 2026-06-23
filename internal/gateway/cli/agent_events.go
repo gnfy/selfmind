@@ -140,7 +140,7 @@ func (m *uiModel) forwardGatewayEvent(event llm.StreamEvent) {
 		if event.Content != "" {
 			m.program.Send(MsgStream{Content: event.Content})
 		}
-	case "agent.thinking", "agent.step", "strategy.selected":
+	case "agent.thinking", "agent.step":
 		if event.Content != "" {
 			m.program.Send(MsgAgentActivity{Content: displayActivityEvent(event.EventType, event.Content)})
 		}
@@ -235,7 +235,7 @@ func (m *uiModel) handleStructuredAgentEvent(event kernel.AgentEvent) {
 	switch event.Type {
 	case "stream":
 		m.program.Send(MsgStream{Content: event.Content})
-	case "agent.thinking", "agent.step", "strategy.selected":
+	case "agent.thinking", "agent.step":
 		if event.Content != "" {
 			m.program.Send(MsgAgentActivity{Content: displayActivityEvent(event.Type, event.Content)})
 		}
@@ -277,9 +277,6 @@ func displayActivityEvent(eventType, content string) string {
 	content = strings.TrimSpace(content)
 	if content == "" {
 		return ""
-	}
-	if eventType == "strategy.selected" {
-		return "Strategy: " + content
 	}
 	return content
 }

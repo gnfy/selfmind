@@ -40,3 +40,24 @@ func TestPackageToolResultSummarizesListFilesPreview(t *testing.T) {
 		t.Fatalf("small raw JSON should still reach model unchanged")
 	}
 }
+
+func TestPackageToolErrorGuidesModelToDiagnose(t *testing.T) {
+	env := packageToolError("terminal", errTest("exit status 1"))
+
+	if !strings.Contains(env.Preview, "Error executing terminal") {
+		t.Fatalf("preview should stay user-readable: %q", env.Preview)
+	}
+	if strings.Contains(env.Preview, "SelfMind diagnostic instruction") {
+		t.Fatalf("preview should not expose model-only recovery instruction: %q", env.Preview)
+	}
+	if !strings.Contains(env.ModelContent, "SelfMind diagnostic instruction") {
+		t.Fatalf("model content should include recovery instruction: %q", env.ModelContent)
+	}
+	if !strings.Contains(env.ModelContent, "inspect relevant context") {
+		t.Fatalf("model content should nudge diagnosis before retry: %q", env.ModelContent)
+	}
+}
+
+type errTest string
+
+func (e errTest) Error() string { return string(e) }

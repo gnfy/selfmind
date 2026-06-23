@@ -18,7 +18,7 @@ func WorkingNotice(channel string) string {
 	if ShouldStreamToClient(channel) {
 		return ""
 	}
-	return "已收到，AI 正在处理，完成后我会把结果发到这里。"
+	return "已收到，AI 正在处理。完成后我会把结果发到这里。"
 }
 
 func normalizeChannel(channel string) string {

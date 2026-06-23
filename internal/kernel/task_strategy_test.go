@@ -57,6 +57,23 @@ func TestTaskStrategyRepoTaskAllowsLocalToolsButSuppressesWeb(t *testing.T) {
 	}
 }
 
+func TestTaskStrategyChineseProjectAnalysisUsesLocalTools(t *testing.T) {
+	strategy := BuildTaskStrategy("你分析一下selfmind目前实现的功能，分析一下有待改进的地方。", "cli")
+
+	if strategy.Class != TaskClassRepoTask {
+		t.Fatalf("class = %s, want %s", strategy.Class, TaskClassRepoTask)
+	}
+	if strategy.ToolMode == ToolModeNone {
+		t.Fatalf("project analysis should not be direct-answer only: %+v", strategy)
+	}
+	if !strategy.AllowsTool("read_file") || !strategy.AllowsTool("search_files") {
+		t.Fatalf("project analysis should expose local read tools: %+v", strategy)
+	}
+	if strategy.AllowsTool("web_search") {
+		t.Fatalf("project analysis should not use web by default: %+v", strategy)
+	}
+}
+
 func TestTaskStrategyDebugTaskRequiresPlan(t *testing.T) {
 	strategy := BuildTaskStrategy("fix the failing tests and explain the regression", "cli")
 

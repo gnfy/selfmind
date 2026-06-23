@@ -68,6 +68,7 @@ type uiModel struct {
 	messages           []ChatMessage
 	thinking           bool
 	toolExecuting      string
+	runTokens          int
 	totalTokens        int
 	tokenLimit         int
 	startTime          time.Time
@@ -97,6 +98,9 @@ type uiModel struct {
 	activityText       string    // Current model/tool phase shown in transcript
 	runStatus          string    // ready | working | done | error | cancelled
 	migrationHint      string    // Hint for migrating Hermes skills
+	streamController   markdownStreamController
+	liveStreamContent  string
+	streamFlushPending bool
 	cursorVisible      bool
 	mouseDragActive    bool
 	mouseAutoScrollDir int
@@ -110,6 +114,7 @@ type MsgClearStatus struct{}
 type MsgWorkingTick time.Time
 type MsgCursorBlinkTick time.Time
 type MsgMouseAutoScrollTick time.Time
+type MsgStreamFlush time.Time
 type MsgAgentActivity struct {
 	Content string
 }
@@ -123,6 +128,12 @@ func workingTick() tea.Cmd {
 func cursorBlinkTick() tea.Cmd {
 	return tea.Tick(530*time.Millisecond, func(t time.Time) tea.Msg {
 		return MsgCursorBlinkTick(t)
+	})
+}
+
+func streamFlushTick() tea.Cmd {
+	return tea.Tick(90*time.Millisecond, func(t time.Time) tea.Msg {
+		return MsgStreamFlush(t)
 	})
 }
 
@@ -435,6 +446,49 @@ func (m *uiModel) appendAssistantResponse(content string) {
 	m.addMessage("assistant", content)
 }
 
+func (m *uiModel) commitLiveStream(content string) bool {
+	content = textutil.CleanUTF8(content)
+	if strings.TrimSpace(content) == "" {
+		return false
+	}
+	m.liveStreamContent += content
+	return true
+}
+
+func (m *uiModel) flushLiveStreamPending() bool {
+	return m.commitLiveStream(m.streamController.Flush())
+}
+
+func (m *uiModel) clearLiveStream() {
+	m.streamController.Reset()
+	m.liveStreamContent = ""
+	m.streamFlushPending = false
+}
+
+func (m *uiModel) finalizeLiveStream(finalContent string) bool {
+	m.flushLiveStreamPending()
+	live := strings.TrimSpace(m.liveStreamContent)
+	finalContent = strings.TrimSpace(textutil.CleanUTF8(finalContent))
+	content := finalContent
+	if content == "" {
+		content = live
+	}
+	m.clearLiveStream()
+	if content == "" {
+		return false
+	}
+	m.appendAssistantResponse(content)
+	return true
+}
+
+func (m *uiModel) scheduleStreamFlush() tea.Cmd {
+	if m.streamFlushPending || !m.streamController.Pending() {
+		return nil
+	}
+	m.streamFlushPending = true
+	return streamFlushTick()
+}
+
 func (m *uiModel) transcriptAtBottom() bool {
 	return m.viewport.AtBottom() || m.viewport.PastBottom()
 }
@@ -456,7 +510,7 @@ func (m *uiModel) transcriptVisibleHeight() int {
 	if m.editor != nil {
 		inputH = m.editor.PreferredHeight()
 	}
-	visibleH := m.height - inputH - 1
+	visibleH := m.height - inputH - 1 - m.composerGapHeight()
 	if m.notificationBar(m.width) != "" {
 		visibleH--
 	}
@@ -467,6 +521,27 @@ func (m *uiModel) transcriptVisibleHeight() int {
 		visibleH = 1
 	}
 	return visibleH
+}
+
+func (m *uiModel) composerGapHeight() int {
+	if m == nil || m.height < 12 {
+		return 0
+	}
+	inputH := 1
+	if m.editor != nil {
+		inputH = m.editor.PreferredHeight()
+	}
+	occupied := inputH + 1 // input area + status bar
+	if m.notificationBar(m.width) != "" {
+		occupied++
+	}
+	if m.migrationHintBar(m.width) != "" {
+		occupied++
+	}
+	if m.height-occupied <= 6 {
+		return 0
+	}
+	return 1
 }
 
 func (m *uiModel) mouseInTranscript(msg tea.MouseMsg) bool {
@@ -511,7 +586,18 @@ func (m *uiModel) viewModel() string {
 
 	statusBar := st.Status.Panel.Width(m.width).Render(m.statusLine())
 
-	return lipgloss.JoinVertical(lipgloss.Left, mainStr, notification, migrationHint, inputArea, statusBar)
+	parts := []string{mainStr}
+	if notification != "" {
+		parts = append(parts, notification)
+	}
+	if migrationHint != "" {
+		parts = append(parts, migrationHint)
+	}
+	if gapH := m.composerGapHeight(); gapH > 0 {
+		parts = append(parts, lipgloss.NewStyle().Width(m.width).Height(gapH).Render(""))
+	}
+	parts = append(parts, inputArea, statusBar)
+	return lipgloss.JoinVertical(lipgloss.Left, parts...)
 }
 
 func (m *uiModel) notificationBar(width int) string {
@@ -603,7 +689,7 @@ func (m *uiModel) statusLine() string {
 	parts := []string{
 		st.Status.Value.Render(header),
 		st.Status.Value.Render(cwd),
-		st.Status.Label.Render(formatUsage(m.totalTokens, m.tokenLimit)),
+		st.Status.Label.Render(formatUsage(m.runTokens, m.tokenLimit)),
 	}
 
 	state := m.runStatus
@@ -734,6 +820,15 @@ func (m *uiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, cursorBlinkTick()
 
+	case MsgStreamFlush:
+		m.streamFlushPending = false
+		wasAtBottom := m.transcriptAtBottom()
+		yOffset := m.viewport.YOffset
+		if m.flushLiveStreamPending() {
+			m.restoreOrFollowTranscript(wasAtBottom, yOffset)
+		}
+		return m, m.scheduleStreamFlush()
+
 	case MsgMouseAutoScrollTick:
 		m.mouseScrollTicking = false
 		if !m.mouseDragActive || m.mouseAutoScrollDir == 0 {
@@ -780,19 +875,11 @@ func (m *uiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		yOffset := m.viewport.YOffset
 		m.thinking = false
 		m.activityText = ""
-		if len(m.messages) > 0 && m.messages[len(m.messages)-1].Role == "assistant" && !m.messages[len(m.messages)-1].IsError {
-			// 如果最后一条消息是助手回复，且不是错误，则追加
-			m.messages[len(m.messages)-1].Content += msg.Content
-		} else {
-			// 否则创建新的助手消息
-			m.messages = append(m.messages, ChatMessage{
-				Role:      "assistant",
-				Content:   msg.Content,
-				Timestamp: time.Now(),
-			})
+		if committed := m.streamController.Push(msg.Content); committed != "" {
+			m.commitLiveStream(committed)
+			m.restoreOrFollowTranscript(wasAtBottom, yOffset)
 		}
-		m.restoreOrFollowTranscript(wasAtBottom, yOffset)
-		return m, nil
+		return m, m.scheduleStreamFlush()
 
 	case MsgAgentDone:
 		msg.Response = textutil.CleanUTF8(msg.Response)
@@ -801,13 +888,17 @@ func (m *uiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.thinking = false
 		m.activityText = ""
 		m.toolExecuting = ""
-		m.totalTokens += msg.Usage.InputTokens + msg.Usage.OutputTokens
+		turnTokens := msg.Usage.InputTokens + msg.Usage.OutputTokens
+		if turnTokens > 0 {
+			m.runTokens = turnTokens
+			m.totalTokens += turnTokens
+		}
 		if msg.Err != nil {
 			m.runStatus = "error"
+			m.finalizeLiveStream(msg.Response)
 			m.addErrorMessage(fmt.Sprintf("Error: %v", msg.Err))
-		} else if strings.TrimSpace(msg.Response) != "" {
+		} else if m.finalizeLiveStream(msg.Response) {
 			m.runStatus = "done"
-			m.appendAssistantResponse(msg.Response)
 		} else {
 			m.runStatus = "error"
 			m.addErrorMessage("Error: model returned an empty response without any error details. Check the provider credentials and endpoint, then retry.")
@@ -818,6 +909,7 @@ func (m *uiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case MsgToolStart:
 		wasAtBottom := m.transcriptAtBottom()
 		yOffset := m.viewport.YOffset
+		m.finalizeLiveStream("")
 		m.thinking = false
 		m.activityText = ""
 		m.toolExecuting = msg.ToolName
@@ -968,6 +1060,7 @@ func (m *uiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if m.thinking || m.toolExecuting != "" {
 				if m.cancelFn != nil {
 					m.cancelFn()
+					m.finalizeLiveStream("")
 					m.thinking = false
 					m.activityText = ""
 					m.toolExecuting = ""
@@ -983,6 +1076,7 @@ func (m *uiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		case "ctrl+l":
 			m.messages = []ChatMessage{}
+			m.clearLiveStream()
 			m.viewport.SetContent("")
 			return m, nil
 		case "enter":
@@ -1008,6 +1102,7 @@ func (m *uiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.runStatus = "working"
 				m.thinkingStart = time.Now()
 				m.thinkingDots = 0
+				m.runTokens = 0
 				m.activityText = "Thinking about the response"
 				return m, tea.Batch(m.spinner.Tick, workingTick())
 			}
@@ -1021,6 +1116,7 @@ func (m *uiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.runStatus = "working"
 			m.thinkingStart = time.Now()
 			m.thinkingDots = 0
+			m.runTokens = 0
 			m.activityText = "Thinking about the request"
 			ctx, cancel := context.WithCancel(context.Background())
 			m.cancelFn = cancel
@@ -1236,9 +1332,9 @@ func (m *uiModel) View() string {
 
 func formatUsage(usage, limit int) string {
 	if limit <= 0 {
-		return fmt.Sprintf("%s/? tokens", compactCount(usage))
+		return fmt.Sprintf("%s run · ctx ?", compactCount(usage))
 	}
-	return fmt.Sprintf("%s/%s tokens", compactCount(usage), compactCount(limit))
+	return fmt.Sprintf("%s run · %s ctx", compactCount(usage), compactCount(limit))
 }
 
 func resolveUITokenLimit(cfg *config.Config, providerName, modelName string) int {

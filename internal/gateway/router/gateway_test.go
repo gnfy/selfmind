@@ -34,10 +34,10 @@ func TestIsTaskDoneConservative(t *testing.T) {
 		want     bool
 	}{
 		{name: "clear done", response: "Task completed successfully.", want: true},
-		{name: "clear chinese done", response: "\u5904\u7406\u5b8c\u6210", want: true},
+		{name: "clear chinese done", response: "处理完成", want: true},
 		{name: "plain success wording", response: "The success criteria are listed below.", want: false},
 		{name: "not done", response: "Not done yet; remaining work is listed below.", want: false},
-		{name: "chinese not done", response: "\u672a\u5b8c\u6210\uff0c\u9700\u8981\u7ee7\u7eed", want: false},
+		{name: "chinese not done", response: "未完成，需要继续", want: false},
 		{name: "blocked", response: "Blocked: need approval before continuing.", want: false},
 	}
 	for _, tt := range tests {
@@ -79,7 +79,7 @@ func TestRealChineseModelAndIdentityQuestions(t *testing.T) {
 	gw := NewGateway(nil, nil, nil, nil)
 	gw.SetModelDisplay("kimi-coding", "kimi-for-coding")
 
-	modelResp, err := gw.Handle(context.Background(), "user1", "cli", "\u4f60\u662f\u4ec0\u4e48\u6a21\u578b\uff1f")
+	modelResp, err := gw.Handle(context.Background(), "user1", "cli", "你是什么模型？")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,7 +87,7 @@ func TestRealChineseModelAndIdentityQuestions(t *testing.T) {
 		t.Fatalf("model response = %+v", modelResp)
 	}
 
-	identityResp, err := gw.Handle(context.Background(), "user1", "cli", "\u4f60\u662f\u8c01\uff1f")
+	identityResp, err := gw.Handle(context.Background(), "user1", "cli", "你是谁？")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,7 +100,7 @@ func TestIntentLLMCanClassifyAmbiguousMessage(t *testing.T) {
 	gw := NewGateway(nil, nil, nil, &intentLLMProvider{content: `{"intent":"task","confidence":0.91,"reason":"asks to inspect work","signals":["inspect"],"should_create_task":true,"should_use_tools":true}`})
 	gw.SetIntentClassifier(NewIntentClassifierWithRules(IntentRuleConfig{Mode: "llm"}))
 
-	result := gw.ClassifyIntentWithContext(context.Background(), "\u5e2e\u6211\u770b\u770b\u8fd9\u4e2a\u60c5\u51b5", "cli")
+	result := gw.ClassifyIntentWithContext(context.Background(), "帮我看看这个情况", "cli")
 	if result.Intent != IntentTask || !result.ShouldCreateTask || !result.ShouldUseTools || result.Source != "llm" {
 		t.Fatalf("intent result = %+v", result)
 	}

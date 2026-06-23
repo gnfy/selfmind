@@ -54,9 +54,10 @@ type ProviderQuirks struct {
 
 // ChatResponse 是统一的标准响应
 type ChatResponse struct {
-	Content   string
-	ToolCalls []ToolCall
-	Usage     UsageStats
+	Content      string
+	ToolCalls    []ToolCall
+	Usage        UsageStats
+	FinishReason string
 }
 
 type ToolCall struct {
@@ -75,6 +76,7 @@ type StreamEvent struct {
 	Content         string
 	ToolCalls       []ToolCall
 	Usage           *UsageStats
+	FinishReason    string
 	Err             error
 	EventType       string
 	ToolName        string

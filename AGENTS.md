@@ -21,6 +21,7 @@ Read the full local architecture note first:
 - `docs/architecture-constraints.zh-CN.md`
 - `docs/provider-runtime.md`
 - `docs/provider-runtime.zh-CN.md`
+- `docs/context-lifecycle.zh-CN.md`
 
 ## Handoff Runbook
 
@@ -95,6 +96,28 @@ repo:
 - User-visible task state should be derived from structured run outcomes
   (`api.RunOutcome`) and handoffs, not from ad hoc status text spread across
   handlers.
+- Durable context must flow through the selector contract:
+  `control.db -> gateway/httpapi context selector -> kernel.TaskRuntimeContext
+  -> kernel.WithTaskRuntimeContext -> Agent.buildSystemPrompt`. Do not inject raw
+  control rows, event JSON, artifact metadata, or full tool output directly into
+  prompts or channel messages.
+- Treat `TaskRuntimeContext` as selected background context, not as a user
+  message. It can contain task state, handoffs, events, artifacts, and later
+  selected memory/session snippets, but it must remain bounded and explainable.
+- Per-turn runtime context should now be assembled as
+  `kernel.RuntimeContextBundle` before prompt rendering. The bundle is the
+  P0/P1 contract for workspace, task, selected memory, selection notes, and
+  token/character budgets. Extend this bundle or the selector that feeds it
+  rather than appending new prompt fragments in unrelated handlers.
+- `internal/kernel/context_engine.go` must stay on the streaming hot path. It
+  should only load a bounded slice of recent channel history and should not make
+  synchronous LLM summarization calls by default. If synchronous compaction is
+  ever required for diagnostics, gate it behind `SELFMIND_SYNC_CONTEXT_SUMMARY`
+  and keep the default path deterministic.
+- Existing memory facts, session FTS recall, task handoffs, task events, and
+  artifacts are separate durable context sources. Future ranking/embedding work
+  should extend the selector layer instead of adding another prompt append path
+  in `agent.go`, gateway handlers, or IM adapters.
 - Hard tasks should not appear stalled. Long-running runs must emit visible
   progress through events, status text, or outbound channel notifications. A
   timeout, failed tool call, or model error should lead to diagnosis, retry or a
@@ -120,17 +143,34 @@ repo:
   `docs/provider-runtime.md`: `ProviderProfile` describes a vendor, `Resolver`
   produces a resolved `Runtime`, app wiring turns the runtime into an
   `llm.Provider`, and adapters only implement protocol transports.
+- The runtime-to-LLM boundary is now `llm.TransportConfig` plus the transport
+  registry in `internal/kernel/llm/transport.go`. `internal/app` may translate a
+  resolved `modelruntime.Runtime` into `TransportConfig`, but it must not choose
+  concrete OpenAI/Anthropic/Responses adapters with provider-name switches.
 - Prefer existing protocol adapters (`openai_chat`, `openai_compatible`,
   `anthropic_messages`, `codex_responses`) when adding model vendors. Add a new
   Go adapter only when the wire protocol is genuinely different.
 - Put provider-specific behavior in `ProviderQuirks` first: auth header,
   tool-schema repair, system-message mode, thinking behavior, User-Agent, and
-  capability metadata. Do not scatter provider-name checks across CLI, gateway,
-  IM adapters, or app setup.
+  protocol-specific request flags such as Codex Responses `store=false` and
+  stream-only requests. Do not scatter provider-name checks across CLI,
+  gateway, IM adapters, or app setup.
 - User YAML `provider_profiles.*.quirks` currently supports
   `auth_header`, `tool_schema`, `system_message_mode`, `thinking_mode`, and
-  `user_agent`. Capability flags such as tool/streaming/vision support belong
-  in built-in Go profiles.
+  `user_agent`, plus `responses_store_false` and `responses_require_stream`
+  for Responses-compatible endpoints that require stateless/stream-only
+  requests. Capability flags such as
+  tool/streaming/vision support belong in built-in Go profiles.
+- Responses-compatible stateless providers must replay native tool turns as
+  `function_call` input items followed by matching `function_call_output`
+  items. Do not send a tool output with only a `call_id`; Codex will reject it
+  because `store=false` means the server cannot look up prior response items.
+- Responses-compatible providers require wire tool names matching
+  `^[a-zA-Z0-9_-]+$`. Keep SelfMind's internal tool names unchanged, but map
+  them to provider-safe names at the adapter boundary and map returned tool
+  calls back to the original names before dispatch. This is especially
+  important for skill, MCP, or legacy tools whose internal names may contain
+  `:`, `.`, `/`, or spaces.
 - Kimi Coding Plan should default to `kimi-coding` +
   `anthropic_messages` + `https://api.kimi.com/coding` +
   `kimi-for-coding`, with Moonshot tool schema repair, no Anthropic `thinking`
@@ -162,8 +202,16 @@ repo:
   not restate simple assignments, and do not leave mojibake or hidden-encoding
   comments.
 - P2 auth reuse is intentionally limited to Codex CLI, Claude Code, Gemini
-  CLI, and Qwen CLI. Other model vendors should use API keys, custom
-  OpenAI-compatible endpoints, or `provider_profiles`.
+  CLI, Qwen CLI, and SelfMind-owned OAuth providers such as MiniMax OAuth. Keep
+  external credential parsing and refresh in `internal/modelruntime`, and make
+  adapters consume `Runtime.TokenGetter` before each request instead of caching
+  an initial token. If the server returns an auth failure such as
+  `token_expired`, adapters may call `Runtime.TokenRefresher` and replay the
+  same request once. `codex-cli` must refresh expired `~/.codex/auth.json`
+  ChatGPT OAuth access tokens, send Codex Responses requests with
+  `store=false`, and surface stale-login/provider-contract failures as
+  actionable text, not raw provider JSON. Other model vendors should use API
+  keys, custom OpenAI-compatible endpoints, or `provider_profiles`.
 - Tool calling should stay Hermes-like: pass tool schemas as native LLM
   `tool_calls` where the provider supports it, preserve `tool_call_id` on
   tool result messages, and keep `[TOOL:...]` only as a compatibility fallback.
@@ -202,6 +250,13 @@ repo:
   `tool.completed` for tool execution, and `turn.completed` for final state.
   CLI/TUI should show these steps live; IM channels should keep token streams
   collapsed but preserve working notices, event records, and failure summaries.
+- Tool failures are diagnostic evidence, not automatic stop conditions. Agents
+  should inspect cwd, repository/module boundaries, environment, auth state,
+  provider protocol constraints, or command help before retrying with a changed
+  command. Do not bake project-specific env overrides into generic tools. For
+  example, a Go workspace/module error should lead the agent to inspect
+  `go env GOWORK`, `go env GOMOD`, `go.work`, and `go.mod`, then choose an
+  explicit cwd or env override only when that diagnosis supports it.
 - Tool results must be packaged through the Agent result envelope before they
   reach the model, TUI, run events, or future artifacts. Keep raw tool output,
   model-bounded content, and user-visible preview as separate surfaces; do not
@@ -250,6 +305,9 @@ repo:
 - `internal/gateway/httpapi/server.go`: local HTTP API and IM webhook
   shared message/run flow. Endpoint handlers live in split `handlers_*.go`,
   `active_runs.go`, and `run_events.go` files in the same package.
+- `internal/gateway/httpapi/context_selector.go`: selects bounded task
+  handoff/event/artifact/workspace slices from `control.db` for one model turn.
+  Extend this when adding long-term context sources.
 - `internal/control/store.go`: control-plane SQLite schema and persistence.
 - `internal/tools/workspace_scope.go`: workspace execution boundary.
 - `internal/gateway/cli/transcript_renderer.go`: TUI transcript, startup card,
@@ -257,6 +315,11 @@ repo:
 - `internal/gateway/cli/slash_commands.go`: slash command metadata and
   dispatcher registry shared by help/editor/dispatch.
 - `internal/kernel/event_context.go`: per-run agent event sink injection.
+- `internal/kernel/context_engine.go`: bounded message-window construction for
+  model calls. Keep it cheap and deterministic on the default hot path.
+- `internal/kernel/task_runtime_context.go`: kernel-owned prompt contract for
+  selected durable task context and `RuntimeContextBundle`. Keep `kernel`
+  independent of `control.Store`.
 - `internal/kernel/task_strategy.go`: per-turn task classification and tool,
   plan, web, and progress policy shared by CLI/IM/web entrypoints.
 - `internal/gateway/httpapi/outcome.go`: structured run outcome extraction for
@@ -297,6 +360,9 @@ go test ./...
 ```
 
 `GOWORK=off` avoids the parent workspace file excluding this module.
+This is a repository-local development command, not a generic terminal-tool
+default. Runtime tools should return the real command output and let the agent
+diagnose workspace/module errors before choosing any env override.
 
 When working from WSL in this checkout, the equivalent command is:
 

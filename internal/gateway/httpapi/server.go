@@ -257,6 +257,7 @@ func (d *Server) runMessage(ctx context.Context, identity *control.IdentityConte
 			Root: workspace.LocalPath,
 		})
 	}
+	ctx = kernel.WithTaskRuntimeContext(ctx, d.selectedTaskRuntimeContext(ctx, task, run, workspace, req.Channel))
 	agentInput := d.withGatewayContext(req.Content, identity, task, workspace, req.Attachments)
 	agentInput = d.withResumeContext(ctx, identity, task, run, intent, agentInput)
 	ctx = kernel.WithTaskStrategy(ctx, taskStrategyForRequest(req, intent))

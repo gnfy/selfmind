@@ -65,6 +65,13 @@ func (s *CredentialStore) ResolveMiniMaxOAuth() Credential {
 			}
 			return token
 		},
+		Refresher: func() string {
+			token, err := s.refreshMiniMaxOAuthToken()
+			if err != nil {
+				return ""
+			}
+			return token
+		},
 	}
 }
 
@@ -88,6 +95,23 @@ func (s *CredentialStore) currentMiniMaxOAuthToken() (string, error) {
 	}
 	if token == "" {
 		return "", fmt.Errorf("MiniMax OAuth state has no access token")
+	}
+	return token, nil
+}
+
+func (s *CredentialStore) refreshMiniMaxOAuthToken() (string, error) {
+	state, err := readProviderState(s.path, MiniMaxOAuthProvider)
+	if err != nil {
+		return "", err
+	}
+	state, err = refreshMiniMaxOAuthState(s.path, state)
+	if err != nil {
+		quarantineMiniMaxOAuthState(s.path, state, err)
+		return "", err
+	}
+	token := stringValue(state["access_token"])
+	if token == "" {
+		return "", fmt.Errorf("MiniMax OAuth refresh returned no access token")
 	}
 	return token, nil
 }

@@ -3,11 +3,15 @@ package cliapp
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"selfmind/internal/platform/config"
 )
@@ -80,6 +84,50 @@ func TestModelCheckResolvesConfiguredProvider(t *testing.T) {
 	}
 }
 
+func TestModelCheckReportsTokenRefresher(t *testing.T) {
+	codexHome := t.TempDir()
+	t.Setenv("CODEX_HOME", codexHome)
+	token := cliappFakeJWT(time.Now().Add(time.Hour))
+	authJSON := fmt.Sprintf(`{"auth_mode":"chatgpt","tokens":{"access_token":%q,"refresh_token":"refresh-token"}}`, token)
+	if err := os.WriteFile(filepath.Join(codexHome, "auth.json"), []byte(authJSON), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := config.SaveConfig(path, &config.Config{
+		Model: config.ModelConfig{Provider: "codex-cli", Default: "gpt-5.5"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	stdout := &bytes.Buffer{}
+	stderr := &bytes.Buffer{}
+	app := &App{
+		ctx:        context.Background(),
+		args:       []string{"selfmind", "model", "check"},
+		stdout:     stdout,
+		stderr:     stderr,
+		configPath: path,
+	}
+
+	handled, code := app.runModelCommandIfRequested()
+	if !handled {
+		t.Fatal("model command was not handled")
+	}
+	if code != 0 {
+		t.Fatalf("exit code = %d, stdout = %s, stderr = %s", code, stdout.String(), stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "Token getter: configured") {
+		t.Fatalf("stdout missing token getter: %s", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "Token refresher: configured") {
+		t.Fatalf("stdout missing token refresher: %s", stdout.String())
+	}
+	if strings.Contains(stdout.String(), token) || strings.Contains(stdout.String(), "refresh-token") {
+		t.Fatalf("stdout leaked token material: %s", stdout.String())
+	}
+}
+
 func TestModelCheckReportsMissingCredential(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	if err := config.SaveConfig(path, &config.Config{
@@ -108,6 +156,12 @@ func TestModelCheckReportsMissingCredential(t *testing.T) {
 	if !strings.Contains(stderr.String(), "no credentials found for provider kimi-coding") {
 		t.Fatalf("stderr missing credential error: %s", stderr.String())
 	}
+}
+
+func cliappFakeJWT(exp time.Time) string {
+	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"none","typ":"JWT"}`))
+	claims := base64.RawURLEncoding.EncodeToString([]byte(fmt.Sprintf(`{"exp":%d}`, exp.Unix())))
+	return header + "." + claims + ".sig"
 }
 
 func TestInteractiveModelCommandAddsCustomEndpointFromPipedInput(t *testing.T) {

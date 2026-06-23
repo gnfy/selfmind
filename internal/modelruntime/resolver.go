@@ -28,6 +28,7 @@ type Runtime struct {
 	ServiceTier      string
 	Quirks           ProviderQuirks
 	TokenGetter      func() string
+	TokenRefresher   func() string
 }
 
 // Selection carries per-command or per-role overrides. Empty fields mean the
@@ -160,6 +161,7 @@ func (r *Resolver) resolveNamed(providerName string, selection Selection, modelN
 		ServiceTier:     firstNonEmpty(selection.ServiceTier, endpoint.ServiceTier, profile.ServiceTier),
 		Quirks:          mergeProviderQuirks(profile.Quirks, quirksFromConfig(endpoint.Quirks), selection.Quirks),
 		TokenGetter:     cred.Getter,
+		TokenRefresher:  cred.Refresher,
 	}, nil
 }
 
@@ -337,11 +339,13 @@ func defaultQuirksForProtocol(protocol string) ProviderQuirks {
 
 func quirksFromConfig(q config.ProviderQuirks) ProviderQuirks {
 	return ProviderQuirks{
-		AuthHeader:        strings.TrimSpace(q.AuthHeader),
-		ToolSchema:        strings.TrimSpace(q.ToolSchema),
-		SystemMessageMode: strings.TrimSpace(q.SystemMessageMode),
-		ThinkingMode:      strings.TrimSpace(q.ThinkingMode),
-		UserAgent:         strings.TrimSpace(q.UserAgent),
+		AuthHeader:             strings.TrimSpace(q.AuthHeader),
+		ToolSchema:             strings.TrimSpace(q.ToolSchema),
+		SystemMessageMode:      strings.TrimSpace(q.SystemMessageMode),
+		ThinkingMode:           strings.TrimSpace(q.ThinkingMode),
+		UserAgent:              strings.TrimSpace(q.UserAgent),
+		ResponsesStoreFalse:    q.ResponsesStoreFalse,
+		ResponsesRequireStream: q.ResponsesRequireStream,
 	}
 }
 
@@ -365,6 +369,12 @@ func mergeProviderQuirks(base ProviderQuirks, overlays ...ProviderQuirks) Provid
 		}
 		if overlay.DisableHTTP2 {
 			out.DisableHTTP2 = true
+		}
+		if overlay.ResponsesStoreFalse {
+			out.ResponsesStoreFalse = true
+		}
+		if overlay.ResponsesRequireStream {
+			out.ResponsesRequireStream = true
 		}
 		if overlay.SupportsTools {
 			out.SupportsTools = true

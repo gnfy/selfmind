@@ -58,6 +58,7 @@ docs/                      架构和开发文档
 
 - [SelfMind 架构约束](architecture-constraints.zh-CN.md)
 - [SelfMind Architecture Constraints](architecture-constraints.md)
+- [SelfMind 上下文生命周期与 P0-P2 落地](context-lifecycle.zh-CN.md)
 
 重点约束：
 
@@ -66,6 +67,7 @@ docs/                      架构和开发文档
 - slash command 的执行、帮助文案和输入提示要逐步收敛到统一 registry。
 - 避免新增跨租户、跨测试共享的全局 mutable 状态。
 - 新 provider、工具、HTTP handler、TUI 组件应按职责拆分，不把逻辑堆进已有大文件。
+- durable context 选择必须走 `gateway/httpapi/context_selector.go` 和 `kernel.TaskRuntimeContext`；不要在无关 handler 里直接拼接 raw task event、artifact 或 memory snippet。
 
 ## 配置系统
 
@@ -222,7 +224,7 @@ selfmind model set openai gpt-4o
 - `internal/app/agent.go` 只把 `Runtime` 转成 adapter 并组装 role routing，不再写厂商级认证探测逻辑。
 - `ProviderQuirks` 负责认证头、tool schema、thinking、system message、User-Agent 等厂商差异。
 - `internal/cliapp/model_commands.go` 管用户交互式 provider/model picker；`Custom endpoint (enter URL manually)` 保持第 4 项，兼容脚本输入。
-- P2 外部认证复用只覆盖 Codex CLI、Claude Code、Gemini CLI、Qwen CLI。其它厂商走 API key、自定义 endpoint 或 `provider_profiles`。
+- P2 外部认证复用只覆盖 Codex CLI、Claude Code、Gemini CLI、Qwen CLI，以及 SelfMind 自己管理的 OAuth provider（例如 MiniMax OAuth）。`Runtime.TokenGetter` 是每次请求前的 token 来源；`Runtime.TokenRefresher` 是 provider 返回认证失败后，协议 adapter 可以调用一次的强制刷新 hook。其它厂商走 API key、自定义 endpoint 或 `provider_profiles`，不要随意探测随机客户端的本地登录态。
 
 ### Role-Based Model Routing
 

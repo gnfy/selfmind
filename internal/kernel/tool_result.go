@@ -11,6 +11,7 @@ import (
 const (
 	toolResultPreviewBytes = 800
 	toolResultModelBytes   = 64000
+	toolResultSeparator    = " · "
 )
 
 // ToolResultEnvelope separates the same tool output into surfaces with
@@ -38,11 +39,12 @@ func packageToolResult(name, raw string) ToolResultEnvelope {
 func packageToolError(name string, err error) ToolResultEnvelope {
 	msg := fmt.Sprintf("Error executing %s: %v", nonEmpty(name, "tool"), err)
 	msg = textutil.CleanUTF8(msg)
+	modelContent := msg + "\n\nSelfMind diagnostic instruction: this tool failed. Treat the error as evidence, inspect relevant context such as cwd, files, environment, auth state, provider constraints, or command help, and continue with a corrected next step unless this is a confirmed blocker."
 	return ToolResultEnvelope{
 		Raw:          msg,
 		Preview:      textutil.Truncate(msg, toolResultPreviewBytes),
-		ModelContent: textutil.Truncate(msg, 4000),
-		Truncated:    len(msg) > 4000,
+		ModelContent: textutil.Truncate(modelContent, 4000),
+		Truncated:    len(modelContent) > 4000,
 		Bytes:        len(msg),
 	}
 }
@@ -111,7 +113,7 @@ func listFilesPreview(raw string) string {
 	if payload.Truncated {
 		parts = append(parts, "truncated")
 	}
-	return strings.Join(parts, " · ")
+	return strings.Join(parts, toolResultSeparator)
 }
 
 func searchFilesPreview(raw string) string {
@@ -138,7 +140,7 @@ func searchFilesPreview(raw string) string {
 	if payload.Truncated {
 		parts = append(parts, "truncated")
 	}
-	return strings.Join(parts, " · ")
+	return strings.Join(parts, toolResultSeparator)
 }
 
 func planPreview(raw string) string {
@@ -162,9 +164,9 @@ func planPreview(raw string) string {
 		}
 	}
 	if inProgress != "" {
-		return fmt.Sprintf("%d steps · now: %s", len(payload.Plan), inProgress)
+		return fmt.Sprintf("%d steps%snow: %s", len(payload.Plan), toolResultSeparator, inProgress)
 	}
-	return fmt.Sprintf("%d steps · %d completed", len(payload.Plan), completed)
+	return fmt.Sprintf("%d steps%s%d completed", len(payload.Plan), toolResultSeparator, completed)
 }
 
 func finishRunPreview(raw string) string {
@@ -179,7 +181,7 @@ func finishRunPreview(raw string) string {
 	summary := strings.TrimSpace(payload.Summary)
 	switch {
 	case status != "" && summary != "":
-		return status + " · " + summary
+		return status + toolResultSeparator + summary
 	case summary != "":
 		return summary
 	case status != "":

@@ -15,6 +15,7 @@ import (
 type AnthropicAdapter struct {
 	APIKey          string
 	KeyGetter       func() string
+	TokenRefresher  func() string
 	Model           string
 	BaseURL         string
 	MaxTokens       int
@@ -60,6 +61,7 @@ type AnthropicResponse struct {
 		InputTokens  int `json:"input_tokens"`
 		OutputTokens int `json:"output_tokens"`
 	} `json:"usage"`
+	StopReason string `json:"stop_reason"`
 }
 
 func NewAnthropicAdapter(apiKey string) *AnthropicAdapter {
@@ -80,7 +82,6 @@ func (a *AnthropicAdapter) GetModel() string {
 }
 
 func (a *AnthropicAdapter) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, error) {
-	apiKey := a.apiKey()
 	anthropicReq := a.requestFromChat(req, false)
 
 	body, err := json.Marshal(anthropicReq)
@@ -88,13 +89,7 @@ func (a *AnthropicAdapter) Chat(ctx context.Context, req ChatRequest) (*ChatResp
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, a.BaseURL, bytes.NewReader(body))
-	if err != nil {
-		return nil, fmt.Errorf("create request: %w", err)
-	}
-	a.setHeaders(httpReq, apiKey)
-
-	resp, err := a.httpClient().Do(httpReq)
+	resp, err := a.doAnthropicRequest(ctx, body, a.apiKey())
 	if err != nil {
 		return nil, fmt.Errorf("anthropic request failed: %w", err)
 	}
@@ -102,11 +97,29 @@ func (a *AnthropicAdapter) Chat(ctx context.Context, req ChatRequest) (*ChatResp
 
 	if resp.StatusCode != http.StatusOK {
 		b, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("anthropic API error %d: %s", resp.StatusCode, string(b))
+		if isAuthFailureStatus(resp.StatusCode, b) {
+			resp.Body.Close()
+			if key, ok := refreshedAPIKey(a.TokenRefresher); ok {
+				resp, err = a.doAnthropicRequest(ctx, body, key)
+				if err != nil {
+					return nil, fmt.Errorf("anthropic request failed after token refresh: %w", err)
+				}
+				defer resp.Body.Close()
+				if resp.StatusCode == http.StatusOK {
+					return a.decodeAnthropicResponse(resp.Body)
+				}
+				b, _ = io.ReadAll(resp.Body)
+			}
+		}
+		return nil, providerAPIError("anthropic", resp.StatusCode, b)
 	}
 
+	return a.decodeAnthropicResponse(resp.Body)
+}
+
+func (a *AnthropicAdapter) decodeAnthropicResponse(body io.Reader) (*ChatResponse, error) {
 	var anthropicResp AnthropicResponse
-	if err := json.NewDecoder(resp.Body).Decode(&anthropicResp); err != nil {
+	if err := json.NewDecoder(body).Decode(&anthropicResp); err != nil {
 		return nil, fmt.Errorf("decode response: %w", err)
 	}
 
@@ -122,8 +135,9 @@ func (a *AnthropicAdapter) Chat(ctx context.Context, req ChatRequest) (*ChatResp
 	}
 
 	return &ChatResponse{
-		Content:   content,
-		ToolCalls: toolCalls,
+		Content:      content,
+		ToolCalls:    toolCalls,
+		FinishReason: anthropicResp.StopReason,
 		Usage: UsageStats{
 			InputTokens:  anthropicResp.Usage.InputTokens,
 			OutputTokens: anthropicResp.Usage.OutputTokens,
@@ -132,7 +146,6 @@ func (a *AnthropicAdapter) Chat(ctx context.Context, req ChatRequest) (*ChatResp
 }
 
 func (a *AnthropicAdapter) StreamChat(ctx context.Context, req ChatRequest) (<-chan StreamEvent, error) {
-	apiKey := a.apiKey()
 	anthropicReq := a.requestFromChat(req, true)
 
 	body, err := json.Marshal(anthropicReq)
@@ -140,23 +153,43 @@ func (a *AnthropicAdapter) StreamChat(ctx context.Context, req ChatRequest) (<-c
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, a.BaseURL, bytes.NewReader(body))
-	if err != nil {
-		return nil, fmt.Errorf("create request: %w", err)
-	}
-	a.setHeaders(httpReq, apiKey)
-
-	resp, err := a.httpClient().Do(httpReq)
+	resp, err := a.doAnthropicRequest(ctx, body, a.apiKey())
 	if err != nil {
 		return nil, fmt.Errorf("anthropic stream request failed: %w", err)
 	}
 	if resp.StatusCode != http.StatusOK {
 		b, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		return nil, fmt.Errorf("anthropic API error %d: %s", resp.StatusCode, string(b))
+		if isAuthFailureStatus(resp.StatusCode, b) {
+			if key, ok := refreshedAPIKey(a.TokenRefresher); ok {
+				resp, err = a.doAnthropicRequest(ctx, body, key)
+				if err != nil {
+					return nil, fmt.Errorf("anthropic stream request failed after token refresh: %w", err)
+				}
+				if resp.StatusCode == http.StatusOK {
+					return anthropicStreamEvents(resp), nil
+				}
+				b, _ = io.ReadAll(resp.Body)
+				resp.Body.Close()
+			}
+		}
+		return nil, providerAPIError("anthropic", resp.StatusCode, b)
 	}
 
-	ch := make(chan StreamEvent, 10)
+	return anthropicStreamEvents(resp), nil
+}
+
+func (a *AnthropicAdapter) doAnthropicRequest(ctx context.Context, body []byte, apiKey string) (*http.Response, error) {
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, a.BaseURL, bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("create request: %w", err)
+	}
+	a.setHeaders(httpReq, apiKey)
+	return a.httpClient().Do(httpReq)
+}
+
+func anthropicStreamEvents(resp *http.Response) <-chan StreamEvent {
+	ch := make(chan StreamEvent, 256)
 	go func() {
 		defer resp.Body.Close()
 		defer close(ch)
@@ -203,6 +236,7 @@ func (a *AnthropicAdapter) StreamChat(ctx context.Context, req ChatRequest) (<-c
 							Type        string `json:"type"`
 							Text        string `json:"text"`
 							PartialJSON string `json:"partial_json"`
+							StopReason  string `json:"stop_reason"`
 						} `json:"delta"`
 						Message struct {
 							Usage struct {
@@ -248,6 +282,9 @@ func (a *AnthropicAdapter) StreamChat(ctx context.Context, req ChatRequest) (<-c
 							ch <- StreamEvent{Usage: &UsageStats{InputTokens: chunk.Message.Usage.InputTokens}}
 						}
 					case "message_delta":
+						if chunk.Delta.StopReason != "" {
+							ch <- StreamEvent{FinishReason: chunk.Delta.StopReason}
+						}
 						if chunk.Usage.OutputTokens > lastOutputTokens {
 							delta := chunk.Usage.OutputTokens - lastOutputTokens
 							lastOutputTokens = chunk.Usage.OutputTokens
@@ -269,7 +306,7 @@ func (a *AnthropicAdapter) StreamChat(ctx context.Context, req ChatRequest) (<-c
 			}
 		}
 	}()
-	return ch, nil
+	return ch
 }
 
 func (a *AnthropicAdapter) ChatCompletion(ctx context.Context, messages []Message) (string, error) {
@@ -285,13 +322,7 @@ func (a *AnthropicAdapter) ChatCompletion(ctx context.Context, messages []Messag
 }
 
 func (a *AnthropicAdapter) apiKey() string {
-	apiKey := a.APIKey
-	if a.KeyGetter != nil {
-		if k := a.KeyGetter(); k != "" {
-			apiKey = k
-		}
-	}
-	return apiKey
+	return apiKeyFrom(a.APIKey, a.KeyGetter)
 }
 
 func isAnthropicOAuthToken(token string) bool {

@@ -58,7 +58,7 @@ func TestAggregateFinalResponseSummarizesToolFailureForIM(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"我暂时无法确认", "处理过程摘要", "Thinking about the request", "gh auth status", "command timed out", "error connecting"} {
+	for _, want := range []string{"我暂时无法确认", "Process summary", "Thinking about the request", "gh auth status", "command timed out", "error connecting"} {
 		if !strings.Contains(content, want) {
 			t.Fatalf("content missing %q: %q", want, content)
 		}

@@ -8,10 +8,17 @@ The runtime follows four boundaries:
 
 - `ProviderProfile` describes a provider declaratively.
 - `Resolver` combines config, environment variables, auth store entries, and per-command selections into a `Runtime`.
-- `llm.Adapter` implements one protocol family, such as OpenAI Chat, Anthropic Messages, or Codex Responses.
-- `ProviderQuirks` carries provider-specific wire behavior, such as auth headers, tool schema fixes, thinking parameters, and User-Agent.
+- `llm.TransportConfig` is the only handoff from app/runtime into the LLM layer.
+- `llm` transports implement one protocol family, such as OpenAI Chat, Anthropic Messages, or Codex Responses.
+- `ProviderQuirks` carries provider-specific wire behavior, such as auth headers, tool schema fixes, thinking parameters, User-Agent, and Responses request flags.
 
-User YAML `quirks` currently exposes `auth_header`, `tool_schema`, `system_message_mode`, `thinking_mode`, and `user_agent`. Capability flags such as tools, streaming, and vision are built-in profile metadata maintained in Go.
+This mirrors the useful part of Hermes' model-provider design: provider
+differences are declarative profile/quirk data, while protocol adapters
+normalize requests, streaming, tool calls, and usage into SelfMind's shared
+`llm.Provider` interface. Channel code, gateway routing, task strategy, and IM
+adapters must not contain vendor-specific logic.
+
+User YAML `quirks` currently exposes `auth_header`, `tool_schema`, `system_message_mode`, `thinking_mode`, `user_agent`, `responses_store_false`, and `responses_require_stream`. Capability flags such as tools, streaming, and vision are built-in profile metadata maintained in Go.
 
 ## Context Window vs Output Cap
 
@@ -38,7 +45,8 @@ Do not display `max_tokens` as the model context window, and do not hardcode fak
 | `internal/modelruntime/resolver.go` | Config/env/auth/selection resolution into `Runtime` |
 | `internal/modelruntime/catalog.go` | Model list fetching and cache |
 | `internal/platform/config/loader.go` | YAML schema and compatibility |
-| `internal/app/agent.go` | `Runtime` to concrete `llm.Provider` wiring |
+| `internal/app/agent.go` | `Runtime` to `llm.TransportConfig` handoff |
+| `internal/kernel/llm/transport.go` | Protocol transport registry and provider factory boundary |
 | `internal/kernel/llm/adapters.go` | OpenAI-compatible transport |
 | `internal/kernel/llm/anthropic_adapter.go` | Anthropic-compatible transport |
 | `internal/kernel/llm/responses_adapter.go` | Codex Responses transport |
@@ -112,14 +120,55 @@ Default behavior:
 - fallback models: `MiniMax-M3`, `MiniMax-M2.7`, `MiniMax-M2.7-highspeed`, `MiniMax-M2.5`
 - `MiniMax-M3` uses adaptive thinking for the `coding_agent` role
 
+## External CLI Auth Reuse
+
+External CLI auth reuse is a compatibility bridge, not a new login system.
+Keep credential parsing and refresh in `internal/modelruntime`; adapters should
+call `Runtime.TokenGetter` before sending each request. When a provider returns
+an auth failure such as `401 token_expired`, an adapter may call
+`Runtime.TokenRefresher` and replay the same request once. Do not put token file
+parsing, OAuth refresh payloads, or provider login state inside an LLM adapter.
+
+- `codex-cli` reads `~/.codex/auth.json` or `CODEX_HOME/auth.json`, refreshes
+  expired ChatGPT OAuth access tokens through the Codex OAuth client, preserves
+  the existing `tokens.account_id`, and sends requests through
+  `llm.ResponsesAdapter`.
+- Codex's backend requires stateless, stream-only Responses calls, so the
+  built-in `codex-cli` profile sets
+  `ProviderQuirks.ResponsesStoreFalse=true` and
+  `ProviderQuirks.ResponsesRequireStream=true`; the adapter must serialize
+  `"store": false` and use streaming even when a caller asks for non-streaming
+  fallback. Do not rely on provider defaults for these flags.
+- Responses-compatible adapters must normalize tool schemas before sending.
+  In particular, `required` must be a JSON array, never `null`; nil Go slices
+  from tool definitions must be converted to `[]`.
+- Responses-compatible adapters must also normalize tool names on the wire.
+  The provider-facing name must match `^[a-zA-Z0-9_-]+$`; keep an alias table
+  inside the adapter so returned tool calls are mapped back to SelfMind's
+  original internal names before dispatch.
+- For stateless Responses providers, every tool result replay must include the
+  assistant `function_call` item before the matching `function_call_output`
+  item in the same request input. The server cannot resolve prior response
+  items when `store=false`.
+- If Codex refresh fails or the refresh token is no longer valid, surface an
+  actionable "run `codex login`" error instead of dumping raw provider JSON.
+- `CODEX_ACCESS_TOKEN` remains a static override and is not refreshed by
+  SelfMind.
+- MiniMax OAuth uses the same contract: `TokenGetter` refreshes near expiry,
+  while `TokenRefresher` handles server-side invalidation discovered on a
+  request.
+
 ## Adding a Provider
 
 1. Add a `ProviderProfile` in `internal/modelruntime/profile.go`.
 2. Prefer an existing protocol family before writing a new adapter.
 3. Set env vars, base URL env var, model-list mode, fallback models, and quirks.
-4. Add resolver tests for protocol, base URL, fallback model, auth, and quirks.
-5. Add adapter tests only when new wire behavior or quirks are introduced.
-6. Update this document.
+4. Do not add provider-name branches in `internal/app`, gateway, CLI, IM adapters,
+   or task strategy. If an existing protocol is sufficient, the transport
+   registry should keep working without code outside `internal/modelruntime`.
+5. Add resolver tests for protocol, base URL, fallback model, auth, and quirks.
+6. Add transport/adapter tests only when new wire behavior or quirks are introduced.
+7. Update this document.
 
 Useful verification:
 

@@ -16,6 +16,7 @@ import (
 type OpenAIAdapter struct {
 	APIKey          string
 	KeyGetter       func() string
+	TokenRefresher  func() string
 	Model           string
 	BaseURL         string
 	Headers         map[string]string
@@ -78,6 +79,7 @@ type OpenAIResponse struct {
 			Content   *string          `json:"content"`
 			ToolCalls []OpenAIToolCall `json:"tool_calls"`
 		} `json:"message"`
+		FinishReason string `json:"finish_reason"`
 	} `json:"choices"`
 	Usage struct {
 		PromptTokens     int `json:"prompt_tokens"`
@@ -254,8 +256,9 @@ func chatResponseFromOpenAI(openaiResp OpenAIResponse) *ChatResponse {
 		content = *openaiResp.Choices[0].Message.Content
 	}
 	return &ChatResponse{
-		Content:   content,
-		ToolCalls: llmToolCallsFromOpenAI(openaiResp.Choices[0].Message.ToolCalls),
+		Content:      content,
+		ToolCalls:    llmToolCallsFromOpenAI(openaiResp.Choices[0].Message.ToolCalls),
+		FinishReason: openaiResp.Choices[0].FinishReason,
 		Usage: UsageStats{
 			InputTokens:  openaiResp.Usage.PromptTokens,
 			OutputTokens: openaiResp.Usage.CompletionTokens,
@@ -321,13 +324,6 @@ func (a *OpenAIAdapter) GetModel() string {
 }
 
 func (a *OpenAIAdapter) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, error) {
-	apiKey := a.APIKey
-	if a.KeyGetter != nil {
-		if k := a.KeyGetter(); k != "" {
-			apiKey = k
-		}
-	}
-
 	wireReq := a.requestWithQuirks(req)
 	openaiReq := openAIRequestFromChat(a.Model, wireReq, false)
 	a.applyOptions(&openaiReq, wireReq)
@@ -337,15 +333,7 @@ func (a *OpenAIAdapter) Chat(ctx context.Context, req ChatRequest) (*ChatRespons
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, a.BaseURL, bytes.NewReader(body))
-	if err != nil {
-		return nil, fmt.Errorf("create request: %w", err)
-	}
-	httpReq.Header.Set("Authorization", "Bearer "+apiKey)
-	httpReq.Header.Set("content-type", "application/json")
-	a.applyHeaders(httpReq)
-
-	resp, err := http.DefaultClient.Do(httpReq)
+	resp, err := a.doOpenAIRequest(ctx, body, apiKeyFrom(a.APIKey, a.KeyGetter))
 	if err != nil {
 		return nil, fmt.Errorf("openai request failed: %w", err)
 	}
@@ -353,7 +341,28 @@ func (a *OpenAIAdapter) Chat(ctx context.Context, req ChatRequest) (*ChatRespons
 
 	if resp.StatusCode != http.StatusOK {
 		b, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("openai API error %d: %s", resp.StatusCode, string(b))
+		if isAuthFailureStatus(resp.StatusCode, b) {
+			resp.Body.Close()
+			if key, ok := refreshedAPIKey(a.TokenRefresher); ok {
+				resp, err = a.doOpenAIRequest(ctx, body, key)
+				if err != nil {
+					return nil, fmt.Errorf("openai request failed after token refresh: %w", err)
+				}
+				defer resp.Body.Close()
+				if resp.StatusCode == http.StatusOK {
+					var refreshedResp OpenAIResponse
+					if err := json.NewDecoder(resp.Body).Decode(&refreshedResp); err != nil {
+						return nil, fmt.Errorf("decode response: %w", err)
+					}
+					if len(refreshedResp.Choices) == 0 {
+						return nil, fmt.Errorf("no response choices")
+					}
+					return chatResponseFromOpenAI(refreshedResp), nil
+				}
+				b, _ = io.ReadAll(resp.Body)
+			}
+		}
+		return nil, providerAPIError("openai", resp.StatusCode, b)
 	}
 
 	var openaiResp OpenAIResponse
@@ -369,13 +378,6 @@ func (a *OpenAIAdapter) Chat(ctx context.Context, req ChatRequest) (*ChatRespons
 }
 
 func (a *OpenAIAdapter) StreamChat(ctx context.Context, req ChatRequest) (<-chan StreamEvent, error) {
-	apiKey := a.APIKey
-	if a.KeyGetter != nil {
-		if k := a.KeyGetter(); k != "" {
-			apiKey = k
-		}
-	}
-
 	wireReq := a.requestWithQuirks(req)
 	openaiReq := openAIRequestFromChat(a.Model, wireReq, true)
 	a.applyOptions(&openaiReq, wireReq)
@@ -385,15 +387,7 @@ func (a *OpenAIAdapter) StreamChat(ctx context.Context, req ChatRequest) (<-chan
 		return nil, err
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, a.BaseURL, bytes.NewReader(body))
-	if err != nil {
-		return nil, err
-	}
-	httpReq.Header.Set("Authorization", "Bearer "+apiKey)
-	httpReq.Header.Set("Content-Type", "application/json")
-	a.applyHeaders(httpReq)
-
-	resp, err := http.DefaultClient.Do(httpReq)
+	resp, err := a.doOpenAIRequest(ctx, body, apiKeyFrom(a.APIKey, a.KeyGetter))
 	if err != nil {
 		return nil, err
 	}
@@ -401,15 +395,48 @@ func (a *OpenAIAdapter) StreamChat(ctx context.Context, req ChatRequest) (<-chan
 	if resp.StatusCode != http.StatusOK {
 		b, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
+		authFailure := isAuthFailureStatus(resp.StatusCode, b)
+		if authFailure {
+			if key, ok := refreshedAPIKey(a.TokenRefresher); ok {
+				resp, err = a.doOpenAIRequest(ctx, body, key)
+				if err != nil {
+					return nil, err
+				}
+				if resp.StatusCode == http.StatusOK {
+					return openAIStreamEvents(resp), nil
+				}
+				b, _ = io.ReadAll(resp.Body)
+				resp.Body.Close()
+				authFailure = isAuthFailureStatus(resp.StatusCode, b)
+			}
+		}
+		if authFailure {
+			return nil, providerAPIError("openai", resp.StatusCode, b)
+		}
 		if len(wireReq.Tools) > 0 {
 			legacyReq := wireReq
 			legacyReq.Tools = nil
 			return a.StreamChat(ctx, legacyReq)
 		}
-		return nil, fmt.Errorf("openai API error %d: %s", resp.StatusCode, string(b))
+		return nil, providerAPIError("openai", resp.StatusCode, b)
 	}
 
-	ch := make(chan StreamEvent, 10)
+	return openAIStreamEvents(resp), nil
+}
+
+func (a *OpenAIAdapter) doOpenAIRequest(ctx context.Context, body []byte, apiKey string) (*http.Response, error) {
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, a.BaseURL, bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	httpReq.Header.Set("Authorization", "Bearer "+apiKey)
+	httpReq.Header.Set("Content-Type", "application/json")
+	a.applyHeaders(httpReq)
+	return http.DefaultClient.Do(httpReq)
+}
+
+func openAIStreamEvents(resp *http.Response) <-chan StreamEvent {
+	ch := make(chan StreamEvent, 256)
 	go func() {
 		defer resp.Body.Close()
 		defer close(ch)
@@ -450,6 +477,7 @@ func (a *OpenAIAdapter) StreamChat(ctx context.Context, req ChatRequest) (<-chan
 								Content   *string               `json:"content"`
 								ToolCalls []openAIToolCallDelta `json:"tool_calls"`
 							} `json:"delta"`
+							FinishReason string `json:"finish_reason"`
 						} `json:"choices"`
 						Usage *UsageStats `json:"usage"`
 					}
@@ -462,6 +490,9 @@ func (a *OpenAIAdapter) StreamChat(ctx context.Context, req ChatRequest) (<-chan
 					}
 					if len(chunk.Choices) > 0 && len(chunk.Choices[0].Delta.ToolCalls) > 0 {
 						accumulateOpenAIToolDeltas(toolDeltas, chunk.Choices[0].Delta.ToolCalls)
+					}
+					if len(chunk.Choices) > 0 && chunk.Choices[0].FinishReason != "" {
+						ch <- StreamEvent{FinishReason: chunk.Choices[0].FinishReason}
 					}
 					if chunk.Usage != nil {
 						ch <- StreamEvent{Usage: chunk.Usage}
@@ -476,8 +507,7 @@ func (a *OpenAIAdapter) StreamChat(ctx context.Context, req ChatRequest) (<-chan
 			}
 		}
 	}()
-
-	return ch, nil
+	return ch
 }
 
 func (a *OpenAIAdapter) applyOptions(openaiReq *OpenAIRequest, req ChatRequest) {
@@ -539,6 +569,7 @@ func (a *OpenRouterAdapter) StreamChat(ctx context.Context, req ChatRequest) (<-
 	openai := &OpenAIAdapter{
 		APIKey:          a.APIKey,
 		KeyGetter:       a.KeyGetter,
+		TokenRefresher:  a.TokenRefresher,
 		Model:           a.Model,
 		BaseURL:         a.BaseURL,
 		Headers:         a.Headers,
@@ -568,10 +599,11 @@ func NewGeminiAdapter(apiKey string) *GeminiAdapter {
 
 // MiniMaxAdapter 适配 MiniMax API
 type MiniMaxAdapter struct {
-	APIKey    string
-	KeyGetter func() string
-	Model     string
-	BaseURL   string
+	APIKey         string
+	KeyGetter      func() string
+	TokenRefresher func() string
+	Model          string
+	BaseURL        string
 }
 
 func NewMiniMaxAdapter(apiKey string) *MiniMaxAdapter {
@@ -593,10 +625,11 @@ func (a *MiniMaxAdapter) GetModel() string {
 func (a *MiniMaxAdapter) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, error) {
 	// MiniMax V2 API 也是 OpenAI 兼容格式
 	adapter := &OpenAIAdapter{
-		APIKey:    a.APIKey,
-		KeyGetter: a.KeyGetter,
-		Model:     a.Model,
-		BaseURL:   a.BaseURL,
+		APIKey:         a.APIKey,
+		KeyGetter:      a.KeyGetter,
+		TokenRefresher: a.TokenRefresher,
+		Model:          a.Model,
+		BaseURL:        a.BaseURL,
 	}
 	return adapter.Chat(ctx, req)
 }
@@ -615,10 +648,11 @@ func (a *MiniMaxAdapter) ChatCompletion(ctx context.Context, messages []Message)
 
 func (a *MiniMaxAdapter) StreamChat(ctx context.Context, req ChatRequest) (<-chan StreamEvent, error) {
 	adapter := &OpenAIAdapter{
-		APIKey:    a.APIKey,
-		KeyGetter: a.KeyGetter,
-		Model:     a.Model,
-		BaseURL:   a.BaseURL,
+		APIKey:         a.APIKey,
+		KeyGetter:      a.KeyGetter,
+		TokenRefresher: a.TokenRefresher,
+		Model:          a.Model,
+		BaseURL:        a.BaseURL,
 	}
 	return adapter.StreamChat(ctx, req)
 }
@@ -645,6 +679,7 @@ func NewGenericOpenAIAdapter(name, baseURL, apiKey, model string) *GenericOpenAI
 type OpenRouterAdapter struct {
 	APIKey          string
 	KeyGetter       func() string
+	TokenRefresher  func() string
 	Model           string
 	BaseURL         string
 	Headers         map[string]string
@@ -701,21 +736,7 @@ func (a *OpenRouterAdapter) Chat(ctx context.Context, req ChatRequest) (*ChatRes
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, a.BaseURL, bytes.NewReader(body))
-	if err != nil {
-		return nil, fmt.Errorf("create request: %w", err)
-	}
-	httpReq.Header.Set("Authorization", "Bearer "+a.apiKey())
-	httpReq.Header.Set("content-type", "application/json")
-	httpReq.Header.Set("HTTP-Referer", "https://selfmind.dev")
-	httpReq.Header.Set("X-Title", "SelfMind Agent")
-	for key, value := range a.Headers {
-		if strings.TrimSpace(key) != "" {
-			httpReq.Header.Set(key, value)
-		}
-	}
-
-	resp, err := a.Client.Do(httpReq)
+	resp, err := a.doOpenRouterRequest(ctx, body, a.apiKey())
 	if err != nil {
 		return nil, fmt.Errorf("openrouter request failed: %w", err)
 	}
@@ -723,7 +744,28 @@ func (a *OpenRouterAdapter) Chat(ctx context.Context, req ChatRequest) (*ChatRes
 
 	if resp.StatusCode != http.StatusOK {
 		b, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("openrouter API error %d: %s", resp.StatusCode, string(b))
+		if isAuthFailureStatus(resp.StatusCode, b) {
+			resp.Body.Close()
+			if key, ok := refreshedAPIKey(a.TokenRefresher); ok {
+				resp, err = a.doOpenRouterRequest(ctx, body, key)
+				if err != nil {
+					return nil, fmt.Errorf("openrouter request failed after token refresh: %w", err)
+				}
+				defer resp.Body.Close()
+				if resp.StatusCode == http.StatusOK {
+					var refreshedResp OpenAIResponse
+					if err := json.NewDecoder(resp.Body).Decode(&refreshedResp); err != nil {
+						return nil, fmt.Errorf("decode response: %w", err)
+					}
+					if len(refreshedResp.Choices) == 0 {
+						return nil, fmt.Errorf("no response choices")
+					}
+					return chatResponseFromOpenAI(refreshedResp), nil
+				}
+				b, _ = io.ReadAll(resp.Body)
+			}
+		}
+		return nil, providerAPIError("openrouter", resp.StatusCode, b)
 	}
 
 	var openaiResp OpenAIResponse
@@ -736,6 +778,23 @@ func (a *OpenRouterAdapter) Chat(ctx context.Context, req ChatRequest) (*ChatRes
 	}
 
 	return chatResponseFromOpenAI(openaiResp), nil
+}
+
+func (a *OpenRouterAdapter) doOpenRouterRequest(ctx context.Context, body []byte, apiKey string) (*http.Response, error) {
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, a.BaseURL, bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("create request: %w", err)
+	}
+	httpReq.Header.Set("Authorization", "Bearer "+apiKey)
+	httpReq.Header.Set("content-type", "application/json")
+	httpReq.Header.Set("HTTP-Referer", "https://selfmind.dev")
+	httpReq.Header.Set("X-Title", "SelfMind Agent")
+	for key, value := range a.Headers {
+		if strings.TrimSpace(key) != "" {
+			httpReq.Header.Set(key, value)
+		}
+	}
+	return a.Client.Do(httpReq)
 }
 
 func (a *OpenRouterAdapter) ChatCompletion(ctx context.Context, messages []Message) (string, error) {

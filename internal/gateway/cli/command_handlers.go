@@ -44,6 +44,7 @@ func (m *uiModel) handleSkillSlash(rawInput, slashName, instruction string) tea.
 	m.thinking = true
 	m.runStatus = "working"
 	m.thinkingStart = time.Now()
+	m.runTokens = 0
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancelFn = cancel
 	return tea.Batch(m.runAgent(ctx, prompt), m.spinner.Tick)
@@ -67,7 +68,7 @@ func (m *uiModel) handleMigration() tea.Cmd {
 func (m *uiModel) handleStatus() tea.Cmd {
 	return func() tea.Msg {
 		elapsed := time.Since(m.startTime)
-		usage := formatUsage(m.totalTokens, m.tokenLimit)
+		usage := fmt.Sprintf("%s total · %s", compactCount(m.totalTokens), formatUsage(m.runTokens, m.tokenLimit))
 
 		status := fmt.Sprintf("## System Status\n\n- **Provider**: %s\n- **Model**: %s\n- **Uptime**: %s\n- **Token Usage**: %s\n",
 			m.providerName, m.modelName, formatDuration(elapsed), usage)

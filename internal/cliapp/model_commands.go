@@ -418,18 +418,23 @@ func (a *App) checkCurrentModel(cfg *config.Config) int {
 	} else {
 		fmt.Fprintln(a.stdout, "Context length: unknown")
 	}
-	fmt.Fprintf(a.stdout, "Quirks: auth=%s tool_schema=%s thinking=%s user_agent=%s disable_http2=%t\n",
+	fmt.Fprintf(a.stdout, "Quirks: auth=%s tool_schema=%s thinking=%s user_agent=%s disable_http2=%t responses_store_false=%t responses_require_stream=%t\n",
 		blankAsDash(rt.Quirks.AuthHeader),
 		blankAsDash(rt.Quirks.ToolSchema),
 		blankAsDash(rt.Quirks.ThinkingMode),
 		blankAsDash(rt.Quirks.UserAgent),
 		rt.Quirks.DisableHTTP2,
+		rt.Quirks.ResponsesStoreFalse,
+		rt.Quirks.ResponsesRequireStream,
 	)
 	if strings.Contains(strings.ToLower(rt.BaseURL), "api.kimi.com/coding") && rt.Quirks.DisableHTTP2 {
 		fmt.Fprintln(a.stdout, "Transport: TLS ALPN restricted to http/1.1")
 	}
 	if rt.TokenGetter != nil {
 		fmt.Fprintln(a.stdout, "Token getter: configured")
+	}
+	if rt.TokenRefresher != nil {
+		fmt.Fprintln(a.stdout, "Token refresher: configured")
 	}
 	return 0
 }

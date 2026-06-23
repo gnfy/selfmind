@@ -47,15 +47,17 @@ const (
 // ProviderQuirks describes provider-specific wire behavior in declarative form.
 // Transports consume these knobs instead of scattering provider-name conditionals.
 type ProviderQuirks struct {
-	AuthHeader        string
-	ToolSchema        string
-	SystemMessageMode string
-	ThinkingMode      string
-	UserAgent         string
-	DisableHTTP2      bool
-	SupportsTools     bool
-	SupportsStreaming bool
-	SupportsVision    bool
+	AuthHeader             string
+	ToolSchema             string
+	SystemMessageMode      string
+	ThinkingMode           string
+	UserAgent              string
+	DisableHTTP2           bool
+	ResponsesStoreFalse    bool
+	ResponsesRequireStream bool
+	SupportsTools          bool
+	SupportsStreaming      bool
+	SupportsVision         bool
 }
 
 // ProviderProfile describes one model provider without owning credentials or
@@ -136,6 +138,13 @@ func kimiQuirks() ProviderQuirks {
 	return q
 }
 
+func codexResponsesQuirks() ProviderQuirks {
+	q := openAIQuirks()
+	q.ResponsesStoreFalse = true
+	q.ResponsesRequireStream = true
+	return q
+}
+
 func BuiltinProfiles() []ProviderProfile {
 	return []ProviderProfile{
 		{
@@ -196,7 +205,7 @@ func BuiltinProfiles() []ProviderProfile {
 			BaseURL: "https://chatgpt.com/backend-api/codex", ExternalSource: "codex-cli",
 			ModelList:      ModelListCodex,
 			FallbackModels: []string{"gpt-5.5", "gpt-5.3-codex"},
-			Quirks:         openAIQuirks(),
+			Quirks:         codexResponsesQuirks(),
 		},
 		{
 			ID: "openrouter", DisplayName: "OpenRouter",

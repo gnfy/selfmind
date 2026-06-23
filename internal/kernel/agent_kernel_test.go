@@ -154,6 +154,30 @@ func (p *streamStartEOFThenChatProvider) StreamChat(ctx context.Context, req llm
 	return nil, io.ErrUnexpectedEOF
 }
 
+type outputLimitProvider struct {
+	requests []llm.ChatRequest
+}
+
+func (p *outputLimitProvider) ChatCompletion(ctx context.Context, messages []llm.Message) (string, error) {
+	return "summary", nil
+}
+
+func (p *outputLimitProvider) Chat(ctx context.Context, req llm.ChatRequest) (*llm.ChatResponse, error) {
+	return &llm.ChatResponse{Content: "fallback"}, nil
+}
+
+func (p *outputLimitProvider) StreamChat(ctx context.Context, req llm.ChatRequest) (<-chan llm.StreamEvent, error) {
+	p.requests = append(p.requests, req)
+	ch := make(chan llm.StreamEvent, 3)
+	if len(p.requests) == 1 {
+		ch <- llm.StreamEvent{Content: "part ", FinishReason: "max_tokens"}
+	} else {
+		ch <- llm.StreamEvent{Content: "finish", FinishReason: "end_turn"}
+	}
+	close(ch)
+	return ch, nil
+}
+
 // mockBackend implements AgentBackend for test purposes (avoids importing tools package)
 type mockBackend struct{}
 
@@ -354,6 +378,24 @@ func requestHasTool(req llm.ChatRequest, name string) bool {
 	return false
 }
 
+func TestSystemPromptGuidesToolFailureDiagnosis(t *testing.T) {
+	mem := memory.NewMemoryManager(&mockStorage{})
+	backend := &planningBackend{}
+	provider := &recordingLLMProvider{}
+	agent := NewAgent(mem, backend, provider, "helpful", 1, 1, nil)
+
+	prompt, err := agent.BuildSystemPrompt(context.Background(), "user123")
+	if err != nil {
+		t.Fatalf("BuildSystemPrompt failed: %v", err)
+	}
+	if !strings.Contains(prompt, "When a tool returns an error, treat the error as diagnostic evidence") {
+		t.Fatalf("prompt missing tool failure recovery guidance: %q", prompt)
+	}
+	if !strings.Contains(prompt, "Do not hard-code environment overrides as a default tool behavior") {
+		t.Fatalf("prompt missing generic env override guidance: %q", prompt)
+	}
+}
+
 func (b *recordingBackend) Dispatch(name string, args map[string]interface{}) (string, error) {
 	b.calledName = name
 	b.calledArgs = args
@@ -435,6 +477,28 @@ func TestAgentFallsBackToNonStreamingWhenStreamStartFails(t *testing.T) {
 	}
 	if provider.chatRequests != 1 {
 		t.Fatalf("expected 1 non-stream fallback request, got %d", provider.chatRequests)
+	}
+}
+
+func TestAgentContinuesAfterOutputLimit(t *testing.T) {
+	mem := memory.NewMemoryManager(&mockStorage{})
+	backend := &mockBackend{}
+	provider := &outputLimitProvider{}
+	agent := NewAgent(mem, backend, provider, "helpful", 3, 1, nil)
+
+	res, _, err := agent.RunConversation(context.Background(), "user123", "cli", "write a longer answer")
+	if err != nil {
+		t.Fatalf("Agent failed: %v", err)
+	}
+	if res != "part finish" {
+		t.Fatalf("response = %q, want concatenated continuation", res)
+	}
+	if len(provider.requests) != 2 {
+		t.Fatalf("requests = %d, want 2", len(provider.requests))
+	}
+	lastReq := provider.requests[1]
+	if len(lastReq.Messages) == 0 || !strings.Contains(lastReq.Messages[len(lastReq.Messages)-1].Content, "Continue from the exact point") {
+		t.Fatalf("second request did not ask model to continue: %+v", lastReq.Messages)
 	}
 }
 

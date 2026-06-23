@@ -6,10 +6,13 @@
 
 - `ProviderProfile` 描述一个服务商是什么。
 - `Resolver` 把配置、环境变量、OAuth、本地凭据解析成一次可执行的 `Runtime`。
-- `llm.Adapter` 只实现协议族传输，例如 OpenAI Chat、Anthropic Messages、Codex Responses。
+- `llm.TransportConfig` 是 app/runtime 进入 LLM 层的唯一交接结构。
+- `llm` transport 只实现协议族传输，例如 OpenAI Chat、Anthropic Messages、Codex Responses。
 - `ProviderQuirks` 描述厂商差异，例如认证头、tool schema、thinking 参数、User-Agent。
 
 CLI、IM、HTTP webhook、未来 SaaS 多端入口都必须复用同一套 runtime。渠道层只负责身份、任务、进度和消息呈现，不应该直接判断 Kimi、MiniMax、OpenAI 这类 provider 细节。
+
+这条边界参考 Hermes 的多模型接入方式：provider 差异尽量沉淀为 profile/quirks 数据，协议 adapter 负责把请求、流式输出、tool call、usage 统一成 `llm.Provider`。渠道、任务策略、IM 和 UI 都不应该知道某个厂商的特殊 HTTP 参数。
 
 ## 设计原则
 
@@ -18,8 +21,9 @@ CLI、IM、HTTP webhook、未来 SaaS 多端入口都必须复用同一套 runti
 3. 只有协议完全不同，才新增 `llm.Provider` 实现。
 4. 认证、base URL、模型 fallback、模型列表来源放在 `internal/modelruntime/profile.go`。
 5. 用户 YAML 和命令行覆盖放在 `internal/modelruntime/resolver.go` 合并。
-6. 传输层只消费 `Runtime`，不再自行读取全局 config。
-7. provider-specific 行为先落到 `ProviderQuirks`，避免在 adapter 中不断新增厂商 if。
+6. app 层只负责把 `Runtime` 转成 `llm.TransportConfig`，不按 provider/protocol 选择具体 adapter。
+7. 传输层只消费 `TransportConfig`，不再自行读取全局 config。
+8. provider-specific 行为先落到 `ProviderQuirks`，避免在 adapter 中不断新增厂商 if。
 
 ## 核心文件
 
@@ -29,7 +33,8 @@ CLI、IM、HTTP webhook、未来 SaaS 多端入口都必须复用同一套 runti
 | `internal/modelruntime/resolver.go` | 解析 config/env/auth store/selection，输出 `Runtime` |
 | `internal/modelruntime/catalog.go` | 拉取和缓存模型列表 |
 | `internal/platform/config/loader.go` | YAML schema、环境变量展开、旧配置兼容 |
-| `internal/app/agent.go` | 把 `Runtime` 转成具体 `llm.Provider` |
+| `internal/app/agent.go` | 把 `Runtime` 转成 `llm.TransportConfig` |
+| `internal/kernel/llm/transport.go` | 协议族 transport registry，把 `TransportConfig` 构造成 `llm.Provider` |
 | `internal/kernel/llm/adapters.go` | OpenAI-compatible transport |
 | `internal/kernel/llm/anthropic_adapter.go` | Anthropic-compatible transport |
 | `internal/kernel/llm/responses_adapter.go` | Codex Responses transport |
@@ -41,11 +46,13 @@ config.yaml / env / auth.json / CLI selection
   -> modelruntime.Resolver
   -> modelruntime.Runtime
   -> app.buildProviderFromRuntime
-  -> llm.Adapter
+  -> llm.TransportConfig
+  -> llm.BuildTransportProvider
+  -> llm transport
   -> kernel.Agent / model gateway
 ```
 
-`Runtime` 是 app 层和 adapter 层之间的唯一 provider 合约。新增渠道时不要绕过它。
+`Runtime` 是 app 层和 modelruntime 层之间的唯一 provider 合约；`TransportConfig` 是 app 层和 LLM 传输层之间的唯一 provider 合约。新增渠道时不要绕过它们。
 
 ## 上下文窗口与输出上限
 
@@ -126,6 +133,24 @@ ProviderProfile{
 | `anthropicQuirks()` | Anthropic Messages，大多数 `x-api-key` provider |
 | `minimaxQuirks()` | MiniMax Anthropic-compatible，Bearer auth，MiniMax thinking |
 | `kimiQuirks()` | Kimi Coding Plan，Moonshot schema，Kimi thinking 省略，Claude Code UA，HTTP/1.1 transport |
+
+## 外部 CLI 登录态复用
+
+外部 CLI 登录态复用只是兼容桥，不是新的登录系统。凭据读取和刷新必须放在
+`internal/modelruntime`；adapter 每次请求前只调用 `Runtime.TokenGetter` 获取当前
+token。若服务端返回 `401 token_expired`、`invalid_token` 等认证失败，adapter 可以调用
+`Runtime.TokenRefresher` 强制刷新 token，并把同一个请求重放一次。不要在 LLM adapter
+里读取 token 文件、拼 OAuth refresh payload，或维护 provider 登录状态。
+
+- `codex-cli` 读取 `~/.codex/auth.json` 或 `CODEX_HOME/auth.json`，按 JWT 过期时间
+  刷新 ChatGPT OAuth access token，并保留原有的 `tokens.account_id`。
+- Codex 请求走 `llm.ResponsesAdapter`，该 adapter 必须挂上 `TokenGetter` 和
+  `TokenRefresher`，避免使用初始化时的旧 token，并能处理服务端提前判定 token 失效的情况。
+- 如果刷新失败或 refresh token 已失效，界面应提示用户运行 `codex login`，不要把
+  provider 返回的原始 JSON 直接展示出来。
+- `CODEX_ACCESS_TOKEN` 是静态覆盖项，SelfMind 不会刷新它。
+- MiniMax OAuth 也按同一契约处理：`TokenGetter` 负责临近过期刷新，
+  `TokenRefresher` 负责请求时发现的服务端失效。
 
 ## 已内置的常用模型服务商
 
@@ -272,10 +297,12 @@ provider_profiles:
 3. 设置 `APIKeyEnvVars`、`BaseURLEnvVar`、`ModelList`、`FallbackModels`。
 4. 选择或新增最小必要的 `ProviderQuirks`。
 5. 如果是 OAuth，先把 token 读写封装在 `internal/modelruntime`，不要放到 adapter。
-6. 在 `internal/modelruntime/resolver_test.go` 覆盖默认协议、base URL、fallback 模型、quirks。
-7. 如果新增 quirks 行为，在 `internal/kernel/llm` 增加 adapter 测试。
-8. 如果 CLI picker 需要展示更友好的名称，更新 `internal/cliapp/model_commands.go` 测试。
-9. 更新本文档的“已内置的常用模型服务商”表格。
+6. 不要在 app/gateway/CLI/IM/task strategy 里新增 provider-name 分支；已有协议族应能直接工作。
+7. 在 `internal/modelruntime/resolver_test.go` 覆盖默认协议、base URL、fallback 模型、quirks。
+8. 如果新增协议族，在 `internal/kernel/llm/transport.go` 注册 transport，并增加 transport 测试。
+9. 如果新增 quirks 行为，在 `internal/kernel/llm` 增加 adapter 测试。
+10. 如果 CLI picker 需要展示更友好的名称，更新 `internal/cliapp/model_commands.go` 测试。
+11. 更新本文档的“已内置的常用模型服务商”表格。
 
 ## 测试建议
 

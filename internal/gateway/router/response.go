@@ -93,20 +93,20 @@ func (s EventSummary) WithContent(content string) string {
 		b.WriteString(content)
 		b.WriteString("\n\n")
 	}
-	b.WriteString("处理过程摘要：")
+	b.WriteString("Process summary:")
 	if len(s.phases) > 0 {
-		b.WriteString("\n- 阶段：")
-		b.WriteString(strings.Join(s.phases, "；"))
+		b.WriteString("\n- Phases: ")
+		b.WriteString(strings.Join(s.phases, "; "))
 	}
 	if len(s.toolsStarted) > 0 {
-		b.WriteString("\n- 已尝试：")
-		b.WriteString(strings.Join(s.toolsStarted, "；"))
+		b.WriteString("\n- Tools tried: ")
+		b.WriteString(strings.Join(s.toolsStarted, "; "))
 	}
-	b.WriteString("\n- 遇到问题：")
-	b.WriteString(strings.Join(s.toolFailures, "；"))
+	b.WriteString("\n- Problems: ")
+	b.WriteString(strings.Join(s.toolFailures, "; "))
 	if len(s.lastOutputs) > 0 {
-		b.WriteString("\n- 最近输出：")
-		b.WriteString(strings.Join(s.lastOutputs, "；"))
+		b.WriteString("\n- Recent output: ")
+		b.WriteString(strings.Join(s.lastOutputs, "; "))
 	}
 	return b.String()
 }

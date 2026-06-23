@@ -58,6 +58,7 @@ Future development and AI-assisted edits must read:
 
 - [SelfMind Architecture Constraints](architecture-constraints.md)
 - [SelfMind 架构约束](architecture-constraints.zh-CN.md)
+- [SelfMind 上下文生命周期与 P0-P2 落地](context-lifecycle.zh-CN.md)
 
 Key rules:
 
@@ -66,6 +67,7 @@ Key rules:
 - Slash command dispatch, help text, and editor hints should move toward one shared registry.
 - Avoid new global mutable state shared across tenants or tests.
 - New providers, tools, HTTP handlers, and TUI components should be split by responsibility instead of being packed into existing large files.
+- Durable context selection must go through `gateway/httpapi/context_selector.go` and `kernel.TaskRuntimeContext`; do not append raw task events, artifacts, or memory snippets directly in unrelated handlers.
 
 ## Configuration
 
@@ -223,7 +225,7 @@ Implementation boundary:
 - `ProviderQuirks` carries provider-specific wire behavior such as auth header, tool schema, thinking mode, system message mode, and User-Agent.
 - `internal/cliapp/model_commands.go` owns the user-facing provider/model picker. Keep `Custom endpoint (enter URL manually)` as the fourth option for backwards-compatible scripted input.
 
-External auth reuse is P2 and intentionally limited to Codex CLI, Claude Code, Gemini CLI, and Qwen CLI. Do not add best-effort reuse for random vendor apps unless there is a stable local auth format and a product decision to support it.
+External auth reuse is P2 and intentionally limited to Codex CLI, Claude Code, Gemini CLI, Qwen CLI, and SelfMind-owned OAuth providers such as MiniMax OAuth. `Runtime.TokenGetter` is the per-request token source; `Runtime.TokenRefresher` is the force-refresh hook that protocol adapters may call once after a provider returns an auth failure. Do not add best-effort reuse for random vendor apps unless there is a stable local auth format and a product decision to support it.
 
 ### Role-Based Model Routing
 

@@ -45,6 +45,36 @@ func TestOpenAIAdapterChatUsesNativeTools(t *testing.T) {
 	}
 }
 
+func TestOpenAIAdapterRefreshesTokenAfterUnauthorized(t *testing.T) {
+	var seen []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen = append(seen, r.Header.Get("Authorization"))
+		w.Header().Set("content-type", "application/json")
+		if len(seen) == 1 {
+			w.WriteHeader(http.StatusUnauthorized)
+			fmt.Fprint(w, `{"error":{"message":"token expired","code":"token_expired"}}`)
+			return
+		}
+		fmt.Fprint(w, `{"choices":[{"message":{"content":"ok"}}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`)
+	}))
+	defer server.Close()
+
+	adapter := NewOpenAIAdapter("old-token")
+	adapter.BaseURL = server.URL
+	adapter.TokenRefresher = func() string { return "fresh-token" }
+
+	resp, err := adapter.Chat(context.Background(), ChatRequest{Messages: []Message{{Role: "user", Content: "hi"}}})
+	if err != nil {
+		t.Fatalf("Chat failed: %v", err)
+	}
+	if resp.Content != "ok" {
+		t.Fatalf("content = %q", resp.Content)
+	}
+	if fmt.Sprint(seen) != "[Bearer old-token Bearer fresh-token]" {
+		t.Fatalf("auth headers = %#v", seen)
+	}
+}
+
 func TestOpenAIAdapterStreamAccumulatesToolCalls(t *testing.T) {
 	var got OpenAIRequest
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -148,6 +178,7 @@ func TestAnthropicAdapterStreamChat(t *testing.T) {
 		})
 		writeSSE(t, w, map[string]interface{}{
 			"type":  "message_delta",
+			"delta": map[string]interface{}{"stop_reason": "max_tokens"},
 			"usage": map[string]interface{}{"output_tokens": 3},
 		})
 		writeSSE(t, w, map[string]interface{}{"type": "message_stop"})
@@ -166,11 +197,15 @@ func TestAnthropicAdapterStreamChat(t *testing.T) {
 
 	var content string
 	var usage UsageStats
+	var finishReason string
 	for event := range ch {
 		if event.Err != nil {
 			t.Fatalf("stream event error: %v", event.Err)
 		}
 		content += event.Content
+		if event.FinishReason != "" {
+			finishReason = event.FinishReason
+		}
 		if event.Usage != nil {
 			usage.InputTokens += event.Usage.InputTokens
 			usage.OutputTokens += event.Usage.OutputTokens
@@ -185,6 +220,80 @@ func TestAnthropicAdapterStreamChat(t *testing.T) {
 	}
 	if usage.InputTokens != 7 || usage.OutputTokens != 3 {
 		t.Fatalf("usage = %+v", usage)
+	}
+	if finishReason != "max_tokens" {
+		t.Fatalf("finishReason = %q, want max_tokens", finishReason)
+	}
+}
+
+func TestAnthropicAdapterRefreshesTokenAfterUnauthorized(t *testing.T) {
+	var seen []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen = append(seen, firstNonEmptyString(r.Header.Get("Authorization"), r.Header.Get("x-api-key")))
+		w.Header().Set("content-type", "application/json")
+		if len(seen) == 1 {
+			w.WriteHeader(http.StatusUnauthorized)
+			fmt.Fprint(w, `{"error":{"message":"token expired","code":"token_expired"}}`)
+			return
+		}
+		fmt.Fprint(w, `{"content":[{"type":"text","text":"ok"}],"usage":{"input_tokens":1,"output_tokens":1}}`)
+	}))
+	defer server.Close()
+
+	adapter := NewAnthropicAdapter("old-token")
+	adapter.BaseURL = server.URL
+	adapter.TokenRefresher = func() string { return "fresh-token" }
+
+	resp, err := adapter.Chat(context.Background(), ChatRequest{Messages: []Message{{Role: "user", Content: "hi"}}})
+	if err != nil {
+		t.Fatalf("Chat failed: %v", err)
+	}
+	if resp.Content != "ok" {
+		t.Fatalf("content = %q", resp.Content)
+	}
+	if fmt.Sprint(seen) != "[old-token fresh-token]" {
+		t.Fatalf("auth headers = %#v", seen)
+	}
+}
+
+func TestAnthropicAdapterStreamRefreshesTokenAfterUnauthorized(t *testing.T) {
+	var seen []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen = append(seen, firstNonEmptyString(r.Header.Get("Authorization"), r.Header.Get("x-api-key")))
+		if len(seen) == 1 {
+			w.WriteHeader(http.StatusUnauthorized)
+			fmt.Fprint(w, `{"error":{"message":"token expired","code":"token_expired"}}`)
+			return
+		}
+		w.Header().Set("content-type", "text/event-stream")
+		writeSSE(t, w, map[string]interface{}{
+			"type":  "content_block_delta",
+			"delta": map[string]interface{}{"type": "text_delta", "text": "ok"},
+		})
+		writeSSE(t, w, map[string]interface{}{"type": "message_stop"})
+	}))
+	defer server.Close()
+
+	adapter := NewAnthropicAdapter("old-token")
+	adapter.BaseURL = server.URL
+	adapter.TokenRefresher = func() string { return "fresh-token" }
+
+	ch, err := adapter.StreamChat(context.Background(), ChatRequest{Messages: []Message{{Role: "user", Content: "hi"}}})
+	if err != nil {
+		t.Fatalf("StreamChat failed: %v", err)
+	}
+	var content string
+	for event := range ch {
+		if event.Err != nil {
+			t.Fatalf("stream event error: %v", event.Err)
+		}
+		content += event.Content
+	}
+	if content != "ok" {
+		t.Fatalf("content = %q", content)
+	}
+	if fmt.Sprint(seen) != "[old-token fresh-token]" {
+		t.Fatalf("auth headers = %#v", seen)
 	}
 }
 

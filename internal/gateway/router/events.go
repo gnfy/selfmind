@@ -35,7 +35,7 @@ func (g *Gateway) RunAgentWithEvents(ctx context.Context, unifiedUID, channel, i
 }
 
 func (g *Gateway) withAgentEvents(ctx context.Context, run func(context.Context) (*HandleResponse, error)) (*HandleResponse, error) {
-	eventCh := make(chan string, 100)
+	eventCh := make(chan string, 1024)
 	ctx = kernel.WithEventChannel(ctx, eventCh)
 
 	resp, err := run(ctx)
@@ -44,7 +44,7 @@ func (g *Gateway) withAgentEvents(ctx context.Context, run func(context.Context)
 	}
 
 	orig := resp.Stream
-	out := make(chan llm.StreamEvent, 50)
+	out := make(chan llm.StreamEvent, 1024)
 	resp.Stream = out
 	go func() {
 		defer close(out)

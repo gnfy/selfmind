@@ -314,6 +314,18 @@ func looksLikeDebugTask(lower string) bool {
 }
 
 func looksLikeRepoTask(lower string) bool {
+	if containsMarker(lower, []string{
+		"current project", "this project", "this repo", "current repo", "codebase",
+		"当前项目", "这个项目", "本项目", "当前仓库", "这个仓库", "代码库", "项目代码",
+		"目前实现的功能", "已实现的功能", "待改进", "改进的地方",
+	}) {
+		return true
+	}
+	if strings.Contains(lower, "selfmind") && containsMarker(lower, []string{
+		"分析", "功能", "改进", "实现", "代码", "架构", "模块",
+	}) {
+		return true
+	}
 	return containsMarker(lower, []string{
 		"repo", "repository", "project", "workspace", "local", "file", "directory",
 		"readme", "git", "gh ", "branch", "commit", "push", "pull request", "pr",
@@ -326,15 +338,22 @@ func looksLikeRepoTask(lower string) bool {
 }
 
 func looksLikeCodingExample(lower string) bool {
-	return containsMarker(lower, []string{
-		"example", "snippet", "sample", "demo", "binary search", "pgsql", "postgres",
-		"php", "golang", " go", "rust", "python", "java", "javascript", "typescript",
-		"\u793a\u4f8b", "\u4f8b\u5b50", "\u4ee3\u7801", "\u5b9e\u73b0",
-		"\u5199\u4e00\u4e2a", "\u5199\u4e00\u6bb5", "\u7528go", "\u7528 go",
-		"\u7528php", "\u7528 php", "\u7528rust", "\u7528 rust",
-		"\u7528python", "\u7528 python", "\u4e8c\u5206\u6cd5",
-		"\u4e8c\u5206\u67e5\u627e", "\u8fde\u63a5pgsql", "\u64cd\u4f5c\u793a\u4f8b",
+	if containsMarker(lower, []string{
+		"example", "snippet", "sample", "demo", "binary search",
+		"\u793a\u4f8b", "\u4f8b\u5b50", "\u4e8c\u5206\u6cd5",
+		"\u4e8c\u5206\u67e5\u627e", "\u64cd\u4f5c\u793a\u4f8b",
+	}) {
+		return true
+	}
+	hasLanguageOrTech := containsMarker(lower, []string{
+		"pgsql", "postgres", "php", "golang", " go", "rust", "python", "java", "javascript", "typescript",
+		"\u7528go", "\u7528 go", "\u7528php", "\u7528 php", "\u7528rust", "\u7528 rust", "\u7528python", "\u7528 python",
 	})
+	hasCodingAction := containsMarker(lower, []string{
+		"implement", "write", "connect", "code",
+		"\u5199\u4e00\u4e2a", "\u5199\u4e00\u6bb5", "\u5b9e\u73b0", "\u8fde\u63a5", "\u4ee3\u7801",
+	})
+	return hasLanguageOrTech && hasCodingAction
 }
 
 func looksLikeStableAdvice(lower string) bool {

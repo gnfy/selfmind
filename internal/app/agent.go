@@ -208,6 +208,33 @@ func firstPositive(values ...int) int {
 	return 0
 }
 
+func codingContextLength(cfg *config.Config) int {
+	if cfg == nil {
+		return 0
+	}
+	selection := modelruntime.Selection{}
+	if roleCfg, ok := cfg.Models.Roles[string(llm.RoleCodingAgent)]; ok {
+		selection = modelruntime.Selection{
+			Provider:        roleCfg.Provider,
+			Model:           roleCfg.Model,
+			BaseURL:         roleCfg.BaseURL,
+			APIKey:          roleCfg.APIKey,
+			Headers:         roleCfg.Headers,
+			ContextLength:   roleCfg.ContextLength,
+			MaxTokens:       roleCfg.MaxTokens,
+			ReasoningEffort: roleCfg.ReasoningEffort,
+			Thinking:        roleCfg.Thinking,
+			ServiceTier:     roleCfg.ServiceTier,
+			Quirks:          runtimeQuirksFromConfig(roleCfg.Quirks),
+		}
+	}
+	rt, err := modelruntime.NewResolver(cfg).Resolve(context.Background(), selection)
+	if err != nil {
+		return 0
+	}
+	return rt.ContextLength
+}
+
 func llmQuirks(q modelruntime.ProviderQuirks) llm.ProviderQuirks {
 	return llm.ProviderQuirks{
 		AuthHeader:        q.AuthHeader,
@@ -224,11 +251,13 @@ func llmQuirks(q modelruntime.ProviderQuirks) llm.ProviderQuirks {
 
 func runtimeQuirksFromConfig(q config.ProviderQuirks) modelruntime.ProviderQuirks {
 	return modelruntime.ProviderQuirks{
-		AuthHeader:        q.AuthHeader,
-		ToolSchema:        q.ToolSchema,
-		SystemMessageMode: q.SystemMessageMode,
-		ThinkingMode:      q.ThinkingMode,
-		UserAgent:         q.UserAgent,
+		AuthHeader:             q.AuthHeader,
+		ToolSchema:             q.ToolSchema,
+		SystemMessageMode:      q.SystemMessageMode,
+		ThinkingMode:           q.ThinkingMode,
+		UserAgent:              q.UserAgent,
+		ResponsesStoreFalse:    q.ResponsesStoreFalse,
+		ResponsesRequireStream: q.ResponsesRequireStream,
 	}
 }
 
@@ -237,88 +266,32 @@ func emptyConfigQuirks(q config.ProviderQuirks) bool {
 		strings.TrimSpace(q.ToolSchema) == "" &&
 		strings.TrimSpace(q.SystemMessageMode) == "" &&
 		strings.TrimSpace(q.ThinkingMode) == "" &&
-		strings.TrimSpace(q.UserAgent) == ""
+		strings.TrimSpace(q.UserAgent) == "" &&
+		!q.ResponsesStoreFalse &&
+		!q.ResponsesRequireStream
 }
 
 func buildProviderFromRuntime(rt modelruntime.Runtime) llm.Provider {
-	// Keep this switch as the narrow app-layer boundary: modelruntime resolves
-	// metadata and credentials, while llm adapters only speak provider protocols.
-	model := strings.TrimSpace(rt.Model)
-	switch modelruntime.NormalizeProtocol(rt.Protocol) {
-	case modelruntime.ProtocolAnthropic:
-		ad := llm.NewAnthropicAdapter(rt.APIKey)
-		if model != "" {
-			ad.Model = model
-		}
-		ad.BaseURL = anthropicMessagesURL(rt.BaseURL)
-		ad.KeyGetter = rt.TokenGetter
-		ad.Headers = rt.Headers
-		ad.MaxTokens = firstPositive(rt.MaxTokens, ad.MaxTokens)
-		ad.ReasoningEffort = rt.ReasoningEffort
-		ad.Thinking = rt.Thinking
-		ad.ServiceTier = rt.ServiceTier
-		ad.Quirks = llmQuirks(rt.Quirks)
-		return ad
-	case modelruntime.ProtocolResponses:
-		return llm.NewResponsesAdapter(rt.APIKey, rt.BaseURL, model)
-	case modelruntime.ProtocolOpenAIChat:
-		ad := llm.NewOpenAIAdapter(rt.APIKey)
-		if model != "" {
-			ad.Model = model
-		}
-		ad.BaseURL = chatCompletionsURL(rt.BaseURL)
-		ad.KeyGetter = rt.TokenGetter
-		ad.Headers = rt.Headers
-		ad.MaxTokens = rt.MaxTokens
-		ad.ReasoningEffort = rt.ReasoningEffort
-		ad.Thinking = rt.Thinking
-		ad.ServiceTier = rt.ServiceTier
-		ad.Quirks = llmQuirks(rt.Quirks)
-		return ad
-	case modelruntime.ProtocolOpenAICompatible:
-		provider := strings.ToLower(strings.TrimSpace(rt.Provider))
-		if provider == "openrouter" {
-			ad := llm.NewOpenRouterAdapter(rt.APIKey)
-			if model != "" {
-				ad.Model = model
-			}
-			ad.BaseURL = chatCompletionsURL(rt.BaseURL)
-			ad.KeyGetter = rt.TokenGetter
-			ad.Headers = rt.Headers
-			ad.MaxTokens = rt.MaxTokens
-			ad.ReasoningEffort = rt.ReasoningEffort
-			ad.Thinking = rt.Thinking
-			ad.ServiceTier = rt.ServiceTier
-			ad.Quirks = llmQuirks(rt.Quirks)
-			return ad
-		}
-		if provider == "google" || provider == "gemini" || provider == "gemini-cli" {
-			ad := llm.NewGeminiAdapter(rt.APIKey)
-			if model != "" {
-				ad.Model = model
-			}
-			ad.BaseURL = googleChatCompletionsURL(rt.BaseURL)
-			ad.KeyGetter = rt.TokenGetter
-			ad.Headers = rt.Headers
-			ad.MaxTokens = rt.MaxTokens
-			ad.ReasoningEffort = rt.ReasoningEffort
-			ad.Thinking = rt.Thinking
-			ad.ServiceTier = rt.ServiceTier
-			ad.Quirks = llmQuirks(rt.Quirks)
-			return ad
-		}
-		ad := llm.NewGenericOpenAIAdapter(rt.Provider, chatCompletionsURL(rt.BaseURL), rt.APIKey, model)
-		ad.KeyGetter = rt.TokenGetter
-		ad.Headers = rt.Headers
-		ad.MaxTokens = rt.MaxTokens
-		ad.ReasoningEffort = rt.ReasoningEffort
-		ad.Thinking = rt.Thinking
-		ad.ServiceTier = rt.ServiceTier
-		ad.Quirks = llmQuirks(rt.Quirks)
-		return ad
-	default:
-		return nil
-	}
+	// modelruntime resolves metadata and credentials; llm owns the protocol
+	// transport registry. Keep provider construction behind this boundary so new
+	// vendors do not grow app/gateway conditionals.
+	return llm.BuildTransportProvider(llm.TransportConfig{
+		Provider:               rt.Provider,
+		Protocol:               rt.Protocol,
+		Model:                  rt.Model,
+		BaseURL:                rt.BaseURL,
+		APIKey:                 rt.APIKey,
+		KeyGetter:              rt.TokenGetter,
+		TokenRefresher:         rt.TokenRefresher,
+		Headers:                rt.Headers,
+		MaxTokens:              rt.MaxTokens,
+		ReasoningEffort:        rt.ReasoningEffort,
+		Thinking:               rt.Thinking,
+		ServiceTier:            rt.ServiceTier,
+		Quirks:                 llmQuirks(rt.Quirks),
+		ResponsesStoreFalse:    rt.Quirks.ResponsesStoreFalse,
+		ResponsesRequireStream: rt.Quirks.ResponsesRequireStream,
+	})
 }
 
 func buildProviderForSelection(cfg *config.Config, providerName, model, baseURL, apiKey string) llm.Provider {
@@ -654,6 +627,7 @@ func InitAgent(mem *memory.MemoryManager, cfg *config.Config, tenantID string) (
 	}
 
 	agent := kernel.NewAgent(mem, nil, codingProvider, cfg.Agent.Soul, maxIter, maxRetries, refl)
+	agent.SetContextWindow(codingContextLength(cfg))
 	reviewEngine := kernel.NewBackgroundReviewEngine(mem, nil, reviewProvider, kernel.EvolutionConfig{
 		Enabled:                cfg.Evolution.Enabled,
 		Mode:                   cfg.Evolution.Mode,

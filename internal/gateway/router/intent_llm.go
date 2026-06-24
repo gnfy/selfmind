@@ -33,6 +33,9 @@ func (g *Gateway) shouldConsultIntentLLM(rule IntentResult, input string) bool {
 	if hardRuleIntent(rule) {
 		return false
 	}
+	if rule.Intent == IntentTask {
+		return false
+	}
 	if mode == "llm" {
 		return true
 	}

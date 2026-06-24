@@ -312,7 +312,7 @@ type recordingBackend struct {
 	calledArgs map[string]interface{}
 }
 
-func TestSimpleRequestDoesNotExposeUpdatePlan(t *testing.T) {
+func TestSimpleRequestKeepsOptionalPlanButHidesWebTools(t *testing.T) {
 	mem := memory.NewMemoryManager(&mockStorage{})
 	backend := &planningBackend{}
 	provider := &recordingLLMProvider{}
@@ -325,8 +325,8 @@ func TestSimpleRequestDoesNotExposeUpdatePlan(t *testing.T) {
 	if len(provider.requests) == 0 {
 		t.Fatal("provider received no requests")
 	}
-	if requestHasTool(provider.requests[0], "update_plan") {
-		t.Fatalf("update_plan should not be exposed for simple requests: %+v", provider.requests[0].Tools)
+	if !requestHasTool(provider.requests[0], "update_plan") {
+		t.Fatalf("update_plan should stay available as optional agent-first planning: %+v", provider.requests[0].Tools)
 	}
 	if requestHasTool(provider.requests[0], "web_search") {
 		t.Fatalf("web_search should not be exposed for stable simple requests: %+v", provider.requests[0].Tools)

@@ -34,10 +34,10 @@ func TestIsTaskDoneConservative(t *testing.T) {
 		want     bool
 	}{
 		{name: "clear done", response: "Task completed successfully.", want: true},
-		{name: "clear chinese done", response: "处理完成", want: true},
+		{name: "clear chinese done", response: "\u5904\u7406\u5b8c\u6210", want: true},
 		{name: "plain success wording", response: "The success criteria are listed below.", want: false},
 		{name: "not done", response: "Not done yet; remaining work is listed below.", want: false},
-		{name: "chinese not done", response: "未完成，需要继续", want: false},
+		{name: "chinese not done", response: "\u672a\u5b8c\u6210\uff0c\u9700\u8981\u7ee7\u7eed", want: false},
 		{name: "blocked", response: "Blocked: need approval before continuing.", want: false},
 	}
 	for _, tt := range tests {
@@ -49,119 +49,70 @@ func TestIsTaskDoneConservative(t *testing.T) {
 	}
 }
 
-func TestModelStatusQuestionUsesConfiguredRuntimeLabel(t *testing.T) {
+func TestModelStatusReplyUsesConfiguredRuntimeLabel(t *testing.T) {
 	gw := NewGateway(nil, nil, nil, nil)
 	gw.SetModelDisplay("kimi-coding", "kimi-for-coding")
 
+	resp := gw.ModelStatusReply()
+	if !strings.Contains(resp, "kimi-coding/kimi-for-coding") {
+		t.Fatalf("response = %q", resp)
+	}
+}
+
+func TestIntentClassifierDefaultsOrdinaryLanguageToTask(t *testing.T) {
+	classifier := NewIntentClassifier()
 	tests := []string{
-		"你是什么模型？",
-		"你用的是什么模型？",
-		"你用的是哪个模型？",
-		"当前使用的模型是什么？",
-		"你现在连接的后端是什么？",
-		"which model are you using?",
-		"current llm?",
+		"who are you?",
+		"\u4f60\u662f\u8c01\uff1f",
+		"write a Go binary search example",
+		"\u53ef\u4ee5",
 	}
 	for _, input := range tests {
 		t.Run(input, func(t *testing.T) {
-			resp, err := gw.Handle(context.Background(), "user1", "cli", input)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if resp == nil || !strings.Contains(resp.Content, "kimi-coding/kimi-for-coding") {
-				t.Fatalf("response = %+v", resp)
+			result := classifier.ClassifyDetailed(input)
+			if result.Intent != IntentTask || !result.ShouldCreateTask || !result.ShouldUseTools {
+				t.Fatalf("intent result = %+v", result)
 			}
 		})
 	}
 }
 
-func TestRealChineseModelAndIdentityQuestions(t *testing.T) {
-	gw := NewGateway(nil, nil, nil, nil)
-	gw.SetModelDisplay("kimi-coding", "kimi-for-coding")
-
-	modelResp, err := gw.Handle(context.Background(), "user1", "cli", "你是什么模型？")
-	if err != nil {
-		t.Fatal(err)
+func TestIntentClassifierKeepsExplicitRoutes(t *testing.T) {
+	classifier := NewIntentClassifier()
+	tests := []struct {
+		input string
+		want  Intent
+	}{
+		{input: "/skill codebase-inspection", want: IntentSkill},
+		{input: "/query last task", want: IntentQuery},
+		{input: "/route cli", want: IntentRoute},
+		{input: "continue", want: IntentContinue},
+		{input: "\u7ee7\u7eed", want: IntentContinue},
 	}
-	if modelResp == nil || !strings.Contains(modelResp.Content, "kimi-coding/kimi-for-coding") {
-		t.Fatalf("model response = %+v", modelResp)
-	}
-
-	identityResp, err := gw.Handle(context.Background(), "user1", "cli", "你是谁？")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if identityResp == nil || !strings.Contains(identityResp.Content, "SelfMind") || !strings.Contains(identityResp.Content, "kimi-coding/kimi-for-coding") {
-		t.Fatalf("identity response = %+v", identityResp)
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			if got := classifier.ClassifyDetailed(tt.input); got.Intent != tt.want {
+				t.Fatalf("intent = %+v, want %v", got, tt.want)
+			}
+		})
 	}
 }
 
-func TestIntentLLMCanClassifyAmbiguousMessage(t *testing.T) {
-	gw := NewGateway(nil, nil, nil, &intentLLMProvider{content: `{"intent":"task","confidence":0.91,"reason":"asks to inspect work","signals":["inspect"],"should_create_task":true,"should_use_tools":true}`})
+func TestIntentLLMDoesNotOverrideAgentFirstDefault(t *testing.T) {
+	gw := NewGateway(nil, nil, nil, &intentLLMProvider{content: `{"intent":"casual","confidence":0.99,"reason":"chat"}`})
 	gw.SetIntentClassifier(NewIntentClassifierWithRules(IntentRuleConfig{Mode: "llm"}))
 
-	result := gw.ClassifyIntentWithContext(context.Background(), "帮我看看这个情况", "cli")
-	if result.Intent != IntentTask || !result.ShouldCreateTask || !result.ShouldUseTools || result.Source != "llm" {
-		t.Fatalf("intent result = %+v", result)
-	}
-}
-
-func TestIntentLLMLowConfidenceAsksClarification(t *testing.T) {
-	gw := NewGateway(nil, nil, nil, &intentLLMProvider{content: `{"intent":"task","confidence":0.3,"reason":"ambiguous","needs_clarification":true,"clarifying_question":"Do you want a task?"}`})
-	gw.SetIntentClassifier(NewIntentClassifierWithRules(IntentRuleConfig{Mode: "llm", AskThreshold: 0.55}))
-
 	result := gw.ClassifyIntentWithContext(context.Background(), "maybe later", "cli")
-	if !result.NeedsClarification || result.ClarifyingQuestion == "" {
+	if result.Intent != IntentTask || result.Source != "rules" {
 		t.Fatalf("intent result = %+v", result)
 	}
 }
 
-func TestModelStatusQuestionDoesNotCatchConfigurationHelp(t *testing.T) {
-	tests := []string{
-		"怎么配置模型？",
-		"帮我切换模型",
-		"model set kimi-coding kimi-for-coding",
-		"你是谁？",
+func TestModelStatusQuestionHelperIsNotUsedForIdentity(t *testing.T) {
+	if isModelStatusQuestion("\u4f60\u662f\u8c01\uff1f") {
+		t.Fatalf("identity question should not be a model-status helper match")
 	}
-	for _, input := range tests {
-		t.Run(input, func(t *testing.T) {
-			if isModelStatusQuestion(input) {
-				t.Fatalf("isModelStatusQuestion(%q) = true, want false", input)
-			}
-		})
-	}
-}
-
-func TestCasualIdentityQuestionWithPunctuation(t *testing.T) {
-	gw := NewGateway(nil, nil, nil, nil)
-	gw.SetModelDisplay("kimi-coding", "kimi-for-coding")
-
-	resp, err := gw.Handle(context.Background(), "user1", "cli", "你是谁？")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if resp == nil {
-		t.Fatalf("response is nil")
-	}
-	if resp.IntentReason == "model status question" {
-		t.Fatalf("identity question should not be handled as model status")
-	}
-	if !strings.Contains(resp.Content, "SelfMind") || !strings.Contains(resp.Content, "kimi-coding/kimi-for-coding") {
-		t.Fatalf("response = %+v", resp)
-	}
-}
-
-func TestCasualShortQuestionDoesNotCatchGeneralQuestions(t *testing.T) {
-	tests := []string{
-		"这个项目能跑吗？",
-		"Go 怎么写二分法？",
-		"这个方案怎么样？",
-	}
-	for _, input := range tests {
-		t.Run(input, func(t *testing.T) {
-			if IsCasualShortQuestion(input) {
-				t.Fatalf("IsCasualShortQuestion(%q) = true, want false", input)
-			}
-		})
+	if !isModelStatusQuestion("which model are you using?") {
+		t.Fatalf("model question should match helper")
 	}
 }

@@ -259,46 +259,14 @@ func (t *SkillTool) SetSkillSteps(steps []string) {
 	t.steps = steps
 }
 
-// Execute 解析 markdown 中的 code block 并依次执行每个步骤
+// Execute keeps legacy skill:<name> tools instruction-only. Skills are loaded
+// through slash invocation or skill_view, not executed as shell scripts.
 func (t *SkillTool) Execute(args map[string]interface{}) (string, error) {
-	tenantID, _ := args["_tenant_id"].(string)
-	// 如果没有预解析的 steps，则延迟解析
-	if len(t.steps) == 0 {
-		t.steps = extractSkillSteps(t.content)
+	name := strings.TrimPrefix(t.Name(), "skill:")
+	if name == "" {
+		name = t.Name()
 	}
-	if len(t.steps) == 0 {
-		return fmt.Sprintf("[Skill: %s] 无可执行步骤，请检查 skill 文件格式（需要 ``` 代码块）", t.Name()), nil
-	}
-
-	var results []string
-	for i, step := range t.steps {
-		if step == "" {
-			continue
-		}
-		// 去掉步骤编号前缀（如 "1. " 或 "step 1:"）
-		cmd := strings.TrimLeft(step, " \t0123456789.-:")
-		cmd = strings.TrimSpace(cmd)
-		if cmd == "" {
-			continue
-		}
-
-		// 通过 terminal 工具执行 shell 命令
-		registry, _ := args["_registry"].(*Registry)
-		if registry == nil {
-			registry = GlobalRegistry()
-		}
-		result, err := registry.Dispatch("terminal", map[string]interface{}{
-			"command":    cmd,
-			"_tenant_id": tenantID,
-		})
-		if err != nil {
-			results = append(results, fmt.Sprintf("步骤 %d 执行失败: %v", i+1, err))
-			break
-		}
-		results = append(results, fmt.Sprintf("步骤 %d:\n%s\n=> %s", i+1, cmd, trimResult(result)))
-	}
-
-	return strings.Join(results, "\n\n"), nil
+	return fmt.Sprintf("[Skill: %s]\nThis skill is instruction-only. Load it with /%s or skill_view(name=%q), then follow its instructions explicitly. Scripts or commands mentioned by the skill must be run through normal tools with the usual workspace and approval checks.", name, normalizeSkillCommandName(name), name), nil
 }
 
 // extractSkillSteps 从 markdown body 中提取所有 fenced code block 内容

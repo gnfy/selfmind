@@ -120,6 +120,19 @@ func (d *Server) ProcessMessage(ctx context.Context, req api.MessageRequest) (ap
 	}
 
 	intent := d.classifyIntent(ctx, req.Content, req.Channel)
+	if intent.Intent != router.IntentContinue && looksLikeAffirmativeContinuation(req.Content) {
+		if task, _ := d.resolveContinueTask(ctx, identity); task != nil {
+			intent = router.IntentResult{
+				Intent:           router.IntentContinue,
+				Confidence:       0.84,
+				Reason:           "affirmative reply with existing task context",
+				Signals:          []string{"continue.affirmative_with_context"},
+				ShouldCreateTask: true,
+				ShouldUseTools:   true,
+				Source:           "httpapi",
+			}
+		}
+	}
 	if handled, resp := d.tryHandleIntentClarification(identity, intent); handled {
 		return resp, http.StatusOK
 	}
@@ -677,11 +690,36 @@ func (d *Server) withGatewayContext(input string, identity *control.IdentityCont
 }
 
 func (d *Server) tryHandleControlCommand(ctx context.Context, identity *control.IdentityContext, req api.MessageRequest) (bool, string, error) {
-	lower := strings.ToLower(strings.TrimSpace(req.Content))
+	trimmed := strings.TrimSpace(req.Content)
+	lower := strings.ToLower(trimmed)
+	if !strings.HasPrefix(lower, "/") {
+		return false, "", nil
+	}
 	switch {
-	case lower == "/id" || lower == "id":
+	case lower == "/help":
+		return true, strings.TrimSpace(`SelfMind commands:
+/help                 Show this help.
+/model                Show the configured model.
+/id                   Show your resolved account identity.
+/status               Show the current task status.
+/tasks                List recent tasks.
+/events               List recent events for the current task.
+/approvals            List pending approvals.
+/approve <id>         Approve a pending action.
+/reject <id>          Reject a pending action.
+/stop                 Cancel the active run.
+/new [title]          Create a new task.
+/resume <task_id>     Resume a task.
+/workspace <id>       Select a workspace.
+/workspaces           List workspaces.`), nil
+	case lower == "/model":
+		if d != nil && d.Gateway != nil {
+			return true, d.Gateway.ModelStatusReply(), nil
+		}
+		return true, "SelfMind is running, but the model gateway is not configured.", nil
+	case lower == "/id":
 		return true, formatIdentity(identity), nil
-	case lower == "/stop" || lower == "stop":
+	case lower == "/stop":
 		active := d.stopActive(identity.PersonID)
 		if active == nil {
 			return true, "No active run to stop.", nil
@@ -703,7 +741,7 @@ func (d *Server) tryHandleControlCommand(ctx context.Context, identity *control.
 		}
 		return true, fmt.Sprintf("Stopping run %s.", fallback(active.RunID, "(starting)")), nil
 	case strings.HasPrefix(lower, "/new"):
-		title := strings.TrimSpace(req.Content[len("/new"):])
+		title := strings.TrimSpace(trimmed[len("/new"):])
 		if title == "" {
 			title = "New task"
 		}
@@ -724,8 +762,19 @@ func (d *Server) tryHandleControlCommand(ctx context.Context, identity *control.
 			return true, "", err
 		}
 		return true, fmt.Sprintf("Created task: %s (%s)", task.Title, task.ID), nil
+	case lower == "/task status" || lower == "/status":
+		task, err := d.Control.CurrentTask(ctx, identity.TenantID, identity.PersonID)
+		if err != nil {
+			return true, "", err
+		}
+		if task == nil {
+			return true, "No active task.", nil
+		}
+		handoff, _ := d.Control.LatestHandoff(ctx, task.ID)
+		plan := d.latestPlanForTask(ctx, task.ID)
+		return true, formatTaskStatus(task, handoff, d.currentActive(identity.PersonID), plan), nil
 	case strings.HasPrefix(lower, "/resume ") || strings.HasPrefix(lower, "/task "):
-		parts := strings.Fields(req.Content)
+		parts := strings.Fields(trimmed)
 		if len(parts) < 2 {
 			return true, "Usage: /resume <task_id>", nil
 		}
@@ -762,20 +811,20 @@ func (d *Server) tryHandleControlCommand(ctx context.Context, identity *control.
 			return true, "", err
 		}
 		return true, fmt.Sprintf("Current workspace: %s (%s)\n%s", ws.Name, ws.ID, ws.LocalPath), nil
-	case lower == "/workspaces" || lower == "workspaces":
+	case lower == "/workspaces":
 		workspaces, err := d.Control.ListWorkspaces(ctx, identity.TenantID, identity.PersonID)
 		if err != nil {
 			return true, "", err
 		}
 		return true, formatWorkspaces(workspaces), nil
-	case lower == "/approvals" || lower == "approvals":
+	case lower == "/approvals":
 		approvals, err := d.Control.ListApprovalRequests(ctx, identity.TenantID, identity.PersonID, "pending", 20)
 		if err != nil {
 			return true, "", err
 		}
 		return true, formatApprovals(approvals), nil
-	case strings.HasPrefix(lower, "/approve ") || strings.HasPrefix(lower, "approve "):
-		parts := strings.Fields(req.Content)
+	case strings.HasPrefix(lower, "/approve "):
+		parts := strings.Fields(trimmed)
 		if len(parts) < 2 {
 			return true, "Usage: /approve <approval_id>", nil
 		}
@@ -785,8 +834,8 @@ func (d *Server) tryHandleControlCommand(ctx context.Context, identity *control.
 		}
 		appendApprovalEvent(ctx, d.Control, approval, req.Channel)
 		return true, fmt.Sprintf("Approved %s.", approval.ID), nil
-	case strings.HasPrefix(lower, "/reject ") || strings.HasPrefix(lower, "reject "):
-		parts := strings.Fields(req.Content)
+	case strings.HasPrefix(lower, "/reject "):
+		parts := strings.Fields(trimmed)
 		if len(parts) < 2 {
 			return true, "Usage: /reject <approval_id>", nil
 		}
@@ -796,7 +845,7 @@ func (d *Server) tryHandleControlCommand(ctx context.Context, identity *control.
 		}
 		appendApprovalEvent(ctx, d.Control, approval, req.Channel)
 		return true, fmt.Sprintf("Rejected %s.", approval.ID), nil
-	case lower == "/events" || lower == "events":
+	case lower == "/events":
 		task, err := d.Control.CurrentTask(ctx, identity.TenantID, identity.PersonID)
 		if err != nil {
 			return true, "", err

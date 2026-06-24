@@ -10,6 +10,7 @@ import (
 const (
 	SkillStateActive   = "active"
 	SkillStateStale    = "stale"
+	SkillStateDisabled = "disabled"
 	SkillStateArchived = "archived"
 
 	SkillSourceAgentCreated = "agent-created"

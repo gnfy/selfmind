@@ -13,9 +13,9 @@ const (
 	IntentCasual
 )
 
-// IntentClassifier is intentionally lightweight. It handles hard commands and
-// high-confidence multilingual cues; ambiguous cases can be delegated to the
-// LLM classifier by the hybrid policy in intent_llm.go.
+// IntentClassifier handles only explicit commands and high-confidence resume
+// cues. Ordinary natural language defaults to IntentTask so the agent, not a
+// keyword router, decides whether to answer directly or use tools.
 type IntentClassifier struct {
 	continuePatterns []*regexp.Regexp
 	taskPatterns     []*regexp.Regexp
@@ -30,23 +30,20 @@ type IntentClassifier struct {
 func NewIntentClassifier() *IntentClassifier {
 	return &IntentClassifier{
 		continuePatterns: compilePatterns([]string{
-			`继续`, `接着`, `往下`, `上次`, `刚才`, `刚刚`, `再试`, `重试`,
 			`\bcontinue\b`, `\bkeep going\b`, `\bgo on\b`, `\bresume\b`, `\btry again\b`,
+			`\bcarry on\b`, `\bnext step\b`,
+			"\u7ee7\u7eed", "\u63a5\u7740", "\u5f80\u4e0b", "\u4e0a\u6b21",
+			"\u521a\u624d", "\u521a\u521a", "\u518d\u8bd5", "\u91cd\u8bd5",
 		}),
-		taskPatterns: compilePatterns([]string{
-			`帮我`, `请帮我`, `看一下`, `检查`, `分析`, `实现`, `写一个`, `写一段`, `修改`, `修复`,
-			`重构`, `优化`, `运行`, `测试`, `部署`, `发布`, `打包`, `提交`, `推送`, `接入`, `配置`,
-			`\bcreate\b`, `\bexecute\b`, `\bdeploy\b`, `\brun\b`, `\bbuild\b`, `\bcheck\b`,
-			`\bmodify\b`, `\bwrite\b`, `\banalyze\b`, `\breview\b`, `\bfix\b`, `\bdebug\b`,
-		}),
+		taskPatterns: compilePatterns([]string{}),
 		skillPatterns: compilePatterns([]string{
-			`^/skill\b`, `^/s\b`, `调用技能`, `用技能`, `执行技能`, `运行技能`,
+			`^/skill\b`, `^/s\b`,
 		}),
 		queryPatterns: compilePatterns([]string{
-			`^/query\b`, `^/search\b`, `搜索.*历史`, `查历史`, `找之前`, `之前.*说过`,
+			`^/query\b`, `^/search\b`,
 		}),
 		routePatterns: compilePatterns([]string{
-			`^/route\b`, `切换到`, `切到`, `转到`, `路由到`,
+			`^/route\b`,
 		}),
 		mode:            "hybrid",
 		directThreshold: 0.8,
@@ -71,46 +68,16 @@ func (c *IntentClassifier) Classify(input string) Intent {
 }
 
 func (c *IntentClassifier) ClassifyWithReason(input string) (Intent, string) {
-	if c == nil {
-		c = NewIntentClassifier()
-	}
-	for _, re := range c.skillPatterns {
-		if re.MatchString(input) {
-			return IntentSkill, "matched skill pattern"
-		}
-	}
-	for _, re := range c.queryPatterns {
-		if re.MatchString(input) {
-			return IntentQuery, "matched query pattern"
-		}
-	}
-	for _, re := range c.routePatterns {
-		if re.MatchString(input) {
-			return IntentRoute, "matched route pattern"
-		}
-	}
-	for _, re := range c.continuePatterns {
-		if re.MatchString(input) {
-			return IntentContinue, "matched continue pattern"
-		}
-	}
-	if IsCasualShortQuestion(input) {
-		return IntentCasual, "matched casual short question"
-	}
-	for _, re := range c.taskPatterns {
-		if re.MatchString(input) {
-			return IntentTask, "matched task pattern"
-		}
-	}
-	return IntentCasual, "no hard pattern matched"
+	result := c.ClassifyDetailed(input)
+	return result.Intent, result.Reason
 }
 
 func IsCasualShortQuestion(input string) bool {
 	switch normalizeQuestionText(input) {
-	case "你好", "您好", "hi", "hello", "嗨", "hey",
-		"谢谢", "多谢", "谢了", "thanks", "thankyou",
-		"再见", "拜拜", "bye", "晚安",
-		"你是谁", "你叫什么", "你是干嘛的", "whoareyou", "whatareyou":
+	case "\u4f60\u597d", "\u60a8\u597d", "hi", "hello", "\u55e8", "hey",
+		"\u8c22\u8c22", "\u591a\u8c22", "\u8c22\u4e86", "thanks", "thankyou",
+		"\u518d\u89c1", "\u62dc\u62dc", "bye", "\u665a\u5b89",
+		"\u4f60\u662f\u8c01", "\u4f60\u53eb\u4ec0\u4e48", "\u4f60\u662f\u5e72\u561b\u7684", "whoareyou", "whatareyou":
 		return true
 	default:
 		return false

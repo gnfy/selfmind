@@ -6,25 +6,31 @@ import (
 	"selfmind/internal/kernel/llm"
 )
 
-func TestTaskStrategyCodingExampleUsesNoTools(t *testing.T) {
-	strategy := BuildTaskStrategy("\u7528PHP\u5b9e\u73b0\u4e00\u4e2apgsql\u7684\u64cd\u4f5c\u793a\u4f8b", "cli")
+func TestTaskStrategyDefaultIsAgentFirst(t *testing.T) {
+	strategy := BuildTaskStrategy("write a Go binary search example", "cli")
 
-	if strategy.Class != TaskClassCodingExample {
-		t.Fatalf("class = %s, want %s", strategy.Class, TaskClassCodingExample)
+	if strategy.Class != TaskClassGeneralTask {
+		t.Fatalf("class = %s, want %s", strategy.Class, TaskClassGeneralTask)
 	}
-	if strategy.ToolMode != ToolModeNone {
-		t.Fatalf("tool mode = %s, want %s", strategy.ToolMode, ToolModeNone)
+	if strategy.ToolMode != ToolModeFull {
+		t.Fatalf("tool mode = %s, want %s", strategy.ToolMode, ToolModeFull)
 	}
-	if strategy.AllowsTool("read_file") || strategy.AllowsTool("update_plan") || strategy.AllowsTool("web_search") {
-		t.Fatalf("coding example should expose no tools: %+v", strategy)
+	if strategy.PlanPolicy != PlanPolicyOptional {
+		t.Fatalf("plan policy = %s, want %s", strategy.PlanPolicy, PlanPolicyOptional)
 	}
-	if strategy.MaxIterations != 1 {
-		t.Fatalf("max iterations = %d, want 1", strategy.MaxIterations)
+	if !strategy.AllowsTool("read_file") || !strategy.AllowsTool("write_file") || !strategy.AllowsTool("terminal") {
+		t.Fatalf("agent-first policy should leave local tools available: %+v", strategy)
+	}
+	if !strategy.AllowsTool("update_plan") {
+		t.Fatalf("agent-first policy should leave optional planning available: %+v", strategy)
+	}
+	if strategy.AllowsTool("web_search") || strategy.AllowsTool("web_extract") {
+		t.Fatalf("web tools should stay hidden until explicitly requested: %+v", strategy)
 	}
 }
 
-func TestTaskStrategyExplicitLookupAllowsWebOnly(t *testing.T) {
-	strategy := BuildTaskStrategy("\u67e5\u4e00\u4e0b Go \u5f53\u524d\u6700\u65b0\u7a33\u5b9a\u7248\u672c", "cli")
+func TestTaskStrategyExplicitLookupEnablesWebWithoutHidingLocalTools(t *testing.T) {
+	strategy := BuildTaskStrategy("look up the latest stable Go version", "cli")
 
 	if strategy.Class != TaskClassExternalLookup {
 		t.Fatalf("class = %s, want %s", strategy.Class, TaskClassExternalLookup)
@@ -32,70 +38,35 @@ func TestTaskStrategyExplicitLookupAllowsWebOnly(t *testing.T) {
 	if !strategy.AllowsTool("web_search") || !strategy.AllowsTool("web_extract") {
 		t.Fatalf("explicit lookup should expose web tools: %+v", strategy)
 	}
-	if strategy.AllowsTool("read_file") {
-		t.Fatalf("simple external lookup should not expose local file tools: %+v", strategy)
-	}
-	if strategy.AllowsTool("update_plan") {
-		t.Fatalf("simple external lookup should not expose update_plan: %+v", strategy)
-	}
-}
-
-func TestTaskStrategyRepoTaskAllowsLocalToolsButSuppressesWeb(t *testing.T) {
-	strategy := BuildTaskStrategy("check this local repo, inspect README and run tests", "cli")
-
-	if strategy.Class != TaskClassRepoTask {
-		t.Fatalf("class = %s, want %s", strategy.Class, TaskClassRepoTask)
-	}
 	if !strategy.AllowsTool("read_file") || !strategy.AllowsTool("terminal") {
-		t.Fatalf("repo task should expose local tools: %+v", strategy)
-	}
-	if strategy.AllowsTool("web_search") || strategy.AllowsTool("web_extract") {
-		t.Fatalf("repo task should suppress web tools by default: %+v", strategy)
+		t.Fatalf("explicit lookup should not remove local tools from the agent: %+v", strategy)
 	}
 	if !strategy.AllowsTool("update_plan") {
-		t.Fatalf("repo task should allow optional planning: %+v", strategy)
+		t.Fatalf("explicit lookup should keep optional planning available: %+v", strategy)
 	}
 }
 
-func TestTaskStrategyChineseProjectAnalysisUsesLocalTools(t *testing.T) {
-	strategy := BuildTaskStrategy("你分析一下selfmind目前实现的功能，分析一下有待改进的地方。", "cli")
+func TestTaskStrategyEmptyInputHasNoTools(t *testing.T) {
+	strategy := BuildTaskStrategy("   ", "cli")
 
-	if strategy.Class != TaskClassRepoTask {
-		t.Fatalf("class = %s, want %s", strategy.Class, TaskClassRepoTask)
+	if strategy.ToolMode != ToolModeNone {
+		t.Fatalf("tool mode = %s, want none", strategy.ToolMode)
 	}
-	if strategy.ToolMode == ToolModeNone {
-		t.Fatalf("project analysis should not be direct-answer only: %+v", strategy)
-	}
-	if !strategy.AllowsTool("read_file") || !strategy.AllowsTool("search_files") {
-		t.Fatalf("project analysis should expose local read tools: %+v", strategy)
-	}
-	if strategy.AllowsTool("web_search") {
-		t.Fatalf("project analysis should not use web by default: %+v", strategy)
+	if strategy.AllowsTool("read_file") || strategy.AllowsTool("update_plan") || strategy.AllowsTool("web_search") {
+		t.Fatalf("empty input should expose no tools: %+v", strategy)
 	}
 }
 
-func TestTaskStrategyDebugTaskRequiresPlan(t *testing.T) {
-	strategy := BuildTaskStrategy("fix the failing tests and explain the regression", "cli")
-
-	if strategy.Class != TaskClassDebugTask {
-		t.Fatalf("class = %s, want %s", strategy.Class, TaskClassDebugTask)
-	}
-	if strategy.PlanPolicy != PlanPolicyRequired {
-		t.Fatalf("plan policy = %s, want %s", strategy.PlanPolicy, PlanPolicyRequired)
-	}
-	if !strategy.AllowsTool("update_plan") {
-		t.Fatalf("debug task should expose update_plan: %+v", strategy)
-	}
-}
-
-func TestFilterToolCallsByStrategyBlocksHiddenFallbackCalls(t *testing.T) {
-	strategy := BuildTaskStrategy("\u7528Go\u5199\u4e00\u4e2a\u4e8c\u5206\u6cd5", "cli")
+func TestFilterToolCallsByStrategyOnlyBlocksHiddenWebCalls(t *testing.T) {
+	strategy := BuildTaskStrategy("write a PHP pgsql operation example", "cli")
 	calls := []llm.ToolCall{
 		{Function: "read_file"},
 		{Function: "update_plan"},
+		{Function: "web_search"},
 	}
 
-	if got := filterToolCallsByStrategy(calls, strategy); len(got) != 0 {
-		t.Fatalf("hidden fallback calls were not filtered: %+v", got)
+	got := filterToolCallsByStrategy(calls, strategy)
+	if len(got) != 2 || got[0].Function != "read_file" || got[1].Function != "update_plan" {
+		t.Fatalf("local and planning tools should pass while hidden web calls are filtered: %+v", got)
 	}
 }

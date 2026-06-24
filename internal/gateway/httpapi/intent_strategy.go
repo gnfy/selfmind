@@ -21,15 +21,7 @@ func taskStrategyForRequest(req api.MessageRequest, intent router.IntentResult) 
 			strategy.Reason = combineReasons("task intent", intent.Reason, strategy.Reason)
 		}
 	case router.IntentCasual:
-		if !intent.ShouldUseTools {
-			strategy.ToolMode = kernel.ToolModeNone
-			strategy.PlanPolicy = kernel.PlanPolicyDisabled
-			strategy.WebPolicy = kernel.WebPolicyDisabled
-			strategy.AllowedTools = map[string]bool{}
-			strategy.MaxIterations = 1
-			strategy.RequireProgressEvents = false
-			strategy.Reason = combineReasons("casual intent", intent.Reason, strategy.Reason)
-		}
+		strategy.Reason = combineReasons("agent-first normal input", intent.Reason, strategy.Reason)
 	}
 	return strategy
 }

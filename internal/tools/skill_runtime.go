@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"unicode/utf8"
 )
 
 type skillListEntry struct {
@@ -14,12 +15,17 @@ type skillListEntry struct {
 	Description string   `json:"description"`
 	State       string   `json:"state"`
 	Source      string   `json:"source"`
+	Scope       string   `json:"scope"`
+	Writable    bool     `json:"writable"`
 	Pinned      bool     `json:"pinned"`
 	LastUsed    string   `json:"last_used,omitempty"`
 	Path        string   `json:"path"`
+	Root        string   `json:"root,omitempty"`
 	Format      string   `json:"format"`
 	Files       []string `json:"linked_files,omitempty"`
 }
+
+const maxSkillInvocationBytes = 48 * 1024
 
 type SkillsListTool struct {
 	BaseTool
@@ -112,12 +118,15 @@ func SkillsListJSONForTenant(tenantID, query string, includeArchived bool) (stri
 	for _, s := range skills {
 		entry := skillListEntry{
 			Name:        s.Name,
-			Description: s.Description,
+			Description: truncateMetadata(s.Description, 1024),
 			State:       s.State,
 			Source:      s.Source,
+			Scope:       s.Scope,
+			Writable:    s.Writable,
 			Pinned:      s.Pinned,
 			LastUsed:    s.LastUsed,
 			Path:        s.Path,
+			Root:        s.Root,
 			Format:      s.Format,
 		}
 		if s.Format == "dir" {
@@ -150,8 +159,11 @@ func SkillViewJSONForTenant(tenantID, name, filePath string) (string, error) {
 		"description": info.Description,
 		"state":       info.State,
 		"source":      info.Source,
+		"scope":       info.Scope,
+		"writable":    info.Writable,
 		"pinned":      info.Pinned,
 		"path":        info.Path,
+		"root":        info.Root,
 		"content":     content,
 	}
 	if filePath != "" {
@@ -202,11 +214,18 @@ func BuildSkillInvocationMessageForTenant(tenantID, name, instruction string) (s
 	if err != nil {
 		return "", "", err
 	}
+	if info.State == SkillStateDisabled {
+		return "", "", fmt.Errorf("skill %q is disabled", info.Name)
+	}
 	_ = MarkSkillUsed(tenantID, info.Name)
+	content, truncated := truncateUTF8ByBytes(content, maxSkillInvocationBytes)
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("[IMPORTANT: The user invoked the %q skill. Follow its instructions for this turn unless the user explicitly overrides them.]\n\n", info.Name))
 	sb.WriteString("## Loaded Skill: " + info.Name + "\n\n")
 	sb.WriteString(content)
+	if truncated {
+		sb.WriteString("\n\n[SelfMind note: this SKILL.md exceeded the per-turn skill budget and was truncated. Use skill_view(name, file_path) for linked files or ask for the specific section if more detail is needed.]\n")
+	}
 	if len(files) > 0 {
 		sb.WriteString("\n\n## Linked Files\n")
 		for _, f := range files {
@@ -244,6 +263,9 @@ func findSkillByCommand(tenantID, command string) (SkillInfo, error) {
 	}
 	want := normalizeSkillCommandName(command)
 	for _, s := range skills {
+		if s.State == SkillStateDisabled {
+			continue
+		}
 		if normalizeSkillCommandName(s.Name) == want {
 			return s, nil
 		}
@@ -271,10 +293,38 @@ func ReloadSkillToolsForTenant(tenantID string, registry *Registry) ([]SkillDefi
 			registry.Unregister(name)
 		}
 	}
-	dir, err := getSkillsDir(tenantID)
+	roots, err := SkillRootsForTenant(tenantID)
 	if err != nil {
 		return nil, err
 	}
-	loader := NewSkillLoader(dir, registry)
-	return loader.LoadAll()
+	var loaded []SkillDefinition
+	for i := len(roots) - 1; i >= 0; i-- {
+		root := roots[i]
+		if root.Writable {
+			_ = os.MkdirAll(root.Path, 0755)
+		}
+		loader := NewSkillLoader(root.Path, registry)
+		defs, err := loader.LoadAll()
+		if err != nil {
+			return loaded, err
+		}
+		loaded = append(loaded, defs...)
+	}
+	return loaded, nil
+}
+
+func truncateUTF8ByBytes(s string, max int) (string, bool) {
+	if max <= 0 || len(s) <= max {
+		return s, false
+	}
+	if max > len(s) {
+		max = len(s)
+	}
+	for max > 0 && !utf8.ValidString(s[:max]) {
+		max--
+	}
+	if max <= 0 {
+		return "", true
+	}
+	return s[:max] + "\n\n...(truncated)", true
 }

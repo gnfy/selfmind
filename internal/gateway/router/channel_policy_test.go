@@ -45,11 +45,11 @@ func TestAggregateFinalResponsePrefersStructuredStream(t *testing.T) {
 	}
 }
 
-func TestAggregateFinalResponseSummarizesToolFailureForIM(t *testing.T) {
+func TestAggregateFinalResponseDoesNotAppendInternalToolSummary(t *testing.T) {
 	stream := make(chan llm.StreamEvent, 6)
 	stream <- llm.StreamEvent{EventType: "agent.thinking", Content: "Thinking about the request"}
 	stream <- llm.StreamEvent{EventType: "tool.started", ToolName: "terminal", ToolArgs: `{"command":"gh auth status"}`}
-	stream <- llm.StreamEvent{EventType: "tool.output", ToolName: "terminal", Content: "error connecting to api.github.com"}
+	stream <- llm.StreamEvent{EventType: "tool.output", ToolName: "terminal", Content: "SelfMind diagnostic instruction: this tool failed"}
 	stream <- llm.StreamEvent{EventType: "tool.completed", ToolName: "terminal", Err: fmt.Errorf("command timed out after 30 seconds")}
 	stream <- llm.StreamEvent{EventType: "stream", Content: "我暂时无法确认 GitHub 登录状态。"}
 	close(stream)
@@ -58,9 +58,33 @@ func TestAggregateFinalResponseSummarizesToolFailureForIM(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"我暂时无法确认", "Process summary", "Thinking about the request", "gh auth status", "command timed out", "error connecting"} {
-		if !strings.Contains(content, want) {
-			t.Fatalf("content missing %q: %q", want, content)
+	if content != "我暂时无法确认 GitHub 登录状态。" {
+		t.Fatalf("content = %q", content)
+	}
+	for _, leaked := range []string{"Process summary", "Thinking about the request", "gh auth status", "command timed out", "SelfMind diagnostic instruction"} {
+		if strings.Contains(content, leaked) {
+			t.Fatalf("content leaked %q: %q", leaked, content)
+		}
+	}
+}
+
+func TestAggregateFinalResponseUsesBriefFallbackWhenNoFinalContent(t *testing.T) {
+	stream := make(chan llm.StreamEvent, 4)
+	stream <- llm.StreamEvent{EventType: "agent.thinking", Content: "Thinking about the request"}
+	stream <- llm.StreamEvent{EventType: "tool.started", ToolName: "terminal", ToolArgs: `{"command":"go test ./..."}`}
+	stream <- llm.StreamEvent{EventType: "tool.completed", ToolName: "terminal", Err: fmt.Errorf("command timed out after 30 seconds")}
+	close(stream)
+
+	content, _, err := AggregateFinalResponse(&HandleResponse{IsStreaming: true, Stream: stream})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(content, "tool error") {
+		t.Fatalf("fallback content = %q", content)
+	}
+	for _, leaked := range []string{"Process summary", "Thinking about the request", "go test", "command timed out"} {
+		if strings.Contains(content, leaked) {
+			t.Fatalf("fallback leaked %q: %q", leaked, content)
 		}
 	}
 }

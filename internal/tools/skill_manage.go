@@ -26,6 +26,9 @@ type SkillInfo struct {
 	Format      string
 	State       string
 	Source      string
+	Scope       string
+	Root        string
+	Writable    bool
 	LastUsed    string
 	Pinned      bool
 }
@@ -46,8 +49,8 @@ func NewSkillManageTool() *SkillManageTool {
 				Properties: map[string]PropertyDef{
 					"action": {
 						Type:        "string",
-						Description: "Action: list, search, read, history, undo, create, update, edit, patch, delete, archive, write_file, remove_file, pin, unpin, or reload.",
-						Enum:        []string{"list", "search", "read", "history", "undo", "create", "update", "edit", "patch", "delete", "archive", "write_file", "remove_file", "pin", "unpin", "reload"},
+						Description: "Action: list, search, read, history, undo, create, update, edit, patch, delete, archive, write_file, remove_file, pin, unpin, enable, disable, or reload.",
+						Enum:        []string{"list", "search", "read", "history", "undo", "create", "update", "edit", "patch", "delete", "archive", "write_file", "remove_file", "pin", "unpin", "enable", "disable", "reload"},
 					},
 					"name": {
 						Type:        "string",
@@ -210,6 +213,32 @@ func (t *SkillManageTool) Execute(args map[string]interface{}) (string, error) {
 		}
 		recordSkillLearningChange(tenantID, info.Name, "unpin", "pinned", "unpinned", info.Source)
 		return fmt.Sprintf("Skill %q unpinned.", info.Name), nil
+	case "enable":
+		if name == "" {
+			return "", fmt.Errorf("name is required for enable")
+		}
+		info, err := findSkill(tenantID, name)
+		if err != nil {
+			return "", err
+		}
+		if err := SetSkillState(tenantID, info.Name, SkillStateActive); err != nil {
+			return "", err
+		}
+		recordSkillLearningChange(tenantID, info.Name, "enable", info.State, SkillStateActive, info.Source)
+		return fmt.Sprintf("Skill %q enabled.", info.Name), nil
+	case "disable":
+		if name == "" {
+			return "", fmt.Errorf("name is required for disable")
+		}
+		info, err := findSkill(tenantID, name)
+		if err != nil {
+			return "", err
+		}
+		if err := SetSkillState(tenantID, info.Name, SkillStateDisabled); err != nil {
+			return "", err
+		}
+		recordSkillLearningChange(tenantID, info.Name, "disable", info.State, SkillStateDisabled, info.Source)
+		return fmt.Sprintf("Skill %q disabled.", info.Name), nil
 	case "reload":
 		registry, _ := args["_registry"].(*Registry)
 		loaded, err := ReloadSkillToolsForTenant(tenantID, registry)
@@ -229,20 +258,11 @@ func reloadSkillToolsFromArgs(tenantID string, args map[string]interface{}) {
 }
 
 func getSkillsDir(tenantID string) (string, error) {
-	home := os.Getenv("HOME")
-	if home == "" {
-		var err error
-		home, err = os.UserHomeDir()
-		if err != nil {
-			return "", fmt.Errorf("get home dir: %w", err)
-		}
+	root, err := WritableSkillRootForTenant(tenantID)
+	if err != nil {
+		return "", err
 	}
-	baseDir := filepath.Join(home, ".selfmind")
-	dir := SkillsDirForTenant(baseDir, tenantID)
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return "", fmt.Errorf("create skills dir: %w", err)
-	}
-	return dir, nil
+	return root.Path, nil
 }
 
 func createSkill(tenantID, name, content, description, source string) (string, error) {
@@ -295,6 +315,9 @@ func editSkill(tenantID, name, content, description string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if err := ensureWritableSkill(info, "editing it"); err != nil {
+		return "", err
+	}
 	content = ensureFrontMatter(content, info.Name, description)
 	if err := kernel.ScanSkillForDangers(content); err != nil {
 		return "", fmt.Errorf("security scan failed: %w", err)
@@ -321,6 +344,9 @@ func patchSkill(tenantID, name, oldText, newText, filePath string, replaceAll bo
 	}
 	info, err := findSkill(tenantID, name)
 	if err != nil {
+		return "", err
+	}
+	if err := ensureWritableSkill(info, "patching it"); err != nil {
 		return "", err
 	}
 	target := info.Path
@@ -367,6 +393,9 @@ func deleteSkill(tenantID, name string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if err := ensureWritableSkill(info, "deleting it"); err != nil {
+		return "", err
+	}
 	if info.Pinned {
 		return "", fmt.Errorf("skill %q is pinned; unpin it before deleting", info.Name)
 	}
@@ -390,6 +419,9 @@ func ArchiveSkillForTenant(tenantID, name string) (string, error) {
 	}
 	info, err := findSkill(tenantID, name)
 	if err != nil {
+		return "", err
+	}
+	if err := ensureWritableSkill(info, "archiving it"); err != nil {
 		return "", err
 	}
 	if info.Pinned {
@@ -428,6 +460,9 @@ func writeSkillSupportFile(tenantID, name, filePath, fileContent string) (string
 	if err != nil {
 		return "", err
 	}
+	if err := ensureWritableSkill(info, "writing support files"); err != nil {
+		return "", err
+	}
 	skillDir, err := ensureDirectorySkill(tenantID, info)
 	if err != nil {
 		return "", err
@@ -460,6 +495,9 @@ func removeSkillSupportFile(tenantID, name, filePath string) (string, error) {
 	}
 	info, err := findSkill(tenantID, name)
 	if err != nil {
+		return "", err
+	}
+	if err := ensureWritableSkill(info, "removing support files"); err != nil {
 		return "", err
 	}
 	if info.Format != "dir" {
@@ -499,6 +537,9 @@ func UndoSkillLearningChangeForTenant(tenantID, changeID string) (string, error)
 		if err != nil {
 			return "", err
 		}
+		if err := ensureWritableSkill(info, "undoing create"); err != nil {
+			return "", err
+		}
 		current, _ := readSkillContent(info)
 		if strings.TrimSpace(change.After) != "" && current != change.After {
 			return "", fmt.Errorf("skill %q changed after %s; refusing to undo create", info.Name, change.ID)
@@ -520,6 +561,9 @@ func UndoSkillLearningChangeForTenant(tenantID, changeID string) (string, error)
 		}
 		info, err := findSkill(tenantID, name)
 		if err != nil {
+			return "", err
+		}
+		if err := ensureWritableSkill(info, "undoing edit"); err != nil {
 			return "", err
 		}
 		target := skillMainFilePath(info)
@@ -576,6 +620,16 @@ func UndoSkillLearningChangeForTenant(tenantID, changeID string) (string, error)
 		}
 		recordSkillLearningChange(tenantID, name, "undo:unpin", "unpinned", "pinned", change.Source)
 		return fmt.Sprintf("Undid skill unpin `%s`: pinned %q.", change.ID, name), nil
+	case change.Action == "enable" || change.Action == "disable":
+		state := strings.TrimSpace(change.Before)
+		if state == "" {
+			state = SkillStateActive
+		}
+		if err := SetSkillState(tenantID, name, state); err != nil {
+			return "", err
+		}
+		recordSkillLearningChange(tenantID, name, "undo:"+change.Action, change.After, state, change.Source)
+		return fmt.Sprintf("Undid skill %s `%s`: restored %q to %s.", change.Action, change.ID, name, state), nil
 	default:
 		return "", fmt.Errorf("skill learning action %q cannot be undone", change.Action)
 	}
@@ -584,6 +638,9 @@ func UndoSkillLearningChangeForTenant(tenantID, changeID string) (string, error)
 func undoSkillSupportFileChange(tenantID, name string, change *LearningChange, filePath string, restoreBefore bool) (string, error) {
 	info, err := findSkill(tenantID, name)
 	if err != nil {
+		return "", err
+	}
+	if err := ensureWritableSkill(info, "undoing support file changes"); err != nil {
 		return "", err
 	}
 	skillDir, err := ensureDirectorySkill(tenantID, info)
@@ -624,7 +681,9 @@ func skillMainFilePath(info SkillInfo) string {
 
 func activeSkillMainPathForRestore(tenantID, name string) (string, SkillInfo, error) {
 	if info, err := findSkill(tenantID, name); err == nil {
-		return skillMainFilePath(info), info, nil
+		if info.Writable {
+			return skillMainFilePath(info), info, nil
+		}
 	}
 	dir, err := getSkillsDir(tenantID)
 	if err != nil {
@@ -632,47 +691,63 @@ func activeSkillMainPathForRestore(tenantID, name string) (string, SkillInfo, er
 	}
 	safeName := kernel.SanitizeSkillName(name)
 	path := filepath.Join(dir, safeName, "SKILL.md")
-	return path, SkillInfo{Name: safeName, Path: filepath.Dir(path), Format: "dir", Source: SkillSourceAgentCreated}, nil
+	return path, SkillInfo{Name: safeName, Path: filepath.Dir(path), Format: "dir", Source: SkillSourceAgentCreated, Scope: SkillScopeUser, Root: dir, Writable: true}, nil
 }
 
 func ListSkillsForTenant(tenantID string, includeArchived bool) ([]SkillInfo, error) {
-	dir, err := getSkillsDir(tenantID)
+	roots, err := SkillRootsForTenant(tenantID)
 	if err != nil {
 		return nil, err
 	}
-	usage, _ := loadSkillUsageForDir(dir)
+	userUsage := map[string]SkillUsageRecord{}
+	if userDir, err := userSkillsDirForTenant(tenantID); err == nil {
+		userUsage, _ = loadSkillUsageForDir(userDir)
+	}
 	var skills []SkillInfo
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
+	seen := map[string]bool{}
+	for _, root := range roots {
+		if root.Writable {
+			_ = os.MkdirAll(root.Path, 0755)
 		}
-		return nil, err
-	}
-	for _, entry := range entries {
-		name := entry.Name()
-		if strings.HasPrefix(name, ".") {
-			continue
-		}
-		path := filepath.Join(dir, name)
-		if entry.IsDir() {
-			info, ok := readSkillInfo(path, "dir", usage)
-			if ok {
-				skills = append(skills, info)
-			}
-			continue
-		}
-		if strings.HasSuffix(name, ".md") {
-			info, ok := readSkillInfo(path, "file", usage)
-			if ok {
-				skills = append(skills, info)
+		usage, _ := loadSkillUsageForDir(root.Path)
+		for name, rec := range userUsage {
+			if _, ok := usage[name]; !ok {
+				usage[name] = rec
 			}
 		}
-	}
-	if includeArchived {
-		archiveDir := filepath.Join(dir, ".archive")
-		archived, _ := listArchivedSkills(archiveDir, usage)
-		skills = append(skills, archived...)
+		entries, err := os.ReadDir(root.Path)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return nil, err
+		}
+		for _, entry := range entries {
+			name := entry.Name()
+			if strings.HasPrefix(name, ".") {
+				continue
+			}
+			path := filepath.Join(root.Path, name)
+			format := ""
+			if entry.IsDir() {
+				format = "dir"
+			} else if strings.HasSuffix(name, ".md") {
+				format = "file"
+			}
+			if format == "" {
+				continue
+			}
+			info, ok := readSkillInfo(path, format, usage, root)
+			if ok && !seen[normalizeSkillCommandName(info.Name)] {
+				seen[normalizeSkillCommandName(info.Name)] = true
+				skills = append(skills, info)
+			}
+		}
+		if includeArchived && root.Writable {
+			archiveDir := filepath.Join(root.Path, ".archive")
+			archived, _ := listArchivedSkills(archiveDir, usage, root)
+			skills = append(skills, archived...)
+		}
 	}
 	sort.Slice(skills, func(i, j int) bool {
 		return skills[i].Name < skills[j].Name
@@ -707,7 +782,11 @@ func ReadSkillForTenant(tenantID, name string) (string, error) {
 		return "", err
 	}
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("# %s\n\nPath: %s\nState: %s\nSource: %s\n\n", info.Name, info.Path, info.State, info.Source))
+	writable := "read-only"
+	if info.Writable {
+		writable = "writable"
+	}
+	sb.WriteString(fmt.Sprintf("# %s\n\nPath: %s\nState: %s\nSource: %s\nScope: %s\nAccess: %s\n\n", info.Name, info.Path, info.State, info.Source, emptyDefault(info.Scope, "unknown"), writable))
 	sb.WriteString(content)
 	if info.Format == "dir" {
 		files := listSupportFiles(info.Path)
@@ -735,7 +814,7 @@ func findSkill(tenantID, name string) (SkillInfo, error) {
 	return SkillInfo{}, fmt.Errorf("skill not found: %s", name)
 }
 
-func readSkillInfo(path, format string, usage map[string]SkillUsageRecord) (SkillInfo, bool) {
+func readSkillInfo(path, format string, usage map[string]SkillUsageRecord, root SkillRoot) (SkillInfo, bool) {
 	contentPath := path
 	if format == "dir" {
 		contentPath = filepath.Join(path, "SKILL.md")
@@ -759,6 +838,9 @@ func readSkillInfo(path, format string, usage map[string]SkillUsageRecord) (Skil
 	}
 	source := rec.Source
 	if source == "" {
+		source = root.Source
+	}
+	if source == "" {
 		source = SkillSourceManual
 	}
 	return SkillInfo{
@@ -768,12 +850,15 @@ func readSkillInfo(path, format string, usage map[string]SkillUsageRecord) (Skil
 		Format:      format,
 		State:       state,
 		Source:      source,
+		Scope:       root.Scope,
+		Root:        root.Path,
+		Writable:    root.Writable,
 		LastUsed:    rec.LastUsed,
 		Pinned:      rec.Pinned,
 	}, true
 }
 
-func listArchivedSkills(archiveDir string, usage map[string]SkillUsageRecord) ([]SkillInfo, error) {
+func listArchivedSkills(archiveDir string, usage map[string]SkillUsageRecord, root SkillRoot) ([]SkillInfo, error) {
 	entries, err := os.ReadDir(archiveDir)
 	if err != nil {
 		return nil, err
@@ -782,12 +867,12 @@ func listArchivedSkills(archiveDir string, usage map[string]SkillUsageRecord) ([
 	for _, entry := range entries {
 		path := filepath.Join(archiveDir, entry.Name())
 		if entry.IsDir() {
-			if info, ok := readSkillInfo(path, "dir", usage); ok {
+			if info, ok := readSkillInfo(path, "dir", usage, root); ok {
 				info.State = SkillStateArchived
 				skills = append(skills, info)
 			}
 		} else if strings.HasSuffix(entry.Name(), ".md") {
-			if info, ok := readSkillInfo(path, "file", usage); ok {
+			if info, ok := readSkillInfo(path, "file", usage, root); ok {
 				info.State = SkillStateArchived
 				skills = append(skills, info)
 			}
@@ -809,6 +894,9 @@ func readSkillContent(info SkillInfo) (string, error) {
 }
 
 func ensureDirectorySkill(tenantID string, info SkillInfo) (string, error) {
+	if err := ensureWritableSkill(info, "converting it to a directory skill"); err != nil {
+		return "", err
+	}
 	if info.Format == "dir" {
 		return info.Path, nil
 	}
@@ -881,7 +969,11 @@ func formatSkillsList(skills []SkillInfo) string {
 		if s.Pinned {
 			pin = " pinned"
 		}
-		sb.WriteString(fmt.Sprintf("- %s [%s/%s%s]: %s\n  %s\n", s.Name, s.State, s.Source, pin, emptyDefault(s.Description, "(no description)"), s.Path))
+		writable := "read-only"
+		if s.Writable {
+			writable = "writable"
+		}
+		sb.WriteString(fmt.Sprintf("- %s [%s/%s/%s/%s%s]: %s\n  %s\n", s.Name, s.State, s.Scope, s.Source, writable, pin, emptyDefault(s.Description, "(no description)"), s.Path))
 	}
 	return sb.String()
 }

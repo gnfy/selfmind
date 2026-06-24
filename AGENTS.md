@@ -215,36 +215,54 @@ repo:
 - Tool calling should stay Hermes-like: pass tool schemas as native LLM
   `tool_calls` where the provider supports it, preserve `tool_call_id` on
   tool result messages, and keep `[TOOL:...]` only as a compatibility fallback.
-- Tool exposure should be planned per turn, not left entirely to the model.
-  Stable coding examples, explanations, and learning/advice requests should not
-  expose `web_search`/`web_extract` unless the user explicitly asks to search,
-  browse, inspect a URL, check official docs, or retrieve current/latest
-  external information.
-- Per-turn tool policy is centralized in `internal/kernel/task_strategy.go`.
-  Future agent work should extend `TaskStrategy` classification, `ToolMode`,
-  `PlanPolicy`, and `WebPolicy` there instead of adding ad hoc keyword checks
-  in CLI, IM, provider adapters, or prompt-building code. The same strategy
-  must filter native tool schemas and legacy `[TOOL:...]` fallback calls before
-  execution.
+- SelfMind is strict agent-first. Except for explicit internal slash commands
+  such as `/help`, `/model`, `/status`, `/tasks`, `/events`, `/approvals`,
+  `/approve`, `/reject`, `/stop`, `/new`, `/resume`, `/workspace`, and
+  `/workspaces`, ordinary natural-language input from CLI, IM, HTTP, or future
+  clients must reach the agent. Do not add pre-agent direct-answer routers for
+  greetings, identity/model questions, "simple" code snippets, explanations, or
+  advice requests.
+- Codex-style continuation is part of the contract. If the assistant proposed a
+  plan and the user replies with a short acceptance or continuation such as
+  `ok`, `yes`, `go ahead`, `continue`, `可以`, `好的`, or `继续`, keep the
+  message in the same task/conversation context and let the agent continue the
+  previously proposed work. If there is no resumable task, route the message to
+  the agent as normal input instead of dropping it into a hardcoded reply.
+- Tool exposure is a guardrail, not a classifier. Per-turn policy is
+  centralized in `internal/kernel/task_strategy.go`; it may hide externally
+  scoped tools such as `web_search`/`web_extract` unless the user explicitly
+  asks to search, browse, inspect a URL, check official docs, or retrieve
+  current/latest external information. It must not decide that natural language
+  is "just chat" and bypass the agent.
+- `TaskStrategy` should stay coarse: channel mode, plan policy, web policy, and
+  safety limits. Avoid keyword-heavy task taxonomies. If a new product-level
+  policy is required, add it here as an agent guardrail and cover it with tests
+  before changing gateway behavior.
 - Gateway intent routing is centralized in `internal/gateway/router/intent*.go`
-  and returns `router.IntentResult`. Keep rule-based cues configurable through
-  `intent.rules` in `config.yaml`; use `intent.mode: rules|hybrid|llm` to
-  control whether the lightweight LLM classifier participates. Do not add new
-  task/chat/continue keyword checks in TUI, IM adapters, or HTTP handlers.
-- Low-confidence intent should ask a short clarification question instead of
-  silently creating a task or dropping the message into casual chat. This is
-  especially important for IM/SaaS usage, where an accidental task can pollute a
-  shared person/task timeline.
+  and returns `router.IntentResult`. `intent.rules` are only for explicit
+  routing commands, skill/query/search commands, and high-confidence resume
+  cues. `intent.mode: rules|hybrid|llm` must not let a lightweight intent model
+  override ordinary user messages into a direct/casual path.
+- Program-level model status belongs behind `/model`. Natural-language
+  questions such as "who are you", "what model are you", or their non-English
+  equivalents must go through the agent, which can answer from active runtime
+  context.
 - The gateway must build `TaskStrategy` from the original user content before
-  adding daemon, workspace, attachment, task, or resume context. Pass it to the
-  agent with `kernel.WithTaskStrategy`; otherwise simple coding examples can be
-  misclassified as repo tasks just because the gateway prompt contains
-  `workspace_root` or `task_id`.
-- Use `update_plan` only when the selected `TaskStrategy.PlanPolicy` permits
-  it. Simple identity/model questions, one-shot code snippets, examples, and
-  stable explanations should answer directly. Repo inspection, debugging,
-  CI/CD, multi-file edits, and long verification tasks should expose local
-  tools and visible progress; debugging and CI/CD should require a plan.
+  adding daemon, workspace, attachment, task, or resume context, then pass it to
+  the agent with `kernel.WithTaskStrategy`. This prevents resume/workspace
+  metadata from becoming hidden routing keywords.
+- `update_plan` is optional and model-decided unless a specific strategy marks
+  it required. Do not runtime-ban planning for snippets or explanations; instead
+  prompt the model to use plans only when the work genuinely needs multiple
+  visible steps. Repo inspection, debugging, CI/CD, multi-file edits, runnable
+  artifact creation, and long verification tasks should expose local tools and
+  visible progress.
+- For ambiguous CLI requests that may produce a file or runnable artifact
+  (`write a JS game`, `make a small tool`, `create a page`), prefer a cheap
+  read-only workspace probe before deciding whether to answer inline, create a
+  standalone artifact, or ask a clarification. For IM channels, ask the user to
+  bind/select a workspace before writing or running commands when no active
+  workspace is clear.
 - Long-running agent work must emit structured progress events. Use
   `agent.thinking` for model-decision phases, `tool.started`/`tool.output`/
   `tool.completed` for tool execution, and `turn.completed` for final state.
@@ -273,6 +291,24 @@ repo:
 - Keep skill handling layered and progressive: `skills_list` is for metadata,
   `skill_view` reads content, `skill_manage` mutates skills, `skill_catalog`
   installs/audits skills, and `skill_bundle` manages grouped workflows.
+- Skill discovery must flow through the shared skill service. Search visible
+  roots in priority order: workspace `.selfmind/skills`, workspace
+  `.agents/skills` for Codex compatibility, workspace `skills/`, optional
+  environment roots, then the user root `~/.selfmind/<tenant>/skills`.
+  Workspace roots may be read-only; mutation tools must refuse writes to
+  read-only roots with a clear error instead of silently copying or replacing.
+- Skills are instruction assets, not auto-executed shell tools. Dynamic
+  `skill:<name>` registrations are compatibility shims only; slash invocation
+  and `skill_view` are the supported ways to load a skill into model context.
+  Scripts or commands mentioned by a skill must still be run explicitly through
+  normal tools and safety checks.
+- Enable/disable is tenant-scoped lifecycle metadata. Disabling a skill must
+  not mutate read-only workspace or external roots; it should make slash and
+  bundle invocation skip the skill until it is enabled again.
+- Skill injection must stay bounded and UTF-8 safe. Metadata should be compact,
+  full `SKILL.md` content is loaded only on explicit invocation/view, and large
+  skill bodies must be truncated with an explicit note rather than corrupting
+  output or exhausting the turn context.
 - Skill mutations should hot-reload the active registry when possible. Direct
   slash invocation must resolve bundles before individual skills.
 - Curator automation should only govern `agent-created` skills by default.
@@ -329,6 +365,8 @@ repo:
 - `internal/kernel/llm/model_gateway.go`: role-based model routing.
 - `docs/provider-runtime.md` and `docs/provider-runtime.zh-CN.md`: mandatory
   provider integration rules and checklist for future model vendors.
+- `docs/skills-architecture.md`: mandatory skill root, scope, invocation,
+  context-budget, and governance contract.
 - `internal/kernel/llm/anthropic_adapter.go`: Anthropic Messages adapter.
 - `internal/kernel/llm/adapters.go`: OpenAI-compatible, OpenRouter, MiniMax
   legacy, and generic OpenAI-compatible adapters.
@@ -339,6 +377,8 @@ repo:
 - `internal/tools/session_search.go`: tenant-aware history search.
 - `internal/tools/skill_runtime.go`: progressive skill list/view helpers,
   runtime reload, and direct slash invocation payloads.
+- `internal/tools/skill_service.go`: shared skill root discovery, scope,
+  precedence, and writable/read-only boundary helpers.
 - `internal/tools/skill_bundles.go`: YAML skill bundles for grouped workflow
   invocation.
 - `internal/tools/skill_catalog.go`: official/local/URL/GitHub skill install

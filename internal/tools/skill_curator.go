@@ -68,6 +68,10 @@ func RunCuratorForTenantWithOptions(tenantID string, opts CuratorOptions) (strin
 	var lines []string
 
 	for _, s := range skills {
+		if s.State == SkillStateDisabled {
+			skippedCount++
+			continue
+		}
 		if s.Source != SkillSourceAgentCreated {
 			skippedCount++
 			continue
@@ -145,7 +149,12 @@ func RestoreSkillForTenant(tenantID, name string) (string, error) {
 	}
 	usage, _ := loadSkillUsageForDir(dir)
 	archiveDir := filepath.Join(dir, ".archive")
-	archived, err := listArchivedSkills(archiveDir, usage)
+	archived, err := listArchivedSkills(archiveDir, usage, SkillRoot{
+		Path:     dir,
+		Scope:    SkillScopeUser,
+		Source:   SkillSourceManual,
+		Writable: true,
+	})
 	if err != nil {
 		return "", err
 	}

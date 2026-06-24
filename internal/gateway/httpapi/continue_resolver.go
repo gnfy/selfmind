@@ -19,32 +19,11 @@ func (d *Server) classifyIntent(ctx context.Context, input, channel string) rout
 }
 
 func (d *Server) tryHandleIntentClarification(identity *control.IdentityContext, intent router.IntentResult) (bool, api.MessageResponse) {
-	if identity == nil || !intent.NeedsClarification {
-		return false, api.MessageResponse{}
-	}
-	question := strings.TrimSpace(intent.ClarifyingQuestion)
-	if question == "" {
-		question = "\u6211\u4e0d\u592a\u786e\u5b9a\u8fd9\u662f\u95f2\u804a\u8fd8\u662f\u4e00\u4e2a\u8981\u5904\u7406\u7684\u4efb\u52a1\u3002\u4f60\u5e0c\u671b\u6211\u76f4\u63a5\u56de\u7b54\uff0c\u8fd8\u662f\u5f00\u59cb\u4e00\u4e2a\u4efb\u52a1\uff1f"
-	}
-	return true, api.MessageResponse{Identity: identity, Content: question}
+	return false, api.MessageResponse{}
 }
 
 func (d *Server) tryHandleDirectIntent(ctx context.Context, identity *control.IdentityContext, req api.MessageRequest, intent router.IntentResult) (bool, api.MessageResponse) {
-	if identity == nil || intent.ShouldCreateTask || intent.Intent != router.IntentCasual || intent.ShouldUseTools || intent.Confidence < 0.8 {
-		return false, api.MessageResponse{}
-	}
-	if d == nil || d.Gateway == nil {
-		return true, api.MessageResponse{Identity: identity, Content: "SelfMind is running, but the model gateway is not configured."}
-	}
-	resp, err := d.Gateway.Handle(ctx, identity.PersonID, req.Channel, req.Content)
-	if err != nil {
-		return true, api.MessageResponse{Identity: identity, Error: err.Error()}
-	}
-	content, usage, err := aggregateDirectResponse(resp)
-	if err != nil {
-		return true, api.MessageResponse{Identity: identity, Error: err.Error()}
-	}
-	return true, api.MessageResponse{Identity: identity, Content: content, Usage: usage}
+	return false, api.MessageResponse{}
 }
 
 func aggregateDirectResponse(resp *router.HandleResponse) (string, llm.UsageStats, error) {
@@ -80,6 +59,20 @@ func (d *Server) resolveContinueTask(ctx context.Context, identity *control.Iden
 func terminalTaskStatus(status string) bool {
 	switch strings.ToLower(strings.TrimSpace(status)) {
 	case "done", "completed", "cancelled", "failed":
+		return true
+	default:
+		return false
+	}
+}
+
+func looksLikeAffirmativeContinuation(input string) bool {
+	clean := strings.ToLower(strings.TrimSpace(input))
+	clean = strings.Trim(clean, " \t\r\n.!?,;:。！？；：，")
+	switch clean {
+	case "ok", "okay", "yes", "y", "sure", "go ahead", "proceed", "sounds good",
+		"\u53ef\u4ee5", "\u597d", "\u597d\u7684", "\u884c", "\u6ca1\u95ee\u9898",
+		"\u540c\u610f", "\u5f00\u59cb", "\u5f00\u59cb\u5427", "\u6309\u8fd9\u4e2a\u505a",
+		"\u5c31\u8fd9\u6837", "\u90a3\u5c31\u8fd9\u6837":
 		return true
 	default:
 		return false

@@ -2,7 +2,6 @@ package app
 
 import (
 	"os"
-	"path/filepath"
 
 	"selfmind/internal/kernel"
 	"selfmind/internal/kernel/memory"
@@ -49,11 +48,7 @@ func InitTools(mem *memory.MemoryManager, cfg *config.Config, ag *kernel.Agent, 
 		tools.GetProcessRegistryForTenant(tenantID).Init(mem, tenantID)
 	}
 
-	home, _ := os.UserHomeDir()
-	baseSkillsDir := filepath.Join(home, ".selfmind")
-	skillsDir := tools.SkillsDirForTenant(baseSkillsDir, tenantID)
-	skillLoader := tools.NewSkillLoader(skillsDir, registry)
-	skillLoader.LoadAll()
+	_, _ = tools.ReloadSkillToolsForTenant(tenantID, registry)
 
 	disp.InjectDelegateFn(MakeDelegateFn(mem, disp, cfg.Delegation))
 	disp.InjectDelegateBatchFn(MakeDelegateBatchFn(mem, disp, cfg.Delegation))

@@ -85,30 +85,16 @@ func (s *EventSummary) Observe(event llm.StreamEvent) {
 
 func (s EventSummary) WithContent(content string) string {
 	content = strings.TrimSpace(content)
-	if len(s.toolFailures) == 0 {
+	if content != "" {
 		return content
 	}
-	var b strings.Builder
-	if content != "" {
-		b.WriteString(content)
-		b.WriteString("\n\n")
+	if len(s.toolFailures) > 0 {
+		return "SelfMind encountered a tool error before producing a final response. Review the tool events above, then retry or ask me to continue."
 	}
-	b.WriteString("Process summary:")
-	if len(s.phases) > 0 {
-		b.WriteString("\n- Phases: ")
-		b.WriteString(strings.Join(s.phases, "; "))
+	if len(s.phases) > 0 || len(s.toolsStarted) > 0 || len(s.lastOutputs) > 0 {
+		return "SelfMind finished this turn without producing a final response. Please retry or ask me to continue."
 	}
-	if len(s.toolsStarted) > 0 {
-		b.WriteString("\n- Tools tried: ")
-		b.WriteString(strings.Join(s.toolsStarted, "; "))
-	}
-	b.WriteString("\n- Problems: ")
-	b.WriteString(strings.Join(s.toolFailures, "; "))
-	if len(s.lastOutputs) > 0 {
-		b.WriteString("\n- Recent output: ")
-		b.WriteString(strings.Join(s.lastOutputs, "; "))
-	}
-	return b.String()
+	return ""
 }
 
 func appendLimited(items []string, item string, limit int) []string {

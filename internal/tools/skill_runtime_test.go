@@ -54,6 +54,123 @@ func TestSkillRuntimeListViewReloadAndSlashInvocation(t *testing.T) {
 	}
 }
 
+func TestSkillRootsIncludeWorkspaceAndCodexCompatibleDirs(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	workspace := t.TempDir()
+	t.Chdir(workspace)
+
+	workspaceSkillDir := filepath.Join(workspace, ".selfmind", "skills", "workspace-flow")
+	if err := os.MkdirAll(workspaceSkillDir, 0755); err != nil {
+		t.Fatalf("create workspace skill dir: %v", err)
+	}
+	if err := atomicWriteFile(filepath.Join(workspaceSkillDir, "SKILL.md"), ensureFrontMatter("Workspace body", "workspace-flow", "workspace skill")); err != nil {
+		t.Fatalf("write workspace skill: %v", err)
+	}
+	codexSkillDir := filepath.Join(workspace, ".agents", "skills", "codex-flow")
+	if err := os.MkdirAll(codexSkillDir, 0755); err != nil {
+		t.Fatalf("create codex-compatible skill dir: %v", err)
+	}
+	if err := atomicWriteFile(filepath.Join(codexSkillDir, "SKILL.md"), ensureFrontMatter("Codex body", "codex-flow", "codex-compatible skill")); err != nil {
+		t.Fatalf("write codex-compatible skill: %v", err)
+	}
+
+	skills, err := ListSkillsForTenant("default", false)
+	if err != nil {
+		t.Fatalf("list skills: %v", err)
+	}
+	var foundWorkspace, foundCodex bool
+	for _, skill := range skills {
+		switch skill.Name {
+		case "workspace-flow":
+			foundWorkspace = true
+			if skill.Scope != SkillScopeWorkspace || !skill.Writable {
+				t.Fatalf("unexpected workspace skill metadata: %+v", skill)
+			}
+		case "codex-flow":
+			foundCodex = true
+			if skill.Scope != SkillScopeWorkspace || skill.Writable {
+				t.Fatalf("unexpected codex-compatible skill metadata: %+v", skill)
+			}
+		}
+	}
+	if !foundWorkspace || !foundCodex {
+		t.Fatalf("expected workspace and codex-compatible skills, got: %+v", skills)
+	}
+}
+
+func TestReadOnlySkillCannotBeMutated(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	workspace := t.TempDir()
+	t.Chdir(workspace)
+	codexSkillDir := filepath.Join(workspace, ".agents", "skills", "readonly-flow")
+	if err := os.MkdirAll(codexSkillDir, 0755); err != nil {
+		t.Fatalf("create readonly skill dir: %v", err)
+	}
+	if err := atomicWriteFile(filepath.Join(codexSkillDir, "SKILL.md"), ensureFrontMatter("Do not mutate", "readonly-flow", "readonly skill")); err != nil {
+		t.Fatalf("write readonly skill: %v", err)
+	}
+
+	tool := NewSkillManageTool()
+	_, err := tool.Execute(map[string]interface{}{
+		"action":   "patch",
+		"name":     "readonly-flow",
+		"old_text": "Do not mutate",
+		"new_text": "Mutated",
+	})
+	if err == nil || !strings.Contains(err.Error(), "read-only") {
+		t.Fatalf("patching read-only skill should fail clearly, got: %v", err)
+	}
+}
+
+func TestDynamicSkillToolIsInstructionOnly(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	registry := NewRegistry()
+	disp := NewDispatcherWithRegistry(registry)
+	disp.RegisterTool(NewSkillManageTool())
+
+	_, err := disp.Dispatch("skill_manage", map[string]interface{}{
+		"action":  "create",
+		"name":    "exec-flow",
+		"content": "```bash\necho should-not-run\n```",
+	})
+	if err != nil {
+		t.Fatalf("create skill: %v", err)
+	}
+	out, err := registry.Dispatch("skill:exec-flow", map[string]interface{}{})
+	if err != nil {
+		t.Fatalf("dispatch dynamic skill: %v", err)
+	}
+	if !strings.Contains(out, "instruction-only") || strings.Contains(out, "should-not-run") {
+		t.Fatalf("dynamic skill tool should not execute or echo skill code blocks, got:\n%s", out)
+	}
+}
+
+func TestSkillDisableSkipsSlashInvocation(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	createTestSkill(t, "default", "toggle-flow", "Toggle body.")
+
+	tool := NewSkillManageTool()
+	if _, err := tool.Execute(map[string]interface{}{"action": "disable", "name": "toggle-flow"}); err != nil {
+		t.Fatalf("disable skill: %v", err)
+	}
+	list, err := SkillsListJSONForTenant("default", "", false)
+	if err != nil {
+		t.Fatalf("list skills: %v", err)
+	}
+	if !strings.Contains(list, `"state": "disabled"`) {
+		t.Fatalf("disabled skill should remain visible in list:\n%s", list)
+	}
+	if _, _, ok, err := ResolveSkillInvocationForTenant("default", "/toggle-flow", ""); ok || err != nil {
+		t.Fatalf("disabled skill should not resolve slash invocation, ok=%v err=%v", ok, err)
+	}
+	if _, err := tool.Execute(map[string]interface{}{"action": "enable", "name": "toggle-flow"}); err != nil {
+		t.Fatalf("enable skill: %v", err)
+	}
+	if _, _, ok, err := ResolveSkillInvocationForTenant("default", "/toggle-flow", ""); !ok || err != nil {
+		t.Fatalf("enabled skill should resolve slash invocation, ok=%v err=%v", ok, err)
+	}
+}
+
 func TestSkillBundleInvocation(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	createTestSkill(t, "default", "inspect-flow", "Inspect first.")

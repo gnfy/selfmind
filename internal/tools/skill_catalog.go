@@ -169,6 +169,9 @@ func InstallSkillFromSource(tenantID, source, name string, force bool) (string, 
 		return "", err
 	}
 	skillDir := filepath.Join(dir, safeName)
+	if existing, err := findSkill(tenantID, safeName); err == nil && filepath.Clean(existing.Root) != filepath.Clean(dir) && !force {
+		return "", fmt.Errorf("skill %q already exists in %s root (%s); pass force only if you want the user skill root to shadow it", safeName, emptyDefault(existing.Scope, "unknown"), existing.Path)
+	}
 	collisions := existingSkillInstallCollisions(dir, safeName)
 	if len(collisions) > 0 && !force {
 		return "", formatInstallCollisionError(safeName, collisions)

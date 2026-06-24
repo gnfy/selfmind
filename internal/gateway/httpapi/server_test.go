@@ -456,7 +456,7 @@ func TestResolveTaskBindsEmptyCurrentTaskToCLIWorkspace(t *testing.T) {
 	}
 }
 
-func TestDirectCasualMessageDoesNotCreateTask(t *testing.T) {
+func TestModelCommandDoesNotCreateTask(t *testing.T) {
 	store, err := control.OpenStore(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -468,12 +468,12 @@ func TestDirectCasualMessageDoesNotCreateTask(t *testing.T) {
 		Platform:       "cli",
 		PlatformUserID: "local",
 		Channel:        "cli",
-		Content:        "\u4f60\u662f\u8c01\uff1f",
+		Content:        "/model",
 	})
 	if status != http.StatusOK {
 		t.Fatalf("status = %d, resp = %+v", status, resp)
 	}
-	if resp.Error != "" || !strings.Contains(resp.Content, "SelfMind") {
+	if resp.Error != "" || !strings.Contains(resp.Content, "model gateway is not configured") {
 		t.Fatalf("resp = %+v", resp)
 	}
 	current, err := store.CurrentTask(httptest.NewRequest(http.MethodGet, "/", nil).Context(), "default", resp.Identity.PersonID)
@@ -481,7 +481,7 @@ func TestDirectCasualMessageDoesNotCreateTask(t *testing.T) {
 		t.Fatal(err)
 	}
 	if current != nil {
-		t.Fatalf("casual message created task: %+v", current)
+		t.Fatalf("/model command created task: %+v", current)
 	}
 }
 

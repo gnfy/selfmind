@@ -43,7 +43,7 @@ type responsesInputItem struct {
 	CallID    string      `json:"call_id,omitempty"`
 	Name      string      `json:"name,omitempty"`
 	Arguments string      `json:"arguments,omitempty"`
-	Output    string      `json:"output,omitempty"`
+	Output    *string     `json:"output,omitempty"`
 }
 
 type responsesResponse struct {
@@ -288,10 +288,11 @@ func (a *ResponsesAdapter) requestFromChat(req ChatRequest, stream bool) respons
 	wire := responsesRequest{Model: model, Stream: stream, Store: a.Store}
 	for _, m := range req.Messages {
 		if m.Role == "tool" {
+			output := contentString(openAIContentFromMessage(m))
 			wire.Input = append(wire.Input, responsesInputItem{
 				Type:   "function_call_output",
 				CallID: m.ToolCallID,
-				Output: contentString(openAIContentFromMessage(m)),
+				Output: &output,
 			})
 			continue
 		}

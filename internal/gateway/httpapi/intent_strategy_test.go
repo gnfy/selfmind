@@ -8,10 +8,10 @@ import (
 	"selfmind/internal/kernel"
 )
 
-func TestTaskStrategyForRequestUsesOriginalContent(t *testing.T) {
+func TestTaskStrategyForRequestIsAgentFirst(t *testing.T) {
 	req := api.MessageRequest{
 		Channel: "cli",
-		Content: "\u7528PHP\u5b9e\u73b0\u4e00\u4e2apgsql\u7684\u64cd\u4f5c\u793a\u4f8b",
+		Content: "write a PHP pgsql operation example",
 	}
 	intent := router.IntentResult{
 		Intent:           router.IntentTask,
@@ -22,11 +22,14 @@ func TestTaskStrategyForRequestUsesOriginalContent(t *testing.T) {
 	}
 
 	strategy := taskStrategyForRequest(req, intent)
-	if strategy.Class != kernel.TaskClassCodingExample {
-		t.Fatalf("class = %s, want %s", strategy.Class, kernel.TaskClassCodingExample)
+	if strategy.Class != kernel.TaskClassGeneralTask {
+		t.Fatalf("class = %s, want %s", strategy.Class, kernel.TaskClassGeneralTask)
 	}
-	if strategy.AllowsTool("update_plan") || strategy.AllowsTool("read_file") {
-		t.Fatalf("simple coding example should stay direct despite gateway task context: %+v", strategy)
+	if !strategy.AllowsTool("read_file") || !strategy.AllowsTool("write_file") || !strategy.AllowsTool("update_plan") {
+		t.Fatalf("agent-first request should keep local tools and optional plan available: %+v", strategy)
+	}
+	if strategy.AllowsTool("web_search") {
+		t.Fatalf("web should stay hidden without an explicit lookup request: %+v", strategy)
 	}
 }
 
@@ -46,5 +49,8 @@ func TestTaskStrategyForContinueKeepsToolsAvailable(t *testing.T) {
 	}
 	if !strategy.AllowsTool("update_plan") || !strategy.AllowsTool("read_file") {
 		t.Fatalf("continue should expose task tools: %+v", strategy)
+	}
+	if strategy.AllowsTool("web_search") {
+		t.Fatalf("continue should not enable web unless the user asked for it: %+v", strategy)
 	}
 }

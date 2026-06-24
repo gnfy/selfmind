@@ -72,10 +72,6 @@ type HandleResponse struct {
 }
 
 func (g *Gateway) Handle(ctx context.Context, unifiedUID, channel, input string) (*HandleResponse, error) {
-	if isModelStatusQuestion(input) {
-		return &HandleResponse{Content: g.modelStatusReply(), Intent: IntentCasual, IntentReason: "model status question"}, nil
-	}
-
 	result := g.ClassifyIntent(input)
 	intent, reason := result.Intent, result.Reason
 	switch intent {
@@ -88,16 +84,10 @@ func (g *Gateway) Handle(ctx context.Context, unifiedUID, channel, input string)
 	case IntentRoute:
 		content, usage, err := g.handleRoute(ctx, unifiedUID, channel, input)
 		return &HandleResponse{Content: content, Usage: usage, Intent: intent, IntentReason: reason}, err
-	case IntentCasual:
-		if IsCasualShortQuestion(input) {
-			content, usage, err := g.handleCasual(ctx, unifiedUID, channel, input)
-			return &HandleResponse{Content: content, Usage: usage, Intent: intent, IntentReason: reason}, err
-		}
-		return g.handleTaskStreaming(ctx, unifiedUID, channel, input, intent, reason)
-	case IntentContinue, IntentTask:
+	case IntentContinue, IntentTask, IntentCasual:
 		return g.handleTaskStreaming(ctx, unifiedUID, channel, input, intent, reason)
 	default:
-		return &HandleResponse{Content: "I could not understand the message route."}, nil
+		return g.handleTaskStreaming(ctx, unifiedUID, channel, input, IntentTask, "agent-first fallback")
 	}
 }
 
@@ -196,12 +186,13 @@ func isModelStatusQuestion(input string) bool {
 	if cleaned == "" {
 		return false
 	}
-	if !containsAnyNormalized(cleaned, []string{"模型", "大模型", "后端", "model", "llm"}) {
+	if !containsAnyNormalized(cleaned, []string{"model", "llm", "\u6a21\u578b", "\u5927\u6a21\u578b", "\u540e\u7aef"}) {
 		return false
 	}
 	return containsAnyNormalized(cleaned, []string{
-		"什么", "哪个", "哪一个", "当前", "现在", "目前", "正在用", "用的", "使用的", "连接的", "跑的",
 		"what", "which", "current", "using", "running", "active",
+		"\u4ec0\u4e48", "\u54ea\u4e2a", "\u54ea\u4e00\u4e2a", "\u5f53\u524d", "\u73b0\u5728", "\u76ee\u524d",
+		"\u6b63\u5728\u7528", "\u7528\u7684", "\u4f7f\u7528\u7684", "\u8fde\u63a5\u7684", "\u8dd1\u7684",
 	})
 }
 
@@ -214,16 +205,16 @@ func normalizeQuestionText(input string) string {
 		"\n", "",
 		"\r", "",
 		"?", "",
-		"？", "",
+		"\uff1f", "",
 		"!", "",
-		"！", "",
-		"。", "",
+		"\uff01", "",
+		"\u3002", "",
 		".", "",
-		"，", "",
+		"\uff0e", "",
 		",", "",
-		"：", "",
+		"\uff0c", "",
 		":", "",
-		"；", "",
+		"\uff1a", "",
 		";", "",
 	)
 	return replacer.Replace(input)
@@ -242,11 +233,18 @@ func (g *Gateway) modelStatusReply() string {
 	return modelStatusReplyText(g.modelDisplayLabel())
 }
 
+func (g *Gateway) ModelStatusReply() string {
+	if g == nil {
+		return modelStatusReplyText("")
+	}
+	return g.modelStatusReply()
+}
+
 func modelStatusReplyText(label string) string {
 	if strings.TrimSpace(label) == "" {
-		return "我是 SelfMind，目前没有解析到可用的 AI 模型配置。请运行 selfmind model check 查看原因。"
+		return "I am SelfMind. No usable AI model configuration was resolved. Run `selfmind model check` to inspect the problem."
 	}
-	return fmt.Sprintf("我是 SelfMind，当前连接的模型是 %s。", label)
+	return fmt.Sprintf("I am SelfMind. The current model is %s.", label)
 }
 
 func (g *Gateway) modelDisplayLabel() string {
@@ -268,31 +266,31 @@ func (g *Gateway) casualReply(input string) string {
 	if reply, ok := g.directCasualReply(input); ok {
 		return reply
 	}
-	return "嗯，我明白了。需要我处理开发任务、检查代码、运行工具或继续某个任务时，直接告诉我。"
+	return "I understand. Tell me what you want me to inspect, change, test, or continue."
 }
 
 func (g *Gateway) directCasualReply(input string) (string, bool) {
 	switch normalizeQuestionText(input) {
-	case "你好", "您好", "hi", "hello", "嗨", "hey":
-		return "你好！我是 SelfMind，可以帮你处理开发任务、检查代码、运行工具和跨端协同。", true
-	case "你是谁", "你叫什么", "你是干嘛的", "whoareyou", "whatareyou":
-		reply := "我是 SelfMind，一个面向开发任务和多端协同的 AI 工作助手。"
+	case "\u4f60\u597d", "\u60a8\u597d", "hi", "hello", "\u55e8", "hey":
+		return "Hello, I am SelfMind. I can help with development tasks, code inspection, tool execution, and multi-device collaboration.", true
+	case "\u4f60\u662f\u8c01", "\u4f60\u53eb\u4ec0\u4e48", "\u4f60\u662f\u5e72\u561b\u7684", "whoareyou", "whatareyou":
+		reply := "I am SelfMind, an AI work assistant for development tasks and multi-device collaboration."
 		if label := g.modelDisplayLabel(); label != "" {
-			reply += " 当前连接的模型是 " + label + "。"
+			reply += " The current model is " + label + "."
 		}
 		return reply, true
-	case "谢谢", "多谢", "谢了", "thanks", "thankyou":
-		return "不客气，需要继续处理任务时直接叫我。", true
-	case "再见", "拜拜", "bye", "晚安":
-		return "再见，需要时再回来找我。", true
+	case "\u8c22\u8c22", "\u591a\u8c22", "\u8c22\u4e86", "thanks", "thankyou":
+		return "You're welcome. Tell me directly when you want to continue a task.", true
+	case "\u518d\u89c1", "\u62dc\u62dc", "bye", "\u665a\u5b89":
+		return "Goodbye. Come back whenever you need help.", true
 	}
 	return "", false
 }
 
 func (g *Gateway) handleSkill(ctx context.Context, unifiedUID, channel, input string) (string, llm.UsageStats, error) {
-	skillName := trimKnownPrefix(input, []string{"/skill ", "/s ", "调用技能", "用技能", "执行技能", "运行技能"})
+	skillName := trimKnownPrefix(input, []string{"/skill ", "/s "})
 	if skillName == "" {
-		return "请指定要调用的技能。", llm.UsageStats{}, nil
+		return "Please specify the skill to run.", llm.UsageStats{}, nil
 	}
 	if g == nil || g.agent == nil || g.agent.Dispatcher() == nil {
 		return "", llm.UsageStats{}, fmt.Errorf("skill dispatcher is not configured")
@@ -305,7 +303,7 @@ func (g *Gateway) handleSkill(ctx context.Context, unifiedUID, channel, input st
 }
 
 func (g *Gateway) handleQuery(ctx context.Context, unifiedUID, channel, input string) (string, llm.UsageStats, error) {
-	query := trimKnownPrefix(input, []string{"/query ", "/search ", "查一下", "搜索 ", "查历史"})
+	query := trimKnownPrefix(input, []string{"/query ", "/search "})
 	if query == "" {
 		query = strings.TrimSpace(input)
 	}
@@ -321,7 +319,7 @@ func (g *Gateway) handleQuery(ctx context.Context, unifiedUID, channel, input st
 }
 
 func (g *Gateway) handleRoute(ctx context.Context, unifiedUID, channel, input string) (string, llm.UsageStats, error) {
-	return fmt.Sprintf("路由指令已收到：目前正在 %s 渠道为你服务。", channel), llm.UsageStats{}, nil
+	return fmt.Sprintf("Route command received. Current channel: %s.", channel), llm.UsageStats{}, nil
 }
 
 func trimKnownPrefix(input string, prefixes []string) string {
@@ -366,7 +364,8 @@ func taskResponseLooksComplete(response string) bool {
 		"not done", "not completed", "not finished", "remaining work", "still need",
 		"need to continue", "next steps", "todo:", "blocked",
 	}) || taskResponseContainsAny(trimmed, []string{
-		"未完成", "还没完成", "没有完成", "待完成", "需要继续", "阻塞",
+		"\u672a\u5b8c\u6210", "\u8fd8\u6ca1\u5b8c\u6210", "\u6ca1\u6709\u5b8c\u6210",
+		"\u5f85\u5b8c\u6210", "\u9700\u8981\u7ee7\u7eed", "\u963b\u585e",
 	}) {
 		return false
 	}
@@ -377,7 +376,8 @@ func taskResponseLooksComplete(response string) bool {
 		"task complete", "task completed", "completed successfully",
 		"finished successfully", "all done", "implementation complete", "tests pass",
 	}) || taskResponseContainsAny(trimmed, []string{
-		"已完成", "任务完成", "处理完成", "已处理完", "已经完成", "搞定",
+		"\u5df2\u5b8c\u6210", "\u4efb\u52a1\u5b8c\u6210", "\u5904\u7406\u5b8c\u6210",
+		"\u5df2\u5904\u7406\u5b8c", "\u5df2\u7ecf\u5b8c\u6210", "\u641e\u5b9a",
 	})
 }
 
@@ -392,7 +392,7 @@ func taskResponseContainsAny(value string, needles []string) bool {
 
 func extractTitle(input string) string {
 	title := strings.TrimSpace(input)
-	for _, prefix := range []string{"帮我", "请帮我", "我想", "请", "please"} {
+	for _, prefix := range []string{"please"} {
 		if strings.HasPrefix(strings.ToLower(title), strings.ToLower(prefix)) {
 			title = strings.TrimSpace(title[len(prefix):])
 			break

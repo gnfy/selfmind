@@ -105,10 +105,28 @@ func BuildTaskStrategy(prompt, channel string) TaskStrategy {
 
 	policy := DefaultTaskStrategy()
 	policy.ChannelMode = normalizeChannelMode(channel)
-	if wantsExternalLookupText(strings.ToLower(clean)) {
+	lower := strings.ToLower(clean)
+	if looksLikePureDirectAnswer(clean, lower) {
+		return TaskStrategy{
+			Class:                 TaskClassSimpleAnswer,
+			ToolMode:              ToolModeNone,
+			PlanPolicy:            PlanPolicyDisabled,
+			WebPolicy:             WebPolicyDisabled,
+			AllowedTools:          map[string]bool{},
+			HiddenTools:           hiddenToolsFor(PlanPolicyDisabled, WebPolicyDisabled),
+			MaxIterations:         2,
+			RequireProgressEvents: false,
+			ChannelMode:           normalizeChannelMode(channel),
+			Reason:                "pure direct-answer turn; no workspace, external, or tool state requested",
+		}
+	}
+	if wantsExternalLookupText(lower) {
 		policy.Class = TaskClassExternalLookup
 		policy.WebPolicy = WebPolicyEnabled
 		policy.Reason = "agent-first turn with explicit external lookup"
+	} else if looksLikeCodingExample(lower) {
+		policy.Class = TaskClassCodingExample
+		policy.Reason = "agent-first coding example; prefer direct answer unless workspace state is needed"
 	} else {
 		policy.Class = TaskClassGeneralTask
 		policy.WebPolicy = WebPolicyDisabled
@@ -225,6 +243,51 @@ func wantsExternalLookupText(lower string) bool {
 		"\u67e5\u4e00\u4e0b", "\u67e5\u8be2", "\u67e5\u627e", "\u627e\u4e00\u4e0b",
 		"\u5b98\u7f51", "\u5b98\u65b9\u6587\u6863", "\u6700\u65b0", "\u65b0\u95fb",
 		"\u4ef7\u683c", "\u62a5\u4ef7", "\u53d1\u5e03\u8bf4\u660e", "\u5f53\u524d\u7248\u672c",
+	})
+}
+
+func looksLikePureDirectAnswer(clean, lower string) bool {
+	if clean == "" {
+		return false
+	}
+	runes := []rune(clean)
+	if len(runes) > 80 {
+		return false
+	}
+	if containsMarker(lower, []string{
+		"who are you", "what are you", "what model", "which model",
+		"your model", "current model", "configured model",
+		"\u4f60\u662f\u8c01", "\u4f60\u662f\u4ec0\u4e48", "\u4ec0\u4e48\u6a21\u578b",
+		"\u54ea\u4e2a\u6a21\u578b", "\u5f53\u524d\u6a21\u578b", "\u8fde\u63a5\u7684\u6a21\u578b",
+		"\u4f60\u7528\u7684\u662f\u4ec0\u4e48\u6a21\u578b", "\u4f60\u662f\u4ec0\u4e48\u5927\u6a21\u578b",
+	}) {
+		return !containsMarker(lower, []string{
+			"\u4ee3\u7801", "code", "\u6587\u4ef6", "file", "\u9879\u76ee", "repo",
+			"\u4ed3\u5e93", "\u76ee\u5f55", "\u5b9e\u73b0", "create", "write",
+			"\u751f\u6210", "\u5206\u6790", "inspect", "run",
+		})
+	}
+	return false
+}
+
+func looksLikeCodingExample(lower string) bool {
+	if lower == "" {
+		return false
+	}
+	if !containsMarker(lower, []string{
+		"go", "golang", "rust", "php", "python", "javascript", "js", "typescript", "ts",
+		"java", "c++", "pgsql", "postgres", "sql",
+		"\u4e8c\u5206", "\u793a\u4f8b", "\u4f8b\u5b50", "\u4ee3\u7801",
+		"\u51fd\u6570", "\u5b9e\u73b0", "\u5199\u4e00\u4e2a",
+		"example", "snippet", "function", "implement",
+	}) {
+		return false
+	}
+	return !containsMarker(lower, []string{
+		"\u5f53\u524d\u9879\u76ee", "\u5f53\u524d\u76ee\u5f55", "\u8fd9\u4e2a\u9879\u76ee",
+		"\u8fd9\u4e2a\u4ed3\u5e93", "\u8fd9\u4e2a\u4ee3\u7801", "\u4fee\u6539",
+		"\u521b\u5efa\u6587\u4ef6", "\u4fdd\u5b58", "\u8fd0\u884c", "\u6d4b\u8bd5",
+		"workspace", "repo", "codebase", "change file",
 	})
 }
 

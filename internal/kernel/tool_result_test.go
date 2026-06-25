@@ -41,6 +41,24 @@ func TestPackageToolResultSummarizesListFilesPreview(t *testing.T) {
 	}
 }
 
+func TestPackageToolResultSummarizesPatchPreview(t *testing.T) {
+	raw := `{"Success":true,"Diff":"","FilesModified":["/tmp/app.go"],"FilesCreated":["/tmp/new.go"],"FilesDeleted":["/tmp/old.go"]}`
+
+	env := packageToolResult("patch", raw)
+
+	if strings.Contains(env.Preview, `"Success"`) || strings.Contains(env.Preview, `"FilesModified"`) {
+		t.Fatalf("preview should not expose raw JSON: %q", env.Preview)
+	}
+	for _, want := range []string{"modified /tmp/app.go", "created /tmp/new.go", "deleted /tmp/old.go"} {
+		if !strings.Contains(env.Preview, want) {
+			t.Fatalf("preview %q missing %q", env.Preview, want)
+		}
+	}
+	if env.ModelContent != raw {
+		t.Fatalf("small raw JSON should still reach model unchanged")
+	}
+}
+
 func TestPackageToolErrorGuidesModelToDiagnose(t *testing.T) {
 	env := packageToolError("terminal", errTest("exit status 1"))
 

@@ -16,6 +16,7 @@ import (
 	"selfmind/internal/gateway/delivery"
 	"selfmind/internal/gateway/router"
 	"selfmind/internal/kernel"
+	"selfmind/internal/kernel/llm"
 	"selfmind/internal/platform/textutil"
 	"selfmind/internal/tools"
 )
@@ -96,19 +97,19 @@ func (d *Server) ProcessMessage(ctx context.Context, req api.MessageRequest) (ap
 	req.Channel = fallback(req.Channel, req.Platform)
 	req.Content = strings.TrimSpace(req.Content)
 	if req.Content == "" {
-		return api.MessageResponse{Error: "content is required"}, http.StatusBadRequest
+		return api.MessageResponse{Error: "content is required", Turn: messageTurn("failed", "", "", "", "", "content is required")}, http.StatusBadRequest
 	}
 
 	identity, err := d.Control.ResolveOrCreateAccount(ctx, req.TenantID, req.Platform, req.PlatformUserID, req.DisplayName)
 	if err != nil {
-		return api.MessageResponse{Error: err.Error()}, http.StatusInternalServerError
+		return api.MessageResponse{Error: err.Error(), Turn: messageTurn("failed", "", "", "", "", err.Error())}, http.StatusInternalServerError
 	}
 
 	if handled, content, err := d.tryHandleControlCommand(ctx, identity, req); handled {
 		if err != nil {
-			return api.MessageResponse{Identity: identity, Error: err.Error()}, http.StatusInternalServerError
+			return api.MessageResponse{Identity: identity, Error: err.Error(), Turn: messageTurn("failed", "", "", "", "", err.Error())}, http.StatusInternalServerError
 		}
-		return api.MessageResponse{Identity: identity, Content: content}, http.StatusOK
+		return api.MessageResponse{Identity: identity, Content: content, Turn: messageTurn("completed", "", "idle", "", "", "")}, http.StatusOK
 	}
 
 	if d.IsDraining() {
@@ -116,6 +117,7 @@ func (d *Server) ProcessMessage(ctx context.Context, req api.MessageRequest) (ap
 			Identity: identity,
 			Error:    "gateway is shutting down; try again after restart",
 			Accepted: false,
+			Turn:     messageTurn("failed", "", "draining", "", "", "gateway is shutting down"),
 		}, http.StatusServiceUnavailable
 	}
 
@@ -145,6 +147,7 @@ func (d *Server) ProcessMessage(ctx context.Context, req api.MessageRequest) (ap
 			Identity: identity,
 			Content:  formatBusyRun(running),
 			Accepted: false,
+			Turn:     messageTurn("busy", "running", "running", running.TaskID, running.RunID, running.Summary),
 		}, http.StatusOK
 	}
 
@@ -161,7 +164,7 @@ func (d *Server) ProcessMessage(ctx context.Context, req api.MessageRequest) (ap
 		StartedAt: time.Now(),
 		Cancel:    cancel,
 	}); !ok {
-		return api.MessageResponse{Identity: identity, Content: "Another task is already running. Use /status or /stop."}, http.StatusOK
+		return api.MessageResponse{Identity: identity, Content: "Another task is already running. Use /status or /stop.", Turn: messageTurn("busy", "running", "running", "", "", "")}, http.StatusOK
 	}
 	defer d.endActive(identity.PersonID)
 
@@ -232,22 +235,49 @@ func isLocalCLIRequest(req api.MessageRequest) bool {
 	return false
 }
 
+func messageTurn(status, taskStatus, backgroundStatus, taskID, runID, message string) *api.TurnStatus {
+	return &api.TurnStatus{
+		Status:           strings.TrimSpace(status),
+		TaskStatus:       strings.TrimSpace(taskStatus),
+		BackgroundStatus: strings.TrimSpace(backgroundStatus),
+		TaskID:           strings.TrimSpace(taskID),
+		RunID:            strings.TrimSpace(runID),
+		Message:          strings.TrimSpace(message),
+	}
+}
+
+func messageContextBudget(usage llm.UsageStats) *api.ContextBudgetInfo {
+	budget := kernel.DefaultRuntimeContextBudget()
+	return &api.ContextBudgetInfo{
+		TotalChars:            budget.TotalChars,
+		WorkspaceChars:        budget.WorkspaceChars,
+		TaskChars:             budget.TaskChars,
+		MemoryChars:           budget.MemoryChars,
+		EstimatedInputTokens:  usage.InputTokens,
+		EstimatedOutputTokens: usage.OutputTokens,
+	}
+}
+
+func llmUsageZero() llm.UsageStats {
+	return llm.UsageStats{}
+}
+
 func (d *Server) runMessage(ctx context.Context, identity *control.IdentityContext, req api.MessageRequest, intent router.IntentResult) (api.MessageResponse, int) {
 	if _, err := d.prepareRequestWorkspace(ctx, identity, &req); err != nil {
-		return api.MessageResponse{Identity: identity, Error: err.Error()}, http.StatusInternalServerError
+		return api.MessageResponse{Identity: identity, Error: err.Error(), Turn: messageTurn("failed", "", "idle", "", "", err.Error()), Context: messageContextBudget(llmUsageZero())}, http.StatusInternalServerError
 	}
 	task, err := d.resolveTask(ctx, identity, req, intent)
 	if err != nil {
 		if strings.Contains(err.Error(), "no task to continue") {
-			return api.MessageResponse{Identity: identity, Content: err.Error()}, http.StatusOK
+			return api.MessageResponse{Identity: identity, Content: err.Error(), Turn: messageTurn("failed", "", "idle", "", "", err.Error()), Context: messageContextBudget(llmUsageZero())}, http.StatusOK
 		}
-		return api.MessageResponse{Identity: identity, Error: err.Error()}, http.StatusInternalServerError
+		return api.MessageResponse{Identity: identity, Error: err.Error(), Turn: messageTurn("failed", "", "idle", "", "", err.Error()), Context: messageContextBudget(llmUsageZero())}, http.StatusInternalServerError
 	}
 	_ = d.Control.RecordChannelMessage(ctx, *identity, req.Channel, task.ID, "user", req.Content)
 
 	run, err := d.Control.StartRun(ctx, task, req.Channel, truncate(req.Content, 240))
 	if err != nil {
-		return api.MessageResponse{Identity: identity, Task: task, Error: err.Error()}, http.StatusInternalServerError
+		return api.MessageResponse{Identity: identity, Task: task, Error: err.Error(), Turn: messageTurn("failed", task.Status, "idle", task.ID, "", err.Error()), Context: messageContextBudget(llmUsageZero())}, http.StatusInternalServerError
 	}
 	stopHeartbeat := d.startRunHeartbeat(ctx, run)
 	defer stopHeartbeat()
@@ -279,7 +309,7 @@ func (d *Server) runMessage(ctx context.Context, identity *control.IdentityConte
 		err := fmt.Errorf("gateway is not configured")
 		_ = d.Control.FinishRun(context.Background(), identity.TenantID, run.ID, "failed")
 		_ = d.Control.UpdateTaskStatus(context.Background(), identity.TenantID, task.ID, "blocked", err.Error(), nil)
-		return api.MessageResponse{Identity: identity, Task: task, Run: run, Error: err.Error()}, http.StatusInternalServerError
+		return api.MessageResponse{Identity: identity, Task: task, Run: run, Error: err.Error(), Turn: messageTurn("failed", "blocked", "idle", task.ID, run.ID, err.Error()), Context: messageContextBudget(llmUsageZero())}, http.StatusInternalServerError
 	}
 
 	resp, err := d.Gateway.RunAgentWithEvents(ctx, identity.PersonID, req.Channel, agentInput)
@@ -292,7 +322,7 @@ func (d *Server) runMessage(ctx context.Context, identity *control.IdentityConte
 		}
 		_ = d.Control.FinishRun(context.Background(), identity.TenantID, run.ID, status)
 		_ = d.Control.UpdateTaskStatus(context.Background(), identity.TenantID, task.ID, taskStatus, err.Error(), nil)
-		return api.MessageResponse{Identity: identity, Task: task, Run: run, Error: err.Error()}, http.StatusOK
+		return api.MessageResponse{Identity: identity, Task: task, Run: run, Error: err.Error(), Turn: messageTurn(status, taskStatus, "idle", task.ID, run.ID, err.Error()), Context: messageContextBudget(llmUsageZero())}, http.StatusOK
 	}
 
 	content, usage, err := d.aggregateGatewayResponse(ctx, req.Channel, task, run, resp)
@@ -305,7 +335,7 @@ func (d *Server) runMessage(ctx context.Context, identity *control.IdentityConte
 		}
 		_ = d.Control.FinishRun(context.Background(), identity.TenantID, run.ID, status)
 		_ = d.Control.UpdateTaskStatus(context.Background(), identity.TenantID, task.ID, taskStatus, err.Error(), nil)
-		return api.MessageResponse{Identity: identity, Task: task, Run: run, Error: err.Error()}, http.StatusOK
+		return api.MessageResponse{Identity: identity, Task: task, Run: run, Error: err.Error(), Turn: messageTurn(status, taskStatus, "idle", task.ID, run.ID, err.Error()), Context: messageContextBudget(usage)}, http.StatusOK
 	}
 
 	outcome := buildRunOutcome(content)
@@ -336,8 +366,13 @@ func (d *Server) runMessage(ctx context.Context, identity *control.IdentityConte
 		Channel:    req.Channel,
 		Payload:    mustJSON(map[string]interface{}{"outcome": outcome, "usage": usage}),
 	})
+	taskID := task.ID
 	task, _ = d.Control.GetTask(ctx, identity.TenantID, task.ID)
-	return api.MessageResponse{Identity: identity, Task: task, Run: run, Outcome: &outcome, Content: content, Usage: usage}, http.StatusOK
+	taskStatus := outcome.Status
+	if task != nil && task.Status != "" {
+		taskStatus = task.Status
+	}
+	return api.MessageResponse{Identity: identity, Task: task, Run: run, Outcome: &outcome, Content: content, Usage: usage, Turn: messageTurn("completed", taskStatus, "idle", taskID, run.ID, outcome.Summary), Context: messageContextBudget(usage)}, http.StatusOK
 }
 
 func (d *Server) recordOutcomeArtifacts(ctx context.Context, task *control.Task, run *control.Run, channel string, files []string) {
@@ -423,7 +458,7 @@ func (d *Server) startAsyncRun(identity *control.IdentityContext, req api.Messag
 		StartedAt: time.Now(),
 	}
 	if ok := d.beginActive(identity.PersonID, active); !ok {
-		return api.MessageResponse{Identity: identity, Content: "Another task is already running. Use /status or /stop."}
+		return api.MessageResponse{Identity: identity, Content: "Another task is already running. Use /status or /stop.", Turn: messageTurn("busy", "running", "running", "", "", "")}
 	}
 
 	runCtx, runCancel := context.WithCancel(context.Background())
@@ -445,6 +480,7 @@ func (d *Server) startAsyncRun(identity *control.IdentityContext, req api.Messag
 		Identity: identity,
 		Content:  notice,
 		Accepted: true,
+		Turn:     messageTurn("accepted", "running", "running", "", "", notice),
 	}
 }
 

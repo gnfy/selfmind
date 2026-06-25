@@ -89,6 +89,10 @@ func toolResultPreview(name, raw string) string {
 		if summary := finishRunPreview(raw); summary != "" {
 			return summary
 		}
+	case "patch":
+		if summary := patchPreview(raw); summary != "" {
+			return summary
+		}
 	}
 	return firstNonEmptyLine(raw, toolResultPreviewBytes)
 }
@@ -188,6 +192,59 @@ func finishRunPreview(raw string) string {
 		return status
 	default:
 		return ""
+	}
+}
+
+func patchPreview(raw string) string {
+	var payload struct {
+		Success       bool     `json:"Success"`
+		FilesModified []string `json:"FilesModified"`
+		FilesCreated  []string `json:"FilesCreated"`
+		FilesDeleted  []string `json:"FilesDeleted"`
+		Error         string   `json:"Error"`
+	}
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		return ""
+	}
+	if strings.TrimSpace(payload.Error) != "" && !payload.Success {
+		return firstNonEmptyLine(payload.Error, toolResultPreviewBytes)
+	}
+	parts := make([]string, 0, 3)
+	if len(payload.FilesModified) > 0 {
+		parts = append(parts, fmt.Sprintf("modified %s", summarizePaths(payload.FilesModified)))
+	}
+	if len(payload.FilesCreated) > 0 {
+		parts = append(parts, fmt.Sprintf("created %s", summarizePaths(payload.FilesCreated)))
+	}
+	if len(payload.FilesDeleted) > 0 {
+		parts = append(parts, fmt.Sprintf("deleted %s", summarizePaths(payload.FilesDeleted)))
+	}
+	if len(parts) == 0 {
+		if payload.Success {
+			return "patch applied"
+		}
+		return ""
+	}
+	return strings.Join(parts, toolResultSeparator)
+}
+
+func summarizePaths(paths []string) string {
+	cleaned := make([]string, 0, len(paths))
+	for _, path := range paths {
+		path = strings.TrimSpace(path)
+		if path != "" {
+			cleaned = append(cleaned, path)
+		}
+	}
+	switch len(cleaned) {
+	case 0:
+		return "0 files"
+	case 1:
+		return cleaned[0]
+	case 2:
+		return cleaned[0] + ", " + cleaned[1]
+	default:
+		return fmt.Sprintf("%s, %s +%d more", cleaned[0], cleaned[1], len(cleaned)-2)
 	}
 }
 

@@ -238,6 +238,19 @@ repo:
   safety limits. Avoid keyword-heavy task taxonomies. If a new product-level
   policy is required, add it here as an agent guardrail and cover it with tests
   before changing gateway behavior.
+- P0/P1 task strategy is still agent-first. It may disable tools only for
+  pure direct-answer turns that do not need workspace, external, or tool state,
+  such as short identity/model questions. Coding examples, explanations,
+  analysis requests, and artifact requests should reach the agent with coarse
+  guidance rather than a pre-agent answer.
+- Gateway `MessageResponse.turn` and `MessageResponse.context` are the
+  structured status contract for CLI, IM, HTTP, and eval clients. Prefer these
+  fields over parsing human text when deciding whether a turn is accepted,
+  busy, completed, failed, or still running.
+- Tool events should include compact diagnostic metadata when failures happen:
+  `error_category`, `diagnostic_hint`, duration, preview, and truncation
+  markers. This lets CLI/IM show Codex-style progress and lets evals detect
+  regressions without dumping raw provider or tool JSON.
 - Gateway intent routing is centralized in `internal/gateway/router/intent*.go`
   and returns `router.IntentResult`. `intent.rules` are only for explicit
   routing commands, skill/query/search commands, and high-confidence resume
@@ -271,10 +284,19 @@ repo:
 - Tool failures are diagnostic evidence, not automatic stop conditions. Agents
   should inspect cwd, repository/module boundaries, environment, auth state,
   provider protocol constraints, or command help before retrying with a changed
-  command. Do not bake project-specific env overrides into generic tools. For
-  example, a Go workspace/module error should lead the agent to inspect
-  `go env GOWORK`, `go env GOMOD`, `go.work`, and `go.mod`, then choose an
-  explicit cwd or env override only when that diagnosis supports it.
+  command. Do not bake project-specific env overrides into generic tools.
+- Environment diagnosis must be language-agnostic. First identify the ecosystem
+  from high-signal files such as `go.mod`, `package.json`, `pyproject.toml`,
+  `requirements.txt`, `Cargo.toml`, `composer.json`, `pom.xml`, `build.gradle`,
+  `.csproj`, `Gemfile`, `Makefile`, `Dockerfile`, and CI workflow files. Then
+  inspect the matching runtime/package-manager state and choose the next
+  command from evidence. For example, a Go workspace/module error should lead
+  the agent to inspect `go env GOWORK`, `go env GOMOD`, `go.work`, and
+  `go.mod`; a Node project should inspect package scripts and lockfiles; a
+  Python project should inspect `pyproject.toml`, virtualenv and test runner
+  hints; a PHP project should inspect `composer.json`; Rust should inspect
+  `Cargo.toml`. Use explicit cwd or env overrides only when that diagnosis
+  supports it.
 - Tool results must be packaged through the Agent result envelope before they
   reach the model, TUI, run events, or future artifacts. Keep raw tool output,
   model-bounded content, and user-visible preview as separate surfaces; do not
@@ -388,6 +410,41 @@ repo:
   reports, archive, and restore.
 - `internal/tools/learning_audit.go`: tenant learning history for memory/skill
   mutations, including history and supported undo helpers.
+- `internal/eval/`: offline evaluation loop for replaying representative
+  prompts through the real gateway/agent path, recording JSONL traces, and
+  checking UX/runtime regressions.
+- `evalcases/`: repository-owned eval case suites. Keep cases small,
+  representative, and safe to run against configured providers.
+- `docs/eval-loop.md`: how to add cases, run evals, interpret reports, and
+  extend checks.
+
+## Eval Loop Contract
+
+Use the eval loop when changing model providers, tool calling, task strategy,
+context selection, skills, CLI/TUI rendering, IM feedback, or any behavior that
+previously regressed in user testing.
+
+- Add or update an `evalcases/**/*.yaml` case whenever a bug report becomes a
+  repeatable scenario. Good cases cover identity/model answers, simple code
+  snippets, continuation (`可以`/`继续`), codebase inspection, provider errors,
+  tool progress, and mojibake prevention.
+- `selfmind eval run <case-or-dir>` must go through the same gateway and agent
+  path as real CLI/IM input. Do not add eval-only shortcuts that bypass
+  identity binding, workspace selection, task strategy, tools, provider
+  adapters, event recording, or context selection.
+- JSONL traces under `evalruns/` are local diagnostics and must not be
+  committed. By default, eval traces should hash user/model text and store only
+  previews/metrics. Use `--record-content` only for local debugging with
+  non-sensitive prompts.
+- P0 checks are deterministic heuristics: non-empty output, no mojibake, no raw
+  provider JSON, no leaked XML tool tags, no provider stack dump, expected
+  workspace, continuation behavior, tool event visibility, bounded duration,
+  context overflow detection, max/min tool call counts, tool error counts, and
+  basic first-token/tool metrics in reports.
+- Future P1/P2 work should add provider matrices, synthetic fixtures,
+  model-as-judge scoring, artifact verification, screenshot/terminal
+  interaction checks, and trend reports without weakening the P0 deterministic
+  checks.
 
 ## Local Test Command
 

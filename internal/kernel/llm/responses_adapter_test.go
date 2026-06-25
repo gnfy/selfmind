@@ -313,6 +313,9 @@ func TestResponsesAdapterReplaysAssistantToolCallsBeforeOutputs(t *testing.T) {
 	if call.ID != "fc_tool_123" {
 		t.Fatalf("function call id = %q", call.ID)
 	}
+	if call.Status != "completed" {
+		t.Fatalf("function call status = %q, want completed", call.Status)
+	}
 	output := wire.Input[2]
 	if output.Type != "function_call_output" || output.CallID != "tool_123" || output.Output == nil || *output.Output != "contents" {
 		t.Fatalf("function output item = %#v", output)
@@ -354,6 +357,28 @@ func TestResponsesAdapterIncludesEmptyToolOutput(t *testing.T) {
 	}
 	if !strings.Contains(string(data), `"output":""`) {
 		t.Fatalf("empty function output must be serialized: %s", string(data))
+	}
+}
+
+func TestResponsesAdapterDropsOrphanToolOutput(t *testing.T) {
+	adapter := NewResponsesAdapter("token", "https://example.test", "gpt-test")
+	wire := adapter.requestFromChat(ChatRequest{Messages: []Message{
+		{Role: "user", Content: "inspect"},
+		{Role: "tool", Name: "read_file", ToolCallID: "tool_orphan", Content: "contents"},
+	}}, true)
+
+	if len(wire.Input) != 1 {
+		t.Fatalf("input length = %d, want 1: %#v", len(wire.Input), wire.Input)
+	}
+	if wire.Input[0].Role != "user" || wire.Input[0].Content != "inspect" {
+		t.Fatalf("first input = %#v", wire.Input[0])
+	}
+	data, err := json.Marshal(wire)
+	if err != nil {
+		t.Fatalf("marshal request: %v", err)
+	}
+	if strings.Contains(string(data), "function_call_output") || strings.Contains(string(data), "tool_orphan") {
+		t.Fatalf("orphan function output should not be serialized: %s", string(data))
 	}
 }
 

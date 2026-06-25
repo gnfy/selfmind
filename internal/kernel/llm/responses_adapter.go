@@ -40,6 +40,7 @@ type responsesInputItem struct {
 	Role      string      `json:"role,omitempty"`
 	Content   interface{} `json:"content,omitempty"`
 	Type      string      `json:"type,omitempty"`
+	Status    string      `json:"status,omitempty"`
 	CallID    string      `json:"call_id,omitempty"`
 	Name      string      `json:"name,omitempty"`
 	Arguments string      `json:"arguments,omitempty"`
@@ -286,12 +287,20 @@ func (a *ResponsesAdapter) streamResponse(resp *http.Response) <-chan StreamEven
 func (a *ResponsesAdapter) requestFromChat(req ChatRequest, stream bool) responsesRequest {
 	model := firstNonEmptyString(req.Model, a.Model)
 	wire := responsesRequest{Model: model, Stream: stream, Store: a.Store}
+	seenToolCalls := map[string]struct{}{}
 	for _, m := range req.Messages {
 		if m.Role == "tool" {
+			callID := strings.TrimSpace(m.ToolCallID)
+			if callID == "" {
+				continue
+			}
+			if _, ok := seenToolCalls[callID]; !ok {
+				continue
+			}
 			output := contentString(openAIContentFromMessage(m))
 			wire.Input = append(wire.Input, responsesInputItem{
 				Type:   "function_call_output",
-				CallID: m.ToolCallID,
+				CallID: callID,
 				Output: &output,
 			})
 			continue
@@ -312,13 +321,16 @@ func (a *ResponsesAdapter) requestFromChat(req ChatRequest, stream bool) respons
 				if strings.TrimSpace(call.Function) == "" {
 					continue
 				}
+				callID := responsesCallID(call)
 				wire.Input = append(wire.Input, responsesInputItem{
 					ID:        responsesFunctionCallItemID(call),
 					Type:      "function_call",
-					CallID:    responsesCallID(call),
+					Status:    "completed",
+					CallID:    callID,
 					Name:      responsesSafeToolName(call.Function),
 					Arguments: responsesCallArguments(call.Args),
 				})
+				seenToolCalls[callID] = struct{}{}
 			}
 		}
 	}

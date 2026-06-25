@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"selfmind/internal/kernel/llm"
 	"selfmind/internal/kernel/memory"
@@ -279,6 +280,7 @@ func (a *Agent) Analyze(imageBase64, mimeType, question string) (string, error) 
 
 func emitToolEndEventWithDuration(ch chan string, name, toolCallID string, result ToolResultEnvelope, duration float64, err error) {
 	if err != nil {
+		category, hint := classifyToolFailure(err.Error())
 		EmitAgentEvent(ch, AgentEvent{
 			Type:            "tool.completed",
 			ToolName:        name,
@@ -286,6 +288,12 @@ func emitToolEndEventWithDuration(ch chan string, name, toolCallID string, resul
 			DurationSeconds: duration,
 			ToolResult:      result.Preview,
 			Error:           result.ModelContent,
+			Payload: map[string]interface{}{
+				"result_bytes":     result.Bytes,
+				"result_truncated": result.Truncated,
+				"error_category":   category,
+				"diagnostic_hint":  hint,
+			},
 		})
 	} else {
 		EmitAgentEvent(ch, AgentEvent{
@@ -299,6 +307,26 @@ func emitToolEndEventWithDuration(ch chan string, name, toolCallID string, resul
 				"result_truncated": result.Truncated,
 			},
 		})
+	}
+}
+
+func classifyToolFailure(message string) (string, string) {
+	lower := strings.ToLower(strings.TrimSpace(message))
+	switch {
+	case lower == "":
+		return "unknown", "Inspect the tool input and retry with corrected arguments if useful."
+	case strings.Contains(lower, "escapes workspace") || strings.Contains(lower, "permission") || strings.Contains(lower, "denied"):
+		return "workspace_scope", "Inspect the active workspace root and use a path inside the allowed workspace."
+	case strings.Contains(lower, "timeout") || strings.Contains(lower, "deadline exceeded"):
+		return "timeout", "Narrow the command or inspect progress before retrying with a smaller scope."
+	case strings.Contains(lower, "exit status") || strings.Contains(lower, "command failed"):
+		return "command_failed", "Treat the output as evidence; inspect cwd, env, files, or command help before retrying."
+	case strings.Contains(lower, "missing required parameter") || strings.Contains(lower, "invalid schema") || strings.Contains(lower, "schema"):
+		return "tool_schema", "Correct the tool arguments using the declared schema before retrying."
+	case strings.Contains(lower, "unauthorized") || strings.Contains(lower, "authentication") || strings.Contains(lower, "token_expired") || strings.Contains(lower, "401"):
+		return "auth", "Check the relevant credential or login state before retrying."
+	default:
+		return "unknown", "Inspect the failed tool result and continue with a corrected next step unless this is a blocker."
 	}
 }
 
@@ -438,10 +466,12 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 				return
 			}
 			if len(pending) > 96 {
-				emit := pending[:len(pending)-32]
+				emit, keep := splitUTF8PrefixKeepTail(pending, 32)
 				pendingStream.Reset()
-				pendingStream.WriteString(pending[len(pending)-32:])
-				emitStream(emit)
+				pendingStream.WriteString(keep)
+				if emit != "" {
+					emitStream(emit)
+				}
 			}
 		}
 		flushPendingStream := func() {
@@ -705,6 +735,26 @@ func responseStoppedForOutputLimit(reason string) bool {
 	}
 }
 
+func splitUTF8PrefixKeepTail(s string, keepBytes int) (string, string) {
+	if s == "" {
+		return "", ""
+	}
+	if keepBytes <= 0 {
+		return textutil.CleanUTF8(s), ""
+	}
+	if len(s) <= keepBytes {
+		return "", s
+	}
+	cut := len(s) - keepBytes
+	for cut > 0 && (!utf8.ValidString(s[:cut]) || !utf8.ValidString(s[cut:])) {
+		cut--
+	}
+	if cut <= 0 {
+		return "", s
+	}
+	return s[:cut], s[cut:]
+}
+
 func activityForIteration(iteration int) string {
 	if iteration <= 0 {
 		return "Thinking about the request"
@@ -848,12 +898,7 @@ func (a *Agent) selectRuntimeContext(ctx context.Context, tenantID, channel, pro
 	}
 	bundle := RuntimeContextBundle{
 		Channel: strings.TrimSpace(channel),
-		Budget: RuntimeContextBudget{
-			TotalChars:     12000,
-			WorkspaceChars: 1600,
-			TaskChars:      7200,
-			MemoryChars:    2400,
-		},
+		Budget:  DefaultRuntimeContextBudget(),
 	}
 	if workspace, ok := WorkspaceContextFromContext(ctx); ok && strings.TrimSpace(workspace.Root) != "" {
 		ws := workspace

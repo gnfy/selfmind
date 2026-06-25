@@ -66,6 +66,15 @@ type RuntimeContextBudget struct {
 	MemoryChars    int
 }
 
+func DefaultRuntimeContextBudget() RuntimeContextBudget {
+	return RuntimeContextBudget{
+		TotalChars:     12000,
+		WorkspaceChars: 1600,
+		TaskChars:      7200,
+		MemoryChars:    2400,
+	}
+}
+
 // RuntimeMemoryContext is one retrieved long-term memory slice selected for the
 // current turn. It is intentionally small; raw transcripts should remain in the
 // event/memory stores and only flow into the model through selected summaries.

@@ -63,10 +63,30 @@ type MessageResponse struct {
 	Task     *control.Task            `json:"task,omitempty"`
 	Run      *control.Run             `json:"run,omitempty"`
 	Outcome  *RunOutcome              `json:"outcome,omitempty"`
+	Turn     *TurnStatus              `json:"turn,omitempty"`
+	Context  *ContextBudgetInfo       `json:"context,omitempty"`
 	Content  string                   `json:"content"`
 	Usage    llm.UsageStats           `json:"usage"`
 	Error    string                   `json:"error,omitempty"`
 	Accepted bool                     `json:"accepted,omitempty"`
+}
+
+type TurnStatus struct {
+	Status           string `json:"status"`
+	TaskStatus       string `json:"task_status,omitempty"`
+	BackgroundStatus string `json:"background_status,omitempty"`
+	TaskID           string `json:"task_id,omitempty"`
+	RunID            string `json:"run_id,omitempty"`
+	Message          string `json:"message,omitempty"`
+}
+
+type ContextBudgetInfo struct {
+	TotalChars            int `json:"total_chars,omitempty"`
+	WorkspaceChars        int `json:"workspace_chars,omitempty"`
+	TaskChars             int `json:"task_chars,omitempty"`
+	MemoryChars           int `json:"memory_chars,omitempty"`
+	EstimatedInputTokens  int `json:"estimated_input_tokens,omitempty"`
+	EstimatedOutputTokens int `json:"estimated_output_tokens,omitempty"`
 }
 
 type ApprovalListResponse struct {

@@ -1,4 +1,5 @@
 /.gocache/
 /dist/
+/evalruns/
 /binary_search.go
 /selfmind.exe

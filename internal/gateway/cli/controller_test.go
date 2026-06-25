@@ -341,6 +341,24 @@ func TestCompletedToolMessageShowsPerStepDuration(t *testing.T) {
 	}
 }
 
+func TestPatchToolMessageSummarizesStructuredJSON(t *testing.T) {
+	rendered := stripANSI(renderToolMessage(ChatMessage{
+		Role:     "tool",
+		ToolName: "patch",
+		Content:  `{"Success":true,"Diff":"","FilesModified":["/tmp/app.go"],"FilesCreated":["/tmp/new.go"]}`,
+		Duration: 0.1,
+	}, 120))
+
+	if strings.Contains(rendered, `"Success"`) || strings.Contains(rendered, `"FilesModified"`) {
+		t.Fatalf("patch tool should not render raw JSON: %q", rendered)
+	}
+	for _, want := range []string{"Edited with patch", "modified /tmp/app.go", "created /tmp/new.go"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("rendered patch message %q missing %q", rendered, want)
+		}
+	}
+}
+
 func TestStatusLineShowsTotalElapsedWhileToolRuns(t *testing.T) {
 	model := NewController(nil, nil, nil, "").model
 	model.runStatus = "working"

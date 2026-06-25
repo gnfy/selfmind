@@ -1,0 +1,25 @@
+id: smoke_rust_binary_search_004
+title: "generate a Rust binary search snippet"
+suite: smoke-10
+workspace: "."
+channel: cli
+
+turns:
+  - input: "用 Rust 实现一个二分查找函数，返回 Option<usize>，只给代码和必要说明。"
+
+expect:
+  status: completed
+  contains:
+    - "fn"
+  must_not_contain:
+    - "<tool>"
+    - "\"tool_calls\""
+  max_duration_seconds: 120
+
+checks:
+  no_mojibake: true
+  no_raw_json_leak: true
+  no_tool_xml_leak: true
+  no_empty_response: true
+  no_provider_stack_dump: true
+  context_not_exceeded: true

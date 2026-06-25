@@ -79,6 +79,9 @@ func Run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	if handled, exitCode := app.runAuthCommandIfRequested(); handled {
 		return exitCode
 	}
+	if handled, exitCode := app.runEvalCommandIfRequested(); handled {
+		return exitCode
+	}
 	if handled, exitCode := app.runWeixinCommandIfRequested(); handled {
 		return exitCode
 	}
@@ -103,6 +106,7 @@ func printTopLevelHelp(stdout io.Writer) {
 	fmt.Fprintln(stdout, "  selfmind [--config PATH]")
 	fmt.Fprintln(stdout, "  selfmind model [current|check|list|set <provider> <model>]")
 	fmt.Fprintln(stdout, "  selfmind auth [login|status|logout] ...")
+	fmt.Fprintln(stdout, "  selfmind eval [list|run|report]")
 	fmt.Fprintln(stdout, "  selfmind gateway ...")
 	fmt.Fprintln(stdout, "  selfmind weixin ...")
 }

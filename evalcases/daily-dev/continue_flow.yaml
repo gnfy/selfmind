@@ -1,0 +1,23 @@
+id: continue_flow_001
+title: "continue after a plan"
+suite: daily-dev
+workspace: "."
+channel: cli
+
+turns:
+  - input: "分析一个 SelfMind 的 eval 设计应该怎么做，先给方案，不要改代码。"
+  - input: "可以，继续。"
+
+expect:
+  status: completed
+  require_same_task: true
+  require_continuation: true
+  max_duration_seconds: 240
+
+checks:
+  no_mojibake: true
+  no_raw_json_leak: true
+  no_tool_xml_leak: true
+  no_empty_response: true
+  no_provider_stack_dump: true
+  context_not_exceeded: true

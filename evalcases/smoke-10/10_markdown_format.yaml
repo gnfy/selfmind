@@ -1,0 +1,26 @@
+id: smoke_markdown_format_010
+title: "produce readable markdown table and code"
+suite: smoke-10
+workspace: "."
+channel: cli
+
+turns:
+  - input: "用 Markdown 表格对比 CLI 和微信里“AI 正在工作中”的提示方式，并给一个很短的 Go struct 示例。"
+
+expect:
+  status: completed
+  contains:
+    - "|"
+    - "type"
+  must_not_contain:
+    - "<tool>"
+    - "\"tool_calls\""
+  max_duration_seconds: 120
+
+checks:
+  no_mojibake: true
+  no_raw_json_leak: true
+  no_tool_xml_leak: true
+  no_empty_response: true
+  no_provider_stack_dump: true
+  context_not_exceeded: true

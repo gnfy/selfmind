@@ -1,0 +1,25 @@
+id: smoke_go_binary_search_003
+title: "generate a Go binary search snippet"
+suite: smoke-10
+workspace: "."
+channel: cli
+
+turns:
+  - input: "用 Go 实现一个二分查找函数，直接给出简洁可读的代码。"
+
+expect:
+  status: completed
+  contains:
+    - "func"
+  must_not_contain:
+    - "<tool>"
+    - "\"tool_calls\""
+  max_duration_seconds: 120
+
+checks:
+  no_mojibake: true
+  no_raw_json_leak: true
+  no_tool_xml_leak: true
+  no_empty_response: true
+  no_provider_stack_dump: true
+  context_not_exceeded: true

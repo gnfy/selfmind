@@ -7,7 +7,7 @@ import (
 )
 
 func TestTaskStrategyDefaultIsAgentFirst(t *testing.T) {
-	strategy := BuildTaskStrategy("write a Go binary search example", "cli")
+	strategy := BuildTaskStrategy("analyze this repository and suggest improvements", "cli")
 
 	if strategy.Class != TaskClassGeneralTask {
 		t.Fatalf("class = %s, want %s", strategy.Class, TaskClassGeneralTask)
@@ -26,6 +26,31 @@ func TestTaskStrategyDefaultIsAgentFirst(t *testing.T) {
 	}
 	if strategy.AllowsTool("web_search") || strategy.AllowsTool("web_extract") {
 		t.Fatalf("web tools should stay hidden until explicitly requested: %+v", strategy)
+	}
+}
+
+func TestTaskStrategyPureModelQuestionUsesDirectAnswer(t *testing.T) {
+	strategy := BuildTaskStrategy("\u4f60\u662f\u4ec0\u4e48\u6a21\u578b\uff1f", "cli")
+
+	if strategy.Class != TaskClassSimpleAnswer {
+		t.Fatalf("class = %s, want %s", strategy.Class, TaskClassSimpleAnswer)
+	}
+	if strategy.ToolMode != ToolModeNone {
+		t.Fatalf("tool mode = %s, want none", strategy.ToolMode)
+	}
+	if strategy.AllowsTool("read_file") || strategy.AllowsTool("update_plan") || strategy.AllowsTool("terminal") {
+		t.Fatalf("pure direct answer should expose no tools: %+v", strategy)
+	}
+}
+
+func TestTaskStrategyCodingExampleKeepsAgentFirstToolsOptional(t *testing.T) {
+	strategy := BuildTaskStrategy("\u7528 PHP \u5b9e\u73b0\u4e00\u4e2a pgsql \u64cd\u4f5c\u793a\u4f8b", "cli")
+
+	if strategy.Class != TaskClassCodingExample {
+		t.Fatalf("class = %s, want %s", strategy.Class, TaskClassCodingExample)
+	}
+	if !strategy.AllowsTool("read_file") || !strategy.AllowsTool("write_file") || !strategy.AllowsTool("update_plan") {
+		t.Fatalf("coding examples should keep agent-first optional tools available: %+v", strategy)
 	}
 }
 

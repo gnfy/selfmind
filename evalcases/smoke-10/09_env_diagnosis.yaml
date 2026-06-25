@@ -1,0 +1,27 @@
+id: smoke_env_diagnosis_009
+title: "diagnose local project validation command"
+suite: smoke-10
+workspace: "."
+channel: cli
+
+turns:
+  - input: "检查当前项目应该如何运行测试或验证。如果命令失败，请先分析错误原因、语言生态、manifest 和可用脚本，再给出正确做法；不要修改文件。"
+
+expect:
+  status: completed
+  require_tool_events: true
+  min_tool_calls: 1
+  max_tool_errors: 5
+  contains:
+    - "项目"
+  max_duration_seconds: 360
+
+checks:
+  no_mojibake: true
+  no_raw_json_leak: true
+  no_tool_xml_leak: true
+  no_empty_response: true
+  no_provider_stack_dump: true
+  tool_failure_should_recover: true
+  workspace_should_match: true
+  context_not_exceeded: true

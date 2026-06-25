@@ -342,6 +342,8 @@ func toolResultLine(label, content string, width int) string {
 		return truncateToWidth(formatPlanToolResult(content), width)
 	case "finish_run":
 		return truncateToWidth(formatFinishRunResult(content), width)
+	case "patch":
+		return truncateToWidth(formatPatchToolResult(content), width)
 	default:
 		return firstResultLine(content, width)
 	}
@@ -443,6 +445,59 @@ func formatFinishRunResult(content string) string {
 		return status
 	default:
 		return ""
+	}
+}
+
+func formatPatchToolResult(content string) string {
+	var payload struct {
+		Success       bool     `json:"Success"`
+		FilesModified []string `json:"FilesModified"`
+		FilesCreated  []string `json:"FilesCreated"`
+		FilesDeleted  []string `json:"FilesDeleted"`
+		Error         string   `json:"Error"`
+	}
+	if err := json.Unmarshal([]byte(content), &payload); err != nil {
+		return firstResultLine(content, 80)
+	}
+	if strings.TrimSpace(payload.Error) != "" && !payload.Success {
+		return firstResultLine(payload.Error, 80)
+	}
+	parts := make([]string, 0, 3)
+	if len(payload.FilesModified) > 0 {
+		parts = append(parts, fmt.Sprintf("modified %s", summarizeToolPaths(payload.FilesModified)))
+	}
+	if len(payload.FilesCreated) > 0 {
+		parts = append(parts, fmt.Sprintf("created %s", summarizeToolPaths(payload.FilesCreated)))
+	}
+	if len(payload.FilesDeleted) > 0 {
+		parts = append(parts, fmt.Sprintf("deleted %s", summarizeToolPaths(payload.FilesDeleted)))
+	}
+	if len(parts) == 0 {
+		if payload.Success {
+			return "patch applied"
+		}
+		return ""
+	}
+	return strings.Join(parts, glyphDot)
+}
+
+func summarizeToolPaths(paths []string) string {
+	cleaned := make([]string, 0, len(paths))
+	for _, path := range paths {
+		path = strings.TrimSpace(path)
+		if path != "" {
+			cleaned = append(cleaned, path)
+		}
+	}
+	switch len(cleaned) {
+	case 0:
+		return "0 files"
+	case 1:
+		return cleaned[0]
+	case 2:
+		return cleaned[0] + ", " + cleaned[1]
+	default:
+		return fmt.Sprintf("%s, %s +%d more", cleaned[0], cleaned[1], len(cleaned)-2)
 	}
 }
 

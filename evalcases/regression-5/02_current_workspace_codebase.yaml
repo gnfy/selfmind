@@ -15,7 +15,7 @@ expect:
   max_duration_seconds: 360
   contains:
     - "cmd/selfmind"
-    - "cmd/selfmindd"
+    - "gateway run"
   must_not_contain:
     - "<tool>"
     - "Process summary:"

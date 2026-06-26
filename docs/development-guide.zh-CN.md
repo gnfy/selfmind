@@ -16,13 +16,12 @@ SelfMind 当前优先做“日常可用的个人 Agent”：
 - 个人版从本地 `config.yaml` 读取模型和 provider 策略。
 - 未来 SaaS 版应从数据库中的租户、用户、workspace 策略里解析同样的模型配置。
 
-`cmd/selfmindd` 是隐藏兼容 wrapper，不要作为用户入口写入主流程文档。
+`selfmind` 是唯一 binary，守护进程通过 `selfmind gateway run` 启动。
 
 ## 目录结构
 
 ```text
 cmd/selfmind/              用户可见 binary 入口
-cmd/selfmindd/             隐藏 gateway 兼容 wrapper
 internal/cliapp/           顶层 CLI 应用路由
   root.go                  全局 -f/--config 和模式分发
   model_commands.go        selfmind model picker/list/set/current
@@ -263,7 +262,6 @@ selfmind gateway restart
 - `internal/runtime/gateway/runner.go` 负责初始化、HTTP server、signal、shutdown、runtime status。
 - `internal/runtime/gateway/client.go` 负责后台 child process 启动。
 - `internal/runtime/gateway/state.go` 管理 pid/state/lock 文件。
-- `cmd/selfmindd/main.go` 调用同一个 runner，仅作为隐藏兼容入口。
 
 运行时文件：
 

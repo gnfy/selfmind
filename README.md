@@ -70,8 +70,6 @@ go run cmd/selfmind/main.go
 
 That command compiles only one file and can make Go treat `selfmind/internal/...` as a standard-library path. Use `go run ./cmd/selfmind` or `go build ./cmd/selfmind`.
 
-`cmd/selfmindd` is kept only as a hidden compatibility wrapper. Users should build and run `selfmind`.
-
 ## Configuration
 
 SelfMind uses one YAML config file. No `.env` file is required.
@@ -612,7 +610,6 @@ Important directories:
 
 ```text
 cmd/selfmind/              user-facing binary entrypoint
-cmd/selfmindd/             hidden compatibility wrapper
 internal/cliapp/           selfmind command router, model command, gateway/client commands
 internal/app/              application wiring for storage, agent, tools, gateway
 internal/platform/config/  YAML config loading, defaults, save, compatibility

@@ -66,9 +66,9 @@ repo:
 - Avoid adding cross-tenant or cross-test global mutable state. Prefer explicit
   dependencies wired by `internal/app` or the gateway runner.
 - Treat `selfmind gateway` as the product entrypoint for multi-terminal work.
-  `selfmindd` is only a hidden compatibility wrapper while the codebase
-  stabilizes. The CLI/TUI can still run locally, but IM/Web integration should
-  go through gateway APIs.
+  `selfmind` is the single binary; the daemon runs as `selfmind gateway run`.
+  The CLI/TUI can still run locally, but IM/Web integration should go through
+  gateway APIs. Do not reintroduce a separate daemon entrypoint binary.
 - Keep `cmd/selfmind/main.go` thin. User-facing command parsing and CLI client
   behavior belong in `internal/cliapp`; do not grow business logic in `cmd`.
 - Treat Linux server as the official release target. GitHub Releases should
@@ -359,8 +359,6 @@ repo:
 - `cmd/selfmind/main.go`: thin user entrypoint that calls `internal/cliapp`.
 - `internal/cliapp/`: selfmind CLI application layer, including gateway
   lifecycle commands, gateway client commands, and TUI bootstrap.
-- `cmd/selfmindd/main.go`: hidden compatibility wrapper around the gateway
-  runner.
 - `internal/gateway/api/`: gateway HTTP request/response DTOs shared by
   clients and handlers.
 - `internal/gateway/httpapi/server.go`: local HTTP API and IM webhook

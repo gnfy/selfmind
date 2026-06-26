@@ -4,7 +4,7 @@
 
 ## 总原则
 
-- 用户入口保持 `selfmind` 单 binary；`selfmindd` 只是隐藏兼容 wrapper。
+- 保持 `selfmind` 单 binary；守护进程用 `selfmind gateway run` 启动，不要新增独立的 daemon 入口 binary。
 - Gateway、TUI、IM、Webhook 可以共享 task/run/workspace/memory/skill 状态，但聊天 transcript 必须保持渠道隔离。
 - 新功能优先复用现有层次：`cliapp` 管命令入口，`gateway/httpapi` 管 HTTP，`gateway/cli` 管 TUI 编排，`ui/components` 管可复用界面组件，`app` 管依赖组装，`kernel` 管 agent loop 和模型调用。
 - 任何改动都要先问：它属于产品入口、应用组装、agent 核心、工具、gateway、TUI 组件，还是配置/存储平台层。不要把业务逻辑塞进离它最近的大文件。

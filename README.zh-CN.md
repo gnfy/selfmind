@@ -73,8 +73,6 @@ go run cmd/selfmind/main.go
 
 这个命令只会编译单个文件，可能导致 Go 把 `selfmind/internal/...` 当成标准库路径去查找。请使用 `go run ./cmd/selfmind` 或 `go build ./cmd/selfmind`。
 
-`cmd/selfmindd` 只保留为隐藏兼容 wrapper，不作为用户构建或启动入口。
-
 ## 配置文件
 
 SelfMind 只使用一个 YAML 配置文件，不需要 `.env`。
@@ -631,7 +629,6 @@ Linux 安装脚本会创建 `/etc/selfmind/config.yaml`、`/var/lib/selfmind/dat
 
 ```text
 cmd/selfmind/              用户入口
-cmd/selfmindd/             隐藏兼容 wrapper
 internal/cliapp/           selfmind 命令路由、model/gateway/client 命令
 internal/app/              storage、agent、tools、gateway 组装
 internal/platform/config/  YAML 配置加载、默认值、兼容和保存

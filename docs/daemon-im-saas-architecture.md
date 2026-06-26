@@ -83,7 +83,8 @@ Current storage file:
 ## Gateway Control Plane
 
 The gateway is the first real control-plane entrypoint. The user-facing entry is
-`selfmind gateway`; `selfmindd` remains only as a hidden compatibility wrapper.
+`selfmind gateway`; the daemon runs as `selfmind gateway run` from the single
+`selfmind` binary.
 
 Implemented in:
 
@@ -92,7 +93,6 @@ Implemented in:
 - `internal/gateway/api`
 - `internal/gateway/httpapi`
 - `internal/runtime/gateway`
-- `cmd/selfmindd/main.go` (compatibility wrapper)
 
 Core endpoints:
 
@@ -299,7 +299,6 @@ Done:
 
 - role-based model gateway foundation;
 - single-binary `selfmind gateway` lifecycle commands;
-- hidden `selfmindd` compatibility wrapper;
 - control-plane SQLite schema;
 - task/run/event/handoff persistence;
 - `/v1/message`;

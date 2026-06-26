@@ -16,13 +16,12 @@ SelfMind currently targets a daily-usable personal agent:
 - Personal mode reads model/provider policy from local `config.yaml`.
 - Future SaaS mode should resolve the same model/provider policy from database-backed tenant/person/workspace stores.
 
-`cmd/selfmindd` is a hidden compatibility wrapper. Do not document it as a user entrypoint.
+`selfmind` is the single binary. Run the daemon as `selfmind gateway run`.
 
 ## Directory Map
 
 ```text
 cmd/selfmind/              user-facing binary entrypoint
-cmd/selfmindd/             hidden gateway compatibility wrapper
 internal/cliapp/           top-level CLI app router
   root.go                  global -f/--config handling and mode dispatch
   model_commands.go        selfmind model picker/list/set/current
@@ -264,7 +263,6 @@ Implementation:
 - `internal/runtime/gateway/runner.go` owns initialization, HTTP server, signals, shutdown, and runtime status.
 - `internal/runtime/gateway/client.go` starts detached child processes.
 - `internal/runtime/gateway/state.go` manages pid/state/lock files.
-- `cmd/selfmindd/main.go` calls the same runner as a hidden compatibility wrapper.
 
 Runtime files live under:
 

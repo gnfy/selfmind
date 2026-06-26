@@ -4,7 +4,7 @@ This document is for maintainers and future AI coding tools. It defines the guar
 
 ## Core Rules
 
-- Keep `selfmind` as the single user-facing binary. `selfmindd` is a hidden compatibility wrapper only.
+- Keep `selfmind` as the single binary. Run the daemon as `selfmind gateway run`; do not add a separate daemon entrypoint binary.
 - Gateway, TUI, IM, and webhook channels may share task/run/workspace/memory/skill state, but chat transcripts stay channel-local.
 - Reuse the existing layers: `cliapp` owns command entrypoints, `gateway/httpapi` owns HTTP, `gateway/cli` owns TUI orchestration, `ui/components` owns reusable UI pieces, `app` owns dependency wiring, and `kernel` owns the agent loop and model calls.
 - Before adding code, decide whether it belongs to product entrypoints, application wiring, agent core, tools, gateway, UI components, or platform config/storage. Do not put business logic into the nearest large file.

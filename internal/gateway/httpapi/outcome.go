@@ -60,11 +60,11 @@ func (d *Server) latestPlanForTask(ctx context.Context, taskID string) []taskPla
 	return nil
 }
 
-func (d *Server) latestStructuredRunOutcome(ctx context.Context, taskID, runID string) (api.RunOutcome, bool) {
-	if d == nil || d.Control == nil || taskID == "" {
+func (c *RunCoordinator) latestStructuredRunOutcome(ctx context.Context, taskID, runID string) (api.RunOutcome, bool) {
+	if c == nil || c.srv == nil || c.srv.Control == nil || taskID == "" {
 		return api.RunOutcome{}, false
 	}
-	events, err := d.Control.ListTaskEvents(ctx, taskID, 50)
+	events, err := c.srv.Control.ListTaskEvents(ctx, taskID, 50)
 	if err != nil {
 		return api.RunOutcome{}, false
 	}

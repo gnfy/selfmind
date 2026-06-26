@@ -188,10 +188,10 @@ func activeRunCopy(active *activeRun) *activeRun {
 // structured outcome, handoff, artifacts, and finishing event.
 func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.IdentityContext, req api.MessageRequest, intent router.IntentResult) (api.MessageResponse, int) {
 	d := c.srv
-	if _, err := d.prepareRequestWorkspace(ctx, identity, &req); err != nil {
+	if _, err := c.prepareRequestWorkspace(ctx, identity, &req); err != nil {
 		return api.MessageResponse{Identity: identity, Error: err.Error(), Turn: messageTurn("failed", "", "idle", "", "", err.Error()), Context: messageContextBudget(llmUsageZero())}, http.StatusInternalServerError
 	}
-	task, err := d.resolveTask(ctx, identity, req, intent)
+	task, err := c.resolveTask(ctx, identity, req, intent)
 	if err != nil {
 		if strings.Contains(err.Error(), "no task to continue") {
 			return api.MessageResponse{Identity: identity, Content: err.Error(), Turn: messageTurn("failed", "", "idle", "", "", err.Error()), Context: messageContextBudget(llmUsageZero())}, http.StatusOK
@@ -204,7 +204,7 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 	if err != nil {
 		return api.MessageResponse{Identity: identity, Task: task, Error: err.Error(), Turn: messageTurn("failed", task.Status, "idle", task.ID, "", err.Error()), Context: messageContextBudget(llmUsageZero())}, http.StatusInternalServerError
 	}
-	stopHeartbeat := d.startRunHeartbeat(ctx, run)
+	stopHeartbeat := c.startRunHeartbeat(ctx, run)
 	defer stopHeartbeat()
 	c.updateActive(identity.PersonID, task, run)
 	_, _ = d.Control.AppendEvent(ctx, control.Event{
@@ -216,8 +216,8 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 		Payload:    mustJSON(map[string]string{"input": truncate(req.Content, 500)}),
 	})
 
-	workspace, _ := d.workspaceForTask(ctx, identity, task, req)
-	cleanupScope := d.installExecutionScope(identity, task, run, workspace)
+	workspace, _ := c.workspaceForTask(ctx, identity, task, req)
+	cleanupScope := c.installExecutionScope(identity, task, run, workspace)
 	defer cleanupScope()
 	if workspace != nil && workspace.LocalPath != "" {
 		ctx = kernel.WithWorkspaceContext(ctx, kernel.WorkspaceContext{
@@ -225,9 +225,9 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 			Root: workspace.LocalPath,
 		})
 	}
-	ctx = kernel.WithTaskRuntimeContext(ctx, d.selectedTaskRuntimeContext(ctx, task, run, workspace, req.Channel))
-	agentInput := d.withGatewayContext(req.Content, identity, task, workspace, req.Attachments)
-	agentInput = d.withResumeContext(ctx, identity, task, run, intent, agentInput)
+	ctx = kernel.WithTaskRuntimeContext(ctx, c.selectedTaskRuntimeContext(ctx, task, run, workspace, req.Channel))
+	agentInput := c.withGatewayContext(req.Content, identity, task, workspace, req.Attachments)
+	agentInput = c.withResumeContext(ctx, identity, task, run, intent, agentInput)
 	ctx = kernel.WithTaskStrategy(ctx, taskStrategyForRequest(req, intent))
 
 	if d.Gateway == nil {
@@ -250,7 +250,7 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 		return api.MessageResponse{Identity: identity, Task: task, Run: run, Error: err.Error(), Turn: messageTurn(status, taskStatus, "idle", task.ID, run.ID, err.Error()), Context: messageContextBudget(llmUsageZero())}, http.StatusOK
 	}
 
-	content, usage, err := d.aggregateGatewayResponse(ctx, req.Channel, task, run, resp)
+	content, usage, err := c.aggregateGatewayResponse(ctx, req.Channel, task, run, resp)
 	if err != nil {
 		status := "failed"
 		taskStatus := "blocked"
@@ -264,7 +264,7 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 	}
 
 	outcome := buildRunOutcome(content)
-	if structured, ok := d.latestStructuredRunOutcome(ctx, task.ID, run.ID); ok {
+	if structured, ok := c.latestStructuredRunOutcome(ctx, task.ID, run.ID); ok {
 		outcome = structured
 		if outcome.Summary == "" {
 			outcome.Summary = buildRunOutcome(content).Summary
@@ -282,7 +282,7 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 		TestStatus:   strings.Join(outcome.Tests, "\n"),
 		Risks:        outcome.Risks,
 	})
-	d.recordOutcomeArtifacts(ctx, task, run, req.Channel, outcome.Files)
+	c.recordOutcomeArtifacts(ctx, task, run, req.Channel, outcome.Files)
 	_, _ = d.Control.AppendEvent(ctx, control.Event{
 		TaskID:     task.ID,
 		RunID:      run.ID,
@@ -303,7 +303,6 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 // startAsyncRun accepts a turn immediately and runs it in the background,
 // delivering the result back to the source channel when it finishes.
 func (c *RunCoordinator) startAsyncRun(identity *control.IdentityContext, req api.MessageRequest, intent router.IntentResult) api.MessageResponse {
-	d := c.srv
 	active := &activeRun{
 		TenantID:  identity.TenantID,
 		PersonID:  identity.PersonID,
@@ -317,13 +316,13 @@ func (c *RunCoordinator) startAsyncRun(identity *control.IdentityContext, req ap
 
 	runCtx, runCancel := context.WithCancel(context.Background())
 	active.Cancel = runCancel
-	stopProgressNotices := d.startAsyncProgressNotices(runCtx, identity, req)
+	stopProgressNotices := c.startAsyncProgressNotices(runCtx, identity, req)
 	go func() {
 		defer c.endActive(identity.PersonID)
 		defer runCancel()
 		defer stopProgressNotices()
 		resp, _ := c.runMessage(runCtx, identity, req, intent)
-		d.deliverAsyncResult(context.Background(), identity, req, resp)
+		c.deliverAsyncResult(context.Background(), identity, req, resp)
 	}()
 
 	notice := router.WorkingNotice(req.Channel)

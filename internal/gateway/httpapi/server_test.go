@@ -324,7 +324,7 @@ func TestGatewayContextIncludesAttachments(t *testing.T) {
 	}
 	task := &control.Task{ID: "task_1", WorkspaceID: "ws_1"}
 	workspace := &control.Workspace{ID: "ws_1", LocalPath: "/repo"}
-	content := daemon.withGatewayContext("please inspect", identity, task, workspace, []api.MessageAttachment{{
+	content := daemon.coordinator().withGatewayContext("please inspect", identity, task, workspace, []api.MessageAttachment{{
 		Kind:     "file",
 		Path:     "/tmp/report.pdf",
 		MimeType: "application/pdf",
@@ -359,7 +359,7 @@ func TestPrepareRequestWorkspaceRegistersCLICWD(t *testing.T) {
 		ClientCWD:      cwd,
 	}
 
-	ws, err := daemon.prepareRequestWorkspace(ctx, identity, &req)
+	ws, err := daemon.coordinator().prepareRequestWorkspace(ctx, identity, &req)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -395,7 +395,7 @@ func TestPrepareRequestWorkspaceIgnoresIMClientCWD(t *testing.T) {
 		ClientCWD:      t.TempDir(),
 	}
 
-	ws, err := daemon.prepareRequestWorkspace(ctx, identity, &req)
+	ws, err := daemon.coordinator().prepareRequestWorkspace(ctx, identity, &req)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -444,10 +444,10 @@ func TestResolveTaskBindsEmptyCurrentTaskToCLIWorkspace(t *testing.T) {
 		ClientCWD:      t.TempDir(),
 		Content:        "inspect current project",
 	}
-	if _, err := daemon.prepareRequestWorkspace(ctx, identity, &req); err != nil {
+	if _, err := daemon.coordinator().prepareRequestWorkspace(ctx, identity, &req); err != nil {
 		t.Fatal(err)
 	}
-	resolved, err := daemon.resolveTask(ctx, identity, req, router.IntentResult{Intent: router.IntentTask})
+	resolved, err := daemon.coordinator().resolveTask(ctx, identity, req, router.IntentResult{Intent: router.IntentTask})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -538,7 +538,7 @@ func TestResumeContextIncludesLatestHandoff(t *testing.T) {
 	}
 
 	daemon := &Server{Control: store, DefaultTenantID: "default"}
-	content := daemon.withResumeContext(ctx, identity, task, nil, router.IntentResult{Intent: router.IntentContinue, Confidence: 0.9, Reason: "test"}, "continue")
+	content := daemon.coordinator().withResumeContext(ctx, identity, task, nil, router.IntentResult{Intent: router.IntentContinue, Confidence: 0.9, Reason: "test"}, "continue")
 	for _, want := range []string{"[SelfMind resume context]", "patched gateway", "wired store", "run tests", "internal/gateway/httpapi/server.go"} {
 		if !strings.Contains(content, want) {
 			t.Fatalf("resume context missing %q:\n%s", want, content)
@@ -705,7 +705,7 @@ func TestRecordOutcomeArtifactsCreatesEvents(t *testing.T) {
 	}
 
 	daemon := &Server{Control: store, DefaultTenantID: "default"}
-	daemon.recordOutcomeArtifacts(ctx, task, run, "cli", []string{"internal/app/tools.go", "https://example.com/report"})
+	daemon.coordinator().recordOutcomeArtifacts(ctx, task, run, "cli", []string{"internal/app/tools.go", "https://example.com/report"})
 
 	artifacts, err := store.ListTaskArtifacts(ctx, task.ID, 10)
 	if err != nil {

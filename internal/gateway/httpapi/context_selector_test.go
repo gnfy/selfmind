@@ -70,7 +70,7 @@ func TestSelectedTaskRuntimeContextReadsControlSlices(t *testing.T) {
 	}
 
 	server := &Server{Control: store}
-	selected := server.selectedTaskRuntimeContext(ctx, task, run, ws, "cli")
+	selected := server.coordinator().selectedTaskRuntimeContext(ctx, task, run, ws, "cli")
 	prompt := selected.Prompt(10000)
 	for _, want := range []string{
 		task.ID,

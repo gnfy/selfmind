@@ -174,12 +174,13 @@ func (d *Server) ProcessMessage(ctx context.Context, req api.MessageRequest) (ap
 	return coord.runMessage(runCtx, identity, req, intent)
 }
 
-func (d *Server) prepareRequestWorkspace(ctx context.Context, identity *control.IdentityContext, req *api.MessageRequest) (*control.Workspace, error) {
-	if d == nil || d.Control == nil || identity == nil || req == nil {
+func (c *RunCoordinator) prepareRequestWorkspace(ctx context.Context, identity *control.IdentityContext, req *api.MessageRequest) (*control.Workspace, error) {
+	if c == nil || c.srv == nil || c.srv.Control == nil || identity == nil || req == nil {
 		return nil, nil
 	}
+	store := c.srv.Control
 	if strings.TrimSpace(req.WorkspaceID) != "" {
-		return d.Control.GetWorkspace(ctx, identity.TenantID, req.WorkspaceID)
+		return store.GetWorkspace(ctx, identity.TenantID, req.WorkspaceID)
 	}
 	if !isLocalCLIRequest(*req) {
 		return nil, nil
@@ -192,7 +193,7 @@ func (d *Server) prepareRequestWorkspace(ctx context.Context, identity *control.
 	if err != nil || !info.IsDir() {
 		return nil, nil
 	}
-	ws, err := d.Control.RegisterWorkspace(ctx, control.Workspace{
+	ws, err := store.RegisterWorkspace(ctx, control.Workspace{
 		TenantID:      identity.TenantID,
 		OwnerPersonID: identity.PersonID,
 		Name:          filepath.Base(cwd),
@@ -265,10 +266,11 @@ func llmUsageZero() llm.UsageStats {
 	return llm.UsageStats{}
 }
 
-func (d *Server) recordOutcomeArtifacts(ctx context.Context, task *control.Task, run *control.Run, channel string, files []string) {
-	if d == nil || d.Control == nil || task == nil {
+func (c *RunCoordinator) recordOutcomeArtifacts(ctx context.Context, task *control.Task, run *control.Run, channel string, files []string) {
+	if c == nil || c.srv == nil || c.srv.Control == nil || task == nil {
 		return
 	}
+	store := c.srv.Control
 	seen := map[string]struct{}{}
 	for _, uri := range files {
 		uri = strings.TrimSpace(uri)
@@ -291,7 +293,7 @@ func (d *Server) recordOutcomeArtifacts(ctx context.Context, task *control.Task,
 		if run != nil {
 			artifact.RunID = run.ID
 		}
-		saved, err := d.Control.SaveArtifact(ctx, artifact)
+		saved, err := store.SaveArtifact(ctx, artifact)
 		if err != nil {
 			continue
 		}
@@ -299,7 +301,7 @@ func (d *Server) recordOutcomeArtifacts(ctx context.Context, task *control.Task,
 		if run != nil {
 			runID = run.ID
 		}
-		_, _ = d.Control.AppendEvent(ctx, control.Event{
+		_, _ = store.AppendEvent(ctx, control.Event{
 			TaskID:     task.ID,
 			RunID:      runID,
 			Type:       "artifact.created",
@@ -339,34 +341,35 @@ func artifactName(uri string) string {
 	return name
 }
 
-func (d *Server) resolveTask(ctx context.Context, identity *control.IdentityContext, req api.MessageRequest, intent router.IntentResult) (*control.Task, error) {
+func (c *RunCoordinator) resolveTask(ctx context.Context, identity *control.IdentityContext, req api.MessageRequest, intent router.IntentResult) (*control.Task, error) {
+	store := c.srv.Control
 	if req.TaskID != "" {
-		task, err := d.Control.GetTask(ctx, identity.TenantID, req.TaskID)
+		task, err := store.GetTask(ctx, identity.TenantID, req.TaskID)
 		if err != nil || task != nil {
-			return d.bindTaskWorkspaceIfMissing(ctx, identity, task, req, err)
+			return c.bindTaskWorkspaceIfMissing(ctx, identity, task, req, err)
 		}
 	}
 	if intent.Intent == router.IntentContinue {
-		task, err := d.resolveContinueTask(ctx, identity)
+		task, err := c.srv.resolveContinueTask(ctx, identity)
 		if err != nil || task != nil {
-			return d.bindTaskWorkspaceIfMissing(ctx, identity, task, req, err)
+			return c.bindTaskWorkspaceIfMissing(ctx, identity, task, req, err)
 		}
 		return nil, fmt.Errorf("no task to continue; start a new task or use /resume <task_id>")
 	}
-	task, err := d.Control.CurrentTask(ctx, identity.TenantID, identity.PersonID)
+	task, err := store.CurrentTask(ctx, identity.TenantID, identity.PersonID)
 	if err != nil {
 		return nil, err
 	}
 	if task != nil {
-		return d.bindTaskWorkspaceIfMissing(ctx, identity, task, req, nil)
+		return c.bindTaskWorkspaceIfMissing(ctx, identity, task, req, nil)
 	}
 	workspaceID := req.WorkspaceID
 	if workspaceID == "" {
-		if ws, _ := d.Control.CurrentWorkspace(ctx, identity.TenantID, identity.PersonID); ws != nil {
+		if ws, _ := store.CurrentWorkspace(ctx, identity.TenantID, identity.PersonID); ws != nil {
 			workspaceID = ws.ID
 		}
 	}
-	return d.Control.CreateTask(ctx, control.TaskCreate{
+	return store.CreateTask(ctx, control.TaskCreate{
 		TenantID:    identity.TenantID,
 		PersonID:    identity.PersonID,
 		WorkspaceID: workspaceID,
@@ -375,35 +378,37 @@ func (d *Server) resolveTask(ctx context.Context, identity *control.IdentityCont
 	})
 }
 
-func (d *Server) bindTaskWorkspaceIfMissing(ctx context.Context, identity *control.IdentityContext, task *control.Task, req api.MessageRequest, priorErr error) (*control.Task, error) {
+func (c *RunCoordinator) bindTaskWorkspaceIfMissing(ctx context.Context, identity *control.IdentityContext, task *control.Task, req api.MessageRequest, priorErr error) (*control.Task, error) {
 	if priorErr != nil || task == nil || identity == nil {
 		return task, priorErr
 	}
 	if task.WorkspaceID != "" || strings.TrimSpace(req.WorkspaceID) == "" {
 		return task, nil
 	}
-	if err := d.Control.SetTaskWorkspace(ctx, identity.TenantID, task.ID, req.WorkspaceID); err != nil {
+	store := c.srv.Control
+	if err := store.SetTaskWorkspace(ctx, identity.TenantID, task.ID, req.WorkspaceID); err != nil {
 		return nil, err
 	}
-	refreshed, err := d.Control.GetTask(ctx, identity.TenantID, task.ID)
+	refreshed, err := store.GetTask(ctx, identity.TenantID, task.ID)
 	if err != nil || refreshed == nil {
 		return task, err
 	}
 	return refreshed, nil
 }
 
-func (d *Server) workspaceForTask(ctx context.Context, identity *control.IdentityContext, task *control.Task, req api.MessageRequest) (*control.Workspace, error) {
+func (c *RunCoordinator) workspaceForTask(ctx context.Context, identity *control.IdentityContext, task *control.Task, req api.MessageRequest) (*control.Workspace, error) {
+	store := c.srv.Control
 	workspaceID := req.WorkspaceID
 	if workspaceID == "" && task != nil {
 		workspaceID = task.WorkspaceID
 	}
 	if workspaceID == "" {
-		return d.Control.CurrentWorkspace(ctx, identity.TenantID, identity.PersonID)
+		return store.CurrentWorkspace(ctx, identity.TenantID, identity.PersonID)
 	}
-	return d.Control.GetWorkspace(ctx, identity.TenantID, workspaceID)
+	return store.GetWorkspace(ctx, identity.TenantID, workspaceID)
 }
 
-func (d *Server) installExecutionScope(identity *control.IdentityContext, task *control.Task, run *control.Run, workspace *control.Workspace) func() {
+func (c *RunCoordinator) installExecutionScope(identity *control.IdentityContext, task *control.Task, run *control.Run, workspace *control.Workspace) func() {
 	if identity == nil {
 		return func() {}
 	}
@@ -423,15 +428,16 @@ func (d *Server) installExecutionScope(identity *control.IdentityContext, task *
 		scope.RunID = run.ID
 		scope.Channel = run.Channel
 	}
-	scope.Approval = d.toolApprovalHandler(identity, task, run, scope.Channel)
+	scope.Approval = c.toolApprovalHandler(identity, task, run, scope.Channel)
 	return tools.SetExecutionScope(identity.PersonID, scope)
 }
 
-func (d *Server) toolApprovalHandler(identity *control.IdentityContext, task *control.Task, run *control.Run, channel string) tools.ToolApprovalHandler {
+func (c *RunCoordinator) toolApprovalHandler(identity *control.IdentityContext, task *control.Task, run *control.Run, channel string) tools.ToolApprovalHandler {
 	return func(ctx context.Context, req tools.ToolApprovalRequest) (tools.ToolApprovalDecision, error) {
-		if d == nil || d.Control == nil || identity == nil {
+		if c == nil || c.srv == nil || c.srv.Control == nil || identity == nil {
 			return tools.ToolApprovalDecision{}, fmt.Errorf("approval store is not available")
 		}
+		store := c.srv.Control
 		if ctx == nil {
 			ctx = context.Background()
 		}
@@ -446,7 +452,7 @@ func (d *Server) toolApprovalHandler(identity *control.IdentityContext, task *co
 		if runID == "" && run != nil {
 			runID = run.ID
 		}
-		approval, err := d.Control.CreateApprovalRequest(waitCtx, control.ApprovalRequest{
+		approval, err := store.CreateApprovalRequest(waitCtx, control.ApprovalRequest{
 			TenantID:         identity.TenantID,
 			PersonID:         identity.PersonID,
 			TaskID:           taskID,
@@ -463,7 +469,7 @@ func (d *Server) toolApprovalHandler(identity *control.IdentityContext, task *co
 			return tools.ToolApprovalDecision{}, err
 		}
 		if taskID != "" {
-			_, _ = d.Control.AppendEvent(waitCtx, control.Event{
+			_, _ = store.AppendEvent(waitCtx, control.Event{
 				TaskID:     taskID,
 				RunID:      runID,
 				Type:       "approval.requested",
@@ -477,7 +483,7 @@ func (d *Server) toolApprovalHandler(identity *control.IdentityContext, task *co
 				}),
 			})
 		}
-		d.notifyApprovalRequested(context.Background(), identity, taskID, runID, fallback(channel, identity.Platform), approval, req)
+		c.notifyApprovalRequested(context.Background(), identity, taskID, runID, fallback(channel, identity.Platform), approval, req)
 
 		ticker := time.NewTicker(time.Second)
 		defer ticker.Stop()
@@ -486,7 +492,7 @@ func (d *Server) toolApprovalHandler(identity *control.IdentityContext, task *co
 			case <-waitCtx.Done():
 				return tools.ToolApprovalDecision{ApprovalID: approval.ID, Reason: waitCtx.Err().Error()}, waitCtx.Err()
 			case <-ticker.C:
-				current, err := d.Control.GetApprovalRequest(waitCtx, identity.TenantID, approval.ID)
+				current, err := store.GetApprovalRequest(waitCtx, identity.TenantID, approval.ID)
 				if err != nil {
 					return tools.ToolApprovalDecision{ApprovalID: approval.ID}, err
 				}
@@ -512,15 +518,15 @@ func redactApprovalArgs(args map[string]interface{}) map[string]interface{} {
 	return out
 }
 
-func (d *Server) notifyApprovalRequested(ctx context.Context, identity *control.IdentityContext, taskID, runID, channel string, approval *control.ApprovalRequest, req tools.ToolApprovalRequest) {
-	if d == nil || d.Delivery == nil || identity == nil || approval == nil {
+func (c *RunCoordinator) notifyApprovalRequested(ctx context.Context, identity *control.IdentityContext, taskID, runID, channel string, approval *control.ApprovalRequest, req tools.ToolApprovalRequest) {
+	if c == nil || c.srv == nil || c.srv.Delivery == nil || identity == nil || approval == nil {
 		return
 	}
 	if identity.Platform == "cli" && channel == "cli" {
 		return
 	}
 	content := fmt.Sprintf("Approval required for %s: %s\nApproval: %s\nReply with /approve %s or /reject %s.", req.ToolName, req.Reason, approval.ID, approval.ID, approval.ID)
-	_ = d.Delivery.EnqueueAndTry(ctx, delivery.Message{
+	_ = c.srv.Delivery.EnqueueAndTry(ctx, delivery.Message{
 		TenantID:       identity.TenantID,
 		PersonID:       identity.PersonID,
 		Platform:       identity.Platform,
@@ -532,7 +538,7 @@ func (d *Server) notifyApprovalRequested(ctx context.Context, identity *control.
 	})
 }
 
-func (d *Server) withGatewayContext(input string, identity *control.IdentityContext, task *control.Task, workspace *control.Workspace, attachments []api.MessageAttachment) string {
+func (c *RunCoordinator) withGatewayContext(input string, identity *control.IdentityContext, task *control.Task, workspace *control.Workspace, attachments []api.MessageAttachment) string {
 	if (workspace == nil || workspace.LocalPath == "" || task == nil) && len(attachments) == 0 {
 		return input
 	}

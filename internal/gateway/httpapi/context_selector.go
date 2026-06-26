@@ -11,8 +11,8 @@ import (
 	"selfmind/internal/platform/textutil"
 )
 
-func (d *Server) selectedTaskRuntimeContext(ctx context.Context, task *control.Task, run *control.Run, workspace *control.Workspace, channel string) kernel.TaskRuntimeContext {
-	if d == nil || d.Control == nil || task == nil {
+func (c *RunCoordinator) selectedTaskRuntimeContext(ctx context.Context, task *control.Task, run *control.Run, workspace *control.Workspace, channel string) kernel.TaskRuntimeContext {
+	if c == nil || c.srv == nil || c.srv.Control == nil || task == nil {
 		return kernel.TaskRuntimeContext{}
 	}
 	selected := kernel.TaskRuntimeContext{
@@ -37,7 +37,7 @@ func (d *Server) selectedTaskRuntimeContext(ctx context.Context, task *control.T
 		selected.WorkspaceID = firstNonEmptyString(selected.WorkspaceID, workspace.ID)
 		selected.Workspace = workspace.LocalPath
 	}
-	if handoff, _ := d.Control.LatestHandoff(ctx, task.ID); handoff != nil {
+	if handoff, _ := c.srv.Control.LatestHandoff(ctx, task.ID); handoff != nil {
 		selected.Handoff = &kernel.TaskHandoffContext{
 			Summary:      handoff.Summary,
 			DoneItems:    append([]string{}, handoff.DoneItems...),
@@ -54,7 +54,7 @@ func (d *Server) selectedTaskRuntimeContext(ctx context.Context, task *control.T
 			selected.NextSteps = append([]string{}, handoff.NextSteps...)
 		}
 	}
-	if artifacts, _ := d.Control.ListTaskArtifacts(ctx, task.ID, 6); len(artifacts) > 0 {
+	if artifacts, _ := c.srv.Control.ListTaskArtifacts(ctx, task.ID, 6); len(artifacts) > 0 {
 		selected.Artifacts = make([]kernel.TaskArtifactContext, 0, len(artifacts))
 		for _, artifact := range artifacts {
 			selected.Artifacts = append(selected.Artifacts, kernel.TaskArtifactContext{
@@ -67,7 +67,7 @@ func (d *Server) selectedTaskRuntimeContext(ctx context.Context, task *control.T
 			})
 		}
 	}
-	if events, _ := d.Control.ListTaskEvents(ctx, task.ID, 8); len(events) > 0 {
+	if events, _ := c.srv.Control.ListTaskEvents(ctx, task.ID, 8); len(events) > 0 {
 		selected.Events = make([]kernel.TaskEventContext, 0, len(events))
 		for _, event := range reverseEvents(events) {
 			selected.Events = append(selected.Events, kernel.TaskEventContext{

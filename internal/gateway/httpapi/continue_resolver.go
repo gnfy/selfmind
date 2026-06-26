@@ -79,12 +79,13 @@ func looksLikeAffirmativeContinuation(input string) bool {
 	}
 }
 
-func (d *Server) withResumeContext(ctx context.Context, identity *control.IdentityContext, task *control.Task, run *control.Run, intent router.IntentResult, input string) string {
-	if d == nil || d.Control == nil || task == nil || intent.Intent != router.IntentContinue {
+func (c *RunCoordinator) withResumeContext(ctx context.Context, identity *control.IdentityContext, task *control.Task, run *control.Run, intent router.IntentResult, input string) string {
+	if c == nil || c.srv == nil || c.srv.Control == nil || task == nil || intent.Intent != router.IntentContinue {
 		return input
 	}
-	handoff, _ := d.Control.LatestHandoff(ctx, task.ID)
-	events, _ := d.Control.ListTaskEvents(ctx, task.ID, 8)
+	store := c.srv.Control
+	handoff, _ := store.LatestHandoff(ctx, task.ID)
+	events, _ := store.ListTaskEvents(ctx, task.ID, 8)
 	if handoff == nil && len(events) == 0 {
 		return input
 	}
@@ -92,7 +93,7 @@ func (d *Server) withResumeContext(ctx context.Context, identity *control.Identi
 	if run != nil {
 		runID = run.ID
 	}
-	_, _ = d.Control.AppendEvent(ctx, control.Event{
+	_, _ = store.AppendEvent(ctx, control.Event{
 		TaskID:     task.ID,
 		RunID:      runID,
 		Type:       "run.resumed",

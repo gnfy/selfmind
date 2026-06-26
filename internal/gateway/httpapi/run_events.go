@@ -14,10 +14,11 @@ import (
 	"selfmind/internal/tools"
 )
 
-func (d *Server) startRunHeartbeat(ctx context.Context, run *control.Run) func() {
-	if d == nil || d.Control == nil || run == nil {
+func (c *RunCoordinator) startRunHeartbeat(ctx context.Context, run *control.Run) func() {
+	if c == nil || c.srv == nil || c.srv.Control == nil || run == nil {
 		return func() {}
 	}
+	store := c.srv.Control
 	done := make(chan struct{})
 	go func() {
 		ticker := time.NewTicker(10 * time.Second)
@@ -29,20 +30,21 @@ func (d *Server) startRunHeartbeat(ctx context.Context, run *control.Run) func()
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				_ = d.Control.UpdateRunHeartbeat(context.Background(), run.TenantID, run.ID)
+				_ = store.UpdateRunHeartbeat(context.Background(), run.TenantID, run.ID)
 			}
 		}
 	}()
 	return func() {
 		close(done)
-		_ = d.Control.UpdateRunHeartbeat(context.Background(), run.TenantID, run.ID)
+		_ = store.UpdateRunHeartbeat(context.Background(), run.TenantID, run.ID)
 	}
 }
 
-func (d *Server) startAsyncProgressNotices(ctx context.Context, identity *control.IdentityContext, req api.MessageRequest) func() {
-	if d == nil || d.Delivery == nil || identity == nil || router.ShouldStreamToClient(req.Channel) {
+func (c *RunCoordinator) startAsyncProgressNotices(ctx context.Context, identity *control.IdentityContext, req api.MessageRequest) func() {
+	if c == nil || c.srv == nil || c.srv.Delivery == nil || identity == nil || router.ShouldStreamToClient(req.Channel) {
 		return func() {}
 	}
+	deliver := c.srv.Delivery
 	done := make(chan struct{})
 	start := time.Now()
 	go func() {
@@ -57,7 +59,7 @@ func (d *Server) startAsyncProgressNotices(ctx context.Context, identity *contro
 			case <-ticker.C:
 				elapsed := time.Since(start).Round(time.Second)
 				content := fmt.Sprintf("SelfMind is still working (%s elapsed). I will send the result here when it finishes.", elapsed)
-				_ = d.Delivery.EnqueueAndTry(context.Background(), delivery.Message{
+				_ = deliver.EnqueueAndTry(context.Background(), delivery.Message{
 					TenantID:       identity.TenantID,
 					PersonID:       identity.PersonID,
 					Platform:       req.Platform,
@@ -73,8 +75,8 @@ func (d *Server) startAsyncProgressNotices(ctx context.Context, identity *contro
 	}
 }
 
-func (d *Server) deliverAsyncResult(ctx context.Context, identity *control.IdentityContext, req api.MessageRequest, resp api.MessageResponse) {
-	if d == nil || d.Delivery == nil || identity == nil {
+func (c *RunCoordinator) deliverAsyncResult(ctx context.Context, identity *control.IdentityContext, req api.MessageRequest, resp api.MessageResponse) {
+	if c == nil || c.srv == nil || c.srv.Delivery == nil || identity == nil {
 		return
 	}
 	if req.Platform == "cli" && req.Channel == "cli" {
@@ -87,7 +89,7 @@ func (d *Server) deliverAsyncResult(ctx context.Context, identity *control.Ident
 	if content == "" {
 		content = "SelfMind task finished."
 	}
-	_ = d.Delivery.EnqueueAndTry(ctx, delivery.Message{
+	_ = c.srv.Delivery.EnqueueAndTry(ctx, delivery.Message{
 		TenantID:       identity.TenantID,
 		PersonID:       identity.PersonID,
 		Platform:       req.Platform,
@@ -113,7 +115,7 @@ func runIDForResponse(resp api.MessageResponse) string {
 	return resp.Run.ID
 }
 
-func (d *Server) aggregateGatewayResponse(ctx context.Context, channel string, task *control.Task, run *control.Run, resp *router.HandleResponse) (string, llm.UsageStats, error) {
+func (c *RunCoordinator) aggregateGatewayResponse(ctx context.Context, channel string, task *control.Task, run *control.Run, resp *router.HandleResponse) (string, llm.UsageStats, error) {
 	if resp == nil {
 		return "", llm.UsageStats{}, nil
 	}
@@ -131,7 +133,7 @@ func (d *Server) aggregateGatewayResponse(ctx context.Context, channel string, t
 				observer(event)
 			}
 			summary.Observe(event)
-			d.recordStreamEvent(ctx, channel, task, run, event)
+			c.recordStreamEvent(ctx, channel, task, run, event)
 			if event.EventType == "stream" {
 				sawStream = true
 				content.WriteString(event.Content)
@@ -157,8 +159,8 @@ func (d *Server) aggregateGatewayResponse(ctx context.Context, channel string, t
 	return summary.WithContent(content.String()), usage, nil
 }
 
-func (d *Server) recordStreamEvent(ctx context.Context, channel string, task *control.Task, run *control.Run, event llm.StreamEvent) {
-	if d == nil || d.Control == nil || task == nil {
+func (c *RunCoordinator) recordStreamEvent(ctx context.Context, channel string, task *control.Task, run *control.Run, event llm.StreamEvent) {
+	if c == nil || c.srv == nil || c.srv.Control == nil || task == nil {
 		return
 	}
 	eventType := event.EventType
@@ -206,7 +208,7 @@ func (d *Server) recordStreamEvent(ctx context.Context, channel string, task *co
 	if run != nil {
 		runID = run.ID
 	}
-	_, _ = d.Control.AppendEvent(ctx, control.Event{
+	_, _ = c.srv.Control.AppendEvent(ctx, control.Event{
 		TaskID:     task.ID,
 		RunID:      runID,
 		Type:       eventType,

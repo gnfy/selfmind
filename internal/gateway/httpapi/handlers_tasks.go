@@ -231,7 +231,7 @@ func (d *Server) handleCurrentTask(w http.ResponseWriter, r *http.Request) {
 		"task":       task,
 		"handoff":    handoff,
 		"artifacts":  artifacts,
-		"active_run": formatActiveRunStatus(d.currentActive(identity.PersonID)),
+		"active_run": formatActiveRunStatus(d.coordinator().currentActive(identity.PersonID)),
 	})
 }
 

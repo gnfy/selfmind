@@ -5,7 +5,6 @@ import (
 	"net/http"
 	"time"
 
-	"selfmind/internal/control"
 	"selfmind/internal/gateway/api"
 )
 
@@ -46,7 +45,7 @@ func (d *Server) GatewayStatus() api.GatewayStatusResponse {
 	if d.RuntimeStatusFunc != nil {
 		runtime = d.RuntimeStatusFunc()
 	}
-	active := d.activeRunStatuses()
+	active := d.coordinator().activeRunStatuses()
 	state, draining, reason := d.gatewayStateParts()
 	if runtime.State == "" {
 		runtime.State = state
@@ -97,7 +96,7 @@ func (d *Server) shutdownAfterDrain(timeout time.Duration, reason string) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	if !d.waitForIdle(ctx) {
-		d.stopAllActive("gateway shutdown")
+		d.coordinator().stopAllActive("gateway shutdown")
 	}
 	if d.ShutdownFunc != nil {
 		d.ShutdownFunc()
@@ -112,76 +111,19 @@ func (d *Server) beginDraining(reason string) {
 }
 
 func (d *Server) waitForIdle(ctx context.Context) bool {
+	coord := d.coordinator()
 	ticker := time.NewTicker(200 * time.Millisecond)
 	defer ticker.Stop()
 	for {
-		if len(d.activeRunStatuses()) == 0 {
+		if len(coord.activeRunStatuses()) == 0 {
 			return true
 		}
 		select {
 		case <-ctx.Done():
-			return len(d.activeRunStatuses()) == 0
+			return len(coord.activeRunStatuses()) == 0
 		case <-ticker.C:
 		}
 	}
-}
-
-func (d *Server) stopAllActive(reason string) {
-	d.mu.Lock()
-	var runs []*activeRun
-	for _, active := range d.active {
-		copy := *active
-		runs = append(runs, &copy)
-		if active.Cancel != nil {
-			active.Cancel()
-		}
-	}
-	d.mu.Unlock()
-
-	for _, active := range runs {
-		if active.RunID != "" && d.Control != nil {
-			_ = d.Control.RequestRunCancel(context.Background(), active.TenantID, active.RunID)
-			_ = d.Control.FinishRun(context.Background(), active.TenantID, active.RunID, "cancelled")
-		}
-		if active.TaskID != "" && d.Control != nil {
-			_ = d.Control.UpdateTaskStatus(context.Background(), active.TenantID, active.TaskID, "cancelled", reason, nil)
-			_, _ = d.Control.AppendEvent(context.Background(), control.Event{
-				TaskID:     active.TaskID,
-				RunID:      active.RunID,
-				Type:       "run.cancelled",
-				Visibility: "task",
-				Channel:    active.Channel,
-				Payload:    mustJSON(map[string]string{"reason": reason}),
-			})
-		}
-	}
-}
-
-func (d *Server) activeRunStatuses() []api.ActiveRunStatus {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	if len(d.active) == 0 {
-		return nil
-	}
-	statuses := make([]api.ActiveRunStatus, 0, len(d.active))
-	for _, active := range d.active {
-		if active == nil {
-			continue
-		}
-		status := formatActiveRunStatus(activeRunCopy(active))
-		if status != nil {
-			statuses = append(statuses, *status)
-		}
-	}
-	return statuses
-}
-
-func activeRunCopy(active *activeRun) *activeRun {
-	if active == nil {
-		return nil
-	}
-	copy := *active
-	return &copy
 }
 
 func (d *Server) drainTimeout() time.Duration {

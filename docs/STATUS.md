@@ -47,7 +47,7 @@
 | WeChat Official Account adapter | 🟡 | Inbound passive-reply + signature verify (`internal/gateway/wechat`); outbound now supported via the customer-service `custom/send` sender (`internal/gateway/delivery/wechat.go`, registered as platform `wechat`). Still no message encryption/decryption. |
 | Approval lifecycle | 🟡 | DB + API + `/approve` / `/reject` done. Native IM approval buttons not wired. |
 | CLI / TUI controller | 🟡 | Components partly extracted; `uiModel` in `controller.go` is still a monolith (violates AGENTS.md guidance). |
-| Run execution coordinator | 🟡 | Run lifecycle still embedded in `httpapi/server.go`; not extracted to a worker/coordinator. `Agent.runMu` still serializes runs. |
+| Run execution coordinator | 🟡 | `RunCoordinator` (`httpapi/run_coordinator.go`) now owns the run lifecycle (`runMessage`/`startAsyncRun`) and the active-run registry; Server is the HTTP/orchestration layer. Remaining: migrate the pre/post-run leaf helpers off Server, and `Agent.runMu` still serializes runs (no parallel worker pool yet). |
 | Process sandbox | 🟡 | Unix process-group isolation only; **not** a security sandbox (no namespace/seccomp/cgroup). Windows is a no-op. |
 | Feishu / QQ adapters | ❌ | Not started. |
 | User profile synthesis | ❌ | Only loose facts; no `ProfileBuilder` / `UserProfile` / `GetProfile`. |
@@ -58,9 +58,10 @@
 These are the live gaps, ordered. They are derived from the table above, not from
 the historical roadmaps.
 
-1. **P0 — Extract run execution** from `httpapi/server.go` into a run coordinator /
-   worker service. Unblocks a real parallel worker pool (currently gated by
-   `Agent.runMu`).
+1. **P0 — Finish the run-execution extraction.** `RunCoordinator` now owns the
+   run lifecycle and active-run registry; next is migrating the pre/post-run
+   leaf helpers off `Server` and building a real parallel worker pool (still
+   gated by `Agent.runMu`).
 2. **P0 — Decompose the CLI controller**: move `uiModel` state out of
    `controller.go` into components, per the AGENTS.md guardrail.
 3. **P1 — Real `execute_code` sandbox** (namespace/seccomp/cgroup or container)

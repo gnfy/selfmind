@@ -362,8 +362,9 @@ repo:
 - `internal/gateway/api/`: gateway HTTP request/response DTOs shared by
   clients and handlers.
 - `internal/gateway/httpapi/server.go`: local HTTP API and IM webhook
-  shared message/run flow. Endpoint handlers live in split `handlers_*.go`,
-  `active_runs.go`, and `run_events.go` files in the same package.
+  shared message/run flow. Endpoint handlers live in split `handlers_*.go` and
+  `run_events.go`; run execution and the active-run registry live in
+  `run_coordinator.go` (the `RunCoordinator` type), which Server delegates to.
 - `internal/gateway/httpapi/context_selector.go`: selects bounded task
   handoff/event/artifact/workspace slices from `control.db` for one model turn.
   Extend this when adding long-term context sources.

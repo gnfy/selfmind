@@ -31,10 +31,12 @@ type Server struct {
 	RuntimeStatusFunc func() api.GatewayRuntimeInfo
 
 	mu           sync.Mutex
-	active       map[string]*activeRun
 	draining     bool
 	drainReason  string
 	shutdownOnce sync.Once
+
+	runs     *RunCoordinator
+	runsOnce sync.Once
 }
 
 type activeRun struct {
@@ -142,7 +144,8 @@ func (d *Server) ProcessMessage(ctx context.Context, req api.MessageRequest) (ap
 		return resp, http.StatusOK
 	}
 
-	if running := d.currentActive(identity.PersonID); running != nil {
+	coord := d.coordinator()
+	if running := coord.currentActive(identity.PersonID); running != nil {
 		return api.MessageResponse{
 			Identity: identity,
 			Content:  formatBusyRun(running),
@@ -152,11 +155,11 @@ func (d *Server) ProcessMessage(ctx context.Context, req api.MessageRequest) (ap
 	}
 
 	if req.Async {
-		return d.startAsyncRun(identity, req, intent), http.StatusOK
+		return coord.startAsyncRun(identity, req, intent), http.StatusOK
 	}
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	if ok := d.beginActive(identity.PersonID, &activeRun{
+	if ok := coord.beginActive(identity.PersonID, &activeRun{
 		TenantID:  identity.TenantID,
 		PersonID:  identity.PersonID,
 		Channel:   req.Channel,
@@ -166,9 +169,9 @@ func (d *Server) ProcessMessage(ctx context.Context, req api.MessageRequest) (ap
 	}); !ok {
 		return api.MessageResponse{Identity: identity, Content: "Another task is already running. Use /status or /stop.", Turn: messageTurn("busy", "running", "running", "", "", "")}, http.StatusOK
 	}
-	defer d.endActive(identity.PersonID)
+	defer coord.endActive(identity.PersonID)
 
-	return d.runMessage(runCtx, identity, req, intent)
+	return coord.runMessage(runCtx, identity, req, intent)
 }
 
 func (d *Server) prepareRequestWorkspace(ctx context.Context, identity *control.IdentityContext, req *api.MessageRequest) (*control.Workspace, error) {
@@ -262,119 +265,6 @@ func llmUsageZero() llm.UsageStats {
 	return llm.UsageStats{}
 }
 
-func (d *Server) runMessage(ctx context.Context, identity *control.IdentityContext, req api.MessageRequest, intent router.IntentResult) (api.MessageResponse, int) {
-	if _, err := d.prepareRequestWorkspace(ctx, identity, &req); err != nil {
-		return api.MessageResponse{Identity: identity, Error: err.Error(), Turn: messageTurn("failed", "", "idle", "", "", err.Error()), Context: messageContextBudget(llmUsageZero())}, http.StatusInternalServerError
-	}
-	task, err := d.resolveTask(ctx, identity, req, intent)
-	if err != nil {
-		if strings.Contains(err.Error(), "no task to continue") {
-			return api.MessageResponse{Identity: identity, Content: err.Error(), Turn: messageTurn("failed", "", "idle", "", "", err.Error()), Context: messageContextBudget(llmUsageZero())}, http.StatusOK
-		}
-		return api.MessageResponse{Identity: identity, Error: err.Error(), Turn: messageTurn("failed", "", "idle", "", "", err.Error()), Context: messageContextBudget(llmUsageZero())}, http.StatusInternalServerError
-	}
-	_ = d.Control.RecordChannelMessage(ctx, *identity, req.Channel, task.ID, "user", req.Content)
-
-	run, err := d.Control.StartRun(ctx, task, req.Channel, truncate(req.Content, 240))
-	if err != nil {
-		return api.MessageResponse{Identity: identity, Task: task, Error: err.Error(), Turn: messageTurn("failed", task.Status, "idle", task.ID, "", err.Error()), Context: messageContextBudget(llmUsageZero())}, http.StatusInternalServerError
-	}
-	stopHeartbeat := d.startRunHeartbeat(ctx, run)
-	defer stopHeartbeat()
-	d.updateActive(identity.PersonID, task, run)
-	_, _ = d.Control.AppendEvent(ctx, control.Event{
-		TaskID:     task.ID,
-		RunID:      run.ID,
-		Type:       "run.started",
-		Visibility: "task",
-		Channel:    req.Channel,
-		Payload:    mustJSON(map[string]string{"input": truncate(req.Content, 500)}),
-	})
-
-	workspace, _ := d.workspaceForTask(ctx, identity, task, req)
-	cleanupScope := d.installExecutionScope(identity, task, run, workspace)
-	defer cleanupScope()
-	if workspace != nil && workspace.LocalPath != "" {
-		ctx = kernel.WithWorkspaceContext(ctx, kernel.WorkspaceContext{
-			ID:   workspace.ID,
-			Root: workspace.LocalPath,
-		})
-	}
-	ctx = kernel.WithTaskRuntimeContext(ctx, d.selectedTaskRuntimeContext(ctx, task, run, workspace, req.Channel))
-	agentInput := d.withGatewayContext(req.Content, identity, task, workspace, req.Attachments)
-	agentInput = d.withResumeContext(ctx, identity, task, run, intent, agentInput)
-	ctx = kernel.WithTaskStrategy(ctx, taskStrategyForRequest(req, intent))
-
-	if d.Gateway == nil {
-		err := fmt.Errorf("gateway is not configured")
-		_ = d.Control.FinishRun(context.Background(), identity.TenantID, run.ID, "failed")
-		_ = d.Control.UpdateTaskStatus(context.Background(), identity.TenantID, task.ID, "blocked", err.Error(), nil)
-		return api.MessageResponse{Identity: identity, Task: task, Run: run, Error: err.Error(), Turn: messageTurn("failed", "blocked", "idle", task.ID, run.ID, err.Error()), Context: messageContextBudget(llmUsageZero())}, http.StatusInternalServerError
-	}
-
-	resp, err := d.Gateway.RunAgentWithEvents(ctx, identity.PersonID, req.Channel, agentInput)
-	if err != nil {
-		status := "failed"
-		taskStatus := "blocked"
-		if ctx.Err() != nil {
-			status = "cancelled"
-			taskStatus = "cancelled"
-		}
-		_ = d.Control.FinishRun(context.Background(), identity.TenantID, run.ID, status)
-		_ = d.Control.UpdateTaskStatus(context.Background(), identity.TenantID, task.ID, taskStatus, err.Error(), nil)
-		return api.MessageResponse{Identity: identity, Task: task, Run: run, Error: err.Error(), Turn: messageTurn(status, taskStatus, "idle", task.ID, run.ID, err.Error()), Context: messageContextBudget(llmUsageZero())}, http.StatusOK
-	}
-
-	content, usage, err := d.aggregateGatewayResponse(ctx, req.Channel, task, run, resp)
-	if err != nil {
-		status := "failed"
-		taskStatus := "blocked"
-		if ctx.Err() != nil {
-			status = "cancelled"
-			taskStatus = "cancelled"
-		}
-		_ = d.Control.FinishRun(context.Background(), identity.TenantID, run.ID, status)
-		_ = d.Control.UpdateTaskStatus(context.Background(), identity.TenantID, task.ID, taskStatus, err.Error(), nil)
-		return api.MessageResponse{Identity: identity, Task: task, Run: run, Error: err.Error(), Turn: messageTurn(status, taskStatus, "idle", task.ID, run.ID, err.Error()), Context: messageContextBudget(usage)}, http.StatusOK
-	}
-
-	outcome := buildRunOutcome(content)
-	if structured, ok := d.latestStructuredRunOutcome(ctx, task.ID, run.ID); ok {
-		outcome = structured
-		if outcome.Summary == "" {
-			outcome.Summary = buildRunOutcome(content).Summary
-		}
-	}
-	_ = d.Control.RecordChannelMessage(ctx, *identity, req.Channel, task.ID, "assistant", content)
-	_ = d.Control.FinishRun(ctx, identity.TenantID, run.ID, outcome.Status)
-	_ = d.Control.UpdateTaskStatus(ctx, identity.TenantID, task.ID, outcome.Status, outcome.Summary, outcome.NextSteps)
-	_, _ = d.Control.SaveHandoff(ctx, control.Handoff{
-		TaskID:       task.ID,
-		Summary:      outcome.Summary,
-		DoneItems:    outcome.Done,
-		NextSteps:    outcome.NextSteps,
-		ChangedFiles: outcome.Files,
-		TestStatus:   strings.Join(outcome.Tests, "\n"),
-		Risks:        outcome.Risks,
-	})
-	d.recordOutcomeArtifacts(ctx, task, run, req.Channel, outcome.Files)
-	_, _ = d.Control.AppendEvent(ctx, control.Event{
-		TaskID:     task.ID,
-		RunID:      run.ID,
-		Type:       "run.finished",
-		Visibility: "task",
-		Channel:    req.Channel,
-		Payload:    mustJSON(map[string]interface{}{"outcome": outcome, "usage": usage}),
-	})
-	taskID := task.ID
-	task, _ = d.Control.GetTask(ctx, identity.TenantID, task.ID)
-	taskStatus := outcome.Status
-	if task != nil && task.Status != "" {
-		taskStatus = task.Status
-	}
-	return api.MessageResponse{Identity: identity, Task: task, Run: run, Outcome: &outcome, Content: content, Usage: usage, Turn: messageTurn("completed", taskStatus, "idle", taskID, run.ID, outcome.Summary), Context: messageContextBudget(usage)}, http.StatusOK
-}
-
 func (d *Server) recordOutcomeArtifacts(ctx context.Context, task *control.Task, run *control.Run, channel string, files []string) {
 	if d == nil || d.Control == nil || task == nil {
 		return
@@ -447,41 +337,6 @@ func artifactName(uri string) string {
 		return clean
 	}
 	return name
-}
-
-func (d *Server) startAsyncRun(identity *control.IdentityContext, req api.MessageRequest, intent router.IntentResult) api.MessageResponse {
-	active := &activeRun{
-		TenantID:  identity.TenantID,
-		PersonID:  identity.PersonID,
-		Channel:   req.Channel,
-		Summary:   truncate(req.Content, 240),
-		StartedAt: time.Now(),
-	}
-	if ok := d.beginActive(identity.PersonID, active); !ok {
-		return api.MessageResponse{Identity: identity, Content: "Another task is already running. Use /status or /stop.", Turn: messageTurn("busy", "running", "running", "", "", "")}
-	}
-
-	runCtx, runCancel := context.WithCancel(context.Background())
-	active.Cancel = runCancel
-	stopProgressNotices := d.startAsyncProgressNotices(runCtx, identity, req)
-	go func() {
-		defer d.endActive(identity.PersonID)
-		defer runCancel()
-		defer stopProgressNotices()
-		resp, _ := d.runMessage(runCtx, identity, req, intent)
-		d.deliverAsyncResult(context.Background(), identity, req, resp)
-	}()
-
-	notice := router.WorkingNotice(req.Channel)
-	if notice == "" {
-		notice = "Started in the background. Use /status to check progress or /stop to cancel."
-	}
-	return api.MessageResponse{
-		Identity: identity,
-		Content:  notice,
-		Accepted: true,
-		Turn:     messageTurn("accepted", "running", "running", "", "", notice),
-	}
 }
 
 func (d *Server) resolveTask(ctx context.Context, identity *control.IdentityContext, req api.MessageRequest, intent router.IntentResult) (*control.Task, error) {
@@ -756,7 +611,7 @@ func (d *Server) tryHandleControlCommand(ctx context.Context, identity *control.
 	case lower == "/id":
 		return true, formatIdentity(identity), nil
 	case lower == "/stop":
-		active := d.stopActive(identity.PersonID)
+		active := d.coordinator().stopActive(identity.PersonID)
 		if active == nil {
 			return true, "No active run to stop.", nil
 		}
@@ -808,7 +663,7 @@ func (d *Server) tryHandleControlCommand(ctx context.Context, identity *control.
 		}
 		handoff, _ := d.Control.LatestHandoff(ctx, task.ID)
 		plan := d.latestPlanForTask(ctx, task.ID)
-		return true, formatTaskStatus(task, handoff, d.currentActive(identity.PersonID), plan), nil
+		return true, formatTaskStatus(task, handoff, d.coordinator().currentActive(identity.PersonID), plan), nil
 	case strings.HasPrefix(lower, "/resume ") || strings.HasPrefix(lower, "/task "):
 		parts := strings.Fields(trimmed)
 		if len(parts) < 2 {
@@ -904,7 +759,7 @@ func (d *Server) tryHandleControlCommand(ctx context.Context, identity *control.
 		}
 		handoff, _ := d.Control.LatestHandoff(ctx, task.ID)
 		plan := d.latestPlanForTask(ctx, task.ID)
-		return true, formatTaskStatus(task, handoff, d.currentActive(identity.PersonID), plan), nil
+		return true, formatTaskStatus(task, handoff, d.coordinator().currentActive(identity.PersonID), plan), nil
 	default:
 		return false, "", nil
 	}

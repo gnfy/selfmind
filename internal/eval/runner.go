@@ -15,6 +15,7 @@ import (
 	"selfmind/internal/gateway/httpapi"
 	"selfmind/internal/kernel"
 	"selfmind/internal/kernel/llm"
+	"selfmind/internal/kernel/memory"
 	"selfmind/internal/platform/config"
 	"selfmind/internal/platform/log"
 )
@@ -28,6 +29,7 @@ type RunOptions struct {
 	OutputPath     string
 	RecordContent  bool
 	ProgressWriter io.Writer
+	TurnTimeout    time.Duration
 }
 
 type RunResult struct {
@@ -45,7 +47,7 @@ type RunResult struct {
 
 type runtimeHarness struct {
 	cfg          *config.Config
-	mem          interface{ Close() error }
+	mem          *memory.MemoryManager
 	controlStore *control.Store
 	cronStop     func()
 	server       *httpapi.Server
@@ -69,13 +71,92 @@ func RunCase(ctx context.Context, c *Case, opts RunOptions) (*RunResult, error) 
 	if c == nil {
 		return nil, fmt.Errorf("case is nil")
 	}
+	repeat := c.Repeat
+	if repeat < 1 {
+		repeat = 1
+	}
+	if repeat == 1 {
+		return runSingle(ctx, c, opts, 0, 1)
+	}
+	// Sampled run for non-deterministic real-model scenarios: pass when the
+	// fraction of passing samples meets PassRate (default: all must pass).
+	passRate := c.PassRate
+	if passRate <= 0 {
+		passRate = 1.0
+	}
+	var last *RunResult
+	var firstErr error
+	passed := 0
+	for s := 0; s < repeat; s++ {
+		r, err := runSingle(ctx, c, opts, s, repeat)
+		if err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		last = r
+		if r.Status == "passed" {
+			passed++
+		}
+	}
+	if last == nil {
+		return nil, firstErr
+	}
+	rate := float64(passed) / float64(repeat)
+	ok := rate >= passRate
+	last.Status = "failed"
+	if ok {
+		last.Status = "passed"
+	}
+	last.Checks = append(last.Checks, CheckResult{
+		Name:    fmt.Sprintf("pass_rate>=%.2f", passRate),
+		OK:      ok,
+		Message: fmt.Sprintf("%d/%d samples passed (%.0f%%)", passed, repeat, rate*100),
+		Score:   rate,
+	})
+	return last, nil
+}
+
+func runSingle(ctx context.Context, c *Case, opts RunOptions, sampleIdx, totalSamples int) (*RunResult, error) {
+	// Isolated scenarios run in a throwaway temp root (fresh data dir + a fresh
+	// workspace seeded from setup) so real-model tool calls can write files and
+	// move task state without polluting the repo or ~/.selfmind.
+	var dataDirOverride string
+	var cleanup func()
 	workspace, err := resolveWorkspace(c, opts.Workspace)
 	if err != nil {
 		return nil, err
 	}
+	if needsIsolation(c) {
+		root, err := os.MkdirTemp("", "selfmind-eval-"+sanitizeFilePart(c.ID)+"-")
+		if err != nil {
+			return nil, err
+		}
+		cleanup = func() { _ = os.RemoveAll(root) }
+		dataDirOverride = filepath.Join(root, "data")
+		workspace = filepath.Join(root, "workspace")
+		if err := os.MkdirAll(workspace, 0o755); err != nil {
+			cleanup()
+			return nil, err
+		}
+		if c.Setup != nil {
+			if err := applyFileSeeds(workspace, c.Setup.Files); err != nil {
+				cleanup()
+				return nil, err
+			}
+		}
+	}
+	if cleanup != nil {
+		defer cleanup()
+	}
+
 	outPath := opts.OutputPath
 	if strings.TrimSpace(outPath) == "" {
 		outPath = DefaultRunPath(c, firstNonEmpty(opts.Provider, c.Provider, "default"))
+	}
+	if totalSamples > 1 {
+		outPath = strings.TrimSuffix(outPath, ".jsonl") + fmt.Sprintf("-s%d.jsonl", sampleIdx+1)
 	}
 	rec, err := NewRecorder(outPath, opts.RecordContent || c.RecordContent)
 	if err != nil {
@@ -83,11 +164,23 @@ func RunCase(ctx context.Context, c *Case, opts RunOptions) (*RunResult, error) 
 	}
 	defer rec.Close()
 
-	h, err := newRuntimeHarness(opts, c)
+	h, err := newRuntimeHarness(opts, c, dataDirOverride)
 	if err != nil {
 		return nil, err
 	}
 	defer h.Close()
+
+	// Resolve the eval identity up front so setup can seed memory/task, then
+	// reuse it for the post-run world-state assertions.
+	identity, err := h.controlStore.ResolveOrCreateAccount(ctx, h.tenantID, "eval", "eval-"+c.ID, "SelfMind Eval")
+	if err != nil {
+		return nil, err
+	}
+	if c.Setup != nil {
+		if err := applyStateSeeds(ctx, h.controlStore, h.mem, identity, "", c.Setup); err != nil {
+			return nil, err
+		}
+	}
 
 	start := time.Now()
 	rec.StartCase(c, h.provider, h.model, workspace)
@@ -106,8 +199,11 @@ func RunCase(ctx context.Context, c *Case, opts RunOptions) (*RunResult, error) 
 				writeLiveProgress(opts.ProgressWriter, c.ID, i, event)
 			}
 		}
-		runCtx := httpapi.WithStreamObserver(ctx, observer)
-		resp, status := h.server.ProcessMessage(runCtx, api.MessageRequest{
+		// Per-turn deadline: a stalled provider stream (bytes stop arriving
+		// without an EOF) would otherwise hang the eval indefinitely. The
+		// deadline cancels the underlying request so the turn fails cleanly.
+		turnCtx, cancelTurn := context.WithTimeout(httpapi.WithStreamObserver(ctx, observer), turnBudget(c, opts))
+		resp, status := h.server.ProcessMessage(turnCtx, api.MessageRequest{
 			TenantID:       h.tenantID,
 			Platform:       "eval",
 			PlatformUserID: "eval-" + c.ID,
@@ -116,6 +212,7 @@ func RunCase(ctx context.Context, c *Case, opts RunOptions) (*RunResult, error) 
 			Content:        turn.Input,
 			ClientCWD:      workspace,
 		})
+		cancelTurn()
 		if resp.Task != nil {
 			taskIDs = append(taskIDs, resp.Task.ID)
 		}
@@ -140,6 +237,20 @@ func RunCase(ctx context.Context, c *Case, opts RunOptions) (*RunResult, error) 
 	// asking whether this interaction completed.
 	snap.OutcomeStatus = firstNonEmpty(lastStatus, lastOutcome)
 	checks := EvaluateCase(c, snap)
+
+	// World-state predicates: assert on control.db / files / memory — an oracle
+	// the model cannot game by phrasing its answer.
+	if len(c.AssertState) > 0 {
+		subjectTaskID := lastNonEmpty(taskIDs)
+		if subjectTaskID == "" {
+			if cur, _ := h.controlStore.CurrentTask(ctx, identity.TenantID, identity.PersonID); cur != nil {
+				subjectTaskID = cur.ID
+			}
+		}
+		world := CollectWorldState(ctx, h.controlStore, h.mem, identity, subjectTaskID, workspace)
+		checks = append(checks, EvaluateStatePredicates(c.AssertState, world)...)
+	}
+
 	status := "passed"
 	if lastStatus == "failed" || !ChecksPassed(checks) {
 		status = "failed"
@@ -157,6 +268,28 @@ func RunCase(ctx context.Context, c *Case, opts RunOptions) (*RunResult, error) 
 		OutputTokens:    outputTokens,
 		Checks:          checks,
 	}, nil
+}
+
+// turnBudget is the per-turn wall-clock deadline. It uses the case's
+// MaxDurationSeconds when set, the explicit option, or a safe default that
+// prevents a stalled provider stream from hanging the whole eval.
+func turnBudget(c *Case, opts RunOptions) time.Duration {
+	if opts.TurnTimeout > 0 {
+		return opts.TurnTimeout
+	}
+	if c != nil && c.Expect.MaxDurationSeconds > 0 {
+		return time.Duration(c.Expect.MaxDurationSeconds) * time.Second
+	}
+	return 200 * time.Second
+}
+
+func lastNonEmpty(values []string) string {
+	for i := len(values) - 1; i >= 0; i-- {
+		if strings.TrimSpace(values[i]) != "" {
+			return strings.TrimSpace(values[i])
+		}
+	}
+	return ""
 }
 
 func writeLiveProgress(w io.Writer, caseID string, turnIndex int, event llm.StreamEvent) {
@@ -183,7 +316,7 @@ func writeLiveProgress(w io.Writer, caseID string, turnIndex int, event llm.Stre
 	}
 }
 
-func newRuntimeHarness(opts RunOptions, c *Case) (*runtimeHarness, error) {
+func newRuntimeHarness(opts RunOptions, c *Case, dataDirOverride string) (*runtimeHarness, error) {
 	cfg, err := config.LoadConfig(config.Options{Path: opts.ConfigPath, CreateIfMissing: true})
 	if err != nil {
 		return nil, err
@@ -195,6 +328,11 @@ func newRuntimeHarness(opts RunOptions, c *Case) (*runtimeHarness, error) {
 	}
 	if model != "" {
 		cfg.Model.Default = model
+	}
+	// Isolated scenarios get a fresh data dir so control.db / memory start clean
+	// and never touch the user's real ~/.selfmind data.
+	if strings.TrimSpace(dataDirOverride) != "" {
+		cfg.Storage.DataDir = dataDirOverride
 	}
 	// Eval runs are explicit foreground checks. Avoid starting unrelated cron
 	// jobs while preserving the same agent/tool/runtime path.

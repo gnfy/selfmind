@@ -1,0 +1,30 @@
+id: state_js_single_file
+title: "write a runnable single-file game and finish the task"
+suite: state-v1
+tier: smoke
+workspace: isolated
+channel: cli
+
+turns:
+  # Bounded on purpose: a heavy "full styled game" blows the time budget on a
+  # reasoning model. We still exercise the file-write state oracle, just fast.
+  - input: "在当前目录写一个最小的单文件网页 game.html:一个标题加一个按钮,点击按钮用 JavaScript 弹出 alert('You win!')。保持简短,不超过 30 行,直接写文件即可。"
+
+expect:
+  status: completed
+  require_tool_events: true
+  min_tool_calls: 1
+checks:
+  no_mojibake: true
+  no_raw_json_leak: true
+  no_tool_xml_leak: true
+  no_empty_response: true
+
+assert_state:
+  - { on: file,   path: game.html, exists: true }
+  - { on: file,   path: game.html, min_bytes: 80 }
+  - { on: file,   path: game.html, contains: "<script" }
+  - { on: file,   path: game.html, contains: "alert" }
+  - { on: file,   path: game.html, not_contains: "TODO" }
+  - { on: events, type: "tool.completed", count_gte: 1 }
+  - { on: events, type: "run.cancelled", count_lte: 0 }

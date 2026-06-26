@@ -1,0 +1,23 @@
+id: state_memory_seeded
+title: "seeded user preference persists through a turn"
+suite: state-v1
+tier: smoke
+workspace: isolated
+channel: cli
+
+setup:
+  memory:
+    - { target: user, content: "用户偏好简洁的中文回答,不要长篇大论" }
+
+turns:
+  - input: "简单说一下你能帮我做什么。"
+
+expect:
+  status: completed
+checks:
+  no_mojibake: true
+  no_empty_response: true
+
+assert_state:
+  - { on: memory, target: user, contains: "简洁" }
+  - { on: memory, target: user, count_gte: 1 }

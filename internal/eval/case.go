@@ -23,6 +23,14 @@ type Case struct {
 	Expect        Expectations  `yaml:"expect" json:"expect,omitempty"`
 	Checks        CheckSettings `yaml:"checks" json:"checks,omitempty"`
 
+	// State-oracle additions (v1): initial world, world-state assertions, and
+	// sampling controls for non-deterministic real-model runs.
+	Setup       *Setup           `yaml:"setup,omitempty" json:"setup,omitempty"`
+	AssertState []StatePredicate `yaml:"assert_state,omitempty" json:"assert_state,omitempty"`
+	Tier        string           `yaml:"tier,omitempty" json:"tier,omitempty"`
+	Repeat      int              `yaml:"repeat,omitempty" json:"repeat,omitempty"`
+	PassRate    float64          `yaml:"pass_rate,omitempty" json:"pass_rate,omitempty"`
+
 	path string
 }
 

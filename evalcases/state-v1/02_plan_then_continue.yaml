@@ -1,0 +1,25 @@
+id: state_plan_then_continue
+title: "plan first, then continue in the same task"
+suite: state-v1
+tier: smoke
+workspace: isolated
+channel: cli
+
+turns:
+  - input: "我想做一个命令行待办工具,先只给我实现方案和步骤,先不要写代码,简短一点。"
+  # Bounded continuation: a concrete small file, not open-ended "do step 1".
+  - input: "可以,按这个方案,先只在当前目录创建一个 README.md,用三五句话说明这个工具叫什么、能做什么。只做这一件事。"
+
+expect:
+  status: completed
+  require_same_task: true
+  require_continuation: true
+checks:
+  no_mojibake: true
+  no_empty_response: true
+
+assert_state:
+  - { on: task, field: status, not_contains: "blocked" }
+  - { on: task, field: last_channel, eq: cli }
+  - { on: file, path: README.md, exists: true }
+  - { on: file, path: README.md, min_bytes: 20 }

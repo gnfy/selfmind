@@ -221,6 +221,13 @@ func newDeliveryService(store *control.Store, cfg *config.Config, weixinSender d
 	if weixinSender != nil {
 		router.Register("weixin", weixinSender)
 	}
+	if cfg.Gateway.Wechat.Enabled && strings.TrimSpace(cfg.Gateway.Wechat.AppID) != "" {
+		router.Register("wechat", &delivery.WechatSender{
+			AppID:     cfg.Gateway.Wechat.AppID,
+			AppSecret: cfg.Gateway.Wechat.AppSecret,
+			BaseURL:   cfg.Gateway.Wechat.BaseURL,
+		})
+	}
 	return delivery.NewService(store, router, delivery.Options{
 		MaxMessageChars: cfg.Gateway.DeliveryMaxMessageChars,
 		RetryAttempts:   cfg.Gateway.DeliveryRetryAttempts,

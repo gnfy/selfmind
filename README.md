@@ -31,7 +31,7 @@ Available for daily personal use:
 
 Still first-version or planned:
 
-- Official Feishu and QQ SDK adapters are not started yet; the WeChat Official Account adapter currently handles inbound messages only (no outbound send).
+- Official Feishu and QQ SDK adapters are not started yet. The WeChat Official Account adapter handles inbound passive replies and can push outbound customer-service messages, but does not yet implement message encryption/decryption.
 - Native approval buttons, official enterprise IM SDKs, rich media attachments, and full platform signing/encryption modes still need production hardening.
 - SaaS admin console, tenant model-secret custody, billing policy, and queue/worker scaling are planned but not complete.
 

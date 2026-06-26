@@ -61,6 +61,12 @@ gateway:
     split_multiline_messages: false
     send_chunk_delay_seconds: 1.5
     send_chunk_retries: 4
+  wechat:
+    enabled: false
+    app_id: ""
+    app_secret: ""
+    token: ""
+    base_url: "https://api.weixin.qq.com"
 
 evolution:
   enabled: true
@@ -203,6 +209,19 @@ type GatewayConfig struct {
 	DeliveryMaxMessageChars int          `mapstructure:"delivery_max_message_chars" yaml:"delivery_max_message_chars,omitempty"`
 	DeliveryRetryAttempts   int          `mapstructure:"delivery_retry_attempts" yaml:"delivery_retry_attempts,omitempty"`
 	Weixin                  WeixinConfig `mapstructure:"weixin" yaml:"weixin,omitempty"`
+	Wechat                  WechatConfig `mapstructure:"wechat" yaml:"wechat,omitempty"`
+}
+
+// WechatConfig configures a WeChat Official Account (公众号). Inbound passive
+// replies only need Token (for signature verification); outbound customer
+// service messages require AppID/AppSecret so the sender can fetch an
+// access_token and call cgi-bin/message/custom/send.
+type WechatConfig struct {
+	Enabled   bool   `mapstructure:"enabled" yaml:"enabled,omitempty"`
+	AppID     string `mapstructure:"app_id" yaml:"app_id,omitempty"`
+	AppSecret string `mapstructure:"app_secret" yaml:"app_secret,omitempty"`
+	Token     string `mapstructure:"token" yaml:"token,omitempty"`
+	BaseURL   string `mapstructure:"base_url" yaml:"base_url,omitempty"`
 }
 
 type WeixinConfig struct {

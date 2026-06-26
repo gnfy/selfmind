@@ -44,7 +44,7 @@
 | Eval loop | ✅ | Real gateway-path replay; P0 deterministic checks; JSONL traces with content hashing; 29 cases / 5 suites. `internal/eval`, `evalcases/`. |
 | Telegram adapter | ✅ | Webhook + long poll, signature verify, send. |
 | Enterprise WeChat (Weixin) adapter | ✅ | Full duplex, AES decrypt, attachments. |
-| WeChat Official Account adapter | 🟡 | Inbound + signature verify only; no outbound send, no message decryption. `internal/gateway/wechat`. |
+| WeChat Official Account adapter | 🟡 | Inbound passive-reply + signature verify (`internal/gateway/wechat`); outbound now supported via the customer-service `custom/send` sender (`internal/gateway/delivery/wechat.go`, registered as platform `wechat`). Still no message encryption/decryption. |
 | Approval lifecycle | 🟡 | DB + API + `/approve` / `/reject` done. Native IM approval buttons not wired. |
 | CLI / TUI controller | 🟡 | Components partly extracted; `uiModel` in `controller.go` is still a monolith (violates AGENTS.md guidance). |
 | Run execution coordinator | 🟡 | Run lifecycle still embedded in `httpapi/server.go`; not extracted to a worker/coordinator. `Agent.runMu` still serializes runs. |
@@ -66,7 +66,8 @@ the historical roadmaps.
 3. **P1 — Real `execute_code` sandbox** (namespace/seccomp/cgroup or container)
    before any untrusted multi-tenant code execution.
 4. **P1 — Wire native IM approval buttons** (Telegram / Weixin); backend is ready.
-5. **P2 — WeChat Official Account outbound**, then Feishu / QQ adapters.
+5. **P2 — Feishu / QQ adapters** (WeChat Official Account outbound is done; the
+   remaining IM gap is Feishu and QQ).
 6. **P2 — User profile synthesis** (`ProfileBuilder`) — the "learns about you" gap.
 7. **P2 — MCP `sampling/createMessage`** for servers that call back into the model.
 

@@ -567,7 +567,15 @@ The GitHub Actions release workflow lives at:
 .github/workflows/release.yml
 ```
 
-It supports automatic tag releases and manual `workflow_dispatch` runs. Current release artifacts:
+Trigger modes:
+
+- **Push a `v*` tag** — builds and publishes a GitHub Release automatically.
+- **Manual run (Actions → Release → Run workflow)** — builds and packages on
+  demand. Leave `tag` empty for a `dev-<date>-<sha>` build; keep `publish` off to
+  just produce downloadable `tar.gz` artifacts on the run page (no Release is
+  created); turn `publish` on to also cut a GitHub Release.
+
+Current release artifacts:
 
 - `selfmind-<tag>-linux-amd64.tar.gz`
 - `selfmind-<tag>-linux-arm64.tar.gz`

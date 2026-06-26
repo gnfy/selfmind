@@ -602,7 +602,14 @@ GitHub Actions release workflow：
 .github/workflows/release.yml
 ```
 
-支持 tag 自动发布和手动发布。当前发布产物：
+触发方式：
+
+- **推送 `v*` tag** —— 自动构建并发布 GitHub Release。
+- **手动运行（Actions → Release → Run workflow）** —— 按需构建打包。`tag` 留空会
+  生成 `dev-<日期>-<sha>` 构建；`publish` 关闭时只在运行页产出可下载的 `tar.gz`
+  artifact（不创建 Release）；`publish` 打开则同时发布 GitHub Release。
+
+当前发布产物：
 
 - `selfmind-<tag>-linux-amd64.tar.gz`
 - `selfmind-<tag>-linux-arm64.tar.gz`

@@ -7,9 +7,15 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Release tag, for example v0.1.0"
-        required: true
+        description: "Release tag, for example v0.1.0. Leave empty for a dev build."
+        required: false
+        default: ""
         type: string
+      publish:
+        description: "Publish a GitHub Release. Off = only build and upload artifacts."
+        required: false
+        default: false
+        type: boolean
       prerelease:
         description: "Mark the GitHub release as a prerelease"
         required: false
@@ -72,6 +78,9 @@ jobs:
         run: |
           if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
             tag="${{ inputs.tag }}"
+            if [[ -z "${tag}" ]]; then
+              tag="dev-$(date -u +%Y%m%d)-${GITHUB_SHA::7}"
+            fi
           else
             tag="${GITHUB_REF_NAME}"
           fi
@@ -124,6 +133,7 @@ jobs:
   publish:
     name: Publish GitHub Release
     needs: build
+    if: ${{ github.event_name == 'push' || inputs.publish }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -136,6 +146,9 @@ jobs:
           if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
             tag="${{ inputs.tag }}"
             prerelease="${{ inputs.prerelease }}"
+            if [[ -z "${tag}" ]]; then
+              tag="dev-$(date -u +%Y%m%d)-${GITHUB_SHA::7}"
+            fi
           else
             tag="${GITHUB_REF_NAME}"
             prerelease="false"

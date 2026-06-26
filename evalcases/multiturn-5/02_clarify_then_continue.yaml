@@ -1,0 +1,32 @@
+id: multiturn_clarify_then_continue
+title: "ambiguous request should clarify and then continue after details"
+suite: multiturn-5
+workspace: "."
+channel: cli
+
+turns:
+  - input: "帮我做一个登录功能，先不要写代码，也不要查看本地文件；如果信息不足，请只问最多 3 个澄清问题。"
+  - input: "补充一下：用 Go + SQLite，只做本地 CLI 登录，先给实现方案；最多 120 字。"
+  - input: "可以，继续，把边界条件和测试点列出来；最多 4 条。"
+
+expect:
+  status: completed
+  require_same_task: true
+  require_continuation: true
+  max_tool_calls: 0
+  max_tool_errors: 2
+  max_duration_seconds: 420
+  contains:
+    - "SQLite"
+  must_not_contain:
+    - "不知道你要继续什么"
+    - "<tool>"
+    - "Process summary:"
+
+checks:
+  no_mojibake: true
+  no_raw_json_leak: true
+  no_tool_xml_leak: true
+  no_empty_response: true
+  no_provider_stack_dump: true
+  context_not_exceeded: true

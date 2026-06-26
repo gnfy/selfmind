@@ -382,6 +382,32 @@ func TestResponsesAdapterDropsOrphanToolOutput(t *testing.T) {
 	}
 }
 
+func TestResponsesAdapterConsumesEachToolCallOutputOnce(t *testing.T) {
+	adapter := NewResponsesAdapter("token", "https://example.test", "gpt-test")
+	wire := adapter.requestFromChat(ChatRequest{Messages: []Message{
+		{Role: "assistant", ToolCalls: []ToolCall{{
+			ID:       "tool_once",
+			Function: "read_file",
+			Args:     `{"path":"README.md"}`,
+		}}},
+		{Role: "tool", Name: "read_file", ToolCallID: "tool_once", Content: "first"},
+		{Role: "tool", Name: "read_file", ToolCallID: "tool_once", Content: "duplicate"},
+	}}, true)
+
+	outputs := 0
+	for _, item := range wire.Input {
+		if item.Type == "function_call_output" {
+			outputs++
+			if item.Output == nil || *item.Output != "first" {
+				t.Fatalf("output item = %#v, want first output only", item)
+			}
+		}
+	}
+	if outputs != 1 {
+		t.Fatalf("function_call_output count = %d, want 1: %#v", outputs, wire.Input)
+	}
+}
+
 func TestResponsesAdapterMapsSanitizedToolNamesBackFromStream(t *testing.T) {
 	var requestBody map[string]interface{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

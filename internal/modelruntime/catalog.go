@@ -13,6 +13,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"selfmind/internal/platform/log"
 )
 
 // Catalog fetches model IDs through the provider's native or compatible list
@@ -117,14 +119,21 @@ func fetchCodexModels(ctx context.Context, apiKey string) ([]string, error) {
 		}
 		req.Header.Set("Authorization", "Bearer "+apiKey)
 		resp, err := http.DefaultClient.Do(req)
-		if err == nil && resp != nil {
+		if err != nil {
+			// Log rather than swallow: a network/auth failure here silently
+			// degrades to the static fallback list and otherwise hides broken
+			// Codex credentials from the user.
+			log.Warn("codex model list fetch failed, falling back", "error", err)
+		} else if resp != nil {
 			defer resp.Body.Close()
-			if resp.StatusCode < 400 {
+			if resp.StatusCode >= 400 {
+				log.Warn("codex model list returned error status, falling back", "status", resp.StatusCode)
+			} else {
 				var payload interface{}
-				if err := json.NewDecoder(resp.Body).Decode(&payload); err == nil {
-					if ids := collectModelIDs(payload); len(ids) > 0 {
-						return ids, nil
-					}
+				if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+					log.Warn("codex model list decode failed, falling back", "error", err)
+				} else if ids := collectModelIDs(payload); len(ids) > 0 {
+					return ids, nil
 				}
 			}
 		}

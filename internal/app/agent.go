@@ -451,18 +451,6 @@ func googleChatCompletionsURL(baseURL string) string {
 	return chatCompletionsURL(baseURL)
 }
 
-func getEffectiveAPIKey(mem *memory.MemoryManager, tenantID, provider string, systemKey string) string {
-	if mem == nil {
-		return systemKey
-	}
-	// 优先从数据库加载该租户的 Key
-	userKey, err := mem.GetPermission(context.Background(), tenantID, provider+"_api_key")
-	// 这里目前复用了 GetPermission 的 bool 返回作为演示
-	_ = userKey
-	_ = err
-	return systemKey
-}
-
 func buildKeyGetter(mem *memory.MemoryManager, tenantID, provider string) func() string {
 	return func() string {
 		if mem == nil {

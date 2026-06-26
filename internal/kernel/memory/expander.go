@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"selfmind/internal/kernel/llm"
@@ -16,6 +17,7 @@ type SemanticExpander struct {
 	enabled  bool
 
 	// simple cache to avoid repeated expansions for the same query within a short window
+	mu       sync.Mutex
 	cache    map[string]cacheEntry
 	cacheTTL time.Duration
 }
@@ -55,7 +57,10 @@ func (se *SemanticExpander) Expand(ctx context.Context, query string) string {
 	ctx = llm.WithModelContext(ctx, mc)
 
 	// cache check
-	if entry, ok := se.cache[query]; ok && time.Since(entry.cachedAt) < se.cacheTTL {
+	se.mu.Lock()
+	entry, ok := se.cache[query]
+	se.mu.Unlock()
+	if ok && time.Since(entry.cachedAt) < se.cacheTTL {
 		return entry.result
 	}
 
@@ -79,6 +84,8 @@ func (se *SemanticExpander) Expand(ctx context.Context, query string) string {
 	// clean up: remove newlines, extra spaces
 	result = strings.Join(strings.Fields(result), " ")
 
+	se.mu.Lock()
 	se.cache[query] = cacheEntry{result: result, cachedAt: time.Now()}
+	se.mu.Unlock()
 	return result
 }

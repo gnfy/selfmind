@@ -10,7 +10,7 @@ import (
 
 const (
 	toolResultPreviewBytes = 800
-	toolResultModelBytes   = 64000
+	toolResultModelBytes   = 24000
 	toolResultSeparator    = " · "
 )
 
@@ -93,6 +93,9 @@ func toolResultPreview(name, raw string) string {
 		if summary := patchPreview(raw); summary != "" {
 			return summary
 		}
+	}
+	if summary := genericJSONPreview(raw); summary != "" {
+		return summary
 	}
 	return firstNonEmptyLine(raw, toolResultPreviewBytes)
 }
@@ -246,6 +249,70 @@ func summarizePaths(paths []string) string {
 	default:
 		return fmt.Sprintf("%s, %s +%d more", cleaned[0], cleaned[1], len(cleaned)-2)
 	}
+}
+
+func genericJSONPreview(raw string) string {
+	var obj map[string]interface{}
+	if err := json.Unmarshal([]byte(strings.TrimSpace(raw)), &obj); err != nil || len(obj) == 0 {
+		return ""
+	}
+	if msg := firstJSONString(obj, "message", "summary", "status", "error", "Error"); msg != "" {
+		return textutil.Truncate(msg, toolResultPreviewBytes)
+	}
+	for _, key := range []string{"FilesModified", "files_modified", "modified", "files"} {
+		if paths := jsonStringSlice(obj[key]); len(paths) > 0 {
+			return "modified " + summarizePaths(paths)
+		}
+	}
+	for _, key := range []string{"FilesCreated", "files_created", "created"} {
+		if paths := jsonStringSlice(obj[key]); len(paths) > 0 {
+			return "created " + summarizePaths(paths)
+		}
+	}
+	for _, key := range []string{"FilesDeleted", "files_deleted", "deleted"} {
+		if paths := jsonStringSlice(obj[key]); len(paths) > 0 {
+			return "deleted " + summarizePaths(paths)
+		}
+	}
+	if success, ok := jsonBool(obj, "Success", "success", "ok"); ok && success {
+		return "completed"
+	}
+	return fmt.Sprintf("%d fields", len(obj))
+}
+
+func firstJSONString(obj map[string]interface{}, keys ...string) string {
+	for _, key := range keys {
+		if value, ok := obj[key].(string); ok && strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
+}
+
+func jsonStringSlice(value interface{}) []string {
+	switch v := value.(type) {
+	case []string:
+		return v
+	case []interface{}:
+		out := make([]string, 0, len(v))
+		for _, item := range v {
+			if text, ok := item.(string); ok && strings.TrimSpace(text) != "" {
+				out = append(out, strings.TrimSpace(text))
+			}
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
+func jsonBool(obj map[string]interface{}, keys ...string) (bool, bool) {
+	for _, key := range keys {
+		if value, ok := obj[key].(bool); ok {
+			return value, true
+		}
+	}
+	return false, false
 }
 
 func firstNonEmptyLine(raw string, maxBytes int) string {

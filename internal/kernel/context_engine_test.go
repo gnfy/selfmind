@@ -49,17 +49,14 @@ func TestBoundedHistoryMessagesKeepsRecentSessionsInChronologicalOrder(t *testin
 		newBlob("ignored-", 3),
 	})
 
-	if len(got) != 11 {
-		t.Fatalf("expected 11 messages, got %d", len(got))
+	if len(got) != 4 {
+		t.Fatalf("expected 4 messages, got %d", len(got))
 	}
-	if got[0].Content != "old-0" {
-		t.Fatalf("expected older selected session first, got %q", got[0].Content)
+	if got[0].Content != "new-6" {
+		t.Fatalf("expected newest session to be trimmed to last 4 messages, got %q", got[0].Content)
 	}
 	if got[len(got)-1].Content != "new-9" {
 		t.Fatalf("expected latest selected message last, got %q", got[len(got)-1].Content)
-	}
-	if got[3].Content != "new-2" {
-		t.Fatalf("expected newest session to be trimmed to last 8 messages, got %q", got[3].Content)
 	}
 }
 

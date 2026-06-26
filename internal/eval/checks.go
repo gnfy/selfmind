@@ -184,18 +184,28 @@ func hasContextOverflow(output string, errors []string) bool {
 		return true
 	}
 	out := strings.ToLower(output)
-	if !strings.Contains(out, "error") && !strings.Contains(out, "failed") && !strings.Contains(out, "exceed") {
-		return false
-	}
-	return containsContextOverflowPhrase(out)
+	return containsContextOverflowOutput(out)
 }
 
 func containsContextOverflowPhrase(s string) bool {
-	return strings.Contains(s, "context length") ||
+	return strings.Contains(s, "maximum context length") ||
 		strings.Contains(s, "maximum context") ||
 		strings.Contains(s, "too many tokens") ||
-		strings.Contains(s, "context window") ||
-		strings.Contains(s, "input is too long")
+		strings.Contains(s, "input is too long") ||
+		strings.Contains(s, "exceeds context") ||
+		strings.Contains(s, "exceeded context") ||
+		strings.Contains(s, "context window exceeded")
+}
+
+func containsContextOverflowOutput(s string) bool {
+	if !strings.Contains(s, "context") && !strings.Contains(s, "tokens") && !strings.Contains(s, "input") {
+		return false
+	}
+	return strings.Contains(s, "too many tokens") ||
+		strings.Contains(s, "input is too long") ||
+		strings.Contains(s, "exceeds context") ||
+		strings.Contains(s, "exceeded context") ||
+		strings.Contains(s, "context window exceeded")
 }
 
 func classifyError(message string) string {

@@ -287,16 +287,17 @@ func (a *ResponsesAdapter) streamResponse(resp *http.Response) <-chan StreamEven
 func (a *ResponsesAdapter) requestFromChat(req ChatRequest, stream bool) responsesRequest {
 	model := firstNonEmptyString(req.Model, a.Model)
 	wire := responsesRequest{Model: model, Stream: stream, Store: a.Store}
-	seenToolCalls := map[string]struct{}{}
+	pendingToolOutputs := map[string]int{}
 	for _, m := range req.Messages {
 		if m.Role == "tool" {
 			callID := strings.TrimSpace(m.ToolCallID)
 			if callID == "" {
 				continue
 			}
-			if _, ok := seenToolCalls[callID]; !ok {
+			if pendingToolOutputs[callID] <= 0 {
 				continue
 			}
+			pendingToolOutputs[callID]--
 			output := contentString(openAIContentFromMessage(m))
 			wire.Input = append(wire.Input, responsesInputItem{
 				Type:   "function_call_output",
@@ -310,7 +311,7 @@ func (a *ResponsesAdapter) requestFromChat(req ChatRequest, stream bool) respons
 			role = "user"
 		}
 		content := contentString(openAIContentFromMessage(m))
-		if role != "assistant" || strings.TrimSpace(content) != "" || len(m.ToolCalls) == 0 {
+		if role != "assistant" || strings.TrimSpace(content) != "" {
 			wire.Input = append(wire.Input, responsesInputItem{
 				Role:    role,
 				Content: content,
@@ -330,7 +331,7 @@ func (a *ResponsesAdapter) requestFromChat(req ChatRequest, stream bool) respons
 					Name:      responsesSafeToolName(call.Function),
 					Arguments: responsesCallArguments(call.Args),
 				})
-				seenToolCalls[callID] = struct{}{}
+				pendingToolOutputs[callID]++
 			}
 		}
 	}

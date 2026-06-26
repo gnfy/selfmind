@@ -742,16 +742,27 @@ func (s *Store) StartRun(ctx context.Context, task *Task, channel, inputSummary 
 		Status:       "running",
 		StartedAt:    time.Now(),
 	}
-	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO task_runs (id, task_id, tenant_id, person_id, workspace_id, channel, input_summary, status, started_at, heartbeat_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		run.ID, run.TaskID, run.TenantID, run.PersonID, run.WorkspaceID, run.Channel, run.InputSummary, run.Status, run.StartedAt.Unix(), run.StartedAt.Unix())
+	// Insert the run and flip the task to running atomically: a partial write
+	// would leave tasks and task_runs disagreeing about the active run.
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
 	}
-	_, _ = s.db.ExecContext(ctx,
+	defer func() { _ = tx.Rollback() }()
+	if _, err = tx.ExecContext(ctx,
+		`INSERT INTO task_runs (id, task_id, tenant_id, person_id, workspace_id, channel, input_summary, status, started_at, heartbeat_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		run.ID, run.TaskID, run.TenantID, run.PersonID, run.WorkspaceID, run.Channel, run.InputSummary, run.Status, run.StartedAt.Unix(), run.StartedAt.Unix()); err != nil {
+		return nil, err
+	}
+	if _, err = tx.ExecContext(ctx,
 		`UPDATE tasks SET active_run_id = ?, status = 'running', last_channel = ?, updated_at = ? WHERE id = ?`,
-		run.ID, run.Channel, time.Now().Unix(), run.TaskID)
+		run.ID, run.Channel, time.Now().Unix(), run.TaskID); err != nil {
+		return nil, err
+	}
+	if err = tx.Commit(); err != nil {
+		return nil, err
+	}
 	return run, nil
 }
 
@@ -760,15 +771,23 @@ func (s *Store) FinishRun(ctx context.Context, tenantID, runID, status string) e
 		status = "done"
 	}
 	now := time.Now().Unix()
-	_, err := s.db.ExecContext(ctx,
-		`UPDATE task_runs SET status = ?, finished_at = ?, heartbeat_at = ? WHERE tenant_id = ? AND id = ?`,
-		status, now, now, normalizeTenant(tenantID), runID)
-	if err == nil {
-		_, _ = s.db.ExecContext(ctx,
-			`UPDATE tasks SET active_run_id = '', updated_at = ? WHERE tenant_id = ? AND active_run_id = ?`,
-			now, normalizeTenant(tenantID), runID)
+	tenant := normalizeTenant(tenantID)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
 	}
-	return err
+	defer func() { _ = tx.Rollback() }()
+	if _, err = tx.ExecContext(ctx,
+		`UPDATE task_runs SET status = ?, finished_at = ?, heartbeat_at = ? WHERE tenant_id = ? AND id = ?`,
+		status, now, now, tenant, runID); err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx,
+		`UPDATE tasks SET active_run_id = '', updated_at = ? WHERE tenant_id = ? AND active_run_id = ?`,
+		now, tenant, runID); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s *Store) AppendEvent(ctx context.Context, event Event) (*Event, error) {

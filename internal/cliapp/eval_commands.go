@@ -37,7 +37,7 @@ func (a *App) printEvalHelp() {
 	fmt.Fprintln(a.stdout)
 	fmt.Fprintln(a.stdout, "Usage:")
 	fmt.Fprintln(a.stdout, "  selfmind eval list [path]")
-	fmt.Fprintln(a.stdout, "  selfmind eval run [case-or-dir] [--suite NAME] [--provider ID] [--model ID]")
+	fmt.Fprintln(a.stdout, "  selfmind eval run [case-or-dir] [--suite NAME] [--provider ID] [--model ID] [--live]")
 	fmt.Fprintln(a.stdout, "  selfmind eval report <jsonl-or-dir>")
 	fmt.Fprintln(a.stdout)
 	fmt.Fprintln(a.stdout, "Examples:")
@@ -154,6 +154,8 @@ func (a *App) parseEvalRunArgs(args []string) (string, selfeval.RunOptions, erro
 			opts.OutputPath = args[i]
 		case "--record-content":
 			opts.RecordContent = true
+		case "--live":
+			opts.ProgressWriter = a.stdout
 		default:
 			if strings.HasPrefix(arg, "-") {
 				return "", opts, fmt.Errorf("unknown flag: %s", arg)

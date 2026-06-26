@@ -3,6 +3,7 @@ package telegram
 import (
 	"bytes"
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -19,11 +20,12 @@ const defaultTelegramAPIBaseURL = "https://api.telegram.org"
 // Adapter Telegram 消息适配器
 // 负责接收 Telegram 消息、解析 user id、调用统一 Gateway 处理
 type Adapter struct {
-	gateway    *router.Gateway
-	token      string
-	webhookURL string
-	apiBaseURL string
-	client     *http.Client
+	gateway       *router.Gateway
+	token         string
+	webhookURL    string
+	webhookSecret string
+	apiBaseURL    string
+	client        *http.Client
 	// Long polling state
 	longPollMu   sync.Mutex
 	longPollStop chan struct{}
@@ -234,10 +236,21 @@ func (a *Adapter) SendText(chatID int64, text string) error {
 	return a.sendMessage(chatID, text)
 }
 
+// SetWebhookSecret configures the secret token Telegram must echo back in the
+// X-Telegram-Bot-Api-Secret-Token header on every webhook delivery. When set,
+// WebhookHandler rejects requests that do not present the matching token,
+// preventing third parties from spoofing updates to the public webhook URL.
+func (a *Adapter) SetWebhookSecret(secret string) {
+	a.webhookSecret = strings.TrimSpace(secret)
+}
+
 // SetWebhook 注册 webhook（用于生产环境）
 func (a *Adapter) SetWebhook(ctx context.Context, webhookURL string) error {
 	url := a.apiURL("setWebhook")
 	payload := map[string]string{"url": webhookURL}
+	if a.webhookSecret != "" {
+		payload["secret_token"] = a.webhookSecret
+	}
 	body, _ := json.Marshal(payload)
 
 	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
@@ -264,6 +277,17 @@ func (a *Adapter) WebhookHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
+	}
+
+	// Reject spoofed deliveries: when a secret token is configured, Telegram
+	// echoes it in this header. A constant-time compare avoids leaking the
+	// token through response timing.
+	if a.webhookSecret != "" {
+		got := r.Header.Get("X-Telegram-Bot-Api-Secret-Token")
+		if subtle.ConstantTimeCompare([]byte(got), []byte(a.webhookSecret)) != 1 {
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
 	}
 
 	body, err := io.ReadAll(r.Body)

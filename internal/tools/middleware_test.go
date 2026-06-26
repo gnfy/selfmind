@@ -187,6 +187,32 @@ func TestToolGuardrailsBlockRepeatedFailure(t *testing.T) {
 	}
 }
 
+func TestDangerousToolCallDetection(t *testing.T) {
+	cases := []struct {
+		name    string
+		command string
+		want    bool
+	}{
+		{"plain rm", "rm -rf build", true},
+		{"absolute path rm bypass", "/bin/rm -rf /tmp/x", true},
+		{"piped killall", "ps aux | killall -9 node", true},
+		{"chained shutdown", "echo hi && shutdown now", true},
+		{"env-prefixed dd", "FOO=bar dd if=/dev/zero of=disk", true},
+		{"fork bomb", ":(){ :|:& };:", true},
+		{"redirect to device", "echo x > /dev/sda", true},
+		{"safe build", "go build ./...", false},
+		{"safe list", "ls -la && cat README.md", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, reason := dangerousToolCall("", "terminal", map[string]interface{}{"command": tc.command})
+			if got != tc.want {
+				t.Fatalf("dangerousToolCall(%q) = %v (reason %q), want %v", tc.command, got, reason, tc.want)
+			}
+		})
+	}
+}
+
 func TestRedactSensitive(t *testing.T) {
 	input := `Authorization: Bearer abcdefghijklmnop token=secret-value api_key: sk-testsecret123456789`
 	out := RedactSensitive(input)

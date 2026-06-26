@@ -70,6 +70,18 @@ expect:
   require_continuation: true
 ```
 
+Turns may override the case channel when a scenario needs to simulate a user
+continuing the same task from another surface:
+
+```yaml
+channel: cli
+turns:
+  - input: "先给一个方案，不要改代码。"
+    channel: cli
+  - input: "继续第一步。"
+    channel: weixin
+```
+
 ## Architecture
 
 - `internal/eval/case.go` parses YAML fixtures.

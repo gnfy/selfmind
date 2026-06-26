@@ -29,6 +29,27 @@ turns:
 	}
 }
 
+func TestLoadCaseAllowsPerTurnChannel(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "case.yaml")
+	if err := os.WriteFile(path, []byte(`
+id: channels
+channel: cli
+turns:
+  - input: "hello"
+    channel: " weixin "
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	c, err := LoadCase(path)
+	if err != nil {
+		t.Fatalf("LoadCase failed: %v", err)
+	}
+	if got := c.Turns[0].Channel; got != "weixin" {
+		t.Fatalf("turn channel = %q, want weixin", got)
+	}
+}
+
 func TestLoadCaseRejectsMojibakeFixtureText(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "case.yaml")

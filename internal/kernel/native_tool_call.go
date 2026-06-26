@@ -67,6 +67,105 @@ func filterToolCallsByStrategy(calls []llm.ToolCall, strategy TaskStrategy) []ll
 	return out
 }
 
+func filterToolCallsByStrategyAndBudget(calls []llm.ToolCall, strategy TaskStrategy, actionToolsUsed int) ([]llm.ToolCall, int) {
+	calls = filterToolCallsByStrategy(calls, strategy)
+	if len(calls) == 0 {
+		return calls, 0
+	}
+	strategy = strategy.normalized()
+	remaining := strategy.MaxActionTools - actionToolsUsed
+	if strategy.ToolMode == ToolModeNone {
+		remaining = 0
+	}
+	out := make([]llm.ToolCall, 0, len(calls))
+	dropped := 0
+	for _, call := range calls {
+		if isLifecycleToolName(call.Function) {
+			out = append(out, call)
+			continue
+		}
+		if remaining <= 0 {
+			dropped++
+			continue
+		}
+		out = append(out, call)
+		remaining--
+	}
+	return out, dropped
+}
+
+func filterToolCallsByLifecycleCaps(calls []llm.ToolCall, toolUseCounts map[string]int) ([]llm.ToolCall, int) {
+	if len(calls) == 0 {
+		return calls, 0
+	}
+	counts := make(map[string]int, len(toolUseCounts))
+	for name, count := range toolUseCounts {
+		counts[strings.TrimSpace(name)] = count
+	}
+	out := make([]llm.ToolCall, 0, len(calls))
+	dropped := 0
+	for _, call := range calls {
+		name := strings.TrimSpace(call.Function)
+		if cap := lifecycleToolCap(name); cap > 0 {
+			if counts[name] >= cap {
+				dropped++
+				continue
+			}
+			counts[name]++
+		}
+		out = append(out, call)
+	}
+	return out, dropped
+}
+
+func incrementToolUseCounts(counts map[string]int, calls []llm.ToolCall) {
+	for _, call := range calls {
+		name := strings.TrimSpace(call.Function)
+		if name != "" {
+			counts[name]++
+		}
+	}
+}
+
+func countActionToolCalls(calls []llm.ToolCall) int {
+	count := 0
+	for _, call := range calls {
+		if !isLifecycleToolName(call.Function) {
+			count++
+		}
+	}
+	return count
+}
+
+func actionToolBudgetReached(strategy TaskStrategy, actionToolsUsed int) bool {
+	strategy = strategy.normalized()
+	return strategy.ToolMode != ToolModeNone && strategy.MaxActionTools > 0 && actionToolsUsed >= strategy.MaxActionTools
+}
+
+func lifecycleToolNames() []string {
+	return []string{"update_plan", "finish_run"}
+}
+
+func lifecycleToolCap(name string) int {
+	switch strings.TrimSpace(name) {
+	case "update_plan":
+		return 2
+	case "finish_run":
+		return 1
+	default:
+		return 0
+	}
+}
+
+func isLifecycleToolName(name string) bool {
+	switch strings.TrimSpace(name) {
+	case "update_plan", "finish_run":
+		return true
+	default:
+		return false
+	}
+}
+
 func legacyToolCallsToLLM(calls []ToolCall, iteration int) []llm.ToolCall {
 	out := make([]llm.ToolCall, 0, len(calls))
 	for i, c := range calls {

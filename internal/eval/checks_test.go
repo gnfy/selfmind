@@ -88,6 +88,12 @@ func TestContextOverflowIgnoresNormalArchitectureText(t *testing.T) {
 	if hasContextOverflow("The context window is selected by the context engine.", nil) {
 		t.Fatalf("normal architecture discussion should not count as context overflow")
 	}
+	if hasContextOverflow("Provider profiles include context length, max tokens, and fallback models.", nil) {
+		t.Fatalf("normal provider capability discussion should not count as context overflow")
+	}
+	if hasContextOverflow("Provider docs can describe a model's maximum context length.", nil) {
+		t.Fatalf("normal maximum context length discussion should not count as context overflow")
+	}
 }
 
 func TestContextOverflowDetectsProviderError(t *testing.T) {

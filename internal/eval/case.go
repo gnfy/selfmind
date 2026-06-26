@@ -27,7 +27,8 @@ type Case struct {
 }
 
 type Turn struct {
-	Input string `yaml:"input" json:"input"`
+	Input   string `yaml:"input" json:"input"`
+	Channel string `yaml:"channel" json:"channel,omitempty"`
 }
 
 type Expectations struct {
@@ -92,6 +93,7 @@ func (c *Case) normalize() error {
 	}
 	for i := range c.Turns {
 		c.Turns[i].Input = strings.TrimSpace(c.Turns[i].Input)
+		c.Turns[i].Channel = strings.TrimSpace(c.Turns[i].Channel)
 	}
 	filtered := c.Turns[:0]
 	for _, t := range c.Turns {

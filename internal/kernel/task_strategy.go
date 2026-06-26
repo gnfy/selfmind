@@ -61,6 +61,7 @@ type TaskStrategy struct {
 	AllowedTools          map[string]bool
 	HiddenTools           map[string]bool
 	MaxIterations         int
+	MaxActionTools        int
 	RequireProgressEvents bool
 	ChannelMode           string
 	Reason                string
@@ -76,6 +77,7 @@ func DefaultTaskStrategy() TaskStrategy {
 		PlanPolicy:            PlanPolicyOptional,
 		WebPolicy:             WebPolicyDisabled,
 		HiddenTools:           hiddenToolsFor(PlanPolicyOptional, WebPolicyDisabled),
+		MaxActionTools:        10,
 		RequireProgressEvents: true,
 		ChannelMode:           "default",
 		Reason:                "agent-first default; web disabled unless explicitly requested",
@@ -97,6 +99,7 @@ func BuildTaskStrategy(prompt, channel string) TaskStrategy {
 			AllowedTools:          map[string]bool{},
 			HiddenTools:           hiddenToolsFor(PlanPolicyDisabled, WebPolicyDisabled),
 			MaxIterations:         1,
+			MaxActionTools:        0,
 			RequireProgressEvents: false,
 			ChannelMode:           normalizeChannelMode(channel),
 			Reason:                "empty input",
@@ -115,6 +118,7 @@ func BuildTaskStrategy(prompt, channel string) TaskStrategy {
 			AllowedTools:          map[string]bool{},
 			HiddenTools:           hiddenToolsFor(PlanPolicyDisabled, WebPolicyDisabled),
 			MaxIterations:         2,
+			MaxActionTools:        0,
 			RequireProgressEvents: false,
 			ChannelMode:           normalizeChannelMode(channel),
 			Reason:                "pure direct-answer turn; no workspace, external, or tool state requested",
@@ -177,6 +181,9 @@ func (s TaskStrategy) normalized() TaskStrategy {
 	if s.HiddenTools == nil {
 		s.HiddenTools = hiddenToolsFor(s.PlanPolicy, s.WebPolicy)
 	}
+	if s.MaxActionTools <= 0 && s.ToolMode != ToolModeNone {
+		s.MaxActionTools = defaultActionToolBudget(s.Class)
+	}
 	return s
 }
 
@@ -197,6 +204,62 @@ func (s TaskStrategy) AllowsTool(name string) bool {
 	return true
 }
 
+func (s TaskStrategy) WithActionToolsDisabled() TaskStrategy {
+	s = s.normalized()
+	if s.AllowedTools == nil {
+		s.AllowedTools = map[string]bool{}
+	}
+	for _, name := range lifecycleToolNames() {
+		if !s.HiddenTools[name] {
+			s.AllowedTools[name] = true
+		}
+	}
+	s.ToolMode = ToolModeLocalRead
+	s.MaxActionTools = 0
+	return s
+}
+
+func (s TaskStrategy) WithHiddenTools(names ...string) TaskStrategy {
+	s = s.normalized()
+	hidden := make(map[string]bool, len(s.HiddenTools)+len(names))
+	for name, value := range s.HiddenTools {
+		hidden[name] = value
+	}
+	allowed := s.AllowedTools
+	if allowed != nil {
+		allowed = make(map[string]bool, len(s.AllowedTools))
+		for name, value := range s.AllowedTools {
+			allowed[name] = value
+		}
+	}
+	for _, name := range names {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		hidden[name] = true
+		if allowed != nil {
+			delete(allowed, name)
+		}
+	}
+	s.HiddenTools = hidden
+	s.AllowedTools = allowed
+	return s
+}
+
+func defaultActionToolBudget(class TaskClass) int {
+	switch class {
+	case TaskClassCodingExample:
+		return 6
+	case TaskClassExternalLookup:
+		return 8
+	case TaskClassRepoTask, TaskClassDebugTask, TaskClassCICDTask:
+		return 12
+	default:
+		return 10
+	}
+}
+
 func (s TaskStrategy) SystemPromptNote() string {
 	s = s.normalized()
 	var sb strings.Builder
@@ -211,13 +274,16 @@ func (s TaskStrategy) SystemPromptNote() string {
 		sb.WriteString("You decide whether tools are useful. Prefer a direct answer for pure questions and small snippets when no local or external state is needed.\n")
 		sb.WriteString("Use local tools when the user asks you to inspect, create, change, run, validate, or reason about files, directories, repositories, command output, workspace state, or a runnable artifact.\n")
 		sb.WriteString("For ambiguous CLI requests that may produce an artifact, do a cheap read-only probe first, such as listing the current directory, then decide whether to answer inline, create a standalone file, or ask a brief clarification.\n")
+		if s.MaxActionTools > 0 {
+			sb.WriteString(fmt.Sprintf("Keep tool use economical. This turn has an action-tool budget of about %d non-lifecycle tool call(s). update_plan and finish_run are lifecycle tools with their own small per-turn caps; do not call them repeatedly. When the budget is nearly exhausted, finish from collected evidence instead of broadening the search.\n", s.MaxActionTools))
+		}
 	}
 	if s.PlanPolicy == PlanPolicyDisabled {
 		sb.WriteString("Do not call update_plan for this turn.\n")
 	} else if s.PlanPolicy == PlanPolicyRequired {
 		sb.WriteString("Use update_plan early, keep it current, and continue through verification or a clear blocker.\n")
 	} else {
-		sb.WriteString("Use update_plan only when the work genuinely needs multiple visible steps.\n")
+		sb.WriteString("Use update_plan only when the work genuinely needs multiple visible steps. Do not update the plan repeatedly without meaningful status changes.\n")
 	}
 	if s.WebPolicy == WebPolicyDisabled {
 		sb.WriteString("Do not use web tools unless the user explicitly asks to search, browse, inspect a URL, or retrieve current external information.\n")
@@ -225,6 +291,7 @@ func (s TaskStrategy) SystemPromptNote() string {
 	if s.ChannelMode == "im" {
 		sb.WriteString("For IM channels, avoid token-by-token narration; preserve concise progress milestones and final outcomes. If a write or command needs a workspace and none is clearly bound, ask the user to select or bind one before acting.\n")
 	}
+	sb.WriteString("Call finish_run only after non-trivial tool-using work that needs a durable task outcome. Skip finish_run for direct answers, small code snippets, ordinary explanations, or when you can answer clearly in one message.\n")
 	return sb.String()
 }
 

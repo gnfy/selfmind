@@ -3,6 +3,7 @@ package eval
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,18 +14,20 @@ import (
 	"selfmind/internal/gateway/api"
 	"selfmind/internal/gateway/httpapi"
 	"selfmind/internal/kernel"
+	"selfmind/internal/kernel/llm"
 	"selfmind/internal/platform/config"
 	"selfmind/internal/platform/log"
 )
 
 type RunOptions struct {
-	ConfigPath    string
-	TenantID      string
-	Provider      string
-	Model         string
-	Workspace     string
-	OutputPath    string
-	RecordContent bool
+	ConfigPath     string
+	TenantID       string
+	Provider       string
+	Model          string
+	Workspace      string
+	OutputPath     string
+	RecordContent  bool
+	ProgressWriter io.Writer
 }
 
 type RunResult struct {
@@ -94,14 +97,22 @@ func RunCase(ctx context.Context, c *Case, opts RunOptions) (*RunResult, error) 
 	var lastOutcome string
 	for i, turn := range c.Turns {
 		turnStart := time.Now()
-		rec.StartTurn(i, turn.Input)
-		runCtx := httpapi.WithStreamObserver(ctx, rec.ObserveStreamEvent)
+		channel := firstNonEmpty(turn.Channel, c.Channel, "cli")
+		rec.StartTurn(i, turn.Input, channel)
+		observer := rec.ObserveStreamEvent
+		if opts.ProgressWriter != nil {
+			observer = func(event llm.StreamEvent) {
+				rec.ObserveStreamEvent(event)
+				writeLiveProgress(opts.ProgressWriter, c.ID, i, event)
+			}
+		}
+		runCtx := httpapi.WithStreamObserver(ctx, observer)
 		resp, status := h.server.ProcessMessage(runCtx, api.MessageRequest{
 			TenantID:       h.tenantID,
 			Platform:       "eval",
 			PlatformUserID: "eval-" + c.ID,
 			DisplayName:    "SelfMind Eval",
-			Channel:        firstNonEmpty(c.Channel, "cli"),
+			Channel:        channel,
 			Content:        turn.Input,
 			ClientCWD:      workspace,
 		})
@@ -146,6 +157,30 @@ func RunCase(ctx context.Context, c *Case, opts RunOptions) (*RunResult, error) 
 		OutputTokens:    outputTokens,
 		Checks:          checks,
 	}, nil
+}
+
+func writeLiveProgress(w io.Writer, caseID string, turnIndex int, event llm.StreamEvent) {
+	if w == nil {
+		return
+	}
+	switch event.EventType {
+	case "agent.thinking", "agent.step":
+		if text := strings.TrimSpace(event.Content); text != "" {
+			fmt.Fprintf(w, "  [%s/%d] %s\n", caseID, turnIndex+1, text)
+		}
+	case "tool.started":
+		if event.ToolName != "" {
+			fmt.Fprintf(w, "  [%s/%d] tool: %s started\n", caseID, turnIndex+1, event.ToolName)
+		}
+	case "tool.completed":
+		status := "done"
+		if event.Err != nil {
+			status = "failed"
+		}
+		fmt.Fprintf(w, "  [%s/%d] tool: %s %s %.1fs\n", caseID, turnIndex+1, event.ToolName, status, event.DurationSeconds)
+	case "model_stream_first_token":
+		fmt.Fprintf(w, "  [%s/%d] first token\n", caseID, turnIndex+1)
+	}
 }
 
 func newRuntimeHarness(opts RunOptions, c *Case) (*runtimeHarness, error) {

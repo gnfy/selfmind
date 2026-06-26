@@ -94,6 +94,10 @@ const (
 	ModelListStatic           ModelListKind = "static"
 )
 
+// minimaxFallbackModels is shared by the minimax, minimax-cn, and
+// minimax-oauth profiles so the fallback list stays consistent across them.
+var minimaxFallbackModels = []string{"MiniMax-M3", "MiniMax-M2.7", "MiniMax-M2.7-highspeed", "MiniMax-M2.5"}
+
 func openAIQuirks() ProviderQuirks {
 	return ProviderQuirks{
 		AuthHeader:        AuthHeaderBearer,
@@ -220,7 +224,7 @@ func BuiltinProfiles() []ProviderProfile {
 			Protocol: ProtocolAnthropic, AuthType: AuthAPIKey,
 			BaseURL: "https://api.minimax.io/anthropic", APIKeyEnvVars: []string{"MINIMAX_API_KEY"},
 			BaseURLEnvVar: "MINIMAX_BASE_URL", ModelList: ModelListAnthropic,
-			FallbackModels: []string{"MiniMax-M3", "MiniMax-M2.7", "MiniMax-M2.7-highspeed", "MiniMax-M2.5"},
+			FallbackModels: minimaxFallbackModels,
 			ContextLength:  204800,
 			MaxTokens:      32768,
 			Quirks:         minimaxQuirks(),
@@ -230,7 +234,7 @@ func BuiltinProfiles() []ProviderProfile {
 			Protocol: ProtocolAnthropic, AuthType: AuthAPIKey,
 			BaseURL: "https://api.minimaxi.com/anthropic", APIKeyEnvVars: []string{"MINIMAX_CN_API_KEY"},
 			BaseURLEnvVar: "MINIMAX_CN_BASE_URL", ModelList: ModelListAnthropic,
-			FallbackModels: []string{"MiniMax-M3", "MiniMax-M2.7", "MiniMax-M2.7-highspeed", "MiniMax-M2.5"},
+			FallbackModels: minimaxFallbackModels,
 			ContextLength:  204800,
 			MaxTokens:      32768,
 			Quirks:         minimaxQuirks(),
@@ -239,7 +243,7 @@ func BuiltinProfiles() []ProviderProfile {
 			ID: "minimax-oauth", DisplayName: "MiniMax OAuth", Aliases: []string{"minimax_oauth", "minimax-portal", "minimax-global"},
 			Protocol: ProtocolAnthropic, AuthType: AuthMiniMaxOAuth,
 			BaseURL: "https://api.minimax.io/anthropic", ModelList: ModelListAnthropic,
-			FallbackModels: []string{"MiniMax-M3", "MiniMax-M2.7", "MiniMax-M2.7-highspeed", "MiniMax-M2.5"},
+			FallbackModels: minimaxFallbackModels,
 			ContextLength:  204800,
 			MaxTokens:      32768,
 			Quirks:         minimaxQuirks(),

@@ -54,7 +54,7 @@ func (d *Server) selectedTaskRuntimeContext(ctx context.Context, task *control.T
 			selected.NextSteps = append([]string{}, handoff.NextSteps...)
 		}
 	}
-	if artifacts, _ := d.Control.ListTaskArtifacts(ctx, task.ID, 12); len(artifacts) > 0 {
+	if artifacts, _ := d.Control.ListTaskArtifacts(ctx, task.ID, 6); len(artifacts) > 0 {
 		selected.Artifacts = make([]kernel.TaskArtifactContext, 0, len(artifacts))
 		for _, artifact := range artifacts {
 			selected.Artifacts = append(selected.Artifacts, kernel.TaskArtifactContext{
@@ -67,7 +67,7 @@ func (d *Server) selectedTaskRuntimeContext(ctx context.Context, task *control.T
 			})
 		}
 	}
-	if events, _ := d.Control.ListTaskEvents(ctx, task.ID, 16); len(events) > 0 {
+	if events, _ := d.Control.ListTaskEvents(ctx, task.ID, 8); len(events) > 0 {
 		selected.Events = make([]kernel.TaskEventContext, 0, len(events))
 		for _, event := range reverseEvents(events) {
 			selected.Events = append(selected.Events, kernel.TaskEventContext{
@@ -98,15 +98,15 @@ func eventPayloadSummary(raw json.RawMessage) string {
 	if err := json.Unmarshal(raw, &obj); err == nil && len(obj) > 0 {
 		for _, key := range []string{"message", "summary", "status", "tool", "result", "error", "input"} {
 			if value, ok := obj[key]; ok {
-				return textutil.Truncate(toContextLine(value), 360)
+				return textutil.Truncate(toContextLine(value), 240)
 			}
 		}
 		if outcome, ok := obj["outcome"]; ok {
-			return textutil.Truncate(toContextLine(outcome), 360)
+			return textutil.Truncate(toContextLine(outcome), 240)
 		}
-		return textutil.Truncate(toContextLine(obj), 360)
+		return textutil.Truncate(toContextLine(obj), 240)
 	}
-	return textutil.Truncate(string(raw), 360)
+	return textutil.Truncate(string(raw), 240)
 }
 
 func artifactMetadataSummary(raw json.RawMessage) string {
@@ -118,12 +118,12 @@ func artifactMetadataSummary(raw json.RawMessage) string {
 	if err := json.Unmarshal(raw, &obj); err == nil && len(obj) > 0 {
 		for _, key := range []string{"summary", "source", "description"} {
 			if value, ok := obj[key]; ok {
-				return textutil.Truncate(toContextLine(value), 220)
+				return textutil.Truncate(toContextLine(value), 180)
 			}
 		}
-		return textutil.Truncate(toContextLine(obj), 220)
+		return textutil.Truncate(toContextLine(obj), 180)
 	}
-	return textutil.Truncate(string(raw), 220)
+	return textutil.Truncate(string(raw), 180)
 }
 
 func toContextLine(value interface{}) string {

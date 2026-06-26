@@ -1,14 +1,81 @@
 package httpapi
 
 import (
+	"crypto/sha256"
+	"crypto/subtle"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"strings"
 
 	"selfmind/internal/gateway/api"
+	"selfmind/internal/platform/log"
 )
+
+// verifyIMSignature validates a platform-specific webhook signature when the
+// platform's secret is configured. It returns nil (allow) for platforms with
+// no configured secret so the generic webhook stays usable, but enforces a
+// valid signature once a secret is present. The endpoint is additionally gated
+// by the gateway auth token in handleIMWebhook.
+func verifyIMSignature(platform string, r *http.Request, body []byte, payload map[string]interface{}) error {
+	switch strings.ToLower(platform) {
+	case "feishu", "lark":
+		return verifyFeishuSignature(r, body, payload)
+	default:
+		return nil
+	}
+}
+
+// verifyFeishuSignature implements Feishu/Lark event-subscription verification:
+//   - When an encrypt key is configured, X-Lark-Signature must equal
+//     hex(sha256(timestamp + nonce + encryptKey + rawBody)).
+//   - When a verification token is configured, the payload token must match.
+//
+// Full AES decryption of the `encrypt` envelope is not handled here; configure
+// plaintext mode or add decryption when the official SDK path lands.
+func verifyFeishuSignature(r *http.Request, body []byte, payload map[string]interface{}) error {
+	encryptKey := strings.TrimSpace(os.Getenv("SELF_FEISHU_ENCRYPT_KEY"))
+	verifyToken := strings.TrimSpace(os.Getenv("SELF_FEISHU_VERIFICATION_TOKEN"))
+
+	if encryptKey != "" {
+		sig := r.Header.Get("X-Lark-Signature")
+		if sig == "" {
+			return fmt.Errorf("missing X-Lark-Signature")
+		}
+		ts := r.Header.Get("X-Lark-Request-Timestamp")
+		nonce := r.Header.Get("X-Lark-Request-Nonce")
+		h := sha256.New()
+		h.Write([]byte(ts + nonce + encryptKey))
+		h.Write(body)
+		expected := hex.EncodeToString(h.Sum(nil))
+		if subtle.ConstantTimeCompare([]byte(expected), []byte(sig)) != 1 {
+			return fmt.Errorf("feishu signature mismatch")
+		}
+	}
+
+	if verifyToken != "" {
+		got := feishuVerificationToken(payload)
+		if got != "" && subtle.ConstantTimeCompare([]byte(got), []byte(verifyToken)) != 1 {
+			return fmt.Errorf("feishu verification token mismatch")
+		}
+	}
+	return nil
+}
+
+// feishuVerificationToken pulls the verification token from either the v1
+// top-level `token` field or the v2 `header.token` field.
+func feishuVerificationToken(payload map[string]interface{}) string {
+	if tok := mapString(payload, "token"); tok != "" {
+		return tok
+	}
+	if header := nestedMap(payload, "header"); header != nil {
+		return mapString(header, "token")
+	}
+	return ""
+}
 
 func (d *Server) handleIMWebhook(w http.ResponseWriter, r *http.Request) {
 	if !d.authorized(r) {
@@ -24,9 +91,22 @@ func (d *Server) handleIMWebhook(w http.ResponseWriter, r *http.Request) {
 		platform = "webhook"
 	}
 
+	// Read the raw body once so platform signature verification can hash the
+	// exact bytes the platform signed, then decode from those same bytes.
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
 	var payload map[string]interface{}
-	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+	if err := json.Unmarshal(body, &payload); err != nil {
 		http.Error(w, "invalid json", http.StatusBadRequest)
+		return
+	}
+
+	if err := verifyIMSignature(platform, r, body, payload); err != nil {
+		log.Warn("im webhook signature rejected", "platform", platform, "error", err)
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
 

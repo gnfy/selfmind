@@ -73,29 +73,31 @@ func (t *ExecuteCodeTool) Execute(args map[string]interface{}) (string, error) {
 	}
 
 	tmpDir := filepath.Join(os.Getenv("HOME"), ".selfmind", "code_sandbox")
-	os.MkdirAll(tmpDir, 0755)
+	if err := os.MkdirAll(tmpDir, 0o755); err != nil {
+		return "", fmt.Errorf("create sandbox dir: %w", err)
+	}
 
 	scriptPath := filepath.Join(tmpDir, fmt.Sprintf("script_%d.py", time.Now().UnixNano()))
-	outputPath := filepath.Join(tmpDir, fmt.Sprintf("output_%d.txt", time.Now().UnixNano()))
 
-	wrappedCode := fmt.Sprintf(`import sys
-sys.stdout = open('%s', 'w')
-sys.stderr = sys.stdout
-exec('''%s''')
-sys.stdout.flush()
-`, outputPath, code)
-
-	if err := os.WriteFile(scriptPath, []byte(wrappedCode), 0755); err != nil {
+	// Write the user code verbatim to a script file and run it directly. Do NOT
+	// wrap it in exec('''...''') string interpolation: that allowed code
+	// containing triple quotes to break out of the literal and inject arbitrary
+	// Python. Running the file directly is both safer and gives accurate
+	// tracebacks/line numbers.
+	if err := os.WriteFile(scriptPath, []byte(code), 0o600); err != nil {
 		return "", fmt.Errorf("write script: %w", err)
 	}
 	defer os.Remove(scriptPath)
-	defer os.Remove(outputPath)
-
-	cmd := exec.Command("python3", scriptPath)
-	cmd.Dir = tmpDir
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeout)*time.Second)
 	defer cancel()
+
+	// CommandContext ensures the process is actually killed when the timeout
+	// fires. The previous code passed a context that was never wired to the
+	// command, so long-running scripts ran unbounded.
+	cmd := exec.CommandContext(ctx, "python3", "-I", scriptPath)
+	cmd.Dir = tmpDir
+	applySandboxLimits(cmd)
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -109,8 +111,10 @@ sys.stdout.flush()
 		return "", fmt.Errorf("execution error: %v\n%s", err, stderr.String())
 	}
 
-	output, _ := os.ReadFile(outputPath)
-	result := string(output)
+	result := stdout.String()
+	if stderr.Len() > 0 {
+		result += stderr.String()
+	}
 	if len(result) > 50*1024 {
 		result = result[:50*1024] + "\n... (output truncated)"
 	}

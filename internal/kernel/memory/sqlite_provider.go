@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"selfmind/internal/platform/log"
 	"selfmind/internal/platform/textutil"
 
 	"github.com/google/uuid"
@@ -72,10 +73,18 @@ func (p *SQLiteProvider) worker() {
 					continue
 				}
 				db.SetMaxOpenConns(1)
-				dbTenant = tenantID
 
-				// 立即初始化所有必要的表结构，防止读取时报错
-				p.initSchema(db)
+				// 立即初始化所有必要的表结构，防止读取时报错。
+				// schema 创建失败会让后续读写神秘地出错，因此必须显式上报，
+				// 而不是吞掉错误继续。
+				if err := p.initSchema(db); err != nil {
+					db.Close()
+					db = nil
+					dbTenant = ""
+					op.result <- dbResult{err: fmt.Errorf("init schema: %w", err)}
+					continue
+				}
+				dbTenant = tenantID
 			}
 
 			var res dbResult
@@ -486,79 +495,85 @@ func (p *SQLiteProvider) worker() {
 }
 
 // initSchema 确保所有必要的表结构都已创建
-func (p *SQLiteProvider) initSchema(db *sql.DB) {
-	// 1. 轨迹表
-	db.Exec(`CREATE TABLE IF NOT EXISTS trajectories (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		content TEXT,
-		channel TEXT DEFAULT 'cli',
-		created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-	);`)
-
-	// 2. 全文搜索表
-	db.Exec(`CREATE VIRTUAL TABLE IF NOT EXISTS sessions_fts USING fts5(
-		session_id UNINDEXED, channel UNINDEXED, content, summary, timestamp UNINDEXED
-	);`)
-	db.Exec(`CREATE TABLE IF NOT EXISTS session_messages (
-		session_id TEXT NOT NULL,
-		message_id INTEGER NOT NULL,
-		channel TEXT DEFAULT 'cli',
-		role TEXT,
-		content TEXT,
-		timestamp INTEGER,
-		PRIMARY KEY(session_id, message_id)
-	);`)
-	db.Exec(`CREATE INDEX IF NOT EXISTS idx_session_messages_session ON session_messages(session_id, message_id);`)
-
-	// 3. 检查点表
-	db.Exec(`CREATE TABLE IF NOT EXISTS checkpoints (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		name TEXT NOT NULL,
-		channel TEXT DEFAULT 'cli',
-		messages TEXT,
-		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-		UNIQUE(name, channel)
-	);`)
-
-	// 4. 事实记忆表
-	db.Exec(`CREATE TABLE IF NOT EXISTS facts (
-		id TEXT PRIMARY KEY,
-		target TEXT,
-		content TEXT,
-		created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-	);`)
-
-	// 5. 权限与秘密存储表
-	db.Exec(`CREATE TABLE IF NOT EXISTS permissions (
-		tool_name TEXT PRIMARY KEY,
-		allowed BOOLEAN
-	);`)
-	db.Exec(`CREATE TABLE IF NOT EXISTS secrets (
-		key_name TEXT PRIMARY KEY,
-		value TEXT
-	);`)
-
-	// 6. 后台进程表
-	db.Exec(`CREATE TABLE IF NOT EXISTS processes (
-		id TEXT PRIMARY KEY,
-		command TEXT,
-		cwd TEXT,
-		pid INTEGER,
-		status TEXT,
-		exit_code INTEGER DEFAULT 0,
-		started_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-		finished_at DATETIME
-	);`)
-
-	// 7. 技能调用指标表
-	db.Exec(`CREATE TABLE IF NOT EXISTS skill_metrics (
-		skill_name TEXT NOT NULL,
-		tenant_id  TEXT NOT NULL,
-		call_count INTEGER DEFAULT 0,
-		fail_count INTEGER DEFAULT 0,
-		last_used  DATETIME,
-		PRIMARY KEY(skill_name, tenant_id)
-	);`)
+func (p *SQLiteProvider) initSchema(db *sql.DB) error {
+	statements := []struct {
+		name string
+		ddl  string
+	}{
+		// 1. 轨迹表
+		{"trajectories", `CREATE TABLE IF NOT EXISTS trajectories (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			content TEXT,
+			channel TEXT DEFAULT 'cli',
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		);`},
+		// 2. 全文搜索表
+		{"sessions_fts", `CREATE VIRTUAL TABLE IF NOT EXISTS sessions_fts USING fts5(
+			session_id UNINDEXED, channel UNINDEXED, content, summary, timestamp UNINDEXED
+		);`},
+		{"session_messages", `CREATE TABLE IF NOT EXISTS session_messages (
+			session_id TEXT NOT NULL,
+			message_id INTEGER NOT NULL,
+			channel TEXT DEFAULT 'cli',
+			role TEXT,
+			content TEXT,
+			timestamp INTEGER,
+			PRIMARY KEY(session_id, message_id)
+		);`},
+		{"idx_session_messages_session", `CREATE INDEX IF NOT EXISTS idx_session_messages_session ON session_messages(session_id, message_id);`},
+		// 3. 检查点表
+		{"checkpoints", `CREATE TABLE IF NOT EXISTS checkpoints (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			name TEXT NOT NULL,
+			channel TEXT DEFAULT 'cli',
+			messages TEXT,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			UNIQUE(name, channel)
+		);`},
+		// 4. 事实记忆表
+		{"facts", `CREATE TABLE IF NOT EXISTS facts (
+			id TEXT PRIMARY KEY,
+			target TEXT,
+			content TEXT,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		);`},
+		// 5. 权限与秘密存储表
+		{"permissions", `CREATE TABLE IF NOT EXISTS permissions (
+			tool_name TEXT PRIMARY KEY,
+			allowed BOOLEAN
+		);`},
+		{"secrets", `CREATE TABLE IF NOT EXISTS secrets (
+			key_name TEXT PRIMARY KEY,
+			value TEXT
+		);`},
+		// 6. 后台进程表
+		{"processes", `CREATE TABLE IF NOT EXISTS processes (
+			id TEXT PRIMARY KEY,
+			command TEXT,
+			cwd TEXT,
+			pid INTEGER,
+			status TEXT,
+			exit_code INTEGER DEFAULT 0,
+			started_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			finished_at DATETIME
+		);`},
+		// 7. 技能调用指标表
+		{"skill_metrics", `CREATE TABLE IF NOT EXISTS skill_metrics (
+			skill_name TEXT NOT NULL,
+			tenant_id  TEXT NOT NULL,
+			call_count INTEGER DEFAULT 0,
+			fail_count INTEGER DEFAULT 0,
+			last_used  DATETIME,
+			PRIMARY KEY(skill_name, tenant_id)
+		);`},
+	}
+	for _, stmt := range statements {
+		if _, err := db.Exec(stmt.ddl); err != nil {
+			log.Error("memory schema init failed", "table", stmt.name, "error", err)
+			return fmt.Errorf("create %s: %w", stmt.name, err)
+		}
+	}
+	return nil
 }
 
 // call 同步向 worker 发送操作并等待结果

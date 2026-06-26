@@ -15,8 +15,10 @@ import (
 )
 
 const (
-	defaultHistoryBlobs       = 2
-	defaultMessagesPerHistory = 8
+	defaultHistoryBlobs       = 1
+	defaultMessagesPerHistory = 4
+	defaultHistoryUserBytes   = 1200
+	defaultHistoryAnswerBytes = 1600
 )
 
 // ContextEngine builds the message window sent to the model.
@@ -107,11 +109,38 @@ func boundedHistoryMessages(historyData [][]byte) []llm.Message {
 		}
 		history.Messages = lastNMessages(history.Messages, defaultMessagesPerHistory)
 		for _, msg := range history.Messages {
-			msg.Content = textutil.CleanUTF8(msg.Content)
-			messages = append(messages, msg)
+			if compact, ok := compactHistoryMessage(msg); ok {
+				messages = append(messages, compact)
+			}
 		}
 	}
 	return messages
+}
+
+func compactHistoryMessage(msg llm.Message) (llm.Message, bool) {
+	role := strings.TrimSpace(msg.Role)
+	if role == "" {
+		role = "user"
+	}
+	switch role {
+	case "user":
+		msg.Content = textutil.TruncateBytes(textutil.CleanUTF8(msg.Content), defaultHistoryUserBytes)
+	case "assistant":
+		msg.Content = textutil.TruncateBytes(textutil.CleanUTF8(msg.Content), defaultHistoryAnswerBytes)
+	case "tool":
+		return llm.Message{}, false
+	default:
+		return llm.Message{}, false
+	}
+	if strings.TrimSpace(msg.Content) == "" {
+		return llm.Message{}, false
+	}
+	msg.Role = role
+	msg.MultiContent = nil
+	msg.Name = ""
+	msg.ToolCallID = ""
+	msg.ToolCalls = nil
+	return msg, true
 }
 
 func lastNMessages(messages []llm.Message, n int) []llm.Message {

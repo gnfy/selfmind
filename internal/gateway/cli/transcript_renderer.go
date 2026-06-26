@@ -79,6 +79,7 @@ func (m *uiModel) renderAllMessages() string {
 		rendered := st.Chat.Thinking.Render(spinnerView + " " + label + dots)
 		lines := processLines([]string{rendered}, len(allLines))
 		allLines = append(allLines, lines...)
+		allLines = append(allLines, "")
 	}
 
 	minLines := m.viewport.Height + m.viewport.YOffset
@@ -345,7 +346,7 @@ func toolResultLine(label, content string, width int) string {
 	case "patch":
 		return truncateToWidth(formatPatchToolResult(content), width)
 	default:
-		return firstResultLine(content, width)
+		return truncateToWidth(formatGenericToolResult(content), width)
 	}
 }
 
@@ -479,6 +480,65 @@ func formatPatchToolResult(content string) string {
 		return ""
 	}
 	return strings.Join(parts, glyphDot)
+}
+
+func formatGenericToolResult(content string) string {
+	content = strings.TrimSpace(content)
+	if content == "" {
+		return ""
+	}
+	var obj map[string]interface{}
+	if err := json.Unmarshal([]byte(content), &obj); err == nil && len(obj) > 0 {
+		for _, key := range []string{"message", "summary", "status", "error", "Error"} {
+			if value, ok := obj[key].(string); ok && strings.TrimSpace(value) != "" {
+				return strings.TrimSpace(value)
+			}
+		}
+		for _, key := range []string{"FilesModified", "files_modified", "modified", "files"} {
+			if paths := interfaceStringSlice(obj[key]); len(paths) > 0 {
+				return "modified " + summarizeToolPaths(paths)
+			}
+		}
+		for _, key := range []string{"FilesCreated", "files_created", "created"} {
+			if paths := interfaceStringSlice(obj[key]); len(paths) > 0 {
+				return "created " + summarizeToolPaths(paths)
+			}
+		}
+		for _, key := range []string{"FilesDeleted", "files_deleted", "deleted"} {
+			if paths := interfaceStringSlice(obj[key]); len(paths) > 0 {
+				return "deleted " + summarizeToolPaths(paths)
+			}
+		}
+		if value, ok := obj["Success"].(bool); ok && value {
+			return "completed"
+		}
+		if value, ok := obj["success"].(bool); ok && value {
+			return "completed"
+		}
+		return fmt.Sprintf("%d fields", len(obj))
+	}
+	var arr []interface{}
+	if err := json.Unmarshal([]byte(content), &arr); err == nil {
+		return fmt.Sprintf("%d items", len(arr))
+	}
+	return firstResultLine(content, 80)
+}
+
+func interfaceStringSlice(value interface{}) []string {
+	switch v := value.(type) {
+	case []string:
+		return v
+	case []interface{}:
+		out := make([]string, 0, len(v))
+		for _, item := range v {
+			if text, ok := item.(string); ok && strings.TrimSpace(text) != "" {
+				out = append(out, strings.TrimSpace(text))
+			}
+		}
+		return out
+	default:
+		return nil
+	}
 }
 
 func summarizeToolPaths(paths []string) string {

@@ -18,6 +18,7 @@ type JSONLEvent struct {
 	Type            string                 `json:"type"`
 	CaseID          string                 `json:"case_id,omitempty"`
 	TurnIndex       int                    `json:"turn_index,omitempty"`
+	Channel         string                 `json:"channel,omitempty"`
 	Provider        string                 `json:"provider,omitempty"`
 	Model           string                 `json:"model,omitempty"`
 	Workspace       string                 `json:"workspace,omitempty"`
@@ -102,7 +103,7 @@ func (r *Recorder) StartCase(c *Case, provider, model, workspace string) {
 	})
 }
 
-func (r *Recorder) StartTurn(index int, input string) {
+func (r *Recorder) StartTurn(index int, input, channel string) {
 	r.mu.Lock()
 	r.turnStart = time.Now()
 	r.firstToken = false
@@ -111,6 +112,7 @@ func (r *Recorder) StartTurn(index int, input string) {
 		Type:         "turn_started",
 		CaseID:       r.caseID,
 		TurnIndex:    index,
+		Channel:      channel,
 		InputHash:    hashText(input),
 		InputPreview: preview(input, 180),
 	})

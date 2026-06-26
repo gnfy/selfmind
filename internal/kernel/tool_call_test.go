@@ -1,6 +1,9 @@
 package kernel
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestExtractToolCallsAcceptsXMLFallbackAndNormalizesAliases(t *testing.T) {
 	text := `I need to inspect the project.
@@ -28,6 +31,21 @@ func TestStripLegacyToolMarkupRemovesXMLBlocks(t *testing.T) {
 	want := "Before\n\n\nAfter"
 	if got != want {
 		t.Fatalf("StripLegacyToolMarkup() = %q, want %q", got, want)
+	}
+}
+
+func TestBracketToolCallWithCommandJSON(t *testing.T) {
+	text := `Before [TOOL:terminal:{"command":"pwd; command -v go || true; ls -la","cwd":"/repo","timeout":20}] After`
+	calls := ExtractToolCalls(text)
+	if len(calls) != 1 {
+		t.Fatalf("len(calls) = %d, want 1: %+v", len(calls), calls)
+	}
+	if calls[0].Name != "terminal" || !strings.Contains(calls[0].Args, "command -v go") {
+		t.Fatalf("unexpected call: %+v", calls[0])
+	}
+	got := StripLegacyToolMarkup(text)
+	if got != "Before  After" {
+		t.Fatalf("StripLegacyToolMarkup() = %q", got)
 	}
 }
 

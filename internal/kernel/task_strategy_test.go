@@ -95,3 +95,43 @@ func TestFilterToolCallsByStrategyOnlyBlocksHiddenWebCalls(t *testing.T) {
 		t.Fatalf("local and planning tools should pass while hidden web calls are filtered: %+v", got)
 	}
 }
+
+func TestFilterToolCallsByLifecycleCaps(t *testing.T) {
+	calls := []llm.ToolCall{
+		{Function: "update_plan"},
+		{Function: "finish_run"},
+		{Function: "read_file"},
+	}
+	got, dropped := filterToolCallsByLifecycleCaps(calls, map[string]int{
+		"update_plan": 3,
+		"finish_run":  1,
+	})
+	if dropped != 2 {
+		t.Fatalf("dropped = %d, want 2", dropped)
+	}
+	if len(got) != 1 || got[0].Function != "read_file" {
+		t.Fatalf("got = %+v, want only read_file", got)
+	}
+}
+
+func TestFilterToolCallsByLifecycleCapsConsumesCurrentBatch(t *testing.T) {
+	calls := []llm.ToolCall{
+		{Function: "update_plan"},
+		{Function: "update_plan"},
+		{Function: "finish_run"},
+		{Function: "finish_run"},
+		{Function: "read_file"},
+	}
+	got, dropped := filterToolCallsByLifecycleCaps(calls, map[string]int{
+		"update_plan": 1,
+	})
+	if dropped != 2 {
+		t.Fatalf("dropped = %d, want 2", dropped)
+	}
+	if len(got) != 3 {
+		t.Fatalf("len(got) = %d, want 3: %+v", len(got), got)
+	}
+	if got[0].Function != "update_plan" || got[1].Function != "finish_run" || got[2].Function != "read_file" {
+		t.Fatalf("got = %+v, want one update_plan, one finish_run, and read_file", got)
+	}
+}

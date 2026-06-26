@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"selfmind/internal/platform/log"
 )
 
 type Delivery struct {
@@ -88,24 +90,49 @@ func (s *Store) MarkInterruptedRuns(ctx context.Context, olderThan time.Duration
 		return 0, err
 	}
 	now := time.Now().Unix()
+	// Apply all run + task status flips in a single transaction so a failure
+	// can't leave some runs marked interrupted while their tasks still point at
+	// a dead active_run_id.
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
 	for _, r := range runs {
-		if _, err := s.db.ExecContext(ctx,
+		if _, err := tx.ExecContext(ctx,
 			`UPDATE task_runs SET status = 'interrupted', finished_at = ?, last_error = 'gateway restarted before run finished'
 			 WHERE tenant_id = ? AND id = ? AND status = 'running'`,
 			now, r.tenantID, r.runID); err != nil {
 			return 0, err
 		}
-		_, _ = s.db.ExecContext(ctx,
+		if _, err := tx.ExecContext(ctx,
 			`UPDATE tasks SET status = 'interrupted', active_run_id = '', current_summary = COALESCE(NULLIF(current_summary, ''), 'Interrupted by gateway restart.'), updated_at = ?
 			 WHERE tenant_id = ? AND id = ? AND active_run_id = ?`,
-			now, r.tenantID, r.taskID, r.runID)
-		_, _ = s.AppendEvent(ctx, Event{
+			now, r.tenantID, r.taskID, r.runID); err != nil {
+			return 0, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	committed = true
+	// Events are best-effort observability; append them after the state is
+	// durably committed and log (rather than swallow) any failure.
+	for _, r := range runs {
+		if _, err := s.AppendEvent(ctx, Event{
 			TaskID:     r.taskID,
 			RunID:      r.runID,
 			Type:       "run.interrupted",
 			Visibility: "task",
 			Payload:    json.RawMessage(`{"reason":"gateway restarted before run finished"}`),
-		})
+		}); err != nil {
+			log.Warn("failed to append run.interrupted event", "task_id", r.taskID, "run_id", r.runID, "error", err)
+		}
 	}
 	return len(runs), nil
 }

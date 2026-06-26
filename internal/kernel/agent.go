@@ -373,6 +373,7 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 	if !ok {
 		strategy = BuildTaskStrategy(initialPrompt, channel)
 	}
+	strategy = strategy.normalized()
 	EmitAgentEvent(eventCh, AgentEvent{
 		Type:    "strategy.selected",
 		Content: strategy.Reason,
@@ -382,6 +383,7 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 			"plan_policy": string(strategy.PlanPolicy),
 			"web_policy":  string(strategy.WebPolicy),
 			"channel":     strategy.ChannelMode,
+			"tool_budget": strategy.normalized().MaxActionTools,
 		},
 	})
 
@@ -431,7 +433,23 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 	if maxIterations < 2 {
 		maxIterations = 2
 	}
+	actionToolsUsed := 0
+	toolUseCounts := map[string]int{}
+	toolBudgetRepairIssued := false
 	for i := 0; i < maxIterations; i++ {
+		iterationStrategy := strategy
+		if actionToolBudgetReached(strategy, actionToolsUsed) {
+			iterationStrategy = strategy.WithActionToolsDisabled()
+		}
+		var cappedLifecycleTools []string
+		for _, name := range lifecycleToolNames() {
+			if cap := lifecycleToolCap(name); cap > 0 && toolUseCounts[name] >= cap {
+				cappedLifecycleTools = append(cappedLifecycleTools, name)
+			}
+		}
+		if len(cappedLifecycleTools) > 0 {
+			iterationStrategy = iterationStrategy.WithHiddenTools(cappedLifecycleTools...)
+		}
 		var fullResp strings.Builder
 		var nativeCalls []llm.ToolCall
 		var streamErr error
@@ -507,13 +525,13 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 		}
 
 		streamCtx, streamCancel := context.WithCancel(ctx)
-		streamCh, err := a.streamChatWithRetry(streamCtx, messages, strategy)
+		streamCh, err := a.streamChatWithRetry(streamCtx, messages, iterationStrategy)
 		if err != nil {
 			streamCancel()
 			if ctx.Err() != nil {
 				return "", totalUsage, fmt.Errorf("llm chat: %w", err)
 			}
-			fallbackResp, fallbackErr := a.chatResponseWithRetry(ctx, messages, strategy)
+			fallbackResp, fallbackErr := a.chatResponseWithRetry(ctx, messages, iterationStrategy)
 			if fallbackErr != nil {
 				return "", totalUsage, fmt.Errorf("llm chat: %w; non-stream fallback failed: %v", err, fallbackErr)
 			}
@@ -608,7 +626,7 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 					return "", totalUsage, fmt.Errorf("stream error after partial response: %w", streamErr)
 				}
 				if streamErr != nil {
-					fallbackResp, fallbackErr := a.chatResponseWithRetry(ctx, messages, strategy)
+					fallbackResp, fallbackErr := a.chatResponseWithRetry(ctx, messages, iterationStrategy)
 					if fallbackErr != nil {
 						return "", totalUsage, fmt.Errorf("stream error: %w; non-stream fallback failed: %v", streamErr, fallbackErr)
 					}
@@ -618,14 +636,26 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 		}
 		flushPendingStream()
 		resp := textutil.CleanUTF8(fullResp.String())
+		legacyMarkupPresent := legacyToolMarkerIndex(resp) >= 0
 		nativeCalls = normalizeToolCallIDs(nativeCalls, i)
-		calls := filterToolCallsByStrategy(nativeCalls, strategy)
+		calls, droppedForBudget := filterToolCallsByStrategyAndBudget(nativeCalls, iterationStrategy, actionToolsUsed)
+		var droppedForLifecycle int
+		calls, droppedForLifecycle = filterToolCallsByLifecycleCaps(calls, toolUseCounts)
+		droppedForBudget += droppedForLifecycle
 		if len(calls) == 0 {
-			calls = filterToolCallsByStrategy(legacyToolCallsToLLM(ExtractToolCalls(resp), i), strategy)
+			var legacyDropped int
+			calls, legacyDropped = filterToolCallsByStrategyAndBudget(legacyToolCallsToLLM(ExtractToolCalls(resp), i), iterationStrategy, actionToolsUsed)
+			var legacyLifecycleDropped int
+			calls, legacyLifecycleDropped = filterToolCallsByLifecycleCaps(calls, toolUseCounts)
+			droppedForBudget += legacyDropped
+			droppedForBudget += legacyLifecycleDropped
+		}
+		if len(calls) == 0 && legacyMarkupPresent && droppedForBudget == 0 {
+			droppedForBudget = 1
 		}
 		assistantContent := resp
-		if len(calls) > 0 {
-			assistantContent = StripLegacyToolMarkup(resp)
+		if len(calls) > 0 || droppedForBudget > 0 || legacyMarkupPresent {
+			assistantContent = toolBudgetSafeAssistantContent(resp)
 		}
 
 		messages = append(messages, llm.Message{Role: "assistant", Content: assistantContent, ToolCalls: calls})
@@ -647,6 +677,8 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 			if !nativeToolActivityAnnounced {
 				emitAgentActivity(eventCh, toolCallActivity(calls), "tool_selection", i)
 			}
+			actionToolsUsed += countActionToolCalls(calls)
+			incrementToolUseCounts(toolUseCounts, calls)
 			results := a.executeToolCalls(ctx, tenantID, eventCh, calls)
 
 			// Append results in order
@@ -660,6 +692,27 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 			// The review itself runs after the final answer, once the outcome is known.
 
 			continue
+		}
+		if droppedForBudget > 0 && !toolBudgetRepairIssued {
+			toolBudgetRepairIssued = true
+			if i+1 >= maxIterations {
+				maxIterations = i + 2
+			}
+			emitAgentActivity(eventCh, "Tool budget reached; finishing from collected evidence", "tool_budget", i)
+			messages = append(messages, llm.Message{
+				Role: "user",
+				Content: "SelfMind tool budget for this turn has been reached. Do not call any more tools and do not output TOOL markup. " +
+					"Write the final user-facing answer now from the evidence already collected. If the task cannot be fully completed, state the blocker and the exact next action in plain text.",
+			})
+			continue
+		}
+		if droppedForBudget > 0 {
+			resp = toolBudgetSafeAssistantContent(resp)
+			if strings.TrimSpace(resp) == "" {
+				resp = "I reached the tool budget before I could complete the remaining tool step. Based on the evidence already collected, I should stop here and state the next action instead of calling more tools."
+			}
+			history.Steps[len(history.Steps)-1] = resp
+			messages[len(messages)-1].Content = resp
 		}
 
 		if responseStoppedForOutputLimit(finishReason) {
@@ -1165,7 +1218,7 @@ func (a *Agent) buildSystemPrompt(ctx context.Context, tenantID string, strategy
 	parts = append(parts, selfImprovementGuidance())
 
 	if bundle, ok := RuntimeContextBundleFromContext(ctx); ok {
-		if prompt := bundle.Prompt(12000); strings.TrimSpace(prompt) != "" {
+		if prompt := bundle.Prompt(8000); strings.TrimSpace(prompt) != "" {
 			parts = append(parts, prompt)
 		}
 	} else {
@@ -1183,7 +1236,7 @@ func (a *Agent) buildSystemPrompt(ctx context.Context, tenantID string, strategy
 		}
 
 		if runtime, ok := TaskRuntimeContextFromContext(ctx); ok {
-			if prompt := runtime.Prompt(9000); strings.TrimSpace(prompt) != "" {
+			if prompt := runtime.Prompt(6000); strings.TrimSpace(prompt) != "" {
 				parts = append(parts, prompt)
 			}
 		}
@@ -1201,7 +1254,7 @@ func (a *Agent) buildSystemPrompt(ctx context.Context, tenantID string, strategy
 			sb.WriteString("When a tool returns an error, treat the error as diagnostic evidence. Do not stop at the first failed command unless the failure is the requested final result. Inspect cwd, files, environment, auth state, provider constraints, or command help as needed, then choose the next correct action.\n")
 			sb.WriteString("Do not hard-code environment overrides as a default tool behavior. For example, if Go reports a go.work/module boundary error, first inspect go env GOWORK/GOMOD and the relevant go.work/go.mod files, then decide whether to change cwd, use an explicit env override, or report a real blocker.\n")
 			sb.WriteString("Use update_plan only for non-trivial work: tasks with 3+ meaningful steps, multi-file changes, investigation/debugging, long-running verification, or explicit user requests for a plan. Do not use update_plan for one-shot answers, small code examples, simple commands, or direct explanations.\n")
-			sb.WriteString("Before the final user-facing answer, call finish_run with a structured outcome: status, summary, done, next_steps, files, tests, risks, and need_approve.\n")
+			sb.WriteString("For non-trivial tool-using work that creates or changes durable task state, call finish_run once with a structured outcome: status, summary, done, next_steps, files, tests, risks, and need_approve. Skip finish_run for direct answers, small snippets, and ordinary explanations.\n")
 			sb.WriteString("Use tool_search when you need a capability but are unsure which registered tool fits.\n")
 			sb.WriteString("The ONLY valid tool names are: ")
 			for i, d := range defs {
@@ -1280,4 +1333,12 @@ func filterToolDefinitions(defs []map[string]interface{}, strategy TaskStrategy)
 		out = append(out, def)
 	}
 	return out
+}
+
+func toolBudgetSafeAssistantContent(content string) string {
+	cleaned := strings.TrimSpace(StripLegacyToolMarkup(content))
+	if cleaned != "" {
+		return cleaned
+	}
+	return ""
 }

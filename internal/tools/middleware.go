@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"selfmind/internal/platform/log"
 )
@@ -46,7 +47,9 @@ func ApprovalMiddleware(dryRun bool) Middleware {
 
 type RateLimitMiddleware struct {
 	maxCalls int
-	count    int
+
+	mu    sync.Mutex
+	count int
 }
 
 func RateLimit(maxCalls int) *RateLimitMiddleware {
@@ -55,10 +58,13 @@ func RateLimit(maxCalls int) *RateLimitMiddleware {
 
 func (r *RateLimitMiddleware) Middleware(next ToolExecutor) ToolExecutor {
 	return func(args map[string]interface{}) (string, error) {
+		r.mu.Lock()
 		if r.count >= r.maxCalls {
+			r.mu.Unlock()
 			return "", fmt.Errorf("rate limit exceeded: max %d calls", r.maxCalls)
 		}
 		r.count++
+		r.mu.Unlock()
 		return next(args)
 	}
 }
@@ -148,12 +154,32 @@ func SmartApprovalMiddleware(projectRoot string) Middleware {
 	}
 }
 
+// dangerousBinaries are program names that warrant explicit approval before
+// execution. Matched by basename so that both `rm` and `/bin/rm` are caught.
+var dangerousBinaries = map[string]struct{}{
+	"rm": {}, "rmdir": {}, "chmod": {}, "chown": {}, "kill": {}, "pkill": {},
+	"killall": {}, "shutdown": {}, "reboot": {}, "halt": {}, "poweroff": {},
+	"mkfs": {}, "dd": {}, "fdisk": {}, "shred": {}, "wipefs": {},
+}
+
+// destructiveSubstrings are raw patterns that are dangerous regardless of how
+// the command is tokenized (e.g. redirecting over a device node).
+var destructiveSubstrings = []string{"> /dev/", ":(){", "/dev/sd", "/dev/nvme"}
+
 func dangerousToolCall(projectRoot, toolName string, args map[string]interface{}) (bool, string) {
 	if toolName == "execute_command" || toolName == "terminal" {
 		cmd, _ := args["command"].(string)
-		for _, pattern := range []string{"rm ", "> /dev/", "chmod ", "chown ", "kill ", "pkill ", "shutdown "} {
+		for _, pattern := range destructiveSubstrings {
 			if strings.Contains(cmd, pattern) {
-				return true, fmt.Sprintf("contains dangerous command: %s", pattern)
+				return true, fmt.Sprintf("contains dangerous pattern: %s", pattern)
+			}
+		}
+		// Tokenize on shell separators so each invoked program in a pipeline or
+		// chain is inspected by basename, defeating prefix tricks like /bin/rm.
+		for _, tok := range tokenizeCommand(cmd) {
+			base := filepath.Base(tok)
+			if _, bad := dangerousBinaries[base]; bad {
+				return true, fmt.Sprintf("invokes dangerous command: %s", base)
 			}
 		}
 	}
@@ -169,6 +195,31 @@ func dangerousToolCall(projectRoot, toolName string, args map[string]interface{}
 		return true, fmt.Sprintf("accesses path outside project root: %s", path)
 	}
 	return false, ""
+}
+
+// tokenizeCommand splits a shell command line into the program names it would
+// invoke. It breaks on shell separators (; | & newlines) and, for each
+// segment, returns the first word that is not a leading VAR=value assignment.
+// This is a heuristic for approval gating, not a shell parser.
+func tokenizeCommand(cmd string) []string {
+	segments := strings.FieldsFunc(cmd, func(r rune) bool {
+		switch r {
+		case ';', '|', '&', '\n', '`', '(', ')':
+			return true
+		}
+		return false
+	})
+	var progs []string
+	for _, seg := range segments {
+		for _, field := range strings.Fields(seg) {
+			if strings.Contains(field, "=") && !strings.ContainsAny(field, "/\\") {
+				continue // leading environment assignment, skip to the real program
+			}
+			progs = append(progs, field)
+			break
+		}
+	}
+	return progs
 }
 
 func contextFromArgs(args map[string]interface{}) context.Context {

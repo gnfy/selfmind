@@ -68,10 +68,10 @@ type RuntimeContextBudget struct {
 
 func DefaultRuntimeContextBudget() RuntimeContextBudget {
 	return RuntimeContextBudget{
-		TotalChars:     12000,
-		WorkspaceChars: 1600,
-		TaskChars:      7200,
-		MemoryChars:    2400,
+		TotalChars:     8000,
+		WorkspaceChars: 1200,
+		TaskChars:      4800,
+		MemoryChars:    1600,
 	}
 }
 
@@ -147,7 +147,7 @@ func (b RuntimeContextBundle) Prompt(maxChars int) string {
 		maxChars = b.Budget.TotalChars
 	}
 	if maxChars <= 0 {
-		maxChars = 12000
+		maxChars = 8000
 	}
 	taskBudget := b.Budget.TaskChars
 	if taskBudget <= 0 {

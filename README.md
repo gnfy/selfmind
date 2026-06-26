@@ -25,7 +25,7 @@ Available for daily personal use:
 - Hermes-style native tool calling for OpenAI-compatible providers, with legacy text-tool fallback, repeated-failure/no-progress guardrails, and secret redaction.
 - Role-based model routing through `models.roles`, so coding, memory extraction, background review, skill curation, and semantic recall can use different models.
 - Dynamic model runtime with provider profiles, live model-list fetching, local model-list cache, and best-effort auth reuse for Codex CLI, Claude Code, Gemini CLI, and Qwen CLI. Codex CLI and the SelfMind-owned MiniMax OAuth profile additionally auto-refresh expired access tokens.
-- Built-in Telegram and Enterprise WeChat (Weixin) adapters with signature verification, payload decryption, attachment download, and outbound delivery.
+- Built-in IM adapters: Telegram, personal/enterprise WeChat (Weixin, iLink protocol with built-in QR login via `selfmind weixin login`), Feishu/Lark, and QQ official bot. WeChat does inbound polling + media; Feishu/QQ use the generic webhook for inbound and a delivery sender for outbound.
 - MCP client over stdio/HTTP (JSON-RPC) with multi-server connections and on-demand tool registration.
 - Extended built-in tools beyond file/terminal: `web_search`, `web_extract`, `execute_code`, and parallel multi-agent `delegate_task`.
 

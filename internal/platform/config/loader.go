@@ -67,6 +67,20 @@ gateway:
     app_secret: ""
     token: ""
     base_url: "https://api.weixin.qq.com"
+  feishu:
+    enabled: false
+    app_id: ""
+    app_secret: ""
+    base_url: "https://open.feishu.cn"
+    verification_token: ""
+    encrypt_key: ""
+  qq:
+    enabled: false
+    app_id: ""
+    secret: ""
+    token: ""
+    base_url: "https://api.sgroup.qq.com"
+    sandbox: false
 
 evolution:
   enabled: true
@@ -210,6 +224,8 @@ type GatewayConfig struct {
 	DeliveryRetryAttempts   int          `mapstructure:"delivery_retry_attempts" yaml:"delivery_retry_attempts,omitempty"`
 	Weixin                  WeixinConfig `mapstructure:"weixin" yaml:"weixin,omitempty"`
 	Wechat                  WechatConfig `mapstructure:"wechat" yaml:"wechat,omitempty"`
+	Feishu                  FeishuConfig `mapstructure:"feishu" yaml:"feishu,omitempty"`
+	QQ                      QQConfig     `mapstructure:"qq" yaml:"qq,omitempty"`
 }
 
 // WechatConfig configures a WeChat Official Account (公众号). Inbound passive
@@ -222,6 +238,31 @@ type WechatConfig struct {
 	AppSecret string `mapstructure:"app_secret" yaml:"app_secret,omitempty"`
 	Token     string `mapstructure:"token" yaml:"token,omitempty"`
 	BaseURL   string `mapstructure:"base_url" yaml:"base_url,omitempty"`
+}
+
+// FeishuConfig configures a Feishu/Lark custom app. Inbound events arrive on the
+// generic /v1/im/feishu webhook (verification token / encrypt-key signature is
+// validated there); outbound replies require AppID/AppSecret so the sender can
+// fetch a tenant_access_token and call open-apis/im/v1/messages.
+type FeishuConfig struct {
+	Enabled           bool   `mapstructure:"enabled" yaml:"enabled,omitempty"`
+	AppID             string `mapstructure:"app_id" yaml:"app_id,omitempty"`
+	AppSecret         string `mapstructure:"app_secret" yaml:"app_secret,omitempty"`
+	BaseURL           string `mapstructure:"base_url" yaml:"base_url,omitempty"`
+	VerificationToken string `mapstructure:"verification_token" yaml:"verification_token,omitempty"`
+	EncryptKey        string `mapstructure:"encrypt_key" yaml:"encrypt_key,omitempty"`
+}
+
+// QQConfig configures a QQ official bot (QQ频道/群). Inbound events arrive on the
+// generic /v1/im/qq webhook; outbound replies require AppID/Secret so the sender
+// can fetch an app access token and call the QQ bot message API.
+type QQConfig struct {
+	Enabled bool   `mapstructure:"enabled" yaml:"enabled,omitempty"`
+	AppID   string `mapstructure:"app_id" yaml:"app_id,omitempty"`
+	Secret  string `mapstructure:"secret" yaml:"secret,omitempty"`
+	Token   string `mapstructure:"token" yaml:"token,omitempty"`
+	BaseURL string `mapstructure:"base_url" yaml:"base_url,omitempty"`
+	Sandbox bool   `mapstructure:"sandbox" yaml:"sandbox,omitempty"`
 }
 
 type WeixinConfig struct {

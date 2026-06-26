@@ -43,13 +43,14 @@
 | MCP client | 🟡 | Real stdio/HTTP JSON-RPC client, multi-server, on-demand tool registration. `sampling/createMessage` not implemented. `internal/tools/mcp_client.go`. |
 | Eval loop | ✅ | Real gateway-path replay; P0 deterministic checks; JSONL traces with content hashing; 29 cases / 5 suites. `internal/eval`, `evalcases/`. |
 | Telegram adapter | ✅ | Webhook + long poll, signature verify, send. |
-| Enterprise WeChat (Weixin) adapter | ✅ | Full duplex, AES decrypt, attachments. |
+| Personal/Enterprise WeChat (Weixin) adapter | ✅ | iLink protocol (`ilinkai.weixin.qq.com`): poll loop, AES, per-peer context_token, typing, media, group/DM policy, dedup. Built-in QR login (`selfmind weixin login`) — no external bridge needed. This is the primary multi-device WeChat path. |
 | WeChat Official Account adapter | 🟡 | Inbound passive-reply + signature verify (`internal/gateway/wechat`); outbound now supported via the customer-service `custom/send` sender (`internal/gateway/delivery/wechat.go`, registered as platform `wechat`). Still no message encryption/decryption. |
 | Approval lifecycle | 🟡 | DB + API + `/approve` / `/reject` done. Native IM approval buttons not wired. |
 | CLI / TUI controller | 🟡 | Components partly extracted; `uiModel` in `controller.go` is still a monolith (violates AGENTS.md guidance). |
 | Run execution coordinator | 🟡 | `RunCoordinator` (`httpapi/run_coordinator.go`) owns the run lifecycle (`runMessage`/`startAsyncRun`), the active-run registry, and all pre/post-run helpers (workspace/task resolution, execution scope, approval handler, context assembly, stream aggregation, outcome persistence). Server is now the HTTP/orchestration layer. Remaining: `Agent.runMu` still serializes all runs through one shared Agent — a parallel worker pool (pool of agents) is the next step. |
 | Process sandbox | 🟡 | Unix process-group isolation only; **not** a security sandbox (no namespace/seccomp/cgroup). Windows is a no-op. |
-| Feishu / QQ adapters | ❌ | Not started. |
+| Feishu / Lark adapter | 🟡 | Inbound via the generic `/v1/im/feishu` webhook (verification-token / encrypt-key signature, challenge); outbound via `delivery.FeishuSender` (tenant_access_token + `im/v1/messages`, chat_id/open_id routing). Config drives both. Encrypt-envelope AES decryption still TODO (use plaintext mode). |
+| QQ official bot adapter | 🟡 | Inbound via `/v1/im/qq` webhook (group/C2C/guild events parsed into a `group:`/`c2c:`/`channel:` target); outbound via `delivery.QQSender` (app access token + per-target message API). Active push only — webhook ed25519 signature verify and passive `msg_id` threading are follow-ups. |
 | User profile synthesis | ❌ | Only loose facts; no `ProfileBuilder` / `UserProfile` / `GetProfile`. |
 | Skill variant evolution / sandbox test | ❌ | Roadmap P3; not started. |
 
@@ -72,8 +73,10 @@ the historical roadmaps.
 3. **P1 — Real `execute_code` sandbox** (namespace/seccomp/cgroup or container)
    before any untrusted multi-tenant code execution.
 4. **P1 — Wire native IM approval buttons** (Telegram / Weixin); backend is ready.
-5. **P2 — Feishu / QQ adapters** (WeChat Official Account outbound is done; the
-   remaining IM gap is Feishu and QQ).
+5. **P2 — IM adapter hardening.** Feishu and QQ are now connected (inbound
+   webhook + outbound sender). Remaining polish: QQ webhook ed25519 signature
+   verification + passive `msg_id` threading; Feishu encrypt-envelope AES
+   decryption; inbound voice→STT and outbound TTS across platforms.
 6. **P2 — User profile synthesis** (`ProfileBuilder`) — the "learns about you" gap.
 7. **P2 — MCP `sampling/createMessage`** for servers that call back into the model.
 

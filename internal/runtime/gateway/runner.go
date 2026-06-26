@@ -201,6 +201,11 @@ func applyGatewayRuntimeEnv(cfg *config.Config) {
 	setEnvIfEmpty("SELF_GATEWAY_ADDR", cfg.Gateway.Addr)
 	setEnvIfEmpty("SELF_GATEWAY_URL", cfg.Gateway.URL)
 	setEnvIfEmpty("SELF_GATEWAY_DRAIN_TIMEOUT", cfg.Gateway.DrainTimeout)
+	// Feishu inbound webhook signature/verification is validated in the httpapi
+	// layer from these env vars; bridge them from config so a single config file
+	// drives both inbound verification and the outbound sender.
+	setEnvIfEmpty("SELF_FEISHU_ENCRYPT_KEY", cfg.Gateway.Feishu.EncryptKey)
+	setEnvIfEmpty("SELF_FEISHU_VERIFICATION_TOKEN", cfg.Gateway.Feishu.VerificationToken)
 }
 
 func newDeliveryService(store *control.Store, cfg *config.Config, weixinSender delivery.Sender) *delivery.Service {
@@ -226,6 +231,22 @@ func newDeliveryService(store *control.Store, cfg *config.Config, weixinSender d
 			AppID:     cfg.Gateway.Wechat.AppID,
 			AppSecret: cfg.Gateway.Wechat.AppSecret,
 			BaseURL:   cfg.Gateway.Wechat.BaseURL,
+		})
+	}
+	if cfg.Gateway.Feishu.Enabled && strings.TrimSpace(cfg.Gateway.Feishu.AppID) != "" {
+		feishuSender := &delivery.FeishuSender{
+			AppID:     cfg.Gateway.Feishu.AppID,
+			AppSecret: cfg.Gateway.Feishu.AppSecret,
+			BaseURL:   cfg.Gateway.Feishu.BaseURL,
+		}
+		router.Register("feishu", feishuSender)
+		router.Register("lark", feishuSender)
+	}
+	if cfg.Gateway.QQ.Enabled && strings.TrimSpace(cfg.Gateway.QQ.AppID) != "" {
+		router.Register("qq", &delivery.QQSender{
+			AppID:   cfg.Gateway.QQ.AppID,
+			Secret:  cfg.Gateway.QQ.Secret,
+			BaseURL: cfg.Gateway.QQ.BaseURL,
 		})
 	}
 	return delivery.NewService(store, router, delivery.Options{

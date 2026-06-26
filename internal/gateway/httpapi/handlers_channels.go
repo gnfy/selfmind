@@ -196,6 +196,40 @@ func messageRequestFromIM(platform string, payload map[string]interface{}) api.M
 		req.DisplayName = firstNonEmpty(mapString(author, "username"), mapString(author, "name"), req.DisplayName)
 	}
 
+	// QQ official bot events: {"t": "...", "d": {...}}. Encode the target type
+	// into Channel ("group:"/"c2c:"/"channel:") so the QQ sender routes the
+	// reply to the right endpoint.
+	if strings.EqualFold(platform, "qq") {
+		if d := nestedMap(payload, "d"); d != nil {
+			eventType := strings.ToUpper(mapString(payload, "t"))
+			req.Content = firstNonEmpty(strings.TrimSpace(mapString(d, "content")), req.Content)
+			author := nestedMap(d, "author")
+			switch {
+			case strings.Contains(eventType, "GROUP"):
+				if gid := mapString(d, "group_openid"); gid != "" {
+					req.Channel = "group:" + gid
+				}
+				if author != nil {
+					req.PlatformUserID = firstNonEmpty(mapString(author, "member_openid"), req.PlatformUserID)
+				}
+			case strings.Contains(eventType, "C2C"):
+				if author != nil {
+					if uid := mapString(author, "user_openid"); uid != "" {
+						req.Channel = "c2c:" + uid
+						req.PlatformUserID = uid
+					}
+				}
+			default: // guild sub-channel (AT_MESSAGE_CREATE / DIRECT_MESSAGE_CREATE)
+				if cid := mapString(d, "channel_id"); cid != "" {
+					req.Channel = "channel:" + cid
+				}
+				if author != nil {
+					req.PlatformUserID = firstNonEmpty(mapString(author, "id"), req.PlatformUserID)
+				}
+			}
+		}
+	}
+
 	req.PlatformUserID = firstNonEmpty(mapString(payload, "FromUserName"), req.PlatformUserID)
 	req.Channel = firstNonEmpty(mapString(payload, "ToUserName"), req.Channel)
 	req.Content = firstNonEmpty(mapString(payload, "Content"), req.Content)

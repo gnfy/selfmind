@@ -28,7 +28,7 @@ SelfMind 是一个用 Go 编写的个人 AI Agent 运行时。它的目标不是
 - Hermes 风格的原生工具调用：OpenAI-compatible provider 优先使用 native tool calls，失败后回退到旧文本工具调用格式；工具层包含重复失败/无进展 guardrail 和敏感信息脱敏。
 - `models.roles` 模型路由：编码、记忆提取、后台复盘、Skill 整理、语义召回可以使用不同模型。
 - 动态模型 runtime：支持 `provider_profiles`、实时模型列表、本地模型列表缓存，以及 Codex CLI、Claude Code、Gemini CLI、Qwen CLI 的 best-effort 登录复用。其中 Codex CLI 和 SelfMind 自有的 MiniMax OAuth profile 还会自动刷新过期的 access token。
-- 内置 Telegram 和企业微信（Weixin）adapter：支持签名校验、报文解密、附件下载和消息回发。
+- 内置 IM 适配器：Telegram、个人/企业微信（Weixin，iLink 协议，内建扫码登录 `selfmind weixin login`）、飞书/Lark、QQ 官方机器人。微信走轮询入站 + 媒体下载；飞书/QQ 入站走通用 webhook、出站走 delivery sender。
 - MCP 客户端：基于 stdio/HTTP（JSON-RPC），支持多 server 连接和按需工具注册。
 - 文件/终端之外的扩展内置工具：`web_search`、`web_extract`、`execute_code`，以及并行多 agent 的 `delegate_task`。
 

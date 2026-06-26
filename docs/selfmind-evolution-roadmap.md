@@ -1,5 +1,12 @@
 # SelfMind 功能补齐路线图
 
+> ⚠️ **状态说明（2026-06-27）**：本文档为历史规划，**部分内容已落地**，与当前代码
+> 不完全一致。例如：多智能体已是**并行**批量委托（`internal/app/multi_agent.go`，
+> 非本文所述的串行）；技能元数据与淘汰已实现（`internal/kernel/skill_store.go`）；
+> MCP 客户端已实现（`internal/tools/mcp_client.go`）。动手前请先读
+> [`docs/STATUS.md`](STATUS.md) 的完成度快照，并以代码为准，不要按本文重复实现。
+> 仍未落地的主要是：用户画像综合、技能变体进化/沙盒测试。
+
 > 本文档基于与 Hermes Agent 的逐模块代码对比，梳理 SelfMind 需优先补齐的四项核心能力及其实现方案。
 
 ---

@@ -24,11 +24,14 @@ Available for daily personal use:
 - Tenant learning audit records for memory and skill mutations, including skill/memory history and basic undo.
 - Hermes-style native tool calling for OpenAI-compatible providers, with legacy text-tool fallback, repeated-failure/no-progress guardrails, and secret redaction.
 - Role-based model routing through `models.roles`, so coding, memory extraction, background review, skill curation, and semantic recall can use different models.
-- Dynamic model runtime with provider profiles, live model-list fetching, local model-list cache, and best-effort auth reuse for Codex CLI, Claude Code, Gemini CLI, and Qwen CLI.
+- Dynamic model runtime with provider profiles, live model-list fetching, local model-list cache, and best-effort auth reuse for Codex CLI, Claude Code, Gemini CLI, and Qwen CLI. Codex CLI and the SelfMind-owned MiniMax OAuth profile additionally auto-refresh expired access tokens.
+- Built-in Telegram and Enterprise WeChat (Weixin) adapters with signature verification, payload decryption, attachment download, and outbound delivery.
+- MCP client over stdio/HTTP (JSON-RPC) with multi-server connections and on-demand tool registration.
+- Extended built-in tools beyond file/terminal: `web_search`, `web_extract`, `execute_code`, and parallel multi-agent `delegate_task`.
 
 Still first-version or planned:
 
-- Official Feishu, WeChat, and QQ SDK adapters are not complete yet.
+- Official Feishu and QQ SDK adapters are not started yet; the WeChat Official Account adapter currently handles inbound messages only (no outbound send).
 - Native approval buttons, official enterprise IM SDKs, rich media attachments, and full platform signing/encryption modes still need production hardening.
 - SaaS admin console, tenant model-secret custody, billing policy, and queue/worker scaling are planned but not complete.
 
@@ -299,7 +302,7 @@ auth:
   credentials_file: "~/.selfmind/auth.json"
 ```
 
-Credential precedence is: explicit key from a command/model role, `api_key` in `config.yaml`, `auth.credentials_file`, environment variables, then external CLI login reuse. External CLI reuse is limited to Codex CLI, Claude Code, Gemini CLI, and Qwen CLI, and SelfMind does not refresh their OAuth tokens.
+Credential precedence is: explicit key from a command/model role, `api_key` in `config.yaml`, `auth.credentials_file`, environment variables, then external CLI login reuse. External CLI reuse is limited to Codex CLI, Claude Code, Gemini CLI, and Qwen CLI. Codex CLI tokens are auto-refreshed when expired; Claude Code, Gemini CLI, and Qwen CLI tokens are reused as-is and need a re-login in the source CLI when they expire.
 
 Recommended usage:
 
@@ -314,10 +317,10 @@ Old flat provider keys such as `providers.openai_api_key`, `providers.openrouter
 
 SelfMind resolves models through `internal/modelruntime`:
 
-- Built-ins: `openai`, `anthropic`, `google`, `codex-cli`, `claude-code`, `gemini-cli`, `qwen-cli`, `openrouter`, `minimax`, `kimi-coding`, `deepseek`, `zai`, and `alibaba-coding-plan`.
+- Built-ins: `openai`, `anthropic`, `google`, `codex-cli`, `claude-code`, `gemini-cli`, `qwen-cli`, `openrouter`, `minimax` (with `minimax-oauth` and regional variants), `kimi-coding`, `deepseek`, `zai`, and `alibaba-coding-plan`.
 - Custom OpenAI-compatible endpoints: use `selfmind model`, then choose `Custom endpoint (enter URL manually)`.
 - Configurable provider profiles: add entries under `provider_profiles` when a provider has a stable base URL/protocol but you do not want a code change.
-- Auth reuse is intentionally limited to Codex CLI, Claude Code, Gemini CLI, and Qwen CLI. Other providers should use API keys in YAML, environment-expanded YAML values, or `auth.credentials_file`.
+- Auth reuse is intentionally limited to Codex CLI, Claude Code, Gemini CLI, Qwen CLI, and SelfMind-owned OAuth providers such as the `minimax-oauth` profile. Other providers should use API keys in YAML, environment-expanded YAML values, or `auth.credentials_file`.
 
 `auth.credentials_file` is a SelfMind-owned JSON credential store. The shape is:
 
@@ -330,7 +333,7 @@ SelfMind resolves models through `internal/modelruntime`:
 }
 ```
 
-For external CLI reuse, SelfMind also scans common local auth files and env vars, such as `~/.codex/auth.json`, Claude Code credentials, Gemini CLI OAuth files, and Qwen CLI OAuth files. OAuth refresh is not implemented; if an external token expires, re-login with the source CLI.
+For external CLI reuse, SelfMind also scans common local auth files and env vars, such as `~/.codex/auth.json`, Claude Code credentials, Gemini CLI OAuth files, and Qwen CLI OAuth files. SelfMind auto-refreshes expired Codex CLI OAuth tokens (and SelfMind-owned MiniMax OAuth tokens) before a request. For Claude Code, Gemini CLI, and Qwen CLI, tokens are reused as-is; if one expires, re-login with the source CLI.
 
 MiniMax and Kimi Coding Plan:
 

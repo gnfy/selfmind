@@ -28,8 +28,11 @@ Read the full local architecture note first:
 Use this checklist whenever a future AI/coding agent picks up work in this
 repo:
 
-1. Read this file, then read the specific docs linked above for the area being
-   changed. For provider/model work, `docs/provider-runtime.md` is mandatory.
+1. Read this file, then read `docs/STATUS.md` for the current implementation
+   snapshot before assuming any feature is missing — several items the planning
+   docs call "to do" are already done. Then read the specific docs linked above
+   for the area being changed. For provider/model work,
+   `docs/provider-runtime.md` is mandatory.
 2. Inspect `git status --short` before editing. The worktree is often dirty;
    do not revert unrelated changes or generated output you did not create.
 3. Locate the current boundary before changing code. Prefer `rg` and focused
@@ -495,9 +498,26 @@ configuration, or anything the user is actively testing through
 
 ## Documentation Maintenance
 
+- `AGENTS.md` is the single source of truth for AI/coding-agent rules in this
+  repo. Other tool entry files must only forward to it, never duplicate rules:
+  `CLAUDE.md`, `GEMINI.md`, and `QWEN.md` each just point at `AGENTS.md`. When a
+  new AI tool is onboarded, add a thin forwarder for it rather than copying
+  rules. Keep `CLAUDE.md`/`GEMINI.md`/`QWEN.md` tracked in git so every clone and
+  CI run sees the same rules.
+- `docs/STATUS.md` is the current implementation snapshot. When a change moves a
+  capability between Missing/Partial/Done, update the matching row in the same
+  PR. Do not add per-feature status notes to the historical roadmap docs; record
+  state in `docs/STATUS.md` instead.
+- The planning docs (`docs/selfmind-evolution-roadmap.md`,
+  `docs/selfmind-evolution-design.md`, `docs/p0-p1-development-plan.zh-CN.md`)
+  are historical intent and are partially superseded. They each carry a status
+  banner pointing to `docs/STATUS.md`; do not treat their "to do" lists as the
+  current backlog.
 - Update `AGENTS.md` when a new invariant, workflow, or "future AI must know"
   rule is introduced.
 - Update `docs/development-guide*.md` for broader engineering explanations.
 - Update `docs/provider-runtime*.md` for model provider rules, provider quirks,
   Kimi/MiniMax behavior, OAuth behavior, or new model-vendor checklists.
 - Keep user-facing README changes separate from internal development rules.
+- For bilingual docs (`*.md` + `*.zh-CN.md`), the English file is canonical for
+  rules; keep the Chinese version in sync or mark it as a translation.

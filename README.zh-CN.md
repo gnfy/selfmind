@@ -27,11 +27,14 @@ SelfMind 是一个用 Go 编写的个人 AI Agent 运行时。它的目标不是
 - 长期记忆、历史会话检索、Skill 管理、后台复盘、Skill curator。
 - Hermes 风格的原生工具调用：OpenAI-compatible provider 优先使用 native tool calls，失败后回退到旧文本工具调用格式；工具层包含重复失败/无进展 guardrail 和敏感信息脱敏。
 - `models.roles` 模型路由：编码、记忆提取、后台复盘、Skill 整理、语义召回可以使用不同模型。
-- 动态模型 runtime：支持 `provider_profiles`、实时模型列表、本地模型列表缓存，以及 Codex CLI、Claude Code、Gemini CLI、Qwen CLI 的 best-effort 登录复用。
+- 动态模型 runtime：支持 `provider_profiles`、实时模型列表、本地模型列表缓存，以及 Codex CLI、Claude Code、Gemini CLI、Qwen CLI 的 best-effort 登录复用。其中 Codex CLI 和 SelfMind 自有的 MiniMax OAuth profile 还会自动刷新过期的 access token。
+- 内置 Telegram 和企业微信（Weixin）adapter：支持签名校验、报文解密、附件下载和消息回发。
+- MCP 客户端：基于 stdio/HTTP（JSON-RPC），支持多 server 连接和按需工具注册。
+- 文件/终端之外的扩展内置工具：`web_search`、`web_extract`、`execute_code`，以及并行多 agent 的 `delegate_task`。
 
 仍属于第一版或后续规划：
 
-- 官方飞书、微信、QQ SDK adapter 还没有完整接入。
+- 官方飞书、QQ SDK adapter 尚未开始；微信公众号 adapter 目前只处理入站消息（不支持主动发送）。
 - IM 原生审批按钮、企业平台官方 SDK、富媒体附件和更完整的平台签名/加密模式还需要生产级加固。
 - SaaS 管理后台、租户模型密钥托管、计费策略、队列/worker 横向扩展还未完成。
 
@@ -300,7 +303,7 @@ auth:
   credentials_file: "~/.selfmind/auth.json"
 ```
 
-凭证解析优先级是：命令行/角色显式传入的 key、`config.yaml` 中的 `api_key`、`auth.credentials_file`、环境变量、外部 CLI 登录复用。外部 CLI 登录复用只覆盖 Codex CLI、Claude Code、Gemini CLI、Qwen CLI，并且不会刷新 OAuth token。
+凭证解析优先级是：命令行/角色显式传入的 key、`config.yaml` 中的 `api_key`、`auth.credentials_file`、环境变量、外部 CLI 登录复用。外部 CLI 登录复用只覆盖 Codex CLI、Claude Code、Gemini CLI、Qwen CLI。其中 Codex CLI 的 token 过期会自动刷新；Claude Code、Gemini CLI、Qwen CLI 的 token 按原样复用，过期后需要回到对应 CLI 重新登录。
 
 推荐选择：
 
@@ -313,10 +316,10 @@ auth:
 
 SelfMind 当前的模型解析走 `internal/modelruntime`。它支持：
 
-- 内置 provider：`openai`、`anthropic`、`google`、`codex-cli`、`claude-code`、`gemini-cli`、`qwen-cli`、`openrouter`、`minimax`、`kimi-coding`、`deepseek`、`zai`、`alibaba-coding-plan`。
+- 内置 provider：`openai`、`anthropic`、`google`、`codex-cli`、`claude-code`、`gemini-cli`、`qwen-cli`、`openrouter`、`minimax`（含 `minimax-oauth` 及各区域别名）、`kimi-coding`、`deepseek`、`zai`、`alibaba-coding-plan`。
 - 自定义 OpenAI-compatible endpoint：运行 `selfmind model`，选择 `Custom endpoint (enter URL manually)`。
 - `provider_profiles`：当厂商只是 base URL、协议、模型名变化时，直接在 YAML 中配置，不需要重新构建。
-- P2 认证复用只覆盖 Codex CLI、Claude Code、Gemini CLI、Qwen CLI。其它厂商使用 API key、环境变量展开或 `auth.credentials_file`。
+- P2 认证复用只覆盖 Codex CLI、Claude Code、Gemini CLI、Qwen CLI，以及 SelfMind 自有的 OAuth provider（如 `minimax-oauth` profile）。其它厂商使用 API key、环境变量展开或 `auth.credentials_file`。
 
 示例：
 
@@ -352,7 +355,7 @@ auth:
 }
 ```
 
-如果复用外部 CLI 登录，SelfMind 会尝试读取常见本地认证文件，例如 `~/.codex/auth.json`、Claude Code、Gemini CLI、Qwen CLI 的 OAuth 文件。当前不会刷新 OAuth token；过期后需要回到原 CLI 重新登录。
+如果复用外部 CLI 登录，SelfMind 会尝试读取常见本地认证文件，例如 `~/.codex/auth.json`、Claude Code、Gemini CLI、Qwen CLI 的 OAuth 文件。SelfMind 会在请求前自动刷新过期的 Codex CLI OAuth token（以及 SelfMind 自有的 MiniMax OAuth token）；Claude Code、Gemini CLI、Qwen CLI 的 token 按原样复用，过期后需要回到原 CLI 重新登录。
 
 MiniMax 和 Kimi Coding Plan 接入：
 

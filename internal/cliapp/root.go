@@ -82,6 +82,9 @@ func Run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	if handled, exitCode := app.runEvalCommandIfRequested(); handled {
 		return exitCode
 	}
+	if handled, exitCode := app.runSelfcheckCommandIfRequested(); handled {
+		return exitCode
+	}
 	if handled, exitCode := app.runWeixinCommandIfRequested(); handled {
 		return exitCode
 	}
@@ -107,6 +110,7 @@ func printTopLevelHelp(stdout io.Writer) {
 	fmt.Fprintln(stdout, "  selfmind model [current|check|list|set <provider> <model>]")
 	fmt.Fprintln(stdout, "  selfmind auth [login|status|logout] ...")
 	fmt.Fprintln(stdout, "  selfmind eval [list|run|report]")
+	fmt.Fprintln(stdout, "  selfmind selfcheck [--skip-go|--skip-eval]")
 	fmt.Fprintln(stdout, "  selfmind gateway ...")
 	fmt.Fprintln(stdout, "  selfmind weixin ...")
 }
@@ -148,6 +152,11 @@ func (a *App) runTUI() int {
 		log.Fatal("app.InitGateway failed", "error", err)
 	}
 	appcore.RegisterCronTool(disp, gwDeps.CronScheduler)
+	// Local TUI path has no gateway Server/executor; start cron so jobs still
+	// run (degrading to the marker fallback) instead of never firing.
+	if err := appcore.StartCron(gwDeps.CronScheduler); err != nil {
+		log.Warn("cron scheduler did not start", "error", err)
+	}
 
 	controlStore, err := control.OpenStore(dataDir)
 	if err != nil {

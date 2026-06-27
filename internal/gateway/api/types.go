@@ -48,6 +48,10 @@ type MessageRequest struct {
 	TaskID         string              `json:"task_id"`
 	Async          bool                `json:"async"`
 	Attachments    []MessageAttachment `json:"attachments,omitempty"`
+	// AllowWeb opts this turn into web tools even though the default policy keeps
+	// them off. Used by scheduled jobs that must look things up (e.g. a market
+	// summary). It does not force web use; it only makes the tools available.
+	AllowWeb bool `json:"allow_web,omitempty"`
 }
 
 type MessageAttachment struct {

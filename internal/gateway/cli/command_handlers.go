@@ -404,7 +404,21 @@ func (m *uiModel) handleMemory(args []string) tea.Cmd {
 			for _, f := range memFacts {
 				sb.WriteString(fmt.Sprintf("- `%s` %s\n", f.ID, f.Content))
 			}
-			sb.WriteString("\nCommands: /memory history [user|memory], /memory remove <user|memory> <id-or-text>, /memory undo <change_id>")
+			pinnedFacts, _ := mem.GetFacts(context.Background(), m.tenantID, "pinned")
+			sb.WriteString("\n### Pinned (authoritative — synthesis won't override)\n")
+			if len(pinnedFacts) == 0 {
+				sb.WriteString("- (empty)\n")
+			}
+			for _, f := range pinnedFacts {
+				sb.WriteString(fmt.Sprintf("- `%s` %s\n", f.ID, f.Content))
+			}
+			sb.WriteString("\n### Synthesized profile (\"what SelfMind thinks of you\")\n")
+			if prof := m.agent.ProfileSummary(context.Background(), m.tenantID); prof != "" {
+				sb.WriteString(prof + "\n")
+			} else {
+				sb.WriteString("- (not synthesized yet)\n")
+			}
+			sb.WriteString("\nCommands: /memory pin <text> · /memory remove <user|memory|pinned|profile> <id-or-text> · /memory history · /memory undo <change_id>")
 			return MsgAgentDone{Response: sb.String()}
 		case "history":
 			target := ""
@@ -445,10 +459,46 @@ func (m *uiModel) handleMemory(args []string) tea.Cmd {
 				return MsgAgentDone{Response: fmt.Sprintf("Memory undo error: %v", err)}
 			}
 			return MsgAgentDone{Response: resp}
+		case "pin":
+			if len(args) < 2 {
+				return MsgAgentDone{Response: "Usage: /memory pin <authoritative fact>"}
+			}
+			resp, err := m.agent.Dispatcher().Dispatch("memory", map[string]interface{}{
+				"action":     "add",
+				"target":     "pinned",
+				"content":    strings.Join(args[1:], " "),
+				"_tenant_id": m.tenantID,
+			})
+			if err != nil {
+				return MsgAgentDone{Response: fmt.Sprintf("Pin failed: %v", err)}
+			}
+			return MsgAgentDone{Response: "Pinned (authoritative): " + resp}
 		default:
-			return MsgAgentDone{Response: "Usage: /memory [list|history [user|memory]|remove <user|memory> <id-or-text>|undo <change_id>]"}
+			return MsgAgentDone{Response: "Usage: /memory [list|pin <text>|history [user|memory]|remove <user|memory|pinned|profile> <id-or-text>|undo <change_id>]"}
 		}
 	}
+}
+
+// handleCompact shrinks the visible transcript to the most recent exchanges,
+// replacing older messages with a single marker. This frees rendered context on
+// long sessions (the codex /compact affordance) deterministically, without a
+// model call. Durable task/memory state is unaffected — only the chat view.
+func (m *uiModel) handleCompact() tea.Cmd {
+	const keep = 6
+	if len(m.messages) <= keep+1 {
+		m.addMessage("assistant", "Nothing to compact yet.")
+		return nil
+	}
+	removed := len(m.messages) - keep
+	marker := ChatMessage{
+		Role:      "system",
+		Content:   fmt.Sprintf("[earlier conversation compacted — %d message(s) hidden from view]", removed),
+		Timestamp: time.Now(),
+	}
+	tail := append([]ChatMessage{}, m.messages[len(m.messages)-keep:]...)
+	m.messages = append([]ChatMessage{marker}, tail...)
+	m.viewport.GotoBottom()
+	return nil
 }
 
 func (m *uiModel) handleCurator(args []string) tea.Cmd {

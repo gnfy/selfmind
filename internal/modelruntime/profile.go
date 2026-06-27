@@ -209,7 +209,11 @@ func BuiltinProfiles() []ProviderProfile {
 			BaseURL: "https://chatgpt.com/backend-api/codex", ExternalSource: "codex-cli",
 			ModelList:      ModelListCodex,
 			FallbackModels: []string{"gpt-5.5", "gpt-5.3-codex"},
-			Quirks:         codexResponsesQuirks(),
+			// Match the official Codex CLI, which reasons at high effort by
+			// default; this is a major driver of its output quality. Override
+			// via provider_profiles/models.roles reasoning_effort.
+			ReasoningEffort: "high",
+			Quirks:          codexResponsesQuirks(),
 		},
 		{
 			ID: "openrouter", DisplayName: "OpenRouter",

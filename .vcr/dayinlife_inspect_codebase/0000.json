@@ -1,0 +1,12 @@
+{
+  "method": "chat",
+  "chat": {
+    "Content": "SelfMind daemon service runner main entrypoint startup",
+    "ToolCalls": null,
+    "Usage": {
+      "InputTokens": 262,
+      "OutputTokens": 10
+    },
+    "FinishReason": "end_turn"
+  }
+}

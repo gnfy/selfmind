@@ -1,0 +1,476 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "usage": {
+        "InputTokens": 8629,
+        "OutputTokens": 0
+      }
+    },
+    {
+      "content": "好的"
+    },
+    {
+      "content": "，"
+    },
+    {
+      "content": "第一步"
+    },
+    {
+      "content": "「"
+    },
+    {
+      "content": "遍历"
+    },
+    {
+      "content": "目录"
+    },
+    {
+      "content": "」"
+    },
+    {
+      "content": "的开发"
+    },
+    {
+      "content": "清单"
+    },
+    {
+      "content": "如下"
+    },
+    {
+      "content": "：\n\n"
+    },
+    {
+      "content": "1"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": " **"
+    },
+    {
+      "content": "定义"
+    },
+    {
+      "content": "支持的"
+    },
+    {
+      "content": "图片"
+    },
+    {
+      "content": "格式"
+    },
+    {
+      "content": "**"
+    },
+    {
+      "content": " —"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "确定"
+    },
+    {
+      "content": "需要"
+    },
+    {
+      "content": "处理的"
+    },
+    {
+      "content": "文件"
+    },
+    {
+      "content": "扩展"
+    },
+    {
+      "content": "名"
+    },
+    {
+      "content": "白"
+    },
+    {
+      "content": "名单"
+    },
+    {
+      "content": "（"
+    },
+    {
+      "content": "如"
+    },
+    {
+      "content": " `."
+    },
+    {
+      "content": "jpg"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": "、"
+    },
+    {
+      "content": "`."
+    },
+    {
+      "content": "jpeg"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": "、"
+    },
+    {
+      "content": "`."
+    },
+    {
+      "content": "png"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": "、"
+    },
+    {
+      "content": "`."
+    },
+    {
+      "content": "webp"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": "、"
+    },
+    {
+      "content": "`."
+    },
+    {
+      "content": "bmp"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": "、"
+    },
+    {
+      "content": "`."
+    },
+    {
+      "content": "gif"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": "）。\n"
+    },
+    {
+      "content": "2"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": " **"
+    },
+    {
+      "content": "递归"
+    },
+    {
+      "content": "扫描"
+    },
+    {
+      "content": "目标"
+    },
+    {
+      "content": "目录"
+    },
+    {
+      "content": "**"
+    },
+    {
+      "content": " —"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "遍历"
+    },
+    {
+      "content": "目录"
+    },
+    {
+      "content": "及其"
+    },
+    {
+      "content": "所有"
+    },
+    {
+      "content": "子"
+    },
+    {
+      "content": "目录"
+    },
+    {
+      "content": "，"
+    },
+    {
+      "content": "按"
+    },
+    {
+      "content": "白"
+    },
+    {
+      "content": "名单"
+    },
+    {
+      "content": "筛选"
+    },
+    {
+      "content": "出"
+    },
+    {
+      "content": "图片"
+    },
+    {
+      "content": "文件"
+    },
+    {
+      "content": "，"
+    },
+    {
+      "content": "并"
+    },
+    {
+      "content": "收集"
+    },
+    {
+      "content": "完整"
+    },
+    {
+      "content": "路径"
+    },
+    {
+      "content": "。\n"
+    },
+    {
+      "content": "3"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": " **"
+    },
+    {
+      "content": "生成"
+    },
+    {
+      "content": "待"
+    },
+    {
+      "content": "处理"
+    },
+    {
+      "content": "任务"
+    },
+    {
+      "content": "列表"
+    },
+    {
+      "content": "**"
+    },
+    {
+      "content": " —"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "将"
+    },
+    {
+      "content": "扫描"
+    },
+    {
+      "content": "结果"
+    },
+    {
+      "content": "整理"
+    },
+    {
+      "content": "为"
+    },
+    {
+      "content": "结构化"
+    },
+    {
+      "content": "列表"
+    },
+    {
+      "content": "（"
+    },
+    {
+      "content": "包含"
+    },
+    {
+      "content": "原"
+    },
+    {
+      "content": "图"
+    },
+    {
+      "content": "路径"
+    },
+    {
+      "content": "、"
+    },
+    {
+      "content": "文件名"
+    },
+    {
+      "content": "、"
+    },
+    {
+      "content": "尺寸"
+    },
+    {
+      "content": "等"
+    },
+    {
+      "content": "元"
+    },
+    {
+      "content": "信息"
+    },
+    {
+      "content": "），"
+    },
+    {
+      "content": "供"
+    },
+    {
+      "content": "后续"
+    },
+    {
+      "content": "步骤"
+    },
+    {
+      "content": "批量"
+    },
+    {
+      "content": "消费"
+    },
+    {
+      "content": "。\n"
+    },
+    {
+      "content": "4"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": " **"
+    },
+    {
+      "content": "预处理"
+    },
+    {
+      "content": "与"
+    },
+    {
+      "content": "校验"
+    },
+    {
+      "content": "**"
+    },
+    {
+      "content": " —"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "过滤"
+    },
+    {
+      "content": "损坏"
+    },
+    {
+      "content": "或"
+    },
+    {
+      "content": "无法"
+    },
+    {
+      "content": "读取"
+    },
+    {
+      "content": "的图片"
+    },
+    {
+      "content": "，"
+    },
+    {
+      "content": "输出"
+    },
+    {
+      "content": "有效"
+    },
+    {
+      "content": "文件"
+    },
+    {
+      "content": "总数"
+    },
+    {
+      "content": "及"
+    },
+    {
+      "content": "被"
+    },
+    {
+      "content": "排除"
+    },
+    {
+      "content": "的文件"
+    },
+    {
+      "content": "清单"
+    },
+    {
+      "content": "，"
+    },
+    {
+      "content": "便于"
+    },
+    {
+      "content": "用户"
+    },
+    {
+      "content": "确认"
+    },
+    {
+      "content": "。"
+    },
+    {
+      "finish_reason": "end_turn"
+    },
+    {
+      "usage": {
+        "InputTokens": 0,
+        "OutputTokens": 155
+      }
+    }
+  ]
+}

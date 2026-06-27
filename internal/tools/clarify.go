@@ -24,6 +24,11 @@ func clarifyHandlerFromArgs(args map[string]interface{}) ClarifyHandler {
 			return fn
 		}
 	}
+	// Gateway/IM execution scopes provide an async clarify handler so the tool
+	// works outside the local interactive TUI.
+	if scope, ok := currentExecutionScopeAny(args); ok && scope.Clarify != nil {
+		return scope.Clarify
+	}
 	return ClarifyFn
 }
 

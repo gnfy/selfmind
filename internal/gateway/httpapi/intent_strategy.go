@@ -10,6 +10,9 @@ import (
 
 func taskStrategyForRequest(req api.MessageRequest, intent router.IntentResult) kernel.TaskStrategy {
 	strategy := kernel.BuildTaskStrategy(req.Content, req.Channel)
+	if req.AllowWeb {
+		strategy = strategy.WithWebEnabled()
+	}
 	switch intent.Intent {
 	case router.IntentContinue:
 		strategy.ToolMode = kernel.ToolModeFull

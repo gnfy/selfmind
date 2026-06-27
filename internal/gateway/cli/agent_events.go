@@ -40,6 +40,7 @@ func (m *uiModel) runAgent(ctx context.Context, input string) tea.Cmd {
 					usage = *event.Usage
 				}
 			})
+			cwd := currentWorkingDir()
 			resp, status := m.messageProcessor(ctx, api.MessageRequest{
 				TenantID:       m.tenantID,
 				Platform:       "cli",
@@ -47,7 +48,8 @@ func (m *uiModel) runAgent(ctx context.Context, input string) tea.Cmd {
 				DisplayName:    cliDisplayName(),
 				Channel:        m.channel,
 				Content:        input,
-				ClientCWD:      currentWorkingDir(),
+				ClientCWD:      cwd,
+				Attachments:    imageAttachmentsFromInput(input, cwd),
 			})
 			if resp.Usage.InputTokens != 0 || resp.Usage.OutputTokens != 0 {
 				usage = resp.Usage

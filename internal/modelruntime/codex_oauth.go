@@ -76,7 +76,19 @@ func codexCredentialFromFile(path string) Credential {
 	if token == "" {
 		return Credential{}
 	}
-	return Credential{Token: token, Source: path, ExpiresAt: expiresAt, Getter: getter, Refresher: refresher}
+	return Credential{Token: token, Source: path, ExpiresAt: expiresAt, Getter: getter, Refresher: refresher, AccountID: codexAccountID(state)}
+}
+
+// codexAccountID extracts the ChatGPT account id from auth.json. The
+// chatgpt.com Codex backend requires it as the chatgpt-account-id header;
+// omitting it can make the server drop the connection (EOF).
+func codexAccountID(state map[string]interface{}) string {
+	if tokens, ok := state["tokens"].(map[string]interface{}); ok {
+		if id := stringValue(tokens["account_id"]); id != "" {
+			return id
+		}
+	}
+	return stringValue(state["account_id"])
 }
 
 func codexAccessToken(state map[string]interface{}) (string, time.Time) {

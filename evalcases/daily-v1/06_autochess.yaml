@@ -1,0 +1,14 @@
+id: daily_autochess
+title: "the large auto-chess request that previously EOF'd"
+suite: daily-v1
+workspace: isolated
+channel: cli
+turns:
+  - input: "用 js 写一个高品质的自走棋小游戏,要有历史名将的背景,名将带有一定的技能,直接写在当前工作目录下 autochess.html。"
+expect:
+  status: completed
+checks:
+  no_mojibake: true
+  no_empty_response: true
+assert_state:
+  - { on: file, path: autochess.html, exists: true }

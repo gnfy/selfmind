@@ -1,0 +1,449 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "usage": {
+        "InputTokens": 9018,
+        "OutputTokens": 0
+      }
+    },
+    {
+      "content": "Go"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "项目"
+    },
+    {
+      "content": "，"
+    },
+    {
+      "content": "使用"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "go"
+    },
+    {
+      "content": " test"
+    },
+    {
+      "content": " ./"
+    },
+    {
+      "content": "..."
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "运行"
+    },
+    {
+      "content": "测试"
+    },
+    {
+      "content": "。"
+    },
+    {
+      "content": "当前"
+    },
+    {
+      "content": "有"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "2"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "个"
+    },
+    {
+      "content": "包"
+    },
+    {
+      "content": "失败"
+    },
+    {
+      "content": "：\n\n"
+    },
+    {
+      "content": "-"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "internal"
+    },
+    {
+      "content": "/app"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": "："
+    },
+    {
+      "content": "1"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "个"
+    },
+    {
+      "content": "失败"
+    },
+    {
+      "content": "，`"
+    },
+    {
+      "content": "Test"
+    },
+    {
+      "content": "Build"
+    },
+    {
+      "content": "Responses"
+    },
+    {
+      "content": "Provider"
+    },
+    {
+      "content": "Preserves"
+    },
+    {
+      "content": "Token"
+    },
+    {
+      "content": "Getter"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " —"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "期望"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "*"
+    },
+    {
+      "content": "ll"
+    },
+    {
+      "content": "m"
+    },
+    {
+      "content": ".Res"
+    },
+    {
+      "content": "ponses"
+    },
+    {
+      "content": "Adapter"
+    },
+    {
+      "content": "`，"
+    },
+    {
+      "content": "实际"
+    },
+    {
+      "content": "得到"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "*"
+    },
+    {
+      "content": "ll"
+    },
+    {
+      "content": "m"
+    },
+    {
+      "content": ".v"
+    },
+    {
+      "content": "cr"
+    },
+    {
+      "content": "Provider"
+    },
+    {
+      "content": "`\n"
+    },
+    {
+      "content": "-"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "internal"
+    },
+    {
+      "content": "/kernel"
+    },
+    {
+      "content": "/"
+    },
+    {
+      "content": "ll"
+    },
+    {
+      "content": "m"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": "："
+    },
+    {
+      "content": "6"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "个"
+    },
+    {
+      "content": "失败"
+    },
+    {
+      "content": "，`"
+    },
+    {
+      "content": "Test"
+    },
+    {
+      "content": "Build"
+    },
+    {
+      "content": "Transport"
+    },
+    {
+      "content": "Provider"
+    },
+    {
+      "content": "Uses"
+    },
+    {
+      "content": "Protocol"
+    },
+    {
+      "content": "Families"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " —"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "多个"
+    },
+    {
+      "content": "子"
+    },
+    {
+      "content": "测试"
+    },
+    {
+      "content": "期望"
+    },
+    {
+      "content": "不同"
+    },
+    {
+      "content": " adapter"
+    },
+    {
+      "content": "，"
+    },
+    {
+      "content": "实际"
+    },
+    {
+      "content": "都得到"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "*"
+    },
+    {
+      "content": "ll"
+    },
+    {
+      "content": "m"
+    },
+    {
+      "content": ".v"
+    },
+    {
+      "content": "cr"
+    },
+    {
+      "content": "Provider"
+    },
+    {
+      "content": "`\n\n"
+    },
+    {
+      "content": "原因"
+    },
+    {
+      "content": "："
+    },
+    {
+      "content": "测试"
+    },
+    {
+      "content": "在"
+    },
+    {
+      "content": " V"
+    },
+    {
+      "content": "CR"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "录制"
+    },
+    {
+      "content": "/"
+    },
+    {
+      "content": "回放"
+    },
+    {
+      "content": "模式下"
+    },
+    {
+      "content": "运行"
+    },
+    {
+      "content": "，`"
+    },
+    {
+      "content": "ll"
+    },
+    {
+      "content": "m"
+    },
+    {
+      "content": ".v"
+    },
+    {
+      "content": "cr"
+    },
+    {
+      "content": "Provider"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "包装"
+    },
+    {
+      "content": "了"
+    },
+    {
+      "content": "真实"
+    },
+    {
+      "content": " provider"
+    },
+    {
+      "content": "，"
+    },
+    {
+      "content": "导致"
+    },
+    {
+      "content": "类型"
+    },
+    {
+      "content": "断言"
+    },
+    {
+      "content": "失败"
+    },
+    {
+      "content": "。"
+    },
+    {
+      "content": "这是"
+    },
+    {
+      "content": "测试"
+    },
+    {
+      "content": "环境问题"
+    },
+    {
+      "content": "，"
+    },
+    {
+      "content": "不是"
+    },
+    {
+      "content": "代码"
+    },
+    {
+      "content": " bug"
+    },
+    {
+      "content": "。"
+    },
+    {
+      "finish_reason": "end_turn"
+    },
+    {
+      "usage": {
+        "InputTokens": 0,
+        "OutputTokens": 146
+      }
+    }
+  ]
+}

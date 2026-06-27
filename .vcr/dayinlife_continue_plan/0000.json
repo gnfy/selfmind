@@ -1,0 +1,12 @@
+{
+  "method": "chat",
+  "chat": {
+    "Content": "image batch watermark processing\nbulk image watermarking tool\ndirectory image watermark automation\nmass photo watermark utility\nfolder image watermarking workflow",
+    "ToolCalls": null,
+    "Usage": {
+      "InputTokens": 265,
+      "OutputTokens": 27
+    },
+    "FinishReason": "end_turn"
+  }
+}

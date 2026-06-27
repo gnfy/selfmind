@@ -1,0 +1,41 @@
+id: handoff_cli_to_weixin
+title: "a task started on CLI continues from WeChat (cross-channel handoff)"
+suite: handoff-v1
+workspace: "."
+channel: cli
+
+# Core SelfMind scenario: start work at the desk on CLI, then follow up and
+# continue the SAME task from WeChat on the commute. Task state is shared
+# (control.db) while chat is channel-local, so the second turn must resume the
+# same task with its prior plan/handoff context — not start over or reply with
+# "I don't know what to continue".
+turns:
+  - input: "帮我规划一个小工具：把一个目录下的图片批量压缩。先不要写代码、不要查看本地文件，只给 3 步实现方案，每步一句话。"
+    channel: cli
+  - input: "可以，继续。把第一步细化成一个开发清单（最多 4 条）。仍然不要写代码。"
+    channel: weixin
+
+expect:
+  status: completed
+  require_same_task: true
+  require_continuation: true
+  max_tool_calls: 0
+  max_tool_errors: 2
+  max_duration_seconds: 420
+  must_not_contain:
+    - "不知道你要继续什么"
+    - "no task to continue"
+    - "<tool>"
+    - "Process summary:"
+
+# State oracle: the cross-channel turn must operate on a real, single task.
+assert_state:
+  - on: task
+    field: status
+    exists: true
+
+checks:
+  no_mojibake: true
+  no_raw_json_leak: true
+  no_tool_xml_leak: true
+  no_empty_response: true

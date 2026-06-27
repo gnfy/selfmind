@@ -75,7 +75,9 @@ func BuildTransportProvider(cfg TransportConfig) Provider {
 		return nil
 	}
 	cfg.Protocol = protocol
-	return factory(cfg)
+	// MaybeWrapVCR is a no-op unless SELFMIND_EVAL_VCR is record|replay, so
+	// production paths are untouched.
+	return MaybeWrapVCR(factory(cfg))
 }
 
 func RegisteredTransports() []string {
@@ -125,6 +127,8 @@ func buildResponsesTransport(cfg TransportConfig) Provider {
 	ad := NewResponsesAdapter(cfg.APIKey, cfg.BaseURL, strings.TrimSpace(cfg.Model))
 	ad.KeyGetter = cfg.KeyGetter
 	ad.TokenRefresher = cfg.TokenRefresher
+	ad.Headers = cfg.Headers
+	ad.ReasoningEffort = cfg.ReasoningEffort
 	if cfg.ResponsesStoreFalse {
 		store := false
 		ad.Store = &store

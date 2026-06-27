@@ -21,6 +21,9 @@ type ExecutionScope struct {
 	RunID         string
 	Channel       string
 	Approval      ToolApprovalHandler
+	// Clarify lets gateway/IM execution contexts answer the clarify tool
+	// without a blocking interactive prompt (which only the local TUI has).
+	Clarify ClarifyHandler
 }
 
 var executionScopes sync.Map // tenantID used by the agent -> ExecutionScope

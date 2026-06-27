@@ -29,17 +29,29 @@ func TestTaskStrategyDefaultIsAgentFirst(t *testing.T) {
 	}
 }
 
-func TestTaskStrategyPureModelQuestionUsesDirectAnswer(t *testing.T) {
+func TestTaskStrategyPureModelQuestionIsSoftHintNotToolHiding(t *testing.T) {
+	// Codex philosophy: a likely direct-answer turn is a SOFT hint (fast-model
+	// routing + no plan), not a reason to strip the tool surface. Local tools
+	// stay available so a misclassified "needs a tool" turn is not crippled.
 	strategy := BuildTaskStrategy("\u4f60\u662f\u4ec0\u4e48\u6a21\u578b\uff1f", "cli")
 
 	if strategy.Class != TaskClassSimpleAnswer {
 		t.Fatalf("class = %s, want %s", strategy.Class, TaskClassSimpleAnswer)
 	}
-	if strategy.ToolMode != ToolModeNone {
-		t.Fatalf("tool mode = %s, want none", strategy.ToolMode)
+	if strategy.ToolMode != ToolModeFull {
+		t.Fatalf("tool mode = %s, want %s (tools stay exposed)", strategy.ToolMode, ToolModeFull)
 	}
-	if strategy.AllowsTool("read_file") || strategy.AllowsTool("update_plan") || strategy.AllowsTool("terminal") {
-		t.Fatalf("pure direct answer should expose no tools: %+v", strategy)
+	if strategy.PlanPolicy != PlanPolicyDisabled {
+		t.Fatalf("plan policy = %s, want %s for a trivial turn", strategy.PlanPolicy, PlanPolicyDisabled)
+	}
+	if !strategy.AllowsTool("read_file") || !strategy.AllowsTool("terminal") {
+		t.Fatalf("direct-answer hint must not strip local tools: %+v", strategy)
+	}
+	if strategy.AllowsTool("update_plan") {
+		t.Fatalf("planning should be hidden when plan policy is disabled: %+v", strategy)
+	}
+	if strategy.AllowsTool("web_search") {
+		t.Fatalf("web tools should stay hidden until explicitly requested: %+v", strategy)
 	}
 }
 
@@ -71,14 +83,19 @@ func TestTaskStrategyExplicitLookupEnablesWebWithoutHidingLocalTools(t *testing.
 	}
 }
 
-func TestTaskStrategyEmptyInputHasNoTools(t *testing.T) {
+func TestTaskStrategyEmptyInputFallsBackToAgentFirstDefault(t *testing.T) {
+	// Empty input is degenerate (the gateway guards it), but it must not invent
+	// a tool-hiding classification. Fall back to the agent-first default.
 	strategy := BuildTaskStrategy("   ", "cli")
 
-	if strategy.ToolMode != ToolModeNone {
-		t.Fatalf("tool mode = %s, want none", strategy.ToolMode)
+	if strategy.ToolMode != ToolModeFull {
+		t.Fatalf("tool mode = %s, want %s", strategy.ToolMode, ToolModeFull)
 	}
-	if strategy.AllowsTool("read_file") || strategy.AllowsTool("update_plan") || strategy.AllowsTool("web_search") {
-		t.Fatalf("empty input should expose no tools: %+v", strategy)
+	if !strategy.AllowsTool("read_file") {
+		t.Fatalf("empty input should still fall back to the default tool surface: %+v", strategy)
+	}
+	if strategy.AllowsTool("web_search") {
+		t.Fatalf("web tools should stay hidden by default: %+v", strategy)
 	}
 }
 
@@ -133,5 +150,24 @@ func TestFilterToolCallsByLifecycleCapsConsumesCurrentBatch(t *testing.T) {
 	}
 	if got[0].Function != "update_plan" || got[1].Function != "finish_run" || got[2].Function != "read_file" {
 		t.Fatalf("got = %+v, want one update_plan, one finish_run, and read_file", got)
+	}
+}
+
+func TestWithWebEnabledUnhidesWebTools(t *testing.T) {
+	// Default strategy keeps web tools hidden; WithWebEnabled must un-hide them
+	// and flip the policy, without touching local tools.
+	s := DefaultTaskStrategy()
+	if s.AllowsTool("web_search") {
+		t.Fatal("precondition: web should be hidden by default")
+	}
+	s = s.WithWebEnabled()
+	if !s.AllowsTool("web_search") || !s.AllowsTool("web_extract") {
+		t.Fatalf("web tools should be available after WithWebEnabled: %+v", s)
+	}
+	if s.WebPolicy != WebPolicyEnabled {
+		t.Fatalf("web policy = %s, want enabled", s.WebPolicy)
+	}
+	if !s.AllowsTool("read_file") {
+		t.Fatalf("local tools must remain available: %+v", s)
 	}
 }

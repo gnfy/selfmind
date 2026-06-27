@@ -82,13 +82,6 @@ func (c *RunCoordinator) deliverAsyncResult(ctx context.Context, identity *contr
 	if req.Platform == "cli" && req.Channel == "cli" {
 		return
 	}
-	content := strings.TrimSpace(resp.Content)
-	if resp.Error != "" {
-		content = "SelfMind task failed: " + tools.RedactSensitive(resp.Error)
-	}
-	if content == "" {
-		content = "SelfMind task finished."
-	}
 	_ = c.srv.Delivery.EnqueueAndTry(ctx, delivery.Message{
 		TenantID:       identity.TenantID,
 		PersonID:       identity.PersonID,
@@ -97,8 +90,55 @@ func (c *RunCoordinator) deliverAsyncResult(ctx context.Context, identity *contr
 		Channel:        req.Channel,
 		TaskID:         taskIDForResponse(resp),
 		RunID:          runIDForResponse(resp),
-		Content:        content,
+		Content:        deliveryContent(resp),
 	})
+}
+
+// deliverCronResult pushes a scheduled job's result to its channel. Unlike the
+// interactive async path it must skip a "busy" tick (the person was mid-run, so
+// the job did not actually execute) instead of delivering a confusing notice.
+func (c *RunCoordinator) deliverCronResult(ctx context.Context, req api.MessageRequest, resp api.MessageResponse) {
+	if c == nil || c.srv == nil || c.srv.Delivery == nil {
+		return
+	}
+	if resp.Turn != nil && resp.Turn.Status == "busy" {
+		return // the run was skipped because the person was active; try again next tick
+	}
+	if req.Platform == "cli" && req.Channel == "cli" {
+		return // local-only job: nothing to push to a channel
+	}
+	platformUser := req.PlatformUserID
+	if resp.Identity != nil && resp.Identity.PlatformUserID != "" {
+		platformUser = resp.Identity.PlatformUserID
+	}
+	tenantID, personID := req.TenantID, ""
+	if resp.Identity != nil {
+		tenantID = firstNonEmptyString(resp.Identity.TenantID, tenantID)
+		personID = resp.Identity.PersonID
+	}
+	_ = c.srv.Delivery.EnqueueAndTry(ctx, delivery.Message{
+		TenantID:       tenantID,
+		PersonID:       personID,
+		Platform:       req.Platform,
+		PlatformUserID: platformUser,
+		Channel:        req.Channel,
+		TaskID:         taskIDForResponse(resp),
+		RunID:          runIDForResponse(resp),
+		Content:        deliveryContent(resp),
+	})
+}
+
+// deliveryContent renders the user-facing text for an outbound delivery: a
+// redacted failure line, a fallback for empty output, or the response content.
+func deliveryContent(resp api.MessageResponse) string {
+	if resp.Error != "" {
+		return "SelfMind task failed: " + tools.RedactSensitive(resp.Error)
+	}
+	content := strings.TrimSpace(resp.Content)
+	if content == "" {
+		return "SelfMind task finished."
+	}
+	return content
 }
 
 func taskIDForResponse(resp api.MessageResponse) string {

@@ -1,0 +1,107 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "content": "可"
+    },
+    {
+      "content": "执行"
+    },
+    {
+      "content": "入口"
+    },
+    {
+      "content": "在"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "cmd"
+    },
+    {
+      "content": "/self"
+    },
+    {
+      "content": "mind"
+    },
+    {
+      "content": "/main"
+    },
+    {
+      "content": ".go"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": "（"
+    },
+    {
+      "content": "目录"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "cmd"
+    },
+    {
+      "content": "/self"
+    },
+    {
+      "content": "mind"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": "）。"
+    },
+    {
+      "content": "启动"
+    },
+    {
+      "content": "可"
+    },
+    {
+      "content": "用"
+    },
+    {
+      "content": "："
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": "go"
+    },
+    {
+      "content": " run"
+    },
+    {
+      "content": " ./"
+    },
+    {
+      "content": "cmd"
+    },
+    {
+      "content": "/self"
+    },
+    {
+      "content": "mind"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": "。"
+    },
+    {
+      "usage": {
+        "InputTokens": 7212,
+        "OutputTokens": 36
+      }
+    }
+  ]
+}

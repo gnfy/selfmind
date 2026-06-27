@@ -1,0 +1,29 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "usage": {
+        "InputTokens": 8250,
+        "OutputTokens": 0
+      }
+    },
+    {
+      "finish_reason": "tool_use"
+    },
+    {
+      "usage": {
+        "InputTokens": 0,
+        "OutputTokens": 23
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "tool_GrLj5iAZuDVIEJTsnd50FbrB",
+          "Function": "terminal",
+          "Args": "{\"command\":\"go test ./...\",\"timeout\":60}"
+        }
+      ]
+    }
+  ]
+}

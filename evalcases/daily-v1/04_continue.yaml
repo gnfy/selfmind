@@ -1,0 +1,18 @@
+id: daily_continue
+title: "list options, then continue into a file (continuation)"
+suite: daily-v1
+workspace: isolated
+channel: cli
+turns:
+  - input: "给我列 2 个 Python 列表去重的方法,先别写代码,简短。"
+  - input: "可以,把第一种写成 dedup.py,直接写文件。"
+expect:
+  status: completed
+  require_same_task: true
+  require_continuation: true
+checks:
+  no_mojibake: true
+  no_empty_response: true
+assert_state:
+  - { on: file, path: dedup.py, exists: true }
+  - { on: task, field: status, not_contains: "blocked" }

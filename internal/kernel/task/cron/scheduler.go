@@ -16,12 +16,20 @@ import (
 
 // CronJob represents a scheduled job stored in SQLite.
 type CronJob struct {
-	ID        int64
-	Name      string
-	CronExpr  string
-	Prompt    string
-	TenantID  string
-	Channel   string // "cli", "telegram", etc.
+	ID       int64
+	Name     string
+	CronExpr string
+	Prompt   string
+	TenantID string
+	Channel  string // "cli", "telegram", "weixin", etc.
+	// Platform and DeliverTo identify where a proactive result is sent. For a
+	// "summarize my work and message me" job, Platform is e.g. "weixin" and
+	// DeliverTo is the platform user/chat id. Empty for local-only jobs.
+	Platform  string
+	DeliverTo string
+	// Web allows a job to enable web tools for this turn (e.g. a market summary
+	// that must look things up), overriding the default web-off policy.
+	Web       bool
 	Enabled   bool
 	LastRun   *time.Time
 	NextRun   *time.Time
@@ -30,13 +38,18 @@ type CronJob struct {
 
 // Scheduler manages cron jobs backed by SQLite.
 type Scheduler struct {
-	db     *sql.DB
-	mem    *memory.MemoryManager
-	pruner SkillPruner // optional; used for skill-pruner jobs
-	parser cron.Parser
-	cron   *cron.Cron
-	mu     sync.RWMutex
-	stopCh chan struct{}
+	db       *sql.DB
+	mem      *memory.MemoryManager
+	pruner   SkillPruner // optional; used for skill-pruner jobs
+	executor JobExecutor // optional; runs a job's prompt as a real agent turn
+	parser   cron.Parser
+	cron     *cron.Cron
+	mu       sync.RWMutex
+	// entries maps a SQLite job id to its live cron entry id. robfig/cron
+	// assigns its own entry ids, which must NOT be assumed equal to our SQLite
+	// ids — this map is the source of truth for unscheduling.
+	entries map[int64]cron.EntryID
+	stopCh  chan struct{}
 }
 
 // SkillPruner is the interface for skill pruning, implemented by SkillStore.
@@ -44,14 +57,23 @@ type SkillPruner interface {
 	Prune(ctx context.Context, tenantID string, thresholdDays int) (int, error)
 }
 
+// JobExecutor runs a cron job's prompt as a real agent turn and delivers the
+// result to the job's channel. It is injected by the gateway layer (which owns
+// ProcessMessage + delivery) so the scheduler stays decoupled from httpapi.
+// When no executor is set, runJob falls back to indexing a memory marker.
+type JobExecutor interface {
+	RunCronJob(ctx context.Context, job CronJob) error
+}
+
 // NewScheduler creates a new cron scheduler backed by a dedicated SQLite DB.
 func NewScheduler(db *sql.DB, mem *memory.MemoryManager) *Scheduler {
 	return &Scheduler{
-		db:     db,
-		mem:    mem,
-		parser: cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow),
-		cron:   cron.New(cron.WithParser(cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow))),
-		stopCh: make(chan struct{}),
+		db:      db,
+		mem:     mem,
+		parser:  cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow),
+		cron:    cron.New(cron.WithParser(cron.NewParser(cron.Minute|cron.Hour|cron.Dom|cron.Month|cron.Dow)), cron.WithLocation(time.Local)),
+		entries: make(map[int64]cron.EntryID),
+		stopCh:  make(chan struct{}),
 	}
 }
 
@@ -59,6 +81,33 @@ func NewScheduler(db *sql.DB, mem *memory.MemoryManager) *Scheduler {
 // Must be called before Scheduler.Start().
 func (s *Scheduler) SetSkillPruner(pruner SkillPruner) {
 	s.pruner = pruner
+}
+
+// SetExecutor installs the agent-run executor. Must be called before Start() so
+// scheduled jobs actually run the agent and deliver results instead of falling
+// back to the marker-only path.
+func (s *Scheduler) SetExecutor(e JobExecutor) {
+	s.executor = e
+}
+
+// SetTimezone rebuilds the cron engine to evaluate schedules in the named
+// location (e.g. "Asia/Shanghai"). An empty name keeps the system local zone.
+// Must be called before AddJob/Start (it discards any scheduled entries), so
+// "0 8 * * *" means 08:00 in the configured zone, not UTC.
+func (s *Scheduler) SetTimezone(name string) error {
+	loc := time.Local
+	if strings.TrimSpace(name) != "" {
+		parsed, err := time.LoadLocation(strings.TrimSpace(name))
+		if err != nil {
+			return fmt.Errorf("load timezone %q: %w", name, err)
+		}
+		loc = parsed
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.cron = cron.New(cron.WithParser(cron.NewParser(cron.Minute|cron.Hour|cron.Dom|cron.Month|cron.Dow)), cron.WithLocation(loc))
+	s.entries = make(map[int64]cron.EntryID)
+	return nil
 }
 
 // InitSchema creates the cron_jobs table if it doesn't exist.
@@ -76,8 +125,47 @@ CREATE TABLE IF NOT EXISTS cron_jobs (
     next_run   INTEGER,
     created_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
 );`
-	_, err := s.db.ExecContext(ctx, schema)
-	return err
+	if _, err := s.db.ExecContext(ctx, schema); err != nil {
+		return err
+	}
+	// Idempotent migration for proactive-delivery columns. SQLite has no
+	// "ADD COLUMN IF NOT EXISTS", so probe the table and add what is missing.
+	return s.migrateColumns(ctx, map[string]string{
+		"platform":   "TEXT NOT NULL DEFAULT ''",
+		"deliver_to": "TEXT NOT NULL DEFAULT ''",
+		"web":        "INTEGER NOT NULL DEFAULT 0",
+	})
+}
+
+// migrateColumns adds any of the named columns that the cron_jobs table is
+// missing, leaving existing rows intact.
+func (s *Scheduler) migrateColumns(ctx context.Context, columns map[string]string) error {
+	rows, err := s.db.QueryContext(ctx, "PRAGMA table_info(cron_jobs)")
+	if err != nil {
+		return err
+	}
+	existing := map[string]bool{}
+	for rows.Next() {
+		var cid int
+		var name, ctype string
+		var notnull, pk int
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			rows.Close()
+			return err
+		}
+		existing[name] = true
+	}
+	rows.Close()
+	for name, def := range columns {
+		if existing[name] {
+			continue
+		}
+		if _, err := s.db.ExecContext(ctx, fmt.Sprintf("ALTER TABLE cron_jobs ADD COLUMN %s %s", name, def)); err != nil {
+			return fmt.Errorf("add column %s: %w", name, err)
+		}
+	}
+	return nil
 }
 
 // AddJob inserts a new cron job and schedules it.
@@ -88,10 +176,10 @@ func (s *Scheduler) AddJob(ctx context.Context, job *CronJob) (int64, error) {
 	}
 
 	res, err := s.db.ExecContext(ctx, `
-		INSERT INTO cron_jobs (name, cron_expr, prompt, tenant_id, channel, enabled)
-		VALUES (?, ?, ?, ?, ?, ?)`,
+		INSERT INTO cron_jobs (name, cron_expr, prompt, tenant_id, channel, platform, deliver_to, web, enabled)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		job.Name, job.CronExpr, job.Prompt, job.TenantID, job.Channel,
-		btoi(job.Enabled))
+		job.Platform, job.DeliverTo, btoi(job.Web), btoi(job.Enabled))
 	if err != nil {
 		return 0, fmt.Errorf("insert cron job: %w", err)
 	}
@@ -105,10 +193,42 @@ func (s *Scheduler) AddJob(ctx context.Context, job *CronJob) (int64, error) {
 	return id, nil
 }
 
+// EnsureJob inserts the job if none with the same name+tenant exists, otherwise
+// updates the existing row in place and reschedules it. This makes built-in job
+// registration (skill-pruner, canary) idempotent across restarts instead of
+// inserting a duplicate row every time the gateway boots.
+func (s *Scheduler) EnsureJob(ctx context.Context, job *CronJob) (int64, error) {
+	if _, err := s.parser.Parse(job.CronExpr); err != nil {
+		return 0, fmt.Errorf("invalid cron expr %q: %w", job.CronExpr, err)
+	}
+	var id int64
+	err := s.db.QueryRowContext(ctx,
+		"SELECT id FROM cron_jobs WHERE name = ? AND tenant_id = ?", job.Name, job.TenantID).Scan(&id)
+	if err == sql.ErrNoRows {
+		return s.AddJob(ctx, job)
+	}
+	if err != nil {
+		return 0, err
+	}
+	if _, err := s.db.ExecContext(ctx, `
+		UPDATE cron_jobs SET cron_expr = ?, prompt = ?, channel = ?, platform = ?, deliver_to = ?, web = ?, enabled = ?
+		WHERE id = ?`,
+		job.CronExpr, job.Prompt, job.Channel, job.Platform, job.DeliverTo, btoi(job.Web), btoi(job.Enabled), id); err != nil {
+		return id, err
+	}
+	job.ID = id
+	if job.Enabled {
+		if err := s.scheduleJob(id, job); err != nil {
+			return id, err
+		}
+	}
+	return id, nil
+}
+
 // ListJobs returns all cron jobs for a tenant.
 func (s *Scheduler) ListJobs(ctx context.Context, tenantID string) ([]CronJob, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, name, cron_expr, prompt, tenant_id, channel, enabled,
+		SELECT id, name, cron_expr, prompt, tenant_id, channel, platform, deliver_to, web, enabled,
 		       last_run, next_run, created_at
 		FROM cron_jobs WHERE tenant_id = ? ORDER BY id`,
 		tenantID)
@@ -120,12 +240,14 @@ func (s *Scheduler) ListJobs(ctx context.Context, tenantID string) ([]CronJob, e
 	var jobs []CronJob
 	for rows.Next() {
 		var j CronJob
+		var web int
 		var lastRun, nextRun sql.NullInt64
 		var createdAt int64
 		if err := rows.Scan(&j.ID, &j.Name, &j.CronExpr, &j.Prompt, &j.TenantID,
-			&j.Channel, &j.Enabled, &lastRun, &nextRun, &createdAt); err != nil {
+			&j.Channel, &j.Platform, &j.DeliverTo, &web, &j.Enabled, &lastRun, &nextRun, &createdAt); err != nil {
 			return nil, err
 		}
+		j.Web = itob(web)
 		if lastRun.Valid {
 			t := time.Unix(lastRun.Int64, 0)
 			j.LastRun = &t
@@ -145,7 +267,10 @@ func (s *Scheduler) RemoveJob(ctx context.Context, id int64) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	s.cron.Remove(cron.EntryID(id))
+	if entryID, ok := s.entries[id]; ok {
+		s.cron.Remove(entryID)
+		delete(s.entries, id)
+	}
 	_, err := s.db.ExecContext(ctx, "DELETE FROM cron_jobs WHERE id = ?", id)
 	return err
 }
@@ -154,11 +279,13 @@ func (s *Scheduler) RemoveJob(ctx context.Context, id int64) error {
 func (s *Scheduler) EnableJob(ctx context.Context, id int64, enabled bool) error {
 	// Reload job to get cron expr
 	row := s.db.QueryRowContext(ctx,
-		"SELECT id, name, cron_expr, prompt, tenant_id, channel FROM cron_jobs WHERE id = ?", id)
+		"SELECT id, name, cron_expr, prompt, tenant_id, channel, platform, deliver_to, web FROM cron_jobs WHERE id = ?", id)
 	var j CronJob
-	if err := row.Scan(&j.ID, &j.Name, &j.CronExpr, &j.Prompt, &j.TenantID, &j.Channel); err != nil {
+	var web int
+	if err := row.Scan(&j.ID, &j.Name, &j.CronExpr, &j.Prompt, &j.TenantID, &j.Channel, &j.Platform, &j.DeliverTo, &web); err != nil {
 		return err
 	}
+	j.Web = itob(web)
 	j.Enabled = enabled
 
 	s.mu.Lock()
@@ -168,8 +295,9 @@ func (s *Scheduler) EnableJob(ctx context.Context, id int64, enabled bool) error
 		if err := s.scheduleJobLocked(id, &j); err != nil {
 			return err
 		}
-	} else {
-		s.cron.Remove(cron.EntryID(id))
+	} else if entryID, ok := s.entries[id]; ok {
+		s.cron.Remove(entryID)
+		delete(s.entries, id)
 	}
 	_, err := s.db.ExecContext(ctx, "UPDATE cron_jobs SET enabled = ? WHERE id = ?", btoi(enabled), id)
 	return err
@@ -179,7 +307,7 @@ func (s *Scheduler) EnableJob(ctx context.Context, id int64, enabled bool) error
 func (s *Scheduler) Start(ctx context.Context) error {
 	// Load and schedule all enabled jobs
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, name, cron_expr, prompt, tenant_id, channel FROM cron_jobs WHERE enabled = 1`)
+		SELECT id, name, cron_expr, prompt, tenant_id, channel, platform, deliver_to, web FROM cron_jobs WHERE enabled = 1`)
 	if err != nil {
 		return err
 	}
@@ -188,10 +316,12 @@ func (s *Scheduler) Start(ctx context.Context) error {
 	s.mu.Lock()
 	for rows.Next() {
 		var j CronJob
-		if err := rows.Scan(&j.ID, &j.Name, &j.CronExpr, &j.Prompt, &j.TenantID, &j.Channel); err != nil {
+		var web int
+		if err := rows.Scan(&j.ID, &j.Name, &j.CronExpr, &j.Prompt, &j.TenantID, &j.Channel, &j.Platform, &j.DeliverTo, &web); err != nil {
 			s.mu.Unlock()
 			return err
 		}
+		j.Web = itob(web)
 		if err := s.scheduleJobLocked(j.ID, &j); err != nil {
 			log.Debug("cron: failed to schedule job", "job_id", j.ID, "job_name", j.Name, "error", err)
 		}
@@ -213,16 +343,19 @@ func (s *Scheduler) Stop(ctx context.Context) {
 
 // scheduleJobLocked adds a job to the cron scheduler (caller must hold s.mu).
 func (s *Scheduler) scheduleJobLocked(id int64, job *CronJob) error {
+	// Replace any existing entry for this job id so re-enabling/rescheduling
+	// does not leak duplicate cron entries.
+	if prev, ok := s.entries[id]; ok {
+		s.cron.Remove(prev)
+		delete(s.entries, id)
+	}
 	entryID, err := s.cron.AddFunc(job.CronExpr, func() {
 		s.runJob(context.Background(), job)
 	})
 	if err != nil {
 		return fmt.Errorf("add cron func: %w", err)
 	}
-	if int64(entryID) != id {
-		// Entry ID mismatch — SQLite id and cron entry id should align
-		log.Debug("cron: warning: job %d entry id %v mismatch", id, entryID)
-	}
+	s.entries[id] = entryID
 	return nil
 }
 
@@ -263,12 +396,25 @@ func (s *Scheduler) runJob(ctx context.Context, job *CronJob) {
 		return
 	}
 
-	// Default: index a marker so the agent picks it up on next conversation
-	trajectoryData := fmt.Sprintf(`[cron job "%s" triggered at %s] %s`,
-		job.Name, now.Format(time.RFC3339), job.Prompt)
+	// Preferred path: run the prompt as a real agent turn and deliver the
+	// result to the job's channel. The executor (gateway layer) owns the run +
+	// delivery; the scheduler stays decoupled.
+	if s.executor != nil {
+		if err := s.executor.RunCronJob(ctx, *job); err != nil {
+			log.Debug("cron: executor failed for job %d (%s): %v", job.ID, job.Name, err)
+		}
+		log.Debug("cron: job %d (%s) completed", job.ID, job.Name)
+		return
+	}
 
-	_ = s.mem.IndexSession(ctx, job.TenantID, job.Channel,
-		fmt.Sprintf("cron-%d-%d", job.ID, now.Unix()), []byte(trajectoryData))
+	// Fallback (no executor, e.g. CLI-only mode): index a marker so the agent
+	// picks the job up on the next conversation instead of silently dropping it.
+	if s.mem != nil {
+		trajectoryData := fmt.Sprintf(`[cron job "%s" triggered at %s] %s`,
+			job.Name, now.Format(time.RFC3339), job.Prompt)
+		_ = s.mem.IndexSession(ctx, job.TenantID, job.Channel,
+			fmt.Sprintf("cron-%d-%d", job.ID, now.Unix()), []byte(trajectoryData))
+	}
 
 	log.Debug("cron: job %d (%s) completed", job.ID, job.Name)
 }
@@ -312,10 +458,13 @@ func (a *ToolAdapter) Schema() tools.ToolSchema {
 			"name":     {Type: "string"},
 			"cron":     {Type: "string", Description: "Cron expression, e.g. 0 9 * * *"},
 			"prompt":   {Type: "string"},
-			"job_id":   {Type: "integer"},
-			"enabled":  {Type: "boolean"},
-			"tenantID": {Type: "string"},
-			"channel":  {Type: "string"},
+			"job_id":     {Type: "integer"},
+			"enabled":    {Type: "boolean"},
+			"tenantID":   {Type: "string"},
+			"channel":    {Type: "string", Description: "Delivery channel, e.g. cli, weixin, telegram"},
+			"platform":   {Type: "string", Description: "Platform to deliver the result on, e.g. weixin"},
+			"deliver_to": {Type: "string", Description: "Recipient id (platform user/chat) for proactive delivery"},
+			"web":        {Type: "boolean", Description: "Allow web tools for this job (e.g. market/news lookups)"},
 		},
 	}
 }
@@ -342,10 +491,13 @@ func (ct *CronTool) ToolDefinition() map[string]interface{} {
 					"name":     map[string]interface{}{"type": "string"},
 					"cron":     map[string]interface{}{"type": "string", "description": "Cron expression, e.g. 0 9 * * *"},
 					"prompt":   map[string]interface{}{"type": "string", "description": "Prompt sent to the agent when the job fires"},
-					"job_id":   map[string]interface{}{"type": "integer", "description": "Job ID to remove or enable"},
-					"enabled":  map[string]interface{}{"type": "boolean"},
-					"tenantID": map[string]interface{}{"type": "string"},
-					"channel":  map[string]interface{}{"type": "string"},
+					"job_id":     map[string]interface{}{"type": "integer", "description": "Job ID to remove or enable"},
+					"enabled":    map[string]interface{}{"type": "boolean"},
+					"tenantID":   map[string]interface{}{"type": "string"},
+					"channel":    map[string]interface{}{"type": "string", "description": "Delivery channel, e.g. cli, weixin"},
+					"platform":   map[string]interface{}{"type": "string", "description": "Platform to deliver on, e.g. weixin"},
+					"deliver_to": map[string]interface{}{"type": "string", "description": "Recipient id for proactive delivery"},
+					"web":        map[string]interface{}{"type": "boolean", "description": "Allow web tools for this job"},
 				},
 			},
 		},
@@ -393,6 +545,9 @@ func (ct *CronTool) Execute(ctx context.Context, args map[string]interface{}) (s
 		cronExpr, _ := args["cron"].(string)
 		prompt, _ := args["prompt"].(string)
 		channel, _ := args["channel"].(string)
+		platform, _ := args["platform"].(string)
+		deliverTo, _ := args["deliver_to"].(string)
+		web, _ := args["web"].(bool)
 		if channel == "" {
 			channel = "cli"
 		}
@@ -400,12 +555,15 @@ func (ct *CronTool) Execute(ctx context.Context, args map[string]interface{}) (s
 			return "", fmt.Errorf("name, cron, and prompt are required for add")
 		}
 		job := &CronJob{
-			Name:     name,
-			CronExpr: cronExpr,
-			Prompt:   prompt,
-			TenantID: tenantID,
-			Channel:  channel,
-			Enabled:  true,
+			Name:      name,
+			CronExpr:  cronExpr,
+			Prompt:    prompt,
+			TenantID:  tenantID,
+			Channel:   channel,
+			Platform:  platform,
+			DeliverTo: deliverTo,
+			Web:       web,
+			Enabled:   true,
 		}
 		id, err := ct.sched.AddJob(ctx, job)
 		if err != nil {

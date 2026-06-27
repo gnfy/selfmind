@@ -1,0 +1,305 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "content": "```"
+    },
+    {
+      "content": "go"
+    },
+    {
+      "content": "\n"
+    },
+    {
+      "content": "package"
+    },
+    {
+      "content": " main"
+    },
+    {
+      "content": "\n\n"
+    },
+    {
+      "content": "import"
+    },
+    {
+      "content": " \""
+    },
+    {
+      "content": "sync"
+    },
+    {
+      "content": "\"\n\n"
+    },
+    {
+      "content": "type"
+    },
+    {
+      "content": " Counter"
+    },
+    {
+      "content": " struct"
+    },
+    {
+      "content": " {\n"
+    },
+    {
+      "content": "\tm"
+    },
+    {
+      "content": "u"
+    },
+    {
+      "content": " sync"
+    },
+    {
+      "content": ".M"
+    },
+    {
+      "content": "utex"
+    },
+    {
+      "content": "\n"
+    },
+    {
+      "content": "\tn"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": " int"
+    },
+    {
+      "content": "\n"
+    },
+    {
+      "content": "}\n\n"
+    },
+    {
+      "content": "func"
+    },
+    {
+      "content": " ("
+    },
+    {
+      "content": "c"
+    },
+    {
+      "content": " *"
+    },
+    {
+      "content": "Counter"
+    },
+    {
+      "content": ")"
+    },
+    {
+      "content": " Inc"
+    },
+    {
+      "content": "()"
+    },
+    {
+      "content": " {\n"
+    },
+    {
+      "content": "\tc"
+    },
+    {
+      "content": ".mu"
+    },
+    {
+      "content": ".Lock"
+    },
+    {
+      "content": "()\n"
+    },
+    {
+      "content": "\tdefer"
+    },
+    {
+      "content": " c"
+    },
+    {
+      "content": ".mu"
+    },
+    {
+      "content": ".Unlock"
+    },
+    {
+      "content": "()\n"
+    },
+    {
+      "content": "\tc"
+    },
+    {
+      "content": ".n"
+    },
+    {
+      "content": "++\n"
+    },
+    {
+      "content": "}\n\n"
+    },
+    {
+      "content": "func"
+    },
+    {
+      "content": " ("
+    },
+    {
+      "content": "c"
+    },
+    {
+      "content": " *"
+    },
+    {
+      "content": "Counter"
+    },
+    {
+      "content": ")"
+    },
+    {
+      "content": " Add"
+    },
+    {
+      "content": "(delta"
+    },
+    {
+      "content": " int"
+    },
+    {
+      "content": ")"
+    },
+    {
+      "content": " {\n"
+    },
+    {
+      "content": "\tc"
+    },
+    {
+      "content": ".mu"
+    },
+    {
+      "content": ".Lock"
+    },
+    {
+      "content": "()\n"
+    },
+    {
+      "content": "\tdefer"
+    },
+    {
+      "content": " c"
+    },
+    {
+      "content": ".mu"
+    },
+    {
+      "content": ".Unlock"
+    },
+    {
+      "content": "()\n"
+    },
+    {
+      "content": "\tc"
+    },
+    {
+      "content": ".n"
+    },
+    {
+      "content": " +="
+    },
+    {
+      "content": " delta"
+    },
+    {
+      "content": "\n"
+    },
+    {
+      "content": "}\n\n"
+    },
+    {
+      "content": "func"
+    },
+    {
+      "content": " ("
+    },
+    {
+      "content": "c"
+    },
+    {
+      "content": " *"
+    },
+    {
+      "content": "Counter"
+    },
+    {
+      "content": ")"
+    },
+    {
+      "content": " Value"
+    },
+    {
+      "content": "()"
+    },
+    {
+      "content": " int"
+    },
+    {
+      "content": " {\n"
+    },
+    {
+      "content": "\tc"
+    },
+    {
+      "content": ".mu"
+    },
+    {
+      "content": ".Lock"
+    },
+    {
+      "content": "()\n"
+    },
+    {
+      "content": "\tdefer"
+    },
+    {
+      "content": " c"
+    },
+    {
+      "content": ".mu"
+    },
+    {
+      "content": ".Unlock"
+    },
+    {
+      "content": "()\n"
+    },
+    {
+      "content": "\treturn"
+    },
+    {
+      "content": " c"
+    },
+    {
+      "content": ".n"
+    },
+    {
+      "content": "\n"
+    },
+    {
+      "content": "}\n"
+    },
+    {
+      "content": "```"
+    },
+    {
+      "usage": {
+        "InputTokens": 6392,
+        "OutputTokens": 174
+      }
+    }
+  ]
+}

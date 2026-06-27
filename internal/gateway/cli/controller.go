@@ -70,6 +70,7 @@ type uiModel struct {
 	runTokens          int
 	totalTokens        int
 	tokenLimit         int
+	modelMeta          string
 	startTime          time.Time
 	provider           llm.Provider
 	providerName       string
@@ -182,6 +183,7 @@ func NewController(a *kernel.Agent, provider llm.Provider, cfg *config.Config, t
 			startTime:     time.Now(),
 			runStatus:     "ready",
 			tokenLimit:    resolveUITokenLimit(cfg, "", ""),
+			modelMeta:     resolveUIModelMeta(cfg),
 			viewport:      viewport.New(0, 0),
 			clarifyBridge: tools.NewClarifyBridge(),
 		},
@@ -231,6 +233,7 @@ func NewControllerWithGateway(gw *router.Gateway, agent *kernel.Agent, provider 
 			startTime:     time.Now(),
 			runStatus:     "ready",
 			tokenLimit:    resolveUITokenLimit(cfg, providerName, modelName),
+			modelMeta:     resolveUIModelMeta(cfg),
 			viewport:      viewport.New(0, 0),
 			clarifyBridge: tools.NewClarifyBridge(),
 		},
@@ -682,13 +685,16 @@ func renderHelpRow(left, right string, leftStyle, rightStyle lipgloss.Style, wid
 
 func (m *uiModel) statusLine() string {
 	st := m.common.Styles
-	header := m.displayModelName() + " default"
+	header := m.displayModelName()
+	if meta := strings.TrimSpace(m.modelMeta); meta != "" {
+		header += " " + meta
+	}
 	cwd := currentWorkingDir()
 
 	parts := []string{
 		st.Status.Value.Render(header),
 		st.Status.Value.Render(cwd),
-		st.Status.Label.Render(formatUsage(m.runTokens, m.tokenLimit)),
+		st.Status.Label.Render(formatUsageSession(m.runTokens, m.totalTokens, m.tokenLimit)),
 	}
 
 	state := m.runStatus

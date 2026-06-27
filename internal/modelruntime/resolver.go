@@ -149,11 +149,19 @@ func (r *Resolver) resolveNamed(providerName string, selection Selection, modelN
 		return Runtime{}, fmt.Errorf("no credentials found for provider %s", profile.ID)
 	}
 	baseURL, protocol = resolveProviderTransport(profile, baseURL, protocol, endpoint, selection, cred)
+	headers := mergeHeaders(profile.Headers, endpoint.Headers, selection.Headers)
+	if cred.AccountID != "" {
+		if headers == nil {
+			headers = map[string]string{}
+		}
+		// Required by the ChatGPT Codex backend; missing it can cause EOF.
+		headers["chatgpt-account-id"] = cred.AccountID
+	}
 	return Runtime{
 		Provider: profile.ID, DisplayName: firstNonEmpty(profile.DisplayName, profile.ID),
 		Model: model, Protocol: protocol, BaseURL: baseURL,
 		APIKey: cred.Token, CredentialSource: cred.Source, AuthType: profile.AuthType,
-		Headers:         mergeHeaders(profile.Headers, endpoint.Headers, selection.Headers),
+		Headers:         headers,
 		ContextLength:   firstPositive(selection.ContextLength, r.cfg.Model.ContextLength, endpoint.ContextLength, profile.ContextLength, KnownContextLength(profile.ID, model)),
 		MaxTokens:       firstPositive(selection.MaxTokens, endpoint.MaxTokens, profile.MaxTokens),
 		ReasoningEffort: firstNonEmpty(selection.ReasoningEffort, endpoint.ReasoningEffort, profile.ReasoningEffort),

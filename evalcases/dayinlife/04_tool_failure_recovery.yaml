@@ -1,0 +1,23 @@
+id: dayinlife_tool_failure_recovery
+title: "diagnose how to run/verify the project without language-specific assumptions"
+suite: dayinlife
+workspace: "."
+channel: cli
+turns:
+  - input: "检查当前项目应该如何运行测试。先做最小化只读探测(看清楚是什么生态再决定命令),如果命令失败请分析原因,不要修改文件。最多 150 字。"
+expect:
+  status: completed
+  require_tool_events: true
+  min_tool_calls: 1
+  max_tool_calls: 10
+  max_tool_errors: 6
+  max_duration_seconds: 540
+  must_not_contain:
+    - "llm stream chat failed"
+    - "responses API error"
+    - "<tool>"
+checks:
+  no_mojibake: true
+  no_raw_json_leak: true
+  no_tool_xml_leak: true
+  no_empty_response: true

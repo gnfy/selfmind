@@ -1,0 +1,50 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "content": "Preparing to run ls_r",
+      "event_type": "agent.thinking"
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_2OxZGIlztRGcXLiTHtClmvYx",
+          "Function": "ls_r",
+          "Args": "{\"path\":\"/mnt/d/wwwroot/ai/selfmind/cmd\",\"recursive\":true,\"max_entries\":80}"
+        }
+      ]
+    },
+    {
+      "content": "Preparing to run read_file",
+      "event_type": "agent.thinking"
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_BMNhDUbMZIkjUecjJXmBxJjP",
+          "Function": "read_file",
+          "Args": "{\"path\":\"/mnt/d/wwwroot/ai/selfmind/go.mod\",\"limit\":20}"
+        }
+      ]
+    },
+    {
+      "content": "Preparing to run search_files",
+      "event_type": "agent.thinking"
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_5Sgs3XChNY5NJptVPL2lU2Gh",
+          "Function": "search_files",
+          "Args": "{\"path\":\"/mnt/d/wwwroot/ai/selfmind\",\"pattern\":\"func main\\\\(\",\"file_glob\":\"*.go\",\"limit\":20,\"timeout\":10}"
+        }
+      ]
+    },
+    {
+      "usage": {
+        "InputTokens": 6588,
+        "OutputTokens": 125
+      }
+    }
+  ]
+}

@@ -50,6 +50,15 @@ func Run(ctx context.Context, opts Options) error {
 	}()
 
 	addr := ResolveAddr(firstNonEmpty(opts.Addr, cfg.Gateway.Addr))
+	// Fail closed: never expose the agent on a public interface without auth.
+	gwToken := firstNonEmpty(
+		strings.TrimSpace(os.Getenv("SELF_GATEWAY_TOKEN")),
+		strings.TrimSpace(os.Getenv("SELF_DAEMON_TOKEN")),
+		strings.TrimSpace(cfg.Gateway.Token),
+	)
+	if err := guardPublicBind(addr, gwToken); err != nil {
+		return err
+	}
 	drainTimeout := opts.DrainTimeout
 	if drainTimeout <= 0 {
 		drainTimeout = resolveDrainTimeout(cfg.Gateway.DrainTimeout)
@@ -118,6 +127,15 @@ func Run(ctx context.Context, opts Options) error {
 	if gatewayAPI.Delivery != nil {
 		gatewayAPI.Delivery.Start(ctx)
 		defer gatewayAPI.Delivery.Stop()
+	}
+	// Install the cron executor now that the Server + Delivery are ready, then
+	// start the scheduler. Scheduled jobs now run real agent turns and deliver
+	// results to their channel (e.g. a daily summary pushed to WeChat).
+	if gwDeps.CronScheduler != nil {
+		gwDeps.CronScheduler.SetExecutor(httpapi.NewCronExecutor(gatewayAPI))
+		if err := app.StartCron(gwDeps.CronScheduler); err != nil {
+			log.Warn("gateway: cron scheduler did not start", "error", err)
+		}
 	}
 	if weixinAdapter != nil {
 		if err := weixinAdapter.Start(ctx); err != nil {

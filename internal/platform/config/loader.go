@@ -361,6 +361,21 @@ type DelegationConfig struct {
 
 type CronConfig struct {
 	Enabled bool `mapstructure:"enabled" yaml:"enabled,omitempty"`
+	// Timezone for cron schedules (e.g. "Asia/Shanghai"). Empty = system local.
+	Timezone string `mapstructure:"timezone" yaml:"timezone,omitempty"`
+	// Canary is a periodic liveness self-check: it runs a trivial agent turn and
+	// alerts the configured channel ONLY on failure (silent on success), so a
+	// broken deploy — e.g. an expired provider token — pings you instead of
+	// silently wasting your time.
+	Canary CanaryConfig `mapstructure:"canary" yaml:"canary,omitempty"`
+}
+
+type CanaryConfig struct {
+	Enabled   bool   `mapstructure:"enabled" yaml:"enabled,omitempty"`
+	CronExpr  string `mapstructure:"cron" yaml:"cron,omitempty"`             // default "0 * * * *" (hourly)
+	Platform  string `mapstructure:"platform" yaml:"platform,omitempty"`     // e.g. "weixin"
+	DeliverTo string `mapstructure:"deliver_to" yaml:"deliver_to,omitempty"` // recipient id for the alert
+	Channel   string `mapstructure:"channel" yaml:"channel,omitempty"`
 }
 
 func LoadConfig(options ...Options) (*Config, error) {

@@ -27,8 +27,8 @@ func NewMemoryTool(mem *memory.MemoryManager) *MemoryTool {
 					},
 					"target": {
 						Type:        "string",
-						Description: "Which memory store: 'user' for user preferences/profile, 'memory' for technical notes/environment facts. Optional for history and undo.",
-						Enum:        []string{"user", "memory"},
+						Description: "Which memory store: 'user' for user preferences/profile, 'memory' for technical notes/environment facts, 'pinned' for authoritative facts the user confirmed (the profile synthesizer must not contradict these). Optional for history and undo.",
+						Enum:        []string{"user", "memory", "pinned"},
 					},
 					"content": {
 						Type:        "string",

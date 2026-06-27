@@ -1,0 +1,12 @@
+{
+  "method": "chat",
+  "chat": {
+    "Content": "test runner test suite pytest unittest jest mocha karma vitest cypress playwright go-test cargo-test dotnet-test",
+    "ToolCalls": null,
+    "Usage": {
+      "InputTokens": 275,
+      "OutputTokens": 22
+    },
+    "FinishReason": "end_turn"
+  }
+}

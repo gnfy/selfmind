@@ -1,0 +1,20 @@
+id: dayinlife_snippet_no_tools
+title: "produce a correct code snippet without touching the workspace"
+suite: dayinlife
+workspace: "."
+channel: cli
+turns:
+  - input: "用 Go 写一个并发安全的计数器(用 sync.Mutex),直接给代码,不要查看或修改本地文件。最多 30 行。"
+expect:
+  status: completed
+  max_tool_calls: 0
+  max_duration_seconds: 300
+  contains:
+    - "sync"
+  must_not_contain:
+    - "<tool>"
+checks:
+  no_mojibake: true
+  no_raw_json_leak: true
+  no_tool_xml_leak: true
+  no_empty_response: true

@@ -1,0 +1,24 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "content": "Preparing to run ls_r",
+      "event_type": "agent.thinking"
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_AWuTMwToKhfUKDZxv6qGy8tZ",
+          "Function": "ls_r",
+          "Args": "{\"path\":\"/mnt/d/wwwroot/ai/selfmind\",\"recursive\":false,\"max_entries\":80}"
+        }
+      ]
+    },
+    {
+      "usage": {
+        "InputTokens": 6403,
+        "OutputTokens": 68
+      }
+    }
+  ]
+}

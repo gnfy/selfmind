@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -176,8 +177,26 @@ func runSingle(ctx context.Context, c *Case, opts RunOptions, sampleIdx, totalSa
 	if err != nil {
 		return nil, err
 	}
+	// Bind the isolated workspace explicitly. The gateway's CLI-cwd heuristic
+	// only auto-registers a workspace for cli/terminal channels, so IM-channel
+	// scenarios (weixin/feishu/qq) would otherwise run with no workspace scope
+	// and write files outside the temp dir. Registering it and passing its ID on
+	// every turn binds the scope regardless of channel.
+	var workspaceID string
+	if dataDirOverride != "" {
+		if ws, werr := h.controlStore.RegisterWorkspace(ctx, control.Workspace{
+			TenantID:      identity.TenantID,
+			OwnerPersonID: identity.PersonID,
+			Name:          "eval-workspace",
+			LocalPath:     workspace,
+			AllowedRoots:  []string{workspace},
+		}); werr == nil && ws != nil {
+			workspaceID = ws.ID
+			_ = h.controlStore.SetCurrentWorkspace(ctx, identity.TenantID, identity.PersonID, ws.ID)
+		}
+	}
 	if c.Setup != nil {
-		if err := applyStateSeeds(ctx, h.controlStore, h.mem, identity, "", c.Setup); err != nil {
+		if err := applyStateSeeds(ctx, h.controlStore, h.mem, identity, workspaceID, c.Setup); err != nil {
 			return nil, err
 		}
 	}
@@ -202,7 +221,10 @@ func runSingle(ctx context.Context, c *Case, opts RunOptions, sampleIdx, totalSa
 		// Per-turn deadline: a stalled provider stream (bytes stop arriving
 		// without an EOF) would otherwise hang the eval indefinitely. The
 		// deadline cancels the underlying request so the turn fails cleanly.
-		turnCtx, cancelTurn := context.WithTimeout(httpapi.WithStreamObserver(ctx, observer), turnBudget(c, opts))
+		// Tag the turn with a VCR session (the case id) so model calls can be
+		// recorded/replayed deterministically when SELFMIND_EVAL_VCR is set.
+		vcrCtx := llm.WithVCRSession(httpapi.WithStreamObserver(ctx, observer), c.ID)
+		turnCtx, cancelTurn := context.WithTimeout(vcrCtx, turnBudget(c, opts))
 		resp, status := h.server.ProcessMessage(turnCtx, api.MessageRequest{
 			TenantID:       h.tenantID,
 			Platform:       "eval",
@@ -211,6 +233,7 @@ func runSingle(ctx context.Context, c *Case, opts RunOptions, sampleIdx, totalSa
 			Channel:        channel,
 			Content:        turn.Input,
 			ClientCWD:      workspace,
+			WorkspaceID:    workspaceID,
 		})
 		cancelTurn()
 		if resp.Task != nil {
@@ -279,6 +302,11 @@ func turnBudget(c *Case, opts RunOptions) time.Duration {
 	}
 	if c != nil && c.Expect.MaxDurationSeconds > 0 {
 		return time.Duration(c.Expect.MaxDurationSeconds) * time.Second
+	}
+	if v := strings.TrimSpace(os.Getenv("SELFMIND_EVAL_TURN_TIMEOUT")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return time.Duration(n) * time.Second
+		}
 	}
 	return 200 * time.Second
 }

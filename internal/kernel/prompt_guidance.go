@@ -1,5 +1,54 @@
 package kernel
 
+import "strings"
+
+// taskExecutionGuidance encodes the work-quality discipline that separates a
+// polished result from a quick-and-dirty one: explore before writing, prefer
+// precise edits, and verify your output before claiming done. It is language-
+// and domain-agnostic (the project's own tooling drives verification) and is
+// injected only on tool-bearing turns.
+func taskExecutionGuidance() string {
+	return `# WORK QUALITY & VERIFICATION
+- Explore before you write: list the working directory and read related or existing files so you do not overwrite or duplicate existing work. Pick a non-colliding filename when one already exists.
+- Prefer precise edits (the patch tool) over rewriting a whole file when changing existing code.
+- VERIFY before declaring done. Identify the project's ecosystem from its manifest/build files (e.g. go.mod, package.json, pyproject.toml/requirements.txt, Cargo.toml, pom.xml/build.gradle, composer.json, Gemfile, Makefile, *.csproj, or CI config) and run that project's own syntax/build/test/lint check with the terminal. If nothing is runnable, re-read what you produced and sanity-check the key parts (entry points and the specific behavior requested). Treat a failed check as work to fix, not a place to stop.
+- Do not claim completion you have not verified. If you could not verify, say so plainly and give the exact command the user can run.`
+}
+
+// frontendQualityGuidance is injected ONLY when the task looks like UI/frontend
+// work (see isFrontendTask). It must not be part of the always-on guidance —
+// for backend, data, infra, or CLI work it is irrelevant and misleading.
+func frontendQualityGuidance() string {
+	return `# FRONTEND / UI QUALITY (this task involves a UI or page)
+- Aim for an intentional, polished result; avoid generic "AI slop" and safe, average layouts.
+- Define CSS variables; use purposeful typography (avoid default system stacks); add a few meaningful animations; use gradients/shapes/patterns for atmosphere instead of a flat single-color background; ensure it works on both desktop and mobile.
+- Exception: inside an existing project or design system, match its established patterns instead.`
+}
+
+// isFrontendTask is a lightweight, multilingual signal for whether design/UI
+// quality guidance is relevant. It is advisory prompt content only (a false
+// positive wastes a little prompt budget; a false negative just omits design
+// hints) — not tool gating or agent routing.
+func isFrontendTask(input string) bool {
+	lower := strings.ToLower(input)
+	signals := []string{
+		// English
+		"frontend", "front-end", "front end", "ui", "ux", "web page", "webpage",
+		"website", "web app", "html", "css", "canvas", "react", "vue", "svelte",
+		"tailwind", "landing page", "dashboard", "animation", "button", "layout",
+		"responsive", "component", "game",
+		// Chinese
+		"前端", "网页", "页面", "界面", "样式", "布局", "动画", "按钮", "可视化",
+		"小游戏", "游戏", "网站", "组件", "响应式", "落地页",
+	}
+	for _, s := range signals {
+		if strings.Contains(lower, s) {
+			return true
+		}
+	}
+	return false
+}
+
 func selfImprovementGuidance() string {
 	return `# Persistent Learning Guidance
 

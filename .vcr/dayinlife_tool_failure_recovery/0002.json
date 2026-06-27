@@ -1,0 +1,29 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "usage": {
+        "InputTokens": 7322,
+        "OutputTokens": 0
+      }
+    },
+    {
+      "finish_reason": "tool_use"
+    },
+    {
+      "usage": {
+        "InputTokens": 0,
+        "OutputTokens": 28
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "tool_cRes9cKnxb9kGMBW5FPMCWRN",
+          "Function": "read_file",
+          "Args": "{\"path\": \"/mnt/d/wwwroot/ai/selfmind/go.mod\"}"
+        }
+      ]
+    }
+  ]
+}

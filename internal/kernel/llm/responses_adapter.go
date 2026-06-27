@@ -10,8 +10,10 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
+	"time"
 )
 
 // ResponsesAdapter talks to OpenAI/Codex Responses-compatible endpoints.
@@ -21,18 +23,25 @@ type ResponsesAdapter struct {
 	TokenRefresher func() string
 	Model          string
 	BaseURL        string
-	Store          *bool
-	RequireStream  bool
-	mu             sync.RWMutex
-	toolNameAlias  map[string]string
+	Store           *bool
+	RequireStream   bool
+	ReasoningEffort string            // e.g. "low"/"medium"/"high"; drives the Responses reasoning field
+	Headers         map[string]string // extra request headers (e.g. chatgpt-account-id)
+	mu              sync.RWMutex
+	toolNameAlias   map[string]string
 }
 
 type responsesRequest struct {
-	Model  string                   `json:"model"`
-	Input  []responsesInputItem     `json:"input"`
-	Tools  []map[string]interface{} `json:"tools,omitempty"`
-	Stream bool                     `json:"stream,omitempty"`
-	Store  *bool                    `json:"store,omitempty"`
+	Model     string                   `json:"model"`
+	Input     []responsesInputItem     `json:"input"`
+	Tools     []map[string]interface{} `json:"tools,omitempty"`
+	Stream    bool                     `json:"stream,omitempty"`
+	Store     *bool                    `json:"store,omitempty"`
+	Reasoning *responsesReasoning      `json:"reasoning,omitempty"`
+}
+
+type responsesReasoning struct {
+	Effort string `json:"effort,omitempty"`
 }
 
 type responsesInputItem struct {
@@ -184,7 +193,7 @@ func (a *ResponsesAdapter) StreamChat(ctx context.Context, req ChatRequest) (<-c
 					return nil, err
 				}
 				if resp.StatusCode < 400 {
-					return a.streamResponse(resp), nil
+					return a.streamResponse(ctx, resp), nil
 				}
 				b, _ = io.ReadAll(resp.Body)
 				resp.Body.Close()
@@ -192,16 +201,52 @@ func (a *ResponsesAdapter) StreamChat(ctx context.Context, req ChatRequest) (<-c
 		}
 		return nil, responsesAPIError(resp.StatusCode, b)
 	}
-	return a.streamResponse(resp), nil
+	return a.streamResponse(ctx, resp), nil
 }
 
-func (a *ResponsesAdapter) streamResponse(resp *http.Response) <-chan StreamEvent {
+// streamIdleTimeout bounds how long the codex SSE stream may go without any
+// new bytes before we abort. Codex Responses (store=false, stream-only) can
+// silently stall mid-response — bytes simply stop arriving without an EOF — and
+// because the body read blocks, a run with no outer deadline would hang
+// forever. The idle timeout turns that into a normal stream error so the
+// caller's retry / non-stream fallback can take over. Reasoning models pause
+// while thinking, so the default is generous.
+func streamIdleTimeout() time.Duration {
+	if v := strings.TrimSpace(os.Getenv("SELFMIND_STREAM_IDLE_TIMEOUT")); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			return d
+		}
+	}
+	return 120 * time.Second
+}
+
+func (a *ResponsesAdapter) streamResponse(ctx context.Context, resp *http.Response) <-chan StreamEvent {
 	ch := make(chan StreamEvent, 256)
 	go func() {
 		defer resp.Body.Close()
 		defer close(ch)
-		scanner := bufio.NewScanner(resp.Body)
-		scanner.Buffer(make([]byte, 0, 64*1024), 10*1024*1024)
+
+		// Read lines off the body in a child goroutine so the main loop can
+		// select on ctx cancellation and an idle timeout. done unblocks the
+		// reader's send if we abort early so it never leaks.
+		lines := make(chan string, 64)
+		done := make(chan struct{})
+		defer close(done)
+		var scanErr error
+		go func() {
+			scanner := bufio.NewScanner(resp.Body)
+			scanner.Buffer(make([]byte, 0, 64*1024), 10*1024*1024)
+			for scanner.Scan() {
+				select {
+				case lines <- scanner.Text():
+				case <-done:
+					return
+				}
+			}
+			scanErr = scanner.Err()
+			close(lines)
+		}()
+
 		var emittedText strings.Builder
 		emittedToolCalls := map[string]struct{}{}
 		emitText := func(text string) {
@@ -225,17 +270,18 @@ func (a *ResponsesAdapter) streamResponse(resp *http.Response) <-chan StreamEven
 			emittedToolCalls[key] = struct{}{}
 			ch <- StreamEvent{ToolCalls: []ToolCall{call}}
 		}
-		for scanner.Scan() {
-			data, ok := sseDataString(scanner.Text())
+		// process handles one SSE line; returns true when the stream is done.
+		process := func(raw string) bool {
+			data, ok := sseDataString(raw)
 			if !ok {
-				continue
+				return false
 			}
 			if data == "[DONE]" {
-				return
+				return true
 			}
 			var ev map[string]interface{}
 			if err := json.Unmarshal([]byte(data), &ev); err != nil {
-				continue
+				return false
 			}
 			switch stringValue(ev["type"]) {
 			case "response.output_item.added":
@@ -252,7 +298,7 @@ func (a *ResponsesAdapter) streamResponse(resp *http.Response) <-chan StreamEven
 				if item, ok := ev["item"].(map[string]interface{}); ok {
 					if call := a.toolCallFromResponsesItem(item); call.Function != "" {
 						emitToolCall(call)
-						continue
+						return false
 					}
 					if emittedText.Len() == 0 {
 						emitText(responsesTextFromItem(item))
@@ -274,11 +320,40 @@ func (a *ResponsesAdapter) streamResponse(resp *http.Response) <-chan StreamEven
 						ch <- StreamEvent{FinishReason: reason}
 					}
 				}
-				return
+				return true
 			}
+			return false
 		}
-		if err := scanner.Err(); err != nil {
-			ch <- StreamEvent{Err: err}
+
+		idle := streamIdleTimeout()
+		timer := time.NewTimer(idle)
+		defer timer.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				ch <- StreamEvent{Err: ctx.Err()}
+				return
+			case <-timer.C:
+				ch <- StreamEvent{Err: fmt.Errorf("codex stream idle for %s without data; aborting", idle)}
+				return
+			case line, ok := <-lines:
+				if !ok {
+					if scanErr != nil {
+						ch <- StreamEvent{Err: scanErr}
+					}
+					return
+				}
+				if !timer.Stop() {
+					select {
+					case <-timer.C:
+					default:
+					}
+				}
+				timer.Reset(idle)
+				if process(line) {
+					return
+				}
+			}
 		}
 	}()
 	return ch
@@ -287,6 +362,9 @@ func (a *ResponsesAdapter) streamResponse(resp *http.Response) <-chan StreamEven
 func (a *ResponsesAdapter) requestFromChat(req ChatRequest, stream bool) responsesRequest {
 	model := firstNonEmptyString(req.Model, a.Model)
 	wire := responsesRequest{Model: model, Stream: stream, Store: a.Store}
+	if effort := strings.TrimSpace(a.ReasoningEffort); effort != "" {
+		wire.Reasoning = &responsesReasoning{Effort: effort}
+	}
 	pendingToolOutputs := map[string]int{}
 	for _, m := range req.Messages {
 		if m.Role == "tool" {
@@ -380,6 +458,24 @@ func (a *ResponsesAdapter) apiKey() string {
 func (a *ResponsesAdapter) setHeaders(req *http.Request, key string) {
 	req.Header.Set("Authorization", "Bearer "+key)
 	req.Header.Set("Content-Type", "application/json")
+	// The ChatGPT Codex backend expects the official client's headers; without
+	// them (notably originator + chatgpt-account-id) the server can drop the
+	// connection mid-request, surfacing as EOF. These are scoped to the codex
+	// backend so generic OpenAI Responses endpoints are unaffected.
+	if strings.Contains(a.BaseURL, "chatgpt.com") {
+		req.Header.Set("originator", "codex_cli_rs")
+		req.Header.Set("OpenAI-Beta", "responses=experimental")
+		if req.Header.Get("User-Agent") == "" {
+			req.Header.Set("User-Agent", "codex_cli_rs/0.142.2")
+		}
+	}
+	// Custom headers (incl. chatgpt-account-id from the resolved runtime) win.
+	for k, v := range a.Headers {
+		if strings.TrimSpace(k) == "" || strings.TrimSpace(v) == "" {
+			continue
+		}
+		req.Header.Set(k, v)
+	}
 }
 
 func (a *ResponsesAdapter) responsesTools(tools []ToolDefinition) []map[string]interface{} {

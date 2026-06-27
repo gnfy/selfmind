@@ -84,56 +84,40 @@ func DefaultTaskStrategy() TaskStrategy {
 	}
 }
 
-// BuildTaskStrategy returns policy guardrails for the agent. It must not become
-// a natural-language task classifier. Ordinary input should reach the agent;
-// this layer only limits capabilities that are clearly outside the user's
-// explicit request or the current channel.
+// BuildTaskStrategy returns policy guardrails for the agent. Following the
+// codex philosophy, it must NOT decide tool exposure by classifying natural
+// language: the config-allowed tool surface stays available on every turn and
+// the model decides whether a tool is useful. This layer only sets soft hints
+// (task class for telemetry/fast-model routing, plan policy) and the genuine
+// safety gate (web tools stay off unless the user explicitly asks). Approval,
+// sandbox, and workspace scope remain enforced in middleware, not here.
 func BuildTaskStrategy(prompt, channel string) TaskStrategy {
 	clean := strings.TrimSpace(prompt)
-	if clean == "" {
-		return TaskStrategy{
-			Class:                 TaskClassSimpleAnswer,
-			ToolMode:              ToolModeNone,
-			PlanPolicy:            PlanPolicyDisabled,
-			WebPolicy:             WebPolicyDisabled,
-			AllowedTools:          map[string]bool{},
-			HiddenTools:           hiddenToolsFor(PlanPolicyDisabled, WebPolicyDisabled),
-			MaxIterations:         1,
-			MaxActionTools:        0,
-			RequireProgressEvents: false,
-			ChannelMode:           normalizeChannelMode(channel),
-			Reason:                "empty input",
-		}
-	}
-
 	policy := DefaultTaskStrategy()
 	policy.ChannelMode = normalizeChannelMode(channel)
-	lower := strings.ToLower(clean)
-	if looksLikePureDirectAnswer(clean, lower) {
-		return TaskStrategy{
-			Class:                 TaskClassSimpleAnswer,
-			ToolMode:              ToolModeNone,
-			PlanPolicy:            PlanPolicyDisabled,
-			WebPolicy:             WebPolicyDisabled,
-			AllowedTools:          map[string]bool{},
-			HiddenTools:           hiddenToolsFor(PlanPolicyDisabled, WebPolicyDisabled),
-			MaxIterations:         2,
-			MaxActionTools:        0,
-			RequireProgressEvents: false,
-			ChannelMode:           normalizeChannelMode(channel),
-			Reason:                "pure direct-answer turn; no workspace, external, or tool state requested",
-		}
+	if clean == "" {
+		policy.Reason = "empty input; agent-first default"
+		return policy
 	}
-	if wantsExternalLookupText(lower) {
+
+	lower := strings.ToLower(clean)
+	switch {
+	case looksLikePureDirectAnswer(clean, lower):
+		// Soft hint only: route trivial identity/model questions to the fast
+		// model and skip planning. Tools STAY exposed — if the guess is wrong
+		// and the turn actually needs a tool, the model can still call it.
+		policy.Class = TaskClassSimpleAnswer
+		policy.PlanPolicy = PlanPolicyDisabled
+		policy.Reason = "likely a direct-answer turn; tools stay available, model answers directly when no tool is needed"
+	case wantsExternalLookupText(lower):
 		policy.Class = TaskClassExternalLookup
 		policy.WebPolicy = WebPolicyEnabled
 		policy.Reason = "agent-first turn with explicit external lookup"
-	} else if looksLikeCodingExample(lower) {
+	case looksLikeCodingExample(lower):
 		policy.Class = TaskClassCodingExample
-		policy.Reason = "agent-first coding example; prefer direct answer unless workspace state is needed"
-	} else {
+		policy.Reason = "agent-first coding example; prefer a direct answer unless workspace state is needed"
+	default:
 		policy.Class = TaskClassGeneralTask
-		policy.WebPolicy = WebPolicyDisabled
 		policy.Reason = "agent-first turn; web disabled unless explicitly requested"
 	}
 	policy.HiddenTools = hiddenToolsFor(policy.PlanPolicy, policy.WebPolicy)
@@ -202,6 +186,22 @@ func (s TaskStrategy) AllowsTool(name string) bool {
 		return s.AllowedTools[name]
 	}
 	return true
+}
+
+// WithWebEnabled opts the turn into web tools and un-hides them. Used when a
+// caller (e.g. a scheduled job with web=true) explicitly grants web access for
+// a turn that the default policy would otherwise keep offline.
+func (s TaskStrategy) WithWebEnabled() TaskStrategy {
+	s = s.normalized()
+	s.WebPolicy = WebPolicyEnabled
+	hidden := make(map[string]bool, len(s.HiddenTools))
+	for name, v := range s.HiddenTools {
+		hidden[name] = v
+	}
+	delete(hidden, "web_search")
+	delete(hidden, "web_extract")
+	s.HiddenTools = hidden
+	return s
 }
 
 func (s TaskStrategy) WithActionToolsDisabled() TaskStrategy {

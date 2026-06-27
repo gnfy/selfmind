@@ -55,7 +55,9 @@ func TestTaskStrategyForContinueKeepsToolsAvailable(t *testing.T) {
 	}
 }
 
-func TestTaskStrategyForIdentityQuestionDisablesActionTools(t *testing.T) {
+func TestTaskStrategyForIdentityQuestionIsSoftHintNotToolHiding(t *testing.T) {
+	// An identity/model question is a soft hint (simple_answer \u2192 fast model, no
+	// plan), but per the codex philosophy it must NOT strip the tool surface.
 	req := api.MessageRequest{
 		Channel: "cli",
 		Content: "\u4f60\u662f\u8c01\uff1f\u5f53\u524d\u8fde\u63a5\u7684\u6a21\u578b\u662f\u4ec0\u4e48\uff1f",
@@ -72,10 +74,13 @@ func TestTaskStrategyForIdentityQuestionDisablesActionTools(t *testing.T) {
 	if strategy.Class != kernel.TaskClassSimpleAnswer {
 		t.Fatalf("class = %s, want simple_answer", strategy.Class)
 	}
-	if strategy.ToolMode != kernel.ToolModeNone {
-		t.Fatalf("tool mode = %s, want none", strategy.ToolMode)
+	if strategy.ToolMode != kernel.ToolModeFull {
+		t.Fatalf("tool mode = %s, want full (tools stay exposed)", strategy.ToolMode)
 	}
-	if strategy.AllowsTool("read_file") || strategy.AllowsTool("terminal") || strategy.AllowsTool("update_plan") {
-		t.Fatalf("identity question should not expose action tools: %+v", strategy)
+	if !strategy.AllowsTool("read_file") || !strategy.AllowsTool("terminal") {
+		t.Fatalf("identity question must not strip local tools: %+v", strategy)
+	}
+	if strategy.AllowsTool("update_plan") {
+		t.Fatalf("planning should be hidden when plan policy is disabled: %+v", strategy)
 	}
 }

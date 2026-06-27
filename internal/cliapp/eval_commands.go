@@ -26,6 +26,10 @@ func (a *App) runEvalCommandIfRequested() (bool, int) {
 		return true, a.evalRun(args[1:])
 	case "report":
 		return true, a.evalReport(args[1:])
+	case "repair":
+		return true, a.evalRepair(args[1:])
+	case "scorecard":
+		return true, a.evalScorecard(args[1:])
 	default:
 		fmt.Fprintln(a.stderr, "usage: selfmind eval [list|run|report]")
 		return true, 2
@@ -39,6 +43,7 @@ func (a *App) printEvalHelp() {
 	fmt.Fprintln(a.stdout, "  selfmind eval list [path]")
 	fmt.Fprintln(a.stdout, "  selfmind eval run [case-or-dir] [--suite NAME] [--provider ID] [--model ID] [--live]")
 	fmt.Fprintln(a.stdout, "  selfmind eval report <jsonl-or-dir>")
+	fmt.Fprintln(a.stdout, "  selfmind eval repair [case-or-dir] [--worktree]")
 	fmt.Fprintln(a.stdout)
 	fmt.Fprintln(a.stdout, "Examples:")
 	fmt.Fprintln(a.stdout, "  selfmind eval run evalcases/daily-dev/chat_basic.yaml")

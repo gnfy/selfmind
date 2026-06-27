@@ -238,6 +238,70 @@ func renderToolMessage(msg ChatMessage, width int) string {
 	if result := toolResultLine(label, msg.Content, width-6); result != "" {
 		sb.WriteString("  " + glyphCorner + " " + result + "\n")
 	}
+	if !msg.IsError {
+		if diff := renderToolDiff(label, args, width-4); diff != "" {
+			sb.WriteString(diff)
+		}
+	}
+	return sb.String()
+}
+
+var (
+	diffAddStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("2"))
+	diffDelStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("1"))
+	diffCtxStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
+)
+
+// renderToolDiff shows a compact, colored diff for file-editing tools so the
+// user can see what actually changed (codex-style), instead of an opaque
+// "Edited with patch". It bounds the output to a handful of lines.
+func renderToolDiff(label string, args map[string]interface{}, width int) string {
+	const maxLines = 12
+	var lines []string
+	switch label {
+	case "patch":
+		patch, _ := args["patch"].(string)
+		lines = strings.Split(strings.TrimRight(patch, "\n"), "\n")
+	case "write_file":
+		content, _ := args["content"].(string)
+		if strings.TrimSpace(content) == "" {
+			return ""
+		}
+		// A write is an all-added block; show it as added lines.
+		for _, ln := range strings.Split(strings.TrimRight(content, "\n"), "\n") {
+			lines = append(lines, "+"+ln)
+		}
+	default:
+		return ""
+	}
+	if len(lines) == 0 {
+		return ""
+	}
+	var sb strings.Builder
+	added, removed, shown := 0, 0, 0
+	for _, ln := range lines {
+		var styled string
+		switch {
+		case strings.HasPrefix(ln, "+"):
+			added++
+			styled = diffAddStyle.Render(truncateToWidth(ln, width-4))
+		case strings.HasPrefix(ln, "-"):
+			removed++
+			styled = diffDelStyle.Render(truncateToWidth(ln, width-4))
+		default:
+			styled = diffCtxStyle.Render(truncateToWidth(ln, width-4))
+		}
+		if shown < maxLines {
+			sb.WriteString("  " + glyphCorner + " " + styled + "\n")
+			shown++
+		}
+	}
+	if len(lines) > maxLines {
+		sb.WriteString("  " + glyphCorner + " " + diffCtxStyle.Render(fmt.Sprintf("… %d more line(s)", len(lines)-maxLines)) + "\n")
+	}
+	if added > 0 || removed > 0 {
+		sb.WriteString("  " + glyphCorner + " " + diffCtxStyle.Render(fmt.Sprintf("(+%d −%d)", added, removed)) + "\n")
+	}
 	return sb.String()
 }
 

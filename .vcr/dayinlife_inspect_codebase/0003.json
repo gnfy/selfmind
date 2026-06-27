@@ -1,0 +1,24 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "content": "Preparing to run read_file",
+      "event_type": "agent.thinking"
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_pRjSv6YQcj0r9FLJyCmah7cM",
+          "Function": "read_file",
+          "Args": "{\"path\":\"/mnt/d/wwwroot/ai/selfmind/cmd/selfmind/main.go\",\"limit\":80}"
+        }
+      ]
+    },
+    {
+      "usage": {
+        "InputTokens": 7116,
+        "OutputTokens": 62
+      }
+    }
+  ]
+}

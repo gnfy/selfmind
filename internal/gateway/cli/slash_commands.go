@@ -33,6 +33,7 @@ var slashCommandMetas = []slashCommandMeta{
 	{Name: "/migrate", Usage: "/migrate", Description: "Migrate skills from Hermes Agent", Hint: "run local storage migrations"},
 	{Name: "/clear", Usage: "/clear", Description: "Clear conversation history", Hint: "clear this conversation view"},
 	{Name: "/exit", Usage: "/exit", Description: "Exit SelfMind", Hint: "leave SelfMind"},
+	{Name: "/compact", Usage: "/compact", Description: "Compact older conversation history to free context", Hint: "summarize and shrink the transcript"},
 }
 
 var slashCommands = []slashCommand{
@@ -125,6 +126,12 @@ var slashCommands = []slashCommand{
 		slashCommandMeta: slashCommandMetas[12],
 		Run: func(m *uiModel, args []string) tea.Cmd {
 			return tea.Quit
+		},
+	},
+	{
+		slashCommandMeta: slashCommandMetas[13],
+		Run: func(m *uiModel, args []string) tea.Cmd {
+			return m.handleCompact()
 		},
 	},
 }

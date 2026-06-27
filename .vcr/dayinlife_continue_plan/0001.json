@@ -1,0 +1,395 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "usage": {
+        "InputTokens": 7111,
+        "OutputTokens": 0
+      }
+    },
+    {
+      "content": "好的"
+    },
+    {
+      "content": "，"
+    },
+    {
+      "content": "这是一个"
+    },
+    {
+      "content": "\""
+    },
+    {
+      "content": "批量"
+    },
+    {
+      "content": "图片"
+    },
+    {
+      "content": "加水"
+    },
+    {
+      "content": "印"
+    },
+    {
+      "content": "\""
+    },
+    {
+      "content": "小"
+    },
+    {
+      "content": "工具的"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "3"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "步"
+    },
+    {
+      "content": "方案"
+    },
+    {
+      "content": "：\n\n"
+    },
+    {
+      "content": "1"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": " **"
+    },
+    {
+      "content": "第一步"
+    },
+    {
+      "content": "："
+    },
+    {
+      "content": "遍历"
+    },
+    {
+      "content": "目录"
+    },
+    {
+      "content": "**"
+    },
+    {
+      "content": " —"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "递归"
+    },
+    {
+      "content": "扫描"
+    },
+    {
+      "content": "目标"
+    },
+    {
+      "content": "目录"
+    },
+    {
+      "content": "，"
+    },
+    {
+      "content": "收集"
+    },
+    {
+      "content": "所有"
+    },
+    {
+      "content": "图片"
+    },
+    {
+      "content": "文件"
+    },
+    {
+      "content": "（"
+    },
+    {
+      "content": "如"
+    },
+    {
+      "content": " j"
+    },
+    {
+      "content": "pg"
+    },
+    {
+      "content": "、"
+    },
+    {
+      "content": "png"
+    },
+    {
+      "content": "、"
+    },
+    {
+      "content": "webp"
+    },
+    {
+      "content": "）"
+    },
+    {
+      "content": "并"
+    },
+    {
+      "content": "生成"
+    },
+    {
+      "content": "待"
+    },
+    {
+      "content": "处理"
+    },
+    {
+      "content": "列表"
+    },
+    {
+      "content": "。\n"
+    },
+    {
+      "content": "2"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": " **"
+    },
+    {
+      "content": "第二步"
+    },
+    {
+      "content": "："
+    },
+    {
+      "content": "合成"
+    },
+    {
+      "content": "水印"
+    },
+    {
+      "content": "**"
+    },
+    {
+      "content": " —"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "读取"
+    },
+    {
+      "content": "每张"
+    },
+    {
+      "content": "原"
+    },
+    {
+      "content": "图"
+    },
+    {
+      "content": "，"
+    },
+    {
+      "content": "将"
+    },
+    {
+      "content": "指定"
+    },
+    {
+      "content": "文字"
+    },
+    {
+      "content": "或"
+    },
+    {
+      "content": "图片"
+    },
+    {
+      "content": "水印"
+    },
+    {
+      "content": "按"
+    },
+    {
+      "content": "预设"
+    },
+    {
+      "content": "位置"
+    },
+    {
+      "content": "（"
+    },
+    {
+      "content": "如"
+    },
+    {
+      "content": "右下角"
+    },
+    {
+      "content": "、"
+    },
+    {
+      "content": "居中"
+    },
+    {
+      "content": "、"
+    },
+    {
+      "content": "平"
+    },
+    {
+      "content": "铺"
+    },
+    {
+      "content": "）"
+    },
+    {
+      "content": "叠加"
+    },
+    {
+      "content": "到"
+    },
+    {
+      "content": "原"
+    },
+    {
+      "content": "图上"
+    },
+    {
+      "content": "。\n"
+    },
+    {
+      "content": "3"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": " **"
+    },
+    {
+      "content": "第三步"
+    },
+    {
+      "content": "："
+    },
+    {
+      "content": "输出"
+    },
+    {
+      "content": "结果"
+    },
+    {
+      "content": "**"
+    },
+    {
+      "content": " —"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "将"
+    },
+    {
+      "content": "加水"
+    },
+    {
+      "content": "印"
+    },
+    {
+      "content": "后的"
+    },
+    {
+      "content": "图片"
+    },
+    {
+      "content": "保存"
+    },
+    {
+      "content": "到新"
+    },
+    {
+      "content": "目录"
+    },
+    {
+      "content": "或"
+    },
+    {
+      "content": "覆盖"
+    },
+    {
+      "content": "原"
+    },
+    {
+      "content": "图"
+    },
+    {
+      "content": "，"
+    },
+    {
+      "content": "并"
+    },
+    {
+      "content": "输出"
+    },
+    {
+      "content": "处理"
+    },
+    {
+      "content": "统计"
+    },
+    {
+      "content": "（"
+    },
+    {
+      "content": "成功"
+    },
+    {
+      "content": "数"
+    },
+    {
+      "content": "、"
+    },
+    {
+      "content": "失败"
+    },
+    {
+      "content": "数"
+    },
+    {
+      "content": "、"
+    },
+    {
+      "content": "耗时"
+    },
+    {
+      "content": "）。"
+    },
+    {
+      "finish_reason": "end_turn"
+    },
+    {
+      "usage": {
+        "InputTokens": 0,
+        "OutputTokens": 128
+      }
+    }
+  ]
+}

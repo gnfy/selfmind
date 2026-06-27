@@ -1,0 +1,12 @@
+{
+  "method": "chat",
+  "chat": {
+    "Content": "Golang sync.Mutex thread-safe counter concurrency",
+    "ToolCalls": null,
+    "Usage": {
+      "InputTokens": 269,
+      "OutputTokens": 152
+    },
+    "FinishReason": ""
+  }
+}

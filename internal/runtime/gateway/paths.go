@@ -1,6 +1,8 @@
 package gateway
 
 import (
+	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -44,6 +46,34 @@ func ResolveAddr(explicit string) string {
 		return addr
 	}
 	return DefaultAddr
+}
+
+// guardPublicBind is the W5 fail-closed check. The default bind is loopback
+// (127.0.0.1), so nothing is exposed and no token is needed. But if the operator
+// binds a non-loopback address (e.g. 0.0.0.0 to reach webhook IM from the
+// internet) without setting an auth token, the API — including /v1/message and
+// /v1/gateway/shutdown — would be open to anyone. Refuse to start in that case
+// with an actionable message instead of silently exposing the agent.
+func guardPublicBind(addr, token string) error {
+	if strings.TrimSpace(token) != "" {
+		return nil // authenticated: any bind is the operator's choice
+	}
+	host := strings.TrimSpace(addr)
+	if h, _, err := net.SplitHostPort(addr); err == nil {
+		host = strings.TrimSpace(h)
+	}
+	if host == "" {
+		// Empty host means "all interfaces" (e.g. ":8765") — treat as public.
+		return fmt.Errorf("refusing to bind %q on all interfaces without an auth token; set SELF_GATEWAY_TOKEN (or gateway.token), or bind a loopback address like %s", addr, DefaultAddr)
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		if ip.IsLoopback() {
+			return nil
+		}
+	} else if host == "localhost" {
+		return nil
+	}
+	return fmt.Errorf("refusing to bind non-loopback address %q without an auth token; set SELF_GATEWAY_TOKEN (or gateway.token) before exposing the gateway, or bind a loopback address like %s", addr, DefaultAddr)
 }
 
 func ResolveURL(explicit string) string {

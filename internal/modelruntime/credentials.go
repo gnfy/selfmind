@@ -15,6 +15,9 @@ type Credential struct {
 	ExpiresAt time.Time
 	Getter    func() string
 	Refresher func() string
+	// AccountID is the provider account identifier (e.g. the ChatGPT
+	// account_id for Codex), sent as a required header by some backends.
+	AccountID string
 }
 
 // CredentialStore is SelfMind's own optional credential file. It is separate

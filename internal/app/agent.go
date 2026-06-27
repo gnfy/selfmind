@@ -208,6 +208,52 @@ func firstPositive(values ...int) int {
 	return 0
 }
 
+// skillInventoryFor returns a closure that renders the tenant's learned skills
+// as a compact prompt block (name + short description, capped). It returns ""
+// when there are no skills, so nothing is injected for a fresh tenant.
+func skillInventoryFor(defaultTenantID string) func(string) string {
+	return func(tid string) string {
+		if strings.TrimSpace(tid) == "" {
+			tid = defaultTenantID
+		}
+		skills, err := tools.ListSkillsForTenant(tid, false)
+		if err != nil || len(skills) == 0 {
+			return ""
+		}
+		const maxSkills = 20
+		var sb strings.Builder
+		sb.WriteString("# LEARNED SKILLS\n")
+		sb.WriteString("You have these reusable skills from past work. When one fits the task, load it with skill_view before reinventing the approach.\n")
+		shown := 0
+		for _, s := range skills {
+			name := strings.TrimSpace(s.Name)
+			if name == "" {
+				continue
+			}
+			desc := strings.TrimSpace(s.Description)
+			if r := []rune(desc); len(r) > 60 {
+				desc = string(r[:60]) + "…"
+			}
+			if desc != "" {
+				fmt.Fprintf(&sb, "- %s: %s\n", name, desc)
+			} else {
+				fmt.Fprintf(&sb, "- %s\n", name)
+			}
+			shown++
+			if shown >= maxSkills {
+				if remaining := len(skills) - shown; remaining > 0 {
+					fmt.Fprintf(&sb, "- … (%d more; use skills_list to see all)\n", remaining)
+				}
+				break
+			}
+		}
+		if shown == 0 {
+			return ""
+		}
+		return sb.String()
+	}
+}
+
 func codingContextLength(cfg *config.Config) int {
 	if cfg == nil {
 		return 0
@@ -585,6 +631,7 @@ func InitAgent(mem *memory.MemoryManager, cfg *config.Config, tenantID string) (
 	memoryExtractProvider := modelGateway.ProviderForRole(llm.RoleMemoryExtract)
 	skillCuratorProvider := modelGateway.ProviderForRole(llm.RoleSkillCurator)
 	semanticRecallProvider := modelGateway.ProviderForRole(llm.RoleSemanticRecall)
+	fastProvider := modelGateway.ProviderForRole(llm.RoleFastClassifier)
 
 	skillsBaseDir := cfg.Evolution.SkillsDir
 	if skillsBaseDir == "" {
@@ -616,6 +663,14 @@ func InitAgent(mem *memory.MemoryManager, cfg *config.Config, tenantID string) (
 
 	agent := kernel.NewAgent(mem, nil, codingProvider, cfg.Agent.Soul, maxIter, maxRetries, refl)
 	agent.SetContextWindow(codingContextLength(cfg))
+	// Simple direct-answer turns use the fast-classifier role (falls back to the
+	// default model when no fast model is configured).
+	agent.SetFastProvider(fastProvider)
+	// Surface learned skills in the prompt so the agent reuses what it learned.
+	agent.SetSkillInventory(skillInventoryFor(tenantID))
+	// Distill accumulated facts into a coherent user profile (uses the
+	// memory_extract role; falls back to the default model when unconfigured).
+	agent.SetProfileSynthesizer(kernel.NewProfileSynthesizer(memoryExtractProvider, true))
 	reviewEngine := kernel.NewBackgroundReviewEngine(mem, nil, reviewProvider, kernel.EvolutionConfig{
 		Enabled:                cfg.Evolution.Enabled,
 		Mode:                   cfg.Evolution.Mode,

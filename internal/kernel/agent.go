@@ -5,6 +5,8 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -27,7 +29,11 @@ type Agent struct {
 	memory           *memory.MemoryManager
 	backend          AgentBackend
 	llm              llm.Provider
-	soul             string
+	fastProvider     llm.Provider // optional fast model for simple direct-answer turns
+	runLLM           llm.Provider // per-run active provider, set under runMu
+	skillInventory     func(tenantID string) string // optional: compact learned-skill list for the prompt
+	profileSynthesizer *ProfileSynthesizer          // optional: distills facts into a user profile
+	soul               string
 	maxIterations    int
 	maxRetries       int
 	Reflector        *ReflectionEngine
@@ -118,15 +124,88 @@ func (a *Agent) SetUseMemoryFence(enabled bool) {
 	}
 }
 
+// SetFastProvider installs an optional fast model used for simple, pure
+// direct-answer turns. It is a role-resolved provider that falls back to the
+// default model when no fast model is configured, so callers always get a
+// working provider.
+func (a *Agent) SetFastProvider(p llm.Provider) {
+	if a == nil {
+		return
+	}
+	a.fastProvider = p
+}
+
+// activeLLM returns the provider for the current run (the per-run choice when
+// set, else the default coding provider).
+func (a *Agent) activeLLM() llm.Provider {
+	if a != nil && a.runLLM != nil {
+		return a.runLLM
+	}
+	return a.llm
+}
+
+// chooseRunProvider routes pure simple-answer turns to the fast provider when
+// one is available; everything else uses the default coding provider.
+func (a *Agent) chooseRunProvider(strategy TaskStrategy) llm.Provider {
+	if a.fastProvider != nil && strategy.Class == TaskClassSimpleAnswer {
+		return a.fastProvider
+	}
+	return a.llm
+}
+
+// SetSkillInventory installs a callback that returns a compact list of the
+// tenant's learned skills. When set, the list is injected into the system
+// prompt on tool-bearing turns so the agent knows what it has already learned
+// and can load a skill with skill_view instead of relearning it. kernel stays
+// independent of the tools package; the app provides the closure.
+func (a *Agent) SetSkillInventory(fn func(tenantID string) string) {
+	if a == nil {
+		return
+	}
+	a.skillInventory = fn
+}
+
+// SetProfileSynthesizer installs the (optional) user-profile synthesizer.
+func (a *Agent) SetProfileSynthesizer(p *ProfileSynthesizer) {
+	if a == nil {
+		return
+	}
+	a.profileSynthesizer = p
+}
+
 // SetContextWindow aligns compaction with the resolved model context length.
 // The provider resolver owns model-specific values; the agent uses this only
 // for local budgeting and summary/truncation decisions.
+//
+// The compaction budget is capped at a WORKING budget (default 256K, override
+// via SELFMIND_CONTEXT_BUDGET) rather than the full model window. On a very
+// large window (e.g. codex ~1.05M) letting the transcript grow to ~900K before
+// trimming is wasteful — especially for stateless providers (store=false) that
+// re-send the whole transcript every step. Capping keeps recent context + the
+// system prompt while bounding per-call token cost. Models with a smaller
+// window still use their own (smaller) window.
 func (a *Agent) SetContextWindow(maxTokens int) {
 	if a == nil || maxTokens <= 0 {
 		return
 	}
-	a.contextEngine = NewContextEngine(maxTokens, contextReserveTokens(maxTokens))
+	budget := agentContextBudget(maxTokens)
+	a.contextEngine = NewContextEngine(budget, contextReserveTokens(budget))
 	a.contextEngine.SetProvider(a.llm)
+}
+
+// agentContextBudget returns the working compaction budget: min(model window,
+// configured working budget). Default working budget is 256K tokens.
+func agentContextBudget(modelWindow int) int {
+	working := 256000
+	if v := strings.TrimSpace(os.Getenv("SELFMIND_CONTEXT_BUDGET")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			working = n
+		}
+	}
+	if modelWindow > 0 && modelWindow < working {
+		return modelWindow
+	}
+	return working
 }
 
 func contextReserveTokens(maxTokens int) int {
@@ -180,7 +259,7 @@ func (a *Agent) chatResponseWithRetry(ctx context.Context, messages []llm.Messag
 	}
 	for attempt := 0; attempt < max; attempt++ {
 		req := llm.ChatRequest{Messages: messages, Tools: a.llmToolDefinitions(strategy)}
-		resp, err := a.llm.Chat(ctx, req)
+		resp, err := a.activeLLM().Chat(ctx, req)
 		if err == nil {
 			return resp, nil
 		}
@@ -220,7 +299,7 @@ func (a *Agent) streamChatWithRetry(ctx context.Context, messages []llm.Message,
 	}
 	for attempt := 0; attempt < max; attempt++ {
 		req := llm.ChatRequest{Messages: messages, Tools: a.llmToolDefinitions(strategy)}
-		ch, err := a.llm.StreamChat(ctx, req)
+		ch, err := a.activeLLM().StreamChat(ctx, req)
 		if err == nil {
 			return ch, nil
 		}
@@ -374,6 +453,11 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 		strategy = BuildTaskStrategy(initialPrompt, channel)
 	}
 	strategy = strategy.normalized()
+
+	// Route this run's model calls per strategy (simple direct-answer turns may
+	// use a fast model). Safe because runMu serializes RunConversation.
+	a.runLLM = a.chooseRunProvider(strategy)
+	defer func() { a.runLLM = nil }()
 	EmitAgentEvent(eventCh, AgentEvent{
 		Type:    "strategy.selected",
 		Content: strategy.Reason,
@@ -390,7 +474,7 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 	ctx = a.selectRuntimeContext(ctx, tenantID, channel, initialPrompt, strategy, eventCh)
 
 	// 0. Build dynamic system prompt (including facts + project context)
-	systemPrompt, _ := a.buildSystemPrompt(ctx, tenantID, strategy)
+	systemPrompt, _ := a.buildSystemPrompt(ctx, tenantID, strategy, initialPrompt)
 	systemPrompt += strategy.SystemPromptNote()
 
 	// 0.1 Inject project context files (.selfmind.md, AGENTS.md, etc.)
@@ -754,6 +838,11 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 		// Auto-extract durable facts from this conversation (async, non-blocking)
 		if a.factExtractor != nil {
 			go a.factExtractor.Extract(context.Background(), tenantID, a.memory, messages)
+		}
+		if a.profileSynthesizer != nil {
+			// Gated internally; only makes a model call when enough new facts
+			// have accumulated.
+			go a.profileSynthesizer.MaybeSynthesize(context.Background(), tenantID, a.memory)
 		}
 
 		a.maybeTriggerBackgroundReview(tenantID, channel, messages, history)
@@ -1205,10 +1294,10 @@ func sha256Hash(s string) string {
 }
 
 func (a *Agent) BuildSystemPrompt(ctx context.Context, tenantID string) (string, error) {
-	return a.buildSystemPrompt(ctx, tenantID, DefaultTaskStrategy())
+	return a.buildSystemPrompt(ctx, tenantID, DefaultTaskStrategy(), "")
 }
 
-func (a *Agent) buildSystemPrompt(ctx context.Context, tenantID string, strategy TaskStrategy) (string, error) {
+func (a *Agent) buildSystemPrompt(ctx context.Context, tenantID string, strategy TaskStrategy, userInput string) (string, error) {
 	var parts []string
 
 	// 1. Core Persona (Soul)
@@ -1282,6 +1371,23 @@ func (a *Agent) buildSystemPrompt(ctx context.Context, tenantID string, strategy
 				sb.WriteString("\n")
 			}
 			parts = append(parts, sb.String())
+
+			// Work-quality discipline (explore, prefer patch, verify) applies to
+			// all tool-bearing turns. Frontend/UI design guidance is added only
+			// when the task actually looks like UI work, so backend/data/CLI
+			// tasks are not biased toward frontend concerns.
+			parts = append(parts, taskExecutionGuidance())
+			if isFrontendTask(userInput) {
+				parts = append(parts, frontendQualityGuidance())
+			}
+
+			// Surface learned skills so the agent applies what it already knows
+			// (only on tool-bearing turns, where skill_view is usable).
+			if a.skillInventory != nil {
+				if block := strings.TrimSpace(a.skillInventory(tenantID)); block != "" {
+					parts = append(parts, block)
+				}
+			}
 		}
 	}
 
@@ -1291,6 +1397,22 @@ func (a *Agent) buildSystemPrompt(ctx context.Context, tenantID string, strategy
 
 	userFacts, _ := a.memory.GetFacts(ctx, tenantID, "user")
 	memFacts, _ := a.memory.GetFacts(ctx, tenantID, "memory")
+
+	// Synthesized user profile (a coherent understanding distilled from many
+	// facts) is the primary "knows you" signal; it is shorter than dumping every
+	// raw fact and reads as a stable picture of the user.
+	if summary := a.latestProfileSummary(ctx, tenantID); summary != "" {
+		parts = append(parts, "<user-profile>\n[System note: synthesized understanding of the user from past interactions; background context, not new input.]\n"+summary+"\n</user-profile>")
+	}
+
+	// Cap raw facts so the memory block stays bounded as facts accumulate.
+	const maxFactsEach = 20
+	if len(userFacts) > maxFactsEach {
+		userFacts = userFacts[len(userFacts)-maxFactsEach:]
+	}
+	if len(memFacts) > maxFactsEach {
+		memFacts = memFacts[len(memFacts)-maxFactsEach:]
+	}
 
 	if len(userFacts) > 0 || len(memFacts) > 0 {
 		var factBlock strings.Builder

@@ -64,6 +64,33 @@ func TestResponsesAdapterSendsStoreFalseWhenConfigured(t *testing.T) {
 	}
 }
 
+func TestResponsesAdapterSendsReasoningEffortAndCustomHeaders(t *testing.T) {
+	var body map[string]interface{}
+	var accountID string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		data, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(data, &body)
+		accountID = r.Header.Get("chatgpt-account-id")
+		w.Header().Set("content-type", "application/json")
+		fmt.Fprint(w, `{"output_text":"ok","usage":{"input_tokens":1,"output_tokens":1}}`)
+	}))
+	defer server.Close()
+
+	adapter := NewResponsesAdapter("token", server.URL, "gpt-test")
+	adapter.ReasoningEffort = "high"
+	adapter.Headers = map[string]string{"chatgpt-account-id": "acc-123"}
+	if _, err := adapter.Chat(context.Background(), ChatRequest{Messages: []Message{{Role: "user", Content: "hi"}}}); err != nil {
+		t.Fatalf("Chat failed: %v", err)
+	}
+	reasoning, ok := body["reasoning"].(map[string]interface{})
+	if !ok || reasoning["effort"] != "high" {
+		t.Fatalf("reasoning = %#v, want effort=high", body["reasoning"])
+	}
+	if accountID != "acc-123" {
+		t.Fatalf("chatgpt-account-id header = %q, want acc-123", accountID)
+	}
+}
+
 func TestResponsesAdapterChatUsesStreamWhenRequired(t *testing.T) {
 	var body map[string]interface{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

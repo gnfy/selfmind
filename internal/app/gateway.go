@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 
+	"selfmind/internal/control"
 	"selfmind/internal/gateway/channel"
 	"selfmind/internal/gateway/router"
 	"selfmind/internal/kernel"
@@ -44,9 +45,14 @@ func InitGateway(dataDir string, mem *memory.MemoryManager, agent *kernel.Agent,
 		if err := cronSched.InitSchema(context.Background()); err != nil {
 			return nil, fmt.Errorf("init cron schema: %w", err)
 		}
+		// Apply the configured timezone before scheduling any job, so "0 8 * * *"
+		// means 08:00 in that zone (e.g. Asia/Shanghai), not UTC.
+		if err := cronSched.SetTimezone(cfg.Cron.Timezone); err != nil {
+			log.Warn("gateway: invalid cron timezone, using system local", "error", err)
+		}
 
-		// Register skill-pruner cron job: runs daily at 03:00 UTC
-		// Prunes skill metrics where call_count < 3 AND last_used > 30 days
+		// Register skill-pruner cron job (idempotent across restarts): runs daily
+		// at 03:00. Prunes skill metrics where call_count < 3 AND last_used > 30d.
 		if skillStore != nil {
 			cronSched.SetSkillPruner(skillStore)
 			var tenants []string
@@ -69,16 +75,38 @@ func InitGateway(dataDir string, mem *memory.MemoryManager, agent *kernel.Agent,
 					Channel:  "cli",
 					Enabled:  true,
 				}
-				if _, err := cronSched.AddJob(context.Background(), job); err != nil {
-					// Non-fatal: log and continue
+				if _, err := cronSched.EnsureJob(context.Background(), job); err != nil {
 					log.Warn("gateway: skipped skill-pruner", "tenant", tenantID, "error", err)
 				}
 			}
 		}
 
-		if err := cronSched.Start(context.Background()); err != nil {
-			return nil, fmt.Errorf("start cron scheduler: %w", err)
+		// Register the liveness canary (W0.3) when configured. It alerts the
+		// chosen channel only on failure, so a broken deploy pings you.
+		if cfg.Cron.Canary.Enabled {
+			expr := cfg.Cron.Canary.CronExpr
+			if expr == "" {
+				expr = "0 * * * *" // hourly
+			}
+			canary := &cron.CronJob{
+				Name:      "canary",
+				CronExpr:  expr,
+				Prompt:    "canary:", // executor runs a trivial liveness turn
+				TenantID:  control.DefaultTenantID,
+				Channel:   firstNonEmpty(cfg.Cron.Canary.Channel, cfg.Cron.Canary.Platform, "cli"),
+				Platform:  cfg.Cron.Canary.Platform,
+				DeliverTo: cfg.Cron.Canary.DeliverTo,
+				Enabled:   true,
+			}
+			if _, err := cronSched.EnsureJob(context.Background(), canary); err != nil {
+				log.Warn("gateway: skipped canary registration", "error", err)
+			}
 		}
+
+		// NOTE: do not Start() here. The scheduler must be started only after the
+		// caller installs a JobExecutor (SetExecutor) so scheduled jobs run the
+		// agent and deliver results instead of falling back to the marker path.
+		// Callers use StartCron once wiring is complete.
 	}
 
 	var provider llm.Provider
@@ -113,6 +141,16 @@ func RegisterCronTool(disp *tools.Dispatcher, cronSched *cron.Scheduler) {
 	}
 	cronTool := cron.NewCronTool(cronSched)
 	disp.RegisterTool(&cron.ToolAdapter{CronTool: cronTool})
+}
+
+// StartCron starts the scheduler loop. Call it after any JobExecutor is
+// installed (gateway path) — or directly (CLI-only path, where jobs degrade to
+// the marker fallback). Safe to call with a nil scheduler.
+func StartCron(cronSched *cron.Scheduler) error {
+	if cronSched == nil {
+		return nil
+	}
+	return cronSched.Start(context.Background())
 }
 
 // StopCron gracefully shuts down the cron scheduler.

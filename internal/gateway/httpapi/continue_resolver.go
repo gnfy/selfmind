@@ -138,6 +138,18 @@ func (c *RunCoordinator) withResumeContext(ctx context.Context, identity *contro
 			sb.WriteString("\n")
 		}
 	}
+	// Re-inject the live plan (with per-step status) so a resumed task continues
+	// from the right step instead of losing its in-progress plan.
+	if plan := c.srv.latestPlanForTask(ctx, task.ID); len(plan) > 0 {
+		sb.WriteString("current_plan:\n")
+		for _, step := range plan {
+			status := strings.TrimSpace(step.Status)
+			if status == "" {
+				status = "pending"
+			}
+			fmt.Fprintf(&sb, "- [%s] %s\n", status, oneLine(step.Step))
+		}
+	}
 	sb.WriteString("Continue from this state. Do not restart completed work unless the user asks for a restart.\n")
 	sb.WriteString("[/SelfMind resume context]\n\n")
 	sb.WriteString(input)

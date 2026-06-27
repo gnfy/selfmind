@@ -429,7 +429,43 @@ func (c *RunCoordinator) installExecutionScope(identity *control.IdentityContext
 		scope.Channel = run.Channel
 	}
 	scope.Approval = c.toolApprovalHandler(identity, task, run, scope.Channel)
+	scope.Clarify = c.gatewayClarify(identity, task, run, scope.Channel)
 	return tools.SetExecutionScope(identity.PersonID, scope)
+}
+
+// gatewayClarify answers the clarify tool in non-interactive (gateway/IM)
+// contexts. There is no blocking prompt channel here, so instead of hanging it
+// records a clarify.requested event and returns a sentinel telling the agent to
+// present the question and end the turn; the user's reply arrives as a normal
+// follow-up message that continues the task.
+func (c *RunCoordinator) gatewayClarify(identity *control.IdentityContext, task *control.Task, run *control.Run, channel string) tools.ClarifyHandler {
+	return func(question string, choices []string) string {
+		taskID, runID := "", ""
+		if task != nil {
+			taskID = task.ID
+		}
+		if run != nil {
+			runID = run.ID
+		}
+		if c != nil && c.srv != nil && c.srv.Control != nil && taskID != "" {
+			_, _ = c.srv.Control.AppendEvent(context.Background(), control.Event{
+				TaskID:     taskID,
+				RunID:      runID,
+				Type:       "clarify.requested",
+				Visibility: "task",
+				Channel:    channel,
+				Payload:    mustJSON(map[string]interface{}{"question": question, "choices": choices}),
+			})
+		}
+		var sb strings.Builder
+		sb.WriteString("This is a non-interactive channel, so there is no live prompt. ")
+		sb.WriteString("End your turn now and ask the user this question as your reply")
+		if len(choices) > 0 {
+			sb.WriteString(" (present the options as a short numbered list)")
+		}
+		sb.WriteString(". They will answer in a follow-up message that continues this task. Do not wait or keep working.")
+		return sb.String()
+	}
 }
 
 func (c *RunCoordinator) toolApprovalHandler(identity *control.IdentityContext, task *control.Task, run *control.Run, channel string) tools.ToolApprovalHandler {

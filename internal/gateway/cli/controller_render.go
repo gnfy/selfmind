@@ -21,7 +21,50 @@ func formatUsage(usage, limit int) string {
 	if limit <= 0 {
 		return fmt.Sprintf("%s run · ctx ?", compactCount(usage))
 	}
-	return fmt.Sprintf("%s run · %s ctx", compactCount(usage), compactCount(limit))
+	return fmt.Sprintf("%s run · %s ctx", compactCount(usage), formatContextLimit(limit))
+}
+
+// formatUsageSession adds the session-cumulative token count for cost
+// awareness: "12.0K run · 340.0K session · 1.05M ctx".
+func formatUsageSession(run, session, limit int) string {
+	ctx := "ctx ?"
+	if limit > 0 {
+		ctx = formatContextLimit(limit) + " ctx"
+	}
+	return fmt.Sprintf("%s run · %s session · %s", compactCount(run), compactCount(session), ctx)
+}
+
+// formatContextLimit shows the context window with more precision than
+// compactCount: a 1,050,000-token window reads "1.05M" instead of a rounded
+// "1.1M". Sub-million values keep the compact K form.
+func formatContextLimit(n int) string {
+	if n >= 1_000_000 {
+		s := fmt.Sprintf("%.2f", float64(n)/1_000_000)
+		s = strings.TrimRight(strings.TrimRight(s, "0"), ".")
+		return s + "M"
+	}
+	return compactCount(n)
+}
+
+// resolveUIModelMeta returns a compact, real model-runtime descriptor for the
+// status line (reasoning effort and/or service tier). It returns "" when none
+// is configured, so the status line shows nothing rather than a placeholder.
+func resolveUIModelMeta(cfg *config.Config) string {
+	if cfg == nil {
+		return ""
+	}
+	rt, err := modelruntime.NewResolver(cfg).Resolve(context.Background(), modelruntime.Selection{})
+	if err != nil {
+		return ""
+	}
+	var parts []string
+	if e := strings.TrimSpace(rt.ReasoningEffort); e != "" {
+		parts = append(parts, e)
+	}
+	if t := strings.TrimSpace(rt.ServiceTier); t != "" {
+		parts = append(parts, t)
+	}
+	return strings.Join(parts, " ")
 }
 
 func resolveUITokenLimit(cfg *config.Config, providerName, modelName string) int {

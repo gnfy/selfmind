@@ -1,0 +1,32 @@
+id: realuser_iterate_script
+title: "dev iterates on a script across two turns"
+suite: realuser-v1
+tier: smoke
+workspace: isolated
+channel: cli
+
+setup:
+  files:
+    "data.csv": |
+      name,score
+      a,10
+      b,20
+      c,30
+
+turns:
+  - input: "写个 Python 脚本 avg.py:读取同目录 data.csv 第二列(score),算平均值并打印。保持简短,直接写文件。"
+  - input: "再改一下:如果 data.csv 不存在,就打印一句提示而不是报错。改同一个文件。"
+
+expect:
+  status: completed
+  require_same_task: true
+  require_continuation: true
+checks:
+  no_mojibake: true
+  no_empty_response: true
+
+assert_state:
+  - { on: file, path: avg.py, exists: true }
+  - { on: file, path: avg.py, matches: "csv|open\\(|read" }
+  - { on: file, path: avg.py, matches: "exist|isfile|FileNotFound|try" }
+  - { on: task, field: status, not_contains: "blocked" }

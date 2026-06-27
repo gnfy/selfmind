@@ -1,0 +1,23 @@
+id: dayinlife_inspect_codebase
+title: "inspect a real codebase and answer where the entrypoint is"
+suite: dayinlife
+workspace: "."
+channel: cli
+turns:
+  - input: "用一两句话说明这个 Go 项目的可执行入口在哪个目录、怎么启动。可以查看本地文件,但不要修改任何文件。最多 120 字。"
+expect:
+  status: completed
+  require_tool_events: true
+  min_tool_calls: 1
+  max_tool_errors: 4
+  max_duration_seconds: 420
+  contains:
+    - "cmd"
+  must_not_contain:
+    - "<tool>"
+    - "Process summary:"
+checks:
+  no_mojibake: true
+  no_raw_json_leak: true
+  no_tool_xml_leak: true
+  no_empty_response: true

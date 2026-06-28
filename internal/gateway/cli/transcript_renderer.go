@@ -13,7 +13,13 @@ const (
 	glyphBullet  = "\u2022"
 	glyphCorner  = "\u2514\u2500"
 	glyphChevron = "\u203a"
-	glyphDot     = " · "
+	// Notification glyphs (see notificationStyleFor). Kept to widely-supported
+	// code points so they render across terminals without width surprises.
+	glyphCheck     = "\u2713" // checkmark: success
+	glyphArrowInto = "\u21b3" // down-right arrow: steering injected into the run
+	glyphWarning   = "\u26a0" // warning sign: recoverable problem
+	glyphCross     = "\u2717" // ballot X: cancelled/aborted
+	glyphDot       = " · "
 )
 
 func (m *uiModel) renderAllMessages() string {
@@ -238,10 +244,49 @@ func renderToolMessage(msg ChatMessage, width int) string {
 	if result := toolResultLine(label, msg.Content, width-6); result != "" {
 		sb.WriteString("  " + glyphCorner + " " + result + "\n")
 	}
-	if !msg.IsError {
+	// For command tools, show a bounded head of the actual output so the run is
+	// not a black box. File-editing tools get a colored diff instead.
+	if block := renderCommandOutputBlock(label, msg.Content, width-4); block != "" {
+		sb.WriteString(block)
+	} else if !msg.IsError {
 		if diff := renderToolDiff(label, args, width-4); diff != "" {
 			sb.WriteString(diff)
 		}
+	}
+	return sb.String()
+}
+
+// renderCommandOutputBlock shows a bounded head of raw command output (stdout/
+// stderr) as dim lines, Codex-style. Terminal tools return plain text rather
+// than JSON, so without this the transcript would only ever show the first line
+// of any command's output. It renders nothing for single-line or empty output
+// (the one-line summary already covers that) and only applies to command tools.
+func renderCommandOutputBlock(label, content string, width int) string {
+	switch label {
+	case "terminal", "execute_command", "shell":
+	default:
+		return ""
+	}
+	content = strings.TrimRight(stripANSI(content), "\n")
+	if strings.TrimSpace(content) == "" {
+		return ""
+	}
+	lines := strings.Split(content, "\n")
+	if len(lines) <= 1 {
+		return ""
+	}
+	const maxLines = 6
+	var sb strings.Builder
+	shown := 0
+	for _, ln := range lines {
+		if shown >= maxLines {
+			break
+		}
+		sb.WriteString("  " + glyphCorner + " " + diffCtxStyle.Render(truncateToWidth(ln, width-4)) + "\n")
+		shown++
+	}
+	if len(lines) > maxLines {
+		sb.WriteString("  " + glyphCorner + " " + diffCtxStyle.Render(fmt.Sprintf("… %d more line(s)", len(lines)-maxLines)) + "\n")
 	}
 	return sb.String()
 }
@@ -409,8 +454,52 @@ func toolResultLine(label, content string, width int) string {
 		return truncateToWidth(formatFinishRunResult(content), width)
 	case "patch":
 		return truncateToWidth(formatPatchToolResult(content), width)
+	case "terminal", "execute_command", "shell":
+		return truncateToWidth(formatCommandResult(content), width)
+	case "read_file", "cat":
+		return truncateToWidth(formatFileReadResult(content), width)
 	default:
 		return truncateToWidth(formatGenericToolResult(content), width)
+	}
+}
+
+// formatCommandResult condenses raw command output into a one-line header.
+// renderCommandOutputBlock renders the head of the output separately, so this
+// only needs to report shape: a line count, or the single line itself.
+func formatCommandResult(content string) string {
+	trimmed := strings.TrimRight(stripANSI(content), "\n")
+	if strings.TrimSpace(trimmed) == "" {
+		// Empty also covers the still-running state (output not captured yet);
+		// the "Ran …" header already conveys a successful no-output command.
+		return ""
+	}
+	lines := strings.Split(trimmed, "\n")
+	if len(lines) == 1 {
+		return strings.TrimSpace(lines[0])
+	}
+	return fmt.Sprintf("%d lines", len(lines))
+}
+
+// formatFileReadResult reports the size of a file read instead of echoing its
+// first content line, which is rarely meaningful on its own.
+func formatFileReadResult(content string) string {
+	if strings.TrimSpace(content) == "" {
+		// Empty also covers the still-running state; show nothing rather than a
+		// misleading "empty" while the read is in flight.
+		return ""
+	}
+	lines := strings.Count(content, "\n") + 1
+	return fmt.Sprintf("%d lines%s%s", lines, glyphDot, humanizeBytes(len(content)))
+}
+
+func humanizeBytes(n int) string {
+	switch {
+	case n >= 1<<20:
+		return fmt.Sprintf("%.1f MB", float64(n)/(1<<20))
+	case n >= 1<<10:
+		return fmt.Sprintf("%.1f KB", float64(n)/(1<<10))
+	default:
+		return fmt.Sprintf("%d B", n)
 	}
 }
 

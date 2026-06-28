@@ -526,7 +526,19 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 	actionToolsUsed := 0
 	toolUseCounts := map[string]int{}
 	toolBudgetRepairIssued := false
+	steerCh := steeringFromContext(ctx)
 	for i := 0; i < maxIterations; i++ {
+		// Mid-turn steering: fold any follow-up the user typed while this turn was
+		// running into the conversation before the next model call, so the agent
+		// adjusts course in-flight instead of the input being rejected or lost.
+		for _, guidance := range drainSteering(steerCh) {
+			messages = append(messages, llm.Message{Role: "user", Content: guidance})
+			history.Steps = append(history.Steps, "user added guidance mid-turn")
+			EmitAgentEvent(eventCh, AgentEvent{
+				Type:    "agent.steering",
+				Payload: map[string]interface{}{"input": guidance},
+			})
+		}
 		iterationStrategy := strategy
 		if actionToolBudgetReached(strategy, actionToolsUsed) {
 			iterationStrategy = strategy.WithActionToolsDisabled()
@@ -1383,6 +1395,7 @@ func (a *Agent) buildSystemPrompt(ctx context.Context, tenantID string, strategy
 			// when the task actually looks like UI work, so backend/data/CLI
 			// tasks are not biased toward frontend concerns.
 			parts = append(parts, taskExecutionGuidance())
+			parts = append(parts, progressNarrationGuidance())
 			if isFrontendTask(userInput) {
 				parts = append(parts, frontendQualityGuidance())
 			}

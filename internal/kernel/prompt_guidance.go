@@ -15,6 +15,20 @@ func taskExecutionGuidance() string {
 - Do not claim completion you have not verified. If you could not verify, say so plainly and give the exact command the user can run.`
 }
 
+// progressNarrationGuidance asks the model to keep the user oriented with short
+// Codex-style preambles before tool batches. These notes stream as ordinary
+// assistant text, and the CLI/TUI persists each one as its own message, turning
+// an otherwise opaque tool run into a readable step trajectory. It is injected
+// only on tool-bearing turns (alongside taskExecutionGuidance); pure
+// direct-answer turns expose no tools and need no narration.
+func progressNarrationGuidance() string {
+	return `# PROGRESS NARRATION (keep the user oriented)
+- Before a group of tool calls, write ONE short sentence (about 8-20 words), in plain language and present tense, saying what you are about to do and why; then make the calls. Group related actions under a single preamble instead of narrating every trivial read.
+- Do not use headings, bullet lists, or code fences for these notes; they are short status lines, not sections.
+- When you change approach after a failure, or move from one phase of the work to the next, say so in one short line before continuing.
+- Skip narration entirely for a direct answer that uses no tools.`
+}
+
 // frontendQualityGuidance is injected ONLY when the task looks like UI/frontend
 // work (see isFrontendTask). It must not be part of the always-on guidance —
 // for backend, data, infra, or CLI work it is irrelevant and misleading.

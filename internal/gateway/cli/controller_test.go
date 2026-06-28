@@ -446,6 +446,89 @@ func TestToolMessageFormatsFinishRunJSON(t *testing.T) {
 	}
 }
 
+func TestCommandToolMessageShowsOutputHead(t *testing.T) {
+	output := "ok  \tselfmind/internal/kernel\t1.7s\nok  \tselfmind/internal/gateway/cli\t1.6s\nFAIL\tselfmind/internal/tools\nline4\nline5\nline6\nline7\nline8"
+	rendered := stripANSI(renderToolMessage(ChatMessage{
+		Role:     "tool",
+		ToolName: "terminal",
+		ToolArgs: `{"command":"go test ./..."}`,
+		Content:  output,
+		Duration: 4.2,
+	}, 120))
+
+	if !strings.Contains(rendered, "Ran go test ./...") {
+		t.Fatalf("command message missing action: %q", rendered)
+	}
+	if !strings.Contains(rendered, "8 lines") {
+		t.Fatalf("command message should summarize line count: %q", rendered)
+	}
+	if !strings.Contains(rendered, "selfmind/internal/kernel") {
+		t.Fatalf("command message should show output head: %q", rendered)
+	}
+	if !strings.Contains(rendered, "2 more line(s)") {
+		t.Fatalf("command output should be bounded with a remainder note: %q", rendered)
+	}
+}
+
+func TestRunningCommandToolMessageHasNoEmptyOutputLine(t *testing.T) {
+	rendered := stripANSI(renderToolMessage(ChatMessage{
+		Role:      "tool",
+		ToolName:  "terminal",
+		ToolArgs:  `{"command":"go test ./..."}`,
+		IsRunning: true,
+	}, 120))
+
+	if strings.Contains(rendered, "no output") || strings.Contains(rendered, "0 lines") {
+		t.Fatalf("running command must not show an empty-output result line: %q", rendered)
+	}
+}
+
+func TestReadFileToolMessageSummarizesSize(t *testing.T) {
+	rendered := stripANSI(renderToolMessage(ChatMessage{
+		Role:     "tool",
+		ToolName: "read_file",
+		ToolArgs: `{"path":"main.go"}`,
+		Content:  "package main\n\nfunc main() {}\n",
+		Duration: 0.1,
+	}, 120))
+
+	if !strings.Contains(rendered, "Read main.go") {
+		t.Fatalf("read_file message missing action: %q", rendered)
+	}
+	if !strings.Contains(rendered, "lines") {
+		t.Fatalf("read_file message should report a line count: %q", rendered)
+	}
+	if strings.Contains(rendered, "package main") {
+		t.Fatalf("read_file message should not echo file contents: %q", rendered)
+	}
+}
+
+func TestNotificationBarStylesGuidanceDistinctly(t *testing.T) {
+	model := NewController(nil, nil, nil, "").model
+
+	model.statusMsg = "Sent to the running task as guidance."
+	guidance := model.notificationBar(80)
+	if !strings.Contains(guidance, glyphArrowInto) {
+		t.Fatalf("guidance notice should carry the steering glyph: %q", stripANSI(guidance))
+	}
+	if !strings.Contains(stripANSI(guidance), "Sent to the running task as guidance.") {
+		t.Fatalf("guidance notice text missing: %q", stripANSI(guidance))
+	}
+
+	cases := map[string]string{
+		"Copied to clipboard":               glyphCheck,
+		"Guidance queue is full; try again": glyphWarning,
+		"Task cancelled by user.":           glyphCross,
+		"Some neutral status":               glyphBullet,
+	}
+	for msg, wantGlyph := range cases {
+		model.statusMsg = msg
+		if got := model.notificationBar(80); !strings.Contains(got, wantGlyph) {
+			t.Fatalf("notice %q should use glyph %q, got %q", msg, wantGlyph, stripANSI(got))
+		}
+	}
+}
+
 func TestDisplayModelNameShowsProviderAndModel(t *testing.T) {
 	model := NewController(nil, nil, nil, "").model
 	model.providerName = "kimi-coding"

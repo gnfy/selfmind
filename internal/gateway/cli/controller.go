@@ -88,6 +88,7 @@ type uiModel struct {
 	sessionSearchFn    func(query string, limit int) (interface{}, error)
 	clarifyBridge      *tools.ClarifyBridge
 	cancelFn           context.CancelFunc
+	steerCh            chan string // mid-turn guidance channel for the active run (nil when idle)
 	clarifyMode        bool
 	clarifyChoices     []string
 	clarifyReq         tools.ClarifyRequest
@@ -605,20 +606,42 @@ func (m *uiModel) viewModel() string {
 	return lipgloss.JoinVertical(lipgloss.Left, parts...)
 }
 
+// notificationBar renders a transient status notice (clipboard, mid-turn
+// steering, cancellation) as a compact, left-aligned colored line with a
+// leading glyph rather than a full-width grey slab. The slab read as leftover
+// terminal output; a categorized accent line reads as a deliberate notice and
+// makes the message kind (success / info / warning) obvious at a glance.
 func (m *uiModel) notificationBar(width int) string {
 	if width <= 0 || strings.TrimSpace(m.statusMsg) == "" {
 		return ""
 	}
 	text := strings.TrimSpace(m.statusMsg)
-	style := lipgloss.NewStyle().
-		Width(width).
+	glyph, color := notificationStyleFor(text)
+	body := glyph + " " + text
+	return lipgloss.NewStyle().
 		Padding(0, 1).
-		Foreground(lipgloss.Color("255")).
-		Background(lipgloss.Color("236"))
-	if strings.Contains(strings.ToLower(text), "copied") {
-		style = style.Foreground(lipgloss.Color("0")).Background(lipgloss.Color("82")).Bold(true)
+		Foreground(lipgloss.Color(color)).
+		Bold(true).
+		Render(truncateToWidth(body, width-2))
+}
+
+// notificationStyleFor classifies a transient status message into a glyph and
+// accent color. It keys off the stable phrases the controller emits (see the
+// statusMsg assignments) so the visual category matches the meaning.
+func notificationStyleFor(text string) (glyph, color string) {
+	lower := strings.ToLower(text)
+	switch {
+	case strings.Contains(lower, "copied"):
+		return glyphCheck, "82" // bright green — quick positive confirmation
+	case strings.Contains(lower, "guidance") && !strings.Contains(lower, "full"):
+		return glyphArrowInto, "39" // blue — steering injected into the active run
+	case strings.Contains(lower, "full") || strings.Contains(lower, "failed") || strings.Contains(lower, "try again"):
+		return glyphWarning, "214" // amber — recoverable problem
+	case strings.Contains(lower, "cancel"):
+		return glyphCross, "203" // red — run aborted
+	default:
+		return glyphBullet, "245" // neutral grey — generic notice
 	}
-	return style.Render(truncateToWidth(text, width-2))
 }
 
 func (m *uiModel) migrationHintBar(width int) string {
@@ -902,6 +925,7 @@ func (m *uiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.thinking = false
 		m.activityText = ""
 		m.toolExecuting = ""
+		m.steerCh = nil // run finished; stop accepting mid-turn guidance for it
 		turnTokens := msg.Usage.InputTokens + msg.Usage.OutputTokens
 		if turnTokens > 0 {
 			m.runTokens = turnTokens
@@ -1109,6 +1133,7 @@ func (m *uiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 					m.thinking = false
 					m.activityText = ""
 					m.toolExecuting = ""
+					m.steerCh = nil
 					m.runStatus = "cancelled"
 					m.statusMsg = "Task cancelled by user."
 					return m, tea.Tick(time.Second*3, func(t time.Time) tea.Msg {
@@ -1155,8 +1180,25 @@ func (m *uiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if strings.HasPrefix(input, "/") {
 				return m, m.handleCommand(input)
 			}
+			// Mid-turn steering: if a run is active, inject this as guidance into
+			// the running turn instead of starting a competing run (which the
+			// busy-guard would reject) or overwriting the in-flight cancelFn.
+			if m.thinking || m.toolExecuting != "" {
+				m.addMessage("user", input)
+				m.editor.Reset()
+				if m.steerCh != nil {
+					select {
+					case m.steerCh <- input:
+						m.statusMsg = "Sent to the running task as guidance."
+					default:
+						m.statusMsg = "Guidance queue is full; try again in a moment."
+					}
+				}
+				return m, nil
+			}
 			m.addMessage("user", input)
 			m.editor.Reset()
+			m.steerCh = make(chan string, 16)
 			m.thinking = true
 			m.runStatus = "working"
 			m.thinkingStart = time.Now()
@@ -1165,6 +1207,7 @@ func (m *uiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.activityText = "Thinking about the request"
 			ctx, cancel := context.WithCancel(context.Background())
 			m.cancelFn = cancel
+			ctx = kernel.WithSteering(ctx, m.steerCh)
 			return m, tea.Batch(m.runAgent(ctx, input), m.spinner.Tick, workingTick())
 		}
 	}

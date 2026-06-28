@@ -419,9 +419,15 @@ func emitToolEndEvent(ch chan string, name, result string, err error) {
 
 // RunConversation 执行 Agent 推理循环
 // channel 用于渠道隔离的历史记录（如 'cli'、'wechat'、'dingtalk'）
-func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, initialPrompt string) (string, llm.UsageStats, error) {
+func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, initialPrompt string) (finalOutput string, finalUsage llm.UsageStats, finalErr error) {
 	a.runMu.Lock()
 	defer a.runMu.Unlock()
+
+	// Flight recorder: tag this turn so the recorder captures its model calls,
+	// and write the turn's metadata when it finishes (no-op unless enabled).
+	if finalize := a.beginFlightRecording(&ctx, tenantID, channel, initialPrompt); finalize != nil {
+		defer func() { finalize(finalOutput, finalErr) }()
+	}
 
 	var totalUsage llm.UsageStats
 	eventCh := eventChannelFromContext(ctx, a.EventChannel)

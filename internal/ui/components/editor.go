@@ -47,6 +47,7 @@ type Editor struct {
 	largePasteChars int            // threshold in characters (from config, 0=disabled)
 	largePasteLines int            // threshold in lines (from config, 0=disabled)
 	cursorVisible   bool
+	hintIndex       int // selected row in the slash-command suggestion popup
 }
 
 type CommandHint struct {
@@ -151,8 +152,15 @@ func (e *Editor) Update(msg tea.Msg) tea.Cmd {
 		return e.handlePasteFromKey(keyMsg)
 	}
 
+	before := e.textarea.Value()
 	var cmd tea.Cmd
 	e.textarea, cmd = e.textarea.Update(msg)
+	// Any actual edit resets the popup selection to the top (navigation keys are
+	// intercepted by the controller and never reach here, so this only fires on
+	// real text changes).
+	if e.textarea.Value() != before {
+		e.hintIndex = 0
+	}
 	return cmd
 }
 
@@ -360,8 +368,11 @@ func (e *Editor) visibleInputLineCount() int {
 }
 
 func (e *Editor) matchingCommands() []CommandHint {
-	val := strings.TrimSpace(e.textarea.Value())
-	if val == "" || !strings.HasPrefix(val, "/") || strings.Contains(val, " ") || strings.Contains(val, "\n") {
+	raw := e.textarea.Value()
+	val := strings.TrimSpace(raw)
+	// Check the raw value for spaces/newlines (not the trimmed one) so a trailing
+	// space — e.g. just after Tab-completing a command — closes the popup.
+	if val == "" || !strings.HasPrefix(val, "/") || strings.Contains(raw, " ") || strings.Contains(raw, "\n") {
 		return nil
 	}
 
@@ -377,14 +388,59 @@ func (e *Editor) matchingCommands() []CommandHint {
 	return matches
 }
 
+// SuggestionsVisible reports whether the slash-command popup is currently shown.
+func (e *Editor) SuggestionsVisible() bool {
+	return len(e.matchingCommands()) > 0
+}
+
+// MoveSuggestion moves the popup selection by delta (wrapping), so the controller
+// can map Up/Down to it instead of input history while the popup is open.
+func (e *Editor) MoveSuggestion(delta int) {
+	n := len(e.matchingCommands())
+	if n == 0 {
+		return
+	}
+	e.hintIndex = ((e.hintIndex+delta)%n + n) % n
+}
+
+// AcceptSuggestion completes the input to the currently selected command and
+// returns true when a suggestion was applied (Tab behaviour).
+func (e *Editor) AcceptSuggestion() bool {
+	matches := e.matchingCommands()
+	if len(matches) == 0 {
+		return false
+	}
+	idx := e.clampedHintIndex(len(matches))
+	e.textarea.SetValue(matches[idx].Name + " ")
+	e.textarea.CursorEnd()
+	e.hintIndex = 0
+	return true
+}
+
+func (e *Editor) clampedHintIndex(n int) int {
+	if e.hintIndex >= n {
+		return n - 1
+	}
+	if e.hintIndex < 0 {
+		return 0
+	}
+	return e.hintIndex
+}
+
 func (e *Editor) renderSuggestions(width int) string {
 	matches := e.matchingCommands()
 	if len(matches) == 0 {
 		return ""
 	}
+	selected := e.clampedHintIndex(len(matches))
 
-	nameStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("75")).Bold(true).Width(14)
-	descStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
+	// codex-style: highlight the selected row by foreground color only (bright
+	// cyan for the whole row), dim the rest. No background blocks — those read as
+	// mismatched bars over a themed/transparent terminal background.
+	nameStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("246")).Bold(true).Width(14)
+	descStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+	selNameStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("45")).Bold(true).Width(14)
+	selDescStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("51"))
 	innerW := width - 2
 	if innerW < 1 {
 		innerW = 1
@@ -395,9 +451,13 @@ func (e *Editor) renderSuggestions(width int) string {
 	}
 
 	rows := make([]string, 0, len(matches))
-	for _, cmd := range matches {
+	for i, cmd := range matches {
 		desc := truncateASCII(cmd.Description, descW)
-		rows = append(rows, lipgloss.JoinHorizontal(lipgloss.Top, nameStyle.Render(cmd.Name), descStyle.Render(desc)))
+		ns, ds := nameStyle, descStyle
+		if i == selected {
+			ns, ds = selNameStyle, selDescStyle
+		}
+		rows = append(rows, lipgloss.JoinHorizontal(lipgloss.Top, ns.Render(cmd.Name), ds.Render(desc)))
 	}
 
 	return lipgloss.NewStyle().

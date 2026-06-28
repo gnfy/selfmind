@@ -80,6 +80,7 @@ type uiModel struct {
 	messageProcessor   MessageProcessor
 	tenantID           string
 	channel            string // 'cli' | 'wechat' | 'dingtalk' | 'web'
+	approvalMode       string // codex-style: on-request | read-only | auto-edit | full-auto
 	spinner            spinner.Model
 	inputHistory       []string
 	historyIndex       int
@@ -180,6 +181,7 @@ func NewController(a *kernel.Agent, provider llm.Provider, cfg *config.Config, t
 			spinner:       sp,
 			inputHistory:  []string{},
 			historyIndex:  -1,
+			approvalMode:  "on-request",
 			startTime:     time.Now(),
 			runStatus:     "ready",
 			tokenLimit:    resolveUITokenLimit(cfg, "", ""),
@@ -230,6 +232,7 @@ func NewControllerWithGateway(gw *router.Gateway, agent *kernel.Agent, provider 
 			spinner:       sp,
 			inputHistory:  []string{},
 			historyIndex:  -1,
+			approvalMode:  "on-request",
 			startTime:     time.Now(),
 			runStatus:     "ready",
 			tokenLimit:    resolveUITokenLimit(cfg, providerName, modelName),
@@ -704,6 +707,12 @@ func (m *uiModel) statusLine() string {
 	}
 	parts = append(parts, st.Status.Good.Render(state))
 
+	// Show the approval mode unless it's the default, so an elevated mode
+	// (auto-edit / full-auto) is always visible.
+	if m.approvalMode != "" && m.approvalMode != "on-request" {
+		parts = append(parts, st.Status.Label.Render("mode:"+m.approvalMode))
+	}
+
 	ctrlHint := "Ctrl+C exit"
 	if m.thinking || m.toolExecuting != "" {
 		ctrlHint = "Ctrl+C cancel"
@@ -1012,6 +1021,20 @@ func (m *uiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *uiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// Ctrl+V, or an empty bracketed paste (how a screenshot paste arrives — the
+	// image has no text payload), may be an image paste. Check the clipboard for
+	// an image and route it to the attachment pipeline. If there is no image it
+	// stays silent: an empty paste is swallowed; Ctrl+V falls through to normal
+	// handling so text paste is unaffected.
+	if msg.Type == tea.KeyCtrlV || (msg.Paste && strings.TrimSpace(string(msg.Runes)) == "") {
+		if cmd, handled := m.tryClipboardImagePaste(); handled {
+			return m, cmd
+		}
+		if msg.Paste {
+			return m, nil
+		}
+	}
+
 	switch msg.Type {
 
 	// Shift+Enter or Ctrl+J inserts a newline (multi-line input).
@@ -1039,13 +1062,30 @@ func (m *uiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.viewport.GotoBottom()
 		return m, nil
 	case tea.KeyUp:
+		// While the slash-command popup is open, Up/Down navigate it (codex-style)
+		// instead of input history.
+		if m.editor.SuggestionsVisible() {
+			m.editor.MoveSuggestion(-1)
+			return m, nil
+		}
 		if m.navigateInputHistory(-1) {
 			return m, nil
 		}
 		m.editor.Update(msg)
 		return m, nil
 	case tea.KeyDown:
+		if m.editor.SuggestionsVisible() {
+			m.editor.MoveSuggestion(1)
+			return m, nil
+		}
 		if m.navigateInputHistory(1) {
+			return m, nil
+		}
+		m.editor.Update(msg)
+		return m, nil
+	case tea.KeyTab:
+		// Tab completes the highlighted slash command.
+		if m.editor.AcceptSuggestion() {
 			return m, nil
 		}
 		m.editor.Update(msg)

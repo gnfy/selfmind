@@ -24,6 +24,9 @@ type ExecutionScope struct {
 	// Clarify lets gateway/IM execution contexts answer the clarify tool
 	// without a blocking interactive prompt (which only the local TUI has).
 	Clarify ClarifyHandler
+	// ApprovalMode is the codex-style approval policy for this turn (read-only /
+	// auto-edit / full-auto / on-request). Empty means on-request.
+	ApprovalMode ApprovalMode
 }
 
 var executionScopes sync.Map // tenantID used by the agent -> ExecutionScope

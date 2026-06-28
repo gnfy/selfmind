@@ -8,6 +8,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"selfmind/internal/app"
+	selfeval "selfmind/internal/eval"
 	"selfmind/internal/gateway/api"
 	"selfmind/internal/kernel"
 	"selfmind/internal/tools"
@@ -498,6 +499,82 @@ func (m *uiModel) handleCompact() tea.Cmd {
 	tail := append([]ChatMessage{}, m.messages[len(m.messages)-keep:]...)
 	m.messages = append([]ChatMessage{marker}, tail...)
 	m.viewport.GotoBottom()
+	return nil
+}
+
+// handlePasteImage reads an image from the OS clipboard, saves it to a temp
+// file, and drops its path into the composer — which the submit path then turns
+// into an image attachment (reusing the path pipeline). Clipboard images are
+// only reachable when the TUI runs on a machine with a GUI clipboard (including
+// WSL reading the Windows clipboard); over SSH there is none, so it explains
+// the alternative instead of failing silently.
+func (m *uiModel) handlePasteImage() tea.Cmd {
+	path, err := clipboardImageToFile()
+	if err != nil {
+		m.addMessage("assistant", "无法从剪贴板读取图片:"+err.Error()+
+			"\n提示:截图需在本机(含 WSL)运行时才能读剪贴板;通过 SSH 连云端时没有剪贴板——请改为拖入/输入图片文件路径,或用微信发图。")
+		return nil
+	}
+	m.attachClipboardImage(path, "/paste-image")
+	return nil
+}
+
+// tryClipboardImagePaste is the Ctrl+V / empty-paste hook: if the clipboard
+// holds an image, attach it and report handled=true. On no image (or no
+// clipboard, e.g. over SSH) it stays silent and returns false so the key falls
+// through to normal handling. Returns a Cmd alongside handled.
+func (m *uiModel) tryClipboardImagePaste() (tea.Cmd, bool) {
+	path, err := clipboardImageToFile()
+	if err != nil {
+		return nil, false
+	}
+	m.attachClipboardImage(path, "")
+	return nil, true
+}
+
+// attachClipboardImage drops a saved clipboard-image path into the composer so
+// the submit path turns it into an image attachment, stripping any leading
+// command token first.
+func (m *uiModel) attachClipboardImage(path, stripPrefix string) {
+	cur := strings.TrimSpace(m.editor.Value())
+	if stripPrefix != "" {
+		cur = strings.TrimSpace(strings.TrimPrefix(cur, stripPrefix))
+	}
+	if cur == "" {
+		m.editor.SetValue(path + " ")
+	} else {
+		m.editor.SetValue(cur + " " + path + " ")
+	}
+	m.addMessage("assistant", "📎 已从剪贴板附加图片。补充你的问题后回车发送即可。")
+}
+
+// handleCapture saves the last recorded turn as a replayable eval case (the
+// "friction → permanent regression test" button). Requires the flight recorder
+// (SELFMIND_FLIGHT_RECORDER=1).
+func (m *uiModel) handleCapture(args []string) tea.Cmd {
+	title := strings.TrimSpace(strings.Join(args, " "))
+	res, err := selfeval.CaptureFromFlight("latest", selfeval.CaptureOptions{Title: title})
+	if err != nil {
+		m.addMessage("assistant", "Capture failed: "+err.Error())
+		return nil
+	}
+	m.addMessage("assistant", fmt.Sprintf(
+		"📌 已保存为回归用例:%s\n  用例:%s\n  cassette:%d 个\n下一步:编辑该文件补 `assert_state`(本该怎样),再 `selfmind selfcheck` 离线回放。",
+		res.CaseID, res.CasePath, res.Cassettes))
+	return nil
+}
+
+// handleMode shows or sets the codex-style approval mode for this session.
+func (m *uiModel) handleMode(args []string) tea.Cmd {
+	if len(args) == 0 {
+		m.addMessage("assistant", fmt.Sprintf(
+			"Approval mode: %s\n\n  on-request  ask only on risky ops (default)\n  read-only   ask before any file write or command\n  auto-edit   auto-apply in-workspace edits; ask before commands\n  full-auto   run everything without asking (workspace scope still applies)\n\nUsage: /mode <on-request|read-only|auto-edit|full-auto>",
+			m.approvalMode))
+		return nil
+	}
+	mode := string(tools.NormalizeApprovalMode(args[0]))
+	m.approvalMode = mode
+	m.addMessage("assistant", "Approval mode set to: "+mode)
 	return nil
 }
 

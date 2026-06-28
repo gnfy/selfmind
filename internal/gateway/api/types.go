@@ -52,6 +52,9 @@ type MessageRequest struct {
 	// them off. Used by scheduled jobs that must look things up (e.g. a market
 	// summary). It does not force web use; it only makes the tools available.
 	AllowWeb bool `json:"allow_web,omitempty"`
+	// ApprovalMode is the codex-style approval policy chosen by the client
+	// (read-only / auto-edit / full-auto / on-request). Empty = on-request.
+	ApprovalMode string `json:"approval_mode,omitempty"`
 }
 
 type MessageAttachment struct {

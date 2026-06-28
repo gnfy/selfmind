@@ -8,8 +8,9 @@
 > superseded** — verify any "to do" item against this page and against the code
 > before acting on it.
 >
-> **Snapshot date:** 2026-06-27. When you finish a change that moves a row,
-> update this table in the same PR.
+> **Snapshot date:** 2026-06-28. When you finish a change that moves a row,
+> update this table in the same PR. See `docs/phase1-modules.md` for the
+> Phase-1 (open-source CLI + cloud daemon + WeChat) feature-module index.
 
 ## Health
 
@@ -41,17 +42,22 @@
 | Multi-agent delegation | ✅ | Parallel, semaphore-bounded batch delegation. `internal/app/multi_agent.go`. (Roadmap lists this as serial-only — it is parallel.) |
 | Extended tools | ✅ | `web_search`, `web_extract`, `execute_code`, `delegate_task`, vision, tts beyond file/terminal. |
 | MCP client | 🟡 | Real stdio/HTTP JSON-RPC client, multi-server, on-demand tool registration. `sampling/createMessage` not implemented. `internal/tools/mcp_client.go`. |
-| Eval loop | ✅ | Real gateway-path replay; P0 deterministic checks; JSONL traces with content hashing; 29 cases / 5 suites. `internal/eval`, `evalcases/`. |
+| Eval loop | ✅ | Real gateway-path runs; P0 deterministic checks + state-predicate oracle (`assert_state`); VCR record/replay for free offline regression; `selfmind eval run/report/repair/scorecard/capture`; day-in-the-life suite with recorded cassettes. `internal/eval`, `evalcases/`. |
+| Flight recorder + capture | ✅ | `SELFMIND_FLIGHT_RECORDER=1` records each real turn; `/capture` / `eval capture` promotes the last turn into a replayable eval case — everyday friction becomes a permanent regression test. `internal/kernel/llm/flight.go`, `internal/kernel/flight_recorder.go`, `internal/eval/capture.go`. |
 | Telegram adapter | ✅ | Webhook + long poll, signature verify, send. |
 | Personal/Enterprise WeChat (Weixin) adapter | ✅ | iLink protocol (`ilinkai.weixin.qq.com`): poll loop, AES, per-peer context_token, typing, media, group/DM policy, dedup. Built-in QR login (`selfmind weixin login`) — no external bridge needed. This is the primary multi-device WeChat path. |
 | WeChat Official Account adapter | 🟡 | Inbound passive-reply + signature verify (`internal/gateway/wechat`); outbound now supported via the customer-service `custom/send` sender (`internal/gateway/delivery/wechat.go`, registered as platform `wechat`). Still no message encryption/decryption. |
-| Approval lifecycle | 🟡 | DB + API + `/approve` / `/reject` done. Native IM approval buttons not wired. |
+| Approval lifecycle | 🟡 | DB + API + `/approve` / `/reject` + codex-style approval modes (`/mode`) done. Native IM approval buttons not wired. |
 | CLI / TUI controller | 🟡 | Components partly extracted; `uiModel` in `controller.go` is still a monolith (violates AGENTS.md guidance). |
 | Run execution coordinator | 🟡 | `RunCoordinator` (`httpapi/run_coordinator.go`) owns the run lifecycle (`runMessage`/`startAsyncRun`), the active-run registry, and all pre/post-run helpers (workspace/task resolution, execution scope, approval handler, context assembly, stream aggregation, outcome persistence). Server is now the HTTP/orchestration layer. Remaining: `Agent.runMu` still serializes all runs through one shared Agent — a parallel worker pool (pool of agents) is the next step. |
 | Process sandbox | 🟡 | Unix process-group isolation only; **not** a security sandbox (no namespace/seccomp/cgroup). Windows is a no-op. |
 | Feishu / Lark adapter | 🟡 | Inbound via the generic `/v1/im/feishu` webhook (verification-token / encrypt-key signature, challenge); outbound via `delivery.FeishuSender` (tenant_access_token + `im/v1/messages`, chat_id/open_id routing). Config drives both. Encrypt-envelope AES decryption still TODO (use plaintext mode). |
 | QQ official bot adapter | 🟡 | Inbound via `/v1/im/qq` webhook (group/C2C/guild events parsed into a `group:`/`c2c:`/`channel:` target); outbound via `delivery.QQSender` (app access token + per-target message API). Active push only — webhook ed25519 signature verify and passive `msg_id` threading are follow-ups. |
-| User profile synthesis | ❌ | Only loose facts; no `ProfileBuilder` / `UserProfile` / `GetProfile`. |
+| User profile synthesis | ✅ | `ProfileSynthesizer` distills facts into a stable profile injected each turn; `pinned` authoritative facts the synthesis must not override; visible/correctable via `/memory` (+ `/memory pin`). `internal/kernel/profile_synthesizer.go`. |
+| Scheduled tasks (cron) | ✅ | SQLite-backed scheduler with timezone; jobs run a real agent turn and deliver the result to their channel (e.g. daily summary → WeChat); `web` opt-in per job; built-in liveness canary; idempotent built-in jobs. `internal/kernel/task/cron`, `internal/gateway/httpapi/cron_executor.go`. |
+| Self-check & CI gate | ✅ | `selfmind selfcheck` (build + test + offline eval) and `.github/workflows/ci.yml`; strict offline VCR replay (`ErrCassetteMiss`) so the gate never burns provider quota. `internal/cliapp/selfcheck_commands.go`. |
+| CLI image input | ✅ | Image-path detection in input + clipboard screenshot paste (`/paste-image`, Ctrl+V auto-detect; WSL/macOS/Linux); routed to the `vision_analyze` tool via the attachment pipeline. Clipboard requires a local GUI (not over SSH). `internal/gateway/cli/attachments.go`, `clipboard.go`. |
+| Approval modes | ✅ | Codex-style `on-request` / `read-only` / `auto-edit` / `full-auto` via `/mode`, enforced in `SmartApprovalMiddleware`; on-demand y/N reuses the clarify bridge. `internal/tools/middleware.go`. |
 | Skill variant evolution / sandbox test | ❌ | Roadmap P3; not started. |
 
 ## Highest-Value Next Work (by priority)
@@ -72,13 +78,17 @@ the historical roadmaps.
    `controller.go` into components, per the AGENTS.md guardrail.
 3. **P1 — Real `execute_code` sandbox** (namespace/seccomp/cgroup or container)
    before any untrusted multi-tenant code execution.
-4. **P1 — Wire native IM approval buttons** (Telegram / Weixin); backend is ready.
+4. **P1 — Wire native IM approval buttons** (Telegram / Weixin); backend +
+   approval modes are ready.
 5. **P2 — IM adapter hardening.** Feishu and QQ are now connected (inbound
    webhook + outbound sender). Remaining polish: QQ webhook ed25519 signature
    verification + passive `msg_id` threading; Feishu encrypt-envelope AES
    decryption; inbound voice→STT and outbound TTS across platforms.
-6. **P2 — User profile synthesis** (`ProfileBuilder`) — the "learns about you" gap.
-7. **P2 — MCP `sampling/createMessage`** for servers that call back into the model.
+6. **P2 — MCP `sampling/createMessage`** for servers that call back into the model.
+
+Cron proactive delivery, user profile synthesis, CLI image input, approval
+modes, and the self-check/CI gate landed with the Phase-1 work — see
+`docs/phase1-modules.md`.
 
 ## How To Keep This Accurate
 

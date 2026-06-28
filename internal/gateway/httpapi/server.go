@@ -408,7 +408,7 @@ func (c *RunCoordinator) workspaceForTask(ctx context.Context, identity *control
 	return store.GetWorkspace(ctx, identity.TenantID, workspaceID)
 }
 
-func (c *RunCoordinator) installExecutionScope(identity *control.IdentityContext, task *control.Task, run *control.Run, workspace *control.Workspace) func() {
+func (c *RunCoordinator) installExecutionScope(identity *control.IdentityContext, task *control.Task, run *control.Run, workspace *control.Workspace, req api.MessageRequest) func() {
 	if identity == nil {
 		return func() {}
 	}
@@ -430,6 +430,7 @@ func (c *RunCoordinator) installExecutionScope(identity *control.IdentityContext
 	}
 	scope.Approval = c.toolApprovalHandler(identity, task, run, scope.Channel)
 	scope.Clarify = c.gatewayClarify(identity, task, run, scope.Channel)
+	scope.ApprovalMode = tools.NormalizeApprovalMode(req.ApprovalMode)
 	return tools.SetExecutionScope(identity.PersonID, scope)
 }
 

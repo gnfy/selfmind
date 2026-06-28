@@ -30,6 +30,8 @@ func (a *App) runEvalCommandIfRequested() (bool, int) {
 		return true, a.evalRepair(args[1:])
 	case "scorecard":
 		return true, a.evalScorecard(args[1:])
+	case "capture":
+		return true, a.evalCapture(args[1:])
 	default:
 		fmt.Fprintln(a.stderr, "usage: selfmind eval [list|run|report]")
 		return true, 2
@@ -44,6 +46,7 @@ func (a *App) printEvalHelp() {
 	fmt.Fprintln(a.stdout, "  selfmind eval run [case-or-dir] [--suite NAME] [--provider ID] [--model ID] [--live]")
 	fmt.Fprintln(a.stdout, "  selfmind eval report <jsonl-or-dir>")
 	fmt.Fprintln(a.stdout, "  selfmind eval repair [case-or-dir] [--worktree]")
+	fmt.Fprintln(a.stdout, "  selfmind eval capture [turn-id|latest] [--title \"...\"] [--suite NAME]")
 	fmt.Fprintln(a.stdout)
 	fmt.Fprintln(a.stdout, "Examples:")
 	fmt.Fprintln(a.stdout, "  selfmind eval run evalcases/daily-dev/chat_basic.yaml")
@@ -175,6 +178,44 @@ func (a *App) parseEvalRunArgs(args []string) (string, selfeval.RunOptions, erro
 		target = "evalcases"
 	}
 	return target, opts, nil
+}
+
+// evalCapture promotes a recorded flight turn into a replayable eval case.
+func (a *App) evalCapture(args []string) int {
+	turnID := "latest"
+	opts := selfeval.CaptureOptions{}
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--title":
+			i++
+			if i >= len(args) {
+				fmt.Fprintln(a.stderr, "--title requires a value")
+				return 2
+			}
+			opts.Title = args[i]
+		case "--suite":
+			i++
+			if i >= len(args) {
+				fmt.Fprintln(a.stderr, "--suite requires a value")
+				return 2
+			}
+			opts.Suite = args[i]
+		default:
+			if strings.HasPrefix(args[i], "-") {
+				fmt.Fprintf(a.stderr, "unknown flag: %s\n", args[i])
+				return 2
+			}
+			turnID = args[i]
+		}
+	}
+	res, err := selfeval.CaptureFromFlight(turnID, opts)
+	if err != nil {
+		fmt.Fprintln(a.stderr, err)
+		return 1
+	}
+	fmt.Fprintf(a.stdout, "Captured eval case: %s\n  case:     %s\n  cassette: %s (%d files)\n", res.CaseID, res.CasePath, res.VCRPath, res.Cassettes)
+	fmt.Fprintf(a.stdout, "Next: edit %s to add `assert_state` (what should have happened), then run `selfmind selfcheck`.\n", res.CasePath)
+	return 0
 }
 
 func (a *App) evalReport(args []string) int {

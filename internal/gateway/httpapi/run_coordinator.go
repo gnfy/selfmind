@@ -217,7 +217,7 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 	})
 
 	workspace, _ := c.workspaceForTask(ctx, identity, task, req)
-	cleanupScope := c.installExecutionScope(identity, task, run, workspace)
+	cleanupScope := c.installExecutionScope(identity, task, run, workspace, req)
 	defer cleanupScope()
 	if workspace != nil && workspace.LocalPath != "" {
 		ctx = kernel.WithWorkspaceContext(ctx, kernel.WorkspaceContext{

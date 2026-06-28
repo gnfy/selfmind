@@ -82,14 +82,21 @@ func HasCassetteSession(dir, session string) bool {
 	return err == nil
 }
 
-// MaybeWrapVCR wraps a provider when SELFMIND_EVAL_VCR is record|replay. It is a
-// no-op otherwise, so production paths are untouched.
+// MaybeWrapVCR wraps a provider when SELFMIND_EVAL_VCR is record|replay (eval
+// harness), or — failing that — when the flight recorder is on (records normal
+// runs into the flight dir for later `eval capture`). No-op otherwise, so
+// production paths are untouched.
 func MaybeWrapVCR(inner Provider) Provider {
 	mode := vcrMode()
-	if mode != "record" && mode != "replay" {
-		return inner
+	if mode == "record" || mode == "replay" {
+		return &vcrProvider{inner: inner, mode: mode, dir: vcrDir(), offline: vcrOffline()}
 	}
-	return &vcrProvider{inner: inner, mode: mode, dir: vcrDir(), offline: vcrOffline()}
+	if FlightEnabled() {
+		// Flight recording is VCR record mode writing to the flight dir, keyed by
+		// the per-turn session the kernel sets.
+		return &vcrProvider{inner: inner, mode: "record", dir: FlightDir()}
+	}
+	return inner
 }
 
 type vcrProvider struct {

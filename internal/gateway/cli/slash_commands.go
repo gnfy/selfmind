@@ -34,6 +34,9 @@ var slashCommandMetas = []slashCommandMeta{
 	{Name: "/clear", Usage: "/clear", Description: "Clear conversation history", Hint: "clear this conversation view"},
 	{Name: "/exit", Usage: "/exit", Description: "Exit SelfMind", Hint: "leave SelfMind"},
 	{Name: "/compact", Usage: "/compact", Description: "Compact older conversation history to free context", Hint: "summarize and shrink the transcript"},
+	{Name: "/paste-image", Usage: "/paste-image", Description: "Attach a screenshot from the clipboard (local GUI only, not over SSH)", Hint: "attach a clipboard screenshot"},
+	{Name: "/mode", Usage: "/mode [on-request|read-only|auto-edit|full-auto]", Description: "Show or set the approval mode", Hint: "choose what runs without asking"},
+	{Name: "/capture", Usage: "/capture [title]", Description: "Save the last turn as a replayable eval case", Hint: "turn this turn into a regression test"},
 }
 
 var slashCommands = []slashCommand{
@@ -132,6 +135,24 @@ var slashCommands = []slashCommand{
 		slashCommandMeta: slashCommandMetas[13],
 		Run: func(m *uiModel, args []string) tea.Cmd {
 			return m.handleCompact()
+		},
+	},
+	{
+		slashCommandMeta: slashCommandMetas[14],
+		Run: func(m *uiModel, args []string) tea.Cmd {
+			return m.handlePasteImage()
+		},
+	},
+	{
+		slashCommandMeta: slashCommandMetas[15],
+		Run: func(m *uiModel, args []string) tea.Cmd {
+			return m.handleMode(args)
+		},
+	},
+	{
+		slashCommandMeta: slashCommandMetas[16],
+		Run: func(m *uiModel, args []string) tea.Cmd {
+			return m.handleCapture(args)
 		},
 	},
 }

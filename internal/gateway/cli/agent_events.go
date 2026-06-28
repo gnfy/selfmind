@@ -50,6 +50,7 @@ func (m *uiModel) runAgent(ctx context.Context, input string) tea.Cmd {
 				Content:        input,
 				ClientCWD:      cwd,
 				Attachments:    imageAttachmentsFromInput(input, cwd),
+				ApprovalMode:   m.approvalMode,
 			})
 			if resp.Usage.InputTokens != 0 || resp.Usage.OutputTokens != 0 {
 				usage = resp.Usage

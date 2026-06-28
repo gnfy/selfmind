@@ -109,13 +109,80 @@ func EnvVarMiddleware(requiredVars ...string) Middleware {
 	}
 }
 
+// ApprovalMode is the codex-style per-turn approval policy. It controls WHICH
+// tool calls need human approval, layered on top of the dangerous-op heuristic.
+type ApprovalMode string
+
+const (
+	// ApprovalOnRequest (default) asks only when an op trips the dangerous-op
+	// heuristic (destructive command, restricted/out-of-workspace path).
+	ApprovalOnRequest ApprovalMode = "on-request"
+	// ApprovalReadOnly asks before ANY file write/edit or command execution.
+	ApprovalReadOnly ApprovalMode = "read-only"
+	// ApprovalAutoEdit auto-approves in-workspace file edits but asks before
+	// running commands (and before edits the heuristic flags as dangerous).
+	ApprovalAutoEdit ApprovalMode = "auto-edit"
+	// ApprovalFullAuto auto-approves everything (workspace scope still applies).
+	ApprovalFullAuto ApprovalMode = "full-auto"
+)
+
+// NormalizeApprovalMode maps free-form input to a known mode, defaulting to
+// on-request.
+func NormalizeApprovalMode(s string) ApprovalMode {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "read-only", "readonly", "read":
+		return ApprovalReadOnly
+	case "auto-edit", "autoedit", "auto", "edit":
+		return ApprovalAutoEdit
+	case "full-auto", "fullauto", "full", "yolo":
+		return ApprovalFullAuto
+	default:
+		return ApprovalOnRequest
+	}
+}
+
+var writeTools = map[string]struct{}{
+	"write_file": {}, "patch": {}, "edit": {}, "apply_patch": {}, "edit_file": {},
+}
+var execTools = map[string]struct{}{
+	"terminal": {}, "execute_command": {}, "shell": {}, "execute_code": {},
+}
+
+func isWriteTool(name string) bool { _, ok := writeTools[name]; return ok }
+func isExecTool(name string) bool  { _, ok := execTools[name]; return ok }
+
+// approvalNeeded decides whether a tool call requires human approval under the
+// given mode. dangerous is the dangerous-op heuristic result.
+func approvalNeeded(mode ApprovalMode, toolName string, dangerous bool) bool {
+	switch mode {
+	case ApprovalFullAuto:
+		return false
+	case ApprovalReadOnly:
+		return isWriteTool(toolName) || isExecTool(toolName) || dangerous
+	case ApprovalAutoEdit:
+		// Edits flow freely (unless the heuristic flags them, e.g. out of
+		// workspace); command execution always asks.
+		return isExecTool(toolName) || dangerous
+	default: // on-request
+		return dangerous
+	}
+}
+
 func SmartApprovalMiddleware(projectRoot string) Middleware {
 	return func(next ToolExecutor) ToolExecutor {
 		return func(args map[string]interface{}) (string, error) {
 			toolName, _ := args["_tool_name"].(string)
 			dangerous, reason := dangerousToolCall(projectRoot, toolName, args)
-			if !dangerous {
+
+			mode := ApprovalOnRequest
+			if scope, ok := currentExecutionScopeAny(args); ok && scope.ApprovalMode != "" {
+				mode = scope.ApprovalMode
+			}
+			if !approvalNeeded(mode, toolName, dangerous) {
 				return next(args)
+			}
+			if !dangerous && reason == "" {
+				reason = fmt.Sprintf("%s requires approval in %s mode", toolName, mode)
 			}
 
 			if scope, ok := currentExecutionScopeAny(args); ok && scope.Approval != nil {

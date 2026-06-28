@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"strings"
 
 	appcore "selfmind/internal/app"
@@ -242,6 +243,16 @@ func (a *App) applyGatewayConfigEnv() {
 	setEnvIfEmpty("SELF_GATEWAY_URL", cfg.Gateway.URL)
 	setEnvIfEmpty("SELF_GATEWAY_TOKEN", cfg.Gateway.Token)
 	setEnvIfEmpty("SELF_GATEWAY_DRAIN_TIMEOUT", cfg.Gateway.DrainTimeout)
+
+	// Flight recorder is configured in YAML (flight_recorder.*); push it into the
+	// env the low-level recorder reads. An explicit env var still wins (override).
+	if cfg.FlightRecorder.Enabled {
+		setEnvIfEmpty("SELFMIND_FLIGHT_RECORDER", "1")
+	}
+	setEnvIfEmpty("SELFMIND_FLIGHT_DIR", cfg.FlightRecorder.Dir)
+	if cfg.FlightRecorder.Keep > 0 {
+		setEnvIfEmpty("SELFMIND_FLIGHT_KEEP", strconv.Itoa(cfg.FlightRecorder.Keep))
+	}
 }
 
 func setEnvIfEmpty(key, value string) {

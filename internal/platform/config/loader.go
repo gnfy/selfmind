@@ -112,6 +112,10 @@ intent:
 cron:
   enabled: true
 
+flight_recorder:
+  enabled: false
+  keep: 20
+
 editor:
   large_paste_chars: 1000
   large_paste_lines: 10
@@ -135,6 +139,7 @@ type Config struct {
 	MCP              MCPConfig                   `mapstructure:"mcp" yaml:"mcp,omitempty"`
 	Delegation       DelegationConfig            `mapstructure:"delegation" yaml:"delegation,omitempty"`
 	Cron             CronConfig                  `mapstructure:"cron" yaml:"cron,omitempty"`
+	FlightRecorder   FlightRecorderConfig        `mapstructure:"flight_recorder" yaml:"flight_recorder,omitempty"`
 	Editor           EditorConfig                `mapstructure:"editor" yaml:"editor,omitempty"`
 	Memory           MemoryConfig                `mapstructure:"memory" yaml:"memory,omitempty"`
 	Models           ModelsConfig                `mapstructure:"models" yaml:"models,omitempty"`
@@ -368,6 +373,15 @@ type CronConfig struct {
 	// broken deploy — e.g. an expired provider token — pings you instead of
 	// silently wasting your time.
 	Canary CanaryConfig `mapstructure:"canary" yaml:"canary,omitempty"`
+}
+
+// FlightRecorderConfig controls recording of real turns for `eval capture`
+// (turn everyday friction into replayable regression tests). Env vars
+// (SELFMIND_FLIGHT_RECORDER / _DIR / _KEEP) override these when set.
+type FlightRecorderConfig struct {
+	Enabled bool   `mapstructure:"enabled" yaml:"enabled,omitempty"`
+	Dir     string `mapstructure:"dir" yaml:"dir,omitempty"`   // default ~/.selfmind/flight
+	Keep    int    `mapstructure:"keep" yaml:"keep,omitempty"` // default 20 most-recent turns
 }
 
 type CanaryConfig struct {

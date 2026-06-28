@@ -33,13 +33,19 @@ The fastest way to grow the suite is to record your real usage and promote the
 turns that misbehaved — turning everyday friction into permanent regression
 tests, for free.
 
-1. **Turn on the flight recorder** for your dogfooding session (records each
-   real turn's model interaction into a bounded, auto-pruned dir; no extra model
-   cost — it saves what already streamed):
+1. **Turn on the flight recorder** (records each real turn's model interaction
+   into a bounded, auto-pruned dir; no extra model cost — it saves what already
+   streamed). Configure it in `config.yaml`:
 
-   ```bash
-   export SELFMIND_FLIGHT_RECORDER=1   # optional: SELFMIND_FLIGHT_DIR, SELFMIND_FLIGHT_KEEP
+   ```yaml
+   flight_recorder:
+     enabled: true
+     # dir: ~/.selfmind/flight   # optional
+     # keep: 20                  # optional, most-recent turns kept
    ```
+
+   Env vars override the YAML when set (`SELFMIND_FLIGHT_RECORDER=1`,
+   `SELFMIND_FLIGHT_DIR`, `SELFMIND_FLIGHT_KEEP`).
 
 2. **Use SelfMind normally.** When a turn misbehaves (wrong continuation, ugly
    output, didn't use a tool, created the wrong file), capture it:

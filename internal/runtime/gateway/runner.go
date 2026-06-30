@@ -108,6 +108,14 @@ func Run(ctx context.Context, opts Options) error {
 	if err != nil {
 		return fmt.Errorf("app.InitGateway failed: %w", err)
 	}
+	// Optional multi-worker execution (SELFMIND_WORKERS>1) for the daemon, where
+	// concurrent CLI/IM/cron requests can actually exercise it. Default 1 = the
+	// single-agent serialized path, unchanged.
+	if workers, werr := app.MaybeEnableWorkerPool(gwDeps.Gateway, mem, cfg, skillStore, defaultTenantID); werr != nil {
+		log.Warn("worker pool partially enabled", "workers", workers, "error", werr)
+	} else if workers > 1 {
+		log.Info("agent worker pool enabled", "workers", workers)
+	}
 	defer app.StopCron(gwDeps.CronScheduler)
 	app.RegisterCronTool(disp, gwDeps.CronScheduler)
 	app.InitMCP(disp, cfg)

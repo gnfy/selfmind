@@ -50,6 +50,10 @@ type ChatMessage struct {
 	IsError       bool    // Fix: add IsError flag
 	IsRunning     bool
 	RunningDetail string
+	// Committed is set in terminal-first hybrid mode once this message has been
+	// printed into native scrollback. Committed messages are immutable and are
+	// not re-rendered in the active region. Unused in legacy (viewport) mode.
+	Committed bool
 }
 
 // uiModel is the main TUI model. It holds all conversation state.
@@ -110,6 +114,15 @@ type uiModel struct {
 	mouseSelection     bool
 	mouseSelectAnchor  int
 	mouseSelectFocus   int
+	transcriptCache    *renderCache // memoizes finalized message renders across frames
+	clientMode         bool         // daemon-client mode: no in-process agent/gateway; chat routes to the daemon
+	toolDispatchFn     func(tool string, args map[string]interface{}) (string, error) // client mode: run management tools on the daemon
+	approvalResponder  func(approvalID, decision string) error // client mode: answer a daemon tool-approval request
+	awaitingApproval   bool                                    // an inline approval prompt is active
+	pendingApprovalID  string
+	hybrid             bool         // terminal-first hybrid mode (SELFMIND_TUI_HYBRID)
+	pendingPrintln     []string     // hybrid: cells to emit to scrollback at end of Update
+	startupCommitted   bool         // hybrid: startup card already printed to scrollback
 }
 
 type MsgClearStatus struct{}
@@ -119,6 +132,15 @@ type MsgMouseAutoScrollTick time.Time
 type MsgStreamFlush time.Time
 type MsgAgentActivity struct {
 	Content string
+}
+
+// MsgApprovalRequest is emitted (client mode) when the daemon blocks a run
+// waiting for tool approval. The TUI renders an inline y/n prompt and answers
+// via the approval responder.
+type MsgApprovalRequest struct {
+	ID     string
+	Tool   string
+	Reason string
 }
 
 func workingTick() tea.Cmd {
@@ -178,7 +200,7 @@ func NewController(a *kernel.Agent, provider llm.Provider, cfg *config.Config, t
 			provider:      provider,
 			agent:         a,
 			tenantID:      tenantID,
-			channel:       "cli",
+			channel:       cliSessionChannel(),
 			spinner:       sp,
 			inputHistory:  []string{},
 			historyIndex:  -1,
@@ -229,7 +251,7 @@ func NewControllerWithGateway(gw *router.Gateway, agent *kernel.Agent, provider 
 			agent:         agent,
 			gateway:       gw,
 			tenantID:      tenantID,
-			channel:       "cli",
+			channel:       cliSessionChannel(),
 			spinner:       sp,
 			inputHistory:  []string{},
 			historyIndex:  -1,
@@ -253,6 +275,39 @@ func (c *Controller) SetMessageProcessor(processor MessageProcessor) {
 		return
 	}
 	c.model.messageProcessor = processor
+}
+
+// SetClientMode marks the controller as a thin client to a gateway daemon. In
+// this mode there is no in-process agent/gateway, so chat routes through the
+// message processor and agent-backed slash commands route through the tool
+// dispatch function (or degrade to a clear notice) instead of dereferencing a
+// nil agent. See docs/worker-pool-design.md.
+func (c *Controller) SetClientMode(enabled bool) {
+	if c == nil || c.model == nil {
+		return
+	}
+	c.model.clientMode = enabled
+}
+
+// SetApprovalResponder installs the function used to answer a daemon
+// tool-approval request from the client TUI's inline prompt. Only set in client
+// mode; in-process approvals use the clarify bridge instead.
+func (c *Controller) SetApprovalResponder(fn func(approvalID, decision string) error) {
+	if c == nil || c.model == nil {
+		return
+	}
+	c.model.approvalResponder = fn
+}
+
+// SetToolDispatch installs the daemon-backed dispatcher used by agent-backed
+// slash commands (/skills, /memory subcommands, /bundles, /curator,
+// /checkpoint) in client mode. When set, uiModel.dispatch routes through it
+// instead of the in-process agent backend.
+func (c *Controller) SetToolDispatch(fn func(tool string, args map[string]interface{}) (string, error)) {
+	if c == nil || c.model == nil {
+		return
+	}
+	c.model.toolDispatchFn = fn
 }
 
 func (c *Controller) SetCheckpointFns(memFn func() (*memory.MemoryManager, string, string), msgFn func() ([]byte, error)) {
@@ -291,10 +346,16 @@ func (c *Controller) checkMigration() {
 
 func (c *Controller) Start() {
 	c.checkMigration()
-	p := tea.NewProgram(c.model,
-		tea.WithAltScreen(),
-		tea.WithMouseCellMotion(),
-	)
+	c.model.hybrid = hybridMode()
+	// Terminal-first hybrid is the default: run inline (no alt-screen, so
+	// finalized cells can be committed to native scrollback) and without mouse
+	// capture (so the terminal owns selection/scroll). SELFMIND_TUI_LEGACY=1
+	// falls back to the alt-screen viewport with app-owned mouse handling.
+	var opts []tea.ProgramOption
+	if !c.model.hybrid {
+		opts = append(opts, tea.WithAltScreen(), tea.WithMouseCellMotion())
+	}
+	p := tea.NewProgram(c.model, opts...)
 	c.model.program = p
 
 	// Wrap p.Run() in a recovered goroutine so panics print to stderr and restore alt screen
@@ -328,6 +389,21 @@ func (c *Controller) Start() {
 	}
 }
 
+// cliSessionChannelID is unique per CLI process so two terminals run by the
+// same user don't share a channel-local conversation (chats are channel-local
+// per AGENTS.md; a shared "cli" channel made concurrent sessions bleed context).
+var cliSessionChannelID = fmt.Sprintf("cli-%d-%d", os.Getpid(), time.Now().UnixNano()%100000)
+
+// cliSessionChannel returns this process's chat channel. SELFMIND_CHANNEL
+// overrides it with a stable, explicitly-shared channel when the user wants
+// resumable/shared sessions across terminals.
+func cliSessionChannel() string {
+	if v := strings.TrimSpace(os.Getenv("SELFMIND_CHANNEL")); v != "" {
+		return v
+	}
+	return cliSessionChannelID
+}
+
 func (m *uiModel) Init() tea.Cmd {
 	return tea.Batch(m.spinner.Tick, cursorBlinkTick())
 }
@@ -345,6 +421,13 @@ func (m *uiModel) addMessage(role, content string) {
 		Content:   content,
 		Timestamp: time.Now(),
 	})
+	// In hybrid mode a non-tool message is final on arrival, so commit it to
+	// scrollback now. Tool messages start as "running" and are committed later
+	// by MsgToolDone.
+	if role != "tool" {
+		m.commit(&m.messages[len(m.messages)-1])
+	}
+	m.trimHistoryWindow()
 	m.viewport.GotoBottom()
 }
 
@@ -356,6 +439,7 @@ func (m *uiModel) addErrorMessage(content string) {
 		Timestamp: time.Now(),
 		IsError:   true,
 	})
+	m.commit(&m.messages[len(m.messages)-1])
 	m.viewport.GotoBottom()
 }
 
@@ -435,7 +519,9 @@ func (m *uiModel) appendAssistantResponse(content string) {
 	}
 	if len(m.messages) > 0 {
 		last := &m.messages[len(m.messages)-1]
-		if last.Role == "assistant" && !last.IsError {
+		// Never merge into a committed cell — in hybrid mode it already lives in
+		// immutable scrollback and cannot be rewritten.
+		if last.Role == "assistant" && !last.IsError && !last.Committed {
 			existing := strings.TrimSpace(last.Content)
 			switch {
 			case existing == "":
@@ -555,6 +641,9 @@ func (m *uiModel) mouseInTranscript(msg tea.MouseMsg) bool {
 }
 
 func (m *uiModel) viewModel() string {
+	if m.hybrid {
+		return m.viewActiveRegion()
+	}
 	if m.pager != nil {
 		return m.pager.View()
 	}
@@ -601,6 +690,9 @@ func (m *uiModel) viewModel() string {
 	}
 	if gapH := m.composerGapHeight(); gapH > 0 {
 		parts = append(parts, lipgloss.NewStyle().Width(m.width).Height(gapH).Render(""))
+	}
+	if hint := m.composerHint(); hint != "" {
+		parts = append(parts, hint)
 	}
 	parts = append(parts, inputArea, statusBar)
 	return lipgloss.JoinVertical(lipgloss.Left, parts...)
@@ -663,6 +755,57 @@ func (m *uiModel) openHelp() {
 		width = 80
 	}
 	m.pager = components.NewPager(m.common, width, m.height, m.renderHelpContent)
+}
+
+// openHistory opens a scrollable, full-fidelity view of the conversation. In
+// hybrid mode, committed cells live in immutable scrollback with bounded diffs;
+// this overlay is the "expand the full diff / review past turns" escape hatch
+// the immutable model otherwise gives up.
+func (m *uiModel) openHistory() {
+	width := m.width
+	if width <= 0 {
+		width = 80
+	}
+	m.pager = components.NewPager(m.common, width, m.height, m.renderHistoryContent)
+}
+
+func (m *uiModel) renderHistoryContent(width int) string {
+	if width < 20 {
+		width = 20
+	}
+	if len(m.messages) == 0 {
+		return "No conversation history yet."
+	}
+	var sb strings.Builder
+	for i := range m.messages {
+		msg := m.messages[i]
+		var rendered string
+		// Patches render with an effectively unbounded diff here (the inline
+		// view bounds them; this overlay is where you see the whole change).
+		if msg.ToolName == "patch" && !msg.IsError {
+			if patch := patchArgOf(msg.ToolArgs); strings.TrimSpace(patch) != "" {
+				rendered = renderPatchCell(patch, msg.Duration, width, 1<<30)
+			}
+		}
+		if rendered == "" {
+			rendered = renderCell(msg, width)
+		}
+		if rendered = strings.TrimRight(rendered, "\n"); rendered == "" {
+			continue
+		}
+		sb.WriteString(rendered + "\n\n")
+	}
+	return strings.TrimRight(sb.String(), "\n")
+}
+
+func patchArgOf(toolArgs string) string {
+	var a map[string]interface{}
+	if json.Unmarshal([]byte(toolArgs), &a) == nil {
+		if p, ok := a["patch"].(string); ok {
+			return p
+		}
+	}
+	return ""
 }
 
 func (m *uiModel) renderHelpContent(width int) string {
@@ -794,7 +937,15 @@ func currentWorkingDir() string {
 	return cwd
 }
 
+// Update wraps updateInner so any cells committed during the handler are
+// flushed to scrollback as tea.Println Cmds *after* the handler returns. This
+// keeps Program.Println off the Update goroutine (which would deadlock).
 func (m *uiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	model, cmd := m.updateInner(msg)
+	return model, m.flushPendingPrintln(cmd)
+}
+
+func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if events := m.clarifyBridge.Events(); events != nil {
 		select {
 		case req := <-events:
@@ -837,6 +988,15 @@ func (m *uiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.viewport.Height = msg.Height - 5
 		if m.pager != nil {
 			m.pager.Resize(msg.Width, msg.Height)
+		}
+		// Hybrid: commit the startup card to scrollback once, now that the width
+		// is known, so it persists at the top of history (like Codex) instead of
+		// vanishing when the first message scrolls the active region.
+		if m.hybrid && !m.startupCommitted && msg.Width > 0 {
+			m.startupCommitted = true
+			if card := strings.TrimRight(strings.Join(m.renderStartupCard(msg.Width), "\n"), "\n"); card != "" {
+				m.pendingPrintln = append(m.pendingPrintln, card)
+			}
 		}
 		return m, nil
 
@@ -926,6 +1086,10 @@ func (m *uiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.activityText = ""
 		m.toolExecuting = ""
 		m.steerCh = nil // run finished; stop accepting mid-turn guidance for it
+		// The mid-turn guidance notice is stale once the run ends — clear it.
+		if strings.HasPrefix(m.statusMsg, "Sent to the running task") || strings.Contains(m.statusMsg, "Guidance queue") {
+			m.statusMsg = ""
+		}
 		turnTokens := msg.Usage.InputTokens + msg.Usage.OutputTokens
 		if turnTokens > 0 {
 			m.runTokens = turnTokens
@@ -943,6 +1107,21 @@ func (m *uiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.restoreOrFollowTranscript(wasAtBottom, yOffset)
 		return m, spinnerCmd
+
+	case MsgApprovalRequest:
+		// The daemon is blocked waiting for approval; prompt inline. The next
+		// Enter is interpreted as the y/n answer (handled in the key path).
+		m.awaitingApproval = true
+		m.pendingApprovalID = msg.ID
+		reason := strings.TrimSpace(msg.Reason)
+		prompt := fmt.Sprintf("⚠ Approval required to run `%s`.", msg.Tool)
+		if reason != "" {
+			prompt += " " + reason
+		}
+		prompt += "\nApprove? [y/N]"
+		m.addMessage("assistant", prompt)
+		m.statusMsg = "Approval required — type y to allow, n to deny."
+		return m, nil
 
 	case MsgToolStart:
 		wasAtBottom := m.transcriptAtBottom()
@@ -989,6 +1168,8 @@ func (m *uiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				last.IsError = false
 			}
+			// The tool cell is now final — commit it to scrollback (hybrid mode).
+			m.commit(last)
 		}
 		if !m.anyToolRunning() {
 			m.toolExecuting = ""
@@ -1148,7 +1329,7 @@ func (m *uiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.messages = []ChatMessage{}
 			m.clearLiveStream()
 			m.viewport.SetContent("")
-			return m, nil
+			return m, m.clearHybridScreen()
 		case "enter":
 			// Shift+Enter / Ctrl+J already handled above via KeyCtrlJ.
 			// Here plain Enter submits
@@ -1159,6 +1340,34 @@ func (m *uiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			m.recordInputHistory(displayInput)
+
+			if m.awaitingApproval {
+				decision, approved := parseApprovalAnswer(input)
+				m.editor.Reset()
+				if decision == "" {
+					// Unclear answer — keep waiting and re-hint.
+					m.statusMsg = "Please answer y (allow) or n (deny)."
+					return m, nil
+				}
+				m.addMessage("user", input)
+				id := m.pendingApprovalID
+				m.awaitingApproval = false
+				m.pendingApprovalID = ""
+				if m.approvalResponder != nil {
+					if err := m.approvalResponder(id, decision); err != nil {
+						m.addErrorMessage(fmt.Sprintf("Could not send approval: %v", err))
+					}
+				}
+				if approved {
+					m.statusMsg = "Approved — resuming."
+				} else {
+					m.statusMsg = "Denied."
+				}
+				m.thinking = true
+				m.runStatus = "working"
+				m.thinkingStart = time.Now()
+				return m, tea.Batch(m.spinner.Tick, workingTick())
+			}
 
 			if m.clarifyMode {
 				response := m.resolveClarifyResponse(input)
@@ -1194,7 +1403,8 @@ func (m *uiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 						m.statusMsg = "Guidance queue is full; try again in a moment."
 					}
 				}
-				return m, nil
+				// Transient notice — auto-clear so it doesn't linger after the turn.
+				return m, tea.Tick(3*time.Second, func(t time.Time) tea.Msg { return MsgClearStatus{} })
 			}
 			m.addMessage("user", input)
 			m.editor.Reset()
@@ -1220,6 +1430,20 @@ func (m *uiModel) syncTranscriptContent() {
 		return
 	}
 	m.viewport.SetContent(m.renderAllMessages())
+}
+
+// parseApprovalAnswer maps a free-text reply to an approval decision. It returns
+// ("approved"|"rejected", approved) or ("", false) when the answer is unclear so
+// the prompt can be repeated. Empty/bare-Enter defaults to deny (safe default).
+func parseApprovalAnswer(input string) (string, bool) {
+	switch strings.ToLower(strings.TrimSpace(input)) {
+	case "y", "yes", "approve", "approved", "allow", "ok":
+		return "approved", true
+	case "n", "no", "reject", "rejected", "deny", "", "d":
+		return "rejected", false
+	default:
+		return "", false
+	}
 }
 
 func (m *uiModel) scrollTranscriptPage(direction int) {

@@ -11,8 +11,59 @@ import (
 	selfeval "selfmind/internal/eval"
 	"selfmind/internal/gateway/api"
 	"selfmind/internal/kernel"
+	"selfmind/internal/kernel/memory"
 	"selfmind/internal/tools"
 )
+
+// factProvenance renders a compact, dim "why is this remembered" suffix
+// (source / scope / confidence / age) for /memory list (W3e). Legacy facts with
+// no metadata get no suffix, so the view stays clean.
+func factProvenance(f memory.Fact) string {
+	var parts []string
+	if f.Source != "" {
+		parts = append(parts, "src="+f.Source)
+	}
+	if f.Scope != "" && f.Scope != "global" {
+		parts = append(parts, "scope="+f.Scope)
+	}
+	if f.Confidence > 0 {
+		parts = append(parts, fmt.Sprintf("conf=%.2f", f.Confidence))
+	}
+	if !f.CreatedAt.IsZero() {
+		parts = append(parts, humanizeAge(time.Since(f.CreatedAt)))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return "  · " + strings.Join(parts, " ")
+}
+
+func humanizeAge(d time.Duration) string {
+	switch {
+	case d < time.Minute:
+		return "just now"
+	case d < time.Hour:
+		return fmt.Sprintf("%dm ago", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%dh ago", int(d.Hours()))
+	default:
+		return fmt.Sprintf("%dd ago", int(d.Hours()/24))
+	}
+}
+
+// dispatch runs a management tool either on the daemon (client mode, via the
+// installed tool-dispatch function) or on the in-process agent backend. It is
+// the single seam that lets agent-backed slash commands work whether the TUI
+// owns an agent or is a thin client to a gateway daemon.
+func (m *uiModel) dispatch(tool string, args map[string]interface{}) (string, error) {
+	if m.toolDispatchFn != nil {
+		return m.toolDispatchFn(tool, args)
+	}
+	if m.agent != nil && m.agent.Dispatcher() != nil {
+		return m.agent.Dispatcher().Dispatch(tool, args)
+	}
+	return "", fmt.Errorf("no agent or daemon available to run %s", tool)
+}
 
 func (m *uiModel) handleCommand(input string) tea.Cmd {
 	parts := strings.Fields(input)
@@ -21,6 +72,11 @@ func (m *uiModel) handleCommand(input string) tea.Cmd {
 		return nil
 	}
 	if cmd, ok := slashCommandIndex[parts[0]]; ok {
+		// In daemon-client mode agent-backed commands route through the tool
+		// dispatch seam (m.dispatch → daemon) or through the message processor
+		// (/status, /tasks). The few that need the in-process store (/memory
+		// list, /skills stats, /model switch) detect client mode themselves and
+		// return a clear notice. So no top-level gate is needed for safety.
 		return cmd.Run(m, parts[1:])
 	}
 	if strings.HasPrefix(parts[0], "/") {
@@ -208,7 +264,7 @@ func (m *uiModel) handleSkills(args []string) tea.Cmd {
 			if len(args) < 2 {
 				return MsgAgentDone{Response: "Usage: /skills history <name>"}
 			}
-			resp, err := m.agent.Dispatcher().Dispatch("skill_manage", map[string]interface{}{"action": "history", "name": args[1], "_tenant_id": m.tenantID})
+			resp, err := m.dispatch("skill_manage", map[string]interface{}{"action": "history", "name": args[1], "_tenant_id": m.tenantID})
 			if err != nil {
 				return MsgAgentDone{Response: fmt.Sprintf("Error loading skill history: %v", err)}
 			}
@@ -217,13 +273,13 @@ func (m *uiModel) handleSkills(args []string) tea.Cmd {
 			if len(args) < 2 {
 				return MsgAgentDone{Response: "Usage: /skills undo <change_id>"}
 			}
-			resp, err := m.agent.Dispatcher().Dispatch("skill_manage", map[string]interface{}{"action": "undo", "change_id": args[1], "_tenant_id": m.tenantID})
+			resp, err := m.dispatch("skill_manage", map[string]interface{}{"action": "undo", "change_id": args[1], "_tenant_id": m.tenantID})
 			if err != nil {
 				return MsgAgentDone{Response: fmt.Sprintf("Error undoing skill change: %v", err)}
 			}
 			return MsgAgentDone{Response: resp}
 		case "catalog":
-			resp, err := m.agent.Dispatcher().Dispatch("skill_catalog", map[string]interface{}{"action": "list", "_tenant_id": m.tenantID})
+			resp, err := m.dispatch("skill_catalog", map[string]interface{}{"action": "list", "_tenant_id": m.tenantID})
 			if err != nil {
 				return MsgAgentDone{Response: fmt.Sprintf("Error loading catalog: %v", err)}
 			}
@@ -245,7 +301,7 @@ func (m *uiModel) handleSkills(args []string) tea.Cmd {
 					}
 				}
 			}
-			resp, err := m.agent.Dispatcher().Dispatch("skill_catalog", map[string]interface{}{
+			resp, err := m.dispatch("skill_catalog", map[string]interface{}{
 				"action":     "install",
 				"source":     args[1],
 				"name":       installName,
@@ -261,7 +317,7 @@ func (m *uiModel) handleSkills(args []string) tea.Cmd {
 			if len(args) >= 2 {
 				auditName = args[1]
 			}
-			resp, err := m.agent.Dispatcher().Dispatch("skill_catalog", map[string]interface{}{"action": "audit", "name": auditName, "_tenant_id": m.tenantID})
+			resp, err := m.dispatch("skill_catalog", map[string]interface{}{"action": "audit", "name": auditName, "_tenant_id": m.tenantID})
 			if err != nil {
 				return MsgAgentDone{Response: fmt.Sprintf("Skill audit error: %v", err)}
 			}
@@ -270,7 +326,7 @@ func (m *uiModel) handleSkills(args []string) tea.Cmd {
 			if len(args) < 2 {
 				return MsgAgentDone{Response: "Usage: /skills delete <name>"}
 			}
-			resp, err := m.agent.Dispatcher().Dispatch("skill_manage", map[string]interface{}{"action": "delete", "name": args[1], "_tenant_id": m.tenantID})
+			resp, err := m.dispatch("skill_manage", map[string]interface{}{"action": "delete", "name": args[1], "_tenant_id": m.tenantID})
 			if err != nil {
 				return MsgAgentDone{Response: fmt.Sprintf("Error deleting skill: %v", err)}
 			}
@@ -288,13 +344,16 @@ func (m *uiModel) handleSkills(args []string) tea.Cmd {
 			if len(args) < 2 {
 				return MsgAgentDone{Response: "Usage: /skills " + action + " <name>"}
 			}
-			resp, err := m.agent.Dispatcher().Dispatch("skill_manage", map[string]interface{}{"action": action, "name": args[1], "_tenant_id": m.tenantID})
+			resp, err := m.dispatch("skill_manage", map[string]interface{}{"action": action, "name": args[1], "_tenant_id": m.tenantID})
 			if err != nil {
 				return MsgAgentDone{Response: fmt.Sprintf("Error updating pin: %v", err)}
 			}
 			return MsgAgentDone{Response: resp}
 		case "stats":
 			if m.agent == nil || m.agent.Memory() == nil {
+				if m.clientMode {
+					return MsgAgentDone{Response: "`/skills stats` needs the in-process store. Run `selfmind` without SELFMIND_TUI_CLIENT, or use `/skills list`."}
+				}
 				return MsgAgentDone{Response: "Memory not initialized."}
 			}
 			store := kernel.NewSkillStore(m.agent.Memory())
@@ -304,7 +363,7 @@ func (m *uiModel) handleSkills(args []string) tea.Cmd {
 			}
 			return MsgAgentDone{Response: stats}
 		case "reload":
-			resp, err := m.agent.Dispatcher().Dispatch("skill_manage", map[string]interface{}{"action": "reload", "_tenant_id": m.tenantID})
+			resp, err := m.dispatch("skill_manage", map[string]interface{}{"action": "reload", "_tenant_id": m.tenantID})
 			if err != nil {
 				return MsgAgentDone{Response: fmt.Sprintf("Error reloading skills: %v", err)}
 			}
@@ -317,7 +376,7 @@ func (m *uiModel) handleSkills(args []string) tea.Cmd {
 
 func (m *uiModel) handleReloadSkills() tea.Cmd {
 	return func() tea.Msg {
-		resp, err := m.agent.Dispatcher().Dispatch("skill_manage", map[string]interface{}{"action": "reload", "_tenant_id": m.tenantID})
+		resp, err := m.dispatch("skill_manage", map[string]interface{}{"action": "reload", "_tenant_id": m.tenantID})
 		if err != nil {
 			return MsgAgentDone{Response: fmt.Sprintf("Error reloading skills: %v", err)}
 		}
@@ -333,7 +392,7 @@ func (m *uiModel) handleBundles(args []string) tea.Cmd {
 		}
 		switch action {
 		case "list":
-			resp, err := m.agent.Dispatcher().Dispatch("skill_bundle", map[string]interface{}{"action": "list", "_tenant_id": m.tenantID})
+			resp, err := m.dispatch("skill_bundle", map[string]interface{}{"action": "list", "_tenant_id": m.tenantID})
 			if err != nil {
 				return MsgAgentDone{Response: fmt.Sprintf("Bundle list error: %v", err)}
 			}
@@ -342,7 +401,7 @@ func (m *uiModel) handleBundles(args []string) tea.Cmd {
 			if len(args) < 2 {
 				return MsgAgentDone{Response: "Usage: /bundles view <name>"}
 			}
-			resp, err := m.agent.Dispatcher().Dispatch("skill_bundle", map[string]interface{}{"action": "read", "name": args[1], "_tenant_id": m.tenantID})
+			resp, err := m.dispatch("skill_bundle", map[string]interface{}{"action": "read", "name": args[1], "_tenant_id": m.tenantID})
 			if err != nil {
 				return MsgAgentDone{Response: fmt.Sprintf("Bundle read error: %v", err)}
 			}
@@ -351,7 +410,7 @@ func (m *uiModel) handleBundles(args []string) tea.Cmd {
 			if len(args) < 3 {
 				return MsgAgentDone{Response: "Usage: /bundles create <name> <skill1,skill2,...>"}
 			}
-			resp, err := m.agent.Dispatcher().Dispatch("skill_bundle", map[string]interface{}{
+			resp, err := m.dispatch("skill_bundle", map[string]interface{}{
 				"action":     "create",
 				"name":       args[1],
 				"skills":     args[2],
@@ -365,7 +424,7 @@ func (m *uiModel) handleBundles(args []string) tea.Cmd {
 			if len(args) < 2 {
 				return MsgAgentDone{Response: "Usage: /bundles delete <name>"}
 			}
-			resp, err := m.agent.Dispatcher().Dispatch("skill_bundle", map[string]interface{}{"action": "delete", "name": args[1], "_tenant_id": m.tenantID})
+			resp, err := m.dispatch("skill_bundle", map[string]interface{}{"action": "delete", "name": args[1], "_tenant_id": m.tenantID})
 			if err != nil {
 				return MsgAgentDone{Response: fmt.Sprintf("Bundle delete error: %v", err)}
 			}
@@ -378,16 +437,23 @@ func (m *uiModel) handleBundles(args []string) tea.Cmd {
 
 func (m *uiModel) handleMemory(args []string) tea.Cmd {
 	return func() tea.Msg {
-		if m.agent == nil || m.agent.Memory() == nil {
-			return MsgAgentDone{Response: "Memory not initialized."}
-		}
 		action := "list"
 		if len(args) > 0 {
 			action = args[0]
 		}
-		mem := m.agent.Memory()
 		switch action {
 		case "list":
+			// In client mode there is no in-process store, so list the facts via
+			// the daemon (memory tool "list" action). The daemon view omits the
+			// synthesized profile, which is an in-process agent concern.
+			if m.agent == nil || m.agent.Memory() == nil {
+				resp, err := m.dispatch("memory", map[string]interface{}{"action": "list", "_tenant_id": m.tenantID})
+				if err != nil {
+					return MsgAgentDone{Response: fmt.Sprintf("Memory list error: %v", err)}
+				}
+				return MsgAgentDone{Response: resp}
+			}
+			mem := m.agent.Memory()
 			userFacts, _ := mem.GetFacts(context.Background(), m.tenantID, "user")
 			memFacts, _ := mem.GetFacts(context.Background(), m.tenantID, "memory")
 			var sb strings.Builder
@@ -396,14 +462,14 @@ func (m *uiModel) handleMemory(args []string) tea.Cmd {
 				sb.WriteString("- (empty)\n")
 			}
 			for _, f := range userFacts {
-				sb.WriteString(fmt.Sprintf("- `%s` %s\n", f.ID, f.Content))
+				sb.WriteString(fmt.Sprintf("- `%s` %s%s\n", f.ID, f.Content, factProvenance(f)))
 			}
 			sb.WriteString("\n### Project / Environment\n")
 			if len(memFacts) == 0 {
 				sb.WriteString("- (empty)\n")
 			}
 			for _, f := range memFacts {
-				sb.WriteString(fmt.Sprintf("- `%s` %s\n", f.ID, f.Content))
+				sb.WriteString(fmt.Sprintf("- `%s` %s%s\n", f.ID, f.Content, factProvenance(f)))
 			}
 			pinnedFacts, _ := mem.GetFacts(context.Background(), m.tenantID, "pinned")
 			sb.WriteString("\n### Pinned (authoritative — synthesis won't override)\n")
@@ -426,7 +492,7 @@ func (m *uiModel) handleMemory(args []string) tea.Cmd {
 			if len(args) >= 2 {
 				target = args[1]
 			}
-			resp, err := m.agent.Dispatcher().Dispatch("memory", map[string]interface{}{"action": "history", "target": target, "_tenant_id": m.tenantID})
+			resp, err := m.dispatch("memory", map[string]interface{}{"action": "history", "target": target, "_tenant_id": m.tenantID})
 			if err != nil {
 				return MsgAgentDone{Response: fmt.Sprintf("Memory history error: %v", err)}
 			}
@@ -437,7 +503,7 @@ func (m *uiModel) handleMemory(args []string) tea.Cmd {
 			}
 			target := args[1]
 			needle := strings.Join(args[2:], " ")
-			resp, err := m.agent.Dispatcher().Dispatch("memory", map[string]interface{}{
+			resp, err := m.dispatch("memory", map[string]interface{}{
 				"action":     "remove",
 				"target":     target,
 				"old_text":   needle,
@@ -451,7 +517,7 @@ func (m *uiModel) handleMemory(args []string) tea.Cmd {
 			if len(args) < 2 {
 				return MsgAgentDone{Response: "Usage: /memory undo <change_id>"}
 			}
-			resp, err := m.agent.Dispatcher().Dispatch("memory", map[string]interface{}{
+			resp, err := m.dispatch("memory", map[string]interface{}{
 				"action":     "undo",
 				"change_id":  args[1],
 				"_tenant_id": m.tenantID,
@@ -464,7 +530,7 @@ func (m *uiModel) handleMemory(args []string) tea.Cmd {
 			if len(args) < 2 {
 				return MsgAgentDone{Response: "Usage: /memory pin <authoritative fact>"}
 			}
-			resp, err := m.agent.Dispatcher().Dispatch("memory", map[string]interface{}{
+			resp, err := m.dispatch("memory", map[string]interface{}{
 				"action":     "add",
 				"target":     "pinned",
 				"content":    strings.Join(args[1:], " "),
@@ -614,7 +680,7 @@ func (m *uiModel) handleCurator(args []string) tea.Cmd {
 			if err != nil {
 				return MsgAgentDone{Response: fmt.Sprintf("Curator restore error: %v", err)}
 			}
-			_, _ = m.agent.Dispatcher().Dispatch("skill_manage", map[string]interface{}{"action": "reload", "_tenant_id": m.tenantID})
+			_, _ = m.dispatch("skill_manage", map[string]interface{}{"action": "reload", "_tenant_id": m.tenantID})
 			return MsgAgentDone{Response: resp}
 		default:
 			return MsgAgentDone{Response: "Usage: /curator [status|run [--dry-run] [--report]|restore <skill-name>]"}
@@ -625,6 +691,9 @@ func (m *uiModel) handleCurator(args []string) tea.Cmd {
 func (m *uiModel) handleModelSwitch(modelName string) tea.Cmd {
 	return func() tea.Msg {
 		if m.agent == nil {
+			if m.clientMode {
+				return MsgAgentDone{Response: "Runtime model switching isn't available in daemon-client mode yet (it mutates the daemon's agent). Set the model via config / `selfmind model set` and restart the daemon."}
+			}
 			return MsgAgentDone{Response: "Agent not initialized."}
 		}
 		oldModel := m.agent.CurrentModel()
@@ -644,7 +713,7 @@ func (m *uiModel) handleCheckpoint(args []string) tea.Cmd {
 		name = args[1]
 	}
 	return func() tea.Msg {
-		resp, err := m.agent.Dispatcher().Dispatch("checkpoint", map[string]interface{}{
+		resp, err := m.dispatch("checkpoint", map[string]interface{}{
 			"action":     action,
 			"name":       name,
 			"_tenant_id": m.tenantID,

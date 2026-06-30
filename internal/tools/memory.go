@@ -3,6 +3,9 @@ package tools
 import (
 	"context"
 	"fmt"
+	"strings"
+	"time"
+
 	"selfmind/internal/kernel/memory"
 )
 
@@ -22,8 +25,8 @@ func NewMemoryTool(mem *memory.MemoryManager) *MemoryTool {
 				Properties: map[string]PropertyDef{
 					"action": {
 						Type:        "string",
-						Description: "The action to perform: add, replace, remove, history, or undo.",
-						Enum:        []string{"add", "replace", "remove", "history", "undo"},
+						Description: "The action to perform: add, replace, remove, history, undo, or list.",
+						Enum:        []string{"add", "replace", "remove", "history", "undo", "list"},
 					},
 					"target": {
 						Type:        "string",
@@ -141,7 +144,71 @@ func (t *MemoryTool) Execute(args map[string]interface{}) (string, error) {
 		}
 		return UndoMemoryLearningChange(ctx, t.mem, tenantID, changeID)
 
+	case "list":
+		return t.formatFactList(ctx, tenantID), nil
+
 	default:
 		return "", fmt.Errorf("unknown action: %s", action)
+	}
+}
+
+// formatFactList renders the user/project/pinned fact stores with compact
+// provenance. It backs `/memory list` for daemon clients (which have no
+// in-process store) via the dispatch path; the in-process TUI keeps its own
+// richer view that also includes the synthesized profile.
+func (t *MemoryTool) formatFactList(ctx context.Context, tenantID string) string {
+	section := func(sb *strings.Builder, title, target string) {
+		facts, _ := t.mem.GetFacts(ctx, tenantID, target)
+		sb.WriteString("\n### " + title + "\n")
+		if len(facts) == 0 {
+			sb.WriteString("- (empty)\n")
+			return
+		}
+		for _, f := range facts {
+			sb.WriteString(fmt.Sprintf("- `%s` %s%s\n", f.ID, f.Content, factProvenanceSuffix(f)))
+		}
+	}
+	var sb strings.Builder
+	sb.WriteString("## Memory\n")
+	section(&sb, "User", "user")
+	section(&sb, "Project / Environment", "memory")
+	section(&sb, "Pinned (authoritative — synthesis won't override)", "pinned")
+	sb.WriteString("\nCommands: /memory pin <text> · /memory remove <user|memory|pinned> <id-or-text> · /memory history · /memory undo <change_id>")
+	return sb.String()
+}
+
+// factProvenanceSuffix is the compact "why is this remembered" suffix
+// (source / scope / confidence / age). Mirrors the TUI's factProvenance so the
+// daemon-client view matches the in-process one.
+func factProvenanceSuffix(f memory.Fact) string {
+	var parts []string
+	if f.Source != "" {
+		parts = append(parts, "src="+f.Source)
+	}
+	if f.Scope != "" && f.Scope != "global" {
+		parts = append(parts, "scope="+f.Scope)
+	}
+	if f.Confidence > 0 {
+		parts = append(parts, fmt.Sprintf("conf=%.2f", f.Confidence))
+	}
+	if !f.CreatedAt.IsZero() {
+		parts = append(parts, humanizeFactAge(time.Since(f.CreatedAt)))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return "  · " + strings.Join(parts, " ")
+}
+
+func humanizeFactAge(d time.Duration) string {
+	switch {
+	case d < time.Minute:
+		return "just now"
+	case d < time.Hour:
+		return fmt.Sprintf("%dm ago", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%dh ago", int(d.Hours()))
+	default:
+		return fmt.Sprintf("%dd ago", int(d.Hours()/24))
 	}
 }

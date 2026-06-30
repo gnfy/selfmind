@@ -26,27 +26,27 @@ type AgentBackend interface {
 
 // Agent 核心推理循环
 type Agent struct {
-	memory           *memory.MemoryManager
-	backend          AgentBackend
-	llm              llm.Provider
-	fastProvider     llm.Provider // optional fast model for simple direct-answer turns
-	runLLM           llm.Provider // per-run active provider, set under runMu
+	memory             *memory.MemoryManager
+	backend            AgentBackend
+	llm                llm.Provider
+	fastProvider       llm.Provider                 // optional fast model for simple direct-answer turns
+	runLLM             llm.Provider                 // per-run active provider, set under runMu
 	skillInventory     func(tenantID string) string // optional: compact learned-skill list for the prompt
 	profileSynthesizer *ProfileSynthesizer          // optional: distills facts into a user profile
 	soul               string
-	maxIterations    int
-	maxRetries       int
-	Reflector        *ReflectionEngine
-	ReviewEngine     *BackgroundReviewEngine
-	contextEngine    *ContextEngine
-	contextScanner   *ContextScanner
-	factExtractor    *FactExtractor
-	turnExtractor    *TurnExtractor
-	semanticExpander *memory.SemanticExpander
-	useMemoryFence   bool
-	EventChannel     chan string // emits "tool_start:name" and "tool_end:name:result" events
-	runMu            sync.Mutex
-	syncQueue        chan syncTurnRequest
+	maxIterations      int
+	maxRetries         int
+	Reflector          *ReflectionEngine
+	ReviewEngine       *BackgroundReviewEngine
+	contextEngine      *ContextEngine
+	contextScanner     *ContextScanner
+	factExtractor      *FactExtractor
+	turnExtractor      *TurnExtractor
+	semanticExpander   *memory.SemanticExpander
+	useMemoryFence     bool
+	EventChannel       chan string // emits "tool_start:name" and "tool_end:name:result" events
+	runMu              sync.Mutex
+	syncQueue          chan syncTurnRequest
 
 	// Evolution config.
 	toolCallCount     int
@@ -1424,14 +1424,18 @@ func (a *Agent) buildSystemPrompt(ctx context.Context, tenantID string, strategy
 		parts = append(parts, "<user-profile>\n[System note: synthesized understanding of the user from past interactions; background context, not new input.]\n"+summary+"\n</user-profile>")
 	}
 
-	// Cap raw facts so the memory block stays bounded as facts accumulate.
+	// Select the most relevant facts (W3d): rank by decayed confidence × scope
+	// relevance instead of plain recency, so high-trust and on-workspace facts
+	// win the bounded slot. Legacy facts (zero metadata) score neutrally, so
+	// they are not dropped.
 	const maxFactsEach = 20
-	if len(userFacts) > maxFactsEach {
-		userFacts = userFacts[len(userFacts)-maxFactsEach:]
+	currentScope := "global"
+	if ws, ok := WorkspaceContextFromContext(ctx); ok && ws.ID != "" {
+		currentScope = "workspace:" + ws.ID
 	}
-	if len(memFacts) > maxFactsEach {
-		memFacts = memFacts[len(memFacts)-maxFactsEach:]
-	}
+	now := time.Now()
+	userFacts = memory.SelectFacts(userFacts, currentScope, now, maxFactsEach)
+	memFacts = memory.SelectFacts(memFacts, currentScope, now, maxFactsEach)
 
 	if len(userFacts) > 0 || len(memFacts) > 0 {
 		var factBlock strings.Builder

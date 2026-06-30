@@ -14,6 +14,13 @@ func WithTaskStrategy(ctx context.Context, strategy TaskStrategy) context.Contex
 }
 
 func taskStrategyFromContext(ctx context.Context) (TaskStrategy, bool) {
+	return TaskStrategyFromContext(ctx)
+}
+
+// TaskStrategyFromContext returns the per-turn strategy pinned by the gateway,
+// if any. Exported so the gateway scheduler can read the strategy to decide
+// write-vs-read workspace serialization (see Gateway.workspaceSerialKey).
+func TaskStrategyFromContext(ctx context.Context) (TaskStrategy, bool) {
 	if ctx == nil {
 		return TaskStrategy{}, false
 	}

@@ -3,12 +3,28 @@ package router
 import (
 	"context"
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"selfmind/internal/kernel"
 	"selfmind/internal/kernel/llm"
+	"selfmind/internal/runpool"
 )
+
+// runIdleTimeout reads SELFMIND_RUN_IDLE_TIMEOUT (e.g. "5m"). 0/unset disables
+// the progress watchdog (default → behavior unchanged). When set, a run that
+// emits no progress event for this long is cancelled so it frees its worker
+// instead of hanging the tool (W1c).
+func runIdleTimeout() time.Duration {
+	if v := strings.TrimSpace(os.Getenv("SELFMIND_RUN_IDLE_TIMEOUT")); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			return d
+		}
+	}
+	return 0
+}
 
 func (g *Gateway) HandleWithEvents(ctx context.Context, unifiedUID, channel, input string) (*HandleResponse, error) {
 	if g == nil || g.agent == nil {
@@ -38,8 +54,13 @@ func (g *Gateway) withAgentEvents(ctx context.Context, run func(context.Context)
 	eventCh := make(chan string, 1024)
 	ctx = kernel.WithEventChannel(ctx, eventCh)
 
+	// Progress watchdog: cancels the run if it goes silent for too long, so a
+	// stuck provider/tool frees its worker. Disabled by default (idle<=0).
+	ctx, activity, stop := runpool.WithWatchdog(ctx, runIdleTimeout())
+
 	resp, err := run(ctx)
 	if err != nil || resp == nil || !resp.IsStreaming {
+		stop()
 		return resp, err
 	}
 
@@ -48,19 +69,22 @@ func (g *Gateway) withAgentEvents(ctx context.Context, run func(context.Context)
 	resp.Stream = out
 	go func() {
 		defer close(out)
+		defer stop()
 		origOpen := true
 		for origOpen {
 			select {
 			case raw := <-eventCh:
+				activity()
 				out <- agentEventToStream(raw)
 			case ev, ok := <-orig:
 				if !ok {
 					origOpen = false
 					continue
 				}
+				activity()
 				out <- ev
 			case <-ctx.Done():
-				out <- llm.StreamEvent{Err: ctx.Err()}
+				out <- llm.StreamEvent{Err: watchdogError(ctx)}
 				return
 			}
 		}
@@ -74,6 +98,15 @@ func (g *Gateway) withAgentEvents(ctx context.Context, run func(context.Context)
 		}
 	}()
 	return resp, nil
+}
+
+// watchdogError turns a watchdog stall into an actionable message; otherwise it
+// surfaces the underlying cancellation.
+func watchdogError(ctx context.Context) error {
+	if cause := context.Cause(ctx); cause == runpool.ErrStalled {
+		return fmt.Errorf("run stalled: no progress for %s — freed the worker; please retry or refine the request", runIdleTimeout())
+	}
+	return ctx.Err()
 }
 
 func agentEventToStream(event string) llm.StreamEvent {

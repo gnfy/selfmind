@@ -1,17 +1,117 @@
 package cli
 
 import (
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"hash/fnv"
+	"math"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/mattn/go-runewidth"
 )
 
+// cellRenderer turns one ChatMessage into its rendered (pre-split) string for a
+// given width. The registry lets new transcript cell kinds (e.g. approval
+// cards, plan widgets) plug in without touching renderAllMessages — the
+// extensibility hook for later phases.
+type cellRenderer func(msg ChatMessage, width int) string
+
+var cellRenderers = map[string]cellRenderer{
+	"user":      func(m ChatMessage, w int) string { return renderUserMessage(stripANSI(m.Content), w) },
+	"assistant": func(m ChatMessage, w int) string { return renderAssistantMessage(stripANSI(m.Content), w) },
+	"tool":      func(m ChatMessage, w int) string { return renderToolMessage(m, w) },
+	"system":    func(m ChatMessage, w int) string { return renderSystemMessage(stripANSI(m.Content), w) },
+}
+
+// renderCell dispatches a message to its registered renderer. Unknown roles
+// render to empty (matching the previous switch default).
+func renderCell(msg ChatMessage, width int) string {
+	if r, ok := cellRenderers[msg.Role]; ok {
+		return r(msg, width)
+	}
+	return ""
+}
+
+// renderCache memoizes per-message rendered output keyed by a fingerprint of the
+// message's render-relevant fields plus width. Finalized messages have a stable
+// fingerprint, so their expensive markdown/tool rendering runs once and is
+// reused across the many frames bubbletea draws on cosmetic ticks (spinner,
+// cursor blink, status, stream flush). This turns the per-frame transcript cost
+// from "re-render all history" into "re-fingerprint all history" — roughly a
+// thousandfold cheaper. A bounded live window (later phase) removes the
+// remaining linear scan.
+type renderCache struct {
+	width   int
+	entries map[uint64]string
+}
+
+// maxRenderCacheEntries caps memory: transient states (a running tool's
+// heartbeat updates, streaming) each mint an entry that becomes garbage once
+// finalized. When the map grows past this, drop it whole; stable messages
+// simply repopulate on the next frame.
+const maxRenderCacheEntries = 4096
+
+func (c *renderCache) lookup(fp uint64) (string, bool) {
+	if c == nil || c.entries == nil {
+		return "", false
+	}
+	s, ok := c.entries[fp]
+	return s, ok
+}
+
+func (c *renderCache) store(fp uint64, rendered string) {
+	if c.entries == nil || len(c.entries) > maxRenderCacheEntries {
+		c.entries = make(map[uint64]string, 64)
+	}
+	c.entries[fp] = rendered
+}
+
+// resetForWidth clears the cache when the wrap width changes; cached renders are
+// width-specific and would be wrong after a resize.
+func (c *renderCache) resetForWidth(width int) {
+	c.width = width
+	c.entries = make(map[uint64]string, 64)
+}
+
+// messageFingerprint is a cheap content+state hash. Any change to a field that
+// affects rendering (content, tool metadata, running/error state, duration,
+// width) produces a new fingerprint and so a cache miss. Hashing the full
+// content each frame is still O(content), but ~1000x cheaper than re-running
+// markdown/tool rendering over it.
+func messageFingerprint(msg ChatMessage, width int) uint64 {
+	h := fnv.New64a()
+	var buf [8]byte
+	binary.LittleEndian.PutUint64(buf[:], uint64(uint32(width)))
+	_, _ = h.Write(buf[:])
+	writeField := func(s string) {
+		_, _ = h.Write([]byte(s))
+		_, _ = h.Write([]byte{0})
+	}
+	writeField(msg.Role)
+	writeField(msg.Content)
+	writeField(msg.ToolName)
+	writeField(msg.ToolArgs)
+	writeField(msg.ToolCallID)
+	writeField(msg.RunningDetail)
+	var flags byte
+	if msg.IsRunning {
+		flags |= 1
+	}
+	if msg.IsError {
+		flags |= 2
+	}
+	_, _ = h.Write([]byte{flags})
+	binary.LittleEndian.PutUint64(buf[:], math.Float64bits(msg.Duration))
+	_, _ = h.Write(buf[:])
+	return h.Sum64()
+}
+
 const (
 	glyphBullet  = "\u2022"
-	glyphCorner  = "\u2514\u2500"
+	glyphCorner  = "\u2514" // \u2514 tree connector (codex-style; used as `glyphCorner + " "`)
 	glyphChevron = "\u203a"
 	// Notification glyphs (see notificationStyleFor). Kept to widely-supported
 	// code points so they render across terminals without width surprises.
@@ -27,6 +127,13 @@ func (m *uiModel) renderAllMessages() string {
 	w := m.viewport.Width
 	if w <= 0 {
 		w = 60
+	}
+
+	if m.transcriptCache == nil {
+		m.transcriptCache = &renderCache{}
+	}
+	if m.transcriptCache.width != w {
+		m.transcriptCache.resetForWidth(w)
 	}
 
 	var allLines []string
@@ -50,21 +157,36 @@ func (m *uiModel) renderAllMessages() string {
 	startupLines = processLines(startupLines, 0)
 	allLines = append(allLines, startupLines...)
 
-	for _, msg := range m.messages {
-		var rendered string
-		switch msg.Role {
-		case "user":
-			rendered = renderUserMessage(stripANSI(msg.Content), w)
-		case "assistant":
-			rendered = renderAssistantMessage(stripANSI(msg.Content), w)
-		case "tool":
-			rendered = renderToolMessage(msg, w)
-		case "system":
-			rendered = renderSystemMessage(stripANSI(msg.Content), w)
+	for i := 0; i < len(m.messages); {
+		// Group a run of consecutive read-only tool cells into one codex-style
+		// "Explored" cell, rather than one cell per read.
+		if isExploreCell(m.messages[i]) {
+			j := i + 1
+			for j < len(m.messages) && isExploreCell(m.messages[j]) {
+				j++
+			}
+			group := m.messages[i:j]
+			fp := exploreGroupFingerprint(group, w)
+			rendered, ok := m.transcriptCache.lookup(fp)
+			if !ok {
+				rendered = renderExploreGroup(group, w)
+				m.transcriptCache.store(fp, rendered)
+			}
+			msgLines := processLines(strings.Split(rendered, "\n"), len(allLines))
+			allLines = append(allLines, msgLines...)
+			i = j
+			continue
 		}
-		msgLines := strings.Split(rendered, "\n")
-		msgLines = processLines(msgLines, len(allLines))
+		msg := m.messages[i]
+		fp := messageFingerprint(msg, w)
+		rendered, ok := m.transcriptCache.lookup(fp)
+		if !ok {
+			rendered = renderCell(msg, w)
+			m.transcriptCache.store(fp, rendered)
+		}
+		msgLines := processLines(strings.Split(rendered, "\n"), len(allLines))
 		allLines = append(allLines, msgLines...)
+		i++
 	}
 
 	if strings.TrimSpace(m.liveStreamContent) != "" {
@@ -82,7 +204,13 @@ func (m *uiModel) renderAllMessages() string {
 		if label == "" {
 			label = "Working"
 		}
-		rendered := st.Chat.Thinking.Render(spinnerView + " " + label + dots)
+		// Codex-style suffix: dim "(elapsed · esc to interrupt)" so a long run
+		// shows progress and how to stop it.
+		hint := ""
+		if !m.thinkingStart.IsZero() {
+			hint = toolBulletDim.Render(fmt.Sprintf("  (%s · esc to interrupt)", formatElapsedCompact(time.Since(m.thinkingStart))))
+		}
+		rendered := st.Chat.Thinking.Render(spinnerView+" "+label+dots) + hint
 		lines := processLines([]string{rendered}, len(allLines))
 		allLines = append(allLines, lines...)
 		allLines = append(allLines, "")
@@ -207,6 +335,184 @@ func renderAssistantMessage(content string, width int) string {
 	return "\n" + strings.Join(lines, "\n")
 }
 
+var (
+	toolHeaderStyle = lipgloss.NewStyle().Bold(true)                      // bold action title (codex: "Explored"/"Ran")
+	toolBulletRun   = lipgloss.NewStyle().Faint(true)                     // ◦ dim while running
+	toolBulletOK    = lipgloss.NewStyle().Foreground(lipgloss.Color("2")) // • green: command succeeded
+	toolBulletErr   = lipgloss.NewStyle().Foreground(lipgloss.Color("1")) // • red: failed
+	toolBulletDim   = lipgloss.NewStyle().Faint(true)                     // • dim: non-command done
+)
+
+const glyphBulletHollow = "◦"
+
+func isCommandTool(label string) bool {
+	switch label {
+	case "terminal", "execute_command", "shell":
+		return true
+	}
+	return false
+}
+
+// toolHeaderLine renders the codex-style cell header: a status bullet (◦ dim
+// while running, • green on command success, • red on failure, • dim otherwise)
+// followed by the bold action title.
+func toolHeaderLine(action string, running, isErr, isCommand bool) string {
+	var bullet string
+	switch {
+	case running:
+		bullet = toolBulletRun.Render(glyphBulletHollow)
+	case isErr:
+		bullet = toolBulletErr.Render(glyphBullet)
+	case isCommand:
+		bullet = toolBulletOK.Render(glyphBullet)
+	default:
+		bullet = toolBulletDim.Render(glyphBullet)
+	}
+	return bullet + " " + toolHeaderStyle.Render(action)
+}
+
+// exploreVerbStyle colors the Read/List/Search verb in an "Explored" group
+// (codex renders these cyan; 39 is SelfMind's existing accent blue).
+var exploreVerbStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("39"))
+
+// isExploreToolName reports whether a tool is a read-only "exploration" (file
+// read, directory list, content search) that codex groups under one "Explored"
+// cell. Mutating/command tools are rendered as their own cells.
+func isExploreToolName(label string) bool {
+	switch label {
+	case "read_file", "cat", "list_files", "ls_r", "search_files", "grep":
+		return true
+	}
+	return false
+}
+
+func isExploreCell(msg ChatMessage) bool {
+	return msg.Role == "tool" && isExploreToolName(msg.ToolName)
+}
+
+// exploreEntry maps a read-only tool call to a (verb, argument) pair for the
+// grouped Explored view: "Read <path>", "List <path>", "Search <q> in <path>".
+func exploreEntry(label string, args map[string]interface{}) (verb, arg string, ok bool) {
+	switch label {
+	case "read_file", "cat":
+		return "Read", toolDetail(args, "path"), true
+	case "list_files", "ls_r":
+		return "List", valueOr(toolDetail(args, "path"), "."), true
+	case "search_files", "grep":
+		q := toolDetail(args, "pattern", "query")
+		p := toolDetail(args, "path")
+		switch {
+		case q != "" && p != "":
+			return "Search", q + " in " + p, true
+		case q != "":
+			return "Search", q, true
+		default:
+			return "Search", p, true
+		}
+	}
+	return "", "", false
+}
+
+// exploreLine renders one "<cyan verb> <arg>" line, wrapping a long argument
+// with a hanging indent aligned under the argument (the verb is ASCII so its
+// display width equals its byte length).
+func exploreLine(verb, arg string, contentWidth int) []string {
+	if contentWidth < 8 {
+		contentWidth = 8
+	}
+	hang := len(verb) + 1
+	avail := contentWidth - hang
+	if avail < 4 {
+		avail = 4
+	}
+	wrapped := strings.Split(wrapText(strings.TrimSpace(arg), avail), "\n")
+	out := make([]string, 0, len(wrapped))
+	for i, ln := range wrapped {
+		if i == 0 {
+			out = append(out, exploreVerbStyle.Render(verb)+" "+ln)
+		} else {
+			out = append(out, strings.Repeat(" ", hang)+ln)
+		}
+	}
+	return out
+}
+
+// renderExploreGroup renders a run of consecutive read-only tool cells as a
+// single codex-style "Explored" cell: a bold header (Exploring while any member
+// is still running) and tree-indented verb lines. Consecutive reads collapse
+// into one comma-joined "Read a, b, c" line; mixed verbs get a line each.
+func renderExploreGroup(msgs []ChatMessage, width int) string {
+	if width < 20 {
+		width = 20
+	}
+	running := false
+	type entry struct{ verb, arg string }
+	var entries []entry
+	allReads := true
+	for _, m := range msgs {
+		if m.IsRunning {
+			running = true
+		}
+		var args map[string]interface{}
+		_ = json.Unmarshal([]byte(m.ToolArgs), &args)
+		verb, arg, ok := exploreEntry(m.ToolName, args)
+		if !ok {
+			continue
+		}
+		if verb != "Read" {
+			allReads = false
+		}
+		entries = append(entries, entry{verb, arg})
+	}
+	if len(entries) == 0 {
+		return ""
+	}
+
+	header := "Explored"
+	bullet := toolBulletDim.Render(glyphBullet)
+	if running {
+		header = "Exploring"
+		bullet = toolBulletRun.Render(glyphBulletHollow)
+	}
+
+	var block []string
+	if allReads {
+		names := make([]string, 0, len(entries))
+		for _, e := range entries {
+			if e.arg != "" {
+				names = append(names, e.arg)
+			}
+		}
+		block = exploreLine("Read", strings.Join(names, ", "), width-4)
+	} else {
+		for _, e := range entries {
+			block = append(block, exploreLine(e.verb, e.arg, width-4)...)
+		}
+	}
+
+	var sb strings.Builder
+	sb.WriteString(bullet + " " + toolHeaderStyle.Render(header) + "\n")
+	for i, ln := range block {
+		if i == 0 {
+			sb.WriteString(planFaintStyle.Render("  └ ") + ln + "\n")
+		} else {
+			sb.WriteString("    " + ln + "\n")
+		}
+	}
+	return sb.String()
+}
+
+// exploreGroupFingerprint combines the members' fingerprints (plus a salt so it
+// never aliases a single-message entry) so a grouped Explored cell is cached
+// like any other rendered cell.
+func exploreGroupFingerprint(msgs []ChatMessage, width int) uint64 {
+	h := uint64(1469598103934665603) ^ uint64(0x6578706c6f7265) // fnv offset ^ "explore"
+	for _, m := range msgs {
+		h = (h * 1099511628211) ^ messageFingerprint(m, width)
+	}
+	return h
+}
+
 func renderToolMessage(msg ChatMessage, width int) string {
 	label := msg.ToolName
 	if label == "" {
@@ -220,9 +526,10 @@ func renderToolMessage(msg ChatMessage, width int) string {
 
 	done := !msg.IsRunning && (msg.Content != "" || msg.Duration > 0)
 	action := toolAction(label, args, done)
+	isCmd := isCommandTool(label)
 	var sb strings.Builder
 	if !done {
-		sb.WriteString(glyphBullet + " " + action + "\n")
+		sb.WriteString(toolHeaderLine(action, true, false, isCmd) + "\n")
 		if detail := strings.TrimSpace(msg.RunningDetail); detail != "" {
 			sb.WriteString("  " + glyphCorner + " " + truncateToWidth(detail, width-6) + "\n")
 		}
@@ -232,13 +539,36 @@ func renderToolMessage(msg ChatMessage, width int) string {
 		return sb.String()
 	}
 
-	status := ""
-	if msg.IsError {
-		status = " failed"
+	// Codex-style file-change rendering for patch: a "<Verb> <file> (+N -M)"
+	// header plus a bounded, colored diff (line-number gutter for new files).
+	// Falls back to the generic path when the V4A patch input isn't available
+	// (e.g. legacy/test messages without ToolArgs).
+	if label == "patch" && !msg.IsError {
+		if patch, _ := args["patch"].(string); strings.TrimSpace(patch) != "" {
+			if cell := renderPatchCell(patch, msg.Duration, width, maxPatchPreviewLines); cell != "" {
+				return cell
+			}
+		}
 	}
-	sb.WriteString(fmt.Sprintf("%s %s%s", glyphBullet, action, status))
+	// write_file returns a "Created/Edited <path> (+A -B)" header plus a bounded
+	// unified diff (W2d); render it colored instead of an all-added dump.
+	if label == "write_file" && !msg.IsError {
+		if cell := renderWriteFileCell(msg.Content, msg.Duration, width); cell != "" {
+			return cell
+		}
+	}
+	// update_plan renders as a Codex-style checklist with progress, not a
+	// one-line summary.
+	if label == "update_plan" && !msg.IsError {
+		if cell := renderPlanCell(msg.Content, msg.Duration, width); cell != "" {
+			return cell
+		}
+	}
+
+	// The red bullet conveys failure; keep a dim duration suffix.
+	sb.WriteString(toolHeaderLine(action, false, msg.IsError, isCmd))
 	if msg.Duration > 0 {
-		sb.WriteString(fmt.Sprintf(" %.1fs", msg.Duration))
+		sb.WriteString(toolBulletDim.Render(fmt.Sprintf(" %.1fs", msg.Duration)))
 	}
 	sb.WriteString("\n")
 	if result := toolResultLine(label, msg.Content, width-6); result != "" {
@@ -348,6 +678,296 @@ func renderToolDiff(label string, args map[string]interface{}, width int) string
 		sb.WriteString("  " + glyphCorner + " " + diffCtxStyle.Render(fmt.Sprintf("(+%d −%d)", added, removed)) + "\n")
 	}
 	return sb.String()
+}
+
+// maxPatchPreviewLines bounds the diff body shown inline at commit time. Real
+// edits are short and show in full; large changes collapse with a remainder
+// note. The full diff is available in the history browser overlay (H4).
+const maxPatchPreviewLines = 40
+
+type patchDiffLine struct {
+	kind byte // '+', '-', ' ' (context), '@' (hunk hint)
+	text string
+}
+
+type patchFileChange struct {
+	verb  string // Added / Edited / Deleted / Moved
+	path  string
+	lines []patchDiffLine
+}
+
+// parseV4APatch parses the SelfMind/Codex V4A patch format into per-file
+// changes. V4A carries no absolute line numbers (that is its design), so the
+// renderer only numbers brand-new files, where lines are 1..N by construction.
+func parseV4APatch(patch string) []patchFileChange {
+	var files []patchFileChange
+	var cur *patchFileChange
+	push := func() {
+		if cur != nil {
+			files = append(files, *cur)
+			cur = nil
+		}
+	}
+	start := func(verb, line, prefix string) {
+		push()
+		cur = &patchFileChange{verb: verb, path: strings.TrimSpace(strings.TrimPrefix(line, prefix))}
+	}
+	for _, ln := range strings.Split(patch, "\n") {
+		switch {
+		case strings.HasPrefix(ln, "*** Begin Patch"), strings.HasPrefix(ln, "*** End Patch"):
+			continue
+		case strings.HasPrefix(ln, "*** Add File: "):
+			start("Added", ln, "*** Add File: ")
+		case strings.HasPrefix(ln, "*** Update File: "):
+			start("Edited", ln, "*** Update File: ")
+		case strings.HasPrefix(ln, "*** Delete File: "):
+			start("Deleted", ln, "*** Delete File: ")
+		case strings.HasPrefix(ln, "*** Move File: "):
+			start("Moved", ln, "*** Move File: ")
+		case strings.HasPrefix(ln, "@@"):
+			if cur != nil {
+				cur.lines = append(cur.lines, patchDiffLine{'@', strings.TrimSpace(strings.Trim(ln, "@ "))})
+			}
+		default:
+			if cur == nil {
+				continue
+			}
+			if ln == "" {
+				cur.lines = append(cur.lines, patchDiffLine{' ', ""})
+				continue
+			}
+			switch ln[0] {
+			case '+':
+				cur.lines = append(cur.lines, patchDiffLine{'+', ln[1:]})
+			case '-':
+				cur.lines = append(cur.lines, patchDiffLine{'-', ln[1:]})
+			case ' ':
+				cur.lines = append(cur.lines, patchDiffLine{' ', ln[1:]})
+			default:
+				cur.lines = append(cur.lines, patchDiffLine{' ', ln})
+			}
+		}
+	}
+	push()
+	return files
+}
+
+// renderPatchCell renders a patch as Codex-style file-change cells: a header
+// "<verb> <path> (+N -M)" and a colored, bounded diff body. maxLines bounds the
+// total body lines (use a large value for the unbounded history view).
+func renderPatchCell(patch string, duration float64, width, maxLines int) string {
+	files := parseV4APatch(patch)
+	if len(files) == 0 {
+		return ""
+	}
+	var sb strings.Builder
+	budget := maxLines
+	hidden := 0
+	for fi, f := range files {
+		added, removed := 0, 0
+		for _, l := range f.lines {
+			switch l.kind {
+			case '+':
+				added++
+			case '-':
+				removed++
+			}
+		}
+		header := fmt.Sprintf("%s %s %s (%s %s)", glyphBullet, f.verb, f.path,
+			diffAddStyle.Render(fmt.Sprintf("+%d", added)), diffDelStyle.Render(fmt.Sprintf("-%d", removed)))
+		if fi == 0 && duration > 0 {
+			header += fmt.Sprintf(" %.1fs", duration)
+		}
+		sb.WriteString(header + "\n")
+
+		isAdd := f.verb == "Added"
+		gutterW := len(fmt.Sprintf("%d", added))
+		lineNo := 0
+		for _, l := range f.lines {
+			if l.kind == '+' && isAdd {
+				lineNo++
+			}
+			if budget <= 0 {
+				hidden++
+				continue
+			}
+			switch l.kind {
+			case '@':
+				sb.WriteString("  " + diffCtxStyle.Render("@@ "+l.text) + "\n")
+			case '+':
+				gutter := ""
+				if isAdd {
+					gutter = diffCtxStyle.Render(fmt.Sprintf("%*d ", gutterW, lineNo))
+				}
+				sb.WriteString("  " + gutter + diffAddStyle.Render("+ "+truncateToWidth(l.text, width-10)) + "\n")
+			case '-':
+				sb.WriteString("  " + diffDelStyle.Render("- "+truncateToWidth(l.text, width-10)) + "\n")
+			default:
+				sb.WriteString("  " + diffCtxStyle.Render("  "+truncateToWidth(l.text, width-10)) + "\n")
+			}
+			budget--
+		}
+	}
+	if hidden > 0 {
+		sb.WriteString("  " + diffCtxStyle.Render(fmt.Sprintf("… +%d more line(s) — open history to see the full diff", hidden)) + "\n")
+	}
+	return sb.String()
+}
+
+// maxWriteFileDiffPreview bounds the diff body shown inline for a write_file
+// cell; the full diff is available via /history.
+const maxWriteFileDiffPreview = 30
+
+// renderWriteFileCell renders write_file's "Created/Edited <path> (+A -B)"
+// header plus its colored diff body. Legacy results (e.g. "Written N bytes")
+// just render as the header line. Returns "" for empty content (fallback).
+func renderWriteFileCell(content string, duration float64, width int) string {
+	content = strings.TrimRight(content, "\n")
+	if strings.TrimSpace(content) == "" {
+		return ""
+	}
+	lines := strings.Split(content, "\n")
+	var sb strings.Builder
+	sb.WriteString(glyphBullet + " " + lines[0])
+	if duration > 0 {
+		sb.WriteString(fmt.Sprintf(" %.1fs", duration))
+	}
+	sb.WriteString("\n")
+	shown := 0
+	for _, ln := range lines[1:] {
+		if shown >= maxWriteFileDiffPreview {
+			break
+		}
+		var styled string
+		switch {
+		case strings.HasPrefix(ln, "+"):
+			styled = diffAddStyle.Render(truncateToWidth(ln, width-6))
+		case strings.HasPrefix(ln, "-"):
+			styled = diffDelStyle.Render(truncateToWidth(ln, width-6))
+		default:
+			styled = diffCtxStyle.Render(truncateToWidth(ln, width-6))
+		}
+		sb.WriteString("  " + styled + "\n")
+		shown++
+	}
+	if remaining := len(lines) - 1 - shown; remaining > 0 {
+		sb.WriteString("  " + diffCtxStyle.Render(fmt.Sprintf("… %d more line(s)", remaining)) + "\n")
+	}
+	return sb.String()
+}
+
+var (
+	planDoneTextStyle = lipgloss.NewStyle().Faint(true).Strikethrough(true) // completed: struck-through + dim
+	planActiveStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("39")).Bold(true) // in-progress: cyan bold
+	planPendingStyle  = lipgloss.NewStyle().Faint(true)                     // pending: dim
+	planExplStyle     = lipgloss.NewStyle().Faint(true).Italic(true)        // explanation note
+	planHeaderStyle   = lipgloss.NewStyle().Bold(true)
+	planFaintStyle    = lipgloss.NewStyle().Faint(true)
+)
+
+const (
+	maxPlanSteps  = 20
+	glyphPlanDone = "✔" // ✔ completed
+	glyphPlanBox  = "□" // □ pending / in-progress (codex distinguishes by color, not glyph)
+)
+
+// renderPlanCell renders update_plan as a Codex-style checklist (the "hybrid"
+// look chosen for SelfMind): header `• Updated plan · done/total`, then a
+// tree-indented block — an italic/dim explanation note, then one line per step
+// marked ✔ (struck-through+dim) completed / □ (cyan+bold) in-progress / □ (dim)
+// pending. Long notes and steps wrap to the terminal width with a hanging
+// indent rather than being truncated. We keep the `· done/total` progress in the
+// header (codex puts it in a persistent status bar, which SelfMind lacks).
+// Returns "" only if content isn't parseable plan JSON (caller falls back).
+func renderPlanCell(content string, duration float64, width int) string {
+	var payload struct {
+		Explanation string `json:"explanation"`
+		Plan        []struct {
+			Step   string `json:"step"`
+			Status string `json:"status"`
+		} `json:"plan"`
+	}
+	if err := json.Unmarshal([]byte(content), &payload); err != nil {
+		return ""
+	}
+	if width < 20 {
+		width = 20
+	}
+	completed := 0
+	for _, s := range payload.Plan {
+		if s.Status == "completed" {
+			completed++
+		}
+	}
+
+	// Build the indented content block (explanation note + steps) without the
+	// tree prefix; the prefix is applied uniformly afterwards.
+	var block []string
+	if exp := strings.TrimSpace(payload.Explanation); exp != "" {
+		for _, ln := range strings.Split(wrapText(exp, width-4), "\n") {
+			block = append(block, planExplStyle.Render(ln))
+		}
+	}
+	if len(payload.Plan) == 0 {
+		block = append(block, planExplStyle.Render("(no steps provided)"))
+	}
+	shown := 0
+	for _, s := range payload.Plan {
+		if shown >= maxPlanSteps {
+			break
+		}
+		block = append(block, planStepLines(strings.TrimSpace(s.Step), s.Status, width-4)...)
+		shown++
+	}
+	if len(payload.Plan) > maxPlanSteps {
+		block = append(block, planPendingStyle.Render(fmt.Sprintf("… %d more steps", len(payload.Plan)-maxPlanSteps)))
+	}
+
+	var sb strings.Builder
+	sb.WriteString(planFaintStyle.Render(glyphBullet) + " " + planHeaderStyle.Render("Updated plan") +
+		planFaintStyle.Render(fmt.Sprintf(" · %d/%d", completed, len(payload.Plan))) + "\n")
+	// Tree prefix: first block line gets "  └ ", the rest a flat 4-space indent.
+	for i, ln := range block {
+		if i == 0 {
+			sb.WriteString(planFaintStyle.Render("  └ ") + ln + "\n")
+		} else {
+			sb.WriteString("    " + ln + "\n")
+		}
+	}
+	return sb.String()
+}
+
+// planStepLines renders one plan step into one or more styled lines: the status
+// glyph + text on the first line, wrapped continuation lines hanging-indented
+// under the text. The glyph is dimmed/colored by status; only completed step
+// text is struck through (matching codex, which never strikes the glyph).
+func planStepLines(text, status string, contentWidth int) []string {
+	glyph := glyphPlanBox + " "
+	glyphStyle := planPendingStyle
+	textStyle := planPendingStyle
+	switch status {
+	case "completed":
+		glyph = glyphPlanDone + " "
+		glyphStyle = planFaintStyle
+		textStyle = planDoneTextStyle
+	case "in_progress":
+		glyphStyle = planActiveStyle
+		textStyle = planActiveStyle
+	}
+	stepWidth := contentWidth - 2 // account for the 2-col glyph / hanging indent
+	if stepWidth < 4 {
+		stepWidth = 4
+	}
+	wrapped := strings.Split(wrapText(text, stepWidth), "\n")
+	out := make([]string, 0, len(wrapped))
+	for i, ln := range wrapped {
+		if i == 0 {
+			out = append(out, glyphStyle.Render(glyph)+textStyle.Render(ln))
+		} else {
+			out = append(out, "  "+textStyle.Render(ln)) // hang under the glyph
+		}
+	}
+	return out
 }
 
 func renderSystemMessage(content string, width int) string {

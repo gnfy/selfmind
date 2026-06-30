@@ -8,6 +8,38 @@ import (
 	"selfmind/internal/kernel/memory"
 )
 
+func TestMemoryToolListAction(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	provider, err := memory.NewSQLiteProvider(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer provider.Close()
+	mem := memory.NewMemoryManager(provider)
+	tool := NewMemoryTool(mem)
+	tenantID := "tenant-list"
+
+	for _, c := range []struct{ target, content string }{
+		{"user", "Prefers Go over Python."},
+		{"memory", "Repo builds with GOWORK=off."},
+		{"pinned", "Name is Wei."},
+	} {
+		if _, err := tool.Execute(map[string]interface{}{"action": "add", "target": c.target, "content": c.content, "_tenant_id": tenantID}); err != nil {
+			t.Fatalf("add %s: %v", c.target, err)
+		}
+	}
+
+	out, err := tool.Execute(map[string]interface{}{"action": "list", "_tenant_id": tenantID})
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	for _, want := range []string{"## Memory", "### User", "Prefers Go over Python.", "Project / Environment", "Repo builds with GOWORK=off.", "Pinned", "Name is Wei."} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("list output missing %q:\n%s", want, out)
+		}
+	}
+}
+
 func TestMemoryToolHistoryAndUndo(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	ctx := context.Background()

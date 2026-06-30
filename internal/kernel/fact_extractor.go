@@ -115,14 +115,14 @@ func (fe *FactExtractor) Extract(ctx context.Context, tenantID string, mem *memo
 		if f == "" || isDuplicate(f, existingUserFacts) {
 			continue
 		}
-		_ = mem.AddFact(ctx, tenantID, "user", f)
+		_ = mem.AddFactMeta(ctx, tenantID, factWithMeta(ctx, "user", f, memory.SourceFactExtractor))
 	}
 	for _, f := range extracted.MemoryFacts {
 		f = strings.TrimSpace(f)
 		if f == "" || isDuplicate(f, existingMemFacts) {
 			continue
 		}
-		_ = mem.AddFact(ctx, tenantID, "memory", f)
+		_ = mem.AddFactMeta(ctx, tenantID, factWithMeta(ctx, "memory", f, memory.SourceFactExtractor))
 	}
 
 	return nil

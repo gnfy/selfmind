@@ -49,7 +49,9 @@
 | WeChat Official Account adapter | 🟡 | Inbound passive-reply + signature verify (`internal/gateway/wechat`); outbound now supported via the customer-service `custom/send` sender (`internal/gateway/delivery/wechat.go`, registered as platform `wechat`). Still no message encryption/decryption. |
 | Approval lifecycle | 🟡 | DB + API + `/approve` / `/reject` + codex-style approval modes (`/mode`) done. Native IM approval buttons not wired. |
 | CLI / TUI controller | 🟡 | Components partly extracted; `uiModel` in `controller.go` is still a monolith (violates AGENTS.md guidance). |
-| Run execution coordinator | 🟡 | `RunCoordinator` (`httpapi/run_coordinator.go`) owns the run lifecycle (`runMessage`/`startAsyncRun`), the active-run registry, and all pre/post-run helpers (workspace/task resolution, execution scope, approval handler, context assembly, stream aggregation, outcome persistence). Server is now the HTTP/orchestration layer. Remaining: `Agent.runMu` still serializes all runs through one shared Agent — a parallel worker pool (pool of agents) is the next step. |
+| TUI rendering (terminal-first hybrid) | 🟡 | **Default**: history committed to native terminal scrollback (`tea.Println`), only the active region redrawn (`history_commit.go`); terminal owns scroll/select/copy. `SELFMIND_TUI_LEGACY=1` falls back to the alt-screen viewport. Codex-style patch diffs (`renderPatchCell`), per-message render cache, `/history` (full diffs), `/copy`. Remaining: delete the legacy path + escape hatch once settled; write_file overwrite real diff; `/history` search + `control.db` backing. See `docs/tui-terminal-first-hybrid.md`. |
+| Run execution coordinator | 🟡 | `RunCoordinator` (`httpapi/run_coordinator.go`) owns the run lifecycle (`runMessage`/`startAsyncRun`), the active-run registry, and all pre/post-run helpers (workspace/task resolution, execution scope, approval handler, context assembly, stream aggregation, outcome persistence). Server is now the HTTP/orchestration layer. Worker pool shipped behind `SELFMIND_WORKERS` (see Multi-terminal concurrency row). |
+| Multi-terminal concurrency (daemon-client) | 🟡 | Decision: converge every terminal on ONE gateway daemon (the codex/hermes model) instead of cross-process locks. Foundation shipped: `gateway.EnsureRunning` (discover-or-autostart + health wait, race-safe via the `gateway.lock` flock); CLI client paths (`selfmind send/status/...`) auto-start a local daemon; `internal/gateway/client` daemon-backed `MessageProcessor` (sync `/v1/message` answer + best-effort event poll → ctx stream observer). Client mode is now the **default** for the TUI (`SELFMIND_TUI_INPROC=1` opts out; auto-falls-back to in-process if the daemon can't start). Chat + agent-backed slash commands (`/skills`, `/memory` incl. `list`, `/bundles`, `/checkpoint`) run on the daemon via a safelisted `/v1/dispatch` (workspace-mutating/code-exec tools refused 403); `/status`/`/tasks` route via the message processor; `/skills stats`,`/model` switch show a client-mode notice. Worker pool (`internal/runpool` + `SELFMIND_WORKERS`, default 1) runs inside that daemon. `workspaceSerialKey` serializes **write** turns only (read turns concurrent, codex Exclusive/SharedRead). Interactive tool approval works in client mode (inline `Approve? [y/N]` driven by the `approval.requested` event → `/v1/approvals/respond`). **Remaining**: session search over the daemon (last parity gap before deleting the in-process path); soak at N>1; per-provider cap (adapter layer, deferred). See `docs/worker-pool-design.md` §8. |
 | Process sandbox | 🟡 | Unix process-group isolation only; **not** a security sandbox (no namespace/seccomp/cgroup). Windows is a no-op. |
 | Feishu / Lark adapter | 🟡 | Inbound via the generic `/v1/im/feishu` webhook (verification-token / encrypt-key signature, challenge); outbound via `delivery.FeishuSender` (tenant_access_token + `im/v1/messages`, chat_id/open_id routing). Config drives both. Encrypt-envelope AES decryption still TODO (use plaintext mode). |
 | QQ official bot adapter | 🟡 | Inbound via `/v1/im/qq` webhook (group/C2C/guild events parsed into a `group:`/`c2c:`/`channel:` target); outbound via `delivery.QQSender` (app access token + per-target message API). Active push only — webhook ed25519 signature verify and passive `msg_id` threading are follow-ups. |
@@ -65,15 +67,17 @@
 These are the live gaps, ordered. They are derived from the table above, not from
 the historical roadmaps.
 
-1. **P0 — Parallel worker pool.** The run lifecycle, active-run registry, and
-   pre/post-run helpers are now extracted into `RunCoordinator`. The last step
-   is a real worker pool: today a single shared `kernel.Agent` serializes every
-   run via `Agent.runMu`. Audit shows the memory store (1-conn SQLite) and tool
-   dispatcher (RWMutex + per-person scope) are concurrency-safe; the blocker is
-   the per-agent mutable state (`toolCallCount`, `turnReviewCount`,
-   `contextEngine`). A pool of N agents (each running one turn at a time, shared
-   immutable deps) gives cross-person parallelism while keeping per-agent state
-   race-free. Verify with `-race`.
+1. **P0 — Daemon-client convergence (multi-terminal).** The worker pool shipped
+   (`internal/runpool` + `SELFMIND_WORKERS`), but it only helps *within one
+   process*. The real multi-terminal blocker is that the rich TUI still builds an
+   in-process gateway, so two `selfmind` terminals are two processes racing on
+   `control.db` / auth refresh / worker state. Fix (codex/hermes model): make the
+   TUI a thin client to one shared daemon. Foundation shipped (`EnsureRunning`,
+   CLI auto-start, `internal/gateway/client`, `SELFMIND_TUI_CLIENT=1`). Next:
+   default the TUI to client mode and route agent-backed slash commands
+   (`/model`, `/skills`, `/memory`, `/tasks`) over the gateway API so client mode
+   reaches parity. Then per-write-only workspace serialization, per-provider rate
+   cap, and a real N>1 soak.
 2. **P0 — Decompose the CLI controller**: move `uiModel` state out of
    `controller.go` into components, per the AGENTS.md guardrail.
 3. **P1 — Real `execute_code` sandbox** (namespace/seccomp/cgroup or container)

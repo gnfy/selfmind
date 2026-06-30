@@ -29,6 +29,10 @@ type App struct {
 	stderr     io.Writer
 	configPath string
 	input      *bufio.Reader
+
+	// gatewayEnsured guards the one-time local-daemon auto-start so each CLI
+	// client invocation probes/starts the gateway at most once.
+	gatewayEnsured bool
 }
 
 func Run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
@@ -125,6 +129,20 @@ func (a *App) runTUI() int {
 
 	log.Init(log.Options{Level: cfg.Agent.LogLevel})
 
+	// Daemon-client mode is now the DEFAULT: the TUI runs as a thin client to a
+	// single shared gateway daemon (the codex/hermes multi-terminal model), so
+	// the worker pool, single auth manager, per-workspace serialization, and one
+	// control.db all apply across terminals. `SELFMIND_TUI_INPROC=1` opts out
+	// (build an in-process gateway, the legacy single-process path). If the
+	// daemon can't be reached/started, we fall back to in-process so a
+	// misconfigured or first-run environment still gets a working TUI.
+	if os.Getenv("SELFMIND_TUI_INPROC") != "1" {
+		if code, ok := a.tryRunTUIClient(cfg); ok {
+			return code
+		}
+		fmt.Fprintln(a.stderr, "Falling back to in-process mode (set SELFMIND_TUI_INPROC=1 to silence).")
+	}
+
 	mem, dataDir, err := appcore.InitStorage(cfg)
 	if err != nil {
 		log.Fatal("app.InitStorage failed", "error", err)
@@ -151,6 +169,13 @@ func (a *App) runTUI() int {
 	gwDeps, err := appcore.InitGateway(dataDir, mem, agent, cfg, skillStore)
 	if err != nil {
 		log.Fatal("app.InitGateway failed", "error", err)
+	}
+	// Optional multi-worker execution (SELFMIND_WORKERS>1); default 1 keeps the
+	// single-agent serialized path unchanged.
+	if workers, err := appcore.MaybeEnableWorkerPool(gwDeps.Gateway, mem, cfg, skillStore, tenantID); err != nil {
+		log.Warn("worker pool partially enabled", "workers", workers, "error", err)
+	} else if workers > 1 {
+		log.Info("agent worker pool enabled", "workers", workers)
 	}
 	appcore.RegisterCronTool(disp, gwDeps.CronScheduler)
 	// Local TUI path has no gateway Server/executor; start cron so jobs still

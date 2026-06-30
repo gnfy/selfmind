@@ -62,6 +62,10 @@ type StorageProvider interface {
 
 	// Fact (Long-term Memory) operations
 	AddFact(ctx context.Context, tenantID string, target, content string) error
+	// AddFactMeta saves a fact with governance metadata (source/scope/
+	// confidence/created_from_run/last_verified_at). AddFact remains the
+	// metadata-less shortcut.
+	AddFactMeta(ctx context.Context, tenantID string, f Fact) error
 	GetFacts(ctx context.Context, tenantID string, target string) ([]Fact, error)
 	RemoveFact(ctx context.Context, tenantID string, id string) error
 
@@ -224,6 +228,14 @@ func (m *MemoryManager) AddFact(ctx context.Context, tenantID string, target, co
 		return fmt.Errorf("memory provider not initialized")
 	}
 	return m.provider.AddFact(ctx, tenantID, target, content)
+}
+
+// AddFactMeta saves a fact with governance metadata.
+func (m *MemoryManager) AddFactMeta(ctx context.Context, tenantID string, f Fact) error {
+	if m.provider == nil {
+		return nil
+	}
+	return m.provider.AddFactMeta(ctx, tenantID, f)
 }
 
 // GetFacts retrieves all facts for a target.

@@ -290,10 +290,46 @@ func (t *WriteFileTool) Execute(args map[string]interface{}) (string, error) {
 	if path == "" || content == "" {
 		return "", fmt.Errorf("path and content are required")
 	}
+	// Capture the pre-image so an overwrite can be shown as a real diff instead
+	// of an opaque "all-added" dump (W2d). Best-effort: a read error just means
+	// we treat it as a new file.
+	oldBytes, statErr := os.ReadFile(path)
+	existed := statErr == nil
 	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("Written %d bytes to %s", len(content), path), nil
+	return writeFileResult(path, string(oldBytes), content, existed), nil
+}
+
+// maxWriteDiffLines bounds the diff included in the write_file result so a large
+// write does not flood the model context (the TUI also bounds its preview).
+const maxWriteDiffLines = 60
+
+// writeFileResult renders the outcome of a write as a compact, diff-bearing
+// message: "Created"/"Edited <path> (+A -B)" plus a bounded unified diff. The
+// header verbs let the TUI recognize and colorize it.
+func writeFileResult(path, oldText, newText string, existed bool) string {
+	if existed && oldText == newText {
+		return fmt.Sprintf("No change to %s", path)
+	}
+	diff, added, removed := unifiedLineDiff(oldText, newText, 3)
+	verb := "Created"
+	if existed {
+		verb = "Edited"
+	}
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("%s %s (+%d -%d)\n", verb, path, added, removed))
+	shown := diff
+	truncated := 0
+	if len(diff) > maxWriteDiffLines {
+		shown = diff[:maxWriteDiffLines]
+		truncated = len(diff) - maxWriteDiffLines
+	}
+	sb.WriteString(strings.Join(shown, "\n"))
+	if truncated > 0 {
+		sb.WriteString(fmt.Sprintf("\n… +%d more diff line(s)", truncated))
+	}
+	return sb.String()
 }
 
 // ExecuteCommandTool 执行 Shell 命令

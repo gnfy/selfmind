@@ -97,6 +97,7 @@ func (a *App) sendGatewayMessage(content string) int {
 }
 
 func (a *App) sendGatewayMessageWithOptions(content string, async bool) int {
+	a.ensureLocalGateway()
 	url := a.gatewayURL()
 	userID := platformUserID()
 	clientCWD, _ := os.Getwd()
@@ -187,6 +188,7 @@ func (a *App) handleWorkspaceCommand(args []string) int {
 }
 
 func (a *App) registerWorkspace(path, name string) int {
+	a.ensureLocalGateway()
 	req := api.WorkspaceRegisterRequest{
 		TenantID:       os.Getenv("SELF_TENANT_ID"),
 		Platform:       "cli",

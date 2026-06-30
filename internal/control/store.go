@@ -646,6 +646,32 @@ func (s *Store) CurrentTask(ctx context.Context, tenantID, personID string) (*Ta
 	return s.GetTask(ctx, tenantID, taskID)
 }
 
+// CurrentTaskForChannel returns the most recent non-terminal task for this
+// person ON THIS CHANNEL. The per-person `current_task` pointer is a single
+// slot, so two concurrent sessions (e.g. two CLI terminals) would otherwise
+// share one task and bleed context into each other. Scoping by channel gives
+// each session its own working task while tasks stay resumable by id from any
+// channel. Falls back to the per-person current task when channel is empty.
+func (s *Store) CurrentTaskForChannel(ctx context.Context, tenantID, personID, channel string) (*Task, error) {
+	if strings.TrimSpace(channel) == "" {
+		return s.CurrentTask(ctx, tenantID, personID)
+	}
+	var taskID string
+	err := s.db.QueryRowContext(ctx,
+		`SELECT id FROM tasks
+		 WHERE tenant_id = ? AND person_id = ? AND last_channel = ?
+		   AND status NOT IN ('done','completed','cancelled')
+		 ORDER BY updated_at DESC LIMIT 1`,
+		normalizeTenant(tenantID), personID, channel).Scan(&taskID)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return s.GetTask(ctx, tenantID, taskID)
+}
+
 func (s *Store) GetTask(ctx context.Context, tenantID, taskID string) (*Task, error) {
 	var t Task
 	var nextSteps string

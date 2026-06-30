@@ -47,32 +47,68 @@ type MiniMaxOAuthStatus struct {
 	CredentialFilePath string
 }
 
+const miniMaxLoginHint = "MiniMax login expired or revoked — run `selfmind model login minimax`, then retry."
+
 func (s *CredentialStore) ResolveMiniMaxOAuth() Credential {
 	if s == nil || strings.TrimSpace(s.path) == "" {
 		return Credential{}
 	}
-	token, err := s.currentMiniMaxOAuthToken()
+	// Route through the process-global manager for per-file single-flight
+	// refresh (MiniMax also rotates its refresh token, so a worker pool would
+	// otherwise stampede it) + quarantine.
+	ref := AuthRef{Provider: "minimax-oauth", Kind: AuthOAuthFile, Path: s.path}
+	globalAuthManager.Register(ref, s.minimaxLoad, s.minimaxRefresh)
+	token, err := globalAuthManager.Token(ref)
 	if err != nil || token == "" {
 		return Credential{}
 	}
 	return Credential{
-		Token:  token,
-		Source: "selfmind-auth:" + s.path,
-		Getter: func() string {
-			token, err := s.currentMiniMaxOAuthToken()
-			if err != nil {
-				return ""
-			}
-			return token
-		},
-		Refresher: func() string {
-			token, err := s.refreshMiniMaxOAuthToken()
-			if err != nil {
-				return ""
-			}
-			return token
-		},
+		Token:     token,
+		Source:    "selfmind-auth:" + s.path,
+		Getter:    func() string { t, _ := globalAuthManager.Token(ref); return t },
+		Refresher: func() string { t, _ := globalAuthManager.ForceRefresh(ref); return t },
 	}
+}
+
+func (s *CredentialStore) minimaxLoad(AuthRef) (AuthSnapshot, error) {
+	state, err := readProviderState(s.path, MiniMaxOAuthProvider)
+	if err != nil {
+		return AuthSnapshot{}, err
+	}
+	return AuthSnapshot{
+		Token:        stringValue(state["access_token"]),
+		RefreshToken: stringValue(state["refresh_token"]),
+		ExpiresAt:    parseMiniMaxExpiry(stringValue(state["expires_at"])),
+	}, nil
+}
+
+func (s *CredentialStore) minimaxRefresh(AuthRef, AuthSnapshot) (AuthSnapshot, *AuthError) {
+	state, err := readProviderState(s.path, MiniMaxOAuthProvider)
+	if err != nil {
+		return AuthSnapshot{}, &AuthError{Reason: "read_auth_file", Cause: err}
+	}
+	refreshed, rerr := refreshMiniMaxOAuthState(s.path, state)
+	if rerr != nil {
+		quarantineMiniMaxOAuthState(s.path, state, rerr) // keep the on-disk diagnostic marker
+		return AuthSnapshot{}, classifyMiniMaxRefreshError(rerr)
+	}
+	return AuthSnapshot{
+		Token:        stringValue(refreshed["access_token"]),
+		RefreshToken: stringValue(refreshed["refresh_token"]),
+		ExpiresAt:    parseMiniMaxExpiry(stringValue(refreshed["expires_at"])),
+	}, nil
+}
+
+func classifyMiniMaxRefreshError(err error) *AuthError {
+	msg := strings.ToLower(err.Error())
+	permanent := strings.Contains(msg, "invalid_grant") ||
+		strings.Contains(msg, "invalid_client") ||
+		(strings.Contains(msg, "refresh_token") &&
+			(strings.Contains(msg, "expired") || strings.Contains(msg, "reused") || strings.Contains(msg, "revoked")))
+	if permanent {
+		return &AuthError{Permanent: true, Reason: "minimax_refresh_permanent", Actionable: miniMaxLoginHint, Cause: err}
+	}
+	return &AuthError{Reason: "minimax_refresh_transient", Cause: err}
 }
 
 func (s *CredentialStore) currentMiniMaxOAuthToken() (string, error) {

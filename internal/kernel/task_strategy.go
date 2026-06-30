@@ -32,6 +32,25 @@ const (
 	ToolModeFull       ToolMode = "full"
 )
 
+// MayWriteWorkspace reports whether this turn's tool surface can mutate the
+// workspace (create/edit files, run write-capable commands). Only write-capable
+// turns need per-workspace serialization; read-only turns (no tools, web-only,
+// or local-read) are safe to run concurrently on the same workspace. This is the
+// SelfMind equivalent of codex's Exclusive-vs-SharedRead access mode.
+func (m ToolMode) MayWriteWorkspace() bool {
+	switch m {
+	case ToolModeLocalWrite, ToolModeFull:
+		return true
+	default:
+		return false
+	}
+}
+
+// MayWriteWorkspace reports whether the turn's strategy can write the workspace.
+func (s TaskStrategy) MayWriteWorkspace() bool {
+	return s.ToolMode.MayWriteWorkspace()
+}
+
 // PlanPolicy controls whether update_plan is exposed and encouraged.
 type PlanPolicy string
 

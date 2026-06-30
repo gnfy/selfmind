@@ -102,6 +102,26 @@ func formatDuration(d time.Duration) string {
 	return fmt.Sprintf("%dm", m)
 }
 
+// formatElapsedCompact renders a running duration codex-style: "0s", "59s",
+// "1m 23s", "1h 02m 05s".
+func formatElapsedCompact(d time.Duration) string {
+	if d < 0 {
+		d = 0
+	}
+	total := int(d.Seconds())
+	h := total / 3600
+	m := (total % 3600) / 60
+	s := total % 60
+	switch {
+	case h > 0:
+		return fmt.Sprintf("%dh %02dm %02ds", h, m, s)
+	case m > 0:
+		return fmt.Sprintf("%dm %02ds", m, s)
+	default:
+		return fmt.Sprintf("%ds", s)
+	}
+}
+
 func valueOr(v, fallback string) string {
 	if v == "" {
 		return fallback

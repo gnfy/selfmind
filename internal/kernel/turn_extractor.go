@@ -126,14 +126,15 @@ func (te *TurnExtractor) Extract(ctx context.Context, tenantID string, mem *memo
 			if f == "" || isDuplicateFact(f, existingUser) {
 				continue
 			}
-			_ = mem.AddFact(bgCtx, tenantID, "user", f)
+			// Derive metadata from the original ctx (workspace/run); write via bgCtx.
+			_ = mem.AddFactMeta(bgCtx, tenantID, factWithMeta(ctx, "user", f, memory.SourceTurnExtractor))
 		}
 		for _, f := range facts.MemoryFacts {
 			f = strings.TrimSpace(f)
 			if f == "" || isDuplicateFact(f, existingMem) {
 				continue
 			}
-			_ = mem.AddFact(bgCtx, tenantID, "memory", f)
+			_ = mem.AddFactMeta(bgCtx, tenantID, factWithMeta(ctx, "memory", f, memory.SourceTurnExtractor))
 		}
 	}()
 }

@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"sync"
 	"time"
 )
 
@@ -19,6 +18,10 @@ const (
 )
 
 var codexOAuthTokenEndpoint = "https://auth.openai.com/oauth/token"
+
+// codexLoginHint is the actionable message surfaced on a permanent refresh
+// failure, instead of raw provider JSON.
+const codexLoginHint = "Codex login expired or revoked — run `codex login`, then retry."
 
 func codexCredentialFromFile(path string) Credential {
 	path = expandHome(path)
@@ -31,52 +34,84 @@ func codexCredentialFromFile(path string) Credential {
 	if token == "" && refreshToken == "" {
 		return Credential{}
 	}
-	var mu sync.Mutex
-	refresher := func() string {
-		mu.Lock()
-		defer mu.Unlock()
-		nextState, err := readJSONFile(path)
-		if err == nil {
-			state = nextState
-		}
-		if codexRefreshToken(state) == "" {
-			return ""
-		}
-		refreshed, err := refreshCodexOAuthState(path, state)
-		if err != nil {
-			return ""
-		}
-		state = refreshed
-		token, _ := codexAccessToken(state)
-		return token
-	}
-	getter := func() string {
-		mu.Lock()
-		defer mu.Unlock()
-		nextState, err := readJSONFile(path)
-		if err == nil {
-			state = nextState
-		}
-		token, expiresAt := codexAccessToken(state)
-		if shouldRefreshCodexToken(token, expiresAt) && codexRefreshToken(state) != "" {
-			if refreshed, err := refreshCodexOAuthState(path, state); err == nil {
-				state = refreshed
-				token, expiresAt = codexAccessToken(state)
-			}
-		}
-		_ = expiresAt
-		return token
-	}
-	if shouldRefreshCodexToken(token, expiresAt) && refreshToken != "" {
-		if refreshed, err := refreshCodexOAuthState(path, state); err == nil {
-			state = refreshed
-			token, expiresAt = codexAccessToken(state)
+
+	// Route refresh through the process-global manager: per-auth-file
+	// single-flight (no rotation stampede under a worker pool), quarantine on
+	// permanent failure, and an actionable error instead of an empty token.
+	ref := AuthRef{Provider: "codex-cli", Kind: AuthOAuthFile, Path: path}
+	globalAuthManager.Register(ref, codexLoad, codexRefresh)
+
+	// Resolve the current token now (refreshes if expired), preserving the old
+	// resolve-time behavior.
+	if resolved, rerr := globalAuthManager.Token(ref); rerr == nil && resolved != "" {
+		token = resolved
+		if snap, ok := globalAuthManager.snapshot(ref); ok {
+			expiresAt = snap.ExpiresAt
 		}
 	}
 	if token == "" {
 		return Credential{}
 	}
-	return Credential{Token: token, Source: path, ExpiresAt: expiresAt, Getter: getter, Refresher: refresher, AccountID: codexAccountID(state)}
+	return Credential{
+		Token:     token,
+		Source:    path,
+		ExpiresAt: expiresAt,
+		AccountID: globalAuthManager.AccountID(ref),
+		Getter:    func() string { t, _ := globalAuthManager.Token(ref); return t },
+		Refresher: func() string { t, _ := globalAuthManager.ForceRefresh(ref); return t },
+	}
+}
+
+// codexLoad reads the current Codex auth state into a snapshot.
+func codexLoad(ref AuthRef) (AuthSnapshot, error) {
+	state, err := readJSONFile(ref.Path)
+	if err != nil {
+		return AuthSnapshot{}, err
+	}
+	token, expiresAt := codexAccessToken(state)
+	return AuthSnapshot{
+		Token:        token,
+		RefreshToken: codexRefreshToken(state),
+		ExpiresAt:    expiresAt,
+		AccountID:    codexAccountID(state),
+	}, nil
+}
+
+// codexRefresh rotates the ChatGPT OAuth token (reusing the proven
+// refreshCodexOAuthState) and classifies failures as transient vs permanent.
+func codexRefresh(ref AuthRef, _ AuthSnapshot) (AuthSnapshot, *AuthError) {
+	state, err := readJSONFile(ref.Path)
+	if err != nil {
+		return AuthSnapshot{}, &AuthError{Reason: "read_auth_file", Cause: err}
+	}
+	if codexRefreshToken(state) == "" {
+		return AuthSnapshot{}, &AuthError{Permanent: true, Reason: "no_refresh_token", Actionable: codexLoginHint}
+	}
+	refreshed, rerr := refreshCodexOAuthState(ref.Path, state)
+	if rerr != nil {
+		return AuthSnapshot{}, classifyCodexRefreshError(rerr)
+	}
+	token, expiresAt := codexAccessToken(refreshed)
+	return AuthSnapshot{
+		Token:        token,
+		RefreshToken: codexRefreshToken(refreshed),
+		ExpiresAt:    expiresAt,
+		AccountID:    codexAccountID(refreshed),
+	}, nil
+}
+
+// classifyCodexRefreshError marks rotation/login failures permanent (quarantine
+// + `codex login`) and everything else transient (retryable).
+func classifyCodexRefreshError(err error) *AuthError {
+	msg := strings.ToLower(err.Error())
+	permanent := strings.Contains(msg, "invalid_grant") ||
+		strings.Contains(msg, "invalid_client") ||
+		(strings.Contains(msg, "refresh_token") &&
+			(strings.Contains(msg, "expired") || strings.Contains(msg, "reused") || strings.Contains(msg, "revoked")))
+	if permanent {
+		return &AuthError{Permanent: true, Reason: "codex_refresh_permanent", Actionable: codexLoginHint, Cause: err}
+	}
+	return &AuthError{Reason: "codex_refresh_transient", Cause: err}
 }
 
 // codexAccountID extracts the ChatGPT account id from auth.json. The

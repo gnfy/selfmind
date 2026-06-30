@@ -57,6 +57,25 @@ type MessageRequest struct {
 	ApprovalMode string `json:"approval_mode,omitempty"`
 }
 
+// DispatchRequest runs a single management tool on the daemon. It backs
+// agent-backed slash commands for thin TUI clients (no in-process agent). The
+// server restricts Tool to a management safelist and overrides the tenant scope
+// from the resolved identity, so this is not a general tool-execution backdoor.
+type DispatchRequest struct {
+	TenantID       string                 `json:"tenant_id"`
+	Platform       string                 `json:"platform"`
+	PlatformUserID string                 `json:"platform_user_id"`
+	DisplayName    string                 `json:"display_name"`
+	Tool           string                 `json:"tool"`
+	Args           map[string]interface{} `json:"args,omitempty"`
+}
+
+// DispatchResponse carries the tool's text result.
+type DispatchResponse struct {
+	Result string `json:"result"`
+	Error  string `json:"error,omitempty"`
+}
+
 type MessageAttachment struct {
 	Kind     string `json:"kind,omitempty"`
 	Path     string `json:"path,omitempty"`

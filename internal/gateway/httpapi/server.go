@@ -54,6 +54,7 @@ func (d *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", d.handleHealth)
 	mux.HandleFunc("/v1/message", d.handleMessage)
+	mux.HandleFunc("/v1/dispatch", d.handleDispatch)
 	mux.HandleFunc("/v1/im/", d.handleIMWebhook)
 	mux.HandleFunc("/v1/accounts/bind", d.handleAccountBind)
 	mux.HandleFunc("/v1/approvals", d.handleApprovals)
@@ -356,7 +357,9 @@ func (c *RunCoordinator) resolveTask(ctx context.Context, identity *control.Iden
 		}
 		return nil, fmt.Errorf("no task to continue; start a new task or use /resume <task_id>")
 	}
-	task, err := store.CurrentTask(ctx, identity.TenantID, identity.PersonID)
+	// Channel-scoped so two concurrent sessions (e.g. two CLI terminals) don't
+	// share one "current task" and bleed context into each other.
+	task, err := store.CurrentTaskForChannel(ctx, identity.TenantID, identity.PersonID, req.Channel)
 	if err != nil {
 		return nil, err
 	}

@@ -33,6 +33,10 @@ func (m *recordingMockStorage) AddFact(ctx context.Context, tenantID, target, co
 	m.facts = append(m.facts, memory.Fact{Target: target, Content: content})
 	return nil
 }
+func (m *recordingMockStorage) AddFactMeta(ctx context.Context, tenantID string, f memory.Fact) error {
+	m.facts = append(m.facts, f)
+	return nil
+}
 func (m *recordingMockStorage) GetFacts(ctx context.Context, tenantID, target string) ([]memory.Fact, error) {
 	var result []memory.Fact
 	for _, f := range m.facts {

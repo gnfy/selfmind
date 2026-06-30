@@ -69,6 +69,23 @@ repo:
   `selfmind` is the single binary; the daemon runs as `selfmind gateway run`.
   The CLI/TUI can still run locally, but IM/Web integration should go through
   gateway APIs. Do not reintroduce a separate daemon entrypoint binary.
+- Multi-terminal concurrency is solved by **daemon-client convergence**, not by
+  cross-process locks. Every terminal should converge on ONE gateway daemon (the
+  codex/hermes model) so the worker pool, the single process-global auth manager,
+  per-workspace serialization, and one `control.db` owner all apply across
+  terminals. Do NOT add cross-process business locks (auth-file locks,
+  cross-process DB write serialization, per-workspace file locks) to coordinate
+  multiple in-process gateways — that works around a problem that disappears when
+  clients share one daemon. Clients reach the daemon via `gateway.EnsureRunning`
+  (discover-or-autostart, race-safe through the `gateway.lock` flock) and the
+  `internal/gateway/client` daemon-backed `MessageProcessor`. The rich TUI runs
+  as a thin client by **default**; `SELFMIND_TUI_INPROC=1` opts back into the
+  in-process gateway, and the client path falls back to in-process automatically
+  if the daemon can't be reached/started. Agent-backed slash commands run on the
+  daemon via the safelisted `/v1/dispatch` (workspace-mutating/code-exec tools
+  are refused there — they must go through a real agent turn). The `gateway.lock`
+  flock is the only legitimate cross-process lock (daemon single-instance). See
+  `docs/worker-pool-design.md` §8.
 - Keep `cmd/selfmind/main.go` thin. User-facing command parsing and CLI client
   behavior belong in `internal/cliapp`; do not grow business logic in `cmd`.
 - Treat Linux server as the official release target. GitHub Releases should

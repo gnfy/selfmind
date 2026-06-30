@@ -67,9 +67,12 @@ func (c *RunCoordinator) selectedTaskRuntimeContext(ctx context.Context, task *c
 			})
 		}
 	}
-	if events, _ := c.srv.Control.ListTaskEvents(ctx, task.ID, 8); len(events) > 0 {
-		selected.Events = make([]kernel.TaskEventContext, 0, len(events))
-		for _, event := range reverseEvents(events) {
+	// Fetch a larger candidate window, then keep the most relevant events
+	// within the budget (W3d) rather than just the most recent 8.
+	if events, _ := c.srv.Control.ListTaskEvents(ctx, task.ID, 40); len(events) > 0 {
+		ranked := rankTaskEvents(events, 8)
+		selected.Events = make([]kernel.TaskEventContext, 0, len(ranked))
+		for _, event := range ranked {
 			selected.Events = append(selected.Events, kernel.TaskEventContext{
 				Type:      event.Type,
 				Channel:   event.Channel,

@@ -46,6 +46,9 @@ func (m *mockStorage) DeleteCheckpoint(ctx context.Context, tenantID, channel, n
 func (m *mockStorage) AddFact(ctx context.Context, tenantID string, target, content string) error {
 	return nil
 }
+func (m *mockStorage) AddFactMeta(ctx context.Context, tenantID string, f memory.Fact) error {
+	return nil
+}
 func (m *mockStorage) GetFacts(ctx context.Context, tenantID string, target string) ([]memory.Fact, error) {
 	return nil, nil
 }

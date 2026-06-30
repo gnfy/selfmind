@@ -37,6 +37,8 @@ var slashCommandMetas = []slashCommandMeta{
 	{Name: "/paste-image", Usage: "/paste-image", Description: "Attach a screenshot from the clipboard (local GUI only, not over SSH)", Hint: "attach a clipboard screenshot"},
 	{Name: "/mode", Usage: "/mode [on-request|read-only|auto-edit|full-auto]", Description: "Show or set the approval mode", Hint: "choose what runs without asking"},
 	{Name: "/capture", Usage: "/capture [title]", Description: "Save the last turn as a replayable eval case", Hint: "turn this turn into a regression test"},
+	{Name: "/history", Usage: "/history", Description: "Open a scrollable view of the full conversation with complete diffs", Hint: "review past turns and full diffs"},
+	{Name: "/copy", Usage: "/copy", Description: "Copy the last assistant response to the clipboard", Hint: "copy the last response"},
 }
 
 var slashCommands = []slashCommand{
@@ -51,6 +53,8 @@ var slashCommands = []slashCommand{
 				current := "(unknown)"
 				if m.agent != nil {
 					current = m.agent.CurrentModel()
+				} else if m.modelName != "" {
+					current = m.modelName // client mode: show the daemon's display model
 				}
 				m.addMessage("assistant", fmt.Sprintf("Current model: %s", current))
 				m.addMessage("assistant", "Usage: /model <model-name>  (e.g. /model claude-3-5-haiku-20241022)")
@@ -122,7 +126,7 @@ var slashCommands = []slashCommand{
 		Run: func(m *uiModel, args []string) tea.Cmd {
 			m.messages = []ChatMessage{}
 			m.viewport.SetContent("")
-			return nil
+			return m.clearHybridScreen()
 		},
 	},
 	{
@@ -153,6 +157,19 @@ var slashCommands = []slashCommand{
 		slashCommandMeta: slashCommandMetas[16],
 		Run: func(m *uiModel, args []string) tea.Cmd {
 			return m.handleCapture(args)
+		},
+	},
+	{
+		slashCommandMeta: slashCommandMetas[17],
+		Run: func(m *uiModel, args []string) tea.Cmd {
+			m.openHistory()
+			return nil
+		},
+	},
+	{
+		slashCommandMeta: slashCommandMetas[18],
+		Run: func(m *uiModel, args []string) tea.Cmd {
+			return m.handleCopyLast()
 		},
 	},
 }

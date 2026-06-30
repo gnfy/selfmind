@@ -303,9 +303,27 @@ func (p *SQLiteProvider) worker() {
 				_, err := db.Exec(`INSERT INTO facts (id, target, content) VALUES (?, ?, ?)`, id, target, content)
 				res = dbResult{err: err}
 
+			case "AddFactMeta":
+				f := op.args[1].(Fact)
+				id := f.ID
+				if id == "" {
+					id = uuid.New().String()
+				}
+				var lastVerified interface{}
+				if !f.LastVerifiedAt.IsZero() {
+					lastVerified = f.LastVerifiedAt.UTC().Unix() // store epoch seconds to avoid datetime-format drift
+				}
+				_, err := db.Exec(
+					`INSERT INTO facts (id, target, content, source, scope, confidence, created_from_run, last_verified_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+					id, f.Target, f.Content, f.Source, f.Scope, f.Confidence, f.CreatedFromRun, lastVerified)
+				res = dbResult{err: err}
+
 			case "GetFacts":
 				target := op.args[1].(string)
-				rows, err := db.Query(`SELECT id, target, content, created_at FROM facts WHERE target = ?`, target)
+				rows, err := db.Query(`SELECT id, target, content, created_at,
+					COALESCE(source,''), COALESCE(scope,''), COALESCE(confidence,0),
+					COALESCE(created_from_run,''), last_verified_at
+					FROM facts WHERE target = ?`, target)
 				if err != nil {
 					res = dbResult{err: err}
 				} else {
@@ -313,10 +331,15 @@ func (p *SQLiteProvider) worker() {
 					for rows.Next() {
 						var f Fact
 						var createdAt string
-						if err := rows.Scan(&f.ID, &f.Target, &f.Content, &createdAt); err != nil {
+						var lastVerified sql.NullInt64
+						if err := rows.Scan(&f.ID, &f.Target, &f.Content, &createdAt,
+							&f.Source, &f.Scope, &f.Confidence, &f.CreatedFromRun, &lastVerified); err != nil {
 							continue
 						}
 						f.CreatedAt, _ = time.Parse("2006-01-02 15:04:05", createdAt)
+						if lastVerified.Valid && lastVerified.Int64 > 0 {
+							f.LastVerifiedAt = time.Unix(lastVerified.Int64, 0).UTC()
+						}
 						results = append(results, f)
 					}
 					rows.Close()
@@ -573,6 +596,50 @@ func (p *SQLiteProvider) initSchema(db *sql.DB) error {
 			return fmt.Errorf("create %s: %w", stmt.name, err)
 		}
 	}
+	// Backward-compatible governance-metadata migration (W3): add the columns
+	// to pre-existing facts tables. Existing rows read back with zero-value
+	// metadata; no data is rewritten.
+	if err := addMissingColumns(db, "facts", []columnDef{
+		{"source", "TEXT DEFAULT ''"},
+		{"scope", "TEXT DEFAULT ''"},
+		{"confidence", "REAL DEFAULT 0"},
+		{"created_from_run", "TEXT DEFAULT ''"},
+		{"last_verified_at", "DATETIME"},
+	}); err != nil {
+		return err
+	}
+	return nil
+}
+
+type columnDef struct{ name, ddl string }
+
+// addMissingColumns adds any of cols not already present on table. SQLite lacks
+// "ADD COLUMN IF NOT EXISTS", so existing columns are detected via PRAGMA.
+func addMissingColumns(db *sql.DB, table string, cols []columnDef) error {
+	rows, err := db.Query(fmt.Sprintf("PRAGMA table_info(%s)", table))
+	if err != nil {
+		return err
+	}
+	existing := map[string]bool{}
+	for rows.Next() {
+		var cid, notnull, pk int
+		var name, ctype string
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			rows.Close()
+			return err
+		}
+		existing[name] = true
+	}
+	rows.Close()
+	for _, c := range cols {
+		if existing[c.name] {
+			continue
+		}
+		if _, err := db.Exec(fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", table, c.name, c.ddl)); err != nil {
+			return fmt.Errorf("add column %s.%s: %w", table, c.name, err)
+		}
+	}
 	return nil
 }
 
@@ -701,6 +768,11 @@ func (p *SQLiteProvider) IndexMessagesFromTrajectory(ctx context.Context, tenant
 
 func (p *SQLiteProvider) AddFact(ctx context.Context, tenantID string, target, content string) error {
 	_, err := p.call("AddFact", tenantID, target, content)
+	return err
+}
+
+func (p *SQLiteProvider) AddFactMeta(ctx context.Context, tenantID string, f Fact) error {
+	_, err := p.call("AddFactMeta", tenantID, f)
 	return err
 }
 

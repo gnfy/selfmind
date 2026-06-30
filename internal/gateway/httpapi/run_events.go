@@ -225,7 +225,15 @@ func (c *RunCoordinator) recordStreamEvent(ctx context.Context, channel string, 
 		if event.ToolCallID != "" {
 			payload["tool_call_id"] = event.ToolCallID
 		}
-		payload["result"] = tools.RedactSensitive(truncate(event.ToolResult, 1000))
+		// Most tool results are previews (1000 chars is plenty). update_plan is the
+		// exception: its result is the structured plan JSON that the client TUI
+		// re-parses to render the Codex-style checklist, so a mid-JSON cut would
+		// break rendering. Plans are bounded (≤20 short steps), so keep them whole.
+		resultLimit := 1000
+		if event.ToolName == "update_plan" {
+			resultLimit = 8000
+		}
+		payload["result"] = tools.RedactSensitive(truncate(event.ToolResult, resultLimit))
 		payload["duration_seconds"] = event.DurationSeconds
 		if event.Err != nil {
 			payload["error"] = tools.RedactSensitive(event.Err.Error())

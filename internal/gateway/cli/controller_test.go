@@ -1,12 +1,16 @@
 package cli
 
 import (
+	"bytes"
+	"context"
 	"io"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"selfmind/internal/gateway/api"
 	"selfmind/internal/platform/config"
 )
 
@@ -425,8 +429,13 @@ func TestToolMessageFormatsPlanJSON(t *testing.T) {
 	if strings.Contains(rendered, `{"plan"`) {
 		t.Fatalf("plan JSON should not be rendered directly: %q", rendered)
 	}
-	if !strings.Contains(rendered, "Updated plan") || !strings.Contains(rendered, "now: 写代码") {
-		t.Fatalf("unexpected plan rendering: %q", rendered)
+	// Codex-style checklist (hybrid): header `Updated plan · done/total` + per-step
+	// glyphs ✔ completed / □ in-progress (cyan) / □ pending.
+	if !strings.Contains(rendered, "Updated plan · 1/2") {
+		t.Fatalf("plan should show progress count: %q", rendered)
+	}
+	if !strings.Contains(rendered, "✔ 确认环境") || !strings.Contains(rendered, "□ 写代码") {
+		t.Fatalf("plan should show per-step status markers: %q", rendered)
 	}
 }
 
@@ -500,6 +509,360 @@ func TestReadFileToolMessageSummarizesSize(t *testing.T) {
 	}
 	if strings.Contains(rendered, "package main") {
 		t.Fatalf("read_file message should not echo file contents: %q", rendered)
+	}
+}
+
+func TestTranscriptCacheConsistentAndInvalidates(t *testing.T) {
+	model := NewController(nil, nil, nil, "").model
+	model.viewport.Width = 80
+	model.viewport.Height = 24
+	model.messages = []ChatMessage{
+		{Role: "user", Content: "hello"},
+		{Role: "assistant", Content: "world **bold** and `code`"},
+		{Role: "tool", ToolName: "read_file", ToolArgs: `{"path":"a.go"}`, Content: "x\ny\nz", Duration: 0.2},
+	}
+
+	first := model.renderAllMessages()
+	second := model.renderAllMessages() // must hit the cache
+	if first != second {
+		t.Fatalf("cached render differs from first render")
+	}
+	if model.transcriptCache == nil || len(model.transcriptCache.entries) == 0 {
+		t.Fatalf("cache was not populated")
+	}
+
+	// Mutating a message must change the output — the fingerprint busts its
+	// cache entry rather than serving a stale render.
+	model.messages[1].Content = "world changed entirely"
+	third := model.renderAllMessages()
+	if third == first {
+		t.Fatalf("render did not reflect mutated message (stale cache)")
+	}
+	if !strings.Contains(stripANSI(third), "changed entirely") {
+		t.Fatalf("mutated content missing from render: %q", stripANSI(third))
+	}
+}
+
+func TestTranscriptCacheResetsOnWidthChange(t *testing.T) {
+	model := NewController(nil, nil, nil, "").model
+	model.viewport.Height = 24
+	model.messages = []ChatMessage{{Role: "assistant", Content: strings.Repeat("word ", 50)}}
+
+	model.viewport.Width = 90
+	wide := model.renderAllMessages()
+	model.viewport.Width = 40
+	narrow := model.renderAllMessages()
+
+	if model.transcriptCache.width != 40 {
+		t.Fatalf("cache width not updated after resize: %d", model.transcriptCache.width)
+	}
+	if wide == narrow {
+		t.Fatalf("narrower width should rewrap to different output")
+	}
+}
+
+// BenchmarkRenderAllMessagesCached approximates a long multi-turn session and
+// measures the warm-cache redraw cost (the path hit by every spinner/cursor
+// tick). Compare against the cost before Phase 1 by stubbing the cache out.
+func BenchmarkRenderAllMessagesCached(b *testing.B) {
+	model := NewController(nil, nil, nil, "").model
+	model.viewport.Width = 100
+	model.viewport.Height = 40
+	for i := 0; i < 200; i++ {
+		n := strconv.Itoa(i)
+		model.messages = append(model.messages,
+			ChatMessage{Role: "user", Content: "question " + n + " about the codebase"},
+			ChatMessage{Role: "assistant", Content: "answer " + n + " with **markdown**, `code`, and a list\n- alpha\n- beta\n- gamma"},
+		)
+	}
+	model.renderAllMessages() // warm the cache
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = model.renderAllMessages()
+	}
+}
+
+// BenchmarkRenderAllMessagesCold drops the cache before each render to
+// approximate the pre-Phase-1 behavior (re-render all history every frame).
+// The ratio against the cached benchmark is the per-frame win.
+func BenchmarkRenderAllMessagesCold(b *testing.B) {
+	model := NewController(nil, nil, nil, "").model
+	model.viewport.Width = 100
+	model.viewport.Height = 40
+	for i := 0; i < 200; i++ {
+		n := strconv.Itoa(i)
+		model.messages = append(model.messages,
+			ChatMessage{Role: "user", Content: "question " + n + " about the codebase"},
+			ChatMessage{Role: "assistant", Content: "answer " + n + " with **markdown**, `code`, and a list\n- alpha\n- beta\n- gamma"},
+		)
+	}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		model.transcriptCache = nil // force a full cold re-render
+		_ = model.renderAllMessages()
+	}
+}
+
+func TestPatchCellRendersAddWithGutterAndStat(t *testing.T) {
+	patch := "*** Begin Patch\n*** Add File: game.html\n+<!doctype html>\n+<title>x</title>\n+done\n*** End Patch"
+	out := stripANSI(renderToolMessage(ChatMessage{
+		Role:     "tool",
+		ToolName: "patch",
+		ToolArgs: `{"patch":` + strconv.Quote(patch) + `}`,
+		Content:  `{"Success":true,"FilesCreated":["game.html"]}`,
+		Duration: 0.3,
+	}, 100))
+
+	if !strings.Contains(out, "Added game.html (+3 -0)") {
+		t.Fatalf("missing codex-style add header: %q", out)
+	}
+	if !strings.Contains(out, "1 + <!doctype html>") {
+		t.Fatalf("new file should show a line-number gutter: %q", out)
+	}
+	if strings.Contains(out, "Edited with patch") {
+		t.Fatalf("should use the new file-change renderer, not the generic verb: %q", out)
+	}
+}
+
+func TestPatchCellRendersEditHunks(t *testing.T) {
+	patch := "*** Begin Patch\n*** Update File: main.go\n@@ func main @@\n keep := context.Background()\n-old := 1\n+new := 2\n*** End Patch"
+	out := stripANSI(renderToolMessage(ChatMessage{
+		Role:     "tool",
+		ToolName: "patch",
+		ToolArgs: `{"patch":` + strconv.Quote(patch) + `}`,
+		Content:  `{"Success":true,"FilesModified":["main.go"]}`,
+		Duration: 0.1,
+	}, 100))
+
+	if !strings.Contains(out, "Edited main.go (+1 -1)") {
+		t.Fatalf("missing edit header: %q", out)
+	}
+	if !strings.Contains(out, "- old := 1") || !strings.Contains(out, "+ new := 2") {
+		t.Fatalf("edit hunk should show colored +/- lines: %q", out)
+	}
+	if !strings.Contains(out, "@@ func main") {
+		t.Fatalf("edit should show the hunk context hint: %q", out)
+	}
+}
+
+func TestPatchCellBoundsLargeAdd(t *testing.T) {
+	var b strings.Builder
+	b.WriteString("*** Begin Patch\n*** Add File: big.txt\n")
+	for i := 0; i < 120; i++ {
+		b.WriteString("+line\n")
+	}
+	b.WriteString("*** End Patch")
+	out := stripANSI(renderPatchCell(b.String(), 0, 100, maxPatchPreviewLines))
+
+	if !strings.Contains(out, "Added big.txt (+120 -0)") {
+		t.Fatalf("header should report full stat even when body is bounded: %q", out)
+	}
+	if !strings.Contains(out, "more line(s)") {
+		t.Fatalf("large diff should be bounded with a remainder note: %q", out)
+	}
+}
+
+func TestHistoryContentRendersUnboundedDiff(t *testing.T) {
+	var p strings.Builder
+	p.WriteString("*** Begin Patch\n*** Add File: big.txt\n")
+	for i := 0; i < 120; i++ {
+		p.WriteString("+line\n")
+	}
+	p.WriteString("*** End Patch")
+	model := NewController(nil, nil, nil, "").model
+	model.width = 100
+	model.messages = []ChatMessage{{
+		Role: "tool", ToolName: "patch",
+		ToolArgs: `{"patch":` + strconv.Quote(p.String()) + `}`,
+		Content:  `{"Success":true,"FilesCreated":["big.txt"]}`,
+	}}
+
+	out := stripANSI(model.renderHistoryContent(100))
+	if strings.Contains(out, "more line(s)") {
+		t.Fatalf("history view should show the full diff, not a bounded preview: %q", out)
+	}
+	if !strings.Contains(out, "120 + line") {
+		t.Fatalf("history view should render all diff lines incl. #120: %q", out)
+	}
+}
+
+func TestTrimHistoryWindowEvictsCommittedPrefix(t *testing.T) {
+	model := NewController(nil, nil, nil, "").model
+	model.messages = make([]ChatMessage, maxHistoryWindow+50)
+	for i := range model.messages {
+		model.messages[i] = ChatMessage{Role: "assistant", Content: "x", Committed: true}
+	}
+	model.trimHistoryWindow()
+	if len(model.messages) != maxHistoryWindow {
+		t.Fatalf("expected window trimmed to %d, got %d", maxHistoryWindow, len(model.messages))
+	}
+
+	// An uncommitted message at the front is never evicted.
+	model.messages = make([]ChatMessage, maxHistoryWindow+50)
+	model.messages[0] = ChatMessage{Role: "tool", IsRunning: true} // uncommitted
+	for i := 1; i < len(model.messages); i++ {
+		model.messages[i] = ChatMessage{Role: "assistant", Committed: true}
+	}
+	model.trimHistoryWindow()
+	if len(model.messages) != maxHistoryWindow+50 {
+		t.Fatalf("must not evict when an uncommitted cell is at the front: got %d", len(model.messages))
+	}
+}
+
+func TestHandleCopyLastSelectsAssistant(t *testing.T) {
+	model := NewController(nil, nil, nil, "").model
+	model.handleCopyLast()
+	if model.statusMsg != "No response to copy yet." {
+		t.Fatalf("empty history should report nothing to copy: %q", model.statusMsg)
+	}
+
+	model.messages = []ChatMessage{
+		{Role: "user", Content: "question"},
+		{Role: "assistant", Content: "the answer"},
+	}
+	model.statusMsg = ""
+	model.handleCopyLast()
+	// Clipboard may be unavailable in CI; we only assert it attempted the copy
+	// (i.e. found a response) rather than reporting "nothing to copy".
+	if model.statusMsg == "No response to copy yet." || model.statusMsg == "" {
+		t.Fatalf("should have attempted to copy the last assistant response: %q", model.statusMsg)
+	}
+}
+
+// TestHybridSubmitDoesNotDeadlock drives the real bubbletea loop headlessly
+// (piped input/output) and submits a prompt. The original bug committed cells
+// via Program.Println synchronously inside Update, which deadlocked the loop on
+// the first submit. With the fix (queue + flush as tea.Println Cmds) the loop
+// keeps running, so p.Quit() is honored and Run returns within the timeout.
+func TestHybridSubmitDoesNotDeadlock(t *testing.T) {
+	c := NewController(nil, nil, nil, "")
+	c.model.hybrid = true
+	c.SetMessageProcessor(func(ctx context.Context, req api.MessageRequest) (api.MessageResponse, int) {
+		return api.MessageResponse{Content: "stub answer"}, 200
+	})
+
+	in := bytes.NewReader([]byte("hi\r")) // type "hi" then Enter → submit
+	var out bytes.Buffer
+	p := tea.NewProgram(c.model,
+		tea.WithInput(in),
+		tea.WithOutput(&out),
+		tea.WithoutSignalHandler(),
+	)
+	c.model.program = p
+
+	done := make(chan error, 1)
+	go func() { _, err := p.Run(); done <- err }()
+
+	p.Send(tea.WindowSizeMsg{Width: 100, Height: 30})
+	go func() {
+		time.Sleep(700 * time.Millisecond) // let submit + commit + stub run
+		p.Quit()
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Skipf("headless bubbletea unavailable in this environment: %v", err)
+		}
+	case <-time.After(8 * time.Second):
+		p.Kill()
+		t.Fatal("hybrid program hung on submit — Update-loop deadlock not fixed")
+	}
+}
+
+func TestHybridIsDefaultWithLegacyEscapeHatch(t *testing.T) {
+	t.Setenv("SELFMIND_TUI_LEGACY", "")
+	if !hybridMode() {
+		t.Fatal("terminal-first hybrid should be the default")
+	}
+	t.Setenv("SELFMIND_TUI_LEGACY", "1")
+	if hybridMode() {
+		t.Fatal("SELFMIND_TUI_LEGACY=1 should force the legacy renderer")
+	}
+}
+
+func TestHybridCommitsStartupCardToScrollbackOnce(t *testing.T) {
+	model := NewController(nil, nil, nil, "").model
+	model.hybrid = true
+
+	model.updateInner(tea.WindowSizeMsg{Width: 100, Height: 30})
+	if !model.startupCommitted {
+		t.Fatal("startup card should be committed on first resize")
+	}
+	if len(model.pendingPrintln) != 1 || !strings.Contains(model.pendingPrintln[0], "SelfMind") {
+		t.Fatalf("startup card should be queued to scrollback once: %v", model.pendingPrintln)
+	}
+
+	model.pendingPrintln = nil
+	model.updateInner(tea.WindowSizeMsg{Width: 120, Height: 40})
+	if len(model.pendingPrintln) != 0 {
+		t.Fatalf("startup card must be committed only once, got: %v", model.pendingPrintln)
+	}
+}
+
+func TestWriteFileCellRendersDiff(t *testing.T) {
+	content := "Edited app.go (+1 -1)\n keep\n-old line\n+new line"
+	out := stripANSI(renderToolMessage(ChatMessage{
+		Role:     "tool",
+		ToolName: "write_file",
+		ToolArgs: `{"path":"app.go"}`,
+		Content:  content,
+		Duration: 0.2,
+	}, 100))
+
+	if !strings.Contains(out, "Edited app.go (+1 -1)") {
+		t.Fatalf("missing write_file header: %q", out)
+	}
+	if !strings.Contains(out, "-old line") || !strings.Contains(out, "+new line") {
+		t.Fatalf("write_file cell should show the colored diff: %q", out)
+	}
+}
+
+func TestHybridCommitMarksMessageImmutable(t *testing.T) {
+	model := NewController(nil, nil, nil, "").model
+	model.hybrid = true
+	model.width = 80
+	model.messages = []ChatMessage{{Role: "user", Content: "hello"}}
+
+	model.commit(&model.messages[0])
+	if !model.messages[0].Committed {
+		t.Fatalf("commit should mark the message committed")
+	}
+	model.commit(&model.messages[0]) // idempotent, no panic with nil program
+}
+
+func TestHybridActiveBlockShowsOnlyUncommitted(t *testing.T) {
+	model := NewController(nil, nil, nil, "").model
+	model.hybrid = true
+	model.width = 80
+	model.messages = []ChatMessage{
+		{Role: "assistant", Content: "committed answer", Committed: true},
+		{Role: "tool", ToolName: "terminal", ToolArgs: `{"command":"go test ./..."}`, IsRunning: true},
+	}
+	model.liveStreamContent = "streaming reply in progress"
+
+	block := stripANSI(model.renderActiveBlock(80))
+	if strings.Contains(block, "committed answer") {
+		t.Fatalf("active block must not include committed cells: %q", block)
+	}
+	if !strings.Contains(block, "go test ./...") {
+		t.Fatalf("active block should show the in-progress tool: %q", block)
+	}
+	if !strings.Contains(block, "streaming reply in progress") {
+		t.Fatalf("active block should show the live stream: %q", block)
+	}
+}
+
+func TestHybridViewDoesNotReRenderCommittedHistory(t *testing.T) {
+	model := NewController(nil, nil, nil, "").model
+	model.hybrid = true
+	model.width = 80
+	model.height = 24
+	model.messages = []ChatMessage{{Role: "user", Content: "scrolled-away message", Committed: true}}
+
+	view := stripANSI(model.viewModel())
+	if strings.Contains(view, "scrolled-away message") {
+		t.Fatalf("hybrid view must render only the active region, not committed history: %q", view)
 	}
 }
 

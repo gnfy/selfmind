@@ -9,6 +9,7 @@ import (
 	"selfmind/internal/kernel/identity"
 	"selfmind/internal/kernel/llm"
 	"selfmind/internal/kernel/task"
+	"selfmind/internal/runpool"
 )
 
 // Gateway is the lightweight routing facade used by CLI/HTTP/IM before a
@@ -21,6 +22,71 @@ type Gateway struct {
 	llmProvider      llm.Provider
 	modelProvider    string
 	modelName        string
+
+	// Worker pool (W1b). nil = single-agent serialized path (default, unchanged).
+	// When enabled (SELFMIND_WORKERS>1), runs check out a worker agent from
+	// `agents`, scheduled by `pool` (per-workspace serialized, bounded
+	// concurrency). See docs/worker-pool-design.md.
+	pool   *runpool.Pool
+	agents chan *kernel.Agent
+}
+
+// EnableWorkerPool turns on multi-worker execution with the primary agent plus
+// the given extra worker agents. A no-op when extra is empty (keeps the
+// default single-agent path), so default behavior is unchanged.
+func (g *Gateway) EnableWorkerPool(extra []*kernel.Agent) {
+	if g == nil || g.agent == nil || len(extra) == 0 {
+		return
+	}
+	all := append([]*kernel.Agent{g.agent}, extra...)
+	g.agents = make(chan *kernel.Agent, len(all))
+	for _, a := range all {
+		g.agents <- a
+	}
+	g.pool = runpool.New(len(all))
+}
+
+// runConversation runs one turn. With no worker pool it calls the single shared
+// agent exactly as before; with a pool it acquires a slot (serialized per
+// workspace), checks out a worker agent, runs, and returns it.
+func (g *Gateway) runConversation(ctx context.Context, uid, channel, input string) (string, llm.UsageStats, error) {
+	if g.pool == nil {
+		return g.agent.RunConversation(ctx, uid, channel, input)
+	}
+	var (
+		resp   string
+		usage  llm.UsageStats
+		runErr error
+	)
+	poolErr := g.pool.Run(ctx, workspaceSerialKey(ctx), func() error {
+		ag := <-g.agents
+		defer func() { g.agents <- ag }()
+		resp, usage, runErr = ag.RunConversation(ctx, uid, channel, input)
+		return runErr
+	})
+	if poolErr != nil && runErr == nil {
+		// Cancelled while queued (or pool returned before running fn).
+		return "", usage, poolErr
+	}
+	return resp, usage, runErr
+}
+
+// workspaceSerialKey serializes WRITE turns on the same workspace; an empty key
+// means the turn runs in parallel with any other. Read-only turns (no tools,
+// web-only, or local-read per the per-turn TaskStrategy) return an empty key so
+// concurrent readers of the same workspace are not needlessly serialized —
+// matching codex's Exclusive-vs-SharedRead distinction. When no strategy is
+// pinned (unknown surface), we conservatively serialize, since an agent turn
+// could write.
+func workspaceSerialKey(ctx context.Context) string {
+	ws, ok := kernel.WorkspaceContextFromContext(ctx)
+	if !ok || ws.ID == "" {
+		return ""
+	}
+	if strategy, ok := kernel.TaskStrategyFromContext(ctx); ok && !strategy.MayWriteWorkspace() {
+		return "" // read-only turn: safe to run concurrently on this workspace
+	}
+	return ws.ID
 }
 
 func NewGateway(
@@ -116,7 +182,7 @@ func (g *Gateway) handleTaskStreaming(ctx context.Context, unifiedUID, channel, 
 	respChan := make(chan llm.StreamEvent, 256)
 	go func() {
 		defer close(respChan)
-		resp, usage, err := g.agent.RunConversation(ctx, unifiedUID, channel, input)
+		resp, usage, err := g.runConversation(ctx, unifiedUID, channel, input)
 		if err != nil {
 			respChan <- llm.StreamEvent{Err: err}
 			if intent == IntentTask {
@@ -161,7 +227,7 @@ func (g *Gateway) runAgentStreaming(ctx context.Context, unifiedUID, channel, in
 	respChan := make(chan llm.StreamEvent, 256)
 	go func() {
 		defer close(respChan)
-		resp, usage, err := g.agent.RunConversation(ctx, unifiedUID, channel, input)
+		resp, usage, err := g.runConversation(ctx, unifiedUID, channel, input)
 		if err != nil {
 			respChan <- llm.StreamEvent{Err: err}
 			return
@@ -298,6 +364,21 @@ func (g *Gateway) handleSkill(ctx context.Context, unifiedUID, channel, input st
 		"_tenant_id": unifiedUID,
 	})
 	return resp, llm.UsageStats{}, err
+}
+
+// DispatchTool runs a single management tool through the agent's backend and
+// returns its text result. It powers daemon-side execution of agent-backed
+// slash commands (/skills, /memory subcommands, /bundles, /curator,
+// /checkpoint) so a thin TUI client can run them without an in-process agent.
+// It is NOT a full agent turn — no per-run mutable state is touched — so it is
+// safe to call concurrently alongside the worker pool. Callers (the HTTP
+// handler) are responsible for restricting which tools may be dispatched and for
+// setting the tenant scope in args.
+func (g *Gateway) DispatchTool(tool string, args map[string]interface{}) (string, error) {
+	if g == nil || g.agent == nil || g.agent.Dispatcher() == nil {
+		return "", fmt.Errorf("gateway agent is not configured")
+	}
+	return g.agent.Dispatcher().Dispatch(tool, args)
 }
 
 func (g *Gateway) handleQuery(ctx context.Context, unifiedUID, channel, input string) (string, llm.UsageStats, error) {

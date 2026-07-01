@@ -28,7 +28,11 @@ type App struct {
 	stdout     io.Writer
 	stderr     io.Writer
 	configPath string
-	input      *bufio.Reader
+	// resumeChannel is the session id from `selfmind --resume <uuid>`; empty
+	// starts a fresh session. Chats are channel-local, so resuming means
+	// reusing that channel's conversation history.
+	resumeChannel string
+	input         *bufio.Reader
 
 	// gatewayEnsured guards the one-time local-daemon auto-start so each CLI
 	// client invocation probes/starts the gateway at most once.
@@ -68,8 +72,14 @@ func Run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		fmt.Fprintln(stderr, err)
 		return 2
 	}
+	cleanedArgs, resumeChannel, err := splitResumeFlag(cleanedArgs)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 2
+	}
 	app.args = cleanedArgs
 	app.configPath = configPath
+	app.resumeChannel = resumeChannel
 	if configPath != "" {
 		_ = os.Setenv("SELF_CONFIG", configPath)
 	}
@@ -111,7 +121,7 @@ func printTopLevelHelp(stdout io.Writer) {
 	fmt.Fprintln(stdout, "SelfMind")
 	fmt.Fprintln(stdout)
 	fmt.Fprintln(stdout, "Usage:")
-	fmt.Fprintln(stdout, "  selfmind [--config PATH]")
+	fmt.Fprintln(stdout, "  selfmind [--config PATH] [--resume SESSION_ID]")
 	fmt.Fprintln(stdout, "  selfmind model [current|check|list|set <provider> <model>]")
 	fmt.Fprintln(stdout, "  selfmind auth [login|status|logout] ...")
 	fmt.Fprintln(stdout, "  selfmind eval [list|run|report]")
@@ -193,6 +203,7 @@ func (a *App) runTUI() int {
 
 	displayProvider, displayModel, _ := appcore.ResolveModelDisplay(cfg)
 	ctrl := tui.NewControllerWithGateway(gwDeps.Gateway, agent, nil, displayProvider, displayModel, cfg, tenantID)
+	ctrl.SetSessionChannel(a.resumeChannel)
 	localGateway := &httpapi.Server{
 		Control:         controlStore,
 		Gateway:         gwDeps.Gateway,
@@ -229,6 +240,7 @@ func (a *App) runTUI() int {
 	})
 
 	ctrl.Start()
+	printResumeHint(a.stdout, ctrl.SessionChannel())
 	fmt.Fprintln(a.stdout, "Goodbye!")
 	return 0
 }
@@ -259,6 +271,36 @@ func splitGlobalConfigFlag(args []string) ([]string, string, error) {
 	return cleaned, configPath, nil
 }
 
+// splitResumeFlag extracts `--resume <uuid>` / `--resume=<uuid>` (and the short
+// `-r`) from the TUI args, returning the remaining args and the resume session
+// id. The flag only affects the interactive TUI; subcommands ignore it because
+// they never see it here.
+func splitResumeFlag(args []string) ([]string, string, error) {
+	if len(args) == 0 {
+		return args, "", nil
+	}
+	cleaned := []string{args[0]}
+	resume := ""
+	for i := 1; i < len(args); i++ {
+		arg := args[i]
+		switch {
+		case arg == "-r" || arg == "--resume":
+			if i+1 >= len(args) {
+				return nil, "", fmt.Errorf("%s requires a session id", arg)
+			}
+			resume = args[i+1]
+			i++
+		case strings.HasPrefix(arg, "--resume="):
+			resume = strings.TrimPrefix(arg, "--resume=")
+		case strings.HasPrefix(arg, "-r="):
+			resume = strings.TrimPrefix(arg, "-r=")
+		default:
+			cleaned = append(cleaned, arg)
+		}
+	}
+	return cleaned, strings.TrimSpace(resume), nil
+}
+
 func (a *App) applyGatewayConfigEnv() {
 	cfg, err := config.LoadConfig(config.Options{Path: a.configPath})
 	if err != nil {
@@ -278,6 +320,18 @@ func (a *App) applyGatewayConfigEnv() {
 	if cfg.FlightRecorder.Keep > 0 {
 		setEnvIfEmpty("SELFMIND_FLIGHT_KEEP", strconv.Itoa(cfg.FlightRecorder.Keep))
 	}
+}
+
+// printResumeHint prints the Claude-Code-style resume line on exit so the user
+// can reopen this exact conversation. The session id is the channel this run
+// used; chats are channel-local, so `--resume <id>` reattaches to its history.
+func printResumeHint(w io.Writer, sessionID string) {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return
+	}
+	fmt.Fprintln(w, "Resume this session with:")
+	fmt.Fprintf(w, "  selfmind --resume %s\n", sessionID)
 }
 
 func setEnvIfEmpty(key, value string) {

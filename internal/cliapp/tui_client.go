@@ -55,6 +55,7 @@ func (a *App) tryRunTUIClient(cfg *config.Config) (int, bool) {
 	// and client mode gates agent-backed slash commands so nothing dereferences
 	// the absent in-process agent.
 	ctrl := tui.NewControllerWithGateway(nil, nil, nil, displayProvider, displayModel, cfg, tenantID)
+	ctrl.SetSessionChannel(a.resumeChannel)
 	ctrl.SetMessageProcessor(client.ProcessMessage)
 	ctrl.SetClientMode(true)
 	// Agent-backed slash commands (/skills, /memory subcommands, /bundles,
@@ -65,6 +66,7 @@ func (a *App) tryRunTUIClient(cfg *config.Config) (int, bool) {
 	ctrl.SetApprovalResponder(client.RespondApproval)
 
 	ctrl.Start()
+	printResumeHint(a.stdout, ctrl.SessionChannel())
 	fmt.Fprintln(a.stdout, "Goodbye!")
 	return 0, true
 }

@@ -13,6 +13,7 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/google/uuid"
 	"github.com/mattn/go-runewidth"
 	"selfmind/internal/app"
 	"selfmind/internal/gateway/api"
@@ -329,6 +330,29 @@ func (c *Controller) SetCleanupFn(fn func()) {
 	c.cleanupFn = fn
 }
 
+// SessionChannel returns the chat channel this session ran on. Chats are
+// channel-local (per AGENTS.md), so reusing this value via `selfmind --resume
+// <uuid>` resumes the same conversation history. Used by the CLI to print a
+// resume hint on exit.
+func (c *Controller) SessionChannel() string {
+	if c == nil || c.model == nil {
+		return ""
+	}
+	return c.model.channel
+}
+
+// SetSessionChannel overrides the chat channel for this session. The CLI calls
+// it when the user resumes a prior session with `selfmind --resume <uuid>`, so
+// this process converges on that session's channel-local history. Must be
+// called before Start(); channel is only read at message-send time.
+func (c *Controller) SetSessionChannel(ch string) {
+	ch = strings.TrimSpace(ch)
+	if c == nil || c.model == nil || ch == "" {
+		return
+	}
+	c.model.channel = ch
+}
+
 func (c *Controller) ClarifyHandler() tools.ClarifyHandler {
 	if c == nil || c.model == nil || c.model.clarifyBridge == nil {
 		return nil
@@ -392,7 +416,9 @@ func (c *Controller) Start() {
 // cliSessionChannelID is unique per CLI process so two terminals run by the
 // same user don't share a channel-local conversation (chats are channel-local
 // per AGENTS.md; a shared "cli" channel made concurrent sessions bleed context).
-var cliSessionChannelID = fmt.Sprintf("cli-%d-%d", os.Getpid(), time.Now().UnixNano()%100000)
+// It doubles as the resumable session id printed on exit and accepted by
+// `selfmind --resume <uuid>`, so it must be a stable, opaque identifier.
+var cliSessionChannelID = uuid.NewString()
 
 // cliSessionChannel returns this process's chat channel. SELFMIND_CHANNEL
 // overrides it with a stable, explicitly-shared channel when the user wants

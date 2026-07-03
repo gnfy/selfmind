@@ -1,0 +1,383 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "content": "1"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "先"
+    },
+    {
+      "content": "明确"
+    },
+    {
+      "content": "重"
+    },
+    {
+      "content": "构"
+    },
+    {
+      "content": "目标"
+    },
+    {
+      "content": "与"
+    },
+    {
+      "content": "边"
+    },
+    {
+      "content": "界"
+    },
+    {
+      "content": "："
+    },
+    {
+      "content": "确定"
+    },
+    {
+      "content": "要"
+    },
+    {
+      "content": "改善"
+    },
+    {
+      "content": "的是"
+    },
+    {
+      "content": "可"
+    },
+    {
+      "content": "读"
+    },
+    {
+      "content": "性"
+    },
+    {
+      "content": "、"
+    },
+    {
+      "content": "性能"
+    },
+    {
+      "content": "、"
+    },
+    {
+      "content": "稳定"
+    },
+    {
+      "content": "性"
+    },
+    {
+      "content": "、"
+    },
+    {
+      "content": "扩"
+    },
+    {
+      "content": "展"
+    },
+    {
+      "content": "性"
+    },
+    {
+      "content": "还是"
+    },
+    {
+      "content": "测试"
+    },
+    {
+      "content": "覆盖"
+    },
+    {
+      "content": "，并"
+    },
+    {
+      "content": "冻结"
+    },
+    {
+      "content": "本"
+    },
+    {
+      "content": "轮"
+    },
+    {
+      "content": "不"
+    },
+    {
+      "content": "改"
+    },
+    {
+      "content": "动"
+    },
+    {
+      "content": "的"
+    },
+    {
+      "content": "功能"
+    },
+    {
+      "content": "范围"
+    },
+    {
+      "content": "。"
+    },
+    {
+      "content": "  \n"
+    },
+    {
+      "content": "2"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": " 再"
+    },
+    {
+      "content": "拆"
+    },
+    {
+      "content": "分"
+    },
+    {
+      "content": "高"
+    },
+    {
+      "content": "风险"
+    },
+    {
+      "content": "模块"
+    },
+    {
+      "content": "："
+    },
+    {
+      "content": "按"
+    },
+    {
+      "content": "职责"
+    },
+    {
+      "content": "、"
+    },
+    {
+      "content": "依"
+    },
+    {
+      "content": "赖"
+    },
+    {
+      "content": "关系"
+    },
+    {
+      "content": "和"
+    },
+    {
+      "content": "变"
+    },
+    {
+      "content": "更"
+    },
+    {
+      "content": "频"
+    },
+    {
+      "content": "率"
+    },
+    {
+      "content": "划"
+    },
+    {
+      "content": "分"
+    },
+    {
+      "content": "重"
+    },
+    {
+      "content": "构"
+    },
+    {
+      "content": "优"
+    },
+    {
+      "content": "先"
+    },
+    {
+      "content": "级"
+    },
+    {
+      "content": "，"
+    },
+    {
+      "content": "优"
+    },
+    {
+      "content": "先"
+    },
+    {
+      "content": "处理"
+    },
+    {
+      "content": "耦"
+    },
+    {
+      "content": "合"
+    },
+    {
+      "content": "高"
+    },
+    {
+      "content": "但"
+    },
+    {
+      "content": "收益"
+    },
+    {
+      "content": "明确"
+    },
+    {
+      "content": "的"
+    },
+    {
+      "content": "部分"
+    },
+    {
+      "content": "。"
+    },
+    {
+      "content": "  \n"
+    },
+    {
+      "content": "3"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": " 最"
+    },
+    {
+      "content": "后"
+    },
+    {
+      "content": "分"
+    },
+    {
+      "content": "批"
+    },
+    {
+      "content": "落"
+    },
+    {
+      "content": "地"
+    },
+    {
+      "content": "并"
+    },
+    {
+      "content": "验证"
+    },
+    {
+      "content": "："
+    },
+    {
+      "content": "每"
+    },
+    {
+      "content": "次"
+    },
+    {
+      "content": "只"
+    },
+    {
+      "content": "做"
+    },
+    {
+      "content": "小"
+    },
+    {
+      "content": "范围"
+    },
+    {
+      "content": "重"
+    },
+    {
+      "content": "构"
+    },
+    {
+      "content": "，"
+    },
+    {
+      "content": "配"
+    },
+    {
+      "content": "套"
+    },
+    {
+      "content": "补"
+    },
+    {
+      "content": "充"
+    },
+    {
+      "content": "测试"
+    },
+    {
+      "content": "或"
+    },
+    {
+      "content": "回"
+    },
+    {
+      "content": "归"
+    },
+    {
+      "content": "检查"
+    },
+    {
+      "content": "，"
+    },
+    {
+      "content": "确保"
+    },
+    {
+      "content": "行为"
+    },
+    {
+      "content": "不"
+    },
+    {
+      "content": "变"
+    },
+    {
+      "content": "后"
+    },
+    {
+      "content": "再"
+    },
+    {
+      "content": "进入"
+    },
+    {
+      "content": "下一"
+    },
+    {
+      "content": "批"
+    },
+    {
+      "content": "。"
+    },
+    {
+      "usage": {
+        "InputTokens": 6644,
+        "OutputTokens": 171
+      }
+    }
+  ]
+}

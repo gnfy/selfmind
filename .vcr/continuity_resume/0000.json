@@ -1,0 +1,12 @@
+{
+  "method": "chat",
+  "chat": {
+    "Content": "配置加载 配置初始化 配置解析 配置管理 config_loader",
+    "ToolCalls": null,
+    "Usage": {
+      "InputTokens": 266,
+      "OutputTokens": 198
+    },
+    "FinishReason": ""
+  }
+}

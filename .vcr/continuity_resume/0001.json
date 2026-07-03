@@ -1,0 +1,275 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "content": "1"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "先"
+    },
+    {
+      "content": "梳"
+    },
+    {
+      "content": "理"
+    },
+    {
+      "content": "现"
+    },
+    {
+      "content": "有"
+    },
+    {
+      "content": "配置"
+    },
+    {
+      "content": "来源"
+    },
+    {
+      "content": "、"
+    },
+    {
+      "content": "优"
+    },
+    {
+      "content": "先"
+    },
+    {
+      "content": "级"
+    },
+    {
+      "content": "和"
+    },
+    {
+      "content": "使用"
+    },
+    {
+      "content": "入口"
+    },
+    {
+      "content": "，"
+    },
+    {
+      "content": "明确"
+    },
+    {
+      "content": "哪些"
+    },
+    {
+      "content": "行为"
+    },
+    {
+      "content": "必须"
+    },
+    {
+      "content": "保持"
+    },
+    {
+      "content": "兼"
+    },
+    {
+      "content": "容"
+    },
+    {
+      "content": "。"
+    },
+    {
+      "content": "  \n"
+    },
+    {
+      "content": "2"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": " 再"
+    },
+    {
+      "content": "设计"
+    },
+    {
+      "content": "统一"
+    },
+    {
+      "content": "的"
+    },
+    {
+      "content": "配置"
+    },
+    {
+      "content": "加载"
+    },
+    {
+      "content": "流程"
+    },
+    {
+      "content": "，把"
+    },
+    {
+      "content": "读取"
+    },
+    {
+      "content": "、"
+    },
+    {
+      "content": "解析"
+    },
+    {
+      "content": "、"
+    },
+    {
+      "content": "校"
+    },
+    {
+      "content": "验"
+    },
+    {
+      "content": "、"
+    },
+    {
+      "content": "默认"
+    },
+    {
+      "content": "值"
+    },
+    {
+      "content": "和"
+    },
+    {
+      "content": "环境"
+    },
+    {
+      "content": "覆盖"
+    },
+    {
+      "content": "拆"
+    },
+    {
+      "content": "成"
+    },
+    {
+      "content": "清"
+    },
+    {
+      "content": "晰"
+    },
+    {
+      "content": "边"
+    },
+    {
+      "content": "界"
+    },
+    {
+      "content": "。"
+    },
+    {
+      "content": "  \n"
+    },
+    {
+      "content": "3"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": " 最"
+    },
+    {
+      "content": "后"
+    },
+    {
+      "content": "分"
+    },
+    {
+      "content": "阶段"
+    },
+    {
+      "content": "替"
+    },
+    {
+      "content": "换"
+    },
+    {
+      "content": "旧"
+    },
+    {
+      "content": "入口"
+    },
+    {
+      "content": "并"
+    },
+    {
+      "content": "补"
+    },
+    {
+      "content": "齐"
+    },
+    {
+      "content": "回"
+    },
+    {
+      "content": "归"
+    },
+    {
+      "content": "验证"
+    },
+    {
+      "content": "，"
+    },
+    {
+      "content": "确保"
+    },
+    {
+      "content": "每"
+    },
+    {
+      "content": "次"
+    },
+    {
+      "content": "迁"
+    },
+    {
+      "content": "移"
+    },
+    {
+      "content": "都"
+    },
+    {
+      "content": "能"
+    },
+    {
+      "content": "快速"
+    },
+    {
+      "content": "发现"
+    },
+    {
+      "content": "配置"
+    },
+    {
+      "content": "行为"
+    },
+    {
+      "content": "差"
+    },
+    {
+      "content": "异"
+    },
+    {
+      "content": "。"
+    },
+    {
+      "usage": {
+        "InputTokens": 6641,
+        "OutputTokens": 135
+      }
+    }
+  ]
+}

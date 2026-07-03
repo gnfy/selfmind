@@ -1,0 +1,12 @@
+{
+  "method": "chat",
+  "chat": {
+    "Content": "重构 优化 代码整理 架构调整 模块拆分",
+    "ToolCalls": null,
+    "Usage": {
+      "InputTokens": 277,
+      "OutputTokens": 239
+    },
+    "FinishReason": ""
+  }
+}

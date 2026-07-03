@@ -1,0 +1,182 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "content": "1"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "先"
+    },
+    {
+      "content": "梳"
+    },
+    {
+      "content": "理"
+    },
+    {
+      "content": "目标"
+    },
+    {
+      "content": "范围"
+    },
+    {
+      "content": "与"
+    },
+    {
+      "content": "受"
+    },
+    {
+      "content": "影响"
+    },
+    {
+      "content": "模块"
+    },
+    {
+      "content": "，"
+    },
+    {
+      "content": "明确"
+    },
+    {
+      "content": "只"
+    },
+    {
+      "content": "做"
+    },
+    {
+      "content": "低"
+    },
+    {
+      "content": "风险"
+    },
+    {
+      "content": "、"
+    },
+    {
+      "content": "可"
+    },
+    {
+      "content": "回"
+    },
+    {
+      "content": "滚"
+    },
+    {
+      "content": "的小"
+    },
+    {
+      "content": "幅"
+    },
+    {
+      "content": "结构"
+    },
+    {
+      "content": "调整"
+    },
+    {
+      "content": "。\n\n"
+    },
+    {
+      "content": "2"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": " 再"
+    },
+    {
+      "content": "按"
+    },
+    {
+      "content": "优"
+    },
+    {
+      "content": "先"
+    },
+    {
+      "content": "级"
+    },
+    {
+      "content": "拆"
+    },
+    {
+      "content": "分"
+    },
+    {
+      "content": "改"
+    },
+    {
+      "content": "动"
+    },
+    {
+      "content": "并"
+    },
+    {
+      "content": "配"
+    },
+    {
+      "content": "套"
+    },
+    {
+      "content": "验证"
+    },
+    {
+      "content": "点"
+    },
+    {
+      "content": "，"
+    },
+    {
+      "content": "确保"
+    },
+    {
+      "content": "每"
+    },
+    {
+      "content": "次"
+    },
+    {
+      "content": "调整"
+    },
+    {
+      "content": "后"
+    },
+    {
+      "content": "都"
+    },
+    {
+      "content": "能"
+    },
+    {
+      "content": "快速"
+    },
+    {
+      "content": "确认"
+    },
+    {
+      "content": "行为"
+    },
+    {
+      "content": "不"
+    },
+    {
+      "content": "变"
+    },
+    {
+      "content": "。"
+    },
+    {
+      "usage": {
+        "InputTokens": 6661,
+        "OutputTokens": 122
+      }
+    }
+  ]
+}

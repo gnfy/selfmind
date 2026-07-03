@@ -1,0 +1,12 @@
+{
+  "method": "chat",
+  "chat": {
+    "Content": "配置加载 配置管理 配置解析 环境变量覆盖 回归验证",
+    "ToolCalls": null,
+    "Usage": {
+      "InputTokens": 859,
+      "OutputTokens": 233
+    },
+    "FinishReason": ""
+  }
+}

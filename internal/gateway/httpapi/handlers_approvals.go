@@ -40,6 +40,11 @@ func (d *Server) handleApprovals(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
+	if status == "pending" {
+		// Same stable order as the /approvals text list so clients can render
+		// ordinals that match what /approve <n> resolves.
+		sortApprovalsForDisplay(approvals)
+	}
 	writeJSON(w, http.StatusOK, api.ApprovalListResponse{Identity: identity, Approvals: approvals})
 }
 
@@ -68,12 +73,15 @@ func (d *Server) handleApprovalRespond(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	approval, err := d.Control.RespondApprovalRequest(r.Context(), identity.TenantID, identity.PersonID, req.ApprovalID, req.Decision, fallback(req.Channel, req.Platform))
+	// ApprovalID accepts the same references as /approve: the /approvals list
+	// number, a unique apr_ prefix, a full id, or empty when exactly one
+	// approval is pending. Resolution failures are user errors (400 + a
+	// human-readable message), never a 500.
+	approval, err := d.respondApprovalByToken(r.Context(), identity, req.ApprovalID, req.Decision, fallback(req.Channel, req.Platform))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	appendApprovalEvent(r.Context(), d.Control, approval, fallback(req.Channel, req.Platform))
 	writeJSON(w, http.StatusOK, api.ApprovalRespondResponse{Identity: identity, Approval: approval})
 }
 

@@ -230,11 +230,43 @@ func messageRequestFromIM(platform string, payload map[string]interface{}) api.M
 		}
 	}
 
+	// Telegram-style callback_query (inline button tap): map the button's
+	// callback data (approve:<id> / reject:<id>) onto the shared /approve
+	// control-command path so button taps and typed commands resolve approvals
+	// identically.
+	if cb := nestedMap(payload, "callback_query"); cb != nil {
+		if from := nestedMap(cb, "from"); from != nil {
+			req.PlatformUserID = firstNonEmpty(mapString(from, "id"), req.PlatformUserID)
+		}
+		if msg := nestedMap(cb, "message"); msg != nil {
+			if chat := nestedMap(msg, "chat"); chat != nil {
+				req.Channel = firstNonEmpty(mapString(chat, "id"), req.Channel)
+			}
+		}
+		if cmd := approvalCommandFromCallbackData(mapString(cb, "data")); cmd != "" {
+			req.Content = cmd
+		}
+	}
+
 	req.PlatformUserID = firstNonEmpty(mapString(payload, "FromUserName"), req.PlatformUserID)
 	req.Channel = firstNonEmpty(mapString(payload, "ToUserName"), req.Channel)
 	req.Content = firstNonEmpty(mapString(payload, "Content"), req.Content)
 	req.Attachments = attachmentsFromIM(payload)
 	return req
+}
+
+// approvalCommandFromCallbackData translates inline-button callback data into
+// the equivalent control command ("" when the data is not an approval action).
+func approvalCommandFromCallbackData(data string) string {
+	data = strings.TrimSpace(data)
+	switch {
+	case strings.HasPrefix(data, "approve:"):
+		return "/approve " + strings.TrimSpace(strings.TrimPrefix(data, "approve:"))
+	case strings.HasPrefix(data, "reject:"):
+		return "/reject " + strings.TrimSpace(strings.TrimPrefix(data, "reject:"))
+	default:
+		return ""
+	}
 }
 
 func attachmentsFromIM(payload map[string]interface{}) []api.MessageAttachment {

@@ -134,6 +134,7 @@ existing person. `/id` shows the current tenant/person/account resolution.
 ## Known gaps on the north-star path
 
 Tracked with priorities in `docs/STATUS.md` ("Highest-Value Next Work"):
-IM-native approval buttons, continuity eval cassettes, session-search client
-parity, stranger-isolation hardening (QQ webhook signature, Feishu envelope
-decryption).
+account visibility (`GET /v1/accounts`), stuck-run recovery, session-search
+client parity, stranger-isolation hardening (QQ webhook signature, Feishu
+envelope decryption). IM-native approval buttons and approval-reference UX
+shipped 2026-07-04 (see the Approval lifecycle row in `docs/STATUS.md`).

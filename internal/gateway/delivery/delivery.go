@@ -25,9 +25,18 @@ type Message struct {
 	TaskID         string `json:"task_id,omitempty"`
 	RunID          string `json:"run_id,omitempty"`
 	Content        string `json:"content"`
-	PartIndex      int    `json:"part_index,omitempty"`
-	PartTotal      int    `json:"part_total,omitempty"`
+	// Kind types the message so platform senders can attach native affordances
+	// instead of string-sniffing content. KindApproval + ApprovalID drive the
+	// Telegram inline approve/reject keyboard; senders without native support
+	// ignore both and fall back to the text instructions in Content.
+	Kind       string `json:"kind,omitempty"`
+	ApprovalID string `json:"approval_id,omitempty"`
+	PartIndex  int    `json:"part_index,omitempty"`
+	PartTotal  int    `json:"part_total,omitempty"`
 }
+
+// KindApproval marks an approval-request notification.
+const KindApproval = "approval"
 
 type Sender interface {
 	Send(ctx context.Context, msg Message) error
@@ -57,6 +66,19 @@ func (r *Router) Register(platform string, sender Sender) {
 		return
 	}
 	r.byPlatform[platform] = sender
+}
+
+// HasPlatform reports whether a message for the platform would reach a real
+// sender (platform-specific or default). The gateway uses it to skip fan-out
+// targets that would only fail and burn retry attempts.
+func (r *Router) HasPlatform(platform string) bool {
+	if r == nil {
+		return false
+	}
+	if _, ok := r.byPlatform[strings.ToLower(strings.TrimSpace(platform))]; ok {
+		return true
+	}
+	return r.defaultSender != nil
 }
 
 func (r *Router) Send(ctx context.Context, msg Message) error {
@@ -133,6 +155,19 @@ func (s *Service) Stop() {
 	}
 }
 
+// SupportsPlatform reports whether this service can deliver to the platform.
+// It is best-effort: when the configured sender does not expose platform
+// routing information (custom senders, tests), it assumes delivery is possible.
+func (s *Service) SupportsPlatform(platform string) bool {
+	if s == nil || s.sender == nil {
+		return false
+	}
+	if checker, ok := s.sender.(interface{ HasPlatform(string) bool }); ok {
+		return checker.HasPlatform(platform)
+	}
+	return true
+}
+
 func (s *Service) EnqueueAndTry(ctx context.Context, msg Message) error {
 	if s == nil || s.store == nil {
 		return ErrNoSender
@@ -153,6 +188,8 @@ func (s *Service) EnqueueAndTry(ctx context.Context, msg Message) error {
 			TaskID:         msg.TaskID,
 			RunID:          msg.RunID,
 			Content:        part,
+			Kind:           msg.Kind,
+			ApprovalID:     msg.ApprovalID,
 			MaxAttempts:    s.opts.RetryAttempts,
 			PartIndex:      i + 1,
 			PartTotal:      len(parts),
@@ -208,6 +245,8 @@ func (s *Service) tryDelivery(ctx context.Context, d *control.Delivery) error {
 		TaskID:         d.TaskID,
 		RunID:          d.RunID,
 		Content:        d.Content,
+		Kind:           d.Kind,
+		ApprovalID:     d.ApprovalID,
 		PartIndex:      d.PartIndex,
 		PartTotal:      d.PartTotal,
 	}

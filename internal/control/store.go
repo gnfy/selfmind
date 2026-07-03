@@ -308,6 +308,8 @@ CREATE TABLE IF NOT EXISTS outbound_messages (
 	task_id TEXT,
 	run_id TEXT,
 	content TEXT NOT NULL,
+	kind TEXT,
+	approval_id TEXT,
 	status TEXT NOT NULL,
 	attempts INTEGER NOT NULL DEFAULT 0,
 	max_attempts INTEGER NOT NULL DEFAULT 3,
@@ -334,6 +336,11 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_outbound_idempotency ON outbound_messages(
 		{"task_runs", "cancel_requested", "INTEGER NOT NULL DEFAULT 0"},
 		{"task_runs", "last_error", "TEXT"},
 		{"outbound_messages", "platform_user_id", "TEXT"},
+		// kind/approval_id let retried deliveries keep their typed rendering
+		// (e.g. Telegram approval inline buttons) instead of degrading to plain
+		// text after the first failed attempt.
+		{"outbound_messages", "kind", "TEXT"},
+		{"outbound_messages", "approval_id", "TEXT"},
 	} {
 		if err := s.ensureColumn(ctx, col.table, col.name, col.def); err != nil {
 			return err
@@ -466,6 +473,47 @@ func (s *Store) BindAccount(ctx context.Context, tenantID, personID, platform, p
 		return nil, err
 	}
 	return s.ResolveOrCreateAccount(ctx, tenantID, platform, platformUserID, displayName)
+}
+
+// Account is one platform binding row for a person. The gateway uses it to fan
+// notifications (e.g. approval requests raised from the CLI) out to the
+// person's other bound endpoints; adapters never enumerate accounts themselves.
+type Account struct {
+	ID             string `json:"id"`
+	TenantID       string `json:"tenant_id"`
+	PersonID       string `json:"person_id"`
+	Platform       string `json:"platform"`
+	PlatformUserID string `json:"platform_user_id"`
+	DisplayName    string `json:"display_name,omitempty"`
+	Status         string `json:"status"`
+}
+
+// ListAccountsByPerson returns the person's active platform bindings in bind
+// order. Only 'active' rows are returned so an unbound endpoint stops
+// receiving cross-channel notifications immediately.
+func (s *Store) ListAccountsByPerson(ctx context.Context, tenantID, personID string) ([]Account, error) {
+	if strings.TrimSpace(personID) == "" {
+		return nil, fmt.Errorf("person id is required")
+	}
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, tenant_id, person_id, platform, platform_user_id, COALESCE(display_name, ''), status
+		 FROM accounts
+		 WHERE tenant_id = ? AND person_id = ? AND status = 'active'
+		 ORDER BY created_at ASC, id ASC`,
+		normalizeTenant(tenantID), personID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Account
+	for rows.Next() {
+		var a Account
+		if err := rows.Scan(&a.ID, &a.TenantID, &a.PersonID, &a.Platform, &a.PlatformUserID, &a.DisplayName, &a.Status); err != nil {
+			return nil, err
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
 }
 
 func (s *Store) RegisterWorkspace(ctx context.Context, ws Workspace) (*Workspace, error) {

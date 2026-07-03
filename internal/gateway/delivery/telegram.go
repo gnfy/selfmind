@@ -11,9 +11,13 @@ import (
 	"time"
 )
 
+const defaultTelegramAPIBaseURL = "https://api.telegram.org"
+
 type TelegramSender struct {
-	Token  string
-	Client *http.Client
+	Token string
+	// BaseURL overrides the Telegram API host (tests); empty = production API.
+	BaseURL string
+	Client  *http.Client
 }
 
 func (s *TelegramSender) Send(ctx context.Context, msg Message) error {
@@ -22,6 +26,9 @@ func (s *TelegramSender) Send(ctx context.Context, msg Message) error {
 		return ErrNoSender
 	}
 	chatID := strings.TrimSpace(msg.Channel)
+	if chatID == "" {
+		chatID = strings.TrimSpace(msg.PlatformUserID)
+	}
 	if chatID == "" {
 		return fmt.Errorf("telegram channel/chat_id is required")
 	}
@@ -33,8 +40,24 @@ func (s *TelegramSender) Send(ctx context.Context, msg Message) error {
 		"chat_id": chatID,
 		"text":    text,
 	}
+	// Approval notifications get native approve/reject buttons; the callback
+	// data round-trips the approval id so the inbound callback_query handler can
+	// respond without parsing message text. Buttons only go on the final part of
+	// a split message so a long preview does not produce duplicate keyboards.
+	if msg.Kind == KindApproval && strings.TrimSpace(msg.ApprovalID) != "" && (msg.PartTotal <= 1 || msg.PartIndex == msg.PartTotal) {
+		payload["reply_markup"] = map[string]interface{}{
+			"inline_keyboard": [][]map[string]string{
+				{{"text": "✅ Approve", "callback_data": "approve:" + strings.TrimSpace(msg.ApprovalID)}},
+				{{"text": "❌ Reject", "callback_data": "reject:" + strings.TrimSpace(msg.ApprovalID)}},
+			},
+		}
+	}
+	base := strings.TrimRight(strings.TrimSpace(s.BaseURL), "/")
+	if base == "" {
+		base = defaultTelegramAPIBaseURL
+	}
 	body, _ := json.Marshal(payload)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage", token), bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, fmt.Sprintf("%s/bot%s/sendMessage", base, token), bytes.NewReader(body))
 	if err != nil {
 		return err
 	}

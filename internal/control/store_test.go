@@ -299,3 +299,78 @@ func TestCurrentTaskForChannelIsolation(t *testing.T) {
 		t.Fatalf("finished task should not be the channel's current task, got %+v", got)
 	}
 }
+
+func TestListAccountsByPerson(t *testing.T) {
+	ctx := context.Background()
+	store, err := OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.BindAccount(ctx, identity.TenantID, identity.PersonID, "weixin", "wxid_1", "Alice WX"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.BindAccount(ctx, identity.TenantID, identity.PersonID, "telegram", "42", "Alice TG"); err != nil {
+		t.Fatal(err)
+	}
+	// A different person's account must not leak in.
+	if _, err := store.ResolveOrCreateAccount(ctx, "default", "weixin", "wxid_other", "Bob"); err != nil {
+		t.Fatal(err)
+	}
+
+	accounts, err := store.ListAccountsByPerson(ctx, identity.TenantID, identity.PersonID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(accounts) != 3 {
+		t.Fatalf("accounts = %+v", accounts)
+	}
+	platforms := map[string]string{}
+	for _, a := range accounts {
+		platforms[a.Platform] = a.PlatformUserID
+		if a.PersonID != identity.PersonID {
+			t.Fatalf("account for wrong person: %+v", a)
+		}
+	}
+	if platforms["weixin"] != "wxid_1" || platforms["telegram"] != "42" || platforms["cli"] != "local" {
+		t.Fatalf("platforms = %+v", platforms)
+	}
+}
+
+func TestDeliveryKindSurvivesQueue(t *testing.T) {
+	ctx := context.Background()
+	store, err := OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	if _, err := store.EnqueueDelivery(ctx, Delivery{
+		TenantID:   "default",
+		PersonID:   "person_x",
+		Platform:   "telegram",
+		Channel:    "42",
+		Content:    "Approval required",
+		Kind:       "approval",
+		ApprovalID: "apr_abc",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	due, err := store.ListDueDeliveries(ctx, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(due) != 1 {
+		t.Fatalf("due = %+v", due)
+	}
+	// Typed rendering (Telegram approval buttons) must survive retry, so the
+	// row round-trips kind + approval_id, not just the text.
+	if due[0].Kind != "approval" || due[0].ApprovalID != "apr_abc" {
+		t.Fatalf("kind = %q approval_id = %q", due[0].Kind, due[0].ApprovalID)
+	}
+}

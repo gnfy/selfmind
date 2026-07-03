@@ -1,12 +1,15 @@
 package httpapi
 
 import (
+	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
 	"selfmind/internal/control"
 	"selfmind/internal/gateway/api"
+	"selfmind/internal/platform/textutil"
 )
 
 // Control-command and status response formatters, extracted from server.go to
@@ -34,23 +37,72 @@ func formatWorkspaces(workspaces []control.Workspace) string {
 	return strings.TrimSpace(sb.String())
 }
 
-func formatApprovals(approvals []control.ApprovalRequest) string {
+// approvalPayload is the persisted shape of a tool_call approval row's
+// payload_json (written by toolApprovalHandler). Fields may be empty for
+// non-tool approvals.
+type approvalPayload struct {
+	Tool   string                 `json:"tool"`
+	Reason string                 `json:"reason"`
+	Args   map[string]interface{} `json:"args"`
+}
+
+func decodeApprovalPayload(approval control.ApprovalRequest) approvalPayload {
+	var p approvalPayload
+	if len(approval.Payload) > 0 {
+		_ = json.Unmarshal(approval.Payload, &p)
+	}
+	return p
+}
+
+// approvalArgsPreview renders the approval's tool args as a compact, bounded,
+// UTF-8-safe "key=value" line so the user can see WHAT they are approving.
+func approvalArgsPreview(args map[string]interface{}, maxChars int) string {
+	if len(args) == 0 {
+		return ""
+	}
+	keys := make([]string, 0, len(args))
+	for k := range args {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	pairs := make([]string, 0, len(keys))
+	for _, k := range keys {
+		pairs = append(pairs, fmt.Sprintf("%s=%v", k, args[k]))
+	}
+	return textutil.Truncate(toOneLine(strings.Join(pairs, " ")), maxChars)
+}
+
+// approvalSummaryLine is the one-line rich description of a pending approval,
+// shared by the /approvals list and outbound approval notifications:
+// `[tool] <args preview> — <reason> (task: <title>)`.
+func approvalSummaryLine(approval control.ApprovalRequest, taskTitle string) string {
+	p := decodeApprovalPayload(approval)
+	label := fallback(p.Tool, approval.ActionType)
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "[%s]", label)
+	if preview := approvalArgsPreview(p.Args, 80); preview != "" {
+		sb.WriteString(" " + preview)
+	}
+	if reason := strings.TrimSpace(p.Reason); reason != "" {
+		sb.WriteString(" — " + textutil.Truncate(toOneLine(reason), 120))
+	}
+	if title := strings.TrimSpace(taskTitle); title != "" {
+		fmt.Fprintf(&sb, " (task: %s)", textutil.Truncate(toOneLine(title), 30))
+	}
+	return sb.String()
+}
+
+func formatApprovals(approvals []control.ApprovalRequest, taskTitles map[string]string) string {
 	if len(approvals) == 0 {
 		return "No pending approvals."
 	}
 	var sb strings.Builder
 	sb.WriteString("Pending approvals:\n")
 	for i, approval := range approvals {
-		fmt.Fprintf(&sb, "%d. %s [%s]", i+1, approval.ID, approval.ActionType)
-		if approval.TaskID != "" {
-			fmt.Fprintf(&sb, " task=%s", approval.TaskID)
-		}
-		if len(approval.Payload) > 0 && string(approval.Payload) != "{}" {
-			fmt.Fprintf(&sb, "\n   %s", truncate(toOneLine(string(approval.Payload)), 180))
-		}
-		sb.WriteString("\n")
+		fmt.Fprintf(&sb, "%d. %s\n", i+1, approvalSummaryLine(approval, taskTitles[approval.TaskID]))
+		fmt.Fprintf(&sb, "   %s\n", approval.ID)
 	}
-	sb.WriteString("\nUse /approve <id> or /reject <id>.")
+	sb.WriteString("\nUse /approve <number> or /reject <number>.")
 	return strings.TrimSpace(sb.String())
 }
 

@@ -107,7 +107,11 @@ Domain docs (**mandatory** before changing that domain):
   gateway owns identity binding, workspace lookup, task/run state, and agent
   dispatch. Approval state lives in `control.approval_requests` and gateway
   handlers; IM adapters may render buttons or parse callbacks but never own
-  approval lifecycle.
+  approval lifecycle. User approval references (list ordinal, unique `apr_`
+  prefix, bare token with one pending) resolve only through the shared
+  resolver in `internal/gateway/httpapi/approval_resolver.go` — clients and
+  adapters pass the raw token to the gateway, never resolve ordinals locally,
+  so `/approve 1` means the same approval on every surface.
 - Gateway control commands (`/status`, `/stop`, `/tasks`, `/workspaces`,
   `/resume`, `/workspace`) stay pre-agent and must not consume model tokens.
 - Keep the per-person active-run guard until the worker pool fully replaces

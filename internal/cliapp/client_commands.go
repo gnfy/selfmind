@@ -27,17 +27,21 @@ func (a *App) runGatewayClientIfRequested() (bool, int) {
 		case "approvals":
 			return true, a.sendGatewayMessage("/approvals")
 		case "approve":
-			if len(a.args) < 3 {
-				fmt.Fprintln(a.stderr, "usage: selfmind approve <approval_id>")
-				return true, 2
+			// Token is optional: the daemon resolves ordinals ("1"), unique apr_
+			// prefixes, full ids, and — with a single pending approval — no token
+			// at all. Keeping resolution server-side means CLI and IM behave
+			// identically.
+			token := ""
+			if len(a.args) >= 3 {
+				token = a.args[2]
 			}
-			return true, a.sendGatewayMessage("/approve " + a.args[2])
+			return true, a.sendGatewayMessage(strings.TrimSpace("/approve " + token))
 		case "reject":
-			if len(a.args) < 3 {
-				fmt.Fprintln(a.stderr, "usage: selfmind reject <approval_id>")
-				return true, 2
+			token := ""
+			if len(a.args) >= 3 {
+				token = a.args[2]
 			}
-			return true, a.sendGatewayMessage("/reject " + a.args[2])
+			return true, a.sendGatewayMessage(strings.TrimSpace("/reject " + token))
 		case "stop":
 			return true, a.sendGatewayMessage("/stop")
 		case "id":
@@ -53,18 +57,39 @@ func (a *App) runGatewayClientIfRequested() (bool, int) {
 		}
 	}
 	if len(a.args) > 1 && a.args[1] == "send" {
-		async := false
+		opts := sendOptions{}
 		args := a.args[2:]
-		if len(args) > 0 && args[0] == "--async" {
-			async = true
-			args = args[1:]
+		usage := "usage: selfmind send [--async] [--mode on-request|read-only|auto-edit|full-auto] <message>"
+	flagLoop:
+		for len(args) > 0 {
+			switch {
+			case args[0] == "--async":
+				opts.async = true
+				args = args[1:]
+			case args[0] == "--mode":
+				if len(args) < 2 {
+					fmt.Fprintln(a.stderr, usage)
+					return true, 2
+				}
+				opts.approvalMode = args[1]
+				args = args[2:]
+			case strings.HasPrefix(args[0], "--mode="):
+				opts.approvalMode = strings.TrimPrefix(args[0], "--mode=")
+				args = args[1:]
+			default:
+				break flagLoop
+			}
+		}
+		if opts.approvalMode != "" && !isValidApprovalMode(opts.approvalMode) {
+			fmt.Fprintf(a.stderr, "invalid --mode %q; valid modes: on-request, read-only, auto-edit, full-auto\n", opts.approvalMode)
+			return true, 2
 		}
 		content := strings.TrimSpace(strings.Join(args, " "))
 		if content == "" {
-			fmt.Fprintln(a.stderr, "usage: selfmind send [--async] <message>")
+			fmt.Fprintln(a.stderr, usage)
 			return true, 2
 		}
-		return true, a.sendGatewayMessageWithOptions(content, async)
+		return true, a.sendGatewayMessageWithOptions(content, opts)
 	}
 	if os.Getenv("SELF_USE_GATEWAY") != "1" && os.Getenv("SELF_USE_DAEMON") != "1" && !(len(a.args) > 1 && a.args[1] == "--daemon") {
 		return false, 0
@@ -92,11 +117,30 @@ func (a *App) runGatewayClientIfRequested() (bool, int) {
 	return true, 0
 }
 
-func (a *App) sendGatewayMessage(content string) int {
-	return a.sendGatewayMessageWithOptions(content, false)
+// sendOptions carries per-send flags from CLI parsing to the message request.
+type sendOptions struct {
+	async bool
+	// approvalMode is the codex-style per-request approval policy
+	// (MessageRequest.ApprovalMode); empty keeps the daemon default.
+	approvalMode string
 }
 
-func (a *App) sendGatewayMessageWithOptions(content string, async bool) int {
+// isValidApprovalMode gates the CLI flag to the documented approval modes so a
+// typo fails fast instead of silently degrading to the default policy.
+func isValidApprovalMode(mode string) bool {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case "on-request", "read-only", "auto-edit", "full-auto":
+		return true
+	default:
+		return false
+	}
+}
+
+func (a *App) sendGatewayMessage(content string) int {
+	return a.sendGatewayMessageWithOptions(content, sendOptions{})
+}
+
+func (a *App) sendGatewayMessageWithOptions(content string, opts sendOptions) int {
 	a.ensureLocalGateway()
 	url := a.gatewayURL()
 	userID := platformUserID()
@@ -112,7 +156,8 @@ func (a *App) sendGatewayMessageWithOptions(content string, async bool) int {
 		WorkspaceID:    os.Getenv("SELF_WORKSPACE_ID"),
 		ClientCWD:      clientCWD,
 		TaskID:         os.Getenv("SELF_TASK_ID"),
-		Async:          async,
+		Async:          opts.async,
+		ApprovalMode:   strings.ToLower(strings.TrimSpace(opts.approvalMode)),
 	}
 	body, _ := json.Marshal(req)
 	httpReq, err := http.NewRequestWithContext(a.ctx, http.MethodPost, url+"/v1/message", bytes.NewReader(body))
@@ -130,7 +175,9 @@ func (a *App) sendGatewayMessageWithOptions(content string, async bool) int {
 	defer httpResp.Body.Close()
 	if httpResp.StatusCode >= 400 {
 		data, _ := io.ReadAll(httpResp.Body)
-		fmt.Fprintf(a.stderr, "%s: %s\n", httpResp.Status, strings.TrimSpace(string(data)))
+		// The daemon returns {"error": "..."} payloads with human-readable
+		// messages; show that single line instead of dumping raw JSON.
+		fmt.Fprintln(a.stderr, gatewayErrorLine(httpResp.Status, data))
 		return 1
 	}
 
@@ -152,6 +199,23 @@ func (a *App) sendGatewayMessageWithOptions(content string, async bool) int {
 		return 0
 	}
 	return 0
+}
+
+// gatewayErrorLine reduces a gateway error response to one human-readable
+// line. The daemon replies with JSON carrying an "error" field; anything else
+// falls back to the raw (trimmed) body.
+func gatewayErrorLine(status string, body []byte) string {
+	trimmed := strings.TrimSpace(string(body))
+	var payload struct {
+		Error string `json:"error"`
+	}
+	if json.Unmarshal(body, &payload) == nil && strings.TrimSpace(payload.Error) != "" {
+		return strings.TrimSpace(payload.Error)
+	}
+	if trimmed == "" {
+		return status
+	}
+	return status + ": " + trimmed
 }
 
 func (a *App) handleWorkspaceCommand(args []string) int {
@@ -214,7 +278,7 @@ func (a *App) registerWorkspace(path, name string) int {
 	defer httpResp.Body.Close()
 	if httpResp.StatusCode >= 400 {
 		data, _ := io.ReadAll(httpResp.Body)
-		fmt.Fprintf(a.stderr, "%s: %s\n", httpResp.Status, strings.TrimSpace(string(data)))
+		fmt.Fprintln(a.stderr, gatewayErrorLine(httpResp.Status, data))
 		return 1
 	}
 	var payload struct {

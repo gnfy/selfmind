@@ -13,15 +13,21 @@ import (
 )
 
 type Delivery struct {
-	ID             string     `json:"id"`
-	TenantID       string     `json:"tenant_id"`
-	PersonID       string     `json:"person_id"`
-	Platform       string     `json:"platform"`
-	PlatformUserID string     `json:"platform_user_id,omitempty"`
-	Channel        string     `json:"channel"`
-	TaskID         string     `json:"task_id,omitempty"`
-	RunID          string     `json:"run_id,omitempty"`
-	Content        string     `json:"content"`
+	ID             string `json:"id"`
+	TenantID       string `json:"tenant_id"`
+	PersonID       string `json:"person_id"`
+	Platform       string `json:"platform"`
+	PlatformUserID string `json:"platform_user_id,omitempty"`
+	Channel        string `json:"channel"`
+	TaskID         string `json:"task_id,omitempty"`
+	RunID          string `json:"run_id,omitempty"`
+	Content        string `json:"content"`
+	// Kind marks typed outbound messages (e.g. "approval") so platform senders
+	// can attach native affordances such as inline buttons; ApprovalID carries
+	// the approval the buttons act on. Both survive retry because they are
+	// persisted with the row.
+	Kind           string     `json:"kind,omitempty"`
+	ApprovalID     string     `json:"approval_id,omitempty"`
 	Status         string     `json:"status"`
 	Attempts       int        `json:"attempts"`
 	MaxAttempts    int        `json:"max_attempts"`
@@ -235,11 +241,11 @@ func (s *Store) EnqueueDelivery(ctx context.Context, d Delivery) (*Delivery, err
 	d.UpdatedAt = now
 	_, err := s.db.ExecContext(ctx,
 		`INSERT OR IGNORE INTO outbound_messages
-		   (id, tenant_id, person_id, platform, platform_user_id, channel, task_id, run_id, content, status, attempts, max_attempts,
+		   (id, tenant_id, person_id, platform, platform_user_id, channel, task_id, run_id, content, kind, approval_id, status, attempts, max_attempts,
 		    next_attempt_at, last_error, part_index, part_total, idempotency_key, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		`,
-		d.ID, d.TenantID, d.PersonID, d.Platform, d.PlatformUserID, d.Channel, d.TaskID, d.RunID, d.Content, d.Status, d.Attempts,
+		d.ID, d.TenantID, d.PersonID, d.Platform, d.PlatformUserID, d.Channel, d.TaskID, d.RunID, d.Content, d.Kind, d.ApprovalID, d.Status, d.Attempts,
 		d.MaxAttempts, d.NextAttemptAt.Unix(), d.LastError, d.PartIndex, d.PartTotal, d.IdempotencyKey, d.CreatedAt.Unix(), d.UpdatedAt.Unix())
 	if err != nil {
 		return nil, err
@@ -253,7 +259,7 @@ func (s *Store) ListDueDeliveries(ctx context.Context, limit int) ([]Delivery, e
 	}
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT id, tenant_id, person_id, platform, COALESCE(platform_user_id, ''), channel, COALESCE(task_id, ''), COALESCE(run_id, ''),
-		        content, status, attempts, max_attempts, next_attempt_at, COALESCE(last_error, ''),
+		        content, COALESCE(kind, ''), COALESCE(approval_id, ''), status, attempts, max_attempts, next_attempt_at, COALESCE(last_error, ''),
 		        part_index, part_total, COALESCE(idempotency_key, ''), created_at, updated_at, COALESCE(delivered_at, 0)
 		 FROM outbound_messages
 		 WHERE status IN ('pending', 'retry') AND next_attempt_at <= ?
@@ -300,7 +306,7 @@ func scanDelivery(rows interface {
 	var d Delivery
 	var next, created, updated, delivered int64
 	if err := rows.Scan(&d.ID, &d.TenantID, &d.PersonID, &d.Platform, &d.PlatformUserID, &d.Channel, &d.TaskID, &d.RunID,
-		&d.Content, &d.Status, &d.Attempts, &d.MaxAttempts, &next, &d.LastError, &d.PartIndex, &d.PartTotal,
+		&d.Content, &d.Kind, &d.ApprovalID, &d.Status, &d.Attempts, &d.MaxAttempts, &next, &d.LastError, &d.PartIndex, &d.PartTotal,
 		&d.IdempotencyKey, &created, &updated, &delivered); err != nil {
 		return Delivery{}, err
 	}

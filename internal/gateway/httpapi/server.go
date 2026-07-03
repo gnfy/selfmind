@@ -539,7 +539,7 @@ func (c *RunCoordinator) toolApprovalHandler(identity *control.IdentityContext, 
 				}),
 			})
 		}
-		c.notifyApprovalRequested(context.Background(), identity, taskID, runID, fallback(channel, identity.Platform), approval, req)
+		c.notifyApprovalRequested(context.Background(), identity, taskID, runID, fallback(channel, identity.Platform), approval)
 
 		ticker := time.NewTicker(time.Second)
 		defer ticker.Stop()
@@ -574,24 +574,76 @@ func redactApprovalArgs(args map[string]interface{}) map[string]interface{} {
 	return out
 }
 
-func (c *RunCoordinator) notifyApprovalRequested(ctx context.Context, identity *control.IdentityContext, taskID, runID, channel string, approval *control.ApprovalRequest, req tools.ToolApprovalRequest) {
+// notifyApprovalRequested pushes an approval notification to the person's
+// reachable endpoints, best-effort. IM-originated approvals notify their own
+// channel (unchanged). CLI-originated approvals used to be silently dropped;
+// they now fan out to the person's OTHER bound accounts whose platform has a
+// delivery sender, so a run started in a terminal can be approved from WeChat
+// or Telegram (scenario 1 of docs/identity-continuity.md). Failures are
+// swallowed: notification is a convenience, the approval row is the truth.
+func (c *RunCoordinator) notifyApprovalRequested(ctx context.Context, identity *control.IdentityContext, taskID, runID, channel string, approval *control.ApprovalRequest) {
 	if c == nil || c.srv == nil || c.srv.Delivery == nil || identity == nil || approval == nil {
 		return
 	}
-	if identity.Platform == "cli" && channel == "cli" {
+	taskTitle := ""
+	if taskID != "" && c.srv.Control != nil {
+		if task, err := c.srv.Control.GetTask(ctx, identity.TenantID, taskID); err == nil && task != nil {
+			taskTitle = task.Title
+		}
+	}
+	content := approvalNotificationText(*approval, taskTitle)
+	base := delivery.Message{
+		TenantID:   identity.TenantID,
+		PersonID:   identity.PersonID,
+		TaskID:     taskID,
+		RunID:      runID,
+		Content:    content,
+		Kind:       delivery.KindApproval,
+		ApprovalID: approval.ID,
+	}
+	if !(identity.Platform == "cli" && channel == "cli") {
+		// IM-originated: notify the requesting channel only (the person is
+		// already looking at it); no cross-channel duplication.
+		msg := base
+		msg.Platform = identity.Platform
+		msg.PlatformUserID = identity.PlatformUserID
+		msg.Channel = channel
+		_ = c.srv.Delivery.EnqueueAndTry(ctx, msg)
 		return
 	}
-	content := fmt.Sprintf("Approval required for %s: %s\nApproval: %s\nReply with /approve %s or /reject %s.", req.ToolName, req.Reason, approval.ID, approval.ID, approval.ID)
-	_ = c.srv.Delivery.EnqueueAndTry(ctx, delivery.Message{
-		TenantID:       identity.TenantID,
-		PersonID:       identity.PersonID,
-		Platform:       identity.Platform,
-		PlatformUserID: identity.PlatformUserID,
-		Channel:        channel,
-		TaskID:         taskID,
-		RunID:          runID,
-		Content:        content,
-	})
+	if c.srv.Control == nil {
+		return
+	}
+	accounts, err := c.srv.Control.ListAccountsByPerson(ctx, identity.TenantID, identity.PersonID)
+	if err != nil {
+		return
+	}
+	for _, account := range accounts {
+		// The CLI account is the originating surface (it gets the inline y/N
+		// prompt); other cli-like bindings have no push channel either.
+		if account.Platform == "cli" || account.ID == identity.AccountID {
+			continue
+		}
+		if !c.srv.Delivery.SupportsPlatform(account.Platform) {
+			continue
+		}
+		msg := base
+		msg.Platform = account.Platform
+		msg.PlatformUserID = account.PlatformUserID
+		// Without a live chat context the platform user id is the DM target;
+		// senders fall back to it when Channel is not a real chat id.
+		msg.Channel = account.PlatformUserID
+		_ = c.srv.Delivery.EnqueueAndTry(ctx, msg)
+	}
+}
+
+// approvalNotificationText is the outbound approval message body: the same
+// rich summary line the /approvals list shows, the copyable id, and bilingual
+// reply instructions. Telegram additionally renders native buttons from
+// Message.Kind/ApprovalID.
+func approvalNotificationText(approval control.ApprovalRequest, taskTitle string) string {
+	return fmt.Sprintf("Approval required:\n%s\n%s\nReply /approve 1 or /reject 1 (or /approve %s). 回复 /approve 1 或 /reject 1",
+		approvalSummaryLine(approval, taskTitle), approval.ID, approval.ID)
 }
 
 func (c *RunCoordinator) withGatewayContext(input string, identity *control.IdentityContext, task *control.Task, workspace *control.Workspace, attachments []api.MessageAttachment) string {
@@ -658,8 +710,8 @@ func (d *Server) tryHandleControlCommand(ctx context.Context, identity *control.
 /tasks                List recent tasks.
 /events               List recent events for the current task.
 /approvals            List pending approvals.
-/approve <id>         Approve a pending action.
-/reject <id>          Reject a pending action.
+/approve <n|id>       Approve a pending action (list number or apr_ id).
+/reject <n|id>        Reject a pending action (list number or apr_ id).
 /stop                 Cancel the active run.
 /new [title]          Create a new task.
 /resume <task_id>     Resume a task.
@@ -763,33 +815,15 @@ func (d *Server) tryHandleControlCommand(ctx context.Context, identity *control.
 		}
 		return true, formatWorkspaces(workspaces), nil
 	case lower == "/approvals":
-		approvals, err := d.Control.ListApprovalRequests(ctx, identity.TenantID, identity.PersonID, "pending", 20)
+		approvals, titles, err := d.pendingApprovalsForDisplay(ctx, identity)
 		if err != nil {
 			return true, "", err
 		}
-		return true, formatApprovals(approvals), nil
-	case strings.HasPrefix(lower, "/approve "):
-		parts := strings.Fields(trimmed)
-		if len(parts) < 2 {
-			return true, "Usage: /approve <approval_id>", nil
-		}
-		approval, err := d.Control.RespondApprovalRequest(ctx, identity.TenantID, identity.PersonID, parts[1], "approved", req.Channel)
-		if err != nil {
-			return true, "", err
-		}
-		appendApprovalEvent(ctx, d.Control, approval, req.Channel)
-		return true, fmt.Sprintf("Approved %s.", approval.ID), nil
-	case strings.HasPrefix(lower, "/reject "):
-		parts := strings.Fields(trimmed)
-		if len(parts) < 2 {
-			return true, "Usage: /reject <approval_id>", nil
-		}
-		approval, err := d.Control.RespondApprovalRequest(ctx, identity.TenantID, identity.PersonID, parts[1], "rejected", req.Channel)
-		if err != nil {
-			return true, "", err
-		}
-		appendApprovalEvent(ctx, d.Control, approval, req.Channel)
-		return true, fmt.Sprintf("Rejected %s.", approval.ID), nil
+		return true, formatApprovals(approvals, titles), nil
+	case lower == "/approve" || strings.HasPrefix(lower, "/approve "):
+		return true, d.respondApprovalCommand(ctx, identity, strings.TrimSpace(trimmed[len("/approve"):]), "approved", req.Channel), nil
+	case lower == "/reject" || strings.HasPrefix(lower, "/reject "):
+		return true, d.respondApprovalCommand(ctx, identity, strings.TrimSpace(trimmed[len("/reject"):]), "rejected", req.Channel), nil
 	case lower == "/events":
 		task, err := d.Control.CurrentTask(ctx, identity.TenantID, identity.PersonID)
 		if err != nil {

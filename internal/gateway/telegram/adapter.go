@@ -26,11 +26,23 @@ type Adapter struct {
 	webhookSecret string
 	apiBaseURL    string
 	client        *http.Client
+	// approvalHandler responds to inline approve/reject button taps. It is
+	// injected by the wiring layer because the adapter must never own approval
+	// lifecycle state (docs/identity-continuity.md): the handler routes the
+	// decision into the gateway/control-store respond path and returns the
+	// user-facing result text.
+	approvalHandler ApprovalHandler
 	// Long polling state
 	longPollMu   sync.Mutex
 	longPollStop chan struct{}
 	longPollDone chan struct{}
 }
+
+// ApprovalHandler resolves an inline-button approval decision for the Telegram
+// user. userID is Telegram's numeric user id; decision is "approved" or
+// "rejected"; approvalID is the apr_ id round-tripped through callback_data.
+// The returned text is shown to the user (callback toast / edited message).
+type ApprovalHandler func(ctx context.Context, userID int64, decision, approvalID string) (string, error)
 
 // NewAdapter 创建一个 Telegram 适配器
 func NewAdapter(gw *router.Gateway, token, webhookURL string) *Adapter {
@@ -101,6 +113,12 @@ func (a *Adapter) StartLongPolling(ctx context.Context) error {
 			}
 
 			for _, u := range updates {
+				if u.CallbackQuery != nil {
+					cb := u.CallbackQuery
+					go a.handleCallbackQuery(context.Background(), cb)
+					offset = u.UpdateID + 1
+					continue
+				}
 				if u.Message == nil {
 					continue
 				}
@@ -302,6 +320,13 @@ func (a *Adapter) WebhookHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if update.CallbackQuery != nil {
+		cb := update.CallbackQuery
+		go a.handleCallbackQuery(context.Background(), cb)
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
 	if update.Message == nil || update.Message.Text == "" {
 		w.WriteHeader(http.StatusOK)
 		return
@@ -328,10 +353,125 @@ func (a *Adapter) WebhookHandler(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
+// SetApprovalHandler installs the responder for inline approve/reject buttons.
+// Without a handler, button taps get a hint to reply with the text command.
+func (a *Adapter) SetApprovalHandler(handler ApprovalHandler) {
+	a.approvalHandler = handler
+}
+
+// handleCallbackQuery processes an inline-button tap: parse the approval
+// decision from callback_data, route it through the injected approval
+// responder, acknowledge the tap (answerCallbackQuery), and append the outcome
+// to the original message so the chat history shows what was decided.
+func (a *Adapter) handleCallbackQuery(ctx context.Context, cb *CallbackQuery) {
+	if cb == nil {
+		return
+	}
+	decision, approvalID := parseApprovalCallbackData(cb.Data)
+	if decision == "" {
+		_ = a.answerCallbackQuery(ctx, cb.ID, "")
+		return
+	}
+	if a.approvalHandler == nil {
+		_ = a.answerCallbackQuery(ctx, cb.ID, "Approval buttons are not wired; reply /approve "+approvalID)
+		return
+	}
+	var userID int64
+	if cb.From != nil {
+		userID = cb.From.ID
+	}
+	result, err := a.approvalHandler(ctx, userID, decision, approvalID)
+	if err != nil {
+		_ = a.answerCallbackQuery(ctx, cb.ID, "Failed: "+err.Error())
+		return
+	}
+	suffix := "— ✅ approved by you"
+	toast := "Approved"
+	if decision == "rejected" {
+		suffix = "— ❌ rejected"
+		toast = "Rejected"
+	}
+	if result != "" {
+		toast = result
+	}
+	_ = a.answerCallbackQuery(ctx, cb.ID, toast)
+	if cb.Message != nil && cb.Message.Chat.ID != 0 && cb.Message.MessageID != 0 {
+		// Editing also removes the inline keyboard (reply_markup omitted), so a
+		// decided approval cannot be tapped twice from the same message.
+		_ = a.editMessageText(ctx, cb.Message.Chat.ID, cb.Message.MessageID, strings.TrimSpace(cb.Message.Text+"\n"+suffix))
+	}
+}
+
+// parseApprovalCallbackData splits "approve:<id>" / "reject:<id>" callback
+// data into a store decision and the approval reference; ("", "") for any
+// other payload.
+func parseApprovalCallbackData(data string) (decision, approvalID string) {
+	data = strings.TrimSpace(data)
+	switch {
+	case strings.HasPrefix(data, "approve:"):
+		return "approved", strings.TrimSpace(strings.TrimPrefix(data, "approve:"))
+	case strings.HasPrefix(data, "reject:"):
+		return "rejected", strings.TrimSpace(strings.TrimPrefix(data, "reject:"))
+	default:
+		return "", ""
+	}
+}
+
+// answerCallbackQuery acknowledges an inline-button tap so the Telegram client
+// stops showing its loading spinner; text becomes a small toast when present.
+func (a *Adapter) answerCallbackQuery(ctx context.Context, callbackQueryID, text string) error {
+	payload := map[string]interface{}{
+		"callback_query_id": callbackQueryID,
+	}
+	if strings.TrimSpace(text) != "" {
+		payload["text"] = text
+	}
+	return a.postJSON(ctx, "answerCallbackQuery", payload)
+}
+
+func (a *Adapter) editMessageText(ctx context.Context, chatID, messageID int64, text string) error {
+	return a.postJSON(ctx, "editMessageText", map[string]interface{}{
+		"chat_id":    chatID,
+		"message_id": messageID,
+		"text":       text,
+	})
+}
+
+func (a *Adapter) postJSON(ctx context.Context, method string, payload map[string]interface{}) error {
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, a.apiURL(method), bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := a.client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("telegram %s error: %d %s", method, resp.StatusCode, string(respBody))
+	}
+	return nil
+}
+
 // Update 表示 Telegram API 的 update 对象
 type Update struct {
-	UpdateID int64    `json:"update_id"`
-	Message  *Message `json:"message,omitempty"`
+	UpdateID      int64          `json:"update_id"`
+	Message       *Message       `json:"message,omitempty"`
+	CallbackQuery *CallbackQuery `json:"callback_query,omitempty"`
+}
+
+// CallbackQuery 表示 Telegram API 的 callback_query 对象（内联按钮点击）
+type CallbackQuery struct {
+	ID      string   `json:"id"`
+	From    *User    `json:"from,omitempty"`
+	Message *Message `json:"message,omitempty"`
+	Data    string   `json:"data,omitempty"`
 }
 
 // Message 表示 Telegram API 的 message 对象

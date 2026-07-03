@@ -50,6 +50,36 @@ turns:
 	}
 }
 
+func TestLoadCaseParsesRequireCassetteAndPerTurnIdentity(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "case.yaml")
+	if err := os.WriteFile(path, []byte(`
+id: identity_override
+channel: cli
+require_cassette: true
+turns:
+  - input: "hello"
+  - input: "/status"
+    channel: weixin
+    platform_user_id: " eval-stranger "
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	c, err := LoadCase(path)
+	if err != nil {
+		t.Fatalf("LoadCase failed: %v", err)
+	}
+	if !c.RequireCassette {
+		t.Fatalf("require_cassette should parse as true")
+	}
+	if got := c.Turns[0].PlatformUserID; got != "" {
+		t.Fatalf("turn 0 platform_user_id = %q, want empty (case default identity)", got)
+	}
+	if got := c.Turns[1].PlatformUserID; got != "eval-stranger" {
+		t.Fatalf("turn 1 platform_user_id = %q, want eval-stranger", got)
+	}
+}
+
 func TestLoadCaseRejectsMojibakeFixtureText(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "case.yaml")

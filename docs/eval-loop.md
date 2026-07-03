@@ -136,6 +136,55 @@ turns:
     channel: weixin
 ```
 
+Turns may also override `platform_user_id` to simulate a *different* platform
+user mid-case. This is the identity-isolation probe: person-scoped task/run
+state must not leak to another account:
+
+```yaml
+turns:
+  - input: "开始一个任务。"
+  - input: "/status"
+    channel: weixin
+    platform_user_id: "eval-stranger"   # a different person; must see nothing
+```
+
+`require_cassette: true` marks a case as mandatory for the offline gate:
+`selfmind selfcheck` FAILS (instead of skipping) when no cassette is recorded
+for the case ID. Use it for north-star scenarios that must never silently drop
+out of CI. Optional cases (the default) are still skipped when unrecorded, so
+the gate keeps growing as cassettes are recorded.
+
+```yaml
+id: continuity_resume
+require_cassette: true
+```
+
+## Selfcheck Gate Floor
+
+`selfmind selfcheck` runs the eval phase in strict offline replay
+(`SELFMIND_EVAL_VCR=replay` + `SELFMIND_EVAL_OFFLINE=1`). Two mechanisms keep
+the gate honest:
+
+- `require_cassette: true` cases fail selfcheck when their cassette is missing
+  (see above).
+- `SELFMIND_EVAL_MIN_CASES=N` fails selfcheck when fewer than N cases were
+  actually replayed (skipped cases do not count). CI sets it in
+  `.github/workflows/ci.yml` so deleted cassettes or renamed case IDs cannot
+  quietly degrade the gate to verifying ~0 cases. Unset (the local default)
+  keeps the grow-as-you-record behavior.
+
+## Continuity Suite
+
+`evalcases/continuity/` covers the cross-endpoint north-star scenarios: a task
+started from the CLI must be visible via `/status` from an IM channel, resumable
+with a bare `继续` from another channel (`require_same_task` +
+`require_continuation`), and invisible to a different platform user (per-turn
+`platform_user_id` override + `must_not_contain` on the first user's task
+title). All three cases set `require_cassette: true`; see
+`evalcases/continuity/README.md` for the one-command recording instructions
+(`SELFMIND_EVAL_VCR=record selfmind eval run evalcases/continuity`) — the
+recorded `.vcr/continuity_*` directories must be committed.
+
 ## Architecture
 
 - `internal/eval/case.go` parses YAML fixtures.

@@ -50,6 +50,11 @@ jobs:
 
       - name: Offline eval (replay only)
         # Runs the same gate developers run locally via `selfmind selfcheck`.
-        # Cases without a recorded cassette are reported and skipped, never
-        # treated as failures, so the gate grows as cassettes are recorded.
+        # Optional cases without a recorded cassette are reported and skipped so
+        # the gate grows as cassettes are recorded — but cases marked
+        # `require_cassette: true` FAIL when their cassette is missing, and
+        # SELFMIND_EVAL_MIN_CASES fails the step when fewer cases actually
+        # replayed than required (so the gate can never quietly verify ~0 cases).
+        env:
+          SELFMIND_EVAL_MIN_CASES: "3"
         run: go run ./cmd/selfmind selfcheck --skip-go

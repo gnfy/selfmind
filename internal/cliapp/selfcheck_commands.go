@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -16,7 +17,10 @@ import (
 // eval, aggregated into one pass/fail. It must never make live model calls — the
 // eval phase runs in strict offline VCR replay, so it cannot burn provider quota
 // and stays deterministic. Cases without a recorded cassette are reported and
-// skipped, never failed, so the gate grows as cassettes are recorded.
+// skipped so the gate grows as cassettes are recorded — EXCEPT cases marked
+// `require_cassette: true`, whose missing cassette is a failure, and the
+// SELFMIND_EVAL_MIN_CASES floor, which fails the gate when fewer cases were
+// actually replayed than required (keeps CI honest about verifying ~0 cases).
 func (a *App) runSelfcheckCommandIfRequested() (bool, int) {
 	if len(a.args) < 2 || a.args[1] != "selfcheck" {
 		return false, 0
@@ -79,7 +83,9 @@ func (a *App) printSelfcheckHelp() {
 	fmt.Fprintln(a.stdout, "  --skip-eval   skip the offline eval suite (build/test only)")
 	fmt.Fprintln(a.stdout)
 	fmt.Fprintln(a.stdout, "The eval phase runs strictly offline (VCR replay). Cases without a recorded")
-	fmt.Fprintln(a.stdout, "cassette are skipped, never failed. No live model calls are made.")
+	fmt.Fprintln(a.stdout, "cassette are skipped — unless the case sets `require_cassette: true`, which")
+	fmt.Fprintln(a.stdout, "makes a missing cassette a failure. Set SELFMIND_EVAL_MIN_CASES=N to fail")
+	fmt.Fprintln(a.stdout, "when fewer than N cases were actually replayed. No live model calls are made.")
 }
 
 // selfcheckGo runs `go build ./...` then `go test ./...` from the repo root with
@@ -139,7 +145,7 @@ func (a *App) selfcheckEval(root string) bool {
 		fmt.Fprintf(a.stdout, "  no eval cases: %v\n", err)
 		return true
 	}
-	passed, failed, skipped := 0, 0, 0
+	passed, failed, skipped, replayed := 0, 0, 0, 0
 	for _, file := range files {
 		c, err := selfeval.LoadCase(file)
 		if err != nil {
@@ -148,9 +154,17 @@ func (a *App) selfcheckEval(root string) bool {
 			continue
 		}
 		if !llm.HasCassetteSession(vcrDir, c.ID) {
+			// Mandatory cases must not silently drop out of the gate: a missing
+			// cassette is a failure, not a skip.
+			if c.RequireCassette {
+				failed++
+				fmt.Fprintf(a.stdout, "  FAIL %s (require_cassette: true but no cassette recorded; run `SELFMIND_EVAL_VCR=record selfmind eval run %s` and commit .vcr/%s/)\n", c.ID, file, c.ID)
+				continue
+			}
 			skipped++
 			continue
 		}
+		replayed++
 		result, err := selfeval.RunCaseFile(a.ctx, file, selfeval.RunOptions{ConfigPath: a.configPath})
 		if err != nil {
 			failed++
@@ -165,9 +179,25 @@ func (a *App) selfcheckEval(root string) bool {
 			fmt.Fprintf(a.stdout, "  FAIL %s (%s)\n", c.ID, result.Status)
 		}
 	}
-	fmt.Fprintf(a.stdout, "  summary: %d passed, %d failed, %d skipped (no cassette)\n", passed, failed, skipped)
+	fmt.Fprintf(a.stdout, "  summary: %d passed, %d failed, %d skipped (no cassette), %d replayed\n", passed, failed, skipped, replayed)
 	if passed == 0 && failed == 0 {
 		fmt.Fprintln(a.stdout, "  note: no recorded cassettes yet; record with `selfmind eval run --live` then commit cassettes locally")
+	}
+	// SELFMIND_EVAL_MIN_CASES is the CI floor: it fails the gate when the number
+	// of actually-replayed (non-skipped) cases falls below the threshold, so the
+	// gate cannot quietly degrade to verifying ~0 cases (e.g. cassettes deleted
+	// or case IDs renamed away from their cassettes). Unset keeps the local
+	// grow-as-you-record default.
+	if raw := strings.TrimSpace(os.Getenv("SELFMIND_EVAL_MIN_CASES")); raw != "" {
+		min, err := strconv.Atoi(raw)
+		if err != nil || min < 0 {
+			fmt.Fprintf(a.stdout, "  FAIL invalid SELFMIND_EVAL_MIN_CASES=%q (expected a non-negative integer)\n", raw)
+			return false
+		}
+		if replayed < min {
+			fmt.Fprintf(a.stdout, "  FAIL eval gate replayed %d case(s) but SELFMIND_EVAL_MIN_CASES=%d requires at least %d; record missing cassettes with `SELFMIND_EVAL_VCR=record selfmind eval run <case-or-dir>` and commit .vcr/<case-id>/\n", replayed, min, min)
+			return false
+		}
 	}
 	return failed == 0
 }

@@ -1,0 +1,33 @@
+id: continuity_resume
+title: "cross-endpoint continuity: '继续' from weixin resumes the CLI task"
+suite: continuity
+workspace: "."
+channel: cli
+require_cassette: true
+
+# North-star scenario: the CLI turn proposes a plan; a bare `继续` arriving on
+# the weixin channel must continue the same task instead of starting a new one
+# or asking "continue what?". `require_same_task` + `require_continuation`
+# assert on task IDs from the structured response, not on model prose.
+turns:
+  - input: "帮我规划'重构配置加载'的方案,先给 3 步,每步一句话,不要写代码、不要看本地文件。"
+    channel: cli
+  - input: "继续"
+    channel: weixin
+
+expect:
+  status: completed
+  require_same_task: true
+  require_continuation: true
+  max_tool_calls: 0
+  max_tool_errors: 2
+  max_duration_seconds: 420
+  must_not_contain:
+    - "不知道你要继续什么"
+    - "<tool>"
+
+checks:
+  no_mojibake: true
+  no_raw_json_leak: true
+  no_tool_xml_leak: true
+  no_empty_response: true

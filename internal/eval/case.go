@@ -11,17 +11,21 @@ import (
 )
 
 type Case struct {
-	ID            string        `yaml:"id" json:"id"`
-	Title         string        `yaml:"title" json:"title,omitempty"`
-	Suite         string        `yaml:"suite" json:"suite,omitempty"`
-	Workspace     string        `yaml:"workspace" json:"workspace,omitempty"`
-	Provider      string        `yaml:"provider" json:"provider,omitempty"`
-	Model         string        `yaml:"model" json:"model,omitempty"`
-	Channel       string        `yaml:"channel" json:"channel,omitempty"`
-	RecordContent bool          `yaml:"record_content" json:"record_content,omitempty"`
-	Turns         []Turn        `yaml:"turns" json:"turns"`
-	Expect        Expectations  `yaml:"expect" json:"expect,omitempty"`
-	Checks        CheckSettings `yaml:"checks" json:"checks,omitempty"`
+	ID            string `yaml:"id" json:"id"`
+	Title         string `yaml:"title" json:"title,omitempty"`
+	Suite         string `yaml:"suite" json:"suite,omitempty"`
+	Workspace     string `yaml:"workspace" json:"workspace,omitempty"`
+	Provider      string `yaml:"provider" json:"provider,omitempty"`
+	Model         string `yaml:"model" json:"model,omitempty"`
+	Channel       string `yaml:"channel" json:"channel,omitempty"`
+	RecordContent bool   `yaml:"record_content" json:"record_content,omitempty"`
+	// RequireCassette marks a case as mandatory for the offline gate: selfcheck
+	// must FAIL (not skip) when no recorded cassette exists for the case ID.
+	// Use it for north-star scenarios that must never silently drop out of CI.
+	RequireCassette bool          `yaml:"require_cassette" json:"require_cassette,omitempty"`
+	Turns           []Turn        `yaml:"turns" json:"turns"`
+	Expect          Expectations  `yaml:"expect" json:"expect,omitempty"`
+	Checks          CheckSettings `yaml:"checks" json:"checks,omitempty"`
 
 	// State-oracle additions (v1): initial world, world-state assertions, and
 	// sampling controls for non-deterministic real-model runs.
@@ -37,6 +41,11 @@ type Case struct {
 type Turn struct {
 	Input   string `yaml:"input" json:"input"`
 	Channel string `yaml:"channel" json:"channel,omitempty"`
+	// PlatformUserID overrides the eval identity for this turn only. It lets a
+	// case simulate a *different* platform user (a "stranger") mid-case to assert
+	// identity isolation: person-scoped task/run state must not leak across
+	// accounts. Empty means the case's default eval identity.
+	PlatformUserID string `yaml:"platform_user_id" json:"platform_user_id,omitempty"`
 }
 
 type Expectations struct {
@@ -102,6 +111,7 @@ func (c *Case) normalize() error {
 	for i := range c.Turns {
 		c.Turns[i].Input = strings.TrimSpace(c.Turns[i].Input)
 		c.Turns[i].Channel = strings.TrimSpace(c.Turns[i].Channel)
+		c.Turns[i].PlatformUserID = strings.TrimSpace(c.Turns[i].PlatformUserID)
 	}
 	filtered := c.Turns[:0]
 	for _, t := range c.Turns {

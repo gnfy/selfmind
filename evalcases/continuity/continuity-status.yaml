@@ -1,0 +1,35 @@
+id: continuity_status
+title: "cross-endpoint continuity: /status from weixin sees the CLI task"
+suite: continuity
+workspace: "."
+channel: cli
+require_cassette: true
+
+# North-star scenario: turn 1 starts a task from the CLI (needs the model,
+# hence the cassette); turn 2 asks `/status` from the weixin channel. `/status`
+# is a pre-agent control command (zero model tokens), so its reply is fully
+# deterministic: the shared person must see the task started on the other
+# endpoint. Assertions pin the stable status-card markers, not model prose.
+turns:
+  - input: "帮我规划一个重构方案,先不要改代码。给 3 步方案,每步一句话,不要看本地文件。"
+    channel: cli
+  - input: "/status"
+    channel: weixin
+
+expect:
+  status: completed
+  max_tool_calls: 0
+  max_tool_errors: 2
+  max_duration_seconds: 300
+  contains:
+    - "Task:"
+    - "Status:"
+  must_not_contain:
+    - "No active task."
+    - "<tool>"
+
+checks:
+  no_mojibake: true
+  no_raw_json_leak: true
+  no_tool_xml_leak: true
+  no_empty_response: true

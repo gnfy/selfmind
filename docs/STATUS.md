@@ -57,11 +57,11 @@
 | QQ official bot adapter | 🟡 | Inbound via `/v1/im/qq` webhook (group/C2C/guild events parsed into a `group:`/`c2c:`/`channel:` target); outbound via `delivery.QQSender` (app access token + per-target message API). Active push only — webhook ed25519 signature verify and passive `msg_id` threading are follow-ups. |
 | User profile synthesis | ✅ | `ProfileSynthesizer` distills facts into a stable profile injected each turn; `pinned` authoritative facts the synthesis must not override; visible/correctable via `/memory` (+ `/memory pin`). `internal/kernel/profile_synthesizer.go`. |
 | Scheduled tasks (cron) | ✅ | SQLite-backed scheduler with timezone; jobs run a real agent turn and deliver the result to their channel (e.g. daily summary → WeChat); `web` opt-in per job; built-in liveness canary; idempotent built-in jobs. `internal/kernel/task/cron`, `internal/gateway/httpapi/cron_executor.go`. |
-| Self-check & CI gate | ✅ | `selfmind selfcheck` (build + test + offline eval) and `.github/workflows/ci.yml`; strict offline VCR replay (`ErrCassetteMiss`) so the gate never burns provider quota. `internal/cliapp/selfcheck_commands.go`. |
+| Self-check & CI gate | ✅ | `selfmind selfcheck` (build + test + offline eval) and `.github/workflows/ci.yml`; strict offline VCR replay (`ErrCassetteMiss`) so the gate never burns provider quota. `require_cassette: true` cases fail (not skip) when their cassette is missing; `SELFMIND_EVAL_MIN_CASES` (set to 3 in CI) fails the gate when fewer cases actually replay. `internal/cliapp/selfcheck_commands.go`. |
+| Continuity eval coverage | 🟡 | cases + gate mechanism landed; cassettes pending one local recording run. `evalcases/continuity/` (cross-endpoint `/status`, `继续` resume, stranger identity isolation via per-turn `platform_user_id`), all `require_cassette: true`; record with `SELFMIND_EVAL_VCR=record selfmind eval run evalcases/continuity` and commit `.vcr/continuity_*`. |
 | CLI image input | ✅ | Image-path detection in input + clipboard screenshot paste (`/paste-image`, Ctrl+V auto-detect; WSL/macOS/Linux); routed to the `vision_analyze` tool via the attachment pipeline. Clipboard requires a local GUI (not over SSH). `internal/gateway/cli/attachments.go`, `clipboard.go`. |
 | Approval modes | ✅ | Staged `on-request` / `read-only` / `auto-edit` / `full-auto` via `/mode`, enforced in `SmartApprovalMiddleware`; on-demand y/N reuses the clarify bridge. `internal/tools/middleware.go`. |
 | Mid-turn steering | ✅ | Works in-process (`internal/kernel/steering.go` + controller `steerCh`) **and** in client mode: input typed during a daemon run is forwarded via `POST /v1/runs/steer` (`httpapi/handlers_steer.go`) into the active run's buffered steering channel (`kernel.WithSteering`, sync + async paths), leaving an auditable `run.steered` event. Daemon refusals surface honestly in the TUI (409 no active run / 429 buffer full → transcript notice, never silently dropped). Covered by unit tests (httpapi/client/controller), not VCR. |
-| Continuity eval coverage | ❌ | No `evalcases/` case exercises the cross-endpoint scenarios (CLI task → IM `/status`/approval → CLI resume). Also: selfcheck skips (not fails) cases without cassettes and no cassettes are committed, so the CI eval gate currently verifies ~0 cases. |
 | Skill variant evolution / sandbox test | ❌ | Old roadmap P3 (doc removed; see git history); not started, and out of scope for the north star. |
 
 ## Highest-Value Next Work (by priority)
@@ -70,10 +70,13 @@ These are the live gaps, ordered by their distance from the north star
 (`docs/identity-continuity.md` — the three continuity scenarios). This section
 is the only priority list in the repo; other docs must point here.
 
-1. **P0 — Make the eval gate real, starting with continuity cases.** Record and
-   commit VCR cassettes for the three north-star scenarios plus the existing
-   core cases; make `selfcheck` fail (not skip) when the verified-case count is
-   below a threshold. This turns the north star into an enforced contract.
+1. **P0 — Record the continuity eval cassettes.** The cross-endpoint continuity
+   suite (`evalcases/continuity/`) and the gate mechanism
+   (`require_cassette`, `SELFMIND_EVAL_MIN_CASES`) are landed; the only missing
+   piece is one local recording run against a live provider:
+   `SELFMIND_EVAL_VCR=record selfmind eval run evalcases/continuity`, then
+   commit `.vcr/continuity_*`. Until then `selfmind selfcheck` (and CI) fails
+   on the three `require_cassette` cases by design.
 2. **P0 — Continuity path polish.** Wire native IM approval buttons
    (Telegram / Weixin — backend + approval modes are ready) for scenario 1, and
    surface identity: `/whoami`-style binding visibility so "bind a new endpoint

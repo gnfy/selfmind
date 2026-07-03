@@ -225,10 +225,12 @@ func runSingle(ctx context.Context, c *Case, opts RunOptions, sampleIdx, totalSa
 		// recorded/replayed deterministically when SELFMIND_EVAL_VCR is set.
 		vcrCtx := llm.WithVCRSession(httpapi.WithStreamObserver(ctx, observer), c.ID)
 		turnCtx, cancelTurn := context.WithTimeout(vcrCtx, turnBudget(c, opts))
+		// A per-turn platform_user_id override simulates a different platform user
+		// (identity-isolation scenarios); the default keeps the case's identity.
 		resp, status := h.server.ProcessMessage(turnCtx, api.MessageRequest{
 			TenantID:       h.tenantID,
 			Platform:       "eval",
-			PlatformUserID: "eval-" + c.ID,
+			PlatformUserID: firstNonEmpty(turn.PlatformUserID, "eval-"+c.ID),
 			DisplayName:    "SelfMind Eval",
 			Channel:        channel,
 			Content:        turn.Input,

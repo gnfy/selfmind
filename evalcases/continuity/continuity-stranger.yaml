@@ -1,0 +1,38 @@
+id: continuity_stranger
+title: "identity isolation: a different platform user must not see the task"
+suite: continuity
+workspace: "."
+channel: cli
+require_cassette: true
+
+# North-star isolation scenario: turn 1 creates task context under the case's
+# default eval identity; turn 2 overrides `platform_user_id` to simulate a
+# DIFFERENT platform user asking `/status` (pre-agent, deterministic). The
+# stranger must get "No active task." — the marker ZWX417 only appears in the
+# first user's task title (titles derive from the first message), so seeing it
+# anywhere would mean person-scoped task state leaked across accounts.
+# Turn 1 instructs the model not to echo the marker; if a recorded reply does
+# echo it anyway, re-record (see README.md).
+turns:
+  - input: "帮我规划代号 ZWX417 的小重构,先给 2 步方案,每步一句话,不要写代码、不要看本地文件,回复里不要出现这个代号。"
+    channel: cli
+  - input: "/status"
+    channel: weixin
+    platform_user_id: "eval-stranger-continuity"
+
+expect:
+  status: completed
+  max_tool_calls: 0
+  max_tool_errors: 2
+  max_duration_seconds: 300
+  contains:
+    - "No active task."
+  must_not_contain:
+    - "ZWX417"
+    - "<tool>"
+
+checks:
+  no_mojibake: true
+  no_raw_json_leak: true
+  no_tool_xml_leak: true
+  no_empty_response: true

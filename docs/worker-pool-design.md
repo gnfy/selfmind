@@ -1,6 +1,7 @@
 # Worker Pool & Queue — Design (W1b)
 
-Status: proposed. Builds on the shipped `ExternalAuthManager`
+Status: largely shipped — see the inline shipped markers and `docs/STATUS.md`
+for what remains. Builds on the shipped `ExternalAuthManager`
 (`docs/external-auth-manager.md`). Part of `docs/daily-driver-readiness-plan.md`
 W1. Design note; `AGENTS.md` is canonical.
 
@@ -193,12 +194,12 @@ serialization, and one `control.db` owner all apply to multi-terminal use.
   back to an `llm.StreamEvent` and feeding it into the ctx stream observer the TUI
   already consumes (`httpapi.StreamObserverFromContext`). Streaming is
   best-effort; correctness never depends on it. Tested (`client_test.go`).
-- Rich TUI client mode behind `SELFMIND_TUI_CLIENT=1`
-  (`internal/cliapp/tui_client.go`): `EnsureRunning`, build the controller with a
+- Rich TUI client mode (superseded by §8d: client mode is now the **default**;
+  `SELFMIND_TUI_INPROC=1` opts back into in-process — `internal/cliapp/tui_client.go`):
+  `EnsureRunning`, build the controller with a
   nil in-process agent/gateway, set the daemon `MessageProcessor`, and mark
   `SetClientMode(true)` so agent-backed slash commands degrade to a notice instead
-  of dereferencing the absent agent. Default (unset) keeps the in-process path
-  byte-for-byte unchanged.
+  of dereferencing the absent agent.
 - Verified headlessly end-to-end against an isolated daemon (temp data dir +
   unused port): first call auto-starts and answers `/status`; a second call
   reuses the running daemon (no restart); `send` round-trips a real turn through

@@ -1,16 +1,16 @@
 # SelfMind Implementation Status
 
 > **Read this first.** This is the current-state snapshot for any AI/coding agent
-> picking up work. The code is the ground truth; this page summarizes it so you do
-> not re-implement something that already exists. The planning docs
-> (`selfmind-evolution-roadmap.md`, `selfmind-evolution-design.md`,
-> `p0-p1-development-plan.zh-CN.md`) are historical intent and are **partially
-> superseded** — verify any "to do" item against this page and against the code
-> before acting on it.
+> picking up work, and the **only live priority list** in this repo. The code is
+> the ground truth; this page summarizes it so you do not re-implement something
+> that already exists. The north star (Phase 1 = cross-endpoint continuity) and
+> the acceptance scenarios live in `docs/identity-continuity.md`. Historical
+> planning docs were removed from the tree (2026-07-03; retrieve via git
+> history) — never resurrect their backlog items or code samples.
 >
-> **Snapshot date:** 2026-06-28. When you finish a change that moves a row,
+> **Snapshot date:** 2026-07-03. When you finish a change that moves a row,
 > update this table in the same PR. See `docs/phase1-modules.md` for the
-> Phase-1 (open-source CLI + cloud daemon + WeChat) feature-module index.
+> Phase-1 feature-module index.
 
 ## Health
 
@@ -60,35 +60,44 @@
 | Self-check & CI gate | ✅ | `selfmind selfcheck` (build + test + offline eval) and `.github/workflows/ci.yml`; strict offline VCR replay (`ErrCassetteMiss`) so the gate never burns provider quota. `internal/cliapp/selfcheck_commands.go`. |
 | CLI image input | ✅ | Image-path detection in input + clipboard screenshot paste (`/paste-image`, Ctrl+V auto-detect; WSL/macOS/Linux); routed to the `vision_analyze` tool via the attachment pipeline. Clipboard requires a local GUI (not over SSH). `internal/gateway/cli/attachments.go`, `clipboard.go`. |
 | Approval modes | ✅ | Codex-style `on-request` / `read-only` / `auto-edit` / `full-auto` via `/mode`, enforced in `SmartApprovalMiddleware`; on-demand y/N reuses the clarify bridge. `internal/tools/middleware.go`. |
-| Skill variant evolution / sandbox test | ❌ | Roadmap P3; not started. |
+| Mid-turn steering | 🟡 | Works in-process (`internal/kernel/steering.go` + controller `steerCh`). **Defect:** in client mode (the default TUI path) the steering channel cannot cross the process boundary and there is no forwarding in `internal/gateway/client`/`httpapi` — mid-run input is silently dropped while appearing accepted. |
+| Continuity eval coverage | ❌ | No `evalcases/` case exercises the cross-endpoint scenarios (CLI task → IM `/status`/approval → CLI resume). Also: selfcheck skips (not fails) cases without cassettes and no cassettes are committed, so the CI eval gate currently verifies ~0 cases. |
+| Skill variant evolution / sandbox test | ❌ | Old roadmap P3 (doc removed; see git history); not started, and out of scope for the north star. |
 
 ## Highest-Value Next Work (by priority)
 
-These are the live gaps, ordered. They are derived from the table above, not from
-the historical roadmaps.
+These are the live gaps, ordered by their distance from the north star
+(`docs/identity-continuity.md` — the three continuity scenarios). This section
+is the only priority list in the repo; other docs must point here.
 
-1. **P0 — Daemon-client convergence (multi-terminal).** The worker pool shipped
-   (`internal/runpool` + `SELFMIND_WORKERS`), but it only helps *within one
-   process*. The real multi-terminal blocker is that the rich TUI still builds an
-   in-process gateway, so two `selfmind` terminals are two processes racing on
-   `control.db` / auth refresh / worker state. Fix (codex/hermes model): make the
-   TUI a thin client to one shared daemon. Foundation shipped (`EnsureRunning`,
-   CLI auto-start, `internal/gateway/client`, `SELFMIND_TUI_CLIENT=1`). Next:
-   default the TUI to client mode and route agent-backed slash commands
-   (`/model`, `/skills`, `/memory`, `/tasks`) over the gateway API so client mode
-   reaches parity. Then per-write-only workspace serialization, per-provider rate
-   cap, and a real N>1 soak.
-2. **P0 — Decompose the CLI controller**: move `uiModel` state out of
-   `controller.go` into components, per the AGENTS.md guardrail.
-3. **P1 — Real `execute_code` sandbox** (namespace/seccomp/cgroup or container)
-   before any untrusted multi-tenant code execution.
-4. **P1 — Wire native IM approval buttons** (Telegram / Weixin); backend +
-   approval modes are ready.
-5. **P2 — IM adapter hardening.** Feishu and QQ are now connected (inbound
-   webhook + outbound sender). Remaining polish: QQ webhook ed25519 signature
-   verification + passive `msg_id` threading; Feishu encrypt-envelope AES
-   decryption; inbound voice→STT and outbound TTS across platforms.
-6. **P2 — MCP `sampling/createMessage`** for servers that call back into the model.
+1. **P0 — Fix client-mode mid-turn steering loss.** The default TUI path
+   silently drops mid-run user input (see the Mid-turn steering row). Either
+   forward steering over the gateway API (e.g. a `/v1/runs/{id}/steer` endpoint
+   feeding the daemon-side `kernel.WithSteering` channel) or, at minimum,
+   disable mid-run input in client mode with an honest notice. A continuity
+   product must never silently eat cross-process input.
+2. **P0 — Make the eval gate real, starting with continuity cases.** Record and
+   commit VCR cassettes for the three north-star scenarios plus the existing
+   core cases; make `selfcheck` fail (not skip) when the verified-case count is
+   below a threshold. This turns the north star into an enforced contract.
+3. **P0 — Continuity path polish.** Wire native IM approval buttons
+   (Telegram / Weixin — backend + approval modes are ready) for scenario 1, and
+   surface identity: `/whoami`-style binding visibility so "bind a new endpoint
+   → inherit tasks and memory" is a visible moment.
+4. **P1 — Finish daemon-client convergence, then delete the duplicates.**
+   Remaining parity gap: session search over the daemon. Once closed, remove
+   the in-process TUI path (`SELFMIND_TUI_INPROC`), the legacy alt-screen TUI
+   (`SELFMIND_TUI_LEGACY`, viewport, `controller_mouse.go`, `renderCache`), and
+   decompose `uiModel` per the AGENTS.md guardrail — one simplification pass.
+   Then a real N>1 soak (`SELFMIND_WORKERS`).
+5. **P1 — Stranger-isolation hardening (scenario 3).** QQ webhook ed25519
+   signature verification (inbound is currently unverified), Feishu
+   encrypt-envelope AES decryption, WeChat OA safe-mode crypto.
+6. **P2 — Real `execute_code` sandbox** (namespace/seccomp/cgroup or container).
+   Prerequisite for any multi-person sharing; not needed for the single-person
+   scenarios.
+7. **P2 — MCP `sampling/createMessage`**, IM voice STT/TTS, remaining adapter
+   polish — only as scenario needs dictate.
 
 Cron proactive delivery, user profile synthesis, CLI image input, approval
 modes, and the self-check/CI gate landed with the Phase-1 work — see

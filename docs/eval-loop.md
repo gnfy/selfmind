@@ -144,6 +144,11 @@ turns:
 - `internal/eval/recorder.go` observes `llm.StreamEvent` through
   `httpapi.WithStreamObserver` and writes JSONL.
 - `internal/eval/checks.go` runs deterministic quality checks.
+- `internal/eval/state_oracle.go` evaluates `assert_state` world-state
+  predicates against `control.db` and the workspace after a run.
+- `internal/eval/scenario.go` drives multi-turn scenario cases.
+- `internal/eval/capture.go` promotes a flight-recorded real turn into a
+  replayable eval case (`/capture`, `selfmind eval capture`).
 - `internal/eval/report.go` summarizes JSONL logs.
 - `internal/cliapp/eval_commands.go` exposes the CLI.
 

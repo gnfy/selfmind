@@ -9,6 +9,11 @@ This page is the module-level index for that work: what each module does and
 where it lives. For per-capability status (Done/Partial/Missing) see
 `docs/STATUS.md`; for the rules behind these modules see `AGENTS.md`.
 
+> **North star note (2026-07-03):** the Phase-1 acceptance bar is
+> **cross-endpoint continuity** (`docs/identity-continuity.md`). Pillar 3
+> (cross-channel handoff) is the primary pillar; Pillars 1, 2, and 4 exist to
+> support it. Priorities live in `docs/STATUS.md`.
+
 ---
 
 ## Pillar 1 — CLI daily use (Codex-parity)

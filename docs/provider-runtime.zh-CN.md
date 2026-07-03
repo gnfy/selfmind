@@ -119,11 +119,13 @@ ProviderProfile{
 | `SystemMessageMode` | system message 放置方式 | `top_level`、`inline` |
 | `ThinkingMode` | thinking 参数策略 | `openai`、`anthropic`、`kimi`、`minimax`、`omit` |
 | `UserAgent` | provider 需要的客户端标识 | 例如 `claude-code/0.1.0` |
+| `ResponsesStoreFalse` | Responses 请求强制 `"store": false`（无状态服务端） | bool |
+| `ResponsesRequireStream` | Responses 请求强制流式（服务端拒绝非流式） | bool |
 | `SupportsTools` | 是否支持 native tools | bool |
 | `SupportsStreaming` | 是否支持 stream | bool |
 | `SupportsVision` | 是否支持视觉输入 | bool |
 
-用户 YAML 里的 `quirks` 目前只开放 `auth_header`、`tool_schema`、`system_message_mode`、`thinking_mode`、`user_agent`。`SupportsTools`、`SupportsStreaming`、`SupportsVision` 属于内置 profile 元数据，新增内置 provider 时在 Go 代码中维护。
+用户 YAML 里的 `quirks` 目前开放 `auth_header`、`tool_schema`、`system_message_mode`、`thinking_mode`、`user_agent`，以及面向 Responses-compatible endpoint 的 `responses_store_false` 和 `responses_require_stream`（要求无状态/仅流式请求的服务端）。`SupportsTools`、`SupportsStreaming`、`SupportsVision` 属于内置 profile 元数据，新增内置 provider 时在 Go 代码中维护。
 
 现有默认 helper：
 
@@ -146,6 +148,18 @@ token。若服务端返回 `401 token_expired`、`invalid_token` 等认证失败
   刷新 ChatGPT OAuth access token，并保留原有的 `tokens.account_id`。
 - Codex 请求走 `llm.ResponsesAdapter`，该 adapter 必须挂上 `TokenGetter` 和
   `TokenRefresher`，避免使用初始化时的旧 token，并能处理服务端提前判定 token 失效的情况。
+- Codex 后端要求无状态、仅流式的 Responses 调用：内置 `codex-cli` profile 设置
+  `ProviderQuirks.ResponsesStoreFalse=true` 和 `ProviderQuirks.ResponsesRequireStream=true`；
+  adapter 必须序列化 `"store": false`，即使调用方要求非流式也必须走流式。不要依赖
+  服务端默认值。
+- Responses-compatible adapter 发送前必须规范化 tool schema：`required` 必须是
+  JSON 数组，绝不能是 `null`；Go 的 nil slice 必须转换为 `[]`。
+- Responses-compatible adapter 必须在线上规范化工具名：provider 侧名称必须匹配
+  `^[a-zA-Z0-9_-]+$`；adapter 内部维护别名表，把返回的 tool call 映射回 SelfMind
+  原始内部名称后再分发。
+- 对无状态 Responses provider，每次重放 tool result 时，必须在同一请求 input 中
+  先包含 assistant 的 `function_call` item，再放对应的 `function_call_output`。
+  `store=false` 时服务端无法查找此前的 response item。
 - 如果刷新失败或 refresh token 已失效，界面应提示用户运行 `codex login`，不要把
   provider 返回的原始 JSON 直接展示出来。
 - `CODEX_ACCESS_TOKEN` 是静态覆盖项，SelfMind 不会刷新它。
@@ -167,6 +181,10 @@ token。若服务端返回 `401 token_expired`、`invalid_token` 等认证失败
 | `deepseek` | `openai_compatible` | API key | `deepseek-chat` |
 | `zai` | `openai_compatible` | API key | `glm-4.5` |
 | `alibaba-coding-plan` | `openai_compatible` | API key | `qwen3-coder-plus` |
+| `codex-cli` | `codex_responses` | 外部 OAuth（Codex CLI 登录态） | `gpt-5.5` |
+| `claude-code` | `anthropic_messages` | 外部 OAuth（Claude Code 登录态） | `claude-3-5-sonnet-20241022` |
+| `gemini-cli` | `openai_compatible` | 外部 OAuth（Gemini CLI 登录态） | `gemini-1.5-pro` |
+| `qwen-cli` | `openai_compatible` | 外部 OAuth（Qwen CLI 登录态） | `qwen3-coder-plus` |
 
 ## Kimi Coding Plan
 

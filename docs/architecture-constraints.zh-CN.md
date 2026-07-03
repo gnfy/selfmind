@@ -59,19 +59,8 @@
 - 单个 switch 超过 12 个分支，要优先沉淀 registry、handler map 或策略对象。
 - 新增功能如果需要同时修改三个以上不相关大文件，先补一层应用服务或组件接口。
 
-## 已开始落地
+## 状态放在哪里
 
-- `internal/ui/components/Pager` 已作为临时页面通用组件引入，`/help` 已改为 Pager 承载。
-- slash command 元数据已收敛到 `internal/gateway/cli/slash_commands.go`，由 help、editor hint 和 dispatch 共享。
-- transcript 渲染已从 TUI controller 拆到 `internal/gateway/cli/transcript_renderer.go`。
-- gateway HTTP handler 已拆分为 task/workspace、channel/account、gateway control、run events、active runs 等文件。
-- Anthropic LLM adapter 已从 OpenAI-compatible adapter 文件中拆出。
-- clarify 回调改为 per-controller `ClarifyBridge`，dispatcher 默认使用隔离 registry，process registry 支持按 tenant 选择，gateway agent event channel 增加串行保护。
-- Skill runtime 已补齐渐进 list/view、直接 `/skill-name` 调用、skill bundle、catalog install/audit、fuzzy patch、hot reload，以及 curator dry-run/report/restore。
-
-后续建议按以下顺序继续：
-
-1. 继续把 OpenAI-compatible、OpenRouter、Gemini、MiniMax adapter 拆成更细的 provider/protocol 文件。
-2. 把 transcript renderer 进一步组件化到 `internal/ui/components`，并补 TUI snapshot 测试。
-3. 将 gateway control command 从大 switch 收敛成 registry。
-4. 继续清理 legacy global helper，只保留显式兼容入口。
+本文件只放规则。实现状态和唯一的优先级列表见 `docs/STATUS.md`；产品北极星与
+跨端连续性契约见 `docs/identity-continuity.md`。不要在这里添加任何按功能的
+状态记录。

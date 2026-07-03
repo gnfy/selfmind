@@ -66,6 +66,10 @@ Do not display `max_tokens` as the model context window, and do not hardcode fak
 | `deepseek` | `openai_compatible` | API key | `deepseek-chat` |
 | `zai` | `openai_compatible` | API key | `glm-4.5` |
 | `alibaba-coding-plan` | `openai_compatible` | API key | `qwen3-coder-plus` |
+| `codex-cli` | `codex_responses` | External OAuth (Codex CLI login) | `gpt-5.5` |
+| `claude-code` | `anthropic_messages` | External OAuth (Claude Code login) | `claude-3-5-sonnet-20241022` |
+| `gemini-cli` | `openai_compatible` | External OAuth (Gemini CLI login) | `gemini-1.5-pro` |
+| `qwen-cli` | `openai_compatible` | External OAuth (Qwen CLI login) | `qwen3-coder-plus` |
 
 ## Kimi Coding Plan
 

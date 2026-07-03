@@ -100,6 +100,18 @@ explicitly asks for a mutation through a writable copy.
 All durable mutations must write tenant learning records through the shared
 audit helpers. Do not add channel-specific or tool-specific history files.
 
+## Catalog Provenance
+
+Catalog installs must preserve Hermes-style provenance:
+
+- Store install records under `~/.selfmind/<tenant>/skills/.catalog/lock.json`
+  and mark usage source as `catalog-installed`.
+- Reject same-name directory or legacy `.md` collisions by default; only
+  overwrite when the user explicitly passes `--force`.
+- A forced reinstall must move the previous copy into
+  `~/.selfmind/<tenant>/skills/.catalog/backups/` before writing the new one.
+  Never silently replace a user-installed or hand-written skill.
+
 ## Adding New Skill Features
 
 When adding a new skill-related feature:

@@ -352,7 +352,7 @@ func (m *uiModel) handleSkills(args []string) tea.Cmd {
 		case "stats":
 			if m.agent == nil || m.agent.Memory() == nil {
 				if m.clientMode {
-					return MsgAgentDone{Response: "`/skills stats` needs the in-process store. Run `selfmind` without SELFMIND_TUI_CLIENT, or use `/skills list`."}
+					return MsgAgentDone{Response: "`/skills stats` needs the in-process store. Run `SELFMIND_TUI_INPROC=1 selfmind`, or use `/skills list`."}
 				}
 				return MsgAgentDone{Response: "Memory not initialized."}
 			}

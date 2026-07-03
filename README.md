@@ -609,10 +609,10 @@ go test ./...
 
 Architecture notes:
 
+- [Identity & Cross-Endpoint Continuity (north star)](docs/identity-continuity.md)
 - [Development Guide](docs/development-guide.md)
 - [Architecture Constraints](docs/architecture-constraints.md)
-- [Gateway / IM / SaaS Architecture](docs/daemon-im-saas-architecture.md)
-- [P0/P1 Development Notes 中文](docs/p0-p1-development-plan.zh-CN.md)
+- [Implementation Status & Priorities](docs/STATUS.md)
 
 Important directories:
 

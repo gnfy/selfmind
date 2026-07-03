@@ -1,8 +1,10 @@
 # SelfMind Daily-Driver Readiness Plan
 
-Status: proposed. Synthesizes the TUI, concurrency, auth, and memory threads into
-one plan for making SelfMind a trustworthy primary productivity tool (CLI-first,
-with WeChat/cron multi-end + cloud 24/7). Design note; `AGENTS.md` is canonical.
+Status: largely shipped (W1a/W3 ✅, W1b/W1c 🟡) — see inline markers and
+`docs/STATUS.md` for the live priority list. Design note; `AGENTS.md` is
+canonical, and the Phase-1 north star (cross-endpoint continuity) lives in
+`docs/identity-continuity.md` — the W1 concurrency work is an enabler for that
+north star, not the headline goal itself.
 
 Companion design docs (do not duplicate here):
 - TUI: `docs/tui-terminal-first-hybrid.md`

@@ -1,38 +1,50 @@
 # SelfMind Agent Notes
 
-This file is for future AI/coding agents continuing work in this repo.
+This file is for future AI/coding agents continuing work in this repo. It is
+auto-injected into every agent session, so it holds the rules you need on every
+task; per-domain details live in the docs it points to. Pointers marked
+**mandatory** mean: read that doc before changing that area.
 
 ## Current Direction
 
-SelfMind is evolving from a local CLI assistant into a long-running personal
-gateway that can later become a SaaS control plane. The key product idea is:
+**North star (Phase 1): cross-endpoint continuity for one person.** SelfMind is
+a personal always-on gateway. One human (`person_id`) binds many platform
+accounts (CLI, WeChat, Telegram, Web); chats stay channel-local, while tasks,
+runs, handoffs, approvals, memory, and skills follow the person. The three
+Phase-1 acceptance scenarios and the continuity contract live in
+`docs/identity-continuity.md` — work that does not serve those scenarios or fix
+a defect on their path needs an explicit reason.
 
-- one always-on SelfMind process can work 24/7;
-- CLI, IM, and Web clients can all command it;
-- different platform accounts can be bound to the same human (`person_id`);
-- each user's workspace is isolated;
-- chats are channel-local, while task state, runs, handoffs, memory, and skills
-  are shared.
+SaaS is deferred: keep `tenant_id` plumbing intact so a later multi-tenant
+control plane is not blocked, but do not design for SaaS now. Do not grow
+provider breadth, IM channel count, or surface-level Codex parity (TUI
+cosmetics, command breadth) beyond what the scenarios need. **Agent execution
+quality — planning, reliable tool calling, error diagnosis/recovery, bounded
+context, verification — is the competence bar and always in scope**: continuity
+of a badly executed task is worthless. The arbiter is the day-in-the-life eval
+scorecard (`selfmind eval scorecard`), not feature comparison against Codex;
+see `docs/identity-continuity.md` "Two bars".
 
-Read the full local architecture note first:
+Read first:
 
-- `docs/daemon-im-saas-architecture.md`
-- `docs/architecture-constraints.md`
-- `docs/architecture-constraints.zh-CN.md`
-- `docs/provider-runtime.md`
-- `docs/provider-runtime.zh-CN.md`
-- `docs/context-lifecycle.zh-CN.md`
+- `docs/identity-continuity.md` (north star, identity model, continuity contract)
+- `docs/STATUS.md` (implementation snapshot and the only live priority list)
+- `docs/architecture-constraints.md` (mandatory guardrails; zh-CN mirror exists)
+
+Domain docs (**mandatory** before changing that domain):
+
+- Providers/models: `docs/provider-runtime.md` (zh-CN mirror exists)
+- Skills: `docs/skills-architecture.md`
+- Eval: `docs/eval-loop.md`
+- Context lifecycle: `docs/context-lifecycle.zh-CN.md`
+- Worker pool / daemon-client: `docs/worker-pool-design.md` §8
+- TUI rendering: `docs/tui-terminal-first-hybrid.md`
 
 ## Handoff Runbook
 
-Use this checklist whenever a future AI/coding agent picks up work in this
-repo:
-
-1. Read this file, then read `docs/STATUS.md` for the current implementation
-   snapshot before assuming any feature is missing — several items the planning
-   docs call "to do" are already done. Then read the specific docs linked above
-   for the area being changed. For provider/model work,
-   `docs/provider-runtime.md` is mandatory.
+1. Read this file, then `docs/STATUS.md` before assuming any feature is
+   missing — several items older docs call "to do" are already done. Then read
+   the domain doc for the area being changed.
 2. Inspect `git status --short` before editing. The worktree is often dirty;
    do not revert unrelated changes or generated output you did not create.
 3. Locate the current boundary before changing code. Prefer `rg` and focused
@@ -44,426 +56,276 @@ repo:
    architectural problem, document the follow-up instead of silently doing a
    risky refactor.
 6. After touching core runtime, provider, gateway, task, tool, or TUI behavior,
-   update this file or the relevant document when the rule for future
+   update this file or the relevant domain doc when the rule for future
    development has changed.
+7. Any change that alters user-visible behavior must, in the same PR, update
+   the matching `docs/STATUS.md` row and add or update an eval case in
+   `evalcases/` when the behavior sits on the message path. Doc drift and an
+   empty eval gate are regressions, not chores to defer.
 
-## Architecture Rules
+## Non-Negotiable Invariants
 
-- Treat `docs/architecture-constraints.md` as mandatory guardrails, not as
-  optional suggestions. Future AI/coding agents should read it before making
-  broad code changes.
-- Do not keep growing `internal/gateway/cli/controller.go`. It should
-  orchestrate state, route Bubble Tea messages, and connect components; reusable
-  transcript, composer, pager, modal, and command behavior belongs in
-  `internal/ui/components` or a dedicated gateway/cli module.
-- New transient TUI pages, such as help, detail, status, task, model, or search
-  screens, should use `internal/ui/components/Pager` or another reusable
-  surface component instead of writing one-off viewport logic in the controller.
-- Slash command metadata should move toward a single registry shared by command
-  dispatch, `/help`, and editor hints. Do not duplicate a command's name,
-  description, and usage across unrelated files. The current registry lives in
-  `internal/gateway/cli/slash_commands.go`.
-- Avoid adding cross-tenant or cross-test global mutable state. Prefer explicit
-  dependencies wired by `internal/app` or the gateway runner.
-- Treat `selfmind gateway` as the product entrypoint for multi-terminal work.
-  `selfmind` is the single binary; the daemon runs as `selfmind gateway run`.
-  The CLI/TUI can still run locally, but IM/Web integration should go through
-  gateway APIs. Do not reintroduce a separate daemon entrypoint binary.
-- Multi-terminal concurrency is solved by **daemon-client convergence**, not by
-  cross-process locks. Every terminal should converge on ONE gateway daemon (the
-  codex/hermes model) so the worker pool, the single process-global auth manager,
-  per-workspace serialization, and one `control.db` owner all apply across
-  terminals. Do NOT add cross-process business locks (auth-file locks,
-  cross-process DB write serialization, per-workspace file locks) to coordinate
-  multiple in-process gateways — that works around a problem that disappears when
-  clients share one daemon. Clients reach the daemon via `gateway.EnsureRunning`
-  (discover-or-autostart, race-safe through the `gateway.lock` flock) and the
-  `internal/gateway/client` daemon-backed `MessageProcessor`. The rich TUI runs
-  as a thin client by **default**; `SELFMIND_TUI_INPROC=1` opts back into the
-  in-process gateway, and the client path falls back to in-process automatically
-  if the daemon can't be reached/started. Agent-backed slash commands run on the
-  daemon via the safelisted `/v1/dispatch` (workspace-mutating/code-exec tools
-  are refused there — they must go through a real agent turn). The `gateway.lock`
-  flock is the only legitimate cross-process lock (daemon single-instance). See
+- `selfmind` is the single binary; the daemon runs as `selfmind gateway run`.
+  Never reintroduce a separate daemon entrypoint binary. Keep
+  `cmd/selfmind/main.go` thin; user-facing command parsing belongs in
+  `internal/cliapp`.
+- Chat transcripts are channel-local, never mirrored across channels. The
+  shared cross-channel layer is durable work state in `control.db`: tenants,
+  persons, accounts, workspaces, tasks, runs, events, handoffs, approvals,
+  notifications.
+- `person_id` = the same human; `account_id` = a platform binding
+  (`cli/local`, `wechat/openid`, …). Channel UX may differ, but a CLI run, a
+  Weixin message, and a web request must create/resume the same
+  person/task/run/approval lifecycle. See `docs/identity-continuity.md`.
+- File, terminal, patch, and process tools must run inside the active
+  workspace scope (`WorkspaceScopeMiddleware`); extend it when adding tools
+  that touch files, processes, or paths.
+- No cross-tenant or cross-test global mutable state. Process-wide objects
+  need clear lifecycle ownership, injected by `internal/app` or the gateway
+  runner. `kernel` must not depend on `gateway` or concrete tools.
+- Linux server is the official release target (amd64/arm64 + systemd assets);
+  Windows/macOS are best-effort until hardened.
+
+## Gateway, Identity & Concurrency
+
+- Multi-terminal concurrency is solved by **daemon-client convergence**, not
+  cross-process locks: every terminal converges on ONE gateway daemon, so the
+  worker pool, the process-global auth manager, per-workspace serialization,
+  and the single `control.db` owner apply across terminals. Never add
+  cross-process business locks (auth-file locks, DB write locks, workspace
+  file locks); the `gateway.lock` flock (daemon single-instance) is the only
+  legitimate cross-process lock.
+- Clients reach the daemon via `gateway.EnsureRunning` (discover-or-autostart,
+  race-safe) and the `internal/gateway/client` daemon-backed
+  `MessageProcessor`. The rich TUI is a thin client by **default**;
+  `SELFMIND_TUI_INPROC=1` opts back into in-process, and the client path falls
+  back automatically if the daemon can't start. Agent-backed slash commands go
+  through the safelisted `/v1/dispatch`, which refuses workspace-mutating and
+  code-exec tools — those require a real agent turn. Details:
   `docs/worker-pool-design.md` §8.
-- Keep `cmd/selfmind/main.go` thin. User-facing command parsing and CLI client
-  behavior belong in `internal/cliapp`; do not grow business logic in `cmd`.
-- Treat Linux server as the official release target. GitHub Releases should
-  package only the `selfmind` Linux `amd64` / `arm64` binaries plus systemd
-  service/install assets until Windows and macOS have production hardening.
-- Keep chat transcripts channel-local. Do not automatically mirror CLI messages
-  into IM, or IM messages into CLI.
-- Share durable state through `control.db`: tenants, persons, accounts,
-  workspaces, tasks, runs, events, handoffs, approvals, and notifications.
-- Use `person_id` as the "same human" identity. Use `account_id` for platform
-  bindings such as `cli/local`, `feishu/ou_xxx`, `wechat/openid`.
-- Platform adapters should parse/authenticate/send platform payloads only. The
+- Platform adapters only parse/authenticate/send platform payloads. The
   gateway owns identity binding, workspace lookup, task/run state, and agent
-  dispatch.
-- Approval state belongs to `control.approval_requests` and gateway
-  control/API handlers. IM adapters can render approval buttons or parse
-  callbacks, but must not own approval lifecycle state.
-- Keep gateway control commands lightweight and pre-agent. `/status`, `/stop`,
-  `/tasks`, `/workspaces`, `/resume`, and `/workspace` should not consume model
-  tokens.
-- Preserve the per-person active-run guard and the gateway's serialized agent
-  call until a real worker pool exists; the current Agent object is not safe to
-  run freely in parallel.
-- Gateway run events must use a per-run event sink installed with
-  `kernel.WithEventChannel(ctx, ch)`. Do not temporarily replace
-  `Agent.EventChannel` in gateway code; that field is only a legacy fallback for
-  local TUI paths.
-- User-visible task state should be derived from structured run outcomes
-  (`api.RunOutcome`) and handoffs, not from ad hoc status text spread across
-  handlers.
-- Durable context must flow through the selector contract:
+  dispatch. Approval state lives in `control.approval_requests` and gateway
+  handlers; IM adapters may render buttons or parse callbacks but never own
+  approval lifecycle.
+- Gateway control commands (`/status`, `/stop`, `/tasks`, `/workspaces`,
+  `/resume`, `/workspace`) stay pre-agent and must not consume model tokens.
+- Keep the per-person active-run guard until the worker pool fully replaces
+  it; the shared Agent object is not safe to run freely in parallel.
+- Run events use a per-run sink installed with
+  `kernel.WithEventChannel(ctx, ch)`. Never swap the shared
+  `Agent.EventChannel` in gateway code (legacy local-TUI fallback only).
+- User-visible task state derives from structured run outcomes
+  (`api.RunOutcome`) and handoffs, not ad hoc status text. Clients decide
+  accepted/busy/completed/failed from `MessageResponse.turn` /
+  `MessageResponse.context`, not by parsing prose.
+- CLI and IM have different feedback contracts: CLI/TUI streams text and tool
+  progress; IM sends concise working notices, key tool/approval milestones,
+  and a final answer or handoff — never token-by-token streams.
+- Long-running work must never look stalled: emit structured progress events
+  (`agent.thinking`, `tool.started`/`tool.output`/`tool.completed`,
+  `turn.completed`). A timeout, failed tool, or model error leads to
+  diagnosis, retry, or a clear handoff — not silent abandonment.
+
+## Context & Memory
+
+- Durable context flows through the selector contract only:
   `control.db -> gateway/httpapi context selector -> kernel.TaskRuntimeContext
-  -> kernel.WithTaskRuntimeContext -> Agent.buildSystemPrompt`. Do not inject raw
-  control rows, event JSON, artifact metadata, or full tool output directly into
+  -> kernel.WithTaskRuntimeContext -> Agent.buildSystemPrompt`. Never inject
+  raw control rows, event JSON, artifact metadata, or full tool output into
   prompts or channel messages.
-- Treat `TaskRuntimeContext` as selected background context, not as a user
-  message. It can contain task state, handoffs, events, artifacts, and later
-  selected memory/session snippets, but it must remain bounded and explainable.
-- Per-turn runtime context should now be assembled as
-  `kernel.RuntimeContextBundle` before prompt rendering. The bundle is the
-  P0/P1 contract for workspace, task, selected memory, selection notes, and
-  token/character budgets. Extend this bundle or the selector that feeds it
-  rather than appending new prompt fragments in unrelated handlers.
-- `internal/kernel/context_engine.go` must stay on the streaming hot path. It
-  should only load a bounded slice of recent channel history and should not make
-  synchronous LLM summarization calls by default. If synchronous compaction is
-  ever required for diagnostics, gate it behind `SELFMIND_SYNC_CONTEXT_SUMMARY`
-  and keep the default path deterministic.
-- Existing memory facts, session FTS recall, task handoffs, task events, and
-  artifacts are separate durable context sources. Future ranking/embedding work
-  should extend the selector layer instead of adding another prompt append path
-  in `agent.go`, gateway handlers, or IM adapters.
-- Hard tasks should not appear stalled. Long-running runs must emit visible
-  progress through events, status text, or outbound channel notifications. A
-  timeout, failed tool call, or model error should lead to diagnosis, retry or a
-  clear handoff, not silent abandonment.
-- CLI and IM have different feedback contracts. CLI/TUI should stream assistant
-  text and tool progress when possible. IM channels such as Weixin should not
-  stream every token; instead they should send concise "working" notices,
-  important tool/approval milestones, and a final answer or handoff.
-- Keep channel UX channel-specific, but task semantics shared. A CLI run,
-  Weixin message, Telegram message, or future web request should all create or
-  resume the same account/person/task/run/event/approval/artifact lifecycle.
-- File and terminal tools must run inside the active workspace scope. Preserve
-  `WorkspaceScopeMiddleware` and extend it when adding tools that touch files,
-  processes, or paths.
-- Model/provider choice should go through role-based routing. Keep roles such
-  as `coding_agent`, `memory_extract`, `background_review`, `skill_curator`,
-  and `semantic_recall` stable so they can become SaaS policy keys later.
-- Provider discovery, credential resolution, model-list fetching, and profile
-  overrides belong in `internal/modelruntime`. Do not add vendor auth probing
-  or model-list fetch logic directly to `internal/app/agent.go` or LLM
+- `TaskRuntimeContext` is selected background context, not a user message; it
+  must stay bounded and explainable. Per-turn context is assembled as
+  `kernel.RuntimeContextBundle` (workspace, task, selected memory, notes,
+  budgets) before prompt rendering — extend the bundle or its selector, never
+  append prompt fragments in unrelated handlers.
+- `internal/kernel/context_engine.go` stays on the streaming hot path: bounded
+  recent-history slice, no synchronous LLM summarization by default
+  (diagnostic-only compaction gates behind `SELFMIND_SYNC_CONTEXT_SUMMARY`).
+- Memory facts, session FTS recall, task handoffs, task events, and artifacts
+  are separate durable sources. Ranking/embedding work extends the selector
+  layer — never another append path in `agent.go`, gateway handlers, or IM
   adapters.
-- Provider integration must follow the Provider Runtime boundary documented in
-  `docs/provider-runtime.md`: `ProviderProfile` describes a vendor, `Resolver`
-  produces a resolved `Runtime`, app wiring turns the runtime into an
-  `llm.Provider`, and adapters only implement protocol transports.
-- The runtime-to-LLM boundary is now `llm.TransportConfig` plus the transport
-  registry in `internal/kernel/llm/transport.go`. `internal/app` may translate a
-  resolved `modelruntime.Runtime` into `TransportConfig`, but it must not choose
-  concrete OpenAI/Anthropic/Responses adapters with provider-name switches.
-- Prefer existing protocol adapters (`openai_chat`, `openai_compatible`,
-  `anthropic_messages`, `codex_responses`) when adding model vendors. Add a new
-  Go adapter only when the wire protocol is genuinely different.
-- Put provider-specific behavior in `ProviderQuirks` first: auth header,
-  tool-schema repair, system-message mode, thinking behavior, User-Agent, and
-  protocol-specific request flags such as Codex Responses `store=false` and
-  stream-only requests. Do not scatter provider-name checks across CLI,
-  gateway, IM adapters, or app setup.
-- User YAML `provider_profiles.*.quirks` currently supports
-  `auth_header`, `tool_schema`, `system_message_mode`, `thinking_mode`, and
-  `user_agent`, plus `responses_store_false` and `responses_require_stream`
-  for Responses-compatible endpoints that require stateless/stream-only
-  requests. Capability flags such as
-  tool/streaming/vision support belong in built-in Go profiles.
-- Responses-compatible stateless providers must replay native tool turns as
-  `function_call` input items followed by matching `function_call_output`
-  items. Do not send a tool output with only a `call_id`; Codex will reject it
-  because `store=false` means the server cannot look up prior response items.
-- Responses-compatible providers require wire tool names matching
-  `^[a-zA-Z0-9_-]+$`. Keep SelfMind's internal tool names unchanged, but map
-  them to provider-safe names at the adapter boundary and map returned tool
-  calls back to the original names before dispatch. This is especially
-  important for skill, MCP, or legacy tools whose internal names may contain
-  `:`, `.`, `/`, or spaces.
-- Kimi Coding Plan should default to `kimi-coding` +
-  `anthropic_messages` + `https://api.kimi.com/coding` +
-  `kimi-for-coding`, with Moonshot tool schema repair, no Anthropic `thinking`
-  field on that path, `max_tokens=32000`, `User-Agent: claude-code/0.1.0`,
-  and HTTP/2 disabled for the Kimi /coding transport. The transport must also
-  restrict TLS ALPN to `http/1.1`; otherwise the server can negotiate `h2`,
-  send HTTP/2 frames, and Go will report `unexpected EOF` or a malformed
-  HTTP/1.x response. This mirrors Hermes' HTTP/1.1 client behavior.
-- MiniMax Coding Plan should default to Anthropic-compatible endpoints
-  (`https://api.minimax.io/anthropic` or `https://api.minimaxi.com/anthropic`),
-  Bearer auth, and fallback models `MiniMax-M3`, `MiniMax-M2.7`,
-  `MiniMax-M2.7-highspeed`, `MiniMax-M2.5`. MiniMax OAuth token refresh belongs
-  in `internal/modelruntime`, not in LLM adapters.
-- Role-based model overrides must pass the same runtime fields as the default
-  provider: headers, max tokens, reasoning effort, thinking, service tier, and
-  quirks. CLI, gateway, IM, and future SaaS policy should all resolve providers
-  through the same `modelruntime.Resolver`.
-- Keep `context_length` and `max_tokens` separate. `context_length` is the
-  model's total input+output context window and drives UI usage display,
-  context budgeting, and future compression policy. `max_tokens` is only the
-  single-response output cap sent to a provider. Do not display `max_tokens` as
-  the model context size, and do not hardcode fake windows such as `1M` in CLI
-  or IM status surfaces.
-- When adding or changing core runtime code, add concise intent/boundary
-  comments for exported types, non-obvious control flow, compatibility paths,
-  and invariants. This especially applies to `internal/modelruntime`, agent
-  wiring, gateway runner/control, tool dispatch, and memory/skill learning.
-  Comments should explain why the boundary exists or what must stay true; do
-  not restate simple assignments, and do not leave mojibake or hidden-encoding
-  comments.
-- P2 auth reuse is intentionally limited to Codex CLI, Claude Code, Gemini
-  CLI, Qwen CLI, and SelfMind-owned OAuth providers such as MiniMax OAuth. Keep
-  external credential parsing and refresh in `internal/modelruntime`, and make
-  adapters consume `Runtime.TokenGetter` before each request instead of caching
-  an initial token. If the server returns an auth failure such as
-  `token_expired`, adapters may call `Runtime.TokenRefresher` and replay the
-  same request once. `codex-cli` must refresh expired `~/.codex/auth.json`
-  ChatGPT OAuth access tokens, send Codex Responses requests with
-  `store=false`, and surface stale-login/provider-contract failures as
-  actionable text, not raw provider JSON. Other model vendors should use API
-  keys, custom OpenAI-compatible endpoints, or `provider_profiles`.
-- Tool calling should stay Hermes-like: pass tool schemas as native LLM
-  `tool_calls` where the provider supports it, preserve `tool_call_id` on
-  tool result messages, and keep `[TOOL:...]` only as a compatibility fallback.
-- SelfMind is strict agent-first. Except for explicit internal slash commands
-  such as `/help`, `/model`, `/status`, `/tasks`, `/events`, `/approvals`,
-  `/approve`, `/reject`, `/stop`, `/new`, `/resume`, `/workspace`, and
-  `/workspaces`, ordinary natural-language input from CLI, IM, HTTP, or future
-  clients must reach the agent. Do not add pre-agent direct-answer routers for
-  greetings, identity/model questions, "simple" code snippets, explanations, or
-  advice requests.
-- Codex-style continuation is part of the contract. If the assistant proposed a
-  plan and the user replies with a short acceptance or continuation such as
-  `ok`, `yes`, `go ahead`, `continue`, `可以`, `好的`, or `继续`, keep the
-  message in the same task/conversation context and let the agent continue the
-  previously proposed work. If there is no resumable task, route the message to
-  the agent as normal input instead of dropping it into a hardcoded reply.
+
+## Agent-First Routing & Task Strategy
+
+- SelfMind is strict agent-first. Except for explicit slash commands (`/help`,
+  `/model`, `/status`, `/tasks`, `/events`, `/approvals`, `/approve`,
+  `/reject`, `/stop`, `/new`, `/resume`, `/workspace`, `/workspaces`),
+  natural-language input from any channel must reach the agent. Never add
+  pre-agent direct-answer routers for greetings, identity/model questions,
+  "simple" snippets, explanations, or advice. Program-level model status
+  belongs behind `/model`; "who are you / what model are you" questions go to
+  the agent.
+- Codex-style continuation is part of the contract: a short acceptance (`ok`,
+  `继续`, `可以`, …) after a proposed plan continues the same task context; if
+  nothing is resumable, it routes to the agent as normal input. The resolution
+  algorithm is in `docs/identity-continuity.md`.
 - Tool exposure is a guardrail, not a classifier. Per-turn policy is
-  centralized in `internal/kernel/task_strategy.go`; it may hide externally
-  scoped tools such as `web_search`/`web_extract` unless the user explicitly
-  asks to search, browse, inspect a URL, check official docs, or retrieve
-  current/latest external information. It must not decide that natural language
-  is "just chat" and bypass the agent.
-- `TaskStrategy` should stay coarse: channel mode, plan policy, web policy, and
-  safety limits. Avoid keyword-heavy task taxonomies. If a new product-level
-  policy is required, add it here as an agent guardrail and cover it with tests
-  before changing gateway behavior.
-- P0/P1 task strategy is still agent-first. It may disable tools only for
-  pure direct-answer turns that do not need workspace, external, or tool state,
-  such as short identity/model questions. Coding examples, explanations,
-  analysis requests, and artifact requests should reach the agent with coarse
-  guidance rather than a pre-agent answer.
-- Gateway `MessageResponse.turn` and `MessageResponse.context` are the
-  structured status contract for CLI, IM, HTTP, and eval clients. Prefer these
-  fields over parsing human text when deciding whether a turn is accepted,
-  busy, completed, failed, or still running.
-- Tool events should include compact diagnostic metadata when failures happen:
-  `error_category`, `diagnostic_hint`, duration, preview, and truncation
-  markers. This lets CLI/IM show Codex-style progress and lets evals detect
-  regressions without dumping raw provider or tool JSON.
-- Gateway intent routing is centralized in `internal/gateway/router/intent*.go`
-  and returns `router.IntentResult`. `intent.rules` are only for explicit
-  routing commands, skill/query/search commands, and high-confidence resume
-  cues. `intent.mode: rules|hybrid|llm` must not let a lightweight intent model
-  override ordinary user messages into a direct/casual path.
-- Program-level model status belongs behind `/model`. Natural-language
-  questions such as "who are you", "what model are you", or their non-English
-  equivalents must go through the agent, which can answer from active runtime
-  context.
-- The gateway must build `TaskStrategy` from the original user content before
-  adding daemon, workspace, attachment, task, or resume context, then pass it to
-  the agent with `kernel.WithTaskStrategy`. This prevents resume/workspace
-  metadata from becoming hidden routing keywords.
-- `update_plan` is optional and model-decided unless a specific strategy marks
-  it required. Do not runtime-ban planning for snippets or explanations; instead
-  prompt the model to use plans only when the work genuinely needs multiple
-  visible steps. Repo inspection, debugging, CI/CD, multi-file edits, runnable
-  artifact creation, and long verification tasks should expose local tools and
-  visible progress.
-- For ambiguous CLI requests that may produce a file or runnable artifact
-  (`write a JS game`, `make a small tool`, `create a page`), prefer a cheap
-  read-only workspace probe before deciding whether to answer inline, create a
-  standalone artifact, or ask a clarification. For IM channels, ask the user to
-  bind/select a workspace before writing or running commands when no active
-  workspace is clear.
-- Long-running agent work must emit structured progress events. Use
-  `agent.thinking` for model-decision phases, `tool.started`/`tool.output`/
-  `tool.completed` for tool execution, and `turn.completed` for final state.
-  CLI/TUI should show these steps live; IM channels should keep token streams
-  collapsed but preserve working notices, event records, and failure summaries.
-- Tool failures are diagnostic evidence, not automatic stop conditions. Agents
-  should inspect cwd, repository/module boundaries, environment, auth state,
-  provider protocol constraints, or command help before retrying with a changed
-  command. Do not bake project-specific env overrides into generic tools.
-- Environment diagnosis must be language-agnostic. First identify the ecosystem
-  from high-signal files such as `go.mod`, `package.json`, `pyproject.toml`,
-  `requirements.txt`, `Cargo.toml`, `composer.json`, `pom.xml`, `build.gradle`,
-  `.csproj`, `Gemfile`, `Makefile`, `Dockerfile`, and CI workflow files. Then
-  inspect the matching runtime/package-manager state and choose the next
-  command from evidence. For example, a Go workspace/module error should lead
-  the agent to inspect `go env GOWORK`, `go env GOMOD`, `go.work`, and
-  `go.mod`; a Node project should inspect package scripts and lockfiles; a
-  Python project should inspect `pyproject.toml`, virtualenv and test runner
-  hints; a PHP project should inspect `composer.json`; Rust should inspect
-  `Cargo.toml`. Use explicit cwd or env overrides only when that diagnosis
-  supports it.
-- Tool results must be packaged through the Agent result envelope before they
-  reach the model, TUI, run events, or future artifacts. Keep raw tool output,
-  model-bounded content, and user-visible preview as separate surfaces; do not
-  reuse one truncated string for all three. UI/event previews should be compact
-  and UTF-8 safe, while model content can use a bounded head/tail view with a
-  clear note when the full output is too large for context.
-- Tool and command output shown in CLI/TUI should be human-readable. Do not dump
-  raw JSON payloads into the transcript unless the user explicitly asked for
-  raw protocol details. Summarize plan updates, tool calls, and errors in a
-  compact form.
-- Only execute clearly read-only tool batches in parallel. Terminal, memory,
-  skill mutation, file writes, patches, process control, delegation, and unknown
-  tools should run sequentially unless a dedicated safety policy says otherwise.
-- Keep skill handling layered and progressive: `skills_list` is for metadata,
-  `skill_view` reads content, `skill_manage` mutates skills, `skill_catalog`
-  installs/audits skills, and `skill_bundle` manages grouped workflows.
-- Skill discovery must flow through the shared skill service. Search visible
-  roots in priority order: workspace `.selfmind/skills`, workspace
-  `.agents/skills` for Codex compatibility, workspace `skills/`, optional
-  environment roots, then the user root `~/.selfmind/<tenant>/skills`.
-  Workspace roots may be read-only; mutation tools must refuse writes to
-  read-only roots with a clear error instead of silently copying or replacing.
-- Skills are instruction assets, not auto-executed shell tools. Dynamic
-  `skill:<name>` registrations are compatibility shims only; slash invocation
-  and `skill_view` are the supported ways to load a skill into model context.
-  Scripts or commands mentioned by a skill must still be run explicitly through
-  normal tools and safety checks.
-- Enable/disable is tenant-scoped lifecycle metadata. Disabling a skill must
-  not mutate read-only workspace or external roots; it should make slash and
-  bundle invocation skip the skill until it is enabled again.
-- Skill injection must stay bounded and UTF-8 safe. Metadata should be compact,
-  full `SKILL.md` content is loaded only on explicit invocation/view, and large
-  skill bodies must be truncated with an explicit note rather than corrupting
-  output or exhausting the turn context.
-- Skill mutations should hot-reload the active registry when possible. Direct
-  slash invocation must resolve bundles before individual skills.
-- Curator automation should only govern `agent-created` skills by default.
-  Manual, catalog-installed, bundled, and pinned skills must not be archived
-  automatically.
-- Catalog installs must preserve Hermes-style provenance. Store install
-  records under `~/.selfmind/<tenant>/skills/.catalog/lock.json`, mark usage
-  source as `catalog-installed`, reject same-name directory or legacy `.md`
-  collisions by default, and only overwrite when the user explicitly passes
-  `--force`.
-- Forced catalog reinstalls must move the previous copy into
-  `~/.selfmind/<tenant>/skills/.catalog/backups/` before writing the new copy.
-  Do not silently replace user-installed or hand-written skills without a
-  backup and explicit force.
-- Memory and skill mutations should write learning audit records under the
-  tenant learning log. Do not add one-off history files in individual tools.
-- User-facing learning history and undo should go through the shared
-  `skill_manage` and `memory` tool actions so CLI/TUI/IM behavior stays
-  consistent and auditable.
+  centralized in `internal/kernel/task_strategy.go`; it may hide
+  `web_search`/`web_extract` unless the user explicitly asks for external
+  information, and may disable tools only for pure direct-answer turns. It
+  must never decide input is "just chat" and bypass the agent.
+- `TaskStrategy` stays coarse (channel mode, plan policy, web policy, safety
+  limits) — no keyword taxonomies. The gateway builds it from the ORIGINAL
+  user content before adding daemon/workspace/attachment/resume context, then
+  passes it via `kernel.WithTaskStrategy`.
+- Intent routing is centralized in `internal/gateway/router/intent*.go`.
+  `intent.rules` cover only explicit routing/skill/search commands and
+  high-confidence resume cues; no intent mode may reroute ordinary messages
+  into a direct/casual path.
+- `update_plan` is optional and model-decided unless a strategy requires it.
+  For ambiguous artifact-producing CLI requests, prefer a cheap read-only
+  workspace probe before choosing inline answer vs. file vs. clarification;
+  on IM, ask the user to bind/select a workspace before writing.
 
-## Important Files
+## Models & Providers
 
-- `cmd/selfmind/main.go`: thin user entrypoint that calls `internal/cliapp`.
-- `internal/cliapp/`: selfmind CLI application layer, including gateway
-  lifecycle commands, gateway client commands, and TUI bootstrap.
-- `internal/gateway/api/`: gateway HTTP request/response DTOs shared by
-  clients and handlers.
-- `internal/gateway/httpapi/server.go`: local HTTP API and IM webhook
-  shared message/run flow. Endpoint handlers live in split `handlers_*.go` and
-  `run_events.go`; run execution and the active-run registry live in
-  `run_coordinator.go` (the `RunCoordinator` type), which Server delegates to.
-- `internal/gateway/httpapi/context_selector.go`: selects bounded task
-  handoff/event/artifact/workspace slices from `control.db` for one model turn.
-  Extend this when adding long-term context sources.
-- `internal/control/store.go`: control-plane SQLite schema and persistence.
-- `internal/tools/workspace_scope.go`: workspace execution boundary.
-- `internal/gateway/cli/transcript_renderer.go`: TUI transcript, startup card,
-  and tool-message rendering.
-- `internal/gateway/cli/slash_commands.go`: slash command metadata and
-  dispatcher registry shared by help/editor/dispatch.
-- `internal/kernel/event_context.go`: per-run agent event sink injection.
-- `internal/kernel/context_engine.go`: bounded message-window construction for
-  model calls. Keep it cheap and deterministic on the default hot path.
-- `internal/kernel/task_runtime_context.go`: kernel-owned prompt contract for
-  selected durable task context and `RuntimeContextBundle`. Keep `kernel`
-  independent of `control.Store`.
-- `internal/kernel/task_strategy.go`: per-turn task classification and tool,
-  plan, web, and progress policy shared by CLI/IM/web entrypoints.
-- `internal/gateway/httpapi/outcome.go`: structured run outcome extraction for
-  task status, handoff, and IM/CLI status cards.
-- `internal/gateway/cli/controller.go`: Bubble Tea state orchestration. Keep
-  new visual behavior in smaller renderer/component files when possible.
-- `internal/kernel/llm/model_gateway.go`: role-based model routing.
-- `docs/provider-runtime.md` and `docs/provider-runtime.zh-CN.md`: mandatory
-  provider integration rules and checklist for future model vendors.
-- `docs/skills-architecture.md`: mandatory skill root, scope, invocation,
-  context-budget, and governance contract.
-- `internal/kernel/llm/anthropic_adapter.go`: Anthropic Messages adapter.
-- `internal/kernel/llm/adapters.go`: OpenAI-compatible, OpenRouter, MiniMax
-  legacy, and generic OpenAI-compatible adapters.
-- `internal/modelruntime/`: provider metadata, credential resolution, external
-  CLI auth reuse, and live model catalog/cache.
-- `internal/kernel/native_tool_call.go`: native/fallback tool-call conversion,
-  structured result messages, and safe parallel execution policy.
-- `internal/tools/session_search.go`: tenant-aware history search.
-- `internal/tools/skill_runtime.go`: progressive skill list/view helpers,
-  runtime reload, and direct slash invocation payloads.
-- `internal/tools/skill_service.go`: shared skill root discovery, scope,
-  precedence, and writable/read-only boundary helpers.
-- `internal/tools/skill_bundles.go`: YAML skill bundles for grouped workflow
-  invocation.
-- `internal/tools/skill_catalog.go`: official/local/URL/GitHub skill install
-  and audit.
-- `internal/tools/skill_fuzzy_patch.go`: tolerant skill content patching.
-- `internal/tools/skill_curator.go`: skill lifecycle governance, dry-run,
-  reports, archive, and restore.
-- `internal/tools/learning_audit.go`: tenant learning history for memory/skill
-  mutations, including history and supported undo helpers.
-- `internal/eval/`: offline evaluation loop for replaying representative
-  prompts through the real gateway/agent path, recording JSONL traces, and
-  checking UX/runtime regressions.
-- `evalcases/`: repository-owned eval case suites. Keep cases small,
-  representative, and safe to run against configured providers.
-- `docs/eval-loop.md`: how to add cases, run evals, interpret reports, and
-  extend checks.
+> **Mandatory:** read `docs/provider-runtime.md` before touching providers,
+> auth, adapters, or model routing. It holds the full quirk tables, the
+> Kimi/MiniMax coding-plan specifics (endpoints, ALPN/HTTP-1.1 transport,
+> schema repair), and the Codex Responses contract.
+
+- Provider integration follows the Provider Runtime boundary:
+  `ProviderProfile` (declarative vendor) → `Resolver` → `Runtime` →
+  `llm.TransportConfig` → transport registry
+  (`internal/kernel/llm/transport.go`). `internal/app` translates Runtime to
+  TransportConfig but never picks concrete adapters via provider-name
+  switches. Discovery, credential resolution, model-list fetching, and
+  profile overrides live in `internal/modelruntime` only.
+- Prefer existing protocol adapters (`openai_chat`, `openai_compatible`,
+  `anthropic_messages`, `codex_responses`); add a Go adapter only for a
+  genuinely different wire protocol. Provider-specific behavior goes in
+  `ProviderQuirks` first — never scattered provider-name checks in CLI,
+  gateway, IM, or app setup.
+- Hard invariants for stateless Responses providers (full rules in
+  provider-runtime.md): serialize `store=false` + stream-only when the quirks
+  demand it; replay tool turns as `function_call` then matching
+  `function_call_output` in the same input; map internal tool names to
+  provider-safe `^[a-zA-Z0-9_-]+$` names at the adapter boundary and back.
+- External auth reuse is limited to Codex CLI, Claude Code, Gemini CLI, Qwen
+  CLI, and SelfMind-owned OAuth (e.g. MiniMax). Credential parsing/refresh
+  lives in `internal/modelruntime`; adapters call `Runtime.TokenGetter` per
+  request and may use `Runtime.TokenRefresher` + one replay on auth failure.
+  Surface stale-login errors as actionable text, never raw provider JSON.
+  Other vendors use API keys or `provider_profiles`.
+- Model choice goes through role-based routing; keep the role names
+  `coding_agent`, `memory_extract`, `background_review`, `skill_curator`,
+  `semantic_recall` stable. Role overrides must pass the same runtime fields
+  as the default provider (headers, max tokens, reasoning effort, thinking,
+  service tier, quirks) and resolve through the same `modelruntime.Resolver`.
+- Keep `context_length` (total window; drives usage display and budgets) and
+  `max_tokens` (per-response output cap) separate. Never display `max_tokens`
+  as the context size or hardcode fake windows like `1M`.
+
+## Tools & Safety
+
+- Tool calling stays Hermes-like: native LLM `tool_calls` where supported,
+  `tool_call_id` preserved on results, `[TOOL:...]` only as a compatibility
+  fallback.
+- Only clearly read-only tool batches run in parallel. Terminal, file writes,
+  patches, memory/skill mutation, process control, delegation, and unknown
+  tools run sequentially unless a dedicated safety policy says otherwise.
+- Tool results go through the Agent result envelope before reaching the
+  model, TUI, or run events. Raw output, model-bounded content (head/tail
+  view with an explicit too-large note), and compact UTF-8-safe user preview
+  are three separate surfaces — never one truncated string for all three.
+- CLI/TUI output must be human-readable: summarize plans, tool calls, and
+  errors; never dump raw JSON unless the user asked for protocol details.
+  Failure events carry compact diagnostics (`error_category`,
+  `diagnostic_hint`, duration, preview, truncation markers).
+- Tool failures are diagnostic evidence, not stop conditions. Diagnose before
+  retrying: identify the ecosystem from high-signal files (`go.mod`,
+  `package.json`, `pyproject.toml`, `Cargo.toml`, `composer.json`, CI files,
+  …), inspect the matching runtime/package-manager state (e.g. a Go
+  workspace error → check `go env GOWORK`/`GOMOD`, `go.work`, `go.mod`), and
+  only then change the command. Never bake project-specific env overrides
+  into generic tools.
+- When changing core runtime code, add concise intent/boundary comments for
+  exported types, non-obvious control flow, and invariants — why the boundary
+  exists, not what the line does. No mojibake or hidden-encoding comments.
+
+## Skills & Learning
+
+> **Mandatory:** read `docs/skills-architecture.md` before changing skill
+> discovery, invocation, mutation, catalog, or curator behavior. It holds the
+> root-precedence, read-only-boundary, context-budget, catalog-provenance,
+> and governance contracts.
+
+- Keep skill handling layered: `skills_list` (metadata) / `skill_view` (read)
+  / `skill_manage` (mutate + hot reload) / `skill_catalog` (install/audit) /
+  `skill_bundle` (grouped workflows). Slash invocation resolves bundles
+  before individual skills.
+- Skills are instruction assets, not auto-executed shell tools; scripts a
+  skill mentions still run through normal tools and safety checks.
+- Catalog installs keep Hermes-style provenance (`.catalog/lock.json`);
+  `--force` reinstalls must back up the previous copy first.
+- Memory and skill mutations write tenant learning-audit records; user-facing
+  history/undo goes through the shared `memory` / `skill_manage` actions —
+  no channel-specific history files or private rollback paths.
+
+## CLI / TUI
+
+- Do not keep growing `internal/gateway/cli/controller.go`; it orchestrates
+  state, routes Bubble Tea messages, and connects components. Reusable
+  transcript/composer/pager/modal/command behavior belongs in
+  `internal/ui/components` or a dedicated gateway/cli module.
+- New transient pages (help, detail, status, task, model, search) use
+  `internal/ui/components/Pager` or another reusable surface — no one-off
+  viewport logic in the controller.
+- Slash command metadata lives in the shared registry
+  (`internal/gateway/cli/slash_commands.go`) used by dispatch, `/help`, and
+  editor hints; never duplicate name/description/usage across files.
+- Rendering and file-size guardrails: `docs/architecture-constraints.md`
+  (mandatory) and `docs/tui-terminal-first-hybrid.md`.
 
 ## Eval Loop Contract
 
-Use the eval loop when changing model providers, tool calling, task strategy,
-context selection, skills, CLI/TUI rendering, IM feedback, or any behavior that
-previously regressed in user testing.
+> Details and case format: `docs/eval-loop.md`.
 
-- Add or update an `evalcases/**/*.yaml` case whenever a bug report becomes a
-  repeatable scenario. Good cases cover identity/model answers, simple code
-  snippets, continuation (`可以`/`继续`), codebase inspection, provider errors,
-  tool progress, and mojibake prevention.
-- `selfmind eval run <case-or-dir>` must go through the same gateway and agent
-  path as real CLI/IM input. Do not add eval-only shortcuts that bypass
-  identity binding, workspace selection, task strategy, tools, provider
-  adapters, event recording, or context selection.
-- JSONL traces under `evalruns/` are local diagnostics and must not be
-  committed. By default, eval traces should hash user/model text and store only
-  previews/metrics. Use `--record-content` only for local debugging with
-  non-sensitive prompts.
-- P0 checks are deterministic heuristics: non-empty output, no mojibake, no raw
-  provider JSON, no leaked XML tool tags, no provider stack dump, expected
-  workspace, continuation behavior, tool event visibility, bounded duration,
-  context overflow detection, max/min tool call counts, tool error counts, and
-  basic first-token/tool metrics in reports.
-- Future P1/P2 work should add provider matrices, synthetic fixtures,
-  model-as-judge scoring, artifact verification, screenshot/terminal
-  interaction checks, and trend reports without weakening the P0 deterministic
-  checks.
+- When a bug report becomes repeatable, add/update an `evalcases/**/*.yaml`
+  case. `selfmind eval run` must go through the same gateway/agent path as
+  real input — no eval-only shortcuts around identity, workspace, strategy,
+  tools, adapters, or context selection.
+- JSONL traces under `evalruns/` are local diagnostics, never committed; by
+  default traces hash user/model text (`--record-content` is local-only).
+- P0 checks stay deterministic (non-empty output, no mojibake, no raw
+  provider JSON, tool-event visibility, bounded duration, …). Later scoring
+  layers must not weaken them.
+
+## Key Files
+
+- `cmd/selfmind/main.go`: thin entrypoint → `internal/cliapp` (CLI layer,
+  gateway lifecycle/client commands, TUI bootstrap).
+- `internal/gateway/httpapi/server.go`: HTTP API + IM webhook flow; handlers
+  in `handlers_*.go`; run lifecycle + active-run registry in
+  `run_coordinator.go`.
+- `internal/gateway/httpapi/context_selector.go`: bounded task
+  handoff/event/artifact/workspace selection per turn.
+- `internal/gateway/httpapi/continue_resolver.go`: cross-channel continue/
+  resume resolution (see `docs/identity-continuity.md`).
+- `internal/gateway/httpapi/outcome.go`: structured run outcome extraction.
+- `internal/control/store.go`: control-plane SQLite schema.
+- `internal/gateway/router/intent*.go`: centralized intent routing.
+- `internal/kernel/task_strategy.go`: per-turn tool/plan/web/progress policy.
+- `internal/kernel/context_engine.go`: bounded message window (hot path).
+- `internal/kernel/task_runtime_context.go`: `TaskRuntimeContext` +
+  `RuntimeContextBundle` prompt contract.
+- `internal/kernel/event_context.go`: per-run event sink injection.
+- `internal/kernel/native_tool_call.go`: native/fallback tool calls, result
+  envelope, parallel-execution policy.
+- `internal/kernel/llm/`: transports (`transport.go`, `adapters.go`,
+  `anthropic_adapter.go`, `responses_adapter.go`), role routing
+  (`model_gateway.go`), VCR (`vcr.go`), flight recorder (`flight.go`).
+- `internal/modelruntime/`: provider profiles, credential resolution,
+  external CLI auth reuse, model catalog/cache, auth manager.
+- `internal/tools/`: workspace scope (`workspace_scope.go`), skills
+  (`skill_service.go`, `skill_runtime.go`, `skill_manage.go`,
+  `skill_catalog.go`, `skill_bundles.go`, `skill_curator.go`), memory,
+  session search, learning audit (`learning_audit.go`).
+- `internal/gateway/cli/`: TUI (`controller.go`, `transcript_renderer.go`,
+  `slash_commands.go`, `command_handlers.go`).
+- `internal/eval/` + `evalcases/`: offline eval loop and repo-owned cases.
 
 ## Local Test Command
 
@@ -475,12 +337,12 @@ $env:GOWORK='off'
 go test ./...
 ```
 
-`GOWORK=off` avoids the parent workspace file excluding this module.
-This is a repository-local development command, not a generic terminal-tool
-default. Runtime tools should return the real command output and let the agent
-diagnose workspace/module errors before choosing any env override.
+`GOWORK=off` avoids the parent workspace file excluding this module. This is a
+repository-local development command, not a generic terminal-tool default;
+runtime tools should return real command output and let the agent diagnose
+workspace/module errors before choosing any env override.
 
-When working from WSL in this checkout, the equivalent command is:
+From WSL in this checkout:
 
 ```sh
 cd /mnt/d/wwwroot/ai/selfmind
@@ -495,8 +357,8 @@ GOWORK=off /usr/local/go/bin/go test ./internal/modelruntime ./internal/kernel/l
 
 ## WSL Build And Smoke Test
 
-When the user expects to try the result in WSL, build the Linux amd64 binary and
-copy it into the user's local path:
+When the user expects to try the result in WSL, build the Linux amd64 binary
+and install it into the user's local path:
 
 ```sh
 cd /mnt/d/wwwroot/ai/selfmind
@@ -514,26 +376,30 @@ configuration, or anything the user is actively testing through
 
 ## Documentation Maintenance
 
-- `AGENTS.md` is the single source of truth for AI/coding-agent rules in this
-  repo. Other tool entry files must only forward to it, never duplicate rules:
-  `CLAUDE.md`, `GEMINI.md`, and `QWEN.md` each just point at `AGENTS.md`. When a
-  new AI tool is onboarded, add a thin forwarder for it rather than copying
-  rules. Keep `CLAUDE.md`/`GEMINI.md`/`QWEN.md` tracked in git so every clone and
-  CI run sees the same rules.
-- `docs/STATUS.md` is the current implementation snapshot. When a change moves a
-  capability between Missing/Partial/Done, update the matching row in the same
-  PR. Do not add per-feature status notes to the historical roadmap docs; record
-  state in `docs/STATUS.md` instead.
-- The planning docs (`docs/selfmind-evolution-roadmap.md`,
-  `docs/selfmind-evolution-design.md`, `docs/p0-p1-development-plan.zh-CN.md`)
-  are historical intent and are partially superseded. They each carry a status
-  banner pointing to `docs/STATUS.md`; do not treat their "to do" lists as the
-  current backlog.
-- Update `AGENTS.md` when a new invariant, workflow, or "future AI must know"
-  rule is introduced.
-- Update `docs/development-guide*.md` for broader engineering explanations.
-- Update `docs/provider-runtime*.md` for model provider rules, provider quirks,
-  Kimi/MiniMax behavior, OAuth behavior, or new model-vendor checklists.
+- `AGENTS.md` is the single source of truth for AI/coding-agent rules. Other
+  tool entry files (`CLAUDE.md`, `GEMINI.md`, `QWEN.md`) only forward here —
+  never duplicate rules; keep them tracked in git. This file is injected into
+  every session: keep rules here short and grouped, push details into domain
+  docs with a **mandatory** pointer, and never remove an invariant just to
+  save lines — comprehension outranks token savings.
+- `docs/identity-continuity.md` is the canonical direction doc (north star,
+  identity model, continuity contract). Update it only when the product goal
+  or the continuity mechanism itself changes, not for per-feature status.
+- `docs/STATUS.md` is the implementation snapshot and the **only** live
+  priority list. When a change moves a capability between
+  Missing/Partial/Done, update the row in the same PR. No other doc may
+  declare its own P0 list; point at `docs/STATUS.md` instead.
+- Historical planning docs (`selfmind-evolution-roadmap.md`,
+  `selfmind-evolution-design.md`, `p0-p1-development-plan.zh-CN.md`,
+  `daemon-im-saas-architecture.md`) were deliberately removed from the tree on
+  2026-07-03 so fresh agent analysis never absorbs stale narratives; their
+  useful content lives in `docs/identity-continuity.md`. Retrieve originals
+  via git history only for archaeology — never resurrect their backlog items
+  or code samples, and do not re-add historical planning docs to the tree.
+- Update `docs/development-guide*.md` for broader engineering explanations;
+  `docs/provider-runtime*.md` for provider rules, quirks, Kimi/MiniMax/OAuth
+  behavior, and vendor checklists; `docs/skills-architecture.md` for the
+  skill contract.
 - Keep user-facing README changes separate from internal development rules.
-- For bilingual docs (`*.md` + `*.zh-CN.md`), the English file is canonical for
-  rules; keep the Chinese version in sync or mark it as a translation.
+- For bilingual docs (`*.md` + `*.zh-CN.md`), the English file is canonical
+  for rules; keep the Chinese version in sync or mark it as a translation.

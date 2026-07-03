@@ -62,21 +62,8 @@ These are not compile-time limits, but future AI agents should actively avoid cr
 - If a switch exceeds 12 branches, prefer a registry, handler map, or strategy object.
 - If a feature requires editing more than three unrelated large files, introduce a clearer application service or component interface first.
 
-## Already Started
+## Where Status Lives
 
-- `internal/ui/components/Pager` is now the shared component for transient pages, and `/help` is backed by Pager.
-- Slash command metadata is centralized in `internal/gateway/cli/slash_commands.go` and shared by help, editor hints, and dispatch.
-- Transcript rendering has moved from the TUI controller to `internal/gateway/cli/transcript_renderer.go`.
-- Gateway HTTP handlers have been split into task/workspace, channel/account, gateway control, run events, and active run files.
-- The Anthropic LLM adapter has been split out of the OpenAI-compatible adapter file.
-- Clarify callbacks now use per-controller `ClarifyBridge`; dispatcher defaults to an isolated registry; process registry selection is tenant-aware; gateway agent events use per-run context sinks.
-- Skill runtime has progressive list/view tools, direct `/skill-name` invocation, skill bundles, catalog install/audit, fuzzy patch, hot reload, and curator dry-run/report/restore.
-- Structured run outcomes now feed task handoffs and `/status`; skill and memory mutations write tenant learning audit records with history/undo surfaces.
-- Gateway approval APIs and text control commands now support listing, approving, and rejecting pending approval requests.
-
-Recommended next steps:
-
-1. Continue splitting OpenAI-compatible, OpenRouter, Gemini, and MiniMax adapters by protocol/provider.
-2. Move transcript rendering further into `internal/ui/components` and add TUI snapshot tests.
-3. Convert gateway control commands from a large switch into a registry.
-4. Continue shrinking legacy global helpers so only explicit compatibility entrypoints remain.
+This file is rules only. Implementation state and the live priority list are in
+`docs/STATUS.md`; the product north star and continuity contract are in
+`docs/identity-continuity.md`. Do not add per-feature status notes here.

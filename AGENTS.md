@@ -115,6 +115,13 @@ Domain docs (**mandatory** before changing that domain):
 - Run events use a per-run sink installed with
   `kernel.WithEventChannel(ctx, ch)`. Never swap the shared
   `Agent.EventChannel` in gateway code (legacy local-TUI fallback only).
+- Stuck-run invariant: a task may only be `running` while a run is actually
+  executing; after any finalization or recovery sweep no task may remain
+  `running` with zero live runs (between-turns tasks park as `in_progress`,
+  recovered ones as `interrupted` — both non-terminal/resumable).
+  `Store.FinishRun` writes terminal run statuses only, and
+  `Store.MarkInterruptedRuns` (boot sweep + 60s in-daemon sweep in
+  `httpapi/run_recovery.go`) must keep excluding the active-run registry.
 - User-visible task state derives from structured run outcomes
   (`api.RunOutcome`) and handoffs, not ad hoc status text. Clients decide
   accepted/busy/completed/failed from `MessageResponse.turn` /

@@ -283,8 +283,18 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 		}
 	}
 	_ = d.Control.RecordChannelMessage(finCtx, *identity, req.Channel, task.ID, "assistant", content)
+	// Invariant: finalization must leave the run terminal and must never leave
+	// the task 'running' with zero live runs. A 'running' outcome means "turn
+	// finished, more work planned", so the task parks as 'in_progress' — still
+	// non-terminal (resolveContinueTask keeps offering it for `继续`/`/resume`)
+	// but honest in /tasks and /status: nothing is executing anymore.
+	// Store.FinishRun coerces the run-side status to a terminal value itself.
+	taskStatus := outcome.Status
+	if taskStatus == "" || taskStatus == "running" {
+		taskStatus = "in_progress"
+	}
 	_ = d.Control.FinishRun(finCtx, identity.TenantID, run.ID, outcome.Status)
-	_ = d.Control.UpdateTaskStatus(finCtx, identity.TenantID, task.ID, outcome.Status, outcome.Summary, outcome.NextSteps)
+	_ = d.Control.UpdateTaskStatus(finCtx, identity.TenantID, task.ID, taskStatus, outcome.Summary, outcome.NextSteps)
 	_, _ = d.Control.SaveHandoff(finCtx, control.Handoff{
 		TaskID:       task.ID,
 		Summary:      outcome.Summary,
@@ -305,7 +315,6 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 	})
 	taskID := task.ID
 	task, _ = d.Control.GetTask(finCtx, identity.TenantID, task.ID)
-	taskStatus := outcome.Status
 	if task != nil && task.Status != "" {
 		taskStatus = task.Status
 	}

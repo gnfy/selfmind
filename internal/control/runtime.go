@@ -91,15 +91,35 @@ func (s *Store) ListRunningRuns(ctx context.Context, tenantID string, personIDs 
 	return out, rows.Err()
 }
 
-func (s *Store) MarkInterruptedRuns(ctx context.Context, olderThan time.Duration) (int, error) {
+// MarkInterruptedRuns is the stuck-run recovery sweep. It flips every run
+// still marked 'running' whose heartbeat (falling back to started_at) is older
+// than olderThan to 'interrupted'; olderThan <= 0 means "every running run",
+// which is the daemon-boot case: the gateway.lock flock guarantees no other
+// process owns this control.db, so any run left 'running' at boot is dead.
+// Runs listed in exceptRunIDs are never touched — the periodic in-daemon sweep
+// passes the active-run registry so a live run whose heartbeat writer stalls
+// (e.g. SQLite contention) can never be killed from under the agent.
+//
+// After the run pass it repairs orphaned tasks: any task still 'running' with
+// zero 'running' runs left is flipped to 'interrupted' too, regardless of what
+// active_run_id points at. Invariant: after this sweep — and after every run
+// finalization path in the gateway — no task may remain 'running' without a
+// live run; task status 'running' means "a run is executing right now", never
+// "parked between turns". Returns the number of runs plus orphaned tasks
+// recovered.
+func (s *Store) MarkInterruptedRuns(ctx context.Context, olderThan time.Duration, exceptRunIDs ...string) (int, error) {
 	cutoff := time.Now().Add(-olderThan).Unix()
 	if olderThan <= 0 {
 		cutoff = time.Now().Unix()
 	}
-	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, task_id, tenant_id FROM task_runs
-		 WHERE status = 'running' AND COALESCE(heartbeat_at, started_at) <= ?`,
-		cutoff)
+	query := `SELECT id, task_id, tenant_id FROM task_runs
+		 WHERE status = 'running' AND COALESCE(heartbeat_at, started_at) <= ?`
+	args := []any{cutoff}
+	if len(exceptRunIDs) > 0 {
+		query += ` AND id NOT IN (` + placeholders(len(exceptRunIDs)) + `)`
+		args = append(args, toAnySlice(exceptRunIDs)...)
+	}
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return 0, err
 	}
@@ -148,6 +168,50 @@ func (s *Store) MarkInterruptedRuns(ctx context.Context, olderThan time.Duration
 			return 0, err
 		}
 	}
+	// Orphaned-task repair: the run pass above only flips a task whose
+	// active_run_id still points at the dead run. Historic finalization bugs
+	// (FinishRun writing a non-terminal run status while clearing
+	// active_run_id) and pre-task-sync sweeps left tasks 'running' with no
+	// 'running' run at all — those never matched the guard and looked
+	// "running" forever in /tasks. The tx sees the run flips above, so any
+	// task still 'running' here truly has zero live runs (excluded registry
+	// runs keep status 'running' and protect their tasks). 'interrupted' is
+	// deliberately non-terminal: resolveContinueTask still offers these tasks
+	// for `继续` / `/resume`.
+	orphanRows, err := tx.QueryContext(ctx,
+		`SELECT id, tenant_id FROM tasks
+		 WHERE status = 'running' AND NOT EXISTS (
+		   SELECT 1 FROM task_runs r WHERE r.task_id = tasks.id AND r.status = 'running'
+		 )`)
+	if err != nil {
+		return 0, err
+	}
+	type orphan struct {
+		taskID   string
+		tenantID string
+	}
+	var orphans []orphan
+	for orphanRows.Next() {
+		var o orphan
+		if err := orphanRows.Scan(&o.taskID, &o.tenantID); err != nil {
+			orphanRows.Close()
+			return 0, err
+		}
+		orphans = append(orphans, o)
+	}
+	if err := orphanRows.Err(); err != nil {
+		orphanRows.Close()
+		return 0, err
+	}
+	orphanRows.Close()
+	for _, o := range orphans {
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE tasks SET status = 'interrupted', active_run_id = '', current_summary = COALESCE(NULLIF(current_summary, ''), 'Interrupted: the gateway lost this task''s run before it finished.'), updated_at = ?
+			 WHERE tenant_id = ? AND id = ? AND status = 'running'`,
+			now, o.tenantID, o.taskID); err != nil {
+			return 0, err
+		}
+	}
 	if err := tx.Commit(); err != nil {
 		return 0, err
 	}
@@ -165,7 +229,17 @@ func (s *Store) MarkInterruptedRuns(ctx context.Context, olderThan time.Duration
 			log.Warn("failed to append run.interrupted event", "task_id", r.taskID, "run_id", r.runID, "error", err)
 		}
 	}
-	return len(runs), nil
+	for _, o := range orphans {
+		if _, err := s.AppendEvent(ctx, Event{
+			TaskID:     o.taskID,
+			Type:       "task.interrupted",
+			Visibility: "task",
+			Payload:    json.RawMessage(`{"reason":"task was running with no live run"}`),
+		}); err != nil {
+			log.Warn("failed to append task.interrupted event", "task_id", o.taskID, "error", err)
+		}
+	}
+	return len(runs) + len(orphans), nil
 }
 
 func (s *Store) ListTaskEvents(ctx context.Context, taskID string, limit int) ([]Event, error) {

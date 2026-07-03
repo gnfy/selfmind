@@ -21,7 +21,9 @@ func (c *RunCoordinator) startRunHeartbeat(ctx context.Context, run *control.Run
 	store := c.srv.Control
 	done := make(chan struct{})
 	go func() {
-		ticker := time.NewTicker(10 * time.Second)
+		// runHeartbeatInterval is shared with the stuck-run sweeper's staleness
+		// threshold (run_recovery.go); change them together.
+		ticker := time.NewTicker(runHeartbeatInterval)
 		defer ticker.Stop()
 		for {
 			select {

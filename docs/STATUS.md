@@ -77,17 +77,46 @@ is the only priority list in the repo; other docs must point here.
    `SELFMIND_EVAL_VCR=record selfmind eval run evalcases/continuity`, then
    commit `.vcr/continuity_*`. Until then `selfmind selfcheck` (and CI) fails
    on the three `require_cassette` cases by design.
-2. **P0 — Continuity path polish.** Wire native IM approval buttons
-   (Telegram / Weixin — backend + approval modes are ready) for scenario 1, and
-   surface identity: `/whoami`-style binding visibility so "bind a new endpoint
-   → inherit tasks and memory" is a visible moment.
-3. **P1 — Finish daemon-client convergence, then delete the duplicates.**
+2. **P0 — Async-run task visibility.** A `selfmind send --async` run attaches
+   to a workspace-matched task but does NOT update the person's `current_task`
+   pointer, so `/status` on every endpoint shows an unrelated old task and the
+   user's own async run is invisible (found in live use 2026-07-04). Fix:
+   update `current_task` when a run resolves its task, and/or make `/status`
+   prefer the active run's task. Add a regression test + eval case.
+3. **P0 — Approval UX (validated live: scenario-1 works but hurts).**
+   (a) `/approve` must accept the list ordinal (`/approve 1`) and a unique
+   short-id prefix, not only the full `apr_` UUID (mobile-unfriendly; users
+   naturally type the ordinal and get "not found");
+   (b) `/approvals` and approval notifications must show WHAT is being
+   approved: tool, bounded command/file preview, reason, task title — blind
+   approval is an incident waiting to happen;
+   (c) CLI `selfmind approve` returns a raw-JSON 500 on a wrong id and accepts
+   a task id silently — friendly errors + detect `task_` prefix;
+   (d) push approval requests to the person's bound IM endpoints
+   (`notifyApprovalRequested` currently skips CLI-originated approvals) and
+   wire Telegram inline buttons; Weixin keeps text `/approve` fallback;
+   (e) `selfmind send` lacks a `--mode` flag though the API supports
+   per-request `approval_mode`.
+4. **P0 — Continuity path polish.** Surface identity: `GET /v1/accounts` +
+   `selfmind accounts`, and make "bind a new endpoint → inherit tasks and
+   memory" a visible moment.
+5. **P1 — Eval isolation & run finalization.** Recording/eval against the
+   default path writes eval-* persons, current_task rows, and runs left in
+   `running` into the REAL `control.db` (found 2026-07-04: 20+ eval persons,
+   6 stuck runs). Default eval/record runs to an isolated data dir (the
+   `isolated` scenario mechanism exists); always finalize run status; provide
+   a one-shot cleanup for existing eval residue.
+6. **P1 — Stuck-run recovery.** Two real tasks remain `[running]` after
+   interruption; the interrupted-run recovery must mark heartbeat-dead runs
+   as interrupted (on daemon start and periodically), so `/tasks` never shows
+   phantom running work.
+7. **P1 — Finish daemon-client convergence, then delete the duplicates.**
    Remaining parity gap: session search over the daemon. Once closed, remove
    the in-process TUI path (`SELFMIND_TUI_INPROC`), the legacy alt-screen TUI
    (`SELFMIND_TUI_LEGACY`, viewport, `controller_mouse.go`, `renderCache`), and
    decompose `uiModel` per the AGENTS.md guardrail — one simplification pass.
    Then a real N>1 soak (`SELFMIND_WORKERS`).
-4. **P1 — Stranger-isolation hardening (scenario 3).** Highest item: the
+8. **P1 — Stranger-isolation hardening (scenario 3).** Highest item: the
    Weixin owner auto-bind hazard — with `gateway.weixin.owner_person_id` set,
    EVERY sender passing the DM policy is bound to the owner person
    (`weixin/adapter.go` inbound path), and the default `dm_policy: open` +
@@ -97,10 +126,10 @@ is the only priority list in the repo; other docs must point here.
    login. Also: QQ webhook ed25519 signature verification (inbound is
    currently unverified), Feishu encrypt-envelope AES decryption, WeChat OA
    safe-mode crypto.
-5. **P2 — Real `execute_code` sandbox** (namespace/seccomp/cgroup or container).
+9. **P2 — Real `execute_code` sandbox** (namespace/seccomp/cgroup or container).
    Prerequisite for any multi-person sharing; not needed for the single-person
    scenarios.
-6. **P2 — MCP `sampling/createMessage`**, IM voice STT/TTS, remaining adapter
+10. **P2 — MCP `sampling/createMessage`**, IM voice STT/TTS, remaining adapter
    polish — only as scenario needs dictate.
 
 Cron proactive delivery, user profile synthesis, CLI image input, approval

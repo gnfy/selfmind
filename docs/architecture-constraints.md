@@ -49,7 +49,7 @@ This document is for maintainers and future AI coding tools. It defines the guar
 - Skill handling must remain progressive and layered: `skills_list` for metadata, `skill_view` for full content/files, `skill_manage` for mutation, `skill_catalog` for install/audit, and `skill_bundle` for bundle CRUD.
 - Skill mutations should hot-reload the active registry when possible. Direct slash invocation resolves bundles first, then individual skills.
 - Curator automation must only govern `agent-created` skills by default. Manual, catalog-installed, bundled, or pinned skills must not be auto-archived.
-- Catalog-installed skills must have Hermes-style provenance in `skills/.catalog/lock.json`. Install should reject same-name directory and legacy `.md` collisions by default; `--force` must back up the previous copy under `skills/.catalog/backups/` before replacement.
+- Catalog-installed skills must have durable install provenance in `skills/.catalog/lock.json`. Install should reject same-name directory and legacy `.md` collisions by default; `--force` must back up the previous copy under `skills/.catalog/backups/` before replacement.
 - Memory and skill mutations should use the shared learning audit log. Do not add scattered history files or channel-specific learning records.
 - User-facing learning history and undo should go through `skill_manage` and `memory` tool actions, not through duplicate TUI/IM-only code paths.
 

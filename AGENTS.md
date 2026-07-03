@@ -17,13 +17,13 @@ a defect on their path needs an explicit reason.
 
 SaaS is deferred: keep `tenant_id` plumbing intact so a later multi-tenant
 control plane is not blocked, but do not design for SaaS now. Do not grow
-provider breadth, IM channel count, or surface-level Codex parity (TUI
-cosmetics, command breadth) beyond what the scenarios need. **Agent execution
-quality — planning, reliable tool calling, error diagnosis/recovery, bounded
-context, verification — is the competence bar and always in scope**: continuity
-of a badly executed task is worthless. The arbiter is the day-in-the-life eval
-scorecard (`selfmind eval scorecard`), not feature comparison against Codex;
-see `docs/identity-continuity.md` "Two bars".
+provider breadth, IM channel count, or surface-level parity with other coding
+CLIs (TUI cosmetics, command breadth) beyond what the scenarios need. **Agent
+execution quality — planning, reliable tool calling, error diagnosis/recovery,
+bounded context, verification — is the competence bar and always in scope**:
+continuity of a badly executed task is worthless. The arbiter is the
+day-in-the-life eval scorecard (`selfmind eval scorecard`), not feature
+comparison against other tools; see `docs/identity-continuity.md` "Two bars".
 
 Read first:
 
@@ -157,7 +157,7 @@ Domain docs (**mandatory** before changing that domain):
   "simple" snippets, explanations, or advice. Program-level model status
   belongs behind `/model`; "who are you / what model are you" questions go to
   the agent.
-- Codex-style continuation is part of the contract: a short acceptance (`ok`,
+- Short-acceptance continuation is part of the contract: a short acceptance (`ok`,
   `继续`, `可以`, …) after a proposed plan continues the same task context; if
   nothing is resumable, it routes to the agent as normal input. The resolution
   algorithm is in `docs/identity-continuity.md`.
@@ -220,7 +220,7 @@ Domain docs (**mandatory** before changing that domain):
 
 ## Tools & Safety
 
-- Tool calling stays Hermes-like: native LLM `tool_calls` where supported,
+- Tool calling stays native-first: native LLM `tool_calls` where supported,
   `tool_call_id` preserved on results, `[TOOL:...]` only as a compatibility
   fallback.
 - Only clearly read-only tool batches run in parallel. Terminal, file writes,
@@ -258,7 +258,7 @@ Domain docs (**mandatory** before changing that domain):
   before individual skills.
 - Skills are instruction assets, not auto-executed shell tools; scripts a
   skill mentions still run through normal tools and safety checks.
-- Catalog installs keep Hermes-style provenance (`.catalog/lock.json`);
+- Catalog installs keep durable install provenance (`.catalog/lock.json`);
   `--force` reinstalls must back up the previous copy first.
 - Memory and skill mutations write tenant learning-audit records; user-facing
   history/undo goes through the shared `memory` / `skill_manage` actions —

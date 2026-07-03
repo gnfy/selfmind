@@ -8,12 +8,16 @@
 
 ## Why SelfMind exists
 
-Every competing personal-agent stack (hermes-agent, OpenClaw, CowAgent) keys its
-state per **platform account** or per **agent instance**. None of them can
-recognize that the person typing in a CLI and the person messaging from WeChat
-are the same human — in hermes this is architecturally unfixable without
-re-keying pairing, sessions, memory, and cron (verified 2026-07: identity is a
-`(platform, user_id)` tuple everywhere; CLI cannot even originate a cron job).
+Mainstream personal-agent stacks key their state per **platform account** or
+per **agent instance**: pairing and allowlists are `(platform, user_id)`
+tuples, sessions are keyed by channel + chat, and memory is scoped to an
+agent's workspace or a per-platform user bucket. Under that data model, the
+person typing in a CLI and the person messaging from WeChat are two unrelated
+principals — often the CLI is not even a first-class identity (it cannot
+originate scheduled jobs or share a memory bucket with an IM account). Fixing
+this retroactively means re-keying pairing, sessions, memory, and scheduled
+jobs at once — an architectural rewrite, not a feature. (Verified against
+several widely used open-source agent stacks, 2026-07.)
 
 SelfMind's founding insight is the inverse: **the person is the primary key.**
 One human (`person_id`) binds many platform accounts; chat stays channel-local,
@@ -59,11 +63,11 @@ therefore carries two bars:
   enough for daily use: planning, reliable tool calling, error diagnosis and
   recovery, bounded context, and verification. This bar is judged by the
   day-in-the-life eval scorecard (`selfmind eval scorecard`), not by feature
-  comparison against Codex.
+  comparison against other coding agents.
 
 Investment rule: when the scorecard says a scenario fails, execution-quality
-work is always in scope. Surface-level Codex parity (TUI cosmetics, command
-breadth, animation) is out of scope regardless.
+work is always in scope. Surface-level parity with mainstream coding CLIs
+(TUI cosmetics, command breadth, animation) is out of scope regardless.
 
 ## Identity model
 

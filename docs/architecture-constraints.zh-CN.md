@@ -47,7 +47,7 @@
 - Skill 处理必须保持渐进和分层：`skills_list` 只暴露元数据，`skill_view` 读取内容，`skill_manage` 负责变更，`skill_catalog` 负责安装/审计，`skill_bundle` 负责组合。
 - Skill 修改应尽量热加载当前 registry；直接 slash 调用时先解析 bundle，再解析单个 skill。
 - Curator 自动治理默认只能处理 agent-created skills；manual、catalog-installed、bundled 或 pinned skills 不应被自动归档。
-- Catalog 安装必须保留 Hermes 风格的 provenance，记录在 `skills/.catalog/lock.json`。安装时默认拒绝同名目录和旧版 `.md` 冲突；只有显式 `--force` 才能替换，并且替换前必须把旧副本备份到 `skills/.catalog/backups/`。
+- Catalog 安装必须保留持久化安装 provenance，记录在 `skills/.catalog/lock.json`。安装时默认拒绝同名目录和旧版 `.md` 冲突；只有显式 `--force` 才能替换，并且替换前必须把旧副本备份到 `skills/.catalog/backups/`。
 - Memory 和 Skill 的用户可见 history/undo 必须走共享的 `memory` / `skill_manage` tool action，不要在 TUI 或 IM 里写重复的私有回滚逻辑。
 
 ## 文件大小红线

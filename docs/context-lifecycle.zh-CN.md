@@ -4,7 +4,7 @@
 
 ## 产品目标
 
-SelfMind 不是复制 Codex。它要做到的是：用户把一个开发任务交给 SelfMind 后，SelfMind 能像成熟 coding agent 一样持续推进、可感知、有状态、可恢复，并且未来可以从 CLI、微信、Web 等多个端协同使用。
+SelfMind 不是复制某个现有 coding CLI。它要做到的是：用户把一个开发任务交给 SelfMind 后，SelfMind 能像成熟 coding agent 一样持续推进、可感知、有状态、可恢复，并且未来可以从 CLI、微信、Web 等多个端协同使用。
 
 核心原则：
 
@@ -20,7 +20,7 @@ P0 的目标是解决“看起来卡住”“工具一直 running”“输出乱
 当前落点：
 
 - `internal/gateway/cli/transcript_renderer.go`
-  - 用 Codex 风格渲染工具步骤：`Running`、`Read`、`Ran`、`Wrote` 等。
+  - 用简洁动词行渲染工具步骤：`Running`、`Read`、`Ran`、`Wrote` 等。
   - 单个步骤完成后显示最终耗时，底部状态栏显示 run 总耗时。
   - 工具结果默认显示用户可读 preview，不把 raw JSON 直接倒到 transcript。
 - `internal/kernel/tool_result.go`
@@ -138,15 +138,15 @@ type ContextCandidate struct {
 }
 ```
 
-## 与 Codex / Hermes 的取舍
+## 与主流 coding agent 的取舍
 
-Codex 值得学习：
+成熟 CLI coding agent 值得学习：
 
 - 用户感知非常强：每一步探索、命令、错误、审批都可见。
 - 当前 workspace 是默认语义，用户说“分析这个项目”时会先看当前目录。
 - 工具输出是摘要和 transcript 双层结构，不把长输出直接堆满主界面。
 
-Hermes 值得学习：
+成熟多端 agent runtime 值得学习：
 
 - provider/tool/channel adapter 分层明确。
 - 多模型接入走 provider runtime，而不是每个入口写 vendor if/else。
@@ -154,8 +154,8 @@ Hermes 值得学习：
 
 SelfMind 的选择：
 
-- CLI 学 Codex 的可感知工作流。
-- 多端/IM/gateway 学 Hermes 的 adapter 和 provider 分层。
+- CLI 学前者的可感知工作流。
+- 多端/IM/gateway 学后者的 adapter 和 provider 分层。
 - 长期上下文走 SelfMind 自己的 task/run/event/artifact/memory 控制面，服务未来 SaaS。
 
 ## 开发检查清单

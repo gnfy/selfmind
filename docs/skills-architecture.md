@@ -102,7 +102,7 @@ audit helpers. Do not add channel-specific or tool-specific history files.
 
 ## Catalog Provenance
 
-Catalog installs must preserve Hermes-style provenance:
+Catalog installs must preserve durable install provenance:
 
 - Store install records under `~/.selfmind/<tenant>/skills/.catalog/lock.json`
   and mark usage source as `catalog-installed`.

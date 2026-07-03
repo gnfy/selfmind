@@ -2,7 +2,7 @@
 
 [中文开发指南](development-guide.zh-CN.md)
 
-这份文档记录 SelfMind 接入多模型服务商的统一方式。目标不是为每个厂商堆一套独立逻辑，而是把 Hermes 这类 coding agent 的经验收敛成稳定边界：
+这份文档记录 SelfMind 接入多模型服务商的统一方式。目标不是为每个厂商堆一套独立逻辑，而是把成熟 coding agent 的多模型接入经验收敛成稳定边界：
 
 - `ProviderProfile` 描述一个服务商是什么。
 - `Resolver` 把配置、环境变量、OAuth、本地凭据解析成一次可执行的 `Runtime`。
@@ -12,7 +12,7 @@
 
 CLI、IM、HTTP webhook、未来 SaaS 多端入口都必须复用同一套 runtime。渠道层只负责身份、任务、进度和消息呈现，不应该直接判断 Kimi、MiniMax、OpenAI 这类 provider 细节。
 
-这条边界参考 Hermes 的多模型接入方式：provider 差异尽量沉淀为 profile/quirks 数据，协议 adapter 负责把请求、流式输出、tool call、usage 统一成 `llm.Provider`。渠道、任务策略、IM 和 UI 都不应该知道某个厂商的特殊 HTTP 参数。
+这条边界的原则是：provider 差异尽量沉淀为 profile/quirks 数据，协议 adapter 负责把请求、流式输出、tool call、usage 统一成 `llm.Provider`。渠道、任务策略、IM 和 UI 都不应该知道某个厂商的特殊 HTTP 参数。
 
 ## 设计原则
 
@@ -56,7 +56,7 @@ config.yaml / env / auth.json / CLI selection
 
 ## 上下文窗口与输出上限
 
-SelfMind 和 Hermes 一样区分两个容易混淆的字段：
+SelfMind 区分两个容易混淆的字段：
 
 - `context_length`：模型总上下文窗口，包含输入和输出 token。CLI 底部 usage、未来上下文压缩预算、会话健康检查都应该使用它。
 - `max_tokens`：单次响应输出上限，只影响模型本次最多生成多少 token。
@@ -207,7 +207,7 @@ provider_profiles:
 - `model=kimi-for-coding`
 - `max_tokens=32000`
 - `User-Agent=claude-code/0.1.0`
-- 禁用 HTTP/2，并把 TLS ALPN 限制为 `http/1.1`，按 Hermes/httpx 的 HTTP/1.1 行为访问 `/coding`
+- 禁用 HTTP/2，并把 TLS ALPN 限制为 `http/1.1`，该 endpoint 只有在 HTTP/1.1-only 客户端行为下才能正常访问 `/coding`
 - tool schema 使用 `moonshot` 修复规则
 - Anthropic-compatible 路径不发送 `thinking`
 

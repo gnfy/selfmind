@@ -12,7 +12,7 @@ The runtime follows four boundaries:
 - `llm` transports implement one protocol family, such as OpenAI Chat, Anthropic Messages, or Codex Responses.
 - `ProviderQuirks` carries provider-specific wire behavior, such as auth headers, tool schema fixes, thinking parameters, User-Agent, and Responses request flags.
 
-This mirrors the useful part of Hermes' model-provider design: provider
+Provider
 differences are declarative profile/quirk data, while protocol adapters
 normalize requests, streaming, tool calls, and usage into SelfMind's shared
 `llm.Provider` interface. Channel code, gateway routing, task strategy, and IM
@@ -22,7 +22,7 @@ User YAML `quirks` currently exposes `auth_header`, `tool_schema`, `system_messa
 
 ## Context Window vs Output Cap
 
-SelfMind follows Hermes' distinction between two commonly confused fields:
+SelfMind distinguishes two commonly confused fields:
 
 - `context_length`: the model's total input+output context window. CLI usage display, future compression budgets, and session health checks should use it.
 - `max_tokens`: the per-response output cap sent to the provider.
@@ -91,7 +91,7 @@ Default behavior:
 - `base_url=https://api.kimi.com/coding`
 - `max_tokens=32000`
 - `User-Agent=claude-code/0.1.0`
-- HTTP/2 disabled for `/coding`, including TLS ALPN restricted to `http/1.1`, matching Hermes/httpx HTTP/1.1 behavior
+- HTTP/2 disabled for `/coding`, including TLS ALPN restricted to `http/1.1`, because the endpoint only behaves correctly with an HTTP/1.1-only client
 - Moonshot tool schema repair
 - no Anthropic `thinking` field on the Kimi Anthropic-compatible path
 

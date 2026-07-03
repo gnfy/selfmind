@@ -3,7 +3,7 @@
 Phase 1 delivers SelfMind as an **open-source CLI assistant that is good enough
 for daily personal work, deployable as a 24/7 cloud daemon, commandable from
 personal WeChat, and that learns about its user over time** — with UX measured
-against Codex CLI.
+against the best mainstream coding CLIs.
 
 This page is the module-level index for that work: what each module does and
 where it lives. For per-capability status (Done/Partial/Missing) see
@@ -16,21 +16,21 @@ where it lives. For per-capability status (Done/Partial/Missing) see
 
 ---
 
-## Pillar 1 — CLI daily use (Codex-parity)
+## Pillar 1 — CLI daily use (daily-driver quality)
 
 | Module | What it does | Lives in |
 |---|---|---|
-| Agent loop + native tool calling | Hermes-style native `tool_calls` with `[TOOL:]` fallback; safe parallel-vs-sequential batch policy; structured result envelope. | `internal/kernel/native_tool_call.go`, `tool_result.go` |
-| Task strategy (agent-first) | Coarse per-turn guardrails; exposes the config-allowed tool surface and lets the model decide (codex philosophy — no keyword tool-hiding); web off unless asked; `WithWebEnabled` opt-in. | `internal/kernel/task_strategy.go` |
+| Agent loop + native tool calling | Native `tool_calls` first with `[TOOL:]` fallback; safe parallel-vs-sequential batch policy; structured result envelope. | `internal/kernel/native_tool_call.go`, `tool_result.go` |
+| Task strategy (agent-first) | Coarse per-turn guardrails; exposes the config-allowed tool surface and lets the model decide (no keyword tool-hiding); web off unless asked; `WithWebEnabled` opt-in. | `internal/kernel/task_strategy.go` |
 | Project context loading | Auto-injects `AGENTS.md`/`CLAUDE.md`/`.selfmind.md` into the system prompt. | `internal/kernel/context_scanner.go` |
 | Work-quality discipline | Language-agnostic explore→precise-edit→verify guidance; conditional frontend/UI guidance only for UI tasks. | `internal/kernel/prompt_guidance.go` |
 | Diff rendering | Colored (+/−) diff for `patch`/`write_file` results in the transcript. | `internal/gateway/cli/transcript_renderer.go` |
-| Slash-command palette | Arrow-key navigable popup with selection highlight + Tab completion (codex-style). | `internal/ui/components/editor.go`, `internal/gateway/cli/controller.go` |
-| Approval modes | Codex-style `/mode`: `on-request` / `read-only` / `auto-edit` / `full-auto`, enforced in tool middleware; on-demand y/N via the clarify bridge. | `internal/tools/middleware.go`, `internal/gateway/cli/command_handlers.go` |
+| Slash-command palette | Arrow-key navigable popup with selection highlight + Tab completion. | `internal/ui/components/editor.go`, `internal/gateway/cli/controller.go` |
+| Approval modes | Staged `/mode`: `on-request` / `read-only` / `auto-edit` / `full-auto`, enforced in tool middleware; on-demand y/N via the clarify bridge. | `internal/tools/middleware.go`, `internal/gateway/cli/command_handlers.go` |
 | Image input | Image-path detection + clipboard screenshot paste (`/paste-image`, Ctrl+V auto-detect); routed to `vision_analyze`. Clipboard needs a local GUI (not over SSH). | `internal/gateway/cli/attachments.go`, `clipboard.go` |
 | Context compaction | `/compact` shrinks the visible transcript to free context (deterministic, no model call). | `internal/gateway/cli/command_handlers.go` |
-| Mid-turn steering | Input typed while a run is in flight is injected into the SAME turn as user guidance (codex/Claude-style) at the next iteration boundary — not rejected as "busy" or dropped. | `internal/kernel/steering.go`, `internal/gateway/cli/controller.go` |
-| Session resume / continuation | Codex-style continuation cues resume the same task; handoff + live plan re-injected. | `internal/gateway/httpapi/continue_resolver.go` |
+| Mid-turn steering | Input typed while a run is in flight is injected into the SAME turn as user guidance at the next iteration boundary — not rejected as "busy" or dropped. | `internal/kernel/steering.go`, `internal/gateway/cli/controller.go` |
+| Session resume / continuation | Short-acceptance continuation cues resume the same task; handoff + live plan re-injected. | `internal/gateway/httpapi/continue_resolver.go` |
 
 ## Pillar 2 — Cloud 24/7 daemon
 
@@ -68,7 +68,7 @@ where it lives. For per-capability status (Done/Partial/Missing) see
 | Eval loop + state oracle | Real gateway-path runs; deterministic P0 checks + `assert_state` world-state predicates. | `internal/eval/` |
 | VCR record/replay | Record live runs once, replay offline forever (sequence-keyed); strict-offline `ErrCassetteMiss` so CI/selfcheck can't burn quota. | `internal/kernel/llm/vcr.go` |
 | Bounded self-repair | `selfmind eval repair` emits a structured repair brief (failed checks + trace) + optional isolated worktree; apply stays human-gated. | `internal/cliapp/repair_commands.go` |
-| Scorecard | `selfmind eval scorecard` runs the day-in-the-life suite and emits a per-scenario "can it replace codex" report. | `internal/cliapp/scorecard_commands.go` |
+| Scorecard | `selfmind eval scorecard` runs the day-in-the-life suite and emits a per-scenario daily-driver readiness report. | `internal/cliapp/scorecard_commands.go` |
 | Flight recorder | Configured via `flight_recorder.enabled` in `config.yaml` (env overrides): records each real user turn's model interaction (bounded, auto-pruned) for later promotion. Free — it saves what already streamed. | `internal/kernel/llm/flight.go`, `internal/kernel/flight_recorder.go`, `internal/platform/config/loader.go` |
 | Capture (friction → test) | `/capture` (TUI) / `selfmind eval capture` promotes the last recorded turn into a replayable eval case + copies its cassette, seeding a P0-check + `assert_state` draft. Everyday friction becomes a permanent offline regression test. | `internal/eval/capture.go`, `internal/cliapp/eval_commands.go` |
 | Liveness canary | Optional periodic self-check job that alerts the channel only on failure. | `internal/kernel/task/cron/`, `internal/gateway/httpapi/cron_executor.go` |

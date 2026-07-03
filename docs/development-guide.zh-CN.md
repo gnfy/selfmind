@@ -324,7 +324,7 @@ event_id        可审计任务事件
 
 ## 工具调用
 
-SelfMind 当前采用 Hermes 风格的 native tool-call contract：
+SelfMind 当前采用 native-first 的 tool-call contract：
 
 - `ChatRequest.Tools` 会发送给 OpenAI-compatible provider。
 - OpenAI-compatible streaming response 会累积 `delta.tool_calls`。
@@ -463,7 +463,7 @@ skill_manage    -> skill mutation and hot reload
 
 ## 新增 IM 平台
 
-保持 Hermes 风格边界：
+保持以下边界：
 
 ```text
 platform adapter

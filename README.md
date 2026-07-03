@@ -22,7 +22,7 @@ Available for daily personal use:
 - Workspace isolation for file, search, patch, and terminal tools.
 - Long-term memory, session search, skill management, background review, and skill curator.
 - Tenant learning audit records for memory and skill mutations, including skill/memory history and basic undo.
-- Hermes-style native tool calling for OpenAI-compatible providers, with legacy text-tool fallback, repeated-failure/no-progress guardrails, and secret redaction.
+- Native tool calling for OpenAI-compatible providers, with legacy text-tool fallback, repeated-failure/no-progress guardrails, and secret redaction.
 - Role-based model routing through `models.roles`, so coding, memory extraction, background review, skill curation, and semantic recall can use different models.
 - Dynamic model runtime with provider profiles, live model-list fetching, local model-list cache, and best-effort auth reuse for Codex CLI, Claude Code, Gemini CLI, and Qwen CLI. Codex CLI and the SelfMind-owned MiniMax OAuth profile additionally auto-refresh expired access tokens.
 - Built-in IM adapters: Telegram, personal/enterprise WeChat (Weixin, iLink protocol with built-in QR login via `selfmind weixin login`), Feishu/Lark, and QQ official bot. WeChat does inbound polling + media; Feishu/QQ use the generic webhook for inbound and a delivery sender for outbound.
@@ -104,7 +104,7 @@ Interactive provider and model picker:
 selfmind model
 ```
 
-The flow is Hermes-like:
+The flow is:
 
 1. Choose a provider: OpenAI, Anthropic, Google, `Custom endpoint (enter URL manually)`, coding-CLI login reuse entries, or other built-in provider profiles.
 2. Enter or keep the API key. For Codex CLI, Claude Code, Gemini CLI, and Qwen CLI entries, SelfMind tries to reuse the existing CLI login instead.
@@ -418,7 +418,7 @@ New skills use a directory layout:
 
 Legacy flat `.md` skills are still loaded. Installed or learned skills are hot-reloadable; newly created skills become callable in the current session.
 
-Catalog installs follow Hermes-style provenance rules. `skill_catalog` writes install metadata to `~/.selfmind/<tenant>/skills/.catalog/lock.json`, marks installed skills as `catalog-installed`, and refuses to overwrite an existing directory or legacy `.md` skill unless you pass `--force`. Forced reinstalls first move the previous copy into `~/.selfmind/<tenant>/skills/.catalog/backups/`. Curator never auto-archives catalog-installed, manual, bundled, or pinned skills.
+Catalog installs follow durable provenance rules. `skill_catalog` writes install metadata to `~/.selfmind/<tenant>/skills/.catalog/lock.json`, marks installed skills as `catalog-installed`, and refuses to overwrite an existing directory or legacy `.md` skill unless you pass `--force`. Forced reinstalls first move the previous copy into `~/.selfmind/<tenant>/skills/.catalog/backups/`. Curator never auto-archives catalog-installed, manual, bundled, or pinned skills.
 
 Common commands:
 
@@ -678,7 +678,7 @@ For a new protocol family:
 
 ### Add An IM Platform
 
-Keep the boundary Hermes-like:
+Keep the adapter boundary thin:
 
 ```text
 platform adapter

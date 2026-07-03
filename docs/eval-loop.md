@@ -20,7 +20,7 @@ selfmind eval run --suite daily-dev --provider kimi-coding --model kimi-for-codi
 selfmind eval report evalruns/2026-06-25
 selfmind selfcheck                 # build + test + offline-replay eval gate (no quota)
 selfmind eval repair [case-or-dir] # re-run failures, print a repair brief (apply stays manual)
-selfmind eval scorecard [dir]      # per-scenario "can it replace codex" report
+selfmind eval scorecard [dir]      # per-scenario daily-driver readiness report
 selfmind eval capture [latest]     # promote the last recorded turn into an eval case
 ```
 

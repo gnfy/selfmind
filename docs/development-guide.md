@@ -324,7 +324,7 @@ Workspace-scoped tools must honor `allowed_roots`. Do not bypass `WorkspaceScope
 
 ## Tool Calling
 
-SelfMind now follows the Hermes-style native tool-call contract:
+SelfMind follows a native-first tool-call contract:
 
 - `ChatRequest.Tools` is sent to OpenAI-compatible providers as native `tools`.
 - Streaming OpenAI-compatible responses accumulate `delta.tool_calls`.

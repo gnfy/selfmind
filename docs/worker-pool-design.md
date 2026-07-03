@@ -162,9 +162,10 @@ processes: two `control.db` openers, two process-global auth managers (so the
 single-flight refresh from W1a does **not** apply across them), two worker pools.
 The pool gives those terminals zero cross-terminal protection.
 
-Studying codex (single `app-server` daemon; terminals are Unix-socket clients;
-all serialization + one `AuthManager` live in that one process) and hermes (single
-`tui_gateway`; TUI/dashboard are JSON-RPC/WebSocket clients) showed both converge
+Studying mature single-daemon agent stacks (one runs a single app-server daemon
+with terminals as Unix-socket clients, all serialization + one `AuthManager` in
+that process; another runs a single gateway with TUI/dashboard as
+JSON-RPC/WebSocket clients) showed both converge
 on the same answer: **one owner process; every UI is a thin client.** Neither
 coordinates multiple terminals with cross-process business locks — that path adds
 complexity (auth file locks, cross-process DB write serialization, per-workspace
@@ -227,8 +228,8 @@ a nil-deref. The old top-level command gate is gone (every path is now nil-safe)
 `workspaceSerialKey` now consults the per-turn `TaskStrategy`: only turns that
 can write (`ToolModeLocalWrite`/`Full` → `TaskStrategy.MayWriteWorkspace()`)
 take the per-workspace exclusive key; read-only turns (`None`/`Web`/`LocalRead`)
-return an empty key and run concurrently on the same workspace — SelfMind's
-equivalent of codex's Exclusive-vs-SharedRead. When no strategy is pinned we
+return an empty key and run concurrently on the same workspace — an
+Exclusive-vs-SharedRead split. When no strategy is pinned we
 conservatively serialize (an agent turn could write). Tested in
 `router/workspace_serial_test.go`.
 

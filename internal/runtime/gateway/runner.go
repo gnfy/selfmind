@@ -88,8 +88,15 @@ func Run(ctx context.Context, opts Options) error {
 		return fmt.Errorf("control.OpenStore failed: %w", err)
 	}
 	defer controlStore.Close()
-	if interrupted, err := controlStore.MarkInterruptedRuns(context.Background(), 30*time.Second); err == nil && interrupted > 0 {
-		log.Warn("gateway: marked stale running tasks as interrupted", "count", interrupted)
+	// Boot-time stuck-run recovery: manager.Acquire above holds the
+	// gateway.lock flock, so this is the ONLY daemon on this control.db and
+	// every run still 'running' here was orphaned by a previous daemon
+	// (kill/crash mid-run). Sweep them all (threshold 0, no heartbeat grace)
+	// and repair tasks left 'running' with no live run, before any traffic.
+	if interrupted, err := controlStore.MarkInterruptedRuns(context.Background(), 0); err != nil {
+		log.Warn("gateway: stuck-run boot sweep failed", "error", err)
+	} else if interrupted > 0 {
+		log.Warn("gateway: recovered interrupted runs/tasks from previous daemon", "count", interrupted)
 	}
 
 	agent, err := app.InitAgent(mem, cfg, defaultTenantID)
@@ -126,6 +133,12 @@ func Run(ctx context.Context, opts Options) error {
 		DefaultTenantID: defaultTenantID,
 		DrainTimeout:    drainTimeout,
 	}
+	// Periodic stuck-run recovery: while the daemon runs, mark heartbeat-dead
+	// runs (and their tasks) interrupted. Runs in the coordinator's active-run
+	// registry are always excluded, so this only catches runs whose executor
+	// died without finalizing.
+	stopStuckRunSweeper := gatewayAPI.StartStuckRunSweeper(ctx)
+	defer stopStuckRunSweeper()
 	var weixinAdapter *weixin.Adapter
 	if cfg.Gateway.Weixin.Enabled {
 		wxCfg := weixin.RuntimeConfigFrom(cfg.Gateway.Weixin, dataDir, defaultTenantID)

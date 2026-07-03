@@ -841,7 +841,14 @@ func (s *Store) StartRun(ctx context.Context, task *Task, channel, inputSummary 
 }
 
 func (s *Store) FinishRun(ctx context.Context, tenantID, runID, status string) error {
-	if status == "" {
+	// FinishRun's contract is to write a TERMINAL run status. Agent outcomes
+	// can legitimately say "running" ("turn done, more work planned"), but a
+	// finished run row left in status 'running' — with active_run_id cleared
+	// below — is exactly the phantom state that recovery sweeps could no
+	// longer attribute to a task, leaving tasks '[running]' forever. Coerce
+	// non-terminal statuses to 'done'; the caller maps the task-level status
+	// separately.
+	if status == "" || status == "running" {
 		status = "done"
 	}
 	now := time.Now().Unix()

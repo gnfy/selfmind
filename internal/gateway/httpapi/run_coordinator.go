@@ -198,6 +198,11 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 		}
 		return api.MessageResponse{Identity: identity, Error: err.Error(), Turn: messageTurn("failed", "", "idle", "", "", err.Error()), Context: messageContextBudget(llmUsageZero())}, http.StatusInternalServerError
 	}
+	// Keep the per-person current_task pointer on the task this run actually
+	// attached to. Channel-scoped resolution (and async sends in particular)
+	// can pick a task that differs from the pointer; without this sync,
+	// /status on every endpoint keeps reporting an unrelated old task.
+	c.syncCurrentTask(ctx, identity, task)
 	_ = d.Control.RecordChannelMessage(ctx, *identity, req.Channel, task.ID, "user", req.Content)
 
 	run, err := d.Control.StartRun(ctx, task, req.Channel, truncate(req.Content, 240))
@@ -298,6 +303,22 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 		taskStatus = task.Status
 	}
 	return api.MessageResponse{Identity: identity, Task: task, Run: run, Outcome: &outcome, Content: content, Usage: usage, Turn: messageTurn("completed", taskStatus, "idle", taskID, run.ID, outcome.Summary), Context: messageContextBudget(usage)}, http.StatusOK
+}
+
+// syncCurrentTask moves the per-person current_task pointer to the task a run
+// resolved, reusing the same SetCurrentTask mechanism as the /new and /resume
+// control commands (never a second pointer). Best-effort and write-avoiding:
+// it only writes when the pointer actually differs, and a pointer-read error
+// falls through to the write so the pointer converges rather than staying
+// stale.
+func (c *RunCoordinator) syncCurrentTask(ctx context.Context, identity *control.IdentityContext, task *control.Task) {
+	if c == nil || c.srv == nil || c.srv.Control == nil || identity == nil || task == nil {
+		return
+	}
+	if current, err := c.srv.Control.CurrentTask(ctx, identity.TenantID, identity.PersonID); err == nil && current != nil && current.ID == task.ID {
+		return
+	}
+	_ = c.srv.Control.SetCurrentTask(ctx, identity.TenantID, identity.PersonID, task.ID)
 }
 
 // startAsyncRun accepts a turn immediately and runs it in the background,

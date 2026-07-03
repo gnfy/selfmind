@@ -716,16 +716,8 @@ func (d *Server) tryHandleControlCommand(ctx context.Context, identity *control.
 		}
 		return true, fmt.Sprintf("Created task: %s (%s)", task.Title, task.ID), nil
 	case lower == "/task status" || lower == "/status":
-		task, err := d.Control.CurrentTask(ctx, identity.TenantID, identity.PersonID)
-		if err != nil {
-			return true, "", err
-		}
-		if task == nil {
-			return true, "No active task.", nil
-		}
-		handoff, _ := d.Control.LatestHandoff(ctx, task.ID)
-		plan := d.latestPlanForTask(ctx, task.ID)
-		return true, formatTaskStatus(task, handoff, d.coordinator().currentActive(identity.PersonID), plan), nil
+		reply, err := d.statusReply(ctx, identity)
+		return true, reply, err
 	case strings.HasPrefix(lower, "/resume ") || strings.HasPrefix(lower, "/task "):
 		parts := strings.Fields(trimmed)
 		if len(parts) < 2 {
@@ -812,19 +804,40 @@ func (d *Server) tryHandleControlCommand(ctx context.Context, identity *control.
 		}
 		return true, formatEvents(events), nil
 	case lower == "/task status" || lower == "task status" || lower == "/status" || lower == "status" || strings.Contains(lower, "进度"):
-		task, err := d.Control.CurrentTask(ctx, identity.TenantID, identity.PersonID)
-		if err != nil {
-			return true, "", err
-		}
-		if task == nil {
-			return true, "No active task.", nil
-		}
-		handoff, _ := d.Control.LatestHandoff(ctx, task.ID)
-		plan := d.latestPlanForTask(ctx, task.ID)
-		return true, formatTaskStatus(task, handoff, d.coordinator().currentActive(identity.PersonID), plan), nil
+		reply, err := d.statusReply(ctx, identity)
+		return true, reply, err
 	default:
 		return false, "", nil
 	}
+}
+
+// statusReply builds the /status card shared by every channel's control-command
+// path. When the person has an active run, its task is what the user is
+// waiting on, so report it first (an async run may attach to a task the
+// current_task pointer has not caught up with yet); fall back to the
+// per-person current_task pointer otherwise. The card format itself
+// (formatTaskStatus, `Task:` / `Status:` markers) is a stable contract pinned
+// by the continuity eval suite — change it there, not here.
+func (d *Server) statusReply(ctx context.Context, identity *control.IdentityContext) (string, error) {
+	active := d.coordinator().currentActive(identity.PersonID)
+	var task *control.Task
+	if active != nil && active.TaskID != "" {
+		// Best-effort lookup: a missing/errored row falls back to the pointer.
+		task, _ = d.Control.GetTask(ctx, identity.TenantID, active.TaskID)
+	}
+	if task == nil {
+		var err error
+		task, err = d.Control.CurrentTask(ctx, identity.TenantID, identity.PersonID)
+		if err != nil {
+			return "", err
+		}
+	}
+	if task == nil {
+		return "No active task.", nil
+	}
+	handoff, _ := d.Control.LatestHandoff(ctx, task.ID)
+	plan := d.latestPlanForTask(ctx, task.ID)
+	return formatTaskStatus(task, handoff, active, plan), nil
 }
 
 func (d *Server) identityFromQuery(r *http.Request) (*control.IdentityContext, error) {

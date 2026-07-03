@@ -22,10 +22,51 @@ selfmind selfcheck                 # build + test + offline-replay eval gate (no
 selfmind eval repair [case-or-dir] # re-run failures, print a repair brief (apply stays manual)
 selfmind eval scorecard [dir]      # per-scenario daily-driver readiness report
 selfmind eval capture [latest]     # promote the last recorded turn into an eval case
+selfmind eval clean [--yes]        # remove historic eval residue from the configured control.db
 ```
 
 `eval run` writes JSONL logs under `evalruns/YYYY-MM-DD/` by default. The
 directory is intentionally ignored by git.
+
+## Data Isolation (default)
+
+Every eval run — record and replay alike — uses a **throwaway temp data dir**
+(fresh `control.db` + memory) by default. Eval identities (`eval-<case-id>`
+persons/accounts), tasks, runs, events, and current-task pointers are created
+in that temp dir and deleted when the case finishes, so recording sessions can
+never pollute the user's real `~/.selfmind` data. Two related knobs:
+
+- **Workspace isolation stays scenario-driven.** Cases with `setup`,
+  `assert_state`, or `workspace: isolated` also get a scratch workspace seeded
+  from `setup.files`; plain cases (e.g. `workspace: "."`) still probe their
+  declared workspace path — only the durable data dir is isolated.
+- **`shared_data: true`** is the explicit opt-out: the case runs against the
+  configured data dir. Almost nothing should need it — each case creates its
+  own eval identity, so there is no shared state to inherit. It cannot be
+  combined with `setup`, `assert_state`, or `workspace: isolated`.
+
+VCR cassettes are unaffected: they live under `.vcr/<case-id>/` (or
+`SELFMIND_EVAL_VCR_DIR`) keyed by case ID, independent of the data dir.
+
+The runner also guarantees **run finalization**: eval turns are synchronous,
+and after each case the harness sweeps the runs it created (scoped to its
+tenant + persons) and forces any run still `running` to `interrupted`, so eval
+can never leave phantom running rows behind. A forced sweep is surfaced as a
+`run_finalization` check message in the JSONL log.
+
+Historic residue from before isolation-by-default can be removed with:
+
+```bash
+selfmind gateway stop        # never run two processes against one control.db
+selfmind eval clean          # dry-run: prints what would be deleted, with counts
+selfmind eval clean --yes    # actually delete
+```
+
+`eval clean` selects persons whose ONLY accounts have platform `eval` (a
+person with even one real binding is never touched) and removes their
+accounts, workspaces, tasks, runs, events, handoffs, artifacts, channel
+messages, approvals, notifications, outbound messages, current-task/workspace
+pointers, and any `eval-*` tenants left empty.
 
 ## Daily feedback loop: flight recorder + capture
 

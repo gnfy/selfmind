@@ -42,7 +42,7 @@
 | Multi-agent delegation | ✅ | Parallel, semaphore-bounded batch delegation. `internal/app/multi_agent.go`. (Roadmap lists this as serial-only — it is parallel.) |
 | Extended tools | ✅ | `web_search`, `web_extract`, `execute_code`, `delegate_task`, vision, tts beyond file/terminal. |
 | MCP client | 🟡 | Real stdio/HTTP JSON-RPC client, multi-server, on-demand tool registration. `sampling/createMessage` not implemented. `internal/tools/mcp_client.go`. |
-| Eval loop | ✅ | Real gateway-path runs; P0 deterministic checks + state-predicate oracle (`assert_state`); VCR record/replay for free offline regression; `selfmind eval run/report/repair/scorecard/capture`; day-in-the-life suite with recorded cassettes. `internal/eval`, `evalcases/`. |
+| Eval loop | ✅ | Real gateway-path runs; P0 deterministic checks + state-predicate oracle (`assert_state`); VCR record/replay for free offline regression; `selfmind eval run/report/repair/scorecard/capture/clean`; day-in-the-life suite with recorded cassettes. **Data-isolated by default**: every run (record and replay) uses a throwaway temp data dir (`shared_data: true` opts out); post-case run-finalization sweep forces leftover `running` rows terminal; `selfmind eval clean [--yes]` removes historic eval residue from a real control.db. `internal/eval`, `evalcases/`. |
 | Flight recorder + capture | ✅ | `SELFMIND_FLIGHT_RECORDER=1` records each real turn; `/capture` / `eval capture` promotes the last turn into a replayable eval case — everyday friction becomes a permanent regression test. `internal/kernel/llm/flight.go`, `internal/kernel/flight_recorder.go`, `internal/eval/capture.go`. |
 | Telegram adapter | ✅ | Webhook + long poll, signature verify, send. |
 | Personal/Enterprise WeChat (Weixin) adapter | ✅ | iLink protocol (`ilinkai.weixin.qq.com`): poll loop, AES, per-peer context_token, typing, media, group/DM policy, dedup. Built-in QR login (`selfmind weixin login`) — no external bridge needed. This is the primary multi-device WeChat path. |
@@ -100,23 +100,19 @@ is the only priority list in the repo; other docs must point here.
 4. **P0 — Continuity path polish.** Surface identity: `GET /v1/accounts` +
    `selfmind accounts`, and make "bind a new endpoint → inherit tasks and
    memory" a visible moment.
-5. **P1 — Eval isolation & run finalization.** Recording/eval against the
-   default path writes eval-* persons, current_task rows, and runs left in
-   `running` into the REAL `control.db` (found 2026-07-04: 20+ eval persons,
-   6 stuck runs). Default eval/record runs to an isolated data dir (the
-   `isolated` scenario mechanism exists); always finalize run status; provide
-   a one-shot cleanup for existing eval residue.
-6. **P1 — Stuck-run recovery.** Two real tasks remain `[running]` after
+5. **P1 — Stuck-run recovery.** Two real tasks remain `[running]` after
    interruption; the interrupted-run recovery must mark heartbeat-dead runs
    as interrupted (on daemon start and periodically), so `/tasks` never shows
-   phantom running work.
-7. **P1 — Finish daemon-client convergence, then delete the duplicates.**
+   phantom running work. (One producer is already fixed: eval runs are now
+   isolated + finalized, and `selfmind eval clean` removes the historic
+   eval residue; this item is about real interrupted runs.)
+6. **P1 — Finish daemon-client convergence, then delete the duplicates.**
    Remaining parity gap: session search over the daemon. Once closed, remove
    the in-process TUI path (`SELFMIND_TUI_INPROC`), the legacy alt-screen TUI
    (`SELFMIND_TUI_LEGACY`, viewport, `controller_mouse.go`, `renderCache`), and
    decompose `uiModel` per the AGENTS.md guardrail — one simplification pass.
    Then a real N>1 soak (`SELFMIND_WORKERS`).
-8. **P1 — Stranger-isolation hardening (scenario 3).** Highest item: the
+7. **P1 — Stranger-isolation hardening (scenario 3).** Highest item: the
    Weixin owner auto-bind hazard — with `gateway.weixin.owner_person_id` set,
    EVERY sender passing the DM policy is bound to the owner person
    (`weixin/adapter.go` inbound path), and the default `dm_policy: open` +
@@ -126,10 +122,10 @@ is the only priority list in the repo; other docs must point here.
    login. Also: QQ webhook ed25519 signature verification (inbound is
    currently unverified), Feishu encrypt-envelope AES decryption, WeChat OA
    safe-mode crypto.
-9. **P2 — Real `execute_code` sandbox** (namespace/seccomp/cgroup or container).
+8. **P2 — Real `execute_code` sandbox** (namespace/seccomp/cgroup or container).
    Prerequisite for any multi-person sharing; not needed for the single-person
    scenarios.
-10. **P2 — MCP `sampling/createMessage`**, IM voice STT/TTS, remaining adapter
+9. **P2 — MCP `sampling/createMessage`**, IM voice STT/TTS, remaining adapter
    polish — only as scenario needs dictate.
 
 Cron proactive delivery, user profile synthesis, CLI image input, approval

@@ -22,10 +22,17 @@ type Case struct {
 	// RequireCassette marks a case as mandatory for the offline gate: selfcheck
 	// must FAIL (not skip) when no recorded cassette exists for the case ID.
 	// Use it for north-star scenarios that must never silently drop out of CI.
-	RequireCassette bool          `yaml:"require_cassette" json:"require_cassette,omitempty"`
-	Turns           []Turn        `yaml:"turns" json:"turns"`
-	Expect          Expectations  `yaml:"expect" json:"expect,omitempty"`
-	Checks          CheckSettings `yaml:"checks" json:"checks,omitempty"`
+	RequireCassette bool `yaml:"require_cassette" json:"require_cassette,omitempty"`
+	// SharedData opts a case OUT of the default data-dir isolation, running it
+	// against the configured data dir (real control.db + memory). Almost no case
+	// should set this: each eval run creates its own eval-<id> identity, so
+	// there is no shared state to inherit — only pollution to leave behind. It
+	// cannot be combined with setup/assert_state/workspace:isolated, which
+	// require a fresh world.
+	SharedData bool          `yaml:"shared_data" json:"shared_data,omitempty"`
+	Turns      []Turn        `yaml:"turns" json:"turns"`
+	Expect     Expectations  `yaml:"expect" json:"expect,omitempty"`
+	Checks     CheckSettings `yaml:"checks" json:"checks,omitempty"`
 
 	// State-oracle additions (v1): initial world, world-state assertions, and
 	// sampling controls for non-deterministic real-model runs.
@@ -122,6 +129,12 @@ func (c *Case) normalize() error {
 	c.Turns = filtered
 	if len(c.Turns) == 0 {
 		return fmt.Errorf("at least one turn is required")
+	}
+	// shared_data reuses the configured control.db, which contradicts scenarios
+	// that seed or assert a fresh world; reject the combination early so a case
+	// author gets a clear error instead of surprising cross-run state bleed.
+	if c.SharedData && needsWorkspaceIsolation(c) {
+		return fmt.Errorf("shared_data cannot be combined with setup, assert_state, or workspace: isolated")
 	}
 	if !c.Checks.NoMojibake && !c.Checks.NoRawJSONLeak && !c.Checks.NoToolXMLLeak &&
 		!c.Checks.NoEmptyResponse && !c.Checks.NoProviderStackDump &&

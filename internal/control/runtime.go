@@ -60,6 +60,37 @@ func (s *Store) RunCancelRequested(ctx context.Context, tenantID, runID string) 
 	return requested != 0, err
 }
 
+// ListRunningRuns returns runs still marked 'running' for a tenant, restricted
+// to the given person IDs when provided. The eval harness uses it after a case
+// to verify every synchronous eval turn actually reached a terminal run status
+// before the harness tears down (phantom `running` rows are what polluted real
+// control.db files before eval isolation).
+func (s *Store) ListRunningRuns(ctx context.Context, tenantID string, personIDs []string) ([]Run, error) {
+	query := `SELECT id, task_id, tenant_id, person_id, COALESCE(workspace_id, ''), channel, COALESCE(input_summary, ''), status, started_at
+	          FROM task_runs WHERE tenant_id = ? AND status = 'running'`
+	args := []any{normalizeTenant(tenantID)}
+	if len(personIDs) > 0 {
+		query += ` AND person_id IN (` + placeholders(len(personIDs)) + `)`
+		args = append(args, toAnySlice(personIDs)...)
+	}
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Run
+	for rows.Next() {
+		var r Run
+		var started int64
+		if err := rows.Scan(&r.ID, &r.TaskID, &r.TenantID, &r.PersonID, &r.WorkspaceID, &r.Channel, &r.InputSummary, &r.Status, &started); err != nil {
+			return nil, err
+		}
+		r.StartedAt = time.Unix(started, 0)
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
 func (s *Store) MarkInterruptedRuns(ctx context.Context, olderThan time.Duration) (int, error) {
 	cutoff := time.Now().Add(-olderThan).Unix()
 	if olderThan <= 0 {

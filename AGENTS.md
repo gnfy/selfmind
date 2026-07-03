@@ -289,6 +289,12 @@ Domain docs (**mandatory** before changing that domain):
   tools, adapters, or context selection.
 - JSONL traces under `evalruns/` are local diagnostics, never committed; by
   default traces hash user/model text (`--record-content` is local-only).
+- Eval runs are data-isolated by default: every case (record and replay) gets
+  a throwaway temp data dir, and the runner finalizes any run left `running`.
+  Never make eval write to the configured `control.db` again (`shared_data:
+  true` is the explicit per-case opt-out); `selfmind eval clean` removes
+  historic residue. Cassettes under `.vcr/` are keyed by case ID and are
+  independent of the data dir.
 - P0 checks stay deterministic (non-empty output, no mojibake, no raw
   provider JSON, tool-event visibility, bounded duration, …). Later scoring
   layers must not weaken them.

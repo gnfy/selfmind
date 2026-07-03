@@ -80,6 +80,29 @@ turns:
 	}
 }
 
+func TestLoadCaseRejectsSharedDataWithIsolationNeeds(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "case.yaml")
+	if err := os.WriteFile(path, []byte(`
+id: shared_conflict
+shared_data: true
+setup:
+  files:
+    "a.txt": "seed"
+turns:
+  - input: "hello"
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := LoadCase(path)
+	if err == nil {
+		t.Fatal("LoadCase should reject shared_data combined with setup")
+	}
+	if !strings.Contains(err.Error(), "shared_data") {
+		t.Fatalf("error should mention shared_data, got: %v", err)
+	}
+}
+
 func TestLoadCaseRejectsMojibakeFixtureText(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "case.yaml")

@@ -120,31 +120,41 @@ func RunCase(ctx context.Context, c *Case, opts RunOptions) (*RunResult, error) 
 }
 
 func runSingle(ctx context.Context, c *Case, opts RunOptions, sampleIdx, totalSamples int) (*RunResult, error) {
-	// Isolated scenarios run in a throwaway temp root (fresh data dir + a fresh
-	// workspace seeded from setup) so real-model tool calls can write files and
-	// move task state without polluting the repo or ~/.selfmind.
+	// Eval runs are data-isolated BY DEFAULT: every case gets a throwaway temp
+	// data dir (fresh control.db + memory), so record/replay sessions never
+	// write eval-* persons, current_task rows, or runs into the user's real
+	// ~/.selfmind data. `shared_data: true` is the explicit opt-out for a case
+	// that genuinely needs pre-existing durable state (none exist today — each
+	// case creates its own eval-<id> identity). Workspace isolation stays
+	// scenario-driven: cases that seed or assert world state also get a scratch
+	// workspace, while e.g. `workspace: "."` cases still probe the real repo.
+	// VCR cassettes are keyed by case ID under a separate .vcr dir, so data-dir
+	// isolation never invalidates recorded cassettes.
 	var dataDirOverride string
 	var cleanup func()
 	workspace, err := resolveWorkspace(c, opts.Workspace)
 	if err != nil {
 		return nil, err
 	}
-	if needsIsolation(c) {
+	isolateWorkspace := needsWorkspaceIsolation(c)
+	if !c.SharedData || isolateWorkspace {
 		root, err := os.MkdirTemp("", "selfmind-eval-"+sanitizeFilePart(c.ID)+"-")
 		if err != nil {
 			return nil, err
 		}
 		cleanup = func() { _ = os.RemoveAll(root) }
 		dataDirOverride = filepath.Join(root, "data")
-		workspace = filepath.Join(root, "workspace")
-		if err := os.MkdirAll(workspace, 0o755); err != nil {
-			cleanup()
-			return nil, err
-		}
-		if c.Setup != nil {
-			if err := applyFileSeeds(workspace, c.Setup.Files); err != nil {
+		if isolateWorkspace {
+			workspace = filepath.Join(root, "workspace")
+			if err := os.MkdirAll(workspace, 0o755); err != nil {
 				cleanup()
 				return nil, err
+			}
+			if c.Setup != nil {
+				if err := applyFileSeeds(workspace, c.Setup.Files); err != nil {
+					cleanup()
+					return nil, err
+				}
 			}
 		}
 	}
@@ -177,11 +187,12 @@ func runSingle(ctx context.Context, c *Case, opts RunOptions, sampleIdx, totalSa
 	if err != nil {
 		return nil, err
 	}
-	// Bind the isolated workspace explicitly. The gateway's CLI-cwd heuristic
-	// only auto-registers a workspace for cli/terminal channels, so IM-channel
-	// scenarios (weixin/feishu/qq) would otherwise run with no workspace scope
-	// and write files outside the temp dir. Registering it and passing its ID on
-	// every turn binds the scope regardless of channel.
+	// Bind the workspace explicitly whenever the data dir is fresh (the
+	// default). The gateway's CLI-cwd heuristic only auto-registers a workspace
+	// for cli/terminal channels, so IM-channel scenarios (weixin/feishu/qq)
+	// would otherwise run with no workspace scope in an empty control.db.
+	// Registering it and passing its ID on every turn binds the scope
+	// regardless of channel.
 	var workspaceID string
 	if dataDirOverride != "" {
 		if ws, werr := h.controlStore.RegisterWorkspace(ctx, control.Workspace{
@@ -207,6 +218,13 @@ func runSingle(ctx context.Context, c *Case, opts RunOptions, sampleIdx, totalSa
 	var inputTokens, outputTokens int
 	var lastStatus string
 	var lastOutcome string
+	// Track every person the case touched (the case identity plus any per-turn
+	// platform_user_id "stranger" identities) so post-case run finalization can
+	// sweep exactly the runs this eval created and nothing else.
+	seenPersons := map[string]bool{}
+	if identity != nil && identity.PersonID != "" {
+		seenPersons[identity.PersonID] = true
+	}
 	for i, turn := range c.Turns {
 		turnStart := time.Now()
 		channel := firstNonEmpty(turn.Channel, c.Channel, "cli")
@@ -238,6 +256,9 @@ func runSingle(ctx context.Context, c *Case, opts RunOptions, sampleIdx, totalSa
 			WorkspaceID:    workspaceID,
 		})
 		cancelTurn()
+		if resp.Identity != nil && resp.Identity.PersonID != "" {
+			seenPersons[resp.Identity.PersonID] = true
+		}
 		if resp.Task != nil {
 			taskIDs = append(taskIDs, resp.Task.ID)
 		}
@@ -252,6 +273,12 @@ func runSingle(ctx context.Context, c *Case, opts RunOptions, sampleIdx, totalSa
 		}
 		rec.FinishTurn(i, status, resp.Content, resp.Error, resp.Usage.InputTokens, resp.Usage.OutputTokens, turnStart)
 	}
+	// Every eval turn is synchronous, so its run must be terminal once
+	// ProcessMessage returns. Anything still `running` here is a finalization
+	// bug or an interrupted write; force a terminal state so eval never leaves
+	// phantom running runs behind (in shared_data mode they would show up in
+	// the user's /tasks forever).
+	forceFinalized := finalizeLeftoverRuns(ctx, h.controlStore, h.tenantID, seenPersons, 3*time.Second)
 	snap := rec.Snapshot()
 	snap.TaskIDs = taskIDs
 	snap.Workspace = workspace
@@ -262,6 +289,16 @@ func runSingle(ctx context.Context, c *Case, opts RunOptions, sampleIdx, totalSa
 	// asking whether this interaction completed.
 	snap.OutcomeStatus = firstNonEmpty(lastStatus, lastOutcome)
 	checks := EvaluateCase(c, snap)
+	if forceFinalized > 0 {
+		// Surface (without failing the case) that the harness had to force
+		// leftover runs to a terminal state — a signal the gateway's own run
+		// finalization regressed.
+		checks = append(checks, CheckResult{
+			Name:    "run_finalization",
+			OK:      true,
+			Message: fmt.Sprintf("forced %d leftover running run(s) to interrupted after the case", forceFinalized),
+		})
+	}
 
 	// World-state predicates: assert on control.db / files / memory — an oracle
 	// the model cannot game by phrasing its answer.
@@ -293,6 +330,42 @@ func runSingle(ctx context.Context, c *Case, opts RunOptions, sampleIdx, totalSa
 		OutputTokens:    outputTokens,
 		Checks:          checks,
 	}, nil
+}
+
+// finalizeLeftoverRuns guarantees every run this eval created reached a
+// terminal status before the harness moves on. Eval turns are synchronous, so
+// under normal operation the sweep finds nothing; the bounded wait only covers
+// in-flight finalization writes racing the turn's return. Leftovers past the
+// deadline are forced to `interrupted` (run + owning task) so they can never
+// linger as phantom `running` rows. The sweep is scoped to the tenant AND the
+// persons this case touched, so a `shared_data` case can never stomp a real
+// concurrent run.
+func finalizeLeftoverRuns(ctx context.Context, store *control.Store, tenantID string, personIDs map[string]bool, wait time.Duration) int {
+	if store == nil || len(personIDs) == 0 {
+		return 0
+	}
+	persons := make([]string, 0, len(personIDs))
+	for id := range personIDs {
+		persons = append(persons, id)
+	}
+	deadline := time.Now().Add(wait)
+	for {
+		runs, err := store.ListRunningRuns(ctx, tenantID, persons)
+		if err != nil || len(runs) == 0 {
+			return 0
+		}
+		if time.Now().After(deadline) {
+			for _, r := range runs {
+				_ = store.FinishRun(ctx, r.TenantID, r.ID, "interrupted")
+				if r.TaskID != "" {
+					_ = store.UpdateTaskStatus(ctx, r.TenantID, r.TaskID, "interrupted",
+						"Eval run did not reach a terminal status; finalized by the eval harness.", nil)
+				}
+			}
+			return len(runs)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
 }
 
 // turnBudget is the per-turn wall-clock deadline. It uses the case's

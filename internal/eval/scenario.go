@@ -56,10 +56,14 @@ type StatePredicate struct {
 	MinBytes        *int    `yaml:"min_bytes,omitempty" json:"min_bytes,omitempty"`
 }
 
-// needsIsolation reports whether a case must run in a fresh temp dataDir +
-// workspace. Any scenario that seeds state or asserts on world state requires
-// isolation so it neither pollutes real ~/.selfmind data nor reads stale state.
-func needsIsolation(c *Case) bool {
+// needsWorkspaceIsolation reports whether a case must run in a fresh temp
+// WORKSPACE (seeded from setup). Data-dir isolation is no longer tied to this:
+// every case gets a throwaway data dir by default (see runSingle), so this only
+// decides whether tool calls should hit a seeded scratch workspace instead of
+// the case's declared workspace path. Scenarios that seed or assert world
+// state always need the scratch workspace so they neither write into the repo
+// nor read stale files.
+func needsWorkspaceIsolation(c *Case) bool {
 	if c == nil {
 		return false
 	}

@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"strconv"
 	"strings"
@@ -889,6 +890,85 @@ func TestNotificationBarStylesGuidanceDistinctly(t *testing.T) {
 		if got := model.notificationBar(80); !strings.Contains(got, wantGlyph) {
 			t.Fatalf("notice %q should use glyph %q, got %q", msg, wantGlyph, stripANSI(got))
 		}
+	}
+}
+
+// TestClientModeSteerForwardsToDaemon: in client mode the run executes inside
+// the daemon, so mid-run input must go through the steer function (gateway
+// API), never the process-local channel the daemon cannot read.
+func TestClientModeSteerForwardsToDaemon(t *testing.T) {
+	model := NewController(nil, nil, nil, "").model
+	model.clientMode = true
+	model.thinking = true
+	model.steerCh = make(chan string, 1) // local channel must stay untouched
+	var got string
+	model.steerFn = func(text string) error {
+		got = text
+		return nil
+	}
+
+	cmd := model.injectMidRunGuidance("focus on the edge cases")
+	if cmd == nil {
+		t.Fatal("expected the transient-notice auto-clear command")
+	}
+	if got != "focus on the edge cases" {
+		t.Fatalf("steer function saw %q", got)
+	}
+	if len(model.steerCh) != 0 {
+		t.Fatal("client mode must not push guidance into the local channel")
+	}
+	if model.statusMsg != "Sent to the running task as guidance." {
+		t.Fatalf("statusMsg = %q", model.statusMsg)
+	}
+	last := model.messages[len(model.messages)-1]
+	if last.Role != "user" || last.Content != "focus on the edge cases" {
+		t.Fatalf("guidance missing from transcript: %+v", last)
+	}
+}
+
+// TestClientModeSteerErrorShowsHonestNotice: a daemon refusal (no active run,
+// full buffer, transport error) must surface in the transcript — mid-run input
+// must never look accepted when it was dropped.
+func TestClientModeSteerErrorShowsHonestNotice(t *testing.T) {
+	model := NewController(nil, nil, nil, "").model
+	model.clientMode = true
+	model.thinking = true
+	model.steerFn = func(text string) error {
+		return errors.New("no active run to steer")
+	}
+
+	_ = model.injectMidRunGuidance("hurry up please")
+	last := model.messages[len(model.messages)-1]
+	if !last.IsError {
+		t.Fatalf("expected an error notice, got %+v", last)
+	}
+	if !strings.Contains(last.Content, "守护进程未接受引导") || !strings.Contains(last.Content, "no active run to steer") {
+		t.Fatalf("notice must state the daemon refusal reason: %q", last.Content)
+	}
+	if model.statusMsg == "Sent to the running task as guidance." {
+		t.Fatalf("statusMsg must not claim success: %q", model.statusMsg)
+	}
+}
+
+// TestInProcessSteerStillUsesLocalChannel: without client mode the existing
+// in-process behavior is unchanged — guidance lands on steerCh for the local
+// agent loop to drain.
+func TestInProcessSteerStillUsesLocalChannel(t *testing.T) {
+	model := NewController(nil, nil, nil, "").model
+	model.thinking = true
+	model.steerCh = make(chan string, 1)
+
+	_ = model.injectMidRunGuidance("prefer table-driven tests")
+	select {
+	case got := <-model.steerCh:
+		if got != "prefer table-driven tests" {
+			t.Fatalf("steered text = %q", got)
+		}
+	default:
+		t.Fatal("guidance did not reach the local steering channel")
+	}
+	if model.statusMsg != "Sent to the running task as guidance." {
+		t.Fatalf("statusMsg = %q", model.statusMsg)
 	}
 }
 

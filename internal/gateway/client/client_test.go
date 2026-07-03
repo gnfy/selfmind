@@ -3,6 +3,7 @@ package client
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -235,6 +236,51 @@ func TestRespondApproval(t *testing.T) {
 	}
 	if gotID != "appr-123" || gotDecision != "approved" {
 		t.Fatalf("server saw id=%q decision=%q", gotID, gotDecision)
+	}
+}
+
+// TestSteerRun covers the client side of mid-turn steering: the request body,
+// the endpoint, and the mapping of daemon refusals onto the typed errors the
+// TUI renders (409 → ErrNoActiveRun, 429 → ErrSteerBusy).
+func TestSteerRun(t *testing.T) {
+	var gotText string
+	status := http.StatusOK
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/runs/steer" || r.Method != http.MethodPost {
+			http.NotFound(w, r)
+			return
+		}
+		var req api.RunSteerRequest
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		gotText = req.Text
+		if status != http.StatusOK {
+			w.WriteHeader(status)
+			return
+		}
+		writeJSONResp(w, api.RunSteerResponse{Accepted: true})
+	}))
+	defer srv.Close()
+
+	c := New(srv.URL, "")
+	if err := c.SteerRun("focus on the failing test"); err != nil {
+		t.Fatalf("SteerRun: %v", err)
+	}
+	if gotText != "focus on the failing test" {
+		t.Fatalf("server saw text = %q", gotText)
+	}
+
+	status = http.StatusConflict
+	if err := c.SteerRun("late guidance"); !errors.Is(err, ErrNoActiveRun) {
+		t.Fatalf("409 should map to ErrNoActiveRun, got %v", err)
+	}
+	status = http.StatusTooManyRequests
+	if err := c.SteerRun("rapid guidance"); !errors.Is(err, ErrSteerBusy) {
+		t.Fatalf("429 should map to ErrSteerBusy, got %v", err)
+	}
+	status = http.StatusInternalServerError
+	err := c.SteerRun("broken daemon")
+	if err == nil || errors.Is(err, ErrNoActiveRun) || errors.Is(err, ErrSteerBusy) {
+		t.Fatalf("500 should be a generic error, got %v", err)
 	}
 }
 

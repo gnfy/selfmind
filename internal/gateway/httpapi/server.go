@@ -48,7 +48,17 @@ type activeRun struct {
 	Summary   string
 	StartedAt time.Time
 	Cancel    context.CancelFunc
+	// Steer carries mid-turn user guidance into the running agent loop
+	// (installed on the run ctx via kernel.WithSteering; drained at iteration
+	// boundaries). Buffered so /v1/runs/steer can hand off without blocking the
+	// HTTP handler; a full buffer is reported as back-pressure, never dropped.
+	Steer chan string
 }
+
+// steerBufferSize bounds queued-but-undrained guidance per run. Small on
+// purpose: steering is corrective input, not a chat backlog; overflow surfaces
+// as 429 so the client can tell the user instead of silently eating text.
+const steerBufferSize = 4
 
 func (d *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
@@ -59,6 +69,7 @@ func (d *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/accounts/bind", d.handleAccountBind)
 	mux.HandleFunc("/v1/approvals", d.handleApprovals)
 	mux.HandleFunc("/v1/approvals/respond", d.handleApprovalRespond)
+	mux.HandleFunc("/v1/runs/steer", d.handleRunSteer)
 	mux.HandleFunc("/v1/tasks/events", d.handleTaskEvents)
 	mux.HandleFunc("/v1/tasks/events/stream", d.handleTaskEventsStream)
 	mux.HandleFunc("/v1/tasks/artifacts", d.handleTaskArtifacts)
@@ -160,6 +171,9 @@ func (d *Server) ProcessMessage(ctx context.Context, req api.MessageRequest) (ap
 	}
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	// The steering channel is registered on the active run (so /v1/runs/steer
+	// can reach it) AND installed on the run ctx (so the agent loop drains it).
+	steerCh := make(chan string, steerBufferSize)
 	if ok := coord.beginActive(identity.PersonID, &activeRun{
 		TenantID:  identity.TenantID,
 		PersonID:  identity.PersonID,
@@ -167,10 +181,12 @@ func (d *Server) ProcessMessage(ctx context.Context, req api.MessageRequest) (ap
 		Summary:   truncate(req.Content, 240),
 		StartedAt: time.Now(),
 		Cancel:    cancel,
+		Steer:     steerCh,
 	}); !ok {
 		return api.MessageResponse{Identity: identity, Content: "Another task is already running. Use /status or /stop.", Turn: messageTurn("busy", "running", "running", "", "", "")}, http.StatusOK
 	}
 	defer coord.endActive(identity.PersonID)
+	runCtx = kernel.WithSteering(runCtx, steerCh)
 
 	return coord.runMessage(runCtx, identity, req, intent)
 }

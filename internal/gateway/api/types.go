@@ -135,6 +135,27 @@ type ApprovalRespondResponse struct {
 	Approval *control.ApprovalRequest `json:"approval"`
 }
 
+// RunSteerRequest injects mid-turn user guidance into the caller's active run
+// (POST /v1/runs/steer). It exists for thin clients: their process-local
+// steering channel can never reach a run executing inside the daemon, so this
+// is the only path by which mid-run input reaches the agent loop. Identity
+// fields mirror ApprovalRespondRequest; the daemon resolves the platform
+// account to a person and steers that person's active run.
+type RunSteerRequest struct {
+	TenantID       string `json:"tenant_id"`
+	Platform       string `json:"platform"`
+	PlatformUserID string `json:"platform_user_id"`
+	DisplayName    string `json:"display_name"`
+	Channel        string `json:"channel"`
+	Text           string `json:"text"`
+}
+
+// RunSteerResponse acknowledges that guidance was handed to the active run.
+type RunSteerResponse struct {
+	Identity *control.IdentityContext `json:"identity"`
+	Accepted bool                     `json:"accepted"`
+}
+
 type RunOutcome struct {
 	Status      string   `json:"status"`
 	Summary     string   `json:"summary,omitempty"`

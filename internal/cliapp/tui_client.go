@@ -64,6 +64,10 @@ func (a *App) tryRunTUIClient(cfg *config.Config) (int, bool) {
 	// Inline approval prompts: when the daemon blocks a run for tool approval,
 	// the event bridge surfaces it and this responder answers it.
 	ctrl.SetApprovalResponder(client.RespondApproval)
+	// Mid-turn steering: input typed while the daemon executes a turn is
+	// forwarded into that run over the gateway API — the controller's local
+	// steering channel cannot cross the process boundary.
+	ctrl.SetSteerFunc(client.SteerRun)
 
 	ctrl.Start()
 	printResumeHint(a.stdout, ctrl.SessionChannel())

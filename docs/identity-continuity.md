@@ -134,6 +134,6 @@ existing person. `/id` shows the current tenant/person/account resolution.
 ## Known gaps on the north-star path
 
 Tracked with priorities in `docs/STATUS.md` ("Highest-Value Next Work"):
-client-mode mid-turn steering loss, IM-native approval buttons, continuity
-eval cassettes, session-search client parity, stranger-isolation hardening
-(QQ webhook signature, Feishu envelope decryption).
+IM-native approval buttons, continuity eval cassettes, session-search client
+parity, stranger-isolation hardening (QQ webhook signature, Feishu envelope
+decryption).

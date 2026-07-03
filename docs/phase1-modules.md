@@ -29,7 +29,7 @@ where it lives. For per-capability status (Done/Partial/Missing) see
 | Approval modes | Staged `/mode`: `on-request` / `read-only` / `auto-edit` / `full-auto`, enforced in tool middleware; on-demand y/N via the clarify bridge. | `internal/tools/middleware.go`, `internal/gateway/cli/command_handlers.go` |
 | Image input | Image-path detection + clipboard screenshot paste (`/paste-image`, Ctrl+V auto-detect); routed to `vision_analyze`. Clipboard needs a local GUI (not over SSH). | `internal/gateway/cli/attachments.go`, `clipboard.go` |
 | Context compaction | `/compact` shrinks the visible transcript to free context (deterministic, no model call). | `internal/gateway/cli/command_handlers.go` |
-| Mid-turn steering | Input typed while a run is in flight is injected into the SAME turn as user guidance at the next iteration boundary — not rejected as "busy" or dropped. | `internal/kernel/steering.go`, `internal/gateway/cli/controller.go` |
+| Mid-turn steering | Input typed while a run is in flight is injected into the SAME turn as user guidance at the next iteration boundary — not rejected as "busy" or dropped. In client mode the guidance is forwarded to the daemon's active run via `POST /v1/runs/steer`. | `internal/kernel/steering.go`, `internal/gateway/cli/controller.go`, `internal/gateway/httpapi/handlers_steer.go`, `internal/gateway/client/client.go` |
 | Session resume / continuation | Short-acceptance continuation cues resume the same task; handoff + live plan re-injected. | `internal/gateway/httpapi/continue_resolver.go` |
 
 ## Pillar 2 — Cloud 24/7 daemon

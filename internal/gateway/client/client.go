@@ -11,6 +11,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -295,6 +296,53 @@ func (c *Client) RespondApproval(approvalID, decision string) error {
 	if httpResp.StatusCode >= http.StatusBadRequest {
 		data, _ := io.ReadAll(httpResp.Body)
 		return fmt.Errorf("approval respond failed: %s: %s", httpResp.Status, strings.TrimSpace(string(data)))
+	}
+	return nil
+}
+
+// Typed steering failures so the TUI can render specific, honest notices
+// without parsing HTTP bodies.
+var (
+	// ErrNoActiveRun: the daemon has no run to steer (409) — it may have
+	// finished between the user's keystroke and the request.
+	ErrNoActiveRun = errors.New("no active run to steer")
+	// ErrSteerBusy: the run's steering buffer is full (429); retry shortly.
+	ErrSteerBusy = errors.New("steering buffer is full; try again in a moment")
+)
+
+// SteerRun forwards mid-turn user guidance to the daemon's active run
+// (POST /v1/runs/steer). In client mode the run executes inside the daemon
+// process, so the TUI's local steering channel can never reach it — this call
+// is the only path by which mid-run input reaches the agent loop.
+func (c *Client) SteerRun(text string) error {
+	req := api.RunSteerRequest{
+		Platform:       "cli",
+		PlatformUserID: clientUserID(),
+		Channel:        "cli",
+		Text:           text,
+	}
+	body, _ := json.Marshal(req)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+"/v1/runs/steer", bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	c.auth(httpReq)
+	httpResp, err := c.httpClient().Do(httpReq)
+	if err != nil {
+		return err
+	}
+	defer httpResp.Body.Close()
+	switch {
+	case httpResp.StatusCode == http.StatusConflict:
+		return ErrNoActiveRun
+	case httpResp.StatusCode == http.StatusTooManyRequests:
+		return ErrSteerBusy
+	case httpResp.StatusCode >= http.StatusBadRequest:
+		data, _ := io.ReadAll(httpResp.Body)
+		return fmt.Errorf("steer failed: %s: %s", httpResp.Status, strings.TrimSpace(string(data)))
 	}
 	return nil
 }

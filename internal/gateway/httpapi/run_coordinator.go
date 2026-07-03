@@ -309,12 +309,16 @@ func (c *RunCoordinator) startAsyncRun(identity *control.IdentityContext, req ap
 		Channel:   req.Channel,
 		Summary:   truncate(req.Content, 240),
 		StartedAt: time.Now(),
+		// Registered here so /v1/runs/steer can inject guidance; wired into the
+		// run ctx below so the agent loop drains it at iteration boundaries.
+		Steer: make(chan string, steerBufferSize),
 	}
 	if ok := c.beginActive(identity.PersonID, active); !ok {
 		return api.MessageResponse{Identity: identity, Content: "Another task is already running. Use /status or /stop.", Turn: messageTurn("busy", "running", "running", "", "", "")}
 	}
 
 	runCtx, runCancel := context.WithCancel(context.Background())
+	runCtx = kernel.WithSteering(runCtx, active.Steer)
 	active.Cancel = runCancel
 	stopProgressNotices := c.startAsyncProgressNotices(runCtx, identity, req)
 	go func() {

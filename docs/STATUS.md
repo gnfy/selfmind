@@ -60,7 +60,7 @@
 | Self-check & CI gate | ✅ | `selfmind selfcheck` (build + test + offline eval) and `.github/workflows/ci.yml`; strict offline VCR replay (`ErrCassetteMiss`) so the gate never burns provider quota. `internal/cliapp/selfcheck_commands.go`. |
 | CLI image input | ✅ | Image-path detection in input + clipboard screenshot paste (`/paste-image`, Ctrl+V auto-detect; WSL/macOS/Linux); routed to the `vision_analyze` tool via the attachment pipeline. Clipboard requires a local GUI (not over SSH). `internal/gateway/cli/attachments.go`, `clipboard.go`. |
 | Approval modes | ✅ | Staged `on-request` / `read-only` / `auto-edit` / `full-auto` via `/mode`, enforced in `SmartApprovalMiddleware`; on-demand y/N reuses the clarify bridge. `internal/tools/middleware.go`. |
-| Mid-turn steering | 🟡 | Works in-process (`internal/kernel/steering.go` + controller `steerCh`). **Defect:** in client mode (the default TUI path) the steering channel cannot cross the process boundary and there is no forwarding in `internal/gateway/client`/`httpapi` — mid-run input is silently dropped while appearing accepted. |
+| Mid-turn steering | ✅ | Works in-process (`internal/kernel/steering.go` + controller `steerCh`) **and** in client mode: input typed during a daemon run is forwarded via `POST /v1/runs/steer` (`httpapi/handlers_steer.go`) into the active run's buffered steering channel (`kernel.WithSteering`, sync + async paths), leaving an auditable `run.steered` event. Daemon refusals surface honestly in the TUI (409 no active run / 429 buffer full → transcript notice, never silently dropped). Covered by unit tests (httpapi/client/controller), not VCR. |
 | Continuity eval coverage | ❌ | No `evalcases/` case exercises the cross-endpoint scenarios (CLI task → IM `/status`/approval → CLI resume). Also: selfcheck skips (not fails) cases without cassettes and no cassettes are committed, so the CI eval gate currently verifies ~0 cases. |
 | Skill variant evolution / sandbox test | ❌ | Old roadmap P3 (doc removed; see git history); not started, and out of scope for the north star. |
 
@@ -70,33 +70,27 @@ These are the live gaps, ordered by their distance from the north star
 (`docs/identity-continuity.md` — the three continuity scenarios). This section
 is the only priority list in the repo; other docs must point here.
 
-1. **P0 — Fix client-mode mid-turn steering loss.** The default TUI path
-   silently drops mid-run user input (see the Mid-turn steering row). Either
-   forward steering over the gateway API (e.g. a `/v1/runs/{id}/steer` endpoint
-   feeding the daemon-side `kernel.WithSteering` channel) or, at minimum,
-   disable mid-run input in client mode with an honest notice. A continuity
-   product must never silently eat cross-process input.
-2. **P0 — Make the eval gate real, starting with continuity cases.** Record and
+1. **P0 — Make the eval gate real, starting with continuity cases.** Record and
    commit VCR cassettes for the three north-star scenarios plus the existing
    core cases; make `selfcheck` fail (not skip) when the verified-case count is
    below a threshold. This turns the north star into an enforced contract.
-3. **P0 — Continuity path polish.** Wire native IM approval buttons
+2. **P0 — Continuity path polish.** Wire native IM approval buttons
    (Telegram / Weixin — backend + approval modes are ready) for scenario 1, and
    surface identity: `/whoami`-style binding visibility so "bind a new endpoint
    → inherit tasks and memory" is a visible moment.
-4. **P1 — Finish daemon-client convergence, then delete the duplicates.**
+3. **P1 — Finish daemon-client convergence, then delete the duplicates.**
    Remaining parity gap: session search over the daemon. Once closed, remove
    the in-process TUI path (`SELFMIND_TUI_INPROC`), the legacy alt-screen TUI
    (`SELFMIND_TUI_LEGACY`, viewport, `controller_mouse.go`, `renderCache`), and
    decompose `uiModel` per the AGENTS.md guardrail — one simplification pass.
    Then a real N>1 soak (`SELFMIND_WORKERS`).
-5. **P1 — Stranger-isolation hardening (scenario 3).** QQ webhook ed25519
+4. **P1 — Stranger-isolation hardening (scenario 3).** QQ webhook ed25519
    signature verification (inbound is currently unverified), Feishu
    encrypt-envelope AES decryption, WeChat OA safe-mode crypto.
-6. **P2 — Real `execute_code` sandbox** (namespace/seccomp/cgroup or container).
+5. **P2 — Real `execute_code` sandbox** (namespace/seccomp/cgroup or container).
    Prerequisite for any multi-person sharing; not needed for the single-person
    scenarios.
-7. **P2 — MCP `sampling/createMessage`**, IM voice STT/TTS, remaining adapter
+6. **P2 — MCP `sampling/createMessage`**, IM voice STT/TTS, remaining adapter
    polish — only as scenario needs dictate.
 
 Cron proactive delivery, user profile synthesis, CLI image input, approval

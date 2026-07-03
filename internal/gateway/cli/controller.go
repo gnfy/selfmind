@@ -119,6 +119,7 @@ type uiModel struct {
 	clientMode         bool         // daemon-client mode: no in-process agent/gateway; chat routes to the daemon
 	toolDispatchFn     func(tool string, args map[string]interface{}) (string, error) // client mode: run management tools on the daemon
 	approvalResponder  func(approvalID, decision string) error // client mode: answer a daemon tool-approval request
+	steerFn            func(text string) error                 // client mode: forward mid-turn guidance to the daemon's active run
 	awaitingApproval   bool                                    // an inline approval prompt is active
 	pendingApprovalID  string
 	hybrid             bool         // terminal-first hybrid mode (SELFMIND_TUI_HYBRID)
@@ -298,6 +299,17 @@ func (c *Controller) SetApprovalResponder(fn func(approvalID, decision string) e
 		return
 	}
 	c.model.approvalResponder = fn
+}
+
+// SetSteerFunc installs the client-mode forwarder for mid-turn guidance
+// (gateway POST /v1/runs/steer). When the run executes inside the daemon, the
+// process-local steering channel can never reach it, so input typed during a
+// run must go through this function instead. Only set in client mode.
+func (c *Controller) SetSteerFunc(fn func(text string) error) {
+	if c == nil || c.model == nil {
+		return
+	}
+	c.model.steerFn = fn
 }
 
 // SetToolDispatch installs the daemon-backed dispatcher used by agent-backed
@@ -1419,18 +1431,7 @@ func (m *uiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			// the running turn instead of starting a competing run (which the
 			// busy-guard would reject) or overwriting the in-flight cancelFn.
 			if m.thinking || m.toolExecuting != "" {
-				m.addMessage("user", input)
-				m.editor.Reset()
-				if m.steerCh != nil {
-					select {
-					case m.steerCh <- input:
-						m.statusMsg = "Sent to the running task as guidance."
-					default:
-						m.statusMsg = "Guidance queue is full; try again in a moment."
-					}
-				}
-				// Transient notice — auto-clear so it doesn't linger after the turn.
-				return m, tea.Tick(3*time.Second, func(t time.Time) tea.Msg { return MsgClearStatus{} })
+				return m, m.injectMidRunGuidance(input)
 			}
 			m.addMessage("user", input)
 			m.editor.Reset()
@@ -1449,6 +1450,36 @@ func (m *uiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	m.editor.Update(msg)
 	return m, nil
+}
+
+// injectMidRunGuidance routes input typed while a run is in flight into that
+// run as user guidance. In-process runs receive it through the local steering
+// channel (kernel.WithSteering); in client mode the run executes inside the
+// daemon process, so the guidance must be forwarded over the gateway API — a
+// local channel push would be silently dropped. Failures are surfaced as an
+// explicit transcript notice: guidance must never appear accepted when it
+// was not.
+func (m *uiModel) injectMidRunGuidance(input string) tea.Cmd {
+	m.addMessage("user", input)
+	m.editor.Reset()
+	switch {
+	case m.clientMode && m.steerFn != nil:
+		if err := m.steerFn(input); err != nil {
+			m.addErrorMessage(fmt.Sprintf("守护进程未接受引导: %v", err))
+			m.statusMsg = "Guidance was not accepted by the daemon."
+		} else {
+			m.statusMsg = "Sent to the running task as guidance."
+		}
+	case m.steerCh != nil:
+		select {
+		case m.steerCh <- input:
+			m.statusMsg = "Sent to the running task as guidance."
+		default:
+			m.statusMsg = "Guidance queue is full; try again in a moment."
+		}
+	}
+	// Transient notice — auto-clear so it doesn't linger after the turn.
+	return tea.Tick(3*time.Second, func(t time.Time) tea.Msg { return MsgClearStatus{} })
 }
 
 func (m *uiModel) syncTranscriptContent() {

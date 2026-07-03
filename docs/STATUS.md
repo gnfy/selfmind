@@ -42,7 +42,7 @@
 | Multi-agent delegation | ✅ | Parallel, semaphore-bounded batch delegation. `internal/app/multi_agent.go`. (Roadmap lists this as serial-only — it is parallel.) |
 | Extended tools | ✅ | `web_search`, `web_extract`, `execute_code`, `delegate_task`, vision, tts beyond file/terminal. |
 | MCP client | 🟡 | Real stdio/HTTP JSON-RPC client, multi-server, on-demand tool registration. `sampling/createMessage` not implemented. `internal/tools/mcp_client.go`. |
-| Eval loop | ✅ | Real gateway-path runs; P0 deterministic checks + state-predicate oracle (`assert_state`); VCR record/replay for free offline regression; `selfmind eval run/report/repair/scorecard/capture`; day-in-the-life suite with recorded cassettes. `internal/eval`, `evalcases/`. |
+| Eval loop | ✅ | Real gateway-path runs; P0 deterministic checks + state-predicate oracle (`assert_state`); VCR record/replay for free offline regression; `selfmind eval run/report/repair/scorecard/capture/clean`; day-in-the-life suite with recorded cassettes. **Data-isolated by default**: every run (record and replay) uses a throwaway temp data dir (`shared_data: true` opts out); post-case run-finalization sweep forces leftover `running` rows terminal; `selfmind eval clean [--yes]` removes historic eval residue from a real control.db. `internal/eval`, `evalcases/`. |
 | Flight recorder + capture | ✅ | `SELFMIND_FLIGHT_RECORDER=1` records each real turn; `/capture` / `eval capture` promotes the last turn into a replayable eval case — everyday friction becomes a permanent regression test. `internal/kernel/llm/flight.go`, `internal/kernel/flight_recorder.go`, `internal/eval/capture.go`. |
 | Telegram adapter | ✅ | Webhook + long poll, signature verify, send. |
 | Personal/Enterprise WeChat (Weixin) adapter | ✅ | iLink protocol (`ilinkai.weixin.qq.com`): poll loop, AES, per-peer context_token, typing, media, group/DM policy, dedup. Built-in QR login (`selfmind weixin login`) — no external bridge needed. This is the primary multi-device WeChat path. |
@@ -58,7 +58,7 @@
 | User profile synthesis | ✅ | `ProfileSynthesizer` distills facts into a stable profile injected each turn; `pinned` authoritative facts the synthesis must not override; visible/correctable via `/memory` (+ `/memory pin`). `internal/kernel/profile_synthesizer.go`. |
 | Scheduled tasks (cron) | ✅ | SQLite-backed scheduler with timezone; jobs run a real agent turn and deliver the result to their channel (e.g. daily summary → WeChat); `web` opt-in per job; built-in liveness canary; idempotent built-in jobs. `internal/kernel/task/cron`, `internal/gateway/httpapi/cron_executor.go`. |
 | Self-check & CI gate | ✅ | `selfmind selfcheck` (build + test + offline eval) and `.github/workflows/ci.yml`; strict offline VCR replay (`ErrCassetteMiss`) so the gate never burns provider quota. `require_cassette: true` cases fail (not skip) when their cassette is missing; `SELFMIND_EVAL_MIN_CASES` (set to 3 in CI) fails the gate when fewer cases actually replay. `internal/cliapp/selfcheck_commands.go`. |
-| Continuity eval coverage | 🟡 | cases + gate mechanism landed; cassettes pending one local recording run. `evalcases/continuity/` (cross-endpoint `/status`, `继续` resume, stranger identity isolation via per-turn `platform_user_id`), all `require_cassette: true`; record with `SELFMIND_EVAL_VCR=record selfmind eval run evalcases/continuity` and commit `.vcr/continuity_*`. |
+| Continuity eval coverage | ✅ | Cases + gate + cassettes recorded and committed; selfcheck replays 7 cases offline. `evalcases/continuity/` (cross-endpoint `/status`, `继续` resume, stranger identity isolation via per-turn `platform_user_id`), all `require_cassette: true`; record with `SELFMIND_EVAL_VCR=record selfmind eval run evalcases/continuity` and commit `.vcr/continuity_*`. |
 | CLI image input | ✅ | Image-path detection in input + clipboard screenshot paste (`/paste-image`, Ctrl+V auto-detect; WSL/macOS/Linux); routed to the `vision_analyze` tool via the attachment pipeline. Clipboard requires a local GUI (not over SSH). `internal/gateway/cli/attachments.go`, `clipboard.go`. |
 | Approval modes | ✅ | Staged `on-request` / `read-only` / `auto-edit` / `full-auto` via `/mode`, enforced in `SmartApprovalMiddleware`; on-demand y/N reuses the clarify bridge. `internal/tools/middleware.go`. |
 | Mid-turn steering | ✅ | Works in-process (`internal/kernel/steering.go` + controller `steerCh`) **and** in client mode: input typed during a daemon run is forwarded via `POST /v1/runs/steer` (`httpapi/handlers_steer.go`) into the active run's buffered steering channel (`kernel.WithSteering`, sync + async paths), leaving an auditable `run.steered` event. Daemon refusals surface honestly in the TUI (409 no active run / 429 buffer full → transcript notice, never silently dropped). Covered by unit tests (httpapi/client/controller), not VCR. |
@@ -70,14 +70,7 @@ These are the live gaps, ordered by their distance from the north star
 (`docs/identity-continuity.md` — the three continuity scenarios). This section
 is the only priority list in the repo; other docs must point here.
 
-1. **P0 — Record the continuity eval cassettes.** The cross-endpoint continuity
-   suite (`evalcases/continuity/`) and the gate mechanism
-   (`require_cassette`, `SELFMIND_EVAL_MIN_CASES`) are landed; the only missing
-   piece is one local recording run against a live provider:
-   `SELFMIND_EVAL_VCR=record selfmind eval run evalcases/continuity`, then
-   commit `.vcr/continuity_*`. Until then `selfmind selfcheck` (and CI) fails
-   on the three `require_cassette` cases by design.
-2. **P0 — Approval UX (validated live: scenario-1 works but hurts).**
+1. **P0 — Approval UX (validated live: scenario-1 works but hurts).**
    (a) `/approve` must accept the list ordinal (`/approve 1`) and a unique
    short-id prefix, not only the full `apr_` UUID (mobile-unfriendly; users
    naturally type the ordinal and get "not found");
@@ -91,26 +84,24 @@ is the only priority list in the repo; other docs must point here.
    wire Telegram inline buttons; Weixin keeps text `/approve` fallback;
    (e) `selfmind send` lacks a `--mode` flag though the API supports
    per-request `approval_mode`.
-3. **P0 — Continuity path polish.** Surface identity: `GET /v1/accounts` +
+2. **P0 — Continuity path polish.** Surface identity: `GET /v1/accounts` +
    `selfmind accounts`, and make "bind a new endpoint → inherit tasks and
    memory" a visible moment.
-4. **P1 — Eval isolation & run finalization.** Recording/eval against the
-   default path writes eval-* persons, current_task rows, and runs left in
-   `running` into the REAL `control.db` (found 2026-07-04: 20+ eval persons,
-   6 stuck runs). Default eval/record runs to an isolated data dir (the
-   `isolated` scenario mechanism exists); always finalize run status; provide
-   a one-shot cleanup for existing eval residue.
-5. **P1 — Stuck-run recovery.** Two real tasks remain `[running]` after
+3. **P1 — Stuck-run recovery.** Two real tasks remain `[running]` after
    interruption; the interrupted-run recovery must mark heartbeat-dead runs
    as interrupted (on daemon start and periodically), so `/tasks` never shows
-   phantom running work.
-6. **P1 — Finish daemon-client convergence, then delete the duplicates.**
+   phantom running work. (Two producers already fixed: run finalization now
+   survives turn-deadline expiry — `context.WithoutCancel` in
+   `runMessage` — and eval runs are isolated + finalized, with
+   `selfmind eval clean` for historic residue; this item is about remaining
+   real interrupted runs, e.g. daemon kill mid-run.)
+4. **P1 — Finish daemon-client convergence, then delete the duplicates.**
    Remaining parity gap: session search over the daemon. Once closed, remove
    the in-process TUI path (`SELFMIND_TUI_INPROC`), the legacy alt-screen TUI
    (`SELFMIND_TUI_LEGACY`, viewport, `controller_mouse.go`, `renderCache`), and
    decompose `uiModel` per the AGENTS.md guardrail — one simplification pass.
    Then a real N>1 soak (`SELFMIND_WORKERS`).
-7. **P1 — Stranger-isolation hardening (scenario 3).** Highest item: the
+5. **P1 — Stranger-isolation hardening (scenario 3).** Highest item: the
    Weixin owner auto-bind hazard — with `gateway.weixin.owner_person_id` set,
    EVERY sender passing the DM policy is bound to the owner person
    (`weixin/adapter.go` inbound path), and the default `dm_policy: open` +
@@ -120,10 +111,10 @@ is the only priority list in the repo; other docs must point here.
    login. Also: QQ webhook ed25519 signature verification (inbound is
    currently unverified), Feishu encrypt-envelope AES decryption, WeChat OA
    safe-mode crypto.
-8. **P2 — Real `execute_code` sandbox** (namespace/seccomp/cgroup or container).
+6. **P2 — Real `execute_code` sandbox** (namespace/seccomp/cgroup or container).
    Prerequisite for any multi-person sharing; not needed for the single-person
    scenarios.
-9. **P2 — MCP `sampling/createMessage`**, IM voice STT/TTS, remaining adapter
+7. **P2 — MCP `sampling/createMessage`**, IM voice STT/TTS, remaining adapter
    polish — only as scenario needs dictate.
 
 Cron proactive delivery, user profile synthesis, CLI image input, approval

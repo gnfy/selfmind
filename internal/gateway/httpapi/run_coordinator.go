@@ -268,17 +268,24 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 		return api.MessageResponse{Identity: identity, Task: task, Run: run, Error: err.Error(), Turn: messageTurn(status, taskStatus, "idle", task.ID, run.ID, err.Error()), Context: messageContextBudget(usage)}, http.StatusOK
 	}
 
+	// Finalization must survive turn cancellation. The turn ctx can be
+	// cancelled or deadline-expired in the window between the agent stream
+	// completing and these writes (observed with eval turn budgets); using the
+	// live ctx here made FinishRun/UpdateTaskStatus fail silently and left runs
+	// stuck in `running` forever. WithoutCancel keeps ctx values (observers,
+	// scopes) while guaranteeing the terminal state lands in control.db.
+	finCtx := context.WithoutCancel(ctx)
 	outcome := buildRunOutcome(content)
-	if structured, ok := c.latestStructuredRunOutcome(ctx, task.ID, run.ID); ok {
+	if structured, ok := c.latestStructuredRunOutcome(finCtx, task.ID, run.ID); ok {
 		outcome = structured
 		if outcome.Summary == "" {
 			outcome.Summary = buildRunOutcome(content).Summary
 		}
 	}
-	_ = d.Control.RecordChannelMessage(ctx, *identity, req.Channel, task.ID, "assistant", content)
-	_ = d.Control.FinishRun(ctx, identity.TenantID, run.ID, outcome.Status)
-	_ = d.Control.UpdateTaskStatus(ctx, identity.TenantID, task.ID, outcome.Status, outcome.Summary, outcome.NextSteps)
-	_, _ = d.Control.SaveHandoff(ctx, control.Handoff{
+	_ = d.Control.RecordChannelMessage(finCtx, *identity, req.Channel, task.ID, "assistant", content)
+	_ = d.Control.FinishRun(finCtx, identity.TenantID, run.ID, outcome.Status)
+	_ = d.Control.UpdateTaskStatus(finCtx, identity.TenantID, task.ID, outcome.Status, outcome.Summary, outcome.NextSteps)
+	_, _ = d.Control.SaveHandoff(finCtx, control.Handoff{
 		TaskID:       task.ID,
 		Summary:      outcome.Summary,
 		DoneItems:    outcome.Done,
@@ -287,8 +294,8 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 		TestStatus:   strings.Join(outcome.Tests, "\n"),
 		Risks:        outcome.Risks,
 	})
-	c.recordOutcomeArtifacts(ctx, task, run, req.Channel, outcome.Files)
-	_, _ = d.Control.AppendEvent(ctx, control.Event{
+	c.recordOutcomeArtifacts(finCtx, task, run, req.Channel, outcome.Files)
+	_, _ = d.Control.AppendEvent(finCtx, control.Event{
 		TaskID:     task.ID,
 		RunID:      run.ID,
 		Type:       "run.finished",
@@ -297,7 +304,7 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 		Payload:    mustJSON(map[string]interface{}{"outcome": outcome, "usage": usage}),
 	})
 	taskID := task.ID
-	task, _ = d.Control.GetTask(ctx, identity.TenantID, task.ID)
+	task, _ = d.Control.GetTask(finCtx, identity.TenantID, task.ID)
 	taskStatus := outcome.Status
 	if task != nil && task.Status != "" {
 		taskStatus = task.Status

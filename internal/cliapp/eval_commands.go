@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"selfmind/internal/control"
 	selfeval "selfmind/internal/eval"
 )
 
@@ -32,8 +33,10 @@ func (a *App) runEvalCommandIfRequested() (bool, int) {
 		return true, a.evalScorecard(args[1:])
 	case "capture":
 		return true, a.evalCapture(args[1:])
+	case "clean":
+		return true, a.evalClean(args[1:])
 	default:
-		fmt.Fprintln(a.stderr, "usage: selfmind eval [list|run|report]")
+		fmt.Fprintln(a.stderr, "usage: selfmind eval [list|run|report|repair|scorecard|capture|clean]")
 		return true, 2
 	}
 }
@@ -47,6 +50,7 @@ func (a *App) printEvalHelp() {
 	fmt.Fprintln(a.stdout, "  selfmind eval report <jsonl-or-dir>")
 	fmt.Fprintln(a.stdout, "  selfmind eval repair [case-or-dir] [--worktree]")
 	fmt.Fprintln(a.stdout, "  selfmind eval capture [turn-id|latest] [--title \"...\"] [--suite NAME]")
+	fmt.Fprintln(a.stdout, "  selfmind eval clean [--yes]   remove eval residue from the configured control.db (dry-run by default)")
 	fmt.Fprintln(a.stdout)
 	fmt.Fprintln(a.stdout, "Examples:")
 	fmt.Fprintln(a.stdout, "  selfmind eval run evalcases/daily-dev/chat_basic.yaml")
@@ -215,6 +219,89 @@ func (a *App) evalCapture(args []string) int {
 	}
 	fmt.Fprintf(a.stdout, "Captured eval case: %s\n  case:     %s\n  cassette: %s (%d files)\n", res.CaseID, res.CasePath, res.VCRPath, res.Cassettes)
 	fmt.Fprintf(a.stdout, "Next: edit %s to add `assert_state` (what should have happened), then run `selfmind selfcheck`.\n", res.CasePath)
+	return 0
+}
+
+// evalClean removes eval residue (persons whose ONLY accounts have platform
+// `eval`, plus all rows keyed to them) from the CONFIGURED data dir's
+// control.db. Historic eval/record runs against the shared data dir leaked
+// this state; new runs are isolated by default, so this is a one-shot cleanup.
+// The default is a dry run; --yes applies the deletion.
+func (a *App) evalClean(args []string) int {
+	apply := false
+	for _, arg := range args {
+		switch arg {
+		case "--yes", "-y":
+			apply = true
+		case "-h", "--help", "help":
+			fmt.Fprintln(a.stdout, "usage: selfmind eval clean [--yes]")
+			fmt.Fprintln(a.stdout)
+			fmt.Fprintln(a.stdout, "Removes leftover eval identities (persons whose only accounts have platform")
+			fmt.Fprintln(a.stdout, "'eval') and their accounts, tasks, runs, events, handoffs, artifacts, and")
+			fmt.Fprintln(a.stdout, "current-task pointers from the configured data dir's control.db.")
+			fmt.Fprintln(a.stdout, "Without --yes this is a dry run that only prints what would be deleted.")
+			return 0
+		default:
+			fmt.Fprintf(a.stderr, "unknown flag: %s\n", arg)
+			return 2
+		}
+	}
+
+	dataDir := a.gatewayDataDir()
+	fmt.Fprintf(a.stdout, "control.db data dir: %s\n", dataDir)
+	fmt.Fprintln(a.stdout, "WARNING: stop the gateway daemon first (`selfmind gateway stop`). Two processes")
+	fmt.Fprintln(a.stdout, "writing one control.db is the exact concurrency anti-pattern SelfMind bans.")
+	fmt.Fprintln(a.stdout)
+
+	store, err := control.OpenStore(dataDir)
+	if err != nil {
+		fmt.Fprintln(a.stderr, err)
+		return 1
+	}
+	defer store.Close()
+
+	report, err := store.CleanEvalResidue(a.ctx, apply)
+	if err != nil {
+		fmt.Fprintln(a.stderr, err)
+		return 1
+	}
+	if report.Empty() {
+		fmt.Fprintln(a.stdout, "No eval residue found.")
+		return 0
+	}
+	verb := "would delete"
+	if apply {
+		verb = "deleted"
+	}
+	fmt.Fprintf(a.stdout, "Eval residue (%s):\n", verb)
+	for _, row := range []struct {
+		label string
+		count int
+	}{
+		{"persons (eval-only accounts)", report.Persons},
+		{"accounts", report.Accounts},
+		{"workspaces", report.Workspaces},
+		{"current_workspace rows", report.CurrentWorkspace},
+		{"tasks", report.Tasks},
+		{"current_task rows", report.CurrentTask},
+		{"task_runs", report.Runs},
+		{"task_events", report.Events},
+		{"task_handoffs", report.Handoffs},
+		{"task_artifacts", report.Artifacts},
+		{"channel_messages", report.ChannelMessages},
+		{"approval_requests", report.Approvals},
+		{"notifications", report.Notifications},
+		{"outbound_messages", report.Outbound},
+		{"emptied eval tenants", report.Tenants},
+	} {
+		if row.count > 0 {
+			fmt.Fprintf(a.stdout, "  %-30s %d\n", row.label, row.count)
+		}
+	}
+	if !apply {
+		fmt.Fprintln(a.stdout)
+		fmt.Fprintln(a.stdout, "Dry run only. Re-run with `selfmind eval clean --yes` to delete.")
+	}
 	return 0
 }
 

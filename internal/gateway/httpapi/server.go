@@ -642,8 +642,10 @@ func (c *RunCoordinator) notifyApprovalRequested(ctx context.Context, identity *
 // reply instructions. Telegram additionally renders native buttons from
 // Message.Kind/ApprovalID.
 func approvalNotificationText(approval control.ApprovalRequest, taskTitle string) string {
-	return fmt.Sprintf("Approval required:\n%s\n%s\nReply /approve 1 or /reject 1 (or /approve %s). 回复 /approve 1 或 /reject 1",
-		approvalSummaryLine(approval, taskTitle), approval.ID, approval.ID)
+	// The copyable id is already on its own line; the hint stays one compact
+	// bilingual sentence instead of repeating the full id again.
+	return fmt.Sprintf("Approval required:\n%s\n%s\n回复 /approve 1 或 /reject 1 (Reply /approve 1 or /reject 1)",
+		approvalSummaryLine(approval, taskTitle), approval.ID)
 }
 
 func (c *RunCoordinator) withGatewayContext(input string, identity *control.IdentityContext, task *control.Task, workspace *control.Workspace, attachments []api.MessageAttachment) string {

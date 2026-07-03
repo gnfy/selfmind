@@ -327,18 +327,26 @@ func (s *Store) EnqueueDelivery(ctx context.Context, d Delivery) (*Delivery, err
 	return &d, nil
 }
 
+// staleSendingSeconds is how long a delivery may sit in 'sending' before the
+// due-poller may reclaim it. A claim normally resolves in seconds; a stale one
+// means the dispatcher crashed mid-send, so the row must become retryable
+// instead of being stranded forever.
+const staleSendingSeconds = 120
+
 func (s *Store) ListDueDeliveries(ctx context.Context, limit int) ([]Delivery, error) {
 	if limit <= 0 || limit > 100 {
 		limit = 50
 	}
+	now := time.Now().Unix()
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT id, tenant_id, person_id, platform, COALESCE(platform_user_id, ''), channel, COALESCE(task_id, ''), COALESCE(run_id, ''),
 		        content, COALESCE(kind, ''), COALESCE(approval_id, ''), status, attempts, max_attempts, next_attempt_at, COALESCE(last_error, ''),
 		        part_index, part_total, COALESCE(idempotency_key, ''), created_at, updated_at, COALESCE(delivered_at, 0)
 		 FROM outbound_messages
-		 WHERE status IN ('pending', 'retry') AND next_attempt_at <= ?
+		 WHERE (status IN ('pending', 'retry') AND next_attempt_at <= ?)
+		    OR (status = 'sending' AND updated_at <= ?)
 		 ORDER BY next_attempt_at ASC, created_at ASC LIMIT ?`,
-		time.Now().Unix(), limit)
+		now, now-staleSendingSeconds, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -352,6 +360,32 @@ func (s *Store) ListDueDeliveries(ctx context.Context, limit int) ([]Delivery, e
 		out = append(out, d)
 	}
 	return out, rows.Err()
+}
+
+// ClaimDelivery atomically transitions a due delivery to 'sending' so exactly
+// one dispatcher — the EnqueueAndTry immediate attempt or the retry poller —
+// owns a given attempt. Without this claim the two dispatchers race between
+// send and MarkDeliveryAttempt and the recipient gets the message twice
+// (observed live: duplicate approval push, attempts=2). Returns false when the
+// row is already claimed or no longer due; a 'sending' row older than
+// staleSendingSeconds is reclaimable (dispatcher crashed mid-send).
+func (s *Store) ClaimDelivery(ctx context.Context, id string) (bool, error) {
+	now := time.Now().Unix()
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE outbound_messages SET status = 'sending', updated_at = ?
+		 WHERE id = ? AND (
+		   (status IN ('pending', 'retry') AND next_attempt_at <= ?)
+		   OR (status = 'sending' AND updated_at <= ?)
+		 )`,
+		now, id, now, now-staleSendingSeconds)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return n == 1, nil
 }
 
 func (s *Store) MarkDeliveryAttempt(ctx context.Context, id string, success bool, errText string, nextAttempt time.Time) error {

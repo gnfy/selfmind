@@ -236,6 +236,18 @@ func (s *Service) tryDelivery(ctx context.Context, d *control.Delivery) error {
 	if s.sender == nil {
 		return ErrNoSender
 	}
+	// Claim before sending: EnqueueAndTry's immediate attempt and the retry
+	// poller both see a freshly enqueued (immediately due) row, and without
+	// mutual exclusion both send it — the recipient gets the message twice.
+	// Exactly one dispatcher wins the claim; the loser treats the row as
+	// handled and moves on.
+	claimed, err := s.store.ClaimDelivery(ctx, d.ID)
+	if err != nil {
+		return err
+	}
+	if !claimed {
+		return nil
+	}
 	msg := Message{
 		TenantID:       d.TenantID,
 		PersonID:       d.PersonID,
@@ -250,7 +262,7 @@ func (s *Service) tryDelivery(ctx context.Context, d *control.Delivery) error {
 		PartIndex:      d.PartIndex,
 		PartTotal:      d.PartTotal,
 	}
-	err := s.sender.Send(ctx, msg)
+	err = s.sender.Send(ctx, msg)
 	if err == nil {
 		return s.store.MarkDeliveryAttempt(ctx, d.ID, true, "", time.Time{})
 	}

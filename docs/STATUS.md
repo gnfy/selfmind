@@ -87,9 +87,16 @@ is the only priority list in the repo; other docs must point here.
    (`SELFMIND_TUI_LEGACY`, viewport, `controller_mouse.go`, `renderCache`), and
    decompose `uiModel` per the AGENTS.md guardrail — one simplification pass.
    Then a real N>1 soak (`SELFMIND_WORKERS`).
-4. **P1 — Stranger-isolation hardening (scenario 3).** QQ webhook ed25519
-   signature verification (inbound is currently unverified), Feishu
-   encrypt-envelope AES decryption, WeChat OA safe-mode crypto.
+4. **P1 — Stranger-isolation hardening (scenario 3).** Highest item: the
+   Weixin owner auto-bind hazard — with `gateway.weixin.owner_person_id` set,
+   EVERY sender passing the DM policy is bound to the owner person
+   (`weixin/adapter.go` inbound path), and the default `dm_policy: open` +
+   empty `allow_from` means any stranger DMing the account becomes the owner.
+   Fix: owner auto-bind must apply only to allowlisted senders, or first-DM
+   pairing-code confirmation; until then document allowlist as mandatory after
+   login. Also: QQ webhook ed25519 signature verification (inbound is
+   currently unverified), Feishu encrypt-envelope AES decryption, WeChat OA
+   safe-mode crypto.
 5. **P2 — Real `execute_code` sandbox** (namespace/seccomp/cgroup or container).
    Prerequisite for any multi-person sharing; not needed for the single-person
    scenarios.

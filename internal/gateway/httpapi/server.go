@@ -611,7 +611,16 @@ func (c *RunCoordinator) notifyApprovalRequested(ctx context.Context, identity *
 		_ = c.srv.Delivery.EnqueueAndTry(ctx, msg)
 		return
 	}
-	if c.srv.Control == nil {
+	c.fanOutToBoundIM(ctx, identity, base)
+}
+
+// fanOutToBoundIM delivers a message to every bound account of the person that
+// has a push-capable delivery sender, skipping cli-like bindings (no push
+// surface) and the originating account. Shared by approval notifications and
+// CLI-originated async results so anything that happens in a terminal is
+// visible on the person's IM endpoints (docs/identity-continuity.md).
+func (c *RunCoordinator) fanOutToBoundIM(ctx context.Context, identity *control.IdentityContext, base delivery.Message) {
+	if c == nil || c.srv == nil || c.srv.Delivery == nil || c.srv.Control == nil || identity == nil {
 		return
 	}
 	accounts, err := c.srv.Control.ListAccountsByPerson(ctx, identity.TenantID, identity.PersonID)

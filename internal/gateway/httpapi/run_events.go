@@ -11,6 +11,7 @@ import (
 	"selfmind/internal/gateway/delivery"
 	"selfmind/internal/gateway/router"
 	"selfmind/internal/kernel/llm"
+	"selfmind/internal/platform/textutil"
 	"selfmind/internal/tools"
 )
 
@@ -82,6 +83,23 @@ func (c *RunCoordinator) deliverAsyncResult(ctx context.Context, identity *contr
 		return
 	}
 	if req.Platform == "cli" && req.Channel == "cli" {
+		// A terminal has no push surface for a fire-and-forget run, so the
+		// final answer used to vanish (the user only saw the task status flip
+		// and read it as "nothing happened" — observed live with a rejected
+		// approval whose acknowledgment nobody could see). Fan the result out
+		// to the person's bound IM endpoints instead, prefixed with the task
+		// title so the message stands alone in a chat.
+		content := deliveryContent(resp)
+		if resp.Task != nil && strings.TrimSpace(resp.Task.Title) != "" {
+			content = "[" + textutil.Truncate(strings.TrimSpace(resp.Task.Title), 60) + "]\n" + content
+		}
+		c.fanOutToBoundIM(ctx, identity, delivery.Message{
+			TenantID: identity.TenantID,
+			PersonID: identity.PersonID,
+			TaskID:   taskIDForResponse(resp),
+			RunID:    runIDForResponse(resp),
+			Content:  content,
+		})
 		return
 	}
 	_ = c.srv.Delivery.EnqueueAndTry(ctx, delivery.Message{

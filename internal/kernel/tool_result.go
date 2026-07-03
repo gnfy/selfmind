@@ -39,7 +39,17 @@ func packageToolResult(name, raw string) ToolResultEnvelope {
 func packageToolError(name string, err error) ToolResultEnvelope {
 	msg := fmt.Sprintf("Error executing %s: %v", nonEmpty(name, "tool"), err)
 	msg = textutil.CleanUTF8(msg)
-	modelContent := msg + "\n\nSelfMind diagnostic instruction: this tool failed. Treat the error as evidence, inspect relevant context such as cwd, files, environment, auth state, provider constraints, or command help, and continue with a corrected next step unless this is a confirmed blocker."
+	// A user rejection is a decision, not a failure. The generic
+	// diagnose-and-retry guidance below is exactly what made the model retry a
+	// variant of a rejected command (observed live: /reject spawned a fresh
+	// approval for a tweaked command). Kernel must not import concrete tools,
+	// so the stable "operation rejected"/"operation cancelled by user" error
+	// strings from tools.SmartApprovalMiddleware are the documented contract.
+	instruction := "\n\nSelfMind diagnostic instruction: this tool failed. Treat the error as evidence, inspect relevant context such as cwd, files, environment, auth state, provider constraints, or command help, and continue with a corrected next step unless this is a confirmed blocker."
+	if isUserRejectionErr(err) {
+		instruction = "\n\nSelfMind instruction: the USER explicitly rejected this operation. This is a decision, not an error. Do NOT retry this operation or any variant of it in this turn. Acknowledge the rejection, state briefly what was not done, and either propose a genuinely different approach for the user to confirm or finish the turn."
+	}
+	modelContent := msg + instruction
 	return ToolResultEnvelope{
 		Raw:          msg,
 		Preview:      textutil.Truncate(msg, toolResultPreviewBytes),
@@ -47,6 +57,19 @@ func packageToolError(name string, err error) ToolResultEnvelope {
 		Truncated:    len(modelContent) > 4000,
 		Bytes:        len(msg),
 	}
+}
+
+// isUserRejectionErr detects an approval rejection/cancellation surfaced from
+// the tools approval middleware. String matching is deliberate: kernel talks
+// to tools only through the abstract backend, so these prefixes (kept stable
+// in tools.SmartApprovalMiddleware) are the cross-package contract.
+func isUserRejectionErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "operation rejected") ||
+		strings.Contains(msg, "operation cancelled by user")
 }
 
 func nonEmpty(value, fallback string) string {

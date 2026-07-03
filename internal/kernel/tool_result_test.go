@@ -1,6 +1,7 @@
 package kernel
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -79,3 +80,27 @@ func TestPackageToolErrorGuidesModelToDiagnose(t *testing.T) {
 type errTest string
 
 func (e errTest) Error() string { return string(e) }
+
+// TestPackageToolErrorUserRejection ensures a user rejection is presented to
+// the model as a decision with a do-not-retry instruction, not as a
+// diagnosable failure — otherwise the model retries a variant of the rejected
+// command and spawns a fresh approval (observed live via /reject on WeChat).
+func TestPackageToolErrorUserRejection(t *testing.T) {
+	rejected := packageToolError("terminal", fmt.Errorf("operation rejected: user said no"))
+	if !strings.Contains(rejected.ModelContent, "Do NOT retry") {
+		t.Fatalf("rejection should carry a do-not-retry instruction, got: %s", rejected.ModelContent)
+	}
+	if strings.Contains(rejected.ModelContent, "corrected next step") {
+		t.Fatalf("rejection must not carry the diagnose-and-retry instruction: %s", rejected.ModelContent)
+	}
+
+	cancelled := packageToolError("terminal", fmt.Errorf("operation cancelled by user"))
+	if !strings.Contains(cancelled.ModelContent, "Do NOT retry") {
+		t.Fatalf("cancellation should carry a do-not-retry instruction, got: %s", cancelled.ModelContent)
+	}
+
+	ordinary := packageToolError("terminal", fmt.Errorf("exit status 1"))
+	if !strings.Contains(ordinary.ModelContent, "corrected next step") {
+		t.Fatalf("ordinary failures keep the diagnostic instruction, got: %s", ordinary.ModelContent)
+	}
+}

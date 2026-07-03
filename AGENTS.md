@@ -245,6 +245,16 @@ Domain docs (**mandatory** before changing that domain):
   errors; never dump raw JSON unless the user asked for protocol details.
   Failure events carry compact diagnostics (`error_category`,
   `diagnostic_hint`, duration, preview, truncation markers).
+- User-facing interaction prompts (approval hints, control-command replies,
+  TUI notices, IM notification text) are English-only — no bilingual strings
+  (owner decision, 2026-07-04). Functional keyword lists that PARSE Chinese
+  user/model text (outcome-section headings, continuation cues) are not UI
+  text and keep their Chinese entries.
+- An approval rejection is a user decision, not a retryable failure. The
+  `operation rejected` / `operation cancelled by user` error strings from
+  `tools.SmartApprovalMiddleware` are a stable contract with kernel's
+  `isUserRejectionErr` (`tool_result.go`), which swaps the diagnose-and-retry
+  instruction for a do-not-retry instruction. Keep both sides in sync.
 - Tool failures are diagnostic evidence, not stop conditions. Diagnose before
   retrying: identify the ecosystem from high-signal files (`go.mod`,
   `package.json`, `pyproject.toml`, `Cargo.toml`, `composer.json`, CI files,

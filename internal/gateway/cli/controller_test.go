@@ -942,7 +942,7 @@ func TestClientModeSteerErrorShowsHonestNotice(t *testing.T) {
 	if !last.IsError {
 		t.Fatalf("expected an error notice, got %+v", last)
 	}
-	if !strings.Contains(last.Content, "守护进程未接受引导") || !strings.Contains(last.Content, "no active run to steer") {
+	if !strings.Contains(last.Content, "did not accept the guidance") || !strings.Contains(last.Content, "no active run to steer") {
 		t.Fatalf("notice must state the daemon refusal reason: %q", last.Content)
 	}
 	if model.statusMsg == "Sent to the running task as guidance." {

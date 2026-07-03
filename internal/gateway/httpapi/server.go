@@ -644,7 +644,7 @@ func (c *RunCoordinator) notifyApprovalRequested(ctx context.Context, identity *
 func approvalNotificationText(approval control.ApprovalRequest, taskTitle string) string {
 	// The copyable id is already on its own line; the hint stays one compact
 	// bilingual sentence instead of repeating the full id again.
-	return fmt.Sprintf("Approval required:\n%s\n%s\n回复 /approve 1 或 /reject 1 (Reply /approve 1 or /reject 1)",
+	return fmt.Sprintf("Approval required:\n%s\n%s\nReply /approve 1 or /reject 1.",
 		approvalSummaryLine(approval, taskTitle), approval.ID)
 }
 

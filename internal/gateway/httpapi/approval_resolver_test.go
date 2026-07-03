@@ -307,7 +307,7 @@ func TestCLIOriginatedApprovalFansOutToBoundIM(t *testing.T) {
 	if msg.Kind != delivery.KindApproval || msg.ApprovalID != approval.ID {
 		t.Fatalf("kind = %q approval = %q", msg.Kind, msg.ApprovalID)
 	}
-	for _, want := range []string{"[terminal]", "rm -rf build", "Deploy service to staging", approval.ID, "回复 /approve 1"} {
+	for _, want := range []string{"[terminal]", "rm -rf build", "Deploy service to staging", approval.ID, "Reply /approve 1"} {
 		if !strings.Contains(msg.Content, want) {
 			t.Fatalf("notification missing %q:\n%s", want, msg.Content)
 		}

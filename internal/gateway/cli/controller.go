@@ -1465,7 +1465,7 @@ func (m *uiModel) injectMidRunGuidance(input string) tea.Cmd {
 	switch {
 	case m.clientMode && m.steerFn != nil:
 		if err := m.steerFn(input); err != nil {
-			m.addErrorMessage(fmt.Sprintf("守护进程未接受引导: %v", err))
+			m.addErrorMessage(fmt.Sprintf("The daemon did not accept the guidance: %v", err))
 			m.statusMsg = "Guidance was not accepted by the daemon."
 		} else {
 			m.statusMsg = "Sent to the running task as guidance."

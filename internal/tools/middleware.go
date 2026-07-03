@@ -200,6 +200,10 @@ func SmartApprovalMiddleware(projectRoot string) Middleware {
 					return "", err
 				}
 				if !decision.Approved {
+					// The "operation rejected" prefix is a stable contract:
+					// kernel's isUserRejectionErr matches it to tell the model
+					// a rejection is a user decision (never retry a variant),
+					// not a diagnosable failure. Keep the wording in sync.
 					if decision.Reason != "" {
 						return "", fmt.Errorf("operation rejected: %s", decision.Reason)
 					}

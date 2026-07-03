@@ -577,8 +577,8 @@ func (m *uiModel) handleCompact() tea.Cmd {
 func (m *uiModel) handlePasteImage() tea.Cmd {
 	path, err := clipboardImageToFile()
 	if err != nil {
-		m.addMessage("assistant", "无法从剪贴板读取图片:"+err.Error()+
-			"\n提示:截图需在本机(含 WSL)运行时才能读剪贴板;通过 SSH 连云端时没有剪贴板——请改为拖入/输入图片文件路径,或用微信发图。")
+		m.addMessage("assistant", "Could not read an image from the clipboard: "+err.Error()+
+			"\nHint: clipboard capture only works when SelfMind runs on the local machine (including WSL); over SSH there is no clipboard — drop in / type an image file path instead, or send the image via WeChat.")
 		return nil
 	}
 	m.attachClipboardImage(path, "/paste-image")
@@ -611,7 +611,7 @@ func (m *uiModel) attachClipboardImage(path, stripPrefix string) {
 	} else {
 		m.editor.SetValue(cur + " " + path + " ")
 	}
-	m.addMessage("assistant", "📎 已从剪贴板附加图片。补充你的问题后回车发送即可。")
+	m.addMessage("assistant", "📎 Image attached from the clipboard. Add your question and press Enter to send.")
 }
 
 // handleCapture saves the last recorded turn as a replayable eval case (the
@@ -625,7 +625,7 @@ func (m *uiModel) handleCapture(args []string) tea.Cmd {
 		return nil
 	}
 	m.addMessage("assistant", fmt.Sprintf(
-		"📌 已保存为回归用例:%s\n  用例:%s\n  cassette:%d 个\n下一步:编辑该文件补 `assert_state`(本该怎样),再 `selfmind selfcheck` 离线回放。",
+		"📌 Saved as a regression case: %s\n  case: %s\n  cassettes: %d\nNext: edit the file to add `assert_state` (what SHOULD have happened), then replay offline with `selfmind selfcheck`.",
 		res.CaseID, res.CasePath, res.Cassettes))
 	return nil
 }

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -94,9 +95,16 @@ func TestProcessMessageReturnsFinalAnswerAndStreamsEvents(t *testing.T) {
 		{ID: "e2", Type: "tool.completed", Payload: mustJSON(map[string]any{"tool": "read_file", "result": "done", "duration_seconds": 0.2})},
 		{ID: "e1", Type: "tool.started", Payload: mustJSON(map[string]any{"tool": "read_file", "args": "main.go"})},
 	}
+	var eventPolls int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/v1/tasks/events":
+			// The first poll is the baseline probe: events that pre-exist the
+			// turn are suppressed, so serve this turn's events only afterwards.
+			if atomic.AddInt32(&eventPolls, 1) == 1 {
+				writeJSONResp(w, map[string]any{"task": map[string]any{"id": "t1"}, "events": []control.Event{}})
+				return
+			}
 			writeJSONResp(w, map[string]any{"task": map[string]any{"id": "t1"}, "events": events})
 		case "/v1/message":
 			// Simulate a turn that takes a beat so the poller has time to fire.

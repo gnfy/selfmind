@@ -47,7 +47,7 @@
 | Telegram adapter | ✅ | Webhook + long poll, signature verify, send. |
 | Personal/Enterprise WeChat (Weixin) adapter | ✅ | iLink protocol (`ilinkai.weixin.qq.com`): poll loop, AES, per-peer context_token, typing, media, group/DM policy, dedup. Built-in QR login (`selfmind weixin login`) — no external bridge needed. This is the primary multi-device WeChat path. |
 | WeChat Official Account adapter | 🟡 | Inbound passive-reply + signature verify (`internal/gateway/wechat`); outbound now supported via the customer-service `custom/send` sender (`internal/gateway/delivery/wechat.go`, registered as platform `wechat`). Still no message encryption/decryption. |
-| Approval lifecycle | 🟡 | DB + API + `/approve` / `/reject` + staged approval modes (`/mode`) done. Approval UX shipped (2026-07-04): all surfaces (control commands, `POST /v1/approvals/respond`, CLI, Telegram buttons) resolve references through one shared resolver (`httpapi/approval_resolver.go`) — list ordinal (`/approve 1`), unique `apr_` prefix, bare `/approve` with a single pending, `task_` ids rejected with a hint; `/approvals` shows tool + bounded args preview + reason + task title; CLI-originated approvals fan out to the person's other bound IM accounts (`notifyApprovalRequested` + `ListAccountsByPerson`); Telegram gets native inline approve/reject buttons (typed `delivery.Message.Kind`, persisted on the outbound row so retries keep buttons) with `callback_query` handled in both the telegram adapter and the generic `/v1/im/*` webhook; `selfmind approve/reject` returns one-line errors, never raw JSON; `selfmind send --mode` threads `approval_mode`. Remaining: the long-poll `internal/gateway/telegram` adapter is still not mounted by the daemon (generic webhook path is), and Weixin stays text-fallback by design. Outbound dispatch is claim-based (`ClaimDelivery`): the immediate attempt and the retry poller are mutually exclusive, fixing the live duplicate approval push. CLI-originated async results now fan out to bound IM endpoints (`deliverAsyncResult` → `fanOutToBoundIM`) so a fire-and-forget terminal run's final answer — including a rejection acknowledgment — is visible on WeChat/Telegram instead of vanishing. Watch item: one live WeChat `/reject 1` got no reply, likely a message lost in a gateway-restart window (iLink getupdates canceled mid-poll); if it reproduces on a stable daemon, audit the poll teardown/ack semantics. |
+| Approval lifecycle | 🟡 | DB + API + `/approve` / `/reject` + staged approval modes (`/mode`) done. Approval UX shipped (2026-07-04): all surfaces (control commands, `POST /v1/approvals/respond`, CLI, Telegram buttons) resolve references through one shared resolver (`httpapi/approval_resolver.go`) — list ordinal (`/approve 1`), unique `apr_` prefix, bare `/approve` with a single pending, `task_` ids rejected with a hint; `/approvals` shows tool + bounded args preview + reason + task title; CLI-originated approvals fan out to the person's other bound IM accounts (`notifyApprovalRequested` + `ListAccountsByPerson`); Telegram gets native inline approve/reject buttons (typed `delivery.Message.Kind`, persisted on the outbound row so retries keep buttons) with `callback_query` handled in both the telegram adapter and the generic `/v1/im/*` webhook; `selfmind approve/reject` returns one-line errors, never raw JSON; `selfmind send --mode` threads `approval_mode`. Remaining: the long-poll `internal/gateway/telegram` adapter is still not mounted by the daemon (generic webhook path is), and Weixin stays text-fallback by design. Outbound dispatch is claim-based (`ClaimDelivery`): the immediate attempt and the retry poller are mutually exclusive, fixing the live duplicate approval push. CLI-originated async results now fan out to bound IM endpoints (`deliverAsyncResult` → `fanOutToBoundIM`) so a fire-and-forget terminal run's final answer — including a rejection acknowledgment — is visible on WeChat/Telegram instead of vanishing. Watch items: (a) one live WeChat `/reject 1` got no reply, likely a message lost in a gateway-restart window (iLink getupdates canceled mid-poll); (b) two result pushes were `sent` (correct target, iLink API accepted) but never arrived on the phone ~4.7h after the user's last inbound message — suspect iLink proactive-push context_token staleness; verify the weixin sender checks the response errcode and consider marking undeliverable pushes failed for retry. |
 | CLI / TUI controller | 🟡 | Components partly extracted; `uiModel` in `controller.go` is still a monolith (violates AGENTS.md guidance). |
 | TUI rendering (terminal-first hybrid) | 🟡 | **Default**: history committed to native terminal scrollback (`tea.Println`), only the active region redrawn (`history_commit.go`); terminal owns scroll/select/copy. `SELFMIND_TUI_LEGACY=1` falls back to the alt-screen viewport. Colored patch diffs (`renderPatchCell`), per-message render cache, `/history` (full diffs), `/copy`. Remaining: delete the legacy path + escape hatch once settled; write_file overwrite real diff; `/history` search + `control.db` backing. See `docs/tui-terminal-first-hybrid.md`. |
 | Run execution coordinator | 🟡 | `RunCoordinator` (`httpapi/run_coordinator.go`) owns the run lifecycle (`runMessage`/`startAsyncRun`), the active-run registry, and all pre/post-run helpers (workspace/task resolution, execution scope, approval handler, context assembly, stream aggregation, outcome persistence). Server is now the HTTP/orchestration layer. Worker pool shipped behind `SELFMIND_WORKERS` (see Multi-terminal concurrency row). Async-run task visibility fixed (2026-07-04): every run (sync and async) now syncs the person's `current_task` pointer to the task it resolved (`syncCurrentTask`, same `SetCurrentTask` mechanism as `/new`/`/resume`), and `/status` prefers the active run's task over the pointer (`Server.statusReply`); regression tests in `httpapi/task_visibility_test.go`. Stuck-run recovery shipped (2026-07-04): **invariant — after any finalization or recovery sweep, no task may remain `running` with zero live runs** (`running` means "a run is executing right now"; between-turns tasks park as `in_progress`). Enforced by: `Store.FinishRun` coercing non-terminal run statuses to `done`; `Store.MarkInterruptedRuns` flipping heartbeat-stale runs *and* repairing orphaned `running` tasks; a boot sweep (threshold 0 — the `gateway.lock` flock guarantees leftover running runs are dead) plus a 60s in-daemon sweep (12× the 10s run heartbeat) that always excludes the active-run registry (`httpapi/run_recovery.go`). Recovered `interrupted`/`in_progress` tasks stay non-terminal and resumable via `继续`/`/resume`. Tests: `control/runtime_test.go`, `httpapi/run_recovery_test.go`. |
@@ -70,16 +70,24 @@ These are the live gaps, ordered by their distance from the north star
 (`docs/identity-continuity.md` — the three continuity scenarios). This section
 is the only priority list in the repo; other docs must point here.
 
-1. **P0 — Continuity path polish.** Surface identity: `GET /v1/accounts` +
+1. **P0 — Task-attach semantics for parked tasks.** `resolveTask` attaches any
+   ordinary message to the channel's current task when it is non-terminal.
+   Since rejection/interruption now park tasks as `in_progress`/`blocked`
+   (non-terminal by design), a brand-new imperative request (observed live:
+   "新建 hello7.sh" landing on the parked hello6 task) inherits the old task's
+   title, status, and push prefix. Decide the rule — e.g. attach only on
+   continuation cues / same-topic heuristics, otherwise create a new task —
+   and cover it with an eval case.
+2. **P0 — Continuity path polish.** Surface identity: `GET /v1/accounts` +
    `selfmind accounts`, and make "bind a new endpoint → inherit tasks and
    memory" a visible moment.
-2. **P1 — Finish daemon-client convergence, then delete the duplicates.**
+3. **P1 — Finish daemon-client convergence, then delete the duplicates.**
    Remaining parity gap: session search over the daemon. Once closed, remove
    the in-process TUI path (`SELFMIND_TUI_INPROC`), the legacy alt-screen TUI
    (`SELFMIND_TUI_LEGACY`, viewport, `controller_mouse.go`, `renderCache`), and
    decompose `uiModel` per the AGENTS.md guardrail — one simplification pass.
    Then a real N>1 soak (`SELFMIND_WORKERS`).
-3. **P1 — Stranger-isolation hardening (scenario 3).** Highest item: the
+4. **P1 — Stranger-isolation hardening (scenario 3).** Highest item: the
    Weixin owner auto-bind hazard — with `gateway.weixin.owner_person_id` set,
    EVERY sender passing the DM policy is bound to the owner person
    (`weixin/adapter.go` inbound path), and the default `dm_policy: open` +
@@ -89,10 +97,10 @@ is the only priority list in the repo; other docs must point here.
    login. Also: QQ webhook ed25519 signature verification (inbound is
    currently unverified), Feishu encrypt-envelope AES decryption, WeChat OA
    safe-mode crypto.
-4. **P2 — Real `execute_code` sandbox** (namespace/seccomp/cgroup or container).
+5. **P2 — Real `execute_code` sandbox** (namespace/seccomp/cgroup or container).
    Prerequisite for any multi-person sharing; not needed for the single-person
    scenarios.
-5. **P2 — MCP `sampling/createMessage`**, IM voice STT/TTS, remaining adapter
+6. **P2 — MCP `sampling/createMessage`**, IM voice STT/TTS, remaining adapter
    polish — only as scenario needs dictate.
 
 Resolved from this list: **Approval UX** (was item 1, resolved 2026-07-04) —

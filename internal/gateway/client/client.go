@@ -168,8 +168,14 @@ func (c *Client) pollEvents(ctx context.Context, req api.MessageRequest, observe
 	seen := map[string]bool{}
 	ticker := time.NewTicker(350 * time.Millisecond)
 	defer ticker.Stop()
-	// Probe once immediately so very fast turns still surface some progress.
-	c.drainEventsOnce(ctx, req, seen, observer)
+	// Baseline probe: mark every pre-existing event of the current task as
+	// seen WITHOUT forwarding it. The person's current task can be an older
+	// parked task, and replaying its history renders yesterday's
+	// approval.requested as a live y/N prompt (observed live: a ghost chmod
+	// approval from a previous session). Only events recorded after this
+	// turn started may reach the observer; this turn's own events appear on
+	// later ticks.
+	c.drainEventsOnce(ctx, req, seen, nil)
 	for {
 		select {
 		case <-ctx.Done():
@@ -210,12 +216,16 @@ func (c *Client) drainEventsOnce(ctx context.Context, req api.MessageRequest, se
 		return
 	}
 	// ListTaskEvents returns newest-first; replay oldest-first for natural order.
+	// A nil observer marks events seen without forwarding (baseline probe).
 	for i := len(payload.Events) - 1; i >= 0; i-- {
 		ev := payload.Events[i]
 		if ev.ID == "" || seen[ev.ID] {
 			continue
 		}
 		seen[ev.ID] = true
+		if observer == nil {
+			continue
+		}
 		if se, ok := eventToStream(ev); ok {
 			observer(se)
 		}

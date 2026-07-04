@@ -632,3 +632,39 @@ func TestPersonSettingsRoundTrip(t *testing.T) {
 		t.Fatalf("cross-person leak: %q", value)
 	}
 }
+
+// TestCreateTaskStartsNonRunning pins the fix for the live phantom-running
+// bug: a freshly created task (e.g. via /new) must NOT be 'running' — nothing
+// is executing, and 'running' made the stuck-run sweeper flip it to
+// 'interrupted'. A real run sets 'running' via StartRun.
+func TestCreateTaskStartsNonRunning(t *testing.T) {
+	ctx := context.Background()
+	store, err := OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	id, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "U")
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := store.CreateTask(ctx, TaskCreate{TenantID: id.TenantID, PersonID: id.PersonID, Title: "fresh", Channel: "cli"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if task.Status == "running" {
+		t.Fatalf("a freshly created task must not be 'running' (nothing executes yet); got %q", task.Status)
+	}
+	switch task.Status {
+	case "done", "completed", "cancelled", "failed":
+		t.Fatalf("a freshly created task must be non-terminal (resumable); got %q", task.Status)
+	}
+	// A boot/periodic sweep must NOT touch it (only status='running' rows).
+	if n, err := store.MarkInterruptedRuns(ctx, 0); err != nil || n != 0 {
+		t.Fatalf("sweep should ignore a new task: n=%d err=%v", n, err)
+	}
+	got, _ := store.GetTask(ctx, id.TenantID, task.ID)
+	if got == nil || got.Status == "interrupted" {
+		t.Fatalf("new task must not become interrupted; got %+v", got)
+	}
+}

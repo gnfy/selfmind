@@ -805,9 +805,15 @@ func (s *Store) CreateTask(ctx context.Context, req TaskCreate) (*Task, error) {
 	}
 	now := time.Now().Unix()
 	id := "task_" + uuid.NewString()
+	// A freshly created task is NOT running — a run sets status='running' with
+	// an active_run_id via StartRun. Hardcoding 'running' here made /new-created
+	// (and any not-yet-run) tasks look running with no run behind them, so the
+	// stuck-run sweeper then flipped them to 'interrupted' (observed live: a
+	// brand-new empty task showing [interrupted]). Start as 'new' — non-terminal
+	// (resolveContinueTask still offers it, the sweeper ignores it) and honest.
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO tasks (id, tenant_id, person_id, workspace_id, title, status, last_channel, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, 'running', ?, ?, ?)`,
+		 VALUES (?, ?, ?, ?, ?, 'new', ?, ?, ?)`,
 		id, req.TenantID, req.PersonID, req.WorkspaceID, req.Title, req.Channel, now, now)
 	if err != nil {
 		return nil, err

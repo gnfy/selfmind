@@ -1294,6 +1294,44 @@ func TestCtrlArrowKeysScrollTranscriptAndKeepInputHistory(t *testing.T) {
 	}
 }
 
+// TestTUIGatewayControlCommandsRouteToDaemon proves the cross-endpoint fix: the
+// TUI previously OMITTED gateway control commands (/approve, /reject, /stop,
+// /id, /new, /resume, /workspace(s), /events, /notify), so typing /approve fell
+// through to the skill/unknown path and never reached the approve lifecycle.
+// They must now relay to the daemon through the message processor with the exact
+// command text.
+func TestTUIGatewayControlCommandsRouteToDaemon(t *testing.T) {
+	for _, tc := range []struct {
+		input string
+		want  string
+	}{
+		{"/approve 1", "/approve 1"},
+		{"/reject 2", "/reject 2"},
+		{"/stop", "/stop"},
+		{"/approvals", "/approvals"},
+		{"/events", "/events"},
+		{"/notify auto", "/notify auto"},
+		{"/resume tsk_1", "/resume tsk_1"},
+		{"/workspace ws_1", "/workspace ws_1"},
+		{"/workspaces", "/workspaces"},
+	} {
+		model := NewController(nil, nil, nil, "").model
+		var got string
+		model.messageProcessor = func(ctx context.Context, req api.MessageRequest) (api.MessageResponse, int) {
+			got = req.Content
+			return api.MessageResponse{Content: "ok"}, 200
+		}
+		cmd := model.handleCommand(tc.input)
+		if cmd == nil {
+			t.Fatalf("%q: expected a command (control commands must be routed, not dropped)", tc.input)
+		}
+		_ = cmd() // execute the relay
+		if got != tc.want {
+			t.Fatalf("%q routed %q to the gateway, want %q", tc.input, got, tc.want)
+		}
+	}
+}
+
 func scrollableTranscriptModel() *uiModel {
 	model := NewController(nil, nil, nil, "").model
 	model.width = 80

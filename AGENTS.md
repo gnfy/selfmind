@@ -330,9 +330,20 @@ Domain docs (**mandatory** before changing that domain):
 - New transient pages (help, detail, status, task, model, search) use
   `internal/ui/components/Pager` or another reusable surface — no one-off
   viewport logic in the controller.
-- Slash command metadata lives in the shared registry
-  (`internal/gateway/cli/slash_commands.go`) used by dispatch, `/help`, and
-  editor hints; never duplicate name/description/usage across files.
+- Control-command metadata is CROSS-ENDPOINT: the canonical catalog is the
+  leaf package `internal/gateway/command` (name, aliases, summary/usage,
+  `Scope` Gateway|Local, `SyncControl` async-hint). Gateway (`httpapi` `/help`,
+  `suggestControlCommand`/reject gate), IM adapters (`weixin`,
+  `handlers_channels` async-hint via `command.IsGatewayControl`), and the TUI
+  all READ it — never re-hand-list command names, help text, the async-hint, or
+  the near-miss decision. Execution stays where it is: the gateway
+  `tryHandleControlCommand` switch is authoritative and must keep a registry
+  entry per case (drift-guarded by `command.TestKnownMatchesGatewayContract` +
+  httpapi `TestEveryRegistryGatewayCommandIsHandledBySwitch`). Approval-mode
+  words come from `tools.IsKnownApprovalModeWord` /
+  `tools.CanonicalApprovalModes`, not per-endpoint lists. TUI-only
+  (`Scope: Local`) commands stay wired in `internal/gateway/cli/slash_commands.go`
+  but are never gateway-routable.
 - Rendering and file-size guardrails: `docs/architecture-constraints.md`
   (mandatory) and `docs/tui-terminal-first-hybrid.md`.
 

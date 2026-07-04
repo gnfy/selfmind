@@ -13,6 +13,7 @@ import (
 
 	"selfmind/internal/control"
 	"selfmind/internal/gateway/api"
+	"selfmind/internal/gateway/command"
 	"selfmind/internal/gateway/delivery"
 	"selfmind/internal/gateway/router"
 	"selfmind/internal/kernel"
@@ -1040,25 +1041,9 @@ func (d *Server) tryHandleControlCommand(ctx context.Context, identity *control.
 	}
 	switch {
 	case lower == "/help":
-		return true, strings.TrimSpace(`SelfMind commands:
-/help                 Show this help.
-/model                Show the configured model.
-/id                   Show your resolved account identity.
-/status               Show the current task status.
-/tasks                List recent tasks.
-/queue [clear]        List queued tasks (or drop all pending queued tasks).
-/diag                 Show a compact runtime diagnostic snapshot.
-/events               List recent events for the current task.
-/approvals            List pending approvals.
-/approve <n|id|all> [task|always]   Approve a pending action; add task/always to remember its class.
-/reject <n|id|all>    Reject a pending action (or all of them).
-/mode [mode]          Show or set your approval mode (on-request|read-only|auto-edit|full-auto|smart).
-/stop                 Cancel the active run.
-/notify <platform|auto> Choose where CLI-origin notifications go when the CLI is detached.
-/new [title]          Create a new task.
-/resume <task_id>     Resume a task.
-/workspace <id>       Select a workspace.
-/workspaces           List workspaces.`), nil
+		// Canonical gateway help comes from the shared command registry so the
+		// help text, the switch below, and every other endpoint cannot drift.
+		return true, command.HelpText(), nil
 	case lower == "/model":
 		if d != nil && d.Gateway != nil {
 			return true, d.Gateway.ModelStatusReply(), nil
@@ -1287,7 +1272,7 @@ func (d *Server) approvalModeReply(ctx context.Context, identity *control.Identi
 	}
 	// Reject unknown words instead of silently defaulting: a typo'd mode should
 	// not quietly leave the person on on-request thinking they set full-auto.
-	if tools.NormalizeApprovalMode(arg) == tools.ApprovalOnRequest && !isKnownApprovalModeWord(arg) {
+	if tools.NormalizeApprovalMode(arg) == tools.ApprovalOnRequest && !tools.IsKnownApprovalModeWord(arg) {
 		return "Unknown mode " + arg + ".\n" + usage, nil
 	}
 	mode := string(tools.NormalizeApprovalMode(arg))
@@ -1301,76 +1286,11 @@ func (d *Server) approvalModeReply(ctx context.Context, identity *control.Identi
 	return reply, nil
 }
 
-// isKnownApprovalModeWord reports whether s is one of the accepted mode words,
-// so /mode can reject typos rather than default them to on-request.
-func isKnownApprovalModeWord(s string) bool {
-	switch strings.ToLower(strings.TrimSpace(s)) {
-	case "on-request", "onrequest", "request",
-		"read-only", "readonly", "read",
-		"auto-edit", "autoedit", "auto", "edit",
-		"full-auto", "fullauto", "full", "yolo",
-		"smart":
-		return true
-	default:
-		return false
-	}
-}
-
 // suggestControlCommand returns the closest control command when the first
-// token is a near-miss (edit distance ≤ 2, same first letter), else "".
+// token is a near-miss, delegating to the shared registry so the gateway and
+// the TUI make the SAME unknown-command decision.
 func suggestControlCommand(lower string) string {
-	fields := strings.Fields(lower)
-	if len(fields) == 0 {
-		return ""
-	}
-	token := fields[0]
-	known := []string{"/help", "/model", "/id", "/status", "/tasks", "/queue", "/diag", "/events",
-		"/approvals", "/approve", "/reject", "/mode", "/stop", "/notify", "/new",
-		"/resume", "/workspace", "/workspaces"}
-	best, bestDist := "", 3
-	for _, cmd := range known {
-		if token == cmd {
-			return "" // exact commands are handled above; not a typo
-		}
-		if len(token) < 3 || token[1] != cmd[1] {
-			continue
-		}
-		if d := editDistance(token, cmd); d < bestDist {
-			best, bestDist = cmd, d
-		}
-	}
-	return best
-}
-
-func editDistance(a, b string) int {
-	la, lb := len(a), len(b)
-	prev := make([]int, lb+1)
-	cur := make([]int, lb+1)
-	for j := 0; j <= lb; j++ {
-		prev[j] = j
-	}
-	for i := 1; i <= la; i++ {
-		cur[0] = i
-		for j := 1; j <= lb; j++ {
-			cost := 1
-			if a[i-1] == b[j-1] {
-				cost = 0
-			}
-			cur[j] = min3(cur[j-1]+1, prev[j]+1, prev[j-1]+cost)
-		}
-		prev, cur = cur, prev
-	}
-	return prev[lb]
-}
-
-func min3(a, b, c int) int {
-	if b < a {
-		a = b
-	}
-	if c < a {
-		a = c
-	}
-	return a
+	return command.Suggest(lower)
 }
 
 // statusReply builds the /status card shared by every channel's control-command

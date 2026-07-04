@@ -12,6 +12,7 @@ import (
 
 	"selfmind/internal/control"
 	"selfmind/internal/gateway/api"
+	"selfmind/internal/gateway/command"
 	"selfmind/internal/gateway/delivery"
 	"selfmind/internal/gateway/router"
 	"selfmind/internal/platform/log"
@@ -429,38 +430,12 @@ func summarizeAttachments(attachments []api.MessageAttachment) string {
 	return b.String()
 }
 
+// isControlCommand is the Weixin async-hint: a gateway control command must be
+// handled synchronously (the switch returns an inline reply) rather than
+// dispatched as an async task with a working notice. It delegates to the shared
+// registry so it can never again omit a gateway command.
 func isControlCommand(content string) bool {
-	lower := strings.ToLower(strings.TrimSpace(content))
-	if lower == "" {
-		return false
-	}
-	commands := []string{
-		"/id", "id",
-		"/stop", "stop",
-		"/tasks", "tasks",
-		"/workspaces", "workspaces",
-		"/events", "events",
-		"/approvals", "approvals",
-		"/status", "status",
-		"/task", "task ",
-		"/workspace", "workspace ",
-		"/new", "new ",
-		"/resume", "resume ",
-		"/approve ", "approve ",
-		"/reject ", "reject ",
-	}
-	for _, cmd := range commands {
-		if strings.HasSuffix(cmd, " ") {
-			if strings.HasPrefix(lower, cmd) {
-				return true
-			}
-			continue
-		}
-		if lower == cmd {
-			return true
-		}
-	}
-	return false
+	return command.IsGatewayControl(content)
 }
 
 func interfaceSlice(value interface{}) []interface{} {

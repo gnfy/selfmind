@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"selfmind/internal/gateway/api"
+	"selfmind/internal/gateway/command"
 	"selfmind/internal/platform/log"
 )
 
@@ -386,35 +387,13 @@ func boolFromMap(payload map[string]interface{}, key string) bool {
 	}
 }
 
+// isControlCommand is the IM async-hint: a message whose first token is a
+// gateway control command must be handled synchronously, not dispatched as an
+// async task. It delegates to the shared registry (command.IsGatewayControl) so
+// the async-hint can never again omit a gateway command (it now covers
+// /queue /diag /mode /notify /help /model, which the old hand list dropped).
 func isControlCommand(content string) bool {
-	lower := strings.ToLower(strings.TrimSpace(content))
-	if lower == "" {
-		return false
-	}
-	switch {
-	case lower == "/id" || lower == "id":
-		return true
-	case lower == "/stop" || lower == "stop":
-		return true
-	case lower == "/tasks" || lower == "tasks":
-		return true
-	case lower == "/workspaces" || lower == "workspaces":
-		return true
-	case lower == "/events" || lower == "events":
-		return true
-	case lower == "/approvals" || lower == "approvals":
-		return true
-	case lower == "/status" || lower == "status" || lower == "/task status" || lower == "task status":
-		return true
-	case strings.HasPrefix(lower, "/new"):
-		return true
-	case strings.HasPrefix(lower, "/resume ") || strings.HasPrefix(lower, "/task ") || strings.HasPrefix(lower, "/workspace "):
-		return true
-	case strings.HasPrefix(lower, "/approve ") || strings.HasPrefix(lower, "approve ") || strings.HasPrefix(lower, "/reject ") || strings.HasPrefix(lower, "reject "):
-		return true
-	default:
-		return false
-	}
+	return command.IsGatewayControl(content)
 }
 
 func firstNonEmpty(values ...string) string {

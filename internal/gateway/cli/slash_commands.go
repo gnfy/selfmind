@@ -41,6 +41,31 @@ var slashCommandMetas = []slashCommandMeta{
 	{Name: "/copy", Usage: "/copy", Description: "Copy the last assistant response to the clipboard", Hint: "copy the last response"},
 	{Name: "/queue", Usage: "/queue [clear]", Description: "List queued tasks, or drop all pending queued tasks", Hint: "view or clear queued work"},
 	{Name: "/diag", Usage: "/diag", Description: "Show a compact runtime diagnostic snapshot", Hint: "active run, queue, approvals, last error"},
+	// Gateway control commands the TUI relays to the daemon. Previously the TUI
+	// OMITTED these, so typing /approve fell through to the skill/unknown path
+	// and never reached the approve lifecycle. They now route through the shared
+	// control passthrough (see gatewayPassthroughCommands) so /approve means the
+	// same thing on every surface.
+	{Name: "/approvals", Usage: "/approvals", Description: "List pending approvals", Hint: "list pending approvals"},
+	{Name: "/approve", Usage: "/approve <n|id|all> [task|always]", Description: "Approve a pending action", Hint: "approve a pending action"},
+	{Name: "/reject", Usage: "/reject <n|id|all>", Description: "Reject a pending action (or all of them)", Hint: "reject a pending action"},
+	{Name: "/stop", Usage: "/stop", Description: "Cancel the active run", Hint: "cancel the active run"},
+	{Name: "/id", Usage: "/id", Description: "Show your resolved account identity", Hint: "show your account identity"},
+	{Name: "/new", Usage: "/new [title]", Description: "Create a new task", Hint: "create a new task"},
+	{Name: "/resume", Usage: "/resume <task_id>", Description: "Resume a task", Hint: "resume a task by id"},
+	{Name: "/workspace", Usage: "/workspace <id>", Description: "Select a workspace", Hint: "select a workspace"},
+	{Name: "/workspaces", Usage: "/workspaces", Description: "List workspaces", Hint: "list your workspaces"},
+	{Name: "/events", Usage: "/events", Description: "List recent events for the current task", Hint: "recent task events"},
+	{Name: "/notify", Usage: "/notify <platform|auto>", Description: "Choose where detached CLI notifications go", Hint: "set notify preference"},
+}
+
+// gatewayPassthroughCommands are the Gateway-scope control commands whose TUI
+// wiring is a pure relay to the daemon (no local rendering). Kept as a list so
+// the cross-endpoint drift-guard test can assert the TUI exposes every gateway
+// command.
+var gatewayPassthroughCommands = []string{
+	"/approvals", "/approve", "/reject", "/stop", "/id", "/new",
+	"/resume", "/workspace", "/workspaces", "/events", "/notify",
 }
 
 var slashCommands = []slashCommand{
@@ -188,9 +213,36 @@ var slashCommands = []slashCommand{
 	},
 }
 
+// metaByName finds a declared slashCommandMeta by command name.
+func metaByName(name string) slashCommandMeta {
+	for _, meta := range slashCommandMetas {
+		if meta.Name == name {
+			return meta
+		}
+	}
+	return slashCommandMeta{Name: name}
+}
+
+// allSlashCommands is the full command table: the hand-wired commands above
+// plus the gateway control commands that relay to the daemon.
+var allSlashCommands = func() []slashCommand {
+	out := make([]slashCommand, 0, len(slashCommands)+len(gatewayPassthroughCommands))
+	out = append(out, slashCommands...)
+	for _, name := range gatewayPassthroughCommands {
+		name := name
+		out = append(out, slashCommand{
+			slashCommandMeta: metaByName(name),
+			Run: func(m *uiModel, args []string) tea.Cmd {
+				return m.handleControlPassthrough(name, args)
+			},
+		})
+	}
+	return out
+}()
+
 var slashCommandIndex = func() map[string]slashCommand {
-	out := make(map[string]slashCommand, len(slashCommands))
-	for _, cmd := range slashCommands {
+	out := make(map[string]slashCommand, len(allSlashCommands))
+	for _, cmd := range allSlashCommands {
 		out[cmd.Name] = cmd
 	}
 	return out

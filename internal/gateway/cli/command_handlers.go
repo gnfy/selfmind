@@ -10,6 +10,7 @@ import (
 	"selfmind/internal/app"
 	selfeval "selfmind/internal/eval"
 	"selfmind/internal/gateway/api"
+	"selfmind/internal/gateway/command"
 	"selfmind/internal/kernel"
 	"selfmind/internal/kernel/memory"
 	"selfmind/internal/tools"
@@ -93,6 +94,13 @@ func (m *uiModel) handleSkillSlash(rawInput, slashName, instruction string) tea.
 		return nil
 	}
 	if !ok {
+		// Unify the unknown-command decision with the gateway: if the token is a
+		// near-miss for a control command, suggest it (same edit-distance logic
+		// via the shared registry) before falling back to the generic hint.
+		if suggestion := command.Suggest(slashName); suggestion != "" {
+			m.addMessage("assistant", fmt.Sprintf("Unknown command %s — did you mean %s? Use /help for the full list.", slashName, suggestion))
+			return nil
+		}
 		m.addMessage("assistant", fmt.Sprintf("Unknown command: %s. Use /help, /skills list, or /bundles list.", slashName))
 		return nil
 	}

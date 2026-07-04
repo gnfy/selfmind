@@ -13,6 +13,7 @@ import (
 
 	"selfmind/internal/gateway/api"
 	"selfmind/internal/platform/config"
+	"selfmind/internal/tools"
 )
 
 func (a *App) runGatewayClientIfRequested() (bool, int) {
@@ -125,15 +126,19 @@ type sendOptions struct {
 	approvalMode string
 }
 
-// isValidApprovalMode gates the CLI flag to the documented approval modes so a
-// typo fails fast instead of silently degrading to the default policy.
+// isValidApprovalMode gates the CLI --mode flag to the canonical approval
+// modes so a typo fails fast instead of silently degrading to the default
+// policy. The flag is intentionally stricter than the /mode command (it rejects
+// aliases like "yolo"), so it checks the canonical set from internal/tools —
+// the single source — rather than keeping its own copy.
 func isValidApprovalMode(mode string) bool {
-	switch strings.ToLower(strings.TrimSpace(mode)) {
-	case "on-request", "read-only", "auto-edit", "full-auto", "smart":
-		return true
-	default:
-		return false
+	m := strings.ToLower(strings.TrimSpace(mode))
+	for _, canonical := range tools.CanonicalApprovalModes() {
+		if m == canonical {
+			return true
+		}
 	}
+	return false
 }
 
 func (a *App) sendGatewayMessage(content string) int {

@@ -135,6 +135,21 @@ type HandleResponse struct {
 	IntentReason string
 }
 
+// Handle classifies intent and runs the agent/skill/query path. It has NO
+// control-command detection: fed "/status" it would create a task, not answer
+// the status card. That is safe ONLY because the single live caller — the
+// in-process TUI via HandleWithEvents — intercepts every slash/control command
+// before reaching here (see internal/gateway/cli handleCommand).
+//
+// DEAD (2026-07-05): the IM adapters that route raw inbound text straight into
+// Handle — internal/gateway/telegram, internal/gateway/wechat, and
+// internal/platform/wechat via internal/gateway/channel.Bridge — are UNMOUNTED
+// (no non-test importer; GatewayDeps.Bridge is created but never consumed). The
+// live inbound funnel is httpapi ProcessMessage → tryHandleControlCommand, which
+// owns control detection. Do NOT wire Handle to a raw inbound endpoint without
+// first routing through that funnel, or control commands become tasks. Removing
+// the dead adapters is a separate cleanup (touches app.GatewayDeps wiring); see
+// docs/STATUS.md item 11.
 func (g *Gateway) Handle(ctx context.Context, unifiedUID, channel, input string) (*HandleResponse, error) {
 	result := g.ClassifyIntent(input)
 	intent, reason := result.Intent, result.Reason

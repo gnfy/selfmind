@@ -152,6 +152,37 @@ func NormalizeApprovalMode(s string) ApprovalMode {
 	}
 }
 
+// IsKnownApprovalModeWord reports whether s is one of the accepted mode words
+// (including the aliases NormalizeApprovalMode understands). It is the single
+// authoritative word list shared by every /mode entry point, so a typo is
+// rejected instead of silently defaulting to on-request — NormalizeApprovalMode
+// alone cannot tell "on-request" from garbage since both map to ApprovalOnRequest.
+func IsKnownApprovalModeWord(s string) bool {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "on-request", "onrequest", "request",
+		"read-only", "readonly", "read",
+		"auto-edit", "autoedit", "auto", "edit",
+		"full-auto", "fullauto", "full", "yolo",
+		"smart":
+		return true
+	default:
+		return false
+	}
+}
+
+// CanonicalApprovalModes returns the canonical mode strings only (no aliases),
+// the single source for the CLI --mode flag, which is intentionally stricter
+// than the /mode command and rejects aliases like "yolo".
+func CanonicalApprovalModes() []string {
+	return []string{
+		string(ApprovalOnRequest),
+		string(ApprovalReadOnly),
+		string(ApprovalAutoEdit),
+		string(ApprovalFullAuto),
+		string(ApprovalSmart),
+	}
+}
+
 var writeTools = map[string]struct{}{
 	"write_file": {}, "patch": {}, "edit": {}, "apply_patch": {}, "edit_file": {},
 }

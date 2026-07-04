@@ -254,6 +254,15 @@ func (s *Store) MarkInterruptedRuns(ctx context.Context, olderThan time.Duration
 	} else if expired > 0 {
 		log.Warn("expired orphaned pending approvals", "count", expired)
 	}
+	// Clarify hygiene rides the same sweep for the same reason: a pending
+	// question whose run died would keep intercepting the next free-text
+	// message as an "answer" to a question nobody is waiting on. Best-effort;
+	// the waiter's own timeout path (gatewayClarify) is the primary cleanup.
+	if expired, err := s.ExpireOrphanedClarifies(ctx); err != nil {
+		log.Warn("failed to expire orphaned clarifies", "error", err)
+	} else if expired > 0 {
+		log.Warn("expired orphaned pending clarifies", "count", expired)
+	}
 	return len(runs) + len(orphans), nil
 }
 

@@ -38,6 +38,11 @@ type Message struct {
 // KindApproval marks an approval-request notification.
 const KindApproval = "approval"
 
+// KindClarify marks a pending-question notification. Unlike an approval it has
+// no native yes/no keyboard — the answer is free text, so senders render it as
+// plain text and the person's next non-command reply resolves it.
+const KindClarify = "clarify"
+
 type Sender interface {
 	Send(ctx context.Context, msg Message) error
 }

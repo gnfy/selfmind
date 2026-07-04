@@ -54,6 +54,17 @@ func (d *Server) diagReply(ctx context.Context, identity *control.IdentityContex
 		fmt.Fprintf(&sb, "- %s (%s)\n", approvalSummaryLine(approval, titles[approval.TaskID]), approval.ID)
 	}
 
+	// Pending questions: a run blocked on a clarify is just as "stuck" as one
+	// blocked on an approval, so it belongs in the same snapshot.
+	clarifies, err := d.Control.ListClarifyRequests(ctx, identity.TenantID, identity.PersonID, "pending", 20)
+	if err != nil {
+		return "", err
+	}
+	fmt.Fprintf(&sb, "Pending questions: %d\n", len(clarifies))
+	for _, clarify := range clarifies {
+		fmt.Fprintf(&sb, "- %s (%s)\n", clarifySummaryLine(clarify), clarify.ID)
+	}
+
 	// Last run error across the person's recent runs.
 	if runs, err := d.Control.ListRecentRunsForPerson(ctx, identity.TenantID, identity.PersonID, 10); err == nil {
 		for _, r := range runs {

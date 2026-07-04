@@ -48,6 +48,7 @@
 | Personal/Enterprise WeChat (Weixin) adapter | ✅ | iLink protocol (`ilinkai.weixin.qq.com`): poll loop, AES, per-peer context_token, typing, media, group/DM policy, dedup. Built-in QR login (`selfmind weixin login`) — no external bridge needed. This is the primary multi-device WeChat path. |
 | WeChat Official Account adapter | 🟡 | Inbound passive-reply + signature verify (`internal/gateway/wechat`); outbound now supported via the customer-service `custom/send` sender (`internal/gateway/delivery/wechat.go`, registered as platform `wechat`). Still no message encryption/decryption. |
 | Approval lifecycle | 🟡 | DB + API + `/approve` / `/reject` + staged approval modes (`/mode`) done. Approval UX shipped (2026-07-04): all surfaces (control commands, `POST /v1/approvals/respond`, CLI, Telegram buttons) resolve references through one shared resolver (`httpapi/approval_resolver.go`) — list ordinal (`/approve 1`), unique `apr_` prefix, bare `/approve` with a single pending, `task_` ids rejected with a hint; `/approvals` shows tool + bounded args preview + reason + task title; CLI-originated approvals fan out to the person's other bound IM accounts (`notifyApprovalRequested` + `ListAccountsByPerson`); Telegram gets native inline approve/reject buttons (typed `delivery.Message.Kind`, persisted on the outbound row so retries keep buttons) with `callback_query` handled in both the telegram adapter and the generic `/v1/im/*` webhook; `selfmind approve/reject` returns one-line errors, never raw JSON; `selfmind send --mode` threads `approval_mode`. Remaining: the long-poll `internal/gateway/telegram` adapter is still not mounted by the daemon (generic webhook path is), and Weixin stays text-fallback by design. Outbound dispatch is claim-based (`ClaimDelivery`): the immediate attempt and the retry poller are mutually exclusive, fixing the live duplicate approval push. IM approvals are conversational and task-free (owner request 2026-07-04): the push is `Approval needed — reply y or n:` + the command/reason only (no task label, no apr_ id, no ordinal); a bare `y`/`n` (or 好/可以/不行) answers the single pending approval, degrading to a numbered `/approve <n>` list only when multiple runs have approvals pending in parallel. The task concept stays in the control plane, out of the IM UX. CLI-originated async results now fan out to bound IM endpoints (`deliverAsyncResult` → `fanOutToBoundIM`) so a fire-and-forget terminal run's final answer — including a rejection acknowledgment — is visible on WeChat/Telegram instead of vanishing. Watch items: (a) one live WeChat `/reject 1` got no reply, likely a message lost in a gateway-restart window (iLink getupdates canceled mid-poll); (b) two result pushes were `sent` (correct target, iLink API accepted) but never arrived on the phone ~4.7h after the user's last inbound message — suspect iLink proactive-push context_token staleness; verify the weixin sender checks the response errcode and consider marking undeliverable pushes failed for retry. |
+| Clarify lifecycle (G3) | ✅ | A mid-run agent question is a first-class DB-backed pending question modeled exactly on the approval waiter (2026-07-04). `gatewayClarify` (formerly a stub) creates a `clarify_requests` row (`internal/control/clarifies.go`: `Create`/`Get`/`List`/`Answer`/`Expire`/`ExpireOrphanedClarifies`), appends the `clarify.requested` event, pushes a presence-aware, single-preferred-endpoint notification through the shared `RunCoordinator.routePendingNotification` (same routing as approvals; `notifyClarifyRequested` + `delivery.KindClarify`, body `Question — reply with your answer:`), then blocks polling the row for up to 30 min. An answer recorded from ANY endpoint (`Store.AnswerClarifyRequest`) returns verbatim as the tool result; timeout/expiry returns a best-judgment fallback sentinel so the run never hangs. Inbound: a plain non-slash reply while a question is pending IS the answer (`tryHandleClarifyAnswer`, in `tryHandleControlCommand` above new-task/queue logic and below the bare y/n approval leg). Orphan hygiene rides `MarkInterruptedRuns` next to the approval sweep. Surfaced in `/status`, `/diag`, and the attach digest (`api.DigestClarify`). A question survives the CLI closing exactly like an approval (docs/identity-continuity.md "Runtime attachment model"). Tests: `control/clarifies_test.go`, `httpapi/clarify_inbound_test.go`. |
 | CLI / TUI controller | 🟡 | Components partly extracted; `uiModel` in `controller.go` is still a monolith (violates AGENTS.md guidance). |
 | TUI rendering (terminal-first hybrid) | 🟡 | **Default**: history committed to native terminal scrollback (`tea.Println`), only the active region redrawn (`history_commit.go`); terminal owns scroll/select/copy. `SELFMIND_TUI_LEGACY=1` falls back to the alt-screen viewport. Colored patch diffs (`renderPatchCell`), per-message render cache, `/history` (full diffs), `/copy`. Remaining: delete the legacy path + escape hatch once settled; write_file overwrite real diff; `/history` search + `control.db` backing. See `docs/tui-terminal-first-hybrid.md`. |
 | Run execution coordinator | 🟡 | `RunCoordinator` (`httpapi/run_coordinator.go`) owns the run lifecycle (`runMessage`/`startAsyncRun`), the active-run registry, and all pre/post-run helpers (workspace/task resolution, execution scope, approval handler, context assembly, stream aggregation, outcome persistence). Server is now the HTTP/orchestration layer. Worker pool shipped behind `SELFMIND_WORKERS` (see Multi-terminal concurrency row). Async-run task visibility fixed (2026-07-04): every run (sync and async) now syncs the person's `current_task` pointer to the task it resolved (`syncCurrentTask`, same `SetCurrentTask` mechanism as `/new`/`/resume`), and `/status` prefers the active run's task over the pointer (`Server.statusReply`); regression tests in `httpapi/task_visibility_test.go`. Stuck-run recovery shipped (2026-07-04): **invariant — after any finalization or recovery sweep, no task may remain `running` with zero live runs** (`running` means "a run is executing right now"; between-turns tasks park as `in_progress`). Enforced by: `Store.FinishRun` coercing non-terminal run statuses to `done`; `Store.MarkInterruptedRuns` flipping heartbeat-stale runs *and* repairing orphaned `running` tasks; a boot sweep (threshold 0 — the `gateway.lock` flock guarantees leftover running runs are dead) plus a 60s in-daemon sweep (12× the 10s run heartbeat) that always excludes the active-run registry (`httpapi/run_recovery.go`). Recovered `interrupted`/`in_progress` tasks stay non-terminal and resumable via `继续`/`/resume`. Tests: `control/runtime_test.go`, `httpapi/run_recovery_test.go`. |
@@ -136,17 +137,34 @@ is the only priority list in the repo; other docs must point here.
    is ✅ shipped (2026-07-04, see the Task queueing capability row): a genuinely
    new message while a run is active is enqueued with an honest acceptance and
    auto-started (sync + async drain + boot drain) when the runner frees up;
-   continuations never queue (they steer). Remaining under this item: the full
-   inbound routing priority order (pending approval y/n/done > pending question
-   > continuation cue > NEW task) — the approval and continuation legs exist;
-   the pending-question leg lands with G3. Observability export (`selfmind
-   doctor` / `/diag`) also shipped 2026-07-04.
-3. **P0 — G3: clarify-over-IM.** `gatewayClarify` is a stub that tells the
-   model to use its own judgment. Make questions first-class like approvals:
-   DB-backed pending question, fan-out push ("Question — reply with your
-   answer:"), next non-command reply resolves it, bounded wait with
-   best-judgment fallback. Required by the attachment model (a question must
-   survive the CLI closing).
+   continuations never queue (they steer). The full inbound routing priority
+   order (bare y/n approval > pending question > continuation cue > NEW task) is
+   now in place — the pending-question leg shipped with G3 below. Observability
+   export (`selfmind doctor` / `/diag`) also shipped 2026-07-04.
+3. **P0 — G3: clarify-over-IM — ✅ shipped (2026-07-04).** `gatewayClarify` is
+   no longer a stub: a clarify is now a first-class DB-backed pending question
+   modeled exactly on the approval waiter. It creates a `clarify_requests` row
+   (`internal/control/clarifies.go`), appends the `clarify.requested` event,
+   pushes a presence-aware, single-preferred-endpoint notification via the
+   shared `RunCoordinator.routePendingNotification` (same routing as approvals;
+   `notifyClarifyRequested` builds the "Question — reply with your answer:" body,
+   `delivery.KindClarify`), then blocks polling the row for up to 30 min. An
+   answer recorded from ANY endpoint (`Store.AnswerClarifyRequest`) is returned
+   verbatim as the tool result; timeout / expiry returns the best-judgment
+   fallback sentinel so the run never hangs. Inbound: a plain non-slash reply
+   while a question is pending IS the answer (`tryHandleClarifyAnswer`, wired in
+   `tryHandleControlCommand` above the new-task/queue logic and below the bare
+   y/n approval leg — approvals and clarifies are mutually exclusive per run, but
+   y/n-looking input still favors an approval defensively). Orphan hygiene:
+   `Store.ExpireOrphanedClarifies` rides `MarkInterruptedRuns` next to the
+   approval sweep, so a restart never leaves a dangling question. Surfacing:
+   `/status`, `/diag`, and the attach digest (`api.DigestClarify`, CLI
+   "N questions waiting") all show pending clarifies. A question now survives the
+   CLI closing exactly like an approval (docs/identity-continuity.md "Runtime
+   attachment model"). `internal/control/clarifies.go`,
+   `internal/gateway/httpapi/{server.go,clarify_inbound.go,diag.go,handlers_digest.go}`,
+   `internal/gateway/cli/attach_digest.go`. Tests:
+   `control/clarifies_test.go`, `httpapi/clarify_inbound_test.go`.
 4. **P2 — G4 (deferred until queues create real multi-task traffic):
    adaptive task tags + targeted messaging.** IM notifications
    carry a short task tag only when >1 task is alive; `/task <n> <text>`

@@ -300,6 +300,21 @@ CREATE TABLE IF NOT EXISTS approval_grants (
 	UNIQUE(tenant_id, person_id, scope_kind, scope_id, pattern_key)
 );
 CREATE INDEX IF NOT EXISTS idx_approval_grants_lookup ON approval_grants(tenant_id, person_id, pattern_key);
+CREATE TABLE IF NOT EXISTS clarify_requests (
+	id TEXT PRIMARY KEY,
+	tenant_id TEXT NOT NULL,
+	person_id TEXT NOT NULL,
+	task_id TEXT,
+	run_id TEXT,
+	question TEXT NOT NULL,
+	options_json TEXT,
+	status TEXT NOT NULL,
+	answer TEXT,
+	channel TEXT,
+	created_at INTEGER NOT NULL,
+	updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_clarify_pending ON clarify_requests(tenant_id, person_id, status, created_at);
 CREATE TABLE IF NOT EXISTS notifications (
 	id TEXT PRIMARY KEY,
 	tenant_id TEXT NOT NULL,

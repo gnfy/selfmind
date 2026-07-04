@@ -95,6 +95,19 @@ func (d *Server) buildDigest(ctx context.Context, identity *control.IdentityCont
 		})
 	}
 
+	// Pending questions are point-in-time state like approvals: still-waiting is
+	// what matters, so this is not anchored on last presence.
+	clarifies, err := d.Control.ListClarifyRequests(ctx, identity.TenantID, identity.PersonID, "pending", maxDigestTasks)
+	if err != nil {
+		return out, err
+	}
+	for _, clarify := range clarifies {
+		out.PendingClarifies = append(out.PendingClarifies, api.DigestClarify{
+			ID:   clarify.ID,
+			Line: clarifySummaryLine(clarify),
+		})
+	}
+
 	pushes, err := d.Control.ListUndeliveredOutbound(ctx, identity.TenantID, identity.PersonID, since, maxDigestPushes)
 	if err != nil {
 		return out, err

@@ -187,6 +187,10 @@ type DigestResponse struct {
 	// PendingApprovals is every approval still waiting for the person, in the
 	// same stable display order as /approvals (so ordinals keep meaning).
 	PendingApprovals []DigestApproval `json:"pending_approvals,omitempty"`
+	// PendingClarifies is every question the agent is blocked on waiting for the
+	// person to answer (G3). Like approvals it is point-in-time state: still
+	// pending is what matters, so it is not anchored on last presence.
+	PendingClarifies []DigestClarify `json:"pending_clarifies,omitempty"`
 	// UnconfirmedPushes are outbound IM messages that may never have reached
 	// the person (status sent_unconfirmed or failed) since the anchor.
 	UnconfirmedPushes []DigestPush `json:"unconfirmed_pushes,omitempty"`
@@ -200,8 +204,8 @@ type DigestResponse struct {
 func (d *DigestResponse) Empty() bool {
 	return d == nil ||
 		(len(d.FinishedTasks) == 0 && len(d.DisruptedTasks) == 0 &&
-			len(d.PendingApprovals) == 0 && len(d.UnconfirmedPushes) == 0 &&
-			d.ActiveRun == nil)
+			len(d.PendingApprovals) == 0 && len(d.PendingClarifies) == 0 &&
+			len(d.UnconfirmedPushes) == 0 && d.ActiveRun == nil)
 }
 
 type DigestTask struct {
@@ -215,6 +219,14 @@ type DigestTask struct {
 // the /approvals list renders; clients show the line and defer resolution
 // (ordinals, y/n) to the shared gateway resolver.
 type DigestApproval struct {
+	ID   string `json:"id"`
+	Line string `json:"line"`
+}
+
+// DigestClarify carries a pending question's id plus its one-line summary;
+// clients show the line and the person answers by replying (the gateway routes
+// the reply to the waiting run).
+type DigestClarify struct {
 	ID   string `json:"id"`
 	Line string `json:"line"`
 }

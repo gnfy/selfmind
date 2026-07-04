@@ -586,13 +586,32 @@ func (c *RunCoordinator) resolveApprovalMode(identity *control.IdentityContext, 
 	return tools.NormalizeApprovalMode(modeStr)
 }
 
-// gatewayClarify answers the clarify tool in non-interactive (gateway/IM)
-// contexts. There is no blocking prompt channel here, so instead of hanging it
-// records a clarify.requested event and returns a sentinel telling the agent to
-// present the question and end the turn; the user's reply arrives as a normal
-// follow-up message that continues the task.
+// clarifyFallbackSentinel is returned when a question goes unanswered (timeout
+// or the run's ctx is done): the agent falls back to its own best judgment
+// instead of hanging, so behavior stays safe even when nobody replies. It is
+// the SAME instruction the old stub returned, so the unanswered path is
+// unchanged from the model's perspective.
+const clarifyFallbackSentinel = "No answer arrived in time (the user may be away). Do not wait any longer: proceed using your own best judgment, state the assumption you are making, and continue the task."
+
+// clarifyWaitTimeout bounds how long a run blocks on a pending question — the
+// same 30-minute bound approvals use.
+const clarifyWaitTimeout = 30 * time.Minute
+
+// gatewayClarify answers the clarify tool as a FIRST-CLASS pending question,
+// modeled exactly on the approval waiter (toolApprovalHandler): it creates a
+// durable clarify_requests row, appends the clarify.requested event, pushes a
+// presence-aware notification to the person's endpoints, then blocks polling the
+// DB row until an answer arrives or the wait bound / run ctx expires. An answer
+// (recorded from ANY endpoint via AnswerClarifyRequest) is returned verbatim as
+// the tool result; a timeout expires the row and returns the best-judgment
+// sentinel so the run never hangs. This is what lets a question survive the CLI
+// closing (docs/identity-continuity.md "Runtime attachment model").
 func (c *RunCoordinator) gatewayClarify(identity *control.IdentityContext, task *control.Task, run *control.Run, channel string) tools.ClarifyHandler {
 	return func(question string, choices []string) string {
+		if c == nil || c.srv == nil || c.srv.Control == nil || identity == nil {
+			return clarifyFallbackSentinel
+		}
+		store := c.srv.Control
 		taskID, runID := "", ""
 		if task != nil {
 			taskID = task.ID
@@ -600,24 +619,67 @@ func (c *RunCoordinator) gatewayClarify(identity *control.IdentityContext, task 
 		if run != nil {
 			runID = run.ID
 		}
-		if c != nil && c.srv != nil && c.srv.Control != nil && taskID != "" {
-			_, _ = c.srv.Control.AppendEvent(context.Background(), control.Event{
+		reqChannel := fallback(channel, identity.Platform)
+		// The run ctx is not available here (the clarify handler signature carries
+		// no ctx), so the wait is bounded purely by clarifyWaitTimeout; the
+		// orphan sweep (ExpireOrphanedClarifies) is the backstop if the daemon is
+		// killed mid-wait.
+		waitCtx, cancel := context.WithTimeout(context.Background(), clarifyWaitTimeout)
+		defer cancel()
+
+		clarify, err := store.CreateClarifyRequest(waitCtx, control.ClarifyRequest{
+			TenantID: identity.TenantID,
+			PersonID: identity.PersonID,
+			TaskID:   taskID,
+			RunID:    runID,
+			Question: question,
+			Options:  mustJSON(choices),
+			Channel:  reqChannel,
+		})
+		if err != nil {
+			// Cannot durably record the question: fall back rather than hang.
+			return clarifyFallbackSentinel
+		}
+		if taskID != "" {
+			_, _ = store.AppendEvent(waitCtx, control.Event{
 				TaskID:     taskID,
 				RunID:      runID,
 				Type:       "clarify.requested",
 				Visibility: "task",
-				Channel:    channel,
-				Payload:    mustJSON(map[string]interface{}{"question": question, "choices": choices}),
+				Channel:    reqChannel,
+				Payload:    mustJSON(map[string]interface{}{"clarify_id": clarify.ID, "question": question, "choices": choices}),
 			})
 		}
-		var sb strings.Builder
-		sb.WriteString("This is a non-interactive channel, so there is no live prompt. ")
-		sb.WriteString("End your turn now and ask the user this question as your reply")
-		if len(choices) > 0 {
-			sb.WriteString(" (present the options as a short numbered list)")
+		c.notifyClarifyRequested(context.Background(), identity, taskID, runID, reqChannel, clarify)
+
+		ticker := time.NewTicker(time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-waitCtx.Done():
+				// The waiter is gone (timeout): a row left 'pending' would keep
+				// intercepting the next free-text message as an answer to a
+				// question nobody is waiting on. Expire it; the orphan sweep is
+				// the backstop for waiters that die without reaching this line.
+				_ = store.ExpireClarifyRequest(context.WithoutCancel(waitCtx), identity.TenantID, clarify.ID, "waiter gone: "+waitCtx.Err().Error())
+				return clarifyFallbackSentinel
+			case <-ticker.C:
+				current, err := store.GetClarifyRequest(waitCtx, identity.TenantID, clarify.ID)
+				if err != nil || current == nil {
+					// Store hiccup / row vanished: don't hang, fall back.
+					return clarifyFallbackSentinel
+				}
+				switch current.Status {
+				case "answered":
+					if answer := strings.TrimSpace(current.Answer); answer != "" {
+						return answer
+					}
+					return clarifyFallbackSentinel
+				case "expired":
+					return clarifyFallbackSentinel
+				}
+			}
 		}
-		sb.WriteString(". They will answer in a follow-up message that continues this task. Do not wait or keep working.")
-		return sb.String()
 	}
 }
 
@@ -744,14 +806,46 @@ func (c *RunCoordinator) notifyApprovalRequested(ctx context.Context, identity *
 		Kind:       delivery.KindApproval,
 		ApprovalID: approval.ID,
 	}
-	// Origin is CLI when the PLATFORM is cli — the channel is a session UUID
-	// for TUI turns and the literal "cli" only for `selfmind send`, so matching
-	// on channel silently routed TUI-originated approvals to a nonexistent
-	// "cli" sender (observed live: approval push stuck in 'sending' forever
-	// while the run waited on a human who was never notified).
+	c.routePendingNotification(ctx, identity, channel, base)
+}
+
+// notifyClarifyRequested pushes a pending-question notification along the SAME
+// conversation-layer routing rules as approvals (docs/identity-continuity.md
+// "Runtime attachment model"): IM-originated questions notify their own channel;
+// CLI-originated questions are suppressed while a CLI endpoint is attached (the
+// live TUI already shows the clarify.requested event) and otherwise go to the
+// SINGLE preferred IM endpoint. Failures are swallowed: the clarify row is the
+// truth; the push is a convenience. A question survives the endpoint that raised
+// it closing exactly like an approval does.
+func (c *RunCoordinator) notifyClarifyRequested(ctx context.Context, identity *control.IdentityContext, taskID, runID, channel string, clarify *control.ClarifyRequest) {
+	if c == nil || c.srv == nil || c.srv.Delivery == nil || identity == nil || clarify == nil {
+		return
+	}
+	base := delivery.Message{
+		TenantID: identity.TenantID,
+		PersonID: identity.PersonID,
+		TaskID:   taskID,
+		RunID:    runID,
+		Content:  clarifyNotificationText(*clarify),
+		Kind:     delivery.KindClarify,
+	}
+	c.routePendingNotification(ctx, identity, channel, base)
+}
+
+// routePendingNotification is the shared presence-aware, single-preferred-
+// endpoint delivery used by BOTH approval and clarify pushes. Origin is CLI when
+// the PLATFORM is cli — the channel is a session UUID for TUI turns and the
+// literal "cli" only for `selfmind send`, so matching on channel would route
+// TUI-originated pushes to a nonexistent "cli" sender. IM origin → the
+// requesting channel only (no cross-channel duplication). CLI origin with a CLI
+// endpoint attached → suppressed (the live TUI already renders the inline
+// prompt/event; an IM push would be a duplicate). CLI origin detached → the one
+// preferred IM endpoint, never a fan-out.
+func (c *RunCoordinator) routePendingNotification(ctx context.Context, identity *control.IdentityContext, channel string, base delivery.Message) {
+	if c == nil || c.srv == nil || c.srv.Delivery == nil || identity == nil {
+		return
+	}
 	if identity.Platform != "cli" {
-		// IM-originated: notify the requesting channel only (the person is
-		// already looking at it); no cross-channel duplication.
 		msg := base
 		msg.Platform = identity.Platform
 		msg.PlatformUserID = identity.PlatformUserID
@@ -759,9 +853,6 @@ func (c *RunCoordinator) notifyApprovalRequested(ctx context.Context, identity *
 		_ = c.srv.Delivery.EnqueueAndTry(ctx, msg)
 		return
 	}
-	// CLI origin, CLI attached: the live TUI renders the inline y/N prompt
-	// from the approval.requested event, so an IM push would be a duplicate.
-	// The approval row stays answerable from any surface either way.
 	if c.srv.presenceTracker().IsAttached(identity.PersonID, "cli") {
 		return
 	}
@@ -839,6 +930,33 @@ func approvalNotificationText(approval control.ApprovalRequest, taskTitle string
 	return "Approval needed — reply y or n:\n" + approvalSummaryLine(approval, "")
 }
 
+// clarifyNotificationText is the outbound pending-question body: the question,
+// its options (when any) as a short numbered list, and one instruction to just
+// reply with the answer. Conversational and task-free like the approval push —
+// the next non-command reply resolves it (docs/identity-continuity.md).
+func clarifyNotificationText(clarify control.ClarifyRequest) string {
+	var sb strings.Builder
+	sb.WriteString("Question — reply with your answer:\n")
+	sb.WriteString(strings.TrimSpace(clarify.Question))
+	for i, option := range clarifyOptions(clarify) {
+		fmt.Fprintf(&sb, "\n%d. %s", i+1, option)
+	}
+	return sb.String()
+}
+
+// clarifyOptions decodes the options_json array, tolerating a null/empty/broken
+// payload by returning no options (the question still stands on its own).
+func clarifyOptions(clarify control.ClarifyRequest) []string {
+	if len(clarify.Options) == 0 {
+		return nil
+	}
+	var options []string
+	if err := json.Unmarshal(clarify.Options, &options); err != nil {
+		return nil
+	}
+	return options
+}
+
 func (c *RunCoordinator) withGatewayContext(input string, identity *control.IdentityContext, task *control.Task, workspace *control.Workspace, attachments []api.MessageAttachment) string {
 	if (workspace == nil || workspace.LocalPath == "" || task == nil) && len(attachments) == 0 {
 		return input
@@ -896,6 +1014,14 @@ func (d *Server) tryHandleControlCommand(ctx context.Context, identity *control.
 	// otherwise the word falls through to the agent (and to the continuation
 	// cue handling for "ok"/"可以"). Runs before the "/" gate below.
 	if handled, reply, err := d.tryHandleBareApprovalReply(ctx, identity, trimmed, req.Channel); handled {
+		return true, reply, err
+	}
+	// Pending question: a plain (non-slash) reply while a clarify_requests row is
+	// pending IS the answer (G3) — resolve it here, above the new-task/queue
+	// logic, so a blocking run gets its answer instead of the reply being queued
+	// or steered. Runs after the bare y/n approval leg (which wins for y/n-looking
+	// input) and before the "/" gate (slash commands are never answers).
+	if handled, reply, err := d.tryHandleClarifyAnswer(ctx, identity, trimmed, req.Channel); handled {
 		return true, reply, err
 	}
 	if !strings.HasPrefix(lower, "/") {
@@ -1279,7 +1405,27 @@ func (d *Server) statusReply(ctx context.Context, identity *control.IdentityCont
 			card += fmt.Sprintf("%d. %s\n", i+1, approvalSummaryLine(approval, titles[approval.TaskID]))
 		}
 	}
+	// A run blocked on a clarify looks just as "stuck" as one blocked on an
+	// approval: surface the pending question(s) so the person knows their reply
+	// is what unblocks the run. ListClarifyRequests is already oldest-first, the
+	// order tryHandleClarifyAnswer answers in.
+	if clarifies, err := d.Control.ListClarifyRequests(ctx, identity.TenantID, identity.PersonID, "pending", 5); err == nil && len(clarifies) > 0 {
+		card += "\n⚠ Waiting for your answer — just reply with it:\n"
+		for i, clarify := range clarifies {
+			if len(clarifies) == 1 {
+				card += clarifySummaryLine(clarify) + "\n"
+				break
+			}
+			card += fmt.Sprintf("%d. %s\n", i+1, clarifySummaryLine(clarify))
+		}
+	}
 	return card, nil
+}
+
+// clarifySummaryLine renders a pending question as one compact line for /status,
+// /diag, and the digest: the question, trimmed to one line and bounded.
+func clarifySummaryLine(clarify control.ClarifyRequest) string {
+	return truncate(toOneLine(clarify.Question), 160)
 }
 
 func (d *Server) identityFromQuery(r *http.Request) (*control.IdentityContext, error) {

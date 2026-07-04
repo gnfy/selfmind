@@ -119,6 +119,12 @@ func formatStartupDigest(digest *api.DigestResponse) string {
 	case n > 1:
 		lines = append(lines, fmt.Sprintf("⚠ %d approvals waiting — see /approvals", n))
 	}
+	switch n := len(digest.PendingClarifies); {
+	case n == 1:
+		lines = append(lines, fmt.Sprintf("⚠ 1 question waiting: %s — just reply with your answer", digest.PendingClarifies[0].Line))
+	case n > 1:
+		lines = append(lines, fmt.Sprintf("⚠ %d questions waiting — see /status", n))
+	}
 	if n := len(digest.UnconfirmedPushes); n > 0 {
 		lines = append(lines, fmt.Sprintf("⚠ %s may not have reached %s (see /status)", countNoun(n, "push"), digestPushTargets(digest.UnconfirmedPushes)))
 	}

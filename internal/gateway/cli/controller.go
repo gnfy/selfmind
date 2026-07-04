@@ -122,6 +122,9 @@ type uiModel struct {
 	steerFn            func(text string) error                 // client mode: forward mid-turn guidance to the daemon's active run
 	awaitingApproval   bool                                    // an inline approval prompt is active
 	pendingApprovalID  string
+	// exitPromptActive intercepts keys while the quit-with-active-run prompt
+	// is shown (b = background+quit, c = cancel+stay, esc = keep watching).
+	exitPromptActive bool
 	hybrid             bool         // terminal-first hybrid mode (SELFMIND_TUI_HYBRID)
 	pendingPrintln     []string     // hybrid: cells to emit to scrollback at end of Update
 	startupCommitted   bool         // hybrid: startup card already printed to scrollback
@@ -1117,6 +1120,7 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.scheduleStreamFlush()
 
 	case MsgAgentDone:
+		m.exitPromptActive = false
 		msg.Response = textutil.CleanUTF8(msg.Response)
 		wasAtBottom := m.transcriptAtBottom()
 		yOffset := m.viewport.YOffset
@@ -1335,6 +1339,11 @@ func (m *uiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	default:
+		if m.exitPromptActive {
+			if cmd, handled := m.handleExitPromptKey(msg.String()); handled {
+				return m, cmd
+			}
+		}
 		switch msg.String() {
 		case "esc":
 			return m, nil
@@ -1344,26 +1353,16 @@ func (m *uiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.editor.Reset()
 				return m, nil
 			}
-			// Priority 2: if agent is thinking or tool running, cancel it.
-			// Runs are daemon-owned and detached from this endpoint's ctx
-			// (G0-a): cancelFn only detaches the local watcher, so the actual
-			// cancellation is routed through the registry-backed /stop control
-			// command (requestDaemonStop). The legacy in-process agent path
-			// (no message processor) still cancels through the local ctx.
+			// Priority 2: a run is active. Runs are daemon-owned (G0-a), so
+			// quitting does NOT cancel — offer the choice explicitly. This
+			// prompt doubles as the moment the user learns the detached-run
+			// design. A second ctrl+c means "background + quit".
 			if m.thinking || m.toolExecuting != "" {
-				if m.cancelFn != nil {
-					m.cancelFn()
-					m.finalizeLiveStream("")
-					m.thinking = false
-					m.activityText = ""
-					m.toolExecuting = ""
-					m.steerCh = nil
-					m.runStatus = "cancelled"
-					m.statusMsg = "Task cancelled by user."
-					return m, tea.Batch(m.requestDaemonStop(), tea.Tick(time.Second*3, func(t time.Time) tea.Msg {
-						return MsgClearStatus{}
-					}))
+				if m.exitPromptActive {
+					return m, tea.Quit
 				}
+				m.exitPromptActive = true
+				m.addMessage("assistant", "A task is still running. Choose:\n  b — quit and leave it running in the background (the result will be pushed to your bound IM)\n  c — cancel the task and stay\n  esc — keep watching")
 				return m, nil
 			}
 			// Priority 3: quit
@@ -1606,3 +1605,48 @@ var shortcutHelpRows = []helpRow{
 }
 
 var _ tea.Model = (*uiModel)(nil)
+
+// handleExitPromptKey resolves the quit-with-active-run prompt. handled=false
+// lets unrelated keys fall through (they are ignored with a re-hint rather
+// than typed into the editor, so a stray keystroke cannot half-answer).
+func (m *uiModel) handleExitPromptKey(key string) (tea.Cmd, bool) {
+	switch key {
+	case "b", "B":
+		m.exitPromptActive = false
+		return tea.Quit, true
+	case "c", "C":
+		m.exitPromptActive = false
+		return m.cancelActiveRunLocally(), true
+	case "esc":
+		m.exitPromptActive = false
+		m.statusMsg = "Still watching."
+		return nil, true
+	case "ctrl+c":
+		// Handled by the ctrl+c case itself (second ctrl+c = background+quit).
+		return nil, false
+	default:
+		m.statusMsg = "Press b (background + quit), c (cancel + stay), or esc."
+		return nil, true
+	}
+}
+
+// cancelActiveRunLocally detaches the local watcher UI state and routes the
+// actual cancellation through the registry-backed /stop control command
+// (runs are daemon-owned since G0-a; the legacy in-process agent path still
+// cancels through the local ctx).
+func (m *uiModel) cancelActiveRunLocally() tea.Cmd {
+	if m.cancelFn == nil {
+		return nil
+	}
+	m.cancelFn()
+	m.finalizeLiveStream("")
+	m.thinking = false
+	m.activityText = ""
+	m.toolExecuting = ""
+	m.steerCh = nil
+	m.runStatus = "cancelled"
+	m.statusMsg = "Task cancelled by user."
+	return tea.Batch(m.requestDaemonStop(), tea.Tick(time.Second*3, func(t time.Time) tea.Msg {
+		return MsgClearStatus{}
+	}))
+}

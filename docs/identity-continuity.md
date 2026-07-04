@@ -168,6 +168,12 @@ Lifecycle: `CLI attach → work → detach (close/handoff) → IM takeover → �
 → CLI re-attach (digest + take back over)`. Crash of a terminal is an
 implicit detach (heartbeat expiry), identical to a graceful close.
 
+Quitting with a run active is an explicit choice, not an accident: the TUI
+prompts — `b` quit and leave it running in the background (result pushed to
+the bound IM), `c` cancel the task and stay, `esc` keep watching; a second
+ctrl+c means background+quit. The prompt doubles as the moment users learn
+the detached-run design (owner decision, 2026-07-04).
+
 Derived requirements (tracked in `docs/STATUS.md`): detached run execution
 (decouple runs from HTTP request contexts), presence registry + routing,
 attach digest, DB-backed clarify (a pending question must be answerable from

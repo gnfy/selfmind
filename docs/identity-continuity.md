@@ -123,6 +123,42 @@ Code: `internal/gateway/httpapi/continue_resolver.go`.
 Account binding: `POST /v1/accounts/bind` attaches a platform account to an
 existing person. `/id` shows the current tenant/person/account resolution.
 
+## Runtime attachment model (endpoints as watchers)
+
+Owner decision, 2026-07-04. This is the runtime form of the continuity
+contract; it extends the identity model above and is the design baseline for
+the G-series work in `docs/STATUS.md`.
+
+**Runs belong to the gateway; every endpoint — CLI included — is a peer
+watcher.** The CLI is an `account` exactly like a bound IM account. A run's
+lifetime is never tied to any endpoint's connection: closing a terminal
+detaches a watcher, it must not cancel or interrupt the run (only heartbeat
+death — a real crash — interrupts). Work-event routing follows **presence**:
+
+- While a live interactive endpoint is attached (event-poll heartbeat is the
+  presence signal), work events (approvals, questions, progress, results) go
+  to it, and IM push stays quiet — no double notification.
+- When no interactive endpoint is attached (terminal closed, or the user
+  explicitly hands off, e.g. "switch to WeChat"), work events fan out to the
+  person's bound IM endpoints. Chat transcripts still never cross channels —
+  what moves is work state, not conversation.
+- Any endpoint may re-attach at any time (next morning, back home on the same
+  machine → same `cli/local` account → same person). Re-attaching flips
+  routing back, shows an **attach digest** (what finished/failed while away,
+  pending approvals/questions, queued tasks — one person-scoped query), and
+  can hook onto a mid-flight run's live event stream and steering.
+
+Lifecycle: `CLI attach → work → detach (close/handoff) → IM takeover → …
+→ CLI re-attach (digest + take back over)`. Crash of a terminal is an
+implicit detach (heartbeat expiry), identical to a graceful close.
+
+Derived requirements (tracked in `docs/STATUS.md`): detached run execution
+(decouple runs from HTTP request contexts), presence registry + routing,
+attach digest, DB-backed clarify (a pending question must be answerable from
+IM after the CLI is gone — the approvals mechanism is the template), and the
+conversational IM routing stack (answer-pending > continuation cue > new task,
+queue instead of "busy").
+
 ## What this rules out
 
 - No pre-agent direct-answer routers; agent-first stays (see `AGENTS.md`).

@@ -70,7 +70,35 @@ These are the live gaps, ordered by their distance from the north star
 (`docs/identity-continuity.md` — the three continuity scenarios). This section
 is the only priority list in the repo; other docs must point here.
 
-1. **P0 — Task-attach semantics for parked tasks.** `resolveTask` attaches any
+1. **P0 — G0: Runtime attachment model** (design:
+   `docs/identity-continuity.md` "Runtime attachment model"; owner decision
+   2026-07-04). (a) Detached run execution — decouple runs from HTTP request
+   contexts (`handleMessage` passes `r.Context()` into the run today, so
+   closing the CLI mid-turn kills the run; runs must execute on daemon-owned
+   contexts, endpoints only watch); (b) presence registry keyed on the
+   event-poll heartbeat + presence-based work-event routing (attached
+   interactive endpoint gets events, IM fan-out only when nobody is attached —
+   also fixes today's double notification while sitting in the TUI);
+   (c) attach digest (on CLI re-attach show finished/failed/pending
+   approvals+questions/queued tasks since last presence); (d) re-attach to a
+   mid-flight run's live events + steering.
+2. **P0 — G1+G2: IM routing stack + queue instead of busy.** Inbound routing
+   priority: pending approval (y/n, done) > pending question > continuation
+   cue > NEW task; a new task while a run is active is queued with an honest
+   acceptance reply and auto-started when the runner frees up (today it is
+   rejected with "Another task is already running", which kills 24/7 IM
+   dispatch). This also resolves the parked-task attach bug below.
+3. **P0 — G3: clarify-over-IM.** `gatewayClarify` is a stub that tells the
+   model to use its own judgment. Make questions first-class like approvals:
+   DB-backed pending question, fan-out push ("Question — reply with your
+   answer:"), next non-command reply resolves it, bounded wait with
+   best-judgment fallback. Required by the attachment model (a question must
+   survive the CLI closing).
+4. **P1 — G4: adaptive task tags + targeted messaging.** IM notifications
+   carry a short task tag only when >1 task is alive; `/task <n> <text>`
+   routes a message to a specific task (steer if running, next-turn input if
+   parked).
+5. **P0 — Task-attach semantics for parked tasks.** `resolveTask` attaches any
    ordinary message to the channel's current task when it is non-terminal.
    Since rejection/interruption now park tasks as `in_progress`/`blocked`
    (non-terminal by design), a brand-new imperative request (observed live:
@@ -78,16 +106,16 @@ is the only priority list in the repo; other docs must point here.
    title, status, and push prefix. Decide the rule — e.g. attach only on
    continuation cues / same-topic heuristics, otherwise create a new task —
    and cover it with an eval case.
-2. **P0 — Continuity path polish.** Surface identity: `GET /v1/accounts` +
+6. **P0 — Continuity path polish.** Surface identity: `GET /v1/accounts` +
    `selfmind accounts`, and make "bind a new endpoint → inherit tasks and
    memory" a visible moment.
-3. **P1 — Finish daemon-client convergence, then delete the duplicates.**
+7. **P1 — Finish daemon-client convergence, then delete the duplicates.**
    Remaining parity gap: session search over the daemon. Once closed, remove
    the in-process TUI path (`SELFMIND_TUI_INPROC`), the legacy alt-screen TUI
    (`SELFMIND_TUI_LEGACY`, viewport, `controller_mouse.go`, `renderCache`), and
    decompose `uiModel` per the AGENTS.md guardrail — one simplification pass.
    Then a real N>1 soak (`SELFMIND_WORKERS`).
-4. **P1 — Stranger-isolation hardening (scenario 3).** Highest item: the
+8. **P1 — Stranger-isolation hardening (scenario 3).** Highest item: the
    Weixin owner auto-bind hazard — with `gateway.weixin.owner_person_id` set,
    EVERY sender passing the DM policy is bound to the owner person
    (`weixin/adapter.go` inbound path), and the default `dm_policy: open` +
@@ -97,10 +125,10 @@ is the only priority list in the repo; other docs must point here.
    login. Also: QQ webhook ed25519 signature verification (inbound is
    currently unverified), Feishu encrypt-envelope AES decryption, WeChat OA
    safe-mode crypto.
-5. **P2 — Real `execute_code` sandbox** (namespace/seccomp/cgroup or container).
+9. **P2 — Real `execute_code` sandbox** (namespace/seccomp/cgroup or container).
    Prerequisite for any multi-person sharing; not needed for the single-person
    scenarios.
-6. **P2 — MCP `sampling/createMessage`**, IM voice STT/TTS, remaining adapter
+10. **P2 — MCP `sampling/createMessage`**, IM voice STT/TTS, remaining adapter
    polish — only as scenario needs dictate.
 
 Resolved from this list: **Approval UX** (was item 1, resolved 2026-07-04) —

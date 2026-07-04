@@ -402,9 +402,17 @@ selfmind -f ./config/config.yaml
 
 | 命令 | 作用 |
 |---|---|
-| `/help` | 查看 TUI 命令。 |
-| `/status` | 查看 provider、model、运行时间、token、任务和 gateway 状态。 |
-| `/tasks` | 查看本地 gateway 任务。 |
+| `/help` | 查看可用命令。 |
+| `/status` | 查看 provider、model、运行时间、token、当前任务，以及待处理的审批/提问。 |
+| `/tasks` | 列出最近的任务及其状态。 |
+| `/queue` / `/queue clear` | 列出排在运行中任务之后的队列 / 清空全部待运行队列。 |
+| `/stop` | 取消正在执行的 run；若当前没有 run 在跑，则取消当前(卡住的)任务。 |
+| `/cancel` | 即使没有活跃 run,也取消当前任务。 |
+| `/new [标题]` | 另起一个新任务,而不是继续当前任务。 |
+| `/resume <task_id>` | 切换回之前的某个任务。 |
+| `/approvals` / `/approve <n>` / `/reject <n>` | 列出并回应待处理的工具审批。 |
+| `/mode [模式]` | 查看或设置审批模式:`on-request`、`read-only`、`auto-edit`、`full-auto`、`smart`。 |
+| `/diag` | 精简的运行时诊断快照。 |
 | `/skills` | Skill 的 list/view/search/catalog/install/audit/archive/pin/unpin/delete/stats/reload。 |
 | `/skills history <name>` | 查看某个 Skill 的学习审计记录。 |
 | `/skills undo <change_id>` | 撤销支持回滚的 Skill 学习变更。 |
@@ -426,6 +434,38 @@ selfmind -f ./config/config.yaml
 | `Shift+Enter` | 插入换行。 |
 | `Ctrl+C` | 取消当前 run 或退出。 |
 | `Ctrl+V` | 粘贴；大段粘贴会转换成更易读的块。 |
+
+## 任务管理
+
+SelfMind 以任务为中心:你的每次请求都会变成一个归属于你(`person_id`)的
+**任务**,在所有端(CLI、微信……)之间共享。任务的状态流转如下:
+
+| 状态 | 含义 |
+|---|---|
+| `running` | 有一个 run 正在执行。 |
+| `in_progress` | 本轮结束但还有后续工作——可续接,当前没有东西在跑。 |
+| `blocked` | 在等你(待处理的审批或提问)。 |
+| `queued` | 在别的任务运行时被接收,排队中,运行空出来后自动开始。 |
+| `interrupted` | run 丢失(网关重启/崩溃),可续接。 |
+| `done` / `completed` / `cancelled` / `failed` | 终态。 |
+
+日常操作:
+
+- **查看:** `/tasks`(最近全部)、`/status`(当前任务 + 待处理的审批/提问)、
+  `/queue`(排队中的)。
+- **继续任务:** 直接回复(`继续` / `ok` / 追加内容)即可续接当前任务;
+  `/resume <task_id>` 切换到更早的任务。
+- **另起任务:** `/new`——否则运行中收到的新请求会**排队**在其后(不会被拒),
+  而追加内容会被当作继续当前任务。
+- **停止任务:** `/stop` 取消正在执行的 run;若没有 run 在跑但任务卡在非终态
+  (例如任务被创建却从未执行),`/stop`(或 `/cancel`)会取消当前任务,使其
+  离开 `in_progress`。
+- **run 归网关所有:** 关掉 CLI **不会**杀死运行中的任务——它会继续在网关上跑,
+  结果推送到你绑定的 IM。重开 CLI 会看到"离开期间"的简报并重新挂上仍在运行的
+  任务。旁观时按 `Ctrl+C` 是脱离(任务继续跑);在自己的 run 期间按 `Ctrl+C`
+  则可选择*后台运行 / 取消 / 继续观看*。
+- **诊断卡住的任务:** `selfmind doctor`(或 `--out file.txt`)导出脱敏快照——
+  最近的 run、待处理审批、队列、事件时间线——让你看清任务在等什么。
 
 ## Skills
 

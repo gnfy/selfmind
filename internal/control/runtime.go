@@ -388,6 +388,16 @@ func (s *Store) ClaimDelivery(ctx context.Context, id string) (bool, error) {
 	return n == 1, nil
 }
 
+// MarkDeliveryFailedPermanent finalizes an undeliverable row (no sender for
+// its platform). Terminal: excluded from due/claim scans, surfaced by digests.
+func (s *Store) MarkDeliveryFailedPermanent(ctx context.Context, id, reason string) error {
+	now := time.Now().Unix()
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE outbound_messages SET status = 'failed', last_error = ?, updated_at = ? WHERE id = ?`,
+		reason, now, id)
+	return err
+}
+
 // MarkDeliverySentUnconfirmed finalizes a delivery the platform accepted but
 // may silently drop (e.g. Weixin/iLink push on a stale context_token). It is
 // terminal for the retry queue — resending on the same stale session risks

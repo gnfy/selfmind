@@ -295,7 +295,10 @@ func TestCLIOriginatedApprovalFansOutToBoundIM(t *testing.T) {
 	daemon.Delivery = delivery.NewService(store, recorder, delivery.Options{})
 
 	coord := daemon.coordinator()
-	coord.notifyApprovalRequested(ctx, identity, task.ID, "", "cli", approval)
+	// TUI turns use a session-UUID channel, not the literal "cli" — origin
+	// detection must key on the platform (regression: a channel match routed
+	// TUI approvals to a nonexistent "cli" sender, stuck in 'sending' forever).
+	coord.notifyApprovalRequested(ctx, identity, task.ID, "", "278361aa-ea7b-4f0b-a338-56c0cfab61a6", approval)
 
 	if len(recorder.messages) != 1 {
 		t.Fatalf("messages = %+v", recorder.messages)

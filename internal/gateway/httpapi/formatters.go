@@ -147,9 +147,13 @@ func formatBusyRun(active *activeRun) string {
 		return ""
 	}
 	elapsed := time.Since(active.StartedAt).Round(time.Second)
-	runID := fallback(active.RunID, "(starting)")
-	taskID := fallback(active.TaskID, "(starting)")
-	return fmt.Sprintf("Task is running\n- task: %s\n- run: %s\n- elapsed: %s\n\nUse /status for details or /stop to cancel.", taskID, runID, elapsed)
+	// Conversational surface: no task/run hashes (ids live in the control
+	// plane; /tasks and the HTTP API expose them when actually needed).
+	title := strings.TrimSpace(active.Summary)
+	if title == "" {
+		title = "(starting)"
+	}
+	return fmt.Sprintf("A task is already running: %s\n- elapsed: %s\n\nUse /status for details or /stop to cancel.", textutil.Truncate(toOneLine(title), 60), elapsed)
 }
 
 func formatActiveRunStatus(active *activeRun) *api.ActiveRunStatus {
@@ -174,11 +178,8 @@ func formatTaskStatus(task *control.Task, handoff *control.Handoff, active *acti
 	}
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "Task: %s\nStatus: %s\n", task.Title, task.Status)
-	if task.WorkspaceID != "" {
-		fmt.Fprintf(&sb, "Workspace: %s\n", task.WorkspaceID)
-	}
 	if active != nil {
-		fmt.Fprintf(&sb, "\nRunning:\n- run: %s\n- elapsed: %s\n- channel: %s\n", fallback(active.RunID, "(starting)"), time.Since(active.StartedAt).Round(time.Second), active.Channel)
+		fmt.Fprintf(&sb, "\nRunning: %s elapsed\n", time.Since(active.StartedAt).Round(time.Second))
 	}
 	if task.CurrentSummary != "" {
 		fmt.Fprintf(&sb, "\nSummary: %s\n", task.CurrentSummary)

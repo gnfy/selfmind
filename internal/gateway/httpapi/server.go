@@ -634,7 +634,12 @@ func (c *RunCoordinator) notifyApprovalRequested(ctx context.Context, identity *
 		Kind:       delivery.KindApproval,
 		ApprovalID: approval.ID,
 	}
-	if !(identity.Platform == "cli" && channel == "cli") {
+	// Origin is CLI when the PLATFORM is cli — the channel is a session UUID
+	// for TUI turns and the literal "cli" only for `selfmind send`, so matching
+	// on channel silently routed TUI-originated approvals to a nonexistent
+	// "cli" sender (observed live: approval push stuck in 'sending' forever
+	// while the run waited on a human who was never notified).
+	if identity.Platform != "cli" {
 		// IM-originated: notify the requesting channel only (the person is
 		// already looking at it); no cross-channel duplication.
 		msg := base
@@ -926,7 +931,24 @@ func (d *Server) statusReply(ctx context.Context, identity *control.IdentityCont
 	}
 	handoff, _ := d.Control.LatestHandoff(ctx, task.ID)
 	plan := d.latestPlanForTask(ctx, task.ID)
-	return formatTaskStatus(task, handoff, active, plan), nil
+	card := formatTaskStatus(task, handoff, active, plan)
+	// A run blocked on an approval looks "stuck" unless the card says the run
+	// is waiting for the HUMAN (observed live: 15 minutes of staring at
+	// "running" while an ls_r approval sat pending). Surface it with the same
+	// conversational summary the push uses.
+	if pending, err := d.Control.ListApprovalRequests(ctx, identity.TenantID, identity.PersonID, "pending", 5); err == nil && len(pending) > 0 {
+		sortApprovalsForDisplay(pending)
+		card += "\n⚠ Waiting for your approval — reply y or n:\n"
+		titles := d.taskTitlesFor(ctx, identity.TenantID, pending)
+		for i, approval := range pending {
+			if len(pending) == 1 {
+				card += approvalSummaryLine(approval, "") + "\n"
+				break
+			}
+			card += fmt.Sprintf("%d. %s\n", i+1, approvalSummaryLine(approval, titles[approval.TaskID]))
+		}
+	}
+	return card, nil
 }
 
 func (d *Server) identityFromQuery(r *http.Request) (*control.IdentityContext, error) {

@@ -82,7 +82,8 @@ func (c *RunCoordinator) deliverAsyncResult(ctx context.Context, identity *contr
 	if c == nil || c.srv == nil || c.srv.Delivery == nil || identity == nil {
 		return
 	}
-	if req.Platform == "cli" && req.Channel == "cli" {
+	// Platform-only check: TUI channels are session UUIDs, not "cli".
+	if req.Platform == "cli" {
 		// A terminal has no push surface for a fire-and-forget run, so the
 		// final answer used to vanish (the user only saw the task status flip
 		// and read it as "nothing happened" — observed live with a rejected
@@ -124,8 +125,8 @@ func (c *RunCoordinator) deliverCronResult(ctx context.Context, req api.MessageR
 	if resp.Turn != nil && resp.Turn.Status == "busy" {
 		return // the run was skipped because the person was active; try again next tick
 	}
-	if req.Platform == "cli" && req.Channel == "cli" {
-		return // local-only job: nothing to push to a channel
+	if req.Platform == "cli" {
+		return // local-only job: nothing to push to a channel (platform-only: TUI channels are session UUIDs)
 	}
 	platformUser := req.PlatformUserID
 	if resp.Identity != nil && resp.Identity.PlatformUserID != "" {

@@ -303,6 +303,11 @@ func (s *Service) tryDelivery(ctx context.Context, d *control.Delivery) error {
 		return s.store.MarkDeliveryAttempt(ctx, d.ID, true, "", time.Time{})
 	}
 	if err == ErrNoSender {
+		// No sender will ever appear for this row; retrying is futile and a
+		// claimed-but-unmarked row would loop through stale-claim reclaim forever
+		// (observed live: a mis-routed platform=cli approval push stuck in
+		// 'sending'). Fail it permanently and keep it visible for the digest.
+		_ = s.store.MarkDeliveryFailedPermanent(ctx, d.ID, "no sender for platform "+msg.Platform)
 		return err
 	}
 	delay := s.nextDelay(d.Attempts + 1)

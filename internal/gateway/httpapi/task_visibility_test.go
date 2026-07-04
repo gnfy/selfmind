@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -156,7 +157,9 @@ func TestStatusPrefersActiveRunTask(t *testing.T) {
 	if !strings.Contains(reply, "Task: "+activeTask.Title) || !strings.Contains(reply, "Status:") {
 		t.Fatalf("status during active run = %q, want task %q", reply, activeTask.Title)
 	}
-	if !strings.Contains(reply, "Running:") || !strings.Contains(reply, run.ID) {
+	// The card is conversational: it shows the running state but no run hash
+	// (ids live in the control plane; /tasks and the HTTP API expose them).
+	if !strings.Contains(reply, "Running:") || strings.Contains(reply, run.ID) {
 		t.Fatalf("status during active run missing running block: %q", reply)
 	}
 
@@ -164,5 +167,25 @@ func TestStatusPrefersActiveRunTask(t *testing.T) {
 	reply = statusReply()
 	if !strings.Contains(reply, "Task: "+pointerTask.Title) {
 		t.Fatalf("status after run = %q, want pointer task %q", reply, pointerTask.Title)
+	}
+}
+
+// TestStatusSurfacesPendingApproval: a run blocked on an approval must not
+// look "stuck" — /status carries the same conversational y/n prompt the push
+// uses (observed live: 15 minutes of staring at a silent "running" card).
+func TestStatusSurfacesPendingApproval(t *testing.T) {
+	daemon, store, identity, task, _ := newApprovalTestServer(t)
+	ctx := context.Background()
+	if err := store.SetCurrentTask(ctx, identity.TenantID, identity.PersonID, task.ID); err != nil {
+		t.Fatal(err)
+	}
+	reply, err := daemon.statusReply(ctx, identity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"Waiting for your approval", "reply y or n", "[terminal]", "rm -rf build"} {
+		if !strings.Contains(reply, want) {
+			t.Fatalf("status card missing %q:\n%s", want, reply)
+		}
 	}
 }

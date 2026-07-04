@@ -122,3 +122,18 @@ func TestIsUserRejectionErrDistinguishesHardFloor(t *testing.T) {
 		t.Fatalf("user cancellation must still be classified as a rejection")
 	}
 }
+
+// TestIsUserRejectionErrMatchesSafetyTriageDeny locks the H2 contract: a
+// smart-mode triage DENY ("operation rejected: blocked by safety triage") is a
+// decision, so the model must get the do-not-retry instruction, not
+// diagnose-and-retry. It shares the user-rejection prefix on purpose.
+func TestIsUserRejectionErrMatchesSafetyTriageDeny(t *testing.T) {
+	deny := fmt.Errorf("operation rejected: blocked by safety triage")
+	if !isUserRejectionErr(deny) {
+		t.Fatalf("triage DENY must be classified as a do-not-retry decision: %v", deny)
+	}
+	env := packageToolError("terminal", deny)
+	if !strings.Contains(env.ModelContent, "Do NOT retry") {
+		t.Fatalf("triage DENY should carry a do-not-retry instruction, got: %s", env.ModelContent)
+	}
+}

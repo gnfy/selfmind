@@ -31,6 +31,14 @@ type ExecutionScope struct {
 	// it to skip a human ask for an already-approved class and records new grants
 	// when a decision says "remember" (task/person scope). Nil = no memory.
 	Grants ApprovalGrantStore
+	// Judge backs the smart-mode LLM triage step (H2): when set, a dangerous
+	// (non-hardline) op that survived the class-grant check is triaged by a
+	// cheap model before the human ask (APPROVE auto-runs + grants the class for
+	// the task, DENY blocks, ESCALATE/errors fall through to the human ask). Nil
+	// = no triage, so smart mode behaves as on-request (human ask). The
+	// gateway/app installs a judge backed by a cheap role model, kept OFF the
+	// run's main provider.
+	Judge ApprovalJudge
 }
 
 var executionScopes sync.Map // tenantID used by the agent -> ExecutionScope

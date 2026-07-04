@@ -30,6 +30,7 @@ type Agent struct {
 	backend            AgentBackend
 	llm                llm.Provider
 	fastProvider       llm.Provider                 // optional fast model for simple direct-answer turns
+	judgeProvider      llm.Provider                 // optional cheap model for smart-mode approval triage (H2), kept OFF the main run provider
 	runLLM             llm.Provider                 // per-run active provider, set under runMu
 	skillInventory     func(tenantID string) string // optional: compact learned-skill list for the prompt
 	profileSynthesizer *ProfileSynthesizer          // optional: distills facts into a user profile
@@ -133,6 +134,29 @@ func (a *Agent) SetFastProvider(p llm.Provider) {
 		return
 	}
 	a.fastProvider = p
+}
+
+// SetApprovalJudgeProvider installs the cheap role-routed provider used for
+// smart-mode approval triage (H2). The kernel only carries the provider so the
+// app/gateway layer (which owns model routing) can pick a cheap role and keep it
+// OFF the run's main coding provider; the concrete tools.ApprovalJudge is built
+// at the gateway boundary from ApprovalJudgeProvider. Kept as an llm.Provider,
+// not a tools type, so kernel takes no dependency on concrete tools.
+func (a *Agent) SetApprovalJudgeProvider(p llm.Provider) {
+	if a == nil {
+		return
+	}
+	a.judgeProvider = p
+}
+
+// ApprovalJudgeProvider returns the cheap provider for smart-mode approval
+// triage, or nil when none is configured (then smart mode degrades to a human
+// ask — never an auto-approval).
+func (a *Agent) ApprovalJudgeProvider() llm.Provider {
+	if a == nil {
+		return nil
+	}
+	return a.judgeProvider
 }
 
 // activeLLM returns the provider for the current run (the per-run choice when

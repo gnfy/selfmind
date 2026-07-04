@@ -125,11 +125,13 @@ const (
 	// ApprovalFullAuto auto-approves everything (workspace scope still applies,
 	// and the hard-floor deny set in hardlineToolCall still fires).
 	ApprovalFullAuto ApprovalMode = "full-auto"
-	// ApprovalSmart is the layered funnel mode. For H1 it behaves exactly like
-	// on-request (asks only on a dangerous op); H2 will insert an LLM triage
-	// step between the session/persistent allowlist and the human ask. The mode
-	// name and plumbing land now so persisted preferences and reply grammar are
-	// stable before the triage logic arrives.
+	// ApprovalSmart is the layered funnel mode. It gates on a dangerous op like
+	// on-request, but (H2) inserts an LLM triage step between the
+	// session/persistent allowlist and the human ask: a cheap judge auto-approves
+	// clearly-safe ops (recording a task-scope class grant so it is asked at most
+	// once per class per task), blocks clearly-damaging ones, and escalates
+	// everything uncertain to the human ask. With no judge installed it degrades
+	// to on-request (human ask) — it never auto-approves without a judge.
 	ApprovalSmart ApprovalMode = "smart"
 )
 
@@ -167,8 +169,9 @@ func approvalNeeded(mode ApprovalMode, toolName string, dangerous bool) bool {
 	case ApprovalFullAuto:
 		return false
 	case ApprovalSmart:
-		// H1: identical to on-request (ask only on a dangerous op). H2 inserts
-		// LLM triage before the human ask; the gate itself stays here.
+		// Gates on a dangerous op like on-request. The smart-specific behavior
+		// (LLM triage before the human ask) lives in SmartApprovalMiddleware,
+		// layered after this gate; the gate itself stays here.
 		return dangerous
 	case ApprovalReadOnly:
 		return isWriteTool(toolName) || isExecTool(toolName) || dangerous
@@ -195,7 +198,12 @@ func approvalNeeded(mode ApprovalMode, toolName string, dangerous bool) bool {
 //  3. Class-level allowlist (scope.Grants): a prior "approve this class" for the
 //     task (session) or person (persistent) suppresses the ask. This is the key
 //     fatigue reducer — approving one chmod approves the chmod CLASS.
-//  4. (H2, deferred) LLM triage for smart mode inserts here.
+//  4. LLM triage (H2), smart mode only: a cheap judge triages the dangerous op
+//     (APPROVE auto-runs + grants the class for the task; DENY blocks as a
+//     do-not-retry decision; ESCALATE / no judge / any error / timeout falls
+//     through to the human ask). It fails SAFE — never auto-approves without a
+//     clear APPROVE from an installed judge — and sits strictly below the hard
+//     floor, which returned long before this point.
 //  5. Human ask (scope.Approval / clarify). An "approve + remember" decision
 //     records a grant for the next same-class call.
 func SmartApprovalMiddleware(projectRoot string) Middleware {
@@ -236,6 +244,39 @@ func SmartApprovalMiddleware(projectRoot string) Middleware {
 			if hasScope && scope.Grants != nil && patternKey != "" {
 				if granted, _ := scope.Grants.IsApprovalGranted(contextFromArgs(args), scope.TenantID, scope.PersonID, scope.TaskID, patternKey); granted {
 					return next(args)
+				}
+			}
+
+			// Layer 4 (H2): LLM triage, smart mode only. Sits ABOVE the human ask
+			// and BELOW the hard floor (hardline ops returned already) and the
+			// class-grant allowlist (a granted class returned already), so triage
+			// is asked at most once per class per task. Only a dangerous
+			// (non-hardline) op reaches here in smart mode. Fails SAFE: with no
+			// judge, or on ESCALATE / any error / timeout, we fall through to the
+			// human ask — never an auto-approval.
+			if mode == ApprovalSmart && hasScope && scope.Judge != nil {
+				ctx := contextFromArgs(args)
+				verdict, terr := triageApproval(ctx, scope.Judge, toolName, triageSubject(toolName, approvalArgs(args)), reason)
+				switch verdict {
+				case TriageApprove:
+					// Record a TASK-scope class grant so the judge is consulted at
+					// most once per class per task, then proceed.
+					if scope.Grants != nil && patternKey != "" {
+						recordApprovalGrant(ctx, scope, "task", patternKey)
+					}
+					log.Info("smart approval: auto-approved by triage", "tool", toolName, "reason", reason, "class", patternKey)
+					return next(args)
+				case TriageDeny:
+					// Rejection contract: reuse the "operation rejected" prefix so
+					// kernel's isUserRejectionErr treats it as a decision (do NOT
+					// retry a variant), not a diagnosable failure.
+					log.Warn("smart approval: blocked by safety triage", "tool", toolName, "reason", reason)
+					return "", fmt.Errorf("operation rejected: blocked by safety triage")
+				default:
+					// ESCALATE (and any error/timeout) → fall through to the human ask.
+					if terr != nil {
+						log.Debug("smart approval: triage escalated on error", "tool", toolName, "error", terr)
+					}
 				}
 			}
 

@@ -212,6 +212,9 @@ func (a *App) runTUI() int {
 		Control:         controlStore,
 		Gateway:         gwDeps.Gateway,
 		DefaultTenantID: tenantID,
+		// Smart-mode approval triage (H2): cheap-model judge off the main run
+		// provider. Nil when unavailable → smart mode asks a human.
+		ApprovalJudge: appcore.NewApprovalJudge(agent.ApprovalJudgeProvider()),
 	}
 	ctrl.SetMessageProcessor(localGateway.ProcessMessage)
 	disp.InjectClarifyHandler(ctrl.ClarifyHandler())

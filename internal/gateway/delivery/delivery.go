@@ -42,6 +42,17 @@ type Sender interface {
 	Send(ctx context.Context, msg Message) error
 }
 
+// SenderWithReceipt lets a sender distinguish "the platform will deliver this"
+// from "the platform accepted it but may silently drop it" (observed live on
+// Weixin/iLink: sends on a stale context_token return success yet never reach
+// the phone). confirmed=false does NOT mean failure — the message may still
+// arrive — so such deliveries are marked sent_unconfirmed, never retried
+// (a retry would use the same stale token and risk duplicates), and are
+// surfaced later by the attach digest.
+type SenderWithReceipt interface {
+	SendWithReceipt(ctx context.Context, msg Message) (confirmed bool, err error)
+}
+
 type SenderFunc func(ctx context.Context, msg Message) error
 
 func (f SenderFunc) Send(ctx context.Context, msg Message) error {
@@ -82,16 +93,28 @@ func (r *Router) HasPlatform(platform string) bool {
 }
 
 func (r *Router) Send(ctx context.Context, msg Message) error {
+	_, err := r.SendWithReceipt(ctx, msg)
+	return err
+}
+
+// SendWithReceipt routes like Send and passes the delivery-confidence receipt
+// through when the platform sender provides one; senders without receipt
+// support are assumed confirmed (their APIs fail loudly instead of dropping).
+func (r *Router) SendWithReceipt(ctx context.Context, msg Message) (bool, error) {
 	if r == nil {
-		return ErrNoSender
+		return false, ErrNoSender
 	}
-	if sender := r.byPlatform[strings.ToLower(strings.TrimSpace(msg.Platform))]; sender != nil {
-		return sender.Send(ctx, msg)
+	sender := r.byPlatform[strings.ToLower(strings.TrimSpace(msg.Platform))]
+	if sender == nil {
+		sender = r.defaultSender
 	}
-	if r.defaultSender != nil {
-		return r.defaultSender.Send(ctx, msg)
+	if sender == nil {
+		return false, ErrNoSender
 	}
-	return ErrNoSender
+	if receipted, ok := sender.(SenderWithReceipt); ok {
+		return receipted.SendWithReceipt(ctx, msg)
+	}
+	return true, sender.Send(ctx, msg)
 }
 
 var ErrNoSender = fmt.Errorf("no outbound sender configured")
@@ -262,8 +285,21 @@ func (s *Service) tryDelivery(ctx context.Context, d *control.Delivery) error {
 		PartIndex:      d.PartIndex,
 		PartTotal:      d.PartTotal,
 	}
-	err = s.sender.Send(ctx, msg)
+	confirmed := true
+	if receipted, ok := s.sender.(SenderWithReceipt); ok {
+		confirmed, err = receipted.SendWithReceipt(ctx, msg)
+	} else {
+		err = s.sender.Send(ctx, msg)
+	}
 	if err == nil {
+		if !confirmed {
+			// Accepted by the platform but delivery is doubtful (e.g. stale
+			// iLink context_token). Terminal for the queue — retrying would
+			// reuse the same stale session and risk duplicates — but recorded
+			// distinctly so the attach digest can surface possibly-missed
+			// notifications.
+			return s.store.MarkDeliverySentUnconfirmed(ctx, d.ID)
+		}
 		return s.store.MarkDeliveryAttempt(ctx, d.ID, true, "", time.Time{})
 	}
 	if err == ErrNoSender {

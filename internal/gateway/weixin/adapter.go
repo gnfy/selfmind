@@ -81,14 +81,31 @@ func (a *Adapter) Stop() {
 }
 
 func (a *Adapter) Send(ctx context.Context, msg delivery.Message) error {
+	_, err := a.SendWithReceipt(ctx, msg)
+	return err
+}
+
+// SendWithReceipt implements delivery.SenderWithReceipt: the iLink API accepts
+// proactive pushes on a stale context_token with ret=0 yet the message never
+// reaches the phone (observed live 2026-07-04). Delivery confidence therefore
+// comes from token freshness, not from the send response.
+func (a *Adapter) SendWithReceipt(ctx context.Context, msg delivery.Message) (bool, error) {
 	if a == nil || a.client == nil {
-		return delivery.ErrNoSender
+		return false, delivery.ErrNoSender
 	}
 	target := firstNonEmpty(msg.Channel, msg.PlatformUserID)
 	if target == "" {
-		return fmt.Errorf("weixin delivery target is empty")
+		return false, fmt.Errorf("weixin delivery target is empty")
 	}
-	return a.client.Send(ctx, target, msg.Content)
+	confirmed := a.client.PushConfidence(target)
+	if err := a.client.Send(ctx, target, msg.Content); err != nil {
+		return confirmed, err
+	}
+	if !confirmed {
+		log.Warn("weixin push accepted but unconfirmed (stale context_token); it may not arrive",
+			"target", target, "kind", msg.Kind)
+	}
+	return confirmed, nil
 }
 
 func (a *Adapter) pollLoop(ctx context.Context) {

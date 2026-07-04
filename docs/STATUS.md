@@ -73,11 +73,17 @@ is the only priority list in the repo; other docs must point here.
 1. **P0 — G0: Runtime attachment model** (design:
    `docs/identity-continuity.md` "Runtime attachment model"; owner decisions
    2026-07-04, incl. origin-affinity routing). Sub-items in order:
-   (0) **Weixin push reliability** — the open watch item (pushes `sent` but
-   not received; suspect iLink context_token staleness) is a prerequisite:
-   "IM takeover" is a false promise if delivery is unreliable. Audit the
-   weixin sender's errcode/token handling; undeliverable pushes must mark
-   failed for retry and surface in the attach digest.
+   (0) **Weixin push reliability** — ✅ mechanism landed (2026-07-04): the
+   sender DOES check iLink ret/errcode, so the observed loss is
+   accepted-but-dropped on a stale context_token. Context tokens now carry
+   capture timestamps (legacy files restore as age-unknown = stale);
+   `delivery.SenderWithReceipt` lets the weixin adapter report push
+   confidence from token freshness (30m conservative window, true window
+   undocumented); doubtful sends finalize as `sent_unconfirmed` — terminal
+   for the retry queue (resending on the same stale session risks
+   duplicates) — with a WARN log. Remaining: surface `sent_unconfirmed` rows
+   in the attach digest (G0-c) and optionally catch-up on the peer's next
+   inbound; calibrate the window empirically.
    (a) Detached run execution — decouple runs from HTTP request contexts
    (`handleMessage` passes `r.Context()` into the run today, so closing the
    CLI mid-turn kills the run; runs execute on daemon-owned contexts,

@@ -705,14 +705,24 @@ func defaultSelfMindHome() string {
 	return filepath.Join(home, ".selfmind")
 }
 
+// tokenEntry pairs an iLink context_token with when it was captured from an
+// inbound message. Age matters: proactive pushes on a fresh token deliver,
+// while pushes on a stale token are accepted by the API (ret=0) yet observed
+// to never reach the phone — the send response cannot distinguish the two, so
+// freshness is the only delivery-confidence signal we have.
+type tokenEntry struct {
+	Token   string `json:"token"`
+	SavedAt int64  `json:"saved_at,omitempty"`
+}
+
 type ContextTokenStore struct {
 	root  string
 	mu    sync.Mutex
-	cache map[string]string
+	cache map[string]tokenEntry
 }
 
 func NewContextTokenStore(homeDir string) *ContextTokenStore {
-	return &ContextTokenStore{root: accountDir(homeDir), cache: map[string]string{}}
+	return &ContextTokenStore{root: accountDir(homeDir), cache: map[string]tokenEntry{}}
 }
 
 func (s *ContextTokenStore) Restore(accountID string) {
@@ -722,13 +732,24 @@ func (s *ContextTokenStore) Restore(accountID string) {
 	if err != nil {
 		return
 	}
-	var payload map[string]string
-	if err := json.Unmarshal(data, &payload); err != nil {
+	// Current format: map[peer]tokenEntry. Legacy format: map[peer]string
+	// (no timestamp — age unknown, treated as stale for push confidence).
+	var payload map[string]tokenEntry
+	if err := json.Unmarshal(data, &payload); err == nil {
+		for peer, entry := range payload {
+			if entry.Token != "" {
+				s.cache[s.key(accountID, peer)] = entry
+			}
+		}
 		return
 	}
-	for peer, token := range payload {
+	var legacy map[string]string
+	if err := json.Unmarshal(data, &legacy); err != nil {
+		return
+	}
+	for peer, token := range legacy {
 		if token != "" {
-			s.cache[s.key(accountID, peer)] = token
+			s.cache[s.key(accountID, peer)] = tokenEntry{Token: token}
 		}
 	}
 }
@@ -736,13 +757,26 @@ func (s *ContextTokenStore) Restore(accountID string) {
 func (s *ContextTokenStore) Get(accountID, peerID string) string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.cache[s.key(accountID, peerID)]
+	return s.cache[s.key(accountID, peerID)].Token
+}
+
+// Age reports how long ago the peer's context_token was captured. ok is false
+// when there is no token or its capture time is unknown (legacy persistence) —
+// callers must treat both as stale.
+func (s *ContextTokenStore) Age(accountID, peerID string) (time.Duration, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	entry, found := s.cache[s.key(accountID, peerID)]
+	if !found || entry.Token == "" || entry.SavedAt <= 0 {
+		return 0, false
+	}
+	return time.Since(time.Unix(entry.SavedAt, 0)), true
 }
 
 func (s *ContextTokenStore) Set(accountID, peerID, token string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.cache[s.key(accountID, peerID)] = token
+	s.cache[s.key(accountID, peerID)] = tokenEntry{Token: token, SavedAt: time.Now().Unix()}
 	s.persistLocked(accountID)
 }
 
@@ -759,10 +793,10 @@ func (s *ContextTokenStore) key(accountID, peerID string) string {
 
 func (s *ContextTokenStore) persistLocked(accountID string) {
 	prefix := accountID + ":"
-	payload := map[string]string{}
-	for key, token := range s.cache {
+	payload := map[string]tokenEntry{}
+	for key, entry := range s.cache {
 		if strings.HasPrefix(key, prefix) {
-			payload[strings.TrimPrefix(key, prefix)] = token
+			payload[strings.TrimPrefix(key, prefix)] = entry
 		}
 	}
 	data, _ := json.MarshalIndent(payload, "", "  ")
@@ -772,6 +806,23 @@ func (s *ContextTokenStore) persistLocked(accountID string) {
 	if err := os.WriteFile(tmp, data, 0600); err == nil {
 		_ = os.Rename(tmp, path)
 	}
+}
+
+// pushSessionFreshWindow is how young a peer's context_token must be for a
+// proactive push to be considered deliverable. Empirical bounds from live use
+// (2026-07-04): minutes-old tokens delivered, a ~4.7h-old token was accepted
+// by the API but never arrived. The true iLink window is undocumented; 30m is
+// a conservative cut — an "unconfirmed" push may still arrive.
+const pushSessionFreshWindow = 30 * time.Minute
+
+// PushConfidence reports whether a proactive push to chatID is expected to
+// actually deliver (fresh context_token), as opposed to accepted-but-dropped.
+func (c *Client) PushConfidence(chatID string) bool {
+	if c == nil || c.tokens == nil {
+		return false
+	}
+	age, ok := c.tokens.Age(c.cfg.AccountID, strings.TrimSpace(chatID))
+	return ok && age <= pushSessionFreshWindow
 }
 
 type typingTicketCache struct {

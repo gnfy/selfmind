@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestAES128ECBRoundTrip(t *testing.T) {
@@ -128,5 +129,63 @@ func TestSendTextUsesIlinkMessageFormat(t *testing.T) {
 	}
 	if captured["base_info"] == nil {
 		t.Fatalf("base_info missing: %+v", captured)
+	}
+}
+
+// TestContextTokenStoreAgeAndLegacyRestore covers the delivery-confidence
+// contract: fresh tokens have a known age, legacy (timestamp-less) persistence
+// restores as age-unknown, and age-unknown must read as stale.
+func TestContextTokenStoreAgeAndLegacyRestore(t *testing.T) {
+	dir := t.TempDir()
+	store := NewContextTokenStore(dir)
+	store.Set("acct", "peer@im.wechat", "tok-1")
+
+	if age, ok := store.Age("acct", "peer@im.wechat"); !ok || age > time.Minute {
+		t.Fatalf("fresh token age = %v ok=%v", age, ok)
+	}
+	if _, ok := store.Age("acct", "missing"); ok {
+		t.Fatal("missing peer must have unknown age")
+	}
+
+	// New-format persistence round-trips the timestamp.
+	restored := NewContextTokenStore(dir)
+	restored.Restore("acct")
+	if got := restored.Get("acct", "peer@im.wechat"); got != "tok-1" {
+		t.Fatalf("restored token = %q", got)
+	}
+	if _, ok := restored.Age("acct", "peer@im.wechat"); !ok {
+		t.Fatal("restored token should keep its capture time")
+	}
+
+	// Legacy format (map[peer]token) restores tokens with unknown age.
+	legacyDir := t.TempDir()
+	legacy := NewContextTokenStore(legacyDir)
+	path := filepath.Join(legacy.root, safeFileName("acct")+".context-tokens.json")
+	if err := os.MkdirAll(legacy.root, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(`{"peer@im.wechat":"tok-legacy"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	legacy.Restore("acct")
+	if got := legacy.Get("acct", "peer@im.wechat"); got != "tok-legacy" {
+		t.Fatalf("legacy token = %q", got)
+	}
+	if _, ok := legacy.Age("acct", "peer@im.wechat"); ok {
+		t.Fatal("legacy token must have unknown age (treated as stale)")
+	}
+}
+
+// TestPushConfidence: only a fresh context_token makes a proactive push
+// trustworthy; missing or unknown-age tokens read as unconfirmed.
+func TestPushConfidence(t *testing.T) {
+	home := t.TempDir()
+	c := NewClient(RuntimeConfig{AccountID: "acct", Token: "auth", HomeDir: home})
+	if c.PushConfidence("peer@im.wechat") {
+		t.Fatal("no token → no confidence")
+	}
+	c.SaveContextToken("peer@im.wechat", "tok")
+	if !c.PushConfidence("peer@im.wechat") {
+		t.Fatal("fresh token → confident push")
 	}
 }

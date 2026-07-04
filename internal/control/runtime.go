@@ -388,6 +388,19 @@ func (s *Store) ClaimDelivery(ctx context.Context, id string) (bool, error) {
 	return n == 1, nil
 }
 
+// MarkDeliverySentUnconfirmed finalizes a delivery the platform accepted but
+// may silently drop (e.g. Weixin/iLink push on a stale context_token). It is
+// terminal for the retry queue — resending on the same stale session risks
+// duplicates — and distinct from 'sent' so the attach digest can list
+// possibly-missed notifications.
+func (s *Store) MarkDeliverySentUnconfirmed(ctx context.Context, id string) error {
+	now := time.Now()
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE outbound_messages SET status = 'sent_unconfirmed', attempts = attempts + 1, last_error = '', updated_at = ?, delivered_at = ? WHERE id = ?`,
+		now.Unix(), now.Unix(), id)
+	return err
+}
+
 func (s *Store) MarkDeliveryAttempt(ctx context.Context, id string, success bool, errText string, nextAttempt time.Time) error {
 	now := time.Now()
 	if success {

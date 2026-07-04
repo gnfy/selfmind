@@ -133,20 +133,36 @@ the G-series work in `docs/STATUS.md`.
 watcher.** The CLI is an `account` exactly like a bound IM account. A run's
 lifetime is never tied to any endpoint's connection: closing a terminal
 detaches a watcher, it must not cancel or interrupt the run (only heartbeat
-death — a real crash — interrupts). Work-event routing follows **presence**:
+death — a real crash — interrupts).
 
-- While a live interactive endpoint is attached (event-poll heartbeat is the
-  presence signal), work events (approvals, questions, progress, results) go
-  to it, and IM push stays quiet — no double notification.
-- When no interactive endpoint is attached (terminal closed, or the user
-  explicitly hands off, e.g. "switch to WeChat"), work events fan out to the
-  person's bound IM endpoints. Chat transcripts still never cross channels —
-  what moves is work state, not conversation.
-- Any endpoint may re-attach at any time (next morning, back home on the same
-  machine → same `cli/local` account → same person). Re-attaching flips
-  routing back, shows an **attach digest** (what finished/failed while away,
-  pending approvals/questions, queued tasks — one person-scoped query), and
-  can hook onto a mid-flight run's live event stream and steering.
+Routing has two independent layers (owner decision, 2026-07-04):
+
+**Conversation layer — replies follow the ORIGIN endpoint, never broadcast.**
+Results, approval prompts, and questions are conversation messages; they
+belong to the surface where the task was dispatched (this includes scheduled
+jobs, which deliver to the channel that created them). Priority:
+
+1. The task explicitly names a reply endpoint ("结果发到 Telegram") — honored
+   only if it is one of the person's OWN bound accounts (never an arbitrary
+   target; this bound check is a security boundary, not a convenience).
+2. Origin is an IM endpoint → reply to that endpoint (conversational
+   coherence; a WeChat-dispatched task answers in that WeChat chat).
+3. Origin is the CLI and it is attached → CLI.
+4. Origin is the CLI and it is detached → the person's single **preferred
+   notify endpoint** (default: most recently active IM account; configurable).
+   One target, never a fan-out to every bound IM.
+
+**Observation layer — live watching follows PRESENCE.** Any attached
+interactive endpoint may hook a mid-flight run's live event stream and
+steering, without changing where the conversation reply goes (watching a
+WeChat-dispatched task from the CLI does not move its answer). Presence is
+derived from the event-poll heartbeat, never persisted as authority; a
+terminal crash is an implicit detach identical to a graceful close.
+
+Re-attaching (next morning, back home on the same machine → same `cli/local`
+account → same person) flips rule 3/4 back and shows an **attach digest**:
+what finished/failed while away, pending approvals/questions, queued tasks —
+one person-scoped query.
 
 Lifecycle: `CLI attach → work → detach (close/handoff) → IM takeover → …
 → CLI re-attach (digest + take back over)`. Crash of a terminal is an

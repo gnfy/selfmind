@@ -71,17 +71,28 @@ These are the live gaps, ordered by their distance from the north star
 is the only priority list in the repo; other docs must point here.
 
 1. **P0 — G0: Runtime attachment model** (design:
-   `docs/identity-continuity.md` "Runtime attachment model"; owner decision
-   2026-07-04). (a) Detached run execution — decouple runs from HTTP request
-   contexts (`handleMessage` passes `r.Context()` into the run today, so
-   closing the CLI mid-turn kills the run; runs must execute on daemon-owned
-   contexts, endpoints only watch); (b) presence registry keyed on the
-   event-poll heartbeat + presence-based work-event routing (attached
-   interactive endpoint gets events, IM fan-out only when nobody is attached —
-   also fixes today's double notification while sitting in the TUI);
-   (c) attach digest (on CLI re-attach show finished/failed/pending
-   approvals+questions/queued tasks since last presence); (d) re-attach to a
-   mid-flight run's live events + steering.
+   `docs/identity-continuity.md` "Runtime attachment model"; owner decisions
+   2026-07-04, incl. origin-affinity routing). Sub-items in order:
+   (0) **Weixin push reliability** — the open watch item (pushes `sent` but
+   not received; suspect iLink context_token staleness) is a prerequisite:
+   "IM takeover" is a false promise if delivery is unreliable. Audit the
+   weixin sender's errcode/token handling; undeliverable pushes must mark
+   failed for retry and surface in the attach digest.
+   (a) Detached run execution — decouple runs from HTTP request contexts
+   (`handleMessage` passes `r.Context()` into the run today, so closing the
+   CLI mid-turn kills the run; runs execute on daemon-owned contexts,
+   endpoints only watch).
+   (b) Two-layer routing — conversation replies follow the ORIGIN endpoint
+   (IM-dispatched answers in that IM chat; explicit reply-endpoint override
+   limited to the person's own bound accounts; CLI-origin falls back to the
+   single preferred notify endpoint only when detached — never a broadcast;
+   revise yesterday's approval/result fan-out from all-bound-IM to this
+   single-target rule). Observation (live events + steering) follows
+   presence (event-poll heartbeat), independent of reply routing; fixes
+   today's double notification while sitting in the TUI.
+   (c) Attach digest (on CLI re-attach show finished/failed/pending
+   approvals+questions/queued tasks/undelivered pushes since last presence).
+   (d) Re-attach to a mid-flight run's live events + steering.
 2. **P0 — G1+G2: IM routing stack + queue instead of busy.** Inbound routing
    priority: pending approval (y/n, done) > pending question > continuation
    cue > NEW task; a new task while a run is active is queued with an honest
@@ -94,7 +105,8 @@ is the only priority list in the repo; other docs must point here.
    answer:"), next non-command reply resolves it, bounded wait with
    best-judgment fallback. Required by the attachment model (a question must
    survive the CLI closing).
-4. **P1 — G4: adaptive task tags + targeted messaging.** IM notifications
+4. **P2 — G4 (deferred until queues create real multi-task traffic):
+   adaptive task tags + targeted messaging.** IM notifications
    carry a short task tag only when >1 task is alive; `/task <n> <text>`
    routes a message to a specific task (steer if running, next-turn input if
    parked).

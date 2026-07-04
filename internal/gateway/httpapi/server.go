@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -1140,6 +1141,20 @@ func (d *Server) tryHandleControlCommand(ctx context.Context, identity *control.
 		queued, err := d.Control.ListQueued(ctx, identity.TenantID, identity.PersonID, control.QueueStatusQueued)
 		if err != nil {
 			return true, "", err
+		}
+		// `/queue drop <n>` removes one item by its list position (same
+		// ordering as the /queue listing), so a single unwanted task can be
+		// dropped without clearing the whole queue.
+		if rest := strings.TrimSpace(strings.TrimPrefix(strings.ToLower(arg), "drop")); arg != "" && strings.HasPrefix(strings.ToLower(arg), "drop") {
+			n, convErr := strconv.Atoi(strings.TrimSpace(rest))
+			if convErr != nil || n < 1 || n > len(queued) {
+				return true, fmt.Sprintf("Usage: /queue drop <n> (1-%d). Run /queue to see positions.", len(queued)), nil
+			}
+			target := queued[n-1]
+			if err := d.Control.MarkQueued(ctx, identity.TenantID, target.ID, control.QueueStatusCancelled); err != nil {
+				return true, "", err
+			}
+			return true, "Dropped queued task: " + textutil.Truncate(toOneLine(target.Content), 60), nil
 		}
 		return true, formatQueue(queued), nil
 	case lower == "/diag":

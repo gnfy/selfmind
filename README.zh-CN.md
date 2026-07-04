@@ -405,7 +405,7 @@ selfmind -f ./config/config.yaml
 | `/help` | 查看可用命令。 |
 | `/status` | 查看 provider、model、运行时间、token、当前任务，以及待处理的审批/提问。 |
 | `/tasks` | 列出最近的任务及其状态。 |
-| `/queue` / `/queue clear` | 列出排在运行中任务之后的队列 / 清空全部待运行队列。 |
+| `/queue` / `/queue drop <n>` / `/queue clear` | 列出队列 / 按序号删除某一条 / 清空全部。 |
 | `/stop` | 取消正在执行的 run；若当前没有 run 在跑，则取消当前(卡住的)任务。 |
 | `/cancel` | 即使没有活跃 run,也取消当前任务。 |
 | `/new [标题]` | 另起一个新任务,而不是继续当前任务。 |

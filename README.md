@@ -375,7 +375,7 @@ Common slash commands:
 | `/help` | Show available commands. |
 | `/status` | Show provider, model, runtime, token usage, current task, and any pending approval/question. |
 | `/tasks` | List recent tasks with their status. |
-| `/queue` / `/queue clear` | List tasks queued behind the running one / drop all pending queued tasks. |
+| `/queue` / `/queue drop <n>` / `/queue clear` | List queued tasks / drop one by position / drop all. |
 | `/stop` | Cancel the active run — or, if nothing is running, cancel the current (stuck) task. |
 | `/cancel` | Cancel the current task even when no run is active. |
 | `/new [title]` | Start a fresh task instead of continuing the current one. |

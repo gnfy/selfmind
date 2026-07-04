@@ -59,7 +59,7 @@ var entries = []Entry{
 	{Name: "/id", Usage: "/id", Summary: "Show your resolved account identity.", SyncControl: true, Scope: Gateway},
 	{Name: "/status", Aliases: []string{"/task status"}, Usage: "/status", Summary: "Show the current task status.", SyncControl: true, Scope: Gateway},
 	{Name: "/tasks", Usage: "/tasks", Summary: "List recent tasks.", SyncControl: true, Scope: Gateway},
-	{Name: "/queue", Usage: "/queue [clear]", Summary: "List queued tasks (or drop all pending queued tasks).", SyncControl: true, Scope: Gateway},
+	{Name: "/queue", Usage: "/queue [drop <n>|clear]", Summary: "List queued tasks (or drop all pending queued tasks).", SyncControl: true, Scope: Gateway},
 	{Name: "/diag", Usage: "/diag", Summary: "Show a compact runtime diagnostic snapshot.", SyncControl: true, Scope: Gateway},
 	{Name: "/events", Usage: "/events", Summary: "List recent events for the current task.", SyncControl: true, Scope: Gateway},
 	{Name: "/approvals", Usage: "/approvals", Summary: "List pending approvals.", SyncControl: true, Scope: Gateway},

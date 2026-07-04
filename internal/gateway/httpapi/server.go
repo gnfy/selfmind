@@ -179,6 +179,19 @@ func (d *Server) ProcessMessage(ctx context.Context, req api.MessageRequest) (ap
 		}
 		return api.MessageResponse{Identity: identity, Content: content, Turn: messageTurn("completed", "", "idle", "", "", "")}, http.StatusOK
 	}
+	// A leading-slash message that no control command claimed is a mistyped
+	// COMMAND, not conversation or new work. Reject it here so it can never be
+	// dispatched to the agent or queued behind a running task (observed live:
+	// "/qwer" created a task and joined the queue). Skill slash-invocation on
+	// the gateway uses /v1/dispatch, not this message path, so rejecting every
+	// unrecognized slash here is safe.
+	if strings.HasPrefix(strings.TrimSpace(req.Content), "/") {
+		msg := "Unknown command " + strings.Fields(strings.TrimSpace(req.Content))[0] + ". Send /help for the list of commands."
+		if suggestion := suggestControlCommand(strings.ToLower(strings.TrimSpace(req.Content))); suggestion != "" {
+			msg = "Unknown command " + strings.Fields(strings.TrimSpace(req.Content))[0] + " — did you mean " + suggestion + "? Send /help for the full list."
+		}
+		return api.MessageResponse{Identity: identity, Content: msg, Turn: messageTurn("completed", "", "idle", "", "", "")}, http.StatusOK
+	}
 
 	if d.IsDraining() {
 		return api.MessageResponse{

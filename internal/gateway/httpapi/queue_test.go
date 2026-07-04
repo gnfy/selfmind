@@ -6,6 +6,7 @@ package httpapi
 
 import (
 	"context"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
@@ -221,5 +222,32 @@ func TestDiagControlCommand(t *testing.T) {
 	}
 	if !strings.Contains(reply, "Active run: none") {
 		t.Fatalf("/diag reply = %q; want Active run: none", reply)
+	}
+}
+
+// TestUnknownSlashCommandIsRejectedNotQueued reproduces the live bug: a
+// slash-shaped message that no control command claims ("/qwer") must be
+// rejected as a mistyped command — never dispatched to the agent or queued
+// behind a running task.
+func TestUnknownSlashCommandIsRejectedNotQueued(t *testing.T) {
+	daemon, store, identity, _, _ := newApprovalTestServer(t)
+	ctx := context.Background()
+
+	resp, status := daemon.ProcessMessage(ctx, api.MessageRequest{
+		Platform: identity.Platform, PlatformUserID: identity.PlatformUserID,
+		Content: "/qwer",
+	})
+	if status != http.StatusOK {
+		t.Fatalf("status = %d", status)
+	}
+	if !strings.Contains(resp.Content, "Unknown command /qwer") {
+		t.Fatalf("content = %q", resp.Content)
+	}
+	if resp.Accepted {
+		t.Fatal("unknown command must not be accepted as work")
+	}
+	// Nothing was queued.
+	if n, err := store.CountQueued(ctx, identity.TenantID, identity.PersonID, control.QueueStatusQueued); err != nil || n != 0 {
+		t.Fatalf("queued = %d err = %v; unknown slash must not enqueue", n, err)
 	}
 }

@@ -25,7 +25,8 @@ import (
 )
 
 const (
-	doctorRecentRuns = 10
+	doctorRecentRuns   = 10
+	doctorRecentEvents = 40
 	doctorMaxPushes  = 10
 	doctorLogLines   = 50
 	// presenceRecentWindow labels an account as recently active in the presence
@@ -164,6 +165,22 @@ func buildDoctorReport(ctx context.Context, store *control.Store, identity *cont
 	} else {
 		for i, q := range queued {
 			fmt.Fprintf(&sb, "%d. %s\n", i+1, oneLine(tools.RedactSensitive(q.Content), 80))
+		}
+	}
+	sb.WriteString("\n")
+
+	// Recent event timeline — the real per-turn/tool/approval/error detail
+	// (task_events), which the sparse gateway.log does not carry.
+	sb.WriteString("== Recent events ==\n")
+	if events, err := store.ListRecentEventsForPerson(ctx, identity.TenantID, identity.PersonID, doctorRecentEvents); err != nil {
+		fmt.Fprintf(&sb, "(error: %v)\n", err)
+	} else if len(events) == 0 {
+		sb.WriteString("(none)\n")
+	} else {
+		for _, e := range events {
+			ts := e.CreatedAt.Format("01-02 15:04:05")
+			line := fmt.Sprintf("%s  %-18s %s", ts, e.Type, oneLine(tools.RedactSensitive(e.Preview), 100))
+			sb.WriteString(strings.TrimRight(line, " ") + "\n")
 		}
 	}
 	sb.WriteString("\n")

@@ -108,3 +108,56 @@ func (s *Store) CountChannelMessagesByChannel(ctx context.Context, tenantID, per
 	}
 	return out, rows.Err()
 }
+
+// EventDigest is one recent task event for the doctor timeline: the real
+// per-turn/tool/approval/error signal, which lives in task_events (control.db),
+// not in the sparse gateway.log. Payload is a bounded preview; callers redact.
+type EventDigest struct {
+	TaskID    string    `json:"task_id"`
+	TaskTitle string    `json:"task_title"`
+	Type      string    `json:"type"`
+	Channel   string    `json:"channel"`
+	Preview   string    `json:"preview,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// ListRecentEventsForPerson returns the person's most recent task events across
+// all their tasks (join through tasks for ownership + title), newest first.
+// This is the doctor "recent events" timeline — the diagnostic detail that
+// gateway.log does not carry.
+func (s *Store) ListRecentEventsForPerson(ctx context.Context, tenantID, personID string, limit int) ([]EventDigest, error) {
+	if strings.TrimSpace(personID) == "" {
+		return nil, fmt.Errorf("person id is required")
+	}
+	if limit <= 0 || limit > 200 {
+		limit = 40
+	}
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT e.task_id, COALESCE(t.title, ''), e.type, COALESCE(e.channel, ''),
+		        COALESCE(e.payload_json, ''), e.created_at
+		 FROM task_events e JOIN tasks t ON t.id = e.task_id
+		 WHERE t.tenant_id = ? AND t.person_id = ?
+		 ORDER BY e.created_at DESC, e.id DESC LIMIT ?`,
+		normalizeTenant(tenantID), personID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []EventDigest
+	for rows.Next() {
+		var d EventDigest
+		var payload string
+		var created int64
+		if err := rows.Scan(&d.TaskID, &d.TaskTitle, &d.Type, &d.Channel, &payload, &created); err != nil {
+			return nil, err
+		}
+		payload = strings.ReplaceAll(strings.ReplaceAll(payload, "\n", " "), "\r", " ")
+		if len(payload) > 160 {
+			payload = payload[:160] + "…"
+		}
+		d.Preview = payload
+		d.CreatedAt = time.Unix(created, 0)
+		out = append(out, d)
+	}
+	return out, rows.Err()
+}

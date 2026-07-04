@@ -8,7 +8,7 @@
 > planning docs were removed from the tree (2026-07-03; retrieve via git
 > history) — never resurrect their backlog items or code samples.
 >
-> **Snapshot date:** 2026-07-04. When you finish a change that moves a row,
+> **Snapshot date:** 2026-07-05. When you finish a change that moves a row,
 > update this table in the same PR. See `docs/phase1-modules.md` for the
 > Phase-1 feature-module index.
 
@@ -16,7 +16,7 @@
 
 - `GOWORK=off go build ./...` — passing.
 - `GOWORK=off go test ./...` — passing.
-- ~289 Go files, ~62.6k LOC, 80 test files (2026-07-03).
+- ~336 Go files, ~74.5k LOC, 109 test files (2026-07-05).
 
 ## Status Legend
 

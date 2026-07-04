@@ -126,6 +126,63 @@ func (d *Server) respondApprovalByToken(ctx context.Context, identity *control.I
 	return approval, nil
 }
 
+// parseBareApprovalReply maps a conversational one-word answer to an approval
+// decision. It stays tight (whole-message match only) so ordinary sentences
+// are never misread as a decision. "ok"/"可以"/"好" double as continuation
+// cues elsewhere; the caller only invokes this when an approval is pending, so
+// a blocking approval wins that collision by construction.
+func parseBareApprovalReply(content string) (string, bool) {
+	s := strings.ToLower(strings.TrimSpace(content))
+	s = strings.Trim(s, " \t\r\n.!?。！？，,")
+	switch s {
+	case "y", "yes", "ok", "okay", "approve", "approved", "sure",
+		"好", "好的", "可以", "同意", "批准", "行":
+		return "approved", true
+	case "n", "no", "reject", "rejected", "deny", "denied", "cancel",
+		"不", "不行", "不可以", "拒绝", "取消":
+		return "rejected", true
+	}
+	return "", false
+}
+
+// tryHandleBareApprovalReply resolves a conversational y/n against the person's
+// pending approvals. It only claims the message when at least one approval is
+// pending, so a bare "y" with nothing pending reaches the agent unchanged. One
+// pending → decide it. Several pending (only possible with parallel runs, since
+// the per-person active-run guard serializes interactive approvals) → the word
+// is ambiguous, so return the numbered list and ask for /approve <n>.
+func (d *Server) tryHandleBareApprovalReply(ctx context.Context, identity *control.IdentityContext, content, channel string) (bool, string, error) {
+	decision, ok := parseBareApprovalReply(content)
+	if !ok || d == nil || d.Control == nil || identity == nil {
+		return false, "", nil
+	}
+	pending, err := d.Control.ListApprovalRequests(ctx, identity.TenantID, identity.PersonID, "pending", 100)
+	if err != nil || len(pending) == 0 {
+		// Store error or nothing pending: not an approval reply — let the word
+		// flow to the agent (and to continuation-cue handling for "ok"/"可以").
+		return false, "", nil
+	}
+	sortApprovalsForDisplay(pending)
+	if len(pending) > 1 {
+		titles := d.taskTitlesFor(ctx, identity.TenantID, pending)
+		verb := "approve"
+		if decision == "rejected" {
+			verb = "reject"
+		}
+		return true, fmt.Sprintf("%d approvals are pending, so I cannot tell which one you mean. Reply /%s <n>:\n%s",
+			len(pending), verb, formatApprovals(pending, titles)), nil
+	}
+	approval, err := d.respondApprovalByToken(ctx, identity, pending[0].ID, decision, channel)
+	if err != nil {
+		return true, "Could not record the decision: " + err.Error(), nil
+	}
+	verb := "Approved"
+	if approval.Status == "rejected" {
+		verb = "Rejected"
+	}
+	return true, verb + ": " + approvalSummaryLine(*approval, ""), nil
+}
+
 // respondApprovalCommand backs the /approve and /reject control commands. It
 // always returns a one-line human reply — resolution problems are user
 // mistakes, not server failures, so they come back as chat text (never a 500

@@ -307,9 +307,17 @@ func TestCLIOriginatedApprovalFansOutToBoundIM(t *testing.T) {
 	if msg.Kind != delivery.KindApproval || msg.ApprovalID != approval.ID {
 		t.Fatalf("kind = %q approval = %q", msg.Kind, msg.ApprovalID)
 	}
-	for _, want := range []string{"[terminal]", "rm -rf build", "Deploy service to staging", approval.ID, "Reply /approve 1"} {
+	// Conversational, task-free push: the command + reason + a y/n prompt, and
+	// deliberately NOT the task title or the apr_ id (those stay in the control
+	// plane / /approvals, out of the IM UX).
+	for _, want := range []string{"[terminal]", "rm -rf build", "reply y or n"} {
 		if !strings.Contains(msg.Content, want) {
 			t.Fatalf("notification missing %q:\n%s", want, msg.Content)
+		}
+	}
+	for _, absent := range []string{"Deploy service to staging", approval.ID} {
+		if strings.Contains(msg.Content, absent) {
+			t.Fatalf("notification should not carry %q:\n%s", absent, msg.Content)
 		}
 	}
 }
@@ -371,5 +379,61 @@ func TestMessageRequestFromTelegramCallbackQuery(t *testing.T) {
 	req = messageRequestFromIM("telegram", payload)
 	if req.Content != "/reject apr_9999" {
 		t.Fatalf("content = %q", req.Content)
+	}
+}
+
+// TestBareYesResolvesLonePendingApproval covers the conversational approval
+// path: with exactly one pending approval a bare "y" (or "好") approves it and
+// "n" rejects it, no /approve ceremony. This is the common IM case.
+func TestBareYesResolvesLonePendingApproval(t *testing.T) {
+	daemon, store, identity, _, approval := newApprovalTestServer(t)
+	ctx := context.Background()
+
+	handled, reply, err := daemon.tryHandleBareApprovalReply(ctx, identity, "y", "weixin")
+	if err != nil || !handled {
+		t.Fatalf("bare y should be handled: handled=%v err=%v", handled, err)
+	}
+	if !strings.Contains(reply, "Approved") {
+		t.Fatalf("reply = %q", reply)
+	}
+	current, _ := store.GetApprovalRequest(ctx, identity.TenantID, approval.ID)
+	if current == nil || current.Status != "approved" {
+		t.Fatalf("approval = %+v", current)
+	}
+}
+
+// TestBareReplyIgnoredWithNoPending ensures a bare "y" with nothing pending is
+// NOT claimed, so it reaches the agent (and continuation-cue handling) instead
+// of being silently eaten.
+func TestBareReplyIgnoredWithNoPending(t *testing.T) {
+	daemon, store, identity, _, approval := newApprovalTestServer(t)
+	ctx := context.Background()
+	if _, err := store.RespondApprovalRequest(ctx, identity.TenantID, identity.PersonID, approval.ID, "approved", "cli"); err != nil {
+		t.Fatal(err)
+	}
+	handled, _, _ := daemon.tryHandleBareApprovalReply(ctx, identity, "y", "weixin")
+	if handled {
+		t.Fatal("bare y with no pending approval must fall through to the agent")
+	}
+}
+
+// TestBareReplyAmbiguousWithMultiplePending: with >1 pending the word cannot
+// resolve, so the handler lists them and asks for /approve <n> instead of
+// guessing.
+func TestBareReplyAmbiguousWithMultiplePending(t *testing.T) {
+	daemon, store, identity, task, _ := newApprovalTestServer(t)
+	ctx := context.Background()
+	if _, err := store.CreateApprovalRequest(ctx, control.ApprovalRequest{
+		TenantID: identity.TenantID, PersonID: identity.PersonID, TaskID: task.ID,
+		ActionType: "tool_call", Payload: []byte(`{"tool":"terminal","reason":"second"}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	handled, reply, err := daemon.tryHandleBareApprovalReply(ctx, identity, "y", "weixin")
+	if err != nil || !handled {
+		t.Fatalf("handled=%v err=%v", handled, err)
+	}
+	if !strings.Contains(reply, "/approve") || !strings.Contains(reply, "pending") {
+		t.Fatalf("ambiguous reply should ask for /approve <n>: %q", reply)
 	}
 }

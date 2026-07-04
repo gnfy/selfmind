@@ -651,10 +651,13 @@ func (c *RunCoordinator) fanOutToBoundIM(ctx context.Context, identity *control.
 // reply instructions. Telegram additionally renders native buttons from
 // Message.Kind/ApprovalID.
 func approvalNotificationText(approval control.ApprovalRequest, taskTitle string) string {
-	// The copyable id is already on its own line; the hint stays one compact
-	// bilingual sentence instead of repeating the full id again.
-	return fmt.Sprintf("Approval required:\n%s\n%s\nReply /approve 1 or /reject 1.",
-		approvalSummaryLine(approval, taskTitle), approval.ID)
+	// Conversational, task-free: in IM the person just needs to answer "can I
+	// run this?", like asking a human assistant. No task label, no apr_ id, no
+	// ordinal — a bare y/n resolves to this approval (the only pending one on
+	// the serial interactive path). The task concept stays in the control
+	// plane, out of the IM UX. /approve <n> remains available for the rare
+	// parallel-run case; /approvals still lists ids.
+	return "Approval needed — reply y or n:\n" + approvalSummaryLine(approval, "")
 }
 
 func (c *RunCoordinator) withGatewayContext(input string, identity *control.IdentityContext, task *control.Task, workspace *control.Workspace, attachments []api.MessageAttachment) string {
@@ -708,6 +711,14 @@ func (c *RunCoordinator) withGatewayContext(input string, identity *control.Iden
 func (d *Server) tryHandleControlCommand(ctx context.Context, identity *control.IdentityContext, req api.MessageRequest) (bool, string, error) {
 	trimmed := strings.TrimSpace(req.Content)
 	lower := strings.ToLower(trimmed)
+	// Conversational approval: a bare "y"/"n" (or 好/可以/不行 …) answers a
+	// pending approval without the /approve ceremony, so IM feels like asking
+	// a human assistant. Only claimed when an approval is actually pending —
+	// otherwise the word falls through to the agent (and to the continuation
+	// cue handling for "ok"/"可以"). Runs before the "/" gate below.
+	if handled, reply, err := d.tryHandleBareApprovalReply(ctx, identity, trimmed, req.Channel); handled {
+		return true, reply, err
+	}
 	if !strings.HasPrefix(lower, "/") {
 		return false, "", nil
 	}

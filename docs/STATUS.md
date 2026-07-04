@@ -202,6 +202,33 @@ is the only priority list in the repo; other docs must point here.
    scenarios.
 10. **P2 — MCP `sampling/createMessage`**, IM voice STT/TTS, remaining adapter
    polish — only as scenario needs dictate.
+11. **P2 — Unify control-command parsing across endpoints (hygiene; do AFTER
+   the command set stabilizes).** Execution is ALREADY a single funnel —
+   every live endpoint (weixin, IM/Telegram webhook, CLI subcommands, TUI
+   passthrough, client mode) reaches `Server.tryHandleControlCommand`
+   (`internal/gateway/httpapi/server.go`). What is duplicated and has DRIFTED
+   is *detection / help / name lists* in ~9 places: the switch itself, the
+   `suggestControlCommand` `known` slice, the gateway `/help` text, TWO
+   async-hint `isControlCommand` copies (`weixin/adapter.go`,
+   `handlers_channels.go` — both omit `/queue /diag /mode /notify /help
+   /model`), the TUI `slash_commands.go` registry (omits `/approve /reject
+   /stop /id /new /resume /workspace(s) /events /notify` → typing `/approve`
+   in the TUI never reaches the approve path), the CLI subcommand switch
+   (`cliapp/client_commands.go`), THREE approval-mode word lists
+   (`server.go`, `client_commands.go`, TUI `handleMode`), and THREE
+   disagreeing `/help` texts. Also two independent "unknown command" deciders
+   (gateway `server.go` reject vs TUI `command_handlers.go` short-circuit) —
+   `/qwer` behaves differently per endpoint. **Fix:** one canonical command
+   registry `name → {aliases, help, async-hint, execute-fn, is-local}`; derive
+   the switch/help/suggest/async-hint/TUI-metas/CLI-subcommands from it; unify
+   the unknown-command decision on `suggestControlCommand`. Keep endpoint-local
+   commands (TUI `/copy /paste-image /history /compact /clear /exit` + skill-
+   store `/skills /memory /…`; CLI lifecycle `gateway/auth/eval/selfcheck/
+   doctor/weixin/model`) flagged `is-local`. Deferred by owner (2026-07-04)
+   until the command set stops changing — this is a pure internal-consistency
+   refactor, no new user-visible behavior. Also delete the dead
+   `router.Gateway.Handle` control path (an unwired second executor that would
+   treat `/status` as a task if re-enabled).
 Resolved from this list: **Approval UX** (was item 1, resolved 2026-07-04) —
 see the Approval lifecycle row above for what shipped and the two intentional
 remainders (unmounted long-poll telegram adapter; Weixin text fallback).

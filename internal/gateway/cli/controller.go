@@ -129,7 +129,12 @@ type uiModel struct {
 	startupDigest *api.DigestResponse
 	digestShown   bool
 	runWatcher    RunWatcher
-	attachedRun   bool // watching a pre-existing daemon run (no local turn owns it)
+	// watchingRun is PASSIVE spectator mode for a pre-existing daemon run
+	// (no local turn owns it, the composer is NOT captured). Distinct from
+	// m.thinking, which means "a local turn is executing".
+	watchingRun      bool
+	watchedTaskTitle string
+	watchCancel      context.CancelFunc
 	// exitPromptActive intercepts keys while the quit-with-active-run prompt
 	// is shown (b = background+quit, c = cancel+stay, esc = keep watching).
 	exitPromptActive bool
@@ -1165,20 +1170,21 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// is no synchronous answer to finalize — the conversation reply follows
 		// the run's ORIGIN endpoint (docs/identity-continuity.md); this watcher
 		// only reports that the observation ended and the recorded outcome.
-		m.exitPromptActive = false
-		m.attachedRun = false
-		m.thinking = false
-		m.activityText = ""
-		m.toolExecuting = ""
-		m.cancelFn = nil
-		if strings.HasPrefix(m.statusMsg, "Sent to the running task") || strings.Contains(m.statusMsg, "Guidance queue") {
+		wasWatching := m.watchingRun
+		m.watchingRun = false
+		m.watchedTaskTitle = ""
+		m.watchCancel = nil
+		if strings.HasPrefix(m.statusMsg, "Watching ") {
 			m.statusMsg = ""
 		}
 		if msg.Cancelled {
-			// cancelActiveRunLocally already reported the cancellation.
+			// The user detached (ctrl+c during watch) — the run keeps running on
+			// the daemon; just stop reporting. No "finished" line.
+			if wasWatching {
+				m.statusMsg = "Detached — the task keeps running in the background."
+			}
 			return m, spinnerCmd
 		}
-		m.runStatus = "done"
 		if summary := strings.TrimSpace(msg.Summary); summary != "" {
 			m.addMessage("system", "The running task finished: "+summary)
 		} else {
@@ -1387,6 +1393,15 @@ func (m *uiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			// Priority 1: if input has content, clear it (don't quit)
 			if input := m.editor.Value(); input != "" {
 				m.editor.Reset()
+				return m, nil
+			}
+			// Priority 1.5: passively watching a daemon run (not our turn).
+			// ctrl+c leaves the spectator view — the run keeps running on the
+			// daemon; it is not the "cancel my task" prompt.
+			if m.watchingRun {
+				if m.watchCancel != nil {
+					m.watchCancel()
+				}
 				return m, nil
 			}
 			// Priority 2: a run is active. Runs are daemon-owned (G0-a), so

@@ -67,36 +67,39 @@ func (m *uiModel) maybeShowStartupDigest(width int) tea.Cmd {
 	}
 	m.addMessage("system", text)
 	if m.startupDigest.ActiveRun != nil && m.clientMode && m.runWatcher != nil {
+		m.watchedTaskTitle = strings.TrimSpace(m.startupDigest.ActiveRun.Title)
 		return m.attachToActiveRun()
 	}
 	return nil
 }
 
-// attachToActiveRun flips the composer into the same "run active" state a
-// local turn uses — spinner, Enter-steers-the-run, ctrl+c exit prompt all
-// reuse the existing paths keyed off m.thinking — and starts the watcher in
-// the background. m.cancelFn cancels only the local watch (detach); actually
-// stopping the run goes through requestDaemonStop like every client-mode
-// cancel.
+// attachToActiveRun starts PASSIVE observation of the person's mid-flight
+// daemon run: live events stream into the transcript, but the composer is NOT
+// captured. This is a spectator view, not a local turn — the user opened the
+// CLI and simply sees what is already running; they remain free to type a new
+// task (the daemon queues it behind the active run per G1+G2) without it being
+// misread as steering, and ctrl+c detaches the watch rather than cancelling
+// someone else's task. Making this a full "run active" state (m.thinking) was
+// wrong: it hijacked startup into steering-mode and, with baseline event
+// suppression, showed a silent spinner that read as "stuck".
 func (m *uiModel) attachToActiveRun() tea.Cmd {
-	m.attachedRun = true
-	m.thinking = true
-	m.runStatus = "working"
-	m.thinkingStart = time.Now()
-	m.thinkingDots = 0
-	m.runTokens = 0
-	m.activityText = "Watching the running task"
+	m.watchingRun = true
+	name := strings.TrimSpace(m.watchedTaskTitle)
+	if name == "" {
+		name = "the running task"
+	}
+	m.statusMsg = "Watching " + name + " — live progress below; type a new task to queue it, or /stop to cancel."
 	ctx, cancel := context.WithCancel(context.Background())
-	m.cancelFn = cancel
+	m.watchCancel = cancel
 	watcher := m.runWatcher
-	return tea.Batch(func() tea.Msg {
+	return func() tea.Msg {
 		summary := watcher(ctx, func(event llm.StreamEvent) {
 			if event.EventType != "" {
 				m.forwardGatewayEvent(event)
 			}
 		})
 		return MsgAttachedRunDone{Summary: summary, Cancelled: ctx.Err() != nil}
-	}, m.spinner.Tick, workingTick())
+	}
 }
 
 // formatStartupDigest renders the digest as one compact conversational block.
@@ -133,7 +136,7 @@ func formatStartupDigest(digest *api.DigestResponse) string {
 		if title == "" {
 			title = "untitled task"
 		}
-		lines = append(lines, fmt.Sprintf("▶ A task is running now: %s (%s) — attaching to its live events…", title, formatElapsedShort(active.ElapsedSeconds)))
+		lines = append(lines, fmt.Sprintf("▶ A task is running now: %s (%s) — live progress below; type a new task to queue it, or /stop to cancel.", title, formatElapsedShort(active.ElapsedSeconds)))
 	}
 	return strings.Join(lines, "\n")
 }

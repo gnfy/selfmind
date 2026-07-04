@@ -94,65 +94,50 @@ func TestStartupDigestAttachesToActiveRun(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("active run must produce the watcher command")
 	}
-	if !model.thinking || !model.attachedRun || model.runStatus != "working" {
-		t.Fatalf("attach must flip run-active state: thinking=%v attached=%v status=%q", model.thinking, model.attachedRun, model.runStatus)
+	// Passive spectator: watchingRun is set but the composer is NOT captured
+	// (m.thinking stays false) — the user can type a new task freely.
+	if !model.watchingRun {
+		t.Fatalf("attach must enter passive watch mode: watchingRun=%v", model.watchingRun)
 	}
-	if model.cancelFn == nil {
-		t.Fatal("attach must install a local detach cancelFn (exit prompt path)")
+	if model.thinking {
+		t.Fatal("passive watch must NOT capture the composer (thinking must stay false)")
 	}
-	if !strings.Contains(model.messages[0].Content, "▶ A task is running now: Long migration (12m) — attaching to its live events…") {
-		t.Fatalf("digest missing the attach line:\n%s", model.messages[0].Content)
+	if model.watchCancel == nil {
+		t.Fatal("attach must install a watch-detach cancel")
 	}
-
-	// The steering path is usable exactly like an in-turn run: Enter-typed
-	// input goes to the daemon steer function, not the local channel.
-	var steered string
-	model.steerFn = func(text string) error {
-		steered = text
-		return nil
+	if !strings.Contains(model.statusMsg, "Watching Long migration") {
+		t.Fatalf("status line should name the watched task: %q", model.statusMsg)
 	}
-	_ = model.injectMidRunGuidance("prioritize the failing shard")
-	if steered != "prioritize the failing shard" {
-		t.Fatalf("steering while attached saw %q", steered)
+	if !strings.Contains(model.messages[0].Content, "Long migration") {
+		t.Fatalf("digest missing the running-task line:\n%s", model.messages[0].Content)
 	}
 
-	// Execute the batch's sub-commands (watcher + ticks) like the Bubble Tea
-	// runtime would, to confirm the watcher actually starts, then cancel the
-	// local watch (detach).
-	go func() {
-		if batch, ok := cmd().(tea.BatchMsg); ok {
-			for _, sub := range batch {
-				if sub != nil {
-					go sub()
-				}
-			}
-		}
-	}()
+	// The watcher runs; execute the returned command and confirm it starts,
+	// then detach.
+	go func() { _ = cmd() }()
 	select {
 	case <-watcherStarted:
 	case <-time.After(5 * time.Second):
 		t.Fatal("run watcher was not started")
 	}
-	model.cancelFn()
+	model.watchCancel()
 
 	updated, _ := model.updateInner(MsgAttachedRunDone{Cancelled: true})
 	model = updated.(*uiModel)
-	if model.thinking || model.attachedRun {
-		t.Fatal("attached-run end must clear the run-active state")
+	if model.watchingRun {
+		t.Fatal("detach must clear watch state")
 	}
 }
 
 func TestAttachedRunDoneReportsOutcome(t *testing.T) {
 	c := NewController(nil, nil, nil, "")
 	model := c.model
-	model.attachedRun = true
-	model.thinking = true
-	model.runStatus = "working"
+	model.watchingRun = true
 
 	updated, _ := model.updateInner(MsgAttachedRunDone{Summary: "migration complete"})
 	model = updated.(*uiModel)
-	if model.thinking || model.attachedRun || model.runStatus != "done" {
-		t.Fatalf("state after attached run end: thinking=%v attached=%v status=%q", model.thinking, model.attachedRun, model.runStatus)
+	if model.watchingRun {
+		t.Fatalf("state after watched run end: watchingRun=%v", model.watchingRun)
 	}
 	last := model.messages[len(model.messages)-1]
 	if last.Role != "system" || !strings.Contains(last.Content, "The running task finished: migration complete") {

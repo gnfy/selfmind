@@ -84,10 +84,18 @@ is the only priority list in the repo; other docs must point here.
    duplicates) — with a WARN log. Remaining: surface `sent_unconfirmed` rows
    in the attach digest (G0-c) and optionally catch-up on the peer's next
    inbound; calibrate the window empirically.
-   (a) Detached run execution — decouple runs from HTTP request contexts
-   (`handleMessage` passes `r.Context()` into the run today, so closing the
-   CLI mid-turn kills the run; runs execute on daemon-owned contexts,
-   endpoints only watch).
+   (a) Detached run execution — ✅ resolved (2026-07-04). Runs execute on
+   daemon-owned contexts: `ProcessMessage` derives the run ctx with
+   `context.WithoutCancel` from the request ctx (values — stream observer,
+   steering, scopes — preserved; caller deadlines re-applied as a bound on
+   the run), so closing the CLI/dropping the connection mid-turn detaches a
+   watcher instead of killing the run. Cancellation is owned by the
+   active-run registry: `/stop`, drain `stopAllActive`, and TUI ctrl+c
+   (now routed through `/stop` via `requestDaemonStop`); the idle watchdog
+   and per-turn deadline still cancel. A sync run whose client vanished
+   routes its result like an async one (`deliverAsyncResult` → IM fan-out
+   for cli origin); connected clients get the sync answer only. Tests:
+   `httpapi/detached_run_test.go`, `cli/cancel_stop_test.go`.
    (b) Two-layer routing — conversation replies follow the ORIGIN endpoint
    (IM-dispatched answers in that IM chat; explicit reply-endpoint override
    limited to the person's own bound accounts; CLI-origin falls back to the

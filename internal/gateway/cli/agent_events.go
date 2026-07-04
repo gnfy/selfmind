@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"selfmind/internal/gateway/api"
@@ -115,6 +116,27 @@ func (m *uiModel) runAgent(ctx context.Context, input string) tea.Cmd {
 		go m.pumpAgentEvents()
 		resp, usage, err := m.agent.RunConversation(ctx, m.tenantID, m.channel, input)
 		return MsgAgentDone{Response: resp, Usage: usage, Err: err}
+	}
+}
+
+// requestDaemonStop asks the gateway to cancel the person's active run via the
+// /stop control command. Since G0-a, run lifetime is daemon-owned and the run
+// ctx is detached from the endpoint connection, so cancelling the local ctx
+// (m.cancelFn) only detaches this watcher — both the in-process gateway
+// (ProcessMessage detaches internally) and the daemon client (the aborted HTTP
+// request only detaches) need this explicit registry-backed stop. Returns nil
+// on the legacy direct-agent path, where the local ctx still owns the run.
+func (m *uiModel) requestDaemonStop() tea.Cmd {
+	if m.messageProcessor == nil {
+		return nil
+	}
+	processor := m.messageProcessor
+	req := m.controlMessageRequest("/stop")
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_, _ = processor(ctx, req)
+		return nil
 	}
 }
 

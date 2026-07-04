@@ -1344,7 +1344,12 @@ func (m *uiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.editor.Reset()
 				return m, nil
 			}
-			// Priority 2: if agent is thinking or tool running, cancel it
+			// Priority 2: if agent is thinking or tool running, cancel it.
+			// Runs are daemon-owned and detached from this endpoint's ctx
+			// (G0-a): cancelFn only detaches the local watcher, so the actual
+			// cancellation is routed through the registry-backed /stop control
+			// command (requestDaemonStop). The legacy in-process agent path
+			// (no message processor) still cancels through the local ctx.
 			if m.thinking || m.toolExecuting != "" {
 				if m.cancelFn != nil {
 					m.cancelFn()
@@ -1355,9 +1360,9 @@ func (m *uiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 					m.steerCh = nil
 					m.runStatus = "cancelled"
 					m.statusMsg = "Task cancelled by user."
-					return m, tea.Tick(time.Second*3, func(t time.Time) tea.Msg {
+					return m, tea.Batch(m.requestDaemonStop(), tea.Tick(time.Second*3, func(t time.Time) tea.Msg {
 						return MsgClearStatus{}
-					})
+					}))
 				}
 				return m, nil
 			}

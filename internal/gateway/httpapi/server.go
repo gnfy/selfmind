@@ -169,7 +169,24 @@ func (d *Server) ProcessMessage(ctx context.Context, req api.MessageRequest) (ap
 	if req.Async {
 		return coord.startAsyncRun(identity, req, intent), http.StatusOK
 	}
-	runCtx, cancel := context.WithCancel(ctx)
+	// Run lifetime is daemon-owned; endpoints detach, never cancel
+	// (docs/identity-continuity.md "Runtime attachment model"). The run ctx is
+	// derived WithoutCancel from the request ctx, so a client that closes its
+	// terminal or drops the HTTP connection mid-turn detaches a watcher instead
+	// of killing the run, while ctx values (stream observer, steering,
+	// workspace scope) stay attached. A caller-supplied deadline is a bound on
+	// the RUN (eval turn budgets, client turn timeouts), not on the
+	// connection, so it is re-applied. Cancellation ownership lives in the
+	// active-run registry: /stop, gateway drain (stopAllActive), and the TUI's
+	// ctrl+c (which now routes through /stop) cancel via activeRun.Cancel; the
+	// idle watchdog derives its own cancellable ctx inside RunAgentWithEvents.
+	runCtx := context.WithoutCancel(ctx)
+	var cancel context.CancelFunc
+	if deadline, ok := ctx.Deadline(); ok {
+		runCtx, cancel = context.WithDeadline(runCtx, deadline)
+	} else {
+		runCtx, cancel = context.WithCancel(runCtx)
+	}
 	defer cancel()
 	// The steering channel is registered on the active run (so /v1/runs/steer
 	// can reach it) AND installed on the run ctx (so the agent loop drains it).
@@ -188,7 +205,23 @@ func (d *Server) ProcessMessage(ctx context.Context, req api.MessageRequest) (ap
 	defer coord.endActive(identity.PersonID)
 	runCtx = kernel.WithSteering(runCtx, steerCh)
 
-	return coord.runMessage(runCtx, identity, req, intent)
+	resp, status := coord.runMessage(runCtx, identity, req, intent)
+	// Detached finish: if the endpoint that dispatched this sync turn vanished
+	// mid-run (the ORIGINAL request ctx was cancelled — not deadline-expired,
+	// and the run itself was not cancelled), nobody reads the HTTP response,
+	// so route the result like an async one: IM fan-out for cli-originated
+	// runs, the source channel otherwise. A client that stayed connected gets
+	// the sync answer only, and a user-cancelled run pushes nothing.
+	if ctx.Err() != nil && context.Cause(ctx) == context.Canceled && !turnCancelled(resp) {
+		coord.deliverAsyncResult(context.Background(), identity, req, resp)
+	}
+	return resp, status
+}
+
+// turnCancelled reports whether the turn ended because the run was cancelled
+// (user /stop, drain) — those must never trigger a detached-result push.
+func turnCancelled(resp api.MessageResponse) bool {
+	return resp.Turn != nil && resp.Turn.Status == "cancelled"
 }
 
 func (c *RunCoordinator) prepareRequestWorkspace(ctx context.Context, identity *control.IdentityContext, req *api.MessageRequest) (*control.Workspace, error) {

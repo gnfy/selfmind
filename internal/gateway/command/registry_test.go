@@ -12,7 +12,7 @@ func TestIsGatewayControlCoversPreviouslyOmittedCommands(t *testing.T) {
 	control := []string{
 		"/queue", "/diag", "/mode", "/notify", "/help", "/model",
 		"/status", "/tasks", "/events", "/approvals", "/approve 1",
-		"/reject 2", "/stop", "/id", "/new title", "/resume tsk_1",
+		"/reject 2", "/stop", "/cancel", "/id", "/new title", "/resume tsk_1",
 		"/workspace ws_1", "/workspaces",
 		"/QUEUE", "/Mode smart", // case-insensitive
 		"/task status", "/task tsk_1", // aliases
@@ -111,7 +111,7 @@ func TestKnownMatchesGatewayContract(t *testing.T) {
 	want := []string{
 		"/help", "/model", "/id", "/status", "/tasks", "/queue", "/diag",
 		"/events", "/approvals", "/approve", "/reject", "/mode", "/stop",
-		"/notify", "/new", "/resume", "/workspace", "/workspaces",
+		"/cancel", "/notify", "/new", "/resume", "/workspace", "/workspaces",
 	}
 	got := Known()
 	sort.Strings(want)

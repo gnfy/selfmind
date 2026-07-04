@@ -1054,7 +1054,12 @@ func (d *Server) tryHandleControlCommand(ctx context.Context, identity *control.
 	case lower == "/stop":
 		active := d.coordinator().stopActive(identity.PersonID)
 		if active == nil {
-			return true, "No active run to stop.", nil
+			// No live run — but a task can be stuck non-terminal
+			// (in_progress/blocked/running) with no run behind it (e.g. a run
+			// that finalized without terminalizing its task, or a task created
+			// but never executed). /stop should still let the user terminate
+			// it, otherwise it sits in /tasks forever with no way to clear it.
+			return true, d.cancelStuckCurrentTask(ctx, identity), nil
 		}
 		if active.RunID != "" {
 			_ = d.Control.RequestRunCancel(context.Background(), identity.TenantID, active.RunID)
@@ -1072,6 +1077,10 @@ func (d *Server) tryHandleControlCommand(ctx context.Context, identity *control.
 			})
 		}
 		return true, fmt.Sprintf("Stopping run %s.", fallback(active.RunID, "(starting)")), nil
+	case strings.HasPrefix(lower, "/cancel"):
+		// Explicit "terminate a stuck task" — same as /stop's no-run fallback,
+		// but a clearer verb for a task that is parked rather than running.
+		return true, d.cancelStuckCurrentTask(ctx, identity), nil
 	case strings.HasPrefix(lower, "/new"):
 		title := strings.TrimSpace(trimmed[len("/new"):])
 		if title == "" {
@@ -1300,6 +1309,34 @@ func suggestControlCommand(lower string) string {
 // per-person current_task pointer otherwise. The card format itself
 // (formatTaskStatus, `Task:` / `Status:` markers) is a stable contract pinned
 // by the continuity eval suite — change it there, not here.
+// cancelStuckCurrentTask terminates the person's current task when it is stuck
+// in a non-terminal state with no live run (the /stop no-run fallback and the
+// /cancel command). It never touches a task that is already terminal. This is
+// the user-facing escape hatch for a task that recovery sweeps missed (created
+// but never run, or finalized without terminalizing).
+func (d *Server) cancelStuckCurrentTask(ctx context.Context, identity *control.IdentityContext) string {
+	if d == nil || d.Control == nil || identity == nil {
+		return "No active run to stop."
+	}
+	task, err := d.Control.CurrentTask(ctx, identity.TenantID, identity.PersonID)
+	if err != nil || task == nil {
+		return "No active run to stop, and no current task to cancel."
+	}
+	if terminalTaskStatus(task.Status) {
+		return "No active run to stop; the current task is already " + task.Status + "."
+	}
+	if err := d.Control.UpdateTaskStatus(ctx, identity.TenantID, task.ID, "cancelled", "Cancelled by user.", nil); err != nil {
+		return "Could not cancel the task: " + err.Error()
+	}
+	_, _ = d.Control.AppendEvent(ctx, control.Event{
+		TaskID:     task.ID,
+		Type:       "task.cancelled",
+		Visibility: "task",
+		Payload:    mustJSON(map[string]string{"reason": "user cancelled a stuck task"}),
+	})
+	return "No live run was executing, so I cancelled the current task: " + textutil.Truncate(toOneLine(task.Title), 60)
+}
+
 func (d *Server) statusReply(ctx context.Context, identity *control.IdentityContext) (string, error) {
 	active := d.coordinator().currentActive(identity.PersonID)
 	var task *control.Task

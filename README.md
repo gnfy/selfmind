@@ -372,9 +372,17 @@ Common slash commands:
 
 | Command | Purpose |
 |---|---|
-| `/help` | Show available TUI commands. |
-| `/status` | Show provider, model, runtime, token usage, task, and gateway status. |
-| `/tasks` | Show local gateway tasks. |
+| `/help` | Show available commands. |
+| `/status` | Show provider, model, runtime, token usage, current task, and any pending approval/question. |
+| `/tasks` | List recent tasks with their status. |
+| `/queue` / `/queue clear` | List tasks queued behind the running one / drop all pending queued tasks. |
+| `/stop` | Cancel the active run — or, if nothing is running, cancel the current (stuck) task. |
+| `/cancel` | Cancel the current task even when no run is active. |
+| `/new [title]` | Start a fresh task instead of continuing the current one. |
+| `/resume <task_id>` | Switch back to an earlier task. |
+| `/approvals` / `/approve <n>` / `/reject <n>` | List and answer pending tool approvals. |
+| `/mode [mode]` | Show or set approval mode: `on-request`, `read-only`, `auto-edit`, `full-auto`, `smart`. |
+| `/diag` | Compact runtime diagnostic snapshot. |
 | `/skills` | Skill list/view/search/catalog/install/audit/archive/pin/unpin/delete/stats/reload. |
 | `/skills history <name>` | View learning audit history for a skill. |
 | `/skills undo <change_id>` | Undo a supported skill learning change. |
@@ -396,6 +404,44 @@ Useful keys:
 | `Shift+Enter` | Insert newline. |
 | `Ctrl+C` | Cancel the current run or exit. |
 | `Ctrl+V` | Paste. Large paste is converted into a readable attachment-style block. |
+
+## Managing tasks
+
+SelfMind is task-centric: each request you make becomes a **task** owned by you
+(`person_id`), shared across every endpoint (CLI, WeChat, …). A task moves
+through these states:
+
+| Status | Meaning |
+|---|---|
+| `running` | A run is executing right now. |
+| `in_progress` | The turn finished but more work is planned — resumable, nothing executing. |
+| `blocked` | Waiting on you (a pending approval or question). |
+| `queued` | Accepted while another task was running; starts automatically when the runner frees up. |
+| `interrupted` | The run was lost (daemon restart / crash); resumable. |
+| `done` / `completed` / `cancelled` / `failed` | Terminal. |
+
+Everyday management:
+
+- **See everything:** `/tasks` (all recent), `/status` (the current one + any
+  pending approval/question), `/queue` (what's waiting).
+- **Continue a task:** just reply (`继续` / `ok` / a follow-up) — a short
+  acceptance continues the current task; `/resume <task_id>` switches to an
+  older one.
+- **Start something separate:** `/new` — otherwise a new request while a task
+  runs is **queued** behind it (not rejected), and a follow-up continues the
+  current task.
+- **Stop a task:** `/stop` cancels the active run. If nothing is running but a
+  task is stuck non-terminal (e.g. it was created but never executed), `/stop`
+  (or `/cancel`) cancels that current task so it leaves `in_progress`.
+- **Runs are daemon-owned:** closing the CLI does **not** kill a running task —
+  it keeps running on the gateway and the result is pushed to your bound IM.
+  Reopen the CLI to see a "while you were away" digest and re-attach to a
+  still-running task. Press `Ctrl+C` while watching to detach (the task keeps
+  running); press it during your own run to choose *background / cancel / keep
+  watching*.
+- **Diagnose a stuck task:** `selfmind doctor` (or `--out file.txt`) exports a
+  redacted snapshot — recent runs, pending approvals, the queue, and the event
+  timeline — so you can see exactly what a task is waiting on.
 
 ## Skills
 

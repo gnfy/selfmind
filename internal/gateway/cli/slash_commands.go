@@ -50,6 +50,7 @@ var slashCommandMetas = []slashCommandMeta{
 	{Name: "/approve", Usage: "/approve <n|id|all> [task|always]", Description: "Approve a pending action", Hint: "approve a pending action"},
 	{Name: "/reject", Usage: "/reject <n|id|all>", Description: "Reject a pending action (or all of them)", Hint: "reject a pending action"},
 	{Name: "/stop", Usage: "/stop", Description: "Cancel the active run", Hint: "cancel the active run"},
+	{Name: "/cancel", Usage: "/cancel", Description: "Cancel the current task even if no run is active", Hint: "cancel the current task"},
 	{Name: "/id", Usage: "/id", Description: "Show your resolved account identity", Hint: "show your account identity"},
 	{Name: "/new", Usage: "/new [title]", Description: "Create a new task", Hint: "create a new task"},
 	{Name: "/resume", Usage: "/resume <task_id>", Description: "Resume a task", Hint: "resume a task by id"},
@@ -64,7 +65,7 @@ var slashCommandMetas = []slashCommandMeta{
 // the cross-endpoint drift-guard test can assert the TUI exposes every gateway
 // command.
 var gatewayPassthroughCommands = []string{
-	"/approvals", "/approve", "/reject", "/stop", "/id", "/new",
+	"/approvals", "/approve", "/reject", "/stop", "/cancel", "/id", "/new",
 	"/resume", "/workspace", "/workspaces", "/events", "/notify",
 }
 

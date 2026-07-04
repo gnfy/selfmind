@@ -440,3 +440,85 @@ func TestBareReplyAmbiguousWithMultiplePending(t *testing.T) {
 		t.Fatalf("ambiguous reply should ask for /approve <n>: %q", reply)
 	}
 }
+
+// TestOrphanedApprovalsExpireAndStopPoisoningTheList reproduces the live
+// incident: a pending approval whose run died (daemon restart) made bare y
+// ambiguous and /approve 1 hit the dead request. The recovery sweep must
+// expire it, leaving live approvals unambiguous.
+func TestOrphanedApprovalsExpireAndStopPoisoningTheList(t *testing.T) {
+	daemon, store, identity, task, stale := newApprovalTestServer(t)
+	ctx := context.Background()
+
+	// The fixture's approval has no run id (left alone by the sweep); make the
+	// stale one explicitly: an approval bound to a dead (non-running) run.
+	if _, err := store.RespondApprovalRequest(ctx, identity.TenantID, identity.PersonID, stale.ID, "rejected", "cli"); err != nil {
+		t.Fatal(err)
+	}
+	deadRun, err := store.StartRun(ctx, task, "cli", "old attempt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.FinishRun(ctx, identity.TenantID, deadRun.ID, "failed"); err != nil {
+		t.Fatal(err)
+	}
+	stale, err = store.CreateApprovalRequest(ctx, control.ApprovalRequest{
+		TenantID: identity.TenantID, PersonID: identity.PersonID, TaskID: task.ID, RunID: deadRun.ID,
+		ActionType: "tool_call", Payload: []byte(`{"tool":"ls_r","reason":"stale"}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A live approval from a running run.
+	liveRun, err := store.StartRun(ctx, task, "cli", "new attempt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	live, err := store.CreateApprovalRequest(ctx, control.ApprovalRequest{
+		TenantID: identity.TenantID, PersonID: identity.PersonID, TaskID: task.ID, RunID: liveRun.ID,
+		ActionType: "tool_call", Payload: []byte(`{"tool":"ls_r","reason":"outside root"}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	expired, err := store.ExpireOrphanedApprovals(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if expired != 1 {
+		t.Fatalf("expired = %d, want exactly the stale one", expired)
+	}
+
+	// Bare y now unambiguously answers the live approval.
+	handled, reply, err := daemon.tryHandleBareApprovalReply(ctx, identity, "y", "weixin")
+	if err != nil || !handled || !strings.Contains(reply, "Approved") {
+		t.Fatalf("handled=%v err=%v reply=%q", handled, err, reply)
+	}
+	current, _ := store.GetApprovalRequest(ctx, identity.TenantID, live.ID)
+	if current == nil || current.Status != "approved" {
+		t.Fatalf("live approval = %+v", current)
+	}
+	staleNow, _ := store.GetApprovalRequest(ctx, identity.TenantID, stale.ID)
+	if staleNow == nil || staleNow.Status != "expired" {
+		t.Fatalf("stale approval = %+v", staleNow)
+	}
+}
+
+// TestUnknownCommandSuggestion: a near-miss like /approves gets a suggestion
+// instead of falling through to the agent (and a busy reply during a run).
+func TestUnknownCommandSuggestion(t *testing.T) {
+	daemon, _, _, _, _ := newApprovalTestServer(t)
+	resp, status := daemon.ProcessMessage(context.Background(), api.MessageRequest{Content: "/approves"})
+	if status != http.StatusOK {
+		t.Fatalf("status = %d", status)
+	}
+	if !strings.Contains(resp.Content, "did you mean /approv") {
+		t.Fatalf("content = %q", resp.Content)
+	}
+	// A far-off slash keeps flowing (handled=false path → here it becomes an
+	// agent turn; we only assert it is NOT claimed as a suggestion).
+	resp, _ = daemon.ProcessMessage(context.Background(), api.MessageRequest{Content: "/deploy-skill do it"})
+	if strings.Contains(resp.Content, "did you mean") {
+		t.Fatalf("far-off command must not be claimed: %q", resp.Content)
+	}
+}

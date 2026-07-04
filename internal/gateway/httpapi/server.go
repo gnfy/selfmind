@@ -579,6 +579,12 @@ func (c *RunCoordinator) toolApprovalHandler(identity *control.IdentityContext, 
 		for {
 			select {
 			case <-waitCtx.Done():
+				// The waiter is gone (timeout / run cancelled): a row left
+				// 'pending' would pollute every later list — bare y turns
+				// ambiguous and /approve 1 hits a dead request (observed
+				// live). Expire it; the recovery sweep is the backstop for
+				// waiters that die without reaching this line.
+				_ = store.ExpireApprovalRequest(context.WithoutCancel(waitCtx), identity.TenantID, approval.ID, "waiter gone: "+waitCtx.Err().Error())
 				return tools.ToolApprovalDecision{ApprovalID: approval.ID, Reason: waitCtx.Err().Error()}, waitCtx.Err()
 			case <-ticker.C:
 				current, err := store.GetApprovalRequest(waitCtx, identity.TenantID, approval.ID)
@@ -901,8 +907,72 @@ func (d *Server) tryHandleControlCommand(ctx context.Context, identity *control.
 		reply, err := d.statusReply(ctx, identity)
 		return true, reply, err
 	default:
+		// Near-miss typo help: "/approves" → suggest "/approvals". Only claim
+		// the message when the token is close to a KNOWN control command —
+		// unknown slashes may be skill invocations or agent input and must
+		// keep flowing through unchanged.
+		if suggestion := suggestControlCommand(lower); suggestion != "" {
+			return true, fmt.Sprintf("Unknown command %s — did you mean %s?", strings.Fields(lower)[0], suggestion), nil
+		}
 		return false, "", nil
 	}
+}
+
+// suggestControlCommand returns the closest control command when the first
+// token is a near-miss (edit distance ≤ 2, same first letter), else "".
+func suggestControlCommand(lower string) string {
+	fields := strings.Fields(lower)
+	if len(fields) == 0 {
+		return ""
+	}
+	token := fields[0]
+	known := []string{"/help", "/model", "/id", "/status", "/tasks", "/events",
+		"/approvals", "/approve", "/reject", "/stop", "/new", "/resume",
+		"/workspace", "/workspaces"}
+	best, bestDist := "", 3
+	for _, cmd := range known {
+		if token == cmd {
+			return "" // exact commands are handled above; not a typo
+		}
+		if len(token) < 3 || token[1] != cmd[1] {
+			continue
+		}
+		if d := editDistance(token, cmd); d < bestDist {
+			best, bestDist = cmd, d
+		}
+	}
+	return best
+}
+
+func editDistance(a, b string) int {
+	la, lb := len(a), len(b)
+	prev := make([]int, lb+1)
+	cur := make([]int, lb+1)
+	for j := 0; j <= lb; j++ {
+		prev[j] = j
+	}
+	for i := 1; i <= la; i++ {
+		cur[0] = i
+		for j := 1; j <= lb; j++ {
+			cost := 1
+			if a[i-1] == b[j-1] {
+				cost = 0
+			}
+			cur[j] = min3(cur[j-1]+1, prev[j]+1, prev[j-1]+cost)
+		}
+		prev, cur = cur, prev
+	}
+	return prev[lb]
+}
+
+func min3(a, b, c int) int {
+	if b < a {
+		a = b
+	}
+	if c < a {
+		a = c
+	}
+	return a
 }
 
 // statusReply builds the /status card shared by every channel's control-command

@@ -109,6 +109,34 @@ func (s *Store) GetApprovalRequest(ctx context.Context, tenantID, approvalID str
 	return &item, nil
 }
 
+// ExpireApprovalRequest finalizes a pending approval whose waiter is gone
+// (run cancelled/interrupted/timed out). A stale 'pending' row poisons every
+// later interaction: bare y/n turns ambiguous and ordinals hit dead requests.
+func (s *Store) ExpireApprovalRequest(ctx context.Context, tenantID, approvalID, reason string) error {
+	_ = reason // schema keeps no reason column; parameter documents intent at call sites
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE approval_requests SET status = 'expired', updated_at = ?
+		 WHERE tenant_id = ? AND id = ? AND status = 'pending'`,
+		time.Now().Unix(), tenantID, approvalID)
+	return err
+}
+
+// ExpireOrphanedApprovals expires every pending approval whose run is no
+// longer 'running' — the sweep backstop for waiters that died without
+// cleaning up (daemon kill mid-wait). Approvals with no run id are left alone.
+func (s *Store) ExpireOrphanedApprovals(ctx context.Context) (int, error) {
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE approval_requests SET status = 'expired', updated_at = ?
+		 WHERE status = 'pending' AND COALESCE(run_id, '') != ''
+		   AND NOT EXISTS (SELECT 1 FROM task_runs r WHERE r.id = approval_requests.run_id AND r.status = 'running')`,
+		time.Now().Unix())
+	if err != nil {
+		return 0, err
+	}
+	n, _ := res.RowsAffected()
+	return int(n), nil
+}
+
 func (s *Store) RespondApprovalRequest(ctx context.Context, tenantID, personID, approvalID, decision, channel string) (*ApprovalRequest, error) {
 	tenantID = normalizeTenant(tenantID)
 	if personID == "" {

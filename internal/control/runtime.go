@@ -245,6 +245,15 @@ func (s *Store) MarkInterruptedRuns(ctx context.Context, olderThan time.Duration
 			log.Warn("failed to append task.interrupted event", "task_id", o.taskID, "error", err)
 		}
 	}
+	// Approval hygiene rides the same sweep: a pending approval whose run died
+	// poisons later approvals (ambiguous bare y/n, ordinals hitting dead
+	// requests — observed live). Best-effort; the waiter's own timeout path is
+	// the primary cleanup.
+	if expired, err := s.ExpireOrphanedApprovals(ctx); err != nil {
+		log.Warn("failed to expire orphaned approvals", "error", err)
+	} else if expired > 0 {
+		log.Warn("expired orphaned pending approvals", "count", expired)
+	}
 	return len(runs) + len(orphans), nil
 }
 

@@ -776,8 +776,8 @@ func (d *Server) tryHandleControlCommand(ctx context.Context, identity *control.
 /tasks                List recent tasks.
 /events               List recent events for the current task.
 /approvals            List pending approvals.
-/approve <n|id>       Approve a pending action (list number or apr_ id).
-/reject <n|id>        Reject a pending action (list number or apr_ id).
+/approve <n|id|all>   Approve a pending action (or all of them).
+/reject <n|id|all>    Reject a pending action (or all of them).
 /stop                 Cancel the active run.
 /new [title]          Create a new task.
 /resume <task_id>     Resume a task.

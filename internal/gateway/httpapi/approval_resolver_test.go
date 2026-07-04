@@ -522,3 +522,38 @@ func TestUnknownCommandSuggestion(t *testing.T) {
 		t.Fatalf("far-off command must not be claimed: %q", resp.Content)
 	}
 }
+
+// TestApproveAllClearsEveryPending: parallel tool batches raise several
+// approvals at once; /approve all answers them in one reply instead of
+// re-numbered one-at-a-time ordinals.
+func TestApproveAllClearsEveryPending(t *testing.T) {
+	daemon, store, identity, task, first := newApprovalTestServer(t)
+	ctx := context.Background()
+	second, err := store.CreateApprovalRequest(ctx, control.ApprovalRequest{
+		TenantID: identity.TenantID, PersonID: identity.PersonID, TaskID: task.ID,
+		ActionType: "tool_call", Payload: []byte(`{"tool":"search_files","reason":"outside root"}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	resp, status := daemon.ProcessMessage(ctx, api.MessageRequest{Content: "/approve all"})
+	if status != http.StatusOK {
+		t.Fatalf("status = %d", status)
+	}
+	if !strings.Contains(resp.Content, "Approved 2:") || !strings.Contains(resp.Content, "[terminal]") || !strings.Contains(resp.Content, "[search_files]") {
+		t.Fatalf("content = %q", resp.Content)
+	}
+	for _, id := range []string{first.ID, second.ID} {
+		current, _ := store.GetApprovalRequest(ctx, identity.TenantID, id)
+		if current == nil || current.Status != "approved" {
+			t.Fatalf("approval %s = %+v", id, current)
+		}
+	}
+
+	// Nothing left: all is a friendly no-op.
+	resp, _ = daemon.ProcessMessage(ctx, api.MessageRequest{Content: "/reject all"})
+	if !strings.Contains(resp.Content, "No pending approvals.") {
+		t.Fatalf("content = %q", resp.Content)
+	}
+}

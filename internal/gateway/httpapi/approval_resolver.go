@@ -197,6 +197,9 @@ func (d *Server) respondApprovalCommand(ctx context.Context, identity *control.I
 	if decision == "rejected" {
 		verbBase = "reject"
 	}
+	if strings.EqualFold(token, "all") {
+		return d.respondAllApprovals(ctx, identity, decision, channel, verbBase)
+	}
 	approval, err := d.respondApprovalByToken(ctx, identity, token, decision, channel)
 	if err != nil {
 		return "Cannot " + verbBase + ": " + err.Error()
@@ -212,6 +215,38 @@ func (d *Server) respondApprovalCommand(ctx context.Context, identity *control.I
 		}
 	}
 	return fmt.Sprintf("%s %s\n%s", verb, approvalSummaryLine(*approval, title), approval.ID)
+}
+
+// respondAllApprovals backs "/approve all" and "/reject all": it decides every
+// currently-pending approval in display order and reports each line. Parallel
+// tool batches can raise several approvals at once; answering them one ordinal
+// at a time re-numbers the list after every reply, which is exactly the
+// friction this shortcut removes.
+func (d *Server) respondAllApprovals(ctx context.Context, identity *control.IdentityContext, decision, channel, verbBase string) string {
+	pending, err := d.Control.ListApprovalRequests(ctx, identity.TenantID, identity.PersonID, "pending", 100)
+	if err != nil {
+		return "Cannot " + verbBase + " all: " + err.Error()
+	}
+	if len(pending) == 0 {
+		return "No pending approvals."
+	}
+	sortApprovalsForDisplay(pending)
+	verb := "Approved"
+	if decision == "rejected" {
+		verb = "Rejected"
+	}
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "%s %d:\n", verb, len(pending))
+	for _, item := range pending {
+		approval, err := d.Control.RespondApprovalRequest(ctx, identity.TenantID, identity.PersonID, item.ID, decision, channel)
+		if err != nil {
+			fmt.Fprintf(&sb, "- failed: %s (%s)\n", approvalSummaryLine(item, ""), err.Error())
+			continue
+		}
+		appendApprovalEvent(ctx, d.Control, approval, channel)
+		fmt.Fprintf(&sb, "- %s\n", approvalSummaryLine(*approval, ""))
+	}
+	return strings.TrimRight(sb.String(), "\n")
 }
 
 // pendingApprovalsForDisplay loads the person's pending approvals in the

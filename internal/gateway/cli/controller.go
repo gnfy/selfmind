@@ -122,6 +122,14 @@ type uiModel struct {
 	steerFn            func(text string) error                 // client mode: forward mid-turn guidance to the daemon's active run
 	awaitingApproval   bool                                    // an inline approval prompt is active
 	pendingApprovalID  string
+	// Attach digest + re-attach (client mode, G0-c/G0-d): the client shell
+	// fetches the digest before the first presence beat and hands it over via
+	// SetStartupDigest; the first sized frame renders it once, and when it
+	// reports a mid-flight run the runWatcher hooks its live events.
+	startupDigest *api.DigestResponse
+	digestShown   bool
+	runWatcher    RunWatcher
+	attachedRun   bool // watching a pre-existing daemon run (no local turn owns it)
 	// exitPromptActive intercepts keys while the quit-with-active-run prompt
 	// is shown (b = background+quit, c = cancel+stay, esc = keep watching).
 	exitPromptActive bool
@@ -1039,7 +1047,9 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.pendingPrintln = append(m.pendingPrintln, card)
 			}
 		}
-		return m, nil
+		// Attach digest waits for the first sized frame so it lands after the
+		// startup card and renders at a real width in both renderers.
+		return m, m.maybeShowStartupDigest(msg.Width)
 
 	case spinner.TickMsg:
 		return m, spinnerCmd
@@ -1148,6 +1158,32 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.addErrorMessage("Error: model returned an empty response without any error details. Check the provider credentials and endpoint, then retry.")
 		}
 		m.restoreOrFollowTranscript(wasAtBottom, yOffset)
+		return m, spinnerCmd
+
+	case MsgAttachedRunDone:
+		// The watched (re-attached) daemon run ended. Unlike MsgAgentDone there
+		// is no synchronous answer to finalize — the conversation reply follows
+		// the run's ORIGIN endpoint (docs/identity-continuity.md); this watcher
+		// only reports that the observation ended and the recorded outcome.
+		m.exitPromptActive = false
+		m.attachedRun = false
+		m.thinking = false
+		m.activityText = ""
+		m.toolExecuting = ""
+		m.cancelFn = nil
+		if strings.HasPrefix(m.statusMsg, "Sent to the running task") || strings.Contains(m.statusMsg, "Guidance queue") {
+			m.statusMsg = ""
+		}
+		if msg.Cancelled {
+			// cancelActiveRunLocally already reported the cancellation.
+			return m, spinnerCmd
+		}
+		m.runStatus = "done"
+		if summary := strings.TrimSpace(msg.Summary); summary != "" {
+			m.addMessage("system", "The running task finished: "+summary)
+		} else {
+			m.addMessage("system", "The running task finished. Use /status for details.")
+		}
 		return m, spinnerCmd
 
 	case MsgApprovalRequest:

@@ -81,9 +81,9 @@ is the only priority list in the repo; other docs must point here.
    confidence from token freshness (30m conservative window, true window
    undocumented); doubtful sends finalize as `sent_unconfirmed` — terminal
    for the retry queue (resending on the same stale session risks
-   duplicates) — with a WARN log. Remaining: surface `sent_unconfirmed` rows
-   in the attach digest (G0-c) and optionally catch-up on the peer's next
-   inbound; calibrate the window empirically.
+   duplicates) — with a WARN log. `sent_unconfirmed`/`failed` rows now
+   surface in the attach digest (G0-c, 2026-07-04). Remaining: optionally
+   catch-up on the peer's next inbound; calibrate the window empirically.
    (a) Detached run execution — ✅ resolved (2026-07-04). Runs execute on
    daemon-owned contexts: `ProcessMessage` derives the run ctx with
    `context.WithoutCancel` from the request ctx (values — stream observer,
@@ -107,9 +107,29 @@ is the only priority list in the repo; other docs must point here.
    `person_settings`) or the most recently seen IM account. IM-origin
    replies unchanged (origin affinity). Follow-up: reply-endpoint override
    parsed from task text remains open.
-   (c) Attach digest (on CLI re-attach show finished/failed/pending
-   approvals+questions/queued tasks/undelivered pushes since last presence).
-   (d) Re-attach to a mid-flight run's live events + steering.
+   (c) Attach digest — ✅ shipped (2026-07-04). `GET /v1/digest`
+   (`httpapi/handlers_digest.go`): person-scoped, anchored on the CLI
+   account's `accounts.last_seen_at` (24h fallback when never seen); bounded
+   sections — finished tasks (≤10), failed/interrupted tasks (≤10), all
+   pending approvals (shared `approvalSummaryLine`), `sent_unconfirmed`/
+   `failed` outbound pushes (≤5), and the person's active run. The client
+   TUI fetches it BEFORE its first presence beat (the beat stamps the
+   anchor) and renders one compact "While you were away" block; an empty
+   digest renders nothing. Store queries:
+   `control.ListTasksByStatusSince`, `control.ListUndeliveredOutbound`.
+   Tests: `httpapi/handlers_digest_test.go`, `control/digest_queries_test.go`,
+   `cli/attach_digest_test.go`.
+   (d) Re-attach to a mid-flight run — ✅ shipped (2026-07-04). When the
+   digest reports an active run, the client TUI starts
+   `client.WatchActiveRun` without a user turn: baseline event probe (no
+   history replay), live tool/thinking/approval events rendered exactly like
+   an in-turn poll, run end detected via a fresh `run.finished`/
+   `run.cancelled` event (carries the outcome summary) with a
+   `/v1/tasks/current` active-run probe as fallback. The controller flips
+   the run-active flags (`attachedRun`/`thinking`), so Enter steers the
+   daemon run (`/v1/runs/steer`) and ctrl+c shows the background/cancel exit
+   prompt — all existing paths. `cli/attach_digest.go`,
+   `client.WatchActiveRun`.
 2. **P0 — G1+G2: IM routing stack + queue instead of busy.** Inbound routing
    priority: pending approval (y/n, done) > pending question > continuation
    cue > NEW task; a new task while a run is active is queued with an honest

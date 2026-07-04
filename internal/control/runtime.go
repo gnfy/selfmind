@@ -420,6 +420,43 @@ func (s *Store) MarkDeliverySentUnconfirmed(ctx context.Context, id string) erro
 	return err
 }
 
+// ListUndeliveredOutbound returns the person's recent outbound pushes that did
+// not confirm delivery — status 'sent_unconfirmed' (the platform accepted the
+// send but may have silently dropped it, e.g. a stale Weixin context token) or
+// 'failed' (retries exhausted / no sender) — updated at or after since, newest
+// first, bounded by limit. It backs the attach digest (G0-c) so a push the
+// person may never have received is surfaced on the next CLI attach instead of
+// being silently lost.
+func (s *Store) ListUndeliveredOutbound(ctx context.Context, tenantID, personID string, since time.Time, limit int) ([]Delivery, error) {
+	if personID == "" {
+		return nil, fmt.Errorf("person id is required")
+	}
+	if limit <= 0 || limit > 50 {
+		limit = 5
+	}
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, tenant_id, person_id, platform, COALESCE(platform_user_id, ''), channel, COALESCE(task_id, ''), COALESCE(run_id, ''),
+		        content, COALESCE(kind, ''), COALESCE(approval_id, ''), status, attempts, max_attempts, next_attempt_at, COALESCE(last_error, ''),
+		        part_index, part_total, COALESCE(idempotency_key, ''), created_at, updated_at, COALESCE(delivered_at, 0)
+		 FROM outbound_messages
+		 WHERE tenant_id = ? AND person_id = ? AND status IN ('sent_unconfirmed', 'failed') AND updated_at >= ?
+		 ORDER BY updated_at DESC, created_at DESC LIMIT ?`,
+		normalizeTenant(tenantID), personID, since.Unix(), limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Delivery
+	for rows.Next() {
+		d, err := scanDelivery(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, d)
+	}
+	return out, rows.Err()
+}
+
 func (s *Store) MarkDeliveryAttempt(ctx context.Context, id string, success bool, errText string, nextAttempt time.Time) error {
 	now := time.Now()
 	if success {

@@ -186,7 +186,12 @@ func (c *Client) pollEvents(ctx context.Context, req api.MessageRequest, observe
 	}
 }
 
-func (c *Client) drainEventsOnce(ctx context.Context, req api.MessageRequest, seen map[string]bool, observer httpapi.StreamObserver) {
+// drainEventsOnce fetches the current task's events, forwards the renderable
+// newly-seen ones to the observer, and returns every newly-seen raw event
+// oldest-first (WatchActiveRun inspects raw types like run.finished that the
+// live UI never renders). A nil observer marks events seen without forwarding
+// (baseline probe).
+func (c *Client) drainEventsOnce(ctx context.Context, req api.MessageRequest, seen map[string]bool, observer httpapi.StreamObserver) []control.Event {
 	q := url.Values{}
 	if req.TenantID != "" {
 		q.Set("tenant_id", req.TenantID)
@@ -200,29 +205,30 @@ func (c *Client) drainEventsOnce(ctx context.Context, req api.MessageRequest, se
 	defer cancel()
 	httpReq, err := http.NewRequestWithContext(reqCtx, http.MethodGet, c.BaseURL+"/v1/tasks/events?"+q.Encode(), nil)
 	if err != nil {
-		return
+		return nil
 	}
 	c.auth(httpReq)
 	httpResp, err := c.httpClient().Do(httpReq)
 	if err != nil {
-		return
+		return nil
 	}
 	defer httpResp.Body.Close()
 	if httpResp.StatusCode != http.StatusOK {
-		return
+		return nil
 	}
 	var payload eventsResponse
 	if json.NewDecoder(httpResp.Body).Decode(&payload) != nil {
-		return
+		return nil
 	}
+	var fresh []control.Event
 	// ListTaskEvents returns newest-first; replay oldest-first for natural order.
-	// A nil observer marks events seen without forwarding (baseline probe).
 	for i := len(payload.Events) - 1; i >= 0; i-- {
 		ev := payload.Events[i]
 		if ev.ID == "" || seen[ev.ID] {
 			continue
 		}
 		seen[ev.ID] = true
+		fresh = append(fresh, ev)
 		if observer == nil {
 			continue
 		}
@@ -230,6 +236,7 @@ func (c *Client) drainEventsOnce(ctx context.Context, req api.MessageRequest, se
 			observer(se)
 		}
 	}
+	return fresh
 }
 
 // eventToStream maps a persisted control.Event back into the llm.StreamEvent the
@@ -276,6 +283,123 @@ func eventToStream(ev control.Event) (llm.StreamEvent, bool) {
 	default:
 		return llm.StreamEvent{}, false
 	}
+}
+
+// Digest fetches the attach digest (GET /v1/digest): what finished, failed,
+// or is still waiting since this CLI account's last presence. Callers must
+// fetch it BEFORE the first presence beat — the beat stamps the very
+// last_seen_at anchor the digest is computed from.
+func (c *Client) Digest(ctx context.Context) (*api.DigestResponse, error) {
+	q := url.Values{}
+	q.Set("platform", "cli")
+	q.Set("platform_user_id", clientUserID())
+	reqCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	httpReq, err := http.NewRequestWithContext(reqCtx, http.MethodGet, c.BaseURL+"/v1/digest?"+q.Encode(), nil)
+	if err != nil {
+		return nil, err
+	}
+	c.auth(httpReq)
+	httpResp, err := c.httpClient().Do(httpReq)
+	if err != nil {
+		return nil, err
+	}
+	defer httpResp.Body.Close()
+	if httpResp.StatusCode != http.StatusOK {
+		data, _ := io.ReadAll(httpResp.Body)
+		return nil, fmt.Errorf("digest returned %s: %s", httpResp.Status, strings.TrimSpace(string(data)))
+	}
+	var digest api.DigestResponse
+	if err := json.NewDecoder(httpResp.Body).Decode(&digest); err != nil {
+		return nil, err
+	}
+	return &digest, nil
+}
+
+// WatchActiveRun re-attaches this client to the person's mid-flight run as a
+// pure watcher (observation layer, docs/identity-continuity.md "Runtime
+// attachment model"): live events stream into the observer without starting a
+// user turn, and the loop ends when the run does. The baseline probe marks
+// every pre-attach event seen so history is never replayed (the same ghost-
+// approval hazard pollEvents guards against). Run end is detected two ways: a
+// fresh run.finished / run.cancelled event on the task (primary; carries the
+// outcome summary), and a /v1/tasks/current probe reporting no active run —
+// run every ~2s, immediately after a turn.completed event, and covering runs
+// that finalize without a terminal event (failure paths) or on another task.
+// Returns the finished run's outcome summary when one is available.
+func (c *Client) WatchActiveRun(ctx context.Context, observer httpapi.StreamObserver) string {
+	req := api.MessageRequest{Platform: "cli", PlatformUserID: clientUserID()}
+	seen := map[string]bool{}
+	c.drainEventsOnce(ctx, req, seen, nil)
+	ticker := time.NewTicker(350 * time.Millisecond)
+	defer ticker.Stop()
+	ticks := 0
+	for {
+		select {
+		case <-ctx.Done():
+			return ""
+		case <-ticker.C:
+			probeNow := false
+			for _, ev := range c.drainEventsOnce(ctx, req, seen, observer) {
+				switch ev.Type {
+				case "run.finished", "run.cancelled":
+					return runOutcomeSummary(ev)
+				case "turn.completed":
+					probeNow = true
+				}
+			}
+			ticks++
+			if probeNow || ticks%6 == 0 {
+				if gone, ok := c.activeRunGone(ctx, req); ok && gone {
+					return ""
+				}
+			}
+		}
+	}
+}
+
+// activeRunGone probes GET /v1/tasks/current and reports whether the person
+// has no active run anymore. ok=false means the probe itself failed (keep
+// watching rather than mistaking a network blip for run completion).
+func (c *Client) activeRunGone(ctx context.Context, req api.MessageRequest) (gone, ok bool) {
+	q := url.Values{}
+	if req.TenantID != "" {
+		q.Set("tenant_id", req.TenantID)
+	}
+	q.Set("platform", fallback(req.Platform, "cli"))
+	q.Set("platform_user_id", fallback(req.PlatformUserID, "local"))
+	reqCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	httpReq, err := http.NewRequestWithContext(reqCtx, http.MethodGet, c.BaseURL+"/v1/tasks/current?"+q.Encode(), nil)
+	if err != nil {
+		return false, false
+	}
+	c.auth(httpReq)
+	httpResp, err := c.httpClient().Do(httpReq)
+	if err != nil {
+		return false, false
+	}
+	defer httpResp.Body.Close()
+	if httpResp.StatusCode != http.StatusOK {
+		return false, false
+	}
+	var payload struct {
+		ActiveRun *api.ActiveRunStatus `json:"active_run"`
+	}
+	if json.NewDecoder(httpResp.Body).Decode(&payload) != nil {
+		return false, false
+	}
+	return payload.ActiveRun == nil, true
+}
+
+// runOutcomeSummary extracts the outcome summary a run.finished event carries
+// (payload {"outcome": api.RunOutcome, ...}); empty when absent.
+func runOutcomeSummary(ev control.Event) string {
+	p := decodePayload(ev.Payload)
+	if outcome, ok := p["outcome"].(map[string]interface{}); ok {
+		return str(outcome["summary"])
+	}
+	return ""
 }
 
 // PingPresence marks this CLI endpoint attached on the daemon (GET

@@ -292,6 +292,122 @@ func TestSteerRun(t *testing.T) {
 	}
 }
 
+func TestDigest(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/digest" {
+			http.NotFound(w, r)
+			return
+		}
+		if r.URL.Query().Get("platform") != "cli" {
+			t.Errorf("digest must identify as the cli platform, got %q", r.URL.Query().Get("platform"))
+		}
+		writeJSONResp(w, api.DigestResponse{
+			SinceUnix:     1751600000,
+			FinishedTasks: []api.DigestTask{{ID: "t1", Title: "Ship it", Status: "completed"}},
+			ActiveRun:     &api.DigestActiveRun{TaskID: "t2", Title: "Long migration", ElapsedSeconds: 720},
+		})
+	}))
+	defer srv.Close()
+
+	c := New(srv.URL, "")
+	digest, err := c.Digest(context.Background())
+	if err != nil {
+		t.Fatalf("Digest: %v", err)
+	}
+	if digest.Empty() {
+		t.Fatal("digest with content must not read empty")
+	}
+	if len(digest.FinishedTasks) != 1 || digest.FinishedTasks[0].Title != "Ship it" {
+		t.Fatalf("finished tasks = %+v", digest.FinishedTasks)
+	}
+	if digest.ActiveRun == nil || digest.ActiveRun.ElapsedSeconds != 720 {
+		t.Fatalf("active run = %+v", digest.ActiveRun)
+	}
+	if (&api.DigestResponse{SinceUnix: 1}).Empty() != true {
+		t.Fatal("a digest with no sections must read empty")
+	}
+}
+
+// TestWatchActiveRunStreamsAndDetectsRunEnd: re-attach (G0-d) — the watcher
+// suppresses pre-attach history via the baseline probe, forwards fresh live
+// events to the observer, and returns the outcome summary when run.finished
+// lands.
+func TestWatchActiveRunStreamsAndDetectsRunEnd(t *testing.T) {
+	history := []control.Event{
+		// Pre-attach history (newest-first) that must never be replayed.
+		{ID: "old1", Type: "tool.completed", Payload: mustJSON(map[string]any{"tool": "read_file", "result": "stale"})},
+	}
+	live := []control.Event{
+		// Newest-first: the run finishes after one fresh tool event.
+		{ID: "e2", Type: "run.finished", Payload: mustJSON(map[string]any{"outcome": map[string]any{"status": "done", "summary": "migration complete"}})},
+		{ID: "e1", Type: "tool.started", Payload: mustJSON(map[string]any{"tool": "terminal", "args": "make migrate"})},
+		{ID: "old1", Type: "tool.completed", Payload: mustJSON(map[string]any{"tool": "read_file", "result": "stale"})},
+	}
+	var polls int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/tasks/events" {
+			http.NotFound(w, r)
+			return
+		}
+		if atomic.AddInt32(&polls, 1) == 1 {
+			writeJSONResp(w, map[string]any{"events": history})
+			return
+		}
+		writeJSONResp(w, map[string]any{"events": live})
+	}))
+	defer srv.Close()
+
+	c := New(srv.URL, "")
+	var mu sync.Mutex
+	var got []string
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	summary := c.WatchActiveRun(ctx, func(se llm.StreamEvent) {
+		mu.Lock()
+		got = append(got, se.EventType)
+		mu.Unlock()
+	})
+	if summary != "migration complete" {
+		t.Fatalf("summary = %q", summary)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(got) != 1 || got[0] != "tool.started" {
+		t.Fatalf("observer must see only the fresh renderable event, got %v", got)
+	}
+}
+
+// TestWatchActiveRunFallsBackToCurrentTaskProbe: a run that finalizes without
+// a terminal event (failure paths) still ends the watch via the
+// /v1/tasks/current probe.
+func TestWatchActiveRunFallsBackToCurrentTaskProbe(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/tasks/events":
+			writeJSONResp(w, map[string]any{"events": []control.Event{}})
+		case "/v1/tasks/current":
+			writeJSONResp(w, map[string]any{"task": nil, "active_run": nil})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	c := New(srv.URL, "")
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	done := make(chan string, 1)
+	go func() { done <- c.WatchActiveRun(ctx, func(llm.StreamEvent) {}) }()
+	select {
+	case summary := <-done:
+		if summary != "" {
+			t.Fatalf("summary = %q, want empty from probe fallback", summary)
+		}
+	case <-time.After(12 * time.Second):
+		t.Fatal("watcher did not end via the current-task probe")
+	}
+}
+
 func mustJSON(v any) json.RawMessage {
 	b, _ := json.Marshal(v)
 	return b

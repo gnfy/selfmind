@@ -896,6 +896,55 @@ func (s *Store) ListTasks(ctx context.Context, tenantID, personID string, limit 
 	return out, rows.Err()
 }
 
+// ListTasksByStatusSince returns the person's tasks whose status is one of
+// statuses and whose last update is at or after since, newest first, bounded
+// by limit. It backs the attach digest (G0-c): "which tasks finished or
+// stopped early while this endpoint was away". It filters on existing columns
+// only (tenant_id, person_id, status, updated_at), so it stays a cheap scan of
+// the person's task list.
+func (s *Store) ListTasksByStatusSince(ctx context.Context, tenantID, personID string, statuses []string, since time.Time, limit int) ([]Task, error) {
+	if strings.TrimSpace(personID) == "" {
+		return nil, fmt.Errorf("person id is required")
+	}
+	if len(statuses) == 0 {
+		return nil, nil
+	}
+	if limit <= 0 {
+		limit = 10
+	}
+	query := `SELECT id, tenant_id, person_id, COALESCE(workspace_id, ''), title, status,
+	                 COALESCE(current_summary, ''), COALESCE(next_steps_json, '[]'),
+	                 COALESCE(blocked_reason, ''), COALESCE(active_run_id, ''),
+	                 COALESCE(last_channel, ''), created_at, updated_at
+	          FROM tasks
+	          WHERE tenant_id = ? AND person_id = ? AND updated_at >= ?
+	            AND status IN (` + placeholders(len(statuses)) + `)
+	          ORDER BY updated_at DESC LIMIT ?`
+	args := []any{normalizeTenant(tenantID), personID, since.Unix()}
+	args = append(args, toAnySlice(statuses)...)
+	args = append(args, limit)
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Task
+	for rows.Next() {
+		var t Task
+		var nextSteps string
+		var created, updated int64
+		if err := rows.Scan(&t.ID, &t.TenantID, &t.PersonID, &t.WorkspaceID, &t.Title, &t.Status, &t.CurrentSummary,
+			&nextSteps, &t.BlockedReason, &t.ActiveRunID, &t.LastChannel, &created, &updated); err != nil {
+			return nil, err
+		}
+		_ = json.Unmarshal([]byte(nextSteps), &t.NextSteps)
+		t.CreatedAt = time.Unix(created, 0)
+		t.UpdatedAt = time.Unix(updated, 0)
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
 func (s *Store) UpdateTaskStatus(ctx context.Context, tenantID, taskID, status, summary string, nextSteps []string) error {
 	nextStepsJSON, _ := json.Marshal(nextSteps)
 	_, err := s.db.ExecContext(ctx,

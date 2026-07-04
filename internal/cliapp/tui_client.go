@@ -68,6 +68,17 @@ func (a *App) tryRunTUIClient(cfg *config.Config) (int, bool) {
 	// forwarded into that run over the gateway API — the controller's local
 	// steering channel cannot cross the process boundary.
 	ctrl.SetSteerFunc(client.SteerRun)
+	// Re-attach to a mid-flight daemon run (G0-d): when the attach digest
+	// reports one, the controller watches its live events without a user turn.
+	ctrl.SetRunWatcher(client.WatchActiveRun)
+	// Attach digest (G0-c). Ordering is load-bearing: the digest must be
+	// fetched BEFORE the first presence beat below, because that beat stamps
+	// accounts.last_seen_at — the very "since last CLI presence" anchor the
+	// digest is computed from. Best-effort: a failed fetch just skips the
+	// digest, it never blocks the TUI.
+	if digest, err := client.Digest(a.ctx); err == nil {
+		ctrl.SetStartupDigest(digest)
+	}
 	// Idle-TUI presence heartbeat: the event poller only runs mid-turn, so
 	// without this loop an open-but-idle TUI reads as detached and CLI-origin
 	// approval prompts would ALSO push to IM (double notification). Stopped on

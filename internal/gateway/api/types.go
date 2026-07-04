@@ -167,6 +167,67 @@ type RunOutcome struct {
 	NeedApprove bool     `json:"need_approve,omitempty"`
 }
 
+// DigestResponse is the attach digest (GET /v1/digest): a bounded,
+// person-scoped summary of what happened since the requesting endpoint's last
+// presence (accounts.last_seen_at; a 24h window when never seen). It exists so
+// reopening the CLI after being away starts with "while you were away" instead
+// of a blank prompt — see docs/identity-continuity.md "Runtime attachment
+// model".
+type DigestResponse struct {
+	Identity *control.IdentityContext `json:"identity,omitempty"`
+	// SinceUnix is the anchor the digest was computed from (unix seconds).
+	SinceUnix int64 `json:"since_unix"`
+	// FinishedTasks completed since the anchor (statuses done/completed).
+	FinishedTasks []DigestTask `json:"finished_tasks,omitempty"`
+	// DisruptedTasks stopped early since the anchor (statuses failed/interrupted).
+	DisruptedTasks []DigestTask `json:"disrupted_tasks,omitempty"`
+	// PendingApprovals is every approval still waiting for the person, in the
+	// same stable display order as /approvals (so ordinals keep meaning).
+	PendingApprovals []DigestApproval `json:"pending_approvals,omitempty"`
+	// UnconfirmedPushes are outbound IM messages that may never have reached
+	// the person (status sent_unconfirmed or failed) since the anchor.
+	UnconfirmedPushes []DigestPush `json:"unconfirmed_pushes,omitempty"`
+	// ActiveRun is the person's currently executing run, if any — the signal
+	// for a client to re-attach to its live events.
+	ActiveRun *DigestActiveRun `json:"active_run,omitempty"`
+}
+
+// Empty reports whether there is literally nothing to tell the user; clients
+// must render nothing in that case (a fresh session stays clean).
+func (d *DigestResponse) Empty() bool {
+	return d == nil ||
+		(len(d.FinishedTasks) == 0 && len(d.DisruptedTasks) == 0 &&
+			len(d.PendingApprovals) == 0 && len(d.UnconfirmedPushes) == 0 &&
+			d.ActiveRun == nil)
+}
+
+type DigestTask struct {
+	ID      string `json:"id"`
+	Title   string `json:"title"`
+	Status  string `json:"status"`
+	Summary string `json:"summary,omitempty"`
+}
+
+// DigestApproval carries the approval id plus the same one-line rich summary
+// the /approvals list renders; clients show the line and defer resolution
+// (ordinals, y/n) to the shared gateway resolver.
+type DigestApproval struct {
+	ID   string `json:"id"`
+	Line string `json:"line"`
+}
+
+type DigestPush struct {
+	Platform string `json:"platform"`
+	Status   string `json:"status"`
+	Preview  string `json:"preview,omitempty"`
+}
+
+type DigestActiveRun struct {
+	TaskID         string `json:"task_id,omitempty"`
+	Title          string `json:"title,omitempty"`
+	ElapsedSeconds int64  `json:"elapsed_seconds"`
+}
+
 type WorkspaceRegisterRequest struct {
 	TenantID       string   `json:"tenant_id"`
 	Platform       string   `json:"platform"`

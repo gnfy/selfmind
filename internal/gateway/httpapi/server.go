@@ -86,6 +86,7 @@ func (d *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/gateway/status", d.handleGatewayStatus)
 	mux.HandleFunc("/v1/gateway/shutdown", d.handleGatewayShutdown)
 	mux.HandleFunc("/v1/presence/ping", d.handlePresencePing)
+	mux.HandleFunc("/v1/digest", d.handleDigest)
 	return mux
 }
 

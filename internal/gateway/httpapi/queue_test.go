@@ -132,11 +132,14 @@ func TestQueueSurvivesRestartBootDrain(t *testing.T) {
 	// A fresh Server (new coordinator) with the same store == a restart.
 	daemon.DrainQueuedAtBoot(ctx)
 
-	waitUntil(t, 5*time.Second, func() bool {
+	// Generous deadlines: the drain chains two full async runs (drain -> run ->
+	// finalize -> drain next), and under full-suite CPU contention 5s flaked
+	// (passes in isolation). waitUntil polls, so green runs stay fast.
+	waitUntil(t, 30*time.Second, func() bool {
 		n, _ := store.CountQueued(ctx, identity.TenantID, identity.PersonID, control.QueueStatusQueued)
 		return n == 0
 	}, "boot drain did not consume the queued rows")
-	waitUntil(t, 5*time.Second, func() bool {
+	waitUntil(t, 30*time.Second, func() bool {
 		tasks, _ := store.ListTasks(ctx, identity.TenantID, identity.PersonID, 20)
 		return len(tasks) >= 2
 	}, "boot-drained tasks never ran")

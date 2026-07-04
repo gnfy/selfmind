@@ -1,0 +1,111 @@
+package control
+
+import (
+	"context"
+	"testing"
+)
+
+func TestTaskQueueLifecycle(t *testing.T) {
+	ctx := context.Background()
+	store, err := OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+	defer store.Close()
+
+	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tenant, person := identity.TenantID, identity.PersonID
+
+	enqueue := func(content string) *QueuedTask {
+		t.Helper()
+		q, err := store.EnqueueQueued(ctx, QueuedTask{
+			TenantID: tenant, PersonID: person, Channel: "cli", Platform: "cli",
+			PlatformUserID: "local", Content: content,
+		})
+		if err != nil {
+			t.Fatalf("enqueue: %v", err)
+		}
+		return q
+	}
+
+	first := enqueue("first task")
+	enqueue("second task")
+
+	// FIFO ordering.
+	queued, err := store.ListQueued(ctx, tenant, person, QueueStatusQueued)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(queued) != 2 || queued[0].Content != "first task" || queued[1].Content != "second task" {
+		t.Fatalf("ListQueued order wrong: %+v", queued)
+	}
+
+	if n, err := store.CountQueued(ctx, tenant, person, QueueStatusQueued); err != nil || n != 2 {
+		t.Fatalf("CountQueued = %d, %v; want 2", n, err)
+	}
+
+	// NextQueued returns the oldest.
+	next, err := store.NextQueued(ctx, tenant, person)
+	if err != nil || next == nil || next.ID != first.ID {
+		t.Fatalf("NextQueued = %+v, %v; want %s", next, err, first.ID)
+	}
+
+	// Marking it started removes it from the queued view.
+	if err := store.MarkQueued(ctx, tenant, first.ID, QueueStatusStarted); err != nil {
+		t.Fatal(err)
+	}
+	if n, _ := store.CountQueued(ctx, tenant, person, QueueStatusQueued); n != 1 {
+		t.Fatalf("after MarkStarted queued count = %d; want 1", n)
+	}
+	if n, _ := store.CountQueued(ctx, tenant, person, QueueStatusStarted); n != 1 {
+		t.Fatalf("started count = %d; want 1", n)
+	}
+
+	// RequeueStartedQueued flips it back (boot recovery).
+	if n, err := store.RequeueStartedQueued(ctx); err != nil || n != 1 {
+		t.Fatalf("RequeueStartedQueued = %d, %v; want 1", n, err)
+	}
+	if n, _ := store.CountQueued(ctx, tenant, person, QueueStatusQueued); n != 2 {
+		t.Fatalf("after requeue queued count = %d; want 2", n)
+	}
+
+	// ClearQueued cancels all remaining.
+	cleared, err := store.ClearQueued(ctx, tenant, person)
+	if err != nil || cleared != 2 {
+		t.Fatalf("ClearQueued = %d, %v; want 2", cleared, err)
+	}
+	if n, _ := store.CountQueued(ctx, tenant, person, QueueStatusQueued); n != 0 {
+		t.Fatalf("after clear queued count = %d; want 0", n)
+	}
+	if next, _ := store.NextQueued(ctx, tenant, person); next != nil {
+		t.Fatalf("NextQueued after clear = %+v; want nil", next)
+	}
+}
+
+func TestListAllQueuedAcrossPersons(t *testing.T) {
+	ctx := context.Background()
+	store, err := OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+	defer store.Close()
+
+	a, _ := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Alice")
+	b, _ := store.ResolveOrCreateAccount(ctx, "default", "telegram", "tg_bob", "Bob")
+	if _, err := store.EnqueueQueued(ctx, QueuedTask{TenantID: a.TenantID, PersonID: a.PersonID, Platform: "cli", PlatformUserID: "local", Content: "a"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.EnqueueQueued(ctx, QueuedTask{TenantID: b.TenantID, PersonID: b.PersonID, Platform: "telegram", PlatformUserID: "tg_bob", Content: "b"}); err != nil {
+		t.Fatal(err)
+	}
+	all, err := store.ListAllQueued(ctx, QueueStatusQueued)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all) != 2 {
+		t.Fatalf("ListAllQueued = %d rows; want 2", len(all))
+	}
+}

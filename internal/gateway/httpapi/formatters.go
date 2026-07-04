@@ -26,6 +26,19 @@ func formatTasks(tasks []control.Task) string {
 	return strings.TrimSpace(sb.String())
 }
 
+func formatQueue(items []control.QueuedTask) string {
+	if len(items) == 0 {
+		return "No queued tasks."
+	}
+	var sb strings.Builder
+	sb.WriteString("Queued tasks:\n")
+	for i, q := range items {
+		fmt.Fprintf(&sb, "%d. %s\n", i+1, textutil.Truncate(toOneLine(q.Content), 60))
+	}
+	sb.WriteString("\nUse /queue clear to drop all queued tasks.")
+	return strings.TrimSpace(sb.String())
+}
+
 func formatWorkspaces(workspaces []control.Workspace) string {
 	if len(workspaces) == 0 {
 		return "No workspaces."

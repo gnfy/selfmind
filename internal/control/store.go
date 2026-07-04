@@ -343,7 +343,21 @@ CREATE TABLE IF NOT EXISTS person_settings (
 	value TEXT NOT NULL,
 	updated_at INTEGER NOT NULL,
 	PRIMARY KEY(tenant_id, person_id, key)
-);`
+);
+CREATE TABLE IF NOT EXISTS task_queue (
+	id TEXT PRIMARY KEY,
+	tenant_id TEXT NOT NULL,
+	person_id TEXT NOT NULL,
+	channel TEXT NOT NULL,
+	platform TEXT NOT NULL,
+	platform_user_id TEXT,
+	content TEXT NOT NULL,
+	approval_mode TEXT,
+	workspace_id TEXT,
+	status TEXT NOT NULL DEFAULT 'queued',
+	created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_task_queue_person ON task_queue(tenant_id, person_id, status, created_at);`
 	if _, err := s.db.ExecContext(ctx, schema); err != nil {
 		return err
 	}

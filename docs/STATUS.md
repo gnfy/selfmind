@@ -34,7 +34,7 @@
 | Native tool calling | ✅ | Native `tool_calls` first, `[TOOL:...]` fallback, repeated-failure guardrails, secret redaction. |
 | Task strategy / intent routing | ✅ | Agent-first; coarse `TaskStrategy`; rules/hybrid/llm intent. `internal/kernel/task_strategy.go`, `internal/gateway/router`. |
 | Context engine | ✅ | Bounded, deterministic message window on the hot path. `internal/kernel/context_engine.go`. |
-| Control store | ✅ | 15 tables: tenants/persons/accounts/workspaces/tasks/runs/events/handoffs/approvals/notifications/outbound/etc. `internal/control/store.go`. |
+| Control store | ✅ | tenants/persons/accounts/workspaces/tasks/runs/events/handoffs/approvals/grants/notifications/outbound/person_settings/`task_queue`/etc. `internal/control/store.go`. |
 | Memory + session search | ✅ | `AddFact`/`GetFacts`, FTS recall, memory fence. |
 | Skills system | ✅ | list/view/manage/catalog/bundle/curator; history + undo; provenance; governance archive/restore. `internal/tools/skill_*.go`. |
 | Skill metrics + pruning | ✅ | `internal/kernel/skill_store.go` RecordCall/Prune. (Roadmap lists this as "to do" — it is done.) |
@@ -62,6 +62,8 @@
 | CLI image input | ✅ | Image-path detection in input + clipboard screenshot paste (`/paste-image`, Ctrl+V auto-detect; WSL/macOS/Linux); routed to the `vision_analyze` tool via the attachment pipeline. Clipboard requires a local GUI (not over SSH). `internal/gateway/cli/attachments.go`, `clipboard.go`. |
 | Approval modes | ✅ | Staged `on-request` / `read-only` / `auto-edit` / `full-auto` / `smart` via `/mode`, enforced in `SmartApprovalMiddleware`; on-demand y/N reuses the clarify bridge. `internal/tools/middleware.go`. **Layered approval funnel shipped (H1, 2026-07-04):** the middleware now runs (1) an unbypassable **hard floor** (`hardlineToolCall`) that fires before any mode bypass — full-auto included — for irreversible ops (recursive delete of `/`,`/home`,`$HOME`,`/etc`,`/usr`,`/var`,`/boot`; `mkfs*`; `dd of=/dev/sd*|nvme*`; redirect over a raw disk device; fork bomb; `shutdown`/`reboot`/`halt`/`poweroff`/`init 0|6`), returning `operation blocked by safety policy: …` (distinct from the user-rejection contract; kernel `isUserRejectionErr` does NOT match it); (2) mode bypass; (3) **class-level approval memory** — approving a coarse *class* (`approvalPatternKey`, e.g. any `chmod` → `exec:invokes dangerous command: chmod`) for the task (session) or person (persistent) via the durable `approval_grants` table skips later same-class asks; (5) human ask. Reply grammar: `/approve [n] task` / `/approve [n] always|person` (or bare `yt`/`ya`) records the grant scope; `/mode` is now an IM control command persisting per-person `approval_mode`. `smart` mode is on-request behavior in H1 — LLM triage is the H2 follow-up (see below). `internal/tools/middleware.go`, `internal/control/approval_grants.go`, `internal/gateway/httpapi/approval_resolver.go`. |
 | Mid-turn steering | ✅ | Works in-process (`internal/kernel/steering.go` + controller `steerCh`) **and** in client mode: input typed during a daemon run is forwarded via `POST /v1/runs/steer` (`httpapi/handlers_steer.go`) into the active run's buffered steering channel (`kernel.WithSteering`, sync + async paths), leaving an auditable `run.steered` event. Daemon refusals surface honestly in the TUI (409 no active run / 429 buffer full → transcript notice, never silently dropped). Covered by unit tests (httpapi/client/controller), not VCR. |
+| Task queueing (G1+G2) | ✅ | New work while a run is active is **queued, not rejected** (2026-07-04). Durable `control.task_queue` (`internal/control/queue.go`: `EnqueueQueued`/`ListQueued`/`NextQueued`/`CountQueued`/`MarkQueued`/`ClearQueued`/`ListAllQueued`/`RequeueStartedQueued`). `ProcessMessage` enqueues a genuinely-new message behind the active run with an honest acceptance (`Queued behind the running task (N ahead)…`); a continuation (`IntentContinue`) is never queued — it stays busy and steers. On every run finalization (sync + async paths) `RunCoordinator.drainQueue` auto-starts the next queued item as a normal async run (per-person `draining` re-entrancy guard; reverts the row to `queued` if a fresh run races the slot). Boot drain (`Server.DrainQueuedAtBoot`, wired in the gateway runner) requeues `started` rows and resumes pending work after a restart. Visibility: `/queue` (list) / `/queue clear`; `/stop` cancels the active run and then drains. `httpapi/queue.go`, `httpapi/run_coordinator.go`. Tests: `control/queue_test.go`, `httpapi/queue_test.go`. |
+| Observability / diagnostics | ✅ | Self-serve diagnostics so the owner never re-describes bugs by hand (2026-07-04). `selfmind doctor [--out FILE]` (`internal/cliapp/doctor_commands.go`): a redacted bundle — gateway status (live HTTP status, else on-disk PID record), last 10 runs (status/title/elapsed/last_error), pending approvals, queued tasks, `sent_unconfirmed`/`failed` pushes, presence snapshot (durable `accounts.last_seen_at`), per-channel activity, and the last 50 gateway.log lines. Read-only; works whether or not the daemon is up (reads control.db + log directly). `/diag` control command returns a compact phone-friendly snapshot (active run + elapsed, queued count, pending approvals, last error, recent events). Content redacted via `tools.RedactSensitive`. Store queries: `control.ListRecentRunsForPerson`, `control.CountChannelMessagesByChannel` (`internal/control/doctor_queries.go`). Tests: `cliapp/doctor_test.go`, `httpapi/queue_test.go` (`/diag`). |
 | Skill variant evolution / sandbox test | ❌ | Old roadmap P3 (doc removed; see git history); not started, and out of scope for the north star. |
 
 ## Highest-Value Next Work (by priority)
@@ -130,12 +132,15 @@ is the only priority list in the repo; other docs must point here.
    daemon run (`/v1/runs/steer`) and ctrl+c shows the background/cancel exit
    prompt — all existing paths. `cli/attach_digest.go`,
    `client.WatchActiveRun`.
-2. **P0 — G1+G2: IM routing stack + queue instead of busy.** Inbound routing
-   priority: pending approval (y/n, done) > pending question > continuation
-   cue > NEW task; a new task while a run is active is queued with an honest
-   acceptance reply and auto-started when the runner frees up (today it is
-   rejected with "Another task is already running", which kills 24/7 IM
-   dispatch). This also resolves the parked-task attach bug below.
+2. **P0 — G1+G2: IM routing stack + queue instead of busy.** Queue-instead-of-busy
+   is ✅ shipped (2026-07-04, see the Task queueing capability row): a genuinely
+   new message while a run is active is enqueued with an honest acceptance and
+   auto-started (sync + async drain + boot drain) when the runner frees up;
+   continuations never queue (they steer). Remaining under this item: the full
+   inbound routing priority order (pending approval y/n/done > pending question
+   > continuation cue > NEW task) — the approval and continuation legs exist;
+   the pending-question leg lands with G3. Observability export (`selfmind
+   doctor` / `/diag`) also shipped 2026-07-04.
 3. **P0 — G3: clarify-over-IM.** `gatewayClarify` is a stub that tells the
    model to use its own judgment. Make questions first-class like approvals:
    DB-backed pending question, fan-out push ("Question — reply with your

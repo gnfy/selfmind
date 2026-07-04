@@ -199,6 +199,27 @@ func (m *uiModel) handleTasks() tea.Cmd {
 	}
 }
 
+// handleControlPassthrough forwards a gateway control command (e.g. /queue,
+// /diag) to the daemon and renders its plain-text reply. These are pre-agent
+// control commands owned by the gateway; the TUI is a thin client that just
+// relays them (never resolves them locally).
+func (m *uiModel) handleControlPassthrough(command string, args []string) tea.Cmd {
+	content := command
+	if len(args) > 0 {
+		content = command + " " + strings.Join(args, " ")
+	}
+	return func() tea.Msg {
+		if m.messageProcessor == nil {
+			return MsgAgentDone{Response: "Gateway not initialized."}
+		}
+		resp, _ := m.messageProcessor(context.Background(), m.controlMessageRequest(content))
+		if resp.Error != "" {
+			return MsgAgentDone{Response: fmt.Sprintf("Error: %s", resp.Error)}
+		}
+		return MsgAgentDone{Response: resp.Content}
+	}
+}
+
 func (m *uiModel) controlMessageRequest(content string) api.MessageRequest {
 	return api.MessageRequest{
 		TenantID:       m.tenantID,

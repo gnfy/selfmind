@@ -116,6 +116,13 @@ Domain docs (**mandatory** before changing that domain):
   `/resume`, `/workspace`) stay pre-agent and must not consume model tokens.
 - Keep the per-person active-run guard until the worker pool fully replaces
   it; the shared Agent object is not safe to run freely in parallel.
+- New work queues per person; continuation never queues. When a run is active,
+  a genuinely new message is enqueued in `control.task_queue` and auto-started
+  when the run finishes (`RunCoordinator.drainQueue`, per-person re-entrancy
+  guard, boot drain via `Server.DrainQueuedAtBoot`) — never rejected as "busy".
+  An `IntentContinue` message is NOT new work: it stays on the busy/steer path.
+  A drained item becomes an ordinary async run, so the worker pool still
+  schedules it — do not add a second serialization layer.
 - Run events use a per-run sink installed with
   `kernel.WithEventChannel(ctx, ch)`. Never swap the shared
   `Agent.EventChannel` in gateway code (legacy local-TUI fallback only).

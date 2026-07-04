@@ -212,12 +212,20 @@ func (d *Server) ProcessMessage(ctx context.Context, req api.MessageRequest) (ap
 
 	coord := d.coordinator()
 	if running := coord.currentActive(identity.PersonID); running != nil {
-		return api.MessageResponse{
-			Identity: identity,
-			Content:  formatBusyRun(running),
-			Accepted: false,
-			Turn:     messageTurn("busy", "running", "running", running.TaskID, running.RunID, running.Summary),
-		}, http.StatusOK
+		// A continuation steers/continues the ACTIVE task, so it is not new work
+		// and must never be queued — keep the honest busy reply (steering proper
+		// goes through /v1/runs/steer). Everything else is genuinely new work:
+		// enqueue it and auto-start when the active run finishes (G1+G2), instead
+		// of rejecting it as "busy" (which killed 24/7 IM dispatch).
+		if intent.Intent == router.IntentContinue {
+			return api.MessageResponse{
+				Identity: identity,
+				Content:  formatBusyRun(running),
+				Accepted: false,
+				Turn:     messageTurn("busy", "running", "running", running.TaskID, running.RunID, running.Summary),
+			}, http.StatusOK
+		}
+		return d.enqueueBehindActive(ctx, identity, req), http.StatusOK
 	}
 
 	if req.Async {
@@ -256,7 +264,13 @@ func (d *Server) ProcessMessage(ctx context.Context, req api.MessageRequest) (ap
 	}); !ok {
 		return api.MessageResponse{Identity: identity, Content: "Another task is already running. Use /status or /stop.", Turn: messageTurn("busy", "running", "running", "", "", "")}, http.StatusOK
 	}
-	defer coord.endActive(identity.PersonID)
+	// Free the per-person slot, then drain the queue: a queued item auto-starts
+	// as an async run once this sync run is done. drainQueue runs after endActive
+	// (defers are LIFO) and only launches when no run raced back in.
+	defer func() {
+		coord.endActive(identity.PersonID)
+		coord.drainQueue(identity)
+	}()
 	runCtx = kernel.WithSteering(runCtx, steerCh)
 
 	resp, status := coord.runMessage(runCtx, identity, req, intent)
@@ -882,6 +896,8 @@ func (d *Server) tryHandleControlCommand(ctx context.Context, identity *control.
 /id                   Show your resolved account identity.
 /status               Show the current task status.
 /tasks                List recent tasks.
+/queue [clear]        List queued tasks (or drop all pending queued tasks).
+/diag                 Show a compact runtime diagnostic snapshot.
 /events               List recent events for the current task.
 /approvals            List pending approvals.
 /approve <n|id|all> [task|always]   Approve a pending action; add task/always to remember its class.
@@ -968,6 +984,23 @@ func (d *Server) tryHandleControlCommand(ctx context.Context, identity *control.
 			return true, "", err
 		}
 		return true, formatTasks(tasks), nil
+	case lower == "/queue" || strings.HasPrefix(lower, "/queue "):
+		arg := strings.TrimSpace(trimmed[len("/queue"):])
+		if strings.EqualFold(arg, "clear") {
+			n, err := d.Control.ClearQueued(ctx, identity.TenantID, identity.PersonID)
+			if err != nil {
+				return true, "", err
+			}
+			return true, fmt.Sprintf("Cleared %d queued task(s).", n), nil
+		}
+		queued, err := d.Control.ListQueued(ctx, identity.TenantID, identity.PersonID, control.QueueStatusQueued)
+		if err != nil {
+			return true, "", err
+		}
+		return true, formatQueue(queued), nil
+	case lower == "/diag":
+		reply, err := d.diagReply(ctx, identity)
+		return true, reply, err
 	case strings.HasPrefix(lower, "/workspace "):
 		parts := strings.Fields(req.Content)
 		if len(parts) < 2 {
@@ -1141,7 +1174,7 @@ func suggestControlCommand(lower string) string {
 		return ""
 	}
 	token := fields[0]
-	known := []string{"/help", "/model", "/id", "/status", "/tasks", "/events",
+	known := []string{"/help", "/model", "/id", "/status", "/tasks", "/queue", "/diag", "/events",
 		"/approvals", "/approve", "/reject", "/mode", "/stop", "/notify", "/new",
 		"/resume", "/workspace", "/workspaces"}
 	best, bestDist := "", 3

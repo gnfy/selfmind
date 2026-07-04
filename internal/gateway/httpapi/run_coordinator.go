@@ -32,6 +32,11 @@ type RunCoordinator struct {
 
 	mu     sync.Mutex
 	active map[string]*activeRun
+	// draining guards the per-person queue drain against re-entrancy: a run
+	// finalization triggers a drain, which launches the next queued item as an
+	// async run, whose OWN finalization drains again — a chain that must never
+	// run two drains for one person concurrently. Keyed by person_id.
+	draining map[string]bool
 }
 
 // coordinator lazily builds the per-Server RunCoordinator. Lazy construction
@@ -39,7 +44,7 @@ type RunCoordinator struct {
 // working regardless of how the Server struct was assembled.
 func (d *Server) coordinator() *RunCoordinator {
 	d.runsOnce.Do(func() {
-		d.runs = &RunCoordinator{srv: d, active: map[string]*activeRun{}}
+		d.runs = &RunCoordinator{srv: d, active: map[string]*activeRun{}, draining: map[string]bool{}}
 	})
 	return d.runs
 }
@@ -359,6 +364,10 @@ func (c *RunCoordinator) startAsyncRun(identity *control.IdentityContext, req ap
 	active.Cancel = runCancel
 	stopProgressNotices := c.startAsyncProgressNotices(runCtx, identity, req)
 	go func() {
+		// Defers run LIFO: drainQueue is registered first so it runs LAST —
+		// after endActive frees the per-person slot — chaining the next queued
+		// item into its own async run once this one is truly done.
+		defer c.drainQueue(identity)
 		defer c.endActive(identity.PersonID)
 		defer runCancel()
 		defer stopProgressNotices()
@@ -375,5 +384,73 @@ func (c *RunCoordinator) startAsyncRun(identity *control.IdentityContext, req ap
 		Content:  notice,
 		Accepted: true,
 		Turn:     messageTurn("accepted", "running", "running", "", "", notice),
+	}
+}
+
+// drainQueue starts the next queued task for a person as an async run, once no
+// run is active. It is the auto-start half of "queue instead of busy" (G1+G2):
+// called after every run finalization (sync and async paths) and at boot.
+//
+// Re-entrancy and races are handled up front: the draining flag serializes
+// drains for a person, and the active-run check refuses to launch while a run
+// is (still or again) executing. If beginActive races and loses to a fresh
+// inbound run, the row is reverted to queued so the NEXT finalization drains it
+// — a queued item is never silently dropped.
+func (c *RunCoordinator) drainQueue(identity *control.IdentityContext) {
+	if c == nil || c.srv == nil || c.srv.Control == nil || identity == nil {
+		return
+	}
+	personID := identity.PersonID
+	c.mu.Lock()
+	if c.active[personID] != nil { // a run raced in; its own finalize will drain
+		c.mu.Unlock()
+		return
+	}
+	if c.draining == nil {
+		c.draining = map[string]bool{}
+	}
+	if c.draining[personID] {
+		c.mu.Unlock()
+		return
+	}
+	c.draining[personID] = true
+	c.mu.Unlock()
+	defer func() {
+		c.mu.Lock()
+		delete(c.draining, personID)
+		c.mu.Unlock()
+	}()
+
+	ctx := context.Background()
+	next, err := c.srv.Control.NextQueued(ctx, identity.TenantID, personID)
+	if err != nil || next == nil {
+		return
+	}
+	if err := c.srv.Control.MarkQueued(ctx, identity.TenantID, next.ID, control.QueueStatusStarted); err != nil {
+		return
+	}
+	req := api.MessageRequest{
+		TenantID:       next.TenantID,
+		Platform:       next.Platform,
+		PlatformUserID: next.PlatformUserID,
+		Channel:        next.Channel,
+		Content:        next.Content,
+		ApprovalMode:   next.ApprovalMode,
+		WorkspaceID:    next.WorkspaceID,
+		Async:          true,
+	}
+	drainIdentity := identity
+	// Reproduce the queued item's own account (platform/platform_user_id may
+	// differ from the endpoint that just finished, e.g. a CLI run draining a
+	// Telegram-queued task) so its result routes back to the right origin.
+	if resolved, rerr := c.srv.Control.ResolveOrCreateAccount(ctx, next.TenantID, next.Platform, next.PlatformUserID, ""); rerr == nil && resolved != nil {
+		drainIdentity = resolved
+	}
+	intent := c.srv.classifyIntent(ctx, req.Content, req.Channel)
+	resp := c.startAsyncRun(drainIdentity, req, intent)
+	if !resp.Accepted {
+		// A fresh inbound run won the slot between our check and beginActive.
+		// Revert so this item is drained on the next finalization.
+		_ = c.srv.Control.MarkQueued(ctx, next.TenantID, next.ID, control.QueueStatusQueued)
 	}
 }

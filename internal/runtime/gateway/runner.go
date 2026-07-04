@@ -165,6 +165,10 @@ func Run(ctx context.Context, opts Options) error {
 			defer weixinAdapter.Stop()
 		}
 	}
+	// Boot drain (G1+G2): resume tasks queued behind a run that a previous
+	// daemon never finished. Runs after Delivery/adapters are ready so queued
+	// items launched here can route their results back.
+	gatewayAPI.DrainQueuedAtBoot(ctx)
 	stopCh := make(chan struct{})
 	var stopOnce sync.Once
 	gatewayAPI.ShutdownFunc = func() {

@@ -39,6 +39,8 @@ var slashCommandMetas = []slashCommandMeta{
 	{Name: "/capture", Usage: "/capture [title]", Description: "Save the last turn as a replayable eval case", Hint: "turn this turn into a regression test"},
 	{Name: "/history", Usage: "/history", Description: "Open a scrollable view of the full conversation with complete diffs", Hint: "review past turns and full diffs"},
 	{Name: "/copy", Usage: "/copy", Description: "Copy the last assistant response to the clipboard", Hint: "copy the last response"},
+	{Name: "/queue", Usage: "/queue [clear]", Description: "List queued tasks, or drop all pending queued tasks", Hint: "view or clear queued work"},
+	{Name: "/diag", Usage: "/diag", Description: "Show a compact runtime diagnostic snapshot", Hint: "active run, queue, approvals, last error"},
 }
 
 var slashCommands = []slashCommand{
@@ -170,6 +172,18 @@ var slashCommands = []slashCommand{
 		slashCommandMeta: slashCommandMetas[18],
 		Run: func(m *uiModel, args []string) tea.Cmd {
 			return m.handleCopyLast()
+		},
+	},
+	{
+		slashCommandMeta: slashCommandMetas[19],
+		Run: func(m *uiModel, args []string) tea.Cmd {
+			return m.handleControlPassthrough("/queue", args)
+		},
+	},
+	{
+		slashCommandMeta: slashCommandMetas[20],
+		Run: func(m *uiModel, args []string) tea.Cmd {
+			return m.handleControlPassthrough("/diag", args)
 		},
 	},
 }

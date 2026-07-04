@@ -278,6 +278,19 @@ Domain docs (**mandatory** before changing that domain):
   CLASS, never the exact command; hard-floor and content-level denials are never
   eligible. Reply grammar carries the scope (`/approve [n] task|always`, bare
   `yt`/`ya`); persisted `/mode` lives in `person_settings` (`approval_mode`).
+- Smart-mode LLM triage (H2, `tools/approval_triage.go`) is layer 4 of the
+  funnel: it sits strictly BELOW the hard floor and the class-grant allowlist
+  and ABOVE the human ask. Only in `smart` mode, only for a dangerous
+  (non-hardline) op with no matching grant, a cheap `ApprovalJudge` (injected
+  via `ExecutionScope.Judge`, backed by a cheap role model kept OFF the run's
+  main provider) returns APPROVE / DENY / ESCALATE. APPROVE auto-runs and
+  records a task-scope class grant (judge consulted at most once per class per
+  task); DENY blocks with the user-rejection contract (`operation rejected: …`,
+  do-not-retry). It NEVER fails open: no judge, ESCALATE, any judge error, an
+  unrecognized reply, or the bounded (15s) timeout all fall through to the human
+  ask — never an auto-approval. The judge prompt strips shell comments and wraps
+  the command in `<command>` delimiters treated as untrusted data
+  (prompt-injection defense).
 - Tool failures are diagnostic evidence, not stop conditions. Diagnose before
   retrying: identify the ecosystem from high-signal files (`go.mod`,
   `package.json`, `pyproject.toml`, `Cargo.toml`, `composer.json`, CI files,

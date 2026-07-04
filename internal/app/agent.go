@@ -632,6 +632,10 @@ func InitAgent(mem *memory.MemoryManager, cfg *config.Config, tenantID string) (
 	skillCuratorProvider := modelGateway.ProviderForRole(llm.RoleSkillCurator)
 	semanticRecallProvider := modelGateway.ProviderForRole(llm.RoleSemanticRecall)
 	fastProvider := modelGateway.ProviderForRole(llm.RoleFastClassifier)
+	// Smart-mode approval triage (H2) uses the background_review role: a cheap
+	// side-task model kept OFF the main coding provider. Falls back to the
+	// default model when no background_review role is configured.
+	judgeProvider := modelGateway.ProviderForRole(llm.RoleBackgroundReview)
 
 	skillsBaseDir := cfg.Evolution.SkillsDir
 	if skillsBaseDir == "" {
@@ -666,6 +670,9 @@ func InitAgent(mem *memory.MemoryManager, cfg *config.Config, tenantID string) (
 	// Simple direct-answer turns use the fast-classifier role (falls back to the
 	// default model when no fast model is configured).
 	agent.SetFastProvider(fastProvider)
+	// Carry the cheap triage provider so the gateway can build the smart-mode
+	// approval judge (H2) from it, without kernel depending on concrete tools.
+	agent.SetApprovalJudgeProvider(judgeProvider)
 	// Surface learned skills in the prompt so the agent reuses what it learned.
 	agent.SetSkillInventory(skillInventoryFor(tenantID))
 	// Distill accumulated facts into a coherent user profile (uses the

@@ -29,6 +29,12 @@ type Server struct {
 	DrainTimeout      time.Duration
 	ShutdownFunc      func()
 	RuntimeStatusFunc func() api.GatewayRuntimeInfo
+	// ApprovalJudge is the optional cheap-model judge for smart-mode LLM approval
+	// triage (H2). Installed on every execution scope so a dangerous
+	// (non-hardline) op in smart mode is triaged before the human ask. Nil (e.g.
+	// eval, or no cheap model) makes smart mode degrade to a human ask — never an
+	// auto-approval.
+	ApprovalJudge tools.ApprovalJudge
 
 	mu           sync.Mutex
 	draining     bool
@@ -568,6 +574,11 @@ func (c *RunCoordinator) installExecutionScope(identity *control.IdentityContext
 	// the control store satisfies tools.ApprovalGrantStore structurally.
 	if c.srv != nil && c.srv.Control != nil {
 		scope.Grants = c.srv.Control
+	}
+	// Judge backs smart-mode LLM approval triage (H2). Optional: nil leaves smart
+	// mode on the human-ask path (never auto-approves without a judge).
+	if c.srv != nil {
+		scope.Judge = c.srv.ApprovalJudge
 	}
 	return tools.SetExecutionScope(identity.PersonID, scope)
 }

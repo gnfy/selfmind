@@ -132,6 +132,10 @@ func Run(ctx context.Context, opts Options) error {
 		Gateway:         gwDeps.Gateway,
 		DefaultTenantID: defaultTenantID,
 		DrainTimeout:    drainTimeout,
+		// Smart-mode approval triage (H2): build the cheap-model judge from the
+		// agent's dedicated triage provider (a cheap role kept OFF the main run
+		// provider). Nil when no provider is available → smart mode asks a human.
+		ApprovalJudge: app.NewApprovalJudge(agent.ApprovalJudgeProvider()),
 	}
 	// Periodic stuck-run recovery: while the daemon runs, mark heartbeat-dead
 	// runs (and their tasks) interrupted. Runs in the coordinator's active-run

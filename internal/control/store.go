@@ -323,7 +323,15 @@ CREATE TABLE IF NOT EXISTS outbound_messages (
 	delivered_at INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_outbound_due ON outbound_messages(status, next_attempt_at);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_outbound_idempotency ON outbound_messages(idempotency_key) WHERE idempotency_key IS NOT NULL AND idempotency_key != '';`
+CREATE UNIQUE INDEX IF NOT EXISTS idx_outbound_idempotency ON outbound_messages(idempotency_key) WHERE idempotency_key IS NOT NULL AND idempotency_key != '';
+CREATE TABLE IF NOT EXISTS person_settings (
+	tenant_id TEXT NOT NULL,
+	person_id TEXT NOT NULL,
+	key TEXT NOT NULL,
+	value TEXT NOT NULL,
+	updated_at INTEGER NOT NULL,
+	PRIMARY KEY(tenant_id, person_id, key)
+);`
 	if _, err := s.db.ExecContext(ctx, schema); err != nil {
 		return err
 	}
@@ -341,6 +349,11 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_outbound_idempotency ON outbound_messages(
 		// text after the first failed attempt.
 		{"outbound_messages", "kind", "TEXT"},
 		{"outbound_messages", "approval_id", "TEXT"},
+		// last_seen_at is durable endpoint recency (unix seconds) used only to
+		// pick the person's preferred notify endpoint when the CLI is detached.
+		// It is NOT presence: liveness stays in the gateway's in-memory
+		// registry (docs/identity-continuity.md "Runtime attachment model").
+		{"accounts", "last_seen_at", "INTEGER"},
 	} {
 		if err := s.ensureColumn(ctx, col.table, col.name, col.def); err != nil {
 			return err
@@ -486,6 +499,9 @@ type Account struct {
 	PlatformUserID string `json:"platform_user_id"`
 	DisplayName    string `json:"display_name,omitempty"`
 	Status         string `json:"status"`
+	// LastSeenAt is the unix second of the account's most recent activity
+	// beat (inbound message or presence touch); 0 means never seen.
+	LastSeenAt int64 `json:"last_seen_at,omitempty"`
 }
 
 // ListAccountsByPerson returns the person's active platform bindings in bind
@@ -496,7 +512,7 @@ func (s *Store) ListAccountsByPerson(ctx context.Context, tenantID, personID str
 		return nil, fmt.Errorf("person id is required")
 	}
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, tenant_id, person_id, platform, platform_user_id, COALESCE(display_name, ''), status
+		`SELECT id, tenant_id, person_id, platform, platform_user_id, COALESCE(display_name, ''), status, COALESCE(last_seen_at, 0)
 		 FROM accounts
 		 WHERE tenant_id = ? AND person_id = ? AND status = 'active'
 		 ORDER BY created_at ASC, id ASC`,
@@ -508,12 +524,100 @@ func (s *Store) ListAccountsByPerson(ctx context.Context, tenantID, personID str
 	var out []Account
 	for rows.Next() {
 		var a Account
-		if err := rows.Scan(&a.ID, &a.TenantID, &a.PersonID, &a.Platform, &a.PlatformUserID, &a.DisplayName, &a.Status); err != nil {
+		if err := rows.Scan(&a.ID, &a.TenantID, &a.PersonID, &a.Platform, &a.PlatformUserID, &a.DisplayName, &a.Status, &a.LastSeenAt); err != nil {
 			return nil, err
 		}
 		out = append(out, a)
 	}
 	return out, rows.Err()
+}
+
+// TouchAccountLastSeen stamps the account's durable recency beat. Callers are
+// expected to throttle (the gateway's presence registry only asks for a write
+// when the last one is >60s stale) — this must never become a per-request
+// write on the hot path.
+func (s *Store) TouchAccountLastSeen(ctx context.Context, tenantID, accountID string) error {
+	if strings.TrimSpace(accountID) == "" {
+		return fmt.Errorf("account id is required")
+	}
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE accounts SET last_seen_at = ? WHERE tenant_id = ? AND id = ?`,
+		time.Now().Unix(), normalizeTenant(tenantID), accountID)
+	return err
+}
+
+// MostRecentIMAccount returns the person's most recently seen active non-cli
+// account whose platform the supplied filter accepts (the gateway passes the
+// delivery service's SupportsPlatform, as a func so control stays free of a
+// delivery import). Never-seen accounts rank after seen ones, in bind order,
+// so a fresh install still resolves deterministically. Returns nil, nil when
+// no bound IM account qualifies.
+func (s *Store) MostRecentIMAccount(ctx context.Context, tenantID, personID string, supported func(platform string) bool) (*Account, error) {
+	if strings.TrimSpace(personID) == "" {
+		return nil, fmt.Errorf("person id is required")
+	}
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, tenant_id, person_id, platform, platform_user_id, COALESCE(display_name, ''), status, COALESCE(last_seen_at, 0)
+		 FROM accounts
+		 WHERE tenant_id = ? AND person_id = ? AND status = 'active' AND platform != 'cli'
+		 ORDER BY COALESCE(last_seen_at, 0) DESC, created_at ASC, rowid ASC`,
+		normalizeTenant(tenantID), personID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var a Account
+		if err := rows.Scan(&a.ID, &a.TenantID, &a.PersonID, &a.Platform, &a.PlatformUserID, &a.DisplayName, &a.Status, &a.LastSeenAt); err != nil {
+			return nil, err
+		}
+		if supported == nil || supported(a.Platform) {
+			return &a, nil
+		}
+	}
+	return nil, rows.Err()
+}
+
+// SetPersonSetting stores a small per-person key-value preference (e.g. the
+// /notify endpoint choice). An empty value deletes the row, which is how a
+// preference resets to its default.
+func (s *Store) SetPersonSetting(ctx context.Context, tenantID, personID, key, value string) error {
+	if strings.TrimSpace(personID) == "" || strings.TrimSpace(key) == "" {
+		return fmt.Errorf("person id and key are required")
+	}
+	tenantID = normalizeTenant(tenantID)
+	if strings.TrimSpace(value) == "" {
+		_, err := s.db.ExecContext(ctx,
+			`DELETE FROM person_settings WHERE tenant_id = ? AND person_id = ? AND key = ?`,
+			tenantID, personID, key)
+		return err
+	}
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO person_settings (tenant_id, person_id, key, value, updated_at)
+		 VALUES (?, ?, ?, ?, ?)
+		 ON CONFLICT(tenant_id, person_id, key) DO UPDATE SET
+		   value = excluded.value,
+		   updated_at = excluded.updated_at`,
+		tenantID, personID, key, value, time.Now().Unix())
+	return err
+}
+
+// GetPersonSetting returns the stored preference value, or "" when unset.
+func (s *Store) GetPersonSetting(ctx context.Context, tenantID, personID, key string) (string, error) {
+	if strings.TrimSpace(personID) == "" || strings.TrimSpace(key) == "" {
+		return "", fmt.Errorf("person id and key are required")
+	}
+	var value string
+	err := s.db.QueryRowContext(ctx,
+		`SELECT value FROM person_settings WHERE tenant_id = ? AND person_id = ? AND key = ?`,
+		normalizeTenant(tenantID), personID, key).Scan(&value)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return value, nil
 }
 
 func (s *Store) RegisterWorkspace(ctx context.Context, ws Workspace) (*Workspace, error) {

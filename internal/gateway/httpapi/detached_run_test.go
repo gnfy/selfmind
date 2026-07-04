@@ -139,8 +139,8 @@ func waitUntil(t *testing.T, timeout time.Duration, cond func() bool, msg string
 // TestSyncRunSurvivesClientDisconnect is the G0-a acceptance test: killing the
 // HTTP connection mid-turn (closing the CLI) must NOT kill the run. The run
 // finishes on the daemon-owned ctx, the task ends terminal/non-interrupted,
-// and the result is fanned out to the person's bound IM endpoints because the
-// sync response had no reader left.
+// and the result is delivered to the person's preferred IM endpoint (single
+// target, G0-b) because the sync response had no reader left.
 func TestSyncRunSurvivesClientDisconnect(t *testing.T) {
 	provider := newSlowLLMProvider("Task completed successfully.")
 	daemon, store, sender := newDetachedRunServer(t, provider)
@@ -186,15 +186,16 @@ func TestSyncRunSurvivesClientDisconnect(t *testing.T) {
 	// The run must still be executing on the daemon (detach, not cancel).
 	provider.releaseNow()
 
-	// The detached result is routed like an async one: fan-out to bound IM.
+	// The detached result is routed like an async one: to the single
+	// preferred IM endpoint (the only bound account here).
 	waitUntil(t, 5*time.Second, func() bool { return len(sender.snapshot()) > 0 },
-		"detached sync result was not fanned out to bound IM")
+		"detached sync result was not delivered to the preferred IM endpoint")
 	msg := sender.snapshot()[0]
 	if msg.Platform != "weixin" || msg.PlatformUserID != "wxid_detached" {
-		t.Fatalf("fan-out target = %s/%s, want weixin/wxid_detached", msg.Platform, msg.PlatformUserID)
+		t.Fatalf("delivery target = %s/%s, want weixin/wxid_detached", msg.Platform, msg.PlatformUserID)
 	}
 	if !strings.Contains(msg.Content, "Task completed successfully") {
-		t.Fatalf("fan-out content = %q, want the final answer", msg.Content)
+		t.Fatalf("delivery content = %q, want the final answer", msg.Content)
 	}
 
 	// The run reached a terminal state and the task is not interrupted.

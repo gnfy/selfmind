@@ -2,6 +2,7 @@ package control
 
 import (
 	"context"
+	"database/sql"
 	"path/filepath"
 	"testing"
 	"time"
@@ -372,5 +373,168 @@ func TestDeliveryKindSurvivesQueue(t *testing.T) {
 	// row round-trips kind + approval_id, not just the text.
 	if due[0].Kind != "approval" || due[0].ApprovalID != "apr_abc" {
 		t.Fatalf("kind = %q approval_id = %q", due[0].Kind, due[0].ApprovalID)
+	}
+}
+
+// TestAccountLastSeenMigrationOnExistingDB proves the ensureColumn migration
+// adds accounts.last_seen_at to a database created before the column existed,
+// and that the recency helpers work on the migrated rows.
+func TestAccountLastSeenMigrationOnExistingDB(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+
+	// Build a pre-G0-b database by hand: accounts without last_seen_at.
+	db, err := sql.Open("sqlite", filepath.Join(dir, "control.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `
+CREATE TABLE accounts (
+	id TEXT PRIMARY KEY,
+	tenant_id TEXT NOT NULL,
+	person_id TEXT NOT NULL,
+	platform TEXT NOT NULL,
+	platform_user_id TEXT NOT NULL,
+	display_name TEXT,
+	status TEXT NOT NULL DEFAULT 'active',
+	created_at INTEGER NOT NULL,
+	updated_at INTEGER NOT NULL,
+	UNIQUE(tenant_id, platform, platform_user_id)
+);
+INSERT INTO accounts (id, tenant_id, person_id, platform, platform_user_id, display_name, status, created_at, updated_at)
+VALUES ('acct_old', 'default', 'person_old', 'weixin', 'wxid_old', 'Old Row', 'active', 1000, 1000);`); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := OpenStore(dir)
+	if err != nil {
+		t.Fatalf("OpenStore on legacy db: %v", err)
+	}
+	defer store.Close()
+
+	accounts, err := store.ListAccountsByPerson(ctx, "default", "person_old")
+	if err != nil {
+		t.Fatalf("ListAccountsByPerson after migration: %v", err)
+	}
+	if len(accounts) != 1 || accounts[0].LastSeenAt != 0 {
+		t.Fatalf("legacy row must survive with last_seen_at=0: %+v", accounts)
+	}
+	if err := store.TouchAccountLastSeen(ctx, "default", "acct_old"); err != nil {
+		t.Fatalf("TouchAccountLastSeen after migration: %v", err)
+	}
+	account, err := store.MostRecentIMAccount(ctx, "default", "person_old", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if account == nil || account.ID != "acct_old" || account.LastSeenAt == 0 {
+		t.Fatalf("MostRecentIMAccount after touch = %+v", account)
+	}
+}
+
+func TestMostRecentIMAccount(t *testing.T) {
+	ctx := context.Background()
+	store, err := OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.BindAccount(ctx, identity.TenantID, identity.PersonID, "weixin", "wxid_1", "Alice WX"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.BindAccount(ctx, identity.TenantID, identity.PersonID, "telegram", "42", "Alice TG"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Nothing seen yet: bind order breaks the tie, and cli never qualifies.
+	account, err := store.MostRecentIMAccount(ctx, identity.TenantID, identity.PersonID, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if account == nil || account.Platform != "weixin" {
+		t.Fatalf("unseen accounts must resolve by bind order, got %+v", account)
+	}
+
+	// The most recently seen account wins.
+	accounts, err := store.ListAccountsByPerson(ctx, identity.TenantID, identity.PersonID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, a := range accounts {
+		if a.Platform == "telegram" {
+			if err := store.TouchAccountLastSeen(ctx, identity.TenantID, a.ID); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	account, err = store.MostRecentIMAccount(ctx, identity.TenantID, identity.PersonID, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if account == nil || account.Platform != "telegram" {
+		t.Fatalf("most recently seen must win, got %+v", account)
+	}
+
+	// The platform filter (delivery capability) skips unsupported platforms.
+	account, err = store.MostRecentIMAccount(ctx, identity.TenantID, identity.PersonID, func(platform string) bool {
+		return platform == "weixin"
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if account == nil || account.Platform != "weixin" {
+		t.Fatalf("filter must skip unsupported platforms, got %+v", account)
+	}
+
+	// No qualifying account -> nil, nil (caller drops the push, no error).
+	account, err = store.MostRecentIMAccount(ctx, identity.TenantID, identity.PersonID, func(string) bool { return false })
+	if err != nil || account != nil {
+		t.Fatalf("no qualifying account must be nil,nil; got %+v, %v", account, err)
+	}
+}
+
+func TestPersonSettingsRoundTrip(t *testing.T) {
+	ctx := context.Background()
+	store, err := OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	if value, err := store.GetPersonSetting(ctx, "default", "person_1", "notify_platform"); err != nil || value != "" {
+		t.Fatalf("unset value = %q, %v", value, err)
+	}
+	if err := store.SetPersonSetting(ctx, "default", "person_1", "notify_platform", "telegram"); err != nil {
+		t.Fatal(err)
+	}
+	if value, _ := store.GetPersonSetting(ctx, "default", "person_1", "notify_platform"); value != "telegram" {
+		t.Fatalf("value = %q", value)
+	}
+	// Overwrite, then reset with an empty value.
+	if err := store.SetPersonSetting(ctx, "default", "person_1", "notify_platform", "weixin"); err != nil {
+		t.Fatal(err)
+	}
+	if value, _ := store.GetPersonSetting(ctx, "default", "person_1", "notify_platform"); value != "weixin" {
+		t.Fatalf("value = %q", value)
+	}
+	if err := store.SetPersonSetting(ctx, "default", "person_1", "notify_platform", ""); err != nil {
+		t.Fatal(err)
+	}
+	if value, _ := store.GetPersonSetting(ctx, "default", "person_1", "notify_platform"); value != "" {
+		t.Fatalf("reset value = %q", value)
+	}
+	// Settings are tenant/person scoped.
+	if err := store.SetPersonSetting(ctx, "default", "person_2", "notify_platform", "telegram"); err != nil {
+		t.Fatal(err)
+	}
+	if value, _ := store.GetPersonSetting(ctx, "default", "person_1", "notify_platform"); value != "" {
+		t.Fatalf("cross-person leak: %q", value)
 	}
 }

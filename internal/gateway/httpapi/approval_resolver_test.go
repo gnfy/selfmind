@@ -284,7 +284,10 @@ func (r *recordingSender) Send(ctx context.Context, msg delivery.Message) error 
 	return nil
 }
 
-func TestCLIOriginatedApprovalFansOutToBoundIM(t *testing.T) {
+// TestCLIOriginatedApprovalRoutesToPreferredIM: with the CLI detached (no
+// presence beat recorded), a CLI-origin approval goes to the person's single
+// preferred IM endpoint — here the only bound account.
+func TestCLIOriginatedApprovalRoutesToPreferredIM(t *testing.T) {
 	daemon, store, identity, task, approval := newApprovalTestServer(t)
 	ctx := context.Background()
 

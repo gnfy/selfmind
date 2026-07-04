@@ -96,14 +96,17 @@ is the only priority list in the repo; other docs must point here.
    routes its result like an async one (`deliverAsyncResult` → IM fan-out
    for cli origin); connected clients get the sync answer only. Tests:
    `httpapi/detached_run_test.go`, `cli/cancel_stop_test.go`.
-   (b) Two-layer routing — conversation replies follow the ORIGIN endpoint
-   (IM-dispatched answers in that IM chat; explicit reply-endpoint override
-   limited to the person's own bound accounts; CLI-origin falls back to the
-   single preferred notify endpoint only when detached — never a broadcast;
-   revise yesterday's approval/result fan-out from all-bound-IM to this
-   single-target rule). Observation (live events + steering) follows
-   presence (event-poll heartbeat), independent of reply routing; fixes
-   today's double notification while sitting in the TUI.
+   (b) Two-layer routing — ✅ shipped (2026-07-04): in-memory presence
+   registry (`httpapi/presence.go`, 90s TTL; touched by `/v1/message`,
+   `/v1/tasks/events`, the new `GET /v1/presence/ping`, and a 30s idle ping
+   loop in the client TUI; `accounts.last_seen_at` persisted throttled for
+   preferred-endpoint recency). CLI-origin approval/result pushes: skipped
+   entirely while a CLI endpoint is attached (no double notification), else
+   delivered to ONE preferred IM endpoint — explicit `/notify <platform|auto>`
+   preference (validated against the person's own bound accounts, stored in
+   `person_settings`) or the most recently seen IM account. IM-origin
+   replies unchanged (origin affinity). Follow-up: reply-endpoint override
+   parsed from task text remains open.
    (c) Attach digest (on CLI re-attach show finished/failed/pending
    approvals+questions/queued tasks/undelivered pushes since last presence).
    (d) Re-attach to a mid-flight run's live events + steering.

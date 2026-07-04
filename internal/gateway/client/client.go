@@ -278,6 +278,56 @@ func eventToStream(ev control.Event) (llm.StreamEvent, bool) {
 	}
 }
 
+// PingPresence marks this CLI endpoint attached on the daemon (GET
+// /v1/presence/ping). Presence gates conversation-layer routing: while the
+// TUI is attached, CLI-origin approval prompts stay inline instead of also
+// pushing to IM. Best-effort by design — a failed ping just lets presence
+// expire, which reads as detached.
+func (c *Client) PingPresence(ctx context.Context) error {
+	q := url.Values{}
+	q.Set("platform", "cli")
+	q.Set("platform_user_id", clientUserID())
+	reqCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	httpReq, err := http.NewRequestWithContext(reqCtx, http.MethodGet, c.BaseURL+"/v1/presence/ping?"+q.Encode(), nil)
+	if err != nil {
+		return err
+	}
+	c.auth(httpReq)
+	httpResp, err := c.httpClient().Do(httpReq)
+	if err != nil {
+		return err
+	}
+	defer httpResp.Body.Close()
+	_, _ = io.Copy(io.Discard, httpResp.Body)
+	if httpResp.StatusCode != http.StatusOK {
+		return fmt.Errorf("presence ping returned %s", httpResp.Status)
+	}
+	return nil
+}
+
+// StartPresencePing runs the idle-TUI heartbeat loop: an immediate ping, then
+// one every 30 seconds until the returned stop function is called (or ctx is
+// cancelled). Without it an open-but-idle TUI would look detached — the event
+// poller only runs during a turn. Failures are silent (best-effort presence).
+func (c *Client) StartPresencePing(ctx context.Context) func() {
+	loopCtx, cancel := context.WithCancel(ctx)
+	go func() {
+		_ = c.PingPresence(loopCtx)
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-loopCtx.Done():
+				return
+			case <-ticker.C:
+				_ = c.PingPresence(loopCtx)
+			}
+		}
+	}()
+	return cancel
+}
+
 // RespondApproval answers a pending tool-approval request on the daemon
 // (decision "approved" or "rejected"), unblocking the waiting run. It backs the
 // client TUI's inline approval prompt.

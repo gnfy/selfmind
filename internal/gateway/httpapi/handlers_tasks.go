@@ -47,6 +47,9 @@ func (d *Server) handleTaskEvents(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
+	// An event poll is a liveness beat: the TUI polls this endpoint mid-turn,
+	// which is exactly when approval routing needs to know it is attached.
+	d.touchPresence(r.Context(), identity)
 	taskID := strings.TrimSpace(r.URL.Query().Get("task_id"))
 	if taskID == "" {
 		task, err := d.Control.CurrentTask(r.Context(), identity.TenantID, identity.PersonID)

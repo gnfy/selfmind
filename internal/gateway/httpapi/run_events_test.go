@@ -9,12 +9,12 @@ import (
 	"selfmind/internal/gateway/delivery"
 )
 
-// TestCLIAsyncResultFansOutToBoundIM encodes the continuity promise for
+// TestCLIAsyncResultRoutesToPreferredIM encodes the continuity promise for
 // fire-and-forget terminal runs: the final answer must reach the person's
-// bound IM endpoints instead of vanishing (observed live: a rejected
+// preferred IM endpoint instead of vanishing (observed live: a rejected
 // approval's acknowledgment was invisible, so the rejection looked like a
-// no-op).
-func TestCLIAsyncResultFansOutToBoundIM(t *testing.T) {
+// no-op). With a single bound account, that account is the preferred one.
+func TestCLIAsyncResultRoutesToPreferredIM(t *testing.T) {
 	daemon, store, identity, task, _ := newApprovalTestServer(t)
 	ctx := context.Background()
 

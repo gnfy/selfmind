@@ -37,6 +37,12 @@ type Server struct {
 
 	runs     *RunCoordinator
 	runsOnce sync.Once
+
+	// presence is the in-memory endpoint-attachment registry (presence.go).
+	// Lazily built like the coordinator so every Server construction path
+	// (HTTP handlers, IM adapters, eval harness, tests) gets one.
+	presence     *presenceRegistry
+	presenceOnce sync.Once
 }
 
 type activeRun struct {
@@ -79,7 +85,50 @@ func (d *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/workspaces", d.handleWorkspaces)
 	mux.HandleFunc("/v1/gateway/status", d.handleGatewayStatus)
 	mux.HandleFunc("/v1/gateway/shutdown", d.handleGatewayShutdown)
+	mux.HandleFunc("/v1/presence/ping", d.handlePresencePing)
 	return mux
+}
+
+// presenceTracker lazily builds the per-Server presence registry.
+func (d *Server) presenceTracker() *presenceRegistry {
+	d.presenceOnce.Do(func() {
+		d.presence = newPresenceRegistry(presenceTTL)
+	})
+	return d.presence
+}
+
+// touchPresence records an endpoint liveness beat for routing decisions and,
+// throttled by the registry, refreshes the account's durable last_seen_at so
+// preferred-endpoint selection tracks where the person actually is.
+func (d *Server) touchPresence(ctx context.Context, identity *control.IdentityContext) {
+	if d == nil || identity == nil {
+		return
+	}
+	if d.presenceTracker().Touch(identity.PersonID, identity.Platform) && d.Control != nil {
+		_ = d.Control.TouchAccountLastSeen(ctx, identity.TenantID, identity.AccountID)
+	}
+}
+
+// handlePresencePing is the lightweight attachment heartbeat for idle
+// interactive clients (the TUI pings every 30s while open). It resolves
+// identity exactly like the other endpoints and only touches derived presence
+// state — it never mutates tasks, runs, or approvals.
+func (d *Server) handlePresencePing(w http.ResponseWriter, r *http.Request) {
+	if !d.authorized(r) {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	identity, err := d.identityFromQuery(r)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	d.touchPresence(r.Context(), identity)
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 func (d *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
@@ -118,6 +167,10 @@ func (d *Server) ProcessMessage(ctx context.Context, req api.MessageRequest) (ap
 	if err != nil {
 		return api.MessageResponse{Error: err.Error(), Turn: messageTurn("failed", "", "", "", "", err.Error())}, http.StatusInternalServerError
 	}
+	// Any inbound message is a presence beat for its endpoint: a CLI turn
+	// marks the terminal attached, an IM message refreshes that account's
+	// recency for preferred-endpoint selection.
+	d.touchPresence(ctx, identity)
 
 	if handled, content, err := d.tryHandleControlCommand(ctx, identity, req); handled {
 		if err != nil {
@@ -613,12 +666,13 @@ func redactApprovalArgs(args map[string]interface{}) map[string]interface{} {
 	return out
 }
 
-// notifyApprovalRequested pushes an approval notification to the person's
-// reachable endpoints, best-effort. IM-originated approvals notify their own
-// channel (unchanged). CLI-originated approvals used to be silently dropped;
-// they now fan out to the person's OTHER bound accounts whose platform has a
-// delivery sender, so a run started in a terminal can be approved from WeChat
-// or Telegram (scenario 1 of docs/identity-continuity.md). Failures are
+// notifyApprovalRequested pushes an approval notification along the
+// conversation-layer routing rules (docs/identity-continuity.md "Runtime
+// attachment model"): IM-originated approvals notify their own channel
+// (origin affinity); CLI-originated approvals are suppressed while a CLI
+// endpoint is attached (the TUI already shows the inline y/N prompt — pushing
+// to IM too was the double-notification bug) and otherwise go to the SINGLE
+// preferred IM endpoint, never a fan-out to every bound account. Failures are
 // swallowed: notification is a convenience, the approval row is the truth.
 func (c *RunCoordinator) notifyApprovalRequested(ctx context.Context, identity *control.IdentityContext, taskID, runID, channel string, approval *control.ApprovalRequest) {
 	if c == nil || c.srv == nil || c.srv.Delivery == nil || identity == nil || approval == nil {
@@ -655,39 +709,65 @@ func (c *RunCoordinator) notifyApprovalRequested(ctx context.Context, identity *
 		_ = c.srv.Delivery.EnqueueAndTry(ctx, msg)
 		return
 	}
-	c.fanOutToBoundIM(ctx, identity, base)
+	// CLI origin, CLI attached: the live TUI renders the inline y/N prompt
+	// from the approval.requested event, so an IM push would be a duplicate.
+	// The approval row stays answerable from any surface either way.
+	if c.srv.presenceTracker().IsAttached(identity.PersonID, "cli") {
+		return
+	}
+	c.deliverToPreferredIM(ctx, identity, base)
 }
 
-// fanOutToBoundIM delivers a message to every bound account of the person that
-// has a push-capable delivery sender, skipping cli-like bindings (no push
-// surface) and the originating account. Shared by approval notifications and
-// CLI-originated async results so anything that happens in a terminal is
-// visible on the person's IM endpoints (docs/identity-continuity.md).
-func (c *RunCoordinator) fanOutToBoundIM(ctx context.Context, identity *control.IdentityContext, base delivery.Message) {
+// personSettingNotifyPlatform is the person_settings key holding the explicit
+// /notify endpoint preference; empty/absent means "auto" (most recently seen).
+const personSettingNotifyPlatform = "notify_platform"
+
+// preferredIMAccount picks the SINGLE IM endpoint for CLI-origin pushes when
+// the CLI is detached (conversation-layer rule 4). Selection order:
+//  1. The person's explicit /notify preference, when it still resolves to one
+//     of their OWN bound, delivery-capable accounts (a stale preference —
+//     unbound platform, sender removed — silently falls through to auto
+//     rather than dropping the notification).
+//  2. Auto: the most recently seen bound IM account the delivery service can
+//     reach (accounts.last_seen_at, refreshed by inbound messages and
+//     presence beats).
+func (c *RunCoordinator) preferredIMAccount(ctx context.Context, identity *control.IdentityContext) *control.Account {
 	if c == nil || c.srv == nil || c.srv.Delivery == nil || c.srv.Control == nil || identity == nil {
-		return
+		return nil
 	}
-	accounts, err := c.srv.Control.ListAccountsByPerson(ctx, identity.TenantID, identity.PersonID)
+	store := c.srv.Control
+	supports := c.srv.Delivery.SupportsPlatform
+	if pref, err := store.GetPersonSetting(ctx, identity.TenantID, identity.PersonID, personSettingNotifyPlatform); err == nil && pref != "" && pref != "auto" {
+		account, err := store.MostRecentIMAccount(ctx, identity.TenantID, identity.PersonID, func(platform string) bool {
+			return platform == pref && supports(platform)
+		})
+		if err == nil && account != nil {
+			return account
+		}
+	}
+	account, err := store.MostRecentIMAccount(ctx, identity.TenantID, identity.PersonID, supports)
 	if err != nil {
+		return nil
+	}
+	return account
+}
+
+// deliverToPreferredIM delivers a CLI-origin message to exactly one endpoint —
+// the preferred IM account — never a broadcast to every bound account
+// (docs/identity-continuity.md: "One target, never a fan-out"). Shared by
+// approval notifications and CLI-originated async/detached results.
+func (c *RunCoordinator) deliverToPreferredIM(ctx context.Context, identity *control.IdentityContext, base delivery.Message) {
+	account := c.preferredIMAccount(ctx, identity)
+	if account == nil {
 		return
 	}
-	for _, account := range accounts {
-		// The CLI account is the originating surface (it gets the inline y/N
-		// prompt); other cli-like bindings have no push channel either.
-		if account.Platform == "cli" || account.ID == identity.AccountID {
-			continue
-		}
-		if !c.srv.Delivery.SupportsPlatform(account.Platform) {
-			continue
-		}
-		msg := base
-		msg.Platform = account.Platform
-		msg.PlatformUserID = account.PlatformUserID
-		// Without a live chat context the platform user id is the DM target;
-		// senders fall back to it when Channel is not a real chat id.
-		msg.Channel = account.PlatformUserID
-		_ = c.srv.Delivery.EnqueueAndTry(ctx, msg)
-	}
+	msg := base
+	msg.Platform = account.Platform
+	msg.PlatformUserID = account.PlatformUserID
+	// Without a live chat context the platform user id is the DM target;
+	// senders fall back to it when Channel is not a real chat id.
+	msg.Channel = account.PlatformUserID
+	_ = c.srv.Delivery.EnqueueAndTry(ctx, msg)
 }
 
 // approvalNotificationText is the outbound approval message body: the same
@@ -779,6 +859,7 @@ func (d *Server) tryHandleControlCommand(ctx context.Context, identity *control.
 /approve <n|id|all>   Approve a pending action (or all of them).
 /reject <n|id|all>    Reject a pending action (or all of them).
 /stop                 Cancel the active run.
+/notify <platform|auto> Choose where CLI-origin notifications go when the CLI is detached.
 /new [title]          Create a new task.
 /resume <task_id>     Resume a task.
 /workspace <id>       Select a workspace.
@@ -886,6 +967,9 @@ func (d *Server) tryHandleControlCommand(ctx context.Context, identity *control.
 			return true, "", err
 		}
 		return true, formatApprovals(approvals, titles), nil
+	case lower == "/notify" || strings.HasPrefix(lower, "/notify "):
+		reply, err := d.notifyPreferenceReply(ctx, identity, strings.TrimSpace(trimmed[len("/notify"):]))
+		return true, reply, err
 	case lower == "/approve" || strings.HasPrefix(lower, "/approve "):
 		return true, d.respondApprovalCommand(ctx, identity, strings.TrimSpace(trimmed[len("/approve"):]), "approved", req.Channel), nil
 	case lower == "/reject" || strings.HasPrefix(lower, "/reject "):
@@ -918,6 +1002,56 @@ func (d *Server) tryHandleControlCommand(ctx context.Context, identity *control.
 	}
 }
 
+// notifyPreferenceReply handles /notify: show, set, or reset the person's
+// preferred notify endpoint for detached CLI-origin pushes. Setting a concrete
+// platform is validated against the person's OWN bound accounts — this bound
+// check is a security boundary (never an arbitrary push target), not a
+// convenience (docs/identity-continuity.md conversation-layer rule 1).
+func (d *Server) notifyPreferenceReply(ctx context.Context, identity *control.IdentityContext, arg string) (string, error) {
+	arg = strings.ToLower(strings.TrimSpace(arg))
+	if arg == "" {
+		current, err := d.Control.GetPersonSetting(ctx, identity.TenantID, identity.PersonID, personSettingNotifyPlatform)
+		if err != nil {
+			return "", err
+		}
+		if current == "" {
+			current = "auto (most recently active IM account)"
+		}
+		return "Notify preference: " + current + "\nUsage: /notify <platform|auto>", nil
+	}
+	if arg == "auto" {
+		if err := d.Control.SetPersonSetting(ctx, identity.TenantID, identity.PersonID, personSettingNotifyPlatform, ""); err != nil {
+			return "", err
+		}
+		return "Notify preference set to auto (most recently active IM account).", nil
+	}
+	accounts, err := d.Control.ListAccountsByPerson(ctx, identity.TenantID, identity.PersonID)
+	if err != nil {
+		return "", err
+	}
+	var bound []string
+	valid := false
+	for _, account := range accounts {
+		if account.Platform == "cli" {
+			continue
+		}
+		bound = append(bound, account.Platform)
+		if account.Platform == arg {
+			valid = true
+		}
+	}
+	if !valid {
+		if len(bound) == 0 {
+			return "You have no bound IM accounts yet, so there is nothing to notify. Bind an account first.", nil
+		}
+		return fmt.Sprintf("%s is not one of your bound IM accounts (bound: %s). Use /notify <platform|auto>.", arg, strings.Join(bound, ", ")), nil
+	}
+	if err := d.Control.SetPersonSetting(ctx, identity.TenantID, identity.PersonID, personSettingNotifyPlatform, arg); err != nil {
+		return "", err
+	}
+	return "Notify preference set to " + arg + ".", nil
+}
+
 // suggestControlCommand returns the closest control command when the first
 // token is a near-miss (edit distance ≤ 2, same first letter), else "".
 func suggestControlCommand(lower string) string {
@@ -927,8 +1061,8 @@ func suggestControlCommand(lower string) string {
 	}
 	token := fields[0]
 	known := []string{"/help", "/model", "/id", "/status", "/tasks", "/events",
-		"/approvals", "/approve", "/reject", "/stop", "/new", "/resume",
-		"/workspace", "/workspaces"}
+		"/approvals", "/approve", "/reject", "/stop", "/notify", "/new",
+		"/resume", "/workspace", "/workspaces"}
 	best, bestDist := "", 3
 	for _, cmd := range known {
 		if token == cmd {

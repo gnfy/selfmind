@@ -68,6 +68,12 @@ func (a *App) tryRunTUIClient(cfg *config.Config) (int, bool) {
 	// forwarded into that run over the gateway API — the controller's local
 	// steering channel cannot cross the process boundary.
 	ctrl.SetSteerFunc(client.SteerRun)
+	// Idle-TUI presence heartbeat: the event poller only runs mid-turn, so
+	// without this loop an open-but-idle TUI reads as detached and CLI-origin
+	// approval prompts would ALSO push to IM (double notification). Stopped on
+	// TUI exit so presence expires and routing falls back to the preferred IM.
+	stopPresence := client.StartPresencePing(a.ctx)
+	defer stopPresence()
 
 	ctrl.Start()
 	printResumeHint(a.stdout, ctrl.SessionChannel())

@@ -536,8 +536,27 @@ func (c *RunCoordinator) installExecutionScope(identity *control.IdentityContext
 	}
 	scope.Approval = c.toolApprovalHandler(identity, task, run, scope.Channel)
 	scope.Clarify = c.gatewayClarify(identity, task, run, scope.Channel)
-	scope.ApprovalMode = tools.NormalizeApprovalMode(req.ApprovalMode)
+	scope.ApprovalMode = c.resolveApprovalMode(identity, req.ApprovalMode)
+	// Grants back class-level approval memory (session/persistent allowlist);
+	// the control store satisfies tools.ApprovalGrantStore structurally.
+	if c.srv != nil && c.srv.Control != nil {
+		scope.Grants = c.srv.Control
+	}
 	return tools.SetExecutionScope(identity.PersonID, scope)
+}
+
+// resolveApprovalMode applies the approval-mode precedence: an explicit
+// per-request mode wins; otherwise the person's persisted /mode preference
+// (approval_mode); otherwise on-request. This is what makes an IM `/mode smart`
+// apply to later messages that carry no mode of their own.
+func (c *RunCoordinator) resolveApprovalMode(identity *control.IdentityContext, reqMode string) tools.ApprovalMode {
+	modeStr := strings.TrimSpace(reqMode)
+	if modeStr == "" && c != nil && c.srv != nil && c.srv.Control != nil && identity != nil {
+		if pref, err := c.srv.Control.GetPersonSetting(context.Background(), identity.TenantID, identity.PersonID, personSettingApprovalMode); err == nil {
+			modeStr = pref
+		}
+	}
+	return tools.NormalizeApprovalMode(modeStr)
 }
 
 // gatewayClarify answers the clarify tool in non-interactive (gateway/IM)
@@ -650,7 +669,10 @@ func (c *RunCoordinator) toolApprovalHandler(identity *control.IdentityContext, 
 				}
 				switch current.Status {
 				case "approved":
-					return tools.ToolApprovalDecision{Approved: true, ApprovalID: approval.ID}, nil
+					// DecisionScope (set when the human answered with a grant
+					// scope) tells the middleware whether to remember this class
+					// for the task/person.
+					return tools.ToolApprovalDecision{Approved: true, ApprovalID: approval.ID, Scope: current.DecisionScope}, nil
 				case "rejected":
 					return tools.ToolApprovalDecision{Approved: false, ApprovalID: approval.ID, Reason: "rejected"}, nil
 				}
@@ -722,6 +744,11 @@ func (c *RunCoordinator) notifyApprovalRequested(ctx context.Context, identity *
 // personSettingNotifyPlatform is the person_settings key holding the explicit
 // /notify endpoint preference; empty/absent means "auto" (most recently seen).
 const personSettingNotifyPlatform = "notify_platform"
+
+// personSettingApprovalMode is the person_settings key holding the person's
+// persisted /mode (approval policy). Applied when a request carries no explicit
+// per-request mode; empty/absent means on-request.
+const personSettingApprovalMode = "approval_mode"
 
 // preferredIMAccount picks the SINGLE IM endpoint for CLI-origin pushes when
 // the CLI is detached (conversation-layer rule 4). Selection order:
@@ -857,8 +884,9 @@ func (d *Server) tryHandleControlCommand(ctx context.Context, identity *control.
 /tasks                List recent tasks.
 /events               List recent events for the current task.
 /approvals            List pending approvals.
-/approve <n|id|all>   Approve a pending action (or all of them).
+/approve <n|id|all> [task|always]   Approve a pending action; add task/always to remember its class.
 /reject <n|id|all>    Reject a pending action (or all of them).
+/mode [mode]          Show or set your approval mode (on-request|read-only|auto-edit|full-auto|smart).
 /stop                 Cancel the active run.
 /notify <platform|auto> Choose where CLI-origin notifications go when the CLI is detached.
 /new [title]          Create a new task.
@@ -971,6 +999,9 @@ func (d *Server) tryHandleControlCommand(ctx context.Context, identity *control.
 	case lower == "/notify" || strings.HasPrefix(lower, "/notify "):
 		reply, err := d.notifyPreferenceReply(ctx, identity, strings.TrimSpace(trimmed[len("/notify"):]))
 		return true, reply, err
+	case lower == "/mode" || strings.HasPrefix(lower, "/mode "):
+		reply, err := d.approvalModeReply(ctx, identity, strings.TrimSpace(trimmed[len("/mode"):]))
+		return true, reply, err
 	case lower == "/approve" || strings.HasPrefix(lower, "/approve "):
 		return true, d.respondApprovalCommand(ctx, identity, strings.TrimSpace(trimmed[len("/approve"):]), "approved", req.Channel), nil
 	case lower == "/reject" || strings.HasPrefix(lower, "/reject "):
@@ -1053,6 +1084,55 @@ func (d *Server) notifyPreferenceReply(ctx context.Context, identity *control.Id
 	return "Notify preference set to " + arg + ".", nil
 }
 
+// approvalModeReply handles /mode from any channel: show the person's current
+// approval mode, or persist a new one (per person via person_settings). The
+// persisted mode is applied when a later request carries no explicit per-request
+// mode (see installExecutionScope). full-auto gets a warning that the hard-floor
+// safety deny set still applies — it is not blocked, only flagged.
+func (d *Server) approvalModeReply(ctx context.Context, identity *control.IdentityContext, arg string) (string, error) {
+	const usage = "Usage: /mode <on-request|read-only|auto-edit|full-auto|smart>"
+	arg = strings.TrimSpace(arg)
+	if arg == "" {
+		current, err := d.Control.GetPersonSetting(ctx, identity.TenantID, identity.PersonID, personSettingApprovalMode)
+		if err != nil {
+			return "", err
+		}
+		if strings.TrimSpace(current) == "" {
+			current = string(tools.ApprovalOnRequest) + " (default)"
+		}
+		return "Approval mode: " + current + "\n" + usage, nil
+	}
+	// Reject unknown words instead of silently defaulting: a typo'd mode should
+	// not quietly leave the person on on-request thinking they set full-auto.
+	if tools.NormalizeApprovalMode(arg) == tools.ApprovalOnRequest && !isKnownApprovalModeWord(arg) {
+		return "Unknown mode " + arg + ".\n" + usage, nil
+	}
+	mode := string(tools.NormalizeApprovalMode(arg))
+	if err := d.Control.SetPersonSetting(ctx, identity.TenantID, identity.PersonID, personSettingApprovalMode, mode); err != nil {
+		return "", err
+	}
+	reply := "Approval mode set to " + mode + "."
+	if mode == string(tools.ApprovalFullAuto) {
+		reply += " Note: the hard-floor safety limits still apply (filesystem-root deletes, disk formatting, host shutdown, and similar are always blocked)."
+	}
+	return reply, nil
+}
+
+// isKnownApprovalModeWord reports whether s is one of the accepted mode words,
+// so /mode can reject typos rather than default them to on-request.
+func isKnownApprovalModeWord(s string) bool {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "on-request", "onrequest", "request",
+		"read-only", "readonly", "read",
+		"auto-edit", "autoedit", "auto", "edit",
+		"full-auto", "fullauto", "full", "yolo",
+		"smart":
+		return true
+	default:
+		return false
+	}
+}
+
 // suggestControlCommand returns the closest control command when the first
 // token is a near-miss (edit distance ≤ 2, same first letter), else "".
 func suggestControlCommand(lower string) string {
@@ -1062,7 +1142,7 @@ func suggestControlCommand(lower string) string {
 	}
 	token := fields[0]
 	known := []string{"/help", "/model", "/id", "/status", "/tasks", "/events",
-		"/approvals", "/approve", "/reject", "/stop", "/notify", "/new",
+		"/approvals", "/approve", "/reject", "/mode", "/stop", "/notify", "/new",
 		"/resume", "/workspace", "/workspaces"}
 	best, bestDist := "", 3
 	for _, cmd := range known {

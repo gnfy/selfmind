@@ -122,8 +122,15 @@ const (
 	// ApprovalAutoEdit auto-approves in-workspace file edits but asks before
 	// running commands (and before edits the heuristic flags as dangerous).
 	ApprovalAutoEdit ApprovalMode = "auto-edit"
-	// ApprovalFullAuto auto-approves everything (workspace scope still applies).
+	// ApprovalFullAuto auto-approves everything (workspace scope still applies,
+	// and the hard-floor deny set in hardlineToolCall still fires).
 	ApprovalFullAuto ApprovalMode = "full-auto"
+	// ApprovalSmart is the layered funnel mode. For H1 it behaves exactly like
+	// on-request (asks only on a dangerous op); H2 will insert an LLM triage
+	// step between the session/persistent allowlist and the human ask. The mode
+	// name and plumbing land now so persisted preferences and reply grammar are
+	// stable before the triage logic arrives.
+	ApprovalSmart ApprovalMode = "smart"
 )
 
 // NormalizeApprovalMode maps free-form input to a known mode, defaulting to
@@ -136,6 +143,8 @@ func NormalizeApprovalMode(s string) ApprovalMode {
 		return ApprovalAutoEdit
 	case "full-auto", "fullauto", "full", "yolo":
 		return ApprovalFullAuto
+	case "smart":
+		return ApprovalSmart
 	default:
 		return ApprovalOnRequest
 	}
@@ -157,6 +166,10 @@ func approvalNeeded(mode ApprovalMode, toolName string, dangerous bool) bool {
 	switch mode {
 	case ApprovalFullAuto:
 		return false
+	case ApprovalSmart:
+		// H1: identical to on-request (ask only on a dangerous op). H2 inserts
+		// LLM triage before the human ask; the gate itself stays here.
+		return dangerous
 	case ApprovalReadOnly:
 		return isWriteTool(toolName) || isExecTool(toolName) || dangerous
 	case ApprovalAutoEdit:
@@ -168,16 +181,46 @@ func approvalNeeded(mode ApprovalMode, toolName string, dangerous bool) bool {
 	}
 }
 
+// SmartApprovalMiddleware is the layered approval funnel that gates dangerous
+// tool calls. Layers, in order:
+//
+//  1. Hard floor (hardlineToolCall): an unbypassable deny set. It fires BEFORE
+//     the mode bypass — full-auto included — because these ops have a blast
+//     radius no session "yes" should authorize. A hardline hit returns
+//     "operation blocked: ..." which is deliberately DISTINCT from the user
+//     rejection contract: kernel's isUserRejectionErr must NOT match it, so the
+//     model is told this is a safety-policy block (do not retry), not a user
+//     decision it might reword.
+//  2. Mode bypass (approvalNeeded): full-auto/auto-edit/etc. skip the ask.
+//  3. Class-level allowlist (scope.Grants): a prior "approve this class" for the
+//     task (session) or person (persistent) suppresses the ask. This is the key
+//     fatigue reducer — approving one chmod approves the chmod CLASS.
+//  4. (H2, deferred) LLM triage for smart mode inserts here.
+//  5. Human ask (scope.Approval / clarify). An "approve + remember" decision
+//     records a grant for the next same-class call.
 func SmartApprovalMiddleware(projectRoot string) Middleware {
 	return func(next ToolExecutor) ToolExecutor {
 		return func(args map[string]interface{}) (string, error) {
 			toolName, _ := args["_tool_name"].(string)
+
+			// Layer 1: hard floor. Unconditional — no mode, not even full-auto,
+			// can bypass it.
+			if blocked, reason := hardlineToolCall(projectRoot, toolName, args); blocked {
+				// Distinct from the rejection contract (see isUserRejectionErr):
+				// this is a safety-policy block, so the model must not retry any
+				// variant, but it is not a user decision.
+				return "", fmt.Errorf("operation blocked by safety policy: %s (do not retry; this is a hard safety limit, not a user rejection)", reason)
+			}
+
 			dangerous, reason := dangerousToolCall(projectRoot, toolName, args)
 
+			scope, hasScope := currentExecutionScopeAny(args)
 			mode := ApprovalOnRequest
-			if scope, ok := currentExecutionScopeAny(args); ok && scope.ApprovalMode != "" {
+			if hasScope && scope.ApprovalMode != "" {
 				mode = scope.ApprovalMode
 			}
+
+			// Layer 2: mode bypass.
 			if !approvalNeeded(mode, toolName, dangerous) {
 				return next(args)
 			}
@@ -185,7 +228,19 @@ func SmartApprovalMiddleware(projectRoot string) Middleware {
 				reason = fmt.Sprintf("%s requires approval in %s mode", toolName, mode)
 			}
 
-			if scope, ok := currentExecutionScopeAny(args); ok && scope.Approval != nil {
+			// Layer 3: class-level allowlist. A coarse pattern key identifies the
+			// action CLASS; a matching task/person grant skips the human ask.
+			// Hardline never reaches here, so a granted class can never cover a
+			// hard-floor op.
+			patternKey := approvalPatternKey(toolName, approvalArgs(args), reason)
+			if hasScope && scope.Grants != nil && patternKey != "" {
+				if granted, _ := scope.Grants.IsApprovalGranted(contextFromArgs(args), scope.TenantID, scope.PersonID, scope.TaskID, patternKey); granted {
+					return next(args)
+				}
+			}
+
+			// Layer 5: human ask.
+			if hasScope && scope.Approval != nil {
 				decision, err := scope.Approval(contextFromArgs(args), ToolApprovalRequest{
 					TenantID: scope.TenantID,
 					PersonID: scope.PersonID,
@@ -209,6 +264,11 @@ func SmartApprovalMiddleware(projectRoot string) Middleware {
 					}
 					return "", fmt.Errorf("operation rejected by approval %s", decision.ApprovalID)
 				}
+				// Remember an "approve this class" decision so the next same-class
+				// call skips the ask.
+				if scope.Grants != nil && patternKey != "" {
+					recordApprovalGrant(contextFromArgs(args), scope, decision.Scope, patternKey)
+				}
 				return next(args)
 			}
 
@@ -223,6 +283,235 @@ func SmartApprovalMiddleware(projectRoot string) Middleware {
 			return next(args)
 		}
 	}
+}
+
+// recordApprovalGrant persists an "approve this class" decision. Scope "task"
+// grants for the current task (session memory, needs a task id); "person"
+// grants across all of the person's tasks (persistent memory). "" (once) and an
+// empty scope record nothing. Failures are swallowed: a lost grant only costs
+// one extra ask, never correctness.
+func recordApprovalGrant(ctx context.Context, scope ExecutionScope, decisionScope, patternKey string) {
+	if scope.Grants == nil || patternKey == "" {
+		return
+	}
+	switch decisionScope {
+	case "task":
+		if scope.TaskID != "" {
+			_ = scope.Grants.GrantApproval(ctx, "task", scope.TenantID, scope.PersonID, scope.TaskID, patternKey)
+		}
+	case "person":
+		if scope.PersonID != "" {
+			_ = scope.Grants.GrantApproval(ctx, "person", scope.TenantID, scope.PersonID, scope.PersonID, patternKey)
+		}
+	}
+}
+
+// approvalPatternKey returns a COARSE class identifier for an approval decision,
+// deliberately NOT the exact command. Approving one `chmod` should approve the
+// chmod CLASS for the granted scope, not just that byte-identical string. For
+// exec tools the class is "exec:"+the dangerous-op reason, which carries the
+// invoked binary (so "chmod 777 a" and "chmod +x b" both key to
+// "exec:invokes dangerous command: chmod", while an rm keys differently). For
+// write/path tools the class is the tool name plus a bucket of the reason with
+// the specific path stripped, so approving one out-of-workspace write does not
+// silently approve a write to a different out-of-workspace path forever — it
+// still buckets by REASON class, which is the intended coarseness. Returns ""
+// when there is nothing meaningful to remember.
+func approvalPatternKey(toolName string, args map[string]interface{}, dangerousReason string) string {
+	if isExecTool(toolName) {
+		if dangerousReason != "" {
+			return "exec:" + dangerousReason
+		}
+		return "exec:" + toolName
+	}
+	return toolName + ":" + patternReasonBucket(dangerousReason)
+}
+
+// patternReasonBucket collapses a dangerous/approval reason to its class by
+// dropping everything after the first ":" (the variable part — a concrete path
+// or mode name). "accesses restricted path: /etc/x" → "accesses restricted
+// path".
+func patternReasonBucket(reason string) string {
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		return "generic"
+	}
+	if i := strings.Index(reason, ":"); i >= 0 {
+		return strings.TrimSpace(reason[:i])
+	}
+	return reason
+}
+
+// hardlineProtectedRoots are directories a recursive delete must never touch.
+// Kept to the tight, high-blast-radius set: the filesystem root and the core
+// system/user trees whose loss bricks the host or wipes the user's home. Merely
+// "dangerous" deletes (a project subdir) stay behind normal approval.
+var hardlineProtectedRoots = map[string]struct{}{
+	"/": {}, "/home": {}, "/etc": {}, "/usr": {}, "/var": {}, "/boot": {},
+}
+
+// hardlineDiskDevices are raw block-device path prefixes. Formatting one
+// (mkfs), overwriting it (dd of=), or redirecting into it destroys partitions
+// irrecoverably, so any such target is a hard block.
+var hardlineDiskDevices = []string{"/dev/sd", "/dev/nvme", "/dev/hd", "/dev/vd", "/dev/xvd"}
+
+// hardlineToolCall is the UNBYPASSABLE safety floor. It fires before any
+// approval-mode bypass (full-auto included) because these operations have a
+// blast radius no session-level "yes" should ever authorize:
+//
+//   - recursive delete of the filesystem root or a protected system/home root
+//     (rm -rf /, /home, $HOME, /etc, /usr, /var, /boot);
+//   - raw-disk destruction: mkfs*, dd of=/dev/sdX|/dev/nvmeX, or any redirect
+//     into a /dev/sdX|/dev/nvmeX device;
+//   - fork bomb (:(){ :|:& };:) which exhausts the process table;
+//   - powering the host down or rebooting it out from under a running task
+//     (shutdown, reboot, halt, poweroff, init 0, init 6).
+//
+// It is intentionally TIGHT: only patterns whose harm is effectively
+// irreversible and never a legitimate agent action belong here. Everything
+// merely "dangerous" stays in dangerousToolCall behind normal approval.
+// Returns (true, reason) to hard-deny.
+func hardlineToolCall(projectRoot, toolName string, args map[string]interface{}) (bool, string) {
+	if !isExecTool(toolName) {
+		return false, ""
+	}
+	cmd, _ := args["command"].(string)
+	if strings.TrimSpace(cmd) == "" {
+		return false, ""
+	}
+	lower := strings.ToLower(cmd)
+
+	// Fork bomb: match the self-replicator regardless of internal spacing.
+	if strings.Contains(strings.ReplaceAll(cmd, " ", ""), ":(){") {
+		return true, "fork bomb (process-table exhaustion)"
+	}
+
+	// Raw-disk destruction via dd of=/dev/... or a redirect into /dev/...
+	for _, dev := range hardlineDiskDevices {
+		if strings.Contains(lower, "of="+dev) {
+			return true, "overwrites raw disk device: " + dev + "*"
+		}
+		if strings.Contains(lower, "> "+dev) || strings.Contains(lower, ">"+dev) {
+			return true, "redirects over raw disk device: " + dev + "*"
+		}
+	}
+
+	// Per-segment program + argument inspection.
+	home := strings.TrimRight(os.Getenv("HOME"), "/")
+	for _, fields := range shellSegments(cmd) {
+		progIdx, ok := segmentProgram(fields)
+		if !ok {
+			continue
+		}
+		base := filepath.Base(fields[progIdx])
+		rest := fields[progIdx+1:]
+		switch {
+		case base == "mkfs" || strings.HasPrefix(base, "mkfs."):
+			return true, "formats a filesystem: " + base
+		case base == "shutdown" || base == "reboot" || base == "halt" || base == "poweroff":
+			return true, "powers down or reboots the host: " + base
+		case base == "init" && len(rest) > 0 && (rest[0] == "0" || rest[0] == "6"):
+			return true, "changes runlevel to halt/reboot: init " + rest[0]
+		case base == "rm":
+			if target, hit := hardlineRmProtectedRoot(rest, home); hit {
+				return true, "recursive delete of protected root: " + target
+			}
+		}
+	}
+	return false, ""
+}
+
+// hardlineRmProtectedRoot reports whether an rm invocation (rest = args after
+// `rm`) recursively targets a protected root. Recursion is required (a
+// non-recursive rm at a root cannot wipe a tree); force is not, because a
+// recursive delete of a protected root is catastrophic with or without -f.
+func hardlineRmProtectedRoot(rest []string, home string) (string, bool) {
+	recursive := false
+	var targets []string
+	for _, f := range rest {
+		switch {
+		case f == "--recursive" || f == "--no-preserve-root":
+			// --no-preserve-root only exists to disable the very guard we are
+			// re-implementing; treat its presence as recursive intent.
+			recursive = true
+		case strings.HasPrefix(f, "--"):
+			// other long options (e.g. --force) do not affect target detection
+		case strings.HasPrefix(f, "-"):
+			if strings.ContainsAny(f, "rR") {
+				recursive = true
+			}
+		default:
+			targets = append(targets, f)
+		}
+	}
+	if !recursive {
+		return "", false
+	}
+	for _, t := range targets {
+		if root, ok := hardlineProtectedRootTarget(t, home); ok {
+			return root, true
+		}
+	}
+	return "", false
+}
+
+// hardlineProtectedRootTarget normalizes an rm target and reports whether it is
+// a protected root. It handles $HOME/~ expansion and a trailing /* glob
+// (rm -rf /* is as catastrophic as rm -rf /).
+func hardlineProtectedRootTarget(target, home string) (string, bool) {
+	t := strings.Trim(target, `"'`)
+	if t == "$HOME" || t == "${HOME}" || t == "~" {
+		return "$HOME", true
+	}
+	clean := filepath.Clean(t)
+	// Collapse a trailing glob so "/*" and "/home/*" map to their root.
+	if strings.HasSuffix(clean, "/*") {
+		clean = strings.TrimSuffix(clean, "/*")
+		if clean == "" {
+			clean = "/"
+		}
+	}
+	if _, bad := hardlineProtectedRoots[clean]; bad {
+		return clean, true
+	}
+	if home != "" && clean == filepath.Clean(home) {
+		return clean, true
+	}
+	return "", false
+}
+
+// shellSegments splits a command line into segments on shell separators and
+// returns the fields of each non-empty segment. It is a heuristic for approval
+// gating (like tokenizeCommand), not a real shell parser.
+func shellSegments(cmd string) [][]string {
+	raw := strings.FieldsFunc(cmd, func(r rune) bool {
+		switch r {
+		case ';', '|', '&', '\n', '`', '(', ')':
+			return true
+		}
+		return false
+	})
+	out := make([][]string, 0, len(raw))
+	for _, seg := range raw {
+		if fs := strings.Fields(seg); len(fs) > 0 {
+			out = append(out, fs)
+		}
+	}
+	return out
+}
+
+// segmentProgram returns the index of the invoked program in a segment's
+// fields, skipping leading VAR=value environment assignments (mirrors
+// tokenizeCommand). ok=false when the segment is only assignments.
+func segmentProgram(fields []string) (int, bool) {
+	i := 0
+	for i < len(fields) && strings.Contains(fields[i], "=") && !strings.ContainsAny(fields[i], "/\\") {
+		i++
+	}
+	if i >= len(fields) {
+		return 0, false
+	}
+	return i, true
 }
 
 // dangerousBinaries are program names that warrant explicit approval before

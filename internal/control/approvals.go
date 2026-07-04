@@ -22,8 +22,13 @@ type ApprovalRequest struct {
 	Status           string          `json:"status"`
 	RequestedChannel string          `json:"requested_channel,omitempty"`
 	ApprovedChannel  string          `json:"approved_channel,omitempty"`
-	CreatedAt        time.Time       `json:"created_at"`
-	UpdatedAt        time.Time       `json:"updated_at"`
+	// DecisionScope carries how long an approval should be remembered: ""
+	// (this call only), "task", or "person". It is set when the decision is
+	// recorded and read back by the approval waiter to drive class-level
+	// approval grants. Empty for pending rows and for reject/expire.
+	DecisionScope string    `json:"decision_scope,omitempty"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
 }
 
 func (s *Store) CreateApprovalRequest(ctx context.Context, req ApprovalRequest) (*ApprovalRequest, error) {
@@ -68,7 +73,7 @@ func (s *Store) ListApprovalRequests(ctx context.Context, tenantID, personID, st
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT id, tenant_id, person_id, COALESCE(task_id, ''), COALESCE(run_id, ''), action_type,
 		        COALESCE(payload_json, '{}'), status, COALESCE(requested_channel, ''), COALESCE(approved_channel, ''),
-		        created_at, updated_at
+		        COALESCE(decision_scope, ''), created_at, updated_at
 		 FROM approval_requests
 		 WHERE tenant_id = ? AND person_id = ? AND status = ?
 		 ORDER BY created_at DESC, id DESC LIMIT ?`,
@@ -96,7 +101,7 @@ func (s *Store) GetApprovalRequest(ctx context.Context, tenantID, approvalID str
 	row := s.db.QueryRowContext(ctx,
 		`SELECT id, tenant_id, person_id, COALESCE(task_id, ''), COALESCE(run_id, ''), action_type,
 		        COALESCE(payload_json, '{}'), status, COALESCE(requested_channel, ''), COALESCE(approved_channel, ''),
-		        created_at, updated_at
+		        COALESCE(decision_scope, ''), created_at, updated_at
 		 FROM approval_requests WHERE tenant_id = ? AND id = ?`,
 		normalizeTenant(tenantID), approvalID)
 	item, err := scanApprovalRequest(row)
@@ -137,7 +142,10 @@ func (s *Store) ExpireOrphanedApprovals(ctx context.Context) (int, error) {
 	return int(n), nil
 }
 
-func (s *Store) RespondApprovalRequest(ctx context.Context, tenantID, personID, approvalID, decision, channel string) (*ApprovalRequest, error) {
+// RespondApprovalRequest records a decision. grantScope (""/"task"/"person")
+// is persisted only for an approval and drives class-level approval memory; it
+// is ignored for a rejection.
+func (s *Store) RespondApprovalRequest(ctx context.Context, tenantID, personID, approvalID, decision, channel, grantScope string) (*ApprovalRequest, error) {
 	tenantID = normalizeTenant(tenantID)
 	if personID == "" {
 		return nil, fmt.Errorf("person id is required")
@@ -150,11 +158,15 @@ func (s *Store) RespondApprovalRequest(ctx context.Context, tenantID, personID, 
 	if err != nil {
 		return nil, err
 	}
+	grantScope = normalizeGrantScope(grantScope)
+	if status != "approved" {
+		grantScope = "" // a grant only makes sense on approval
+	}
 	result, err := s.db.ExecContext(ctx,
 		`UPDATE approval_requests
-		 SET status = ?, approved_channel = ?, updated_at = ?
+		 SET status = ?, approved_channel = ?, decision_scope = ?, updated_at = ?
 		 WHERE tenant_id = ? AND person_id = ? AND id = ? AND status = 'pending'`,
-		status, channel, time.Now().Unix(), tenantID, personID, approvalID)
+		status, channel, grantScope, time.Now().Unix(), tenantID, personID, approvalID)
 	if err != nil {
 		return nil, err
 	}
@@ -172,6 +184,18 @@ func (s *Store) RespondApprovalRequest(ctx context.Context, tenantID, personID, 
 		}
 	}
 	return s.GetApprovalRequest(ctx, tenantID, approvalID)
+}
+
+// normalizeGrantScope maps free-form scope input to "", "task", or "person".
+func normalizeGrantScope(scope string) string {
+	switch strings.ToLower(strings.TrimSpace(scope)) {
+	case "task", "session":
+		return "task"
+	case "person", "always", "persistent":
+		return "person"
+	default:
+		return ""
+	}
 }
 
 func normalizeApprovalDecision(decision string) (string, error) {
@@ -192,7 +216,7 @@ func scanApprovalRequest(rows interface {
 	var payload string
 	var created, updated int64
 	if err := rows.Scan(&item.ID, &item.TenantID, &item.PersonID, &item.TaskID, &item.RunID, &item.ActionType,
-		&payload, &item.Status, &item.RequestedChannel, &item.ApprovedChannel, &created, &updated); err != nil {
+		&payload, &item.Status, &item.RequestedChannel, &item.ApprovedChannel, &item.DecisionScope, &created, &updated); err != nil {
 		return ApprovalRequest{}, err
 	}
 	item.Payload = json.RawMessage(payload)

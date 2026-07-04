@@ -98,7 +98,7 @@ func resolveApprovalReference(pending []control.ApprovalRequest, token string) (
 // empty for a lone pending approval) for the person and records the decision.
 // All validation failures come back as user-facing errors; only storage
 // problems surface as internal errors.
-func (d *Server) respondApprovalByToken(ctx context.Context, identity *control.IdentityContext, token, decision, channel string) (*control.ApprovalRequest, error) {
+func (d *Server) respondApprovalByToken(ctx context.Context, identity *control.IdentityContext, token, decision, channel, grantScope string) (*control.ApprovalRequest, error) {
 	if d == nil || d.Control == nil || identity == nil {
 		return nil, fmt.Errorf("approval store is not available")
 	}
@@ -118,7 +118,7 @@ func (d *Server) respondApprovalByToken(ctx context.Context, identity *control.I
 		}
 		return nil, resolveErr
 	}
-	approval, err := d.Control.RespondApprovalRequest(ctx, identity.TenantID, identity.PersonID, resolved.ID, decision, channel)
+	approval, err := d.Control.RespondApprovalRequest(ctx, identity.TenantID, identity.PersonID, resolved.ID, decision, channel, grantScope)
 	if err != nil {
 		return nil, err
 	}
@@ -127,22 +127,42 @@ func (d *Server) respondApprovalByToken(ctx context.Context, identity *control.I
 }
 
 // parseBareApprovalReply maps a conversational one-word answer to an approval
-// decision. It stays tight (whole-message match only) so ordinary sentences
-// are never misread as a decision. "ok"/"可以"/"好" double as continuation
-// cues elsewhere; the caller only invokes this when an approval is pending, so
-// a blocking approval wins that collision by construction.
-func parseBareApprovalReply(content string) (string, bool) {
+// decision plus an optional grant scope ("" once / "task" / "person"). It stays
+// tight (whole-message match only) so ordinary sentences are never misread as a
+// decision. "ok"/"可以"/"好" double as continuation cues elsewhere; the caller
+// only invokes this when an approval is pending, so a blocking approval wins
+// that collision by construction. The scope shortcuts mirror the /approve
+// grammar: "yt" grants the class for the task, "ya" grants it for the person.
+func parseBareApprovalReply(content string) (decision, scope string, ok bool) {
 	s := strings.ToLower(strings.TrimSpace(content))
 	s = strings.Trim(s, " \t\r\n.!?。！？，,")
 	switch s {
+	case "yt":
+		return "approved", "task", true
+	case "ya":
+		return "approved", "person", true
 	case "y", "yes", "ok", "okay", "approve", "approved", "sure",
 		"好", "好的", "可以", "同意", "批准", "行":
-		return "approved", true
+		return "approved", "", true
 	case "n", "no", "reject", "rejected", "deny", "denied", "cancel",
 		"不", "不行", "不可以", "拒绝", "取消":
-		return "rejected", true
+		return "rejected", "", true
 	}
-	return "", false
+	return "", "", false
+}
+
+// parseApprovalScopeWord maps a grant-scope word from the /approve grammar to
+// "task", "person", or "" (unrecognized/once). "always" is the friendly alias
+// for person scope.
+func parseApprovalScopeWord(word string) string {
+	switch strings.ToLower(strings.TrimSpace(word)) {
+	case "task", "session":
+		return "task"
+	case "always", "person", "persistent":
+		return "person"
+	default:
+		return ""
+	}
 }
 
 // tryHandleBareApprovalReply resolves a conversational y/n against the person's
@@ -152,7 +172,7 @@ func parseBareApprovalReply(content string) (string, bool) {
 // the per-person active-run guard serializes interactive approvals) → the word
 // is ambiguous, so return the numbered list and ask for /approve <n>.
 func (d *Server) tryHandleBareApprovalReply(ctx context.Context, identity *control.IdentityContext, content, channel string) (bool, string, error) {
-	decision, ok := parseBareApprovalReply(content)
+	decision, grantScope, ok := parseBareApprovalReply(content)
 	if !ok || d == nil || d.Control == nil || identity == nil {
 		return false, "", nil
 	}
@@ -172,7 +192,7 @@ func (d *Server) tryHandleBareApprovalReply(ctx context.Context, identity *contr
 		return true, fmt.Sprintf("%d approvals are pending, so I cannot tell which one you mean. Reply /%s <n>:\n%s",
 			len(pending), verb, formatApprovals(pending, titles)), nil
 	}
-	approval, err := d.respondApprovalByToken(ctx, identity, pending[0].ID, decision, channel)
+	approval, err := d.respondApprovalByToken(ctx, identity, pending[0].ID, decision, channel, grantScope)
 	if err != nil {
 		return true, "Could not record the decision: " + err.Error(), nil
 	}
@@ -188,8 +208,24 @@ func (d *Server) tryHandleBareApprovalReply(ctx context.Context, identity *contr
 // mistakes, not server failures, so they come back as chat text (never a 500
 // with raw JSON on any channel).
 func (d *Server) respondApprovalCommand(ctx context.Context, identity *control.IdentityContext, token, decision, channel string) string {
-	if fields := strings.Fields(token); len(fields) > 0 {
-		token = fields[0]
+	// The reference token may be followed by a grant-scope word:
+	//   /approve            → this action once
+	//   /approve task       → remember the action's class for this task
+	//   /approve always     → remember it for you across tasks (alias: person)
+	// A bare scope word ("/approve task") targets the lone pending approval.
+	grantScope := ""
+	fields := strings.Fields(token)
+	if len(fields) > 0 {
+		if s := parseApprovalScopeWord(fields[0]); s != "" {
+			// First word IS the scope: token stays empty (lone pending approval).
+			grantScope = s
+			token = ""
+		} else {
+			token = fields[0]
+			if len(fields) > 1 {
+				grantScope = parseApprovalScopeWord(fields[1])
+			}
+		}
 	} else {
 		token = ""
 	}
@@ -200,7 +236,7 @@ func (d *Server) respondApprovalCommand(ctx context.Context, identity *control.I
 	if strings.EqualFold(token, "all") {
 		return d.respondAllApprovals(ctx, identity, decision, channel, verbBase)
 	}
-	approval, err := d.respondApprovalByToken(ctx, identity, token, decision, channel)
+	approval, err := d.respondApprovalByToken(ctx, identity, token, decision, channel, grantScope)
 	if err != nil {
 		return "Cannot " + verbBase + ": " + err.Error()
 	}
@@ -214,7 +250,20 @@ func (d *Server) respondApprovalCommand(ctx context.Context, identity *control.I
 			title = task.Title
 		}
 	}
-	return fmt.Sprintf("%s %s\n%s", verb, approvalSummaryLine(*approval, title), approval.ID)
+	return fmt.Sprintf("%s%s %s\n%s", verb, grantScopeNote(approval.DecisionScope), approvalSummaryLine(*approval, title), approval.ID)
+}
+
+// grantScopeNote renders the human-facing "remembered" suffix for an approval
+// that also recorded a class-level grant. Empty for a once-only decision.
+func grantScopeNote(scope string) string {
+	switch scope {
+	case "task":
+		return " (this class remembered for this task)"
+	case "person":
+		return " (this class remembered for you across tasks)"
+	default:
+		return ""
+	}
 }
 
 // respondAllApprovals backs "/approve all" and "/reject all": it decides every
@@ -238,7 +287,9 @@ func (d *Server) respondAllApprovals(ctx context.Context, identity *control.Iden
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "%s %d:\n", verb, len(pending))
 	for _, item := range pending {
-		approval, err := d.Control.RespondApprovalRequest(ctx, identity.TenantID, identity.PersonID, item.ID, decision, channel)
+		// Bulk decisions are always once-only: remembering a whole batch as a
+		// class grant would be too coarse a decision to infer.
+		approval, err := d.Control.RespondApprovalRequest(ctx, identity.TenantID, identity.PersonID, item.ID, decision, channel, "")
 		if err != nil {
 			fmt.Fprintf(&sb, "- failed: %s (%s)\n", approvalSummaryLine(item, ""), err.Error())
 			continue

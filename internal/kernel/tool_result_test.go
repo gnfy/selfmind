@@ -104,3 +104,21 @@ func TestPackageToolErrorUserRejection(t *testing.T) {
 		t.Fatalf("ordinary failures keep the diagnostic instruction, got: %s", ordinary.ModelContent)
 	}
 }
+
+// TestIsUserRejectionErrDistinguishesHardFloor guards the contract that the
+// hard-floor deny string from tools.SmartApprovalMiddleware ("operation blocked
+// by safety policy: ...") is NOT treated as a user rejection. A hard block is a
+// safety-policy decision, not a user preference; conflating the two would apply
+// the wrong model instruction. The rejection strings must still match.
+func TestIsUserRejectionErrDistinguishesHardFloor(t *testing.T) {
+	blocked := fmt.Errorf("operation blocked by safety policy: recursive delete of protected root: / (do not retry; this is a hard safety limit, not a user rejection)")
+	if isUserRejectionErr(blocked) {
+		t.Fatalf("hard-floor block must NOT be classified as a user rejection: %v", blocked)
+	}
+	if !isUserRejectionErr(fmt.Errorf("operation rejected: user said no")) {
+		t.Fatalf("user rejection must still be classified as a rejection")
+	}
+	if !isUserRejectionErr(fmt.Errorf("operation cancelled by user")) {
+		t.Fatalf("user cancellation must still be classified as a rejection")
+	}
+}

@@ -285,9 +285,21 @@ CREATE TABLE IF NOT EXISTS approval_requests (
 	status TEXT NOT NULL,
 	requested_channel TEXT,
 	approved_channel TEXT,
+	decision_scope TEXT,
 	created_at INTEGER NOT NULL,
 	updated_at INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS approval_grants (
+	id TEXT PRIMARY KEY,
+	tenant_id TEXT NOT NULL,
+	person_id TEXT NOT NULL,
+	scope_kind TEXT NOT NULL,
+	scope_id TEXT NOT NULL,
+	pattern_key TEXT NOT NULL,
+	created_at INTEGER NOT NULL,
+	UNIQUE(tenant_id, person_id, scope_kind, scope_id, pattern_key)
+);
+CREATE INDEX IF NOT EXISTS idx_approval_grants_lookup ON approval_grants(tenant_id, person_id, pattern_key);
 CREATE TABLE IF NOT EXISTS notifications (
 	id TEXT PRIMARY KEY,
 	tenant_id TEXT NOT NULL,
@@ -354,6 +366,10 @@ CREATE TABLE IF NOT EXISTS person_settings (
 		// It is NOT presence: liveness stays in the gateway's in-memory
 		// registry (docs/identity-continuity.md "Runtime attachment model").
 		{"accounts", "last_seen_at", "INTEGER"},
+		// decision_scope carries the class-level approval memory scope
+		// (""/task/person) recorded when an approval is answered; older DBs
+		// created before the layered approval funnel lack the column.
+		{"approval_requests", "decision_scope", "TEXT"},
 	} {
 		if err := s.ensureColumn(ctx, col.table, col.name, col.def); err != nil {
 			return err

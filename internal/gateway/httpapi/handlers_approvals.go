@@ -77,7 +77,7 @@ func (d *Server) handleApprovalRespond(w http.ResponseWriter, r *http.Request) {
 	// number, a unique apr_ prefix, a full id, or empty when exactly one
 	// approval is pending. Resolution failures are user errors (400 + a
 	// human-readable message), never a 500.
-	approval, err := d.respondApprovalByToken(r.Context(), identity, req.ApprovalID, req.Decision, fallback(req.Channel, req.Platform))
+	approval, err := d.respondApprovalByToken(r.Context(), identity, req.ApprovalID, req.Decision, fallback(req.Channel, req.Platform), req.Scope)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return

@@ -59,7 +59,7 @@ func (a *App) runGatewayClientIfRequested() (bool, int) {
 	if len(a.args) > 1 && a.args[1] == "send" {
 		opts := sendOptions{}
 		args := a.args[2:]
-		usage := "usage: selfmind send [--async] [--mode on-request|read-only|auto-edit|full-auto] <message>"
+		usage := "usage: selfmind send [--async] [--mode on-request|read-only|auto-edit|full-auto|smart] <message>"
 	flagLoop:
 		for len(args) > 0 {
 			switch {
@@ -81,7 +81,7 @@ func (a *App) runGatewayClientIfRequested() (bool, int) {
 			}
 		}
 		if opts.approvalMode != "" && !isValidApprovalMode(opts.approvalMode) {
-			fmt.Fprintf(a.stderr, "invalid --mode %q; valid modes: on-request, read-only, auto-edit, full-auto\n", opts.approvalMode)
+			fmt.Fprintf(a.stderr, "invalid --mode %q; valid modes: on-request, read-only, auto-edit, full-auto, smart\n", opts.approvalMode)
 			return true, 2
 		}
 		content := strings.TrimSpace(strings.Join(args, " "))
@@ -129,7 +129,7 @@ type sendOptions struct {
 // typo fails fast instead of silently degrading to the default policy.
 func isValidApprovalMode(mode string) bool {
 	switch strings.ToLower(strings.TrimSpace(mode)) {
-	case "on-request", "read-only", "auto-edit", "full-auto":
+	case "on-request", "read-only", "auto-edit", "full-auto", "smart":
 		return true
 	default:
 		return false

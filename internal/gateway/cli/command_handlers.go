@@ -634,7 +634,7 @@ func (m *uiModel) handleCapture(args []string) tea.Cmd {
 func (m *uiModel) handleMode(args []string) tea.Cmd {
 	if len(args) == 0 {
 		m.addMessage("assistant", fmt.Sprintf(
-			"Approval mode: %s\n\n  on-request  ask only on risky ops (default)\n  read-only   ask before any file write or command\n  auto-edit   auto-apply in-workspace edits; ask before commands\n  full-auto   run everything without asking (workspace scope still applies)\n\nUsage: /mode <on-request|read-only|auto-edit|full-auto>",
+			"Approval mode: %s\n\n  on-request  ask only on risky ops (default)\n  read-only   ask before any file write or command\n  auto-edit   auto-apply in-workspace edits; ask before commands\n  full-auto   run everything without asking (hard-floor safety limits still apply)\n  smart       ask only on risky ops (LLM triage arrives in a later release)\n\nUsage: /mode <on-request|read-only|auto-edit|full-auto|smart>",
 			m.approvalMode))
 		return nil
 	}

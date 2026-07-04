@@ -255,6 +255,22 @@ Domain docs (**mandatory** before changing that domain):
   `tools.SmartApprovalMiddleware` are a stable contract with kernel's
   `isUserRejectionErr` (`tool_result.go`), which swaps the diagnose-and-retry
   instruction for a do-not-retry instruction. Keep both sides in sync.
+- The approval hard floor (`hardlineToolCall` in `tools/middleware.go`) is an
+  UNBYPASSABLE deny set that fires BEFORE any approval-mode bypass — full-auto
+  included — for irreversible, never-legitimate ops (recursive delete of the
+  filesystem root or a protected system/home root, `mkfs*`, `dd`/redirect over
+  a raw disk device, fork bomb, host shutdown/reboot/`init 0|6`). It returns
+  `operation blocked by safety policy: …`, deliberately DISTINCT from the
+  user-rejection strings: `isUserRejectionErr` must NOT match it (a hard block
+  is a safety-policy decision, not a user preference). Keep the set TIGHT —
+  merely "dangerous" ops stay in `dangerousToolCall` behind normal approval —
+  and never let a mode, a session grant, or an LLM triage step (H2) override it.
+- Class-level approval memory (`approval_grants` table + `ApprovalGrantStore`):
+  approving a coarse action CLASS (`approvalPatternKey`) for a task (session) or
+  person (persistent) suppresses later same-class asks. The pattern key is a
+  CLASS, never the exact command; hard-floor and content-level denials are never
+  eligible. Reply grammar carries the scope (`/approve [n] task|always`, bare
+  `yt`/`ya`); persisted `/mode` lives in `person_settings` (`approval_mode`).
 - Tool failures are diagnostic evidence, not stop conditions. Diagnose before
   retrying: identify the ecosystem from high-signal files (`go.mod`,
   `package.json`, `pyproject.toml`, `Cargo.toml`, `composer.json`, CI files,

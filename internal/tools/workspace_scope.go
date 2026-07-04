@@ -25,8 +25,12 @@ type ExecutionScope struct {
 	// without a blocking interactive prompt (which only the local TUI has).
 	Clarify ClarifyHandler
 	// ApprovalMode is the codex-style approval policy for this turn (read-only /
-	// auto-edit / full-auto / on-request). Empty means on-request.
+	// auto-edit / full-auto / smart / on-request). Empty means on-request.
 	ApprovalMode ApprovalMode
+	// Grants backs class-level approval memory: the approval middleware consults
+	// it to skip a human ask for an already-approved class and records new grants
+	// when a decision says "remember" (task/person scope). Nil = no memory.
+	Grants ApprovalGrantStore
 }
 
 var executionScopes sync.Map // tenantID used by the agent -> ExecutionScope

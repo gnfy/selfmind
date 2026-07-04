@@ -128,6 +128,9 @@ type ApprovalRespondRequest struct {
 	Channel        string `json:"channel"`
 	ApprovalID     string `json:"approval_id"`
 	Decision       string `json:"decision"`
+	// Scope records class-level approval memory on an approve: "" (once),
+	// "task" (remember for this task), or "person" (remember across tasks).
+	Scope string `json:"scope,omitempty"`
 }
 
 type ApprovalRespondResponse struct {

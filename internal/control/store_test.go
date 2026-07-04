@@ -244,7 +244,7 @@ func TestStoreApprovalFlow(t *testing.T) {
 	if len(pending) != 1 || pending[0].ID != approval.ID {
 		t.Fatalf("pending approvals = %+v", pending)
 	}
-	approved, err := store.RespondApprovalRequest(ctx, identity.TenantID, identity.PersonID, approval.ID, "approved", "wechat")
+	approved, err := store.RespondApprovalRequest(ctx, identity.TenantID, identity.PersonID, approval.ID, "approved", "wechat", "")
 	if err != nil {
 		t.Fatalf("RespondApprovalRequest failed: %v", err)
 	}
@@ -258,8 +258,102 @@ func TestStoreApprovalFlow(t *testing.T) {
 	if len(pending) != 0 {
 		t.Fatalf("expected no pending approvals, got %+v", pending)
 	}
-	if _, err := store.RespondApprovalRequest(ctx, identity.TenantID, identity.PersonID, approval.ID, "rejected", "cli"); err == nil {
+	if _, err := store.RespondApprovalRequest(ctx, identity.TenantID, identity.PersonID, approval.ID, "rejected", "cli", ""); err == nil {
 		t.Fatal("expected duplicate response to fail")
+	}
+}
+
+func TestApprovalGrantsScopes(t *testing.T) {
+	ctx := context.Background()
+	store, err := OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("OpenStore failed: %v", err)
+	}
+	defer store.Close()
+
+	identity, err := store.ResolveOrCreateAccount(ctx, "tenant-a", "cli", "local", "Alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tenant, person := identity.TenantID, identity.PersonID
+	const pk = "exec:invokes dangerous command: chmod"
+
+	// Nothing granted yet.
+	if ok, err := store.IsApprovalGranted(ctx, tenant, person, "task-1", pk); err != nil || ok {
+		t.Fatalf("expected no grant initially, ok=%v err=%v", ok, err)
+	}
+
+	// Task grant applies only to that task.
+	if err := store.GrantApproval(ctx, "task", tenant, person, "task-1", pk); err != nil {
+		t.Fatalf("GrantApproval task: %v", err)
+	}
+	if ok, _ := store.IsApprovalGranted(ctx, tenant, person, "task-1", pk); !ok {
+		t.Fatalf("task-1 grant should be visible for task-1")
+	}
+	if ok, _ := store.IsApprovalGranted(ctx, tenant, person, "task-2", pk); ok {
+		t.Fatalf("task-1 grant must NOT apply to task-2")
+	}
+
+	// Person grant applies across all tasks.
+	if err := store.GrantApproval(ctx, "person", tenant, person, person, pk); err != nil {
+		t.Fatalf("GrantApproval person: %v", err)
+	}
+	if ok, _ := store.IsApprovalGranted(ctx, tenant, person, "task-2", pk); !ok {
+		t.Fatalf("person grant should apply to any task")
+	}
+	if ok, _ := store.IsApprovalGranted(ctx, tenant, person, "", pk); !ok {
+		t.Fatalf("person grant should apply even with no task id")
+	}
+
+	// A different pattern key is still ungranted.
+	if ok, _ := store.IsApprovalGranted(ctx, tenant, person, "task-2", "exec:invokes dangerous command: rm"); ok {
+		t.Fatalf("unrelated class must not be granted")
+	}
+
+	// Grants are idempotent.
+	if err := store.GrantApproval(ctx, "task", tenant, person, "task-1", pk); err != nil {
+		t.Fatalf("re-grant should be idempotent: %v", err)
+	}
+}
+
+// TestRespondApprovalRecordsDecisionScope pins that the grant scope round-trips
+// on an approval and is dropped on a rejection.
+func TestRespondApprovalRecordsDecisionScope(t *testing.T) {
+	ctx := context.Background()
+	store, err := OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("OpenStore failed: %v", err)
+	}
+	defer store.Close()
+	identity, err := store.ResolveOrCreateAccount(ctx, "tenant-a", "cli", "local", "Alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	mk := func() *ApprovalRequest {
+		a, err := store.CreateApprovalRequest(ctx, ApprovalRequest{
+			TenantID: identity.TenantID, PersonID: identity.PersonID,
+			ActionType: "tool_call", RequestedChannel: "cli",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return a
+	}
+	a1 := mk()
+	got, err := store.RespondApprovalRequest(ctx, identity.TenantID, identity.PersonID, a1.ID, "approved", "cli", "task")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.DecisionScope != "task" {
+		t.Fatalf("approve should keep task scope, got %q", got.DecisionScope)
+	}
+	a2 := mk()
+	got, err = store.RespondApprovalRequest(ctx, identity.TenantID, identity.PersonID, a2.ID, "rejected", "cli", "person")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.DecisionScope != "" {
+		t.Fatalf("reject must drop grant scope, got %q", got.DecisionScope)
 	}
 }
 

@@ -205,13 +205,45 @@ func TestApproveEmptyTokenWithSinglePending(t *testing.T) {
 func TestApproveAlreadyDecidedReportsStatus(t *testing.T) {
 	daemon, store, identity, _, approval := newApprovalTestServer(t)
 	ctx := context.Background()
-	if _, err := store.RespondApprovalRequest(ctx, identity.TenantID, identity.PersonID, approval.ID, "approved", "cli"); err != nil {
+	if _, err := store.RespondApprovalRequest(ctx, identity.TenantID, identity.PersonID, approval.ID, "approved", "cli", ""); err != nil {
 		t.Fatal(err)
 	}
 	resp, status := daemon.ProcessMessage(ctx, api.MessageRequest{Content: "/approve " + approval.ID})
 	if status != http.StatusOK || !strings.Contains(resp.Content, "already approved") {
 		t.Fatalf("status = %d, content = %q", status, resp.Content)
 	}
+}
+
+// TestApproveScopeGrammarRecordsDecisionScope pins the reply-scope mapping:
+// "/approve task" records task scope, "/approve always" records person scope,
+// and a bare "y" records nothing.
+func TestApproveScopeGrammarRecordsDecisionScope(t *testing.T) {
+	ctx := context.Background()
+
+	check := func(content, wantScope string) {
+		t.Helper()
+		daemon, store, identity, _, approval := newApprovalTestServer(t)
+		resp, status := daemon.ProcessMessage(ctx, api.MessageRequest{Content: content})
+		if status != http.StatusOK {
+			t.Fatalf("%q: status = %d, resp = %+v", content, status, resp)
+		}
+		current, _ := store.GetApprovalRequest(ctx, identity.TenantID, approval.ID)
+		if current == nil || current.Status != "approved" {
+			t.Fatalf("%q: approval not approved: %+v", content, current)
+		}
+		if current.DecisionScope != wantScope {
+			t.Fatalf("%q: decision scope = %q, want %q", content, current.DecisionScope, wantScope)
+		}
+	}
+
+	check("/approve 1 task", "task")
+	check("/approve 1 always", "person")
+	check("/approve 1 person", "person")
+	check("/approve 1", "")
+	check("/approve task", "task") // bare scope word targets the lone pending
+	check("y", "")                 // bare conversational approve remembers nothing
+	check("yt", "task")            // conversational task-scope shortcut
+	check("ya", "person")          // conversational person-scope shortcut
 }
 
 func TestApprovalsListShowsRichContent(t *testing.T) {
@@ -414,7 +446,7 @@ func TestBareYesResolvesLonePendingApproval(t *testing.T) {
 func TestBareReplyIgnoredWithNoPending(t *testing.T) {
 	daemon, store, identity, _, approval := newApprovalTestServer(t)
 	ctx := context.Background()
-	if _, err := store.RespondApprovalRequest(ctx, identity.TenantID, identity.PersonID, approval.ID, "approved", "cli"); err != nil {
+	if _, err := store.RespondApprovalRequest(ctx, identity.TenantID, identity.PersonID, approval.ID, "approved", "cli", ""); err != nil {
 		t.Fatal(err)
 	}
 	handled, _, _ := daemon.tryHandleBareApprovalReply(ctx, identity, "y", "weixin")
@@ -454,7 +486,7 @@ func TestOrphanedApprovalsExpireAndStopPoisoningTheList(t *testing.T) {
 
 	// The fixture's approval has no run id (left alone by the sweep); make the
 	// stale one explicitly: an approval bound to a dead (non-running) run.
-	if _, err := store.RespondApprovalRequest(ctx, identity.TenantID, identity.PersonID, stale.ID, "rejected", "cli"); err != nil {
+	if _, err := store.RespondApprovalRequest(ctx, identity.TenantID, identity.PersonID, stale.ID, "rejected", "cli", ""); err != nil {
 		t.Fatal(err)
 	}
 	deadRun, err := store.StartRun(ctx, task, "cli", "old attempt")

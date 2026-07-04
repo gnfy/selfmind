@@ -60,7 +60,7 @@
 | Self-check & CI gate | ✅ | `selfmind selfcheck` (build + test + offline eval) and `.github/workflows/ci.yml`; strict offline VCR replay (`ErrCassetteMiss`) so the gate never burns provider quota. `require_cassette: true` cases fail (not skip) when their cassette is missing; `SELFMIND_EVAL_MIN_CASES` (set to 3 in CI) fails the gate when fewer cases actually replay. `internal/cliapp/selfcheck_commands.go`. |
 | Continuity eval coverage | ✅ | Cases + gate + cassettes recorded and committed; selfcheck replays 7 cases offline. `evalcases/continuity/` (cross-endpoint `/status`, `继续` resume, stranger identity isolation via per-turn `platform_user_id`), all `require_cassette: true`; record with `SELFMIND_EVAL_VCR=record selfmind eval run evalcases/continuity` and commit `.vcr/continuity_*`. |
 | CLI image input | ✅ | Image-path detection in input + clipboard screenshot paste (`/paste-image`, Ctrl+V auto-detect; WSL/macOS/Linux); routed to the `vision_analyze` tool via the attachment pipeline. Clipboard requires a local GUI (not over SSH). `internal/gateway/cli/attachments.go`, `clipboard.go`. |
-| Approval modes | ✅ | Staged `on-request` / `read-only` / `auto-edit` / `full-auto` via `/mode`, enforced in `SmartApprovalMiddleware`; on-demand y/N reuses the clarify bridge. `internal/tools/middleware.go`. |
+| Approval modes | ✅ | Staged `on-request` / `read-only` / `auto-edit` / `full-auto` / `smart` via `/mode`, enforced in `SmartApprovalMiddleware`; on-demand y/N reuses the clarify bridge. `internal/tools/middleware.go`. **Layered approval funnel shipped (H1, 2026-07-04):** the middleware now runs (1) an unbypassable **hard floor** (`hardlineToolCall`) that fires before any mode bypass — full-auto included — for irreversible ops (recursive delete of `/`,`/home`,`$HOME`,`/etc`,`/usr`,`/var`,`/boot`; `mkfs*`; `dd of=/dev/sd*|nvme*`; redirect over a raw disk device; fork bomb; `shutdown`/`reboot`/`halt`/`poweroff`/`init 0|6`), returning `operation blocked by safety policy: …` (distinct from the user-rejection contract; kernel `isUserRejectionErr` does NOT match it); (2) mode bypass; (3) **class-level approval memory** — approving a coarse *class* (`approvalPatternKey`, e.g. any `chmod` → `exec:invokes dangerous command: chmod`) for the task (session) or person (persistent) via the durable `approval_grants` table skips later same-class asks; (5) human ask. Reply grammar: `/approve [n] task` / `/approve [n] always|person` (or bare `yt`/`ya`) records the grant scope; `/mode` is now an IM control command persisting per-person `approval_mode`. `smart` mode is on-request behavior in H1 — LLM triage is the H2 follow-up (see below). `internal/tools/middleware.go`, `internal/control/approval_grants.go`, `internal/gateway/httpapi/approval_resolver.go`. |
 | Mid-turn steering | ✅ | Works in-process (`internal/kernel/steering.go` + controller `steerCh`) **and** in client mode: input typed during a daemon run is forwarded via `POST /v1/runs/steer` (`httpapi/handlers_steer.go`) into the active run's buffered steering channel (`kernel.WithSteering`, sync + async paths), leaving an auditable `run.steered` event. Daemon refusals surface honestly in the TUI (409 no active run / 429 buffer full → transcript notice, never silently dropped). Covered by unit tests (httpapi/client/controller), not VCR. |
 | Skill variant evolution / sandbox test | ❌ | Old roadmap P3 (doc removed; see git history); not started, and out of scope for the north star. |
 
@@ -179,6 +179,15 @@ is the only priority list in the repo; other docs must point here.
    scenarios.
 10. **P2 — MCP `sampling/createMessage`**, IM voice STT/TTS, remaining adapter
    polish — only as scenario needs dictate.
+11. **P1 — H2: LLM triage for `smart` approval mode.** The layered approval
+   funnel and `smart` mode plumbing shipped in H1 (see the Approval modes row);
+   in H1 `smart` behaves exactly like `on-request`. H2 inserts an LLM triage
+   step between the class-level allowlist (layer 3) and the human ask (layer 5)
+   in `SmartApprovalMiddleware`: for a dangerous op with no matching grant,
+   consult the model to auto-allow low-risk / clearly-in-scope actions and
+   escalate the rest to the human, so `smart` becomes the low-fatigue default.
+   The hard floor (layer 1) stays unconditional and above triage. This is the
+   highest-value follow-up to H1.
 
 Resolved from this list: **Approval UX** (was item 1, resolved 2026-07-04) —
 see the Approval lifecycle row above for what shipped and the two intentional

@@ -241,8 +241,10 @@ func (c *Client) drainEventsOnce(ctx context.Context, req api.MessageRequest, se
 
 // eventToStream maps a persisted control.Event back into the llm.StreamEvent the
 // TUI's forwardGatewayEvent understands. It returns ok=false for event types the
-// live UI does not render (plan/outcome/turn bookkeeping), so they are skipped.
-// The payload field names mirror httpapi.recordStreamEvent.
+// live UI does not render (outcome/turn bookkeeping), so they are skipped.
+// plan.updated is forwarded (payload carries the full plan) so the client TUI
+// renders the live checklist. The payload field names mirror
+// httpapi.recordStreamEvent.
 func eventToStream(ev control.Event) (llm.StreamEvent, bool) {
 	p := decodePayload(ev.Payload)
 	switch {
@@ -280,6 +282,13 @@ func eventToStream(ev control.Event) (llm.StreamEvent, bool) {
 		}, true
 	case strings.HasPrefix(ev.Type, "learning."):
 		return llm.StreamEvent{EventType: "learning.review", Content: str(p["message"])}, true
+	case ev.Type == "plan.updated":
+		// The daemon records the full structured plan (plan steps + explanation)
+		// in the event payload. Forward it so the client TUI can render the live
+		// Codex-style checklist via renderPlanCell — without this the plan step
+		// list never reaches client-mode TUIs (the default path) and the user
+		// sees only a stray "plan updated" line instead of [x]/[>]/[ ] progress.
+		return llm.StreamEvent{EventType: "plan.updated", Payload: p}, true
 	default:
 		return llm.StreamEvent{}, false
 	}

@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -145,11 +146,23 @@ func (c *RunCoordinator) withResumeContext(ctx context.Context, identity *contro
 		}
 		writeResumeList(&sb, "done", handoff.DoneItems)
 		writeResumeList(&sb, "next_steps", handoff.NextSteps)
-		writeResumeList(&sb, "changed_files", handoff.ChangedFiles)
 		if handoff.TestStatus != "" {
 			fmt.Fprintf(&sb, "test_status: %s\n", oneLine(handoff.TestStatus))
 		}
 		writeResumeList(&sb, "risks", handoff.Risks)
+	}
+	// The files this task already created/edited — merged from the handoff and
+	// the task's file-mutating tool events (write_file/patch). An interrupted run
+	// (e.g. provider EOF) leaves no handoff, so the events are the only record of
+	// what was built; surfacing the exact paths stops the continuation from
+	// re-listing the directory and editing the wrong file (observed live: a
+	// resumed game-build task rediscovered and overwrote an unrelated .html).
+	if files := c.resumeChangedFiles(ctx, task, handoff, 10); len(files) > 0 {
+		sb.WriteString("files_this_task_created_or_changed:\n")
+		for _, f := range files {
+			fmt.Fprintf(&sb, "- %s\n", f)
+		}
+		sb.WriteString("Edit these existing files directly to continue; do not re-search the workspace or recreate them unless the user asks for a fresh start.\n")
 	}
 	if len(events) > 0 {
 		sb.WriteString("recent_events:\n")
@@ -180,6 +193,151 @@ func (c *RunCoordinator) withResumeContext(ctx context.Context, identity *contro
 	sb.WriteString("[/SelfMind resume context]\n\n")
 	sb.WriteString(input)
 	return sb.String()
+}
+
+// resumeChangedFiles returns up to `limit` distinct file paths this task has
+// already created or edited, most-authoritative first: the handoff's changed
+// files (when a run finalized), then paths recovered from the task's
+// file-mutating tool events (the only source when a run was interrupted before
+// finalization). Bounded and derived — it never injects raw event rows into the
+// prompt, staying inside the resume-context contract (docs/context-lifecycle).
+func (c *RunCoordinator) resumeChangedFiles(ctx context.Context, task *control.Task, handoff *control.Handoff, limit int) []string {
+	if c == nil || c.srv == nil || c.srv.Control == nil || task == nil || limit <= 0 {
+		return nil
+	}
+	seen := map[string]bool{}
+	var out []string
+	add := func(p string) {
+		p = strings.TrimSpace(p)
+		if p == "" || seen[p] || len(out) >= limit {
+			return
+		}
+		seen[p] = true
+		out = append(out, p)
+	}
+	if handoff != nil {
+		for _, f := range handoff.ChangedFiles {
+			add(f)
+		}
+	}
+	// ListTaskEvents is newest-first; scan a bounded window for file-mutating
+	// tool calls. tool.started args carry the exact target path (write_file) or
+	// the V4A patch text (patch); tool.completed result headers are a backup.
+	events, _ := c.srv.Control.ListTaskEvents(ctx, task.ID, 80)
+	for _, ev := range events {
+		if len(out) >= limit {
+			break
+		}
+		payload := decodeEventPayload(ev.Payload)
+		tool := strings.TrimSpace(asString(payload["tool"]))
+		switch ev.Type {
+		case "tool.started":
+			switch tool {
+			case "write_file":
+				add(pathFromArgsJSON(asString(payload["args"])))
+			case "patch":
+				for _, p := range patchPathsFromArgsJSON(asString(payload["args"])) {
+					add(p)
+				}
+			}
+		case "tool.completed":
+			if tool == "write_file" {
+				add(pathFromWriteResultHeader(asString(payload["result"])))
+			}
+		}
+	}
+	return out
+}
+
+func decodeEventPayload(raw json.RawMessage) map[string]interface{} {
+	if len(raw) == 0 {
+		return map[string]interface{}{}
+	}
+	m := map[string]interface{}{}
+	_ = json.Unmarshal(raw, &m)
+	return m
+}
+
+func asString(v interface{}) string {
+	if s, ok := v.(string); ok {
+		return s
+	}
+	return ""
+}
+
+// pathFromArgsJSON extracts the "path" field from a write_file tool's recorded
+// args JSON (a JSON string held in the event payload).
+func pathFromArgsJSON(argsJSON string) string {
+	argsJSON = strings.TrimSpace(argsJSON)
+	if argsJSON == "" {
+		return ""
+	}
+	var args struct {
+		Path string `json:"path"`
+	}
+	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
+		return ""
+	}
+	return args.Path
+}
+
+// patchPathsFromArgsJSON extracts every file path a V4A patch touches from the
+// patch tool's recorded args JSON ({"patch": "*** Begin Patch ..."}).
+func patchPathsFromArgsJSON(argsJSON string) []string {
+	argsJSON = strings.TrimSpace(argsJSON)
+	if argsJSON == "" {
+		return nil
+	}
+	var args struct {
+		Patch string `json:"patch"`
+	}
+	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
+		return nil
+	}
+	var out []string
+	for _, line := range strings.Split(args.Patch, "\n") {
+		line = strings.TrimSpace(line)
+		for _, prefix := range []string{"*** Update File:", "*** Add File:", "*** Delete File:", "*** Move File:"} {
+			if strings.HasPrefix(line, prefix) {
+				rest := strings.TrimSpace(strings.TrimPrefix(line, prefix))
+				// "Move File: old -> new" — keep the destination path.
+				if idx := strings.Index(rest, "->"); idx >= 0 {
+					rest = strings.TrimSpace(rest[idx+2:])
+				}
+				if rest != "" {
+					out = append(out, rest)
+				}
+			}
+		}
+	}
+	return out
+}
+
+// pathFromWriteResultHeader recovers the path from a write_file result header
+// ("Created <path> (+A -B)", "Edited <path> (+A -B)", "No change to <path>").
+func pathFromWriteResultHeader(result string) string {
+	line := strings.TrimSpace(firstLine(result))
+	if line == "" {
+		return ""
+	}
+	for _, prefix := range []string{"Created ", "Edited ", "No change to "} {
+		if strings.HasPrefix(line, prefix) {
+			rest := strings.TrimSpace(strings.TrimPrefix(line, prefix))
+			// Drop the trailing " (+A -B)" stats suffix if present.
+			if idx := strings.LastIndex(rest, " (+"); idx >= 0 {
+				rest = strings.TrimSpace(rest[:idx])
+			}
+			return rest
+		}
+	}
+	return ""
+}
+
+func firstLine(s string) string {
+	if idx := strings.IndexByte(s, '\n'); idx >= 0 {
+		return s[:idx]
+	}
+	return s
 }
 
 func writeResumeList(sb *strings.Builder, label string, values []string) {

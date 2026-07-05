@@ -567,6 +567,115 @@ func TestResumeContextIncludesLatestHandoff(t *testing.T) {
 	}
 }
 
+// TestResumeContextIncludesCreatedFilesFromEvents proves a task interrupted
+// before any handoff (the codex-EOF case) still carries the files its prior run
+// created, recovered from write_file/patch tool events, so the continuation
+// edits the right file instead of rediscovering and guessing.
+func TestResumeContextIncludesCreatedFilesFromEvents(t *testing.T) {
+	store, err := control.OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	ctx := httptest.NewRequest(http.MethodGet, "/", nil).Context()
+	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Local User")
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := store.CreateTask(ctx, control.TaskCreate{
+		TenantID: identity.TenantID,
+		PersonID: identity.PersonID,
+		Title:    "Build the KOF 97 game",
+		Channel:  "wechat",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A write_file the prior (interrupted) run performed — no handoff was saved.
+	if _, err := store.AppendEvent(ctx, control.Event{
+		TaskID:     task.ID,
+		Type:       "tool.started",
+		Visibility: "task",
+		Channel:    "wechat",
+		Payload:    mustJSON(map[string]interface{}{"tool": "write_file", "args": `{"path":"arcade-fury-97.html","content":"<html>...</html>"}`}),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AppendEvent(ctx, control.Event{
+		TaskID:     task.ID,
+		Type:       "tool.completed",
+		Visibility: "task",
+		Channel:    "wechat",
+		Payload:    mustJSON(map[string]interface{}{"tool": "write_file", "result": "Created arcade-fury-97.html (+120 -0)"}),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	daemon := &Server{Control: store, DefaultTenantID: "default"}
+	content := daemon.coordinator().withResumeContext(ctx, identity, task, nil, router.IntentResult{Intent: router.IntentContinue, Confidence: 0.9, Reason: "test"}, "继续")
+	for _, want := range []string{"files_this_task_created_or_changed", "arcade-fury-97.html", "Edit these existing files directly"} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("resume context missing %q:\n%s", want, content)
+		}
+	}
+}
+
+// TestWorkspacePreservedOnResume proves a continuation runs under the task's own
+// workspace even when the request carries a different (client cwd-derived)
+// workspace — otherwise a CLI `继续` of an IM task would run in the terminal's
+// directory and trip out-of-root approvals.
+func TestWorkspacePreservedOnResume(t *testing.T) {
+	store, err := control.OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	ctx := httptest.NewRequest(http.MethodGet, "/", nil).Context()
+	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Local User")
+	if err != nil {
+		t.Fatal(err)
+	}
+	taskWS, err := store.RegisterWorkspace(ctx, control.Workspace{
+		TenantID:      identity.TenantID,
+		OwnerPersonID: identity.PersonID,
+		Name:          "game",
+		LocalPath:     t.TempDir(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	clientWS, err := store.RegisterWorkspace(ctx, control.Workspace{
+		TenantID:      identity.TenantID,
+		OwnerPersonID: identity.PersonID,
+		Name:          "terminal-cwd",
+		LocalPath:     t.TempDir(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := store.CreateTask(ctx, control.TaskCreate{
+		TenantID:    identity.TenantID,
+		PersonID:    identity.PersonID,
+		WorkspaceID: taskWS.ID,
+		Title:       "Build the game",
+		Channel:     "wechat",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	daemon := &Server{Control: store, DefaultTenantID: "default"}
+	// The CLI request carries its own cwd-derived workspace, but the resume must
+	// keep the task's original one.
+	got, err := daemon.coordinator().workspaceForTask(ctx, identity, task, api.MessageRequest{WorkspaceID: clientWS.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got == nil || got.ID != taskWS.ID {
+		t.Fatalf("resume workspace = %+v, want task workspace %s", got, taskWS.ID)
+	}
+}
+
 func TestTaskEventsEndpoint(t *testing.T) {
 	t.Setenv("SELF_GATEWAY_TOKEN", "")
 	store, err := control.OpenStore(t.TempDir())

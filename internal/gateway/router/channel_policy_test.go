@@ -16,7 +16,7 @@ func TestChannelPolicyStreamsOnlyForCLI(t *testing.T) {
 		if ShouldStreamToClient(channel) {
 			t.Fatalf("%s should not stream token chunks to the client", channel)
 		}
-		if notice := WorkingNotice(channel); !strings.Contains(notice, "AI 正在处理") {
+		if notice := WorkingNotice(channel); !strings.Contains(notice, "SelfMind is working on this") {
 			t.Fatalf("working notice for %s = %q", channel, notice)
 		}
 	}

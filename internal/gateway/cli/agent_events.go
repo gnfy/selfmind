@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
@@ -14,6 +15,31 @@ import (
 	"selfmind/internal/kernel"
 	"selfmind/internal/kernel/llm"
 )
+
+// planJSONFromEvent rebuilds the {"explanation", "plan":[{step,status}]} JSON
+// that renderPlanCell parses from a plan.updated stream event's payload. The
+// payload's "plan" value is a []kernel.PlanItem in the in-process router path
+// and a decoded []interface{} in the daemon-client path; json.Marshal handles
+// both, so one helper serves every TUI transport. Returns "" if no plan is
+// present so the caller renders nothing rather than an empty cell.
+func planJSONFromEvent(event llm.StreamEvent) string {
+	if event.Payload == nil {
+		return ""
+	}
+	plan, ok := event.Payload["plan"]
+	if !ok || plan == nil {
+		return ""
+	}
+	payload := map[string]interface{}{"plan": plan}
+	if exp, ok := event.Payload["explanation"].(string); ok && strings.TrimSpace(exp) != "" {
+		payload["explanation"] = exp
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return ""
+	}
+	return string(data)
+}
 
 func (m *uiModel) runAgent(ctx context.Context, input string) tea.Cmd {
 	return func() tea.Msg {
@@ -170,8 +196,17 @@ func (m *uiModel) forwardGatewayEvent(event llm.StreamEvent) {
 			m.program.Send(MsgAgentActivity{Content: displayActivityEvent(event.EventType, event.Content)})
 		}
 	case "tool.started":
+		// update_plan renders as a plan checklist driven by the plan.updated
+		// event (which carries the full structured plan); its raw tool.* events
+		// would only add a redundant summary cell, so skip them here.
+		if event.ToolName == "update_plan" {
+			return
+		}
 		m.program.Send(MsgToolStart{ToolName: event.ToolName, ToolCallID: event.ToolCallID, Args: event.ToolArgs})
 	case "tool.completed":
+		if event.ToolName == "update_plan" {
+			return
+		}
 		m.program.Send(MsgToolDone{
 			ToolName:   event.ToolName,
 			ToolCallID: event.ToolCallID,
@@ -179,6 +214,15 @@ func (m *uiModel) forwardGatewayEvent(event llm.StreamEvent) {
 			Err:        event.Err,
 			Duration:   event.DurationSeconds,
 		})
+	case "plan.updated":
+		// Render the live plan as a Codex-style checklist. The event payload holds
+		// the full plan (steps + explanation); rebuild the JSON renderPlanCell
+		// parses and commit it as an update_plan tool cell. This is the only path
+		// that shows the [x]/[>]/[ ] step list in client-mode TUIs (the default).
+		if planJSON := planJSONFromEvent(event); planJSON != "" {
+			m.program.Send(MsgToolStart{ToolName: "update_plan"})
+			m.program.Send(MsgToolDone{ToolName: "update_plan", Result: planJSON})
+		}
 	case "tool.output":
 		if event.Content != "" {
 			m.program.Send(MsgToolOutput{ToolName: event.ToolName, Content: event.Content})

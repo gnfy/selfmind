@@ -857,16 +857,20 @@ func renderWriteFileCell(content string, duration float64, width int) string {
 }
 
 var (
-	planDoneTextStyle = lipgloss.NewStyle().Faint(true).Strikethrough(true) // completed: struck-through + dim
+	planDoneTextStyle = lipgloss.NewStyle().Faint(true).Strikethrough(true)             // completed: struck-through + dim
 	planActiveStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("39")).Bold(true) // in-progress: cyan bold
-	planPendingStyle  = lipgloss.NewStyle().Faint(true)                     // pending: dim
-	planExplStyle     = lipgloss.NewStyle().Faint(true).Italic(true)        // explanation note
+	planPendingStyle  = lipgloss.NewStyle().Faint(true)                                 // pending: dim
+	planExplStyle     = lipgloss.NewStyle().Faint(true).Italic(true)                    // explanation note
 	planHeaderStyle   = lipgloss.NewStyle().Bold(true)
 	planFaintStyle    = lipgloss.NewStyle().Faint(true)
 )
 
 const (
-	maxPlanSteps  = 20
+	// maxPlanSteps is an extreme backstop only: a normal plan must render in full
+	// so the user always perceives complete progress. Kept high enough that real
+	// plans are never truncated; the "… N more steps" guard fires only for
+	// pathological plans well beyond any legitimate size.
+	maxPlanSteps  = 50
 	glyphPlanDone = "✔" // ✔ completed
 	glyphPlanBox  = "□" // □ pending / in-progress (codex distinguishes by color, not glyph)
 )

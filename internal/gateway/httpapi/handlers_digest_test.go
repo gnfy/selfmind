@@ -158,6 +158,35 @@ func TestDigestEmptyWorldStaysEmpty(t *testing.T) {
 	}
 }
 
+// TestDigestReportsApprovalMode: the digest carries the person's effective
+// approval mode so a client can show it in the status bar from startup. It is
+// person state, not a "while you were away" item, so it never makes the digest
+// non-empty.
+func TestDigestReportsApprovalMode(t *testing.T) {
+	daemon, store, identity := newDigestTestServer(t)
+
+	// Unset → on-request default, and the digest still reads as empty.
+	digest := fetchDigest(t, daemon)
+	if digest.ApprovalMode != "on-request" {
+		t.Fatalf("default approval mode = %q, want on-request", digest.ApprovalMode)
+	}
+	if !digest.Empty() {
+		t.Fatalf("approval mode must not make the digest non-empty: %+v", digest)
+	}
+
+	// Persisted mode is reflected.
+	if err := store.SetPersonSetting(context.Background(), identity.TenantID, identity.PersonID, personSettingApprovalMode, "smart"); err != nil {
+		t.Fatal(err)
+	}
+	digest = fetchDigest(t, daemon)
+	if digest.ApprovalMode != "smart" {
+		t.Fatalf("approval mode = %q, want smart", digest.ApprovalMode)
+	}
+	if !digest.Empty() {
+		t.Fatalf("approval mode must not make the digest non-empty: %+v", digest)
+	}
+}
+
 // TestDigestAnchorsOnAccountLastSeen: once a presence beat has stamped
 // accounts.last_seen_at, the digest window starts there — tasks that finished
 // while the user was watching are not re-reported on the next attach.

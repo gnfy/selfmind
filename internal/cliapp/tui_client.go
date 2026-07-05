@@ -78,6 +78,9 @@ func (a *App) tryRunTUIClient(cfg *config.Config) (int, bool) {
 	// digest, it never blocks the TUI.
 	if digest, err := client.Digest(a.ctx); err == nil {
 		ctrl.SetStartupDigest(digest)
+		// Learn the person's effective approval mode so the status bar shows it
+		// from startup (the daemon owns it via person_settings /mode).
+		ctrl.SetPersistedApprovalMode(digest.ApprovalMode)
 	}
 	// Idle-TUI presence heartbeat: the event poller only runs mid-turn, so
 	// without this loop an open-but-idle TUI reads as detached and CLI-origin

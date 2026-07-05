@@ -17,6 +17,7 @@ import (
 
 	"selfmind/internal/control"
 	"selfmind/internal/gateway/api"
+	"selfmind/internal/tools"
 )
 
 const (
@@ -135,6 +136,16 @@ func (d *Server) buildDigest(ctx context.Context, identity *control.IdentityCont
 		}
 		out.ActiveRun = run
 	}
+
+	// Effective approval mode: the person's persisted /mode preference, or
+	// on-request when unset. Lets a client show the current mode in its status
+	// bar from startup instead of guessing the local default.
+	mode := ""
+	if pref, err := d.Control.GetPersonSetting(ctx, identity.TenantID, identity.PersonID, personSettingApprovalMode); err == nil {
+		mode = strings.TrimSpace(pref)
+	}
+	out.ApprovalMode = string(tools.NormalizeApprovalMode(mode))
+
 	return out, nil
 }
 

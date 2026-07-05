@@ -85,43 +85,48 @@ type uiModel struct {
 	messageProcessor   MessageProcessor
 	tenantID           string
 	channel            string // 'cli' | 'wechat' | 'dingtalk' | 'web'
-	approvalMode       string // codex-style: on-request | read-only | auto-edit | full-auto
-	spinner            spinner.Model
-	inputHistory       []string
-	historyIndex       int
-	historyDraft       string
-	sessionSearchFn    func(query string, limit int) (interface{}, error)
-	clarifyBridge      *tools.ClarifyBridge
-	cancelFn           context.CancelFunc
-	steerCh            chan string // mid-turn guidance channel for the active run (nil when idle)
-	clarifyMode        bool
-	clarifyChoices     []string
-	clarifyReq         tools.ClarifyRequest
-	secretMode         bool
-	secretKey          string
-	statusMsg          string    // Transient status message
-	thinkingDots       int       // Counter for "..." animation
-	thinkingStart      time.Time // When current thinking started
-	activityText       string    // Current model/tool phase shown in transcript
-	runStatus          string    // ready | working | done | error | cancelled
-	migrationHint      string    // Hint for migrating Hermes skills
-	streamController   markdownStreamController
-	liveStreamContent  string
-	streamFlushPending bool
-	cursorVisible      bool
-	mouseDragActive    bool
-	mouseAutoScrollDir int
-	mouseScrollTicking bool
-	mouseSelection     bool
-	mouseSelectAnchor  int
-	mouseSelectFocus   int
-	transcriptCache    *renderCache // memoizes finalized message renders across frames
-	clientMode         bool         // daemon-client mode: no in-process agent/gateway; chat routes to the daemon
-	toolDispatchFn     func(tool string, args map[string]interface{}) (string, error) // client mode: run management tools on the daemon
-	approvalResponder  func(approvalID, decision string) error // client mode: answer a daemon tool-approval request
-	steerFn            func(text string) error                 // client mode: forward mid-turn guidance to the daemon's active run
-	awaitingApproval   bool                                    // an inline approval prompt is active
-	pendingApprovalID  string
+	approvalMode       string // codex-style session override: on-request | read-only | auto-edit | full-auto | smart. In client mode "" means "defer to the person's persisted mode".
+	// persistedApprovalMode is the person's daemon-side effective mode, learned
+	// from GET /v1/digest at startup. It backs the status-bar display when the
+	// session has no explicit override (approvalMode == ""), so the bar always
+	// shows the real effective mode instead of nothing.
+	persistedApprovalMode string
+	spinner               spinner.Model
+	inputHistory          []string
+	historyIndex          int
+	historyDraft          string
+	sessionSearchFn       func(query string, limit int) (interface{}, error)
+	clarifyBridge         *tools.ClarifyBridge
+	cancelFn              context.CancelFunc
+	steerCh               chan string // mid-turn guidance channel for the active run (nil when idle)
+	clarifyMode           bool
+	clarifyChoices        []string
+	clarifyReq            tools.ClarifyRequest
+	secretMode            bool
+	secretKey             string
+	statusMsg             string    // Transient status message
+	thinkingDots          int       // Counter for "..." animation
+	thinkingStart         time.Time // When current thinking started
+	activityText          string    // Current model/tool phase shown in transcript
+	runStatus             string    // ready | working | done | error | cancelled
+	migrationHint         string    // Hint for migrating Hermes skills
+	streamController      markdownStreamController
+	liveStreamContent     string
+	streamFlushPending    bool
+	cursorVisible         bool
+	mouseDragActive       bool
+	mouseAutoScrollDir    int
+	mouseScrollTicking    bool
+	mouseSelection        bool
+	mouseSelectAnchor     int
+	mouseSelectFocus      int
+	transcriptCache       *renderCache                                                   // memoizes finalized message renders across frames
+	clientMode            bool                                                           // daemon-client mode: no in-process agent/gateway; chat routes to the daemon
+	toolDispatchFn        func(tool string, args map[string]interface{}) (string, error) // client mode: run management tools on the daemon
+	approvalResponder     func(approvalID, decision string) error                        // client mode: answer a daemon tool-approval request
+	steerFn               func(text string) error                                        // client mode: forward mid-turn guidance to the daemon's active run
+	awaitingApproval      bool                                                           // an inline approval prompt is active
+	pendingApprovalID     string
 	// Attach digest + re-attach (client mode, G0-c/G0-d): the client shell
 	// fetches the digest before the first presence beat and hands it over via
 	// SetStartupDigest; the first sized frame renders it once, and when it
@@ -138,9 +143,9 @@ type uiModel struct {
 	// exitPromptActive intercepts keys while the quit-with-active-run prompt
 	// is shown (b = background+quit, c = cancel+stay, esc = keep watching).
 	exitPromptActive bool
-	hybrid             bool         // terminal-first hybrid mode (SELFMIND_TUI_HYBRID)
-	pendingPrintln     []string     // hybrid: cells to emit to scrollback at end of Update
-	startupCommitted   bool         // hybrid: startup card already printed to scrollback
+	hybrid           bool     // terminal-first hybrid mode (SELFMIND_TUI_HYBRID)
+	pendingPrintln   []string // hybrid: cells to emit to scrollback at end of Update
+	startupCommitted bool     // hybrid: startup card already printed to scrollback
 }
 
 type MsgClearStatus struct{}
@@ -305,6 +310,38 @@ func (c *Controller) SetClientMode(enabled bool) {
 		return
 	}
 	c.model.clientMode = enabled
+	if enabled {
+		// In client mode the daemon owns the effective approval mode (the
+		// person's persisted /mode). Clear the local default so requests defer
+		// to it; the status bar shows the persisted value fetched from the digest
+		// until the user sets a session override with /mode.
+		c.model.approvalMode = ""
+	}
+}
+
+// SetPersistedApprovalMode records the person's daemon-side effective approval
+// mode (from GET /v1/digest) so the status bar can show it from startup, before
+// any /mode override. Empty input is ignored.
+func (c *Controller) SetPersistedApprovalMode(mode string) {
+	if c == nil || c.model == nil {
+		return
+	}
+	if m := strings.TrimSpace(mode); m != "" {
+		c.model.persistedApprovalMode = m
+	}
+}
+
+// effectiveApprovalMode is the mode shown in the status bar and used for
+// display: a session override wins, else the persisted mode from the digest,
+// else the on-request default.
+func (m *uiModel) effectiveApprovalMode() string {
+	if mode := strings.TrimSpace(m.approvalMode); mode != "" {
+		return mode
+	}
+	if mode := strings.TrimSpace(m.persistedApprovalMode); mode != "" {
+		return mode
+	}
+	return "on-request"
 }
 
 // SetApprovalResponder installs the function used to answer a daemon
@@ -927,11 +964,11 @@ func (m *uiModel) statusLine() string {
 	}
 	parts = append(parts, st.Status.Good.Render(state))
 
-	// Show the approval mode unless it's the default, so an elevated mode
-	// (auto-edit / full-auto) is always visible.
-	if m.approvalMode != "" && m.approvalMode != "on-request" {
-		parts = append(parts, st.Status.Label.Render("mode:"+m.approvalMode))
-	}
+	// Always show the effective approval mode so the user can see it at a glance.
+	// In client mode approvalMode is "" (defers to the daemon); the effective
+	// value comes from the persisted mode learned via the startup digest, falling
+	// back to on-request when unknown.
+	parts = append(parts, st.Status.Label.Render("mode:"+m.effectiveApprovalMode()))
 
 	ctrlHint := "Ctrl+C exit"
 	if m.thinking || m.toolExecuting != "" {

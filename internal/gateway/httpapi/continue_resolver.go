@@ -288,15 +288,18 @@ func (c *RunCoordinator) resumeChangedFiles(ctx context.Context, task *control.T
 		switch ev.Type {
 		case "tool.started":
 			switch tool {
-			case "write_file":
-				add(pathFromArgsJSON(asString(payload["args"])))
-			case "patch":
+			case "patch", "apply_patch":
 				for _, p := range patchPathsFromArgsJSON(asString(payload["args"])) {
 					add(p)
 				}
+			case "write_file", "edit", "edit_file":
+				// Single-path file-mutating tools carry the target under
+				// path/file_path/output_path — never read_file (a read, not a change).
+				add(pathFromArgsJSON(asString(payload["args"])))
 			}
 		case "tool.completed":
-			if tool == "write_file" {
+			switch tool {
+			case "write_file", "edit", "edit_file":
 				add(pathFromWriteResultHeader(asString(payload["result"])))
 			}
 		}
@@ -320,20 +323,29 @@ func asString(v interface{}) string {
 	return ""
 }
 
-// pathFromArgsJSON extracts the "path" field from a write_file tool's recorded
-// args JSON (a JSON string held in the event payload).
+// pathFromArgsJSON extracts the target path from a single-path file tool's
+// recorded args JSON (a JSON string held in the event payload). Different tools
+// name the field differently (write_file: path; some edit tools: file_path or
+// output_path), so it checks each in priority order.
 func pathFromArgsJSON(argsJSON string) string {
 	argsJSON = strings.TrimSpace(argsJSON)
 	if argsJSON == "" {
 		return ""
 	}
 	var args struct {
-		Path string `json:"path"`
+		Path       string `json:"path"`
+		FilePath   string `json:"file_path"`
+		OutputPath string `json:"output_path"`
 	}
 	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
 		return ""
 	}
-	return args.Path
+	for _, p := range []string{args.Path, args.FilePath, args.OutputPath} {
+		if strings.TrimSpace(p) != "" {
+			return p
+		}
+	}
+	return ""
 }
 
 // patchPathsFromArgsJSON extracts every file path a V4A patch touches from the

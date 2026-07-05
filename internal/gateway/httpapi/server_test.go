@@ -676,6 +676,59 @@ func TestWorkspacePreservedOnResume(t *testing.T) {
 	}
 }
 
+// TestResumeChangedFilesHarvestsPatchAndEditPaths proves the resume manifest
+// covers V4A patch/apply_patch headers and edit-tool file_path args, not just
+// write_file — so a continuation of a run that used any file-mutating tool still
+// knows the exact paths to edit.
+func TestResumeChangedFilesHarvestsPatchAndEditPaths(t *testing.T) {
+	store, err := control.OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	ctx := httptest.NewRequest(http.MethodGet, "/", nil).Context()
+	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Local User")
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := store.CreateTask(ctx, control.TaskCreate{
+		TenantID: identity.TenantID,
+		PersonID: identity.PersonID,
+		Title:    "Refactor the module",
+		Channel:  "cli",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	events := []control.Event{
+		{Type: "tool.started", Payload: mustJSON(map[string]interface{}{"tool": "patch", "args": `{"patch":"*** Begin Patch\n*** Update File: internal/foo.go\n*** End Patch"}`})},
+		{Type: "tool.started", Payload: mustJSON(map[string]interface{}{"tool": "apply_patch", "args": `{"patch":"*** Begin Patch\n*** Add File: internal/bar.go\n*** End Patch"}`})},
+		{Type: "tool.started", Payload: mustJSON(map[string]interface{}{"tool": "edit", "args": `{"file_path":"internal/baz.go"}`})},
+	}
+	for _, ev := range events {
+		ev.TaskID = task.ID
+		ev.Visibility = "task"
+		ev.Channel = "cli"
+		if _, err := store.AppendEvent(ctx, ev); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	daemon := &Server{Control: store, DefaultTenantID: "default"}
+	got := daemon.coordinator().resumeChangedFiles(ctx, task, nil, 10)
+	want := map[string]bool{"internal/foo.go": false, "internal/bar.go": false, "internal/baz.go": false}
+	for _, p := range got {
+		if _, ok := want[p]; ok {
+			want[p] = true
+		}
+	}
+	for p, seen := range want {
+		if !seen {
+			t.Fatalf("resume manifest missing %q, got %v", p, got)
+		}
+	}
+}
+
 func TestTaskEventsEndpoint(t *testing.T) {
 	t.Setenv("SELF_GATEWAY_TOKEN", "")
 	store, err := control.OpenStore(t.TempDir())

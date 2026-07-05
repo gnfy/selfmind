@@ -164,9 +164,17 @@ Domain docs (**mandatory** before changing that domain):
   `kernel.RuntimeContextBundle` (workspace, task, selected memory, notes,
   budgets) before prompt rendering — extend the bundle or its selector, never
   append prompt fragments in unrelated handlers.
-- `internal/kernel/context_engine.go` stays on the streaming hot path: bounded
-  recent-history slice, no synchronous LLM summarization by default
-  (diagnostic-only compaction gates behind `SELFMIND_SYNC_CONTEXT_SUMMARY`).
+- `internal/kernel/context_engine.go` stays on the streaming hot path: a bounded
+  recent-history slice and no LLM work while under budget. Over-budget context
+  compacts by DEFAULT — the middle turns become ONE structured summary while the
+  head (system + original task) and tail (recent turns) stay verbatim; it never
+  silently drops the oldest turns when a summarizer is wired. The summarizer is
+  the cheap `memory_extract` role (via `Agent.SetSummaryProvider`), OFF the main
+  provider, called only at the over-threshold moment — never per turn. The
+  summary prompt (and a deterministic tool-arg path harvest) MUST retain the
+  created/modified/read file paths. Fall back to deterministic trim only when no
+  summarizer exists. `SELFMIND_SYNC_CONTEXT_SUMMARY` is legacy (compaction runs
+  without it); guard against empty/larger/recursive summaries.
 - Memory facts, session FTS recall, task handoffs, task events, and artifacts
   are separate durable sources. Ranking/embedding work extends the selector
   layer — never another append path in `agent.go`, gateway handlers, or IM

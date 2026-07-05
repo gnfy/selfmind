@@ -670,6 +670,9 @@ func InitAgent(mem *memory.MemoryManager, cfg *config.Config, tenantID string) (
 	// Simple direct-answer turns use the fast-classifier role (falls back to the
 	// default model when no fast model is configured).
 	agent.SetFastProvider(fastProvider)
+	// Over-budget context compaction runs by default on the cheap memory_extract
+	// role (kept OFF the main coding provider) instead of dropping oldest turns.
+	agent.SetSummaryProvider(memoryExtractProvider)
 	// Carry the cheap triage provider so the gateway can build the smart-mode
 	// approval judge (H2) from it, without kernel depending on concrete tools.
 	agent.SetApprovalJudgeProvider(judgeProvider)

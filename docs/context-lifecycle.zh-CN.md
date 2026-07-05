@@ -182,11 +182,27 @@ per-turn prompt contract for workspace, task runtime state, selected memory
 snippets, selection notes, and bounded context budgets. Future context work
 should extend this bundle or the gateway selector that feeds it.
 
-`internal/kernel/context_engine.go` is intentionally cheap on the default hot
-path: it loads only a bounded slice of recent channel history and performs
-deterministic trimming. Synchronous LLM summarization is disabled by default
-because it delays the first visible token and makes the CLI feel stuck. It can
-be enabled only for diagnostics with `SELFMIND_SYNC_CONTEXT_SUMMARY=1`.
+`internal/kernel/context_engine.go` is cheap on the hot path: while the window
+is under budget it loads only a bounded slice of recent channel history and does
+no LLM work. When the window grows past `summaryThreshold` (¾ of the budget) it
+**compacts by default** (契约变更, 2026-07-05): the drop-eligible MIDDLE turns are
+summarized into ONE structured message, while the head (system prompt + the
+first user turn = original task) and the tail (最近 `compactionTailTurns` 条) are
+kept verbatim. 这取代了旧的"默认直接丢弃最旧消息"行为——长对话不再"失忆"。
+
+关键约束:
+
+- 摘要用便宜的 `memory_extract` 角色 provider(`Agent.SetSummaryProvider` →
+  `ContextEngine.SetSummaryProvider`),不占用主 coding provider;只在越过阈值那一
+  刻做一次有界调用,绝不每轮调用,所以流式首 token 不受影响。
+- 摘要 prompt 强制保留 `## Relevant Files`(任务目标、决策、下一步,以及所有
+  创建/修改/读取的文件路径)。另有一个确定性兜底:从工具调用参数
+  (`path`/`file_path`/`output_path`/`workdir` 和 V4A `patch`/`apply_patch` 头)
+  抽取路径,模型漏写时自动补上,保证 artifact 清单不丢。
+- 兜底策略:没有 summarizer 时退回确定性裁剪(旧行为);摘要为空、摘要不比被替换
+  的片段更小、或中段本身已是上一份摘要时,都跳过压缩,永不增长窗口或递归叠加摘要。
+- `SELFMIND_SYNC_CONTEXT_SUMMARY` 现为遗留开关:压缩默认已开,不再需要它;它仅在
+  没有配置 summarizer 角色时,允许回退用主 provider 做压缩。
 
 Streaming feedback now relies on larger event buffers and critical-event
 delivery backpressure. CLI/TUI should show tool and assistant progress live;

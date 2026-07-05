@@ -30,6 +30,7 @@ type Agent struct {
 	backend            AgentBackend
 	llm                llm.Provider
 	fastProvider       llm.Provider                 // optional fast model for simple direct-answer turns
+	summaryProvider    llm.Provider                 // optional cheap model for over-budget context compaction, kept OFF the main run provider
 	judgeProvider      llm.Provider                 // optional cheap model for smart-mode approval triage (H2), kept OFF the main run provider
 	runLLM             llm.Provider                 // per-run active provider, set under runMu
 	skillInventory     func(tenantID string) string // optional: compact learned-skill list for the prompt
@@ -136,6 +137,21 @@ func (a *Agent) SetFastProvider(p llm.Provider) {
 	a.fastProvider = p
 }
 
+// SetSummaryProvider installs the cheap provider used to compact over-budget
+// context into a summary (the memory_extract role, kept OFF the main coding
+// provider). It is remembered so SetContextWindow, which rebuilds the context
+// engine, can re-apply it. When unset the context engine falls back to
+// deterministic trimming.
+func (a *Agent) SetSummaryProvider(p llm.Provider) {
+	if a == nil {
+		return
+	}
+	a.summaryProvider = p
+	if a.contextEngine != nil {
+		a.contextEngine.SetSummaryProvider(p)
+	}
+}
+
 // SetApprovalJudgeProvider installs the cheap role-routed provider used for
 // smart-mode approval triage (H2). The kernel only carries the provider so the
 // app/gateway layer (which owns model routing) can pick a cheap role and keep it
@@ -215,6 +231,9 @@ func (a *Agent) SetContextWindow(maxTokens int) {
 	budget := agentContextBudget(maxTokens)
 	a.contextEngine = NewContextEngine(budget, contextReserveTokens(budget))
 	a.contextEngine.SetProvider(a.llm)
+	// Re-apply the cheap compaction summarizer onto the fresh engine so default
+	// over-budget compaction survives a context-window reconfiguration.
+	a.contextEngine.SetSummaryProvider(a.summaryProvider)
 }
 
 // agentContextBudget returns the working compaction budget: min(model window,

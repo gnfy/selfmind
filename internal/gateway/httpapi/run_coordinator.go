@@ -244,14 +244,20 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 	if d.Gateway == nil {
 		err := fmt.Errorf("gateway is not configured")
 		_ = d.Control.FinishRun(context.Background(), identity.TenantID, run.ID, "failed")
-		_ = d.Control.UpdateTaskStatus(context.Background(), identity.TenantID, task.ID, "blocked", err.Error(), nil)
-		return api.MessageResponse{Identity: identity, Task: task, Run: run, Error: err.Error(), Turn: messageTurn("failed", "blocked", "idle", task.ID, run.ID, err.Error()), Context: messageContextBudget(llmUsageZero())}, http.StatusInternalServerError
+		_ = d.Control.UpdateTaskStatus(context.Background(), identity.TenantID, task.ID, "failed", err.Error(), nil)
+		return api.MessageResponse{Identity: identity, Task: task, Run: run, Error: err.Error(), Turn: messageTurn("failed", "failed", "idle", task.ID, run.ID, err.Error()), Context: messageContextBudget(llmUsageZero())}, http.StatusInternalServerError
 	}
 
 	resp, err := d.Gateway.RunAgentWithEvents(ctx, identity.PersonID, req.Channel, agentInput)
 	if err != nil {
 		status := "failed"
-		taskStatus := "blocked"
+		// A run error (provider transport failure, model error) is NOT
+		// "blocked" — blocked means waiting on the USER (approval/question).
+		// Park the task interrupted: non-terminal and resumable, so a
+		// continuation ("continue"/resume) retries it and /cancel ends it.
+		// Observed live: a codex EOF left a task "blocked" with no way to
+		// retry or finish.
+		taskStatus := "interrupted"
 		if ctx.Err() != nil {
 			status = "cancelled"
 			taskStatus = "cancelled"
@@ -264,7 +270,13 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 	content, usage, err := c.aggregateGatewayResponse(ctx, req.Channel, task, run, resp)
 	if err != nil {
 		status := "failed"
-		taskStatus := "blocked"
+		// A run error (provider transport failure, model error) is NOT
+		// "blocked" — blocked means waiting on the USER (approval/question).
+		// Park the task interrupted: non-terminal and resumable, so a
+		// continuation ("continue"/resume) retries it and /cancel ends it.
+		// Observed live: a codex EOF left a task "blocked" with no way to
+		// retry or finish.
+		taskStatus := "interrupted"
 		if ctx.Err() != nil {
 			status = "cancelled"
 			taskStatus = "cancelled"

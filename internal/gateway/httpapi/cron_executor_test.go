@@ -1,13 +1,14 @@
 package httpapi
 
 import (
+	"strings"
 	"testing"
 
 	"selfmind/internal/gateway/api"
 )
 
 func TestDeliveryContent(t *testing.T) {
-	if got := deliveryContent(api.MessageResponse{Error: "boom"}); got != "SelfMind task failed: boom" {
+	if got := deliveryContent(api.MessageResponse{Error: "boom"}); !strings.HasPrefix(got, "SelfMind task failed: boom") || !strings.Contains(got, "/cancel") {
 		t.Fatalf("error case = %q", got)
 	}
 	if got := deliveryContent(api.MessageResponse{}); got != "SelfMind task finished." {

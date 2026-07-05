@@ -154,7 +154,10 @@ func (c *RunCoordinator) deliverCronResult(ctx context.Context, req api.MessageR
 // redacted failure line, a fallback for empty output, or the response content.
 func deliveryContent(resp api.MessageResponse) string {
 	if resp.Error != "" {
-		return "SelfMind task failed: " + tools.RedactSensitive(resp.Error)
+		// The failed task parks as interrupted (resumable), so give the two
+		// ways out — retry or drop — instead of a dead-end error dump.
+		return "SelfMind task failed: " + tools.RedactSensitive(resp.Error) +
+			"\nReply \"continue\" to retry, or /cancel to drop the task."
 	}
 	content := strings.TrimSpace(resp.Content)
 	if content == "" {

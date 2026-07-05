@@ -51,7 +51,7 @@ func (m *uiModel) composerHint() string {
 	if strings.TrimSpace(m.editor.Value()) == "" {
 		return ""
 	}
-	return composerHintStyle.Render(glyphArrowInto + " Enter 将作为指导发送给运行中的任务 · sends as guidance to the running task")
+	return composerHintStyle.Render(glyphArrowInto + " Enter sends as guidance to the running task")
 }
 
 // clearHybridScreen wipes the terminal (screen + visible scrollback) and

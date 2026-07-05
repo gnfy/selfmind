@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"strconv"
@@ -12,6 +13,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"selfmind/internal/gateway/api"
+	"selfmind/internal/kernel/llm"
 	"selfmind/internal/platform/config"
 )
 
@@ -379,6 +381,36 @@ func TestStatusLineShowsTotalElapsedWhileToolRuns(t *testing.T) {
 	}
 }
 
+func TestStatusLineAlwaysShowsEffectiveApprovalMode(t *testing.T) {
+	// Explicit session override wins.
+	explicit := NewController(nil, nil, nil, "").model
+	explicit.approvalMode = "auto-edit"
+	if line := stripANSI(explicit.statusLine()); !strings.Contains(line, "mode:auto-edit") {
+		t.Fatalf("status line should show explicit mode: %q", line)
+	}
+
+	// No override → the persisted mode learned from the digest is shown.
+	c := NewController(nil, nil, nil, "")
+	c.SetClientMode(true) // clears approvalMode → defers to persisted
+	c.SetPersistedApprovalMode("smart")
+	if line := stripANSI(c.model.statusLine()); !strings.Contains(line, "mode:smart") {
+		t.Fatalf("status line should show persisted mode when no override: %q", line)
+	}
+
+	// Unknown (client mode, digest gave nothing) → on-request fallback.
+	unknown := NewController(nil, nil, nil, "")
+	unknown.SetClientMode(true)
+	if line := stripANSI(unknown.model.statusLine()); !strings.Contains(line, "mode:on-request") {
+		t.Fatalf("status line should fall back to on-request: %q", line)
+	}
+
+	// After /mode the bar updates to the new session mode.
+	unknown.model.handleMode([]string{"full-auto"})
+	if line := stripANSI(unknown.model.statusLine()); !strings.Contains(line, "mode:full-auto") {
+		t.Fatalf("status line should update after /mode: %q", line)
+	}
+}
+
 func TestAssistantMessageDoesNotRenderAsBulletList(t *testing.T) {
 	rendered := stripANSI(renderAssistantMessage("hello\nworld", 80))
 
@@ -437,6 +469,77 @@ func TestToolMessageFormatsPlanJSON(t *testing.T) {
 	}
 	if !strings.Contains(rendered, "✔ 确认环境") || !strings.Contains(rendered, "□ 写代码") {
 		t.Fatalf("plan should show per-step status markers: %q", rendered)
+	}
+}
+
+// TestForwardedPlanEventRendersChecklist proves a plan.updated stream event
+// (as delivered in daemon-client mode) renders the full multi-step checklist —
+// not a one-line "plan updated" note. It drives the same MsgToolStart/MsgToolDone
+// pair forwardGatewayEvent emits from the event payload.
+func TestForwardedPlanEventRendersChecklist(t *testing.T) {
+	event := llm.StreamEvent{
+		EventType: "plan.updated",
+		Payload: map[string]interface{}{
+			"explanation": "getting started",
+			"plan": []interface{}{
+				map[string]interface{}{"step": "read spec", "status": "completed"},
+				map[string]interface{}{"step": "write code", "status": "in_progress"},
+				map[string]interface{}{"step": "run tests", "status": "pending"},
+			},
+		},
+	}
+	planJSON := planJSONFromEvent(event)
+	if planJSON == "" {
+		t.Fatalf("planJSONFromEvent returned empty for a populated plan")
+	}
+
+	model := NewController(nil, nil, nil, "").model
+	updated, _ := model.Update(MsgToolStart{ToolName: "update_plan"})
+	model = updated.(*uiModel)
+	updated, _ = model.Update(MsgToolDone{ToolName: "update_plan", Result: planJSON})
+	model = updated.(*uiModel)
+
+	if len(model.messages) == 0 {
+		t.Fatalf("expected a plan tool cell")
+	}
+	rendered := stripANSI(renderToolMessage(model.messages[len(model.messages)-1], 120))
+	if !strings.Contains(rendered, "Updated plan · 1/3") {
+		t.Fatalf("forwarded plan should render the checklist header: %q", rendered)
+	}
+	for _, step := range []string{"read spec", "write code", "run tests"} {
+		if !strings.Contains(rendered, step) {
+			t.Fatalf("forwarded plan missing step %q: %q", step, rendered)
+		}
+	}
+	if strings.Contains(rendered, `{"plan"`) {
+		t.Fatalf("forwarded plan should not render raw JSON: %q", rendered)
+	}
+}
+
+// TestPlanChecklistShowsFullPlanUpToCap confirms a normal-sized plan renders in
+// full (no truncation) and truncation fires only beyond the raised maxPlanSteps
+// backstop.
+func TestPlanChecklistShowsFullPlanUpToCap(t *testing.T) {
+	build := func(n int) string {
+		steps := make([]map[string]string, 0, n)
+		for i := 0; i < n; i++ {
+			steps = append(steps, map[string]string{"step": "step " + strconv.Itoa(i), "status": "pending"})
+		}
+		data, _ := json.Marshal(map[string]interface{}{"plan": steps})
+		return string(data)
+	}
+
+	atCap := stripANSI(renderPlanCell(build(maxPlanSteps), 0, 120))
+	if strings.Contains(atCap, "more steps") {
+		t.Fatalf("a plan at the cap should render in full without truncation: %q", atCap)
+	}
+	if !strings.Contains(atCap, "step "+strconv.Itoa(maxPlanSteps-1)) {
+		t.Fatalf("last step at the cap should be shown: %q", atCap)
+	}
+
+	over := stripANSI(renderPlanCell(build(maxPlanSteps+1), 0, 120))
+	if !strings.Contains(over, "… 1 more steps") {
+		t.Fatalf("a plan beyond the cap should truncate with a backstop note: %q", over)
 	}
 }
 

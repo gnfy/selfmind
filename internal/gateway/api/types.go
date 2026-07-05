@@ -197,6 +197,11 @@ type DigestResponse struct {
 	// ActiveRun is the person's currently executing run, if any — the signal
 	// for a client to re-attach to its live events.
 	ActiveRun *DigestActiveRun `json:"active_run,omitempty"`
+	// ApprovalMode is the person's effective approval mode (their persisted
+	// /mode preference, or "on-request" when unset). It is point-in-time person
+	// state — NOT a "while you were away" item — so it never affects Empty();
+	// clients read it to show the current mode in the status bar from startup.
+	ApprovalMode string `json:"approval_mode,omitempty"`
 }
 
 // Empty reports whether there is literally nothing to tell the user; clients

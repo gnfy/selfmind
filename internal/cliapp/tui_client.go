@@ -87,6 +87,9 @@ func (a *App) tryRunTUIClient(cfg *config.Config) (int, bool) {
 	// digest, it never blocks the TUI.
 	if digest, err := client.Digest(a.ctx); err == nil {
 		ctrl.SetStartupDigest(digest)
+		// Learn the person's effective approval mode so the status bar shows it
+		// from startup (the daemon owns it via person_settings /mode).
+		ctrl.SetPersistedApprovalMode(digest.ApprovalMode)
 	}
 	// Presence = recent user input: every keystroke stamps the shared tracker
 	// the client's active=0|1 claim is computed from.

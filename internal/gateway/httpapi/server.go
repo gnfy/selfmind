@@ -574,9 +574,22 @@ func (c *RunCoordinator) bindTaskWorkspaceIfMissing(ctx context.Context, identit
 
 func (c *RunCoordinator) workspaceForTask(ctx context.Context, identity *control.IdentityContext, task *control.Task, req api.MessageRequest) (*control.Workspace, error) {
 	store := c.srv.Control
-	workspaceID := req.WorkspaceID
-	if workspaceID == "" && task != nil {
+	// The task's own workspace binding is authoritative and must survive a
+	// resume/continue. resolveTask already set task.WorkspaceID to the request
+	// workspace for NEW tasks (so preferring the task matches the request there),
+	// but a continuation attaches to an EXISTING task whose workspace differs
+	// from the client's cwd-derived one (prepareRequestWorkspace sets
+	// req.WorkspaceID from ClientCWD for local CLI turns). If req won here, a CLI
+	// `继续` of an IM task would run in the terminal's cwd instead of the dir the
+	// prior run built in — tripping out-of-root approvals and rediscovering the
+	// wrong files. Fall back to the request/current workspace only when the task
+	// has no binding of its own.
+	workspaceID := ""
+	if task != nil {
 		workspaceID = task.WorkspaceID
+	}
+	if workspaceID == "" {
+		workspaceID = req.WorkspaceID
 	}
 	if workspaceID == "" {
 		return store.CurrentWorkspace(ctx, identity.TenantID, identity.PersonID)

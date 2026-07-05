@@ -671,7 +671,7 @@ func (m *uiModel) handleMode(args []string) tea.Cmd {
 		}
 		m.addMessage("assistant", fmt.Sprintf(
 			"Approval mode: %s\n\n  on-request  ask only on risky ops (default)\n  read-only   ask before any file write or command\n  auto-edit   auto-apply in-workspace edits; ask before commands\n  full-auto   run everything without asking (hard-floor safety limits still apply)\n  smart       auto-run clearly safe risky ops after LLM triage; ask otherwise\n\nUsage: /mode <on-request|read-only|auto-edit|full-auto|smart>",
-			current))
+			m.effectiveApprovalMode()))
 		return nil
 	}
 	mode := string(tools.NormalizeApprovalMode(args[0]))

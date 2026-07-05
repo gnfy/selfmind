@@ -79,10 +79,42 @@ func TestEventToStreamMapping(t *testing.T) {
 	}
 
 	// Bookkeeping types are skipped (the live UI does not render them).
-	for _, typ := range []string{"plan.updated", "run.outcome", "turn.completed", "stream"} {
+	for _, typ := range []string{"run.outcome", "turn.completed", "stream"} {
 		if _, ok := eventToStream(control.Event{ID: "x", Type: typ}); ok {
 			t.Fatalf("type %q should be skipped", typ)
 		}
+	}
+}
+
+// TestEventToStreamForwardsPlan verifies plan.updated is forwarded (not skipped)
+// with the full structured plan payload, so client-mode TUIs can render the live
+// checklist instead of dropping the plan step list.
+func TestEventToStreamForwardsPlan(t *testing.T) {
+	ev := control.Event{
+		ID:   "p1",
+		Type: "plan.updated",
+		Payload: mustJSON(map[string]any{
+			"explanation": "starting work",
+			"plan": []map[string]any{
+				{"step": "read spec", "status": "completed"},
+				{"step": "write code", "status": "in_progress"},
+				{"step": "run tests", "status": "pending"},
+			},
+		}),
+	}
+	se, ok := eventToStream(ev)
+	if !ok {
+		t.Fatalf("plan.updated should be forwarded")
+	}
+	if se.EventType != "plan.updated" {
+		t.Fatalf("EventType = %q, want plan.updated", se.EventType)
+	}
+	steps, ok := se.Payload["plan"].([]interface{})
+	if !ok || len(steps) != 3 {
+		t.Fatalf("plan payload not forwarded intact: %+v", se.Payload)
+	}
+	if se.Payload["explanation"] != "starting work" {
+		t.Fatalf("explanation not forwarded: %+v", se.Payload)
 	}
 }
 

@@ -370,6 +370,7 @@ CREATE TABLE IF NOT EXISTS task_queue (
 	approval_mode TEXT,
 	workspace_id TEXT,
 	status TEXT NOT NULL DEFAULT 'queued',
+	restarts INTEGER NOT NULL DEFAULT 0,
 	created_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_task_queue_person ON task_queue(tenant_id, person_id, status, created_at);`
@@ -399,6 +400,11 @@ CREATE INDEX IF NOT EXISTS idx_task_queue_person ON task_queue(tenant_id, person
 		// (""/task/person) recorded when an approval is answered; older DBs
 		// created before the layered approval funnel lack the column.
 		{"approval_requests", "decision_scope", "TEXT"},
+		// restarts counts boot requeues of a 'started' row. Without a cap a
+		// queued task whose run never finishes before the next daemon restart
+		// resurrects FOREVER (observed live: a 10-min task + repeated deploy
+		// restarts spawned 5 duplicate task corpses).
+		{"task_queue", "restarts", "INTEGER NOT NULL DEFAULT 0"},
 	} {
 		if err := s.ensureColumn(ctx, col.table, col.name, col.def); err != nil {
 			return err

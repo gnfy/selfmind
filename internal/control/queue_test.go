@@ -64,9 +64,10 @@ func TestTaskQueueLifecycle(t *testing.T) {
 		t.Fatalf("started count = %d; want 1", n)
 	}
 
-	// RequeueStartedQueued flips it back (boot recovery).
-	if n, err := store.RequeueStartedQueued(ctx); err != nil || n != 1 {
-		t.Fatalf("RequeueStartedQueued = %d, %v; want 1", n, err)
+	// RequeueStartedQueued flips it back (boot recovery), consuming its one
+	// restart credit.
+	if n, dropped, err := store.RequeueStartedQueued(ctx); err != nil || n != 1 || dropped != 0 {
+		t.Fatalf("RequeueStartedQueued = %d/%d, %v; want 1/0", n, dropped, err)
 	}
 	if n, _ := store.CountQueued(ctx, tenant, person, QueueStatusQueued); n != 2 {
 		t.Fatalf("after requeue queued count = %d; want 2", n)

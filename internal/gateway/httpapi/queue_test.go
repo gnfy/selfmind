@@ -296,3 +296,73 @@ func TestStopCancelsStuckTaskWhenNoRun(t *testing.T) {
 		t.Fatalf("second stop should report terminal/none, got %q", resp.Content)
 	}
 }
+
+// TestBootRequeueIsCapped reproduces the live resurrection loop: a 'started'
+// row whose run never finalizes before the next daemon restart must be
+// requeued at most maxQueueRestarts times, then dropped as failed — not
+// resurrected at every boot forever (observed live: five duplicate task
+// corpses after a day of deploy restarts).
+func TestBootRequeueIsCapped(t *testing.T) {
+	provider := newSlowLLMProvider("done")
+	provider.releaseNow()
+	daemon, store, _ := newDetachedRunServer(t, provider)
+	ctx := context.Background()
+	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Local")
+	if err != nil {
+		t.Fatal(err)
+	}
+	q, _ := store.EnqueueQueued(ctx, control.QueuedTask{TenantID: identity.TenantID, PersonID: identity.PersonID, Platform: "cli", PlatformUserID: "local", Channel: "cli", Content: "long survivor"})
+	_ = store.MarkQueued(ctx, identity.TenantID, q.ID, control.QueueStatusStarted)
+
+	// Boot 1: within budget → requeued.
+	requeued, dropped, err := store.RequeueStartedQueued(ctx)
+	if err != nil || requeued != 1 || dropped != 0 {
+		t.Fatalf("boot1 requeue = %d/%d, %v; want 1/0", requeued, dropped, err)
+	}
+	// Simulate it launching again and the daemon dying again.
+	_ = store.MarkQueued(ctx, identity.TenantID, q.ID, control.QueueStatusStarted)
+
+	// Boot 2: budget exhausted → dropped as failed, never requeued.
+	requeued, dropped, err = store.RequeueStartedQueued(ctx)
+	if err != nil || requeued != 0 || dropped != 1 {
+		t.Fatalf("boot2 requeue = %d/%d, %v; want 0/1", requeued, dropped, err)
+	}
+	if n, _ := store.CountQueued(ctx, identity.TenantID, identity.PersonID, control.QueueStatusQueued); n != 0 {
+		t.Fatalf("row must not be queued after budget exhaustion, queued=%d", n)
+	}
+	_ = daemon
+}
+
+// TestDrainCancelsQueuedSlashCommands: poison rows (slash content enqueued
+// before the unknown-slash gate existed) are cancelled at drain time, never
+// launched as agent runs; the next real item still drains.
+func TestDrainCancelsQueuedSlashCommands(t *testing.T) {
+	provider := newSlowLLMProvider("done")
+	provider.releaseNow()
+	daemon, store, _ := newDetachedRunServer(t, provider)
+	ctx := context.Background()
+	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Local")
+	if err != nil {
+		t.Fatal(err)
+	}
+	junk, _ := store.EnqueueQueued(ctx, control.QueuedTask{TenantID: identity.TenantID, PersonID: identity.PersonID, Platform: "cli", PlatformUserID: "local", Channel: "cli", Content: "/qwer"})
+	real, _ := store.EnqueueQueued(ctx, control.QueuedTask{TenantID: identity.TenantID, PersonID: identity.PersonID, Platform: "cli", PlatformUserID: "local", Channel: "cli", Content: "real queued work"})
+
+	daemon.DrainQueuedAtBoot(ctx)
+
+	waitUntil(t, 30*time.Second, func() bool {
+		j, _ := store.GetQueued(ctx, identity.TenantID, junk.ID)
+		return j != nil && j.Status == control.QueueStatusCancelled
+	}, "slash row was not cancelled at drain")
+	waitUntil(t, 30*time.Second, func() bool {
+		r, _ := store.GetQueued(ctx, identity.TenantID, real.ID)
+		return r != nil && r.Status == control.QueueStatusStarted
+	}, "real row after the slash row never drained")
+	// The junk must never have become a task.
+	tasks, _ := store.ListTasks(ctx, identity.TenantID, identity.PersonID, 20)
+	for _, task := range tasks {
+		if strings.Contains(task.Title, "/qwer") {
+			t.Fatalf("queued slash command became a task: %+v", task)
+		}
+	}
+}

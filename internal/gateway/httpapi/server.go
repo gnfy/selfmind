@@ -1089,7 +1089,14 @@ func (d *Server) tryHandleControlCommand(ctx context.Context, identity *control.
 				Payload:    mustJSON(map[string]string{"reason": "user requested stop"}),
 			})
 		}
-		return true, fmt.Sprintf("Stopping run %s.", fallback(active.RunID, "(starting)")), nil
+		reply := fmt.Sprintf("Stopping run %s.", fallback(active.RunID, "(starting)"))
+		// Queued work auto-starts when this run finalizes (the G1+G2 drain
+		// contract). Say so, or the next task popping up right after a /stop
+		// reads as "stop did nothing" (observed live).
+		if n, err := d.Control.CountQueued(ctx, identity.TenantID, identity.PersonID, control.QueueStatusQueued); err == nil && n > 0 {
+			reply += fmt.Sprintf(" %d queued task(s) will start next — /queue clear to drop them.", n)
+		}
+		return true, reply, nil
 	case strings.HasPrefix(lower, "/cancel"):
 		// Explicit "terminate a stuck task" — same as /stop's no-run fallback,
 		// but a clearer verb for a task that is parked rather than running.

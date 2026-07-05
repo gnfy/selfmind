@@ -135,6 +135,22 @@ func (s *Store) NextQueued(ctx context.Context, tenantID, personID string) (*Que
 	return &q, nil
 }
 
+// GetQueued fetches one queue row by id (any status). Diagnostic/test helper.
+func (s *Store) GetQueued(ctx context.Context, tenantID, id string) (*QueuedTask, error) {
+	row := s.db.QueryRowContext(ctx,
+		`SELECT `+queueSelectColumns+`
+		 FROM task_queue WHERE tenant_id = ? AND id = ?`,
+		normalizeTenant(tenantID), id)
+	q, err := scanQueuedTask(row)
+	if err != nil {
+		if strings.Contains(err.Error(), "no rows") {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &q, nil
+}
+
 // CountQueued returns how many rows a person has in the given status. Used for
 // the "N ahead" acceptance line and /queue.
 func (s *Store) CountQueued(ctx context.Context, tenantID, personID, status string) (int, error) {
@@ -201,18 +217,33 @@ func (s *Store) ListAllQueued(ctx context.Context, status string) ([]QueuedTask,
 	return out, rows.Err()
 }
 
-// RequeueStartedQueued flips every 'started' row back to 'queued' and returns
-// the count. Called at boot: a row left 'started' means the daemon died between
-// marking it started and the run finalizing, so it never actually ran — requeue
-// it so the boot drain picks it up. Safe because at boot the gateway.lock flock
-// guarantees no other daemon owns this control.db.
-func (s *Store) RequeueStartedQueued(ctx context.Context) (int, error) {
+// maxQueueRestarts bounds how many boots may resurrect one 'started' row. A
+// row left 'started' usually means the daemon died mid-run; ONE retry is owed.
+// Unbounded retries turn a long task + frequent restarts into an infinite
+// resurrection loop (observed live: five duplicate "tank game" task corpses
+// after a day of deploy restarts).
+const maxQueueRestarts = 1
+
+// RequeueStartedQueued flips 'started' rows back to 'queued' (boot recovery:
+// the daemon died between marking a row started and its run finalizing) and
+// returns the requeued count. Rows that already used their restart budget are
+// marked failed instead — never silently, the count of dropped rows is
+// returned too. Safe at boot: gateway.lock guarantees single ownership.
+func (s *Store) RequeueStartedQueued(ctx context.Context) (requeued, dropped int, err error) {
 	res, err := s.db.ExecContext(ctx,
-		`UPDATE task_queue SET status = ? WHERE status = ?`,
-		QueueStatusQueued, QueueStatusStarted)
+		`UPDATE task_queue SET status = ?, restarts = restarts + 1
+		 WHERE status = ? AND restarts < ?`,
+		QueueStatusQueued, QueueStatusStarted, maxQueueRestarts)
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
-	n, err := res.RowsAffected()
-	return int(n), err
+	nRequeued, _ := res.RowsAffected()
+	res, err = s.db.ExecContext(ctx,
+		`UPDATE task_queue SET status = 'failed' WHERE status = ?`,
+		QueueStatusStarted)
+	if err != nil {
+		return int(nRequeued), 0, err
+	}
+	nDropped, _ := res.RowsAffected()
+	return int(nRequeued), int(nDropped), nil
 }

@@ -11,6 +11,7 @@ import (
 
 	"selfmind/internal/control"
 	"selfmind/internal/gateway/api"
+	"selfmind/internal/platform/log"
 )
 
 // enqueueBehindActive stores a new task behind the person's active run and
@@ -53,7 +54,10 @@ func (d *Server) DrainQueuedAtBoot(ctx context.Context) {
 	if d == nil || d.Control == nil {
 		return
 	}
-	_, _ = d.Control.RequeueStartedQueued(ctx)
+	requeued, dropped, _ := d.Control.RequeueStartedQueued(ctx)
+	if dropped > 0 {
+		log.Warn("gateway: dropped queued tasks that exhausted their restart budget", "dropped", dropped, "requeued", requeued)
+	}
 	rows, err := d.Control.ListAllQueued(ctx, control.QueueStatusQueued)
 	if err != nil {
 		return

@@ -12,6 +12,7 @@ import (
 	"selfmind/internal/gateway/api"
 	"selfmind/internal/gateway/router"
 	"selfmind/internal/kernel"
+	"selfmind/internal/platform/log"
 )
 
 // RunCoordinator owns agent run execution and the per-person active-run
@@ -422,12 +423,28 @@ func (c *RunCoordinator) drainQueue(identity *control.IdentityContext) {
 	}()
 
 	ctx := context.Background()
-	next, err := c.srv.Control.NextQueued(ctx, identity.TenantID, personID)
-	if err != nil || next == nil {
-		return
-	}
-	if err := c.srv.Control.MarkQueued(ctx, identity.TenantID, next.ID, control.QueueStatusStarted); err != nil {
-		return
+	var next *control.QueuedTask
+	for {
+		var err error
+		next, err = c.srv.Control.NextQueued(ctx, identity.TenantID, personID)
+		if err != nil || next == nil {
+			return
+		}
+		if err := c.srv.Control.MarkQueued(ctx, identity.TenantID, next.ID, control.QueueStatusStarted); err != nil {
+			return
+		}
+		// A queued row is re-validated at drain time with today's inbound
+		// rules: slash-shaped content no control command claims is a mistyped
+		// COMMAND, not work — cancel it instead of launching an agent run.
+		// This also flushes poison rows enqueued before the unknown-slash
+		// reject gate existed (observed live: a queued "/qwer" resurrected as
+		// an agent task at every boot). Loop on to the next real item.
+		if trimmed := strings.TrimSpace(next.Content); strings.HasPrefix(trimmed, "/") {
+			_ = c.srv.Control.MarkQueued(ctx, identity.TenantID, next.ID, control.QueueStatusCancelled)
+			log.Warn("gateway: cancelled queued slash-command row instead of draining it", "content", trimmed)
+			continue
+		}
+		break
 	}
 	req := api.MessageRequest{
 		TenantID:       next.TenantID,

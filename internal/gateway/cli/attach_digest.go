@@ -137,6 +137,15 @@ func formatStartupDigest(digest *api.DigestResponse) string {
 			title = "untitled task"
 		}
 		lines = append(lines, fmt.Sprintf("▶ A task is running now: %s (%s) — live progress below; type a new task to queue it, or /stop to cancel.", title, formatElapsedShort(active.ElapsedSeconds)))
+		// Current progress: the run's plan checklist (server-bounded lines, the
+		// current step marked [>]) and the latest activity, so re-attaching
+		// answers "where is it?" without waiting for the next live event.
+		for _, step := range active.PlanSteps {
+			lines = append(lines, "    "+step)
+		}
+		if activity := strings.TrimSpace(active.LatestActivity); activity != "" {
+			lines = append(lines, "    now: "+activity)
+		}
 	}
 	return strings.Join(lines, "\n")
 }

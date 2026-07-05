@@ -18,6 +18,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"selfmind/internal/control"
@@ -31,6 +32,72 @@ type Client struct {
 	BaseURL string
 	Token   string
 	HTTP    *http.Client
+	// Presence honesty (docs/identity-continuity.md "Runtime attachment
+	// model"): presence must mean "the person is at this terminal", not "a
+	// terminal process is alive". IdleTimeout + LastInput let the client
+	// compute input age and stamp active=0|1 on its presence-claiming
+	// requests (the idle ping and the event polls); the daemon only touches
+	// presence for active=1. IdleTimeout <= 0 or a nil LastInput disables the
+	// idle check (every beat claims attachment — the old behavior).
+	IdleTimeout time.Duration
+	LastInput   func() time.Time
+}
+
+// InputTracker is a tiny concurrency-safe "last user input" timestamp shared
+// between the TUI (keystrokes Touch it) and the Client (heartbeats read it).
+// It is seeded with the construction time: launching the TUI is itself input.
+type InputTracker struct {
+	lastNanos atomic.Int64
+}
+
+// NewInputTracker returns a tracker seeded to now.
+func NewInputTracker() *InputTracker {
+	t := &InputTracker{}
+	t.Touch()
+	return t
+}
+
+// Touch records user input at time now.
+func (t *InputTracker) Touch() {
+	if t != nil {
+		t.lastNanos.Store(time.Now().UnixNano())
+	}
+}
+
+// Last returns the most recent input time (zero when never touched).
+func (t *InputTracker) Last() time.Time {
+	if t == nil {
+		return time.Time{}
+	}
+	nanos := t.lastNanos.Load()
+	if nanos == 0 {
+		return time.Time{}
+	}
+	return time.Unix(0, nanos)
+}
+
+// presenceActive reports whether this endpoint may still claim attachment:
+// the last user input is younger than IdleTimeout. Missing wiring or a zero
+// timeout fails open to active — never let a config gap silently mute the
+// terminal's presence.
+func (c *Client) presenceActive() bool {
+	if c == nil || c.IdleTimeout <= 0 || c.LastInput == nil {
+		return true
+	}
+	last := c.LastInput()
+	if last.IsZero() {
+		return true
+	}
+	return time.Since(last) <= c.IdleTimeout
+}
+
+// presenceActiveParam is the wire form of presenceActive for the active=0|1
+// query parameter (absent or "1" = claim presence, "0" = watching only).
+func (c *Client) presenceActiveParam() string {
+	if c.presenceActive() {
+		return "1"
+	}
+	return "0"
 }
 
 // New builds a Client. A nil http.Client falls back to a sensible default with
@@ -201,6 +268,11 @@ func (c *Client) drainEventsOnce(ctx context.Context, req api.MessageRequest, se
 	if req.DisplayName != "" {
 		q.Set("display_name", req.DisplayName)
 	}
+	// Event polls double as presence beats on the daemon; claim attachment
+	// only while the person is actually typing here (input younger than the
+	// idle timeout), so watching a long run from a vacated desk does not keep
+	// muting IM pushes.
+	q.Set("active", c.presenceActiveParam())
 	reqCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 	httpReq, err := http.NewRequestWithContext(reqCtx, http.MethodGet, c.BaseURL+"/v1/tasks/events?"+q.Encode(), nil)
@@ -411,6 +483,10 @@ func (c *Client) PingPresence(ctx context.Context) error {
 	q := url.Values{}
 	q.Set("platform", "cli")
 	q.Set("platform_user_id", clientUserID())
+	// active=0 turns the beat into a no-op on the daemon's presence registry:
+	// the loop keeps running (a keystroke re-activates the NEXT beat within
+	// 30s) but a vacated terminal stops claiming attachment.
+	q.Set("active", c.presenceActiveParam())
 	reqCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	httpReq, err := http.NewRequestWithContext(reqCtx, http.MethodGet, c.BaseURL+"/v1/presence/ping?"+q.Encode(), nil)

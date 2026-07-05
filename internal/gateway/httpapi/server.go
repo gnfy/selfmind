@@ -4,10 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strconv"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -118,10 +118,21 @@ func (d *Server) touchPresence(ctx context.Context, identity *control.IdentityCo
 	}
 }
 
+// presenceClaimed reports whether the request claims interactive presence.
+// The client stamps active=0 on heartbeats/polls once its last user INPUT is
+// older than the configured presence idle timeout (input age is only known
+// client-side); absent or any other value keeps the old always-attached
+// behavior. Presence stays derived: the daemon just honors the claim.
+func presenceClaimed(r *http.Request) bool {
+	return r.URL.Query().Get("active") != "0"
+}
+
 // handlePresencePing is the lightweight attachment heartbeat for idle
 // interactive clients (the TUI pings every 30s while open). It resolves
 // identity exactly like the other endpoints and only touches derived presence
-// state — it never mutates tasks, runs, or approvals.
+// state — it never mutates tasks, runs, or approvals. A beat with active=0
+// (no recent user input at that terminal) is a no-op on presence, so a
+// vacated TUI detaches by TTL and pushes route to the preferred IM again.
 func (d *Server) handlePresencePing(w http.ResponseWriter, r *http.Request) {
 	if !d.authorized(r) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
@@ -136,7 +147,9 @@ func (d *Server) handlePresencePing(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	d.touchPresence(r.Context(), identity)
+	if presenceClaimed(r) {
+		d.touchPresence(r.Context(), identity)
+	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
@@ -584,6 +597,14 @@ func (c *RunCoordinator) installExecutionScope(identity *control.IdentityContext
 	scope.Approval = c.toolApprovalHandler(identity, task, run, scope.Channel)
 	scope.Clarify = c.gatewayClarify(identity, task, run, scope.Channel)
 	scope.ApprovalMode = c.resolveApprovalMode(identity, req.ApprovalMode)
+	// Live mode: re-resolve at EACH ask with the same precedence as run start
+	// (explicit request mode wins, else the person's CURRENT persisted /mode).
+	// This is what makes `/mode smart` sent from IM mid-run govern the
+	// in-flight run's later approval decisions instead of a frozen snapshot.
+	reqMode := req.ApprovalMode
+	scope.ModeGetter = func() tools.ApprovalMode {
+		return c.resolveApprovalMode(identity, reqMode)
+	}
 	// Grants back class-level approval memory (session/persistent allowlist);
 	// the control store satisfies tools.ApprovalGrantStore structurally.
 	if c.srv != nil && c.srv.Control != nil {

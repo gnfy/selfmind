@@ -85,7 +85,7 @@ type uiModel struct {
 	messageProcessor   MessageProcessor
 	tenantID           string
 	channel            string // 'cli' | 'wechat' | 'dingtalk' | 'web'
-	approvalMode       string // codex-style: on-request | read-only | auto-edit | full-auto
+	approvalMode       string // codex-style; "" = unset this session (defer to the persisted /mode preference on the gateway)
 	spinner            spinner.Model
 	inputHistory       []string
 	historyIndex       int
@@ -115,12 +115,12 @@ type uiModel struct {
 	mouseSelection     bool
 	mouseSelectAnchor  int
 	mouseSelectFocus   int
-	transcriptCache    *renderCache // memoizes finalized message renders across frames
-	clientMode         bool         // daemon-client mode: no in-process agent/gateway; chat routes to the daemon
+	transcriptCache    *renderCache                                                   // memoizes finalized message renders across frames
+	clientMode         bool                                                           // daemon-client mode: no in-process agent/gateway; chat routes to the daemon
 	toolDispatchFn     func(tool string, args map[string]interface{}) (string, error) // client mode: run management tools on the daemon
-	approvalResponder  func(approvalID, decision string) error // client mode: answer a daemon tool-approval request
-	steerFn            func(text string) error                 // client mode: forward mid-turn guidance to the daemon's active run
-	awaitingApproval   bool                                    // an inline approval prompt is active
+	approvalResponder  func(approvalID, decision string) error                        // client mode: answer a daemon tool-approval request
+	steerFn            func(text string) error                                        // client mode: forward mid-turn guidance to the daemon's active run
+	awaitingApproval   bool                                                           // an inline approval prompt is active
 	pendingApprovalID  string
 	// Attach digest + re-attach (client mode, G0-c/G0-d): the client shell
 	// fetches the digest before the first presence beat and hands it over via
@@ -138,9 +138,10 @@ type uiModel struct {
 	// exitPromptActive intercepts keys while the quit-with-active-run prompt
 	// is shown (b = background+quit, c = cancel+stay, esc = keep watching).
 	exitPromptActive bool
-	hybrid             bool         // terminal-first hybrid mode (SELFMIND_TUI_HYBRID)
-	pendingPrintln     []string     // hybrid: cells to emit to scrollback at end of Update
-	startupCommitted   bool         // hybrid: startup card already printed to scrollback
+	onUserInput      func()   // presence honesty: stamped on every keystroke (SetInputActivityHook, input_activity.go)
+	hybrid           bool     // terminal-first hybrid mode (SELFMIND_TUI_HYBRID)
+	pendingPrintln   []string // hybrid: cells to emit to scrollback at end of Update
+	startupCommitted bool     // hybrid: startup card already printed to scrollback
 }
 
 type MsgClearStatus struct{}
@@ -222,7 +223,7 @@ func NewController(a *kernel.Agent, provider llm.Provider, cfg *config.Config, t
 			spinner:       sp,
 			inputHistory:  []string{},
 			historyIndex:  -1,
-			approvalMode:  "on-request",
+			approvalMode:  "", // unset: requests omit the mode so the persisted /mode preference governs
 			startTime:     time.Now(),
 			runStatus:     "ready",
 			tokenLimit:    resolveUITokenLimit(cfg, "", ""),
@@ -273,7 +274,7 @@ func NewControllerWithGateway(gw *router.Gateway, agent *kernel.Agent, provider 
 			spinner:       sp,
 			inputHistory:  []string{},
 			historyIndex:  -1,
-			approvalMode:  "on-request",
+			approvalMode:  "", // unset: requests omit the mode so the persisted /mode preference governs
 			startTime:     time.Now(),
 			runStatus:     "ready",
 			tokenLimit:    resolveUITokenLimit(cfg, providerName, modelName),
@@ -1103,6 +1104,9 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, spinnerCmd
 
 	case tea.KeyMsg:
+		if m.onUserInput != nil {
+			m.onUserInput() // presence honesty: every keystroke counts as "the person is here" (input_activity.go)
+		}
 		if m.pager != nil {
 			closed, cmd := m.pager.Update(msg)
 			if closed {

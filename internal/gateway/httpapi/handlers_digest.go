@@ -11,6 +11,8 @@ package httpapi
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -132,10 +134,128 @@ func (d *Server) buildDigest(ctx context.Context, identity *control.IdentityCont
 			if task, err := d.Control.GetTask(ctx, identity.TenantID, active.TaskID); err == nil && task != nil && strings.TrimSpace(task.Title) != "" {
 				run.Title = strings.TrimSpace(task.Title)
 			}
+			// Current progress (owner request 2026-07-05): reuse the SAME plan
+			// source /status uses (latest plan.updated task event) plus the most
+			// recent progress event, so re-attach shows where the run stands,
+			// bounded to a glanceable few lines.
+			run.PlanSteps = digestPlanLines(d.latestPlanForTask(ctx, active.TaskID))
+			run.LatestActivity = d.latestActivityForTask(ctx, active.TaskID)
 		}
 		out.ActiveRun = run
 	}
 	return out, nil
+}
+
+const (
+	// digestPlanMaxLines bounds the active run's plan rendering in the digest:
+	// enough to see progress shape, never a scrolling checklist (use /status
+	// for the full plan).
+	digestPlanMaxLines = 6
+	// digestActivityChars bounds the one-line latest-activity note.
+	digestActivityChars = 120
+)
+
+// digestPlanLines renders plan steps as bounded checklist lines. A plan that
+// fits shows whole; a longer one collapses fully-completed leading steps into
+// one summary line, keeps the current step visible, and truncates the tail
+// with "… N more steps" — progress stays obvious without dumping 20 lines.
+func digestPlanLines(plan []taskPlanStep) []string {
+	if len(plan) == 0 {
+		return nil
+	}
+	render := func(step taskPlanStep) string {
+		marker := "[ ]"
+		switch step.Status {
+		case "completed":
+			marker = "[x]"
+		case "in_progress":
+			marker = "[>]"
+		case "cancelled":
+			marker = "[-]"
+		}
+		return marker + " " + truncate(toOneLine(step.Step), 80)
+	}
+	if len(plan) <= digestPlanMaxLines {
+		lines := make([]string, 0, len(plan))
+		for _, step := range plan {
+			lines = append(lines, render(step))
+		}
+		return lines
+	}
+	// Current step: the first in_progress one, else the first not yet finished.
+	cur := -1
+	for i, step := range plan {
+		if step.Status == "in_progress" {
+			cur = i
+			break
+		}
+	}
+	if cur == -1 {
+		for i, step := range plan {
+			if step.Status != "completed" && step.Status != "cancelled" {
+				cur = i
+				break
+			}
+		}
+	}
+	if cur == -1 {
+		cur = len(plan) - 1
+	}
+	var lines []string
+	if cur > 0 {
+		lines = append(lines, fmt.Sprintf("[x] … %d earlier steps done", cur))
+	}
+	for i := cur; i < len(plan); i++ {
+		if len(lines) == digestPlanMaxLines-1 && i < len(plan)-1 {
+			lines = append(lines, fmt.Sprintf("… %d more steps", len(plan)-i))
+			return lines
+		}
+		lines = append(lines, render(plan[i]))
+	}
+	return lines
+}
+
+// latestActivityForTask summarizes the task's most recent progress event as
+// one line (tool call or thinking note) — the "what is it doing right now"
+// companion to the plan. Empty when the task has no renderable progress yet.
+func (d *Server) latestActivityForTask(ctx context.Context, taskID string) string {
+	if d == nil || d.Control == nil || taskID == "" {
+		return ""
+	}
+	events, err := d.Control.ListTaskEvents(ctx, taskID, 50)
+	if err != nil {
+		return ""
+	}
+	// ListTaskEvents is newest-first: the first renderable progress event wins.
+	for _, event := range events {
+		var payload struct {
+			Tool    string `json:"tool"`
+			Error   string `json:"error"`
+			Message string `json:"message"`
+		}
+		if len(event.Payload) > 0 {
+			_ = json.Unmarshal(event.Payload, &payload)
+		}
+		switch event.Type {
+		case "tool.started":
+			if payload.Tool != "" {
+				return truncate("running "+payload.Tool, digestActivityChars)
+			}
+		case "tool.completed":
+			if payload.Tool == "" {
+				continue
+			}
+			if payload.Error != "" {
+				return truncate(payload.Tool+" failed: "+toOneLine(payload.Error), digestActivityChars)
+			}
+			return truncate(payload.Tool+" finished", digestActivityChars)
+		case "agent.thinking", "agent.step":
+			if strings.TrimSpace(payload.Message) != "" {
+				return truncate(toOneLine(payload.Message), digestActivityChars)
+			}
+		}
+	}
+	return ""
 }
 
 func digestTasks(tasks []control.Task) []api.DigestTask {

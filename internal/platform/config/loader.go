@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/spf13/viper"
 	"go.yaml.in/yaml/v3"
@@ -42,6 +44,9 @@ storage:
 gateway:
   addr: "127.0.0.1:8765"
   token: ""
+  # How long the TUI may sit without keystrokes before it stops counting as
+  # "attached" (pushes then resume on your preferred IM). "0" = never idle.
+  presence_idle_timeout: "5m"
   outbound_webhook_url: ""
   outbound_webhook_token: ""
   telegram_token: ""
@@ -218,10 +223,19 @@ type StorageConfig struct {
 }
 
 type GatewayConfig struct {
-	Addr                    string       `mapstructure:"addr" yaml:"addr,omitempty"`
-	URL                     string       `mapstructure:"url" yaml:"url,omitempty"`
-	Token                   string       `mapstructure:"token" yaml:"token,omitempty"`
-	DrainTimeout            string       `mapstructure:"drain_timeout" yaml:"drain_timeout,omitempty"`
+	Addr         string `mapstructure:"addr" yaml:"addr,omitempty"`
+	URL          string `mapstructure:"url" yaml:"url,omitempty"`
+	Token        string `mapstructure:"token" yaml:"token,omitempty"`
+	DrainTimeout string `mapstructure:"drain_timeout" yaml:"drain_timeout,omitempty"`
+	// PresenceIdleTimeout bounds how long a TUI without user INPUT keeps
+	// claiming presence ("attached"). Presence means "the person is at this
+	// terminal", not "a terminal is open": once the last keystroke is older
+	// than this, the client's heartbeats stop claiming attachment, so pushes
+	// route to the preferred IM again. Duration string; default "5m"; "0"
+	// disables idle detection (an open TUI always counts as attached).
+	// The decision is CLIENT-side (input age is only known there); the daemon
+	// just honors the client's active=0|1 claim on presence-touching requests.
+	PresenceIdleTimeout     string       `mapstructure:"presence_idle_timeout" yaml:"presence_idle_timeout,omitempty"`
 	OutboundWebhookURL      string       `mapstructure:"outbound_webhook_url" yaml:"outbound_webhook_url,omitempty"`
 	OutboundWebhookToken    string       `mapstructure:"outbound_webhook_token" yaml:"outbound_webhook_token,omitempty"`
 	TelegramToken           string       `mapstructure:"telegram_token" yaml:"telegram_token,omitempty"`
@@ -231,6 +245,35 @@ type GatewayConfig struct {
 	Wechat                  WechatConfig `mapstructure:"wechat" yaml:"wechat,omitempty"`
 	Feishu                  FeishuConfig `mapstructure:"feishu" yaml:"feishu,omitempty"`
 	QQ                      QQConfig     `mapstructure:"qq" yaml:"qq,omitempty"`
+}
+
+// DefaultPresenceIdleTimeout is the presence_idle_timeout applied when the
+// knob is absent or unparsable: 5 minutes without a keystroke marks the
+// terminal idle so pushes resume on IM.
+const DefaultPresenceIdleTimeout = 5 * time.Minute
+
+// PresenceIdleTimeoutDuration parses presence_idle_timeout. Empty or invalid
+// values fall back to DefaultPresenceIdleTimeout; a zero (or negative)
+// duration returns 0, meaning "never idle" (the old always-attached behavior).
+func (g GatewayConfig) PresenceIdleTimeoutDuration() time.Duration {
+	raw := strings.TrimSpace(g.PresenceIdleTimeout)
+	if raw == "" {
+		return DefaultPresenceIdleTimeout
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil {
+		// Bare numbers read as seconds ("300" → 5m) so a unitless yaml value
+		// is honored instead of silently ignored.
+		if secs, serr := strconv.Atoi(raw); serr == nil {
+			d = time.Duration(secs) * time.Second
+		} else {
+			return DefaultPresenceIdleTimeout
+		}
+	}
+	if d <= 0 {
+		return 0
+	}
+	return d
 }
 
 // WechatConfig configures a WeChat Official Account (公众号). Inbound passive
@@ -570,6 +613,7 @@ func (c *Config) Normalize() {
 	c.Gateway.URL = expandEnvRef(c.Gateway.URL)
 	c.Gateway.Token = expandEnvRef(c.Gateway.Token)
 	c.Gateway.DrainTimeout = expandEnvRef(c.Gateway.DrainTimeout)
+	c.Gateway.PresenceIdleTimeout = expandEnvRef(c.Gateway.PresenceIdleTimeout)
 	c.Gateway.OutboundWebhookURL = expandEnvRef(c.Gateway.OutboundWebhookURL)
 	c.Gateway.OutboundWebhookToken = expandEnvRef(c.Gateway.OutboundWebhookToken)
 	c.Gateway.TelegramToken = expandEnvRef(c.Gateway.TelegramToken)

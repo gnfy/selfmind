@@ -308,6 +308,34 @@ provider_profiles:
       thinking_mode: "omit"
 ```
 
+## 传输韧性（Transport Resilience）
+
+对无状态 Responses 后端（codex `store=false`）做流式请求时会遇到瞬时的
+`Post .../responses: EOF` 断连。重试/退避层在不改动协议契约的前提下吸收这些错误
+（英文规范为准，见 `provider-runtime.md`）：
+
+- Agent 重试循环（`internal/kernel/agent.go`
+  `streamChatWithRetry`/`chatResponseWithRetry`）只对**可重试**错误重发，采用指数退避
+  `base*2^(attempt-1)` + `[0.9,1.1)` 抖动、封顶、可被 ctx 取消的 sleep。分类逻辑在
+  `internal/kernel/llm/retryable.go`（`IsRetryableError`）：EOF /
+  `io.ErrUnexpectedEOF` / 连接 reset/refused / `net.Error` 超时 / 5xx / 429 /
+  流空闲 属于可重试；上下文超限、配额/用量上限、401/鉴权失败、400 无效请求属于
+  **致命**错误，直接失败。新增 provider 错误要可分类——暴露状态码或可识别短语。
+- 429 的 `Retry-After` 会被遵守（`RetryAfterFromError`）：响应头经 `foldRetryAfter`
+  折叠进错误信息，并解析 codex/OpenAI 的 "try again in N" 正文措辞；上限 600s。
+- SSE 空闲看门狗（`responses_adapter.go`）在流长时间无新数据时中止并抛出可重试的
+  空闲错误，让循环重连；由配置驱动
+  （`SELFMIND_STREAM_IDLE_TIMEOUT` 环境变量 > 配置默认 > 180s），且从不改动
+  `store`/`stream` 标志。
+- Provider HTTP 调用统一走 `llm.ProviderHTTPClient()`，开启 TCP keepalive
+  （`httpclient.go`），让死连接尽快暴露；Kimi 的 HTTP/1.1-only 路径复用同一带
+  keepalive 的 transport。
+- **不做游标续传。** `store=false` 时服务端从未持久化响应，无法用
+  `previous_response_id` 续传——重试始终是整体重发，不要尝试部分续传。
+
+配置项（`agent:` 段）：`llm_max_retries`(默认 5)、`llm_retry_base`(`300ms`)、
+`llm_retry_cap`(`30s`)、`llm_stream_idle_timeout`(`180s`)。留空或 0 = 默认值。
+
 ## 新增内置 Provider Checklist
 
 1. 在 `internal/modelruntime/profile.go` 添加 `ProviderProfile`。

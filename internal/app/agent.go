@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"selfmind/internal/kernel"
 	"selfmind/internal/kernel/llm"
@@ -15,6 +16,26 @@ import (
 	"selfmind/internal/platform/log"
 	"selfmind/internal/tools"
 )
+
+// parseResilienceDuration parses a Go duration string, falling back to def when
+// the value is empty or unparseable. Used for the LLM transport resilience
+// knobs (llm_retry_base/llm_retry_cap/llm_stream_idle_timeout).
+func parseResilienceDuration(value string, def time.Duration) time.Duration {
+	if strings.TrimSpace(value) == "" {
+		return def
+	}
+	if d, err := time.ParseDuration(strings.TrimSpace(value)); err == nil && d > 0 {
+		return d
+	}
+	return def
+}
+
+// applyLLMResilience pushes the process-wide streaming idle-watchdog default
+// from config into the llm transport layer. Per-attempt backoff/retry policy is
+// applied per-agent via Agent.SetRetryPolicy.
+func applyLLMResilience(cfg *config.Config) {
+	llm.SetStreamIdleTimeout(parseResilienceDuration(cfg.Agent.LLMStreamIdleTimeout, llm.DefaultStreamIdle))
+}
 
 // mockProvider is used when no LLM provider can be resolved. It returns the
 // setup diagnostic as a normal assistant response so the TUI can surface the
@@ -666,6 +687,21 @@ func InitAgent(mem *memory.MemoryManager, cfg *config.Config, tenantID string) (
 	}
 
 	agent := kernel.NewAgent(mem, nil, codingProvider, cfg.Agent.Soul, maxIter, maxRetries, refl)
+	// LLM transport resilience (Package Zero): backoff/attempt policy for the
+	// agent retry loop, plus the process-wide SSE idle watchdog default.
+	applyLLMResilience(cfg)
+	llmRetries := cfg.Agent.LLMMaxRetries
+	if llmRetries <= 0 {
+		llmRetries = maxRetries
+	}
+	if llmRetries <= 0 {
+		llmRetries = 5
+	}
+	agent.SetRetryPolicy(
+		llmRetries,
+		parseResilienceDuration(cfg.Agent.LLMRetryBase, llm.DefaultRetryBase),
+		parseResilienceDuration(cfg.Agent.LLMRetryCap, llm.DefaultRetryCap),
+	)
 	agent.SetContextWindow(codingContextLength(cfg))
 	// Simple direct-answer turns use the fast-classifier role (falls back to the
 	// default model when no fast model is configured).

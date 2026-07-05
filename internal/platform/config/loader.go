@@ -255,6 +255,17 @@ type AgentConfig struct {
 	MaxIterations int    `mapstructure:"max_iterations" yaml:"max_iterations,omitempty"`
 	MaxRetries    int    `mapstructure:"max_retries" yaml:"max_retries,omitempty"`
 	LogLevel      string `mapstructure:"log_level" yaml:"log_level,omitempty"`
+
+	// LLM transport resilience (Package Zero). Absent/0 values fall back to
+	// built-in defaults; base/cap/idle accept Go durations ("300ms", "30s").
+	// LLMMaxRetries is the streaming/non-streaming call attempt count (default
+	// 5); LLMRetryBase/LLMRetryCap bound the exponential backoff+jitter between
+	// attempts; LLMStreamIdleTimeout bounds how long an SSE stream may stall
+	// without new data before it aborts with a retryable error.
+	LLMMaxRetries        int    `mapstructure:"llm_max_retries" yaml:"llm_max_retries,omitempty"`
+	LLMRetryBase         string `mapstructure:"llm_retry_base" yaml:"llm_retry_base,omitempty"`
+	LLMRetryCap          string `mapstructure:"llm_retry_cap" yaml:"llm_retry_cap,omitempty"`
+	LLMStreamIdleTimeout string `mapstructure:"llm_stream_idle_timeout" yaml:"llm_stream_idle_timeout,omitempty"`
 }
 
 type StorageConfig struct {
@@ -608,6 +619,10 @@ func EnsureConfigExists(path string) error {
 func setDefaults(v *viper.Viper) {
 	v.SetDefault("agent.max_iterations", 90)
 	v.SetDefault("agent.max_retries", 3)
+	v.SetDefault("agent.llm_max_retries", 5)
+	v.SetDefault("agent.llm_retry_base", "300ms")
+	v.SetDefault("agent.llm_retry_cap", "30s")
+	v.SetDefault("agent.llm_stream_idle_timeout", "180s")
 	v.SetDefault("delegation.max_iterations", 50)
 	v.SetDefault("agent.log_level", "INFO")
 	v.SetDefault("storage.type", "sqlite")

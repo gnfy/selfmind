@@ -137,7 +137,7 @@ func (a *ResponsesAdapter) Chat(ctx context.Context, req ChatRequest) (*ChatResp
 				b, _ = io.ReadAll(resp.Body)
 			}
 		}
-		return nil, responsesAPIError(resp.StatusCode, b)
+		return nil, foldRetryAfter(responsesAPIError(resp.StatusCode, b), resp.Header)
 	}
 	var payload responsesResponse
 	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
@@ -199,7 +199,7 @@ func (a *ResponsesAdapter) StreamChat(ctx context.Context, req ChatRequest) (<-c
 				resp.Body.Close()
 			}
 		}
-		return nil, responsesAPIError(resp.StatusCode, b)
+		return nil, foldRetryAfter(responsesAPIError(resp.StatusCode, b), resp.Header)
 	}
 	return a.streamResponse(ctx, resp), nil
 }
@@ -217,7 +217,10 @@ func streamIdleTimeout() time.Duration {
 			return d
 		}
 	}
-	return 120 * time.Second
+	if d := configuredStreamIdle.Load(); d > 0 {
+		return time.Duration(d)
+	}
+	return DefaultStreamIdle
 }
 
 func (a *ResponsesAdapter) streamResponse(ctx context.Context, resp *http.Response) <-chan StreamEvent {
@@ -448,7 +451,7 @@ func (a *ResponsesAdapter) doRequest(ctx context.Context, body []byte, key strin
 		return nil, err
 	}
 	a.setHeaders(httpReq, key)
-	return http.DefaultClient.Do(httpReq)
+	return ProviderHTTPClient().Do(httpReq)
 }
 
 func (a *ResponsesAdapter) apiKey() string {

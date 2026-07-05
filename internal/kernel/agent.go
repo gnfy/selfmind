@@ -600,10 +600,17 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 		}
 	}
 
-	// Build messages using ContextEngine
+	// Build messages using ContextEngine. Working-context history follows the
+	// TASK when the turn is bound to one (so a task started on WeChat continues
+	// from CLI with full history), falling back to a stable channel key for
+	// taskless/casual chat. The fallback channel is the backward-compat read key
+	// for tasks whose transcript predates task-keyed history.
+	histKey := a.trajectoryKey(ctx, channel)
+	fallbackKey := a.trajectoryFallbackKey(ctx, histKey)
 	messages, err := a.contextEngine.BuildMessages(
 		ctx, a.memory, tenantID,
-		channel,
+		histKey,
+		fallbackKey,
 		systemPrompt,
 		initialPrompt,
 	)
@@ -951,8 +958,10 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 		// No tool calls — task complete
 		history.Outcome = resp
 
-		// Save trajectory to memory
-		a.saveHistory(ctx, tenantID, channel, messages)
+		// Save trajectory to memory under the same task-scoped (or stable
+		// channel) key used to load it, so the task's history is one bucket
+		// across endpoints and restarts.
+		a.saveHistory(ctx, tenantID, histKey, messages)
 
 		// Auto-extract durable facts from this conversation (async, non-blocking)
 		if a.factExtractor != nil {
@@ -1322,8 +1331,86 @@ func (a *Agent) saveHistory(ctx context.Context, tenantID, channel string, messa
 	}
 	a.memory.SaveTrajectory(ctx, tenantID, channel, data)
 
-	sessionID := generateSessionID(messages)
+	// Index under a task-derived session id when the turn is bound to a task, so
+	// session_search retrieves the whole task ("what we did on the order system")
+	// as ONE coherent session regardless of which endpoint the turns arrived on.
+	// IndexSession is idempotent per session id, so re-indexing the growing task
+	// trajectory each turn overwrites rather than fragments it. Taskless turns
+	// keep the per-content session id.
+	sessionID := a.sessionKey(ctx, messages)
 	a.memory.IndexSession(ctx, tenantID, channel, sessionID, data)
+}
+
+// trajectoryKey resolves the storage partition for this turn's working-context
+// history. When the turn is bound to a task, history is keyed by the TASK so it
+// follows the task across endpoints (a task started on WeChat continues from CLI
+// with full history) and across CLI restarts (whose channel is a fresh
+// per-session UUID). With no task, history stays channel-local — genuinely
+// casual chat is never merged across platforms — except that a bare per-session
+// UUID collapses to a stable per-person key so casual history is not scattered
+// into a new bucket on every restart. The person is already the storage tenant,
+// so the collapsed key is stable per person without colliding across people.
+func (a *Agent) trajectoryKey(ctx context.Context, channel string) string {
+	if runtime, ok := TaskRuntimeContextFromContext(ctx); ok {
+		if id := strings.TrimSpace(runtime.TaskID); id != "" {
+			return "task:" + id
+		}
+	}
+	channel = strings.TrimSpace(channel)
+	if channel == "" || looksLikeSessionUUID(channel) {
+		return "session"
+	}
+	return channel
+}
+
+// trajectoryFallbackKey returns the backward-compat read key for a task-bound
+// turn: the channel of the task's most recent prior run, where a pre-change task
+// stored its transcript. It is empty for taskless turns and when it would equal
+// the primary key (no distinct prior channel to migrate from).
+func (a *Agent) trajectoryFallbackKey(ctx context.Context, primaryKey string) string {
+	runtime, ok := TaskRuntimeContextFromContext(ctx)
+	if !ok {
+		return ""
+	}
+	prior := strings.TrimSpace(runtime.PriorChannel)
+	if prior == "" || prior == primaryKey {
+		return ""
+	}
+	return prior
+}
+
+// sessionKey ties a task's turns to one FTS session id so cross-endpoint recall
+// spans the whole task; taskless turns fall back to a per-content id.
+func (a *Agent) sessionKey(ctx context.Context, messages []llm.Message) string {
+	if runtime, ok := TaskRuntimeContextFromContext(ctx); ok {
+		if id := strings.TrimSpace(runtime.TaskID); id != "" {
+			return "task:" + id
+		}
+	}
+	return generateSessionID(messages)
+}
+
+// looksLikeSessionUUID reports whether s is a bare RFC-4122 UUID — the shape the
+// in-process TUI mints once per launch. Such a channel is not a durable identity,
+// so taskless history keyed by it would fragment across restarts.
+func looksLikeSessionUUID(s string) bool {
+	if len(s) != 36 {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		r := s[i]
+		if i == 8 || i == 13 || i == 18 || i == 23 {
+			if r != '-' {
+				return false
+			}
+			continue
+		}
+		isHex := (r >= '0' && r <= '9') || (r >= 'a' && r <= 'f') || (r >= 'A' && r <= 'F')
+		if !isHex {
+			return false
+		}
+	}
+	return true
 }
 
 // syncTurn persists the current turn to external memory providers.

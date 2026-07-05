@@ -1036,6 +1036,30 @@ func (s *Store) StartRun(ctx context.Context, task *Task, channel, inputSummary 
 	return run, nil
 }
 
+// PriorRunChannel returns the channel of the task's most recent run other than
+// exceptRunID (typically the current run). It backs the backward-compat read of
+// working-context history: a task whose transcript was stored channel-keyed
+// before history became task-keyed can still be loaded under this channel. It is
+// a bounded, read-only lookup; an empty result (no prior run) is not an error.
+func (s *Store) PriorRunChannel(ctx context.Context, tenantID, taskID, exceptRunID string) (string, error) {
+	if strings.TrimSpace(taskID) == "" {
+		return "", nil
+	}
+	var channel string
+	err := s.db.QueryRowContext(ctx,
+		`SELECT COALESCE(channel, '') FROM task_runs
+		 WHERE tenant_id = ? AND task_id = ? AND id != ?
+		 ORDER BY started_at DESC, id DESC LIMIT 1`,
+		normalizeTenant(tenantID), taskID, exceptRunID).Scan(&channel)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return channel, nil
+}
+
 func (s *Store) FinishRun(ctx context.Context, tenantID, runID, status string) error {
 	// FinishRun's contract is to write a TERMINAL run status. Agent outcomes
 	// can legitimately say "running" ("turn done, more work planned"), but a

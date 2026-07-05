@@ -293,6 +293,11 @@ func (s TaskStrategy) SystemPromptNote() string {
 		sb.WriteString("You decide whether tools are useful. Prefer a direct answer for pure questions and small snippets when no local or external state is needed.\n")
 		sb.WriteString("Use local tools when the user asks you to inspect, create, change, run, validate, or reason about files, directories, repositories, command output, workspace state, or a runnable artifact.\n")
 		sb.WriteString("For ambiguous CLI requests that may produce an artifact, do a cheap read-only probe first, such as listing the current directory, then decide whether to answer inline, create a standalone file, or ask a brief clarification.\n")
+		if s.ToolMode.MayWriteWorkspace() {
+			// Inspect-before-build: the workspace is the shared source of truth
+			// across endpoints, so reuse existing code instead of reinventing it.
+			sb.WriteString("Before writing new code or creating a file, search the workspace for an existing implementation (grep or list/read files) and extend or reuse it instead of reinventing; the workspace is the shared source of truth.\n")
+		}
 		if s.MaxActionTools > 0 {
 			sb.WriteString(fmt.Sprintf("Keep tool use economical. This turn has an action-tool budget of about %d non-lifecycle tool call(s). update_plan and finish_run are lifecycle tools with their own small per-turn caps; do not call them repeatedly. When the budget is nearly exhausted, finish from collected evidence instead of broadening the search.\n", s.MaxActionTools))
 		}

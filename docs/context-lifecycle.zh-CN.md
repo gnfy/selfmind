@@ -208,3 +208,32 @@ Streaming feedback now relies on larger event buffers and critical-event
 delivery backpressure. CLI/TUI should show tool and assistant progress live;
 IM channels should keep token streams collapsed and use working notices plus
 final summaries.
+
+## 工作历史按任务分区(轻任务层,2026-07-06,契约变更)
+
+工作上下文历史(persisted trajectory)以前按 **channel** 存取。因为 TUI 的
+channel 是每次启动随机生成的 UUID、微信是稳定 openid,所以同一个任务的历史无法
+跨端(微信 → CLI)也无法跨 CLI 重启延续。现在改为**跟随任务**:
+
+- 键的解析集中在 `Agent.trajectoryKey(ctx, channel)`,load(`ContextEngine.BuildMessages`)
+  和 save(`Agent.saveHistory`)两端用**同一个键**:
+  - 当前轮绑定到任务(`TaskRuntimeContext.TaskID` 非空)→ 键为 `task:<taskID>`,
+    历史随任务跨端、跨重启共享同一份。
+  - 无任务的闲聊 → 回退到稳定的 per-person channel 键;裸 UUID 会塌缩为固定的
+    `session`(避免每次重启散成新桶),而 `cli`/`wechat`/openid 这类稳定 channel
+    保持原样。**渠道隔离不变**:只有绑定任务的轮次才用任务键,真正的闲聊仍按
+    channel 隔离,绝不跨平台合并(person 已是存储 tenant 分区)。
+- **向后兼容读**:改动之前创建的任务其历史按旧 channel 键存储。当 `task:<id>`
+  键还没有历史时(首次任务键续接,或旧任务),`BuildMessages` 会尽力从任务上一次
+  run 的 channel(`TaskRuntimeContext.PriorChannel`,来自
+  `control.Store.PriorRunChannel`)读取一次,避免旧任务"失忆"。该回退是只读的,
+  save 始终写任务键,任务在下一次保存时自然迁移为任务键历史。tradeoff:旧 channel
+  桶可能混有该 channel 上其它任务的历史(这正是改动前该任务能看到的历史),可接受;
+  handoff/artifact/summary 已由 selector 注入,是另一层兜底。
+- **session_search 第二腿**:任务的每一轮以任务派生的 session id
+  (`task:<id>`,`Agent.sessionKey`)写入 FTS,使跨端召回把整个任务当作一个会话;
+  `IndexSession` 改为幂等(按 session id 先删后插),重复索引增长中的轨迹不会产生
+  重复 FTS 行。person/tenant 作用域不变。
+
+继续/恢复逻辑本身不变:仍只在显式续接证据(`task_id` / `IntentContinue` /
+`/resume` pin)下 attach,其余消息各自建任务,没有内容路由、没有消歧分流。

@@ -16,18 +16,25 @@ type runtimeContextBundleKey struct{}
 // model turn. It keeps kernel independent from the control database while still
 // letting the model see task/run state, handoffs, recent events, and artifacts.
 type TaskRuntimeContext struct {
-	TaskID      string
-	RunID       string
-	Title       string
-	Status      string
-	Summary     string
-	Channel     string
-	WorkspaceID string
-	Workspace   string
-	NextSteps   []string
-	Handoff     *TaskHandoffContext
-	Events      []TaskEventContext
-	Artifacts   []TaskArtifactContext
+	TaskID  string
+	RunID   string
+	Title   string
+	Status  string
+	Summary string
+	Channel string
+	// PriorChannel is the channel of the task's most recent PRIOR run (before the
+	// current one). It is the backward-compat read key for working-context
+	// history: a task created before history became task-keyed stored its
+	// transcript under this channel, so the first task-keyed continuation can
+	// still load it instead of appearing amnesiac. Empty when there is no
+	// distinct prior run.
+	PriorChannel string
+	WorkspaceID  string
+	Workspace    string
+	NextSteps    []string
+	Handoff      *TaskHandoffContext
+	Events       []TaskEventContext
+	Artifacts    []TaskArtifactContext
 }
 
 type TaskHandoffContext struct {

@@ -62,6 +62,56 @@ func TestSQLiteProvider_FTS5(t *testing.T) {
 	}
 }
 
+// TestSQLiteProvider_TaskSessionRecall verifies the second leg of the light task
+// layer: a task's turns indexed under a stable task-derived session id are
+// retrievable by content (cross-endpoint recall via session_search) and that
+// re-indexing the growing trajectory each turn is idempotent — one session, not
+// a duplicate per turn.
+func TestSQLiteProvider_TaskSessionRecall(t *testing.T) {
+	dir := t.TempDir()
+	p, err := NewSQLiteProvider(dir)
+	if err != nil {
+		t.Fatalf("NewSQLiteProvider: %v", err)
+	}
+	defer p.Close()
+
+	const tenant = "person1"
+	const sessionID = "task:order-sys"
+
+	// Turn 1 (arrived on WeChat), then turn 2 (arrived on CLI) — same task, so
+	// both re-index the SAME session id as the trajectory grows.
+	turn1 := []byte(`{"messages":[{"role":"user","content":"design the order module"}]}`)
+	turn2 := []byte(`{"messages":[{"role":"user","content":"design the order module"},{"role":"assistant","content":"added invoice pricing rules"}]}`)
+	if err := p.IndexMessagesFromTrajectory(nil, tenant, "wechat", sessionID, turn1); err != nil {
+		t.Fatalf("index turn1: %v", err)
+	}
+	if err := p.IndexMessagesFromTrajectory(nil, tenant, "cli", sessionID, turn2); err != nil {
+		t.Fatalf("index turn2: %v", err)
+	}
+
+	// Content from the later turn is retrievable ("what we did on the order system").
+	sessions, err := p.SearchSessions(tenant, "invoice", 5)
+	if err != nil {
+		t.Fatalf("SearchSessions: %v", err)
+	}
+	if len(sessions) == 0 {
+		t.Fatal("expected the task session to be retrievable by later-turn content")
+	}
+	// Idempotent: re-indexing the same session id must not create duplicate rows.
+	for _, s := range sessions {
+		if s.SessionID != sessionID {
+			t.Fatalf("unexpected session id %q", s.SessionID)
+		}
+	}
+	all, err := p.SearchSessions(tenant, "order", 10)
+	if err != nil {
+		t.Fatalf("SearchSessions order: %v", err)
+	}
+	if len(all) != 1 {
+		t.Fatalf("expected exactly 1 session row for the task after re-index, got %d", len(all))
+	}
+}
+
 func TestSQLiteProvider_MultiTenantIsolation(t *testing.T) {
 	dir := t.TempDir()
 	p, err := NewSQLiteProvider(dir)

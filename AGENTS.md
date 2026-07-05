@@ -179,6 +179,17 @@ Domain docs (**mandatory** before changing that domain):
   are separate durable sources. Ranking/embedding work extends the selector
   layer — never another append path in `agent.go`, gateway handlers, or IM
   adapters.
+- Working-context history follows the TASK, not the channel. `Agent.trajectoryKey`
+  keys the persisted trajectory by `task:<id>` when the turn is task-bound (load
+  in `ContextEngine.BuildMessages` and save in `saveHistory` MUST use the same
+  key) so a task started on one endpoint continues from another with full
+  history; taskless/casual chat falls back to a STABLE per-person channel key
+  (a bare session UUID collapses to `session`) and stays channel-local — never
+  merge genuine casual chat across platforms. FTS indexing of a task uses the
+  same task-derived session id (`Agent.sessionKey`) so `session_search` recall
+  spans endpoints; `IndexSession` is idempotent per session id. This does NOT
+  change chat-transcript channel-locality (transcripts stay per channel); it is
+  the durable working-state layer following the person's task.
 
 ## Agent-First Routing & Task Strategy
 

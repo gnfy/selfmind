@@ -85,11 +85,21 @@ func (c *ContextEngine) SetSummaryProvider(p llm.Provider) {
 
 // BuildMessages combines the selected system prompt, a bounded slice of recent
 // persisted history, and the current user input.
+//
+// channel is the trajectory key for this turn (task-scoped when the turn is
+// bound to a task, otherwise the stable channel key). fallbackChannel is an
+// optional backward-compat read key: when the primary key has no stored history
+// yet (a task's first task-keyed continuation, or a task created before history
+// became task-keyed), history is best-effort loaded from the fallback so an
+// existing task is not amnesiac. The fallback is READ-ONLY here; saveHistory
+// always writes under the primary key, so the task migrates to task-keyed
+// history on its next save.
 func (c *ContextEngine) BuildMessages(
 	ctx context.Context,
 	mem *memory.MemoryManager,
 	tenantID string,
 	channel string,
+	fallbackChannel string,
 	systemPrompt string,
 	userInput string,
 ) ([]llm.Message, error) {
@@ -99,6 +109,12 @@ func (c *ContextEngine) BuildMessages(
 		historyData, err = mem.GetLatestContext(ctx, tenantID, channel)
 		if err != nil {
 			return nil, fmt.Errorf("load context: %w", err)
+		}
+		fallbackChannel = strings.TrimSpace(fallbackChannel)
+		if len(historyData) == 0 && fallbackChannel != "" && fallbackChannel != channel {
+			if legacy, err := mem.GetLatestContext(ctx, tenantID, fallbackChannel); err == nil {
+				historyData = legacy
+			}
 		}
 	}
 

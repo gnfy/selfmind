@@ -33,6 +33,18 @@ func (c *RunCoordinator) selectedTaskRuntimeContext(ctx context.Context, task *c
 			selected.WorkspaceID = run.WorkspaceID
 		}
 	}
+	// Backward-compat read key: the channel of the task's most recent PRIOR run.
+	// A task created before working history became task-keyed stored its
+	// transcript channel-keyed; without this the first task-keyed continuation
+	// would look amnesiac. StartRun already stamped task.LastChannel with the
+	// current channel, so query the runs table for the previous run instead.
+	exceptRunID := ""
+	if run != nil {
+		exceptRunID = run.ID
+	}
+	if prior, err := c.srv.Control.PriorRunChannel(ctx, task.TenantID, task.ID, exceptRunID); err == nil {
+		selected.PriorChannel = prior
+	}
 	if workspace != nil {
 		selected.WorkspaceID = firstNonEmptyString(selected.WorkspaceID, workspace.ID)
 		selected.Workspace = workspace.LocalPath

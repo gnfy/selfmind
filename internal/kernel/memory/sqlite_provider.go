@@ -113,6 +113,14 @@ func (p *SQLiteProvider) worker() {
 
 			case "IndexSession":
 				sess := op.args[1].(FTS5Session)
+				// Idempotent per session id: a task-scoped session is re-indexed
+				// every turn as its trajectory grows, so clear the prior row(s)
+				// first, otherwise the FTS index accumulates stale duplicates of
+				// the same session. Delete is a no-op the first time.
+				if _, err := db.Exec(`DELETE FROM sessions_fts WHERE session_id = ?`, sess.SessionID); err != nil {
+					res = dbResult{err: err}
+					break
+				}
 				_, err := db.Exec(
 					`INSERT INTO sessions_fts (session_id, channel, content, summary, timestamp) VALUES (?, ?, ?, ?, ?)`,
 					sess.SessionID, sess.Channel, sess.Content, sess.Summary, sess.Timestamp,

@@ -212,6 +212,11 @@ agent:
   max_iterations: 90
   max_retries: 3
   log_level: "INFO"
+  # LLM transport resilience (Package Zero). Absent/0 = sensible defaults.
+  llm_max_retries: 5            # streaming/non-streaming call attempts
+  llm_retry_base: "300ms"       # exponential backoff base (base*2^(n-1))
+  llm_retry_cap: "30s"          # backoff ceiling; jitter [0.9,1.1) applied
+  llm_stream_idle_timeout: "180s" # abort a stalled SSE stream (retryable) so the loop reconnects
 
 # Long-term memory and semantic recall.
 memory:

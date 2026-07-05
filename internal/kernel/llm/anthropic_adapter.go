@@ -111,7 +111,7 @@ func (a *AnthropicAdapter) Chat(ctx context.Context, req ChatRequest) (*ChatResp
 				b, _ = io.ReadAll(resp.Body)
 			}
 		}
-		return nil, providerAPIError("anthropic", resp.StatusCode, b)
+		return nil, foldRetryAfter(providerAPIError("anthropic", resp.StatusCode, b), resp.Header)
 	}
 
 	return a.decodeAnthropicResponse(resp.Body)
@@ -173,7 +173,7 @@ func (a *AnthropicAdapter) StreamChat(ctx context.Context, req ChatRequest) (<-c
 				resp.Body.Close()
 			}
 		}
-		return nil, providerAPIError("anthropic", resp.StatusCode, b)
+		return nil, foldRetryAfter(providerAPIError("anthropic", resp.StatusCode, b), resp.Header)
 	}
 
 	return anthropicStreamEvents(resp), nil
@@ -462,10 +462,9 @@ func (a *AnthropicAdapter) setHeaders(req *http.Request, apiKey string) {
 
 func (a *AnthropicAdapter) httpClient() *http.Client {
 	if !a.Quirks.DisableHTTP2 && !isKimiCodingEndpoint(a.BaseURL) {
-		return http.DefaultClient
+		return ProviderHTTPClient()
 	}
-	base, _ := http.DefaultTransport.(*http.Transport)
-	transport := base.Clone()
+	transport := newProviderTransport()
 	transport.ForceAttemptHTTP2 = false
 	transport.TLSNextProto = map[string]func(string, *tls.Conn) http.RoundTripper{}
 	tlsConfig := &tls.Config{NextProtos: []string{"http/1.1"}}

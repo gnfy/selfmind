@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"math/rand"
 	"os"
 	"strconv"
 	"strings"
@@ -38,6 +39,8 @@ type Agent struct {
 	soul               string
 	maxIterations      int
 	maxRetries         int
+	retryBase          time.Duration // LLM retry backoff base (0 => llm.DefaultRetryBase)
+	retryCap           time.Duration // LLM retry backoff cap (0 => llm.DefaultRetryCap)
 	Reflector          *ReflectionEngine
 	ReviewEngine       *BackgroundReviewEngine
 	contextEngine      *ContextEngine
@@ -293,14 +296,62 @@ func (a *Agent) SetEvolutionNotifyChannel(ch chan string) {
 const MaxRetries = 3
 const agentEventBufferSize = 1024
 
-// chatResponseWithRetry implements retry for non-streaming model calls.
+// SetRetryPolicy configures the LLM transport retry loop: attempt count and the
+// exponential-backoff base/cap. Non-positive values keep the current/default
+// value (attempts default to a.maxRetries; base/cap default to
+// llm.DefaultRetryBase / llm.DefaultRetryCap). Injected once by internal/app
+// from config; kernel owns no config parsing.
+func (a *Agent) SetRetryPolicy(attempts int, base, cap time.Duration) {
+	if attempts > 0 {
+		a.maxRetries = attempts
+	}
+	if base > 0 {
+		a.retryBase = base
+	}
+	if cap > 0 {
+		a.retryCap = cap
+	}
+}
+
+// retryAttempts returns the effective attempt count (>=1).
+func (a *Agent) retryAttempts() int {
+	if a.maxRetries > 0 {
+		return a.maxRetries
+	}
+	return 1
+}
+
+// waitBeforeRetry sleeps before retry number attempt (1-based). It honors a
+// server-advertised Retry-After (from the just-failed err) when present,
+// otherwise exponential backoff base*2^(attempt-1) with [0.9,1.1) jitter,
+// capped. The sleep is context-cancellable so /stop and deadlines interrupt a
+// pending backoff. Returns ctx.Err() if the context ended mid-wait.
+func (a *Agent) waitBeforeRetry(ctx context.Context, attempt int, err error) error {
+	delay := llm.Backoff(attempt, a.retryBase, a.retryCap, rand.Float64)
+	if ra, ok := llm.RetryAfterFromError(err); ok && ra > delay {
+		delay = ra
+	}
+	if delay <= 0 {
+		return nil
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+// chatResponseWithRetry implements retry for non-streaming model calls. It only
+// re-sends on retryable (transient) errors with exponential backoff + jitter;
+// fatal errors (context-window, quota, auth, invalid request) fail fast so we
+// never waste attempts on unfixable calls.
 func (a *Agent) chatResponseWithRetry(ctx context.Context, messages []llm.Message, strategy TaskStrategy) (*llm.ChatResponse, error) {
 	var lastErr error
-	max := a.maxRetries
-	if max <= 0 {
-		max = 1
-	}
-	for attempt := 0; attempt < max; attempt++ {
+	max := a.retryAttempts()
+	for attempt := 1; attempt <= max; attempt++ {
 		req := llm.ChatRequest{Messages: messages, Tools: a.llmToolDefinitions(strategy)}
 		resp, err := a.activeLLM().Chat(ctx, req)
 		if err == nil {
@@ -308,18 +359,20 @@ func (a *Agent) chatResponseWithRetry(ctx context.Context, messages []llm.Messag
 		}
 		lastErr = err
 
-		// 如果是上下文取消或超时，立即退出，不再重试
+		// Context cancel/deadline: stop immediately, do not retry.
 		if ctx.Err() != nil {
 			return nil, err
 		}
-
-		// 如果是 401/403 等鉴权错误，说明 Key 坏了，重试也无意义
-		if strings.Contains(err.Error(), "401") || strings.Contains(err.Error(), "invalid_api_key") {
+		// Fatal (non-retryable) provider errors fail fast.
+		if !llm.IsRetryableError(err) {
+			return nil, err
+		}
+		if attempt == max {
 			break
 		}
-
-		// 指数退避
-		time.Sleep(time.Duration(attempt+1) * 500 * time.Millisecond)
+		if werr := a.waitBeforeRetry(ctx, attempt, err); werr != nil {
+			return nil, werr
+		}
 	}
 	return nil, fmt.Errorf("llm chat failed after %d attempts: %w", max, lastErr)
 }
@@ -333,14 +386,16 @@ func (a *Agent) chatWithRetry(ctx context.Context, messages []llm.Message) (stri
 	return resp.Content, resp.Usage, nil
 }
 
-// streamChatWithRetry 实现了流式调用的自动 Fallback 逻辑
+// streamChatWithRetry opens a streaming call, re-sending on retryable errors
+// with exponential backoff + jitter. This is where the codex
+// `Post .../responses: EOF` connection drops are absorbed: a dropped POST is a
+// retryable error, so the loop reconnects with a full re-send (store=false
+// means there is no server-persisted response to resume by cursor). Fatal
+// errors fail fast.
 func (a *Agent) streamChatWithRetry(ctx context.Context, messages []llm.Message, strategy TaskStrategy) (<-chan llm.StreamEvent, error) {
 	var lastErr error
-	max := a.maxRetries
-	if max <= 0 {
-		max = 1
-	}
-	for attempt := 0; attempt < max; attempt++ {
+	max := a.retryAttempts()
+	for attempt := 1; attempt <= max; attempt++ {
 		req := llm.ChatRequest{Messages: messages, Tools: a.llmToolDefinitions(strategy)}
 		ch, err := a.activeLLM().StreamChat(ctx, req)
 		if err == nil {
@@ -351,12 +406,15 @@ func (a *Agent) streamChatWithRetry(ctx context.Context, messages []llm.Message,
 		if ctx.Err() != nil {
 			return nil, err
 		}
-
-		if strings.Contains(err.Error(), "401") || strings.Contains(err.Error(), "invalid_api_key") {
+		if !llm.IsRetryableError(err) {
+			return nil, err
+		}
+		if attempt == max {
 			break
 		}
-
-		time.Sleep(time.Duration(attempt+1) * 500 * time.Millisecond)
+		if werr := a.waitBeforeRetry(ctx, attempt, err); werr != nil {
+			return nil, werr
+		}
 	}
 	return nil, fmt.Errorf("llm stream chat failed after %d attempts: %w", max, lastErr)
 }

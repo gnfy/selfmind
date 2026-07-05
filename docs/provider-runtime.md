@@ -162,6 +162,41 @@ parsing, OAuth refresh payloads, or provider login state inside an LLM adapter.
   while `TokenRefresher` handles server-side invalidation discovered on a
   request.
 
+## Transport Resilience
+
+Streaming against stateless Responses backends (codex `store=false`) hits
+transient `Post .../responses: EOF` connection drops. The retry/backoff layer
+absorbs these without touching the wire contract:
+
+- The agent retry loop (`internal/kernel/agent.go`
+  `streamChatWithRetry`/`chatResponseWithRetry`) re-sends only on **retryable**
+  errors with exponential backoff `base*2^(attempt-1)` and `[0.9,1.1)` jitter,
+  capped, with a context-cancellable sleep. Classification lives in
+  `internal/kernel/llm/retryable.go` (`IsRetryableError`): EOF /
+  `io.ErrUnexpectedEOF` / connection reset/refused / `net.Error` timeout / 5xx
+  / 429 / stream-idle are retryable; context-window, quota/usage limit,
+  401/invalid-auth, and 400 invalid-request are **fatal** and fail fast. Keep
+  new provider errors classifiable — surface a status code or a recognizable
+  phrase, not opaque text.
+- 429 `Retry-After` is honored (`RetryAfterFromError`): the header is folded
+  into the error via `foldRetryAfter` at the adapter 4xx/5xx return sites, and
+  the codex/OpenAI "try again in N" body phrasing is parsed. Capped at 600s.
+- The SSE idle watchdog (`responses_adapter.go` `streamIdleTimeout` +
+  `streamResponse`) aborts a stream that stalls without new data, emitting a
+  retryable stream-idle error so the loop reconnects. It is config-driven
+  (`SELFMIND_STREAM_IDLE_TIMEOUT` env > config default > 180s) and never
+  changes `store`/`stream` flags.
+- Provider HTTP calls use the shared `llm.ProviderHTTPClient()` with TCP
+  keepalive (`httpclient.go`) so dead sockets surface fast. The Kimi
+  HTTP/1.1-only path clones the same keepalive transport.
+- **No cursor resume.** With `store=false` the server never persisted the
+  response, so `previous_response_id` resume is impossible — a retry is always
+  a full re-send. Do not attempt partial-resume.
+
+Config knobs (`agent:` section): `llm_max_retries` (default 5),
+`llm_retry_base` (`300ms`), `llm_retry_cap` (`30s`), `llm_stream_idle_timeout`
+(`180s`). Absent/0 = defaults.
+
 ## Adding a Provider
 
 1. Add a `ProviderProfile` in `internal/modelruntime/profile.go`.

@@ -207,6 +207,11 @@ agent:
   max_iterations: 90
   max_retries: 3
   log_level: "INFO"
+  # LLM 传输韧性（Package Zero）。留空或 0 = 使用合理默认值。
+  llm_max_retries: 5            # 流式/非流式调用重试次数
+  llm_retry_base: "300ms"       # 指数退避基数（base*2^(n-1)）
+  llm_retry_cap: "30s"          # 退避上限；叠加 [0.9,1.1) 抖动
+  llm_stream_idle_timeout: "180s" # SSE 流卡住时中止（可重试），让重试循环重连
 
 # 长期记忆和语义召回配置。
 memory:

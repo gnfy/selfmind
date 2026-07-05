@@ -362,7 +362,7 @@ func (a *OpenAIAdapter) Chat(ctx context.Context, req ChatRequest) (*ChatRespons
 				b, _ = io.ReadAll(resp.Body)
 			}
 		}
-		return nil, providerAPIError("openai", resp.StatusCode, b)
+		return nil, foldRetryAfter(providerAPIError("openai", resp.StatusCode, b), resp.Header)
 	}
 
 	var openaiResp OpenAIResponse
@@ -411,14 +411,14 @@ func (a *OpenAIAdapter) StreamChat(ctx context.Context, req ChatRequest) (<-chan
 			}
 		}
 		if authFailure {
-			return nil, providerAPIError("openai", resp.StatusCode, b)
+			return nil, foldRetryAfter(providerAPIError("openai", resp.StatusCode, b), resp.Header)
 		}
 		if len(wireReq.Tools) > 0 {
 			legacyReq := wireReq
 			legacyReq.Tools = nil
 			return a.StreamChat(ctx, legacyReq)
 		}
-		return nil, providerAPIError("openai", resp.StatusCode, b)
+		return nil, foldRetryAfter(providerAPIError("openai", resp.StatusCode, b), resp.Header)
 	}
 
 	return openAIStreamEvents(resp), nil
@@ -432,7 +432,7 @@ func (a *OpenAIAdapter) doOpenAIRequest(ctx context.Context, body []byte, apiKey
 	httpReq.Header.Set("Authorization", "Bearer "+apiKey)
 	httpReq.Header.Set("Content-Type", "application/json")
 	a.applyHeaders(httpReq)
-	return http.DefaultClient.Do(httpReq)
+	return ProviderHTTPClient().Do(httpReq)
 }
 
 func openAIStreamEvents(resp *http.Response) <-chan StreamEvent {
@@ -765,7 +765,7 @@ func (a *OpenRouterAdapter) Chat(ctx context.Context, req ChatRequest) (*ChatRes
 				b, _ = io.ReadAll(resp.Body)
 			}
 		}
-		return nil, providerAPIError("openrouter", resp.StatusCode, b)
+		return nil, foldRetryAfter(providerAPIError("openrouter", resp.StatusCode, b), resp.Header)
 	}
 
 	var openaiResp OpenAIResponse

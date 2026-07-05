@@ -215,6 +215,9 @@ func (a *App) runTUI() int {
 		// Smart-mode approval triage (H2): cheap-model judge off the main run
 		// provider. Nil when unavailable → smart mode asks a human.
 		ApprovalJudge: appcore.NewApprovalJudge(agent.ApprovalJudgeProvider()),
+		// Implicit-continuation LLM upgrade window (Fix 1); "0" disables it.
+		// (Escrow needs the daemon sweep, so PendingNotifyAfter is daemon-only.)
+		ContinueWindow: cfg.Intent.ContinueWindowDuration(),
 	}
 	ctrl.SetMessageProcessor(localGateway.ProcessMessage)
 	disp.InjectClarifyHandler(ctrl.ClarifyHandler())

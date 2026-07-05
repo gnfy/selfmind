@@ -4,18 +4,73 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"selfmind/internal/control"
 	"selfmind/internal/gateway/api"
 	"selfmind/internal/gateway/router"
 	"selfmind/internal/kernel/llm"
+	"selfmind/internal/platform/log"
 )
 
-func (d *Server) classifyIntent(ctx context.Context, input, channel string) router.IntentResult {
-	if d != nil && d.Gateway != nil {
-		return d.Gateway.ClassifyIntentWithContext(ctx, input, channel)
+func (d *Server) classifyIntent(ctx context.Context, identity *control.IdentityContext, input, channel string) router.IntentResult {
+	if d == nil || d.Gateway == nil {
+		return router.NewIntentClassifier().ClassifyDetailed(input)
 	}
-	return router.NewIntentClassifier().ClassifyDetailed(input)
+	// Implicit-continuation upgrade (Fix 1): the rules classifier defaults
+	// ordinary language to IntentTask and shouldConsultIntentLLM hard-refuses to
+	// consult the LLM for it, so an implicit follow-up ("质量太差了") after a just-
+	// finished task would always create a NEW task with no context. When a recent
+	// resumable task exists within the window, let the LLM decide continuation vs
+	// new work. It may only upgrade task -> continue (never downgrade), so the
+	// agent-first red line stays; at most one cheap LLM call per message, and only
+	// in hybrid/llm mode when the window matches.
+	if d.ContinueWindow > 0 && identity != nil {
+		if rules := d.Gateway.ClassifyIntent(input); rules.Intent == router.IntentTask {
+			if recent := d.recentResumableTask(ctx, identity); recent != nil {
+				upgraded, ok := d.Gateway.UpgradeTaskToContinueWithLLM(ctx, input, channel, router.RecentTaskContext{
+					Title:   recent.Title,
+					Summary: recent.CurrentSummary,
+					Status:  recent.Status,
+					Age:     time.Since(recent.UpdatedAt),
+				})
+				if ok {
+					log.Info("gateway: implicit continuation upgrade",
+						"task", recent.ID, "confidence", upgraded.Confidence, "channel", channel)
+					return upgraded
+				}
+			}
+		}
+	}
+	return d.Gateway.ClassifyIntentWithContext(ctx, input, channel)
+}
+
+// recentResumableTask returns the person's most recently updated non-terminal
+// task whose updated_at is within ContinueWindow, or nil. It is a cheap bounded
+// scan (ListTasks is updated_at DESC, capped at 10) used only to decide whether
+// the implicit-continuation LLM upgrade is worth a call — never to attach work
+// on its own (attach still needs the IntentContinue verdict).
+func (d *Server) recentResumableTask(ctx context.Context, identity *control.IdentityContext) *control.Task {
+	if d == nil || d.Control == nil || identity == nil || d.ContinueWindow <= 0 {
+		return nil
+	}
+	tasks, err := d.Control.ListTasks(ctx, identity.TenantID, identity.PersonID, 10)
+	if err != nil {
+		return nil
+	}
+	cutoff := time.Now().Add(-d.ContinueWindow)
+	for i := range tasks {
+		if terminalTaskStatus(tasks[i].Status) {
+			continue
+		}
+		if tasks[i].UpdatedAt.Before(cutoff) {
+			// DESC order: this non-terminal task and every later one are out of
+			// the window, so there is nothing recent enough to continue.
+			return nil
+		}
+		return &tasks[i]
+	}
+	return nil
 }
 
 func (d *Server) tryHandleIntentClarification(identity *control.IdentityContext, intent router.IntentResult) (bool, api.MessageResponse) {

@@ -400,6 +400,12 @@ CREATE INDEX IF NOT EXISTS idx_task_queue_person ON task_queue(tenant_id, person
 		// (""/task/person) recorded when an approval is answered; older DBs
 		// created before the layered approval funnel lack the column.
 		{"approval_requests", "decision_scope", "TEXT"},
+		// notified_at (unix seconds) records when an IM notification was actually
+		// SENT for a pending approval/clarify (never when a CLI-attached push was
+		// suppressed). The escrow sweep uses NULL to find pendings that left the
+		// person uninformed and re-pushes them once the CLI detaches (Fix 2).
+		{"approval_requests", "notified_at", "INTEGER"},
+		{"clarify_requests", "notified_at", "INTEGER"},
 		// restarts counts boot requeues of a 'started' row. Without a cap a
 		// queued task whose run never finishes before the next daemon restart
 		// resurrects FOREVER (observed live: a 10-min task + repeated deploy

@@ -124,6 +124,102 @@ func (g *Gateway) classifyIntentWithLLM(ctx context.Context, input, channel stri
 	return result, nil
 }
 
+// RecentTaskContext is the minimal recent-task summary the implicit-continuation
+// judgment needs. Kept tiny on purpose (title + one-line summary + status +
+// age): it is background context for a cheap LLM call, not a prompt payload.
+type RecentTaskContext struct {
+	Title   string
+	Summary string
+	Status  string
+	Age     time.Duration
+}
+
+// continuationUpgradePayload is the JSON contract for the implicit-continuation
+// judgment. "decision" is deliberately continue|new only — this call may never
+// route ordinary work into a casual/direct path.
+type continuationUpgradePayload struct {
+	Decision   string  `json:"decision"`
+	Confidence float64 `json:"confidence"`
+	Reason     string  `json:"reason"`
+}
+
+// UpgradeTaskToContinueWithLLM is the ONE narrow exception to the "never consult
+// the LLM for a rules IntentTask" gate (shouldConsultIntentLLM). The httpapi
+// layer calls it only when the rules classifier landed on IntentTask AND the
+// person has a recently active resumable task within the configured window. It
+// asks a cheap LLM whether this message continues that task or is new work, and
+// may ONLY upgrade task -> continue: any other verdict (new work, low
+// confidence, parse/transport error, rules mode) returns ok=false so the caller
+// keeps the rules IntentTask. It never downgrades to casual/direct — the
+// agent-first red line stays. At most one LLM call per inbound message.
+func (g *Gateway) UpgradeTaskToContinueWithLLM(ctx context.Context, input, channel string, recent RecentTaskContext) (IntentResult, bool) {
+	if g == nil || g.llmProvider == nil || g.intentClassifier == nil {
+		return IntentResult{}, false
+	}
+	if g.intentClassifier.Mode() == "rules" {
+		return IntentResult{}, false
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	callCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	defer cancel()
+
+	resp, err := g.llmProvider.Chat(callCtx, llm.ChatRequest{
+		MaxTokens: 200,
+		Messages: []llm.Message{
+			{Role: "system", Content: continuationUpgradeSystemPrompt()},
+			{Role: "user", Content: continuationUpgradeUserPrompt(channel, recent, input)},
+		},
+	})
+	if err != nil {
+		return IntentResult{}, false
+	}
+	var payload continuationUpgradePayload
+	if err := json.Unmarshal([]byte(stripJSONFence(resp.Content)), &payload); err != nil {
+		return IntentResult{}, false
+	}
+	if strings.ToLower(strings.TrimSpace(payload.Decision)) != "continue" {
+		return IntentResult{}, false
+	}
+	confidence := clampConfidence(payload.Confidence)
+	if confidence <= 0 {
+		confidence = 0.7
+	}
+	return IntentResult{
+		Intent:           IntentContinue,
+		Confidence:       confidence,
+		Reason:           firstNonEmptyIntent(payload.Reason, "llm upgraded implicit continuation"),
+		Signals:          []string{"continue.llm_upgrade"},
+		ShouldCreateTask: true,
+		ShouldUseTools:   true,
+		Source:           "llm",
+	}, true
+}
+
+func continuationUpgradeSystemPrompt() string {
+	return `You decide whether a new SelfMind message continues the person's most recent unfinished task or starts new work.
+Return JSON only. No markdown.
+
+You are given the recent task (title, summary, status) and the new message.
+- Answer "continue" ONLY when the new message is clearly follow-up on that same task: refining it, reacting to its result, correcting it, or asking to keep going.
+- Answer "new" when the message is about something else, a fresh request, or you are unsure.
+- Never invent a task. When in doubt, answer "new".
+
+Schema:
+{"decision":"continue|new","confidence":0.0,"reason":"..."}`
+}
+
+func continuationUpgradeUserPrompt(channel string, recent RecentTaskContext, input string) string {
+	age := ""
+	if recent.Age > 0 {
+		age = recent.Age.Round(time.Second).String()
+	}
+	return fmt.Sprintf(
+		"channel: %s\nrecent_task_title: %s\nrecent_task_summary: %s\nrecent_task_status: %s\nrecent_task_age: %s\nnew_message:\n%s",
+		channel, recent.Title, recent.Summary, recent.Status, age, input)
+}
+
 func intentClassifierSystemPrompt() string {
 	return `You classify a SelfMind user message before task creation.
 Return JSON only. No markdown.

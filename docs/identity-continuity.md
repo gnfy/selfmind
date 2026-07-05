@@ -102,7 +102,18 @@ Code: `internal/gateway/httpapi/continue_resolver.go`.
 1. **Continuation detection.** Short acceptances (`ok`, `继续`, `可以`, …) are
    matched by `looksLikeAffirmativeContinuation`; richer cues come from
    `internal/gateway/router/intent*.go` (`IntentContinue`). Intent rules must
-   stay high-confidence; ordinary messages go to the agent as-is.
+   stay high-confidence; ordinary messages go to the agent as-is. **Implicit
+   continuation via LLM upgrade:** an ordinary message carries no cue, so the
+   rules classifier defaults it to `IntentTask`. When the person has a
+   non-terminal task updated within `intent.continue_window` (default 30m; `0`
+   disables), the hybrid/llm classifier asks a cheap LLM — with that task's
+   title/summary as context — whether the message continues it or is new work.
+   The LLM may ONLY upgrade `task→continue` (never downgrade to casual/direct,
+   preserving agent-first), at most one call per inbound message; an upgraded
+   `IntentContinue` is itself continuation evidence and flows through the normal
+   attach path below (`router.UpgradeTaskToContinueWithLLM`,
+   `httpapi.classifyIntent`). This is what makes an implicit follow-up ("质量太差了")
+   right after a finished task continue it instead of spawning a context-less one.
 2. **Task resolution** (`resolveContinueTask`, person-scoped, never
    channel-scoped): the person's `CurrentTask` if set; otherwise the most
    recent non-terminal task from the last 10 (`terminalTaskStatus`: done /

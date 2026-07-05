@@ -193,6 +193,11 @@ gateway:
   # result pushes route to your preferred IM again. "0" disables (an open TUI
   # always counts as attached).
   presence_idle_timeout: "5m"
+  # An unanswered approval/question is re-pushed to your preferred IM this long
+  # after it was raised, if you have since left the CLI and it was never sent.
+  # The escrow sweep runs every 60s, so effective latency is this + up to 60s.
+  # "0" disables escrow.
+  pending_notify_after: "2m"
   # Generic outbound webhook for custom IM relays.
   outbound_webhook_url: ""
   outbound_webhook_token: ""
@@ -251,6 +256,16 @@ models:
 # MCP servers. Empty by default.
 mcp:
   servers: []
+
+# Intent routing. Ordinary language always reaches the agent; these knobs only
+# tune explicit-command matching and continuation detection.
+intent:
+  mode: "hybrid"
+  # When your message reads as new work but you have a non-terminal task updated
+  # within this window, a cheap LLM decides whether it continues that task or
+  # starts new work (it may only upgrade to a continuation, never sidetrack it).
+  # "0" disables this implicit-continuation check.
+  continue_window: "30m"
 
 # Cron entrypoint. Personal mode can keep the default.
 cron:
@@ -430,8 +445,11 @@ Everyday management:
 - **See everything:** `/tasks` (all recent), `/status` (the current one + any
   pending approval/question), `/queue` (what's waiting).
 - **Continue a task:** just reply (`继续` / `ok` / a follow-up) — a short
-  acceptance continues the current task; `/resume <task_id>` switches to an
-  older one.
+  acceptance continues the current task, and even an implicit follow-up shortly
+  after a task (e.g. "the quality is poor") is recognized as continuing it rather
+  than starting fresh; `/resume <task_id>` switches to an older one.
+- **You'll be nudged:** an unanswered approval or question is re-pushed to your
+  preferred IM if you leave the CLI, so it never sits pending invisibly.
 - **Start something separate:** `/new` — otherwise a new request while a task
   runs is **queued** behind it (not rejected), and a follow-up continues the
   current task.

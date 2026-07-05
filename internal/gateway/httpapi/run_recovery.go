@@ -82,6 +82,10 @@ func (d *Server) startStuckRunSweeper(ctx context.Context, interval, threshold t
 				return
 			case <-ticker.C:
 				d.sweepStuckRuns(threshold)
+				// Same 60s cadence re-pushes pending approvals/clarifies that were
+				// left uninformed once the CLI detaches (Fix 2). No-op when the
+				// escrow threshold is unset (PendingNotifyAfter <= 0).
+				d.sweepPendingNotifications(d.PendingNotifyAfter)
 			}
 		}
 	}()
@@ -99,5 +103,34 @@ func (d *Server) sweepStuckRuns(threshold time.Duration) {
 	}
 	if recovered > 0 {
 		log.Warn("gateway: recovered stuck runs/tasks", "count", recovered, "stale_after", threshold.String())
+	}
+}
+
+// sweepPendingNotifications is the escrow pass (Fix 2): it finds pending
+// approvals/clarifies older than the threshold that were never notified and, for
+// those whose person has since detached from the CLI, re-pushes them to the
+// preferred IM. It is bounded (each list caps at 100) and idempotent — a push
+// stamps notified_at only on success, so the next sweep is a no-op for already
+// notified rows and a retry for failed ones. A zero threshold disables escrow.
+func (d *Server) sweepPendingNotifications(threshold time.Duration) {
+	if d == nil || d.Control == nil || threshold <= 0 {
+		return
+	}
+	ctx := context.Background()
+	cutoff := time.Now().Add(-threshold)
+	coord := d.coordinator()
+	if approvals, err := d.Control.ListPendingApprovalsForEscrow(ctx, cutoff); err != nil {
+		log.Warn("gateway: escrow approval scan failed", "error", err)
+	} else {
+		for i := range approvals {
+			coord.escrowApprovalNotification(ctx, &approvals[i])
+		}
+	}
+	if clarifies, err := d.Control.ListPendingClarifiesForEscrow(ctx, cutoff); err != nil {
+		log.Warn("gateway: escrow clarify scan failed", "error", err)
+	} else {
+		for i := range clarifies {
+			coord.escrowClarifyNotification(ctx, &clarifies[i])
+		}
 	}
 }

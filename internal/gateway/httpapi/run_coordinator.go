@@ -475,7 +475,10 @@ func (c *RunCoordinator) drainQueue(identity *control.IdentityContext) {
 	if resolved, rerr := c.srv.Control.ResolveOrCreateAccount(ctx, next.TenantID, next.Platform, next.PlatformUserID, ""); rerr == nil && resolved != nil {
 		drainIdentity = resolved
 	}
-	intent := c.srv.classifyIntent(ctx, req.Content, req.Channel)
+	// A queued-drain item is genuinely NEW work and must create its own task
+	// (AGENTS.md task-attach contract), so it never takes the implicit-
+	// continuation upgrade — pass nil identity to skip the recent-task lookup.
+	intent := c.srv.classifyIntent(ctx, nil, req.Content, req.Channel)
 	resp := c.startAsyncRun(drainIdentity, req, intent)
 	if !resp.Accepted {
 		// A fresh inbound run won the slot between our check and beginActive.

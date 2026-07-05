@@ -18,15 +18,15 @@ import (
 // "Runtime attachment model"). Unlike an approval — a bounded yes/no — an
 // answer is free text, so there is no decision_scope/grant machinery here.
 type ClarifyRequest struct {
-	ID        string          `json:"id"`
-	TenantID  string          `json:"tenant_id"`
-	PersonID  string          `json:"person_id"`
-	TaskID    string          `json:"task_id,omitempty"`
-	RunID     string          `json:"run_id,omitempty"`
-	Question  string          `json:"question"`
-	Options   json.RawMessage `json:"options_json,omitempty"`
-	Status    string          `json:"status"`
-	Answer    string          `json:"answer,omitempty"`
+	ID       string          `json:"id"`
+	TenantID string          `json:"tenant_id"`
+	PersonID string          `json:"person_id"`
+	TaskID   string          `json:"task_id,omitempty"`
+	RunID    string          `json:"run_id,omitempty"`
+	Question string          `json:"question"`
+	Options  json.RawMessage `json:"options_json,omitempty"`
+	Status   string          `json:"status"`
+	Answer   string          `json:"answer,omitempty"`
 	// Channel is the requesting channel at create time, then overwritten with
 	// the answering channel when the person replies (the last surface that
 	// touched the question).
@@ -159,6 +159,44 @@ func (s *Store) AnswerClarifyRequest(ctx context.Context, tenantID, personID, cl
 		}
 	}
 	return s.GetClarifyRequest(ctx, tenantID, clarifyID)
+}
+
+// MarkClarifyNotified stamps notified_at on a pending question once an IM
+// notification has actually been SENT (initial detached push or escrow re-push).
+// Idempotent, mirroring MarkApprovalNotified.
+func (s *Store) MarkClarifyNotified(ctx context.Context, tenantID, clarifyID string) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE clarify_requests SET notified_at = ?
+		 WHERE tenant_id = ? AND id = ? AND status = 'pending' AND notified_at IS NULL`,
+		time.Now().Unix(), normalizeTenant(tenantID), clarifyID)
+	return err
+}
+
+// ListPendingClarifiesForEscrow returns pending questions created at or before
+// createdBefore that have not yet had an IM notification sent, across all
+// tenants, oldest first. Mirrors ListPendingApprovalsForEscrow (Fix 2).
+func (s *Store) ListPendingClarifiesForEscrow(ctx context.Context, createdBefore time.Time) ([]ClarifyRequest, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, tenant_id, person_id, COALESCE(task_id, ''), COALESCE(run_id, ''), question,
+		        COALESCE(options_json, '[]'), status, COALESCE(answer, ''), COALESCE(channel, ''),
+		        created_at, updated_at
+		 FROM clarify_requests
+		 WHERE status = 'pending' AND notified_at IS NULL AND created_at <= ?
+		 ORDER BY created_at ASC, id ASC LIMIT 100`,
+		createdBefore.Unix())
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []ClarifyRequest
+	for rows.Next() {
+		item, err := scanClarifyRequest(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
 }
 
 // ExpireClarifyRequest finalizes a pending question whose waiter is gone

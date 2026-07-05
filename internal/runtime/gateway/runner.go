@@ -132,6 +132,10 @@ func Run(ctx context.Context, opts Options) error {
 		Gateway:         gwDeps.Gateway,
 		DefaultTenantID: defaultTenantID,
 		DrainTimeout:    drainTimeout,
+		// Implicit-continuation LLM upgrade window (Fix 1) and pending-approval/
+		// clarify escrow threshold (Fix 2). Both derive from config; "0" disables.
+		ContinueWindow:     cfg.Intent.ContinueWindowDuration(),
+		PendingNotifyAfter: cfg.Gateway.PendingNotifyAfterDuration(),
 		// Smart-mode approval triage (H2): build the cheap-model judge from the
 		// agent's dedicated triage provider (a cheap role kept OFF the main run
 		// provider). Nil when no provider is available → smart mode asks a human.

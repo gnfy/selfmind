@@ -142,6 +142,46 @@ func (s *Store) ExpireOrphanedApprovals(ctx context.Context) (int, error) {
 	return int(n), nil
 }
 
+// MarkApprovalNotified stamps notified_at on a pending approval once an IM
+// notification has actually been SENT for it (initial detached push or escrow
+// re-push). Idempotent: only a still-pending row with no prior stamp is touched,
+// so a crashed push retries next sweep and a resolved approval is never marked.
+func (s *Store) MarkApprovalNotified(ctx context.Context, tenantID, approvalID string) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE approval_requests SET notified_at = ?
+		 WHERE tenant_id = ? AND id = ? AND status = 'pending' AND notified_at IS NULL`,
+		time.Now().Unix(), normalizeTenant(tenantID), approvalID)
+	return err
+}
+
+// ListPendingApprovalsForEscrow returns pending approvals created at or before
+// createdBefore that have not yet had an IM notification sent (notified_at IS
+// NULL), across all tenants (the sweep is daemon-wide). Oldest first so the
+// person hears about the longest-waiting approval first.
+func (s *Store) ListPendingApprovalsForEscrow(ctx context.Context, createdBefore time.Time) ([]ApprovalRequest, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, tenant_id, person_id, COALESCE(task_id, ''), COALESCE(run_id, ''), action_type,
+		        COALESCE(payload_json, '{}'), status, COALESCE(requested_channel, ''), COALESCE(approved_channel, ''),
+		        COALESCE(decision_scope, ''), created_at, updated_at
+		 FROM approval_requests
+		 WHERE status = 'pending' AND notified_at IS NULL AND created_at <= ?
+		 ORDER BY created_at ASC, id ASC LIMIT 100`,
+		createdBefore.Unix())
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []ApprovalRequest
+	for rows.Next() {
+		item, err := scanApprovalRequest(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
 // RespondApprovalRequest records a decision. grantScope (""/"task"/"person")
 // is persisted only for an approval and drives class-level approval memory; it
 // is ignored for a rejection.

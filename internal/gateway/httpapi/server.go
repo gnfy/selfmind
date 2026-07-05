@@ -31,6 +31,16 @@ type Server struct {
 	DrainTimeout      time.Duration
 	ShutdownFunc      func()
 	RuntimeStatusFunc func() api.GatewayRuntimeInfo
+	// ContinueWindow bounds the implicit-continuation LLM upgrade (Fix 1): when
+	// rules classify a message as new work but the person has a non-terminal task
+	// updated within this window, the LLM decides continuation vs new work. Zero
+	// disables the exception (rules result stands).
+	ContinueWindow time.Duration
+	// PendingNotifyAfter is the escrow threshold (Fix 2): an unanswered
+	// approval/clarify older than this, whose person has detached from the CLI and
+	// which was never notified, is re-pushed to the preferred IM by the periodic
+	// sweep. Zero disables escrow.
+	PendingNotifyAfter time.Duration
 	// ApprovalJudge is the optional cheap-model judge for smart-mode LLM approval
 	// triage (H2). Installed on every execution scope so a dangerous
 	// (non-hardline) op in smart mode is triaged before the human ask. Nil (e.g.
@@ -223,7 +233,7 @@ func (d *Server) ProcessMessage(ctx context.Context, req api.MessageRequest) (ap
 		}, http.StatusServiceUnavailable
 	}
 
-	intent := d.classifyIntent(ctx, req.Content, req.Channel)
+	intent := d.classifyIntent(ctx, identity, req.Content, req.Channel)
 	if intent.Intent != router.IntentContinue && looksLikeAffirmativeContinuation(req.Content) {
 		if task, _ := d.resolveContinueTask(ctx, identity); task != nil {
 			intent = router.IntentResult{
@@ -869,7 +879,12 @@ func (c *RunCoordinator) notifyApprovalRequested(ctx context.Context, identity *
 		Kind:       delivery.KindApproval,
 		ApprovalID: approval.ID,
 	}
-	c.routePendingNotification(ctx, identity, channel, base)
+	// Track "notified" honestly: stamp notified_at only when a push actually went
+	// out (IM origin, or CLI detached). A suppressed CLI-attached push leaves it
+	// NULL so the escrow sweep can re-push after the CLI leaves (Fix 2).
+	if c.routePendingNotification(ctx, identity, channel, base) && c.srv.Control != nil {
+		_ = c.srv.Control.MarkApprovalNotified(ctx, identity.TenantID, approval.ID)
+	}
 }
 
 // notifyClarifyRequested pushes a pending-question notification along the SAME
@@ -892,7 +907,9 @@ func (c *RunCoordinator) notifyClarifyRequested(ctx context.Context, identity *c
 		Content:  clarifyNotificationText(*clarify),
 		Kind:     delivery.KindClarify,
 	}
-	c.routePendingNotification(ctx, identity, channel, base)
+	if c.routePendingNotification(ctx, identity, channel, base) && c.srv.Control != nil {
+		_ = c.srv.Control.MarkClarifyNotified(ctx, identity.TenantID, clarify.ID)
+	}
 }
 
 // routePendingNotification is the shared presence-aware, single-preferred-
@@ -904,22 +921,81 @@ func (c *RunCoordinator) notifyClarifyRequested(ctx context.Context, identity *c
 // endpoint attached → suppressed (the live TUI already renders the inline
 // prompt/event; an IM push would be a duplicate). CLI origin detached → the one
 // preferred IM endpoint, never a fan-out.
-func (c *RunCoordinator) routePendingNotification(ctx context.Context, identity *control.IdentityContext, channel string, base delivery.Message) {
+// The bool return reports whether a message was actually enqueued for delivery
+// (so the caller can stamp notified_at); a suppressed CLI-attached push returns
+// false.
+func (c *RunCoordinator) routePendingNotification(ctx context.Context, identity *control.IdentityContext, channel string, base delivery.Message) bool {
 	if c == nil || c.srv == nil || c.srv.Delivery == nil || identity == nil {
-		return
+		return false
 	}
 	if identity.Platform != "cli" {
 		msg := base
 		msg.Platform = identity.Platform
 		msg.PlatformUserID = identity.PlatformUserID
 		msg.Channel = channel
-		_ = c.srv.Delivery.EnqueueAndTry(ctx, msg)
-		return
+		return c.srv.Delivery.EnqueueAndTry(ctx, msg) == nil
 	}
 	if c.srv.presenceTracker().IsAttached(identity.PersonID, "cli") {
+		return false
+	}
+	return c.deliverToPreferredIM(ctx, identity, base)
+}
+
+// escrowApprovalNotification re-pushes a pending approval that was never
+// notified (initial CLI push suppressed, or the send failed) once the person is
+// no longer attached on CLI (Fix 2). It routes to the SINGLE preferred IM
+// endpoint and stamps notified_at only after the enqueue succeeds, so a failed
+// push retries on the next sweep and a resolved approval is never marked.
+func (c *RunCoordinator) escrowApprovalNotification(ctx context.Context, approval *control.ApprovalRequest) {
+	if c == nil || c.srv == nil || c.srv.Control == nil || approval == nil {
 		return
 	}
-	c.deliverToPreferredIM(ctx, identity, base)
+	// Person is back at the CLI: the live TUI shows the inline prompt, so leave
+	// the push for a later sweep rather than duplicating to IM.
+	if c.srv.presenceTracker().IsAttached(approval.PersonID, "cli") {
+		return
+	}
+	identity := &control.IdentityContext{TenantID: approval.TenantID, PersonID: approval.PersonID}
+	taskTitle := ""
+	if approval.TaskID != "" {
+		if task, err := c.srv.Control.GetTask(ctx, identity.TenantID, approval.TaskID); err == nil && task != nil {
+			taskTitle = task.Title
+		}
+	}
+	base := delivery.Message{
+		TenantID:   identity.TenantID,
+		PersonID:   identity.PersonID,
+		TaskID:     approval.TaskID,
+		RunID:      approval.RunID,
+		Content:    approvalNotificationText(*approval, taskTitle),
+		Kind:       delivery.KindApproval,
+		ApprovalID: approval.ID,
+	}
+	if c.deliverToPreferredIM(ctx, identity, base) {
+		_ = c.srv.Control.MarkApprovalNotified(ctx, identity.TenantID, approval.ID)
+	}
+}
+
+// escrowClarifyNotification is the clarify twin of escrowApprovalNotification.
+func (c *RunCoordinator) escrowClarifyNotification(ctx context.Context, clarify *control.ClarifyRequest) {
+	if c == nil || c.srv == nil || c.srv.Control == nil || clarify == nil {
+		return
+	}
+	if c.srv.presenceTracker().IsAttached(clarify.PersonID, "cli") {
+		return
+	}
+	identity := &control.IdentityContext{TenantID: clarify.TenantID, PersonID: clarify.PersonID}
+	base := delivery.Message{
+		TenantID: identity.TenantID,
+		PersonID: identity.PersonID,
+		TaskID:   clarify.TaskID,
+		RunID:    clarify.RunID,
+		Content:  clarifyNotificationText(*clarify),
+		Kind:     delivery.KindClarify,
+	}
+	if c.deliverToPreferredIM(ctx, identity, base) {
+		_ = c.srv.Control.MarkClarifyNotified(ctx, identity.TenantID, clarify.ID)
+	}
 }
 
 // personSettingNotifyPlatform is the person_settings key holding the explicit
@@ -965,10 +1041,13 @@ func (c *RunCoordinator) preferredIMAccount(ctx context.Context, identity *contr
 // the preferred IM account — never a broadcast to every bound account
 // (docs/identity-continuity.md: "One target, never a fan-out"). Shared by
 // approval notifications and CLI-originated async/detached results.
-func (c *RunCoordinator) deliverToPreferredIM(ctx context.Context, identity *control.IdentityContext, base delivery.Message) {
+// The bool return reports whether the message was enqueued (an account existed
+// and EnqueueAndTry accepted it), so escrow/initial callers can stamp
+// notified_at only on a real send.
+func (c *RunCoordinator) deliverToPreferredIM(ctx context.Context, identity *control.IdentityContext, base delivery.Message) bool {
 	account := c.preferredIMAccount(ctx, identity)
 	if account == nil {
-		return
+		return false
 	}
 	msg := base
 	msg.Platform = account.Platform
@@ -976,7 +1055,7 @@ func (c *RunCoordinator) deliverToPreferredIM(ctx context.Context, identity *con
 	// Without a live chat context the platform user id is the DM target;
 	// senders fall back to it when Channel is not a real chat id.
 	msg.Channel = account.PlatformUserID
-	_ = c.srv.Delivery.EnqueueAndTry(ctx, msg)
+	return c.srv.Delivery.EnqueueAndTry(ctx, msg) == nil
 }
 
 // approvalNotificationText is the outbound approval message body: the same

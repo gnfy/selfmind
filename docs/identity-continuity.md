@@ -119,6 +119,17 @@ Code: `internal/gateway/httpapi/continue_resolver.go`.
    `person_id`, a task started from CLI resumes from WeChat and vice versa.
    The channel only affects where the reply is delivered
    (`task.LastChannel`) and the feedback style (stream vs. concise notices).
+5. **New work never attaches silently** (task-attach semantics, 2026-07-05).
+   A message with no continuation evidence — no cue, no short acceptance, no
+   explicit task id — always creates a NEW task, even while a parked
+   non-terminal task exists; async dispatches, queued-task drains, and cron
+   turns follow the same rule, and the new task carries the request's
+   explicit `workspace_id` when one is given. An explicit `/resume <task_id>`
+   is itself continuation evidence for exactly the NEXT agent-bound message
+   (a one-shot pin, consumed on use), so a stale `/resume` can never capture
+   unrelated work later. Parked tasks are resumed deliberately (`/resume`, a
+   later continuation cue), never captured accidentally
+   (`internal/gateway/httpapi` `resolveTask`).
 
 Account binding: `POST /v1/accounts/bind` attaches a platform account to an
 existing person. `/id` shows the current tenant/person/account resolution.

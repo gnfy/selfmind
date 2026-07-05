@@ -411,6 +411,9 @@ func TestPrepareRequestWorkspaceIgnoresIMClientCWD(t *testing.T) {
 	}
 }
 
+// TestResolveTaskBindsEmptyCurrentTaskToCLIWorkspace: attaching (continuation)
+// to a workspace-less task binds the request's resolved CLI workspace to it;
+// plain new work instead creates its own task carrying that workspace.
 func TestResolveTaskBindsEmptyCurrentTaskToCLIWorkspace(t *testing.T) {
 	store, err := control.OpenStore(t.TempDir())
 	if err != nil {
@@ -447,12 +450,23 @@ func TestResolveTaskBindsEmptyCurrentTaskToCLIWorkspace(t *testing.T) {
 	if _, err := daemon.coordinator().prepareRequestWorkspace(ctx, identity, &req); err != nil {
 		t.Fatal(err)
 	}
-	resolved, err := daemon.coordinator().resolveTask(ctx, identity, req, router.IntentResult{Intent: router.IntentTask})
+	// Continuation evidence attaches to the workspace-less current task and
+	// binds the request's resolved CLI workspace to it.
+	resolved, err := daemon.coordinator().resolveTask(ctx, identity, req, router.IntentResult{Intent: router.IntentContinue})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if resolved == nil || resolved.ID != task.ID || resolved.WorkspaceID != req.WorkspaceID {
 		t.Fatalf("resolved task = %+v, req workspace = %s", resolved, req.WorkspaceID)
+	}
+	// Plain new work never attaches to the parked task: it gets its OWN task,
+	// still carrying the request workspace (task-attach semantics).
+	fresh, err := daemon.coordinator().resolveTask(ctx, identity, req, router.IntentResult{Intent: router.IntentTask})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fresh == nil || fresh.ID == task.ID || fresh.WorkspaceID != req.WorkspaceID {
+		t.Fatalf("new-work task = %+v, req workspace = %s", fresh, req.WorkspaceID)
 	}
 }
 

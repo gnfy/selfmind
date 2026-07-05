@@ -66,6 +66,11 @@ type Expectations struct {
 	MinToolCalls            int      `yaml:"min_tool_calls" json:"min_tool_calls,omitempty"`
 	RequireSameTask         bool     `yaml:"require_same_task" json:"require_same_task,omitempty"`
 	RequireContinuation     bool     `yaml:"require_continuation" json:"require_continuation,omitempty"`
+	// RequireTaskSwitch is the inverse of RequireSameTask: a multi-turn case
+	// must use MORE than one task ID. It asserts the task-attach semantics —
+	// a new request without continuation evidence creates its own task
+	// instead of attaching to the parked current one.
+	RequireTaskSwitch bool `yaml:"require_task_switch" json:"require_task_switch,omitempty"`
 	RequireWorkspaceMatch   bool     `yaml:"require_workspace_match" json:"require_workspace_match,omitempty"`
 	AllowedErrorCategories  []string `yaml:"allowed_error_categories" json:"allowed_error_categories,omitempty"`
 	DisallowedErrorCategory []string `yaml:"disallowed_error_category" json:"disallowed_error_category,omitempty"`

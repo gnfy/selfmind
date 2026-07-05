@@ -4,10 +4,17 @@ These cases assert the core product promise: one person, many endpoints. A task
 started from the CLI must be visible (`/status`), resumable (`继续`), and
 identity-isolated (a different platform user sees nothing) from another channel.
 
-All three cases are marked `require_cassette: true`: `selfmind selfcheck` (and
-CI) FAILS — does not skip — while their cassettes are missing. They need one
-local recording run against a configured live provider before the CI gate goes
-green.
+The three original cases are marked `require_cassette: true`: `selfmind
+selfcheck` (and CI) FAILS — does not skip — while their cassettes are missing.
+They need one local recording run against a configured live provider before
+the CI gate goes green.
+
+`continuity-task-attach.yaml` (task-attach semantics: new work never lands on
+the parked task, asserted via `require_task_switch`) is NOT yet
+`require_cassette: true` — it skips offline until its cassette is recorded and
+committed; flip the flag on in the same commit as the cassette. Its
+deterministic coverage lives in
+`internal/gateway/httpapi/task_attach_test.go`.
 
 ## Recording the cassettes (one command)
 

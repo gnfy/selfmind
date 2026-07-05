@@ -480,6 +480,18 @@ func artifactName(uri string) string {
 	return name
 }
 
+// resolveTask decides which task this turn runs under. Attach happens ONLY on
+// explicit continuation evidence: a caller-supplied task id, an IntentContinue
+// classification (router cue or the short-acceptance upgrade in
+// ProcessMessage), or the one-shot pin written by /resume. Everything else
+// that reaches the agent is genuinely NEW work — async dispatches and
+// queued-task drains included — and always gets its OWN task, even when a
+// parked non-terminal task exists. Attaching new work to a parked task made
+// the run inherit that task's title/status and (absent or wrong) workspace
+// (observed live: an async "create docsite-demo" request landing on an
+// unrelated /new-created empty task, so every file op tripped out-of-root
+// approvals). Parked tasks stay reachable via /resume or a later continuation
+// cue (resolveContinueTask); see docs/identity-continuity.md.
 func (c *RunCoordinator) resolveTask(ctx context.Context, identity *control.IdentityContext, req api.MessageRequest, intent router.IntentResult) (*control.Task, error) {
 	store := c.srv.Control
 	if req.TaskID != "" {
@@ -488,6 +500,10 @@ func (c *RunCoordinator) resolveTask(ctx context.Context, identity *control.Iden
 			return c.bindTaskWorkspaceIfMissing(ctx, identity, task, req, err)
 		}
 	}
+	// The /resume pin covers exactly the NEXT agent-bound message, so it is
+	// consumed here no matter which branch wins below — a stale pin must never
+	// capture unrelated work later.
+	pinned := c.srv.consumeResumePin(ctx, identity)
 	if intent.Intent == router.IntentContinue {
 		task, err := c.srv.resolveContinueTask(ctx, identity)
 		if err != nil || task != nil {
@@ -495,15 +511,11 @@ func (c *RunCoordinator) resolveTask(ctx context.Context, identity *control.Iden
 		}
 		return nil, fmt.Errorf("no task to continue; start a new task or use /resume <task_id>")
 	}
-	// Channel-scoped so two concurrent sessions (e.g. two CLI terminals) don't
-	// share one "current task" and bleed context into each other.
-	task, err := store.CurrentTaskForChannel(ctx, identity.TenantID, identity.PersonID, req.Channel)
-	if err != nil {
-		return nil, err
+	if pinned != nil && !terminalTaskStatus(pinned.Status) {
+		return c.bindTaskWorkspaceIfMissing(ctx, identity, pinned, req, nil)
 	}
-	if task != nil {
-		return c.bindTaskWorkspaceIfMissing(ctx, identity, task, req, nil)
-	}
+	// No continuation evidence → new task. An explicit request workspace wins;
+	// otherwise the person's current workspace seeds the task scope.
 	workspaceID := req.WorkspaceID
 	if workspaceID == "" {
 		if ws, _ := store.CurrentWorkspace(ctx, identity.TenantID, identity.PersonID); ws != nil {
@@ -1122,6 +1134,11 @@ func (d *Server) tryHandleControlCommand(ctx context.Context, identity *control.
 		if err := d.Control.SetCurrentTask(ctx, identity.TenantID, identity.PersonID, task.ID); err != nil {
 			return true, "", err
 		}
+		// One-shot pin: an explicit /resume IS continuation evidence, so the
+		// next agent-bound message attaches to this task even without a
+		// continuation cue. Consumed by resolveTask; after that, plain new
+		// messages create their own tasks again (task-attach semantics).
+		_ = d.Control.SetPersonSetting(ctx, identity.TenantID, identity.PersonID, resumePinKey, task.ID)
 		return true, fmt.Sprintf("Resumed task: %s (%s)", task.Title, task.ID), nil
 	case lower == "/tasks" || lower == "tasks" || strings.Contains(lower, "任务列表"):
 		tasks, err := d.Control.ListTasks(ctx, identity.TenantID, identity.PersonID, 20)

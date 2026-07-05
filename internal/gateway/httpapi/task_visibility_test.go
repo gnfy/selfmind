@@ -13,10 +13,11 @@ import (
 )
 
 // TestAsyncRunMovesCurrentTaskPointer covers the live-use regression where a
-// `selfmind send --async` run attached to a channel-matched task but left the
-// person's current_task pointer on an unrelated old task, making the user's
-// own async run invisible to /status on every endpoint. The pointer must move
-// to the task the run actually resolved.
+// `selfmind send --async` run left the person's current_task pointer on an
+// unrelated old task, making the user's own async run invisible to /status on
+// every endpoint. The pointer must move to the task the run actually resolved
+// — which, under the task-attach semantics (attach only on continuation
+// evidence), is a brand-new task, never the parked current one.
 func TestAsyncRunMovesCurrentTaskPointer(t *testing.T) {
 	t.Setenv("SELF_GATEWAY_TOKEN", "")
 	t.Setenv("SELF_DAEMON_TOKEN", "")
@@ -31,19 +32,7 @@ func TestAsyncRunMovesCurrentTaskPointer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Task the async send will resolve to (most recent non-terminal task on
-	// its channel), created first so the pointer ends up elsewhere.
-	asyncTask, err := store.CreateTask(ctx, control.TaskCreate{
-		TenantID: identity.TenantID,
-		PersonID: identity.PersonID,
-		Title:    "Async background task",
-		Channel:  "send",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	// Newer task on another channel: CreateTask moves the pointer here, so the
-	// async send below resolves a task that differs from current_task.
+	// Parked current task the async send must NOT attach to.
 	currentTask, err := store.CreateTask(ctx, control.TaskCreate{
 		TenantID: identity.TenantID,
 		PersonID: identity.PersonID,
@@ -69,20 +58,28 @@ func TestAsyncRunMovesCurrentTaskPointer(t *testing.T) {
 		t.Fatalf("async accept failed: status=%d resp=%+v", status, resp)
 	}
 
-	// The run executes in the background; wait for the pointer to converge.
+	// The run executes in the background; wait for the pointer to converge on
+	// the run's own freshly created task.
 	deadline := time.Now().Add(5 * time.Second)
 	for {
 		current, err := store.CurrentTask(ctx, identity.TenantID, identity.PersonID)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if current != nil && current.ID == asyncTask.ID {
+		if current != nil && current.ID != currentTask.ID {
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("current task pointer did not move: got %+v, want %s", current, asyncTask.ID)
+			t.Fatalf("current task pointer did not move off the parked task: got %+v", current)
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+	current, _ := store.CurrentTask(ctx, identity.TenantID, identity.PersonID)
+	if current == nil || current.LastChannel != "send" {
+		t.Fatalf("pointer should follow the async run's own task; got %+v", current)
+	}
+	if after, _ := store.GetTask(ctx, identity.TenantID, currentTask.ID); after == nil || after.Status != "new" {
+		t.Fatalf("parked task mutated by the async run: %+v", after)
 	}
 }
 

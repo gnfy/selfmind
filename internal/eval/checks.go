@@ -81,6 +81,9 @@ func EvaluateCase(c *Case, snap RunSnapshot) []CheckResult {
 	if c.Expect.RequireContinuation {
 		add("require_continuation", len(c.Turns) > 1 && len(uniqueStrings(snap.TaskIDs)) == 1, "continuation should reuse the active task context")
 	}
+	if c.Expect.RequireTaskSwitch {
+		add("require_task_switch", len(c.Turns) > 1 && len(uniqueStrings(snap.TaskIDs)) > 1, "new work without continuation evidence should create its own task, not attach to the parked one")
+	}
 	if strings.TrimSpace(c.Expect.Status) != "" {
 		want := normalizeStatus(c.Expect.Status)
 		got := normalizeStatus(snap.OutcomeStatus)

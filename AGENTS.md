@@ -123,6 +123,13 @@ Domain docs (**mandatory** before changing that domain):
   An `IntentContinue` message is NOT new work: it stays on the busy/steer path.
   A drained item becomes an ordinary async run, so the worker pool still
   schedules it — do not add a second serialization layer.
+- Task attach requires explicit continuation evidence: caller `task_id`,
+  `IntentContinue` (router cue or short acceptance), or the one-shot `/resume`
+  pin. Every other agent-bound message — sync, async, queued-drain, cron —
+  creates its OWN task honoring the request `workspace_id`
+  (`httpapi/server.go` `resolveTask`). Never re-add implicit current-task or
+  channel-recency attach for ordinary messages; parked tasks are resumed
+  deliberately, not captured.
 - Run events use a per-run sink installed with
   `kernel.WithEventChannel(ctx, ch)`. Never swap the shared
   `Agent.EventChannel` in gateway code (legacy local-TUI fallback only).

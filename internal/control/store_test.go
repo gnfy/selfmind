@@ -357,44 +357,6 @@ func TestRespondApprovalRecordsDecisionScope(t *testing.T) {
 	}
 }
 
-func TestCurrentTaskForChannelIsolation(t *testing.T) {
-	ctx := context.Background()
-	store, err := OpenStore(t.TempDir())
-	if err != nil {
-		t.Fatalf("OpenStore: %v", err)
-	}
-	defer store.Close()
-
-	const tenant, person = "t1", "p1"
-	taskA, err := store.CreateTask(ctx, TaskCreate{TenantID: tenant, PersonID: person, Title: "A", Channel: "cli-A"})
-	if err != nil {
-		t.Fatalf("create A: %v", err)
-	}
-	taskB, err := store.CreateTask(ctx, TaskCreate{TenantID: tenant, PersonID: person, Title: "B", Channel: "cli-B"})
-	if err != nil {
-		t.Fatalf("create B: %v", err)
-	}
-
-	// Each channel resolves to its OWN task — no cross-session bleed, even
-	// though the single per-person current_task pointer now points at B.
-	gotA, err := store.CurrentTaskForChannel(ctx, tenant, person, "cli-A")
-	if err != nil || gotA == nil || gotA.ID != taskA.ID {
-		t.Fatalf("channel cli-A should resolve to task A, got %+v (err %v)", gotA, err)
-	}
-	gotB, err := store.CurrentTaskForChannel(ctx, tenant, person, "cli-B")
-	if err != nil || gotB == nil || gotB.ID != taskB.ID {
-		t.Fatalf("channel cli-B should resolve to task B, got %+v (err %v)", gotB, err)
-	}
-
-	// A finished task is no longer the channel's current task.
-	if err := store.UpdateTaskStatus(ctx, tenant, taskA.ID, "done", "", nil); err != nil {
-		t.Fatalf("update status: %v", err)
-	}
-	if got, _ := store.CurrentTaskForChannel(ctx, tenant, person, "cli-A"); got != nil {
-		t.Fatalf("finished task should not be the channel's current task, got %+v", got)
-	}
-}
-
 func TestListAccountsByPerson(t *testing.T) {
 	ctx := context.Background()
 	store, err := OpenStore(t.TempDir())

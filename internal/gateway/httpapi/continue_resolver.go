@@ -33,6 +33,32 @@ func aggregateDirectResponse(resp *router.HandleResponse) (string, llm.UsageStat
 	return router.AggregateFinalResponse(resp)
 }
 
+// resumePinKey is the person_settings key holding the one-shot "attach the
+// next agent-bound message to this task" marker written by /resume. It is
+// person-scoped (like resolveContinueTask) and consumed by the first message
+// that reaches resolveTask, so a stale /resume can never capture unrelated new
+// work later — absence of continuation evidence always means a new task.
+const resumePinKey = "resume_pin_task"
+
+// consumeResumePin returns the task pinned by an explicit /resume and clears
+// the pin in the same step (one-shot). A missing, foreign, or unreadable task
+// yields nil so the caller falls through to new-task creation.
+func (d *Server) consumeResumePin(ctx context.Context, identity *control.IdentityContext) *control.Task {
+	if d == nil || d.Control == nil || identity == nil {
+		return nil
+	}
+	taskID, err := d.Control.GetPersonSetting(ctx, identity.TenantID, identity.PersonID, resumePinKey)
+	if err != nil || strings.TrimSpace(taskID) == "" {
+		return nil
+	}
+	_ = d.Control.SetPersonSetting(ctx, identity.TenantID, identity.PersonID, resumePinKey, "")
+	task, err := d.Control.GetTask(ctx, identity.TenantID, taskID)
+	if err != nil || task == nil || task.PersonID != identity.PersonID {
+		return nil
+	}
+	return task
+}
+
 func (d *Server) resolveContinueTask(ctx context.Context, identity *control.IdentityContext) (*control.Task, error) {
 	if d == nil || d.Control == nil || identity == nil {
 		return nil, nil

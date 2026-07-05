@@ -24,6 +24,7 @@ var cellRenderers = map[string]cellRenderer{
 	"assistant": func(m ChatMessage, w int) string { return renderAssistantMessage(stripANSI(m.Content), w) },
 	"tool":      func(m ChatMessage, w int) string { return renderToolMessage(m, w) },
 	"system":    func(m ChatMessage, w int) string { return renderSystemMessage(stripANSI(m.Content), w) },
+	"notice":    func(m ChatMessage, w int) string { return renderNoticeMessage(stripANSI(m.Content), w) },
 }
 
 // renderCell dispatches a message to its registered renderer. Unknown roles
@@ -196,7 +197,9 @@ func (m *uiModel) renderAllMessages() string {
 		allLines = append(allLines, msgLines...)
 	}
 
-	if m.thinking {
+	// Suppressed while the approval panel is up (mirrors renderActiveBlock):
+	// "Preparing to run <tool>…" next to the panel is duplicated noise.
+	if m.thinking && m.approvalPrompt == nil {
 		allLines = append(allLines, "")
 		spinnerView := m.spinner.View()
 		dots := strings.Repeat(".", (m.thinkingDots%3)+1)
@@ -968,6 +971,38 @@ func planStepLines(text, status string, contentWidth int) []string {
 		}
 	}
 	return out
+}
+
+// noticeStyleFor colors a compact one-line notice by its leading glyph so the
+// transcript record of an approval (requested / approved / denied) reads at a
+// glance without a multi-line cell.
+func noticeStyleFor(content string) lipgloss.Style {
+	switch {
+	case strings.HasPrefix(content, glyphWarning):
+		return lipgloss.NewStyle().Foreground(lipgloss.Color("214")) // amber: attention
+	case strings.HasPrefix(content, glyphCheck):
+		return lipgloss.NewStyle().Foreground(lipgloss.Color("2")) // green: approved
+	case strings.HasPrefix(content, glyphCross):
+		return lipgloss.NewStyle().Foreground(lipgloss.Color("203")) // red: denied
+	default:
+		return lipgloss.NewStyle().Faint(true)
+	}
+}
+
+// renderNoticeMessage renders a "notice" cell: exactly ONE compact line (long
+// content is truncated), used as the durable transcript record for transient
+// interactions such as approvals. The interactive detail lives in the active
+// region, not in history.
+func renderNoticeMessage(content string, width int) string {
+	content = strings.TrimSpace(content)
+	if content == "" {
+		return ""
+	}
+	if width < 12 {
+		width = 12
+	}
+	content = strings.ReplaceAll(content, "\n", " ")
+	return noticeStyleFor(content).Render(truncateToWidth(content, width-1))
 }
 
 func renderSystemMessage(content string, width int) string {

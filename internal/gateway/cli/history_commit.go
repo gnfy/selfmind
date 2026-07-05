@@ -40,6 +40,11 @@ var composerHintStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("39")).Ita
 // the user has typed something — so they know Enter will inject the text as
 // guidance into the running task (not start a new turn). Empty otherwise.
 func (m *uiModel) composerHint() string {
+	// Deny follow-up (approval panel "No"): always show what Enter will do —
+	// send guidance with the rejection, or just deny when left empty.
+	if m.approvalDenyFollowup {
+		return composerHintStyle.Render(glyphArrowInto + " " + approvalDenyHint)
+	}
 	if m.steerCh == nil || (!m.thinking && m.toolExecuting == "") {
 		return ""
 	}
@@ -181,7 +186,10 @@ func (m *uiModel) renderActiveBlock(width int) string {
 			lines = append(lines, strings.Split(rendered, "\n")...)
 		}
 	}
-	if m.thinking {
+	// While the approval panel is up, the run is paused on the user: the
+	// spinner/activity line ("Preparing to run <tool>…") would be noise next to
+	// the panel, so it is suppressed until the decision resumes the run.
+	if m.thinking && m.approvalPrompt == nil {
 		spinnerView := m.spinner.View()
 		dots := strings.Repeat(".", (m.thinkingDots%3)+1)
 		label := strings.TrimSpace(m.activityText)
@@ -212,6 +220,12 @@ func (m *uiModel) viewActiveRegion() string {
 	var parts []string
 	if active := m.renderActiveBlock(mainW); strings.TrimSpace(active) != "" {
 		parts = append(parts, active)
+	}
+	// Transient approval dialog: active-region content per the hybrid contract
+	// (docs/tui-terminal-first-hybrid.md §3) — it must never scroll away into
+	// history while undecided.
+	if m.approvalPrompt != nil {
+		parts = append(parts, m.approvalPrompt.View(mainW))
 	}
 	if notification != "" {
 		parts = append(parts, notification)

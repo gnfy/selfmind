@@ -211,6 +211,7 @@ func TestEventToStreamApprovalRequested(t *testing.T) {
 			"approval_id": "appr-123",
 			"tool":        "write_file",
 			"reason":      "edits main.go",
+			"target":      "main.go",
 		}),
 	})
 	if !ok || se.EventType != "approval.requested" {
@@ -222,10 +223,13 @@ func TestEventToStreamApprovalRequested(t *testing.T) {
 	if id, _ := se.Payload["approval_id"].(string); id != "appr-123" {
 		t.Fatalf("approval_id not carried: %+v", se.Payload)
 	}
+	if target, _ := se.Payload["target"].(string); target != "main.go" {
+		t.Fatalf("target not carried: %+v", se.Payload)
+	}
 }
 
 func TestRespondApproval(t *testing.T) {
-	var gotID, gotDecision string
+	var gotID, gotDecision, gotScope string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/approvals/respond" {
 			http.NotFound(w, r)
@@ -233,17 +237,24 @@ func TestRespondApproval(t *testing.T) {
 		}
 		var req api.ApprovalRespondRequest
 		_ = json.NewDecoder(r.Body).Decode(&req)
-		gotID, gotDecision = req.ApprovalID, req.Decision
+		gotID, gotDecision, gotScope = req.ApprovalID, req.Decision, req.Scope
 		writeJSONResp(w, api.ApprovalRespondResponse{})
 	}))
 	defer srv.Close()
 
 	c := New(srv.URL, "")
-	if err := c.RespondApproval("appr-123", "approved"); err != nil {
+	if err := c.RespondApproval("appr-123", "approved", ""); err != nil {
 		t.Fatalf("RespondApproval: %v", err)
 	}
-	if gotID != "appr-123" || gotDecision != "approved" {
-		t.Fatalf("server saw id=%q decision=%q", gotID, gotDecision)
+	if gotID != "appr-123" || gotDecision != "approved" || gotScope != "" {
+		t.Fatalf("server saw id=%q decision=%q scope=%q", gotID, gotDecision, gotScope)
+	}
+	// The TUI panel's grant scope rides the same request.
+	if err := c.RespondApproval("appr-123", "approved", "task"); err != nil {
+		t.Fatalf("RespondApproval with scope: %v", err)
+	}
+	if gotScope != "task" {
+		t.Fatalf("scope not threaded through: %q", gotScope)
 	}
 }
 

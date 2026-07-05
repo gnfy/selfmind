@@ -118,10 +118,17 @@ type uiModel struct {
 	transcriptCache    *renderCache // memoizes finalized message renders across frames
 	clientMode         bool         // daemon-client mode: no in-process agent/gateway; chat routes to the daemon
 	toolDispatchFn     func(tool string, args map[string]interface{}) (string, error) // client mode: run management tools on the daemon
-	approvalResponder  func(approvalID, decision string) error // client mode: answer a daemon tool-approval request
-	steerFn            func(text string) error                 // client mode: forward mid-turn guidance to the daemon's active run
-	awaitingApproval   bool                                    // an inline approval prompt is active
-	pendingApprovalID  string
+	approvalResponder  func(approvalID, decision, scope string) error // client mode: answer a daemon tool-approval request (scope: ""|task|person)
+	steerFn            func(text string) error                        // client mode: forward mid-turn guidance to the daemon's active run
+	// Interactive approval panel state (see approval_flow.go). approvalPrompt is
+	// the active panel; approvalQueue holds requests that arrived while one was
+	// already up (FIFO re-arm); approvalDenyFollowup captures the composer after
+	// "No" so the user can attach guidance to the rejection.
+	approvalPrompt       *components.ApprovalPrompt
+	approvalQueue        []MsgApprovalRequest
+	approvalDenyFollowup bool
+	pendingApprovalID    string
+	pendingApprovalTool  string
 	// Attach digest + re-attach (client mode, G0-c/G0-d): the client shell
 	// fetches the digest before the first presence beat and hands it over via
 	// SetStartupDigest; the first sized frame renders it once, and when it
@@ -153,11 +160,12 @@ type MsgAgentActivity struct {
 }
 
 // MsgApprovalRequest is emitted (client mode) when the daemon blocks a run
-// waiting for tool approval. The TUI renders an inline y/n prompt and answers
-// via the approval responder.
+// waiting for tool approval. The TUI renders the interactive approval panel in
+// the active region and answers via the approval responder.
 type MsgApprovalRequest struct {
 	ID     string
 	Tool   string
+	Target string // compact object of the action (path/command); may be empty
 	Reason string
 }
 
@@ -308,9 +316,11 @@ func (c *Controller) SetClientMode(enabled bool) {
 }
 
 // SetApprovalResponder installs the function used to answer a daemon
-// tool-approval request from the client TUI's inline prompt. Only set in client
-// mode; in-process approvals use the clarify bridge instead.
-func (c *Controller) SetApprovalResponder(fn func(approvalID, decision string) error) {
+// tool-approval request from the client TUI's approval panel. scope carries the
+// class-grant memory ("" once, "task", "person") through the existing
+// /v1/approvals/respond path. Only set in client mode; in-process approvals use
+// the clarify bridge instead.
+func (c *Controller) SetApprovalResponder(fn func(approvalID, decision, scope string) error) {
 	if c == nil || c.model == nil {
 		return
 	}
@@ -663,6 +673,11 @@ func (m *uiModel) transcriptVisibleHeight() int {
 	if m.migrationHintBar(m.width) != "" {
 		visibleH--
 	}
+	// Legacy mode draws the approval panel between transcript and composer, so
+	// the viewport gives up that many rows.
+	if m.approvalPrompt != nil {
+		visibleH -= lipgloss.Height(m.approvalPrompt.View(m.width))
+	}
 	if visibleH < 1 {
 		visibleH = 1
 	}
@@ -736,6 +751,11 @@ func (m *uiModel) viewModel() string {
 	statusBar := st.Status.Panel.Width(m.width).Render(m.statusLine())
 
 	parts := []string{mainStr}
+	// The approval panel is active-region content in BOTH renderers: in legacy
+	// mode it sits between the transcript viewport and the composer.
+	if m.approvalPrompt != nil {
+		parts = append(parts, m.approvalPrompt.View(mainW))
+	}
 	if notification != "" {
 		parts = append(parts, notification)
 	}
@@ -921,11 +941,17 @@ func (m *uiModel) statusLine() string {
 	}
 
 	state := m.runStatus
-	if m.runStatus == "working" && !m.thinkingStart.IsZero() {
-		elapsed := time.Since(m.thinkingStart).Seconds()
-		state = fmt.Sprintf("working %.1fs", elapsed)
+	stateStyle := st.Status.Good
+	switch {
+	case m.approvalFlowActive():
+		// A pending approval is a distinct state — the run is paused on the
+		// user, not "working", and definitely not "ready".
+		state = "⏸ waiting approval"
+		stateStyle = st.Status.Warning
+	case m.runStatus == "working" && !m.thinkingStart.IsZero():
+		state = fmt.Sprintf("working %.1fs", time.Since(m.thinkingStart).Seconds())
 	}
-	parts = append(parts, st.Status.Good.Render(state))
+	parts = append(parts, stateStyle.Render(state))
 
 	// Show the approval mode unless it's the default, so an elevated mode
 	// (auto-edit / full-auto) is always visible.
@@ -1136,6 +1162,10 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case MsgAgentDone:
 		m.exitPromptActive = false
+		// The run is over; any unanswered approval row is expired by the daemon
+		// once its waiter is gone, so drop stale approval UI instead of letting a
+		// panel answer into the void.
+		m.clearApprovalFlow()
 		msg.Response = textutil.CleanUTF8(msg.Response)
 		wasAtBottom := m.transcriptAtBottom()
 		yOffset := m.viewport.YOffset
@@ -1193,18 +1223,14 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, spinnerCmd
 
 	case MsgApprovalRequest:
-		// The daemon is blocked waiting for approval; prompt inline. The next
-		// Enter is interpreted as the y/n answer (handled in the key path).
-		m.awaitingApproval = true
-		m.pendingApprovalID = msg.ID
-		reason := strings.TrimSpace(msg.Reason)
-		prompt := fmt.Sprintf("⚠ Approval required to run `%s`.", msg.Tool)
-		if reason != "" {
-			prompt += " " + reason
+		// The daemon is blocked waiting for approval. Arm the interactive panel
+		// (active region); if one is already up, queue FIFO and re-arm after the
+		// current decision. No redundant text notice — the panel is the prompt.
+		if m.approvalFlowActive() {
+			m.approvalQueue = append(m.approvalQueue, msg)
+			return m, nil
 		}
-		prompt += "\nApprove? [y/N]"
-		m.addMessage("assistant", prompt)
-		m.statusMsg = "Approval required — type y to allow, n to deny."
+		m.armApprovalPrompt(msg)
 		return m, nil
 
 	case MsgToolStart:
@@ -1310,6 +1336,15 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *uiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// An active approval panel captures every key except ctrl+c: the decision
+	// must be explicit (Esc does nothing), and stray keys must not leak into
+	// the composer.
+	if m.approvalPrompt != nil {
+		if cmd, handled := m.handleApprovalPromptKey(msg); handled {
+			return m, cmd
+		}
+	}
+
 	// Ctrl+V, or an empty bracketed paste (how a screenshot paste arrives — the
 	// image has no text payload), may be an image paste. Check the clipboard for
 	// an image and route it to the attachment pipeline. If there is no image it
@@ -1424,6 +1459,12 @@ func (m *uiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.viewport.SetContent("")
 			return m, m.clearHybridScreen()
 		case "enter":
+			// Deny follow-up (approval panel "No"): Enter resolves it — bare Enter
+			// is a plain deny, typed text is deny + guidance. Checked before the
+			// empty-input early return so bare Enter works.
+			if m.approvalDenyFollowup {
+				return m, m.finishApprovalDeny(m.editor.ExpandValue())
+			}
 			// Shift+Enter / Ctrl+J already handled above via KeyCtrlJ.
 			// Here plain Enter submits
 			// Use ExpandValue() to replace paste placeholders with actual content.
@@ -1433,34 +1474,6 @@ func (m *uiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			m.recordInputHistory(displayInput)
-
-			if m.awaitingApproval {
-				decision, approved := parseApprovalAnswer(input)
-				m.editor.Reset()
-				if decision == "" {
-					// Unclear answer — keep waiting and re-hint.
-					m.statusMsg = "Please answer y (allow) or n (deny)."
-					return m, nil
-				}
-				m.addMessage("user", input)
-				id := m.pendingApprovalID
-				m.awaitingApproval = false
-				m.pendingApprovalID = ""
-				if m.approvalResponder != nil {
-					if err := m.approvalResponder(id, decision); err != nil {
-						m.addErrorMessage(fmt.Sprintf("Could not send approval: %v", err))
-					}
-				}
-				if approved {
-					m.statusMsg = "Approved — resuming."
-				} else {
-					m.statusMsg = "Denied."
-				}
-				m.thinking = true
-				m.runStatus = "working"
-				m.thinkingStart = time.Now()
-				return m, tea.Batch(m.spinner.Tick, workingTick())
-			}
 
 			if m.clarifyMode {
 				response := m.resolveClarifyResponse(input)
@@ -1542,20 +1555,6 @@ func (m *uiModel) syncTranscriptContent() {
 		return
 	}
 	m.viewport.SetContent(m.renderAllMessages())
-}
-
-// parseApprovalAnswer maps a free-text reply to an approval decision. It returns
-// ("approved"|"rejected", approved) or ("", false) when the answer is unclear so
-// the prompt can be repeated. Empty/bare-Enter defaults to deny (safe default).
-func parseApprovalAnswer(input string) (string, bool) {
-	switch strings.ToLower(strings.TrimSpace(input)) {
-	case "y", "yes", "approve", "approved", "allow", "ok":
-		return "approved", true
-	case "n", "no", "reject", "rejected", "deny", "", "d":
-		return "rejected", false
-	default:
-		return "", false
-	}
 }
 
 func (m *uiModel) scrollTranscriptPage(direction int) {

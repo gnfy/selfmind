@@ -271,12 +271,16 @@ func eventToStream(ev control.Event) (llm.StreamEvent, bool) {
 		return llm.StreamEvent{EventType: ev.Type, Content: str(p["message"])}, true
 	case ev.Type == "approval.requested":
 		// Surface the pending approval so the client TUI can prompt; approval_id
-		// rides in Payload, tool in ToolName, reason in Content.
+		// and the compact action target ride in Payload, tool in ToolName,
+		// reason in Content.
 		return llm.StreamEvent{
 			EventType: "approval.requested",
 			ToolName:  str(p["tool"]),
 			Content:   str(p["reason"]),
-			Payload:   map[string]interface{}{"approval_id": str(p["approval_id"])},
+			Payload: map[string]interface{}{
+				"approval_id": str(p["approval_id"]),
+				"target":      str(p["target"]),
+			},
 		}, true
 	case strings.HasPrefix(ev.Type, "learning."):
 		return llm.StreamEvent{EventType: "learning.review", Content: str(p["message"])}, true
@@ -454,14 +458,16 @@ func (c *Client) StartPresencePing(ctx context.Context) func() {
 
 // RespondApproval answers a pending tool-approval request on the daemon
 // (decision "approved" or "rejected"), unblocking the waiting run. It backs the
-// client TUI's inline approval prompt.
-func (c *Client) RespondApproval(approvalID, decision string) error {
+// client TUI's approval panel. scope carries class-grant memory on an approve:
+// "" (once), "task", or "person" — same grammar as `/approve [n] task|always`.
+func (c *Client) RespondApproval(approvalID, decision, scope string) error {
 	req := api.ApprovalRespondRequest{
 		Platform:       "cli",
 		PlatformUserID: clientUserID(),
 		Channel:        "cli",
 		ApprovalID:     approvalID,
 		Decision:       decision,
+		Scope:          scope,
 	}
 	body, _ := json.Marshal(req)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

@@ -190,14 +190,17 @@ func (m *uiModel) forwardGatewayEvent(event llm.StreamEvent) {
 			m.program.Send(MsgLearningEvent{Content: event.Content})
 		}
 	case "approval.requested":
-		id := ""
+		id, target := "", ""
 		if event.Payload != nil {
 			if v, ok := event.Payload["approval_id"].(string); ok {
 				id = v
 			}
+			if v, ok := event.Payload["target"].(string); ok {
+				target = v
+			}
 		}
 		if id != "" {
-			m.program.Send(MsgApprovalRequest{ID: id, Tool: event.ToolName, Reason: event.Content})
+			m.program.Send(MsgApprovalRequest{ID: id, Tool: event.ToolName, Target: target, Reason: event.Content})
 		}
 	}
 }

@@ -756,6 +756,10 @@ func (c *RunCoordinator) toolApprovalHandler(identity *control.IdentityContext, 
 					"action_type": approval.ActionType,
 					"tool":        req.ToolName,
 					"reason":      req.Reason,
+					// Compact single-string object of the action (path/command)
+					// so one-line UI surfaces (the TUI approval panel) can show
+					// "tool → target" without decoding full args.
+					"target": approvalActionTarget(req.Args),
 				}),
 			})
 		}
@@ -801,6 +805,19 @@ func redactApprovalArgs(args map[string]interface{}) map[string]interface{} {
 		out[k] = tools.RedactSensitive(fmt.Sprintf("%v", v))
 	}
 	return out
+}
+
+// approvalActionTarget derives a compact single-string object of the pending
+// action (a path, command, pattern, or name) from the tool args, redacted like
+// the stored args. One-line UI surfaces use it; the full redacted args stay on
+// the approval row.
+func approvalActionTarget(args map[string]interface{}) string {
+	for _, key := range []string{"path", "file_path", "filename", "command", "pattern", "query", "name", "action", "url"} {
+		if v, ok := args[key].(string); ok && strings.TrimSpace(v) != "" {
+			return tools.RedactSensitive(strings.TrimSpace(v))
+		}
+	}
+	return ""
 }
 
 // notifyApprovalRequested pushes an approval notification along the

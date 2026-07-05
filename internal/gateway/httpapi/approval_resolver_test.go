@@ -592,3 +592,22 @@ func TestApproveAllClearsEveryPending(t *testing.T) {
 		t.Fatalf("content = %q", resp.Content)
 	}
 }
+
+// TestApprovalActionTarget: the compact target string carried on the
+// approval.requested event for one-line UI surfaces (TUI panel header).
+func TestApprovalActionTarget(t *testing.T) {
+	cases := []struct {
+		args map[string]interface{}
+		want string
+	}{
+		{map[string]interface{}{"path": "/mnt/d/site/index.html", "content": "<html>"}, "/mnt/d/site/index.html"},
+		{map[string]interface{}{"command": "chmod +x run.sh"}, "chmod +x run.sh"},
+		{map[string]interface{}{"content": "no target keys"}, ""},
+		{nil, ""},
+	}
+	for _, tc := range cases {
+		if got := approvalActionTarget(tc.args); got != tc.want {
+			t.Errorf("approvalActionTarget(%v) = %q, want %q", tc.args, got, tc.want)
+		}
+	}
+}

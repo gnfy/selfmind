@@ -8,6 +8,7 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -193,5 +194,131 @@ func TestDigestAnchorsOnAccountLastSeen(t *testing.T) {
 	digest = fetchDigest(t, daemon)
 	if len(digest.FinishedTasks) != 1 || digest.FinishedTasks[0].ID != task.ID {
 		t.Fatalf("task finished after the anchor missing: %+v", digest.FinishedTasks)
+	}
+}
+
+// TestDigestActiveRunShowsProgress (owner request 2026-07-05): the digest's
+// active-run entry must answer "where does it stand?" — the same plan source
+// /status uses (latest plan.updated event) rendered as bounded checklist
+// lines with the current step marked, plus a one-line latest activity note.
+func TestDigestActiveRunShowsProgress(t *testing.T) {
+	daemon, store, identity := newDigestTestServer(t)
+	ctx := context.Background()
+
+	task, err := store.CreateTask(ctx, control.TaskCreate{
+		TenantID: identity.TenantID,
+		PersonID: identity.PersonID,
+		Title:    "Migrate the database",
+		Channel:  "cli",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	planPayload, _ := json.Marshal(map[string]interface{}{
+		"plan": []map[string]string{
+			{"step": "Dump the schema", "status": "completed"},
+			{"step": "Rewrite the migrations", "status": "in_progress"},
+			{"step": "Replay onto staging", "status": "pending"},
+		},
+	})
+	if _, err := store.AppendEvent(ctx, control.Event{TaskID: task.ID, Type: "plan.updated", Visibility: "task", Payload: planPayload}); err != nil {
+		t.Fatal(err)
+	}
+	thinkingPayload, _ := json.Marshal(map[string]string{"message": "rewriting migration 007"})
+	if _, err := store.AppendEvent(ctx, control.Event{TaskID: task.ID, Type: "agent.thinking", Visibility: "task", Payload: thinkingPayload}); err != nil {
+		t.Fatal(err)
+	}
+
+	daemon.coordinator().beginActive(identity.PersonID, &activeRun{
+		TenantID:  identity.TenantID,
+		PersonID:  identity.PersonID,
+		TaskID:    task.ID,
+		RunID:     "run_progress",
+		Channel:   "cli",
+		Summary:   "migrate the database",
+		StartedAt: time.Now().Add(-3 * time.Minute),
+	})
+
+	digest := fetchDigest(t, daemon)
+	if digest.ActiveRun == nil {
+		t.Fatal("active run missing from the digest")
+	}
+	wantPlan := []string{
+		"[x] Dump the schema",
+		"[>] Rewrite the migrations",
+		"[ ] Replay onto staging",
+	}
+	if len(digest.ActiveRun.PlanSteps) != len(wantPlan) {
+		t.Fatalf("plan steps = %v", digest.ActiveRun.PlanSteps)
+	}
+	for i, want := range wantPlan {
+		if digest.ActiveRun.PlanSteps[i] != want {
+			t.Fatalf("plan step %d = %q, want %q", i, digest.ActiveRun.PlanSteps[i], want)
+		}
+	}
+	if digest.ActiveRun.LatestActivity != "rewriting migration 007" {
+		t.Fatalf("latest activity = %q", digest.ActiveRun.LatestActivity)
+	}
+}
+
+// TestDigestPlanLinesBounded: a long plan never turns the digest into a
+// scrolling checklist — completed leading steps collapse, the current step
+// stays visible, and the tail truncates with a "… N more steps" line, all
+// within the digestPlanMaxLines budget.
+func TestDigestPlanLinesBounded(t *testing.T) {
+	mkPlan := func(n, current int) []taskPlanStep {
+		plan := make([]taskPlanStep, 0, n)
+		for i := 0; i < n; i++ {
+			status := "pending"
+			if i < current {
+				status = "completed"
+			} else if i == current {
+				status = "in_progress"
+			}
+			plan = append(plan, taskPlanStep{Step: fmt.Sprintf("step %02d", i+1), Status: status})
+		}
+		return plan
+	}
+
+	// 20 pending steps, current at the front: head shown, tail collapsed.
+	lines := digestPlanLines(mkPlan(20, 0))
+	if len(lines) > digestPlanMaxLines {
+		t.Fatalf("plan lines exceed the budget: %v", lines)
+	}
+	if lines[0] != "[>] step 01" {
+		t.Fatalf("first line = %q", lines[0])
+	}
+	if last := lines[len(lines)-1]; !strings.Contains(last, "more steps") {
+		t.Fatalf("long plan must end with a more-steps marker: %v", lines)
+	}
+
+	// Current step deep in a 20-step plan: earlier done work collapses so the
+	// current step is still visible.
+	lines = digestPlanLines(mkPlan(20, 10))
+	if len(lines) > digestPlanMaxLines {
+		t.Fatalf("plan lines exceed the budget: %v", lines)
+	}
+	if !strings.Contains(lines[0], "10 earlier steps done") {
+		t.Fatalf("completed prefix must collapse: %v", lines)
+	}
+	foundCurrent := false
+	for _, line := range lines {
+		if strings.HasPrefix(line, "[>] step 11") {
+			foundCurrent = true
+		}
+	}
+	if !foundCurrent {
+		t.Fatalf("current step must stay visible: %v", lines)
+	}
+	if last := lines[len(lines)-1]; !strings.Contains(last, "more steps") {
+		t.Fatalf("tail must truncate with a marker: %v", lines)
+	}
+
+	// A short plan renders whole; an absent plan renders nothing.
+	if lines = digestPlanLines(mkPlan(3, 1)); len(lines) != 3 {
+		t.Fatalf("short plan must render whole: %v", lines)
+	}
+	if lines = digestPlanLines(nil); lines != nil {
+		t.Fatalf("no plan must render nothing: %v", lines)
 	}
 }

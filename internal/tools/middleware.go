@@ -254,9 +254,23 @@ func SmartApprovalMiddleware(projectRoot string) Middleware {
 			dangerous, reason := dangerousToolCall(projectRoot, toolName, args)
 
 			scope, hasScope := currentExecutionScopeAny(args)
+			// Live mode lookup: the mode is resolved PER ASK, not frozen at run
+			// start, so a /mode change from any endpoint governs the in-flight
+			// run's later asks. ModeGetter carries the gateway's re-resolution
+			// (explicit request mode wins, else current persisted preference);
+			// the static snapshot is the fallback when no getter is installed.
 			mode := ApprovalOnRequest
-			if hasScope && scope.ApprovalMode != "" {
-				mode = scope.ApprovalMode
+			if hasScope {
+				switch {
+				case scope.ModeGetter != nil:
+					if live := scope.ModeGetter(); live != "" {
+						mode = live
+					} else if scope.ApprovalMode != "" {
+						mode = scope.ApprovalMode
+					}
+				case scope.ApprovalMode != "":
+					mode = scope.ApprovalMode
+				}
 			}
 
 			// Layer 2: mode bypass.

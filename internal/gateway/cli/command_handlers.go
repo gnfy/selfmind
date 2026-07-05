@@ -660,16 +660,23 @@ func (m *uiModel) handleCapture(args []string) tea.Cmd {
 }
 
 // handleMode shows or sets the codex-style approval mode for this session.
+// An unset session mode ("") is deliberate: requests then OMIT approval_mode,
+// so the gateway resolves the person's persisted /mode preference (set from
+// any endpoint, e.g. IM) instead of this terminal shadowing it forever.
 func (m *uiModel) handleMode(args []string) tea.Cmd {
 	if len(args) == 0 {
+		current := m.approvalMode
+		if current == "" {
+			current = "not set this session (your saved /mode preference applies; on-request if none)"
+		}
 		m.addMessage("assistant", fmt.Sprintf(
-			"Approval mode: %s\n\n  on-request  ask only on risky ops (default)\n  read-only   ask before any file write or command\n  auto-edit   auto-apply in-workspace edits; ask before commands\n  full-auto   run everything without asking (hard-floor safety limits still apply)\n  smart       ask only on risky ops (LLM triage arrives in a later release)\n\nUsage: /mode <on-request|read-only|auto-edit|full-auto|smart>",
-			m.approvalMode))
+			"Approval mode: %s\n\n  on-request  ask only on risky ops (default)\n  read-only   ask before any file write or command\n  auto-edit   auto-apply in-workspace edits; ask before commands\n  full-auto   run everything without asking (hard-floor safety limits still apply)\n  smart       auto-run clearly safe risky ops after LLM triage; ask otherwise\n\nUsage: /mode <on-request|read-only|auto-edit|full-auto|smart>",
+			current))
 		return nil
 	}
 	mode := string(tools.NormalizeApprovalMode(args[0]))
 	m.approvalMode = mode
-	m.addMessage("assistant", "Approval mode set to: "+mode)
+	m.addMessage("assistant", "Approval mode set to: "+mode+" (this session's messages send it explicitly; it overrides your saved /mode preference)")
 	return nil
 }
 

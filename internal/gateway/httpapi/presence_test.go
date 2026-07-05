@@ -286,3 +286,87 @@ func TestPresencePingRequiresAuth(t *testing.T) {
 		t.Fatalf("authenticated status = %d, body = %s", rec.Code, rec.Body.String())
 	}
 }
+
+// TestPresenceBeatWithActiveZeroDoesNotClaim: a heartbeat or event poll
+// stamped active=0 (the client's last user input is older than the presence
+// idle timeout) must NOT touch presence — an open-but-vacated TUI detaches by
+// TTL so pushes route to the preferred IM again. active=1 and absent keep the
+// old behavior, and the endpoints still answer normally either way.
+func TestPresenceBeatWithActiveZeroDoesNotClaim(t *testing.T) {
+	daemon, store, identity, _, _ := newApprovalTestServer(t)
+
+	// Inactive ping: 200 OK, but no presence claim and no durable recency stamp.
+	rec := httptest.NewRecorder()
+	daemon.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/presence/ping?platform=cli&platform_user_id=local&active=0", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("inactive ping status = %d", rec.Code)
+	}
+	if daemon.presenceTracker().IsAttached(identity.PersonID, "cli") {
+		t.Fatal("active=0 ping must not mark the endpoint attached")
+	}
+	accounts, err := store.ListAccountsByPerson(context.Background(), identity.TenantID, identity.PersonID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(accounts) != 1 || accounts[0].LastSeenAt != 0 {
+		t.Fatalf("active=0 ping must not stamp accounts.last_seen_at: %+v", accounts)
+	}
+
+	// Inactive event poll: events still served, presence still unclaimed.
+	rec = httptest.NewRecorder()
+	daemon.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/tasks/events?platform=cli&platform_user_id=local&active=0", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("inactive event poll status = %d", rec.Code)
+	}
+	if daemon.presenceTracker().IsAttached(identity.PersonID, "cli") {
+		t.Fatal("active=0 event poll must not mark the endpoint attached")
+	}
+
+	// active=1 claims again (the person typed → the next beat re-attaches).
+	rec = httptest.NewRecorder()
+	daemon.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/presence/ping?platform=cli&platform_user_id=local&active=1", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("active ping status = %d", rec.Code)
+	}
+	if !daemon.presenceTracker().IsAttached(identity.PersonID, "cli") {
+		t.Fatal("active=1 ping must mark the endpoint attached")
+	}
+}
+
+// TestPresenceIdleBeatsLetAttachmentExpire simulates the walk-away lifecycle:
+// an attached endpoint that keeps heartbeating with active=0 stops refreshing
+// its presence, so IsAttached flips false once the TTL lapses — exactly as if
+// the beats had stopped entirely.
+func TestPresenceIdleBeatsLetAttachmentExpire(t *testing.T) {
+	daemon, _, identity, _, _ := newApprovalTestServer(t)
+	registry := daemon.presenceTracker()
+	now := time.Now()
+	registry.now = func() time.Time { return now }
+
+	// Attached via an active beat.
+	rec := httptest.NewRecorder()
+	daemon.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/presence/ping?platform=cli&platform_user_id=local", nil))
+	if rec.Code != http.StatusOK || !registry.IsAttached(identity.PersonID, "cli") {
+		t.Fatalf("active beat must attach (status=%d)", rec.Code)
+	}
+
+	// The person walks away: only inactive beats arrive while time passes the TTL.
+	for i := 0; i < 4; i++ {
+		now = now.Add(30 * time.Second)
+		rec = httptest.NewRecorder()
+		daemon.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/presence/ping?platform=cli&platform_user_id=local&active=0", nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("inactive beat %d status = %d", i, rec.Code)
+		}
+	}
+	if registry.IsAttached(identity.PersonID, "cli") {
+		t.Fatal("inactive beats past the TTL must read as detached")
+	}
+
+	// They come back and type: the next active beat re-attaches instantly.
+	rec = httptest.NewRecorder()
+	daemon.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/presence/ping?platform=cli&platform_user_id=local&active=1", nil))
+	if rec.Code != http.StatusOK || !registry.IsAttached(identity.PersonID, "cli") {
+		t.Fatal("an active beat after idling must re-attach")
+	}
+}

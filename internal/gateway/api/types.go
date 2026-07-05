@@ -237,10 +237,23 @@ type DigestPush struct {
 	Preview  string `json:"preview,omitempty"`
 }
 
+// DigestActiveRun tells a re-attaching client not just THAT a run is
+// executing but WHERE it stands: the same update_plan checklist /status
+// renders (bounded, pre-rendered lines) plus the latest progress event, so
+// reopening the CLI answers "how far along is it?" at a glance.
 type DigestActiveRun struct {
 	TaskID         string `json:"task_id,omitempty"`
 	Title          string `json:"title,omitempty"`
 	ElapsedSeconds int64  `json:"elapsed_seconds"`
+	// PlanSteps is the run's current plan as pre-rendered checklist lines
+	// ("[x] done", "[>] current", "[ ] pending", "[-] cancelled"), bounded to
+	// a handful of lines server-side; a long plan collapses completed leading
+	// steps and truncates the tail with "… N more steps". Empty when the run
+	// published no plan.
+	PlanSteps []string `json:"plan_steps,omitempty"`
+	// LatestActivity is ONE line describing the most recent progress event
+	// (tool call or thinking note), the "what is it doing right now" signal.
+	LatestActivity string `json:"latest_activity,omitempty"`
 }
 
 type WorkspaceRegisterRequest struct {

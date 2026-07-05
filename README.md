@@ -188,6 +188,11 @@ gateway:
   # Empty is fine for local-only use. Set a token for servers or exposed ports.
   token: ""
   drain_timeout: "30s"
+  # Presence = recent keyboard input, not an open window: after this long
+  # without a keystroke the TUI stops counting as "attached", so approval and
+  # result pushes route to your preferred IM again. "0" disables (an open TUI
+  # always counts as attached).
+  presence_idle_timeout: "5m"
   # Generic outbound webhook for custom IM relays.
   outbound_webhook_url: ""
   outbound_webhook_token: ""

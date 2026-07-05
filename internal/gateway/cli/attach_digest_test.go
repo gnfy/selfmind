@@ -153,3 +153,49 @@ func TestFormatElapsedShort(t *testing.T) {
 		}
 	}
 }
+
+// TestStartupDigestRendersActiveRunProgress: when the digest's active run
+// carries plan lines and a latest-activity note (server-bounded), the startup
+// block renders them under the "running now" line so re-attaching shows where
+// the task stands; without them the line stays as before.
+func TestStartupDigestRendersActiveRunProgress(t *testing.T) {
+	text := formatStartupDigest(&api.DigestResponse{
+		ActiveRun: &api.DigestActiveRun{
+			TaskID:         "t9",
+			Title:          "Long migration",
+			ElapsedSeconds: 720,
+			PlanSteps: []string{
+				"[x] Dump the schema",
+				"[>] Rewrite the migrations",
+				"[ ] Replay onto staging",
+				"… 4 more steps",
+			},
+			LatestActivity: "running terminal",
+		},
+	})
+	for _, want := range []string{
+		"▶ A task is running now: Long migration (12m)",
+		"    [x] Dump the schema",
+		"    [>] Rewrite the migrations",
+		"    [ ] Replay onto staging",
+		"    … 4 more steps",
+		"    now: running terminal",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("digest missing %q:\n%s", want, text)
+		}
+	}
+
+	// No plan/activity: no indented progress lines appear.
+	bare := formatStartupDigest(&api.DigestResponse{
+		ActiveRun: &api.DigestActiveRun{TaskID: "t9", Title: "Long migration", ElapsedSeconds: 720},
+	})
+	if strings.Contains(bare, "\n    ") {
+		t.Fatalf("bare active run must not render progress lines:\n%s", bare)
+	}
+
+	// The empty-digest contract is untouched.
+	if got := formatStartupDigest(&api.DigestResponse{}); got != "" {
+		t.Fatalf("empty digest must render nothing, got %q", got)
+	}
+}

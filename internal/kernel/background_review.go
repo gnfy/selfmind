@@ -3,11 +3,13 @@ package kernel
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
 	"selfmind/internal/kernel/llm"
 	"selfmind/internal/kernel/memory"
+	"selfmind/internal/platform/log"
 	"selfmind/internal/platform/textutil"
 )
 
@@ -76,10 +78,24 @@ func (e *BackgroundReviewEngine) SpawnReview(tenantID, channel string, messages 
 		reviewAgent := NewAgent(e.mem, restricted, e.provider, backgroundReviewSoul(reviewMemory, reviewSkills), e.maxIterations, e.maxRetries, nil)
 		reviewAgent.SetUseMemoryFence(e.useMemoryFence)
 		resp, _, err := reviewAgent.RunConversation(ctx, tenantID, channel+":background_review", buildBackgroundReviewPrompt(snapshot, reviewMemory, reviewSkills))
+		msg := summarizeReviewResult(resp, err)
+		// Hallucinated-compliance guard: models sometimes emit the "skill
+		// updated: <name>" summary WITHOUT ever calling skill_manage. Never
+		// forward a change claim that reality does not confirm — verify each
+		// claimed skill through the same restricted backend before notifying.
+		if err == nil {
+			if unverified := unverifiedSkillClaims(restricted, tenantID, resp); len(unverified) > 0 {
+				log.Warn("background review claimed a skill change that did not happen",
+					"claimed_skills", strings.Join(unverified, ", "),
+					"tenant", tenantID,
+					"channel", channel)
+				msg = fmt.Sprintf("claimed a skill change that did not happen (skill %s not found after review; skill_manage change not verified); recorded as no-change",
+					quoteNames(unverified))
+			}
+		}
 		if e.notifyCh == nil {
 			return
 		}
-		msg := summarizeReviewResult(resp, err)
 		select {
 		case e.notifyCh <- "review:" + msg:
 		default:
@@ -147,6 +163,69 @@ func toolDefinitionParameters(d map[string]interface{}) map[string]interface{} {
 	return nil
 }
 
+// skillClaimPattern conservatively matches the explicit change-claim format
+// the review prompt asks for ("skill created: <name>", "skill updated: <name>",
+// "skill patched: <name>"). It intercepts ONLY clear claims: the verb must be
+// followed by a colon (ASCII or full-width) and a plausible skill name token.
+// Ordinary prose ("Nothing to save.", discussion of skills without a claim)
+// never matches and passes through unchanged.
+// The name must start and end with an alphanumeric so trailing sentence
+// punctuation ("skill updated: foo.") is not swallowed into the name.
+var skillClaimPattern = regexp.MustCompile(`(?i)\bskill\s+(created|updated|patched)\s*[:：]\s*` + "[`\"']?" + `([A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?)`)
+
+// extractSkillChangeClaims returns the deduplicated skill names the review
+// response claims to have created/updated/patched. Memory claims
+// ("memory saved: <topic>") are deliberately NOT intercepted: the claimed
+// topic is free text that cannot be cheaply and reliably matched against
+// stored facts, and a fuzzy check would risk rejecting honest reviews. Skill
+// claims name a concrete on-disk asset, so they are verifiable.
+func extractSkillChangeClaims(resp string) []string {
+	matches := skillClaimPattern.FindAllStringSubmatch(resp, -1)
+	if len(matches) == 0 {
+		return nil
+	}
+	seen := make(map[string]bool, len(matches))
+	names := make([]string, 0, len(matches))
+	for _, m := range matches {
+		name := m[2]
+		if name == "" || seen[name] {
+			continue
+		}
+		seen[name] = true
+		names = append(names, name)
+	}
+	return names
+}
+
+// unverifiedSkillClaims verifies every claimed skill change against reality by
+// loading the named skill through the SAME restricted backend the review agent
+// used (skill_view is on its allowlist). Existence is the baseline check for
+// created/updated/patched claims: a hallucinated claim with no tool call leaves
+// no skill on disk. Any claim that cannot be confirmed (missing skill, or a
+// backend without skill_view) is treated as unverified — this check never
+// fails open into crediting an unconfirmed change.
+func unverifiedSkillClaims(backend AgentBackend, tenantID, resp string) []string {
+	var failed []string
+	for _, name := range extractSkillChangeClaims(resp) {
+		_, err := backend.Dispatch("skill_view", map[string]interface{}{
+			"name":       name,
+			"_tenant_id": tenantID,
+		})
+		if err != nil {
+			failed = append(failed, name)
+		}
+	}
+	return failed
+}
+
+func quoteNames(names []string) string {
+	quoted := make([]string, 0, len(names))
+	for _, n := range names {
+		quoted = append(quoted, fmt.Sprintf("%q", n))
+	}
+	return strings.Join(quoted, ", ")
+}
+
 func backgroundReviewSoul(reviewMemory, reviewSkills bool) string {
 	var focus []string
 	if reviewMemory {
@@ -155,7 +234,7 @@ func backgroundReviewSoul(reviewMemory, reviewSkills bool) string {
 	if reviewSkills {
 		focus = append(focus, "reusable procedural skills")
 	}
-	return "You are SelfMind's background learning reviewer. You run after the user-facing answer is complete. Use only the available tools to save durable learning. Focus: " + strings.Join(focus, " and ") + ". If nothing is worth saving, answer exactly: Nothing to save."
+	return "You are SelfMind's background learning reviewer. You run after the user-facing answer is complete. Use only the available tools to save durable learning. Focus: " + strings.Join(focus, " and ") + ". Never state that a skill was created/updated or a memory was saved unless you actually made that change with a successful tool call in this turn; claims are verified against the toolchain. If nothing is worth saving, answer exactly: Nothing to save."
 }
 
 func buildBackgroundReviewPrompt(messages []llm.Message, reviewMemory, reviewSkills bool) string {
@@ -188,7 +267,8 @@ func buildBackgroundReviewPrompt(messages []llm.Message, reviewMemory, reviewSki
 		sb.WriteString(fmt.Sprintf("\n[%s]\n%s\n", m.Role, content))
 	}
 	sb.WriteString("\nUse tools if there is durable learning. Otherwise reply: Nothing to save.\n")
-	sb.WriteString("After tool use, summarize exactly what changed in one short sentence, for example: memory saved: <topic>, skill updated: <name>, or skill created: <name>.")
+	sb.WriteString("After tool use, summarize exactly what changed in one short sentence, for example: memory saved: <topic>, skill updated: <name>, or skill created: <name>.\n")
+	sb.WriteString("Never state \"skill created:\", \"skill updated:\", \"skill patched:\", or \"memory saved:\" unless the corresponding tool call succeeded in THIS turn; these claims are verified against the toolchain and a false claim is discarded. If you decide not to change anything, reply exactly: Nothing to save.")
 	return sb.String()
 }
 

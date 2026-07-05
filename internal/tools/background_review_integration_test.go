@@ -72,6 +72,9 @@ func TestSpawnReviewCreatesSkillThroughRealToolchain(t *testing.T) {
 	registry := NewRegistry()
 	disp := NewDispatcherWithRegistry(registry)
 	disp.RegisterTool(NewSkillManageTool())
+	// skill_view backs the post-run claim verification inside SpawnReview
+	// (production registers it on the same dispatcher; see internal/app/tools.go).
+	disp.RegisterTool(NewSkillViewTool())
 	disp.RegisterTool(&BaseTool{
 		name:        "terminal",
 		description: "must never be exposed to the background review agent",
@@ -102,6 +105,11 @@ func TestSpawnReviewCreatesSkillThroughRealToolchain(t *testing.T) {
 	}
 	if !strings.HasPrefix(note, "review:") || !strings.Contains(note, "skill created: review-flow") {
 		t.Fatalf("unexpected review notification: %q", note)
+	}
+	// Honest create: post-run claim verification must pass and the original
+	// summary must be forwarded unchanged, never downgraded to a no-change.
+	if strings.Contains(note, "recorded as no-change") {
+		t.Fatalf("honest create was wrongly flagged as unverified: %q", note)
 	}
 
 	// The restricted backend must expose skill_manage (allowlisted) and must
@@ -177,5 +185,94 @@ func TestSpawnReviewCreatesSkillThroughRealToolchain(t *testing.T) {
 	}
 	if !foundCreate {
 		t.Fatalf("no create learning-audit record for review-flow: %+v", changes)
+	}
+}
+
+// hallucinatedReviewProvider reproduces the live defect trajectory: the model
+// NEVER calls skill_manage and directly emits the compliance summary
+// "skill updated: ghost-skill" as its final (and only) turn.
+type hallucinatedReviewProvider struct{}
+
+func (p *hallucinatedReviewProvider) ChatCompletion(ctx context.Context, messages []llm.Message) (string, error) {
+	return "skill updated: ghost-skill", nil
+}
+
+func (p *hallucinatedReviewProvider) Chat(ctx context.Context, req llm.ChatRequest) (*llm.ChatResponse, error) {
+	return &llm.ChatResponse{Content: "skill updated: ghost-skill"}, nil
+}
+
+func (p *hallucinatedReviewProvider) StreamChat(ctx context.Context, req llm.ChatRequest) (<-chan llm.StreamEvent, error) {
+	ch := make(chan llm.StreamEvent, 1)
+	ch <- llm.StreamEvent{Content: "skill updated: ghost-skill"}
+	close(ch)
+	return ch, nil
+}
+
+// TestSpawnReviewRejectsHallucinatedSkillClaim covers the hallucinated-
+// compliance defect: a claimed skill change with zero tool calls must be
+// detected by the post-run verification in SpawnReview and reported as a
+// no-change, never forwarded as a credited update.
+func TestSpawnReviewRejectsHallucinatedSkillClaim(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	storage, err := memory.NewSQLiteProvider(t.TempDir())
+	if err != nil {
+		t.Fatalf("sqlite provider: %v", err)
+	}
+	t.Cleanup(func() { _ = storage.Close() })
+	mem := memory.NewMemoryManager(storage)
+
+	registry := NewRegistry()
+	disp := NewDispatcherWithRegistry(registry)
+	disp.RegisterTool(NewSkillManageTool())
+	disp.RegisterTool(NewSkillViewTool())
+
+	engine := kernel.NewBackgroundReviewEngine(mem, disp, &hallucinatedReviewProvider{}, kernel.EvolutionConfig{Enabled: true}, 4, 1)
+	notify := make(chan string, 1)
+	engine.SetNotifyChannel(notify)
+
+	engine.SpawnReview("default", "cli", []llm.Message{
+		{Role: "user", Content: "analyze this Go project"},
+		{Role: "assistant", Content: "Analyzed the module layout and reported findings."},
+	}, false, true)
+
+	var note string
+	select {
+	case note = <-notify:
+	case <-time.After(30 * time.Second):
+		t.Fatal("background review did not complete within the deadline")
+	}
+
+	// The notify message must flag the unverified claim as a no-change and
+	// must NOT credit the update the model hallucinated.
+	if !strings.HasPrefix(note, "review:") {
+		t.Fatalf("unexpected review notification: %q", note)
+	}
+	if !strings.Contains(note, "recorded as no-change") || !strings.Contains(note, "did not happen") {
+		t.Fatalf("hallucinated claim was not rejected: %q", note)
+	}
+	if strings.Contains(note, "learning review: skill updated") {
+		t.Fatalf("hallucinated claim was forwarded as a credited update: %q", note)
+	}
+	if !strings.Contains(note, "ghost-skill") {
+		t.Fatalf("rejection message does not name the claimed skill: %q", note)
+	}
+
+	// No skill may exist on disk.
+	dir, err := getSkillsDir("default")
+	if err != nil {
+		t.Fatalf("skills dir: %v", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(dir, "ghost-skill")); !os.IsNotExist(statErr) {
+		t.Fatalf("ghost skill unexpectedly present on disk: %v", statErr)
+	}
+
+	// No learning-audit record may exist for the claimed name.
+	changes, err := ListSkillLearningChanges("default", "ghost-skill", 20)
+	if err != nil {
+		t.Fatalf("list learning changes: %v", err)
+	}
+	if len(changes) != 0 {
+		t.Fatalf("unexpected learning-audit records for hallucinated skill: %+v", changes)
 	}
 }

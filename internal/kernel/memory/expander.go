@@ -45,8 +45,10 @@ Expanded terms:`
 
 // Expand takes a user query and returns an expanded query string suitable for FTS5.
 // If expansion fails or is disabled, the original query is returned unchanged.
+// Nil-receiver safe: callers may hold a typed-nil expander behind an interface
+// (e.g. the gateway recall engine when no semantic_recall role is configured).
 func (se *SemanticExpander) Expand(ctx context.Context, query string) string {
-	if !se.enabled || se.provider == nil {
+	if se == nil || !se.enabled || se.provider == nil {
 		return query
 	}
 	if query == "" {

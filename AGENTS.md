@@ -210,6 +210,19 @@ Domain docs (**mandatory** before changing that domain):
   spine is the durable working-state layer only. FTS indexing keeps the
   task-derived session id (`Agent.sessionKey`; `IndexSession` idempotent per
   session id) and is never keyed by the spine.
+- Automatic recall v1 (Work Timeline P2, `docs/work-timeline.md` "Semantic
+  recall"): the gateway selector (`httpapi/recall.go` on `Server.Recall`)
+  attaches ≤3 bounded, EPHEMERAL `TaskRuntimeContext.RecallSlices` per turn
+  (session FTS + task label cards via `control.ListTaskCards`; one slice per
+  work line, label card beats raw session fragment; current task excluded;
+  control-command/short-message skips). Recall renders only into the per-turn
+  system context block — never the messages array, never persisted history —
+  and must never block or fail the turn: `semantic_recall`-role expansion runs
+  only when that role is explicitly configured, time-bounded, degrading to
+  raw-term FTS. New recall sources implement `httpapi.RecallSource` (the v2
+  embedding seam); do not add recall calls outside the selector. The memory
+  store partitions by PERSON (the agent's storage tenant is `person_id`) —
+  search sessions with the person id, not the control tenant.
 
 ## Agent-First Routing & Task Strategy
 

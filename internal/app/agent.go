@@ -590,24 +590,12 @@ func buildModelGateway(cfg *config.Config, mem *memory.MemoryManager, tenantID s
 		if roleName == "" {
 			continue
 		}
-		if roleCfg.Provider == "" && roleCfg.Model == "" && roleCfg.BaseURL == "" && roleCfg.APIKey == "" && roleCfg.ContextLength <= 0 && roleCfg.MaxTokens <= 0 && len(roleCfg.Headers) == 0 && roleCfg.ReasoningEffort == "" && len(roleCfg.Thinking) == 0 && roleCfg.ServiceTier == "" && emptyConfigQuirks(roleCfg.Quirks) {
+		if roleConfigEmpty(roleCfg) {
 			continue
 		}
 
 		roleProviderName := firstNonEmpty(roleCfg.Provider, pName)
-		roleProvider := buildProviderForSelectionWithRuntime(cfg, modelruntime.Selection{
-			Provider:        roleProviderName,
-			Model:           roleCfg.Model,
-			BaseURL:         roleCfg.BaseURL,
-			APIKey:          roleCfg.APIKey,
-			Headers:         roleCfg.Headers,
-			ContextLength:   roleCfg.ContextLength,
-			MaxTokens:       roleCfg.MaxTokens,
-			ReasoningEffort: roleCfg.ReasoningEffort,
-			Thinking:        roleCfg.Thinking,
-			ServiceTier:     roleCfg.ServiceTier,
-			Quirks:          runtimeQuirksFromConfig(roleCfg.Quirks),
-		})
+		roleProvider := buildRoleProvider(cfg, roleProviderName, roleCfg)
 		if roleProvider == nil {
 			log.Warn("model role skipped: provider unavailable", "role", roleName, "provider", roleProviderName)
 			continue
@@ -622,6 +610,63 @@ func buildModelGateway(cfg *config.Config, mem *memory.MemoryManager, tenantID s
 		})
 	}
 	return gateway
+}
+
+// roleConfigEmpty reports whether a models.roles entry carries no actual
+// override — such entries never register a role profile.
+func roleConfigEmpty(roleCfg config.ModelRoleConfig) bool {
+	return roleCfg.Provider == "" && roleCfg.Model == "" && roleCfg.BaseURL == "" && roleCfg.APIKey == "" &&
+		roleCfg.ContextLength <= 0 && roleCfg.MaxTokens <= 0 && len(roleCfg.Headers) == 0 &&
+		roleCfg.ReasoningEffort == "" && len(roleCfg.Thinking) == 0 && roleCfg.ServiceTier == "" &&
+		emptyConfigQuirks(roleCfg.Quirks)
+}
+
+// buildRoleProvider resolves one role override through the same
+// modelruntime.Resolver path as the default provider (headers, max tokens,
+// reasoning effort, thinking, service tier, quirks all carried).
+func buildRoleProvider(cfg *config.Config, roleProviderName string, roleCfg config.ModelRoleConfig) llm.Provider {
+	return buildProviderForSelectionWithRuntime(cfg, modelruntime.Selection{
+		Provider:        roleProviderName,
+		Model:           roleCfg.Model,
+		BaseURL:         roleCfg.BaseURL,
+		APIKey:          roleCfg.APIKey,
+		Headers:         roleCfg.Headers,
+		ContextLength:   roleCfg.ContextLength,
+		MaxTokens:       roleCfg.MaxTokens,
+		ReasoningEffort: roleCfg.ReasoningEffort,
+		Thinking:        roleCfg.Thinking,
+		ServiceTier:     roleCfg.ServiceTier,
+		Quirks:          runtimeQuirksFromConfig(roleCfg.Quirks),
+	})
+}
+
+// SemanticRecallExpander builds the query expander for the gateway's AUTOMATIC
+// recall slice (Work Timeline P2, docs/work-timeline.md "Semantic recall").
+// Unlike the agent-side expander behind the model-invoked session_search tool
+// (which falls back to the default provider), automatic recall runs at the
+// start of every eligible turn — so it only expands when a semantic_recall
+// role model is EXPLICITLY configured, and never spends main-model tokens.
+// Returns nil when the role is unconfigured, its provider cannot be built, or
+// memory.semantic_recall is disabled; the recall engine then degrades to
+// raw-term FTS.
+func SemanticRecallExpander(mem *memory.MemoryManager, cfg *config.Config, tenantID string) *memory.SemanticExpander {
+	if cfg == nil || !cfg.Memory.SemanticRecall {
+		return nil
+	}
+	roleCfg, ok := cfg.Models.Roles[string(llm.RoleSemanticRecall)]
+	if !ok || roleConfigEmpty(roleCfg) {
+		return nil
+	}
+	roleProviderName := firstNonEmpty(roleCfg.Provider, defaultProviderName(cfg))
+	provider := buildRoleProvider(cfg, roleProviderName, roleCfg)
+	if provider == nil {
+		return nil
+	}
+	if tenantID == "" {
+		tenantID = "default"
+	}
+	applyDynamicKeyGetter(provider, mem, tenantID, roleProviderName)
+	return memory.NewSemanticExpander(provider, true)
 }
 
 // InitAgent creates the LLM provider, reflection engine, and agent core.

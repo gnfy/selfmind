@@ -218,6 +218,9 @@ func (a *App) runTUI() int {
 		// Implicit-continuation LLM upgrade window (Fix 1); "0" disables it.
 		// (Escrow needs the daemon sweep, so PendingNotifyAfter is daemon-only.)
 		ContinueWindow: cfg.Intent.ContinueWindowDuration(),
+		// Automatic semantic recall (Work Timeline P2): same selector-layer
+		// wiring as the daemon so in-process TUI turns get identical context.
+		Recall: httpapi.NewRecallEngine(controlStore, mem, appcore.SemanticRecallExpander(mem, cfg, tenantID)),
 	}
 	ctrl.SetMessageProcessor(localGateway.ProcessMessage)
 	disp.InjectClarifyHandler(ctrl.ClarifyHandler())

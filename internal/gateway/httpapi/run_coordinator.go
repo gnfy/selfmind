@@ -236,7 +236,7 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 			Root: workspace.LocalPath,
 		})
 	}
-	ctx = kernel.WithTaskRuntimeContext(ctx, c.selectedTaskRuntimeContext(ctx, task, run, workspace, req.Channel))
+	ctx = kernel.WithTaskRuntimeContext(ctx, c.selectedTaskRuntimeContext(ctx, task, run, workspace, req.Channel, req.Content))
 	agentInput := c.withGatewayContext(req.Content, identity, task, workspace, req.Attachments)
 	agentInput = c.withResumeContext(ctx, identity, task, run, intent, agentInput)
 	ctx = kernel.WithTaskStrategy(ctx, taskStrategyForRequest(req, intent))

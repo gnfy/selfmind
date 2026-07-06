@@ -91,13 +91,32 @@ authoritative instruction. If it changes direction, the latest message wins."*
 
 ### Semantic recall (the new load-bearing wall, built in two tiers)
 
-- **v1 (now):** `semantic_recall`-role query expansion + FTS (BM25) over spine
-  entries, task label cards, and artifacts — all components already exist
-  (SemanticExpander, session_search, task-session indexing); the change is
-  wiring recall into the Composer as an automatic slice instead of a
-  model-invoked tool only.
+- **v1 — SHIPPED (P2, 2026-07-06):** `semantic_recall`-role query expansion +
+  FTS (BM25) over spine entries, task label cards, and artifacts, wired into
+  the selector as an automatic slice instead of a model-invoked tool only.
+  Implementation: `internal/gateway/httpapi/recall.go` (`RecallEngine` on
+  `Server.Recall`, called from `selectedTaskRuntimeContext`) → new bounded
+  `kernel.TaskRuntimeContext.RecallSlices` rendered under
+  `[Recall — possibly related prior work; reference only]` in the runtime
+  context block (ephemeral: system-prompt only, never the messages array,
+  never persisted into working history). Sources v1: indexed sessions
+  (person-partitioned FTS, includes `task:<id>` task sessions) and task label
+  cards (title + current_summary + latest handoff summary/changed files via
+  the live read-only `control.ListTaskCards` JOIN — queried, not mirrored
+  into FTS, so cards can never go stale; artifacts/changed files surface
+  through the card's work line). Budget: ≤3 slices, ~400-char excerpts, one
+  slice per work line (label card beats raw session fragment), current task
+  excluded; control-command-shaped and <6-rune messages skip recall entirely.
+  Expansion runs ONLY when a `semantic_recall` role model is explicitly
+  configured (`app.SemanticRecallExpander` — never the main coding model),
+  bounded by a 3s timeout, degrading to raw-term FTS on any failure.
+  Observability: redacted `context.recall` task event (source counts + refs,
+  no excerpts).
 - **v2 (later):** true embedding vector index (spine entries + label cards +
-  artifacts). Interface reserved in v1.
+  artifacts). Interface reserved in v1: `httpapi.RecallSource`
+  (`Search(ctx, RecallQuery) []RecallHit` with work-line dedupe keys) — an
+  embedding-backed source registers alongside the FTS sources without
+  reshaping the selector, budget, or dedupe logic.
 - Degradation chain: recall miss → the agent asks in-turn, or
   inspect-before-build reads the workspace (both already shipped). Never a
   silent wrong attach.

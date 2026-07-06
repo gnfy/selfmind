@@ -22,6 +22,11 @@ func (a *App) runGatewayClientIfRequested() (bool, int) {
 		case "status":
 			return true, a.sendGatewayMessage("/status")
 		case "tasks":
+			// Forward the view variant (done|archived|all) so `selfmind tasks
+			// done` matches the gateway /tasks grammar instead of dropping it.
+			if len(a.args) > 2 {
+				return true, a.sendGatewayMessage("/tasks " + strings.Join(a.args[2:], " "))
+			}
 			return true, a.sendGatewayMessage("/tasks")
 		case "workspaces":
 			return true, a.sendGatewayMessage("/workspaces")

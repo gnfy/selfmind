@@ -1,0 +1,31 @@
+id: recall_cross_task
+title: "automatic recall v1: related prior work surfaces on a NEW task's turn"
+require_cassette: true
+suite: continuity
+workspace: "."
+channel: cli
+
+# Work Timeline P2 (docs/work-timeline.md "Semantic recall"): turn 1 parks a
+# planning task about the KOF game; turn 2 is NEW work (its own task) that
+# mentions the same subject. The selector must attach a recall slice from the
+# turn-1 work line (task label card / task session) and record a redacted
+# context.recall event on the turn-2 task — recall is automatic, not just the
+# model-invoked session_search tool. Deterministic Go coverage:
+# internal/gateway/httpapi/recall_test.go.
+turns:
+  - input: "帮我规划一个'九七格斗游戏'网页版的实现方案,先给 3 步,每步一句话,不要写代码、不要看本地文件。"
+  - input: "另外写一段九七格斗游戏的宣传文案,两句话即可,不要写代码、不要看本地文件。"
+
+expect:
+  status: completed
+  require_task_switch: true
+  max_tool_calls: 0
+  max_duration_seconds: 420
+
+assert_state:
+  - { on: events, type: context.recall, count_gte: 1 }
+
+checks:
+  no_mojibake: true
+  no_empty_response: true
+  no_raw_json_leak: true

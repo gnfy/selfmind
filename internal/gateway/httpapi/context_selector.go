@@ -11,7 +11,11 @@ import (
 	"selfmind/internal/platform/textutil"
 )
 
-func (c *RunCoordinator) selectedTaskRuntimeContext(ctx context.Context, task *control.Task, run *control.Run, workspace *control.Workspace, channel string) kernel.TaskRuntimeContext {
+// selectedTaskRuntimeContext assembles the bounded durable-context slice for
+// one turn. userMessage is the ORIGINAL user content (before daemon/workspace/
+// resume wrapping) — it feeds the automatic recall query and is never itself
+// injected anywhere.
+func (c *RunCoordinator) selectedTaskRuntimeContext(ctx context.Context, task *control.Task, run *control.Run, workspace *control.Workspace, channel, userMessage string) kernel.TaskRuntimeContext {
 	if c == nil || c.srv == nil || c.srv.Control == nil || task == nil {
 		return kernel.TaskRuntimeContext{}
 	}
@@ -90,6 +94,41 @@ func (c *RunCoordinator) selectedTaskRuntimeContext(ctx context.Context, task *c
 				Channel:   event.Channel,
 				Summary:   eventPayloadSummary(event.Payload),
 				CreatedAt: event.CreatedAt,
+			})
+		}
+	}
+	// Automatic semantic recall (Work Timeline P2): bounded cross-history
+	// slices selected at the SELECTOR layer and attached to the runtime
+	// context for this turn only — the render path is TaskRuntimeContext →
+	// RuntimeContextBundle → system prompt, never the messages array, so
+	// recall is ephemeral and absent from persisted working history. The
+	// engine owns its own skip conditions (control-command-shaped or trivially
+	// short input) and never fails the turn. The current task's own work line
+	// is excluded — its context is already in this bundle and in the
+	// task-keyed working history. Runs after event selection so this turn's
+	// context.recall event is not echoed back into its own context.
+	if c.srv.Recall != nil {
+		if slices, stats := c.srv.Recall.Select(ctx, task.TenantID, task.PersonID, task.ID, userMessage); len(slices) > 0 {
+			selected.RecallSlices = slices
+			runID := ""
+			if run != nil {
+				runID = run.ID
+			}
+			// Redacted observability: source counts + refs only, no excerpts,
+			// so /events and eval can see what recall did without leaking
+			// prior-session text into the event log.
+			_, _ = c.srv.Control.AppendEvent(ctx, control.Event{
+				TaskID:     task.ID,
+				RunID:      runID,
+				Type:       "context.recall",
+				Visibility: "task",
+				Channel:    fallback(channel, task.LastChannel),
+				Payload: mustJSON(map[string]interface{}{
+					"sources":  stats.Sources,
+					"refs":     stats.Refs,
+					"expanded": stats.Expanded,
+					"terms":    stats.Terms,
+				}),
 			})
 		}
 	}

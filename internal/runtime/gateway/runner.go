@@ -140,6 +140,10 @@ func Run(ctx context.Context, opts Options) error {
 		// agent's dedicated triage provider (a cheap role kept OFF the main run
 		// provider). Nil when no provider is available → smart mode asks a human.
 		ApprovalJudge: app.NewApprovalJudge(agent.ApprovalJudgeProvider()),
+		// Automatic semantic recall (Work Timeline P2): FTS sessions + task
+		// label cards attached at the selector layer; query expansion only when
+		// a semantic_recall role model is explicitly configured.
+		Recall: httpapi.NewRecallEngine(controlStore, mem, app.SemanticRecallExpander(mem, cfg, defaultTenantID)),
 	}
 	// Periodic stuck-run recovery: while the daemon runs, mark heartbeat-dead
 	// runs (and their tasks) interrupted. Runs in the coordinator's active-run

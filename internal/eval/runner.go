@@ -488,6 +488,9 @@ func newRuntimeHarness(opts RunOptions, c *Case, dataDirOverride string) (*runti
 		Control:         controlStore,
 		Gateway:         gwDeps.Gateway,
 		DefaultTenantID: tenantID,
+		// Automatic semantic recall (Work Timeline P2): eval runs the same
+		// selector path as real input — no eval-only shortcut around recall.
+		Recall: httpapi.NewRecallEngine(controlStore, mem, appcore.SemanticRecallExpander(mem, cfg, tenantID)),
 	}
 	return &runtimeHarness{
 		cfg:          cfg,

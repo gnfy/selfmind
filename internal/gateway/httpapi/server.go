@@ -47,6 +47,12 @@ type Server struct {
 	// eval, or no cheap model) makes smart mode degrade to a human ask — never an
 	// auto-approval.
 	ApprovalJudge tools.ApprovalJudge
+	// Recall is the automatic semantic-recall engine (Work Timeline P2): at
+	// turn start the context selector attaches bounded "possibly related prior
+	// work" slices from the FTS session index and task label cards to the
+	// runtime context. Nil disables automatic recall (the model-invoked
+	// session_search tool is unaffected). See recall.go.
+	Recall *RecallEngine
 
 	mu           sync.Mutex
 	draining     bool

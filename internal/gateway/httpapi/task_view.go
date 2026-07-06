@@ -385,7 +385,9 @@ func shortTaskID(id string) string {
 func cardTaskID(id string) string {
 	const prefix = "task_"
 	if strings.HasPrefix(id, prefix) && len(id) > len(prefix)+9 {
-		return strings.TrimRight(id[:len(prefix)+9], "-") + "..."
+		// Short prefix only, no ellipsis (owner preference): the prefix is a
+		// valid /resume reference as-is, and the dots read as visual noise.
+		return strings.TrimRight(id[:len(prefix)+9], "-")
 	}
 	return id
 }

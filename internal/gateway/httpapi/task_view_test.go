@@ -183,15 +183,16 @@ func TestTasksCardInterruptedReplacesAge(t *testing.T) {
 	}
 }
 
-// TestCardTaskIDRoundTrip: the card's shortened id (`task_` + 9 uuid chars +
-// "...") resolves back through findTaskByRef even when pasted verbatim.
+// TestCardTaskIDRoundTrip: the card's shortened id (`task_` + 8 uuid chars,
+// no ellipsis) resolves back through findTaskByRef even when pasted verbatim.
 func TestCardTaskIDRoundTrip(t *testing.T) {
 	daemon, store, identity := newTaskViewServer(t)
 	task := seedTask(t, store, identity, "id roundtrip", "in_progress", 1)
 
 	display := cardTaskID(task.ID)
-	// 9 uuid chars, minus the group hyphen v4 uuids always have at char 9.
-	if !strings.HasSuffix(display, "...") || len(display) != len("task_")+8+3 {
+	// 9 uuid chars minus the group hyphen v4 uuids always have at char 9; no
+	// trailing ellipsis (owner preference — it read as noise).
+	if strings.HasSuffix(display, ".") || len(display) != len("task_")+8 {
 		t.Fatalf("cardTaskID shape wrong: %q", display)
 	}
 	got, err := daemon.findTaskByRef(context.Background(), identity, display)

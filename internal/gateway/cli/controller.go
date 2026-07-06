@@ -122,6 +122,17 @@ type uiModel struct {
 	mouseSelectFocus      int
 	transcriptCache       *renderCache                                                   // memoizes finalized message renders across frames
 	clientMode            bool                                                           // daemon-client mode: no in-process agent/gateway; chat routes to the daemon
+	// workspaceOverride* pin this session's execution workspace after a
+	// successful `/workspace <n|id>` switch (mirrors the approvalMode session
+	// override). Without it the next CLI turn silently re-derived a workspace
+	// from the launch cwd — /workspace was a no-op for subsequent messages
+	// (observed live). While set, every agent-bound and control request from
+	// this session carries WorkspaceID (explicit workspace wins server-side)
+	// and the status bar shows the override instead of the cwd. Empty = the
+	// default cwd-derived behavior.
+	workspaceOverrideID   string
+	workspaceOverrideName string
+	workspaceOverridePath string
 	toolDispatchFn        func(tool string, args map[string]interface{}) (string, error) // client mode: run management tools on the daemon
 	approvalResponder     func(approvalID, decision, scope string) error                 // client mode: answer a daemon tool-approval request (scope: ""|task|person)
 	steerFn               func(text string) error                                        // client mode: forward mid-turn guidance to the daemon's active run
@@ -970,11 +981,22 @@ func (m *uiModel) statusLine() string {
 	if meta := strings.TrimSpace(m.modelMeta); meta != "" {
 		header += " " + meta
 	}
-	cwd := currentWorkingDir()
+	// The directory segment shows where the NEXT message actually runs: the
+	// session workspace override when one is set (/workspace <n>), else the
+	// launch cwd. Rendering cwd while an override is active lied about the
+	// execution root (defect: stale status bar after /workspace).
+	dir := currentWorkingDir()
+	if m.workspaceOverridePath != "" {
+		if m.workspaceOverrideName != "" {
+			dir = m.workspaceOverrideName + ":" + m.workspaceOverridePath
+		} else {
+			dir = m.workspaceOverridePath
+		}
+	}
 
 	parts := []string{
 		st.Status.Value.Render(header),
-		st.Status.Value.Render(cwd),
+		st.Status.Value.Render(dir),
 		st.Status.Label.Render(formatUsageSession(m.runTokens, m.totalTokens, m.tokenLimit)),
 	}
 
@@ -1370,6 +1392,25 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.statusMsg = ""
 		return m, nil
 
+	case MsgTokens:
+		// Live cumulative usage snapshot for the active run (token.updated).
+		// Only runTokens ticks here; totalTokens stays untouched so the final
+		// MsgAgentDone usage remains the single authoritative session
+		// increment (no double counting).
+		if msg.Run > 0 {
+			m.runTokens = msg.Run
+		}
+		return m, nil
+
+	case MsgWorkspaceSwitched:
+		// A successful /workspace switch: pin the session override, then render
+		// the gateway's reply through the normal done path so the transcript
+		// looks identical to a plain control passthrough.
+		m.workspaceOverrideID = msg.ID
+		m.workspaceOverrideName = msg.Name
+		m.workspaceOverridePath = msg.Path
+		return m.Update(MsgAgentDone{Response: msg.Reply})
+
 	default:
 		cmd := m.editor.Update(msg)
 		return m, cmd
@@ -1674,6 +1715,25 @@ type MsgToolDone struct {
 
 type MsgLearningEvent struct {
 	Content string
+}
+
+// MsgTokens is a live cumulative token-usage snapshot for the active run,
+// derived from the daemon's token.updated events. Run is input+output tokens
+// so far; it updates the status bar mid-run while the final response usage
+// stays authoritative for session totals.
+type MsgTokens struct {
+	Run int
+}
+
+// MsgWorkspaceSwitched reports a successful gateway /workspace switch, carrying
+// the resolved workspace parsed from the control reply plus the raw reply text
+// to render. A failed switch never produces this message (the reply renders as
+// a plain MsgAgentDone and no override is set).
+type MsgWorkspaceSwitched struct {
+	ID    string
+	Name  string
+	Path  string
+	Reply string
 }
 
 type helpRow struct {

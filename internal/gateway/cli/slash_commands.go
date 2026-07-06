@@ -232,11 +232,21 @@ var allSlashCommands = func() []slashCommand {
 	out = append(out, slashCommands...)
 	for _, name := range gatewayPassthroughCommands {
 		name := name
+		run := func(m *uiModel, args []string) tea.Cmd {
+			return m.handleControlPassthrough(name, args)
+		}
+		// /workspace still relays to the gateway (which owns resolution and
+		// current_workspace), but the TUI additionally captures the resolved
+		// workspace from the success reply as the session override — see
+		// handleWorkspaceSelect.
+		if name == "/workspace" {
+			run = func(m *uiModel, args []string) tea.Cmd {
+				return m.handleWorkspaceSelect(args)
+			}
+		}
 		out = append(out, slashCommand{
 			slashCommandMeta: metaByName(name),
-			Run: func(m *uiModel, args []string) tea.Cmd {
-				return m.handleControlPassthrough(name, args)
-			},
+			Run:              run,
 		})
 	}
 	return out

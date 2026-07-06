@@ -358,6 +358,18 @@ func eventToStream(ev control.Event) (llm.StreamEvent, bool) {
 		}, true
 	case strings.HasPrefix(ev.Type, "learning."):
 		return llm.StreamEvent{EventType: "learning.review", Content: str(p["message"])}, true
+	case ev.Type == "token.updated":
+		// Live cumulative usage snapshot for the run (kernel emits it after
+		// every model response with run totals). Forward it as a typed Usage
+		// so the client TUI ticks its run token counter mid-run — without this
+		// the status bar sat at 0 until the final sync response (observed live).
+		return llm.StreamEvent{
+			EventType: "token.updated",
+			Usage: &llm.UsageStats{
+				InputTokens:  int(num(p["input_tokens"])),
+				OutputTokens: int(num(p["output_tokens"])),
+			},
+		}, true
 	case ev.Type == "plan.updated":
 		// The daemon records the full structured plan (plan steps + explanation)
 		// in the event payload. Forward it so the client TUI can render the live

@@ -55,6 +55,20 @@ func TestEventToStreamMapping(t *testing.T) {
 			},
 		},
 		{
+			// Live token ticking (client-mode status bar): the daemon records
+			// cumulative run usage as token.updated task events; the client must
+			// forward them with a typed Usage snapshot or the TUI shows 0 tokens
+			// for the whole run.
+			name:    "token updated carries usage",
+			ev:      control.Event{ID: "5", Type: "token.updated", Payload: mustJSON(map[string]any{"input_tokens": 1200, "output_tokens": 34})},
+			wantTyp: "token.updated",
+			check: func(t *testing.T, se llm.StreamEvent) {
+				if se.Usage == nil || se.Usage.InputTokens != 1200 || se.Usage.OutputTokens != 34 {
+					t.Fatalf("bad token.updated mapping: %+v", se)
+				}
+			},
+		},
+		{
 			name:    "learning classified maps to learning.review",
 			ev:      control.Event{ID: "4", Type: "learning.memory.saved", Payload: mustJSON(map[string]any{"message": "saved a fact"})},
 			wantTyp: "learning.review",

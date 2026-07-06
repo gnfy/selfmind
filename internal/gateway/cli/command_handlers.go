@@ -247,7 +247,72 @@ func (m *uiModel) controlMessageRequest(content string) api.MessageRequest {
 		Channel:        m.channel,
 		Content:        content,
 		ClientCWD:      currentWorkingDir(),
+		// Session workspace override (set by /workspace this session): explicit
+		// WorkspaceID wins over cwd derivation server-side, so /new and other
+		// control turns act in the selected workspace, not the launch dir.
+		WorkspaceID: m.workspaceOverrideID,
 	}
+}
+
+// handleWorkspaceSelect relays `/workspace <n|id>` to the gateway exactly like
+// a control passthrough, then — on a successful switch — pins the resolved
+// workspace as this session's override so subsequent agent turns actually run
+// there (defect: the next message silently fell back to the launch-cwd
+// workspace because only ClientCWD rode the request). Failure replies (usage
+// text, "no workspace matching …") render as-is and set nothing.
+func (m *uiModel) handleWorkspaceSelect(args []string) tea.Cmd {
+	content := "/workspace"
+	if len(args) > 0 {
+		content += " " + strings.Join(args, " ")
+	}
+	return func() tea.Msg {
+		if m.messageProcessor == nil {
+			return MsgAgentDone{Response: "Gateway not initialized."}
+		}
+		resp, _ := m.messageProcessor(context.Background(), m.controlMessageRequest(content))
+		if resp.Error != "" {
+			return MsgAgentDone{Response: fmt.Sprintf("Error: %s", resp.Error)}
+		}
+		if id, name, path, ok := parseWorkspaceSwitchReply(resp.Content); ok {
+			return MsgWorkspaceSwitched{ID: id, Name: name, Path: path, Reply: resp.Content}
+		}
+		return MsgAgentDone{Response: resp.Content}
+	}
+}
+
+// parseWorkspaceSwitchReply extracts the resolved workspace from the gateway's
+// success reply, whose shape is a stable control-command contract:
+//
+//	Current workspace: <name> (<ws_id>)
+//	<local_path>
+//
+// Parsing is tolerant (names may contain spaces or parentheses — the id is the
+// LAST parenthesized token on the first line) and any mismatch returns ok=false
+// so an unexpected reply never fabricates an override.
+func parseWorkspaceSwitchReply(reply string) (id, name, path string, ok bool) {
+	lines := strings.Split(strings.TrimSpace(reply), "\n")
+	const prefix = "Current workspace: "
+	first := strings.TrimSpace(lines[0])
+	if !strings.HasPrefix(first, prefix) {
+		return "", "", "", false
+	}
+	rest := strings.TrimSpace(strings.TrimPrefix(first, prefix))
+	if !strings.HasSuffix(rest, ")") {
+		return "", "", "", false
+	}
+	open := strings.LastIndex(rest, "(")
+	if open < 0 {
+		return "", "", "", false
+	}
+	id = strings.TrimSpace(rest[open+1 : len(rest)-1])
+	name = strings.TrimSpace(rest[:open])
+	if id == "" {
+		return "", "", "", false
+	}
+	if len(lines) > 1 {
+		path = strings.TrimSpace(lines[1])
+	}
+	return id, name, path, true
 }
 
 func (m *uiModel) handleSkills(args []string) tea.Cmd {

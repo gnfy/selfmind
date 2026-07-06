@@ -78,6 +78,11 @@ func (m *uiModel) runAgent(ctx context.Context, input string) tea.Cmd {
 				ClientCWD:      cwd,
 				Attachments:    imageAttachmentsFromInput(input, cwd),
 				ApprovalMode:   m.approvalMode,
+				// Session workspace override from /workspace this session; the
+				// server honors an explicit WorkspaceID before deriving one from
+				// ClientCWD, so the turn runs in the selected workspace. Empty
+				// keeps the cwd-derived default.
+				WorkspaceID: m.workspaceOverrideID,
 			})
 			if resp.Usage.InputTokens != 0 || resp.Usage.OutputTokens != 0 {
 				usage = resp.Usage
@@ -233,6 +238,13 @@ func (m *uiModel) forwardGatewayEvent(event llm.StreamEvent) {
 		if event.Content != "" {
 			m.program.Send(MsgLearningEvent{Content: event.Content})
 		}
+	case "token.updated":
+		// Live cumulative usage for the active run. The daemon-client path
+		// carries it in Usage (client.eventToStream); the in-process gateway
+		// path carries the raw payload (agentEventToStream), so read both.
+		if run := runTokensFromEvent(event); run > 0 {
+			m.program.Send(MsgTokens{Run: run})
+		}
 	case "approval.requested":
 		id, target := "", ""
 		if event.Payload != nil {
@@ -346,6 +358,10 @@ func (m *uiModel) handleStructuredAgentEvent(event kernel.AgentEvent) {
 			ToolCallID: event.ToolCallID,
 			Payload:    event.Payload,
 		})})
+	case "token.updated":
+		if run := payloadTokenCount(event.Payload["input_tokens"]) + payloadTokenCount(event.Payload["output_tokens"]); run > 0 {
+			m.program.Send(MsgTokens{Run: run})
+		}
 	case "plan.updated":
 		m.program.Send(MsgLearningEvent{Content: "Plan updated."})
 	case "run.outcome":
@@ -353,6 +369,35 @@ func (m *uiModel) handleStructuredAgentEvent(event kernel.AgentEvent) {
 	case "learning.review":
 		m.program.Send(MsgLearningEvent{Content: event.Content})
 	}
+}
+
+// runTokensFromEvent extracts the cumulative run token count from a
+// token.updated stream event: prefer the typed Usage snapshot, fall back to
+// the raw payload fields (input_tokens/output_tokens survive a JSON round
+// trip as float64, or stay int on pure in-process delivery).
+func runTokensFromEvent(event llm.StreamEvent) int {
+	if event.Usage != nil {
+		return event.Usage.InputTokens + event.Usage.OutputTokens
+	}
+	if event.Payload == nil {
+		return 0
+	}
+	return payloadTokenCount(event.Payload["input_tokens"]) + payloadTokenCount(event.Payload["output_tokens"])
+}
+
+func payloadTokenCount(v interface{}) int {
+	switch n := v.(type) {
+	case float64:
+		return int(n)
+	case int:
+		return n
+	case int64:
+		return int(n)
+	case json.Number:
+		f, _ := n.Float64()
+		return int(f)
+	}
+	return 0
 }
 
 func displayActivityEvent(eventType, content string) string {

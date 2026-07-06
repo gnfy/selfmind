@@ -135,6 +135,16 @@ is the only priority list in the repo; other docs must point here.
      success reply names the task's bound workspace; the workspace-escape tool
      error appends a `/resume`//`/workspace` hint; the TUI echoes typed slash
      commands into the transcript (`handleCommand`).
+     2026-07-07 TUI session fixes: a successful `/workspace <n|id>` pins a
+     session workspace override in the TUI (resolved id/name/path parsed from
+     the gateway's control reply; `MessageRequest.WorkspaceID` rides every
+     later agent/control turn, so the switch is no longer a no-op for
+     subsequent CLI messages), the status bar renders the override
+     `<name>:<path>` instead of the launch cwd, and client mode forwards
+     `token.updated` usage events (`client.eventToStream` → `MsgTokens`) so
+     run token counts tick live instead of sitting at 0 until the final
+     response. Tests: `cli/workspace_override_test.go`,
+     `cli/token_events_test.go`, `client/client_test.go`.
    - **P4 eval: ✅ shipped 2026-07-06.** `evalcases/timeline/` — five cases
      (iterate/new-topic/ambiguity/cross-endpoint/tasks-view) with committed
      cassettes replaying offline; scenarios 7-10 map to Go tests (see the

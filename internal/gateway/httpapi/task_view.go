@@ -12,12 +12,26 @@ import (
 
 // /tasks aggregated view + /task <id> subcommands (Work Timeline P3,
 // docs/work-timeline.md "/tasks view"). Tasks are labels: the default view
-// shows only OPEN work (one line per label with run count, age, workspace and
-// a next-step hint), collapses finished work to a count, and /task <id> gives
-// the drill-down (detail, runs, rename, archive). Shared by every endpoint via
-// tryHandleControlCommand — IM gets the same short lines.
+// shows only OPEN work as multi-line cards (simplified status bracket, last
+// input, primary artifact, pending approvals/questions, run count, short id),
+// collapses finished work to a count, and /task <id> gives the drill-down
+// (detail, runs, rename, archive). Shared by every endpoint via
+// tryHandleControlCommand — IM gets the same short cards.
 
 const taskUsage = "Usage: /task <id> [runs|rename <name>|archive]"
+
+const tasksTrailingHint = "Reply to continue the current task, /resume <id> to switch, /task <id> for detail."
+
+// taskCardView is the batched per-person data every card draws from, fetched
+// once per /tasks render (grouped queries, never per-task round trips).
+type taskCardView struct {
+	activeTaskID string              // task with a LIVE run right now, else ""
+	runCounts    map[string]int      // task_id -> run count
+	lastRuns     map[string]string   // task_id -> latest run input summary
+	files        map[string][]string // task_id -> latest handoff changed files
+	approvals    map[string]int      // task_id -> pending approvals
+	questions    map[string]int      // task_id -> pending clarify questions
+}
 
 // tasksOverviewReply renders /tasks and its variants: "" (open work),
 // "done" (terminal, non-archived), "archived", "all".
@@ -26,8 +40,16 @@ func (d *Server) tasksOverviewReply(ctx context.Context, identity *control.Ident
 	if err != nil {
 		return "", err
 	}
-	runCounts, _ := d.Control.RunCountsByPerson(ctx, identity.TenantID, identity.PersonID)
-	wsNames := d.workspaceNames(ctx, identity)
+	view := taskCardView{}
+	if active := d.coordinator().currentActive(identity.PersonID); active != nil {
+		view.activeTaskID = active.TaskID
+	}
+	// Best-effort card data: a failed grouped query drops that column, never
+	// the whole view.
+	view.runCounts, _ = d.Control.RunCountsByPerson(ctx, identity.TenantID, identity.PersonID)
+	view.lastRuns, _ = d.Control.LatestRunSummaries(ctx, identity.TenantID, identity.PersonID)
+	view.files, _ = d.Control.LatestHandoffFilesByPerson(ctx, identity.TenantID, identity.PersonID)
+	view.approvals, view.questions, _ = d.Control.PendingCountsByTask(ctx, identity.TenantID, identity.PersonID)
 
 	var open, done, archived []control.Task
 	for _, t := range tasks {
@@ -43,20 +65,13 @@ func (d *Server) tasksOverviewReply(ctx context.Context, identity *control.Ident
 
 	switch strings.TrimSpace(variant) {
 	case "":
-		activeTaskID := ""
-		if active := d.coordinator().currentActive(identity.PersonID); active != nil {
-			activeTaskID = active.TaskID
-		}
-		approvalCounts := d.pendingApprovalCounts(ctx, identity)
 		var sb strings.Builder
 		if len(open) == 0 {
 			sb.WriteString("No open tasks.")
 		} else {
 			sb.WriteString("Open tasks:\n")
 			for i, t := range open {
-				sb.WriteString(fmt.Sprintf("%d. %s — %s\n", i+1,
-					taskOverviewLine(t, runCounts[t.ID], wsNames[t.WorkspaceID], activeTaskID),
-					taskNextStepHint(t, activeTaskID, approvalCounts[t.ID])))
+				sb.WriteString("\n" + renderTaskCard(i+1, t, view) + "\n")
 			}
 		}
 		if n := len(done); n > 0 {
@@ -65,61 +80,119 @@ func (d *Server) tasksOverviewReply(ctx context.Context, identity *control.Ident
 		if n := len(archived); n > 0 {
 			sb.WriteString(fmt.Sprintf("\n%d archived — /tasks archived", n))
 		}
+		if len(open) > 0 {
+			sb.WriteString("\n\n" + tasksTrailingHint)
+		}
 		return strings.TrimSpace(sb.String()), nil
 	case "done":
-		return renderTaskList("Done tasks", done, runCounts, wsNames), nil
+		return renderTaskCards("Done tasks", done, view), nil
 	case "archived":
-		return renderTaskList("Archived tasks", archived, runCounts, wsNames), nil
+		return renderTaskCards("Archived tasks", archived, view), nil
 	case "all":
-		return renderTaskList("All tasks", tasks, runCounts, wsNames), nil
+		return renderTaskCards("All tasks", tasks, view), nil
 	default:
 		return "Usage: /tasks [done|archived|all]", nil
 	}
 }
 
-// taskOverviewLine is one label's aggregate line:
-// `[status] title (task_xxxxxxxx) · run: N 次 · <age> · <workspace>`.
-func taskOverviewLine(t control.Task, runs int, wsName, activeTaskID string) string {
-	label := t.Status
+// taskCardStatus maps one label to the simplified card bracket:
+// running (live run) > done/cancelled/failed/archived verbatim > waiting
+// (pending approval/question, or blocked) > paused (open, nothing executing —
+// in_progress/interrupted/new all read as paused).
+func taskCardStatus(t control.Task, isActive bool, pendingApprovals, pendingQuestions int) string {
 	switch {
-	case t.ID == activeTaskID:
-		label = "running"
-	case isParkedTaskStatus(t.Status):
-		label = t.Status + " · paused"
-	}
-	line := fmt.Sprintf("[%s] %s (%s) · run: %d 次 · %s",
-		label, textutil.Truncate(toOneLine(t.Title), 48), shortTaskID(t.ID), runs, humanAge(t.UpdatedAt))
-	if wsName != "" {
-		line += " · " + wsName
-	}
-	return line
-}
-
-// taskNextStepHint tells the person what unblocks or continues each open
-// label, so /tasks reads as a worklist rather than a status dump.
-func taskNextStepHint(t control.Task, activeTaskID string, pendingApprovals int) string {
-	switch {
-	case t.ID == activeTaskID:
-		return "running now (/status)"
-	case pendingApprovals > 0:
-		return fmt.Sprintf("waiting approval (%d pending — /approvals)", pendingApprovals)
-	case strings.EqualFold(t.Status, "blocked"):
-		return "waiting on you (/status)"
+	case isActive:
+		return "running"
+	case terminalTaskStatus(t.Status):
+		return strings.ToLower(strings.TrimSpace(t.Status))
+	case pendingApprovals > 0 || pendingQuestions > 0 || strings.EqualFold(strings.TrimSpace(t.Status), "blocked"):
+		return "waiting"
 	default:
-		return "reply to continue or /resume " + shortTaskID(t.ID)
+		return "paused"
 	}
 }
 
-func renderTaskList(header string, tasks []control.Task, runCounts map[string]int, wsNames map[string]string) string {
+// renderTaskCard renders one label as a multi-line card:
+//
+//	1. [running] 拳皇97风格对战游戏
+//	   last: 再多做几个角色 · 3m ago
+//	   file: arcade-fury-97.html
+//	   approvals: 1
+//	   runs: 6
+//	   id: task_65de41f2a...
+//
+// file/approvals/questions lines are omitted when empty/zero; an interrupted
+// label shows "· interrupted" instead of the age.
+func renderTaskCard(index int, t control.Task, v taskCardView) string {
+	var sb strings.Builder
+	isActive := t.ID == v.activeTaskID
+	status := taskCardStatus(t, isActive, v.approvals[t.ID], v.questions[t.ID])
+	fmt.Fprintf(&sb, "%d. [%s] %s\n", index, status, truncateRunes(toOneLine(t.Title), 50))
+
+	last := strings.TrimSpace(v.lastRuns[t.ID])
+	if last == "" {
+		last = strings.TrimSpace(t.CurrentSummary)
+	}
+	suffix := humanAge(t.UpdatedAt)
+	if !isActive && strings.EqualFold(strings.TrimSpace(t.Status), "interrupted") {
+		suffix = "interrupted"
+	}
+	if last != "" {
+		fmt.Fprintf(&sb, "   last: %s · %s\n", truncateRunes(toOneLine(last), 40), suffix)
+	} else {
+		fmt.Fprintf(&sb, "   last: %s\n", suffix)
+	}
+
+	if files := v.files[t.ID]; len(files) > 0 {
+		if name := fileBasename(files[0]); name != "" {
+			fmt.Fprintf(&sb, "   file: %s\n", name)
+		}
+	}
+	if n := v.approvals[t.ID]; n > 0 {
+		fmt.Fprintf(&sb, "   approvals: %d\n", n)
+	}
+	if n := v.questions[t.ID]; n > 0 {
+		fmt.Fprintf(&sb, "   questions: %d\n", n)
+	}
+	fmt.Fprintf(&sb, "   runs: %d\n", v.runCounts[t.ID])
+	fmt.Fprintf(&sb, "   id: %s", cardTaskID(t.ID))
+	return sb.String()
+}
+
+// renderTaskCards renders the done|archived|all variants with the same card
+// format as the default view (no trailing hint — those lists are archives, not
+// the active worklist).
+func renderTaskCards(header string, tasks []control.Task, view taskCardView) string {
 	if len(tasks) == 0 {
 		return "No " + strings.ToLower(header) + "."
 	}
 	var sb strings.Builder
 	sb.WriteString(header + ":\n")
 	for i, t := range tasks {
-		sb.WriteString(fmt.Sprintf("%d. %s\n", i+1, taskOverviewLine(t, runCounts[t.ID], wsNames[t.WorkspaceID], "")))
+		sb.WriteString("\n" + renderTaskCard(i+1, t, view) + "\n")
 	}
 	return strings.TrimSpace(sb.String())
+}
+
+// truncateRunes bounds display text by RUNE count (CJK titles get the same
+// visible width budget as ASCII; textutil.Truncate is byte-based).
+func truncateRunes(s string, max int) string {
+	r := []rune(s)
+	if max <= 0 || len(r) <= max {
+		return s
+	}
+	return string(r[:max]) + "..."
+}
+
+// fileBasename extracts a display basename from a changed-file path, handling
+// both / and \ separators (workspace paths may be Windows-style).
+func fileBasename(path string) string {
+	path = strings.TrimSpace(path)
+	path = strings.TrimRight(path, "/\\")
+	if i := strings.LastIndexAny(path, "/\\"); i >= 0 {
+		path = path[i+1:]
+	}
+	return strings.TrimSpace(path)
 }
 
 // taskCommandReply handles /task <id> [runs|rename <name>|archive].
@@ -243,6 +316,9 @@ func (d *Server) taskDetailReply(ctx context.Context, identity *control.Identity
 // prints). Only the person's own tasks resolve.
 func (d *Server) findTaskByRef(ctx context.Context, identity *control.IdentityContext, ref string) (*control.Task, error) {
 	ref = strings.TrimSpace(ref)
+	// A card id copied verbatim ends in "..." (or a unicode ellipsis); treat it
+	// as the prefix it abbreviates.
+	ref = strings.TrimRight(ref, ".…")
 	if ref == "" {
 		return nil, nil
 	}
@@ -277,22 +353,6 @@ func (d *Server) findTaskByRef(ctx context.Context, identity *control.IdentityCo
 	return match, nil
 }
 
-// pendingApprovalCounts groups the person's pending approvals by task for the
-// /tasks next-step hints.
-func (d *Server) pendingApprovalCounts(ctx context.Context, identity *control.IdentityContext) map[string]int {
-	out := map[string]int{}
-	pending, err := d.Control.ListApprovalRequests(ctx, identity.TenantID, identity.PersonID, "pending", 100)
-	if err != nil {
-		return out
-	}
-	for _, ap := range pending {
-		if ap.TaskID != "" {
-			out[ap.TaskID]++
-		}
-	}
-	return out
-}
-
 // workspaceNames maps workspace id → display name for the person's
 // workspaces. Best-effort: an error yields an empty map (lines drop the
 // workspace column).
@@ -308,12 +368,24 @@ func (d *Server) workspaceNames(ctx context.Context, identity *control.IdentityC
 	return out
 }
 
-// shortTaskID renders the compact display form `task_xxxxxxxx` used by the
-// aggregated view; findTaskByRef resolves it back.
+// shortTaskID renders the compact reference form `task_xxxxxxxx` used in
+// hints (/resume task_xxxxxxxx); findTaskByRef resolves it back.
 func shortTaskID(id string) string {
 	const prefix = "task_"
 	if strings.HasPrefix(id, prefix) && len(id) > len(prefix)+8 {
 		return id[:len(prefix)+8]
+	}
+	return id
+}
+
+// cardTaskID renders the card's trailing id line: `task_` + the first 9 chars
+// of the uuid part + `...` (a dangling `-` separator is dropped — for v4
+// uuids char 9 is always the group hyphen). findTaskByRef strips the trailing
+// dots, so a pasted card id resolves like any unique prefix.
+func cardTaskID(id string) string {
+	const prefix = "task_"
+	if strings.HasPrefix(id, prefix) && len(id) > len(prefix)+9 {
+		return strings.TrimRight(id[:len(prefix)+9], "-") + "..."
 	}
 	return id
 }

@@ -3,6 +3,7 @@ package control
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -58,6 +59,100 @@ func (s *Store) RunCountsByPerson(ctx context.Context, tenantID, personID string
 		out[taskID] = n
 	}
 	return out, rows.Err()
+}
+
+// LatestRunSummaries returns task_id -> the latest run's input summary for
+// every task the person owns. One grouped query (correlated subquery picks the
+// newest run per task); backs the /tasks card "last:" line without a per-task
+// round trip.
+func (s *Store) LatestRunSummaries(ctx context.Context, tenantID, personID string) (map[string]string, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT r.task_id, COALESCE(r.input_summary, '')
+		 FROM task_runs r
+		 WHERE r.tenant_id = ? AND r.person_id = ?
+		   AND r.id = (SELECT r2.id FROM task_runs r2 WHERE r2.task_id = r.task_id
+		               ORDER BY r2.started_at DESC, r2.rowid DESC LIMIT 1)`,
+		normalizeTenant(tenantID), personID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]string{}
+	for rows.Next() {
+		var taskID, summary string
+		if err := rows.Scan(&taskID, &summary); err != nil {
+			return nil, err
+		}
+		out[taskID] = summary
+	}
+	return out, rows.Err()
+}
+
+// LatestHandoffFilesByPerson returns task_id -> the latest handoff's changed
+// files for every task the person owns. One grouped query; backs the /tasks
+// card "file:" line (the primary artifact) without a per-task LatestHandoff.
+func (s *Store) LatestHandoffFilesByPerson(ctx context.Context, tenantID, personID string) (map[string][]string, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT h.task_id, COALESCE(h.changed_files_json, '[]')
+		 FROM task_handoffs h
+		 JOIN tasks t ON t.id = h.task_id
+		 WHERE t.tenant_id = ? AND t.person_id = ?
+		   AND h.id = (SELECT h2.id FROM task_handoffs h2 WHERE h2.task_id = h.task_id
+		               ORDER BY h2.created_at DESC, h2.rowid DESC LIMIT 1)`,
+		normalizeTenant(tenantID), personID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string][]string{}
+	for rows.Next() {
+		var taskID, filesJSON string
+		if err := rows.Scan(&taskID, &filesJSON); err != nil {
+			return nil, err
+		}
+		var files []string
+		_ = json.Unmarshal([]byte(filesJSON), &files)
+		if len(files) > 0 {
+			out[taskID] = files
+		}
+	}
+	return out, rows.Err()
+}
+
+// PendingCountsByTask returns task_id -> pending approval count and task_id ->
+// pending question (clarify) count for the person, in two grouped queries.
+// Backs the /tasks card "waiting" status and the approvals:/questions: lines.
+func (s *Store) PendingCountsByTask(ctx context.Context, tenantID, personID string) (approvals, questions map[string]int, err error) {
+	tenant := normalizeTenant(tenantID)
+	countByTask := func(table string) (map[string]int, error) {
+		rows, err := s.db.QueryContext(ctx,
+			`SELECT task_id, COUNT(*) FROM `+table+`
+			 WHERE tenant_id = ? AND person_id = ? AND status = 'pending'
+			   AND COALESCE(task_id, '') != ''
+			 GROUP BY task_id`,
+			tenant, personID)
+		if err != nil {
+			return nil, err
+		}
+		defer rows.Close()
+		out := map[string]int{}
+		for rows.Next() {
+			var taskID string
+			var n int
+			if err := rows.Scan(&taskID, &n); err != nil {
+				return nil, err
+			}
+			out[taskID] = n
+		}
+		return out, rows.Err()
+	}
+	if approvals, err = countByTask("approval_requests"); err != nil {
+		return nil, nil, err
+	}
+	if questions, err = countByTask("clarify_requests"); err != nil {
+		return nil, nil, err
+	}
+	return approvals, questions, nil
 }
 
 // ListTaskRuns returns a task's most recent runs, newest first. Read-only and

@@ -417,7 +417,7 @@ selfmind -f ./config/config.yaml
 |---|---|
 | `/help` | 查看可用命令。 |
 | `/status` | 查看 provider、model、运行时间、token、当前任务，以及待处理的审批/提问。 |
-| `/tasks` / `/tasks done\|archived\|all` | 列出进行中的工作,每个任务一行(含 run 次数和下一步提示);已完成的折叠为计数。 |
+| `/tasks` / `/tasks done\|archived\|all` | 以紧凑卡片列出进行中的工作(状态、最近输入、主要文件、待处理审批/提问、run 次数、短 id);已完成的折叠为计数。 |
 | `/task <id>` / `/task <id> runs\|rename <名称>\|archive` | 查看单个任务详情和 run 记录,重命名或归档它。 |
 | `/queue` / `/queue drop <n>` / `/queue clear` | 列出队列 / 按序号删除某一条 / 清空全部。 |
 | `/stop` | 取消正在执行的 run；若当前没有 run 在跑，则取消当前(卡住的)任务。 |
@@ -467,7 +467,31 @@ SelfMind 以任务为中心:你的每次请求都会变成一个归属于你(`pe
 
 - **查看:** `/tasks`(进行中的工作;`/tasks done` 看已完成)、`/task <id>`
   (单个任务详情)、`/status`(当前任务 + 待处理的审批/提问)、
-  `/queue`(排队中的)。
+  `/queue`(排队中的)。`/tasks` 为每个进行中的任务渲染一张卡片:
+
+  ```text
+  Open tasks:
+
+  1. [running] 拳皇97风格对战游戏
+     last: 再多做几个角色 · 3m ago
+     file: arcade-fury-97.html
+     runs: 6
+     id: task_65de41f2a...
+
+  2. [waiting] 微信接入
+     last: 等待扫码登录确认 · 1h ago
+     approvals: 1
+     runs: 2
+     id: task_9f2a77b01...
+
+  … and 43 done — /tasks done
+
+  Reply to continue the current task, /resume <id> to switch, /task <id> for detail.
+  ```
+
+  方括号是简化后的状态:`running`(有 run 正在执行)、`waiting`(有待处理的
+  审批/提问在等你)、`paused`(进行中但当前没有东西在跑——回复或 `/resume`
+  即可继续),终态则原样显示。
 - **继续任务:** 直接回复(`继续` / `ok` / 追加内容)即可续接当前任务;
   普通追加消息默认落在当前进行中的任务上(工作上下文本来就跟随你本人,后台还有
   一个廉价模型的标注器,会把确实属于其他任务的 run 重新归档);

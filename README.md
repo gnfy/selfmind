@@ -394,7 +394,7 @@ Common slash commands:
 |---|---|
 | `/help` | Show available commands. |
 | `/status` | Show provider, model, runtime, token usage, current task, and any pending approval/question. |
-| `/tasks` / `/tasks done\|archived\|all` | List open work, one line per task with run count and a next-step hint; finished work collapses to a count. |
+| `/tasks` / `/tasks done\|archived\|all` | List open work as compact cards (status, last input, primary file, pending approvals/questions, run count, short id); finished work collapses to a count. |
 | `/task <id>` / `/task <id> runs\|rename <name>\|archive` | Inspect one task (detail, recent runs), rename it, or archive it. |
 | `/queue` / `/queue drop <n>` / `/queue clear` | List queued tasks / drop one by position / drop all. |
 | `/stop` | Cancel the active run — or, if nothing is running, cancel the current (stuck) task. |
@@ -445,7 +445,32 @@ Everyday management:
 
 - **See everything:** `/tasks` (open work; `/tasks done` for finished),
   `/task <id>` (one task's detail and runs), `/status` (the current one + any
-  pending approval/question), `/queue` (what's waiting).
+  pending approval/question), `/queue` (what's waiting). `/tasks` renders one
+  card per open task:
+
+  ```text
+  Open tasks:
+
+  1. [running] KOF '97 style fighting game
+     last: add a few more characters · 3m ago
+     file: arcade-fury-97.html
+     runs: 6
+     id: task_65de41f2a...
+
+  2. [waiting] WeChat channel setup
+     last: waiting for QR-code login confirmation · 1h ago
+     approvals: 1
+     runs: 2
+     id: task_9f2a77b01...
+
+  … and 43 done — /tasks done
+
+  Reply to continue the current task, /resume <id> to switch, /task <id> for detail.
+  ```
+
+  The bracket is the simplified state: `running` (a run is executing),
+  `waiting` (a pending approval/question needs you), `paused` (open, nothing
+  executing — reply or `/resume` to continue), or a terminal status verbatim.
 - **Continue a task:** just reply (`继续` / `ok` / a follow-up) — an ordinary
   follow-up runs under your current open task by default (your working context
   follows you regardless, and a cheap background labeler re-files a run that

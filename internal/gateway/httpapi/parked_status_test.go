@@ -33,20 +33,36 @@ func TestFormatTaskStatusRunningShowsElapsed(t *testing.T) {
 	}
 }
 
-// TestTaskOverviewLineMarksParked: the /tasks aggregated view labels the
-// active task [running], a parked (in_progress, not active) task paused, and
-// leaves terminal tasks plain.
-func TestTaskOverviewLineMarksParked(t *testing.T) {
-	activeLine := taskOverviewLine(control.Task{ID: "t_active", Title: "running one", Status: "in_progress"}, 1, "", "t_active")
-	if strings.Contains(activeLine, "paused") || !strings.Contains(activeLine, "[running]") {
-		t.Fatalf("the active task must read as running, not paused: %q", activeLine)
+// TestTaskCardStatusMapping: the /tasks card bracket is the simplified state —
+// running (live run) beats everything, terminal statuses render verbatim,
+// pending approvals/questions or blocked read as waiting, and every other open
+// state (in_progress, interrupted, new) reads as paused.
+func TestTaskCardStatusMapping(t *testing.T) {
+	cases := []struct {
+		name      string
+		task      control.Task
+		isActive  bool
+		approvals int
+		questions int
+		want      string
+	}{
+		{"live run wins", control.Task{Status: "in_progress"}, true, 0, 0, "running"},
+		{"live run beats pending approval", control.Task{Status: "in_progress"}, true, 2, 0, "running"},
+		{"pending approval waits", control.Task{Status: "in_progress"}, false, 1, 0, "waiting"},
+		{"pending question waits", control.Task{Status: "in_progress"}, false, 0, 1, "waiting"},
+		{"blocked waits", control.Task{Status: "blocked"}, false, 0, 0, "waiting"},
+		{"parked in_progress pauses", control.Task{Status: "in_progress"}, false, 0, 0, "paused"},
+		{"interrupted pauses", control.Task{Status: "interrupted"}, false, 0, 0, "paused"},
+		{"new pauses", control.Task{Status: "new"}, false, 0, 0, "paused"},
+		{"done verbatim", control.Task{Status: "done"}, false, 0, 0, "done"},
+		{"completed verbatim", control.Task{Status: "completed"}, false, 0, 0, "completed"},
+		{"cancelled verbatim", control.Task{Status: "cancelled"}, false, 0, 0, "cancelled"},
+		{"archived verbatim", control.Task{Status: "archived"}, false, 0, 0, "archived"},
+		{"terminal ignores stale pending", control.Task{Status: "done"}, false, 1, 0, "done"},
 	}
-	parkedLine := taskOverviewLine(control.Task{ID: "t_parked", Title: "parked one", Status: "in_progress"}, 1, "", "t_active")
-	if !strings.Contains(parkedLine, "paused") {
-		t.Fatalf("a parked non-active task must be marked paused: %q", parkedLine)
-	}
-	doneLine := taskOverviewLine(control.Task{ID: "t_done", Title: "finished one", Status: "completed"}, 1, "", "")
-	if strings.Contains(doneLine, "paused") {
-		t.Fatalf("a terminal task must not be marked paused: %q", doneLine)
+	for _, tc := range cases {
+		if got := taskCardStatus(tc.task, tc.isActive, tc.approvals, tc.questions); got != tc.want {
+			t.Errorf("%s: taskCardStatus = %q, want %q", tc.name, got, tc.want)
+		}
 	}
 }

@@ -187,3 +187,117 @@ func TestReassignRunKeepsSourceWithOtherRuns(t *testing.T) {
 		t.Fatalf("failed reassign must not move the run, got %d on source", len(runs))
 	}
 }
+
+// TestLatestRunSummariesPicksNewestPerTask: one grouped query returns the most
+// recent run's input summary for each of the person's tasks.
+func TestLatestRunSummariesPicksNewestPerTask(t *testing.T) {
+	store, identity := labelTestStore(t)
+	ctx := context.Background()
+	a := mustCreateTask(t, store, identity, "A")
+	b := mustCreateTask(t, store, identity, "B")
+
+	for _, summary := range []string{"first ask", "second ask"} {
+		run, err := store.StartRun(ctx, a, "cli", summary)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = store.FinishRun(ctx, identity.TenantID, run.ID, "done")
+	}
+	run, err := store.StartRun(ctx, b, "cli", "only ask on B")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = store.FinishRun(ctx, identity.TenantID, run.ID, "done")
+
+	got, err := store.LatestRunSummaries(ctx, identity.TenantID, identity.PersonID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got[a.ID] != "second ask" {
+		t.Fatalf("latest summary for A = %q, want %q", got[a.ID], "second ask")
+	}
+	if got[b.ID] != "only ask on B" {
+		t.Fatalf("latest summary for B = %q", got[b.ID])
+	}
+}
+
+// TestLatestHandoffFilesByPerson: the grouped query returns the LATEST
+// handoff's changed files per task and omits tasks with no handoff.
+func TestLatestHandoffFilesByPerson(t *testing.T) {
+	store, identity := labelTestStore(t)
+	ctx := context.Background()
+	withFiles := mustCreateTask(t, store, identity, "with files")
+	bare := mustCreateTask(t, store, identity, "no handoff")
+
+	if _, err := store.SaveHandoff(ctx, Handoff{TaskID: withFiles.ID, Summary: "v1", ChangedFiles: []string{"old.html"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.SaveHandoff(ctx, Handoff{TaskID: withFiles.ID, Summary: "v2", ChangedFiles: []string{"games/new.html", "notes.md"}}); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := store.LatestHandoffFilesByPerson(ctx, identity.TenantID, identity.PersonID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	files := got[withFiles.ID]
+	if len(files) != 2 || files[0] != "games/new.html" {
+		t.Fatalf("latest handoff files = %+v", files)
+	}
+	if _, ok := got[bare.ID]; ok {
+		t.Fatalf("task without handoff must be absent, got %+v", got)
+	}
+}
+
+// TestPendingCountsByTask: pending approvals and questions group by task in
+// two queries; answered/expired rows and rows without a task never count.
+func TestPendingCountsByTask(t *testing.T) {
+	store, identity := labelTestStore(t)
+	ctx := context.Background()
+	task := mustCreateTask(t, store, identity, "guarded work")
+	other := mustCreateTask(t, store, identity, "quiet work")
+
+	for i := 0; i < 2; i++ {
+		if _, err := store.CreateApprovalRequest(ctx, ApprovalRequest{
+			TenantID: identity.TenantID, PersonID: identity.PersonID, TaskID: task.ID,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Taskless approval: never attributed to a card.
+	if _, err := store.CreateApprovalRequest(ctx, ApprovalRequest{
+		TenantID: identity.TenantID, PersonID: identity.PersonID,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	clarify, err := store.CreateClarifyRequest(ctx, ClarifyRequest{
+		TenantID: identity.TenantID, PersonID: identity.PersonID, TaskID: task.ID, Question: "which one?",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	answered, err := store.CreateClarifyRequest(ctx, ClarifyRequest{
+		TenantID: identity.TenantID, PersonID: identity.PersonID, TaskID: task.ID, Question: "already handled?",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AnswerClarifyRequest(ctx, identity.TenantID, identity.PersonID, answered.ID, "yes", "cli"); err != nil {
+		t.Fatal(err)
+	}
+	_ = clarify
+
+	approvals, questions, err := store.PendingCountsByTask(ctx, identity.TenantID, identity.PersonID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if approvals[task.ID] != 2 {
+		t.Fatalf("approvals[task] = %d, want 2 (%+v)", approvals[task.ID], approvals)
+	}
+	if questions[task.ID] != 1 {
+		t.Fatalf("questions[task] = %d, want 1 (%+v)", questions[task.ID], questions)
+	}
+	if approvals[other.ID] != 0 || questions[other.ID] != 0 {
+		t.Fatalf("quiet task must stay at zero: %+v / %+v", approvals, questions)
+	}
+}

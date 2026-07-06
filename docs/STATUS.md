@@ -74,6 +74,26 @@ These are the live gaps, ordered by their distance from the north star
 (`docs/identity-continuity.md` — the three continuity scenarios). This section
 is the only priority list in the repo; other docs must point here.
 
+0. **P0 — Work Timeline transition (approved 2026-07-06; canonical design:
+   `docs/work-timeline.md` — mandatory reading, includes the full rationale
+   and the rejected alternatives).** Context ownership moves from tasks to a
+   person-level work spine; `task` keeps its name but demotes to a work
+   label/view; disambiguation happens in the agent's turn, never at ingress.
+   Control plane (runs/approvals/queue/clarify/recovery) is untouched.
+   Packages, one worktree each, owner verifies between packages:
+   - **P1 spine:** person-keyed turn-level history (slimmed entries) +
+     summary boundary note + ContextComposer slice formalization +
+     legacy-key compat reads. (The 2026-07-06 task-keyed trajectory work is
+     the foundation, not waste.)
+   - **P2 recall v1** (parallel with P1): query-expansion + FTS as an
+     automatic Composer slice; label-card/artifact indexing; embedding (v2)
+     interface reserved.
+   - **P3 labels & view** (after P1): `resolveTask` → harmless pre-label
+     guess; post-run labeler + re-point; `/tasks` aggregated thread view;
+     `/task <id> runs|rename|archive`. Removes the implicit-continuation LLM
+     upgrade (attachment no longer affects context).
+   - **P4 eval:** the ten acceptance scenarios in work-timeline.md, recorded
+     cassettes, zh/en/elliptical/cross-endpoint.
 1. **P0 — G0: Runtime attachment model** (design:
    `docs/identity-continuity.md` "Runtime attachment model"; owner decisions
    2026-07-04, incl. origin-affinity routing). Sub-items in order:

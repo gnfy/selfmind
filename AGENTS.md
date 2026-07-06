@@ -28,6 +28,9 @@ comparison against other tools; see `docs/identity-continuity.md` "Two bars".
 Read first:
 
 - `docs/identity-continuity.md` (north star, identity model, continuity contract)
+- `docs/work-timeline.md` (approved target for task/context semantics — the
+  person-level work spine; mandatory before touching task attach, working
+  history, context assembly, recall, or `/tasks`)
 - `docs/STATUS.md` (implementation snapshot and the only live priority list)
 - `docs/architecture-constraints.md` (mandatory guardrails; zh-CN mirror exists)
 
@@ -129,7 +132,12 @@ Domain docs (**mandatory** before changing that domain):
   creates its OWN task honoring the request `workspace_id`
   (`httpapi/server.go` `resolveTask`). Never re-add implicit current-task or
   channel-recency attach for ordinary messages; parked tasks are resumed
-  deliberately, not captured.
+  deliberately, not captured. **Direction (approved 2026-07-06, mandatory
+  reading before touching this area): `docs/work-timeline.md`.** Context will
+  move to a person-level spine and `resolveTask` demotes to a harmless
+  pre-label guess (packages P1–P3, tracked in `docs/STATUS.md`); until a
+  package lands, this bullet is the live rule. Do NOT build an ingress
+  task-routing/disambiguation layer — that design was evaluated and rejected.
 - Run events use a per-run sink installed with
   `kernel.WithEventChannel(ctx, ch)`. Never swap the shared
   `Agent.EventChannel` in gateway code (legacy local-TUI fallback only).
@@ -189,7 +197,12 @@ Domain docs (**mandatory** before changing that domain):
   same task-derived session id (`Agent.sessionKey`) so `session_search` recall
   spans endpoints; `IndexSession` is idempotent per session id. This does NOT
   change chat-transcript channel-locality (transcripts stay per channel); it is
-  the durable working-state layer following the person's task.
+  the durable working-state layer following the person's task. **Direction
+  (approved 2026-07-06): the history key evolves task → person-level work
+  spine in package P1 — see `docs/work-timeline.md` (mandatory) before
+  changing keying, context assembly, or recall.** The task-keyed mechanism
+  (stable keys, fallback reads, task-session indexing) carries over as the
+  spine's foundation.
 
 ## Agent-First Routing & Task Strategy
 

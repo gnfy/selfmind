@@ -99,6 +99,13 @@ Rules (also in `docs/architecture-constraints.md`):
 The mechanism agents must preserve when touching resume/continuation behavior.
 Code: `internal/gateway/httpapi/continue_resolver.go`.
 
+> **Direction (approved 2026-07-06):** context ownership moves from tasks to a
+> person-level work spine; `task` demotes to a work label and the ingress
+> attach rules below become a harmless pre-label guess. `docs/work-timeline.md`
+> is the canonical target (mandatory reading before changing this contract);
+> packages P1–P3 in `docs/STATUS.md` track the transition. Until a package
+> lands, the rules below are the live behavior.
+
 1. **Continuation detection.** Short acceptances (`ok`, `继续`, `可以`, …) are
    matched by `looksLikeAffirmativeContinuation`; richer cues come from
    `internal/gateway/router/intent*.go` (`IntentContinue`). Intent rules must

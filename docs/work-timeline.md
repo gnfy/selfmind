@@ -121,22 +121,33 @@ authoritative instruction. If it changes direction, the latest message wins."*
   inspect-before-build reads the workspace (both already shipped). Never a
   silent wrong attach.
 
-### Labels (task demoted, name kept)
+### Labels (task demoted, name kept) — SHIPPED (P3, 2026-07-06)
 
 - After a run finishes, a cheap model (memory_extract role) assigns the run to
   an existing OPEN task label or creates a new one (input: turn summary +
-  open-label list).
-- Titles are stable: generated once, never auto-renamed; `/task <id> rename`
+  open-label list). Implementation: `httpapi/run_labeler.go` (`RunLabeler` on
+  `Server.Labeler`, built by `app.NewRunLabeler` from the memory_extract
+  provider; nil in eval = KEEP everything). Contract: one-line reply
+  KEEP / MOVE:<task_id> / TITLE:<short title>; MOVE only to an OFFERED open
+  label; every failure path degrades to KEEP; runs async post-finalize under
+  a 10s bound, never blocking the response.
+- Titles are stable: generated once (TITLE, new placeholders only; fallback
+  stays the truncated first input), never auto-renamed; `/task <id> rename`
   for humans.
-- `resolveTask` at run start becomes a *pre-label guess* (explicit
-  `/resume`/task_id wins; else current open label or a new placeholder). A
+- `resolveTask` at run start is a *pre-label guess* (explicit
+  `/resume`/task_id/cue wins; else current open label or a new placeholder). A
   wrong guess is corrected post-run by re-pointing the run's task_id —
-  harmless, because labels never gate context. This keeps
-  `task_runs.task_id NOT NULL` and every control-plane constraint intact.
-- Label decisions are recorded (run → task mapping + reason) so eval can score
-  labeling accuracy. Mislabels are display bugs, not context corruption.
+  `control.Store.ReassignRun` moves task_runs + task_events + task_artifacts
+  in one transaction, folds handoffs into the target and deletes an
+  auto-created placeholder left with zero runs — harmless, because labels
+  never gate context, and the EXECUTION workspace follows the REQUEST for
+  pre-label turns. This keeps `task_runs.task_id NOT NULL` and every
+  control-plane constraint intact.
+- Label decisions are recorded (`label.assigned` task event: decision,
+  from/to, run id, bounded reason) so eval can score labeling accuracy.
+  Mislabels are display bugs, not context corruption.
 
-### Ingress (simplified)
+### Ingress (simplified) — SHIPPED (P3, 2026-07-06)
 
 ```
 message → control-command filter (unchanged)
@@ -147,18 +158,23 @@ message → control-command filter (unchanged)
 ```
 
 - The implicit-continuation LLM upgrade (`intent.continue_window`) is REMOVED
-  once P1 lands — attachment no longer affects context, so the call buys
-  nothing.
+  (P3) — attachment no longer affects context, so the call bought nothing.
+  `intent.continue_window` in existing configs is ignored (deprecated field);
+  `router.UpgradeTaskToContinueWithLLM` was deleted.
 - No disambiguation machinery at ingress. Two games in context and an
   ambiguous "这个游戏动画不好看" → the agent asks "九七还是坦克?" as a normal
   turn. Judging with context in hand always beats classifying without it.
 
-### /tasks view (same name, aggregated display)
+### /tasks view (same name, aggregated display) — SHIPPED (P3, 2026-07-06)
 
 Default shows open/running/waiting/paused labels with `run: N 次`, latest
-activity, next-step hint; done collapses (`/tasks done|all` expands);
-`/task <id>` detail, `/task <id> runs|rename|archive`. IM variant stays
-hash-free with ordinal actions.
+activity, next-step hint; done collapses (`/tasks done|archived|all` expands);
+`/task <id>` detail, `/task <id> runs|rename|archive` (archive is a terminal
+status: hidden from open lists, recall label cards, and the pre-label guess;
+only an explicit `/resume <id>` reopens it). Short ids (`task_xxxxxxxx`) are
+shown and accepted back. Implementation: `httpapi/task_view.go`, shared by CLI
+and IM via the control-command path; `/task` is registered in
+`internal/gateway/command`.
 
 ## What does NOT change
 
@@ -183,8 +199,9 @@ session keys (hermes-style), Honcho-style dialectic user modeling.
   keys, fallback reads, task-session indexing all carry over.)
 - **P2 recall v1:** query-expansion + FTS as an automatic Composer slice;
   label-card/artifact indexing; embedding interface reserved. Parallel to P1.
-- **P3 labels & view:** resolveTask → pre-label; post-run labeler + re-point;
-  `/tasks` aggregation; `/task` subcommands. Depends on P1.
+- **P3 labels & view: ✅ landed 2026-07-06.** resolveTask → pre-label;
+  post-run labeler + re-point; `/tasks` aggregation; `/task` subcommands
+  (runs/rename/archive); implicit-continuation LLM upgrade removed.
 - **P4 eval:** the ten acceptance scenarios below, recorded cassettes,
   zh/en/elliptical/cross-endpoint coverage.
 

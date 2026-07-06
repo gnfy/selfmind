@@ -197,7 +197,7 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 	if _, err := c.prepareRequestWorkspace(ctx, identity, &req); err != nil {
 		return api.MessageResponse{Identity: identity, Error: err.Error(), Turn: messageTurn("failed", "", "idle", "", "", err.Error()), Context: messageContextBudget(llmUsageZero())}, http.StatusInternalServerError
 	}
-	task, err := c.resolveTask(ctx, identity, req, intent)
+	task, attach, err := c.resolveTask(ctx, identity, req, intent)
 	if err != nil {
 		if strings.Contains(err.Error(), "no task to continue") {
 			return api.MessageResponse{Identity: identity, Content: err.Error(), Turn: messageTurn("failed", "", "idle", "", "", err.Error()), Context: messageContextBudget(llmUsageZero())}, http.StatusOK
@@ -227,7 +227,7 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 		Payload:    mustJSON(map[string]string{"input": truncate(req.Content, 500)}),
 	})
 
-	workspace, _ := c.workspaceForTask(ctx, identity, task, req)
+	workspace, _ := c.workspaceForTask(ctx, identity, task, req, attach)
 	cleanupScope := c.installExecutionScope(identity, task, run, workspace, req)
 	defer cleanupScope()
 	if workspace != nil && workspace.LocalPath != "" {
@@ -332,11 +332,20 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 		Payload:    mustJSON(map[string]interface{}{"outcome": outcome, "usage": usage}),
 	})
 	taskID := task.ID
-	task, _ = d.Control.GetTask(finCtx, identity.TenantID, task.ID)
-	if task != nil && task.Status != "" {
-		taskStatus = task.Status
+	refreshed, _ := d.Control.GetTask(finCtx, identity.TenantID, task.ID)
+	if refreshed != nil && refreshed.Status != "" {
+		taskStatus = refreshed.Status
 	}
-	return api.MessageResponse{Identity: identity, Task: task, Run: run, Outcome: &outcome, Content: content, Usage: usage, Turn: messageTurn("completed", taskStatus, "idle", taskID, run.ID, outcome.Summary), Context: messageContextBudget(usage)}, http.StatusOK
+	if refreshed == nil {
+		refreshed = task
+	}
+	out := api.MessageResponse{Identity: identity, Task: refreshed, Run: run, Outcome: &outcome, Content: content, Usage: usage, Turn: messageTurn("completed", taskStatus, "idle", taskID, run.ID, outcome.Summary), Context: messageContextBudget(usage)}
+	// Post-run labeler (Work Timeline P3): asynchronously check the pre-label
+	// guess against the person's open labels. Runs under the finalize ctx
+	// (WithoutCancel) AFTER the response is assembled, never blocks it, and
+	// no-ops when nil.
+	c.labelFinishedRunAsync(finCtx, identity, task, run, req.Content, outcome.Summary, attach)
+	return out, http.StatusOK
 }
 
 // syncCurrentTask moves the per-person current_task pointer to the task a run
@@ -475,10 +484,10 @@ func (c *RunCoordinator) drainQueue(identity *control.IdentityContext) {
 	if resolved, rerr := c.srv.Control.ResolveOrCreateAccount(ctx, next.TenantID, next.Platform, next.PlatformUserID, ""); rerr == nil && resolved != nil {
 		drainIdentity = resolved
 	}
-	// A queued-drain item is genuinely NEW work and must create its own task
-	// (AGENTS.md task-attach contract), so it never takes the implicit-
-	// continuation upgrade — pass nil identity to skip the recent-task lookup.
-	intent := c.srv.classifyIntent(ctx, nil, req.Content, req.Channel)
+	// A drained item is an ordinary agent-bound message: rules-based intent
+	// only, and resolveTask gives it the same pre-label guess as any other
+	// message (Work Timeline P3) — harmless, since labels never gate context.
+	intent := c.srv.classifyIntent(ctx, req.Content, req.Channel)
 	resp := c.startAsyncRun(drainIdentity, req, intent)
 	if !resp.Accepted {
 		// A fresh inbound run won the slot between our check and beginActive.

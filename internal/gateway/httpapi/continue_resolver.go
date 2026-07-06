@@ -5,73 +5,25 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
-	"time"
 
 	"selfmind/internal/control"
 	"selfmind/internal/gateway/api"
 	"selfmind/internal/gateway/router"
 	"selfmind/internal/kernel/llm"
-	"selfmind/internal/platform/log"
 )
 
-func (d *Server) classifyIntent(ctx context.Context, identity *control.IdentityContext, input, channel string) router.IntentResult {
+// classifyIntent is rules-first intent classification (plus the router's own
+// LLM consult for ambiguous non-task input). The implicit-continuation LLM
+// upgrade that used to live here was REMOVED with Work Timeline P3: context is
+// spine-based (P1) so task attachment no longer affects what the model sees —
+// a pre-agent "does this continue that task?" call bought nothing. Explicit
+// rules-based IntentContinue (cues, short acceptance) remains: it still drives
+// the busy/steer path and deterministic continue semantics.
+func (d *Server) classifyIntent(ctx context.Context, input, channel string) router.IntentResult {
 	if d == nil || d.Gateway == nil {
 		return router.NewIntentClassifier().ClassifyDetailed(input)
 	}
-	// Implicit-continuation upgrade (Fix 1): the rules classifier defaults
-	// ordinary language to IntentTask and shouldConsultIntentLLM hard-refuses to
-	// consult the LLM for it, so an implicit follow-up ("质量太差了") after a just-
-	// finished task would always create a NEW task with no context. When a recent
-	// resumable task exists within the window, let the LLM decide continuation vs
-	// new work. It may only upgrade task -> continue (never downgrade), so the
-	// agent-first red line stays; at most one cheap LLM call per message, and only
-	// in hybrid/llm mode when the window matches.
-	if d.ContinueWindow > 0 && identity != nil {
-		if rules := d.Gateway.ClassifyIntent(input); rules.Intent == router.IntentTask {
-			if recent := d.recentResumableTask(ctx, identity); recent != nil {
-				upgraded, ok := d.Gateway.UpgradeTaskToContinueWithLLM(ctx, input, channel, router.RecentTaskContext{
-					Title:   recent.Title,
-					Summary: recent.CurrentSummary,
-					Status:  recent.Status,
-					Age:     time.Since(recent.UpdatedAt),
-				})
-				if ok {
-					log.Info("gateway: implicit continuation upgrade",
-						"task", recent.ID, "confidence", upgraded.Confidence, "channel", channel)
-					return upgraded
-				}
-			}
-		}
-	}
 	return d.Gateway.ClassifyIntentWithContext(ctx, input, channel)
-}
-
-// recentResumableTask returns the person's most recently updated non-terminal
-// task whose updated_at is within ContinueWindow, or nil. It is a cheap bounded
-// scan (ListTasks is updated_at DESC, capped at 10) used only to decide whether
-// the implicit-continuation LLM upgrade is worth a call — never to attach work
-// on its own (attach still needs the IntentContinue verdict).
-func (d *Server) recentResumableTask(ctx context.Context, identity *control.IdentityContext) *control.Task {
-	if d == nil || d.Control == nil || identity == nil || d.ContinueWindow <= 0 {
-		return nil
-	}
-	tasks, err := d.Control.ListTasks(ctx, identity.TenantID, identity.PersonID, 10)
-	if err != nil {
-		return nil
-	}
-	cutoff := time.Now().Add(-d.ContinueWindow)
-	for i := range tasks {
-		if terminalTaskStatus(tasks[i].Status) {
-			continue
-		}
-		if tasks[i].UpdatedAt.Before(cutoff) {
-			// DESC order: this non-terminal task and every later one are out of
-			// the window, so there is nothing recent enough to continue.
-			return nil
-		}
-		return &tasks[i]
-	}
-	return nil
 }
 
 func (d *Server) tryHandleIntentClarification(identity *control.IdentityContext, intent router.IntentResult) (bool, api.MessageResponse) {
@@ -119,9 +71,14 @@ func (d *Server) resolveContinueTask(ctx context.Context, identity *control.Iden
 	if d == nil || d.Control == nil || identity == nil {
 		return nil, nil
 	}
+	// An archived label is deliberately shelved: `继续` must never resurrect it
+	// implicitly (only an explicit /resume <id> can — see resolveTask's pin).
 	current, err := d.Control.CurrentTask(ctx, identity.TenantID, identity.PersonID)
-	if err != nil || current != nil {
-		return current, err
+	if err != nil {
+		return nil, err
+	}
+	if current != nil && !archivedTaskStatus(current.Status) {
+		return current, nil
 	}
 	tasks, err := d.Control.ListTasks(ctx, identity.TenantID, identity.PersonID, 10)
 	if err != nil {
@@ -132,19 +89,31 @@ func (d *Server) resolveContinueTask(ctx context.Context, identity *control.Iden
 			return &task, nil
 		}
 	}
-	if len(tasks) == 1 {
+	if len(tasks) == 1 && !archivedTaskStatus(tasks[0].Status) {
 		return &tasks[0], nil
 	}
 	return nil, nil
 }
 
+// terminalTaskStatus reports whether a task status ends its life for implicit
+// continuation and the pre-label default. `archived` (the /task <id> archive
+// verb, Work Timeline P3) is terminal here: an archived label is excluded from
+// open lists, recall label cards, and the pre-label guess — but an explicit
+// /resume <id> may still reopen it deliberately (see resolveTask).
 func terminalTaskStatus(status string) bool {
 	switch strings.ToLower(strings.TrimSpace(status)) {
-	case "done", "completed", "cancelled", "failed":
+	case "done", "completed", "cancelled", "failed", "archived":
 		return true
 	default:
 		return false
 	}
+}
+
+// archivedTaskStatus isolates the one terminal status a person may explicitly
+// resurrect via /resume (a deliberate act, unlike done/cancelled/failed which
+// stay closed).
+func archivedTaskStatus(status string) bool {
+	return strings.EqualFold(strings.TrimSpace(status), "archived")
 }
 
 func looksLikeAffirmativeContinuation(input string) bool {

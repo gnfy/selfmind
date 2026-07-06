@@ -33,23 +33,20 @@ func TestFormatTaskStatusRunningShowsElapsed(t *testing.T) {
 	}
 }
 
-// TestFormatTasksMarksParked: /tasks marks a parked (in_progress, not the active
-// task) task as paused while leaving the active task and terminal tasks plain.
-func TestFormatTasksMarksParked(t *testing.T) {
-	tasks := []control.Task{
-		{ID: "t_active", Title: "running one", Status: "in_progress"},
-		{ID: "t_parked", Title: "parked one", Status: "in_progress"},
-		{ID: "t_done", Title: "finished one", Status: "completed"},
+// TestTaskOverviewLineMarksParked: the /tasks aggregated view labels the
+// active task [running], a parked (in_progress, not active) task paused, and
+// leaves terminal tasks plain.
+func TestTaskOverviewLineMarksParked(t *testing.T) {
+	activeLine := taskOverviewLine(control.Task{ID: "t_active", Title: "running one", Status: "in_progress"}, 1, "", "t_active")
+	if strings.Contains(activeLine, "paused") || !strings.Contains(activeLine, "[running]") {
+		t.Fatalf("the active task must read as running, not paused: %q", activeLine)
 	}
-	out := formatTasks(tasks, "t_active")
-	lines := strings.Split(out, "\n")
-	if strings.Contains(lines[0], "paused") {
-		t.Fatalf("the active task must not be marked paused: %q", lines[0])
+	parkedLine := taskOverviewLine(control.Task{ID: "t_parked", Title: "parked one", Status: "in_progress"}, 1, "", "t_active")
+	if !strings.Contains(parkedLine, "paused") {
+		t.Fatalf("a parked non-active task must be marked paused: %q", parkedLine)
 	}
-	if !strings.Contains(lines[1], "paused") {
-		t.Fatalf("a parked non-active task must be marked paused: %q", lines[1])
-	}
-	if strings.Contains(lines[2], "paused") {
-		t.Fatalf("a terminal task must not be marked paused: %q", lines[2])
+	doneLine := taskOverviewLine(control.Task{ID: "t_done", Title: "finished one", Status: "completed"}, 1, "", "")
+	if strings.Contains(doneLine, "paused") {
+		t.Fatalf("a terminal task must not be marked paused: %q", doneLine)
 	}
 }

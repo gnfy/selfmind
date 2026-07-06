@@ -126,18 +126,26 @@ Domain docs (**mandatory** before changing that domain):
   An `IntentContinue` message is NOT new work: it stays on the busy/steer path.
   A drained item becomes an ordinary async run, so the worker pool still
   schedules it — do not add a second serialization layer.
-- Task attach requires explicit continuation evidence: caller `task_id`,
-  `IntentContinue` (router cue or short acceptance), or the one-shot `/resume`
-  pin. Every other agent-bound message — sync, async, queued-drain, cron —
-  creates its OWN task honoring the request `workspace_id`
-  (`httpapi/server.go` `resolveTask`). Never re-add implicit current-task or
-  channel-recency attach for ordinary messages; parked tasks are resumed
-  deliberately, not captured. **Direction (approved 2026-07-06, mandatory
-  reading before touching this area): `docs/work-timeline.md`.** Context will
-  move to a person-level spine and `resolveTask` demotes to a harmless
-  pre-label guess (packages P1–P3, tracked in `docs/STATUS.md`); until a
-  package lands, this bullet is the live rule. Do NOT build an ingress
-  task-routing/disambiguation layer — that design was evaluated and rejected.
+- Task = work LABEL, and `resolveTask` is a harmless PRE-LABEL guess (Work
+  Timeline P3, landed 2026-07-06 — `docs/work-timeline.md` is mandatory
+  reading before touching this area). Explicit evidence stays deterministic:
+  caller `task_id`, `IntentContinue` (router cue or short acceptance), or the
+  one-shot `/resume` pin (which alone may reopen an ARCHIVED label). Every
+  other agent-bound message — sync, async, queued-drain, cron — pre-labels
+  onto the person's current OPEN (non-terminal, non-archived) label, else a
+  fresh placeholder. The guess is safe because labels never gate context
+  (spine P1 + recall P2) and the EXECUTION workspace follows the REQUEST for
+  pre-label turns (`workspaceForTask`); a wrong guess is display-only. After
+  finalization the async post-run labeler (`Server.Labeler`, cheap
+  memory_extract role via `app.NewRunLabeler`; nil = keep everything) answers
+  KEEP / MOVE:<task_id> / TITLE:<title>: MOVE re-points the run + its
+  events/artifacts transactionally (`Store.ReassignRun`, deleting an
+  auto-created placeholder left with zero runs), TITLE names a NEW placeholder
+  exactly once (established labels rename only via `/task <id> rename`), and
+  every non-KEEP decision writes a `label.assigned` event. All failure paths
+  degrade to KEEP. Do NOT build an ingress task-routing/disambiguation layer
+  or a pre-agent continue-vs-new LLM call — both were evaluated and rejected
+  (the implicit-continuation upgrade was removed in P3).
 - Run events use a per-run sink installed with
   `kernel.WithEventChannel(ctx, ch)`. Never swap the shared
   `Agent.EventChannel` in gateway code (legacy local-TUI fallback only).
@@ -227,7 +235,7 @@ Domain docs (**mandatory** before changing that domain):
 ## Agent-First Routing & Task Strategy
 
 - SelfMind is strict agent-first. Except for explicit slash commands (`/help`,
-  `/model`, `/status`, `/tasks`, `/events`, `/approvals`, `/approve`,
+  `/model`, `/status`, `/tasks`, `/task`, `/events`, `/approvals`, `/approve`,
   `/reject`, `/stop`, `/new`, `/resume`, `/workspace`, `/workspaces`),
   natural-language input from any channel must reach the agent. Never add
   pre-agent direct-answer routers for greetings, identity/model questions,

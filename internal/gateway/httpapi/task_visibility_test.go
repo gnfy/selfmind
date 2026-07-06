@@ -13,11 +13,12 @@ import (
 )
 
 // TestAsyncRunMovesCurrentTaskPointer covers the live-use regression where a
-// `selfmind send --async` run left the person's current_task pointer on an
-// unrelated old task, making the user's own async run invisible to /status on
-// every endpoint. The pointer must move to the task the run actually resolved
-// — which, under the task-attach semantics (attach only on continuation
-// evidence), is a brand-new task, never the parked current one.
+// `selfmind send --async` run left the person's current_task pointer on a task
+// the run did not resolve, making the async run invisible to /status. Under
+// the pre-label semantics (Work Timeline P3) an ordinary async send reuses the
+// person's open current label, so the pointer must stay on that label and the
+// label must visibly carry the run (last_channel + status move off 'new') —
+// the run is never orphaned on an invisible task.
 func TestAsyncRunMovesCurrentTaskPointer(t *testing.T) {
 	t.Setenv("SELF_GATEWAY_TOKEN", "")
 	t.Setenv("SELF_DAEMON_TOKEN", "")
@@ -32,7 +33,7 @@ func TestAsyncRunMovesCurrentTaskPointer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Parked current task the async send must NOT attach to.
+	// Open current label: the async send pre-labels onto it (display guess).
 	currentTask, err := store.CreateTask(ctx, control.TaskCreate{
 		TenantID: identity.TenantID,
 		PersonID: identity.PersonID,
@@ -58,28 +59,27 @@ func TestAsyncRunMovesCurrentTaskPointer(t *testing.T) {
 		t.Fatalf("async accept failed: status=%d resp=%+v", status, resp)
 	}
 
-	// The run executes in the background; wait for the pointer to converge on
-	// the run's own freshly created task.
+	// The run executes in the background on the pre-labeled current task; wait
+	// for the label to visibly carry it (a run stamps last_channel and moves
+	// the status off 'new').
 	deadline := time.Now().Add(5 * time.Second)
 	for {
-		current, err := store.CurrentTask(ctx, identity.TenantID, identity.PersonID)
+		after, err := store.GetTask(ctx, identity.TenantID, currentTask.ID)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if current != nil && current.ID != currentTask.ID {
+		if after != nil && after.LastChannel == "send" && after.Status != "new" {
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("current task pointer did not move off the parked task: got %+v", current)
+			t.Fatalf("async run never became visible on the pre-labeled task: got %+v", after)
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
+	// The pointer stays on the label the run resolved, so /status shows it.
 	current, _ := store.CurrentTask(ctx, identity.TenantID, identity.PersonID)
-	if current == nil || current.LastChannel != "send" {
-		t.Fatalf("pointer should follow the async run's own task; got %+v", current)
-	}
-	if after, _ := store.GetTask(ctx, identity.TenantID, currentTask.ID); after == nil || after.Status != "new" {
-		t.Fatalf("parked task mutated by the async run: %+v", after)
+	if current == nil || current.ID != currentTask.ID {
+		t.Fatalf("pointer should stay on the pre-labeled task; got %+v", current)
 	}
 }
 

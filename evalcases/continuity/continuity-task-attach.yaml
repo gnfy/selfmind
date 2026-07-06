@@ -1,24 +1,26 @@
 id: continuity_task_attach
-title: "task-attach semantics: new work never lands on the parked task"
+title: "pre-label semantics: an ordinary follow-up runs under the open current label"
 require_cassette: true
 suite: continuity
 workspace: "."
 channel: cli
 
-# Regression for the live defect where a brand-new imperative request attached
-# to the person's parked current task (an unrelated /new-created empty task),
-# inheriting its title/status and missing workspace. Rule: attach only on
-# continuation evidence (continue cue, short acceptance, /resume pin, explicit
-# task id); anything else creates its OWN task. Turn 1 parks a plan-stage task
-# (non-terminal); turn 2 is unrelated new work and must switch task IDs.
-# Deterministic Go coverage: internal/gateway/httpapi/task_attach_test.go.
+# Work Timeline P3 (docs/work-timeline.md "Labels"/"Ingress"): an ordinary
+# message with no continuation evidence PRE-LABELS onto the person's current
+# OPEN task instead of spawning a context-less task per message. This is
+# harmless by construction — context is spine-based, the execution workspace
+# follows the request, and the post-run labeler can re-point the run — so the
+# old capture-bug assertion (turn 2 had to switch task ids) is inverted: both
+# turns stay on one label and must still complete cleanly with no tool calls.
+# (The cassette is sequence-keyed, so it replays across the semantics change.)
+# Deterministic Go coverage: internal/gateway/httpapi/task_attach_test.go,
+# internal/gateway/httpapi/run_labeler_test.go.
 turns:
   - input: "帮我规划'重构配置加载'的方案,先给 3 步,每步一句话,不要写代码、不要看本地文件。"
   - input: "用一句话解释 SQLite 的 WAL 模式是什么,不要看本地文件,不要写代码。"
 
 expect:
   status: completed
-  require_task_switch: true
   max_tool_calls: 0
   max_duration_seconds: 420
 

@@ -214,10 +214,11 @@ func (a *App) runTUI() int {
 		DefaultTenantID: tenantID,
 		// Smart-mode approval triage (H2): cheap-model judge off the main run
 		// provider. Nil when unavailable → smart mode asks a human.
-		ApprovalJudge: appcore.NewApprovalJudge(agent.ApprovalJudgeProvider()),
-		// Implicit-continuation LLM upgrade window (Fix 1); "0" disables it.
 		// (Escrow needs the daemon sweep, so PendingNotifyAfter is daemon-only.)
-		ContinueWindow: cfg.Intent.ContinueWindowDuration(),
+		ApprovalJudge: appcore.NewApprovalJudge(agent.ApprovalJudgeProvider()),
+		// Post-run labeler (Work Timeline P3): cheap memory_extract-role judge
+		// that re-points a wrong pre-label after the run. Nil → labels are kept.
+		Labeler: appcore.NewRunLabeler(agent.SummaryProvider()),
 		// Automatic semantic recall (Work Timeline P2): same selector-layer
 		// wiring as the daemon so in-process TUI turns get identical context.
 		Recall: httpapi.NewRecallEngine(controlStore, mem, appcore.SemanticRecallExpander(mem, cfg, tenantID)),

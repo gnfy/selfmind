@@ -178,6 +178,18 @@ func (a *Agent) ApprovalJudgeProvider() llm.Provider {
 	return a.judgeProvider
 }
 
+// SummaryProvider returns the cheap memory_extract-role provider installed by
+// SetSummaryProvider, or nil when none is configured. The gateway boundary
+// uses it to build side-task judges that must stay OFF the main coding
+// provider (e.g. the post-run labeler, Work Timeline P3); a nil provider makes
+// those features degrade to no-ops, never to the main model.
+func (a *Agent) SummaryProvider() llm.Provider {
+	if a == nil {
+		return nil
+	}
+	return a.summaryProvider
+}
+
 // activeLLM returns the provider for the current run (the per-run choice when
 // set, else the default coding provider).
 func (a *Agent) activeLLM() llm.Provider {

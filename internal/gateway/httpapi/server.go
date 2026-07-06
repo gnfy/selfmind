@@ -31,11 +31,6 @@ type Server struct {
 	DrainTimeout      time.Duration
 	ShutdownFunc      func()
 	RuntimeStatusFunc func() api.GatewayRuntimeInfo
-	// ContinueWindow bounds the implicit-continuation LLM upgrade (Fix 1): when
-	// rules classify a message as new work but the person has a non-terminal task
-	// updated within this window, the LLM decides continuation vs new work. Zero
-	// disables the exception (rules result stands).
-	ContinueWindow time.Duration
 	// PendingNotifyAfter is the escrow threshold (Fix 2): an unanswered
 	// approval/clarify older than this, whose person has detached from the CLI and
 	// which was never notified, is re-pushed to the preferred IM by the periodic
@@ -53,6 +48,16 @@ type Server struct {
 	// runtime context. Nil disables automatic recall (the model-invoked
 	// session_search tool is unaffected). See recall.go.
 	Recall *RecallEngine
+	// Labeler is the optional cheap-model post-run labeler (Work Timeline P3):
+	// after a run finalizes, it decides whether the run's pre-label guess was
+	// right (KEEP), belongs to another open label (MOVE), or needs a stable
+	// title (TITLE, new placeholders only). Nil (e.g. eval, no cheap model)
+	// means every pre-label is kept as-is — everything still works because
+	// labels never gate context. See run_labeler.go.
+	Labeler RunLabeler
+	// labelerWG tracks in-flight post-run labeler goroutines so tests (and a
+	// graceful drain) can wait for them; production paths never block on it.
+	labelerWG sync.WaitGroup
 
 	mu           sync.Mutex
 	draining     bool
@@ -239,7 +244,7 @@ func (d *Server) ProcessMessage(ctx context.Context, req api.MessageRequest) (ap
 		}, http.StatusServiceUnavailable
 	}
 
-	intent := d.classifyIntent(ctx, identity, req.Content, req.Channel)
+	intent := d.classifyIntent(ctx, req.Content, req.Channel)
 	if intent.Intent != router.IntentContinue && looksLikeAffirmativeContinuation(req.Content) {
 		if task, _ := d.resolveContinueTask(ctx, identity); task != nil {
 			intent = router.IntentResult{
@@ -509,24 +514,38 @@ func artifactName(uri string) string {
 	return name
 }
 
-// resolveTask decides which task this turn runs under. Attach happens ONLY on
-// explicit continuation evidence: a caller-supplied task id, an IntentContinue
-// classification (router cue or the short-acceptance upgrade in
-// ProcessMessage), or the one-shot pin written by /resume. Everything else
-// that reaches the agent is genuinely NEW work — async dispatches and
-// queued-task drains included — and always gets its OWN task, even when a
-// parked non-terminal task exists. Attaching new work to a parked task made
-// the run inherit that task's title/status and (absent or wrong) workspace
-// (observed live: an async "create docsite-demo" request landing on an
-// unrelated /new-created empty task, so every file op tripped out-of-root
-// approvals). Parked tasks stay reachable via /resume or a later continuation
-// cue (resolveContinueTask); see docs/identity-continuity.md.
-func (c *RunCoordinator) resolveTask(ctx context.Context, identity *control.IdentityContext, req api.MessageRequest, intent router.IntentResult) (*control.Task, error) {
+// taskAttach describes how resolveTask chose the turn's task label, so later
+// stages know whether the choice was the user's or a guess.
+type taskAttach struct {
+	// created is true when a brand-new placeholder label was created for this
+	// turn. Its title is provisional (truncated input) until the post-run
+	// labeler titles it once; the labeler may also fold it into an existing
+	// open label and delete the empty placeholder.
+	created bool
+	// preLabel is true when the label is a soft pre-label GUESS (no explicit
+	// continuation evidence): the post-run labeler may re-point the run, and
+	// the execution workspace follows the REQUEST, not the guessed label.
+	preLabel bool
+}
+
+// resolveTask decides which task label this turn runs under (Work Timeline P3,
+// docs/work-timeline.md "Labels"/"Ingress"). Explicit evidence is
+// deterministic and wins: a caller-supplied task id, an IntentContinue
+// classification (router cue or short acceptance), or the one-shot /resume
+// pin. Everything else gets a harmless PRE-LABEL guess: the person's current
+// task when it is OPEN (non-terminal, non-archived), else a fresh placeholder
+// label. The guess is safe because context is spine-based (P1) and recall
+// (P2) — labels never gate what the model sees — and the post-run labeler
+// re-points a wrong guess; a mislabel is a display bug, not context
+// corruption. task_runs.task_id stays NOT NULL and the control plane
+// (queue/approvals/busy/steer) is untouched.
+func (c *RunCoordinator) resolveTask(ctx context.Context, identity *control.IdentityContext, req api.MessageRequest, intent router.IntentResult) (*control.Task, taskAttach, error) {
 	store := c.srv.Control
 	if req.TaskID != "" {
 		task, err := store.GetTask(ctx, identity.TenantID, req.TaskID)
 		if err != nil || task != nil {
-			return c.bindTaskWorkspaceIfMissing(ctx, identity, task, req, err)
+			task, err = c.bindTaskWorkspaceIfMissing(ctx, identity, task, req, err)
+			return task, taskAttach{}, err
 		}
 	}
 	// The /resume pin covers exactly the NEXT agent-bound message, so it is
@@ -536,14 +555,26 @@ func (c *RunCoordinator) resolveTask(ctx context.Context, identity *control.Iden
 	if intent.Intent == router.IntentContinue {
 		task, err := c.srv.resolveContinueTask(ctx, identity)
 		if err != nil || task != nil {
-			return c.bindTaskWorkspaceIfMissing(ctx, identity, task, req, err)
+			task, err = c.bindTaskWorkspaceIfMissing(ctx, identity, task, req, err)
+			return task, taskAttach{}, err
 		}
-		return nil, fmt.Errorf("no task to continue; start a new task or use /resume <task_id>")
+		return nil, taskAttach{}, fmt.Errorf("no task to continue; start a new task or use /resume <task_id>")
 	}
-	if pinned != nil && !terminalTaskStatus(pinned.Status) {
-		return c.bindTaskWorkspaceIfMissing(ctx, identity, pinned, req, nil)
+	// An explicit /resume is a deliberate act, so it may reopen even an
+	// ARCHIVED label; the other terminal statuses (done/cancelled/failed) stay
+	// closed to the pin exactly as before.
+	if pinned != nil && (!terminalTaskStatus(pinned.Status) || archivedTaskStatus(pinned.Status)) {
+		task, err := c.bindTaskWorkspaceIfMissing(ctx, identity, pinned, req, nil)
+		return task, taskAttach{}, err
 	}
-	// No continuation evidence → new task. An explicit request workspace wins;
+	// Pre-label guess: reuse the person's current OPEN label. Display-only —
+	// the workspace still follows the request (workspaceForTask) and the
+	// post-run labeler corrects a wrong guess.
+	if current, err := store.CurrentTask(ctx, identity.TenantID, identity.PersonID); err == nil &&
+		current != nil && !terminalTaskStatus(current.Status) {
+		return current, taskAttach{preLabel: true}, nil
+	}
+	// No open label → new placeholder. An explicit request workspace wins;
 	// otherwise the person's current workspace seeds the task scope.
 	workspaceID := req.WorkspaceID
 	if workspaceID == "" {
@@ -551,13 +582,14 @@ func (c *RunCoordinator) resolveTask(ctx context.Context, identity *control.Iden
 			workspaceID = ws.ID
 		}
 	}
-	return store.CreateTask(ctx, control.TaskCreate{
+	task, err := store.CreateTask(ctx, control.TaskCreate{
 		TenantID:    identity.TenantID,
 		PersonID:    identity.PersonID,
 		WorkspaceID: workspaceID,
 		Title:       titleFromInput(req.Content),
 		Channel:     req.Channel,
 	})
+	return task, taskAttach{created: true, preLabel: true}, err
 }
 
 func (c *RunCoordinator) bindTaskWorkspaceIfMissing(ctx context.Context, identity *control.IdentityContext, task *control.Task, req api.MessageRequest, priorErr error) (*control.Task, error) {
@@ -578,20 +610,25 @@ func (c *RunCoordinator) bindTaskWorkspaceIfMissing(ctx context.Context, identit
 	return refreshed, nil
 }
 
-func (c *RunCoordinator) workspaceForTask(ctx context.Context, identity *control.IdentityContext, task *control.Task, req api.MessageRequest) (*control.Workspace, error) {
+func (c *RunCoordinator) workspaceForTask(ctx context.Context, identity *control.IdentityContext, task *control.Task, req api.MessageRequest, attach taskAttach) (*control.Workspace, error) {
 	store := c.srv.Control
-	// The task's own workspace binding is authoritative and must survive a
-	// resume/continue. resolveTask already set task.WorkspaceID to the request
-	// workspace for NEW tasks (so preferring the task matches the request there),
-	// but a continuation attaches to an EXISTING task whose workspace differs
-	// from the client's cwd-derived one (prepareRequestWorkspace sets
-	// req.WorkspaceID from ClientCWD for local CLI turns). If req won here, a CLI
-	// `继续` of an IM task would run in the terminal's cwd instead of the dir the
-	// prior run built in — tripping out-of-root approvals and rediscovering the
-	// wrong files. Fall back to the request/current workspace only when the task
-	// has no binding of its own.
+	// For EXPLICIT attaches (task id, continuation cue, /resume pin) the task's
+	// own workspace binding is authoritative and must survive a resume/continue:
+	// a CLI `继续` of an IM task must run in the dir the prior run built in, not
+	// the terminal's cwd-derived workspace (prepareRequestWorkspace sets
+	// req.WorkspaceID from ClientCWD for local CLI turns) — otherwise every file
+	// op trips out-of-root approvals against the wrong tree.
+	//
+	// For a PRE-LABEL guess the label is display-only, so the REQUEST wins: the
+	// run executes in the explicitly requested (or cwd-derived) workspace even
+	// when the guessed label is bound elsewhere. This is what makes a wrong
+	// pre-label harmless — execution scope never inherits a guessed label's
+	// workspace (Work Timeline P3).
 	workspaceID := ""
-	if task != nil {
+	if attach.preLabel {
+		workspaceID = strings.TrimSpace(req.WorkspaceID)
+	}
+	if workspaceID == "" && task != nil {
 		workspaceID = task.WorkspaceID
 	}
 	if workspaceID == "" {
@@ -1262,16 +1299,16 @@ func (d *Server) tryHandleControlCommand(ctx context.Context, identity *control.
 	case lower == "/task status" || lower == "/status":
 		reply, err := d.statusReply(ctx, identity)
 		return true, reply, err
-	case strings.HasPrefix(lower, "/resume ") || strings.HasPrefix(lower, "/task "):
+	case strings.HasPrefix(lower, "/resume "):
 		parts := strings.Fields(trimmed)
 		if len(parts) < 2 {
 			return true, "Usage: /resume <task_id>", nil
 		}
-		task, err := d.Control.GetTask(ctx, identity.TenantID, parts[1])
+		task, err := d.findTaskByRef(ctx, identity, parts[1])
 		if err != nil {
 			return true, "", err
 		}
-		if task == nil || task.PersonID != identity.PersonID {
+		if task == nil {
 			return true, "Task not found.", nil
 		}
 		if err := d.Control.SetCurrentTask(ctx, identity.TenantID, identity.PersonID, task.ID); err != nil {
@@ -1280,19 +1317,22 @@ func (d *Server) tryHandleControlCommand(ctx context.Context, identity *control.
 		// One-shot pin: an explicit /resume IS continuation evidence, so the
 		// next agent-bound message attaches to this task even without a
 		// continuation cue. Consumed by resolveTask; after that, plain new
-		// messages create their own tasks again (task-attach semantics).
+		// messages fall back to the pre-label guess again. /resume of an
+		// ARCHIVED label deliberately reopens it (resolveTask honors the pin).
 		_ = d.Control.SetPersonSetting(ctx, identity.TenantID, identity.PersonID, resumePinKey, task.ID)
 		return true, fmt.Sprintf("Resumed task: %s (%s)", task.Title, task.ID), nil
-	case lower == "/tasks" || lower == "tasks" || strings.Contains(lower, "任务列表"):
-		tasks, err := d.Control.ListTasks(ctx, identity.TenantID, identity.PersonID, 20)
-		if err != nil {
-			return true, "", err
+	case lower == "/task" || strings.HasPrefix(lower, "/task "):
+		// /task <id> detail + subcommands (runs|rename|archive). "/task status"
+		// is an alias of /status and is claimed by the case above.
+		reply, err := d.taskCommandReply(ctx, identity, strings.Fields(trimmed)[1:])
+		return true, reply, err
+	case lower == "/tasks" || strings.HasPrefix(lower, "/tasks ") || lower == "tasks" || strings.Contains(lower, "任务列表"):
+		variant := ""
+		if strings.HasPrefix(lower, "/tasks ") {
+			variant = strings.TrimSpace(strings.TrimPrefix(lower, "/tasks"))
 		}
-		activeTaskID := ""
-		if active := d.coordinator().currentActive(identity.PersonID); active != nil {
-			activeTaskID = active.TaskID
-		}
-		return true, formatTasks(tasks, activeTaskID), nil
+		reply, err := d.tasksOverviewReply(ctx, identity, variant)
+		return true, reply, err
 	case lower == "/queue" || strings.HasPrefix(lower, "/queue "):
 		arg := strings.TrimSpace(trimmed[len("/queue"):])
 		if strings.EqualFold(arg, "clear") {

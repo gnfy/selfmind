@@ -171,10 +171,13 @@ func (m *uiModel) handleStatus() tea.Cmd {
 	}
 }
 
-func (m *uiModel) handleTasks() tea.Cmd {
+func (m *uiModel) handleTasks(args []string) tea.Cmd {
 	return func() tea.Msg {
 		if m.messageProcessor != nil {
-			resp, _ := m.messageProcessor(context.Background(), m.controlMessageRequest("/tasks"))
+			// Relay variants (/tasks done|archived|all) to the gateway, which
+			// owns the aggregated view.
+			content := strings.TrimSpace("/tasks " + strings.Join(args, " "))
+			resp, _ := m.messageProcessor(context.Background(), m.controlMessageRequest(content))
 			if resp.Error != "" {
 				return MsgAgentDone{Response: fmt.Sprintf("Error fetching tasks: %s", resp.Error)}
 			}

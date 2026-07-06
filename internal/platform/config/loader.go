@@ -111,11 +111,6 @@ models:
 
 intent:
   mode: "hybrid"
-  # When rules classify a message as new work but the person has a recently
-  # active (non-terminal) task updated within this window, a cheap LLM decides
-  # whether the message continues that task or starts new work (it may only
-  # upgrade to a continuation, never downgrade). "0" = disable the exception.
-  continue_window: "30m"
   rules:
     continue: []
     task: []
@@ -169,38 +164,13 @@ type ModelConfig struct {
 
 type IntentConfig struct {
 	Mode string `mapstructure:"mode" yaml:"mode,omitempty"`
-	// ContinueWindow bounds how recently a non-terminal task must have been
-	// updated for the implicit-continuation LLM upgrade to consider it (Fix 1).
-	// Duration string; default "30m"; "0" disables the exception.
+	// Deprecated: continue_window configured the implicit-continuation LLM
+	// upgrade, removed with Work Timeline P3 (context is spine-based, so task
+	// attachment no longer affects context). The field is kept only so
+	// existing config.yaml files keep loading; its value is ignored.
 	ContinueWindow string                 `mapstructure:"continue_window" yaml:"continue_window,omitempty"`
 	Rules          map[string][]string    `mapstructure:"rules" yaml:"rules,omitempty"`
 	Thresholds     IntentThresholdsConfig `mapstructure:"thresholds" yaml:"thresholds,omitempty"`
-}
-
-// DefaultContinueWindow is the intent.continue_window applied when the knob is
-// absent or unparsable: 30 minutes.
-const DefaultContinueWindow = 30 * time.Minute
-
-// ContinueWindowDuration parses intent.continue_window. Empty or invalid values
-// fall back to DefaultContinueWindow; a zero (or negative) duration returns 0,
-// meaning "disable the implicit-continuation LLM upgrade".
-func (c IntentConfig) ContinueWindowDuration() time.Duration {
-	raw := strings.TrimSpace(c.ContinueWindow)
-	if raw == "" {
-		return DefaultContinueWindow
-	}
-	d, err := time.ParseDuration(raw)
-	if err != nil {
-		if secs, serr := strconv.Atoi(raw); serr == nil {
-			d = time.Duration(secs) * time.Second
-		} else {
-			return DefaultContinueWindow
-		}
-	}
-	if d <= 0 {
-		return 0
-	}
-	return d
 }
 
 type IntentThresholdsConfig struct {
@@ -647,7 +617,6 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("evolution.nudge_interval", 10)
 	v.SetDefault("models.source", "local")
 	v.SetDefault("intent.mode", "hybrid")
-	v.SetDefault("intent.continue_window", "30m")
 	v.SetDefault("intent.thresholds.direct", 0.8)
 	v.SetDefault("intent.thresholds.ask", 0.55)
 	v.SetDefault("gateway.pending_notify_after", "2m")

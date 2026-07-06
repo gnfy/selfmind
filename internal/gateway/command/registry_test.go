@@ -109,7 +109,7 @@ func TestLocalCommandsNotGatewayRoutable(t *testing.T) {
 // registry so help/suggest/async-hint cannot drift again.
 func TestKnownMatchesGatewayContract(t *testing.T) {
 	want := []string{
-		"/help", "/model", "/id", "/status", "/tasks", "/queue", "/diag",
+		"/help", "/model", "/id", "/status", "/tasks", "/task", "/queue", "/diag",
 		"/events", "/approvals", "/approve", "/reject", "/mode", "/stop",
 		"/cancel", "/notify", "/new", "/resume", "/workspace", "/workspaces",
 	}

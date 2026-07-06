@@ -413,7 +413,8 @@ func TestPrepareRequestWorkspaceIgnoresIMClientCWD(t *testing.T) {
 
 // TestResolveTaskBindsEmptyCurrentTaskToCLIWorkspace: attaching (continuation)
 // to a workspace-less task binds the request's resolved CLI workspace to it;
-// plain new work instead creates its own task carrying that workspace.
+// plain new work pre-labels onto the open current task while executing in the
+// request's workspace (Work Timeline P3).
 func TestResolveTaskBindsEmptyCurrentTaskToCLIWorkspace(t *testing.T) {
 	store, err := control.OpenStore(t.TempDir())
 	if err != nil {
@@ -452,21 +453,35 @@ func TestResolveTaskBindsEmptyCurrentTaskToCLIWorkspace(t *testing.T) {
 	}
 	// Continuation evidence attaches to the workspace-less current task and
 	// binds the request's resolved CLI workspace to it.
-	resolved, err := daemon.coordinator().resolveTask(ctx, identity, req, router.IntentResult{Intent: router.IntentContinue})
+	resolved, attach, err := daemon.coordinator().resolveTask(ctx, identity, req, router.IntentResult{Intent: router.IntentContinue})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if resolved == nil || resolved.ID != task.ID || resolved.WorkspaceID != req.WorkspaceID {
 		t.Fatalf("resolved task = %+v, req workspace = %s", resolved, req.WorkspaceID)
 	}
-	// Plain new work never attaches to the parked task: it gets its OWN task,
-	// still carrying the request workspace (task-attach semantics).
-	fresh, err := daemon.coordinator().resolveTask(ctx, identity, req, router.IntentResult{Intent: router.IntentTask})
+	if attach.preLabel || attach.created {
+		t.Fatalf("continuation attach must be explicit, got %+v", attach)
+	}
+	// Plain new work pre-labels onto the open current task (Work Timeline P3)
+	// — a display guess — while the EXECUTION workspace still follows the
+	// request (workspaceForTask), so the guess is harmless.
+	fresh, attach, err := daemon.coordinator().resolveTask(ctx, identity, req, router.IntentResult{Intent: router.IntentTask})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if fresh == nil || fresh.ID == task.ID || fresh.WorkspaceID != req.WorkspaceID {
-		t.Fatalf("new-work task = %+v, req workspace = %s", fresh, req.WorkspaceID)
+	if fresh == nil || fresh.ID != task.ID {
+		t.Fatalf("plain work should pre-label onto the open current task, got %+v", fresh)
+	}
+	if !attach.preLabel || attach.created {
+		t.Fatalf("pre-label reuse must be flagged preLabel (not created), got %+v", attach)
+	}
+	ws, err := daemon.coordinator().workspaceForTask(ctx, identity, fresh, req, attach)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ws == nil || ws.ID != req.WorkspaceID {
+		t.Fatalf("pre-label run must execute in the REQUEST workspace %s, got %+v", req.WorkspaceID, ws)
 	}
 }
 
@@ -667,7 +682,7 @@ func TestWorkspacePreservedOnResume(t *testing.T) {
 	daemon := &Server{Control: store, DefaultTenantID: "default"}
 	// The CLI request carries its own cwd-derived workspace, but the resume must
 	// keep the task's original one.
-	got, err := daemon.coordinator().workspaceForTask(ctx, identity, task, api.MessageRequest{WorkspaceID: clientWS.ID})
+	got, err := daemon.coordinator().workspaceForTask(ctx, identity, task, api.MessageRequest{WorkspaceID: clientWS.ID}, taskAttach{})
 	if err != nil {
 		t.Fatal(err)
 	}

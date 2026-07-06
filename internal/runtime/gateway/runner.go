@@ -132,14 +132,15 @@ func Run(ctx context.Context, opts Options) error {
 		Gateway:         gwDeps.Gateway,
 		DefaultTenantID: defaultTenantID,
 		DrainTimeout:    drainTimeout,
-		// Implicit-continuation LLM upgrade window (Fix 1) and pending-approval/
-		// clarify escrow threshold (Fix 2). Both derive from config; "0" disables.
-		ContinueWindow:     cfg.Intent.ContinueWindowDuration(),
+		// Pending-approval/clarify escrow threshold (Fix 2); "0" disables.
 		PendingNotifyAfter: cfg.Gateway.PendingNotifyAfterDuration(),
 		// Smart-mode approval triage (H2): build the cheap-model judge from the
 		// agent's dedicated triage provider (a cheap role kept OFF the main run
 		// provider). Nil when no provider is available → smart mode asks a human.
 		ApprovalJudge: app.NewApprovalJudge(agent.ApprovalJudgeProvider()),
+		// Post-run labeler (Work Timeline P3): cheap memory_extract-role judge
+		// that re-points a wrong pre-label after the run. Nil → labels are kept.
+		Labeler: app.NewRunLabeler(agent.SummaryProvider()),
 		// Automatic semantic recall (Work Timeline P2): FTS sessions + task
 		// label cards attached at the selector layer; query expansion only when
 		// a semantic_recall role model is explicitly configured.

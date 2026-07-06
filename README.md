@@ -266,11 +266,6 @@ mcp:
 # tune explicit-command matching and continuation detection.
 intent:
   mode: "hybrid"
-  # When your message reads as new work but you have a non-terminal task updated
-  # within this window, a cheap LLM decides whether it continues that task or
-  # starts new work (it may only upgrade to a continuation, never sidetrack it).
-  # "0" disables this implicit-continuation check.
-  continue_window: "30m"
 
 # Cron entrypoint. Personal mode can keep the default.
 cron:
@@ -399,7 +394,8 @@ Common slash commands:
 |---|---|
 | `/help` | Show available commands. |
 | `/status` | Show provider, model, runtime, token usage, current task, and any pending approval/question. |
-| `/tasks` | List recent tasks with their status. |
+| `/tasks` / `/tasks done\|archived\|all` | List open work, one line per task with run count and a next-step hint; finished work collapses to a count. |
+| `/task <id>` / `/task <id> runs\|rename <name>\|archive` | Inspect one task (detail, recent runs), rename it, or archive it. |
 | `/queue` / `/queue drop <n>` / `/queue clear` | List queued tasks / drop one by position / drop all. |
 | `/stop` | Cancel the active run — or, if nothing is running, cancel the current (stuck) task. |
 | `/cancel` | Cancel the current task even when no run is active. |
@@ -447,12 +443,14 @@ through these states:
 
 Everyday management:
 
-- **See everything:** `/tasks` (all recent), `/status` (the current one + any
+- **See everything:** `/tasks` (open work; `/tasks done` for finished),
+  `/task <id>` (one task's detail and runs), `/status` (the current one + any
   pending approval/question), `/queue` (what's waiting).
-- **Continue a task:** just reply (`继续` / `ok` / a follow-up) — a short
-  acceptance continues the current task, and even an implicit follow-up shortly
-  after a task (e.g. "the quality is poor") is recognized as continuing it rather
-  than starting fresh; `/resume <task_id>` switches to an older one.
+- **Continue a task:** just reply (`继续` / `ok` / a follow-up) — an ordinary
+  follow-up runs under your current open task by default (your working context
+  follows you regardless, and a cheap background labeler re-files a run that
+  actually belonged to another task); `/resume <task_id>` switches to an older
+  one, including an archived one.
 - **You'll be nudged:** an unanswered approval or question is re-pushed to your
   preferred IM if you leave the CLI, so it never sits pending invisibly.
 - **Start something separate:** `/new` — otherwise a new request while a task

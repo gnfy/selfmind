@@ -9,12 +9,14 @@ selfcheck` (and CI) FAILS — does not skip — while their cassettes are missin
 They need one local recording run against a configured live provider before
 the CI gate goes green.
 
-`continuity-task-attach.yaml` (task-attach semantics: new work never lands on
-the parked task, asserted via `require_task_switch`) is NOT yet
-`require_cassette: true` — it skips offline until its cassette is recorded and
-committed; flip the flag on in the same commit as the cassette. Its
-deterministic coverage lives in
-`internal/gateway/httpapi/task_attach_test.go`.
+`continuity-task-attach.yaml` was rewritten for the Work Timeline P3
+pre-label semantics (2026-07-06): an ordinary follow-up now runs under the
+open current label BY DESIGN, so the case no longer asserts
+`require_task_switch` — it pins that both turns complete cleanly on the
+message path. Its cassette is committed and sequence-keyed, so it survived
+the semantics change. Deterministic coverage lives in
+`internal/gateway/httpapi/task_attach_test.go` and
+`internal/gateway/httpapi/run_labeler_test.go`.
 
 ## Recording the cassettes (one command)
 

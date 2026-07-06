@@ -99,28 +99,24 @@ Rules (also in `docs/architecture-constraints.md`):
 The mechanism agents must preserve when touching resume/continuation behavior.
 Code: `internal/gateway/httpapi/continue_resolver.go`.
 
-> **Direction (approved 2026-07-06):** context ownership moves from tasks to a
-> person-level work spine; `task` demotes to a work label and the ingress
-> attach rules below become a harmless pre-label guess. `docs/work-timeline.md`
-> is the canonical target (mandatory reading before changing this contract);
-> packages P1–P3 in `docs/STATUS.md` track the transition. Until a package
-> lands, the rules below are the live behavior.
+> **Landed (2026-07-06, Work Timeline P1–P3):** context ownership lives on the
+> person-level work spine; `task` is a work label and ingress attach is a
+> harmless pre-label guess corrected by a post-run labeler.
+> `docs/work-timeline.md` is the canonical description (mandatory reading
+> before changing this contract); the rules below are the live behavior.
 
 1. **Continuation detection.** Short acceptances (`ok`, `继续`, `可以`, …) are
    matched by `looksLikeAffirmativeContinuation`; richer cues come from
    `internal/gateway/router/intent*.go` (`IntentContinue`). Intent rules must
-   stay high-confidence; ordinary messages go to the agent as-is. **Implicit
-   continuation via LLM upgrade:** an ordinary message carries no cue, so the
-   rules classifier defaults it to `IntentTask`. When the person has a
-   non-terminal task updated within `intent.continue_window` (default 30m; `0`
-   disables), the hybrid/llm classifier asks a cheap LLM — with that task's
-   title/summary as context — whether the message continues it or is new work.
-   The LLM may ONLY upgrade `task→continue` (never downgrade to casual/direct,
-   preserving agent-first), at most one call per inbound message; an upgraded
-   `IntentContinue` is itself continuation evidence and flows through the normal
-   attach path below (`router.UpgradeTaskToContinueWithLLM`,
-   `httpapi.classifyIntent`). This is what makes an implicit follow-up ("质量太差了")
-   right after a finished task continue it instead of spawning a context-less one.
+   stay high-confidence; ordinary messages go to the agent as-is. The implicit
+   pre-agent "continue vs new" LLM upgrade (`intent.continue_window`,
+   `router.UpgradeTaskToContinueWithLLM`) was REMOVED with Work Timeline P3:
+   working context is the person-level spine, so an implicit follow-up
+   ("质量太差了") keeps its context regardless of which task label the run gets
+   — the call bought nothing, and its failure mode (a wrong pre-agent routing
+   decision) was worse than its absence. `intent.continue_window` in existing
+   config files is ignored. Do not reintroduce ingress continuation
+   classifiers; see `docs/work-timeline.md` "Ingress (simplified)".
 2. **Task resolution** (`resolveContinueTask`, person-scoped, never
    channel-scoped): the person's `CurrentTask` if set; otherwise the most
    recent non-terminal task from the last 10 (`terminalTaskStatus`: done /
@@ -137,17 +133,21 @@ Code: `internal/gateway/httpapi/continue_resolver.go`.
    `person_id`, a task started from CLI resumes from WeChat and vice versa.
    The channel only affects where the reply is delivered
    (`task.LastChannel`) and the feedback style (stream vs. concise notices).
-5. **New work never attaches silently** (task-attach semantics, 2026-07-05).
-   A message with no continuation evidence — no cue, no short acceptance, no
-   explicit task id — always creates a NEW task, even while a parked
-   non-terminal task exists; async dispatches, queued-task drains, and cron
-   turns follow the same rule, and the new task carries the request's
-   explicit `workspace_id` when one is given. An explicit `/resume <task_id>`
-   is itself continuation evidence for exactly the NEXT agent-bound message
-   (a one-shot pin, consumed on use), so a stale `/resume` can never capture
-   unrelated work later. Parked tasks are resumed deliberately (`/resume`, a
-   later continuation cue), never captured accidentally
-   (`internal/gateway/httpapi` `resolveTask`).
+5. **Ordinary messages get a harmless pre-label guess** (Work Timeline P3,
+   2026-07-06 — supersedes the 2026-07-05 "new work never attaches" rule). A
+   message with no continuation evidence — no cue, no short acceptance, no
+   explicit task id, no pin — runs under the person's current OPEN
+   (non-terminal, non-archived) task label, else a fresh placeholder; async
+   dispatches, queued-task drains, and cron turns follow the same rule. The
+   guess is safe because labels never gate context (the spine does) and the
+   EXECUTION workspace follows the REQUEST for pre-label turns — the harm of
+   the old capture bug (wrong workspace, wrong context) is structurally gone.
+   A cheap post-run labeler re-points a wrong guess (KEEP/MOVE/TITLE,
+   `label.assigned` audit event); mislabels are display bugs. An explicit
+   `/resume <task_id>` is continuation evidence for exactly the NEXT
+   agent-bound message (a one-shot pin, consumed on use) and is the only way
+   to reopen an ARCHIVED label (`/task <id> archive` shelves one)
+   (`internal/gateway/httpapi` `resolveTask`, `run_labeler.go`).
 
 Account binding: `POST /v1/accounts/bind` attaches a platform account to an
 existing person. `/id` shows the current tenant/person/account resolution.

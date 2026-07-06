@@ -380,7 +380,7 @@ func TestRecallEphemeralNotPersistedInHistory(t *testing.T) {
 		Platform: "cli", PlatformUserID: "local", Channel: "cli",
 		Content: "improve the tetris rendering pipeline",
 	}
-	intent := daemon.classifyIntent(ctx, identity, req.Content, req.Channel)
+	intent := daemon.classifyIntent(ctx, req.Content, req.Channel)
 	resp, status := daemon.coordinator().runMessage(ctx, identity, req, intent)
 	if status != 200 || resp.Error != "" {
 		t.Fatalf("turn 1 failed: %d %s", status, resp.Error)
@@ -430,7 +430,7 @@ func TestRecallEphemeralNotPersistedInHistory(t *testing.T) {
 		Platform: "cli", PlatformUserID: "local", Channel: "cli",
 		Content: "now summarize the weather station findings", TaskID: taskID,
 	}
-	intent2 := daemon.classifyIntent(ctx, identity, req2.Content, req2.Channel)
+	intent2 := daemon.classifyIntent(ctx, req2.Content, req2.Channel)
 	resp2, status2 := daemon.coordinator().runMessage(ctx, identity, req2, intent2)
 	if status2 != 200 || resp2.Error != "" {
 		t.Fatalf("turn 2 failed: %d %s", status2, resp2.Error)

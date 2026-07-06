@@ -23,7 +23,7 @@ var slashCommandMetas = []slashCommandMeta{
 	{Name: "/help", Usage: "/help", Description: "Open this temporary help page", Hint: "show available commands"},
 	{Name: "/model", Usage: "/model [model-name]", Description: "Show or switch model", Hint: "choose model, provider, and reasoning"},
 	{Name: "/status", Usage: "/status", Description: "Show runtime status and background processes", Hint: "show runtime, gateway, and model state"},
-	{Name: "/tasks", Usage: "/tasks", Description: "List global tasks", Hint: "view and manage gateway tasks"},
+	{Name: "/tasks", Usage: "/tasks [done|archived|all]", Description: "List open work (done/archived collapse to counts)", Hint: "view and manage gateway tasks"},
 	{Name: "/skills", Usage: "/skills [list|view|history|undo|search|install|audit|delete|archive|pin|unpin|stats|reload]", Description: "Manage learned skills", Hint: "list, view, undo, install, or archive skills"},
 	{Name: "/bundles", Usage: "/bundles [list|view|create|delete]", Description: "Manage skill bundles", Hint: "load multiple skills together"},
 	{Name: "/reload-skills", Usage: "/reload-skills", Description: "Reload skill tools from disk", Hint: "refresh skill commands"},
@@ -53,7 +53,8 @@ var slashCommandMetas = []slashCommandMeta{
 	{Name: "/cancel", Usage: "/cancel", Description: "Cancel the current task even if no run is active", Hint: "cancel the current task"},
 	{Name: "/id", Usage: "/id", Description: "Show your resolved account identity", Hint: "show your account identity"},
 	{Name: "/new", Usage: "/new [title]", Description: "Create a new task", Hint: "create a new task"},
-	{Name: "/resume", Usage: "/resume <task_id>", Description: "Resume a task", Hint: "resume a task by id"},
+	{Name: "/resume", Usage: "/resume <task_id>", Description: "Resume a task (an archived id reopens it)", Hint: "resume a task by id"},
+	{Name: "/task", Usage: "/task <id> [runs|rename <name>|archive]", Description: "Show a task's detail, runs, rename it, or archive it", Hint: "inspect or manage one task"},
 	{Name: "/workspace", Usage: "/workspace <id>", Description: "Select a workspace", Hint: "select a workspace"},
 	{Name: "/workspaces", Usage: "/workspaces", Description: "List workspaces", Hint: "list your workspaces"},
 	{Name: "/events", Usage: "/events", Description: "List recent events for the current task", Hint: "recent task events"},
@@ -66,7 +67,7 @@ var slashCommandMetas = []slashCommandMeta{
 // command.
 var gatewayPassthroughCommands = []string{
 	"/approvals", "/approve", "/reject", "/stop", "/cancel", "/id", "/new",
-	"/resume", "/workspace", "/workspaces", "/events", "/notify",
+	"/resume", "/task", "/workspace", "/workspaces", "/events", "/notify",
 }
 
 var slashCommands = []slashCommand{
@@ -100,7 +101,7 @@ var slashCommands = []slashCommand{
 	{
 		slashCommandMeta: slashCommandMetas[3],
 		Run: func(m *uiModel, args []string) tea.Cmd {
-			return m.handleTasks()
+			return m.handleTasks(args)
 		},
 	},
 	{

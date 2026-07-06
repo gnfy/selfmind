@@ -15,26 +15,6 @@ import (
 // Control-command and status response formatters, extracted from server.go to
 // keep that file focused on routing and request orchestration (see AGENTS.md).
 
-// formatTasks renders the /tasks list. activeTaskID is the person's currently
-// executing task (empty when nothing is running): a task in the between-turns
-// resumable state (in_progress/interrupted) with NO active run finished its turn
-// and is only PARKED, so it is labelled [paused] rather than reading as busy —
-// the stored status value is untouched, only the human-facing label.
-func formatTasks(tasks []control.Task, activeTaskID string) string {
-	if len(tasks) == 0 {
-		return "No tasks."
-	}
-	var sb strings.Builder
-	for i, task := range tasks {
-		label := task.Status
-		if task.ID != activeTaskID && isParkedTaskStatus(task.Status) {
-			label = task.Status + " · paused"
-		}
-		fmt.Fprintf(&sb, "%d. [%s] %s (%s)\n", i+1, label, task.Title, task.ID)
-	}
-	return strings.TrimSpace(sb.String())
-}
-
 // isParkedTaskStatus reports whether a status is the non-terminal, resumable
 // between-turns state a task rests in once its run finished: in_progress (parked
 // between turns) or interrupted (recovered after a crash/sweep). Such a task is

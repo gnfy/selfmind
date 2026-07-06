@@ -15,15 +15,38 @@ import (
 // Control-command and status response formatters, extracted from server.go to
 // keep that file focused on routing and request orchestration (see AGENTS.md).
 
-func formatTasks(tasks []control.Task) string {
+// formatTasks renders the /tasks list. activeTaskID is the person's currently
+// executing task (empty when nothing is running): a task in the between-turns
+// resumable state (in_progress/interrupted) with NO active run finished its turn
+// and is only PARKED, so it is labelled [paused] rather than reading as busy —
+// the stored status value is untouched, only the human-facing label.
+func formatTasks(tasks []control.Task, activeTaskID string) string {
 	if len(tasks) == 0 {
 		return "No tasks."
 	}
 	var sb strings.Builder
 	for i, task := range tasks {
-		fmt.Fprintf(&sb, "%d. [%s] %s (%s)\n", i+1, task.Status, task.Title, task.ID)
+		label := task.Status
+		if task.ID != activeTaskID && isParkedTaskStatus(task.Status) {
+			label = task.Status + " · paused"
+		}
+		fmt.Fprintf(&sb, "%d. [%s] %s (%s)\n", i+1, label, task.Title, task.ID)
 	}
 	return strings.TrimSpace(sb.String())
+}
+
+// isParkedTaskStatus reports whether a status is the non-terminal, resumable
+// between-turns state a task rests in once its run finished: in_progress (parked
+// between turns) or interrupted (recovered after a crash/sweep). Such a task is
+// waiting for the person to continue, not actively working — but only when no
+// run is live, which the caller checks separately.
+func isParkedTaskStatus(status string) bool {
+	switch strings.TrimSpace(strings.ToLower(status)) {
+	case "in_progress", "interrupted":
+		return true
+	default:
+		return false
+	}
 }
 
 func formatQueue(items []control.QueuedTask) string {
@@ -190,7 +213,15 @@ func formatTaskStatus(task *control.Task, handoff *control.Handoff, active *acti
 		return "No active task."
 	}
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "Task: %s\nStatus: %s\n", task.Title, task.Status)
+	statusText := task.Status
+	// A task parked in the between-turns resumable state (in_progress/interrupted)
+	// with NO live run finished its turn — it is not stuck. Say so, or the user
+	// reads "in_progress" as "still working" and waits on a run that already ended
+	// (observed live: 13 minutes staring at in_progress after the turn completed).
+	if active == nil && isParkedTaskStatus(task.Status) {
+		statusText = task.Status + " (turn finished — reply to continue, or /new)"
+	}
+	fmt.Fprintf(&sb, "Task: %s\nStatus: %s\n", task.Title, statusText)
 	if active != nil {
 		fmt.Fprintf(&sb, "\nRunning: %s elapsed\n", time.Since(active.StartedAt).Round(time.Second))
 	}

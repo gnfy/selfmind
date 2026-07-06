@@ -1282,7 +1282,11 @@ func (d *Server) tryHandleControlCommand(ctx context.Context, identity *control.
 		if err != nil {
 			return true, "", err
 		}
-		return true, formatTasks(tasks), nil
+		activeTaskID := ""
+		if active := d.coordinator().currentActive(identity.PersonID); active != nil {
+			activeTaskID = active.TaskID
+		}
+		return true, formatTasks(tasks, activeTaskID), nil
 	case lower == "/queue" || strings.HasPrefix(lower, "/queue "):
 		arg := strings.TrimSpace(trimmed[len("/queue"):])
 		if strings.EqualFold(arg, "clear") {
@@ -1453,15 +1457,131 @@ func (d *Server) approvalModeReply(ctx context.Context, identity *control.Identi
 	if tools.NormalizeApprovalMode(arg) == tools.ApprovalOnRequest && !tools.IsKnownApprovalModeWord(arg) {
 		return "Unknown mode " + arg + ".\n" + usage, nil
 	}
-	mode := string(tools.NormalizeApprovalMode(arg))
+	normalized := tools.NormalizeApprovalMode(arg)
+	mode := string(normalized)
 	if err := d.Control.SetPersonSetting(ctx, identity.TenantID, identity.PersonID, personSettingApprovalMode, mode); err != nil {
 		return "", err
 	}
 	reply := "Approval mode set to " + mode + "."
+	// Re-evaluate approvals that were ALREADY pending under the new mode. Without
+	// this a run blocked on a human ask before the switch stays blocked forever
+	// (observed live: a read_file approval sat pending for minutes after /mode
+	// smart) — the live ModeGetter only governs the NEXT dangerous op. The retro
+	// pass NEVER bypasses the hard floor and fails safe (leaves pending) on any
+	// uncertainty.
+	reply += d.retroResolvePendingApprovals(ctx, identity, normalized)
 	if mode == string(tools.ApprovalFullAuto) {
 		reply += " Note: the hard-floor safety limits still apply (filesystem-root deletes, disk formatting, host shutdown, and similar are always blocked)."
 	}
 	return reply, nil
+}
+
+// retroResolvePendingApprovals re-checks the person's currently-pending
+// approvals under a freshly-set approval mode and settles the ones the mode can
+// decide on its own, so switching to smart/full-auto/auto-edit unblocks a run
+// that was already stuck on a human ask. It mirrors the middleware funnel via
+// tools.EvaluateModeDecision (hard floor authoritative; smart mode consults the
+// same judge), only touches this person's pending rows, and returns a compact
+// English summary suffix for the /mode reply (empty when there was nothing to
+// re-check). Auto-approve/deny flip the pending row so the blocked waiter wakes
+// on its next 1s poll (server.go ~812); no new wakeup channel is needed.
+func (d *Server) retroResolvePendingApprovals(ctx context.Context, identity *control.IdentityContext, mode tools.ApprovalMode) string {
+	// on-request / read-only still ask for everything they gate, so there is
+	// nothing to auto-settle — leave the pending rows untouched and say nothing.
+	if mode == tools.ApprovalOnRequest || mode == tools.ApprovalReadOnly {
+		return ""
+	}
+	pending, err := d.Control.ListApprovalRequests(ctx, identity.TenantID, identity.PersonID, "pending", 100)
+	if err != nil || len(pending) == 0 {
+		return ""
+	}
+	approved, denied, stillPending := 0, 0, 0
+	for _, ap := range pending {
+		p := decodeApprovalPayload(ap)
+		toolName := strings.TrimSpace(p.Tool)
+		if toolName == "" {
+			// Non-tool approval (no tool to classify): fail safe, leave pending.
+			stillPending++
+			continue
+		}
+		decision := tools.EvaluateModeDecision(ctx, mode, "", toolName, p.Args, p.Reason, approvalReasonIsDangerous(p.Reason), d.ApprovalJudge)
+		switch decision {
+		case tools.ModeApprove:
+			// Internal channel "mode-change", empty grant scope (a retro approval
+			// is a one-off, it records no class grant).
+			if _, err := d.Control.RespondApprovalRequest(ctx, identity.TenantID, identity.PersonID, ap.ID, "approved", "mode-change", ""); err == nil {
+				approved++
+				d.appendApprovalModeEvent(ctx, ap, "approval.auto_approved", string(mode))
+			} else {
+				stillPending++
+			}
+		case tools.ModeDeny:
+			if _, err := d.Control.RespondApprovalRequest(ctx, identity.TenantID, identity.PersonID, ap.ID, "rejected", "mode-change", ""); err == nil {
+				denied++
+				d.appendApprovalModeEvent(ctx, ap, "approval.auto_rejected", string(mode))
+			} else {
+				stillPending++
+			}
+		default:
+			stillPending++
+		}
+	}
+	if approved == 0 && denied == 0 && stillPending == 0 {
+		return ""
+	}
+	total := approved + denied + stillPending
+	var parts []string
+	if approved > 0 {
+		parts = append(parts, fmt.Sprintf("%d auto-approved", approved))
+	}
+	if denied > 0 {
+		parts = append(parts, fmt.Sprintf("%d blocked by safety triage", denied))
+	}
+	if stillPending > 0 {
+		parts = append(parts, fmt.Sprintf("%d still needs your y/n", stillPending))
+	}
+	return fmt.Sprintf(" Re-checked %s: %s.", pluralize(total, "pending approval"), strings.Join(parts, ", "))
+}
+
+// appendApprovalModeEvent records a task-visible audit trail when a /mode change
+// auto-settles a pending approval, so the timeline shows WHY a stuck approval
+// suddenly resolved. Best-effort: a lost event never affects correctness.
+func (d *Server) appendApprovalModeEvent(ctx context.Context, ap control.ApprovalRequest, eventType, mode string) {
+	if ap.TaskID == "" {
+		return
+	}
+	_, _ = d.Control.AppendEvent(ctx, control.Event{
+		TaskID:     ap.TaskID,
+		RunID:      ap.RunID,
+		Type:       eventType,
+		Visibility: "task",
+		Payload: mustJSON(map[string]string{
+			"approval_id": ap.ID,
+			"reason":      "approval mode changed to " + mode,
+		}),
+	})
+}
+
+// approvalReasonIsDangerous reports whether a stored approval reason reflects the
+// dangerous-op heuristic (destructive command, restricted/out-of-workspace path)
+// rather than a pure mode requirement ("… requires approval in read-only mode").
+// It is used as EvaluateModeDecision's dangerousHint so the retro pass preserves
+// the ORIGINAL danger signal even though it recomputes without the run's
+// projectRoot — it can only raise danger, never downgrade it.
+func approvalReasonIsDangerous(reason string) bool {
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		return false
+	}
+	return !strings.Contains(reason, "requires approval in")
+}
+
+// pluralize renders "1 thing" / "n things" for a compact count phrase.
+func pluralize(n int, noun string) string {
+	if n == 1 {
+		return "1 " + noun
+	}
+	return fmt.Sprintf("%d %ss", n, noun)
 }
 
 // suggestControlCommand returns the closest control command when the first

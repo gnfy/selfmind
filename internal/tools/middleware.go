@@ -215,6 +215,75 @@ func approvalNeeded(mode ApprovalMode, toolName string, dangerous bool) bool {
 	}
 }
 
+// ModeDecision is the outcome of evaluating a SINGLE known operation against an
+// approval mode (plus the hard floor and, for smart mode, the LLM judge). It is
+// returned by EvaluateModeDecision so callers outside the live middleware — most
+// notably the /mode retro-resolution of already-pending approvals — can reuse the
+// exact funnel layering without re-running a real tool call.
+type ModeDecision int
+
+const (
+	// ModeAsk: leave the decision to the human ask (or, for a pending approval,
+	// keep it pending). This is the fail-safe default: the hard floor, any
+	// uncertainty, an escalating/absent judge, or an ask-always mode all land here.
+	ModeAsk ModeDecision = iota
+	// ModeApprove: the mode (or an APPROVE judge verdict) auto-approves this op.
+	ModeApprove
+	// ModeDeny: a smart-mode judge returned DENY — block as a user-style decision
+	// (do not retry), never as a diagnosable failure.
+	ModeDeny
+)
+
+// EvaluateModeDecision classifies ONE already-known operation under an approval
+// mode, mirroring SmartApprovalMiddleware's layering for a single call: the hard
+// floor first (authoritative — a hardline op is NEVER auto-approved, it returns
+// ModeAsk), then the mode gate (approvalNeeded), then, for smart mode only, the
+// cheap LLM judge. It deliberately does NOT consult class grants; the caller owns
+// that. It is used by the /mode command to re-evaluate approvals that were
+// already pending when the mode changed, so a switch to smart/full-auto/auto-edit
+// unblocks a run that was stuck on a human ask.
+//
+// dangerousHint lets a caller preserve a dangerous classification the local
+// recompute cannot reproduce — e.g. a pending approval whose out-of-workspace
+// path check needed the original projectRoot. It only ever RAISES danger (it is
+// OR'd with the recompute), so it can never silently downgrade a flagged op.
+// A nil judge in smart mode falls through to ModeAsk (never auto-approves).
+func EvaluateModeDecision(ctx context.Context, mode ApprovalMode, projectRoot, toolName string, args map[string]interface{}, reason string, dangerousHint bool, judge ApprovalJudge) ModeDecision {
+	if args == nil {
+		args = map[string]interface{}{}
+	}
+	// Layer 1: hard floor. Authoritative — no mode bypasses it, and it is never
+	// auto-approved here. Left to a human (ModeAsk); in practice a hardline op
+	// never reaches a pending-approval row, but stay conservative regardless.
+	if blocked, _ := hardlineToolCall(projectRoot, toolName, args); blocked {
+		return ModeAsk
+	}
+	dangerous, dreason := dangerousToolCall(projectRoot, toolName, args)
+	dangerous = dangerous || dangerousHint
+	if strings.TrimSpace(reason) == "" {
+		reason = dreason
+	}
+	// Layer 2: mode gate. If the mode would not require an ask for this op, it is
+	// auto-approved (full-auto for everything; auto-edit for non-dangerous edits).
+	if !approvalNeeded(mode, toolName, dangerous) {
+		return ModeApprove
+	}
+	// Layer 4: smart-mode LLM triage. APPROVE auto-runs, DENY blocks as a
+	// decision, everything else (ESCALATE / no judge / error / timeout) falls
+	// through to the human ask — fail SAFE, exactly like the middleware.
+	if mode == ApprovalSmart && judge != nil {
+		verdict, _ := triageApproval(ctx, judge, toolName, triageSubject(toolName, args), reason)
+		switch verdict {
+		case TriageApprove:
+			return ModeApprove
+		case TriageDeny:
+			return ModeDeny
+		}
+	}
+	// Layer 5: human ask.
+	return ModeAsk
+}
+
 // SmartApprovalMiddleware is the layered approval funnel that gates dangerous
 // tool calls. Layers, in order:
 //

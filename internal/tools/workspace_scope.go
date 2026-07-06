@@ -144,7 +144,13 @@ func resolveScopedPath(scope ExecutionScope, raw string) (string, error) {
 	clean = filepath.Clean(clean)
 
 	if !scopeAllowsPath(scope, clean) {
-		return "", fmt.Errorf("path %s escapes workspace allowed roots", clean)
+		// The "path ... escapes workspace allowed roots" prefix is stable:
+		// failure classifiers match it via strings.Contains("escapes
+		// workspace"), so guidance may only be APPENDED. The trailing hint
+		// names the actual way out — the scope follows the bound workspace,
+		// not the terminal's cwd, and without it users read this error as
+		// "resume didn't work" (observed live).
+		return "", fmt.Errorf("path %s escapes workspace allowed roots. Use /resume <task> to work in that task's workspace, or /workspace <n> to switch", clean)
 	}
 	return clean, nil
 }

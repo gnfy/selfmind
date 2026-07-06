@@ -291,7 +291,9 @@ func (d *Server) handleWorkspaces(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	workspaces, err := d.Control.ListWorkspaces(r.Context(), identity.TenantID, identity.PersonID)
+	// Same display-ordered fetch as /workspaces so API consumers see the list
+	// in the order ordinal references resolve against.
+	workspaces, err := d.listWorkspacesForDisplay(r.Context(), identity)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return

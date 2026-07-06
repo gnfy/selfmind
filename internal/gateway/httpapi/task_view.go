@@ -3,6 +3,8 @@ package httpapi
 import (
 	"context"
 	"fmt"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -18,7 +20,7 @@ import (
 // (detail, runs, rename, archive). Shared by every endpoint via
 // tryHandleControlCommand — IM gets the same short cards.
 
-const taskUsage = "Usage: /task <id> [runs|rename <name>|archive]"
+const taskUsage = "Usage: /task <n|id> [runs|rename <name>|archive]"
 
 const tasksTrailingHint = "Reply to continue the current task, /resume <id> to switch, /task <id> for detail."
 
@@ -36,7 +38,7 @@ type taskCardView struct {
 // tasksOverviewReply renders /tasks and its variants: "" (open work),
 // "done" (terminal, non-archived), "archived", "all".
 func (d *Server) tasksOverviewReply(ctx context.Context, identity *control.IdentityContext, variant string) (string, error) {
-	tasks, err := d.Control.ListTasks(ctx, identity.TenantID, identity.PersonID, 100)
+	tasks, err := d.listTasksForDisplay(ctx, identity)
 	if err != nil {
 		return "", err
 	}
@@ -51,17 +53,7 @@ func (d *Server) tasksOverviewReply(ctx context.Context, identity *control.Ident
 	view.files, _ = d.Control.LatestHandoffFilesByPerson(ctx, identity.TenantID, identity.PersonID)
 	view.approvals, view.questions, _ = d.Control.PendingCountsByTask(ctx, identity.TenantID, identity.PersonID)
 
-	var open, done, archived []control.Task
-	for _, t := range tasks {
-		switch {
-		case archivedTaskStatus(t.Status):
-			archived = append(archived, t)
-		case terminalTaskStatus(t.Status):
-			done = append(done, t)
-		default:
-			open = append(open, t)
-		}
-	}
+	open, done, archived := splitTasksForDisplay(tasks)
 
 	switch strings.TrimSpace(variant) {
 	case "":
@@ -200,12 +192,12 @@ func (d *Server) taskCommandReply(ctx context.Context, identity *control.Identit
 	if len(args) == 0 {
 		return taskUsage, nil
 	}
-	task, err := d.findTaskByRef(ctx, identity, args[0])
+	task, userErr, err := d.resolveTaskReference(ctx, identity, args[0])
 	if err != nil {
 		return "", err
 	}
-	if task == nil {
-		return "Task not found. Run /tasks to list ids.", nil
+	if userErr != "" {
+		return userErr, nil
 	}
 	sub := ""
 	if len(args) > 1 {
@@ -311,9 +303,92 @@ func (d *Server) taskDetailReply(ctx context.Context, identity *control.Identity
 	return strings.TrimSpace(sb.String()), nil
 }
 
+// listTasksForDisplay fetches the person's tasks in the stable display order
+// every task list renders in. The store already orders by updated_at DESC;
+// the id tiebreak here makes ties deterministic so the numbered cards and
+// ordinal resolution can never disagree within one snapshot.
+func (d *Server) listTasksForDisplay(ctx context.Context, identity *control.IdentityContext) ([]control.Task, error) {
+	tasks, err := d.Control.ListTasks(ctx, identity.TenantID, identity.PersonID, 100)
+	if err != nil {
+		return nil, err
+	}
+	sortTasksForDisplay(tasks)
+	return tasks, nil
+}
+
+// sortTasksForDisplay orders tasks newest-first (updated_at DESC, id ASC as
+// tiebreaker). This is the card order of the /tasks views and therefore the
+// order ordinal references (/task 1, /resume 1) resolve against; both sides
+// must use it or numbers would pick the wrong task (same display-order =
+// resolution-order contract as sortApprovalsForDisplay).
+func sortTasksForDisplay(tasks []control.Task) {
+	sort.SliceStable(tasks, func(i, j int) bool {
+		if !tasks[i].UpdatedAt.Equal(tasks[j].UpdatedAt) {
+			return tasks[i].UpdatedAt.After(tasks[j].UpdatedAt)
+		}
+		return tasks[i].ID < tasks[j].ID
+	})
+}
+
+// splitTasksForDisplay partitions display-ordered tasks into open / done /
+// archived, preserving order. The open slice IS the numbered card list of the
+// default /tasks view, so it is also the list task ordinals resolve against.
+func splitTasksForDisplay(tasks []control.Task) (open, done, archived []control.Task) {
+	for _, t := range tasks {
+		switch {
+		case archivedTaskStatus(t.Status):
+			archived = append(archived, t)
+		case terminalTaskStatus(t.Status):
+			done = append(done, t)
+		default:
+			open = append(open, t)
+		}
+	}
+	return open, done, archived
+}
+
+// resolveTaskReference resolves a user-supplied task reference for control
+// commands, mirroring the approval resolver contract (approval_resolver.go):
+// a bare number is a LIST ORDINAL against the numbered cards of the default
+// /tasks view (open tasks, display order = resolution order — both sides go
+// through listTasksForDisplay/splitTasksForDisplay), and anything else is a
+// full id or unique short prefix (findTaskByRef; the card-displayed
+// task_xxxxxxxx form round-trips). Shared by /task and /resume so the same
+// reference means the same task on every surface.
+//
+// The middle return is a user-facing sentence (safe to send verbatim on any
+// channel) for reference mistakes; the error return is reserved for storage
+// failures.
+func (d *Server) resolveTaskReference(ctx context.Context, identity *control.IdentityContext, ref string) (*control.Task, string, error) {
+	ref = strings.TrimSpace(ref)
+	if ordinal, convErr := strconv.Atoi(ref); convErr == nil {
+		tasks, err := d.listTasksForDisplay(ctx, identity)
+		if err != nil {
+			return nil, "", err
+		}
+		open, _, _ := splitTasksForDisplay(tasks)
+		if len(open) == 0 {
+			return nil, "No open tasks to number; see /tasks.", nil
+		}
+		if ordinal < 1 || ordinal > len(open) {
+			return nil, fmt.Sprintf("No open task number %d; %d open (see /tasks).", ordinal, len(open)), nil
+		}
+		return &open[ordinal-1], "", nil
+	}
+	task, err := d.findTaskByRef(ctx, identity, ref)
+	if err != nil {
+		return nil, "", err
+	}
+	if task == nil {
+		return nil, "Task not found. Run /tasks to list ids.", nil
+	}
+	return task, "", nil
+}
+
 // findTaskByRef resolves a task reference for control commands: the full id,
 // or a unique prefix (the short `task_xxxxxxxx` form the aggregated view
-// prints). Only the person's own tasks resolve.
+// prints). Only the person's own tasks resolve. Ordinal references resolve in
+// resolveTaskReference, which wraps this.
 func (d *Server) findTaskByRef(ctx context.Context, identity *control.IdentityContext, ref string) (*control.Task, error) {
 	ref = strings.TrimSpace(ref)
 	// A card id copied verbatim ends in "..." (or a unicode ellipsis); treat it

@@ -1460,3 +1460,66 @@ func testKimiConfig() *config.Config {
 	cfg.Normalize()
 	return cfg
 }
+
+// TestSlashCommandEchoesUserInputBeforeReply: a submitted control command must
+// appear in the transcript as a user cell BEFORE its reply. Slash turns used
+// to skip the echo normal chat turns get, so a control session (/workspaces →
+// /workspace 2 → /resume …) rendered as disembodied replies (observed live:
+// "我在cli里面输入的内容,好像也看不到了").
+func TestSlashCommandEchoesUserInputBeforeReply(t *testing.T) {
+	c := NewController(nil, nil, nil, "")
+	model := c.model
+	c.SetClientMode(true)
+	c.SetMessageProcessor(func(ctx context.Context, req api.MessageRequest) (api.MessageResponse, int) {
+		return api.MessageResponse{Content: "Open tasks:\n\n1. [paused] demo"}, 200
+	})
+
+	cmd := model.handleCommand("/tasks")
+	if cmd == nil {
+		t.Fatal("expected /tasks to return a command")
+	}
+	// The echo must be committed synchronously, before the reply arrives.
+	if len(model.messages) == 0 {
+		t.Fatal("no transcript messages after submit")
+	}
+	echo := model.messages[len(model.messages)-1]
+	if echo.Role != "user" || echo.Content != "/tasks" {
+		t.Fatalf("typed command not echoed as a user cell: %+v", echo)
+	}
+
+	updated, _ := model.Update(cmd())
+	got := updated.(*uiModel)
+	last := got.messages[len(got.messages)-1]
+	if last.Role != "assistant" || !strings.Contains(last.Content, "Open tasks") {
+		t.Fatalf("control reply missing after echo: %+v", last)
+	}
+	// Order: user echo strictly before the reply.
+	var userIdx, replyIdx = -1, -1
+	for i, msg := range got.messages {
+		if msg.Role == "user" && msg.Content == "/tasks" {
+			userIdx = i
+		}
+		if msg.Role == "assistant" && strings.Contains(msg.Content, "Open tasks") {
+			replyIdx = i
+		}
+	}
+	if userIdx == -1 || replyIdx == -1 || userIdx >= replyIdx {
+		t.Fatalf("echo/reply order wrong: user=%d reply=%d", userIdx, replyIdx)
+	}
+}
+
+// TestSkillSlashDoesNotDoubleEchoInput: the skill-invocation fallback used to
+// echo the raw input itself; now handleCommand owns the single echo.
+func TestSkillSlashDoesNotDoubleEchoInput(t *testing.T) {
+	model := NewController(nil, nil, nil, "").model
+	_ = model.handleCommand("/definitely-not-a-command-xyz")
+	count := 0
+	for _, msg := range model.messages {
+		if msg.Role == "user" && strings.Contains(msg.Content, "/definitely-not-a-command-xyz") {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("typed command echoed %d times, want exactly 1", count)
+	}
+}

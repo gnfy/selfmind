@@ -1302,14 +1302,17 @@ func (d *Server) tryHandleControlCommand(ctx context.Context, identity *control.
 	case strings.HasPrefix(lower, "/resume "):
 		parts := strings.Fields(trimmed)
 		if len(parts) < 2 {
-			return true, "Usage: /resume <task_id>", nil
+			return true, "Usage: /resume <n|task_id>", nil
 		}
-		task, err := d.findTaskByRef(ctx, identity, parts[1])
+		// Same reference grammar as /task: list ordinal (/tasks card order),
+		// full id, or the short card-displayed prefix — the id the /tasks card
+		// shows MUST round-trip through /resume.
+		task, userErr, err := d.resolveTaskReference(ctx, identity, parts[1])
 		if err != nil {
 			return true, "", err
 		}
-		if task == nil {
-			return true, "Task not found.", nil
+		if userErr != "" {
+			return true, userErr, nil
 		}
 		if err := d.Control.SetCurrentTask(ctx, identity.TenantID, identity.PersonID, task.ID); err != nil {
 			return true, "", err
@@ -1320,7 +1323,10 @@ func (d *Server) tryHandleControlCommand(ctx context.Context, identity *control.
 		// messages fall back to the pre-label guess again. /resume of an
 		// ARCHIVED label deliberately reopens it (resolveTask honors the pin).
 		_ = d.Control.SetPersonSetting(ctx, identity.TenantID, identity.PersonID, resumePinKey, task.ID)
-		return true, fmt.Sprintf("Resumed task: %s (%s)", task.Title, task.ID), nil
+		// State the workspace binding explicitly: the client's status bar keeps
+		// showing its launch cwd until the next agent turn, so without this
+		// line a successful /resume reads as "didn't work" (observed live).
+		return true, "Resumed task: " + task.Title + " (" + task.ID + ")" + d.resumeWorkspaceNote(ctx, identity, task), nil
 	case lower == "/task" || strings.HasPrefix(lower, "/task "):
 		// /task <id> detail + subcommands (runs|rename|archive). "/task status"
 		// is an alias of /status and is claimed by the case above.
@@ -1367,21 +1373,21 @@ func (d *Server) tryHandleControlCommand(ctx context.Context, identity *control.
 	case strings.HasPrefix(lower, "/workspace "):
 		parts := strings.Fields(req.Content)
 		if len(parts) < 2 {
-			return true, "Usage: /workspace <workspace_id>", nil
+			return true, "Usage: /workspace <n|workspace_id>", nil
 		}
-		ws, err := d.Control.GetWorkspace(ctx, identity.TenantID, parts[1])
+		ws, userErr, err := d.resolveWorkspaceReference(ctx, identity, parts[1])
 		if err != nil {
 			return true, "", err
 		}
-		if ws == nil || ws.OwnerPersonID != identity.PersonID {
-			return true, "Workspace not found.", nil
+		if userErr != "" {
+			return true, userErr, nil
 		}
 		if err := d.Control.SetCurrentWorkspace(ctx, identity.TenantID, identity.PersonID, ws.ID); err != nil {
 			return true, "", err
 		}
 		return true, fmt.Sprintf("Current workspace: %s (%s)\n%s", ws.Name, ws.ID, ws.LocalPath), nil
 	case lower == "/workspaces":
-		workspaces, err := d.Control.ListWorkspaces(ctx, identity.TenantID, identity.PersonID)
+		workspaces, err := d.listWorkspacesForDisplay(ctx, identity)
 		if err != nil {
 			return true, "", err
 		}

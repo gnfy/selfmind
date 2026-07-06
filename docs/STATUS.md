@@ -127,6 +127,14 @@ is the only priority list in the repo; other docs must point here.
      REMOVED (`intent.continue_window` deprecated no-op). Tests:
      `httpapi/run_labeler_test.go`, `httpapi/task_attach_test.go`,
      `httpapi/task_view_test.go`, `control/task_labels_test.go`.
+     2026-07-06 UX fixes: ordinal references everywhere the lists are numbered
+     (`/task <n>`, `/resume <n>` against the /tasks open-card order via
+     `resolveTaskReference`; `/workspace <n>` against the /workspaces order via
+     `resolveWorkspaceReference` — display order = resolution order, approval
+     resolver contract); `/resume` accepts the card-displayed short id and its
+     success reply names the task's bound workspace; the workspace-escape tool
+     error appends a `/resume`//`/workspace` hint; the TUI echoes typed slash
+     commands into the transcript (`handleCommand`).
    - **P4 eval: ✅ shipped 2026-07-06.** `evalcases/timeline/` — five cases
      (iterate/new-topic/ambiguity/cross-endpoint/tasks-view) with committed
      cassettes replaying offline; scenarios 7-10 map to Go tests (see the

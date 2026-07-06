@@ -1,0 +1,31 @@
+id: timeline_ordinal_refs
+title: "ordinal references: /task <n> and /resume <n> follow the /tasks card order"
+suite: timeline
+workspace: "."
+channel: cli
+
+# Control-command turns only — no model calls, so this case runs offline
+# without a cassette. The number printed by the /tasks card must resolve the
+# same task through /task <n> and /resume <n> (display order = resolution
+# order, same contract as approval ordinals), and the /resume reply must state
+# the workspace binding so the user can tell the resume worked.
+turns:
+  - input: "/new ordinal reference check"
+  - input: "/tasks"
+  - input: "/task 1"
+  - input: "/resume 1"
+
+expect:
+  status: completed
+  max_tool_calls: 0
+  max_duration_seconds: 60
+  contains:
+    - "Open tasks:"
+    - "Task: ordinal reference check"
+    - "Resumed task: ordinal reference check"
+    - "your next message"
+
+checks:
+  no_mojibake: true
+  no_empty_response: true
+  no_raw_json_leak: true

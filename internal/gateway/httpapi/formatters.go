@@ -42,6 +42,10 @@ func formatQueue(items []control.QueuedTask) string {
 	return strings.TrimSpace(sb.String())
 }
 
+// formatWorkspaces renders the numbered /workspaces list. The caller must pass
+// the listWorkspacesForDisplay order: the numbers printed here are what
+// /workspace <n> resolves (resolveWorkspaceReference), so display order IS
+// resolution order.
 func formatWorkspaces(workspaces []control.Workspace) string {
 	if len(workspaces) == 0 {
 		return "No workspaces."
@@ -50,6 +54,7 @@ func formatWorkspaces(workspaces []control.Workspace) string {
 	for i, ws := range workspaces {
 		fmt.Fprintf(&sb, "%d. %s (%s)\n   %s\n", i+1, ws.Name, ws.ID, ws.LocalPath)
 	}
+	sb.WriteString("\nUse /workspace <number> (or the id) to switch.")
 	return strings.TrimSpace(sb.String())
 }
 

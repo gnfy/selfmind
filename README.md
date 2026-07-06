@@ -395,12 +395,13 @@ Common slash commands:
 | `/help` | Show available commands. |
 | `/status` | Show provider, model, runtime, token usage, current task, and any pending approval/question. |
 | `/tasks` / `/tasks done\|archived\|all` | List open work as compact cards (status, last input, primary file, pending approvals/questions, run count, short id); finished work collapses to a count. |
-| `/task <id>` / `/task <id> runs\|rename <name>\|archive` | Inspect one task (detail, recent runs), rename it, or archive it. |
+| `/task <n\|id>` / `/task <n\|id> runs\|rename <name>\|archive` | Inspect one task (detail, recent runs), rename it, or archive it — `<n>` is the card number from `/tasks`, `<id>` a full or short id. |
 | `/queue` / `/queue drop <n>` / `/queue clear` | List queued tasks / drop one by position / drop all. |
 | `/stop` | Cancel the active run — or, if nothing is running, cancel the current (stuck) task. |
 | `/cancel` | Cancel the current task even when no run is active. |
 | `/new [title]` | Start a fresh task instead of continuing the current one. |
-| `/resume <task_id>` | Switch back to an earlier task. |
+| `/resume <n\|task_id>` | Switch back to an earlier task by its `/tasks` card number, short id, or full id. |
+| `/workspaces` / `/workspace <n\|id>` | List workspaces / switch by list number or id. |
 | `/approvals` / `/approve <n>` / `/reject <n>` | List and answer pending tool approvals. |
 | `/mode [mode]` | Show or set approval mode: `on-request`, `read-only`, `auto-edit`, `full-auto`, `smart`. |
 | `/diag` | Compact runtime diagnostic snapshot. |

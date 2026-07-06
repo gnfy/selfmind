@@ -114,7 +114,13 @@ Domain docs (**mandatory** before changing that domain):
   prefix, bare token with one pending) resolve only through the shared
   resolver in `internal/gateway/httpapi/approval_resolver.go` — clients and
   adapters pass the raw token to the gateway, never resolve ordinals locally,
-  so `/approve 1` means the same approval on every surface.
+  so `/approve 1` means the same approval on every surface. The same
+  display-order-equals-resolution-order contract covers tasks and workspaces:
+  `/task <n>`/`/resume <n>` resolve through `resolveTaskReference`
+  (`httpapi/task_view.go`, /tasks open-card order) and `/workspace <n>` through
+  `resolveWorkspaceReference` (`httpapi/workspace_resolver.go`, /workspaces
+  order) — any numbered list a command accepts a number for must share ONE
+  sorted fetch with its renderer.
 - Gateway control commands (`/status`, `/stop`, `/tasks`, `/workspaces`,
   `/resume`, `/workspace`) stay pre-agent and must not consume model tokens.
 - Keep the per-person active-run guard until the worker pool fully replaces

@@ -72,6 +72,12 @@ func (m *uiModel) handleCommand(input string) tea.Cmd {
 	if len(parts) == 0 {
 		return nil
 	}
+	// Echo the typed command as a user cell BEFORE any reply renders. Normal
+	// chat turns echo their input, but slash turns did not, so a control
+	// session (/workspaces → /workspace 2 → /resume …) read as disembodied
+	// replies with no visible questions (observed live). addMessage covers
+	// both surfaces: hybrid scrollback (commit) and the legacy viewport.
+	m.addMessage("user", input)
 	if cmd, ok := slashCommandIndex[parts[0]]; ok {
 		// In daemon-client mode agent-backed commands route through the tool
 		// dispatch seam (m.dispatch → daemon) or through the message processor
@@ -82,12 +88,12 @@ func (m *uiModel) handleCommand(input string) tea.Cmd {
 	}
 	if strings.HasPrefix(parts[0], "/") {
 		instruction := strings.TrimSpace(strings.TrimPrefix(input, parts[0]))
-		return m.handleSkillSlash(input, parts[0], instruction)
+		return m.handleSkillSlash(parts[0], instruction)
 	}
 	return nil
 }
 
-func (m *uiModel) handleSkillSlash(rawInput, slashName, instruction string) tea.Cmd {
+func (m *uiModel) handleSkillSlash(slashName, instruction string) tea.Cmd {
 	prompt, displayName, ok, err := tools.ResolveSkillInvocationForTenant(m.tenantID, slashName, instruction)
 	if err != nil {
 		m.addMessage("assistant", fmt.Sprintf("Skill command error: %v", err))
@@ -104,7 +110,8 @@ func (m *uiModel) handleSkillSlash(rawInput, slashName, instruction string) tea.
 		m.addMessage("assistant", fmt.Sprintf("Unknown command: %s. Use /help, /skills list, or /bundles list.", slashName))
 		return nil
 	}
-	m.addMessage("user", rawInput)
+	// The typed command was already echoed by handleCommand; only the loaded
+	// skill notice is added here.
 	m.statusMsg = fmt.Sprintf("Loaded skill context: %s", displayName)
 	m.thinking = true
 	m.runStatus = "working"

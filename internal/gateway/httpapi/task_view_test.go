@@ -204,6 +204,104 @@ func TestCardTaskIDRoundTrip(t *testing.T) {
 	}
 }
 
+// TestTaskOrdinalResolvesCardOrder: /task <n> and /resume <n> resolve the
+// SAME task the default /tasks view numbers <n> (display order = resolution
+// order), and out-of-range ordinals return a clear pointer to /tasks instead
+// of "Task not found".
+func TestTaskOrdinalResolvesCardOrder(t *testing.T) {
+	daemon, store, identity := newTaskViewServer(t)
+	seedTask(t, store, identity, "first open task", "in_progress", 1)
+	seedTask(t, store, identity, "second open task", "in_progress", 1)
+	seedTask(t, store, identity, "finished work", "done", 1)
+
+	tasks, err := daemon.listTasksForDisplay(context.Background(), identity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	open, _, _ := splitTasksForDisplay(tasks)
+	if len(open) != 2 {
+		t.Fatalf("want 2 open tasks, got %d", len(open))
+	}
+
+	// The card numbered 1 by /tasks is the task /task 1 and /resume 1 resolve.
+	out := controlReply(t, daemon, "/tasks")
+	if !strings.Contains(out, "1. [paused] "+open[0].Title) {
+		t.Fatalf("/tasks card 1 disagrees with display order:\n%s", out)
+	}
+	detail := controlReply(t, daemon, "/task 1")
+	if !strings.Contains(detail, "ID: "+open[0].ID) {
+		t.Fatalf("/task 1 resolved the wrong task:\n%s", detail)
+	}
+	detail2 := controlReply(t, daemon, "/task 2 runs")
+	if !strings.Contains(detail2, "1. [done]") {
+		t.Fatalf("/task 2 runs should list the second card's runs:\n%s", detail2)
+	}
+	resumed := controlReply(t, daemon, "/resume 2")
+	if !strings.Contains(resumed, "Resumed task: "+open[1].Title) || !strings.Contains(resumed, open[1].ID) {
+		t.Fatalf("/resume 2 resolved the wrong task: %s", resumed)
+	}
+
+	// Numbers beyond the open list are a reference mistake, not a 500 and not
+	// a bare "Task not found" — done tasks never take a number.
+	if out := controlReply(t, daemon, "/task 3"); !strings.Contains(out, "No open task number 3") || !strings.Contains(out, "/tasks") {
+		t.Fatalf("out-of-range ordinal reply: %s", out)
+	}
+	if out := controlReply(t, daemon, "/resume 99"); !strings.Contains(out, "No open task number 99") {
+		t.Fatalf("out-of-range /resume reply: %s", out)
+	}
+}
+
+// TestResumeAcceptsCardDisplayedID: the exact shortened id printed on a /tasks
+// card (cardTaskID) must round-trip through /resume — the card is where users
+// copy the reference from (observed live: /resume task_68a72a44 → "Task not
+// found." because only the full uuid was accepted).
+func TestResumeAcceptsCardDisplayedID(t *testing.T) {
+	daemon, store, identity := newTaskViewServer(t)
+	task := seedTask(t, store, identity, "resume by card id", "in_progress", 1)
+
+	display := cardTaskID(task.ID)
+	out := controlReply(t, daemon, "/resume "+display)
+	if !strings.Contains(out, "Resumed task: resume by card id") || !strings.Contains(out, task.ID) {
+		t.Fatalf("card id %q did not resume the task: %s", display, out)
+	}
+	// The shortTaskID hint form (task_ + 8 chars) resolves too.
+	out = controlReply(t, daemon, "/resume "+shortTaskID(task.ID))
+	if !strings.Contains(out, "Resumed task:") {
+		t.Fatalf("short id did not resume: %s", out)
+	}
+}
+
+// TestResumeReplyStatesWorkspaceBinding: the /resume success reply names the
+// task's bound workspace (or says none is bound). The status bar keeps showing
+// the launch cwd until the next turn, so without this line a working /resume
+// reads as broken (observed live).
+func TestResumeReplyStatesWorkspaceBinding(t *testing.T) {
+	daemon, store, identity := newTaskViewServer(t)
+	ctx := context.Background()
+	path := t.TempDir()
+	ws, err := store.RegisterWorkspace(ctx, control.Workspace{
+		TenantID: identity.TenantID, OwnerPersonID: identity.PersonID,
+		Name: "game", LocalPath: path,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bound := seedTask(t, store, identity, "bound to game", "in_progress", 1)
+	if err := store.SetTaskWorkspace(ctx, identity.TenantID, bound.ID, ws.ID); err != nil {
+		t.Fatal(err)
+	}
+	unbound := seedTask(t, store, identity, "no workspace", "in_progress", 1)
+
+	out := controlReply(t, daemon, "/resume "+bound.ID)
+	if !strings.Contains(out, "workspace: game ("+path+"); your next message runs there.") {
+		t.Fatalf("bound workspace note missing: %s", out)
+	}
+	out = controlReply(t, daemon, "/resume "+unbound.ID)
+	if !strings.Contains(out, "no workspace bound; your next message uses the current workspace.") {
+		t.Fatalf("unbound workspace note missing: %s", out)
+	}
+}
+
 // TestTaskDetailRunsRenameArchive drives the /task <id> subcommands end to
 // end, including short-prefix id resolution.
 func TestTaskDetailRunsRenameArchive(t *testing.T) {

@@ -418,12 +418,13 @@ selfmind -f ./config/config.yaml
 | `/help` | 查看可用命令。 |
 | `/status` | 查看 provider、model、运行时间、token、当前任务，以及待处理的审批/提问。 |
 | `/tasks` / `/tasks done\|archived\|all` | 以紧凑卡片列出进行中的工作(状态、最近输入、主要文件、待处理审批/提问、run 次数、短 id);已完成的折叠为计数。 |
-| `/task <id>` / `/task <id> runs\|rename <名称>\|archive` | 查看单个任务详情和 run 记录,重命名或归档它。 |
+| `/task <n\|id>` / `/task <n\|id> runs\|rename <名称>\|archive` | 查看单个任务详情和 run 记录,重命名或归档它——`<n>` 是 `/tasks` 卡片上的序号,`<id>` 是完整或短 id。 |
 | `/queue` / `/queue drop <n>` / `/queue clear` | 列出队列 / 按序号删除某一条 / 清空全部。 |
 | `/stop` | 取消正在执行的 run；若当前没有 run 在跑，则取消当前(卡住的)任务。 |
 | `/cancel` | 即使没有活跃 run,也取消当前任务。 |
 | `/new [标题]` | 另起一个新任务,而不是继续当前任务。 |
-| `/resume <task_id>` | 切换回之前的某个任务。 |
+| `/resume <n\|task_id>` | 按 `/tasks` 卡片序号、短 id 或完整 id 切换回之前的某个任务。 |
+| `/workspaces` / `/workspace <n\|id>` | 列出工作区 / 按列表序号或 id 切换。 |
 | `/approvals` / `/approve <n>` / `/reject <n>` | 列出并回应待处理的工具审批。 |
 | `/mode [模式]` | 查看或设置审批模式:`on-request`、`read-only`、`auto-edit`、`full-auto`、`smart`。 |
 | `/diag` | 精简的运行时诊断快照。 |

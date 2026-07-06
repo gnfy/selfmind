@@ -59,7 +59,7 @@ var entries = []Entry{
 	{Name: "/id", Usage: "/id", Summary: "Show your resolved account identity.", SyncControl: true, Scope: Gateway},
 	{Name: "/status", Aliases: []string{"/task status"}, Usage: "/status", Summary: "Show the current task status.", SyncControl: true, Scope: Gateway},
 	{Name: "/tasks", Usage: "/tasks [done|archived|all]", Summary: "List open work (done/archived collapse to counts).", SyncControl: true, Scope: Gateway},
-	{Name: "/task", Usage: "/task <id> [runs|rename <name>|archive]", Summary: "Show a task's detail, list its runs, rename it, or archive it.", SyncControl: true, Scope: Gateway},
+	{Name: "/task", Usage: "/task <n|id> [runs|rename <name>|archive]", Summary: "Show a task's detail, list its runs, rename it, or archive it.", SyncControl: true, Scope: Gateway},
 	{Name: "/queue", Usage: "/queue [drop <n>|clear]", Summary: "List queued tasks (or drop all pending queued tasks).", SyncControl: true, Scope: Gateway},
 	{Name: "/diag", Usage: "/diag", Summary: "Show a compact runtime diagnostic snapshot.", SyncControl: true, Scope: Gateway},
 	{Name: "/events", Usage: "/events", Summary: "List recent events for the current task.", SyncControl: true, Scope: Gateway},
@@ -71,8 +71,8 @@ var entries = []Entry{
 	{Name: "/cancel", Usage: "/cancel", Summary: "Cancel the current task even if no run is active.", SyncControl: true, Scope: Gateway},
 	{Name: "/notify", Usage: "/notify <platform|auto>", Summary: "Choose where CLI-origin notifications go when the CLI is detached.", SyncControl: true, Scope: Gateway},
 	{Name: "/new", Usage: "/new [title]", Summary: "Create a new task.", SyncControl: true, Scope: Gateway},
-	{Name: "/resume", Usage: "/resume <task_id>", Summary: "Resume a task (an archived id reopens it).", SyncControl: true, Scope: Gateway},
-	{Name: "/workspace", Usage: "/workspace <id>", Summary: "Select a workspace.", SyncControl: true, Scope: Gateway},
+	{Name: "/resume", Usage: "/resume <n|task_id>", Summary: "Resume a task by list number or id (an archived id reopens it).", SyncControl: true, Scope: Gateway},
+	{Name: "/workspace", Usage: "/workspace <n|id>", Summary: "Select a workspace by list number or id.", SyncControl: true, Scope: Gateway},
 	{Name: "/workspaces", Usage: "/workspaces", Summary: "List workspaces.", SyncControl: true, Scope: Gateway},
 
 	// --- Local TUI/CLI-only commands (never gateway-routed) ---

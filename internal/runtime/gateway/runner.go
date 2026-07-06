@@ -146,6 +146,12 @@ func Run(ctx context.Context, opts Options) error {
 		// a semantic_recall role model is explicitly configured.
 		Recall: httpapi.NewRecallEngine(controlStore, mem, app.SemanticRecallExpander(mem, cfg, defaultTenantID)),
 	}
+	if gatewayAPI.Labeler == nil {
+		// Silent degradation would be confusing: without a memory_extract role
+		// provider the post-run labeler never re-points a wrong pre-label, so
+		// /tasks grouping quality drops. Say so once at boot.
+		log.Info("gateway: run labeler disabled (no memory_extract role provider configured); pre-labels are kept as-is")
+	}
 	// Periodic stuck-run recovery: while the daemon runs, mark heartbeat-dead
 	// runs (and their tasks) interrupted. Runs in the coordinator's active-run
 	// registry are always excluded, so this only catches runs whose executor

@@ -15,7 +15,17 @@ import (
 // one turn. userMessage is the ORIGINAL user content (before daemon/workspace/
 // resume wrapping) — it feeds the automatic recall query and is never itself
 // injected anywhere.
-func (c *RunCoordinator) selectedTaskRuntimeContext(ctx context.Context, task *control.Task, run *control.Run, workspace *control.Workspace, channel, userMessage string) kernel.TaskRuntimeContext {
+//
+// preLabel marks a soft pre-label GUESS (ordinary message, no explicit
+// continuation evidence — see resolveTask/taskAttach). For those turns the
+// guessed task must NOT bias the prompt: only minimal label metadata
+// (id/title/status) is injected, and the rich slices (summary, handoff,
+// events, artifacts, next steps) are withheld — the spine tail carries the
+// live work, and semantic recall (whose current-task exclusion is lifted for
+// pre-label turns) surfaces related prior work with an explicit
+// "possibly related; reference only" framing instead. Explicit attaches
+// (/resume, task_id, continuation cue) keep the full context.
+func (c *RunCoordinator) selectedTaskRuntimeContext(ctx context.Context, task *control.Task, run *control.Run, workspace *control.Workspace, channel, userMessage string, preLabel bool) kernel.TaskRuntimeContext {
 	if c == nil || c.srv == nil || c.srv.Control == nil || task == nil {
 		return kernel.TaskRuntimeContext{}
 	}
@@ -23,10 +33,12 @@ func (c *RunCoordinator) selectedTaskRuntimeContext(ctx context.Context, task *c
 		TaskID:      task.ID,
 		Title:       task.Title,
 		Status:      task.Status,
-		Summary:     task.CurrentSummary,
 		Channel:     fallback(channel, task.LastChannel),
 		WorkspaceID: task.WorkspaceID,
-		NextSteps:   append([]string{}, task.NextSteps...),
+	}
+	if !preLabel {
+		selected.Summary = task.CurrentSummary
+		selected.NextSteps = append([]string{}, task.NextSteps...)
 	}
 	if run != nil {
 		selected.RunID = run.ID
@@ -53,7 +65,7 @@ func (c *RunCoordinator) selectedTaskRuntimeContext(ctx context.Context, task *c
 		selected.WorkspaceID = firstNonEmptyString(selected.WorkspaceID, workspace.ID)
 		selected.Workspace = workspace.LocalPath
 	}
-	if handoff, _ := c.srv.Control.LatestHandoff(ctx, task.ID); handoff != nil {
+	if handoff, _ := c.srv.Control.LatestHandoff(ctx, task.ID); handoff != nil && !preLabel {
 		selected.Handoff = &kernel.TaskHandoffContext{
 			Summary:      handoff.Summary,
 			DoneItems:    append([]string{}, handoff.DoneItems...),
@@ -70,7 +82,7 @@ func (c *RunCoordinator) selectedTaskRuntimeContext(ctx context.Context, task *c
 			selected.NextSteps = append([]string{}, handoff.NextSteps...)
 		}
 	}
-	if artifacts, _ := c.srv.Control.ListTaskArtifacts(ctx, task.ID, 6); len(artifacts) > 0 {
+	if artifacts, _ := c.srv.Control.ListTaskArtifacts(ctx, task.ID, 6); len(artifacts) > 0 && !preLabel {
 		selected.Artifacts = make([]kernel.TaskArtifactContext, 0, len(artifacts))
 		for _, artifact := range artifacts {
 			selected.Artifacts = append(selected.Artifacts, kernel.TaskArtifactContext{
@@ -85,7 +97,7 @@ func (c *RunCoordinator) selectedTaskRuntimeContext(ctx context.Context, task *c
 	}
 	// Fetch a larger candidate window, then keep the most relevant events
 	// within the budget (W3d) rather than just the most recent 8.
-	if events, _ := c.srv.Control.ListTaskEvents(ctx, task.ID, 40); len(events) > 0 {
+	if events, _ := c.srv.Control.ListTaskEvents(ctx, task.ID, 40); len(events) > 0 && !preLabel {
 		ranked := rankTaskEvents(events, 8)
 		selected.Events = make([]kernel.TaskEventContext, 0, len(ranked))
 		for _, event := range ranked {
@@ -108,7 +120,14 @@ func (c *RunCoordinator) selectedTaskRuntimeContext(ctx context.Context, task *c
 	// task-keyed working history. Runs after event selection so this turn's
 	// context.recall event is not echoed back into its own context.
 	if c.srv.Recall != nil {
-		if slices, stats := c.srv.Recall.Select(ctx, task.TenantID, task.PersonID, task.ID, userMessage); len(slices) > 0 {
+		// Pre-label turns lift the current-task exclusion: their bundle above
+		// is metadata-only, so the guessed task's own card must be allowed to
+		// surface via recall when the message content actually relates to it.
+		excludeTaskID := task.ID
+		if preLabel {
+			excludeTaskID = ""
+		}
+		if slices, stats := c.srv.Recall.Select(ctx, task.TenantID, task.PersonID, excludeTaskID, userMessage); len(slices) > 0 {
 			selected.RecallSlices = slices
 			runID := ""
 			if run != nil {

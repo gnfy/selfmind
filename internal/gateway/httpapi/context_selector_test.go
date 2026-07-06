@@ -70,7 +70,7 @@ func TestSelectedTaskRuntimeContextReadsControlSlices(t *testing.T) {
 	}
 
 	server := &Server{Control: store}
-	selected := server.coordinator().selectedTaskRuntimeContext(ctx, task, run, ws, "cli", "continue the context selector work")
+	selected := server.coordinator().selectedTaskRuntimeContext(ctx, task, run, ws, "cli", "continue the context selector work", false)
 	prompt := selected.Prompt(10000)
 	for _, want := range []string{
 		task.ID,
@@ -81,6 +81,55 @@ func TestSelectedTaskRuntimeContextReadsControlSlices(t *testing.T) {
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("selected prompt missing %q:\n%s", want, prompt)
+		}
+	}
+}
+
+// TestPreLabelContextIsMinimal pins the Work Timeline boundary: a soft
+// pre-label GUESS must not bias the prompt with the guessed task's rich
+// context. Only id/title/status metadata may appear; summary, handoff,
+// events, and artifacts are withheld (the spine tail + recall cover the real
+// work). An explicit attach (preLabel=false) keeps the full context — covered
+// by TestSelectedTaskRuntimeContext above.
+func TestPreLabelContextIsMinimal(t *testing.T) {
+	ctx := context.Background()
+	store, err := control.OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Sel")
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := store.CreateTask(ctx, control.TaskCreate{TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "guessed label", Channel: "cli"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.UpdateTaskStatus(ctx, identity.TenantID, task.ID, "in_progress", "old summary that must not leak", []string{"stale next step"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.SaveHandoff(ctx, control.Handoff{TaskID: task.ID, Summary: "handoff that must not leak", ChangedFiles: []string{"secret/file.go"}}); err != nil {
+		t.Fatal(err)
+	}
+	task, err = store.GetTask(ctx, identity.TenantID, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	server := &Server{Control: store}
+	selected := server.coordinator().selectedTaskRuntimeContext(ctx, task, nil, nil, "cli", "an ordinary new message", true)
+
+	if selected.TaskID != task.ID || selected.Title == "" || selected.Status == "" {
+		t.Fatalf("minimal metadata must survive: %+v", selected)
+	}
+	if selected.Summary != "" || selected.Handoff != nil || len(selected.Events) > 0 || len(selected.Artifacts) > 0 || len(selected.NextSteps) > 0 {
+		t.Fatalf("pre-label turn leaked rich task context: %+v", selected)
+	}
+	prompt := selected.Prompt(10000)
+	for _, banned := range []string{"old summary that must not leak", "handoff that must not leak", "secret/file.go", "stale next step"} {
+		if strings.Contains(prompt, banned) {
+			t.Fatalf("pre-label prompt contains banned content %q:\n%s", banned, prompt)
 		}
 	}
 }

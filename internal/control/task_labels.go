@@ -246,6 +246,21 @@ func (s *Store) ReassignRun(ctx context.Context, tenantID, runID, fromTaskID, to
 		toTaskID, runID); err != nil {
 		return err
 	}
+	// Approvals/questions raised during this run follow it too. Post-run they
+	// are always terminal (pending rows expire when the waiter exits), so this
+	// is referential integrity — decided rows must not point at a placeholder
+	// the cleanup below may delete — and the prerequisite for any future
+	// mid-run relabel.
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE approval_requests SET task_id = ? WHERE run_id = ?`,
+		toTaskID, runID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE clarify_requests SET task_id = ? WHERE run_id = ?`,
+		toTaskID, runID); err != nil {
+		return err
+	}
 	if _, err := tx.ExecContext(ctx,
 		`UPDATE tasks SET updated_at = ? WHERE tenant_id = ? AND id = ?`,
 		now, tenant, toTaskID); err != nil {

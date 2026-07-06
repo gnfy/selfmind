@@ -1391,7 +1391,11 @@ func (d *Server) tryHandleControlCommand(ctx context.Context, identity *control.
 		if err != nil {
 			return true, "", err
 		}
-		return true, formatWorkspaces(workspaces), nil
+		currentID := ""
+		if current, _ := d.Control.CurrentWorkspace(ctx, identity.TenantID, identity.PersonID); current != nil {
+			currentID = current.ID
+		}
+		return true, formatWorkspaces(workspaces, currentID), nil
 	case lower == "/approvals":
 		approvals, titles, err := d.pendingApprovalsForDisplay(ctx, identity)
 		if err != nil {

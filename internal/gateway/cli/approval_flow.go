@@ -93,7 +93,7 @@ func (m *uiModel) resolveApprovalChoice(opt components.ApprovalOption) tea.Cmd {
 	tool := m.pendingApprovalTool
 	m.sendApprovalDecision("approved", opt.Scope)
 	m.addMessage("notice", "✓ Approved "+tool+approvalScopeNote(opt.Scope))
-	m.statusMsg = "Approved — resuming."
+	m.statusMsg = "Approved " + tool + " — resuming."
 	m.resumeAfterApproval()
 	m.armNextQueuedApproval()
 	return tea.Batch(m.spinner.Tick, workingTick())

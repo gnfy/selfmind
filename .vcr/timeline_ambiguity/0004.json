@@ -1,0 +1,3029 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "content": "可以"
+    },
+    {
+      "content": "。"
+    },
+    {
+      "content": "因为"
+    },
+    {
+      "content": "你"
+    },
+    {
+      "content": "有"
+    },
+    {
+      "content": "两个"
+    },
+    {
+      "content": "游戏"
+    },
+    {
+      "content": "（"
+    },
+    {
+      "content": "“"
+    },
+    {
+      "content": "拳"
+    },
+    {
+      "content": "皇"
+    },
+    {
+      "content": "格"
+    },
+    {
+      "content": "斗"
+    },
+    {
+      "content": "”和"
+    },
+    {
+      "content": "“"
+    },
+    {
+      "content": "坦"
+    },
+    {
+      "content": "克"
+    },
+    {
+      "content": "大战"
+    },
+    {
+      "content": "”"
+    },
+    {
+      "content": "），"
+    },
+    {
+      "content": "我"
+    },
+    {
+      "content": "先"
+    },
+    {
+      "content": "按"
+    },
+    {
+      "content": "两个"
+    },
+    {
+      "content": "方向"
+    },
+    {
+      "content": "都"
+    },
+    {
+      "content": "给"
+    },
+    {
+      "content": "你"
+    },
+    {
+      "content": "一些"
+    },
+    {
+      "content": "动画"
+    },
+    {
+      "content": "改"
+    },
+    {
+      "content": "进"
+    },
+    {
+      "content": "思"
+    },
+    {
+      "content": "路"
+    },
+    {
+      "content": "；"
+    },
+    {
+      "content": "如果"
+    },
+    {
+      "content": "你"
+    },
+    {
+      "content": "说"
+    },
+    {
+      "content": "的是"
+    },
+    {
+      "content": "其中"
+    },
+    {
+      "content": "一个"
+    },
+    {
+      "content": "，我"
+    },
+    {
+      "content": "后"
+    },
+    {
+      "content": "面"
+    },
+    {
+      "content": "可以"
+    },
+    {
+      "content": "再"
+    },
+    {
+      "content": "帮"
+    },
+    {
+      "content": "你"
+    },
+    {
+      "content": "细"
+    },
+    {
+      "content": "化"
+    },
+    {
+      "content": "到"
+    },
+    {
+      "content": "具体"
+    },
+    {
+      "content": "实现"
+    },
+    {
+      "content": "。\n\n"
+    },
+    {
+      "content": "##"
+    },
+    {
+      "content": " 通"
+    },
+    {
+      "content": "用"
+    },
+    {
+      "content": "改"
+    },
+    {
+      "content": "进"
+    },
+    {
+      "content": "方向"
+    },
+    {
+      "content": "\n\n"
+    },
+    {
+      "content": "1"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": " **"
+    },
+    {
+      "content": "增加"
+    },
+    {
+      "content": "缓"
+    },
+    {
+      "content": "动"
+    },
+    {
+      "content": "效果"
+    },
+    {
+      "content": "**\n"
+    },
+    {
+      "content": "  "
+    },
+    {
+      "content": " -"
+    },
+    {
+      "content": " 不"
+    },
+    {
+      "content": "要"
+    },
+    {
+      "content": "让"
+    },
+    {
+      "content": "角色"
+    },
+    {
+      "content": "、"
+    },
+    {
+      "content": "坦"
+    },
+    {
+      "content": "克"
+    },
+    {
+      "content": "、"
+    },
+    {
+      "content": "子"
+    },
+    {
+      "content": "弹"
+    },
+    {
+      "content": "“"
+    },
+    {
+      "content": "匀"
+    },
+    {
+      "content": "速"
+    },
+    {
+      "content": "移动"
+    },
+    {
+      "content": "”"
+    },
+    {
+      "content": "。\n"
+    },
+    {
+      "content": "  "
+    },
+    {
+      "content": " -"
+    },
+    {
+      "content": " 可以"
+    },
+    {
+      "content": "用"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "ease"
+    },
+    {
+      "content": "-out"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": "、"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": "ease"
+    },
+    {
+      "content": "-in"
+    },
+    {
+      "content": "-out"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": "，"
+    },
+    {
+      "content": "让"
+    },
+    {
+      "content": "动作"
+    },
+    {
+      "content": "有"
+    },
+    {
+      "content": "加"
+    },
+    {
+      "content": "速"
+    },
+    {
+      "content": "和"
+    },
+    {
+      "content": "减"
+    },
+    {
+      "content": "速"
+    },
+    {
+      "content": "感"
+    },
+    {
+      "content": "。\n"
+    },
+    {
+      "content": "  "
+    },
+    {
+      "content": " -"
+    },
+    {
+      "content": " 比"
+    },
+    {
+      "content": "如"
+    },
+    {
+      "content": "攻击"
+    },
+    {
+      "content": "、"
+    },
+    {
+      "content": "闪"
+    },
+    {
+      "content": "避"
+    },
+    {
+      "content": "、"
+    },
+    {
+      "content": "爆"
+    },
+    {
+      "content": "炸"
+    },
+    {
+      "content": "、"
+    },
+    {
+      "content": "受"
+    },
+    {
+      "content": "击"
+    },
+    {
+      "content": "都"
+    },
+    {
+      "content": "可以"
+    },
+    {
+      "content": "有"
+    },
+    {
+      "content": "短"
+    },
+    {
+      "content": "暂"
+    },
+    {
+      "content": "的"
+    },
+    {
+      "content": "弹"
+    },
+    {
+      "content": "性"
+    },
+    {
+      "content": "变化"
+    },
+    {
+      "content": "。\n\n"
+    },
+    {
+      "content": "2"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": " **"
+    },
+    {
+      "content": "增加"
+    },
+    {
+      "content": "受"
+    },
+    {
+      "content": "击"
+    },
+    {
+      "content": "反馈"
+    },
+    {
+      "content": "**\n"
+    },
+    {
+      "content": "  "
+    },
+    {
+      "content": " -"
+    },
+    {
+      "content": " 被"
+    },
+    {
+      "content": "打"
+    },
+    {
+      "content": "中"
+    },
+    {
+      "content": "时"
+    },
+    {
+      "content": "不要"
+    },
+    {
+      "content": "只是"
+    },
+    {
+      "content": "扣"
+    },
+    {
+      "content": "血"
+    },
+    {
+      "content": "。\n"
+    },
+    {
+      "content": "  "
+    },
+    {
+      "content": " -"
+    },
+    {
+      "content": " 可以"
+    },
+    {
+      "content": "加入"
+    },
+    {
+      "content": "：\n"
+    },
+    {
+      "content": "    "
+    },
+    {
+      "content": " -"
+    },
+    {
+      "content": " 屏"
+    },
+    {
+      "content": "幕"
+    },
+    {
+      "content": "轻"
+    },
+    {
+      "content": "微"
+    },
+    {
+      "content": "震"
+    },
+    {
+      "content": "动"
+    },
+    {
+      "content": "\n"
+    },
+    {
+      "content": "    "
+    },
+    {
+      "content": " -"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "角色"
+    },
+    {
+      "content": "/"
+    },
+    {
+      "content": "坦"
+    },
+    {
+      "content": "克"
+    },
+    {
+      "content": "闪"
+    },
+    {
+      "content": "白"
+    },
+    {
+      "content": "或"
+    },
+    {
+      "content": "闪"
+    },
+    {
+      "content": "红"
+    },
+    {
+      "content": "\n"
+    },
+    {
+      "content": "    "
+    },
+    {
+      "content": " -"
+    },
+    {
+      "content": " 短"
+    },
+    {
+      "content": "暂"
+    },
+    {
+      "content": "击"
+    },
+    {
+      "content": "退"
+    },
+    {
+      "content": "\n"
+    },
+    {
+      "content": "    "
+    },
+    {
+      "content": " -"
+    },
+    {
+      "content": " 血"
+    },
+    {
+      "content": "条"
+    },
+    {
+      "content": "震"
+    },
+    {
+      "content": "动"
+    },
+    {
+      "content": "\n"
+    },
+    {
+      "content": "    "
+    },
+    {
+      "content": " -"
+    },
+    {
+      "content": " 粒"
+    },
+    {
+      "content": "子"
+    },
+    {
+      "content": "飞"
+    },
+    {
+      "content": "溅"
+    },
+    {
+      "content": "\n\n"
+    },
+    {
+      "content": "3"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": " **"
+    },
+    {
+      "content": "增加"
+    },
+    {
+      "content": "粒"
+    },
+    {
+      "content": "子"
+    },
+    {
+      "content": "效果"
+    },
+    {
+      "content": "**\n"
+    },
+    {
+      "content": "  "
+    },
+    {
+      "content": " -"
+    },
+    {
+      "content": " 拳"
+    },
+    {
+      "content": "皇"
+    },
+    {
+      "content": "格"
+    },
+    {
+      "content": "斗"
+    },
+    {
+      "content": "可以"
+    },
+    {
+      "content": "加"
+    },
+    {
+      "content": "：\n"
+    },
+    {
+      "content": "    "
+    },
+    {
+      "content": " -"
+    },
+    {
+      "content": " 拳"
+    },
+    {
+      "content": "风"
+    },
+    {
+      "content": "\n"
+    },
+    {
+      "content": "    "
+    },
+    {
+      "content": " -"
+    },
+    {
+      "content": " 火"
+    },
+    {
+      "content": "花"
+    },
+    {
+      "content": "\n"
+    },
+    {
+      "content": "    "
+    },
+    {
+      "content": " -"
+    },
+    {
+      "content": " 能"
+    },
+    {
+      "content": "量"
+    },
+    {
+      "content": "波"
+    },
+    {
+      "content": "尾"
+    },
+    {
+      "content": "迹"
+    },
+    {
+      "content": "\n"
+    },
+    {
+      "content": "    "
+    },
+    {
+      "content": " -"
+    },
+    {
+      "content": " 落"
+    },
+    {
+      "content": "地"
+    },
+    {
+      "content": "尘"
+    },
+    {
+      "content": "土"
+    },
+    {
+      "content": "\n"
+    },
+    {
+      "content": "  "
+    },
+    {
+      "content": " -"
+    },
+    {
+      "content": " 坦"
+    },
+    {
+      "content": "克"
+    },
+    {
+      "content": "大战"
+    },
+    {
+      "content": "可以"
+    },
+    {
+      "content": "加"
+    },
+    {
+      "content": "：\n"
+    },
+    {
+      "content": "    "
+    },
+    {
+      "content": " -"
+    },
+    {
+      "content": " 炮"
+    },
+    {
+      "content": "弹"
+    },
+    {
+      "content": "尾"
+    },
+    {
+      "content": "烟"
+    },
+    {
+      "content": "\n"
+    },
+    {
+      "content": "    "
+    },
+    {
+      "content": " -"
+    },
+    {
+      "content": " 爆"
+    },
+    {
+      "content": "炸"
+    },
+    {
+      "content": "碎"
+    },
+    {
+      "content": "片"
+    },
+    {
+      "content": "\n"
+    },
+    {
+      "content": "    "
+    },
+    {
+      "content": " -"
+    },
+    {
+      "content": " 烟"
+    },
+    {
+      "content": "雾"
+    },
+    {
+      "content": "\n"
+    },
+    {
+      "content": "    "
+    },
+    {
+      "content": " -"
+    },
+    {
+      "content": " 火"
+    },
+    {
+      "content": "光"
+    },
+    {
+      "content": "\n\n"
+    },
+    {
+      "content": "4"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": " **"
+    },
+    {
+      "content": "减少"
+    },
+    {
+      "content": "“"
+    },
+    {
+      "content": "瞬"
+    },
+    {
+      "content": "间"
+    },
+    {
+      "content": "切"
+    },
+    {
+      "content": "换"
+    },
+    {
+      "content": "”"
+    },
+    {
+      "content": "**\n"
+    },
+    {
+      "content": "  "
+    },
+    {
+      "content": " -"
+    },
+    {
+      "content": " 很"
+    },
+    {
+      "content": "多"
+    },
+    {
+      "content": "小游戏"
+    },
+    {
+      "content": "不好"
+    },
+    {
+      "content": "看"
+    },
+    {
+      "content": "，是"
+    },
+    {
+      "content": "因为"
+    },
+    {
+      "content": "状态"
+    },
+    {
+      "content": "变化"
+    },
+    {
+      "content": "太"
+    },
+    {
+      "content": "生"
+    },
+    {
+      "content": "硬"
+    },
+    {
+      "content": "。\n"
+    },
+    {
+      "content": "  "
+    },
+    {
+      "content": " -"
+    },
+    {
+      "content": " 比"
+    },
+    {
+      "content": "如"
+    },
+    {
+      "content": "：\n"
+    },
+    {
+      "content": "    "
+    },
+    {
+      "content": " -"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "站"
+    },
+    {
+      "content": "立"
+    },
+    {
+      "content": " →"
+    },
+    {
+      "content": " 跑"
+    },
+    {
+      "content": "动"
+    },
+    {
+      "content": "\n"
+    },
+    {
+      "content": "    "
+    },
+    {
+      "content": " -"
+    },
+    {
+      "content": " 跑"
+    },
+    {
+      "content": "动"
+    },
+    {
+      "content": " →"
+    },
+    {
+      "content": " 攻"
+    },
+    {
+      "content": "击"
+    },
+    {
+      "content": "\n"
+    },
+    {
+      "content": "    "
+    },
+    {
+      "content": " -"
+    },
+    {
+      "content": " 攻"
+    },
+    {
+      "content": "击"
+    },
+    {
+      "content": " →"
+    },
+    {
+      "content": " 收"
+    },
+    {
+      "content": "招"
+    },
+    {
+      "content": "\n"
+    },
+    {
+      "content": "    "
+    },
+    {
+      "content": " -"
+    },
+    {
+      "content": " 坦"
+    },
+    {
+      "content": "克"
+    },
+    {
+      "content": "开"
+    },
+    {
+      "content": "火"
+    },
+    {
+      "content": " →"
+    },
+    {
+      "content": " 炮"
+    },
+    {
+      "content": "口"
+    },
+    {
+      "content": "后"
+    },
+    {
+      "content": "坐"
+    },
+    {
+      "content": "\n"
+    },
+    {
+      "content": "  "
+    },
+    {
+      "content": " -"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "这些"
+    },
+    {
+      "content": "都"
+    },
+    {
+      "content": "可以"
+    },
+    {
+      "content": "加"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "100"
+    },
+    {
+      "content": "ms"
+    },
+    {
+      "content": "～"
+    },
+    {
+      "content": "300"
+    },
+    {
+      "content": "ms"
+    },
+    {
+      "content": " 的"
+    },
+    {
+      "content": "过"
+    },
+    {
+      "content": "渡"
+    },
+    {
+      "content": "动画"
+    },
+    {
+      "content": "。\n\n"
+    },
+    {
+      "content": "5"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": " **"
+    },
+    {
+      "content": "加"
+    },
+    {
+      "content": "一点"
+    },
+    {
+      "content": "镜"
+    },
+    {
+      "content": "头"
+    },
+    {
+      "content": "表现"
+    },
+    {
+      "content": "**\n"
+    },
+    {
+      "content": "  "
+    },
+    {
+      "content": " -"
+    },
+    {
+      "content": " 命"
+    },
+    {
+      "content": "中"
+    },
+    {
+      "content": "、"
+    },
+    {
+      "content": "爆"
+    },
+    {
+      "content": "炸"
+    },
+    {
+      "content": "、大"
+    },
+    {
+      "content": "招"
+    },
+    {
+      "content": "时"
+    },
+    {
+      "content": "可以"
+    },
+    {
+      "content": "短"
+    },
+    {
+      "content": "暂"
+    },
+    {
+      "content": "震"
+    },
+    {
+      "content": "屏"
+    },
+    {
+      "content": "。\n"
+    },
+    {
+      "content": "  "
+    },
+    {
+      "content": " -"
+    },
+    {
+      "content": " 大"
+    },
+    {
+      "content": "招"
+    },
+    {
+      "content": "可以"
+    },
+    {
+      "content": "让"
+    },
+    {
+      "content": "背景"
+    },
+    {
+      "content": "变"
+    },
+    {
+      "content": "暗"
+    },
+    {
+      "content": "一"
+    },
+    {
+      "content": "瞬"
+    },
+    {
+      "content": "间"
+    },
+    {
+      "content": "。\n"
+    },
+    {
+      "content": "  "
+    },
+    {
+      "content": " -"
+    },
+    {
+      "content": " 坦"
+    },
+    {
+      "content": "克"
+    },
+    {
+      "content": "爆"
+    },
+    {
+      "content": "炸"
+    },
+    {
+      "content": "时"
+    },
+    {
+      "content": "可以"
+    },
+    {
+      "content": "有"
+    },
+    {
+      "content": "冲"
+    },
+    {
+      "content": "击"
+    },
+    {
+      "content": "波"
+    },
+    {
+      "content": "扩"
+    },
+    {
+      "content": "散"
+    },
+    {
+      "content": "。\n\n"
+    },
+    {
+      "content": "---\n\n"
+    },
+    {
+      "content": "##"
+    },
+    {
+      "content": " “"
+    },
+    {
+      "content": "拳"
+    },
+    {
+      "content": "皇"
+    },
+    {
+      "content": "格"
+    },
+    {
+      "content": "斗"
+    },
+    {
+      "content": "”"
+    },
+    {
+      "content": "动画"
+    },
+    {
+      "content": "建议"
+    },
+    {
+      "content": "\n\n"
+    },
+    {
+      "content": "1"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": " **"
+    },
+    {
+      "content": "攻击"
+    },
+    {
+      "content": "动作"
+    },
+    {
+      "content": "分"
+    },
+    {
+      "content": "阶段"
+    },
+    {
+      "content": "**\n"
+    },
+    {
+      "content": "  "
+    },
+    {
+      "content": " -"
+    },
+    {
+      "content": " 出"
+    },
+    {
+      "content": "拳"
+    },
+    {
+      "content": "不要"
+    },
+    {
+      "content": "只"
+    },
+    {
+      "content": "是一"
+    },
+    {
+      "content": "帧"
+    },
+    {
+      "content": "。\n"
+    },
+    {
+      "content": "  "
+    },
+    {
+      "content": " -"
+    },
+    {
+      "content": " 可以"
+    },
+    {
+      "content": "分"
+    },
+    {
+      "content": "成"
+    },
+    {
+      "content": "：\n"
+    },
+    {
+      "content": "    "
+    },
+    {
+      "content": " -"
+    },
+    {
+      "content": " 蓄"
+    },
+    {
+      "content": "力"
+    },
+    {
+      "content": "\n"
+    },
+    {
+      "content": "    "
+    },
+    {
+      "content": " -"
+    },
+    {
+      "content": " 出"
+    },
+    {
+      "content": "拳"
+    },
+    {
+      "content": "\n"
+    },
+    {
+      "content": "    "
+    },
+    {
+      "content": " -"
+    },
+    {
+      "content": " 命"
+    },
+    {
+      "content": "中"
+    },
+    {
+      "content": "\n"
+    },
+    {
+      "content": "    "
+    },
+    {
+      "content": " -"
+    },
+    {
+      "content": " 收"
+    },
+    {
+      "content": "拳"
+    },
+    {
+      "content": "\n"
+    },
+    {
+      "content": "  "
+    },
+    {
+      "content": " -"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "这样"
+    },
+    {
+      "content": "会"
+    },
+    {
+      "content": "更"
+    },
+    {
+      "content": "像"
+    },
+    {
+      "content": "格"
+    },
+    {
+      "content": "斗"
+    },
+    {
+      "content": "游戏"
+    },
+    {
+      "content": "。\n\n"
+    },
+    {
+      "content": "2"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": " **"
+    },
+    {
+      "content": "加入"
+    },
+    {
+      "content": "打"
+    },
+    {
+      "content": "击"
+    },
+    {
+      "content": "停"
+    },
+    {
+      "content": "顿"
+    },
+    {
+      "content": " Hit"
+    },
+    {
+      "content": " Stop"
+    },
+    {
+      "content": "**\n"
+    },
+    {
+      "content": "  "
+    },
+    {
+      "content": " -"
+    },
+    {
+      "content": " 命"
+    },
+    {
+      "content": "中"
+    },
+    {
+      "content": "敌"
+    },
+    {
+      "content": "人的"
+    },
+    {
+      "content": "瞬"
+    },
+    {
+      "content": "间"
+    },
+    {
+      "content": "，让"
+    },
+    {
+      "content": "双方"
+    },
+    {
+      "content": "暂停"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "60"
+    },
+    {
+      "content": "ms"
+    },
+    {
+      "content": "～"
+    },
+    {
+      "content": "120"
+    },
+    {
+      "content": "ms"
+    },
+    {
+      "content": "。\n"
+    },
+    {
+      "content": "  "
+    },
+    {
+      "content": " -"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "这个"
+    },
+    {
+      "content": "小"
+    },
+    {
+      "content": "停"
+    },
+    {
+      "content": "顿"
+    },
+    {
+      "content": "会"
+    },
+    {
+      "content": "极"
+    },
+    {
+      "content": "大"
+    },
+    {
+      "content": "增强"
+    },
+    {
+      "content": "打"
+    },
+    {
+      "content": "击"
+    },
+    {
+      "content": "感"
+    },
+    {
+      "content": "。\n\n"
+    },
+    {
+      "content": "3"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": " **"
+    },
+    {
+      "content": "角色"
+    },
+    {
+      "content": "受"
+    },
+    {
+      "content": "击"
+    },
+    {
+      "content": "动画"
+    },
+    {
+      "content": "**\n"
+    },
+    {
+      "content": "  "
+    },
+    {
+      "content": " -"
+    },
+    {
+      "content": " 被"
+    },
+    {
+      "content": "打"
+    },
+    {
+      "content": "中"
+    },
+    {
+      "content": "时"
+    },
+    {
+      "content": "：\n"
+    },
+    {
+      "content": "    "
+    },
+    {
+      "content": " -"
+    },
+    {
+      "content": " 身"
+    },
+    {
+      "content": "体"
+    },
+    {
+      "content": "后"
+    },
+    {
+      "content": "仰"
+    },
+    {
+      "content": "\n"
+    },
+    {
+      "content": "    "
+    },
+    {
+      "content": " -"
+    },
+    {
+      "content": " 向"
+    },
+    {
+      "content": "后"
+    },
+    {
+      "content": "滑"
+    },
+    {
+      "content": "动"
+    },
+    {
+      "content": "一点"
+    },
+    {
+      "content": "\n"
+    },
+    {
+      "content": "    "
+    },
+    {
+      "content": " -"
+    },
+    {
+      "content": " 闪"
+    },
+    {
+      "content": "白"
+    },
+    {
+      "content": "\n"
+    },
+    {
+      "content": "    "
+    },
+    {
+      "content": " -"
+    },
+    {
+      "content": " 血"
+    },
+    {
+      "content": "条"
+    },
+    {
+      "content": "快速"
+    },
+    {
+      "content": "减少"
+    },
+    {
+      "content": "后"
+    },
+    {
+      "content": "再"
+    },
+    {
+      "content": "缓"
+    },
+    {
+      "content": "慢"
+    },
+    {
+      "content": "跟"
+    },
+    {
+      "content": "随"
+    },
+    {
+      "content": "\n"
+    },
+    {
+      "content": "  "
+    },
+    {
+      "content": " -"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "这样"
+    },
+    {
+      "content": "比"
+    },
+    {
+      "content": "单"
+    },
+    {
+      "content": "纯"
+    },
+    {
+      "content": "扣"
+    },
+    {
+      "content": "血"
+    },
+    {
+      "content": "好"
+    },
+    {
+      "content": "看"
+    },
+    {
+      "content": "很多"
+    },
+    {
+      "content": "。\n\n"
+    },
+    {
+      "content": "4"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": " **"
+    },
+    {
+      "content": "技能"
+    },
+    {
+      "content": "特"
+    },
+    {
+      "content": "效"
+    },
+    {
+      "content": "**\n"
+    },
+    {
+      "content": "  "
+    },
+    {
+      "content": " -"
+    },
+    {
+      "content": " 普"
+    },
+    {
+      "content": "通"
+    },
+    {
+      "content": "攻击"
+    },
+    {
+      "content": "："
+    },
+    {
+      "content": "小"
+    },
+    {
+      "content": "火"
+    },
+    {
+      "content": "花"
+    },
+    {
+      "content": "、"
+    },
+    {
+      "content": "拳"
+    },
+    {
+      "content": "风"
+    },
+    {
+      "content": "线"
+    },
+    {
+      "content": "条"
+    },
+    {
+      "content": "。\n"
+    },
+    {
+      "content": "  "
+    },
+    {
+      "content": " -"
+    },
+    {
+      "content": " 重"
+    },
+    {
+      "content": "击"
+    },
+    {
+      "content": "："
+    },
+    {
+      "content": "更"
+    },
+    {
+      "content": "大的"
+    },
+    {
+      "content": "闪"
+    },
+    {
+      "content": "光"
+    },
+    {
+      "content": "和"
+    },
+    {
+      "content": "震"
+    },
+    {
+      "content": "屏"
+    },
+    {
+      "content": "。\n"
+    },
+    {
+      "content": "  "
+    },
+    {
+      "content": " -"
+    },
+    {
+      "content": " 大"
+    },
+    {
+      "content": "招"
+    },
+    {
+      "content": "："
+    },
+    {
+      "content": "背景"
+    },
+    {
+      "content": "变"
+    },
+    {
+      "content": "暗"
+    },
+    {
+      "content": "、"
+    },
+    {
+      "content": "角色"
+    },
+    {
+      "content": "发"
+    },
+    {
+      "content": "光"
+    },
+    {
+      "content": "、"
+    },
+    {
+      "content": "能"
+    },
+    {
+      "content": "量"
+    },
+    {
+      "content": "波"
+    },
+    {
+      "content": "拖"
+    },
+    {
+      "content": "尾"
+    },
+    {
+      "content": "。\n\n"
+    },
+    {
+      "content": "5"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": " **"
+    },
+    {
+      "content": "跳"
+    },
+    {
+      "content": "跃"
+    },
+    {
+      "content": "和"
+    },
+    {
+      "content": "落"
+    },
+    {
+      "content": "地"
+    },
+    {
+      "content": "**\n"
+    },
+    {
+      "content": "  "
+    },
+    {
+      "content": " -"
+    },
+    {
+      "content": " 跳"
+    },
+    {
+      "content": "跃"
+    },
+    {
+      "content": "可以"
+    },
+    {
+      "content": "用"
+    },
+    {
+      "content": "抛"
+    },
+    {
+      "content": "物"
+    },
+    {
+      "content": "线"
+    },
+    {
+      "content": "，而"
+    },
+    {
+      "content": "不是"
+    },
+    {
+      "content": "直"
+    },
+    {
+      "content": "上"
+    },
+    {
+      "content": "直"
+    },
+    {
+      "content": "下"
+    },
+    {
+      "content": "。\n"
+    },
+    {
+      "content": "  "
+    },
+    {
+      "content": " -"
+    },
+    {
+      "content": " 落"
+    },
+    {
+      "content": "地"
+    },
+    {
+      "content": "时"
+    },
+    {
+      "content": "加"
+    },
+    {
+      "content": "一点"
+    },
+    {
+      "content": "尘"
+    },
+    {
+      "content": "土"
+    },
+    {
+      "content": "和"
+    },
+    {
+      "content": "角色"
+    },
+    {
+      "content": "下"
+    },
+    {
+      "content": "蹲"
+    },
+    {
+      "content": "缓"
+    },
+    {
+      "content": "冲"
+    },
+    {
+      "content": "。\n\n"
+    },
+    {
+      "content": "---\n\n"
+    },
+    {
+      "content": "##"
+    },
+    {
+      "content": " “"
+    },
+    {
+      "content": "坦"
+    },
+    {
+      "content": "克"
+    },
+    {
+      "content": "大战"
+    },
+    {
+      "content": "”"
+    },
+    {
+      "content": "动画"
+    },
+    {
+      "content": "建议"
+    },
+    {
+      "content": "\n\n"
+    },
+    {
+      "content": "1"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": " **"
+    },
+    {
+      "content": "炮"
+    },
+    {
+      "content": "弹"
+    },
+    {
+      "content": "加"
+    },
+    {
+      "content": "拖"
+    },
+    {
+      "content": "尾"
+    },
+    {
+      "content": "**\n"
+    },
+    {
+      "content": "  "
+    },
+    {
+      "content": " -"
+    },
+    {
+      "content": " 炮"
+    },
+    {
+      "content": "弹"
+    },
+    {
+      "content": "后"
+    },
+    {
+      "content": "面"
+    },
+    {
+      "content": "加"
+    },
+    {
+      "content": "一"
+    },
+    {
+      "content": "条"
+    },
+    {
+      "content": "淡"
+    },
+    {
+      "content": "淡"
+    },
+    {
+      "content": "的"
+    },
+    {
+      "content": "烟"
+    },
+    {
+      "content": "雾"
+    },
+    {
+      "content": "或"
+    },
+    {
+      "content": "光"
+    },
+    {
+      "content": "线"
+    },
+    {
+      "content": "。\n"
+    },
+    {
+      "content": "  "
+    },
+    {
+      "content": " -"
+    },
+    {
+      "content": " 子"
+    },
+    {
+      "content": "弹"
+    },
+    {
+      "content": "移动"
+    },
+    {
+      "content": "会"
+    },
+    {
+      "content": "更"
+    },
+    {
+      "content": "明显"
+    },
+    {
+      "content": "。\n\n"
+    },
+    {
+      "content": "2"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": " **"
+    },
+    {
+      "content": "开"
+    },
+    {
+      "content": "炮"
+    },
+    {
+      "content": "后"
+    },
+    {
+      "content": "坐"
+    },
+    {
+      "content": "力"
+    },
+    {
+      "content": "**\n"
+    },
+    {
+      "content": "  "
+    },
+    {
+      "content": " -"
+    },
+    {
+      "content": " 坦"
+    },
+    {
+      "content": "克"
+    },
+    {
+      "content": "开"
+    },
+    {
+      "content": "炮"
+    },
+    {
+      "content": "瞬"
+    },
+    {
+      "content": "间"
+    },
+    {
+      "content": "，"
+    },
+    {
+      "content": "坦"
+    },
+    {
+      "content": "克"
+    },
+    {
+      "content": "身体"
+    },
+    {
+      "content": "往"
+    },
+    {
+      "content": "后"
+    },
+    {
+      "content": "抖"
+    },
+    {
+      "content": "一下"
+    },
+    {
+      "content": "。\n"
+    },
+    {
+      "content": "  "
+    },
+    {
+      "content": " -"
+    },
+    {
+      "content": " 炮"
+    },
+    {
+      "content": "管"
+    },
+    {
+      "content": "也"
+    },
+    {
+      "content": "可以"
+    },
+    {
+      "content": "轻"
+    },
+    {
+      "content": "微"
+    },
+    {
+      "content": "后"
+    },
+    {
+      "content": "缩"
+    },
+    {
+      "content": "。\n\n"
+    },
+    {
+      "content": "3"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": " **"
+    },
+    {
+      "content": "爆"
+    },
+    {
+      "content": "炸"
+    },
+    {
+      "content": "动画"
+    },
+    {
+      "content": "分"
+    },
+    {
+      "content": "层"
+    },
+    {
+      "content": "**\n"
+    },
+    {
+      "content": "  "
+    },
+    {
+      "content": " -"
+    },
+    {
+      "content": " 爆"
+    },
+    {
+      "content": "炸"
+    },
+    {
+      "content": "不要"
+    },
+    {
+      "content": "只是"
+    },
+    {
+      "content": "一个"
+    },
+    {
+      "content": "圆"
+    },
+    {
+      "content": "。\n"
+    },
+    {
+      "content": "  "
+    },
+    {
+      "content": " -"
+    },
+    {
+      "content": " 可以"
+    },
+    {
+      "content": "分"
+    },
+    {
+      "content": "成"
+    },
+    {
+      "content": "：\n"
+    },
+    {
+      "content": "    "
+    },
+    {
+      "content": " -"
+    },
+    {
+      "content": " 中"
+    },
+    {
+      "content": "心"
+    },
+    {
+      "content": "火"
+    },
+    {
+      "content": "光"
+    },
+    {
+      "content": "\n"
+    },
+    {
+      "content": "    "
+    },
+    {
+      "content": " -"
+    },
+    {
+      "content": " 外"
+    },
+    {
+      "content": "层"
+    },
+    {
+      "content": "冲"
+    },
+    {
+      "content": "击"
+    },
+    {
+      "content": "波"
+    },
+    {
+      "content": "\n"
+    },
+    {
+      "content": "    "
+    },
+    {
+      "content": " -"
+    },
+    {
+      "content": " 黑"
+    },
+    {
+      "content": "烟"
+    },
+    {
+      "content": "\n"
+    },
+    {
+      "content": "    "
+    },
+    {
+      "content": " -"
+    },
+    {
+      "content": " 碎"
+    },
+    {
+      "content": "片"
+    },
+    {
+      "content": "飞"
+    },
+    {
+      "content": "散"
+    },
+    {
+      "content": "\n"
+    },
+    {
+      "content": "  "
+    },
+    {
+      "content": " -"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "这样"
+    },
+    {
+      "content": "视觉"
+    },
+    {
+      "content": "会"
+    },
+    {
+      "content": "丰富"
+    },
+    {
+      "content": "很多"
+    },
+    {
+      "content": "。\n\n"
+    },
+    {
+      "content": "4"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": " **"
+    },
+    {
+      "content": "坦"
+    },
+    {
+      "content": "克"
+    },
+    {
+      "content": "移动"
+    },
+    {
+      "content": "履"
+    },
+    {
+      "content": "带"
+    },
+    {
+      "content": "感"
+    },
+    {
+      "content": "**\n"
+    },
+    {
+      "content": "  "
+    },
+    {
+      "content": " -"
+    },
+    {
+      "content": " 坦"
+    },
+    {
+      "content": "克"
+    },
+    {
+      "content": "移动"
+    },
+    {
+      "content": "时"
+    },
+    {
+      "content": "可以"
+    },
+    {
+      "content": "加"
+    },
+    {
+      "content": "：\n"
+    },
+    {
+      "content": "    "
+    },
+    {
+      "content": " -"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "轻"
+    },
+    {
+      "content": "微"
+    },
+    {
+      "content": "上下"
+    },
+    {
+      "content": "抖"
+    },
+    {
+      "content": "动"
+    },
+    {
+      "content": "\n"
+    },
+    {
+      "content": "    "
+    },
+    {
+      "content": " -"
+    },
+    {
+      "content": " 履"
+    },
+    {
+      "content": "带"
+    },
+    {
+      "content": "滚"
+    },
+    {
+      "content": "动"
+    },
+    {
+      "content": "纹"
+    },
+    {
+      "content": "理"
+    },
+    {
+      "content": "\n"
+    },
+    {
+      "content": "    "
+    },
+    {
+      "content": " -"
+    },
+    {
+      "content": " 地"
+    },
+    {
+      "content": "面"
+    },
+    {
+      "content": "扬"
+    },
+    {
+      "content": "尘"
+    },
+    {
+      "content": "\n\n"
+    },
+    {
+      "content": "5"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": " **"
+    },
+    {
+      "content": "墙"
+    },
+    {
+      "content": "体"
+    },
+    {
+      "content": "被"
+    },
+    {
+      "content": "打"
+    },
+    {
+      "content": "效果"
+    },
+    {
+      "content": "**\n"
+    },
+    {
+      "content": "  "
+    },
+    {
+      "content": " -"
+    },
+    {
+      "content": " 子"
+    },
+    {
+      "content": "弹"
+    },
+    {
+      "content": "击"
+    },
+    {
+      "content": "中"
+    },
+    {
+      "content": "墙"
+    },
+    {
+      "content": "时"
+    },
+    {
+      "content": "：\n"
+    },
+    {
+      "content": "    "
+    },
+    {
+      "content": " -"
+    },
+    {
+      "content": " 墙"
+    },
+    {
+      "content": "块"
+    },
+    {
+      "content": "碎"
+    },
+    {
+      "content": "裂"
+    },
+    {
+      "content": "\n"
+    },
+    {
+      "content": "    "
+    },
+    {
+      "content": " -"
+    },
+    {
+      "content": " 小"
+    },
+    {
+      "content": "碎"
+    },
+    {
+      "content": "片"
+    },
+    {
+      "content": "飞"
+    },
+    {
+      "content": "出"
+    },
+    {
+      "content": "\n"
+    },
+    {
+      "content": "    "
+    },
+    {
+      "content": " -"
+    },
+    {
+      "content": " 命"
+    },
+    {
+      "content": "中"
+    },
+    {
+      "content": "点"
+    },
+    {
+      "content": "闪"
+    },
+    {
+      "content": "光"
+    },
+    {
+      "content": "\n"
+    },
+    {
+      "content": "  "
+    },
+    {
+      "content": " -"
+    },
+    {
+      "content": " 比"
+    },
+    {
+      "content": "直接"
+    },
+    {
+      "content": "消"
+    },
+    {
+      "content": "失"
+    },
+    {
+      "content": "更"
+    },
+    {
+      "content": "有"
+    },
+    {
+      "content": "反馈"
+    },
+    {
+      "content": "。\n\n"
+    },
+    {
+      "content": "---\n\n"
+    },
+    {
+      "content": "##"
+    },
+    {
+      "content": " 最"
+    },
+    {
+      "content": "值得"
+    },
+    {
+      "content": "优"
+    },
+    {
+      "content": "先"
+    },
+    {
+      "content": "做"
+    },
+    {
+      "content": "的"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "5"
+    },
+    {
+      "content": " 个"
+    },
+    {
+      "content": "效果"
+    },
+    {
+      "content": "\n\n"
+    },
+    {
+      "content": "如果"
+    },
+    {
+      "content": "你"
+    },
+    {
+      "content": "想"
+    },
+    {
+      "content": "先"
+    },
+    {
+      "content": "快速"
+    },
+    {
+      "content": "提升"
+    },
+    {
+      "content": "观"
+    },
+    {
+      "content": "感"
+    },
+    {
+      "content": "，我"
+    },
+    {
+      "content": "建议"
+    },
+    {
+      "content": "优"
+    },
+    {
+      "content": "先"
+    },
+    {
+      "content": "加"
+    },
+    {
+      "content": "这些"
+    },
+    {
+      "content": "：\n\n"
+    },
+    {
+      "content": "1"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": " **"
+    },
+    {
+      "content": "命"
+    },
+    {
+      "content": "中"
+    },
+    {
+      "content": "闪"
+    },
+    {
+      "content": "光"
+    },
+    {
+      "content": "**\n"
+    },
+    {
+      "content": "2"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": " **"
+    },
+    {
+      "content": "屏"
+    },
+    {
+      "content": "幕"
+    },
+    {
+      "content": "震"
+    },
+    {
+      "content": "动"
+    },
+    {
+      "content": "**\n"
+    },
+    {
+      "content": "3"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": " **"
+    },
+    {
+      "content": "爆"
+    },
+    {
+      "content": "炸"
+    },
+    {
+      "content": "粒"
+    },
+    {
+      "content": "子"
+    },
+    {
+      "content": "**\n"
+    },
+    {
+      "content": "4"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": " **"
+    },
+    {
+      "content": "攻击"
+    },
+    {
+      "content": "/"
+    },
+    {
+      "content": "开"
+    },
+    {
+      "content": "炮"
+    },
+    {
+      "content": "后"
+    },
+    {
+      "content": "坐"
+    },
+    {
+      "content": "力"
+    },
+    {
+      "content": "**\n"
+    },
+    {
+      "content": "5"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": " **"
+    },
+    {
+      "content": "移动"
+    },
+    {
+      "content": "和"
+    },
+    {
+      "content": "攻击"
+    },
+    {
+      "content": "的"
+    },
+    {
+      "content": "缓"
+    },
+    {
+      "content": "动"
+    },
+    {
+      "content": "过"
+    },
+    {
+      "content": "渡"
+    },
+    {
+      "content": "**\n\n"
+    },
+    {
+      "content": "这"
+    },
+    {
+      "content": "几个"
+    },
+    {
+      "content": "实现"
+    },
+    {
+      "content": "成本"
+    },
+    {
+      "content": "不"
+    },
+    {
+      "content": "高"
+    },
+    {
+      "content": "，但"
+    },
+    {
+      "content": "视觉"
+    },
+    {
+      "content": "提升"
+    },
+    {
+      "content": "很"
+    },
+    {
+      "content": "明显"
+    },
+    {
+      "content": "。"
+    },
+    {
+      "usage": {
+        "InputTokens": 6869,
+        "OutputTokens": 1153
+      }
+    }
+  ]
+}

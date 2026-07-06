@@ -1,0 +1,12 @@
+{
+  "method": "chat",
+  "chat": {
+    "Content": "秋天 秋季 秋日 短诗 两行诗",
+    "ToolCalls": null,
+    "Usage": {
+      "InputTokens": 264,
+      "OutputTokens": 223
+    },
+    "FinishReason": ""
+  }
+}

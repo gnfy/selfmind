@@ -1,0 +1,25 @@
+id: timeline_iterate
+title: "scenarios 1+2: new work opens a label; an iteration continues it via the spine"
+require_cassette: true
+suite: timeline
+workspace: "."
+channel: cli
+
+# Work Timeline acceptance scenarios 1+2 (docs/work-timeline.md): turn 1 is
+# fresh work (opens a label); turn 2 is an implicit iteration ("刚才那首")
+# with no continuation cue — the spine tail carries turn-1 content so the
+# model revises the SAME poem, and P3 pre-label keeps both turns on one label.
+turns:
+  - input: "写一首两行的关于秋天的短诗,直接给出诗句,不要解释,不要读文件,不要写代码。"
+  - input: "把刚才那首诗改成夏天主题,还是两行,直接给出诗句。"
+
+expect:
+  status: completed
+  max_tool_calls: 0
+  max_duration_seconds: 300
+
+checks:
+  no_mojibake: true
+  no_empty_response: true
+  no_raw_json_leak: true
+  require_same_task: true

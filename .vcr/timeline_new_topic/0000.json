@@ -1,0 +1,12 @@
+{
+  "method": "chat",
+  "chat": {
+    "Content": "codename project-name working-title game-title internal-name",
+    "ToolCalls": null,
+    "Usage": {
+      "InputTokens": 265,
+      "OutputTokens": 325
+    },
+    "FinishReason": ""
+  }
+}

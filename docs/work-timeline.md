@@ -210,6 +210,9 @@ the next package (standing workflow).
 
 ## Acceptance scenarios (definition of done)
 
+> Coverage shipped (P4, 2026-07-06): `evalcases/timeline/` + the scenario→test
+> table in its README.
+
 1. "用JS写九七游戏" → new label, new run.
 2. "再多做几个角色" → context continuous via spine tail (no routing); same
    label, new run.

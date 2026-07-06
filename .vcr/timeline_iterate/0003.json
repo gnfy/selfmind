@@ -1,0 +1,68 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "content": "夏"
+    },
+    {
+      "content": "风"
+    },
+    {
+      "content": "吹"
+    },
+    {
+      "content": "亮"
+    },
+    {
+      "content": "碧"
+    },
+    {
+      "content": "绿"
+    },
+    {
+      "content": "的"
+    },
+    {
+      "content": "荷"
+    },
+    {
+      "content": "塘"
+    },
+    {
+      "content": "  \n"
+    },
+    {
+      "content": "蝉"
+    },
+    {
+      "content": "声"
+    },
+    {
+      "content": "轻"
+    },
+    {
+      "content": "落"
+    },
+    {
+      "content": "炽"
+    },
+    {
+      "content": "热"
+    },
+    {
+      "content": "的"
+    },
+    {
+      "content": "长"
+    },
+    {
+      "content": "街"
+    },
+    {
+      "usage": {
+        "InputTokens": 7343,
+        "OutputTokens": 26
+      }
+    }
+  ]
+}

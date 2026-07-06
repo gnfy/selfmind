@@ -1,0 +1,12 @@
+{
+  "method": "chat",
+  "chat": {
+    "Content": "SkyCast Horizon 中文翻译 宣传语 天气预报 项目名",
+    "ToolCalls": null,
+    "Usage": {
+      "InputTokens": 648,
+      "OutputTokens": 377
+    },
+    "FinishReason": ""
+  }
+}

@@ -1,0 +1,65 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "content": "HTTP"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "404"
+    },
+    {
+      "content": " 表"
+    },
+    {
+      "content": "示"
+    },
+    {
+      "content": "服务器"
+    },
+    {
+      "content": "能"
+    },
+    {
+      "content": "正常"
+    },
+    {
+      "content": "响应"
+    },
+    {
+      "content": "请求"
+    },
+    {
+      "content": "，但"
+    },
+    {
+      "content": "找"
+    },
+    {
+      "content": "不到"
+    },
+    {
+      "content": "客户端"
+    },
+    {
+      "content": "请求"
+    },
+    {
+      "content": "的"
+    },
+    {
+      "content": "资源"
+    },
+    {
+      "content": "。"
+    },
+    {
+      "usage": {
+        "InputTokens": 6800,
+        "OutputTokens": 22
+      }
+    }
+  ]
+}

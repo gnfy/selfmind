@@ -1,0 +1,24 @@
+id: timeline_cross_endpoint
+title: "scenario 5: a WeChat follow-up continues CLI work with full spine context"
+require_cassette: true
+suite: timeline
+workspace: "."
+channel: cli
+
+# Scenario 5: the spine is person-level and cross-endpoint — turn 2 arrives on
+# a DIFFERENT channel (weixin) and still sees turn-1 content, continuing the
+# same work line.
+turns:
+  - input: "帮我起一个两个词的英文项目名,主题是天气预报,只回项目名,不要读文件。"
+  - input: "继续刚才的,把这个项目名翻译成中文并加一句宣传语。"
+    channel: weixin
+expect:
+  status: completed
+  max_tool_calls: 0
+  max_duration_seconds: 300
+
+checks:
+  no_mojibake: true
+  no_empty_response: true
+  no_raw_json_leak: true
+  require_same_task: true

@@ -1,0 +1,56 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "content": "天"
+    },
+    {
+      "content": "际"
+    },
+    {
+      "content": "预"
+    },
+    {
+      "content": "报"
+    },
+    {
+      "content": "\n\n"
+    },
+    {
+      "content": "预"
+    },
+    {
+      "content": "见"
+    },
+    {
+      "content": "风"
+    },
+    {
+      "content": "云"
+    },
+    {
+      "content": "，"
+    },
+    {
+      "content": "掌"
+    },
+    {
+      "content": "握"
+    },
+    {
+      "content": "每"
+    },
+    {
+      "content": "一天"
+    },
+    {
+      "content": "。"
+    },
+    {
+      "usage": {
+        "InputTokens": 7225,
+        "OutputTokens": 19
+      }
+    }
+  ]
+}

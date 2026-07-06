@@ -1,0 +1,35 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "content": "Iron"
+    },
+    {
+      "content": "vale"
+    },
+    {
+      "content": "\n"
+    },
+    {
+      "content": "Night"
+    },
+    {
+      "content": "forge"
+    },
+    {
+      "content": "\n"
+    },
+    {
+      "content": "Star"
+    },
+    {
+      "content": "fall"
+    },
+    {
+      "usage": {
+        "InputTokens": 6675,
+        "OutputTokens": 63
+      }
+    }
+  ]
+}

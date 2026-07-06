@@ -1,0 +1,12 @@
+{
+  "method": "chat",
+  "chat": {
+    "Content": "夏日 短诗 两行诗 改写 诗句",
+    "ToolCalls": null,
+    "Usage": {
+      "InputTokens": 712,
+      "OutputTokens": 386
+    },
+    "FinishReason": ""
+  }
+}

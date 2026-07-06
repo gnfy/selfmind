@@ -1,0 +1,24 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "content": "Preparing to run memory",
+      "event_type": "agent.thinking"
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_jQkEMMjHcL43c8pJB7QwCg7I",
+          "Function": "memory",
+          "Args": "{\"action\":\"add\",\"target\":\"memory\",\"content\":\"用户正在做两个 HTML 小游戏，名称分别是“拳皇格斗”和“坦克大战”。\"}"
+        }
+      ]
+    },
+    {
+      "usage": {
+        "InputTokens": 6682,
+        "OutputTokens": 219
+      }
+    }
+  ]
+}

@@ -1,0 +1,23 @@
+id: timeline_tasks_view
+title: "scenarios 6: /tasks aggregates open work; done work collapses"
+suite: timeline
+workspace: "."
+channel: cli
+
+# Scenario 6: control-command turns only — no model calls, so this case runs
+# offline without a cassette. /new opens a label; /tasks must render the
+# aggregated open-work view (not a flat per-message dump).
+turns:
+  - input: "/new 时间线视图验证"
+  - input: "/tasks"
+
+expect:
+  status: completed
+  max_tool_calls: 0
+  max_duration_seconds: 60
+  contains: ["Open tasks:", "时间线视图验证"]
+
+checks:
+  no_mojibake: true
+  no_empty_response: true
+  no_raw_json_leak: true

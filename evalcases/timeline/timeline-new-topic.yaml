@@ -1,0 +1,25 @@
+id: timeline_new_topic
+title: "scenario 3: unrelated new work mid-stream answers cleanly despite prior chatter"
+require_cassette: true
+suite: timeline
+workspace: "."
+channel: cli
+
+# Scenario 3: after some prior work sits in the spine, a completely unrelated
+# ask must be answered sensibly — spine chatter must not bleed into the reply.
+# (Under P3 both turns may share the open label; that is harmless by design,
+# so no task-id assertion here.)
+turns:
+  - input: "给我三个适合游戏项目的英文代号,只列代号,不要解释,不要读文件。"
+  - input: "用一句话解释 HTTP 404 状态码是什么意思,不要读文件,不要写代码。"
+
+expect:
+  status: completed
+  max_tool_calls: 0
+  max_duration_seconds: 300
+  contains: ["404"]
+
+checks:
+  no_mojibake: true
+  no_empty_response: true
+  no_raw_json_leak: true

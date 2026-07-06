@@ -1,0 +1,14 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "content": "收到"
+    },
+    {
+      "usage": {
+        "InputTokens": 6765,
+        "OutputTokens": 5
+      }
+    }
+  ]
+}

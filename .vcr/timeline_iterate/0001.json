@@ -1,0 +1,68 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "content": "秋"
+    },
+    {
+      "content": "风"
+    },
+    {
+      "content": "掠"
+    },
+    {
+      "content": "过"
+    },
+    {
+      "content": "金"
+    },
+    {
+      "content": "黄"
+    },
+    {
+      "content": "的"
+    },
+    {
+      "content": "田"
+    },
+    {
+      "content": "野"
+    },
+    {
+      "content": "  \n"
+    },
+    {
+      "content": "落"
+    },
+    {
+      "content": "叶"
+    },
+    {
+      "content": "轻"
+    },
+    {
+      "content": "吻"
+    },
+    {
+      "content": "黄"
+    },
+    {
+      "content": "昏"
+    },
+    {
+      "content": "的"
+    },
+    {
+      "content": "河"
+    },
+    {
+      "content": "岸"
+    },
+    {
+      "usage": {
+        "InputTokens": 6577,
+        "OutputTokens": 44
+      }
+    }
+  ]
+}

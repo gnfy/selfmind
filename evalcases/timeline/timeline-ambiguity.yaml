@@ -1,0 +1,27 @@
+id: timeline_ambiguity
+title: "scenario 4: ambiguous reference with two similar works — the agent asks in-turn"
+require_cassette: true
+suite: timeline
+workspace: "."
+channel: cli
+
+# Scenario 4: two similar works exist in the spine; an ambiguous follow-up
+# ("这个游戏") must make the agent ASK which one rather than guess. This is
+# model behavior pinned by the cassette: the clarifying reply should name both
+# candidates.
+turns:
+  - input: "我在做两个HTML小游戏:一个叫'拳皇格斗',一个叫'坦克大战'。先记住这两个名字,回复收到即可,不要读文件。"
+  - input: "这个游戏的动画不太好看,帮我想想怎么改进。"
+
+expect:
+  status: completed
+  # The agent may reasonably glance at the workspace (inspect posture)
+  # before asking which game is meant — allow a few read-only calls.
+  max_tool_calls: 4
+  max_duration_seconds: 300
+  contains: ["拳皇", "坦克"]
+
+checks:
+  no_mojibake: true
+  no_empty_response: true
+  no_raw_json_leak: true

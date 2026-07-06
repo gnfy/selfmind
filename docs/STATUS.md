@@ -121,8 +121,11 @@ is the only priority list in the repo; other docs must point here.
      REMOVED (`intent.continue_window` deprecated no-op). Tests:
      `httpapi/run_labeler_test.go`, `httpapi/task_attach_test.go`,
      `httpapi/task_view_test.go`, `control/task_labels_test.go`.
-   - **P4 eval:** the ten acceptance scenarios in work-timeline.md, recorded
-     cassettes, zh/en/elliptical/cross-endpoint.
+   - **P4 eval: ✅ shipped 2026-07-06.** `evalcases/timeline/` — five cases
+     (iterate/new-topic/ambiguity/cross-endpoint/tasks-view) with committed
+     cassettes replaying offline; scenarios 7-10 map to Go tests (see the
+     suite README's scenario table). The Work Timeline transition P0-P4 is
+     complete.
 1. **P0 — G0: Runtime attachment model** (design:
    `docs/identity-continuity.md` "Runtime attachment model"; owner decisions
    2026-07-04, incl. origin-affinity routing). Sub-items in order:

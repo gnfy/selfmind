@@ -1,0 +1,12 @@
+{
+  "method": "chat",
+  "chat": {
+    "Content": "游戏动画 动作表现 动画过渡 缓动曲线 动效优化",
+    "ToolCalls": null,
+    "Usage": {
+      "InputTokens": 250,
+      "OutputTokens": 146
+    },
+    "FinishReason": ""
+  }
+}

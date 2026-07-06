@@ -1,0 +1,12 @@
+{
+  "method": "chat",
+  "chat": {
+    "Content": "weather_forecast weather_prediction meteorology project_name app_name",
+    "ToolCalls": null,
+    "Usage": {
+      "InputTokens": 262,
+      "OutputTokens": 233
+    },
+    "FinishReason": ""
+  }
+}

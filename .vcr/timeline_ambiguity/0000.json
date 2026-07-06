@@ -1,0 +1,12 @@
+{
+  "method": "chat",
+  "chat": {
+    "Content": "HTML小游戏 拳皇格斗 坦克大战 KOF格斗 坦克游戏",
+    "ToolCalls": null,
+    "Usage": {
+      "InputTokens": 271,
+      "OutputTokens": 195
+    },
+    "FinishReason": ""
+  }
+}

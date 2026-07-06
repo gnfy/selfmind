@@ -97,7 +97,11 @@ func (p *SQLiteProvider) worker() {
 
 			case "GetLatestContext":
 				channel := op.args[1].(string)
-				rows, err := db.Query(`SELECT content FROM trajectories WHERE channel = ? ORDER BY created_at DESC LIMIT 10`, channel)
+				// Spine keys store one slim entry per turn, so the read window
+				// must cover a generous tail of turns (kernel bounds how many it
+				// replays). `id DESC` tiebreaks same-second inserts so the tail
+				// keeps completion order.
+				rows, err := db.Query(`SELECT content FROM trajectories WHERE channel = ? ORDER BY created_at DESC, id DESC LIMIT 32`, channel)
 				if err != nil {
 					res = dbResult{err: err}
 				} else {

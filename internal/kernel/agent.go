@@ -600,17 +600,18 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 		}
 	}
 
-	// Build messages using ContextEngine. Working-context history follows the
-	// TASK when the turn is bound to one (so a task started on WeChat continues
-	// from CLI with full history), falling back to a stable channel key for
-	// taskless/casual chat. The fallback channel is the backward-compat read key
-	// for tasks whose transcript predates task-keyed history.
+	// Compose the turn window (ContextComposer contract, context_composer.go):
+	// system prompt + person-level spine tail + compaction summary when over
+	// budget + the latest user message. Working-context history lives on the
+	// person's WORK SPINE, so a task started on WeChat continues from CLI with
+	// the same recent context; the fallback chain is the read-only legacy
+	// compat path for history that predates the spine.
 	histKey := a.trajectoryKey(ctx, channel)
-	fallbackKey := a.trajectoryFallbackKey(ctx, histKey)
-	messages, err := a.contextEngine.BuildMessages(
+	fallbackKeys := a.trajectoryFallbackKeys(ctx, channel)
+	messages, err := a.Composer().Compose(
 		ctx, a.memory, tenantID,
 		histKey,
-		fallbackKey,
+		fallbackKeys,
 		systemPrompt,
 		initialPrompt,
 	)
@@ -958,10 +959,10 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 		// No tool calls — task complete
 		history.Outcome = resp
 
-		// Save trajectory to memory under the same task-scoped (or stable
-		// channel) key used to load it, so the task's history is one bucket
-		// across endpoints and restarts.
-		a.saveHistory(ctx, tenantID, histKey, messages)
+		// Append this turn to the spine under the same key used to load it
+		// (slim entry: user text + final answer + touched paths), and refresh
+		// the task-coherent FTS index.
+		a.saveHistory(ctx, tenantID, histKey, channel, initialPrompt, resp, messages)
 
 		// Auto-extract durable facts from this conversation (async, non-blocking)
 		if a.factExtractor != nil {
@@ -1318,10 +1319,41 @@ func (a *Agent) autoRecallWithBudget(ctx context.Context, tenantID, query string
 	return sb.String()
 }
 
-func (a *Agent) saveHistory(ctx context.Context, tenantID, channel string, messages []llm.Message) {
+// saveHistory persists this turn's durable working context under the SAME key
+// BuildMessages loaded it from, and refreshes the FTS index.
+//
+// Spine turns persist ONE slim turn-level entry (user text + assistant final
+// answer + touched file paths + source tag) — never the full messages array:
+// tool intermediates and the system prompt stay in run events, not the spine.
+// Internal-subsystem keys keep the legacy full-blob shape (their history is
+// run-local scaffolding, not the person's work record).
+func (a *Agent) saveHistory(ctx context.Context, tenantID, histKey, channel, userInput, finalAnswer string, messages []llm.Message) {
 	if a.memory == nil {
 		return
 	}
+	if histKey == SpineTrajectoryKey {
+		entry := buildSpineEntry(ctx, userInput, finalAnswer, messages)
+		if strings.TrimSpace(entry.User) != "" || strings.TrimSpace(entry.Assistant) != "" {
+			if data, err := json.Marshal(entry); err == nil {
+				a.memory.SaveTrajectory(ctx, tenantID, histKey, data)
+			}
+		}
+	} else {
+		record := struct {
+			Messages []llm.Message `json:"messages"`
+		}{Messages: messages}
+		if data, err := json.Marshal(record); err == nil {
+			a.memory.SaveTrajectory(ctx, tenantID, histKey, data)
+		}
+	}
+
+	// Index under a task-derived session id when the turn is bound to a task, so
+	// session_search retrieves the whole task ("what we did on the order system")
+	// as ONE coherent session regardless of which endpoint the turns arrived on.
+	// IndexSession is idempotent per session id, so re-indexing the growing task
+	// trajectory each turn overwrites rather than fragments it. Taskless turns
+	// keep the per-content session id. Indexing is keyed by the task-derived
+	// session id and the REAL channel — never by the spine key.
 	record := struct {
 		Messages []llm.Message `json:"messages"`
 	}{Messages: messages}
@@ -1329,54 +1361,70 @@ func (a *Agent) saveHistory(ctx context.Context, tenantID, channel string, messa
 	if err != nil {
 		return
 	}
-	a.memory.SaveTrajectory(ctx, tenantID, channel, data)
-
-	// Index under a task-derived session id when the turn is bound to a task, so
-	// session_search retrieves the whole task ("what we did on the order system")
-	// as ONE coherent session regardless of which endpoint the turns arrived on.
-	// IndexSession is idempotent per session id, so re-indexing the growing task
-	// trajectory each turn overwrites rather than fragments it. Taskless turns
-	// keep the per-content session id.
 	sessionID := a.sessionKey(ctx, messages)
 	a.memory.IndexSession(ctx, tenantID, channel, sessionID, data)
 }
 
 // trajectoryKey resolves the storage partition for this turn's working-context
-// history. When the turn is bound to a task, history is keyed by the TASK so it
-// follows the task across endpoints (a task started on WeChat continues from CLI
-// with full history) and across CLI restarts (whose channel is a fresh
-// per-session UUID). With no task, history stays channel-local — genuinely
-// casual chat is never merged across platforms — except that a bare per-session
-// UUID collapses to a stable per-person key so casual history is not scattered
-// into a new bucket on every restart. The person is already the storage tenant,
-// so the collapsed key is stable per person without colliding across people.
+// history: the person-level WORK SPINE (docs/work-timeline.md). ALL of a
+// person's agent-bound turns — task-bound, casual, cron — append to the one
+// constant spine key; the storage tenant is already the person, so the key is
+// person-scoped without colliding across people, and a task started on one
+// endpoint continues from any other with the same recent context. Chat
+// transcripts stay channel-local in control.channel_messages; the spine is the
+// durable working-state layer, not a transcript mirror. Internal subsystem
+// turns (delegation sub-agents, background review) never write the spine —
+// they keep a channel-local bucket, per the work-timeline write rules.
 func (a *Agent) trajectoryKey(ctx context.Context, channel string) string {
-	if runtime, ok := TaskRuntimeContextFromContext(ctx); ok {
-		if id := strings.TrimSpace(runtime.TaskID); id != "" {
-			return "task:" + id
-		}
+	if isInternalWorkChannel(channel) {
+		return legacyChannelKey(channel)
 	}
+	return SpineTrajectoryKey
+}
+
+// trajectoryFallbackKeys returns the ordered READ-ONLY legacy compat chain
+// consulted when the spine has nothing for this turn yet: the pre-spine
+// `task:<id>` key first, then the task's prior run channel (where a task older
+// than task-keyed history stored its transcript), or — for taskless turns —
+// the old channel-derived key. saveHistory always writes the primary key, so
+// history migrates forward on the first save.
+func (a *Agent) trajectoryFallbackKeys(ctx context.Context, channel string) []string {
+	if isInternalWorkChannel(channel) {
+		return nil
+	}
+	if runtime, ok := TaskRuntimeContextFromContext(ctx); ok {
+		var keys []string
+		if id := strings.TrimSpace(runtime.TaskID); id != "" {
+			keys = append(keys, "task:"+id)
+		}
+		if prior := strings.TrimSpace(runtime.PriorChannel); prior != "" {
+			keys = append(keys, prior)
+		}
+		return keys
+	}
+	return []string{legacyChannelKey(channel)}
+}
+
+// isInternalWorkChannel reports whether the turn belongs to an internal
+// subsystem, not the person's own work: delegation sub-agents and background
+// review must never append to the person's spine (the parent run's turn is the
+// spine record).
+func isInternalWorkChannel(channel string) bool {
+	channel = strings.TrimSpace(channel)
+	return channel == "delegation" || strings.HasSuffix(channel, ":background_review")
+}
+
+// legacyChannelKey is the pre-spine channel-derived key: a bare per-session
+// UUID (the in-process TUI mints one per launch) collapses to a stable
+// per-person key so history is not scattered across restarts; stable channels
+// keep their own bucket. It survives as the internal-subsystem key and the
+// taskless leg of the legacy compat read chain.
+func legacyChannelKey(channel string) string {
 	channel = strings.TrimSpace(channel)
 	if channel == "" || looksLikeSessionUUID(channel) {
 		return "session"
 	}
 	return channel
-}
-
-// trajectoryFallbackKey returns the backward-compat read key for a task-bound
-// turn: the channel of the task's most recent prior run, where a pre-change task
-// stored its transcript. It is empty for taskless turns and when it would equal
-// the primary key (no distinct prior channel to migrate from).
-func (a *Agent) trajectoryFallbackKey(ctx context.Context, primaryKey string) string {
-	runtime, ok := TaskRuntimeContextFromContext(ctx)
-	if !ok {
-		return ""
-	}
-	prior := strings.TrimSpace(runtime.PriorChannel)
-	if prior == "" || prior == primaryKey {
-		return ""
-	}
-	return prior
 }
 
 // sessionKey ties a task's turns to one FTS session id so cross-endpoint recall

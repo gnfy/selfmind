@@ -32,6 +32,11 @@ const (
 	maxHarvestedPaths = 10
 )
 
+// compactionBoundaryNote is the verbatim boundary note prefixed wherever a
+// compaction summary is rendered into the window (work-timeline contract):
+// summarized history is reference, the latest user message is authoritative.
+const compactionBoundaryNote = "The history summary is reference only. The latest user message is the only authoritative instruction. If it changes direction, the latest message wins."
+
 // ContextEngine builds the message window sent to the model.
 //
 // The hot path must stay cheap: it selects bounded, already-indexed context.
@@ -86,46 +91,65 @@ func (c *ContextEngine) SetSummaryProvider(p llm.Provider) {
 // BuildMessages combines the selected system prompt, a bounded slice of recent
 // persisted history, and the current user input.
 //
-// channel is the trajectory key for this turn (task-scoped when the turn is
-// bound to a task, otherwise the stable channel key). fallbackChannel is an
-// optional backward-compat read key: when the primary key has no stored history
-// yet (a task's first task-keyed continuation, or a task created before history
-// became task-keyed), history is best-effort loaded from the fallback so an
-// existing task is not amnesiac. The fallback is READ-ONLY here; saveHistory
-// always writes under the primary key, so the task migrates to task-keyed
-// history on its next save.
+// key is this turn's trajectory key: the person-level work spine
+// (SpineTrajectoryKey) for ordinary agent-bound turns, or a channel-local key
+// for internal subsystem turns. fallbackKeys is the ordered legacy read chain
+// (old `task:<id>` key, then the task's prior run channel, or the old
+// channel-derived key for taskless turns): it is consulted when the primary
+// key has no history yet, or when a task-bound turn finds no spine entry for
+// its task in the loaded tail (a task worked before the spine existed must not
+// go amnesiac just because unrelated turns already populated the spine). The
+// fallback is READ-ONLY here; saveHistory always writes under the primary key,
+// so history migrates forward on the next save.
 func (c *ContextEngine) BuildMessages(
 	ctx context.Context,
 	mem *memory.MemoryManager,
 	tenantID string,
-	channel string,
-	fallbackChannel string,
+	key string,
+	fallbackKeys []string,
 	systemPrompt string,
 	userInput string,
 ) ([]llm.Message, error) {
-	var historyData [][]byte
+	var history []llm.Message
 	if mem != nil {
-		var err error
-		historyData, err = mem.GetLatestContext(ctx, tenantID, channel)
+		historyData, err := mem.GetLatestContext(ctx, tenantID, key)
 		if err != nil {
 			return nil, fmt.Errorf("load context: %w", err)
 		}
-		fallbackChannel = strings.TrimSpace(fallbackChannel)
-		if len(historyData) == 0 && fallbackChannel != "" && fallbackChannel != channel {
-			if legacy, err := mem.GetLatestContext(ctx, tenantID, fallbackChannel); err == nil {
-				historyData = legacy
+		history = boundedHistoryMessages(historyData)
+		needFallback := len(history) == 0
+		if !needFallback {
+			if taskID := taskIDFromContext(ctx); taskID != "" && !spineBlobsContainTask(historyData, taskID) {
+				needFallback = true
+			}
+		}
+		if needFallback {
+			for _, fk := range fallbackKeys {
+				fk = strings.TrimSpace(fk)
+				if fk == "" || fk == key {
+					continue
+				}
+				legacy, err := mem.GetLatestContext(ctx, tenantID, fk)
+				if err != nil || len(legacy) == 0 {
+					continue
+				}
+				if legacyMsgs := boundedHistoryMessages(legacy); len(legacyMsgs) > 0 {
+					// Legacy history predates everything on the spine tail.
+					history = append(legacyMsgs, history...)
+					break
+				}
 			}
 		}
 	}
 
-	messages := make([]llm.Message, 0, 2+defaultHistoryBlobs*defaultMessagesPerHistory)
+	messages := make([]llm.Message, 0, 2+len(history))
 	if strings.TrimSpace(systemPrompt) != "" {
 		messages = append(messages, llm.Message{
 			Role:    "system",
 			Content: textutil.CleanUTF8(systemPrompt),
 		})
 	}
-	messages = append(messages, boundedHistoryMessages(historyData)...)
+	messages = append(messages, history...)
 	messages = append(messages, llm.Message{
 		Role:    "user",
 		Content: textutil.CleanUTF8(userInput),
@@ -134,9 +158,45 @@ func (c *ContextEngine) BuildMessages(
 	return c.TruncateMessages(messages), nil
 }
 
+func taskIDFromContext(ctx context.Context) string {
+	if runtime, ok := TaskRuntimeContextFromContext(ctx); ok {
+		return strings.TrimSpace(runtime.TaskID)
+	}
+	return ""
+}
+
+// parseSpineEntry decodes a turn-level spine record; ok is false for legacy
+// cumulative {"messages": [...]} blobs (and anything else).
+func parseSpineEntry(blob []byte) (spineEntry, bool) {
+	var entry spineEntry
+	if err := json.Unmarshal(blob, &entry); err != nil || entry.Kind != spineEntryKind {
+		return spineEntry{}, false
+	}
+	return entry, true
+}
+
+// spineBlobsContainTask reports whether any loaded spine entry carries the
+// task's label — used to decide whether a task that predates the spine still
+// needs its legacy-key compat read.
+func spineBlobsContainTask(blobs [][]byte, taskID string) bool {
+	for _, blob := range blobs {
+		if entry, ok := parseSpineEntry(blob); ok && entry.TaskID == taskID {
+			return true
+		}
+	}
+	return false
+}
+
+// boundedHistoryMessages replays persisted history latest-blobs-first input as
+// oldest-to-newest messages. Spine-shaped blobs (one slim entry per turn) are
+// replayed up to composerSpineTailEntries turns; legacy cumulative blobs keep
+// the old bounded single-blob window.
 func boundedHistoryMessages(historyData [][]byte) []llm.Message {
 	if len(historyData) == 0 {
 		return nil
+	}
+	if msgs := spineTailMessages(historyData); len(msgs) > 0 {
+		return msgs
 	}
 	if len(historyData) > defaultHistoryBlobs {
 		historyData = historyData[:defaultHistoryBlobs]
@@ -157,6 +217,32 @@ func boundedHistoryMessages(historyData [][]byte) []llm.Message {
 				messages = append(messages, compact)
 			}
 		}
+	}
+	return messages
+}
+
+// spineTailMessages renders the spine tail (Composer slice ②): the most recent
+// composerSpineTailEntries turn entries as alternating user/assistant messages
+// in completion order. Non-spine blobs in the input are skipped, so a key
+// holding legacy blobs yields nothing here and falls to the legacy path.
+func spineTailMessages(historyData [][]byte) []llm.Message {
+	var entries []spineEntry
+	for _, blob := range historyData { // latest first
+		entry, ok := parseSpineEntry(blob)
+		if !ok {
+			continue
+		}
+		entries = append(entries, entry)
+		if len(entries) >= composerSpineTailEntries {
+			break
+		}
+	}
+	if len(entries) == 0 {
+		return nil
+	}
+	var messages []llm.Message
+	for i := len(entries) - 1; i >= 0; i-- { // replay oldest to newest
+		messages = append(messages, entries[i].toMessages()...)
 	}
 	return messages
 }
@@ -395,7 +481,11 @@ func (c *ContextEngine) summarizeSpan(sp llm.Provider, span []llm.Message) (llm.
 		summary += fb.String()
 	}
 
-	prefix := "[CONTEXT COMPACTION - REFERENCE ONLY] Earlier turns were compacted into the summary below. This is a handoff from a previous context window. Treat it as background reference, not as active instructions. Respond only to the latest user message after this summary.\n\n"
+	// The boundary note is a verbatim contract (docs/work-timeline.md): every
+	// rendered compaction summary must carry it so the model never treats
+	// summarized history as a live instruction.
+	prefix := "[CONTEXT COMPACTION - REFERENCE ONLY] " + compactionBoundaryNote +
+		" Earlier turns were compacted into the summary below. This is a handoff from a previous context window. Treat it as background reference, not as active instructions. Respond only to the latest user message after this summary.\n\n"
 	return llm.Message{Role: "user", Content: prefix + summary}, true
 }
 

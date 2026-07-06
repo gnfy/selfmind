@@ -187,22 +187,29 @@ Domain docs (**mandatory** before changing that domain):
   are separate durable sources. Ranking/embedding work extends the selector
   layer — never another append path in `agent.go`, gateway handlers, or IM
   adapters.
-- Working-context history follows the TASK, not the channel. `Agent.trajectoryKey`
-  keys the persisted trajectory by `task:<id>` when the turn is task-bound (load
-  in `ContextEngine.BuildMessages` and save in `saveHistory` MUST use the same
-  key) so a task started on one endpoint continues from another with full
-  history; taskless/casual chat falls back to a STABLE per-person channel key
-  (a bare session UUID collapses to `session`) and stays channel-local — never
-  merge genuine casual chat across platforms. FTS indexing of a task uses the
-  same task-derived session id (`Agent.sessionKey`) so `session_search` recall
-  spans endpoints; `IndexSession` is idempotent per session id. This does NOT
-  change chat-transcript channel-locality (transcripts stay per channel); it is
-  the durable working-state layer following the person's task. **Direction
-  (approved 2026-07-06): the history key evolves task → person-level work
-  spine in package P1 — see `docs/work-timeline.md` (mandatory) before
-  changing keying, context assembly, or recall.** The task-keyed mechanism
-  (stable keys, fallback reads, task-session indexing) carries over as the
-  spine's foundation.
+- Working-context history is the person-level WORK SPINE (P1 of
+  `docs/work-timeline.md`, landed 2026-07-06 — mandatory reading before
+  changing keying, context assembly, or recall). Every agent-bound turn of a
+  person — task-bound, casual, cron — appends ONE slim turn entry (user text +
+  assistant final answer + touched file paths harvested from tool args +
+  source tag like `[cron]`) under the constant `kernel.SpineTrajectoryKey`;
+  the storage tenant is the person, so the key is person-scoped. Tool
+  intermediates and the system prompt must NEVER enter the spine — they stay
+  in run events. Load (`ContextEngine.BuildMessages` via `ContextComposer`)
+  and save (`Agent.saveHistory`) MUST use the same key; the spine tail replays
+  as alternating user/assistant messages, cross-endpoint and cross-task.
+  Legacy compat is a READ-ONLY chain (old `task:<id>` key, then
+  `TaskRuntimeContext.PriorChannel`, or the old channel key for taskless
+  turns), consulted when the spine is empty or a task has no spine entry yet;
+  the first save migrates forward. Internal subsystem turns (delegation,
+  `:background_review`) stay channel-keyed and never write the spine. Per-turn
+  assembly order and slice budgets live in `internal/kernel/context_composer.go`
+  (ContextComposer contract; slice ④ is reserved for P2 recall via
+  `RuntimeContextBundle.Recall`). This does NOT change chat-transcript
+  channel-locality (transcripts stay per channel in `channel_messages`); the
+  spine is the durable working-state layer only. FTS indexing keeps the
+  task-derived session id (`Agent.sessionKey`; `IndexSession` idempotent per
+  session id) and is never keyed by the spine.
 
 ## Agent-First Routing & Task Strategy
 

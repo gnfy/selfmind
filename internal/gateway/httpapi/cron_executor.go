@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"selfmind/internal/gateway/api"
+	"selfmind/internal/kernel"
 	"selfmind/internal/kernel/task/cron"
 )
 
@@ -53,6 +54,11 @@ func (e *CronExecutor) RunCronJob(ctx context.Context, job cron.CronJob) error {
 		Content:        prompt,
 		AllowWeb:       job.Web,
 	}
+	// Tag the turn's origin so its work-spine entry reads "[cron] …" — a
+	// non-interactive turn must be distinguishable from the person's own
+	// message when the spine tail is replayed later. Best-effort: the sync run
+	// ctx keeps values (WithoutCancel), a queued-behind-busy retry loses the tag.
+	ctx = kernel.WithTurnSource(ctx, "cron")
 	resp, _ := e.srv.ProcessMessage(ctx, req)
 	if canary {
 		// Liveness check: stay silent on success, alert only on failure.

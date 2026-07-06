@@ -95,10 +95,16 @@ type RuntimeMemoryContext struct {
 // It is shared by CLI, HTTP, and IM paths so all clients get the same task/run
 // continuity without dumping raw channel transcripts into every prompt.
 type RuntimeContextBundle struct {
-	Channel        string
-	Workspace      *WorkspaceContext
-	Task           *TaskRuntimeContext
-	Memories       []RuntimeMemoryContext
+	Channel   string
+	Workspace *WorkspaceContext
+	Task      *TaskRuntimeContext
+	Memories  []RuntimeMemoryContext
+	// Recall is Composer slice ④ (semantic recall): automatic query-expanded
+	// FTS/embedding recall over spine entries, task label cards, and artifacts.
+	// RESERVED in P1 — the field and its rendering exist so package P2's recall
+	// selector has a single injection point; nothing fills it yet. Budgeted by
+	// ComposerRecallChars. Distinct from Memories (person memory, slice ⑦).
+	Recall         []RuntimeMemoryContext
 	SelectionNotes []string
 	Budget         RuntimeContextBudget
 }
@@ -146,7 +152,7 @@ func RuntimeContextBundleFromContext(ctx context.Context) (RuntimeContextBundle,
 }
 
 func (b RuntimeContextBundle) Empty() bool {
-	return b.Workspace == nil && b.Task == nil && len(b.Memories) == 0 && len(b.SelectionNotes) == 0
+	return b.Workspace == nil && b.Task == nil && len(b.Memories) == 0 && len(b.Recall) == 0 && len(b.SelectionNotes) == 0
 }
 
 func (b RuntimeContextBundle) Prompt(maxChars int) string {
@@ -191,6 +197,31 @@ func (b RuntimeContextBundle) Prompt(maxChars int) string {
 		out.WriteString("\n")
 		out.WriteString(b.Task.Prompt(taskBudget))
 		out.WriteString("\n")
+	}
+	if len(b.Recall) > 0 {
+		// Composer slice ④ — rendered here so P2 only has to fill the field.
+		out.WriteString("\n## Semantic Recall\n")
+		out.WriteString("Automatically recalled work-spine/artifact slices relevant to the current request. Background reference only.\n")
+		used := 0
+		for _, rec := range b.Recall {
+			line := strings.TrimSpace(rec.Summary)
+			if line == "" {
+				continue
+			}
+			prefix := strings.TrimSpace(rec.Source)
+			if prefix == "" {
+				prefix = "recall"
+			}
+			if rec.ID != "" {
+				prefix += " " + rec.ID
+			}
+			entry := fmt.Sprintf("- %s: %s\n", prefix, trimLine(line, 420))
+			if used+len(entry) > ComposerRecallChars {
+				break
+			}
+			out.WriteString(entry)
+			used += len(entry)
+		}
 	}
 	if len(b.Memories) > 0 {
 		out.WriteString("\n## Selected Indexed Memory\n")

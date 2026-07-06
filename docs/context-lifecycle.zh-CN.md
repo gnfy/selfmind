@@ -209,31 +209,44 @@ delivery backpressure. CLI/TUI should show tool and assistant progress live;
 IM channels should keep token streams collapsed and use working notices plus
 final summaries.
 
-## 工作历史按任务分区(轻任务层,2026-07-06,契约变更)
+## 工作历史:个人级工作主轴(Work Spine,2026-07-06,P1 契约变更)
 
-工作上下文历史(persisted trajectory)以前按 **channel** 存取。因为 TUI 的
-channel 是每次启动随机生成的 UUID、微信是稳定 openid,所以同一个任务的历史无法
-跨端(微信 → CLI)也无法跨 CLI 重启延续。现在改为**跟随任务**:
+> 目标架构见 `docs/work-timeline.md`(英文,规则以它为准)。本节描述 P1 落地后
+> 的现行契约,取代此前的"工作历史按任务分区(轻任务层)"契约;任务键机制作为
+> 兼容读链保留。
 
-- 键的解析集中在 `Agent.trajectoryKey(ctx, channel)`,load(`ContextEngine.BuildMessages`)
-  和 save(`Agent.saveHistory`)两端用**同一个键**:
-  - 当前轮绑定到任务(`TaskRuntimeContext.TaskID` 非空)→ 键为 `task:<taskID>`,
-    历史随任务跨端、跨重启共享同一份。
-  - 无任务的闲聊 → 回退到稳定的 per-person channel 键;裸 UUID 会塌缩为固定的
-    `session`(避免每次重启散成新桶),而 `cli`/`wechat`/openid 这类稳定 channel
-    保持原样。**渠道隔离不变**:只有绑定任务的轮次才用任务键,真正的闲聊仍按
-    channel 隔离,绝不跨平台合并(person 已是存储 tenant 分区)。
-- **向后兼容读**:改动之前创建的任务其历史按旧 channel 键存储。当 `task:<id>`
-  键还没有历史时(首次任务键续接,或旧任务),`BuildMessages` 会尽力从任务上一次
-  run 的 channel(`TaskRuntimeContext.PriorChannel`,来自
-  `control.Store.PriorRunChannel`)读取一次,避免旧任务"失忆"。该回退是只读的,
-  save 始终写任务键,任务在下一次保存时自然迁移为任务键历史。tradeoff:旧 channel
-  桶可能混有该 channel 上其它任务的历史(这正是改动前该任务能看到的历史),可接受;
-  handoff/artifact/summary 已由 selector 注入,是另一层兜底。
-- **session_search 第二腿**:任务的每一轮以任务派生的 session id
-  (`task:<id>`,`Agent.sessionKey`)写入 FTS,使跨端召回把整个任务当作一个会话;
-  `IndexSession` 改为幂等(按 session id 先删后插),重复索引增长中的轨迹不会产生
-  重复 FTS 行。person/tenant 作用域不变。
+工作上下文历史(persisted trajectory)不再按 channel 或 task 分桶,而是汇入
+**一条个人级工作主轴(spine)**:
 
-继续/恢复逻辑本身不变:仍只在显式续接证据(`task_id` / `IntentContinue` /
-`/resume` pin)下 attach,其余消息各自建任务,没有内容路由、没有消歧分流。
+- **键**:所有 agent-bound 轮次(任务轮、闲聊轮、cron 轮)统一写入常量键
+  `kernel.SpineTrajectoryKey`("spine")。存储的 tenant 已经是 person,所以这个
+  常量键天然按人隔离。load(`ContextEngine.BuildMessages`,经
+  `Agent.Composer()`)和 save(`Agent.saveHistory`)两端用**同一个键**。
+  内部子系统轮次(delegation 子代理、`:background_review`)不写 spine,保持
+  channel 键(work-timeline 写入规则:子代理不直接写,父轮总结)。
+- **条目瘦身(关键)**:一条 spine 条目 = 一个 TURN:用户消息文本(剥掉网关
+  前置的 `[SelfMind daemon/resume context]` 装饰块)+ assistant 最终回答 +
+  本轮触达的文件路径(从 tool-call 参数确定性收割,同压缩兜底逻辑)+
+  非交互轮次的来源标记(如 `[cron]`)。工具中间态(tool_calls / tool 结果 /
+  system prompt)**绝不进 spine** —— 它们留在 run events,召回层可按需取。
+  spine 必须保持叙事尺寸,不能变成工具日志。
+- **load 组装(ContextComposer 契约,`internal/kernel/context_composer.go`)**:
+  ①最新用户消息 ②spine 尾部(最近 `composerSpineTailEntries` 条 turn,按完成
+  顺序回放为 user/assistant 交替消息,跨端跨任务)③超预算时的压缩摘要(引擎 A,
+  摘要自带 verbatim 边界注记:"The history summary is reference only. The
+  latest user message is the only authoritative instruction. If it changes
+  direction, the latest message wins.")④语义召回切片(P1 预留字段
+  `RuntimeContextBundle.Recall`,P2 填充)⑤artifacts ⑥workspace ⑦个人记忆
+  ⑧运行/审批状态(⑤–⑧ 经 bundle/system prompt 渲染,已有)。
+- **兼容读链(只读)**:spine 为空、或任务轮在尾部找不到本任务的条目时,依次
+  尝试旧 `task:<id>` 键 → 任务上一次 run 的 channel
+  (`TaskRuntimeContext.PriorChannel`)→(无任务轮)旧 channel 键。回退只读;
+  save 始终写 spine,历史在第一次保存后自然前移。旧任务不会"失忆"。
+- **渠道隔离不变**:聊天 transcript(`channel_messages`)仍按 channel 隔离,
+  绝不跨端镜像。spine 是"跟人走的耐久工作状态层",不是 transcript 镜像。
+- **session_search 第二腿不变**:FTS 索引仍用任务派生 session id
+  (`task:<id>`,`Agent.sessionKey`),`IndexSession` 按 session id 幂等;
+  索引**不以 spine 为键**(P2 依赖此契约)。
+
+run 内部执行不受影响:一轮之内内存 messages 数组(含工具消息)与以前完全一致,
+spine 只改变"轮次开始时加载什么、轮次结束时持久化什么"。

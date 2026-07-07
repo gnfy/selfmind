@@ -16,12 +16,16 @@ import (
 	"github.com/google/uuid"
 )
 
-// Queue row lifecycle: queued -> started (drained into an async run) ; or
-// queued -> cancelled (/queue clear). "started" is durable so a boot drain can
-// tell which rows were mid-launch when the daemon died and requeue them.
+// Queue row lifecycle: queued -> started (drained into an async run) -> done
+// (the drained run finalized); or queued -> cancelled (/queue clear). "started"
+// is durable so a boot drain can tell which rows were mid-launch when the daemon
+// died and requeue them; "done" is terminal so a COMPLETED drained item is never
+// re-run at the next boot (the duplicate-execution bug: a started row that
+// finalized normally was still requeued and re-ran the completed work).
 const (
 	QueueStatusQueued    = "queued"
 	QueueStatusStarted   = "started"
+	QueueStatusDone      = "done"
 	QueueStatusCancelled = "cancelled"
 )
 

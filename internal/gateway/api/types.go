@@ -55,6 +55,11 @@ type MessageRequest struct {
 	// ApprovalMode is the codex-style approval policy chosen by the client
 	// (read-only / auto-edit / full-auto / on-request). Empty = on-request.
 	ApprovalMode string `json:"approval_mode,omitempty"`
+	// QueueID is set ONLY by the coordinator when it drains a queued task into an
+	// async run, so the run's finalization can mark that queue row done (and thus
+	// never be re-run at the next boot drain). It is internal routing state, never
+	// part of the wire request — hence json:"-".
+	QueueID string `json:"-"`
 }
 
 // DispatchRequest runs a single management tool on the daemon. It backs

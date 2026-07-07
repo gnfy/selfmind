@@ -145,6 +145,58 @@ func TestQueueSurvivesRestartBootDrain(t *testing.T) {
 	}, "boot-drained tasks never ran")
 }
 
+// TestDrainedItemMarkedDoneNotRequeued pins the duplicate-execution fix: a
+// queued item that is drained AND COMPLETES must end 'done' (not left 'started')
+// so a later boot drain never re-runs the finished work.
+func TestDrainedItemMarkedDoneNotRequeued(t *testing.T) {
+	provider := newSlowLLMProvider("done")
+	daemon, store, _ := newDetachedRunServer(t, provider)
+	ctx := context.Background()
+	identity := startBlockedRun(t, daemon, provider)
+
+	// Queue a second task behind the running one, capture its row id.
+	daemon.ProcessMessage(ctx, api.MessageRequest{
+		Platform: "cli", PlatformUserID: "local", Channel: "cli", Content: "the queued task",
+	})
+	queued, _ := store.ListQueued(ctx, identity.TenantID, identity.PersonID, control.QueueStatusQueued)
+	if len(queued) != 1 {
+		t.Fatalf("precondition: queued rows = %d; want 1", len(queued))
+	}
+	rowID := queued[0].ID
+
+	// Release the provider: the running run finishes, drains the queue, and the
+	// drained run then completes too.
+	provider.releaseNow()
+
+	// The drained row transitions to 'done' (not stuck on 'started').
+	waitUntil(t, 10*time.Second, func() bool {
+		r, _ := store.GetQueued(ctx, identity.TenantID, rowID)
+		return r != nil && r.Status == control.QueueStatusDone
+	}, "drained-and-completed row never reached 'done'")
+
+	// No run left executing.
+	waitUntil(t, 5*time.Second, func() bool {
+		runs, _ := store.ListRunningRuns(ctx, identity.TenantID, []string{identity.PersonID})
+		return len(runs) == 0
+	}, "a run stayed running after drain")
+
+	tasksBefore, _ := store.ListTasks(ctx, identity.TenantID, identity.PersonID, 50)
+
+	// A boot drain must NOT resurrect the completed work: the done row is neither
+	// 'started' (requeued) nor 'queued' (drained), so nothing re-runs.
+	daemon.DrainQueuedAtBoot(ctx)
+
+	if r, _ := store.GetQueued(ctx, identity.TenantID, rowID); r == nil || r.Status != control.QueueStatusDone {
+		t.Fatalf("done row must survive boot drain unchanged, got %+v", r)
+	}
+	// Give any erroneous drain a beat, then assert the task count did not grow.
+	time.Sleep(200 * time.Millisecond)
+	tasksAfter, _ := store.ListTasks(ctx, identity.TenantID, identity.PersonID, 50)
+	if len(tasksAfter) != len(tasksBefore) {
+		t.Fatalf("boot drain re-ran completed work: tasks %d -> %d", len(tasksBefore), len(tasksAfter))
+	}
+}
+
 func TestQueueControlCommandsListAndClear(t *testing.T) {
 	provider := newSlowLLMProvider("done")
 	daemon, store, _ := newDetachedRunServer(t, provider)
@@ -356,7 +408,9 @@ func TestDrainCancelsQueuedSlashCommands(t *testing.T) {
 	}, "slash row was not cancelled at drain")
 	waitUntil(t, 30*time.Second, func() bool {
 		r, _ := store.GetQueued(ctx, identity.TenantID, real.ID)
-		return r != nil && r.Status == control.QueueStatusStarted
+		// Drained means it left 'queued': it is 'started' while its run executes
+		// and 'done' once the run finalizes (fast here, so either is acceptable).
+		return r != nil && (r.Status == control.QueueStatusStarted || r.Status == control.QueueStatusDone)
 	}, "real row after the slash row never drained")
 	// The junk must never have become a task.
 	tasks, _ := store.ListTasks(ctx, identity.TenantID, identity.PersonID, 20)

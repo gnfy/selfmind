@@ -3,14 +3,31 @@ package router
 import (
 	"context"
 	"fmt"
+	"runtime/debug"
 	"strings"
 
 	"selfmind/internal/kernel"
 	"selfmind/internal/kernel/identity"
 	"selfmind/internal/kernel/llm"
 	"selfmind/internal/kernel/task"
+	"selfmind/internal/platform/log"
 	"selfmind/internal/runpool"
 )
+
+// recoverStreamPanic converts a panic on an agent streaming goroutine into a
+// stream error event instead of crashing the entire gateway daemon. These
+// goroutines run detached from any net/http per-request recover, so an
+// unrecovered panic in runConversation (the agent turn) would take the whole
+// process down; the caller's stream aggregation instead sees the Err and
+// finalizes the run as failed / task interrupted. Deferred AFTER
+// `defer close(respChan)` so it runs FIRST and can still send before close.
+func recoverStreamPanic(respChan chan<- llm.StreamEvent) {
+	if r := recover(); r != nil {
+		log.Error("agent streaming goroutine panicked; recovered to keep the gateway alive",
+			"panic", fmt.Sprintf("%v", r), "stack", string(debug.Stack()))
+		respChan <- llm.StreamEvent{Err: fmt.Errorf("run aborted by internal error")}
+	}
+}
 
 // Gateway is the lightweight routing facade used by CLI/HTTP/IM before a
 // message enters the durable control-plane flow.
@@ -197,6 +214,7 @@ func (g *Gateway) handleTaskStreaming(ctx context.Context, unifiedUID, channel, 
 	respChan := make(chan llm.StreamEvent, 256)
 	go func() {
 		defer close(respChan)
+		defer recoverStreamPanic(respChan)
 		resp, usage, err := g.runConversation(ctx, unifiedUID, channel, input)
 		if err != nil {
 			respChan <- llm.StreamEvent{Err: err}
@@ -242,6 +260,7 @@ func (g *Gateway) runAgentStreaming(ctx context.Context, unifiedUID, channel, in
 	respChan := make(chan llm.StreamEvent, 256)
 	go func() {
 		defer close(respChan)
+		defer recoverStreamPanic(respChan)
 		resp, usage, err := g.runConversation(ctx, unifiedUID, channel, input)
 		if err != nil {
 			respChan <- llm.StreamEvent{Err: err}

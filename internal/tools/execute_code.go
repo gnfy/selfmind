@@ -7,8 +7,15 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sync"
 	"time"
+
+	"selfmind/internal/platform/log"
 )
+
+// sandboxWarnOnce ensures the "no real isolation" warning is emitted once per
+// process, not on every execute_code call.
+var sandboxWarnOnce sync.Once
 
 // =============================================================================
 // Code Execution Tool
@@ -57,6 +64,14 @@ func (t *ExecuteCodeTool) Execute(args map[string]interface{}) (string, error) {
 	if !ok || code == "" {
 		return "", fmt.Errorf("code is required")
 	}
+
+	// Residual-risk warning: applySandboxLimits is process-group containment
+	// only, NOT real isolation (namespaces/seccomp/cgroups/container). Code that
+	// reaches here has already cleared the approval funnel, but there is no OS
+	// sandbox confining what it can touch on the host. Emitted once per process.
+	sandboxWarnOnce.Do(func() {
+		log.Warn("execute_code runs without OS isolation (process-group containment only); the executed code has full host access under this user")
+	})
 
 	language, _ := args["language"].(string)
 	if language == "" {

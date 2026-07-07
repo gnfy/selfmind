@@ -42,10 +42,19 @@ func TestApprovalNeeded(t *testing.T) {
 		{ApprovalAutoEdit, "patch", false, false},
 		{ApprovalAutoEdit, "write_file", true, true}, // flagged edit (e.g. out of workspace)
 		{ApprovalAutoEdit, "terminal", false, true},
-		// on-request only asks on dangerous.
+		// on-request asks on dangerous OR any arbitrary-code exec tool (running
+		// commands/code is inherently approval-worthy, not gated on the heuristic).
 		{ApprovalOnRequest, "write_file", false, false},
-		{ApprovalOnRequest, "terminal", false, false},
+		{ApprovalOnRequest, "terminal", false, true},
 		{ApprovalOnRequest, "terminal", true, true},
+		{ApprovalOnRequest, "execute_code", false, true},
+		{ApprovalOnRequest, "shell", false, true},
+		{ApprovalOnRequest, "read_file", false, false},
+		// smart gates on exec tools too (then the LLM judge triages the ask).
+		{ApprovalSmart, "terminal", false, true},
+		{ApprovalSmart, "execute_code", false, true},
+		{ApprovalSmart, "read_file", false, false},
+		{ApprovalSmart, "write_file", true, true},
 	}
 	for _, r := range rows {
 		if got := approvalNeeded(r.mode, r.tool, r.dangerous); got != r.want {

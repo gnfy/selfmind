@@ -345,6 +345,22 @@ Domain docs (**mandatory** before changing that domain):
   is a safety-policy decision, not a user preference). Keep the set TIGHT —
   merely "dangerous" ops stay in `dangerousToolCall` behind normal approval —
   and never let a mode, a session grant, or an LLM triage step (H2) override it.
+  Both the floor AND `dangerousToolCall` read the exec payload via
+  `execCommandPayload` (command/code/script — so `execute_code`'s `args["code"]`
+  is inspected, not just `args["command"]`) and classify WRAPPER-UNWRAPPED
+  segments (`expandCommandSegments`): a shell `-c` script and
+  `sudo/doas/env/xargs/nohup/timeout/nice/ionice/setsid/stdbuf/command` prefixes
+  are unwrapped (bounded depth 3) to their real inner program, so
+  `bash -c "rm -rf /"` / `sudo rm -rf /` cannot slip past. An unparseable wrapped
+  payload degrades to dangerous (approval), never to a hard block — the floor
+  only denies what it can positively identify.
+- Running ARBITRARY CODE always asks: `approvalNeeded` returns true for
+  `isExecTool` (`terminal`/`shell`/`execute_command`/`execute_code`) in
+  on-request AND smart modes, regardless of the dangerous heuristic. The
+  heuristic is a read-side NARROWING optimization, never a gate that lets
+  unprompted code execution through (it once left `execute_code` fully
+  unapproved). Only full-auto (and auto-edit for edits) bypasses; the hard floor
+  still fires above everything.
 - Class-level approval memory (`approval_grants` table + `ApprovalGrantStore`):
   approving a coarse action CLASS (`approvalPatternKey`) for a task (session) or
   person (persistent) suppresses later same-class asks. The pattern key is a

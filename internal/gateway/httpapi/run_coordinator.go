@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"time"
@@ -194,6 +195,16 @@ func activeRunCopy(active *activeRun) *activeRun {
 // structured outcome, handoff, artifacts, and finishing event.
 func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.IdentityContext, req api.MessageRequest, intent router.IntentResult) (api.MessageResponse, int) {
 	d := c.srv
+	// A drained queue row transitions to 'done' the moment its async run returns
+	// through ANY terminal path — normal completion, an early error return, or a
+	// panic unwinding through this defer. Marking it done (not leaving it
+	// 'started') is what stops boot recovery from re-running already-completed
+	// work. Uses a fresh context so a cancelled turn ctx cannot skip the write.
+	if req.QueueID != "" && d != nil && d.Control != nil {
+		defer func() {
+			_ = d.Control.MarkQueued(context.Background(), identity.TenantID, req.QueueID, control.QueueStatusDone)
+		}()
+	}
 	if _, err := c.prepareRequestWorkspace(ctx, identity, &req); err != nil {
 		return api.MessageResponse{Identity: identity, Error: err.Error(), Turn: messageTurn("failed", "", "idle", "", "", err.Error()), Context: messageContextBudget(llmUsageZero())}, http.StatusInternalServerError
 	}
@@ -393,6 +404,18 @@ func (c *RunCoordinator) startAsyncRun(identity *control.IdentityContext, req ap
 		defer c.endActive(identity.PersonID)
 		defer runCancel()
 		defer stopProgressNotices()
+		// Panic firewall: async runs (IM, queue drain, cron, detached CLI) have
+		// no net/http per-request recover shielding them, so an unrecovered panic
+		// in runMessage would crash the ENTIRE gateway daemon. Registered LAST so
+		// it unwinds FIRST — before endActive/drainQueue — letting it read the
+		// active-run registry to finalize the run/task while the slot still
+		// exists. endActive + drainQueue then still run, so the person is never
+		// left wedged behind a dead run.
+		defer func() {
+			if r := recover(); r != nil {
+				c.recoverAsyncRun(identity, req, r)
+			}
+		}()
 		resp, _ := c.runMessage(runCtx, identity, req, intent)
 		c.deliverAsyncResult(context.Background(), identity, req, resp)
 	}()
@@ -407,6 +430,53 @@ func (c *RunCoordinator) startAsyncRun(identity *control.IdentityContext, req ap
 		Accepted: true,
 		Turn:     messageTurn("accepted", "running", "running", "", "", notice),
 	}
+}
+
+// recoverAsyncRun contains a panicked async run so the daemon survives. It logs
+// the panic with its stack, then reuses the ordinary failure-finalize contract:
+// the run is marked failed and the task interrupted (non-terminal/resumable), so
+// status, the active-run registry, and the queue stay consistent — the caller's
+// deferred endActive + drainQueue still run afterward, freeing the person's slot
+// so they are not wedged. It never re-panics. Run/task ids come from the active
+// registry snapshot (still present because this defer unwinds before endActive).
+func (c *RunCoordinator) recoverAsyncRun(identity *control.IdentityContext, req api.MessageRequest, r interface{}) {
+	log.Error("async run panicked; recovered to keep the gateway alive",
+		"person", identity.PersonID, "channel", req.Channel,
+		"panic", fmt.Sprintf("%v", r), "stack", string(debug.Stack()))
+	if c.srv == nil || c.srv.Control == nil {
+		return
+	}
+	active := c.currentActive(identity.PersonID)
+	if active == nil {
+		// Panic before the run was registered (e.g. during workspace/task
+		// resolution): nothing to finalize; endActive/drainQueue handle the slot.
+		return
+	}
+	ctx := context.Background()
+	tenant := active.TenantID
+	if tenant == "" {
+		tenant = identity.TenantID
+	}
+	if active.RunID != "" {
+		_ = c.srv.Control.FinishRun(ctx, tenant, active.RunID, "failed")
+	}
+	if active.TaskID != "" {
+		_ = c.srv.Control.UpdateTaskStatus(ctx, tenant, active.TaskID, "interrupted", "run aborted by internal error", nil)
+		_, _ = c.srv.Control.AppendEvent(ctx, control.Event{
+			TaskID:     active.TaskID,
+			RunID:      active.RunID,
+			Type:       "run.failed",
+			Visibility: "task",
+			Channel:    active.Channel,
+			Payload:    mustJSON(map[string]string{"error": "internal error", "reason": "run panicked and was recovered"}),
+		})
+	}
+	// Let the origin endpoint know the turn ended instead of hanging forever.
+	c.deliverAsyncResult(ctx, identity, req, api.MessageResponse{
+		Identity: identity,
+		Error:    "internal error: the run was aborted",
+		Turn:     messageTurn("failed", "interrupted", "idle", active.TaskID, active.RunID, "run aborted by internal error"),
+	})
 }
 
 // drainQueue starts the next queued task for a person as an async run, once no
@@ -476,6 +546,10 @@ func (c *RunCoordinator) drainQueue(identity *control.IdentityContext) {
 		ApprovalMode:   next.ApprovalMode,
 		WorkspaceID:    next.WorkspaceID,
 		Async:          true,
+		// Carry the queue row id so the drained run's finalization marks it done
+		// (QueueStatusDone) — otherwise the row stays 'started' and boot recovery
+		// re-runs the already-completed work.
+		QueueID: next.ID,
 	}
 	drainIdentity := identity
 	// Reproduce the queued item's own account (platform/platform_user_id may

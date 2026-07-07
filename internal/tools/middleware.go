@@ -200,10 +200,15 @@ func approvalNeeded(mode ApprovalMode, toolName string, dangerous bool) bool {
 	case ApprovalFullAuto:
 		return false
 	case ApprovalSmart:
-		// Gates on a dangerous op like on-request. The smart-specific behavior
-		// (LLM triage before the human ask) lives in SmartApprovalMiddleware,
-		// layered after this gate; the gate itself stays here.
-		return dangerous
+		// Gates on any arbitrary-code exec tool OR a dangerous op. Running
+		// arbitrary commands/code is inherently approval-worthy: the `dangerous`
+		// heuristic is a NARROWING optimization for known-safe reads, never a
+		// gate that lets arbitrary exec through unprompted (it historically only
+		// inspected args["command"], so execute_code's args["code"] payload slid
+		// past it entirely and ran with NO approval). In smart mode the exec ask
+		// is then triaged by the LLM judge in SmartApprovalMiddleware; the gate
+		// itself stays here.
+		return isExecTool(toolName) || dangerous
 	case ApprovalReadOnly:
 		return isWriteTool(toolName) || isExecTool(toolName) || dangerous
 	case ApprovalAutoEdit:
@@ -211,7 +216,11 @@ func approvalNeeded(mode ApprovalMode, toolName string, dangerous bool) bool {
 		// workspace); command execution always asks.
 		return isExecTool(toolName) || dangerous
 	default: // on-request
-		return dangerous
+		// Arbitrary-code exec (terminal/shell/execute_command/execute_code)
+		// ALWAYS asks, even when the dangerous heuristic does not fire: the
+		// heuristic is a read-side optimization, not an authorization for
+		// unprompted code execution. Non-exec tools stay gated on `dangerous`.
+		return isExecTool(toolName) || dangerous
 	}
 }
 
@@ -530,7 +539,7 @@ func hardlineToolCall(projectRoot, toolName string, args map[string]interface{})
 	if !isExecTool(toolName) {
 		return false, ""
 	}
-	cmd, _ := args["command"].(string)
+	cmd := execCommandPayload(toolName, args)
 	if strings.TrimSpace(cmd) == "" {
 		return false, ""
 	}
@@ -542,6 +551,8 @@ func hardlineToolCall(projectRoot, toolName string, args map[string]interface{})
 	}
 
 	// Raw-disk destruction via dd of=/dev/... or a redirect into /dev/...
+	// These are substring checks on the FULL command, so they already pierce
+	// any shell/priv wrapper (`bash -c "dd ... of=/dev/sda"`).
 	for _, dev := range hardlineDiskDevices {
 		if strings.Contains(lower, "of="+dev) {
 			return true, "overwrites raw disk device: " + dev + "*"
@@ -551,9 +562,14 @@ func hardlineToolCall(projectRoot, toolName string, args map[string]interface{})
 		}
 	}
 
-	// Per-segment program + argument inspection.
+	// Per-segment program + argument inspection over the WRAPPER-UNWRAPPED
+	// segments, so `bash -c "rm -rf /"`, `sudo rm -rf /`, and `env rm -rf $HOME`
+	// are classified by their real inner program, not the wrapper. The floor
+	// stays TIGHT: an unwrappable payload does NOT hard-block here (that only
+	// raises the dangerous heuristic) — deny only what we can positively identify.
 	home := strings.TrimRight(os.Getenv("HOME"), "/")
-	for _, fields := range shellSegments(cmd) {
+	segs, _ := expandCommandSegments(cmd, 0)
+	for _, fields := range segs {
 		progIdx, ok := segmentProgram(fields)
 		if !ok {
 			continue
@@ -635,29 +651,9 @@ func hardlineProtectedRootTarget(target, home string) (string, bool) {
 	return "", false
 }
 
-// shellSegments splits a command line into segments on shell separators and
-// returns the fields of each non-empty segment. It is a heuristic for approval
-// gating (like tokenizeCommand), not a real shell parser.
-func shellSegments(cmd string) [][]string {
-	raw := strings.FieldsFunc(cmd, func(r rune) bool {
-		switch r {
-		case ';', '|', '&', '\n', '`', '(', ')':
-			return true
-		}
-		return false
-	})
-	out := make([][]string, 0, len(raw))
-	for _, seg := range raw {
-		if fs := strings.Fields(seg); len(fs) > 0 {
-			out = append(out, fs)
-		}
-	}
-	return out
-}
-
 // segmentProgram returns the index of the invoked program in a segment's
-// fields, skipping leading VAR=value environment assignments (mirrors
-// tokenizeCommand). ok=false when the segment is only assignments.
+// fields, skipping leading VAR=value environment assignments. ok=false when the
+// segment is only assignments.
 func segmentProgram(fields []string) (int, bool) {
 	i := 0
 	for i < len(fields) && strings.Contains(fields[i], "=") && !strings.ContainsAny(fields[i], "/\\") {
@@ -682,20 +678,32 @@ var dangerousBinaries = map[string]struct{}{
 var destructiveSubstrings = []string{"> /dev/", ":(){", "/dev/sd", "/dev/nvme"}
 
 func dangerousToolCall(projectRoot, toolName string, args map[string]interface{}) (bool, string) {
-	if toolName == "execute_command" || toolName == "terminal" {
-		cmd, _ := args["command"].(string)
+	if isExecTool(toolName) {
+		cmd := execCommandPayload(toolName, args)
 		for _, pattern := range destructiveSubstrings {
 			if strings.Contains(cmd, pattern) {
 				return true, fmt.Sprintf("contains dangerous pattern: %s", pattern)
 			}
 		}
-		// Tokenize on shell separators so each invoked program in a pipeline or
-		// chain is inspected by basename, defeating prefix tricks like /bin/rm.
-		for _, tok := range tokenizeCommand(cmd) {
-			base := filepath.Base(tok)
+		// Inspect each WRAPPER-UNWRAPPED segment's program by basename, defeating
+		// both prefix tricks like /bin/rm AND wrapper tricks like
+		// `bash -c "rm ..."` / `sudo rm ...` / `env rm ...`.
+		segs, unparsed := expandCommandSegments(cmd, 0)
+		for _, fields := range segs {
+			progIdx, ok := segmentProgram(fields)
+			if !ok {
+				continue
+			}
+			base := filepath.Base(fields[progIdx])
 			if _, bad := dangerousBinaries[base]; bad {
 				return true, fmt.Sprintf("invokes dangerous command: %s", base)
 			}
+		}
+		// A wrapper whose payload we could not extract (e.g. `bash script.sh`,
+		// `sh -s`) is opaque: treat it as dangerous (needs approval) but never
+		// hardline. This is the "can't parse → dangerous, not hard-blocked" rule.
+		if unparsed {
+			return true, "invokes an opaque wrapped command"
 		}
 	}
 
@@ -712,29 +720,213 @@ func dangerousToolCall(projectRoot, toolName string, args map[string]interface{}
 	return false, ""
 }
 
-// tokenizeCommand splits a shell command line into the program names it would
-// invoke. It breaks on shell separators (; | & newlines) and, for each
-// segment, returns the first word that is not a leading VAR=value assignment.
-// This is a heuristic for approval gating, not a shell parser.
-func tokenizeCommand(cmd string) []string {
-	segments := strings.FieldsFunc(cmd, func(r rune) bool {
+// execCommandPayload returns the shell/code payload an exec tool would run. The
+// classifier heuristics were originally written for terminal-style tools that
+// carry their command in args["command"], which silently exempted execute_code
+// (payload in args["code"]) from BOTH the hard floor and the dangerous-op
+// heuristic. This normalizes across the exec tools so the same string checks see
+// the real payload regardless of which arg key holds it.
+func execCommandPayload(toolName string, args map[string]interface{}) string {
+	if !isExecTool(toolName) {
+		return ""
+	}
+	for _, key := range []string{"command", "code", "script"} {
+		if v, ok := args[key].(string); ok && strings.TrimSpace(v) != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+// maxWrapperDepth bounds how deep the wrapper unwrapper recurses (e.g.
+// `sudo bash -c "env rm -rf /"`), so pathological nesting cannot spin the
+// classifier.
+const maxWrapperDepth = 3
+
+// shellDashCWrappers invoke a shell that runs a `-c "<script>"` payload; the
+// real command lives inside the quoted script, invisible to a first-token scan.
+var shellDashCWrappers = map[string]struct{}{
+	"sh": {}, "bash": {}, "zsh": {}, "dash": {},
+}
+
+// execPrefixWrappers prefix another command (optionally after their own flags
+// and, for env, VAR=value assignments). The wrapped program is the real target.
+var execPrefixWrappers = map[string]struct{}{
+	"env": {}, "sudo": {}, "doas": {}, "xargs": {}, "nohup": {}, "timeout": {},
+	"nice": {}, "ionice": {}, "setsid": {}, "stdbuf": {}, "command": {},
+}
+
+// wrapperValueFlags lists, per exec-prefix wrapper, the SEPARATED short flags
+// that consume the following token as their value (e.g. `sudo -u root <cmd>`).
+// Skipping the value is what stops `sudo -u root rm -rf /` from mis-identifying
+// `root` as the command and missing the `rm`. Attached forms (`-uroot`,
+// `--user=root`) are self-contained single tokens and need no entry.
+var wrapperValueFlags = map[string]map[string]struct{}{
+	"sudo":    {"-u": {}, "-g": {}, "-p": {}, "-C": {}, "-r": {}, "-t": {}, "-T": {}, "-U": {}, "-h": {}},
+	"doas":    {"-u": {}, "-C": {}},
+	"env":     {"-u": {}, "-C": {}, "-S": {}},
+	"nice":    {"-n": {}},
+	"ionice":  {"-c": {}, "-n": {}, "-p": {}, "-P": {}},
+	"timeout": {"-s": {}, "-k": {}, "--signal": {}, "--kill-after": {}},
+	"xargs":   {"-n": {}, "-I": {}, "-P": {}, "-L": {}, "-s": {}, "-d": {}, "-E": {}, "-a": {}},
+	"stdbuf":  {"-i": {}, "-o": {}, "-e": {}},
+}
+
+// expandCommandSegments splits a command line into its EFFECTIVE segments,
+// recursively unwrapping shell/priv/exec wrappers so downstream classifiers see
+// the wrapped payload. Each returned segment starts at its real program (leading
+// env assignments stripped). unparsed reports whether any wrapper's payload
+// could not be extracted, so the caller can degrade to "dangerous, not hardline".
+// Shared by hardlineToolCall (the floor) and dangerousToolCall (the heuristic).
+func expandCommandSegments(cmd string, depth int) (segs [][]string, unparsed bool) {
+	for _, seg := range splitTopLevelSegments(cmd) {
+		fields := shellFields(seg)
+		if len(fields) == 0 {
+			continue
+		}
+		sub, u := expandSegment(fields, depth)
+		segs = append(segs, sub...)
+		unparsed = unparsed || u
+	}
+	return segs, unparsed
+}
+
+// expandSegment unwraps a single tokenized segment. A shell `-c` wrapper is
+// replaced by the segments of its script; an exec-prefix wrapper is replaced by
+// re-classifying from its wrapped program. A wrapper we cannot see through
+// yields the wrapper segment itself plus unparsed=true.
+func expandSegment(fields []string, depth int) (segs [][]string, unparsed bool) {
+	progIdx, ok := segmentProgram(fields)
+	if !ok {
+		return nil, false
+	}
+	base := strings.ToLower(filepath.Base(fields[progIdx]))
+	rest := fields[progIdx+1:]
+	if depth < maxWrapperDepth {
+		if _, isShell := shellDashCWrappers[base]; isShell {
+			if script, found := dashCScript(rest); found {
+				return expandCommandSegments(script, depth+1)
+			}
+			return [][]string{fields[progIdx:]}, true
+		}
+		if _, isExec := execPrefixWrappers[base]; isExec {
+			if inner, found := execWrappedCommand(base, rest); found {
+				return expandSegment(inner, depth+1)
+			}
+			return [][]string{fields[progIdx:]}, true
+		}
+	}
+	return [][]string{fields[progIdx:]}, false
+}
+
+// dashCScript returns the script a shell `-c` runs. Because shellFields strips
+// quotes and splits on whitespace, a multi-word script like "rm -rf /" arrives
+// as several tokens; rejoining everything after the `-c` flag reconstructs it
+// (a small over-capture of any positional $0/$1 args after the script is
+// harmless — it only adds more tokens to classify). Matches `-c`, `--command`,
+// and a combined short cluster ending in c (e.g. `-lc`).
+func dashCScript(rest []string) (string, bool) {
+	for i := 0; i < len(rest); i++ {
+		tok := rest[i]
+		isDashC := tok == "-c" || tok == "--command" ||
+			(strings.HasPrefix(tok, "-") && !strings.HasPrefix(tok, "--") && len(tok) > 1 && strings.HasSuffix(tok, "c"))
+		if isDashC {
+			if i+1 < len(rest) {
+				return strings.Join(rest[i+1:], " "), true
+			}
+			return "", false
+		}
+	}
+	return "", false
+}
+
+// execWrappedCommand skips an exec-prefix wrapper's own flags, flag-values, and
+// env assignments (and timeout's leading DURATION) to return the wrapped command
+// fields. found=false when everything was consumed as wrapper options.
+func execWrappedCommand(wrapper string, rest []string) ([]string, bool) {
+	valueFlags := wrapperValueFlags[wrapper]
+	for i := 0; i < len(rest); i++ {
+		tok := rest[i]
+		switch {
+		case tok == "--":
+			if i+1 < len(rest) {
+				return rest[i+1:], true
+			}
+			return nil, false
+		case strings.HasPrefix(tok, "-"):
+			if valueFlags != nil {
+				if _, needsValue := valueFlags[tok]; needsValue && i+1 < len(rest) {
+					i++ // consume the flag's separated value
+				}
+			}
+		case strings.Contains(tok, "=") && !strings.ContainsAny(tok, "/\\"):
+			// leading VAR=value assignment (env), skip
+		case wrapper == "timeout" && isDurationToken(tok):
+			// `timeout DURATION cmd...`: the duration precedes the command
+		default:
+			return rest[i:], true
+		}
+	}
+	return nil, false
+}
+
+// isDurationToken reports whether tok looks like a timeout duration (5, 30s,
+// 2m, 1.5h). Used only to skip timeout's leading argument; a real command name
+// never matches this shape.
+func isDurationToken(tok string) bool {
+	if tok == "" {
+		return false
+	}
+	if s := tok[len(tok)-1]; s == 's' || s == 'm' || s == 'h' || s == 'd' {
+		tok = tok[:len(tok)-1]
+	}
+	if tok == "" {
+		return false
+	}
+	seenDot := false
+	for _, r := range tok {
+		switch {
+		case r >= '0' && r <= '9':
+		case r == '.' && !seenDot:
+			seenDot = true
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// splitTopLevelSegments splits s on shell separators (; | & newline backtick
+// parens). It is deliberately NOT quote-aware: a separator inside quotes still
+// splits, which is strictly more CONSERVATIVE for approval classification (a
+// command hidden after an in-quote `;` still surfaces as its own segment) and,
+// combined with the quote-stripping in shellFields, lets the classifier see a
+// shell command embedded inside a code payload — e.g. execute_code running
+// `os.system('rm -rf /')`, where the parens/quotes are just delimiters.
+func splitTopLevelSegments(s string) []string {
+	return strings.FieldsFunc(s, func(r rune) bool {
 		switch r {
 		case ';', '|', '&', '\n', '`', '(', ')':
 			return true
 		}
 		return false
 	})
-	var progs []string
-	for _, seg := range segments {
-		for _, field := range strings.Fields(seg) {
-			if strings.Contains(field, "=") && !strings.ContainsAny(field, "/\\") {
-				continue // leading environment assignment, skip to the real program
-			}
-			progs = append(progs, field)
-			break
+}
+
+// shellFields strips shell quote characters and splits the segment on
+// whitespace. Real shells GROUP a quoted span into one argument; treating its
+// words individually instead is intentional here — it can only over-split (a
+// false "dangerous", which merely asks for approval), never hide a program,
+// and it means a wrapped `-c "rm -rf /"` script re-tokenizes cleanly once
+// dashCScript rejoins the tokens after `-c`.
+func shellFields(seg string) []string {
+	cleaned := strings.Map(func(r rune) rune {
+		if r == '\'' || r == '"' {
+			return -1
 		}
-	}
-	return progs
+		return r
+	}, seg)
+	return strings.Fields(cleaned)
 }
 
 func contextFromArgs(args map[string]interface{}) context.Context {

@@ -318,6 +318,12 @@ func renderUserMessage(content string, width int) string {
 	return "\n" + style.Render(strings.Join(lines, "\n"))
 }
 
+// currentMarkerStyle highlights the gateway's "← current" marker (e.g. in the
+// /workspaces list) so the active selection stands out — same cyan family as
+// the command hints. Applied at render time only; the gateway text stays plain
+// for IM surfaces.
+var currentMarkerStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("39"))
+
 func renderAssistantMessage(content string, width int) string {
 	content = strings.TrimSpace(content)
 	if content == "" {
@@ -332,6 +338,9 @@ func renderAssistantMessage(content string, width int) string {
 		if strings.TrimSpace(line) == "" {
 			lines[i] = ""
 			continue
+		}
+		if strings.Contains(line, "← current") {
+			line = strings.ReplaceAll(line, "← current", currentMarkerStyle.Render("← current"))
 		}
 		lines[i] = "  " + line
 	}

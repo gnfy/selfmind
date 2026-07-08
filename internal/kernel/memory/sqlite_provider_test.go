@@ -112,6 +112,32 @@ func TestSQLiteProvider_TaskSessionRecall(t *testing.T) {
 	}
 }
 
+func TestSQLiteProvider_ChineseRecallFallback(t *testing.T) {
+	p, err := NewSQLiteProvider(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewSQLiteProvider: %v", err)
+	}
+	defer p.Close()
+
+	const tenant = "person-cn"
+	const sessionID = "task:kof97"
+	traj := []byte(`{"messages":[{"role":"user","content":"九七对战游戏需要增加跳跃攻击和打击反馈"},{"role":"assistant","content":"已修改 arcade-fury-97.html"}]}`)
+	if err := p.IndexMessagesFromTrajectory(nil, tenant, "weixin", sessionID, traj); err != nil {
+		t.Fatalf("IndexMessagesFromTrajectory: %v", err)
+	}
+
+	sessions, err := p.SearchSessions(tenant, "跳跃攻击", 5)
+	if err != nil {
+		t.Fatalf("SearchSessions: %v", err)
+	}
+	if len(sessions) == 0 {
+		t.Fatal("expected Chinese LIKE fallback to retrieve the task session")
+	}
+	if sessions[0].SessionID != sessionID {
+		t.Fatalf("session id = %q, want %q", sessions[0].SessionID, sessionID)
+	}
+}
+
 func TestSQLiteProvider_MultiTenantIsolation(t *testing.T) {
 	dir := t.TempDir()
 	p, err := NewSQLiteProvider(dir)

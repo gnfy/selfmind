@@ -113,6 +113,36 @@ func TestSendRejectsInvalidMode(t *testing.T) {
 	}
 }
 
+func TestExtractTaskResumeCommand(t *testing.T) {
+	stdout := &bytes.Buffer{}
+	stderr := &bytes.Buffer{}
+	app := &App{args: []string{"selfmind", "resume", "task_12345678"}, stdout: stdout, stderr: stderr}
+
+	handled, code := app.extractTaskResumeCommand()
+	if !handled || code != 0 {
+		t.Fatalf("handled = %v, code = %d", handled, code)
+	}
+	if app.resumeTaskRef != "task_12345678" {
+		t.Fatalf("resumeTaskRef = %q", app.resumeTaskRef)
+	}
+	if len(app.args) != 1 || app.args[0] != "selfmind" {
+		t.Fatalf("args after extraction = %+v", app.args)
+	}
+}
+
+func TestExtractTaskResumeCommandRequiresRef(t *testing.T) {
+	stderr := &bytes.Buffer{}
+	app := &App{args: []string{"selfmind", "resume"}, stderr: stderr}
+
+	handled, code := app.extractTaskResumeCommand()
+	if !handled || code != 2 {
+		t.Fatalf("handled = %v, code = %d", handled, code)
+	}
+	if !strings.Contains(stderr.String(), "usage: selfmind resume") {
+		t.Fatalf("stderr = %q", stderr.String())
+	}
+}
+
 func TestGatewayErrorLineExtractsJSONError(t *testing.T) {
 	if got := gatewayErrorLine("500 Internal Server Error", []byte(`{"error":"approval request not found: apr_x"}`)); got != "approval request not found: apr_x" {
 		t.Fatalf("got %q", got)

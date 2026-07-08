@@ -127,6 +127,10 @@ func OpenStore(dataDir string) (*Store, error) {
 		return nil, err
 	}
 	db.SetMaxOpenConns(1)
+	if _, err := db.Exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout=5000;`); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("configure sqlite: %w", err)
+	}
 	store := &Store{db: db}
 	if err := store.InitSchema(context.Background()); err != nil {
 		db.Close()
@@ -229,6 +233,8 @@ CREATE TABLE IF NOT EXISTS task_runs (
 	cancel_requested INTEGER NOT NULL DEFAULT 0,
 	last_error TEXT
 );
+CREATE INDEX IF NOT EXISTS idx_task_runs_task_started ON task_runs(tenant_id, task_id, started_at);
+CREATE INDEX IF NOT EXISTS idx_task_runs_person_status ON task_runs(tenant_id, person_id, status, started_at);
 CREATE TABLE IF NOT EXISTS task_events (
 	id TEXT PRIMARY KEY,
 	task_id TEXT NOT NULL,
@@ -251,6 +257,7 @@ CREATE TABLE IF NOT EXISTS channel_messages (
 	content TEXT NOT NULL,
 	created_at INTEGER NOT NULL
 );
+CREATE INDEX IF NOT EXISTS idx_channel_messages_person_channel ON channel_messages(tenant_id, person_id, channel, created_at);
 CREATE TABLE IF NOT EXISTS task_handoffs (
 	id TEXT PRIMARY KEY,
 	task_id TEXT NOT NULL,
@@ -262,6 +269,7 @@ CREATE TABLE IF NOT EXISTS task_handoffs (
 	risks_json TEXT,
 	created_at INTEGER NOT NULL
 );
+CREATE INDEX IF NOT EXISTS idx_task_handoffs_task_created ON task_handoffs(task_id, created_at);
 CREATE TABLE IF NOT EXISTS task_artifacts (
 	id TEXT PRIMARY KEY,
 	task_id TEXT NOT NULL,
@@ -289,6 +297,7 @@ CREATE TABLE IF NOT EXISTS approval_requests (
 	created_at INTEGER NOT NULL,
 	updated_at INTEGER NOT NULL
 );
+CREATE INDEX IF NOT EXISTS idx_approval_pending ON approval_requests(tenant_id, person_id, status, created_at);
 CREATE TABLE IF NOT EXISTS approval_grants (
 	id TEXT PRIMARY KEY,
 	tenant_id TEXT NOT NULL,

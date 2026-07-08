@@ -67,8 +67,8 @@ type ToolCall struct {
 }
 
 type UsageStats struct {
-	InputTokens  int
-	OutputTokens int
+	InputTokens  int `json:"input_tokens"`
+	OutputTokens int `json:"output_tokens"`
 }
 
 // StreamEvent 定义流式响应事件

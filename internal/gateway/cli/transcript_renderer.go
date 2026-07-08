@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 
+	uicommon "selfmind/internal/ui/common"
+
 	"github.com/charmbracelet/lipgloss"
 	"github.com/mattn/go-runewidth"
 )
@@ -235,6 +237,14 @@ func renderSelectedTranscriptLine(line string, width int, style lipgloss.Style) 
 	return style.Copy().Width(width).Render(truncateToWidth(stripANSI(line), width))
 }
 
+var (
+	startupBorderStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color(uicommon.PaletteBorder))
+	startupLabelStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color(uicommon.PaletteMuted))
+	startupValueStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color(uicommon.PaletteText))
+	startupSubtleStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color(uicommon.PaletteSubtle))
+	startupCommandStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(uicommon.PaletteBlue))
+)
+
 func (m *uiModel) renderStartupCard(width int) []string {
 	maxCardW := width - 2
 	if maxCardW > 54 {
@@ -275,19 +285,19 @@ func (m *uiModel) renderStartupCard(width int) []string {
 	}
 
 	lines := []string{
-		"+" + strings.Repeat("-", cardW-2) + "+",
-		renderBoxLine(title, cardW),
-		renderBoxLine("", cardW),
-		renderBoxLine(modelLine, cardW),
+		startupBorderStyle.Render("+" + strings.Repeat("-", cardW-2) + "+"),
+		renderStartupBoxLine(startupValueStyle.Render(">_ SelfMind ")+startupSubtleStyle.Render("(v0.1.0)"), cardW),
+		renderStartupBoxLine("", cardW),
+		renderStartupDataLine("model:", modelName, cardW, "      /model to change"),
 	}
 	if providerLine != "" {
-		lines = append(lines, renderBoxLine(providerLine, cardW))
+		lines = append(lines, renderStartupDataLine("provider:", providerName, cardW, ""))
 	}
 	lines = append(lines,
-		renderBoxLine(dirLine, cardW),
-		"+"+strings.Repeat("-", cardW-2)+"+",
+		renderStartupDataLine("directory:", currentWorkingDir(), cardW, ""),
+		startupBorderStyle.Render("+"+strings.Repeat("-", cardW-2)+"+"),
 		"",
-		"Tip: Tell SelfMind what to inspect, change, test, or remember.",
+		startupValueStyle.Render("Tip: Tell SelfMind what to inspect, change, test, or remember."),
 		"",
 	)
 	return lines
@@ -299,8 +309,8 @@ func renderUserMessage(content string, width int) string {
 		width = 8
 	}
 	style := lipgloss.NewStyle().
-		Background(lipgloss.Color("236")).
-		Foreground(lipgloss.Color("255")).
+		Background(lipgloss.Color(uicommon.PaletteEditorBG)).
+		Foreground(lipgloss.Color(uicommon.PaletteEditorText)).
 		Padding(1, 1).
 		Width(width)
 	if content == "" {
@@ -322,7 +332,45 @@ func renderUserMessage(content string, width int) string {
 // /workspaces list) so the active selection stands out — same cyan family as
 // the command hints. Applied at render time only; the gateway text stays plain
 // for IM surfaces.
-var currentMarkerStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("39"))
+func renderStartupBoxLine(content string, width int) string {
+	inner := width - 4
+	if inner < 1 {
+		return content
+	}
+	return startupBorderStyle.Render("| ") + padRightWidth(content, inner) + startupBorderStyle.Render(" |")
+}
+
+func renderStartupDataLine(label, value string, width int, suffix string) string {
+	const labelWidth = 11
+	inner := width - 4
+	if inner < 1 {
+		return ""
+	}
+	labelText := label + strings.Repeat(" ", max(0, labelWidth-runewidth.StringWidth(label)))
+	suffixWidth := runewidth.StringWidth(suffix)
+	valueWidth := inner - labelWidth - suffixWidth
+	if valueWidth < 1 {
+		valueWidth = inner - labelWidth
+		suffix = ""
+	}
+	if valueWidth < 1 {
+		return renderStartupBoxLine(startupLabelStyle.Render(truncateToWidth(labelText, inner)), width)
+	}
+
+	valueText := truncateToWidth(value, valueWidth)
+	renderedSuffix := ""
+	if suffix != "" {
+		renderedSuffix = strings.Replace(suffix, "/model", startupCommandStyle.Render("/model"), 1)
+		renderedSuffix = strings.Replace(renderedSuffix, "to change", startupSubtleStyle.Render("to change"), 1)
+	}
+	content := startupLabelStyle.Render(labelText) + startupValueStyle.Render(valueText) + renderedSuffix
+	if runewidth.StringWidth(stripANSI(content)) > inner {
+		content = startupLabelStyle.Render(labelText) + startupValueStyle.Render(truncateToWidth(value, inner-labelWidth))
+	}
+	return renderStartupBoxLine(content, width)
+}
+
+var currentMarkerStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(uicommon.PaletteBlue))
 
 func renderAssistantMessage(content string, width int) string {
 	content = strings.TrimSpace(content)

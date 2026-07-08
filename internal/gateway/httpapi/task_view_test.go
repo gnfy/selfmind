@@ -183,6 +183,41 @@ func TestTasksCardInterruptedReplacesAge(t *testing.T) {
 	}
 }
 
+func TestTasksSearchFiltersAcrossTaskCards(t *testing.T) {
+	daemon, store, identity := newTaskViewServer(t)
+	ctx := context.Background()
+	open := seedTask(t, store, identity, "KOF 97 battle game", "in_progress", 1)
+	seedTask(t, store, identity, "pgsql example", "done", 1)
+	seedTask(t, store, identity, "unrelated notes", "done", 1)
+	archived := seedTask(t, store, identity, "old tank battle", "archived", 1)
+
+	if _, err := store.SaveHandoff(ctx, control.Handoff{
+		TaskID:       open.ID,
+		Summary:      "arcade work",
+		ChangedFiles: []string{"games/arcade-fury-97.html"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	out := controlReply(t, daemon, "/tasks arcade-fury")
+	if !strings.Contains(out, "KOF 97 battle game") || !strings.Contains(out, "Use /resume <id>") {
+		t.Fatalf("search should match handoff file and show id hint:\n%s", out)
+	}
+	if strings.Contains(out, "pgsql example") || strings.Contains(out, "unrelated notes") {
+		t.Fatalf("search leaked unrelated tasks:\n%s", out)
+	}
+
+	doneOut := controlReply(t, daemon, "/tasks done pgsql")
+	if !strings.Contains(doneOut, "pgsql example") || strings.Contains(doneOut, "KOF 97 battle game") {
+		t.Fatalf("done-scoped search wrong:\n%s", doneOut)
+	}
+
+	archivedOut := controlReply(t, daemon, "/tasks archived tank")
+	if !strings.Contains(archivedOut, archived.Title) {
+		t.Fatalf("archived-scoped search missing task:\n%s", archivedOut)
+	}
+}
+
 // TestCardTaskIDRoundTrip: the card's shortened id (`task_` + 8 uuid chars,
 // no ellipsis) resolves back through findTaskByRef even when pasted verbatim.
 func TestCardTaskIDRoundTrip(t *testing.T) {

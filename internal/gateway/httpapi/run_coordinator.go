@@ -311,7 +311,17 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 			outcome.Summary = buildRunOutcome(content).Summary
 		}
 	}
-	_ = d.Control.RecordChannelMessage(finCtx, *identity, req.Channel, task.ID, "assistant", content)
+	var finalizeErrs []string
+	recordFinalizeErr := func(action string, err error) {
+		if err == nil {
+			return
+		}
+		msg := fmt.Sprintf("%s: %v", action, err)
+		finalizeErrs = append(finalizeErrs, msg)
+		log.Error("run finalization failed", "action", action, "task_id", task.ID, "run_id", run.ID, "error", err)
+	}
+
+	recordFinalizeErr("record assistant message", d.Control.RecordChannelMessage(finCtx, *identity, req.Channel, task.ID, "assistant", content))
 	// Invariant: finalization must leave the run terminal and must never leave
 	// the task 'running' with zero live runs. A 'running' outcome means "turn
 	// finished, more work planned", so the task parks as 'in_progress' — still
@@ -322,9 +332,9 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 	if taskStatus == "" || taskStatus == "running" {
 		taskStatus = "in_progress"
 	}
-	_ = d.Control.FinishRun(finCtx, identity.TenantID, run.ID, outcome.Status)
-	_ = d.Control.UpdateTaskStatus(finCtx, identity.TenantID, task.ID, taskStatus, outcome.Summary, outcome.NextSteps)
-	_, _ = d.Control.SaveHandoff(finCtx, control.Handoff{
+	recordFinalizeErr("finish run", d.Control.FinishRun(finCtx, identity.TenantID, run.ID, outcome.Status))
+	recordFinalizeErr("update task status", d.Control.UpdateTaskStatus(finCtx, identity.TenantID, task.ID, taskStatus, outcome.Summary, outcome.NextSteps))
+	_, handoffErr := d.Control.SaveHandoff(finCtx, control.Handoff{
 		TaskID:       task.ID,
 		Summary:      outcome.Summary,
 		DoneItems:    outcome.Done,
@@ -333,8 +343,9 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 		TestStatus:   strings.Join(outcome.Tests, "\n"),
 		Risks:        outcome.Risks,
 	})
+	recordFinalizeErr("save handoff", handoffErr)
 	c.recordOutcomeArtifacts(finCtx, task, run, req.Channel, outcome.Files)
-	_, _ = d.Control.AppendEvent(finCtx, control.Event{
+	_, eventErr := d.Control.AppendEvent(finCtx, control.Event{
 		TaskID:     task.ID,
 		RunID:      run.ID,
 		Type:       "run.finished",
@@ -342,6 +353,17 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 		Channel:    req.Channel,
 		Payload:    mustJSON(map[string]interface{}{"outcome": outcome, "usage": usage}),
 	})
+	recordFinalizeErr("append run.finished event", eventErr)
+	if len(finalizeErrs) > 0 {
+		_, _ = d.Control.AppendEvent(context.Background(), control.Event{
+			TaskID:     task.ID,
+			RunID:      run.ID,
+			Type:       "run.finalize_error",
+			Visibility: "task",
+			Channel:    req.Channel,
+			Payload:    mustJSON(map[string]interface{}{"errors": finalizeErrs}),
+		})
+	}
 	taskID := task.ID
 	refreshed, _ := d.Control.GetTask(finCtx, identity.TenantID, task.ID)
 	if refreshed != nil && refreshed.Status != "" {

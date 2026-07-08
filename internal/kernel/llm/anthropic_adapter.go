@@ -355,7 +355,7 @@ func (a *AnthropicAdapter) requestFromChat(req ChatRequest, stream bool) Anthrop
 	if strings.TrimSpace(anthropicReq.SystemPrompt) != "" {
 		systemParts = append(systemParts, strings.TrimSpace(anthropicReq.SystemPrompt))
 	}
-	for _, m := range req.Messages {
+	for _, m := range sanitizeToolMessageLedger(req.Messages) {
 		content := anthropicContentFromMessage(m, len(req.Tools) > 0)
 		role := m.Role
 		if role == "system" {

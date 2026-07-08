@@ -137,20 +137,14 @@ func Run(ctx context.Context, opts Options) error {
 		// Smart-mode approval triage (H2): build the cheap-model judge from the
 		// agent's dedicated triage provider (a cheap role kept OFF the main run
 		// provider). Nil when no provider is available → smart mode asks a human.
-		ApprovalJudge: app.NewApprovalJudge(agent.ApprovalJudgeProvider()),
+		ApprovalJudge: app.NewConfiguredApprovalJudge(mem, cfg, defaultTenantID),
 		// Post-run labeler (Work Timeline P3): cheap memory_extract-role judge
 		// that re-points a wrong pre-label after the run. Nil → labels are kept.
-		Labeler: app.NewRunLabeler(agent.SummaryProvider()),
+		Labeler: app.NewConfiguredRunLabeler(mem, cfg, defaultTenantID),
 		// Automatic semantic recall (Work Timeline P2): FTS sessions + task
 		// label cards attached at the selector layer; query expansion only when
 		// a semantic_recall role model is explicitly configured.
 		Recall: httpapi.NewRecallEngine(controlStore, mem, app.SemanticRecallExpander(mem, cfg, defaultTenantID)),
-	}
-	if gatewayAPI.Labeler == nil {
-		// Silent degradation would be confusing: without a memory_extract role
-		// provider the post-run labeler never re-points a wrong pre-label, so
-		// /tasks grouping quality drops. Say so once at boot.
-		log.Info("gateway: run labeler disabled (no memory_extract role provider configured); pre-labels are kept as-is")
 	}
 	// Periodic stuck-run recovery: while the daemon runs, mark heartbeat-dead
 	// runs (and their tasks) interrupted. Runs in the coordinator's active-run

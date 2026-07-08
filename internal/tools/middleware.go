@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -634,7 +635,7 @@ func hardlineProtectedRootTarget(target, home string) (string, bool) {
 	if t == "$HOME" || t == "${HOME}" || t == "~" {
 		return "$HOME", true
 	}
-	clean := filepath.Clean(t)
+	clean := cleanShellPathTarget(t)
 	// Collapse a trailing glob so "/*" and "/home/*" map to their root.
 	if strings.HasSuffix(clean, "/*") {
 		clean = strings.TrimSuffix(clean, "/*")
@@ -645,10 +646,19 @@ func hardlineProtectedRootTarget(target, home string) (string, bool) {
 	if _, bad := hardlineProtectedRoots[clean]; bad {
 		return clean, true
 	}
-	if home != "" && clean == filepath.Clean(home) {
+	if home != "" && clean == cleanShellPathTarget(home) {
 		return clean, true
 	}
 	return "", false
+}
+
+// cleanShellPathTarget normalizes shell command paths with slash semantics.
+// Tool commands often run in WSL/Linux containers even when SelfMind is built
+// or tested on Windows, so filepath.Clean would use the wrong separator rules
+// for targets like "/" or "/etc".
+func cleanShellPathTarget(target string) string {
+	target = strings.ReplaceAll(target, "\\", "/")
+	return path.Clean(target)
 }
 
 // segmentProgram returns the index of the invoked program in a segment's

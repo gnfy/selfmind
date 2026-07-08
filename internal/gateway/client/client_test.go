@@ -78,6 +78,23 @@ func TestEventToStreamMapping(t *testing.T) {
 				}
 			},
 		},
+		{
+			name: "clarify requested",
+			ev: control.Event{ID: "6", Type: "clarify.requested", Payload: mustJSON(map[string]any{
+				"clarify_id": "clar_123",
+				"question":   "Which file should I edit?",
+				"choices":    []string{"a.go", "b.go"},
+			})},
+			wantTyp: "clarify.requested",
+			check: func(t *testing.T, se llm.StreamEvent) {
+				if se.Content != "Which file should I edit?" {
+					t.Fatalf("bad clarify question mapping: %+v", se)
+				}
+				if id, _ := se.Payload["clarify_id"].(string); id != "clar_123" {
+					t.Fatalf("clarify_id not carried: %+v", se.Payload)
+				}
+			},
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

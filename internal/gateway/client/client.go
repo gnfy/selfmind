@@ -356,6 +356,15 @@ func eventToStream(ev control.Event) (llm.StreamEvent, bool) {
 				"target":      str(p["target"]),
 			},
 		}, true
+	case ev.Type == "clarify.requested":
+		return llm.StreamEvent{
+			EventType: "clarify.requested",
+			Content:   str(p["question"]),
+			Payload: map[string]interface{}{
+				"clarify_id": str(p["clarify_id"]),
+				"choices":    p["choices"],
+			},
+		}, true
 	case strings.HasPrefix(ev.Type, "learning."):
 		return llm.StreamEvent{EventType: "learning.review", Content: str(p["message"])}, true
 	case ev.Type == "token.updated":

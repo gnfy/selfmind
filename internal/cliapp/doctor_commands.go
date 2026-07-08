@@ -27,8 +27,8 @@ import (
 const (
 	doctorRecentRuns   = 10
 	doctorRecentEvents = 40
-	doctorMaxPushes  = 10
-	doctorLogLines   = 50
+	doctorMaxPushes    = 10
+	doctorLogLines     = 50
 	// presenceRecentWindow labels an account as recently active in the presence
 	// snapshot. Matches the daemon's presence TTL intent (durable last_seen_at is
 	// the only cross-process signal a CLI-side doctor can read).
@@ -69,7 +69,8 @@ func (a *App) doctor(args []string) int {
 		return 1
 	}
 
-	report := buildDoctorReport(ctx, store, identity, dataDir, a.gatewayStatusLine(), doctorLogLines)
+	configSection := a.collectConfigDiagnostics().section()
+	report := buildDoctorReport(ctx, store, identity, dataDir, a.gatewayStatusLine(), configSection, doctorLogLines)
 
 	if strings.TrimSpace(*outPath) != "" {
 		if err := os.WriteFile(*outPath, []byte(report), 0600); err != nil {
@@ -114,7 +115,7 @@ func (a *App) gatewayStatusLine() string {
 // buildDoctorReport assembles the redacted diagnostic bundle from durable
 // control-plane state and the on-disk log. It is separated from CLI plumbing so
 // it can be unit-tested against a seeded temp store.
-func buildDoctorReport(ctx context.Context, store *control.Store, identity *control.IdentityContext, dataDir, gatewayStatus string, logLines int) string {
+func buildDoctorReport(ctx context.Context, store *control.Store, identity *control.IdentityContext, dataDir, gatewayStatus, configSection string, logLines int) string {
 	var sb strings.Builder
 	sb.WriteString("SelfMind doctor — diagnostic bundle\n")
 	fmt.Fprintf(&sb, "generated: %s\n", time.Now().UTC().Format(time.RFC3339))
@@ -122,6 +123,10 @@ func buildDoctorReport(ctx context.Context, store *control.Store, identity *cont
 	fmt.Fprintf(&sb, "data dir: %s\n\n", dataDir)
 
 	fmt.Fprintf(&sb, "== Gateway ==\n%s\n\n", gatewayStatus)
+	if strings.TrimSpace(configSection) != "" {
+		sb.WriteString(configSection)
+		sb.WriteString("\n\n")
+	}
 
 	// Recent runs.
 	sb.WriteString("== Recent runs ==\n")

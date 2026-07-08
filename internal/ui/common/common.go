@@ -6,6 +6,24 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
+const (
+	PaletteBackground = "#2d001b"
+	PaletteSurface    = "#4b2a40"
+	PaletteBorder     = "#8a7180"
+	PaletteBorderDim  = "#6f5867"
+	PaletteText       = "#f4edf2"
+	PaletteMuted      = "#a58c9d"
+	PaletteSubtle     = "#7e6676"
+	PaletteBlue       = "#2f9de8"
+	PaletteAmber      = "#b9824f"
+	PaletteGreen      = "#7dd36f"
+	PaletteRed        = "#ff6b6b"
+	PaletteCursor     = "#b8d8bd"
+	PaletteEditorBG   = "236"
+	PaletteEditorText = "255"
+	PaletteEditorHint = "244"
+)
+
 type Common struct {
 	Width, Height int
 	Styles        *Styles
@@ -25,18 +43,18 @@ type Styles struct {
 }
 
 func DefaultStyles() *Styles {
-	bg := lipgloss.Color("235")
-	surface := lipgloss.Color("236")
-	border := lipgloss.Color("238")
-	borderBright := lipgloss.Color("240")
-	fg := lipgloss.Color("255")
-	fgMuted := lipgloss.Color("245")
-	fgSubtle := lipgloss.Color("238")
-	primary := lipgloss.Color("86")
-	secondary := lipgloss.Color("147")
-	accent := lipgloss.Color("212")
-	warning := lipgloss.Color("214")
-	info := lipgloss.Color("75")
+	bg := lipgloss.Color(PaletteBackground)
+	surface := lipgloss.Color(PaletteSurface)
+	border := lipgloss.Color(PaletteBorderDim)
+	borderBright := lipgloss.Color(PaletteBorder)
+	fg := lipgloss.Color(PaletteText)
+	fgMuted := lipgloss.Color(PaletteMuted)
+	fgSubtle := lipgloss.Color(PaletteSubtle)
+	primary := lipgloss.Color(PaletteBlue)
+	secondary := lipgloss.Color("#c7a8d8")
+	accent := lipgloss.Color("#d778a5")
+	warning := lipgloss.Color(PaletteAmber)
+	info := lipgloss.Color(PaletteBlue)
 
 	s := &Styles{
 		Primary: primary, Secondary: secondary, Accent: accent, Background: bg, Surface: surface,
@@ -61,18 +79,21 @@ func DefaultStyles() *Styles {
 	s.Chat.Thinking = lipgloss.NewStyle().Foreground(fgMuted).Italic(true)
 	s.Chat.Selected = lipgloss.NewStyle().Foreground(lipgloss.Color("0")).Background(lipgloss.Color("15"))
 
-	// Codex-cli style: transcript stays plain, composer is a relaxed filled band.
-	s.Editor.Panel = lipgloss.NewStyle().Background(surface).Padding(1, 1)
-	s.Editor.Prompt = lipgloss.NewStyle().Foreground(fg).Background(surface).Bold(false)
-	s.Editor.Text = lipgloss.NewStyle().Foreground(fg).Background(surface)
-	s.Editor.Cursor = lipgloss.NewStyle().Background(lipgloss.Color("255")).Foreground(lipgloss.Color("0"))
+	editorBG := lipgloss.Color(PaletteEditorBG)
+	editorText := lipgloss.Color(PaletteEditorText)
+	// Keep the composer on the original neutral gray; the Codex-like palette is
+	// reserved for chrome and hints so the input remains familiar and legible.
+	s.Editor.Panel = lipgloss.NewStyle().Background(editorBG).Padding(1, 1)
+	s.Editor.Prompt = lipgloss.NewStyle().Foreground(editorText).Background(editorBG).Bold(false)
+	s.Editor.Text = lipgloss.NewStyle().Foreground(editorText).Background(editorBG)
+	s.Editor.Cursor = lipgloss.NewStyle().Background(lipgloss.Color(PaletteEditorText)).Foreground(lipgloss.Color("0"))
 
 	s.Status.Panel = lipgloss.NewStyle().Foreground(fgMuted).Padding(0, 1)
 	s.Status.Label = lipgloss.NewStyle().Foreground(fgMuted)
 	s.Status.Value = lipgloss.NewStyle().Foreground(fg)
-	s.Status.Good = lipgloss.NewStyle().Foreground(lipgloss.Color("82"))
+	s.Status.Good = lipgloss.NewStyle().Foreground(lipgloss.Color(PaletteGreen))
 	s.Status.Warning = lipgloss.NewStyle().Foreground(warning)
-	s.Status.Error = lipgloss.NewStyle().Foreground(lipgloss.Color("203"))
+	s.Status.Error = lipgloss.NewStyle().Foreground(lipgloss.Color(PaletteRed))
 
 	s.Main = lipgloss.NewStyle().Padding(0, 0)
 	s.Welcome = "SelfMind is ready. Type a task to begin."

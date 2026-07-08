@@ -35,8 +35,10 @@ type taskCardView struct {
 	questions    map[string]int      // task_id -> pending clarify questions
 }
 
-// tasksOverviewReply renders /tasks and its variants: "" (open work),
-// "done" (terminal, non-archived), "archived", "all".
+// tasksOverviewReply renders /tasks and its variants: ""/"open" (open work),
+// "done" (terminal, non-archived), "archived", "all". Any other suffix is a
+// keyword search across all tasks, e.g. /tasks game. A variant may also carry a
+// query: /tasks done report, /tasks archived tank, /tasks search pgsql.
 func (d *Server) tasksOverviewReply(ctx context.Context, identity *control.IdentityContext, variant string) (string, error) {
 	tasks, err := d.listTasksForDisplay(ctx, identity)
 	if err != nil {
@@ -54,9 +56,13 @@ func (d *Server) tasksOverviewReply(ctx context.Context, identity *control.Ident
 	view.approvals, view.questions, _ = d.Control.PendingCountsByTask(ctx, identity.TenantID, identity.PersonID)
 
 	open, done, archived := splitTasksForDisplay(tasks)
+	args := parseTasksArgs(variant)
+	if args.search {
+		return renderTaskSearchResults(args, open, done, archived, tasks, view), nil
+	}
 
-	switch strings.TrimSpace(variant) {
-	case "":
+	switch args.view {
+	case "", "open":
 		var sb strings.Builder
 		if len(open) == 0 {
 			sb.WriteString("No open tasks.")
@@ -83,8 +89,117 @@ func (d *Server) tasksOverviewReply(ctx context.Context, identity *control.Ident
 	case "all":
 		return renderTaskCards("All tasks", tasks, view), nil
 	default:
-		return "Usage: /tasks [done|archived|all]", nil
+		return "Usage: /tasks [open|done|archived|all|search <keyword>|<keyword>]", nil
 	}
+}
+
+type tasksArgs struct {
+	view   string
+	query  string
+	search bool
+}
+
+func parseTasksArgs(input string) tasksArgs {
+	fields := strings.Fields(strings.TrimSpace(input))
+	if len(fields) == 0 {
+		return tasksArgs{}
+	}
+	first := strings.ToLower(fields[0])
+	switch first {
+	case "open", "done", "archived", "all":
+		return tasksArgs{
+			view:   first,
+			query:  strings.TrimSpace(strings.Join(fields[1:], " ")),
+			search: len(fields) > 1,
+		}
+	case "search", "find", "query":
+		return tasksArgs{
+			view:   "all",
+			query:  strings.TrimSpace(strings.Join(fields[1:], " ")),
+			search: true,
+		}
+	default:
+		return tasksArgs{view: "all", query: strings.TrimSpace(strings.Join(fields, " ")), search: true}
+	}
+}
+
+func renderTaskSearchResults(args tasksArgs, open, done, archived, all []control.Task, view taskCardView) string {
+	query := strings.TrimSpace(args.query)
+	if query == "" {
+		return "Usage: /tasks search <keyword>"
+	}
+	scope := all
+	scopeLabel := "all"
+	switch args.view {
+	case "open":
+		scope = open
+		scopeLabel = "open"
+	case "done":
+		scope = done
+		scopeLabel = "done"
+	case "archived":
+		scope = archived
+		scopeLabel = "archived"
+	case "all", "":
+		scope = all
+	}
+	matches := filterTasksByQuery(scope, query, view)
+	if len(matches) == 0 {
+		if scopeLabel == "all" {
+			return fmt.Sprintf("No tasks match %q.", query)
+		}
+		return fmt.Sprintf("No %s tasks match %q.", scopeLabel, query)
+	}
+	var sb strings.Builder
+	if scopeLabel == "all" {
+		fmt.Fprintf(&sb, "Matching tasks for %q:\n", query)
+	} else {
+		fmt.Fprintf(&sb, "Matching %s tasks for %q:\n", scopeLabel, query)
+	}
+	for i, t := range matches {
+		sb.WriteString("\n" + renderTaskCard(i+1, t, view) + "\n")
+	}
+	sb.WriteString("\nUse /resume <id> from a card to switch, or /task <id> for detail.")
+	return strings.TrimSpace(sb.String())
+}
+
+func filterTasksByQuery(tasks []control.Task, query string, view taskCardView) []control.Task {
+	terms := strings.Fields(strings.ToLower(strings.TrimSpace(query)))
+	if len(terms) == 0 {
+		return nil
+	}
+	var out []control.Task
+	for _, t := range tasks {
+		haystack := strings.ToLower(strings.Join(taskSearchFields(t, view), "\n"))
+		matched := true
+		for _, term := range terms {
+			if !strings.Contains(haystack, term) {
+				matched = false
+				break
+			}
+		}
+		if matched {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+func taskSearchFields(t control.Task, view taskCardView) []string {
+	fields := []string{
+		t.ID,
+		cardTaskID(t.ID),
+		shortTaskID(t.ID),
+		t.Title,
+		t.Status,
+		t.CurrentSummary,
+		strings.Join(t.NextSteps, " "),
+		view.lastRuns[t.ID],
+	}
+	for _, file := range view.files[t.ID] {
+		fields = append(fields, file, fileBasename(file))
+	}
+	return fields
 }
 
 // taskCardStatus maps one label to the simplified card bracket:
@@ -106,12 +221,12 @@ func taskCardStatus(t control.Task, isActive bool, pendingApprovals, pendingQues
 
 // renderTaskCard renders one label as a multi-line card:
 //
-//	1. [running] 拳皇97风格对战游戏
-//	   last: 再多做几个角色 · 3m ago
-//	   file: arcade-fury-97.html
-//	   approvals: 1
-//	   runs: 6
-//	   id: task_65de41f2a...
+//  1. [running] 拳皇97风格对战游戏
+//     last: 再多做几个角色 · 3m ago
+//     file: arcade-fury-97.html
+//     approvals: 1
+//     runs: 6
+//     id: task_65de41f2a...
 //
 // file/approvals/questions lines are omitted when empty/zero; an interrupted
 // label shows "· interrupted" instead of the age.

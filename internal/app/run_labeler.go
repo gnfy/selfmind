@@ -6,6 +6,9 @@ import (
 
 	"selfmind/internal/gateway/httpapi"
 	"selfmind/internal/kernel/llm"
+	"selfmind/internal/kernel/memory"
+	"selfmind/internal/platform/config"
+	"selfmind/internal/platform/log"
 )
 
 // llmRunLabeler implements httpapi.RunLabeler over a cheap role-routed
@@ -36,6 +39,15 @@ func NewRunLabeler(provider llm.Provider) httpapi.RunLabeler {
 		return nil
 	}
 	return &llmRunLabeler{provider: provider}
+}
+
+func NewConfiguredRunLabeler(mem *memory.MemoryManager, cfg *config.Config, tenantID string) httpapi.RunLabeler {
+	provider := explicitRoleProvider(mem, cfg, tenantID, llm.RoleMemoryExtract)
+	if provider == nil {
+		log.Info("run labeler disabled: configure models.roles.memory_extract to enable post-run relabeling without using the main model")
+		return nil
+	}
+	return NewRunLabeler(provider)
 }
 
 func (l *llmRunLabeler) Label(ctx context.Context, prompt string) (string, error) {

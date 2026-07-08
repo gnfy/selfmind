@@ -102,6 +102,7 @@ type uiModel struct {
 	clarifyMode           bool
 	clarifyChoices        []string
 	clarifyReq            tools.ClarifyRequest
+	clarifyGateway        bool
 	secretMode            bool
 	secretKey             string
 	statusMsg             string    // Transient status message
@@ -120,8 +121,8 @@ type uiModel struct {
 	mouseSelection        bool
 	mouseSelectAnchor     int
 	mouseSelectFocus      int
-	transcriptCache       *renderCache                                                   // memoizes finalized message renders across frames
-	clientMode            bool                                                           // daemon-client mode: no in-process agent/gateway; chat routes to the daemon
+	transcriptCache       *renderCache // memoizes finalized message renders across frames
+	clientMode            bool         // daemon-client mode: no in-process agent/gateway; chat routes to the daemon
 	// workspaceOverride* pin this session's execution workspace after a
 	// successful `/workspace <n|id>` switch (mirrors the approvalMode session
 	// override). Without it the next CLI turn silently re-derived a workspace
@@ -184,6 +185,20 @@ type MsgApprovalRequest struct {
 	Tool   string
 	Target string // compact object of the action (path/command); may be empty
 	Reason string
+}
+
+// MsgClarifyRequest is emitted in daemon-client mode when a remote run blocks
+// on a clarify question. The answer is posted back through the gateway as a
+// normal message, so the original run keeps executing and the live event poller
+// keeps showing progress.
+type MsgClarifyRequest struct {
+	ID       string
+	Question string
+	Choices  []string
+}
+
+type MsgClarifyAnswerResult struct {
+	Err error
 }
 
 func workingTick() tea.Cmd {
@@ -426,6 +441,24 @@ func (c *Controller) SessionChannel() string {
 		return ""
 	}
 	return c.model.channel
+}
+
+// HasConversationHistory reports whether this TUI session contains user-visible
+// conversation state worth resuming. A freshly opened-and-closed TUI gets a
+// session id for isolation, but should not advertise a useless resume command.
+func (c *Controller) HasConversationHistory() bool {
+	if c == nil || c.model == nil {
+		return false
+	}
+	if len(c.model.inputHistory) > 0 {
+		return true
+	}
+	for _, msg := range c.model.messages {
+		if strings.TrimSpace(msg.Content) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // SetSessionChannel overrides the chat channel for this session. The CLI calls
@@ -1089,20 +1122,7 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if events := m.clarifyBridge.Events(); events != nil {
 		select {
 		case req := <-events:
-			m.thinking = false
-			m.toolExecuting = ""
-			m.clarifyMode = true
-			m.clarifyChoices = req.Choices
-			m.addMessage("assistant", fmt.Sprintf("❓ %s", req.Question))
-			if len(req.Choices) > 0 {
-				var lines []string
-				for i, c := range req.Choices {
-					lines = append(lines, fmt.Sprintf("  %d. %s", i+1, c))
-				}
-				lines = append(lines, "  0. Other (type your answer)")
-				m.addMessage("assistant", "Options:\n"+strings.Join(lines, "\n"))
-			}
-			m.clarifyReq = req
+			m.armClarifyPrompt(req, false)
 			return m, nil
 		default:
 		}
@@ -1236,6 +1256,10 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.activityText = ""
 		m.toolExecuting = ""
 		m.steerCh = nil // run finished; stop accepting mid-turn guidance for it
+		m.clarifyMode = false
+		m.clarifyGateway = false
+		m.clarifyChoices = nil
+		m.clarifyReq = tools.ClarifyRequest{}
 		// The mid-turn guidance notice is stale once the run ends — clear it.
 		if strings.HasPrefix(m.statusMsg, "Sent to the running task") || strings.Contains(m.statusMsg, "Guidance queue") {
 			m.statusMsg = ""
@@ -1295,6 +1319,21 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.armApprovalPrompt(msg)
 		return m, nil
+
+	case MsgClarifyRequest:
+		m.armClarifyPrompt(tools.ClarifyRequest{Question: msg.Question, Choices: msg.Choices}, true)
+		return m, nil
+
+	case MsgClarifyAnswerResult:
+		if msg.Err != nil {
+			m.addErrorMessage(fmt.Sprintf("Could not send clarify answer: %v", msg.Err))
+			m.runStatus = "error"
+			m.statusMsg = "Clarify answer was not accepted."
+		} else {
+			m.statusMsg = "Answer sent. The task is continuing."
+			m.runStatus = "working"
+		}
+		return m, tea.Tick(3*time.Second, func(t time.Time) tea.Msg { return MsgClearStatus{} })
 
 	case MsgToolStart:
 		wasAtBottom := m.transcriptAtBottom()
@@ -1561,8 +1600,21 @@ func (m *uiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				response := m.resolveClarifyResponse(input)
 				m.addMessage("user", response)
 				m.editor.Reset()
+				if m.clarifyGateway {
+					m.clarifyMode = false
+					m.clarifyGateway = false
+					m.clarifyChoices = nil
+					m.clarifyReq = tools.ClarifyRequest{}
+					m.thinking = true
+					m.runStatus = "working"
+					m.thinkingStart = time.Now()
+					m.thinkingDots = 0
+					m.activityText = "Waiting for the task to continue"
+					return m, tea.Batch(m.answerClarifyViaGateway(response), m.spinner.Tick, workingTick())
+				}
 				m.clarifyBridge.Submit(m.clarifyReq, response)
 				m.clarifyMode = false
+				m.clarifyGateway = false
 				m.clarifyChoices = nil
 				m.clarifyReq = tools.ClarifyRequest{}
 				m.thinking = true
@@ -1658,6 +1710,45 @@ func (m *uiModel) scrollTranscriptLines(lines int) {
 	}
 	if lines > 0 {
 		m.viewport.LineDown(lines)
+	}
+}
+
+func (m *uiModel) armClarifyPrompt(req tools.ClarifyRequest, viaGateway bool) {
+	m.thinking = false
+	m.toolExecuting = ""
+	m.clarifyMode = true
+	m.clarifyGateway = viaGateway
+	m.clarifyChoices = req.Choices
+	m.addMessage("assistant", fmt.Sprintf("Clarification needed: %s", req.Question))
+	if len(req.Choices) > 0 {
+		var lines []string
+		for i, c := range req.Choices {
+			lines = append(lines, fmt.Sprintf("  %d. %s", i+1, c))
+		}
+		lines = append(lines, "  0. Other (type your answer)")
+		m.addMessage("assistant", "Options:\n"+strings.Join(lines, "\n"))
+	}
+	m.clarifyReq = req
+	m.statusMsg = "Answer the question to continue the task."
+}
+
+func (m *uiModel) answerClarifyViaGateway(response string) tea.Cmd {
+	if m.messageProcessor == nil {
+		return func() tea.Msg { return MsgClarifyAnswerResult{Err: fmt.Errorf("gateway is not initialized")} }
+	}
+	processor := m.messageProcessor
+	req := m.controlMessageRequest(response)
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		resp, status := processor(ctx, req)
+		if resp.Error != "" {
+			return MsgClarifyAnswerResult{Err: fmt.Errorf("%s", resp.Error)}
+		}
+		if status >= 400 {
+			return MsgClarifyAnswerResult{Err: fmt.Errorf("gateway returned HTTP %d", status)}
+		}
+		return MsgClarifyAnswerResult{}
 	}
 }
 

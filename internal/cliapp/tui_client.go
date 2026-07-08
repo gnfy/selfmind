@@ -66,6 +66,10 @@ func (a *App) tryRunTUIClient(cfg *config.Config) (int, bool) {
 	ctrl := tui.NewControllerWithGateway(nil, nil, nil, displayProvider, displayModel, cfg, tenantID)
 	ctrl.SetSessionChannel(a.resumeChannel)
 	ctrl.SetMessageProcessor(client.ProcessMessage)
+	if err := a.pinResumeTask(client.ProcessMessage); err != nil {
+		fmt.Fprintf(a.stderr, "SelfMind resume error: %v\n", err)
+		return 1, true
+	}
 	ctrl.SetClientMode(true)
 	// Agent-backed slash commands (/skills, /memory subcommands, /bundles,
 	// /checkpoint) run on the daemon via the safelisted /v1/dispatch endpoint.
@@ -104,7 +108,9 @@ func (a *App) tryRunTUIClient(cfg *config.Config) (int, bool) {
 	defer stopPresence()
 
 	ctrl.Start()
-	printResumeHint(a.stdout, ctrl.SessionChannel())
+	if a.resumeChannel != "" || ctrl.HasConversationHistory() {
+		printResumeHint(a.stdout, ctrl.SessionChannel())
+	}
 	fmt.Fprintln(a.stdout, "Goodbye!")
 	return 0, true
 }

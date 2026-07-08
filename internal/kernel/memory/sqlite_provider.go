@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode"
 
 	"selfmind/internal/platform/log"
 	"selfmind/internal/platform/textutil"
@@ -73,6 +74,13 @@ func (p *SQLiteProvider) worker() {
 					continue
 				}
 				db.SetMaxOpenConns(1)
+				if _, err := db.Exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout=5000;`); err != nil {
+					db.Close()
+					db = nil
+					dbTenant = ""
+					op.result <- dbResult{err: fmt.Errorf("configure db: %w", err)}
+					continue
+				}
 
 				// 立即初始化所有必要的表结构，防止读取时报错。
 				// schema 创建失败会让后续读写神秘地出错，因此必须显式上报，
@@ -166,26 +174,10 @@ func (p *SQLiteProvider) worker() {
 			case "SearchSessions":
 				query := op.args[1].(string)
 				limit := op.args[2].(int)
-				safeQuery := strings.ReplaceAll(query, `"`, `""`)
-				ftsQuery := fmt.Sprintf(`session_id:%s* OR content:%s* OR summary:%s*`, safeQuery, safeQuery, safeQuery)
-				rows, err := db.Query(
-					`SELECT session_id, channel, content, summary, timestamp
-					 FROM sessions_fts
-					 WHERE sessions_fts MATCH ?
-					 ORDER BY rank
-					 LIMIT ?`,
-					ftsQuery, limit,
-				)
+				results, err := searchSessions(db, query, limit)
 				if err != nil {
 					res = dbResult{err: err}
 				} else {
-					var results []FTS5Session
-					for rows.Next() {
-						var s FTS5Session
-						rows.Scan(&s.SessionID, &s.Channel, &s.Content, &s.Summary, &s.Timestamp)
-						results = append(results, s)
-					}
-					rows.Close()
 					res = dbResult{val: results}
 				}
 
@@ -527,6 +519,126 @@ func (p *SQLiteProvider) worker() {
 			return
 		}
 	}
+}
+
+func searchSessions(db *sql.DB, query string, limit int) ([]FTS5Session, error) {
+	if limit <= 0 {
+		limit = 10
+	}
+	safeQuery := strings.ReplaceAll(query, `"`, `""`)
+	ftsQuery := fmt.Sprintf(`session_id:%s* OR content:%s* OR summary:%s*`, safeQuery, safeQuery, safeQuery)
+	rows, err := db.Query(
+		`SELECT session_id, channel, content, summary, timestamp
+		 FROM sessions_fts
+		 WHERE sessions_fts MATCH ?
+		 ORDER BY rank
+		 LIMIT ?`,
+		ftsQuery, limit,
+	)
+	if err == nil {
+		results, scanErr := scanFTSSessions(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		if len(results) > 0 || !containsCJK(query) {
+			return results, nil
+		}
+	} else if !containsCJK(query) {
+		return nil, err
+	}
+	return searchSessionsLike(db, query, limit)
+}
+
+func scanFTSSessions(rows *sql.Rows) ([]FTS5Session, error) {
+	defer rows.Close()
+	var results []FTS5Session
+	for rows.Next() {
+		var s FTS5Session
+		if err := rows.Scan(&s.SessionID, &s.Channel, &s.Content, &s.Summary, &s.Timestamp); err != nil {
+			return nil, err
+		}
+		results = append(results, s)
+	}
+	return results, rows.Err()
+}
+
+func searchSessionsLike(db *sql.DB, query string, limit int) ([]FTS5Session, error) {
+	terms := recallLikeTerms(query)
+	if len(terms) == 0 {
+		return nil, nil
+	}
+	var where []string
+	args := make([]interface{}, 0, len(terms)*3+1)
+	for _, term := range terms {
+		where = append(where, "(session_id LIKE ? OR content LIKE ? OR summary LIKE ?)")
+		like := "%" + term + "%"
+		args = append(args, like, like, like)
+	}
+	args = append(args, limit)
+	rows, err := db.Query(
+		`SELECT session_id, channel, content, summary, timestamp
+		 FROM sessions_fts
+		 WHERE `+strings.Join(where, " OR ")+`
+		 ORDER BY timestamp DESC
+		 LIMIT ?`,
+		args...,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return scanFTSSessions(rows)
+}
+
+func recallLikeTerms(query string) []string {
+	cleaned := strings.NewReplacer(
+		"session_id:", " ",
+		"content:", " ",
+		"summary:", " ",
+		"AND", " ",
+		"OR", " ",
+		"NOT", " ",
+		"*", " ",
+		"\"", " ",
+		"(", " ",
+		")", " ",
+	).Replace(query)
+	fields := strings.FieldsFunc(cleaned, func(r rune) bool {
+		return !(unicode.IsLetter(r) || unicode.IsDigit(r) || containsCJKRune(r))
+	})
+	seen := map[string]bool{}
+	var terms []string
+	for _, field := range fields {
+		field = strings.TrimSpace(field)
+		if field == "" || seen[field] {
+			continue
+		}
+		if containsCJK(field) || len([]rune(field)) >= 3 {
+			seen[field] = true
+			terms = append(terms, field)
+			if len(terms) >= 8 {
+				break
+			}
+		}
+	}
+	return terms
+}
+
+func containsCJK(s string) bool {
+	for _, r := range s {
+		if containsCJKRune(r) {
+			return true
+		}
+	}
+	return false
+}
+
+func containsCJKRune(r rune) bool {
+	return (r >= 0x4E00 && r <= 0x9FFF) ||
+		(r >= 0x3400 && r <= 0x4DBF) ||
+		(r >= 0x20000 && r <= 0x2A6DF) ||
+		(r >= 0x2A700 && r <= 0x2B73F) ||
+		(r >= 0x2B740 && r <= 0x2B81F) ||
+		(r >= 0x2B820 && r <= 0x2CEAF)
 }
 
 // initSchema 确保所有必要的表结构都已创建

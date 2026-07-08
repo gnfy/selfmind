@@ -32,6 +32,10 @@ type App struct {
 	// starts a fresh session. Chats are channel-local, so resuming means
 	// reusing that channel's conversation history.
 	resumeChannel string
+	// resumeTaskRef is the task/list reference from `selfmind resume <task>`.
+	// It is pinned before the TUI starts, then the normal interactive session
+	// continues with that task as the next-turn context.
+	resumeTaskRef string
 	input         *bufio.Reader
 
 	// gatewayEnsured guards the one-time local-daemon auto-start so each CLI
@@ -80,12 +84,18 @@ func Run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	app.args = cleanedArgs
 	app.configPath = configPath
 	app.resumeChannel = resumeChannel
+	if handled, exitCode := app.extractTaskResumeCommand(); handled && exitCode != 0 {
+		return exitCode
+	}
 	if configPath != "" {
 		_ = os.Setenv("SELF_CONFIG", configPath)
 	}
 	app.applyGatewayConfigEnv()
 
 	if handled, exitCode := app.runGatewayCommandIfRequested(); handled {
+		return exitCode
+	}
+	if handled, exitCode := app.runConfigCommandIfRequested(); handled {
 		return exitCode
 	}
 	if handled, exitCode := app.runModelCommandIfRequested(); handled {
@@ -125,6 +135,9 @@ func printTopLevelHelp(stdout io.Writer) {
 	fmt.Fprintln(stdout)
 	fmt.Fprintln(stdout, "Usage:")
 	fmt.Fprintln(stdout, "  selfmind [--config PATH] [--resume SESSION_ID]")
+	fmt.Fprintln(stdout, "  selfmind resume <n|task_id>")
+	fmt.Fprintln(stdout, "  selfmind tasks [open|done|archived|all|<keyword>]")
+	fmt.Fprintln(stdout, "  selfmind config [doctor|upgrade]")
 	fmt.Fprintln(stdout, "  selfmind model [current|check|list|set <provider> <model>]")
 	fmt.Fprintln(stdout, "  selfmind auth [login|status|logout] ...")
 	fmt.Fprintln(stdout, "  selfmind eval [list|run|report]")
@@ -137,11 +150,13 @@ func printTopLevelHelp(stdout io.Writer) {
 func (a *App) runTUI() int {
 	cfg, err := config.LoadConfig(config.Options{Path: a.configPath})
 	if err != nil {
-		fmt.Fprintln(a.stderr, err)
+		fmt.Fprintf(a.stderr, "SelfMind config error: %v\n", err)
+		fmt.Fprintln(a.stderr, "Run `selfmind doctor` for details.")
 		return 1
 	}
 
 	log.Init(log.Options{Level: cfg.Agent.LogLevel})
+	a.printStartupHealthWarnings()
 
 	// Daemon-client mode is now the DEFAULT: the TUI runs as a thin client to a
 	// single shared gateway daemon (the codex/hermes multi-terminal model), so
@@ -215,15 +230,19 @@ func (a *App) runTUI() int {
 		// Smart-mode approval triage (H2): cheap-model judge off the main run
 		// provider. Nil when unavailable → smart mode asks a human.
 		// (Escrow needs the daemon sweep, so PendingNotifyAfter is daemon-only.)
-		ApprovalJudge: appcore.NewApprovalJudge(agent.ApprovalJudgeProvider()),
+		ApprovalJudge: appcore.NewConfiguredApprovalJudge(mem, cfg, tenantID),
 		// Post-run labeler (Work Timeline P3): cheap memory_extract-role judge
 		// that re-points a wrong pre-label after the run. Nil → labels are kept.
-		Labeler: appcore.NewRunLabeler(agent.SummaryProvider()),
+		Labeler: appcore.NewConfiguredRunLabeler(mem, cfg, tenantID),
 		// Automatic semantic recall (Work Timeline P2): same selector-layer
 		// wiring as the daemon so in-process TUI turns get identical context.
 		Recall: httpapi.NewRecallEngine(controlStore, mem, appcore.SemanticRecallExpander(mem, cfg, tenantID)),
 	}
 	ctrl.SetMessageProcessor(localGateway.ProcessMessage)
+	if err := a.pinResumeTask(localGateway.ProcessMessage); err != nil {
+		fmt.Fprintf(a.stderr, "SelfMind resume error: %v\n", err)
+		return 1
+	}
 	disp.InjectClarifyHandler(ctrl.ClarifyHandler())
 	ctrl.SetSessionSearchFn(mem.SearchFn(tenantID))
 
@@ -254,7 +273,9 @@ func (a *App) runTUI() int {
 	})
 
 	ctrl.Start()
-	printResumeHint(a.stdout, ctrl.SessionChannel())
+	if a.resumeChannel != "" || ctrl.HasConversationHistory() {
+		printResumeHint(a.stdout, ctrl.SessionChannel())
+	}
 	fmt.Fprintln(a.stdout, "Goodbye!")
 	return 0
 }

@@ -64,9 +64,9 @@ func NewEditor(c *common.Common, editorCfg *config.EditorConfig) *Editor {
 	t.Placeholder = "Ask SelfMind to inspect, change, test, or remember"
 	t.Prompt = "" // Handled manually in Draw
 
-	editorBG := lipgloss.Color("236")
+	editorBG := lipgloss.Color(common.PaletteEditorBG)
 	baseStyle := lipgloss.NewStyle().Background(editorBG)
-	placeholderStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("244")).Background(editorBG)
+	placeholderStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(common.PaletteEditorHint)).Background(editorBG)
 
 	// Keep the textarea visually merged with the filled composer band.
 	t.FocusedStyle.Base = baseStyle
@@ -496,9 +496,9 @@ func renderEditorValue(value, placeholder string, height, width int, cursorStyle
 		visible = append(visible, "")
 	}
 
-	bg := lipgloss.Color("236")
+	bg := lipgloss.Color(common.PaletteEditorBG)
 	lineStyle := lipgloss.NewStyle().Background(bg).Width(width)
-	textStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("255")).Background(bg)
+	textStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(common.PaletteEditorText)).Background(bg)
 
 	for i, line := range visible {
 		globalLine := start + i
@@ -578,9 +578,9 @@ func renderEmptyEditorLine(placeholder string, width int, cursorStyle lipgloss.S
 	if width < 1 {
 		width = 1
 	}
-	bg := lipgloss.Color("236")
+	bg := lipgloss.Color(common.PaletteEditorBG)
 	lineStyle := lipgloss.NewStyle().Background(bg).Width(width)
-	placeholderStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("244")).Background(bg)
+	placeholderStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(common.PaletteEditorHint)).Background(bg)
 
 	cursorStyleToUse := lipgloss.NewStyle().Background(bg)
 	if cursorVisible {

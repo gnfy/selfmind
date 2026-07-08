@@ -363,6 +363,7 @@ func (a *Agent) waitBeforeRetry(ctx context.Context, attempt int, err error) err
 func (a *Agent) chatResponseWithRetry(ctx context.Context, messages []llm.Message, strategy TaskStrategy) (*llm.ChatResponse, error) {
 	var lastErr error
 	max := a.retryAttempts()
+	messages = a.prepareMessagesForModel(messages)
 	for attempt := 1; attempt <= max; attempt++ {
 		req := llm.ChatRequest{Messages: messages, Tools: a.llmToolDefinitions(strategy)}
 		resp, err := a.activeLLM().Chat(ctx, req)
@@ -407,6 +408,7 @@ func (a *Agent) chatWithRetry(ctx context.Context, messages []llm.Message) (stri
 func (a *Agent) streamChatWithRetry(ctx context.Context, messages []llm.Message, strategy TaskStrategy) (<-chan llm.StreamEvent, error) {
 	var lastErr error
 	max := a.retryAttempts()
+	messages = a.prepareMessagesForModel(messages)
 	for attempt := 1; attempt <= max; attempt++ {
 		req := llm.ChatRequest{Messages: messages, Tools: a.llmToolDefinitions(strategy)}
 		ch, err := a.activeLLM().StreamChat(ctx, req)
@@ -429,6 +431,13 @@ func (a *Agent) streamChatWithRetry(ctx context.Context, messages []llm.Message,
 		}
 	}
 	return nil, fmt.Errorf("llm stream chat failed after %d attempts: %w", max, lastErr)
+}
+
+func (a *Agent) prepareMessagesForModel(messages []llm.Message) []llm.Message {
+	if a == nil || a.contextEngine == nil {
+		return messages
+	}
+	return a.contextEngine.TruncateMessages(messages)
 }
 
 // SetBackend updates the agent's execution backend

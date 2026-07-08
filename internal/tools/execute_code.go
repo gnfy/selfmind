@@ -87,7 +87,17 @@ func (t *ExecuteCodeTool) Execute(args map[string]interface{}) (string, error) {
 		return "", fmt.Errorf("only python is supported currently")
 	}
 
-	tmpDir := filepath.Join(os.Getenv("HOME"), ".selfmind", "code_sandbox")
+	home := os.Getenv("HOME")
+	if home == "" {
+		home, _ = os.UserHomeDir()
+	}
+	if home == "" {
+		home = "."
+	}
+	tmpDir, err := filepath.Abs(filepath.Join(home, ".selfmind", "code_sandbox"))
+	if err != nil {
+		return "", fmt.Errorf("resolve sandbox dir: %w", err)
+	}
 	if err := os.MkdirAll(tmpDir, 0o755); err != nil {
 		return "", fmt.Errorf("create sandbox dir: %w", err)
 	}
@@ -118,7 +128,7 @@ func (t *ExecuteCodeTool) Execute(args map[string]interface{}) (string, error) {
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
-	err := cmd.Run()
+	err = cmd.Run()
 	if err != nil {
 		if ctx.Err() == context.DeadlineExceeded {
 			return "", fmt.Errorf("execution timed out after %d seconds", timeout)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 
@@ -25,7 +26,7 @@ func writeRunnerFixtures(t *testing.T) (string, string) {
 
 	realDataDir := filepath.Join(t.TempDir(), "realdata")
 	cfgPath := filepath.Join(t.TempDir(), "config.yaml")
-	cfg := "storage:\n  type: \"sqlite\"\n  data_dir: \"" + realDataDir + "\"\n"
+	cfg := "storage:\n  type: \"sqlite\"\n  data_dir: " + strconv.Quote(realDataDir) + "\n"
 	if err := os.WriteFile(cfgPath, []byte(cfg), 0o644); err != nil {
 		t.Fatalf("write config: %v", err)
 	}

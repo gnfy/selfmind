@@ -18,11 +18,11 @@ import (
 
 // ResponsesAdapter talks to OpenAI/Codex Responses-compatible endpoints.
 type ResponsesAdapter struct {
-	APIKey         string
-	KeyGetter      func() string
-	TokenRefresher func() string
-	Model          string
-	BaseURL        string
+	APIKey          string
+	KeyGetter       func() string
+	TokenRefresher  func() string
+	Model           string
+	BaseURL         string
 	Store           *bool
 	RequireStream   bool
 	ReasoningEffort string            // e.g. "low"/"medium"/"high"; drives the Responses reasoning field
@@ -368,8 +368,14 @@ func (a *ResponsesAdapter) requestFromChat(req ChatRequest, stream bool) respons
 	if effort := strings.TrimSpace(a.ReasoningEffort); effort != "" {
 		wire.Reasoning = &responsesReasoning{Effort: effort}
 	}
+	// Responses replays assistant function_call items as first-class input
+	// items. A standalone historical function_call is valid replay context, but
+	// a function_call_output without a matching call_id is rejected by the API.
+	// Keep the adapter-local pendingToolOutputs check below instead of applying
+	// the stricter chat/anthropic ledger sanitizer here.
+	messages := req.Messages
 	pendingToolOutputs := map[string]int{}
-	for _, m := range req.Messages {
+	for _, m := range messages {
 		if m.Role == "tool" {
 			callID := strings.TrimSpace(m.ToolCallID)
 			if callID == "" {

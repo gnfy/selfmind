@@ -258,6 +258,37 @@ func (m *uiModel) forwardGatewayEvent(event llm.StreamEvent) {
 		if id != "" {
 			m.program.Send(MsgApprovalRequest{ID: id, Tool: event.ToolName, Target: target, Reason: event.Content})
 		}
+	case "clarify.requested":
+		if strings.TrimSpace(event.Content) == "" {
+			return
+		}
+		id := ""
+		if event.Payload != nil {
+			if v, ok := event.Payload["clarify_id"].(string); ok {
+				id = v
+			}
+		}
+		m.program.Send(MsgClarifyRequest{ID: id, Question: event.Content, Choices: clarifyChoicesFromPayload(event.Payload)})
+	}
+}
+
+func clarifyChoicesFromPayload(payload map[string]interface{}) []string {
+	if payload == nil || payload["choices"] == nil {
+		return nil
+	}
+	switch raw := payload["choices"].(type) {
+	case []string:
+		return raw
+	case []interface{}:
+		choices := make([]string, 0, len(raw))
+		for _, item := range raw {
+			if s := strings.TrimSpace(fmt.Sprint(item)); s != "" {
+				choices = append(choices, s)
+			}
+		}
+		return choices
+	default:
+		return nil
 	}
 }
 

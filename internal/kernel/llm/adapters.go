@@ -90,12 +90,13 @@ type OpenAIResponse struct {
 
 func openAIRequestFromChat(model string, req ChatRequest, stream bool) OpenAIRequest {
 	nativeTools := len(req.Tools) > 0
+	messages := sanitizeToolMessageLedger(req.Messages)
 	openaiReq := OpenAIRequest{
 		Model:    model,
-		Messages: make([]OpenAIMessage, 0, len(req.Messages)),
+		Messages: make([]OpenAIMessage, 0, len(messages)),
 		Stream:   stream,
 	}
-	for _, m := range req.Messages {
+	for _, m := range messages {
 		openaiReq.Messages = append(openaiReq.Messages, openAIMessageFromLLM(m, nativeTools))
 	}
 	if nativeTools {
@@ -413,11 +414,6 @@ func (a *OpenAIAdapter) StreamChat(ctx context.Context, req ChatRequest) (<-chan
 		if authFailure {
 			return nil, foldRetryAfter(providerAPIError("openai", resp.StatusCode, b), resp.Header)
 		}
-		if len(wireReq.Tools) > 0 {
-			legacyReq := wireReq
-			legacyReq.Tools = nil
-			return a.StreamChat(ctx, legacyReq)
-		}
 		return nil, foldRetryAfter(providerAPIError("openai", resp.StatusCode, b), resp.Header)
 	}
 
@@ -479,7 +475,7 @@ func openAIStreamEvents(resp *http.Response) <-chan StreamEvent {
 							} `json:"delta"`
 							FinishReason string `json:"finish_reason"`
 						} `json:"choices"`
-						Usage *UsageStats `json:"usage"`
+						Usage *openAIStreamUsage `json:"usage"`
 					}
 					if err := json.Unmarshal(dataPart, &chunk); err != nil {
 						continue
@@ -495,7 +491,10 @@ func openAIStreamEvents(resp *http.Response) <-chan StreamEvent {
 						ch <- StreamEvent{FinishReason: chunk.Choices[0].FinishReason}
 					}
 					if chunk.Usage != nil {
-						ch <- StreamEvent{Usage: chunk.Usage}
+						stats := chunk.Usage.usageStats()
+						if stats.InputTokens != 0 || stats.OutputTokens != 0 {
+							ch <- StreamEvent{Usage: &stats}
+						}
 					}
 				}
 			}
@@ -508,6 +507,25 @@ func openAIStreamEvents(resp *http.Response) <-chan StreamEvent {
 		}
 	}()
 	return ch
+}
+
+type openAIStreamUsage struct {
+	PromptTokens     int `json:"prompt_tokens"`
+	CompletionTokens int `json:"completion_tokens"`
+	InputTokens      int `json:"input_tokens"`
+	OutputTokens     int `json:"output_tokens"`
+}
+
+func (u openAIStreamUsage) usageStats() UsageStats {
+	in := u.InputTokens
+	if in == 0 {
+		in = u.PromptTokens
+	}
+	out := u.OutputTokens
+	if out == 0 {
+		out = u.CompletionTokens
+	}
+	return UsageStats{InputTokens: in, OutputTokens: out}
 }
 
 func (a *OpenAIAdapter) applyOptions(openaiReq *OpenAIRequest, req ChatRequest) {

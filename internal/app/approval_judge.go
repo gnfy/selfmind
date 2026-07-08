@@ -5,6 +5,9 @@ import (
 	"strings"
 
 	"selfmind/internal/kernel/llm"
+	"selfmind/internal/kernel/memory"
+	"selfmind/internal/platform/config"
+	"selfmind/internal/platform/log"
 	"selfmind/internal/tools"
 )
 
@@ -36,6 +39,15 @@ func NewApprovalJudge(provider llm.Provider) tools.ApprovalJudge {
 		return nil
 	}
 	return &llmApprovalJudge{provider: provider}
+}
+
+func NewConfiguredApprovalJudge(mem *memory.MemoryManager, cfg *config.Config, tenantID string) tools.ApprovalJudge {
+	provider := explicitRoleProvider(mem, cfg, tenantID, llm.RoleBackgroundReview)
+	if provider == nil {
+		log.Info("smart approval judge disabled: configure models.roles.background_review to enable model triage without using the main model")
+		return nil
+	}
+	return NewApprovalJudge(provider)
 }
 
 func (j *llmApprovalJudge) Judge(ctx context.Context, prompt string) (string, error) {

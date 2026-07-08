@@ -3,6 +3,7 @@ package modelruntime
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -154,6 +155,9 @@ func TestAtomicWriteFile(t *testing.T) {
 	data, err := os.ReadFile(path)
 	if err != nil || string(data) != `{"token":"x"}` {
 		t.Fatalf("read back = %q, %v", data, err)
+	}
+	if runtime.GOOS == "windows" {
+		return
 	}
 	if fi, _ := os.Stat(path); fi != nil && fi.Mode().Perm() != 0o600 {
 		t.Fatalf("mode = %v, want 0600", fi.Mode().Perm())

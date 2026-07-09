@@ -2,6 +2,7 @@ package weixin
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -113,6 +114,7 @@ func (a *Adapter) pollLoop(ctx context.Context) {
 	defer close(a.done)
 	syncBuf := a.loadSyncBuf()
 	backoff := time.Second
+	sessionExpiredLogged := false
 	for {
 		select {
 		case <-ctx.Done():
@@ -121,6 +123,21 @@ func (a *Adapter) pollLoop(ctx context.Context) {
 		}
 		resp, err := a.client.GetUpdates(ctx, syncBuf, 50*time.Second)
 		if err != nil {
+			if errors.Is(err, ErrSessionExpired) {
+				// Recovery requires a manual re-login; poll slowly instead of
+				// hammering, and shout once per expiry so the owner learns the
+				// channel is down instead of discovering it by silence.
+				if !sessionExpiredLogged {
+					log.Error("weixin session expired — inbound messages are NOT being received; run `selfmind weixin login` and restart the gateway", "error", tools.RedactSensitive(err.Error()))
+					sessionExpiredLogged = true
+				}
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(5 * time.Minute):
+				}
+				continue
+			}
 			log.Warn("weixin getupdates failed", "error", tools.RedactSensitive(err.Error()))
 			wait := backoff
 			if wait > 30*time.Second {
@@ -137,6 +154,7 @@ func (a *Adapter) pollLoop(ctx context.Context) {
 			continue
 		}
 		backoff = time.Second
+		sessionExpiredLogged = false
 		if next := firstNonEmpty(stringFromMap(resp, "get_updates_buf"), stringFromMap(resp, "sync_buf")); next != "" {
 			syncBuf = next
 			a.saveSyncBuf(syncBuf)
@@ -162,7 +180,7 @@ func (a *Adapter) processMessage(ctx context.Context, raw map[string]interface{}
 		return nil
 	}
 	msgID := messageID(msg)
-	if msgID != "" && a.isDuplicate(msgID) {
+	if msgID != "" && a.isDuplicate(ctx, msgID) {
 		return nil
 	}
 	sender := senderID(msg, a.cfg.AccountID)
@@ -273,19 +291,32 @@ func (a *Adapter) allowed(sender, chat string, isGroup bool) bool {
 	}
 }
 
-func (a *Adapter) isDuplicate(id string) bool {
+func (a *Adapter) isDuplicate(ctx context.Context, id string) bool {
 	a.mu.Lock()
-	defer a.mu.Unlock()
 	now := time.Now()
 	for key, at := range a.seen {
 		if now.Sub(at) > 24*time.Hour {
 			delete(a.seen, key)
 		}
 	}
-	if _, ok := a.seen[id]; ok {
+	_, dup := a.seen[id]
+	if !dup {
+		a.seen[id] = now
+	}
+	a.mu.Unlock()
+	if dup {
 		return true
 	}
-	a.seen[id] = now
+	// The in-memory map dies with the process while the iLink sync buffer
+	// replays recent messages on reconnect, so a restart used to re-run the
+	// agent on already-processed messages. The durable first-seen check in
+	// control.db is what closes that window; a store error fails open so a
+	// dedup hiccup never drops a real message.
+	if a.store != nil {
+		if first, err := a.store.MarkInboundSeen(ctx, "weixin", id); err == nil && !first {
+			return true
+		}
+	}
 	return false
 }
 

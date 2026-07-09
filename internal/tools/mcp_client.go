@@ -190,8 +190,22 @@ func (c *MCPClient) handleMessage(msg *JSONRPCMessage) {
 		c.sendError(msg.ID, -1, "sampling not implemented")
 	default:
 		if msg.ID != nil {
-			id := int64(msg.ID.(float64))
-			getResponseChan(id) <- msg
+			// JSON numbers decode as float64; a malformed server can send a
+			// string/null id — never panic the reader goroutine on it.
+			f, ok := msg.ID.(float64)
+			if !ok {
+				return
+			}
+			ch, ok := lookupResponseChan(int64(f))
+			if !ok {
+				// Late reply after the waiter timed out and deleted its channel:
+				// drop it instead of re-creating an entry nobody will ever drain.
+				return
+			}
+			select {
+			case ch <- msg:
+			default: // duplicate reply for the same id; waiter already has one
+			}
 		}
 	}
 }
@@ -370,6 +384,9 @@ func nextRequestID() int64 {
 	return nextReqID
 }
 
+// getResponseChan registers (or returns) the waiter channel for a request id.
+// Only the request sender may create entries; the reader goroutine uses
+// lookupResponseChan so late replies never resurrect a deleted entry.
 func getResponseChan(id int64) chan *JSONRPCMessage {
 	respMu.Lock()
 	defer respMu.Unlock()
@@ -377,6 +394,13 @@ func getResponseChan(id int64) chan *JSONRPCMessage {
 		respChans[id] = make(chan *JSONRPCMessage, 1)
 	}
 	return respChans[id]
+}
+
+func lookupResponseChan(id int64) (chan *JSONRPCMessage, bool) {
+	respMu.Lock()
+	defer respMu.Unlock()
+	ch, ok := respChans[id]
+	return ch, ok
 }
 
 func (c *MCPClient) sendRequest(method string, params interface{}, result interface{}) (*JSONRPCMessage, error) {

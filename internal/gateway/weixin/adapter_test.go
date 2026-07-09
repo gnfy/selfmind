@@ -185,3 +185,31 @@ func weixinTextFromSendPayload(payload map[string]interface{}) string {
 	text, _ := textItem["text"].(string)
 	return text
 }
+
+func TestDuplicateDetectionSurvivesRestart(t *testing.T) {
+	ctx := context.Background()
+	store, err := control.OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	first := NewAdapter(RuntimeConfig{DMPolicy: "open", GroupPolicy: "disabled"}, store, nil)
+	if first.isDuplicate(ctx, "wx-msg-1") {
+		t.Fatal("first sighting must not be a duplicate")
+	}
+	if !first.isDuplicate(ctx, "wx-msg-1") {
+		t.Fatal("in-memory repeat must be a duplicate")
+	}
+
+	// A fresh adapter simulates a daemon restart: the in-memory map is empty
+	// but the sync buffer replays recent messages — the durable store is what
+	// must remember them.
+	second := NewAdapter(RuntimeConfig{DMPolicy: "open", GroupPolicy: "disabled"}, store, nil)
+	if !second.isDuplicate(ctx, "wx-msg-1") {
+		t.Fatal("duplicate detection must survive a restart via the durable store")
+	}
+	if second.isDuplicate(ctx, "wx-msg-2") {
+		t.Fatal("an unseen id must not be a duplicate")
+	}
+}

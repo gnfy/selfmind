@@ -119,10 +119,11 @@ func OpenStore(dataDir string) (*Store, error) {
 	if dataDir == "" {
 		return nil, fmt.Errorf("data dir is required")
 	}
-	if err := os.MkdirAll(dataDir, 0755); err != nil {
+	if err := os.MkdirAll(dataDir, 0700); err != nil {
 		return nil, fmt.Errorf("create data dir: %w", err)
 	}
-	db, err := sql.Open("sqlite", filepath.Join(dataDir, "control.db")+"?_journal=WAL&_sync=NORMAL")
+	dbPath := filepath.Join(dataDir, "control.db")
+	db, err := sql.Open("sqlite", dbPath+"?_journal=WAL&_sync=NORMAL")
 	if err != nil {
 		return nil, err
 	}
@@ -136,7 +137,21 @@ func OpenStore(dataDir string) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
+	tightenStorePerms(dataDir, dbPath)
 	return store, nil
+}
+
+// tightenStorePerms keeps conversation history and account bindings private on
+// shared hosts: SQLite creates files 0644 by default, and pre-existing installs
+// created the data dir 0755. Best-effort — chmod is a no-op on some filesystems
+// (e.g. Windows) and must never block startup.
+func tightenStorePerms(dataDir, dbPath string) {
+	_ = os.Chmod(dataDir, 0700)
+	for _, p := range []string{dbPath, dbPath + "-wal", dbPath + "-shm"} {
+		if _, err := os.Stat(p); err == nil {
+			_ = os.Chmod(p, 0600)
+		}
+	}
 }
 
 func (s *Store) Close() error {
@@ -382,7 +397,14 @@ CREATE TABLE IF NOT EXISTS task_queue (
 	restarts INTEGER NOT NULL DEFAULT 0,
 	created_at INTEGER NOT NULL
 );
-CREATE INDEX IF NOT EXISTS idx_task_queue_person ON task_queue(tenant_id, person_id, status, created_at);`
+CREATE INDEX IF NOT EXISTS idx_task_queue_person ON task_queue(tenant_id, person_id, status, created_at);
+CREATE TABLE IF NOT EXISTS inbound_dedup (
+	platform TEXT NOT NULL,
+	message_id TEXT NOT NULL,
+	created_at INTEGER NOT NULL,
+	PRIMARY KEY (platform, message_id)
+);
+CREATE INDEX IF NOT EXISTS idx_inbound_dedup_created ON inbound_dedup(created_at);`
 	if _, err := s.db.ExecContext(ctx, schema); err != nil {
 		return err
 	}

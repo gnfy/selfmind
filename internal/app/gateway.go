@@ -37,9 +37,17 @@ func InitGateway(dataDir string, mem *memory.MemoryManager, agent *kernel.Agent,
 
 	var cronSched *cron.Scheduler
 	if cfg.Cron.Enabled {
-		cronDB, err := sql.Open("sqlite", dataDir+"/cron.db")
+		cronDB, err := sql.Open("sqlite", dataDir+"/cron.db?_journal=WAL&_sync=NORMAL")
 		if err != nil {
 			return nil, fmt.Errorf("open cron db: %w", err)
+		}
+		// Same SQLite hygiene as control.db: single writer connection with a
+		// busy timeout, so cron writes never race the scheduler goroutine into
+		// "database is locked".
+		cronDB.SetMaxOpenConns(1)
+		if _, err := cronDB.Exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout=5000;`); err != nil {
+			cronDB.Close()
+			return nil, fmt.Errorf("configure cron db: %w", err)
 		}
 		cronSched = cron.NewScheduler(cronDB, mem)
 		if err := cronSched.InitSchema(context.Background()); err != nil {

@@ -11,6 +11,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"mime"
@@ -184,10 +185,28 @@ func (c *Client) SaveContextToken(peerID, token string) {
 	c.tokens.Set(c.cfg.AccountID, peerID, token)
 }
 
+// ErrSessionExpired reports that the iLink login session is no longer valid.
+// The server keeps answering getupdates with HTTP 200 + an in-band error code,
+// so without this check the poll loop would treat expiry as an empty success
+// and silently stop receiving messages forever.
+var ErrSessionExpired = errors.New("weixin session expired")
+
 func (c *Client) GetUpdates(ctx context.Context, syncBuf string, timeout time.Duration) (map[string]interface{}, error) {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	return c.apiPost(ctx, epGetUpdates, map[string]interface{}{"get_updates_buf": syncBuf}, c.cfg.Token)
+	resp, err := c.apiPost(ctx, epGetUpdates, map[string]interface{}{"get_updates_buf": syncBuf}, c.cfg.Token)
+	if err != nil {
+		return nil, err
+	}
+	ret, errcode := intFromMap(resp, "ret"), intFromMap(resp, "errcode")
+	if isOKCode(ret) && isOKCode(errcode) {
+		return resp, nil
+	}
+	errmsg := stringFromMap(resp, "errmsg")
+	if isSessionExpired(ret, errcode, errmsg) {
+		return nil, fmt.Errorf("%w: ret=%d errcode=%d errmsg=%s", ErrSessionExpired, ret, errcode, errmsg)
+	}
+	return nil, fmt.Errorf("iLink getupdates error: ret=%d errcode=%d errmsg=%s", ret, errcode, errmsg)
 }
 
 func (c *Client) SendTyping(ctx context.Context, chatID string, start bool) error {

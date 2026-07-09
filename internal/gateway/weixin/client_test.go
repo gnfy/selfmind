@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -187,5 +188,49 @@ func TestPushConfidence(t *testing.T) {
 	c.SaveContextToken("peer@im.wechat", "tok")
 	if !c.PushConfidence("peer@im.wechat") {
 		t.Fatal("fresh token → confident push")
+	}
+}
+
+func TestGetUpdatesDetectsSessionExpiry(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// iLink reports expiry in-band on HTTP 200 — the exact shape that used
+		// to read as an empty success and silently stop the poll loop.
+		_, _ = w.Write([]byte(`{"ret":-14,"errcode":0,"errmsg":"session expired"}`))
+	}))
+	defer server.Close()
+
+	client := NewClient(RuntimeConfig{
+		AccountID: "wx-account",
+		Token:     "token",
+		BaseURL:   server.URL,
+		HomeDir:   t.TempDir(),
+	})
+	_, err := client.GetUpdates(context.Background(), "", time.Second)
+	if err == nil {
+		t.Fatal("in-band session expiry must surface as an error")
+	}
+	if !errors.Is(err, ErrSessionExpired) {
+		t.Fatalf("expected ErrSessionExpired, got %v", err)
+	}
+}
+
+func TestGetUpdatesPassesThroughOKResponse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"ret":0,"errcode":0,"get_updates_buf":"buf-1"}`))
+	}))
+	defer server.Close()
+
+	client := NewClient(RuntimeConfig{
+		AccountID: "wx-account",
+		Token:     "token",
+		BaseURL:   server.URL,
+		HomeDir:   t.TempDir(),
+	})
+	resp, err := client.GetUpdates(context.Background(), "", time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp["get_updates_buf"] != "buf-1" {
+		t.Fatalf("unexpected response: %v", resp)
 	}
 }

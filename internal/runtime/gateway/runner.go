@@ -34,7 +34,10 @@ type Options struct {
 func Run(ctx context.Context, opts Options) error {
 	cfg, err := config.LoadConfig(config.Options{Path: opts.ConfigPath})
 	if err != nil {
-		cfg = &config.Config{}
+		// Fail fast: LoadConfig auto-creates the default template when the file
+		// is missing, so an error here means a genuinely broken config. Booting
+		// with an empty config would half-start a daemon with no providers.
+		return fmt.Errorf("load config: %w", err)
 	}
 	applyGatewayRuntimeEnv(cfg)
 	log.Init(log.Options{Level: cfg.Agent.LogLevel})

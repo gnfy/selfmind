@@ -116,12 +116,61 @@ func (d *Server) handleIMWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Redelivery guard: IM platforms re-POST an event on any non-2xx or slow
+	// response, so a duplicate must be acknowledged 200 WITHOUT running the
+	// agent again. Keyed by the platform's own message/event id, persisted in
+	// control.db so it survives a restart; payloads with no recognizable id
+	// pass through (nothing safe to dedup on), and a dedup-store error fails
+	// open rather than dropping real work.
+	if msgID := imMessageID(platform, payload); msgID != "" && d.Control != nil {
+		first, err := d.Control.MarkInboundSeen(r.Context(), platform, msgID)
+		if err != nil {
+			log.Warn("im webhook dedup check failed", "platform", platform, "error", err)
+		} else if !first {
+			writeJSON(w, http.StatusOK, map[string]string{"status": "duplicate"})
+			return
+		}
+	}
+
 	req := messageRequestFromIM(platform, payload)
 	if boolFromMap(payload, "async") || (os.Getenv("SELF_IM_ASYNC") == "1" && !isControlCommand(req.Content)) {
 		req.Async = true
 	}
 	resp, status := d.ProcessMessage(r.Context(), req)
 	writeJSON(w, status, resp)
+}
+
+// imMessageID extracts the platform's own message/event id from a webhook
+// payload for redelivery dedup. Coverage: generic (`message_id`/`event_id`),
+// Feishu v2 (`header.event_id`, else `event.message.message_id`), QQ official
+// bot (`d.id`), and Telegram (`update_id`). Empty means "no id to dedup on".
+func imMessageID(platform string, payload map[string]interface{}) string {
+	if id := firstNonEmpty(mapString(payload, "message_id"), mapString(payload, "event_id")); id != "" {
+		return id
+	}
+	if header := nestedMap(payload, "header"); header != nil {
+		if id := mapString(header, "event_id"); id != "" {
+			return id
+		}
+	}
+	if event := nestedMap(payload, "event"); event != nil {
+		if msg := nestedMap(event, "message"); msg != nil {
+			if id := mapString(msg, "message_id"); id != "" {
+				return id
+			}
+		}
+	}
+	if strings.EqualFold(platform, "qq") {
+		if d := nestedMap(payload, "d"); d != nil {
+			if id := mapString(d, "id"); id != "" {
+				return id
+			}
+		}
+	}
+	if id := mapString(payload, "update_id"); id != "" {
+		return "update:" + id
+	}
+	return ""
 }
 
 func (d *Server) handleAccountBind(w http.ResponseWriter, r *http.Request) {

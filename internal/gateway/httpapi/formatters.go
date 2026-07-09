@@ -181,6 +181,20 @@ func formatBusyRun(active *activeRun) string {
 	return fmt.Sprintf("A task is already running: %s\n- elapsed: %s\n\nUse /status for details or /stop to cancel.", textutil.Truncate(toOneLine(title), 60), elapsed)
 }
 
+// formatSteeredIntoRun is the conversational acknowledgement that a
+// continuation was injected into the running task (cross-endpoint steering). No
+// task/run hashes — ids stay in the control plane.
+func formatSteeredIntoRun(active *activeRun) string {
+	if active == nil {
+		return "Added your guidance to the running task."
+	}
+	title := strings.TrimSpace(active.Summary)
+	if title == "" {
+		title = "the running task"
+	}
+	return fmt.Sprintf("Added your guidance to %s. It will pick this up at the next step.", textutil.Truncate(toOneLine(title), 60))
+}
+
 func formatActiveRunStatus(active *activeRun) *api.ActiveRunStatus {
 	if active == nil {
 		return nil

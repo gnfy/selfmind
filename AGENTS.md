@@ -129,7 +129,12 @@ Domain docs (**mandatory** before changing that domain):
   a genuinely new message is enqueued in `control.task_queue` and auto-started
   when the run finishes (`RunCoordinator.drainQueue`, per-person re-entrancy
   guard, boot drain via `Server.DrainQueuedAtBoot`) — never rejected as "busy".
-  An `IntentContinue` message is NOT new work: it stays on the busy/steer path.
+  An `IntentContinue` message is NOT new work: it STEERS the active run — it is
+  injected into that run's steering channel on EVERY entry (`/v1/message` as
+  well as the thin-client `/v1/runs/steer`), via the shared
+  `Server.steerActiveRun`, so a continuation from any surface (CLI, IM, web)
+  reaches the running task; a full/absent steering channel falls back to the
+  honest busy reply, never a silent drop. A continuation must never be queued.
   A drained item becomes an ordinary async run, so the worker pool still
   schedules it — do not add a second serialization layer.
 - Task = work LABEL, and `resolveTask` is a harmless PRE-LABEL guess (Work
@@ -176,6 +181,18 @@ Domain docs (**mandatory** before changing that domain):
 
 ## Context & Memory
 
+- Project-convention files (AGENTS.md et al.) are injected by `ContextScanner`
+  (`internal/kernel/context_scanner.go`) on a budget INDEPENDENT of the
+  person-memory layer (facts + profile), so raising one never starves the other.
+  Discovery is root→leaf (git/workspace root down to cwd, one highest-priority
+  file per level, deeper = higher precedence, emitted last). Budget is dynamic
+  (scaled to the model window, floored/ceilinged). NEVER drop a file whole for
+  being large — head/tail truncate with a `read_file` pointer to the full path.
+  The block is fenced as UNTRUSTED workspace data that operator/user
+  instructions and safety policy outrank (a cloned repo's AGENTS.md must not
+  inject instructions via the IM path). `filenames` order is precedence; README
+  is intentionally excluded (human-facing, low signal). Do not reintroduce a
+  fixed per-file byte skip.
 - Durable context flows through the selector contract only:
   `control.db -> gateway/httpapi context selector -> kernel.TaskRuntimeContext
   -> kernel.WithTaskRuntimeContext -> Agent.buildSystemPrompt`. Never inject
@@ -317,6 +334,16 @@ Domain docs (**mandatory** before changing that domain):
 - Only clearly read-only tool batches run in parallel. Terminal, file writes,
   patches, memory/skill mutation, process control, delegation, and unknown
   tools run sequentially unless a dedicated safety policy says otherwise.
+- Delegation nesting is bounded STRUCTURALLY, not by a runtime counter (tool
+  execution has no context channel to carry depth). Sub-agent backends are
+  always freshly cloned in `buildDelegateSubBackend` (`internal/app/delegation.go`)
+  — NEVER the shared parent dispatcher — with `delegate_task` stripped unless the
+  depth budget (`delegation.max_depth`, default 1 = flat) allows another hop, in
+  which case a fresh nested delegate wired to depth+1 is added; at the budget the
+  sub-agent is a leaf with no delegation tool. Never hand a sub-agent the parent
+  backend directly (it re-exposes `delegate_task` → runaway recursion) and never
+  mutate the parent dispatcher to filter tools. Batch fan-out is bounded by
+  `max_subtasks`, concurrency by `max_concurrent`.
 - Tool results go through the Agent result envelope before reaching the
   model, TUI, or run events. Raw output, model-bounded content (head/tail
   view with an explicit too-large note), and compact UTF-8-safe user preview
@@ -354,6 +381,16 @@ Domain docs (**mandatory** before changing that domain):
   `bash -c "rm -rf /"` / `sudo rm -rf /` cannot slip past. An unparseable wrapped
   payload degrades to dangerous (approval), never to a hard block — the floor
   only denies what it can positively identify.
+- Network egress is a first-class DANGEROUS class (`egressCommand` in
+  `tools/middleware.go`, folded into `dangerousToolCall`): curl/wget/nc/socat/
+  scp/sftp/rsync/ssh/… by wrapper-unwrapped basename, plus `/dev/tcp/`·
+  `/dev/udp/` redirects — the exfiltration half of the IM-injection threat
+  (untrusted inbound message → terminal data-out). It is dangerous, NOT
+  hardline: on-request (default) and smart modes ask/triage it; full-auto still
+  bypasses it by the documented full-auto contract (owner decision 2026-07-09 —
+  do NOT promote egress to an unbypassable tier without owner sign-off). `git`
+  is intentionally excluded (push/pull to configured remotes = fatigue). Keep it
+  its own named function so it stays testable and tightenable.
 - Running ARBITRARY CODE always asks: `approvalNeeded` returns true for
   `isExecTool` (`terminal`/`shell`/`execute_command`/`execute_code`) in
   on-request AND smart modes, regardless of the dangerous heuristic. The

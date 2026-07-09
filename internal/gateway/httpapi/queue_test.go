@@ -67,12 +67,19 @@ func TestContinuationDoesNotQueue(t *testing.T) {
 	ctx := context.Background()
 	identity := startBlockedRun(t, daemon, provider)
 
-	// A continuation cue steers the active task and must never be queued.
+	// A continuation cue steers the ACTIVE run (injected into its steering
+	// channel, the same one /v1/runs/steer uses) and must never be queued. The
+	// run has a live steering channel with buffer space, so the continuation is
+	// accepted, not bounced as "busy" — this is the cross-endpoint takeover the
+	// north star requires (a continuation from any surface reaches the run).
 	resp, _ := daemon.ProcessMessage(ctx, api.MessageRequest{
 		Platform: "cli", PlatformUserID: "local", Channel: "cli", Content: "继续",
 	})
-	if resp.Turn == nil || resp.Turn.Status != "busy" {
-		t.Fatalf("continuation turn = %+v; want status=busy", resp.Turn)
+	if resp.Turn == nil || resp.Turn.Status != "accepted" {
+		t.Fatalf("continuation turn = %+v; want status=accepted (steered)", resp.Turn)
+	}
+	if !resp.Accepted {
+		t.Fatalf("continuation should be accepted (steered into the run); got %+v", resp)
 	}
 	if n, _ := store.CountQueued(ctx, identity.TenantID, identity.PersonID, control.QueueStatusQueued); n != 0 {
 		t.Fatalf("continuation must not enqueue; queued count = %d", n)

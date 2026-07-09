@@ -458,6 +458,18 @@ type DelegationConfig struct {
 	APIKey        string `mapstructure:"api_key" yaml:"api_key,omitempty"`
 	MaxRetries    int    `mapstructure:"max_retries" yaml:"max_retries,omitempty"`
 	MaxIterations int    `mapstructure:"max_iterations" yaml:"max_iterations,omitempty"`
+	// MaxDepth bounds delegation nesting. Depth 1 = the top-level agent may
+	// delegate once; its sub-agents are leaves that cannot delegate further.
+	// This is a hard STRUCTURAL bound (sub-agents beyond the budget never
+	// receive the delegate_task tool), not a runtime counter — otherwise a
+	// sub-agent handed the full backend can call delegate_task again forever.
+	// Default 1 (flat) when unset.
+	MaxDepth int `mapstructure:"max_depth" yaml:"max_depth,omitempty"`
+	// MaxConcurrent bounds parallel sub-agents in a single batch. Default 5.
+	MaxConcurrent int `mapstructure:"max_concurrent" yaml:"max_concurrent,omitempty"`
+	// MaxSubtasks bounds how many goals one delegate_task batch may fan out to.
+	// Default 16; exceeding it fails the call with a clear error.
+	MaxSubtasks int `mapstructure:"max_subtasks" yaml:"max_subtasks,omitempty"`
 }
 
 type CronConfig struct {

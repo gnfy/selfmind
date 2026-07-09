@@ -41,6 +41,19 @@ type MultiAgentHost struct {
 	stopCh        chan struct{}
 	mu            sync.Mutex
 	running       map[string]context.CancelFunc // taskID -> cancel func
+
+	// subBackendBuilder, when set, overrides the default toolset-filtering
+	// backend construction. Delegation uses it to hand sub-agents a
+	// depth-bounded backend (delegate_task stripped past the budget) so a batch
+	// sub-agent cannot recurse any more than a single-goal one can.
+	subBackendBuilder func(toolsets []string) kernel.AgentBackend
+}
+
+// SetSubBackendBuilder installs a custom sub-agent backend builder. It must be
+// called before RunBatch. See buildDelegateSubBackend for the depth-bounding
+// contract.
+func (h *MultiAgentHost) SetSubBackendBuilder(fn func(toolsets []string) kernel.AgentBackend) {
+	h.subBackendBuilder = fn
 }
 
 // NewMultiAgentHost creates a new MultiAgentHost.
@@ -142,8 +155,15 @@ func (h *MultiAgentHost) runSubAgent(ctx context.Context, task Task, taskID stri
 	// Each subagent gets its own isolated tenant ID
 	subTenantID := fmt.Sprintf("subagent-%s", taskID)
 
-	// Build subagent backend with toolset restrictions
-	subBackend := h.buildSubBackend(task.Toolsets)
+	// Build subagent backend with toolset restrictions. A delegation-supplied
+	// builder (depth-bounded, delegate_task stripped past budget) takes
+	// precedence over the default toolset filter.
+	var subBackend kernel.AgentBackend
+	if h.subBackendBuilder != nil {
+		subBackend = h.subBackendBuilder(task.Toolsets)
+	} else {
+		subBackend = h.buildSubBackend(task.Toolsets)
+	}
 
 	// Build the full prompt
 	fullPrompt := task.Goal

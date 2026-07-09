@@ -267,12 +267,23 @@ func (d *Server) ProcessMessage(ctx context.Context, req api.MessageRequest) (ap
 
 	coord := d.coordinator()
 	if running := coord.currentActive(identity.PersonID); running != nil {
-		// A continuation steers/continues the ACTIVE task, so it is not new work
-		// and must never be queued — keep the honest busy reply (steering proper
-		// goes through /v1/runs/steer). Everything else is genuinely new work:
-		// enqueue it and auto-start when the active run finishes (G1+G2), instead
-		// of rejecting it as "busy" (which killed 24/7 IM dispatch).
+		// A continuation targets the ACTIVE task, so it is not new work and must
+		// never be queued. Historically this returned a bare "busy" reply, which
+		// left the cross-endpoint takeover story broken: a continuation arriving
+		// from IM/web (or any entry that isn't the thin-client /v1/runs/steer
+		// path) could not reach the in-flight run. Now every entry steers — the
+		// continuation is injected into the active run's steering channel, the
+		// same channel /v1/runs/steer uses — so guidance from any surface lands
+		// in the running task (docs/identity-continuity.md "Runtime attachment
+		// model"). Genuinely new work still enqueues (G1+G2), never rejected as
+		// "busy".
 		if intent.Intent == router.IntentContinue {
+			if resp, ok := d.steerActiveRun(ctx, identity, running, req); ok {
+				return resp, http.StatusOK
+			}
+			// Steering unavailable (no live channel) or the buffer is full
+			// (guidance arriving faster than the loop drains): report back-
+			// pressure honestly rather than dropping the message.
 			return api.MessageResponse{
 				Identity: identity,
 				Content:  formatBusyRun(running),

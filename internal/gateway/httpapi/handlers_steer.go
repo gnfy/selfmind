@@ -66,6 +66,41 @@ func (d *Server) handleRunSteer(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, api.RunSteerResponse{Identity: identity, Accepted: true})
 }
 
+// steerActiveRun injects a continuation message into an already-running run's
+// steering channel. It is the shared core behind BOTH the thin-client
+// /v1/runs/steer endpoint and the /v1/message continuation path, so a
+// continuation from ANY surface (CLI, IM, web) reaches the in-flight run
+// instead of bouncing off a "busy" reply. Non-blocking by design: the agent
+// loop drains at iteration boundaries, so a full buffer means guidance is
+// arriving faster than it is consumed — that is real back-pressure, reported to
+// the caller (ok=false) rather than blocking the handler or dropping text.
+//
+// Returns ok=false when there is no live steering channel or the buffer is
+// full; the caller then decides how to report back-pressure (the /v1/message
+// path falls back to the busy reply). active must be the coordinator's live
+// handle (its Steer channel is shared through the returned copy).
+func (d *Server) steerActiveRun(ctx context.Context, identity *control.IdentityContext, active *activeRun, req api.MessageRequest) (api.MessageResponse, bool) {
+	if active == nil || active.Steer == nil {
+		return api.MessageResponse{}, false
+	}
+	text := strings.TrimSpace(req.Content)
+	if text == "" {
+		return api.MessageResponse{}, false
+	}
+	select {
+	case active.Steer <- text:
+		appendRunSteeredEvent(ctx, d.Control, active, fallback(req.Channel, active.Channel), text)
+		return api.MessageResponse{
+			Identity: identity,
+			Content:  formatSteeredIntoRun(active),
+			Accepted: true,
+			Turn:     messageTurn("accepted", "running", "running", active.TaskID, active.RunID, active.Summary),
+		}, true
+	default:
+		return api.MessageResponse{}, false
+	}
+}
+
 // appendRunSteeredEvent records that guidance entered the run, with a bounded
 // preview only (never the raw full text — events are durable context). Skipped
 // when the run has not resolved its task yet: TaskID is assigned after

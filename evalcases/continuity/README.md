@@ -59,3 +59,11 @@ forbids it): delete that case's `.vcr/<case-id>/` directory and re-record.
   not free model prose, so replays stay stable.
 - `continuity-stranger.yaml` uses the per-turn `platform_user_id` override to
   simulate a second platform user; see `docs/eval-loop.md`.
+- **Cross-endpoint active-run steering** (a continuation injected into a run
+  that is still executing; 2026-07-09) is deliberately NOT an eval case: the
+  eval runner is sequential — turns do not overlap, so there is no live
+  active run for a later turn to steer into. Modeling it would require an
+  eval-only shortcut (forbidden). Its regression protection is the real-gateway
+  Go coverage: `httpapi/steer_active_run_test.go`,
+  `httpapi/handlers_steer_test.go`, and `httpapi/queue_test.go`
+  (`TestContinuationDoesNotQueue`).

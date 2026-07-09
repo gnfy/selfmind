@@ -607,6 +607,12 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 
 	// 0.1 Inject project context files (.selfmind.md, AGENTS.md, etc.)
 	if a.contextScanner != nil {
+		// Size the project-context budget to the live model window (may have
+		// been changed by SetContextWindow). The project layer has its OWN
+		// budget, independent of the person-memory layer below.
+		if a.contextEngine != nil {
+			a.contextScanner.SetContextWindowTokens(a.contextEngine.maxTokens)
+		}
 		var ctxFiles []ContextFile
 		if workspace, ok := WorkspaceContextFromContext(ctx); ok {
 			ctxFiles, _ = a.contextScanner.ScanFrom(workspace.Root)

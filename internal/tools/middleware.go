@@ -687,6 +687,50 @@ var dangerousBinaries = map[string]struct{}{
 // the command is tokenized (e.g. redirecting over a device node).
 var destructiveSubstrings = []string{"> /dev/", ":(){", "/dev/sd", "/dev/nvme"}
 
+// egressBinaries are programs whose primary purpose is moving data across the
+// network. They are classified dangerous (approval-gated) not because they are
+// destructive but because they are the exfiltration half of the IM-injection
+// threat: an untrusted message reaching the agent must not silently `curl` data
+// out. Matched by basename over wrapper-unwrapped segments, like
+// dangerousBinaries. ssh/scp/sftp/rsync are included because they move data to
+// a remote host; git is intentionally NOT here (its network use is push/pull to
+// configured remotes, and gating every git call would be pure fatigue).
+var egressBinaries = map[string]struct{}{
+	"curl": {}, "wget": {}, "nc": {}, "ncat": {}, "netcat": {}, "socat": {},
+	"telnet": {}, "ftp": {}, "tftp": {}, "scp": {}, "sftp": {}, "rsync": {},
+	"ssh": {},
+}
+
+// egressSubstrings catch network egress that has no distinct program name: the
+// bash pseudo-device redirect (`>/dev/tcp/host/port`) and its UDP sibling. These
+// are checked on the full payload so a wrapper cannot hide them.
+var egressSubstrings = []string{"/dev/tcp/", "/dev/udp/"}
+
+// egressCommand reports whether the exec payload performs network egress. It is
+// a first-class safety classifier (its own function, not a buried list entry) so
+// the egress threat can be reasoned about, tested, and tightened independently
+// of the destructive-command heuristics. cmd is the raw payload; segs are its
+// wrapper-unwrapped segments (shared with dangerousToolCall to avoid re-parsing).
+func egressCommand(cmd string, segs [][]string) (bool, string) {
+	lower := strings.ToLower(cmd)
+	for _, sub := range egressSubstrings {
+		if strings.Contains(lower, sub) {
+			return true, "network egress via " + sub
+		}
+	}
+	for _, fields := range segs {
+		progIdx, ok := segmentProgram(fields)
+		if !ok {
+			continue
+		}
+		base := filepath.Base(fields[progIdx])
+		if _, hit := egressBinaries[base]; hit {
+			return true, "network egress command: " + base
+		}
+	}
+	return false, ""
+}
+
 func dangerousToolCall(projectRoot, toolName string, args map[string]interface{}) (bool, string) {
 	if isExecTool(toolName) {
 		cmd := execCommandPayload(toolName, args)
@@ -708,6 +752,12 @@ func dangerousToolCall(projectRoot, toolName string, args map[string]interface{}
 			if _, bad := dangerousBinaries[base]; bad {
 				return true, fmt.Sprintf("invokes dangerous command: %s", base)
 			}
+		}
+		// Network egress (data exfiltration half of the IM-injection threat) is
+		// dangerous even when the command is otherwise harmless. Reuse the
+		// already-unwrapped segments so wrappers can't hide `sudo curl ...`.
+		if hit, ereason := egressCommand(cmd, segs); hit {
+			return true, ereason
 		}
 		// A wrapper whose payload we could not extract (e.g. `bash script.sh`,
 		// `sh -s`) is opaque: treat it as dangerous (needs approval) but never

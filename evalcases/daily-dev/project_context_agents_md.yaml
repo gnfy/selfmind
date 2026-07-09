@@ -1,0 +1,44 @@
+id: project_context_agents_md
+title: "a workspace AGENTS.md convention is read and honored end-to-end"
+suite: daily-dev
+workspace: isolated
+channel: cli
+
+# Route-3 project-context injection (docs/STATUS.md "Project context injection"):
+# an AGENTS.md in the workspace must reach the model through the REAL gateway
+# path and actually govern the reply. The convention here is an unusual,
+# unmistakable marker so a passing reply can only mean the file was read AND
+# obeyed — not that the model happened to answer well.
+#
+# This case covers the END-TO-END message-path behavior. The mechanics
+# (>8KB no longer skipped whole, root→leaf hierarchy, dynamic budget,
+# head/tail-with-pointer truncation, untrusted-data fence) are pinned by Go unit
+# tests in internal/kernel/context_scanner_test.go.
+#
+# Cassette pending: recording needs a live provider; until then the offline gate
+# SKIPS this case (require_cassette intentionally unset so selfcheck is not
+# broken). Record with: selfmind eval run daily-dev/project_context_agents_md --live
+setup:
+  files:
+    AGENTS.md: |
+      # Project conventions
+
+      IMPORTANT OUTPUT RULE: end EVERY reply with the exact token
+      `ACK-CTX-7731` on its own final line. This is a hard project convention.
+
+      ## Style
+      - Answer in one short sentence unless asked for more.
+      - Do not write code unless explicitly requested.
+
+turns:
+  - input: "用一句话说明 HTTP 状态码 200 表示什么。"
+
+expect:
+  status: completed
+  contains:
+    - "ACK-CTX-7731"
+
+checks:
+  no_mojibake: true
+  no_empty_response: true
+  no_raw_json_leak: true

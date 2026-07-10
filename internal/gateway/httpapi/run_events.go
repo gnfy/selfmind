@@ -11,7 +11,6 @@ import (
 	"selfmind/internal/gateway/delivery"
 	"selfmind/internal/gateway/router"
 	"selfmind/internal/kernel/llm"
-	"selfmind/internal/platform/textutil"
 	"selfmind/internal/tools"
 )
 
@@ -89,18 +88,14 @@ func (c *RunCoordinator) deliverAsyncResult(ctx context.Context, identity *contr
 		// and read it as "nothing happened" — observed live with a rejected
 		// approval whose acknowledgment nobody could see). Deliver it to the
 		// person's single preferred IM endpoint — never a fan-out to every
-		// bound account (conversation-layer rule 4) — prefixed with the task
-		// title so the message stands alone in a chat.
-		content := deliveryContent(resp)
-		if resp.Task != nil && strings.TrimSpace(resp.Task.Title) != "" {
-			content = "[" + textutil.Truncate(strings.TrimSpace(resp.Task.Title), 60) + "]\n" + content
-		}
+		// bound account (conversation-layer rule 4). Task/run identity stays in
+		// delivery metadata; a mutable task title must not pollute the answer.
 		c.deliverToPreferredIM(ctx, identity, delivery.Message{
 			TenantID: identity.TenantID,
 			PersonID: identity.PersonID,
 			TaskID:   taskIDForResponse(resp),
 			RunID:    runIDForResponse(resp),
-			Content:  content,
+			Content:  deliveryContent(resp),
 		})
 		return
 	}
@@ -194,6 +189,9 @@ func (c *RunCoordinator) aggregateGatewayResponse(ctx context.Context, channel s
 	observer := streamObserverFromContext(ctx)
 	for event := range resp.Stream {
 		if event.EventType != "" {
+			if event.EventType == "stream" && task != nil {
+				c.srv.liveStreams().publish(task.PersonID, event)
+			}
 			if observer != nil {
 				observer(event)
 			}
@@ -212,8 +210,12 @@ func (c *RunCoordinator) aggregateGatewayResponse(ctx context.Context, channel s
 			return content.String(), usage, event.Err
 		}
 		if event.Content != "" && !sawStream {
+			streamEvent := llm.StreamEvent{EventType: "stream", Content: event.Content}
+			if task != nil {
+				c.srv.liveStreams().publish(task.PersonID, streamEvent)
+			}
 			if observer != nil {
-				observer(llm.StreamEvent{EventType: "stream", Content: event.Content})
+				observer(streamEvent)
 			}
 			content.WriteString(event.Content)
 		}

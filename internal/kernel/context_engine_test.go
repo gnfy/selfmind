@@ -262,3 +262,23 @@ func TestTruncateMessagesDoesNotSummarizeOnHotPathByDefault(t *testing.T) {
 		t.Fatalf("expected system prompt to be preserved, got role %q", got[0].Role)
 	}
 }
+
+func TestRecoverMessagesDropsOptionalProjectContextAndKeepsLatestUser(t *testing.T) {
+	engine := NewContextEngine(240, 20)
+	messages := []llm.Message{
+		{Role: "system", Content: "core tool contract\n\n# PROJECT CONTEXT\n" + strings.Repeat("large project rules ", 200)},
+		{Role: "user", Content: "old question " + strings.Repeat("old ", 120)},
+		{Role: "assistant", Content: strings.Repeat("old answer ", 120)},
+		{Role: "user", Content: "LATEST-INSTRUCTION"},
+	}
+	got := engine.RecoverMessages(messages)
+	if len(got) == 0 || got[len(got)-1].Content != "LATEST-INSTRUCTION" {
+		t.Fatalf("latest user instruction was not preserved: %+v", got)
+	}
+	if strings.Contains(got[0].Content, strings.Repeat("large project rules ", 20)) {
+		t.Fatal("optional project context was not removed during recovery")
+	}
+	if !strings.Contains(got[0].Content, "core tool contract") {
+		t.Fatal("core system contract was lost")
+	}
+}

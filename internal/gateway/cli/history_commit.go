@@ -2,7 +2,6 @@ package cli
 
 import (
 	"fmt"
-	"os"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -56,13 +55,9 @@ func (m *uiModel) composerHint() string {
 
 // clearHybridScreen wipes the terminal (screen + visible scrollback) and
 // re-shows the startup card, so /clear and ctrl+l feel like a clean slate even
-// though committed history otherwise lives in immutable scrollback. Returns nil
-// in legacy mode (the viewport clear there is sufficient). ClearScreen runs
-// before the card print, so the card survives.
+// though committed history otherwise lives in immutable scrollback. ClearScreen
+// runs before the card print, so the card survives.
 func (m *uiModel) clearHybridScreen() tea.Cmd {
-	if !m.hybrid {
-		return nil
-	}
 	cmds := []tea.Cmd{tea.ClearScreen}
 	if m.width > 0 {
 		if card := strings.TrimRight(strings.Join(m.renderStartupCard(m.width), "\n"), "\n"); card != "" {
@@ -94,25 +89,12 @@ func (m *uiModel) handleCopyLast() tea.Cmd {
 
 // Terminal-first hybrid rendering (see docs/tui-terminal-first-hybrid.md).
 //
-// In hybrid mode the transcript is NOT held in a viewport and re-rendered every
+// The transcript is NOT held in a viewport and re-rendered every
 // frame. Instead, each cell is committed to the terminal's native scrollback
 // (via the bubbletea Program's Println) the moment it finalizes, and View()
 // renders only the small active region (in-progress cells, live stream,
 // spinner, input, status). The terminal then owns scroll, selection, copy, and
 // long-history performance. Committed cells are immutable.
-
-// hybridMode reports whether terminal-first hybrid rendering is enabled. It is
-// now the DEFAULT. Set SELFMIND_TUI_LEGACY=1 to fall back to the legacy
-// alt-screen viewport renderer — an escape hatch kept for one cycle while the
-// hybrid path settles, to be removed once we delete the legacy path.
-func hybridMode() bool {
-	switch strings.ToLower(strings.TrimSpace(os.Getenv("SELFMIND_TUI_LEGACY"))) {
-	case "1", "true", "on", "yes":
-		return false
-	default:
-		return true
-	}
-}
 
 // commitWidth is the wrap width used when rendering a cell into scrollback.
 func (m *uiModel) commitWidth() int {
@@ -124,8 +106,8 @@ func (m *uiModel) commitWidth() int {
 }
 
 // commit queues a finalized message to be printed into native scrollback and
-// marks it immutable so the active region stops rendering it. It is a no-op in
-// legacy mode or if the message is already committed.
+// marks it immutable so the active region stops rendering it. It is a no-op if
+// the message is already committed.
 //
 // IMPORTANT: this must NOT call Program.Println directly. Program.Println sends
 // on the program's message channel and blocks until the loop consumes it; doing
@@ -133,7 +115,7 @@ func (m *uiModel) commitWidth() int {
 // the symptom was the TUI freezing on the first submit. Instead we accumulate
 // the rendered lines and the Update wrapper flushes them as tea.Println Cmds.
 func (m *uiModel) commit(msg *ChatMessage) {
-	if !m.hybrid || msg == nil || msg.Committed {
+	if msg == nil || msg.Committed {
 		return
 	}
 	msg.Committed = true

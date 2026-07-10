@@ -9,8 +9,37 @@ import (
 
 	"selfmind/internal/control"
 	"selfmind/internal/gateway/api"
+	"selfmind/internal/gateway/delivery"
 	"selfmind/internal/gateway/router"
 )
+
+func TestAdapterProactiveSendUsesConcreteRecipient(t *testing.T) {
+	var target string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload map[string]interface{}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		msg, _ := payload["msg"].(map[string]interface{})
+		target = stringFromMap(msg, "to_user_id")
+		_, _ = w.Write([]byte(`{"ret":0,"errcode":0}`))
+	}))
+	defer server.Close()
+
+	adapter := NewAdapter(RuntimeConfig{
+		AccountID: "wx-account", Token: "token", BaseURL: server.URL,
+		HomeDir: t.TempDir(), SendChunkRetries: 0,
+	}, nil, nil)
+	_, err := adapter.SendWithReceipt(context.Background(), delivery.Message{
+		Platform: "weixin", PlatformUserID: "real-peer@im.wechat", Channel: "weixin", Content: "reminder",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if target != "real-peer@im.wechat" {
+		t.Fatalf("to_user_id = %q; generic channel must fall back to recipient", target)
+	}
+}
 
 func TestAdapterProcessesMessageThroughGatewayHandler(t *testing.T) {
 	ctx := context.Background()

@@ -141,13 +141,23 @@ func Run(ctx context.Context, opts Options) error {
 		// agent's dedicated triage provider (a cheap role kept OFF the main run
 		// provider). Nil when no provider is available → smart mode asks a human.
 		ApprovalJudge: app.NewConfiguredApprovalJudge(mem, cfg, defaultTenantID),
-		// Post-run labeler (Work Timeline P3): cheap memory_extract-role judge
-		// that re-points a wrong pre-label after the run. Nil → labels are kept.
-		Labeler: app.NewConfiguredRunLabeler(mem, cfg, defaultTenantID),
+		// A single explicit memory_extract-role pass handles both task-label
+		// hygiene and durable fact extraction after eligible runs.
+		PostRunAnalyzer: app.NewConfiguredPostRunAnalyzer(mem, cfg, defaultTenantID),
 		// Automatic semantic recall (Work Timeline P2): FTS sessions + task
 		// label cards attached at the selector layer; query expansion only when
 		// a semantic_recall role model is explicitly configured.
 		Recall: httpapi.NewRecallEngine(controlStore, mem, app.SemanticRecallExpander(mem, cfg, defaultTenantID)),
+		// Structured session APIs for thin clients (/v1/sessions): the daemon
+		// session index, person-partitioned (ACTIVE PLAN P0-3).
+		Sessions: mem,
+	}
+	doneAfter, cancelledAfter := cfg.Tasks.AutoArchiveDurations()
+	gatewayAPI.TaskGovernance = httpapi.TaskGovernanceOptions{
+		InboxEnabled:              cfg.Tasks.InboxEnabled,
+		DefaultListLimit:          cfg.Tasks.ListLimit(),
+		AutoArchiveDoneAfter:      doneAfter,
+		AutoArchiveCancelledAfter: cancelledAfter,
 	}
 	// Periodic stuck-run recovery: while the daemon runs, mark heartbeat-dead
 	// runs (and their tasks) interrupted. Runs in the coordinator's active-run
@@ -155,6 +165,8 @@ func Run(ctx context.Context, opts Options) error {
 	// died without finalizing.
 	stopStuckRunSweeper := gatewayAPI.StartStuckRunSweeper(ctx)
 	defer stopStuckRunSweeper()
+	stopTaskGovernanceSweeper := gatewayAPI.StartTaskGovernanceSweeper(ctx)
+	defer stopTaskGovernanceSweeper()
 	var weixinAdapter *weixin.Adapter
 	if cfg.Gateway.Weixin.Enabled {
 		wxCfg := weixin.RuntimeConfigFrom(cfg.Gateway.Weixin, dataDir, defaultTenantID)
@@ -308,10 +320,16 @@ func newDeliveryService(store *control.Store, cfg *config.Config, weixinSender d
 			BaseURL: cfg.Gateway.QQ.BaseURL,
 		})
 	}
-	return delivery.NewService(store, router, delivery.Options{
+	opts := delivery.Options{
 		MaxMessageChars: cfg.Gateway.DeliveryMaxMessageChars,
 		RetryAttempts:   cfg.Gateway.DeliveryRetryAttempts,
-	})
+	}
+	if raw := strings.TrimSpace(cfg.Gateway.DeliveryCatchUpMaxAge); raw != "" {
+		if dur, err := time.ParseDuration(raw); err == nil && dur > 0 {
+			opts.CatchUpMaxAge = dur
+		}
+	}
+	return delivery.NewService(store, router, opts)
 }
 
 func resolveDrainTimeout(configValue string) time.Duration {

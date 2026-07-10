@@ -784,3 +784,7 @@ func firstNonEmptyString(values ...string) string {
 	}
 	return ""
 }
+
+// SupportsNativeTools reports whether this transport carries ChatRequest.Tools
+// natively (probe used by buildSystemPrompt to avoid double-sending schemas).
+func (a *ResponsesAdapter) SupportsNativeTools() bool { return true } // Responses is a native tool-calling protocol

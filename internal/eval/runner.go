@@ -19,6 +19,7 @@ import (
 	"selfmind/internal/kernel/memory"
 	"selfmind/internal/platform/config"
 	"selfmind/internal/platform/log"
+	"selfmind/internal/tools"
 )
 
 type RunOptions struct {
@@ -225,6 +226,17 @@ func runSingle(ctx context.Context, c *Case, opts RunOptions, sampleIdx, totalSa
 	if identity != nil && identity.PersonID != "" {
 		seenPersons[identity.PersonID] = true
 	}
+	// VCR hygiene, once per case execution: reset the per-session call counter
+	// so numbering always starts at 0000 (the counter is process-global and a
+	// prior run of the same case in this process would otherwise leave a 0001+
+	// hole in recordings and break replays); in record mode also wipe the
+	// case's previous cassette generation so files never interleave.
+	llm.ResetVCRSession(c.ID)
+	if llm.VCRRecordMode() {
+		if err := llm.WipeVCRSessionRecordings("", c.ID); err != nil {
+			return nil, fmt.Errorf("wipe stale cassettes for %s: %w", c.ID, err)
+		}
+	}
 	for i, turn := range c.Turns {
 		turnStart := time.Now()
 		channel := firstNonEmpty(turn.Channel, c.Channel, "cli")
@@ -254,6 +266,10 @@ func runSingle(ctx context.Context, c *Case, opts RunOptions, sampleIdx, totalSa
 			Content:        turn.Input,
 			ClientCWD:      workspace,
 			WorkspaceID:    workspaceID,
+			// Eval has no human sitting on the approval waiter. Run autonomously
+			// inside the case workspace; workspace scope and the hard deny floor
+			// remain active, so dangerous operations are still rejected.
+			ApprovalMode: string(tools.ApprovalFullAuto),
 		})
 		cancelTurn()
 		if resp.Identity != nil && resp.Identity.PersonID != "" {

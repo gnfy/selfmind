@@ -456,7 +456,7 @@ func (m *uiModel) handleSkills(args []string) tea.Cmd {
 		case "stats":
 			if m.agent == nil || m.agent.Memory() == nil {
 				if m.clientMode {
-					return MsgAgentDone{Response: "`/skills stats` needs the in-process store. Run `SELFMIND_TUI_INPROC=1 selfmind`, or use `/skills list`."}
+					return MsgAgentDone{Response: "`/skills stats` is not available over the daemon yet; use `/skills list` (per-skill call counts ride the list view)."}
 				}
 				return MsgAgentDone{Response: "Memory not initialized."}
 			}
@@ -536,6 +536,31 @@ func (m *uiModel) handleBundles(args []string) tea.Cmd {
 		default:
 			return MsgAgentDone{Response: "Usage: /bundles [list|view|create|delete]"}
 		}
+	}
+}
+
+// handleSessionSearch backs /search: find prior working sessions by keyword
+// (empty query = recent sessions). It rides the session_search tool through
+// m.dispatch, so BOTH modes hit their correct partition: client mode goes to
+// the daemon (/v1/dispatch overrides the partition to the person id — what
+// daemon runs write), in-process mode uses the local dispatcher with the
+// in-process tenant. This closed the last session-search parity gap before the
+// in-process path removal (ACTIVE PLAN P0-3).
+func (m *uiModel) handleSessionSearch(args []string) tea.Cmd {
+	query := strings.TrimSpace(strings.Join(args, " "))
+	return func() tea.Msg {
+		dispatchArgs := map[string]interface{}{"limit": 10, "_tenant_id": m.tenantID}
+		if query != "" {
+			dispatchArgs["query"] = query
+		}
+		resp, err := m.dispatch("session_search", dispatchArgs)
+		if err != nil {
+			return MsgAgentDone{Response: fmt.Sprintf("Session search error: %v", err)}
+		}
+		if strings.TrimSpace(resp) == "" {
+			resp = "No matching sessions."
+		}
+		return MsgAgentDone{Response: resp}
 	}
 }
 
@@ -668,7 +693,6 @@ func (m *uiModel) handleCompact() tea.Cmd {
 	}
 	tail := append([]ChatMessage{}, m.messages[len(m.messages)-keep:]...)
 	m.messages = append([]ChatMessage{marker}, tail...)
-	m.viewport.GotoBottom()
 	return nil
 }
 

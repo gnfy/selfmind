@@ -20,7 +20,7 @@ import (
 // (detail, runs, rename, archive). Shared by every endpoint via
 // tryHandleControlCommand — IM gets the same short cards.
 
-const taskUsage = "Usage: /task <n|id> [runs|rename <name>|archive]"
+const taskUsage = "Usage: /task <n|id> [runs|rename <name>|pin|unpin|archive]"
 
 const tasksTrailingHint = "Reply to continue the current task, /resume <id> to switch, /task <id> for detail."
 
@@ -40,10 +40,26 @@ type taskCardView struct {
 // keyword search across all tasks, e.g. /tasks game. A variant may also carry a
 // query: /tasks done report, /tasks archived tank, /tasks search pgsql.
 func (d *Server) tasksOverviewReply(ctx context.Context, identity *control.IdentityContext, variant string) (string, error) {
-	tasks, err := d.listTasksForDisplay(ctx, identity)
+	args := parseTasksArgs(variant)
+	viewName := args.view
+	if viewName == "" {
+		viewName = "open"
+	}
+	limit := args.limit
+	if limit <= 0 {
+		limit = d.TaskGovernance.listLimit()
+	}
+	if limit > 200 {
+		limit = 200
+	}
+	offset := (args.page - 1) * limit
+	page, err := d.Control.QueryTasks(ctx, identity.TenantID, identity.PersonID, control.TaskQuery{
+		View: viewName, WorkspaceID: args.workspace, Keyword: args.query, Limit: limit, Offset: offset,
+	})
 	if err != nil {
 		return "", err
 	}
+	tasks := page.Tasks
 	view := taskCardView{}
 	if active := d.coordinator().currentActive(identity.PersonID); active != nil {
 		view.activeTaskID = active.TaskID
@@ -55,71 +71,152 @@ func (d *Server) tasksOverviewReply(ctx context.Context, identity *control.Ident
 	view.files, _ = d.Control.LatestHandoffFilesByPerson(ctx, identity.TenantID, identity.PersonID)
 	view.approvals, view.questions, _ = d.Control.PendingCountsByTask(ctx, identity.TenantID, identity.PersonID)
 
-	open, done, archived := splitTasksForDisplay(tasks)
-	args := parseTasksArgs(variant)
 	if args.search {
-		return renderTaskSearchResults(args, open, done, archived, tasks, view), nil
+		return renderTaskSearchPage(args, page, view), nil
 	}
 
-	switch args.view {
+	switch viewName {
 	case "", "open":
 		var sb strings.Builder
-		if len(open) == 0 {
+		if len(tasks) == 0 {
 			sb.WriteString("No open tasks.")
 		} else {
 			sb.WriteString("Open tasks:\n")
-			for i, t := range open {
-				sb.WriteString("\n" + renderTaskCard(i+1, t, view) + "\n")
+			for i, task := range tasks {
+				index := 0
+				if args.page == 1 {
+					index = i + 1
+				}
+				sb.WriteString("\n" + renderTaskCard(index, task, view) + "\n")
+			}
+			if page.HasMore() {
+				sb.WriteString(fmt.Sprintf("\n... and %d more open - use /tasks open --page %d or /tasks search <keyword>", page.Total-offset-len(tasks), args.page+1))
 			}
 		}
-		if n := len(done); n > 0 {
+		donePage, _ := d.Control.QueryTasks(ctx, identity.TenantID, identity.PersonID, control.TaskQuery{View: "done", WorkspaceID: args.workspace, Limit: 1})
+		archivedPage, _ := d.Control.QueryTasks(ctx, identity.TenantID, identity.PersonID, control.TaskQuery{View: "archived", WorkspaceID: args.workspace, Limit: 1})
+		if n := donePage.Total; n > 0 {
 			sb.WriteString(fmt.Sprintf("\n… and %d done — /tasks done", n))
 		}
-		if n := len(archived); n > 0 {
+		if n := archivedPage.Total; n > 0 {
 			sb.WriteString(fmt.Sprintf("\n%d archived — /tasks archived", n))
 		}
-		if len(open) > 0 {
+		if len(tasks) > 0 {
 			sb.WriteString("\n\n" + tasksTrailingHint)
 		}
 		return strings.TrimSpace(sb.String()), nil
 	case "done":
-		return renderTaskCards("Done tasks", done, view), nil
+		return renderTaskPage("Done tasks", args, page, view), nil
 	case "archived":
-		return renderTaskCards("Archived tasks", archived, view), nil
+		return renderTaskPage("Archived tasks", args, page, view), nil
 	case "all":
-		return renderTaskCards("All tasks", tasks, view), nil
+		return renderTaskPage("All tasks", args, page, view), nil
 	default:
 		return "Usage: /tasks [open|done|archived|all|search <keyword>|<keyword>]", nil
 	}
 }
 
 type tasksArgs struct {
-	view   string
-	query  string
-	search bool
+	view      string
+	query     string
+	workspace string
+	page      int
+	limit     int
+	search    bool
 }
 
 func parseTasksArgs(input string) tasksArgs {
+	args := tasksArgs{page: 1}
 	fields := strings.Fields(strings.TrimSpace(input))
 	if len(fields) == 0 {
-		return tasksArgs{}
+		return args
 	}
-	first := strings.ToLower(fields[0])
+	positional := make([]string, 0, len(fields))
+	for i := 0; i < len(fields); i++ {
+		switch strings.ToLower(fields[i]) {
+		case "--page":
+			if i+1 < len(fields) {
+				i++
+				if value, err := strconv.Atoi(fields[i]); err == nil && value > 0 {
+					args.page = value
+				}
+			}
+		case "--limit":
+			if i+1 < len(fields) {
+				i++
+				if value, err := strconv.Atoi(fields[i]); err == nil && value > 0 {
+					args.limit = value
+				}
+			}
+		case "--workspace":
+			if i+1 < len(fields) {
+				i++
+				args.workspace = strings.TrimSpace(fields[i])
+			}
+		default:
+			positional = append(positional, fields[i])
+		}
+	}
+	if len(positional) == 0 {
+		return args
+	}
+	first := strings.ToLower(positional[0])
 	switch first {
 	case "open", "done", "archived", "all":
-		return tasksArgs{
-			view:   first,
-			query:  strings.TrimSpace(strings.Join(fields[1:], " ")),
-			search: len(fields) > 1,
-		}
+		args.view = first
+		args.query = strings.TrimSpace(strings.Join(positional[1:], " "))
+		args.search = args.query != ""
 	case "search", "find", "query":
-		return tasksArgs{
-			view:   "all",
-			query:  strings.TrimSpace(strings.Join(fields[1:], " ")),
-			search: true,
-		}
+		args.view = "all"
+		args.query = strings.TrimSpace(strings.Join(positional[1:], " "))
+		args.search = true
 	default:
-		return tasksArgs{view: "all", query: strings.TrimSpace(strings.Join(fields, " ")), search: true}
+		args.view = "all"
+		args.query = strings.TrimSpace(strings.Join(positional, " "))
+		args.search = true
+	}
+	return args
+}
+
+func renderTaskSearchPage(args tasksArgs, page control.TaskPage, view taskCardView) string {
+	query := strings.TrimSpace(args.query)
+	if query == "" {
+		return "Usage: /tasks search <keyword> [--workspace <id>] [--page <n>]"
+	}
+	if len(page.Tasks) == 0 {
+		return fmt.Sprintf("No %s tasks match %q.", args.view, query)
+	}
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "Matching %s tasks for %q:\n", args.view, query)
+	for _, task := range page.Tasks {
+		sb.WriteString("\n" + renderTaskCard(0, task, view) + "\n")
+	}
+	appendTaskPageHint(&sb, args, page)
+	sb.WriteString("\nUse /resume <id> from a card to switch, or /task <id> for detail.")
+	return strings.TrimSpace(sb.String())
+}
+
+func renderTaskPage(title string, args tasksArgs, page control.TaskPage, view taskCardView) string {
+	if len(page.Tasks) == 0 {
+		return "No " + strings.ToLower(title) + "."
+	}
+	var sb strings.Builder
+	sb.WriteString(title + ":\n")
+	for _, task := range page.Tasks {
+		sb.WriteString("\n" + renderTaskCard(0, task, view) + "\n")
+	}
+	appendTaskPageHint(&sb, args, page)
+	return strings.TrimSpace(sb.String())
+}
+
+func appendTaskPageHint(sb *strings.Builder, args tasksArgs, page control.TaskPage) {
+	if page.Total <= page.Limit {
+		return
+	}
+	pages := (page.Total + page.Limit - 1) / page.Limit
+	fmt.Fprintf(sb, "\nPage %d/%d (%d tasks).", args.page, pages, page.Total)
+	if page.HasMore() {
+		fmt.Fprintf(sb, " Next: /tasks %s --page %d", args.view, args.page+1)
 	}
 }
 
@@ -192,6 +289,8 @@ func taskSearchFields(t control.Task, view taskCardView) []string {
 		shortTaskID(t.ID),
 		t.Title,
 		t.Status,
+		t.Kind,
+		t.WorkspaceID,
 		t.CurrentSummary,
 		strings.Join(t.NextSteps, " "),
 		view.lastRuns[t.ID],
@@ -234,7 +333,11 @@ func renderTaskCard(index int, t control.Task, v taskCardView) string {
 	var sb strings.Builder
 	isActive := t.ID == v.activeTaskID
 	status := taskCardStatus(t, isActive, v.approvals[t.ID], v.questions[t.ID])
-	fmt.Fprintf(&sb, "%d. [%s] %s\n", index, status, truncateRunes(toOneLine(t.Title), 50))
+	if index > 0 {
+		fmt.Fprintf(&sb, "%d. [%s] %s\n", index, status, truncateRunes(toOneLine(t.Title), 50))
+	} else {
+		fmt.Fprintf(&sb, "- [%s] %s\n", status, truncateRunes(toOneLine(t.Title), 50))
+	}
 
 	last := strings.TrimSpace(v.lastRuns[t.ID])
 	if last == "" {
@@ -254,6 +357,9 @@ func renderTaskCard(index int, t control.Task, v taskCardView) string {
 		if name := fileBasename(files[0]); name != "" {
 			fmt.Fprintf(&sb, "   file: %s\n", name)
 		}
+	}
+	if t.Pinned {
+		sb.WriteString("   pinned: yes\n")
 	}
 	if n := v.approvals[t.ID]; n > 0 {
 		fmt.Fprintf(&sb, "   approvals: %d\n", n)
@@ -349,6 +455,28 @@ func (d *Server) taskCommandReply(ctx context.Context, identity *control.Identit
 			return "", err
 		}
 		return fmt.Sprintf("Renamed task %s to: %s", shortTaskID(task.ID), name), nil
+	case "pin", "unpin":
+		pinned := sub == "pin"
+		if task.Pinned == pinned {
+			if pinned {
+				return "Task is already pinned.", nil
+			}
+			return "Task is not pinned.", nil
+		}
+		if err := d.Control.SetTaskPinned(ctx, identity.TenantID, task.ID, pinned); err != nil {
+			return "", err
+		}
+		eventType := "task.unpinned"
+		verb := "Unpinned"
+		if pinned {
+			eventType = "task.pinned"
+			verb = "Pinned"
+		}
+		_, _ = d.Control.AppendEvent(ctx, control.Event{
+			TaskID: task.ID, Type: eventType, Visibility: "task",
+			Payload: mustJSON(map[string]string{"source": "user"}),
+		})
+		return fmt.Sprintf("%s task: %s (%s)", verb, textutil.Truncate(toOneLine(task.Title), 48), shortTaskID(task.ID)), nil
 	case "archive":
 		if archivedTaskStatus(task.Status) {
 			return "Task is already archived.", nil
@@ -386,6 +514,10 @@ func (d *Server) taskDetailReply(ctx context.Context, identity *control.Identity
 		statusText += " (turn finished — reply to continue, or /resume " + shortTaskID(task.ID) + ")"
 	}
 	fmt.Fprintf(&sb, "Status: %s\n", statusText)
+	fmt.Fprintf(&sb, "Kind: %s\n", task.Kind)
+	if task.Pinned {
+		sb.WriteString("Pinned: yes\n")
+	}
 	if task.WorkspaceID != "" {
 		name := d.workspaceNames(ctx, identity)[task.WorkspaceID]
 		if name == "" {
@@ -431,6 +563,14 @@ func (d *Server) listTasksForDisplay(ctx context.Context, identity *control.Iden
 	return tasks, nil
 }
 
+func (d *Server) limitOpenTaskCards(tasks []control.Task) []control.Task {
+	limit := d.TaskGovernance.listLimit()
+	if len(tasks) <= limit {
+		return tasks
+	}
+	return tasks[:limit]
+}
+
 // sortTasksForDisplay orders tasks newest-first (updated_at DESC, id ASC as
 // tiebreaker). This is the card order of the /tasks views and therefore the
 // order ordinal references (/task 1, /resume 1) resolve against; both sides
@@ -438,6 +578,9 @@ func (d *Server) listTasksForDisplay(ctx context.Context, identity *control.Iden
 // resolution-order contract as sortApprovalsForDisplay).
 func sortTasksForDisplay(tasks []control.Task) {
 	sort.SliceStable(tasks, func(i, j int) bool {
+		if tasks[i].Pinned != tasks[j].Pinned {
+			return tasks[i].Pinned
+		}
 		if !tasks[i].UpdatedAt.Equal(tasks[j].UpdatedAt) {
 			return tasks[i].UpdatedAt.After(tasks[j].UpdatedAt)
 		}
@@ -482,6 +625,7 @@ func (d *Server) resolveTaskReference(ctx context.Context, identity *control.Ide
 			return nil, "", err
 		}
 		open, _, _ := splitTasksForDisplay(tasks)
+		open = d.limitOpenTaskCards(open)
 		if len(open) == 0 {
 			return nil, "No open tasks to number; see /tasks.", nil
 		}
@@ -517,7 +661,7 @@ func (d *Server) findTaskByRef(ctx context.Context, identity *control.IdentityCo
 		return nil, err
 	}
 	if task != nil {
-		if task.PersonID != identity.PersonID {
+		if task.PersonID != identity.PersonID || !task.IsVisible() {
 			return nil, nil
 		}
 		return task, nil

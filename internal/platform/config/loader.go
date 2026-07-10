@@ -126,6 +126,19 @@ flight_recorder:
   enabled: false
   keep: 20
 
+memory:
+  auto_extract_interval: 5
+  auto_extract_min_chars: 80
+  semantic_recall: true
+  use_memory_fence: true
+
+tasks:
+  inbox_enabled: true
+  default_list_limit: 10
+  auto_archive_done_after: "720h"
+  auto_archive_cancelled_after: "168h"
+  maintenance_model_role: "memory_extract"
+
 editor:
   large_paste_chars: 1000
   large_paste_lines: 10
@@ -152,6 +165,7 @@ type Config struct {
 	FlightRecorder   FlightRecorderConfig        `mapstructure:"flight_recorder" yaml:"flight_recorder,omitempty"`
 	Editor           EditorConfig                `mapstructure:"editor" yaml:"editor,omitempty"`
 	Memory           MemoryConfig                `mapstructure:"memory" yaml:"memory,omitempty"`
+	Tasks            TaskConfig                  `mapstructure:"tasks" yaml:"tasks,omitempty"`
 	Models           ModelsConfig                `mapstructure:"models" yaml:"models,omitempty"`
 	Intent           IntentConfig                `mapstructure:"intent" yaml:"intent,omitempty"`
 }
@@ -192,6 +206,50 @@ type MemoryConfig struct {
 	AutoExtractMinChars int  `mapstructure:"auto_extract_min_chars" yaml:"auto_extract_min_chars,omitempty"`
 	SemanticRecall      bool `mapstructure:"semantic_recall" yaml:"semantic_recall,omitempty"`
 	UseMemoryFence      bool `mapstructure:"use_memory_fence" yaml:"use_memory_fence,omitempty"`
+}
+
+type TaskConfig struct {
+	InboxEnabled              bool   `mapstructure:"inbox_enabled" yaml:"inbox_enabled,omitempty"`
+	DefaultListLimit          int    `mapstructure:"default_list_limit" yaml:"default_list_limit,omitempty"`
+	AutoArchiveDoneAfter      string `mapstructure:"auto_archive_done_after" yaml:"auto_archive_done_after,omitempty"`
+	AutoArchiveCancelledAfter string `mapstructure:"auto_archive_cancelled_after" yaml:"auto_archive_cancelled_after,omitempty"`
+	MaintenanceModelRole      string `mapstructure:"maintenance_model_role" yaml:"maintenance_model_role,omitempty"`
+}
+
+const (
+	DefaultTaskListLimit            = 10
+	DefaultTaskAutoArchiveDone      = 30 * 24 * time.Hour
+	DefaultTaskAutoArchiveCancelled = 7 * 24 * time.Hour
+)
+
+func (t TaskConfig) ListLimit() int {
+	if t.DefaultListLimit <= 0 {
+		return DefaultTaskListLimit
+	}
+	if t.DefaultListLimit > 50 {
+		return 50
+	}
+	return t.DefaultListLimit
+}
+
+func (t TaskConfig) AutoArchiveDurations() (time.Duration, time.Duration) {
+	return parseTaskDuration(t.AutoArchiveDoneAfter, DefaultTaskAutoArchiveDone),
+		parseTaskDuration(t.AutoArchiveCancelledAfter, DefaultTaskAutoArchiveCancelled)
+}
+
+func parseTaskDuration(raw string, fallback time.Duration) time.Duration {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return fallback
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil {
+		return fallback
+	}
+	if d <= 0 {
+		return 0
+	}
+	return d
 }
 
 type MCPConfig struct {
@@ -262,16 +320,21 @@ type GatewayConfig struct {
 	// detached and no notification was sent yet (Fix 2). Duration string;
 	// default "2m"; "0" disables escrow. The sweep runs every 60s, so effective
 	// latency is this value + up to 60s.
-	PendingNotifyAfter      string       `mapstructure:"pending_notify_after" yaml:"pending_notify_after,omitempty"`
-	OutboundWebhookURL      string       `mapstructure:"outbound_webhook_url" yaml:"outbound_webhook_url,omitempty"`
-	OutboundWebhookToken    string       `mapstructure:"outbound_webhook_token" yaml:"outbound_webhook_token,omitempty"`
-	TelegramToken           string       `mapstructure:"telegram_token" yaml:"telegram_token,omitempty"`
-	DeliveryMaxMessageChars int          `mapstructure:"delivery_max_message_chars" yaml:"delivery_max_message_chars,omitempty"`
-	DeliveryRetryAttempts   int          `mapstructure:"delivery_retry_attempts" yaml:"delivery_retry_attempts,omitempty"`
-	Weixin                  WeixinConfig `mapstructure:"weixin" yaml:"weixin,omitempty"`
-	Wechat                  WechatConfig `mapstructure:"wechat" yaml:"wechat,omitempty"`
-	Feishu                  FeishuConfig `mapstructure:"feishu" yaml:"feishu,omitempty"`
-	QQ                      QQConfig     `mapstructure:"qq" yaml:"qq,omitempty"`
+	PendingNotifyAfter      string `mapstructure:"pending_notify_after" yaml:"pending_notify_after,omitempty"`
+	OutboundWebhookURL      string `mapstructure:"outbound_webhook_url" yaml:"outbound_webhook_url,omitempty"`
+	OutboundWebhookToken    string `mapstructure:"outbound_webhook_token" yaml:"outbound_webhook_token,omitempty"`
+	TelegramToken           string `mapstructure:"telegram_token" yaml:"telegram_token,omitempty"`
+	DeliveryMaxMessageChars int    `mapstructure:"delivery_max_message_chars" yaml:"delivery_max_message_chars,omitempty"`
+	DeliveryRetryAttempts   int    `mapstructure:"delivery_retry_attempts" yaml:"delivery_retry_attempts,omitempty"`
+	// DeliveryCatchUpMaxAge bounds how old (Go duration, e.g. "4h") a
+	// sent_unconfirmed push may be and still be re-pushed by the one-shot
+	// catch-up when the peer's next inbound refreshes the platform session.
+	// Empty = 4h default. "0" is invalid (use a tiny duration to disable).
+	DeliveryCatchUpMaxAge string       `mapstructure:"delivery_catchup_max_age" yaml:"delivery_catchup_max_age,omitempty"`
+	Weixin                WeixinConfig `mapstructure:"weixin" yaml:"weixin,omitempty"`
+	Wechat                WechatConfig `mapstructure:"wechat" yaml:"wechat,omitempty"`
+	Feishu                FeishuConfig `mapstructure:"feishu" yaml:"feishu,omitempty"`
+	QQ                    QQConfig     `mapstructure:"qq" yaml:"qq,omitempty"`
 }
 
 // DefaultPresenceIdleTimeout is the presence_idle_timeout applied when the
@@ -625,6 +688,11 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("memory.auto_extract_min_chars", 80)
 	v.SetDefault("memory.semantic_recall", true)
 	v.SetDefault("memory.use_memory_fence", true)
+	v.SetDefault("tasks.inbox_enabled", true)
+	v.SetDefault("tasks.default_list_limit", DefaultTaskListLimit)
+	v.SetDefault("tasks.auto_archive_done_after", "720h")
+	v.SetDefault("tasks.auto_archive_cancelled_after", "168h")
+	v.SetDefault("tasks.maintenance_model_role", "memory_extract")
 	v.SetDefault("evolution.enabled", true)
 	v.SetDefault("evolution.nudge_interval", 10)
 	v.SetDefault("models.source", "local")

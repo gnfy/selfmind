@@ -2,7 +2,6 @@ package httpapi
 
 import (
 	"context"
-	"strings"
 	"testing"
 
 	"selfmind/internal/gateway/api"
@@ -38,7 +37,7 @@ func TestCLIAsyncResultRoutesToPreferredIM(t *testing.T) {
 	if msg.Platform != "weixin" || msg.PlatformUserID != "wxid_123" {
 		t.Fatalf("target = %s/%s", msg.Platform, msg.PlatformUserID)
 	}
-	if !strings.Contains(msg.Content, "rejected chmod") || !strings.Contains(msg.Content, task.Title) {
-		t.Fatalf("result content should carry the answer and the task title:\n%s", msg.Content)
+	if msg.Content != "The user rejected chmod; nothing else was run." {
+		t.Fatalf("result content should be the final answer only:\n%s", msg.Content)
 	}
 }

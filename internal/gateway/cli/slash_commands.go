@@ -23,7 +23,7 @@ var slashCommandMetas = []slashCommandMeta{
 	{Name: "/help", Usage: "/help", Description: "Open this temporary help page", Hint: "show available commands"},
 	{Name: "/model", Usage: "/model [model-name]", Description: "Show or switch model", Hint: "choose model, provider, and reasoning"},
 	{Name: "/status", Usage: "/status", Description: "Show runtime status and background processes", Hint: "show runtime, gateway, and model state"},
-	{Name: "/tasks", Usage: "/tasks [done|archived|all]", Description: "List open work (done/archived collapse to counts)", Hint: "view and manage gateway tasks"},
+	{Name: "/tasks", Usage: "/tasks [open|done|archived|all|search <text>] [--workspace <id>] [--page <n>]", Description: "List or search paged work labels", Hint: "view and manage gateway tasks"},
 	{Name: "/skills", Usage: "/skills [list|view|history|undo|search|install|audit|delete|archive|pin|unpin|stats|reload]", Description: "Manage learned skills", Hint: "list, view, undo, install, or archive skills"},
 	{Name: "/bundles", Usage: "/bundles [list|view|create|delete]", Description: "Manage skill bundles", Hint: "load multiple skills together"},
 	{Name: "/reload-skills", Usage: "/reload-skills", Description: "Reload skill tools from disk", Hint: "refresh skill commands"},
@@ -41,6 +41,7 @@ var slashCommandMetas = []slashCommandMeta{
 	{Name: "/copy", Usage: "/copy", Description: "Copy the last assistant response to the clipboard", Hint: "copy the last response"},
 	{Name: "/queue", Usage: "/queue [clear]", Description: "List queued tasks, or drop all pending queued tasks", Hint: "view or clear queued work"},
 	{Name: "/diag", Usage: "/diag", Description: "Show a compact runtime diagnostic snapshot", Hint: "active run, queue, approvals, last error"},
+	{Name: "/search", Usage: "/search [query]", Description: "Search past working sessions (empty = recent sessions)", Hint: "find prior work by keyword"},
 	// Gateway control commands the TUI relays to the daemon. Previously the TUI
 	// OMITTED these, so typing /approve fell through to the skill/unknown path
 	// and never reached the approve lifecycle. They now route through the shared
@@ -154,7 +155,6 @@ var slashCommands = []slashCommand{
 		slashCommandMeta: slashCommandMetas[11],
 		Run: func(m *uiModel, args []string) tea.Cmd {
 			m.messages = []ChatMessage{}
-			m.viewport.SetContent("")
 			return m.clearHybridScreen()
 		},
 	},
@@ -211,6 +211,12 @@ var slashCommands = []slashCommand{
 		slashCommandMeta: slashCommandMetas[20],
 		Run: func(m *uiModel, args []string) tea.Cmd {
 			return m.handleControlPassthrough("/diag", args)
+		},
+	},
+	{
+		slashCommandMeta: metaByName("/search"),
+		Run: func(m *uiModel, args []string) tea.Cmd {
+			return m.handleSessionSearch(args)
 		},
 	},
 }

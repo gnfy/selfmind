@@ -1,0 +1,155 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "content": "SQLite"
+    },
+    {
+      "content": " 的"
+    },
+    {
+      "content": " WAL"
+    },
+    {
+      "content": "（"
+    },
+    {
+      "content": "Write"
+    },
+    {
+      "content": "-A"
+    },
+    {
+      "content": "head"
+    },
+    {
+      "content": " Logging"
+    },
+    {
+      "content": "）"
+    },
+    {
+      "content": "模式"
+    },
+    {
+      "content": "是一"
+    },
+    {
+      "content": "种"
+    },
+    {
+      "content": "先"
+    },
+    {
+      "content": "把"
+    },
+    {
+      "content": "写"
+    },
+    {
+      "content": "入"
+    },
+    {
+      "content": "记录"
+    },
+    {
+      "content": "追加"
+    },
+    {
+      "content": "到"
+    },
+    {
+      "content": "独"
+    },
+    {
+      "content": "立"
+    },
+    {
+      "content": "日志"
+    },
+    {
+      "content": "文件"
+    },
+    {
+      "content": "、"
+    },
+    {
+      "content": "再"
+    },
+    {
+      "content": "择"
+    },
+    {
+      "content": "机"
+    },
+    {
+      "content": "合"
+    },
+    {
+      "content": "并"
+    },
+    {
+      "content": "回"
+    },
+    {
+      "content": "主"
+    },
+    {
+      "content": "数据库"
+    },
+    {
+      "content": "的"
+    },
+    {
+      "content": "机制"
+    },
+    {
+      "content": "，用"
+    },
+    {
+      "content": "来"
+    },
+    {
+      "content": "提升"
+    },
+    {
+      "content": "并"
+    },
+    {
+      "content": "发"
+    },
+    {
+      "content": "读"
+    },
+    {
+      "content": "写"
+    },
+    {
+      "content": "能力"
+    },
+    {
+      "content": "并"
+    },
+    {
+      "content": "保证"
+    },
+    {
+      "content": "崩"
+    },
+    {
+      "content": "溃"
+    },
+    {
+      "content": "恢复"
+    },
+    {
+      "content": "。"
+    },
+    {
+      "usage": {
+        "input_tokens": 14485,
+        "output_tokens": 54
+      }
+    }
+  ]
+}

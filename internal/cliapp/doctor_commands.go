@@ -197,8 +197,19 @@ func buildDoctorReport(ctx context.Context, store *control.Store, identity *cont
 	} else if len(pushes) == 0 {
 		sb.WriteString("(none)\n")
 	} else {
+		unconfirmed := false
 		for _, p := range pushes {
+			if p.Status == "sent_unconfirmed" {
+				unconfirmed = true
+			}
 			fmt.Fprintf(&sb, "- [%s/%s] %s\n", p.Platform, p.Status, oneLine(tools.RedactSensitive(p.Content), 80))
+		}
+		if unconfirmed {
+			sb.WriteString("note: sent_unconfirmed = the platform accepted the push but delivery is doubtful.\n")
+			sb.WriteString("  On WeChat/iLink this happens when the proactive-push session token (context_token)\n")
+			sb.WriteString("  went stale — the API returns success yet the message never reaches the phone.\n")
+			sb.WriteString("  Recovery: send ANY message from that chat; the fresh inbound renews the token and\n")
+			sb.WriteString("  arms a one-shot catch-up re-push of recent unconfirmed notices (bounded, no duplicates).\n")
 		}
 	}
 	sb.WriteString("\n")

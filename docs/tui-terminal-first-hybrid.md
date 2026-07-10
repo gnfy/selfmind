@@ -9,12 +9,12 @@ stays canonical.
 
 - H0 spike: ✅ verified (WSL + PowerShell), spike removed.
 - H1–H5: ✅ shipped (see §5).
-- **Promotion: ✅ hybrid is now the DEFAULT.** `SELFMIND_TUI_LEGACY=1` is the
+- **hybrid is the ONLY renderer (2026-07-10).** The legacy path and `SELFMIND_TUI_LEGACY` were DELETED. (Historical note: it used to be the
   escape hatch to the old renderer (kept one cycle).
 - Overlays (`/help`, `/history`, `/model`, …): ✅ user-verified in hybrid.
 - `/clear` + `ctrl+l`: clear the screen and re-show the startup card in hybrid.
 - **Remaining (deferred follow-ups, not blocking default):**
-  - Delete the legacy rendering path + `SELFMIND_TUI_LEGACY` once settled
+  - Legacy rendering path + `SELFMIND_TUI_LEGACY`: ✅ deleted 2026-07-10
     (viewport, `controller_mouse.go`, app scroll, `renderCache`).
   - write_file overwrite real diff (needs a pre-image; tool-contract change).
   - `/history` in-overlay search + `control.db`-backed history beyond the window.

@@ -1,5 +1,9 @@
 id: continuity_task_attach
 title: "pre-label semantics: an ordinary follow-up runs under the open current label"
+# The cassette is mandatory. Re-record it whenever this scenario's expected
+# behavior changes:
+#   SELFMIND_EVAL_VCR=record selfmind eval run evalcases/continuity/continuity-task-attach.yaml --live
+# Commit the gap-free .vcr/continuity_task_attach/ generation with this file.
 require_cassette: true
 suite: continuity
 workspace: "."

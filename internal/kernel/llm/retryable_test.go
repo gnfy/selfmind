@@ -57,6 +57,15 @@ func TestIsRetryableErrorClassification(t *testing.T) {
 	}
 }
 
+func TestIsContextWindowError(t *testing.T) {
+	if !IsContextWindowError(errors.New("responses API error 400: context_length_exceeded")) {
+		t.Fatal("context overflow must be recognized for prompt compaction")
+	}
+	if IsContextWindowError(errors.New("responses API error 400: invalid schema")) {
+		t.Fatal("ordinary invalid requests are not context-window errors")
+	}
+}
+
 func TestBackoffMonotonicAndCapped(t *testing.T) {
 	base := 100 * time.Millisecond
 	cap := 2 * time.Second

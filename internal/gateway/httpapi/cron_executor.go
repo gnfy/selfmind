@@ -46,11 +46,16 @@ func (e *CronExecutor) RunCronJob(ctx context.Context, job cron.CronJob) error {
 			prompt = "Reply with the single word READY to confirm you are working. Do not use any tools."
 		}
 	}
+	platform := firstNonEmptyString(job.Platform, job.Channel, "cli")
+	channel := firstNonEmptyString(job.Channel, platform, "cli")
+	if strings.TrimSpace(job.DeliverTo) != "" && (channel == "" || strings.EqualFold(channel, platform)) {
+		channel = strings.TrimSpace(job.DeliverTo)
+	}
 	req := api.MessageRequest{
 		TenantID:       job.TenantID,
-		Platform:       firstNonEmptyString(job.Platform, job.Channel, "cli"),
+		Platform:       platform,
 		PlatformUserID: job.DeliverTo,
-		Channel:        firstNonEmptyString(job.Channel, job.Platform, "cli"),
+		Channel:        channel,
 		Content:        prompt,
 		AllowWeb:       job.Web,
 	}

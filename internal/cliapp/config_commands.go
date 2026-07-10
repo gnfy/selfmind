@@ -85,6 +85,11 @@ var configReportDefaultPaths = [][]string{
 	{"memory", "semantic_recall"},
 	{"memory", "use_memory_fence"},
 	{"models", "source"},
+	{"tasks", "inbox_enabled"},
+	{"tasks", "default_list_limit"},
+	{"tasks", "auto_archive_done_after"},
+	{"tasks", "auto_archive_cancelled_after"},
+	{"tasks", "maintenance_model_role"},
 	{"storage", "type"},
 	{"storage", "data_dir"},
 }

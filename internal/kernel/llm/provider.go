@@ -93,3 +93,23 @@ type Provider interface {
 	Chat(ctx context.Context, req ChatRequest) (*ChatResponse, error)
 	StreamChat(ctx context.Context, req ChatRequest) (<-chan StreamEvent, error)
 }
+
+// NativeToolsCapable is an optional Provider capability probe: a provider that
+// KNOWS its wire protocol carries native tool definitions (ChatRequest.Tools →
+// the vendor's tools param) reports it here. buildSystemPrompt uses the probe
+// to stop double-sending tool definitions (native param AND full text schemas
+// in the system prompt). Wrapper providers (role router, VCR) must forward the
+// probe to the provider they resolve to. A provider that does not implement
+// the interface is treated as NOT native — the safe direction: unknown
+// providers keep the full text fallback instead of losing tool definitions.
+type NativeToolsCapable interface {
+	SupportsNativeTools() bool
+}
+
+// ProviderSupportsNativeTools probes p, defaulting to false (keep text).
+func ProviderSupportsNativeTools(p Provider) bool {
+	if c, ok := p.(NativeToolsCapable); ok {
+		return c.SupportsNativeTools()
+	}
+	return false
+}

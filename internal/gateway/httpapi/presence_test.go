@@ -232,6 +232,25 @@ func TestNotifyCommandValidatesOwnAccounts(t *testing.T) {
 	if pref, _ := store.GetPersonSetting(ctx, identity.TenantID, identity.PersonID, personSettingNotifyPlatform); pref != "" {
 		t.Fatalf("auto must clear the stored preference, got %q", pref)
 	}
+
+	// on/off are user-facing aliases: on restores automatic selection, while
+	// off suppresses detached CLI-origin pushes without affecting direct chat
+	// replies.
+	if resp, _ = daemon.ProcessMessage(ctx, api.MessageRequest{Content: "/notify off"}); !strings.Contains(resp.Content, "disabled") {
+		t.Fatalf("content=%q", resp.Content)
+	}
+	if pref, _ := store.GetPersonSetting(ctx, identity.TenantID, identity.PersonID, personSettingNotifyPlatform); pref != "off" {
+		t.Fatalf("off must persist the disabled state, got %q", pref)
+	}
+	if account := daemon.coordinator().preferredIMAccount(ctx, identity); account != nil {
+		t.Fatalf("disabled notify preference selected account %+v", account)
+	}
+	if resp, _ = daemon.ProcessMessage(ctx, api.MessageRequest{Content: "/notify on"}); !strings.Contains(resp.Content, "enabled") {
+		t.Fatalf("content=%q", resp.Content)
+	}
+	if pref, _ := store.GetPersonSetting(ctx, identity.TenantID, identity.PersonID, personSettingNotifyPlatform); pref != "" {
+		t.Fatalf("on must restore automatic selection, got %q", pref)
+	}
 }
 
 // TestPresencePingEndpoint: the idle-TUI heartbeat resolves identity, touches

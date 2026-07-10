@@ -863,3 +863,7 @@ func hasHeader(headers map[string]string, name string) bool {
 	}
 	return false
 }
+
+// SupportsNativeTools reports whether this transport carries ChatRequest.Tools
+// natively (probe used by buildSystemPrompt to avoid double-sending schemas).
+func (a *AnthropicAdapter) SupportsNativeTools() bool { return a.Quirks.SupportsTools }

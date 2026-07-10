@@ -759,9 +759,9 @@ func InitAgent(mem *memory.MemoryManager, cfg *config.Config, tenantID string) (
 	agent.SetApprovalJudgeProvider(judgeProvider)
 	// Surface learned skills in the prompt so the agent reuses what it learned.
 	agent.SetSkillInventory(skillInventoryFor(tenantID))
-	// Distill accumulated facts into a coherent user profile (uses the
-	// memory_extract role; falls back to the default model when unconfigured).
-	agent.SetProfileSynthesizer(kernel.NewProfileSynthesizer(memoryExtractProvider, true))
+	// Post-run memory extraction and label maintenance are intentionally owned
+	// by the daemon's single PostRunAnalyzer. The Agent must not launch a second
+	// extractor/profile model call for the same run.
 	reviewEngine := kernel.NewBackgroundReviewEngine(mem, nil, reviewProvider, kernel.EvolutionConfig{
 		Enabled:                cfg.Evolution.Enabled,
 		Mode:                   cfg.Evolution.Mode,
@@ -776,14 +776,6 @@ func InitAgent(mem *memory.MemoryManager, cfg *config.Config, tenantID string) (
 	if cfg.Evolution.NudgeInterval > 0 {
 		agent.SetNudgeInterval(cfg.Evolution.NudgeInterval)
 	}
-
-	// 注入自动事实提取器（默认开启，使用当前 provider）
-	fe := kernel.NewFactExtractor(memoryExtractProvider, true)
-	agent.SetFactExtractor(fe)
-
-	// 注入每轮轻量提取器（频率控制，使用当前 provider）
-	te := kernel.NewTurnExtractor(memoryExtractProvider, true, cfg.Memory.AutoExtractInterval, cfg.Memory.AutoExtractMinChars)
-	agent.SetTurnExtractor(te)
 
 	// 注入语义查询扩展器
 	se := memory.NewSemanticExpander(semanticRecallProvider, cfg.Memory.SemanticRecall)

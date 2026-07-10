@@ -262,8 +262,8 @@ func (s *Store) ReassignRun(ctx context.Context, tenantID, runID, fromTaskID, to
 		return err
 	}
 	if _, err := tx.ExecContext(ctx,
-		`UPDATE tasks SET updated_at = ? WHERE tenant_id = ? AND id = ?`,
-		now, tenant, toTaskID); err != nil {
+		`UPDATE tasks SET last_activity_at = ?, updated_at = ? WHERE tenant_id = ? AND id = ?`,
+		now, now, tenant, toTaskID); err != nil {
 		return err
 	}
 

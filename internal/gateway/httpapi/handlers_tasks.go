@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -25,12 +26,44 @@ func (d *Server) handleTasks(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	tasks, err := d.Control.ListTasks(r.Context(), identity.TenantID, identity.PersonID, 50)
+	limit := queryInt(r, "limit", 50)
+	offset := queryInt(r, "offset", 0)
+	view := strings.TrimSpace(r.URL.Query().Get("view"))
+	if view == "" {
+		view = "all"
+	}
+	page, err := d.Control.QueryTasks(r.Context(), identity.TenantID, identity.PersonID, control.TaskQuery{
+		View:        view,
+		Status:      strings.TrimSpace(r.URL.Query().Get("status")),
+		WorkspaceID: strings.TrimSpace(r.URL.Query().Get("workspace_id")),
+		Keyword:     strings.TrimSpace(r.URL.Query().Get("q")),
+		Limit:       limit,
+		Offset:      offset,
+	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]interface{}{"identity": identity, "tasks": tasks})
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"identity": identity,
+		"tasks":    page.Tasks,
+		"total":    page.Total,
+		"limit":    page.Limit,
+		"offset":   page.Offset,
+		"has_more": page.HasMore(),
+	})
+}
+
+func queryInt(r *http.Request, key string, fallback int) int {
+	raw := strings.TrimSpace(r.URL.Query().Get(key))
+	if raw == "" {
+		return fallback
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil {
+		return fallback
+	}
+	return value
 }
 
 func (d *Server) handleTaskEvents(w http.ResponseWriter, r *http.Request) {

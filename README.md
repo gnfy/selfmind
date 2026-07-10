@@ -225,6 +225,14 @@ memory:
   semantic_recall: true
   use_memory_fence: true
 
+# Reversible work-label governance. "0" disables an archive class.
+tasks:
+  inbox_enabled: true
+  default_list_limit: 10
+  auto_archive_done_after: "720h"
+  auto_archive_cancelled_after: "168h"
+  maintenance_model_role: "memory_extract"
+
 # Background learning/review settings for memory and skill evolution.
 evolution:
   enabled: true
@@ -429,9 +437,11 @@ Useful keys:
 
 ## Managing tasks
 
-SelfMind is task-centric: each request you make becomes a **task** owned by you
-(`person_id`), shared across every endpoint (CLI, WeChat, …). A task moves
-through these states:
+SelfMind is spine-first: your person-level work history provides continuity,
+while **tasks are work labels** that group runs for status, resume, and
+handoff across every endpoint (CLI, WeChat, etc.). Casual and diagnostic runs
+may be filed into a hidden Inbox instead of creating visible task clutter. A
+visible task moves through these states:
 
 | Status | Meaning |
 |---|---|
@@ -474,9 +484,13 @@ Everyday management:
   executing — reply or `/resume` to continue), or a terminal status verbatim.
 - **Continue a task:** just reply (`继续` / `ok` / a follow-up) — an ordinary
   follow-up runs under your current open task by default (your working context
-  follows you regardless, and a cheap background labeler re-files a run that
+  follows you regardless, and the bounded post-run analyzer re-files a run that
   actually belonged to another task); `/resume <task_id>` switches to an older
   one, including an archived one.
+- **Keep important work visible:** `/task <id> pin` protects a task from
+  retention; `/task <id> unpin` removes that protection. Old terminal tasks
+  are archived, never deleted, according to the `tasks.auto_archive_*`
+  settings; `/resume <id>` reopens an archive.
 - **You'll be nudged:** an unanswered approval or question is re-pushed to your
   preferred IM if you leave the CLI, so it never sits pending invisibly.
 - **Start something separate:** `/new` — otherwise a new request while a task

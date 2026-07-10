@@ -1,6 +1,48 @@
-/.gocache/
+# --- Build / local binaries ---
 /dist/
-/evalruns/
-/binary_search.go
 /selfmind
 /selfmind.exe
+*.exe
+*.test
+*.out
+*.prof
+coverage.out
+coverage.html
+profile.cov
+
+# Local Go build cache (repo-local GOCACHE)
+/.gocache/
+
+# --- Eval local diagnostics (never commit; cassettes live in .vcr/) ---
+# AGENTS.md: JSONL traces under evalruns/ are local diagnostics.
+/evalruns/
+
+# Flight recorder dumps if ever written inside the repo
+# (default path is ~/.selfmind/flight — keep this for overrides)
+/flight/
+/.flight/
+
+# --- Secrets / local config (runtime data lives in ~/.selfmind) ---
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+auth.json
+credentials.json
+
+# --- Editor / OS / agent tooling ---
+.claude/
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# --- Temp / logs ---
+/tmp/
+*.tmp
+*.log
+*.tar.gz

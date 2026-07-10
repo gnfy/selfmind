@@ -1,0 +1,26 @@
+id: timeline_task_governance
+title: "task governance: pin state is visible and reversible"
+suite: timeline
+workspace: "."
+channel: cli
+
+# Control-only task-governance flow. No model or cassette is required.
+turns:
+  - input: "/new long-lived task governance check"
+  - input: "/task 1 pin"
+  - input: "/tasks"
+  - input: "/task 1 unpin"
+
+expect:
+  status: completed
+  max_tool_calls: 0
+  max_duration_seconds: 60
+  contains:
+    - "Pinned task"
+    - "pinned: yes"
+    - "Unpinned task"
+
+checks:
+  no_mojibake: true
+  no_empty_response: true
+  no_raw_json_leak: true

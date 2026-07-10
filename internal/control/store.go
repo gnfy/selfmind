@@ -44,19 +44,24 @@ type Workspace struct {
 }
 
 type Task struct {
-	ID             string    `json:"id"`
-	TenantID       string    `json:"tenant_id"`
-	PersonID       string    `json:"person_id"`
-	WorkspaceID    string    `json:"workspace_id,omitempty"`
-	Title          string    `json:"title"`
-	Status         string    `json:"status"`
-	CurrentSummary string    `json:"current_summary,omitempty"`
-	NextSteps      []string  `json:"next_steps,omitempty"`
-	BlockedReason  string    `json:"blocked_reason,omitempty"`
-	ActiveRunID    string    `json:"active_run_id,omitempty"`
-	LastChannel    string    `json:"last_channel,omitempty"`
-	CreatedAt      time.Time `json:"created_at"`
-	UpdatedAt      time.Time `json:"updated_at"`
+	ID             string     `json:"id"`
+	TenantID       string     `json:"tenant_id"`
+	PersonID       string     `json:"person_id"`
+	WorkspaceID    string     `json:"workspace_id,omitempty"`
+	Title          string     `json:"title"`
+	Status         string     `json:"status"`
+	Kind           string     `json:"kind,omitempty"`
+	Visibility     string     `json:"visibility,omitempty"`
+	Pinned         bool       `json:"pinned,omitempty"`
+	CurrentSummary string     `json:"current_summary,omitempty"`
+	NextSteps      []string   `json:"next_steps,omitempty"`
+	BlockedReason  string     `json:"blocked_reason,omitempty"`
+	ActiveRunID    string     `json:"active_run_id,omitempty"`
+	LastChannel    string     `json:"last_channel,omitempty"`
+	ArchivedAt     *time.Time `json:"archived_at,omitempty"`
+	LastActivityAt time.Time  `json:"last_activity_at"`
+	CreatedAt      time.Time  `json:"created_at"`
+	UpdatedAt      time.Time  `json:"updated_at"`
 }
 
 type Run struct {
@@ -113,6 +118,9 @@ type TaskCreate struct {
 	WorkspaceID string
 	Title       string
 	Channel     string
+	Kind        string
+	Visibility  string
+	Pinned      bool
 }
 
 func OpenStore(dataDir string) (*Store, error) {
@@ -217,11 +225,16 @@ CREATE TABLE IF NOT EXISTS tasks (
 	workspace_id TEXT,
 	title TEXT NOT NULL,
 	status TEXT NOT NULL,
+	kind TEXT NOT NULL DEFAULT 'work',
+	visibility TEXT NOT NULL DEFAULT 'visible',
+	pinned INTEGER NOT NULL DEFAULT 0,
 	current_summary TEXT,
 	next_steps_json TEXT,
 	blocked_reason TEXT,
 	active_run_id TEXT,
 	last_channel TEXT,
+	archived_at INTEGER,
+	last_activity_at INTEGER,
 	created_at INTEGER NOT NULL,
 	updated_at INTEGER NOT NULL
 );
@@ -442,10 +455,33 @@ CREATE INDEX IF NOT EXISTS idx_inbound_dedup_created ON inbound_dedup(created_at
 		// resurrects FOREVER (observed live: a 10-min task + repeated deploy
 		// restarts spawned 5 duplicate task corpses).
 		{"task_queue", "restarts", "INTEGER NOT NULL DEFAULT 0"},
+		// Task governance columns are additive and default old rows to normal,
+		// visible work. No migration may hide, archive, or rename existing tasks.
+		{"tasks", "kind", "TEXT NOT NULL DEFAULT 'work'"},
+		{"tasks", "visibility", "TEXT NOT NULL DEFAULT 'visible'"},
+		{"tasks", "pinned", "INTEGER NOT NULL DEFAULT 0"},
+		{"tasks", "archived_at", "INTEGER"},
+		{"tasks", "last_activity_at", "INTEGER"},
+		// catchup_at (unix seconds) claims a sent_unconfirmed row's ONE catch-up
+		// re-push (fired when the peer's next inbound refreshes the platform
+		// session, e.g. a fresh iLink context_token). Non-zero = already caught
+		// up; the row is never re-pushed again (anti-duplicate rail, P0-1).
+		{"outbound_messages", "catchup_at", "INTEGER"},
 	} {
 		if err := s.ensureColumn(ctx, col.table, col.name, col.def); err != nil {
 			return err
 		}
+	}
+	if _, err := s.db.ExecContext(ctx, `
+		UPDATE tasks SET last_activity_at = updated_at WHERE last_activity_at IS NULL;
+		CREATE INDEX IF NOT EXISTS idx_tasks_governance
+			ON tasks(tenant_id, person_id, visibility, status, updated_at);
+		CREATE INDEX IF NOT EXISTS idx_tasks_retention
+			ON tasks(visibility, pinned, status, last_activity_at);
+		CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_inbox_unique
+			ON tasks(tenant_id, person_id, COALESCE(workspace_id, ''))
+			WHERE kind = 'inbox';`); err != nil {
+		return err
 	}
 	return nil
 }
@@ -848,6 +884,12 @@ func (s *Store) CreateTask(ctx context.Context, req TaskCreate) (*Task, error) {
 	}
 	now := time.Now().Unix()
 	id := "task_" + uuid.NewString()
+	kind := normalizeTaskKind(req.Kind)
+	visibility := normalizeTaskVisibility(req.Visibility)
+	pinned := 0
+	if req.Pinned {
+		pinned = 1
+	}
 	// A freshly created task is NOT running — a run sets status='running' with
 	// an active_run_id via StartRun. Hardcoding 'running' here made /new-created
 	// (and any not-yet-run) tasks look running with no run behind them, so the
@@ -855,9 +897,11 @@ func (s *Store) CreateTask(ctx context.Context, req TaskCreate) (*Task, error) {
 	// brand-new empty task showing [interrupted]). Start as 'new' — non-terminal
 	// (resolveContinueTask still offers it, the sweeper ignores it) and honest.
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO tasks (id, tenant_id, person_id, workspace_id, title, status, last_channel, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, 'new', ?, ?, ?)`,
-		id, req.TenantID, req.PersonID, req.WorkspaceID, req.Title, req.Channel, now, now)
+		`INSERT INTO tasks (id, tenant_id, person_id, workspace_id, title, status, kind, visibility,
+		 pinned, last_channel, last_activity_at, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, 'new', ?, ?, ?, ?, ?, ?, ?)`,
+		id, req.TenantID, req.PersonID, req.WorkspaceID, req.Title, kind, visibility,
+		pinned, req.Channel, now, now, now)
 	if err != nil {
 		return nil, err
 	}
@@ -901,16 +945,21 @@ func (s *Store) CurrentTask(ctx context.Context, tenantID, personID string) (*Ta
 func (s *Store) GetTask(ctx context.Context, tenantID, taskID string) (*Task, error) {
 	var t Task
 	var nextSteps string
-	var created, updated int64
+	var pinned int
+	var archived sql.NullInt64
+	var created, updated, lastActivity int64
 	err := s.db.QueryRowContext(ctx,
 		`SELECT id, tenant_id, person_id, COALESCE(workspace_id, ''), title, status,
+		        COALESCE(kind, 'work'), COALESCE(visibility, 'visible'), COALESCE(pinned, 0),
 		        COALESCE(current_summary, ''), COALESCE(next_steps_json, '[]'),
 		        COALESCE(blocked_reason, ''), COALESCE(active_run_id, ''),
-		        COALESCE(last_channel, ''), created_at, updated_at
+		        COALESCE(last_channel, ''), archived_at,
+		        COALESCE(last_activity_at, updated_at), created_at, updated_at
 		 FROM tasks WHERE tenant_id = ? AND id = ?`,
 		normalizeTenant(tenantID), taskID).
-		Scan(&t.ID, &t.TenantID, &t.PersonID, &t.WorkspaceID, &t.Title, &t.Status, &t.CurrentSummary,
-			&nextSteps, &t.BlockedReason, &t.ActiveRunID, &t.LastChannel, &created, &updated)
+		Scan(&t.ID, &t.TenantID, &t.PersonID, &t.WorkspaceID, &t.Title, &t.Status,
+			&t.Kind, &t.Visibility, &pinned, &t.CurrentSummary, &nextSteps, &t.BlockedReason,
+			&t.ActiveRunID, &t.LastChannel, &archived, &lastActivity, &created, &updated)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -918,6 +967,12 @@ func (s *Store) GetTask(ctx context.Context, tenantID, taskID string) (*Task, er
 		return nil, err
 	}
 	_ = json.Unmarshal([]byte(nextSteps), &t.NextSteps)
+	t.Pinned = pinned != 0
+	if archived.Valid {
+		at := time.Unix(archived.Int64, 0)
+		t.ArchivedAt = &at
+	}
+	t.LastActivityAt = time.Unix(lastActivity, 0)
 	t.CreatedAt = time.Unix(created, 0)
 	t.UpdatedAt = time.Unix(updated, 0)
 	return &t, nil
@@ -944,10 +999,14 @@ func (s *Store) ListTasks(ctx context.Context, tenantID, personID string, limit 
 	}
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT id, tenant_id, person_id, COALESCE(workspace_id, ''), title, status,
+		        COALESCE(kind, 'work'), COALESCE(visibility, 'visible'), COALESCE(pinned, 0),
 		        COALESCE(current_summary, ''), COALESCE(next_steps_json, '[]'),
 		        COALESCE(blocked_reason, ''), COALESCE(active_run_id, ''),
-		        COALESCE(last_channel, ''), created_at, updated_at
-		 FROM tasks WHERE tenant_id = ? AND person_id = ? ORDER BY updated_at DESC LIMIT ?`,
+		        COALESCE(last_channel, ''), archived_at,
+		        COALESCE(last_activity_at, updated_at), created_at, updated_at
+		 FROM tasks WHERE tenant_id = ? AND person_id = ?
+		   AND COALESCE(visibility, 'visible') != 'hidden'
+		 ORDER BY updated_at DESC LIMIT ?`,
 		normalizeTenant(tenantID), personID, limit)
 	if err != nil {
 		return nil, err
@@ -957,12 +1016,21 @@ func (s *Store) ListTasks(ctx context.Context, tenantID, personID string, limit 
 	for rows.Next() {
 		var t Task
 		var nextSteps string
-		var created, updated int64
-		if err := rows.Scan(&t.ID, &t.TenantID, &t.PersonID, &t.WorkspaceID, &t.Title, &t.Status, &t.CurrentSummary,
-			&nextSteps, &t.BlockedReason, &t.ActiveRunID, &t.LastChannel, &created, &updated); err != nil {
+		var pinned int
+		var archived sql.NullInt64
+		var created, updated, lastActivity int64
+		if err := rows.Scan(&t.ID, &t.TenantID, &t.PersonID, &t.WorkspaceID, &t.Title, &t.Status,
+			&t.Kind, &t.Visibility, &pinned, &t.CurrentSummary, &nextSteps, &t.BlockedReason,
+			&t.ActiveRunID, &t.LastChannel, &archived, &lastActivity, &created, &updated); err != nil {
 			return nil, err
 		}
 		_ = json.Unmarshal([]byte(nextSteps), &t.NextSteps)
+		t.Pinned = pinned != 0
+		if archived.Valid {
+			at := time.Unix(archived.Int64, 0)
+			t.ArchivedAt = &at
+		}
+		t.LastActivityAt = time.Unix(lastActivity, 0)
 		t.CreatedAt = time.Unix(created, 0)
 		t.UpdatedAt = time.Unix(updated, 0)
 		out = append(out, t)
@@ -987,11 +1055,14 @@ func (s *Store) ListTasksByStatusSince(ctx context.Context, tenantID, personID s
 		limit = 10
 	}
 	query := `SELECT id, tenant_id, person_id, COALESCE(workspace_id, ''), title, status,
+	                 COALESCE(kind, 'work'), COALESCE(visibility, 'visible'), COALESCE(pinned, 0),
 	                 COALESCE(current_summary, ''), COALESCE(next_steps_json, '[]'),
 	                 COALESCE(blocked_reason, ''), COALESCE(active_run_id, ''),
-	                 COALESCE(last_channel, ''), created_at, updated_at
+	                 COALESCE(last_channel, ''), archived_at,
+	                 COALESCE(last_activity_at, updated_at), created_at, updated_at
 	          FROM tasks
 	          WHERE tenant_id = ? AND person_id = ? AND updated_at >= ?
+	            AND COALESCE(visibility, 'visible') != 'hidden'
 	            AND status IN (` + placeholders(len(statuses)) + `)
 	          ORDER BY updated_at DESC LIMIT ?`
 	args := []any{normalizeTenant(tenantID), personID, since.Unix()}
@@ -1006,12 +1077,21 @@ func (s *Store) ListTasksByStatusSince(ctx context.Context, tenantID, personID s
 	for rows.Next() {
 		var t Task
 		var nextSteps string
-		var created, updated int64
-		if err := rows.Scan(&t.ID, &t.TenantID, &t.PersonID, &t.WorkspaceID, &t.Title, &t.Status, &t.CurrentSummary,
-			&nextSteps, &t.BlockedReason, &t.ActiveRunID, &t.LastChannel, &created, &updated); err != nil {
+		var pinned int
+		var archived sql.NullInt64
+		var created, updated, lastActivity int64
+		if err := rows.Scan(&t.ID, &t.TenantID, &t.PersonID, &t.WorkspaceID, &t.Title, &t.Status,
+			&t.Kind, &t.Visibility, &pinned, &t.CurrentSummary, &nextSteps, &t.BlockedReason,
+			&t.ActiveRunID, &t.LastChannel, &archived, &lastActivity, &created, &updated); err != nil {
 			return nil, err
 		}
 		_ = json.Unmarshal([]byte(nextSteps), &t.NextSteps)
+		t.Pinned = pinned != 0
+		if archived.Valid {
+			at := time.Unix(archived.Int64, 0)
+			t.ArchivedAt = &at
+		}
+		t.LastActivityAt = time.Unix(lastActivity, 0)
 		t.CreatedAt = time.Unix(created, 0)
 		t.UpdatedAt = time.Unix(updated, 0)
 		out = append(out, t)
@@ -1021,10 +1101,14 @@ func (s *Store) ListTasksByStatusSince(ctx context.Context, tenantID, personID s
 
 func (s *Store) UpdateTaskStatus(ctx context.Context, tenantID, taskID, status, summary string, nextSteps []string) error {
 	nextStepsJSON, _ := json.Marshal(nextSteps)
+	now := time.Now().Unix()
 	_, err := s.db.ExecContext(ctx,
 		`UPDATE tasks SET status = ?, current_summary = COALESCE(NULLIF(?, ''), current_summary),
-		 next_steps_json = ?, updated_at = ? WHERE tenant_id = ? AND id = ?`,
-		status, summary, string(nextStepsJSON), time.Now().Unix(), normalizeTenant(tenantID), taskID)
+		 next_steps_json = ?, archived_at = CASE
+		   WHEN ? = 'archived' THEN COALESCE(archived_at, ?)
+		   ELSE NULL
+		 END, last_activity_at = ?, updated_at = ? WHERE tenant_id = ? AND id = ?`,
+		status, summary, string(nextStepsJSON), status, now, now, now, normalizeTenant(tenantID), taskID)
 	return err
 }
 
@@ -1057,8 +1141,9 @@ func (s *Store) StartRun(ctx context.Context, task *Task, channel, inputSummary 
 		return nil, err
 	}
 	if _, err = tx.ExecContext(ctx,
-		`UPDATE tasks SET active_run_id = ?, status = 'running', last_channel = ?, updated_at = ? WHERE id = ?`,
-		run.ID, run.Channel, time.Now().Unix(), run.TaskID); err != nil {
+		`UPDATE tasks SET active_run_id = ?, status = 'running', last_channel = ?,
+		 archived_at = NULL, last_activity_at = ?, updated_at = ? WHERE id = ?`,
+		run.ID, run.Channel, time.Now().Unix(), time.Now().Unix(), run.TaskID); err != nil {
 		return nil, err
 	}
 	if err = tx.Commit(); err != nil {
@@ -1115,8 +1200,9 @@ func (s *Store) FinishRun(ctx context.Context, tenantID, runID, status string) e
 		return err
 	}
 	if _, err = tx.ExecContext(ctx,
-		`UPDATE tasks SET active_run_id = '', updated_at = ? WHERE tenant_id = ? AND active_run_id = ?`,
-		now, tenant, runID); err != nil {
+		`UPDATE tasks SET active_run_id = '', last_activity_at = ?, updated_at = ?
+		 WHERE tenant_id = ? AND active_run_id = ?`,
+		now, now, tenant, runID); err != nil {
 		return err
 	}
 	return tx.Commit()

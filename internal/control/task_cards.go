@@ -47,6 +47,7 @@ func (s *Store) ListTaskCards(ctx context.Context, tenantID, personID string, li
 		     ORDER BY created_at DESC, rowid DESC LIMIT 1
 		 )
 		 WHERE t.tenant_id = ? AND t.person_id = ?
+		   AND COALESCE(t.visibility, 'visible') != 'hidden'
 		   AND t.status NOT IN ('archived', 'cancelled')
 		 ORDER BY t.updated_at DESC LIMIT ?`,
 		normalizeTenant(tenantID), personID, limit)

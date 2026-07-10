@@ -23,12 +23,14 @@ import (
 //
 // It returns (exitCode, true) once the client TUI has run. It returns
 // (0, false) WITHOUT running anything if the daemon could not be reached or
-// started, so the caller can fall back to the in-process path — a
-// misconfigured/first-run environment still gets a working TUI.
+// started; the caller then fails with actionable guidance — there is NO
+// in-process fallback (daemon-only, ACTIVE PLAN P0-3: a silent local agent
+// would write person-state into a divergent partition).
 func (a *App) tryRunTUIClient(cfg *config.Config) (int, bool) {
 	res, err := gatewayrt.EnsureRunning(a.ctx, gatewayrt.EnsureOptions{ConfigPath: a.configPath})
 	if err != nil {
 		fmt.Fprintf(a.stderr, "could not reach or start the gateway daemon: %v\n", err)
+		fmt.Fprintln(a.stderr, "Common causes: a stale gateway.lock from a killed daemon, the configured gateway.addr port being taken by another process, or a broken config.yaml.")
 		return 0, false
 	}
 	if res.Started {

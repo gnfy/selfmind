@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -53,6 +54,39 @@ func vcrSessionFromContext(ctx context.Context) string {
 
 var vcrCounters sync.Map // session -> *atomic.Int64
 
+// ResetVCRSession clears the per-session call counter so the next recorded or
+// replayed call for the session starts at 0000.json. The eval runner calls it
+// at the start of EVERY case execution: the counter is process-global and was
+// never reset, so a case re-run in the same process continued numbering where
+// the previous run stopped — recording cassettes with a 0001+ hole (observed
+// live: .vcr/continuity_task_attach/ held 0001-0003 and no 0000) and failing
+// replays that probe indices past the recorded range.
+func ResetVCRSession(session string) {
+	if strings.TrimSpace(session) == "" {
+		return
+	}
+	vcrCounters.Delete(session)
+}
+
+// WipeVCRSessionRecordings removes a session's cassette directory. Record mode
+// calls it before recording a case so a re-record never interleaves files from
+// a previous recording generation. An empty dir resolves like the recorder does
+// (SELFMIND_EVAL_VCR_DIR, else ".vcr") so the wipe hits the same directory the
+// new recording will write.
+func WipeVCRSessionRecordings(dir, session string) error {
+	if strings.TrimSpace(session) == "" {
+		return nil
+	}
+	if strings.TrimSpace(dir) == "" {
+		dir = vcrDir()
+	}
+	return os.RemoveAll(filepath.Join(dir, sanitizeVCR(session)))
+}
+
+// VCRRecordMode reports whether the eval VCR is in record mode (the runner
+// wipes stale cassettes for a case before recording it).
+func VCRRecordMode() bool { return vcrMode() == "record" }
+
 func vcrMode() string { return strings.ToLower(strings.TrimSpace(os.Getenv("SELFMIND_EVAL_VCR"))) }
 func vcrDir() string {
 	if d := strings.TrimSpace(os.Getenv("SELFMIND_EVAL_VCR_DIR")); d != "" {
@@ -71,15 +105,47 @@ func vcrOffline() bool {
 	return false
 }
 
-// HasCassetteSession reports whether a recorded cassette exists for a session
-// (case id) under dir. selfcheck uses it to replay recorded cases and skip the
-// rest rather than going live. An empty dir means the default ".vcr".
+// HasCassetteSession reports whether a COMPLETE recorded cassette exists for a
+// session (case id) under dir. selfcheck uses it to replay recorded cases and
+// skip the rest rather than going live. An empty dir means the default ".vcr".
+//
+// Complete means: 0000.json exists and the numbered files are gap-free
+// (0000..max). Replay is position-keyed from 0000, so a directory missing 0000
+// or holding a gap can never replay — treating "any *.json" as valid would mask
+// exactly the counter-contamination corruption ResetVCRSession prevents.
 func HasCassetteSession(dir, session string) bool {
 	if strings.TrimSpace(dir) == "" {
 		dir = ".vcr"
 	}
-	_, err := os.Stat(filepath.Join(dir, sanitizeVCR(session), "0000.json"))
-	return err == nil
+	entries, err := os.ReadDir(filepath.Join(dir, sanitizeVCR(session)))
+	if err != nil {
+		return false
+	}
+	seen := make(map[int]bool)
+	max := -1
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !strings.HasSuffix(name, ".json") {
+			continue
+		}
+		n, err := strconv.Atoi(strings.TrimSuffix(name, ".json"))
+		if err != nil {
+			continue
+		}
+		seen[n] = true
+		if n > max {
+			max = n
+		}
+	}
+	if max < 0 || !seen[0] {
+		return false
+	}
+	for i := 0; i <= max; i++ {
+		if !seen[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // MaybeWrapVCR wraps a provider when SELFMIND_EVAL_VCR is record|replay (eval
@@ -123,6 +189,7 @@ type recordedEvent struct {
 
 type cassette struct {
 	Method     string          `json:"method"`
+	Error      string          `json:"error,omitempty"`
 	Events     []recordedEvent `json:"events,omitempty"`
 	Chat       *ChatResponse   `json:"chat,omitempty"`
 	Completion string          `json:"completion,omitempty"`
@@ -150,6 +217,17 @@ func (v *vcrProvider) load(path string) (*cassette, error) {
 	return &c, nil
 }
 
+func cassetteMiss(path, method string, recorded *cassette, loadErr error) error {
+	recordedMethod := ""
+	if recorded != nil {
+		recordedMethod = recorded.Method
+	}
+	if loadErr != nil {
+		return fmt.Errorf("%w: method=%s path=%s: %v", ErrCassetteMiss, method, path, loadErr)
+	}
+	return fmt.Errorf("%w: method=%s path=%s recorded_method=%s", ErrCassetteMiss, method, path, recordedMethod)
+}
+
 func (v *vcrProvider) save(path string, c cassette) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return
@@ -162,22 +240,33 @@ func (v *vcrProvider) save(path string, c cassette) {
 }
 
 func (v *vcrProvider) StreamChat(ctx context.Context, req ChatRequest) (<-chan StreamEvent, error) {
-	key, ok := v.nextKey(ctx)
-	if !ok {
-		return v.inner.StreamChat(ctx, req)
-	}
 	if v.mode == "replay" {
-		if c, err := v.load(key); err == nil && c.Method == "stream" {
+		key, ok := v.nextKey(ctx)
+		if !ok {
+			return v.inner.StreamChat(ctx, req)
+		}
+		c, loadErr := v.load(key)
+		if loadErr == nil && c.Method == "stream" {
+			if c.Error != "" {
+				return nil, errors.New(c.Error)
+			}
 			return replayStream(c.Events), nil
 		}
 		if v.offline {
-			return nil, ErrCassetteMiss
+			return nil, cassetteMiss(key, "stream", c, loadErr)
 		}
 		return v.inner.StreamChat(ctx, req) // cassette miss → live fallback
 	}
+	key, ok := v.nextKey(ctx)
 	in, err := v.inner.StreamChat(ctx, req)
 	if err != nil {
+		if ok {
+			v.save(key, cassette{Method: "stream", Error: err.Error()})
+		}
 		return nil, err
+	}
+	if !ok {
+		return in, nil
 	}
 	out := make(chan StreamEvent, 256)
 	go func() {
@@ -193,42 +282,69 @@ func (v *vcrProvider) StreamChat(ctx context.Context, req ChatRequest) (<-chan S
 }
 
 func (v *vcrProvider) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, error) {
-	key, ok := v.nextKey(ctx)
-	if !ok {
-		return v.inner.Chat(ctx, req)
-	}
 	if v.mode == "replay" {
-		if c, err := v.load(key); err == nil && c.Method == "chat" && c.Chat != nil {
-			return c.Chat, nil
+		key, ok := v.nextKey(ctx)
+		if !ok {
+			return v.inner.Chat(ctx, req)
+		}
+		c, loadErr := v.load(key)
+		if loadErr == nil && c.Method == "chat" {
+			if c.Error != "" {
+				return nil, errors.New(c.Error)
+			}
+			if c.Chat != nil {
+				return c.Chat, nil
+			}
 		}
 		if v.offline {
-			return nil, ErrCassetteMiss
+			return nil, cassetteMiss(key, "chat", c, loadErr)
 		}
 		return v.inner.Chat(ctx, req)
 	}
+	key, ok := v.nextKey(ctx)
 	resp, err := v.inner.Chat(ctx, req)
-	if err == nil && resp != nil {
+	if err != nil {
+		if ok {
+			v.save(key, cassette{Method: "chat", Error: err.Error()})
+		}
+		return resp, err
+	}
+	if resp == nil {
+		return resp, err
+	}
+	if ok {
 		v.save(key, cassette{Method: "chat", Chat: resp})
 	}
 	return resp, err
 }
 
 func (v *vcrProvider) ChatCompletion(ctx context.Context, messages []Message) (string, error) {
-	key, ok := v.nextKey(ctx)
-	if !ok {
-		return v.inner.ChatCompletion(ctx, messages)
-	}
 	if v.mode == "replay" {
-		if c, err := v.load(key); err == nil && c.Method == "completion" {
+		key, ok := v.nextKey(ctx)
+		if !ok {
+			return v.inner.ChatCompletion(ctx, messages)
+		}
+		c, loadErr := v.load(key)
+		if loadErr == nil && c.Method == "completion" {
+			if c.Error != "" {
+				return "", errors.New(c.Error)
+			}
 			return c.Completion, nil
 		}
 		if v.offline {
-			return "", ErrCassetteMiss
+			return "", cassetteMiss(key, "completion", c, loadErr)
 		}
 		return v.inner.ChatCompletion(ctx, messages)
 	}
+	key, ok := v.nextKey(ctx)
 	text, err := v.inner.ChatCompletion(ctx, messages)
-	if err == nil {
+	if err != nil {
+		if ok {
+			v.save(key, cassette{Method: "completion", Error: err.Error()})
+		}
+		return text, err
+	}
+	if ok {
 		v.save(key, cassette{Method: "completion", Completion: text})
 	}
 	return text, err
@@ -283,3 +399,7 @@ func sanitizeVCR(s string) string {
 	}
 	return out
 }
+
+// SupportsNativeTools forwards the capability probe to the wrapped provider so
+// VCR wrapping never changes prompt assembly.
+func (v *vcrProvider) SupportsNativeTools() bool { return ProviderSupportsNativeTools(v.inner) }

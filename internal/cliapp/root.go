@@ -3,22 +3,14 @@ package cliapp
 import (
 	"bufio"
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 	"strconv"
 	"strings"
 
-	appcore "selfmind/internal/app"
-	"selfmind/internal/control"
-	tui "selfmind/internal/gateway/cli"
-	"selfmind/internal/gateway/httpapi"
-	"selfmind/internal/kernel"
-	"selfmind/internal/kernel/memory"
 	"selfmind/internal/platform/config"
 	"selfmind/internal/platform/log"
-	"selfmind/internal/tools"
 )
 
 type App struct {
@@ -158,126 +150,20 @@ func (a *App) runTUI() int {
 	log.Init(log.Options{Level: cfg.Agent.LogLevel})
 	a.printStartupHealthWarnings()
 
-	// Daemon-client mode is now the DEFAULT: the TUI runs as a thin client to a
-	// single shared gateway daemon (the codex/hermes multi-terminal model), so
-	// the worker pool, single auth manager, per-workspace serialization, and one
-	// control.db all apply across terminals. `SELFMIND_TUI_INPROC=1` opts out
-	// (build an in-process gateway, the legacy single-process path). If the
-	// daemon can't be reached/started, we fall back to in-process so a
-	// misconfigured or first-run environment still gets a working TUI.
-	if os.Getenv("SELFMIND_TUI_INPROC") != "1" {
-		if code, ok := a.tryRunTUIClient(cfg); ok {
-			return code
-		}
-		fmt.Fprintln(a.stderr, "Falling back to in-process mode (set SELFMIND_TUI_INPROC=1 to silence).")
-	}
-
-	mem, dataDir, err := appcore.InitStorage(cfg)
-	if err != nil {
-		log.Fatal("app.InitStorage failed", "error", err)
-	}
-
-	tenantID := os.Getenv("SELF_TENANT_ID")
-	if tenantID == "" {
-		tenantID = "default"
-	}
-
-	agent, err := appcore.InitAgent(mem, cfg, tenantID)
-	if err != nil {
-		log.Fatal("app.InitAgent failed", "error", err)
-	}
-
-	skillStore := kernel.NewSkillStore(mem)
-	disp, err := appcore.InitTools(mem, cfg, agent, skillStore, tenantID)
-	if err != nil {
-		log.Fatal("app.InitTools failed", "error", err)
-	}
-
-	agent.SetBackend(disp)
-
-	gwDeps, err := appcore.InitGateway(dataDir, mem, agent, cfg, skillStore)
-	if err != nil {
-		log.Fatal("app.InitGateway failed", "error", err)
-	}
-	// Optional multi-worker execution (SELFMIND_WORKERS>1); default 1 keeps the
-	// single-agent serialized path unchanged.
-	if workers, err := appcore.MaybeEnableWorkerPool(gwDeps.Gateway, mem, cfg, skillStore, tenantID); err != nil {
-		log.Warn("worker pool partially enabled", "workers", workers, "error", err)
-	} else if workers > 1 {
-		log.Info("agent worker pool enabled", "workers", workers)
-	}
-	appcore.RegisterCronTool(disp, gwDeps.CronScheduler)
-	// Local TUI path has no gateway Server/executor; start cron so jobs still
-	// run (degrading to the marker fallback) instead of never firing.
-	if err := appcore.StartCron(gwDeps.CronScheduler); err != nil {
-		log.Warn("cron scheduler did not start", "error", err)
-	}
-
-	controlStore, err := control.OpenStore(dataDir)
-	if err != nil {
-		log.Fatal("control.OpenStore failed", "error", err)
-	}
-
-	appcore.InitMCP(disp, cfg)
-
-	displayProvider, displayModel, _ := appcore.ResolveModelDisplay(cfg)
-	ctrl := tui.NewControllerWithGateway(gwDeps.Gateway, agent, nil, displayProvider, displayModel, cfg, tenantID)
-	ctrl.SetSessionChannel(a.resumeChannel)
-	localGateway := &httpapi.Server{
-		Control:         controlStore,
-		Gateway:         gwDeps.Gateway,
-		DefaultTenantID: tenantID,
-		// Smart-mode approval triage (H2): cheap-model judge off the main run
-		// provider. Nil when unavailable → smart mode asks a human.
-		// (Escrow needs the daemon sweep, so PendingNotifyAfter is daemon-only.)
-		ApprovalJudge: appcore.NewConfiguredApprovalJudge(mem, cfg, tenantID),
-		// Post-run labeler (Work Timeline P3): cheap memory_extract-role judge
-		// that re-points a wrong pre-label after the run. Nil → labels are kept.
-		Labeler: appcore.NewConfiguredRunLabeler(mem, cfg, tenantID),
-		// Automatic semantic recall (Work Timeline P2): same selector-layer
-		// wiring as the daemon so in-process TUI turns get identical context.
-		Recall: httpapi.NewRecallEngine(controlStore, mem, appcore.SemanticRecallExpander(mem, cfg, tenantID)),
-	}
-	ctrl.SetMessageProcessor(localGateway.ProcessMessage)
-	if err := a.pinResumeTask(localGateway.ProcessMessage); err != nil {
-		fmt.Fprintf(a.stderr, "SelfMind resume error: %v\n", err)
+	// Daemon-only: the TUI is ALWAYS a thin client to the single gateway
+	// daemon (ACTIVE PLAN P0-3). The in-process agent path was removed — every
+	// entrance (CLI, IM, cron, HTTP) executes inside the daemon, so one worker
+	// pool, one auth manager, one control.db owner apply across terminals. If
+	// the daemon cannot be reached or started, we fail with actionable guidance
+	// instead of silently running a divergent local agent (the old fallback
+	// split memory/session state across partitions).
+	code, ok := a.tryRunTUIClient(cfg)
+	if !ok {
+		fmt.Fprintln(a.stderr, "SelfMind could not connect to its gateway daemon.")
+		fmt.Fprintln(a.stderr, "Try: `selfmind gateway status`, `selfmind gateway run` (foreground logs), or `selfmind doctor`.")
 		return 1
 	}
-	disp.InjectClarifyHandler(ctrl.ClarifyHandler())
-	ctrl.SetSessionSearchFn(mem.SearchFn(tenantID))
-
-	memFn := func() (*memory.MemoryManager, string, string) { return mem, tenantID, "cli" }
-	msgFn := func() ([]byte, error) {
-		msgs, err := tui.GetCheckpointMessages()
-		if err != nil || msgs == nil {
-			return nil, err
-		}
-		return json.Marshal(msgs)
-	}
-	wrappedMemFn := func() (*memory.MemoryManager, string, string, error) {
-		m, t, c := memFn()
-		return m, t, c, nil
-	}
-	checkpointTool := tools.NewCheckpointTool(wrappedMemFn, msgFn)
-	disp.RegisterTool(checkpointTool)
-	ctrl.SetCheckpointFns(memFn, msgFn)
-
-	ctrl.SetCleanupFn(func() {
-		appcore.StopCron(gwDeps.CronScheduler)
-		if controlStore != nil {
-			controlStore.Close()
-		}
-		if mem != nil {
-			mem.Close()
-		}
-	})
-
-	ctrl.Start()
-	if a.resumeChannel != "" || ctrl.HasConversationHistory() {
-		printResumeHint(a.stdout, ctrl.SessionChannel())
-	}
-	fmt.Fprintln(a.stdout, "Goodbye!")
-	return 0
+	return code
 }
 
 func splitGlobalConfigFlag(args []string) ([]string, string, error) {

@@ -28,10 +28,10 @@ type fakeLabeler struct {
 	block   chan struct{} // when non-nil, Label waits for it (or ctx)
 }
 
-func (f *fakeLabeler) Label(ctx context.Context, prompt string) (string, error) {
+func (f *fakeLabeler) Analyze(ctx context.Context, req PostRunAnalysisRequest) (PostRunAnalysis, error) {
 	f.mu.Lock()
 	f.calls++
-	f.prompts = append(f.prompts, prompt)
+	f.prompts = append(f.prompts, req.Prompt)
 	block := f.block
 	reply, err := f.reply, f.err
 	f.mu.Unlock()
@@ -39,10 +39,10 @@ func (f *fakeLabeler) Label(ctx context.Context, prompt string) (string, error) 
 		select {
 		case <-block:
 		case <-ctx.Done():
-			return "", ctx.Err()
+			return PostRunAnalysis{}, ctx.Err()
 		}
 	}
-	return reply, err
+	return PostRunAnalysis{TaskDecision: reply}, err
 }
 
 func (f *fakeLabeler) callCount() int {
@@ -61,7 +61,7 @@ func runOrdinaryTurn(t *testing.T, daemon *Server, content string) api.MessageRe
 	if status != 200 || resp.Task == nil {
 		t.Fatalf("turn failed: status=%d resp=%+v", status, resp)
 	}
-	daemon.labelerWG.Wait()
+	daemon.postRunWG.Wait()
 	return resp
 }
 
@@ -100,7 +100,7 @@ func TestLabelerMoveRepointsRunAndCleansPlaceholder(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	daemon.Labeler = &fakeLabeler{reply: "MOVE:" + target.ID}
+	daemon.PostRunAnalyzer = &fakeLabeler{reply: "MOVE:" + target.ID}
 	resp := runOrdinaryTurn(t, daemon, "make the KOF characters look sharper")
 	placeholderID := resp.Task.ID
 	if placeholderID == target.ID {
@@ -144,7 +144,7 @@ func TestLabelerTitleSetsPlaceholderTitleOnce(t *testing.T) {
 	ctx := context.Background()
 
 	fake := &fakeLabeler{reply: "TITLE:Build the KOF fighting game"}
-	daemon.Labeler = fake
+	daemon.PostRunAnalyzer = fake
 
 	// No current task yet → the first ordinary message creates a placeholder.
 	resp := runOrdinaryTurn(t, daemon, "用JS写一个KOF格斗游戏,先做两个角色")
@@ -181,7 +181,7 @@ func TestLabelerKeepAndGarbageAreNoops(t *testing.T) {
 	ctx := context.Background()
 
 	for _, reply := range []string{"KEEP", "definitely not a decision"} {
-		daemon.Labeler = &fakeLabeler{reply: reply}
+		daemon.PostRunAnalyzer = &fakeLabeler{reply: reply}
 		resp := runOrdinaryTurn(t, daemon, "do a thing ("+reply+")")
 		task, _ := store.GetTask(ctx, resp.Task.TenantID, resp.Task.ID)
 		if task == nil {
@@ -210,6 +210,67 @@ func TestNilLabelerNoops(t *testing.T) {
 	}
 }
 
+func TestLabelerSkipsEstablishedSoleOpenLabel(t *testing.T) {
+	provider := newSlowLLMProvider("making progress on the requested work")
+	provider.releaseNow()
+	daemon, _, _ := newDetachedRunServer(t, provider)
+	fake := &fakeLabeler{reply: "KEEP"}
+	daemon.PostRunAnalyzer = fake
+
+	first := runOrdinaryTurn(t, daemon, "build the first version")
+	if fake.callCount() != 1 {
+		t.Fatalf("new placeholder should be labeled once, got %d calls", fake.callCount())
+	}
+	second := runOrdinaryTurn(t, daemon, "improve the same version")
+	if second.Task == nil || first.Task == nil || second.Task.ID != first.Task.ID {
+		t.Fatalf("expected established label reuse: first=%+v second=%+v", first.Task, second.Task)
+	}
+	if fake.callCount() != 1 {
+		t.Fatalf("sole established open label must skip redundant judge call, got %d", fake.callCount())
+	}
+}
+
+func TestLabelerInboxHidesCasualRunAndClearsPlaceholder(t *testing.T) {
+	provider := newSlowLLMProvider("I am SelfMind")
+	provider.releaseNow()
+	daemon, store, _ := newDetachedRunServer(t, provider)
+	daemon.TaskGovernance = TaskGovernanceOptions{InboxEnabled: true}
+	daemon.PostRunAnalyzer = &fakeLabeler{reply: "INBOX"}
+	identity, err := store.ResolveOrCreateAccount(context.Background(), "default", "cli", "local", "Me")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	resp := runOrdinaryTurn(t, daemon, "who are you?")
+	if ghost, _ := store.GetTask(context.Background(), identity.TenantID, resp.Task.ID); ghost != nil {
+		t.Fatalf("auto-created visible placeholder should be removed, got %+v", ghost)
+	}
+	inbox, err := store.EnsureInboxTask(context.Background(), identity.TenantID, identity.PersonID, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	runs, err := store.ListTaskRuns(context.Background(), identity.TenantID, inbox.ID, 10)
+	if err != nil || len(runs) != 1 {
+		t.Fatalf("casual run was not preserved in inbox: runs=%+v err=%v", runs, err)
+	}
+	if current, _ := store.CurrentTask(context.Background(), identity.TenantID, identity.PersonID); current != nil {
+		t.Fatalf("inbox must never become current task: %+v", current)
+	}
+	if visible, _ := store.ListTasks(context.Background(), identity.TenantID, identity.PersonID, 20); len(visible) != 0 {
+		t.Fatalf("inbox run polluted visible task list: %+v", visible)
+	}
+	if !hasEventOfType(t, store, inbox.ID, "label.assigned") {
+		t.Fatal("inbox assignment must remain auditable")
+	}
+}
+
+func TestParseRunLabelReplyInbox(t *testing.T) {
+	decision, arg := parseRunLabelReply("INBOX\nignored")
+	if decision != "INBOX" || arg != "" {
+		t.Fatalf("decision=%q arg=%q", decision, arg)
+	}
+}
+
 // TestLabelerSkippedForExplicitAttach: an explicit attach (req.TaskID) is the
 // user's decision — the labeler is never consulted.
 func TestLabelerSkippedForExplicitAttach(t *testing.T) {
@@ -220,7 +281,7 @@ func TestLabelerSkippedForExplicitAttach(t *testing.T) {
 
 	parked := parkEmptyTask(t, daemon, "explicit target")
 	fake := &fakeLabeler{reply: "KEEP"}
-	daemon.Labeler = fake
+	daemon.PostRunAnalyzer = fake
 
 	resp, status := daemon.ProcessMessage(ctx, api.MessageRequest{
 		Platform: "cli", PlatformUserID: "local", Channel: "cli",
@@ -229,9 +290,36 @@ func TestLabelerSkippedForExplicitAttach(t *testing.T) {
 	if status != 200 || resp.Task == nil || resp.Task.ID != parked.ID {
 		t.Fatalf("explicit attach failed: %+v", resp.Task)
 	}
-	daemon.labelerWG.Wait()
+	daemon.postRunWG.Wait()
 	if fake.callCount() != 0 {
 		t.Fatalf("labeler must not run for explicit attaches, got %d calls", fake.callCount())
+	}
+}
+
+func TestPostRunAnalyzerLearnsFromSubstantiveExplicitAttachWithoutRelabeling(t *testing.T) {
+	provider := newSlowLLMProvider("completed a substantive implementation and verified the result")
+	provider.releaseNow()
+	daemon, store, _ := newDetachedRunServer(t, provider)
+	ctx := context.Background()
+
+	parked := parkEmptyTask(t, daemon, "explicit durable target")
+	fake := &fakeLabeler{reply: "TITLE:must be ignored"}
+	daemon.PostRunAnalyzer = fake
+	input := strings.Repeat("Continue the explicitly selected implementation with durable design constraints. ", 4)
+	resp, status := daemon.ProcessMessage(ctx, api.MessageRequest{
+		Platform: "cli", PlatformUserID: "local", Channel: "cli",
+		Content: input, TaskID: parked.ID,
+	})
+	if status != 200 || resp.Task == nil || resp.Task.ID != parked.ID {
+		t.Fatalf("explicit attach failed: %+v", resp)
+	}
+	daemon.postRunWG.Wait()
+	if fake.callCount() != 1 {
+		t.Fatalf("substantive run should receive one combined maintenance call, got %d", fake.callCount())
+	}
+	after, _ := store.GetTask(ctx, parked.TenantID, parked.ID)
+	if after == nil || after.Title != parked.Title {
+		t.Fatalf("explicit task was relabeled: before=%+v after=%+v", parked, after)
 	}
 }
 
@@ -244,7 +332,7 @@ func TestLabelerDoesNotBlockResponse(t *testing.T) {
 	ctx := context.Background()
 
 	fake := &fakeLabeler{reply: "TITLE:Named after release", block: make(chan struct{})}
-	daemon.Labeler = fake
+	daemon.PostRunAnalyzer = fake
 
 	resp, status := daemon.ProcessMessage(ctx, api.MessageRequest{
 		Platform: "cli", PlatformUserID: "local", Channel: "cli", Content: "slow labeling turn",
@@ -259,7 +347,7 @@ func TestLabelerDoesNotBlockResponse(t *testing.T) {
 		t.Fatalf("provisional title should stand while the labeler deliberates: %+v", before)
 	}
 	close(fake.block)
-	daemon.labelerWG.Wait()
+	daemon.postRunWG.Wait()
 	waitUntil(t, 2*time.Second, func() bool {
 		after, _ := store.GetTask(ctx, resp.Task.TenantID, resp.Task.ID)
 		return after != nil && after.Title == "Named after release"
@@ -274,7 +362,7 @@ func TestLabelerMoveTargetMustBeOffered(t *testing.T) {
 	daemon, store, _ := newDetachedRunServer(t, provider)
 	ctx := context.Background()
 
-	daemon.Labeler = &fakeLabeler{reply: "MOVE:task_does-not-exist"}
+	daemon.PostRunAnalyzer = &fakeLabeler{reply: "MOVE:task_does-not-exist"}
 	resp := runOrdinaryTurn(t, daemon, "work with a lying labeler")
 	task, _ := store.GetTask(ctx, resp.Task.TenantID, resp.Task.ID)
 	if task == nil {
@@ -304,7 +392,7 @@ func TestLabelerPromptCarriesTurnAndCandidates(t *testing.T) {
 	}
 
 	fake := &fakeLabeler{reply: "KEEP"}
-	daemon.Labeler = fake
+	daemon.PostRunAnalyzer = fake
 	runOrdinaryTurn(t, daemon, "the unique turn text marker")
 
 	fake.mu.Lock()
@@ -313,7 +401,7 @@ func TestLabelerPromptCarriesTurnAndCandidates(t *testing.T) {
 		t.Fatalf("labeler consulted %d times, want 1", len(fake.prompts))
 	}
 	prompt := fake.prompts[0]
-	for _, want := range []string{target.ID, "<turn>", "the unique turn text marker", "new placeholder: true"} {
+	for _, want := range []string{target.ID, "<turn-data>", "the unique turn text marker", "new placeholder: true"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("labeler prompt missing %q:\n%s", want, prompt)
 		}

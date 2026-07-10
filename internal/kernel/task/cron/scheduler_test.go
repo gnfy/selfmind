@@ -118,6 +118,57 @@ func TestRunJobPrefersExecutor(t *testing.T) {
 	}
 }
 
+func TestOneTimeJobRecordsRunAndDisablesItself(t *testing.T) {
+	s := newTestScheduler(t)
+	fx := &fakeExecutor{}
+	s.SetExecutor(fx)
+	ctx := context.Background()
+	job := &CronJob{
+		Name: "one-shot", CronExpr: "1 2 3 4 *", Prompt: "remind me",
+		TenantID: "default", Channel: "wxid_abc", Platform: "weixin", DeliverTo: "wxid_abc",
+		Once: true, Enabled: true,
+	}
+	id, err := s.AddJob(ctx, job)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if job.ID != id || id == 0 {
+		t.Fatalf("job id not propagated: id=%d job=%+v", id, job)
+	}
+
+	s.runJob(ctx, job)
+	jobs, err := s.ListJobs(ctx, "default")
+	if err != nil || len(jobs) != 1 {
+		t.Fatalf("jobs=%+v err=%v", jobs, err)
+	}
+	if jobs[0].Enabled || jobs[0].LastRun == nil || !jobs[0].Once {
+		t.Fatalf("one-time job was not completed durably: %+v", jobs[0])
+	}
+	if _, ok := s.entries[id]; ok {
+		t.Fatalf("one-time job %d remains scheduled", id)
+	}
+}
+
+func TestCronToolNormalizesProactiveRecipient(t *testing.T) {
+	s := newTestScheduler(t)
+	tool := NewCronTool(s)
+	_, err := tool.Execute(context.Background(), map[string]interface{}{
+		"action": "add", "name": "notify", "cron": "1 2 3 4 *", "prompt": "hello",
+		"tenantID": "default", "channel": "weixin", "platform": "weixin",
+		"deliver_to": "wxid_abc", "once": true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	jobs, err := s.ListJobs(context.Background(), "default")
+	if err != nil || len(jobs) != 1 {
+		t.Fatalf("jobs=%+v err=%v", jobs, err)
+	}
+	if jobs[0].Channel != "wxid_abc" || !jobs[0].Once {
+		t.Fatalf("proactive job not normalized: %+v", jobs[0])
+	}
+}
+
 // TestRunJobFallbackWithoutExecutor proves a memless, executor-less scheduler
 // does not panic (it degrades to a no-op marker path).
 func TestRunJobFallbackWithoutExecutor(t *testing.T) {

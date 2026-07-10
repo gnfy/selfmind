@@ -601,6 +601,8 @@ func (a *OpenRouterAdapter) StreamChat(ctx context.Context, req ChatRequest) (<-
 }
 
 // GeminiAdapter 适配 Google Gemini API (OpenAI 兼容模式)
+func (a *OpenAIAdapter) SupportsNativeTools() bool { return a.Quirks.SupportsTools }
+
 type GeminiAdapter struct {
 	OpenAIAdapter
 }
@@ -694,6 +696,8 @@ func NewGenericOpenAIAdapter(name, baseURL, apiKey, model string) *GenericOpenAI
 // ---- OpenRouter 统一适配器 ----
 
 // OpenRouterAdapter 通过 OpenRouter 路由到多个模型
+func (a *GenericOpenAIAdapter) SupportsNativeTools() bool { return a.Quirks.SupportsTools }
+
 type OpenRouterAdapter struct {
 	APIKey          string
 	KeyGetter       func() string
@@ -826,3 +830,5 @@ func (a *OpenRouterAdapter) ChatCompletion(ctx context.Context, messages []Messa
 	}
 	return resp.Content, nil
 }
+
+func (a *OpenRouterAdapter) SupportsNativeTools() bool { return a.Quirks.SupportsTools }

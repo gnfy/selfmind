@@ -95,7 +95,15 @@ func (a *Adapter) SendWithReceipt(ctx context.Context, msg delivery.Message) (bo
 	if a == nil || a.client == nil {
 		return false, delivery.ErrNoSender
 	}
-	target := firstNonEmpty(msg.Channel, msg.PlatformUserID)
+	target := strings.TrimSpace(msg.Channel)
+	// Proactive jobs historically stored the generic platform name in Channel
+	// while PlatformUserID held the actual recipient. Sending to literal
+	// "weixin" produces iLink ret=-3. Prefer the concrete recipient whenever
+	// Channel is absent or is only a platform marker; interactive group/DM
+	// channels remain authoritative when they contain a real chat id.
+	if target == "" || strings.EqualFold(target, strings.TrimSpace(msg.Platform)) {
+		target = strings.TrimSpace(msg.PlatformUserID)
+	}
 	if target == "" {
 		return false, fmt.Errorf("weixin delivery target is empty")
 	}

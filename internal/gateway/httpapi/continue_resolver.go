@@ -77,7 +77,7 @@ func (d *Server) resolveContinueTask(ctx context.Context, identity *control.Iden
 	if err != nil {
 		return nil, err
 	}
-	if current != nil && !archivedTaskStatus(current.Status) {
+	if current != nil && current.IsVisible() && !current.IsInbox() && !archivedTaskStatus(current.Status) {
 		return current, nil
 	}
 	tasks, err := d.Control.ListTasks(ctx, identity.TenantID, identity.PersonID, 10)

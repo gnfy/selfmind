@@ -71,7 +71,11 @@ func EnsureRunning(ctx context.Context, opts EnsureOptions) (EnsureResult, error
 		return EnsureResult{}, fmt.Errorf("start gateway daemon: %w", err)
 	}
 	if err := waitHealthy(ctx, url, timeout); err != nil {
-		return EnsureResult{}, fmt.Errorf("gateway did not become ready at %s within %s: %w", url, timeout, err)
+		// Actionable by construction (daemon-only has no fallback): name the
+		// address, the wait, the underlying error, and where the truth lives.
+		return EnsureResult{}, fmt.Errorf(
+			"gateway did not become ready at %s within %s: %w (check `selfmind gateway status`, the daemon log under the data dir, a stale gateway.lock from a killed daemon, or another process holding the port)",
+			url, timeout, err)
 	}
 	rec, _ := manager.RunningRecord()
 	return EnsureResult{URL: url, Record: rec, Started: true}, nil

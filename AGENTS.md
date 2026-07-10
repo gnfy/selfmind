@@ -100,12 +100,19 @@ Domain docs (**mandatory** before changing that domain):
   legitimate cross-process lock.
 - Clients reach the daemon via `gateway.EnsureRunning` (discover-or-autostart,
   race-safe) and the `internal/gateway/client` daemon-backed
-  `MessageProcessor`. The rich TUI is a thin client by **default**;
-  `SELFMIND_TUI_INPROC=1` opts back into in-process, and the client path falls
-  back automatically if the daemon can't start. Agent-backed slash commands go
-  through the safelisted `/v1/dispatch`, which refuses workspace-mutating and
-  code-exec tools — those require a real agent turn. Details:
-  `docs/worker-pool-design.md` §8.
+  `MessageProcessor`. **DAEMON-ONLY (2026-07-10, ACTIVE PLAN P0-3): the TUI is
+  ALWAYS a thin client — there is NO in-process agent path and NO fallback.**
+  Every entrance (CLI, IM, cron, HTTP) executes inside the one daemon, so the
+  worker pool, auth manager, per-workspace serialization, and control.db owner
+  apply across terminals, and person-partitioned state (memory/session/
+  checkpoints) is never split across a divergent local partition. If the daemon
+  cannot be reached or started, the client FAILS with an actionable message
+  (gateway status / `gateway run` / doctor) — it must never silently run a local
+  agent. Do NOT reintroduce `SELFMIND_TUI_INPROC`, an in-process gateway build
+  in the TUI path, or a "fall back to in-process" branch. Agent-backed slash
+  commands go through the safelisted `/v1/dispatch`, which refuses
+  workspace-mutating and code-exec tools — those require a real agent turn.
+  Details: `docs/worker-pool-design.md` §8.
 - Platform adapters only parse/authenticate/send platform payloads. The
   gateway owns identity binding, workspace lookup, task/run state, and agent
   dispatch. Approval state lives in `control.approval_requests` and gateway
@@ -147,16 +154,31 @@ Domain docs (**mandatory** before changing that domain):
   fresh placeholder. The guess is safe because labels never gate context
   (spine P1 + recall P2) and the EXECUTION workspace follows the REQUEST for
   pre-label turns (`workspaceForTask`); a wrong guess is display-only. After
-  finalization the async post-run labeler (`Server.Labeler`, cheap
-  memory_extract role via `app.NewRunLabeler`; nil = keep everything) answers
-  KEEP / MOVE:<task_id> / TITLE:<title>: MOVE re-points the run + its
+  finalization the async `PostRunAnalyzer` performs at most one explicitly
+  role-routed maintenance call (`tasks.maintenance_model_role`, default
+  `memory_extract`; nil = keep labels and skip automatic extraction). The same
+  JSON result contains durable user/workspace facts plus KEEP /
+  MOVE:<task_id> / TITLE:<title> / INBOX. MOVE re-points the run + its
   events/artifacts transactionally (`Store.ReassignRun`, deleting an
   auto-created placeholder left with zero runs), TITLE names a NEW placeholder
   exactly once (established labels rename only via `/task <id> rename`), and
   every non-KEEP decision writes a `label.assigned` event. All failure paths
-  degrade to KEEP. Do NOT build an ingress task-routing/disambiguation layer
+  preserve the completed run. Do NOT add a second turn/final fact extractor,
+  profile synthesis call, or ingress task-routing/disambiguation layer
   or a pre-agent continue-vs-new LLM call — both were evaluated and rejected
   (the implicit-continuation upgrade was removed in P3).
+- Task governance is post-run and reversible, never an ingress decision.
+- Do not call post-run maintenance on every run. It is eligible for a new
+  placeholder, real cross-label ambiguity, or a substantive durable outcome.
+  Explicit attachment is never relabeled; trivial established-label turns
+  with no durable facts skip the model call.
+  `INBOX` moves a casual/diagnostic run to one hidden, archived inbox label per
+  person/workspace; the run/events remain auditable, while Inbox is excluded
+  from `/tasks`, recall, current-task selection, and continuation.
+  `/task <id> pin|unpin` is explicit user authority. Automatic retention may
+  archive only old visible terminal tasks with no live run or pending human
+  input; it never deletes history, touches open/interrupted work, or overrides
+  a pin.
 - Run events use a per-run sink installed with
   `kernel.WithEventChannel(ctx, ch)`. Never swap the shared
   `Agent.EventChannel` in gateway code (legacy local-TUI fallback only).
@@ -178,6 +200,15 @@ Domain docs (**mandatory** before changing that domain):
   (`agent.thinking`, `tool.started`/`tool.output`/`tool.completed`,
   `turn.completed`). A timeout, failed tool, or model error leads to
   diagnosis, retry, or a clear handoff — not silent abandonment.
+- Outbound `sent_unconfirmed` is TERMINAL for the retry queue (a blind resend
+  reuses the same stale platform session and risks duplicates). The only
+  legitimate resend is the inbound-triggered one-shot catch-up
+  (`delivery.Service.CatchUpUnconfirmed`, fired from `ProcessMessage` when an
+  IM inbound just refreshed the platform session): each row is claimed
+  at-most-once (`outbound_messages.catchup_at`, claim-before-send), only rows
+  inside `gateway.delivery_catchup_max_age` qualify, and one catch-up replays a
+  bounded oldest-first batch. Never add another resend path for unconfirmed
+  rows, and never let a catch-up attempt clear the claim.
 
 ## Context & Memory
 
@@ -241,6 +272,16 @@ Domain docs (**mandatory** before changing that domain):
   spine is the durable working-state layer only. FTS indexing keeps the
   task-derived session id (`Agent.sessionKey`; `IndexSession` idempotent per
   session id) and is never keyed by the spine.
+- Storage partitions are PER-PERSON for run-written data: daemon agent runs
+  execute with `identity.PersonID` as the storage tenant, so memory facts,
+  session FTS, and checkpoints live under the person partition — while the
+  daemon's SKILLS dir is keyed by the control tenant the agent was built with.
+  `/v1/dispatch` must scope per tool (`personPartitionTools` in
+  `httpapi/handlers_dispatch.go`): person-partitioned tools get PersonID,
+  skill tools get the control tenant. Never inject one scope for all tools —
+  that regression made client `/memory list` read an empty partition. The
+  structured `GET /v1/sessions` API and the TUI `/search` command are always
+  person-partitioned.
 - Automatic recall v1 (Work Timeline P2, `docs/work-timeline.md` "Semantic
   recall"): the gateway selector (`httpapi/recall.go` on `Server.Recall`)
   attaches ≤3 bounded, EPHEMERAL `TaskRuntimeContext.RecallSlices` per turn

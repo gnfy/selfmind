@@ -429,6 +429,89 @@ func (s *Store) MarkDeliverySentUnconfirmed(ctx context.Context, id string) erro
 	return err
 }
 
+// ListCatchUpEligible returns sent_unconfirmed rows eligible for the one-shot
+// catch-up re-push that runs when the peer's next inbound refreshes the
+// platform session (P0-1, docs/STATUS.md "ACTIVE PLAN"). Eligible = same
+// person+platform+channel, never caught up before (catchup_at empty — the
+// at-most-once rail), and fresher than since (stale notices are not re-pushed).
+// Oldest first so a capped catch-up replays in original order.
+func (s *Store) ListCatchUpEligible(ctx context.Context, tenantID, personID, platform, channel string, since time.Time, limit int) ([]Delivery, error) {
+	if personID == "" || platform == "" {
+		return nil, fmt.Errorf("person id and platform are required")
+	}
+	if limit <= 0 || limit > 10 {
+		limit = 3
+	}
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, tenant_id, person_id, platform, COALESCE(platform_user_id, ''), channel, COALESCE(task_id, ''), COALESCE(run_id, ''),
+		        content, COALESCE(kind, ''), COALESCE(approval_id, ''), status, attempts, max_attempts, next_attempt_at, COALESCE(last_error, ''),
+		        part_index, part_total, COALESCE(idempotency_key, ''), created_at, updated_at, COALESCE(delivered_at, 0)
+		 FROM outbound_messages
+		 WHERE tenant_id = ? AND person_id = ? AND platform = ? AND channel = ?
+		   AND status = 'sent_unconfirmed' AND COALESCE(catchup_at, 0) = 0 AND updated_at >= ?
+		 ORDER BY created_at ASC, rowid ASC LIMIT ?`,
+		normalizeTenant(tenantID), personID, platform, channel, since.Unix(), limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Delivery
+	for rows.Next() {
+		d, err := scanDelivery(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, d)
+	}
+	return out, rows.Err()
+}
+
+// ClaimDeliveryCatchUp stamps catchup_at on a sent_unconfirmed row, claiming
+// its single catch-up re-push. Claim-before-send (like ClaimDelivery): two
+// concurrent inbounds both listing the row race here, exactly one wins, and a
+// crash after the claim loses at most one re-push — never duplicates one.
+func (s *Store) ClaimDeliveryCatchUp(ctx context.Context, id string) (bool, error) {
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE outbound_messages SET catchup_at = ?, updated_at = ?
+		 WHERE id = ? AND status = 'sent_unconfirmed' AND COALESCE(catchup_at, 0) = 0`,
+		time.Now().Unix(), time.Now().Unix(), id)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return n == 1, nil
+}
+
+// CountOutboundByStatusSince returns per-status outbound counts for the person
+// since the given time. It backs the /diag outbound-health section.
+func (s *Store) CountOutboundByStatusSince(ctx context.Context, tenantID, personID string, since time.Time) (map[string]int, error) {
+	if personID == "" {
+		return nil, fmt.Errorf("person id is required")
+	}
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT status, COUNT(*) FROM outbound_messages
+		 WHERE tenant_id = ? AND person_id = ? AND updated_at >= ?
+		 GROUP BY status`,
+		normalizeTenant(tenantID), personID, since.Unix())
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make(map[string]int)
+	for rows.Next() {
+		var status string
+		var n int
+		if err := rows.Scan(&status, &n); err != nil {
+			return nil, err
+		}
+		out[status] = n
+	}
+	return out, rows.Err()
+}
+
 // ListUndeliveredOutbound returns the person's recent outbound pushes that did
 // not confirm delivery — status 'sent_unconfirmed' (the platform accepted the
 // send but may have silently dropped it, e.g. a stale Weixin context token) or

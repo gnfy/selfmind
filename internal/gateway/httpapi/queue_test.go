@@ -282,6 +282,9 @@ func TestDiagControlCommand(t *testing.T) {
 	if !strings.Contains(reply, "Queued: 1") {
 		t.Fatalf("/diag reply = %q; want Queued: 1", reply)
 	}
+	if !strings.Contains(reply, "Tasks: open 0, terminal 0, archived 0, pinned 0, inbox runs 0") {
+		t.Fatalf("/diag reply = %q; want task governance stats", reply)
+	}
 	if !strings.Contains(reply, "Active run: none") {
 		t.Fatalf("/diag reply = %q; want Active run: none", reply)
 	}

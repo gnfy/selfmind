@@ -239,6 +239,21 @@ func TestCardTaskIDRoundTrip(t *testing.T) {
 	}
 }
 
+func TestHiddenInboxDoesNotResolveAsUserTask(t *testing.T) {
+	daemon, store, identity := newTaskViewServer(t)
+	inbox, err := store.EnsureInboxTask(context.Background(), identity.TenantID, identity.PersonID, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := daemon.findTaskByRef(context.Background(), identity, inbox.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != nil {
+		t.Fatalf("hidden inbox must not resolve through user task commands: %+v", got)
+	}
+}
+
 // TestTaskOrdinalResolvesCardOrder: /task <n> and /resume <n> resolve the
 // SAME task the default /tasks view numbers <n> (display order = resolution
 // order), and out-of-range ordinals return a clear pointer to /tasks instead
@@ -380,6 +395,33 @@ func TestTaskDetailRunsRenameArchive(t *testing.T) {
 	}
 	if out := controlReply(t, daemon, "/task task_nope-nope"); !strings.Contains(out, "not found") {
 		t.Fatalf("missing task should say not found: %s", out)
+	}
+}
+
+func TestTaskPinCommandsAndCard(t *testing.T) {
+	daemon, store, identity := newTaskViewServer(t)
+	task := seedTask(t, store, identity, "important long-running work", "in_progress", 1)
+
+	if out := controlReply(t, daemon, "/task "+task.ID+" pin"); !strings.Contains(out, "Pinned task") {
+		t.Fatalf("pin reply: %s", out)
+	}
+	got, _ := store.GetTask(context.Background(), identity.TenantID, task.ID)
+	if got == nil || !got.Pinned {
+		t.Fatalf("task was not pinned: %+v", got)
+	}
+	if out := controlReply(t, daemon, "/tasks"); !strings.Contains(out, "pinned: yes") {
+		t.Fatalf("pin state missing from card:\n%s", out)
+	}
+	seedTask(t, store, identity, "newer ordinary work", "in_progress", 1)
+	if out := controlReply(t, daemon, "/tasks"); strings.Index(out, task.Title) > strings.Index(out, "newer ordinary work") {
+		t.Fatalf("pinned task must remain before newer ordinary work:\n%s", out)
+	}
+	if out := controlReply(t, daemon, "/task "+task.ID+" unpin"); !strings.Contains(out, "Unpinned task") {
+		t.Fatalf("unpin reply: %s", out)
+	}
+	got, _ = store.GetTask(context.Background(), identity.TenantID, task.ID)
+	if got == nil || got.Pinned {
+		t.Fatalf("task was not unpinned: %+v", got)
 	}
 }
 

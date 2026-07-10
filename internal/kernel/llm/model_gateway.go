@@ -235,3 +235,13 @@ func withRequestRole(req ChatRequest, role ModelRole) ChatRequest {
 	req.Options["model_role"] = string(role)
 	return req
 }
+
+// SupportsNativeTools resolves the role's current provider and forwards the
+// probe, so prompt assembly reflects the provider actually routed this turn.
+func (p *RoleProvider) SupportsNativeTools() bool {
+	profile := p.gateway.resolve(p.role)
+	if profile.Provider == nil {
+		return false
+	}
+	return ProviderSupportsNativeTools(profile.Provider)
+}

@@ -63,8 +63,6 @@ func TestStreamBuffersPartialLineUntilFlush(t *testing.T) {
 	model := NewController(nil, nil, nil, "").model
 	model.width = 80
 	model.height = 20
-	model.viewport.Width = 80
-	model.viewport.Height = 15
 
 	updated, cmd := model.Update(MsgStream{Content: "hello"})
 	model = updated.(*uiModel)
@@ -84,8 +82,8 @@ func TestStreamBuffersPartialLineUntilFlush(t *testing.T) {
 	if model.liveStreamContent != "hello" {
 		t.Fatalf("liveStreamContent = %q, want hello", model.liveStreamContent)
 	}
-	if view := stripANSI(model.renderAllMessages()); !strings.Contains(view, "hello") {
-		t.Fatalf("live stream was not rendered: %q", view)
+	if view := stripANSI(model.renderActiveBlock(80)); !strings.Contains(view, "hello") {
+		t.Fatalf("live stream was not rendered in the active region: %q", view)
 	}
 }
 
@@ -93,8 +91,6 @@ func TestStreamCommitsCompleteLineImmediately(t *testing.T) {
 	model := NewController(nil, nil, nil, "").model
 	model.width = 80
 	model.height = 20
-	model.viewport.Width = 80
-	model.viewport.Height = 15
 
 	updated, _ := model.Update(MsgStream{Content: "hello\nnext"})
 	model = updated.(*uiModel)
@@ -185,8 +181,6 @@ func TestAgentActivityReplacesGenericWorkingText(t *testing.T) {
 	model := NewController(nil, nil, nil, "").model
 	model.width = 80
 	model.height = 20
-	model.viewport.Width = 80
-	model.viewport.Height = 15
 
 	updated, _ := model.Update(MsgAgentActivity{Content: "Reading tool results and deciding the next step"})
 	model = updated.(*uiModel)
@@ -197,17 +191,15 @@ func TestAgentActivityReplacesGenericWorkingText(t *testing.T) {
 	if model.activityText != "Reading tool results and deciding the next step" {
 		t.Fatalf("activityText = %q", model.activityText)
 	}
-	if view := stripANSI(model.renderAllMessages()); !strings.Contains(view, "Reading tool results and deciding the next step") {
-		t.Fatalf("activity text was not rendered: %q", view)
+	if view := stripANSI(model.renderActiveBlock(80)); !strings.Contains(view, "Reading tool results and deciding the next step") {
+		t.Fatalf("activity text was not rendered in the active region: %q", view)
 	}
 }
 
-func TestThinkingIndicatorHasGapAfterTranscript(t *testing.T) {
+func TestThinkingIndicatorRendersInActiveRegion(t *testing.T) {
 	model := NewController(nil, nil, nil, "").model
 	model.width = 100
 	model.height = 24
-	model.viewport.Width = 100
-	model.viewport.Height = 18
 	model.messages = append(model.messages, ChatMessage{
 		Role:    "user",
 		Content: "analyze this project",
@@ -215,19 +207,8 @@ func TestThinkingIndicatorHasGapAfterTranscript(t *testing.T) {
 	model.thinking = true
 	model.activityText = "Thinking about the request"
 
-	lines := strings.Split(stripANSI(model.renderAllMessages()), "\n")
-	activityLine := -1
-	for i, line := range lines {
-		if strings.Contains(line, "Thinking about the request") {
-			activityLine = i
-			break
-		}
-	}
-	if activityLine <= 0 {
-		t.Fatalf("activity line not found in rendered transcript: %q", strings.Join(lines, "\n"))
-	}
-	if strings.TrimSpace(lines[activityLine-1]) != "" {
-		t.Fatalf("activity line should have a blank gap above it, previous line = %q", lines[activityLine-1])
+	if view := stripANSI(model.renderActiveBlock(100)); !strings.Contains(view, "Thinking about the request") {
+		t.Fatalf("activity indicator missing from the active region: %q", view)
 	}
 }
 
@@ -616,97 +597,6 @@ func TestReadFileToolMessageSummarizesSize(t *testing.T) {
 	}
 }
 
-func TestTranscriptCacheConsistentAndInvalidates(t *testing.T) {
-	model := NewController(nil, nil, nil, "").model
-	model.viewport.Width = 80
-	model.viewport.Height = 24
-	model.messages = []ChatMessage{
-		{Role: "user", Content: "hello"},
-		{Role: "assistant", Content: "world **bold** and `code`"},
-		{Role: "tool", ToolName: "read_file", ToolArgs: `{"path":"a.go"}`, Content: "x\ny\nz", Duration: 0.2},
-	}
-
-	first := model.renderAllMessages()
-	second := model.renderAllMessages() // must hit the cache
-	if first != second {
-		t.Fatalf("cached render differs from first render")
-	}
-	if model.transcriptCache == nil || len(model.transcriptCache.entries) == 0 {
-		t.Fatalf("cache was not populated")
-	}
-
-	// Mutating a message must change the output — the fingerprint busts its
-	// cache entry rather than serving a stale render.
-	model.messages[1].Content = "world changed entirely"
-	third := model.renderAllMessages()
-	if third == first {
-		t.Fatalf("render did not reflect mutated message (stale cache)")
-	}
-	if !strings.Contains(stripANSI(third), "changed entirely") {
-		t.Fatalf("mutated content missing from render: %q", stripANSI(third))
-	}
-}
-
-func TestTranscriptCacheResetsOnWidthChange(t *testing.T) {
-	model := NewController(nil, nil, nil, "").model
-	model.viewport.Height = 24
-	model.messages = []ChatMessage{{Role: "assistant", Content: strings.Repeat("word ", 50)}}
-
-	model.viewport.Width = 90
-	wide := model.renderAllMessages()
-	model.viewport.Width = 40
-	narrow := model.renderAllMessages()
-
-	if model.transcriptCache.width != 40 {
-		t.Fatalf("cache width not updated after resize: %d", model.transcriptCache.width)
-	}
-	if wide == narrow {
-		t.Fatalf("narrower width should rewrap to different output")
-	}
-}
-
-// BenchmarkRenderAllMessagesCached approximates a long multi-turn session and
-// measures the warm-cache redraw cost (the path hit by every spinner/cursor
-// tick). Compare against the cost before Phase 1 by stubbing the cache out.
-func BenchmarkRenderAllMessagesCached(b *testing.B) {
-	model := NewController(nil, nil, nil, "").model
-	model.viewport.Width = 100
-	model.viewport.Height = 40
-	for i := 0; i < 200; i++ {
-		n := strconv.Itoa(i)
-		model.messages = append(model.messages,
-			ChatMessage{Role: "user", Content: "question " + n + " about the codebase"},
-			ChatMessage{Role: "assistant", Content: "answer " + n + " with **markdown**, `code`, and a list\n- alpha\n- beta\n- gamma"},
-		)
-	}
-	model.renderAllMessages() // warm the cache
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		_ = model.renderAllMessages()
-	}
-}
-
-// BenchmarkRenderAllMessagesCold drops the cache before each render to
-// approximate the pre-Phase-1 behavior (re-render all history every frame).
-// The ratio against the cached benchmark is the per-frame win.
-func BenchmarkRenderAllMessagesCold(b *testing.B) {
-	model := NewController(nil, nil, nil, "").model
-	model.viewport.Width = 100
-	model.viewport.Height = 40
-	for i := 0; i < 200; i++ {
-		n := strconv.Itoa(i)
-		model.messages = append(model.messages,
-			ChatMessage{Role: "user", Content: "question " + n + " about the codebase"},
-			ChatMessage{Role: "assistant", Content: "answer " + n + " with **markdown**, `code`, and a list\n- alpha\n- beta\n- gamma"},
-		)
-	}
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		model.transcriptCache = nil // force a full cold re-render
-		_ = model.renderAllMessages()
-	}
-}
-
 func TestPatchCellRendersAddWithGutterAndStat(t *testing.T) {
 	patch := "*** Begin Patch\n*** Add File: game.html\n+<!doctype html>\n+<title>x</title>\n+done\n*** End Patch"
 	out := stripANSI(renderToolMessage(ChatMessage{
@@ -840,7 +730,6 @@ func TestHandleCopyLastSelectsAssistant(t *testing.T) {
 // keeps running, so p.Quit() is honored and Run returns within the timeout.
 func TestHybridSubmitDoesNotDeadlock(t *testing.T) {
 	c := NewController(nil, nil, nil, "")
-	c.model.hybrid = true
 	c.SetMessageProcessor(func(ctx context.Context, req api.MessageRequest) (api.MessageResponse, int) {
 		return api.MessageResponse{Content: "stub answer"}, 200
 	})
@@ -874,20 +763,8 @@ func TestHybridSubmitDoesNotDeadlock(t *testing.T) {
 	}
 }
 
-func TestHybridIsDefaultWithLegacyEscapeHatch(t *testing.T) {
-	t.Setenv("SELFMIND_TUI_LEGACY", "")
-	if !hybridMode() {
-		t.Fatal("terminal-first hybrid should be the default")
-	}
-	t.Setenv("SELFMIND_TUI_LEGACY", "1")
-	if hybridMode() {
-		t.Fatal("SELFMIND_TUI_LEGACY=1 should force the legacy renderer")
-	}
-}
-
 func TestHybridCommitsStartupCardToScrollbackOnce(t *testing.T) {
 	model := NewController(nil, nil, nil, "").model
-	model.hybrid = true
 
 	model.updateInner(tea.WindowSizeMsg{Width: 100, Height: 30})
 	if !model.startupCommitted {
@@ -924,7 +801,6 @@ func TestWriteFileCellRendersDiff(t *testing.T) {
 
 func TestHybridCommitMarksMessageImmutable(t *testing.T) {
 	model := NewController(nil, nil, nil, "").model
-	model.hybrid = true
 	model.width = 80
 	model.messages = []ChatMessage{{Role: "user", Content: "hello"}}
 
@@ -937,7 +813,6 @@ func TestHybridCommitMarksMessageImmutable(t *testing.T) {
 
 func TestHybridActiveBlockShowsOnlyUncommitted(t *testing.T) {
 	model := NewController(nil, nil, nil, "").model
-	model.hybrid = true
 	model.width = 80
 	model.messages = []ChatMessage{
 		{Role: "assistant", Content: "committed answer", Committed: true},
@@ -959,7 +834,6 @@ func TestHybridActiveBlockShowsOnlyUncommitted(t *testing.T) {
 
 func TestHybridViewDoesNotReRenderCommittedHistory(t *testing.T) {
 	model := NewController(nil, nil, nil, "").model
-	model.hybrid = true
 	model.width = 80
 	model.height = 24
 	model.messages = []ChatMessage{{Role: "user", Content: "scrolled-away message", Committed: true}}
@@ -1103,28 +977,6 @@ func TestControllerUsesResolvedContextLength(t *testing.T) {
 	}
 }
 
-func TestMouseEventsDoNotCreateAppSelection(t *testing.T) {
-	model := NewController(nil, nil, nil, "").model
-	model.width = 80
-	model.height = 24
-	model.viewport.Width = 80
-	model.viewport.Height = 20
-
-	events := []tea.MouseMsg{
-		{Button: tea.MouseButtonLeft, Action: tea.MouseActionPress, X: 10, Y: 5},
-		{Button: tea.MouseButtonLeft, Action: tea.MouseActionMotion, X: 70, Y: 12},
-		{Button: tea.MouseButtonLeft, Action: tea.MouseActionRelease, X: 70, Y: 12},
-		{Button: tea.MouseButtonRight, Action: tea.MouseActionPress, X: 70, Y: 12},
-	}
-	for _, event := range events {
-		updated, _ := model.Update(event)
-		model = updated.(*uiModel)
-	}
-	if model.mouseDragActive {
-		t.Fatalf("mouse drag state should be cleared after release")
-	}
-}
-
 func TestCursorBlinkTickTogglesComposerCursor(t *testing.T) {
 	model := NewController(nil, nil, nil, "").model
 	model.cursorVisible = true
@@ -1140,106 +992,15 @@ func TestCursorBlinkTickTogglesComposerCursor(t *testing.T) {
 	}
 }
 
-func TestMouseWheelScrollsTranscriptOnlyInChatArea(t *testing.T) {
-	model := scrollableTranscriptModel()
-	model.viewModel()
-	bottom := model.viewport.YOffset
-
-	updated, _ := model.Update(tea.MouseMsg{
-		Button: tea.MouseButtonWheelUp,
-		Action: tea.MouseActionPress,
-		X:      10,
-		Y:      4,
-	})
-	model = updated.(*uiModel)
-	if got := model.viewport.YOffset; got >= bottom {
-		t.Fatalf("wheel in transcript did not scroll up: got %d, bottom %d", got, bottom)
-	}
-
-	scrolled := model.viewport.YOffset
-	updated, _ = model.Update(tea.MouseMsg{
-		Button: tea.MouseButtonWheelUp,
-		Action: tea.MouseActionPress,
-		X:      10,
-		Y:      model.transcriptVisibleHeight() + 1,
-	})
-	model = updated.(*uiModel)
-	if got := model.viewport.YOffset; got != scrolled {
-		t.Fatalf("wheel outside transcript changed offset: got %d, want %d", got, scrolled)
-	}
-}
-
-func TestMouseDragAtTranscriptEdgeAutoScrolls(t *testing.T) {
-	model := scrollableTranscriptModel()
-	model.viewModel()
-	bottom := model.viewport.YOffset
-
-	updated, _ := model.Update(tea.MouseMsg{
-		Button: tea.MouseButtonLeft,
-		Action: tea.MouseActionPress,
-		X:      10,
-		Y:      5,
-	})
-	model = updated.(*uiModel)
-	if !model.mouseDragActive {
-		t.Fatalf("left press in transcript should start drag tracking")
-	}
-
-	updated, cmd := model.Update(tea.MouseMsg{
-		Button: tea.MouseButtonLeft,
-		Action: tea.MouseActionMotion,
-		X:      10,
-		Y:      0,
-	})
-	model = updated.(*uiModel)
-	if got := model.viewport.YOffset; got >= bottom {
-		t.Fatalf("dragging at top edge did not scroll up: got %d, bottom %d", got, bottom)
-	}
-	if cmd == nil {
-		t.Fatalf("edge drag should schedule continuous auto-scroll")
-	}
-
-	updated, _ = model.Update(tea.MouseMsg{
-		Button: tea.MouseButtonLeft,
-		Action: tea.MouseActionRelease,
-		X:      10,
-		Y:      0,
-	})
-	model = updated.(*uiModel)
-	if model.mouseDragActive || model.mouseAutoScrollDir != 0 {
-		t.Fatalf("release should clear drag auto-scroll state")
-	}
-}
-
 func TestSelectionActionBarIsNotRendered(t *testing.T) {
 	model := NewController(nil, nil, nil, "").model
 	model.width = 80
 	model.height = 24
-	model.viewport.Width = 80
-	model.viewport.Height = 20
 
 	view := stripANSI(model.viewModel())
 
 	if strings.Contains(view, "Selection active") || strings.Contains(view, "Right-click: copy") {
 		t.Fatalf("selection action bar should not be rendered: %q", view)
-	}
-}
-
-func TestRenderedTranscriptIgnoresAppSelectionState(t *testing.T) {
-	model := NewController(nil, nil, nil, "").model
-	model.width = 80
-	model.height = 24
-	model.viewport.Width = 80
-	model.viewport.Height = 20
-	model.messages = []ChatMessage{
-		{Role: "user", Content: "question"},
-		{Role: "assistant", Content: "answer"},
-	}
-
-	rendered := model.renderAllMessages()
-
-	if strings.Contains(rendered, "\x1b[") {
-		t.Fatalf("rendered transcript should not contain selection ANSI styling: %q", rendered)
 	}
 }
 
@@ -1318,85 +1079,6 @@ func TestInputHistoryDoesNotStealMultilineArrowNavigation(t *testing.T) {
 	}
 }
 
-func TestTranscriptPageKeysScrollChatHistory(t *testing.T) {
-	model := scrollableTranscriptModel()
-	model.viewModel()
-	bottom := model.viewport.YOffset
-	if bottom <= 0 {
-		t.Fatalf("test transcript is not scrollable, bottom offset = %d", bottom)
-	}
-
-	updated, _ := model.handleKey(tea.KeyMsg{Type: tea.KeyPgUp})
-	model = updated.(*uiModel)
-
-	if got := model.viewport.YOffset; got >= bottom {
-		t.Fatalf("PageUp did not scroll transcript up: got offset %d, bottom %d", got, bottom)
-	}
-
-	updated, _ = model.handleKey(tea.KeyMsg{Type: tea.KeyPgDown})
-	model = updated.(*uiModel)
-
-	if got := model.viewport.YOffset; got != bottom {
-		t.Fatalf("PageDown offset = %d, want bottom %d", got, bottom)
-	}
-}
-
-func TestTranscriptScrollPositionSurvivesDraftAndWorkingRender(t *testing.T) {
-	model := scrollableTranscriptModel()
-	model.viewModel()
-	bottom := model.viewport.YOffset
-
-	updated, _ := model.handleKey(tea.KeyMsg{Type: tea.KeyPgUp})
-	model = updated.(*uiModel)
-	scrolled := model.viewport.YOffset
-	if scrolled >= bottom {
-		t.Fatalf("PageUp did not move away from bottom: got %d, bottom %d", scrolled, bottom)
-	}
-
-	model.editor.SetValue("draft while reading")
-	model.thinking = true
-	model.viewModel()
-
-	if got := model.viewport.YOffset; got != scrolled {
-		t.Fatalf("viewModel snapped to offset %d, want preserved offset %d", got, scrolled)
-	}
-}
-
-func TestStreamDoesNotSnapToBottomAfterManualTranscriptScroll(t *testing.T) {
-	model := scrollableTranscriptModel()
-	model.viewModel()
-
-	updated, _ := model.handleKey(tea.KeyMsg{Type: tea.KeyPgUp})
-	model = updated.(*uiModel)
-	scrolled := model.viewport.YOffset
-
-	updated, _ = model.Update(MsgStream{Content: "new chunk"})
-	model = updated.(*uiModel)
-
-	if got := model.viewport.YOffset; got != scrolled {
-		t.Fatalf("stream snapped to offset %d, want preserved offset %d", got, scrolled)
-	}
-}
-
-func TestCtrlArrowKeysScrollTranscriptAndKeepInputHistory(t *testing.T) {
-	model := scrollableTranscriptModel()
-	model.recordInputHistory("previous task")
-	model.viewModel()
-	bottom := model.viewport.YOffset
-
-	updated, _ := model.handleKey(tea.KeyMsg{Type: tea.KeyCtrlUp})
-	model = updated.(*uiModel)
-	if got := model.viewport.YOffset; got >= bottom {
-		t.Fatalf("Ctrl+Up did not scroll transcript up: got %d, bottom %d", got, bottom)
-	}
-
-	updated, _ = model.handleKey(tea.KeyMsg{Type: tea.KeyUp})
-	model = updated.(*uiModel)
-	if got := model.editor.Value(); got != "previous task" {
-		t.Fatalf("plain Up should still navigate input history, got %q", got)
-	}
-}
-
 // TestTUIGatewayControlCommandsRouteToDaemon proves the cross-endpoint fix: the
 // TUI previously OMITTED gateway control commands (/approve, /reject, /stop,
 // /id, /new, /resume, /workspace(s), /events, /notify), so typing /approve fell
@@ -1433,21 +1115,6 @@ func TestTUIGatewayControlCommandsRouteToDaemon(t *testing.T) {
 			t.Fatalf("%q routed %q to the gateway, want %q", tc.input, got, tc.want)
 		}
 	}
-}
-
-func scrollableTranscriptModel() *uiModel {
-	model := NewController(nil, nil, nil, "").model
-	model.width = 80
-	model.height = 18
-	model.viewport.Width = 80
-	model.viewport.Height = 12
-	for i := 0; i < 40; i++ {
-		model.messages = append(model.messages, ChatMessage{
-			Role:    "assistant",
-			Content: strings.Repeat("line content ", 3),
-		})
-	}
-	return model
 }
 
 func testKimiConfig() *config.Config {

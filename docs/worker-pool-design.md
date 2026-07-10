@@ -154,13 +154,12 @@ engines and must be verified for the tools/process registry.
 
 ## 8. Multi-terminal: daemon-client convergence (the framing fix)
 
-The pool above solves concurrency **inside one process**. But the original
-framing missed that SelfMind's primary interface — the rich Bubble Tea TUI
-(`internal/cliapp/root.go` `runTUI`) — builds its **own in-process gateway** and
-opens `control.db` directly. So two `selfmind` terminals are two independent
-processes: two `control.db` openers, two process-global auth managers (so the
-single-flight refresh from W1a does **not** apply across them), two worker pools.
-The pool gives those terminals zero cross-terminal protection.
+The pool above solves concurrency **inside one process**. Earlier SelfMind
+versions let the rich Bubble Tea TUI build its own gateway and open
+`control.db`, which made every terminal a separate owner process. That design
+has been removed: CLI/TUI, IM, HTTP and scheduled work now execute through one
+daemon. The clients do not own an agent, worker pool, auth manager, or control
+database.
 
 Studying mature single-daemon agent stacks (one runs a single app-server daemon
 with terminals as Unix-socket clients, all serialization + one `AuthManager` in
@@ -178,7 +177,7 @@ the daemon, while the TUI bypassed the daemon. The fix is to route the TUI
 through the daemon, after which the pool, the single auth manager, per-workspace
 serialization, and one `control.db` owner all apply to multi-terminal use.
 
-### 8a. Shipped (foundation, flagged)
+### 8a. Shipped (daemon-only foundation)
 
 - `gateway.EnsureRunning` (`internal/runtime/gateway/ensure.go`): discover a live
   daemon or auto-start a detached `selfmind gateway run`, then wait on `/health`.
@@ -195,12 +194,10 @@ serialization, and one `control.db` owner all apply to multi-terminal use.
   back to an `llm.StreamEvent` and feeding it into the ctx stream observer the TUI
   already consumes (`httpapi.StreamObserverFromContext`). Streaming is
   best-effort; correctness never depends on it. Tested (`client_test.go`).
-- Rich TUI client mode (superseded by §8d: client mode is now the **default**;
-  `SELFMIND_TUI_INPROC=1` opts back into in-process — `internal/cliapp/tui_client.go`):
-  `EnsureRunning`, build the controller with a
-  nil in-process agent/gateway, set the daemon `MessageProcessor`, and mark
-  `SetClientMode(true)` so agent-backed slash commands degrade to a notice instead
-  of dereferencing the absent agent.
+- Rich TUI thin-client mode (`internal/cliapp/tui_client.go`): `EnsureRunning`,
+  build a UI-only controller, install the daemon `MessageProcessor`, and route
+  agent-backed commands through daemon APIs. There is no in-process opt-out or
+  correctness fallback.
 - Verified headlessly end-to-end against an isolated daemon (temp data dir +
   unused port): first call auto-starts and answers `/status`; a second call
   reuses the running daemon (no restart); `send` round-trips a real turn through
@@ -209,9 +206,9 @@ serialization, and one `control.db` owner all apply to multi-terminal use.
 ### 8b. Slash-command parity in client mode — shipped
 
 Agent-backed slash commands now work in client mode through a single dispatch
-seam (`uiModel.dispatch`): in client mode it routes to the daemon's safelisted
-`/v1/dispatch` endpoint (`Gateway.DispatchTool` → agent backend), otherwise it
-uses the in-process agent. This covers the dispatch-backed subcommands —
+seam (`uiModel.dispatch`): it routes to the daemon's safelisted
+`/v1/dispatch` endpoint (`Gateway.DispatchTool` → agent backend). This covers
+the dispatch-backed subcommands —
 `/skills` (history/undo/catalog/install/audit/delete/pin/reload), `/memory`
 (history/remove/undo/pin), `/bundles`, `/checkpoint`. Commands backed by
 tenant-scoped local helpers (`/skills list/view/search/archive`, `/curator`)
@@ -219,9 +216,9 @@ already work client-side; `/status` and `/tasks` route through the message
 processor. The dispatch safelist is read/curate/learning-management tools only —
 **workspace-mutating / code-executing tools are refused** (HTTP 403) so
 `/v1/dispatch` is not a backdoor around workspace scope, approval, and run
-events. The few genuinely in-process-only paths (`/memory list`, `/skills
-stats`, `/model` switch) detect client mode and return a clear notice instead of
-a nil-deref. The old top-level command gate is gone (every path is now nil-safe).
+events. Person-partitioned memory/session reads use structured daemon APIs;
+commands not yet supported remotely return a clear notice rather than opening a
+second local ownership path.
 
 ### 8c. Workspace serialization: write-only — shipped
 
@@ -233,16 +230,13 @@ Exclusive-vs-SharedRead split. When no strategy is pinned we
 conservatively serialize (an agent turn could write). Tested in
 `router/workspace_serial_test.go`.
 
-### 8d. Default flipped to client mode — shipped
+### 8d. Daemon-only ownership — shipped
 
-The bare `selfmind` TUI now defaults to daemon-client mode: it auto-starts /
-attaches to the daemon and runs as a thin client. `SELFMIND_TUI_INPROC=1` opts
-back into the legacy in-process gateway. The flip is **fail-safe**: if the
-daemon can't be reached or started (misconfig / first run), it logs and falls
-back to the in-process path, so a broken daemon never leaves the user without a
-TUI. `/memory list` now works in client mode via a new `memory` tool `list`
-action over the dispatch path (the in-process view additionally shows the
-synthesized profile, which is an agent-only concern).
+The bare `selfmind` TUI auto-starts or attaches to the daemon and runs only as
+a thin client. If the daemon cannot start, startup fails with actionable
+diagnostics; it never creates a local agent as a fallback. `/memory list` and
+session search use daemon-owned, person-partitioned data, so every terminal and
+IM endpoint sees one consistent history.
 
 ### 8e. Interactive approval in client mode — shipped
 
@@ -258,14 +252,11 @@ end-to-end path requires a live approval-triggering run to exercise.)
 
 ### 8f. Remaining
 
-- **Session search in client mode**: the session browser's structured search
-  (`SetSessionSearchFn`) isn't wired to the daemon (`session_search` is
-  safelisted for dispatch but returns text, not the browser's structured shape).
 - **Richer live streaming** (optional): the event poll is event-level (tool /
   thinking), not token-level. Add an assistant-text increment to run events + a
   true SSE consumer for a typewriter effect.
-- **Real multi-terminal soak** at `SELFMIND_WORKERS>1` before deleting the
-  in-process path.
+- **Real multi-terminal soak** at `SELFMIND_WORKERS>1` to validate ordering,
+  provider pressure and workspace serialization under sustained load.
 - **Per-provider concurrency cap + 429 backoff**: deferred by design — belongs at
   the LLM adapter / model-gateway boundary (provider identity + the 429 response
   live there), not the run scheduler. Low value for single-user multi-terminal

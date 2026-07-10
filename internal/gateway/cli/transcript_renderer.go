@@ -7,7 +7,6 @@ import (
 	"hash/fnv"
 	"math"
 	"strings"
-	"time"
 
 	uicommon "selfmind/internal/ui/common"
 
@@ -17,7 +16,7 @@ import (
 
 // cellRenderer turns one ChatMessage into its rendered (pre-split) string for a
 // given width. The registry lets new transcript cell kinds (e.g. approval
-// cards, plan widgets) plug in without touching renderAllMessages — the
+// cards, plan widgets) plug in without touching the shared renderers — the
 // extensibility hook for later phases.
 type cellRenderer func(msg ChatMessage, width int) string
 
@@ -36,47 +35,6 @@ func renderCell(msg ChatMessage, width int) string {
 		return r(msg, width)
 	}
 	return ""
-}
-
-// renderCache memoizes per-message rendered output keyed by a fingerprint of the
-// message's render-relevant fields plus width. Finalized messages have a stable
-// fingerprint, so their expensive markdown/tool rendering runs once and is
-// reused across the many frames bubbletea draws on cosmetic ticks (spinner,
-// cursor blink, status, stream flush). This turns the per-frame transcript cost
-// from "re-render all history" into "re-fingerprint all history" — roughly a
-// thousandfold cheaper. A bounded live window (later phase) removes the
-// remaining linear scan.
-type renderCache struct {
-	width   int
-	entries map[uint64]string
-}
-
-// maxRenderCacheEntries caps memory: transient states (a running tool's
-// heartbeat updates, streaming) each mint an entry that becomes garbage once
-// finalized. When the map grows past this, drop it whole; stable messages
-// simply repopulate on the next frame.
-const maxRenderCacheEntries = 4096
-
-func (c *renderCache) lookup(fp uint64) (string, bool) {
-	if c == nil || c.entries == nil {
-		return "", false
-	}
-	s, ok := c.entries[fp]
-	return s, ok
-}
-
-func (c *renderCache) store(fp uint64, rendered string) {
-	if c.entries == nil || len(c.entries) > maxRenderCacheEntries {
-		c.entries = make(map[uint64]string, 64)
-	}
-	c.entries[fp] = rendered
-}
-
-// resetForWidth clears the cache when the wrap width changes; cached renders are
-// width-specific and would be wrong after a resize.
-func (c *renderCache) resetForWidth(width int) {
-	c.width = width
-	c.entries = make(map[uint64]string, 64)
 }
 
 // messageFingerprint is a cheap content+state hash. Any change to a field that
@@ -124,118 +82,6 @@ const (
 	glyphCross     = "\u2717" // ballot X: cancelled/aborted
 	glyphDot       = " · "
 )
-
-func (m *uiModel) renderAllMessages() string {
-	st := m.common.Styles
-	w := m.viewport.Width
-	if w <= 0 {
-		w = 60
-	}
-
-	if m.transcriptCache == nil {
-		m.transcriptCache = &renderCache{}
-	}
-	if m.transcriptCache.width != w {
-		m.transcriptCache.resetForWidth(w)
-	}
-
-	var allLines []string
-	processLines := func(lines []string, baseIdx int) []string {
-		if !m.mouseSelection {
-			return lines
-		}
-		start, end := m.mouseSelectionRange()
-		out := append([]string{}, lines...)
-		for i, line := range out {
-			idx := baseIdx + i
-			if idx < start || idx > end {
-				continue
-			}
-			out[i] = renderSelectedTranscriptLine(line, w, st.Chat.Selected)
-		}
-		return out
-	}
-
-	startupLines := append([]string{"", ""}, m.renderStartupCard(w)...)
-	startupLines = processLines(startupLines, 0)
-	allLines = append(allLines, startupLines...)
-
-	for i := 0; i < len(m.messages); {
-		// Group a run of consecutive read-only tool cells into one codex-style
-		// "Explored" cell, rather than one cell per read.
-		if isExploreCell(m.messages[i]) {
-			j := i + 1
-			for j < len(m.messages) && isExploreCell(m.messages[j]) {
-				j++
-			}
-			group := m.messages[i:j]
-			fp := exploreGroupFingerprint(group, w)
-			rendered, ok := m.transcriptCache.lookup(fp)
-			if !ok {
-				rendered = renderExploreGroup(group, w)
-				m.transcriptCache.store(fp, rendered)
-			}
-			msgLines := processLines(strings.Split(rendered, "\n"), len(allLines))
-			allLines = append(allLines, msgLines...)
-			i = j
-			continue
-		}
-		msg := m.messages[i]
-		fp := messageFingerprint(msg, w)
-		rendered, ok := m.transcriptCache.lookup(fp)
-		if !ok {
-			rendered = renderCell(msg, w)
-			m.transcriptCache.store(fp, rendered)
-		}
-		msgLines := processLines(strings.Split(rendered, "\n"), len(allLines))
-		allLines = append(allLines, msgLines...)
-		i++
-	}
-
-	if strings.TrimSpace(m.liveStreamContent) != "" {
-		rendered := renderAssistantMessage(stripANSI(m.liveStreamContent), w)
-		msgLines := strings.Split(rendered, "\n")
-		msgLines = processLines(msgLines, len(allLines))
-		allLines = append(allLines, msgLines...)
-	}
-
-	// Suppressed while the approval panel is up (mirrors renderActiveBlock):
-	// "Preparing to run <tool>…" next to the panel is duplicated noise.
-	if m.thinking && m.approvalPrompt == nil {
-		allLines = append(allLines, "")
-		spinnerView := m.spinner.View()
-		dots := strings.Repeat(".", (m.thinkingDots%3)+1)
-		label := strings.TrimSpace(m.activityText)
-		if label == "" {
-			label = "Working"
-		}
-		// Codex-style suffix: dim "(elapsed · esc to interrupt)" so a long run
-		// shows progress and how to stop it.
-		hint := ""
-		if !m.thinkingStart.IsZero() {
-			hint = toolBulletDim.Render(fmt.Sprintf("  (%s · esc to interrupt)", formatElapsedCompact(time.Since(m.thinkingStart))))
-		}
-		rendered := st.Chat.Thinking.Render(spinnerView+" "+label+dots) + hint
-		lines := processLines([]string{rendered}, len(allLines))
-		allLines = append(allLines, lines...)
-		allLines = append(allLines, "")
-	}
-
-	minLines := m.viewport.Height + m.viewport.YOffset
-	for len(allLines) < minLines {
-		idx := len(allLines)
-		line := processLines([]string{""}, idx)
-		allLines = append(allLines, line[0])
-	}
-	return strings.Join(allLines, "\n")
-}
-
-func renderSelectedTranscriptLine(line string, width int, style lipgloss.Style) string {
-	if width < 1 {
-		width = 1
-	}
-	return style.Copy().Width(width).Render(truncateToWidth(stripANSI(line), width))
-}
 
 var (
 	startupBorderStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color(uicommon.PaletteBorder))

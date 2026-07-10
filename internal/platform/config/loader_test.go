@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestLoadConfigSupportsExplicitPathAndLegacyModelFields(t *testing.T) {
@@ -101,5 +102,43 @@ func TestWeixinConfigReadsHermesStyleEnvironment(t *testing.T) {
 	}
 	if wx.DMPolicy != "allowlist" || len(wx.AllowFrom) != 2 || wx.AllowFrom[0] != "alice" || !wx.SplitMultilineMessages {
 		t.Fatalf("weixin policy = %+v", wx)
+	}
+}
+
+func TestTaskGovernanceDefaultsAndOverrides(t *testing.T) {
+	defaultPath := filepath.Join(t.TempDir(), "default.yaml")
+	cfg, err := LoadConfig(Options{Path: defaultPath, CreateIfMissing: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	doneAfter, cancelledAfter := cfg.Tasks.AutoArchiveDurations()
+	if !cfg.Tasks.InboxEnabled || cfg.Tasks.ListLimit() != 10 || cfg.Tasks.MaintenanceModelRole != "memory_extract" {
+		t.Fatalf("task defaults = %+v", cfg.Tasks)
+	}
+	if doneAfter != 30*24*time.Hour || cancelledAfter != 7*24*time.Hour {
+		t.Fatalf("archive defaults = %s/%s", doneAfter, cancelledAfter)
+	}
+
+	overridePath := filepath.Join(t.TempDir(), "override.yaml")
+	if err := os.WriteFile(overridePath, []byte(`
+tasks:
+  inbox_enabled: false
+  default_list_limit: 99
+  auto_archive_done_after: "48h"
+  auto_archive_cancelled_after: "0"
+  maintenance_model_role: "fast_classifier"
+`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err = LoadConfig(Options{Path: overridePath})
+	if err != nil {
+		t.Fatal(err)
+	}
+	doneAfter, cancelledAfter = cfg.Tasks.AutoArchiveDurations()
+	if cfg.Tasks.InboxEnabled || cfg.Tasks.ListLimit() != 50 || cfg.Tasks.MaintenanceModelRole != "fast_classifier" {
+		t.Fatalf("task overrides = %+v", cfg.Tasks)
+	}
+	if doneAfter != 48*time.Hour || cancelledAfter != 0 {
+		t.Fatalf("archive overrides = %s/%s", doneAfter, cancelledAfter)
 	}
 }

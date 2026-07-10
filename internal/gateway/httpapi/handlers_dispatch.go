@@ -21,7 +21,22 @@ var dispatchSafelist = map[string]bool{
 	"skill_catalog":  true,
 	"skill_bundle":   true,
 	"checkpoint":     true,
-	"session_search": true, // read-only; reserved for a future client session browser
+	"session_search": true, // read-only; backs the TUI /search command
+}
+
+// personPartitionTools are dispatch tools whose backing store partitions by
+// PERSON: daemon agent runs execute with the person id as the storage tenant
+// (`RunAgentWithEvents(ctx, identity.PersonID, …)` — see AGENTS.md "Context &
+// Memory": the agent's storage tenant is person_id), so memory facts, session
+// FTS rows, and checkpoints all live under the person partition. Dispatching
+// these tools with the CONTROL tenant used to read the wrong (empty or stale
+// in-process-era) partition — client `/memory list` could not see what the
+// daemon had learned. Skill tools stay on the control tenant: the daemon's
+// skills dir is keyed by the tenant the agent was built with.
+var personPartitionTools = map[string]bool{
+	"memory":         true,
+	"session_search": true,
+	"checkpoint":     true,
 }
 
 // handleDispatch runs a single safelisted management tool on the daemon's agent
@@ -73,8 +88,15 @@ func (d *Server) handleDispatch(w http.ResponseWriter, r *http.Request) {
 	for k, v := range req.Args {
 		args[k] = v
 	}
-	// Tenant scope is authoritative from the resolved identity, not the client.
-	args["_tenant_id"] = identity.TenantID
+	// Partition scope is authoritative from the resolved identity, never from
+	// the client-supplied args. Person-partitioned stores get the person id
+	// (matching what agent runs write); tenant-partitioned stores (skills) get
+	// the control tenant.
+	if personPartitionTools[tool] {
+		args["_tenant_id"] = identity.PersonID
+	} else {
+		args["_tenant_id"] = identity.TenantID
+	}
 
 	result, derr := d.Gateway.DispatchTool(tool, args)
 	if derr != nil {

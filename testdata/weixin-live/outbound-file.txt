@@ -1,0 +1,6 @@
+SELFMIND-WEIXIN-FILE-20260710-B1
+
+This is a UTF-8 outbound attachment fixture for SelfMind Weixin live testing.
+中文校验：如果你能在微信中打开本文件，并看到本行没有乱码，文件投递测试通过。
+
+Expected SHA-256 is recorded by the live-test guide at test time.

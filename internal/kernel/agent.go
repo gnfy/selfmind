@@ -27,31 +27,28 @@ type AgentBackend interface {
 
 // Agent 核心推理循环
 type Agent struct {
-	memory             *memory.MemoryManager
-	backend            AgentBackend
-	llm                llm.Provider
-	fastProvider       llm.Provider                 // optional fast model for simple direct-answer turns
-	summaryProvider    llm.Provider                 // optional cheap model for over-budget context compaction, kept OFF the main run provider
-	judgeProvider      llm.Provider                 // optional cheap model for smart-mode approval triage (H2), kept OFF the main run provider
-	runLLM             llm.Provider                 // per-run active provider, set under runMu
-	skillInventory     func(tenantID string) string // optional: compact learned-skill list for the prompt
-	profileSynthesizer *ProfileSynthesizer          // optional: distills facts into a user profile
-	soul               string
-	maxIterations      int
-	maxRetries         int
-	retryBase          time.Duration // LLM retry backoff base (0 => llm.DefaultRetryBase)
-	retryCap           time.Duration // LLM retry backoff cap (0 => llm.DefaultRetryCap)
-	Reflector          *ReflectionEngine
-	ReviewEngine       *BackgroundReviewEngine
-	contextEngine      *ContextEngine
-	contextScanner     *ContextScanner
-	factExtractor      *FactExtractor
-	turnExtractor      *TurnExtractor
-	semanticExpander   *memory.SemanticExpander
-	useMemoryFence     bool
-	EventChannel       chan string // emits "tool_start:name" and "tool_end:name:result" events
-	runMu              sync.Mutex
-	syncQueue          chan syncTurnRequest
+	memory           *memory.MemoryManager
+	backend          AgentBackend
+	llm              llm.Provider
+	fastProvider     llm.Provider                 // optional fast model for simple direct-answer turns
+	summaryProvider  llm.Provider                 // optional cheap model for over-budget context compaction, kept OFF the main run provider
+	judgeProvider    llm.Provider                 // optional cheap model for smart-mode approval triage (H2), kept OFF the main run provider
+	runLLM           llm.Provider                 // per-run active provider, set under runMu
+	skillInventory   func(tenantID string) string // optional: compact learned-skill list for the prompt
+	soul             string
+	maxIterations    int
+	maxRetries       int
+	retryBase        time.Duration // LLM retry backoff base (0 => llm.DefaultRetryBase)
+	retryCap         time.Duration // LLM retry backoff cap (0 => llm.DefaultRetryCap)
+	Reflector        *ReflectionEngine
+	ReviewEngine     *BackgroundReviewEngine
+	contextEngine    *ContextEngine
+	contextScanner   *ContextScanner
+	semanticExpander *memory.SemanticExpander
+	useMemoryFence   bool
+	EventChannel     chan string // emits "tool_start:name" and "tool_end:name:result" events
+	runMu            sync.Mutex
+	syncQueue        chan syncTurnRequest
 
 	// Evolution config.
 	toolCallCount     int
@@ -79,10 +76,8 @@ func NewAgent(mem *memory.MemoryManager, backend AgentBackend, provider llm.Prov
 		contextScanner: NewContextScanner(),
 		EventChannel:   ch,
 		syncQueue:      make(chan syncTurnRequest, 16),
-		// factExtractor is set via SetFactExtractor after agent creation
-		// so the caller can decide whether to enable auto-extraction.
-		toolCallCount: 0,
-		nudgeInterval: 10, // 默认每 10 次工具调用触发一次
+		toolCallCount:  0,
+		nudgeInterval:  10, // 默认每 10 次工具调用触发一次
 	}
 	ag.contextEngine.SetProvider(provider)
 	go ag.runSyncWorker()
@@ -103,17 +98,6 @@ func (a *Agent) SetBackgroundReviewEngine(engine *BackgroundReviewEngine) {
 		engine.SetNotifyChannel(a.evolutionNotifyCh)
 		engine.SetUseMemoryFence(a.useMemoryFence)
 	}
-}
-
-// SetEvolutionNotifyChannel sets the channel for evolution notifications to TUI
-// SetFactExtractor injects the auto-fact-extractor. Called by app layer after agent creation.
-func (a *Agent) SetFactExtractor(fe *FactExtractor) {
-	a.factExtractor = fe
-}
-
-// SetTurnExtractor injects the per-turn lightweight fact extractor.
-func (a *Agent) SetTurnExtractor(te *TurnExtractor) {
-	a.turnExtractor = te
 }
 
 // SetSemanticExpander injects the query semantic expander for recall.
@@ -218,14 +202,6 @@ func (a *Agent) SetSkillInventory(fn func(tenantID string) string) {
 		return
 	}
 	a.skillInventory = fn
-}
-
-// SetProfileSynthesizer installs the (optional) user-profile synthesizer.
-func (a *Agent) SetProfileSynthesizer(p *ProfileSynthesizer) {
-	if a == nil {
-		return
-	}
-	a.profileSynthesizer = p
 }
 
 // SetContextWindow aligns compaction with the resolved model context length.
@@ -440,6 +416,28 @@ func (a *Agent) prepareMessagesForModel(messages []llm.Message) []llm.Message {
 	return a.contextEngine.TruncateMessages(messages)
 }
 
+func (a *Agent) prepareMessagesForContextRecovery(messages []llm.Message) []llm.Message {
+	if a == nil || a.contextEngine == nil {
+		return messages
+	}
+	return a.contextEngine.RecoverMessages(messages)
+}
+
+// partialStreamRecoveryMessages resumes a response whose transport ended
+// before any tool call was executed. The partial assistant text is evidence,
+// not a completed turn; asking for an exact continuation avoids repeating it.
+// Native calls collected from the broken stream are deliberately excluded and
+// must be emitted again by the recovery response before they can execute.
+func partialStreamRecoveryMessages(messages []llm.Message, partial string) []llm.Message {
+	out := append([]llm.Message(nil), messages...)
+	partial = strings.TrimSpace(textutil.CleanUTF8(partial))
+	if partial != "" {
+		out = append(out, llm.Message{Role: "assistant", Content: partial})
+	}
+	out = append(out, llm.Message{Role: "user", Content: "[SelfMind transport recovery] The previous model stream disconnected before any tool was executed. Continue from the exact point where it stopped without repeating text. If a tool is needed, emit the complete tool call now."})
+	return out
+}
+
 // SetBackend updates the agent's execution backend
 func (a *Agent) SetBackend(b AgentBackend) {
 	a.backend = b
@@ -646,6 +644,15 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 		return "", totalUsage, fmt.Errorf("build messages: %w", err)
 	}
 
+	// Context breakdown (P1-2): attribute the turn's prompt tokens to their
+	// components so /diag can show where the window goes on a long session. One
+	// bounded event per turn; the gateway persists it and /diag reads the
+	// newest one back. Best-effort — never affects the run.
+	EmitAgentEvent(eventCh, AgentEvent{
+		Type:    "context.breakdown",
+		Payload: ComputeContextBreakdown(systemPrompt, messages).Payload(),
+	})
+
 	history := TaskHistory{
 		Goal:  initialPrompt,
 		Steps: []string{},
@@ -761,6 +768,18 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 				nativeCalls = append(nativeCalls, chatResp.ToolCalls...)
 			}
 		}
+		appendRecoveredChatResponse := func(chatResp *llm.ChatResponse) {
+			if chatResp == nil {
+				return
+			}
+			content := textutil.CleanUTF8(chatResp.Content)
+			meta := *chatResp
+			meta.Content = ""
+			appendChatResponse(&meta)
+			if content != "" {
+				handleStreamContent(content)
+			}
+		}
 
 		streamCtx, streamCancel := context.WithCancel(ctx)
 		streamCh, err := a.streamChatWithRetry(streamCtx, messages, iterationStrategy)
@@ -769,11 +788,18 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 			if ctx.Err() != nil {
 				return "", totalUsage, fmt.Errorf("llm chat: %w", err)
 			}
-			fallbackResp, fallbackErr := a.chatResponseWithRetry(ctx, messages, iterationStrategy)
+			fallbackMessages := messages
+			if llm.IsContextWindowError(err) {
+				emitAgentActivity(eventCh, "Context window was rejected; retrying with a smaller context slice", "context_recovery", i)
+				fallbackMessages = a.prepareMessagesForContextRecovery(messages)
+			} else {
+				emitAgentActivity(eventCh, "Streaming transport failed; retrying without streaming", "transport_recovery", i)
+			}
+			fallbackResp, fallbackErr := a.chatResponseWithRetry(ctx, fallbackMessages, iterationStrategy)
 			if fallbackErr != nil {
 				return "", totalUsage, fmt.Errorf("llm chat: %w; non-stream fallback failed: %v", err, fallbackErr)
 			}
-			appendChatResponse(fallbackResp)
+			appendRecoveredChatResponse(fallbackResp)
 		} else {
 			streamStarted := time.Now()
 			sawModelEvent := false
@@ -860,15 +886,30 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 				} else if ctx.Err() != nil {
 					return "", totalUsage, fmt.Errorf("stream error: %w", streamErr)
 				}
-				if streamErr != nil && (fullResp.Len() > 0 || len(nativeCalls) > 0) {
-					return "", totalUsage, fmt.Errorf("stream error after partial response: %w", streamErr)
-				}
 				if streamErr != nil {
-					fallbackResp, fallbackErr := a.chatResponseWithRetry(ctx, messages, iterationStrategy)
+					recoveryMessages := messages
+					phase := "transport_recovery"
+					if llm.IsContextWindowError(streamErr) {
+						phase = "context_recovery"
+						recoveryMessages = a.prepareMessagesForContextRecovery(recoveryMessages)
+					} else if !llm.IsRetryableError(streamErr) {
+						return "", totalUsage, fmt.Errorf("stream error: %w", streamErr)
+					}
+					if fullResp.Len() > 0 || len(nativeCalls) > 0 {
+						recoveryMessages = partialStreamRecoveryMessages(recoveryMessages, fullResp.String())
+						// No tool has executed yet. Discard calls from the broken stream;
+						// the recovery response must emit a complete call before execution.
+						nativeCalls = nil
+						emitAgentActivity(eventCh, "Model stream interrupted; continuing from the partial response", phase, i)
+					} else {
+						emitAgentActivity(eventCh, "Model stream interrupted; retrying the response", phase, i)
+					}
+					fallbackResp, fallbackErr := a.chatResponseWithRetry(ctx, recoveryMessages, iterationStrategy)
 					if fallbackErr != nil {
 						return "", totalUsage, fmt.Errorf("stream error: %w; non-stream fallback failed: %v", streamErr, fallbackErr)
 					}
-					appendChatResponse(fallbackResp)
+					appendRecoveredChatResponse(fallbackResp)
+					streamErr = nil
 				}
 			}
 		}
@@ -901,15 +942,6 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 
 		// Sync turn to external memory providers after each assistant response
 		a.syncTurn(ctx, tenantID, messages)
-
-		// Turn-level lightweight fact extraction (frequency controlled)
-		if a.turnExtractor != nil {
-			turn := a.extractLastTurn(messages)
-			if a.turnExtractor.ShouldExtract(turn, len(calls) > 0) {
-				a.turnExtractor.Extract(ctx, tenantID, a.memory, turn)
-				a.turnExtractor.ResetCounter()
-			}
-		}
 
 		if len(calls) > 0 {
 			if !nativeToolActivityAnnounced {
@@ -990,16 +1022,6 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 		// (slim entry: user text + final answer + touched paths), and refresh
 		// the task-coherent FTS index.
 		a.saveHistory(ctx, tenantID, histKey, channel, initialPrompt, resp, messages)
-
-		// Auto-extract durable facts from this conversation (async, non-blocking)
-		if a.factExtractor != nil {
-			go a.factExtractor.Extract(context.Background(), tenantID, a.memory, messages)
-		}
-		if a.profileSynthesizer != nil {
-			// Gated internally; only makes a model call when enough new facts
-			// have accumulated.
-			go a.profileSynthesizer.MaybeSynthesize(context.Background(), tenantID, a.memory)
-		}
 
 		a.maybeTriggerBackgroundReview(tenantID, channel, messages, history)
 
@@ -1198,18 +1220,26 @@ func (a *Agent) selectRuntimeContext(ctx context.Context, tenantID, channel, pro
 		Channel: strings.TrimSpace(channel),
 		Budget:  DefaultRuntimeContextBudget(),
 	}
+	selectorProvided := false
 	if workspace, ok := WorkspaceContextFromContext(ctx); ok && strings.TrimSpace(workspace.Root) != "" {
 		ws := workspace
 		bundle.Workspace = &ws
 		bundle.SelectionNotes = append(bundle.SelectionNotes, "active workspace selected from request context")
 	}
 	if runtime, ok := TaskRuntimeContextFromContext(ctx); ok {
+		selectorProvided = true
 		rt := runtime
 		bundle.Task = &rt
 		bundle.SelectionNotes = append(bundle.SelectionNotes, "active task/run slice selected from control event log")
 	}
 
-	if a.shouldRecallMemory(strategy, bundle) {
+	// The daemon selector already performs bounded semantic/session recall and
+	// stores its slices in TaskRuntimeContext. Running the legacy agent recall
+	// here as well duplicated the auxiliary-model call; unlike the selector's
+	// short deadline, that second call could wait for provider retries and add
+	// tens of seconds before the main model request. Keep this path only for
+	// direct Agent callers without a selected runtime slice.
+	if !selectorProvided && a.shouldRecallMemory(strategy, bundle) {
 		for _, mem := range a.selectMemorySnippets(ctx, tenantID, prompt, bundle.Budget.MemoryChars) {
 			bundle.Memories = append(bundle.Memories, mem)
 		}
@@ -1579,17 +1609,26 @@ func (a *Agent) BuildSystemPrompt(ctx context.Context, tenantID string) (string,
 }
 
 func (a *Agent) buildSystemPrompt(ctx context.Context, tenantID string, strategy TaskStrategy, userInput string) (string, error) {
-	var parts []string
+	// P1-3: split the prompt into a STABLE prefix (byte-identical across turns
+	// for a given workspace/tenant/model) and a VOLATILE suffix (task runtime,
+	// memory, recall, per-turn conditionals). Providers cache on prefix match,
+	// so keeping all volatile content AFTER all stable content maximizes the
+	// cacheable prefix. Content is unchanged — only grouped by mutability.
+	var stable []string   // soul, guidance, tool contract+defs, skills
+	var volatile []string // runtime context, memory/profile, per-turn conditionals
 
-	// 1. Core Persona (Soul)
+	// 1. Core Persona (Soul) — stable.
 	if a.soul != "" {
-		parts = append(parts, a.soul)
+		stable = append(stable, a.soul)
 	}
-	parts = append(parts, selfImprovementGuidance())
+	stable = append(stable, selfImprovementGuidance())
 
+	// Runtime context (workspace + task/run/recall state) is VOLATILE — it
+	// changes every turn, so it goes in the suffix, never between stable blocks
+	// (where it would bust the cacheable prefix, the pre-P1-3 bug).
 	if bundle, ok := RuntimeContextBundleFromContext(ctx); ok {
 		if prompt := bundle.Prompt(8000); strings.TrimSpace(prompt) != "" {
-			parts = append(parts, prompt)
+			volatile = append(volatile, prompt)
 		}
 	} else {
 		if workspace, ok := WorkspaceContextFromContext(ctx); ok {
@@ -1602,79 +1641,94 @@ func (a *Agent) buildSystemPrompt(ctx context.Context, tenantID string, strategy
 			sb.WriteString("Use workspace_root as the default directory for local tools and relative paths.\n")
 			sb.WriteString("When the user asks about this project, current repo, current codebase, or names a project without a path, inspect workspace_root first.\n")
 			sb.WriteString("If the request arrives from IM and no workspace is available, ask the user to select or bind a workspace instead of guessing a local path.")
-			parts = append(parts, sb.String())
+			volatile = append(volatile, sb.String())
 		}
 
 		if runtime, ok := TaskRuntimeContextFromContext(ctx); ok {
 			if prompt := runtime.Prompt(6000); strings.TrimSpace(prompt) != "" {
-				parts = append(parts, prompt)
+				volatile = append(volatile, prompt)
 			}
 		}
 	}
 
-	// 2. Tool Instructions - 增强指令强度
+	// 2. Tool Instructions — stable (behavior contract + defs + guidance).
 	if a.backend != nil {
 		defs := filterToolDefinitions(a.backend.GetToolDefinitions(), strategy)
 		if len(defs) > 0 {
 			var sb strings.Builder
+			// Behavior contract: HOW to use tools (errors as diagnostics,
+			// update_plan discipline, finish_run outcome, tool_search). Always
+			// present on tool-bearing turns — it is guidance the native tools
+			// param cannot carry.
 			sb.WriteString("\n# TOOL USE INSTRUCTIONS\n")
 			sb.WriteString("Use local tools whenever the user asks about local files, directories, command output, project state, or system status.\n")
-			sb.WriteString("Prefer native tool calls when the model interface supports them. If native tool calls are unavailable, use the exact fallback format: [TOOL:tool_name:{\"arg\": \"val\"}]\n")
-			sb.WriteString("Do not emit XML-style tool tags such as <tool> or <parameter>; they are only tolerated for compatibility and should not appear in user-facing answers.\n")
 			sb.WriteString("When a tool returns an error, treat the error as diagnostic evidence. Do not stop at the first failed command unless the failure is the requested final result. Inspect cwd, files, environment, auth state, provider constraints, or command help as needed, then choose the next correct action.\n")
 			sb.WriteString("Do not hard-code environment overrides as a default tool behavior. For example, if Go reports a go.work/module boundary error, first inspect go env GOWORK/GOMOD and the relevant go.work/go.mod files, then decide whether to change cwd, use an explicit env override, or report a real blocker.\n")
 			sb.WriteString("Use update_plan only for non-trivial work: tasks with 3+ meaningful steps, multi-file changes, investigation/debugging, long-running verification, or explicit user requests for a plan. Do not use update_plan for one-shot answers, small code examples, simple commands, or direct explanations.\n")
 			sb.WriteString("For non-trivial tool-using work that creates or changes durable task state, call finish_run once with a structured outcome: status, summary, done, next_steps, files, tests, risks, and need_approve. Skip finish_run for direct answers, small snippets, and ordinary explanations.\n")
 			sb.WriteString("Use tool_search when you need a capability but are unsure which registered tool fits.\n")
-			sb.WriteString("The ONLY valid tool names are: ")
-			for i, d := range defs {
-				sb.WriteString(fmt.Sprintf("'%s'", toolDefinitionName(d)))
-				if i < len(defs)-1 {
-					sb.WriteString(", ")
+			// Tool DEFINITIONS: names, descriptions, parameter schemas. A
+			// native-tools provider already receives all of this through
+			// ChatRequest.Tools (the vendor's tools param), so repeating it in
+			// the system prompt double-sent every schema on every turn (P1-1,
+			// docs/STATUS.md "ACTIVE PLAN"). Only fallback-format providers get
+			// the full text catalog — for them the prompt IS the tool interface.
+			if llm.ProviderSupportsNativeTools(a.Provider()) {
+				sb.WriteString("Tools are provided through the native tool-calling interface. Use only those tools; do not invent tool names such as 'ls', 'cat', or 'sh'.\n")
+			} else {
+				sb.WriteString("If native tool calls are unavailable, use the exact fallback format: [TOOL:tool_name:{\"arg\": \"val\"}]\n")
+				sb.WriteString("Do not emit XML-style tool tags such as <tool> or <parameter>; they are only tolerated for compatibility and should not appear in user-facing answers.\n")
+				sb.WriteString("The ONLY valid tool names are: ")
+				for i, d := range defs {
+					sb.WriteString(fmt.Sprintf("'%s'", toolDefinitionName(d)))
+					if i < len(defs)-1 {
+						sb.WriteString(", ")
+					}
 				}
-			}
-			sb.WriteString(".\n")
-			sb.WriteString("DO NOT use tools like 'ls', 'cat', 'read', 'run_command', or 'sh' which do not exist. Use the specific tools listed above.\n")
-			sb.WriteString("Do not invent tool names. If you use the fallback tag format, output only the [TOOL:...] tag for that step.\n\n")
-			sb.WriteString("## Available Tools\n")
-			for _, d := range defs {
-				sb.WriteString(fmt.Sprintf("### %s\n%s\n", toolDefinitionName(d), toolDefinitionDescription(d)))
-				if params := toolDefinitionParameters(d); params != nil {
-					if props, ok := params["properties"].(map[string]interface{}); ok {
-						sb.WriteString("Parameters:\n")
-						for pName, pDef := range props {
-							if def, ok := pDef.(map[string]interface{}); ok {
-								sb.WriteString(fmt.Sprintf("- %s (%s): %s\n", pName, def["type"], def["description"]))
+				sb.WriteString(".\n")
+				sb.WriteString("DO NOT use tools like 'ls', 'cat', 'read', 'run_command', or 'sh' which do not exist. Use the specific tools listed above.\n")
+				sb.WriteString("Do not invent tool names. If you use the fallback tag format, output only the [TOOL:...] tag for that step.\n\n")
+				sb.WriteString("## Available Tools\n")
+				for _, d := range defs {
+					sb.WriteString(fmt.Sprintf("### %s\n%s\n", toolDefinitionName(d), toolDefinitionDescription(d)))
+					if params := toolDefinitionParameters(d); params != nil {
+						if props, ok := params["properties"].(map[string]interface{}); ok {
+							sb.WriteString("Parameters:\n")
+							for pName, pDef := range props {
+								if def, ok := pDef.(map[string]interface{}); ok {
+									sb.WriteString(fmt.Sprintf("- %s (%s): %s\n", pName, def["type"], def["description"]))
+								}
 							}
 						}
 					}
+					sb.WriteString("\n")
 				}
-				sb.WriteString("\n")
 			}
-			parts = append(parts, sb.String())
+			stable = append(stable, sb.String())
 
 			// Work-quality discipline (explore, prefer patch, verify) applies to
-			// all tool-bearing turns. Frontend/UI design guidance is added only
-			// when the task actually looks like UI work, so backend/data/CLI
-			// tasks are not biased toward frontend concerns.
-			parts = append(parts, taskExecutionGuidance())
-			parts = append(parts, progressNarrationGuidance())
+			// all tool-bearing turns — stable.
+			stable = append(stable, taskExecutionGuidance())
+			stable = append(stable, progressNarrationGuidance())
+			// Frontend guidance is CONDITIONAL on the user's input, so it is
+			// volatile (per-turn) and must not sit in the stable prefix.
 			if isFrontendTask(userInput) {
-				parts = append(parts, frontendQualityGuidance())
+				volatile = append(volatile, frontendQualityGuidance())
 			}
 
 			// Surface learned skills so the agent applies what it already knows
-			// (only on tool-bearing turns, where skill_view is usable).
+			// (only on tool-bearing turns, where skill_view is usable). The skill
+			// index changes only when skills change, so it is treated as stable.
 			if a.skillInventory != nil {
 				if block := strings.TrimSpace(a.skillInventory(tenantID)); block != "" {
-					parts = append(parts, block)
+					stable = append(stable, block)
 				}
 			}
 		}
 	}
 
 	if a.memory == nil {
-		return strings.Join(parts, "\n\n"), nil
+		return strings.Join(append(stable, volatile...), "\n\n"), nil
 	}
 
 	userFacts, _ := a.memory.GetFacts(ctx, tenantID, "user")
@@ -1684,7 +1738,7 @@ func (a *Agent) buildSystemPrompt(ctx context.Context, tenantID string, strategy
 	// facts) is the primary "knows you" signal; it is shorter than dumping every
 	// raw fact and reads as a stable picture of the user.
 	if summary := a.latestProfileSummary(ctx, tenantID); summary != "" {
-		parts = append(parts, "<user-profile>\n[System note: synthesized understanding of the user from past interactions; background context, not new input.]\n"+summary+"\n</user-profile>")
+		volatile = append(volatile, "<user-profile>\n[System note: synthesized understanding of the user from past interactions; background context, not new input.]\n"+summary+"\n</user-profile>")
 	}
 
 	// Select the most relevant facts (W3d): rank by decayed confidence × scope
@@ -1725,10 +1779,10 @@ func (a *Agent) buildSystemPrompt(ctx context.Context, tenantID string, strategy
 			}
 			factBlock.WriteString("</MEMORY>")
 		}
-		parts = append(parts, factBlock.String())
+		volatile = append(volatile, factBlock.String())
 	}
 
-	return strings.Join(parts, "\n\n"), nil
+	return strings.Join(append(stable, volatile...), "\n\n"), nil
 }
 
 func filterToolDefinitions(defs []map[string]interface{}, strategy TaskStrategy) []map[string]interface{} {

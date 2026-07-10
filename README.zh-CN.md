@@ -220,6 +220,14 @@ memory:
   semantic_recall: true
   use_memory_fence: true
 
+# 任务标签治理。旧配置缺少本节时会使用这些兼容默认值。
+tasks:
+  inbox_enabled: true
+  default_list_limit: 10
+  auto_archive_done_after: "720h"
+  auto_archive_cancelled_after: "168h"
+  maintenance_model_role: "memory_extract"
+
 # 后台学习/复盘相关配置，用于沉淀 memory 和 skill。
 evolution:
   enabled: true
@@ -417,8 +425,8 @@ selfmind -f ./config/config.yaml
 |---|---|
 | `/help` | 查看可用命令。 |
 | `/status` | 查看 provider、model、运行时间、token、当前任务，以及待处理的审批/提问。 |
-| `/tasks` / `/tasks done\|archived\|all` | 以紧凑卡片列出进行中的工作(状态、最近输入、主要文件、待处理审批/提问、run 次数、短 id);已完成的折叠为计数。 |
-| `/task <n\|id>` / `/task <n\|id> runs\|rename <名称>\|archive` | 查看单个任务详情和 run 记录,重命名或归档它——`<n>` 是 `/tasks` 卡片上的序号,`<id>` 是完整或短 id。 |
+| `/tasks` / `/tasks done\|archived\|all\|search <关键词>` | 以紧凑卡片列出工作，或按标题、历史输入、摘要和工件路径搜索完整历史；默认列表数量可配置。 |
+| `/task <n\|id>` / `/task <n\|id> runs\|rename <名称>\|pin\|unpin\|archive` | 查看单个任务详情和 run 记录，重命名、置顶、取消置顶或归档它。 |
 | `/queue` / `/queue drop <n>` / `/queue clear` | 列出队列 / 按序号删除某一条 / 清空全部。 |
 | `/stop` | 取消正在执行的 run；若当前没有 run 在跑，则取消当前(卡住的)任务。 |
 | `/cancel` | 即使没有活跃 run,也取消当前任务。 |
@@ -452,8 +460,10 @@ selfmind -f ./config/config.yaml
 
 ## 任务管理
 
-SelfMind 以任务为中心:你的每次请求都会变成一个归属于你(`person_id`)的
-**任务**,在所有端(CLI、微信……)之间共享。任务的状态流转如下:
+SelfMind 以 `person_id` 级连续工作流作为上下文脊柱，CLI、微信等端共享同一条
+工作历史。每次执行会形成一个 **run**；task 保留为可搜索、可恢复、可治理的
+工作标签，而不是上下文边界。标签判断错误只影响展示，不会切断全局上下文。
+任务的状态流转如下:
 
 | 状态 | 含义 |
 |---|---|
@@ -489,6 +499,12 @@ SelfMind 以任务为中心:你的每次请求都会变成一个归属于你(`pe
 
   Reply to continue the current task, /resume <id> to switch, /task <id> for detail.
   ```
+
+- **治理而不打扰:** 闲聊、身份/模型问答和一次性诊断可在 run 结束后进入隐藏
+  Inbox，不出现在 `/tasks`、召回和“继续”候选中；代码、工件、审批、定时工作
+  不会进入 Inbox。旧的已完成/取消任务会按 `tasks.auto_archive_*` 自动归档，
+  但不会删除，仍可搜索和 `/resume`。有长期价值的工作可用 `/task <id> pin`
+  固定，显式用户操作始终高于后台治理判断。
 
   方括号是简化后的状态:`running`(有 run 正在执行)、`waiting`(有待处理的
   审批/提问在等你)、`paused`(进行中但当前没有东西在跑——回复或 `/resume`

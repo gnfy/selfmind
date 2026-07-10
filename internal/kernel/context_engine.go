@@ -353,6 +353,52 @@ func (c *ContextEngine) TruncateMessages(messages []llm.Message) []llm.Message {
 	return c.truncateDeterministically(messages, max)
 }
 
+// RecoverMessages rebuilds a materially smaller request after the provider
+// rejects the normal estimate as over its actual context window. It is not the
+// ordinary budget path: it first removes optional project-context material,
+// then trims old turns to two thirds of the configured usable window, and as a
+// last resort middle-truncates an oversized system prompt. The newest user
+// instruction remains at the tail and adapter-side tool-ledger sanitization
+// removes any pair made orphaned by dropping old turns.
+func (c *ContextEngine) RecoverMessages(messages []llm.Message) []llm.Message {
+	if c == nil || len(messages) == 0 {
+		return messages
+	}
+	out := append([]llm.Message(nil), messages...)
+	if out[0].Role == "system" {
+		if idx := strings.Index(out[0].Content, "# PROJECT CONTEXT"); idx >= 0 {
+			out[0].Content = strings.TrimSpace(out[0].Content[:idx]) +
+				"\n\n[Project context omitted during context-window recovery; use local tools to inspect it if needed.]"
+		}
+	}
+	max := c.maxTokens - c.reserveTokens
+	if max <= 0 {
+		max = c.maxTokens
+	}
+	if max <= 0 {
+		max = 1
+	}
+	target := max * 2 / 3
+	if target < 256 {
+		target = max
+	}
+	out = c.truncateDeterministically(out, target)
+	for len(out) > 0 && out[0].Role == "system" && c.countMessages(out) > target && len([]rune(out[0].Content)) > 512 {
+		out[0].Content = truncateContextMiddle(out[0].Content, len([]rune(out[0].Content))*3/4)
+	}
+	return out
+}
+
+func truncateContextMiddle(value string, maxRunes int) string {
+	runes := []rune(value)
+	if maxRunes <= 0 || len(runes) <= maxRunes {
+		return value
+	}
+	head := maxRunes * 3 / 4
+	tail := maxRunes - head
+	return string(runes[:head]) + "\n\n...[system context reduced for provider window]...\n\n" + string(runes[len(runes)-tail:])
+}
+
 // summarizer returns the provider used for compaction, or nil when none is
 // wired. It prefers the dedicated cheap summarizer role; only under the legacy
 // SELFMIND_SYNC_CONTEXT_SUMMARY flag does it fall back to the main run provider

@@ -1,0 +1,368 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "content": "1"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "先"
+    },
+    {
+      "content": "确定"
+    },
+    {
+      "content": "网页版"
+    },
+    {
+      "content": "格"
+    },
+    {
+      "content": "斗"
+    },
+    {
+      "content": "游戏"
+    },
+    {
+      "content": "的"
+    },
+    {
+      "content": "核心"
+    },
+    {
+      "content": "范围"
+    },
+    {
+      "content": "："
+    },
+    {
+      "content": "角色"
+    },
+    {
+      "content": "数量"
+    },
+    {
+      "content": "、"
+    },
+    {
+      "content": "操作"
+    },
+    {
+      "content": "方式"
+    },
+    {
+      "content": "、"
+    },
+    {
+      "content": "单"
+    },
+    {
+      "content": "人"
+    },
+    {
+      "content": "/"
+    },
+    {
+      "content": "双"
+    },
+    {
+      "content": "人"
+    },
+    {
+      "content": "模式"
+    },
+    {
+      "content": "、"
+    },
+    {
+      "content": "胜"
+    },
+    {
+      "content": "负"
+    },
+    {
+      "content": "规则"
+    },
+    {
+      "content": "和"
+    },
+    {
+      "content": "基础"
+    },
+    {
+      "content": "招"
+    },
+    {
+      "content": "式"
+    },
+    {
+      "content": "系统"
+    },
+    {
+      "content": "。\n\n"
+    },
+    {
+      "content": "2"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": " 再"
+    },
+    {
+      "content": "设计"
+    },
+    {
+      "content": "技术"
+    },
+    {
+      "content": "架"
+    },
+    {
+      "content": "构"
+    },
+    {
+      "content": "："
+    },
+    {
+      "content": "用"
+    },
+    {
+      "content": " Canvas"
+    },
+    {
+      "content": "/Web"
+    },
+    {
+      "content": "GL"
+    },
+    {
+      "content": " 实"
+    },
+    {
+      "content": "现"
+    },
+    {
+      "content": "战"
+    },
+    {
+      "content": "斗"
+    },
+    {
+      "content": "画"
+    },
+    {
+      "content": "面"
+    },
+    {
+      "content": "，用"
+    },
+    {
+      "content": "前"
+    },
+    {
+      "content": "端"
+    },
+    {
+      "content": "状态"
+    },
+    {
+      "content": "机"
+    },
+    {
+      "content": "管理"
+    },
+    {
+      "content": "角色"
+    },
+    {
+      "content": "动作"
+    },
+    {
+      "content": "、"
+    },
+    {
+      "content": "碰"
+    },
+    {
+      "content": "撞"
+    },
+    {
+      "content": "、"
+    },
+    {
+      "content": "血"
+    },
+    {
+      "content": "量"
+    },
+    {
+      "content": "、"
+    },
+    {
+      "content": "连"
+    },
+    {
+      "content": "招"
+    },
+    {
+      "content": "和"
+    },
+    {
+      "content": "回"
+    },
+    {
+      "content": "合"
+    },
+    {
+      "content": "流程"
+    },
+    {
+      "content": "。\n\n"
+    },
+    {
+      "content": "3"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": " 最"
+    },
+    {
+      "content": "后"
+    },
+    {
+      "content": "按"
+    },
+    {
+      "content": " MVP"
+    },
+    {
+      "content": " 推"
+    },
+    {
+      "content": "进"
+    },
+    {
+      "content": "："
+    },
+    {
+      "content": "先"
+    },
+    {
+      "content": "做"
+    },
+    {
+      "content": "一个"
+    },
+    {
+      "content": "场"
+    },
+    {
+      "content": "景"
+    },
+    {
+      "content": "、"
+    },
+    {
+      "content": "两个"
+    },
+    {
+      "content": "角色"
+    },
+    {
+      "content": "、"
+    },
+    {
+      "content": "基础"
+    },
+    {
+      "content": "移动"
+    },
+    {
+      "content": "攻击"
+    },
+    {
+      "content": "和"
+    },
+    {
+      "content": "血"
+    },
+    {
+      "content": "条"
+    },
+    {
+      "content": "，再"
+    },
+    {
+      "content": "逐"
+    },
+    {
+      "content": "步"
+    },
+    {
+      "content": "加入"
+    },
+    {
+      "content": "音"
+    },
+    {
+      "content": "效"
+    },
+    {
+      "content": "、"
+    },
+    {
+      "content": "特"
+    },
+    {
+      "content": "效"
+    },
+    {
+      "content": "、"
+    },
+    {
+      "content": "AI"
+    },
+    {
+      "content": "、"
+    },
+    {
+      "content": "联网"
+    },
+    {
+      "content": "对"
+    },
+    {
+      "content": "战"
+    },
+    {
+      "content": "和"
+    },
+    {
+      "content": "角色"
+    },
+    {
+      "content": "扩"
+    },
+    {
+      "content": "展"
+    },
+    {
+      "content": "。"
+    },
+    {
+      "usage": {
+        "input_tokens": 4531,
+        "output_tokens": 165
+      }
+    }
+  ]
+}

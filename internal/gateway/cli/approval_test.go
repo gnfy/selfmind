@@ -17,9 +17,6 @@ func newApprovalTestModel() (*uiModel, *[]approvalRespondCall) {
 	model := NewController(nil, nil, nil, "").model
 	model.width = 100
 	model.height = 30
-	model.viewport.Width = 100
-	model.viewport.Height = 24
-	model.hybrid = true
 	calls := &[]approvalRespondCall{}
 	model.approvalResponder = func(id, decision, scope string) error {
 		*calls = append(*calls, approvalRespondCall{id, decision, scope})
@@ -75,22 +72,9 @@ func TestApprovalRequestArmsPanel(t *testing.T) {
 	}
 }
 
-func TestApprovalPanelRendersInLegacyModeToo(t *testing.T) {
-	model, _ := newApprovalTestModel()
-	model.hybrid = false
-
-	updated, _ := model.Update(sampleApproval("apr_1"))
-	model = updated.(*uiModel)
-
-	view := stripANSI(model.View())
-	if !strings.Contains(view, "Approval required") || !strings.Contains(view, "Yes, run it once") {
-		t.Fatalf("legacy view missing the panel:\n%s", view)
-	}
-}
-
 // TestApprovalPanelSuppressesSpinnerLine: while the panel is up, the
 // "Preparing to run <tool>" spinner/activity line is redundant noise and must
-// disappear in BOTH renderers. It returns once the run resumes.
+// disappear from the active region. It returns once the run resumes.
 func TestApprovalPanelSuppressesSpinnerLine(t *testing.T) {
 	model, _ := newApprovalTestModel()
 	model.thinking = true
@@ -102,10 +86,6 @@ func TestApprovalPanelSuppressesSpinnerLine(t *testing.T) {
 	if active := stripANSI(model.renderActiveBlock(100)); strings.Contains(active, "Preparing to run") {
 		t.Fatalf("hybrid active region must hide the spinner line while the panel is up:\n%s", active)
 	}
-	if all := stripANSI(model.renderAllMessages()); strings.Contains(all, "Preparing to run") {
-		t.Fatalf("legacy transcript must hide the spinner line while the panel is up:\n%s", all)
-	}
-
 	// Resolving the approval resumes the run and restores the working indicator.
 	updated, _ = model.Update(keyRunes("y"))
 	model = updated.(*uiModel)

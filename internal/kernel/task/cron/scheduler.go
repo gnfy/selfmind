@@ -29,7 +29,11 @@ type CronJob struct {
 	DeliverTo string
 	// Web allows a job to enable web tools for this turn (e.g. a market summary
 	// that must look things up), overriding the default web-off policy.
-	Web       bool
+	Web bool
+	// Once disables the schedule after its first execution. A calendar-shaped
+	// cron expression alone is still recurring (for example, yearly), so
+	// one-time reminders need an explicit durable bit.
+	Once      bool
 	Enabled   bool
 	LastRun   *time.Time
 	NextRun   *time.Time
@@ -121,6 +125,7 @@ CREATE TABLE IF NOT EXISTS cron_jobs (
     tenant_id  TEXT NOT NULL,
     channel    TEXT NOT NULL DEFAULT 'cli',
     enabled    INTEGER NOT NULL DEFAULT 1,
+	once       INTEGER NOT NULL DEFAULT 0,
     last_run   INTEGER,
     next_run   INTEGER,
     created_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
@@ -134,6 +139,7 @@ CREATE TABLE IF NOT EXISTS cron_jobs (
 		"platform":   "TEXT NOT NULL DEFAULT ''",
 		"deliver_to": "TEXT NOT NULL DEFAULT ''",
 		"web":        "INTEGER NOT NULL DEFAULT 0",
+		"once":       "INTEGER NOT NULL DEFAULT 0",
 	})
 }
 
@@ -176,14 +182,15 @@ func (s *Scheduler) AddJob(ctx context.Context, job *CronJob) (int64, error) {
 	}
 
 	res, err := s.db.ExecContext(ctx, `
-		INSERT INTO cron_jobs (name, cron_expr, prompt, tenant_id, channel, platform, deliver_to, web, enabled)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		INSERT INTO cron_jobs (name, cron_expr, prompt, tenant_id, channel, platform, deliver_to, web, once, enabled)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		job.Name, job.CronExpr, job.Prompt, job.TenantID, job.Channel,
-		job.Platform, job.DeliverTo, btoi(job.Web), btoi(job.Enabled))
+		job.Platform, job.DeliverTo, btoi(job.Web), btoi(job.Once), btoi(job.Enabled))
 	if err != nil {
 		return 0, fmt.Errorf("insert cron job: %w", err)
 	}
 	id, _ := res.LastInsertId()
+	job.ID = id
 
 	if job.Enabled {
 		if err := s.scheduleJob(id, job); err != nil {
@@ -211,9 +218,9 @@ func (s *Scheduler) EnsureJob(ctx context.Context, job *CronJob) (int64, error) 
 		return 0, err
 	}
 	if _, err := s.db.ExecContext(ctx, `
-		UPDATE cron_jobs SET cron_expr = ?, prompt = ?, channel = ?, platform = ?, deliver_to = ?, web = ?, enabled = ?
+		UPDATE cron_jobs SET cron_expr = ?, prompt = ?, channel = ?, platform = ?, deliver_to = ?, web = ?, once = ?, enabled = ?
 		WHERE id = ?`,
-		job.CronExpr, job.Prompt, job.Channel, job.Platform, job.DeliverTo, btoi(job.Web), btoi(job.Enabled), id); err != nil {
+		job.CronExpr, job.Prompt, job.Channel, job.Platform, job.DeliverTo, btoi(job.Web), btoi(job.Once), btoi(job.Enabled), id); err != nil {
 		return id, err
 	}
 	job.ID = id
@@ -228,7 +235,7 @@ func (s *Scheduler) EnsureJob(ctx context.Context, job *CronJob) (int64, error) 
 // ListJobs returns all cron jobs for a tenant.
 func (s *Scheduler) ListJobs(ctx context.Context, tenantID string) ([]CronJob, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, name, cron_expr, prompt, tenant_id, channel, platform, deliver_to, web, enabled,
+		SELECT id, name, cron_expr, prompt, tenant_id, channel, platform, deliver_to, web, once, enabled,
 		       last_run, next_run, created_at
 		FROM cron_jobs WHERE tenant_id = ? ORDER BY id`,
 		tenantID)
@@ -240,14 +247,15 @@ func (s *Scheduler) ListJobs(ctx context.Context, tenantID string) ([]CronJob, e
 	var jobs []CronJob
 	for rows.Next() {
 		var j CronJob
-		var web int
+		var web, once int
 		var lastRun, nextRun sql.NullInt64
 		var createdAt int64
 		if err := rows.Scan(&j.ID, &j.Name, &j.CronExpr, &j.Prompt, &j.TenantID,
-			&j.Channel, &j.Platform, &j.DeliverTo, &web, &j.Enabled, &lastRun, &nextRun, &createdAt); err != nil {
+			&j.Channel, &j.Platform, &j.DeliverTo, &web, &once, &j.Enabled, &lastRun, &nextRun, &createdAt); err != nil {
 			return nil, err
 		}
 		j.Web = itob(web)
+		j.Once = itob(once)
 		if lastRun.Valid {
 			t := time.Unix(lastRun.Int64, 0)
 			j.LastRun = &t
@@ -279,13 +287,14 @@ func (s *Scheduler) RemoveJob(ctx context.Context, id int64) error {
 func (s *Scheduler) EnableJob(ctx context.Context, id int64, enabled bool) error {
 	// Reload job to get cron expr
 	row := s.db.QueryRowContext(ctx,
-		"SELECT id, name, cron_expr, prompt, tenant_id, channel, platform, deliver_to, web FROM cron_jobs WHERE id = ?", id)
+		"SELECT id, name, cron_expr, prompt, tenant_id, channel, platform, deliver_to, web, once FROM cron_jobs WHERE id = ?", id)
 	var j CronJob
-	var web int
-	if err := row.Scan(&j.ID, &j.Name, &j.CronExpr, &j.Prompt, &j.TenantID, &j.Channel, &j.Platform, &j.DeliverTo, &web); err != nil {
+	var web, once int
+	if err := row.Scan(&j.ID, &j.Name, &j.CronExpr, &j.Prompt, &j.TenantID, &j.Channel, &j.Platform, &j.DeliverTo, &web, &once); err != nil {
 		return err
 	}
 	j.Web = itob(web)
+	j.Once = itob(once)
 	j.Enabled = enabled
 
 	s.mu.Lock()
@@ -307,7 +316,7 @@ func (s *Scheduler) EnableJob(ctx context.Context, id int64, enabled bool) error
 func (s *Scheduler) Start(ctx context.Context) error {
 	// Load and schedule all enabled jobs
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, name, cron_expr, prompt, tenant_id, channel, platform, deliver_to, web FROM cron_jobs WHERE enabled = 1`)
+		SELECT id, name, cron_expr, prompt, tenant_id, channel, platform, deliver_to, web, once FROM cron_jobs WHERE enabled = 1`)
 	if err != nil {
 		return err
 	}
@@ -316,12 +325,13 @@ func (s *Scheduler) Start(ctx context.Context) error {
 	s.mu.Lock()
 	for rows.Next() {
 		var j CronJob
-		var web int
-		if err := rows.Scan(&j.ID, &j.Name, &j.CronExpr, &j.Prompt, &j.TenantID, &j.Channel, &j.Platform, &j.DeliverTo, &web); err != nil {
+		var web, once int
+		if err := rows.Scan(&j.ID, &j.Name, &j.CronExpr, &j.Prompt, &j.TenantID, &j.Channel, &j.Platform, &j.DeliverTo, &web, &once); err != nil {
 			s.mu.Unlock()
 			return err
 		}
 		j.Web = itob(web)
+		j.Once = itob(once)
 		if err := s.scheduleJobLocked(j.ID, &j); err != nil {
 			log.Debug("cron: failed to schedule job", "job_id", j.ID, "job_name", j.Name, "error", err)
 		}
@@ -371,6 +381,9 @@ func (s *Scheduler) runJob(ctx context.Context, job *CronJob) {
 	if job.Prompt == "" {
 		return
 	}
+	if job.Once {
+		defer s.completeOneTimeJob(job.ID)
+	}
 
 	log.Debug("cron: running job %d (%s) for tenant %s", job.ID, job.Name, job.TenantID)
 
@@ -419,6 +432,22 @@ func (s *Scheduler) runJob(ctx context.Context, job *CronJob) {
 	log.Debug("cron: job %d (%s) completed", job.ID, job.Name)
 }
 
+// completeOneTimeJob durably disables a one-shot schedule and removes its live
+// cron entry after the first attempted execution. The job remains in history
+// for diagnostics instead of being deleted.
+func (s *Scheduler) completeOneTimeJob(id int64) {
+	if s == nil || s.db == nil || id <= 0 {
+		return
+	}
+	_, _ = s.db.ExecContext(context.Background(), "UPDATE cron_jobs SET enabled = 0 WHERE id = ?", id)
+	s.mu.Lock()
+	if entryID, ok := s.entries[id]; ok {
+		s.cron.Remove(entryID)
+		delete(s.entries, id)
+	}
+	s.mu.Unlock()
+}
+
 // btoi converts bool to int (SQLite integer).
 func btoi(b bool) int {
 	if b {
@@ -445,7 +474,7 @@ type ToolAdapter struct {
 
 func (a *ToolAdapter) Name() string { return "cron" }
 func (a *ToolAdapter) Description() string {
-	return "Manage scheduled cron jobs. Sub-commands: list, add <name> <cron_expr> <prompt>, remove <id>, enable <id> <true|false>"
+	return "Manage scheduled jobs and reminders. Use once=true for a one-time reminder; otherwise schedules recur."
 }
 func (a *ToolAdapter) Execute(args map[string]interface{}) (string, error) {
 	return a.CronTool.Execute(context.Background(), args)
@@ -454,10 +483,10 @@ func (a *ToolAdapter) Schema() tools.ToolSchema {
 	return tools.ToolSchema{
 		Type: "object",
 		Properties: map[string]tools.PropertyDef{
-			"action":   {Type: "string", Description: "Action: list, add, remove, enable"},
-			"name":     {Type: "string"},
-			"cron":     {Type: "string", Description: "Cron expression, e.g. 0 9 * * *"},
-			"prompt":   {Type: "string"},
+			"action":     {Type: "string", Description: "Action: list, add, remove, enable"},
+			"name":       {Type: "string"},
+			"cron":       {Type: "string", Description: "Cron expression, e.g. 0 9 * * *"},
+			"prompt":     {Type: "string"},
 			"job_id":     {Type: "integer"},
 			"enabled":    {Type: "boolean"},
 			"tenantID":   {Type: "string"},
@@ -465,6 +494,7 @@ func (a *ToolAdapter) Schema() tools.ToolSchema {
 			"platform":   {Type: "string", Description: "Platform to deliver the result on, e.g. weixin"},
 			"deliver_to": {Type: "string", Description: "Recipient id (platform user/chat) for proactive delivery"},
 			"web":        {Type: "boolean", Description: "Allow web tools for this job (e.g. market/news lookups)"},
+			"once":       {Type: "boolean", Description: "Run once, then disable automatically (for one-time reminders)"},
 		},
 	}
 }
@@ -480,7 +510,7 @@ func (ct *CronTool) ToolDefinition() map[string]interface{} {
 		"type": "function",
 		"function": map[string]interface{}{
 			"name":        "cron",
-			"description": "Manage scheduled cron jobs. Sub-commands: list, add <name> <cron_expr> <prompt>, remove <id>, enable <id> <true|false>",
+			"description": "Manage scheduled jobs and reminders. Use once=true for a one-time reminder; otherwise schedules recur.",
 			"parameters": map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
@@ -488,9 +518,9 @@ func (ct *CronTool) ToolDefinition() map[string]interface{} {
 						"type":        "string",
 						"description": "Action: list, add, remove, enable",
 					},
-					"name":     map[string]interface{}{"type": "string"},
-					"cron":     map[string]interface{}{"type": "string", "description": "Cron expression, e.g. 0 9 * * *"},
-					"prompt":   map[string]interface{}{"type": "string", "description": "Prompt sent to the agent when the job fires"},
+					"name":       map[string]interface{}{"type": "string"},
+					"cron":       map[string]interface{}{"type": "string", "description": "Cron expression, e.g. 0 9 * * *"},
+					"prompt":     map[string]interface{}{"type": "string", "description": "Prompt sent to the agent when the job fires"},
 					"job_id":     map[string]interface{}{"type": "integer", "description": "Job ID to remove or enable"},
 					"enabled":    map[string]interface{}{"type": "boolean"},
 					"tenantID":   map[string]interface{}{"type": "string"},
@@ -498,6 +528,7 @@ func (ct *CronTool) ToolDefinition() map[string]interface{} {
 					"platform":   map[string]interface{}{"type": "string", "description": "Platform to deliver on, e.g. weixin"},
 					"deliver_to": map[string]interface{}{"type": "string", "description": "Recipient id for proactive delivery"},
 					"web":        map[string]interface{}{"type": "boolean", "description": "Allow web tools for this job"},
+					"once":       map[string]interface{}{"type": "boolean", "description": "Run once, then disable automatically (for one-time reminders)"},
 				},
 			},
 		},
@@ -548,8 +579,12 @@ func (ct *CronTool) Execute(ctx context.Context, args map[string]interface{}) (s
 		platform, _ := args["platform"].(string)
 		deliverTo, _ := args["deliver_to"].(string)
 		web, _ := args["web"].(bool)
+		once, _ := args["once"].(bool)
+		if deliverTo != "" && (channel == "" || strings.EqualFold(channel, platform)) {
+			channel = deliverTo
+		}
 		if channel == "" {
-			channel = "cli"
+			channel = firstNonEmptyCron(platform, "cli")
 		}
 		if name == "" || cronExpr == "" || prompt == "" {
 			return "", fmt.Errorf("name, cron, and prompt are required for add")
@@ -563,6 +598,7 @@ func (ct *CronTool) Execute(ctx context.Context, args map[string]interface{}) (s
 			Platform:  platform,
 			DeliverTo: deliverTo,
 			Web:       web,
+			Once:      once,
 			Enabled:   true,
 		}
 		id, err := ct.sched.AddJob(ctx, job)
@@ -596,4 +632,13 @@ func (ct *CronTool) Execute(ctx context.Context, args map[string]interface{}) (s
 	default:
 		return "", fmt.Errorf("unknown cron action: %s", action)
 	}
+}
+
+func firstNonEmptyCron(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }

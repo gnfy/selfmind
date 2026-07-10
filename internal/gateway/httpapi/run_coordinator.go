@@ -224,6 +224,9 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 
 	run, err := d.Control.StartRun(ctx, task, req.Channel, truncate(req.Content, 240))
 	if err != nil {
+		if attach.created {
+			_, _ = d.Control.DeleteEmptyTask(context.WithoutCancel(ctx), identity.TenantID, identity.PersonID, task.ID)
+		}
 		return api.MessageResponse{Identity: identity, Task: task, Error: err.Error(), Turn: messageTurn("failed", task.Status, "idle", task.ID, "", err.Error()), Context: messageContextBudget(llmUsageZero())}, http.StatusInternalServerError
 	}
 	stopHeartbeat := c.startRunHeartbeat(ctx, run)
@@ -373,11 +376,14 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 		refreshed = task
 	}
 	out := api.MessageResponse{Identity: identity, Task: refreshed, Run: run, Outcome: &outcome, Content: content, Usage: usage, Turn: messageTurn("completed", taskStatus, "idle", taskID, run.ID, outcome.Summary), Context: messageContextBudget(usage)}
-	// Post-run labeler (Work Timeline P3): asynchronously check the pre-label
-	// guess against the person's open labels. Runs under the finalize ctx
-	// (WithoutCancel) AFTER the response is assembled, never blocks it, and
-	// no-ops when nil.
-	c.labelFinishedRunAsync(finCtx, identity, task, run, req.Content, outcome.Summary, attach)
+	// One post-run maintenance pass handles harmless task-label hygiene and
+	// durable memory extraction. It runs after finalization and never delays the
+	// user-visible response.
+	analysisWorkspaceID := run.WorkspaceID
+	if workspace != nil && workspace.ID != "" {
+		analysisWorkspaceID = workspace.ID
+	}
+	c.analyzeFinishedRunAsync(finCtx, identity, task, run, analysisWorkspaceID, req.Content, outcome, attach)
 	return out, http.StatusOK
 }
 

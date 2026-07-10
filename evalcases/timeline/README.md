@@ -1,6 +1,6 @@
 # Timeline suite — Work Timeline acceptance scenarios
 
-Regression coverage for the ten acceptance scenarios in
+Regression coverage for the eleven acceptance scenarios in
 `docs/work-timeline.md`. Model turns are cassette-pinned (`.vcr/timeline_*`,
 committed); re-record with:
 
@@ -20,3 +20,4 @@ SELFMIND_EVAL_VCR=record selfmind eval run evalcases/timeline
 | 8 | Long-run compaction keeps the goal | Go: `internal/kernel/context_engine_test.go` (default compaction, head/tail protection, Relevant Files) + `light_task_layer_test.go` (spine) — unbounded-length runs are not eval-expressible offline |
 | 9 | Control-plane zero regression | Existing suites: approvals/queue/recovery Go tests + `evalcases/continuity/*` cassettes |
 | 10 | Label decisions auditable | Go: `run_labeler_test.go` (`label.assigned` event on non-KEEP); run→task mapping implicit in `task_runs` |
+| 11 | Task governance is user-controlled | `timeline-task-governance.yaml` (pin visibility + reversible unpin); Go: `task_governance_test.go` (hidden Inbox, safe auto-archive) |

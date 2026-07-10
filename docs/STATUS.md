@@ -51,9 +51,9 @@
 | Approval lifecycle | 🟡 | DB + API + `/approve` / `/reject` + staged approval modes (`/mode`) done. Approval UX shipped (2026-07-04): all surfaces (control commands, `POST /v1/approvals/respond`, CLI, Telegram buttons) resolve references through one shared resolver (`httpapi/approval_resolver.go`) — list ordinal (`/approve 1`), unique `apr_` prefix, bare `/approve` with a single pending, `task_` ids rejected with a hint; `/approvals` shows tool + bounded args preview + reason + task title; CLI-originated approvals fan out to the person's other bound IM accounts (`notifyApprovalRequested` + `ListAccountsByPerson`); Telegram gets native inline approve/reject buttons (typed `delivery.Message.Kind`, persisted on the outbound row so retries keep buttons) with `callback_query` handled in both the telegram adapter and the generic `/v1/im/*` webhook; `selfmind approve/reject` returns one-line errors, never raw JSON; `selfmind send --mode` threads `approval_mode`. Remaining: the long-poll `internal/gateway/telegram` adapter is still not mounted by the daemon (generic webhook path is), and Weixin stays text-fallback by design. Outbound dispatch is claim-based (`ClaimDelivery`): the immediate attempt and the retry poller are mutually exclusive, fixing the live duplicate approval push. IM approvals are conversational and task-free (owner request 2026-07-04): the push is `Approval needed — reply y or n:` + the command/reason only (no task label, no apr_ id, no ordinal); a bare `y`/`n` (or 好/可以/不行) answers the single pending approval, degrading to a numbered `/approve <n>` list only when multiple runs have approvals pending in parallel. The task concept stays in the control plane, out of the IM UX. CLI-originated async results now fan out to bound IM endpoints (`deliverAsyncResult` → `fanOutToBoundIM`) so a fire-and-forget terminal run's final answer — including a rejection acknowledgment — is visible on WeChat/Telegram instead of vanishing. Watch items: (a) one live WeChat `/reject 1` got no reply, likely a message lost in a gateway-restart window (iLink getupdates canceled mid-poll); (b) two result pushes were `sent` (correct target, iLink API accepted) but never arrived on the phone ~4.7h after the user's last inbound message — suspect iLink proactive-push context_token staleness; verify the weixin sender checks the response errcode and consider marking undeliverable pushes failed for retry. **Pending-notification escrow (2026-07-05):** the initial push is one-shot at creation, so a CLI-attached approval whose CLI then quit used to sit pending invisibly. A `notified_at` column (`approval_requests` + `clarify_requests`, `ensureColumn` migration) is stamped only when a push actually SENDS (never when suppressed); the in-daemon 60s sweep (`run_recovery.go`) now re-pushes pending approvals/clarifies older than `gateway.pending_notify_after` (default 2m; `0` disables) whose person has since detached from the CLI and were never notified, to the single preferred IM — idempotent (marks after `EnqueueAndTry` succeeds, so a crash retries next sweep; boot sweep covers restarts). `Store.MarkApprovalNotified`/`MarkClarifyNotified`/`ListPendingApprovalsForEscrow`/`ListPendingClarifiesForEscrow`; `RunCoordinator.escrowApprovalNotification`/`escrowClarifyNotification`. Tests: `control/escrow_test.go`, `httpapi/escrow_test.go`. |
 | Clarify lifecycle (G3) | ✅ | A mid-run agent question is a first-class DB-backed pending question modeled exactly on the approval waiter (2026-07-04). `gatewayClarify` (formerly a stub) creates a `clarify_requests` row (`internal/control/clarifies.go`: `Create`/`Get`/`List`/`Answer`/`Expire`/`ExpireOrphanedClarifies`), appends the `clarify.requested` event, pushes a presence-aware, single-preferred-endpoint notification through the shared `RunCoordinator.routePendingNotification` (same routing as approvals; `notifyClarifyRequested` + `delivery.KindClarify`, body `Question — reply with your answer:`), then blocks polling the row for up to 30 min. An answer recorded from ANY endpoint (`Store.AnswerClarifyRequest`) returns verbatim as the tool result; timeout/expiry returns a best-judgment fallback sentinel so the run never hangs. Inbound: a plain non-slash reply while a question is pending IS the answer (`tryHandleClarifyAnswer`, in `tryHandleControlCommand` above new-task/queue logic and below the bare y/n approval leg). Orphan hygiene rides `MarkInterruptedRuns` next to the approval sweep. Surfaced in `/status`, `/diag`, and the attach digest (`api.DigestClarify`). A question survives the CLI closing exactly like an approval (docs/identity-continuity.md "Runtime attachment model"). Tests: `control/clarifies_test.go`, `httpapi/clarify_inbound_test.go`. |
 | CLI / TUI controller | 🟡 | Components partly extracted; `uiModel` in `controller.go` is still a monolith (violates AGENTS.md guidance). |
-| TUI rendering (terminal-first hybrid) | 🟡 | **Default**: history committed to native terminal scrollback (`tea.Println`), only the active region redrawn (`history_commit.go`); terminal owns scroll/select/copy. `SELFMIND_TUI_LEGACY=1` falls back to the alt-screen viewport. Colored patch diffs (`renderPatchCell`), per-message render cache, `/history` (full diffs), `/copy`. Codex-style interactive approval panel (2026-07-05): `approval.requested` arms a bordered selector in the ACTIVE region (`ui/components.ApprovalPrompt`, wired by `gateway/cli/approval_flow.go`) — ↑/↓/j/k + Enter or shortcuts y/t/a/n mapping to grant scope ""/task/person on the existing `/v1/approvals/respond` path; Esc does nothing (explicit decision required); "No" opens a deny follow-up composer (Enter = bare deny, text = deny + mid-turn guidance); queued approvals re-arm FIFO; duplicate text notice + "Preparing to run" spinner suppressed while the panel is up; transcript keeps ONE compact `notice` line per request/decision; status bar shows `⏸ waiting approval`. Renders in both hybrid and legacy modes; IM/text approval surfaces unchanged. Remaining: delete the legacy path + escape hatch once settled; write_file overwrite real diff; `/history` search + `control.db` backing. Live plan checklist now renders in **client mode** (2026-07-05): the daemon's `plan.updated` event carries the full structured plan, forwarded by `client.eventToStream` and rendered as an `update_plan` cell so `renderPlanCell` shows the `[x]/[>]/[ ]` steps instead of a stray "plan updated" line (`agent_events.go` `forwardGatewayEvent` + `planJSONFromEvent`); `maxPlanSteps` raised 20→50 so a normal plan is never truncated. Status bar always shows the effective approval mode (`statusLine` `mode:<effective>`), learned from `GET /v1/digest` `approval_mode` at startup and updated by `/mode`. See `docs/tui-terminal-first-hybrid.md`. |
+| TUI rendering (terminal-first hybrid) | ✅ | **Only renderer (2026-07-10):** history committed to native terminal scrollback (`tea.Println`), only the active region redrawn (`history_commit.go`); terminal owns scroll/select/copy. The legacy alt-screen viewport (`SELFMIND_TUI_LEGACY`, `viewport`, `controller_mouse.go`, the per-message render cache) was DELETED with the in-process path — there is no `hybridMode()` switch anymore. Colored patch diffs (`renderPatchCell`), `/history` (full diffs), `/copy`. Codex-style interactive approval panel (2026-07-05): `approval.requested` arms a bordered selector in the ACTIVE region (`ui/components.ApprovalPrompt`, wired by `gateway/cli/approval_flow.go`) — ↑/↓/j/k + Enter or shortcuts y/t/a/n mapping to grant scope ""/task/person on the existing `/v1/approvals/respond` path; Esc does nothing (explicit decision required); "No" opens a deny follow-up composer (Enter = bare deny, text = deny + mid-turn guidance); queued approvals re-arm FIFO; duplicate text notice + "Preparing to run" spinner suppressed while the panel is up; transcript keeps ONE compact `notice` line per request/decision; status bar shows `⏸ waiting approval`. IM/text approval surfaces unchanged. Remaining: write_file overwrite real diff; `/history` search + `control.db` backing. Live plan checklist now renders in **client mode** (2026-07-05): the daemon's `plan.updated` event carries the full structured plan, forwarded by `client.eventToStream` and rendered as an `update_plan` cell so `renderPlanCell` shows the `[x]/[>]/[ ]` steps instead of a stray "plan updated" line (`agent_events.go` `forwardGatewayEvent` + `planJSONFromEvent`); `maxPlanSteps` raised 20→50 so a normal plan is never truncated. Status bar always shows the effective approval mode (`statusLine` `mode:<effective>`), learned from `GET /v1/digest` `approval_mode` at startup and updated by `/mode`. See `docs/tui-terminal-first-hybrid.md`. |
 | Run execution coordinator | 🟡 | `RunCoordinator` (`httpapi/run_coordinator.go`) owns the run lifecycle (`runMessage`/`startAsyncRun`), the active-run registry, and all pre/post-run helpers (workspace/task resolution, execution scope, approval handler, context assembly, stream aggregation, outcome persistence). Server is now the HTTP/orchestration layer. Worker pool shipped behind `SELFMIND_WORKERS` (see Multi-terminal concurrency row). Async-run task visibility fixed (2026-07-04): every run (sync and async) now syncs the person's `current_task` pointer to the task it resolved (`syncCurrentTask`, same `SetCurrentTask` mechanism as `/new`/`/resume`), and `/status` prefers the active run's task over the pointer (`Server.statusReply`); regression tests in `httpapi/task_visibility_test.go`. Stuck-run recovery shipped (2026-07-04): **invariant — after any finalization or recovery sweep, no task may remain `running` with zero live runs** (`running` means "a run is executing right now"; between-turns tasks park as `in_progress`). Enforced by: `Store.FinishRun` coercing non-terminal run statuses to `done`; `Store.MarkInterruptedRuns` flipping heartbeat-stale runs *and* repairing orphaned `running` tasks; a boot sweep (threshold 0 — the `gateway.lock` flock guarantees leftover running runs are dead) plus a 60s in-daemon sweep (12× the 10s run heartbeat) that always excludes the active-run registry (`httpapi/run_recovery.go`). Recovered `interrupted`/`in_progress` tasks stay non-terminal and resumable via `继续`/`/resume`. Tests: `control/runtime_test.go`, `httpapi/run_recovery_test.go`. **Post-run labeler (P3, 2026-07-06):** after finalization (under the `WithoutCancel` finalize ctx, AFTER the response is assembled), `labelFinishedRunAsync` (`httpapi/run_labeler.go`) asynchronously asks the cheap `Server.Labeler` (memory_extract role via `app.NewRunLabeler`; nil in eval) whether the turn's pre-label guess was right: KEEP no-ops, MOVE re-points the run + events/artifacts to an offered open label (`Store.ReassignRun`, transactional; deletes an auto-created placeholder left with zero runs, folds its handoffs, repoints `current_task`), TITLE names a NEW placeholder once. Every non-KEEP decision writes a `label.assigned` event; every failure degrades to KEEP; it never blocks the response (10s bound, `labelerWG` tracked). Only pre-label (guessed) attaches are labeled — explicit task_id/cue/pin attaches are the user's decision. Tests: `httpapi/run_labeler_test.go`, `control/task_labels_test.go`. **Async panic firewall (2026-07-07):** async runs (IM, queue drain, cron, detached CLI) have no net/http per-request recover, so an unrecovered panic in an agent turn used to crash the whole gateway daemon. Fixed on two layers: the router's agent-streaming goroutines (`router.runAgentStreaming` + the task-streaming variant) now `defer recoverStreamPanic`, converting a panic into a stream `Err` event the run finalizer already handles (task → interrupted); and `startAsyncRun`'s goroutine has a `recover` (`recoverAsyncRun`) that logs the stack, finalizes the run failed + task interrupted, delivers a failure notice, and (via the existing endActive + drainQueue defers) frees the person's slot so they are never wedged. Tests: `httpapi/run_panic_test.go`. **Parked-task wording (2026-07-06):** a task parked `in_progress`/`interrupted` with NO live run finished its turn — it is not busy. `/status` (`formatTaskStatus`) now renders `Status: in_progress (turn finished — reply to continue, or /new)` and `/tasks` (`task_view.go` cards, given the person's active task id) labels such tasks `[paused]` (the active one `[running]`), so the user stops reading a completed turn as "still working" (observed live: 13 min staring at `in_progress`). Stored status value and the state machine are UNCHANGED — user-facing wording only; a genuinely running task still shows elapsed. Tests: `httpapi/parked_status_test.go`. |
-| Multi-terminal concurrency (daemon-client) | 🟡 | Decision: converge every terminal on ONE gateway daemon instead of cross-process locks. Foundation shipped: `gateway.EnsureRunning` (discover-or-autostart + health wait, race-safe via the `gateway.lock` flock); CLI client paths (`selfmind send/status/...`) auto-start a local daemon; `internal/gateway/client` daemon-backed `MessageProcessor` (sync `/v1/message` answer + best-effort event poll → ctx stream observer). Client mode is now the **default** for the TUI (`SELFMIND_TUI_INPROC=1` opts out; auto-falls-back to in-process if the daemon can't start). Chat + agent-backed slash commands (`/skills`, `/memory` incl. `list`, `/bundles`, `/checkpoint`) run on the daemon via a safelisted `/v1/dispatch` (workspace-mutating/code-exec tools refused 403); `/status`/`/tasks` route via the message processor; `/skills stats`,`/model` switch show a client-mode notice. Worker pool (`internal/runpool` + `SELFMIND_WORKERS`, default 1) runs inside that daemon. `workspaceSerialKey` serializes **write** turns only (read turns concurrent, Exclusive/SharedRead semantics). Interactive tool approval works in client mode (Codex-style TUI approval panel driven by the `approval.requested` event → `/v1/approvals/respond`, incl. grant scope; see TUI rendering row). The message-based-channel working notice (`router.WorkingNotice`) is English-only (2026-07-05: "Got it — SelfMind is working on this…"; the stray bilingual TUI composer hint in `history_commit.go` was also de-duplicated to English). **Remaining**: session search over the daemon (last parity gap before deleting the in-process path); soak at N>1; per-provider cap (adapter layer, deferred). See `docs/worker-pool-design.md` §8. |
+| Multi-terminal concurrency (daemon-client) | 🟡 | Decision: converge every terminal on ONE gateway daemon instead of cross-process locks. Foundation shipped: `gateway.EnsureRunning` (discover-or-autostart + health wait, race-safe via the `gateway.lock` flock); CLI client paths (`selfmind send/status/...`) auto-start a local daemon; `internal/gateway/client` daemon-backed `MessageProcessor` (sync `/v1/message` answer + best-effort event poll → ctx stream observer). Client mode is the ONLY TUI path (2026-07-10): the in-process gateway build and the `SELFMIND_TUI_INPROC` opt-out were deleted — a daemon that can't start fails with actionable guidance, never a local agent. Chat + agent-backed slash commands (`/skills`, `/memory` incl. `list`, `/bundles`, `/checkpoint`) run on the daemon via a safelisted `/v1/dispatch` (workspace-mutating/code-exec tools refused 403); `/status`/`/tasks` route via the message processor; `/skills stats`,`/model` switch show a client-mode notice. Worker pool (`internal/runpool` + `SELFMIND_WORKERS`, default 1) runs inside that daemon. `workspaceSerialKey` serializes **write** turns only (read turns concurrent, Exclusive/SharedRead semantics). Interactive tool approval works in client mode (Codex-style TUI approval panel driven by the `approval.requested` event → `/v1/approvals/respond`, incl. grant scope; see TUI rendering row). The message-based-channel working notice (`router.WorkingNotice`) is English-only (2026-07-05: "Got it — SelfMind is working on this…"; the stray bilingual TUI composer hint in `history_commit.go` was also de-duplicated to English). **Remaining**: soak at N>1; per-provider cap (adapter layer, deferred). (Session search over the daemon + in-process deletion shipped 2026-07-10, see ACTIVE PLAN P0-3.) See `docs/worker-pool-design.md` §8. |
 | Process sandbox | 🟡 | Unix process-group isolation only; **not** a security sandbox (no namespace/seccomp/cgroup). Windows is a no-op. `execute_code` emits a one-per-process WARN noting it runs with full host access under the current user. Since 2026-07-07 `execute_code` is at least approval-gated (see Approval modes row), but the residual risk stands: approved code still has unrestricted host access — real isolation is P2 (Highest-Value Next Work item 9). |
 | Feishu / Lark adapter | 🟡 | Inbound via the generic `/v1/im/feishu` webhook (verification-token / encrypt-key signature, challenge); outbound via `delivery.FeishuSender` (tenant_access_token + `im/v1/messages`, chat_id/open_id routing). Config drives both. Encrypt-envelope AES decryption still TODO (use plaintext mode). **Inbound redelivery dedup (2026-07-09):** the `/v1/im/*` webhook now acknowledges a duplicate delivery 200 without re-running the agent — keyed by the platform's own id (`imMessageID`: generic `message_id`/`event_id`, Feishu `header.event_id`/`event.message.message_id`, QQ `d.id`, Telegram `update_id`), persisted in `control.inbound_dedup` (48h retention) so it survives restarts; no-id payloads and dedup-store errors fail open. `handlers_channels.go`, `control/inbound_dedup.go`; tests `httpapi/handlers_channels_test.go`, `control/inbound_dedup_test.go`. |
 | QQ official bot adapter | 🟡 | Inbound via `/v1/im/qq` webhook (group/C2C/guild events parsed into a `group:`/`c2c:`/`channel:` target); outbound via `delivery.QQSender` (app access token + per-target message API). Active push only — webhook ed25519 signature verify and passive `msg_id` threading are follow-ups. Inbound redelivery dedup by `d.id` shipped 2026-07-09 (see the Feishu row — shared `/v1/im/*` mechanism). |
@@ -68,6 +68,7 @@
 | Task queueing (G1+G2) | ✅ | New work while a run is active is **queued, not rejected** (2026-07-04). Durable `control.task_queue` (`internal/control/queue.go`: `EnqueueQueued`/`ListQueued`/`NextQueued`/`CountQueued`/`MarkQueued`/`ClearQueued`/`ListAllQueued`/`RequeueStartedQueued`). `ProcessMessage` enqueues a genuinely-new message behind the active run with an honest acceptance (`Queued behind the running task (N ahead)…`); a continuation (`IntentContinue`) is never queued — it **steers the active run** on every entry (2026-07-09; see Mid-turn steering row), falling back to the busy reply only when the steering channel is full/absent. On every run finalization (sync + async paths) `RunCoordinator.drainQueue` auto-starts the next queued item as a normal async run (per-person `draining` re-entrancy guard; reverts the row to `queued` if a fresh run races the slot). Boot drain (`Server.DrainQueuedAtBoot`, wired in the gateway runner) requeues `started` rows and resumes pending work after a restart. Visibility: `/queue` (list) / `/queue clear`; `/stop` cancels the active run and then drains. `httpapi/queue.go`, `httpapi/run_coordinator.go`. Tests: `control/queue_test.go`, `httpapi/queue_test.go`. **Queue done-state (2026-07-07):** a drained row's async run finalization now marks the row `QueueStatusDone` (the coordinator threads the queue id onto the drained `MessageRequest.QueueID`; `runMessage` marks done in a deferred terminal-path write). Previously the row stayed `started` with no back-reference, so boot recovery (`RequeueStartedQueued`) re-ran already-completed work at every restart (only masked by `maxQueueRestarts=1`). `RequeueStartedQueued` still touches only `started` rows, so `done` rows are never resurrected. Test: `httpapi/queue_test.go` (`TestDrainedItemMarkedDoneNotRequeued`). |
 | Task-attach semantics | ✅ | **Pre-label guess (Work Timeline P3, 2026-07-06 — supersedes the 2026-07-05 explicit-evidence-only rule).** Explicit evidence stays deterministic: caller `task_id`, `IntentContinue` (router cue / short acceptance), or the one-shot `/resume` pin (`person_settings.resume_pin_task`, consumed by the next agent-bound message; the pin alone may reopen an ARCHIVED label). Every other agent-bound message — sync, async, queued-drain, cron — pre-labels onto the person's current OPEN (non-terminal, non-archived) label, else a fresh placeholder. Harmless by construction: labels never gate context (spine P1 + recall P2), the EXECUTION workspace follows the REQUEST for pre-label turns (`workspaceForTask` — a guessed label's binding is never stamped or inherited), and the post-run labeler re-points wrong guesses (see the Run execution coordinator row). `resolveTask` returns a `taskAttach{created,preLabel}` provenance flag (`httpapi/server.go`, `httpapi/continue_resolver.go`). Resume carries real work state (2026-07-05): a resumed run keeps the **task's own workspace** even when the request carries a different client-cwd workspace (`workspaceForTask` prefers `task.WorkspaceID`, fixing a cross-endpoint `继续` that ran in the terminal's dir and tripped out-of-root approvals), and `withResumeContext` now injects a bounded (≤10) `files_this_task_created_or_changed` list merged from the handoff and the task's file-mutating tool events (`resumeChangedFiles`) — so an interrupted run (no handoff) still tells the continuation which file to edit instead of rediscovering and overwriting the wrong one. Harvest hardened 2026-07-05 to cover `write_file`/`edit`/`edit_file` (path via `path`/`file_path`/`output_path`) and `patch`/`apply_patch` (V4A `Update`/`Add`/`Delete`/`Move File` headers), never `read_file`. Tests: `httpapi/task_attach_test.go`, `httpapi/server_test.go` (`TestResumeContextIncludesCreatedFilesFromEvents`, `TestResumeChangedFilesHarvestsPatchAndEditPaths`, `TestWorkspacePreservedOnResume`); eval: `evalcases/continuity/continuity-task-attach.yaml` (cassette pending). |
 | Observability / diagnostics | ✅ | Self-serve diagnostics so the owner never re-describes bugs by hand (2026-07-04). `selfmind doctor [--out FILE]` (`internal/cliapp/doctor_commands.go`): a redacted bundle — gateway status (live HTTP status, else on-disk PID record), last 10 runs (status/title/elapsed/last_error), pending approvals, queued tasks, `sent_unconfirmed`/`failed` pushes, presence snapshot (durable `accounts.last_seen_at`), per-channel activity, and the last 50 gateway.log lines. Read-only; works whether or not the daemon is up (reads control.db + log directly). `/diag` control command returns a compact phone-friendly snapshot (active run + elapsed, queued count, pending approvals, last error, recent events). Content redacted via `tools.RedactSensitive`. Store queries: `control.ListRecentRunsForPerson`, `control.CountChannelMessagesByChannel` (`internal/control/doctor_queries.go`). Tests: `cliapp/doctor_test.go`, `httpapi/queue_test.go` (`/diag`). |
+| Task governance | ✅ | Post-run, reversible label hygiene (2026-07-10): additive task metadata (`kind`, `visibility`, `pinned`, `archived_at`, `last_activity_at`) migrates every old row to visible normal work without deleting or renaming it. The single cheap-model `PostRunAnalyzer` supports `INBOX` and durable fact extraction in the same bounded call; casual/identity/diagnostic runs may move to one hidden archived Inbox per person/workspace, while runs/events stay durable and Inbox is excluded from `/tasks`, recall cards, current-task selection, and continuation. `/task <id> pin|unpin` is explicit user authority. A configurable 6h sweep archives only stale visible terminal work (`tasks.auto_archive_*`), excluding pinned, active, open/interrupted, and pending approval/question tasks; archive is reversible via `/resume` and history is never deleted. Default `/tasks` is SQLite-filtered and paged by view/workspace/keyword. Tests: `control/task_governance_test.go`, `app/post_run_analyzer_test.go`, `httpapi/run_labeler_test.go`, `httpapi/task_view_test.go`; eval: `evalcases/timeline/timeline-task-governance.yaml`. |
 | Skill variant evolution / sandbox test | ❌ | Old roadmap P3 (doc removed; see git history); not started, and out of scope for the north star. |
 
 ## Highest-Value Next Work (by priority)
@@ -75,6 +76,146 @@
 These are the live gaps, ordered by their distance from the north star
 (`docs/identity-continuity.md` — the three continuity scenarios). This section
 is the only priority list in the repo; other docs must point here.
+
+### ACTIVE PLAN — Daemon-only + north-star experience (approved 2026-07-10)
+
+Owner-approved consolidation (2026-07-10, multi-agent cross-review calibrated).
+Core goal: CLI / IM / cron / HTTP API are ALL just entrances; everything enters
+ONE daemon; the daemon is the only agent runtime. Supersedes item 7 below and
+absorbs the weixin-push remainder of item 1(0). Order within a phase is the
+execution order.
+
+**P0 — north-star closure**
+
+- **P0-1 IM delivery loop completion — ✅ shipped and owner-verified on a real
+  WeChat device 2026-07-10.** iLink ret/errcode checking and
+  `sent_unconfirmed` (terminal, no blind retry — duplicate risk) were already
+  shipped. New: (a) **catch-up re-push** — any IM inbound (the weixin adapter
+  saves the fresh context_token before dispatch) fires
+  `delivery.Service.CatchUpUnconfirmed` (goroutine off `ProcessMessage`,
+  30s-bounded ctx) which re-delivers that person+platform+channel's
+  `sent_unconfirmed` rows behind THREE anti-duplicate rails: at-most-once per
+  row (`outbound_messages.catchup_at` claim column, claim-before-send via
+  `Store.ClaimDeliveryCatchUp`), a freshness window
+  (`gateway.delivery_catchup_max_age`, default 4h), and a per-catch-up cap
+  (default 3) oldest-first; a re-push that is STILL unconfirmed keeps its
+  consumed claim — never a duplicate drip. (b) `/diag` shows `Outbound (24h):
+  sent N, unconfirmed N, failed N` + the newest undelivered reason
+  (`Store.CountOutboundByStatusSince`). (c) `selfmind doctor` explains the
+  stale-context_token failure mode and the reply-to-recover path. Tests:
+  `control/catchup_test.go`, `delivery/catchup_test.go`. The owner verified
+  text, async completion, file delivery, approval round-trip, reminder, and
+  diagnostics on a real phone; one observed iLink `ret=-3` remains visible in
+  `/diag` as a failed push rather than a false success.
+- **P0-2 cassette gate integrity — ✅ shipped and re-recorded 2026-07-10.**
+  Root cause fixed: the VCR per-session counter was
+  process-global and never reset, so a case re-run in one process continued
+  numbering (recording 0001+ holes — the observed `.vcr/continuity_task_attach/`
+  corruption — and breaking same-process replays). Now `llm.ResetVCRSession`
+  runs at the start of EVERY case execution and record mode wipes the case's
+  previous cassette generation first (`llm.WipeVCRSessionRecordings`,
+  runner wiring in `internal/eval/runner.go`). `HasCassetteSession` is strict:
+  0000.json required AND gap-free 0000..max ("any *.json" would mask exactly
+  this corruption). The owner re-recorded a gap-free
+  `.vcr/continuity_task_attach/0000..0005.json` generation and
+  `continuity-task-attach.yaml` now requires the cassette. Tests:
+  `llm/vcr_test.go`; acceptance: strict offline `selfmind selfcheck`.
+  Acceptance: `selfmind selfcheck` passes strictly offline.
+- **P0-3 session-search-over-daemon, THEN delete in-process — parity ✅ shipped
+  2026-07-10; deletion still pending.** Landed: (1) **dispatch partition fix**
+  — daemon runs store memory/session-FTS/checkpoints under the PERSON id
+  (`RunAgentWithEvents(ctx, identity.PersonID, …)`), but `/v1/dispatch` forced
+  the CONTROL tenant on every tool, so client `/memory list` read an empty (or
+  stale in-process-era) partition. Now person-partitioned tools (`memory`,
+  `session_search`, `checkpoint`) dispatch with `identity.PersonID`; skill
+  tools keep the control tenant (the daemon skills-dir key)
+  (`handlers_dispatch.go` `personPartitionTools`). (2) **structured
+  `GET /v1/sessions`** — search (`?q=`), recent, and message window
+  (`?session_id=&around=&window=`), always person-partitioned, backed by
+  `Server.Sessions` (`SessionsBackend`, wired to the memory manager in the
+  runner); nil-safe 503 (`handlers_sessions.go`). (3) **TUI `/search`** —
+  works in BOTH modes via the `m.dispatch` seam (client → daemon dispatch with
+  the fixed partition; in-process → local dispatcher), closing the named
+  parity gap; the dead in-process-only `sessionSearchFn` wiring was removed.
+  Tests: `httpapi/handlers_sessions_test.go`. **Deletion step ✅ done
+  2026-07-10:** `SELFMIND_TUI_INPROC` and the in-process fallback are GONE —
+  `runTUI` always runs the thin client (`cliapp/root.go`); a daemon that can't
+  be reached/started FAILS with actionable guidance (gateway status / `gateway
+  run` / doctor), never a local agent. `EnsureRunning` timeout error now names
+  the address, wait, cause, and where to look (stale gateway.lock / port /
+  config). The legacy alt-screen TUI (`SELFMIND_TUI_LEGACY`, viewport,
+  `controller_mouse.go`, render cache) was removed with it — hybrid is the only
+  renderer. Scope note: "eval covers the daemon path" means eval keeps
+  exercising the full gateway `Server` code path (in-process harness,
+  data-isolated) — it does NOT spawn daemon OS processes.
+
+- **P0-4 execution continuity + post-run/task governance — ✅ shipped
+  2026-07-10.** Thin CLI clients subscribe to daemon-owned
+  `GET /v1/runs/stream` SSE and render assistant deltas while the final message
+  response remains the source of truth; IM/cron keep stage/final delivery only.
+  The agent recovers opening and partial-stream EOF/reset/idle failures through
+  bounded non-stream continuation, compacts again on context-window rejection,
+  and never executes an incomplete native tool call. One app-layer
+  `PostRunAnalyzer` call (explicit `tasks.maintenance_model_role`, default
+  `memory_extract`) combines KEEP/MOVE/TITLE/INBOX with durable user/workspace
+  facts; the old per-turn/final/profile calls are no longer wired. Task listing
+  is SQLite-filtered and paged by view/status/workspace/keyword; failed first-
+  run placeholders are deleted only when they have no durable history. Tests:
+  `client/client_test.go`, `httpapi/live_stream_test.go`,
+  `kernel/agent_retry_test.go`, `app/post_run_analyzer_test.go`,
+  `control/task_governance_test.go`, `httpapi/run_labeler_test.go`.
+
+P0 acceptance: CLI/IM/cron all execute in the daemon; no `SELFMIND_TUI_INPROC`;
+no automatic local-agent fallback; WeChat reliably receives progress/approval/
+completion/failure; continuity eval replays offline.
+
+**P1 — long-conversation quality**
+
+- **P1-1 native-tools prompt dedup — ✅ shipped 2026-07-10.** Tool definitions
+  were DOUBLE-SENT (native `ChatRequest.Tools` AND the full name list +
+  descriptions + param schemas in the system prompt). Now `buildSystemPrompt`
+  keeps the behavior contract always, but emits the name-list/descriptions/
+  schemas only for providers WITHOUT native tool support, probed via
+  `llm.ProviderSupportsNativeTools` (the `NativeToolsCapable` interface,
+  forwarded through the role router and VCR wrappers to the provider actually
+  routed this turn). Native providers get a one-line note instead.
+  `kernel/context…`, `llm/provider.go`, adapters. Tests:
+  `kernel/tools_prompt_dedup_test.go`.
+- **P1-2 context usage breakdown — ✅ shipped 2026-07-10.** Each turn emits a
+  `context.breakdown` run event (`kernel.ComputeContextBreakdown`:
+  identity/tools/project_context/memory/runtime/history token shares by section
+  marker); `/diag` reads the newest one back and renders a one-line share view
+  (the TUI shows it via `/diag`). Tests: `kernel/context_breakdown_test.go`.
+- **P1-3 stable/volatile prompt split + prompt-cache prefix — ✅ shipped
+  2026-07-10.** `buildSystemPrompt` groups content into a STABLE prefix (soul,
+  guidance, tool contract+defs, skills) and a VOLATILE suffix (runtime context,
+  memory/profile, per-turn conditionals like frontend guidance), joined
+  stable-then-volatile so the cacheable prefix is maximized. The pre-fix bug
+  injected volatile runtime context BETWEEN soul and tools. No AGENTS.md
+  diffing (rejected — upkeep outweighs the marginal cache win). Tests:
+  `kernel/prompt_layering_test.go`.
+
+**P2 — engineering governance**
+
+- **P2-1 split server.go / controller.go — ✅ shipped 2026-07-10** (no behavior
+  change; same-package function relocation, compiler+tests as the safety net).
+  `server.go` 1928→751: `*RunCoordinator` methods → `run_coordinator_lifecycle.go`,
+  control-command cluster → `control_commands.go`. `controller.go` 1691→720:
+  message loop → `controller_update.go`, view/render → `controller_view.go`,
+  transcript mutators → `controller_transcript.go`, constructors →
+  `controller_init.go`. All under the 800-line architecture-constraints line.
+  Remaining follow-up (STATUS item 11, separable/low-risk): physically delete
+  the unmounted dead adapters (`gateway/telegram`, `gateway/wechat`,
+  `platform/wechat`, `GatewayDeps.Bridge`) — not done here to avoid a
+  cross-package excision under the same change.
+- **P2-2 docs — ✅ shipped 2026-07-10.** AGENTS.md carries the daemon-only
+  development invariant (no in-process agent path / no fallback / no
+  `SELFMIND_TUI_INPROC`); STATUS rows and `docs/tui-terminal-first-hybrid.md`
+  updated for the legacy-TUI removal.
+
+One-liner: make cross-endpoint takeover actually reliable → make the eval gate
+trustworthy → converge to daemon-only; only then token economics and code
+hygiene.
 
 0. **P0 — Work Timeline transition (approved 2026-07-06; canonical design:
    `docs/work-timeline.md` — mandatory reading, includes the full rationale
@@ -164,8 +305,9 @@ is the only priority list in the repo; other docs must point here.
    undocumented); doubtful sends finalize as `sent_unconfirmed` — terminal
    for the retry queue (resending on the same stale session risks
    duplicates) — with a WARN log. `sent_unconfirmed`/`failed` rows now
-   surface in the attach digest (G0-c, 2026-07-04). Remaining: optionally
-   catch-up on the peer's next inbound; calibrate the window empirically.
+   surface in the attach digest (G0-c, 2026-07-04). Remaining: catch-up on
+   the peer's next inbound + delivery health in `/diag` — **absorbed into the
+   ACTIVE PLAN above (P0-1, 2026-07-10)**; calibrate the window empirically.
    (a) Detached run execution — ✅ resolved (2026-07-04). Runs execute on
    daemon-owned contexts: `ProcessMessage` derives the run ctx with
    `context.WithoutCancel` from the request ctx (values — stream observer,
@@ -291,11 +433,11 @@ is the only priority list in the repo; other docs must point here.
    `selfmind accounts`, and make "bind a new endpoint → inherit tasks and
    memory" a visible moment.
 7. **P1 — Finish daemon-client convergence, then delete the duplicates.**
-   Remaining parity gap: session search over the daemon. Once closed, remove
-   the in-process TUI path (`SELFMIND_TUI_INPROC`), the legacy alt-screen TUI
-   (`SELFMIND_TUI_LEGACY`, viewport, `controller_mouse.go`, `renderCache`), and
-   decompose `uiModel` per the AGENTS.md guardrail — one simplification pass.
-   Then a real N>1 soak (`SELFMIND_WORKERS`).
+   **SUPERSEDED by the ACTIVE PLAN above (P0-3, 2026-07-10)** — same content,
+   now with deletion preconditions and eval-scope wording. The legacy TUI
+   cleanup (`SELFMIND_TUI_LEGACY`, viewport, `controller_mouse.go`,
+   `renderCache`, `uiModel` decomposition) and the N>1 soak
+   (`SELFMIND_WORKERS`) ride along in that item.
 8. **P1 — Stranger-isolation hardening (scenario 3).** Highest item: the
    Weixin owner auto-bind hazard — with `gateway.weixin.owner_person_id` set,
    EVERY sender passing the DM policy is bound to the owner person

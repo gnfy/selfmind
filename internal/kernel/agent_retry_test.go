@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -19,6 +20,30 @@ type scriptedStreamProvider struct {
 	errFor      error
 	streamCalls atomic.Int32
 	chatCalls   atomic.Int32
+}
+
+type partialStreamProvider struct {
+	chatCalls atomic.Int32
+}
+
+func (p *partialStreamProvider) ChatCompletion(context.Context, []llm.Message) (string, error) {
+	return "continued", nil
+}
+
+func (p *partialStreamProvider) Chat(ctx context.Context, req llm.ChatRequest) (*llm.ChatResponse, error) {
+	p.chatCalls.Add(1)
+	if len(req.Messages) < 2 || !strings.Contains(req.Messages[len(req.Messages)-1].Content, "transport recovery") {
+		return nil, errors.New("missing partial-stream recovery instruction")
+	}
+	return &llm.ChatResponse{Content: "continued"}, nil
+}
+
+func (p *partialStreamProvider) StreamChat(context.Context, llm.ChatRequest) (<-chan llm.StreamEvent, error) {
+	ch := make(chan llm.StreamEvent, 2)
+	ch <- llm.StreamEvent{Content: "partial "}
+	ch <- llm.StreamEvent{Err: io.ErrUnexpectedEOF}
+	close(ch)
+	return ch, nil
 }
 
 func (p *scriptedStreamProvider) ChatCompletion(ctx context.Context, messages []llm.Message) (string, error) {
@@ -136,5 +161,21 @@ func TestRetryBackoffIsContextCancellable(t *testing.T) {
 	}
 	if elapsed > 2*time.Second {
 		t.Fatalf("cancellation should interrupt the 10s backoff quickly, took %v", elapsed)
+	}
+}
+
+func TestRunConversationRecoversPartialStreamWithoutRepeatingTools(t *testing.T) {
+	p := &partialStreamProvider{}
+	agent := newRetryTestAgent(p)
+	agent.SetRetryPolicy(2, time.Millisecond, 5*time.Millisecond)
+	answer, _, err := agent.RunConversation(context.Background(), "person-1", "cli", "answer this")
+	if err != nil {
+		t.Fatalf("RunConversation: %v", err)
+	}
+	if answer != "partial continued" {
+		t.Fatalf("answer=%q", answer)
+	}
+	if p.chatCalls.Load() != 1 {
+		t.Fatalf("recovery chat calls=%d want 1", p.chatCalls.Load())
 	}
 }

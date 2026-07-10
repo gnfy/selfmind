@@ -129,6 +129,13 @@ type Options struct {
 	RetryAttempts   int
 	RetryBaseDelay  time.Duration
 	PollInterval    time.Duration
+	// CatchUpMaxAge bounds how old a sent_unconfirmed push may be and still be
+	// re-pushed by the inbound-triggered catch-up (stale notices are noise, the
+	// user likely learned the outcome elsewhere). 0 = default 4h.
+	CatchUpMaxAge time.Duration
+	// CatchUpLimit caps how many rows one catch-up replays (oldest first) so a
+	// returning user is never flooded. 0 = default 3.
+	CatchUpLimit int
 }
 
 type Service struct {
@@ -153,6 +160,12 @@ func NewService(store *control.Store, sender Sender, opts Options) *Service {
 	}
 	if opts.PollInterval <= 0 {
 		opts.PollInterval = 15 * time.Second
+	}
+	if opts.CatchUpMaxAge <= 0 {
+		opts.CatchUpMaxAge = 4 * time.Hour
+	}
+	if opts.CatchUpLimit <= 0 {
+		opts.CatchUpLimit = 3
 	}
 	return &Service{
 		store:  store,
@@ -320,6 +333,61 @@ func (s *Service) tryDelivery(ctx context.Context, d *control.Delivery) error {
 	redacted := tools.RedactSensitive(err.Error())
 	_ = s.store.MarkDeliveryAttempt(ctx, d.ID, false, redacted, next)
 	return err
+}
+
+// CatchUpUnconfirmed re-pushes the person's sent_unconfirmed rows for one
+// platform+channel, fired when that peer's INBOUND message just refreshed the
+// platform session (e.g. a fresh iLink context_token) — the one moment a resend
+// is likely to actually arrive. Anti-duplicate rails (P0-1, docs/STATUS.md
+// "ACTIVE PLAN"): each row is claimed at most once (ClaimDeliveryCatchUp,
+// claim-before-send), only rows fresher than CatchUpMaxAge qualify, and one
+// catch-up replays at most CatchUpLimit rows oldest-first. A re-send that is
+// STILL unconfirmed is left claimed — it never becomes a loop. Returns how many
+// re-pushes were confirmed.
+func (s *Service) CatchUpUnconfirmed(ctx context.Context, tenantID, personID, platform, channel string) int {
+	if s == nil || s.store == nil || s.sender == nil {
+		return 0
+	}
+	since := time.Now().Add(-s.opts.CatchUpMaxAge)
+	rows, err := s.store.ListCatchUpEligible(ctx, tenantID, personID, platform, channel, since, s.opts.CatchUpLimit)
+	if err != nil || len(rows) == 0 {
+		return 0
+	}
+	confirmedCount := 0
+	for i := range rows {
+		d := &rows[i]
+		claimed, err := s.store.ClaimDeliveryCatchUp(ctx, d.ID)
+		if err != nil || !claimed {
+			continue
+		}
+		msg := Message{
+			TenantID:       d.TenantID,
+			PersonID:       d.PersonID,
+			Platform:       d.Platform,
+			PlatformUserID: d.PlatformUserID,
+			Channel:        d.Channel,
+			TaskID:         d.TaskID,
+			RunID:          d.RunID,
+			Content:        d.Content,
+			Kind:           d.Kind,
+			ApprovalID:     d.ApprovalID,
+			PartIndex:      d.PartIndex,
+			PartTotal:      d.PartTotal,
+		}
+		confirmed := true
+		if receipted, ok := s.sender.(SenderWithReceipt); ok {
+			confirmed, err = receipted.SendWithReceipt(ctx, msg)
+		} else {
+			err = s.sender.Send(ctx, msg)
+		}
+		if err == nil && confirmed {
+			_ = s.store.MarkDeliveryAttempt(ctx, d.ID, true, "", time.Time{})
+			confirmedCount++
+		}
+		// err or still-unconfirmed: the row stays sent_unconfirmed with its
+		// catch-up claim consumed — visible in digests/diag, never re-pushed.
+	}
+	return confirmedCount
 }
 
 func (s *Service) nextDelay(attempt int) time.Duration {

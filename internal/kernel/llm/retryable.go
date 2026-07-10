@@ -76,13 +76,38 @@ func IsRetryableError(err error) bool {
 	return true
 }
 
-var fatalMarkers = []string{
+// IsContextWindowError identifies the one fatal provider error that can be
+// repaired locally by rebuilding a smaller prompt. It remains non-retryable
+// for an unchanged request; the agent must explicitly compact first.
+func IsContextWindowError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	for _, marker := range contextWindowMarkers {
+		if strings.Contains(msg, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+var contextWindowMarkers = []string{
 	"context length",
 	"context window",
 	"maximum context",
 	"context_length_exceeded",
 	"reduce the length",
 	"too many tokens",
+}
+
+var fatalMarkers = []string{
+	contextWindowMarkers[0],
+	contextWindowMarkers[1],
+	contextWindowMarkers[2],
+	contextWindowMarkers[3],
+	contextWindowMarkers[4],
+	contextWindowMarkers[5],
 	"string too long",
 	"quota",
 	"insufficient_quota",

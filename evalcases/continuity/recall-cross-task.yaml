@@ -5,20 +5,13 @@ suite: continuity
 workspace: "."
 channel: cli
 
-# Work Timeline P2 (docs/work-timeline.md "Semantic recall"): turn 1 parks a
-# planning task about the KOF game; an explicit /new (a control turn — no
-# model call, so the sequence-keyed cassette is unaffected) opens a separate
-# label, and the final turn runs under it while mentioning the same subject.
-# The selector must attach a recall slice from the turn-1 work line (task
-# label card / task session) and record a redacted context.recall event on the
-# new label — recall is automatic, not just the model-invoked session_search
-# tool. (Under P3 pre-label semantics an ordinary follow-up would stay on the
-# turn-1 label, and recall excludes the current task — hence the explicit
-# /new.) Deterministic Go coverage: internal/gateway/httpapi/recall_test.go.
+# Work Timeline P2: turn 1 parks a planning task about the KOF game. An
+# explicit /new control turn opens a separate label without consuming a model
+# response. The final turn must receive an automatic recall slice from turn 1.
 turns:
-  - input: "帮我规划一个'九七格斗游戏'网页版的实现方案,先给 3 步,每步一句话,不要写代码、不要看本地文件。"
+  - input: "帮我规划一个九七格斗游戏网页版的实现方案，先给 3 步，每步一句话，不要写代码，不要看本地文件。"
   - input: "/new 宣传文案"
-  - input: "另外写一段九七格斗游戏的宣传文案,两句话即可,不要写代码、不要看本地文件。"
+  - input: "另外写一段九七格斗游戏的宣传文案，两句话即可，不要写代码，不要看本地文件。"
 
 expect:
   status: completed

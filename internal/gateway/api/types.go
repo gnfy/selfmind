@@ -285,3 +285,34 @@ type BindAccountRequest struct {
 	PlatformUserID string `json:"platform_user_id"`
 	DisplayName    string `json:"display_name"`
 }
+
+// SessionSummary is one indexed working session (FTS row) returned by the
+// daemon session APIs. Mirrors kernel/memory.FTS5Session without importing it
+// so the API package stays decoupled from kernel storage types.
+type SessionSummary struct {
+	SessionID string `json:"session_id"`
+	Channel   string `json:"channel"`
+	Content   string `json:"content,omitempty"`
+	Summary   string `json:"summary,omitempty"`
+	Timestamp int64  `json:"timestamp"`
+}
+
+// SessionMessage is a single indexed message inside a historical session.
+type SessionMessage struct {
+	SessionID string `json:"session_id"`
+	MessageID int    `json:"message_id"`
+	Channel   string `json:"channel"`
+	Role      string `json:"role"`
+	Content   string `json:"content"`
+	Timestamp int64  `json:"timestamp"`
+}
+
+// SessionsResponse carries session search / recent-session results.
+type SessionsResponse struct {
+	Sessions []SessionSummary `json:"sessions"`
+}
+
+// SessionMessagesResponse carries one session's message window.
+type SessionMessagesResponse struct {
+	Messages []SessionMessage `json:"messages"`
+}

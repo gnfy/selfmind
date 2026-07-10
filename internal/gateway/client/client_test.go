@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -201,6 +202,68 @@ func TestProcessMessageReturnsFinalAnswerAndStreamsEvents(t *testing.T) {
 	defer mu.Unlock()
 	if len(got) < 2 || got[0] != "tool.started" || got[1] != "tool.completed" {
 		t.Fatalf("expected tool.started then tool.completed, got %v", got)
+	}
+}
+
+func TestProcessMessageStreamsAssistantDeltasBeforeFinalAnswer(t *testing.T) {
+	subscribed := make(chan struct{})
+	emitDelta := make(chan struct{})
+	var subscribedOnce sync.Once
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/runs/stream":
+			w.Header().Set("Content-Type", "text/event-stream")
+			flusher := w.(http.Flusher)
+			_, _ = fmt.Fprint(w, "event: ready\ndata: {}\n\n")
+			flusher.Flush()
+			subscribedOnce.Do(func() { close(subscribed) })
+			select {
+			case <-emitDelta:
+				event, _ := json.Marshal(llm.StreamEvent{EventType: "stream", Content: "early "})
+				_, _ = fmt.Fprintf(w, "event: assistant.delta\ndata: %s\n\n", event)
+				flusher.Flush()
+			case <-r.Context().Done():
+				return
+			}
+			<-r.Context().Done()
+		case "/v1/tasks/events":
+			writeJSONResp(w, map[string]any{"events": []control.Event{}})
+		case "/v1/message":
+			select {
+			case <-subscribed:
+			case <-time.After(time.Second):
+				t.Fatal("message started before delta stream subscribed")
+			}
+			close(emitDelta)
+			time.Sleep(75 * time.Millisecond)
+			writeJSONResp(w, api.MessageResponse{Content: "early final answer"})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	c := New(srv.URL, "")
+	deltaSeen := make(chan string, 1)
+	ctx := httpapi.WithStreamObserver(context.Background(), func(se llm.StreamEvent) {
+		if se.EventType == "stream" {
+			select {
+			case deltaSeen <- se.Content:
+			default:
+			}
+		}
+	})
+	resp, status := c.ProcessMessage(ctx, api.MessageRequest{Platform: "cli", PlatformUserID: "tester", Content: "stream it"})
+	if status != http.StatusOK || resp.Content != "early final answer" {
+		t.Fatalf("response=%+v status=%d", resp, status)
+	}
+	select {
+	case got := <-deltaSeen:
+		if got != "early " {
+			t.Fatalf("delta=%q", got)
+		}
+	default:
+		t.Fatal("assistant delta was not forwarded before final response")
 	}
 }
 

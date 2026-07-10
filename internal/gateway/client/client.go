@@ -8,6 +8,7 @@
 package client
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -18,6 +19,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -139,6 +141,17 @@ func (c *Client) ProcessMessage(ctx context.Context, req api.MessageRequest) (ap
 	// and create no run events, so don't bother polling for them.
 	if observer != nil && !isControlCommand(req.Content) {
 		go c.pollEvents(streamCtx, req, observer)
+		ready := make(chan struct{})
+		go c.streamAssistantDeltas(streamCtx, req, observer, ready)
+		// Subscribe before starting the turn so a fast first token cannot race
+		// ahead of the SSE connection. Failure closes ready as well and simply
+		// degrades to the complete synchronous answer.
+		select {
+		case <-ready:
+		case <-ctx.Done():
+			return api.MessageResponse{Error: ctx.Err().Error()}, http.StatusGatewayTimeout
+		case <-time.After(750 * time.Millisecond):
+		}
 	}
 
 	resp, status, err := c.postMessage(ctx, req)
@@ -147,6 +160,63 @@ func (c *Client) ProcessMessage(ctx context.Context, req api.MessageRequest) (ap
 		return api.MessageResponse{Error: err.Error()}, http.StatusBadGateway
 	}
 	return resp, status
+}
+
+// streamAssistantDeltas consumes the daemon's ephemeral person-level SSE
+// stream. It forwards text only; durable tool/approval/plan events continue to
+// arrive through pollEvents. Any transport failure is intentionally silent —
+// postMessage still returns the full final answer.
+func (c *Client) streamAssistantDeltas(ctx context.Context, req api.MessageRequest, observer httpapi.StreamObserver, ready chan<- struct{}) {
+	var readyOnce sync.Once
+	markReady := func() { readyOnce.Do(func() { close(ready) }) }
+	defer markReady()
+
+	q := url.Values{}
+	if req.TenantID != "" {
+		q.Set("tenant_id", req.TenantID)
+	}
+	q.Set("platform", fallback(req.Platform, "cli"))
+	q.Set("platform_user_id", fallback(req.PlatformUserID, "local"))
+	if req.DisplayName != "" {
+		q.Set("display_name", req.DisplayName)
+	}
+	q.Set("active", c.presenceActiveParam())
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, c.BaseURL+"/v1/runs/stream?"+q.Encode(), nil)
+	if err != nil {
+		return
+	}
+	c.auth(httpReq)
+	httpResp, err := c.httpClient().Do(httpReq)
+	if err != nil {
+		return
+	}
+	defer httpResp.Body.Close()
+	if httpResp.StatusCode != http.StatusOK {
+		return
+	}
+
+	scanner := bufio.NewScanner(httpResp.Body)
+	scanner.Buffer(make([]byte, 0, 16*1024), 2*1024*1024)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if strings.HasPrefix(line, "event: ready") {
+			markReady()
+			continue
+		}
+		if !strings.HasPrefix(line, "data:") {
+			continue
+		}
+		data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+		if data == "" || data == "{}" {
+			continue
+		}
+		var event llm.StreamEvent
+		if json.Unmarshal([]byte(data), &event) != nil || event.Content == "" {
+			continue
+		}
+		event.EventType = "stream"
+		observer(event)
+	}
 }
 
 func (c *Client) postMessage(ctx context.Context, req api.MessageRequest) (api.MessageResponse, int, error) {

@@ -123,14 +123,15 @@ authoritative instruction. If it changes direction, the latest message wins."*
 
 ### Labels (task demoted, name kept) — SHIPPED (P3, 2026-07-06)
 
-- After a run finishes, a cheap model (memory_extract role) assigns the run to
-  an existing OPEN task label or creates a new one (input: turn summary +
-  open-label list). Implementation: `httpapi/run_labeler.go` (`RunLabeler` on
-  `Server.Labeler`, built by `app.NewRunLabeler` from the memory_extract
-  provider; nil in eval = KEEP everything). Contract: one-line reply
-  KEEP / MOVE:<task_id> / TITLE:<short title>; MOVE only to an OFFERED open
-  label; every failure path degrades to KEEP; runs async post-finalize under
-  a 10s bound, never blocking the response.
+- After an eligible run finishes, one cheap-model call combines reversible task
+  hygiene with durable fact extraction. Implementation:
+  `httpapi/run_labeler.go` (`PostRunAnalyzer` on `Server`, built by
+  `app.NewConfiguredPostRunAnalyzer` from the explicit
+  `tasks.maintenance_model_role`; no configured role disables maintenance
+  instead of falling back to the main model). Its task decision is KEEP /
+  MOVE:<task_id> / TITLE:<short title> / INBOX; MOVE only targets an offered
+  open label, every failure degrades to KEEP, and the call runs asynchronously
+  after finalization under a bounded timeout.
 - Titles are stable: generated once (TITLE, new placeholders only; fallback
   stays the truncated first input), never auto-renamed; `/task <id> rename`
   for humans.
@@ -169,18 +170,45 @@ message → control-command filter (unchanged)
 
 Default shows open/running/waiting/paused labels with `run: N 次`, latest
 activity, next-step hint; done collapses (`/tasks done|archived|all` expands);
-`/task <id>` detail, `/task <id> runs|rename|archive` (archive is a terminal
+`/task <id>` detail, `/task <id> runs|rename|pin|unpin|archive` (archive is a terminal
 status: hidden from open lists, recall label cards, and the pre-label guess;
 only an explicit `/resume <id>` reopens it). Short ids (`task_xxxxxxxx`) are
 shown and accepted back. Implementation: `httpapi/task_view.go`, shared by CLI
 and IM via the control-command path; `/task` is registered in
-`internal/gateway/command`.
+`internal/gateway/command`. `/tasks search <keyword>` queries complete visible
+history, including prior run summaries and handoff file paths. Status/view,
+workspace, keyword, and pagination are applied in SQLite (`--workspace`,
+`--page`, `--limit`) instead of filtering a fixed recent window in memory; the
+default open view stays bounded by `tasks.default_list_limit`.
+
+### Task governance (post-run, reversible)
+
+Tasks remain work labels, but a long-lived assistant also needs label hygiene:
+
+- `work` and `recurring` labels are visible; one `inbox` label per
+  person/workspace is hidden and archived.
+- One `PostRunAnalyzer` call combines task-label hygiene and durable user/
+  workspace fact extraction. It uses the explicitly configured
+  `tasks.maintenance_model_role` (default `memory_extract`) and never silently
+  falls back to the main coding model. It may answer `INBOX` only for casual,
+  identity/model, or one-off diagnostic turns with no durable work thread. It
+  never runs at ingress and never changes the context the completed run saw.
+- Analysis is eligibility-gated: a new placeholder, real cross-label
+  ambiguity, or a substantive durable outcome may trigger one call. A simple
+  established-label turn with no durable facts skips it. Explicit attachment
+  is never relabeled, though a substantive run can still yield memory facts.
+- Inbox is excluded from `/tasks`, recall cards, current-task selection, and
+  implicit continuation. Runs and events remain stored for audit.
+- A person may pin/unpin a visible task. Retention never archives pinned,
+  open, interrupted, active, or human-waiting work.
+- Automatic retention only changes an old terminal label to `archived`; it
+  never deletes runs, events, handoffs, artifacts, or user-authored titles.
 
 ## What does NOT change
 
 Control plane (runs/approvals/queue/clarify/recovery/hard floor/grants),
 presence + delivery routing, person/account identity model, compaction (A),
-artifact manifest (B), transport resilience (Zero), the tasks table schema,
+artifact manifest (B), transport resilience (Zero),
 all command names (`/tasks`, `/task`, `/resume`, `/new` — the `/work` rename
 was considered and rejected: pure churn), and the eval system.
 
@@ -201,7 +229,8 @@ session keys (hermes-style), Honcho-style dialectic user modeling.
   label-card/artifact indexing; embedding interface reserved. Parallel to P1.
 - **P3 labels & view: ✅ landed 2026-07-06.** resolveTask → pre-label;
   post-run labeler + re-point; `/tasks` aggregation; `/task` subcommands
-  (runs/rename/archive); implicit-continuation LLM upgrade removed.
+  (runs/rename/pin/unpin/archive); hidden Inbox and retention governance;
+  complete-history task search; implicit-continuation LLM upgrade removed.
 - **P4 eval:** the ten acceptance scenarios below, recorded cassettes,
   zh/en/elliptical/cross-endpoint coverage.
 

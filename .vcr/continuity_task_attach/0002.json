@@ -1,12 +1,275 @@
 {
-  "method": "chat",
-  "chat": {
-    "Content": "Write-Ahead-Logging 预写日志 journal_mode WAL 并发读写",
-    "ToolCalls": null,
-    "Usage": {
-      "InputTokens": 260,
-      "OutputTokens": 100
+  "method": "stream",
+  "events": [
+    {
+      "content": "1"
     },
-    "FinishReason": ""
-  }
+    {
+      "content": "."
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "先"
+    },
+    {
+      "content": "梳"
+    },
+    {
+      "content": "理"
+    },
+    {
+      "content": "现"
+    },
+    {
+      "content": "有"
+    },
+    {
+      "content": "配置"
+    },
+    {
+      "content": "来源"
+    },
+    {
+      "content": "、"
+    },
+    {
+      "content": "优"
+    },
+    {
+      "content": "先"
+    },
+    {
+      "content": "级"
+    },
+    {
+      "content": "和"
+    },
+    {
+      "content": "默认"
+    },
+    {
+      "content": "值"
+    },
+    {
+      "content": "规则"
+    },
+    {
+      "content": "，"
+    },
+    {
+      "content": "明确"
+    },
+    {
+      "content": "哪些"
+    },
+    {
+      "content": "行为"
+    },
+    {
+      "content": "必须"
+    },
+    {
+      "content": "保持"
+    },
+    {
+      "content": "兼"
+    },
+    {
+      "content": "容"
+    },
+    {
+      "content": "。\n\n"
+    },
+    {
+      "content": "2"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": " 再"
+    },
+    {
+      "content": "抽"
+    },
+    {
+      "content": "象"
+    },
+    {
+      "content": "统一"
+    },
+    {
+      "content": "的"
+    },
+    {
+      "content": "配置"
+    },
+    {
+      "content": "加载"
+    },
+    {
+      "content": "流程"
+    },
+    {
+      "content": "，把"
+    },
+    {
+      "content": "读取"
+    },
+    {
+      "content": "、"
+    },
+    {
+      "content": "解析"
+    },
+    {
+      "content": "、"
+    },
+    {
+      "content": "校"
+    },
+    {
+      "content": "验"
+    },
+    {
+      "content": "、"
+    },
+    {
+      "content": "合"
+    },
+    {
+      "content": "并"
+    },
+    {
+      "content": "和"
+    },
+    {
+      "content": "错误"
+    },
+    {
+      "content": "提示"
+    },
+    {
+      "content": "拆"
+    },
+    {
+      "content": "成"
+    },
+    {
+      "content": "清"
+    },
+    {
+      "content": "晰"
+    },
+    {
+      "content": "阶段"
+    },
+    {
+      "content": "。\n\n"
+    },
+    {
+      "content": "3"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": " 最"
+    },
+    {
+      "content": "后"
+    },
+    {
+      "content": "按"
+    },
+    {
+      "content": "小"
+    },
+    {
+      "content": "步"
+    },
+    {
+      "content": "迁"
+    },
+    {
+      "content": "移"
+    },
+    {
+      "content": "调用"
+    },
+    {
+      "content": "方"
+    },
+    {
+      "content": "，并"
+    },
+    {
+      "content": "用"
+    },
+    {
+      "content": "回"
+    },
+    {
+      "content": "归"
+    },
+    {
+      "content": "测试"
+    },
+    {
+      "content": "覆盖"
+    },
+    {
+      "content": "旧"
+    },
+    {
+      "content": "配置"
+    },
+    {
+      "content": "、新"
+    },
+    {
+      "content": "配置"
+    },
+    {
+      "content": "、"
+    },
+    {
+      "content": "缺"
+    },
+    {
+      "content": "失"
+    },
+    {
+      "content": "配置"
+    },
+    {
+      "content": "和"
+    },
+    {
+      "content": "冲"
+    },
+    {
+      "content": "突"
+    },
+    {
+      "content": "配置"
+    },
+    {
+      "content": "场"
+    },
+    {
+      "content": "景"
+    },
+    {
+      "content": "。"
+    },
+    {
+      "usage": {
+        "input_tokens": 14179,
+        "output_tokens": 144
+      }
+    }
+  ]
 }

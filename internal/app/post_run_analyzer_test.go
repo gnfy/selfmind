@@ -54,6 +54,9 @@ func TestPostRunAnalyzerCombinesDecisionAndFactPersistence(t *testing.T) {
 	if got.TaskDecision != "TITLE:Post-run maintenance" || model.calls != 1 {
 		t.Fatalf("analysis=%+v calls=%d", got, model.calls)
 	}
+	if err := analyzer.Apply(context.Background(), req, got); err != nil {
+		t.Fatal(err)
+	}
 	userFacts, err := mem.GetFacts(context.Background(), "tenant", "user")
 	if err != nil || len(userFacts) != 1 {
 		t.Fatalf("user facts=%+v err=%v", userFacts, err)
@@ -69,14 +72,29 @@ func TestPostRunAnalyzerCombinesDecisionAndFactPersistence(t *testing.T) {
 		t.Fatalf("workspace fact metadata=%+v", workspaceFacts[0])
 	}
 
-	// Re-analyzing the same durable facts must not duplicate memory rows.
-	if _, err := analyzer.Analyze(context.Background(), req); err != nil {
+	// Re-analyzing the same durable facts must not duplicate memory rows —
+	// and the duplicate observation is corroborating evidence, so the stored
+	// fact must be REINFORCED (confidence up, verification time refreshed),
+	// never silently dropped.
+	firstConfidence := userFacts[0].Confidence
+	firstVerified := userFacts[0].LastVerifiedAt
+	replayed, err := analyzer.Analyze(context.Background(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := analyzer.Apply(context.Background(), req, replayed); err != nil {
 		t.Fatal(err)
 	}
 	userFacts, _ = mem.GetFacts(context.Background(), "tenant", "user")
 	workspaceFacts, _ = mem.GetFacts(context.Background(), "tenant", "memory")
 	if len(userFacts) != 1 || len(workspaceFacts) != 1 {
 		t.Fatalf("duplicates stored: user=%d memory=%d", len(userFacts), len(workspaceFacts))
+	}
+	if userFacts[0].Confidence != firstConfidence {
+		t.Fatalf("same-run replay must not reinforce twice: %v -> %v", firstConfidence, userFacts[0].Confidence)
+	}
+	if userFacts[0].LastVerifiedAt.Before(firstVerified) {
+		t.Fatalf("reinforcement must not move last_verified_at backwards: %v -> %v", firstVerified, userFacts[0].LastVerifiedAt)
 	}
 }
 

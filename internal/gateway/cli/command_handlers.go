@@ -12,45 +12,8 @@ import (
 	"selfmind/internal/gateway/api"
 	"selfmind/internal/gateway/command"
 	"selfmind/internal/kernel"
-	"selfmind/internal/kernel/memory"
 	"selfmind/internal/tools"
 )
-
-// factProvenance renders a compact, dim "why is this remembered" suffix
-// (source / scope / confidence / age) for /memory list (W3e). Legacy facts with
-// no metadata get no suffix, so the view stays clean.
-func factProvenance(f memory.Fact) string {
-	var parts []string
-	if f.Source != "" {
-		parts = append(parts, "src="+f.Source)
-	}
-	if f.Scope != "" && f.Scope != "global" {
-		parts = append(parts, "scope="+f.Scope)
-	}
-	if f.Confidence > 0 {
-		parts = append(parts, fmt.Sprintf("conf=%.2f", f.Confidence))
-	}
-	if !f.CreatedAt.IsZero() {
-		parts = append(parts, humanizeAge(time.Since(f.CreatedAt)))
-	}
-	if len(parts) == 0 {
-		return ""
-	}
-	return "  · " + strings.Join(parts, " ")
-}
-
-func humanizeAge(d time.Duration) string {
-	switch {
-	case d < time.Minute:
-		return "just now"
-	case d < time.Hour:
-		return fmt.Sprintf("%dm ago", int(d.Minutes()))
-	case d < 24*time.Hour:
-		return fmt.Sprintf("%dh ago", int(d.Hours()))
-	default:
-		return fmt.Sprintf("%dd ago", int(d.Hours()/24))
-	}
-}
 
 // dispatch runs a management tool either on the daemon (client mode, via the
 // installed tool-dispatch function) or on the in-process agent backend. It is
@@ -81,8 +44,8 @@ func (m *uiModel) handleCommand(input string) tea.Cmd {
 	if cmd, ok := slashCommandIndex[parts[0]]; ok {
 		// In daemon-client mode agent-backed commands route through the tool
 		// dispatch seam (m.dispatch → daemon) or through the message processor
-		// (/status, /tasks). The few that need the in-process store (/memory
-		// list, /skills stats, /model switch) detect client mode themselves and
+		// (/status, /tasks). The few that need the in-process store (/skills
+		// stats, /model switch) detect client mode themselves and
 		// return a clear notice. So no top-level gate is needed for safety.
 		return cmd.Run(m, parts[1:])
 	}
@@ -572,50 +535,61 @@ func (m *uiModel) handleMemory(args []string) tea.Cmd {
 		}
 		switch action {
 		case "list":
-			// In client mode there is no in-process store, so list the facts via
-			// the daemon (memory tool "list" action). The daemon view omits the
-			// synthesized profile, which is an in-process agent concern.
-			if m.agent == nil || m.agent.Memory() == nil {
-				resp, err := m.dispatch("memory", map[string]interface{}{"action": "list", "_tenant_id": m.tenantID})
-				if err != nil {
-					return MsgAgentDone{Response: fmt.Sprintf("Memory list error: %v", err)}
-				}
-				return MsgAgentDone{Response: resp}
+			resp, err := m.dispatch("memory", map[string]interface{}{"action": "list", "_tenant_id": m.tenantID})
+			if err != nil {
+				return MsgAgentDone{Response: fmt.Sprintf("Memory list error: %v", err)}
 			}
-			mem := m.agent.Memory()
-			userFacts, _ := mem.GetFacts(context.Background(), m.tenantID, "user")
-			memFacts, _ := mem.GetFacts(context.Background(), m.tenantID, "memory")
-			var sb strings.Builder
-			sb.WriteString("## Memory\n\n### User\n")
-			if len(userFacts) == 0 {
-				sb.WriteString("- (empty)\n")
+			return MsgAgentDone{Response: resp}
+		case "raw":
+			resp, err := m.dispatch("memory", map[string]interface{}{"action": "raw", "_tenant_id": m.tenantID})
+			if err != nil {
+				return MsgAgentDone{Response: fmt.Sprintf("Memory raw view error: %v", err)}
 			}
-			for _, f := range userFacts {
-				sb.WriteString(fmt.Sprintf("- `%s` %s%s\n", f.ID, f.Content, factProvenance(f)))
+			return MsgAgentDone{Response: resp}
+		case "search":
+			if len(args) < 2 {
+				return MsgAgentDone{Response: "Usage: /memory search <query>"}
 			}
-			sb.WriteString("\n### Project / Environment\n")
-			if len(memFacts) == 0 {
-				sb.WriteString("- (empty)\n")
+			resp, err := m.dispatch("memory", map[string]interface{}{
+				"action": "search", "query": strings.Join(args[1:], " "), "_tenant_id": m.tenantID,
+			})
+			if err != nil {
+				return MsgAgentDone{Response: fmt.Sprintf("Memory search error: %v", err)}
 			}
-			for _, f := range memFacts {
-				sb.WriteString(fmt.Sprintf("- `%s` %s%s\n", f.ID, f.Content, factProvenance(f)))
+			return MsgAgentDone{Response: resp}
+		case "show":
+			if len(args) != 2 {
+				return MsgAgentDone{Response: "Usage: /memory show <ref>"}
 			}
-			pinnedFacts, _ := mem.GetFacts(context.Background(), m.tenantID, "pinned")
-			sb.WriteString("\n### Pinned (authoritative — synthesis won't override)\n")
-			if len(pinnedFacts) == 0 {
-				sb.WriteString("- (empty)\n")
+			resp, err := m.dispatch("memory", map[string]interface{}{
+				"action": "show", "ref": args[1], "_tenant_id": m.tenantID,
+			})
+			if err != nil {
+				return MsgAgentDone{Response: fmt.Sprintf("Memory detail error: %v", err)}
 			}
-			for _, f := range pinnedFacts {
-				sb.WriteString(fmt.Sprintf("- `%s` %s\n", f.ID, f.Content))
+			return MsgAgentDone{Response: resp}
+		case "forget":
+			if len(args) != 2 {
+				return MsgAgentDone{Response: "Usage: /memory forget <ref>"}
 			}
-			sb.WriteString("\n### Synthesized profile (\"what SelfMind thinks of you\")\n")
-			if prof := m.agent.ProfileSummary(context.Background(), m.tenantID); prof != "" {
-				sb.WriteString(prof + "\n")
-			} else {
-				sb.WriteString("- (not synthesized yet)\n")
+			resp, err := m.dispatch("memory", map[string]interface{}{
+				"action": "forget", "ref": args[1], "_tenant_id": m.tenantID,
+			})
+			if err != nil {
+				return MsgAgentDone{Response: fmt.Sprintf("Memory forget error: %v", err)}
 			}
-			sb.WriteString("\nCommands: /memory pin <text> · /memory remove <user|memory|pinned|profile> <id-or-text> · /memory history · /memory undo <change_id>")
-			return MsgAgentDone{Response: sb.String()}
+			return MsgAgentDone{Response: resp}
+		case "correct":
+			if len(args) < 3 {
+				return MsgAgentDone{Response: "Usage: /memory correct <ref> <replacement text>"}
+			}
+			resp, err := m.dispatch("memory", map[string]interface{}{
+				"action": "correct", "ref": args[1], "content": strings.Join(args[2:], " "), "_tenant_id": m.tenantID,
+			})
+			if err != nil {
+				return MsgAgentDone{Response: fmt.Sprintf("Memory correction error: %v", err)}
+			}
+			return MsgAgentDone{Response: resp}
 		case "history":
 			target := ""
 			if len(args) >= 2 {
@@ -670,7 +644,7 @@ func (m *uiModel) handleMemory(args []string) tea.Cmd {
 			}
 			return MsgAgentDone{Response: "Pinned (authoritative): " + resp}
 		default:
-			return MsgAgentDone{Response: "Usage: /memory [list|pin <text>|history [user|memory]|remove <user|memory|pinned|profile> <id-or-text>|undo <change_id>]"}
+			return MsgAgentDone{Response: "Usage: /memory [list|search <query>|show <ref>|correct <ref> <text>|forget <ref>|pin <text>|raw|history|undo]"}
 		}
 	}
 }

@@ -579,8 +579,16 @@ Curator only manages `agent-created` skills by default. Pinned skills are protec
 
 Memory stores durable user preferences and project/environment facts. It should not be used for temporary task status.
 
+The default view is a human-readable profile: related evidence is grouped, storage IDs are hidden, and no raw fact is deleted. Search exposes short references for inspection and correction; use `raw` only when auditing the underlying evidence.
+
 ```sh
-/memory list
+/memory
+/memory search selfmind
+/memory show 5f33aefd
+/memory correct 5f33aefd "Prefers concise, structured answers."
+/memory forget 5f33aefd
+/memory pin "Always discuss technical work in Chinese."
+/memory raw
 /memory history
 /memory history user
 /memory remove user "prefers concise answers"

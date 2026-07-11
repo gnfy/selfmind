@@ -19,6 +19,7 @@ import (
 	"selfmind/internal/gateway/httpapi"
 	"selfmind/internal/gateway/weixin"
 	"selfmind/internal/kernel"
+	"selfmind/internal/kernel/memory"
 	"selfmind/internal/platform/config"
 	"selfmind/internal/platform/log"
 )
@@ -144,6 +145,10 @@ func Run(ctx context.Context, opts Options) error {
 		// A single explicit memory_extract-role pass handles both task-label
 		// hygiene and durable fact extraction after eligible runs.
 		PostRunAnalyzer: app.NewConfiguredPostRunAnalyzer(mem, cfg, defaultTenantID),
+		// Background memory self-organization (docs/memory-governance.zh-CN.md
+		// §4): nil unless memory.governance.enabled AND its model role is
+		// explicitly configured; default mode is shadow (report only).
+		MemoryConsolidator: memoryConsolidatorOrNil(mem, cfg, defaultTenantID),
 		// Automatic semantic recall (Work Timeline P2): FTS sessions + task
 		// label cards attached at the selector layer; query expansion only when
 		// a semantic_recall role model is explicitly configured.
@@ -165,8 +170,12 @@ func Run(ctx context.Context, opts Options) error {
 	// died without finalizing.
 	stopStuckRunSweeper := gatewayAPI.StartStuckRunSweeper(ctx)
 	defer stopStuckRunSweeper()
+	stopMaintenanceWorker := gatewayAPI.StartMaintenanceWorker(ctx)
+	defer stopMaintenanceWorker()
 	stopTaskGovernanceSweeper := gatewayAPI.StartTaskGovernanceSweeper(ctx)
 	defer stopTaskGovernanceSweeper()
+	stopMemoryGovernance := gatewayAPI.StartMemoryGovernance(ctx)
+	defer stopMemoryGovernance()
 	var weixinAdapter *weixin.Adapter
 	if cfg.Gateway.Weixin.Enabled {
 		wxCfg := weixin.RuntimeConfigFrom(cfg.Gateway.Weixin, dataDir, defaultTenantID)
@@ -277,6 +286,15 @@ func applyGatewayRuntimeEnv(cfg *config.Config) {
 	// drives both inbound verification and the outbound sender.
 	setEnvIfEmpty("SELF_FEISHU_ENCRYPT_KEY", cfg.Gateway.Feishu.EncryptKey)
 	setEnvIfEmpty("SELF_FEISHU_VERIFICATION_TOKEN", cfg.Gateway.Feishu.VerificationToken)
+}
+
+// memoryConsolidatorOrNil keeps a nil *app.MemoryConsolidator from becoming a
+// non-nil httpapi.MemoryConsolidator interface value.
+func memoryConsolidatorOrNil(mem *memory.MemoryManager, cfg *config.Config, tenantID string) httpapi.MemoryConsolidator {
+	if c := app.NewConfiguredMemoryConsolidator(mem, cfg, tenantID); c != nil {
+		return c
+	}
+	return nil
 }
 
 func newDeliveryService(store *control.Store, cfg *config.Config, weixinSender delivery.Sender) *delivery.Service {

@@ -68,6 +68,10 @@ type StorageProvider interface {
 	AddFactMeta(ctx context.Context, tenantID string, f Fact) error
 	GetFacts(ctx context.Context, tenantID string, target string) ([]Fact, error)
 	RemoveFact(ctx context.Context, tenantID string, id string) error
+	// TouchFact reaffirms an existing fact without rewriting its content:
+	// repetition is corroborating evidence, so the fact's confidence and
+	// last-verified time move forward instead of the duplicate being dropped.
+	TouchFact(ctx context.Context, tenantID, id string, confidence float64, verifiedAt time.Time) error
 
 	// Permission operations
 	SetPermission(ctx context.Context, tenantID, toolName string, allowed bool) error
@@ -252,6 +256,14 @@ func (m *MemoryManager) RemoveFact(ctx context.Context, tenantID string, id stri
 		return fmt.Errorf("memory provider not initialized")
 	}
 	return m.provider.RemoveFact(ctx, tenantID, id)
+}
+
+// TouchFact reaffirms a fact: bumps confidence and last-verified time.
+func (m *MemoryManager) TouchFact(ctx context.Context, tenantID, id string, confidence float64, verifiedAt time.Time) error {
+	if m.provider == nil {
+		return fmt.Errorf("memory provider not initialized")
+	}
+	return m.provider.TouchFact(ctx, tenantID, id, confidence, verifiedAt)
 }
 
 // SetPermission sets the permission for a tool.

@@ -597,8 +597,16 @@ Curator 默认只治理 `agent-created` 的 Skill；被 pin 的 Skill 不会被�
 
 Memory 用于保存长期有效的用户偏好、项目事实和环境约定，不应该保存一次性任务进度。
 
+默认视图面向人类管理：相关证据会被归组，存储 UUID 默认隐藏，但不会删除任何原始事实。通过搜索拿到短引用后，可以查看来源、纠正或遗忘；只有审计底层证据时才使用 `raw`。
+
 ```sh
-/memory list
+/memory
+/memory search selfmind
+/memory show 5f33aefd
+/memory correct 5f33aefd "偏好简洁、结构化的回答。"
+/memory forget 5f33aefd
+/memory pin "技术讨论始终使用中文。"
+/memory raw
 /memory history
 /memory history user
 /memory remove user "喜欢简洁回答"

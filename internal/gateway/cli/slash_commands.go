@@ -27,7 +27,7 @@ var slashCommandMetas = []slashCommandMeta{
 	{Name: "/skills", Usage: "/skills [list|view|history|undo|search|install|audit|delete|archive|pin|unpin|stats|reload]", Description: "Manage learned skills", Hint: "list, view, undo, install, or archive skills"},
 	{Name: "/bundles", Usage: "/bundles [list|view|create|delete]", Description: "Manage skill bundles", Hint: "load multiple skills together"},
 	{Name: "/reload-skills", Usage: "/reload-skills", Description: "Reload skill tools from disk", Hint: "refresh skill commands"},
-	{Name: "/memory", Usage: "/memory [list|history|remove|undo]", Description: "Review, audit, remove, or undo saved memories", Hint: "review, audit, or undo saved memories"},
+	{Name: "/memory", Usage: "/memory [search|show|correct|forget|pin|raw|history|undo]", Description: "Review and manage long-term memory", Hint: "review or manage saved memories"},
 	{Name: "/curator", Usage: "/curator [status|run|restore]", Description: "Review or run skill cleanup", Hint: "check learning cleanup status"},
 	{Name: "/checkpoint", Usage: "/checkpoint [list|save|load|delete] [name]", Description: "Manage workspace checkpoints", Hint: "save or inspect workspace checkpoints"},
 	{Name: "/migrate", Usage: "/migrate", Description: "Migrate skills from Hermes Agent", Hint: "run local storage migrations"},

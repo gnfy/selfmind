@@ -15,6 +15,7 @@ import (
 // Fact sources, ordered by inherent trust.
 const (
 	SourceUser          = "user"           // user stated it directly
+	SourceAgent         = "agent"          // the agent deliberately chose to save it mid-run
 	SourceFactExtractor = "fact_extractor" // distilled at the end of a substantive turn
 	SourceTurnExtractor = "turn_extractor" // lightweight per-turn extraction
 )
@@ -26,6 +27,8 @@ func BaseConfidence(source string) float64 {
 		return 0.9
 	case SourceFactExtractor:
 		return 0.65
+	case SourceAgent:
+		return 0.6
 	case SourceTurnExtractor:
 		return 0.5
 	default:

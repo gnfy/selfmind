@@ -128,6 +128,9 @@ intent:
 		"openai:",
 		"storage:",
 		"gateway:",
+		"governance:",
+		"mode: shadow",
+		"pause_while_run_active: true",
 		"${OPENAI_API_KEY}",
 	} {
 		if !strings.Contains(text, want) {

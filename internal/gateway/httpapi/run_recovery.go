@@ -104,6 +104,11 @@ func (d *Server) sweepStuckRuns(threshold time.Duration) {
 	if recovered > 0 {
 		log.Warn("gateway: recovered stuck runs/tasks", "count", recovered, "stale_after", threshold.String())
 	}
+	// A maintenance job stuck 'running' means the daemon died mid-pass; the
+	// claim CAS makes reset-then-reclaim safe, so return it to pending.
+	if reset, err := d.Control.ResetStaleMaintenanceJobs(context.Background(), threshold); err == nil && reset > 0 {
+		log.Warn("gateway: reset stale maintenance jobs", "count", reset)
+	}
 }
 
 // sweepPendingNotifications is the escrow pass (Fix 2): it finds pending

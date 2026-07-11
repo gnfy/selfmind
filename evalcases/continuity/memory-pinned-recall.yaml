@@ -1,0 +1,32 @@
+id: memory_pinned_recall
+title: "durable memory saved in one task is recalled after an explicit task switch"
+suite: continuity
+workspace: "."
+channel: cli
+
+# Memory governance P0 (docs/memory-governance.zh-CN.md §5.1): a fact the user
+# asks to remember must reach durable memory through the real message path and
+# still govern replies after /new opens a different work label. The marker is
+# unusual so a passing reply can only come from stored context, not general
+# knowledge. NOTE: the person-level work spine also replays recent turns, so
+# this case alone cannot isolate the pinned-injection layer from spine recall —
+# that isolation is pinned by internal/kernel/pinned_injection_test.go; this
+# case guards the end-to-end "remember → switch → recall" behavior.
+#
+# Cassette pending: recording needs a live provider; until then the offline
+# gate SKIPS this case (require_cassette intentionally unset). Record with:
+# selfmind eval run continuity/memory_pinned_recall --live
+turns:
+  - input: "请把这条非敏感测试标记永久保存到长期记忆（这是经我确认的权威事实）：我的部署标记是 ACK-MEM-4482。保存完成后只回复 saved。"
+  - input: "/new 其他问题"
+  - input: "我的部署标记是什么？只输出标记本身，不要解释。"
+
+expect:
+  status: completed
+  contains:
+    - "ACK-MEM-4482"
+
+checks:
+  no_mojibake: true
+  no_empty_response: true
+  no_raw_json_leak: true

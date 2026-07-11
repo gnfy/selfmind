@@ -202,10 +202,33 @@ type AuthConfig struct {
 }
 
 type MemoryConfig struct {
-	AutoExtractInterval int  `mapstructure:"auto_extract_interval" yaml:"auto_extract_interval,omitempty"`
-	AutoExtractMinChars int  `mapstructure:"auto_extract_min_chars" yaml:"auto_extract_min_chars,omitempty"`
-	SemanticRecall      bool `mapstructure:"semantic_recall" yaml:"semantic_recall,omitempty"`
-	UseMemoryFence      bool `mapstructure:"use_memory_fence" yaml:"use_memory_fence,omitempty"`
+	AutoExtractInterval int                    `mapstructure:"auto_extract_interval" yaml:"auto_extract_interval,omitempty"`
+	AutoExtractMinChars int                    `mapstructure:"auto_extract_min_chars" yaml:"auto_extract_min_chars,omitempty"`
+	SemanticRecall      bool                   `mapstructure:"semantic_recall" yaml:"semantic_recall,omitempty"`
+	UseMemoryFence      bool                   `mapstructure:"use_memory_fence" yaml:"use_memory_fence,omitempty"`
+	Governance          MemoryGovernanceConfig `mapstructure:"governance" yaml:"governance,omitempty"`
+}
+
+// MemoryGovernanceConfig controls background memory self-organization
+// (docs/memory-governance.zh-CN.md §4). Mode gates what may be APPLIED:
+// "shadow" judges and reports only, "merge-only" additionally applies
+// high-confidence MERGE, "full" adds caps/archival. The judge always uses the
+// explicitly configured role and never falls back to the main coding model.
+type MemoryGovernanceConfig struct {
+	Enabled                bool    `mapstructure:"enabled" yaml:"enabled,omitempty"`
+	Mode                   string  `mapstructure:"mode" yaml:"mode,omitempty"` // shadow | merge-only | full
+	ModelRole              string  `mapstructure:"model_role" yaml:"model_role,omitempty"`
+	ConsolidationInterval  string  `mapstructure:"consolidation_interval" yaml:"consolidation_interval,omitempty"`
+	ConsolidationBatchSize int     `mapstructure:"consolidation_batch_size" yaml:"consolidation_batch_size,omitempty"`
+	AutoMergeConfidence    float64 `mapstructure:"auto_merge_confidence" yaml:"auto_merge_confidence,omitempty"`
+	// AutoSupersedeConfidence is reserved for a future deterministic
+	// supersede apply gate. It is parsed for forward compatibility but is not
+	// applied by the current shadow/merge-only/full implementation.
+	AutoSupersedeConfidence float64 `mapstructure:"auto_supersede_confidence" yaml:"auto_supersede_confidence,omitempty"`
+	MaxActiveGlobal         int     `mapstructure:"max_active_global" yaml:"max_active_global,omitempty"`
+	MaxActivePerWorkspace   int     `mapstructure:"max_active_per_workspace" yaml:"max_active_per_workspace,omitempty"`
+	ArchiveAfter            string  `mapstructure:"archive_after" yaml:"archive_after,omitempty"`
+	PauseWhileRunActive     *bool   `mapstructure:"pause_while_run_active" yaml:"pause_while_run_active,omitempty"`
 }
 
 type TaskConfig struct {
@@ -688,6 +711,19 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("memory.auto_extract_min_chars", 80)
 	v.SetDefault("memory.semantic_recall", true)
 	v.SetDefault("memory.use_memory_fence", true)
+	// Governance starts in observation-only mode. It is inert when the
+	// explicitly configured maintenance role cannot be resolved and never
+	// borrows the main coding model.
+	v.SetDefault("memory.governance.enabled", true)
+	v.SetDefault("memory.governance.mode", "shadow")
+	v.SetDefault("memory.governance.model_role", "memory_extract")
+	v.SetDefault("memory.governance.consolidation_interval", "24h")
+	v.SetDefault("memory.governance.consolidation_batch_size", 8)
+	v.SetDefault("memory.governance.auto_merge_confidence", 0.95)
+	v.SetDefault("memory.governance.max_active_global", 120)
+	v.SetDefault("memory.governance.max_active_per_workspace", 200)
+	v.SetDefault("memory.governance.archive_after", "4320h")
+	v.SetDefault("memory.governance.pause_while_run_active", true)
 	v.SetDefault("tasks.inbox_enabled", true)
 	v.SetDefault("tasks.default_list_limit", DefaultTaskListLimit)
 	v.SetDefault("tasks.auto_archive_done_after", "720h")

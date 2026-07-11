@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"selfmind/internal/kernel/memory"
+
+	"github.com/google/uuid"
 )
 
 // MemoryTool allows the agent to save durable information.
@@ -25,12 +27,12 @@ func NewMemoryTool(mem *memory.MemoryManager) *MemoryTool {
 				Properties: map[string]PropertyDef{
 					"action": {
 						Type:        "string",
-						Description: "The action to perform: add, replace, remove, history, undo, or list.",
-						Enum:        []string{"add", "replace", "remove", "history", "undo", "list"},
+						Description: "The action to perform: list, raw, search, show, add, correct, forget, replace, remove, history, or undo.",
+						Enum:        []string{"list", "raw", "search", "show", "add", "correct", "forget", "replace", "remove", "history", "undo"},
 					},
 					"target": {
 						Type:        "string",
-						Description: "Which memory store: 'user' for user preferences/profile, 'memory' for technical notes/environment facts, 'pinned' for authoritative facts the user confirmed (the profile synthesizer must not contradict these). Optional for history and undo.",
+						Description: "Which memory store: 'user' for user preferences/profile, 'memory' for technical notes/environment facts, 'pinned' for authoritative facts the user confirmed (always injected into prompts, immune to automatic maintenance). Optional for history and undo.",
 						Enum:        []string{"user", "memory", "pinned"},
 					},
 					"content": {
@@ -44,6 +46,14 @@ func NewMemoryTool(mem *memory.MemoryManager) *MemoryTool {
 					"change_id": {
 						Type:        "string",
 						Description: "Learning history change id to undo.",
+					},
+					"query": {
+						Type:        "string",
+						Description: "Case-insensitive text to search for in saved memories.",
+					},
+					"ref": {
+						Type:        "string",
+						Description: "A full memory ID or the short reference shown by search/show.",
 					},
 				},
 				Required: []string{"action"},
@@ -59,6 +69,8 @@ func (t *MemoryTool) Execute(args map[string]interface{}) (string, error) {
 	content, _ := args["content"].(string)
 	oldText, _ := args["old_text"].(string)
 	changeID, _ := args["change_id"].(string)
+	query, _ := args["query"].(string)
+	ref, _ := args["ref"].(string)
 
 	tenantID, _ := args["_tenant_id"].(string)
 	if tenantID == "" {
@@ -74,11 +86,34 @@ func (t *MemoryTool) Execute(args map[string]interface{}) (string, error) {
 		if content == "" {
 			return "", fmt.Errorf("content is required for add")
 		}
-		err := t.mem.AddFact(ctx, tenantID, target, content)
-		if err != nil {
+		// The pinned target is user authority by definition (/memory pin routes
+		// here); everything else the agent saves on its own initiative.
+		source := memory.SourceAgent
+		if target == "pinned" {
+			source = memory.SourceUser
+		}
+		fact := memory.Fact{
+			ID:             uuid.New().String(),
+			Target:         target,
+			Content:        content,
+			Source:         source,
+			Scope:          memory.DeriveFactScope(target, ""),
+			Confidence:     memory.BaseConfidence(source),
+			LastVerifiedAt: time.Now(),
+		}
+		if err := t.mem.AddFactMeta(ctx, tenantID, fact); err != nil {
 			return "", err
 		}
-		recordMemoryLearningChange(tenantID, target, "add", "", content, "memory_tool")
+		if store, ok := t.mem.Canonical(); ok {
+			if err := store.ApplyIntakeWrite(ctx, tenantID, memory.IntakeWrite{
+				Decision: "ADD", Target: target, Scope: fact.Scope,
+				Source: source, Content: content,
+			}); err != nil {
+				_ = t.mem.RemoveFact(ctx, tenantID, fact.ID)
+				return "", fmt.Errorf("write canonical memory: %w", err)
+			}
+		}
+		recordMemoryLearningChangeScoped(tenantID, target, fact.Scope, "add", "", content, "memory_tool")
 		return fmt.Sprintf("Added to %s memory: %s", target, content), nil
 
 	case "remove":
@@ -96,11 +131,19 @@ func (t *MemoryTool) Execute(args map[string]interface{}) (string, error) {
 		if !ok {
 			return "", fmt.Errorf("could not find memory entry matching %q", oldText)
 		}
+		if store, ok := t.mem.Canonical(); ok {
+			if err := store.SetCanonicalStatusByHash(ctx, tenantID, canonicalTargetOf(fact), fact.Scope, fact.Content, memory.CanonicalForgotten, "agent"); err != nil {
+				return "", err
+			}
+		}
 		err = t.mem.RemoveFact(ctx, tenantID, fact.ID)
 		if err != nil {
+			if store, ok := t.mem.Canonical(); ok {
+				_ = store.SetCanonicalStatusByHash(ctx, tenantID, canonicalTargetOf(fact), fact.Scope, fact.Content, memory.CanonicalActive, "agent_rollback")
+			}
 			return "", err
 		}
-		recordMemoryLearningChange(tenantID, target, "remove", fact.Content, "", "memory_tool")
+		recordMemoryLearningChangeScoped(tenantID, target, fact.Scope, "remove", fact.Content, "", "memory_tool")
 		return fmt.Sprintf("Removed from %s memory: %s", target, fact.Content), nil
 
 	case "replace":
@@ -118,17 +161,40 @@ func (t *MemoryTool) Execute(args map[string]interface{}) (string, error) {
 		if !ok {
 			return "", fmt.Errorf("could not find memory entry matching %q", oldText)
 		}
-		// In SQLite, we can just remove and add, or implement UpdateFact.
-		// For simplicity, we use Remove + Add.
-		err = t.mem.RemoveFact(ctx, tenantID, fact.ID)
-		if err != nil {
+		// Remove + re-add under the SAME id so references, provenance, and scope
+		// survive the rewrite; only content, source, and freshness change.
+		if err := t.mem.RemoveFact(ctx, tenantID, fact.ID); err != nil {
 			return "", err
 		}
-		err = t.mem.AddFact(ctx, tenantID, target, content)
-		if err != nil {
+		replaced := memory.Fact{
+			ID:             fact.ID,
+			Target:         fact.Target,
+			Content:        content,
+			Source:         memory.SourceAgent,
+			Scope:          fact.Scope,
+			Confidence:     memory.BaseConfidence(memory.SourceAgent),
+			CreatedFromRun: fact.CreatedFromRun,
+			LastVerifiedAt: time.Now(),
+		}
+		if replaced.Scope == "" {
+			replaced.Scope = memory.DeriveFactScope(replaced.Target, "")
+		}
+		if err := t.mem.AddFactMeta(ctx, tenantID, replaced); err != nil {
+			// Keep a failed replace from silently deleting the original.
+			_ = t.mem.AddFactMeta(ctx, tenantID, fact)
 			return "", err
 		}
-		recordMemoryLearningChange(tenantID, target, "replace", fact.Content, content, "memory_tool")
+		if store, ok := t.mem.Canonical(); ok {
+			if err := store.ApplyIntakeWrite(ctx, tenantID, memory.IntakeWrite{
+				Decision: "SUPERSEDE", Target: canonicalTargetOf(fact), Scope: replaced.Scope,
+				Source: memory.SourceAgent, Content: content, RefContent: fact.Content,
+			}); err != nil {
+				_ = t.mem.RemoveFact(ctx, tenantID, replaced.ID)
+				_ = t.mem.AddFactMeta(ctx, tenantID, fact)
+				return "", fmt.Errorf("replace canonical memory: %w", err)
+			}
+		}
+		recordMemoryLearningChangeScoped(tenantID, target, replaced.Scope, "replace", fact.Content, content, "memory_tool")
 		return fmt.Sprintf("Replaced in %s memory: %s -> %s", target, fact.Content, content), nil
 
 	case "history":
@@ -136,50 +202,127 @@ func (t *MemoryTool) Execute(args map[string]interface{}) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		return FormatMemoryLearningChanges(changes), nil
+		out := FormatMemoryLearningChanges(changes)
+		if store, ok := t.mem.Canonical(); ok {
+			events, eventErr := store.ListMemoryEvents(ctx, tenantID, 30)
+			if eventErr == nil {
+				if governance := FormatCanonicalGovernanceEvents(events); governance != "" {
+					out += "\n\n" + governance
+				}
+			}
+		}
+		return out, nil
 
 	case "undo":
 		if changeID == "" {
 			return "", fmt.Errorf("change_id is required for undo")
 		}
-		return UndoMemoryLearningChange(ctx, t.mem, tenantID, changeID)
+		out, err := UndoMemoryLearningChange(ctx, t.mem, tenantID, changeID)
+		if err == nil {
+			return out, nil
+		}
+		if store, ok := t.mem.Canonical(); ok && strings.Contains(err.Error(), "learning change not found") {
+			if undoErr := store.UndoMemoryEvent(ctx, tenantID, changeID, "user"); undoErr == nil {
+				return fmt.Sprintf("Undid memory governance event `%s`.", changeID), nil
+			} else {
+				return "", undoErr
+			}
+		}
+		return "", err
 
 	case "list":
-		return t.formatFactList(ctx, tenantID), nil
+		return formatMemoryOverview(ctx, t.mem, tenantID)
+
+	case "raw":
+		return formatRawMemoryFacts(ctx, t.mem, tenantID)
+
+	case "search":
+		return formatMemorySearch(ctx, t.mem, tenantID, query)
+
+	case "show":
+		return formatMemoryDetail(ctx, t.mem, tenantID, ref)
+
+	case "forget":
+		fact, err := findMemoryFactByRef(ctx, t.mem, tenantID, ref)
+		if err != nil {
+			return "", err
+		}
+		// Forget must stop recall IMMEDIATELY on both layers: the canonical
+		// row (authoritative read model) flips to forgotten by id or by
+		// statement identity, and the legacy fact row is removed.
+		if store, ok := t.mem.Canonical(); ok {
+			if err := store.SetCanonicalStatus(ctx, tenantID, fact.ID, memory.CanonicalForgotten, "user"); err != nil {
+				return "", err
+			}
+			if err := store.SetCanonicalStatusByHash(ctx, tenantID, canonicalTargetOf(fact), fact.Scope, fact.Content, memory.CanonicalForgotten, "user"); err != nil {
+				return "", err
+			}
+		}
+		if err := t.mem.RemoveFact(ctx, tenantID, fact.ID); err != nil {
+			return "", err
+		}
+		removeLegacyFactByContent(ctx, t.mem, tenantID, fact)
+		recordMemoryLearningChangeScoped(tenantID, fact.Target, fact.Scope, "remove", fact.Content, "", "memory_user")
+		return fmt.Sprintf("Forgot memory [%s]: %s", shortMemoryRef(fact.ID), fact.Content), nil
+
+	case "correct":
+		if strings.TrimSpace(content) == "" {
+			return "", fmt.Errorf("content is required for correct")
+		}
+		fact, err := findMemoryFactByRef(ctx, t.mem, tenantID, ref)
+		if err != nil {
+			return "", err
+		}
+		if err := t.mem.RemoveFact(ctx, tenantID, fact.ID); err != nil {
+			return "", err
+		}
+		corrected := memory.Fact{
+			ID:             fact.ID,
+			Target:         fact.Target,
+			Content:        strings.TrimSpace(content),
+			Source:         memory.SourceUser,
+			Scope:          fact.Scope,
+			Confidence:     memory.BaseConfidence(memory.SourceUser),
+			CreatedFromRun: fact.CreatedFromRun,
+			LastVerifiedAt: time.Now(),
+		}
+		if corrected.Scope == "" {
+			corrected.Scope = memory.DeriveFactScope(corrected.Target, "")
+		}
+		if err := t.mem.AddFactMeta(ctx, tenantID, corrected); err != nil {
+			// Keep a failed correction from silently deleting its evidence.
+			_ = t.mem.AddFactMeta(ctx, tenantID, fact)
+			return "", err
+		}
+		// User authority supersedes on the canonical layer too — corrections
+		// may retire ANY belief, including previously user-confirmed ones.
+		if store, ok := t.mem.Canonical(); ok {
+			if err := store.SetCanonicalStatus(ctx, tenantID, fact.ID, memory.CanonicalSuperseded, "user"); err != nil {
+				_ = t.mem.RemoveFact(ctx, tenantID, corrected.ID)
+				_ = t.mem.AddFactMeta(ctx, tenantID, fact)
+				return "", err
+			}
+			if err := store.ApplyIntakeWrite(ctx, tenantID, memory.IntakeWrite{
+				Decision: "SUPERSEDE", Target: canonicalTargetOf(fact), Scope: corrected.Scope,
+				Source: memory.SourceUser, Content: corrected.Content, RefContent: fact.Content,
+				Confidence: 1,
+			}); err != nil {
+				_ = store.SetCanonicalStatus(ctx, tenantID, fact.ID, memory.CanonicalActive, "user_rollback")
+				_ = t.mem.RemoveFact(ctx, tenantID, corrected.ID)
+				_ = t.mem.AddFactMeta(ctx, tenantID, fact)
+				return "", fmt.Errorf("correct canonical memory: %w", err)
+			}
+		}
+		recordMemoryLearningChangeScoped(tenantID, fact.Target, corrected.Scope, "replace", fact.Content, corrected.Content, "memory_user")
+		return fmt.Sprintf("Corrected memory [%s]: %s", shortMemoryRef(fact.ID), corrected.Content), nil
 
 	default:
 		return "", fmt.Errorf("unknown action: %s", action)
 	}
 }
 
-// formatFactList renders the user/project/pinned fact stores with compact
-// provenance. It backs `/memory list` for daemon clients (which have no
-// in-process store) via the dispatch path; the in-process TUI keeps its own
-// richer view that also includes the synthesized profile.
-func (t *MemoryTool) formatFactList(ctx context.Context, tenantID string) string {
-	section := func(sb *strings.Builder, title, target string) {
-		facts, _ := t.mem.GetFacts(ctx, tenantID, target)
-		sb.WriteString("\n### " + title + "\n")
-		if len(facts) == 0 {
-			sb.WriteString("- (empty)\n")
-			return
-		}
-		for _, f := range facts {
-			sb.WriteString(fmt.Sprintf("- `%s` %s%s\n", f.ID, f.Content, factProvenanceSuffix(f)))
-		}
-	}
-	var sb strings.Builder
-	sb.WriteString("## Memory\n")
-	section(&sb, "User", "user")
-	section(&sb, "Project / Environment", "memory")
-	section(&sb, "Pinned (authoritative — synthesis won't override)", "pinned")
-	sb.WriteString("\nCommands: /memory pin <text> · /memory remove <user|memory|pinned> <id-or-text> · /memory history · /memory undo <change_id>")
-	return sb.String()
-}
-
 // factProvenanceSuffix is the compact "why is this remembered" suffix
-// (source / scope / confidence / age). Mirrors the TUI's factProvenance so the
-// daemon-client view matches the in-process one.
+// (source / scope / confidence / age) used by the explicit raw evidence view.
 func factProvenanceSuffix(f memory.Fact) string {
 	var parts []string
 	if f.Source != "" {
@@ -210,5 +353,29 @@ func humanizeFactAge(d time.Duration) string {
 		return fmt.Sprintf("%dh ago", int(d.Hours()))
 	default:
 		return fmt.Sprintf("%dd ago", int(d.Hours()/24))
+	}
+}
+
+// canonicalTargetOf maps a view fact back to the canonical row's stored
+// target. Pinned rows retain target=pinned in both the legacy and canonical
+// stores; the pinned flag is an additional protection bit.
+func canonicalTargetOf(f memory.Fact) string {
+	return f.Target
+}
+
+// removeLegacyFactByContent clears a legacy fact row that matches the
+// forgotten statement exactly. Best-effort: when the read model served a
+// canonical id, the legacy row has a different id and is found by content.
+func removeLegacyFactByContent(ctx context.Context, mem *memory.MemoryManager, tenantID string, fact memory.Fact) {
+	for _, target := range []string{"pinned", "user", "memory"} {
+		facts, err := mem.GetFacts(ctx, tenantID, target)
+		if err != nil {
+			continue
+		}
+		for _, f := range facts {
+			if strings.EqualFold(strings.TrimSpace(f.Content), strings.TrimSpace(fact.Content)) {
+				_ = mem.RemoveFact(ctx, tenantID, f.ID)
+			}
+		}
 	}
 }

@@ -417,7 +417,23 @@ CREATE TABLE IF NOT EXISTS inbound_dedup (
 	created_at INTEGER NOT NULL,
 	PRIMARY KEY (platform, message_id)
 );
-CREATE INDEX IF NOT EXISTS idx_inbound_dedup_created ON inbound_dedup(created_at);`
+CREATE INDEX IF NOT EXISTS idx_inbound_dedup_created ON inbound_dedup(created_at);
+CREATE TABLE IF NOT EXISTS maintenance_jobs (
+	run_id TEXT NOT NULL,
+	analyzer_version INTEGER NOT NULL DEFAULT 1,
+	tenant_id TEXT NOT NULL,
+	status TEXT NOT NULL DEFAULT 'pending',
+	attempts INTEGER NOT NULL DEFAULT 0,
+	next_retry_at INTEGER NOT NULL DEFAULT 0,
+	result_hash TEXT NOT NULL DEFAULT '',
+	payload_json TEXT NOT NULL DEFAULT '',
+	proposal_json TEXT NOT NULL DEFAULT '',
+	last_error TEXT NOT NULL DEFAULT '',
+	created_at INTEGER NOT NULL,
+	updated_at INTEGER NOT NULL,
+	PRIMARY KEY (run_id, analyzer_version)
+);
+CREATE INDEX IF NOT EXISTS idx_maintenance_jobs_status ON maintenance_jobs(tenant_id, status, next_retry_at);`
 	if _, err := s.db.ExecContext(ctx, schema); err != nil {
 		return err
 	}
@@ -467,6 +483,11 @@ CREATE INDEX IF NOT EXISTS idx_inbound_dedup_created ON inbound_dedup(created_at
 		// session, e.g. a fresh iLink context_token). Non-zero = already caught
 		// up; the row is never re-pushed again (anti-duplicate rail, P0-1).
 		{"outbound_messages", "catchup_at", "INTEGER"},
+		// Replay data makes post-run maintenance a real daemon job rather than a
+		// one-shot goroutine. proposal_json freezes the model decision before any
+		// memory mutation, so crash recovery re-applies the same proposal.
+		{"maintenance_jobs", "payload_json", "TEXT NOT NULL DEFAULT ''"},
+		{"maintenance_jobs", "proposal_json", "TEXT NOT NULL DEFAULT ''"},
 	} {
 		if err := s.ensureColumn(ctx, col.table, col.name, col.def); err != nil {
 			return err
@@ -1203,6 +1224,12 @@ func (s *Store) FinishRun(ctx context.Context, tenantID, runID, status string) e
 		`UPDATE tasks SET active_run_id = '', last_activity_at = ?, updated_at = ?
 		 WHERE tenant_id = ? AND active_run_id = ?`,
 		now, now, tenant, runID); err != nil {
+		return err
+	}
+	// The maintenance job is born in the SAME terminal transaction, so "run
+	// reached a terminal state" and "run has exactly one pending maintenance
+	// slot" can never diverge (docs/memory-governance.zh-CN.md §2.5).
+	if err = createMaintenanceJobTx(ctx, tx, tenant, runID, 1); err != nil {
 		return err
 	}
 	return tx.Commit()

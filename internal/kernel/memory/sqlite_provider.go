@@ -92,6 +92,12 @@ func (p *SQLiteProvider) worker() {
 					op.result <- dbResult{err: fmt.Errorf("init schema: %w", err)}
 					continue
 				}
+				// Incremental legacy import is best-effort: a failure must not
+				// brick ordinary memory ops (the legacy read path is unaffected),
+				// and the import is idempotent so the next open retries it.
+				if err := importLegacyFacts(db); err != nil {
+					log.Warn("memory: legacy fact import failed; will retry on next open", "tenant", tenantID, "error", err)
+				}
 				dbTenant = tenantID
 			}
 
@@ -354,6 +360,54 @@ func (p *SQLiteProvider) worker() {
 				id := op.args[1].(string)
 				_, err := db.Exec(`DELETE FROM facts WHERE id = ?`, id)
 				res = dbResult{err: err}
+
+			case "TouchFact":
+				id := op.args[1].(string)
+				confidence := op.args[2].(float64)
+				verifiedAt := op.args[3].(time.Time)
+				_, err := db.Exec(`UPDATE facts SET confidence = ?, last_verified_at = ? WHERE id = ?`,
+					confidence, verifiedAt.UTC().Unix(), id)
+				res = dbResult{err: err}
+
+			case "ListCanonicalMemories":
+				val, err := listCanonicalMemories(db, op.args[1].(CanonicalFilter))
+				res = dbResult{val: val, err: err}
+
+			case "ObservationsForMemory":
+				val, err := observationsForMemory(db, op.args[1].(string))
+				res = dbResult{val: val, err: err}
+
+			case "ListMemoryEvents":
+				val, err := listMemoryEvents(db, op.args[1].(int))
+				res = dbResult{val: val, err: err}
+
+			case "ApplyIntakeWrite":
+				res = dbResult{err: applyIntakeWrite(db, op.args[1].(IntakeWrite))}
+
+			case "ApplyMerge":
+				res = dbResult{err: applyMerge(db, op.args[1].(MergeWrite))}
+
+			case "SetCanonicalStatusByHash":
+				res = dbResult{err: setCanonicalStatusByHash(db, op.args[1].(string), op.args[2].(string), op.args[3].(string), op.args[4].(string), op.args[5].(string))}
+
+			case "SetCanonicalStatus":
+				res = dbResult{err: setCanonicalStatusByID(db, op.args[1].(string), op.args[2].(string), op.args[3].(string))}
+
+			case "TouchCanonicalAccess":
+				res = dbResult{err: touchCanonicalAccess(db, op.args[1].([]string))}
+
+			case "ArchiveCanonicals":
+				res = dbResult{err: archiveCanonicals(db, op.args[1].([]string), op.args[2].(string), op.args[3].(string))}
+
+			case "ListJudgedClusterIDs":
+				val, err := listJudgedClusterIDs(db)
+				res = dbResult{val: val, err: err}
+
+			case "RecordConsolidationJudgement":
+				res = dbResult{err: recordConsolidationJudgement(db, op.args[1].(string), op.args[2].(string), op.args[3].(float64), op.args[4].(string))}
+
+			case "UndoMemoryEvent":
+				res = dbResult{err: undoMemoryEvent(db, op.args[1].(string), op.args[2].(string))}
 
 			case "SetPermission":
 				toolName := op.args[1].(string)
@@ -713,6 +767,67 @@ func (p *SQLiteProvider) initSchema(db *sql.DB) error {
 			last_used  DATETIME,
 			PRIMARY KEY(skill_name, tenant_id)
 		);`},
+		// 8. 分层记忆模型（docs/memory-governance.zh-CN.md §2）：
+		// observations 是不可变证据，canonical_memories 是可修订读模型，
+		// memory_evidence 连接两者，memory_events 是带快照的审计。
+		// 时间统一存 epoch 秒（INTEGER），避免 DATETIME 格式漂移。
+		{"memory_observations", `CREATE TABLE IF NOT EXISTS memory_observations (
+			id TEXT PRIMARY KEY,
+			run_id TEXT DEFAULT '',
+			analyzer_version INTEGER DEFAULT 0,
+			workspace_id TEXT DEFAULT '',
+			target TEXT NOT NULL,
+			scope TEXT DEFAULT '',
+			source TEXT DEFAULT '',
+			content TEXT NOT NULL,
+			normalized_hash TEXT NOT NULL,
+			confidence_prior REAL DEFAULT 0,
+			status TEXT DEFAULT 'accepted',
+			created_at INTEGER
+		);`},
+		{"idx_observations_hash", `CREATE INDEX IF NOT EXISTS idx_observations_hash ON memory_observations(target, scope, normalized_hash);`},
+		{"canonical_memories", `CREATE TABLE IF NOT EXISTS canonical_memories (
+			id TEXT PRIMARY KEY,
+			target TEXT NOT NULL,
+			scope TEXT DEFAULT '',
+			category TEXT DEFAULT '',
+			content TEXT NOT NULL,
+			normalized_hash TEXT NOT NULL,
+			status TEXT DEFAULT 'active',
+			pinned INTEGER DEFAULT 0,
+			user_confirmed INTEGER DEFAULT 0,
+			confidence REAL DEFAULT 0,
+			evidence_count INTEGER DEFAULT 0,
+			occurrences INTEGER DEFAULT 0,
+			last_verified_at INTEGER,
+			last_accessed_at INTEGER,
+			valid_from INTEGER,
+			valid_until INTEGER,
+			superseded_by TEXT DEFAULT '',
+			revision INTEGER DEFAULT 1,
+			created_at INTEGER,
+			updated_at INTEGER
+		);`},
+		{"idx_canonical_status", `CREATE INDEX IF NOT EXISTS idx_canonical_status ON canonical_memories(target, status);`},
+		{"idx_canonical_hash", `CREATE INDEX IF NOT EXISTS idx_canonical_hash ON canonical_memories(target, scope, normalized_hash);`},
+		{"memory_evidence", `CREATE TABLE IF NOT EXISTS memory_evidence (
+			memory_id TEXT NOT NULL,
+			observation_id TEXT NOT NULL,
+			relation TEXT NOT NULL,
+			created_at INTEGER,
+			PRIMARY KEY(memory_id, observation_id, relation)
+		);`},
+		{"memory_events", `CREATE TABLE IF NOT EXISTS memory_events (
+			id TEXT PRIMARY KEY,
+			actor TEXT NOT NULL,
+			action TEXT NOT NULL,
+			memory_id TEXT DEFAULT '',
+			observation_id TEXT DEFAULT '',
+			confidence REAL DEFAULT 0,
+			snapshot TEXT DEFAULT '',
+			detail TEXT DEFAULT '',
+			created_at INTEGER
+		);`},
 	}
 	for _, stmt := range statements {
 		if _, err := db.Exec(stmt.ddl); err != nil {
@@ -913,6 +1028,11 @@ func (p *SQLiteProvider) GetFacts(ctx context.Context, tenantID string, target s
 
 func (p *SQLiteProvider) RemoveFact(ctx context.Context, tenantID string, id string) error {
 	_, err := p.call("RemoveFact", tenantID, id)
+	return err
+}
+
+func (p *SQLiteProvider) TouchFact(ctx context.Context, tenantID, id string, confidence float64, verifiedAt time.Time) error {
+	_, err := p.call("TouchFact", tenantID, id, confidence, verifiedAt)
 	return err
 }
 

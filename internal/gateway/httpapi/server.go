@@ -62,6 +62,10 @@ type Server struct {
 	PostRunAnalyzer PostRunAnalyzer
 	// postRunWG tracks detached maintenance calls for tests and graceful drain.
 	postRunWG sync.WaitGroup
+	// MemoryConsolidator is the background memory self-organization pass
+	// (docs/memory-governance.zh-CN.md §4). Nil disables governance entirely;
+	// the loop is started by the gateway runner via StartMemoryGovernance.
+	MemoryConsolidator MemoryConsolidator
 
 	mu           sync.Mutex
 	draining     bool

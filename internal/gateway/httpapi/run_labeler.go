@@ -2,6 +2,9 @@ package httpapi
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -13,21 +16,35 @@ import (
 )
 
 // PostRunAnalysis is the one bounded maintenance result produced after an
-// eligible run. TaskDecision is harmless display governance; extracted facts
-// are persisted by the app-layer analyzer that owns the memory backend.
+// eligible run. TaskDecision is harmless display governance; memory decisions
+// are applied by the app-layer analyzer that owns the memory backend.
 type PostRunAnalysis struct {
-	TaskDecision string
-	UserFacts    []string
-	MemoryFacts  []string
+	TaskDecision string           `json:"task_decision"`
+	UserFacts    []string         `json:"user_facts,omitempty"`
+	MemoryFacts  []string         `json:"memory_facts,omitempty"`
+	Decisions    []MemoryDecision `json:"memory_decisions,omitempty"`
+}
+
+// MemoryDecision is one intake ruling against nearby existing memory
+// (docs/memory-governance.zh-CN.md §3.3): the model proposes, the
+// deterministic policy layer in the analyzer decides whether it takes effect.
+type MemoryDecision struct {
+	Target     string  `json:"target"`        // user | memory
+	Decision   string  `json:"decision"`      // SKIP | ADD | REINFORCE | SUPERSEDE | CONFLICT
+	Ref        string  `json:"ref,omitempty"` // offered neighbor id prefix
+	Content    string  `json:"content,omitempty"`
+	Confidence float64 `json:"confidence,omitempty"`
 }
 
 type PostRunAnalysisRequest struct {
-	Prompt      string
-	TenantID    string
-	PersonID    string
-	WorkspaceID string
-	TaskID      string
-	RunID       string
+	Prompt          string
+	TurnText        string // raw user input + outcome summary, for neighbor retrieval
+	TenantID        string
+	PersonID        string
+	WorkspaceID     string
+	TaskID          string
+	RunID           string
+	AnalyzerVersion int
 }
 
 // PostRunAnalyzer combines task-label hygiene and durable fact extraction in
@@ -37,10 +54,22 @@ type PostRunAnalyzer interface {
 	Analyze(ctx context.Context, req PostRunAnalysisRequest) (PostRunAnalysis, error)
 }
 
+type PostRunAnalysisApplier interface {
+	Apply(ctx context.Context, req PostRunAnalysisRequest, analysis PostRunAnalysis) error
+}
+
 // postRunAnalyzerTimeout bounds one maintenance call. It runs post-finalize
 // on a detached goroutine, so this bound protects the daemon from a hung
 // provider, not the user-visible response (which was already sent).
-const postRunAnalyzerTimeout = 15 * time.Second
+const postRunAnalyzerTimeout = 45 * time.Second
+
+// postRunAnalyzerVersion identifies the maintenance algorithm generation for
+// the maintenance_jobs idempotency key. Bump it when the analyzer's decision
+// semantics change and historic runs should become re-analyzable.
+const postRunAnalyzerVersion = 1
+
+// maintenanceRetryDelay parks a failed job before it becomes claimable again.
+const maintenanceRetryDelay = 10 * time.Minute
 
 // runLabelerMaxOpenLabels caps how many open labels are offered as MOVE
 // candidates — the person-level open set is small by design.
@@ -57,6 +86,15 @@ func (c *RunCoordinator) analyzeFinishedRunAsync(ctx context.Context, identity *
 		return
 	}
 	srv := c.srv
+	payload, err := json.Marshal(postRunJobPayload{
+		Identity: *identity, Task: *task, Run: *run, WorkspaceID: workspaceID,
+		UserInput: userInput, Outcome: outcome, AttachCreated: attach.created, AttachPreLabel: attach.preLabel,
+	})
+	if err != nil {
+		log.Warn("gateway: encode maintenance replay payload failed", "run", run.ID, "error", err)
+	} else if err := srv.Control.SetMaintenanceJobPayload(context.WithoutCancel(ctx), identity.TenantID, run.ID, postRunAnalyzerVersion, string(payload)); err != nil {
+		log.Warn("gateway: persist maintenance replay payload failed", "run", run.ID, "error", err)
+	}
 	srv.postRunWG.Add(1)
 	go func() {
 		defer srv.postRunWG.Done()
@@ -64,6 +102,17 @@ func (c *RunCoordinator) analyzeFinishedRunAsync(ctx context.Context, identity *
 		defer cancel()
 		srv.analyzeFinishedRun(callCtx, identity, task, run, workspaceID, userInput, outcome, attach)
 	}()
+}
+
+type postRunJobPayload struct {
+	Identity       control.IdentityContext `json:"identity"`
+	Task           control.Task            `json:"task"`
+	Run            control.Run             `json:"run"`
+	WorkspaceID    string                  `json:"workspace_id,omitempty"`
+	UserInput      string                  `json:"user_input"`
+	Outcome        api.RunOutcome          `json:"outcome"`
+	AttachCreated  bool                    `json:"attach_created,omitempty"`
+	AttachPreLabel bool                    `json:"attach_pre_label,omitempty"`
 }
 
 func (d *Server) analyzeFinishedRun(ctx context.Context, identity *control.IdentityContext, task *control.Task, run *control.Run, workspaceID, userInput string, outcome api.RunOutcome, attach taskAttach) {
@@ -74,25 +123,69 @@ func (d *Server) analyzeFinishedRun(ctx context.Context, identity *control.Ident
 		labelEligible = attach.created || len(candidates) > 0
 	}
 	if !labelEligible && !postRunMemoryEligible(userInput, outcome) {
+		_ = d.Control.SkipMaintenanceJob(ctx, identity.TenantID, run.ID, postRunAnalyzerVersion, "run is not eligible for post-run maintenance")
+		return
+	}
+	// Claim the run's maintenance job before any model work: one run has ONE
+	// logical maintenance result. A lost claim means another delivery of the
+	// same terminal notification already owns (or finished) this pass.
+	claimed, err := d.Control.ClaimMaintenanceJob(ctx, identity.TenantID, run.ID, postRunAnalyzerVersion)
+	if err != nil {
+		log.Warn("gateway: maintenance job claim failed; skipping analyzer", "run", run.ID, "error", err)
+		return
+	}
+	if !claimed {
 		return
 	}
 	prompt := buildPostRunAnalysisPrompt(task, attach.created, labelEligible, userInput, outcome, candidates)
-	analysis, err := d.PostRunAnalyzer.Analyze(ctx, PostRunAnalysisRequest{
-		Prompt:      prompt,
-		TenantID:    identity.TenantID,
-		PersonID:    identity.PersonID,
-		WorkspaceID: workspaceID,
-		TaskID:      task.ID,
-		RunID:       run.ID,
-	})
-	if err != nil {
-		log.Warn("gateway: post-run analyzer failed; keeping execution result unchanged", "run", run.ID, "error", err)
-		return
+	req := PostRunAnalysisRequest{
+		Prompt:          prompt,
+		TurnText:        strings.TrimSpace(userInput + "\n" + outcome.Summary),
+		TenantID:        identity.TenantID,
+		PersonID:        identity.PersonID,
+		WorkspaceID:     workspaceID,
+		TaskID:          task.ID,
+		RunID:           run.ID,
+		AnalyzerVersion: postRunAnalyzerVersion,
 	}
-	if !labelEligible {
-		return
+	var analysis PostRunAnalysis
+	job, _ := d.Control.GetMaintenanceJob(ctx, identity.TenantID, run.ID, postRunAnalyzerVersion)
+	if job != nil && strings.TrimSpace(job.ProposalJSON) != "" {
+		if err := json.Unmarshal([]byte(job.ProposalJSON), &analysis); err != nil {
+			_ = d.Control.FailMaintenanceJob(ctx, identity.TenantID, run.ID, postRunAnalyzerVersion, "decode frozen proposal: "+err.Error(), maintenanceRetryDelay)
+			return
+		}
+	} else {
+		analysis, err = d.PostRunAnalyzer.Analyze(ctx, req)
+		if err != nil {
+			log.Warn("gateway: post-run analyzer failed; keeping execution result unchanged", "run", run.ID, "error", err)
+			_ = d.Control.FailMaintenanceJob(ctx, identity.TenantID, run.ID, postRunAnalyzerVersion, err.Error(), maintenanceRetryDelay)
+			return
+		}
+		proposal, marshalErr := json.Marshal(analysis)
+		if marshalErr != nil {
+			_ = d.Control.FailMaintenanceJob(ctx, identity.TenantID, run.ID, postRunAnalyzerVersion, marshalErr.Error(), maintenanceRetryDelay)
+			return
+		}
+		if err := d.Control.SaveMaintenanceProposal(ctx, identity.TenantID, run.ID, postRunAnalyzerVersion, string(proposal), analysisResultHash(analysis)); err != nil {
+			_ = d.Control.FailMaintenanceJob(ctx, identity.TenantID, run.ID, postRunAnalyzerVersion, err.Error(), maintenanceRetryDelay)
+			return
+		}
 	}
-	decision, arg := parseRunLabelReply(analysis.TaskDecision)
+	if applier, ok := d.PostRunAnalyzer.(PostRunAnalysisApplier); ok {
+		if err := applier.Apply(ctx, req, analysis); err != nil {
+			_ = d.Control.FailMaintenanceJob(ctx, identity.TenantID, run.ID, postRunAnalyzerVersion, err.Error(), maintenanceRetryDelay)
+			return
+		}
+	}
+	if labelEligible {
+		d.applyPostRunLabel(ctx, identity, task, run, attach, candidates, analysis.TaskDecision)
+	}
+	_ = d.Control.CompleteMaintenanceJob(ctx, identity.TenantID, run.ID, postRunAnalyzerVersion, analysisResultHash(analysis))
+}
+
+func (d *Server) applyPostRunLabel(ctx context.Context, identity *control.IdentityContext, task *control.Task, run *control.Run, attach taskAttach, candidates []control.Task, rawDecision string) {
+	decision, arg := parseRunLabelReply(rawDecision)
 	switch decision {
 	case "KEEP", "":
 		return
@@ -103,7 +196,7 @@ func (d *Server) analyzeFinishedRun(ctx context.Context, identity *control.Ident
 				"run", run.ID, "target", arg)
 			return
 		}
-		d.applyLabelMove(ctx, identity, task, run, target, attach, analysis.TaskDecision)
+		d.applyLabelMove(ctx, identity, task, run, target, attach, rawDecision)
 	case "TITLE":
 		// Title stability rule: only a placeholder created THIS turn may be
 		// titled by the labeler, and only once (its title was the provisional
@@ -131,8 +224,19 @@ func (d *Server) analyzeFinishedRun(ctx context.Context, identity *control.Ident
 		if !d.TaskGovernance.InboxEnabled {
 			return
 		}
-		d.applyInboxLabel(ctx, identity, task, run, attach, analysis.TaskDecision)
+		d.applyInboxLabel(ctx, identity, task, run, attach, rawDecision)
 	}
+}
+
+// analysisResultHash fingerprints one maintenance result so a later retry of
+// the same terminal notification can be recognized as already applied.
+func analysisResultHash(analysis PostRunAnalysis) string {
+	parts := append(append([]string{analysis.TaskDecision}, analysis.UserFacts...), analysis.MemoryFacts...)
+	for _, d := range analysis.Decisions {
+		parts = append(parts, d.Target+"|"+d.Decision+"|"+d.Ref+"|"+d.Content)
+	}
+	digest := sha256.Sum256([]byte(strings.Join(parts, "\x00")))
+	return hex.EncodeToString(digest[:8])
 }
 
 // postRunMemoryEligible is language-neutral: durable outcome structure or a
@@ -142,6 +246,11 @@ func (d *Server) analyzeFinishedRun(ctx context.Context, identity *control.Ident
 func postRunMemoryEligible(userInput string, outcome api.RunOutcome) bool {
 	if len(outcome.Files) > 0 || len(outcome.Done) > 0 || len(outcome.NextSteps) > 0 || len(outcome.Tests) > 0 || len(outcome.Risks) > 0 {
 		return true
+	}
+	// A failed run with no durable evidence teaches nothing worth one model
+	// call — its diagnostics belong in run events, not person memory.
+	if strings.EqualFold(strings.TrimSpace(outcome.Status), "failed") {
+		return false
 	}
 	return len([]rune(strings.TrimSpace(userInput)))+len([]rune(strings.TrimSpace(outcome.Summary))) >= 160
 }
@@ -262,9 +371,10 @@ func buildPostRunAnalysisPrompt(task *control.Task, created, labelEligible bool,
 		}
 	}
 	sb.WriteString("\nMemory rules:\n")
-	sb.WriteString("- user_facts: only durable preferences or identity facts explicitly stated by the user.\n")
-	sb.WriteString("- memory_facts: only durable workspace decisions, conventions, constraints, or reusable facts confirmed by the run.\n")
-	sb.WriteString("- Empty arrays are correct when this turn adds nothing durable.\n")
+	sb.WriteString("- memory_decisions: judge each durable fact this turn supports AGAINST the existing nearby memories listed after the turn data.\n")
+	sb.WriteString("- target is \"user\" for durable preferences/identity facts explicitly stated by the user, \"memory\" for durable workspace decisions, conventions, or reusable constraints confirmed by the run.\n")
+	sb.WriteString("- decision SKIP: temporary, speculative, secret, or already fully represented. ADD: genuinely new durable information. REINFORCE: same meaning as the referenced memory (do not rewrite it). SUPERSEDE: this turn makes the referenced memory outdated. CONFLICT: contradicts the referenced memory and both could be true.\n")
+	sb.WriteString("- REINFORCE/SUPERSEDE/CONFLICT must set ref to an id from the nearby list. An empty memory_decisions array is correct when this turn adds nothing durable.\n")
 	sb.WriteString("\n<turn-data>\n")
 	fmt.Fprintf(&sb, "user: %s\n", textutil.Truncate(toOneLine(userInput), 800))
 	fmt.Fprintf(&sb, "result_summary: %s\n", textutil.Truncate(toOneLine(outcome.Summary), 800))

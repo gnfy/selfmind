@@ -79,7 +79,7 @@ var entries = []Entry{
 	{Name: "/skills", Usage: "/skills [list|view|history|undo|search|install|audit|delete|archive|pin|unpin|stats|reload]", Summary: "Manage learned skills.", Scope: Local},
 	{Name: "/bundles", Usage: "/bundles [list|view|create|delete]", Summary: "Manage skill bundles.", Scope: Local},
 	{Name: "/reload-skills", Usage: "/reload-skills", Summary: "Reload skill tools from disk.", Scope: Local},
-	{Name: "/memory", Usage: "/memory [list|history|remove|undo]", Summary: "Review, audit, remove, or undo saved memories.", Scope: Local},
+	{Name: "/memory", Usage: "/memory [search|show|correct|forget|pin|raw|history|undo]", Summary: "Review and manage long-term memory.", Scope: Local},
 	{Name: "/curator", Usage: "/curator [status|run|restore]", Summary: "Review or run skill cleanup.", Scope: Local},
 	{Name: "/checkpoint", Usage: "/checkpoint [list|save|load|delete] [name]", Summary: "Manage workspace checkpoints.", Scope: Local},
 	{Name: "/migrate", Usage: "/migrate", Summary: "Migrate skills from Hermes Agent.", Scope: Local},

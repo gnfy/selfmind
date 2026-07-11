@@ -115,9 +115,13 @@ thin metadata, no confidence model, coarse selection.
   and ranks to 8. Tested. Remaining: a single unified pool fusing memory +
   events + artifacts + summaries across the kernel/httpapi boundary (each
   dimension now ranks within itself).
-- **W3e — `/memory` transparency** ✅ shipped: `/memory list` now shows each
-  fact's provenance (source / scope / confidence / age) via `factProvenance`;
-  correction stays through the existing remove/undo/pin actions.
+- **W3e — `/memory` transparency and governance UX** ✅ shipped: `/memory`
+  defaults to a bounded human read model that categorizes and groups related
+  evidence without deleting it or exposing UUID noise. `/memory search` returns
+  short references; `/memory show` exposes source/scope/confidence; `/memory
+  correct` preserves the reference and promotes the correction to user
+  authority; `/memory forget` remains audited. `/memory raw` is the explicit
+  evidence/provenance view, and legacy remove/history/undo/pin actions remain.
 - **W3f — Memory eval** ✅ shipped: `TestMemoryEvalGuarantees` +
   `TestMemoryEvalProviderRoundTrip` encode the guarantees (user-stated outranks
   turn-extracted, fresh-high beats stale-low, workspace scoping, legacy

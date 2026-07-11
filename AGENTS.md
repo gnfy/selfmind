@@ -249,6 +249,44 @@ Domain docs (**mandatory** before changing that domain):
   are separate durable sources. Ranking/embedding work extends the selector
   layer — never another append path in `agent.go`, gateway handlers, or IM
   adapters.
+- Human memory UX is a read model over durable evidence, not a dump of the
+  `facts` table. `/memory` groups related evidence into stable human categories
+  and hides UUID/provenance noise; `/memory raw` preserves the auditable view,
+  while `search -> show -> correct|forget` is the management path. Read-model
+  grouping must be deterministic, bounded, UTF-8 safe, and non-destructive.
+  User corrections retain the fact reference and become `SourceUser`; never
+  let automatic extraction silently override a pinned or user-corrected fact.
+  Add new governance fields to evidence/canonical models, not directly to TUI
+  formatting. `/memory history` is the joined human view over explicit learning
+  changes and canonical governance events; reversible merge/archive events must
+  remain undoable from that view. Never claim a merge is reversible unless its
+  snapshot also preserves observation-to-member evidence ownership.
+- Silent memory self-organization is the primary product path; human search,
+  correction, pinning, and forgetting are safety controls, not routine cleanup.
+  Do not persist every user message. One bounded post-run maintenance decision
+  must choose `SKIP`, `ADD`, `REINFORCE`, `SUPERSEDE`, or `CONFLICT` against
+  nearby canonical memory. Consolidation is two-stage: deterministic same-scope
+  retrieval may only propose candidates, while the explicitly configured cheap
+  model makes the semantic decision. Similarity alone must never merge facts.
+  Pinned and `SourceUser` facts are immutable to automatic maintenance, and
+  pinned facts are ALWAYS injected into the prompt ahead of selected facts,
+  outside the bounded selection slots (`buildSystemPrompt`) — never let them
+  compete for or be truncated by the extracted-fact budget. The legacy profile
+  synthesizer was deleted (2026-07-11, dead code that starved pinned
+  visibility); never reintroduce a profile-synthesis model call. Keep
+  consolidation retryable, checkpointed, lower-priority than foreground runs,
+  and disabled from applying writes until dry-run precision/recall gates pass.
+  A terminal run's maintenance input and model proposal are durable: save the
+  replay payload before dispatch, freeze `proposal_json` before any memory/task
+  mutation, and reuse it after a crash. Apply failures MUST fail the maintenance
+  job rather than log-and-succeed; canonical proposal items are idempotent by
+  run/analyzer/decision key. A fresh payload-attachment race stays pending,
+  retries are bounded, and automatic governance pauses for foreground runs by
+  default. Every statement lookup or status mutation is target+scope+hash
+  scoped; identical text in another workspace is a different belief;
+  see `docs/memory-self-organization-eval.md` and
+  `docs/memory-governance.zh-CN.md` (layered observation/canonical schema,
+  maintenance-job idempotency, intake decision policy — landed 2026-07-11).
 - Working-context history is the person-level WORK SPINE (P1 of
   `docs/work-timeline.md`, landed 2026-07-06 — mandatory reading before
   changing keying, context assembly, or recall). Every agent-bound turn of a

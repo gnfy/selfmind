@@ -6,6 +6,7 @@ import (
 	"io"
 	"strings"
 	"testing"
+	"time"
 
 	"selfmind/internal/kernel/llm"
 	"selfmind/internal/kernel/memory"
@@ -53,7 +54,10 @@ func (m *mockStorage) GetFacts(ctx context.Context, tenantID string, target stri
 	return nil, nil
 }
 func (m *mockStorage) RemoveFact(ctx context.Context, tenantID string, id string) error { return nil }
-func (m *mockStorage) Close() error                                                     { return nil }
+func (m *mockStorage) TouchFact(ctx context.Context, tenantID, id string, confidence float64, verifiedAt time.Time) error {
+	return nil
+}
+func (m *mockStorage) Close() error { return nil }
 
 func (m *mockStorage) GetPermission(ctx context.Context, tenantID, toolName string) (bool, error) {
 	return true, nil

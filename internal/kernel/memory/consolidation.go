@@ -89,6 +89,13 @@ func BuildConsolidationDryRun(facts []Fact, cfg ConsolidationDryRunConfig, now t
 		now = time.Now()
 	}
 
+	// One signature per fact; the complete-link loops below are O(n²) in
+	// comparisons and must never redo per-fact normalization.
+	sigs := make([]SimilaritySignature, len(facts))
+	for i, fact := range facts {
+		sigs[i] = BuildSimilaritySignature(fact.Content)
+	}
+
 	partitions := make(map[string][]int)
 	for i, fact := range facts {
 		if IsProtectedFact(fact) {
@@ -137,7 +144,7 @@ func BuildConsolidationDryRun(facts []Fact, cfg ConsolidationDryRunConfig, now t
 				if used[candidate] || candidate == seed {
 					continue
 				}
-				score := ConsolidationSimilarity(facts[seed].Content, facts[candidate].Content)
+				score := SignatureSimilarity(sigs[seed], sigs[candidate])
 				if score >= cfg.CandidateSimilarity {
 					candidates = append(candidates, scoredCandidate{index: candidate, score: score})
 				}
@@ -154,7 +161,7 @@ func BuildConsolidationDryRun(facts []Fact, cfg ConsolidationDryRunConfig, now t
 				}
 				acceptable := true
 				for _, member := range chunk {
-					if ConsolidationSimilarity(facts[member].Content, facts[candidate.index].Content) < cfg.CandidateSimilarity {
+					if SignatureSimilarity(sigs[member], sigs[candidate.index]) < cfg.CandidateSimilarity {
 						acceptable = false
 						break
 					}
@@ -244,25 +251,55 @@ func normalizedConsolidationScope(f Fact) string {
 }
 
 func ConsolidationSimilarity(a, b string) float64 {
-	a, b = normalizeConsolidationText(a), normalizeConsolidationText(b)
-	if a == "" || b == "" {
+	return SignatureSimilarity(BuildSimilaritySignature(a), BuildSimilaritySignature(b))
+}
+
+// SimilaritySignature caches the derived features ConsolidationSimilarity
+// needs (normalized text, term set, bigrams). O(n²) passes — read-model
+// grouping and candidate clustering — MUST build one signature per fact and
+// compare signatures, not raw strings: recomputing these maps per PAIR made a
+// ~800-fact /memory call take seconds.
+type SimilaritySignature struct {
+	norm   string
+	runes  int
+	cjk    bool
+	terms  map[string]struct{}
+	ngrams map[string]struct{}
+}
+
+// BuildSimilaritySignature normalizes once and precomputes the comparison
+// sets. Bigrams are built unconditionally so a CJK/non-CJK pair still
+// compares exactly like ConsolidationSimilarity always did.
+func BuildSimilaritySignature(value string) SimilaritySignature {
+	norm := normalizeConsolidationText(value)
+	sig := SimilaritySignature{norm: norm, runes: len([]rune(norm))}
+	if norm == "" {
+		return sig
+	}
+	sig.cjk = consolidationContainsCJK(norm)
+	sig.terms = consolidationTerms(norm)
+	sig.ngrams = consolidationNGrams(norm, 2)
+	return sig
+}
+
+// SignatureSimilarity is ConsolidationSimilarity over precomputed signatures.
+func SignatureSimilarity(a, b SimilaritySignature) float64 {
+	if a.norm == "" || b.norm == "" {
 		return 0
 	}
-	if a == b {
+	if a.norm == b.norm {
 		return 1
 	}
 	shorter, longer := a, b
-	if len([]rune(shorter)) > len([]rune(longer)) {
+	if shorter.runes > longer.runes {
 		shorter, longer = longer, shorter
 	}
-	if len([]rune(shorter)) >= 16 && strings.Contains(longer, shorter) {
+	if shorter.runes >= 16 && strings.Contains(longer.norm, shorter.norm) {
 		return 0.94
 	}
-	at, bt := consolidationTerms(a), consolidationTerms(b)
-	word := overlapScore(at, bt)
-	if consolidationContainsCJK(a) || consolidationContainsCJK(b) {
-		grams := overlapScore(consolidationNGrams(a, 2), consolidationNGrams(b, 2))
-		if grams > word {
+	word := overlapScore(a.terms, b.terms)
+	if a.cjk || b.cjk {
+		if grams := overlapScore(a.ngrams, b.ngrams); grams > word {
 			word = grams
 		}
 	}

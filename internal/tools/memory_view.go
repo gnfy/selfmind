@@ -503,6 +503,7 @@ func groupMemoryFacts(facts []memory.Fact) []memoryFactGroup {
 		fact     memory.Fact
 		category string
 		key      string
+		sig      memory.SimilaritySignature
 	}
 	var items []classifiedFact
 	for _, fact := range facts {
@@ -510,7 +511,15 @@ func groupMemoryFacts(facts []memory.Fact) []memoryFactGroup {
 			continue
 		}
 		category := memoryFactCategory(fact)
-		items = append(items, classifiedFact{fact: fact, category: category, key: memorySemanticKey(category, fact.Content)})
+		items = append(items, classifiedFact{
+			fact:     fact,
+			category: category,
+			key:      memorySemanticKey(category, fact.Content),
+			// Signature built ONCE per fact: the pair loop below is O(n²) in
+			// comparisons and must never redo normalization/tokenization —
+			// that regression made /memory take seconds at a few hundred facts.
+			sig: memory.BuildSimilaritySignature(displayMemoryText(fact.Content)),
+		})
 	}
 	parent := make([]int, len(items))
 	for i := range parent {
@@ -529,13 +538,18 @@ func groupMemoryFacts(facts []memory.Fact) []memoryFactGroup {
 			parent[rb] = ra
 		}
 	}
-	for i := 0; i < len(items); i++ {
-		for j := i + 1; j < len(items); j++ {
-			if items[i].category != items[j].category {
-				continue
-			}
-			if (items[i].key != "" && items[i].key == items[j].key) || equivalentMemoryText(items[i].fact.Content, items[j].fact.Content) {
-				union(i, j)
+	byCategory := make(map[string][]int)
+	for i, item := range items {
+		byCategory[item.category] = append(byCategory[item.category], i)
+	}
+	for _, bucket := range byCategory {
+		for a := 0; a < len(bucket); a++ {
+			for b := a + 1; b < len(bucket); b++ {
+				i, j := bucket[a], bucket[b]
+				if (items[i].key != "" && items[i].key == items[j].key) ||
+					memory.SignatureSimilarity(items[i].sig, items[j].sig) >= memoryEquivalenceThreshold {
+					union(i, j)
+				}
 			}
 		}
 	}
@@ -681,8 +695,12 @@ func namedProjectName(value string) string {
 	return ""
 }
 
+// memoryEquivalenceThreshold matches the consolidation candidate threshold so
+// the browsing fold and the background clustering agree on "same topic".
+const memoryEquivalenceThreshold = 0.42
+
 func equivalentMemoryText(a, b string) bool {
-	return memory.ConsolidationSimilarity(displayMemoryText(a), displayMemoryText(b)) >= 0.42
+	return memory.ConsolidationSimilarity(displayMemoryText(a), displayMemoryText(b)) >= memoryEquivalenceThreshold
 }
 
 // displayMemoryText repairs the common legacy failure where UTF-8 bytes were

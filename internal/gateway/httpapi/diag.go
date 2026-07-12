@@ -214,6 +214,11 @@ func contextBreakdownDetail(events []control.Event) string {
 		} {
 			fmt.Fprintf(&sb, "- %-38s ~%d tok (%d%%)\n", section.label, raw[section.key], raw[section.key]*100/total)
 		}
+		// Assembly-time accounting (W5): the stable share is the cacheable
+		// prompt prefix. Absent on events recorded before the accounting landed.
+		if stable, ok := raw["stable"]; ok && stable+raw["volatile"] > 0 {
+			fmt.Fprintf(&sb, "Prompt cache: ~%d tok stable prefix, ~%d tok volatile suffix\n", stable, raw["volatile"])
+		}
 		return sb.String()
 	}
 	return ""

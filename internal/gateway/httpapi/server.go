@@ -72,6 +72,9 @@ type Server struct {
 	// tool reads them back person-scoped. Empty disables spooling (truncation
 	// notes stay plain head/tail).
 	ToolOutputDir string
+	// SkillReviewer executes durable background-review jobs (execution-quality
+	// W7); nil disables the worker's review pass (reviews stay in-process).
+	SkillReviewer SkillReviewRunner
 
 	mu           sync.Mutex
 	draining     bool

@@ -29,7 +29,7 @@ func TestPinnedFactsAlwaysInjected(t *testing.T) {
 	}
 
 	agent := NewAgent(mem, promptToolBackend{}, &textOnlyProvider{}, "You are SelfMind.", 1, 1, nil)
-	prompt, err := agent.buildSystemPrompt(ctx, "tenant", DefaultTaskStrategy(), "hello")
+	prompt, _, err := agent.buildSystemPrompt(ctx, "tenant", DefaultTaskStrategy(), "hello")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,7 +64,7 @@ func TestPinnedFactsNotTruncatedBySelection(t *testing.T) {
 	}
 
 	agent := NewAgent(mem, promptToolBackend{}, &textOnlyProvider{}, "You are SelfMind.", 1, 1, nil)
-	prompt, err := agent.buildSystemPrompt(ctx, "tenant", DefaultTaskStrategy(), "hello")
+	prompt, _, err := agent.buildSystemPrompt(ctx, "tenant", DefaultTaskStrategy(), "hello")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -25,10 +25,16 @@ const CanaryPrefix = "canary:"
 // Start(). In CLI-only mode (no Server) the scheduler keeps its marker fallback.
 type CronExecutor struct {
 	srv *Server
+	// sched, when set, lets the executor persist the job's learned task
+	// binding (W6). Nil keeps the pre-binding behavior (pre-label each fire).
+	sched *cron.Scheduler
 }
 
-// NewCronExecutor returns a JobExecutor backed by the gateway Server.
-func NewCronExecutor(srv *Server) *CronExecutor { return &CronExecutor{srv: srv} }
+// NewCronExecutor returns a JobExecutor backed by the gateway Server. The
+// scheduler reference enables stable task binding for recurring jobs.
+func NewCronExecutor(srv *Server, sched *cron.Scheduler) *CronExecutor {
+	return &CronExecutor{srv: srv, sched: sched}
+}
 
 // RunCronJob runs the job's prompt synchronously and delivers the result. It
 // runs inside robfig/cron's per-job goroutine, so a long turn does not block
@@ -59,6 +65,21 @@ func (e *CronExecutor) RunCronJob(ctx context.Context, job cron.CronJob) error {
 		Content:        prompt,
 		AllowWeb:       job.Web,
 	}
+	// Stable label binding (W6): a learned task id rides the request as
+	// explicit attach evidence, so every fire of a daily job lands on the
+	// same label instead of a fresh pre-label guess. A binding whose label
+	// has been archived is cleared and re-learned from this run.
+	if strings.TrimSpace(job.TaskID) != "" && e.srv.Control != nil {
+		task, err := e.srv.Control.GetTask(ctx, job.TenantID, job.TaskID)
+		if err == nil && task != nil && task.ArchivedAt == nil && !archivedTaskStatus(task.Status) {
+			req.TaskID = job.TaskID
+		} else {
+			if e.sched != nil {
+				_ = e.sched.SetTaskID(ctx, job.ID, "")
+			}
+			job.TaskID = ""
+		}
+	}
 	// Tag the turn's origin so its work-spine entry reads "[cron] …" — a
 	// non-interactive turn must be distinguishable from the person's own
 	// message when the spine tail is replayed later. Best-effort: the sync run
@@ -82,6 +103,11 @@ func (e *CronExecutor) RunCronJob(ctx context.Context, job cron.CronJob) error {
 		return nil
 	}
 	e.srv.coordinator().deliverCronResult(ctx, req, resp)
+	// Learn the binding from the first successful execution: the resolved
+	// task is this job's stable label from now on.
+	if job.TaskID == "" && e.sched != nil && resp.Error == "" && resp.Task != nil && strings.TrimSpace(resp.Task.ID) != "" {
+		_ = e.sched.SetTaskID(ctx, job.ID, resp.Task.ID)
+	}
 	return nil
 }
 

@@ -36,6 +36,58 @@ var breakdownMarkers = []struct {
 	{"<memory-context>", "memory"},
 }
 
+// PromptSection is one assembled system-prompt component, recorded AT
+// assembly time (execution-quality W5): category for the breakdown event,
+// token estimate, and the P1-3 stable/volatile classification. Accounting at
+// the append site is exact where the marker scan below is a heuristic.
+type PromptSection struct {
+	Category string // identity | tools | project_context | memory | runtime
+	Tokens   int
+	Stable   bool
+}
+
+// BreakdownFromSections builds the breakdown from assembly-time accounting
+// instead of re-parsing the joined prompt. Sections carry the prompt shares;
+// messages contribute History exactly as before.
+func BreakdownFromSections(sections []PromptSection, messages []llm.Message) ContextBreakdown {
+	var b ContextBreakdown
+	for _, s := range sections {
+		switch s.Category {
+		case "project_context":
+			b.ProjectContext += s.Tokens
+		case "tools":
+			b.Tools += s.Tokens
+		case "runtime":
+			b.Runtime += s.Tokens
+		case "memory":
+			b.Memory += s.Tokens
+		default:
+			b.Identity += s.Tokens
+		}
+	}
+	for _, msg := range messages {
+		if msg.Role == "system" {
+			continue
+		}
+		b.History += estimateTokens(msg.Content)
+	}
+	b.Total = b.Identity + b.Tools + b.ProjectContext + b.Memory + b.Runtime + b.History
+	return b
+}
+
+// StableVolatileTokens sums the accounted sections by mutability — the
+// authoritative boundary of the P1-3 cacheable prefix.
+func StableVolatileTokens(sections []PromptSection) (stable, volatile int) {
+	for _, s := range sections {
+		if s.Stable {
+			stable += s.Tokens
+		} else {
+			volatile += s.Tokens
+		}
+	}
+	return stable, volatile
+}
+
 // ComputeContextBreakdown categorizes the assembled system prompt by section and
 // sums the non-system messages as History.
 func ComputeContextBreakdown(systemPrompt string, messages []llm.Message) ContextBreakdown {

@@ -30,6 +30,13 @@ type CronJob struct {
 	// Web allows a job to enable web tools for this turn (e.g. a market summary
 	// that must look things up), overriding the default web-off policy.
 	Web bool
+	// TaskID pins a recurring job to ONE stable work label (execution-quality
+	// W6): learned from the first execution's resolved task and passed as
+	// explicit attach evidence on later fires, so a daily report stops
+	// scattering across fresh pre-label guesses. Cleared automatically when
+	// the label is archived; display/organization only — labels never gate
+	// context (Work Timeline P3).
+	TaskID string
 	// Once disables the schedule after its first execution. A calendar-shaped
 	// cron expression alone is still recurring (for example, yearly), so
 	// one-time reminders need an explicit durable bit.
@@ -140,6 +147,7 @@ CREATE TABLE IF NOT EXISTS cron_jobs (
 		"deliver_to": "TEXT NOT NULL DEFAULT ''",
 		"web":        "INTEGER NOT NULL DEFAULT 0",
 		"once":       "INTEGER NOT NULL DEFAULT 0",
+		"task_id":    "TEXT NOT NULL DEFAULT ''",
 	})
 }
 
@@ -236,7 +244,7 @@ func (s *Scheduler) EnsureJob(ctx context.Context, job *CronJob) (int64, error) 
 func (s *Scheduler) ListJobs(ctx context.Context, tenantID string) ([]CronJob, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, name, cron_expr, prompt, tenant_id, channel, platform, deliver_to, web, once, enabled,
-		       last_run, next_run, created_at
+		       last_run, next_run, created_at, COALESCE(task_id, '')
 		FROM cron_jobs WHERE tenant_id = ? ORDER BY id`,
 		tenantID)
 	if err != nil {
@@ -251,7 +259,7 @@ func (s *Scheduler) ListJobs(ctx context.Context, tenantID string) ([]CronJob, e
 		var lastRun, nextRun sql.NullInt64
 		var createdAt int64
 		if err := rows.Scan(&j.ID, &j.Name, &j.CronExpr, &j.Prompt, &j.TenantID,
-			&j.Channel, &j.Platform, &j.DeliverTo, &web, &once, &j.Enabled, &lastRun, &nextRun, &createdAt); err != nil {
+			&j.Channel, &j.Platform, &j.DeliverTo, &web, &once, &j.Enabled, &lastRun, &nextRun, &createdAt, &j.TaskID); err != nil {
 			return nil, err
 		}
 		j.Web = itob(web)
@@ -287,10 +295,10 @@ func (s *Scheduler) RemoveJob(ctx context.Context, id int64) error {
 func (s *Scheduler) EnableJob(ctx context.Context, id int64, enabled bool) error {
 	// Reload job to get cron expr
 	row := s.db.QueryRowContext(ctx,
-		"SELECT id, name, cron_expr, prompt, tenant_id, channel, platform, deliver_to, web, once FROM cron_jobs WHERE id = ?", id)
+		"SELECT id, name, cron_expr, prompt, tenant_id, channel, platform, deliver_to, web, once, COALESCE(task_id, '') FROM cron_jobs WHERE id = ?", id)
 	var j CronJob
 	var web, once int
-	if err := row.Scan(&j.ID, &j.Name, &j.CronExpr, &j.Prompt, &j.TenantID, &j.Channel, &j.Platform, &j.DeliverTo, &web, &once); err != nil {
+	if err := row.Scan(&j.ID, &j.Name, &j.CronExpr, &j.Prompt, &j.TenantID, &j.Channel, &j.Platform, &j.DeliverTo, &web, &once, &j.TaskID); err != nil {
 		return err
 	}
 	j.Web = itob(web)
@@ -312,11 +320,19 @@ func (s *Scheduler) EnableJob(ctx context.Context, id int64, enabled bool) error
 	return err
 }
 
+// SetTaskID records (or clears, with "") the job's learned work-label
+// binding. Called by the gateway executor: learn-on-first-run, clear when the
+// label was archived. Purely durable state — no reschedule needed.
+func (s *Scheduler) SetTaskID(ctx context.Context, id int64, taskID string) error {
+	_, err := s.db.ExecContext(ctx, "UPDATE cron_jobs SET task_id = ? WHERE id = ?", strings.TrimSpace(taskID), id)
+	return err
+}
+
 // Start begins the cron scheduler loop.
 func (s *Scheduler) Start(ctx context.Context) error {
 	// Load and schedule all enabled jobs
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, name, cron_expr, prompt, tenant_id, channel, platform, deliver_to, web, once FROM cron_jobs WHERE enabled = 1`)
+		SELECT id, name, cron_expr, prompt, tenant_id, channel, platform, deliver_to, web, once, COALESCE(task_id, '') FROM cron_jobs WHERE enabled = 1`)
 	if err != nil {
 		return err
 	}
@@ -326,7 +342,7 @@ func (s *Scheduler) Start(ctx context.Context) error {
 	for rows.Next() {
 		var j CronJob
 		var web, once int
-		if err := rows.Scan(&j.ID, &j.Name, &j.CronExpr, &j.Prompt, &j.TenantID, &j.Channel, &j.Platform, &j.DeliverTo, &web, &once); err != nil {
+		if err := rows.Scan(&j.ID, &j.Name, &j.CronExpr, &j.Prompt, &j.TenantID, &j.Channel, &j.Platform, &j.DeliverTo, &web, &once, &j.TaskID); err != nil {
 			s.mu.Unlock()
 			return err
 		}

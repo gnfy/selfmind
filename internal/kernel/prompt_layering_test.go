@@ -19,7 +19,7 @@ func TestPromptStablePrefixOrdering(t *testing.T) {
 	rc := TaskRuntimeContext{TaskID: "task_x", Title: "VOLATILE-RUNTIME-MARKER"}
 	ctx := WithTaskRuntimeContext(context.Background(), rc)
 
-	prompt, err := agent.buildSystemPrompt(ctx, "tenant", DefaultTaskStrategy(), "do some work")
+	prompt, _, err := agent.buildSystemPrompt(ctx, "tenant", DefaultTaskStrategy(), "do some work")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,7 +47,7 @@ func TestPromptPrefixStableAcrossMemoryChange(t *testing.T) {
 			_ = mem.AddFact(context.Background(), "tenant", "user", "prefers concise answers")
 		}
 		agent := NewAgent(mem, promptToolBackend{}, &textOnlyProvider{}, "You are SelfMind.", 1, 1, nil)
-		p, err := agent.buildSystemPrompt(context.Background(), "tenant", DefaultTaskStrategy(), "do some work")
+		p, _, err := agent.buildSystemPrompt(context.Background(), "tenant", DefaultTaskStrategy(), "do some work")
 		if err != nil {
 			t.Fatal(err)
 		}

@@ -39,6 +39,25 @@ type MaintenanceJob struct {
 	UpdatedAt       time.Time
 }
 
+// EnqueueMaintenanceJob creates a standalone durable job outside the
+// FinishRun transaction (execution-quality W7: background skill review and
+// other daemon maintenance kinds). The (key, version) primary key makes the
+// enqueue idempotent — a duplicate returns false without touching the
+// existing row, which is the dedup half of the durable-review contract.
+func (s *Store) EnqueueMaintenanceJob(ctx context.Context, tenantID, key string, version int, payload string) (bool, error) {
+	now := time.Now().Unix()
+	res, err := s.db.ExecContext(ctx,
+		`INSERT OR IGNORE INTO maintenance_jobs
+		   (run_id, analyzer_version, tenant_id, status, payload_json, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		key, version, normalizeTenant(tenantID), MaintenanceJobPending, payload, now, now)
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	return n > 0, nil
+}
+
 // SetMaintenanceJobPayload stores the immutable replay input captured by the
 // normal finalization path. It is deliberately separate from FinishRun because
 // the control store does not know the gateway request or structured outcome.

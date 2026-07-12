@@ -2,6 +2,8 @@ package gateway
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net/http"
@@ -173,6 +175,18 @@ func Run(ctx context.Context, opts Options) error {
 	// runs (and their tasks) interrupted. Runs in the coordinator's active-run
 	// registry are always excluded, so this only catches runs whose executor
 	// died without finalizing.
+	// Durable background review (W7): review requests enqueue as idempotent
+	// maintenance jobs (payload-hash key) and execute in the maintenance
+	// worker with bounded retries; a daemon crash no longer loses them.
+	if agent.ReviewEngine != nil {
+		gatewayAPI.SkillReviewer = agent.ReviewEngine
+		agent.ReviewEngine.SetEnqueue(func(tenantID, payloadJSON string) bool {
+			digest := sha256.Sum256([]byte(payloadJSON))
+			key := "skillreview_" + hex.EncodeToString(digest[:12])
+			inserted, err := controlStore.EnqueueMaintenanceJob(context.Background(), tenantID, key, httpapi.SkillReviewJobVersion, payloadJSON)
+			return err == nil && inserted
+		})
+	}
 	stopStuckRunSweeper := gatewayAPI.StartStuckRunSweeper(ctx)
 	defer stopStuckRunSweeper()
 	stopMaintenanceWorker := gatewayAPI.StartMaintenanceWorker(ctx)
@@ -195,7 +209,7 @@ func Run(ctx context.Context, opts Options) error {
 	// start the scheduler. Scheduled jobs now run real agent turns and deliver
 	// results to their channel (e.g. a daily summary pushed to WeChat).
 	if gwDeps.CronScheduler != nil {
-		gwDeps.CronScheduler.SetExecutor(httpapi.NewCronExecutor(gatewayAPI))
+		gwDeps.CronScheduler.SetExecutor(httpapi.NewCronExecutor(gatewayAPI, gwDeps.CronScheduler))
 		if err := app.StartCron(gwDeps.CronScheduler); err != nil {
 			log.Warn("gateway: cron scheduler did not start", "error", err)
 		}

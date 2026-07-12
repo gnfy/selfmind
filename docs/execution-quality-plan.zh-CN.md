@@ -215,7 +215,10 @@ Codex 的做法是四层有界但绝不落盘：采集端 1MiB HeadTailBuffer（
 
 ---
 
-## W5 ContextComposer 组装时记账（低优）
+## W5 ContextComposer 组装时记账（低优）—— ✅ 已实施 2026-07-12
+
+> buildSystemPrompt 逐段记账（类别+token+stable/volatile），breakdown 事件改用
+> 精确记账并新增 stable/volatile 字段，`/diag context` 显示缓存前缀边界。
 
 薄包装是刻意取舍，不引入插件化 slice 框架。唯一值得做的增量：Compose 从
 "组装后估算"改为**组装时记账**——每个切片在拼接时记录
@@ -223,14 +226,21 @@ Codex 的做法是四层有界但绝不落盘：采集端 1MiB HeadTailBuffer（
 记账值（准确），并为 P1-3 的稳定前缀提供权威边界。行为不变，只是观测从
 估算变精确。~150 行。与 W2 的 `/diag context` 天然配套，可并入 W2 一起做。
 
-## W6 Cron 绑定 TaskID（低优，小改动）
+## W6 Cron 绑定 TaskID（低优，小改动）—— ✅ 已实施 2026-07-12
+
+> `cron_jobs.task_id` 幂等迁移；首次成功执行回写学到的 task；后续触发作为显式
+> attach 证据；label 归档自动清除重学。
 
 `cron_jobs` 加可空 `task_id`；执行时若非空且 label 未归档 → 作为显式
 attach 证据（等价 caller task_id）；首次执行由 labeler TITLE 命名后回写
 task_id。日报类任务从此稳定归入同一 label。注意这只是显示/归档整洁问题
 （P3 后 label 不管上下文），做的价值是 `/tasks` 视图干净。~120 行。
 
-## W7 skill review 迁入周期维护器（低优）
+## W7 skill review 迁入周期维护器（低优）—— ✅ 已实施 2026-07-12
+
+> daemon 内 SpawnReview 改为入队幂等 maintenance_job（payload 哈希键、版本
+> 命名空间 100），维护 worker 每 pass ≤2 个 CAS 认领执行、失败 10 分钟重试、
+> 5 次封顶；无入队接线的环境（eval/测试）保持原地执行路径。
 
 `background_review` 触发从即时 goroutine 改为 `maintenance_jobs` 同款
 durable job（去重 UNIQUE 键、CAS 认领、限流、有界重试），挂进 daemon 周期

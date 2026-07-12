@@ -2,6 +2,7 @@ package kernel
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"regexp"
 	"strings"
@@ -22,6 +23,9 @@ type BackgroundReviewEngine struct {
 	maxRetries     int
 	useMemoryFence bool
 	notifyCh       chan string
+	// enqueue, when set, hands a serialized ReviewJobPayload to the durable
+	// maintenance queue instead of spawning an immediate goroutine (W7).
+	enqueue func(tenantID, payloadJSON string) bool
 }
 
 func NewBackgroundReviewEngine(mem *memory.MemoryManager, backend AgentBackend, provider llm.Provider, cfg EvolutionConfig, maxIter, maxRetries int) *BackgroundReviewEngine {
@@ -53,6 +57,55 @@ func (e *BackgroundReviewEngine) SetUseMemoryFence(enabled bool) {
 	e.useMemoryFence = enabled
 }
 
+// SetEnqueue installs the durable-job hand-off (execution-quality W7). When
+// set, SpawnReview serializes a bounded snapshot and enqueues it instead of
+// spawning a goroutine — the daemon maintenance worker executes it with
+// dedup, rate limiting, and bounded retries, and a crash no longer loses the
+// review. Nil (tests, eval, CLI-only) keeps the immediate in-process path.
+func (e *BackgroundReviewEngine) SetEnqueue(fn func(tenantID, payloadJSON string) bool) {
+	e.enqueue = fn
+}
+
+// ReviewJobPayload is the durable snapshot of one requested review — the
+// bounded message tail plus flags, everything ExecuteReview needs to run
+// later in the maintenance worker.
+type ReviewJobPayload struct {
+	Channel      string          `json:"channel"`
+	Messages     []ReviewMessage `json:"messages"`
+	ReviewMemory bool            `json:"review_memory"`
+	ReviewSkills bool            `json:"review_skills"`
+}
+
+type ReviewMessage struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+}
+
+const (
+	reviewPayloadTailMessages = 8
+	reviewPayloadMessageChars = 2000
+)
+
+func reviewPayloadSnapshot(messages []llm.Message) []ReviewMessage {
+	// Skip the system prompt (the review agent builds its own) and keep a
+	// bounded recent tail — the same window the review prompt cares about.
+	var tail []ReviewMessage
+	for _, m := range messages {
+		if m.Role == "system" {
+			continue
+		}
+		content := m.Content
+		if len(content) > reviewPayloadMessageChars {
+			content = textutil.Truncate(content, reviewPayloadMessageChars)
+		}
+		tail = append(tail, ReviewMessage{Role: m.Role, Content: content})
+	}
+	if len(tail) > reviewPayloadTailMessages {
+		tail = tail[len(tail)-reviewPayloadTailMessages:]
+	}
+	return tail
+}
+
 func (e *BackgroundReviewEngine) SpawnReview(tenantID, channel string, messages []llm.Message, reviewMemory, reviewSkills bool) {
 	if e == nil || !e.config.Enabled || e.provider == nil || e.backend == nil {
 		return
@@ -60,47 +113,82 @@ func (e *BackgroundReviewEngine) SpawnReview(tenantID, channel string, messages 
 	if !reviewMemory && !reviewSkills {
 		return
 	}
+	if e.enqueue != nil {
+		payload := ReviewJobPayload{
+			Channel:      channel,
+			Messages:     reviewPayloadSnapshot(messages),
+			ReviewMemory: reviewMemory,
+			ReviewSkills: reviewSkills,
+		}
+		if raw, err := json.Marshal(payload); err == nil && e.enqueue(tenantID, string(raw)) {
+			return
+		}
+		// Enqueue failure falls through to the immediate path — a review is
+		// best-effort learning either way, but never silently dropped here.
+	}
 	snapshot := append([]llm.Message(nil), messages...)
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 		defer cancel()
+		e.ExecuteReview(ctx, tenantID, channel, snapshot, reviewMemory, reviewSkills)
+	}()
+}
 
-		restricted := &restrictedReviewBackend{
-			inner: e.backend,
-			allowed: map[string]bool{
-				"memory":         true,
-				"skill_manage":   true,
-				"skills_list":    true,
-				"skill_view":     true,
-				"session_search": true,
-			},
+// RunReviewFromPayload executes one durable review job (the maintenance
+// worker path). The returned summary doubles as the job's result hash input.
+func (e *BackgroundReviewEngine) RunReviewFromPayload(ctx context.Context, tenantID, payloadJSON string) (string, error) {
+	if e == nil || !e.config.Enabled || e.provider == nil || e.backend == nil {
+		return "", fmt.Errorf("background review engine is not configured")
+	}
+	var payload ReviewJobPayload
+	if err := json.Unmarshal([]byte(payloadJSON), &payload); err != nil {
+		return "", fmt.Errorf("invalid review payload: %w", err)
+	}
+	messages := make([]llm.Message, 0, len(payload.Messages))
+	for _, m := range payload.Messages {
+		messages = append(messages, llm.Message{Role: m.Role, Content: m.Content})
+	}
+	return e.ExecuteReview(ctx, tenantID, payload.Channel, messages, payload.ReviewMemory, payload.ReviewSkills), nil
+}
+
+// ExecuteReview runs one review synchronously and returns the user-facing
+// summary. Shared by the legacy in-process goroutine and the durable worker.
+func (e *BackgroundReviewEngine) ExecuteReview(ctx context.Context, tenantID, channel string, snapshot []llm.Message, reviewMemory, reviewSkills bool) string {
+	restricted := &restrictedReviewBackend{
+		inner: e.backend,
+		allowed: map[string]bool{
+			"memory":         true,
+			"skill_manage":   true,
+			"skills_list":    true,
+			"skill_view":     true,
+			"session_search": true,
+		},
+	}
+	reviewAgent := NewAgent(e.mem, restricted, e.provider, backgroundReviewSoul(reviewMemory, reviewSkills), e.maxIterations, e.maxRetries, nil)
+	reviewAgent.SetUseMemoryFence(e.useMemoryFence)
+	resp, _, err := reviewAgent.RunConversation(ctx, tenantID, channel+":background_review", buildBackgroundReviewPrompt(snapshot, reviewMemory, reviewSkills))
+	msg := summarizeReviewResult(resp, err)
+	// Hallucinated-compliance guard: models sometimes emit the "skill
+	// updated: <name>" summary WITHOUT ever calling skill_manage. Never
+	// forward a change claim that reality does not confirm — verify each
+	// claimed skill through the same restricted backend before notifying.
+	if err == nil {
+		if unverified := unverifiedSkillClaims(restricted, tenantID, resp); len(unverified) > 0 {
+			log.Warn("background review claimed a skill change that did not happen",
+				"claimed_skills", strings.Join(unverified, ", "),
+				"tenant", tenantID,
+				"channel", channel)
+			msg = fmt.Sprintf("claimed a skill change that did not happen (skill %s not found after review; skill_manage change not verified); recorded as no-change",
+				quoteNames(unverified))
 		}
-		reviewAgent := NewAgent(e.mem, restricted, e.provider, backgroundReviewSoul(reviewMemory, reviewSkills), e.maxIterations, e.maxRetries, nil)
-		reviewAgent.SetUseMemoryFence(e.useMemoryFence)
-		resp, _, err := reviewAgent.RunConversation(ctx, tenantID, channel+":background_review", buildBackgroundReviewPrompt(snapshot, reviewMemory, reviewSkills))
-		msg := summarizeReviewResult(resp, err)
-		// Hallucinated-compliance guard: models sometimes emit the "skill
-		// updated: <name>" summary WITHOUT ever calling skill_manage. Never
-		// forward a change claim that reality does not confirm — verify each
-		// claimed skill through the same restricted backend before notifying.
-		if err == nil {
-			if unverified := unverifiedSkillClaims(restricted, tenantID, resp); len(unverified) > 0 {
-				log.Warn("background review claimed a skill change that did not happen",
-					"claimed_skills", strings.Join(unverified, ", "),
-					"tenant", tenantID,
-					"channel", channel)
-				msg = fmt.Sprintf("claimed a skill change that did not happen (skill %s not found after review; skill_manage change not verified); recorded as no-change",
-					quoteNames(unverified))
-			}
-		}
-		if e.notifyCh == nil {
-			return
-		}
+	}
+	if e.notifyCh != nil {
 		select {
 		case e.notifyCh <- "review:" + msg:
 		default:
 		}
-	}()
+	}
+	return msg
 }
 
 type restrictedReviewBackend struct {

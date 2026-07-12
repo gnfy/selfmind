@@ -244,3 +244,35 @@ func TestSetTimezone(t *testing.T) {
 		t.Fatal("invalid tz should error")
 	}
 }
+
+// TestTaskIDBindingRoundTrip: SetTaskID persists the learned label binding
+// (execution-quality W6), ListJobs reads it back, and clearing works.
+func TestTaskIDBindingRoundTrip(t *testing.T) {
+	s := newTestScheduler(t)
+	ctx := context.Background()
+	id, err := s.AddJob(ctx, &CronJob{
+		Name: "daily-report", CronExpr: "0 9 * * *", Prompt: "日报",
+		TenantID: "default", Channel: "cli", Enabled: false,
+	})
+	if err != nil {
+		t.Fatalf("add job: %v", err)
+	}
+	if err := s.SetTaskID(ctx, id, "task_abc123"); err != nil {
+		t.Fatalf("set task id: %v", err)
+	}
+	jobs, err := s.ListJobs(ctx, "default")
+	if err != nil || len(jobs) != 1 {
+		t.Fatalf("list jobs: %v %d", err, len(jobs))
+	}
+	if jobs[0].TaskID != "task_abc123" {
+		t.Fatalf("task binding did not round-trip: %+v", jobs[0])
+	}
+	// Clearing (archived label) resets to the pre-binding behavior.
+	if err := s.SetTaskID(ctx, id, ""); err != nil {
+		t.Fatalf("clear task id: %v", err)
+	}
+	jobs, _ = s.ListJobs(ctx, "default")
+	if jobs[0].TaskID != "" {
+		t.Fatalf("clear must empty the binding: %+v", jobs[0])
+	}
+}

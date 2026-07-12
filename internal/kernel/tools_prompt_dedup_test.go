@@ -70,7 +70,7 @@ func (promptToolBackend) GetToolDefinitions() []map[string]interface{} {
 func TestToolPromptDedupForNativeProviders(t *testing.T) {
 	build := func(p llm.Provider) string {
 		agent := NewAgent(memory.NewMemoryManager(nil), promptToolBackend{}, p, "test", 1, 1, nil)
-		prompt, _ := agent.buildSystemPrompt(context.Background(), "tenant", DefaultTaskStrategy(), "check the repo")
+		prompt, _, _ := agent.buildSystemPrompt(context.Background(), "tenant", DefaultTaskStrategy(), "check the repo")
 		return prompt
 	}
 

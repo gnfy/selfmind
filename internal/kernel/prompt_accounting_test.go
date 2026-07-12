@@ -1,0 +1,69 @@
+package kernel
+
+import (
+	"context"
+	"testing"
+
+	"selfmind/internal/kernel/llm"
+)
+
+// TestBreakdownFromSections: assembly-time accounting maps categories and the
+// stable/volatile split without re-parsing the joined prompt (W5).
+func TestBreakdownFromSections(t *testing.T) {
+	sections := []PromptSection{
+		{Category: "identity", Tokens: 100, Stable: true},
+		{Category: "tools", Tokens: 200, Stable: true},
+		{Category: "project_context", Tokens: 300},
+		{Category: "memory", Tokens: 50},
+		{Category: "runtime", Tokens: 80},
+	}
+	messages := []llm.Message{
+		{Role: "system", Content: "ignored"},
+		{Role: "user", Content: "hello world"},
+	}
+	b := BreakdownFromSections(sections, messages)
+	if b.Identity != 100 || b.Tools != 200 || b.ProjectContext != 300 || b.Memory != 50 || b.Runtime != 80 {
+		t.Fatalf("category mapping wrong: %+v", b)
+	}
+	if b.History <= 0 {
+		t.Fatal("non-system messages must count as history")
+	}
+	if b.Total != 730+b.History {
+		t.Fatalf("total mismatch: %+v", b)
+	}
+	stable, volatile := StableVolatileTokens(sections)
+	if stable != 300 || volatile != 430 {
+		t.Fatalf("stable/volatile split wrong: %d/%d", stable, volatile)
+	}
+}
+
+// TestBuildSystemPromptAccountsSections: the real assembly returns sections
+// whose token sum tracks the joined prompt, and the stable prefix is
+// non-empty (identity + guidance at minimum).
+func TestBuildSystemPromptAccountsSections(t *testing.T) {
+	agent := NewAgent(nil, nil, &fakeSummarizer{reply: "x"}, "You are SelfMind.", 4, 1, nil)
+	prompt, sections, err := agent.buildSystemPrompt(context.Background(), "tenant", DefaultTaskStrategy(), "hello")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sections) == 0 {
+		t.Fatal("expected accounted sections")
+	}
+	sum := 0
+	for _, s := range sections {
+		if s.Tokens <= 0 {
+			t.Fatalf("section with non-positive tokens: %+v", s)
+		}
+		sum += s.Tokens
+	}
+	promptTokens := estimateTokens(prompt)
+	// Join separators make the totals differ slightly; accounting must stay
+	// within a small tolerance of the joined prompt estimate.
+	if sum < promptTokens*9/10 || sum > promptTokens*11/10 {
+		t.Fatalf("accounted %d tokens vs joined prompt %d — drifted", sum, promptTokens)
+	}
+	stable, _ := StableVolatileTokens(sections)
+	if stable == 0 {
+		t.Fatal("stable prefix must be accounted")
+	}
+}

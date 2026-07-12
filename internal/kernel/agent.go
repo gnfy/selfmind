@@ -601,8 +601,11 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 	ctx = a.selectRuntimeContext(ctx, tenantID, channel, initialPrompt, strategy, eventCh)
 
 	// 0. Build dynamic system prompt (including facts + project context)
-	systemPrompt, _ := a.buildSystemPrompt(ctx, tenantID, strategy, initialPrompt)
-	systemPrompt += strategy.SystemPromptNote()
+	systemPrompt, promptSections, _ := a.buildSystemPrompt(ctx, tenantID, strategy, initialPrompt)
+	if note := strategy.SystemPromptNote(); note != "" {
+		systemPrompt += note
+		promptSections = append(promptSections, PromptSection{Category: "runtime", Tokens: estimateTokens(note)})
+	}
 
 	// 0.1 Inject project context files (.selfmind.md, AGENTS.md, etc.)
 	if a.contextScanner != nil {
@@ -622,6 +625,7 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 			ctxPrompt := a.contextScanner.BuildContextPrompt(ctxFiles)
 			if ctxPrompt != "" {
 				systemPrompt += "\n\n" + ctxPrompt
+				promptSections = append(promptSections, PromptSection{Category: "project_context", Tokens: estimateTokens(ctxPrompt)})
 			}
 		}
 	}
@@ -645,13 +649,19 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 		return "", totalUsage, fmt.Errorf("build messages: %w", err)
 	}
 
-	// Context breakdown (P1-2): attribute the turn's prompt tokens to their
-	// components so /diag can show where the window goes on a long session. One
-	// bounded event per turn; the gateway persists it and /diag reads the
-	// newest one back. Best-effort — never affects the run.
+	// Context breakdown (P1-2, accounted at assembly since W5): attribute the
+	// turn's prompt tokens to their components so /diag can show where the
+	// window goes on a long session. One bounded event per turn; the gateway
+	// persists it and /diag reads the newest one back. Best-effort — never
+	// affects the run. The stable/volatile split is the authoritative P1-3
+	// cacheable-prefix boundary.
+	breakdownPayload := BreakdownFromSections(promptSections, messages).Payload()
+	stableTok, volatileTok := StableVolatileTokens(promptSections)
+	breakdownPayload["stable"] = stableTok
+	breakdownPayload["volatile"] = volatileTok
 	EmitAgentEvent(eventCh, AgentEvent{
 		Type:    "context.breakdown",
-		Payload: ComputeContextBreakdown(systemPrompt, messages).Payload(),
+		Payload: breakdownPayload,
 	})
 
 	history := TaskHistory{
@@ -1627,10 +1637,11 @@ func sha256Hash(s string) string {
 }
 
 func (a *Agent) BuildSystemPrompt(ctx context.Context, tenantID string) (string, error) {
-	return a.buildSystemPrompt(ctx, tenantID, DefaultTaskStrategy(), "")
+	prompt, _, err := a.buildSystemPrompt(ctx, tenantID, DefaultTaskStrategy(), "")
+	return prompt, err
 }
 
-func (a *Agent) buildSystemPrompt(ctx context.Context, tenantID string, strategy TaskStrategy, userInput string) (string, error) {
+func (a *Agent) buildSystemPrompt(ctx context.Context, tenantID string, strategy TaskStrategy, userInput string) (string, []PromptSection, error) {
 	// P1-3: split the prompt into a STABLE prefix (byte-identical across turns
 	// for a given workspace/tenant/model) and a VOLATILE suffix (task runtime,
 	// memory, recall, per-turn conditionals). Providers cache on prefix match,
@@ -1638,19 +1649,31 @@ func (a *Agent) buildSystemPrompt(ctx context.Context, tenantID string, strategy
 	// cacheable prefix. Content is unchanged — only grouped by mutability.
 	var stable []string   // soul, guidance, tool contract+defs, skills
 	var volatile []string // runtime context, memory/profile, per-turn conditionals
+	// W5: every append is accounted at assembly time (category + token
+	// estimate + mutability), so the context.breakdown event reports what was
+	// actually joined instead of a marker-scan estimate.
+	var sections []PromptSection
+	addStable := func(category, content string) {
+		stable = append(stable, content)
+		sections = append(sections, PromptSection{Category: category, Tokens: estimateTokens(content), Stable: true})
+	}
+	addVolatile := func(category, content string) {
+		volatile = append(volatile, content)
+		sections = append(sections, PromptSection{Category: category, Tokens: estimateTokens(content), Stable: false})
+	}
 
 	// 1. Core Persona (Soul) — stable.
 	if a.soul != "" {
-		stable = append(stable, a.soul)
+		addStable("identity", a.soul)
 	}
-	stable = append(stable, selfImprovementGuidance())
+	addStable("identity", selfImprovementGuidance())
 
 	// Runtime context (workspace + task/run/recall state) is VOLATILE — it
 	// changes every turn, so it goes in the suffix, never between stable blocks
 	// (where it would bust the cacheable prefix, the pre-P1-3 bug).
 	if bundle, ok := RuntimeContextBundleFromContext(ctx); ok {
 		if prompt := bundle.Prompt(8000); strings.TrimSpace(prompt) != "" {
-			volatile = append(volatile, prompt)
+			addVolatile("runtime", prompt)
 		}
 	} else {
 		if workspace, ok := WorkspaceContextFromContext(ctx); ok {
@@ -1663,12 +1686,12 @@ func (a *Agent) buildSystemPrompt(ctx context.Context, tenantID string, strategy
 			sb.WriteString("Use workspace_root as the default directory for local tools and relative paths.\n")
 			sb.WriteString("When the user asks about this project, current repo, current codebase, or names a project without a path, inspect workspace_root first.\n")
 			sb.WriteString("If the request arrives from IM and no workspace is available, ask the user to select or bind a workspace instead of guessing a local path.")
-			volatile = append(volatile, sb.String())
+			addVolatile("runtime", sb.String())
 		}
 
 		if runtime, ok := TaskRuntimeContextFromContext(ctx); ok {
 			if prompt := runtime.Prompt(6000); strings.TrimSpace(prompt) != "" {
-				volatile = append(volatile, prompt)
+				addVolatile("runtime", prompt)
 			}
 		}
 	}
@@ -1726,16 +1749,16 @@ func (a *Agent) buildSystemPrompt(ctx context.Context, tenantID string, strategy
 					sb.WriteString("\n")
 				}
 			}
-			stable = append(stable, sb.String())
+			addStable("tools", sb.String())
 
 			// Work-quality discipline (explore, prefer patch, verify) applies to
 			// all tool-bearing turns — stable.
-			stable = append(stable, taskExecutionGuidance())
-			stable = append(stable, progressNarrationGuidance())
+			addStable("tools", taskExecutionGuidance())
+			addStable("tools", progressNarrationGuidance())
 			// Frontend guidance is CONDITIONAL on the user's input, so it is
 			// volatile (per-turn) and must not sit in the stable prefix.
 			if isFrontendTask(userInput) {
-				volatile = append(volatile, frontendQualityGuidance())
+				addVolatile("runtime", frontendQualityGuidance())
 			}
 
 			// Surface learned skills so the agent applies what it already knows
@@ -1743,14 +1766,14 @@ func (a *Agent) buildSystemPrompt(ctx context.Context, tenantID string, strategy
 			// index changes only when skills change, so it is treated as stable.
 			if a.skillInventory != nil {
 				if block := strings.TrimSpace(a.skillInventory(tenantID)); block != "" {
-					stable = append(stable, block)
+					addStable("tools", block)
 				}
 			}
 		}
 	}
 
 	if a.memory == nil {
-		return strings.Join(append(stable, volatile...), "\n\n"), nil
+		return strings.Join(append(stable, volatile...), "\n\n"), sections, nil
 	}
 
 	// Read-path cutover (docs/memory-governance.zh-CN.md §5.1): prefer the
@@ -1816,7 +1839,7 @@ func (a *Agent) buildSystemPrompt(ctx context.Context, tenantID string, strategy
 			}
 			factBlock.WriteString("</MEMORY>")
 		}
-		volatile = append(volatile, factBlock.String())
+		addVolatile("memory", factBlock.String())
 	}
 
 	// Recall counts as use: refresh last_accessed_at so archival decisions see
@@ -1830,7 +1853,7 @@ func (a *Agent) buildSystemPrompt(ctx context.Context, tenantID string, strategy
 		}
 	}
 
-	return strings.Join(append(stable, volatile...), "\n\n"), nil
+	return strings.Join(append(stable, volatile...), "\n\n"), sections, nil
 }
 
 // loadMemoryForPrompt reads the person's memory for injection through the

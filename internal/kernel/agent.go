@@ -340,7 +340,7 @@ func (a *Agent) waitBeforeRetry(ctx context.Context, attempt int, err error) err
 func (a *Agent) chatResponseWithRetry(ctx context.Context, messages []llm.Message, strategy TaskStrategy) (*llm.ChatResponse, error) {
 	var lastErr error
 	max := a.retryAttempts()
-	messages = a.prepareMessagesForModel(messages)
+	messages = a.prepareMessagesForModel(ctx, messages)
 	for attempt := 1; attempt <= max; attempt++ {
 		req := llm.ChatRequest{Messages: messages, Tools: a.llmToolDefinitions(strategy)}
 		resp, err := a.activeLLM().Chat(ctx, req)
@@ -385,7 +385,7 @@ func (a *Agent) chatWithRetry(ctx context.Context, messages []llm.Message) (stri
 func (a *Agent) streamChatWithRetry(ctx context.Context, messages []llm.Message, strategy TaskStrategy) (<-chan llm.StreamEvent, error) {
 	var lastErr error
 	max := a.retryAttempts()
-	messages = a.prepareMessagesForModel(messages)
+	messages = a.prepareMessagesForModel(ctx, messages)
 	for attempt := 1; attempt <= max; attempt++ {
 		req := llm.ChatRequest{Messages: messages, Tools: a.llmToolDefinitions(strategy)}
 		ch, err := a.activeLLM().StreamChat(ctx, req)
@@ -410,11 +410,11 @@ func (a *Agent) streamChatWithRetry(ctx context.Context, messages []llm.Message,
 	return nil, fmt.Errorf("llm stream chat failed after %d attempts: %w", max, lastErr)
 }
 
-func (a *Agent) prepareMessagesForModel(messages []llm.Message) []llm.Message {
+func (a *Agent) prepareMessagesForModel(ctx context.Context, messages []llm.Message) []llm.Message {
 	if a == nil || a.contextEngine == nil {
 		return messages
 	}
-	return a.contextEngine.TruncateMessages(messages)
+	return a.contextEngine.TruncateMessagesCtx(ctx, messages)
 }
 
 func (a *Agent) prepareMessagesForContextRecovery(messages []llm.Message) []llm.Message {
@@ -669,6 +669,12 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 	}
 	actionToolsUsed := 0
 	toolUseCounts := map[string]int{}
+	// Artifact-backed tool results appended this turn, by message index and
+	// the iteration that produced them: after toolResultAgeIterations they are
+	// shrunk in place (losslessly — the artifact keeps the full output
+	// addressable) so old verbatim bodies stop crowding the window.
+	type agedToolMsg struct{ index, iteration int }
+	var artifactToolMsgs []agedToolMsg
 	toolBudgetRepairIssued := false
 	steerCh := steeringFromContext(ctx)
 	for i := 0; i < maxIterations; i++ {
@@ -952,10 +958,25 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 			incrementToolUseCounts(toolUseCounts, calls)
 			results := a.executeToolCalls(ctx, tenantID, eventCh, calls)
 
+			// Age out earlier artifact-backed tool results before appending
+			// fresh evidence: this iteration's output matters more than the
+			// verbatim body of one from 3+ iterations ago.
+			for _, aged := range artifactToolMsgs {
+				if i-aged.iteration < toolResultAgeIterations {
+					continue
+				}
+				if shrunk, ok := shrinkAgedToolResult(messages[aged.index].Content); ok {
+					messages[aged.index].Content = shrunk
+				}
+			}
+
 			// Append results in order
 			for _, res := range results {
 				history.Steps = append(history.Steps, res.step)
 				messages = append(messages, res.msg)
+				if res.msg.Role == "tool" && strings.Contains(res.msg.Content, toolArtifactNoteToken) {
+					artifactToolMsgs = append(artifactToolMsgs, agedToolMsg{index: len(messages) - 1, iteration: i})
+				}
 			}
 
 			// Evolution review: 工具调用计数触发（非阻塞）

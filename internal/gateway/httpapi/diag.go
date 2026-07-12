@@ -11,6 +11,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -142,7 +143,223 @@ func (d *Server) memoryDiagReply(ctx context.Context, identity *control.Identity
 	if d.MemoryConsolidator != nil {
 		mode = d.MemoryConsolidator.Mode()
 	}
-	return strings.TrimSpace(result) + "\nGovernance mode: " + mode, nil
+	reply := strings.TrimSpace(result) + "\nGovernance mode: " + mode
+	// Optional capability (W2): consolidation progress from the durable
+	// judgement checkpoints, when the consolidator implements it.
+	if summarizer, ok := d.MemoryConsolidator.(interface {
+		PassSummary(ctx context.Context, personID string) string
+	}); ok {
+		if line := summarizer.PassSummary(ctx, identity.PersonID); line != "" {
+			reply += "\n" + line
+		}
+	}
+	return reply, nil
+}
+
+// contextDiagReply is /diag context: where the last turn's prompt went
+// (expanded breakdown), what compaction bought, and what recall did — all
+// read back from persisted run events, zero model tokens (W2).
+func (d *Server) contextDiagReply(ctx context.Context, identity *control.IdentityContext) (string, error) {
+	if d == nil || d.Control == nil || identity == nil {
+		return "Context diagnostics unavailable.", nil
+	}
+	taskID := ""
+	if active := d.coordinator().currentActive(identity.PersonID); active != nil {
+		taskID = active.TaskID
+	} else if task, _ := d.Control.CurrentTask(ctx, identity.TenantID, identity.PersonID); task != nil {
+		taskID = task.ID
+	}
+	if taskID == "" {
+		return "Context diagnostics\nNo current task — send a message first, then re-run /diag context.", nil
+	}
+	events, err := d.Control.ListTaskEvents(ctx, taskID, 120)
+	if err != nil {
+		return "", err
+	}
+
+	var sb strings.Builder
+	sb.WriteString("Context diagnostics (current task)\n")
+
+	if line := contextBreakdownDetail(events); line != "" {
+		sb.WriteString(line)
+	} else {
+		sb.WriteString("Breakdown: no context.breakdown event recorded yet\n")
+	}
+	sb.WriteString(latestCompactionLine(events))
+	sb.WriteString(latestRecallLine(events))
+	return strings.TrimSpace(sb.String()), nil
+}
+
+// contextBreakdownDetail is the multi-line expansion of the newest
+// context.breakdown event (the /diag one-liner, one section per line).
+func contextBreakdownDetail(events []control.Event) string {
+	for _, e := range events {
+		if e.Type != "context.breakdown" {
+			continue
+		}
+		var raw map[string]int
+		if json.Unmarshal(e.Payload, &raw) != nil || raw["total"] <= 0 {
+			return ""
+		}
+		total := raw["total"]
+		var sb strings.Builder
+		fmt.Fprintf(&sb, "Breakdown (last turn, ~%d tok):\n", total)
+		for _, section := range []struct{ key, label string }{
+			{"identity", "identity/soul"},
+			{"tools", "tool contract"},
+			{"project_context", "project context (AGENTS.md)"},
+			{"memory", "person memory"},
+			{"runtime", "runtime context (task/workspace/recall)"},
+			{"history", "history"},
+		} {
+			fmt.Fprintf(&sb, "- %-38s ~%d tok (%d%%)\n", section.label, raw[section.key], raw[section.key]*100/total)
+		}
+		return sb.String()
+	}
+	return ""
+}
+
+// latestCompactionLine renders the newest context.compacted event, or an
+// explicit "none" so the user can tell "never compacted" from "no data".
+func latestCompactionLine(events []control.Event) string {
+	for _, e := range events {
+		if e.Type != "context.compacted" {
+			continue
+		}
+		var p struct {
+			BeforeTokens     int   `json:"before_tokens"`
+			AfterTokens      int   `json:"after_tokens"`
+			MessagesReplaced int   `json:"messages_replaced"`
+			DurationMS       int64 `json:"duration_ms"`
+		}
+		if json.Unmarshal(e.Payload, &p) != nil || p.BeforeTokens <= 0 {
+			continue
+		}
+		return fmt.Sprintf("Compaction (last): ~%d → ~%d tok, %d messages folded into one summary, %dms\n",
+			p.BeforeTokens, p.AfterTokens, p.MessagesReplaced, p.DurationMS)
+	}
+	return "Compaction: not triggered in recent turns\n"
+}
+
+// latestRecallLine renders the newest context.recall event — hits, skip
+// reason, and cost. Zero-hit turns emit too, so absence here means recall is
+// not wired at all.
+func latestRecallLine(events []control.Event) string {
+	for _, e := range events {
+		if e.Type != "context.recall" {
+			continue
+		}
+		var p struct {
+			Sources   map[string]int `json:"sources"`
+			Slices    int            `json:"slices"`
+			Expanded  bool           `json:"expanded"`
+			Skipped   string         `json:"skipped"`
+			ElapsedMS int64          `json:"elapsed_ms"`
+		}
+		if json.Unmarshal(e.Payload, &p) != nil {
+			continue
+		}
+		if p.Skipped != "" {
+			return fmt.Sprintf("Recall (last turn): skipped (%s)\n", p.Skipped)
+		}
+		parts := make([]string, 0, len(p.Sources))
+		for name, count := range p.Sources {
+			parts = append(parts, fmt.Sprintf("%s=%d", name, count))
+		}
+		sort.Strings(parts)
+		src := strings.Join(parts, ", ")
+		if src == "" {
+			src = "no hits"
+		}
+		expanded := ""
+		if p.Expanded {
+			expanded = ", query expanded"
+		}
+		return fmt.Sprintf("Recall (last turn): %d slice(s) [%s]%s, %dms\n", p.Slices, src, expanded, p.ElapsedMS)
+	}
+	return "Recall: no recall event recorded yet\n"
+}
+
+// tasksDiagReply is /diag tasks: label hygiene counts plus a bounded
+// "possibly stuck" list — open work whose last activity is old enough that
+// the owner probably forgot it, never an automatic state change (W2).
+func (d *Server) tasksDiagReply(ctx context.Context, identity *control.IdentityContext) (string, error) {
+	if d == nil || d.Control == nil || identity == nil {
+		return "Task diagnostics unavailable.", nil
+	}
+	var sb strings.Builder
+	sb.WriteString("Task diagnostics\n")
+	if stats, err := d.Control.ReadTaskGovernanceStats(ctx, identity.TenantID, identity.PersonID); err == nil {
+		fmt.Fprintf(&sb, "Labels: open %d, terminal %d, archived %d, pinned %d, inbox runs %d\n",
+			stats.Open, stats.Terminal, stats.Archived, stats.Pinned, stats.InboxRuns)
+	}
+	queued, _ := d.Control.CountQueued(ctx, identity.TenantID, identity.PersonID, control.QueueStatusQueued)
+	approvals, _, _ := d.pendingApprovalsForDisplay(ctx, identity)
+	clarifies, _ := d.Control.ListClarifyRequests(ctx, identity.TenantID, identity.PersonID, "pending", 20)
+	fmt.Fprintf(&sb, "Waiting: queued %d, pending approvals %d, pending questions %d\n", queued, len(approvals), len(clarifies))
+
+	// Possibly-stuck scan over the most recent open cards (bounded, read-only).
+	if cards, err := d.Control.ListTaskCards(ctx, identity.TenantID, identity.PersonID, 50); err == nil {
+		lines := stuckTaskLines(cards, time.Now())
+		if len(lines) == 0 {
+			sb.WriteString("Possibly stuck: none\n")
+		} else {
+			fmt.Fprintf(&sb, "Possibly stuck (%d): oldest first — /resume to continue, /task <id> to inspect\n", len(lines))
+			for _, line := range lines {
+				sb.WriteString(line)
+			}
+		}
+	}
+	return strings.TrimSpace(sb.String()), nil
+}
+
+// Stuck thresholds: open work parked without a pending human decision for
+// this long is probably forgotten, not in progress. Read-model only — the
+// state machine is untouched (the stuck-run invariant belongs to recovery).
+const (
+	stuckInterruptedAfter = 48 * time.Hour
+	stuckInProgressAfter  = 7 * 24 * time.Hour
+)
+
+// stuckTaskLines renders the possibly-stuck task list (≤5, oldest first)
+// from task cards. Pure so the thresholds stay unit-testable.
+func stuckTaskLines(cards []control.TaskCard, now time.Time) []string {
+	type stuck struct {
+		card control.TaskCard
+		age  time.Duration
+	}
+	var found []stuck
+	for _, card := range cards {
+		status := strings.ToLower(strings.TrimSpace(card.Status))
+		age := now.Sub(card.UpdatedAt)
+		switch status {
+		case "interrupted", "blocked":
+			if age > stuckInterruptedAfter {
+				found = append(found, stuck{card: card, age: age})
+			}
+		case "in_progress":
+			if age > stuckInProgressAfter {
+				found = append(found, stuck{card: card, age: age})
+			}
+		}
+	}
+	sort.Slice(found, func(i, j int) bool { return found[i].age > found[j].age })
+	lines := make([]string, 0, 5)
+	for i, item := range found {
+		if i >= 5 {
+			break
+		}
+		lines = append(lines, fmt.Sprintf("- [%s] %s (%s, idle %s)\n",
+			item.card.Status, truncate(toOneLine(item.card.Title), 48), item.card.TaskID, formatIdleAge(item.age)))
+	}
+	return lines
+}
+
+func formatIdleAge(age time.Duration) string {
+	if age >= 24*time.Hour {
+		return fmt.Sprintf("%dd", int(age.Hours()/24))
+	}
+	return fmt.Sprintf("%dh", int(age.Hours()))
 }
 
 // diagEventLabel keeps /diag useful on IM without exposing internal event

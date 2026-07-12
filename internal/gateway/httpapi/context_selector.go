@@ -86,6 +86,7 @@ func (c *RunCoordinator) selectedTaskRuntimeContext(ctx context.Context, task *c
 		selected.Artifacts = make([]kernel.TaskArtifactContext, 0, len(artifacts))
 		for _, artifact := range artifacts {
 			selected.Artifacts = append(selected.Artifacts, kernel.TaskArtifactContext{
+				ID:        artifact.ID,
 				Kind:      artifact.Kind,
 				Name:      artifact.Name,
 				URI:       artifact.URI,
@@ -127,29 +128,36 @@ func (c *RunCoordinator) selectedTaskRuntimeContext(ctx context.Context, task *c
 		if preLabel {
 			excludeTaskID = ""
 		}
-		if slices, stats := c.srv.Recall.Select(ctx, task.TenantID, task.PersonID, excludeTaskID, userMessage); len(slices) > 0 {
-			selected.RecallSlices = slices
-			runID := ""
-			if run != nil {
-				runID = run.ID
-			}
-			// Redacted observability: source counts + refs only, no excerpts,
-			// so /events and eval can see what recall did without leaking
-			// prior-session text into the event log.
-			_, _ = c.srv.Control.AppendEvent(ctx, control.Event{
-				TaskID:     task.ID,
-				RunID:      runID,
-				Type:       "context.recall",
-				Visibility: "task",
-				Channel:    fallback(channel, task.LastChannel),
-				Payload: mustJSON(map[string]interface{}{
-					"sources":  stats.Sources,
-					"refs":     stats.Refs,
-					"expanded": stats.Expanded,
-					"terms":    stats.Terms,
-				}),
-			})
+		slices, stats := c.srv.Recall.Select(ctx, task.TenantID, task.PersonID, excludeTaskID, userMessage)
+		selected.RecallSlices = slices
+		runID := ""
+		if run != nil {
+			runID = run.ID
 		}
+		// Redacted observability: source counts + refs only, no excerpts, so
+		// /events, /diag context, and eval can see what recall did without
+		// leaking prior-session text into the event log. Zero-hit and skipped
+		// turns emit too — "recall found nothing" and "recall never ran" are
+		// different diagnoses (W2).
+		payload := map[string]interface{}{
+			"sources":    stats.Sources,
+			"refs":       stats.Refs,
+			"expanded":   stats.Expanded,
+			"terms":      stats.Terms,
+			"slices":     len(slices),
+			"elapsed_ms": stats.ElapsedMS,
+		}
+		if stats.Skipped != "" {
+			payload["skipped"] = stats.Skipped
+		}
+		_, _ = c.srv.Control.AppendEvent(ctx, control.Event{
+			TaskID:     task.ID,
+			RunID:      runID,
+			Type:       "context.recall",
+			Visibility: "task",
+			Channel:    fallback(channel, task.LastChannel),
+			Payload:    mustJSON(payload),
+		})
 	}
 	return selected
 }

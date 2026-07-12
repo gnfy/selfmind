@@ -188,6 +188,31 @@ func (c *RunCoordinator) withResumeContext(ctx context.Context, identity *contro
 		}
 		sb.WriteString("Edit these existing files directly to continue; do not re-search the workspace or recreate them unless the user asks for a fresh start.\n")
 	}
+	// Spooled large tool outputs from earlier runs of this task (W1): the
+	// continuation can read any byte range by reference instead of re-running
+	// the commands that produced them.
+	if artifacts, err := store.ListTaskArtifacts(ctx, task.ID, 20); err == nil {
+		listed := 0
+		for _, artifact := range artifacts {
+			if artifact.Kind != "tool_output" || listed >= 5 {
+				continue
+			}
+			if listed == 0 {
+				sb.WriteString("large_tool_outputs (read with tool_output_view, do not re-run the commands):\n")
+			}
+			var meta struct {
+				Tool  string `json:"tool"`
+				Bytes int    `json:"bytes"`
+			}
+			_ = json.Unmarshal(artifact.Metadata, &meta)
+			tool := meta.Tool
+			if tool == "" {
+				tool = artifact.Name
+			}
+			fmt.Fprintf(&sb, "- artifact_id=%s tool=%s bytes=%d\n", artifact.ID, tool, meta.Bytes)
+			listed++
+		}
+	}
 	if len(events) > 0 {
 		sb.WriteString("recent_events:\n")
 		for _, event := range events {

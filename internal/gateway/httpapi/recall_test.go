@@ -168,11 +168,21 @@ func TestRecallUnrelatedMessageNoSlices(t *testing.T) {
 	if len(selected.RecallSlices) != 0 {
 		t.Fatalf("unrelated message must produce no recall slices, got %+v", selected.RecallSlices)
 	}
+	// Zero-hit turns still emit the observability event (W2): "recall found
+	// nothing" must be distinguishable from "recall never ran" in /diag.
 	events, _ := store.ListTaskEvents(context.Background(), task.ID, 20)
-	for _, event := range events {
-		if event.Type == "context.recall" {
-			t.Fatalf("no context.recall event expected when nothing is recalled")
+	var recallEvent *control.Event
+	for i := range events {
+		if events[i].Type == "context.recall" {
+			recallEvent = &events[i]
+			break
 		}
+	}
+	if recallEvent == nil {
+		t.Fatal("zero-hit recall must still emit a context.recall event")
+	}
+	if !strings.Contains(string(recallEvent.Payload), `"slices":0`) {
+		t.Fatalf("zero-hit event must record slices=0: %s", recallEvent.Payload)
 	}
 }
 

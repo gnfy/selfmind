@@ -66,6 +66,12 @@ type Server struct {
 	// (docs/memory-governance.zh-CN.md §4). Nil disables governance entirely;
 	// the loop is started by the gateway runner via StartMemoryGovernance.
 	MemoryConsolidator MemoryConsolidator
+	// ToolOutputDir is the spool root for over-budget tool outputs
+	// (execution-quality W1): each run's sink writes
+	// <ToolOutputDir>/<personID>/<artifactID>.txt and the tool_output_view
+	// tool reads them back person-scoped. Empty disables spooling (truncation
+	// notes stay plain head/tail).
+	ToolOutputDir string
 
 	mu           sync.Mutex
 	draining     bool

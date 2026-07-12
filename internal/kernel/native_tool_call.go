@@ -285,7 +285,7 @@ func (a *Agent) executeSingleToolCall(ctx context.Context, tenantID string, even
 		}
 	}
 
-	packaged := packageToolResult(name, result)
+	packaged := packageToolResultCtx(ctx, name, result)
 	if eventCh != nil {
 		emitToolEndEventWithDuration(eventCh, name, call.ID, packaged, duration, nil)
 		emitStructuredToolEvent(eventCh, name, args, result, nil)
@@ -355,7 +355,7 @@ func parallelSafeTool(name string) bool {
 	switch name {
 	case "read_file", "cat", "ls_r", "list_files", "search_files", "grep",
 		"web_search", "web_extract", "session_search", "get_current_time",
-		"process_list", "process_poll":
+		"process_list", "process_poll", "tool_output_view":
 		return true
 	default:
 		return false

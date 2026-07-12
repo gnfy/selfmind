@@ -250,6 +250,9 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 			Root: workspace.LocalPath,
 		})
 	}
+	if sink := c.newToolArtifactSink(identity, task, run); sink != nil {
+		ctx = kernel.WithToolArtifactSink(ctx, sink)
+	}
 	ctx = kernel.WithTaskRuntimeContext(ctx, c.selectedTaskRuntimeContext(ctx, task, run, workspace, req.Channel, req.Content, attach.preLabel))
 	agentInput := c.withGatewayContext(req.Content, identity, task, workspace, req.Attachments)
 	agentInput = c.withResumeContext(ctx, identity, task, run, intent, agentInput)

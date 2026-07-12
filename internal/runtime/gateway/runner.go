@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"sync"
 	"syscall"
@@ -156,6 +157,10 @@ func Run(ctx context.Context, opts Options) error {
 		// Structured session APIs for thin clients (/v1/sessions): the daemon
 		// session index, person-partitioned (ACTIVE PLAN P0-3).
 		Sessions: mem,
+		// Spool root for over-budget tool outputs (execution-quality W1); must
+		// match the tool_output_view base dir wired in app.InitTools (both
+		// derive from the same resolved data dir).
+		ToolOutputDir: filepath.Join(dataDir, "tool-output"),
 	}
 	doneAfter, cancelledAfter := cfg.Tasks.AutoArchiveDurations()
 	gatewayAPI.TaskGovernance = httpapi.TaskGovernanceOptions{

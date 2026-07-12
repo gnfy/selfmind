@@ -1,8 +1,10 @@
 package kernel
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"selfmind/internal/platform/textutil"
@@ -12,6 +14,20 @@ const (
 	toolResultPreviewBytes = 800
 	toolResultModelBytes   = 24000
 	toolResultSeparator    = " · "
+	// toolResultRawCapBytes bounds what is CAPTURED, codex-style: beyond this
+	// the middle is dropped at intake and exists nowhere (not even in the
+	// artifact spool). Protects daemon memory from a runaway command.
+	toolResultRawCapBytes = 2 << 20 // 2 MiB
+	// toolResultAgedBytes is the shrink target for artifact-backed tool
+	// results that have aged out of the recent iterations of the SAME turn:
+	// the model can read the full output back by reference at any time, so
+	// aging them down is lossless (unlike codex, where the middle is gone).
+	toolResultAgedBytes = 4096
+	// toolArtifactNoteToken marks a model-surface truncation note that carries
+	// an artifact reference. The aged-shrink pass in the agent loop only
+	// shrinks messages containing it — shrinking is only safe when the full
+	// output remains addressable.
+	toolArtifactNoteToken = "saved as artifact "
 )
 
 // ToolResultEnvelope separates the same tool output into surfaces with
@@ -26,13 +42,50 @@ type ToolResultEnvelope struct {
 }
 
 func packageToolResult(name, raw string) ToolResultEnvelope {
+	return packageToolResultCtx(context.Background(), name, raw)
+}
+
+// packageToolResultCtx builds the result envelope. When the model surface has
+// to be truncated and the run carries a ToolArtifactSink, the capture-capped
+// full output is spooled as an artifact and the truncation note tells the
+// model to read omitted ranges via tool_output_view instead of re-running the
+// command. Any sink failure degrades to the plain head/tail note — spooling
+// must never fail a tool call.
+func packageToolResultCtx(ctx context.Context, name, raw string) ToolResultEnvelope {
 	raw = textutil.CleanUTF8(raw)
+	if len(raw) > toolResultRawCapBytes {
+		marker := fmt.Sprintf(
+			"\n\n... [SelfMind note: output exceeded the %dMB capture limit; %d bytes from the middle were dropped at capture and are not recoverable. Narrow the command if the middle matters.] ...\n\n",
+			toolResultRawCapBytes>>20, len(raw)-toolResultRawCapBytes,
+		)
+		raw = textutil.HeadTail(raw, (toolResultRawCapBytes-len(marker))/2, marker)
+	}
 	env := ToolResultEnvelope{
 		Raw:     raw,
 		Preview: toolResultPreview(name, raw),
 		Bytes:   len(raw),
 	}
 	env.ModelContent, env.Truncated = toolResultModelContent(raw)
+	if !env.Truncated {
+		return env
+	}
+	sink := ToolArtifactSinkFromContext(ctx)
+	if sink == nil {
+		return env
+	}
+	ref, err := sink.SaveToolOutput(ctx, name, raw)
+	if err != nil || strings.TrimSpace(ref.ID) == "" {
+		return env
+	}
+	marker := fmt.Sprintf(
+		"\n\n... [SelfMind note: tool output truncated for model context; the full %d-byte output was %s%s. Beginning and ending are shown. To read any omitted range, call tool_output_view with {\"artifact_id\": %q, \"offset_bytes\": N, \"limit_bytes\": M} instead of re-running the command.] ...\n\n",
+		len(raw), toolArtifactNoteToken, ref.ID, ref.ID,
+	)
+	keep := (toolResultModelBytes - len(marker)) / 2
+	if keep < 1024 {
+		keep = 1024
+	}
+	env.ModelContent = textutil.HeadTail(raw, keep, marker)
 	return env
 }
 
@@ -92,6 +145,37 @@ func toolResultModelContent(raw string) (string, bool) {
 		keep = 1024
 	}
 	return textutil.HeadTail(raw, keep, marker), true
+}
+
+// toolResultAgeIterations is how many agent-loop iterations an artifact-backed
+// tool result stays verbatim before shrinkAgedToolResult ages it down.
+const toolResultAgeIterations = 3
+
+var toolArtifactIDPattern = regexp.MustCompile(`saved as artifact (art_[A-Za-z0-9_-]+)`)
+
+// shrinkAgedToolResult ages one artifact-backed tool result out of the working
+// window (codex-style history re-truncation, made lossless by the artifact
+// spool): the head/tail shrink to toolResultAgedBytes around a note that keeps
+// the artifact id readable, so the model can still fetch any byte range via
+// tool_output_view. Content without an artifact reference is returned
+// unchanged — shrinking is only safe when the full output stays addressable.
+func shrinkAgedToolResult(content string) (string, bool) {
+	if len(content) <= toolResultAgedBytes {
+		return content, false
+	}
+	match := toolArtifactIDPattern.FindStringSubmatch(content)
+	if match == nil {
+		return content, false
+	}
+	note := fmt.Sprintf(
+		"\n\n... [SelfMind note: this earlier tool output was aged out of the working window to save context; the full output is still readable via tool_output_view with {\"artifact_id\": %q, \"offset_bytes\": N, \"limit_bytes\": M}.] ...\n\n",
+		match[1],
+	)
+	keep := (toolResultAgedBytes - len(note)) / 2
+	if keep < 512 {
+		keep = 512
+	}
+	return textutil.HeadTail(content, keep, note), true
 }
 
 func toolResultPreview(name, raw string) string {

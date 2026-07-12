@@ -25,7 +25,11 @@ W3 服务任务连续性体验，W4 以后是增量优化。
 
 ---
 
-## W1 工具输出工件化（最高优先）
+## W1 工具输出工件化（最高优先）—— ✅ 已实施 2026-07-12
+
+> 全部设计点（0–6）已落地并通过单测；STATUS.md Extended tools 行为准。
+> 唯一余项：`evalcases/quality/tool-output-artifact.yaml` 的 cassette 因当日
+> 两个 provider 配额耗尽未录，配额恢复后录制并设 `require_cassette: true`。
 
 ### 现状与证据
 
@@ -39,8 +43,21 @@ W3 服务任务连续性体验，W4 以后是增量优化。
 任何超限工具输出全文持久化为 run artifact，模型可在同一 run 或续跑中**按引用
 重读任意片段**，且不破坏三表面契约（raw / model-bounded / user preview）。
 
+### 与 Codex 的对照（2026-07-12 源码核查 `/mnt/d/wwwroot/ai/codex`）
+
+Codex 的做法是四层有界但绝不落盘：采集端 1MiB HeadTailBuffer（中段采集时即
+丢，`unified_exec/head_tail_buffer.rs`）；单次结果默认 10k token 且模型可用
+`max_output_tokens` 参数按需放大；工具输出进历史时按 TruncationPolicy 再截
+一遍（`context_manager/history.rs`）；长输出靠有状态 session 轮询增量读。
+它对"中段"的答案是丢弃+重跑/管道过滤。W1 吸收其有界性（下述 0/3 两点），
+坚持工件化作为差异点——跨端续跑需要"三天后按引用重读"，codex 单机会话模型
+不需要。
+
 ### 设计
 
+0. **采集端封顶（借 codex）**：`Raw` 当前无上限，失控命令可吃爆 daemon 内
+   存。envelope 层加 2MiB head/tail 采集上限（头尾各半，标注 omitted 字节
+   数）；落盘的工件也是这个有界版本，超出部分连工件都不保留。
 1. **落盘**：超过 `toolResultModelBytes` 的结果全文写
    `<data_dir>/<person分区>/artifacts/<run_id>/<tool>-<call_seq>.txt`，并写一行
    `control.task_artifacts`（复用现有表：`Kind="tool_output"`、`URI=文件路径`、
@@ -60,6 +77,11 @@ W3 服务任务连续性体验，W4 以后是增量优化。
 5. **续跑集成**：`withResumeContext` 的 `files_this_task_created_or_changed`
    机制不变；另在 resume 上下文中列出该 task 最近 N 个 `tool_output` 工件的
    id+工具名+大小，让续跑知道有什么可读。
+6. **同 turn 历史再截断（借 codex）**：当前每个 24KB 截断版在 turn 的迭代
+   窗口里一直占位直到整体压缩。带工件引用的旧工具结果在迭代过去 3 轮后缩到
+   4KB + 引用（模型随时可按引用读回，所以这次"再截断"是无损的——这正是
+   工件化让 codex 模式变安全的地方）。若实现侵入迭代热路径过深，允许拆出
+   随 W5 交付，但设计归属 W1。
 
 ### 验收与测试
 
@@ -79,7 +101,12 @@ W3 服务任务连续性体验，W4 以后是增量优化。
 
 ---
 
-## W2 诊断补齐（/diag context、/diag tasks、compaction/recall 可观测）
+## W2 诊断补齐（/diag context、/diag tasks、compaction/recall 可观测）—— ✅ 已实施 2026-07-12
+
+> 设计点 1–6 全部落地（含 `/diag memory` 的整理进度行，经可选 `PassSummary`
+> 能力接口）；"可能卡住"清单作为 W3 健康检测的先导已随 `/diag tasks` 交付。
+> W5 的组装时记账未随本包实施（breakdown 仍为组装后估算）。
+> STATUS.md Observability 行为准。
 
 ### 现状与证据
 
@@ -113,7 +140,14 @@ W3 服务任务连续性体验，W4 以后是增量优化。
 
 ---
 
-## W3 Task 健康检测 + 重复合并建议（只建议，不自动）
+## W3 Task 健康检测 + 重复合并建议（只建议，不自动）—— ✅ 已实施 2026-07-12
+
+> 设计点 1–3 落地：健康标记随 W2 的 `/diag tasks` 交付（卡片徽标改为
+> `/tasks` 的 possible-duplicate 行）；建议器挂 6h 治理 sweep（同 workspace、
+> ≥0.8、幂等事件）；`/task <src> merge <dst>` 单事务迁移全部历史并归档源。
+> 设计点 4（统计扫描聚合化）核查后未发现全表扫问题，未动。
+> eval case 未加：合并是确定性 pre-agent 控制命令，单测覆盖（先例：/queue drop）。
+> STATUS.md Task governance 行为准。
 
 ### 现状与证据
 

@@ -155,7 +155,7 @@ func (c *ContextEngine) BuildMessages(
 		Content: textutil.CleanUTF8(userInput),
 	})
 
-	return c.TruncateMessages(messages), nil
+	return c.TruncateMessagesCtx(ctx, messages), nil
 }
 
 func taskIDFromContext(ctx context.Context) string {
@@ -328,6 +328,14 @@ func roughTokenCount(messages []llm.Message) int {
 // summarizer role was injected. A final deterministic pass always guarantees the
 // result fits the budget even after compaction.
 func (c *ContextEngine) TruncateMessages(messages []llm.Message) []llm.Message {
+	return c.TruncateMessagesCtx(context.Background(), messages)
+}
+
+// TruncateMessagesCtx is TruncateMessages with the per-run event channel
+// available: when compaction actually fires it emits ONE context.compacted
+// event (before/after tokens, span, duration) so /diag context can show what
+// compaction bought — observability only, the compaction path is unchanged.
+func (c *ContextEngine) TruncateMessagesCtx(ctx context.Context, messages []llm.Message) []llm.Message {
 	if len(messages) == 0 {
 		return messages
 	}
@@ -345,7 +353,21 @@ func (c *ContextEngine) TruncateMessages(messages []llm.Message) []llm.Message {
 	}
 
 	if sp := c.summarizer(); sp != nil && len(messages) > compactionTailTurns+1 && c.countMessages(messages) > c.summaryThreshold {
+		beforeTokens := c.countMessages(messages)
+		beforeCount := len(messages)
+		started := time.Now()
 		if compacted, ok := c.compactMiddle(messages, sp); ok {
+			if ch := EventChannelFromContext(ctx); ch != nil {
+				EmitAgentEvent(ch, AgentEvent{
+					Type: "context.compacted",
+					Payload: map[string]interface{}{
+						"before_tokens":     beforeTokens,
+						"after_tokens":      c.countMessages(compacted),
+						"messages_replaced": beforeCount - len(compacted) + 1,
+						"duration_ms":       time.Since(started).Milliseconds(),
+					},
+				})
+			}
 			messages = compacted
 		}
 	}

@@ -146,6 +146,9 @@ type RecallStats struct {
 	Expanded bool
 	Terms    int
 	Skipped  string // non-empty when recall was skipped ("control_command", "short_message")
+	// ElapsedMS is the wall-clock cost of the whole Select call (expansion
+	// included) — the number /diag context reports per turn.
+	ElapsedMS int64
 }
 
 // RecallEngine runs bounded searches over its sources and selects the top
@@ -174,8 +177,11 @@ func NewRecallEngine(cards RecallTaskCardLister, sessions RecallSessionSearcher,
 // Select builds the search query from the incoming user message, runs every
 // source, and returns the deduped, budgeted top slices plus redacted stats.
 // It never returns an error: recall degrades, the turn proceeds.
-func (e *RecallEngine) Select(ctx context.Context, tenantID, personID, currentTaskID, message string) ([]kernel.RecallSlice, RecallStats) {
-	stats := RecallStats{Sources: map[string]int{}}
+func (e *RecallEngine) Select(ctx context.Context, tenantID, personID, currentTaskID, message string) (slices []kernel.RecallSlice, stats RecallStats) {
+	stats = RecallStats{Sources: map[string]int{}}
+	started := time.Now()
+	// Named returns so the deferred stamp reaches every exit, skips included.
+	defer func() { stats.ElapsedMS = time.Since(started).Milliseconds() }()
 	if e == nil || len(e.sources) == 0 {
 		return nil, stats
 	}
@@ -248,7 +254,6 @@ func (e *RecallEngine) Select(ctx context.Context, tenantID, personID, currentTa
 		return ranked[i].WorkKey < ranked[j].WorkKey
 	})
 
-	var slices []kernel.RecallSlice
 	usedChars := 0
 	for _, hit := range ranked {
 		if len(slices) >= recallMaxSlices {

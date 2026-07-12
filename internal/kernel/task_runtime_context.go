@@ -73,6 +73,10 @@ type TaskEventContext struct {
 }
 
 type TaskArtifactContext struct {
+	// ID is the stable artifact reference. For kind "tool_output" it is the
+	// handle tool_output_view reads by — render it, or the model cannot
+	// address the artifact from a later turn.
+	ID        string
 	Kind      string
 	Name      string
 	URI       string
@@ -343,7 +347,10 @@ func (r TaskRuntimeContext) Prompt(maxChars int) string {
 			if artifact.Summary != "" {
 				line += " (" + artifact.Summary + ")"
 			}
-			fmt.Fprintf(&b, "- %s\n", trimLine(line, 320))
+			if artifact.ID != "" && artifact.Kind == "tool_output" {
+				line += " [readable via tool_output_view artifact_id=" + artifact.ID + "]"
+			}
+			fmt.Fprintf(&b, "- %s\n", trimLine(line, 400))
 		}
 	}
 	if len(r.RecallSlices) > 0 {

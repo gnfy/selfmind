@@ -179,6 +179,12 @@ func (d *Server) tryHandleControlCommand(ctx context.Context, identity *control.
 	case lower == "/diag memory":
 		reply, err := d.memoryDiagReply(ctx, identity)
 		return true, reply, err
+	case lower == "/diag context":
+		reply, err := d.contextDiagReply(ctx, identity)
+		return true, reply, err
+	case lower == "/diag tasks":
+		reply, err := d.tasksDiagReply(ctx, identity)
+		return true, reply, err
 	case lower == "/diag":
 		reply, err := d.diagReply(ctx, identity)
 		return true, reply, err

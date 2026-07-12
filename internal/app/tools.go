@@ -2,6 +2,7 @@ package app
 
 import (
 	"os"
+	"path/filepath"
 
 	"selfmind/internal/kernel"
 	"selfmind/internal/kernel/memory"
@@ -25,6 +26,11 @@ func InitTools(mem *memory.MemoryManager, cfg *config.Config, ag *kernel.Agent, 
 
 	tools.RegisterBuiltins(disp)
 	tools.RegisterExtendedTools(disp)
+	// Read-back for spooled large tool outputs (W1): the base dir must match
+	// the gateway sink's spool dir, both derived from the same resolved data
+	// dir, so every dispatcher (daemon, worker pool, eval) can resolve the
+	// artifacts the coordinator writes.
+	disp.RegisterTool(tools.NewToolOutputViewTool(filepath.Join(ResolveDataDir(cfg), "tool-output")))
 	disp.RegisterTool(tools.NewSkillManageTool())
 	disp.RegisterTool(tools.NewSkillsListTool())
 	disp.RegisterTool(tools.NewSkillViewTool())

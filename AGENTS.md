@@ -448,6 +448,18 @@ Domain docs (**mandatory** before changing that domain):
   model, TUI, or run events. Raw output, model-bounded content (head/tail
   view with an explicit too-large note), and compact UTF-8-safe user preview
   are three separate surfaces — never one truncated string for all three.
+  Large outputs are ARTIFACT-BACKED (W1, 2026-07-12): capture is capped at
+  2MiB head/tail (codex-style, the dropped middle exists nowhere); an
+  over-24KB model surface is spooled by the per-run gateway sink
+  (`kernel.ToolArtifactSink`, `httpapi/tool_artifacts.go`) to
+  `<data>/tool-output/<person>/<art_id>.txt` + a `tool_output` task-artifact
+  row, and the truncation note tells the model to read omitted ranges with
+  the read-only `tool_output_view` tool (person-scoped filesystem resolve, ≤
+  24KB/call) instead of re-running the command. Artifact-backed tool results
+  older than 3 iterations shrink in place (`shrinkAgedToolResult`) — lossless
+  ONLY because the artifact stays addressable; never age-shrink a tool result
+  without an artifact reference. Spool failures degrade to the plain note;
+  spooling must never fail a tool call.
 - CLI/TUI output must be human-readable: summarize plans, tool calls, and
   errors; never dump raw JSON unless the user asked for protocol details.
   Failure events carry compact diagnostics (`error_category`,

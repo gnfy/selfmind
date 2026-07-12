@@ -73,5 +73,9 @@ func (d *Server) runTaskGovernanceSweep(ctx context.Context) int {
 	if len(archived) > 0 {
 		log.Info("gateway: archived stale terminal tasks", "count", len(archived))
 	}
+	// Duplicate-label suggestions ride the same sweep (execution-quality W3):
+	// deterministic, zero model calls, suggestion-only — /task merge is the
+	// only way a pair actually folds.
+	d.suggestDuplicateTasks(ctx)
 	return len(archived)
 }

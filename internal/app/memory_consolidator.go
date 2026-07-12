@@ -103,6 +103,34 @@ func (c *MemoryConsolidator) mode() string {
 // surface without leaking app/config dependencies into httpapi.
 func (c *MemoryConsolidator) Mode() string { return c.mode() }
 
+// PassSummary is the optional /diag memory capability (W2): one line of
+// consolidation progress for the person, read back from the durable
+// judgement checkpoints so it survives daemon restarts.
+func (c *MemoryConsolidator) PassSummary(ctx context.Context, personID string) string {
+	if c == nil || c.mem == nil {
+		return ""
+	}
+	store, ok := c.mem.Canonical()
+	if !ok {
+		return ""
+	}
+	judged, err := store.ListJudgedClusterIDs(ctx, personID)
+	if err != nil {
+		return ""
+	}
+	current := 0
+	for key := range judged {
+		if strings.HasPrefix(key, consolidationJudgeVersion+":") {
+			current++
+		}
+	}
+	line := fmt.Sprintf("Consolidation: %d cluster(s) judged under judge %s", current, consolidationJudgeVersion)
+	if c.reportDir != "" {
+		line += "; report dir: " + c.reportDir
+	}
+	return line
+}
+
 func (c *MemoryConsolidator) batchSize() int {
 	if c.gov.ConsolidationBatchSize > 0 {
 		return c.gov.ConsolidationBatchSize

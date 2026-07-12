@@ -507,6 +507,10 @@ func newRuntimeHarness(opts RunOptions, c *Case, dataDirOverride string) (*runti
 		// Automatic semantic recall (Work Timeline P2): eval runs the same
 		// selector path as real input — no eval-only shortcut around recall.
 		Recall: httpapi.NewRecallEngine(controlStore, mem, appcore.SemanticRecallExpander(mem, cfg, tenantID)),
+		// Tool-output spool (execution-quality W1): same derivation as the
+		// daemon runner, so eval exercises the artifact + read-back flow
+		// inside its isolated data dir.
+		ToolOutputDir: filepath.Join(dataDir, "tool-output"),
 	}
 	return &runtimeHarness{
 		cfg:          cfg,

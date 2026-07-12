@@ -1,0 +1,33 @@
+id: tool_output_artifact_readback
+title: "truncated large tool output is read back by artifact reference, not re-run"
+suite: quality
+workspace: "."
+channel: cli
+
+# Execution-quality W1 (docs/execution-quality-plan.zh-CN.md): a tool output
+# beyond the 24KB model budget is spooled as a task artifact; the truncation
+# note carries the artifact id, the resume context lists it, and the model
+# reads the omitted middle via tool_output_view instead of re-running the
+# command. The marker sits at line 1500 of ~3000 (~130KB), far outside the
+# head/tail window, so a passing answer can only come from the artifact read
+# (or a forbidden re-run, which the prompt excludes).
+#
+# Cassette PENDING: both live providers hit quota limits on 2026-07-12
+# (codex 429, kimi 403); the offline gate skips this case until recorded
+# (require_cassette intentionally unset). Record when quota refreshes:
+# SELFMIND_EVAL_VCR=record selfmind eval run \
+#   evalcases/quality/tool-output-artifact.yaml --provider kimi-coding
+turns:
+  - input: "请用终端原样运行这条命令（不要改动、不要加管道过滤），完成后只回复 done：awk 'BEGIN{for(i=1;i<=3000;i++){if(i==1500){print \"MARKER-CODE: QLX-7734-MID\"}else{print \"line\",i,\"padding padding padding padding padding padding\"}}}'"
+  - input: "继续：刚才那条命令的输出中间藏了一行 MARKER-CODE。它的完整值是什么？禁止再运行任何终端命令——输出已保存为 artifact，用 tool_output_view 按引用读取被截断的中段。只输出标记值本身。"
+
+expect:
+  status: completed
+  min_tool_calls: 1
+  contains:
+    - "QLX-7734-MID"
+
+checks:
+  no_mojibake: true
+  no_empty_response: true
+  no_raw_json_leak: true

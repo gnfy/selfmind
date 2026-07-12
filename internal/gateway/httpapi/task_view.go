@@ -20,7 +20,7 @@ import (
 // (detail, runs, rename, archive). Shared by every endpoint via
 // tryHandleControlCommand — IM gets the same short cards.
 
-const taskUsage = "Usage: /task <n|id> [runs|rename <name>|pin|unpin|archive]"
+const taskUsage = "Usage: /task <n|id> [runs|rename <name>|pin|unpin|archive|merge <dst>]"
 
 const tasksTrailingHint = "Reply to continue the current task, /resume <id> to switch, /task <id> for detail."
 
@@ -33,6 +33,7 @@ type taskCardView struct {
 	files        map[string][]string // task_id -> latest handoff changed files
 	approvals    map[string]int      // task_id -> pending approvals
 	questions    map[string]int      // task_id -> pending clarify questions
+	dupes        map[string]string   // task_id -> suggested duplicate-of task id (W3)
 }
 
 // tasksOverviewReply renders /tasks and its variants: ""/"open" (open work),
@@ -70,6 +71,9 @@ func (d *Server) tasksOverviewReply(ctx context.Context, identity *control.Ident
 	view.lastRuns, _ = d.Control.LatestRunSummaries(ctx, identity.TenantID, identity.PersonID)
 	view.files, _ = d.Control.LatestHandoffFilesByPerson(ctx, identity.TenantID, identity.PersonID)
 	view.approvals, view.questions, _ = d.Control.PendingCountsByTask(ctx, identity.TenantID, identity.PersonID)
+	if suggestions, err := d.Control.ListDuplicateSuggestions(ctx, identity.TenantID, identity.PersonID); err == nil {
+		view.dupes = dupeSuggestionsForView(suggestions, tasks)
+	}
 
 	if args.search {
 		return renderTaskSearchPage(args, page, view), nil
@@ -367,6 +371,10 @@ func renderTaskCard(index int, t control.Task, v taskCardView) string {
 	if n := v.questions[t.ID]; n > 0 {
 		fmt.Fprintf(&sb, "   questions: %d\n", n)
 	}
+	if other := v.dupes[t.ID]; other != "" {
+		fmt.Fprintf(&sb, "   possible duplicate of: %s (merge with /task %s merge %s)\n",
+			shortTaskID(other), shortTaskID(t.ID), shortTaskID(other))
+	}
 	fmt.Fprintf(&sb, "   runs: %d\n", v.runCounts[t.ID])
 	fmt.Fprintf(&sb, "   id: %s", cardTaskID(t.ID))
 	return sb.String()
@@ -477,6 +485,43 @@ func (d *Server) taskCommandReply(ctx context.Context, identity *control.Identit
 			Payload: mustJSON(map[string]string{"source": "user"}),
 		})
 		return fmt.Sprintf("%s task: %s (%s)", verb, textutil.Truncate(toOneLine(task.Title), 48), shortTaskID(task.ID)), nil
+	case "merge":
+		// Explicit user authority only (execution-quality W3): the duplicate
+		// suggester proposes, this command is the single fold path.
+		if len(args) < 3 {
+			return "Usage: /task <src> merge <dst> — moves all of src's runs/history into dst and archives src.", nil
+		}
+		target, targetErr, err := d.resolveTaskReference(ctx, identity, args[2])
+		if err != nil {
+			return "", err
+		}
+		if targetErr != "" {
+			return targetErr, nil
+		}
+		if target.ID == task.ID {
+			return "Source and target are the same task.", nil
+		}
+		// Never merge live work: a running task's registry state and steering
+		// channel are keyed by its task id.
+		if active := d.coordinator().currentActive(identity.PersonID); active != nil &&
+			(active.TaskID == task.ID || active.TaskID == target.ID) {
+			return "One of these tasks has a run executing right now — wait for it to finish (or /stop) before merging.", nil
+		}
+		moved, err := d.Control.MergeTasks(ctx, identity.TenantID, identity.PersonID, task.ID, target.ID)
+		if err != nil {
+			return "", err
+		}
+		_, _ = d.Control.AppendEvent(ctx, control.Event{
+			TaskID: target.ID, Type: "task.merged", Visibility: "task",
+			Payload: mustJSON(map[string]interface{}{
+				"merged_from":       task.ID,
+				"merged_from_title": textutil.Truncate(toOneLine(task.Title), 60),
+				"runs_moved":        moved,
+				"source":            "user",
+			}),
+		})
+		return fmt.Sprintf("Merged %s into %s: %d run(s) moved, source archived.\nContinue with /resume %s.",
+			textutil.Truncate(toOneLine(task.Title), 40), textutil.Truncate(toOneLine(target.Title), 40), moved, shortTaskID(target.ID)), nil
 	case "archive":
 		if archivedTaskStatus(task.Status) {
 			return "Task is already archived.", nil

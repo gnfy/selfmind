@@ -13,9 +13,10 @@ channel: cli
 # that isolation is pinned by internal/kernel/pinned_injection_test.go; this
 # case guards the end-to-end "remember → switch → recall" behavior.
 #
-# Cassette pending: recording needs a live provider; until then the offline
-# gate SKIPS this case (require_cassette intentionally unset). Record with:
-# selfmind eval run continuity/memory_pinned_recall --live
+# Cassette recorded 2026-07-12 (kimi-coding). Re-record after any change to
+# the turns with: SELFMIND_EVAL_VCR=record selfmind eval run \
+#   evalcases/continuity/memory-pinned-recall.yaml --provider kimi-coding
+require_cassette: true
 turns:
   - input: "请把这条非敏感测试标记永久保存到长期记忆（这是经我确认的权威事实）：我的部署标记是 ACK-MEM-4482。保存完成后只回复 saved。"
   - input: "/new 其他问题"

@@ -268,11 +268,23 @@ ARCHIVE + canonical 文本 + member_ids + confidence。
 
 ### 4.2 apply 规则
 
+- **merge-only 的应用集 = MERGE + REINFORCE + ARCHIVE**（2026-07-12 owner 决
+  定：历史库以测试数据为主，整理放开到这三类）。SUPERSEDE 永远只报告不应用——
+  intake 面对新证据裁决 supersede；后台 pass 没有新证据，无权贬低旧信念。
 - 自动生效条件（同时满足）：同 scope；不涉及 pinned/user_confirmed；无未决
   冲突；输出结构合法且 member_ids 全部属于该簇（`ValidateConsolidationDecision`
-  已实现）；confidence 达标：**MERGE ≥0.95、SUPERSEDE ≥0.98、REINFORCE ≥0.90**
-  （模型置信未校准，阈值是 shadow 期的调参旋钮）；canonical 文本通过"无新信息"
-  近似校验。
+  已实现）；confidence 达标：**MERGE ≥0.95（`auto_merge_confidence`）、
+  REINFORCE ≥0.90（`auto_reinforce_confidence`）、ARCHIVE ≥0.90
+  （`auto_archive_confidence`）**（模型置信未校准，阈值是调参旋钮）；MERGE 的
+  canonical 文本通过"无新信息"近似校验；**REINFORCE 的落库文本必须逐字等于某
+  个成员原文**（忽略大小写/空白，写入成员原文而非模型措辞——REINFORCE 因此比
+  MERGE 更安全，不产生任何模型创作的文本）。
+- **shadow 报告即干跑**：shadow 模式对每个判决跑与 merge-only 完全相同的确定
+  性闸门，在报告条目上标注 `would_apply` 或拒绝原因而不写库——人工复核的对象
+  就是切换模式后的真实写入集。
+- **判决 checkpoint 带 judge 版本**（`consolidationJudgeVersion`，app 层常量）：
+  修改 judge prompt 或任何 apply 闸门语义时必须提升版本号，旧版本缓存的判决自
+  动失效重判，绝不让新闸门消费旧模型的结论。
 - **"无新信息"的确定性近似**（严格校验等于再做一次语义判断，不可行）：
   canonical 长度设上限，且其中出现的文件路径、数字、专有 token 必须在证据集中
   出现过，否则该决策降级 KEEP。列为 shadow 期人工抽查项。
@@ -311,10 +323,13 @@ memory:
     consolidation_batch_size: 8
     auto_merge_confidence: 0.95
     auto_supersede_confidence: 0.98
+    auto_reinforce_confidence: 0.90
+    auto_archive_confidence: 0.90
     pause_while_run_active: true
 ```
 
-当前自动落地边界：`shadow` 只记录判断，`merge-only` 自动执行高置信度 MERGE，
+当前自动落地边界：`shadow` 只记录判断（含 `would_apply` 干跑标注），
+`merge-only` 自动执行门禁通过的 MERGE / REINFORCE / ARCHIVE，
 `full` 在此基础上执行全局/每 workspace 上限与按时间归档。
 `auto_supersede_confidence` 目前仅为前向兼容保留，后台 consolidation 尚不会自动
 执行 SUPERSEDE；run 结束时的 intake SUPERSEDE 仍由独立的确定性门禁控制。

@@ -285,8 +285,18 @@ Domain docs (**mandatory** before changing that domain):
   compete for or be truncated by the extracted-fact budget. The legacy profile
   synthesizer was deleted (2026-07-11, dead code that starved pinned
   visibility); never reintroduce a profile-synthesis model call. Keep
-  consolidation retryable, checkpointed, lower-priority than foreground runs,
-  and disabled from applying writes until dry-run precision/recall gates pass.
+  consolidation retryable, checkpointed, and lower-priority than foreground
+  runs. Consolidation apply is mode-gated (owner decision 2026-07-12, the
+  legacy store is mostly test data): `shadow` (default) writes nothing but
+  dry-runs the SAME deterministic gates and annotates `would_apply` in the
+  report; `merge-only` applies gated MERGE (confidence + no-novel-token),
+  REINFORCE (canonical must restate one member's text VERBATIM — the member's
+  original is what gets written, never model wording), and ARCHIVE
+  (reversible); SUPERSEDE is report-only for consolidation — only intake, with
+  fresh evidence, may supersede. Judgement checkpoints carry
+  `consolidationJudgeVersion` (`internal/app/memory_consolidator.go`); bump it
+  whenever the judge prompt or an apply gate changes so cached decisions
+  re-judge instead of feeding a newer gate.
   A terminal run's maintenance input and model proposal are durable: save the
   replay payload before dispatch, freeze `proposal_json` before any memory/task
   mutation, and reuse it after a crash. Apply failures MUST fail the maintenance

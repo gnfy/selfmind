@@ -225,6 +225,11 @@ type MemoryGovernanceConfig struct {
 	// supersede apply gate. It is parsed for forward compatibility but is not
 	// applied by the current shadow/merge-only/full implementation.
 	AutoSupersedeConfidence float64 `mapstructure:"auto_supersede_confidence" yaml:"auto_supersede_confidence,omitempty"`
+	// AutoReinforceConfidence gates applying REINFORCE (fold repeats onto one
+	// member's verbatim text); AutoArchiveConfidence gates applying ARCHIVE
+	// (reversible). Both default to 0.90 (docs/memory-governance.zh-CN.md §4.2).
+	AutoReinforceConfidence float64 `mapstructure:"auto_reinforce_confidence" yaml:"auto_reinforce_confidence,omitempty"`
+	AutoArchiveConfidence   float64 `mapstructure:"auto_archive_confidence" yaml:"auto_archive_confidence,omitempty"`
 	MaxActiveGlobal         int     `mapstructure:"max_active_global" yaml:"max_active_global,omitempty"`
 	MaxActivePerWorkspace   int     `mapstructure:"max_active_per_workspace" yaml:"max_active_per_workspace,omitempty"`
 	ArchiveAfter            string  `mapstructure:"archive_after" yaml:"archive_after,omitempty"`

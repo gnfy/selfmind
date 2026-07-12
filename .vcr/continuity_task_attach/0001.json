@@ -1,12 +1,254 @@
 {
-  "method": "chat",
-  "chat": {
-    "Content": "配置加载重构 configuration loading refactor 配置文件解析 config loader redesign 配置管理重构",
-    "ToolCalls": null,
-    "Usage": {
-      "input_tokens": 273,
-      "output_tokens": 140
+  "method": "stream",
+  "events": [
+    {
+      "usage": {
+        "input_tokens": 15932,
+        "output_tokens": 0
+      }
     },
-    "FinishReason": "end_turn"
-  }
+    {
+      "content": "1"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "梳理"
+    },
+    {
+      "content": "现有"
+    },
+    {
+      "content": "配置"
+    },
+    {
+      "content": "来源"
+    },
+    {
+      "content": "与"
+    },
+    {
+      "content": "优先级"
+    },
+    {
+      "content": "，"
+    },
+    {
+      "content": "明确"
+    },
+    {
+      "content": "环境"
+    },
+    {
+      "content": "变量"
+    },
+    {
+      "content": "、"
+    },
+    {
+      "content": "配置文件"
+    },
+    {
+      "content": "、"
+    },
+    {
+      "content": "默认值"
+    },
+    {
+      "content": "之间的"
+    },
+    {
+      "content": "覆盖"
+    },
+    {
+      "content": "关系和"
+    },
+    {
+      "content": "加载"
+    },
+    {
+      "content": "顺序"
+    },
+    {
+      "content": "。\n"
+    },
+    {
+      "content": "2"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "收敛"
+    },
+    {
+      "content": "配置"
+    },
+    {
+      "content": "读取"
+    },
+    {
+      "content": "入口"
+    },
+    {
+      "content": "，"
+    },
+    {
+      "content": "统一"
+    },
+    {
+      "content": "校验"
+    },
+    {
+      "content": "、"
+    },
+    {
+      "content": "转换"
+    },
+    {
+      "content": "和"
+    },
+    {
+      "content": "错误"
+    },
+    {
+      "content": "提示"
+    },
+    {
+      "content": "，"
+    },
+    {
+      "content": "消除"
+    },
+    {
+      "content": "分散"
+    },
+    {
+      "content": "在各"
+    },
+    {
+      "content": "处的"
+    },
+    {
+      "content": "重复"
+    },
+    {
+      "content": "解析"
+    },
+    {
+      "content": "逻辑"
+    },
+    {
+      "content": "。\n"
+    },
+    {
+      "content": "3"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "补充"
+    },
+    {
+      "content": "加载"
+    },
+    {
+      "content": "过程的"
+    },
+    {
+      "content": "日志"
+    },
+    {
+      "content": "与"
+    },
+    {
+      "content": "埋"
+    },
+    {
+      "content": "点"
+    },
+    {
+      "content": "，"
+    },
+    {
+      "content": "并"
+    },
+    {
+      "content": "针对"
+    },
+    {
+      "content": "非法"
+    },
+    {
+      "content": "配置"
+    },
+    {
+      "content": "提供"
+    },
+    {
+      "content": "可"
+    },
+    {
+      "content": "执行的"
+    },
+    {
+      "content": "报错"
+    },
+    {
+      "content": "与"
+    },
+    {
+      "content": "降级"
+    },
+    {
+      "content": "策略"
+    },
+    {
+      "content": "，"
+    },
+    {
+      "content": "确保"
+    },
+    {
+      "content": "可"
+    },
+    {
+      "content": "观测"
+    },
+    {
+      "content": "与"
+    },
+    {
+      "content": "可"
+    },
+    {
+      "content": "回"
+    },
+    {
+      "content": "滚"
+    },
+    {
+      "content": "。"
+    },
+    {
+      "finish_reason": "end_turn"
+    },
+    {
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 144
+      }
+    }
+  ]
 }

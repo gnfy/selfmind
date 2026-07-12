@@ -1,0 +1,23 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "usage": {
+        "input_tokens": 15921,
+        "output_tokens": 0
+      }
+    },
+    {
+      "content": "saved"
+    },
+    {
+      "finish_reason": "end_turn"
+    },
+    {
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 48
+      }
+    }
+  ]
+}

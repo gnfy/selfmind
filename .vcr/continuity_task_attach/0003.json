@@ -1,4 +1,149 @@
 {
-  "method": "completion",
-  "error": "anthropic request failed: Post \"https://api.kimi.com/coding/v1/messages\": context deadline exceeded"
+  "method": "stream",
+  "events": [
+    {
+      "usage": {
+        "input_tokens": 16130,
+        "output_tokens": 0
+      }
+    },
+    {
+      "content": "SQLite"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "的"
+    },
+    {
+      "content": " WAL"
+    },
+    {
+      "content": "（"
+    },
+    {
+      "content": "Write"
+    },
+    {
+      "content": "-A"
+    },
+    {
+      "content": "head"
+    },
+    {
+      "content": " Logging"
+    },
+    {
+      "content": "）"
+    },
+    {
+      "content": "模式"
+    },
+    {
+      "content": "是一种"
+    },
+    {
+      "content": "在"
+    },
+    {
+      "content": "真正"
+    },
+    {
+      "content": "修改"
+    },
+    {
+      "content": "数据库"
+    },
+    {
+      "content": "文件"
+    },
+    {
+      "content": "前"
+    },
+    {
+      "content": "先把"
+    },
+    {
+      "content": "变更"
+    },
+    {
+      "content": "写入"
+    },
+    {
+      "content": "独立"
+    },
+    {
+      "content": "日志"
+    },
+    {
+      "content": "文件的"
+    },
+    {
+      "content": "机制"
+    },
+    {
+      "content": "，"
+    },
+    {
+      "content": "它"
+    },
+    {
+      "content": "能让"
+    },
+    {
+      "content": "读取"
+    },
+    {
+      "content": "操作"
+    },
+    {
+      "content": "不必"
+    },
+    {
+      "content": "等待"
+    },
+    {
+      "content": "写入"
+    },
+    {
+      "content": "完成"
+    },
+    {
+      "content": "，"
+    },
+    {
+      "content": "从而提高"
+    },
+    {
+      "content": "并发"
+    },
+    {
+      "content": "性能"
+    },
+    {
+      "content": "并"
+    },
+    {
+      "content": "保证"
+    },
+    {
+      "content": "事务"
+    },
+    {
+      "content": "安全"
+    },
+    {
+      "content": "。"
+    },
+    {
+      "finish_reason": "end_turn"
+    },
+    {
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 93
+      }
+    }
+  ]
 }

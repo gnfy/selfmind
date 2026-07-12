@@ -1,0 +1,38 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "usage": {
+        "input_tokens": 15917,
+        "output_tokens": 0
+      }
+    },
+    {
+      "content": "ACK"
+    },
+    {
+      "content": "-M"
+    },
+    {
+      "content": "EM"
+    },
+    {
+      "content": "-"
+    },
+    {
+      "content": "448"
+    },
+    {
+      "content": "2"
+    },
+    {
+      "finish_reason": "end_turn"
+    },
+    {
+      "usage": {
+        "input_tokens": 0,
+        "output_tokens": 89
+      }
+    }
+  ]
+}

@@ -2,7 +2,10 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -83,6 +86,142 @@ func TestConsolidatorShadowNeverWrites(t *testing.T) {
 	}
 	if judge.calls() != before {
 		t.Fatalf("already-judged cluster was re-judged: %d -> %d", before, judge.calls())
+	}
+}
+
+// TestConsolidatorShadowAnnotatesWouldApply: the shadow report dry-runs the
+// SAME apply gates merge-only uses, so would_apply marks exactly the writes
+// a mode switch would perform — the human review gates real behavior.
+func TestConsolidatorShadowAnnotatesWouldApply(t *testing.T) {
+	provider, err := memory.NewSQLiteProvider(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer provider.Close()
+	mgr := memory.NewMemoryManager(provider)
+	seedParaphrases(t, mgr, "person")
+
+	judge := &capturingProviderStub{content: `{"action":"MERGE","canonical":"User prefers code shown inline rather than written to files","confidence":0.99}`}
+	reportDir := t.TempDir()
+	c := &MemoryConsolidator{provider: judge, mem: mgr, gov: config.MemoryGovernanceConfig{Enabled: true, Mode: "shadow"}, reportDir: reportDir}
+	if err := c.RunOnce(context.Background(), "person"); err != nil {
+		t.Fatal(err)
+	}
+	if active, archived := activeCount(t, mgr, "person"); active != 3 || archived != 0 {
+		t.Fatalf("shadow dry run must not write: active=%d archived=%d", active, archived)
+	}
+	raw, err := os.ReadFile(filepath.Join(reportDir, "shadow-person.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var report struct {
+		JudgedNow []consolidationReportEntry `json:"judged_now"`
+	}
+	if err := json.Unmarshal(raw, &report); err != nil {
+		t.Fatal(err)
+	}
+	if len(report.JudgedNow) != 1 || !report.JudgedNow[0].WouldApply || report.JudgedNow[0].Applied {
+		t.Fatalf("shadow report must annotate would_apply without applying: %+v", report.JudgedNow)
+	}
+}
+
+// TestConsolidatorReinforceApply: merge-only folds a REINFORCE cluster onto
+// one member's VERBATIM text — the applied canonical never contains model
+// wording, making reinforce strictly safer than merge.
+func TestConsolidatorReinforceApply(t *testing.T) {
+	provider, err := memory.NewSQLiteProvider(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer provider.Close()
+	mgr := memory.NewMemoryManager(provider)
+	seedParaphrases(t, mgr, "person")
+
+	verbatim := "The user prefers code displayed inline rather than written to files"
+	judge := &capturingProviderStub{content: `{"action":"REINFORCE","canonical":"` + verbatim + `","confidence":0.92}`}
+	c := &MemoryConsolidator{provider: judge, mem: mgr, gov: config.MemoryGovernanceConfig{Enabled: true, Mode: "merge-only"}, reportDir: t.TempDir()}
+	if err := c.RunOnce(context.Background(), "person"); err != nil {
+		t.Fatal(err)
+	}
+	active, archived := activeCount(t, mgr, "person")
+	if active != 1 || archived != 3 {
+		t.Fatalf("reinforce apply expected 1 active + 3 archived, got active=%d archived=%d", active, archived)
+	}
+	store, _ := mgr.Canonical()
+	actives, _ := store.ListCanonicalMemories(context.Background(), "person", memory.CanonicalFilter{})
+	if len(actives) != 1 || actives[0].Content != verbatim {
+		t.Fatalf("reinforced canonical must be the member's verbatim text: %+v", actives)
+	}
+}
+
+// TestConsolidatorReinforceRejectsNonVerbatim: a REINFORCE whose canonical is
+// model-authored (matches no member) is kept, not applied.
+func TestConsolidatorReinforceRejectsNonVerbatim(t *testing.T) {
+	provider, err := memory.NewSQLiteProvider(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer provider.Close()
+	mgr := memory.NewMemoryManager(provider)
+	seedParaphrases(t, mgr, "person")
+
+	judge := &capturingProviderStub{content: `{"action":"REINFORCE","canonical":"User strongly prefers inline code and dislikes file output","confidence":0.96}`}
+	c := &MemoryConsolidator{provider: judge, mem: mgr, gov: config.MemoryGovernanceConfig{Enabled: true, Mode: "merge-only"}, reportDir: t.TempDir()}
+	if err := c.RunOnce(context.Background(), "person"); err != nil {
+		t.Fatal(err)
+	}
+	if active, archived := activeCount(t, mgr, "person"); active != 3 || archived != 0 {
+		t.Fatalf("non-verbatim reinforce must be kept, got active=%d archived=%d", active, archived)
+	}
+}
+
+// TestConsolidatorArchiveApply: merge-only applies a confident ARCHIVE —
+// members become archived (reversible), never deleted.
+func TestConsolidatorArchiveApply(t *testing.T) {
+	provider, err := memory.NewSQLiteProvider(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer provider.Close()
+	mgr := memory.NewMemoryManager(provider)
+	seedParaphrases(t, mgr, "person")
+
+	judge := &capturingProviderStub{content: `{"action":"ARCHIVE","confidence":0.95,"reason":"transient debugging state"}`}
+	c := &MemoryConsolidator{provider: judge, mem: mgr, gov: config.MemoryGovernanceConfig{Enabled: true, Mode: "merge-only"}, reportDir: t.TempDir()}
+	if err := c.RunOnce(context.Background(), "person"); err != nil {
+		t.Fatal(err)
+	}
+	if active, archived := activeCount(t, mgr, "person"); active != 0 || archived != 3 {
+		t.Fatalf("archive apply expected 0 active + 3 archived, got active=%d archived=%d", active, archived)
+	}
+}
+
+// TestConsolidatorJudgeCheckpointIsVersioned: checkpoints carry the judge
+// version, so bumping consolidationJudgeVersion re-judges cached clusters
+// instead of letting a newer apply gate consume stale decisions.
+func TestConsolidatorJudgeCheckpointIsVersioned(t *testing.T) {
+	provider, err := memory.NewSQLiteProvider(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer provider.Close()
+	mgr := memory.NewMemoryManager(provider)
+	seedParaphrases(t, mgr, "person")
+
+	judge := &capturingProviderStub{content: `{"action":"KEEP","confidence":0.9}`}
+	c := &MemoryConsolidator{provider: judge, mem: mgr, gov: config.MemoryGovernanceConfig{Enabled: true, Mode: "shadow"}, reportDir: t.TempDir()}
+	if err := c.RunOnce(context.Background(), "person"); err != nil {
+		t.Fatal(err)
+	}
+	store, _ := mgr.Canonical()
+	judged, err := store.ListJudgedClusterIDs(context.Background(), "person")
+	if err != nil || len(judged) == 0 {
+		t.Fatalf("expected a judgement checkpoint: %v err=%v", judged, err)
+	}
+	for key := range judged {
+		if !strings.HasPrefix(key, consolidationJudgeVersion+":") {
+			t.Fatalf("checkpoint key %q must carry judge version %q", key, consolidationJudgeVersion)
+		}
 	}
 }
 

@@ -22,8 +22,10 @@ import (
 // proposes candidate clusters, the explicitly configured cheap model judges
 // them, and the deterministic gate decides what may be APPLIED. In shadow
 // mode (the default) nothing is written except judgement audit events and a
-// report file for human review; merge-only additionally applies
-// high-confidence MERGE; full adds caps and archival.
+// report file for human review — the report's would_apply flag is a dry run
+// of the same gates, so it shows exactly what merge-only would write.
+// merge-only applies gated MERGE, REINFORCE (verbatim member text only), and
+// ARCHIVE (reversible); SUPERSEDE stays report-only. full adds caps/aging.
 type MemoryConsolidator struct {
 	provider  llm.Provider
 	mem       *memory.MemoryManager
@@ -115,6 +117,29 @@ func (c *MemoryConsolidator) mergeGate() float64 {
 	return 0.95
 }
 
+func (c *MemoryConsolidator) reinforceGate() float64 {
+	if c.gov.AutoReinforceConfidence > 0 {
+		return c.gov.AutoReinforceConfidence
+	}
+	return 0.90
+}
+
+func (c *MemoryConsolidator) archiveGate() float64 {
+	if c.gov.AutoArchiveConfidence > 0 {
+		return c.gov.AutoArchiveConfidence
+	}
+	return 0.90
+}
+
+// consolidationJudgeVersion tags every judgement checkpoint. Bump it whenever
+// the judge prompt or an apply gate changes semantics: a cached decision from
+// an older judge must be re-judged, never silently applied by a newer gate.
+const consolidationJudgeVersion = "j2"
+
+func judgedClusterKey(clusterID string) string {
+	return consolidationJudgeVersion + ":" + clusterID
+}
+
 type consolidationReportEntry struct {
 	ClusterID  string   `json:"cluster_id"`
 	Action     string   `json:"action"`
@@ -122,6 +147,7 @@ type consolidationReportEntry struct {
 	Canonical  string   `json:"canonical,omitempty"`
 	Members    []string `json:"members"`
 	Applied    bool     `json:"applied"`
+	WouldApply bool     `json:"would_apply,omitempty"` // shadow dry run: gates passed, mode withheld the write
 	Reason     string   `json:"reason,omitempty"`
 	Rejected   string   `json:"rejected,omitempty"` // why the gate refused to apply
 }
@@ -172,7 +198,7 @@ func (c *MemoryConsolidator) RunOnce(ctx context.Context, personID string) error
 		if processed >= c.batchSize() {
 			break
 		}
-		if judged[cluster.ID] {
+		if judged[judgedClusterKey(cluster.ID)] {
 			continue
 		}
 		if ctx.Err() != nil {
@@ -194,11 +220,19 @@ func (c *MemoryConsolidator) RunOnce(ctx context.Context, personID string) error
 		if err := memory.ValidateConsolidationDecision(report, decision); err != nil {
 			entry.Rejected = err.Error()
 			entry.Action = "KEEP"
-		} else if decision.Action == "MERGE" && (c.mode() == "merge-only" || c.mode() == "full") {
-			entry.Applied, entry.Rejected = c.tryApplyMerge(ctx, store, personID, cluster, decision)
+		} else if apply, reject := c.applyGate(store, personID, cluster, decision); reject != "" {
+			entry.Rejected = reject
+		} else if apply != nil {
+			if c.mode() == "shadow" {
+				entry.WouldApply = true
+			} else if err := apply(ctx); err != nil {
+				entry.Rejected = err.Error()
+			} else {
+				entry.Applied = true
+			}
 		}
 		detail, _ := json.Marshal(entry)
-		if err := store.RecordConsolidationJudgement(ctx, personID, cluster.ID, entry.Action, decision.Confidence, string(detail)); err != nil {
+		if err := store.RecordConsolidationJudgement(ctx, personID, judgedClusterKey(cluster.ID), entry.Action, decision.Confidence, string(detail)); err != nil {
 			log.Warn("memory governance: judgement checkpoint failed", "cluster", cluster.ID, "error", err)
 		}
 		entries = append(entries, entry)
@@ -211,12 +245,15 @@ func (c *MemoryConsolidator) RunOnce(ctx context.Context, personID string) error
 	return nil
 }
 
-// tryApplyMerge runs the deterministic apply gate. Returns (applied, reason
-// it was rejected) — a rejection is never an error, just a KEEP.
-func (c *MemoryConsolidator) tryApplyMerge(ctx context.Context, store memory.CanonicalStore, personID string, cluster memory.ConsolidationCluster, decision memory.ConsolidationDecision) (bool, string) {
-	if decision.Confidence < c.mergeGate() {
-		return false, fmt.Sprintf("confidence %.2f below auto_merge_confidence %.2f", decision.Confidence, c.mergeGate())
-	}
+// applyGate runs the deterministic apply checks for one validated judge
+// decision WITHOUT writing. It returns a write closure when every gate
+// passes and the reason the gate refused otherwise. KEEP and CONFLICT return
+// (nil, "") — nothing to write. SUPERSEDE is intentionally never auto-applied
+// by consolidation: intake handles supersede against fresh evidence; a
+// background pass demoting an old belief has no new evidence to justify it.
+// Shadow mode discards the closure and reports would_apply, so the shadow
+// report measures exactly the writes merge-only would perform.
+func (c *MemoryConsolidator) applyGate(store memory.CanonicalStore, personID string, cluster memory.ConsolidationCluster, decision memory.ConsolidationDecision) (func(context.Context) error, string) {
 	memberIDs := decision.MemberIDs
 	if len(memberIDs) < 2 {
 		memberIDs = nil
@@ -228,18 +265,65 @@ func (c *MemoryConsolidator) tryApplyMerge(ctx context.Context, store memory.Can
 	for _, m := range cluster.Members {
 		memberTexts = append(memberTexts, m.Content)
 	}
-	if tok := canonicalNovelToken(decision.Canonical, memberTexts); tok != "" {
-		return false, fmt.Sprintf("canonical introduces token %q absent from all members", tok)
+	merge := func(canonical string) func(context.Context) error {
+		return func(ctx context.Context) error {
+			return store.ApplyMerge(ctx, personID, memory.MergeWrite{
+				MemberIDs: memberIDs, Canonical: canonical,
+				Target: cluster.Target, Scope: cluster.Scope,
+				Confidence: decision.Confidence, ClusterID: cluster.ID, Actor: "consolidator",
+			})
+		}
 	}
-	err := store.ApplyMerge(ctx, personID, memory.MergeWrite{
-		MemberIDs: memberIDs, Canonical: decision.Canonical,
-		Target: cluster.Target, Scope: cluster.Scope,
-		Confidence: decision.Confidence, ClusterID: cluster.ID, Actor: "consolidator",
-	})
-	if err != nil {
-		return false, err.Error()
+	switch decision.Action {
+	case "MERGE":
+		if decision.Confidence < c.mergeGate() {
+			return nil, fmt.Sprintf("confidence %.2f below auto_merge_confidence %.2f", decision.Confidence, c.mergeGate())
+		}
+		if tok := canonicalNovelToken(decision.Canonical, memberTexts); tok != "" {
+			return nil, fmt.Sprintf("canonical introduces token %q absent from all members", tok)
+		}
+		return merge(decision.Canonical), ""
+	case "REINFORCE":
+		if decision.Confidence < c.reinforceGate() {
+			return nil, fmt.Sprintf("confidence %.2f below auto_reinforce_confidence %.2f", decision.Confidence, c.reinforceGate())
+		}
+		// The applied text is the MEMBER's original, never model wording: a
+		// reinforce folds repeats without authoring anything new.
+		canonical := verbatimMember(decision.Canonical, memberTexts)
+		if canonical == "" {
+			return nil, "REINFORCE canonical must restate one member's text verbatim"
+		}
+		return merge(canonical), ""
+	case "ARCHIVE":
+		if decision.Confidence < c.archiveGate() {
+			return nil, fmt.Sprintf("confidence %.2f below auto_archive_confidence %.2f", decision.Confidence, c.archiveGate())
+		}
+		reason := strings.TrimSpace("consolidation: " + decision.Reason)
+		return func(ctx context.Context) error {
+			return store.ArchiveCanonicals(ctx, personID, memberIDs, "consolidator", reason)
+		}, ""
+	case "SUPERSEDE":
+		return nil, "SUPERSEDE is report-only for background consolidation"
 	}
-	return true, ""
+	return nil, ""
+}
+
+// verbatimMember returns the member text the canonical restates (ignoring
+// case and whitespace), or "" when the canonical matches no member.
+func verbatimMember(canonical string, members []string) string {
+	norm := func(s string) string {
+		return strings.Join(strings.Fields(strings.ToLower(strings.TrimSpace(s))), " ")
+	}
+	want := norm(canonical)
+	if want == "" {
+		return ""
+	}
+	for _, m := range members {
+		if norm(m) == want {
+			return m
+		}
+	}
+	return ""
 }
 
 // canonicalNovelToken is the deterministic approximation of "the canonical

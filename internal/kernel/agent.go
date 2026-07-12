@@ -1736,7 +1736,7 @@ func (a *Agent) buildSystemPrompt(ctx context.Context, tenantID string, strategy
 	// layered canonical store — merged/superseded/forgotten beliefs never
 	// reach the prompt — falling back to the legacy facts tables while a
 	// partition has no canonical rows yet.
-	pinnedFacts, userFacts, memFacts, accessedIDs := a.loadMemoryForPrompt(ctx, tenantID)
+	pinnedFacts, userFacts, memFacts, servedCanonicalIDs := a.loadMemoryForPrompt(ctx, tenantID)
 
 	// Pinned facts are user-confirmed ground truth: they are injected first,
 	// unconditionally, and never compete with extracted facts for the bounded
@@ -1758,6 +1758,7 @@ func (a *Agent) buildSystemPrompt(ctx context.Context, tenantID string, strategy
 	now := time.Now()
 	userFacts = memory.SelectFacts(userFacts, currentScope, now, maxFactsEach)
 	memFacts = memory.SelectFacts(memFacts, currentScope, now, maxFactsEach)
+	accessedIDs := selectedCanonicalAccessIDs(servedCanonicalIDs, pinnedFacts, userFacts, memFacts)
 
 	if len(pinnedFacts) > 0 || len(userFacts) > 0 || len(memFacts) > 0 {
 		var factBlock strings.Builder
@@ -1827,6 +1828,32 @@ func (a *Agent) loadMemoryForPrompt(ctx context.Context, tenantID string) (pinne
 		}
 	}
 	return pinned, user, mem, served
+}
+
+// selectedCanonicalAccessIDs returns only canonical rows that actually reach
+// the model. ReadModelFacts intentionally reads every active row before
+// SelectFacts applies the prompt budget; touching that pre-selection set would
+// make unused memories look recently recalled and prevent age-based archival.
+func selectedCanonicalAccessIDs(served []string, groups ...[]memory.Fact) []string {
+	canonical := make(map[string]struct{}, len(served))
+	for _, id := range served {
+		canonical[id] = struct{}{}
+	}
+	seen := make(map[string]struct{})
+	out := make([]string, 0)
+	for _, facts := range groups {
+		for _, fact := range facts {
+			if _, ok := canonical[fact.ID]; !ok {
+				continue
+			}
+			if _, ok := seen[fact.ID]; ok {
+				continue
+			}
+			seen[fact.ID] = struct{}{}
+			out = append(out, fact.ID)
+		}
+	}
+	return out
 }
 
 func filterToolDefinitions(defs []map[string]interface{}, strategy TaskStrategy) []map[string]interface{} {

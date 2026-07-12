@@ -17,6 +17,7 @@ type MemoryConsolidator interface {
 	RunOnce(ctx context.Context, personID string) error
 	Interval() time.Duration
 	PauseWhileRunActive() bool
+	Mode() string
 }
 
 // StartMemoryGovernance starts the periodic consolidation loop. Foreground

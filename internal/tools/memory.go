@@ -27,8 +27,8 @@ func NewMemoryTool(mem *memory.MemoryManager) *MemoryTool {
 				Properties: map[string]PropertyDef{
 					"action": {
 						Type:        "string",
-						Description: "The action to perform: list, raw, search, show, add, correct, forget, replace, remove, history, or undo.",
-						Enum:        []string{"list", "raw", "search", "show", "add", "correct", "forget", "replace", "remove", "history", "undo"},
+						Description: "The action to perform: list, category, conflicts, stats, raw, search, show, explain, add, pin, unpin, correct, forget, replace, remove, history, or undo.",
+						Enum:        []string{"list", "category", "conflicts", "stats", "raw", "search", "show", "explain", "add", "pin", "unpin", "correct", "forget", "replace", "remove", "history", "undo"},
 					},
 					"target": {
 						Type:        "string",
@@ -55,6 +55,14 @@ func NewMemoryTool(mem *memory.MemoryManager) *MemoryTool {
 						Type:        "string",
 						Description: "A full memory ID or the short reference shown by search/show.",
 					},
+					"category": {
+						Type:        "string",
+						Description: "Memory category key shown by list, such as communication, development, projects, goals, identity, or other.",
+					},
+					"page": {
+						Type:        "integer",
+						Description: "One-based category page number.",
+					},
 				},
 				Required: []string{"action"},
 			},
@@ -71,11 +79,21 @@ func (t *MemoryTool) Execute(args map[string]interface{}) (string, error) {
 	changeID, _ := args["change_id"].(string)
 	query, _ := args["query"].(string)
 	ref, _ := args["ref"].(string)
+	category, _ := args["category"].(string)
+	page := 1
+	switch value := args["page"].(type) {
+	case int:
+		page = value
+	case float64:
+		page = int(value)
+	}
 
 	tenantID, _ := args["_tenant_id"].(string)
 	if tenantID == "" {
 		tenantID = "default"
 	}
+	workspaceID, _ := args["_workspace_id"].(string)
+	workspaceID = strings.TrimSpace(workspaceID)
 	ctx := context.Background()
 
 	switch action {
@@ -97,7 +115,7 @@ func (t *MemoryTool) Execute(args map[string]interface{}) (string, error) {
 			Target:         target,
 			Content:        content,
 			Source:         source,
-			Scope:          memory.DeriveFactScope(target, ""),
+			Scope:          memory.DeriveFactScope(target, workspaceID),
 			Confidence:     memory.BaseConfidence(source),
 			LastVerifiedAt: time.Now(),
 		}
@@ -177,7 +195,7 @@ func (t *MemoryTool) Execute(args map[string]interface{}) (string, error) {
 			LastVerifiedAt: time.Now(),
 		}
 		if replaced.Scope == "" {
-			replaced.Scope = memory.DeriveFactScope(replaced.Target, "")
+			replaced.Scope = memory.DeriveFactScope(replaced.Target, workspaceID)
 		}
 		if err := t.mem.AddFactMeta(ctx, tenantID, replaced); err != nil {
 			// Keep a failed replace from silently deleting the original.
@@ -233,14 +251,42 @@ func (t *MemoryTool) Execute(args map[string]interface{}) (string, error) {
 	case "list":
 		return formatMemoryOverview(ctx, t.mem, tenantID)
 
+	case "category":
+		return formatMemoryCategory(ctx, t.mem, tenantID, category, page)
+
+	case "conflicts":
+		return formatMemoryConflicts(ctx, t.mem, tenantID)
+
+	case "stats":
+		return formatMemoryDiagnostics(ctx, t.mem, tenantID)
+
 	case "raw":
 		return formatRawMemoryFacts(ctx, t.mem, tenantID)
 
 	case "search":
 		return formatMemorySearch(ctx, t.mem, tenantID, query)
 
-	case "show":
+	case "show", "explain":
 		return formatMemoryDetail(ctx, t.mem, tenantID, ref)
+
+	case "pin", "unpin":
+		fact, err := findMemoryFactByRef(ctx, t.mem, tenantID, ref)
+		if err != nil {
+			return "", err
+		}
+		store, ok := t.mem.Canonical()
+		if !ok {
+			return "", fmt.Errorf("pinning existing memory requires the canonical memory store")
+		}
+		pinned := action == "pin"
+		if err := store.SetCanonicalPinned(ctx, tenantID, fact.ID, pinned, "user"); err != nil {
+			return "", err
+		}
+		verb := "Unpinned"
+		if pinned {
+			verb = "Pinned"
+		}
+		return fmt.Sprintf("%s memory [%s]: %s", verb, shortMemoryRef(fact.ID), fact.Content), nil
 
 	case "forget":
 		fact, err := findMemoryFactByRef(ctx, t.mem, tenantID, ref)
@@ -287,7 +333,7 @@ func (t *MemoryTool) Execute(args map[string]interface{}) (string, error) {
 			LastVerifiedAt: time.Now(),
 		}
 		if corrected.Scope == "" {
-			corrected.Scope = memory.DeriveFactScope(corrected.Target, "")
+			corrected.Scope = memory.DeriveFactScope(corrected.Target, workspaceID)
 		}
 		if err := t.mem.AddFactMeta(ctx, tenantID, corrected); err != nil {
 			// Keep a failed correction from silently deleting its evidence.

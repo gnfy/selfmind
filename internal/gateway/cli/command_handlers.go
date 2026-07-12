@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -546,6 +547,31 @@ func (m *uiModel) handleMemory(args []string) tea.Cmd {
 				return MsgAgentDone{Response: fmt.Sprintf("Memory raw view error: %v", err)}
 			}
 			return MsgAgentDone{Response: resp}
+		case "category":
+			if len(args) < 2 {
+				return MsgAgentDone{Response: "Usage: /memory category <name> [page]"}
+			}
+			page := 1
+			if len(args) >= 3 {
+				parsed, err := strconv.Atoi(args[2])
+				if err != nil || parsed < 1 {
+					return MsgAgentDone{Response: "Usage: /memory category <name> [page]"}
+				}
+				page = parsed
+			}
+			resp, err := m.dispatch("memory", map[string]interface{}{
+				"action": "category", "category": args[1], "page": page, "_tenant_id": m.tenantID,
+			})
+			if err != nil {
+				return MsgAgentDone{Response: fmt.Sprintf("Memory category error: %v", err)}
+			}
+			return MsgAgentDone{Response: resp}
+		case "conflicts":
+			resp, err := m.dispatch("memory", map[string]interface{}{"action": "conflicts", "_tenant_id": m.tenantID})
+			if err != nil {
+				return MsgAgentDone{Response: fmt.Sprintf("Memory conflicts error: %v", err)}
+			}
+			return MsgAgentDone{Response: resp}
 		case "search":
 			if len(args) < 2 {
 				return MsgAgentDone{Response: "Usage: /memory search <query>"}
@@ -557,12 +583,12 @@ func (m *uiModel) handleMemory(args []string) tea.Cmd {
 				return MsgAgentDone{Response: fmt.Sprintf("Memory search error: %v", err)}
 			}
 			return MsgAgentDone{Response: resp}
-		case "show":
+		case "show", "explain":
 			if len(args) != 2 {
 				return MsgAgentDone{Response: "Usage: /memory show <ref>"}
 			}
 			resp, err := m.dispatch("memory", map[string]interface{}{
-				"action": "show", "ref": args[1], "_tenant_id": m.tenantID,
+				"action": action, "ref": args[1], "_tenant_id": m.tenantID,
 			})
 			if err != nil {
 				return MsgAgentDone{Response: fmt.Sprintf("Memory detail error: %v", err)}
@@ -631,7 +657,16 @@ func (m *uiModel) handleMemory(args []string) tea.Cmd {
 			return MsgAgentDone{Response: resp}
 		case "pin":
 			if len(args) < 2 {
-				return MsgAgentDone{Response: "Usage: /memory pin <authoritative fact>"}
+				return MsgAgentDone{Response: "Usage: /memory pin <ref|authoritative fact>"}
+			}
+			if len(args) == 2 && looksLikeMemoryReference(args[1]) {
+				resp, err := m.dispatch("memory", map[string]interface{}{
+					"action": "pin", "ref": args[1], "_tenant_id": m.tenantID,
+				})
+				if err != nil {
+					return MsgAgentDone{Response: fmt.Sprintf("Pin failed: %v", err)}
+				}
+				return MsgAgentDone{Response: resp}
 			}
 			resp, err := m.dispatch("memory", map[string]interface{}{
 				"action":     "add",
@@ -643,10 +678,35 @@ func (m *uiModel) handleMemory(args []string) tea.Cmd {
 				return MsgAgentDone{Response: fmt.Sprintf("Pin failed: %v", err)}
 			}
 			return MsgAgentDone{Response: "Pinned (authoritative): " + resp}
+		case "unpin":
+			if len(args) != 2 || !looksLikeMemoryReference(args[1]) {
+				return MsgAgentDone{Response: "Usage: /memory unpin <ref>"}
+			}
+			resp, err := m.dispatch("memory", map[string]interface{}{
+				"action": "unpin", "ref": args[1], "_tenant_id": m.tenantID,
+			})
+			if err != nil {
+				return MsgAgentDone{Response: fmt.Sprintf("Unpin failed: %v", err)}
+			}
+			return MsgAgentDone{Response: resp}
 		default:
-			return MsgAgentDone{Response: "Usage: /memory [list|search <query>|show <ref>|correct <ref> <text>|forget <ref>|pin <text>|raw|history|undo]"}
+			return MsgAgentDone{Response: "Usage: /memory [list|category <name> [page]|conflicts|search <query>|show <ref>|correct <ref> <text>|forget <ref>|pin <ref|text>|unpin <ref>|raw|history|undo]"}
 		}
 	}
+}
+
+func looksLikeMemoryReference(value string) bool {
+	value = strings.TrimSpace(value)
+	if len(value) != 8 && len(value) != 36 {
+		return false
+	}
+	for _, r := range value {
+		if r == '-' || (r >= '0' && r <= '9') || (r >= 'a' && r <= 'f') || (r >= 'A' && r <= 'F') {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 // handleCompact shrinks the visible transcript to the most recent exchanges,

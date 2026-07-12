@@ -156,6 +156,10 @@ type CanonicalStore interface {
 	// SetCanonicalStatus flips one canonical row by id (the read model hands
 	// canonical ids to the management path once the cutover is active).
 	SetCanonicalStatus(ctx context.Context, tenantID, id, status, actor string) error
+	// SetCanonicalPinned changes the user's unconditional-injection bit by id.
+	// Pinning also confirms the row as user authority; unpinning keeps that
+	// confirmation while returning the row to ordinary ranked injection.
+	SetCanonicalPinned(ctx context.Context, tenantID, id string, pinned bool, actor string) error
 	TouchCanonicalAccess(ctx context.Context, tenantID string, ids []string) error
 	ArchiveCanonicals(ctx context.Context, tenantID string, ids []string, actor, reason string) error
 	ListJudgedClusterIDs(ctx context.Context, tenantID string) (map[string]bool, error)

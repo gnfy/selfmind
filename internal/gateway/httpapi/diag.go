@@ -128,6 +128,23 @@ func (d *Server) diagReply(ctx context.Context, identity *control.IdentityContex
 	return strings.TrimSpace(sb.String()), nil
 }
 
+func (d *Server) memoryDiagReply(ctx context.Context, identity *control.IdentityContext) (string, error) {
+	if d == nil || d.Gateway == nil || identity == nil {
+		return "Memory diagnostics unavailable.", nil
+	}
+	result, err := d.Gateway.DispatchTool("memory", map[string]interface{}{
+		"action": "stats", "_tenant_id": identity.PersonID,
+	})
+	if err != nil {
+		return "", err
+	}
+	mode := "disabled"
+	if d.MemoryConsolidator != nil {
+		mode = d.MemoryConsolidator.Mode()
+	}
+	return strings.TrimSpace(result) + "\nGovernance mode: " + mode, nil
+}
+
 // diagEventLabel keeps /diag useful on IM without exposing internal event
 // vocabulary or channel/account identifiers. Unknown events remain visible in
 // a generic form so diagnostics do not silently hide activity.

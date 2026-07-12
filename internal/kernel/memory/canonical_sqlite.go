@@ -577,6 +577,15 @@ func undoMemoryEvent(db *sql.DB, eventID, actor string) error {
 			CanonicalForgotten, now, memoryID); err != nil {
 			return err
 		}
+	case "pin", "unpin":
+		var snap canonicalProtectionSnapshot
+		if memoryID == "" || json.Unmarshal([]byte(snapshot), &snap) != nil {
+			return fmt.Errorf("%s event %s has no protection snapshot", action, eventID)
+		}
+		if _, err := tx.Exec(`UPDATE canonical_memories SET pinned = ?, user_confirmed = ?, updated_at = ?, revision = revision + 1 WHERE id = ?`,
+			sqliteBool(snap.Pinned), sqliteBool(snap.UserConfirmed), now, memoryID); err != nil {
+			return err
+		}
 	default:
 		return fmt.Errorf("memory event action %q cannot be undone", action)
 	}
@@ -622,6 +631,58 @@ func setCanonicalStatusByID(db *sql.DB, id, status, actor string) error {
 			uuid.New().String(), actor, status, id, time.Now().UTC().Unix())
 	}
 	return err
+}
+
+type canonicalProtectionSnapshot struct {
+	Pinned        bool `json:"pinned"`
+	UserConfirmed bool `json:"user_confirmed"`
+}
+
+func setCanonicalPinned(db *sql.DB, id string, pinned bool, actor string) error {
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var oldPinned, oldConfirmed int
+	if err := tx.QueryRow(`SELECT pinned, user_confirmed FROM canonical_memories WHERE id = ?`, id).Scan(&oldPinned, &oldConfirmed); err != nil {
+		if err == sql.ErrNoRows {
+			return fmt.Errorf("canonical memory not found: %s", id)
+		}
+		return err
+	}
+	newPinned := sqliteBool(pinned)
+	newConfirmed := oldConfirmed
+	if pinned {
+		newConfirmed = 1
+	}
+	if oldPinned == newPinned && oldConfirmed == newConfirmed {
+		return tx.Commit()
+	}
+	now := time.Now().UTC().Unix()
+	if _, err := tx.Exec(`UPDATE canonical_memories SET pinned = ?, user_confirmed = ?,
+		last_verified_at = CASE WHEN ? = 1 THEN ? ELSE last_verified_at END,
+		updated_at = ?, revision = revision + 1 WHERE id = ?`,
+		newPinned, newConfirmed, newPinned, now, now, id); err != nil {
+		return err
+	}
+	snapshot, _ := json.Marshal(canonicalProtectionSnapshot{Pinned: oldPinned != 0, UserConfirmed: oldConfirmed != 0})
+	action := "unpin"
+	if pinned {
+		action = "pin"
+	}
+	if _, err := tx.Exec(`INSERT INTO memory_events (id, actor, action, memory_id, snapshot, created_at)
+		VALUES (?, ?, ?, ?, ?, ?)`, uuid.New().String(), actor, action, id, string(snapshot), now); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func sqliteBool(value bool) int {
+	if value {
+		return 1
+	}
+	return 0
 }
 
 func touchCanonicalAccess(db *sql.DB, ids []string) error {
@@ -744,6 +805,11 @@ func (p *SQLiteProvider) SetCanonicalStatusByHash(ctx context.Context, tenantID,
 
 func (p *SQLiteProvider) SetCanonicalStatus(ctx context.Context, tenantID, id, status, actor string) error {
 	_, err := p.call("SetCanonicalStatus", tenantID, id, status, actor)
+	return err
+}
+
+func (p *SQLiteProvider) SetCanonicalPinned(ctx context.Context, tenantID, id string, pinned bool, actor string) error {
+	_, err := p.call("SetCanonicalPinned", tenantID, id, pinned, actor)
 	return err
 }
 

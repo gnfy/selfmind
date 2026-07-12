@@ -363,6 +363,11 @@ canonical、支持/矛盾证据、来源、最后确认时间、为何被召回�
 <text>`、`pin <id>`、`forget <id>`、`conflicts`、`raw`、`history`、`undo`；
 `/diag memory` 显示治理统计。search 升级 FTS + CJK bigram（修 D9）。
 
+实现约束（2026-07-12）：`last_accessed_at` 只更新真正通过预算选择并注入 prompt
+的 canonical id；候选扫描不算使用。Agent 原生工具调用透传 `_workspace_id`，因此
+项目/环境记忆按 workspace 落库。`pin <id>`/`unpin <id>` 已接 canonical 保护位，
+pin 同时确认用户权威；unpin 仅取消无条件注入，不抹掉用户确认。
+
 ### 5.3 纠正与遗忘语义（P2）
 
 | 操作 | 语义 |

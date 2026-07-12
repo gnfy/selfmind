@@ -288,6 +288,14 @@ func TestDiagControlCommand(t *testing.T) {
 	if !strings.Contains(reply, "Active run: none") {
 		t.Fatalf("/diag reply = %q; want Active run: none", reply)
 	}
+
+	handled, reply, err = daemon.tryHandleControlCommand(ctx, identity, api.MessageRequest{Channel: "cli", Content: "/diag memory"})
+	if !handled || err != nil {
+		t.Fatalf("/diag memory handled=%v err=%v", handled, err)
+	}
+	if !strings.Contains(reply, "Governance mode: disabled") {
+		t.Fatalf("/diag memory reply = %q", reply)
+	}
 }
 
 // TestUnknownSlashCommandIsRejectedNotQueued reproduces the live bug: a

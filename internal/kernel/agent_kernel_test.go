@@ -517,6 +517,7 @@ func TestAgentRunNativeToolCall(t *testing.T) {
 
 	eventCh := make(chan string, 20)
 	ctx := WithEventChannel(memory.WithTenantID(context.Background(), "user123"), eventCh)
+	ctx = WithWorkspaceContext(ctx, WorkspaceContext{ID: "workspace-123", Root: t.TempDir()})
 	res, _, err := agent.RunConversation(ctx, "user123", "cli", "read the readme")
 	if err != nil {
 		t.Fatalf("Agent failed: %v", err)
@@ -533,7 +534,7 @@ func TestAgentRunNativeToolCall(t *testing.T) {
 	if backend.calledName != "read_file" {
 		t.Fatalf("calledName = %q, want read_file", backend.calledName)
 	}
-	if backend.calledArgs["path"] != "README.md" || backend.calledArgs["_tenant_id"] != "user123" {
+	if backend.calledArgs["path"] != "README.md" || backend.calledArgs["_tenant_id"] != "user123" || backend.calledArgs["_workspace_id"] != "workspace-123" {
 		t.Fatalf("unexpected tool args: %+v", backend.calledArgs)
 	}
 
@@ -557,6 +558,17 @@ func TestAgentRunNativeToolCall(t *testing.T) {
 	}
 	if !agentEventsContain(events, "tool.started") {
 		t.Fatalf("tool.started event missing: %+v", events)
+	}
+}
+
+func TestSelectedCanonicalAccessIDsOnlyIncludesInjectedFacts(t *testing.T) {
+	selected := selectedCanonicalAccessIDs(
+		[]string{"pinned", "selected", "not-selected"},
+		[]memory.Fact{{ID: "pinned"}},
+		[]memory.Fact{{ID: "selected"}, {ID: "legacy"}, {ID: "selected"}},
+	)
+	if got, want := strings.Join(selected, ","), "pinned,selected"; got != want {
+		t.Fatalf("selected ids = %q, want %q", got, want)
 	}
 }
 

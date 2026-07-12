@@ -249,10 +249,21 @@ Domain docs (**mandatory** before changing that domain):
   are separate durable sources. Ranking/embedding work extends the selector
   layer — never another append path in `agent.go`, gateway handlers, or IM
   adapters.
+- A canonical memory's `last_accessed_at` means it was actually injected into
+  the model prompt, not merely scanned as a selection candidate. Touch only the
+  post-budget selected ids (plus unconditional pinned rows); touching every
+  active row defeats age-based archival. Native tool dispatch must pass the
+  active logical `_workspace_id` alongside `_tenant_id`, and project/environment
+  memory writes must derive `workspace:<id>` scope from it. User preferences
+  remain global. Never infer workspace memory scope from cwd text inside the
+  memory tool.
 - Human memory UX is a read model over durable evidence, not a dump of the
   `facts` table. `/memory` groups related evidence into stable human categories
   and hides UUID/provenance noise; `/memory raw` preserves the auditable view,
-  while `search -> show -> correct|forget` is the management path. Read-model
+  while `search -> show -> correct|forget|pin|unpin` is the management path.
+  Pinning an existing reference preserves its content, evidence, and scope;
+  unpinning removes unconditional injection but retains user-confirmed authority.
+  Read-model
   grouping must be deterministic, bounded, UTF-8 safe, and non-destructive.
   User corrections retain the fact reference and become `SourceUser`; never
   let automatic extraction silently override a pinned or user-corrected fact.

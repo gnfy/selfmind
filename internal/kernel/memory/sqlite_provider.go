@@ -393,6 +393,9 @@ func (p *SQLiteProvider) worker() {
 			case "SetCanonicalStatus":
 				res = dbResult{err: setCanonicalStatusByID(db, op.args[1].(string), op.args[2].(string), op.args[3].(string))}
 
+			case "SetCanonicalPinned":
+				res = dbResult{err: setCanonicalPinned(db, op.args[1].(string), op.args[2].(bool), op.args[3].(string))}
+
 			case "TouchCanonicalAccess":
 				res = dbResult{err: touchCanonicalAccess(db, op.args[1].([]string))}
 

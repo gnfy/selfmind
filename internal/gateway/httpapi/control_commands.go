@@ -176,6 +176,9 @@ func (d *Server) tryHandleControlCommand(ctx context.Context, identity *control.
 			return true, "Dropped queued task: " + textutil.Truncate(toOneLine(target.Content), 60), nil
 		}
 		return true, formatQueue(queued), nil
+	case lower == "/diag memory":
+		reply, err := d.memoryDiagReply(ctx, identity)
+		return true, reply, err
 	case lower == "/diag":
 		reply, err := d.diagReply(ctx, identity)
 		return true, reply, err

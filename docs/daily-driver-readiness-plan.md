@@ -116,12 +116,14 @@ thin metadata, no confidence model, coarse selection.
   events + artifacts + summaries across the kernel/httpapi boundary (each
   dimension now ranks within itself).
 - **W3e — `/memory` transparency and governance UX** ✅ shipped: `/memory`
-  defaults to a bounded human read model that categorizes and groups related
-  evidence without deleting it or exposing UUID noise. `/memory search` returns
-  short references; `/memory show` exposes source/scope/confidence; `/memory
-  correct` preserves the reference and promotes the correction to user
-  authority; `/memory forget` remains audited. `/memory raw` is the explicit
-  evidence/provenance view, and legacy remove/history/undo/pin actions remain.
+  is a short health dashboard and category directory; it never expands the
+  full fact list. `/memory category <name> [page]` provides a paged, ranked,
+  actionable view with stable short references, while `/memory conflicts`
+  isolates the only items that normally require human attention. `/memory
+  show` explains canonical status, protection, confidence and supporting
+  observations; `/memory search` returns short references; `/memory correct`
+  promotes user authority and `/memory forget` remains audited. `/memory raw`
+  is the explicit evidence/provenance view, and history/undo/pin remain.
 - **W3f — Memory eval** ✅ shipped: `TestMemoryEvalGuarantees` +
   `TestMemoryEvalProviderRoundTrip` encode the guarantees (user-stated outranks
   turn-extracted, fresh-high beats stale-low, workspace scoping, legacy

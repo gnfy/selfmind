@@ -378,6 +378,20 @@ Domain docs (**mandatory** before changing that domain):
   limits) — no keyword taxonomies. The gateway builds it from the ORIGINAL
   user content before adding daemon/workspace/attachment/resume context, then
   passes it via `kernel.WithTaskStrategy`.
+- `web_search` (`internal/tools/web_search.go`) is a BACKEND REGISTRY, not a
+  scraper. Hosted APIs (Tavily/Brave/Serper/Firecrawl) are the quality path;
+  SearXNG is self-host; DuckDuckGo HTML scraping is a best-effort fallback
+  ONLY — never promote it back to the default. Config is exactly TWO fields
+  (`web.search_backend` + `web.api_key`) — ONE backend, ONE key, NO fallback
+  chain (a configured backend that fails returns an error, it never silently
+  switches engines). Keys live in `config.yaml` `web:` (the detached `setsid`
+  daemon does not inherit shell env, so env-only credentials silently fail);
+  `app.InitTools` passes `cfg.Web` in as `WebSearchOptions`. **Honesty
+  invariant: a backend failure (non-200, anti-bot challenge, missing
+  credential) MUST return an error, never "No results found".** Reporting an
+  outage as an empty result made the model burn calls rephrasing and invent
+  negative conclusions — "No results found" is reserved for a backend that
+  actually ran and returned zero hits.
 - Intent routing is centralized in `internal/gateway/router/intent*.go`.
   `intent.rules` cover only explicit routing/skill/search commands and
   high-confidence resume cues; no intent mode may reroute ordinary messages

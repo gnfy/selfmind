@@ -142,6 +142,17 @@ tasks:
 editor:
   large_paste_chars: 1000
   large_paste_lines: 10
+
+# Web search backend. Local DuckDuckGo scraping is unreliable (anti-bot
+# blocks, GFW), so a hosted search API is strongly recommended: pick one
+# backend and paste ITS key. Leave both empty for best-effort DuckDuckGo.
+#   tavily : https://tavily.com          (recommended; AI-native, free tier)
+#   brave  : https://brave.com/search/api (independent index, free tier)
+#   serper : https://serper.dev           (Google results, free credits)
+# (searxng: set search_backend: searxng and put your instance URL in api_key)
+web:
+  search_backend: ""   # tavily | brave | serper | firecrawl | searxng | duckduckgo
+  api_key: ""
 `
 
 type Options struct {
@@ -168,6 +179,24 @@ type Config struct {
 	Tasks            TaskConfig                  `mapstructure:"tasks" yaml:"tasks,omitempty"`
 	Models           ModelsConfig                `mapstructure:"models" yaml:"models,omitempty"`
 	Intent           IntentConfig                `mapstructure:"intent" yaml:"intent,omitempty"`
+	Web              WebConfig                   `mapstructure:"web" yaml:"web,omitempty"`
+}
+
+// WebConfig configures the web_search backend. Local HTML scraping
+// (DuckDuckGo) is unreliable on many network egresses (anti-bot 202, GFW), so
+// a hosted search API is the quality path — the same choice codex (server-side
+// search) and hermes (managed Firecrawl) make. Just two fields: pick ONE
+// backend and give ITS credential. The key lives here, NOT in env vars: the
+// daemon is started detached (setsid) and does not inherit a shell's exports,
+// which is why env-only backends never worked in practice.
+type WebConfig struct {
+	// SearchBackend picks the backend: tavily | brave | serper | firecrawl |
+	// searxng | duckduckgo. Empty = duckduckgo scraping (best-effort, no key).
+	SearchBackend string `mapstructure:"search_backend" yaml:"search_backend,omitempty"`
+	// APIKey is the credential for the chosen backend (the searxng backend
+	// reads its instance URL from this field instead of a key). Ignored by
+	// duckduckgo.
+	APIKey string `mapstructure:"api_key" yaml:"api_key,omitempty"`
 }
 
 type ModelConfig struct {
@@ -799,6 +828,7 @@ func (c *Config) Normalize() {
 	c.Gateway.OutboundWebhookToken = expandEnvRef(c.Gateway.OutboundWebhookToken)
 	c.Gateway.TelegramToken = expandEnvRef(c.Gateway.TelegramToken)
 	c.Gateway.Weixin = normalizeWeixin(c.Gateway.Weixin)
+	c.Web = normalizeWeb(c.Web)
 	c.Auth.CredentialsFile = cleanPath(firstNonEmpty(c.Auth.CredentialsFile, "~/.selfmind/auth.json"))
 	c.Delegation.Provider = expandEnvRef(c.Delegation.Provider)
 	c.Delegation.Model = expandEnvRef(c.Delegation.Model)
@@ -889,6 +919,15 @@ func normalizeWeixin(wx WeixinConfig) WeixinConfig {
 		wx.Enabled = true
 	}
 	return wx
+}
+
+// normalizeWeb resolves web-search credentials from config, with an env-var
+// fallback purely for convenience (config is the source of truth because the
+// detached daemon does not inherit shell exports).
+func normalizeWeb(w WebConfig) WebConfig {
+	w.SearchBackend = strings.ToLower(strings.TrimSpace(expandEnvRef(w.SearchBackend)))
+	w.APIKey = firstNonEmpty(expandEnvRef(w.APIKey), os.Getenv("SELFMIND_WEB_SEARCH_API_KEY"))
+	return w
 }
 
 func configOrEnvDefault(configValue, envKey, defaultValue string) string {

@@ -26,6 +26,7 @@ import (
 
 const (
 	doctorRecentRuns   = 10
+	doctorRecentErrors = 12
 	doctorRecentEvents = 40
 	doctorMaxPushes    = 10
 	doctorLogLines     = 50
@@ -144,6 +145,23 @@ func buildDoctorReport(ctx context.Context, store *control.Store, identity *cont
 			if strings.TrimSpace(r.LastError) != "" {
 				fmt.Fprintf(&sb, "    error: %s\n", oneLine(tools.RedactSensitive(r.LastError), 160))
 			}
+		}
+	}
+	sb.WriteString("\n")
+
+	// Recent errors: run-level failures + tool failures, aggregated newest
+	// first, so "what has been going wrong lately" is one glance instead of
+	// reading each run's events by hand.
+	sb.WriteString("== Recent errors ==\n")
+	if errs, err := store.ListRecentErrors(ctx, identity.TenantID, identity.PersonID, doctorRecentErrors); err != nil {
+		fmt.Fprintf(&sb, "(error: %v)\n", err)
+	} else if len(errs) == 0 {
+		sb.WriteString("(none)\n")
+	} else {
+		for _, e := range errs {
+			fmt.Fprintf(&sb, "- %s [%s:%s] %s\n",
+				e.When.Format("01-02 15:04"), e.Kind, oneLine(e.Source, 24),
+				oneLine(tools.RedactSensitive(e.Message), 160))
 		}
 	}
 	sb.WriteString("\n")

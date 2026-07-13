@@ -76,6 +76,89 @@ func (s *Store) ListRecentRunsForPerson(ctx context.Context, tenantID, personID 
 	return out, rows.Err()
 }
 
+// ErrorEntry is one recent failure for the doctor "recent errors" section: a
+// run-level failure (model/interface error, interrupted run) or a tool-failure
+// event (a tool.completed carrying an error). Aggregating both into one
+// newest-first list answers "what has been going wrong lately" without reading
+// per-run event logs by hand.
+type ErrorEntry struct {
+	When    time.Time `json:"when"`
+	Kind    string    `json:"kind"`  // "run" | "tool"
+	Source  string    `json:"source"` // run status, or the failing tool name
+	Message string    `json:"message"`
+	TaskID  string    `json:"task_id,omitempty"`
+}
+
+// ListRecentErrors returns the person's most recent failures, newest first,
+// read entirely from the durable task_events log (the authoritative,
+// per-event, immutable record — unlike task_runs.last_error, which ordinary
+// model failures never set):
+//   - tool.completed events carrying a non-empty "error" (tool failures,
+//     Kind "tool", Source = tool name);
+//   - run.finished events whose outcome.status is a failure (run/model
+//     failures, Kind "run", Source = the failed status, Message = the
+//     outcome summary — where a 429/EOF surfaces);
+//   - run.finalize_error events (Kind "run", finalization defects).
+//
+// Read-only, person-scoped (via the task join), bounded. The caller redacts
+// secrets before display.
+func (s *Store) ListRecentErrors(ctx context.Context, tenantID, personID string, limit int) ([]ErrorEntry, error) {
+	if strings.TrimSpace(personID) == "" {
+		return nil, fmt.Errorf("person id is required")
+	}
+	if limit <= 0 || limit > 100 {
+		limit = 10
+	}
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT e.type, e.created_at, e.task_id,
+		        COALESCE(json_extract(e.payload_json,'$.tool'),''),
+		        COALESCE(json_extract(e.payload_json,'$.error'),''),
+		        COALESCE(json_extract(e.payload_json,'$.outcome.status'),''),
+		        COALESCE(json_extract(e.payload_json,'$.outcome.summary'),''),
+		        COALESCE(json_extract(e.payload_json,'$.errors'),'')
+		 FROM task_events e JOIN tasks t ON t.id = e.task_id
+		 WHERE t.tenant_id = ? AND t.person_id = ?
+		   AND (
+		     (e.type = 'tool.completed' AND TRIM(COALESCE(json_extract(e.payload_json,'$.error'),'')) <> '')
+		     OR (e.type = 'run.finished' AND LOWER(COALESCE(json_extract(e.payload_json,'$.outcome.status'),'')) IN ('failed','error'))
+		     OR e.type = 'run.finalize_error'
+		   )
+		 ORDER BY e.created_at DESC LIMIT ?`,
+		normalizeTenant(tenantID), personID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []ErrorEntry
+	for rows.Next() {
+		var typ, taskID, tool, toolErr, outStatus, outSummary, finalizeErrs string
+		var ts int64
+		if err := rows.Scan(&typ, &ts, &taskID, &tool, &toolErr, &outStatus, &outSummary, &finalizeErrs); err != nil {
+			return nil, err
+		}
+		e := ErrorEntry{When: time.Unix(ts, 0), TaskID: taskID}
+		switch typ {
+		case "tool.completed":
+			e.Kind = "tool"
+			e.Source = tool
+			if e.Source == "" {
+				e.Source = "tool"
+			}
+			e.Message = toolErr
+		case "run.finished":
+			e.Kind = "run"
+			e.Source = outStatus
+			e.Message = outSummary
+		case "run.finalize_error":
+			e.Kind = "run"
+			e.Source = "finalize_error"
+			e.Message = finalizeErrs
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
 // ChannelMessageCount is a per-channel message tally for the doctor "activity by
 // channel" section (the durable, person-scoped trajectory of where work happened).
 type ChannelMessageCount struct {

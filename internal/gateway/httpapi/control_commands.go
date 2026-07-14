@@ -188,7 +188,10 @@ func (d *Server) tryHandleControlCommand(ctx context.Context, identity *control.
 	case lower == "/diag":
 		reply, err := d.diagReply(ctx, identity)
 		return true, reply, err
-	case strings.HasPrefix(lower, "/workspace "):
+	case strings.HasPrefix(lower, "/workspace ") || strings.HasPrefix(lower, "/ws "):
+		// Unified workspace verb: WITH an argument it selects; bare it lists
+		// (handled by the case below). "/ws" is the short alias and
+		// "/workspaces" the plural spelling — all three behave identically.
 		parts := strings.Fields(req.Content)
 		if len(parts) < 2 {
 			return true, "Usage: /workspace <n|workspace_id>", nil
@@ -204,7 +207,7 @@ func (d *Server) tryHandleControlCommand(ctx context.Context, identity *control.
 			return true, "", err
 		}
 		return true, fmt.Sprintf("Current workspace: %s (%s)\n%s", ws.Name, ws.ID, ws.LocalPath), nil
-	case lower == "/workspaces":
+	case lower == "/workspaces" || lower == "/workspace" || lower == "/ws":
 		workspaces, err := d.listWorkspacesForDisplay(ctx, identity)
 		if err != nil {
 			return true, "", err

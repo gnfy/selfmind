@@ -119,6 +119,56 @@ func TestStoreIdentityWorkspaceTaskFlow(t *testing.T) {
 	}
 }
 
+func TestEnsureWorkspacePreservesExplicitAllowedRoots(t *testing.T) {
+	ctx := context.Background()
+	store, err := OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("OpenStore failed: %v", err)
+	}
+	defer store.Close()
+
+	root := filepath.Join(t.TempDir(), "repo")
+	extra := filepath.Join(t.TempDir(), "shared")
+	explicit, err := store.RegisterWorkspace(ctx, Workspace{
+		TenantID:      "tenant-a",
+		OwnerPersonID: "person-a",
+		Name:          "repo",
+		LocalPath:     root,
+		AllowedRoots:  []string{root, extra},
+	})
+	if err != nil {
+		t.Fatalf("RegisterWorkspace failed: %v", err)
+	}
+
+	ensured, err := store.EnsureWorkspace(ctx, Workspace{
+		TenantID:      "tenant-a",
+		OwnerPersonID: "person-a",
+		Name:          "repo revisited",
+		LocalPath:     root,
+		AllowedRoots:  []string{root},
+	})
+	if err != nil {
+		t.Fatalf("EnsureWorkspace failed: %v", err)
+	}
+	if ensured.ID != explicit.ID || len(ensured.AllowedRoots) != 2 || ensured.AllowedRoots[1] != extra {
+		t.Fatalf("ensure collapsed explicit roots: %+v", ensured.AllowedRoots)
+	}
+
+	replaced, err := store.RegisterWorkspace(ctx, Workspace{
+		TenantID:      "tenant-a",
+		OwnerPersonID: "person-a",
+		Name:          "repo",
+		LocalPath:     root,
+		AllowedRoots:  []string{root},
+	})
+	if err != nil {
+		t.Fatalf("explicit replacement failed: %v", err)
+	}
+	if len(replaced.AllowedRoots) != 1 || replaced.AllowedRoots[0] != root {
+		t.Fatalf("explicit replacement did not revoke extra root: %+v", replaced.AllowedRoots)
+	}
+}
+
 func TestStoreRuntimeDeliveryAndInterruptFlow(t *testing.T) {
 	ctx := context.Background()
 	store, err := OpenStore(t.TempDir())

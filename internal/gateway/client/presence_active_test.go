@@ -1,6 +1,6 @@
 package client
 
-// Client-side presence honesty: the presence ping and the event polls carry
+// Client-side presence honesty: the presence ping and the unified event stream carry
 // active=0|1 computed from the age of the last user input, so an open TUI at
 // a vacated desk stops claiming attachment (the daemon then lets presence
 // expire and pushes route to the preferred IM again).
@@ -17,7 +17,7 @@ import (
 )
 
 // presenceCaptureServer records the active query param of every presence ping
-// and event poll it serves.
+// and event-stream connection it serves.
 func presenceCaptureServer(t *testing.T) (*httptest.Server, func() []string) {
 	t.Helper()
 	var mu sync.Mutex
@@ -26,10 +26,6 @@ func presenceCaptureServer(t *testing.T) (*httptest.Server, func() []string) {
 		mu.Lock()
 		seen = append(seen, r.URL.Path+"?active="+r.URL.Query().Get("active"))
 		mu.Unlock()
-		if r.URL.Path == "/v1/tasks/events" {
-			_, _ = w.Write([]byte(`{"events":[]}`))
-			return
-		}
 		_, _ = w.Write([]byte(`{"status":"ok"}`))
 	}))
 	t.Cleanup(srv.Close)
@@ -54,21 +50,29 @@ func TestPresenceBeatsCarryInputDerivedActiveFlag(t *testing.T) {
 	if err := c.PingPresence(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	c.drainEventsOnce(context.Background(), api.MessageRequest{Platform: "cli", PlatformUserID: "local"}, map[string]bool{}, nil)
+	resp, err := c.openEventStream(context.Background(), api.MessageRequest{Platform: "cli", PlatformUserID: "local"}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
 
 	// Stale input (older than the timeout): both surfaces stop claiming.
 	lastInput = time.Now().Add(-2 * time.Minute)
 	if err := c.PingPresence(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	c.drainEventsOnce(context.Background(), api.MessageRequest{Platform: "cli", PlatformUserID: "local"}, map[string]bool{}, nil)
+	resp, err = c.openEventStream(context.Background(), api.MessageRequest{Platform: "cli", PlatformUserID: "local"}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
 
 	got := seen()
 	want := []string{
 		"/v1/presence/ping?active=1",
-		"/v1/tasks/events?active=1",
+		"/v1/events/stream?active=1",
 		"/v1/presence/ping?active=0",
-		"/v1/tasks/events?active=0",
+		"/v1/events/stream?active=0",
 	}
 	if len(got) != len(want) {
 		t.Fatalf("requests = %v", got)

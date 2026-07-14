@@ -23,6 +23,7 @@ func InitTools(mem *memory.MemoryManager, cfg *config.Config, ag *kernel.Agent, 
 	disp.InjectMiddleware(tools.AuthMiddleware(mem))
 	disp.InjectMiddleware(tools.WorkspaceScopeMiddleware())
 	disp.InjectMiddleware(tools.NewToolGuardrails().Middleware)
+	disp.InjectMiddleware(tools.EvidenceMiddleware())
 
 	tools.RegisterBuiltins(disp)
 	tools.RegisterExtendedTools(disp, tools.WebSearchOptions{

@@ -32,6 +32,9 @@ var ErrCassetteMiss = errors.New("vcr: cassette miss in offline mode (record it 
 // background/aux calls without a session fall through to the live provider.
 
 type vcrSessionCtxKey struct{}
+type vcrWorkspaceCtxKey struct{}
+
+const vcrWorkspacePlaceholder = "{{SELFMIND_VCR_WORKSPACE}}"
 
 // WithVCRSession tags a context so provider calls made under it are recorded or
 // replayed against the named session.
@@ -42,12 +45,33 @@ func WithVCRSession(ctx context.Context, session string) context.Context {
 	return context.WithValue(ctx, vcrSessionCtxKey{}, session)
 }
 
+// WithVCRWorkspace makes workspace paths portable across isolated eval runs.
+// Record mode stores a stable placeholder; replay mode expands it to the
+// current run's scratch workspace.
+func WithVCRWorkspace(ctx context.Context, workspace string) context.Context {
+	workspace = strings.TrimSpace(workspace)
+	if workspace == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, vcrWorkspaceCtxKey{}, workspace)
+}
+
 func vcrSessionFromContext(ctx context.Context) string {
 	if ctx == nil {
 		return ""
 	}
 	if v, ok := ctx.Value(vcrSessionCtxKey{}).(string); ok {
 		return v
+	}
+	return ""
+}
+
+func vcrWorkspaceFromContext(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	if v, ok := ctx.Value(vcrWorkspaceCtxKey{}).(string); ok {
+		return strings.TrimSpace(v)
 	}
 	return ""
 }
@@ -86,6 +110,14 @@ func WipeVCRSessionRecordings(dir, session string) error {
 // VCRRecordMode reports whether the eval VCR is in record mode (the runner
 // wipes stale cassettes for a case before recording it).
 func VCRRecordMode() bool { return vcrMode() == "record" }
+
+// EvalVCRActive reports whether the explicit eval recorder/replayer owns the
+// request context. Flight recording must not replace the case session in this
+// mode or replay will look under a random flight-* directory instead.
+func EvalVCRActive() bool {
+	mode := vcrMode()
+	return mode == "record" || mode == "replay"
+}
 
 func vcrMode() string { return strings.ToLower(strings.TrimSpace(os.Getenv("SELFMIND_EVAL_VCR"))) }
 func vcrDir() string {
@@ -205,7 +237,7 @@ func (v *vcrProvider) nextKey(ctx context.Context) (string, bool) {
 	return filepath.Join(v.dir, sanitizeVCR(session), fmt.Sprintf("%04d.json", n)), true
 }
 
-func (v *vcrProvider) load(path string) (*cassette, error) {
+func (v *vcrProvider) load(ctx context.Context, path string) (*cassette, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
@@ -214,6 +246,7 @@ func (v *vcrProvider) load(path string) (*cassette, error) {
 	if err := json.Unmarshal(data, &c); err != nil {
 		return nil, err
 	}
+	c = rewriteCassette(c, vcrWorkspacePlaceholder, vcrWorkspaceFromContext(ctx))
 	return &c, nil
 }
 
@@ -228,10 +261,11 @@ func cassetteMiss(path, method string, recorded *cassette, loadErr error) error 
 	return fmt.Errorf("%w: method=%s path=%s recorded_method=%s", ErrCassetteMiss, method, path, recordedMethod)
 }
 
-func (v *vcrProvider) save(path string, c cassette) {
+func (v *vcrProvider) save(ctx context.Context, path string, c cassette) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return
 	}
+	c = rewriteCassette(c, vcrWorkspaceFromContext(ctx), vcrWorkspacePlaceholder)
 	data, err := json.MarshalIndent(c, "", "  ")
 	if err != nil {
 		return
@@ -245,7 +279,7 @@ func (v *vcrProvider) StreamChat(ctx context.Context, req ChatRequest) (<-chan S
 		if !ok {
 			return v.inner.StreamChat(ctx, req)
 		}
-		c, loadErr := v.load(key)
+		c, loadErr := v.load(ctx, key)
 		if loadErr == nil && c.Method == "stream" {
 			if c.Error != "" {
 				return nil, errors.New(c.Error)
@@ -261,7 +295,7 @@ func (v *vcrProvider) StreamChat(ctx context.Context, req ChatRequest) (<-chan S
 	in, err := v.inner.StreamChat(ctx, req)
 	if err != nil {
 		if ok {
-			v.save(key, cassette{Method: "stream", Error: err.Error()})
+			v.save(ctx, key, cassette{Method: "stream", Error: err.Error()})
 		}
 		return nil, err
 	}
@@ -276,7 +310,7 @@ func (v *vcrProvider) StreamChat(ctx context.Context, req ChatRequest) (<-chan S
 			rec = append(rec, toRecorded(ev))
 			out <- ev
 		}
-		v.save(key, cassette{Method: "stream", Events: rec})
+		v.save(ctx, key, cassette{Method: "stream", Events: rec})
 	}()
 	return out, nil
 }
@@ -287,7 +321,7 @@ func (v *vcrProvider) Chat(ctx context.Context, req ChatRequest) (*ChatResponse,
 		if !ok {
 			return v.inner.Chat(ctx, req)
 		}
-		c, loadErr := v.load(key)
+		c, loadErr := v.load(ctx, key)
 		if loadErr == nil && c.Method == "chat" {
 			if c.Error != "" {
 				return nil, errors.New(c.Error)
@@ -305,7 +339,7 @@ func (v *vcrProvider) Chat(ctx context.Context, req ChatRequest) (*ChatResponse,
 	resp, err := v.inner.Chat(ctx, req)
 	if err != nil {
 		if ok {
-			v.save(key, cassette{Method: "chat", Error: err.Error()})
+			v.save(ctx, key, cassette{Method: "chat", Error: err.Error()})
 		}
 		return resp, err
 	}
@@ -313,7 +347,7 @@ func (v *vcrProvider) Chat(ctx context.Context, req ChatRequest) (*ChatResponse,
 		return resp, err
 	}
 	if ok {
-		v.save(key, cassette{Method: "chat", Chat: resp})
+		v.save(ctx, key, cassette{Method: "chat", Chat: resp})
 	}
 	return resp, err
 }
@@ -324,7 +358,7 @@ func (v *vcrProvider) ChatCompletion(ctx context.Context, messages []Message) (s
 		if !ok {
 			return v.inner.ChatCompletion(ctx, messages)
 		}
-		c, loadErr := v.load(key)
+		c, loadErr := v.load(ctx, key)
 		if loadErr == nil && c.Method == "completion" {
 			if c.Error != "" {
 				return "", errors.New(c.Error)
@@ -340,12 +374,12 @@ func (v *vcrProvider) ChatCompletion(ctx context.Context, messages []Message) (s
 	text, err := v.inner.ChatCompletion(ctx, messages)
 	if err != nil {
 		if ok {
-			v.save(key, cassette{Method: "completion", Error: err.Error()})
+			v.save(ctx, key, cassette{Method: "completion", Error: err.Error()})
 		}
 		return text, err
 	}
 	if ok {
-		v.save(key, cassette{Method: "completion", Completion: text})
+		v.save(ctx, key, cassette{Method: "completion", Completion: text})
 	}
 	return text, err
 }
@@ -381,6 +415,84 @@ func fromRecorded(r recordedEvent) StreamEvent {
 		e.Err = fmt.Errorf("%s", r.Err)
 	}
 	return e
+}
+
+func rewriteCassette(c cassette, from, to string) cassette {
+	if strings.TrimSpace(from) == "" || from == to {
+		return c
+	}
+	c.Error = rewriteVCRString(c.Error, from, to)
+	c.Completion = rewriteVCRString(c.Completion, from, to)
+	if c.Chat != nil {
+		chat := *c.Chat
+		chat.Content = rewriteVCRString(chat.Content, from, to)
+		chat.ToolCalls = rewriteVCRToolCalls(chat.ToolCalls, from, to)
+		c.Chat = &chat
+	}
+	if len(c.Events) > 0 {
+		events := make([]recordedEvent, len(c.Events))
+		for i, event := range c.Events {
+			event.Content = rewriteVCRString(event.Content, from, to)
+			event.ToolCalls = rewriteVCRToolCalls(event.ToolCalls, from, to)
+			event.ToolArgs = rewriteVCRString(event.ToolArgs, from, to)
+			event.ToolResult = rewriteVCRString(event.ToolResult, from, to)
+			event.Err = rewriteVCRString(event.Err, from, to)
+			event.Payload = rewriteVCRMap(event.Payload, from, to)
+			events[i] = event
+		}
+		c.Events = events
+	}
+	return c
+}
+
+func rewriteVCRToolCalls(calls []ToolCall, from, to string) []ToolCall {
+	if len(calls) == 0 {
+		return calls
+	}
+	result := append([]ToolCall(nil), calls...)
+	for i := range result {
+		result[i].Args = rewriteVCRString(result[i].Args, from, to)
+	}
+	return result
+}
+
+func rewriteVCRMap(values map[string]interface{}, from, to string) map[string]interface{} {
+	if len(values) == 0 {
+		return values
+	}
+	result := make(map[string]interface{}, len(values))
+	for key, value := range values {
+		result[key] = rewriteVCRValue(value, from, to)
+	}
+	return result
+}
+
+func rewriteVCRValue(value interface{}, from, to string) interface{} {
+	switch typed := value.(type) {
+	case string:
+		return rewriteVCRString(typed, from, to)
+	case map[string]interface{}:
+		return rewriteVCRMap(typed, from, to)
+	case []interface{}:
+		result := make([]interface{}, len(typed))
+		for i, item := range typed {
+			result[i] = rewriteVCRValue(item, from, to)
+		}
+		return result
+	default:
+		return value
+	}
+}
+
+func rewriteVCRString(value, from, to string) string {
+	if value == "" || from == "" {
+		return value
+	}
+	value = strings.ReplaceAll(value, from, to)
+	if slashFrom := filepath.ToSlash(from); slashFrom != from {
+		value = strings.ReplaceAll(value, slashFrom, filepath.ToSlash(to))
+	}
+	return value
 }
 
 func sanitizeVCR(s string) string {

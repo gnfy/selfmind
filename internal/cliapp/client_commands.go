@@ -30,6 +30,10 @@ func (a *App) runGatewayClientIfRequested() (bool, int) {
 			return true, a.sendGatewayMessage("/tasks")
 		case "workspaces":
 			return true, a.sendGatewayMessage("/workspaces")
+		case "ws":
+			// Short alias for `workspace` (unified verb: bare lists, arg selects,
+			// add/use manage).
+			return true, a.handleWorkspaceCommand(a.args[2:])
 		case "approvals":
 			return true, a.sendGatewayMessage("/approvals")
 		case "approve":
@@ -228,10 +232,14 @@ func gatewayErrorLine(status string, body []byte) string {
 	return status + ": " + trimmed
 }
 
+// handleWorkspaceCommand backs both `selfmind workspace ...` and its short
+// alias `selfmind ws ...`. Unified verb: bare lists, `add`/`use` are the
+// management subcommands, and a bare number/id selects — so
+// `ws`, `ws 2`, `ws add <path>`, `ws use <id>` all read the same way.
 func (a *App) handleWorkspaceCommand(args []string) int {
 	if len(args) == 0 {
-		fmt.Fprintln(a.stderr, "usage: selfmind workspace [add|use] ...")
-		return 2
+		// Bare `workspace`/`ws` lists, mirroring the gateway's unified verb.
+		return a.sendGatewayMessage("/workspaces")
 	}
 	switch args[0] {
 	case "add":
@@ -251,13 +259,15 @@ func (a *App) handleWorkspaceCommand(args []string) int {
 		return a.registerWorkspace(abs, name)
 	case "use":
 		if len(args) < 2 {
-			fmt.Fprintln(a.stderr, "usage: selfmind workspace use <workspace_id>")
+			fmt.Fprintln(a.stderr, "usage: selfmind ws use <workspace_id>")
 			return 2
 		}
 		return a.sendGatewayMessage("/workspace " + args[1])
+	case "list":
+		return a.sendGatewayMessage("/workspaces")
 	default:
-		fmt.Fprintln(a.stderr, "usage: selfmind workspace [add|use] ...")
-		return 2
+		// A bare number or id selects the workspace (ws 2, ws ws_abc123).
+		return a.sendGatewayMessage("/workspace " + args[0])
 	}
 }
 

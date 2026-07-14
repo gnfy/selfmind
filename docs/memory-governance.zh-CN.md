@@ -484,3 +484,26 @@ CONFLICT 机制是"减少人工管理"的关键反转：系统只在真正矛盾
 - 不物理删除证据（forget 隐私保留期后除外）。
 - 不把 embedding 做成前置依赖（接 seam 后置替换检索层）。
 - 不要求用户日常整理（pin/forget 是安全阀，CONFLICT 是唯一主动触点）。
+
+---
+
+## 10. Shadow 校准与晋级
+
+`shadow` 是默认且无写入风险的治理模式。每次整理结束后，SelfMind 在
+`<data-dir>/memory/reports/` 写入同一份结果的两种视图：
+
+- `shadow-<person>.json`：机器可读的完整判决、候选组和动作明细；
+- `shadow-<person>.md`：供 owner 抽查的可读报告。
+
+报告至少包含：整理前 active 数、候选组数、本轮实际判决数、拒绝数、
+`would_apply` 数、预计整理后 active 数，以及每项 MERGE/REINFORCE/ARCHIVE
+建议。`/diag memory` 只显示最新一轮摘要，不把明细塞进日常终端。
+
+晋级必须是显式配置变更：
+
+1. 保持 `shadow`，抽查真实历史中的候选与拒绝原因；
+2. 准确率满足验收线后改为 `merge-only`，只应用高置信、可逆动作；
+3. 观察稳定库存后再设置 global/workspace cap，并考虑启用 `full`。
+
+系统不得根据一次报告自动晋级。报告缺失、模型未配置、候选不足或校验
+失败都应保持当前模式，前台 run 始终优先于后台整理。

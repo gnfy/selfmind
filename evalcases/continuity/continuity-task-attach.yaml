@@ -18,7 +18,11 @@ channel: cli
 # turns stay on one label and must still complete cleanly with no tool calls.
 # (The cassette is sequence-keyed, so it replays across the semantics change.)
 # Deterministic Go coverage: internal/gateway/httpapi/task_attach_test.go,
-# internal/gateway/httpapi/run_labeler_test.go.
+# internal/gateway/httpapi/run_labeler_test.go. The daemon transport that
+# carries this turn is separately locked by the unified RunEvent integration
+# tests: committed cursor replay, SSE reconnect, person isolation, and terminal
+# event delivery in internal/control, internal/gateway/httpapi, and
+# internal/gateway/client.
 turns:
   - input: "帮我规划'重构配置加载'的方案,先给 3 步,每步一句话,不要写代码、不要看本地文件。"
   - input: "用一句话解释 SQLite 的 WAL 模式是什么,不要看本地文件,不要写代码。"

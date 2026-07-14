@@ -165,14 +165,38 @@ type RunSteerResponse struct {
 }
 
 type RunOutcome struct {
-	Status      string   `json:"status"`
-	Summary     string   `json:"summary,omitempty"`
-	Done        []string `json:"done,omitempty"`
-	NextSteps   []string `json:"next_steps,omitempty"`
-	Files       []string `json:"files,omitempty"`
-	Tests       []string `json:"tests,omitempty"`
-	Risks       []string `json:"risks,omitempty"`
-	NeedApprove bool     `json:"need_approve,omitempty"`
+	Status           string               `json:"status"`
+	CompletionReason string               `json:"completion_reason,omitempty"`
+	Resumable        bool                 `json:"resumable,omitempty"`
+	Summary          string               `json:"summary,omitempty"`
+	Done             []string             `json:"done,omitempty"`
+	NextSteps        []string             `json:"next_steps,omitempty"`
+	Files            []string             `json:"files,omitempty"`
+	Tests            []string             `json:"tests,omitempty"`
+	Risks            []string             `json:"risks,omitempty"`
+	NeedApprove      bool                 `json:"need_approve,omitempty"`
+	Verification     *VerificationOutcome `json:"verification,omitempty"`
+	ClaimMismatches  []string             `json:"claim_mismatches,omitempty"`
+}
+
+// VerificationOutcome is derived from tool-runtime evidence. It never trusts
+// a model's prose claim that tests passed. State is one of not_applicable,
+// not_run, stale, passed, failed, partial, or blocked.
+type VerificationOutcome struct {
+	State            string              `json:"state"`
+	Summary          string              `json:"summary,omitempty"`
+	LatestMutationAt int64               `json:"latest_mutation_at_unix_nano,omitempty"`
+	Checks           []VerificationCheck `json:"checks,omitempty"`
+}
+
+type VerificationCheck struct {
+	Kind       string `json:"kind,omitempty"`
+	Command    string `json:"command,omitempty"`
+	CWD        string `json:"cwd,omitempty"`
+	Status     string `json:"status"`
+	ExitCode   int    `json:"exit_code"`
+	StartedAt  int64  `json:"started_at_unix_nano,omitempty"`
+	FinishedAt int64  `json:"finished_at_unix_nano,omitempty"`
 }
 
 // DigestResponse is the attach digest (GET /v1/digest): a bounded,

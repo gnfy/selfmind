@@ -88,3 +88,27 @@ func TestAggregateFinalResponseUsesBriefFallbackWhenNoFinalContent(t *testing.T)
 		}
 	}
 }
+
+func TestAggregateFinalResponseMarksIncompleteTurnResumable(t *testing.T) {
+	stream := make(chan llm.StreamEvent, 2)
+	stream <- llm.StreamEvent{EventType: "stream", Content: "I updated the first file."}
+	stream <- llm.StreamEvent{
+		EventType: "turn.completed",
+		Payload: map[string]interface{}{
+			"status":            "incomplete",
+			"completion_reason": "tool_budget_exhausted",
+			"resumable":         true,
+		},
+	}
+	close(stream)
+
+	content, _, err := AggregateFinalResponse(&HandleResponse{IsStreaming: true, Stream: stream})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"I updated the first file.", "tool budget exhausted", "continue"} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("content = %q, want %q", content, want)
+		}
+	}
+}

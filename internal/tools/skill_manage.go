@@ -978,18 +978,6 @@ func formatSkillsList(skills []SkillInfo) string {
 	return sb.String()
 }
 
-func atomicWriteFile(path, content string) error {
-	tmpPath := path + ".tmp"
-	if err := os.WriteFile(tmpPath, []byte(content), 0644); err != nil {
-		return fmt.Errorf("write tmp file: %w", err)
-	}
-	if err := os.Rename(tmpPath, path); err != nil {
-		_ = os.Remove(tmpPath)
-		return fmt.Errorf("rename file: %w", err)
-	}
-	return nil
-}
-
 // ensureFrontMatter wraps raw content with YAML front matter if missing.
 func ensureFrontMatter(content, name, description string) string {
 	if strings.HasPrefix(strings.TrimSpace(content), "---") {

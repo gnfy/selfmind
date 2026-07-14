@@ -1,4 +1,0 @@
-{
-  "method": "stream",
-  "error": "anthropic API error 403: You've reached your usage limit for this billing cycle. Your quota will be refreshed in the next cycle. To continue now, purchase extra usage or upgrade your plan: https://www.kimi.com/membership/subscription?tab=quota"
-}

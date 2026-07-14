@@ -71,7 +71,7 @@ func EmitAgentEvent(ch chan string, event AgentEvent) {
 
 func isCriticalAgentEvent(eventType string) bool {
 	switch strings.TrimSpace(eventType) {
-	case "stream", "tool.started", "tool.completed", "tool.output", "turn.completed", "token.updated":
+	case "stream", "tool.started", "tool.completed", "tool.output", "turn.completed", "token.updated", "evidence.recorded":
 		return true
 	default:
 		return false

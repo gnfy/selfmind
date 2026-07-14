@@ -180,7 +180,7 @@ func normalizeMetadata(t Tool, meta ToolMetadata) ToolMetadata {
 
 func defaultRiskLevel(name string) ToolRiskLevel {
 	switch name {
-	case "terminal", "execute_command", "write_file", "patch", "skill_manage":
+	case "terminal", "verify", "execute_command", "write_file", "patch", "skill_manage":
 		return ToolRiskHigh
 	case "update_plan", "finish_run", "tool_search", "session_search", "web_search", "web_extract":
 		return ToolRiskLow

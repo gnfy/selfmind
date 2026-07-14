@@ -35,3 +35,17 @@ func TestBeginFlightRecording(t *testing.T) {
 		t.Fatal("expected a latest flight id after finalize")
 	}
 }
+
+func TestBeginFlightRecordingDoesNotOverrideEvalVCRSession(t *testing.T) {
+	t.Setenv("SELFMIND_EVAL_VCR", "replay")
+	t.Setenv("SELFMIND_FLIGHT_RECORDER", "1")
+
+	a := &Agent{}
+	ctx := llm.WithVCRSession(context.Background(), "continuity-case")
+	if fin := a.beginFlightRecording(&ctx, "default", "cli", "continue"); fin != nil {
+		t.Fatal("flight recorder should yield to the explicit eval VCR session")
+	}
+	if got := llm.VCRSessionForTest(ctx); got != "continuity-case" {
+		t.Fatalf("eval VCR session = %q, want continuity-case", got)
+	}
+}

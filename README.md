@@ -74,6 +74,10 @@ That command compiles only one file and can make Go treat `selfmind/internal/...
 
 SelfMind uses one YAML config file. No `.env` file is required.
 
+> **Full field reference:** see [`docs/config-reference.md`](docs/config-reference.md)
+> for every section, default value, and when to change it. The essentials are
+> below.
+
 Default path:
 
 ```text
@@ -291,6 +295,21 @@ delegation:
 editor:
   large_paste_chars: 1000
   large_paste_lines: 10
+
+# Web search backend. Local DuckDuckGo scraping is unreliable (anti-bot
+# blocks, GFW); set one hosted key for reliable results. Leave both empty for
+# best-effort DuckDuckGo. Pick ONE backend and give ITS key.
+#   tavily (recommended, https://tavily.com) | brave | serper | firecrawl | searxng
+web:
+  search_backend: "tavily"
+  api_key: "tvly-xxxxxxxx"   # searxng: put the instance URL here instead
+
+# Flight recorder: save each real turn locally so `selfmind eval capture` can
+# promote a bad turn into an offline regression test. See "Diagnostics And
+# Regression Capture".
+flight_recorder:
+  enabled: true
+  keep: 30
 ```
 
 ### Model Config Fields
@@ -409,7 +428,7 @@ Common slash commands:
 | `/cancel` | Cancel the current task even when no run is active. |
 | `/new [title]` | Start a fresh task instead of continuing the current one. |
 | `/resume <n\|task_id>` | Switch back to an earlier task by its `/tasks` card number, short id, or full id. |
-| `/workspaces` / `/workspace <n\|id>` | List workspaces / switch by list number or id. |
+| `/workspace [n\|id]` (alias `/ws`, also `/workspaces`) | Bare lists workspaces; with a number or id, switches to it. |
 | `/approvals` / `/approve <n>` / `/reject <n>` | List and answer pending tool approvals. |
 | `/mode [mode]` | Show or set approval mode: `on-request`, `read-only`, `auto-edit`, `full-auto`, `smart`. |
 | `/diag` | Compact runtime diagnostic snapshot. |
@@ -597,6 +616,58 @@ The default view is a human-readable profile: related evidence is grouped, stora
 
 Memory and skill changes are written to `~/.selfmind/<tenant>/learning/`. Use history first, then undo the specific `change_id` when a learned item is wrong or stale.
 
+## Diagnostics And Regression Capture
+
+SelfMind records what happens as you use it, so you can find problems and turn real failures into permanent regression tests. Three things, in order of how often you touch them.
+
+### 1. See what recently went wrong
+
+Errors (failed tools, model/API failures like 429 or connection drops) are recorded automatically. To review them:
+
+```sh
+selfmind doctor
+```
+
+The `== Recent errors ==` section aggregates both kinds, newest first:
+
+```
+== Recent errors ==
+- 07-13 10:33 [tool:web_search] backend unavailable (HTTP 202 anti-bot challenge)
+- 07-13 09:15 [run:failed] llm chat: responses API error 429: usage limit reached
+```
+
+`[tool:<name>]` is a single tool call failing; `[run:failed]` is a whole turn / model interface failing. Secrets are redacted. For per-turn context detail (where the prompt tokens went, recall hits, compaction), use the control commands in a chat: `/diag`, `/diag context`, `/diag tasks`, `/diag memory`.
+
+### 2. Record real turns (flight recorder)
+
+Enable it once in config so every real turn's model interaction is saved locally:
+
+```yaml
+flight_recorder:
+  enabled: true
+  keep: 30        # keep the newest 30 turns, auto-prune older
+```
+
+Restart the gateway (`selfmind gateway restart`) after changing config. Recordings live in `~/.selfmind/flight/` (local only, never uploaded); `keep` bounds disk use. Internal/background turns (delegation, reviews) are excluded — only real user-facing turns are kept.
+
+### 3. Turn a bad turn into a regression test
+
+When a turn shows a bug worth preventing forever, promote it into an offline eval case:
+
+```sh
+# Promote the most recent recorded turn (or pass a turn id instead of "latest")
+selfmind eval capture latest --title "search backend outage must report failure, not a false negative" --suite quality
+
+# Verify it replays offline (uses the recording — no provider quota)
+SELFMIND_EVAL_VCR=replay selfmind eval run evalcases/quality/<case>.yaml
+# or run the whole regression gate:
+selfmind selfcheck
+```
+
+**Before committing a captured case, open its YAML and scrub it** — flight recordings are plaintext conversations, so remove any real names, private queries, or anything that should not enter the repo.
+
+The loop: use SelfMind normally → `selfmind doctor` to spot problems → `eval capture` to freeze a bad turn → `eval run` to confirm it is caught from now on.
+
 ## Gateway Mode
 
 Start a long-running local gateway:
@@ -627,12 +698,12 @@ selfmind send --async "run tests and fix failures"
 selfmind status
 selfmind tasks
 selfmind stop
-selfmind workspaces
+selfmind ws                       # list workspaces (alias of `workspace`; `workspaces` also works)
 selfmind approvals
 selfmind approve <approval_id>
 selfmind reject <approval_id>
-selfmind workspace add .
-selfmind workspace use <workspace_id>
+selfmind ws add .                 # register the current dir as a workspace
+selfmind ws use <workspace_id>    # or: selfmind ws <n>  to switch by list number
 selfmind new "implement the checkout page"
 ```
 

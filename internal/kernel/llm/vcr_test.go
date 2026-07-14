@@ -2,9 +2,11 @@ package llm
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -136,6 +138,34 @@ func TestWipeVCRSessionRecordings(t *testing.T) {
 	// Empty session is a no-op guard.
 	if err := WipeVCRSessionRecordings(dir, ""); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestRewriteCassetteMakesWorkspacePortable(t *testing.T) {
+	recordedRoot := filepath.Join(string(filepath.Separator), "tmp", "recorded-workspace")
+	replayRoot := filepath.Join(string(filepath.Separator), "tmp", "replay-workspace")
+	original := cassette{
+		Method: "stream",
+		Events: []recordedEvent{{
+			Content: "Editing " + filepath.Join(recordedRoot, "main.go"),
+			ToolCalls: []ToolCall{{
+				ID: "call-1", Function: "write_file",
+				Args: `{"path":"` + filepath.Join(recordedRoot, "main.go") + `"}`,
+			}},
+			Payload: map[string]interface{}{"cwd": recordedRoot},
+		}},
+	}
+
+	stored := rewriteCassette(original, recordedRoot, vcrWorkspacePlaceholder)
+	if strings.Contains(stored.Events[0].Content, recordedRoot) || !strings.Contains(stored.Events[0].Content, vcrWorkspacePlaceholder) {
+		data, _ := json.Marshal(stored)
+		t.Fatalf("stored cassette is not portable: %s", data)
+	}
+
+	replayed := rewriteCassette(stored, vcrWorkspacePlaceholder, replayRoot)
+	if strings.Contains(replayed.Events[0].Content, recordedRoot) || !strings.Contains(replayed.Events[0].Content, replayRoot) {
+		data, _ := json.Marshal(replayed)
+		t.Fatalf("replayed cassette did not use current workspace: %s", data)
 	}
 }
 

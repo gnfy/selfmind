@@ -52,6 +52,17 @@ type EventSummary struct {
 	toolsStarted []string
 	toolFailures []string
 	lastOutputs  []string
+	completion   TurnCompletion
+}
+
+// TurnCompletion captures the kernel's structured terminal signal. It is
+// independent of assistant prose so a partial answer cannot be mistaken for a
+// completed run.
+type TurnCompletion struct {
+	Status           string
+	CompletionReason string
+	FinishReason     string
+	Resumable        bool
 }
 
 func (s *EventSummary) Observe(event llm.StreamEvent) {
@@ -80,11 +91,36 @@ func (s *EventSummary) Observe(event llm.StreamEvent) {
 			}
 			s.toolFailures = appendLimited(s.toolFailures, fmt.Sprintf("%s: %v", label, event.Err), 5)
 		}
+	case "turn.completed":
+		s.completion.Status = payloadString(event.Payload, "status")
+		s.completion.CompletionReason = payloadString(event.Payload, "completion_reason")
+		s.completion.FinishReason = payloadString(event.Payload, "finish_reason")
+		s.completion.Resumable = payloadBool(event.Payload, "resumable")
 	}
+}
+
+func (s EventSummary) Completion() TurnCompletion {
+	return s.completion
 }
 
 func (s EventSummary) WithContent(content string) string {
 	content = strings.TrimSpace(content)
+	if s.completion.Status == "incomplete" {
+		reason := humanCompletionReason(s.completion.CompletionReason)
+		notice := "SelfMind stopped before full completion"
+		if reason != "" {
+			notice += " (" + reason + ")"
+		}
+		if s.completion.Resumable {
+			notice += "; reply \"continue\" to resume."
+		} else {
+			notice += "."
+		}
+		if content == "" {
+			return notice
+		}
+		return content + "\n\n" + notice
+	}
 	if content != "" {
 		return content
 	}
@@ -95,6 +131,35 @@ func (s EventSummary) WithContent(content string) string {
 		return "SelfMind finished this turn without producing a final response. Please retry or ask me to continue."
 	}
 	return ""
+}
+
+func payloadString(payload map[string]interface{}, key string) string {
+	if payload == nil {
+		return ""
+	}
+	value, _ := payload[key].(string)
+	return strings.TrimSpace(value)
+}
+
+func payloadBool(payload map[string]interface{}, key string) bool {
+	if payload == nil {
+		return false
+	}
+	value, _ := payload[key].(bool)
+	return value
+}
+
+func humanCompletionReason(reason string) string {
+	switch strings.TrimSpace(reason) {
+	case "tool_budget_exhausted":
+		return "tool budget exhausted"
+	case "output_limit":
+		return "model output limit reached"
+	case "max_iterations":
+		return "iteration limit reached"
+	default:
+		return strings.ReplaceAll(strings.TrimSpace(reason), "_", " ")
+	}
 }
 
 func appendLimited(items []string, item string, limit int) []string {

@@ -106,6 +106,25 @@ func TestListFilesToolRecursiveSkipsAndTruncates(t *testing.T) {
 	}
 }
 
+func TestListFilesToolAcceptsEmptyDirectory(t *testing.T) {
+	out, err := NewListFilesTool().Execute(map[string]interface{}{
+		"path":      t.TempDir(),
+		"recursive": false,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload struct {
+		Entries []string `json:"entries"`
+	}
+	if err := json.Unmarshal([]byte(out), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if len(payload.Entries) != 0 {
+		t.Fatalf("entries = %v, want empty", payload.Entries)
+	}
+}
+
 func TestSearchFilesToolHonorsLimitAndSkipsIgnoredDirs(t *testing.T) {
 	root := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(root, ".git"), 0755); err != nil {

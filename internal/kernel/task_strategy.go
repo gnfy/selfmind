@@ -81,6 +81,9 @@ type TaskStrategy struct {
 	HiddenTools           map[string]bool
 	MaxIterations         int
 	MaxActionTools        int
+	ActionToolBudgetStep  int
+	ActionToolBudgetLimit int
+	MaxBudgetExtensions   int
 	RequireProgressEvents bool
 	ChannelMode           string
 	Reason                string
@@ -97,6 +100,9 @@ func DefaultTaskStrategy() TaskStrategy {
 		WebPolicy:             WebPolicyDisabled,
 		HiddenTools:           hiddenToolsFor(PlanPolicyOptional, WebPolicyDisabled),
 		MaxActionTools:        10,
+		ActionToolBudgetStep:  4,
+		ActionToolBudgetLimit: 22,
+		MaxBudgetExtensions:   3,
 		RequireProgressEvents: true,
 		ChannelMode:           "default",
 		Reason:                "agent-first default; web disabled unless explicitly requested",
@@ -186,6 +192,15 @@ func (s TaskStrategy) normalized() TaskStrategy {
 	}
 	if s.MaxActionTools <= 0 && s.ToolMode != ToolModeNone {
 		s.MaxActionTools = defaultActionToolBudget(s.Class)
+	}
+	if s.ActionToolBudgetStep <= 0 {
+		s.ActionToolBudgetStep = 4
+	}
+	if s.ActionToolBudgetLimit < s.MaxActionTools {
+		s.ActionToolBudgetLimit = max(s.MaxActionTools, 22)
+	}
+	if s.MaxBudgetExtensions <= 0 {
+		s.MaxBudgetExtensions = 3
 	}
 	return s
 }
@@ -299,7 +314,7 @@ func (s TaskStrategy) SystemPromptNote() string {
 			sb.WriteString("Before writing new code or creating a file, search the workspace for an existing implementation (grep or list/read files) and extend or reuse it instead of reinventing; the workspace is the shared source of truth.\n")
 		}
 		if s.MaxActionTools > 0 {
-			sb.WriteString(fmt.Sprintf("Keep tool use economical. This turn has an action-tool budget of about %d non-lifecycle tool call(s). update_plan and finish_run are lifecycle tools with their own small per-turn caps; do not call them repeatedly. When the budget is nearly exhausted, finish from collected evidence instead of broadening the search.\n", s.MaxActionTools))
+			sb.WriteString(fmt.Sprintf("Keep tool use economical. This turn starts with about %d non-lifecycle tool call(s). SelfMind may extend that budget when completed tools produce new evidence, but it will never exceed %d. update_plan and finish_run are lifecycle tools with their own small per-turn caps; do not call them repeatedly.\n", s.MaxActionTools, s.ActionToolBudgetLimit))
 		}
 	}
 	if s.PlanPolicy == PlanPolicyDisabled {

@@ -2,6 +2,7 @@ package control
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 	"time"
 )
@@ -41,7 +42,7 @@ func newRecoveryFixture(t *testing.T) (*Store, *IdentityContext, *Task, *Run) {
 // 'interrupted' together with its still-running task.
 func TestMarkInterruptedRunsBootSweep(t *testing.T) {
 	ctx := context.Background()
-	store, identity, task, _ := newRecoveryFixture(t)
+	store, identity, task, run := newRecoveryFixture(t)
 
 	count, err := store.MarkInterruptedRuns(ctx, 0)
 	if err != nil {
@@ -63,6 +64,23 @@ func TestMarkInterruptedRunsBootSweep(t *testing.T) {
 	}
 	if got.Status != "interrupted" || got.ActiveRunID != "" {
 		t.Fatalf("task after sweep = status %q active_run_id %q, want interrupted/empty", got.Status, got.ActiveRunID)
+	}
+	events, err := store.ListTaskEvents(ctx, task.ID, 10)
+	if err != nil {
+		t.Fatalf("ListTaskEvents: %v", err)
+	}
+	var recovered map[string]interface{}
+	for _, event := range events {
+		if event.Type == "run.interrupted" && event.RunID == run.ID {
+			if err := json.Unmarshal(event.Payload, &recovered); err != nil {
+				t.Fatalf("decode recovery event: %v", err)
+			}
+			break
+		}
+	}
+	outcome, _ := recovered["outcome"].(map[string]interface{})
+	if outcome["completion_reason"] != "daemon_recovery" || outcome["resumable"] != true {
+		t.Fatalf("recovery outcome = %#v, want daemon_recovery/resumable", outcome)
 	}
 }
 

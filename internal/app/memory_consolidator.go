@@ -125,10 +125,34 @@ func (c *MemoryConsolidator) PassSummary(ctx context.Context, personID string) s
 		}
 	}
 	line := fmt.Sprintf("Consolidation: %d cluster(s) judged under judge %s", current, consolidationJudgeVersion)
+	if report, ok := c.readReport(personID); ok {
+		line = fmt.Sprintf(
+			"Consolidation: mode=%s, candidates=%d, judged_now=%d, would_apply=%d, rejected=%d, projected_active=%d (judge %s)",
+			report.Mode, report.Summary.CandidateGroups, report.Summary.JudgedNow,
+			report.Summary.WouldApply, report.Summary.Rejected,
+			report.Summary.ProjectedActive, report.Judge,
+		)
+	}
 	if c.reportDir != "" {
 		line += "; report dir: " + c.reportDir
 	}
 	return line
+}
+
+func (c *MemoryConsolidator) readReport(personID string) (consolidationReportFile, bool) {
+	if c == nil || c.reportDir == "" {
+		return consolidationReportFile{}, false
+	}
+	path := filepath.Join(c.reportDir, "shadow-"+sanitizeReportName(personID)+".json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return consolidationReportFile{}, false
+	}
+	var report consolidationReportFile
+	if json.Unmarshal(data, &report) != nil || report.Summary.Actions == nil {
+		return consolidationReportFile{}, false
+	}
+	return report, true
 }
 
 func (c *MemoryConsolidator) batchSize() int {
@@ -178,6 +202,26 @@ type consolidationReportEntry struct {
 	WouldApply bool     `json:"would_apply,omitempty"` // shadow dry run: gates passed, mode withheld the write
 	Reason     string   `json:"reason,omitempty"`
 	Rejected   string   `json:"rejected,omitempty"` // why the gate refused to apply
+}
+
+type consolidationReportSummary struct {
+	ActiveBefore    int            `json:"active_before"`
+	CandidateGroups int            `json:"candidate_groups"`
+	JudgedNow       int            `json:"judged_now"`
+	WouldApply      int            `json:"would_apply"`
+	Applied         int            `json:"applied"`
+	Rejected        int            `json:"rejected"`
+	ProjectedActive int            `json:"projected_active"`
+	Actions         map[string]int `json:"actions"`
+}
+
+type consolidationReportFile struct {
+	Person      string                     `json:"person"`
+	Mode        string                     `json:"mode"`
+	GeneratedAt string                     `json:"generated_at"`
+	Judge       string                     `json:"judge"`
+	Summary     consolidationReportSummary `json:"summary"`
+	JudgedNow   []consolidationReportEntry `json:"judged_now"`
 }
 
 // RunOnce consolidates one person partition: retrieve clusters, judge the
@@ -540,27 +584,107 @@ func (c *MemoryConsolidator) enforceCaps(ctx context.Context, store memory.Canon
 
 // writeReport persists the human-review artifact for the shadow gate.
 func (c *MemoryConsolidator) writeReport(personID string, report memory.ConsolidationDryRun, entries []consolidationReportEntry) {
-	if c.reportDir == "" || len(entries) == 0 {
+	if c.reportDir == "" {
 		return
 	}
 	if err := os.MkdirAll(c.reportDir, 0700); err != nil {
 		return
 	}
-	payload, err := json.MarshalIndent(map[string]interface{}{
-		"person":         personID,
-		"mode":           c.mode(),
-		"generated_at":   time.Now().Format(time.RFC3339),
-		"total_facts":    report.TotalFacts,
-		"total_clusters": len(report.CandidateClusters),
-		"judged_now":     entries,
-	}, "", "  ")
+	generatedAt := time.Now()
+	file := consolidationReportFile{
+		Person: personID, Mode: c.mode(), GeneratedAt: generatedAt.Format(time.RFC3339),
+		Judge:     consolidationJudgeVersion,
+		Summary:   summarizeConsolidationReport(report, entries),
+		JudgedNow: entries,
+	}
+	payload, err := json.MarshalIndent(file, "", "  ")
 	if err != nil {
 		return
 	}
-	path := filepath.Join(c.reportDir, "shadow-"+sanitizeReportName(personID)+".json")
-	if err := os.WriteFile(path, payload, 0600); err == nil {
-		log.Info("memory governance: consolidation report written", "person", personID, "mode", c.mode(), "judged", len(entries), "path", path)
+	base := filepath.Join(c.reportDir, "shadow-"+sanitizeReportName(personID))
+	jsonPath := base + ".json"
+	if err := os.WriteFile(jsonPath, payload, 0600); err != nil {
+		return
 	}
+	markdown := renderConsolidationReport(file)
+	_ = os.WriteFile(base+".md", []byte(markdown), 0600)
+	log.Info("memory governance: consolidation report written", "person", personID, "mode", c.mode(), "judged", len(entries), "path", jsonPath)
+}
+
+func summarizeConsolidationReport(report memory.ConsolidationDryRun, entries []consolidationReportEntry) consolidationReportSummary {
+	summary := consolidationReportSummary{
+		ActiveBefore: report.TotalFacts, CandidateGroups: len(report.CandidateClusters),
+		JudgedNow: len(entries), ProjectedActive: report.TotalFacts,
+		Actions: make(map[string]int),
+	}
+	for _, entry := range entries {
+		action := strings.ToUpper(strings.TrimSpace(entry.Action))
+		if action == "" {
+			action = "KEEP"
+		}
+		summary.Actions[action]++
+		if entry.WouldApply {
+			summary.WouldApply++
+		}
+		if entry.Applied {
+			summary.Applied++
+		}
+		if entry.Rejected != "" {
+			summary.Rejected++
+		}
+		if !entry.WouldApply && !entry.Applied {
+			continue
+		}
+		switch action {
+		case "MERGE", "REINFORCE":
+			if len(entry.Members) > 1 {
+				summary.ProjectedActive -= len(entry.Members) - 1
+			}
+		case "ARCHIVE":
+			summary.ProjectedActive -= len(entry.Members)
+		}
+	}
+	if summary.ProjectedActive < 0 {
+		summary.ProjectedActive = 0
+	}
+	return summary
+}
+
+func renderConsolidationReport(report consolidationReportFile) string {
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "# SelfMind Memory Governance Report\n\n")
+	fmt.Fprintf(&sb, "- Generated: %s\n- Person: `%s`\n- Mode: `%s`\n- Judge: `%s`\n\n", report.GeneratedAt, report.Person, report.Mode, report.Judge)
+	fmt.Fprintf(&sb, "## Calibration Summary\n\n")
+	fmt.Fprintf(&sb, "| Metric | Value |\n|---|---:|\n")
+	fmt.Fprintf(&sb, "| Active before | %d |\n| Candidate groups | %d |\n| Judged this pass | %d |\n| Would apply in merge-only | %d |\n| Applied | %d |\n| Rejected by deterministic gates | %d |\n| Projected active | %d |\n\n",
+		report.Summary.ActiveBefore, report.Summary.CandidateGroups, report.Summary.JudgedNow,
+		report.Summary.WouldApply, report.Summary.Applied, report.Summary.Rejected,
+		report.Summary.ProjectedActive)
+	if len(report.JudgedNow) == 0 {
+		sb.WriteString("No new clusters were judged in this pass.\n")
+		return sb.String()
+	}
+	sb.WriteString("## Decisions\n\n")
+	for i, entry := range report.JudgedNow {
+		state := "kept"
+		if entry.WouldApply {
+			state = "would apply"
+		}
+		if entry.Applied {
+			state = "applied"
+		}
+		if entry.Rejected != "" {
+			state = "rejected: " + entry.Rejected
+		}
+		fmt.Fprintf(&sb, "%d. **%s** (confidence %.0f%%, %s)\n", i+1, entry.Action, entry.Confidence*100, state)
+		if entry.Canonical != "" {
+			fmt.Fprintf(&sb, "   - Canonical: %s\n", entry.Canonical)
+		}
+		for _, member := range entry.Members {
+			fmt.Fprintf(&sb, "   - Evidence: %s\n", textutil.Truncate(member, 240))
+		}
+	}
+	return sb.String()
 }
 
 func sanitizeReportName(s string) string {

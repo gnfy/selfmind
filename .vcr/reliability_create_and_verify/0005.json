@@ -1,0 +1,116 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "content": "Done"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": " Created"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "verified"
+    },
+    {
+      "content": ".py"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " with"
+    },
+    {
+      "content": ":\n\n"
+    },
+    {
+      "content": "```"
+    },
+    {
+      "content": "python"
+    },
+    {
+      "content": "\n"
+    },
+    {
+      "content": "print"
+    },
+    {
+      "content": "('"
+    },
+    {
+      "content": "verified"
+    },
+    {
+      "content": "')\n"
+    },
+    {
+      "content": "``"
+    },
+    {
+      "content": "`\n\n"
+    },
+    {
+      "content": "Verified"
+    },
+    {
+      "content": " successfully"
+    },
+    {
+      "content": " with"
+    },
+    {
+      "content": ":\n\n"
+    },
+    {
+      "content": "```"
+    },
+    {
+      "content": "bash"
+    },
+    {
+      "content": "\n"
+    },
+    {
+      "content": "python"
+    },
+    {
+      "content": "3"
+    },
+    {
+      "content": " -"
+    },
+    {
+      "content": "m"
+    },
+    {
+      "content": " py"
+    },
+    {
+      "content": "_compile"
+    },
+    {
+      "content": " verified"
+    },
+    {
+      "content": ".py"
+    },
+    {
+      "content": "\n"
+    },
+    {
+      "content": "```"
+    },
+    {
+      "usage": {
+        "input_tokens": 5238,
+        "output_tokens": 39
+      }
+    }
+  ]
+}

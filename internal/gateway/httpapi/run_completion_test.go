@@ -1,0 +1,61 @@
+package httpapi
+
+import (
+	"context"
+	"errors"
+	"testing"
+
+	"selfmind/internal/control"
+)
+
+func TestFinalizeErroredRunIsDurableAndResumable(t *testing.T) {
+	ctx := context.Background()
+	store, err := control.OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Local User")
+	if err != nil {
+		t.Fatalf("identity: %v", err)
+	}
+	task, err := store.CreateTask(ctx, control.TaskCreate{
+		TenantID: identity.TenantID,
+		PersonID: identity.PersonID,
+		Title:    "provider failure",
+		Channel:  "cli",
+	})
+	if err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	run, err := store.StartRun(ctx, task, "cli", "keep working")
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+	server := &Server{Control: store, DefaultTenantID: "default"}
+	outcome := server.coordinator().finalizeErroredRun(ctx, identity, task, run, "cli", errors.New("unexpected EOF"))
+	if outcome.Status != "interrupted" || outcome.CompletionReason != "provider_or_transport_error" || !outcome.Resumable {
+		t.Fatalf("outcome = %#v", outcome)
+	}
+	runs, err := store.ListTaskRuns(ctx, identity.TenantID, task.ID, 10)
+	if err != nil || len(runs) != 1 || runs[0].Status != "interrupted" {
+		t.Fatalf("runs = %#v, err=%v", runs, err)
+	}
+	gotTask, err := store.GetTask(ctx, identity.TenantID, task.ID)
+	if err != nil || gotTask.Status != "interrupted" || gotTask.ActiveRunID != "" {
+		t.Fatalf("task = %#v, err=%v", gotTask, err)
+	}
+	events, err := store.ListTaskEvents(ctx, task.ID, 10)
+	if err != nil {
+		t.Fatalf("ListTaskEvents: %v", err)
+	}
+	found := false
+	for _, event := range events {
+		if event.Type == "run.interrupted" && event.RunID == run.ID {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("run.interrupted event missing: %#v", events)
+	}
+}

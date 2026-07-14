@@ -242,7 +242,7 @@ IM endpoint sees one consistent history.
 
 Tool approvals now prompt inline in the client TUI. The daemon already appends an
 `approval.requested` event to `control.db` and blocks the run polling for a
-response (`RunCoordinator.toolApprovalHandler`); the client's event poller maps
+response (`RunCoordinator.toolApprovalHandler`); the client's unified event stream maps
 that event to `MsgApprovalRequest`, the TUI shows an inline `Approve? [y/N]`
 prompt, and the answer is sent via `Client.RespondApproval` →
 `/v1/approvals/respond`, which unblocks the run. Bare Enter denies (safe
@@ -252,9 +252,11 @@ end-to-end path requires a live approval-triggering run to exercise.)
 
 ### 8f. Remaining
 
-- **Richer live streaming** (optional): the event poll is event-level (tool /
-  thinking), not token-level. Add an assistant-text increment to run events + a
-  true SSE consumer for a typewriter effect.
+- **Unified live streaming is shipped**: `/v1/events/stream` carries durable
+  task/run events and ephemeral assistant deltas in one `RunEvent` envelope.
+  Durable events resume with `Last-Event-ID`; the synchronous message response
+  remains the final-answer source of truth. CLI consumes both classes, while
+  IM/cron deliberately project low-frequency milestones and the final result.
 - **Real multi-terminal soak** at `SELFMIND_WORKERS>1` to validate ordering,
   provider pressure and workspace serialization under sustained load.
 - **Per-provider concurrency cap + 429 backoff**: deferred by design — belongs at

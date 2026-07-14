@@ -478,7 +478,7 @@ func applyAdd(op PatchOperation) (string, error) {
 		}
 	}
 
-	if err := os.WriteFile(op.FilePath, []byte(content), 0644); err != nil {
+	if err := atomicWriteBytes(op.FilePath, []byte(content), 0644); err != nil {
 		return "", fmt.Errorf("failed to write %s: %w", op.FilePath, err)
 	}
 
@@ -552,7 +552,7 @@ func applyUpdate(op PatchOperation) (string, error) {
 	}
 
 	// Write the modified content
-	if err := os.WriteFile(op.FilePath, []byte(content), 0644); err != nil {
+	if err := atomicWriteBytes(op.FilePath, []byte(content), 0644); err != nil {
 		return "", fmt.Errorf("failed to write %s: %w", op.FilePath, err)
 	}
 

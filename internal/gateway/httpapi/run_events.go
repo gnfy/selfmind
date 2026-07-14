@@ -175,12 +175,12 @@ func runIDForResponse(resp api.MessageResponse) string {
 	return resp.Run.ID
 }
 
-func (c *RunCoordinator) aggregateGatewayResponse(ctx context.Context, channel string, task *control.Task, run *control.Run, resp *router.HandleResponse) (string, llm.UsageStats, error) {
+func (c *RunCoordinator) aggregateGatewayResponse(ctx context.Context, channel string, task *control.Task, run *control.Run, resp *router.HandleResponse) (string, llm.UsageStats, router.EventSummary, error) {
 	if resp == nil {
-		return "", llm.UsageStats{}, nil
+		return "", llm.UsageStats{}, router.EventSummary{}, nil
 	}
 	if !resp.IsStreaming {
-		return resp.Content, resp.Usage, nil
+		return resp.Content, resp.Usage, router.EventSummary{}, nil
 	}
 	var content strings.Builder
 	var usage llm.UsageStats
@@ -190,7 +190,7 @@ func (c *RunCoordinator) aggregateGatewayResponse(ctx context.Context, channel s
 	for event := range resp.Stream {
 		if event.EventType != "" {
 			if event.EventType == "stream" && task != nil {
-				c.srv.liveStreams().publish(task.PersonID, event)
+				c.srv.events().publishAssistant(task, run, event)
 			}
 			if observer != nil {
 				observer(event)
@@ -207,12 +207,12 @@ func (c *RunCoordinator) aggregateGatewayResponse(ctx context.Context, channel s
 			continue
 		}
 		if event.Err != nil {
-			return content.String(), usage, event.Err
+			return content.String(), usage, summary, event.Err
 		}
 		if event.Content != "" && !sawStream {
 			streamEvent := llm.StreamEvent{EventType: "stream", Content: event.Content}
 			if task != nil {
-				c.srv.liveStreams().publish(task.PersonID, streamEvent)
+				c.srv.events().publishAssistant(task, run, streamEvent)
 			}
 			if observer != nil {
 				observer(streamEvent)
@@ -223,7 +223,7 @@ func (c *RunCoordinator) aggregateGatewayResponse(ctx context.Context, channel s
 			usage = *event.Usage
 		}
 	}
-	return summary.WithContent(content.String()), usage, nil
+	return summary.WithContent(content.String()), usage, summary, nil
 }
 
 func (c *RunCoordinator) recordStreamEvent(ctx context.Context, channel string, task *control.Task, run *control.Run, event llm.StreamEvent) {

@@ -124,3 +124,27 @@ func TestCompletedStatusAcceptsSuccessfulTurnEvenWhenTaskStillRunning(t *testing
 		}
 	}
 }
+
+func TestEvaluateCaseChecksStructuredCompletionAndVerification(t *testing.T) {
+	resumable := false
+	c := &Case{
+		ID:    "verified_completion",
+		Turns: []Turn{{Input: "change and verify"}},
+		Expect: Expectations{
+			Status:            "completed",
+			CompletionReason:  "completed",
+			Resumable:         &resumable,
+			VerificationState: "passed",
+		},
+	}
+	checks := EvaluateCase(c, RunSnapshot{
+		Output:            "done",
+		OutcomeStatus:     "completed",
+		CompletionReason:  "completed",
+		Resumable:         false,
+		VerificationState: "passed",
+	})
+	if !ChecksPassed(checks) {
+		t.Fatalf("structured completion checks should pass: %+v", checks)
+	}
+}

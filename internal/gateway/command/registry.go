@@ -72,8 +72,8 @@ var entries = []Entry{
 	{Name: "/notify", Usage: "/notify <platform|auto>", Summary: "Choose where CLI-origin notifications go when the CLI is detached.", SyncControl: true, Scope: Gateway},
 	{Name: "/new", Usage: "/new [title]", Summary: "Create a new task.", SyncControl: true, Scope: Gateway},
 	{Name: "/resume", Usage: "/resume <n|task_id>", Summary: "Resume a task by list number or id (an archived id reopens it).", SyncControl: true, Scope: Gateway},
-	{Name: "/workspace", Usage: "/workspace <n|id>", Summary: "Select a workspace by list number or id.", SyncControl: true, Scope: Gateway},
-	{Name: "/workspaces", Usage: "/workspaces", Summary: "List workspaces.", SyncControl: true, Scope: Gateway},
+	{Name: "/workspace", Aliases: []string{"/ws"}, Usage: "/workspace [n|id]  (bare = list; alias: /ws)", Summary: "List workspaces (bare) or select one by list number or id.", SyncControl: true, Scope: Gateway},
+	{Name: "/workspaces", Usage: "/workspaces  (same as bare /workspace or /ws)", Summary: "List workspaces.", SyncControl: true, Scope: Gateway},
 
 	// --- Local TUI/CLI-only commands (never gateway-routed) ---
 	{Name: "/skills", Usage: "/skills [list|view|history|undo|search|install|audit|delete|archive|pin|unpin|stats|reload]", Summary: "Manage learned skills.", Scope: Local},

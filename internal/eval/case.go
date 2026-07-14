@@ -56,21 +56,24 @@ type Turn struct {
 }
 
 type Expectations struct {
-	Status                  string   `yaml:"status" json:"status,omitempty"`
-	Contains                []string `yaml:"contains" json:"contains,omitempty"`
-	MustNotContain          []string `yaml:"must_not_contain" json:"must_not_contain,omitempty"`
-	MaxDurationSeconds      int      `yaml:"max_duration_seconds" json:"max_duration_seconds,omitempty"`
-	MaxToolErrors           int      `yaml:"max_tool_errors" json:"max_tool_errors,omitempty"`
-	MaxToolCalls            *int     `yaml:"max_tool_calls" json:"max_tool_calls,omitempty"`
-	RequireToolEvents       bool     `yaml:"require_tool_events" json:"require_tool_events,omitempty"`
-	MinToolCalls            int      `yaml:"min_tool_calls" json:"min_tool_calls,omitempty"`
-	RequireSameTask         bool     `yaml:"require_same_task" json:"require_same_task,omitempty"`
-	RequireContinuation     bool     `yaml:"require_continuation" json:"require_continuation,omitempty"`
+	Status              string   `yaml:"status" json:"status,omitempty"`
+	CompletionReason    string   `yaml:"completion_reason" json:"completion_reason,omitempty"`
+	Resumable           *bool    `yaml:"resumable" json:"resumable,omitempty"`
+	VerificationState   string   `yaml:"verification_state" json:"verification_state,omitempty"`
+	Contains            []string `yaml:"contains" json:"contains,omitempty"`
+	MustNotContain      []string `yaml:"must_not_contain" json:"must_not_contain,omitempty"`
+	MaxDurationSeconds  int      `yaml:"max_duration_seconds" json:"max_duration_seconds,omitempty"`
+	MaxToolErrors       int      `yaml:"max_tool_errors" json:"max_tool_errors,omitempty"`
+	MaxToolCalls        *int     `yaml:"max_tool_calls" json:"max_tool_calls,omitempty"`
+	RequireToolEvents   bool     `yaml:"require_tool_events" json:"require_tool_events,omitempty"`
+	MinToolCalls        int      `yaml:"min_tool_calls" json:"min_tool_calls,omitempty"`
+	RequireSameTask     bool     `yaml:"require_same_task" json:"require_same_task,omitempty"`
+	RequireContinuation bool     `yaml:"require_continuation" json:"require_continuation,omitempty"`
 	// RequireTaskSwitch is the inverse of RequireSameTask: a multi-turn case
 	// must use MORE than one task ID. It asserts the task-attach semantics —
 	// a new request without continuation evidence creates its own task
 	// instead of attaching to the parked current one.
-	RequireTaskSwitch bool `yaml:"require_task_switch" json:"require_task_switch,omitempty"`
+	RequireTaskSwitch       bool     `yaml:"require_task_switch" json:"require_task_switch,omitempty"`
 	RequireWorkspaceMatch   bool     `yaml:"require_workspace_match" json:"require_workspace_match,omitempty"`
 	AllowedErrorCategories  []string `yaml:"allowed_error_categories" json:"allowed_error_categories,omitempty"`
 	DisallowedErrorCategory []string `yaml:"disallowed_error_category" json:"disallowed_error_category,omitempty"`

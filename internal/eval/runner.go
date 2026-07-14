@@ -219,6 +219,9 @@ func runSingle(ctx context.Context, c *Case, opts RunOptions, sampleIdx, totalSa
 	var inputTokens, outputTokens int
 	var lastStatus string
 	var lastOutcome string
+	var lastCompletionReason string
+	var lastResumable bool
+	var lastVerificationState string
 	// Track every person the case touched (the case identity plus any per-turn
 	// platform_user_id "stranger" identities) so post-case run finalization can
 	// sweep exactly the runs this eval created and nothing else.
@@ -254,6 +257,7 @@ func runSingle(ctx context.Context, c *Case, opts RunOptions, sampleIdx, totalSa
 		// Tag the turn with a VCR session (the case id) so model calls can be
 		// recorded/replayed deterministically when SELFMIND_EVAL_VCR is set.
 		vcrCtx := llm.WithVCRSession(httpapi.WithStreamObserver(ctx, observer), c.ID)
+		vcrCtx = llm.WithVCRWorkspace(vcrCtx, workspace)
 		turnCtx, cancelTurn := context.WithTimeout(vcrCtx, turnBudget(c, opts))
 		// A per-turn platform_user_id override simulates a different platform user
 		// (identity-isolation scenarios); the default keeps the case's identity.
@@ -280,10 +284,18 @@ func runSingle(ctx context.Context, c *Case, opts RunOptions, sampleIdx, totalSa
 		}
 		if resp.Outcome != nil {
 			lastOutcome = resp.Outcome.Status
+			lastCompletionReason = resp.Outcome.CompletionReason
+			lastResumable = resp.Outcome.Resumable
+			if resp.Outcome.Verification != nil {
+				lastVerificationState = resp.Outcome.Verification.State
+			}
 		}
 		inputTokens += resp.Usage.InputTokens
 		outputTokens += resp.Usage.OutputTokens
 		lastStatus = "completed"
+		if resp.Turn != nil && strings.TrimSpace(resp.Turn.Status) != "" {
+			lastStatus = resp.Turn.Status
+		}
 		if resp.Error != "" || status >= 400 {
 			lastStatus = "failed"
 		}
@@ -304,6 +316,9 @@ func runSingle(ctx context.Context, c *Case, opts RunOptions, sampleIdx, totalSa
 	// may remain "running" after a successful turn, while the smoke case is only
 	// asking whether this interaction completed.
 	snap.OutcomeStatus = firstNonEmpty(lastStatus, lastOutcome)
+	snap.CompletionReason = lastCompletionReason
+	snap.Resumable = lastResumable
+	snap.VerificationState = lastVerificationState
 	checks := EvaluateCase(c, snap)
 	if forceFinalized > 0 {
 		// Surface (without failing the case) that the harness had to force

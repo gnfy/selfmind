@@ -90,11 +90,10 @@ type Server struct {
 	presence     *presenceRegistry
 	presenceOnce sync.Once
 
-	// liveStream is an ephemeral person-scoped fan-out for assistant text
-	// deltas. It is intentionally separate from durable task events so token
-	// streaming cannot grow control.db.
-	liveStream     *liveStreamHub
-	liveStreamOnce sync.Once
+	// eventBroker is the daemon's person-scoped real-time event plane. Durable
+	// events still live in control.db; assistant deltas remain ephemeral.
+	eventBroker     *runEventBroker
+	eventBrokerOnce sync.Once
 }
 
 type activeRun struct {
@@ -129,6 +128,7 @@ func (d *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/approvals/respond", d.handleApprovalRespond)
 	mux.HandleFunc("/v1/runs/steer", d.handleRunSteer)
 	mux.HandleFunc("/v1/runs/stream", d.handleRunStream)
+	mux.HandleFunc("/v1/events/stream", d.handleEventsStream)
 	mux.HandleFunc("/v1/sessions", d.handleSessions)
 	mux.HandleFunc("/v1/tasks/events", d.handleTaskEvents)
 	mux.HandleFunc("/v1/tasks/events/stream", d.handleTaskEventsStream)

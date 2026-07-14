@@ -114,14 +114,38 @@ func TestConsolidatorShadowAnnotatesWouldApply(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var report struct {
-		JudgedNow []consolidationReportEntry `json:"judged_now"`
-	}
+	var report consolidationReportFile
 	if err := json.Unmarshal(raw, &report); err != nil {
 		t.Fatal(err)
 	}
 	if len(report.JudgedNow) != 1 || !report.JudgedNow[0].WouldApply || report.JudgedNow[0].Applied {
 		t.Fatalf("shadow report must annotate would_apply without applying: %+v", report.JudgedNow)
+	}
+	if report.Summary.ActiveBefore != 3 || report.Summary.WouldApply != 1 || report.Summary.ProjectedActive != 1 {
+		t.Fatalf("unexpected human calibration summary: %+v", report.Summary)
+	}
+	markdown, err := os.ReadFile(filepath.Join(reportDir, "shadow-person.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if text := string(markdown); !strings.Contains(text, "## Calibration Summary") || !strings.Contains(text, "Would apply in merge-only") {
+		t.Fatalf("human report is missing calibration guidance:\n%s", text)
+	}
+	if summary := c.PassSummary(context.Background(), "person"); !strings.Contains(summary, "would_apply=1") || !strings.Contains(summary, "projected_active=1") {
+		t.Fatalf("diag summary did not use the report: %q", summary)
+	}
+	if err := c.RunOnce(context.Background(), "person"); err != nil {
+		t.Fatal(err)
+	}
+	raw, err = os.ReadFile(filepath.Join(reportDir, "shadow-person.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(raw, &report); err != nil {
+		t.Fatal(err)
+	}
+	if report.Summary.JudgedNow != 0 || report.Summary.WouldApply != 0 {
+		t.Fatalf("a no-op pass must replace stale action counts: %+v", report.Summary)
 	}
 }
 

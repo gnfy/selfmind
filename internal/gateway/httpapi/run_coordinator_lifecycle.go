@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -13,6 +14,69 @@ import (
 	"strings"
 	"time"
 )
+
+// finalizeErroredRun is the single terminal path for provider, transport, and
+// cancellation failures after a run has started. It writes the same structured
+// outcome consumed by CLI watchers, IM delivery, recovery, and resume turns.
+func (c *RunCoordinator) finalizeErroredRun(ctx context.Context, identity *control.IdentityContext, task *control.Task, run *control.Run, channel string, runErr error) api.RunOutcome {
+	outcome := api.RunOutcome{
+		Status:           "interrupted",
+		CompletionReason: "provider_or_transport_error",
+		Resumable:        true,
+		Summary:          "The run was interrupted before the model finished responding.",
+		NextSteps:        []string{"Reply \"continue\" to resume from the durable run history."},
+	}
+	if runErr != nil {
+		outcome.Risks = []string{truncate(tools.RedactSensitive(runErr.Error()), 500)}
+	}
+	eventType := "run.interrupted"
+	// A caller cancellation or caller deadline is terminal: request/eval turn
+	// budgets deliberately bound the daemon-owned run. Provider-internal
+	// timeouts, EOF, and rate-limit exhaustion leave ctx live and remain
+	// resumable interruptions because durable evidence may already exist.
+	if ctx.Err() != nil || errors.Is(runErr, context.Canceled) {
+		outcome.Status = "cancelled"
+		outcome.CompletionReason = "cancelled"
+		outcome.Resumable = false
+		outcome.Summary = "The run was cancelled before completion."
+		outcome.NextSteps = nil
+		eventType = "run.cancelled"
+	}
+
+	if c == nil || c.srv == nil || c.srv.Control == nil || identity == nil || task == nil || run == nil {
+		return outcome
+	}
+	finCtx := context.WithoutCancel(ctx)
+	if err := c.srv.Control.FinishRun(finCtx, identity.TenantID, run.ID, outcome.Status); err != nil {
+		return outcome
+	}
+	_ = c.srv.Control.UpdateTaskStatus(finCtx, identity.TenantID, task.ID, outcome.Status, outcome.Summary, outcome.NextSteps)
+	_, _ = c.srv.Control.SaveHandoff(finCtx, control.Handoff{
+		TaskID:    task.ID,
+		Summary:   outcome.Summary,
+		NextSteps: outcome.NextSteps,
+		Risks:     outcome.Risks,
+	})
+	_, _ = c.srv.Control.AppendEvent(finCtx, control.Event{
+		TaskID:     task.ID,
+		RunID:      run.ID,
+		Type:       eventType,
+		Visibility: "task",
+		Channel:    channel,
+		Payload: mustJSON(map[string]interface{}{
+			"outcome": outcome,
+			"error":   firstString(outcome.Risks),
+		}),
+	})
+	return outcome
+}
+
+func firstString(items []string) string {
+	if len(items) == 0 {
+		return ""
+	}
+	return items[0]
+}
 
 func (c *RunCoordinator) prepareRequestWorkspace(ctx context.Context, identity *control.IdentityContext, req *api.MessageRequest) (*control.Workspace, error) {
 	if c == nil || c.srv == nil || c.srv.Control == nil || identity == nil || req == nil {
@@ -33,7 +97,7 @@ func (c *RunCoordinator) prepareRequestWorkspace(ctx context.Context, identity *
 	if err != nil || !info.IsDir() {
 		return nil, nil
 	}
-	ws, err := store.RegisterWorkspace(ctx, control.Workspace{
+	ws, err := store.EnsureWorkspace(ctx, control.Workspace{
 		TenantID:      identity.TenantID,
 		OwnerPersonID: identity.PersonID,
 		Name:          filepath.Base(cwd),

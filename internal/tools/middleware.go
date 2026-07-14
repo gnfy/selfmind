@@ -188,7 +188,7 @@ var writeTools = map[string]struct{}{
 	"write_file": {}, "patch": {}, "edit": {}, "apply_patch": {}, "edit_file": {},
 }
 var execTools = map[string]struct{}{
-	"terminal": {}, "execute_command": {}, "shell": {}, "execute_code": {},
+	"terminal": {}, "verify": {}, "execute_command": {}, "shell": {}, "execute_code": {},
 }
 
 func isWriteTool(name string) bool { _, ok := writeTools[name]; return ok }

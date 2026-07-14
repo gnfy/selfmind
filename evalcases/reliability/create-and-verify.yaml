@@ -1,0 +1,34 @@
+id: reliability_create_and_verify
+title: "a code mutation is complete only after runtime verification"
+suite: reliability
+workspace: isolated
+channel: cli
+require_cassette: true
+
+# Re-record this case after intentional execution-contract changes:
+#   SELFMIND_EVAL_VCR=record selfmind eval run \
+#     evalcases/reliability/create-and-verify.yaml --live
+turns:
+  - input: "Create verified.py in the current workspace with one print('verified') statement. After the final write, use the verify tool to run: python3 -m py_compile verified.py"
+
+expect:
+  status: completed
+  completion_reason: completed
+  resumable: false
+  verification_state: passed
+  require_tool_events: true
+  min_tool_calls: 2
+  max_tool_errors: 0
+  max_duration_seconds: 180
+
+assert_state:
+  - on: file
+    path: "verified.py"
+    exists: true
+    contains: "print"
+
+checks:
+  no_mojibake: true
+  no_raw_json_leak: true
+  no_empty_response: true
+  no_provider_stack_dump: true

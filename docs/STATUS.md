@@ -8,7 +8,7 @@
 > planning docs were removed from the tree (2026-07-03; retrieve via git
 > history) — never resurrect their backlog items or code samples.
 >
-> **Snapshot date:** 2026-07-05. When you finish a change that moves a row,
+> **Snapshot date:** 2026-07-14. When you finish a change that moves a row,
 > update this table in the same PR. See `docs/phase1-modules.md` for the
 > Phase-1 feature-module index.
 
@@ -53,7 +53,7 @@
 | CLI / TUI controller | 🟡 | Components partly extracted; `uiModel` in `controller.go` is still a monolith (violates AGENTS.md guidance). |
 | TUI rendering (terminal-first hybrid) | ✅ | **Only renderer (2026-07-10):** history committed to native terminal scrollback (`tea.Println`), only the active region redrawn (`history_commit.go`); terminal owns scroll/select/copy. The legacy alt-screen viewport (`SELFMIND_TUI_LEGACY`, `viewport`, `controller_mouse.go`, the per-message render cache) was DELETED with the in-process path — there is no `hybridMode()` switch anymore. Colored patch diffs (`renderPatchCell`), `/history` (full diffs), `/copy`. Codex-style interactive approval panel (2026-07-05): `approval.requested` arms a bordered selector in the ACTIVE region (`ui/components.ApprovalPrompt`, wired by `gateway/cli/approval_flow.go`) — ↑/↓/j/k + Enter or shortcuts y/t/a/n mapping to grant scope ""/task/person on the existing `/v1/approvals/respond` path; Esc does nothing (explicit decision required); "No" opens a deny follow-up composer (Enter = bare deny, text = deny + mid-turn guidance); queued approvals re-arm FIFO; duplicate text notice + "Preparing to run" spinner suppressed while the panel is up; transcript keeps ONE compact `notice` line per request/decision; status bar shows `⏸ waiting approval`. IM/text approval surfaces unchanged. Remaining: write_file overwrite real diff; `/history` search + `control.db` backing. Live plan checklist now renders in **client mode** (2026-07-05): the daemon's `plan.updated` event carries the full structured plan, forwarded by `client.eventToStream` and rendered as an `update_plan` cell so `renderPlanCell` shows the `[x]/[>]/[ ]` steps instead of a stray "plan updated" line (`agent_events.go` `forwardGatewayEvent` + `planJSONFromEvent`); `maxPlanSteps` raised 20→50 so a normal plan is never truncated. Status bar always shows the effective approval mode (`statusLine` `mode:<effective>`), learned from `GET /v1/digest` `approval_mode` at startup and updated by `/mode`. See `docs/tui-terminal-first-hybrid.md`. |
 | Run execution coordinator | 🟡 | `RunCoordinator` (`httpapi/run_coordinator.go`) owns the run lifecycle (`runMessage`/`startAsyncRun`), the active-run registry, and all pre/post-run helpers (workspace/task resolution, execution scope, approval handler, context assembly, stream aggregation, outcome persistence). Server is now the HTTP/orchestration layer. Worker pool shipped behind `SELFMIND_WORKERS` (see Multi-terminal concurrency row). Async-run task visibility fixed (2026-07-04): every run (sync and async) now syncs the person's `current_task` pointer to the task it resolved (`syncCurrentTask`, same `SetCurrentTask` mechanism as `/new`/`/resume`), and `/status` prefers the active run's task over the pointer (`Server.statusReply`); regression tests in `httpapi/task_visibility_test.go`. Stuck-run recovery shipped (2026-07-04): **invariant — after any finalization or recovery sweep, no task may remain `running` with zero live runs** (`running` means "a run is executing right now"; between-turns tasks park as `in_progress`). Enforced by: `Store.FinishRun` coercing non-terminal run statuses to `done`; `Store.MarkInterruptedRuns` flipping heartbeat-stale runs *and* repairing orphaned `running` tasks; a boot sweep (threshold 0 — the `gateway.lock` flock guarantees leftover running runs are dead) plus a 60s in-daemon sweep (12× the 10s run heartbeat) that always excludes the active-run registry (`httpapi/run_recovery.go`). Recovered `interrupted`/`in_progress` tasks stay non-terminal and resumable via `继续`/`/resume`. Tests: `control/runtime_test.go`, `httpapi/run_recovery_test.go`. **Post-run labeler (P3, 2026-07-06):** after finalization (under the `WithoutCancel` finalize ctx, AFTER the response is assembled), `labelFinishedRunAsync` (`httpapi/run_labeler.go`) asynchronously asks the cheap `Server.Labeler` (memory_extract role via `app.NewRunLabeler`; nil in eval) whether the turn's pre-label guess was right: KEEP no-ops, MOVE re-points the run + events/artifacts to an offered open label (`Store.ReassignRun`, transactional; deletes an auto-created placeholder left with zero runs, folds its handoffs, repoints `current_task`), TITLE names a NEW placeholder once. Every non-KEEP decision writes a `label.assigned` event; every failure degrades to KEEP; it never blocks the response (10s bound, `labelerWG` tracked). Only pre-label (guessed) attaches are labeled — explicit task_id/cue/pin attaches are the user's decision. Tests: `httpapi/run_labeler_test.go`, `control/task_labels_test.go`. **Async panic firewall (2026-07-07):** async runs (IM, queue drain, cron, detached CLI) have no net/http per-request recover, so an unrecovered panic in an agent turn used to crash the whole gateway daemon. Fixed on two layers: the router's agent-streaming goroutines (`router.runAgentStreaming` + the task-streaming variant) now `defer recoverStreamPanic`, converting a panic into a stream `Err` event the run finalizer already handles (task → interrupted); and `startAsyncRun`'s goroutine has a `recover` (`recoverAsyncRun`) that logs the stack, finalizes the run failed + task interrupted, delivers a failure notice, and (via the existing endActive + drainQueue defers) frees the person's slot so they are never wedged. Tests: `httpapi/run_panic_test.go`. **Parked-task wording (2026-07-06):** a task parked `in_progress`/`interrupted` with NO live run finished its turn — it is not busy. `/status` (`formatTaskStatus`) now renders `Status: in_progress (turn finished — reply to continue, or /new)` and `/tasks` (`task_view.go` cards, given the person's active task id) labels such tasks `[paused]` (the active one `[running]`), so the user stops reading a completed turn as "still working" (observed live: 13 min staring at `in_progress`). Stored status value and the state machine are UNCHANGED — user-facing wording only; a genuinely running task still shows elapsed. Tests: `httpapi/parked_status_test.go`. |
-| Multi-terminal concurrency (daemon-client) | 🟡 | Decision: converge every terminal on ONE gateway daemon instead of cross-process locks. Foundation shipped: `gateway.EnsureRunning` (discover-or-autostart + health wait, race-safe via the `gateway.lock` flock); CLI client paths (`selfmind send/status/...`) auto-start a local daemon; `internal/gateway/client` daemon-backed `MessageProcessor` (sync `/v1/message` answer + best-effort event poll → ctx stream observer). Client mode is the ONLY TUI path (2026-07-10): the in-process gateway build and the `SELFMIND_TUI_INPROC` opt-out were deleted — a daemon that can't start fails with actionable guidance, never a local agent. Chat + agent-backed slash commands (`/skills`, `/memory` incl. `list`, `/bundles`, `/checkpoint`) run on the daemon via a safelisted `/v1/dispatch` (workspace-mutating/code-exec tools refused 403); `/status`/`/tasks` route via the message processor; `/skills stats`,`/model` switch show a client-mode notice. Worker pool (`internal/runpool` + `SELFMIND_WORKERS`, default 1) runs inside that daemon. `workspaceSerialKey` serializes **write** turns only (read turns concurrent, Exclusive/SharedRead semantics). Interactive tool approval works in client mode (Codex-style TUI approval panel driven by the `approval.requested` event → `/v1/approvals/respond`, incl. grant scope; see TUI rendering row). The message-based-channel working notice (`router.WorkingNotice`) is English-only (2026-07-05: "Got it — SelfMind is working on this…"; the stray bilingual TUI composer hint in `history_commit.go` was also de-duplicated to English). **Remaining**: soak at N>1; per-provider cap (adapter layer, deferred). (Session search over the daemon + in-process deletion shipped 2026-07-10, see ACTIVE PLAN P0-3.) See `docs/worker-pool-design.md` §8. |
+| Multi-terminal concurrency (daemon-client) | 🟡 | Decision: converge every terminal on ONE gateway daemon instead of cross-process locks. Foundation shipped: `gateway.EnsureRunning` (discover-or-autostart + health wait, race-safe via the `gateway.lock` flock); CLI client paths (`selfmind send/status/...`) auto-start a local daemon; `internal/gateway/client` daemon-backed `MessageProcessor` (sync `/v1/message` final answer + unified `/v1/events/stream` observer with durable cursor replay). Client mode is the ONLY TUI path (2026-07-10): the in-process gateway build and the `SELFMIND_TUI_INPROC` opt-out were deleted — a daemon that can't start fails with actionable guidance, never a local agent. Chat + agent-backed slash commands (`/skills`, `/memory` incl. `list`, `/bundles`, `/checkpoint`) run on the daemon via a safelisted `/v1/dispatch` (workspace-mutating/code-exec tools refused 403); `/status`/`/tasks` route via the message processor; `/skills stats`,`/model` switch show a client-mode notice. Worker pool (`internal/runpool` + `SELFMIND_WORKERS`, default 1) runs inside that daemon. `workspaceSerialKey` serializes **write** turns only (read turns concurrent, Exclusive/SharedRead semantics). Interactive tool approval works in client mode (Codex-style TUI approval panel driven by the `approval.requested` event → `/v1/approvals/respond`, incl. grant scope; see TUI rendering row). The message-based-channel working notice (`router.WorkingNotice`) is English-only (2026-07-05: "Got it — SelfMind is working on this…"; the stray bilingual TUI composer hint in `history_commit.go` was also de-duplicated to English). **Remaining**: soak at N>1; per-provider cap (adapter layer, deferred). (Session search over the daemon + in-process deletion shipped 2026-07-10, see ACTIVE PLAN P0-3.) See `docs/worker-pool-design.md` §8. |
 | Process sandbox | 🟡 | Unix process-group isolation only; **not** a security sandbox (no namespace/seccomp/cgroup). Windows is a no-op. `execute_code` emits a one-per-process WARN noting it runs with full host access under the current user. Since 2026-07-07 `execute_code` is at least approval-gated (see Approval modes row), but the residual risk stands: approved code still has unrestricted host access — real isolation is P2 (Highest-Value Next Work item 9). |
 | Feishu / Lark adapter | 🟡 | Inbound via the generic `/v1/im/feishu` webhook (verification-token / encrypt-key signature, challenge); outbound via `delivery.FeishuSender` (tenant_access_token + `im/v1/messages`, chat_id/open_id routing). Config drives both. Encrypt-envelope AES decryption still TODO (use plaintext mode). **Inbound redelivery dedup (2026-07-09):** the `/v1/im/*` webhook now acknowledges a duplicate delivery 200 without re-running the agent — keyed by the platform's own id (`imMessageID`: generic `message_id`/`event_id`, Feishu `header.event_id`/`event.message.message_id`, QQ `d.id`, Telegram `update_id`), persisted in `control.inbound_dedup` (48h retention) so it survives restarts; no-id payloads and dedup-store errors fail open. `handlers_channels.go`, `control/inbound_dedup.go`; tests `httpapi/handlers_channels_test.go`, `control/inbound_dedup_test.go`. |
 | QQ official bot adapter | 🟡 | Inbound via `/v1/im/qq` webhook (group/C2C/guild events parsed into a `group:`/`c2c:`/`channel:` target); outbound via `delivery.QQSender` (app access token + per-target message API). Active push only — webhook ed25519 signature verify and passive `msg_id` threading are follow-ups. Inbound redelivery dedup by `d.id` shipped 2026-07-09 (see the Feishu row — shared `/v1/im/*` mechanism). |
@@ -81,9 +81,13 @@
   injection; scanning a candidate no longer refreshes archival freshness.
   Native tool dispatch carries `_workspace_id`, keeping project/environment
   facts workspace-scoped while user preferences remain global.
-- Next: calibrate real-history shadow precision, enable high-confidence
-  `merge-only`, finish the canonical cutover, then tune caps/archival and
-  FTS+CJK memory search.
+- Shadow consolidation now emits private JSON and human-readable Markdown
+  calibration reports (`memory/reports/shadow-<person>.{json,md}`) with active
+  counts, candidate groups, judged groups, rejected groups, projected active
+  count, and each proposed action. `/diag memory` summarizes the latest pass.
+- Next: review real-history report precision, deliberately enable
+  high-confidence `merge-only`, then tune caps/archival and FTS+CJK memory
+  search. Automatic promotion remains forbidden.
 
 ## Highest-Value Next Work (by priority)
 
@@ -121,7 +125,8 @@ execution order.
   text, async completion, file delivery, approval round-trip, reminder, and
   diagnostics on a real phone; one observed iLink `ret=-3` remains visible in
   `/diag` as a failed push rather than a false success.
-- **P0-2 cassette gate integrity — ✅ shipped and re-recorded 2026-07-10.**
+- **P0-2 cassette gate integrity — ✅ shipped, re-recorded, and replay-verified
+  2026-07-14.**
   Root cause fixed: the VCR per-session counter was
   process-global and never reset, so a case re-run in one process continued
   numbering (recording 0001+ holes — the observed `.vcr/continuity_task_attach/`
@@ -130,11 +135,14 @@ execution order.
   previous cassette generation first (`llm.WipeVCRSessionRecordings`,
   runner wiring in `internal/eval/runner.go`). `HasCassetteSession` is strict:
   0000.json required AND gap-free 0000..max ("any *.json" would mask exactly
-  this corruption). The owner re-recorded a gap-free
-  `.vcr/continuity_task_attach/0000..0005.json` generation and
+  this corruption). The normal-turn flight recorder also now yields to an
+  explicit eval VCR mode instead of replacing the case session with a random
+  `flight-*` session. The owner re-recorded a gap-free
+  `.vcr/continuity_task_attach/0000..0003.json` generation and
   `continuity-task-attach.yaml` now requires the cassette. Tests:
-  `llm/vcr_test.go`; acceptance: strict offline `selfmind selfcheck`.
-  Acceptance: `selfmind selfcheck` passes strictly offline.
+  `llm/vcr_test.go`, `kernel/flight_recorder_test.go`; acceptance: strict
+  offline replay of `continuity-task-attach.yaml` passes without provider
+  access, and `selfmind selfcheck` stays strictly offline.
 - **P0-3 session-search-over-daemon, THEN delete in-process — parity ✅ shipped
   2026-07-10; deletion still pending.** Landed: (1) **dispatch partition fix**
   — daemon runs store memory/session-FTS/checkpoints under the PERSON id
@@ -165,8 +173,12 @@ execution order.
 
 - **P0-4 execution continuity + post-run/task governance — ✅ shipped
   2026-07-10.** Thin CLI clients subscribe to daemon-owned
-  `GET /v1/runs/stream` SSE and render assistant deltas while the final message
-  response remains the source of truth; IM/cron keep stage/final delivery only.
+  `GET /v1/events/stream` SSE and render durable run events plus ephemeral
+  assistant deltas while the final message response remains the source of truth.
+  Every committed event receives a monotonic durable cursor; reconnects replay
+  with `Last-Event-ID`, and a stream gap triggers a bounded database catch-up.
+  IM/cron deliberately keep low-frequency stage/final delivery only and never
+  receive token deltas.
   The agent recovers opening and partial-stream EOF/reset/idle failures through
   bounded non-stream continuation, compacts again on context-window rejection,
   and never executes an incomplete native tool call. One app-layer
@@ -208,6 +220,29 @@ completion/failure; continuity eval replays offline.
   injected volatile runtime context BETWEEN soul and tools. No AGENTS.md
   diffing (rejected — upkeep outweighs the marginal cache win). Tests:
   `kernel/prompt_layering_test.go`.
+
+- **P1-4 evidence-backed execution completion — ✅ shipped 2026-07-14.**
+  Agent completion is now a structured contract rather than an optimistic final
+  sentence. `turn.completed` and `api.RunOutcome` carry
+  `completion_reason`, `resumable`, and deterministic verification state. The
+  action-tool budget starts small, extends only after a new successful,
+  non-lifecycle tool call (a unique evidence signature), and stops at a hard
+  ceiling; budget/output/iteration exhaustion is
+  terminal `interrupted`, never a false `done`. File/patch/terminal/verify
+  calls emit durable `evidence.recorded` events. The gateway derives changed
+  files and verification freshness from those events, rejects unsupported
+  completion claims, and persists provider/transport failures as resumable
+  interrupted runs; daemon recovery emits the same structured outcome.
+  `verify` is a first-class, approval-aware tool for explicit checks.
+  Workspace writes use same-directory temp files plus atomic replacement on
+  Unix and Windows, including empty-file writes. Client workspace discovery
+  now preserves explicitly registered `allowed_roots`; only an explicit
+  workspace update can revoke roots. Eval expectations can assert completion
+  reason, resumability, and verification state. Tests:
+  `kernel/agent_kernel_test.go`, `tools/atomic_write_test.go`,
+  `httpapi/evidence_outcome_test.go`, `httpapi/run_completion_test.go`,
+  `control/runtime_test.go`, `eval/checks_test.go`. Eval:
+  `evalcases/reliability/create-and-verify.yaml` (live cassette pending).
 
 **P2 — engineering governance**
 
@@ -336,13 +371,13 @@ hygiene.
    `httpapi/detached_run_test.go`, `cli/cancel_stop_test.go`.
    (b) Two-layer routing — ✅ shipped (2026-07-04): in-memory presence
    registry (`httpapi/presence.go`, 90s TTL; touched by `/v1/message`,
-   `/v1/tasks/events`, the new `GET /v1/presence/ping`, and a 30s idle ping
+   `/v1/events/stream`, `GET /v1/presence/ping`, and a 30s idle ping
    loop in the client TUI; `accounts.last_seen_at` persisted throttled for
    preferred-endpoint recency). **Presence = recent user INPUT (2026-07-05):**
    an open-but-vacated TUI no longer claims attachment forever. The client
    tracks the last keystroke (`cli.SetInputActivityHook` →
    `client.InputTracker`) and stamps `active=0|1` on its presence ping and
-   event polls once input age exceeds `gateway.presence_idle_timeout`
+   event stream once input age exceeds `gateway.presence_idle_timeout`
    (duration, default `5m`, `0` = old always-attached behavior; the decision
    is client-side because only the client knows input age — the daemon just
    skips `touchPresence` for `active=0`, `presenceClaimed`). `/v1/message`
@@ -524,9 +559,11 @@ modes, and the self-check/CI gate landed with the Phase-1 work — see
 - Background governance defaults to `shadow`, uses the explicitly configured
   maintenance role only, pauses while foreground runs are active, enforces both
   global and per-workspace caps in `full`, and writes private reports with 0600
-  permissions. `auto_supersede_confidence` is reserved and not yet an automatic
-  consolidation apply gate.
-- Remaining calibration work: run the shadow judge over real legacy history,
-  inspect precision/recall, then deliberately promote `shadow -> merge-only ->
-  full`. Automatic consolidation SUPERSEDE/CONFLICT application remains out of
-  scope until that evidence exists.
+  permissions. Reports include a dry-run action ledger and projected active
+  count, and `/diag memory` surfaces the latest calibration summary.
+  `auto_supersede_confidence` is reserved and not yet an automatic consolidation
+  apply gate.
+- Remaining calibration work: inspect the generated shadow report against real
+  legacy history, then deliberately promote `shadow -> merge-only -> full`.
+  Automatic consolidation SUPERSEDE/CONFLICT application remains out of scope
+  until that evidence exists.

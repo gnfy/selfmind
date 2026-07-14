@@ -267,40 +267,14 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 
 	resp, err := d.Gateway.RunAgentWithEvents(ctx, identity.PersonID, req.Channel, agentInput)
 	if err != nil {
-		status := "failed"
-		// A run error (provider transport failure, model error) is NOT
-		// "blocked" — blocked means waiting on the USER (approval/question).
-		// Park the task interrupted: non-terminal and resumable, so a
-		// continuation ("continue"/resume) retries it and /cancel ends it.
-		// Observed live: a codex EOF left a task "blocked" with no way to
-		// retry or finish.
-		taskStatus := "interrupted"
-		if ctx.Err() != nil {
-			status = "cancelled"
-			taskStatus = "cancelled"
-		}
-		_ = d.Control.FinishRun(context.Background(), identity.TenantID, run.ID, status)
-		_ = d.Control.UpdateTaskStatus(context.Background(), identity.TenantID, task.ID, taskStatus, err.Error(), nil)
-		return api.MessageResponse{Identity: identity, Task: task, Run: run, Error: err.Error(), Turn: messageTurn(status, taskStatus, "idle", task.ID, run.ID, err.Error()), Context: messageContextBudget(llmUsageZero())}, http.StatusOK
+		outcome := c.finalizeErroredRun(ctx, identity, task, run, req.Channel, err)
+		return api.MessageResponse{Identity: identity, Task: task, Run: run, Outcome: &outcome, Error: firstString(outcome.Risks), Turn: messageTurn(outcome.Status, outcome.Status, "idle", task.ID, run.ID, outcome.Summary), Context: messageContextBudget(llmUsageZero())}, http.StatusOK
 	}
 
-	content, usage, err := c.aggregateGatewayResponse(ctx, req.Channel, task, run, resp)
+	content, usage, eventSummary, err := c.aggregateGatewayResponse(ctx, req.Channel, task, run, resp)
 	if err != nil {
-		status := "failed"
-		// A run error (provider transport failure, model error) is NOT
-		// "blocked" — blocked means waiting on the USER (approval/question).
-		// Park the task interrupted: non-terminal and resumable, so a
-		// continuation ("continue"/resume) retries it and /cancel ends it.
-		// Observed live: a codex EOF left a task "blocked" with no way to
-		// retry or finish.
-		taskStatus := "interrupted"
-		if ctx.Err() != nil {
-			status = "cancelled"
-			taskStatus = "cancelled"
-		}
-		_ = d.Control.FinishRun(context.Background(), identity.TenantID, run.ID, status)
-		_ = d.Control.UpdateTaskStatus(context.Background(), identity.TenantID, task.ID, taskStatus, err.Error(), nil)
-		return api.MessageResponse{Identity: identity, Task: task, Run: run, Error: err.Error(), Turn: messageTurn(status, taskStatus, "idle", task.ID, run.ID, err.Error()), Context: messageContextBudget(usage)}, http.StatusOK
+		outcome := c.finalizeErroredRun(ctx, identity, task, run, req.Channel, err)
+		return api.MessageResponse{Identity: identity, Task: task, Run: run, Outcome: &outcome, Content: content, Usage: usage, Error: firstString(outcome.Risks), Turn: messageTurn(outcome.Status, outcome.Status, "idle", task.ID, run.ID, outcome.Summary), Context: messageContextBudget(usage)}, http.StatusOK
 	}
 
 	// Finalization must survive turn cancellation. The turn ctx can be
@@ -317,6 +291,31 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 			outcome.Summary = buildRunOutcome(content).Summary
 		}
 	}
+	completion := eventSummary.Completion()
+	if completion.CompletionReason != "" {
+		outcome.CompletionReason = completion.CompletionReason
+	}
+	outcome.Resumable = completion.Resumable
+	if completion.Status == "incomplete" {
+		outcome.Status = "interrupted"
+		outcome.Resumable = true
+		outcome.NextSteps = appendUnique(outcome.NextSteps, "Reply \"continue\" to resume from the collected evidence.", 8)
+	}
+	verification, evidenceFiles := c.evidenceOutcome(finCtx, task.ID, run.ID)
+	outcome.Verification, outcome.Files = mergeEvidenceFiles(verification, evidenceFiles, outcome.Files)
+	outcome.ClaimMismatches = verificationClaimMismatches(outcome)
+	if verificationRequiresResume(outcome.Verification, outcome.Files) {
+		outcome.Status = "interrupted"
+		outcome.Resumable = true
+		if outcome.CompletionReason == "" || outcome.CompletionReason == "completed" {
+			outcome.CompletionReason = "verification_" + outcome.Verification.State
+		}
+		outcome.NextSteps = appendUnique(outcome.NextSteps, verificationNextStep(outcome.Verification), 8)
+	}
+	for _, mismatch := range outcome.ClaimMismatches {
+		outcome.Risks = appendUnique(outcome.Risks, mismatch, 8)
+	}
+	content = withVerificationNotice(content, outcome.Verification, outcome.ClaimMismatches)
 	var finalizeErrs []string
 	recordFinalizeErr := func(action string, err error) {
 		if err == nil {
@@ -378,7 +377,11 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 	if refreshed == nil {
 		refreshed = task
 	}
-	out := api.MessageResponse{Identity: identity, Task: refreshed, Run: run, Outcome: &outcome, Content: content, Usage: usage, Turn: messageTurn("completed", taskStatus, "idle", taskID, run.ID, outcome.Summary), Context: messageContextBudget(usage)}
+	turnStatus := "completed"
+	if outcome.Resumable && outcome.Status == "interrupted" {
+		turnStatus = "interrupted"
+	}
+	out := api.MessageResponse{Identity: identity, Task: refreshed, Run: run, Outcome: &outcome, Content: content, Usage: usage, Turn: messageTurn(turnStatus, taskStatus, "idle", taskID, run.ID, outcome.Summary), Context: messageContextBudget(usage)}
 	// One post-run maintenance pass handles harmless task-label hygiene and
 	// durable memory extraction. It runs after finalization and never delays the
 	// user-visible response.

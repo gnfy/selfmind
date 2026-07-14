@@ -4,11 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -154,25 +152,30 @@ func TestEventToStreamForwardsPlan(t *testing.T) {
 // and verifies (1) the synchronous final answer is returned and (2) live task
 // events are replayed into the ctx stream observer.
 func TestProcessMessageReturnsFinalAnswerAndStreamsEvents(t *testing.T) {
-	events := []control.Event{
-		// newest-first, as ListTaskEvents returns.
-		{ID: "e2", Type: "tool.completed", Payload: mustJSON(map[string]any{"tool": "read_file", "result": "done", "duration_seconds": 0.2})},
-		{ID: "e1", Type: "tool.started", Payload: mustJSON(map[string]any{"tool": "read_file", "args": "main.go"})},
-	}
-	var eventPolls int32
+	subscribed := make(chan struct{})
+	emit := make(chan struct{})
+	var subscribedOnce sync.Once
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
-		case "/v1/tasks/events":
-			// The first poll is the baseline probe: events that pre-exist the
-			// turn are suppressed, so serve this turn's events only afterwards.
-			if atomic.AddInt32(&eventPolls, 1) == 1 {
-				writeJSONResp(w, map[string]any{"task": map[string]any{"id": "t1"}, "events": []control.Event{}})
+		case "/v1/events/stream":
+			w.Header().Set("Content-Type", "text/event-stream")
+			flusher := w.(http.Flusher)
+			writeTestRunEvent(w, api.RunEvent{Type: "ready", Durability: api.EventEphemeral})
+			flusher.Flush()
+			subscribedOnce.Do(func() { close(subscribed) })
+			select {
+			case <-emit:
+				writeTestRunEvent(w, api.RunEvent{EventID: "e1", Cursor: 1, Type: "tool.started", Durability: api.EventDurable, Payload: mustJSON(map[string]any{"tool": "read_file", "args": "main.go"})})
+				writeTestRunEvent(w, api.RunEvent{EventID: "e2", Cursor: 2, Type: "tool.completed", Durability: api.EventDurable, Payload: mustJSON(map[string]any{"tool": "read_file", "result": "done", "duration_seconds": 0.2})})
+				flusher.Flush()
+			case <-r.Context().Done():
 				return
 			}
-			writeJSONResp(w, map[string]any{"task": map[string]any{"id": "t1"}, "events": events})
+			<-r.Context().Done()
 		case "/v1/message":
-			// Simulate a turn that takes a beat so the poller has time to fire.
-			time.Sleep(500 * time.Millisecond)
+			<-subscribed
+			close(emit)
+			time.Sleep(75 * time.Millisecond)
 			writeJSONResp(w, api.MessageResponse{Content: "the final answer"})
 		default:
 			http.NotFound(w, r)
@@ -211,23 +214,21 @@ func TestProcessMessageStreamsAssistantDeltasBeforeFinalAnswer(t *testing.T) {
 	var subscribedOnce sync.Once
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
-		case "/v1/runs/stream":
+		case "/v1/events/stream":
 			w.Header().Set("Content-Type", "text/event-stream")
 			flusher := w.(http.Flusher)
-			_, _ = fmt.Fprint(w, "event: ready\ndata: {}\n\n")
+			writeTestRunEvent(w, api.RunEvent{Type: "ready", Durability: api.EventEphemeral})
 			flusher.Flush()
 			subscribedOnce.Do(func() { close(subscribed) })
 			select {
 			case <-emitDelta:
-				event, _ := json.Marshal(llm.StreamEvent{EventType: "stream", Content: "early "})
-				_, _ = fmt.Fprintf(w, "event: assistant.delta\ndata: %s\n\n", event)
+				payload, _ := json.Marshal(llm.StreamEvent{EventType: "stream", Content: "early "})
+				writeTestRunEvent(w, api.RunEvent{Type: "assistant.delta", Durability: api.EventEphemeral, Payload: payload})
 				flusher.Flush()
 			case <-r.Context().Done():
 				return
 			}
 			<-r.Context().Done()
-		case "/v1/tasks/events":
-			writeJSONResp(w, map[string]any{"events": []control.Event{}})
 		case "/v1/message":
 			select {
 			case <-subscribed:
@@ -264,6 +265,56 @@ func TestProcessMessageStreamsAssistantDeltasBeforeFinalAnswer(t *testing.T) {
 		}
 	default:
 		t.Fatal("assistant delta was not forwarded before final response")
+	}
+}
+
+func TestUnifiedEventStreamReconnectsFromDurableCursor(t *testing.T) {
+	var mu sync.Mutex
+	var lastEventIDs []string
+	requests := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/events/stream" {
+			http.NotFound(w, r)
+			return
+		}
+		mu.Lock()
+		requests++
+		requestNo := requests
+		lastEventIDs = append(lastEventIDs, r.Header.Get("Last-Event-ID"))
+		mu.Unlock()
+		w.Header().Set("Content-Type", "text/event-stream")
+		flusher := w.(http.Flusher)
+		writeTestRunEvent(w, api.RunEvent{Type: "ready", Durability: api.EventEphemeral})
+		if requestNo == 1 {
+			writeTestRunEvent(w, api.RunEvent{EventID: "e1", Cursor: 11, Type: "tool.started", Durability: api.EventDurable})
+		} else {
+			writeTestRunEvent(w, api.RunEvent{EventID: "e2", Cursor: 12, Type: "tool.completed", Durability: api.EventDurable})
+		}
+		flusher.Flush()
+	}))
+	defer srv.Close()
+
+	c := New(srv.URL, "")
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	got := make(chan api.RunEvent, 2)
+	go c.streamEvents(ctx, api.MessageRequest{Platform: "cli", PlatformUserID: "tester"}, nil, func(event api.RunEvent) {
+		got <- event
+		if event.Cursor == 12 {
+			cancel()
+		}
+	}, nil)
+	for i := 0; i < 2; i++ {
+		select {
+		case <-got:
+		case <-time.After(2 * time.Second):
+			t.Fatal("timed out waiting for reconnected event")
+		}
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(lastEventIDs) < 2 || lastEventIDs[0] != "" || lastEventIDs[1] != "11" {
+		t.Fatalf("Last-Event-ID sequence=%v", lastEventIDs)
 	}
 }
 
@@ -470,27 +521,18 @@ func TestDigest(t *testing.T) {
 // events to the observer, and returns the outcome summary when run.finished
 // lands.
 func TestWatchActiveRunStreamsAndDetectsRunEnd(t *testing.T) {
-	history := []control.Event{
-		// Pre-attach history (newest-first) that must never be replayed.
-		{ID: "old1", Type: "tool.completed", Payload: mustJSON(map[string]any{"tool": "read_file", "result": "stale"})},
-	}
-	live := []control.Event{
-		// Newest-first: the run finishes after one fresh tool event.
-		{ID: "e2", Type: "run.finished", Payload: mustJSON(map[string]any{"outcome": map[string]any{"status": "done", "summary": "migration complete"}})},
-		{ID: "e1", Type: "tool.started", Payload: mustJSON(map[string]any{"tool": "terminal", "args": "make migrate"})},
-		{ID: "old1", Type: "tool.completed", Payload: mustJSON(map[string]any{"tool": "read_file", "result": "stale"})},
-	}
-	var polls int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v1/tasks/events" {
+		if r.URL.Path != "/v1/events/stream" {
 			http.NotFound(w, r)
 			return
 		}
-		if atomic.AddInt32(&polls, 1) == 1 {
-			writeJSONResp(w, map[string]any{"events": history})
-			return
-		}
-		writeJSONResp(w, map[string]any{"events": live})
+		w.Header().Set("Content-Type", "text/event-stream")
+		flusher := w.(http.Flusher)
+		writeTestRunEvent(w, api.RunEvent{Type: "ready", Durability: api.EventEphemeral})
+		writeTestRunEvent(w, api.RunEvent{EventID: "e1", Cursor: 1, Type: "tool.started", Durability: api.EventDurable, Payload: mustJSON(map[string]any{"tool": "terminal", "args": "make migrate"})})
+		writeTestRunEvent(w, api.RunEvent{EventID: "e2", Cursor: 2, Type: "run.finished", Durability: api.EventDurable, Payload: mustJSON(map[string]any{"outcome": map[string]any{"status": "done", "summary": "migration complete"}})})
+		flusher.Flush()
+		<-r.Context().Done()
 	}))
 	defer srv.Close()
 
@@ -520,8 +562,11 @@ func TestWatchActiveRunStreamsAndDetectsRunEnd(t *testing.T) {
 func TestWatchActiveRunFallsBackToCurrentTaskProbe(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
-		case "/v1/tasks/events":
-			writeJSONResp(w, map[string]any{"events": []control.Event{}})
+		case "/v1/events/stream":
+			w.Header().Set("Content-Type", "text/event-stream")
+			writeTestRunEvent(w, api.RunEvent{Type: "ready", Durability: api.EventEphemeral})
+			w.(http.Flusher).Flush()
+			<-r.Context().Done()
 		case "/v1/tasks/current":
 			writeJSONResp(w, map[string]any{"task": nil, "active_run": nil})
 		default:
@@ -554,4 +599,9 @@ func writeJSONResp(w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(v)
+}
+
+func writeTestRunEvent(w http.ResponseWriter, event api.RunEvent) {
+	data, _ := json.Marshal(event)
+	_, _ = w.Write([]byte("event: " + event.Type + "\ndata: " + string(data) + "\n\n"))
 }

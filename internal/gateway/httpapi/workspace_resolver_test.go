@@ -67,3 +67,41 @@ func TestWorkspaceOrdinalResolvesListedOrder(t *testing.T) {
 		t.Fatalf("unknown id reply: %s", out)
 	}
 }
+
+// TestWorkspaceUnifiedVerbAndAlias: /workspace, /workspaces, and /ws behave
+// identically — bare lists, an argument selects. /ws is the short alias.
+func TestWorkspaceUnifiedVerbAndAlias(t *testing.T) {
+	daemon, store, identity := newTaskViewServer(t)
+	seedWorkspace(t, store, identity, "alpha")
+	seedWorkspace(t, store, identity, "beta")
+
+	// Bare forms all list, and list the same set.
+	list := controlReply(t, daemon, "/workspaces")
+	for _, bare := range []string{"/workspace", "/ws"} {
+		if got := controlReply(t, daemon, bare); got != list {
+			t.Fatalf("%q must list identically to /workspaces:\n got: %s\nwant: %s", bare, got, list)
+		}
+	}
+
+	// Resolve #2 against the actual display order (order = resolution order).
+	listed, err := daemon.listWorkspacesForDisplay(context.Background(), identity)
+	if err != nil || len(listed) != 2 {
+		t.Fatalf("want 2 workspaces: %v err=%v", listed, err)
+	}
+	second := listed[1]
+
+	// /ws <n> selects exactly like /workspace <n>, and sets current workspace.
+	switched := controlReply(t, daemon, "/ws 2")
+	if !strings.Contains(switched, "Current workspace: "+second.Name) || !strings.Contains(switched, second.ID) {
+		t.Fatalf("/ws 2 selected the wrong workspace: %s", switched)
+	}
+	current, err := store.CurrentWorkspace(context.Background(), identity.TenantID, identity.PersonID)
+	if err != nil || current == nil || current.ID != second.ID {
+		t.Fatalf("/ws 2 did not switch current workspace: %+v err=%v", current, err)
+	}
+
+	// /ws <id> also selects.
+	if byID := controlReply(t, daemon, "/ws "+second.ID); !strings.Contains(byID, "Current workspace: "+second.Name) {
+		t.Fatalf("/ws <id> broke: %s", byID)
+	}
+}

@@ -80,6 +80,30 @@ turns:
 	}
 }
 
+func TestLoadCaseParsesStructuredCompletionExpectations(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "case.yaml")
+	if err := os.WriteFile(path, []byte(`
+id: structured_completion
+turns:
+  - input: "change and verify"
+expect:
+  status: completed
+  completion_reason: completed
+  resumable: false
+  verification_state: passed
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	c, err := LoadCase(path)
+	if err != nil {
+		t.Fatalf("LoadCase failed: %v", err)
+	}
+	if c.Expect.CompletionReason != "completed" || c.Expect.Resumable == nil || *c.Expect.Resumable || c.Expect.VerificationState != "passed" {
+		t.Fatalf("structured expectations not parsed: %+v", c.Expect)
+	}
+}
+
 func TestLoadCaseRejectsSharedDataWithIsolationNeeds(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "case.yaml")

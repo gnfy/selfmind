@@ -1,80 +1,144 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
+	"selfmind/internal/control"
+	"selfmind/internal/gateway/api"
 	"selfmind/internal/kernel/llm"
 )
 
-// liveStreamHub carries short-lived assistant text deltas from the daemon to
-// attached interactive clients. Deltas deliberately never enter control.db:
-// the synchronous message response remains the correctness source of truth,
-// while this hub only improves perceived latency in the CLI.
-type liveStreamHub struct {
-	mu     sync.RWMutex
+type runEventSubscriber struct {
+	ch  chan api.RunEvent
+	gap atomic.Bool
+}
+
+// runEventBroker serializes the daemon-local live view. Durable appends are
+// observed after commit; assistant deltas share the same per-run live sequence
+// but never enter SQLite.
+type runEventBroker struct {
+	mu     sync.Mutex
 	nextID uint64
-	subs   map[string]map[uint64]chan llm.StreamEvent
+	subs   map[string]map[uint64]*runEventSubscriber
+	seq    map[string]uint64
 }
 
-func newLiveStreamHub() *liveStreamHub {
-	return &liveStreamHub{subs: make(map[string]map[uint64]chan llm.StreamEvent)}
-}
-
-func (h *liveStreamHub) subscribe(personID string) (<-chan llm.StreamEvent, func()) {
-	ch := make(chan llm.StreamEvent, 256)
-	h.mu.Lock()
-	h.nextID++
-	id := h.nextID
-	if h.subs[personID] == nil {
-		h.subs[personID] = make(map[uint64]chan llm.StreamEvent)
+func newRunEventBroker(store *control.Store) *runEventBroker {
+	b := &runEventBroker{
+		subs: make(map[string]map[uint64]*runEventSubscriber),
+		seq:  make(map[string]uint64),
 	}
-	h.subs[personID][id] = ch
-	h.mu.Unlock()
+	if store != nil {
+		store.SubscribeEventAppends(b.publishDurable)
+	}
+	return b
+}
 
+func (b *runEventBroker) subscribe(personID string) (*runEventSubscriber, func()) {
+	sub := &runEventSubscriber{ch: make(chan api.RunEvent, 256)}
+	b.mu.Lock()
+	b.nextID++
+	id := b.nextID
+	if b.subs[personID] == nil {
+		b.subs[personID] = make(map[uint64]*runEventSubscriber)
+	}
+	b.subs[personID][id] = sub
+	b.mu.Unlock()
 	var once sync.Once
-	return ch, func() {
+	return sub, func() {
 		once.Do(func() {
-			h.mu.Lock()
-			if group := h.subs[personID]; group != nil {
-				delete(group, id)
-				if len(group) == 0 {
-					delete(h.subs, personID)
-				}
+			b.mu.Lock()
+			delete(b.subs[personID], id)
+			if len(b.subs[personID]) == 0 {
+				delete(b.subs, personID)
 			}
-			h.mu.Unlock()
+			b.mu.Unlock()
 		})
 	}
 }
 
-func (h *liveStreamHub) publish(personID string, event llm.StreamEvent) {
-	if h == nil || personID == "" || event.EventType != "stream" || event.Content == "" {
+func (b *runEventBroker) publishDurable(event control.Event) {
+	if event.PersonID == "" {
 		return
 	}
-	h.mu.RLock()
-	defer h.mu.RUnlock()
-	for _, ch := range h.subs[personID] {
+	b.publish(api.RunEvent{
+		EventID: event.ID, Cursor: event.Cursor,
+		TenantID: event.TenantID, PersonID: event.PersonID,
+		TaskID: event.TaskID, RunID: event.RunID, Type: event.Type,
+		Durability: api.EventDurable, CreatedAt: event.CreatedAt,
+		Payload: event.Payload,
+	})
+}
+
+func (b *runEventBroker) publishAssistant(task *control.Task, run *control.Run, event llm.StreamEvent) {
+	if task == nil || event.Content == "" {
+		return
+	}
+	payload, _ := json.Marshal(event)
+	runID := ""
+	if run != nil {
+		runID = run.ID
+	}
+	b.publish(api.RunEvent{
+		TenantID: task.TenantID, PersonID: task.PersonID,
+		TaskID: task.ID, RunID: runID, Type: "assistant.delta",
+		Durability: api.EventEphemeral, CreatedAt: time.Now(), Payload: payload,
+	})
+}
+
+func (b *runEventBroker) publish(event api.RunEvent) {
+	if b == nil || event.PersonID == "" || event.Type == "" {
+		return
+	}
+	b.mu.Lock()
+	key := event.RunID
+	if key == "" {
+		key = "person:" + event.PersonID
+	}
+	b.seq[key]++
+	event.LiveSeq = b.seq[key]
+	for _, sub := range b.subs[event.PersonID] {
 		select {
-		case ch <- event:
+		case sub.ch <- event:
 		default:
-			// Streaming is best-effort. A slow terminal receives the complete
-			// final response when POST /v1/message returns, so never stall the
-			// agent hot path on UI backpressure.
+			sub.gap.Store(true)
 		}
+	}
+	if isTerminalRunEvent(event.Type) && event.RunID != "" {
+		delete(b.seq, key)
+	}
+	b.mu.Unlock()
+}
+
+func isTerminalRunEvent(eventType string) bool {
+	switch eventType {
+	case "run.finished", "run.cancelled", "run.interrupted", "run.failed":
+		return true
+	default:
+		return false
 	}
 }
 
-func (d *Server) liveStreams() *liveStreamHub {
-	d.liveStreamOnce.Do(func() { d.liveStream = newLiveStreamHub() })
-	return d.liveStream
+func (d *Server) events() *runEventBroker {
+	d.eventBrokerOnce.Do(func() { d.eventBroker = newRunEventBroker(d.Control) })
+	return d.eventBroker
 }
 
-// handleRunStream exposes person-scoped ephemeral assistant deltas. Tool,
-// approval, plan, and lifecycle events remain on the durable task event path.
+// handleRunStream is retained as a compatibility route alias for one release.
+// New clients use /v1/events/stream and decode the RunEvent envelope.
 func (d *Server) handleRunStream(w http.ResponseWriter, r *http.Request) {
+	d.handleEventsStream(w, r)
+}
+
+func (d *Server) handleEventsStream(w http.ResponseWriter, r *http.Request) {
 	if !d.authorized(r) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
@@ -102,10 +166,22 @@ func (d *Server) handleRunStream(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("X-Accel-Buffering", "no")
 
-	events, unsubscribe := d.liveStreams().subscribe(identity.PersonID)
+	sub, unsubscribe := d.events().subscribe(identity.PersonID)
 	defer unsubscribe()
-	_, _ = fmt.Fprint(w, "event: ready\ndata: {}\n\n")
+	cursor, explicitCursor := requestedEventCursor(r)
+	if !explicitCursor {
+		cursor, _ = d.Control.LatestPersonEventCursor(r.Context(), identity.TenantID, identity.PersonID)
+	} else if !d.replayPersonEvents(r.Context(), w, flusher, identity, &cursor) {
+		return
+	}
+	writeRunEventSSE(w, api.RunEvent{
+		Cursor: cursor, TenantID: identity.TenantID, PersonID: identity.PersonID,
+		Type: "ready", Durability: api.EventEphemeral, CreatedAt: time.Now(),
+	})
 	flusher.Flush()
+	if strings.EqualFold(r.URL.Query().Get("once"), "true") {
+		return
+	}
 
 	heartbeat := time.NewTicker(15 * time.Second)
 	defer heartbeat.Stop()
@@ -114,15 +190,75 @@ func (d *Server) handleRunStream(w http.ResponseWriter, r *http.Request) {
 		case <-r.Context().Done():
 			return
 		case <-heartbeat.C:
+			if sub.gap.Swap(false) {
+				writeRunEventSSE(w, api.RunEvent{Type: "stream.gap", Durability: api.EventEphemeral, PersonID: identity.PersonID, CreatedAt: time.Now()})
+				if !d.replayPersonEvents(r.Context(), w, flusher, identity, &cursor) {
+					return
+				}
+			}
 			_, _ = fmt.Fprint(w, ": keep-alive\n\n")
 			flusher.Flush()
-		case event := <-events:
-			data, err := json.Marshal(event)
-			if err != nil {
-				continue
+		case event := <-sub.ch:
+			if sub.gap.Swap(false) {
+				writeRunEventSSE(w, api.RunEvent{Type: "stream.gap", Durability: api.EventEphemeral, PersonID: identity.PersonID, CreatedAt: time.Now()})
+				if !d.replayPersonEvents(r.Context(), w, flusher, identity, &cursor) {
+					return
+				}
 			}
-			_, _ = fmt.Fprintf(w, "event: assistant.delta\ndata: %s\n\n", data)
+			if event.Durability == api.EventDurable {
+				if event.Cursor <= cursor {
+					continue
+				}
+				cursor = event.Cursor
+			}
+			writeRunEventSSE(w, event)
 			flusher.Flush()
 		}
 	}
+}
+
+func requestedEventCursor(r *http.Request) (int64, bool) {
+	raw := strings.TrimSpace(r.Header.Get("Last-Event-ID"))
+	if raw == "" {
+		raw = strings.TrimSpace(r.URL.Query().Get("cursor"))
+	}
+	if raw == "" {
+		return 0, false
+	}
+	cursor, err := strconv.ParseInt(raw, 10, 64)
+	return cursor, err == nil && cursor >= 0
+}
+
+func (d *Server) replayPersonEvents(ctx context.Context, w http.ResponseWriter, flusher http.Flusher, identity *control.IdentityContext, cursor *int64) bool {
+	for {
+		events, err := d.Control.ListPersonEventsAfter(ctx, identity.TenantID, identity.PersonID, *cursor, 200)
+		if err != nil {
+			return false
+		}
+		for _, event := range events {
+			writeRunEventSSE(w, durableRunEvent(event))
+			*cursor = event.Cursor
+		}
+		flusher.Flush()
+		if len(events) < 200 {
+			return true
+		}
+	}
+}
+
+func durableRunEvent(event control.Event) api.RunEvent {
+	return api.RunEvent{
+		EventID: event.ID, Cursor: event.Cursor, TenantID: event.TenantID,
+		PersonID: event.PersonID, TaskID: event.TaskID, RunID: event.RunID,
+		Type: event.Type, Durability: api.EventDurable,
+		CreatedAt: event.CreatedAt, Payload: event.Payload,
+	}
+}
+
+func writeRunEventSSE(w http.ResponseWriter, event api.RunEvent) {
+	data, _ := json.Marshal(event)
+	if event.Durability == api.EventDurable && event.Cursor > 0 {
+		_, _ = fmt.Fprintf(w, "id: %d\n", event.Cursor)
+	}
+	_, _ = fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event.Type, data)
 }

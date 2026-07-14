@@ -1,0 +1,69 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "content": "I"
+    },
+    {
+      "content": "’ll"
+    },
+    {
+      "content": " inspect"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " workspace"
+    },
+    {
+      "content": " first"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " then"
+    },
+    {
+      "content": " create"
+    },
+    {
+      "content": " and"
+    },
+    {
+      "content": " compile"
+    },
+    {
+      "content": "-check"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " file"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": "Preparing to run ls_r",
+      "event_type": "agent.thinking"
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_tUsJ3ydeEH3VadInnJwXqeMt",
+          "Function": "ls_r",
+          "Args": "{\"path\":\"{{SELFMIND_VCR_WORKSPACE}}\",\"recursive\":false,\"max_entries\":100}"
+        }
+      ]
+    },
+    {
+      "usage": {
+        "input_tokens": 4782,
+        "output_tokens": 235
+      }
+    }
+  ]
+}

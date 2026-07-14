@@ -56,8 +56,9 @@ var slashCommandMetas = []slashCommandMeta{
 	{Name: "/new", Usage: "/new [title]", Description: "Create a new task", Hint: "create a new task"},
 	{Name: "/resume", Usage: "/resume <n|task_id>", Description: "Resume a task by list number or id (an archived id reopens it)", Hint: "resume a task by number or id"},
 	{Name: "/task", Usage: "/task <n|id> [runs|rename <name>|archive]", Description: "Show a task's detail, runs, rename it, or archive it", Hint: "inspect or manage one task"},
-	{Name: "/workspace", Usage: "/workspace <n|id>", Description: "Select a workspace by list number or id", Hint: "select a workspace"},
-	{Name: "/workspaces", Usage: "/workspaces", Description: "List workspaces", Hint: "list your workspaces"},
+	{Name: "/workspace", Usage: "/workspace [n|id]", Description: "List workspaces (bare) or select one by number/id", Hint: "list or select a workspace"},
+	{Name: "/ws", Usage: "/ws [n|id]", Description: "Short alias for /workspace (bare lists, arg selects)", Hint: "list or select a workspace"},
+	{Name: "/workspaces", Usage: "/workspaces", Description: "List workspaces (same as bare /workspace)", Hint: "list your workspaces"},
 	{Name: "/events", Usage: "/events", Description: "List recent events for the current task", Hint: "recent task events"},
 	{Name: "/notify", Usage: "/notify <platform|auto>", Description: "Choose where detached CLI notifications go", Hint: "set notify preference"},
 }
@@ -68,7 +69,7 @@ var slashCommandMetas = []slashCommandMeta{
 // command.
 var gatewayPassthroughCommands = []string{
 	"/approvals", "/approve", "/reject", "/stop", "/cancel", "/id", "/new",
-	"/resume", "/task", "/workspace", "/workspaces", "/events", "/notify",
+	"/resume", "/task", "/workspace", "/workspaces", "/ws", "/events", "/notify",
 }
 
 var slashCommands = []slashCommand{
@@ -245,7 +246,7 @@ var allSlashCommands = func() []slashCommand {
 		// current_workspace), but the TUI additionally captures the resolved
 		// workspace from the success reply as the session override — see
 		// handleWorkspaceSelect.
-		if name == "/workspace" {
+		if name == "/workspace" || name == "/ws" {
 			run = func(m *uiModel, args []string) tea.Cmd {
 				return m.handleWorkspaceSelect(args)
 			}

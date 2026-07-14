@@ -12,9 +12,12 @@ import (
 )
 
 type toolExecutionResult struct {
-	index int
-	step  string
-	msg   llm.Message
+	index     int
+	step      string
+	msg       llm.Message
+	toolName  string
+	signature string
+	success   bool
 }
 
 type parallelToolSupport interface {
@@ -212,14 +215,17 @@ func (a *Agent) executeToolCalls(ctx context.Context, tenantID string, eventCh c
 
 func (a *Agent) executeSingleToolCall(ctx context.Context, tenantID string, eventCh chan string, idx int, call llm.ToolCall) toolExecutionResult {
 	name := call.Function
+	signature := strings.TrimSpace(name) + "\x00" + strings.TrimSpace(call.Args)
 	if call.ID == "" {
 		call.ID = fmt.Sprintf("toolcall-%d", idx)
 	}
 	if name == "" {
 		step := "Error executing tool: missing function name"
 		return toolExecutionResult{
-			index: idx,
-			step:  step,
+			index:     idx,
+			step:      step,
+			toolName:  name,
+			signature: signature,
 			msg: llm.Message{
 				Role:       "tool",
 				Content:    step,
@@ -232,8 +238,10 @@ func (a *Agent) executeSingleToolCall(ctx context.Context, tenantID string, even
 	case <-ctx.Done():
 		step := fmt.Sprintf("Error executing %s: %v", name, ctx.Err())
 		return toolExecutionResult{
-			index: idx,
-			step:  step,
+			index:     idx,
+			step:      step,
+			toolName:  name,
+			signature: signature,
 			msg: llm.Message{
 				Role:       "tool",
 				Content:    step,
@@ -274,8 +282,10 @@ func (a *Agent) executeSingleToolCall(ctx context.Context, tenantID string, even
 			emitToolEndEventWithDuration(eventCh, name, call.ID, packaged, duration, err)
 		}
 		return toolExecutionResult{
-			index: idx,
-			step:  packaged.ModelContent,
+			index:     idx,
+			step:      packaged.ModelContent,
+			toolName:  name,
+			signature: signature,
 			msg: llm.Message{
 				Role:       "tool",
 				Content:    packaged.ModelContent,
@@ -292,8 +302,11 @@ func (a *Agent) executeSingleToolCall(ctx context.Context, tenantID string, even
 	}
 
 	return toolExecutionResult{
-		index: idx,
-		step:  toolHistoryStep(name, packaged),
+		index:     idx,
+		step:      toolHistoryStep(name, packaged),
+		toolName:  name,
+		signature: signature,
+		success:   true,
 		msg: llm.Message{
 			Role:       "tool",
 			Content:    packaged.ModelContent,

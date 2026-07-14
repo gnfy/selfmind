@@ -678,6 +678,12 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 		maxIterations = 2
 	}
 	actionToolsUsed := 0
+	actionToolBudget := strategy.normalized().MaxActionTools
+	actionToolBudgetLimit := strategy.normalized().ActionToolBudgetLimit
+	budgetExtensions := 0
+	progressVersion := 0
+	progressAtLastBudgetDecision := 0
+	successfulActionEvidence := map[string]struct{}{}
 	toolUseCounts := map[string]int{}
 	// Artifact-backed tool results appended this turn, by message index and
 	// the iteration that produced them: after toolResultAgeIterations they are
@@ -686,6 +692,35 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 	type agedToolMsg struct{ index, iteration int }
 	var artifactToolMsgs []agedToolMsg
 	toolBudgetRepairIssued := false
+	toolBudgetExhausted := false
+	tryExtendToolBudget := func(iteration int) bool {
+		if actionToolBudget <= 0 || actionToolBudget >= actionToolBudgetLimit || budgetExtensions >= strategy.normalized().MaxBudgetExtensions {
+			return false
+		}
+		if progressVersion <= progressAtLastBudgetDecision {
+			return false
+		}
+		previous := actionToolBudget
+		nextBudget := actionToolBudget + strategy.normalized().ActionToolBudgetStep
+		if nextBudget > actionToolBudgetLimit {
+			nextBudget = actionToolBudgetLimit
+		}
+		actionToolBudget = nextBudget
+		budgetExtensions++
+		progressAtLastBudgetDecision = progressVersion
+		if iteration+2 >= maxIterations {
+			maxIterations = iteration + 3
+		}
+		EmitAgentEvent(eventCh, AgentEvent{Type: "strategy.budget_extended", Payload: map[string]interface{}{
+			"previous_budget": previous,
+			"new_budget":      actionToolBudget,
+			"hard_limit":      actionToolBudgetLimit,
+			"extension":       budgetExtensions,
+			"progress":        progressVersion,
+		}})
+		emitAgentActivity(eventCh, fmt.Sprintf("New evidence found; extending the tool budget from %d to %d", previous, actionToolBudget), "tool_budget", iteration)
+		return true
+	}
 	steerCh := steeringFromContext(ctx)
 	for i := 0; i < maxIterations; i++ {
 		// Mid-turn steering: fold any follow-up the user typed while this turn was
@@ -700,8 +735,19 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 			})
 		}
 		iterationStrategy := strategy
-		if actionToolBudgetReached(strategy, actionToolsUsed) {
-			iterationStrategy = strategy.WithActionToolsDisabled()
+		iterationStrategy.MaxActionTools = actionToolBudget
+		if actionToolBudgetReached(iterationStrategy, actionToolsUsed) {
+			if tryExtendToolBudget(i) {
+				iterationStrategy.MaxActionTools = actionToolBudget
+			} else {
+				// Even when the provider respects the reduced tool schema and does
+				// not emit a call that we can count as "dropped", reaching the
+				// bounded ceiling means the runtime constrained the turn. Preserve
+				// that fact in completion semantics instead of silently calling the
+				// resulting prose a complete task.
+				toolBudgetExhausted = true
+				iterationStrategy = strategy.WithActionToolsDisabled()
+			}
 		}
 		var cappedLifecycleTools []string
 		for _, name := range lifecycleToolNames() {
@@ -984,6 +1030,12 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 			for _, res := range results {
 				history.Steps = append(history.Steps, res.step)
 				messages = append(messages, res.msg)
+				if res.success && !isLifecycleToolName(res.toolName) {
+					if _, seen := successfulActionEvidence[res.signature]; !seen {
+						successfulActionEvidence[res.signature] = struct{}{}
+						progressVersion++
+					}
+				}
 				if res.msg.Role == "tool" && strings.Contains(res.msg.Content, toolArtifactNoteToken) {
 					artifactToolMsgs = append(artifactToolMsgs, agedToolMsg{index: len(messages) - 1, iteration: i})
 				}
@@ -993,10 +1045,18 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 			a.toolCallCount += len(calls)
 			// The review itself runs after the final answer, once the outcome is known.
 
+			if droppedForBudget > 0 && tryExtendToolBudget(i) {
+				messages = append(messages, llm.Message{Role: "user", Content: "SelfMind extended the bounded tool budget because the completed calls produced new evidence. Continue with the next necessary action, and avoid repeating an identical call unless its inputs or relevant state changed."})
+			}
 			continue
 		}
 		if droppedForBudget > 0 && !toolBudgetRepairIssued {
+			if tryExtendToolBudget(i) {
+				messages = append(messages, llm.Message{Role: "user", Content: "SelfMind extended the bounded tool budget because prior calls produced new evidence. Retry only the next necessary tool action; do not repeat unchanged calls."})
+				continue
+			}
 			toolBudgetRepairIssued = true
+			toolBudgetExhausted = true
 			if i+1 >= maxIterations {
 				maxIterations = i + 2
 			}
@@ -1034,11 +1094,13 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 				Type:    "turn.completed",
 				Content: history.Outcome,
 				Payload: map[string]interface{}{
-					"status":        "incomplete",
-					"finish_reason": finishReason,
+					"status":            "incomplete",
+					"finish_reason":     finishReason,
+					"completion_reason": "output_limit",
+					"resumable":         true,
 				},
 			})
-			return history.Outcome, totalUsage, fmt.Errorf("model response reached the output limit before completing")
+			return history.Outcome, totalUsage, nil
 		}
 		if continuedAnswer.Len() > 0 {
 			continuedAnswer.WriteString(resp)
@@ -1057,11 +1119,21 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 
 		a.maybeTriggerBackgroundReview(tenantID, channel, messages, history)
 
+		completionStatus := "completed"
+		completionReason := "completed"
+		resumable := false
+		if toolBudgetExhausted {
+			completionStatus = "incomplete"
+			completionReason = "tool_budget_exhausted"
+			resumable = true
+		}
 		EmitAgentEvent(eventCh, AgentEvent{
 			Type:    "turn.completed",
 			Content: resp,
 			Payload: map[string]interface{}{
-				"status": "completed",
+				"status":            completionStatus,
+				"completion_reason": completionReason,
+				"resumable":         resumable,
 			},
 		})
 		return resp, totalUsage, nil
@@ -1071,7 +1143,9 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 		Type:    "turn.completed",
 		Content: "max iterations reached",
 		Payload: map[string]interface{}{
-			"status": "max_iterations",
+			"status":            "incomplete",
+			"completion_reason": "max_iterations",
+			"resumable":         true,
 		},
 	})
 	return "max iterations reached", totalUsage, nil

@@ -1,0 +1,69 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "content": "The"
+    },
+    {
+      "content": " workspace"
+    },
+    {
+      "content": " is"
+    },
+    {
+      "content": " empty"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " so"
+    },
+    {
+      "content": " I"
+    },
+    {
+      "content": "’m"
+    },
+    {
+      "content": " writing"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " requested"
+    },
+    {
+      "content": " Python"
+    },
+    {
+      "content": " file"
+    },
+    {
+      "content": " now"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": "Preparing to run write_file",
+      "event_type": "agent.thinking"
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_9eqaA9uYexuCwVUoEX26HMbE",
+          "Function": "write_file",
+          "Args": "{\"path\":\"{{SELFMIND_VCR_WORKSPACE}}/verified.py\",\"content\":\"print('verified')\\n\"}"
+        }
+      ]
+    },
+    {
+      "usage": {
+        "input_tokens": 4916,
+        "output_tokens": 69
+      }
+    }
+  ]
+}

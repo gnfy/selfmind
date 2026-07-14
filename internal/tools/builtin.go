@@ -137,7 +137,7 @@ func (t *ListFilesTool) Execute(args map[string]interface{}) (string, error) {
 		}
 		defer dir.Close()
 		files, err := dir.ReadDir(maxEntries + 1)
-		if err != nil {
+		if err != nil && err != io.EOF {
 			return "", err
 		}
 		for _, f := range files {
@@ -286,8 +286,8 @@ func NewWriteFileTool() *WriteFileTool {
 
 func (t *WriteFileTool) Execute(args map[string]interface{}) (string, error) {
 	path, _ := args["path"].(string)
-	content, _ := args["content"].(string)
-	if path == "" || content == "" {
+	content, contentOK := args["content"].(string)
+	if path == "" || !contentOK {
 		return "", fmt.Errorf("path and content are required")
 	}
 	// Capture the pre-image so an overwrite can be shown as a real diff instead
@@ -295,7 +295,7 @@ func (t *WriteFileTool) Execute(args map[string]interface{}) (string, error) {
 	// we treat it as a new file.
 	oldBytes, statErr := os.ReadFile(path)
 	existed := statErr == nil
-	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+	if err := atomicWriteBytes(path, []byte(content), 0644); err != nil {
 		return "", err
 	}
 	return writeFileResult(path, string(oldBytes), content, existed), nil
@@ -395,6 +395,53 @@ func (t *ExecuteCommandTool) Execute(args map[string]interface{}) (string, error
 		return fmt.Sprintf("Started background process with ID: %s", id), nil
 	}
 
+	return executeForegroundCommand(args, "terminal", timeoutSeconds)
+}
+
+// VerifyTool runs a foreground check whose result is recorded as verification
+// evidence. Keeping it separate from terminal lets finalization distinguish a
+// deliberate test/build/lint check from an arbitrary shell command.
+type VerifyTool struct{ BaseTool }
+
+func NewVerifyTool() *VerifyTool {
+	return &VerifyTool{BaseTool: BaseTool{
+		name:        "verify",
+		description: "Run a test, build, lint, typecheck, syntax, smoke, or custom verification command and record its exit status as durable run evidence",
+		schema: ToolSchema{
+			Type: "object",
+			Properties: map[string]PropertyDef{
+				"command": {Type: "string", Description: "Full verification command to execute"},
+				"cwd":     {Type: "string", Description: "Working directory", Default: "."},
+				"timeout": {Type: "integer", Description: "Timeout in seconds", Default: 120},
+				"kind": {
+					Type:        "string",
+					Description: "Verification category",
+					Enum:        []string{"test", "build", "lint", "typecheck", "syntax", "smoke", "custom"},
+					Default:     "custom",
+				},
+			},
+			Required: []string{"command"},
+		},
+	}}
+}
+
+func (t *VerifyTool) Execute(args map[string]interface{}) (string, error) {
+	if strings.TrimSpace(stringArg(args, "command")) == "" {
+		return "", fmt.Errorf("command is required")
+	}
+	timeoutSeconds, _ := args["timeout"].(int)
+	if timeoutSeconds <= 0 {
+		timeoutSeconds = 120
+	}
+	return executeForegroundCommand(args, "verify", timeoutSeconds)
+}
+
+func executeForegroundCommand(args map[string]interface{}, toolName string, timeoutSeconds int) (string, error) {
+	cmdStr, _ := args["command"].(string)
+	cwd, _ := args["cwd"].(string)
+	if cwd == "" {
+		cwd = "."
+	}
 	parentCtx := contextFromArgs(args)
 	runCtx, cancel := context.WithTimeout(parentCtx, time.Duration(timeoutSeconds)*time.Second)
 	defer cancel()
@@ -402,7 +449,14 @@ func (t *ExecuteCommandTool) Execute(args map[string]interface{}) (string, error
 	cmd := shellCommandContext(runCtx, cmdStr)
 	cmd.Dir = cwd
 
-	out, err := runCommandStreaming(runCtx, cmd, cmdStr)
+	out, err := runCommandStreaming(runCtx, cmd, cmdStr, toolName)
+	exitCode := 0
+	if exitErr, ok := err.(interface{ ExitCode() int }); ok {
+		exitCode = exitErr.ExitCode()
+	} else if err != nil {
+		exitCode = -1
+	}
+	args["_command_exit_code"] = exitCode
 	if runCtx.Err() == context.DeadlineExceeded {
 		return out, fmt.Errorf("command timed out after %d seconds", timeoutSeconds)
 	}
@@ -415,7 +469,7 @@ func (t *ExecuteCommandTool) Execute(args map[string]interface{}) (string, error
 	return out, nil
 }
 
-func runCommandStreaming(ctx context.Context, cmd commandRunner, command string) (string, error) {
+func runCommandStreaming(ctx context.Context, cmd commandRunner, command, toolName string) (string, error) {
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return "", err
@@ -441,7 +495,7 @@ func runCommandStreaming(ctx context.Context, cmd commandRunner, command string)
 		output.WriteString(line)
 		mu.Unlock()
 		emitToolProgress(eventCh, "tool.output", map[string]interface{}{
-			"tool_name": "terminal",
+			"tool_name": toolName,
 			"stream":    stream,
 			"command":   command,
 			"line":      line,
@@ -471,7 +525,7 @@ func runCommandStreaming(ctx context.Context, cmd commandRunner, command string)
 			return result, err
 		case <-ticker.C:
 			emitToolProgress(eventCh, "tool.heartbeat", map[string]interface{}{
-				"tool_name":       "terminal",
+				"tool_name":       toolName,
 				"command":         command,
 				"elapsed_seconds": time.Since(start).Seconds(),
 			}, "")
@@ -752,6 +806,7 @@ func RegisterBuiltins(d *Dispatcher) {
 	d.RegisterTool(NewWriteFileTool())
 	d.RegisterTool(NewPatchTool())
 	d.RegisterTool(NewExecuteCommandTool())
+	d.RegisterTool(NewVerifyTool())
 	d.RegisterTool(NewSearchFilesTool())
 	d.RegisterTool(NewGetCurrentTimeTool())
 	d.RegisterTool(NewProcessTool())

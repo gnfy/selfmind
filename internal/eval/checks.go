@@ -20,6 +20,9 @@ type RunSnapshot struct {
 	ExpectedWorkspace string
 	DurationSeconds   float64
 	OutcomeStatus     string
+	CompletionReason  string
+	Resumable         bool
+	VerificationState string
 }
 
 type CheckResult struct {
@@ -92,6 +95,17 @@ func EvaluateCase(c *Case, snap RunSnapshot) []CheckResult {
 			ok = true
 		}
 		add("status:"+want, ok, "outcome status should match expectation; got "+firstNonEmpty(got, "<empty>"))
+	}
+	if want := strings.TrimSpace(c.Expect.CompletionReason); want != "" {
+		got := strings.TrimSpace(snap.CompletionReason)
+		add("completion_reason:"+want, got == want, "completion reason should match expectation; got "+firstNonEmpty(got, "<empty>"))
+	}
+	if c.Expect.Resumable != nil {
+		add("resumable", snap.Resumable == *c.Expect.Resumable, "resumable flag should match expectation")
+	}
+	if want := strings.TrimSpace(c.Expect.VerificationState); want != "" {
+		got := strings.TrimSpace(snap.VerificationState)
+		add("verification_state:"+want, got == want, "verification state should match expectation; got "+firstNonEmpty(got, "<empty>"))
 	}
 	if c.Expect.RequireWorkspaceMatch || c.Checks.WorkspaceShouldMatch {
 		want := strings.TrimSpace(snap.ExpectedWorkspace)

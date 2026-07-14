@@ -77,6 +77,9 @@ go run cmd/selfmind/main.go
 
 SelfMind 只使用一个 YAML 配置文件，不需要 `.env`。
 
+> **完整字段说明：** 每个配置段、默认值、以及"什么时候需要改"见
+> [`docs/config-reference.zh-CN.md`](docs/config-reference.zh-CN.md)。下面是核心部分。
+
 默认路径：
 
 ```text
@@ -285,6 +288,20 @@ delegation:
 editor:
   large_paste_chars: 1000
   large_paste_lines: 10
+
+# 联网搜索后端。本地爬 DuckDuckGo 不可靠（反爬、GFW），建议配一个托管 API
+# 的 key 才能稳定拿到结果；两项都留空则退回尽力而为的 DuckDuckGo。
+# 只选一个后端，填它的 key：
+#   tavily（推荐，https://tavily.com）| brave | serper | firecrawl | searxng
+web:
+  search_backend: "tavily"
+  api_key: "tvly-xxxxxxxx"   # searxng 时这里填实例 URL
+
+# 飞行记录器：把每轮真实对话存本地，供 `selfmind eval capture` 把坏 turn
+# 固化成离线回归测试。详见"诊断与回归固化"。
+flight_recorder:
+  enabled: true
+  keep: 30
 ```
 
 ### 模型配置字段说明
@@ -432,7 +449,7 @@ selfmind -f ./config/config.yaml
 | `/cancel` | 即使没有活跃 run,也取消当前任务。 |
 | `/new [标题]` | 另起一个新任务,而不是继续当前任务。 |
 | `/resume <n\|task_id>` | 按 `/tasks` 卡片序号、短 id 或完整 id 切换回之前的某个任务。 |
-| `/workspaces` / `/workspace <n\|id>` | 列出工作区 / 按列表序号或 id 切换。 |
+| `/workspace [n\|id]`（简称 `/ws`，`/workspaces` 亦可） | 无参列出工作区；带序号或 id 则切换到它。 |
 | `/approvals` / `/approve <n>` / `/reject <n>` | 列出并回应待处理的工具审批。 |
 | `/mode [模式]` | 查看或设置审批模式:`on-request`、`read-only`、`auto-edit`、`full-auto`、`smart`。 |
 | `/diag` | 精简的运行时诊断快照。 |
@@ -615,6 +632,58 @@ Memory 用于保存长期有效的用户偏好、项目事实和环境约定，�
 
 Memory 和 Skill 的学习变更会写入 `~/.selfmind/<tenant>/learning/`。当学错、过期或不想保留时，先用 history 找到 `change_id`，再用 undo 回滚。
 
+## 诊断与回归固化
+
+SelfMind 会自动记录使用过程，方便你发现问题、并把真实故障固化成永久回归测试。三个动作，按使用频率排列。
+
+### 1. 查看最近出了什么问题
+
+错误（工具失败、模型/接口失败如 429 或连接中断）会自动记录。查看：
+
+```sh
+selfmind doctor
+```
+
+`== Recent errors ==` 段按时间倒序聚合两类失败：
+
+```
+== Recent errors ==
+- 07-13 10:33 [tool:web_search] backend unavailable (HTTP 202 anti-bot challenge)
+- 07-13 09:15 [run:failed] llm chat: responses API error 429: usage limit reached
+```
+
+`[tool:<名字>]` 是单个工具调用失败；`[run:failed]` 是整轮/模型接口失败。密钥已脱敏。想看单轮上下文细节（token 构成、召回命中、压缩），在对话里用控制命令：`/diag`、`/diag context`、`/diag tasks`、`/diag memory`。
+
+### 2. 录制真实对话（飞行记录器）
+
+在配置里开一次，之后每轮真实对话的模型交互都会存到本地：
+
+```yaml
+flight_recorder:
+  enabled: true
+  keep: 30        # 保留最新 30 轮，自动清理更旧的
+```
+
+改完配置后重启网关（`selfmind gateway restart`）。记录存在 `~/.selfmind/flight/`（纯本地、不上传）；`keep` 限制磁盘占用。内部/后台轮次（委派、审查）不录，只保留真实的用户对话。
+
+### 3. 把一个坏 turn 固化成回归测试
+
+当某一轮出现值得永久防住的问题时，把它提升成离线 eval 用例：
+
+```sh
+# 提升最近一轮（也可用 turn-id 代替 latest）
+selfmind eval capture latest --title "搜索后端不可用时应报故障而非编造否定结论" --suite quality
+
+# 离线回放验证（用录制，不烧 provider 配额）
+SELFMIND_EVAL_VCR=replay selfmind eval run evalcases/quality/<case>.yaml
+# 或跑整个回归门禁：
+selfmind selfcheck
+```
+
+**提交 git 前务必打开生成的 YAML 脱敏**——飞行记录是明文对话，请去掉真实姓名、隐私 query、任何不该进仓库的内容。
+
+整条闭环：正常使用 → `selfmind doctor` 发现问题 → `eval capture` 冻结坏 turn → `eval run` 确认以后能被抓到。
+
 ## Gateway 模式
 
 启动长期运行的本地 gateway：
@@ -645,12 +714,12 @@ selfmind send --async "运行测试并修复失败"
 selfmind status
 selfmind tasks
 selfmind stop
-selfmind workspaces
+selfmind ws                       # 列出工作区（workspace 的简称；workspaces 也可）
 selfmind approvals
 selfmind approve <approval_id>
 selfmind reject <approval_id>
-selfmind workspace add .
-selfmind workspace use <workspace_id>
+selfmind ws add .                 # 把当前目录注册为工作区
+selfmind ws use <workspace_id>    # 或：selfmind ws <n>  按列表序号切换
 selfmind new "实现 checkout 页面"
 ```
 

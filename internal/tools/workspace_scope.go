@@ -94,7 +94,7 @@ func WorkspaceScopeMiddleware() Middleware {
 
 			toolName, _ := args["_tool_name"].(string)
 			switch toolName {
-			case "terminal":
+			case "terminal", "verify":
 				cwd, _ := args["cwd"].(string)
 				scoped, err := resolveScopedPath(scope, cwd)
 				if err != nil {

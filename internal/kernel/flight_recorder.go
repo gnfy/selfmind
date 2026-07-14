@@ -19,7 +19,7 @@ var flightTurnCounter atomic.Int64
 // internal/background one — only real user-facing turns are recorded so they can
 // be promoted into eval cases via `selfmind eval capture`.
 func (a *Agent) beginFlightRecording(ctx *context.Context, tenantID, channel, prompt string) func(string, error) {
-	if ctx == nil || !llm.FlightEnabled() || isInternalChannel(channel) {
+	if ctx == nil || llm.EvalVCRActive() || !llm.FlightEnabled() || isInternalChannel(channel) {
 		return nil
 	}
 	turnID := newFlightTurnID()

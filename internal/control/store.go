@@ -17,7 +17,8 @@ import (
 const DefaultTenantID = "default"
 
 type Store struct {
-	db *sql.DB
+	db     *sql.DB
+	events *eventAppendBus
 }
 
 type IdentityContext struct {
@@ -79,6 +80,9 @@ type Run struct {
 
 type Event struct {
 	ID         string          `json:"id"`
+	Cursor     int64           `json:"cursor,omitempty"`
+	TenantID   string          `json:"tenant_id,omitempty"`
+	PersonID   string          `json:"person_id,omitempty"`
 	TaskID     string          `json:"task_id"`
 	RunID      string          `json:"run_id,omitempty"`
 	Type       string          `json:"type"`
@@ -140,7 +144,7 @@ func OpenStore(dataDir string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("configure sqlite: %w", err)
 	}
-	store := &Store{db: db}
+	store := &Store{db: db, events: newEventAppendBus()}
 	if err := store.InitSchema(context.Background()); err != nil {
 		db.Close()
 		return nil, err
@@ -265,6 +269,7 @@ CREATE INDEX IF NOT EXISTS idx_task_runs_task_started ON task_runs(tenant_id, ta
 CREATE INDEX IF NOT EXISTS idx_task_runs_person_status ON task_runs(tenant_id, person_id, status, started_at);
 CREATE TABLE IF NOT EXISTS task_events (
 	id TEXT PRIMARY KEY,
+	cursor INTEGER,
 	task_id TEXT NOT NULL,
 	run_id TEXT,
 	type TEXT NOT NULL,
@@ -274,6 +279,10 @@ CREATE TABLE IF NOT EXISTS task_events (
 	created_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_task_events_task ON task_events(task_id, created_at);
+CREATE TABLE IF NOT EXISTS event_sequence (
+	id INTEGER PRIMARY KEY CHECK (id = 1),
+	next_cursor INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS channel_messages (
 	id TEXT PRIMARY KEY,
 	tenant_id TEXT NOT NULL,
@@ -488,12 +497,22 @@ CREATE INDEX IF NOT EXISTS idx_maintenance_jobs_status ON maintenance_jobs(tenan
 		// memory mutation, so crash recovery re-applies the same proposal.
 		{"maintenance_jobs", "payload_json", "TEXT NOT NULL DEFAULT ''"},
 		{"maintenance_jobs", "proposal_json", "TEXT NOT NULL DEFAULT ''"},
+		// cursor is a daemon-wide, never-reused append sequence for resumable
+		// event streams. It cannot rely on SQLite's implicit rowid because
+		// cleanup or VACUUM may reuse/change rowids.
+		{"task_events", "cursor", "INTEGER"},
 	} {
 		if err := s.ensureColumn(ctx, col.table, col.name, col.def); err != nil {
 			return err
 		}
 	}
 	if _, err := s.db.ExecContext(ctx, `
+		UPDATE task_events SET cursor = rowid WHERE cursor IS NULL;
+		INSERT OR IGNORE INTO event_sequence (id, next_cursor) VALUES (1, 0);
+		UPDATE event_sequence
+			SET next_cursor = MAX(next_cursor, COALESCE((SELECT MAX(cursor) FROM task_events), 0))
+			WHERE id = 1;
+		CREATE UNIQUE INDEX IF NOT EXISTS idx_task_events_cursor ON task_events(cursor);
 		UPDATE tasks SET last_activity_at = updated_at WHERE last_activity_at IS NULL;
 		CREATE INDEX IF NOT EXISTS idx_tasks_governance
 			ON tasks(tenant_id, person_id, visibility, status, updated_at);
@@ -766,6 +785,18 @@ func (s *Store) GetPersonSetting(ctx context.Context, tenantID, personID, key st
 }
 
 func (s *Store) RegisterWorkspace(ctx context.Context, ws Workspace) (*Workspace, error) {
+	return s.registerWorkspace(ctx, ws, true)
+}
+
+// EnsureWorkspace creates a workspace when it is first observed by a client,
+// but preserves explicit configuration such as allowed roots on later visits.
+// RegisterWorkspace remains the authoritative replace operation used by the
+// workspace management API.
+func (s *Store) EnsureWorkspace(ctx context.Context, ws Workspace) (*Workspace, error) {
+	return s.registerWorkspace(ctx, ws, false)
+}
+
+func (s *Store) registerWorkspace(ctx context.Context, ws Workspace, replaceConfiguration bool) (*Workspace, error) {
 	ws.TenantID = normalizeTenant(ws.TenantID)
 	if ws.OwnerPersonID == "" {
 		return nil, fmt.Errorf("owner person id is required")
@@ -786,14 +817,21 @@ func (s *Store) RegisterWorkspace(ctx context.Context, ws Workspace) (*Workspace
 	roots, _ := json.Marshal(ws.AllowedRoots)
 
 	var existingID string
+	var existingRoots string
 	err := s.db.QueryRowContext(ctx,
-		`SELECT id FROM workspaces WHERE tenant_id = ? AND owner_person_id = ? AND local_path = ?`,
-		ws.TenantID, ws.OwnerPersonID, ws.LocalPath).Scan(&existingID)
+		`SELECT id, COALESCE(allowed_roots_json, '[]') FROM workspaces WHERE tenant_id = ? AND owner_person_id = ? AND local_path = ?`,
+		ws.TenantID, ws.OwnerPersonID, ws.LocalPath).Scan(&existingID, &existingRoots)
 	if err != nil && err != sql.ErrNoRows {
 		return nil, err
 	}
 	if existingID == "" {
 		existingID = "ws_" + uuid.NewString()
+	} else if !replaceConfiguration {
+		var preserved []string
+		if json.Unmarshal([]byte(existingRoots), &preserved) == nil && len(preserved) > 0 {
+			ws.AllowedRoots = preserved
+			roots, _ = json.Marshal(ws.AllowedRoots)
+		}
 	}
 	ws.ID = existingID
 	_, err = s.db.ExecContext(ctx,
@@ -1247,12 +1285,32 @@ func (s *Store) AppendEvent(ctx context.Context, event Event) (*Event, error) {
 	}
 	event.ID = "event_" + uuid.NewString()
 	event.CreatedAt = time.Now()
-	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO task_events (id, task_id, run_id, type, visibility, channel, payload_json, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		event.ID, event.TaskID, event.RunID, event.Type, event.Visibility, event.Channel, string(event.Payload), event.CreatedAt.Unix())
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT tenant_id, person_id FROM tasks WHERE id = ?`, event.TaskID,
+	).Scan(&event.TenantID, &event.PersonID); err != nil {
+		return nil, err
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
+	}
+	defer tx.Rollback()
+	if err := tx.QueryRowContext(ctx,
+		`UPDATE event_sequence SET next_cursor = next_cursor + 1 WHERE id = 1 RETURNING next_cursor`,
+	).Scan(&event.Cursor); err != nil {
+		return nil, err
+	}
+	if _, err := tx.ExecContext(ctx,
+		`INSERT INTO task_events (id, cursor, task_id, run_id, type, visibility, channel, payload_json, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		event.ID, event.Cursor, event.TaskID, event.RunID, event.Type, event.Visibility, event.Channel, string(event.Payload), event.CreatedAt.Unix()); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	if s.events != nil {
+		s.events.publish(event)
 	}
 	return &event, nil
 }

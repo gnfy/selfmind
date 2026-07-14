@@ -1,0 +1,66 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "content": "The"
+    },
+    {
+      "content": " file"
+    },
+    {
+      "content": " is"
+    },
+    {
+      "content": " written"
+    },
+    {
+      "content": ";"
+    },
+    {
+      "content": " I"
+    },
+    {
+      "content": "’m"
+    },
+    {
+      "content": " running"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " requested"
+    },
+    {
+      "content": " py"
+    },
+    {
+      "content": "_compile"
+    },
+    {
+      "content": " verification"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": "Preparing to run verify",
+      "event_type": "agent.thinking"
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_gKQUrGRrZiZUMe58AhKHyFC6",
+          "Function": "verify",
+          "Args": "{\"command\":\"python3 -m py_compile verified.py\",\"cwd\":\"{{SELFMIND_VCR_WORKSPACE}}\",\"kind\":\"syntax\",\"timeout\":30}"
+        }
+      ]
+    },
+    {
+      "usage": {
+        "input_tokens": 5029,
+        "output_tokens": 74
+      }
+    }
+  ]
+}

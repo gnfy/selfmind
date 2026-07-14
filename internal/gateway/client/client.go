@@ -38,7 +38,7 @@ type Client struct {
 	// model"): presence must mean "the person is at this terminal", not "a
 	// terminal process is alive". IdleTimeout + LastInput let the client
 	// compute input age and stamp active=0|1 on its presence-claiming
-	// requests (the idle ping and the event polls); the daemon only touches
+	// requests (the idle ping and the event stream); the daemon only touches
 	// presence for active=1. IdleTimeout <= 0 or a nil LastInput disables the
 	// idle check (every beat claims attachment — the old behavior).
 	IdleTimeout time.Duration
@@ -128,21 +128,20 @@ func (c *Client) auth(req *http.Request) {
 
 // ProcessMessage implements the cli.MessageProcessor signature against a remote
 // daemon. The synchronous POST is the source of truth for the final answer;
-// concurrently, a best-effort poller replays the run's task events into the
-// ctx stream observer so the TUI shows live tool/thinking progress. Streaming is
-// strictly best-effort — the returned answer never depends on it — which keeps
-// the client correct even if event polling lags or the task can't be resolved.
+// concurrently, one person-scoped SSE stream forwards durable run events and
+// ephemeral assistant deltas to the TUI. Streaming is strictly best-effort:
+// the returned answer never depends on it, so a reconnect or dropped delta
+// cannot lose the final result.
 func (c *Client) ProcessMessage(ctx context.Context, req api.MessageRequest) (api.MessageResponse, int) {
 	observer := httpapi.StreamObserverFromContext(ctx)
 
 	streamCtx, stopStream := context.WithCancel(ctx)
 	defer stopStream()
 	// Slash/control commands ("/status", "/tasks", ...) return inline content
-	// and create no run events, so don't bother polling for them.
+	// and create no run events, so don't open the live stream for them.
 	if observer != nil && !isControlCommand(req.Content) {
-		go c.pollEvents(streamCtx, req, observer)
 		ready := make(chan struct{})
-		go c.streamAssistantDeltas(streamCtx, req, observer, ready)
+		go c.streamEvents(streamCtx, req, observer, nil, ready)
 		// Subscribe before starting the turn so a fast first token cannot race
 		// ahead of the SSE connection. Failure closes ready as well and simply
 		// degrades to the complete synchronous answer.
@@ -162,15 +161,65 @@ func (c *Client) ProcessMessage(ctx context.Context, req api.MessageRequest) (ap
 	return resp, status
 }
 
-// streamAssistantDeltas consumes the daemon's ephemeral person-level SSE
-// stream. It forwards text only; durable tool/approval/plan events continue to
-// arrive through pollEvents. Any transport failure is intentionally silent —
-// postMessage still returns the full final answer.
-func (c *Client) streamAssistantDeltas(ctx context.Context, req api.MessageRequest, observer httpapi.StreamObserver, ready chan<- struct{}) {
+// streamEvents consumes the daemon's unified person-level SSE stream. Durable
+// events resume from the last committed cursor after reconnect; ephemeral text
+// deltas may be dropped because postMessage still returns the full final answer.
+func (c *Client) streamEvents(ctx context.Context, req api.MessageRequest, observer httpapi.StreamObserver, onEvent func(api.RunEvent), ready chan<- struct{}) {
 	var readyOnce sync.Once
-	markReady := func() { readyOnce.Do(func() { close(ready) }) }
+	markReady := func() {
+		if ready != nil {
+			readyOnce.Do(func() { close(ready) })
+		}
+	}
 	defer markReady()
 
+	var cursor int64
+	for {
+		if ctx.Err() != nil {
+			return
+		}
+		httpResp, err := c.openEventStream(ctx, req, cursor)
+		if err != nil {
+			if !sleepContext(ctx, 250*time.Millisecond) {
+				return
+			}
+			continue
+		}
+		scanner := bufio.NewScanner(httpResp.Body)
+		scanner.Buffer(make([]byte, 0, 16*1024), 2*1024*1024)
+		for scanner.Scan() {
+			line := scanner.Text()
+			if !strings.HasPrefix(line, "data:") {
+				continue
+			}
+			data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+			if data == "" || data == "{}" {
+				continue
+			}
+			var event api.RunEvent
+			if json.Unmarshal([]byte(data), &event) != nil || event.Type == "" {
+				continue
+			}
+			if event.Cursor > cursor {
+				cursor = event.Cursor
+			}
+			if event.Type == "ready" {
+				markReady()
+				continue
+			}
+			if onEvent != nil {
+				onEvent(event)
+			}
+			forwardRunEvent(event, observer)
+		}
+		_ = httpResp.Body.Close()
+		if !sleepContext(ctx, 250*time.Millisecond) {
+			return
+		}
+	}
+}
+
+func (c *Client) openEventStream(ctx context.Context, req api.MessageRequest, cursor int64) (*http.Response, error) {
 	q := url.Values{}
 	if req.TenantID != "" {
 		q.Set("tenant_id", req.TenantID)
@@ -181,41 +230,60 @@ func (c *Client) streamAssistantDeltas(ctx context.Context, req api.MessageReque
 		q.Set("display_name", req.DisplayName)
 	}
 	q.Set("active", c.presenceActiveParam())
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, c.BaseURL+"/v1/runs/stream?"+q.Encode(), nil)
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, c.BaseURL+"/v1/events/stream?"+q.Encode(), nil)
 	if err != nil {
-		return
+		return nil, err
+	}
+	if cursor > 0 {
+		httpReq.Header.Set("Last-Event-ID", fmt.Sprintf("%d", cursor))
 	}
 	c.auth(httpReq)
 	httpResp, err := c.httpClient().Do(httpReq)
 	if err != nil {
-		return
+		return nil, err
 	}
-	defer httpResp.Body.Close()
 	if httpResp.StatusCode != http.StatusOK {
+		data, _ := io.ReadAll(httpResp.Body)
+		_ = httpResp.Body.Close()
+		return nil, fmt.Errorf("event stream returned %s: %s", httpResp.Status, strings.TrimSpace(string(data)))
+	}
+	return httpResp, nil
+}
+
+func forwardRunEvent(event api.RunEvent, observer httpapi.StreamObserver) {
+	if observer == nil {
 		return
 	}
+	if event.Type == "assistant.delta" {
+		var streamEvent llm.StreamEvent
+		if json.Unmarshal(event.Payload, &streamEvent) == nil && streamEvent.Content != "" {
+			streamEvent.EventType = "stream"
+			observer(streamEvent)
+		}
+		return
+	}
+	if event.Type == "stream.gap" {
+		observer(llm.StreamEvent{EventType: "agent.step", Content: "Reconnected to the event stream; recovering durable progress."})
+		return
+	}
+	controlEvent := control.Event{
+		ID: event.EventID, Cursor: event.Cursor, TenantID: event.TenantID,
+		PersonID: event.PersonID, TaskID: event.TaskID, RunID: event.RunID,
+		Type: event.Type, CreatedAt: event.CreatedAt, Payload: event.Payload,
+	}
+	if streamEvent, ok := eventToStream(controlEvent); ok {
+		observer(streamEvent)
+	}
+}
 
-	scanner := bufio.NewScanner(httpResp.Body)
-	scanner.Buffer(make([]byte, 0, 16*1024), 2*1024*1024)
-	for scanner.Scan() {
-		line := scanner.Text()
-		if strings.HasPrefix(line, "event: ready") {
-			markReady()
-			continue
-		}
-		if !strings.HasPrefix(line, "data:") {
-			continue
-		}
-		data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
-		if data == "" || data == "{}" {
-			continue
-		}
-		var event llm.StreamEvent
-		if json.Unmarshal([]byte(data), &event) != nil || event.Content == "" {
-			continue
-		}
-		event.EventType = "stream"
-		observer(event)
+func sleepContext(ctx context.Context, delay time.Duration) bool {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
 	}
 }
 
@@ -290,95 +358,6 @@ func clientUserID() string {
 		}
 	}
 	return "local"
-}
-
-// eventsResponse mirrors the GET /v1/tasks/events payload.
-type eventsResponse struct {
-	Events []control.Event `json:"events"`
-}
-
-// pollEvents re-fetches the person's current-task events on a short cadence and
-// forwards any newly-seen event (oldest-first) to the observer. It re-resolves
-// "current task" each tick, so it correctly latches onto the run's task once the
-// daemon creates it mid-request, without needing the task id up front.
-func (c *Client) pollEvents(ctx context.Context, req api.MessageRequest, observer httpapi.StreamObserver) {
-	seen := map[string]bool{}
-	ticker := time.NewTicker(350 * time.Millisecond)
-	defer ticker.Stop()
-	// Baseline probe: mark every pre-existing event of the current task as
-	// seen WITHOUT forwarding it. The person's current task can be an older
-	// parked task, and replaying its history renders yesterday's
-	// approval.requested as a live y/N prompt (observed live: a ghost chmod
-	// approval from a previous session). Only events recorded after this
-	// turn started may reach the observer; this turn's own events appear on
-	// later ticks.
-	c.drainEventsOnce(ctx, req, seen, nil)
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			c.drainEventsOnce(ctx, req, seen, observer)
-		}
-	}
-}
-
-// drainEventsOnce fetches the current task's events, forwards the renderable
-// newly-seen ones to the observer, and returns every newly-seen raw event
-// oldest-first (WatchActiveRun inspects raw types like run.finished that the
-// live UI never renders). A nil observer marks events seen without forwarding
-// (baseline probe).
-func (c *Client) drainEventsOnce(ctx context.Context, req api.MessageRequest, seen map[string]bool, observer httpapi.StreamObserver) []control.Event {
-	q := url.Values{}
-	if req.TenantID != "" {
-		q.Set("tenant_id", req.TenantID)
-	}
-	q.Set("platform", fallback(req.Platform, "cli"))
-	q.Set("platform_user_id", fallback(req.PlatformUserID, "local"))
-	if req.DisplayName != "" {
-		q.Set("display_name", req.DisplayName)
-	}
-	// Event polls double as presence beats on the daemon; claim attachment
-	// only while the person is actually typing here (input younger than the
-	// idle timeout), so watching a long run from a vacated desk does not keep
-	// muting IM pushes.
-	q.Set("active", c.presenceActiveParam())
-	reqCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
-	defer cancel()
-	httpReq, err := http.NewRequestWithContext(reqCtx, http.MethodGet, c.BaseURL+"/v1/tasks/events?"+q.Encode(), nil)
-	if err != nil {
-		return nil
-	}
-	c.auth(httpReq)
-	httpResp, err := c.httpClient().Do(httpReq)
-	if err != nil {
-		return nil
-	}
-	defer httpResp.Body.Close()
-	if httpResp.StatusCode != http.StatusOK {
-		return nil
-	}
-	var payload eventsResponse
-	if json.NewDecoder(httpResp.Body).Decode(&payload) != nil {
-		return nil
-	}
-	var fresh []control.Event
-	// ListTaskEvents returns newest-first; replay oldest-first for natural order.
-	for i := len(payload.Events) - 1; i >= 0; i-- {
-		ev := payload.Events[i]
-		if ev.ID == "" || seen[ev.ID] {
-			continue
-		}
-		seen[ev.ID] = true
-		fresh = append(fresh, ev)
-		if observer == nil {
-			continue
-		}
-		if se, ok := eventToStream(ev); ok {
-			observer(se)
-		}
-	}
-	return fresh
 }
 
 // eventToStream maps a persisted control.Event back into the llm.StreamEvent the
@@ -495,40 +474,46 @@ func (c *Client) Digest(ctx context.Context) (*api.DigestResponse, error) {
 // WatchActiveRun re-attaches this client to the person's mid-flight run as a
 // pure watcher (observation layer, docs/identity-continuity.md "Runtime
 // attachment model"): live events stream into the observer without starting a
-// user turn, and the loop ends when the run does. The baseline probe marks
-// every pre-attach event seen so history is never replayed (the same ghost-
-// approval hazard pollEvents guards against). Run end is detected two ways: a
-// fresh run.finished / run.cancelled event on the task (primary; carries the
-// outcome summary), and a /v1/tasks/current probe reporting no active run —
-// run every ~2s, immediately after a turn.completed event, and covering runs
-// that finalize without a terminal event (failure paths) or on another task.
+// user turn, and the loop ends when the run does. Run end is detected two ways:
+// a terminal event on the unified stream (primary; carries the outcome summary)
+// and a /v1/tasks/current probe reporting no active run (compatibility fallback
+// for older daemons and exceptional finalization paths).
 // Returns the finished run's outcome summary when one is available.
 func (c *Client) WatchActiveRun(ctx context.Context, observer httpapi.StreamObserver) string {
 	req := api.MessageRequest{Platform: "cli", PlatformUserID: clientUserID()}
-	seen := map[string]bool{}
-	c.drainEventsOnce(ctx, req, seen, nil)
-	ticker := time.NewTicker(350 * time.Millisecond)
+	watchCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	terminal := make(chan api.RunEvent, 1)
+	probeNow := make(chan struct{}, 1)
+	go c.streamEvents(watchCtx, req, observer, func(event api.RunEvent) {
+		switch event.Type {
+		case "run.finished", "run.cancelled", "run.interrupted", "run.failed":
+			select {
+			case terminal <- event:
+			default:
+			}
+		case "turn.completed":
+			select {
+			case probeNow <- struct{}{}:
+			default:
+			}
+		}
+	}, nil)
+	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
-	ticks := 0
 	for {
 		select {
 		case <-ctx.Done():
 			return ""
-		case <-ticker.C:
-			probeNow := false
-			for _, ev := range c.drainEventsOnce(ctx, req, seen, observer) {
-				switch ev.Type {
-				case "run.finished", "run.cancelled":
-					return runOutcomeSummary(ev)
-				case "turn.completed":
-					probeNow = true
-				}
+		case event := <-terminal:
+			return runEventOutcomeSummary(event)
+		case <-probeNow:
+			if gone, ok := c.activeRunGone(ctx, req); ok && gone {
+				return ""
 			}
-			ticks++
-			if probeNow || ticks%6 == 0 {
-				if gone, ok := c.activeRunGone(ctx, req); ok && gone {
-					return ""
-				}
+		case <-ticker.C:
+			if gone, ok := c.activeRunGone(ctx, req); ok && gone {
+				return ""
 			}
 		}
 	}
@@ -578,6 +563,10 @@ func runOutcomeSummary(ev control.Event) string {
 	return ""
 }
 
+func runEventOutcomeSummary(event api.RunEvent) string {
+	return runOutcomeSummary(control.Event{Type: event.Type, Payload: event.Payload})
+}
+
 // PingPresence marks this CLI endpoint attached on the daemon (GET
 // /v1/presence/ping). Presence gates conversation-layer routing: while the
 // TUI is attached, CLI-origin approval prompts stay inline instead of also
@@ -612,8 +601,9 @@ func (c *Client) PingPresence(ctx context.Context) error {
 
 // StartPresencePing runs the idle-TUI heartbeat loop: an immediate ping, then
 // one every 30 seconds until the returned stop function is called (or ctx is
-// cancelled). Without it an open-but-idle TUI would look detached — the event
-// poller only runs during a turn. Failures are silent (best-effort presence).
+// cancelled). Without it an open-but-idle TUI would look detached because the
+// event stream is only open during an active turn/watch. Failures are silent
+// (best-effort presence).
 func (c *Client) StartPresencePing(ctx context.Context) func() {
 	loopCtx, cancel := context.WithCancel(ctx)
 	go func() {

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -225,12 +226,23 @@ func (s *Store) MarkInterruptedRuns(ctx context.Context, olderThan time.Duration
 	// Events are best-effort observability; append them after the state is
 	// durably committed and log (rather than swallow) any failure.
 	for _, r := range runs {
+		outcome := map[string]interface{}{
+			"status":            "interrupted",
+			"completion_reason": "daemon_recovery",
+			"resumable":         true,
+			"summary":           "Interrupted by gateway restart.",
+			"next_steps":        []string{"Reply \"continue\" to resume from durable history."},
+		}
+		payload, _ := json.Marshal(map[string]interface{}{
+			"reason":  "gateway restarted before run finished",
+			"outcome": outcome,
+		})
 		if _, err := s.AppendEvent(ctx, Event{
 			TaskID:     r.taskID,
 			RunID:      r.runID,
 			Type:       "run.interrupted",
 			Visibility: "task",
-			Payload:    json.RawMessage(`{"reason":"gateway restarted before run finished"}`),
+			Payload:    payload,
 		}); err != nil {
 			log.Warn("failed to append run.interrupted event", "task_id", r.taskID, "run_id", r.runID, "error", err)
 		}
@@ -274,9 +286,9 @@ func (s *Store) ListTaskEvents(ctx context.Context, taskID string, limit int) ([
 		limit = 50
 	}
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, task_id, COALESCE(run_id, ''), type, visibility, COALESCE(channel, ''),
+		`SELECT cursor, id, task_id, COALESCE(run_id, ''), type, visibility, COALESCE(channel, ''),
 		        COALESCE(payload_json, '{}'), created_at
-		 FROM task_events WHERE task_id = ? ORDER BY created_at DESC, id DESC LIMIT ?`,
+		 FROM task_events WHERE task_id = ? ORDER BY cursor DESC LIMIT ?`,
 		taskID, limit)
 	if err != nil {
 		return nil, err
@@ -287,7 +299,60 @@ func (s *Store) ListTaskEvents(ctx context.Context, taskID string, limit int) ([
 		var e Event
 		var payload string
 		var created int64
-		if err := rows.Scan(&e.ID, &e.TaskID, &e.RunID, &e.Type, &e.Visibility, &e.Channel, &payload, &created); err != nil {
+		if err := rows.Scan(&e.Cursor, &e.ID, &e.TaskID, &e.RunID, &e.Type, &e.Visibility, &e.Channel, &payload, &created); err != nil {
+			return nil, err
+		}
+		e.Payload = json.RawMessage(payload)
+		e.CreatedAt = time.Unix(created, 0)
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
+// LatestPersonEventCursor returns the durable append cursor visible to one
+// person. The explicit daemon-wide sequence is never reused by cleanup or
+// VACUUM, so it is suitable for SSE Last-Event-ID across daemon restarts.
+func (s *Store) LatestPersonEventCursor(ctx context.Context, tenantID, personID string) (int64, error) {
+	var cursor int64
+	err := s.db.QueryRowContext(ctx,
+		`SELECT COALESCE(MAX(e.cursor), 0)
+		 FROM task_events e JOIN tasks t ON t.id = e.task_id
+		 WHERE t.tenant_id = ? AND t.person_id = ?`,
+		normalizeTenant(tenantID), personID,
+	).Scan(&cursor)
+	return cursor, err
+}
+
+// ListPersonEventsAfter replays durable events across all of a person's task
+// labels in append order. Labels are presentation metadata, not event-stream
+// boundaries, so a CLI attached to the person sees the same run regardless of
+// a post-run relabel.
+func (s *Store) ListPersonEventsAfter(ctx context.Context, tenantID, personID string, cursor int64, limit int) ([]Event, error) {
+	if strings.TrimSpace(personID) == "" {
+		return nil, fmt.Errorf("person id is required")
+	}
+	if limit <= 0 || limit > 500 {
+		limit = 200
+	}
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT e.cursor, e.id, e.task_id, COALESCE(e.run_id, ''), e.type, e.visibility,
+		        COALESCE(e.channel, ''), COALESCE(e.payload_json, '{}'), e.created_at,
+		        t.tenant_id, t.person_id
+		 FROM task_events e JOIN tasks t ON t.id = e.task_id
+		 WHERE t.tenant_id = ? AND t.person_id = ? AND e.cursor > ?
+		 ORDER BY e.cursor ASC LIMIT ?`,
+		normalizeTenant(tenantID), personID, cursor, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Event
+	for rows.Next() {
+		var e Event
+		var payload string
+		var created int64
+		if err := rows.Scan(&e.Cursor, &e.ID, &e.TaskID, &e.RunID, &e.Type, &e.Visibility,
+			&e.Channel, &payload, &created, &e.TenantID, &e.PersonID); err != nil {
 			return nil, err
 		}
 		e.Payload = json.RawMessage(payload)

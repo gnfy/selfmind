@@ -319,6 +319,97 @@ type recordingBackend struct {
 	calledArgs map[string]interface{}
 }
 
+type budgetBackend struct {
+	calls []string
+}
+
+func (b *budgetBackend) Dispatch(name string, args map[string]interface{}) (string, error) {
+	b.calls = append(b.calls, fmt.Sprint(args["path"]))
+	return "read " + fmt.Sprint(args["path"]), nil
+}
+
+func (b *budgetBackend) GetToolDefinitions() []map[string]interface{} {
+	return []map[string]interface{}{{
+		"type": "function",
+		"function": map[string]interface{}{
+			"name": "read_file", "description": "read",
+			"parameters": map[string]interface{}{
+				"type":       "object",
+				"properties": map[string]interface{}{"path": map[string]interface{}{"type": "string"}},
+				"required":   []string{"path"},
+			},
+		},
+	}}
+}
+
+type budgetProvider struct {
+	requests int
+}
+
+func (p *budgetProvider) ChatCompletion(context.Context, []llm.Message) (string, error) {
+	return "done", nil
+}
+
+func (p *budgetProvider) Chat(context.Context, llm.ChatRequest) (*llm.ChatResponse, error) {
+	return &llm.ChatResponse{Content: "done"}, nil
+}
+
+func (p *budgetProvider) StreamChat(_ context.Context, req llm.ChatRequest) (<-chan llm.StreamEvent, error) {
+	p.requests++
+	ch := make(chan llm.StreamEvent, 1)
+	if requestHasTool(req, "read_file") {
+		ch <- llm.StreamEvent{ToolCalls: []llm.ToolCall{{
+			ID: "budget-call-" + fmt.Sprint(p.requests), Function: "read_file",
+			Args: fmt.Sprintf(`{"path":"file-%d.go"}`, p.requests),
+		}}}
+	} else {
+		ch <- llm.StreamEvent{Content: "done"}
+	}
+	close(ch)
+	return ch, nil
+}
+
+func TestToolBudgetExtendsOnlyWithinHardLimitAndMarksIncomplete(t *testing.T) {
+	mem := memory.NewMemoryManager(&mockStorage{})
+	backend := &budgetBackend{}
+	provider := &budgetProvider{}
+	agent := NewAgent(mem, backend, provider, "helpful", 10, 1, nil)
+	events := make(chan string, 64)
+	ctx := WithEventChannel(context.Background(), events)
+	ctx = WithTaskStrategy(ctx, TaskStrategy{
+		Class: TaskClassRepoTask, ToolMode: ToolModeFull, PlanPolicy: PlanPolicyOptional,
+		MaxActionTools: 1, ActionToolBudgetStep: 1, ActionToolBudgetLimit: 3, MaxBudgetExtensions: 2,
+	})
+
+	if _, _, err := agent.RunConversation(ctx, "user123", "cli", "inspect three files"); err != nil {
+		t.Fatal(err)
+	}
+	close(events)
+	if len(backend.calls) != 3 {
+		t.Fatalf("tool calls = %d (%v), want hard limit 3", len(backend.calls), backend.calls)
+	}
+	extensions := 0
+	completion := AgentEvent{}
+	for raw := range events {
+		event, ok := DecodeAgentEvent(raw)
+		if !ok {
+			continue
+		}
+		if event.Type == "strategy.budget_extended" {
+			extensions++
+		}
+		if event.Type == "turn.completed" {
+			completion = event
+		}
+	}
+	if extensions != 2 {
+		t.Fatalf("extensions = %d, want 2", extensions)
+	}
+	if completion.Payload["completion_reason"] != "tool_budget_exhausted" || completion.Payload["resumable"] != true {
+		t.Fatalf("completion = %+v", completion)
+	}
+}
+
 func TestSimpleRequestKeepsOptionalPlanButHidesWebTools(t *testing.T) {
 	mem := memory.NewMemoryManager(&mockStorage{})
 	backend := &planningBackend{}

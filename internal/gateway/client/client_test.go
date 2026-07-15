@@ -44,6 +44,26 @@ func TestEventToStreamMapping(t *testing.T) {
 			},
 		},
 		{
+			name:    "tool output carries correlation",
+			ev:      control.Event{ID: "2b", Type: "tool.output", Payload: mustJSON(map[string]any{"tool": "terminal", "tool_call_id": "c2", "message": "building"})},
+			wantTyp: "tool.output",
+			check: func(t *testing.T, se llm.StreamEvent) {
+				if se.ToolName != "terminal" || se.ToolCallID != "c2" || se.Content != "building" {
+					t.Fatalf("bad tool.output mapping: %+v", se)
+				}
+			},
+		},
+		{
+			name:    "legacy tool output keeps tool name",
+			ev:      control.Event{ID: "2c", Type: "tool.output", Payload: mustJSON(map[string]any{"tool_name": "verify", "message": "checking"})},
+			wantTyp: "tool.output",
+			check: func(t *testing.T, se llm.StreamEvent) {
+				if se.ToolName != "verify" || se.Content != "checking" {
+					t.Fatalf("bad legacy tool.output mapping: %+v", se)
+				}
+			},
+		},
+		{
 			name:    "thinking",
 			ev:      control.Event{ID: "3", Type: "agent.thinking", Payload: mustJSON(map[string]any{"message": "considering"})},
 			wantTyp: "agent.thinking",

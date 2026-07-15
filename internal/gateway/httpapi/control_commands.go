@@ -206,6 +206,9 @@ func (d *Server) tryHandleControlCommand(ctx context.Context, identity *control.
 		if err := d.Control.SetCurrentWorkspace(ctx, identity.TenantID, identity.PersonID, ws.ID); err != nil {
 			return true, "", err
 		}
+		if !isLocalCLIRequest(req) {
+			return true, formatWorkspaceSwitchForIM(ws), nil
+		}
 		return true, fmt.Sprintf("Current workspace: %s (%s)\n%s", ws.Name, ws.ID, ws.LocalPath), nil
 	case lower == "/workspaces" || lower == "/workspace" || lower == "/ws":
 		workspaces, err := d.listWorkspacesForDisplay(ctx, identity)
@@ -215,6 +218,9 @@ func (d *Server) tryHandleControlCommand(ctx context.Context, identity *control.
 		currentID := ""
 		if current, _ := d.Control.CurrentWorkspace(ctx, identity.TenantID, identity.PersonID); current != nil {
 			currentID = current.ID
+		}
+		if !isLocalCLIRequest(req) {
+			return true, formatWorkspacesForIM(workspaces, currentID), nil
 		}
 		return true, formatWorkspaces(workspaces, currentID), nil
 	case lower == "/approvals":

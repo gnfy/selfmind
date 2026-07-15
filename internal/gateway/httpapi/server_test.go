@@ -411,6 +411,66 @@ func TestPrepareRequestWorkspaceIgnoresIMClientCWD(t *testing.T) {
 	}
 }
 
+func TestPrepareRequestWorkspaceUsesCurrentWorkspaceForIM(t *testing.T) {
+	store, err := control.OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	ctx := httptest.NewRequest(http.MethodGet, "/", nil).Context()
+	identity, err := store.ResolveOrCreateAccount(ctx, "default", "weixin", "wx_user", "Weixin User")
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldRoot := t.TempDir()
+	oldWS, err := store.RegisterWorkspace(ctx, control.Workspace{
+		TenantID: identity.TenantID, OwnerPersonID: identity.PersonID,
+		Name: "old", LocalPath: oldRoot, AllowedRoots: []string{oldRoot},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	newRoot := t.TempDir()
+	newWS, err := store.RegisterWorkspace(ctx, control.Workspace{
+		TenantID: identity.TenantID, OwnerPersonID: identity.PersonID,
+		Name: "current", LocalPath: newRoot, AllowedRoots: []string{newRoot},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetCurrentWorkspace(ctx, identity.TenantID, identity.PersonID, newWS.ID); err != nil {
+		t.Fatal(err)
+	}
+	task, err := store.CreateTask(ctx, control.TaskCreate{
+		TenantID: identity.TenantID, PersonID: identity.PersonID,
+		WorkspaceID: oldWS.ID, Title: "work in the old workspace", Channel: "weixin",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	daemon := &Server{Control: store, DefaultTenantID: "default"}
+	req := api.MessageRequest{
+		Platform: "weixin", PlatformUserID: "wx_user", Channel: "wx_chat",
+		ClientCWD: t.TempDir(), Content: "inspect this workspace",
+	}
+	resolved, err := daemon.coordinator().prepareRequestWorkspace(ctx, identity, &req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved == nil || resolved.ID != newWS.ID || req.WorkspaceID != newWS.ID {
+		t.Fatalf("IM request workspace = %+v, request=%+v; want current %s", resolved, req, newWS.ID)
+	}
+	executionWS, err := daemon.coordinator().workspaceForTask(ctx, identity, task, req, taskAttach{preLabel: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if executionWS == nil || executionWS.ID != newWS.ID {
+		t.Fatalf("pre-label execution workspace = %+v, want current %s", executionWS, newWS.ID)
+	}
+}
+
 // TestResolveTaskBindsEmptyCurrentTaskToCLIWorkspace: attaching (continuation)
 // to a workspace-less task binds the request's resolved CLI workspace to it;
 // plain new work pre-labels onto the open current task while executing in the

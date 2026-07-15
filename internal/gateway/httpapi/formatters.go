@@ -62,6 +62,34 @@ func formatWorkspaces(workspaces []control.Workspace, currentID string) string {
 	return strings.TrimSpace(sb.String())
 }
 
+// formatWorkspacesForIM uses transport-neutral plain text. Some IM clients
+// reinterpret "1." lines and indentation as a rich-text ordered list, which
+// can detach a workspace name from its path. Keep every workspace on one
+// logical line and use bracketed ordinals that survive wrapping unchanged.
+func formatWorkspacesForIM(workspaces []control.Workspace, currentID string) string {
+	if len(workspaces) == 0 {
+		return "No WS configured."
+	}
+	var sb strings.Builder
+	sb.WriteString("WS\n\n")
+	for i, ws := range workspaces {
+		marker := ""
+		if currentID != "" && ws.ID == currentID {
+			marker = " [current]"
+		}
+		fmt.Fprintf(&sb, "[%d] %s%s | %s\n", i+1, ws.Name, marker, ws.LocalPath)
+	}
+	sb.WriteString("\nSwitch: /ws 2")
+	return strings.TrimSpace(sb.String())
+}
+
+func formatWorkspaceSwitchForIM(ws *control.Workspace) string {
+	if ws == nil {
+		return "WS not found."
+	}
+	return fmt.Sprintf("WS switched\n\n%s\n%s", ws.Name, ws.LocalPath)
+}
+
 // approvalPayload is the persisted shape of a tool_call approval row's
 // payload_json (written by toolApprovalHandler). Fields may be empty for
 // non-tool approvals.

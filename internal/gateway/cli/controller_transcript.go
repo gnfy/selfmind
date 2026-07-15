@@ -34,49 +34,98 @@ func (m *uiModel) addErrorMessage(content string) {
 	m.commit(&m.messages[len(m.messages)-1])
 }
 
-func (m *uiModel) appendToolOutput(toolName, content string) {
+const maxActiveToolOutputLines = 3
+
+func (m *uiModel) appendToolOutput(toolCallID, toolName, content string) bool {
 	content = textutil.CleanUTF8(content)
 	content = strings.TrimRight(content, "\n")
 	if content == "" {
-		return
+		return false
 	}
-	if len(m.messages) == 0 || m.messages[len(m.messages)-1].Role != "tool" {
-		m.addMessage("tool", "")
+	idx := m.findActiveToolMessageIndex(toolCallID, toolName)
+	if idx < 0 {
+		// Output can arrive after a run has finalized or after an SSE reconnect.
+		// Never create an anonymous tool row for an event that cannot be tied to
+		// an active call; it would stay in the redraw region forever.
+		return false
 	}
-	last := &m.messages[len(m.messages)-1]
+	last := &m.messages[idx]
 	if toolName != "" {
 		last.ToolName = toolName
 	}
-	last.IsRunning = true
-	if strings.TrimSpace(last.Content) == "" {
-		last.Content = content
-		return
+	if toolCallID != "" {
+		last.ToolCallID = toolCallID
 	}
-	last.Content += "\n" + content
+	combined := content
+	if existing := strings.TrimSpace(last.Content); existing != "" {
+		combined = existing + "\n" + content
+	}
+	lines := strings.Split(combined, "\n")
+	if len(lines) > maxActiveToolOutputLines {
+		lines = lines[len(lines)-maxActiveToolOutputLines:]
+	}
+	last.Content = strings.Join(lines, "\n")
+	return true
 }
 
-func (m *uiModel) findToolMessageIndex(toolCallID, toolName string) int {
+func (m *uiModel) findActiveToolMessageIndex(toolCallID, toolName string) int {
 	if toolCallID != "" {
 		for i := len(m.messages) - 1; i >= 0; i-- {
 			msg := m.messages[i]
-			if msg.Role == "tool" && msg.ToolCallID == toolCallID {
+			if msg.Role == "tool" && !msg.Committed && msg.IsRunning && msg.ToolCallID == toolCallID {
 				return i
 			}
 		}
+		return -1
 	}
+	match := -1
 	for i := len(m.messages) - 1; i >= 0; i-- {
 		msg := m.messages[i]
-		if msg.Role != "tool" || !msg.IsRunning {
+		if msg.Role != "tool" || msg.Committed || !msg.IsRunning {
 			continue
 		}
 		if toolName == "" || msg.ToolName == "" || msg.ToolName == toolName {
-			return i
+			if match >= 0 {
+				// A legacy event without a call id is safe only when it identifies one
+				// active call. Guessing between parallel calls corrupts both rows.
+				return -1
+			}
+			match = i
 		}
 	}
-	if len(m.messages) > 0 && m.messages[len(m.messages)-1].Role == "tool" {
-		return len(m.messages) - 1
+	return match
+}
+
+func (m *uiModel) toolMessageExists(toolCallID string) bool {
+	if toolCallID == "" {
+		return false
 	}
-	return -1
+	for i := len(m.messages) - 1; i >= 0; i-- {
+		if m.messages[i].Role == "tool" && m.messages[i].ToolCallID == toolCallID {
+			return true
+		}
+	}
+	return false
+}
+
+func (m *uiModel) discardOpenToolMessages() {
+	kept := m.messages[:0]
+	for _, msg := range m.messages {
+		if msg.Role == "tool" && !msg.Committed {
+			continue
+		}
+		kept = append(kept, msg)
+	}
+	m.messages = kept
+}
+
+func isTerminalRunStatus(status string) bool {
+	switch status {
+	case "done", "error", "cancelled":
+		return true
+	default:
+		return false
+	}
 }
 
 func (m *uiModel) appendAssistantResponse(content string) {

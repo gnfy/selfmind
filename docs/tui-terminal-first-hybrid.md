@@ -155,6 +155,16 @@ substrate). Document results in this file.
 - Folded into H1: a running tool renders in the active region; on
   `MsgToolDone` the final cell is committed to scrollback. The legacy in-place
   mutation path is retained for legacy mode (no behavior change there).
+- Tool output is correlated end to end by `tool_call_id` (builtin event →
+  daemon event log → SSE replay → TUI). Unmatched output is ignored instead of
+  creating an anonymous `Running tool` cell, and committed cells are never
+  mutated by later events.
+- Active command output is a bounded three-line tail. A terminal run state
+  (`done`, `error`, or `cancelled`) discards any unfinished transient tool cells
+  and ignores late tool events, leaving a clean input surface after completion.
+- Verification notices remain concise English control text. Successful
+  verification is silent; incomplete, failed, or blocked verification adds one
+  actionable line only.
 
 ### H3 — Commit-time file-change rendering ✅ shipped (patch); ⏳ write_file overwrite deferred
 - `renderPatchCell` (`transcript_renderer.go`) parses the V4A patch input

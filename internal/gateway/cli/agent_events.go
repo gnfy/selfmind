@@ -230,7 +230,7 @@ func (m *uiModel) forwardGatewayEvent(event llm.StreamEvent) {
 		}
 	case "tool.output":
 		if event.Content != "" {
-			m.program.Send(MsgToolOutput{ToolName: event.ToolName, Content: event.Content})
+			m.program.Send(MsgToolOutput{ToolName: event.ToolName, ToolCallID: event.ToolCallID, Content: event.Content})
 		}
 	case "tool.heartbeat":
 		m.program.Send(MsgToolHeartbeat{ToolName: event.ToolName, ToolCallID: event.ToolCallID, Content: heartbeatStatus(event)})
@@ -380,7 +380,7 @@ func (m *uiModel) handleStructuredAgentEvent(event kernel.AgentEvent) {
 		})
 	case "tool.output":
 		if event.Content != "" {
-			m.program.Send(MsgToolOutput{ToolName: event.ToolName, Content: event.Content})
+			m.program.Send(MsgToolOutput{ToolName: event.ToolName, ToolCallID: event.ToolCallID, Content: event.Content})
 		}
 	case "tool.heartbeat":
 		m.program.Send(MsgToolHeartbeat{ToolName: event.ToolName, ToolCallID: event.ToolCallID, Content: heartbeatStatus(llm.StreamEvent{

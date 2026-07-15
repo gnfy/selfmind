@@ -612,8 +612,9 @@ type MsgToolStart struct {
 }
 
 type MsgToolOutput struct {
-	ToolName string
-	Content  string
+	ToolName   string
+	ToolCallID string
+	Content    string
 }
 
 type MsgToolHeartbeat struct {

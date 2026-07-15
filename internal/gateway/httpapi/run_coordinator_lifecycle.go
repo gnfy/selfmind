@@ -87,7 +87,17 @@ func (c *RunCoordinator) prepareRequestWorkspace(ctx context.Context, identity *
 		return store.GetWorkspace(ctx, identity.TenantID, req.WorkspaceID)
 	}
 	if !isLocalCLIRequest(*req) {
-		return nil, nil
+		// IM and scheduled turns have no trustworthy client cwd. Bind the
+		// person's durable workspace selection to this request explicitly so a
+		// stale task pre-label cannot supply an older execution directory.
+		ws, err := store.CurrentWorkspace(ctx, identity.TenantID, identity.PersonID)
+		if err != nil {
+			return nil, err
+		}
+		if ws != nil {
+			req.WorkspaceID = ws.ID
+		}
+		return ws, nil
 	}
 	cwd := cleanClientCWD(req.ClientCWD)
 	if cwd == "" {
@@ -727,6 +737,7 @@ func (c *RunCoordinator) withGatewayContext(input string, identity *control.Iden
 	if workspace != nil && workspace.LocalPath != "" {
 		fmt.Fprintf(&sb, "workspace_id: %s\n", workspace.ID)
 		fmt.Fprintf(&sb, "workspace_root: %s\n", workspace.LocalPath)
+		sb.WriteString("workspace_root is authoritative for this turn. Ignore remembered or historical workspace paths unless the user explicitly names one.\n")
 		sb.WriteString("Use workspace_root as the default cwd for local file tools.\n")
 		sb.WriteString("When the user says current project, this repo, this codebase, or names a project without an explicit path, inspect workspace_root first.\n")
 		sb.WriteString("Resolve relative paths against workspace_root. Do not access files outside workspace allowed roots.\n")

@@ -389,7 +389,16 @@ func eventToStream(ev control.Event) (llm.StreamEvent, bool) {
 		}
 		return se, true
 	case ev.Type == "tool.output":
-		return llm.StreamEvent{EventType: "tool.output", ToolName: str(p["tool"]), Content: str(p["message"])}, true
+		toolName := str(p["tool"])
+		if toolName == "" {
+			toolName = str(p["tool_name"])
+		}
+		return llm.StreamEvent{
+			EventType:  "tool.output",
+			ToolName:   toolName,
+			ToolCallID: str(p["tool_call_id"]),
+			Content:    str(p["message"]),
+		}, true
 	case ev.Type == "agent.thinking" || ev.Type == "agent.step":
 		return llm.StreamEvent{EventType: ev.Type, Content: str(p["message"])}, true
 	case ev.Type == "approval.requested":

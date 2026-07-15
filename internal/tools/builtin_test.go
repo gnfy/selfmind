@@ -16,9 +16,10 @@ func TestTerminalToolEmitsStreamingOutput(t *testing.T) {
 	ctx := kernel.WithEventChannel(context.Background(), ch)
 
 	out, err := NewExecuteCommandTool().Execute(map[string]interface{}{
-		"command":  "echo hello",
-		"timeout":  5,
-		"_context": ctx,
+		"command":       "echo hello",
+		"timeout":       5,
+		"_context":      ctx,
+		"_tool_call_id": "call-stream",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -26,8 +27,12 @@ func TestTerminalToolEmitsStreamingOutput(t *testing.T) {
 	if !strings.Contains(out, "hello") {
 		t.Fatalf("output = %q, want hello", out)
 	}
-	if !eventSeen(ch, "tool.output") {
+	event, ok := eventOfType(ch, "tool.output")
+	if !ok {
 		t.Fatalf("tool.output event was not emitted")
+	}
+	if event.ToolCallID != "call-stream" {
+		t.Fatalf("tool.output call id = %q", event.ToolCallID)
 	}
 }
 
@@ -170,15 +175,20 @@ func TestSearchFilesToolHonorsLimitAndSkipsIgnoredDirs(t *testing.T) {
 }
 
 func eventSeen(ch <-chan string, eventType string) bool {
+	_, ok := eventOfType(ch, eventType)
+	return ok
+}
+
+func eventOfType(ch <-chan string, eventType string) (kernel.AgentEvent, bool) {
 	for {
 		select {
 		case raw := <-ch:
 			event, ok := kernel.DecodeAgentEvent(raw)
 			if ok && event.Type == eventType {
-				return true
+				return event, true
 			}
 		default:
-			return false
+			return kernel.AgentEvent{}, false
 		}
 	}
 }

@@ -449,7 +449,7 @@ func executeForegroundCommand(args map[string]interface{}, toolName string, time
 	cmd := shellCommandContext(runCtx, cmdStr)
 	cmd.Dir = cwd
 
-	out, err := runCommandStreaming(runCtx, cmd, cmdStr, toolName)
+	out, err := runCommandStreaming(runCtx, cmd, cmdStr, toolName, stringArg(args, "_tool_call_id"))
 	exitCode := 0
 	if exitErr, ok := err.(interface{ ExitCode() int }); ok {
 		exitCode = exitErr.ExitCode()
@@ -469,7 +469,7 @@ func executeForegroundCommand(args map[string]interface{}, toolName string, time
 	return out, nil
 }
 
-func runCommandStreaming(ctx context.Context, cmd commandRunner, command, toolName string) (string, error) {
+func runCommandStreaming(ctx context.Context, cmd commandRunner, command, toolName, toolCallID string) (string, error) {
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return "", err
@@ -495,10 +495,11 @@ func runCommandStreaming(ctx context.Context, cmd commandRunner, command, toolNa
 		output.WriteString(line)
 		mu.Unlock()
 		emitToolProgress(eventCh, "tool.output", map[string]interface{}{
-			"tool_name": toolName,
-			"stream":    stream,
-			"command":   command,
-			"line":      line,
+			"tool_name":    toolName,
+			"tool_call_id": toolCallID,
+			"stream":       stream,
+			"command":      command,
+			"line":         line,
 		}, line)
 	}
 
@@ -526,6 +527,7 @@ func runCommandStreaming(ctx context.Context, cmd commandRunner, command, toolNa
 		case <-ticker.C:
 			emitToolProgress(eventCh, "tool.heartbeat", map[string]interface{}{
 				"tool_name":       toolName,
+				"tool_call_id":    toolCallID,
 				"command":         command,
 				"elapsed_seconds": time.Since(start).Seconds(),
 			}, "")

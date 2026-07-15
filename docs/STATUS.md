@@ -243,6 +243,14 @@ completion/failure; continuity eval replays offline.
   `httpapi/evidence_outcome_test.go`, `httpapi/run_completion_test.go`,
   `control/runtime_test.go`, `eval/checks_test.go`. Eval:
   `evalcases/reliability/create-and-verify.yaml` (live cassette pending).
+  **Terminal reconciliation (2026-07-15):** `tool.output` preserves
+  `tool_call_id` through builtin execution, daemon persistence, SSE replay, and
+  the TUI. Only a matching active call can update a tool cell; unmatched and
+  late events are ignored, active output is a three-line tail, and terminal run
+  states remove unfinished transient cells. Verification control text stays
+  concise English and successful verification adds no extra transcript line.
+  Tests: `gateway/cli/controller_test.go`, `gateway/client/client_test.go`,
+  `gateway/httpapi/run_events_test.go`, `tools/builtin_test.go`.
 
 **P2 — engineering governance**
 

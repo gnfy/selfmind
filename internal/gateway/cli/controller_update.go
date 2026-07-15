@@ -119,6 +119,7 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.thinking = false
 		m.activityText = ""
 		m.toolExecuting = ""
+		m.discardOpenToolMessages()
 		m.steerCh = nil // run finished; stop accepting mid-turn guidance for it
 		m.clarifyMode = false
 		m.clarifyGateway = false
@@ -154,6 +155,8 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.watchingRun = false
 		m.watchedTaskTitle = ""
 		m.watchCancel = nil
+		m.toolExecuting = ""
+		m.discardOpenToolMessages()
 		if strings.HasPrefix(m.statusMsg, "Watching ") {
 			m.statusMsg = ""
 		}
@@ -199,6 +202,9 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Tick(3*time.Second, func(t time.Time) tea.Msg { return MsgClearStatus{} })
 
 	case MsgToolStart:
+		if isTerminalRunStatus(m.runStatus) || m.toolMessageExists(msg.ToolCallID) {
+			return m, spinnerCmd
+		}
 		m.finalizeLiveStream("")
 		m.thinking = false
 		m.activityText = ""
@@ -212,8 +218,11 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, spinnerCmd
 
 	case MsgToolDone:
+		if isTerminalRunStatus(m.runStatus) {
+			return m, spinnerCmd
+		}
 		msg.Result = textutil.CleanUTF8(msg.Result)
-		idx := m.findToolMessageIndex(msg.ToolCallID, msg.ToolName)
+		idx := m.findActiveToolMessageIndex(msg.ToolCallID, msg.ToolName)
 		if idx >= 0 {
 			last := &m.messages[idx]
 			last.ToolName = msg.ToolName
@@ -247,17 +256,23 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, spinnerCmd
 
 	case MsgToolOutput:
+		if isTerminalRunStatus(m.runStatus) {
+			return m, spinnerCmd
+		}
 		m.thinking = false
 		m.activityText = ""
-		m.appendToolOutput(msg.ToolName, msg.Content)
+		m.appendToolOutput(msg.ToolCallID, msg.ToolName, msg.Content)
 		return m, spinnerCmd
 
 	case MsgToolHeartbeat:
-		if msg.ToolName != "" {
-			m.toolExecuting = msg.ToolName
+		if isTerminalRunStatus(m.runStatus) {
+			return m, spinnerCmd
 		}
-		idx := m.findToolMessageIndex(msg.ToolCallID, msg.ToolName)
+		idx := m.findActiveToolMessageIndex(msg.ToolCallID, msg.ToolName)
 		if idx >= 0 {
+			if msg.ToolName != "" {
+				m.toolExecuting = msg.ToolName
+			}
 			last := &m.messages[idx]
 			if msg.ToolName == "" || last.ToolName == "" || last.ToolName == msg.ToolName {
 				if msg.ToolName != "" {

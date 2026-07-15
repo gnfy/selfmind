@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"selfmind/internal/control"
+	"selfmind/internal/gateway/api"
 )
 
 // /workspace <n> resolves the number the /workspaces listing printed —
@@ -103,5 +104,60 @@ func TestWorkspaceUnifiedVerbAndAlias(t *testing.T) {
 	// /ws <id> also selects.
 	if byID := controlReply(t, daemon, "/ws "+second.ID); !strings.Contains(byID, "Current workspace: "+second.Name) {
 		t.Fatalf("/ws <id> broke: %s", byID)
+	}
+}
+
+func TestWorkspaceIMRepliesAreReadableAndHideIDs(t *testing.T) {
+	store, err := control.OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	ctx := context.Background()
+	identity, err := store.ResolveOrCreateAccount(ctx, "default", "weixin", "wx_user", "Weixin User")
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := seedWorkspace(t, store, identity, "alpha")
+	second := seedWorkspace(t, store, identity, "beta")
+	if err := store.SetCurrentWorkspace(ctx, identity.TenantID, identity.PersonID, second.ID); err != nil {
+		t.Fatal(err)
+	}
+	daemon := &Server{Control: store, DefaultTenantID: "default"}
+	listed, err := daemon.listWorkspacesForDisplay(ctx, identity)
+	if err != nil || len(listed) != 2 {
+		t.Fatalf("list workspaces: %+v err=%v", listed, err)
+	}
+
+	listResp, status := daemon.ProcessMessage(ctx, api.MessageRequest{
+		Platform: "weixin", PlatformUserID: "wx_user", Channel: "wx_chat", Content: "/ws",
+	})
+	if status != 200 || listResp.Error != "" {
+		t.Fatalf("/ws status=%d resp=%+v", status, listResp)
+	}
+	if strings.Contains(listResp.Content, first.ID) || strings.Contains(listResp.Content, second.ID) {
+		t.Fatalf("IM workspace list must hide UUIDs:\n%s", listResp.Content)
+	}
+	if !strings.Contains(listResp.Content, "WS\n\n[1]") ||
+		!strings.Contains(listResp.Content, "\n[2]") ||
+		!strings.Contains(listResp.Content, "beta [current] | "+second.LocalPath) {
+		t.Fatalf("IM workspace list is not grouped/readable:\n%s", listResp.Content)
+	}
+	for _, unstable := range []string{"\n1. ", "\n2. ", "\n   ", "Path:", "<number>"} {
+		if strings.Contains(listResp.Content, unstable) {
+			t.Fatalf("IM workspace list contains rich-text-sensitive syntax %q:\n%s", unstable, listResp.Content)
+		}
+	}
+
+	switchResp, status := daemon.ProcessMessage(ctx, api.MessageRequest{
+		Platform: "weixin", PlatformUserID: "wx_user", Channel: "wx_chat", Content: "/ws 1",
+	})
+	if status != 200 || switchResp.Error != "" {
+		t.Fatalf("/ws 1 status=%d resp=%+v", status, switchResp)
+	}
+	target := listed[0]
+	if strings.Contains(switchResp.Content, target.ID) ||
+		!strings.Contains(switchResp.Content, "WS switched\n\n"+target.Name+"\n"+target.LocalPath) {
+		t.Fatalf("IM switch reply is not compact/readable:\n%s", switchResp.Content)
 	}
 }

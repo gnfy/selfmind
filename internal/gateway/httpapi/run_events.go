@@ -265,6 +265,12 @@ func (c *RunCoordinator) recordStreamEvent(ctx context.Context, channel string, 
 		if event.Err != nil {
 			payload["error"] = tools.RedactSensitive(event.Err.Error())
 		}
+	case "tool.output":
+		payload["tool"] = event.ToolName
+		if event.ToolCallID != "" {
+			payload["tool_call_id"] = event.ToolCallID
+		}
+		payload["message"] = tools.RedactSensitive(event.Content)
 	case "learning.review":
 		payload["message"] = tools.RedactSensitive(event.Content)
 		eventType = classifyLearningReviewEvent(event.Content)

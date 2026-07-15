@@ -101,3 +101,19 @@ func TestVerificationFailureMakesCodeRunResumable(t *testing.T) {
 		t.Fatal("unverified code mutation must make the run resumable")
 	}
 }
+
+func TestVerificationNoticeIsConciseAndEnglish(t *testing.T) {
+	got := withVerificationNotice("Changed the file.", &api.VerificationOutcome{
+		State:   "not_run",
+		Summary: "Files changed, but no verification command was recorded after the change.",
+	}, nil)
+	want := "Changed the file.\n\nVerification incomplete: no check ran after file changes."
+	if got != want {
+		t.Fatalf("notice = %q, want %q", got, want)
+	}
+
+	passed := withVerificationNotice("Done.", &api.VerificationOutcome{State: "passed", Summary: "1 check passed."}, nil)
+	if passed != "Done." {
+		t.Fatalf("successful verification should not add UI noise: %q", passed)
+	}
+}

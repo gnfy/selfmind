@@ -2,10 +2,13 @@ package httpapi
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
+	"selfmind/internal/control"
 	"selfmind/internal/gateway/api"
 	"selfmind/internal/gateway/delivery"
+	"selfmind/internal/kernel/llm"
 )
 
 // TestCLIAsyncResultRoutesToPreferredIM encodes the continuity promise for
@@ -40,4 +43,52 @@ func TestCLIAsyncResultRoutesToPreferredIM(t *testing.T) {
 	if msg.Content != "The user rejected chmod; nothing else was run." {
 		t.Fatalf("result content should be the final answer only:\n%s", msg.Content)
 	}
+}
+
+func TestRecordToolOutputKeepsCorrelationFields(t *testing.T) {
+	store, err := control.OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	ctx := context.Background()
+	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Local")
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := store.CreateTask(ctx, control.TaskCreate{TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "Output", Channel: "cli"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := store.StartRun(ctx, task, "cli", "run command")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	server := &Server{Control: store, DefaultTenantID: "default"}
+	server.coordinator().recordStreamEvent(ctx, "cli", task, run, llm.StreamEvent{
+		EventType:  "tool.output",
+		ToolName:   "terminal",
+		ToolCallID: "call-1",
+		Content:    "line one",
+	})
+
+	events, err := store.ListTaskEvents(ctx, task.ID, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range events {
+		if event.Type != "tool.output" {
+			continue
+		}
+		var payload map[string]interface{}
+		if err := json.Unmarshal(event.Payload, &payload); err != nil {
+			t.Fatal(err)
+		}
+		if payload["tool"] != "terminal" || payload["tool_call_id"] != "call-1" || payload["message"] != "line one" {
+			t.Fatalf("payload = %+v", payload)
+		}
+		return
+	}
+	t.Fatal("tool.output event was not recorded")
 }

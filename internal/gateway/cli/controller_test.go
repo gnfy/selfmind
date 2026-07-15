@@ -312,6 +312,84 @@ func TestToolDoneMatchesStartedToolByCallID(t *testing.T) {
 	}
 }
 
+func TestToolOutputMatchesActiveToolByCallID(t *testing.T) {
+	model := NewController(nil, nil, nil, "").model
+	updated, _ := model.Update(MsgToolStart{ToolName: "terminal", ToolCallID: "call-a"})
+	model = updated.(*uiModel)
+	updated, _ = model.Update(MsgToolStart{ToolName: "terminal", ToolCallID: "call-b"})
+	model = updated.(*uiModel)
+
+	updated, _ = model.Update(MsgToolOutput{ToolName: "terminal", ToolCallID: "call-a", Content: "output-a"})
+	model = updated.(*uiModel)
+
+	if model.messages[0].Content != "output-a" {
+		t.Fatalf("first tool output = %q, want output-a", model.messages[0].Content)
+	}
+	if model.messages[1].Content != "" {
+		t.Fatalf("second tool was cross-wired: %+v", model.messages[1])
+	}
+}
+
+func TestUnmatchedToolOutputDoesNotCreateAnonymousRow(t *testing.T) {
+	model := NewController(nil, nil, nil, "").model
+
+	updated, _ := model.Update(MsgToolOutput{ToolName: "terminal", ToolCallID: "missing", Content: "late output"})
+	model = updated.(*uiModel)
+
+	if len(model.messages) != 0 {
+		t.Fatalf("unmatched output created a tool row: %+v", model.messages)
+	}
+}
+
+func TestActiveToolOutputIsBounded(t *testing.T) {
+	model := NewController(nil, nil, nil, "").model
+	updated, _ := model.Update(MsgToolStart{ToolName: "terminal", ToolCallID: "call-a"})
+	model = updated.(*uiModel)
+	for _, line := range []string{"one", "two", "three", "four"} {
+		updated, _ = model.Update(MsgToolOutput{ToolName: "terminal", ToolCallID: "call-a", Content: line})
+		model = updated.(*uiModel)
+	}
+
+	if got := model.messages[0].Content; got != "two\nthree\nfour" {
+		t.Fatalf("bounded output = %q", got)
+	}
+}
+
+func TestAgentDoneDiscardsUnfinishedToolRows(t *testing.T) {
+	model := NewController(nil, nil, nil, "").model
+	updated, _ := model.Update(MsgToolStart{ToolName: "terminal", ToolCallID: "call-a"})
+	model = updated.(*uiModel)
+	updated, _ = model.Update(MsgToolOutput{ToolName: "terminal", ToolCallID: "call-a", Content: "still running"})
+	model = updated.(*uiModel)
+
+	updated, _ = model.Update(MsgAgentDone{Response: "Finished."})
+	model = updated.(*uiModel)
+
+	if len(model.messages) != 1 || model.messages[0].Role != "assistant" || model.messages[0].Content != "Finished." {
+		t.Fatalf("terminal cleanup left transient rows: %+v", model.messages)
+	}
+	if active := stripANSI(model.renderActiveBlock(100)); strings.TrimSpace(active) != "" {
+		t.Fatalf("active region is not clean after completion: %q", active)
+	}
+}
+
+func TestLateToolEventsAreIgnoredAfterAgentDone(t *testing.T) {
+	model := NewController(nil, nil, nil, "").model
+	updated, _ := model.Update(MsgAgentDone{Response: "Finished."})
+	model = updated.(*uiModel)
+
+	updated, _ = model.Update(MsgToolStart{ToolName: "terminal", ToolCallID: "late"})
+	model = updated.(*uiModel)
+	updated, _ = model.Update(MsgToolOutput{ToolName: "terminal", ToolCallID: "late", Content: "late output"})
+	model = updated.(*uiModel)
+	updated, _ = model.Update(MsgToolDone{ToolName: "terminal", ToolCallID: "late", Result: "late result"})
+	model = updated.(*uiModel)
+
+	if len(model.messages) != 1 || model.messages[0].Content != "Finished." {
+		t.Fatalf("late events changed terminal history: %+v", model.messages)
+	}
+}
+
 func TestCompletedToolMessageShowsPerStepDuration(t *testing.T) {
 	rendered := stripANSI(renderToolMessage(ChatMessage{
 		Role:     "tool",

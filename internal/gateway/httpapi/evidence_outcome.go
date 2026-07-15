@@ -234,13 +234,44 @@ func withVerificationNotice(content string, verification *api.VerificationOutcom
 	if verification == nil || verification.State == "not_applicable" {
 		return strings.TrimSpace(content)
 	}
-	line := "Verification: " + verification.Summary
+	line := conciseVerificationNotice(verification)
+	if line == "" && len(mismatches) == 0 {
+		return strings.TrimSpace(content)
+	}
 	if len(mismatches) > 0 {
-		line += " The assistant's verification claim was not accepted."
+		if line != "" {
+			line += " "
+		}
+		line += "The assistant's verification claim was not accepted."
 	}
 	content = strings.TrimSpace(content)
 	if content == "" {
 		return line
 	}
 	return content + "\n\n" + line
+}
+
+func conciseVerificationNotice(verification *api.VerificationOutcome) string {
+	if verification == nil {
+		return ""
+	}
+	switch verification.State {
+	case "passed":
+		return ""
+	case "not_run":
+		return "Verification incomplete: no check ran after file changes."
+	case "stale":
+		return "Verification incomplete: checks ran before the latest file change."
+	case "failed":
+		return "Verification failed."
+	case "blocked":
+		return "Verification blocked."
+	case "partial":
+		return "Verification incomplete: some checks were blocked."
+	default:
+		if summary := strings.TrimSpace(verification.Summary); summary != "" {
+			return "Verification: " + summary
+		}
+		return ""
+	}
 }

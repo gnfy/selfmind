@@ -24,6 +24,9 @@ func (m *uiModel) transcriptVisibleHeight() int {
 	if m.migrationHintBar(m.width) != "" {
 		visibleH--
 	}
+	if plan := m.activePlanBlock(m.width); plan != "" {
+		visibleH -= lipgloss.Height(plan)
+	}
 	// Legacy mode draws the approval panel between transcript and composer, so
 	// the viewport gives up that many rows.
 	if m.approvalPrompt != nil {
@@ -35,8 +38,28 @@ func (m *uiModel) transcriptVisibleHeight() int {
 	return visibleH
 }
 
+// activePlanBlock gives the pinned plan its own visual band. The leading and
+// trailing blank rows keep live progress distinct from both transcript events
+// and the composer while remaining part of the measured active-region height.
+func (m *uiModel) activePlanBlock(width int) string {
+	if m == nil {
+		return ""
+	}
+	plan := strings.TrimRight(renderPlanCell(m.activePlanJSON, 0, width), "\n")
+	if strings.TrimSpace(plan) == "" {
+		return ""
+	}
+	return "\n" + plan + "\n"
+}
+
 func (m *uiModel) composerGapHeight() int {
 	if m == nil || m.height < 12 {
+		return 0
+	}
+	// The live plan and approval prompt already provide a clear visual boundary
+	// above the composer. Adding the generic spacer here would push useful
+	// content upward and make a multi-step plan jump as it changes height.
+	if strings.TrimSpace(m.activePlanJSON) != "" || m.approvalPrompt != nil {
 		return 0
 	}
 	inputH := 1

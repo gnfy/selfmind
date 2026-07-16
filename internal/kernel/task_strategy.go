@@ -320,9 +320,9 @@ func (s TaskStrategy) SystemPromptNote() string {
 	if s.PlanPolicy == PlanPolicyDisabled {
 		sb.WriteString("Do not call update_plan for this turn.\n")
 	} else if s.PlanPolicy == PlanPolicyRequired {
-		sb.WriteString("Use update_plan early, keep it current, and continue through verification or a clear blocker.\n")
+		sb.WriteString("Use update_plan early and keep it current after meaningful step transitions. Every call must send the complete current plan snapshot, including unchanged and completed steps. Before finish_run status done, update the plan so every step is completed or cancelled. Continue through verification or a clear blocker.\n")
 	} else {
-		sb.WriteString("Use update_plan only when the work genuinely needs multiple visible steps. Do not update the plan repeatedly without meaningful status changes.\n")
+		sb.WriteString("Use update_plan only when the work genuinely needs multiple visible steps. Every call must send the complete current plan snapshot, including unchanged and completed steps. Update it after meaningful transitions, and resolve every step before finish_run status done; do not update repeatedly without a real status change.\n")
 	}
 	if s.WebPolicy == WebPolicyDisabled {
 		sb.WriteString("Do not use web tools unless the user explicitly asks to search, browse, inspect a URL, or retrieve current external information.\n")

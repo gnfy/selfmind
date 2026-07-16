@@ -166,6 +166,46 @@ substrate). Document results in this file.
   verification is silent; incomplete, failed, or blocked verification adds one
   actionable line only.
 
+### H2a - Live plan pinned above the composer
+
+- A plan is active run state, not an append-only transcript cell. The daemon's
+  latest `plan.updated` snapshot replaces the previous snapshot in memory.
+- The active plan renders after normal transcript content and notifications,
+  immediately above the approval panel or composer. This matches the compact
+  bottom placement used by coding-agent CLIs while preserving native terminal
+  scrollback for completed conversation and tool cells. One measured blank row
+  above and below the plan keeps it visually separate without causing layout
+  overlap or pushing the composer beyond the terminal height.
+- Terminal run states, cancellation, `/clear`, and a new user turn clear stale
+  active plan state. Plan height is included in transcript layout calculations
+  so it cannot cover history or move the composer off screen.
+- `update_plan` snapshots must describe every current step. Before a run may
+  complete successfully, all steps must be resolved; an unresolved plan is
+  repaired through the agent loop or leaves the run resumable rather than
+  falsely complete.
+
+### H2b - Physical-row-safe structured tool cells
+
+- Every cell is sanitized and pre-wrapped by terminal display columns before
+  it enters native scrollback. CSI/OSC/DCS escapes, carriage-return progress
+  frames, backspaces, invalid UTF-8, tabs, and unbroken long tokens cannot make
+  Bubble Tea's logical row count diverge from the terminal's physical rows.
+  Every committed physical row ends with an explicit style reset. This removes
+  stale composer-background strips after long commands and here-docs.
+- Command cells expose intent, not shell syntax. Known commands render compact
+  semantic titles such as `Ran tests`, `Searched files`, or
+  `Ran Google Cloud command`; here-doc bodies never become titles. Unknown
+  commands retain only a bounded first command, with a maximum two-row header.
+- Command output is limited to five physical rows using a head/tail preview and
+  a hidden-row count. The durable tool event remains unchanged; the transcript
+  is a readable operational summary rather than a raw terminal dump.
+- This presentation policy is channel-specific. The CLI receives structured
+  live tool cells and assistant deltas. IM channels keep concise English
+  working/approval/final messages and do not receive raw shell output.
+- Regression coverage: `terminal_text_test.go` verifies control sanitization,
+  hard wrapping, per-row resets, hidden here-doc bodies, bounded head/tail
+  output, and the complete commit-to-scrollback boundary.
+
 ### H3 — Commit-time file-change rendering ✅ shipped (patch); ⏳ write_file overwrite deferred
 - `renderPatchCell` (`transcript_renderer.go`) parses the V4A patch input
   (`args["patch"]`) into per-file changes and renders:

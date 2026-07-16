@@ -230,6 +230,9 @@ tasks:
   auto_archive_done_after: "720h"
   auto_archive_cancelled_after: "168h"
   maintenance_model_role: "memory_extract"
+  maintenance_debounce: "5m"
+  maintenance_max_wait: "15m"
+  maintenance_batch_max_runs: 10
 
 # 后台学习/复盘相关配置，用于沉淀 memory 和 skill。
 evolution:

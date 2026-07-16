@@ -693,6 +693,10 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 	var artifactToolMsgs []agedToolMsg
 	toolBudgetRepairIssued := false
 	toolBudgetExhausted := false
+	planSeen := false
+	var unresolvedPlanSteps []string
+	planRepairAttempts := 0
+	successfulFinishStatus := ""
 	tryExtendToolBudget := func(iteration int) bool {
 		if actionToolBudget <= 0 || actionToolBudget >= actionToolBudgetLimit || budgetExtensions >= strategy.normalized().MaxBudgetExtensions {
 			return false
@@ -1013,6 +1017,18 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 			actionToolsUsed += countActionToolCalls(calls)
 			incrementToolUseCounts(toolUseCounts, calls)
 			results := a.executeToolCalls(ctx, tenantID, eventCh, calls)
+			for idx, res := range results {
+				if !res.success || idx >= len(calls) {
+					continue
+				}
+				if unresolved, ok := unresolvedPlanStepsFromToolCall(calls[idx]); ok {
+					planSeen = true
+					unresolvedPlanSteps = unresolved
+				}
+				if status, ok := finishRunStatusFromToolCall(calls[idx]); ok {
+					successfulFinishStatus = status
+				}
+			}
 
 			// Age out earlier artifact-backed tool results before appending
 			// fresh evidence: this iteration's output matters more than the
@@ -1109,6 +1125,21 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 			messages[len(messages)-1].Content = resp
 		}
 
+		planUnresolved := planSeen && len(unresolvedPlanSteps) > 0 && successfulFinishStatus == ""
+		if planUnresolved && !toolBudgetExhausted && planRepairAttempts < 2 && toolUseCounts["update_plan"] < lifecycleToolCap("update_plan") {
+			planRepairAttempts++
+			if i+1 >= maxIterations {
+				maxIterations = i + 2
+			}
+			emitAgentActivity(eventCh, "The visible plan still has unresolved steps; reconciling final progress", "plan_reconciliation", i)
+			messages = append(messages, llm.Message{
+				Role: "user",
+				Content: "Before giving the final answer, reconcile the visible plan. Call update_plan once with the complete current snapshot. " +
+					"Mark finished steps completed and steps intentionally not performed cancelled. If work is genuinely blocked or waiting externally, call finish_run with that non-done status instead. Unresolved steps: " + strings.Join(unresolvedPlanSteps, "; "),
+			})
+			continue
+		}
+
 		// No tool calls — task complete
 		history.Outcome = resp
 
@@ -1125,6 +1156,10 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 		if toolBudgetExhausted {
 			completionStatus = "incomplete"
 			completionReason = "tool_budget_exhausted"
+			resumable = true
+		} else if planUnresolved {
+			completionStatus = "incomplete"
+			completionReason = "plan_unresolved"
 			resumable = true
 		}
 		EmitAgentEvent(eventCh, AgentEvent{
@@ -1783,7 +1818,7 @@ func (a *Agent) buildSystemPrompt(ctx context.Context, tenantID string, strategy
 			sb.WriteString("Use local tools whenever the user asks about local files, directories, command output, project state, or system status.\n")
 			sb.WriteString("When a tool returns an error, treat the error as diagnostic evidence. Do not stop at the first failed command unless the failure is the requested final result. Inspect cwd, files, environment, auth state, provider constraints, or command help as needed, then choose the next correct action.\n")
 			sb.WriteString("Do not hard-code environment overrides as a default tool behavior. For example, if Go reports a go.work/module boundary error, first inspect go env GOWORK/GOMOD and the relevant go.work/go.mod files, then decide whether to change cwd, use an explicit env override, or report a real blocker.\n")
-			sb.WriteString("Use update_plan only for non-trivial work: tasks with 3+ meaningful steps, multi-file changes, investigation/debugging, long-running verification, or explicit user requests for a plan. Do not use update_plan for one-shot answers, small code examples, simple commands, or direct explanations.\n")
+			sb.WriteString("Use update_plan only for non-trivial work: tasks with 3+ meaningful steps, multi-file changes, investigation/debugging, long-running verification, or explicit user requests for a plan. Each update_plan call replaces the prior plan, so always send the complete current snapshot and resolve all steps before finish_run status done. Do not use update_plan for one-shot answers, small code examples, simple commands, or direct explanations.\n")
 			sb.WriteString("For non-trivial tool-using work that creates or changes durable task state, call finish_run once with a structured outcome: status, summary, done, next_steps, files, tests, risks, and need_approve. Skip finish_run for direct answers, small snippets, and ordinary explanations.\n")
 			sb.WriteString("Use tool_search when you need a capability but are unsure which registered tool fits.\n")
 			// Tool DEFINITIONS: names, descriptions, parameter schemas. A

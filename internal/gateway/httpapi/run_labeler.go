@@ -55,6 +55,15 @@ type PostRunAnalyzer interface {
 	Analyze(ctx context.Context, req PostRunAnalysisRequest) (PostRunAnalysis, error)
 }
 
+// PostRunBatchAnalyzer is the optional batching extension used by the daemon
+// maintenance worker. Results are keyed by run id so a model cannot reorder
+// decisions and accidentally apply one run's memory or label ruling to
+// another. Implementations that do not support batching keep working through
+// PostRunAnalyzer, with one call per ready job.
+type PostRunBatchAnalyzer interface {
+	AnalyzeBatch(ctx context.Context, reqs []PostRunAnalysisRequest) (map[string]PostRunAnalysis, error)
+}
+
 type PostRunAnalysisApplier interface {
 	Apply(ctx context.Context, req PostRunAnalysisRequest, analysis PostRunAnalysis) error
 }
@@ -76,9 +85,10 @@ const maintenanceRetryDelay = 10 * time.Minute
 // candidates — the person-level open set is small by design.
 const runLabelerMaxOpenLabels = 10
 
-// analyzeFinishedRunAsync launches at most one maintenance model call for a
-// finalized run. Explicit task attachment is never second-guessed, but a
-// substantive explicit run may still yield durable memory facts.
+// analyzeFinishedRunAsync captures the immutable replay evidence for a
+// finalized run. Model work is deliberately NOT launched here: the daemon's
+// maintenance worker is the sole consumer and can debounce several nearby
+// runs into one cheap-model request without delaying the user-visible result.
 func (c *RunCoordinator) analyzeFinishedRunAsync(ctx context.Context, identity *control.IdentityContext, task *control.Task, run *control.Run, workspaceID, userInput string, outcome api.RunOutcome, attach taskAttach) {
 	if c == nil || c.srv == nil || c.srv.PostRunAnalyzer == nil || c.srv.Control == nil {
 		return
@@ -96,13 +106,6 @@ func (c *RunCoordinator) analyzeFinishedRunAsync(ctx context.Context, identity *
 	} else if err := srv.Control.SetMaintenanceJobPayload(context.WithoutCancel(ctx), identity.TenantID, run.ID, postRunAnalyzerVersion, string(payload)); err != nil {
 		log.Warn("gateway: persist maintenance replay payload failed", "run", run.ID, "error", err)
 	}
-	srv.postRunWG.Add(1)
-	go func() {
-		defer srv.postRunWG.Done()
-		callCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), postRunAnalyzerTimeout)
-		defer cancel()
-		srv.analyzeFinishedRun(callCtx, identity, task, run, workspaceID, userInput, outcome, attach)
-	}()
 }
 
 type postRunJobPayload struct {
@@ -117,19 +120,13 @@ type postRunJobPayload struct {
 }
 
 func (d *Server) analyzeFinishedRun(ctx context.Context, identity *control.IdentityContext, task *control.Task, run *control.Run, workspaceID, userInput string, outcome api.RunOutcome, attach taskAttach) {
-	var candidates []control.Task
-	labelEligible := false
-	if attach.preLabel {
-		candidates = d.openLabelCandidates(ctx, identity, task.ID)
-		labelEligible = attach.created || len(candidates) > 0
-	}
-	if !labelEligible && !postRunMemoryEligible(userInput, outcome) {
-		_ = d.Control.SkipMaintenanceJob(ctx, identity.TenantID, run.ID, postRunAnalyzerVersion, "run is not eligible for post-run maintenance")
+	prepared := d.preparePostRunAnalysis(ctx, identity, task, run, workspaceID, userInput, outcome, attach)
+	if prepared == nil {
 		return
 	}
 	// Claim the run's maintenance job before any model work: one run has ONE
-	// logical maintenance result. A lost claim means another delivery of the
-	// same terminal notification already owns (or finished) this pass.
+	// logical maintenance result. A lost claim means another worker already
+	// owns (or finished) this pass.
 	claimed, err := d.Control.ClaimMaintenanceJob(ctx, identity.TenantID, run.ID, postRunAnalyzerVersion)
 	if err != nil {
 		log.Warn("gateway: maintenance job claim failed; skipping analyzer", "run", run.ID, "error", err)
@@ -138,55 +135,112 @@ func (d *Server) analyzeFinishedRun(ctx context.Context, identity *control.Ident
 	if !claimed {
 		return
 	}
-	prompt := buildPostRunAnalysisPrompt(task, attach.created, labelEligible, userInput, outcome, candidates)
-	req := PostRunAnalysisRequest{
-		Prompt:          prompt,
-		TurnText:        strings.TrimSpace(userInput + "\n" + outcome.Summary),
-		TenantID:        identity.TenantID,
-		PersonID:        identity.PersonID,
-		WorkspaceID:     workspaceID,
-		TaskID:          task.ID,
-		RunID:           run.ID,
-		AnalyzerVersion: postRunAnalyzerVersion,
+	d.analyzeClaimedPostRun(ctx, prepared)
+}
+
+type preparedPostRunAnalysis struct {
+	identity      *control.IdentityContext
+	task          *control.Task
+	run           *control.Run
+	attach        taskAttach
+	candidates    []control.Task
+	labelEligible bool
+	request       PostRunAnalysisRequest
+}
+
+func (d *Server) preparePostRunAnalysis(ctx context.Context, identity *control.IdentityContext, task *control.Task, run *control.Run, workspaceID, userInput string, outcome api.RunOutcome, attach taskAttach) *preparedPostRunAnalysis {
+	if d == nil || d.Control == nil || d.PostRunAnalyzer == nil || identity == nil || task == nil || run == nil {
+		return nil
 	}
+	var candidates []control.Task
+	labelEligible := false
+	if attach.preLabel {
+		candidates = d.openLabelCandidates(ctx, identity, task.ID)
+		labelEligible = attach.created || len(candidates) > 0
+	}
+	if !labelEligible && !postRunMemoryEligible(userInput, outcome) {
+		_ = d.Control.SkipMaintenanceJob(ctx, identity.TenantID, run.ID, postRunAnalyzerVersion, "run is not eligible for post-run maintenance")
+		return nil
+	}
+	prompt := buildPostRunAnalysisPrompt(task, attach.created, labelEligible, userInput, outcome, candidates)
+	return &preparedPostRunAnalysis{
+		identity: identity, task: task, run: run, attach: attach,
+		candidates: candidates, labelEligible: labelEligible,
+		request: PostRunAnalysisRequest{
+			Prompt:          prompt,
+			TurnText:        strings.TrimSpace(userInput + "\n" + outcome.Summary),
+			TenantID:        identity.TenantID,
+			PersonID:        identity.PersonID,
+			WorkspaceID:     workspaceID,
+			TaskID:          task.ID,
+			RunID:           run.ID,
+			AnalyzerVersion: postRunAnalyzerVersion,
+		},
+	}
+}
+
+func (d *Server) analyzeClaimedPostRun(ctx context.Context, prepared *preparedPostRunAnalysis) {
+	if prepared == nil {
+		return
+	}
+	req := prepared.request
 	var analysis PostRunAnalysis
-	job, _ := d.Control.GetMaintenanceJob(ctx, identity.TenantID, run.ID, postRunAnalyzerVersion)
+	job, _ := d.Control.GetMaintenanceJob(ctx, req.TenantID, req.RunID, postRunAnalyzerVersion)
 	if job != nil && strings.TrimSpace(job.ProposalJSON) != "" {
 		if err := json.Unmarshal([]byte(job.ProposalJSON), &analysis); err != nil {
-			_ = d.Control.FailMaintenanceJob(ctx, identity.TenantID, run.ID, postRunAnalyzerVersion, "decode frozen proposal: "+err.Error(), maintenanceRetryDelay)
+			_ = d.Control.FailMaintenanceJob(ctx, req.TenantID, req.RunID, postRunAnalyzerVersion, "decode frozen proposal: "+err.Error(), maintenanceRetryDelay)
 			return
 		}
 	} else {
+		var err error
 		analysis, err = d.PostRunAnalyzer.Analyze(ctx, req)
 		if err != nil {
-			log.Warn("gateway: post-run analyzer failed; keeping execution result unchanged", "run", run.ID, "error", err)
-			if llm.IsRetryableError(err) {
-				_ = d.Control.FailMaintenanceJob(ctx, identity.TenantID, run.ID, postRunAnalyzerVersion, err.Error(), maintenanceRetryDelay)
-			} else {
-				d.blockMaintenanceProviderJob(ctx, identity, task, run, postRunAnalyzerVersion, err)
-			}
+			d.failClaimedPostRun(ctx, prepared, err)
 			return
 		}
-		proposal, marshalErr := json.Marshal(analysis)
-		if marshalErr != nil {
-			_ = d.Control.FailMaintenanceJob(ctx, identity.TenantID, run.ID, postRunAnalyzerVersion, marshalErr.Error(), maintenanceRetryDelay)
-			return
-		}
-		if err := d.Control.SaveMaintenanceProposal(ctx, identity.TenantID, run.ID, postRunAnalyzerVersion, string(proposal), analysisResultHash(analysis)); err != nil {
-			_ = d.Control.FailMaintenanceJob(ctx, identity.TenantID, run.ID, postRunAnalyzerVersion, err.Error(), maintenanceRetryDelay)
+		if !d.saveMaintenanceProposal(ctx, prepared, analysis) {
 			return
 		}
 	}
+	d.applyClaimedPostRun(ctx, prepared, analysis)
+}
+
+func (d *Server) saveMaintenanceProposal(ctx context.Context, prepared *preparedPostRunAnalysis, analysis PostRunAnalysis) bool {
+	proposal, err := json.Marshal(analysis)
+	if err == nil {
+		err = d.Control.SaveMaintenanceProposal(ctx, prepared.request.TenantID, prepared.request.RunID, postRunAnalyzerVersion, string(proposal), analysisResultHash(analysis))
+	}
+	if err != nil {
+		_ = d.Control.FailMaintenanceJob(ctx, prepared.request.TenantID, prepared.request.RunID, postRunAnalyzerVersion, err.Error(), maintenanceRetryDelay)
+		return false
+	}
+	return true
+}
+
+func (d *Server) applyClaimedPostRun(ctx context.Context, prepared *preparedPostRunAnalysis, analysis PostRunAnalysis) {
+	req := prepared.request
 	if applier, ok := d.PostRunAnalyzer.(PostRunAnalysisApplier); ok {
 		if err := applier.Apply(ctx, req, analysis); err != nil {
-			_ = d.Control.FailMaintenanceJob(ctx, identity.TenantID, run.ID, postRunAnalyzerVersion, err.Error(), maintenanceRetryDelay)
+			_ = d.Control.FailMaintenanceJob(ctx, req.TenantID, req.RunID, postRunAnalyzerVersion, err.Error(), maintenanceRetryDelay)
 			return
 		}
 	}
-	if labelEligible {
-		d.applyPostRunLabel(ctx, identity, task, run, attach, candidates, analysis.TaskDecision)
+	if prepared.labelEligible {
+		d.applyPostRunLabel(ctx, prepared.identity, prepared.task, prepared.run, prepared.attach, prepared.candidates, analysis.TaskDecision)
 	}
-	_ = d.Control.CompleteMaintenanceJob(ctx, identity.TenantID, run.ID, postRunAnalyzerVersion, analysisResultHash(analysis))
+	_ = d.Control.CompleteMaintenanceJob(ctx, req.TenantID, req.RunID, postRunAnalyzerVersion, analysisResultHash(analysis))
+}
+
+func (d *Server) failClaimedPostRun(ctx context.Context, prepared *preparedPostRunAnalysis, err error) {
+	if prepared == nil || err == nil {
+		return
+	}
+	log.Warn("gateway: post-run analyzer failed; keeping execution result unchanged", "run", prepared.request.RunID, "error", err)
+	if llm.IsRetryableError(err) {
+		_ = d.Control.FailMaintenanceJob(ctx, prepared.request.TenantID, prepared.request.RunID, postRunAnalyzerVersion, err.Error(), maintenanceRetryDelay)
+		return
+	}
+	d.blockMaintenanceProviderJob(ctx, prepared.identity, prepared.task, prepared.run, postRunAnalyzerVersion, err)
 }
 
 func (d *Server) applyPostRunLabel(ctx context.Context, identity *control.IdentityContext, task *control.Task, run *control.Run, attach taskAttach, candidates []control.Task, rawDecision string) {

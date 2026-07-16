@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
-	"github.com/mattn/go-runewidth"
 
 	"selfmind/internal/modelruntime"
 	"selfmind/internal/platform/config"
@@ -138,44 +137,6 @@ func renderProgressBar(progress float64, width int) string {
 		filled = width
 	}
 	return "[" + strings.Repeat("█", filled) + strings.Repeat("░", width-filled) + "]"
-}
-
-func wrapText(s string, width int) string {
-	if width <= 0 {
-		return s
-	}
-	var result []string
-	for _, line := range strings.Split(s, "\n") {
-		if runewidth.StringWidth(stripANSI(line)) <= width {
-			result = append(result, line)
-			continue
-		}
-		var cur strings.Builder
-		curWidth := 0
-		words := strings.Fields(line)
-		for _, w := range words {
-			wWidth := runewidth.StringWidth(stripANSI(w))
-			if curWidth+wWidth+1 <= width {
-				if cur.Len() > 0 {
-					cur.WriteString(" ")
-					curWidth += 1
-				}
-				cur.WriteString(w)
-				curWidth += wWidth
-			} else {
-				if cur.Len() > 0 {
-					result = append(result, cur.String())
-				}
-				cur.Reset()
-				cur.WriteString(w)
-				curWidth = wWidth
-			}
-		}
-		if cur.Len() > 0 {
-			result = append(result, cur.String())
-		}
-	}
-	return strings.Join(result, "\n")
 }
 
 var (

@@ -119,7 +119,7 @@ func (m *uiModel) commit(msg *ChatMessage) {
 		return
 	}
 	msg.Committed = true
-	rendered := strings.TrimRight(renderCell(*msg, m.commitWidth()), "\n")
+	rendered := prepareTerminalCell(renderCell(*msg, m.commitWidth()), m.commitWidth())
 	if rendered != "" {
 		m.pendingPrintln = append(m.pendingPrintln, rendered)
 	}
@@ -156,14 +156,14 @@ func (m *uiModel) renderActiveBlock(width int) string {
 		if m.messages[i].Committed {
 			continue
 		}
-		rendered := strings.TrimRight(renderCell(m.messages[i], width), "\n")
+		rendered := prepareTerminalCell(renderCell(m.messages[i], width), width)
 		if rendered == "" {
 			continue
 		}
 		lines = append(lines, strings.Split(rendered, "\n")...)
 	}
 	if strings.TrimSpace(m.liveStreamContent) != "" {
-		rendered := strings.TrimRight(renderAssistantMessage(stripANSI(m.liveStreamContent), width), "\n")
+		rendered := prepareTerminalCell(renderAssistantMessage(stripANSI(m.liveStreamContent), width), width)
 		if rendered != "" {
 			lines = append(lines, strings.Split(rendered, "\n")...)
 		}
@@ -206,14 +206,22 @@ func (m *uiModel) viewActiveRegion() string {
 	// Transient approval dialog: active-region content per the hybrid contract
 	// (docs/tui-terminal-first-hybrid.md §3) — it must never scroll away into
 	// history while undecided.
-	if m.approvalPrompt != nil {
-		parts = append(parts, m.approvalPrompt.View(mainW))
-	}
 	if notification != "" {
 		parts = append(parts, notification)
 	}
 	if migrationHint != "" {
 		parts = append(parts, migrationHint)
+	}
+	// Keep the latest plan in the mutable bottom region, immediately above any
+	// blocking prompt/composer. It updates in place and never pollutes native
+	// terminal scrollback with stale snapshots.
+	if plan := m.activePlanBlock(mainW); plan != "" {
+		parts = append(parts, plan)
+	}
+	// A blocking approval stays closest to the composer so the next expected
+	// user action remains obvious even when a plan is visible.
+	if m.approvalPrompt != nil {
+		parts = append(parts, m.approvalPrompt.View(mainW))
 	}
 	if gapH := m.composerGapHeight(); gapH > 0 {
 		parts = append(parts, lipgloss.NewStyle().Width(m.width).Height(gapH).Render(""))

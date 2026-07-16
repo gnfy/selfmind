@@ -118,6 +118,7 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		msg.Response = textutil.CleanUTF8(msg.Response)
 		m.thinking = false
 		m.activityText = ""
+		m.activePlanJSON = ""
 		m.toolExecuting = ""
 		m.discardOpenToolMessages()
 		m.steerCh = nil // run finished; stop accepting mid-turn guidance for it
@@ -156,6 +157,7 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.watchedTaskTitle = ""
 		m.watchCancel = nil
 		m.toolExecuting = ""
+		m.activePlanJSON = ""
 		m.discardOpenToolMessages()
 		if strings.HasPrefix(m.statusMsg, "Watching ") {
 			m.statusMsg = ""
@@ -252,6 +254,15 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if !m.anyToolRunning() {
 			m.toolExecuting = ""
+		}
+		return m, spinnerCmd
+
+	case MsgPlanUpdated:
+		if isTerminalRunStatus(m.runStatus) {
+			return m, spinnerCmd
+		}
+		if content := strings.TrimSpace(textutil.CleanUTF8(msg.Content)); content != "" {
+			m.activePlanJSON = content
 		}
 		return m, spinnerCmd
 
@@ -423,6 +434,7 @@ func (m *uiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "ctrl+l":
 			m.messages = []ChatMessage{}
 			m.clearLiveStream()
+			m.activePlanJSON = ""
 			return m, m.clearHybridScreen()
 		case "enter":
 			// Deny follow-up (approval panel "No"): Enter resolves it — bare Enter
@@ -490,6 +502,7 @@ func (m *uiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			m.addMessage("user", input)
 			m.editor.Reset()
+			m.activePlanJSON = ""
 			m.steerCh = make(chan string, 16)
 			m.thinking = true
 			m.runStatus = "working"

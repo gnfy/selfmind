@@ -277,6 +277,41 @@ func (b *planningBackend) Dispatch(name string, args map[string]interface{}) (st
 	return "ok", nil
 }
 
+type planReconciliationProvider struct {
+	requests []llm.ChatRequest
+}
+
+func (p *planReconciliationProvider) ChatCompletion(context.Context, []llm.Message) (string, error) {
+	return "done", nil
+}
+
+func (p *planReconciliationProvider) Chat(context.Context, llm.ChatRequest) (*llm.ChatResponse, error) {
+	return &llm.ChatResponse{Content: "done"}, nil
+}
+
+func (p *planReconciliationProvider) StreamChat(_ context.Context, req llm.ChatRequest) (<-chan llm.StreamEvent, error) {
+	p.requests = append(p.requests, req)
+	ch := make(chan llm.StreamEvent, 1)
+	switch len(p.requests) {
+	case 1:
+		ch <- llm.StreamEvent{ToolCalls: []llm.ToolCall{{
+			ID: "plan-initial", Function: "update_plan",
+			Args: `{"plan":[{"step":"implement","status":"completed"},{"step":"verify","status":"in_progress"}]}`,
+		}}}
+	case 2:
+		ch <- llm.StreamEvent{Content: "Everything is done."}
+	case 3:
+		ch <- llm.StreamEvent{ToolCalls: []llm.ToolCall{{
+			ID: "plan-final", Function: "update_plan",
+			Args: `{"plan":[{"step":"implement","status":"completed"},{"step":"verify","status":"completed"}]}`,
+		}}}
+	default:
+		ch <- llm.StreamEvent{Content: "Implemented and verified."}
+	}
+	close(ch)
+	return ch, nil
+}
+
 func (b *planningBackend) GetToolDefinitions() []map[string]interface{} {
 	return []map[string]interface{}{
 		{
@@ -428,6 +463,48 @@ func TestSimpleRequestKeepsOptionalPlanButHidesWebTools(t *testing.T) {
 	}
 	if requestHasTool(provider.requests[0], "web_search") {
 		t.Fatalf("web_search should not be exposed for stable simple requests: %+v", provider.requests[0].Tools)
+	}
+}
+
+func TestAgentReconcilesUnresolvedPlanBeforeCompleting(t *testing.T) {
+	mem := memory.NewMemoryManager(&mockStorage{})
+	provider := &planReconciliationProvider{}
+	agent := NewAgent(mem, &planningBackend{}, provider, "helpful", 6, 1, nil)
+	events := make(chan string, 64)
+	ctx := WithEventChannel(context.Background(), events)
+	ctx = WithTaskStrategy(ctx, TaskStrategy{
+		Class: TaskClassRepoTask, ToolMode: ToolModeFull, PlanPolicy: PlanPolicyRequired,
+		MaxActionTools: 2, ActionToolBudgetStep: 1, ActionToolBudgetLimit: 4, MaxBudgetExtensions: 1,
+	})
+
+	answer, _, err := agent.RunConversation(ctx, "user123", "cli", "implement and verify the change")
+	if err != nil {
+		t.Fatal(err)
+	}
+	close(events)
+	if answer != "Implemented and verified." {
+		t.Fatalf("answer = %q", answer)
+	}
+	if len(provider.requests) != 4 {
+		t.Fatalf("provider requests = %d, want 4", len(provider.requests))
+	}
+	repairPromptSeen := false
+	for _, msg := range provider.requests[2].Messages {
+		if msg.Role == "user" && strings.Contains(msg.Content, "reconcile the visible plan") {
+			repairPromptSeen = true
+		}
+	}
+	if !repairPromptSeen {
+		t.Fatal("plan reconciliation prompt was not injected")
+	}
+	completion := AgentEvent{}
+	for raw := range events {
+		if event, ok := DecodeAgentEvent(raw); ok && event.Type == "turn.completed" {
+			completion = event
+		}
+	}
+	if completion.Payload["completion_reason"] != "completed" {
+		t.Fatalf("completion = %+v", completion)
 	}
 }
 

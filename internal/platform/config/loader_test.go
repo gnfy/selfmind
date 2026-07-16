@@ -112,11 +112,15 @@ func TestTaskGovernanceDefaultsAndOverrides(t *testing.T) {
 		t.Fatal(err)
 	}
 	doneAfter, cancelledAfter := cfg.Tasks.AutoArchiveDurations()
+	debounce, maxWait, batchMax := cfg.Tasks.MaintenanceBatchPolicy()
 	if !cfg.Tasks.InboxEnabled || cfg.Tasks.ListLimit() != 10 || cfg.Tasks.MaintenanceModelRole != "memory_extract" || len(cfg.Tasks.MaintenanceFallbackRoles) != 2 {
 		t.Fatalf("task defaults = %+v", cfg.Tasks)
 	}
 	if doneAfter != 30*24*time.Hour || cancelledAfter != 7*24*time.Hour {
 		t.Fatalf("archive defaults = %s/%s", doneAfter, cancelledAfter)
+	}
+	if debounce != 5*time.Minute || maxWait != 15*time.Minute || batchMax != 10 {
+		t.Fatalf("maintenance defaults = %s/%s/%d", debounce, maxWait, batchMax)
 	}
 
 	overridePath := filepath.Join(t.TempDir(), "override.yaml")
@@ -128,6 +132,9 @@ tasks:
   auto_archive_cancelled_after: "0"
   maintenance_model_role: "fast_classifier"
   maintenance_fallback_roles: ["background_review"]
+  maintenance_debounce: "2m"
+  maintenance_max_wait: "10m"
+  maintenance_batch_max_runs: 99
 `), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -136,10 +143,14 @@ tasks:
 		t.Fatal(err)
 	}
 	doneAfter, cancelledAfter = cfg.Tasks.AutoArchiveDurations()
+	debounce, maxWait, batchMax = cfg.Tasks.MaintenanceBatchPolicy()
 	if cfg.Tasks.InboxEnabled || cfg.Tasks.ListLimit() != 50 || cfg.Tasks.MaintenanceModelRole != "fast_classifier" || len(cfg.Tasks.MaintenanceFallbackRoles) != 1 || cfg.Tasks.MaintenanceFallbackRoles[0] != "background_review" {
 		t.Fatalf("task overrides = %+v", cfg.Tasks)
 	}
 	if doneAfter != 48*time.Hour || cancelledAfter != 0 {
 		t.Fatalf("archive overrides = %s/%s", doneAfter, cancelledAfter)
+	}
+	if debounce != 2*time.Minute || maxWait != 10*time.Minute || batchMax != 50 {
+		t.Fatalf("maintenance overrides = %s/%s/%d", debounce, maxWait, batchMax)
 	}
 }

@@ -44,6 +44,25 @@ func TestFormatTaskStatusRunningShowsElapsed(t *testing.T) {
 	}
 }
 
+func TestFormatTaskStatusUsesUnambiguousPlanMarkers(t *testing.T) {
+	task := &control.Task{Title: "ship release", Status: "in_progress"}
+	plan := []taskPlanStep{
+		{Step: "inspect", Status: "completed"},
+		{Step: "deploy", Status: "in_progress"},
+		{Step: "verify", Status: "pending"},
+		{Step: "optional cleanup", Status: "cancelled"},
+	}
+	card := formatTaskStatus(task, nil, nil, plan)
+	for _, want := range []string{"- ✓ inspect", "- → deploy", "- ○ verify", "- − optional cleanup"} {
+		if !strings.Contains(card, want) {
+			t.Fatalf("status card missing %q: %q", want, card)
+		}
+	}
+	if strings.Contains(card, "[x]") {
+		t.Fatalf("status card must not use an ambiguous x marker: %q", card)
+	}
+}
+
 // TestTaskCardStatusMapping: the /tasks card bracket is the simplified state —
 // running (live run) beats everything, terminal statuses render verbatim,
 // pending approvals/questions or blocked read as waiting, and every other open

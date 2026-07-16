@@ -262,16 +262,7 @@ func formatTaskStatus(task *control.Task, handoff *control.Handoff, active *acti
 	if len(plan) > 0 {
 		sb.WriteString("\nPlan:\n")
 		for _, step := range plan {
-			marker := "[ ]"
-			switch step.Status {
-			case "completed":
-				marker = "[x]"
-			case "in_progress":
-				marker = "[>]"
-			case "cancelled":
-				marker = "[-]"
-			}
-			fmt.Fprintf(&sb, "- %s %s\n", marker, step.Step)
+			fmt.Fprintf(&sb, "- %s %s\n", planStatusMarker(step.Status), step.Step)
 		}
 	}
 	if handoff != nil {
@@ -308,4 +299,20 @@ func formatTaskStatus(task *control.Task, handoff *control.Handoff, active *acti
 		}
 	}
 	return strings.TrimSpace(sb.String())
+}
+
+// planStatusMarker keeps plain-text plan rendering unambiguous across CLI and
+// IM clients. In particular, "x" is commonly read as a failure rather than a
+// checked checkbox when Markdown is not rendered.
+func planStatusMarker(status string) string {
+	switch status {
+	case "completed":
+		return "✓"
+	case "in_progress":
+		return "→"
+	case "cancelled":
+		return "−"
+	default:
+		return "○"
+	}
 }

@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"regexp"
 	"strings"
 	"time"
 
@@ -15,7 +14,6 @@ import (
 	"selfmind/internal/kernel"
 	"selfmind/internal/kernel/llm"
 	"selfmind/internal/kernel/memory"
-	"selfmind/internal/platform/textutil"
 	"selfmind/internal/tools"
 	"selfmind/internal/ui/common"
 	"selfmind/internal/ui/components"
@@ -104,6 +102,7 @@ type uiModel struct {
 	thinkingDots          int       // Counter for "..." animation
 	thinkingStart         time.Time // When current thinking started
 	activityText          string    // Current model/tool phase shown in transcript
+	activePlanJSON        string    // Latest complete plan snapshot, rendered above the composer
 	runStatus             string    // ready | working | done | error | cancelled
 	migrationHint         string    // Hint for migrating Hermes skills
 	streamController      markdownStreamController
@@ -386,11 +385,6 @@ func (m *uiModel) Init() tea.Cmd {
 	return tea.Batch(m.spinner.Tick, cursorBlinkTick())
 }
 
-var ansiRegex = regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]`)
-
-func stripANSI(s string) string {
-	return textutil.CleanUTF8(ansiRegex.ReplaceAllString(s, ""))
-}
 func (m *uiModel) anyToolRunning() bool {
 	for i := range m.messages {
 		if m.messages[i].Role == "tool" && m.messages[i].IsRunning {
@@ -631,6 +625,13 @@ type MsgToolDone struct {
 	Duration   float64
 }
 
+// MsgPlanUpdated replaces the live plan shown above the composer. Plan events
+// are snapshots rather than transcript cells: only the latest snapshot is
+// useful while the run is active, and finalized terminal history stays clean.
+type MsgPlanUpdated struct {
+	Content string
+}
+
 type MsgLearningEvent struct {
 	Content string
 }
@@ -712,6 +713,7 @@ func (m *uiModel) cancelActiveRunLocally() tea.Cmd {
 	m.thinking = false
 	m.activityText = ""
 	m.toolExecuting = ""
+	m.activePlanJSON = ""
 	m.steerCh = nil
 	m.runStatus = "cancelled"
 	m.statusMsg = "Task cancelled by user."

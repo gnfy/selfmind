@@ -273,9 +273,9 @@ func TestDigestActiveRunShowsProgress(t *testing.T) {
 		t.Fatal("active run missing from the digest")
 	}
 	wantPlan := []string{
-		"[x] Dump the schema",
-		"[>] Rewrite the migrations",
-		"[ ] Replay onto staging",
+		"✓ Dump the schema",
+		"→ Rewrite the migrations",
+		"○ Replay onto staging",
 	}
 	if len(digest.ActiveRun.PlanSteps) != len(wantPlan) {
 		t.Fatalf("plan steps = %v", digest.ActiveRun.PlanSteps)
@@ -314,7 +314,7 @@ func TestDigestPlanLinesBounded(t *testing.T) {
 	if len(lines) > digestPlanMaxLines {
 		t.Fatalf("plan lines exceed the budget: %v", lines)
 	}
-	if lines[0] != "[>] step 01" {
+	if lines[0] != "→ step 01" {
 		t.Fatalf("first line = %q", lines[0])
 	}
 	if last := lines[len(lines)-1]; !strings.Contains(last, "more steps") {
@@ -332,7 +332,7 @@ func TestDigestPlanLinesBounded(t *testing.T) {
 	}
 	foundCurrent := false
 	for _, line := range lines {
-		if strings.HasPrefix(line, "[>] step 11") {
+		if strings.HasPrefix(line, "→ step 11") {
 			foundCurrent = true
 		}
 	}

@@ -2,6 +2,7 @@ package tools
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -64,5 +65,53 @@ func TestFinishRunToolNormalizesApprovalStatus(t *testing.T) {
 	}
 	if out["need_approve"] != true {
 		t.Fatalf("need_approve = %v, want true", out["need_approve"])
+	}
+}
+
+func TestFinishRunRequiresResolvedSharedPlan(t *testing.T) {
+	store := NewPlanStore()
+	plan := NewUpdatePlanToolWithStore(store)
+	finish := NewFinishRunToolWithStore(store)
+	base := map[string]interface{}{"_tenant_id": "tenant-plan-finalization"}
+
+	_, err := plan.Execute(map[string]interface{}{
+		"_tenant_id": base["_tenant_id"],
+		"plan": []interface{}{
+			map[string]interface{}{"step": "Implement change", "status": "completed"},
+			map[string]interface{}{"step": "Run verification", "status": "in_progress"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("initial plan update failed: %v", err)
+	}
+
+	_, err = finish.Execute(map[string]interface{}{
+		"_tenant_id": base["_tenant_id"],
+		"status":     "done",
+		"summary":    "Completed the work.",
+	})
+	if err == nil || !strings.Contains(err.Error(), "unresolved plan steps") {
+		t.Fatalf("finish_run should reject an unresolved plan, got: %v", err)
+	}
+
+	_, err = plan.Execute(map[string]interface{}{
+		"_tenant_id": base["_tenant_id"],
+		"plan": []interface{}{
+			map[string]interface{}{"step": "Implement change", "status": "completed"},
+			map[string]interface{}{"step": "Run verification", "status": "completed"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("final plan update failed: %v", err)
+	}
+	if _, ok := store.Get("tenant-plan-finalization"); ok {
+		t.Fatal("resolved plan should be released from the runtime guard store")
+	}
+	if _, err := finish.Execute(map[string]interface{}{
+		"_tenant_id": base["_tenant_id"],
+		"status":     "done",
+		"summary":    "Completed and verified the work.",
+	}); err != nil {
+		t.Fatalf("finish_run rejected a resolved plan: %v", err)
 	}
 }

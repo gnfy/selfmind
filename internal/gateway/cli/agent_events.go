@@ -220,13 +220,10 @@ func (m *uiModel) forwardGatewayEvent(event llm.StreamEvent) {
 			Duration:   event.DurationSeconds,
 		})
 	case "plan.updated":
-		// Render the live plan as a Codex-style checklist. The event payload holds
-		// the full plan (steps + explanation); rebuild the JSON renderPlanCell
-		// parses and commit it as an update_plan tool cell. This is the only path
-		// that shows the [x]/[>]/[ ] step list in client-mode TUIs (the default).
+		// A plan is mutable run state, not immutable terminal history. Replace the
+		// live snapshot above the composer so progress updates in place.
 		if planJSON := planJSONFromEvent(event); planJSON != "" {
-			m.program.Send(MsgToolStart{ToolName: "update_plan"})
-			m.program.Send(MsgToolDone{ToolName: "update_plan", Result: planJSON})
+			m.program.Send(MsgPlanUpdated{Content: planJSON})
 		}
 	case "tool.output":
 		if event.Content != "" {
@@ -365,8 +362,14 @@ func (m *uiModel) handleStructuredAgentEvent(event kernel.AgentEvent) {
 			m.program.Send(MsgAgentActivity{Content: displayActivityEvent(event.Type, event.Content)})
 		}
 	case "tool.started":
+		if event.ToolName == "update_plan" {
+			return
+		}
 		m.program.Send(MsgToolStart{ToolName: event.ToolName, ToolCallID: event.ToolCallID, Args: event.ToolArgs})
 	case "tool.completed":
+		if event.ToolName == "update_plan" {
+			return
+		}
 		var err error
 		if event.Error != "" {
 			err = fmt.Errorf("%s", event.Error)
@@ -394,7 +397,10 @@ func (m *uiModel) handleStructuredAgentEvent(event kernel.AgentEvent) {
 			m.program.Send(MsgTokens{Run: run})
 		}
 	case "plan.updated":
-		m.program.Send(MsgLearningEvent{Content: "Plan updated."})
+		streamEvent := llm.StreamEvent{EventType: event.Type, Payload: event.Payload}
+		if planJSON := planJSONFromEvent(streamEvent); planJSON != "" {
+			m.program.Send(MsgPlanUpdated{Content: planJSON})
+		}
 	case "run.outcome":
 		m.program.Send(MsgLearningEvent{Content: "Outcome recorded."})
 	case "learning.review":

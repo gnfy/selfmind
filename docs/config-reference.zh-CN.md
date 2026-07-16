@@ -191,6 +191,9 @@ tasks:
   auto_archive_cancelled_after: "168h" # 7 天
   maintenance_model_role: "memory_extract"  # run 后标签/事实整理用的角色
   maintenance_fallback_roles: ["background_review", "fast_classifier"] # 显式廉价角色故障切换，不会隐式使用主模型
+  maintenance_debounce: "5m"       # 安静窗口后再做语义治理
+  maintenance_max_wait: "15m"      # 持续有新 run 时也不会无限等待
+  maintenance_batch_max_runs: 10   # 单次模型调用最多处理的 run 数
 ```
 
 自动归档只碰陈旧、终态、未 pin、无活跃 run 的任务。
@@ -214,6 +217,10 @@ tasks:
   maintenance_model_role: "memory_extract"
   maintenance_fallback_roles: ["maintenance_backup", "background_review"]
 ```
+
+run 终态事务会立即保存可重放证据。三个批处理参数只延迟可逆的任务标签和
+长期记忆治理，不延迟最终回答，也不影响最近对话连续性。批次绝不跨 tenant、
+person 或 workspace。空值或零时长使用产品默认值。
 
 ## 8. 诊断：飞行记录器
 

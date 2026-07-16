@@ -59,8 +59,11 @@
 - **相似度只提名，永不决策。** 任何字符串/向量相似度只产生候选，"是否同一
   事实"的语义判断只属于显式配置的便宜模型（`memory_extract` role，绝不回退
   主 coding model）。
-- **每个 run 至多一次维护模型调用。** 记忆入库决策必须并入现有 post-run
-  maintenance 调用（与 task labeler 同一次），不得新增第二条抽取/决策通路。
+- **每个 run 至多一个维护结果，但多个 run 可以共用一次模型调用。** run 终态
+  事务只持久化证据；daemon 按 tenant/person/workspace 防抖分组，批量调用一次
+  便宜模型，再按 run_id 冻结和应用各自的 task + memory 决策。记忆入库决策
+  必须与 task labeler 共用这条通路，不得新增第二条抽取/决策通路。显式的用户
+  memory 命令仍即时执行；最近对话由 work spine 即时承接，不依赖治理完成。
 - **pinned 与 `SourceUser` 对自动维护不可变。** 自动流程对其只允许
   KEEP/CONFLICT。
 - **一切自动改动可审计、可撤销。** 归档不等于删除；物理删除只发生在 forget

@@ -124,3 +124,26 @@ func TestDecodePostRunAnalysisRejectsNonJSON(t *testing.T) {
 		t.Fatal("non-JSON analyzer output must be rejected")
 	}
 }
+
+func TestPostRunAnalyzerBatchesProviderCallAndKeysResultsByRun(t *testing.T) {
+	model := &postRunProviderStub{content: `{
+		"runs":[
+			{"run_id":"run-2","task_decision":"INBOX"},
+			{"run_id":"run-1","task_decision":"TITLE:Release checks"}
+		]
+	}`}
+	analyzer := &llmPostRunAnalyzer{provider: model}
+	results, err := analyzer.AnalyzeBatch(context.Background(), []httpapi.PostRunAnalysisRequest{
+		{Prompt: "first", TenantID: "tenant", PersonID: "person", WorkspaceID: "ws", TaskID: "task-1", RunID: "run-1"},
+		{Prompt: "second", TenantID: "tenant", PersonID: "person", WorkspaceID: "ws", TaskID: "task-2", RunID: "run-2"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if model.calls != 1 {
+		t.Fatalf("provider calls = %d", model.calls)
+	}
+	if results["run-1"].TaskDecision != "TITLE:Release checks" || results["run-2"].TaskDecision != "INBOX" {
+		t.Fatalf("results = %+v", results)
+	}
+}

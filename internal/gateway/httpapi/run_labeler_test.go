@@ -52,8 +52,8 @@ func (f *fakeLabeler) callCount() int {
 	return f.calls
 }
 
-// runOrdinaryTurn sends one ordinary sync message and waits for any labeler
-// goroutine spawned by its finalization to finish.
+// runOrdinaryTurn sends one ordinary sync message and advances the daemon-only
+// maintenance worker past its debounce window.
 func runOrdinaryTurn(t *testing.T, daemon *Server, content string) api.MessageResponse {
 	t.Helper()
 	resp, status := daemon.ProcessMessage(context.Background(), api.MessageRequest{
@@ -62,8 +62,13 @@ func runOrdinaryTurn(t *testing.T, daemon *Server, content string) api.MessageRe
 	if status != 200 || resp.Task == nil {
 		t.Fatalf("turn failed: status=%d resp=%+v", status, resp)
 	}
-	daemon.postRunWG.Wait()
+	drainPostRunMaintenance(daemon)
 	return resp
+}
+
+func drainPostRunMaintenance(daemon *Server) {
+	daemon.PostRunMaintenance = PostRunMaintenanceOptions{Debounce: -1, MaxWait: -1, BatchMaxRuns: 10}
+	daemon.runMaintenancePassAt(context.Background(), time.Now())
 }
 
 func hasEventOfType(t *testing.T, store *control.Store, taskID, eventType string) bool {
@@ -325,7 +330,7 @@ func TestLabelerSkippedForExplicitAttach(t *testing.T) {
 	if status != 200 || resp.Task == nil || resp.Task.ID != parked.ID {
 		t.Fatalf("explicit attach failed: %+v", resp.Task)
 	}
-	daemon.postRunWG.Wait()
+	drainPostRunMaintenance(daemon)
 	if fake.callCount() != 0 {
 		t.Fatalf("labeler must not run for explicit attaches, got %d calls", fake.callCount())
 	}
@@ -348,7 +353,7 @@ func TestPostRunAnalyzerLearnsFromSubstantiveExplicitAttachWithoutRelabeling(t *
 	if status != 200 || resp.Task == nil || resp.Task.ID != parked.ID {
 		t.Fatalf("explicit attach failed: %+v", resp)
 	}
-	daemon.postRunWG.Wait()
+	drainPostRunMaintenance(daemon)
 	if fake.callCount() != 1 {
 		t.Fatalf("substantive run should receive one combined maintenance call, got %d", fake.callCount())
 	}
@@ -381,8 +386,14 @@ func TestLabelerDoesNotBlockResponse(t *testing.T) {
 	if before == nil || before.Title != "slow labeling turn" {
 		t.Fatalf("provisional title should stand while the labeler deliberates: %+v", before)
 	}
+	done := make(chan struct{})
+	go func() {
+		drainPostRunMaintenance(daemon)
+		close(done)
+	}()
+	waitUntil(t, 2*time.Second, func() bool { return fake.callCount() == 1 }, "maintenance worker did not start the labeler")
 	close(fake.block)
-	daemon.postRunWG.Wait()
+	<-done
 	waitUntil(t, 2*time.Second, func() bool {
 		after, _ := store.GetTask(ctx, resp.Task.TenantID, resp.Task.ID)
 		return after != nil && after.Title == "Named after release"

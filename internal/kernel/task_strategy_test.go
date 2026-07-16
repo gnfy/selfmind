@@ -120,7 +120,7 @@ func TestFilterToolCallsByLifecycleCaps(t *testing.T) {
 		{Function: "read_file"},
 	}
 	got, dropped := filterToolCallsByLifecycleCaps(calls, map[string]int{
-		"update_plan": 3,
+		"update_plan": 16,
 		"finish_run":  1,
 	})
 	if dropped != 2 {
@@ -140,7 +140,7 @@ func TestFilterToolCallsByLifecycleCapsConsumesCurrentBatch(t *testing.T) {
 		{Function: "read_file"},
 	}
 	got, dropped := filterToolCallsByLifecycleCaps(calls, map[string]int{
-		"update_plan": 1,
+		"update_plan": 15,
 	})
 	if dropped != 2 {
 		t.Fatalf("dropped = %d, want 2", dropped)
@@ -150,6 +150,35 @@ func TestFilterToolCallsByLifecycleCapsConsumesCurrentBatch(t *testing.T) {
 	}
 	if got[0].Function != "update_plan" || got[1].Function != "finish_run" || got[2].Function != "read_file" {
 		t.Fatalf("got = %+v, want one update_plan, one finish_run, and read_file", got)
+	}
+}
+
+func TestUpdatePlanLifecycleCapSupportsMeaningfulProgress(t *testing.T) {
+	if got := lifecycleToolCap("update_plan"); got != 16 {
+		t.Fatalf("update_plan lifecycle cap = %d, want 16", got)
+	}
+	calls := make([]llm.ToolCall, 17)
+	for i := range calls {
+		calls[i] = llm.ToolCall{Function: "update_plan"}
+	}
+	got, dropped := filterToolCallsByLifecycleCaps(calls, map[string]int{})
+	if len(got) != 16 || dropped != 1 {
+		t.Fatalf("len(got)=%d dropped=%d, want 16 and 1", len(got), dropped)
+	}
+}
+
+func TestUnresolvedPlanStepsFromToolCall(t *testing.T) {
+	call := llm.ToolCall{Function: "update_plan", Args: `{"plan":[{"step":"inspect","status":"completed"},{"step":"verify","status":"in_progress"},{"step":"optional cleanup","status":"cancelled"}]}`}
+	got, ok := unresolvedPlanStepsFromToolCall(call)
+	if !ok || len(got) != 1 || got[0] != "verify" {
+		t.Fatalf("unresolved plan = %v, ok=%v; want [verify], true", got, ok)
+	}
+}
+
+func TestFinishRunStatusFromToolCall(t *testing.T) {
+	got, ok := finishRunStatusFromToolCall(llm.ToolCall{Function: "finish_run", Args: `{"status":"waiting_external"}`})
+	if !ok || got != "waiting_external" {
+		t.Fatalf("finish status = %q, ok=%v", got, ok)
 	}
 }
 

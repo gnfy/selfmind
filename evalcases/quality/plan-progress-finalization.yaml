@@ -1,0 +1,35 @@
+id: plan_progress_finalization
+title: "A visible implementation plan is updated and fully resolved"
+suite: quality
+workspace: isolated
+channel: cli
+require_cassette: false
+
+turns:
+  - input: >-
+      Create plan-progress.txt containing exactly PLAN-COMPLETE. Maintain a
+      visible three-step plan for inspect, write, and verify. Update the plan
+      after each meaningful transition, verify the exact file contents, and do
+      not finish while any plan step is pending or in progress.
+
+expect:
+  status: completed
+  require_tool_events: true
+  min_tool_calls: 2
+  max_tool_errors: 0
+
+assert_state:
+  - on: file
+    path: plan-progress.txt
+    exists: true
+    matches: "^PLAN-COMPLETE\\n?$"
+
+checks:
+  no_mojibake: true
+  no_raw_json_leak: true
+  no_empty_response: true
+  no_provider_stack_dump: true
+
+# Unit tests enforce snapshot replacement and unresolved-plan reconciliation.
+# This eval keeps the full agent path honest: plan, implementation, evidence,
+# and completion must converge in one run.

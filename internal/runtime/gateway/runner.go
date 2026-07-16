@@ -165,11 +165,15 @@ func Run(ctx context.Context, opts Options) error {
 		ToolOutputDir: filepath.Join(dataDir, "tool-output"),
 	}
 	doneAfter, cancelledAfter := cfg.Tasks.AutoArchiveDurations()
+	maintenanceDebounce, maintenanceMaxWait, maintenanceBatchMax := cfg.Tasks.MaintenanceBatchPolicy()
 	gatewayAPI.TaskGovernance = httpapi.TaskGovernanceOptions{
 		InboxEnabled:              cfg.Tasks.InboxEnabled,
 		DefaultListLimit:          cfg.Tasks.ListLimit(),
 		AutoArchiveDoneAfter:      doneAfter,
 		AutoArchiveCancelledAfter: cancelledAfter,
+	}
+	gatewayAPI.PostRunMaintenance = httpapi.PostRunMaintenanceOptions{
+		Debounce: maintenanceDebounce, MaxWait: maintenanceMaxWait, BatchMaxRuns: maintenanceBatchMax,
 	}
 	// Periodic stuck-run recovery: while the daemon runs, mark heartbeat-dead
 	// runs (and their tasks) interrupted. Runs in the coordinator's active-run

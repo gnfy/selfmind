@@ -56,10 +56,19 @@ func (d *Server) diagReply(ctx context.Context, identity *control.IdentityContex
 				activeWatches, watches[control.ExternalWatchFailed], watches[control.ExternalWatchTimedOut])
 		}
 	}
-	if health, err := d.Control.MaintenanceHealthForPerson(ctx, identity.TenantID, identity.PersonID); err == nil && health.Blocked > 0 {
-		fmt.Fprintf(&sb, "Background learning: paused (%d job(s))\n", health.Blocked)
-		if reason := strings.TrimSpace(health.LastError); reason != "" {
-			fmt.Fprintf(&sb, "- provider: %s\n", truncate(toOneLine(tools.RedactSensitive(reason)), 140))
+	if health, err := d.Control.MaintenanceHealthForPerson(ctx, identity.TenantID, identity.PersonID); err == nil {
+		if health.Pending > 0 || health.Running > 0 {
+			oldest := ""
+			if !health.OldestPendingAt.IsZero() {
+				oldest = fmt.Sprintf(", oldest %s", time.Since(health.OldestPendingAt).Round(time.Second))
+			}
+			fmt.Fprintf(&sb, "Background learning: queued %d, running %d (batched%s)\n", health.Pending, health.Running, oldest)
+		}
+		if health.Blocked > 0 {
+			fmt.Fprintf(&sb, "Background learning: paused (%d job(s))\n", health.Blocked)
+			if reason := strings.TrimSpace(health.LastError); reason != "" {
+				fmt.Fprintf(&sb, "- provider: %s\n", truncate(toOneLine(tools.RedactSensitive(reason)), 140))
+			}
 		}
 	}
 

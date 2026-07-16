@@ -280,7 +280,7 @@ type DigestActiveRun struct {
 	Title          string `json:"title,omitempty"`
 	ElapsedSeconds int64  `json:"elapsed_seconds"`
 	// PlanSteps is the run's current plan as pre-rendered checklist lines
-	// ("[x] done", "[>] current", "[ ] pending", "[-] cancelled"), bounded to
+	// ("✓ done", "→ current", "○ pending", "− cancelled"), bounded to
 	// a handful of lines server-side; a long plan collapses completed leading
 	// steps and truncates the tail with "… N more steps". Empty when the run
 	// published no plan.

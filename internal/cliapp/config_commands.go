@@ -101,6 +101,9 @@ var configReportDefaultPaths = [][]string{
 	{"tasks", "auto_archive_cancelled_after"},
 	{"tasks", "maintenance_model_role"},
 	{"tasks", "maintenance_fallback_roles"},
+	{"tasks", "maintenance_debounce"},
+	{"tasks", "maintenance_max_wait"},
+	{"tasks", "maintenance_batch_max_runs"},
 	{"storage", "type"},
 	{"storage", "data_dir"},
 }

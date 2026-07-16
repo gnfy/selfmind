@@ -123,15 +123,20 @@ authoritative instruction. If it changes direction, the latest message wins."*
 
 ### Labels (task demoted, name kept) — SHIPPED (P3, 2026-07-06)
 
-- After an eligible run finishes, one cheap-model call combines reversible task
-  hygiene with durable fact extraction. Implementation:
+- After a run finishes, finalization persists replayable evidence without
+  calling a model. The daemon eligibility-filters and batches adjacent jobs for
+  the same tenant/person/workspace after a five-minute quiet window (bounded by
+  a fifteen-minute maximum wait and a configurable run-count cap). One
+  cheap-model call may therefore combine reversible task hygiene with durable
+  fact extraction for several runs, while returning one independently frozen
+  result keyed by each run id. Implementation:
   `httpapi/run_labeler.go` (`PostRunAnalyzer` on `Server`, built by
   `app.NewConfiguredPostRunAnalyzer` from the explicit
   `tasks.maintenance_model_role`; no configured role disables maintenance
   instead of falling back to the main model). Its task decision is KEEP /
   MOVE:<task_id> / TITLE:<short title> / INBOX; MOVE only targets an offered
-  open label, every failure degrades to KEEP, and the call runs asynchronously
-  after finalization under a bounded timeout.
+  open label, every failure preserves the completed run, and semantic
+  maintenance runs asynchronously in the daemon under a bounded timeout.
 - Titles are stable: generated once (TITLE, new placeholders only; fallback
   stays the truncated first input), never auto-renamed; `/task <id> rename`
   for humans.
@@ -187,12 +192,17 @@ Tasks remain work labels, but a long-lived assistant also needs label hygiene:
 
 - `work` and `recurring` labels are visible; one `inbox` label per
   person/workspace is hidden and archived.
-- One `PostRunAnalyzer` call combines task-label hygiene and durable user/
-  workspace fact extraction. It uses the explicitly configured
+- One logical `PostRunAnalyzer` result per eligible run combines task-label
+  hygiene and durable user/workspace fact extraction. Several same-person,
+  same-workspace results may share one provider call according to
+  `tasks.maintenance_debounce`, `tasks.maintenance_max_wait`, and
+  `tasks.maintenance_batch_max_runs`. It uses the explicitly configured
   `tasks.maintenance_model_role` (default `memory_extract`) and never silently
   falls back to the main coding model. It may answer `INBOX` only for casual,
   identity/model, or one-off diagnostic turns with no durable work thread. It
   never runs at ingress and never changes the context the completed run saw.
+  Recent turns remain immediately available from the person work spine; only
+  label and long-term-memory governance is delayed.
 - Analysis is eligibility-gated: a new placeholder, real cross-label
   ambiguity, or a substantive durable outcome may trigger one call. A simple
   established-label turn with no durable facts skips it. Explicit attachment

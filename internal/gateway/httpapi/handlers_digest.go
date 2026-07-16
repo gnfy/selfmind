@@ -175,16 +175,7 @@ func digestPlanLines(plan []taskPlanStep) []string {
 		return nil
 	}
 	render := func(step taskPlanStep) string {
-		marker := "[ ]"
-		switch step.Status {
-		case "completed":
-			marker = "[x]"
-		case "in_progress":
-			marker = "[>]"
-		case "cancelled":
-			marker = "[-]"
-		}
-		return marker + " " + truncate(toOneLine(step.Step), 80)
+		return planStatusMarker(step.Status) + " " + truncate(toOneLine(step.Step), 80)
 	}
 	if len(plan) <= digestPlanMaxLines {
 		lines := make([]string, 0, len(plan))
@@ -214,7 +205,7 @@ func digestPlanLines(plan []taskPlanStep) []string {
 	}
 	var lines []string
 	if cur > 0 {
-		lines = append(lines, fmt.Sprintf("[x] … %d earlier steps done", cur))
+		lines = append(lines, fmt.Sprintf("✓ … %d earlier steps done", cur))
 	}
 	for i := cur; i < len(plan); i++ {
 		if len(lines) == digestPlanMaxLines-1 && i < len(plan)-1 {

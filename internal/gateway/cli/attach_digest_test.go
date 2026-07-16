@@ -165,9 +165,9 @@ func TestStartupDigestRendersActiveRunProgress(t *testing.T) {
 			Title:          "Long migration",
 			ElapsedSeconds: 720,
 			PlanSteps: []string{
-				"[x] Dump the schema",
-				"[>] Rewrite the migrations",
-				"[ ] Replay onto staging",
+				"✓ Dump the schema",
+				"→ Rewrite the migrations",
+				"○ Replay onto staging",
 				"… 4 more steps",
 			},
 			LatestActivity: "running terminal",
@@ -175,9 +175,9 @@ func TestStartupDigestRendersActiveRunProgress(t *testing.T) {
 	})
 	for _, want := range []string{
 		"▶ A task is running now: Long migration (12m)",
-		"    [x] Dump the schema",
-		"    [>] Rewrite the migrations",
-		"    [ ] Replay onto staging",
+		"    ✓ Dump the schema",
+		"    → Rewrite the migrations",
+		"    ○ Replay onto staging",
 		"    … 4 more steps",
 		"    now: running terminal",
 	} {

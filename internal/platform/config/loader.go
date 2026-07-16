@@ -139,6 +139,9 @@ tasks:
   auto_archive_cancelled_after: "168h"
   maintenance_model_role: "memory_extract"
   maintenance_fallback_roles: ["background_review", "fast_classifier"]
+  maintenance_debounce: "5m"
+  maintenance_max_wait: "15m"
+  maintenance_batch_max_runs: 10
 
 editor:
   large_paste_chars: 1000
@@ -273,12 +276,18 @@ type TaskConfig struct {
 	AutoArchiveCancelledAfter string   `mapstructure:"auto_archive_cancelled_after" yaml:"auto_archive_cancelled_after,omitempty"`
 	MaintenanceModelRole      string   `mapstructure:"maintenance_model_role" yaml:"maintenance_model_role,omitempty"`
 	MaintenanceFallbackRoles  []string `mapstructure:"maintenance_fallback_roles" yaml:"maintenance_fallback_roles,omitempty"`
+	MaintenanceDebounce       string   `mapstructure:"maintenance_debounce" yaml:"maintenance_debounce,omitempty"`
+	MaintenanceMaxWait        string   `mapstructure:"maintenance_max_wait" yaml:"maintenance_max_wait,omitempty"`
+	MaintenanceBatchMaxRuns   int      `mapstructure:"maintenance_batch_max_runs" yaml:"maintenance_batch_max_runs,omitempty"`
 }
 
 const (
 	DefaultTaskListLimit            = 10
 	DefaultTaskAutoArchiveDone      = 30 * 24 * time.Hour
 	DefaultTaskAutoArchiveCancelled = 7 * 24 * time.Hour
+	DefaultTaskMaintenanceDebounce  = 5 * time.Minute
+	DefaultTaskMaintenanceMaxWait   = 15 * time.Minute
+	DefaultTaskMaintenanceBatchMax  = 10
 )
 
 func (t TaskConfig) ListLimit() int {
@@ -294,6 +303,22 @@ func (t TaskConfig) ListLimit() int {
 func (t TaskConfig) AutoArchiveDurations() (time.Duration, time.Duration) {
 	return parseTaskDuration(t.AutoArchiveDoneAfter, DefaultTaskAutoArchiveDone),
 		parseTaskDuration(t.AutoArchiveCancelledAfter, DefaultTaskAutoArchiveCancelled)
+}
+
+func (t TaskConfig) MaintenanceBatchPolicy() (time.Duration, time.Duration, int) {
+	debounce := parseTaskDuration(t.MaintenanceDebounce, DefaultTaskMaintenanceDebounce)
+	maxWait := parseTaskDuration(t.MaintenanceMaxWait, DefaultTaskMaintenanceMaxWait)
+	if maxWait > 0 && debounce > maxWait {
+		maxWait = debounce
+	}
+	maxRuns := t.MaintenanceBatchMaxRuns
+	if maxRuns <= 0 {
+		maxRuns = DefaultTaskMaintenanceBatchMax
+	}
+	if maxRuns > 50 {
+		maxRuns = 50
+	}
+	return debounce, maxWait, maxRuns
 }
 
 func parseTaskDuration(raw string, fallback time.Duration) time.Duration {
@@ -766,6 +791,9 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("tasks.auto_archive_cancelled_after", "168h")
 	v.SetDefault("tasks.maintenance_model_role", "memory_extract")
 	v.SetDefault("tasks.maintenance_fallback_roles", []string{"background_review", "fast_classifier"})
+	v.SetDefault("tasks.maintenance_debounce", "5m")
+	v.SetDefault("tasks.maintenance_max_wait", "15m")
+	v.SetDefault("tasks.maintenance_batch_max_runs", DefaultTaskMaintenanceBatchMax)
 	v.SetDefault("evolution.enabled", true)
 	v.SetDefault("evolution.nudge_interval", 10)
 	v.SetDefault("models.source", "local")

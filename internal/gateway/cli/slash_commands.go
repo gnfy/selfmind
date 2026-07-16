@@ -156,6 +156,7 @@ var slashCommands = []slashCommand{
 		slashCommandMeta: slashCommandMetas[11],
 		Run: func(m *uiModel, args []string) tea.Cmd {
 			m.messages = []ChatMessage{}
+			m.activePlanJSON = ""
 			return m.clearHybridScreen()
 		},
 	},

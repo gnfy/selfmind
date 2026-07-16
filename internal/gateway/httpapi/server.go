@@ -60,8 +60,9 @@ type Server struct {
 	// keeps the pre-label and skips automatic learning without affecting the
 	// completed user turn.
 	PostRunAnalyzer PostRunAnalyzer
-	// postRunWG tracks detached maintenance calls for tests and graceful drain.
-	postRunWG sync.WaitGroup
+	// PostRunMaintenance controls the daemon-owned debounce/batch window for
+	// post-run label and memory governance. It never delays run finalization.
+	PostRunMaintenance PostRunMaintenanceOptions
 	// MemoryConsolidator is the background memory self-organization pass
 	// (docs/memory-governance.zh-CN.md §4). Nil disables governance entirely;
 	// the loop is started by the gateway runner via StartMemoryGovernance.

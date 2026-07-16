@@ -199,6 +199,9 @@ tasks:
   auto_archive_cancelled_after: "168h" # 7d
   maintenance_model_role: "memory_extract"  # role for post-run label/fact maintenance
   maintenance_fallback_roles: ["background_review", "fast_classifier"] # explicit cheap-role failover; never the primary model implicitly
+  maintenance_debounce: "5m"       # wait for a quiet window before semantic maintenance
+  maintenance_max_wait: "15m"      # force a batch even if runs keep arriving
+  maintenance_batch_max_runs: 10   # never put more than this many runs in one call
 ```
 
 Auto-archive only touches stale, terminal, unpinned tasks with no live run.
@@ -222,6 +225,12 @@ tasks:
   maintenance_model_role: "memory_extract"
   maintenance_fallback_roles: ["maintenance_backup", "background_review"]
 ```
+
+Run finalization always persists replayable evidence immediately. The three
+batch settings only delay reversible task-label and long-term-memory governance;
+they do not delay the final answer or recent conversation continuity. Batches
+never cross tenant, person, or workspace boundaries. Empty or zero duration
+values use the product defaults.
 
 ## 8. Diagnostics: flight recorder
 

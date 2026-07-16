@@ -628,17 +628,17 @@ func TestCommandToolMessageShowsOutputHead(t *testing.T) {
 		Duration: 4.2,
 	}, 120))
 
-	if !strings.Contains(rendered, "Ran go test ./...") {
+	if !strings.Contains(rendered, "Ran tests") {
 		t.Fatalf("command message missing action: %q", rendered)
 	}
-	if !strings.Contains(rendered, "8 lines") {
-		t.Fatalf("command message should summarize line count: %q", rendered)
+	if strings.Contains(rendered, "go test ./...") {
+		t.Fatalf("command header should use a semantic summary: %q", rendered)
 	}
 	if !strings.Contains(rendered, "selfmind/internal/kernel") {
 		t.Fatalf("command message should show output head: %q", rendered)
 	}
-	if !strings.Contains(rendered, "2 more line(s)") {
-		t.Fatalf("command output should be bounded with a remainder note: %q", rendered)
+	if !strings.Contains(rendered, "4 more lines") || !strings.Contains(rendered, "line8") {
+		t.Fatalf("command output should use a bounded head/tail preview: %q", rendered)
 	}
 }
 
@@ -902,7 +902,7 @@ func TestHybridActiveBlockShowsOnlyUncommitted(t *testing.T) {
 	if strings.Contains(block, "committed answer") {
 		t.Fatalf("active block must not include committed cells: %q", block)
 	}
-	if !strings.Contains(block, "go test ./...") {
+	if !strings.Contains(block, "Running tests") {
 		t.Fatalf("active block should show the in-progress tool: %q", block)
 	}
 	if !strings.Contains(block, "streaming reply in progress") {

@@ -262,7 +262,7 @@ func isCommandTool(label string) bool {
 // toolHeaderLine renders the codex-style cell header: a status bullet (◦ dim
 // while running, • green on command success, • red on failure, • dim otherwise)
 // followed by the bold action title.
-func toolHeaderLine(action string, running, isErr, isCommand bool) string {
+func toolHeaderLine(action string, running, isErr, isCommand bool, duration float64, width int) string {
 	var bullet string
 	switch {
 	case running:
@@ -274,7 +274,29 @@ func toolHeaderLine(action string, running, isErr, isCommand bool) string {
 	default:
 		bullet = toolBulletDim.Render(glyphBullet)
 	}
-	return bullet + " " + toolHeaderStyle.Render(action)
+	action = strings.TrimSpace(sanitizeTerminalText(action))
+	suffix := ""
+	if duration > 0 {
+		suffix = fmt.Sprintf(" %.1fs", duration)
+	}
+	available := width - 2 - runewidth.StringWidth(suffix)
+	if available < 12 {
+		available = 12
+	}
+	rows := physicalDisplayLines(action, available)
+	if len(rows) == 0 {
+		rows = []string{"tool"}
+	}
+	if len(rows) > maxToolHeaderRows {
+		rows = rows[:maxToolHeaderRows]
+		rows[1] = truncateToWidth(rows[1], max(4, available-3)) + "..."
+	}
+	var sb strings.Builder
+	sb.WriteString(bullet + " " + toolHeaderStyle.Render(rows[0]) + toolBulletDim.Render(suffix))
+	for _, row := range rows[1:] {
+		sb.WriteString("\n  " + toolBulletDim.Render(row))
+	}
+	return sb.String()
 }
 
 // exploreVerbStyle colors the Read/List/Search verb in an "Explored" group
@@ -435,11 +457,13 @@ func renderToolMessage(msg ChatMessage, width int) string {
 	isCmd := isCommandTool(label)
 	var sb strings.Builder
 	if !done {
-		sb.WriteString(toolHeaderLine(action, true, false, isCmd) + "\n")
+		sb.WriteString(toolHeaderLine(action, true, false, isCmd, 0, width) + "\n")
 		if detail := strings.TrimSpace(msg.RunningDetail); detail != "" {
 			sb.WriteString("  " + glyphCorner + " " + truncateToWidth(detail, width-6) + "\n")
 		}
-		if result := toolResultLine(label, msg.Content, width-6); result != "" {
+		if isCmd {
+			sb.WriteString(renderCommandOutputBlock(label, msg.Content, width))
+		} else if result := toolResultLine(label, msg.Content, width-6); result != "" {
 			sb.WriteString("  " + glyphCorner + " " + result + "\n")
 		}
 		return sb.String()
@@ -471,18 +495,17 @@ func renderToolMessage(msg ChatMessage, width int) string {
 		}
 	}
 
-	// The red bullet conveys failure; keep a dim duration suffix.
-	sb.WriteString(toolHeaderLine(action, false, msg.IsError, isCmd))
-	if msg.Duration > 0 {
-		sb.WriteString(toolBulletDim.Render(fmt.Sprintf(" %.1fs", msg.Duration)))
-	}
+	// The red bullet conveys failure; duration stays visually subordinate.
+	sb.WriteString(toolHeaderLine(action, false, msg.IsError, isCmd, msg.Duration, width))
 	sb.WriteString("\n")
-	if result := toolResultLine(label, msg.Content, width-6); result != "" {
-		sb.WriteString("  " + glyphCorner + " " + result + "\n")
+	if !isCmd {
+		if result := toolResultLine(label, msg.Content, width-6); result != "" {
+			sb.WriteString("  " + glyphCorner + " " + result + "\n")
+		}
 	}
-	// For command tools, show a bounded head of the actual output so the run is
-	// not a black box. File-editing tools get a colored diff instead.
-	if block := renderCommandOutputBlock(label, msg.Content, width-4); block != "" {
+	// Command tools use a bounded physical-row head/tail preview. File-editing
+	// tools retain their compact colored diff.
+	if block := renderCommandOutputBlock(label, msg.Content, width); block != "" {
 		sb.WriteString(block)
 	} else if !msg.IsError {
 		if diff := renderToolDiff(label, args, width-4); diff != "" {
@@ -492,37 +515,27 @@ func renderToolMessage(msg ChatMessage, width int) string {
 	return sb.String()
 }
 
-// renderCommandOutputBlock shows a bounded head of raw command output (stdout/
-// stderr) as dim lines, Codex-style. Terminal tools return plain text rather
-// than JSON, so without this the transcript would only ever show the first line
-// of any command's output. It renders nothing for single-line or empty output
-// (the one-line summary already covers that) and only applies to command tools.
+// renderCommandOutputBlock shows a bounded physical-row head/tail preview of
+// raw command output (stdout/stderr) as dim lines, Codex-style. Keeping the tail
+// preserves compiler and shell diagnostics without letting long output take
+// over the transcript. It only applies to command tools.
 func renderCommandOutputBlock(label, content string, width int) string {
 	switch label {
 	case "terminal", "execute_command", "shell":
 	default:
 		return ""
 	}
-	content = strings.TrimRight(stripANSI(content), "\n")
-	if strings.TrimSpace(content) == "" {
+	if strings.TrimSpace(sanitizeTerminalText(content)) == "" {
 		return ""
 	}
-	lines := strings.Split(content, "\n")
-	if len(lines) <= 1 {
-		return ""
-	}
-	const maxLines = 6
+	lines := boundedCommandOutputRows(content, max(8, width-4), maxCommandOutputRows)
 	var sb strings.Builder
-	shown := 0
-	for _, ln := range lines {
-		if shown >= maxLines {
-			break
+	for i, ln := range lines {
+		prefix := "    "
+		if i == 0 {
+			prefix = "  " + glyphCorner + " "
 		}
-		sb.WriteString("  " + glyphCorner + " " + diffCtxStyle.Render(truncateToWidth(ln, width-4)) + "\n")
-		shown++
-	}
-	if len(lines) > maxLines {
-		sb.WriteString("  " + glyphCorner + " " + diffCtxStyle.Render(fmt.Sprintf("… %d more line(s)", len(lines)-maxLines)) + "\n")
+		sb.WriteString(prefix + diffCtxStyle.Render(ln) + "\n")
 	}
 	return sb.String()
 }
@@ -929,11 +942,7 @@ func toolAction(label string, args map[string]interface{}, done bool) string {
 	detail := toolDetail(args, "path", "pattern", "query", "command", "name", "action")
 	switch label {
 	case "terminal", "execute_command", "shell":
-		detail = toolDetail(args, "command", "path")
-		if done {
-			return "Ran " + valueOr(detail, label)
-		}
-		return "Running " + valueOr(detail, label)
+		return commandToolAction(toolDetail(args, "command", "path"), done)
 	case "cat", "read_file":
 		detail = toolDetail(args, "path")
 		if done {
@@ -998,7 +1007,7 @@ func toolAction(label string, args map[string]interface{}, done bool) string {
 func toolDetail(args map[string]interface{}, keys ...string) string {
 	for _, key := range keys {
 		if v, ok := args[key].(string); ok && strings.TrimSpace(v) != "" {
-			return strings.TrimSpace(v)
+			return strings.TrimSpace(sanitizeTerminalText(v))
 		}
 	}
 	return ""

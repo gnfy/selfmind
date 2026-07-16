@@ -33,10 +33,17 @@ func NewPlanStore() *PlanStore {
 }
 
 func NewUpdatePlanTool() *PlanTool {
+	return NewUpdatePlanToolWithStore(NewPlanStore())
+}
+
+func NewUpdatePlanToolWithStore(store *PlanStore) *PlanTool {
+	if store == nil {
+		store = NewPlanStore()
+	}
 	return &PlanTool{
 		BaseTool: BaseTool{
 			name:        "update_plan",
-			description: "Update the visible task plan. Use only for non-trivial multi-step work; do not use for one-shot answers, small code examples, simple commands, or direct explanations. Keep exactly one step in_progress when work is active.",
+			description: "Replace the visible task plan with a complete current snapshot. Use only for non-trivial multi-step work; do not use for one-shot answers, small code examples, simple commands, or direct explanations. Include every step on every update, keep exactly one step in_progress while work is active, and resolve all steps before finishing successfully.",
 			schema: ToolSchema{
 				Type: "object",
 				Properties: map[string]PropertyDef{
@@ -46,7 +53,7 @@ func NewUpdatePlanTool() *PlanTool {
 					},
 					"plan": {
 						Type:        "array",
-						Description: "Ordered task plan items.",
+						Description: "The complete ordered plan snapshot, including unchanged and completed steps. This replaces the previous snapshot; it is not a partial patch.",
 						Items: &PropertyDef{
 							Type: "object",
 							Properties: map[string]PropertyDef{
@@ -71,7 +78,7 @@ func NewUpdatePlanTool() *PlanTool {
 				RiskLevel: ToolRiskLow,
 			},
 		},
-		store: NewPlanStore(),
+		store: store,
 	}
 }
 
@@ -105,7 +112,19 @@ func (t *PlanTool) Execute(args map[string]interface{}) (string, error) {
 		Plan:        steps,
 	}
 	if t.store != nil {
-		t.store.Set(planKey(args), state)
+		key := planKey(args)
+		resolved := true
+		for _, step := range steps {
+			if step.Status != "completed" && step.Status != "cancelled" {
+				resolved = false
+				break
+			}
+		}
+		if resolved {
+			t.store.Delete(key)
+		} else {
+			t.store.Set(key, state)
+		}
 	}
 	data, _ := json.Marshal(state)
 	return string(data), nil
@@ -118,6 +137,25 @@ func (s *PlanStore) Set(key string, state PlanState) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.plans[key] = state
+}
+
+func (s *PlanStore) Get(key string) (PlanState, bool) {
+	if s == nil {
+		return PlanState{}, false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	state, ok := s.plans[key]
+	return state, ok
+}
+
+func (s *PlanStore) Delete(key string) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.plans, key)
 }
 
 func planStepsFromArgs(raw interface{}) ([]PlanStep, error) {
@@ -143,8 +181,13 @@ func planStepsFromArgs(raw interface{}) ([]PlanStep, error) {
 }
 
 func planKey(args map[string]interface{}) string {
-	if scope, ok := currentExecutionScope(args); ok && scope.TaskID != "" {
-		return scope.TaskID
+	if scope, ok := currentExecutionScopeAny(args); ok {
+		if scope.RunID != "" {
+			return scope.RunID
+		}
+		if scope.TaskID != "" {
+			return scope.TaskID
+		}
 	}
 	if tenantID, _ := args["_tenant_id"].(string); tenantID != "" {
 		return tenantID
@@ -154,9 +197,14 @@ func planKey(args map[string]interface{}) string {
 
 type FinishRunTool struct {
 	BaseTool
+	store *PlanStore
 }
 
 func NewFinishRunTool() *FinishRunTool {
+	return NewFinishRunToolWithStore(nil)
+}
+
+func NewFinishRunToolWithStore(store *PlanStore) *FinishRunTool {
 	return &FinishRunTool{
 		BaseTool: BaseTool{
 			name:        "finish_run",
@@ -210,6 +258,7 @@ func NewFinishRunTool() *FinishRunTool {
 				RiskLevel: ToolRiskLow,
 			},
 		},
+		store: store,
 	}
 }
 
@@ -226,6 +275,20 @@ func (t *FinishRunTool) Execute(args map[string]interface{}) (string, error) {
 	if summary == "" {
 		return "", fmt.Errorf("summary is required")
 	}
+	key := planKey(args)
+	if status == "done" && t.store != nil {
+		if plan, ok := t.store.Get(key); ok {
+			var unresolved []string
+			for _, step := range plan.Plan {
+				if step.Status != "completed" && step.Status != "cancelled" {
+					unresolved = append(unresolved, step.Step)
+				}
+			}
+			if len(unresolved) > 0 {
+				return "", fmt.Errorf("successful run still has unresolved plan steps: %s; call update_plan with the complete plan snapshot before finish_run", strings.Join(unresolved, "; "))
+			}
+		}
+	}
 	out := map[string]interface{}{
 		"status":       status,
 		"summary":      summary,
@@ -237,6 +300,9 @@ func (t *FinishRunTool) Execute(args map[string]interface{}) (string, error) {
 		"need_approve": taskBoolArg(args, "need_approve"),
 	}
 	data, _ := json.Marshal(out)
+	if t.store != nil {
+		t.store.Delete(key)
+	}
 	return string(data), nil
 }
 

@@ -152,12 +152,51 @@ func lifecycleToolNames() []string {
 func lifecycleToolCap(name string) int {
 	switch strings.TrimSpace(name) {
 	case "update_plan":
-		return 2
+		// Normal plans need an initial snapshot, one update per meaningful step
+		// transition, and a final resolved snapshot. Keep a hard anti-loop cap,
+		// but do not cut off ordinary multi-step work after the second update.
+		return 16
 	case "finish_run":
 		return 1
 	default:
 		return 0
 	}
+}
+
+func unresolvedPlanStepsFromToolCall(call llm.ToolCall) ([]string, bool) {
+	if strings.TrimSpace(call.Function) != "update_plan" {
+		return nil, false
+	}
+	args := parseToolCallArgs(call.Args)
+	raw, ok := args["plan"].([]interface{})
+	if !ok {
+		return nil, false
+	}
+	unresolved := make([]string, 0, len(raw))
+	for _, item := range raw {
+		step, ok := item.(map[string]interface{})
+		if !ok {
+			return nil, false
+		}
+		status := strings.TrimSpace(fmt.Sprintf("%v", step["status"]))
+		if status == "completed" || status == "cancelled" {
+			continue
+		}
+		name := strings.TrimSpace(fmt.Sprintf("%v", step["step"]))
+		if name == "" {
+			name = "unnamed step"
+		}
+		unresolved = append(unresolved, name)
+	}
+	return unresolved, true
+}
+
+func finishRunStatusFromToolCall(call llm.ToolCall) (string, bool) {
+	if strings.TrimSpace(call.Function) != "finish_run" {
+		return "", false
+	}
+	status := strings.TrimSpace(fmt.Sprintf("%v", parseToolCallArgs(call.Args)["status"]))
+	return status, status != ""
 }
 
 func isLifecycleToolName(name string) bool {

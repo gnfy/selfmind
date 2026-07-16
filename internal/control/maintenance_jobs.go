@@ -115,7 +115,7 @@ func (s *Store) ListRunnableMaintenanceJobs(ctx context.Context, analyzerVersion
 	if analyzerVersion <= 0 {
 		analyzerVersion = 1
 	}
-	if limit <= 0 || limit > 100 {
+	if limit <= 0 || limit > 500 {
 		limit = 20
 	}
 	now := time.Now().Unix()
@@ -261,20 +261,34 @@ func (s *Store) ResetBlockedMaintenanceJobs(ctx context.Context) (int, error) {
 // by /diag. It intentionally reports only aggregate state and a redacted recent
 // reason; raw provider payloads remain in logs.
 type MaintenanceHealth struct {
-	Blocked   int
-	LastError string
+	Pending         int
+	Running         int
+	Blocked         int
+	OldestPendingAt time.Time
+	LastError       string
 }
 
 func (s *Store) MaintenanceHealthForPerson(ctx context.Context, tenantID, personID string) (MaintenanceHealth, error) {
 	tenantID = normalizeTenant(tenantID)
 	var health MaintenanceHealth
+	var oldest int64
 	err := s.db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM maintenance_jobs mj
+		`SELECT
+		 COALESCE(SUM(CASE WHEN mj.status IN (?, ?) THEN 1 ELSE 0 END), 0),
+		 COALESCE(SUM(CASE WHEN mj.status = ? THEN 1 ELSE 0 END), 0),
+		 COALESCE(SUM(CASE WHEN mj.status = ? THEN 1 ELSE 0 END), 0),
+		 COALESCE(MIN(CASE WHEN mj.status IN (?, ?) THEN mj.created_at ELSE NULL END), 0)
+		 FROM maintenance_jobs mj
 		 JOIN task_runs r ON r.tenant_id = mj.tenant_id AND r.id = mj.run_id
-		 WHERE mj.tenant_id = ? AND r.person_id = ? AND mj.status = ?`,
-		tenantID, personID, MaintenanceJobBlockedProvider).Scan(&health.Blocked)
+		 WHERE mj.tenant_id = ? AND r.person_id = ?`,
+		MaintenanceJobPending, MaintenanceJobFailed, MaintenanceJobRunning, MaintenanceJobBlockedProvider,
+		MaintenanceJobPending, MaintenanceJobFailed, tenantID, personID).
+		Scan(&health.Pending, &health.Running, &health.Blocked, &oldest)
 	if err != nil {
 		return health, err
+	}
+	if oldest > 0 {
+		health.OldestPendingAt = time.Unix(oldest, 0)
 	}
 	if health.Blocked == 0 {
 		return health, nil

@@ -113,3 +113,45 @@ func TestMaintenanceJobFailureAndRecovery(t *testing.T) {
 		t.Fatalf("attempts = %d, want 3 (initial + post-fail + post-reset)", job.Attempts)
 	}
 }
+
+// TestMaintenanceJobProviderBlockAndRestartProbe pins the fatal-provider
+// contract: quota/auth/configuration failures do not enter the timed retry
+// loop, diagnostics can see the pause, and a daemon restart grants exactly one
+// fresh probe after the owner updates provider configuration.
+func TestMaintenanceJobProviderBlockAndRestartProbe(t *testing.T) {
+	ctx := context.Background()
+	store, identity, _, run := newRecoveryFixture(t)
+	if err := store.FinishRun(ctx, identity.TenantID, run.ID, "done"); err != nil {
+		t.Fatal(err)
+	}
+	if claimed, err := store.ClaimMaintenanceJob(ctx, identity.TenantID, run.ID, 1); err != nil || !claimed {
+		t.Fatalf("claim: claimed=%v err=%v", claimed, err)
+	}
+
+	blocked, err := store.BlockMaintenanceJob(ctx, identity.TenantID, run.ID, 1, "provider 403: quota exhausted")
+	if err != nil || !blocked {
+		t.Fatalf("block: blocked=%v err=%v", blocked, err)
+	}
+	if claimed, err := store.ClaimMaintenanceJob(ctx, identity.TenantID, run.ID, 1); err != nil || claimed {
+		t.Fatalf("provider-blocked job must not retry: claimed=%v err=%v", claimed, err)
+	}
+	job, err := store.GetMaintenanceJob(ctx, identity.TenantID, run.ID, 1)
+	if err != nil || job == nil {
+		t.Fatalf("job: %+v err=%v", job, err)
+	}
+	if job.Status != MaintenanceJobBlockedProvider || job.Attempts != 1 {
+		t.Fatalf("blocked job = %+v", job)
+	}
+	health, err := store.MaintenanceHealthForPerson(ctx, identity.TenantID, identity.PersonID)
+	if err != nil || health.Blocked != 1 || health.LastError != "provider 403: quota exhausted" {
+		t.Fatalf("health = %+v err=%v", health, err)
+	}
+
+	reset, err := store.ResetBlockedMaintenanceJobs(ctx)
+	if err != nil || reset != 1 {
+		t.Fatalf("restart reset: count=%d err=%v", reset, err)
+	}
+	if claimed, err := store.ClaimMaintenanceJob(ctx, identity.TenantID, run.ID, 1); err != nil || !claimed {
+		t.Fatalf("fresh restart probe: claimed=%v err=%v", claimed, err)
+	}
+}

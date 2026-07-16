@@ -35,6 +35,10 @@ type TaskRuntimeContext struct {
 	Handoff      *TaskHandoffContext
 	Events       []TaskEventContext
 	Artifacts    []TaskArtifactContext
+	// DeliveryWarnings are bounded advisory notes for terminal results that a
+	// previous endpoint may not have received. They help another endpoint
+	// restate the outcome without replaying or duplicating the outbound message.
+	DeliveryWarnings []string
 	// RecallSlices are bounded cross-history recall results selected by the
 	// gateway recall engine (Work Timeline P2, docs/work-timeline.md "Semantic
 	// recall"). They are EPHEMERAL by construction: rendered into this turn's
@@ -352,6 +356,11 @@ func (r TaskRuntimeContext) Prompt(maxChars int) string {
 			}
 			fmt.Fprintf(&b, "- %s\n", trimLine(line, 400))
 		}
+	}
+	if len(r.DeliveryWarnings) > 0 {
+		b.WriteString("\n## Delivery Continuity\n")
+		b.WriteString("A previous endpoint may not have received these final results. If the user asks about that work, restate the relevant result on the current endpoint; do not resend unrelated notifications.\n")
+		writeBullets(&b, r.DeliveryWarnings, 3, 360)
 	}
 	if len(r.RecallSlices) > 0 {
 		b.WriteString("\n## [Recall — possibly related prior work; reference only]\n")

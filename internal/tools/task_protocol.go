@@ -160,14 +160,14 @@ func NewFinishRunTool() *FinishRunTool {
 	return &FinishRunTool{
 		BaseTool: BaseTool{
 			name:        "finish_run",
-			description: "Record a structured task outcome before the final answer. Use when the task is done, blocked, failed, or needs approval.",
+			description: "Record a structured task outcome before the final answer. Use when the task is done, blocked, failed, waiting on a registered external watch, or needs approval.",
 			schema: ToolSchema{
 				Type: "object",
 				Properties: map[string]PropertyDef{
 					"status": {
 						Type:        "string",
 						Description: "Task status.",
-						Enum:        []string{"done", "blocked", "failed", "running", "needs_approval"},
+						Enum:        []string{"done", "blocked", "failed", "running", "waiting_external", "needs_approval"},
 					},
 					"summary": {
 						Type:        "string",

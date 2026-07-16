@@ -1,0 +1,62 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "content": "Registered"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " durable"
+    },
+    {
+      "content": " external"
+    },
+    {
+      "content": " watch"
+    },
+    {
+      "content": " “"
+    },
+    {
+      "content": "CI"
+    },
+    {
+      "content": " completion"
+    },
+    {
+      "content": "”"
+    },
+    {
+      "content": " and"
+    },
+    {
+      "content": " marked"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " run"
+    },
+    {
+      "content": " as"
+    },
+    {
+      "content": " waiting"
+    },
+    {
+      "content": "_external"
+    },
+    {
+      "content": "."
+    },
+    {
+      "usage": {
+        "input_tokens": 5328,
+        "output_tokens": 21
+      }
+    }
+  ]
+}

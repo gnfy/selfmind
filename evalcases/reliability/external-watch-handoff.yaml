@@ -1,0 +1,29 @@
+id: reliability_external_watch_handoff
+title: "external waits leave the model loop and become daemon-owned work"
+suite: reliability
+workspace: isolated
+channel: cli
+require_cassette: false
+
+# Record this case with a live provider before promoting it to a mandatory
+# offline gate:
+#   SELFMIND_EVAL_VCR=record selfmind eval run \
+#     evalcases/reliability/external-watch-handoff.yaml --live
+turns:
+  - input: "Register a durable external watch named CI completion. In the current workspace, poll the command printf 'SUCCEEDED\\n', treat SUCCEEDED as success, use a 5 second interval and a 60 second timeout, then finish this run as waiting_external. Do not execute the polling command directly."
+
+expect:
+  status: waiting_external
+  require_tool_events: true
+  # finish_run is a lifecycle tool and intentionally does not count as an
+  # action tool; watch_external is the single required action.
+  min_tool_calls: 1
+  max_tool_errors: 0
+  max_duration_seconds: 120
+
+checks:
+  no_mojibake: true
+  no_raw_json_leak: true
+  no_tool_xml_leak: true
+  no_empty_response: true
+  no_provider_stack_dump: true

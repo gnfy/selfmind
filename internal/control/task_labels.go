@@ -14,6 +14,55 @@ import (
 // that a post-run labeler may re-point, and humans may rename or archive a
 // label. None of these operations touch run execution state.
 
+// LatestRunOutcome is the terminal reason attached to a task's newest run.
+// Task status alone cannot distinguish a daemon restart from a provider error
+// or an intentional wait for an external system.
+type LatestRunOutcome struct {
+	CompletionReason string
+	Resumable        bool
+}
+
+// LatestRunOutcomesByPerson returns the newest durable run outcome for every
+// task. It is one grouped query for /tasks rendering, never a per-card lookup.
+func (s *Store) LatestRunOutcomesByPerson(ctx context.Context, tenantID, personID string) (map[string]LatestRunOutcome, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT e.task_id, e.payload_json
+		 FROM task_events e
+		 JOIN tasks t ON t.id = e.task_id
+		 WHERE t.tenant_id = ? AND t.person_id = ?
+		   AND e.type IN ('run.finished', 'run.interrupted')
+		   AND e.rowid = (
+		     SELECT e2.rowid FROM task_events e2
+		     WHERE e2.task_id = e.task_id AND e2.type IN ('run.finished', 'run.interrupted')
+		     ORDER BY e2.created_at DESC, e2.rowid DESC LIMIT 1
+		   )`, normalizeTenant(tenantID), personID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]LatestRunOutcome{}
+	for rows.Next() {
+		var taskID string
+		var raw []byte
+		if err := rows.Scan(&taskID, &raw); err != nil {
+			return nil, err
+		}
+		var payload struct {
+			Outcome struct {
+				CompletionReason string `json:"completion_reason"`
+				Resumable        bool   `json:"resumable"`
+			} `json:"outcome"`
+		}
+		if json.Unmarshal(raw, &payload) == nil {
+			out[taskID] = LatestRunOutcome{
+				CompletionReason: strings.TrimSpace(payload.Outcome.CompletionReason),
+				Resumable:        payload.Outcome.Resumable,
+			}
+		}
+	}
+	return out, rows.Err()
+}
+
 // RenameTask sets a task's title. Used by the post-run labeler (first-time
 // titling of an auto-created placeholder) and the /task <id> rename command.
 func (s *Store) RenameTask(ctx context.Context, tenantID, taskID, title string) error {

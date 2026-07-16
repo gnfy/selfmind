@@ -21,6 +21,12 @@ const (
 	MaintenanceJobSucceeded = "succeeded"
 	MaintenanceJobFailed    = "failed"
 	MaintenanceJobSkipped   = "skipped"
+	// MaintenanceJobBlockedProvider is terminal for the current daemon
+	// lifetime. Retrying quota, authentication, billing, or invalid-request
+	// failures every few minutes only burns requests and hides the real outage.
+	// A daemon restart resets these rows once, which is also the normal boundary
+	// after the owner updates provider configuration.
+	MaintenanceJobBlockedProvider = "blocked_provider"
 )
 
 // MaintenanceJob mirrors one maintenance_jobs row.
@@ -210,6 +216,76 @@ func (s *Store) FailMaintenanceJob(ctx context.Context, tenantID, runID string, 
 		MaintenanceJobFailed, lastError, now.Add(retryAfter).Unix(), now.Unix(),
 		normalizeTenant(tenantID), runID, analyzerVersion, MaintenanceJobRunning)
 	return err
+}
+
+// BlockMaintenanceJob records a non-retryable provider failure. The CAS return
+// lets the gateway emit one user-visible diagnostic even when the immediate
+// finalizer races the durable maintenance worker.
+func (s *Store) BlockMaintenanceJob(ctx context.Context, tenantID, runID string, analyzerVersion int, lastError string) (bool, error) {
+	if analyzerVersion <= 0 {
+		analyzerVersion = 1
+	}
+	if len(lastError) > 500 {
+		lastError = lastError[:500]
+	}
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE maintenance_jobs SET status = ?, last_error = ?, next_retry_at = 0, updated_at = ?
+		 WHERE tenant_id = ? AND run_id = ? AND analyzer_version = ? AND status = ?`,
+		MaintenanceJobBlockedProvider, lastError, time.Now().Unix(),
+		normalizeTenant(tenantID), runID, analyzerVersion, MaintenanceJobRunning)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n > 0, err
+}
+
+// ResetBlockedMaintenanceJobs gives non-retryable provider failures one fresh
+// probe after a daemon restart. If the provider is still unavailable the first
+// attempt blocks again immediately; if configuration changed, the durable
+// payload is replayed without losing the maintenance result.
+func (s *Store) ResetBlockedMaintenanceJobs(ctx context.Context) (int, error) {
+	now := time.Now().Unix()
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE maintenance_jobs SET status = ?, next_retry_at = 0, updated_at = ?
+		 WHERE status = ?`,
+		MaintenanceJobPending, now, MaintenanceJobBlockedProvider)
+	if err != nil {
+		return 0, err
+	}
+	n, err := res.RowsAffected()
+	return int(n), err
+}
+
+// MaintenanceHealth is the person-scoped background-learning health exposed
+// by /diag. It intentionally reports only aggregate state and a redacted recent
+// reason; raw provider payloads remain in logs.
+type MaintenanceHealth struct {
+	Blocked   int
+	LastError string
+}
+
+func (s *Store) MaintenanceHealthForPerson(ctx context.Context, tenantID, personID string) (MaintenanceHealth, error) {
+	tenantID = normalizeTenant(tenantID)
+	var health MaintenanceHealth
+	err := s.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM maintenance_jobs mj
+		 JOIN task_runs r ON r.tenant_id = mj.tenant_id AND r.id = mj.run_id
+		 WHERE mj.tenant_id = ? AND r.person_id = ? AND mj.status = ?`,
+		tenantID, personID, MaintenanceJobBlockedProvider).Scan(&health.Blocked)
+	if err != nil {
+		return health, err
+	}
+	if health.Blocked == 0 {
+		return health, nil
+	}
+	err = s.db.QueryRowContext(ctx,
+		`SELECT COALESCE(mj.last_error, '') FROM maintenance_jobs mj
+		 JOIN task_runs r ON r.tenant_id = mj.tenant_id AND r.id = mj.run_id
+		 WHERE mj.tenant_id = ? AND r.person_id = ? AND mj.status = ?
+		 ORDER BY mj.updated_at DESC LIMIT 1`,
+		tenantID, personID, MaintenanceJobBlockedProvider).Scan(&health.LastError)
+	return health, err
 }
 
 // ResetStaleMaintenanceJobs returns crashed 'running' jobs (daemon died mid

@@ -112,7 +112,7 @@ func TestTaskGovernanceDefaultsAndOverrides(t *testing.T) {
 		t.Fatal(err)
 	}
 	doneAfter, cancelledAfter := cfg.Tasks.AutoArchiveDurations()
-	if !cfg.Tasks.InboxEnabled || cfg.Tasks.ListLimit() != 10 || cfg.Tasks.MaintenanceModelRole != "memory_extract" {
+	if !cfg.Tasks.InboxEnabled || cfg.Tasks.ListLimit() != 10 || cfg.Tasks.MaintenanceModelRole != "memory_extract" || len(cfg.Tasks.MaintenanceFallbackRoles) != 2 {
 		t.Fatalf("task defaults = %+v", cfg.Tasks)
 	}
 	if doneAfter != 30*24*time.Hour || cancelledAfter != 7*24*time.Hour {
@@ -127,6 +127,7 @@ tasks:
   auto_archive_done_after: "48h"
   auto_archive_cancelled_after: "0"
   maintenance_model_role: "fast_classifier"
+  maintenance_fallback_roles: ["background_review"]
 `), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -135,7 +136,7 @@ tasks:
 		t.Fatal(err)
 	}
 	doneAfter, cancelledAfter = cfg.Tasks.AutoArchiveDurations()
-	if cfg.Tasks.InboxEnabled || cfg.Tasks.ListLimit() != 50 || cfg.Tasks.MaintenanceModelRole != "fast_classifier" {
+	if cfg.Tasks.InboxEnabled || cfg.Tasks.ListLimit() != 50 || cfg.Tasks.MaintenanceModelRole != "fast_classifier" || len(cfg.Tasks.MaintenanceFallbackRoles) != 1 || cfg.Tasks.MaintenanceFallbackRoles[0] != "background_review" {
 		t.Fatalf("task overrides = %+v", cfg.Tasks)
 	}
 	if doneAfter != 48*time.Hour || cancelledAfter != 0 {

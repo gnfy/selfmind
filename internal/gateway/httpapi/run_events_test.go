@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"selfmind/internal/control"
@@ -91,4 +92,46 @@ func TestRecordToolOutputKeepsCorrelationFields(t *testing.T) {
 		return
 	}
 	t.Fatal("tool.output event was not recorded")
+}
+
+func TestRecordSteeringConsumedIsDurableAndRedacted(t *testing.T) {
+	store, err := control.OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	ctx := context.Background()
+	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Local")
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := store.CreateTask(ctx, control.TaskCreate{TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "Steer", Channel: "cli"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := store.StartRun(ctx, task, "cli", "start")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	server := &Server{Control: store, DefaultTenantID: "default"}
+	server.coordinator().recordStreamEvent(ctx, "cli", task, run, llm.StreamEvent{
+		EventType: "agent.steering",
+		Payload:   map[string]interface{}{"input": "retry with token sk-secret-value"},
+	})
+
+	events, err := store.ListTaskEvents(ctx, task.ID, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range events {
+		if event.Type != "run.steering_consumed" {
+			continue
+		}
+		if strings.Contains(string(event.Payload), "sk-secret-value") || !strings.Contains(string(event.Payload), "Mid-turn guidance was applied") {
+			t.Fatalf("consumed payload must be useful and redacted: %s", event.Payload)
+		}
+		return
+	}
+	t.Fatal("run.steering_consumed event was not recorded")
 }

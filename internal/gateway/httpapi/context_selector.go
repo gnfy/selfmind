@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"selfmind/internal/control"
 	"selfmind/internal/kernel"
@@ -25,7 +26,7 @@ import (
 // pre-label turns) surfaces related prior work with an explicit
 // "possibly related; reference only" framing instead. Explicit attaches
 // (/resume, task_id, continuation cue) keep the full context.
-func (c *RunCoordinator) selectedTaskRuntimeContext(ctx context.Context, task *control.Task, run *control.Run, workspace *control.Workspace, channel, userMessage string, preLabel bool) kernel.TaskRuntimeContext {
+func (c *RunCoordinator) selectedTaskRuntimeContext(ctx context.Context, task *control.Task, run *control.Run, workspace *control.Workspace, platform, channel, userMessage string, preLabel bool) kernel.TaskRuntimeContext {
 	if c == nil || c.srv == nil || c.srv.Control == nil || task == nil {
 		return kernel.TaskRuntimeContext{}
 	}
@@ -108,6 +109,18 @@ func (c *RunCoordinator) selectedTaskRuntimeContext(ctx context.Context, task *c
 				Summary:   eventPayloadSummary(event.Payload),
 				CreatedAt: event.CreatedAt,
 			})
+		}
+	}
+	// A fresh IM inbound already triggers channel-specific catch-up. CLI cannot
+	// refresh an IM context token, so instead give the agent a small advisory
+	// that the prior final answer may need to be restated on this endpoint.
+	if !preLabel && strings.EqualFold(strings.TrimSpace(platform), "cli") {
+		if pushes, err := c.srv.Control.ListUndeliveredTaskResults(ctx, task.TenantID, task.PersonID, task.ID, time.Now().Add(-24*time.Hour), 3); err == nil {
+			for _, push := range pushes {
+				preview := textutil.Truncate(strings.TrimSpace(push.Content), 180)
+				selected.DeliveryWarnings = append(selected.DeliveryWarnings,
+					fmt.Sprintf("%s result status=%s, updated=%s, preview=%q", push.Platform, push.Status, push.UpdatedAt.Format(time.RFC3339), preview))
+			}
 		}
 	}
 	// Automatic semantic recall (Work Timeline P2): bounded cross-history

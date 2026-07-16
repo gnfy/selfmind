@@ -8,6 +8,7 @@ package httpapi
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -77,6 +78,40 @@ func hasEventOfType(t *testing.T, store *control.Store, taskID, eventType string
 		}
 	}
 	return false
+}
+
+func TestPostRunProviderFailureBlocksWithoutRetry(t *testing.T) {
+	provider := newSlowLLMProvider("completed the requested work")
+	provider.releaseNow()
+	daemon, store, _ := newDetachedRunServer(t, provider)
+	fake := &fakeLabeler{err: errors.New("provider 403: quota exhausted")}
+	daemon.PostRunAnalyzer = fake
+
+	resp := runOrdinaryTurn(t, daemon, "Please remember that I prefer concise Go code reviews, with tests and specific file references.")
+	runs, err := store.ListTaskRuns(context.Background(), resp.Task.TenantID, resp.Task.ID, 10)
+	if err != nil || len(runs) != 1 {
+		t.Fatalf("runs = %+v err=%v", runs, err)
+	}
+	job, err := store.GetMaintenanceJob(context.Background(), resp.Task.TenantID, runs[0].ID, postRunAnalyzerVersion)
+	if err != nil || job == nil {
+		t.Fatalf("job = %+v err=%v", job, err)
+	}
+	if job.Status != control.MaintenanceJobBlockedProvider || job.Attempts != 1 {
+		t.Fatalf("provider failure must block after one attempt: %+v", job)
+	}
+
+	daemon.runMaintenancePass(context.Background())
+	if fake.callCount() != 1 {
+		t.Fatalf("blocked provider was retried: calls=%d", fake.callCount())
+	}
+	identity, err := store.ResolveOrCreateAccount(context.Background(), "default", "cli", "local", "Local User")
+	if err != nil {
+		t.Fatal(err)
+	}
+	diag, err := daemon.diagReply(context.Background(), identity)
+	if err != nil || !strings.Contains(diag, "Background learning: paused (1 job(s))") {
+		t.Fatalf("diag = %q err=%v", diag, err)
+	}
 }
 
 // TestLabelerMoveRepointsRunAndCleansPlaceholder: MOVE re-points the run (and

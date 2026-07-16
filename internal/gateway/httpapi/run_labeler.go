@@ -11,6 +11,7 @@ import (
 
 	"selfmind/internal/control"
 	"selfmind/internal/gateway/api"
+	"selfmind/internal/kernel/llm"
 	"selfmind/internal/platform/log"
 	"selfmind/internal/platform/textutil"
 )
@@ -159,7 +160,11 @@ func (d *Server) analyzeFinishedRun(ctx context.Context, identity *control.Ident
 		analysis, err = d.PostRunAnalyzer.Analyze(ctx, req)
 		if err != nil {
 			log.Warn("gateway: post-run analyzer failed; keeping execution result unchanged", "run", run.ID, "error", err)
-			_ = d.Control.FailMaintenanceJob(ctx, identity.TenantID, run.ID, postRunAnalyzerVersion, err.Error(), maintenanceRetryDelay)
+			if llm.IsRetryableError(err) {
+				_ = d.Control.FailMaintenanceJob(ctx, identity.TenantID, run.ID, postRunAnalyzerVersion, err.Error(), maintenanceRetryDelay)
+			} else {
+				d.blockMaintenanceProviderJob(ctx, identity, task, run, postRunAnalyzerVersion, err)
+			}
 			return
 		}
 		proposal, marshalErr := json.Marshal(analysis)

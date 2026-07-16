@@ -6,7 +6,40 @@ import (
 	"testing"
 
 	"selfmind/internal/control"
+	"selfmind/internal/gateway/api"
+	"selfmind/internal/gateway/router"
 )
+
+func TestStructuredWaitingExternalSurvivesGenericTurnCompletion(t *testing.T) {
+	outcome := reconcileTurnCompletion(api.RunOutcome{
+		Status:  "waiting_external",
+		Summary: "Watching the external build.",
+	}, router.TurnCompletion{
+		Status:           "completed",
+		CompletionReason: "completed",
+	}, true)
+
+	if outcome.Status != "waiting_external" || outcome.CompletionReason != "waiting_external" || outcome.Resumable {
+		t.Fatalf("outcome = %#v", outcome)
+	}
+	if got := turnStatusForOutcome(outcome); got != "waiting_external" {
+		t.Fatalf("turn status = %q, want waiting_external", got)
+	}
+}
+
+func TestIncompleteTurnOverridesStructuredWaitingExternal(t *testing.T) {
+	outcome := reconcileTurnCompletion(api.RunOutcome{
+		Status: "waiting_external",
+	}, router.TurnCompletion{
+		Status:           "incomplete",
+		CompletionReason: "output_limit",
+		Resumable:        true,
+	}, true)
+
+	if outcome.Status != "interrupted" || outcome.CompletionReason != "output_limit" || !outcome.Resumable {
+		t.Fatalf("outcome = %#v", outcome)
+	}
+}
 
 func TestFinalizeErroredRunIsDurableAndResumable(t *testing.T) {
 	ctx := context.Background()

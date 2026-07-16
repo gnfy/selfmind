@@ -49,6 +49,19 @@ func (d *Server) diagReply(ctx context.Context, identity *control.IdentityContex
 		fmt.Fprintf(&sb, "Tasks: open %d, terminal %d, archived %d, pinned %d, inbox runs %d\n",
 			stats.Open, stats.Terminal, stats.Archived, stats.Pinned, stats.InboxRuns)
 	}
+	if watches, err := d.Control.CountExternalWatchesByStatus(ctx, identity.TenantID, identity.PersonID); err == nil {
+		activeWatches := watches[control.ExternalWatchPending] + watches[control.ExternalWatchRunning]
+		if activeWatches+watches[control.ExternalWatchFailed]+watches[control.ExternalWatchTimedOut] > 0 {
+			fmt.Fprintf(&sb, "External watches: active %d, failed %d, timed out %d\n",
+				activeWatches, watches[control.ExternalWatchFailed], watches[control.ExternalWatchTimedOut])
+		}
+	}
+	if health, err := d.Control.MaintenanceHealthForPerson(ctx, identity.TenantID, identity.PersonID); err == nil && health.Blocked > 0 {
+		fmt.Fprintf(&sb, "Background learning: paused (%d job(s))\n", health.Blocked)
+		if reason := strings.TrimSpace(health.LastError); reason != "" {
+			fmt.Fprintf(&sb, "- provider: %s\n", truncate(toOneLine(tools.RedactSensitive(reason)), 140))
+		}
+	}
 
 	// Pending approvals.
 	approvals, titles, err := d.pendingApprovalsForDisplay(ctx, identity)
@@ -378,6 +391,16 @@ func diagEventLabel(eventType string) string {
 		return "Task completed"
 	case "run.failed", "run.finalize_error":
 		return "Task failed"
+	case "run.interrupted":
+		return "Task interrupted and resumable"
+	case "run.recovery_notified":
+		return "Recovery notice sent"
+	case "maintenance.blocked":
+		return "Background learning paused"
+	case "external_watch.created":
+		return "External watch started"
+	case "external_watch.completed":
+		return "External watch completed"
 	case "agent.thinking", "strategy.selected", "context.selected", "context.recall", "context.breakdown":
 		return "AI prepared the next step"
 	case "tool.started":

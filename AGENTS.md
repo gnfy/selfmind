@@ -189,6 +189,47 @@ Domain docs (**mandatory** before changing that domain):
   `Store.FinishRun` writes terminal run statuses only, and
   `Store.MarkInterruptedRuns` (boot sweep + 60s in-daemon sweep in
   `httpapi/run_recovery.go`) must keep excluding the active-run registry.
+- External systems that need minutes of polling must use the durable
+  `watch_external` handoff, not repeated model turns. The registering run ends
+  as `waiting_external`; the daemon owns the persisted bounded command,
+  interval, success/failure patterns, timeout, and final notification. The
+  watch command passes through the same scope, egress, risk, and approval
+  middleware as an ordinary terminal call. Never add a second unsupervised
+  polling goroutine or keep a person's active-run slot occupied while waiting
+  for CI/CD or another external service.
+- A daemon-recovery interruption is actionable user state. Recovery sweeps
+  enqueue one concise preferred-channel notification and append the durable
+  `run.recovery_notified` marker only after enqueue succeeds; retries and
+  restarts must not duplicate the notice or silently discard an undelivered
+  one.
+- Maintenance-provider authentication, quota, and other non-retryable errors
+  block the durable maintenance job immediately. Do not consume the normal
+  retry horizon on a terminal provider response. `/diag` must expose the
+  paused background-learning state; a daemon restart may grant one fresh
+  probe so recovered credentials can unblock the queue.
+- Maintenance failover is explicit and cheap-role-only. Resolve
+  `tasks.maintenance_model_role` first, then the ordered
+  `tasks.maintenance_fallback_roles`; skip missing roles and never invent a
+  fallback to the primary coding model. A provider outage must not silently
+  turn background labeling, memory extraction, or review into expensive
+  foreground-model traffic.
+- Cross-endpoint steering has two durable states: `run.steered` means the
+  daemon accepted the guidance, while `run.steering_consumed` means the agent
+  applied it to a later model request. The consumed event records metadata,
+  never the raw steering text.
+- Final asynchronous answers must carry outbound kind `final_result`. When a
+  task is explicitly continued from CLI and a recent IM final result is
+  `sent_unconfirmed` or `failed`, inject a bounded delivery-continuity advisory
+  so the agent can restate the result. Do not use this advisory for soft
+  pre-label guesses or as another resend path.
+- Approval heuristics must use the root selected by the request's
+  `ExecutionScope`, not the daemon process cwd. A path already admitted by the
+  active workspace/allowed-roots scope must not be treated as outside the
+  project merely because the user switched workspaces after daemon startup.
+- `/tasks` state is derived from the latest structured run outcome. Preserve
+  distinctions such as daemon recovery, provider interruption, context
+  overflow, verification incomplete, and durable external waiting; never
+  collapse all resumable states into a generic `paused` label.
 - User-visible task state derives from structured run outcomes
   (`api.RunOutcome`) and handoffs, not ad hoc status text. Clients decide
   accepted/busy/completed/failed from `MessageResponse.turn` /

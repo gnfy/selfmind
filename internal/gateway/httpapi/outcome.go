@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"selfmind/internal/gateway/api"
+	"selfmind/internal/gateway/router"
 )
 
 type taskPlanStep struct {
@@ -92,6 +93,67 @@ func (c *RunCoordinator) latestStructuredRunOutcome(ctx context.Context, taskID,
 		return out, true
 	}
 	return api.RunOutcome{}, false
+}
+
+// reconcileTurnCompletion combines the agent loop's transport-level terminal
+// signal with the task's structured outcome. A structured finish_run result is
+// authoritative for business states such as waiting_external and blocked. The
+// loop may override it only when execution itself was incomplete (for example,
+// an output limit or exhausted tool budget).
+func reconcileTurnCompletion(outcome api.RunOutcome, completion router.TurnCompletion, structured bool) api.RunOutcome {
+	if completion.Status == "incomplete" {
+		outcome.Status = "interrupted"
+		outcome.Resumable = true
+		if completion.CompletionReason != "" {
+			outcome.CompletionReason = completion.CompletionReason
+		}
+		outcome.NextSteps = appendUnique(outcome.NextSteps, "Reply \"continue\" to resume from the collected evidence.", 8)
+		return outcome
+	}
+
+	status := strings.ToLower(strings.TrimSpace(outcome.Status))
+	if structured {
+		switch status {
+		case "waiting_external":
+			outcome.CompletionReason = "waiting_external"
+			outcome.Resumable = false
+			return outcome
+		case "blocked":
+			if outcome.CompletionReason == "" || outcome.CompletionReason == "completed" {
+				outcome.CompletionReason = "blocked"
+			}
+			return outcome
+		case "failed":
+			if outcome.CompletionReason == "" || outcome.CompletionReason == "completed" {
+				outcome.CompletionReason = "failed"
+			}
+			return outcome
+		}
+	}
+
+	if completion.CompletionReason != "" {
+		outcome.CompletionReason = completion.CompletionReason
+	}
+	outcome.Resumable = completion.Resumable
+	return outcome
+}
+
+func turnStatusForOutcome(outcome api.RunOutcome) string {
+	switch strings.ToLower(strings.TrimSpace(outcome.Status)) {
+	case "waiting_external":
+		return "waiting_external"
+	case "blocked":
+		return "blocked"
+	case "failed":
+		return "failed"
+	case "cancelled":
+		return "cancelled"
+	case "interrupted":
+		if outcome.Resumable {
+			return "interrupted"
+		}
+	}
+	return "completed"
 }
 
 func extractOutcomeSection(content string, headings []string) []string {

@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"selfmind/internal/kernel/llm"
 	"selfmind/internal/platform/log"
 )
 
@@ -21,10 +22,10 @@ const maintenanceMaxAttempts = 5
 // identical review request enqueued twice is one job. Bounded per pass — the
 // review is background learning and must never crowd out post-run analysis.
 const (
-	SkillReviewJobVersion  = 100
-	skillReviewsPerPass    = 2
-	skillReviewJobTimeout  = 5 * time.Minute
-	skillReviewRetryDelay  = 10 * time.Minute
+	SkillReviewJobVersion = 100
+	skillReviewsPerPass   = 2
+	skillReviewJobTimeout = 5 * time.Minute
+	skillReviewRetryDelay = 10 * time.Minute
 )
 
 // SkillReviewRunner executes one durable background-review job. Implemented
@@ -46,6 +47,11 @@ func (d *Server) StartMaintenanceWorker(ctx context.Context) func() {
 		log.Warn("gateway: reset maintenance jobs at boot failed", "error", err)
 	} else if reset > 0 {
 		log.Info("gateway: reset maintenance jobs at boot", "count", reset)
+	}
+	if reset, err := d.Control.ResetBlockedMaintenanceJobs(context.Background()); err != nil {
+		log.Warn("gateway: reset provider-blocked maintenance jobs at boot failed", "error", err)
+	} else if reset > 0 {
+		log.Info("gateway: retrying provider-blocked maintenance jobs after restart", "count", reset)
 	}
 	done := make(chan struct{})
 	var once sync.Once
@@ -136,7 +142,11 @@ func (d *Server) runSkillReviewPass(ctx context.Context) {
 		summary, err := d.SkillReviewer.RunReviewFromPayload(callCtx, job.TenantID, job.PayloadJSON)
 		cancel()
 		if err != nil {
-			_ = d.Control.FailMaintenanceJob(ctx, job.TenantID, job.RunID, job.AnalyzerVersion, err.Error(), skillReviewRetryDelay)
+			if llm.IsRetryableError(err) {
+				_ = d.Control.FailMaintenanceJob(ctx, job.TenantID, job.RunID, job.AnalyzerVersion, err.Error(), skillReviewRetryDelay)
+			} else {
+				_, _ = d.Control.BlockMaintenanceJob(ctx, job.TenantID, job.RunID, job.AnalyzerVersion, err.Error())
+			}
 			continue
 		}
 		digest := sha256.Sum256([]byte(summary))

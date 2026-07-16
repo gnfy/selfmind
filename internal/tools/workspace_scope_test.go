@@ -71,3 +71,19 @@ func TestScopePatchContentRewritesPaths(t *testing.T) {
 		t.Fatalf("patch path was not scoped: %s", got)
 	}
 }
+
+func TestApprovalProjectRootUsesAllowedSecondaryRoot(t *testing.T) {
+	primary := t.TempDir()
+	secondary := t.TempDir()
+	target := filepath.Join(secondary, "README.md")
+	scope := ExecutionScope{WorkspaceRoot: primary, AllowedRoots: []string{primary, secondary}}
+	args := map[string]interface{}{"path": target, "_tool_name": "read_file"}
+
+	effective := approvalProjectRoot("/daemon/cwd", scope, args)
+	if effective != filepath.Clean(secondary) {
+		t.Fatalf("effective root = %q, want %q", effective, filepath.Clean(secondary))
+	}
+	if dangerous, reason := dangerousToolCall(effective, "read_file", args); dangerous {
+		t.Fatalf("allowed secondary-root read classified dangerous: %s", reason)
+	}
+}

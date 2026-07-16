@@ -253,7 +253,7 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 	if sink := c.newToolArtifactSink(identity, task, run); sink != nil {
 		ctx = kernel.WithToolArtifactSink(ctx, sink)
 	}
-	ctx = kernel.WithTaskRuntimeContext(ctx, c.selectedTaskRuntimeContext(ctx, task, run, workspace, req.Channel, req.Content, attach.preLabel))
+	ctx = kernel.WithTaskRuntimeContext(ctx, c.selectedTaskRuntimeContext(ctx, task, run, workspace, req.Platform, req.Channel, req.Content, attach.preLabel))
 	agentInput := c.withGatewayContext(req.Content, identity, task, workspace, req.Attachments)
 	agentInput = c.withResumeContext(ctx, identity, task, run, intent, agentInput)
 	ctx = kernel.WithTaskStrategy(ctx, taskStrategyForRequest(req, intent))
@@ -285,22 +285,15 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 	// scopes) while guaranteeing the terminal state lands in control.db.
 	finCtx := context.WithoutCancel(ctx)
 	outcome := buildRunOutcome(content)
+	structuredOutcome := false
 	if structured, ok := c.latestStructuredRunOutcome(finCtx, task.ID, run.ID); ok {
+		structuredOutcome = true
 		outcome = structured
 		if outcome.Summary == "" {
 			outcome.Summary = buildRunOutcome(content).Summary
 		}
 	}
-	completion := eventSummary.Completion()
-	if completion.CompletionReason != "" {
-		outcome.CompletionReason = completion.CompletionReason
-	}
-	outcome.Resumable = completion.Resumable
-	if completion.Status == "incomplete" {
-		outcome.Status = "interrupted"
-		outcome.Resumable = true
-		outcome.NextSteps = appendUnique(outcome.NextSteps, "Reply \"continue\" to resume from the collected evidence.", 8)
-	}
+	outcome = reconcileTurnCompletion(outcome, eventSummary.Completion(), structuredOutcome)
 	verification, evidenceFiles := c.evidenceOutcome(finCtx, task.ID, run.ID)
 	outcome.Verification, outcome.Files = mergeEvidenceFiles(verification, evidenceFiles, outcome.Files)
 	outcome.ClaimMismatches = verificationClaimMismatches(outcome)
@@ -377,10 +370,7 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 	if refreshed == nil {
 		refreshed = task
 	}
-	turnStatus := "completed"
-	if outcome.Resumable && outcome.Status == "interrupted" {
-		turnStatus = "interrupted"
-	}
+	turnStatus := turnStatusForOutcome(outcome)
 	out := api.MessageResponse{Identity: identity, Task: refreshed, Run: run, Outcome: &outcome, Content: content, Usage: usage, Turn: messageTurn(turnStatus, taskStatus, "idle", taskID, run.ID, outcome.Summary), Context: messageContextBudget(usage)}
 	// One post-run maintenance pass handles harmless task-label hygiene and
 	// durable memory extraction. It runs after finalization and never delays the

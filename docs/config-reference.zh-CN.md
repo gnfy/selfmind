@@ -190,9 +190,30 @@ tasks:
   auto_archive_done_after: "720h"      # 30 天；"0" 关闭该归档类
   auto_archive_cancelled_after: "168h" # 7 天
   maintenance_model_role: "memory_extract"  # run 后标签/事实整理用的角色
+  maintenance_fallback_roles: ["background_review", "fast_classifier"] # 显式廉价角色故障切换，不会隐式使用主模型
 ```
 
 自动归档只碰陈旧、终态、未 pin、无活跃 run 的任务。
+`maintenance_fallback_roles` 是有序列表。遇到不可重试的 provider
+故障后，SelfMind 会依次尝试其中已显式配置的角色，跳过不存在的角色，
+且绝不会隐式回退到主编码模型。所有角色都使用同一家 provider 时，无法
+实现服务商级故障切换。例如，可让 Kimi 继续作为默认廉价角色，并添加
+MiniMax 备用角色：
+
+```yaml
+models:
+  roles:
+    memory_extract:
+      provider: "kimi-coding"
+      model: "kimi-for-coding"
+    maintenance_backup:
+      provider: "minimax"
+      model: "MiniMax-M3"
+
+tasks:
+  maintenance_model_role: "memory_extract"
+  maintenance_fallback_roles: ["maintenance_backup", "background_review"]
+```
 
 ## 8. 诊断：飞行记录器
 

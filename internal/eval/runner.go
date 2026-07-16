@@ -513,6 +513,10 @@ func newRuntimeHarness(opts RunOptions, c *Case, dataDirOverride string) (*runti
 		}
 		return nil, err
 	}
+	// The eval harness creates the control store after the core tool set. Add
+	// daemon-owned tools here so reliability cases exercise the production
+	// registration path instead of silently running with a smaller tool set.
+	disp.RegisterTool(tools.NewExternalWatchTool(controlStore))
 	appcore.InitMCP(disp, cfg)
 	displayProvider, displayModel, _ := appcore.ResolveModelDisplay(cfg)
 	server := &httpapi.Server{

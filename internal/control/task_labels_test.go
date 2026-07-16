@@ -2,6 +2,7 @@ package control
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 )
 
@@ -218,6 +219,32 @@ func TestLatestRunSummariesPicksNewestPerTask(t *testing.T) {
 	}
 	if got[b.ID] != "only ask on B" {
 		t.Fatalf("latest summary for B = %q", got[b.ID])
+	}
+}
+
+func TestLatestRunOutcomesByPersonPicksNewestTerminalEvent(t *testing.T) {
+	store, identity := labelTestStore(t)
+	ctx := context.Background()
+	task := mustCreateTask(t, store, identity, "release")
+	run, err := store.StartRun(ctx, task, "cli", "publish")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, reason := range []string{"provider_error", "daemon_recovery"} {
+		payload, _ := json.Marshal(map[string]interface{}{
+			"outcome": map[string]interface{}{"completion_reason": reason, "resumable": true},
+		})
+		if _, err := store.AppendEvent(ctx, Event{TaskID: task.ID, RunID: run.ID, Type: "run.interrupted", Payload: payload}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	got, err := store.LatestRunOutcomesByPerson(ctx, identity.TenantID, identity.PersonID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got[task.ID].CompletionReason != "daemon_recovery" || !got[task.ID].Resumable {
+		t.Fatalf("latest outcome = %+v", got[task.ID])
 	}
 }
 

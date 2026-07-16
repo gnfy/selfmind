@@ -99,7 +99,7 @@ func (d *Server) suggestDuplicatesForPerson(ctx context.Context, tenantID, perso
 // hidden labels can no longer be merged into, so pairing them is noise.
 func openTaskCardStatus(status string) bool {
 	switch strings.ToLower(strings.TrimSpace(status)) {
-	case "new", "in_progress", "interrupted", "blocked", "running", "":
+	case "new", "in_progress", "interrupted", "blocked", "running", "waiting_external", "":
 		return true
 	default:
 		return false

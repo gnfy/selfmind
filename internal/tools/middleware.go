@@ -188,7 +188,7 @@ var writeTools = map[string]struct{}{
 	"write_file": {}, "patch": {}, "edit": {}, "apply_patch": {}, "edit_file": {},
 }
 var execTools = map[string]struct{}{
-	"terminal": {}, "verify": {}, "execute_command": {}, "shell": {}, "execute_code": {},
+	"terminal": {}, "verify": {}, "execute_command": {}, "shell": {}, "execute_code": {}, "watch_external": {},
 }
 
 func isWriteTool(name string) bool { _, ok := writeTools[name]; return ok }
@@ -320,19 +320,22 @@ func SmartApprovalMiddleware(projectRoot string) Middleware {
 	return func(next ToolExecutor) ToolExecutor {
 		return func(args map[string]interface{}) (string, error) {
 			toolName, _ := args["_tool_name"].(string)
+			scope, hasScope := currentExecutionScopeAny(args)
+			effectiveRoot := projectRoot
+			if hasScope {
+				effectiveRoot = approvalProjectRoot(projectRoot, scope, args)
+			}
 
 			// Layer 1: hard floor. Unconditional — no mode, not even full-auto,
 			// can bypass it.
-			if blocked, reason := hardlineToolCall(projectRoot, toolName, args); blocked {
+			if blocked, reason := hardlineToolCall(effectiveRoot, toolName, args); blocked {
 				// Distinct from the rejection contract (see isUserRejectionErr):
 				// this is a safety-policy block, so the model must not retry any
 				// variant, but it is not a user decision.
 				return "", fmt.Errorf("operation blocked by safety policy: %s (do not retry; this is a hard safety limit, not a user rejection)", reason)
 			}
 
-			dangerous, reason := dangerousToolCall(projectRoot, toolName, args)
-
-			scope, hasScope := currentExecutionScopeAny(args)
+			dangerous, reason := dangerousToolCall(effectiveRoot, toolName, args)
 			// Live mode lookup: the mode is resolved PER ASK, not frozen at run
 			// start, so a /mode change from any endpoint governs the in-flight
 			// run's later asks. ModeGetter carries the gateway's re-resolution
@@ -448,6 +451,38 @@ func SmartApprovalMiddleware(projectRoot string) Middleware {
 			return next(args)
 		}
 	}
+}
+
+// approvalProjectRoot aligns approval heuristics with the workspace scope that
+// already authorized the call. The daemon process cwd is not necessarily the
+// active workspace; using it caused harmless reads after /ws to ask again.
+func approvalProjectRoot(fallback string, scope ExecutionScope, args map[string]interface{}) string {
+	roots := append([]string{}, scope.AllowedRoots...)
+	if len(roots) == 0 && strings.TrimSpace(scope.WorkspaceRoot) != "" {
+		roots = []string{scope.WorkspaceRoot}
+	}
+	target := ""
+	for _, key := range []string{"path", "cwd"} {
+		if value, ok := args[key].(string); ok && strings.TrimSpace(value) != "" {
+			target = strings.TrimSpace(value)
+			break
+		}
+	}
+	if target != "" && !filepath.IsAbs(target) && strings.TrimSpace(scope.WorkspaceRoot) != "" {
+		target = filepath.Join(scope.WorkspaceRoot, target)
+	}
+	if target != "" {
+		for _, root := range roots {
+			absRoot, err := filepath.Abs(root)
+			if err == nil && isWithin(filepath.Clean(absRoot), filepath.Clean(target)) {
+				return filepath.Clean(absRoot)
+			}
+		}
+	}
+	if strings.TrimSpace(scope.WorkspaceRoot) != "" {
+		return filepath.Clean(scope.WorkspaceRoot)
+	}
+	return fallback
 }
 
 // recordApprovalGrant persists an "approve this class" decision. Scope "task"

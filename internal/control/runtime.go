@@ -614,6 +614,42 @@ func (s *Store) ListUndeliveredOutbound(ctx context.Context, tenantID, personID 
 	return out, rows.Err()
 }
 
+// ListUndeliveredTaskResults returns recent final answers for one task that
+// were not confirmed delivered. Historic rows created before outbound kinds
+// were introduced have an empty kind and remain eligible for compatibility.
+// The result is bounded and intended for prompt metadata, not message replay.
+func (s *Store) ListUndeliveredTaskResults(ctx context.Context, tenantID, personID, taskID string, since time.Time, limit int) ([]Delivery, error) {
+	if personID == "" || taskID == "" {
+		return nil, fmt.Errorf("person id and task id are required")
+	}
+	if limit <= 0 || limit > 10 {
+		limit = 3
+	}
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, tenant_id, person_id, platform, COALESCE(platform_user_id, ''), channel, COALESCE(task_id, ''), COALESCE(run_id, ''),
+		        content, COALESCE(kind, ''), COALESCE(approval_id, ''), status, attempts, max_attempts, next_attempt_at, COALESCE(last_error, ''),
+		        part_index, part_total, COALESCE(idempotency_key, ''), created_at, updated_at, COALESCE(delivered_at, 0)
+		 FROM outbound_messages
+		 WHERE tenant_id = ? AND person_id = ? AND task_id = ?
+		   AND status IN ('sent_unconfirmed', 'failed') AND updated_at >= ?
+		   AND COALESCE(kind, '') IN ('', 'final_result')
+		 ORDER BY updated_at DESC, created_at DESC LIMIT ?`,
+		normalizeTenant(tenantID), personID, taskID, since.Unix(), limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Delivery
+	for rows.Next() {
+		d, err := scanDelivery(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, d)
+	}
+	return out, rows.Err()
+}
+
 func (s *Store) MarkDeliveryAttempt(ctx context.Context, id string, success bool, errText string, nextAttempt time.Time) error {
 	now := time.Now()
 	if success {

@@ -95,6 +95,7 @@ func (c *RunCoordinator) deliverAsyncResult(ctx context.Context, identity *contr
 			PersonID: identity.PersonID,
 			TaskID:   taskIDForResponse(resp),
 			RunID:    runIDForResponse(resp),
+			Kind:     delivery.KindFinalResult,
 			Content:  deliveryContent(resp),
 		})
 		return
@@ -107,6 +108,7 @@ func (c *RunCoordinator) deliverAsyncResult(ctx context.Context, identity *contr
 		Channel:        req.Channel,
 		TaskID:         taskIDForResponse(resp),
 		RunID:          runIDForResponse(resp),
+		Kind:           delivery.KindFinalResult,
 		Content:        deliveryContent(resp),
 	})
 }
@@ -141,6 +143,7 @@ func (c *RunCoordinator) deliverCronResult(ctx context.Context, req api.MessageR
 		Channel:        req.Channel,
 		TaskID:         taskIDForResponse(resp),
 		RunID:          runIDForResponse(resp),
+		Kind:           delivery.KindFinalResult,
 		Content:        deliveryContent(resp),
 	})
 }
@@ -278,6 +281,15 @@ func (c *RunCoordinator) recordStreamEvent(ctx context.Context, channel string, 
 		eventType = "plan.updated"
 	case "run.outcome":
 		eventType = "run.outcome"
+	case "agent.steering":
+		// run.steered means the gateway accepted guidance. This separate durable
+		// event proves the agent actually folded it into the next model request.
+		eventType = "run.steering_consumed"
+		if input, ok := payload["input"].(string); ok {
+			payload["input_length"] = len([]rune(input))
+		}
+		delete(payload, "input")
+		payload["message"] = "Mid-turn guidance was applied to the next model step."
 	case "agent.thinking", "agent.step", "strategy.selected", "turn.started", "turn.completed", "token.updated":
 		if event.Content != "" {
 			payload["message"] = tools.RedactSensitive(event.Content)

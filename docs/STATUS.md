@@ -8,7 +8,7 @@
 > planning docs were removed from the tree (2026-07-03; retrieve via git
 > history) — never resurrect their backlog items or code samples.
 >
-> **Snapshot date:** 2026-07-14. When you finish a change that moves a row,
+> **Snapshot date:** 2026-07-16. When you finish a change that moves a row,
 > update this table in the same PR. See `docs/phase1-modules.md` for the
 > Phase-1 feature-module index.
 
@@ -251,6 +251,54 @@ completion/failure; continuity eval replays offline.
   concise English and successful verification adds no extra transcript line.
   Tests: `gateway/cli/controller_test.go`, `gateway/client/client_test.go`,
   `gateway/httpapi/run_events_test.go`, `tools/builtin_test.go`.
+
+- **P1-5 durable external waits + visible recovery health — ✅ shipped
+  2026-07-16.** CI/CD and other slow external systems no longer require an
+  active model loop to poll. The native `watch_external` tool registers one
+  bounded, persisted command with success/failure patterns, interval and hard
+  timeout; the registering run exits as `waiting_external`, while the daemon
+  claims due checks from `external_watches`, executes them under the existing
+  terminal scope/egress/approval policy, updates the task, records events and
+  sends the preferred IM notification. This removes foreground token burn and
+  frees the per-person run slot while waiting. Structured `waiting_external`
+  remains authoritative through gateway finalization and is exposed as the
+  public turn status instead of being overwritten by generic `completed`.
+  Post-run maintenance now treats
+  non-retryable provider errors (quota/auth/config) as `blocked_provider`
+  instead of spending five retries; `/diag` reports background learning as
+  paused and daemon restart grants one fresh recovery probe. Boot/stale-run
+  recovery also sends one idempotent preferred-channel interruption notice
+  (`run.recovery_notified`) after enqueue succeeds. Tests:
+  `control/external_watches_test.go`,
+  `control/recovery_notifications_test.go`,
+  `httpapi/recovery_notification_test.go`,
+  `httpapi/run_labeler_test.go`. Eval:
+  `evalcases/reliability/external-watch-handoff.yaml`; the live cassette was
+  recorded on 2026-07-16 and now provides the offline replay gate in addition
+  to deterministic unit coverage.
+
+- **P1-6 cross-endpoint recovery + maintenance failover + honest task state -
+  shipped 2026-07-16.** Async and cron final answers are now typed as
+  `final_result`. An explicit CLI continuation receives a bounded
+  `Delivery Continuity` slice when the same task has a recent Weixin/IM final
+  answer in `sent_unconfirmed` or `failed`, allowing the agent to restate the
+  missing conclusion without adding a second resend path. Mid-turn guidance
+  now records `run.steering_consumed` only after it reaches a model step; raw
+  guidance is not copied into the durable event. Post-run maintenance can
+  fail over through the explicitly configured
+  `tasks.maintenance_fallback_roles` and still never falls back to the primary
+  coding model. Smart approval evaluates paths against the active
+  `ExecutionScope`, so switching `/ws` no longer makes already-authorized
+  reads look outside the daemon's startup directory. `/tasks` uses the newest
+  structured run outcome to distinguish daemon recovery, provider transport
+  interruption, context overflow, verification incomplete, and
+  `waiting_external`. Existing `/diag context`, stable/volatile prompt
+  accounting, artifact-backed large tool outputs, duplicate-task suggestions,
+  and the already-split gateway files were verified as covering the remaining
+  proposed P1/P2 work without another implementation. Tests:
+  `httpapi/context_selector_test.go`, `httpapi/run_events_test.go`,
+  `httpapi/task_view_test.go`, `control/task_labels_test.go`,
+  `tools/workspace_scope_test.go`, `app/post_run_analyzer_test.go`.
 
 **P2 — engineering governance**
 

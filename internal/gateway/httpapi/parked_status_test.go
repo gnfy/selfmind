@@ -19,6 +19,17 @@ func TestFormatTaskStatusParkedWording(t *testing.T) {
 	}
 }
 
+func TestInterruptedTaskSuffixUsesCompletionReason(t *testing.T) {
+	got := interruptedTaskSuffix(control.LatestRunOutcome{CompletionReason: "daemon_recovery", Resumable: true})
+	if got != "daemon restarted - resumable" {
+		t.Fatalf("suffix = %q", got)
+	}
+	got = interruptedTaskSuffix(control.LatestRunOutcome{CompletionReason: "provider_or_transport_error", Resumable: true})
+	if got != "provider connection interrupted - resumable" {
+		t.Fatalf("provider suffix = %q", got)
+	}
+}
+
 // TestFormatTaskStatusRunningShowsElapsed: a task with a live run still reports
 // elapsed and does NOT get the parked wording.
 func TestFormatTaskStatusRunningShowsElapsed(t *testing.T) {
@@ -36,7 +47,8 @@ func TestFormatTaskStatusRunningShowsElapsed(t *testing.T) {
 // TestTaskCardStatusMapping: the /tasks card bracket is the simplified state —
 // running (live run) beats everything, terminal statuses render verbatim,
 // pending approvals/questions or blocked read as waiting, and every other open
-// state (in_progress, interrupted, new) reads as paused.
+// state (in_progress, new) reads as paused. Interrupted remains explicit so a
+// daemon recovery cannot look like an ordinary parked turn.
 func TestTaskCardStatusMapping(t *testing.T) {
 	cases := []struct {
 		name      string
@@ -52,7 +64,7 @@ func TestTaskCardStatusMapping(t *testing.T) {
 		{"pending question waits", control.Task{Status: "in_progress"}, false, 0, 1, "waiting"},
 		{"blocked waits", control.Task{Status: "blocked"}, false, 0, 0, "waiting"},
 		{"parked in_progress pauses", control.Task{Status: "in_progress"}, false, 0, 0, "paused"},
-		{"interrupted pauses", control.Task{Status: "interrupted"}, false, 0, 0, "paused"},
+		{"interrupted is explicit", control.Task{Status: "interrupted"}, false, 0, 0, "interrupted"},
 		{"new pauses", control.Task{Status: "new"}, false, 0, 0, "paused"},
 		{"done verbatim", control.Task{Status: "done"}, false, 0, 0, "done"},
 		{"completed verbatim", control.Task{Status: "completed"}, false, 0, 0, "completed"},

@@ -43,6 +43,11 @@ const KindApproval = "approval"
 // plain text and the person's next non-command reply resolves it.
 const KindClarify = "clarify"
 
+// KindFinalResult marks the terminal user-facing answer for a run. Keeping
+// final answers typed lets cross-endpoint continuity surface a missed result
+// without confusing it with progress, approval, or diagnostic notifications.
+const KindFinalResult = "final_result"
+
 type Sender interface {
 	Send(ctx context.Context, msg Message) error
 }

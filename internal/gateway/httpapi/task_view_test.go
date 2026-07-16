@@ -172,8 +172,8 @@ func TestTasksCardInterruptedReplacesAge(t *testing.T) {
 	seedTask(t, store, identity, "3D 坦克大战重构", "interrupted", 1)
 
 	out := controlReply(t, daemon, "/tasks")
-	if !strings.Contains(out, "[paused] 3D 坦克大战重构") {
-		t.Fatalf("interrupted maps to the paused bracket:\n%s", out)
+	if !strings.Contains(out, "[interrupted] 3D 坦克大战重构") {
+		t.Fatalf("interrupted keeps an honest terminal-reason bracket:\n%s", out)
 	}
 	if !strings.Contains(out, "last: 3D 坦克大战重构 · interrupted") {
 		t.Fatalf("interrupted must replace the age on the last line:\n%s", out)

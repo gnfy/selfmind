@@ -112,7 +112,7 @@ func Run(ctx context.Context, opts Options) error {
 	}
 
 	skillStore := kernel.NewSkillStore(mem)
-	disp, err := app.InitTools(mem, cfg, agent, skillStore, defaultTenantID)
+	disp, err := app.InitTools(mem, cfg, agent, skillStore, defaultTenantID, controlStore)
 	if err != nil {
 		return fmt.Errorf("app.InitTools failed: %w", err)
 	}
@@ -125,7 +125,7 @@ func Run(ctx context.Context, opts Options) error {
 	// Optional multi-worker execution (SELFMIND_WORKERS>1) for the daemon, where
 	// concurrent CLI/IM/cron requests can actually exercise it. Default 1 = the
 	// single-agent serialized path, unchanged.
-	if workers, werr := app.MaybeEnableWorkerPool(gwDeps.Gateway, mem, cfg, skillStore, defaultTenantID); werr != nil {
+	if workers, werr := app.MaybeEnableWorkerPool(gwDeps.Gateway, mem, cfg, skillStore, defaultTenantID, controlStore); werr != nil {
 		log.Warn("worker pool partially enabled", "workers", workers, "error", werr)
 	} else if workers > 1 {
 		log.Info("agent worker pool enabled", "workers", workers)
@@ -187,8 +187,6 @@ func Run(ctx context.Context, opts Options) error {
 			return err == nil && inserted
 		})
 	}
-	stopStuckRunSweeper := gatewayAPI.StartStuckRunSweeper(ctx)
-	defer stopStuckRunSweeper()
 	stopMaintenanceWorker := gatewayAPI.StartMaintenanceWorker(ctx)
 	defer stopMaintenanceWorker()
 	stopTaskGovernanceSweeper := gatewayAPI.StartTaskGovernanceSweeper(ctx)
@@ -205,6 +203,12 @@ func Run(ctx context.Context, opts Options) error {
 		gatewayAPI.Delivery.Start(ctx)
 		defer gatewayAPI.Delivery.Stop()
 	}
+	// Recovery notifications depend on Delivery. Start this worker only after
+	// the outbox/router is ready so boot-recovered runs can be surfaced now.
+	stopStuckRunSweeper := gatewayAPI.StartStuckRunSweeper(ctx)
+	defer stopStuckRunSweeper()
+	stopExternalWatchWorker := gatewayAPI.StartExternalWatchWorker(ctx)
+	defer stopExternalWatchWorker()
 	// Install the cron executor now that the Server + Delivery are ready, then
 	// start the scheduler. Scheduled jobs now run real agent turns and deliver
 	// results to their channel (e.g. a daily summary pushed to WeChat).

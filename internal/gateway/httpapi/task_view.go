@@ -27,13 +27,14 @@ const tasksTrailingHint = "Reply to continue the current task, /resume <id> to s
 // taskCardView is the batched per-person data every card draws from, fetched
 // once per /tasks render (grouped queries, never per-task round trips).
 type taskCardView struct {
-	activeTaskID string              // task with a LIVE run right now, else ""
-	runCounts    map[string]int      // task_id -> run count
-	lastRuns     map[string]string   // task_id -> latest run input summary
-	files        map[string][]string // task_id -> latest handoff changed files
-	approvals    map[string]int      // task_id -> pending approvals
-	questions    map[string]int      // task_id -> pending clarify questions
-	dupes        map[string]string   // task_id -> suggested duplicate-of task id (W3)
+	activeTaskID string                              // task with a LIVE run right now, else ""
+	runCounts    map[string]int                      // task_id -> run count
+	lastRuns     map[string]string                   // task_id -> latest run input summary
+	files        map[string][]string                 // task_id -> latest handoff changed files
+	approvals    map[string]int                      // task_id -> pending approvals
+	questions    map[string]int                      // task_id -> pending clarify questions
+	dupes        map[string]string                   // task_id -> suggested duplicate-of task id (W3)
+	outcomes     map[string]control.LatestRunOutcome // task_id -> newest terminal reason
 }
 
 // tasksOverviewReply renders /tasks and its variants: ""/"open" (open work),
@@ -71,6 +72,7 @@ func (d *Server) tasksOverviewReply(ctx context.Context, identity *control.Ident
 	view.lastRuns, _ = d.Control.LatestRunSummaries(ctx, identity.TenantID, identity.PersonID)
 	view.files, _ = d.Control.LatestHandoffFilesByPerson(ctx, identity.TenantID, identity.PersonID)
 	view.approvals, view.questions, _ = d.Control.PendingCountsByTask(ctx, identity.TenantID, identity.PersonID)
+	view.outcomes, _ = d.Control.LatestRunOutcomesByPerson(ctx, identity.TenantID, identity.PersonID)
 	if suggestions, err := d.Control.ListDuplicateSuggestions(ctx, identity.TenantID, identity.PersonID); err == nil {
 		view.dupes = dupeSuggestionsForView(suggestions, tasks)
 	}
@@ -315,7 +317,9 @@ func taskCardStatus(t control.Task, isActive bool, pendingApprovals, pendingQues
 		return "running"
 	case terminalTaskStatus(t.Status):
 		return strings.ToLower(strings.TrimSpace(t.Status))
-	case pendingApprovals > 0 || pendingQuestions > 0 || strings.EqualFold(strings.TrimSpace(t.Status), "blocked"):
+	case strings.EqualFold(strings.TrimSpace(t.Status), "interrupted"):
+		return "interrupted"
+	case pendingApprovals > 0 || pendingQuestions > 0 || strings.EqualFold(strings.TrimSpace(t.Status), "blocked") || strings.EqualFold(strings.TrimSpace(t.Status), "waiting_external"):
 		return "waiting"
 	default:
 		return "paused"
@@ -349,7 +353,9 @@ func renderTaskCard(index int, t control.Task, v taskCardView) string {
 	}
 	suffix := humanAge(t.UpdatedAt)
 	if !isActive && strings.EqualFold(strings.TrimSpace(t.Status), "interrupted") {
-		suffix = "interrupted"
+		suffix = interruptedTaskSuffix(v.outcomes[t.ID])
+	} else if !isActive && strings.EqualFold(strings.TrimSpace(t.Status), "waiting_external") {
+		suffix = "external check pending"
 	}
 	if last != "" {
 		fmt.Fprintf(&sb, "   last: %s · %s\n", truncateRunes(toOneLine(last), 40), suffix)
@@ -378,6 +384,25 @@ func renderTaskCard(index int, t control.Task, v taskCardView) string {
 	fmt.Fprintf(&sb, "   runs: %d\n", v.runCounts[t.ID])
 	fmt.Fprintf(&sb, "   id: %s", cardTaskID(t.ID))
 	return sb.String()
+}
+
+func interruptedTaskSuffix(outcome control.LatestRunOutcome) string {
+	resumable := ""
+	if outcome.Resumable {
+		resumable = " - resumable"
+	}
+	switch strings.ToLower(strings.TrimSpace(outcome.CompletionReason)) {
+	case "daemon_recovery":
+		return "daemon restarted" + resumable
+	case "provider_or_transport_error", "transport_error", "provider_error":
+		return "provider connection interrupted" + resumable
+	case "context_overflow":
+		return "context limit reached" + resumable
+	case "verification_incomplete", "verification_failed":
+		return "verification incomplete" + resumable
+	default:
+		return "interrupted" + resumable
+	}
 }
 
 // renderTaskCards renders the done|archived|all variants with the same card

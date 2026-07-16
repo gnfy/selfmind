@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"selfmind/internal/control"
 	"selfmind/internal/kernel"
 	"selfmind/internal/kernel/memory"
 	"selfmind/internal/platform/config"
@@ -12,7 +13,7 @@ import (
 
 // InitTools wires up the dispatcher, built-in tools, extended tools,
 // the skill loader, the skill metrics middleware, and injects the session search function.
-func InitTools(mem *memory.MemoryManager, cfg *config.Config, ag *kernel.Agent, skillStore *kernel.SkillStore, tenantID string) (*tools.Dispatcher, error) {
+func InitTools(mem *memory.MemoryManager, cfg *config.Config, ag *kernel.Agent, skillStore *kernel.SkillStore, tenantID string, controlStores ...*control.Store) (*tools.Dispatcher, error) {
 	registry := tools.NewRegistry()
 	disp := tools.NewDispatcherWithRegistry(registry)
 	if tenantID == "" {
@@ -30,6 +31,9 @@ func InitTools(mem *memory.MemoryManager, cfg *config.Config, ag *kernel.Agent, 
 		Backend: cfg.Web.SearchBackend,
 		APIKey:  cfg.Web.APIKey,
 	})
+	if len(controlStores) > 0 && controlStores[0] != nil {
+		disp.RegisterTool(tools.NewExternalWatchTool(controlStores[0]))
+	}
 	// Read-back for spooled large tool outputs (W1): the base dir must match
 	// the gateway sink's spool dir, both derived from the same resolved data
 	// dir, so every dispatcher (daemon, worker pool, eval) can resolve the

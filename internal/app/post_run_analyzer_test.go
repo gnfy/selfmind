@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"selfmind/internal/gateway/httpapi"
@@ -12,6 +13,7 @@ import (
 type postRunProviderStub struct {
 	content string
 	calls   int
+	err     error
 }
 
 func (p *postRunProviderStub) ChatCompletion(context.Context, []llm.Message) (string, error) {
@@ -20,6 +22,9 @@ func (p *postRunProviderStub) ChatCompletion(context.Context, []llm.Message) (st
 
 func (p *postRunProviderStub) Chat(context.Context, llm.ChatRequest) (*llm.ChatResponse, error) {
 	p.calls++
+	if p.err != nil {
+		return nil, p.err
+	}
 	return &llm.ChatResponse{Content: p.content}, nil
 }
 
@@ -27,6 +32,22 @@ func (p *postRunProviderStub) StreamChat(context.Context, llm.ChatRequest) (<-ch
 	ch := make(chan llm.StreamEvent)
 	close(ch)
 	return ch, nil
+}
+
+func TestMaintenanceProviderChainUsesExplicitFallback(t *testing.T) {
+	primary := &postRunProviderStub{err: errors.New("403 quota exhausted")}
+	fallback := &postRunProviderStub{content: `{"task_decision":"KEEP"}`}
+	chain := &maintenanceProviderChain{providers: []namedMaintenanceProvider{
+		{role: llm.RoleMemoryExtract, provider: primary},
+		{role: llm.RoleBackgroundReview, provider: fallback},
+	}}
+	resp, err := chain.Chat(context.Background(), llm.ChatRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp == nil || resp.Content == "" || primary.calls != 1 || fallback.calls != 1 {
+		t.Fatalf("resp=%+v primary_calls=%d fallback_calls=%d", resp, primary.calls, fallback.calls)
+	}
 }
 
 func TestPostRunAnalyzerCombinesDecisionAndFactPersistence(t *testing.T) {

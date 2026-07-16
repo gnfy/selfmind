@@ -1,0 +1,75 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "content": "The"
+    },
+    {
+      "content": " external"
+    },
+    {
+      "content": " watch"
+    },
+    {
+      "content": " is"
+    },
+    {
+      "content": " registered"
+    },
+    {
+      "content": ";"
+    },
+    {
+      "content": " I"
+    },
+    {
+      "content": "’m"
+    },
+    {
+      "content": " marking"
+    },
+    {
+      "content": " this"
+    },
+    {
+      "content": " run"
+    },
+    {
+      "content": " as"
+    },
+    {
+      "content": " waiting"
+    },
+    {
+      "content": " on"
+    },
+    {
+      "content": " it"
+    },
+    {
+      "content": " now"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": "Preparing to run finish_run",
+      "event_type": "agent.thinking"
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_4osUzEOOiEVKj9DlRRSVdCk8",
+          "Function": "finish_run",
+          "Args": "{\"status\":\"waiting_external\",\"summary\":\"Registered durable external watch \\\"CI completion\\\" and handed off waiting to the daemon.\",\"done\":[\"Registered external watch named CI completion.\",\"Configured it to poll printf 'SUCCEEDED\\\\n' from the current workspace.\",\"Set success pattern to SUCCEEDED, interval to 5 seconds, and timeout to 60 seconds.\"],\"next_steps\":[\"Daemon will report when the watch succeeds, fails, or times out.\"],\"files\":[],\"tests\":[],\"risks\":[],\"need_approve\":false}"
+        }
+      ]
+    },
+    {
+      "usage": {
+        "input_tokens": 5215,
+        "output_tokens": 141
+      }
+    }
+  ]
+}

@@ -198,9 +198,30 @@ tasks:
   auto_archive_done_after: "720h"      # 30d; "0" disables that archive class
   auto_archive_cancelled_after: "168h" # 7d
   maintenance_model_role: "memory_extract"  # role for post-run label/fact maintenance
+  maintenance_fallback_roles: ["background_review", "fast_classifier"] # explicit cheap-role failover; never the primary model implicitly
 ```
 
 Auto-archive only touches stale, terminal, unpinned tasks with no live run.
+`maintenance_fallback_roles` is ordered. After a non-retryable provider
+failure, SelfMind tries each explicitly configured role, skips missing roles,
+and never falls back to the primary coding model. Reusing the same provider in
+every role does not provide provider-level failover. For example, keep Kimi as
+the normal low-cost role and add a MiniMax backup:
+
+```yaml
+models:
+  roles:
+    memory_extract:
+      provider: "kimi-coding"
+      model: "kimi-for-coding"
+    maintenance_backup:
+      provider: "minimax"
+      model: "MiniMax-M3"
+
+tasks:
+  maintenance_model_role: "memory_extract"
+  maintenance_fallback_roles: ["maintenance_backup", "background_review"]
+```
 
 ## 8. Diagnostics: flight recorder
 

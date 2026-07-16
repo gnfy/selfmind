@@ -17,9 +17,12 @@ package httpapi
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
+	"selfmind/internal/control"
+	"selfmind/internal/gateway/delivery"
 	"selfmind/internal/platform/log"
 )
 
@@ -74,6 +77,9 @@ func (d *Server) startStuckRunSweeper(ctx context.Context, interval, threshold t
 	go func() {
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
+		// The boot sweep runs before Delivery is available. Once the recovery
+		// worker starts, surface those durable interruption events immediately.
+		d.sweepRecoveryNotifications()
 		for {
 			select {
 			case <-done:
@@ -82,6 +88,7 @@ func (d *Server) startStuckRunSweeper(ctx context.Context, interval, threshold t
 				return
 			case <-ticker.C:
 				d.sweepStuckRuns(threshold)
+				d.sweepRecoveryNotifications()
 				// Same 60s cadence re-pushes pending approvals/clarifies that were
 				// left uninformed once the CLI detaches (Fix 2). No-op when the
 				// escrow threshold is unset (PendingNotifyAfter <= 0).
@@ -90,6 +97,37 @@ func (d *Server) startStuckRunSweeper(ctx context.Context, interval, threshold t
 		}
 	}()
 	return func() { once.Do(func() { close(done) }) }
+}
+
+// sweepRecoveryNotifications turns durable daemon-recovery events into one
+// presence-aware notification. It marks an event only after delivery was
+// actually enqueued, so an offline/unbound endpoint remains retryable.
+func (d *Server) sweepRecoveryNotifications() {
+	if d == nil || d.Control == nil || d.Delivery == nil {
+		return
+	}
+	ctx := context.Background()
+	items, err := d.Control.ListPendingRecoveryNotifications(ctx, 50)
+	if err != nil {
+		log.Warn("gateway: recovery notification scan failed", "error", err)
+		return
+	}
+	for _, item := range items {
+		identity := &control.IdentityContext{TenantID: item.TenantID, PersonID: item.PersonID, Platform: "cli"}
+		title := item.Title
+		if title == "" {
+			title = "a task"
+		}
+		content := fmt.Sprintf("SelfMind restarted while %q was running. The saved task is safe and resumable.\n\nReply continue to resume from durable progress.", title)
+		if d.coordinator().routePendingNotification(ctx, identity, item.Channel, delivery.Message{
+			TenantID: item.TenantID, PersonID: item.PersonID, TaskID: item.TaskID, RunID: item.RunID,
+			Content: content, Kind: "recovery",
+		}) {
+			if err := d.Control.MarkRecoveryNotificationSent(ctx, item); err != nil {
+				log.Warn("gateway: recovery notification marker failed", "run", item.RunID, "error", err)
+			}
+		}
+	}
 }
 
 // sweepStuckRuns runs one recovery pass, shielding every run in the active

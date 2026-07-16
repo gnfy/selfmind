@@ -442,7 +442,37 @@ CREATE TABLE IF NOT EXISTS maintenance_jobs (
 	updated_at INTEGER NOT NULL,
 	PRIMARY KEY (run_id, analyzer_version)
 );
-CREATE INDEX IF NOT EXISTS idx_maintenance_jobs_status ON maintenance_jobs(tenant_id, status, next_retry_at);`
+CREATE INDEX IF NOT EXISTS idx_maintenance_jobs_status ON maintenance_jobs(tenant_id, status, next_retry_at);
+CREATE TABLE IF NOT EXISTS external_watches (
+	id TEXT PRIMARY KEY,
+	tenant_id TEXT NOT NULL,
+	person_id TEXT NOT NULL,
+	workspace_id TEXT,
+	task_id TEXT NOT NULL,
+	run_id TEXT,
+	channel TEXT,
+	description TEXT NOT NULL DEFAULT '',
+	cwd TEXT NOT NULL,
+	command TEXT NOT NULL,
+	success_pattern TEXT NOT NULL,
+	failure_pattern TEXT NOT NULL DEFAULT '',
+	status TEXT NOT NULL DEFAULT 'pending',
+	interval_seconds INTEGER NOT NULL DEFAULT 30,
+	command_timeout_seconds INTEGER NOT NULL DEFAULT 30,
+	timeout_at INTEGER NOT NULL,
+	next_check_at INTEGER NOT NULL,
+	attempts INTEGER NOT NULL DEFAULT 0,
+	last_output TEXT NOT NULL DEFAULT '',
+	last_error TEXT NOT NULL DEFAULT '',
+	created_at INTEGER NOT NULL,
+	updated_at INTEGER NOT NULL,
+	finished_at INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_external_watches_due
+	ON external_watches(status, next_check_at);
+CREATE INDEX IF NOT EXISTS idx_external_watches_owner
+	ON external_watches(tenant_id, person_id, status, updated_at);`
+
 	if _, err := s.db.ExecContext(ctx, schema); err != nil {
 		return err
 	}

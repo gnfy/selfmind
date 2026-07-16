@@ -100,6 +100,7 @@ var configReportDefaultPaths = [][]string{
 	{"tasks", "auto_archive_done_after"},
 	{"tasks", "auto_archive_cancelled_after"},
 	{"tasks", "maintenance_model_role"},
+	{"tasks", "maintenance_fallback_roles"},
 	{"storage", "type"},
 	{"storage", "data_dir"},
 }

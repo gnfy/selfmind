@@ -104,7 +104,7 @@ func selectWithRecall(t *testing.T, store *control.Store, identity *control.Iden
 		t.Fatal(err)
 	}
 	server := &Server{Control: store, Recall: engine}
-	return server.coordinator().selectedTaskRuntimeContext(ctx, task, run, nil, "cli", message, false), task
+	return server.coordinator().selectedTaskRuntimeContext(ctx, task, run, nil, "cli", "cli", message, false), task
 }
 
 func TestRecallSelectorAttachesRelatedSlices(t *testing.T) {

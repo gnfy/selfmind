@@ -138,6 +138,7 @@ tasks:
   auto_archive_done_after: "720h"
   auto_archive_cancelled_after: "168h"
   maintenance_model_role: "memory_extract"
+  maintenance_fallback_roles: ["background_review", "fast_classifier"]
 
 editor:
   large_paste_chars: 1000
@@ -266,11 +267,12 @@ type MemoryGovernanceConfig struct {
 }
 
 type TaskConfig struct {
-	InboxEnabled              bool   `mapstructure:"inbox_enabled" yaml:"inbox_enabled,omitempty"`
-	DefaultListLimit          int    `mapstructure:"default_list_limit" yaml:"default_list_limit,omitempty"`
-	AutoArchiveDoneAfter      string `mapstructure:"auto_archive_done_after" yaml:"auto_archive_done_after,omitempty"`
-	AutoArchiveCancelledAfter string `mapstructure:"auto_archive_cancelled_after" yaml:"auto_archive_cancelled_after,omitempty"`
-	MaintenanceModelRole      string `mapstructure:"maintenance_model_role" yaml:"maintenance_model_role,omitempty"`
+	InboxEnabled              bool     `mapstructure:"inbox_enabled" yaml:"inbox_enabled,omitempty"`
+	DefaultListLimit          int      `mapstructure:"default_list_limit" yaml:"default_list_limit,omitempty"`
+	AutoArchiveDoneAfter      string   `mapstructure:"auto_archive_done_after" yaml:"auto_archive_done_after,omitempty"`
+	AutoArchiveCancelledAfter string   `mapstructure:"auto_archive_cancelled_after" yaml:"auto_archive_cancelled_after,omitempty"`
+	MaintenanceModelRole      string   `mapstructure:"maintenance_model_role" yaml:"maintenance_model_role,omitempty"`
+	MaintenanceFallbackRoles  []string `mapstructure:"maintenance_fallback_roles" yaml:"maintenance_fallback_roles,omitempty"`
 }
 
 const (
@@ -763,6 +765,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("tasks.auto_archive_done_after", "720h")
 	v.SetDefault("tasks.auto_archive_cancelled_after", "168h")
 	v.SetDefault("tasks.maintenance_model_role", "memory_extract")
+	v.SetDefault("tasks.maintenance_fallback_roles", []string{"background_review", "fast_classifier"})
 	v.SetDefault("evolution.enabled", true)
 	v.SetDefault("evolution.nudge_interval", 10)
 	v.SetDefault("models.source", "local")

@@ -1,0 +1,72 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "content": "I"
+    },
+    {
+      "content": "’m"
+    },
+    {
+      "content": " registering"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " requested"
+    },
+    {
+      "content": " durable"
+    },
+    {
+      "content": " CI"
+    },
+    {
+      "content": " completion"
+    },
+    {
+      "content": " watch"
+    },
+    {
+      "content": " without"
+    },
+    {
+      "content": " running"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " poll"
+    },
+    {
+      "content": " command"
+    },
+    {
+      "content": " directly"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": "Preparing to run watch_external",
+      "event_type": "agent.thinking"
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_RAZIGwKJl1aXN3tiIcGOPte3",
+          "Function": "watch_external",
+          "Args": "{\"command\":\"printf 'SUCCEEDED\\\\n'\",\"cwd\":\"{{SELFMIND_VCR_WORKSPACE}}\",\"description\":\"CI completion\",\"interval_seconds\":5,\"success_pattern\":\"SUCCEEDED\",\"timeout_seconds\":60,\"command_timeout_seconds\":30}"
+        }
+      ]
+    },
+    {
+      "usage": {
+        "input_tokens": 5052,
+        "output_tokens": 225
+      }
+    }
+  ]
+}

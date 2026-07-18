@@ -9,6 +9,7 @@ import (
 
 	"selfmind/internal/control"
 	"selfmind/internal/gateway/delivery"
+	"selfmind/internal/kernel/llm"
 	"selfmind/internal/tools"
 )
 
@@ -24,7 +25,8 @@ func (d *Server) blockMaintenanceProviderJob(ctx context.Context, identity *cont
 	if d == nil || d.Control == nil || identity == nil || task == nil || run == nil || providerErr == nil {
 		return
 	}
-	blocked, err := d.Control.BlockMaintenanceJob(ctx, identity.TenantID, run.ID, version, providerErr.Error())
+	info, _ := llm.ProviderErrorInfo(providerErr)
+	blocked, err := d.Control.BlockMaintenanceJobForRoute(ctx, identity.TenantID, run.ID, version, info.RouteID, providerErr.Error())
 	if err != nil || !blocked {
 		return
 	}

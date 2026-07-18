@@ -34,15 +34,22 @@ const (
 // (channel/platform/platform_user_id) and to reproduce the request scope
 // (approval_mode, workspace_id).
 type QueuedTask struct {
-	ID             string    `json:"id"`
-	TenantID       string    `json:"tenant_id"`
-	PersonID       string    `json:"person_id"`
-	Channel        string    `json:"channel"`
-	Platform       string    `json:"platform"`
-	PlatformUserID string    `json:"platform_user_id,omitempty"`
-	Content        string    `json:"content"`
-	ApprovalMode   string    `json:"approval_mode,omitempty"`
-	WorkspaceID    string    `json:"workspace_id,omitempty"`
+	ID             string `json:"id"`
+	TenantID       string `json:"tenant_id"`
+	PersonID       string `json:"person_id"`
+	Channel        string `json:"channel"`
+	Platform       string `json:"platform"`
+	PlatformUserID string `json:"platform_user_id,omitempty"`
+	Content        string `json:"content"`
+	ApprovalMode   string `json:"approval_mode,omitempty"`
+	WorkspaceID    string `json:"workspace_id,omitempty"`
+	// TaskID pins the drained run to a specific existing task (used by
+	// system-originated finalization work such as external-watch closure).
+	// Empty for ordinary inbound messages, which resolve their task normally.
+	TaskID string `json:"task_id,omitempty"`
+	// IdempotencyKey deduplicates system-originated enqueues across crash
+	// recovery replays. Empty (ordinary inbound) rows never deduplicate.
+	IdempotencyKey string    `json:"idempotency_key,omitempty"`
 	Status         string    `json:"status"`
 	CreatedAt      time.Time `json:"created_at"`
 }
@@ -64,12 +71,30 @@ func (s *Store) EnqueueQueued(ctx context.Context, q QueuedTask) (*QueuedTask, e
 	}
 	q.Status = QueueStatusQueued
 	q.CreatedAt = time.Now()
-	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO task_queue (id, tenant_id, person_id, channel, platform, platform_user_id, content, approval_mode, workspace_id, status, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		q.ID, q.TenantID, q.PersonID, q.Channel, q.Platform, q.PlatformUserID, q.Content, q.ApprovalMode, q.WorkspaceID, q.Status, q.CreatedAt.Unix())
+	q.IdempotencyKey = strings.TrimSpace(q.IdempotencyKey)
+	query := `INSERT INTO task_queue (id, tenant_id, person_id, channel, platform, platform_user_id, content, approval_mode, workspace_id, task_id, idempotency_key, status, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	if q.IdempotencyKey != "" {
+		query += ` ON CONFLICT(idempotency_key) WHERE idempotency_key != '' DO NOTHING`
+	}
+	result, err := s.db.ExecContext(ctx, query,
+		q.ID, q.TenantID, q.PersonID, q.Channel, q.Platform, q.PlatformUserID, q.Content, q.ApprovalMode, q.WorkspaceID, q.TaskID, q.IdempotencyKey, q.Status, q.CreatedAt.Unix())
 	if err != nil {
 		return nil, err
+	}
+	if n, _ := result.RowsAffected(); n == 0 {
+		if q.IdempotencyKey == "" {
+			return nil, fmt.Errorf("queue insert affected no rows without an idempotency key")
+		}
+		// The stable idempotency key already has a row: a replayed enqueue is
+		// success, never an error (a recovery loop must not spin on it).
+		existing := s.db.QueryRowContext(ctx,
+			`SELECT `+queueSelectColumns+` FROM task_queue WHERE idempotency_key = ?`, q.IdempotencyKey)
+		dup, err := scanQueuedTask(existing)
+		if err != nil {
+			return nil, fmt.Errorf("load duplicate queued task %q: %w", q.IdempotencyKey, err)
+		}
+		return &dup, nil
 	}
 	return &q, nil
 }
@@ -80,7 +105,7 @@ func scanQueuedTask(rows interface {
 	var q QueuedTask
 	var created int64
 	if err := rows.Scan(&q.ID, &q.TenantID, &q.PersonID, &q.Channel, &q.Platform, &q.PlatformUserID,
-		&q.Content, &q.ApprovalMode, &q.WorkspaceID, &q.Status, &created); err != nil {
+		&q.Content, &q.ApprovalMode, &q.WorkspaceID, &q.TaskID, &q.IdempotencyKey, &q.Status, &created); err != nil {
 		return QueuedTask{}, err
 	}
 	q.CreatedAt = time.Unix(created, 0)
@@ -88,7 +113,8 @@ func scanQueuedTask(rows interface {
 }
 
 const queueSelectColumns = `id, tenant_id, person_id, channel, platform, COALESCE(platform_user_id, ''),
-	content, COALESCE(approval_mode, ''), COALESCE(workspace_id, ''), status, created_at`
+	content, COALESCE(approval_mode, ''), COALESCE(workspace_id, ''), COALESCE(task_id, ''),
+	COALESCE(idempotency_key, ''), status, created_at`
 
 // ListQueued returns a person's queue rows in FIFO order (oldest first) for the
 // given status. An empty status defaults to "queued".

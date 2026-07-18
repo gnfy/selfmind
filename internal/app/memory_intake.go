@@ -118,16 +118,81 @@ func resolveNeighborRef(offered []memory.Fact, ref string) *memory.Fact {
 	return match
 }
 
+// intakeMeta carries the durability ruling into the canonical write.
+type intakeMeta struct {
+	ValidUntil time.Time
+	Category   string
+}
+
+// defaultTimeBoundedTTL bounds a time_bounded fact whose valid_until the
+// model omitted or garbled.
+const defaultTimeBoundedTTL = 30 * 24 * time.Hour
+
+// decisionMeta enforces the durability contract deterministically, keyed on
+// the two-tier transient verdict (memory.ClassifyTransientContent). The
+// matrix fails CLOSED against permanence and OPEN toward keeping rules —
+// the acceptance bar is: rather miss a transient candidate than wrongly
+// discard one long-term rule.
+//
+//	durable  + confirmed-transient  → time-bounded TTL (suspect: expires
+//	                                  instead of poisoning recall forever)
+//	durable  + candidate/none       → permanent
+//	time_bounded                    → valid_until (model value or default)
+//	episodic                        → dropped
+//	empty    + confirmed-transient  → dropped (the observed live pollution)
+//	empty    + candidate/none       → time-bounded TTL (an omitted field
+//	                                  never mints permanent memory; an
+//	                                  ambiguous candidate survives bounded)
+func decisionMeta(d httpapi.MemoryDecision) (intakeMeta, bool) {
+	verdict := memory.ClassifyTransientContent(d.Content)
+	meta := intakeMeta{Category: strings.TrimSpace(d.Category)}
+	switch strings.ToLower(strings.TrimSpace(d.Durability)) {
+	case "durable":
+		if verdict == memory.TransientConfirmed {
+			meta.ValidUntil = time.Now().Add(defaultTimeBoundedTTL)
+		}
+		return meta, false
+	case "time_bounded":
+		if parsed, err := time.Parse(time.RFC3339, strings.TrimSpace(d.ValidUntil)); err == nil && parsed.After(time.Now()) {
+			meta.ValidUntil = parsed
+		} else {
+			meta.ValidUntil = time.Now().Add(defaultTimeBoundedTTL)
+		}
+		return meta, false
+	case "episodic":
+		return intakeMeta{}, true
+	default:
+		if verdict == memory.TransientConfirmed {
+			return intakeMeta{}, true
+		}
+		meta.ValidUntil = time.Now().Add(defaultTimeBoundedTTL)
+		return meta, false
+	}
+}
+
+// memoryPartition returns the storage partition for a run's person memory.
+// The foreground agent reads person-partitioned memory (the agent's storage
+// tenant IS person_id — see handlers_dispatch.go), so background intake must
+// write to the same partition or nothing it learns is ever recalled. The
+// control-plane TenantID is only a last-resort fallback for legacy requests
+// that carry no person.
+func memoryPartition(req httpapi.PostRunAnalysisRequest) string {
+	if p := strings.TrimSpace(req.PersonID); p != "" {
+		return p
+	}
+	return req.TenantID
+}
+
 // canonicalWrite mirrors every intake effect onto the layered store
 // (best-effort: the legacy facts write is authoritative during the
 // transition. Errors are returned so the maintenance job can replay its frozen
 // proposal; exact replay is idempotent by observation id.
-func (a *llmPostRunAnalyzer) canonicalWrite(ctx context.Context, req httpapi.PostRunAnalysisRequest, decision, target, content, refContent string, confidence float64) error {
+func (a *llmPostRunAnalyzer) canonicalWrite(ctx context.Context, req httpapi.PostRunAnalysisRequest, decision, target, content, refContent string, confidence float64, meta intakeMeta) error {
 	store, ok := a.memory.Canonical()
 	if !ok {
 		return nil
 	}
-	err := store.ApplyIntakeWrite(ctx, req.TenantID, memory.IntakeWrite{
+	err := store.ApplyIntakeWrite(ctx, memoryPartition(req), memory.IntakeWrite{
 		Decision:        decision,
 		Target:          target,
 		Scope:           memory.DeriveFactScope(target, req.WorkspaceID),
@@ -139,6 +204,8 @@ func (a *llmPostRunAnalyzer) canonicalWrite(ctx context.Context, req httpapi.Pos
 		Confidence:      confidence,
 		AnalyzerVersion: req.AnalyzerVersion,
 		DecisionKey:     strings.ToUpper(strings.TrimSpace(decision)) + "|" + strings.TrimSpace(refContent),
+		Category:        meta.Category,
+		ValidUntil:      meta.ValidUntil,
 	})
 	if err != nil {
 		return fmt.Errorf("canonical %s write: %w", strings.ToLower(decision), err)
@@ -153,6 +220,12 @@ func (a *llmPostRunAnalyzer) applyMemoryDecisions(ctx context.Context, req httpa
 		if target != "user" && target != "memory" {
 			target = "memory"
 		}
+		meta, episodic := decisionMeta(d)
+		if episodic {
+			// Run-state observations live in task cards, handoffs, and the
+			// work spine; storing them as facts poisons later recall.
+			continue
+		}
 		switch strings.ToUpper(strings.TrimSpace(d.Decision)) {
 		case "SKIP":
 			continue
@@ -160,7 +233,7 @@ func (a *llmPostRunAnalyzer) applyMemoryDecisions(ctx context.Context, req httpa
 		case "REINFORCE":
 			ref := resolveNeighborRef(neighbors[target], d.Ref)
 			if ref == nil {
-				if err := a.addFactWithDedup(ctx, req, target, d.Content); err != nil {
+				if err := a.addFactWithDedup(ctx, req, target, d.Content, meta); err != nil {
 					return err
 				}
 				continue
@@ -175,7 +248,7 @@ func (a *llmPostRunAnalyzer) applyMemoryDecisions(ctx context.Context, req httpa
 		case "SUPERSEDE":
 			ref := resolveNeighborRef(neighbors[target], d.Ref)
 			if ref == nil {
-				if err := a.addFactWithDedup(ctx, req, target, d.Content); err != nil {
+				if err := a.addFactWithDedup(ctx, req, target, d.Content, meta); err != nil {
 					return err
 				}
 				continue
@@ -184,12 +257,12 @@ func (a *llmPostRunAnalyzer) applyMemoryDecisions(ctx context.Context, req httpa
 			if protected || d.Confidence < supersedeConfidenceGate {
 				// Retiring a belief needs explicit high confidence and never
 				// touches user-stated facts: keep both, pending later evidence.
-				if err := a.addConflictFact(ctx, req, target, *ref, d.Content); err != nil {
+				if err := a.addConflictFact(ctx, req, target, *ref, d.Content, meta); err != nil {
 					return err
 				}
 				continue
 			}
-			if err := a.canonicalWrite(ctx, req, "SUPERSEDE", target, d.Content, ref.Content, d.Confidence); err != nil {
+			if err := a.canonicalWrite(ctx, req, "SUPERSEDE", target, d.Content, ref.Content, d.Confidence, meta); err != nil {
 				return err
 			}
 			if err := a.supersedeFact(ctx, req, target, *ref, d.Content); err != nil {
@@ -199,17 +272,17 @@ func (a *llmPostRunAnalyzer) applyMemoryDecisions(ctx context.Context, req httpa
 		case "CONFLICT":
 			ref := resolveNeighborRef(neighbors[target], d.Ref)
 			if ref == nil {
-				if err := a.addFactWithDedup(ctx, req, target, d.Content); err != nil {
+				if err := a.addFactWithDedup(ctx, req, target, d.Content, meta); err != nil {
 					return err
 				}
 				continue
 			}
-			if err := a.addConflictFact(ctx, req, target, *ref, d.Content); err != nil {
+			if err := a.addConflictFact(ctx, req, target, *ref, d.Content, meta); err != nil {
 				return err
 			}
 
 		default: // ADD and anything unparseable degrade to the dedup-net add
-			if err := a.addFactWithDedup(ctx, req, target, d.Content); err != nil {
+			if err := a.addFactWithDedup(ctx, req, target, d.Content, meta); err != nil {
 				return err
 			}
 		}
@@ -219,12 +292,12 @@ func (a *llmPostRunAnalyzer) applyMemoryDecisions(ctx context.Context, req httpa
 
 // addFactWithDedup runs the deterministic dedup net before writing: an
 // identical or contained statement reinforces instead of duplicating.
-func (a *llmPostRunAnalyzer) addFactWithDedup(ctx context.Context, req httpapi.PostRunAnalysisRequest, target, content string) error {
+func (a *llmPostRunAnalyzer) addFactWithDedup(ctx context.Context, req httpapi.PostRunAnalysisRequest, target, content string, meta intakeMeta) error {
 	content = strings.TrimSpace(content)
 	if content == "" {
 		return nil
 	}
-	existing, err := a.memory.GetFacts(ctx, req.TenantID, target)
+	existing, err := a.memory.GetFacts(ctx, memoryPartition(req), target)
 	if err != nil {
 		return fmt.Errorf("read existing %s facts: %w", target, err)
 	}
@@ -240,11 +313,11 @@ func (a *llmPostRunAnalyzer) addFactWithDedup(ctx context.Context, req httpapi.P
 		CreatedFromRun: req.RunID,
 		LastVerifiedAt: time.Now(),
 	}
-	if err := a.memory.AddFactMeta(ctx, req.TenantID, fact); err != nil {
+	if err := a.memory.AddFactMeta(ctx, memoryPartition(req), fact); err != nil {
 		return fmt.Errorf("store %s fact: %w", target, err)
 	}
-	tools.RecordMemoryLearningChangeScoped(req.TenantID, target, fact.Scope, "add", "", content, "post_run_analyzer")
-	return a.canonicalWrite(ctx, req, "ADD", target, content, "", 0)
+	tools.RecordMemoryLearningChangeScoped(memoryPartition(req), target, fact.Scope, "add", "", content, "post_run_analyzer")
+	return a.canonicalWrite(ctx, req, "ADD", target, content, "", 0, meta)
 }
 
 // supersedeFact retires an outdated belief in favor of the new statement.
@@ -255,7 +328,7 @@ func (a *llmPostRunAnalyzer) supersedeFact(ctx context.Context, req httpapi.Post
 	if content == "" {
 		return nil
 	}
-	if err := a.memory.RemoveFact(ctx, req.TenantID, old.ID); err != nil {
+	if err := a.memory.RemoveFact(ctx, memoryPartition(req), old.ID); err != nil {
 		return fmt.Errorf("remove superseded %s fact: %w", target, err)
 	}
 	fact := memory.Fact{
@@ -271,18 +344,18 @@ func (a *llmPostRunAnalyzer) supersedeFact(ctx context.Context, req httpapi.Post
 	if fact.Scope == "" {
 		fact.Scope = memory.DeriveFactScope(target, req.WorkspaceID)
 	}
-	if err := a.memory.AddFactMeta(ctx, req.TenantID, fact); err != nil {
+	if err := a.memory.AddFactMeta(ctx, memoryPartition(req), fact); err != nil {
 		// Never let a failed supersede silently delete the old belief.
-		_ = a.memory.AddFactMeta(ctx, req.TenantID, old)
+		_ = a.memory.AddFactMeta(ctx, memoryPartition(req), old)
 		return fmt.Errorf("write superseding %s fact: %w", target, err)
 	}
-	tools.RecordMemoryLearningChangeScoped(req.TenantID, target, fact.Scope, "replace", old.Content, content, "post_run_analyzer")
+	tools.RecordMemoryLearningChangeScoped(memoryPartition(req), target, fact.Scope, "replace", old.Content, content, "post_run_analyzer")
 	return nil
 }
 
 // addConflictFact keeps both statements: the contradiction is preserved as
 // evidence and surfaces to the user instead of one side silently winning.
-func (a *llmPostRunAnalyzer) addConflictFact(ctx context.Context, req httpapi.PostRunAnalysisRequest, target string, ref memory.Fact, content string) error {
+func (a *llmPostRunAnalyzer) addConflictFact(ctx context.Context, req httpapi.PostRunAnalysisRequest, target string, ref memory.Fact, content string, meta intakeMeta) error {
 	content = strings.TrimSpace(content)
 	if content == "" || strings.EqualFold(content, ref.Content) {
 		return nil
@@ -296,9 +369,9 @@ func (a *llmPostRunAnalyzer) addConflictFact(ctx context.Context, req httpapi.Po
 		CreatedFromRun: req.RunID,
 		LastVerifiedAt: time.Now(),
 	}
-	if err := a.memory.AddFactMeta(ctx, req.TenantID, fact); err != nil {
+	if err := a.memory.AddFactMeta(ctx, memoryPartition(req), fact); err != nil {
 		return fmt.Errorf("store conflicting %s fact: %w", target, err)
 	}
-	tools.RecordMemoryLearningChangeScoped(req.TenantID, target, fact.Scope, "add", ref.Content, content, "post_run_analyzer_conflict")
-	return a.canonicalWrite(ctx, req, "CONFLICT", target, content, ref.Content, 0)
+	tools.RecordMemoryLearningChangeScoped(memoryPartition(req), target, fact.Scope, "add", ref.Content, content, "post_run_analyzer_conflict")
+	return a.canonicalWrite(ctx, req, "CONFLICT", target, content, ref.Content, 0, meta)
 }

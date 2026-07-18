@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"selfmind/internal/control"
 	"selfmind/internal/kernel"
 	"selfmind/internal/kernel/llm"
 	"selfmind/internal/kernel/memory"
@@ -63,32 +64,6 @@ Example:
 
 SelfMind also supports Anthropic, Google, and custom OpenAI-compatible endpoints.`
 
-/*
-const mockSetupGuide = `SelfMind 尚未配置 API Key，无法进行 AI 对话。
-
-请按以下步骤配置：
-
-1. 编辑配置文件：
-   nano ~/.selfmind/config.yaml
-
-2. 在 providers 区块添加你的 API Key，例如：
-   providers:
-     anthropic_api_key: "sk-ant-your-key-here"
-   （或使用 openai_api_key / gemini_api_key / minimax_api_key）
-
-3. 重启 SelfMind
-
-获取 API Key：
-  - Anthropic: https://console.anthropic.com/
-  - OpenAI: https://platform.openai.com/
-  - Gemini: https://aistudio.google.com/
-  - MiniMax: https://platform.minimaxi.com/
-
-配置完成后，SelfMind 将自动使用配置的模型。`
-
-`
-
-*/
 
 func (m *mockProvider) ChatCompletion(ctx context.Context, messages []llm.Message) (string, error) {
 	return m.response(), nil
@@ -310,6 +285,7 @@ func llmQuirks(q modelruntime.ProviderQuirks) llm.ProviderQuirks {
 		ThinkingMode:      q.ThinkingMode,
 		UserAgent:         q.UserAgent,
 		DisableHTTP2:      q.DisableHTTP2,
+		PromptCache:       q.PromptCache,
 		SupportsTools:     q.SupportsTools,
 		SupportsStreaming: q.SupportsStreaming,
 		SupportsVision:    q.SupportsVision,
@@ -377,6 +353,7 @@ func buildProviderForSelectionWithRuntime(cfg *config.Config, selection modelrun
 		Provider:        selection.Provider,
 		Model:           selection.Model,
 		BaseURL:         selection.BaseURL,
+		Protocol:        selection.Protocol,
 		APIKey:          selection.APIKey,
 		Headers:         selection.Headers,
 		ContextLength:   selection.ContextLength,
@@ -523,7 +500,8 @@ func buildKeyGetter(mem *memory.MemoryManager, tenantID, provider string) func()
 		if mem == nil {
 			return ""
 		}
-		// 只有当数据库里确实有值时才返回，否则返回空让 Adapter 使用默认值
+		// Return a value only when the database actually has one; otherwise return
+		// empty so the adapter falls back to its default.
 		val, err := mem.GetSecret(context.Background(), tenantID, provider+"_api_key")
 		if err != nil || val == "" {
 			return ""
@@ -595,7 +573,7 @@ func buildModelGateway(cfg *config.Config, mem *memory.MemoryManager, tenantID s
 		}
 
 		roleProviderName := firstNonEmpty(roleCfg.Provider, pName)
-		roleProvider := buildRoleProvider(cfg, roleProviderName, roleCfg)
+		roleProvider := buildRoleProvider(cfg, llm.ModelRole(roleName), roleProviderName, roleCfg)
 		if roleProvider == nil {
 			log.Warn("model role skipped: provider unavailable", "role", roleName, "provider", roleProviderName)
 			continue
@@ -615,7 +593,7 @@ func buildModelGateway(cfg *config.Config, mem *memory.MemoryManager, tenantID s
 // roleConfigEmpty reports whether a models.roles entry carries no actual
 // override — such entries never register a role profile.
 func roleConfigEmpty(roleCfg config.ModelRoleConfig) bool {
-	return roleCfg.Provider == "" && roleCfg.Model == "" && roleCfg.BaseURL == "" && roleCfg.APIKey == "" &&
+	return roleCfg.Provider == "" && roleCfg.Model == "" && roleCfg.BaseURL == "" && roleCfg.Protocol == "" && roleCfg.APIKey == "" &&
 		roleCfg.ContextLength <= 0 && roleCfg.MaxTokens <= 0 && len(roleCfg.Headers) == 0 &&
 		roleCfg.ReasoningEffort == "" && len(roleCfg.Thinking) == 0 && roleCfg.ServiceTier == "" &&
 		emptyConfigQuirks(roleCfg.Quirks)
@@ -624,11 +602,20 @@ func roleConfigEmpty(roleCfg config.ModelRoleConfig) bool {
 // buildRoleProvider resolves one role override through the same
 // modelruntime.Resolver path as the default provider (headers, max tokens,
 // reasoning effort, thinking, service tier, quirks all carried).
-func buildRoleProvider(cfg *config.Config, roleProviderName string, roleCfg config.ModelRoleConfig) llm.Provider {
-	return buildProviderForSelectionWithRuntime(cfg, modelruntime.Selection{
+func buildRoleProvider(cfg *config.Config, role llm.ModelRole, roleProviderName string, roleCfg config.ModelRoleConfig) llm.Provider {
+	return buildProviderForSelectionWithRuntime(cfg, roleProviderSelection(role, roleProviderName, roleCfg))
+}
+
+// roleProviderSelection keeps every role on the provider-defined transport.
+// Kimi Coding Plan's /coding route speaks Anthropic Messages for both the main
+// agent and bounded auxiliary calls. An explicit role protocol still wins for
+// custom gateways or installations with a different wire contract.
+func roleProviderSelection(_ llm.ModelRole, roleProviderName string, roleCfg config.ModelRoleConfig) modelruntime.Selection {
+	return modelruntime.Selection{
 		Provider:        roleProviderName,
 		Model:           roleCfg.Model,
 		BaseURL:         roleCfg.BaseURL,
+		Protocol:        roleCfg.Protocol,
 		APIKey:          roleCfg.APIKey,
 		Headers:         roleCfg.Headers,
 		ContextLength:   roleCfg.ContextLength,
@@ -637,7 +624,7 @@ func buildRoleProvider(cfg *config.Config, roleProviderName string, roleCfg conf
 		Thinking:        roleCfg.Thinking,
 		ServiceTier:     roleCfg.ServiceTier,
 		Quirks:          runtimeQuirksFromConfig(roleCfg.Quirks),
-	})
+	}
 }
 
 // SemanticRecallExpander builds the query expander for the gateway's AUTOMATIC
@@ -658,7 +645,7 @@ func SemanticRecallExpander(mem *memory.MemoryManager, cfg *config.Config, tenan
 		return nil
 	}
 	roleProviderName := firstNonEmpty(roleCfg.Provider, defaultProviderName(cfg))
-	provider := buildRoleProvider(cfg, roleProviderName, roleCfg)
+	provider := buildRoleProvider(cfg, llm.RoleSemanticRecall, roleProviderName, roleCfg)
 	if provider == nil {
 		return nil
 	}
@@ -670,13 +657,13 @@ func SemanticRecallExpander(mem *memory.MemoryManager, cfg *config.Config, tenan
 }
 
 // InitAgent creates the LLM provider, reflection engine, and agent core.
-func InitAgent(mem *memory.MemoryManager, cfg *config.Config, tenantID string) (*kernel.Agent, error) {
+func InitAgent(mem *memory.MemoryManager, cfg *config.Config, tenantID string, stores ...*control.Store) (*kernel.Agent, error) {
 	provider := buildLLMProvider(cfg)
 	if provider == nil {
 		return nil, fmt.Errorf("no LLM provider available")
 	}
 
-	// 安全打印调试信息 (Logs suppressed for clean TUI)
+	// Debug logging suppressed to keep the TUI clean.
 	/*
 		geminiKey := cfg.Providers.GeminiAPIKey
 		if len(geminiKey) > 8 {
@@ -684,7 +671,7 @@ func InitAgent(mem *memory.MemoryManager, cfg *config.Config, tenantID string) (
 		}
 	*/
 
-	// 关键修复：将动态 Key 加载器注入适配器
+	// Inject the dynamic key loader into the adapter (per-request token retrieval).
 	if tenantID == "" {
 		tenantID = "default"
 	}
@@ -702,6 +689,12 @@ func InitAgent(mem *memory.MemoryManager, cfg *config.Config, tenantID string) (
 	// side-task model kept OFF the main coding provider. Falls back to the
 	// default model when no background_review role is configured.
 	judgeProvider := modelGateway.ProviderForRole(llm.RoleBackgroundReview)
+	if len(stores) > 0 && stores[0] != nil {
+		// Background learning shares the same durable physical-route circuit as
+		// post-run analysis and memory consolidation. In daemon mode it must not
+		// silently borrow the foreground coding model.
+		reviewProvider, _ = configuredMaintenanceProvider(mem, cfg, tenantID, stores[0], llm.RoleBackgroundReview)
+	}
 
 	skillsBaseDir := cfg.Evolution.SkillsDir
 	if skillsBaseDir == "" {
@@ -719,7 +712,7 @@ func InitAgent(mem *memory.MemoryManager, cfg *config.Config, tenantID string) (
 		SkillsDir:              skillsDir,
 	})
 
-	// 设置 evolution notify channel（暂时传 nil，后续由 TUI 层注入）
+	// Evolution notify channel: nil for now; the TUI layer injects it later.
 	refl.SetNotifyChannel(nil)
 
 	maxIter := cfg.Agent.MaxIterations
@@ -772,16 +765,16 @@ func InitAgent(mem *memory.MemoryManager, cfg *config.Config, tenantID string) (
 	}, 8, maxRetries)
 	agent.SetBackgroundReviewEngine(reviewEngine)
 
-	// 设置 nudge interval
+	// Configure the nudge interval.
 	if cfg.Evolution.NudgeInterval > 0 {
 		agent.SetNudgeInterval(cfg.Evolution.NudgeInterval)
 	}
 
-	// 注入语义查询扩展器
+	// Inject the semantic query expander.
 	se := memory.NewSemanticExpander(semanticRecallProvider, cfg.Memory.SemanticRecall)
 	agent.SetSemanticExpander(se)
 
-	// 设置记忆注入格式
+	// Configure the memory injection format.
 	agent.SetUseMemoryFence(cfg.Memory.UseMemoryFence)
 
 	return agent, nil

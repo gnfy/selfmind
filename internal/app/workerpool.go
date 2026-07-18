@@ -41,7 +41,7 @@ func MaybeEnableWorkerPool(gw *router.Gateway, mem *memory.MemoryManager, cfg *c
 	}
 	extra := make([]*kernel.Agent, 0, n-1)
 	for i := 1; i < n; i++ {
-		a, err := InitAgent(mem, cfg, tenantID)
+		a, err := InitAgent(mem, cfg, tenantID, controlStore...)
 		if err != nil {
 			return 1 + len(extra), err
 		}

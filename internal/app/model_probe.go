@@ -1,0 +1,109 @@
+package app
+
+import (
+	"context"
+	"fmt"
+	"sort"
+	"strings"
+	"time"
+
+	"selfmind/internal/kernel/llm"
+	"selfmind/internal/modelruntime"
+	"selfmind/internal/platform/config"
+)
+
+const modelRoleProbeTimeout = 20 * time.Second
+
+// ModelRoleProbe reports one live request for one resolved runtime. Roles that
+// share the same provider/model endpoint are intentionally grouped so doctor
+// does not spend duplicate quota merely because several maintenance roles use
+// the same Coding Plan profile.
+type ModelRoleProbe struct {
+	Roles    []string
+	Provider string
+	Model    string
+	Latency  time.Duration
+	Err      error
+}
+
+type roleProbeTarget struct {
+	roles    []string
+	runtime  modelruntime.Runtime
+	provider llm.Provider
+}
+
+// ProbeConfiguredModelRoles performs a bounded live health check for explicitly
+// configured model roles. It never invents a fallback to the primary model.
+func ProbeConfiguredModelRoles(ctx context.Context, cfg *config.Config) []ModelRoleProbe {
+	if cfg == nil || len(cfg.Models.Roles) == 0 {
+		return nil
+	}
+	roleNames := make([]string, 0, len(cfg.Models.Roles))
+	for roleName := range cfg.Models.Roles {
+		roleNames = append(roleNames, roleName)
+	}
+	sort.Strings(roleNames)
+
+	resolver := modelruntime.NewResolver(cfg)
+	targets := make(map[string]*roleProbeTarget)
+	var unresolved []ModelRoleProbe
+	for _, roleName := range roleNames {
+		roleCfg := cfg.Models.Roles[roleName]
+		if roleConfigEmpty(roleCfg) {
+			continue
+		}
+		selection := roleProviderSelection(llm.ModelRole(roleName), firstNonEmpty(roleCfg.Provider, defaultProviderName(cfg)), roleCfg)
+		rt, err := resolver.Resolve(ctx, selection)
+		if err != nil {
+			unresolved = append(unresolved, ModelRoleProbe{Roles: []string{roleName}, Provider: selection.Provider, Model: selection.Model, Err: err})
+			continue
+		}
+		key := strings.Join([]string{rt.Provider, rt.Model, rt.Protocol, rt.BaseURL}, "\x00")
+		if target := targets[key]; target != nil {
+			target.roles = append(target.roles, roleName)
+			continue
+		}
+		targets[key] = &roleProbeTarget{
+			roles:    []string{roleName},
+			runtime:  rt,
+			provider: buildProviderForSelectionWithRuntime(cfg, selection),
+		}
+	}
+
+	keys := make([]string, 0, len(targets))
+	for key := range targets {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	results := append([]ModelRoleProbe(nil), unresolved...)
+	for _, key := range keys {
+		target := targets[key]
+		probe := ModelRoleProbe{Roles: append([]string(nil), target.roles...), Provider: target.runtime.Provider, Model: target.runtime.Model}
+		start := time.Now()
+		if target.provider == nil {
+			probe.Err = fmt.Errorf("provider could not be built")
+		} else {
+			probeCtx, cancel := context.WithTimeout(ctx, modelRoleProbeTimeout)
+			probeCtx = llm.WithModelContext(probeCtx, llm.ModelContext{Role: llm.ModelRole(target.roles[0])})
+			resp, err := target.provider.Chat(probeCtx, llm.ChatRequest{
+				Model:        target.runtime.Model,
+				MaxTokens:    64,
+				SystemPrompt: "This is a model health check. Return exactly OK.",
+				Messages:     []llm.Message{{Role: "user", Content: "Reply with OK."}},
+			})
+			cancel()
+			switch {
+			case err != nil:
+				probe.Err = err
+			case resp == nil || strings.TrimSpace(resp.Content) == "":
+				probe.Err = fmt.Errorf("model returned an empty response")
+			}
+		}
+		probe.Latency = time.Since(start)
+		results = append(results, probe)
+	}
+	sort.Slice(results, func(i, j int) bool {
+		return strings.Join(results[i].Roles, ",") < strings.Join(results[j].Roles, ",")
+	})
+	return results
+}

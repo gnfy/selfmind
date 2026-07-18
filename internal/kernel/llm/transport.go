@@ -108,6 +108,7 @@ func NormalizeTransportProtocol(value string) string {
 
 func buildAnthropicTransport(cfg TransportConfig) Provider {
 	ad := NewAnthropicAdapter(cfg.APIKey)
+	ad.ProviderName = strings.TrimSpace(cfg.Provider)
 	if strings.TrimSpace(cfg.Model) != "" {
 		ad.Model = strings.TrimSpace(cfg.Model)
 	}

@@ -113,6 +113,7 @@ func TestTaskGovernanceDefaultsAndOverrides(t *testing.T) {
 	}
 	doneAfter, cancelledAfter := cfg.Tasks.AutoArchiveDurations()
 	debounce, maxWait, batchMax := cfg.Tasks.MaintenanceBatchPolicy()
+	probeInitial, probeMax := cfg.Tasks.MaintenanceQuotaCircuitPolicy()
 	if !cfg.Tasks.InboxEnabled || cfg.Tasks.ListLimit() != 10 || cfg.Tasks.MaintenanceModelRole != "memory_extract" || len(cfg.Tasks.MaintenanceFallbackRoles) != 2 {
 		t.Fatalf("task defaults = %+v", cfg.Tasks)
 	}
@@ -121,6 +122,9 @@ func TestTaskGovernanceDefaultsAndOverrides(t *testing.T) {
 	}
 	if debounce != 5*time.Minute || maxWait != 15*time.Minute || batchMax != 10 {
 		t.Fatalf("maintenance defaults = %s/%s/%d", debounce, maxWait, batchMax)
+	}
+	if probeInitial != 15*time.Minute || probeMax != 4*time.Hour {
+		t.Fatalf("quota circuit defaults = %s/%s", probeInitial, probeMax)
 	}
 
 	overridePath := filepath.Join(t.TempDir(), "override.yaml")
@@ -135,6 +139,8 @@ tasks:
   maintenance_debounce: "2m"
   maintenance_max_wait: "10m"
   maintenance_batch_max_runs: 99
+  maintenance_quota_probe_initial: "3m"
+  maintenance_quota_probe_max: "30m"
 `), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -144,6 +150,7 @@ tasks:
 	}
 	doneAfter, cancelledAfter = cfg.Tasks.AutoArchiveDurations()
 	debounce, maxWait, batchMax = cfg.Tasks.MaintenanceBatchPolicy()
+	probeInitial, probeMax = cfg.Tasks.MaintenanceQuotaCircuitPolicy()
 	if cfg.Tasks.InboxEnabled || cfg.Tasks.ListLimit() != 50 || cfg.Tasks.MaintenanceModelRole != "fast_classifier" || len(cfg.Tasks.MaintenanceFallbackRoles) != 1 || cfg.Tasks.MaintenanceFallbackRoles[0] != "background_review" {
 		t.Fatalf("task overrides = %+v", cfg.Tasks)
 	}
@@ -152,5 +159,8 @@ tasks:
 	}
 	if debounce != 2*time.Minute || maxWait != 10*time.Minute || batchMax != 50 {
 		t.Fatalf("maintenance overrides = %s/%s/%d", debounce, maxWait, batchMax)
+	}
+	if probeInitial != 3*time.Minute || probeMax != 30*time.Minute {
+		t.Fatalf("quota circuit overrides = %s/%s", probeInitial, probeMax)
 	}
 }

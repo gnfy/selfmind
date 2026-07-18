@@ -20,7 +20,7 @@ func explicitRoleProvider(mem *memory.MemoryManager, cfg *config.Config, tenantI
 		return nil
 	}
 	roleProviderName := firstNonEmpty(roleCfg.Provider, defaultProviderName(cfg))
-	provider := buildRoleProvider(cfg, roleProviderName, roleCfg)
+	provider := buildRoleProvider(cfg, role, roleProviderName, roleCfg)
 	if provider == nil {
 		return nil
 	}

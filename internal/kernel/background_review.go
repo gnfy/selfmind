@@ -148,12 +148,21 @@ func (e *BackgroundReviewEngine) RunReviewFromPayload(ctx context.Context, tenan
 	for _, m := range payload.Messages {
 		messages = append(messages, llm.Message{Role: m.Role, Content: m.Content})
 	}
-	return e.ExecuteReview(ctx, tenantID, payload.Channel, messages, payload.ReviewMemory, payload.ReviewSkills), nil
+	return e.executeReview(ctx, tenantID, payload.Channel, messages, payload.ReviewMemory, payload.ReviewSkills)
 }
 
 // ExecuteReview runs one review synchronously and returns the user-facing
 // summary. Shared by the legacy in-process goroutine and the durable worker.
 func (e *BackgroundReviewEngine) ExecuteReview(ctx context.Context, tenantID, channel string, snapshot []llm.Message, reviewMemory, reviewSkills bool) string {
+	msg, _ := e.executeReview(ctx, tenantID, channel, snapshot, reviewMemory, reviewSkills)
+	return msg
+}
+
+// executeReview preserves the provider error for the durable worker. The
+// legacy public method intentionally remains best-effort, while queued jobs
+// must see quota failures so they can be blocked on the shared route circuit
+// instead of being incorrectly marked complete.
+func (e *BackgroundReviewEngine) executeReview(ctx context.Context, tenantID, channel string, snapshot []llm.Message, reviewMemory, reviewSkills bool) (string, error) {
 	restricted := &restrictedReviewBackend{
 		inner: e.backend,
 		allowed: map[string]bool{
@@ -188,7 +197,7 @@ func (e *BackgroundReviewEngine) ExecuteReview(ctx context.Context, tenantID, ch
 		default:
 		}
 	}
-	return msg
+	return msg, err
 }
 
 type restrictedReviewBackend struct {

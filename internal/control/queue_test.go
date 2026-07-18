@@ -110,3 +110,45 @@ func TestListAllQueuedAcrossPersons(t *testing.T) {
 		t.Fatalf("ListAllQueued = %d rows; want 2", len(all))
 	}
 }
+
+func TestEnqueueQueuedOnlyIgnoresIdempotencyConflict(t *testing.T) {
+	ctx := context.Background()
+	store, err := OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := QueuedTask{
+		TenantID: identity.TenantID, PersonID: identity.PersonID,
+		Channel: "cli", Platform: "cli", Content: "finalize",
+		IdempotencyKey: "watch:one:finalize",
+	}
+	first, err := store.EnqueueQueued(ctx, base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := store.EnqueueQueued(ctx, base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.ID != second.ID {
+		t.Fatalf("duplicate enqueue returned %q, want existing %q", second.ID, first.ID)
+	}
+
+	// A primary-key collision without an idempotency key is a real storage
+	// error. It must never be hidden as a successful enqueue.
+	fixed := QueuedTask{
+		ID: "queue_fixed", TenantID: identity.TenantID, PersonID: identity.PersonID,
+		Channel: "cli", Platform: "cli", Content: "ordinary",
+	}
+	if _, err := store.EnqueueQueued(ctx, fixed); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.EnqueueQueued(ctx, fixed); err == nil {
+		t.Fatal("duplicate primary key without idempotency key must fail")
+	}
+}

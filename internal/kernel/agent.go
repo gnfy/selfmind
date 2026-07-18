@@ -26,7 +26,7 @@ type AgentBackend interface {
 	GetToolDefinitions() []map[string]interface{}
 }
 
-// Agent 核心推理循环
+// Agent is the core reasoning loop.
 type Agent struct {
 	memory           *memory.MemoryManager
 	backend          AgentBackend
@@ -78,12 +78,17 @@ func NewAgent(mem *memory.MemoryManager, backend AgentBackend, provider llm.Prov
 		EventChannel:   ch,
 		syncQueue:      make(chan syncTurnRequest, 16),
 		toolCallCount:  0,
-		nudgeInterval:  10, // 默认每 10 次工具调用触发一次
+		nudgeInterval:  10, // default: review every 10 tool calls
 	}
 	ag.contextEngine.SetProvider(provider)
 	go ag.runSyncWorker()
 	return ag
 }
+
+// skillReviewIntervalMultiplier stretches the skill-review cadence relative
+// to the memory-review nudge interval. Skills are slow-moving assets; a
+// per-interval review mostly re-confirms unchanged skills at model cost.
+const skillReviewIntervalMultiplier = 3
 
 // SetNudgeInterval sets how often evolution review triggers (every N tool calls)
 func (a *Agent) SetNudgeInterval(n int) {
@@ -367,7 +372,7 @@ func (a *Agent) chatResponseWithRetry(ctx context.Context, messages []llm.Messag
 	return nil, fmt.Errorf("llm chat failed after %d attempts: %w", max, lastErr)
 }
 
-// chatWithRetry 实现了运行时自动 Fallback 逻辑
+// chatWithRetry implements runtime provider fallback.
 func (a *Agent) chatWithRetry(ctx context.Context, messages []llm.Message) (string, llm.UsageStats, error) {
 	resp, err := a.chatResponseWithRetry(ctx, messages, DefaultTaskStrategy())
 	if err != nil {
@@ -538,8 +543,8 @@ func emitToolEndEvent(ch chan string, name, result string, err error) {
 	emitToolEndEventWithDuration(ch, name, "", packageToolResult(name, result), 0, nil)
 }
 
-// RunConversation 执行 Agent 推理循环
-// channel 用于渠道隔离的历史记录（如 'cli'、'wechat'、'dingtalk'）
+// RunConversation executes the agent reasoning loop. channel keys the
+// channel-local conversation history (e.g. 'cli', 'wechat', 'dingtalk').
 func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, initialPrompt string) (finalOutput string, finalUsage llm.UsageStats, finalErr error) {
 	a.runMu.Lock()
 	defer a.runMu.Unlock()
@@ -552,6 +557,25 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 
 	var totalUsage llm.UsageStats
 	eventCh := eventChannelFromContext(ctx, a.EventChannel)
+	// recordUsage accumulates provider usage (including prompt-cache reads and
+	// writes) and emits one token.updated snapshot. input_tokens stays the
+	// logical input total; billed_input_tokens subtracts cache-served tokens.
+	recordUsage := func(usage llm.UsageStats) {
+		totalUsage.InputTokens += usage.InputTokens
+		totalUsage.OutputTokens += usage.OutputTokens
+		totalUsage.CacheReadInputTokens += usage.CacheReadInputTokens
+		totalUsage.CacheCreationInputTokens += usage.CacheCreationInputTokens
+		EmitAgentEvent(eventCh, AgentEvent{
+			Type: "token.updated",
+			Payload: map[string]interface{}{
+				"input_tokens":                totalUsage.InputTokens,
+				"output_tokens":               totalUsage.OutputTokens,
+				"cache_read_input_tokens":     totalUsage.CacheReadInputTokens,
+				"cache_creation_input_tokens": totalUsage.CacheCreationInputTokens,
+				"billed_input_tokens":         totalUsage.InputTokens - totalUsage.CacheReadInputTokens,
+			},
+		})
+	}
 	EmitAgentEvent(eventCh, AgentEvent{
 		Type: "turn.started",
 		Payload: map[string]interface{}{
@@ -820,16 +844,8 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 			if chatResp.FinishReason != "" {
 				finishReason = chatResp.FinishReason
 			}
-			if chatResp.Usage.InputTokens != 0 || chatResp.Usage.OutputTokens != 0 {
-				totalUsage.InputTokens += chatResp.Usage.InputTokens
-				totalUsage.OutputTokens += chatResp.Usage.OutputTokens
-				EmitAgentEvent(eventCh, AgentEvent{
-					Type: "token.updated",
-					Payload: map[string]interface{}{
-						"input_tokens":  totalUsage.InputTokens,
-						"output_tokens": totalUsage.OutputTokens,
-					},
-				})
+			if chatResp.Usage != (llm.UsageStats{}) {
+				recordUsage(chatResp.Usage)
 			}
 			if len(chatResp.ToolCalls) > 0 {
 				nativeCalls = append(nativeCalls, chatResp.ToolCalls...)
@@ -859,6 +875,11 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 			if llm.IsContextWindowError(err) {
 				emitAgentActivity(eventCh, "Context window was rejected; retrying with a smaller context slice", "context_recovery", i)
 				fallbackMessages = a.prepareMessagesForContextRecovery(messages)
+			} else if !llm.IsRetryableError(err) {
+				// Quota/auth/billing/invalid-request failures are not streaming
+				// transport failures. Re-sending the same request through Chat would
+				// double-charge the physical route and defeat the quota circuit.
+				return "", totalUsage, fmt.Errorf("llm chat: %w", err)
 			} else {
 				emitAgentActivity(eventCh, "Streaming transport failed; retrying without streaming", "transport_recovery", i)
 			}
@@ -889,15 +910,7 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 							finishReason = event.FinishReason
 						}
 						if event.Usage != nil {
-							totalUsage.InputTokens += event.Usage.InputTokens
-							totalUsage.OutputTokens += event.Usage.OutputTokens
-							EmitAgentEvent(eventCh, AgentEvent{
-								Type: "token.updated",
-								Payload: map[string]interface{}{
-									"input_tokens":  totalUsage.InputTokens,
-									"output_tokens": totalUsage.OutputTokens,
-								},
-							})
+							recordUsage(*event.Usage)
 						}
 						if len(event.ToolCalls) > 0 {
 							if !nativeToolActivityAnnounced {
@@ -915,15 +928,7 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 						finishReason = event.FinishReason
 					}
 					if event.Usage != nil {
-						totalUsage.InputTokens += event.Usage.InputTokens
-						totalUsage.OutputTokens += event.Usage.OutputTokens
-						EmitAgentEvent(eventCh, AgentEvent{
-							Type: "token.updated",
-							Payload: map[string]interface{}{
-								"input_tokens":  totalUsage.InputTokens,
-								"output_tokens": totalUsage.OutputTokens,
-							},
-						})
+						recordUsage(*event.Usage)
 					}
 					if len(event.ToolCalls) > 0 {
 						if !nativeToolActivityAnnounced {
@@ -1057,7 +1062,7 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 				}
 			}
 
-			// Evolution review: 工具调用计数触发（非阻塞）
+			// Evolution review: triggered by the tool-call counter (non-blocking).
 			a.toolCallCount += len(calls)
 			// The review itself runs after the final answer, once the outcome is known.
 
@@ -1126,7 +1131,7 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 		}
 
 		planUnresolved := planSeen && len(unresolvedPlanSteps) > 0 && successfulFinishStatus == ""
-		if planUnresolved && !toolBudgetExhausted && planRepairAttempts < 2 && toolUseCounts["update_plan"] < lifecycleToolCap("update_plan") {
+		if planUnresolved && planRepairAttempts < 2 && toolUseCounts["update_plan"] < lifecycleToolCap("update_plan") {
 			planRepairAttempts++
 			if i+1 >= maxIterations {
 				maxIterations = i + 2
@@ -1153,7 +1158,7 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 		completionStatus := "completed"
 		completionReason := "completed"
 		resumable := false
-		if toolBudgetExhausted {
+		if toolBudgetExhausted && successfulFinishStatus == "" {
 			completionStatus = "incomplete"
 			completionReason = "tool_budget_exhausted"
 			resumable = true
@@ -1284,7 +1289,8 @@ func emitProviderEvent(eventCh chan string, event llm.StreamEvent, iteration int
 	EmitAgentEvent(eventCh, agentEvent)
 }
 
-// triggerEvolutionReview 异步触发 evolution review（不阻塞主会话）
+// triggerEvolutionReview fires an evolution review asynchronously without
+// blocking the main session.
 func (a *Agent) maybeTriggerBackgroundReview(tenantID, channel string, messages []llm.Message, history TaskHistory) {
 	interval := a.nudgeInterval
 	if interval <= 0 {
@@ -1292,7 +1298,11 @@ func (a *Agent) maybeTriggerBackgroundReview(tenantID, channel string, messages 
 	}
 	a.turnReviewCount++
 	reviewMemory := a.turnReviewCount >= interval
-	reviewSkills := a.toolCallCount >= interval
+	// Skill review runs at a fraction of the memory-review cadence: reusable
+	// workflows change far more slowly than facts, and every review is a
+	// cheap-role model call (observed live: 15 skill reviews in one day of
+	// CI/CD work, all confirming the same unchanged skills).
+	reviewSkills := a.toolCallCount >= interval*skillReviewIntervalMultiplier
 	if !reviewMemory && !reviewSkills {
 		return
 	}
@@ -1316,7 +1326,7 @@ func (a *Agent) triggerEvolutionReview(tenantID string, history TaskHistory) {
 		return
 	}
 
-	// 深拷贝数据，避免竞态
+	// Deep-copy the data to avoid races.
 	historyCopy := TaskHistory{
 		Goal:    history.Goal,
 		Context: history.Context,
@@ -1341,7 +1351,7 @@ func (a *Agent) triggerEvolutionReview(tenantID string, history TaskHistory) {
 			return
 		}
 
-		// 发送通知到 TUI
+		// Notify the TUI.
 		if a.evolutionNotifyCh != nil && result.Action != "skip" {
 			action := map[string]string{"create": "created", "update": "updated"}[result.Action]
 			msg := fmt.Sprintf("💾 skill %s %s", result.SkillName, action)

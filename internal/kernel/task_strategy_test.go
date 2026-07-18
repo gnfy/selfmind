@@ -1,6 +1,7 @@
 package kernel
 
 import (
+	"strings"
 	"testing"
 
 	"selfmind/internal/kernel/llm"
@@ -99,6 +100,17 @@ func TestTaskStrategyEmptyInputFallsBackToAgentFirstDefault(t *testing.T) {
 	}
 }
 
+func TestTaskStrategyUsesFiniteElasticBudgetAndDurableExternalWait(t *testing.T) {
+	strategy := BuildTaskStrategy("deploy the service and wait for CI", "cli")
+	if strategy.MaxActionTools != 10 || strategy.ActionToolBudgetLimit != 34 || strategy.MaxBudgetExtensions != 6 {
+		t.Fatalf("budget = initial:%d limit:%d extensions:%d", strategy.MaxActionTools, strategy.ActionToolBudgetLimit, strategy.MaxBudgetExtensions)
+	}
+	note := strategy.SystemPromptNote()
+	if !strings.Contains(note, "watch_external") || !strings.Contains(note, "waiting_external") {
+		t.Fatalf("missing durable external-wait contract: %q", note)
+	}
+}
+
 func TestFilterToolCallsByStrategyOnlyBlocksHiddenWebCalls(t *testing.T) {
 	strategy := BuildTaskStrategy("write a PHP pgsql operation example", "cli")
 	calls := []llm.ToolCall{
@@ -120,7 +132,7 @@ func TestFilterToolCallsByLifecycleCaps(t *testing.T) {
 		{Function: "read_file"},
 	}
 	got, dropped := filterToolCallsByLifecycleCaps(calls, map[string]int{
-		"update_plan": 16,
+		"update_plan": 8,
 		"finish_run":  1,
 	})
 	if dropped != 2 {
@@ -140,7 +152,7 @@ func TestFilterToolCallsByLifecycleCapsConsumesCurrentBatch(t *testing.T) {
 		{Function: "read_file"},
 	}
 	got, dropped := filterToolCallsByLifecycleCaps(calls, map[string]int{
-		"update_plan": 15,
+		"update_plan": 7,
 	})
 	if dropped != 2 {
 		t.Fatalf("dropped = %d, want 2", dropped)
@@ -154,16 +166,16 @@ func TestFilterToolCallsByLifecycleCapsConsumesCurrentBatch(t *testing.T) {
 }
 
 func TestUpdatePlanLifecycleCapSupportsMeaningfulProgress(t *testing.T) {
-	if got := lifecycleToolCap("update_plan"); got != 16 {
-		t.Fatalf("update_plan lifecycle cap = %d, want 16", got)
+	if got := lifecycleToolCap("update_plan"); got != 8 {
+		t.Fatalf("update_plan lifecycle cap = %d, want 8", got)
 	}
-	calls := make([]llm.ToolCall, 17)
+	calls := make([]llm.ToolCall, 9)
 	for i := range calls {
 		calls[i] = llm.ToolCall{Function: "update_plan"}
 	}
 	got, dropped := filterToolCallsByLifecycleCaps(calls, map[string]int{})
-	if len(got) != 16 || dropped != 1 {
-		t.Fatalf("len(got)=%d dropped=%d, want 16 and 1", len(got), dropped)
+	if len(got) != 8 || dropped != 1 {
+		t.Fatalf("len(got)=%d dropped=%d, want 8 and 1", len(got), dropped)
 	}
 }
 

@@ -18,7 +18,7 @@ import (
 // finalizeErroredRun is the single terminal path for provider, transport, and
 // cancellation failures after a run has started. It writes the same structured
 // outcome consumed by CLI watchers, IM delivery, recovery, and resume turns.
-func (c *RunCoordinator) finalizeErroredRun(ctx context.Context, identity *control.IdentityContext, task *control.Task, run *control.Run, channel string, runErr error) api.RunOutcome {
+func (c *RunCoordinator) finalizeErroredRun(ctx context.Context, identity *control.IdentityContext, task *control.Task, run *control.Run, channel string, runErr error, replay ...runMaintenanceReplay) api.RunOutcome {
 	outcome := api.RunOutcome{
 		Status:           "interrupted",
 		CompletionReason: "provider_or_transport_error",
@@ -47,7 +47,11 @@ func (c *RunCoordinator) finalizeErroredRun(ctx context.Context, identity *contr
 		return outcome
 	}
 	finCtx := context.WithoutCancel(ctx)
-	if err := c.srv.Control.FinishRun(finCtx, identity.TenantID, run.ID, outcome.Status); err != nil {
+	var evidence runMaintenanceReplay
+	if len(replay) > 0 {
+		evidence = replay[0]
+	}
+	if err := c.finishRunWithMaintenancePayload(finCtx, identity, task, run, outcome.Status, evidence.WorkspaceID, evidence.UserInput, outcome, evidence.Attach); err != nil {
 		return outcome
 	}
 	_ = c.srv.Control.UpdateTaskStatus(finCtx, identity.TenantID, task.ID, outcome.Status, outcome.Summary, outcome.NextSteps)

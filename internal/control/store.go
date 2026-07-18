@@ -79,17 +79,18 @@ type Run struct {
 }
 
 type Event struct {
-	ID         string          `json:"id"`
-	Cursor     int64           `json:"cursor,omitempty"`
-	TenantID   string          `json:"tenant_id,omitempty"`
-	PersonID   string          `json:"person_id,omitempty"`
-	TaskID     string          `json:"task_id"`
-	RunID      string          `json:"run_id,omitempty"`
-	Type       string          `json:"type"`
-	Visibility string          `json:"visibility"`
-	Channel    string          `json:"channel,omitempty"`
-	Payload    json.RawMessage `json:"payload_json,omitempty"`
-	CreatedAt  time.Time       `json:"created_at"`
+	ID             string          `json:"id"`
+	Cursor         int64           `json:"cursor,omitempty"`
+	TenantID       string          `json:"tenant_id,omitempty"`
+	PersonID       string          `json:"person_id,omitempty"`
+	TaskID         string          `json:"task_id"`
+	RunID          string          `json:"run_id,omitempty"`
+	Type           string          `json:"type"`
+	Visibility     string          `json:"visibility"`
+	Channel        string          `json:"channel,omitempty"`
+	Payload        json.RawMessage `json:"payload_json,omitempty"`
+	IdempotencyKey string          `json:"idempotency_key,omitempty"`
+	CreatedAt      time.Time       `json:"created_at"`
 }
 
 type Handoff struct {
@@ -276,6 +277,7 @@ CREATE TABLE IF NOT EXISTS task_events (
 	visibility TEXT NOT NULL DEFAULT 'task',
 	channel TEXT,
 	payload_json TEXT,
+	idempotency_key TEXT,
 	created_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_task_events_task ON task_events(task_id, created_at);
@@ -415,6 +417,8 @@ CREATE TABLE IF NOT EXISTS task_queue (
 	content TEXT NOT NULL,
 	approval_mode TEXT,
 	workspace_id TEXT,
+	task_id TEXT NOT NULL DEFAULT '',
+	idempotency_key TEXT NOT NULL DEFAULT '',
 	status TEXT NOT NULL DEFAULT 'queued',
 	restarts INTEGER NOT NULL DEFAULT 0,
 	created_at INTEGER NOT NULL
@@ -443,6 +447,39 @@ CREATE TABLE IF NOT EXISTS maintenance_jobs (
 	PRIMARY KEY (run_id, analyzer_version)
 );
 CREATE INDEX IF NOT EXISTS idx_maintenance_jobs_status ON maintenance_jobs(tenant_id, status, next_retry_at);
+CREATE TABLE IF NOT EXISTS maintenance_attempts (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	run_id TEXT NOT NULL,
+	analyzer_version INTEGER NOT NULL DEFAULT 1,
+	tenant_id TEXT NOT NULL,
+	attempt INTEGER NOT NULL DEFAULT 0,
+	outcome TEXT NOT NULL,
+	error TEXT NOT NULL DEFAULT '',
+	route_id TEXT NOT NULL DEFAULT '',
+	created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_maintenance_attempts_job
+	ON maintenance_attempts(tenant_id, run_id, analyzer_version, created_at);
+CREATE INDEX IF NOT EXISTS idx_maintenance_attempts_recent
+	ON maintenance_attempts(tenant_id, created_at);
+CREATE TABLE IF NOT EXISTS provider_route_health (
+	tenant_id TEXT NOT NULL,
+	route_id TEXT NOT NULL,
+	provider TEXT NOT NULL DEFAULT '',
+	model TEXT NOT NULL DEFAULT '',
+	state TEXT NOT NULL DEFAULT 'closed',
+	failure_class TEXT NOT NULL DEFAULT '',
+	consecutive_failures INTEGER NOT NULL DEFAULT 0,
+	opened_at INTEGER NOT NULL DEFAULT 0,
+	next_probe_at INTEGER NOT NULL DEFAULT 0,
+	probe_lease_until INTEGER NOT NULL DEFAULT 0,
+	last_error TEXT NOT NULL DEFAULT '',
+	last_request_id TEXT NOT NULL DEFAULT '',
+	updated_at INTEGER NOT NULL,
+	PRIMARY KEY (tenant_id, route_id)
+);
+CREATE INDEX IF NOT EXISTS idx_provider_route_probe
+	ON provider_route_health(tenant_id, state, next_probe_at);
 CREATE TABLE IF NOT EXISTS external_watches (
 	id TEXT PRIMARY KEY,
 	tenant_id TEXT NOT NULL,
@@ -462,6 +499,10 @@ CREATE TABLE IF NOT EXISTS external_watches (
 	timeout_at INTEGER NOT NULL,
 	next_check_at INTEGER NOT NULL,
 	attempts INTEGER NOT NULL DEFAULT 0,
+	extensions INTEGER NOT NULL DEFAULT 0,
+	finalized INTEGER NOT NULL DEFAULT 0,
+	verdict_revision INTEGER NOT NULL DEFAULT 1,
+	notified INTEGER NOT NULL DEFAULT 0,
 	last_output TEXT NOT NULL DEFAULT '',
 	last_error TEXT NOT NULL DEFAULT '',
 	created_at INTEGER NOT NULL,
@@ -510,6 +551,18 @@ CREATE INDEX IF NOT EXISTS idx_external_watches_owner
 		// resurrects FOREVER (observed live: a 10-min task + repeated deploy
 		// restarts spawned 5 duplicate task corpses).
 		{"task_queue", "restarts", "INTEGER NOT NULL DEFAULT 0"},
+		// task_id pins a system-originated queued item (external-watch
+		// finalization) to its task; ordinary inbound rows leave it empty.
+		{"task_queue", "task_id", "TEXT NOT NULL DEFAULT ''"},
+		// idempotency_key makes system-originated enqueues (watch
+		// finalization) replay-safe: a crash-recovery re-enqueue with the
+		// same stable key is one row, never a duplicate run.
+		{"task_queue", "idempotency_key", "TEXT NOT NULL DEFAULT ''"},
+		// verdict_revision counts terminal-verdict revisions (timed_out ->
+		// succeeded). It keys all finalization products, so replaying the
+		// SAME verdict creates nothing new while a REVISED verdict emits one
+		// fresh correction event/run/notice.
+		{"external_watches", "verdict_revision", "INTEGER NOT NULL DEFAULT 1"},
 		// Task governance columns are additive and default old rows to normal,
 		// visible work. No migration may hide, archive, or rename existing tasks.
 		{"tasks", "kind", "TEXT NOT NULL DEFAULT 'work'"},
@@ -527,12 +580,52 @@ CREATE INDEX IF NOT EXISTS idx_external_watches_owner
 		// memory mutation, so crash recovery re-applies the same proposal.
 		{"maintenance_jobs", "payload_json", "TEXT NOT NULL DEFAULT ''"},
 		{"maintenance_jobs", "proposal_json", "TEXT NOT NULL DEFAULT ''"},
+		// blocked_route_id binds a provider-quota pause to the physical route
+		// that caused it. A successful half-open probe requeues only jobs for
+		// that route; unrelated provider/configuration failures remain blocked.
+		{"maintenance_jobs", "blocked_route_id", "TEXT NOT NULL DEFAULT ''"},
 		// cursor is a daemon-wide, never-reused append sequence for resumable
 		// event streams. It cannot rely on SQLite's implicit rowid because
 		// cleanup or VACUUM may reuse/change rowids.
 		{"task_events", "cursor", "INTEGER"},
+		// System-originated event products use a stable key so a crash replay
+		// cannot append the same logical event twice. Ordinary events leave it
+		// NULL and retain append-only behavior.
+		{"task_events", "idempotency_key", "TEXT"},
+		// extensions bounds automatic deadline extension of an external watch
+		// to exactly one grant, so a build that outlives its window gets one
+		// extra bounded wait instead of an endless rolling deadline.
+		{"external_watches", "extensions", "INTEGER NOT NULL DEFAULT 0"},
 	} {
 		if err := s.ensureColumn(ctx, col.table, col.name, col.def); err != nil {
+			return err
+		}
+	}
+	// finalized marks that a terminal watch's completion side effects (task
+	// update, event, notification, finalization run) actually ran. The
+	// terminal-status CAS and the side effects are not one transaction, so
+	// boot recovery compensates unfinalized terminal watches. Backfill runs
+	// exactly once: watches already terminal before this column existed had
+	// their side effects delivered by the old code path, and replaying them
+	// would duplicate notifications.
+	if added, err := s.ensureColumnAdded(ctx, "external_watches", "finalized", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return err
+	} else if added {
+		if _, err := s.db.ExecContext(ctx, `UPDATE external_watches SET finalized = 1
+			WHERE status IN (?, ?, ?, ?)`,
+			ExternalWatchSucceeded, ExternalWatchFailed, ExternalWatchTimedOut, ExternalWatchCancelled); err != nil {
+			return err
+		}
+	}
+	// Notification delivery is a separate replay product. Existing terminal
+	// watches predate that split and must not notify again after an upgrade;
+	// only newly completed watches begin with notified=0.
+	if added, err := s.ensureColumnAdded(ctx, "external_watches", "notified", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return err
+	} else if added {
+		if _, err := s.db.ExecContext(ctx, `UPDATE external_watches SET notified = 1
+			WHERE status IN (?, ?, ?, ?)`,
+			ExternalWatchSucceeded, ExternalWatchFailed, ExternalWatchTimedOut, ExternalWatchCancelled); err != nil {
 			return err
 		}
 	}
@@ -543,6 +636,9 @@ CREATE INDEX IF NOT EXISTS idx_external_watches_owner
 			SET next_cursor = MAX(next_cursor, COALESCE((SELECT MAX(cursor) FROM task_events), 0))
 			WHERE id = 1;
 		CREATE UNIQUE INDEX IF NOT EXISTS idx_task_events_cursor ON task_events(cursor);
+		CREATE UNIQUE INDEX IF NOT EXISTS idx_task_events_idempotency
+			ON task_events(idempotency_key)
+			WHERE idempotency_key IS NOT NULL AND idempotency_key != '';
 		UPDATE tasks SET last_activity_at = updated_at WHERE last_activity_at IS NULL;
 		CREATE INDEX IF NOT EXISTS idx_tasks_governance
 			ON tasks(tenant_id, person_id, visibility, status, updated_at);
@@ -550,16 +646,25 @@ CREATE INDEX IF NOT EXISTS idx_external_watches_owner
 			ON tasks(visibility, pinned, status, last_activity_at);
 		CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_inbox_unique
 			ON tasks(tenant_id, person_id, COALESCE(workspace_id, ''))
-			WHERE kind = 'inbox';`); err != nil {
+			WHERE kind = 'inbox';
+		CREATE UNIQUE INDEX IF NOT EXISTS idx_task_queue_idempotency ON task_queue(idempotency_key)
+			WHERE idempotency_key != '';`); err != nil {
 		return err
 	}
 	return nil
 }
 
 func (s *Store) ensureColumn(ctx context.Context, table, name, definition string) error {
+	_, err := s.ensureColumnAdded(ctx, table, name, definition)
+	return err
+}
+
+// ensureColumnAdded reports whether it just created the column, so one-time
+// backfills can run exactly on the upgrade that introduced the column.
+func (s *Store) ensureColumnAdded(ctx context.Context, table, name, definition string) (bool, error) {
 	rows, err := s.db.QueryContext(ctx, fmt.Sprintf("PRAGMA table_info(%s)", table))
 	if err != nil {
-		return err
+		return false, err
 	}
 	defer rows.Close()
 	for rows.Next() {
@@ -569,17 +674,19 @@ func (s *Store) ensureColumn(ctx context.Context, table, name, definition string
 		var defaultValue interface{}
 		var pk int
 		if err := rows.Scan(&cid, &colName, &colType, &notNull, &defaultValue, &pk); err != nil {
-			return err
+			return false, err
 		}
 		if colName == name {
-			return nil
+			return false, nil
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return err
+		return false, err
 	}
-	_, err = s.db.ExecContext(ctx, fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", table, name, definition))
-	return err
+	if _, err := s.db.ExecContext(ctx, fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", table, name, definition)); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func (s *Store) EnsureTenant(ctx context.Context, tenantID, name string) error {
@@ -746,6 +853,29 @@ func (s *Store) TouchAccountLastSeen(ctx context.Context, tenantID, accountID st
 // delivery import). Never-seen accounts rank after seen ones, in bind order,
 // so a fresh install still resolves deterministically. Returns nil, nil when
 // no bound IM account qualifies.
+// AccountForChannel resolves the account whose platform_user_id equals the
+// given channel string (IM channels use the platform user id as the durable
+// channel key). Returns nil when the channel does not map to a bound account
+// (e.g. CLI session channels).
+func (s *Store) AccountForChannel(ctx context.Context, tenantID, personID, channel string) (*Account, error) {
+	channel = strings.TrimSpace(channel)
+	if channel == "" {
+		return nil, nil
+	}
+	row := s.db.QueryRowContext(ctx, `SELECT id, tenant_id, person_id, platform, platform_user_id,
+		COALESCE(display_name, ''), status, COALESCE(last_seen_at, 0)
+		FROM accounts WHERE tenant_id = ? AND person_id = ? AND platform_user_id = ? AND status = 'active' LIMIT 1`,
+		normalizeTenant(tenantID), personID, channel)
+	var a Account
+	if err := row.Scan(&a.ID, &a.TenantID, &a.PersonID, &a.Platform, &a.PlatformUserID, &a.DisplayName, &a.Status, &a.LastSeenAt); err != nil {
+		if strings.Contains(err.Error(), "no rows") {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &a, nil
+}
+
 func (s *Store) MostRecentIMAccount(ctx context.Context, tenantID, personID string, supported func(platform string) bool) (*Account, error) {
 	if strings.TrimSpace(personID) == "" {
 		return nil, fmt.Errorf("person id is required")
@@ -1265,7 +1395,46 @@ func (s *Store) PriorRunChannel(ctx context.Context, tenantID, taskID, exceptRun
 	return channel, nil
 }
 
+// GetRun reads one run by id. It is used by recovery/finalization paths that
+// must reconstruct the same durable maintenance evidence as the normal run
+// path after an asynchronous panic.
+func (s *Store) GetRun(ctx context.Context, tenantID, runID string) (*Run, error) {
+	if strings.TrimSpace(runID) == "" {
+		return nil, nil
+	}
+	var r Run
+	var started int64
+	var finished sql.NullInt64
+	err := s.db.QueryRowContext(ctx,
+		`SELECT id, task_id, tenant_id, person_id, COALESCE(workspace_id, ''), channel,
+		        COALESCE(input_summary, ''), status, started_at, finished_at
+		 FROM task_runs WHERE tenant_id = ? AND id = ?`,
+		normalizeTenant(tenantID), runID).
+		Scan(&r.ID, &r.TaskID, &r.TenantID, &r.PersonID, &r.WorkspaceID, &r.Channel,
+			&r.InputSummary, &r.Status, &started, &finished)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	r.StartedAt = time.Unix(started, 0)
+	if finished.Valid {
+		at := time.Unix(finished.Int64, 0)
+		r.FinishedAt = &at
+	}
+	return &r, nil
+}
+
 func (s *Store) FinishRun(ctx context.Context, tenantID, runID, status string) error {
+	return s.FinishRunWithMaintenancePayload(ctx, tenantID, runID, status, 1, "")
+}
+
+// FinishRunWithMaintenancePayload atomically records both the terminal run
+// state and the immutable replay input consumed by post-run maintenance. The
+// ordinary FinishRun wrapper remains for callers that intentionally have no
+// analyzer evidence (for example an administrative cancellation).
+func (s *Store) FinishRunWithMaintenancePayload(ctx context.Context, tenantID, runID, status string, analyzerVersion int, payload string) error {
 	// FinishRun's contract is to write a TERMINAL run status. Agent outcomes
 	// can legitimately say "running" ("turn done, more work planned"), but a
 	// finished run row left in status 'running' — with active_run_id cleared
@@ -1297,7 +1466,7 @@ func (s *Store) FinishRun(ctx context.Context, tenantID, runID, status string) e
 	// The maintenance job is born in the SAME terminal transaction, so "run
 	// reached a terminal state" and "run has exactly one pending maintenance
 	// slot" can never diverge (docs/memory-governance.zh-CN.md §2.5).
-	if err = createMaintenanceJobTx(ctx, tx, tenant, runID, 1); err != nil {
+	if err = createMaintenanceJobTx(ctx, tx, tenant, runID, analyzerVersion, payload); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -1312,6 +1481,16 @@ func (s *Store) AppendEvent(ctx context.Context, event Event) (*Event, error) {
 	}
 	if event.Visibility == "" {
 		event.Visibility = "task"
+	}
+	event.IdempotencyKey = strings.TrimSpace(event.IdempotencyKey)
+	if event.IdempotencyKey != "" {
+		existing, err := s.eventByIdempotencyKey(ctx, event.IdempotencyKey)
+		if err == nil {
+			return existing, nil
+		}
+		if err != sql.ErrNoRows {
+			return nil, err
+		}
 	}
 	event.ID = "event_" + uuid.NewString()
 	event.CreatedAt = time.Now()
@@ -1330,11 +1509,31 @@ func (s *Store) AppendEvent(ctx context.Context, event Event) (*Event, error) {
 	).Scan(&event.Cursor); err != nil {
 		return nil, err
 	}
-	if _, err := tx.ExecContext(ctx,
-		`INSERT INTO task_events (id, cursor, task_id, run_id, type, visibility, channel, payload_json, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		event.ID, event.Cursor, event.TaskID, event.RunID, event.Type, event.Visibility, event.Channel, string(event.Payload), event.CreatedAt.Unix()); err != nil {
+	var idempotencyKey interface{}
+	if event.IdempotencyKey != "" {
+		idempotencyKey = event.IdempotencyKey
+	}
+	result, err := tx.ExecContext(ctx,
+		`INSERT INTO task_events (id, cursor, task_id, run_id, type, visibility, channel, payload_json, idempotency_key, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 ON CONFLICT(idempotency_key) WHERE idempotency_key IS NOT NULL AND idempotency_key != '' DO NOTHING`,
+		event.ID, event.Cursor, event.TaskID, event.RunID, event.Type, event.Visibility, event.Channel, string(event.Payload), idempotencyKey, event.CreatedAt.Unix())
+	if err != nil {
 		return nil, err
+	}
+	if inserted, err := result.RowsAffected(); err != nil {
+		return nil, err
+	} else if inserted == 0 {
+		// Roll back the cursor increment before returning the concurrently
+		// inserted logical event.
+		if err := tx.Rollback(); err != nil {
+			return nil, err
+		}
+		existing, err := s.eventByIdempotencyKey(ctx, event.IdempotencyKey)
+		if err != nil {
+			return nil, fmt.Errorf("load duplicate event %q: %w", event.IdempotencyKey, err)
+		}
+		return existing, nil
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, err
@@ -1342,6 +1541,27 @@ func (s *Store) AppendEvent(ctx context.Context, event Event) (*Event, error) {
 	if s.events != nil {
 		s.events.publish(event)
 	}
+	return &event, nil
+}
+
+func (s *Store) eventByIdempotencyKey(ctx context.Context, key string) (*Event, error) {
+	var event Event
+	var payload string
+	var createdAt int64
+	err := s.db.QueryRowContext(ctx, `SELECT e.id, e.cursor, t.tenant_id, t.person_id,
+		e.task_id, COALESCE(e.run_id, ''), e.type, e.visibility,
+		COALESCE(e.channel, ''), COALESCE(e.payload_json, ''),
+		COALESCE(e.idempotency_key, ''), e.created_at
+		FROM task_events e JOIN tasks t ON t.id = e.task_id
+		WHERE e.idempotency_key = ?`, key).Scan(
+		&event.ID, &event.Cursor, &event.TenantID, &event.PersonID,
+		&event.TaskID, &event.RunID, &event.Type, &event.Visibility,
+		&event.Channel, &payload, &event.IdempotencyKey, &createdAt)
+	if err != nil {
+		return nil, err
+	}
+	event.Payload = json.RawMessage(payload)
+	event.CreatedAt = time.Unix(createdAt, 0)
 	return &event, nil
 }
 

@@ -63,3 +63,18 @@ func TestLegacyToolCallsToLLM(t *testing.T) {
 		t.Fatalf("unexpected call: %+v", calls[0])
 	}
 }
+
+func TestEmitStructuredToolEventSuppressesUnchangedPlan(t *testing.T) {
+	events := make(chan string, 2)
+	args := map[string]interface{}{
+		"plan": []interface{}{map[string]interface{}{"step": "Inspect", "status": "in_progress"}},
+	}
+	emitStructuredToolEvent(events, "update_plan", args, `{"changed":false}`, nil)
+	if len(events) != 0 {
+		t.Fatalf("unchanged plan emitted %d event(s)", len(events))
+	}
+	emitStructuredToolEvent(events, "update_plan", args, `{"changed":true}`, nil)
+	if len(events) != 1 {
+		t.Fatalf("changed plan emitted %d event(s), want 1", len(events))
+	}
+}

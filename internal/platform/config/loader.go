@@ -142,6 +142,8 @@ tasks:
   maintenance_debounce: "5m"
   maintenance_max_wait: "15m"
   maintenance_batch_max_runs: 10
+  maintenance_quota_probe_initial: "15m"
+  maintenance_quota_probe_max: "4h"
 
 editor:
   large_paste_chars: 1000
@@ -270,15 +272,21 @@ type MemoryGovernanceConfig struct {
 }
 
 type TaskConfig struct {
-	InboxEnabled              bool     `mapstructure:"inbox_enabled" yaml:"inbox_enabled,omitempty"`
-	DefaultListLimit          int      `mapstructure:"default_list_limit" yaml:"default_list_limit,omitempty"`
-	AutoArchiveDoneAfter      string   `mapstructure:"auto_archive_done_after" yaml:"auto_archive_done_after,omitempty"`
-	AutoArchiveCancelledAfter string   `mapstructure:"auto_archive_cancelled_after" yaml:"auto_archive_cancelled_after,omitempty"`
-	MaintenanceModelRole      string   `mapstructure:"maintenance_model_role" yaml:"maintenance_model_role,omitempty"`
-	MaintenanceFallbackRoles  []string `mapstructure:"maintenance_fallback_roles" yaml:"maintenance_fallback_roles,omitempty"`
-	MaintenanceDebounce       string   `mapstructure:"maintenance_debounce" yaml:"maintenance_debounce,omitempty"`
-	MaintenanceMaxWait        string   `mapstructure:"maintenance_max_wait" yaml:"maintenance_max_wait,omitempty"`
-	MaintenanceBatchMaxRuns   int      `mapstructure:"maintenance_batch_max_runs" yaml:"maintenance_batch_max_runs,omitempty"`
+	InboxEnabled                 bool     `mapstructure:"inbox_enabled" yaml:"inbox_enabled,omitempty"`
+	DefaultListLimit             int      `mapstructure:"default_list_limit" yaml:"default_list_limit,omitempty"`
+	AutoArchiveDoneAfter         string   `mapstructure:"auto_archive_done_after" yaml:"auto_archive_done_after,omitempty"`
+	AutoArchiveCancelledAfter    string   `mapstructure:"auto_archive_cancelled_after" yaml:"auto_archive_cancelled_after,omitempty"`
+	MaintenanceModelRole         string   `mapstructure:"maintenance_model_role" yaml:"maintenance_model_role,omitempty"`
+	MaintenanceFallbackRoles     []string `mapstructure:"maintenance_fallback_roles" yaml:"maintenance_fallback_roles,omitempty"`
+	MaintenanceDebounce          string   `mapstructure:"maintenance_debounce" yaml:"maintenance_debounce,omitempty"`
+	MaintenanceMaxWait           string   `mapstructure:"maintenance_max_wait" yaml:"maintenance_max_wait,omitempty"`
+	MaintenanceBatchMaxRuns      int      `mapstructure:"maintenance_batch_max_runs" yaml:"maintenance_batch_max_runs,omitempty"`
+	MaintenanceQuotaProbeInitial string   `mapstructure:"maintenance_quota_probe_initial" yaml:"maintenance_quota_probe_initial,omitempty"`
+	MaintenanceQuotaProbeMax     string   `mapstructure:"maintenance_quota_probe_max" yaml:"maintenance_quota_probe_max,omitempty"`
+	// MaintenanceLLMTimeout bounds one post-run analyzer provider call.
+	// Cheap-role providers can be slow on real batches; a too-tight bound
+	// converts every job into deadline-exceeded retries and skipped learning.
+	MaintenanceLLMTimeout string `mapstructure:"maintenance_llm_timeout" yaml:"maintenance_llm_timeout,omitempty"`
 }
 
 const (
@@ -288,6 +296,9 @@ const (
 	DefaultTaskMaintenanceDebounce  = 5 * time.Minute
 	DefaultTaskMaintenanceMaxWait   = 15 * time.Minute
 	DefaultTaskMaintenanceBatchMax  = 10
+	DefaultTaskQuotaProbeInitial    = 15 * time.Minute
+	DefaultTaskQuotaProbeMax        = 4 * time.Hour
+	DefaultTaskMaintenanceLLMTimeout = 2 * time.Minute
 )
 
 func (t TaskConfig) ListLimit() int {
@@ -319,6 +330,27 @@ func (t TaskConfig) MaintenanceBatchPolicy() (time.Duration, time.Duration, int)
 		maxRuns = 50
 	}
 	return debounce, maxWait, maxRuns
+}
+
+// MaintenanceLLMCallTimeout returns the per-call analyzer bound.
+func (t TaskConfig) MaintenanceLLMCallTimeout() time.Duration {
+	timeout := parseTaskDuration(t.MaintenanceLLMTimeout, DefaultTaskMaintenanceLLMTimeout)
+	if timeout <= 0 {
+		timeout = DefaultTaskMaintenanceLLMTimeout
+	}
+	return timeout
+}
+
+func (t TaskConfig) MaintenanceQuotaCircuitPolicy() (time.Duration, time.Duration) {
+	initial := parseTaskDuration(t.MaintenanceQuotaProbeInitial, DefaultTaskQuotaProbeInitial)
+	maximum := parseTaskDuration(t.MaintenanceQuotaProbeMax, DefaultTaskQuotaProbeMax)
+	if initial <= 0 {
+		initial = DefaultTaskQuotaProbeInitial
+	}
+	if maximum < initial {
+		maximum = initial
+	}
+	return initial, maximum
 }
 
 func parseTaskDuration(raw string, fallback time.Duration) time.Duration {
@@ -565,6 +597,11 @@ type ProviderQuirks struct {
 	UserAgent              string `mapstructure:"user_agent" yaml:"user_agent,omitempty"`
 	ResponsesStoreFalse    bool   `mapstructure:"responses_store_false" yaml:"responses_store_false,omitempty"`
 	ResponsesRequireStream bool   `mapstructure:"responses_require_stream" yaml:"responses_require_stream,omitempty"`
+	// PromptCache opts an anthropic-protocol endpoint into cache_control
+	// breakpoints (stable system prefix + rolling history breakpoint).
+	// Off by default: providers that ignore the field are unaffected, but
+	// enabling it should be a deliberate, per-provider decision.
+	PromptCache bool `mapstructure:"prompt_cache" yaml:"prompt_cache,omitempty"`
 }
 
 type ModelsConfig struct {
@@ -576,6 +613,7 @@ type ModelRoleConfig struct {
 	Provider        string                 `mapstructure:"provider" yaml:"provider,omitempty"`
 	Model           string                 `mapstructure:"model" yaml:"model,omitempty"`
 	BaseURL         string                 `mapstructure:"base_url" yaml:"base_url,omitempty"`
+	Protocol        string                 `mapstructure:"protocol" yaml:"protocol,omitempty"`
 	APIKey          string                 `mapstructure:"api_key" yaml:"api_key,omitempty"`
 	ContextLength   int                    `mapstructure:"context_length" yaml:"context_length,omitempty"`
 	MaxTokens       int                    `mapstructure:"max_tokens" yaml:"max_tokens,omitempty"`
@@ -794,6 +832,9 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("tasks.maintenance_debounce", "5m")
 	v.SetDefault("tasks.maintenance_max_wait", "15m")
 	v.SetDefault("tasks.maintenance_batch_max_runs", DefaultTaskMaintenanceBatchMax)
+	v.SetDefault("tasks.maintenance_quota_probe_initial", "15m")
+	v.SetDefault("tasks.maintenance_quota_probe_max", "4h")
+	v.SetDefault("tasks.maintenance_llm_timeout", "2m")
 	v.SetDefault("evolution.enabled", true)
 	v.SetDefault("evolution.nudge_interval", 10)
 	v.SetDefault("models.source", "local")
@@ -905,6 +946,7 @@ func (c *Config) Normalize() {
 		role.Provider = expandEnvRef(role.Provider)
 		role.Model = expandEnvRef(role.Model)
 		role.BaseURL = expandEnvRef(role.BaseURL)
+		role.Protocol = expandEnvRef(role.Protocol)
 		role.APIKey = expandEnvRef(role.APIKey)
 		role.Headers = normalizeHeaders(role.Headers)
 		role.ReasoningEffort = expandEnvRef(role.ReasoningEffort)

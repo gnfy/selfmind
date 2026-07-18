@@ -3,33 +3,54 @@ package app
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
+	"time"
 
+	"selfmind/internal/control"
 	"selfmind/internal/gateway/httpapi"
 	"selfmind/internal/kernel/llm"
 	"selfmind/internal/kernel/memory"
+	"selfmind/internal/modelruntime"
+	"selfmind/internal/platform/config"
 )
 
 type postRunProviderStub struct {
-	content string
-	calls   int
-	err     error
+	content      string
+	response     *llm.ChatResponse
+	calls        int
+	streamCalls  int
+	err          error
+	requests     []llm.ChatRequest
+	streamEvents []llm.StreamEvent
 }
 
 func (p *postRunProviderStub) ChatCompletion(context.Context, []llm.Message) (string, error) {
 	return p.content, nil
 }
 
-func (p *postRunProviderStub) Chat(context.Context, llm.ChatRequest) (*llm.ChatResponse, error) {
+func (p *postRunProviderStub) Chat(_ context.Context, req llm.ChatRequest) (*llm.ChatResponse, error) {
+	return p.chat(req)
+}
+
+func (p *postRunProviderStub) chat(req llm.ChatRequest) (*llm.ChatResponse, error) {
 	p.calls++
+	p.requests = append(p.requests, req)
 	if p.err != nil {
 		return nil, p.err
+	}
+	if p.response != nil {
+		return p.response, nil
 	}
 	return &llm.ChatResponse{Content: p.content}, nil
 }
 
 func (p *postRunProviderStub) StreamChat(context.Context, llm.ChatRequest) (<-chan llm.StreamEvent, error) {
-	ch := make(chan llm.StreamEvent)
+	p.streamCalls++
+	ch := make(chan llm.StreamEvent, len(p.streamEvents))
+	for _, event := range p.streamEvents {
+		ch <- event
+	}
 	close(ch)
 	return ch, nil
 }
@@ -47,6 +68,151 @@ func TestMaintenanceProviderChainUsesExplicitFallback(t *testing.T) {
 	}
 	if resp == nil || resp.Content == "" || primary.calls != 1 || fallback.calls != 1 {
 		t.Fatalf("resp=%+v primary_calls=%d fallback_calls=%d", resp, primary.calls, fallback.calls)
+	}
+}
+
+func TestMaintenanceProviderChainFallsBackOnEmptyResponse(t *testing.T) {
+	primary := &postRunProviderStub{content: "   "}
+	fallback := &postRunProviderStub{content: `{"task_decision":"KEEP"}`}
+	chain := &maintenanceProviderChain{providers: []namedMaintenanceProvider{
+		{role: llm.RoleMemoryExtract, provider: primary},
+		{role: llm.RoleBackgroundReview, provider: fallback},
+	}}
+
+	resp, err := chain.Chat(context.Background(), llm.ChatRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp == nil || strings.TrimSpace(resp.Content) == "" || primary.calls != 1 || fallback.calls != 1 {
+		t.Fatalf("resp=%+v primary_calls=%d fallback_calls=%d", resp, primary.calls, fallback.calls)
+	}
+}
+
+func TestMaintenanceProviderChainAcceptsToolCallOnlyResponse(t *testing.T) {
+	primary := &postRunProviderStub{response: &llm.ChatResponse{ToolCalls: []llm.ToolCall{{
+		ID: "call-1", Function: "review", Args: `{}`,
+	}}}}
+	fallback := &postRunProviderStub{content: `{"task_decision":"KEEP"}`}
+	chain := &maintenanceProviderChain{providers: []namedMaintenanceProvider{
+		{role: llm.RoleMemoryExtract, provider: primary},
+		{role: llm.RoleBackgroundReview, provider: fallback},
+	}}
+
+	resp, err := chain.Chat(context.Background(), llm.ChatRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp == nil || len(resp.ToolCalls) != 1 || primary.calls != 1 || fallback.calls != 0 {
+		t.Fatalf("resp=%+v primary_calls=%d fallback_calls=%d", resp, primary.calls, fallback.calls)
+	}
+}
+
+func TestMaintenanceCredentialIdentityKeepsDynamicOAuthRouteStable(t *testing.T) {
+	first := &modelruntime.Runtime{
+		APIKey: "access-token-1", CredentialSource: "auth.json:minimax-oauth",
+		TokenGetter: func() string { return "access-token-1" },
+	}
+	second := &modelruntime.Runtime{
+		APIKey: "access-token-2", CredentialSource: "auth.json:minimax-oauth",
+		TokenGetter: func() string { return "access-token-2" },
+	}
+	if got, want := maintenanceCredentialIdentity(first), maintenanceCredentialIdentity(second); got != want {
+		t.Fatalf("dynamic route identity changed after refresh: %q != %q", got, want)
+	}
+
+	staticA := &modelruntime.Runtime{APIKey: "key-a", CredentialSource: "config"}
+	staticB := &modelruntime.Runtime{APIKey: "key-b", CredentialSource: "config"}
+	if maintenanceCredentialIdentity(staticA) == maintenanceCredentialIdentity(staticB) {
+		t.Fatal("different static credentials must not share a quota circuit")
+	}
+}
+
+func TestMaintenanceProviderChainKeepsEmptyResponsesRetryable(t *testing.T) {
+	chain := &maintenanceProviderChain{providers: []namedMaintenanceProvider{
+		{role: llm.RoleMemoryExtract, provider: &postRunProviderStub{content: " "}},
+		{role: llm.RoleBackgroundReview, provider: &postRunProviderStub{}},
+	}}
+
+	_, err := chain.Chat(context.Background(), llm.ChatRequest{})
+	if err == nil {
+		t.Fatal("all-empty provider chain must fail")
+	}
+	if !llm.IsRetryableError(err) {
+		t.Fatalf("empty output can recover with a smaller batch or larger budget: %v", err)
+	}
+}
+
+func TestMaintenanceProviderChainKeepsFatalOnlyFailuresNonRetryable(t *testing.T) {
+	chain := &maintenanceProviderChain{providers: []namedMaintenanceProvider{
+		{role: llm.RoleMemoryExtract, provider: &postRunProviderStub{err: errors.New("HTTP 401 unauthorized")}},
+		{role: llm.RoleBackgroundReview, provider: &postRunProviderStub{err: errors.New("HTTP 403 quota exhausted")}},
+	}}
+	_, err := chain.Chat(context.Background(), llm.ChatRequest{})
+	if err == nil || llm.IsRetryableError(err) {
+		t.Fatalf("fatal-only provider chain must fail fast: %v", err)
+	}
+}
+
+func TestMaintenanceProviderChainOpensQuotaCircuitAfterOneRequest(t *testing.T) {
+	store, err := control.OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	provider := &postRunProviderStub{err: &llm.ProviderError{
+		Provider: "kimi-coding", Class: llm.ProviderErrorQuota, StatusCode: 403,
+		Message: "usage limit reached",
+	}}
+	chain := &maintenanceProviderChain{
+		providers: []namedMaintenanceProvider{{
+			role: llm.RoleMemoryExtract, provider: provider,
+			route: maintenanceRouteIdentity{ID: "route-kimi", Provider: "kimi-coding", Model: "kimi-for-coding"},
+		}},
+		control: store, tenantID: "tenant", probeInitial: time.Hour, probeMax: 4 * time.Hour, probeLease: time.Minute,
+	}
+	if _, err := chain.Chat(context.Background(), llm.ChatRequest{}); err == nil || !llm.IsQuotaError(err) {
+		t.Fatalf("first call error = %v", err)
+	}
+	if _, err := chain.Chat(context.Background(), llm.ChatRequest{}); err == nil || !llm.IsQuotaError(err) {
+		t.Fatalf("open-circuit call error = %v", err)
+	}
+	if provider.calls != 1 {
+		t.Fatalf("physical provider calls = %d, want 1", provider.calls)
+	}
+}
+
+func TestMaintenanceProviderChainObservesQuotaInsideStream(t *testing.T) {
+	store, err := control.OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	provider := &postRunProviderStub{streamEvents: []llm.StreamEvent{{Err: &llm.ProviderError{
+		Provider: "kimi-coding", Class: llm.ProviderErrorQuota, StatusCode: 403,
+		Message: "usage limit reached inside stream",
+	}}}}
+	chain := &maintenanceProviderChain{
+		providers: []namedMaintenanceProvider{{
+			role: llm.RoleBackgroundReview, provider: provider,
+			route: maintenanceRouteIdentity{ID: "route-kimi-stream", Provider: "kimi-coding", Model: "kimi-for-coding"},
+		}},
+		control: store, tenantID: "tenant", probeInitial: time.Hour, probeMax: 4 * time.Hour, probeLease: time.Minute,
+	}
+	stream, err := chain.StreamChat(context.Background(), llm.ChatRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	event := <-stream
+	if event.Err == nil || !llm.IsQuotaError(event.Err) {
+		t.Fatalf("stream error = %v", event.Err)
+	}
+	if _, err := chain.StreamChat(context.Background(), llm.ChatRequest{}); err == nil || !llm.IsQuotaError(err) {
+		t.Fatalf("open-circuit stream error = %v", err)
+	}
+	if provider.streamCalls != 1 {
+		t.Fatalf("physical stream calls = %d, want 1", provider.streamCalls)
 	}
 }
 
@@ -78,19 +244,25 @@ func TestPostRunAnalyzerCombinesDecisionAndFactPersistence(t *testing.T) {
 	if err := analyzer.Apply(context.Background(), req, got); err != nil {
 		t.Fatal(err)
 	}
-	userFacts, err := mem.GetFacts(context.Background(), "tenant", "user")
+	// Background learning must land in the person partition — the one the
+	// foreground agent reads — never in the control tenant partition (the
+	// 2026-07-17 partition-split regression).
+	userFacts, err := mem.GetFacts(context.Background(), "person", "user")
 	if err != nil || len(userFacts) != 1 {
 		t.Fatalf("user facts=%+v err=%v", userFacts, err)
 	}
 	if userFacts[0].CreatedFromRun != "run" || userFacts[0].Scope != "global" {
 		t.Fatalf("user fact metadata=%+v", userFacts[0])
 	}
-	workspaceFacts, err := mem.GetFacts(context.Background(), "tenant", "memory")
+	workspaceFacts, err := mem.GetFacts(context.Background(), "person", "memory")
 	if err != nil || len(workspaceFacts) != 1 {
 		t.Fatalf("memory facts=%+v err=%v", workspaceFacts, err)
 	}
 	if workspaceFacts[0].Scope != "workspace:workspace" {
 		t.Fatalf("workspace fact metadata=%+v", workspaceFacts[0])
+	}
+	if tenantFacts, err := mem.GetFacts(context.Background(), "tenant", "user"); err != nil || len(tenantFacts) != 0 {
+		t.Fatalf("control tenant partition must stay empty, got %+v err=%v", tenantFacts, err)
 	}
 
 	// Re-analyzing the same durable facts must not duplicate memory rows —
@@ -106,8 +278,8 @@ func TestPostRunAnalyzerCombinesDecisionAndFactPersistence(t *testing.T) {
 	if err := analyzer.Apply(context.Background(), req, replayed); err != nil {
 		t.Fatal(err)
 	}
-	userFacts, _ = mem.GetFacts(context.Background(), "tenant", "user")
-	workspaceFacts, _ = mem.GetFacts(context.Background(), "tenant", "memory")
+	userFacts, _ = mem.GetFacts(context.Background(), "person", "user")
+	workspaceFacts, _ = mem.GetFacts(context.Background(), "person", "memory")
 	if len(userFacts) != 1 || len(workspaceFacts) != 1 {
 		t.Fatalf("duplicates stored: user=%d memory=%d", len(userFacts), len(workspaceFacts))
 	}
@@ -143,7 +315,118 @@ func TestPostRunAnalyzerBatchesProviderCallAndKeysResultsByRun(t *testing.T) {
 	if model.calls != 1 {
 		t.Fatalf("provider calls = %d", model.calls)
 	}
+	if got := model.requests[0].MaxTokens; got != 4096 {
+		t.Fatalf("batch max tokens = %d, want 4096", got)
+	}
 	if results["run-1"].TaskDecision != "TITLE:Release checks" || results["run-2"].TaskDecision != "INBOX" {
 		t.Fatalf("results = %+v", results)
+	}
+}
+
+func TestConfiguredPostRunAnalyzerDeduplicatesEquivalentRoleRoutes(t *testing.T) {
+	cfg := &config.Config{
+		Model: config.ModelConfig{Provider: "kimi-coding", Default: "kimi-for-coding"},
+		ProviderProfiles: map[string]config.ProviderEndpoint{
+			"kimi-coding": {APIKey: "sk-kimi-test"},
+		},
+		Models: config.ModelsConfig{Roles: map[string]config.ModelRoleConfig{
+			"memory_extract":    {Provider: "kimi-coding", Model: "kimi-for-coding"},
+			"background_review": {Provider: "kimi-coding", Model: "another-maintenance-model", MaxTokens: 1024},
+		}},
+		Tasks: config.TaskConfig{
+			MaintenanceModelRole:     "memory_extract",
+			MaintenanceFallbackRoles: []string{"background_review"},
+		},
+	}
+	cfg.Normalize()
+	analyzer, ok := NewConfiguredPostRunAnalyzer(nil, cfg, "tenant").(*llmPostRunAnalyzer)
+	if !ok || analyzer == nil {
+		t.Fatal("configured analyzer was not built")
+	}
+	if _, chained := analyzer.provider.(*maintenanceProviderChain); chained {
+		t.Fatal("roles sharing one Kimi endpoint and credential must not be called repeatedly")
+	}
+}
+
+func TestMaintenanceRouteKeyIgnoresRequestTuningButSeparatesCredentials(t *testing.T) {
+	base := &config.Config{
+		Model:            config.ModelConfig{Provider: "kimi-coding", Default: "kimi-for-coding"},
+		ProviderProfiles: map[string]config.ProviderEndpoint{"kimi-coding": {APIKey: "key-a"}},
+		Models: config.ModelsConfig{Roles: map[string]config.ModelRoleConfig{
+			"memory_extract":    {Provider: "kimi-coding", Model: "kimi-for-coding", MaxTokens: 4096},
+			"background_review": {Provider: "kimi-coding", Model: "other", MaxTokens: 1024, ReasoningEffort: "high"},
+		}},
+	}
+	base.Normalize()
+	first := maintenanceRoleRouteKey(base, llm.RoleMemoryExtract)
+	second := maintenanceRoleRouteKey(base, llm.RoleBackgroundReview)
+	if first == "" || first != second {
+		t.Fatalf("same physical route should share key: %q != %q", first, second)
+	}
+	base.ProviderProfiles["kimi-coding"] = config.ProviderEndpoint{APIKey: "key-b"}
+	if changed := maintenanceRoleRouteKey(base, llm.RoleMemoryExtract); changed == first {
+		t.Fatal("credential change must produce a fresh quota route")
+	}
+}
+
+func TestConfiguredMaintenanceRouteIDsIncludeAllBackgroundSubsystems(t *testing.T) {
+	cfg := &config.Config{
+		Model: config.ModelConfig{Provider: "openai", Default: "gpt-main"},
+		ProviderProfiles: map[string]config.ProviderEndpoint{
+			"tasks-provider":  {APIKey: "tasks-key", BaseURL: "https://tasks.example/v1", Protocol: "openai_compatible"},
+			"memory-provider": {APIKey: "memory-key", BaseURL: "https://memory.example/v1", Protocol: "openai_compatible"},
+			"review-provider": {APIKey: "review-key", BaseURL: "https://review.example/v1", Protocol: "openai_compatible"},
+		},
+		Models: config.ModelsConfig{Roles: map[string]config.ModelRoleConfig{
+			"memory_extract":    {Provider: "tasks-provider", Model: "tasks-model"},
+			"memory_governance": {Provider: "memory-provider", Model: "memory-model"},
+			"background_review": {Provider: "review-provider", Model: "review-model"},
+		}},
+		Tasks: config.TaskConfig{MaintenanceModelRole: "memory_extract"},
+		Memory: config.MemoryConfig{Governance: config.MemoryGovernanceConfig{
+			Enabled: true, ModelRole: "memory_governance",
+		}},
+	}
+	cfg.Normalize()
+	got := configuredMaintenanceRouteIDs(cfg)
+	want := map[string]bool{
+		maintenanceRoleRouteKey(cfg, llm.RoleMemoryExtract):              true,
+		maintenanceRoleRouteKey(cfg, llm.ModelRole("memory_governance")): true,
+		maintenanceRoleRouteKey(cfg, llm.RoleBackgroundReview):           true,
+	}
+	if len(got) != len(want) {
+		t.Fatalf("route ids = %v, want %d distinct routes", got, len(want))
+	}
+	for _, id := range got {
+		if !want[id] {
+			t.Fatalf("unexpected route id %q in %v", id, got)
+		}
+	}
+}
+
+func TestKimiAuxiliaryRolesUseProviderDefaultTransport(t *testing.T) {
+	cfg := &config.Config{
+		Model: config.ModelConfig{Provider: "kimi-coding", Default: "kimi-for-coding"},
+		ProviderProfiles: map[string]config.ProviderEndpoint{
+			"kimi-coding": {APIKey: "sk-kimi-test"},
+		},
+	}
+	cfg.Normalize()
+	roleCfg := config.ModelRoleConfig{Provider: "kimi-coding", Model: "kimi-for-coding"}
+	rt, err := modelruntime.NewResolver(cfg).Resolve(context.Background(), roleProviderSelection(llm.RoleMemoryExtract, "kimi-coding", roleCfg))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rt.Protocol != modelruntime.ProtocolAnthropic || rt.BaseURL != "https://api.kimi.com/coding" {
+		t.Fatalf("auxiliary runtime = protocol %q base %q", rt.Protocol, rt.BaseURL)
+	}
+
+	roleCfg.Protocol = modelruntime.ProtocolOpenAICompatible
+	rt, err = modelruntime.NewResolver(cfg).Resolve(context.Background(), roleProviderSelection(llm.RoleMemoryExtract, "kimi-coding", roleCfg))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rt.Protocol != modelruntime.ProtocolOpenAICompatible || rt.BaseURL != "https://api.kimi.com/coding/v1" {
+		t.Fatalf("explicit protocol override = protocol %q base %q", rt.Protocol, rt.BaseURL)
 	}
 }

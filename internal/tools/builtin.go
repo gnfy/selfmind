@@ -16,9 +16,9 @@ import (
 	"selfmind/internal/platform/textutil"
 )
 
-// ---- 内置工具实现 ----
+// ---- Built-in tool implementations ----
 
-// ListFilesTool 列出目录文件
+// ListFilesTool lists directory entries.
 type ListFilesTool struct {
 	BaseTool
 }
@@ -169,7 +169,7 @@ func (t *ListFilesTool) Execute(args map[string]interface{}) (string, error) {
 	return string(b), nil
 }
 
-// ReadFileTool 读取文件内容
+// ReadFileTool reads file contents.
 type ReadFileTool struct {
 	BaseTool
 }
@@ -220,7 +220,7 @@ func (t *ReadFileTool) Execute(args map[string]interface{}) (string, error) {
 
 	file, err := os.Open(path)
 	if err != nil {
-		return "", err
+		return "", enrichToolFailure("read_file", err, "")
 	}
 	defer file.Close()
 	data, err := io.ReadAll(io.LimitReader(file, int64(maxBytes)+1))
@@ -237,7 +237,7 @@ func (t *ReadFileTool) Execute(args map[string]interface{}) (string, error) {
 func readFileLineLimited(path string, limit, maxBytes int) (string, error) {
 	file, err := os.Open(path)
 	if err != nil {
-		return "", err
+		return "", enrichToolFailure("read_file", err, "")
 	}
 	defer file.Close()
 
@@ -256,7 +256,7 @@ func readFileLineLimited(path string, limit, maxBytes int) (string, error) {
 	return strings.Join(lines, "\n"), nil
 }
 
-// WriteFileTool 写入文件内容
+// WriteFileTool writes file contents.
 type WriteFileTool struct {
 	BaseTool
 }
@@ -332,7 +332,7 @@ func writeFileResult(path, oldText, newText string, existed bool) string {
 	return sb.String()
 }
 
-// ExecuteCommandTool 执行 Shell 命令
+// ExecuteCommandTool runs a shell command.
 type ExecuteCommandTool struct {
 	BaseTool
 }
@@ -458,13 +458,14 @@ func executeForegroundCommand(args map[string]interface{}, toolName string, time
 	}
 	args["_command_exit_code"] = exitCode
 	if runCtx.Err() == context.DeadlineExceeded {
-		return out, fmt.Errorf("command timed out after %d seconds", timeoutSeconds)
+		return out, enrichToolFailure(toolName, fmt.Errorf("command timed out after %d seconds", timeoutSeconds), out)
 	}
 	if runCtx.Err() == context.Canceled {
+		// Cancellation is a lifecycle decision, not a diagnosable failure.
 		return out, fmt.Errorf("command cancelled")
 	}
 	if err != nil {
-		return out, fmt.Errorf("command failed: %v", err)
+		return out, enrichToolFailure(toolName, fmt.Errorf("command failed: %v", err), out)
 	}
 	return out, nil
 }
@@ -583,7 +584,7 @@ func emitToolProgress(eventCh chan string, eventType string, payload map[string]
 	})
 }
 
-// SearchFilesTool 搜索文件内容
+// SearchFilesTool searches file contents.
 type SearchFilesTool struct {
 	BaseTool
 }
@@ -724,12 +725,12 @@ func (t *SearchFilesTool) Execute(args map[string]interface{}) (string, error) {
 	})
 	if err != nil {
 		if err == context.DeadlineExceeded {
-			return "", fmt.Errorf("search_files timed out after %d seconds", timeoutSeconds)
+			return "", enrichToolFailure("search_files", fmt.Errorf("search_files timed out after %d seconds", timeoutSeconds), "")
 		}
 		if err == context.Canceled {
 			return "", fmt.Errorf("search_files cancelled")
 		}
-		return "", err
+		return "", enrichToolFailure("search_files", err, "")
 	}
 	b, _ := json.Marshal(map[string]interface{}{
 		"path":          path,
@@ -767,7 +768,7 @@ func stringArg(args map[string]interface{}, key string) string {
 	return ""
 }
 
-// GetCurrentTimeTool 获取当前时间
+// GetCurrentTimeTool returns the current time.
 type GetCurrentTimeTool struct {
 	BaseTool
 }
@@ -801,7 +802,7 @@ func (t *timeWrapper) Format(layout string) string {
 	return time.Now().Format(layout)
 }
 
-// RegisterBuiltins 将所有内置工具注册到 dispatcher
+// RegisterBuiltins registers every built-in tool on the dispatcher.
 func RegisterBuiltins(d *Dispatcher) {
 	d.RegisterTool(NewListFilesTool())
 	d.RegisterTool(NewReadFileTool())

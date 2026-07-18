@@ -6,10 +6,36 @@ package kernel
 // internal/tools/background_review_integration_test.go).
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
 	"reflect"
 	"testing"
+
+	"selfmind/internal/kernel/llm"
+	"selfmind/internal/kernel/memory"
 )
+
+type quotaReviewProvider struct{ calls int }
+
+func (p *quotaReviewProvider) quotaError() error {
+	return &llm.ProviderError{Provider: "kimi-coding", Class: llm.ProviderErrorQuota, StatusCode: 403, Message: "usage limit reached"}
+}
+
+func (p *quotaReviewProvider) ChatCompletion(context.Context, []llm.Message) (string, error) {
+	p.calls++
+	return "", p.quotaError()
+}
+
+func (p *quotaReviewProvider) Chat(context.Context, llm.ChatRequest) (*llm.ChatResponse, error) {
+	p.calls++
+	return nil, p.quotaError()
+}
+
+func (p *quotaReviewProvider) StreamChat(context.Context, llm.ChatRequest) (<-chan llm.StreamEvent, error) {
+	p.calls++
+	return nil, p.quotaError()
+}
 
 func TestExtractSkillChangeClaims(t *testing.T) {
 	cases := []struct {
@@ -122,5 +148,30 @@ func TestUnverifiedSkillClaims(t *testing.T) {
 	backend.calls = nil
 	if got := unverifiedSkillClaims(backend, "default", "Nothing to save."); got != nil || len(backend.calls) != 0 {
 		t.Fatalf("non-claim text triggered verification: flagged=%v calls=%v", got, backend.calls)
+	}
+}
+
+func TestDurableBackgroundReviewPropagatesQuotaError(t *testing.T) {
+	provider, err := memory.NewSQLiteProvider(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer provider.Close()
+	model := &quotaReviewProvider{}
+	engine := NewBackgroundReviewEngine(memory.NewMemoryManager(provider), &fakeClaimBackend{}, model,
+		EvolutionConfig{Enabled: true}, 1, 1)
+	payload, err := json.Marshal(ReviewJobPayload{
+		Channel: "cli", ReviewSkills: true,
+		Messages: []ReviewMessage{{Role: "user", Content: "remember this workflow"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = engine.RunReviewFromPayload(context.Background(), "tenant", string(payload))
+	if err == nil || !llm.IsQuotaError(err) {
+		t.Fatalf("review error = %v", err)
+	}
+	if model.calls != 1 {
+		t.Fatalf("provider calls = %d, want 1 non-retryable request", model.calls)
 	}
 }

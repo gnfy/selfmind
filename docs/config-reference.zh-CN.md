@@ -71,6 +71,8 @@ models:
     memory_extract:          # 记忆写入 + 整理 + 压缩摘要
       provider: "kimi-coding"
       model: "kimi-for-coding"
+      # 可选的角色级覆盖，仅用于自定义网关。Kimi Coding Plan 的
+      # 默认协议是 anthropic_messages，与 /coding endpoint 一致。
     background_review:       # 技能/记忆自审、smart 模式审批裁决
       provider: "kimi-coding"
       model: "kimi-for-coding"
@@ -80,6 +82,11 @@ models:
     skill_curator: { provider: "kimi-coding", model: "kimi-for-coding" }
     fast_classifier: { provider: "kimi-coding", model: "kimi-for-coding" }
 ```
+
+`kimi-coding` 的全部角色都使用供应商默认的 Anthropic Messages 传输
+（`https://api.kimi.com/coding/v1/messages`），与 Hermes 和 Kimi Coding
+Plan `/coding` 路径的实际协议一致。角色级 `protocol` 只用于自定义网关
+或协议不同的特殊部署；正常使用 Kimi Coding Plan 时应省略。
 
 角色名固定；没配的角色回退到主模型。指向便宜模型可以把后台工作从主 provider
 挪开。
@@ -194,6 +201,9 @@ tasks:
   maintenance_debounce: "5m"       # 安静窗口后再做语义治理
   maintenance_max_wait: "15m"      # 持续有新 run 时也不会无限等待
   maintenance_batch_max_runs: 10   # 单次模型调用最多处理的 run 数
+  maintenance_quota_probe_initial: "15m" # quota 403 后首次探测间隔
+  maintenance_quota_probe_max: "4h"      # 指数退避探测的最长间隔
+  maintenance_llm_timeout: "2m"    # 单次分析器模型调用的超时上限；过紧会导致 deadline 重试耗尽并丢学习
 ```
 
 自动归档只碰陈旧、终态、未 pin、无活跃 run 的任务。
@@ -221,6 +231,14 @@ tasks:
 run 终态事务会立即保存可重放证据。三个批处理参数只延迟可逆的任务标签和
 长期记忆治理，不延迟最终回答，也不影响最近对话连续性。批次绝不跨 tenant、
 person 或 workspace。空值或零时长使用产品默认值。
+
+只要维护角色解析到相同 endpoint 和凭据，即使角色名或模型名不同，也会共享
+同一个持久化 quota 熔断器。首次 quota 403 会暂停该路由上的积压作业，但不会
+消耗它们的重试次数。SelfMind 在 `maintenance_quota_probe_initial` 后只放行一个
+半开探测；若仍是 quota 错误，则指数退避到 `maintenance_quota_probe_max`。
+探测成功后会自动关闭熔断并重放暂停作业。`/diag` 会显示被阻塞的路由和下次
+探测时间。如果配额耗尽期间也必须继续治理，请把 fallback 角色配置到不同的
+provider 或凭据。
 
 ## 8. 诊断：飞行记录器
 

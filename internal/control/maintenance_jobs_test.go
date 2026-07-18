@@ -66,6 +66,32 @@ func TestMaintenanceJobLifecycle(t *testing.T) {
 	}
 }
 
+func TestFinishRunPersistsMaintenancePayloadAtomically(t *testing.T) {
+	ctx := context.Background()
+	store, identity, _, run := newRecoveryFixture(t)
+	payload := `{"run":"atomic-replay"}`
+
+	if err := store.FinishRunWithMaintenancePayload(ctx, identity.TenantID, run.ID, "done", 1, payload); err != nil {
+		t.Fatalf("FinishRunWithMaintenancePayload: %v", err)
+	}
+	job, err := store.GetMaintenanceJob(ctx, identity.TenantID, run.ID, 1)
+	if err != nil || job == nil {
+		t.Fatalf("job=%+v err=%v", job, err)
+	}
+	if job.PayloadJSON != payload || job.Status != MaintenanceJobPending {
+		t.Fatalf("job=%+v", job)
+	}
+
+	// Duplicate finalization must not replace the immutable first replay input.
+	if err := store.FinishRunWithMaintenancePayload(ctx, identity.TenantID, run.ID, "done", 1, `{"run":"replacement"}`); err != nil {
+		t.Fatalf("duplicate finalize: %v", err)
+	}
+	job, _ = store.GetMaintenanceJob(ctx, identity.TenantID, run.ID, 1)
+	if job.PayloadJSON != payload {
+		t.Fatalf("payload was replaced: %q", job.PayloadJSON)
+	}
+}
+
 // TestMaintenanceJobFailureAndRecovery: a failed job becomes claimable only
 // after its retry horizon, and a crashed 'running' job returns to pending via
 // the recovery sweep helper.
@@ -153,5 +179,88 @@ func TestMaintenanceJobProviderBlockAndRestartProbe(t *testing.T) {
 	}
 	if claimed, err := store.ClaimMaintenanceJob(ctx, identity.TenantID, run.ID, 1); err != nil || !claimed {
 		t.Fatalf("fresh restart probe: claimed=%v err=%v", claimed, err)
+	}
+}
+
+func TestReplayRetryLimitedMaintenanceJobsIsSelective(t *testing.T) {
+	ctx := context.Background()
+	store, identity, _, run := newRecoveryFixture(t)
+	payload := `{"run":"historic"}`
+	if err := store.FinishRunWithMaintenancePayload(ctx, identity.TenantID, run.ID, "done", 1, payload); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SkipMaintenanceJob(ctx, identity.TenantID, run.ID, 1, "maintenance retry limit reached"); err != nil {
+		t.Fatal(err)
+	}
+
+	// A deterministic skip must not be replayed even when it has evidence.
+	task2, err := store.CreateTask(ctx, TaskCreate{TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "not eligible"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run2, err := store.StartRun(ctx, task2, "cli", "status")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.FinishRunWithMaintenancePayload(ctx, identity.TenantID, run2.ID, "done", 1, `{"run":"skip"}`); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SkipMaintenanceJob(ctx, identity.TenantID, run2.ID, 1, "run is not eligible"); err != nil {
+		t.Fatal(err)
+	}
+
+	n, err := store.ReplayRetryLimitedMaintenanceJobs(ctx, identity.TenantID, 10)
+	if err != nil || n != 1 {
+		t.Fatalf("replayed=%d err=%v", n, err)
+	}
+	job, _ := store.GetMaintenanceJob(ctx, identity.TenantID, run.ID, 1)
+	if job == nil || job.Status != MaintenanceJobPending || job.Attempts != 0 || job.LastError != "" {
+		t.Fatalf("replayed job=%+v", job)
+	}
+	job2, _ := store.GetMaintenanceJob(ctx, identity.TenantID, run2.ID, 1)
+	if job2 == nil || job2.Status != MaintenanceJobSkipped {
+		t.Fatalf("deterministic skip changed: %+v", job2)
+	}
+}
+
+// TestMaintenanceAttemptHistory pins the append-only failure timeline: the
+// job row's last_error is overwritten on every transition, so fail/skip/block
+// must each leave a durable history row with the REAL error, and retention
+// pruning stays bounded.
+func TestMaintenanceAttemptHistory(t *testing.T) {
+	ctx := context.Background()
+	store, identity, _, run := newRecoveryFixture(t)
+	if err := store.FinishRun(ctx, identity.TenantID, run.ID, "done"); err != nil {
+		t.Fatal(err)
+	}
+	if claimed, err := store.ClaimMaintenanceJob(ctx, identity.TenantID, run.ID, 1); err != nil || !claimed {
+		t.Fatalf("claim: %v %v", claimed, err)
+	}
+	if err := store.FailMaintenanceJob(ctx, identity.TenantID, run.ID, 1, "context deadline exceeded", time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SkipMaintenanceJob(ctx, identity.TenantID, run.ID, 1, "maintenance retry limit reached"); err != nil {
+		t.Fatal(err)
+	}
+	attempts, err := store.RecentMaintenanceAttempts(ctx, identity.TenantID, time.Now().Add(-time.Hour), 10)
+	if err != nil || len(attempts) != 2 {
+		t.Fatalf("attempts=%+v err=%v", attempts, err)
+	}
+	// Newest first: the skip, then the failure that carries the real error.
+	if attempts[0].Outcome != "skipped" || attempts[1].Outcome != "failed" {
+		t.Fatalf("outcomes = %q, %q", attempts[0].Outcome, attempts[1].Outcome)
+	}
+	if attempts[1].Error != "context deadline exceeded" {
+		t.Fatalf("real error lost: %q", attempts[1].Error)
+	}
+
+	// Retention: age the rows and prune.
+	if _, err := store.db.ExecContext(ctx, `UPDATE maintenance_attempts SET created_at = ?`,
+		time.Now().Add(-40*24*time.Hour).Unix()); err != nil {
+		t.Fatal(err)
+	}
+	pruned, err := store.PruneMaintenanceAttempts(ctx, 0)
+	if err != nil || pruned != 2 {
+		t.Fatalf("pruned=%d err=%v", pruned, err)
 	}
 }

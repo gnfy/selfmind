@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 
@@ -37,6 +38,21 @@ func TestIncompleteTurnOverridesStructuredWaitingExternal(t *testing.T) {
 	}, true)
 
 	if outcome.Status != "interrupted" || outcome.CompletionReason != "output_limit" || !outcome.Resumable {
+		t.Fatalf("outcome = %#v", outcome)
+	}
+}
+
+func TestStructuredDoneSurvivesExhaustedActionBudget(t *testing.T) {
+	outcome := reconcileTurnCompletion(api.RunOutcome{
+		Status:  "done",
+		Summary: "Implemented and verified.",
+	}, router.TurnCompletion{
+		Status:           "incomplete",
+		CompletionReason: "tool_budget_exhausted",
+		Resumable:        true,
+	}, true)
+
+	if outcome.Status != "done" || outcome.CompletionReason != "completed" || outcome.Resumable {
 		t.Fatalf("outcome = %#v", outcome)
 	}
 }
@@ -90,5 +106,16 @@ func TestFinalizeErroredRunIsDurableAndResumable(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("run.interrupted event missing: %#v", events)
+	}
+	job, err := store.GetMaintenanceJob(ctx, identity.TenantID, run.ID, postRunAnalyzerVersion)
+	if err != nil || job == nil || job.PayloadJSON == "" {
+		t.Fatalf("maintenance replay payload missing: job=%#v err=%v", job, err)
+	}
+	var replay postRunJobPayload
+	if err := json.Unmarshal([]byte(job.PayloadJSON), &replay); err != nil {
+		t.Fatalf("decode maintenance replay: %v", err)
+	}
+	if replay.Outcome.Status != "interrupted" || replay.Run.ID != run.ID {
+		t.Fatalf("maintenance replay = %#v", replay)
 	}
 }

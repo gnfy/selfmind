@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -15,6 +16,7 @@ type fakeBatchPostRunAnalyzer struct {
 	singleCalls int
 	batchCalls  int
 	batchSizes  []int
+	failAbove   int
 }
 
 func (f *fakeBatchPostRunAnalyzer) Analyze(context.Context, PostRunAnalysisRequest) (PostRunAnalysis, error) {
@@ -29,11 +31,45 @@ func (f *fakeBatchPostRunAnalyzer) AnalyzeBatch(_ context.Context, reqs []PostRu
 	defer f.mu.Unlock()
 	f.batchCalls++
 	f.batchSizes = append(f.batchSizes, len(reqs))
+	if f.failAbove > 0 && len(reqs) > f.failAbove {
+		return nil, errors.New("unexpected end of JSON input")
+	}
 	out := make(map[string]PostRunAnalysis, len(reqs))
 	for _, req := range reqs {
 		out[req.RunID] = PostRunAnalysis{TaskDecision: "KEEP"}
 	}
 	return out, nil
+}
+
+func TestMaintenanceWorkerBisectsRetryableBatchFailure(t *testing.T) {
+	provider := newSlowLLMProvider("completed the requested work with durable output")
+	provider.releaseNow()
+	daemon, _, _ := newDetachedRunServer(t, provider)
+	analyzer := &fakeBatchPostRunAnalyzer{failAbove: 1}
+	daemon.PostRunAnalyzer = analyzer
+
+	for i := 0; i < 2; i++ {
+		resp, status := daemon.ProcessMessage(context.Background(), api.MessageRequest{
+			Platform: "cli", PlatformUserID: "local", Channel: "cli",
+			Content: strings.Repeat("Implement and verify this durable workspace improvement. ", 4),
+		})
+		if status != 200 || resp.Run == nil {
+			t.Fatalf("turn %d failed: status=%d resp=%+v", i, status, resp)
+		}
+	}
+	daemon.PostRunMaintenance = PostRunMaintenanceOptions{
+		Debounce: 5 * time.Minute, MaxWait: 15 * time.Minute, BatchMaxRuns: 2,
+	}
+	daemon.runMaintenancePassAt(context.Background(), time.Now())
+	if analyzer.batchCalls != 3 {
+		t.Fatalf("batch calls = %d, sizes=%v", analyzer.batchCalls, analyzer.batchSizes)
+	}
+	want := []int{2, 1, 1}
+	for i := range want {
+		if analyzer.batchSizes[i] != want[i] {
+			t.Fatalf("batch sizes = %v, want %v", analyzer.batchSizes, want)
+		}
+	}
 }
 
 func TestMaintenanceWorkerBatchesRunsByPersonWorkspace(t *testing.T) {

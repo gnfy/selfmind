@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -88,6 +89,7 @@ func (d *Server) tasksOverviewReply(ctx context.Context, identity *control.Ident
 			sb.WriteString("No open tasks.")
 		} else {
 			sb.WriteString("Open tasks:\n")
+			tasks = groupTasksByWorkKey(tasks)
 			for i, task := range tasks {
 				index := 0
 				if args.page == 1 {
@@ -307,6 +309,47 @@ func taskSearchFields(t control.Task, view taskCardView) []string {
 	return fields
 }
 
+// taskWorkKeyPattern extracts a deterministic work key (ticket id like
+// RUQX-224 or JIRA-style keys) from a task title. Display-only: grouping by
+// key never affects context selection, workspace binding, or permissions.
+var taskWorkKeyPattern = regexp.MustCompile(`\b([A-Z][A-Z0-9]{1,9}-\d{1,6})\b`)
+
+// groupTasksByWorkKey stably reorders open task cards so tasks sharing a
+// ticket key sit together (anchored at the first occurrence). Tasks without a
+// key keep their relative order. Purely presentational — same cards, adjacent.
+func groupTasksByWorkKey(tasks []control.Task) []control.Task {
+	if len(tasks) < 3 {
+		return tasks
+	}
+	anchor := map[string]int{}
+	for i, t := range tasks {
+		key := taskWorkKeyPattern.FindString(t.Title)
+		if key == "" {
+			continue
+		}
+		if _, seen := anchor[key]; !seen {
+			anchor[key] = i
+		}
+	}
+	order := make([]int, len(tasks))
+	for i, t := range tasks {
+		order[i] = i
+		if key := taskWorkKeyPattern.FindString(t.Title); key != "" {
+			order[i] = anchor[key]
+		}
+	}
+	indices := make([]int, len(tasks))
+	for i := range indices {
+		indices[i] = i
+	}
+	sort.SliceStable(indices, func(a, b int) bool { return order[indices[a]] < order[indices[b]] })
+	out := make([]control.Task, len(tasks))
+	for i, idx := range indices {
+		out[i] = tasks[idx]
+	}
+	return out
+}
+
 // taskCardStatus maps one label to the simplified card bracket:
 // running (live run) > done/cancelled/failed/archived verbatim > waiting
 // (pending approval/question, or blocked) > paused (open, nothing executing —
@@ -319,7 +362,7 @@ func taskCardStatus(t control.Task, isActive bool, pendingApprovals, pendingQues
 		return strings.ToLower(strings.TrimSpace(t.Status))
 	case strings.EqualFold(strings.TrimSpace(t.Status), "interrupted"):
 		return "interrupted"
-	case pendingApprovals > 0 || pendingQuestions > 0 || strings.EqualFold(strings.TrimSpace(t.Status), "blocked") || strings.EqualFold(strings.TrimSpace(t.Status), "waiting_external"):
+	case pendingApprovals > 0 || pendingQuestions > 0 || strings.EqualFold(strings.TrimSpace(t.Status), "blocked") || strings.EqualFold(strings.TrimSpace(t.Status), "waiting_external") || strings.EqualFold(strings.TrimSpace(t.Status), "waiting_user"):
 		return "waiting"
 	default:
 		return "paused"
@@ -328,8 +371,8 @@ func taskCardStatus(t control.Task, isActive bool, pendingApprovals, pendingQues
 
 // renderTaskCard renders one label as a multi-line card:
 //
-//  1. [running] 拳皇97风格对战游戏
-//     last: 再多做几个角色 · 3m ago
+//  1. [running] KOF97-style fighting game
+//     last: add a few more characters · 3m ago
 //     file: arcade-fury-97.html
 //     approvals: 1
 //     runs: 6

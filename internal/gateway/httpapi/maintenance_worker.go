@@ -33,6 +33,10 @@ type PostRunMaintenanceOptions struct {
 	Debounce     time.Duration
 	MaxWait      time.Duration
 	BatchMaxRuns int
+	// LLMTimeout bounds one analyzer provider call. Zero uses the default;
+	// it exists because a too-tight bound silently converts a slow cheap-role
+	// provider into five deadline-exceeded retries and a skipped job.
+	LLMTimeout time.Duration
 }
 
 func (o PostRunMaintenanceOptions) normalized() PostRunMaintenanceOptions {
@@ -51,7 +55,15 @@ func (o PostRunMaintenanceOptions) normalized() PostRunMaintenanceOptions {
 	if o.BatchMaxRuns > 50 {
 		o.BatchMaxRuns = 50
 	}
+	if o.LLMTimeout <= 0 {
+		o.LLMTimeout = defaultPostRunAnalyzerTimeout
+	}
 	return o
+}
+
+// analyzerTimeout is the per-call provider bound from the normalized options.
+func (d *Server) analyzerTimeout() time.Duration {
+	return d.PostRunMaintenance.normalized().LLMTimeout
 }
 
 // Skill-review durable jobs (execution-quality W7) share the maintenance_jobs
@@ -86,10 +98,15 @@ func (d *Server) StartMaintenanceWorker(ctx context.Context) func() {
 	} else if reset > 0 {
 		log.Info("gateway: reset maintenance jobs at boot", "count", reset)
 	}
-	if reset, err := d.Control.ResetBlockedMaintenanceJobs(context.Background()); err != nil {
+	if reset, err := d.Control.ResetLegacyBlockedMaintenanceJobs(context.Background()); err != nil {
 		log.Warn("gateway: reset provider-blocked maintenance jobs at boot failed", "error", err)
 	} else if reset > 0 {
-		log.Info("gateway: retrying provider-blocked maintenance jobs after restart", "count", reset)
+		log.Info("gateway: retrying legacy provider-blocked maintenance jobs after restart", "count", reset)
+	}
+	if pruned, err := d.Control.PruneMaintenanceAttempts(context.Background(), 0); err != nil {
+		log.Warn("gateway: prune maintenance attempt history failed", "error", err)
+	} else if pruned > 0 {
+		log.Info("gateway: pruned maintenance attempt history", "count", pruned)
 	}
 	done := make(chan struct{})
 	var once sync.Once
@@ -128,6 +145,11 @@ type postRunMaintenanceGroup struct {
 }
 
 func (d *Server) runMaintenancePassAt(ctx context.Context, now time.Time) {
+	if requeued, err := d.Control.RequeueDueProviderRouteProbes(ctx, now); err != nil {
+		log.Warn("gateway: quota probe scheduling failed", "error", err)
+	} else if requeued > 0 {
+		log.Info("gateway: scheduled provider quota probe", "routes", requeued)
+	}
 	if d.PostRunAnalyzer == nil {
 		d.runSkillReviewPass(ctx)
 		return
@@ -169,7 +191,7 @@ func (d *Server) runMaintenancePassAt(ctx context.Context, now time.Time) {
 		// Apply it immediately; making it wait for another debounce window would
 		// only delay recovery and cannot save another model call.
 		if strings.TrimSpace(job.ProposalJSON) != "" {
-			callCtx, cancel := context.WithTimeout(ctx, postRunAnalyzerTimeout)
+			callCtx, cancel := context.WithTimeout(ctx, d.analyzerTimeout())
 			d.analyzeFinishedRun(callCtx, &payload.Identity, &payload.Task, &payload.Run,
 				payload.WorkspaceID, payload.UserInput, payload.Outcome, attach)
 			cancel()
@@ -230,7 +252,7 @@ func (d *Server) runPostRunMaintenanceBatch(ctx context.Context, items []*queued
 	batchAnalyzer, supportsBatch := d.PostRunAnalyzer.(PostRunBatchAnalyzer)
 	if !supportsBatch {
 		for _, item := range items {
-			callCtx, cancel := context.WithTimeout(ctx, postRunAnalyzerTimeout)
+			callCtx, cancel := context.WithTimeout(ctx, d.analyzerTimeout())
 			d.analyzeFinishedRun(callCtx, &item.payload.Identity, &item.payload.Task, &item.payload.Run,
 				item.payload.WorkspaceID, item.payload.UserInput, item.payload.Outcome,
 				taskAttach{created: item.payload.AttachCreated, preLabel: item.payload.AttachPreLabel})
@@ -256,24 +278,44 @@ func (d *Server) runPostRunMaintenanceBatch(ctx context.Context, items []*queued
 	if len(claimed) == 0 {
 		return
 	}
-	timeout := postRunAnalyzerTimeout + time.Duration(len(claimed)-1)*5*time.Second
-	if timeout > 90*time.Second {
-		timeout = 90 * time.Second
+	d.processClaimedPostRunBatch(ctx, batchAnalyzer, claimed, requests)
+}
+
+// processClaimedPostRunBatch degrades a failed aggregate request by bisecting
+// it until the bad/truncated response is isolated. A reasoning-heavy model can
+// occasionally exhaust its output budget on a large JSON batch; one such run
+// must not discard otherwise valid maintenance work for the whole bucket.
+func (d *Server) processClaimedPostRunBatch(ctx context.Context, batchAnalyzer PostRunBatchAnalyzer, claimed []*queuedPostRunMaintenance, requests []PostRunAnalysisRequest) {
+	if len(claimed) == 0 || len(claimed) != len(requests) {
+		return
 	}
-	callCtx, cancel := context.WithTimeout(ctx, timeout)
+	callCtx, cancel := context.WithTimeout(ctx, d.postRunMaintenanceBatchTimeout(len(claimed)))
 	results, err := batchAnalyzer.AnalyzeBatch(callCtx, requests)
 	cancel()
 	if err != nil {
+		if len(claimed) > 1 && llm.IsRetryableError(err) {
+			mid := len(claimed) / 2
+			d.processClaimedPostRunBatch(ctx, batchAnalyzer, claimed[:mid], requests[:mid])
+			d.processClaimedPostRunBatch(ctx, batchAnalyzer, claimed[mid:], requests[mid:])
+			return
+		}
 		for _, item := range claimed {
 			d.failClaimedPostRun(ctx, item.prepared, err)
 		}
 		return
 	}
+	missingClaimed := make([]*queuedPostRunMaintenance, 0)
+	missingRequests := make([]PostRunAnalysisRequest, 0)
 	for _, item := range claimed {
 		analysis, ok := results[item.job.RunID]
 		if !ok {
-			_ = d.Control.FailMaintenanceJob(ctx, item.job.TenantID, item.job.RunID, postRunAnalyzerVersion,
-				fmt.Sprintf("maintenance batch response omitted run %s", item.job.RunID), maintenanceRetryDelay)
+			missingClaimed = append(missingClaimed, item)
+			for _, req := range requests {
+				if req.RunID == item.job.RunID {
+					missingRequests = append(missingRequests, req)
+					break
+				}
+			}
 			continue
 		}
 		if !d.saveMaintenanceProposal(ctx, item.prepared, analysis) {
@@ -281,6 +323,37 @@ func (d *Server) runPostRunMaintenanceBatch(ctx context.Context, items []*queued
 		}
 		d.applyClaimedPostRun(ctx, item.prepared, analysis)
 	}
+	if len(missingClaimed) == 0 {
+		return
+	}
+	if len(missingClaimed) == 1 {
+		d.failClaimedPostRun(ctx, missingClaimed[0].prepared,
+			fmt.Errorf("maintenance batch response omitted run %s", missingClaimed[0].job.RunID))
+		return
+	}
+	if len(missingClaimed) < len(claimed) {
+		d.processClaimedPostRunBatch(ctx, batchAnalyzer, missingClaimed, missingRequests)
+		return
+	}
+	// The provider omitted every run. Repeating the same aggregate request is
+	// unlikely to help, so split it just like a truncated response.
+	mid := len(missingClaimed) / 2
+	d.processClaimedPostRunBatch(ctx, batchAnalyzer, missingClaimed[:mid], missingRequests[:mid])
+	d.processClaimedPostRunBatch(ctx, batchAnalyzer, missingClaimed[mid:], missingRequests[mid:])
+}
+
+func (d *Server) postRunMaintenanceBatchTimeout(size int) time.Duration {
+	if size < 1 {
+		size = 1
+	}
+	base := d.analyzerTimeout()
+	timeout := base + time.Duration(size-1)*5*time.Second
+	// The batch bound grows with size but never exceeds twice the per-call
+	// bound: past that point bisection is cheaper than waiting.
+	if cap := 2 * base; timeout > cap {
+		return cap
+	}
+	return timeout
 }
 
 // runSkillReviewPass drains a bounded number of durable skill-review jobs
@@ -313,7 +386,8 @@ func (d *Server) runSkillReviewPass(ctx context.Context) {
 			if llm.IsRetryableError(err) {
 				_ = d.Control.FailMaintenanceJob(ctx, job.TenantID, job.RunID, job.AnalyzerVersion, err.Error(), skillReviewRetryDelay)
 			} else {
-				_, _ = d.Control.BlockMaintenanceJob(ctx, job.TenantID, job.RunID, job.AnalyzerVersion, err.Error())
+				info, _ := llm.ProviderErrorInfo(err)
+				_, _ = d.Control.BlockMaintenanceJobForRoute(ctx, job.TenantID, job.RunID, job.AnalyzerVersion, info.RouteID, err.Error())
 			}
 			continue
 		}

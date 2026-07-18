@@ -35,6 +35,16 @@ type MemoryDecision struct {
 	Ref        string  `json:"ref,omitempty"` // offered neighbor id prefix
 	Content    string  `json:"content,omitempty"`
 	Confidence float64 `json:"confidence,omitempty"`
+	// Durability is the analyzer's time-validity ruling: durable |
+	// time_bounded | episodic. The intake policy layer ENFORCES it in code —
+	// episodic content never becomes long-term memory even when the model
+	// pairs it with ADD (prompt-only enforcement failed in production:
+	// 10/29 facts stored on 2026-07-17 were transient run state).
+	Durability string `json:"durability,omitempty"`
+	// ValidUntil (RFC3339) is required for time_bounded facts; intake
+	// defaults it when missing.
+	ValidUntil string `json:"valid_until,omitempty"`
+	Category   string `json:"category,omitempty"`
 }
 
 type PostRunAnalysisRequest struct {
@@ -68,10 +78,14 @@ type PostRunAnalysisApplier interface {
 	Apply(ctx context.Context, req PostRunAnalysisRequest, analysis PostRunAnalysis) error
 }
 
-// postRunAnalyzerTimeout bounds one maintenance call. It runs post-finalize
-// on a detached goroutine, so this bound protects the daemon from a hung
-// provider, not the user-visible response (which was already sent).
-const postRunAnalyzerTimeout = 45 * time.Second
+// defaultPostRunAnalyzerTimeout bounds one maintenance call. It runs
+// post-finalize on a detached goroutine, so this bound protects the daemon
+// from a hung provider, not the user-visible response (which was already
+// sent). Cheap-role providers routinely exceeded the old 45s bound on real
+// batches (observed live 2026-07-17: repeated "context deadline exceeded"
+// burned all five retries and skipped learning for the affected runs), so the
+// default is generous and configurable via tasks.maintenance_llm_timeout.
+const defaultPostRunAnalyzerTimeout = 2 * time.Minute
 
 // postRunAnalyzerVersion identifies the maintenance algorithm generation for
 // the maintenance_jobs idempotency key. Bump it when the analyzer's decision
@@ -85,27 +99,31 @@ const maintenanceRetryDelay = 10 * time.Minute
 // candidates — the person-level open set is small by design.
 const runLabelerMaxOpenLabels = 10
 
-// analyzeFinishedRunAsync captures the immutable replay evidence for a
-// finalized run. Model work is deliberately NOT launched here: the daemon's
-// maintenance worker is the sole consumer and can debounce several nearby
-// runs into one cheap-model request without delaying the user-visible result.
-func (c *RunCoordinator) analyzeFinishedRunAsync(ctx context.Context, identity *control.IdentityContext, task *control.Task, run *control.Run, workspaceID, userInput string, outcome api.RunOutcome, attach taskAttach) {
-	if c == nil || c.srv == nil || c.srv.PostRunAnalyzer == nil || c.srv.Control == nil {
-		return
+type runMaintenanceReplay struct {
+	WorkspaceID string
+	UserInput   string
+	Attach      taskAttach
+}
+
+// finishRunWithMaintenancePayload captures replay evidence in the SAME
+// transaction that makes the run terminal. Model work remains asynchronous:
+// the daemon maintenance worker is still the only consumer and may debounce
+// several nearby runs into one cheap-model request.
+func (c *RunCoordinator) finishRunWithMaintenancePayload(ctx context.Context, identity *control.IdentityContext, task *control.Task, run *control.Run, status, workspaceID, userInput string, outcome api.RunOutcome, attach taskAttach) error {
+	if c == nil || c.srv == nil || c.srv.Control == nil || identity == nil || task == nil || run == nil {
+		return fmt.Errorf("maintenance finalization context is incomplete")
 	}
-	if identity == nil || task == nil || run == nil {
-		return
-	}
-	srv := c.srv
 	payload, err := json.Marshal(postRunJobPayload{
 		Identity: *identity, Task: *task, Run: *run, WorkspaceID: workspaceID,
 		UserInput: userInput, Outcome: outcome, AttachCreated: attach.created, AttachPreLabel: attach.preLabel,
 	})
 	if err != nil {
-		log.Warn("gateway: encode maintenance replay payload failed", "run", run.ID, "error", err)
-	} else if err := srv.Control.SetMaintenanceJobPayload(context.WithoutCancel(ctx), identity.TenantID, run.ID, postRunAnalyzerVersion, string(payload)); err != nil {
-		log.Warn("gateway: persist maintenance replay payload failed", "run", run.ID, "error", err)
+		return fmt.Errorf("encode maintenance replay payload: %w", err)
 	}
+	return c.srv.Control.FinishRunWithMaintenancePayload(
+		context.WithoutCancel(ctx), identity.TenantID, run.ID, status,
+		postRunAnalyzerVersion, string(payload),
+	)
 }
 
 type postRunJobPayload struct {

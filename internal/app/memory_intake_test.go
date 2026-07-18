@@ -15,16 +15,20 @@ type capturingProviderStub struct {
 	content    string
 	lastPrompt string
 	chatCalls  int
+	err        error
 }
 
 func (p *capturingProviderStub) calls() int { return p.chatCalls }
 
 func (p *capturingProviderStub) ChatCompletion(context.Context, []llm.Message) (string, error) {
-	return p.content, nil
+	return p.content, p.err
 }
 
 func (p *capturingProviderStub) Chat(_ context.Context, req llm.ChatRequest) (*llm.ChatResponse, error) {
 	p.chatCalls++
+	if p.err != nil {
+		return nil, p.err
+	}
 	if len(req.Messages) > 0 {
 		p.lastPrompt = req.Messages[len(req.Messages)-1].Content
 	}
@@ -57,7 +61,7 @@ func TestIntakeDecisionPolicy(t *testing.T) {
 		{ID: "33333333-cccc-4ccc-8ccc-cccccccccccc", Target: "user", Content: "User indents with tabs", Source: memory.SourceUser, Scope: "global", Confidence: 0.9, LastVerifiedAt: time.Now()},
 	}
 	for _, f := range seed {
-		if err := mem.AddFactMeta(ctx, "tenant", f); err != nil {
+		if err := mem.AddFactMeta(ctx, "person", f); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -88,7 +92,7 @@ func TestIntakeDecisionPolicy(t *testing.T) {
 		t.Fatalf("neighbor block missing from prompt:\n%s", model.lastPrompt)
 	}
 
-	memFacts, _ := mem.GetFacts(ctx, "tenant", "memory")
+	memFacts, _ := mem.GetFacts(ctx, "person", "memory")
 	byID := map[string]memory.Fact{}
 	byContent := map[string]memory.Fact{}
 	for _, f := range memFacts {
@@ -115,7 +119,7 @@ func TestIntakeDecisionPolicy(t *testing.T) {
 	}
 
 	// Protected user-stated fact: SUPERSEDE degrades to CONFLICT — both kept.
-	userFacts, _ := mem.GetFacts(ctx, "tenant", "user")
+	userFacts, _ := mem.GetFacts(ctx, "person", "user")
 	var oldKept, newKept bool
 	for _, f := range userFacts {
 		if f.Content == "User indents with tabs" {
@@ -174,5 +178,122 @@ func TestIntakeSupersedeConfidenceGate(t *testing.T) {
 	}
 	if !old || !updated {
 		t.Fatalf("under-confident supersede must keep both: old=%v new=%v", old, updated)
+	}
+}
+
+// TestIntakeDurabilityEnforcement pins the deterministic time-validity gate:
+// episodic decisions and transient run-state content never become memory even
+// when the model pairs them with ADD (the 2026-07-17 pollution: 10/29 stored
+// facts were IN_PROGRESS-style run state), and time_bounded facts carry a
+// valid_until.
+func TestIntakeDurabilityEnforcement(t *testing.T) {
+	ctx := context.Background()
+	provider, err := memory.NewSQLiteProvider(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer provider.Close()
+	mem := memory.NewMemoryManager(provider)
+	model := &capturingProviderStub{content: `{
+		"task_decision":"KEEP",
+		"memory_decisions":[
+			{"target":"memory","decision":"ADD","content":"RUQX-222 已执行并审批，当前状态 IN_PROGRESS / QUEUED","confidence":0.9,"durability":"durable"},
+			{"target":"memory","decision":"ADD","content":"RUQX-500 本次构建状态标记为 PREPARED_NOT_EXECUTED，尚未执行","confidence":0.9},
+			{"target":"memory","decision":"ADD","content":"release freeze active for launch week","confidence":0.9,"durability":"episodic"},
+			{"target":"memory","decision":"ADD","content":"lid-tm-tracking uses _COMMIT without _IMG_TAG","confidence":0.9,"durability":"durable","category":"release-rule"},
+			{"target":"memory","decision":"ADD","content":"cw2 profile lacks iam:ListRoles until the ticket lands","confidence":0.9,"durability":"time_bounded","valid_until":"2999-01-02T15:04:05Z"}
+		]}`}
+	analyzer := &llmPostRunAnalyzer{provider: model, memory: mem}
+	req := httpapi.PostRunAnalysisRequest{
+		Prompt: "analyze", TurnText: "release work",
+		TenantID: "tenant", PersonID: "person", WorkspaceID: "ws", TaskID: "task", RunID: "run",
+	}
+	analysis, err := analyzer.Analyze(ctx, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := analyzer.Apply(ctx, req, analysis); err != nil {
+		t.Fatal(err)
+	}
+
+	facts, _ := mem.GetFacts(ctx, "person", "memory")
+	if len(facts) != 3 {
+		t.Fatalf("stored facts = %d (%+v), want durable + time_bounded + marker-suspect-durable", len(facts), facts)
+	}
+	for _, f := range facts {
+		if strings.Contains(f.Content, "PREPARED_NOT_EXECUTED") || strings.Contains(f.Content, "release freeze") {
+			t.Fatalf("episodic/unlabeled-transient content stored: %q", f.Content)
+		}
+	}
+
+	store, ok := mem.Canonical()
+	if !ok {
+		t.Fatal("canonical store missing")
+	}
+	canonicals, err := store.ListCanonicalMemories(ctx, "person", memory.CanonicalFilter{})
+	if err != nil || len(canonicals) != 3 {
+		t.Fatalf("canonicals=%+v err=%v", canonicals, err)
+	}
+	var sawBounded, sawDurable, sawSuspect bool
+	for _, c := range canonicals {
+		switch {
+		case strings.Contains(c.Content, "cw2 profile"):
+			sawBounded = true
+			if c.ValidUntil.IsZero() {
+				t.Fatalf("time_bounded canonical lost valid_until: %+v", c)
+			}
+		case strings.Contains(c.Content, "_COMMIT"):
+			sawDurable = true
+			if !c.ValidUntil.IsZero() {
+				t.Fatalf("durable canonical must not expire: %+v", c)
+			}
+			if c.Category != "release-rule" {
+				t.Fatalf("category lost: %+v", c)
+			}
+		case strings.Contains(c.Content, "IN_PROGRESS"):
+			// Explicit durable + transient markers: stored, but NEVER
+			// permanent — a mislabeled run-state fact must expire.
+			sawSuspect = true
+			if c.ValidUntil.IsZero() {
+				t.Fatalf("marker-suspect durable canonical must carry valid_until: %+v", c)
+			}
+		}
+	}
+	if !sawBounded || !sawDurable || !sawSuspect {
+		t.Fatalf("expected bounded+durable+suspect facts in canonical store: %+v", canonicals)
+	}
+}
+
+// TestIntakeDurabilityFailClosed pins the fail-closed default: a decision
+// with NO durability field and no transient markers is stored, but bounded —
+// an omitted field never mints permanent memory.
+func TestIntakeDurabilityFailClosed(t *testing.T) {
+	meta, episodic := decisionMeta(httpapi.MemoryDecision{Content: "team prefers squash merges"})
+	if episodic {
+		t.Fatal("unlabeled non-transient content must still be stored")
+	}
+	if meta.ValidUntil.IsZero() {
+		t.Fatal("unlabeled content must be time-bounded, never permanent")
+	}
+	meta, episodic = decisionMeta(httpapi.MemoryDecision{Content: "team prefers squash merges", Durability: "durable"})
+	if episodic || !meta.ValidUntil.IsZero() {
+		t.Fatalf("explicit durable without markers must be permanent: %+v %v", meta, episodic)
+	}
+	// Confirmed transient (instance + current-state) without a label: dropped.
+	if _, episodic := decisionMeta(httpapi.MemoryDecision{Content: "RUQX-9 当前状态 QUEUED"}); !episodic {
+		t.Fatal("unlabeled confirmed-transient content must be dropped")
+	}
+	// Candidate (status vocabulary only) without a label: stored bounded,
+	// never dropped — the acceptance bar protects ambiguous rules.
+	if meta, episodic := decisionMeta(httpapi.MemoryDecision{Content: "构建已入队 QUEUED"}); episodic || meta.ValidUntil.IsZero() {
+		t.Fatalf("unlabeled candidate must survive bounded: %+v %v", meta, episodic)
+	}
+	// Explanatory rule semantics veto the confirmed tier: an explicit durable
+	// rule that mentions status tokens stays PERMANENT.
+	if meta, episodic := decisionMeta(httpapi.MemoryDecision{Content: "发布记录从 PREPARED_NOT_EXECUTED 转为 EXECUTED 表示执行完成", Durability: "durable"}); episodic || !meta.ValidUntil.IsZero() {
+		t.Fatalf("durable rule mentioning status tokens must stay permanent: %+v %v", meta, episodic)
+	}
+	if meta, episodic := decisionMeta(httpapi.MemoryDecision{Content: "QUEUED means the task is waiting for dispatch", Durability: "durable"}); episodic || !meta.ValidUntil.IsZero() {
+		t.Fatalf("english rule must stay permanent: %+v %v", meta, episodic)
 	}
 }

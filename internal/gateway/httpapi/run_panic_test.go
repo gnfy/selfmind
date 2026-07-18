@@ -85,6 +85,14 @@ func TestAsyncRunPanicIsRecovered(t *testing.T) {
 	if task.Status == "running" {
 		t.Fatalf("task must not be left 'running' after a panic; status=%q", task.Status)
 	}
+	runs, err := store.ListTaskRuns(ctx, identity.TenantID, task.ID, 1)
+	if err != nil || len(runs) != 1 {
+		t.Fatalf("task runs: %+v err=%v", runs, err)
+	}
+	job, err := store.GetMaintenanceJob(ctx, identity.TenantID, runs[0].ID, postRunAnalyzerVersion)
+	if err != nil || job == nil || job.PayloadJSON == "" {
+		t.Fatalf("panic finalization lost maintenance replay evidence: job=%+v err=%v", job, err)
+	}
 
 	// A fresh message is accepted (not rejected as busy) — the daemon keeps serving.
 	next, _ := daemon.ProcessMessage(ctx, api.MessageRequest{

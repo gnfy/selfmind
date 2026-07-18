@@ -2,7 +2,6 @@ package llm
 
 import (
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"strings"
 )
@@ -95,15 +94,40 @@ func authErrorDetails(body []byte) (code string, message string) {
 func providerAPIError(provider string, status int, body []byte) error {
 	text := strings.TrimSpace(string(body))
 	code, message := authErrorDetails(body)
+	class := classifyProviderAPIError(status, code, message, text)
 	if isAuthFailureStatus(status, body) {
-		detail := firstNonEmptyString(message, code, http.StatusText(status))
-		return fmt.Errorf("%s credential expired or invalid (HTTP %d): %s", provider, status, detail)
-	}
-	if message != "" {
-		return fmt.Errorf("%s API error %d: %s", provider, status, message)
+		return &ProviderError{Provider: provider, StatusCode: status, Class: ProviderErrorAuth,
+			Code: code, Message: firstNonEmptyString(message, code, http.StatusText(status))}
 	}
 	if text == "" {
 		text = http.StatusText(status)
 	}
-	return fmt.Errorf("%s API error %d: %s", provider, status, text)
+	return &ProviderError{Provider: provider, StatusCode: status, Class: class,
+		Code: code, Message: firstNonEmptyString(message, text)}
+}
+
+func classifyProviderAPIError(status int, values ...string) ProviderErrorClass {
+	text := strings.ToLower(strings.Join(values, " "))
+	for _, marker := range []string{"quota", "insufficient_quota", "usage limit", "usage_limit", "quota exhausted"} {
+		if strings.Contains(text, marker) {
+			return ProviderErrorQuota
+		}
+	}
+	for _, marker := range []string{"billing", "payment", "credit balance"} {
+		if strings.Contains(text, marker) {
+			return ProviderErrorBilling
+		}
+	}
+	switch {
+	case status == http.StatusTooManyRequests:
+		return ProviderErrorRateLimit
+	case status == http.StatusUnauthorized:
+		return ProviderErrorAuth
+	case status >= 500 || status == http.StatusRequestTimeout:
+		return ProviderErrorTransient
+	case status >= 400:
+		return ProviderErrorInvalidRequest
+	default:
+		return ProviderErrorUnknown
+	}
 }

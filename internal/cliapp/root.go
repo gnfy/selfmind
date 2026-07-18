@@ -102,6 +102,9 @@ func Run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	if handled, exitCode := app.runSelfcheckCommandIfRequested(); handled {
 		return exitCode
 	}
+	if handled, exitCode := app.runMaintenanceCommandIfRequested(); handled {
+		return exitCode
+	}
 	if handled, exitCode := app.runDoctorCommandIfRequested(); handled {
 		return exitCode
 	}
@@ -134,7 +137,9 @@ func printTopLevelHelp(stdout io.Writer) {
 	fmt.Fprintln(stdout, "  selfmind auth [login|status|logout] ...")
 	fmt.Fprintln(stdout, "  selfmind eval [list|run|report]")
 	fmt.Fprintln(stdout, "  selfmind selfcheck [--skip-go|--skip-eval]")
-	fmt.Fprintln(stdout, "  selfmind doctor [--out FILE]")
+	fmt.Fprintln(stdout, "  selfmind maintenance replay [--limit N]")
+	fmt.Fprintln(stdout, "  selfmind maintenance migrate-memory [--apply] [--data-dir DIR]")
+	fmt.Fprintln(stdout, "  selfmind doctor [--out FILE] [--probe-models]")
 	fmt.Fprintln(stdout, "  selfmind gateway ...")
 	fmt.Fprintln(stdout, "  selfmind weixin ...")
 }

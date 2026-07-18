@@ -8,7 +8,7 @@
 > planning docs were removed from the tree (2026-07-03; retrieve via git
 > history) — never resurrect their backlog items or code samples.
 >
-> **Snapshot date:** 2026-07-16. When you finish a change that moves a row,
+> **Snapshot date:** 2026-07-17. When you finish a change that moves a row,
 > update this table in the same PR. See `docs/phase1-modules.md` for the
 > Phase-1 feature-module index.
 
@@ -289,6 +289,17 @@ completion/failure; continuity eval replays offline.
   concise English and successful verification adds no extra transcript line.
   Tests: `gateway/cli/controller_test.go`, `gateway/client/client_test.go`,
   `gateway/httpapi/run_events_test.go`, `tools/builtin_test.go`.
+  **Budget and lifecycle reconciliation (2026-07-17):** action tools now use a
+  finite elastic budget of 10 initial calls and at most 34 calls, extending in
+  four-call increments only when new successful evidence is produced. Exhausting
+  that action budget no longer blocks lifecycle-only `update_plan`/`finish_run`
+  calls or overrides a successful structured completion. Output limits,
+  transport truncation, and missing lifecycle closure still remain incomplete.
+  Identical visible plan snapshots are deduplicated, resolved snapshots remain
+  available for deduplication, and `update_plan` is capped at eight calls per
+  run. Tests: `kernel/agent_kernel_test.go`,
+  `kernel/native_tool_call_test.go`, `kernel/task_strategy_test.go`,
+  `tools/task_protocol_test.go`, `httpapi/run_completion_test.go`.
 
 - **P1-5 durable external waits + visible recovery health — ✅ shipped
   2026-07-16.** CI/CD and other slow external systems no longer require an
@@ -314,6 +325,136 @@ completion/failure; continuity eval replays offline.
   `evalcases/reliability/external-watch-handoff.yaml`; the live cassette was
   recorded on 2026-07-16 and now provides the offline replay gate in addition
   to deterministic unit coverage.
+  **Adoption contract (2026-07-17):** the agent prompt now requires durable
+  `watch_external` handoff after at most one short status check for long-running
+  CI/CD, deployment, and other remote jobs, rather than foreground polling.
+  **Watch correctness + closure (2026-07-17, after two live false timeouts):**
+  pattern matching now normalizes CRLF/whitespace and matches per line, so
+  anchored patterns like `^SUCCESS$` hit real CLI output (`"SUCCESS\n"`);
+  terminal-state classification wins over the deadline (a late SUCCESS is a
+  success, not a timeout); a watch whose final output is fresh and
+  non-terminal earns exactly ONE bounded 30m extension
+  (`external_watches.extensions` CAS); daemon startup re-matches recently
+  timed_out watches' recorded output and revises misjudged verdicts with full
+  completion side effects; and a SUCCEEDED watch now auto-enqueues one
+  idempotent finalization run (task_queue rows carry `task_id`; resolveTask
+  honors it) that re-verifies the external state and backfills records — the
+  "Reply continue" notice is the fallback, not the closure path. Timeout
+  notices state the operation may still be running and include the last
+  output. Tests: `httpapi/external_watch_match_test.go`,
+  `control/external_watches_test.go`.
+  **Review hardening (same day):** (a) finalization is at-least-once, never
+  lost — the terminal-status CAS and the side effects are separate steps, so
+  `external_watches.finalized` (one-time backfill on upgrade) tracks whether
+  side effects ran and boot recovery compensates unfinalized terminal
+  watches; verdict revision resets the flag so corrected outcomes re-finalize.
+  (b) Cross-endpoint origin: finalization and notices resolve the account
+  behind the watch's channel (`AccountForChannel`) — a weixin-registered
+  watch routes back to weixin; unmatched channels keep the cli/preferred-IM
+  path. (c) `migrate-memory` moves canonical+observations+evidence+events as
+  connected components and only when every linked observation resolves to the
+  SAME person — split-evidence components stay in legacy intact. (d) The
+  durability gate fails closed against permanence: empty/unknown durability
+  is stored time-bounded (never permanent), unlabeled transient content is
+  dropped, and an explicit-durable fact that mentions status tokens survives
+  bounded instead of being dropped (false-drop fix); batch prompt example now
+  carries the durability fields.
+  **Sixth-review hardening (same day):** (a) Watch finalization products are
+  replay-safe by ROW IDENTITY, not just ordering — `task_queue` gained
+  `idempotency_key` (partial unique index; only that conflict is ignored, while
+  unrelated constraint failures remain visible), the finalization run keys on
+  `external-watch:<id>:r<revision>:finalization`, and `task_events` gained a
+  database-enforced idempotency key for one completed event per
+  watch+revision. Core finalization is marked complete only after the task,
+  event, and finalization-run intent are durable. Notification delivery is a
+  separate `external_watches.notified` state: failures stay pending and are
+  retried by the sweep, while the content-derived outbox key prevents duplicate
+  durable notices. `external_watches.verdict_revision` bumps on verdict
+  correction, yielding one fresh correction run/event/notice while
+  same-verdict replays create nothing; the boot compensation scan pages until
+  drained (capped) and cancelled watches are born finalized. IM network
+  delivery remains at-least-once by nature — exactly-once holds for durable
+  intent materialization. (b) The transient
+  gate is two-tier (`memory.ClassifyTransientContent`): CONFIRMED requires
+  instance id + current-state semantics + status token, and explanatory rule
+  cues (表示/转为/means/…) veto it; only CONFIRMED is ever auto-dropped or
+  auto-archived — candidates are stored time-bounded / report-only, and
+  pinned/user-confirmed rows are skipped at the audit layer AND refused in
+  the archive SQL. `memory-audit --archive-confirmed` replaces blanket
+  `--archive`. Live dry-run: 8 confirmed (all genuine pollution), 3
+  candidates (incl. two durable doc-facts previously at risk), zero false
+  archives. Tests: `control/external_watches_test.go`
+  (idempotency-by-row-count), `memory/transient_classifier_test.go`,
+  `cliapp/memory_audit_commands_test.go` (pinned/candidate protection and
+  UTF-8-safe audit truncation).
+
+- **Memory partition convergence — ✅ shipped 2026-07-17 (P0).** Background
+  post-run intake wrote canonical/legacy facts to the control-tenant partition
+  (`data/default/memory.db`) while the foreground agent reads the person
+  partition — everything learned since the layered store landed was never
+  recallable (219 canonical rows, zero `last_accessed_at`). All intake and
+  analyzer write/read sites now use `memoryPartition(req)` (PersonID with a
+  legacy tenant fallback). `selfmind maintenance migrate-memory [--apply]`
+  moves stranded default-partition rows to their person partition by
+  `created_from_run → task_runs.person_id`; unresolved rows stay in the
+  legacy partition. Tests: `app/post_run_analyzer_test.go` (person-partition +
+  control-tenant-stays-empty assertions), `app/memory_intake_test.go`.
+
+- **Memory durability enforcement — ✅ shipped 2026-07-17 (P1).** The
+  post-run analyzer now returns `durability` (durable | time_bounded |
+  episodic), `valid_until`, and `category` per memory decision, and the intake
+  policy layer ENFORCES it in code: episodic decisions and transient
+  run-state content (deterministic marker backstop: IN_PROGRESS / QUEUED /
+  PREPARED_NOT_EXECUTED / 当前状态 / 尚未执行 …) never reach the facts or
+  canonical stores, and are filtered BEFORE the 3+3 quota so they cannot
+  crowd out durable knowledge; time_bounded facts always carry `valid_until`
+  (model value or 30d default). Motivation: 10/29 facts stored on 2026-07-17
+  were transient run state despite prompt-level SKIP instructions. Existing
+  pollution is handled offline: `selfmind maintenance memory-audit
+  [--archive]` shadow-classifies active canonicals with the SAME marker rule
+  (`memory.TransientContentMarkers`) and archives reversibly — never a
+  physical delete. Tests: `app/memory_intake_test.go`
+  (`TestIntakeDurabilityEnforcement`), `cliapp/memory_audit_commands_test.go`.
+
+- **Maintenance chain diagnosability — ✅ shipped 2026-07-17 (P0).** New
+  append-only `maintenance_attempts` history (outcome, REAL error, route,
+  attempt, 30d retention pruned at worker boot) records every fail/skip/block
+  transition — the job row's `last_error` is overwritten by "maintenance
+  retry limit reached" at skip time, which had made the live incident
+  (repeated analyzer `context deadline exceeded` → 5 retries → learning
+  silently skipped) undiagnosable from durable state. The analyzer per-call
+  timeout is now `tasks.maintenance_llm_timeout` (default 2m, was a 45s
+  const; batch bound = 2× per-call). `/diag` adds a "Learning failures (24h)"
+  timeline and a "watch verdict suspect" alert for timed_out watches whose
+  recorded output matches a terminal pattern. Tests:
+  `control/maintenance_jobs_test.go` (`TestMaintenanceAttemptHistory`).
+
+- **Prompt-cache accounting + opt-in cache_control (2026-07-17, P1).**
+  `UsageStats` carries `cache_read_input_tokens` / `cache_creation_input_tokens`;
+  `token.updated` adds both plus `billed_input_tokens`. The anthropic adapter
+  parses cache usage (non-stream + message_start) and, under the new opt-in
+  `prompt_cache` provider quirk (config `quirks.prompt_cache`, default off,
+  byte-identical requests when off), attaches `cache_control` breakpoints on
+  the stable system prefix and a rolling history breakpoint. Prompt layering
+  was verified byte-stable across consecutive turns
+  (`kernel/prompt_layering_test.go`), so the cacheable prefix is real.
+  Measured motivation: ~7.0M input tokens on 2026-07-17, ≥90% replayed
+  prefix. Enable per provider after verifying the endpoint honors the field
+  via the new usage counters. Tests: `llm/anthropic_prompt_cache_test.go`,
+  `kernel/token_usage_event_test.go`.
+
+- **Turn-efficiency + consistency batch (2026-07-17, P1/P2).** Tool failures
+  now classify (`error_class: syntax|auth|timeout|not_found|permission|
+  network|environment` + one actionable hint appended to terminal/read_file/
+  search_files failures; raw error preserved — `tools/tool_errors.go`);
+  measured motivation: 24/352 failed calls on 2026-07-17, each ≈ one full
+  replay turn. `finish_run` gains `waiting_user` (prepared, awaiting the
+  user's go-ahead) distinct from `blocked`, mapped through outcome
+  reconciliation, task cards, dupes, and strategy guidance. `/tasks` open view
+  groups cards by deterministic ticket key (display-only,
+  `groupTasksByWorkKey`). Skill review cadence stretched to 3× the memory
+  nudge interval (15 no-change reviews in one day of CI/CD work). Tests:
+  `tools/tool_errors_test.go`, `httpapi/task_workkey_test.go`.
 
 - **P1-6 cross-endpoint recovery + maintenance failover + honest task state -
   shipped 2026-07-16.** Async and cron final answers are now typed as
@@ -337,6 +478,33 @@ completion/failure; continuity eval replays offline.
   `httpapi/context_selector_test.go`, `httpapi/run_events_test.go`,
   `httpapi/task_view_test.go`, `control/task_labels_test.go`,
   `tools/workspace_scope_test.go`, `app/post_run_analyzer_test.go`.
+  **Maintenance replay hardening (2026-07-17):** normal and provider-error run
+  finalization now write the immutable maintenance replay payload in the same
+  transaction as the terminal run state and job row; no success/error window
+  can leave an empty replay job. Explicit fallback roles are tried when a
+  provider returns a nil or whitespace-only response, instead of accepting an
+  empty proposal as success. Tests: `control/maintenance_jobs_test.go`,
+  `app/post_run_analyzer_test.go`, `httpapi/run_completion_test.go`.
+  **Kimi transport closure (2026-07-17):** every Kimi Coding Plan role remains
+  on the provider-default Anthropic Messages transport, matching Hermes and the
+  `/coding` route's wire contract; custom gateways may still override protocol
+  per role. Equivalent fallback routes are deduplicated, output budget
+  scales with batch size, and retryable aggregate failures are bisected so one
+  truncated or malformed run cannot fail the entire maintenance batch. A fatal
+  backup-provider error no longer converts a recoverable empty/truncated Kimi
+  result into a non-retryable chain failure. Tests:
+  `app/post_run_analyzer_test.go`, `httpapi/maintenance_batch_test.go`.
+  **Kimi maintenance quota circuit (2026-07-17):** Anthropic-compatible Kimi
+  responses now parse direct-string content and turn HTTP-200 semantic empties
+  into typed provider errors carrying request/stop metadata. Maintenance roles
+  sharing an endpoint and credential are one physical route: the first quota
+  403 opens a durable circuit, queued post-run/memory/skill-review jobs block
+  without spending retry attempts, one scheduled half-open probe tests
+  recovery, and success replays the backlog. Stream-delivered quota errors are
+  observed by the same circuit. `/diag` exposes the blocked route and next
+  probe. Tests: `kernel/llm/adapters_test.go`,
+  `app/post_run_analyzer_test.go`, `control/provider_route_health_test.go`,
+  `kernel/background_review_test.go`.
 
 **P2 — engineering governance**
 

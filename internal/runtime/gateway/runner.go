@@ -106,7 +106,7 @@ func Run(ctx context.Context, opts Options) error {
 		log.Warn("gateway: recovered interrupted runs/tasks from previous daemon", "count", interrupted)
 	}
 
-	agent, err := app.InitAgent(mem, cfg, defaultTenantID)
+	agent, err := app.InitAgent(mem, cfg, defaultTenantID, controlStore)
 	if err != nil {
 		return fmt.Errorf("app.InitAgent failed: %w", err)
 	}
@@ -147,11 +147,11 @@ func Run(ctx context.Context, opts Options) error {
 		ApprovalJudge: app.NewConfiguredApprovalJudge(mem, cfg, defaultTenantID),
 		// A single explicit memory_extract-role pass handles both task-label
 		// hygiene and durable fact extraction after eligible runs.
-		PostRunAnalyzer: app.NewConfiguredPostRunAnalyzer(mem, cfg, defaultTenantID),
+		PostRunAnalyzer: app.NewConfiguredPostRunAnalyzer(mem, cfg, defaultTenantID, controlStore),
 		// Background memory self-organization (docs/memory-governance.zh-CN.md
 		// §4): nil unless memory.governance.enabled AND its model role is
 		// explicitly configured; default mode is shadow (report only).
-		MemoryConsolidator: memoryConsolidatorOrNil(mem, cfg, defaultTenantID),
+		MemoryConsolidator: memoryConsolidatorOrNil(mem, cfg, defaultTenantID, controlStore),
 		// Automatic semantic recall (Work Timeline P2): FTS sessions + task
 		// label cards attached at the selector layer; query expansion only when
 		// a semantic_recall role model is explicitly configured.
@@ -174,6 +174,7 @@ func Run(ctx context.Context, opts Options) error {
 	}
 	gatewayAPI.PostRunMaintenance = httpapi.PostRunMaintenanceOptions{
 		Debounce: maintenanceDebounce, MaxWait: maintenanceMaxWait, BatchMaxRuns: maintenanceBatchMax,
+		LLMTimeout: cfg.Tasks.MaintenanceLLMCallTimeout(),
 	}
 	// Periodic stuck-run recovery: while the daemon runs, mark heartbeat-dead
 	// runs (and their tasks) interrupted. Runs in the coordinator's active-run
@@ -317,8 +318,8 @@ func applyGatewayRuntimeEnv(cfg *config.Config) {
 
 // memoryConsolidatorOrNil keeps a nil *app.MemoryConsolidator from becoming a
 // non-nil httpapi.MemoryConsolidator interface value.
-func memoryConsolidatorOrNil(mem *memory.MemoryManager, cfg *config.Config, tenantID string) httpapi.MemoryConsolidator {
-	if c := app.NewConfiguredMemoryConsolidator(mem, cfg, tenantID); c != nil {
+func memoryConsolidatorOrNil(mem *memory.MemoryManager, cfg *config.Config, tenantID string, stores ...*control.Store) httpapi.MemoryConsolidator {
+	if c := app.NewConfiguredMemoryConsolidator(mem, cfg, tenantID, stores...); c != nil {
 		return c
 	}
 	return nil

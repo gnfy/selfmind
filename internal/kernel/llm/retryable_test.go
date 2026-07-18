@@ -47,6 +47,7 @@ func TestIsRetryableErrorClassification(t *testing.T) {
 		{"codex-login", errors.New("Codex login expired (responses API 401). Run `codex login`"), false},
 		{"invalid-request-400", errors.New("responses API error 400: invalid request"), false},
 		{"model-not-found", errors.New("openai API error 404: model_not_found"), false},
+		{"explicit-non-retryable", NonRetryable(errors.New("empty provider response")), false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -54,6 +55,17 @@ func TestIsRetryableErrorClassification(t *testing.T) {
 				t.Fatalf("IsRetryableError(%q) = %v, want %v", tc.err, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestNonRetryablePreservesCause(t *testing.T) {
+	cause := errors.New("empty provider response")
+	err := NonRetryable(cause)
+	if !errors.Is(err, cause) {
+		t.Fatalf("marker must preserve its cause: %v", err)
+	}
+	if NonRetryable(err) != err {
+		t.Fatal("marking an error twice must be idempotent")
 	}
 }
 

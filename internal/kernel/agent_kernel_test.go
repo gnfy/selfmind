@@ -404,6 +404,71 @@ func (p *budgetProvider) StreamChat(_ context.Context, req llm.ChatRequest) (<-c
 	return ch, nil
 }
 
+type budgetClosureBackend struct{}
+
+func (b *budgetClosureBackend) Dispatch(name string, args map[string]interface{}) (string, error) {
+	switch name {
+	case "read_file":
+		return "read evidence", nil
+	case "update_plan":
+		return `{"changed":true}`, nil
+	case "finish_run":
+		return `{"status":"done","summary":"implemented and verified"}`, nil
+	default:
+		return "", fmt.Errorf("unexpected tool %s", name)
+	}
+}
+
+func (b *budgetClosureBackend) GetToolDefinitions() []map[string]interface{} {
+	definition := func(name string) map[string]interface{} {
+		return map[string]interface{}{
+			"type": "function",
+			"function": map[string]interface{}{
+				"name": name, "description": name,
+				"parameters": map[string]interface{}{"type": "object", "properties": map[string]interface{}{}},
+			},
+		}
+	}
+	return []map[string]interface{}{definition("read_file"), definition("update_plan"), definition("finish_run")}
+}
+
+type budgetClosureProvider struct{ requests int }
+
+func (p *budgetClosureProvider) ChatCompletion(context.Context, []llm.Message) (string, error) {
+	return "done", nil
+}
+
+func (p *budgetClosureProvider) Chat(context.Context, llm.ChatRequest) (*llm.ChatResponse, error) {
+	return &llm.ChatResponse{Content: "done"}, nil
+}
+
+func (p *budgetClosureProvider) StreamChat(_ context.Context, _ llm.ChatRequest) (<-chan llm.StreamEvent, error) {
+	p.requests++
+	ch := make(chan llm.StreamEvent, 1)
+	switch p.requests {
+	case 1:
+		ch <- llm.StreamEvent{ToolCalls: []llm.ToolCall{
+			{ID: "plan-open", Function: "update_plan", Args: `{"plan":[{"step":"inspect","status":"completed"},{"step":"verify","status":"in_progress"}]}`},
+			{ID: "read", Function: "read_file", Args: `{"path":"target.go"}`},
+		}}
+	case 2:
+		ch <- llm.StreamEvent{Content: "The implementation is ready."}
+	case 3:
+		ch <- llm.StreamEvent{ToolCalls: []llm.ToolCall{{
+			ID: "plan-close", Function: "update_plan",
+			Args: `{"plan":[{"step":"inspect","status":"completed"},{"step":"verify","status":"completed"}]}`,
+		}}}
+	case 4:
+		ch <- llm.StreamEvent{ToolCalls: []llm.ToolCall{{
+			ID: "finish", Function: "finish_run", Args: `{"status":"done","summary":"implemented and verified"}`,
+		}}}
+	default:
+		ch <- llm.StreamEvent{Content: "Implemented and verified."}
+	}
+	close(ch)
+	return ch, nil
+}
+
 func TestToolBudgetExtendsOnlyWithinHardLimitAndMarksIncomplete(t *testing.T) {
 	mem := memory.NewMemoryManager(&mockStorage{})
 	backend := &budgetBackend{}
@@ -442,6 +507,36 @@ func TestToolBudgetExtendsOnlyWithinHardLimitAndMarksIncomplete(t *testing.T) {
 	}
 	if completion.Payload["completion_reason"] != "tool_budget_exhausted" || completion.Payload["resumable"] != true {
 		t.Fatalf("completion = %+v", completion)
+	}
+}
+
+func TestActionBudgetExhaustionStillAllowsLifecycleClosure(t *testing.T) {
+	mem := memory.NewMemoryManager(&mockStorage{})
+	provider := &budgetClosureProvider{}
+	agent := NewAgent(mem, &budgetClosureBackend{}, provider, "helpful", 8, 1, nil)
+	events := make(chan string, 64)
+	ctx := WithEventChannel(context.Background(), events)
+	ctx = WithTaskStrategy(ctx, TaskStrategy{
+		Class: TaskClassRepoTask, ToolMode: ToolModeFull, PlanPolicy: PlanPolicyRequired,
+		MaxActionTools: 1, ActionToolBudgetStep: 1, ActionToolBudgetLimit: 1, MaxBudgetExtensions: 1,
+	})
+
+	if _, _, err := agent.RunConversation(ctx, "user123", "cli", "inspect, implement, and verify"); err != nil {
+		t.Fatal(err)
+	}
+	close(events)
+	completion := AgentEvent{}
+	for raw := range events {
+		event, ok := DecodeAgentEvent(raw)
+		if ok && event.Type == "turn.completed" {
+			completion = event
+		}
+	}
+	if completion.Payload["completion_reason"] != "completed" || completion.Payload["resumable"] == true {
+		t.Fatalf("completion = %+v", completion)
+	}
+	if provider.requests < 5 {
+		t.Fatalf("provider requests = %d, lifecycle closure was cut short", provider.requests)
 	}
 }
 

@@ -314,13 +314,17 @@ func applyIntakeWrite(db *sql.DB, w IntakeWrite) error {
 	insertCanonical := func(status string) (string, error) {
 		id := uuid.New().String()
 		pinned := strings.EqualFold(w.Target, "pinned")
+		var validUntil interface{}
+		if !w.ValidUntil.IsZero() {
+			validUntil = w.ValidUntil.Unix()
+		}
 		_, err := tx.Exec(`INSERT INTO canonical_memories
-			(id, target, scope, content, normalized_hash, status, pinned, user_confirmed,
-			 confidence, evidence_count, occurrences, last_verified_at, valid_from, created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 1, ?, ?, ?, ?)`,
-			id, w.Target, w.Scope, content, NormalizedContentHash(content), status,
+			(id, target, scope, category, content, normalized_hash, status, pinned, user_confirmed,
+			 confidence, evidence_count, occurrences, last_verified_at, valid_from, valid_until, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 1, ?, ?, ?, ?, ?)`,
+			id, w.Target, w.Scope, strings.TrimSpace(w.Category), content, NormalizedContentHash(content), status,
 			boolToInt(pinned), boolToInt(pinned || strings.EqualFold(w.Source, SourceUser)),
-			BaseConfidence(w.Source), now, now, now, now)
+			BaseConfidence(w.Source), now, now, validUntil, now, now)
 		return id, err
 	}
 	edge := func(memoryID, relation string) error {

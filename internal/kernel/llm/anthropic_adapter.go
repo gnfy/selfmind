@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/tls"
@@ -13,6 +14,7 @@ import (
 )
 
 type AnthropicAdapter struct {
+	ProviderName    string
 	APIKey          string
 	KeyGetter       func() string
 	TokenRefresher  func() string
@@ -32,10 +34,13 @@ type AnthropicMessage struct {
 }
 
 type AnthropicRequest struct {
-	Model        string             `json:"model"`
-	Messages     []AnthropicMessage `json:"messages"`
-	MaxTokens    int                `json:"max_tokens"`
-	SystemPrompt string             `json:"system,omitempty"`
+	Model     string             `json:"model"`
+	Messages  []AnthropicMessage `json:"messages"`
+	MaxTokens int                `json:"max_tokens"`
+	// SystemPrompt is a plain string by default. With the PromptCache quirk it
+	// becomes a block list so the last block can carry a cache_control
+	// breakpoint; both shapes are valid Anthropic `system` payloads.
+	SystemPrompt interface{} `json:"system,omitempty"`
 	Tools        []AnthropicTool    `json:"tools,omitempty"`
 	ToolChoice   interface{}        `json:"tool_choice,omitempty"`
 	Thinking     interface{}        `json:"thinking,omitempty"`
@@ -50,26 +55,33 @@ type AnthropicTool struct {
 }
 
 type AnthropicResponse struct {
-	Content []struct {
-		Type  string          `json:"type"`
-		Text  string          `json:"text"`
-		ID    string          `json:"id"`
-		Name  string          `json:"name"`
-		Input json.RawMessage `json:"input"`
-	} `json:"content"`
-	Usage struct {
-		InputTokens  int `json:"input_tokens"`
-		OutputTokens int `json:"output_tokens"`
+	Content json.RawMessage `json:"content"`
+	Usage   struct {
+		InputTokens              int `json:"input_tokens"`
+		OutputTokens             int `json:"output_tokens"`
+		CacheReadInputTokens     int `json:"cache_read_input_tokens"`
+		CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
 	} `json:"usage"`
-	StopReason string `json:"stop_reason"`
+	StopReason string          `json:"stop_reason"`
+	Error      json.RawMessage `json:"error"`
+}
+
+type anthropicContentBlock struct {
+	Type     string          `json:"type"`
+	Text     string          `json:"text"`
+	Thinking string          `json:"thinking"`
+	ID       string          `json:"id"`
+	Name     string          `json:"name"`
+	Input    json.RawMessage `json:"input"`
 }
 
 func NewAnthropicAdapter(apiKey string) *AnthropicAdapter {
 	return &AnthropicAdapter{
-		APIKey:    apiKey,
-		Model:     "claude-3-5-sonnet-20241022",
-		BaseURL:   "https://api.anthropic.com/v1/messages",
-		MaxTokens: 1024,
+		ProviderName: "anthropic",
+		APIKey:       apiKey,
+		Model:        "claude-3-5-sonnet-20241022",
+		BaseURL:      "https://api.anthropic.com/v1/messages",
+		MaxTokens:    1024,
 	}
 }
 
@@ -106,26 +118,47 @@ func (a *AnthropicAdapter) Chat(ctx context.Context, req ChatRequest) (*ChatResp
 				}
 				defer resp.Body.Close()
 				if resp.StatusCode == http.StatusOK {
-					return a.decodeAnthropicResponse(resp.Body)
+					return a.decodeAnthropicResponseWithMeta(resp.Body, requestIDFromHeaders(resp.Header))
 				}
 				b, _ = io.ReadAll(resp.Body)
 			}
 		}
-		return nil, foldRetryAfter(providerAPIError("anthropic", resp.StatusCode, b), resp.Header)
+		return nil, foldRetryAfter(providerAPIError(a.providerName(), resp.StatusCode, b), resp.Header)
 	}
 
-	return a.decodeAnthropicResponse(resp.Body)
+	return a.decodeAnthropicResponseWithMeta(resp.Body, requestIDFromHeaders(resp.Header))
 }
 
 func (a *AnthropicAdapter) decodeAnthropicResponse(body io.Reader) (*ChatResponse, error) {
+	return a.decodeAnthropicResponseWithMeta(body, "")
+}
+
+func (a *AnthropicAdapter) decodeAnthropicResponseWithMeta(body io.Reader, requestID string) (*ChatResponse, error) {
+	raw, err := io.ReadAll(body)
+	if err != nil {
+		return nil, fmt.Errorf("read response: %w", err)
+	}
+	if len(bytes.TrimSpace(raw)) == 0 {
+		return nil, a.emptyResponseError(requestID, "", "HTTP 200 response body was empty")
+	}
 	var anthropicResp AnthropicResponse
-	if err := json.NewDecoder(body).Decode(&anthropicResp); err != nil {
+	if err := json.Unmarshal(raw, &anthropicResp); err != nil {
 		return nil, fmt.Errorf("decode response: %w", err)
+	}
+	if len(bytes.TrimSpace(anthropicResp.Error)) > 0 && !bytes.Equal(bytes.TrimSpace(anthropicResp.Error), []byte("null")) {
+		code, message := authErrorDetails(anthropicResp.Error)
+		return nil, &ProviderError{Provider: a.providerName(), Class: classifyProviderAPIError(http.StatusOK, code, message),
+			StatusCode: http.StatusOK, Code: code, Message: firstNonEmptyString(message, string(anthropicResp.Error)), RequestID: requestID}
 	}
 
 	var content string
 	var toolCalls []ToolCall
-	for _, c := range anthropicResp.Content {
+	blocks, directText, err := decodeAnthropicContent(anthropicResp.Content)
+	if err != nil {
+		return nil, fmt.Errorf("decode response content: %w", err)
+	}
+	content += directText
+	for _, c := range blocks {
 		switch c.Type {
 		case "text":
 			content += c.Text
@@ -133,16 +166,44 @@ func (a *AnthropicAdapter) decodeAnthropicResponse(body io.Reader) (*ChatRespons
 			toolCalls = append(toolCalls, ToolCall{ID: c.ID, Function: c.Name, Args: rawJSONOrObject(c.Input)})
 		}
 	}
+	if strings.TrimSpace(content) == "" && len(toolCalls) == 0 {
+		return nil, a.emptyResponseError(requestID, anthropicResp.StopReason, "HTTP 200 response contained no text or tool use")
+	}
 
 	return &ChatResponse{
 		Content:      content,
 		ToolCalls:    toolCalls,
 		FinishReason: anthropicResp.StopReason,
 		Usage: UsageStats{
-			InputTokens:  anthropicResp.Usage.InputTokens,
-			OutputTokens: anthropicResp.Usage.OutputTokens,
+			InputTokens:              anthropicResp.Usage.InputTokens,
+			OutputTokens:             anthropicResp.Usage.OutputTokens,
+			CacheReadInputTokens:     anthropicResp.Usage.CacheReadInputTokens,
+			CacheCreationInputTokens: anthropicResp.Usage.CacheCreationInputTokens,
 		},
 	}, nil
+}
+
+func decodeAnthropicContent(raw json.RawMessage) ([]anthropicContentBlock, string, error) {
+	raw = bytes.TrimSpace(raw)
+	if len(raw) == 0 || bytes.Equal(raw, []byte("null")) {
+		return nil, "", nil
+	}
+	switch raw[0] {
+	case '[':
+		var blocks []anthropicContentBlock
+		return blocks, "", json.Unmarshal(raw, &blocks)
+	case '"':
+		var text string
+		return nil, text, json.Unmarshal(raw, &text)
+	case '{':
+		var block anthropicContentBlock
+		if err := json.Unmarshal(raw, &block); err != nil {
+			return nil, "", err
+		}
+		return []anthropicContentBlock{block}, "", nil
+	default:
+		return nil, "", fmt.Errorf("unsupported content shape")
+	}
 }
 
 func (a *AnthropicAdapter) StreamChat(ctx context.Context, req ChatRequest) (<-chan StreamEvent, error) {
@@ -173,10 +234,10 @@ func (a *AnthropicAdapter) StreamChat(ctx context.Context, req ChatRequest) (<-c
 				resp.Body.Close()
 			}
 		}
-		return nil, foldRetryAfter(providerAPIError("anthropic", resp.StatusCode, b), resp.Header)
+		return nil, foldRetryAfter(providerAPIError(a.providerName(), resp.StatusCode, b), resp.Header)
 	}
 
-	return anthropicStreamEvents(resp), nil
+	return anthropicStreamEventsForProvider(resp, a.providerName()), nil
 }
 
 func (a *AnthropicAdapter) doAnthropicRequest(ctx context.Context, body []byte, apiKey string) (*http.Response, error) {
@@ -189,124 +250,155 @@ func (a *AnthropicAdapter) doAnthropicRequest(ctx context.Context, body []byte, 
 }
 
 func anthropicStreamEvents(resp *http.Response) <-chan StreamEvent {
+	return anthropicStreamEventsForProvider(resp, "anthropic")
+}
+
+func anthropicStreamEventsForProvider(resp *http.Response, provider string) <-chan StreamEvent {
 	ch := make(chan StreamEvent, 256)
 	go func() {
 		defer resp.Body.Close()
 		defer close(ch)
 
-		reader := io.Reader(resp.Body)
-		buf := make([]byte, 4096)
-		var leftover []byte
+		requestID := requestIDFromHeaders(resp.Header)
+		scanner := bufio.NewScanner(resp.Body)
+		scanner.Buffer(make([]byte, 4096), 2*1024*1024)
 		inputTokensSent := false
 		lastOutputTokens := 0
 		toolDeltas := make(map[int]*ToolCall)
-
-		for {
-			n, err := reader.Read(buf)
-			if n > 0 {
-				data := append(leftover, buf[:n]...)
-				lines := bytes.Split(data, []byte("\n"))
-				if !bytes.HasSuffix(data, []byte("\n")) {
-					leftover = lines[len(lines)-1]
-					lines = lines[:len(lines)-1]
-				} else {
-					leftover = nil
-				}
-				for _, line := range lines {
-					dataPart, ok := sseDataBytes(line)
-					if !ok {
-						continue
-					}
-					if bytes.Equal(dataPart, []byte("[DONE]")) {
-						if calls := orderedAnthropicToolCalls(toolDeltas); len(calls) > 0 {
-							ch <- StreamEvent{ToolCalls: calls}
-						}
-						return
-					}
-					var chunk struct {
-						Type         string `json:"type"`
-						Index        int    `json:"index"`
-						ContentBlock struct {
-							Type  string          `json:"type"`
-							ID    string          `json:"id"`
-							Name  string          `json:"name"`
-							Input json.RawMessage `json:"input"`
-						} `json:"content_block"`
-						Delta struct {
-							Type        string `json:"type"`
-							Text        string `json:"text"`
-							PartialJSON string `json:"partial_json"`
-							StopReason  string `json:"stop_reason"`
-						} `json:"delta"`
-						Message struct {
-							Usage struct {
-								InputTokens  int `json:"input_tokens"`
-								OutputTokens int `json:"output_tokens"`
-							} `json:"usage"`
-						} `json:"message"`
-						Usage struct {
-							OutputTokens int `json:"output_tokens"`
-						} `json:"usage"`
-					}
-					if err := json.Unmarshal(dataPart, &chunk); err != nil {
-						continue
-					}
-					switch chunk.Type {
-					case "content_block_start":
-						if chunk.ContentBlock.Type == "tool_use" {
-							call := &ToolCall{
-								ID:       chunk.ContentBlock.ID,
-								Function: chunk.ContentBlock.Name,
-								Args:     rawJSONOrNonEmptyObject(chunk.ContentBlock.Input),
-							}
-							toolDeltas[chunk.Index] = call
-						}
-					case "content_block_delta":
-						if chunk.Delta.Text != "" {
-							ch <- StreamEvent{Content: chunk.Delta.Text}
-						}
-						if chunk.Delta.PartialJSON != "" {
-							call := toolDeltas[chunk.Index]
-							if call == nil {
-								call = &ToolCall{}
-								toolDeltas[chunk.Index] = call
-							}
-							if strings.TrimSpace(call.Args) == "{}" || strings.TrimSpace(call.Args) == "null" {
-								call.Args = ""
-							}
-							call.Args += chunk.Delta.PartialJSON
-						}
-					case "message_start":
-						if !inputTokensSent && chunk.Message.Usage.InputTokens > 0 {
-							inputTokensSent = true
-							ch <- StreamEvent{Usage: &UsageStats{InputTokens: chunk.Message.Usage.InputTokens}}
-						}
-					case "message_delta":
-						if chunk.Delta.StopReason != "" {
-							ch <- StreamEvent{FinishReason: chunk.Delta.StopReason}
-						}
-						if chunk.Usage.OutputTokens > lastOutputTokens {
-							delta := chunk.Usage.OutputTokens - lastOutputTokens
-							lastOutputTokens = chunk.Usage.OutputTokens
-							ch <- StreamEvent{Usage: &UsageStats{OutputTokens: delta}}
-						}
-					case "message_stop":
-						if calls := orderedAnthropicToolCalls(toolDeltas); len(calls) > 0 {
-							ch <- StreamEvent{ToolCalls: calls}
-						}
-						return
-					}
-				}
+		semanticOutput := false
+		finish := func() {
+			if calls := orderedAnthropicToolCalls(toolDeltas); len(calls) > 0 {
+				semanticOutput = true
+				ch <- StreamEvent{ToolCalls: calls}
 			}
-			if err != nil {
-				if err != io.EOF {
-					ch <- StreamEvent{Err: err}
-				}
-				break
+			if !semanticOutput {
+				ch <- StreamEvent{Err: &ProviderError{Provider: provider, Class: ProviderErrorEmptyResponse,
+					StatusCode: http.StatusOK, Message: "HTTP 200 stream contained no text or tool use", RequestID: requestID}}
 			}
 		}
+
+		for scanner.Scan() {
+			dataPart, ok := sseDataBytes(scanner.Bytes())
+			if !ok {
+				continue
+			}
+			if bytes.Equal(dataPart, []byte("[DONE]")) {
+				finish()
+				return
+			}
+			var chunk struct {
+				Type         string `json:"type"`
+				Index        int    `json:"index"`
+				ContentBlock struct {
+					Type  string          `json:"type"`
+					Text  string          `json:"text"`
+					ID    string          `json:"id"`
+					Name  string          `json:"name"`
+					Input json.RawMessage `json:"input"`
+				} `json:"content_block"`
+				Delta struct {
+					Type        string `json:"type"`
+					Text        string `json:"text"`
+					PartialJSON string `json:"partial_json"`
+					StopReason  string `json:"stop_reason"`
+				} `json:"delta"`
+				Message struct {
+					Usage struct {
+						InputTokens              int `json:"input_tokens"`
+						OutputTokens             int `json:"output_tokens"`
+						CacheReadInputTokens     int `json:"cache_read_input_tokens"`
+						CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
+					} `json:"usage"`
+				} `json:"message"`
+				Usage struct {
+					OutputTokens int `json:"output_tokens"`
+				} `json:"usage"`
+			}
+			if err := json.Unmarshal(dataPart, &chunk); err != nil {
+				continue
+			}
+			switch chunk.Type {
+			case "content_block_start":
+				if chunk.ContentBlock.Type == "text" && chunk.ContentBlock.Text != "" {
+					semanticOutput = true
+					ch <- StreamEvent{Content: chunk.ContentBlock.Text}
+				}
+				if chunk.ContentBlock.Type == "tool_use" {
+					call := &ToolCall{
+						ID:       chunk.ContentBlock.ID,
+						Function: chunk.ContentBlock.Name,
+						Args:     rawJSONOrNonEmptyObject(chunk.ContentBlock.Input),
+					}
+					toolDeltas[chunk.Index] = call
+				}
+			case "content_block_delta":
+				if chunk.Delta.Text != "" {
+					semanticOutput = true
+					ch <- StreamEvent{Content: chunk.Delta.Text}
+				}
+				if chunk.Delta.PartialJSON != "" {
+					call := toolDeltas[chunk.Index]
+					if call == nil {
+						call = &ToolCall{}
+						toolDeltas[chunk.Index] = call
+					}
+					if strings.TrimSpace(call.Args) == "{}" || strings.TrimSpace(call.Args) == "null" {
+						call.Args = ""
+					}
+					call.Args += chunk.Delta.PartialJSON
+				}
+			case "message_start":
+				startUsage := chunk.Message.Usage
+				if !inputTokensSent && (startUsage.InputTokens > 0 || startUsage.CacheReadInputTokens > 0 || startUsage.CacheCreationInputTokens > 0) {
+					inputTokensSent = true
+					ch <- StreamEvent{Usage: &UsageStats{
+						InputTokens:              startUsage.InputTokens,
+						CacheReadInputTokens:     startUsage.CacheReadInputTokens,
+						CacheCreationInputTokens: startUsage.CacheCreationInputTokens,
+					}}
+				}
+			case "message_delta":
+				if chunk.Delta.StopReason != "" {
+					ch <- StreamEvent{FinishReason: chunk.Delta.StopReason}
+				}
+				if chunk.Usage.OutputTokens > lastOutputTokens {
+					delta := chunk.Usage.OutputTokens - lastOutputTokens
+					lastOutputTokens = chunk.Usage.OutputTokens
+					ch <- StreamEvent{Usage: &UsageStats{OutputTokens: delta}}
+				}
+			case "message_stop":
+				finish()
+				return
+			}
+		}
+		if err := scanner.Err(); err != nil {
+			ch <- StreamEvent{Err: err}
+			return
+		}
+		finish()
 	}()
 	return ch
+}
+
+func (a *AnthropicAdapter) providerName() string {
+	if name := strings.TrimSpace(a.ProviderName); name != "" {
+		return name
+	}
+	return "anthropic"
+}
+
+func (a *AnthropicAdapter) emptyResponseError(requestID, stopReason, message string) error {
+	return &ProviderError{Provider: a.providerName(), Class: ProviderErrorEmptyResponse,
+		StatusCode: http.StatusOK, Message: message, RequestID: requestID, StopReason: strings.TrimSpace(stopReason)}
+}
+
+func requestIDFromHeaders(headers http.Header) string {
+	for _, name := range []string{"request-id", "x-request-id", "x-moonshot-request-id", "trace-id"} {
+		if value := strings.TrimSpace(headers.Get(name)); value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func (a *AnthropicAdapter) ChatCompletion(ctx context.Context, messages []Message) (string, error) {
@@ -332,10 +424,9 @@ func isAnthropicOAuthToken(token string) bool {
 
 func (a *AnthropicAdapter) requestFromChat(req ChatRequest, stream bool) AnthropicRequest {
 	anthropicReq := AnthropicRequest{
-		Model:        a.Model,
-		MaxTokens:    firstPositiveInt(req.MaxTokens, a.MaxTokens, 1024),
-		SystemPrompt: req.SystemPrompt,
-		Stream:       stream,
+		Model:     a.Model,
+		MaxTokens: firstPositiveInt(req.MaxTokens, a.MaxTokens, 1024),
+		Stream:    stream,
 	}
 	if len(req.Tools) > 0 {
 		tools := req.Tools
@@ -351,9 +442,10 @@ func (a *AnthropicAdapter) requestFromChat(req ChatRequest, stream bool) Anthrop
 	}
 	anthropicReq.Thinking = a.thinkingForRequest(req)
 	anthropicReq.ServiceTier = a.serviceTierForRequest(req)
+	systemPrompt := req.SystemPrompt
 	systemParts := []string{}
-	if strings.TrimSpace(anthropicReq.SystemPrompt) != "" {
-		systemParts = append(systemParts, strings.TrimSpace(anthropicReq.SystemPrompt))
+	if strings.TrimSpace(systemPrompt) != "" {
+		systemParts = append(systemParts, strings.TrimSpace(systemPrompt))
 	}
 	for _, m := range sanitizeToolMessageLedger(req.Messages) {
 		content := anthropicContentFromMessage(m, len(req.Tools) > 0)
@@ -373,9 +465,83 @@ func (a *AnthropicAdapter) requestFromChat(req ChatRequest, stream bool) Anthrop
 		anthropicReq.Messages = append(anthropicReq.Messages, AnthropicMessage{Role: role, Content: content})
 	}
 	if len(systemParts) > 0 {
-		anthropicReq.SystemPrompt = strings.Join(systemParts, "\n\n")
+		systemPrompt = strings.Join(systemParts, "\n\n")
+	}
+	if systemPrompt != "" {
+		anthropicReq.SystemPrompt = systemPrompt
+	}
+	if a.Quirks.PromptCache {
+		applyAnthropicPromptCache(&anthropicReq)
 	}
 	return anthropicReq
+}
+
+// maxAnthropicCacheBreakpoints is the provider limit on cache_control blocks
+// per request; never attach more than this many breakpoints.
+const maxAnthropicCacheBreakpoints = 4
+
+// applyAnthropicPromptCache attaches opt-in cache_control breakpoints when the
+// PromptCache quirk is enabled: one on the last system content block, and one
+// rolling breakpoint on the last content block of the most recent message
+// BEFORE the final user message, so the previous turns' prefix stays cacheable
+// while the newest user message keeps changing.
+func applyAnthropicPromptCache(req *AnthropicRequest) {
+	breakpoints := 0
+	if system, ok := req.SystemPrompt.(string); ok && system != "" {
+		req.SystemPrompt = []interface{}{map[string]interface{}{
+			"type":          "text",
+			"text":          system,
+			"cache_control": anthropicEphemeralCacheControl(),
+		}}
+		breakpoints++
+	}
+	if breakpoints >= maxAnthropicCacheBreakpoints {
+		return
+	}
+	lastUser := -1
+	for i := len(req.Messages) - 1; i >= 0; i-- {
+		if req.Messages[i].Role == "user" {
+			lastUser = i
+			break
+		}
+	}
+	if lastUser <= 0 {
+		return
+	}
+	if content, ok := withTrailingCacheControl(req.Messages[lastUser-1].Content); ok {
+		req.Messages[lastUser-1].Content = content
+	}
+}
+
+func anthropicEphemeralCacheControl() map[string]interface{} {
+	return map[string]interface{}{"type": "ephemeral"}
+}
+
+// withTrailingCacheControl marks the last content block of a message as a
+// cache breakpoint, normalizing plain-string content into one text block.
+func withTrailingCacheControl(content interface{}) (interface{}, bool) {
+	switch value := content.(type) {
+	case string:
+		if strings.TrimSpace(value) == "" {
+			return nil, false
+		}
+		return []interface{}{map[string]interface{}{
+			"type":          "text",
+			"text":          value,
+			"cache_control": anthropicEphemeralCacheControl(),
+		}}, true
+	case []interface{}:
+		if len(value) == 0 {
+			return nil, false
+		}
+		if block, ok := value[len(value)-1].(map[string]interface{}); ok {
+			block["cache_control"] = anthropicEphemeralCacheControl()
+			return value, true
+		}
+		return nil, false
+	default:
+		return nil, false
+	}
 }
 
 func anthropicContentFromMessage(m Message, nativeTools bool) interface{} {

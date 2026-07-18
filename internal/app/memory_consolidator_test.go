@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"selfmind/internal/kernel/llm"
 	"selfmind/internal/kernel/memory"
 	"selfmind/internal/platform/config"
 )
@@ -31,6 +32,28 @@ func seedParaphrases(t *testing.T, mem *memory.MemoryManager, tenantID string) {
 		}); err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+func TestMemoryConsolidatorStopsPassOnQuota(t *testing.T) {
+	provider, err := memory.NewSQLiteProvider(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer provider.Close()
+	mgr := memory.NewMemoryManager(provider)
+	seedParaphrases(t, mgr, "person")
+
+	judge := &capturingProviderStub{err: &llm.ProviderError{
+		Provider: "kimi-coding", Class: llm.ProviderErrorQuota, StatusCode: 403, Message: "usage limit reached",
+	}}
+	c := &MemoryConsolidator{provider: judge, mem: mgr, gov: config.MemoryGovernanceConfig{Enabled: true, Mode: "shadow"}, reportDir: t.TempDir()}
+	err = c.RunOnce(context.Background(), "person")
+	if err == nil || !llm.IsQuotaError(err) {
+		t.Fatalf("RunOnce error = %v", err)
+	}
+	if judge.calls() != 1 {
+		t.Fatalf("judge calls = %d, want 1", judge.calls())
 	}
 }
 

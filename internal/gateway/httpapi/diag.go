@@ -55,6 +55,20 @@ func (d *Server) diagReply(ctx context.Context, identity *control.IdentityContex
 			fmt.Fprintf(&sb, "External watches: active %d, failed %d, timed out %d\n",
 				activeWatches, watches[control.ExternalWatchFailed], watches[control.ExternalWatchTimedOut])
 		}
+		// A timed_out watch whose recorded output already matches a declared
+		// terminal pattern is a misjudgment the startup recovery pass will
+		// revise — surface it instead of leaving a silently wrong verdict.
+		if watches[control.ExternalWatchTimedOut] > 0 {
+			if finished, err := d.Control.ListExternalWatchesFinishedSince(ctx, control.ExternalWatchTimedOut, time.Now().Add(-externalWatchRecoveryLookback), 10); err == nil {
+				for _, watch := range finished {
+					if status := classifyExternalWatchOutput(watch, watch.LastOutput); status != "" {
+						fmt.Fprintf(&sb, "- watch verdict suspect: %s timed out but last output matches %s (%s)\n",
+							truncate(toOneLine(watch.Description), 60), status,
+							truncate(toOneLine(strings.TrimSpace(watch.LastOutput)), 40))
+					}
+				}
+			}
+		}
 	}
 	if health, err := d.Control.MaintenanceHealthForPerson(ctx, identity.TenantID, identity.PersonID); err == nil {
 		if health.Pending > 0 || health.Running > 0 {
@@ -66,9 +80,45 @@ func (d *Server) diagReply(ctx context.Context, identity *control.IdentityContex
 		}
 		if health.Blocked > 0 {
 			fmt.Fprintf(&sb, "Background learning: paused (%d job(s))\n", health.Blocked)
+			for i, route := range health.BlockedRoutes {
+				if i >= 3 {
+					break
+				}
+				nextProbe := "waiting for probe"
+				if !route.NextProbeAt.IsZero() {
+					remaining := time.Until(route.NextProbeAt).Round(time.Second)
+					if remaining <= 0 {
+						nextProbe = "probe due"
+					} else {
+						nextProbe = "next probe in " + remaining.String()
+					}
+				}
+				fmt.Fprintf(&sb, "- route: %s/%s, %s\n", route.Provider, route.Model, nextProbe)
+			}
 			if reason := strings.TrimSpace(health.LastError); reason != "" {
 				fmt.Fprintf(&sb, "- provider: %s\n", truncate(toOneLine(tools.RedactSensitive(reason)), 140))
 			}
+		}
+	}
+	// Maintenance failure history (24h): the job row's last_error is
+	// overwritten on every transition, so this append-only timeline is what
+	// actually answers "why did learning fail" (e.g. deadline-exceeded runs
+	// that were later skipped at the retry limit).
+	if attempts, err := d.Control.RecentMaintenanceAttempts(ctx, identity.TenantID, time.Now().Add(-24*time.Hour), 20); err == nil && len(attempts) > 0 {
+		byOutcome := map[string]int{}
+		for _, a := range attempts {
+			byOutcome[a.Outcome]++
+		}
+		fmt.Fprintf(&sb, "Learning failures (24h): failed %d, skipped %d, provider-blocked %d\n",
+			byOutcome["failed"], byOutcome["skipped"], byOutcome["blocked_provider"])
+		shown := 0
+		for _, a := range attempts {
+			if strings.TrimSpace(a.Error) == "" || shown >= 3 {
+				continue
+			}
+			fmt.Fprintf(&sb, "- %s attempt %d (%s): %s\n", a.Outcome, a.Attempt,
+				a.CreatedAt.Format("15:04"), truncate(toOneLine(tools.RedactSensitive(a.Error)), 120))
+			shown++
 		}
 	}
 

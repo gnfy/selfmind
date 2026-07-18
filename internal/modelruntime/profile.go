@@ -53,6 +53,7 @@ type ProviderQuirks struct {
 	ThinkingMode           string
 	UserAgent              string
 	DisableHTTP2           bool
+	PromptCache            bool
 	ResponsesStoreFalse    bool
 	ResponsesRequireStream bool
 	SupportsTools          bool
@@ -257,7 +258,7 @@ func BuiltinProfiles() []ProviderProfile {
 			Protocol: ProtocolAnthropic, AuthType: AuthAPIKey,
 			BaseURL: "https://api.kimi.com/coding", APIKeyEnvVars: []string{"KIMI_CODING_API_KEY", "KIMI_API_KEY"},
 			BaseURLEnvVar: "KIMI_BASE_URL", ModelList: ModelListStatic,
-			FallbackModels:  []string{"kimi-for-coding"},
+			FallbackModels:  []string{"kimi-for-coding", "kimi-for-coding-highspeed"},
 			ContextLength:   262144,
 			Headers:         map[string]string{"User-Agent": "claude-code/0.1.0"},
 			MaxTokens:       32000,

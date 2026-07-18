@@ -37,6 +37,7 @@ type Selection struct {
 	Provider        string
 	Model           string
 	BaseURL         string
+	Protocol        string
 	APIKey          string
 	Headers         map[string]string
 	ContextLength   int
@@ -142,7 +143,7 @@ func (r *Resolver) resolveNamed(providerName string, selection Selection, modelN
 	// Explicit selection wins, then YAML endpoint overrides, env base URL, and
 	// finally the built-in profile default.
 	baseURL := firstNonEmpty(selection.BaseURL, endpoint.BaseURL, envValue(profile.BaseURLEnvVar), profile.BaseURL)
-	protocol := NormalizeProtocol(firstNonEmpty(endpoint.Protocol, profile.Protocol))
+	protocol := NormalizeProtocol(firstNonEmpty(selection.Protocol, endpoint.Protocol, profile.Protocol))
 	model := firstNonEmpty(modelName, endpoint.Model, firstModel(profile.FallbackModels))
 	cred := r.resolveCredential(profile, endpoint, selection.APIKey)
 	if cred.Token == "" && profile.AuthType != AuthNone {
@@ -180,7 +181,7 @@ func (r *Resolver) resolveCustom(providerName string, selection Selection, model
 	}
 	for _, cp := range r.cfg.Providers.Custom {
 		if strings.EqualFold(cp.Name, name) || strings.EqualFold("custom:"+cp.Name, providerName) {
-			protocol := NormalizeProtocol(firstNonEmpty(cp.Protocol, ProtocolOpenAICompatible))
+			protocol := NormalizeProtocol(firstNonEmpty(selection.Protocol, cp.Protocol, ProtocolOpenAICompatible))
 			return Runtime{
 				Provider: "custom:" + cp.Name, DisplayName: cp.Name,
 				Model:            firstNonEmpty(modelName, cp.Model, selection.Model),
@@ -282,7 +283,7 @@ func resolveProviderTransport(profile ProviderProfile, baseURL, protocol string,
 	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
 	if id == "kimi-coding" {
 		userBaseURL := strings.TrimSpace(selection.BaseURL) != "" || strings.TrimSpace(endpoint.BaseURL) != "" || envValue(profile.BaseURLEnvVar) != ""
-		userProtocol := strings.TrimSpace(endpoint.Protocol) != ""
+		userProtocol := strings.TrimSpace(selection.Protocol) != "" || strings.TrimSpace(endpoint.Protocol) != ""
 		if !userBaseURL && strings.HasPrefix(strings.TrimSpace(cred.Token), "sk-kimi-") {
 			baseURL = "https://api.kimi.com/coding"
 		}
@@ -354,6 +355,7 @@ func quirksFromConfig(q config.ProviderQuirks) ProviderQuirks {
 		UserAgent:              strings.TrimSpace(q.UserAgent),
 		ResponsesStoreFalse:    q.ResponsesStoreFalse,
 		ResponsesRequireStream: q.ResponsesRequireStream,
+		PromptCache:            q.PromptCache,
 	}
 }
 
@@ -377,6 +379,9 @@ func mergeProviderQuirks(base ProviderQuirks, overlays ...ProviderQuirks) Provid
 		}
 		if overlay.DisableHTTP2 {
 			out.DisableHTTP2 = true
+		}
+		if overlay.PromptCache {
+			out.PromptCache = true
 		}
 		if overlay.ResponsesStoreFalse {
 			out.ResponsesStoreFalse = true

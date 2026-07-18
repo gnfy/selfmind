@@ -4,9 +4,62 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"regexp"
 	"strings"
 	"time"
 )
+
+// Transient-content classification (two tiers). A single broad regex cannot
+// separate a transient FACT ("RUQX-224 当前状态为 QUEUED") from a durable RULE
+// that merely mentions status vocabulary ("QUEUED means the task is waiting
+// for dispatch"), so destructive decisions key off a CONFIRMED verdict that
+// requires all three signals — a concrete instance, current-state semantics,
+// and a status token — while candidates are only ever flagged for review.
+// Shared by the intake durability gate (internal/app) and the offline memory
+// audit (selfmind maintenance memory-audit).
+type TransientVerdict int
+
+const (
+	// TransientNone: no run-state vocabulary at all.
+	TransientNone TransientVerdict = iota
+	// TransientCandidate: status vocabulary without a confirmed instance
+	// context, or with explanatory rule semantics. Never auto-dropped or
+	// auto-archived — worst case it is stored time-bounded and reviewed.
+	TransientCandidate
+	// TransientConfirmed: a concrete instance (ticket/build/run id) described
+	// in current-state terms. Safe for automatic run-state handling.
+	TransientConfirmed
+)
+
+var (
+	transientStatusTokens = regexp.MustCompile(
+		`(?i)\b(IN_PROGRESS|QUEUED|PRE_BUILD|PREPARED_NOT_EXECUTED)\b|尚未执行|待执行|正在等待|正在执行|当前状态`)
+	// Explanatory semantics mark a probable long-term rule; they veto the
+	// confirmed tier no matter what else matches.
+	transientRuleCues = regexp.MustCompile(
+		`表示|意味着|说明|规则|流程|转为|(?i)\bmeans\b|(?i)\bindicates\b|(?i)\brule\b|(?i)\btransition`)
+	// A concrete work instance: ticket key, run id, build id, or a UUID-ish
+	// identifier.
+	transientInstanceCues = regexp.MustCompile(
+		`\b[A-Z][A-Z0-9]{1,9}-\d{1,6}\b|\brun_[A-Za-z0-9-]{6,}|(?i)\bbuild id\b|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}`)
+	// Current-state semantics: this specific moment/run, not a general claim.
+	transientTemporalCues = regexp.MustCompile(
+		`当前|目前|现在|刚刚|本次|已按|状态标记为|状态[:：]?\s*(?:为|是)|(?i)\bcurrently\b|(?i)\bthis run\b|(?i)\bright now\b`)
+)
+
+// ClassifyTransientContent grades content for run-state transience.
+func ClassifyTransientContent(content string) TransientVerdict {
+	if !transientStatusTokens.MatchString(content) {
+		return TransientNone
+	}
+	if transientRuleCues.MatchString(content) {
+		return TransientCandidate
+	}
+	if transientInstanceCues.MatchString(content) && transientTemporalCues.MatchString(content) {
+		return TransientConfirmed
+	}
+	return TransientCandidate
+}
 
 // Layered memory model (docs/memory-governance.zh-CN.md §2):
 //
@@ -126,6 +179,12 @@ type IntakeWrite struct {
 	Confidence      float64
 	AnalyzerVersion int
 	DecisionKey     string // stable per frozen proposal item; used for replay idempotency
+	// Category is the analyzer-declared fact category (optional).
+	Category string
+	// ValidUntil marks a time-bounded fact's expiry. Zero means no expiry
+	// (durable). Episodic observations never reach ApplyIntakeWrite — the
+	// intake policy layer drops them before the canonical write.
+	ValidUntil time.Time
 }
 
 // MergeWrite folds a judged cluster into one canonical memory. Members are

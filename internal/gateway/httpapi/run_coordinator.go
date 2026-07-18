@@ -242,6 +242,11 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 	})
 
 	workspace, _ := c.workspaceForTask(ctx, identity, task, req, attach)
+	analysisWorkspaceID := run.WorkspaceID
+	if workspace != nil && workspace.ID != "" {
+		analysisWorkspaceID = workspace.ID
+	}
+	replay := runMaintenanceReplay{WorkspaceID: analysisWorkspaceID, UserInput: req.Content, Attach: attach}
 	cleanupScope := c.installExecutionScope(identity, task, run, workspace, req)
 	defer cleanupScope()
 	if workspace != nil && workspace.LocalPath != "" {
@@ -260,20 +265,21 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 
 	if d.Gateway == nil {
 		err := fmt.Errorf("gateway is not configured")
-		_ = d.Control.FinishRun(context.Background(), identity.TenantID, run.ID, "failed")
+		outcome := api.RunOutcome{Status: "failed", CompletionReason: "gateway_unavailable", Summary: err.Error(), Risks: []string{err.Error()}}
+		_ = c.finishRunWithMaintenancePayload(context.Background(), identity, task, run, outcome.Status, replay.WorkspaceID, replay.UserInput, outcome, replay.Attach)
 		_ = d.Control.UpdateTaskStatus(context.Background(), identity.TenantID, task.ID, "failed", err.Error(), nil)
 		return api.MessageResponse{Identity: identity, Task: task, Run: run, Error: err.Error(), Turn: messageTurn("failed", "failed", "idle", task.ID, run.ID, err.Error()), Context: messageContextBudget(llmUsageZero())}, http.StatusInternalServerError
 	}
 
 	resp, err := d.Gateway.RunAgentWithEvents(ctx, identity.PersonID, req.Channel, agentInput)
 	if err != nil {
-		outcome := c.finalizeErroredRun(ctx, identity, task, run, req.Channel, err)
+		outcome := c.finalizeErroredRun(ctx, identity, task, run, req.Channel, err, replay)
 		return api.MessageResponse{Identity: identity, Task: task, Run: run, Outcome: &outcome, Error: firstString(outcome.Risks), Turn: messageTurn(outcome.Status, outcome.Status, "idle", task.ID, run.ID, outcome.Summary), Context: messageContextBudget(llmUsageZero())}, http.StatusOK
 	}
 
 	content, usage, eventSummary, err := c.aggregateGatewayResponse(ctx, req.Channel, task, run, resp)
 	if err != nil {
-		outcome := c.finalizeErroredRun(ctx, identity, task, run, req.Channel, err)
+		outcome := c.finalizeErroredRun(ctx, identity, task, run, req.Channel, err, replay)
 		return api.MessageResponse{Identity: identity, Task: task, Run: run, Outcome: &outcome, Content: content, Usage: usage, Error: firstString(outcome.Risks), Turn: messageTurn(outcome.Status, outcome.Status, "idle", task.ID, run.ID, outcome.Summary), Context: messageContextBudget(usage)}, http.StatusOK
 	}
 
@@ -330,7 +336,7 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 	if taskStatus == "" || taskStatus == "running" {
 		taskStatus = "in_progress"
 	}
-	recordFinalizeErr("finish run", d.Control.FinishRun(finCtx, identity.TenantID, run.ID, outcome.Status))
+	recordFinalizeErr("finish run", c.finishRunWithMaintenancePayload(finCtx, identity, task, run, outcome.Status, replay.WorkspaceID, replay.UserInput, outcome, replay.Attach))
 	recordFinalizeErr("update task status", d.Control.UpdateTaskStatus(finCtx, identity.TenantID, task.ID, taskStatus, outcome.Summary, outcome.NextSteps))
 	_, handoffErr := d.Control.SaveHandoff(finCtx, control.Handoff{
 		TaskID:       task.ID,
@@ -372,14 +378,6 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 	}
 	turnStatus := turnStatusForOutcome(outcome)
 	out := api.MessageResponse{Identity: identity, Task: refreshed, Run: run, Outcome: &outcome, Content: content, Usage: usage, Turn: messageTurn(turnStatus, taskStatus, "idle", taskID, run.ID, outcome.Summary), Context: messageContextBudget(usage)}
-	// One post-run maintenance pass handles harmless task-label hygiene and
-	// durable memory extraction. It runs after finalization and never delays the
-	// user-visible response.
-	analysisWorkspaceID := run.WorkspaceID
-	if workspace != nil && workspace.ID != "" {
-		analysisWorkspaceID = workspace.ID
-	}
-	c.analyzeFinishedRunAsync(finCtx, identity, task, run, analysisWorkspaceID, req.Content, outcome, attach)
 	return out, http.StatusOK
 }
 
@@ -481,8 +479,31 @@ func (c *RunCoordinator) recoverAsyncRun(identity *control.IdentityContext, req 
 	if tenant == "" {
 		tenant = identity.TenantID
 	}
+	outcome := api.RunOutcome{
+		Status:           "interrupted",
+		CompletionReason: "internal_error",
+		Resumable:        true,
+		Summary:          "The run was interrupted by an internal error.",
+		NextSteps:        []string{"Reply \"continue\" to resume from the last durable evidence."},
+		Risks:            []string{"The previous run ended unexpectedly before it could report a complete result."},
+	}
 	if active.RunID != "" {
-		_ = c.srv.Control.FinishRun(ctx, tenant, active.RunID, "failed")
+		// Reconstruct the normal atomic finalizer so a panic cannot leave a
+		// terminal run without the durable post-run maintenance evidence used by
+		// task labels and memory governance. Fall back to the administrative
+		// finalizer only when the rows themselves cannot be recovered.
+		task, taskErr := c.srv.Control.GetTask(ctx, tenant, active.TaskID)
+		run, runErr := c.srv.Control.GetRun(ctx, tenant, active.RunID)
+		if taskErr == nil && runErr == nil && task != nil && run != nil {
+			if err := c.finishRunWithMaintenancePayload(ctx, identity, task, run, "failed", run.WorkspaceID, req.Content, outcome, taskAttach{}); err != nil {
+				log.Warn("panic recovery: atomic run finalization failed", "run", active.RunID, "error", err)
+				_ = c.srv.Control.FinishRun(ctx, tenant, active.RunID, "failed")
+			}
+		} else {
+			log.Warn("panic recovery: run context unavailable; using fallback finalizer",
+				"run", active.RunID, "task_error", taskErr, "run_error", runErr)
+			_ = c.srv.Control.FinishRun(ctx, tenant, active.RunID, "failed")
+		}
 	}
 	if active.TaskID != "" {
 		_ = c.srv.Control.UpdateTaskStatus(ctx, tenant, active.TaskID, "interrupted", "run aborted by internal error", nil)
@@ -498,6 +519,7 @@ func (c *RunCoordinator) recoverAsyncRun(identity *control.IdentityContext, req 
 	// Let the origin endpoint know the turn ended instead of hanging forever.
 	c.deliverAsyncResult(ctx, identity, req, api.MessageResponse{
 		Identity: identity,
+		Outcome:  &outcome,
 		Error:    "internal error: the run was aborted",
 		Turn:     messageTurn("failed", "interrupted", "idle", active.TaskID, active.RunID, "run aborted by internal error"),
 	})
@@ -569,7 +591,10 @@ func (c *RunCoordinator) drainQueue(identity *control.IdentityContext) {
 		Content:        next.Content,
 		ApprovalMode:   next.ApprovalMode,
 		WorkspaceID:    next.WorkspaceID,
-		Async:          true,
+		// A system-originated finalization row carries the task it closes;
+		// resolveTask honors an explicit TaskID before any label guess.
+		TaskID: next.TaskID,
+		Async:  true,
 		// Carry the queue row id so the drained run's finalization marks it done
 		// (QueueStatusDone) — otherwise the row stays 'started' and boot recovery
 		// re-runs the already-completed work.

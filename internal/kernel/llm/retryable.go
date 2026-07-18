@@ -24,6 +24,30 @@ const (
 	maxRetryAfter     = 600 * time.Second
 )
 
+// nonRetryableError marks a local/provider result that cannot be repaired by
+// resending the same request. It is intentionally private: callers use
+// NonRetryable so retry policy remains centralized in this package.
+type nonRetryableError struct {
+	err error
+}
+
+func (e *nonRetryableError) Error() string { return e.err.Error() }
+func (e *nonRetryableError) Unwrap() error { return e.err }
+
+// NonRetryable prevents an otherwise unknown error shape from entering the
+// generic retry loop. This is useful for semantic failures such as a provider
+// returning a successful HTTP response with no usable model output.
+func NonRetryable(err error) error {
+	if err == nil {
+		return nil
+	}
+	var marked *nonRetryableError
+	if errors.As(err, &marked) {
+		return err
+	}
+	return &nonRetryableError{err: err}
+}
+
 // IsRetryableError reports whether an LLM transport error is worth re-sending
 // with backoff. Retryable = transient network/stream/server conditions that a
 // full re-send can recover from (EOF, connection reset/refused, timeouts,
@@ -36,6 +60,18 @@ const (
 func IsRetryableError(err error) bool {
 	if err == nil {
 		return false
+	}
+	var marked *nonRetryableError
+	if errors.As(err, &marked) {
+		return false
+	}
+	if providerErr, ok := ProviderErrorInfo(err); ok {
+		switch providerErr.Class {
+		case ProviderErrorQuota, ProviderErrorAuth, ProviderErrorBilling, ProviderErrorInvalidRequest:
+			return false
+		case ProviderErrorRateLimit, ProviderErrorTransient, ProviderErrorEmptyResponse:
+			return true
+		}
 	}
 	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
 		return true

@@ -3,11 +3,52 @@ package llm
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 )
+
+func TestAnthropicAdapterAcceptsKimiDirectStringContent(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("content-type", "application/json")
+		fmt.Fprint(w, `{"content":"maintenance ok","stop_reason":"end_turn","usage":{"input_tokens":2,"output_tokens":3}}`)
+	}))
+	defer server.Close()
+
+	adapter := NewAnthropicAdapter("test-key")
+	adapter.ProviderName = "kimi-coding"
+	adapter.BaseURL = server.URL
+	resp, err := adapter.Chat(context.Background(), ChatRequest{Messages: []Message{{Role: "user", Content: "hello"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Content != "maintenance ok" || resp.FinishReason != "end_turn" {
+		t.Fatalf("response = %+v", resp)
+	}
+}
+
+func TestAnthropicAdapterClassifiesHTTP200EmptyResponse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("content-type", "application/json")
+		w.Header().Set("x-request-id", "kimi-request-1")
+		fmt.Fprint(w, `{"content":[],"stop_reason":"end_turn","usage":{"input_tokens":2,"output_tokens":0}}`)
+	}))
+	defer server.Close()
+
+	adapter := NewAnthropicAdapter("test-key")
+	adapter.ProviderName = "kimi-coding"
+	adapter.BaseURL = server.URL
+	_, err := adapter.Chat(context.Background(), ChatRequest{Messages: []Message{{Role: "user", Content: "hello"}}})
+	if err == nil {
+		t.Fatal("empty HTTP 200 must be an explicit provider error")
+	}
+	var providerErr *ProviderError
+	if !errors.As(err, &providerErr) || providerErr.Class != ProviderErrorEmptyResponse || providerErr.RequestID != "kimi-request-1" {
+		t.Fatalf("error = %#v", err)
+	}
+}
 
 func TestOpenAIAdapterChatUsesNativeTools(t *testing.T) {
 	var got OpenAIRequest

@@ -102,6 +102,14 @@ func (c *RunCoordinator) latestStructuredRunOutcome(ctx context.Context, taskID,
 // an output limit or exhausted tool budget).
 func reconcileTurnCompletion(outcome api.RunOutcome, completion router.TurnCompletion, structured bool) api.RunOutcome {
 	if completion.Status == "incomplete" {
+		// Reaching the bounded action-tool ceiling is advisory once the model has
+		// produced a valid structured outcome. Lifecycle tools remain available
+		// after the ceiling specifically so a run can close its plan and state.
+		// Transport/output truncation is different: it can invalidate the outcome
+		// itself and must still force a resumable interruption.
+		if structured && completion.CompletionReason == "tool_budget_exhausted" {
+			return reconcileStructuredOutcome(outcome)
+		}
 		outcome.Status = "interrupted"
 		outcome.Resumable = true
 		if completion.CompletionReason != "" {
@@ -111,22 +119,9 @@ func reconcileTurnCompletion(outcome api.RunOutcome, completion router.TurnCompl
 		return outcome
 	}
 
-	status := strings.ToLower(strings.TrimSpace(outcome.Status))
 	if structured {
-		switch status {
-		case "waiting_external":
-			outcome.CompletionReason = "waiting_external"
-			outcome.Resumable = false
-			return outcome
-		case "blocked":
-			if outcome.CompletionReason == "" || outcome.CompletionReason == "completed" {
-				outcome.CompletionReason = "blocked"
-			}
-			return outcome
-		case "failed":
-			if outcome.CompletionReason == "" || outcome.CompletionReason == "completed" {
-				outcome.CompletionReason = "failed"
-			}
+		outcome = reconcileStructuredOutcome(outcome)
+		if outcome.CompletionReason != "" && outcome.CompletionReason != "completed" {
 			return outcome
 		}
 	}
@@ -138,10 +133,39 @@ func reconcileTurnCompletion(outcome api.RunOutcome, completion router.TurnCompl
 	return outcome
 }
 
+func reconcileStructuredOutcome(outcome api.RunOutcome) api.RunOutcome {
+	status := strings.ToLower(strings.TrimSpace(outcome.Status))
+	switch status {
+	case "done", "completed":
+		outcome.Status = "done"
+		outcome.CompletionReason = "completed"
+		outcome.Resumable = false
+	case "waiting_external":
+		outcome.CompletionReason = "waiting_external"
+		outcome.Resumable = false
+	case "waiting_user":
+		// Prepared work awaiting the user's explicit go-ahead. Distinct from
+		// blocked (an obstacle) so task health reads correctly.
+		outcome.CompletionReason = "waiting_user"
+		outcome.Resumable = false
+	case "blocked":
+		if outcome.CompletionReason == "" || outcome.CompletionReason == "completed" {
+			outcome.CompletionReason = "blocked"
+		}
+	case "failed":
+		if outcome.CompletionReason == "" || outcome.CompletionReason == "completed" {
+			outcome.CompletionReason = "failed"
+		}
+	}
+	return outcome
+}
+
 func turnStatusForOutcome(outcome api.RunOutcome) string {
 	switch strings.ToLower(strings.TrimSpace(outcome.Status)) {
 	case "waiting_external":
 		return "waiting_external"
+	case "waiting_user":
+		return "waiting_user"
 	case "blocked":
 		return "blocked"
 	case "failed":

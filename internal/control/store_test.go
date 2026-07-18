@@ -540,6 +540,74 @@ VALUES ('acct_old', 'default', 'person_old', 'weixin', 'wxid_old', 'Old Row', 'a
 	}
 }
 
+// TestTaskEventIdempotencyMigrationOnExistingDB protects the upgrade order:
+// an existing task_events table must gain the column before its index is built.
+func TestTaskEventIdempotencyMigrationOnExistingDB(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+
+	db, err := sql.Open("sqlite", filepath.Join(dir, "control.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `
+CREATE TABLE task_events (
+	id TEXT PRIMARY KEY,
+	cursor INTEGER,
+	task_id TEXT NOT NULL,
+	run_id TEXT,
+	type TEXT NOT NULL,
+	visibility TEXT NOT NULL DEFAULT 'task',
+	channel TEXT,
+	payload_json TEXT,
+	created_at INTEGER NOT NULL
+);
+CREATE TABLE task_queue (
+	id TEXT PRIMARY KEY,
+	tenant_id TEXT NOT NULL,
+	person_id TEXT NOT NULL,
+	channel TEXT NOT NULL,
+	content TEXT NOT NULL,
+	approval_mode TEXT,
+	workspace_id TEXT,
+	status TEXT NOT NULL DEFAULT 'queued',
+	created_at INTEGER NOT NULL
+);`); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := OpenStore(dir)
+	if err != nil {
+		t.Fatalf("OpenStore on legacy db: %v", err)
+	}
+	defer store.Close()
+
+	if _, err := store.db.ExecContext(ctx, `
+INSERT INTO task_events (id, cursor, task_id, type, visibility, idempotency_key, created_at)
+VALUES ('event-1', 1, 'task-1', 'test', 'task', 'stable-key', 1);`); err != nil {
+		t.Fatalf("insert after migration: %v", err)
+	}
+	if _, err := store.db.ExecContext(ctx, `
+INSERT INTO task_events (id, cursor, task_id, type, visibility, idempotency_key, created_at)
+VALUES ('event-2', 2, 'task-1', 'test', 'task', 'stable-key', 2);`); err == nil {
+		t.Fatal("duplicate event idempotency key must be rejected after migration")
+	}
+
+	if _, err := store.db.ExecContext(ctx, `
+INSERT INTO task_queue (id, tenant_id, person_id, channel, content, idempotency_key, status, created_at)
+VALUES ('queue-1', 'default', 'person-1', 'cli', 'one', 'stable-queue-key', 'queued', 1);`); err != nil {
+		t.Fatalf("queue insert after migration: %v", err)
+	}
+	if _, err := store.db.ExecContext(ctx, `
+INSERT INTO task_queue (id, tenant_id, person_id, channel, content, idempotency_key, status, created_at)
+VALUES ('queue-2', 'default', 'person-1', 'cli', 'two', 'stable-queue-key', 'queued', 2);`); err == nil {
+		t.Fatal("duplicate queue idempotency key must be rejected after migration")
+	}
+}
+
 func TestMostRecentIMAccount(t *testing.T) {
 	ctx := context.Background()
 	store, err := OpenStore(t.TempDir())

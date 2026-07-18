@@ -14,6 +14,9 @@ turns:
 
 expect:
   status: completed
+  completion_reason: completed
+  resumable: false
+  verification_state: passed
   require_tool_events: true
   min_tool_calls: 2
   max_tool_errors: 0
@@ -30,6 +33,7 @@ checks:
   no_empty_response: true
   no_provider_stack_dump: true
 
-# Unit tests enforce snapshot replacement and unresolved-plan reconciliation.
-# This eval keeps the full agent path honest: plan, implementation, evidence,
-# and completion must converge in one run.
+# Unit tests enforce snapshot replacement, duplicate-event suppression,
+# lifecycle closure after action-budget exhaustion, and unresolved-plan
+# reconciliation. This eval keeps the full agent path honest: plan,
+# implementation, evidence, and completion must converge in one run.

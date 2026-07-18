@@ -18,8 +18,10 @@ import (
 	"strings"
 	"time"
 
+	appcore "selfmind/internal/app"
 	"selfmind/internal/control"
 	"selfmind/internal/gateway/api"
+	"selfmind/internal/platform/config"
 	gatewayrt "selfmind/internal/runtime/gateway"
 	"selfmind/internal/tools"
 )
@@ -47,6 +49,7 @@ func (a *App) doctor(args []string) int {
 	fs := flag.NewFlagSet("selfmind doctor", flag.ContinueOnError)
 	fs.SetOutput(a.stderr)
 	outPath := fs.String("out", "", "write the bundle to a file instead of stdout")
+	probeModels := fs.Bool("probe-models", false, "send one bounded live request per unique configured role model")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -72,6 +75,21 @@ func (a *App) doctor(args []string) int {
 
 	configSection := a.collectConfigDiagnostics().section()
 	report := buildDoctorReport(ctx, store, identity, dataDir, a.gatewayStatusLine(), configSection, doctorLogLines)
+	probeFailed := false
+	if *probeModels {
+		cfg, loadErr := config.LoadConfig(config.Options{Path: a.configPath})
+		if loadErr != nil {
+			report += "\n\n== Model role probes ==\n(error: " + loadErr.Error() + ")"
+			probeFailed = true
+		} else {
+			probeCtx, probeCancel := context.WithTimeout(a.ctx, 90*time.Second)
+			probes := appcore.ProbeConfiguredModelRoles(probeCtx, cfg)
+			probeCancel()
+			section, failed := formatModelRoleProbes(probes)
+			report += "\n\n" + section
+			probeFailed = failed
+		}
+	}
 
 	if strings.TrimSpace(*outPath) != "" {
 		if err := os.WriteFile(*outPath, []byte(report), 0600); err != nil {
@@ -79,10 +97,46 @@ func (a *App) doctor(args []string) int {
 			return 1
 		}
 		fmt.Fprintf(a.stdout, "Diagnostic bundle written to %s\n", *outPath)
+		if probeFailed {
+			return 1
+		}
 		return 0
 	}
 	fmt.Fprintln(a.stdout, report)
+	if probeFailed {
+		return 1
+	}
 	return 0
+}
+
+func formatModelRoleProbes(probes []appcore.ModelRoleProbe) (string, bool) {
+	var sb strings.Builder
+	sb.WriteString("== Model role probes ==\n")
+	if len(probes) == 0 {
+		sb.WriteString("(no explicitly configured roles)")
+		return sb.String(), false
+	}
+	failed := false
+	for _, probe := range probes {
+		roles := strings.Join(probe.Roles, ",")
+		if probe.Err != nil {
+			failed = true
+			fmt.Fprintf(&sb, "- FAIL roles=%s provider=%s model=%s latency=%s error=%s\n",
+				roles, valueOrUnknown(probe.Provider), valueOrUnknown(probe.Model), probe.Latency.Round(time.Millisecond),
+				oneLine(tools.RedactSensitive(probe.Err.Error()), 180))
+			continue
+		}
+		fmt.Fprintf(&sb, "- OK roles=%s provider=%s model=%s latency=%s\n",
+			roles, valueOrUnknown(probe.Provider), valueOrUnknown(probe.Model), probe.Latency.Round(time.Millisecond))
+	}
+	return strings.TrimSpace(sb.String()), failed
+}
+
+func valueOrUnknown(value string) string {
+	if strings.TrimSpace(value) == "" {
+		return "unknown"
+	}
+	return strings.TrimSpace(value)
 }
 
 // tenantID resolves the CLI's default tenant, mirroring the gateway runner.

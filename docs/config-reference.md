@@ -75,6 +75,8 @@ models:
     memory_extract:          # memory intake + consolidation + compaction summaries
       provider: "kimi-coding"
       model: "kimi-for-coding"
+      # Optional per-role override for custom gateways. The Kimi Coding Plan
+      # default is anthropic_messages, matching its /coding endpoint.
     background_review:       # skill/memory self-review, smart-mode approval triage
       provider: "kimi-coding"
       model: "kimi-for-coding"
@@ -84,6 +86,12 @@ models:
     skill_curator: { provider: "kimi-coding", model: "kimi-for-coding" }
     fast_classifier: { provider: "kimi-coding", model: "kimi-for-coding" }
 ```
+
+For `kimi-coding`, every role uses the provider default Anthropic Messages
+transport (`https://api.kimi.com/coding/v1/messages`). This matches Hermes and
+the wire contract of Kimi Coding Plan's `/coding` route. A role-level `protocol`
+value is available only for custom gateways or installations with a different
+wire contract; it should normally be omitted for Kimi Coding Plan.
 
 Role names are stable; a role with no override falls back to the main model.
 Point them at a cheap model to keep background work off your primary provider.
@@ -202,6 +210,9 @@ tasks:
   maintenance_debounce: "5m"       # wait for a quiet window before semantic maintenance
   maintenance_max_wait: "15m"      # force a batch even if runs keep arriving
   maintenance_batch_max_runs: 10   # never put more than this many runs in one call
+  maintenance_quota_probe_initial: "15m" # first provider probe after a quota 403
+  maintenance_quota_probe_max: "4h"      # maximum exponential probe interval
+  maintenance_llm_timeout: "2m"    # bound for one analyzer provider call; too tight = deadline-exceeded retries and skipped learning
 ```
 
 Auto-archive only touches stale, terminal, unpinned tasks with no live run.
@@ -231,6 +242,16 @@ batch settings only delay reversible task-label and long-term-memory governance;
 they do not delay the final answer or recent conversation continuity. Batches
 never cross tenant, person, or workspace boundaries. Empty or zero duration
 values use the product defaults.
+
+Maintenance roles that resolve to the same physical endpoint and credential
+share one persistent quota circuit even when their role or model names differ.
+The first quota 403 pauses queued jobs for that route without consuming their
+retry budgets. SelfMind then permits one half-open probe after
+`maintenance_quota_probe_initial`; repeated quota failures back off up to
+`maintenance_quota_probe_max`. A successful probe closes the circuit and
+replays the paused jobs. `/diag` shows blocked routes and the next probe time.
+Configure a fallback role on a different provider or credential when
+maintenance must continue while the primary Coding Plan quota is exhausted.
 
 ## 8. Diagnostics: flight recorder
 

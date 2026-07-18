@@ -152,10 +152,10 @@ func lifecycleToolNames() []string {
 func lifecycleToolCap(name string) int {
 	switch strings.TrimSpace(name) {
 	case "update_plan":
-		// Normal plans need an initial snapshot, one update per meaningful step
-		// transition, and a final resolved snapshot. Keep a hard anti-loop cap,
-		// but do not cut off ordinary multi-step work after the second update.
-		return 16
+		// A visible plan is a phase-level view, not a transcript. Eight calls are
+		// enough for an initial snapshot, several real transitions, and closure;
+		// identical snapshots are also suppressed by PlanStore.
+		return 8
 	case "finish_run":
 		return 1
 	default:
@@ -420,6 +420,12 @@ func emitStructuredToolEvent(eventCh chan string, name string, args map[string]i
 	}
 	switch name {
 	case "update_plan":
+		var update struct {
+			Changed *bool `json:"changed"`
+		}
+		if json.Unmarshal([]byte(result), &update) == nil && update.Changed != nil && !*update.Changed {
+			return
+		}
 		EmitAgentEvent(eventCh, AgentEvent{
 			Type: "plan.updated",
 			Plan: planItemsFromArgs(args),

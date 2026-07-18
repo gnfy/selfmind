@@ -114,4 +114,49 @@ func TestFinishRunRequiresResolvedSharedPlan(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("finish_run rejected a resolved plan: %v", err)
 	}
+	if _, ok := store.last["tenant-plan-finalization"]; ok {
+		t.Fatal("finish_run should purge the final plan deduplication snapshot")
+	}
+}
+
+func TestPlanToolSuppressesIdenticalVisibleSnapshots(t *testing.T) {
+	store := NewPlanStore()
+	plan := NewUpdatePlanToolWithStore(store)
+	args := map[string]interface{}{
+		"_tenant_id":  "tenant-plan-dedupe",
+		"explanation": "first narration",
+		"plan": []interface{}{
+			map[string]interface{}{"step": "Inspect", "status": "in_progress"},
+			map[string]interface{}{"step": "Verify", "status": "pending"},
+		},
+	}
+
+	first, err := plan.Execute(args)
+	if err != nil {
+		t.Fatalf("first update: %v", err)
+	}
+	var firstResult struct {
+		Changed bool `json:"changed"`
+	}
+	if err := json.Unmarshal([]byte(first), &firstResult); err != nil {
+		t.Fatalf("decode first result: %v", err)
+	}
+	if !firstResult.Changed {
+		t.Fatal("first snapshot must be visible")
+	}
+
+	args["explanation"] = "different narration"
+	second, err := plan.Execute(args)
+	if err != nil {
+		t.Fatalf("second update: %v", err)
+	}
+	var secondResult struct {
+		Changed bool `json:"changed"`
+	}
+	if err := json.Unmarshal([]byte(second), &secondResult); err != nil {
+		t.Fatalf("decode second result: %v", err)
+	}
+	if secondResult.Changed {
+		t.Fatal("identical steps and statuses must not repaint the plan")
+	}
 }

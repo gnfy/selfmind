@@ -101,8 +101,8 @@ func DefaultTaskStrategy() TaskStrategy {
 		HiddenTools:           hiddenToolsFor(PlanPolicyOptional, WebPolicyDisabled),
 		MaxActionTools:        10,
 		ActionToolBudgetStep:  4,
-		ActionToolBudgetLimit: 22,
-		MaxBudgetExtensions:   3,
+		ActionToolBudgetLimit: 34,
+		MaxBudgetExtensions:   6,
 		RequireProgressEvents: true,
 		ChannelMode:           "default",
 		Reason:                "agent-first default; web disabled unless explicitly requested",
@@ -197,10 +197,10 @@ func (s TaskStrategy) normalized() TaskStrategy {
 		s.ActionToolBudgetStep = 4
 	}
 	if s.ActionToolBudgetLimit < s.MaxActionTools {
-		s.ActionToolBudgetLimit = max(s.MaxActionTools, 22)
+		s.ActionToolBudgetLimit = max(s.MaxActionTools, 34)
 	}
 	if s.MaxBudgetExtensions <= 0 {
-		s.MaxBudgetExtensions = 3
+		s.MaxBudgetExtensions = 6
 	}
 	return s
 }
@@ -316,6 +316,7 @@ func (s TaskStrategy) SystemPromptNote() string {
 		if s.MaxActionTools > 0 {
 			sb.WriteString(fmt.Sprintf("Keep tool use economical. This turn starts with about %d non-lifecycle tool call(s). SelfMind may extend that budget when completed tools produce new evidence, but it will never exceed %d. update_plan and finish_run are lifecycle tools with their own small per-turn caps; do not call them repeatedly.\n", s.MaxActionTools, s.ActionToolBudgetLimit))
 		}
+		sb.WriteString("When an external build, deployment, CI job, or remote operation will outlive one short status check, do not keep the model turn busy with repeated polling. Submit a bounded watch_external check with explicit success and failure conditions, then finish the run as waiting_external so the daemon can resume and notify the user durably. When work is fully prepared and only awaits the user's explicit go-ahead, finish with status waiting_user instead of blocked.\n")
 	}
 	if s.PlanPolicy == PlanPolicyDisabled {
 		sb.WriteString("Do not call update_plan for this turn.\n")

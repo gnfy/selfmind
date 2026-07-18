@@ -16,6 +16,7 @@ type PlanTool struct {
 type PlanStore struct {
 	mu    sync.RWMutex
 	plans map[string]PlanState
+	last  map[string]PlanState
 }
 
 type PlanState struct {
@@ -29,7 +30,10 @@ type PlanStep struct {
 }
 
 func NewPlanStore() *PlanStore {
-	return &PlanStore{plans: make(map[string]PlanState)}
+	return &PlanStore{
+		plans: make(map[string]PlanState),
+		last:  make(map[string]PlanState),
+	}
 }
 
 func NewUpdatePlanTool() *PlanTool {
@@ -111,8 +115,10 @@ func (t *PlanTool) Execute(args map[string]interface{}) (string, error) {
 		Explanation: taskStringArg(args, "explanation"),
 		Plan:        steps,
 	}
+	changed := true
 	if t.store != nil {
 		key := planKey(args)
+		changed = t.store.Set(key, state)
 		resolved := true
 		for _, step := range steps {
 			if step.Status != "completed" && step.Status != "cancelled" {
@@ -122,21 +128,30 @@ func (t *PlanTool) Execute(args map[string]interface{}) (string, error) {
 		}
 		if resolved {
 			t.store.Delete(key)
-		} else {
-			t.store.Set(key, state)
 		}
 	}
-	data, _ := json.Marshal(state)
+	data, _ := json.Marshal(struct {
+		PlanState
+		Changed bool `json:"changed"`
+	}{PlanState: state, Changed: changed})
 	return string(data), nil
 }
 
-func (s *PlanStore) Set(key string, state PlanState) {
+// Set records the complete snapshot and reports whether the visible plan
+// changed. Explanations are intentionally not part of the comparison: changing
+// narration without changing a step or status must not repaint the UI or add a
+// duplicate plan.updated event.
+func (s *PlanStore) Set(key string, state PlanState) bool {
 	if s == nil {
-		return
+		return true
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	previous, ok := s.last[key]
+	changed := !ok || !samePlanSteps(previous.Plan, state.Plan)
+	s.last[key] = state
 	s.plans[key] = state
+	return changed
 }
 
 func (s *PlanStore) Get(key string) (PlanState, bool) {
@@ -156,6 +171,31 @@ func (s *PlanStore) Delete(key string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.plans, key)
+}
+
+// Purge removes both the active plan and its final deduplication snapshot.
+// UpdatePlan keeps the final snapshot briefly so repeated completion updates
+// do not repaint the UI; FinishRun ends that lifetime explicitly.
+func (s *PlanStore) Purge(key string) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.plans, key)
+	delete(s.last, key)
+}
+
+func samePlanSteps(a, b []PlanStep) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i].Step != b[i].Step || a[i].Status != b[i].Status {
+			return false
+		}
+	}
+	return true
 }
 
 func planStepsFromArgs(raw interface{}) ([]PlanStep, error) {
@@ -208,14 +248,14 @@ func NewFinishRunToolWithStore(store *PlanStore) *FinishRunTool {
 	return &FinishRunTool{
 		BaseTool: BaseTool{
 			name:        "finish_run",
-			description: "Record a structured task outcome before the final answer. Use when the task is done, blocked, failed, waiting on a registered external watch, or needs approval.",
+			description: "Record a structured task outcome before the final answer. Use when the task is done, blocked, failed, waiting on a registered external watch, prepared and waiting for the user's go-ahead (waiting_user), or needs approval.",
 			schema: ToolSchema{
 				Type: "object",
 				Properties: map[string]PropertyDef{
 					"status": {
 						Type:        "string",
 						Description: "Task status.",
-						Enum:        []string{"done", "blocked", "failed", "running", "waiting_external", "needs_approval"},
+						Enum:        []string{"done", "blocked", "failed", "running", "waiting_external", "waiting_user", "needs_approval"},
 					},
 					"summary": {
 						Type:        "string",
@@ -301,7 +341,7 @@ func (t *FinishRunTool) Execute(args map[string]interface{}) (string, error) {
 	}
 	data, _ := json.Marshal(out)
 	if t.store != nil {
-		t.store.Delete(key)
+		t.store.Purge(key)
 	}
 	return string(data), nil
 }

@@ -152,3 +152,136 @@ func TestEnqueueQueuedOnlyIgnoresIdempotencyConflict(t *testing.T) {
 		t.Fatal("duplicate primary key without idempotency key must fail")
 	}
 }
+
+func TestRequeueSystemQueuedIsBoundedAndLeavesOrdinaryRowsAlone(t *testing.T) {
+	ctx := context.Background()
+	store, err := OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "gnfy", "Alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	system, err := store.EnqueueQueued(ctx, QueuedTask{
+		TenantID: identity.TenantID, PersonID: identity.PersonID,
+		Channel: "cli-session", Platform: "cli", Content: "finalize",
+		IdempotencyKey: "external-watch:test:r1:finalization",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.MarkQueued(ctx, identity.TenantID, system.ID, QueueStatusDone); err != nil {
+		t.Fatal(err)
+	}
+	for want := 1; want <= 2; want++ {
+		requeued, err := store.RequeueSystemQueued(ctx, identity.TenantID, system.ID, 2)
+		if err != nil || !requeued {
+			t.Fatalf("requeue %d = %v, %v", want, requeued, err)
+		}
+		row, err := store.GetQueuedByIdempotencyKey(ctx, system.IdempotencyKey)
+		if err != nil || row == nil || row.Status != QueueStatusQueued || row.Restarts != want {
+			t.Fatalf("row after requeue %d = %+v, %v", want, row, err)
+		}
+		if err := store.MarkQueued(ctx, identity.TenantID, system.ID, QueueStatusFailed); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if requeued, err := store.RequeueSystemQueued(ctx, identity.TenantID, system.ID, 2); err != nil || requeued {
+		t.Fatalf("exhausted row requeue = %v, %v; want false", requeued, err)
+	}
+
+	ordinary, err := store.EnqueueQueued(ctx, QueuedTask{
+		TenantID: identity.TenantID, PersonID: identity.PersonID,
+		Channel: "cli", Platform: "cli", Content: "ordinary",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.MarkQueued(ctx, identity.TenantID, ordinary.ID, QueueStatusDone); err != nil {
+		t.Fatal(err)
+	}
+	if requeued, err := store.RequeueSystemQueued(ctx, identity.TenantID, ordinary.ID, 2); err != nil || requeued {
+		t.Fatalf("ordinary row requeue = %v, %v; want false", requeued, err)
+	}
+}
+
+func TestUpdateSystemQueuedContentOnlyTouchesDurableSystemRows(t *testing.T) {
+	ctx := context.Background()
+	store, err := OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "gnfy", "Alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	system, err := store.EnqueueQueued(ctx, QueuedTask{
+		TenantID: identity.TenantID, PersonID: identity.PersonID,
+		Content: "old system prompt", IdempotencyKey: "system:refresh",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ordinary, err := store.EnqueueQueued(ctx, QueuedTask{
+		TenantID: identity.TenantID, PersonID: identity.PersonID,
+		Content: "user message",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	updated, err := store.UpdateSystemQueuedContent(ctx, identity.TenantID, system.ID, "current system prompt")
+	if err != nil || !updated {
+		t.Fatalf("system refresh: updated=%v err=%v", updated, err)
+	}
+	row, err := store.GetQueued(ctx, identity.TenantID, system.ID)
+	if err != nil || row == nil || row.Content != "current system prompt" {
+		t.Fatalf("system row: row=%+v err=%v", row, err)
+	}
+	updated, err = store.UpdateSystemQueuedContent(ctx, identity.TenantID, ordinary.ID, "must not replace user input")
+	if err != nil || updated {
+		t.Fatalf("ordinary refresh: updated=%v err=%v", updated, err)
+	}
+	row, err = store.GetQueued(ctx, identity.TenantID, ordinary.ID)
+	if err != nil || row == nil || row.Content != "user message" {
+		t.Fatalf("ordinary row changed: row=%+v err=%v", row, err)
+	}
+}
+
+func TestMarkQueuedIfStatusDoesNotOverwriteRecoveryTransition(t *testing.T) {
+	ctx := context.Background()
+	store, err := OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "gnfy", "Alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	row, err := store.EnqueueQueued(ctx, QueuedTask{
+		TenantID: identity.TenantID, PersonID: identity.PersonID,
+		Content: "recover me", Platform: "cli", PlatformUserID: "gnfy",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.MarkQueued(ctx, identity.TenantID, row.ID, QueueStatusStarted); err != nil {
+		t.Fatal(err)
+	}
+	if changed, err := store.MarkQueuedIfStatus(ctx, identity.TenantID, row.ID, QueueStatusStarted, QueueStatusQueued); err != nil || !changed {
+		t.Fatalf("restart transition = %v, %v; want true", changed, err)
+	}
+	// The old run's deferred completion races after shutdown. It must not turn
+	// the explicitly reopened row back into done.
+	if changed, err := store.MarkQueuedIfStatus(ctx, identity.TenantID, row.ID, QueueStatusStarted, QueueStatusDone); err != nil || changed {
+		t.Fatalf("stale completion transition = %v, %v; want false", changed, err)
+	}
+	got, err := store.GetQueued(ctx, identity.TenantID, row.ID)
+	if err != nil || got == nil || got.Status != QueueStatusQueued {
+		t.Fatalf("queue after race = %+v, %v", got, err)
+	}
+}

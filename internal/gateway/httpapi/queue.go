@@ -69,10 +69,7 @@ func (d *Server) DrainQueuedAtBoot(ctx context.Context) {
 			continue
 		}
 		seen[key] = true
-		identity, err := d.Control.ResolveOrCreateAccount(ctx, q.TenantID, q.Platform, q.PlatformUserID, "")
-		if err != nil || identity == nil {
-			continue
-		}
+		identity := d.routeIdentityForPerson(ctx, q.TenantID, q.PersonID, q.Channel, q.Platform, nil)
 		d.coordinator().drainQueue(identity)
 	}
 }

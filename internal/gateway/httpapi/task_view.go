@@ -362,7 +362,7 @@ func taskCardStatus(t control.Task, isActive bool, pendingApprovals, pendingQues
 		return strings.ToLower(strings.TrimSpace(t.Status))
 	case strings.EqualFold(strings.TrimSpace(t.Status), "interrupted"):
 		return "interrupted"
-	case pendingApprovals > 0 || pendingQuestions > 0 || strings.EqualFold(strings.TrimSpace(t.Status), "blocked") || strings.EqualFold(strings.TrimSpace(t.Status), "waiting_external") || strings.EqualFold(strings.TrimSpace(t.Status), "waiting_user"):
+	case pendingApprovals > 0 || pendingQuestions > 0 || strings.EqualFold(strings.TrimSpace(t.Status), "blocked") || strings.EqualFold(strings.TrimSpace(t.Status), "waiting_external") || strings.EqualFold(strings.TrimSpace(t.Status), "waiting_finalization") || strings.EqualFold(strings.TrimSpace(t.Status), "waiting_user"):
 		return "waiting"
 	default:
 		return "paused"
@@ -399,6 +399,8 @@ func renderTaskCard(index int, t control.Task, v taskCardView) string {
 		suffix = interruptedTaskSuffix(v.outcomes[t.ID])
 	} else if !isActive && strings.EqualFold(strings.TrimSpace(t.Status), "waiting_external") {
 		suffix = "external check pending"
+	} else if !isActive && strings.EqualFold(strings.TrimSpace(t.Status), "waiting_finalization") {
+		suffix = "finalization queued"
 	}
 	if last != "" {
 		fmt.Fprintf(&sb, "   last: %s · %s\n", truncateRunes(toOneLine(last), 40), suffix)

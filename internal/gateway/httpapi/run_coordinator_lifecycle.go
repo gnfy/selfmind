@@ -30,11 +30,18 @@ func (c *RunCoordinator) finalizeErroredRun(ctx context.Context, identity *contr
 		outcome.Risks = []string{truncate(tools.RedactSensitive(runErr.Error()), 500)}
 	}
 	eventType := "run.interrupted"
-	// A caller cancellation or caller deadline is terminal: request/eval turn
-	// budgets deliberately bound the daemon-owned run. Provider-internal
-	// timeouts, EOF, and rate-limit exhaustion leave ctx live and remain
-	// resumable interruptions because durable evidence may already exist.
-	if ctx.Err() != nil || errors.Is(runErr, context.Canceled) {
+	if errors.Is(context.Cause(ctx), errGatewayShutdown) {
+		outcome.CompletionReason = "daemon_recovery"
+		outcome.Summary = "The run was interrupted by a gateway restart."
+		outcome.NextSteps = []string{"Reply \"continue\" to resume from the last durable evidence."}
+		if runErr != nil {
+			outcome.Risks = nil
+		}
+		// A caller cancellation or caller deadline is terminal: request/eval turn
+		// budgets deliberately bound the daemon-owned run. Provider-internal
+		// timeouts, EOF, and rate-limit exhaustion leave ctx live and remain
+		// resumable interruptions because durable evidence may already exist.
+	} else if ctx.Err() != nil || errors.Is(runErr, context.Canceled) {
 		outcome.Status = "cancelled"
 		outcome.CompletionReason = "cancelled"
 		outcome.Resumable = false

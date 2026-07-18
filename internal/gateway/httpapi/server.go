@@ -102,10 +102,15 @@ type activeRun struct {
 	PersonID  string
 	TaskID    string
 	RunID     string
+	QueueID   string
 	Channel   string
 	Summary   string
 	StartedAt time.Time
 	Cancel    context.CancelFunc
+	// Interrupt supplies an infrastructure cause distinct from an explicit
+	// user cancellation. Gateway restarts are resumable and must never turn a
+	// task into a user-cancelled terminal state.
+	Interrupt context.CancelCauseFunc
 	// Steer carries mid-turn user guidance into the running agent loop
 	// (installed on the run ctx via kernel.WithSteering; drained at iteration
 	// boundaries). Buffered so /v1/runs/steer can hand off without blocking the
@@ -347,13 +352,16 @@ func (d *Server) ProcessMessage(ctx context.Context, req api.MessageRequest) (ap
 	// ctrl+c (which now routes through /stop) cancel via activeRun.Cancel; the
 	// idle watchdog derives its own cancellable ctx inside RunAgentWithEvents.
 	runCtx := context.WithoutCancel(ctx)
-	var cancel context.CancelFunc
+	var deadlineCancel context.CancelFunc
 	if deadline, ok := ctx.Deadline(); ok {
-		runCtx, cancel = context.WithDeadline(runCtx, deadline)
-	} else {
-		runCtx, cancel = context.WithCancel(runCtx)
+		runCtx, deadlineCancel = context.WithDeadline(runCtx, deadline)
 	}
+	runCtx, cancelCause := context.WithCancelCause(runCtx)
+	cancel := func() { cancelCause(context.Canceled) }
 	defer cancel()
+	if deadlineCancel != nil {
+		defer deadlineCancel()
+	}
 	// The steering channel is registered on the active run (so /v1/runs/steer
 	// can reach it) AND installed on the run ctx (so the agent loop drains it).
 	steerCh := make(chan string, steerBufferSize)
@@ -361,9 +369,11 @@ func (d *Server) ProcessMessage(ctx context.Context, req api.MessageRequest) (ap
 		TenantID:  identity.TenantID,
 		PersonID:  identity.PersonID,
 		Channel:   req.Channel,
+		QueueID:   req.QueueID,
 		Summary:   truncate(req.Content, 240),
 		StartedAt: time.Now(),
 		Cancel:    cancel,
+		Interrupt: cancelCause,
 		Steer:     steerCh,
 	}); !ok {
 		return api.MessageResponse{Identity: identity, Content: "Another task is already running. Use /status or /stop.", Turn: messageTurn("busy", "running", "running", "", "", "")}, http.StatusOK

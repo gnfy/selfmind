@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"runtime/debug"
@@ -15,6 +16,8 @@ import (
 	"selfmind/internal/kernel"
 	"selfmind/internal/platform/log"
 )
+
+var errGatewayShutdown = errors.New("gateway shutdown")
 
 // RunCoordinator owns agent run execution and the per-person active-run
 // registry. It is the seam between the gateway's thin HTTP/orchestration layer
@@ -143,41 +146,48 @@ func (c *RunCoordinator) activeRunStatuses() []api.ActiveRunStatus {
 	return statuses
 }
 
-// stopAllActive cancels every active run and marks the underlying tasks/runs
-// cancelled. Used during gateway drain/shutdown.
+// stopAllActive interrupts every active run during gateway shutdown. This is
+// infrastructure recovery, not a user cancellation: work remains resumable,
+// and a drained queue row is reopened so the next daemon can continue it.
 func (c *RunCoordinator) stopAllActive(reason string) {
 	c.mu.Lock()
 	var runs []*activeRun
 	for _, active := range c.active {
 		copy := *active
 		runs = append(runs, &copy)
-		if active.Cancel != nil {
-			active.Cancel()
-		}
 	}
 	c.mu.Unlock()
 
-	control := c.srv.Control
+	store := c.srv.Control
 	for _, active := range runs {
-		if active.RunID != "" && control != nil {
-			_ = control.RequestRunCancel(context.Background(), active.TenantID, active.RunID)
-			_ = control.FinishRun(context.Background(), active.TenantID, active.RunID, "cancelled")
+		if active.QueueID != "" && store != nil {
+			_, _ = store.MarkQueuedIfStatus(context.Background(), active.TenantID, active.QueueID, control.QueueStatusStarted, control.QueueStatusQueued)
 		}
-		if active.TaskID != "" && control != nil {
-			_ = control.UpdateTaskStatus(context.Background(), active.TenantID, active.TaskID, "cancelled", reason, nil)
-			_, _ = control.AppendEvent(context.Background(), controlEvent(active, reason))
+		if active.RunID != "" && store != nil {
+			_ = store.FinishRun(context.Background(), active.TenantID, active.RunID, "interrupted")
+		}
+		if active.TaskID != "" && store != nil {
+			next := []string{"Reply \"continue\" to resume from the last durable evidence."}
+			_ = store.UpdateTaskStatus(context.Background(), active.TenantID, active.TaskID, "interrupted", "Interrupted by gateway shutdown.", next)
+			_, _ = store.AppendEvent(context.Background(), gatewayShutdownEvent(active, reason))
+		}
+		if active.Interrupt != nil {
+			active.Interrupt(errGatewayShutdown)
+		} else if active.Cancel != nil {
+			active.Cancel()
 		}
 	}
 }
 
-func controlEvent(active *activeRun, reason string) control.Event {
+func gatewayShutdownEvent(active *activeRun, reason string) control.Event {
 	return control.Event{
-		TaskID:     active.TaskID,
-		RunID:      active.RunID,
-		Type:       "run.cancelled",
-		Visibility: "task",
-		Channel:    active.Channel,
-		Payload:    mustJSON(map[string]string{"reason": reason}),
+		TaskID:         active.TaskID,
+		RunID:          active.RunID,
+		Type:           "run.interrupted",
+		Visibility:     "task",
+		Channel:        active.Channel,
+		Payload:        mustJSON(map[string]string{"reason": reason, "completion_reason": "daemon_recovery"}),
+		IdempotencyKey: "run:" + active.RunID + ":gateway-shutdown",
 	}
 }
 
@@ -202,7 +212,7 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 	// work. Uses a fresh context so a cancelled turn ctx cannot skip the write.
 	if req.QueueID != "" && d != nil && d.Control != nil {
 		defer func() {
-			_ = d.Control.MarkQueued(context.Background(), identity.TenantID, req.QueueID, control.QueueStatusDone)
+			_, _ = d.Control.MarkQueuedIfStatus(context.Background(), identity.TenantID, req.QueueID, control.QueueStatusStarted, control.QueueStatusDone)
 		}()
 	}
 	if _, err := c.prepareRequestWorkspace(ctx, identity, &req); err != nil {
@@ -404,6 +414,7 @@ func (c *RunCoordinator) startAsyncRun(identity *control.IdentityContext, req ap
 		TenantID:  identity.TenantID,
 		PersonID:  identity.PersonID,
 		Channel:   req.Channel,
+		QueueID:   req.QueueID,
 		Summary:   truncate(req.Content, 240),
 		StartedAt: time.Now(),
 		// Registered here so /v1/runs/steer can inject guidance; wired into the
@@ -414,9 +425,11 @@ func (c *RunCoordinator) startAsyncRun(identity *control.IdentityContext, req ap
 		return api.MessageResponse{Identity: identity, Content: "Another task is already running. Use /status or /stop.", Turn: messageTurn("busy", "running", "running", "", "", "")}
 	}
 
-	runCtx, runCancel := context.WithCancel(context.Background())
+	runCtx, cancelCause := context.WithCancelCause(context.Background())
+	runCancel := func() { cancelCause(context.Canceled) }
 	runCtx = kernel.WithSteering(runCtx, active.Steer)
 	active.Cancel = runCancel
+	active.Interrupt = cancelCause
 	stopProgressNotices := c.startAsyncProgressNotices(runCtx, identity, req)
 	go func() {
 		// Defers run LIFO: drainQueue is registered first so it runs LAST —
@@ -600,13 +613,11 @@ func (c *RunCoordinator) drainQueue(identity *control.IdentityContext) {
 		// re-runs the already-completed work.
 		QueueID: next.ID,
 	}
-	drainIdentity := identity
-	// Reproduce the queued item's own account (platform/platform_user_id may
-	// differ from the endpoint that just finished, e.g. a CLI run draining a
-	// Telegram-queued task) so its result routes back to the right origin.
-	if resolved, rerr := c.srv.Control.ResolveOrCreateAccount(ctx, next.TenantID, next.Platform, next.PlatformUserID, ""); rerr == nil && resolved != nil {
-		drainIdentity = resolved
-	}
+	// Reproduce the queued item's route while preserving its durable person.
+	// Never create an account here: system rows may intentionally omit
+	// platform_user_id, and normalizing that blank value to cli:local used to
+	// move external-watch finalization onto a different person.
+	drainIdentity := c.srv.routeIdentityForPerson(ctx, next.TenantID, next.PersonID, next.Channel, next.Platform, identity)
 	// A drained item is an ordinary agent-bound message: rules-based intent
 	// only, and resolveTask gives it the same pre-label guess as any other
 	// message (Work Timeline P3) — harmless, since labels never gate context.

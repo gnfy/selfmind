@@ -26,6 +26,7 @@ const (
 	QueueStatusQueued    = "queued"
 	QueueStatusStarted   = "started"
 	QueueStatusDone      = "done"
+	QueueStatusFailed    = "failed"
 	QueueStatusCancelled = "cancelled"
 )
 
@@ -51,6 +52,7 @@ type QueuedTask struct {
 	// recovery replays. Empty (ordinary inbound) rows never deduplicate.
 	IdempotencyKey string    `json:"idempotency_key,omitempty"`
 	Status         string    `json:"status"`
+	Restarts       int       `json:"restarts,omitempty"`
 	CreatedAt      time.Time `json:"created_at"`
 }
 
@@ -105,7 +107,7 @@ func scanQueuedTask(rows interface {
 	var q QueuedTask
 	var created int64
 	if err := rows.Scan(&q.ID, &q.TenantID, &q.PersonID, &q.Channel, &q.Platform, &q.PlatformUserID,
-		&q.Content, &q.ApprovalMode, &q.WorkspaceID, &q.TaskID, &q.IdempotencyKey, &q.Status, &created); err != nil {
+		&q.Content, &q.ApprovalMode, &q.WorkspaceID, &q.TaskID, &q.IdempotencyKey, &q.Status, &q.Restarts, &created); err != nil {
 		return QueuedTask{}, err
 	}
 	q.CreatedAt = time.Unix(created, 0)
@@ -114,7 +116,7 @@ func scanQueuedTask(rows interface {
 
 const queueSelectColumns = `id, tenant_id, person_id, channel, platform, COALESCE(platform_user_id, ''),
 	content, COALESCE(approval_mode, ''), COALESCE(workspace_id, ''), COALESCE(task_id, ''),
-	COALESCE(idempotency_key, ''), status, created_at`
+	COALESCE(idempotency_key, ''), status, COALESCE(restarts, 0), created_at`
 
 // ListQueued returns a person's queue rows in FIFO order (oldest first) for the
 // given status. An empty status defaults to "queued".
@@ -181,6 +183,71 @@ func (s *Store) GetQueued(ctx context.Context, tenantID, id string) (*QueuedTask
 	return &q, nil
 }
 
+// GetQueuedByIdempotencyKey fetches one system-originated queue row. Ordinary
+// inbound rows intentionally have no idempotency key and are not addressable
+// through this recovery API.
+func (s *Store) GetQueuedByIdempotencyKey(ctx context.Context, key string) (*QueuedTask, error) {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return nil, nil
+	}
+	row := s.db.QueryRowContext(ctx,
+		`SELECT `+queueSelectColumns+` FROM task_queue WHERE idempotency_key = ?`, key)
+	q, err := scanQueuedTask(row)
+	if err != nil {
+		if strings.Contains(err.Error(), "no rows") {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &q, nil
+}
+
+// UpdateSystemQueuedContent refreshes the execution contract of one durable
+// system row without touching ordinary inbound messages. Recovery jobs can
+// outlive the binary version that created them, so replay must use the current
+// deterministic materialization prompt rather than stale instructions stored
+// by an older daemon.
+func (s *Store) UpdateSystemQueuedContent(ctx context.Context, tenantID, id, content string) (bool, error) {
+	if strings.TrimSpace(id) == "" {
+		return false, fmt.Errorf("queue id is required")
+	}
+	result, err := s.db.ExecContext(ctx,
+		`UPDATE task_queue SET content = ?
+		 WHERE tenant_id = ? AND id = ? AND idempotency_key != ''
+		   AND status != ?`,
+		content, normalizeTenant(tenantID), id, QueueStatusCancelled)
+	if err != nil {
+		return false, err
+	}
+	n, _ := result.RowsAffected()
+	return n == 1, nil
+}
+
+// RequeueSystemQueued reopens one idempotent system row after its prior launch
+// ended without materializing the promised durable state. It never touches
+// ordinary user messages, and the caller supplies a small hard retry budget so
+// reconciliation cannot become an infinite execution loop.
+func (s *Store) RequeueSystemQueued(ctx context.Context, tenantID, id string, maxRestarts int) (bool, error) {
+	if strings.TrimSpace(id) == "" {
+		return false, fmt.Errorf("queue id is required")
+	}
+	if maxRestarts < 1 {
+		maxRestarts = 1
+	}
+	result, err := s.db.ExecContext(ctx,
+		`UPDATE task_queue SET status = ?, restarts = restarts + 1
+		 WHERE tenant_id = ? AND id = ? AND idempotency_key != ''
+		   AND status IN (?, ?, ?) AND restarts < ?`,
+		QueueStatusQueued, normalizeTenant(tenantID), id,
+		QueueStatusStarted, QueueStatusDone, QueueStatusFailed, maxRestarts)
+	if err != nil {
+		return false, err
+	}
+	n, _ := result.RowsAffected()
+	return n == 1, nil
+}
+
 // CountQueued returns how many rows a person has in the given status. Used for
 // the "N ahead" acceptance line and /queue.
 func (s *Store) CountQueued(ctx context.Context, tenantID, personID, status string) (int, error) {
@@ -205,6 +272,25 @@ func (s *Store) MarkQueued(ctx context.Context, tenantID, id, status string) err
 		`UPDATE task_queue SET status = ? WHERE tenant_id = ? AND id = ?`,
 		normalizeName(status, QueueStatusQueued), normalizeTenant(tenantID), id)
 	return err
+}
+
+// MarkQueuedIfStatus performs a compare-and-swap transition. Run shutdown and
+// completion race with one another, so unconditional writes can turn a row
+// explicitly reopened for restart back into done while the old goroutine is
+// unwinding.
+func (s *Store) MarkQueuedIfStatus(ctx context.Context, tenantID, id, fromStatus, toStatus string) (bool, error) {
+	if strings.TrimSpace(id) == "" {
+		return false, fmt.Errorf("queue id is required")
+	}
+	result, err := s.db.ExecContext(ctx,
+		`UPDATE task_queue SET status = ? WHERE tenant_id = ? AND id = ? AND status = ?`,
+		normalizeName(toStatus, QueueStatusQueued), normalizeTenant(tenantID), id,
+		normalizeName(fromStatus, QueueStatusQueued))
+	if err != nil {
+		return false, err
+	}
+	n, _ := result.RowsAffected()
+	return n == 1, nil
 }
 
 // ClearQueued cancels every still-queued row for a person and returns how many
@@ -269,7 +355,8 @@ func (s *Store) RequeueStartedQueued(ctx context.Context) (requeued, dropped int
 	}
 	nRequeued, _ := res.RowsAffected()
 	res, err = s.db.ExecContext(ctx,
-		`UPDATE task_queue SET status = 'failed' WHERE status = ?`,
+		`UPDATE task_queue SET status = ? WHERE status = ?`,
+		QueueStatusFailed,
 		QueueStatusStarted)
 	if err != nil {
 		return int(nRequeued), 0, err

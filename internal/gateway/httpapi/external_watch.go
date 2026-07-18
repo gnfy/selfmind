@@ -31,6 +31,11 @@ const (
 	// output, so a matcher fix can heal fresh misjudgments without churning
 	// ancient history.
 	externalWatchRecoveryLookback = 14 * 24 * time.Hour
+	// A successful watcher verdict may need an agent run to backfill release
+	// records and close the task. Reconciliation may reopen that durable system
+	// row only a few times; after that the task becomes visibly blocked instead
+	// of looping forever.
+	externalWatchFinalizationRetries = 3
 )
 
 // StartExternalWatchWorker executes durable external-state checks without
@@ -67,7 +72,10 @@ func (d *Server) startExternalWatchWorker(ctx context.Context, interval time.Dur
 }
 
 func (d *Server) runExternalWatchPass(ctx context.Context) {
-	defer d.runExternalWatchNotificationPass(ctx)
+	defer func() {
+		d.reconcileExternalWatchFinalizations(ctx)
+		d.runExternalWatchNotificationPass(ctx)
+	}()
 	watches, err := d.Control.ListDueExternalWatches(ctx, externalWatchPassLimit)
 	if err != nil {
 		log.Warn("external watch scan failed", "error", err)
@@ -279,8 +287,13 @@ func (d *Server) recoverExternalWatchVerdicts(ctx context.Context) {
 // set only after every required durable write succeeds. Endpoint delivery is
 // tracked separately so a channel outage cannot replay these core products.
 func (d *Server) finalizeExternalWatch(ctx context.Context, watch control.ExternalWatch, status, output, lastError string) {
+	// Materialize from the terminal snapshot, not the pre-claim watch value.
+	// The latter may still carry pending status and an empty output buffer.
+	watch.Status = status
+	watch.LastOutput = output
+	watch.LastError = lastError
 	summary, nextSteps := externalWatchOutcome(watch, status, output, lastError)
-	taskStatus := "in_progress"
+	taskStatus := "waiting_finalization"
 	if status != control.ExternalWatchSucceeded {
 		taskStatus = "blocked"
 	}
@@ -322,12 +335,6 @@ func (d *Server) finalizeExternalWatch(ctx context.Context, watch control.Extern
 	} else if !marked {
 		log.Warn("external watch finalized twice (benign after crash recovery)", "watch_id", watch.ID)
 	}
-	// The watch passed into this method is the pre-claim snapshot. Carry the
-	// terminal values forward so the independently retried notification does
-	// not render a successful watch as its former pending/running state.
-	watch.Status = status
-	watch.LastOutput = output
-	watch.LastError = lastError
 	d.notifyExternalWatchCompletion(ctx, watch)
 }
 
@@ -349,7 +356,7 @@ func (d *Server) notifyExternalWatchCompletion(ctx context.Context, watch contro
 	summary, _ := externalWatchOutcome(watch, watch.Status, watch.LastOutput, watch.LastError)
 	notice := summary + "\n\nReply continue to resume the task."
 	if watch.Status == control.ExternalWatchSucceeded {
-		notice = summary + "\n\nA finalization run is queued to verify the result and close out the task."
+		notice = summary + "\n\nA finalization run is queued to record the result and close out the task."
 	}
 	origin := d.externalWatchOriginIdentity(ctx, watch)
 	handled := origin.Platform == "cli" && d.presenceTracker().IsAttached(watch.PersonID, "cli")
@@ -376,30 +383,18 @@ func (d *Server) notifyExternalWatchCompletion(ctx context.Context, watch contro
 // session UUIDs — fall back to the cli identity, whose notification path
 // already routes to the person's preferred IM when the CLI is detached.
 func (d *Server) externalWatchOriginIdentity(ctx context.Context, watch control.ExternalWatch) *control.IdentityContext {
-	identity := &control.IdentityContext{TenantID: watch.TenantID, PersonID: watch.PersonID, Platform: "cli"}
-	account, err := d.Control.AccountForChannel(ctx, watch.TenantID, watch.PersonID, watch.Channel)
-	if err != nil {
-		log.Warn("external watch origin account lookup failed", "watch_id", watch.ID, "error", err)
-		return identity
-	}
-	if account != nil && account.Platform != "" && account.Platform != "cli" {
-		identity.Platform = account.Platform
-		identity.PlatformUserID = account.PlatformUserID
-	}
-	return identity
+	return d.routeIdentityForPerson(ctx, watch.TenantID, watch.PersonID, watch.Channel, "cli", nil)
 }
 
 // enqueueExternalWatchFinalization queues one durable follow-up run that
-// verifies the completed external operation and closes out the task (backfill
-// records, accurate final status). It rides the ordinary task_queue path, so
+// records the completed external operation and closes out the task (backfill
+// records, accurate final status). The daemon watcher verdict is authoritative
+// evidence; this follow-up must not poll the external service again. It rides
+// the ordinary task_queue path, so
 // it respects the one-active-run rule and boot recovery. Its stable
 // idempotency key makes crash-recovery replays converge on the same queue row.
 func (d *Server) enqueueExternalWatchFinalization(ctx context.Context, watch control.ExternalWatch, origin *control.IdentityContext, summary string) error {
-	content := fmt.Sprintf(
-		"External operation for this task completed successfully: %s\n"+
-			"Finalize the task now: re-check the final external state with a read-only command, "+
-			"backfill any pending records this task promised to update, and finish with an accurate status.",
-		summary)
+	content := externalWatchFinalizationContent(watch, summary)
 	_, err := d.Control.EnqueueQueued(ctx, control.QueuedTask{
 		TenantID:       watch.TenantID,
 		PersonID:       watch.PersonID,
@@ -410,13 +405,192 @@ func (d *Server) enqueueExternalWatchFinalization(ctx context.Context, watch con
 		TaskID:         watch.TaskID,
 		// Stable per-verdict key: a crash-recovery replay of the SAME verdict
 		// is one row; a revised verdict earns one fresh finalization run.
-		IdempotencyKey: fmt.Sprintf("external-watch:%s:r%d:finalization", watch.ID, watch.VerdictRevision),
+		IdempotencyKey: externalWatchFinalizationKey(watch),
 	})
 	if err != nil {
 		return err
 	}
 	d.coordinator().drainQueue(origin)
 	return nil
+}
+
+func externalWatchFinalizationContent(watch control.ExternalWatch, summary string) string {
+	evidence := truncateExternalWatchOutput(strings.TrimSpace(watch.LastOutput))
+	if utf8.RuneCountInString(evidence) > 1200 {
+		runes := []rune(evidence)
+		evidence = string(runes[:1200]) + "\n... evidence truncated"
+	}
+	return fmt.Sprintf(
+		"The daemon's durable external watcher verified this operation successfully. "+
+			"Treat the recorded watcher result as authoritative evidence and do not rerun the external status check unless other durable evidence directly contradicts it.\n\n"+
+			"Result: %s\nRecorded output:\n%s\n\n"+
+			"Finalize the task now: backfill any pending records this task promised to update, summarize the final state, and finish the task with an accurate status.",
+		summary, firstNonEmpty(evidence, "(no output recorded)"))
+}
+
+func externalWatchFinalizationKey(watch control.ExternalWatch) string {
+	return fmt.Sprintf("external-watch:%s:r%d:finalization", watch.ID, watch.VerdictRevision)
+}
+
+// reconcileExternalWatchFinalizations closes the crash and partial-run gaps
+// after a watcher has already established success. The watcher is the fact
+// source; the queue row is only a recoverable materialization job. A queued,
+// started, done, or failed job that left its task non-terminal is retried with
+// a hard budget, while live runs and terminal tasks are never duplicated.
+func (d *Server) reconcileExternalWatchFinalizations(ctx context.Context) {
+	if d == nil || d.Control == nil {
+		return
+	}
+	watches, err := d.Control.ListExternalWatchesFinishedSince(ctx, control.ExternalWatchSucceeded, time.Now().Add(-externalWatchRecoveryLookback), 200)
+	if err != nil {
+		log.Warn("external watch finalization reconciliation scan failed", "error", err)
+		return
+	}
+	for i := range watches {
+		watch := watches[i]
+		task, err := d.Control.GetTask(ctx, watch.TenantID, watch.TaskID)
+		if err != nil || task == nil {
+			if err != nil {
+				log.Warn("external watch finalization task lookup failed", "watch_id", watch.ID, "error", err)
+			}
+			continue
+		}
+		recoverableShutdownCancel := d.recoverableGatewayShutdownCancellation(ctx, task)
+		if terminalTaskStatus(task.Status) && !recoverableShutdownCancel {
+			continue
+		}
+		if active := d.coordinator().currentActive(watch.PersonID); active != nil && active.TaskID == watch.TaskID {
+			continue
+		}
+		if task.ActiveRunID != "" {
+			run, err := d.Control.GetRun(ctx, watch.TenantID, task.ActiveRunID)
+			if err != nil {
+				log.Warn("external watch finalization active run lookup failed", "watch_id", watch.ID, "error", err)
+				continue
+			}
+			if run != nil && strings.EqualFold(run.Status, "running") {
+				continue
+			}
+		}
+
+		key := externalWatchFinalizationKey(watch)
+		queued, err := d.Control.GetQueuedByIdempotencyKey(ctx, key)
+		if err != nil {
+			log.Warn("external watch finalization queue lookup failed", "watch_id", watch.ID, "error", err)
+			continue
+		}
+		summary, nextSteps := externalWatchOutcome(watch, watch.Status, watch.LastOutput, watch.LastError)
+		origin := d.externalWatchOriginIdentity(ctx, watch)
+		if queued == nil {
+			if task.Status != "waiting_finalization" {
+				_ = d.Control.UpdateTaskStatus(ctx, watch.TenantID, watch.TaskID, "waiting_finalization", summary, nextSteps)
+			}
+			if err := d.enqueueExternalWatchFinalization(ctx, watch, origin, summary); err != nil {
+				log.Warn("external watch missing finalization enqueue failed", "watch_id", watch.ID, "error", err)
+			}
+			continue
+		}
+		if queued.Status != control.QueueStatusCancelled {
+			updated, err := d.Control.UpdateSystemQueuedContent(ctx, watch.TenantID, queued.ID, externalWatchFinalizationContent(watch, summary))
+			if err != nil {
+				log.Warn("external watch finalization prompt refresh failed", "watch_id", watch.ID, "error", err)
+				continue
+			}
+			if !updated {
+				log.Warn("external watch finalization prompt was not refreshed", "watch_id", watch.ID, "queue_id", queued.ID)
+				continue
+			}
+		}
+
+		switch queued.Status {
+		case control.QueueStatusQueued:
+			if task.Status != "waiting_finalization" {
+				_ = d.Control.UpdateTaskStatus(ctx, watch.TenantID, watch.TaskID, "waiting_finalization", summary, nextSteps)
+			}
+			d.coordinator().drainQueue(origin)
+		case control.QueueStatusStarted, control.QueueStatusDone, control.QueueStatusFailed:
+			requeued, err := d.Control.RequeueSystemQueued(ctx, watch.TenantID, queued.ID, externalWatchFinalizationRetries)
+			if err != nil {
+				log.Warn("external watch finalization requeue failed", "watch_id", watch.ID, "error", err)
+				continue
+			}
+			if requeued {
+				_ = d.Control.UpdateTaskStatus(ctx, watch.TenantID, watch.TaskID, "waiting_finalization", summary, nextSteps)
+				d.coordinator().drainQueue(origin)
+				continue
+			}
+			d.blockExternalWatchFinalization(ctx, watch, queued)
+		case control.QueueStatusCancelled:
+			d.blockExternalWatchFinalization(ctx, watch, queued)
+		}
+	}
+}
+
+// recoverableGatewayShutdownCancellation recognizes both the current durable
+// shutdown summary and the legacy two-write shape produced by older daemons:
+// stopAllActive first appended reason=gateway shutdown, then the unwinding run
+// overwrote the task summary with a generic cancellation. Only the newest
+// cancelled run is considered, so an older restart can never reopen a later
+// explicit user cancellation.
+func (d *Server) recoverableGatewayShutdownCancellation(ctx context.Context, task *control.Task) bool {
+	if task == nil || !strings.EqualFold(strings.TrimSpace(task.Status), "cancelled") {
+		return false
+	}
+	summary := strings.TrimSpace(task.CurrentSummary)
+	if strings.EqualFold(summary, "gateway shutdown") || strings.EqualFold(summary, "interrupted by gateway shutdown.") {
+		return true
+	}
+	events, err := d.Control.ListTaskEvents(ctx, task.ID, 80)
+	if err != nil {
+		log.Warn("external watch shutdown history lookup failed", "task_id", task.ID, "error", err)
+		return false
+	}
+	latestCancelledRun := ""
+	for _, event := range events {
+		if event.Type == "run.cancelled" && strings.TrimSpace(event.RunID) != "" {
+			latestCancelledRun = event.RunID
+			break
+		}
+	}
+	if latestCancelledRun == "" {
+		return false
+	}
+	for _, event := range events {
+		if event.Type != "run.cancelled" || event.RunID != latestCancelledRun {
+			continue
+		}
+		var payload struct {
+			Reason string `json:"reason"`
+		}
+		if json.Unmarshal(event.Payload, &payload) == nil && strings.EqualFold(strings.TrimSpace(payload.Reason), "gateway shutdown") {
+			return true
+		}
+	}
+	return false
+}
+
+func (d *Server) blockExternalWatchFinalization(ctx context.Context, watch control.ExternalWatch, queued *control.QueuedTask) {
+	reason := fmt.Sprintf("The external operation succeeded, but its finalization run did not complete after %d recovery attempts.", queued.Restarts)
+	next := []string{"Review the recorded watcher evidence and resume this task to finish its release record."}
+	if queued.Status == control.QueueStatusCancelled {
+		reason = "The external operation succeeded, but its finalization run was cancelled."
+	}
+	_ = d.Control.UpdateTaskStatus(ctx, watch.TenantID, watch.TaskID, "blocked", reason, next)
+	payload, _ := json.Marshal(map[string]interface{}{
+		"watch_id": watch.ID,
+		"queue_id": queued.ID,
+		"status":   queued.Status,
+		"restarts": queued.Restarts,
+	})
+	_, _ = d.Control.AppendEvent(ctx, control.Event{
+		TaskID:         watch.TaskID,
+		RunID:          watch.RunID,
+		Type:           "external_watch.finalization_blocked",
+		Visibility:     "task",
+		Channel:        watch.Channel,
+		Payload:        payload,
+		IdempotencyKey: externalWatchFinalizationKey(watch) + ":blocked",
+	})
 }
 
 func externalWatchOutcome(watch control.ExternalWatch, status, output, lastError string) (string, []string) {

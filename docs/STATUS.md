@@ -338,7 +338,8 @@ completion/failure; continuity eval replays offline.
   timed_out watches' recorded output and revises misjudged verdicts with full
   completion side effects; and a SUCCEEDED watch now auto-enqueues one
   idempotent finalization run (task_queue rows carry `task_id`; resolveTask
-  honors it) that re-verifies the external state and backfills records — the
+  honors it) that treats the durable watcher result as authoritative evidence
+  and backfills records without polling the external system again — the
   "Reply continue" notice is the fallback, not the closure path. Timeout
   notices state the operation may still be running and include the last
   output. Tests: `httpapi/external_watch_match_test.go`,
@@ -387,6 +388,24 @@ completion/failure; continuity eval replays offline.
   (idempotency-by-row-count), `memory/transient_classifier_test.go`,
   `cliapp/memory_audit_commands_test.go` (pinned/candidate protection and
   UTF-8-safe audit truncation).
+  **Historical status closure hardening (2026-07-18):** daemon-originated
+  queue recovery reconstructs delivery routes from accounts already bound to
+  the durable `person_id`; a blank `platform_user_id` is never resolved as the
+  synthetic `cli:local` account and therefore cannot move a finalization run
+  onto another person. Successful watches enter the visible
+  `waiting_finalization` state until their release-record run finishes. A
+  periodic reconciler checks successful watches whose tasks remain
+  non-terminal, restarts only their idempotent system queue row with a hard
+  three-attempt budget, and exposes exhausted/cancelled closure as `blocked`
+  instead of silently leaving stale `in_progress` tasks. Gateway shutdown is
+  an infrastructure interruption rather than a user cancellation: active runs
+  become resumable `interrupted` work, their started system queue row is
+  compare-and-swap reopened, and the unwinding goroutine cannot overwrite that
+  row as `done`. The reconciler also heals the legacy `gateway shutdown`
+  cancellation written by older binaries. Tests:
+  `httpapi/route_identity_test.go`,
+  `httpapi/recovery_notification_test.go`,
+  `httpapi/gateway_shutdown_test.go`, `control/queue_test.go`.
 
 - **Memory partition convergence — ✅ shipped 2026-07-17 (P0).** Background
   post-run intake wrote canonical/legacy facts to the control-tenant partition

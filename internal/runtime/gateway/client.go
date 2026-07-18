@@ -36,8 +36,17 @@ func StartDetached(opts StartOptions) (StartResult, error) {
 	}
 	dataDir := resolveDataDir(cfg)
 	manager := NewManager(dataDir, ResolveAddr(cfg.Gateway.Addr))
-	if rec, ok := manager.RunningRecord(); ok && !opts.Replace {
-		return StartResult{}, AlreadyRunningError{Record: rec}
+	if rec, ok := manager.RunningRecord(); ok {
+		if !opts.Replace {
+			return StartResult{}, AlreadyRunningError{Record: rec}
+		}
+		drainTimeout := resolveDrainTimeout(cfg.Gateway.DrainTimeout)
+		ctx, cancel := context.WithTimeout(context.Background(), drainTimeout+15*time.Second)
+		err := stopExistingForReplace(ctx, manager, drainTimeout)
+		cancel()
+		if err != nil {
+			return StartResult{}, fmt.Errorf("replace running gateway: %w", err)
+		}
 	}
 	if err := os.MkdirAll(manager.Paths.RuntimeDir, 0755); err != nil {
 		return StartResult{}, err
@@ -52,13 +61,7 @@ func StartDetached(opts StartOptions) (StartResult, error) {
 	if err != nil {
 		return StartResult{}, err
 	}
-	args := []string{"gateway", "run", "--detached-child"}
-	if opts.ConfigPath != "" {
-		args = []string{"-f", opts.ConfigPath, "gateway", "run", "--detached-child"}
-	}
-	if opts.Replace {
-		args = append(args, "--replace")
-	}
+	args := detachedRunArgs()
 	cmd := exec.Command(exe, args...)
 	cmd.Env = os.Environ()
 	if opts.ConfigPath != "" {
@@ -73,6 +76,10 @@ func StartDetached(opts StartOptions) (StartResult, error) {
 	pid := cmd.Process.Pid
 	_ = cmd.Process.Release()
 	return StartResult{PID: pid, LogPath: manager.Paths.LogPath}, nil
+}
+
+func detachedRunArgs() []string {
+	return []string{"gateway", "run"}
 }
 
 func RequestStatus(ctx context.Context, url string) ([]byte, int, error) {

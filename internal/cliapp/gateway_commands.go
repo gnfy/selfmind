@@ -47,7 +47,6 @@ func (a *App) gatewayRun(args []string) int {
 	fs.SetOutput(a.stderr)
 	replace := fs.Bool("replace", false, "replace a running gateway")
 	addr := fs.String("addr", "", "listen address")
-	_ = fs.Bool("detached-child", false, "internal detached child marker")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}

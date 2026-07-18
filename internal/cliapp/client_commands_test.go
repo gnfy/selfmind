@@ -113,6 +113,21 @@ func TestSendRejectsInvalidMode(t *testing.T) {
 	}
 }
 
+func TestTaskCommandUsesShortLivedGatewayRequest(t *testing.T) {
+	app, recorded, stdout, _ := newSendTestApp(t, []string{"selfmind", "task", "task_12345678", "runs"})
+
+	handled, code := app.runGatewayClientIfRequested()
+	if !handled || code != 0 {
+		t.Fatalf("handled = %v, code = %d", handled, code)
+	}
+	if recorded.Content != "/task task_12345678 runs" {
+		t.Fatalf("content = %q", recorded.Content)
+	}
+	if strings.TrimSpace(stdout.String()) != "ok" {
+		t.Fatalf("stdout = %q", stdout.String())
+	}
+}
+
 func TestExtractTaskResumeCommand(t *testing.T) {
 	stdout := &bytes.Buffer{}
 	stderr := &bytes.Buffer{}

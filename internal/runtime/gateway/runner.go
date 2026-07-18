@@ -28,11 +28,10 @@ import (
 )
 
 type Options struct {
-	Addr          string
-	Replace       bool
-	DetachedChild bool
-	DrainTimeout  time.Duration
-	ConfigPath    string
+	Addr         string
+	Replace      bool
+	DrainTimeout time.Duration
+	ConfigPath   string
 }
 
 func Run(ctx context.Context, opts Options) error {

@@ -28,6 +28,10 @@ func (a *App) runGatewayClientIfRequested() (bool, int) {
 				return true, a.sendGatewayMessage("/tasks " + strings.Join(a.args[2:], " "))
 			}
 			return true, a.sendGatewayMessage("/tasks")
+		case "task":
+			// Keep task detail and management commands available as short-lived
+			// CLI calls instead of falling through to the interactive TUI.
+			return true, a.sendGatewayMessage(strings.TrimSpace("/task " + strings.Join(a.args[2:], " ")))
 		case "workspaces":
 			return true, a.sendGatewayMessage("/workspaces")
 		case "ws":
@@ -100,6 +104,12 @@ func (a *App) runGatewayClientIfRequested() (bool, int) {
 			return true, 2
 		}
 		return true, a.sendGatewayMessageWithOptions(content, opts)
+	}
+	// Positional arguments that are not recognized above are not interactive
+	// input. Let the root dispatcher report them as unknown commands instead of
+	// silently starting a long-lived TUI process.
+	if len(a.args) > 1 && a.args[1] != "--daemon" {
+		return false, 0
 	}
 	if os.Getenv("SELF_USE_GATEWAY") != "1" && os.Getenv("SELF_USE_DAEMON") != "1" && !(len(a.args) > 1 && a.args[1] == "--daemon") {
 		return false, 0

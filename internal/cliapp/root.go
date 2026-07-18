@@ -35,6 +35,8 @@ type App struct {
 	gatewayEnsured bool
 }
 
+const Version = "v0.1.0"
+
 func Run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if ctx == nil {
 		ctx = context.Background()
@@ -53,6 +55,10 @@ func Run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	}
 	if isTopLevelHelp(args) {
 		printTopLevelHelp(stdout)
+		return 0
+	}
+	if isVersionCommand(args) {
+		fmt.Fprintf(stdout, "SelfMind %s\n", Version)
 		return 0
 	}
 
@@ -114,6 +120,11 @@ func Run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	if handled, exitCode := app.runGatewayClientIfRequested(); handled {
 		return exitCode
 	}
+	if len(app.args) > 1 {
+		fmt.Fprintf(app.stderr, "unknown command %q\n", app.args[1])
+		fmt.Fprintln(app.stderr, "Run `selfmind --help` to see available commands.")
+		return 2
+	}
 	return app.runTUI()
 }
 
@@ -125,12 +136,26 @@ func isTopLevelHelp(args []string) bool {
 	return arg == "-h" || arg == "--help" || arg == "help"
 }
 
+func isVersionCommand(args []string) bool {
+	if len(args) != 2 {
+		return false
+	}
+	switch args[1] {
+	case "-v", "--version", "version":
+		return true
+	default:
+		return false
+	}
+}
+
 func printTopLevelHelp(stdout io.Writer) {
 	fmt.Fprintln(stdout, "SelfMind")
 	fmt.Fprintln(stdout)
 	fmt.Fprintln(stdout, "Usage:")
 	fmt.Fprintln(stdout, "  selfmind [--config PATH] [--resume SESSION_ID]")
+	fmt.Fprintln(stdout, "  selfmind --version")
 	fmt.Fprintln(stdout, "  selfmind resume <n|task_id>")
+	fmt.Fprintln(stdout, "  selfmind task <n|task_id> [runs|rename|pin|unpin|archive]")
 	fmt.Fprintln(stdout, "  selfmind tasks [open|done|archived|all|<keyword>]")
 	fmt.Fprintln(stdout, "  selfmind config [doctor|upgrade]")
 	fmt.Fprintln(stdout, "  selfmind model [current|check|list|set <provider> <model>]")

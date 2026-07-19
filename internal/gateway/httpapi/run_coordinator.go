@@ -269,9 +269,20 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 	if sink := c.newToolArtifactSink(identity, task, run); sink != nil {
 		ctx = kernel.WithToolArtifactSink(ctx, sink)
 	}
+	if ledger := c.newToolLedger(identity); ledger != nil {
+		ctx = kernel.WithToolLedger(ctx, ledger)
+	}
+	if sink := c.newLoopCheckpointSink(identity, task, run); sink != nil {
+		ctx = kernel.WithLoopCheckpointSink(ctx, sink)
+	}
 	ctx = kernel.WithTaskRuntimeContext(ctx, c.selectedTaskRuntimeContext(ctx, task, run, workspace, req.Platform, req.Channel, req.Content, attach.preLabel))
+	ctx = c.withLoopCheckpointResume(ctx, identity, task, run, intent)
 	agentInput := c.withGatewayContext(req.Content, identity, task, workspace, req.Attachments)
 	agentInput = c.withResumeContext(ctx, identity, task, run, intent, agentInput)
+	// Independent of continuation intent: any run on a task with uncertain
+	// (crash-orphaned) side-effect tool calls must verify before repeating
+	// (P0-B closure — a boot-requeued run re-drains as a "new" message).
+	agentInput = c.withUncertainToolWarning(ctx, identity, task, agentInput)
 	ctx = kernel.WithTaskStrategy(ctx, taskStrategyForRequest(req, intent))
 
 	if d.Gateway == nil {
@@ -412,15 +423,19 @@ func (c *RunCoordinator) syncCurrentTask(ctx context.Context, identity *control.
 // delivering the result back to the source channel when it finishes.
 func (c *RunCoordinator) startAsyncRun(identity *control.IdentityContext, req api.MessageRequest, intent router.IntentResult) api.MessageResponse {
 	active := &activeRun{
-		TenantID:  identity.TenantID,
-		PersonID:  identity.PersonID,
-		Channel:   req.Channel,
-		QueueID:   req.QueueID,
-		Summary:   truncate(req.Content, 240),
-		StartedAt: time.Now(),
+		TenantID:       identity.TenantID,
+		PersonID:       identity.PersonID,
+		Channel:        req.Channel,
+		Platform:       req.Platform,
+		PlatformUserID: req.PlatformUserID,
+		WorkspaceID:    req.WorkspaceID,
+		ApprovalMode:   req.ApprovalMode,
+		QueueID:        req.QueueID,
+		Summary:        truncate(req.Content, 240),
+		StartedAt:      time.Now(),
 		// Registered here so /v1/runs/steer can inject guidance; wired into the
 		// run ctx below so the agent loop drains it at iteration boundaries.
-		Steer: make(chan string, steerBufferSize),
+		Steer: make(chan kernel.SteeringInput, steerBufferSize),
 	}
 	if ok := c.beginActive(identity.PersonID, active); !ok {
 		return api.MessageResponse{Identity: identity, Content: "Another task is already running. Use /status or /stop.", Turn: messageTurn("busy", "running", "running", "", "", "")}
@@ -428,7 +443,7 @@ func (c *RunCoordinator) startAsyncRun(identity *control.IdentityContext, req ap
 
 	runCtx, cancelCause := context.WithCancelCause(context.Background())
 	runCancel := func() { cancelCause(context.Canceled) }
-	runCtx = kernel.WithSteering(runCtx, active.Steer)
+	runCtx = kernel.WithSteeringInputs(runCtx, active.Steer)
 	active.Cancel = runCancel
 	active.Interrupt = cancelCause
 	stopProgressNotices := c.startAsyncProgressNotices(runCtx, identity, req)
@@ -437,6 +452,10 @@ func (c *RunCoordinator) startAsyncRun(identity *control.IdentityContext, req ap
 		// after endActive frees the per-person slot — chaining the next queued
 		// item into its own async run once this one is truly done.
 		defer c.drainQueue(identity)
+		// Unconsumed steering outlives the run as durable queued work pinned
+		// to the task (P0-A). Runs BEFORE drainQueue (LIFO) so the deferral is
+		// visible to that very drain.
+		defer c.deferUnconsumedSteering(identity, active)
 		defer c.endActive(identity.PersonID)
 		defer runCancel()
 		defer stopProgressNotices()

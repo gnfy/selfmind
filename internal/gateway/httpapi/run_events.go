@@ -11,6 +11,7 @@ import (
 	"selfmind/internal/gateway/delivery"
 	"selfmind/internal/gateway/router"
 	"selfmind/internal/kernel/llm"
+	"selfmind/internal/platform/log"
 	"selfmind/internal/tools"
 )
 
@@ -244,7 +245,10 @@ func (c *RunCoordinator) recordStreamEvent(ctx context.Context, channel string, 
 		return
 	}
 	eventType := event.EventType
-	if eventType == "stream" || eventType == "" || eventType == "tool.heartbeat" {
+	// agent.step is the per-iteration state-machine trace (P0-B): live
+	// observability only, never durable task history — persisting one row per
+	// loop iteration would bloat task_events for no recall value.
+	if eventType == "stream" || eventType == "" || eventType == "tool.heartbeat" || eventType == "agent.step" {
 		return
 	}
 	payload := map[string]interface{}{}
@@ -295,8 +299,22 @@ func (c *RunCoordinator) recordStreamEvent(ctx context.Context, channel string, 
 		// run.steered means the gateway accepted guidance. This separate durable
 		// event proves the agent actually folded it into the next model request.
 		eventType = "run.steering_consumed"
-		if input, ok := payload["input"].(string); ok {
-			payload["input_length"] = len([]rune(input))
+		// Consumption proof for the persistent mailbox: new kernels carry the
+		// exact mailbox ID. Fall back to the content hash only for events emitted
+		// by an older process during a rolling upgrade.
+		if run != nil {
+			var consumed bool
+			var err error
+			if id, _ := payload["steering_id"].(string); strings.TrimSpace(id) != "" {
+				consumed, err = c.srv.Control.ConsumeSteeringByID(ctx, task.TenantID, run.ID, id)
+			} else if hash, _ := payload["content_hash"].(string); strings.TrimSpace(hash) != "" {
+				consumed, err = c.srv.Control.ConsumeSteeringByHash(ctx, task.TenantID, run.ID, hash)
+			}
+			if err != nil {
+				log.Warn("steering consumption mark failed", "run_id", run.ID, "error", err)
+			} else if !consumed {
+				log.Warn("steering consumption proof did not match a live mailbox row", "run_id", run.ID)
+			}
 		}
 		delete(payload, "input")
 		payload["message"] = "Mid-turn guidance was applied to the next model step."

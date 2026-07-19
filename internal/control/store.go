@@ -509,6 +509,55 @@ CREATE TABLE IF NOT EXISTS external_watches (
 	updated_at INTEGER NOT NULL,
 	finished_at INTEGER
 );
+CREATE TABLE IF NOT EXISTS steering_mailbox (
+	id TEXT PRIMARY KEY,
+	tenant_id TEXT NOT NULL,
+	person_id TEXT NOT NULL,
+	run_id TEXT NOT NULL DEFAULT '',
+	task_id TEXT NOT NULL DEFAULT '',
+	channel TEXT NOT NULL DEFAULT '',
+	platform TEXT NOT NULL DEFAULT '',
+	platform_user_id TEXT NOT NULL DEFAULT '',
+	workspace_id TEXT NOT NULL DEFAULT '',
+	approval_mode TEXT NOT NULL DEFAULT '',
+	content TEXT NOT NULL,
+	content_hash TEXT NOT NULL,
+	status TEXT NOT NULL DEFAULT 'accepted',
+	created_at INTEGER NOT NULL,
+	updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_steering_mailbox_live
+	ON steering_mailbox(tenant_id, status, created_at);
+CREATE INDEX IF NOT EXISTS idx_steering_mailbox_run
+	ON steering_mailbox(run_id, status);
+CREATE TABLE IF NOT EXISTS loop_checkpoints (
+	run_id TEXT PRIMARY KEY,
+	tenant_id TEXT NOT NULL,
+	person_id TEXT NOT NULL,
+	task_id TEXT NOT NULL,
+	iteration INTEGER NOT NULL DEFAULT 0,
+	outcome TEXT NOT NULL DEFAULT '',
+	detail TEXT NOT NULL DEFAULT '',
+	snapshot_json BLOB NOT NULL,
+	updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_loop_checkpoints_task
+	ON loop_checkpoints(tenant_id, task_id, updated_at);
+CREATE TABLE IF NOT EXISTS tool_ledger (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	tenant_id TEXT NOT NULL,
+	run_id TEXT NOT NULL,
+	tool_call_id TEXT NOT NULL,
+	tool_name TEXT NOT NULL,
+	args_hash TEXT NOT NULL DEFAULT '',
+	retry_class TEXT NOT NULL DEFAULT 'side_effect',
+	status TEXT NOT NULL DEFAULT 'planned',
+	created_at INTEGER NOT NULL,
+	updated_at INTEGER NOT NULL,
+	UNIQUE(run_id, tool_call_id)
+);
+CREATE INDEX IF NOT EXISTS idx_tool_ledger_uncertain
+	ON tool_ledger(tenant_id, run_id, status);
 CREATE INDEX IF NOT EXISTS idx_external_watches_due
 	ON external_watches(status, next_check_at);
 CREATE INDEX IF NOT EXISTS idx_external_watches_owner
@@ -596,6 +645,12 @@ CREATE INDEX IF NOT EXISTS idx_external_watches_owner
 		// to exactly one grant, so a build that outlives its window gets one
 		// extra bounded wait instead of an endless rolling deadline.
 		{"external_watches", "extensions", "INTEGER NOT NULL DEFAULT 0"},
+		// Steering accepted by one endpoint must retain the complete execution
+		// and delivery scope when it is deferred after a restart.
+		{"steering_mailbox", "platform", "TEXT NOT NULL DEFAULT ''"},
+		{"steering_mailbox", "platform_user_id", "TEXT NOT NULL DEFAULT ''"},
+		{"steering_mailbox", "workspace_id", "TEXT NOT NULL DEFAULT ''"},
+		{"steering_mailbox", "approval_mode", "TEXT NOT NULL DEFAULT ''"},
 	} {
 		if err := s.ensureColumn(ctx, col.table, col.name, col.def); err != nil {
 			return err

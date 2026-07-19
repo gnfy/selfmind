@@ -78,9 +78,9 @@ where it lives. For per-capability status (Done/Partial/Missing) see
 
 ## Known limitations (carried to Phase 2)
 
-- **No parallel worker pool** — one shared `Agent` serializes runs (`Agent.runMu`); fine for a single user, blocks multi-tenant SaaS.
+- **Provider concurrency is only partially governed** — the daemon worker pool exists, but per-provider caps and tenant-level fairness remain Phase 2 work.
 - **`controller.go` still monolithic** — violates the AGENTS.md decomposition guardrail (code hygiene).
-- **`execute_code`/`terminal` is not a security sandbox** — process-group isolation only.
+- **The Linux sandbox is single-user, not multi-tenant isolation** — bubblewrap protects the daily-driver boundary, while SaaS still needs containers or equivalent namespace/seccomp/cgroup and quota isolation.
 - **Clipboard image paste is local-GUI only** — not reachable over SSH (use a file path or send via WeChat there).
 - **Native IM approval buttons** not wired; **MCP `sampling/createMessage`** not implemented.
 - **Write+verify reliability** is provider-dependent (see the `dayinlife` scenario-5 provider-resilience probe).

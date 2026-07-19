@@ -113,11 +113,23 @@ func TestRecordSteeringConsumedIsDurableAndRedacted(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	steering, err := store.AcceptSteering(ctx, control.SteeringMessage{
+		TenantID: identity.TenantID, PersonID: identity.PersonID,
+		TaskID: task.ID, RunID: run.ID, Channel: "cli", Platform: "cli",
+		Content: "retry with token sk-secret-value",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	server := &Server{Control: store, DefaultTenantID: "default"}
 	server.coordinator().recordStreamEvent(ctx, "cli", task, run, llm.StreamEvent{
 		EventType: "agent.steering",
-		Payload:   map[string]interface{}{"input": "retry with token sk-secret-value"},
+		Payload: map[string]interface{}{
+			"steering_id":  steering.ID,
+			"content_hash": steering.ContentHash,
+			"input_length": len([]rune(steering.Content)),
+		},
 	})
 
 	events, err := store.ListTaskEvents(ctx, task.ID, 20)
@@ -128,8 +140,11 @@ func TestRecordSteeringConsumedIsDurableAndRedacted(t *testing.T) {
 		if event.Type != "run.steering_consumed" {
 			continue
 		}
-		if strings.Contains(string(event.Payload), "sk-secret-value") || !strings.Contains(string(event.Payload), "Mid-turn guidance was applied") {
+		if strings.Contains(string(event.Payload), "sk-secret-value") || !strings.Contains(string(event.Payload), "Mid-turn guidance was applied") || !strings.Contains(string(event.Payload), steering.ID) {
 			t.Fatalf("consumed payload must be useful and redacted: %s", event.Payload)
+		}
+		if leftovers, err := store.ListUnconsumedSteering(ctx, identity.TenantID, run.ID, 10); err != nil || len(leftovers) != 0 {
+			t.Fatalf("mailbox not consumed: %+v err=%v", leftovers, err)
 		}
 		return
 	}

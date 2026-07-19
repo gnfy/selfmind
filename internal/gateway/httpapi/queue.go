@@ -51,6 +51,24 @@ func (d *Server) enqueueBehindActive(ctx context.Context, identity *control.Iden
 // — requeue those first, then kick one drain per person with pending work (the
 // drain chain handles the rest, one at a time per person).
 func (d *Server) DrainQueuedAtBoot(ctx context.Context) {
+	// Steering mailbox recovery (P0-A) runs FIRST so guidance orphaned by the
+	// previous daemon lands in the queue before this drain launches anything:
+	// live rows inside the replay window defer into task-pinned queued work,
+	// stale rows expire.
+	if d != nil && d.Control != nil {
+		if deferred, expired, err := d.Control.RecoverSteeringAtBoot(ctx); err != nil {
+			log.Warn("gateway: steering mailbox boot recovery failed", "error", err)
+		} else if deferred+expired > 0 {
+			log.Info("gateway: recovered steering mailbox", "deferred", deferred, "expired", expired)
+		}
+		// Prune resolved tool-ledger history (P0-B); uncertain dispatched rows
+		// are correctness state and are never pruned here.
+		if pruned, err := d.Control.PruneToolLedger(ctx, 0); err != nil {
+			log.Warn("gateway: tool ledger prune failed", "error", err)
+		} else if pruned > 0 {
+			log.Info("gateway: pruned resolved tool ledger rows", "count", pruned)
+		}
+	}
 	if d == nil || d.Control == nil {
 		return
 	}

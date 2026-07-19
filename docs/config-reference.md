@@ -117,6 +117,25 @@ web:
   api_key: "tvly-xxxx"       # the chosen backend's key; for searxng, the instance URL
 ```
 
+## exec_sandbox (Loop Engineering P0-D)
+
+Bubblewrap isolation for `terminal`, `verify`, and `execute_code` on Linux.
+**Default ON, best effort.** `sandbox: auto` prefers an isolated read-only-root,
+workspace-writable, no-network process. If bubblewrap is unavailable, auto
+records a degraded host fallback; `required: true` fails closed instead.
+
+```yaml
+exec_sandbox:
+  enabled: true         # prefer bwrap for auto-mode exec calls
+  required: false       # if true, refuse to exec when the sandbox is unavailable (fail-closed)
+  allow_network: false  # keep the host network namespace (default: no egress inside the sandbox)
+```
+
+Each exec tool accepts `sandbox: auto|isolated|host`. `isolated` refuses when
+the host cannot isolate. `host` is an explicit escape hatch for cloud CLIs,
+credentials, and networking; it always goes through the approval funnel and is
+disabled entirely when `required: true`. Install with `apt install bubblewrap`.
+
 - Recommended: **Tavily** (https://tavily.com, AI-native, free tier, good CN
   coverage). Alternatives: Brave (https://brave.com/search/api/), Serper
   (https://serper.dev, Google results).

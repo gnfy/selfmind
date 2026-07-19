@@ -11,6 +11,7 @@ import (
 
 	"selfmind/internal/modelruntime"
 	"selfmind/internal/platform/config"
+	"selfmind/internal/tools"
 	uicommon "selfmind/internal/ui/common"
 
 	"github.com/charmbracelet/lipgloss"
@@ -32,14 +33,16 @@ type configUpgradeReport struct {
 }
 
 type configDiagnostics struct {
-	Path       string
-	Missing    bool
-	ReadError  string
-	ParseError string
-	LoadError  string
-	Upgrade    configUpgradeReport
-	ModelLine  string
-	ModelError string
+	Path           string
+	Missing        bool
+	ReadError      string
+	ParseError     string
+	LoadError      string
+	Upgrade        configUpgradeReport
+	ModelLine      string
+	ModelError     string
+	SandboxLine    string
+	SandboxWarning string
 }
 
 var configMigrations = []configMigration{
@@ -106,6 +109,9 @@ var configReportDefaultPaths = [][]string{
 	{"tasks", "maintenance_batch_max_runs"},
 	{"storage", "type"},
 	{"storage", "data_dir"},
+	{"exec_sandbox", "enabled"},
+	{"exec_sandbox", "required"},
+	{"exec_sandbox", "allow_network"},
 }
 
 func (a *App) runConfigCommandIfRequested() (bool, int) {
@@ -233,6 +239,7 @@ func (a *App) collectConfigDiagnostics() configDiagnostics {
 		return diag
 	}
 	diag.Upgrade = inspectConfigUpgrade(path, doc, canonicalDoc)
+	diag.SandboxLine, diag.SandboxWarning = sandboxDiagnostic(cfg)
 
 	rt, err := modelruntime.NewResolver(cfg).Resolve(a.ctx, modelruntime.Selection{})
 	if err != nil {
@@ -273,6 +280,9 @@ func (d configDiagnostics) section() string {
 		} else if d.ModelLine != "" {
 			fmt.Fprintf(&sb, "model: %s\n", d.ModelLine)
 		}
+		if d.SandboxLine != "" {
+			fmt.Fprintf(&sb, "exec_sandbox: %s\n", d.SandboxLine)
+		}
 	}
 	if len(d.Upgrade.Legacy) > 0 {
 		sb.WriteString("legacy keys:\n")
@@ -305,7 +315,23 @@ func (d configDiagnostics) startupWarnings() []string {
 	if d.ModelError != "" {
 		warnings = append(warnings, "AI model is not ready")
 	}
+	if d.SandboxWarning != "" {
+		warnings = append(warnings, d.SandboxWarning)
+	}
 	return warnings
+}
+
+func sandboxDiagnostic(cfg *config.Config) (line, warning string) {
+	if cfg == nil || !cfg.ExecSandbox.Enabled {
+		return "disabled", ""
+	}
+	if tools.ExecSandboxAvailable() {
+		return "ready (auto uses isolated no-network execution)", ""
+	}
+	if cfg.ExecSandbox.Required {
+		return "blocked (bubblewrap or unprivileged user namespaces unavailable)", "execution sandbox is required but unavailable"
+	}
+	return "degraded (auto falls back to approval-controlled host execution)", "execution sandbox is unavailable"
 }
 
 func (a *App) printStartupHealthWarnings() {

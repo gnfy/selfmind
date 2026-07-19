@@ -159,6 +159,14 @@ editor:
 web:
   search_backend: ""   # tavily | brave | serper | firecrawl | searxng | duckduckgo
   api_key: ""
+
+# Shell/Python execution prefers an isolated, no-network Linux sandbox. Calls
+# that intentionally need host credentials or networking can request
+# sandbox=host and go through the normal approval flow.
+exec_sandbox:
+  enabled: true
+  required: false
+  allow_network: false
 `
 
 type Options struct {
@@ -186,6 +194,17 @@ type Config struct {
 	Models           ModelsConfig                `mapstructure:"models" yaml:"models,omitempty"`
 	Intent           IntentConfig                `mapstructure:"intent" yaml:"intent,omitempty"`
 	Web              WebConfig                   `mapstructure:"web" yaml:"web,omitempty"`
+	ExecSandbox      ExecSandboxConfig           `mapstructure:"exec_sandbox" yaml:"exec_sandbox,omitempty"`
+}
+
+// ExecSandboxConfig gates bubblewrap isolation for terminal, verify, and
+// execute_code. Linux defaults to best-effort isolation; Required turns an
+// unavailable sandbox into a hard refusal instead of an observable host
+// fallback.
+type ExecSandboxConfig struct {
+	Enabled      bool `mapstructure:"enabled" yaml:"enabled"`
+	Required     bool `mapstructure:"required" yaml:"required"`
+	AllowNetwork bool `mapstructure:"allow_network" yaml:"allow_network"`
 }
 
 // WebConfig configures the web_search backend. Local HTML scraping
@@ -290,14 +309,14 @@ type TaskConfig struct {
 }
 
 const (
-	DefaultTaskListLimit            = 10
-	DefaultTaskAutoArchiveDone      = 30 * 24 * time.Hour
-	DefaultTaskAutoArchiveCancelled = 7 * 24 * time.Hour
-	DefaultTaskMaintenanceDebounce  = 5 * time.Minute
-	DefaultTaskMaintenanceMaxWait   = 15 * time.Minute
-	DefaultTaskMaintenanceBatchMax  = 10
-	DefaultTaskQuotaProbeInitial    = 15 * time.Minute
-	DefaultTaskQuotaProbeMax        = 4 * time.Hour
+	DefaultTaskListLimit             = 10
+	DefaultTaskAutoArchiveDone       = 30 * 24 * time.Hour
+	DefaultTaskAutoArchiveCancelled  = 7 * 24 * time.Hour
+	DefaultTaskMaintenanceDebounce   = 5 * time.Minute
+	DefaultTaskMaintenanceMaxWait    = 15 * time.Minute
+	DefaultTaskMaintenanceBatchMax   = 10
+	DefaultTaskQuotaProbeInitial     = 15 * time.Minute
+	DefaultTaskQuotaProbeMax         = 4 * time.Hour
 	DefaultTaskMaintenanceLLMTimeout = 2 * time.Minute
 )
 
@@ -842,6 +861,9 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("intent.thresholds.direct", 0.8)
 	v.SetDefault("intent.thresholds.ask", 0.55)
 	v.SetDefault("gateway.pending_notify_after", "2m")
+	v.SetDefault("exec_sandbox.enabled", true)
+	v.SetDefault("exec_sandbox.required", false)
+	v.SetDefault("exec_sandbox.allow_network", false)
 }
 
 func (c *Config) Normalize() {

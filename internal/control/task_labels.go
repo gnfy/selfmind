@@ -295,6 +295,11 @@ func (s *Store) ReassignRun(ctx context.Context, tenantID, runID, fromTaskID, to
 		toTaskID, runID); err != nil {
 		return err
 	}
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE loop_checkpoints SET task_id = ? WHERE run_id = ?`,
+		toTaskID, runID); err != nil {
+		return err
+	}
 	// Approvals/questions raised during this run follow it too. Post-run they
 	// are always terminal (pending rows expire when the waiter exits), so this
 	// is referential integrity — decided rows must not point at a placeholder

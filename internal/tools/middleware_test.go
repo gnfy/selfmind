@@ -96,6 +96,37 @@ func TestSmartApprovalMiddlewareUsesExecutionScopeApproval(t *testing.T) {
 	}
 }
 
+func TestExplicitHostSandboxRequiresApproval(t *testing.T) {
+	approvalCalled := false
+	cleanup := SetExecutionScope("person-host", ExecutionScope{
+		TenantID: "tenant-host",
+		PersonID: "person-host",
+		Approval: func(_ context.Context, req ToolApprovalRequest) (ToolApprovalDecision, error) {
+			approvalCalled = true
+			if !strings.Contains(req.Reason, "host") {
+				t.Fatalf("approval reason = %q", req.Reason)
+			}
+			return ToolApprovalDecision{Approved: true}, nil
+		},
+	})
+	defer cleanup()
+
+	executed := false
+	exec := SmartApprovalMiddleware("")(func(args map[string]interface{}) (string, error) {
+		executed = true
+		return "executed", nil
+	})
+	result, err := exec(map[string]interface{}{
+		"_tenant_id": "person-host",
+		"_tool_name": "terminal",
+		"command":    "gcloud builds list",
+		"sandbox":    "host",
+	})
+	if err != nil || result != "executed" || !approvalCalled || !executed {
+		t.Fatalf("result=%q err=%v approval=%v executed=%v", result, err, approvalCalled, executed)
+	}
+}
+
 func TestWatchFinalizationProfileNeverWaitsForShellApproval(t *testing.T) {
 	approvalCalled := false
 	cleanup := SetExecutionScope("person-watch", ExecutionScope{

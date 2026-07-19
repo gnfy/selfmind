@@ -9,6 +9,7 @@ import (
 
 	"selfmind/internal/control"
 	"selfmind/internal/gateway/api"
+	"selfmind/internal/kernel"
 )
 
 // TestSteerActiveRunSharedCore covers the core behind cross-endpoint steering:
@@ -44,7 +45,7 @@ func TestSteerActiveRunSharedCore(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	steerCh := make(chan string, 1)
+	steerCh := make(chan kernel.SteeringInput, 1)
 	active := &activeRun{
 		TenantID:  identity.TenantID,
 		PersonID:  identity.PersonID,
@@ -73,8 +74,8 @@ func TestSteerActiveRunSharedCore(t *testing.T) {
 	}
 	select {
 	case got := <-steerCh:
-		if got != "also handle the retry path" {
-			t.Fatalf("steered text = %q", got)
+		if got.Content != "also handle the retry path" || got.ID == "" {
+			t.Fatalf("steered input = %+v", got)
 		}
 	default:
 		t.Fatal("guidance did not reach the steering channel")
@@ -94,13 +95,13 @@ func TestSteerActiveRunSharedCore(t *testing.T) {
 	if steered == nil {
 		t.Fatalf("run.steered event missing: %+v", events)
 	}
-	if !strings.Contains(string(steered.Payload), "retry path") {
+	if strings.Contains(string(steered.Payload), "retry path") || !strings.Contains(string(steered.Payload), "steering_id") {
 		t.Fatalf("run.steered payload = %s", steered.Payload)
 	}
 
 	// Fill the (size-1) buffer; the next continuation must report back-pressure
 	// (ok=false) so the caller falls back to a busy reply — never a silent drop.
-	steerCh <- "occupies the buffer"
+	steerCh <- kernel.SteeringInput{Content: "occupies the buffer"}
 	if _, ok := daemon.steerActiveRun(ctx, identity, active, api.MessageRequest{Content: "overflow"}); ok {
 		t.Fatal("expected ok=false on a full steering buffer (back-pressure), got ok=true")
 	}

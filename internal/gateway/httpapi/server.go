@@ -98,15 +98,19 @@ type Server struct {
 }
 
 type activeRun struct {
-	TenantID  string
-	PersonID  string
-	TaskID    string
-	RunID     string
-	QueueID   string
-	Channel   string
-	Summary   string
-	StartedAt time.Time
-	Cancel    context.CancelFunc
+	TenantID       string
+	PersonID       string
+	TaskID         string
+	RunID          string
+	QueueID        string
+	Channel        string
+	Platform       string
+	PlatformUserID string
+	WorkspaceID    string
+	ApprovalMode   string
+	Summary        string
+	StartedAt      time.Time
+	Cancel         context.CancelFunc
 	// Interrupt supplies an infrastructure cause distinct from an explicit
 	// user cancellation. Gateway restarts are resumable and must never turn a
 	// task into a user-cancelled terminal state.
@@ -115,7 +119,7 @@ type activeRun struct {
 	// (installed on the run ctx via kernel.WithSteering; drained at iteration
 	// boundaries). Buffered so /v1/runs/steer can hand off without blocking the
 	// HTTP handler; a full buffer is reported as back-pressure, never dropped.
-	Steer chan string
+	Steer chan kernel.SteeringInput
 }
 
 // steerBufferSize bounds queued-but-undrained guidance per run. Small on
@@ -364,17 +368,21 @@ func (d *Server) ProcessMessage(ctx context.Context, req api.MessageRequest) (ap
 	}
 	// The steering channel is registered on the active run (so /v1/runs/steer
 	// can reach it) AND installed on the run ctx (so the agent loop drains it).
-	steerCh := make(chan string, steerBufferSize)
+	steerCh := make(chan kernel.SteeringInput, steerBufferSize)
 	if ok := coord.beginActive(identity.PersonID, &activeRun{
-		TenantID:  identity.TenantID,
-		PersonID:  identity.PersonID,
-		Channel:   req.Channel,
-		QueueID:   req.QueueID,
-		Summary:   truncate(req.Content, 240),
-		StartedAt: time.Now(),
-		Cancel:    cancel,
-		Interrupt: cancelCause,
-		Steer:     steerCh,
+		TenantID:       identity.TenantID,
+		PersonID:       identity.PersonID,
+		Channel:        req.Channel,
+		Platform:       req.Platform,
+		PlatformUserID: req.PlatformUserID,
+		WorkspaceID:    req.WorkspaceID,
+		ApprovalMode:   req.ApprovalMode,
+		QueueID:        req.QueueID,
+		Summary:        truncate(req.Content, 240),
+		StartedAt:      time.Now(),
+		Cancel:         cancel,
+		Interrupt:      cancelCause,
+		Steer:          steerCh,
 	}); !ok {
 		return api.MessageResponse{Identity: identity, Content: "Another task is already running. Use /status or /stop.", Turn: messageTurn("busy", "running", "running", "", "", "")}, http.StatusOK
 	}
@@ -385,7 +393,7 @@ func (d *Server) ProcessMessage(ctx context.Context, req api.MessageRequest) (ap
 		coord.endActive(identity.PersonID)
 		coord.drainQueue(identity)
 	}()
-	runCtx = kernel.WithSteering(runCtx, steerCh)
+	runCtx = kernel.WithSteeringInputs(runCtx, steerCh)
 
 	resp, status := coord.runMessage(runCtx, identity, req, intent)
 	// Detached finish: if the endpoint that dispatched this sync turn vanished

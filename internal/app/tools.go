@@ -27,6 +27,10 @@ func InitTools(mem *memory.MemoryManager, cfg *config.Config, ag *kernel.Agent, 
 	disp.InjectMiddleware(tools.EvidenceMiddleware())
 
 	tools.RegisterBuiltins(disp)
+	// Exec sandbox (P0-D): process-wide Linux policy. Auto mode prefers bwrap;
+	// unavailable best-effort isolation is reported as a host fallback, while
+	// required mode fails closed. Explicit host calls remain approval-gated.
+	tools.SetExecSandbox(cfg.ExecSandbox.Enabled, cfg.ExecSandbox.Required, cfg.ExecSandbox.AllowNetwork)
 	tools.RegisterExtendedTools(disp, tools.WebSearchOptions{
 		Backend: cfg.Web.SearchBackend,
 		APIKey:  cfg.Web.APIKey,

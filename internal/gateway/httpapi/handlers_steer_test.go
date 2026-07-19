@@ -11,6 +11,7 @@ import (
 
 	"selfmind/internal/control"
 	"selfmind/internal/gateway/api"
+	"selfmind/internal/kernel"
 )
 
 // TestRunSteerEndpoint covers the daemon side of client-mode mid-turn
@@ -67,7 +68,7 @@ func TestRunSteerEndpoint(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	steerCh := make(chan string, 2)
+	steerCh := make(chan kernel.SteeringInput, 2)
 	if ok := daemon.coordinator().beginActive(identity.PersonID, &activeRun{
 		TenantID:  identity.TenantID,
 		PersonID:  identity.PersonID,
@@ -94,8 +95,8 @@ func TestRunSteerEndpoint(t *testing.T) {
 	}
 	select {
 	case got := <-steerCh:
-		if got != "please cover the unicode edge cases too" {
-			t.Fatalf("steered text = %q", got)
+		if got.Content != "please cover the unicode edge cases too" || got.ID == "" || got.ContentHash == "" {
+			t.Fatalf("steered input = %+v", got)
 		}
 	default:
 		t.Fatal("guidance did not reach the run's steering channel")
@@ -114,13 +115,13 @@ func TestRunSteerEndpoint(t *testing.T) {
 	if steered == nil {
 		t.Fatalf("run.steered event missing: %+v", events)
 	}
-	if steered.RunID != run.ID || !strings.Contains(string(steered.Payload), "unicode edge cases") {
+	if steered.RunID != run.ID || strings.Contains(string(steered.Payload), "unicode edge cases") || !strings.Contains(string(steered.Payload), "steering_id") {
 		t.Fatalf("run.steered event = %+v payload = %s", steered, steered.Payload)
 	}
 
 	// Fill the buffer; the next steer must report back-pressure, not block or drop.
-	steerCh <- "queued-1"
-	steerCh <- "queued-2"
+	steerCh <- kernel.SteeringInput{Content: "queued-1"}
+	steerCh <- kernel.SteeringInput{Content: "queued-2"}
 	if rec := steer("overflow"); rec.Code != http.StatusTooManyRequests {
 		t.Fatalf("full-buffer status = %d, body = %s", rec.Code, rec.Body.String())
 	}

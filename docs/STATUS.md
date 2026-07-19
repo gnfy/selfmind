@@ -54,7 +54,7 @@
 | TUI rendering (terminal-first hybrid) | ✅ | **Only renderer (2026-07-10):** history committed to native terminal scrollback (`tea.Println`), only the active region redrawn (`history_commit.go`); terminal owns scroll/select/copy. The legacy alt-screen viewport (`SELFMIND_TUI_LEGACY`, `viewport`, `controller_mouse.go`, the per-message render cache) was DELETED with the in-process path — there is no `hybridMode()` switch anymore. Colored patch diffs (`renderPatchCell`), `/history` (full diffs), `/copy`. Codex-style interactive approval panel (2026-07-05): `approval.requested` arms a bordered selector in the ACTIVE region (`ui/components.ApprovalPrompt`, wired by `gateway/cli/approval_flow.go`) — ↑/↓/j/k + Enter or shortcuts y/t/a/n mapping to grant scope ""/task/person on the existing `/v1/approvals/respond` path; Esc does nothing (explicit decision required); "No" opens a deny follow-up composer (Enter = bare deny, text = deny + mid-turn guidance); queued approvals re-arm FIFO; duplicate text notice + "Preparing to run" spinner suppressed while the panel is up; transcript keeps ONE compact `notice` line per request/decision; status bar shows `⏸ waiting approval`. IM/text approval surfaces unchanged. Remaining: write_file overwrite real diff; `/history` search + `control.db` backing. Live plan checklist now renders in **client mode** (2026-07-05): the daemon's `plan.updated` event carries the full structured plan, forwarded by `client.eventToStream` and rendered as an `update_plan` cell so `renderPlanCell` shows the `[x]/[>]/[ ]` steps instead of a stray "plan updated" line (`agent_events.go` `forwardGatewayEvent` + `planJSONFromEvent`); `maxPlanSteps` raised 20→50 so a normal plan is never truncated. Status bar always shows the effective approval mode (`statusLine` `mode:<effective>`), learned from `GET /v1/digest` `approval_mode` at startup and updated by `/mode`. See `docs/tui-terminal-first-hybrid.md`. |
 | Run execution coordinator | 🟡 | `RunCoordinator` (`httpapi/run_coordinator.go`) owns lifecycle, active-run registration, workspace/task resolution, execution scope, context assembly, streaming, outcome persistence, queue drain, and async delivery. Every sync/async run keeps task visibility current; stuck-run recovery repairs heartbeat-stale runs and orphaned `running` labels, while parked work remains resumable. Run finalization now performs durable bookkeeping only: it stores one replayable maintenance job per run and never calls a governance model on the response path. The daemon maintenance worker debounces and batches only same-tenant/person/workspace jobs, freezes one proposal per run, and applies KEEP/MOVE/TITLE/INBOX plus memory intake independently. Explicit task evidence remains authoritative. Async panic recovery converts panics into interrupted resumable runs and frees the person's slot. `/status` and `/tasks` distinguish a live run from a parked turn. Tests: `control/runtime_test.go`, `httpapi/run_recovery_test.go`, `httpapi/run_labeler_test.go`, `httpapi/maintenance_batch_test.go`, `httpapi/run_panic_test.go`, `httpapi/parked_status_test.go`. |
 | Multi-terminal concurrency (daemon-client) | 🟡 | Decision: converge every terminal on ONE gateway daemon instead of cross-process locks. Foundation shipped: `gateway.EnsureRunning` (discover-or-autostart + health wait, race-safe via the `gateway.lock` flock); CLI client paths (`selfmind send/status/...`) auto-start a local daemon; `internal/gateway/client` daemon-backed `MessageProcessor` (sync `/v1/message` final answer + unified `/v1/events/stream` observer with durable cursor replay). Client mode is the ONLY TUI path (2026-07-10): the in-process gateway build and the `SELFMIND_TUI_INPROC` opt-out were deleted — a daemon that can't start fails with actionable guidance, never a local agent. Chat + agent-backed slash commands (`/skills`, `/memory` incl. `list`, `/bundles`, `/checkpoint`) run on the daemon via a safelisted `/v1/dispatch` (workspace-mutating/code-exec tools refused 403); `/status`/`/tasks` route via the message processor; `/skills stats`,`/model` switch show a client-mode notice. Worker pool (`internal/runpool` + `SELFMIND_WORKERS`, default 1) runs inside that daemon. `workspaceSerialKey` serializes **write** turns only (read turns concurrent, Exclusive/SharedRead semantics). Interactive tool approval works in client mode (Codex-style TUI approval panel driven by the `approval.requested` event → `/v1/approvals/respond`, incl. grant scope; see TUI rendering row). The message-based-channel working notice (`router.WorkingNotice`) is English-only (2026-07-05: "Got it — SelfMind is working on this…"; the stray bilingual TUI composer hint in `history_commit.go` was also de-duplicated to English). **Remaining**: soak at N>1; per-provider cap (adapter layer, deferred). (Session search over the daemon + in-process deletion shipped 2026-07-10, see ACTIVE PLAN P0-3.) See `docs/worker-pool-design.md` §8. |
-| Process sandbox | 🟡 | Unix process-group isolation only; **not** a security sandbox (no namespace/seccomp/cgroup). Windows is a no-op. `execute_code` emits a one-per-process WARN noting it runs with full host access under the current user. Since 2026-07-07 `execute_code` is at least approval-gated (see Approval modes row), but the residual risk stands: approved code still has unrestricted host access — real isolation is P2 (Highest-Value Next Work item 9). |
+| Process sandbox | ✅ | **Linux execution contract (2026-07-19):** `terminal`, `verify`, and `execute_code` accept `sandbox:auto|isolated|host`. `auto` prefers bubblewrap, `isolated` fails closed without it, and `host` remains approval-gated; `exec_sandbox.required=true` disables host fallback. The default bubblewrap profile exposes a read-only host root, a writable workspace, and no network unless operator policy enables it. Doctor/startup report capability state. The WSL daily-driver has bubblewrap installed and passed a live soak (workspace write succeeds, `/etc` write is denied, network namespace is isolated). This is a single-user Linux boundary, not yet a multi-tenant container/seccomp/cgroup boundary. |
 | Feishu / Lark adapter | 🟡 | Inbound via the generic `/v1/im/feishu` webhook (verification-token / encrypt-key signature, challenge); outbound via `delivery.FeishuSender` (tenant_access_token + `im/v1/messages`, chat_id/open_id routing). Config drives both. Encrypt-envelope AES decryption still TODO (use plaintext mode). **Inbound redelivery dedup (2026-07-09):** the `/v1/im/*` webhook now acknowledges a duplicate delivery 200 without re-running the agent — keyed by the platform's own id (`imMessageID`: generic `message_id`/`event_id`, Feishu `header.event_id`/`event.message.message_id`, QQ `d.id`, Telegram `update_id`), persisted in `control.inbound_dedup` (48h retention) so it survives restarts; no-id payloads and dedup-store errors fail open. `handlers_channels.go`, `control/inbound_dedup.go`; tests `httpapi/handlers_channels_test.go`, `control/inbound_dedup_test.go`. |
 | QQ official bot adapter | 🟡 | Inbound via `/v1/im/qq` webhook (group/C2C/guild events parsed into a `group:`/`c2c:`/`channel:` target); outbound via `delivery.QQSender` (app access token + per-target message API). Active push only — webhook ed25519 signature verify and passive `msg_id` threading are follow-ups. Inbound redelivery dedup by `d.id` shipped 2026-07-09 (see the Feishu row — shared `/v1/im/*` mechanism). |
 | Production hardening batch (2026-07-09) | ✅ | Pre-production fixes from the 2026-07-08 full audit: (1) **config fail-fast** — `gateway run` now aborts with `load config: …` on a broken config instead of half-starting with an empty one (`runtime/gateway/runner.go`; LoadConfig still auto-creates the default template on first run); (2) **cron.db SQLite hygiene** — WAL + `busy_timeout=5000` + `MaxOpenConns(1)`, same as control.db (`app/gateway.go`); (3) **data privacy on shared hosts** — data dir 0700 and `control.db`/-wal/-shm chmod 0600 best-effort at open (`control.OpenStore` `tightenStorePerms`). |
@@ -128,6 +128,143 @@
 These are the live gaps, ordered by their distance from the north star
 (`docs/identity-continuity.md` — the three continuity scenarios). This section
 is the only priority list in the repo; other docs must point here.
+
+### ACTIVE PLAN — Loop Engineering: typed state + exact recovery (approved 2026-07-19)
+
+Owner-approved 2026-07-19 after a three-round Codex-vs-SelfMind loop analysis
+(capability map, structural map, corrective review) plus live incidents
+(87-minute approval stall; boot requeue re-running side-effectful turns;
+steering accepted into a memory channel before durability). Principles: keep
+the product moats (daemon/queue/memory/IM/cron/watchers); unify state and
+completion semantics BEFORE adding more rules; hard iteration/budget caps stay
+as safety limits but become per-model-tier configuration; assistant deltas
+stay ephemeral and task_events stays the single durable source; sandbox and
+state-machine work proceed as separate change streams.
+
+- **P0-A Persistent steering mailbox — ✅ shipped 2026-07-19.** `steering_mailbox` table
+  (accepted → claimed → consumed / deferred / expired, full text + content
+  hash + idempotency key). Persist BEFORE returning Accepted; the in-memory
+  channel becomes delivery, not the record. Consumed is marked when the
+  kernel's `agent.steering` event commits; run finalization and daemon boot
+  defer leftovers into the task-pinned durable queue
+  (`steering:<id>` idempotency keys); stale rows expire. Acceptance: crash in
+  any accepted-but-unconsumed window loses nothing; replay is at-least-once
+  with queue-level dedup.
+- **P0-B Internal StepOutcome state machine + tool execution ledger — ✅
+  shipped 2026-07-19.**
+  Shipped first: the tool execution ledger. `tool_ledger`
+  (dispatched → completed/failed) records every dispatch with a retry class
+  (`kernel.ClassifyToolRetry`: read_only / idempotent / side_effect, failing
+  SAFE — unknown tools are side_effect) via an injected `kernel.ToolLedger`
+  seam (mirrors ToolArtifactSink; nil-safe, best-effort). A crash between
+  dispatch and outcome leaves a durable `dispatched` (uncertain) row; on
+  resume, `withResumeContext` surfaces the task's uncertain SIDE-EFFECT
+  entries (`uncertain_tool_calls`) instructing the model to VERIFY real state
+  read-only before repeating — never blindly re-fire a deploy/build/POST.
+  Read-only uncertain entries are excluded (blind re-run is safe); resolved
+  rows prune at boot, dispatched rows never. Tests:
+  `kernel/tool_ledger_test.go`, `control/tool_ledger_test.go`.
+  **Ledger closure shipped 2026-07-19:** the uncertain-tool warning is now
+  injected INDEPENDENT of continuation intent (`withUncertainToolWarning` at
+  run setup, not gated on IntentContinue) — a boot-requeued 'started' row
+  re-drains with its ORIGINAL content (classifies as a new message), so the
+  intent-gated resume path would have missed it and let the run silently
+  re-fire a deploy/build/POST. Any run touching a task with uncertain
+  side-effect entries is told to verify real state read-only first. Tests:
+  `httpapi/tool_ledger_warning_test.go`. P0-B is functionally complete; the
+  full StepOutcome control-flow INVERSION (each iteration returning an outcome
+  that a match drives) remains an optional readability follow-up now that the
+  transitions are typed and observable.
+  **StepOutcome completion classification shipped 2026-07-19:** the three
+  duplicated turn.completed emission sites collapse into one typed
+  `resolveTurnCompletion(completionSignals)` (pure, precedence-preserving:
+  output_limit > tool_budget_exhausted[unless finish_run status] >
+  plan_unresolved > max_iterations > completed) emitted via a single
+  `emitTurnCompleted`. The hard iteration cap is DEMOTED to a safety
+  backstop: hitting it no longer returns the "max iterations reached" stub
+  that discarded work — it finalizes from the collected answer (continued
+  buffer → last assistant content → honest resume note) and saves the spine,
+  same as any bounded stop. `StepOutcome` vocabulary
+  (continue_model/execute_tools/complete_turn/fail_turn) is defined; the
+  mid-loop continue/execute/compact transitions remain inline. Tests:
+  `kernel/step_outcome_test.go`. The kernel owns typed model/tool/compact/
+  terminal transitions. Approval and external-wait remain tool/gateway
+  lifecycle states rather than duplicate kernel outcomes. A future readability
+  refactor may make each iteration return one `StepOutcome`, but it is not a
+  missing reliability behavior: completion classification, durable checkpoint,
+  uncertain-side-effect recovery, and the safety-limit fallback are shipped.
+- **P0-C Mid-turn compaction as a loop state — ✅ shipped 2026-07-19.** The
+  loop now recomputes the window budget every iteration and runs the existing
+  head(goal)+tail(recent input/steering/plan/evidence)+summarize-middle
+  compaction WITHIN the run before the next model call, instead of growing
+  until a provider context-window rejection forces emergency recovery. A
+  `compact_context` StepOutcome + the existing `context.compacted` event fire
+  when it triggers; the run continues. Tool_call/result pairs orphaned by the
+  summary are dropped safely at EVERY adapter boundary (verified:
+  chat/anthropic `sanitizeToolMessageLedger`, responses `pendingToolOutputs`).
+  No-op under budget (a cheap per-iteration token estimate), skipped on the
+  first iteration (fresh from the Composer). Tests:
+  `kernel/agent_kernel_test.go` (`TestMidTurnCompactionFiresWithinRun`).
+  Smaller follow-ups (not blocking): an explicit open-fresh-window primitive
+  (summarize + deterministic-trim fallback already keep the run under budget),
+  per-model-tier action-budget relaxation, and head-trim-on-summary-retry
+  cache-prefix nicety.
+  ORIGINAL PLAN: Recompute the token budget
+  after every model step; over threshold → `CompactContext` → summarize or
+  open a fresh window (keep original task + latest summary + plan + changed
+  files) → continue the SAME run. Hard rules: tool_call/result pairs live or
+  die together; newest user input, unconsumed steering, goals, plan, and
+  verification evidence always survive; compaction retries trim from the head
+  to preserve the cache prefix. Afterwards relax action budgets per model
+  tier.
+- **P0-D Sandbox-first execution — ✅ Linux contract shipped 2026-07-19.**
+  Terminal, verify, and execute-code tools expose an explicit per-call
+  `sandbox: auto|isolated|host` contract. `auto` is the default: it uses
+  bubblewrap isolation when available and otherwise records an observable
+  fallback to approval-controlled host execution; `isolated` fails closed
+  when isolation is unavailable; explicit `host` execution is approval-gated;
+  and operator policy `exec_sandbox.required=true` disables every host
+  fallback. The default operator policy is enabled/no-network, while doctor
+  and startup health report whether the host is ready, degraded, or blocked.
+  The implementation is `internal/tools/sandbox` (bwrap capability detection —
+  binary + unprivileged user namespaces — and read-only-root /
+  writable-workspace / no-network argv construction, unit-tested for argv
+  correctness and detection); config `exec_sandbox.{enabled,required,
+  allow_network}`; and `sandboxedShellCommand`, shared by terminal, verify,
+  and execute-code. The WSL target has `/usr/bin/bwrap` 0.9.0 installed and a
+  live isolation soak passed: workspace writes succeed, host configuration is
+  read-only, and the network namespace is empty under the default policy.
+  External side effects such as deploy APIs are not made exactly-once by a
+  filesystem sandbox; their safety remains P0-B's ledger. Tests:
+  `tools/sandbox/sandbox_test.go`,
+  `tools/exec_sandbox_test.go`.
+  ORIGINAL PLAN: **P0-D Sandbox-first execution MVP (parallel track, separate changes).**
+  bubblewrap + seccomp (Landlock alone cannot gate network egress):
+  terminal/verify default to workspace-writable + read-only-elsewhere +
+  no-network; sandbox denial escalates through the existing approval funnel
+  with the first approval cached (class grants). External side effects
+  (gcloud/deploys) are NOT sandboxed — their safety is P0-B's ledger
+  verification. Kills the 87-minute-stall class structurally.
+- **P1**: **Compatibility normalizer shipped 2026-07-19:** fallback
+  `[TOOL:...]` and XML parsing, aliases, incomplete-call detection, and
+  balanced JSON extraction now live in `internal/kernel/llm/tool_compat.go`;
+  the Agent core consumes normalized calls through a thin wrapper. Remaining:
+  a real provider-owned `TurnSession` only when a provider can preserve remote
+  response state without violating `store=false`; item lifecycle events with
+  commit-before-confirm ordering; and in-stream execution only after the
+  transport can prove a tool item complete and recover it from the ledger.
+  Per-call parallelism must preserve model order and read/write dependencies,
+  so mixed batches intentionally remain serial until that contract exists.
+- **P2**: PTY/unified exec; review sub-agent mode (restricted-backend parts
+  already exist); rate-limit window surfacing in /status; sub-agent messaging
+  and context-projection options.
+
+**Acceptance matrix (every P0 lands against it):** crash/interrupt injected
+at ① steering accepted-not-consumed ② tool planned/dispatched ③ side effect
+succeeded but result uncommitted ④ waiting on approval ⑤ compacting
+⑥ provider truncation/context overflow ⑦ new message at the final-answer
+boundary — assert no message loss, no duplicated side effect, no state lie,
+and `uncertain` verifies instead of re-running.
 
 ### ACTIVE PLAN — Daemon-only + north-star experience (approved 2026-07-10)
 
@@ -843,9 +980,10 @@ hygiene.
    login. Also: QQ webhook ed25519 signature verification (inbound is
    currently unverified), Feishu encrypt-envelope AES decryption, WeChat OA
    safe-mode crypto.
-9. **P2 — Real `execute_code` sandbox** (namespace/seccomp/cgroup or container).
-   Prerequisite for any multi-person sharing; not needed for the single-person
-   scenarios.
+9. **P2 — Multi-tenant execution isolation hardening.** The Linux single-user
+   bubblewrap contract is shipped. Before multi-person sharing, add per-tenant
+   containers or equivalent namespace/seccomp/cgroup isolation, resource
+   quotas, and stronger egress policy.
 10. **P2 — MCP `sampling/createMessage`**, IM voice STT/TTS, remaining adapter
    polish — only as scenario needs dictate.
 11. **RESOLVED (2026-07-05) — Unify control-command parsing across endpoints.**

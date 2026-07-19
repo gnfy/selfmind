@@ -5,16 +5,15 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sync"
 	"time"
 
+	"selfmind/internal/kernel"
 	"selfmind/internal/platform/log"
 )
 
-// sandboxWarnOnce ensures the "no real isolation" warning is emitted once per
-// process, not on every execute_code call.
+// sandboxWarnOnce keeps an auto-fallback warning from flooding the daemon log.
 var sandboxWarnOnce sync.Once
 
 // =============================================================================
@@ -50,6 +49,12 @@ func NewExecuteCodeTool() *ExecuteCodeTool {
 						Description: "超时秒数，默认 300",
 						Default:     300,
 					},
+					"sandbox": {
+						Type:        "string",
+						Description: "Execution isolation: auto prefers an isolated no-network sandbox; isolated requires it; host uses host credentials/network and requires approval",
+						Enum:        []string{"auto", "isolated", "host"},
+						Default:     "auto",
+					},
 				},
 				Required: []string{"code"},
 			},
@@ -64,14 +69,6 @@ func (t *ExecuteCodeTool) Execute(args map[string]interface{}) (string, error) {
 	if !ok || code == "" {
 		return "", fmt.Errorf("code is required")
 	}
-
-	// Residual-risk warning: applySandboxLimits is process-group containment
-	// only, NOT real isolation (namespaces/seccomp/cgroups/container). Code that
-	// reaches here has already cleared the approval funnel, but there is no OS
-	// sandbox confining what it can touch on the host. Emitted once per process.
-	sandboxWarnOnce.Do(func() {
-		log.Warn("execute_code runs without OS isolation (process-group containment only); the executed code has full host access under this user")
-	})
 
 	language, _ := args["language"].(string)
 	if language == "" {
@@ -114,13 +111,30 @@ func (t *ExecuteCodeTool) Execute(args map[string]interface{}) (string, error) {
 	}
 	defer os.Remove(scriptPath)
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeout)*time.Second)
+	ctx, cancel := context.WithTimeout(contextFromArgs(args), time.Duration(timeout)*time.Second)
 	defer cancel()
 
-	// CommandContext ensures the process is actually killed when the timeout
-	// fires. The previous code passed a context that was never wired to the
-	// command, so long-running scripts ran unbounded.
-	cmd := exec.CommandContext(ctx, "python3", "-I", scriptPath)
+	requestedMode, modeErr := requestedSandboxMode(args)
+	if modeErr != nil {
+		return "", enrichToolFailure("execute_code", modeErr, "")
+	}
+	cmd, decision, sandboxErr := sandboxedCommand(ctx, []string{"python3", "-I", scriptPath}, tmpDir, requestedMode)
+	if sandboxErr != nil {
+		return "", enrichToolFailure("execute_code", sandboxErr, "")
+	}
+	args["_sandbox_mode"] = string(decision.Mode)
+	args["_sandbox_reason"] = decision.Reason
+	emitToolProgress(kernel.EventChannelFromContext(ctx), "tool.sandbox", map[string]interface{}{
+		"tool_name":    "execute_code",
+		"tool_call_id": stringArg(args, "_tool_call_id"),
+		"mode":         string(decision.Mode),
+		"reason":       decision.Reason,
+	}, string(decision.Mode))
+	if decision.Mode == SandboxHost {
+		sandboxWarnOnce.Do(func() {
+			log.Warn("execute_code is running on the host without OS isolation", "reason", decision.Reason)
+		})
+	}
 	cmd.Dir = tmpDir
 	applySandboxLimits(cmd)
 

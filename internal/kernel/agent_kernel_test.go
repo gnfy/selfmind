@@ -904,3 +904,156 @@ func agentEventsContain(events []AgentEvent, eventType string) bool {
 	}
 	return false
 }
+
+// stepOutcomeTrace collects the ordered outcome of each agent.step event —
+// the mid-loop state machine's transition sequence (P0-B).
+func stepOutcomeTrace(events []AgentEvent) []string {
+	var trace []string
+	for _, e := range events {
+		if e.Type != "agent.step" {
+			continue
+		}
+		if outcome, ok := e.Payload["outcome"].(string); ok {
+			trace = append(trace, outcome)
+		}
+	}
+	return trace
+}
+
+// TestLoopEmitsTypedStepTrace pins the mid-loop state machine: a
+// tool-call-then-answer turn traces execute_tools → complete_turn, and the
+// terminal step carries the resolved completion reason.
+func TestLoopEmitsTypedStepTrace(t *testing.T) {
+	mem := memory.NewMemoryManager(&mockStorage{})
+	agent := NewAgent(mem, &recordingBackend{}, &nativeToolLLMProvider{}, "helpful", 3, 1, nil)
+	eventCh := make(chan string, 64)
+	ctx := WithEventChannel(memory.WithTenantID(context.Background(), "user123"), eventCh)
+	ctx = WithWorkspaceContext(ctx, WorkspaceContext{ID: "ws", Root: t.TempDir()})
+	if _, _, err := agent.RunConversation(ctx, "user123", "cli", "read the readme"); err != nil {
+		t.Fatal(err)
+	}
+	trace := stepOutcomeTrace(drainAgentEvents(eventCh))
+	want := []string{string(StepExecuteTools), string(StepCompleteTurn)}
+	if len(trace) != len(want) {
+		t.Fatalf("step trace = %v, want %v", trace, want)
+	}
+	for i := range want {
+		if trace[i] != want[i] {
+			t.Fatalf("step trace[%d] = %q, want %q (full %v)", i, trace[i], want[i], trace)
+		}
+	}
+}
+
+// TestBudgetExhaustionStepTrace pins the transition sequence when the tool
+// budget forces a finalize-from-evidence: the loop continues under
+// budget_exhausted_finalize then completes, and the terminal step reason is
+// tool_budget_exhausted.
+func TestBudgetExhaustionStepTrace(t *testing.T) {
+	mem := memory.NewMemoryManager(&mockStorage{})
+	agent := NewAgent(mem, &budgetBackend{}, &budgetProvider{}, "helpful", 10, 1, nil)
+	eventCh := make(chan string, 128)
+	ctx := WithEventChannel(context.Background(), eventCh)
+	ctx = WithTaskStrategy(ctx, TaskStrategy{
+		Class: TaskClassRepoTask, ToolMode: ToolModeFull, PlanPolicy: PlanPolicyOptional,
+		MaxActionTools: 1, ActionToolBudgetStep: 1, ActionToolBudgetLimit: 3, MaxBudgetExtensions: 2,
+	})
+	if _, _, err := agent.RunConversation(ctx, "user123", "cli", "inspect three files"); err != nil {
+		t.Fatal(err)
+	}
+	events := drainAgentEvents(eventCh)
+	trace := stepOutcomeTrace(events)
+	if len(trace) == 0 || trace[len(trace)-1] != string(StepCompleteTurn) {
+		t.Fatalf("trace must end in complete_turn: %v", trace)
+	}
+	var completion AgentEvent
+	for _, e := range events {
+		if e.Type == "turn.completed" {
+			completion = e
+		}
+	}
+	if completion.Payload["completion_reason"] != "tool_budget_exhausted" {
+		t.Fatalf("completion = %+v (trace %v)", completion.Payload, trace)
+	}
+}
+
+// bigOutputBackend returns a large tool output to grow the window past a small
+// budget within a run.
+type bigOutputBackend struct{ calls int }
+
+func (b *bigOutputBackend) Dispatch(name string, args map[string]interface{}) (string, error) {
+	b.calls++
+	return strings.Repeat("x", 4000), nil
+}
+func (b *bigOutputBackend) GetToolDefinitions() []map[string]interface{} { return nil }
+
+// multiToolProvider asks for read_file on the first N stream requests, then
+// answers — driving several loop iterations that each append a large tool
+// result.
+type multiToolProvider struct {
+	requests  int
+	toolTurns int
+}
+
+func (p *multiToolProvider) ChatCompletion(context.Context, []llm.Message) (string, error) {
+	return "done", nil
+}
+func (p *multiToolProvider) Chat(context.Context, llm.ChatRequest) (*llm.ChatResponse, error) {
+	return &llm.ChatResponse{Content: "done"}, nil
+}
+func (p *multiToolProvider) StreamChat(_ context.Context, req llm.ChatRequest) (<-chan llm.StreamEvent, error) {
+	p.requests++
+	ch := make(chan llm.StreamEvent, 1)
+	if p.requests <= p.toolTurns {
+		ch <- llm.StreamEvent{ToolCalls: []llm.ToolCall{{
+			ID:       fmt.Sprintf("call-%d", p.requests),
+			Function: "read_file",
+			Args:     fmt.Sprintf(`{"path":"f%d.txt"}`, p.requests),
+		}}}
+	} else {
+		ch <- llm.StreamEvent{Content: "final answer"}
+	}
+	close(ch)
+	return ch, nil
+}
+
+// TestMidTurnCompactionFiresWithinRun pins P0-C: a growing window is compacted
+// WITHIN the run (a compact_context step + a context.compacted event), and the
+// run still completes — no provider context-window rejection needed.
+func TestMidTurnCompactionFiresWithinRun(t *testing.T) {
+	mem := memory.NewMemoryManager(&mockStorage{})
+	provider := &multiToolProvider{toolTurns: 5}
+	agent := NewAgent(mem, &bigOutputBackend{}, provider, "helpful", 12, 1, nil)
+	agent.SetContextWindow(4000) // small window so accumulated tool output overflows
+	agent.SetSummaryProvider(&fakeSummarizer{reply: "## Active Task\ncontinue the work\n## Relevant Files\n- f1.txt"})
+
+	eventCh := make(chan string, 256)
+	ctx := WithEventChannel(memory.WithTenantID(context.Background(), "user123"), eventCh)
+	ctx = WithWorkspaceContext(ctx, WorkspaceContext{ID: "ws", Root: t.TempDir()})
+	answer, _, err := agent.RunConversation(ctx, "user123", "cli", "inspect several files")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if answer != "final answer" {
+		t.Fatalf("answer = %q, want final answer", answer)
+	}
+
+	events := drainAgentEvents(eventCh)
+	sawCompactStep := false
+	sawCompactEvent := false
+	for _, e := range events {
+		if e.Type == "agent.step" {
+			if outcome, _ := e.Payload["outcome"].(string); outcome == string(StepCompactContext) {
+				sawCompactStep = true
+			}
+		}
+		if e.Type == "context.compacted" {
+			sawCompactEvent = true
+		}
+	}
+	if !sawCompactStep {
+		t.Fatalf("expected a compact_context step within the run; events=%v", stepOutcomeTrace(events))
+	}
+	if !sawCompactEvent {
+		t.Fatal("expected a context.compacted event from mid-turn compaction")
+	}
+}

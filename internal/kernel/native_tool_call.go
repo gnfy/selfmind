@@ -302,6 +302,39 @@ func (a *Agent) executeSingleToolCall(ctx context.Context, tenantID string, even
 		args["_workspace_id"] = strings.TrimSpace(workspace.ID)
 	}
 
+	// Claim the dispatch BEFORE execution. For state-changing tools this is a
+	// hard correctness boundary: if the claim cannot be persisted, or the same
+	// call id was already claimed, do not execute the side effect.
+	var ledgerRunID string
+	retryClass := ClassifyToolRetry(name)
+	if rt, ok := TaskRuntimeContextFromContext(ctx); ok {
+		ledgerRunID = rt.RunID
+	}
+	ledger := ToolLedgerFromContext(ctx)
+	if ledgerRunID != "" {
+		if ledger == nil && retryClass != ToolRetryReadOnly {
+			return a.toolDispatchRefused(eventCh, idx, call, signature,
+				fmt.Errorf("durable tool ledger is unavailable; %s was not executed", name))
+		}
+		if ledger != nil {
+			decision, claimErr := ledger.ClaimDispatch(ctx, ToolLedgerEntry{
+				RunID:      ledgerRunID,
+				ToolCallID: call.ID,
+				ToolName:   name,
+				ArgsHash:   ToolArgsHash(call.Args),
+				RetryClass: retryClass,
+			})
+			if claimErr != nil && retryClass != ToolRetryReadOnly {
+				return a.toolDispatchRefused(eventCh, idx, call, signature,
+					fmt.Errorf("durable tool claim failed; %s was not executed: %w", name, claimErr))
+			}
+			if claimErr == nil && !decision.Execute {
+				return a.toolDispatchRefused(eventCh, idx, call, signature,
+					fmt.Errorf("tool call %s is already recorded as %s; it was not executed again; inspect current state with read-only tools before deciding the next step", call.ID, decision.Status))
+			}
+		}
+	}
+
 	if eventCh != nil {
 		EmitAgentEvent(eventCh, AgentEvent{
 			Type:       "tool.started",
@@ -315,7 +348,15 @@ func (a *Agent) executeSingleToolCall(ctx context.Context, tenantID string, even
 	result, err := a.backend.Dispatch(name, args)
 	duration := time.Since(startTime).Seconds()
 
+	var ledgerErr error
+	if ledgerRunID != "" && ledger != nil {
+		ledgerErr = ledger.RecordOutcome(ctx, ledgerRunID, call.ID, err == nil)
+	}
+
 	if err != nil {
+		if ledgerErr != nil {
+			err = fmt.Errorf("%w; durable outcome recording also failed: %v", err, ledgerErr)
+		}
 		packaged := packageToolError(name, err)
 		if eventCh != nil {
 			emitToolEndEventWithDuration(eventCh, name, call.ID, packaged, duration, err)
@@ -332,6 +373,10 @@ func (a *Agent) executeSingleToolCall(ctx context.Context, tenantID string, even
 				ToolCallID: call.ID,
 			},
 		}
+	}
+	if ledgerErr != nil && retryClass != ToolRetryReadOnly {
+		return a.toolDispatchRefused(eventCh, idx, call, signature,
+			fmt.Errorf("%s returned, but its durable outcome could not be recorded; external state is uncertain and must be verified before any retry: %w", name, ledgerErr))
 	}
 
 	packaged := packageToolResultCtx(ctx, name, result)
@@ -352,6 +397,17 @@ func (a *Agent) executeSingleToolCall(ctx context.Context, tenantID string, even
 			Name:       name,
 			ToolCallID: call.ID,
 		},
+	}
+}
+
+func (a *Agent) toolDispatchRefused(eventCh chan string, idx int, call llm.ToolCall, signature string, err error) toolExecutionResult {
+	packaged := packageToolError(call.Function, err)
+	if eventCh != nil {
+		emitToolEndEventWithDuration(eventCh, call.Function, call.ID, packaged, 0, err)
+	}
+	return toolExecutionResult{
+		index: idx, step: packaged.ModelContent, toolName: call.Function, signature: signature,
+		msg: llm.Message{Role: "tool", Content: packaged.ModelContent, Name: call.Function, ToolCallID: call.ID},
 	}
 }
 

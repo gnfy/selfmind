@@ -9,6 +9,7 @@ import (
 	"selfmind/internal/control"
 	"selfmind/internal/gateway/api"
 	"selfmind/internal/gateway/router"
+	"selfmind/internal/kernel"
 	"selfmind/internal/kernel/llm"
 )
 
@@ -155,6 +156,9 @@ func (c *RunCoordinator) withResumeContext(ctx context.Context, identity *contro
 			"confidence": intent.Confidence,
 		}),
 	})
+	if kernel.HasLoopResumeMessages(ctx) {
+		return input
+	}
 
 	var sb strings.Builder
 	sb.WriteString("[SelfMind resume context]\n")
@@ -250,6 +254,32 @@ func (c *RunCoordinator) withResumeContext(ctx context.Context, identity *contro
 // file-mutating tool events (the only source when a run was interrupted before
 // finalization). Bounded and derived — it never injects raw event rows into the
 // prompt, staying inside the resume-context contract (docs/context-lifecycle).
+// withUncertainToolWarning injects the task's uncertain side-effect ledger
+// entries (dispatched, outcome never recorded — a prior crash) regardless of
+// intent classification (P0-B closure). The safety property belongs to the
+// TASK, not the continuation intent: a requeued 'started' row re-drains with
+// its ORIGINAL content, which classifies as a new message, so gating this on
+// IntentContinue would let a boot-requeued run silently re-fire a
+// deploy/build/POST. Any run touching a task with uncertain side effects is
+// told to verify real state read-only before repeating.
+func (c *RunCoordinator) withUncertainToolWarning(ctx context.Context, identity *control.IdentityContext, task *control.Task, input string) string {
+	if c == nil || c.srv == nil || c.srv.Control == nil || identity == nil || task == nil {
+		return input
+	}
+	entries, err := c.srv.Control.ListUncertainToolEntriesForTask(ctx, identity.TenantID, task.ID, 10)
+	if err != nil || len(entries) == 0 {
+		return input
+	}
+	var sb strings.Builder
+	sb.WriteString("[SelfMind uncertain tool calls]\n")
+	sb.WriteString("A prior run of this task dispatched these side-effectful tool calls but crashed before recording their outcome. They may or may not have taken effect. VERIFY the real external state with a read-only check before repeating any of them; do NOT blindly re-run (a second deploy/build/network POST could result):\n")
+	for _, e := range entries {
+		fmt.Fprintf(&sb, "- tool=%s class=%s dispatched=%s (outcome unrecorded)\n",
+			e.ToolName, e.RetryClass, e.CreatedAt.Format("01-02 15:04"))
+	}
+	return strings.TrimSpace(sb.String()) + "\n\n" + input
+}
+
 func (c *RunCoordinator) resumeChangedFiles(ctx context.Context, task *control.Task, handoff *control.Handoff, limit int) []string {
 	if c == nil || c.srv == nil || c.srv.Control == nil || task == nil || limit <= 0 {
 		return nil

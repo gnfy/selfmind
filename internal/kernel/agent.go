@@ -672,6 +672,25 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 	if err != nil {
 		return "", totalUsage, fmt.Errorf("build messages: %w", err)
 	}
+	// An explicit continuation may carry the exact stable ledger from an
+	// interrupted run. Keep the freshly composed system prompt (configuration,
+	// workspace and policy may have changed), replay the prior non-system
+	// message/tool ledger, then append this turn's current user input. This is
+	// the precise path; handoff/event resume text remains the compatibility
+	// fallback when no checkpoint exists.
+	if resumeMessages := loopResumeMessagesFromContext(ctx); len(resumeMessages) > 0 {
+		resumed := make([]llm.Message, 0, len(resumeMessages)+2)
+		if len(messages) > 0 && messages[0].Role == "system" {
+			resumed = append(resumed, messages[0])
+		}
+		for _, message := range resumeMessages {
+			if message.Role != "system" {
+				resumed = append(resumed, message)
+			}
+		}
+		resumed = append(resumed, llm.Message{Role: "user", Content: initialPrompt})
+		messages = a.contextEngine.TruncateMessagesCtx(ctx, resumed)
+	}
 
 	// Context breakdown (P1-2, accounted at assembly since W5): attribute the
 	// turn's prompt tokens to their components so /diag can show where the
@@ -750,17 +769,68 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 		return true
 	}
 	steerCh := steeringFromContext(ctx)
+	// Mid-loop state machine (P0-B): each iteration ends in exactly one typed
+	// StepOutcome, emitted as an agent.step event so the loop's control flow is
+	// an explicit, observable state machine (execute_tools → continue_model →
+	// … → complete_turn) rather than a wall of bare continues, and the seam the
+	// P0-C CompactContext state plugs into. recordStep is the single transition
+	// point.
+	recordStep := func(iteration int, outcome StepOutcome, detail string) {
+		EmitAgentEvent(eventCh, AgentEvent{
+			Type: "agent.step",
+			Payload: map[string]interface{}{
+				"iteration": iteration,
+				"outcome":   string(outcome),
+				"detail":    detail,
+			},
+		})
+		if sink := loopCheckpointSinkFromContext(ctx); sink != nil {
+			checkpoint := LoopCheckpoint{
+				Iteration: iteration,
+				Outcome:   outcome,
+				Detail:    detail,
+				Messages:  cloneLoopMessages(messages),
+			}
+			if err := sink.SaveLoopCheckpoint(context.WithoutCancel(ctx), checkpoint); err != nil {
+				EmitAgentEvent(eventCh, AgentEvent{Type: "checkpoint.failed", Payload: map[string]interface{}{
+					"iteration": iteration, "outcome": string(outcome), "error": err.Error(),
+				}})
+			}
+		}
+	}
 	for i := 0; i < maxIterations; i++ {
 		// Mid-turn steering: fold any follow-up the user typed while this turn was
 		// running into the conversation before the next model call, so the agent
 		// adjusts course in-flight instead of the input being rejected or lost.
 		for _, guidance := range drainSteering(steerCh) {
-			messages = append(messages, llm.Message{Role: "user", Content: guidance})
+			messages = append(messages, llm.Message{Role: "user", Content: guidance.Content})
 			history.Steps = append(history.Steps, "user added guidance mid-turn")
 			EmitAgentEvent(eventCh, AgentEvent{
-				Type:    "agent.steering",
-				Payload: map[string]interface{}{"input": guidance},
+				Type: "agent.steering",
+				Payload: map[string]interface{}{
+					"steering_id":  guidance.ID,
+					"content_hash": guidance.ContentHash,
+					"input_length": len([]rune(guidance.Content)),
+				},
 			})
+		}
+		// Mid-turn compaction (P0-C): recompute the window budget every
+		// iteration and compact WITHIN the run before the next model call,
+		// instead of letting it grow until a provider context-window rejection
+		// forces emergency recovery. TruncateMessagesCtx is a no-op under
+		// budget; over threshold it keeps the head (original task goal) and
+		// tail (recent turns = newest input, steering, plan, verification
+		// evidence) verbatim and summarizes the middle once via the cheap role.
+		// Tool_call/result pairs orphaned by the summary are dropped safely at
+		// every adapter boundary (sanitizeToolMessageLedger / responses
+		// pendingToolOutputs). Skipped on the first iteration — its window came
+		// fresh from the Composer.
+		if i > 0 && a.contextEngine != nil {
+			before := len(messages)
+			messages = a.contextEngine.TruncateMessagesCtx(ctx, messages)
+			if len(messages) < before {
+				recordStep(i, StepCompactContext, "mid_turn")
+			}
 		}
 		iterationStrategy := strategy
 		iterationStrategy.MaxActionTools = actionToolBudget
@@ -1069,11 +1139,13 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 			if droppedForBudget > 0 && tryExtendToolBudget(i) {
 				messages = append(messages, llm.Message{Role: "user", Content: "SelfMind extended the bounded tool budget because the completed calls produced new evidence. Continue with the next necessary action, and avoid repeating an identical call unless its inputs or relevant state changed."})
 			}
+			recordStep(i, StepExecuteTools, toolNamesForTrace(calls))
 			continue
 		}
 		if droppedForBudget > 0 && !toolBudgetRepairIssued {
 			if tryExtendToolBudget(i) {
 				messages = append(messages, llm.Message{Role: "user", Content: "SelfMind extended the bounded tool budget because prior calls produced new evidence. Retry only the next necessary tool action; do not repeat unchanged calls."})
+				recordStep(i, StepContinueModel, "budget_extended")
 				continue
 			}
 			toolBudgetRepairIssued = true
@@ -1087,6 +1159,7 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 				Content: "SelfMind tool budget for this turn has been reached. Do not call any more tools and do not output TOOL markup. " +
 					"Write the final user-facing answer now from the evidence already collected. If the task cannot be fully completed, state the blocker and the exact next action in plain text.",
 			})
+			recordStep(i, StepContinueModel, "budget_exhausted_finalize")
 			continue
 		}
 		if droppedForBudget > 0 {
@@ -1108,19 +1181,13 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 					Role:    "user",
 					Content: "Continue from the exact point where your previous answer stopped. Do not repeat earlier content. Finish the remaining answer completely.",
 				})
+				recordStep(i, StepContinueModel, "output_limit_continue")
 				continue
 			}
 			history.Outcome = continuedAnswer.String()
-			EmitAgentEvent(eventCh, AgentEvent{
-				Type:    "turn.completed",
-				Content: history.Outcome,
-				Payload: map[string]interface{}{
-					"status":            "incomplete",
-					"finish_reason":     finishReason,
-					"completion_reason": "output_limit",
-					"resumable":         true,
-				},
-			})
+			completion := resolveTurnCompletion(completionSignals{OutputLimited: true})
+			recordStep(i, StepCompleteTurn, completion.Reason)
+			emitTurnCompleted(eventCh, history.Outcome, completion, "finish_reason", finishReason)
 			return history.Outcome, totalUsage, nil
 		}
 		if continuedAnswer.Len() > 0 {
@@ -1142,6 +1209,7 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 				Content: "Before giving the final answer, reconcile the visible plan. Call update_plan once with the complete current snapshot. " +
 					"Mark finished steps completed and steps intentionally not performed cancelled. If work is genuinely blocked or waiting externally, call finish_run with that non-done status instead. Unresolved steps: " + strings.Join(unresolvedPlanSteps, "; "),
 			})
+			recordStep(i, StepContinueModel, "plan_repair")
 			continue
 		}
 
@@ -1155,40 +1223,70 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 
 		a.maybeTriggerBackgroundReview(tenantID, channel, messages, history)
 
-		completionStatus := "completed"
-		completionReason := "completed"
-		resumable := false
-		if toolBudgetExhausted && successfulFinishStatus == "" {
-			completionStatus = "incomplete"
-			completionReason = "tool_budget_exhausted"
-			resumable = true
-		} else if planUnresolved {
-			completionStatus = "incomplete"
-			completionReason = "plan_unresolved"
-			resumable = true
-		}
-		EmitAgentEvent(eventCh, AgentEvent{
-			Type:    "turn.completed",
-			Content: resp,
-			Payload: map[string]interface{}{
-				"status":            completionStatus,
-				"completion_reason": completionReason,
-				"resumable":         resumable,
-			},
+		completion := resolveTurnCompletion(completionSignals{
+			FinishStatus:        successfulFinishStatus,
+			ToolBudgetExhausted: toolBudgetExhausted,
+			PlanUnresolved:      planUnresolved,
 		})
+		recordStep(i, StepCompleteTurn, completion.Reason)
+		emitTurnCompleted(eventCh, resp, completion)
 		return resp, totalUsage, nil
 	}
 
-	EmitAgentEvent(eventCh, AgentEvent{
-		Type:    "turn.completed",
-		Content: "max iterations reached",
-		Payload: map[string]interface{}{
-			"status":            "incomplete",
-			"completion_reason": "max_iterations",
-			"resumable":         true,
-		},
-	})
-	return "max iterations reached", totalUsage, nil
+	// Iteration cap is a pure SAFETY backstop now, not a completion mechanism:
+	// finalize from whatever answer was collected instead of discarding it
+	// behind a stub string. Prefer the accumulated continued answer, else the
+	// last assistant content, else an honest note.
+	outcome := strings.TrimSpace(continuedAnswer.String())
+	if outcome == "" {
+		outcome = strings.TrimSpace(lastAssistantContent(messages))
+	}
+	if outcome == "" {
+		outcome = "SelfMind reached the safety iteration limit before finishing. The collected evidence and next steps are in this task's events; reply \"continue\" to resume."
+	}
+	history.Outcome = outcome
+	a.saveHistory(ctx, tenantID, histKey, channel, initialPrompt, outcome, messages)
+	completion := resolveTurnCompletion(completionSignals{IterationCapped: true})
+	recordStep(maxIterations, StepCompleteTurn, completion.Reason)
+	emitTurnCompleted(eventCh, outcome, completion)
+	return outcome, totalUsage, nil
+}
+
+// toolNamesForTrace renders a compact tool-name list for the agent.step trace.
+func toolNamesForTrace(calls []llm.ToolCall) string {
+	names := make([]string, 0, len(calls))
+	for _, c := range calls {
+		if n := strings.TrimSpace(c.Function); n != "" {
+			names = append(names, n)
+		}
+	}
+	return strings.Join(names, ",")
+}
+
+// emitTurnCompleted is the single turn.completed emission point. Extra
+// key/value pairs are appended to the payload (used for finish_reason on the
+// output-limit path).
+func emitTurnCompleted(eventCh chan string, content string, c turnCompletion, extra ...string) {
+	payload := map[string]interface{}{
+		"status":            c.Status,
+		"completion_reason": c.Reason,
+		"resumable":         c.Resumable,
+	}
+	for i := 0; i+1 < len(extra); i += 2 {
+		payload[extra[i]] = extra[i+1]
+	}
+	EmitAgentEvent(eventCh, AgentEvent{Type: "turn.completed", Content: content, Payload: payload})
+}
+
+// lastAssistantContent returns the most recent assistant message body, for the
+// iteration-cap finalization fallback.
+func lastAssistantContent(messages []llm.Message) string {
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role == "assistant" && strings.TrimSpace(messages[i].Content) != "" {
+			return messages[i].Content
+		}
+	}
+	return ""
 }
 
 func responseStoppedForOutputLimit(reason string) bool {

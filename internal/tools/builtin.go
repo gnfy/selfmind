@@ -364,6 +364,12 @@ func NewExecuteCommandTool() *ExecuteCommandTool {
 						Description: "Whether to run in background",
 						Default:     false,
 					},
+					"sandbox": {
+						Type:        "string",
+						Description: "Execution isolation: auto prefers an isolated no-network sandbox; isolated requires it; host uses host credentials/network and requires approval",
+						Enum:        []string{"auto", "isolated", "host"},
+						Default:     "auto",
+					},
 				},
 				Required: []string{"command"},
 			},
@@ -387,6 +393,13 @@ func (t *ExecuteCommandTool) Execute(args map[string]interface{}) (string, error
 	}
 
 	if background {
+		mode, err := requestedSandboxMode(args)
+		if err != nil {
+			return "", err
+		}
+		if mode != SandboxHost {
+			return "", fmt.Errorf("background commands require sandbox=host and approval; use watch_external for durable unattended waits")
+		}
 		registry := ProcessRegistryForArgs(args)
 		id, err := registry.StartProcess(cmdStr, cwd)
 		if err != nil {
@@ -419,6 +432,12 @@ func NewVerifyTool() *VerifyTool {
 					Enum:        []string{"test", "build", "lint", "typecheck", "syntax", "smoke", "custom"},
 					Default:     "custom",
 				},
+				"sandbox": {
+					Type:        "string",
+					Description: "Execution isolation: auto prefers an isolated no-network sandbox; isolated requires it; host uses host credentials/network and requires approval",
+					Enum:        []string{"auto", "isolated", "host"},
+					Default:     "auto",
+				},
 			},
 			Required: []string{"command"},
 		},
@@ -446,7 +465,22 @@ func executeForegroundCommand(args map[string]interface{}, toolName string, time
 	runCtx, cancel := context.WithTimeout(parentCtx, time.Duration(timeoutSeconds)*time.Second)
 	defer cancel()
 
-	cmd := shellCommandContext(runCtx, cmdStr)
+	requestedMode, modeErr := requestedSandboxMode(args)
+	if modeErr != nil {
+		return "", enrichToolFailure(toolName, modeErr, "")
+	}
+	cmd, decision, sandboxErr := sandboxedShellCommand(runCtx, cmdStr, cwd, requestedMode)
+	if sandboxErr != nil {
+		return "", enrichToolFailure(toolName, sandboxErr, "")
+	}
+	args["_sandbox_mode"] = string(decision.Mode)
+	args["_sandbox_reason"] = decision.Reason
+	emitToolProgress(kernel.EventChannelFromContext(runCtx), "tool.sandbox", map[string]interface{}{
+		"tool_name":    toolName,
+		"tool_call_id": stringArg(args, "_tool_call_id"),
+		"mode":         string(decision.Mode),
+		"reason":       decision.Reason,
+	}, string(decision.Mode))
 	cmd.Dir = cwd
 
 	out, err := runCommandStreaming(runCtx, cmd, cmdStr, toolName, stringArg(args, "_tool_call_id"))
@@ -465,6 +499,9 @@ func executeForegroundCommand(args map[string]interface{}, toolName string, time
 		return out, fmt.Errorf("command cancelled")
 	}
 	if err != nil {
+		if decision.Mode == SandboxIsolated {
+			err = fmt.Errorf("%w; command ran in an isolated sandbox; if it intentionally needs host credentials or network access, retry with sandbox=host (approval required)", err)
+		}
 		return out, enrichToolFailure(toolName, fmt.Errorf("command failed: %v", err), out)
 	}
 	return out, nil

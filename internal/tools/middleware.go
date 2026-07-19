@@ -783,6 +783,9 @@ func egressCommand(cmd string, segs [][]string) (bool, string) {
 
 func dangerousToolCall(projectRoot, toolName string, args map[string]interface{}) (bool, string) {
 	if isExecTool(toolName) {
+		if strings.EqualFold(strings.TrimSpace(stringArg(args, "sandbox")), string(SandboxHost)) {
+			return true, "requests execution on the host outside the isolated sandbox"
+		}
 		cmd := execCommandPayload(toolName, args)
 		for _, pattern := range destructiveSubstrings {
 			if strings.Contains(cmd, pattern) {

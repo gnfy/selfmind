@@ -191,6 +191,85 @@ func TestResponsesAdapterStreamsMessageFromCompletedPayload(t *testing.T) {
 	}
 }
 
+func TestResponsesAdapterParsesCachedTokensFromResponse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("content-type", "application/json")
+		fmt.Fprint(w, `{"output_text":"ok","usage":{"input_tokens":120,"output_tokens":7,"input_tokens_details":{"cached_tokens":100}}}`)
+	}))
+	defer server.Close()
+
+	adapter := NewResponsesAdapter("token", server.URL, "gpt-test")
+	resp, err := adapter.Chat(context.Background(), ChatRequest{Messages: []Message{{Role: "user", Content: "hi"}}})
+	if err != nil {
+		t.Fatalf("Chat failed: %v", err)
+	}
+	if resp.Usage.InputTokens != 120 || resp.Usage.OutputTokens != 7 {
+		t.Fatalf("usage = %+v", resp.Usage)
+	}
+	if resp.Usage.CacheReadInputTokens != 100 {
+		t.Fatalf("CacheReadInputTokens = %d, want 100", resp.Usage.CacheReadInputTokens)
+	}
+	// OpenAI Responses never reports cache creation separately.
+	if resp.Usage.CacheCreationInputTokens != 0 {
+		t.Fatalf("CacheCreationInputTokens = %d, want 0", resp.Usage.CacheCreationInputTokens)
+	}
+}
+
+func TestResponsesAdapterParsesCachedTokensFromStreamCompleted(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("content-type", "text/event-stream")
+		writeSSE(t, w, map[string]interface{}{"type": "response.output_text.delta", "delta": "ok"})
+		writeSSE(t, w, map[string]interface{}{
+			"type": "response.completed",
+			"response": map[string]interface{}{
+				"status": "completed",
+				"usage": map[string]interface{}{
+					"input_tokens":         120,
+					"output_tokens":        7,
+					"input_tokens_details": map[string]interface{}{"cached_tokens": 100},
+				},
+			},
+		})
+	}))
+	defer server.Close()
+
+	adapter := NewResponsesAdapter("token", server.URL, "gpt-test")
+	adapter.RequireStream = true
+	resp, err := adapter.Chat(context.Background(), ChatRequest{Messages: []Message{{Role: "user", Content: "hi"}}})
+	if err != nil {
+		t.Fatalf("Chat failed: %v", err)
+	}
+	if resp.Usage.InputTokens != 120 || resp.Usage.OutputTokens != 7 {
+		t.Fatalf("usage = %+v", resp.Usage)
+	}
+	if resp.Usage.CacheReadInputTokens != 100 {
+		t.Fatalf("CacheReadInputTokens = %d, want 100", resp.Usage.CacheReadInputTokens)
+	}
+	if resp.Usage.CacheCreationInputTokens != 0 {
+		t.Fatalf("CacheCreationInputTokens = %d, want 0", resp.Usage.CacheCreationInputTokens)
+	}
+}
+
+func TestResponsesAdapterUsageWithoutDetailsIsBackwardCompatible(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("content-type", "application/json")
+		fmt.Fprint(w, `{"output_text":"ok","usage":{"input_tokens":5,"output_tokens":2}}`)
+	}))
+	defer server.Close()
+
+	adapter := NewResponsesAdapter("token", server.URL, "gpt-test")
+	resp, err := adapter.Chat(context.Background(), ChatRequest{Messages: []Message{{Role: "user", Content: "hi"}}})
+	if err != nil {
+		t.Fatalf("Chat failed: %v", err)
+	}
+	if resp.Usage.InputTokens != 5 || resp.Usage.OutputTokens != 2 {
+		t.Fatalf("usage = %+v", resp.Usage)
+	}
+	if resp.Usage.CacheReadInputTokens != 0 || resp.Usage.CacheCreationInputTokens != 0 {
+		t.Fatalf("cache usage = %+v, want zero", resp.Usage)
+	}
+}
+
 func TestResponsesAdapterDoesNotDuplicateOutputTextAndMessageContent(t *testing.T) {
 	payload := responsesResponse{OutputText: "same answer"}
 	payload.Output = append(payload.Output, struct {

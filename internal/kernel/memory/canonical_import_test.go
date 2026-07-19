@@ -2,7 +2,9 @@ package memory
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -104,6 +106,147 @@ func TestLegacyFactImport(t *testing.T) {
 	}
 	defer p3.Close()
 	verify(p3, "idempotent reopen")
+}
+
+// TestLegacyImportSkipsLiveIntakeTwin pins the duplicate-evidence guard: a
+// run-attributed legacy fact whose statement the live intake path already
+// recorded for the SAME run (as a deterministic `obs_` observation) must not
+// re-materialize as a second observation — that would count one piece of
+// evidence twice and inflate evidence_count/occurrences. A runless legacy
+// fact has no possible intake twin and must keep importing as before.
+func TestLegacyImportSkipsLiveIntakeTwin(t *testing.T) {
+	dir := t.TempDir()
+	ctx := context.Background()
+
+	p1, err := NewSQLiteProvider(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Live intake path: deterministic obs_ observation + canonical for run-1.
+	if err := p1.ApplyIntakeWrite(ctx, "tenant", IntakeWrite{
+		Decision: "ADD", Target: "memory", Scope: "workspace:a", Source: SourceFactExtractor,
+		Content: "Deploy uses blue-green rollout", RunID: "run-1", AnalyzerVersion: 1, DecisionKey: "item-0",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// The same run also left a legacy fact row for the same statement (the
+	// pre-fix write path recorded both); import must treat it as evidence the
+	// intake path already holds.
+	if err := p1.AddFactMeta(ctx, "tenant", Fact{
+		ID: "fact-dup", Target: "memory", Content: "Deploy uses blue-green rollout",
+		Source: SourceFactExtractor, Scope: "workspace:a", Confidence: 0.6, CreatedFromRun: "run-1",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// Runless legacy fact: current import behavior must be preserved.
+	if err := p1.AddFactMeta(ctx, "tenant", Fact{
+		ID: "fact-runless", Target: "memory", Content: "The repo builds with make", Scope: "workspace:a",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := p1.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Reopen: importLegacyFacts now sees both facts plus the live observation.
+	p2, err := NewSQLiteProvider(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p2.Close()
+	all, err := p2.ListCanonicalMemories(ctx, "tenant", CanonicalFilter{})
+	if err != nil || len(all) != 2 {
+		t.Fatalf("canonical count = %d err=%v, want 2: %+v", len(all), err, all)
+	}
+	for _, m := range all {
+		switch m.Content {
+		case "Deploy uses blue-green rollout":
+			if m.EvidenceCount != 1 || m.Occurrences != 1 {
+				t.Fatalf("duplicated legacy evidence inflated counters: %+v", m)
+			}
+			obs, err := p2.ObservationsForMemory(ctx, "tenant", m.ID)
+			if err != nil || len(obs) != 1 {
+				t.Fatalf("want exactly one observation, got %d err=%v: %+v", len(obs), err, obs)
+			}
+			if !strings.HasPrefix(obs[0].ID, "obs_") {
+				t.Fatalf("surviving observation must be the deterministic intake row: %+v", obs[0])
+			}
+		case "The repo builds with make":
+			if m.EvidenceCount != 1 || m.Occurrences != 1 {
+				t.Fatalf("runless legacy fact must import once: %+v", m)
+			}
+		default:
+			t.Fatalf("unexpected canonical: %+v", m)
+		}
+	}
+}
+
+func TestLegacyImportGuardRequiresSameTargetAndDeterministicIntake(t *testing.T) {
+	dir := t.TempDir()
+	ctx := context.Background()
+	p, err := NewSQLiteProvider(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Same run/scope/text under a different target is a distinct statement.
+	if err := p.ApplyIntakeWrite(ctx, "tenant", IntakeWrite{
+		Decision: "ADD", Target: "user", Scope: "global", Source: SourceFactExtractor,
+		Content: "Shared statement", RunID: "run-cross-target", AnalyzerVersion: 1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.AddFactMeta(ctx, "tenant", Fact{
+		ID: "fact-cross-target", Target: "memory", Scope: "global",
+		Content: "Shared statement", CreatedFromRun: "run-cross-target",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.AddFactMeta(ctx, "tenant", Fact{
+		ID: "fact-nondeterministic", Target: "memory", Scope: "global",
+		Content: "Only a UUID observation exists", CreatedFromRun: "run-nondeterministic",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	db, err := sql.Open("sqlite", filepath.Join(dir, "tenant", "memory.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO memory_observations
+		(id, run_id, target, scope, content, normalized_hash, status, created_at)
+		VALUES ('uuid-observation', 'run-nondeterministic', 'memory', 'global',
+			'Only a UUID observation exists', ?, 'accepted', ?)`,
+		NormalizedContentHash("Only a UUID observation exists"), time.Now().UTC().Unix()); err != nil {
+		db.Close()
+		t.Fatal(err)
+	}
+	db.Close()
+
+	p, err = NewSQLiteProvider(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	rows, err := p.ListCanonicalMemories(ctx, "tenant", CanonicalFilter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := map[string]bool{}
+	for _, row := range rows {
+		seen[row.Target+"\x00"+row.Content] = true
+	}
+	for _, key := range []string{
+		"user\x00Shared statement",
+		"memory\x00Shared statement",
+		"memory\x00Only a UUID observation exists",
+	} {
+		if !seen[key] {
+			t.Fatalf("legacy import guard wrongly suppressed %q: %+v", key, rows)
+		}
+	}
 }
 
 func TestCanonicalIntakeIsScopedAndReplayIdempotent(t *testing.T) {

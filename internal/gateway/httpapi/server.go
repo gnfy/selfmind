@@ -254,7 +254,7 @@ func (d *Server) ProcessMessage(ctx context.Context, req api.MessageRequest) (ap
 		go func(tenantID, personID, platform, channel string) {
 			cctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
-			d.Delivery.CatchUpUnconfirmed(cctx, tenantID, personID, platform, channel)
+			d.Delivery.CatchUpRecoverable(cctx, tenantID, personID, platform, channel)
 		}(identity.TenantID, identity.PersonID, req.Platform, req.Channel)
 	}
 

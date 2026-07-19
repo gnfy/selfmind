@@ -9,6 +9,7 @@ import (
 
 	"selfmind/internal/control"
 	selfeval "selfmind/internal/eval"
+	"selfmind/internal/platform/config"
 )
 
 func (a *App) runEvalCommandIfRequested() (bool, int) {
@@ -50,7 +51,7 @@ func (a *App) printEvalHelp() {
 	fmt.Fprintln(a.stdout, "  selfmind eval report <jsonl-or-dir>")
 	fmt.Fprintln(a.stdout, "  selfmind eval repair [case-or-dir] [--worktree]")
 	fmt.Fprintln(a.stdout, "  selfmind eval capture [turn-id|latest] [--title \"...\"] [--suite NAME]")
-	fmt.Fprintln(a.stdout, "  selfmind eval clean [--yes]   remove eval residue from the configured control.db (dry-run by default)")
+	fmt.Fprintln(a.stdout, "  selfmind eval clean [--yes]   remove eval residue from the configured control.db and on-disk eval-* dirs (dry-run by default)")
 	fmt.Fprintln(a.stdout)
 	fmt.Fprintln(a.stdout, "Examples:")
 	fmt.Fprintln(a.stdout, "  selfmind eval run evalcases/daily-dev/chat_basic.yaml")
@@ -222,11 +223,12 @@ func (a *App) evalCapture(args []string) int {
 	return 0
 }
 
-// evalClean removes eval residue (persons whose ONLY accounts have platform
-// `eval`, plus all rows keyed to them) from the CONFIGURED data dir's
-// control.db. Historic eval/record runs against the shared data dir leaked
-// this state; new runs are isolated by default, so this is a one-shot cleanup.
-// The default is a dry run; --yes applies the deletion.
+// evalClean removes eval residue from the CONFIGURED installation: control.db
+// rows (persons whose ONLY accounts have platform `eval`, plus all rows keyed
+// to them) AND on-disk `eval-<case>-<nano>` tenant directories that historic
+// runs minted under the config home (skills base default) and the data dir.
+// New runs are isolated by default, so this is a one-shot cleanup. The default
+// is a dry run; --yes applies the deletion.
 func (a *App) evalClean(args []string) int {
 	apply := false
 	for _, arg := range args {
@@ -238,7 +240,10 @@ func (a *App) evalClean(args []string) int {
 			fmt.Fprintln(a.stdout)
 			fmt.Fprintln(a.stdout, "Removes leftover eval identities (persons whose only accounts have platform")
 			fmt.Fprintln(a.stdout, "'eval') and their accounts, tasks, runs, events, handoffs, artifacts, and")
-			fmt.Fprintln(a.stdout, "current-task pointers from the configured data dir's control.db.")
+			fmt.Fprintln(a.stdout, "current-task pointers from the configured data dir's control.db, plus")
+			fmt.Fprintln(a.stdout, "on-disk eval-* tenant directories (per-case skills/memory residue) that are")
+			fmt.Fprintln(a.stdout, "direct children of the config home or data dir and contain only known eval")
+			fmt.Fprintln(a.stdout, "artifacts. Anything unrecognized is reported and left in place.")
 			fmt.Fprintln(a.stdout, "Without --yes this is a dry run that only prints what would be deleted.")
 			return 0
 		default:
@@ -265,7 +270,18 @@ func (a *App) evalClean(args []string) int {
 		fmt.Fprintln(a.stderr, err)
 		return 1
 	}
-	if report.Empty() {
+	// On-disk residue roots: the config home (parent of config.yaml — the
+	// skills base dir app wiring defaulted to) and the storage data dir
+	// (per-tenant memory stores). The scanner is strictly verifiable: exact
+	// name pattern, direct child of a root, known-artifact contents only.
+	var diskRoots []string
+	if cfgPath, _ := config.ResolveConfigPath(a.configPath); strings.TrimSpace(cfgPath) != "" {
+		diskRoots = append(diskRoots, filepath.Dir(cfgPath))
+	}
+	diskRoots = append(diskRoots, dataDir)
+	disk := selfeval.CleanDiskResidue(diskRoots, apply)
+
+	if report.Empty() && disk.Empty() {
 		fmt.Fprintln(a.stdout, "No eval residue found.")
 		return 0
 	}
@@ -273,36 +289,84 @@ func (a *App) evalClean(args []string) int {
 	if apply {
 		verb = "deleted"
 	}
-	fmt.Fprintf(a.stdout, "Eval residue (%s):\n", verb)
-	for _, row := range []struct {
-		label string
-		count int
-	}{
-		{"persons (eval-only accounts)", report.Persons},
-		{"accounts", report.Accounts},
-		{"workspaces", report.Workspaces},
-		{"current_workspace rows", report.CurrentWorkspace},
-		{"tasks", report.Tasks},
-		{"current_task rows", report.CurrentTask},
-		{"task_runs", report.Runs},
-		{"task_events", report.Events},
-		{"task_handoffs", report.Handoffs},
-		{"task_artifacts", report.Artifacts},
-		{"channel_messages", report.ChannelMessages},
-		{"approval_requests", report.Approvals},
-		{"notifications", report.Notifications},
-		{"outbound_messages", report.Outbound},
-		{"emptied eval tenants", report.Tenants},
-	} {
-		if row.count > 0 {
-			fmt.Fprintf(a.stdout, "  %-30s %d\n", row.label, row.count)
+	if !report.Empty() {
+		fmt.Fprintf(a.stdout, "Eval residue in control.db (%s):\n", verb)
+		for _, row := range []struct {
+			label string
+			count int
+		}{
+			{"persons (eval-only accounts)", report.Persons},
+			{"accounts", report.Accounts},
+			{"workspaces", report.Workspaces},
+			{"current_workspace rows", report.CurrentWorkspace},
+			{"tasks", report.Tasks},
+			{"current_task rows", report.CurrentTask},
+			{"task_runs", report.Runs},
+			{"task_events", report.Events},
+			{"task_handoffs", report.Handoffs},
+			{"task_artifacts", report.Artifacts},
+			{"channel_messages", report.ChannelMessages},
+			{"approval_requests", report.Approvals},
+			{"notifications", report.Notifications},
+			{"outbound_messages", report.Outbound},
+			{"emptied eval tenants", report.Tenants},
+		} {
+			if row.count > 0 {
+				fmt.Fprintf(a.stdout, "  %-30s %d\n", row.label, row.count)
+			}
 		}
 	}
+	a.printDiskResidue(disk, apply, verb)
 	if !apply {
 		fmt.Fprintln(a.stdout)
 		fmt.Fprintln(a.stdout, "Dry run only. Re-run with `selfmind eval clean --yes` to delete.")
 	}
 	return 0
+}
+
+// printDiskResidue renders the on-disk part of `eval clean`: per-root counts
+// and bytes, the total, and every skipped directory with its reason so the
+// user can audit what the conservative scanner refused to touch.
+func (a *App) printDiskResidue(disk *selfeval.DiskResidueReport, apply bool, verb string) {
+	if disk == nil || disk.Empty() {
+		return
+	}
+	fmt.Fprintf(a.stdout, "Eval residue directories on disk (%s):\n", verb)
+	for _, root := range disk.Roots {
+		if len(root.Candidates) == 0 && len(root.Skipped) == 0 {
+			continue
+		}
+		fmt.Fprintf(a.stdout, "  %s: %d dir(s), %s\n", root.Root, len(root.Candidates), formatByteSize(root.Bytes))
+	}
+	if apply {
+		fmt.Fprintf(a.stdout, "  removed: %d dir(s), skipped: %d\n", disk.Removed, disk.TotalSkipped())
+	} else {
+		fmt.Fprintf(a.stdout, "  total: %d dir(s), %s\n", disk.TotalDirs(), formatByteSize(disk.TotalBytes()))
+	}
+	for _, root := range disk.Roots {
+		for _, skip := range root.Skipped {
+			fmt.Fprintf(a.stdout, "  SKIPPED %s (%s)\n", skip.Path, skip.Reason)
+		}
+	}
+}
+
+// formatByteSize renders a byte count for humans; exact bytes stay visible
+// below 10 KiB so tests and small residue reports remain precise.
+func formatByteSize(n int64) string {
+	if n < 10*1024 {
+		return fmt.Sprintf("%d B", n)
+	}
+	units := []string{"KiB", "MiB", "GiB", "TiB"}
+	v := float64(n)
+	unit := "B"
+	for _, u := range units {
+		if v < 1024 {
+			break
+		}
+		v /= 1024
+		unit = u
+	}
+	return fmt.Sprintf("%.1f %s", v, unit)
 }
 
 func (a *App) evalReport(args []string) int {

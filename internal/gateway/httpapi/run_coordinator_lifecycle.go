@@ -299,8 +299,9 @@ func (c *RunCoordinator) installExecutionScope(identity *control.IdentityContext
 		return func() {}
 	}
 	scope := tools.ExecutionScope{
-		TenantID: identity.TenantID,
-		PersonID: identity.PersonID,
+		TenantID:         identity.TenantID,
+		PersonID:         identity.PersonID,
+		ExecutionProfile: req.ExecutionProfile,
 	}
 	if workspace != nil {
 		scope.WorkspaceID = workspace.ID
@@ -506,7 +507,11 @@ func (c *RunCoordinator) toolApprovalHandler(identity *control.IdentityContext, 
 				// live). Expire it; the recovery sweep is the backstop for
 				// waiters that die without reaching this line.
 				_ = store.ExpireApprovalRequest(context.WithoutCancel(waitCtx), identity.TenantID, approval.ID, "waiter gone: "+waitCtx.Err().Error())
-				return tools.ToolApprovalDecision{ApprovalID: approval.ID, Reason: waitCtx.Err().Error()}, waitCtx.Err()
+				return tools.ToolApprovalDecision{
+					Approved:   false,
+					ApprovalID: approval.ID,
+					Reason:     "approval expired; do not request another approval or retry a variant; finish waiting_user",
+				}, nil
 			case <-ticker.C:
 				current, err := store.GetApprovalRequest(waitCtx, identity.TenantID, approval.ID)
 				if err != nil {

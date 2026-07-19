@@ -14,6 +14,8 @@ import (
 	"selfmind/internal/tools"
 )
 
+const skillPrunerNamePrefix = "skill-pruner-"
+
 // CronJob represents a scheduled job stored in SQLite.
 type CronJob struct {
 	ID       int64
@@ -30,6 +32,11 @@ type CronJob struct {
 	// Web allows a job to enable web tools for this turn (e.g. a market summary
 	// that must look things up), overriding the default web-off policy.
 	Web bool
+	// SystemKey marks a daemon-registered system job (e.g.
+	// "skill-pruner:default"). Non-empty keys are unique via a partial index;
+	// user-created jobs leave it empty. Names under the skill-pruner-* prefix
+	// are reserved so future migrations can identify built-ins safely.
+	SystemKey string
 	// TaskID pins a recurring job to ONE stable work label (execution-quality
 	// W6): learned from the first execution's resolved task and passed as
 	// explicit attach evidence on later fires, so a daily report stops
@@ -142,13 +149,78 @@ CREATE TABLE IF NOT EXISTS cron_jobs (
 	}
 	// Idempotent migration for proactive-delivery columns. SQLite has no
 	// "ADD COLUMN IF NOT EXISTS", so probe the table and add what is missing.
-	return s.migrateColumns(ctx, map[string]string{
+	if err := s.migrateColumns(ctx, map[string]string{
 		"platform":   "TEXT NOT NULL DEFAULT ''",
 		"deliver_to": "TEXT NOT NULL DEFAULT ''",
 		"web":        "INTEGER NOT NULL DEFAULT 0",
 		"once":       "INTEGER NOT NULL DEFAULT 0",
 		"task_id":    "TEXT NOT NULL DEFAULT ''",
-	})
+		// system_key identifies daemon-registered system jobs so they can be
+		// deduplicated by a partial unique index without constraining users'
+		// freedom to create same-named jobs of their own (system_key stays
+		// empty for user jobs and empty keys never collide).
+		"system_key": "TEXT NOT NULL DEFAULT ''",
+	}); err != nil {
+		return err
+	}
+	return s.migrateSystemJobs(ctx)
+}
+
+// migrateSystemJobs is the one-shot governance repair for daemon-registered
+// jobs (2026-07: tenant discovery via os.ReadDir(dataDir) had registered one
+// skill-pruner per data-directory entry — eval residue and person partitions
+// included — accumulating ~2.5k rows). Skills are control-tenant assets, so
+// exactly one skill-pruner survives; the partial unique index then keeps every
+// future system job single. Idempotent: safe on every boot.
+func (s *Scheduler) migrateSystemJobs(ctx context.Context) error {
+	// Only historical rows with the exact built-in shape are safe to migrate.
+	// A user may have created a similarly named row before this namespace was
+	// reserved; its prompt/schedule must not be interpreted as system state.
+	legacyShape := `COALESCE(system_key, '') = '' AND cron_expr = '0 3 * * *'
+		AND channel = 'cli' AND prompt LIKE 'skill_prune:%'`
+	// 1. Skill pruning is a control-tenant concern: drop old per-partition
+	//    built-ins (eval-*, person_*, gateway, ... pseudo-tenants).
+	if _, err := s.db.ExecContext(ctx,
+		`DELETE FROM cron_jobs WHERE name LIKE 'skill-pruner-%'
+			AND name != 'skill-pruner-default' AND `+legacyShape); err != nil {
+		return err
+	}
+	// 2. Collapse only historic built-in-shaped default rows. Prefer an
+	//    already-keyed survivor; otherwise keep the oldest legacy row.
+	if _, err := s.db.ExecContext(ctx,
+		`DELETE FROM cron_jobs WHERE name = 'skill-pruner-default'
+			AND (system_key = 'skill-pruner:default' OR (`+legacyShape+`))
+			AND id != COALESCE(
+				(SELECT MIN(id) FROM cron_jobs WHERE system_key = 'skill-pruner:default'),
+				(SELECT MIN(id) FROM cron_jobs WHERE name = 'skill-pruner-default' AND `+legacyShape+`)
+			)`); err != nil {
+		return err
+	}
+	// 3. Stamp its stable system key, then enforce uniqueness for all future
+	//    system jobs. The index is created only after the cleanup above so an
+	//    upgrade over a polluted table cannot fail on existing duplicates.
+	if _, err := s.db.ExecContext(ctx,
+		`UPDATE cron_jobs SET system_key = 'skill-pruner:default'
+			WHERE name = 'skill-pruner-default' AND `+legacyShape); err != nil {
+		return err
+	}
+	if _, err := s.db.ExecContext(ctx,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_cron_jobs_system_key
+			ON cron_jobs(system_key) WHERE system_key != ''`); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateCronJobIdentity(job *CronJob) error {
+	if job == nil {
+		return fmt.Errorf("cron job is required")
+	}
+	if strings.TrimSpace(job.SystemKey) == "" &&
+		strings.HasPrefix(strings.ToLower(strings.TrimSpace(job.Name)), skillPrunerNamePrefix) {
+		return fmt.Errorf("cron job name %q is reserved for SelfMind system jobs", job.Name)
+	}
+	return nil
 }
 
 // migrateColumns adds any of the named columns that the cron_jobs table is
@@ -184,16 +256,19 @@ func (s *Scheduler) migrateColumns(ctx context.Context, columns map[string]strin
 
 // AddJob inserts a new cron job and schedules it.
 func (s *Scheduler) AddJob(ctx context.Context, job *CronJob) (int64, error) {
+	if err := validateCronJobIdentity(job); err != nil {
+		return 0, err
+	}
 	// Validate cron expression
 	if _, err := s.parser.Parse(job.CronExpr); err != nil {
 		return 0, fmt.Errorf("invalid cron expr %q: %w", job.CronExpr, err)
 	}
 
 	res, err := s.db.ExecContext(ctx, `
-		INSERT INTO cron_jobs (name, cron_expr, prompt, tenant_id, channel, platform, deliver_to, web, once, enabled)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		INSERT INTO cron_jobs (name, cron_expr, prompt, tenant_id, channel, platform, deliver_to, web, once, enabled, system_key)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		job.Name, job.CronExpr, job.Prompt, job.TenantID, job.Channel,
-		job.Platform, job.DeliverTo, btoi(job.Web), btoi(job.Once), btoi(job.Enabled))
+		job.Platform, job.DeliverTo, btoi(job.Web), btoi(job.Once), btoi(job.Enabled), job.SystemKey)
 	if err != nil {
 		return 0, fmt.Errorf("insert cron job: %w", err)
 	}
@@ -209,33 +284,73 @@ func (s *Scheduler) AddJob(ctx context.Context, job *CronJob) (int64, error) {
 }
 
 // EnsureJob inserts the job if none with the same name+tenant exists, otherwise
-// updates the existing row in place and reschedules it. This makes built-in job
-// registration (skill-pruner, canary) idempotent across restarts instead of
-// inserting a duplicate row every time the gateway boots.
+// updates the oldest row in place, removes historical duplicates, and
+// reschedules it. This makes built-in registration idempotent across restarts
+// and repairs duplicate rows created by older binaries.
 func (s *Scheduler) EnsureJob(ctx context.Context, job *CronJob) (int64, error) {
+	if err := validateCronJobIdentity(job); err != nil {
+		return 0, err
+	}
 	if _, err := s.parser.Parse(job.CronExpr); err != nil {
 		return 0, fmt.Errorf("invalid cron expr %q: %w", job.CronExpr, err)
 	}
-	var id int64
-	err := s.db.QueryRowContext(ctx,
-		"SELECT id FROM cron_jobs WHERE name = ? AND tenant_id = ?", job.Name, job.TenantID).Scan(&id)
-	if err == sql.ErrNoRows {
-		return s.AddJob(ctx, job)
+	lookupQuery, lookupArgs := "SELECT id FROM cron_jobs WHERE name = ? AND tenant_id = ? ORDER BY id", []interface{}{job.Name, job.TenantID}
+	if strings.TrimSpace(job.SystemKey) != "" {
+		// System jobs identify by their stable key: renames or tenant moves of
+		// a built-in job must update the surviving row, never mint a second.
+		lookupQuery, lookupArgs = "SELECT id FROM cron_jobs WHERE system_key = ? ORDER BY id", []interface{}{job.SystemKey}
 	}
+	rows, err := s.db.QueryContext(ctx, lookupQuery, lookupArgs...)
 	if err != nil {
 		return 0, err
 	}
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Close(); err != nil {
+		return 0, err
+	}
+	if len(ids) == 0 {
+		return s.AddJob(ctx, job)
+	}
+	id := ids[0]
 	if _, err := s.db.ExecContext(ctx, `
-		UPDATE cron_jobs SET cron_expr = ?, prompt = ?, channel = ?, platform = ?, deliver_to = ?, web = ?, once = ?, enabled = ?
+		UPDATE cron_jobs SET name = ?, tenant_id = ?, cron_expr = ?, prompt = ?, channel = ?, platform = ?, deliver_to = ?, web = ?, once = ?, enabled = ?, system_key = ?
 		WHERE id = ?`,
-		job.CronExpr, job.Prompt, job.Channel, job.Platform, job.DeliverTo, btoi(job.Web), btoi(job.Once), btoi(job.Enabled), id); err != nil {
+		job.Name, job.TenantID, job.CronExpr, job.Prompt, job.Channel, job.Platform, job.DeliverTo, btoi(job.Web), btoi(job.Once), btoi(job.Enabled), job.SystemKey, id); err != nil {
 		return id, err
 	}
-	job.ID = id
-	if job.Enabled {
-		if err := s.scheduleJob(id, job); err != nil {
-			return id, err
+	for _, duplicateID := range ids[1:] {
+		if _, err := s.db.ExecContext(ctx, "DELETE FROM cron_jobs WHERE id = ?", duplicateID); err != nil {
+			return id, fmt.Errorf("delete duplicate cron job %d: %w", duplicateID, err)
 		}
+	}
+	job.ID = id
+	s.mu.Lock()
+	for _, duplicateID := range ids[1:] {
+		if entryID, ok := s.entries[duplicateID]; ok {
+			s.cron.Remove(entryID)
+			delete(s.entries, duplicateID)
+		}
+	}
+	if !job.Enabled {
+		if entryID, ok := s.entries[id]; ok {
+			s.cron.Remove(entryID)
+			delete(s.entries, id)
+		}
+		s.mu.Unlock()
+		return id, nil
+	}
+	err = s.scheduleJobLocked(id, job)
+	s.mu.Unlock()
+	if err != nil {
+		return id, err
 	}
 	return id, nil
 }

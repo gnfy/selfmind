@@ -13,18 +13,24 @@ import (
 // refreshes it. It records every delivered content in order.
 type switchableReceiptSender struct {
 	confirmed bool
+	err       error
 	sent      []string
 }
 
 func (r *switchableReceiptSender) Send(ctx context.Context, msg Message) error {
 	r.sent = append(r.sent, msg.Content)
-	return nil
+	return r.err
 }
 
 func (r *switchableReceiptSender) SendWithReceipt(ctx context.Context, msg Message) (bool, error) {
 	r.sent = append(r.sent, msg.Content)
-	return r.confirmed, nil
+	return r.confirmed, r.err
 }
+
+type refreshRequiredError string
+
+func (e refreshRequiredError) Error() string                { return string(e) }
+func (e refreshRequiredError) SessionRefreshRequired() bool { return true }
 
 // TestCatchUpUnconfirmedRepushesOnceBounded pins the P0-1 catch-up contract:
 // after the peer's inbound refreshes the session, unconfirmed pushes are
@@ -113,5 +119,42 @@ func TestCatchUpStillUnconfirmedNeverLoops(t *testing.T) {
 	sender.sent = nil
 	if n := svc.CatchUpUnconfirmed(ctx, "default", "p1", "weixin", "wx-chat"); n != 0 || len(sender.sent) != 0 {
 		t.Fatalf("claimed row must never re-push again (n=%d sent=%v)", n, sender.sent)
+	}
+}
+
+func TestCriticalPrepareFailureWaitsForFreshInboundThenRecovers(t *testing.T) {
+	ctx := context.Background()
+	store, err := control.OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	sender := &switchableReceiptSender{err: refreshRequiredError("iLink sendmessage error: ret=-2 errcode=0 errmsg=prepare failed")}
+	svc := NewService(store, sender, Options{PollInterval: time.Hour})
+	if err := svc.EnqueueAndTry(ctx, Message{
+		TenantID: "default", PersonID: "p1", Platform: "weixin",
+		PlatformUserID: "wx", Channel: "wx-chat", Content: "final answer", Kind: KindFinalResult,
+	}); err == nil {
+		t.Fatal("prepare failure must surface to the immediate caller")
+	}
+	rows, err := store.ListCatchUpEligible(ctx, "default", "p1", "weixin", "wx-chat", time.Now().Add(-time.Hour), 10)
+	if err != nil || len(rows) != 1 || rows[0].Status != "pending_session" {
+		t.Fatalf("pending-session rows=%+v err=%v", rows, err)
+	}
+
+	// A new inbound refreshed the session. The critical result is replayed once
+	// and becomes confirmed instead of remaining a permanent failure.
+	sender.err = nil
+	sender.confirmed = true
+	sender.sent = nil
+	if n := svc.CatchUpRecoverable(ctx, "default", "p1", "weixin", "wx-chat"); n != 1 {
+		t.Fatalf("confirmed catch-up=%d, want 1", n)
+	}
+	if len(sender.sent) != 1 || sender.sent[0] != "final answer" {
+		t.Fatalf("catch-up sent=%v", sender.sent)
+	}
+	if rows, _ := store.ListCatchUpEligible(ctx, "default", "p1", "weixin", "wx-chat", time.Now().Add(-time.Hour), 10); len(rows) != 0 {
+		t.Fatalf("confirmed row remained eligible: %+v", rows)
 	}
 }

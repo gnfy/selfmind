@@ -155,6 +155,45 @@ type MemoryEvent struct {
 	CreatedAt     time.Time `json:"created_at"`
 }
 
+// DedupUndoSnapshot captures the exact evidence and counters changed by the
+// one-time legacy-import deduplicator. Observations are immutable evidence, so
+// cleanup must remain reversible through the ordinary memory event undo path.
+type DedupUndoSnapshot struct {
+	Canonical    DedupCanonicalSnapshot     `json:"canonical"`
+	Observations []DedupObservationSnapshot `json:"observations"`
+	Evidence     []DedupEvidenceSnapshot    `json:"evidence"`
+}
+
+type DedupCanonicalSnapshot struct {
+	ID            string  `json:"id"`
+	Confidence    float64 `json:"confidence"`
+	EvidenceCount int     `json:"evidence_count"`
+	Occurrences   int     `json:"occurrences"`
+	UpdatedAt     int64   `json:"updated_at"`
+}
+
+type DedupObservationSnapshot struct {
+	ID              string  `json:"id"`
+	RunID           string  `json:"run_id"`
+	AnalyzerVersion int     `json:"analyzer_version"`
+	WorkspaceID     string  `json:"workspace_id"`
+	Target          string  `json:"target"`
+	Scope           string  `json:"scope"`
+	Source          string  `json:"source"`
+	Content         string  `json:"content"`
+	NormalizedHash  string  `json:"normalized_hash"`
+	ConfidencePrior float64 `json:"confidence_prior"`
+	Status          string  `json:"status"`
+	CreatedAt       int64   `json:"created_at"`
+}
+
+type DedupEvidenceSnapshot struct {
+	MemoryID      string `json:"memory_id"`
+	ObservationID string `json:"observation_id"`
+	Relation      string `json:"relation"`
+	CreatedAt     int64  `json:"created_at"`
+}
+
 // CanonicalFilter bounds canonical-memory reads.
 type CanonicalFilter struct {
 	Target   string   // optional: user | memory | pinned-era imports keep their target

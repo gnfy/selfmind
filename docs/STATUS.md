@@ -407,6 +407,53 @@ completion/failure; continuity eval replays offline.
   `httpapi/recovery_notification_test.go`,
   `httpapi/gateway_shutdown_test.go`, `control/queue_test.go`.
 
+- **Runtime hygiene batch — ✅ shipped 2026-07-19.** (a) **Cron governance:**
+  skill pruning is control-tenant-only — the daemon registers exactly ONE
+  `skill-pruner-default` job instead of one per data-directory entry (the old
+  `os.ReadDir(dataDir)` tenant discovery had accumulated ~2.5k rows across
+  eval residue and person partitions, and their 03:00 fires kept touching
+  every stale partition's memory.db). `cron_jobs` gained `system_key` with a
+  partial unique index (empty keys — user jobs — never constrained; users may
+  freely duplicate ordinary names, while the `skill-pruner-*` namespace is
+  reserved for system safety); a boot migration deletes only rows matching
+  the historical built-in schedule/prompt/channel shape, preserves
+  coincidentally prefixed user rows, and collapses historic built-in
+  duplicates BEFORE the index is created; `EnsureJob`
+  resolves system jobs by key. `selfmind doctor` gained a "Cron governance"
+  section (totals, system jobs, pruner count, duplicate groups, runaway
+  warning). Tests: `cron/scheduler_test.go` (`TestSystemJobGovernance…`).
+  (b) **Sender-aware progress notices:** `startAsyncProgressNotices` skips
+  platforms the delivery service cannot send to (observed live 2026-07-18:
+  163 doomed `platform=cli` outbound rows in one day); CLI async progress is
+  dropped by design — the final result already routes to the preferred IM,
+  and forwarding 30s ticks would violate the IM cadence contract.
+  (c) **Responses cache telemetry:** the Responses adapter now parses
+  `usage.input_tokens_details.cached_tokens` into
+  `UsageStats.CacheReadInputTokens` (non-stream + stream + RequireStream
+  aggregation); OpenAI cached tokens are discounted, not free, so
+  `billed_input_tokens` is an approximation on this protocol. Tests:
+  `llm/responses_adapter_test.go`. (d) **Eval isolation + residue:** the eval
+  harness isolates `Evolution.SkillsDir` into the per-case temp dir, and —
+  because `tools.SkillRootsForTenant` hard-anchors a second per-tenant skill
+  root at `~/.selfmind/<tenant>/skills` via os.UserHomeDir regardless of
+  config (the source that actually minted the ~500 `eval-*/skills` dirs) —
+  the harness also self-sweeps its own verified eval tenant dir on Close.
+  Follow-up: make tool skill roots config-injectable so the sweep becomes
+  unnecessary. `selfmind eval clean` additionally removes on-disk eval
+  residue directories under strict verification (exact name pattern + direct
+  child of a known root + known contents only; symlinks never qualify —
+  never a generalized recursive delete). (e) **Legacy import dedup:**
+  `importLegacyFacts` skips run-attributed facts only when the live intake
+  already recorded a deterministic `obs_` twin with the same
+  run+target+scope+hash, and
+  `selfmind maintenance memory-dedup [--apply]` repairs existing duplicated
+  evidence only when the redundant row is proven by a matching legacy fact
+  (keeps the deterministic `obs_` row, prunes imported twins, recomputes
+  confidence/counts from surviving evidence, and stores a reversible snapshot
+  in `memory_events`). Canonical
+  single-write migration remains the planned follow-up (four-phase: import →
+  coverage audit → single write → rollback window).
+
 - **Memory partition convergence — ✅ shipped 2026-07-17 (P0).** Background
   post-run intake wrote canonical/legacy facts to the control-tenant partition
   (`data/default/memory.db`) while the foreground agent reads the person
@@ -448,19 +495,37 @@ completion/failure; continuity eval replays offline.
   recorded output matches a terminal pattern. Tests:
   `control/maintenance_jobs_test.go` (`TestMaintenanceAttemptHistory`).
 
-- **Prompt-cache accounting + opt-in cache_control (2026-07-17, P1).**
+- **Prompt-cache accounting + provider-safe cache_control (2026-07-17/18, P1).**
   `UsageStats` carries `cache_read_input_tokens` / `cache_creation_input_tokens`;
   `token.updated` adds both plus `billed_input_tokens`. The anthropic adapter
-  parses cache usage (non-stream + message_start) and, under the new opt-in
-  `prompt_cache` provider quirk (config `quirks.prompt_cache`, default off,
-  byte-identical requests when off), attaches `cache_control` breakpoints on
+  parses cache usage (non-stream + message_start) and, under the
+  `prompt_cache` provider quirk, attaches `cache_control` breakpoints on
   the stable system prefix and a rolling history breakpoint. Prompt layering
   was verified byte-stable across consecutive turns
   (`kernel/prompt_layering_test.go`), so the cacheable prefix is real.
   Measured motivation: ~7.0M input tokens on 2026-07-17, ≥90% replayed
-  prefix. Enable per provider after verifying the endpoint honors the field
-  via the new usage counters. Tests: `llm/anthropic_prompt_cache_test.go`,
-  `kernel/token_usage_event_test.go`.
+  prefix. Built-in native Anthropic and MiniMax profiles now enable the
+  documented cache contract; custom Anthropic-compatible endpoints and direct
+  Kimi Coding remain off unless explicitly configured. `/diag context` shows
+  cache reads, writes, billed input, and hit rate instead of only estimating
+  the stable prefix. Tests: `llm/anthropic_prompt_cache_test.go`,
+  `kernel/token_usage_event_test.go`, `modelruntime/resolver_test.go`,
+  `httpapi/diag_w2_test.go`.
+
+- **Unattended completion + IM recovery closure (2026-07-18, P0/P1).**
+  External-watch finalization queue rows now receive a dedicated execution
+  profile: safe workspace file tools run without prompting, while shell,
+  network, privileged, and out-of-workspace operations fail immediately with
+  an instruction to finish `waiting_user`. Approval expiry likewise returns a
+  stable rejection instead of a retryable context deadline, preventing the
+  observed sequence of three unattended 30-minute approval waits. Weixin
+  `ret=-2` / `prepare failed` is classified as session-refresh-required for
+  critical notifications; the durable row becomes `pending_session` and the
+  next inbound message retries it after refreshing platform context. Startup
+  `EnsureJob` also collapses historical duplicate named cron rows, fixing the
+  accumulated `skill-pruner` schedules. Tests: `tools/middleware_test.go`,
+  `gateway/delivery/catchup_test.go`, `gateway/weixin/client_test.go`,
+  `kernel/task/cron/scheduler_test.go`, `httpapi/recovery_notification_test.go`.
 
 - **Turn-efficiency + consistency batch (2026-07-17, P1/P2).** Tool failures
   now classify (`error_class: syntax|auth|timeout|not_found|permission|

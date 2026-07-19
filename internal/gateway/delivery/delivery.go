@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"net/http"
@@ -47,6 +48,14 @@ const KindClarify = "clarify"
 // final answers typed lets cross-endpoint continuity surface a missed result
 // without confusing it with progress, approval, or diagnostic notifications.
 const KindFinalResult = "final_result"
+
+// SessionRefreshError marks a platform failure that cannot succeed by retrying
+// against the current session, but is safe to retry after a new inbound message
+// refreshes that session.
+type SessionRefreshError interface {
+	error
+	SessionRefreshRequired() bool
+}
 
 type Sender interface {
 	Send(ctx context.Context, msg Message) error
@@ -333,6 +342,13 @@ func (s *Service) tryDelivery(ctx context.Context, d *control.Delivery) error {
 		_ = s.store.MarkDeliveryFailedPermanent(ctx, d.ID, "no sender for platform "+msg.Platform)
 		return err
 	}
+	if sessionRefreshRequired(err) && catchUpWorthyKind(msg.Kind) {
+		// Do not burn retries against the same broken session. The next inbound
+		// from this peer is the safe recovery trigger because it refreshes the
+		// platform context before catch-up runs.
+		_ = s.store.MarkDeliveryPendingSession(ctx, d.ID, tools.RedactSensitive(err.Error()))
+		return err
+	}
 	delay := s.nextDelay(d.Attempts + 1)
 	next := time.Now().Add(delay)
 	redacted := tools.RedactSensitive(err.Error())
@@ -346,10 +362,11 @@ func (s *Service) tryDelivery(ctx context.Context, d *control.Delivery) error {
 // is likely to actually arrive. Anti-duplicate rails (P0-1, docs/STATUS.md
 // "ACTIVE PLAN"): each row is claimed at most once (ClaimDeliveryCatchUp,
 // claim-before-send), only rows fresher than CatchUpMaxAge qualify, and one
-// catch-up replays at most CatchUpLimit rows oldest-first. A re-send that is
-// STILL unconfirmed is left claimed — it never becomes a loop. Returns how many
-// re-pushes were confirmed.
-func (s *Service) CatchUpUnconfirmed(ctx context.Context, tenantID, personID, platform, channel string) int {
+// catch-up replays at most CatchUpLimit rows oldest-first. Confirmed and
+// unconfirmed sends retain the existing one-shot semantics. Session-refresh
+// failures release their claim so a later inbound message can safely retry.
+// Returns how many re-pushes were confirmed.
+func (s *Service) CatchUpRecoverable(ctx context.Context, tenantID, personID, platform, channel string) int {
 	if s == nil || s.store == nil || s.sender == nil {
 		return 0
 	}
@@ -388,11 +405,40 @@ func (s *Service) CatchUpUnconfirmed(ctx context.Context, tenantID, personID, pl
 		if err == nil && confirmed {
 			_ = s.store.MarkDeliveryAttempt(ctx, d.ID, true, "", time.Time{})
 			confirmedCount++
+		} else if err == nil {
+			_ = s.store.MarkDeliverySentUnconfirmed(ctx, d.ID)
+		} else if sessionRefreshRequired(err) {
+			// ret=-2 means the platform did not accept the message. Release the
+			// claim so a later inbound session refresh may retry safely.
+			_ = s.store.MarkDeliveryPendingSession(ctx, d.ID, tools.RedactSensitive(err.Error()))
 		}
-		// err or still-unconfirmed: the row stays sent_unconfirmed with its
-		// catch-up claim consumed — visible in digests/diag, never re-pushed.
+		// Other errors keep the claim consumed, avoiding a retry loop for faults
+		// that a fresh platform session cannot repair.
 	}
 	return confirmedCount
+}
+
+// CatchUpUnconfirmed preserves the older API name while extending recovery to
+// critical rows waiting for a fresh platform session.
+func (s *Service) CatchUpUnconfirmed(ctx context.Context, tenantID, personID, platform, channel string) int {
+	return s.CatchUpRecoverable(ctx, tenantID, personID, platform, channel)
+}
+
+func sessionRefreshRequired(err error) bool {
+	if err == nil {
+		return false
+	}
+	var typed SessionRefreshError
+	return errors.As(err, &typed) && typed.SessionRefreshRequired()
+}
+
+func catchUpWorthyKind(kind string) bool {
+	switch strings.TrimSpace(kind) {
+	case KindFinalResult, KindApproval, KindClarify, "external_watch", "recovery", "maintenance_health":
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *Service) nextDelay(attempt int) time.Duration {

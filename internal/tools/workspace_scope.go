@@ -7,6 +7,8 @@ import (
 	"sync"
 )
 
+const ExecutionProfileWatchFinalization = "watch-finalization"
+
 // ExecutionScope describes the workspace boundary for one active person/tenant.
 // The daemon installs a scope before running an agent turn so file and shell
 // tools default to the task workspace and cannot wander into another user's
@@ -20,7 +22,10 @@ type ExecutionScope struct {
 	TaskID        string
 	RunID         string
 	Channel       string
-	Approval      ToolApprovalHandler
+	// ExecutionProfile is an internal contract for system-originated work. It
+	// must never be populated from an external request.
+	ExecutionProfile string
+	Approval         ToolApprovalHandler
 	// Clarify lets gateway/IM execution contexts answer the clarify tool
 	// without a blocking interactive prompt (which only the local TUI has).
 	Clarify ClarifyHandler

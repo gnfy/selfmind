@@ -465,9 +465,7 @@ func newRuntimeHarness(opts RunOptions, c *Case, dataDirOverride string) (*runti
 	}
 	// Isolated scenarios get a fresh data dir so control.db / memory start clean
 	// and never touch the user's real ~/.selfmind data.
-	if strings.TrimSpace(dataDirOverride) != "" {
-		cfg.Storage.DataDir = dataDirOverride
-	}
+	isolatedEvalConfig(cfg, dataDirOverride)
 	// Eval runs are explicit foreground checks. Avoid starting unrelated cron
 	// jobs while preserving the same agent/tool/runtime path.
 	cfg.Cron.Enabled = false
@@ -543,6 +541,22 @@ func newRuntimeHarness(opts RunOptions, c *Case, dataDirOverride string) (*runti
 	}, nil
 }
 
+// isolatedEvalConfig redirects every config-derived durable path into the
+// case's throwaway temp data dir. Storage.DataDir covers control.db, memory,
+// and the tool-output spool (all derive from the data dir). Evolution.SkillsDir
+// needs an explicit override: app wiring defaults the skills base dir to
+// ~/.selfmind and mints a `<eval-tenant>/skills` tree there for every case, so
+// leaving it empty leaks one home-dir directory per eval run. Any future config
+// field whose default resolves under the user's home dir and is consumed by
+// app wiring must be redirected here before the harness builds the runtime.
+func isolatedEvalConfig(cfg *config.Config, dataDir string) {
+	if cfg == nil || strings.TrimSpace(dataDir) == "" {
+		return
+	}
+	cfg.Storage.DataDir = dataDir
+	cfg.Evolution.SkillsDir = filepath.Join(dataDir, "skills")
+}
+
 func (h *runtimeHarness) Close() {
 	if h == nil {
 		return
@@ -555,6 +569,16 @@ func (h *runtimeHarness) Close() {
 	}
 	if h.mem != nil {
 		_ = h.mem.Close()
+	}
+	// Skill tooling keys per-tenant skill roots under ~/.selfmind (by tenant
+	// ID, not by config), so wiring mints `<home>/.selfmind/<eval-tenant>/skills`
+	// as a side effect of registering skill tools — a path the SkillsDir config
+	// override cannot redirect. The harness owns its throwaway tenant, so it
+	// removes exactly that directory on the way out; RemoveEvalTenantDir
+	// verifies both the tenant-ID shape and known-artifact contents before
+	// deleting anything.
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		RemoveEvalTenantDir(filepath.Join(home, ".selfmind"), h.tenantID)
 	}
 }
 

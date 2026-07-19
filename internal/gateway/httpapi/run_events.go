@@ -46,6 +46,16 @@ func (c *RunCoordinator) startAsyncProgressNotices(ctx context.Context, identity
 	if c == nil || c.srv == nil || c.srv.Delivery == nil || identity == nil || router.ShouldStreamToClient(req.Channel) {
 		return func() {}
 	}
+	// Sender-aware delivery policy: never mint outbound rows that no platform
+	// sender can deliver. CLI/system async runs in particular have no push
+	// surface for a 30s progress stream (and forwarding progress ticks to the
+	// preferred IM would violate the IM cadence contract — concise notices and
+	// final results only); their FINAL result already routes to the preferred
+	// IM via deliverAsyncResult. Observed live 2026-07-18: 163 progress rows
+	// for platform "cli" all failed with "no sender for platform cli".
+	if !c.srv.Delivery.SupportsPlatform(req.Platform) {
+		return func() {}
+	}
 	deliver := c.srv.Delivery
 	done := make(chan struct{})
 	start := time.Now()

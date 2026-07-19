@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"os"
 
 	"selfmind/internal/control"
 	"selfmind/internal/gateway/channel"
@@ -59,33 +58,27 @@ func InitGateway(dataDir string, mem *memory.MemoryManager, agent *kernel.Agent,
 			log.Warn("gateway: invalid cron timezone, using system local", "error", err)
 		}
 
-		// Register skill-pruner cron job (idempotent across restarts): runs daily
-		// at 03:00. Prunes skill metrics where call_count < 3 AND last_used > 30d.
+		// Register the skill-pruner cron job (idempotent across restarts): runs
+		// daily at 03:00, pruning skill metrics where call_count < 3 AND
+		// last_used > 30d. Skills are control-tenant assets (AGENTS.md), so
+		// EXACTLY ONE pruner exists for the control tenant. Never enumerate
+		// data-dir entries as tenants: that treated eval residue and person
+		// memory partitions as tenants and registered thousands of jobs whose
+		// daily fire opened (and created) memory.db files in every stale
+		// directory.
 		if skillStore != nil {
 			cronSched.SetSkillPruner(skillStore)
-			var tenants []string
-			if entries, err := os.ReadDir(dataDir); err == nil {
-				for _, e := range entries {
-					if e.IsDir() {
-						tenants = append(tenants, e.Name())
-					}
-				}
+			job := &cron.CronJob{
+				Name:      "skill-pruner-default",
+				CronExpr:  "0 3 * * *",
+				Prompt:    "skill_prune:default",
+				TenantID:  "default",
+				Channel:   "cli",
+				Enabled:   true,
+				SystemKey: "skill-pruner:default",
 			}
-			if len(tenants) == 0 {
-				tenants = []string{"default"}
-			}
-			for _, tenantID := range tenants {
-				job := &cron.CronJob{
-					Name:     "skill-pruner-" + tenantID,
-					CronExpr: "0 3 * * *",
-					Prompt:   fmt.Sprintf("skill_prune:%s", tenantID),
-					TenantID: tenantID,
-					Channel:  "cli",
-					Enabled:  true,
-				}
-				if _, err := cronSched.EnsureJob(context.Background(), job); err != nil {
-					log.Warn("gateway: skipped skill-pruner", "tenant", tenantID, "error", err)
-				}
+			if _, err := cronSched.EnsureJob(context.Background(), job); err != nil {
+				log.Warn("gateway: skipped skill-pruner registration", "error", err)
 			}
 		}
 

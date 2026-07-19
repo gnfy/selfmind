@@ -74,9 +74,27 @@ type responsesResponse struct {
 		} `json:"content"`
 	} `json:"output"`
 	Usage struct {
-		InputTokens  int `json:"input_tokens"`
-		OutputTokens int `json:"output_tokens"`
+		InputTokens        int `json:"input_tokens"`
+		OutputTokens       int `json:"output_tokens"`
+		InputTokensDetails struct {
+			CachedTokens int `json:"cached_tokens"`
+		} `json:"input_tokens_details"`
 	} `json:"usage"`
+}
+
+// usageStatsFromResponses maps Responses-protocol usage to UsageStats.
+// OpenAI/Codex report automatic prompt-cache hits as
+// usage.input_tokens_details.cached_tokens; there is no separate cache-creation
+// counter, so CacheCreationInputTokens stays 0 for this protocol. Note that
+// OpenAI cached input tokens are discounted, not free, so the downstream
+// billed_input_tokens = input_tokens - cache_read_input_tokens is an
+// approximation for this protocol.
+func usageStatsFromResponses(payload responsesResponse) UsageStats {
+	return UsageStats{
+		InputTokens:          payload.Usage.InputTokens,
+		OutputTokens:         payload.Usage.OutputTokens,
+		CacheReadInputTokens: payload.Usage.InputTokensDetails.CachedTokens,
+	}
 }
 
 func NewResponsesAdapter(apiKey, baseURL, model string) *ResponsesAdapter {
@@ -165,6 +183,8 @@ func (a *ResponsesAdapter) chatViaStream(ctx context.Context, req ChatRequest) (
 		if event.Usage != nil {
 			resp.Usage.InputTokens += event.Usage.InputTokens
 			resp.Usage.OutputTokens += event.Usage.OutputTokens
+			resp.Usage.CacheReadInputTokens += event.Usage.CacheReadInputTokens
+			resp.Usage.CacheCreationInputTokens += event.Usage.CacheCreationInputTokens
 		}
 		if event.FinishReason != "" {
 			resp.FinishReason = event.FinishReason
@@ -317,7 +337,8 @@ func (a *ResponsesAdapter) streamResponse(ctx context.Context, resp *http.Respon
 						emitToolCall(call)
 					}
 					if payload.Usage.InputTokens != 0 || payload.Usage.OutputTokens != 0 {
-						ch <- StreamEvent{Usage: &UsageStats{InputTokens: payload.Usage.InputTokens, OutputTokens: payload.Usage.OutputTokens}}
+						usage := usageStatsFromResponses(payload)
+						ch <- StreamEvent{Usage: &usage}
 					}
 					if reason := responsesFinishReason(payload); reason != "" {
 						ch <- StreamEvent{FinishReason: reason}
@@ -599,7 +620,7 @@ func (a *ResponsesAdapter) chatResponseFromResponses(payload responsesResponse) 
 	return &ChatResponse{
 		Content:      content,
 		ToolCalls:    calls,
-		Usage:        UsageStats{InputTokens: payload.Usage.InputTokens, OutputTokens: payload.Usage.OutputTokens},
+		Usage:        usageStatsFromResponses(payload),
 		FinishReason: responsesFinishReason(payload),
 	}
 }

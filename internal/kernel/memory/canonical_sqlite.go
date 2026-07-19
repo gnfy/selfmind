@@ -21,7 +21,10 @@ import (
 // importLegacyFacts incrementally imports rows from the legacy `facts` table
 // into the layered model. Idempotency: each legacy fact becomes AT MOST one
 // observation, keyed by the fact's own id (INSERT OR IGNORE); a rerun after a
-// partial import resumes where it stopped. Legacy facts with the same
+// partial import resumes where it stopped. A run-attributed fact whose
+// evidence the live intake path already recorded (same run + scope +
+// normalized statement) is skipped entirely — that evidence exists, only under
+// a deterministic `obs_` id. Legacy facts with the same
 // normalized content in the same target+scope fold into ONE canonical memory
 // whose evidence/occurrence counters carry the repetition signal. The `facts`
 // table itself is never modified.
@@ -74,6 +77,28 @@ func importLegacyFacts(db *sql.DB) error {
 		}
 		scope := normalizedConsolidationScope(f)
 		hash := NormalizedContentHash(f.Content)
+
+		// Duplicate-evidence guard: a run-attributed legacy fact usually has a
+		// live-intake twin already recorded as a deterministic `obs_<hash>`
+		// observation for the same (run, target, scope, statement). Re-materializing it
+		// under the legacy fact's own id would double-count the SAME evidence
+		// (the id-keyed INSERT OR IGNORE below cannot see the twin because the
+		// two paths use different ids), inflating evidence_count/occurrences and
+		// REINFORCE math. One run may contribute one observation per statement;
+		// runless legacy facts have no intake twin and keep current behavior.
+		if strings.TrimSpace(f.CreatedFromRun) != "" {
+			var one int
+			err := tx.QueryRow(`SELECT 1 FROM memory_observations
+				WHERE run_id = ? AND target = ? AND scope = ? AND normalized_hash = ?
+				  AND id LIKE 'obs_%' LIMIT 1`,
+				f.CreatedFromRun, f.Target, scope, hash).Scan(&one)
+			if err == nil {
+				continue // live intake already recorded this evidence
+			}
+			if err != sql.ErrNoRows {
+				return err
+			}
+		}
 
 		result, err := tx.Exec(`INSERT OR IGNORE INTO memory_observations
 			(id, run_id, workspace_id, target, scope, source, content, normalized_hash, confidence_prior, status, created_at)
@@ -588,6 +613,40 @@ func undoMemoryEvent(db *sql.DB, eventID, actor string) error {
 		}
 		if _, err := tx.Exec(`UPDATE canonical_memories SET pinned = ?, user_confirmed = ?, updated_at = ?, revision = revision + 1 WHERE id = ?`,
 			sqliteBool(snap.Pinned), sqliteBool(snap.UserConfirmed), now, memoryID); err != nil {
+			return err
+		}
+	case "dedup":
+		var snap DedupUndoSnapshot
+		if memoryID == "" || json.Unmarshal([]byte(snapshot), &snap) != nil ||
+			snap.Canonical.ID != memoryID || len(snap.Observations) == 0 || len(snap.Evidence) == 0 {
+			return fmt.Errorf("dedup event %s has no reversible evidence snapshot", eventID)
+		}
+		for _, observation := range snap.Observations {
+			if _, err := tx.Exec(`INSERT OR IGNORE INTO memory_observations
+				(id, run_id, analyzer_version, workspace_id, target, scope, source, content,
+				 normalized_hash, confidence_prior, status, created_at)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				observation.ID, observation.RunID, observation.AnalyzerVersion,
+				observation.WorkspaceID, observation.Target, observation.Scope,
+				observation.Source, observation.Content, observation.NormalizedHash,
+				observation.ConfidencePrior, observation.Status, observation.CreatedAt); err != nil {
+				return err
+			}
+		}
+		for _, evidence := range snap.Evidence {
+			if evidence.MemoryID != memoryID {
+				return fmt.Errorf("dedup event %s contains evidence for another memory", eventID)
+			}
+			if _, err := tx.Exec(`INSERT OR IGNORE INTO memory_evidence
+				(memory_id, observation_id, relation, created_at) VALUES (?, ?, ?, ?)`,
+				evidence.MemoryID, evidence.ObservationID, evidence.Relation, evidence.CreatedAt); err != nil {
+				return err
+			}
+		}
+		if _, err := tx.Exec(`UPDATE canonical_memories SET confidence = ?, evidence_count = ?,
+			occurrences = ?, updated_at = ? WHERE id = ?`, snap.Canonical.Confidence,
+			snap.Canonical.EvidenceCount, snap.Canonical.Occurrences,
+			snap.Canonical.UpdatedAt, memoryID); err != nil {
 			return err
 		}
 	default:

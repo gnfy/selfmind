@@ -304,7 +304,7 @@ func (c *Client) sendTextChunk(ctx context.Context, chatID, text string) error {
 				c.tokens.Delete(c.cfg.AccountID, chatID)
 				continue
 			}
-			err = fmt.Errorf("iLink sendmessage error: ret=%d errcode=%d errmsg=%s", ret, errcode, stringFromMap(resp, "errmsg"))
+			err = &sendMessageError{ret: ret, errcode: errcode, errmsg: stringFromMap(resp, "errmsg")}
 			if ret == rateLimitCode || errcode == rateLimitCode {
 				lastErr = err
 			} else {
@@ -331,6 +331,26 @@ func (c *Client) sendTextChunk(ctx context.Context, chatID, text string) error {
 		lastErr = fmt.Errorf("weixin send failed")
 	}
 	return lastErr
+}
+
+type sendMessageError struct {
+	ret     int
+	errcode int
+	errmsg  string
+}
+
+func (e *sendMessageError) Error() string {
+	return fmt.Sprintf("iLink sendmessage error: ret=%d errcode=%d errmsg=%s", e.ret, e.errcode, e.errmsg)
+}
+
+// SessionRefreshRequired satisfies delivery.SessionRefreshError. iLink
+// ret=-2/prepare failed has not accepted the message; it should be retried only
+// after a new inbound refreshes the conversation session.
+func (e *sendMessageError) SessionRefreshRequired() bool {
+	if e == nil {
+		return false
+	}
+	return e.ret == -2 || e.errcode == -2 || strings.Contains(strings.ToLower(e.errmsg), "prepare failed")
 }
 
 func (c *Client) sendTextOnce(ctx context.Context, chatID, text, contextToken, clientID string) (map[string]interface{}, error) {

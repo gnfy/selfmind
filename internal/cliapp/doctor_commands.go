@@ -11,6 +11,7 @@ package cliapp
 import (
 	"bufio"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -286,6 +287,14 @@ func buildDoctorReport(ctx context.Context, store *control.Store, identity *cont
 	}
 	sb.WriteString("\n")
 
+	// Cron governance: system jobs must stay singular. The 2026-07 incident
+	// registered one skill-pruner per data-directory entry (~2.5k rows) whose
+	// daily fire kept touching stale eval/person partitions; this section
+	// makes that class of runaway visible before it burns a night of I/O.
+	sb.WriteString("== Cron governance ==\n")
+	sb.WriteString(cronGovernanceSection(ctx, dataDir))
+	sb.WriteString("\n")
+
 	// Presence snapshot (durable last_seen recency per bound account).
 	sb.WriteString("== Presence (bound accounts) ==\n")
 	if accounts, err := store.ListAccountsByPerson(ctx, identity.TenantID, identity.PersonID); err != nil {
@@ -370,4 +379,43 @@ func tailLines(path string, n int) ([]string, error) {
 		return nil, err
 	}
 	return lines, nil
+}
+
+// cronGovernanceSection summarizes cron_jobs health from the cron database:
+// totals, system-job count, the keyed skill-pruner, historical built-in rows,
+// and duplicate system keys. Read-only; a missing db reports cleanly.
+func cronGovernanceSection(ctx context.Context, dataDir string) string {
+	db, err := sql.Open("sqlite", "file:"+dataDir+"/cron.db?mode=ro")
+	if err != nil {
+		return fmt.Sprintf("(error: %v)\n", err)
+	}
+	defer db.Close()
+	var total, system, pruner, legacyPruner, dupGroups int
+	if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM cron_jobs").Scan(&total); err != nil {
+		return fmt.Sprintf("(error: %v)\n", err)
+	}
+	_ = db.QueryRowContext(ctx, "SELECT COUNT(*) FROM cron_jobs WHERE COALESCE(system_key,'') != ''").Scan(&system)
+	_ = db.QueryRowContext(ctx, "SELECT COUNT(*) FROM cron_jobs WHERE system_key = 'skill-pruner:default'").Scan(&pruner)
+	_ = db.QueryRowContext(ctx, `SELECT COUNT(*) FROM cron_jobs
+		WHERE COALESCE(system_key, '') = '' AND name LIKE 'skill-pruner-%'
+		  AND cron_expr = '0 3 * * *' AND channel = 'cli'
+		  AND prompt LIKE 'skill_prune:%'`).Scan(&legacyPruner)
+	_ = db.QueryRowContext(ctx, `SELECT COUNT(*) FROM (
+		SELECT 1 FROM cron_jobs WHERE COALESCE(system_key, '') != ''
+		GROUP BY system_key HAVING COUNT(*) > 1)`).Scan(&dupGroups)
+	out := fmt.Sprintf("jobs: %d total, %d system, skill-pruner: %d keyed + %d legacy, %d duplicate system-key group(s)\n",
+		total, system, pruner, legacyPruner, dupGroups)
+	if pruner > 1 {
+		out += "warning: more than one skill-pruner job — skills are control-tenant assets; restart the daemon to run the governance migration.\n"
+	}
+	if legacyPruner > 0 {
+		out += "warning: legacy system-shaped skill-pruner jobs remain; restart the daemon to run the governance migration.\n"
+	}
+	if dupGroups > 0 {
+		out += "warning: duplicate cron rows detected — restart the daemon (EnsureJob collapses them) or inspect cron.db.\n"
+	}
+	if total > 50 {
+		out += "warning: unusually many cron jobs — check for runaway system registration.\n"
+	}
+	return out
 }

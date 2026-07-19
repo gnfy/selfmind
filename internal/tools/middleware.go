@@ -355,6 +355,21 @@ func SmartApprovalMiddleware(projectRoot string) Middleware {
 				}
 			}
 
+			// Durable watcher finalization is deliberately unattended. It consumes
+			// authoritative watcher evidence and may update files inside the active
+			// workspace, but it must never wait for a human or independently re-run
+			// shell/network checks. Rejecting immediately uses the stable
+			// user-decision contract, so the model cannot retry command variants.
+			if hasScope && scope.ExecutionProfile == ExecutionProfileWatchFinalization {
+				if isExecTool(toolName) {
+					return "", fmt.Errorf("operation rejected: unattended watcher finalization cannot run shell or terminal commands; use recorded watcher evidence and file tools, or finish waiting_user if evidence is insufficient")
+				}
+				if dangerous {
+					return "", fmt.Errorf("operation rejected: unattended watcher finalization cannot perform privileged or out-of-workspace operations; finish waiting_user instead")
+				}
+				return next(args)
+			}
+
 			// Layer 2: mode bypass.
 			if !approvalNeeded(mode, toolName, dangerous) {
 				return next(args)

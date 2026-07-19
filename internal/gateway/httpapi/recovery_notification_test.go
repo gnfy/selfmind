@@ -136,6 +136,9 @@ func TestExternalWatchFinalizationUsesRecordedEvidence(t *testing.T) {
 	if strings.Contains(strings.ToLower(row.Content), "re-check") || !strings.Contains(row.Content, "authoritative evidence") || !strings.Contains(row.Content, "SUCCESS") {
 		t.Fatalf("finalization prompt does not preserve watcher authority: %q", row.Content)
 	}
+	if !strings.Contains(row.Content, "unattended finalization") || !strings.Contains(row.Content, "do not invoke terminal") {
+		t.Fatalf("finalization prompt lacks unattended execution contract: %q", row.Content)
+	}
 }
 
 func TestExternalWatchFinalizationReconcilesDoneQueue(t *testing.T) {

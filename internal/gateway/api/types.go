@@ -60,6 +60,10 @@ type MessageRequest struct {
 	// never be re-run at the next boot drain). It is internal routing state, never
 	// part of the wire request — hence json:"-".
 	QueueID string `json:"-"`
+	// ExecutionProfile carries an internal execution contract for durable
+	// system work. It is never accepted from the wire. Ordinary user turns leave
+	// it empty; watcher finalization uses a constrained unattended profile.
+	ExecutionProfile string `json:"-"`
 }
 
 // DispatchRequest runs a single management tool on the daemon. It backs

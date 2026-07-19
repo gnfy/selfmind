@@ -45,6 +45,22 @@ func TestLatestCompactionLine(t *testing.T) {
 	}
 }
 
+func TestLatestPromptCacheLine(t *testing.T) {
+	events := []control.Event{eventWith("token.updated", map[string]interface{}{
+		"input_tokens": 1000, "cache_read_input_tokens": 800,
+		"cache_creation_input_tokens": 120, "billed_input_tokens": 200,
+	})}
+	out := latestPromptCacheLine(events)
+	for _, want := range []string{"read 800 tok (80%)", "created 120 tok", "billed input 200 tok"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("prompt cache line missing %q: %s", want, out)
+		}
+	}
+	if !strings.Contains(latestPromptCacheLine(nil), "no provider usage data") {
+		t.Fatal("absence must be explicit")
+	}
+}
+
 func TestLatestRecallLine(t *testing.T) {
 	hit := []control.Event{eventWith("context.recall", map[string]interface{}{
 		"sources": map[string]int{"taskcard": 1, "session": 2}, "slices": 3, "expanded": true, "elapsed_ms": 45,

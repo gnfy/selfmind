@@ -133,6 +133,26 @@ func TestSendTextUsesIlinkMessageFormat(t *testing.T) {
 	}
 }
 
+func TestSendTextMarksPrepareFailureAsSessionRefreshRequired(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"ret":-2,"errcode":0,"errmsg":"prepare failed"}`))
+	}))
+	defer server.Close()
+
+	client := NewClient(RuntimeConfig{
+		AccountID: "wx-account", Token: "token", BaseURL: server.URL,
+		SendChunkRetries: 1, HomeDir: t.TempDir(),
+	})
+	err := client.Send(context.Background(), "peer-1", "important result")
+	if err == nil {
+		t.Fatal("prepare failure must be returned")
+	}
+	var typed interface{ SessionRefreshRequired() bool }
+	if !errors.As(err, &typed) || !typed.SessionRefreshRequired() {
+		t.Fatalf("error does not request session refresh: %T %v", err, err)
+	}
+}
+
 // TestContextTokenStoreAgeAndLegacyRestore covers the delivery-confidence
 // contract: fresh tokens have a known age, legacy (timestamp-less) persistence
 // restores as age-unknown, and age-unknown must read as stale.

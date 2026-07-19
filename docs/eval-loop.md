@@ -22,7 +22,7 @@ selfmind selfcheck                 # build + test + offline-replay eval gate (no
 selfmind eval repair [case-or-dir] # re-run failures, print a repair brief (apply stays manual)
 selfmind eval scorecard [dir]      # per-scenario daily-driver readiness report
 selfmind eval capture [latest]     # promote the last recorded turn into an eval case
-selfmind eval clean [--yes]        # remove historic eval residue from the configured control.db
+selfmind eval clean [--yes]        # remove historic eval residue (control.db rows + on-disk eval-* dirs)
 ```
 
 `eval run` writes JSONL logs under `evalruns/YYYY-MM-DD/` by default. The
@@ -67,6 +67,16 @@ person with even one real binding is never touched) and removes their
 accounts, workspaces, tasks, runs, events, handoffs, artifacts, channel
 messages, approvals, notifications, outbound messages, current-task/workspace
 pointers, and any `eval-*` tenants left empty.
+
+It also removes on-disk residue: per-case `eval-<case>-<nanos>` tenant
+directories that historic runs minted under the config home (skills base
+default) and the data dir (per-tenant memory stores). The scan is strictly
+verifiable, never a generalized recursive delete — a directory qualifies only
+when its name matches the eval tenant pattern, it is a direct child of one of
+those two roots, and it contains only known eval artifacts (memory store files
+and/or a skills subtree). Anything unrecognized is reported and skipped. New
+runs no longer leave these directories behind: the harness overrides the
+skills dir into its throwaway temp dir and sweeps its own tenant dir on close.
 
 ## Daily feedback loop: flight recorder + capture
 

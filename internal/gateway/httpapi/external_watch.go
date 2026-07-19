@@ -422,7 +422,9 @@ func externalWatchFinalizationContent(watch control.ExternalWatch, summary strin
 	}
 	return fmt.Sprintf(
 		"The daemon's durable external watcher verified this operation successfully. "+
-			"Treat the recorded watcher result as authoritative evidence and do not rerun the external status check unless other durable evidence directly contradicts it.\n\n"+
+			"Treat the recorded watcher result as authoritative evidence and do not rerun the external status check unless other durable evidence directly contradicts it. "+
+			"This is an unattended finalization run: use file tools only; do not invoke terminal, shell, or network tools. "+
+			"If the recorded evidence is insufficient or a privileged operation is required, finish with waiting_user instead of requesting approval or retrying variants.\n\n"+
 			"Result: %s\nRecorded output:\n%s\n\n"+
 			"Finalize the task now: backfill any pending records this task promised to update, summarize the final state, and finish the task with an accurate status.",
 		summary, firstNonEmpty(evidence, "(no output recorded)"))

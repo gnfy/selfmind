@@ -96,6 +96,62 @@ func TestSmartApprovalMiddlewareUsesExecutionScopeApproval(t *testing.T) {
 	}
 }
 
+func TestWatchFinalizationProfileNeverWaitsForShellApproval(t *testing.T) {
+	approvalCalled := false
+	cleanup := SetExecutionScope("person-watch", ExecutionScope{
+		TenantID:         "tenant-watch",
+		PersonID:         "person-watch",
+		ExecutionProfile: ExecutionProfileWatchFinalization,
+		Approval: func(context.Context, ToolApprovalRequest) (ToolApprovalDecision, error) {
+			approvalCalled = true
+			return ToolApprovalDecision{Approved: true}, nil
+		},
+	})
+	defer cleanup()
+
+	executed := false
+	exec := SmartApprovalMiddleware("")(func(args map[string]interface{}) (string, error) {
+		executed = true
+		return "executed", nil
+	})
+	_, err := exec(map[string]interface{}{
+		"_tenant_id": "person-watch",
+		"_tool_name": "terminal",
+		"command":    "grep SUCCESS release.md",
+	})
+	if err == nil || !strings.Contains(err.Error(), "operation rejected: unattended watcher finalization") {
+		t.Fatalf("terminal rejection = %v", err)
+	}
+	if approvalCalled || executed {
+		t.Fatalf("unattended shell reached approval/executor: approval=%v executed=%v", approvalCalled, executed)
+	}
+}
+
+func TestWatchFinalizationProfileAllowsSafeWorkspaceFileTool(t *testing.T) {
+	cleanup := SetExecutionScope("person-watch-file", ExecutionScope{
+		TenantID:         "tenant-watch",
+		PersonID:         "person-watch-file",
+		WorkspaceRoot:    t.TempDir(),
+		ExecutionProfile: ExecutionProfileWatchFinalization,
+	})
+	defer cleanup()
+
+	executed := false
+	exec := SmartApprovalMiddleware("")(func(args map[string]interface{}) (string, error) {
+		executed = true
+		return "executed", nil
+	})
+	result, err := exec(map[string]interface{}{
+		"_tenant_id": "person-watch-file",
+		"_tool_name": "write_file",
+		"path":       "release.md",
+		"content":    "completed",
+	})
+	if err != nil || result != "executed" || !executed {
+		t.Fatalf("safe file tool result=%q err=%v executed=%v", result, err, executed)
+	}
+}
+
 func TestRateLimitMiddleware(t *testing.T) {
 	rl := RateLimit(2)
 	mw := rl.Middleware

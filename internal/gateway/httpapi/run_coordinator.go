@@ -15,6 +15,7 @@ import (
 	"selfmind/internal/gateway/router"
 	"selfmind/internal/kernel"
 	"selfmind/internal/platform/log"
+	"selfmind/internal/tools"
 )
 
 var errGatewayShutdown = errors.New("gateway shutdown")
@@ -612,6 +613,9 @@ func (c *RunCoordinator) drainQueue(identity *control.IdentityContext) {
 		// (QueueStatusDone) — otherwise the row stays 'started' and boot recovery
 		// re-runs the already-completed work.
 		QueueID: next.ID,
+	}
+	if strings.HasPrefix(next.IdempotencyKey, "external-watch:") {
+		req.ExecutionProfile = tools.ExecutionProfileWatchFinalization
 	}
 	// Reproduce the queued item's route while preserving its durable person.
 	// Never create an account here: system rows may intentionally omit

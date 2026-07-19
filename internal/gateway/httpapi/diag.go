@@ -257,9 +257,37 @@ func (d *Server) contextDiagReply(ctx context.Context, identity *control.Identit
 	} else {
 		sb.WriteString("Breakdown: no context.breakdown event recorded yet\n")
 	}
+	sb.WriteString(latestPromptCacheLine(events))
 	sb.WriteString(latestCompactionLine(events))
 	sb.WriteString(latestRecallLine(events))
 	return strings.TrimSpace(sb.String()), nil
+}
+
+func latestPromptCacheLine(events []control.Event) string {
+	for _, e := range events {
+		if e.Type != "token.updated" {
+			continue
+		}
+		var p struct {
+			InputTokens         int `json:"input_tokens"`
+			CacheReadTokens     int `json:"cache_read_input_tokens"`
+			CacheCreationTokens int `json:"cache_creation_input_tokens"`
+			BilledInputTokens   int `json:"billed_input_tokens"`
+		}
+		if json.Unmarshal(e.Payload, &p) != nil {
+			continue
+		}
+		if p.InputTokens <= 0 && p.CacheReadTokens <= 0 && p.CacheCreationTokens <= 0 {
+			continue
+		}
+		hitRate := 0
+		if p.InputTokens > 0 {
+			hitRate = p.CacheReadTokens * 100 / p.InputTokens
+		}
+		return fmt.Sprintf("Prompt cache (run): read %d tok (%d%%), created %d tok, billed input %d tok\n",
+			p.CacheReadTokens, hitRate, p.CacheCreationTokens, p.BilledInputTokens)
+	}
+	return "Prompt cache: no provider usage data recorded yet\n"
 }
 
 // contextBreakdownDetail is the multi-line expansion of the newest

@@ -123,8 +123,14 @@ func anthropicQuirks() ProviderQuirks {
 	}
 }
 
-func minimaxQuirks() ProviderQuirks {
+func cachedAnthropicQuirks() ProviderQuirks {
 	q := anthropicQuirks()
+	q.PromptCache = true
+	return q
+}
+
+func minimaxQuirks() ProviderQuirks {
+	q := cachedAnthropicQuirks()
 	q.AuthHeader = AuthHeaderBearer
 	q.ThinkingMode = ThinkingModeMiniMax
 	return q
@@ -169,7 +175,7 @@ func BuiltinProfiles() []ProviderProfile {
 			BaseURLEnvVar: "ANTHROPIC_BASE_URL", ExternalSource: "claude-code",
 			ModelList:      ModelListAnthropic,
 			FallbackModels: []string{"claude-3-5-sonnet-20241022", "claude-3-5-haiku-20241022"},
-			Quirks:         anthropicQuirks(),
+			Quirks:         cachedAnthropicQuirks(),
 		},
 		{
 			ID: "claude-code", DisplayName: "Claude Code", Aliases: []string{"claude-oauth"},
@@ -177,7 +183,7 @@ func BuiltinProfiles() []ProviderProfile {
 			BaseURL: "https://api.anthropic.com", ExternalSource: "claude-code",
 			ModelList:      ModelListAnthropic,
 			FallbackModels: []string{"claude-3-5-sonnet-20241022", "claude-3-5-haiku-20241022"},
-			Quirks:         anthropicQuirks(),
+			Quirks:         cachedAnthropicQuirks(),
 		},
 		{
 			ID: "google", DisplayName: "Google AI Studio", Aliases: []string{"gemini"},

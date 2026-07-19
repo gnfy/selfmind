@@ -5,10 +5,13 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
 	"selfmind/internal/control"
+	"selfmind/internal/platform/config"
+	"selfmind/internal/tools"
 )
 
 // writeRunnerFixtures prepares a hermetic eval environment: temp HOME (no real
@@ -76,6 +79,16 @@ func TestRunCaseDefaultsToIsolatedDataDir(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(realDataDir, "control.db")); !os.IsNotExist(err) {
 		t.Fatalf("default eval run must not create the configured control.db (stat err=%v)", err)
 	}
+	// SkillsDir isolation: app wiring must not mint an eval-tenant skills dir
+	// under the (temp) home — that was the per-case ~/.selfmind/eval-*/skills
+	// leak. writeRunnerFixtures pinned HOME, so any eval-* child here is a leak.
+	home, _ := os.UserHomeDir()
+	entries, _ := os.ReadDir(filepath.Join(home, ".selfmind"))
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), "eval-") {
+			t.Fatalf("eval run leaked %q into the home .selfmind dir", e.Name())
+		}
+	}
 }
 
 // TestRunCaseSharedDataOptsIntoConfiguredDir covers the explicit escape hatch:
@@ -113,6 +126,46 @@ func TestRunCaseSharedDataOptsIntoConfiguredDir(t *testing.T) {
 	}
 	if stuck != 0 {
 		t.Fatalf("shared_data run left %d run(s) in running status", stuck)
+	}
+}
+
+// TestIsolatedEvalConfigKeepsSkillsUnderTempDir is the regression test for the
+// SkillsDir isolation leak: the harness overrode Storage.DataDir but left
+// Evolution.SkillsDir empty, so app wiring fell back to ~/.selfmind and minted
+// one `eval-<case>-<nano>/skills` home-dir directory per eval case. The
+// resolved skills dir must live under the throwaway data dir, never under the
+// user's home.
+func TestIsolatedEvalConfigKeepsSkillsUnderTempDir(t *testing.T) {
+	cfg := &config.Config{}
+	tempData := filepath.Join(t.TempDir(), "data")
+	isolatedEvalConfig(cfg, tempData)
+
+	if cfg.Storage.DataDir != tempData {
+		t.Fatalf("data dir override lost: %q", cfg.Storage.DataDir)
+	}
+	// Replicate app wiring's resolution (internal/app/agent.go): an empty
+	// SkillsDir falls back to <home>/.selfmind before the tenant dir is minted.
+	base := cfg.Evolution.SkillsDir
+	if base == "" {
+		home, _ := os.UserHomeDir()
+		base = filepath.Join(home, ".selfmind")
+	}
+	skillsDir := tools.SkillsDirForTenant(base, "eval-some_case-1234567890123456789")
+	if !strings.HasPrefix(skillsDir, tempData+string(filepath.Separator)) {
+		t.Fatalf("skills dir %q escaped the temp data dir %q", skillsDir, tempData)
+	}
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		if strings.HasPrefix(skillsDir, filepath.Join(home, ".selfmind")+string(filepath.Separator)) {
+			t.Fatalf("skills dir %q resolved under the user home", skillsDir)
+		}
+	}
+
+	// A blank data dir must stay a no-op: the shared_data escape hatch runs
+	// against the configured paths and must not gain surprise overrides.
+	shared := &config.Config{}
+	isolatedEvalConfig(shared, "")
+	if shared.Storage.DataDir != "" || shared.Evolution.SkillsDir != "" {
+		t.Fatalf("shared_data config must be untouched, got %+v", shared)
 	}
 }
 

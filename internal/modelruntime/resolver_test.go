@@ -139,6 +139,9 @@ func TestResolverKimiCodingDefaultsToAnthropicEndpoint(t *testing.T) {
 	if !rt.Quirks.DisableHTTP2 {
 		t.Fatalf("DisableHTTP2 quirk = false, want true")
 	}
+	if rt.Quirks.PromptCache {
+		t.Fatal("direct Kimi Coding must not receive unverified cache_control markers")
+	}
 }
 
 func TestResolverKimiOpenAICompatibleUsesCodingV1Root(t *testing.T) {
@@ -201,6 +204,30 @@ func TestResolverMiniMaxProfiles(t *testing.T) {
 	}
 	if rt.Quirks.ThinkingMode != ThinkingModeMiniMax {
 		t.Fatalf("thinking mode quirk = %q, want %q", rt.Quirks.ThinkingMode, ThinkingModeMiniMax)
+	}
+	if !rt.Quirks.PromptCache {
+		t.Fatal("MiniMax Anthropic endpoint should enable documented prompt caching")
+	}
+}
+
+func TestBuiltinPromptCachePolicy(t *testing.T) {
+	registry := NewRegistry()
+	for _, provider := range []string{"anthropic", "claude-code", "minimax", "minimax-cn", "minimax-oauth"} {
+		profile, ok := registry.Resolve(provider)
+		if !ok {
+			t.Fatalf("builtin provider %q not found", provider)
+		}
+		if !profile.Quirks.PromptCache {
+			t.Errorf("provider %q should enable its documented Anthropic prompt-cache path", provider)
+		}
+	}
+
+	kimi, ok := registry.Resolve("kimi-coding")
+	if !ok {
+		t.Fatal("builtin provider kimi-coding not found")
+	}
+	if kimi.Quirks.PromptCache {
+		t.Fatal("direct Kimi Coding must keep unverified cache_control markers disabled")
 	}
 }
 

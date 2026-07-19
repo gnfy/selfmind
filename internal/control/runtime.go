@@ -494,6 +494,21 @@ func (s *Store) MarkDeliverySentUnconfirmed(ctx context.Context, id string) erro
 	return err
 }
 
+// MarkDeliveryPendingSession parks a critical notification until the peer's
+// next inbound refreshes the platform session. It is excluded from normal
+// retry scans; catchup_at is cleared because a prepare failure means the
+// platform did not accept the message and a later inbound can retry safely.
+func (s *Store) MarkDeliveryPendingSession(ctx context.Context, id, reason string) error {
+	now := time.Now().Unix()
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE outbound_messages
+		 SET status = 'pending_session', attempts = attempts + 1, last_error = ?,
+		     catchup_at = 0, updated_at = ?
+		 WHERE id = ?`,
+		reason, now, id)
+	return err
+}
+
 // ListCatchUpEligible returns sent_unconfirmed rows eligible for the one-shot
 // catch-up re-push that runs when the peer's next inbound refreshes the
 // platform session (P0-1, docs/STATUS.md "ACTIVE PLAN"). Eligible = same
@@ -513,7 +528,13 @@ func (s *Store) ListCatchUpEligible(ctx context.Context, tenantID, personID, pla
 		        part_index, part_total, COALESCE(idempotency_key, ''), created_at, updated_at, COALESCE(delivered_at, 0)
 		 FROM outbound_messages
 		 WHERE tenant_id = ? AND person_id = ? AND platform = ? AND channel = ?
-		   AND status = 'sent_unconfirmed' AND COALESCE(catchup_at, 0) = 0 AND updated_at >= ?
+		   AND (
+		     status IN ('sent_unconfirmed', 'pending_session')
+		     OR (status = 'failed'
+		         AND COALESCE(kind, '') IN ('final_result', 'approval', 'clarify', 'external_watch', 'recovery', 'maintenance_health')
+		         AND (last_error LIKE '%ret=-2%' OR lower(last_error) LIKE '%prepare failed%'))
+		   )
+		   AND COALESCE(catchup_at, 0) = 0 AND updated_at >= ?
 		 ORDER BY created_at ASC, rowid ASC LIMIT ?`,
 		normalizeTenant(tenantID), personID, platform, channel, since.Unix(), limit)
 	if err != nil {
@@ -538,7 +559,12 @@ func (s *Store) ListCatchUpEligible(ctx context.Context, tenantID, personID, pla
 func (s *Store) ClaimDeliveryCatchUp(ctx context.Context, id string) (bool, error) {
 	res, err := s.db.ExecContext(ctx,
 		`UPDATE outbound_messages SET catchup_at = ?, updated_at = ?
-		 WHERE id = ? AND status = 'sent_unconfirmed' AND COALESCE(catchup_at, 0) = 0`,
+		 WHERE id = ? AND (
+		   status IN ('sent_unconfirmed', 'pending_session')
+		   OR (status = 'failed'
+		       AND COALESCE(kind, '') IN ('final_result', 'approval', 'clarify', 'external_watch', 'recovery', 'maintenance_health')
+		       AND (last_error LIKE '%ret=-2%' OR lower(last_error) LIKE '%prepare failed%'))
+		 ) AND COALESCE(catchup_at, 0) = 0`,
 		time.Now().Unix(), time.Now().Unix(), id)
 	if err != nil {
 		return false, err
@@ -631,7 +657,7 @@ func (s *Store) ListUndeliveredTaskResults(ctx context.Context, tenantID, person
 		        part_index, part_total, COALESCE(idempotency_key, ''), created_at, updated_at, COALESCE(delivered_at, 0)
 		 FROM outbound_messages
 		 WHERE tenant_id = ? AND person_id = ? AND task_id = ?
-		   AND status IN ('sent_unconfirmed', 'failed') AND updated_at >= ?
+		   AND status IN ('sent_unconfirmed', 'pending_session', 'failed') AND updated_at >= ?
 		   AND COALESCE(kind, '') IN ('', 'final_result')
 		 ORDER BY updated_at DESC, created_at DESC LIMIT ?`,
 		normalizeTenant(tenantID), personID, taskID, since.Unix(), limit)

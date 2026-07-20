@@ -173,6 +173,12 @@ func TestExternalWatchFinalizationReconcilesDoneQueue(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err := store.MarkQueued(ctx, watch.TenantID, row.ID, control.QueueStatusStarted); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.BindQueuedRun(ctx, watch.TenantID, row.ID, "run_incomplete_finalization"); err != nil {
+		t.Fatal(err)
+	}
 	if err := store.MarkQueued(ctx, watch.TenantID, row.ID, control.QueueStatusDone); err != nil {
 		t.Fatal(err)
 	}
@@ -226,10 +232,16 @@ func TestExternalWatchFinalizationRepairsLegacyGatewayShutdownCancellation(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
+	legacyRunID := "run_legacy_shutdown"
+	if err := store.MarkQueued(ctx, watch.TenantID, row.ID, control.QueueStatusStarted); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.BindQueuedRun(ctx, watch.TenantID, row.ID, legacyRunID); err != nil {
+		t.Fatal(err)
+	}
 	if err := store.MarkQueued(ctx, watch.TenantID, row.ID, control.QueueStatusDone); err != nil {
 		t.Fatal(err)
 	}
-	legacyRunID := "run_legacy_shutdown"
 	for _, payload := range []map[string]interface{}{
 		{"reason": "gateway shutdown"},
 		{"error": "context canceled", "outcome": map[string]interface{}{"status": "cancelled"}},

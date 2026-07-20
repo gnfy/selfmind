@@ -81,7 +81,7 @@ func (d *Server) buildDigest(ctx context.Context, identity *control.IdentityCont
 	}
 	out.FinishedTasks = digestTasks(finished)
 
-	disrupted, err := d.Control.ListTasksByStatusSince(ctx, identity.TenantID, identity.PersonID, []string{"failed", "interrupted"}, since, maxDigestTasks)
+	disrupted, err := d.Control.ListTasksByStatusSince(ctx, identity.TenantID, identity.PersonID, []string{"failed", "interrupted", api.RunStatusVerificationPartial}, since, maxDigestTasks)
 	if err != nil {
 		return out, err
 	}

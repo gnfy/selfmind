@@ -148,3 +148,24 @@ func TestEvaluateCaseChecksStructuredCompletionAndVerification(t *testing.T) {
 		t.Fatalf("structured completion checks should pass: %+v", checks)
 	}
 }
+
+func TestEvaluateCaseAcceptsGatewayRejectionBeforeTaskCreation(t *testing.T) {
+	c := &Case{
+		ID:    "gateway_rejection",
+		Turns: []Turn{{Input: "reject this"}},
+		Expect: Expectations{
+			HTTPStatus:    400,
+			RequireNoTask: true,
+			RequireNoRun:  true,
+		},
+	}
+	checks := EvaluateCase(c, RunSnapshot{HTTPStatus: 400})
+	if !ChecksPassed(checks) {
+		t.Fatalf("expected rejection without task/run should pass: %+v", checks)
+	}
+
+	checks = EvaluateCase(c, RunSnapshot{HTTPStatus: 400, TaskIDs: []string{"task_leak"}, RunIDs: []string{"run_leak"}})
+	if ChecksPassed(checks) {
+		t.Fatalf("rejection that created durable work must fail: %+v", checks)
+	}
+}

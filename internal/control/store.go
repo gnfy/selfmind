@@ -418,6 +418,7 @@ CREATE TABLE IF NOT EXISTS task_queue (
 	approval_mode TEXT,
 	workspace_id TEXT,
 	task_id TEXT NOT NULL DEFAULT '',
+	run_id TEXT NOT NULL DEFAULT '',
 	idempotency_key TEXT NOT NULL DEFAULT '',
 	status TEXT NOT NULL DEFAULT 'queued',
 	restarts INTEGER NOT NULL DEFAULT 0,
@@ -603,6 +604,10 @@ CREATE INDEX IF NOT EXISTS idx_external_watches_owner
 		// task_id pins a system-originated queued item (external-watch
 		// finalization) to its task; ordinary inbound rows leave it empty.
 		{"task_queue", "task_id", "TEXT NOT NULL DEFAULT ''"},
+		// run_id binds a drained queue row to the concrete run that executed it.
+		// Recovery may reopen a done system row only when that run has no durable
+		// terminal event; old rows with no binding are never guessed/replayed.
+		{"task_queue", "run_id", "TEXT NOT NULL DEFAULT ''"},
 		// idempotency_key makes system-originated enqueues (watch
 		// finalization) replay-safe: a crash-recovery re-enqueue with the
 		// same stable key is one row, never a duplicate run.

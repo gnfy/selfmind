@@ -149,6 +149,14 @@ editor:
   large_paste_chars: 1000
   large_paste_lines: 10
 
+# Persistent CLI input history (up/down-arrow recall across sessions),
+# stored as ~/.selfmind/input_history.jsonl. persistence: "none" disables
+# disk writes; in-session recall still works.
+history:
+  persistence: "save-all"   # save-all | none
+  max_bytes: 524288
+  load_entries: 200
+
 # Web search backend. Local DuckDuckGo scraping is unreliable (anti-bot
 # blocks, GFW), so a hosted search API is strongly recommended: pick one
 # backend and paste ITS key. Leave both empty for best-effort DuckDuckGo.
@@ -195,6 +203,7 @@ type Config struct {
 	Intent           IntentConfig                `mapstructure:"intent" yaml:"intent,omitempty"`
 	Web              WebConfig                   `mapstructure:"web" yaml:"web,omitempty"`
 	ExecSandbox      ExecSandboxConfig           `mapstructure:"exec_sandbox" yaml:"exec_sandbox,omitempty"`
+	History          HistoryConfig               `mapstructure:"history" yaml:"history,omitempty"`
 }
 
 // ExecSandboxConfig gates bubblewrap isolation for terminal, verify, and
@@ -249,6 +258,21 @@ type IntentThresholdsConfig struct {
 type EditorConfig struct {
 	LargePasteChars int `mapstructure:"large_paste_chars" yaml:"large_paste_chars,omitempty"`
 	LargePasteLines int `mapstructure:"large_paste_lines" yaml:"large_paste_lines,omitempty"`
+}
+
+// HistoryConfig governs the CLI's persistent input history (the up/down-arrow
+// composer history, ~/.selfmind/input_history.jsonl). Persistence "none"
+// disables disk writes entirely; in-session history still works.
+type HistoryConfig struct {
+	Persistence string `mapstructure:"persistence" yaml:"persistence,omitempty"`
+	MaxBytes    int64  `mapstructure:"max_bytes" yaml:"max_bytes,omitempty"`
+	LoadEntries int    `mapstructure:"load_entries" yaml:"load_entries,omitempty"`
+}
+
+// PersistEnabled reports whether input history should be written to disk.
+// Any value other than "none" means save (default "save-all").
+func (h HistoryConfig) PersistEnabled() bool {
+	return !strings.EqualFold(strings.TrimSpace(h.Persistence), "none")
 }
 
 type AuthConfig struct {
@@ -825,6 +849,9 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("auth.credentials_file", "~/.selfmind/auth.json")
 	v.SetDefault("editor.large_paste_chars", 1000)
 	v.SetDefault("editor.large_paste_lines", 10)
+	v.SetDefault("history.persistence", "save-all")
+	v.SetDefault("history.max_bytes", 524288)
+	v.SetDefault("history.load_entries", 200)
 	v.SetDefault("memory.auto_extract_interval", 5)
 	v.SetDefault("memory.auto_extract_min_chars", 80)
 	v.SetDefault("memory.semantic_recall", true)

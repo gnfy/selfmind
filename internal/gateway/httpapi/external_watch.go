@@ -510,10 +510,43 @@ func (d *Server) reconcileExternalWatchFinalizations(ctx context.Context) {
 				_ = d.Control.UpdateTaskStatus(ctx, watch.TenantID, watch.TaskID, "waiting_finalization", summary, nextSteps)
 			}
 			d.coordinator().drainQueue(origin)
-		case control.QueueStatusStarted, control.QueueStatusDone, control.QueueStatusFailed:
+		case control.QueueStatusStarted:
+			materialized, err := d.Control.RunHasSuccessfulTerminalEvent(ctx, queued.RunID)
+			if err != nil {
+				log.Warn("external watch started finalization terminal lookup failed", "watch_id", watch.ID, "run_id", queued.RunID, "error", err)
+				continue
+			}
+			if materialized {
+				if _, err := d.Control.MarkQueuedIfStatus(ctx, watch.TenantID, queued.ID, control.QueueStatusStarted, control.QueueStatusDone); err != nil {
+					log.Warn("external watch completed finalization settlement failed", "watch_id", watch.ID, "queue_id", queued.ID, "error", err)
+				}
+				continue
+			}
+			fallthrough
+		case control.QueueStatusFailed:
 			requeued, err := d.Control.RequeueSystemQueued(ctx, watch.TenantID, queued.ID, externalWatchFinalizationRetries)
 			if err != nil {
 				log.Warn("external watch finalization requeue failed", "watch_id", watch.ID, "error", err)
+				continue
+			}
+			if requeued {
+				_ = d.Control.UpdateTaskStatus(ctx, watch.TenantID, watch.TaskID, "waiting_finalization", summary, nextSteps)
+				d.coordinator().drainQueue(origin)
+				continue
+			}
+			d.blockExternalWatchFinalization(ctx, watch, queued)
+		case control.QueueStatusDone:
+			materialized, err := d.Control.RunHasSuccessfulTerminalEvent(ctx, queued.RunID)
+			if err != nil {
+				log.Warn("external watch finalization terminal lookup failed", "watch_id", watch.ID, "run_id", queued.RunID, "error", err)
+				continue
+			}
+			if materialized {
+				continue
+			}
+			requeued, err := d.Control.RequeueDoneSystemQueuedIfUnmaterialized(ctx, watch.TenantID, queued.ID, externalWatchFinalizationRetries)
+			if err != nil {
+				log.Warn("external watch incomplete finalization requeue failed", "watch_id", watch.ID, "run_id", queued.RunID, "error", err)
 				continue
 			}
 			if requeued {

@@ -40,29 +40,32 @@ func NewController(a *kernel.Agent, provider llm.Provider, cfg *config.Config, t
 	}
 	editor := components.NewEditor(c, editorCfg)
 	editor.SetCommandHints(slashCommandHints())
+	channel := cliSessionChannel()
+	historyStore, persistedHistory := newInputHistoryState(cfg, channel)
 
 	return &Controller{
 		model: &uiModel{
-			common:        c,
-			sidebar:       sidebar.New(c),
-			status:        status.New(c),
-			editor:        editor,
-			messages:      []ChatMessage{},
-			thinking:      false,
-			cursorVisible: true,
-			provider:      provider,
-			agent:         a,
-			tenantID:      tenantID,
-			channel:       cliSessionChannel(),
-			spinner:       sp,
-			inputHistory:  []string{},
-			historyIndex:  -1,
-			approvalMode:  "", // unset: requests omit the mode so the persisted /mode preference governs
-			startTime:     time.Now(),
-			runStatus:     "ready",
-			tokenLimit:    resolveUITokenLimit(cfg, "", ""),
-			modelMeta:     resolveUIModelMeta(cfg),
-			clarifyBridge: tools.NewClarifyBridge(),
+			common:            c,
+			sidebar:           sidebar.New(c),
+			status:            status.New(c),
+			editor:            editor,
+			messages:          []ChatMessage{},
+			thinking:          false,
+			cursorVisible:     true,
+			provider:          provider,
+			agent:             a,
+			tenantID:          tenantID,
+			channel:           channel,
+			spinner:           sp,
+			inputHistory:      persistedHistory,
+			inputHistoryStore: historyStore,
+			historyIndex:      -1,
+			approvalMode:      "", // unset: requests omit the mode so the persisted /mode preference governs
+			startTime:         time.Now(),
+			runStatus:         "ready",
+			tokenLimit:        resolveUITokenLimit(cfg, "", ""),
+			modelMeta:         resolveUIModelMeta(cfg),
+			clarifyBridge:     tools.NewClarifyBridge(),
 		},
 	}
 }
@@ -87,32 +90,35 @@ func NewControllerWithGateway(gw *router.Gateway, agent *kernel.Agent, provider 
 	}
 	editor := components.NewEditor(c, editorCfg)
 	editor.SetCommandHints(slashCommandHints())
+	channel := cliSessionChannel()
+	historyStore, persistedHistory := newInputHistoryState(cfg, channel)
 
 	return &Controller{
 		model: &uiModel{
-			common:        c,
-			sidebar:       sidebar.New(c),
-			status:        status.New(c),
-			editor:        editor,
-			messages:      []ChatMessage{},
-			thinking:      false,
-			cursorVisible: true,
-			provider:      provider,
-			providerName:  providerName,
-			modelName:     modelName,
-			agent:         agent,
-			gateway:       gw,
-			tenantID:      tenantID,
-			channel:       cliSessionChannel(),
-			spinner:       sp,
-			inputHistory:  []string{},
-			historyIndex:  -1,
-			approvalMode:  "", // unset: requests omit the mode so the persisted /mode preference governs
-			startTime:     time.Now(),
-			runStatus:     "ready",
-			tokenLimit:    resolveUITokenLimit(cfg, providerName, modelName),
-			modelMeta:     resolveUIModelMeta(cfg),
-			clarifyBridge: tools.NewClarifyBridge(),
+			common:            c,
+			sidebar:           sidebar.New(c),
+			status:            status.New(c),
+			editor:            editor,
+			messages:          []ChatMessage{},
+			thinking:          false,
+			cursorVisible:     true,
+			provider:          provider,
+			providerName:      providerName,
+			modelName:         modelName,
+			agent:             agent,
+			gateway:           gw,
+			tenantID:          tenantID,
+			channel:           channel,
+			spinner:           sp,
+			inputHistory:      persistedHistory,
+			inputHistoryStore: historyStore,
+			historyIndex:      -1,
+			approvalMode:      "", // unset: requests omit the mode so the persisted /mode preference governs
+			startTime:         time.Now(),
+			runStatus:         "ready",
+			tokenLimit:        resolveUITokenLimit(cfg, providerName, modelName),
+			modelMeta:         resolveUIModelMeta(cfg),
+			clarifyBridge:     tools.NewClarifyBridge(),
 		},
 	}
 }
@@ -152,6 +158,10 @@ func (c *Controller) Start() {
 	if c.model.clarifyBridge != nil {
 		c.model.clarifyBridge.Drain()
 	}
+	// Flush queued input-history writes before the process exits (writes are
+	// async and best-effort; without this, the last inputs of a session could
+	// be lost). No-op when persistence is disabled.
+	c.model.inputHistoryStore.Close()
 	if c.cleanupFn != nil {
 		c.cleanupFn()
 	}

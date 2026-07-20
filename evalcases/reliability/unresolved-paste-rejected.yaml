@@ -1,0 +1,16 @@
+id: reliability_unresolved_paste_rejected
+title: "Unexpanded paste placeholders are rejected before dispatch"
+suite: reliability
+workspace: isolated
+channel: cli
+turns:
+  - input: "Inspect this content: [[ paste:0 main.go.. [80 lines] .. end ]]"
+expect:
+  http_status: 400
+  require_no_task: true
+  require_no_run: true
+  max_tool_calls: 0
+  max_duration_seconds: 10
+checks:
+  no_provider_stack_dump: true
+  context_not_exceeded: true

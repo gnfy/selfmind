@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"selfmind/internal/control"
+	"selfmind/internal/gateway/api"
 	"selfmind/internal/tools"
 )
 
@@ -143,13 +144,14 @@ func (d *Server) diagReply(ctx context.Context, identity *control.IdentityContex
 		fmt.Fprintf(&sb, "- %s (%s)\n", clarifySummaryLine(clarify), clarify.ID)
 	}
 
-	// Outbound delivery health (last 24h): sent / sent_unconfirmed / failed
+	// Outbound delivery health (last 24h): sent / sent_unconfirmed /
+	// pending_session / failed.
 	// counts plus the newest undelivered reason, so "the push never reached my
 	// phone" is diagnosable from the phone itself (P0-1).
 	if counts, err := d.Control.CountOutboundByStatusSince(ctx, identity.TenantID, identity.PersonID, time.Now().Add(-24*time.Hour)); err == nil && len(counts) > 0 {
-		fmt.Fprintf(&sb, "Outbound (24h): sent %d, unconfirmed %d, failed %d\n",
-			counts["sent"], counts["sent_unconfirmed"], counts["failed"])
-		if counts["sent_unconfirmed"] > 0 || counts["failed"] > 0 {
+		fmt.Fprintf(&sb, "Outbound (24h): sent %d, unconfirmed %d, pending %d, failed %d\n",
+			counts["sent"], counts["sent_unconfirmed"], counts["pending_session"], counts["failed"])
+		if counts["sent_unconfirmed"] > 0 || counts["pending_session"] > 0 || counts["failed"] > 0 {
 			if undelivered, err := d.Control.ListUndeliveredOutbound(ctx, identity.TenantID, identity.PersonID, time.Now().Add(-24*time.Hour), 1); err == nil && len(undelivered) > 0 {
 				u := undelivered[0]
 				reason := strings.TrimSpace(u.LastError)
@@ -159,6 +161,9 @@ func (d *Server) diagReply(ctx context.Context, identity *control.IdentityContex
 				fmt.Fprintf(&sb, "- last undelivered: %s (%s)\n", truncate(toOneLine(tools.RedactSensitive(reason)), 140), u.Status)
 			}
 		}
+	}
+	if pending, err := d.Control.CountPendingSessionOutbound(ctx, identity.TenantID, identity.PersonID); err == nil && pending > 0 {
+		fmt.Fprintf(&sb, "Pending session recovery: %d (use /diag delivery)\n", pending)
 	}
 
 	// Last run error across the person's recent runs.
@@ -194,11 +199,97 @@ func (d *Server) diagReply(ctx context.Context, identity *control.IdentityContex
 		if len(events) > 0 {
 			sb.WriteString("Recent activity:\n")
 			for _, event := range events {
-				fmt.Fprintf(&sb, "- %s\n", diagEventLabel(event.Type))
+				fmt.Fprintf(&sb, "- %s\n", diagEventLabel(event))
 			}
 		}
 	}
 	return strings.TrimSpace(sb.String()), nil
+}
+
+// deliveryDiagReply lists durable platform-session failures without exposing
+// account or channel identifiers. A short delivery ID is sufficient for the
+// scoped manual retry command in the same IM chat.
+func (d *Server) deliveryDiagReply(ctx context.Context, identity *control.IdentityContext) (string, error) {
+	if d == nil || d.Control == nil || identity == nil {
+		return "Delivery diagnostics unavailable.", nil
+	}
+	rows, err := d.Control.ListPendingSessionOutbound(ctx, identity.TenantID, identity.PersonID, 5)
+	if err != nil {
+		return "", err
+	}
+	if len(rows) == 0 {
+		return "Delivery recovery\nNo messages are waiting for a fresh IM session.", nil
+	}
+	total, _ := d.Control.CountPendingSessionOutbound(ctx, identity.TenantID, identity.PersonID)
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "Delivery recovery\n%d message(s) are waiting for a fresh IM session.\n", total)
+	if total > len(rows) {
+		fmt.Fprintf(&sb, "Showing the oldest %d.\n", len(rows))
+	}
+	for _, row := range rows {
+		ref := shortDeliveryID(row.ID)
+		kind := strings.TrimSpace(row.Kind)
+		if kind == "" {
+			kind = "message"
+		}
+		fmt.Fprintf(&sb, "- %s | %s | waiting %s\n", ref, kind, humanDuration(time.Since(row.CreatedAt)))
+		fmt.Fprintf(&sb, "  Retry here once: /diag delivery retry %s\n", ref)
+	}
+	sb.WriteString("Automatic recovery also runs after a fresh message in the affected IM chat.")
+	return strings.TrimSpace(sb.String()), nil
+}
+
+func (d *Server) retryDeliveryReply(ctx context.Context, identity *control.IdentityContext, req api.MessageRequest, ref string) (string, error) {
+	if d == nil || d.Delivery == nil || identity == nil {
+		return "Delivery recovery unavailable.", nil
+	}
+	if strings.EqualFold(strings.TrimSpace(req.Platform), "cli") || strings.TrimSpace(req.Channel) == "" {
+		return "Run this recovery command in the affected IM chat.", nil
+	}
+	id, status, err := d.Delivery.RetryPendingSession(ctx, identity.TenantID, identity.PersonID, req.Platform, req.Channel, ref)
+	shortID := shortDeliveryID(id)
+	if err != nil {
+		switch status {
+		case "pending_session":
+			return "The IM session is still unavailable. Send a fresh message here, then retry if needed.", nil
+		case "failed":
+			return "Delivery recovery failed permanently. Run /diag for the redacted reason.", nil
+		default:
+			return "No matching recoverable delivery was found in this IM chat.", nil
+		}
+	}
+	switch status {
+	case "sent":
+		return "Recovered delivery " + shortID + ".", nil
+	case "sent_unconfirmed":
+		return "The platform accepted delivery " + shortID + ", but receipt is unconfirmed. It will not be retried automatically.", nil
+	default:
+		return "Delivery recovery finished with status: " + status, nil
+	}
+}
+
+func shortDeliveryID(id string) string {
+	id = strings.TrimSpace(id)
+	if len(id) > 8 {
+		return id[:8]
+	}
+	return id
+}
+
+func humanDuration(d time.Duration) string {
+	if d < 0 {
+		d = 0
+	}
+	if d < time.Minute {
+		return "under a minute"
+	}
+	if d < time.Hour {
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	}
+	if d < 24*time.Hour {
+		return fmt.Sprintf("%dh", int(d.Hours()))
+	}
+	return fmt.Sprintf("%dd", int(d.Hours()/24))
 }
 
 func (d *Server) memoryDiagReply(ctx context.Context, identity *control.IdentityContext) (string, error) {
@@ -438,7 +529,7 @@ func stuckTaskLines(cards []control.TaskCard, now time.Time) []string {
 		status := strings.ToLower(strings.TrimSpace(card.Status))
 		age := now.Sub(card.UpdatedAt)
 		switch status {
-		case "interrupted", "blocked":
+		case "interrupted", api.RunStatusVerificationPartial, "blocked":
 			if age > stuckInterruptedAfter {
 				found = append(found, stuck{card: card, age: age})
 			}
@@ -470,8 +561,19 @@ func formatIdleAge(age time.Duration) string {
 // diagEventLabel keeps /diag useful on IM without exposing internal event
 // vocabulary or channel/account identifiers. Unknown events remain visible in
 // a generic form so diagnostics do not silently hide activity.
-func diagEventLabel(eventType string) string {
-	switch strings.TrimSpace(eventType) {
+func diagEventLabel(event control.Event) string {
+	eventType := strings.TrimSpace(event.Type)
+	if eventType == "run.finished" {
+		var payload struct {
+			Outcome struct {
+				Status string `json:"status"`
+			} `json:"outcome"`
+		}
+		if json.Unmarshal(event.Payload, &payload) == nil && strings.EqualFold(payload.Outcome.Status, "verification_partial") {
+			return "Work changed; verification remains"
+		}
+	}
+	switch eventType {
 	case "run.started":
 		return "Task started"
 	case "run.finished", "turn.completed":

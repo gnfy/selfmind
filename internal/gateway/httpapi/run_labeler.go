@@ -105,25 +105,51 @@ type runMaintenanceReplay struct {
 	Attach      taskAttach
 }
 
-// finishRunWithMaintenancePayload captures replay evidence in the SAME
-// transaction that makes the run terminal. Model work remains asynchronous:
-// the daemon maintenance worker is still the only consumer and may debounce
-// several nearby runs into one cheap-model request.
-func (c *RunCoordinator) finishRunWithMaintenancePayload(ctx context.Context, identity *control.IdentityContext, task *control.Task, run *control.Run, status, workspaceID, userInput string, outcome api.RunOutcome, attach taskAttach) error {
-	if c == nil || c.srv == nil || c.srv.Control == nil || identity == nil || task == nil || run == nil {
-		return fmt.Errorf("maintenance finalization context is incomplete")
+func buildPostRunMaintenancePayload(identity *control.IdentityContext, task *control.Task, run *control.Run, workspaceID, userInput string, outcome api.RunOutcome, attach taskAttach) (string, error) {
+	if identity == nil || task == nil || run == nil {
+		return "", fmt.Errorf("maintenance replay context is incomplete")
 	}
 	payload, err := json.Marshal(postRunJobPayload{
 		Identity: *identity, Task: *task, Run: *run, WorkspaceID: workspaceID,
 		UserInput: userInput, Outcome: outcome, AttachCreated: attach.created, AttachPreLabel: attach.preLabel,
 	})
 	if err != nil {
-		return fmt.Errorf("encode maintenance replay payload: %w", err)
+		return "", fmt.Errorf("encode maintenance replay payload: %w", err)
 	}
-	return c.srv.Control.FinishRunWithMaintenancePayload(
-		context.WithoutCancel(ctx), identity.TenantID, run.ID, status,
-		postRunAnalyzerVersion, string(payload),
-	)
+	return string(payload), nil
+}
+
+func (c *RunCoordinator) materializeRunFinalization(ctx context.Context, identity *control.IdentityContext, task *control.Task, run *control.Run, taskStatus, workspaceID, userInput, channel, assistantContent string, outcome api.RunOutcome, attach taskAttach, handoff control.Handoff, event control.Event) error {
+	if c == nil || c.srv == nil || c.srv.Control == nil || identity == nil || task == nil || run == nil {
+		return fmt.Errorf("run finalization context is incomplete")
+	}
+	payload, err := buildPostRunMaintenancePayload(identity, task, run, workspaceID, userInput, outcome, attach)
+	if err != nil {
+		return err
+	}
+	_, err = c.srv.Control.MaterializeRunFinalization(context.WithoutCancel(ctx), control.RunFinalization{
+		Identity:           *identity,
+		RunID:              run.ID,
+		RunStatus:          terminalRunStatus(outcome.Status),
+		TaskID:             task.ID,
+		TaskStatus:         taskStatus,
+		Summary:            outcome.Summary,
+		NextSteps:          outcome.NextSteps,
+		Channel:            channel,
+		AssistantContent:   assistantContent,
+		Handoff:            handoff,
+		AnalyzerVersion:    postRunAnalyzerVersion,
+		MaintenancePayload: payload,
+		Event:              event,
+	})
+	return err
+}
+
+func terminalRunStatus(status string) string {
+	if strings.EqualFold(strings.TrimSpace(status), api.RunStatusVerificationPartial) {
+		return "done"
+	}
+	return status
 }
 
 type postRunJobPayload struct {

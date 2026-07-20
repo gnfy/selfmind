@@ -104,6 +104,34 @@ expect:
 	}
 }
 
+func TestLoadCaseParsesGatewayRejectionExpectations(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "case.yaml")
+	if err := os.WriteFile(path, []byte(`
+id: gateway_rejection
+turns:
+  - input: "reject this"
+expect:
+  http_status: 400
+  require_no_task: true
+  require_no_run: true
+checks:
+  no_provider_stack_dump: true
+`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	c, err := LoadCase(path)
+	if err != nil {
+		t.Fatalf("LoadCase failed: %v", err)
+	}
+	if c.Expect.HTTPStatus != 400 || !c.Expect.RequireNoTask || !c.Expect.RequireNoRun {
+		t.Fatalf("gateway rejection expectations not parsed: %+v", c.Expect)
+	}
+	if c.Checks.NoEmptyResponse {
+		t.Fatalf("an expected gateway rejection must not require assistant output: %+v", c.Checks)
+	}
+}
+
 func TestLoadCaseRejectsSharedDataWithIsolationNeeds(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "case.yaml")

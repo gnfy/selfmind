@@ -87,6 +87,7 @@ type uiModel struct {
 	persistedApprovalMode string
 	spinner               spinner.Model
 	inputHistory          []string
+	inputHistoryStore     *inputHistoryStore // nil when persistence is disabled
 	historyIndex          int
 	historyDraft          string
 	clarifyBridge         *tools.ClarifyBridge

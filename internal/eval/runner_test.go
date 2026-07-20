@@ -65,6 +65,7 @@ func TestRunCaseDefaultsToIsolatedDataDir(t *testing.T) {
 	}
 	realDataDir, cfgPath := writeRunnerFixtures(t)
 	c := writeRunnerCase(t, "runner_isolation_default", "")
+	beforeEvalDirs := homeEvalDirs(t)
 
 	out := filepath.Join(t.TempDir(), "out.jsonl")
 	result, err := RunCase(context.Background(), c, RunOptions{ConfigPath: cfgPath, OutputPath: out})
@@ -82,13 +83,30 @@ func TestRunCaseDefaultsToIsolatedDataDir(t *testing.T) {
 	// SkillsDir isolation: app wiring must not mint an eval-tenant skills dir
 	// under the (temp) home — that was the per-case ~/.selfmind/eval-*/skills
 	// leak. writeRunnerFixtures pinned HOME, so any eval-* child here is a leak.
-	home, _ := os.UserHomeDir()
-	entries, _ := os.ReadDir(filepath.Join(home, ".selfmind"))
-	for _, e := range entries {
-		if strings.HasPrefix(e.Name(), "eval-") {
-			t.Fatalf("eval run leaked %q into the home .selfmind dir", e.Name())
+	for name := range homeEvalDirs(t) {
+		if _, existed := beforeEvalDirs[name]; !existed {
+			t.Fatalf("eval run leaked %q into the home .selfmind dir", name)
 		}
 	}
+}
+
+func homeEvalDirs(t *testing.T) map[string]struct{} {
+	t.Helper()
+	result := map[string]struct{}{}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return result
+	}
+	entries, err := os.ReadDir(filepath.Join(home, ".selfmind"))
+	if err != nil {
+		return result
+	}
+	for _, entry := range entries {
+		if entry.IsDir() && strings.HasPrefix(entry.Name(), "eval-") {
+			result[entry.Name()] = struct{}{}
+		}
+	}
+	return result
 }
 
 // TestRunCaseSharedDataOptsIntoConfiguredDir covers the explicit escape hatch:
@@ -126,6 +144,47 @@ func TestRunCaseSharedDataOptsIntoConfiguredDir(t *testing.T) {
 	}
 	if stuck != 0 {
 		t.Fatalf("shared_data run left %d run(s) in running status", stuck)
+	}
+}
+
+func TestRunCaseExpectedGatewayRejectionPassesWithoutProvider(t *testing.T) {
+	if testing.Short() {
+		t.Skip("boots the full gateway harness")
+	}
+	_, cfgPath := writeRunnerFixtures(t)
+	maxTools := 0
+	c := &Case{
+		ID:      "unresolved_paste_rejected",
+		Title:   "unresolved paste is rejected before dispatch",
+		Channel: "cli",
+		Turns: []Turn{{
+			Input: "inspect this\n[[ paste:0 main.go.. [80 lines] .. end ]]",
+		}},
+		Expect: Expectations{
+			HTTPStatus:         400,
+			RequireNoTask:      true,
+			RequireNoRun:       true,
+			MaxToolCalls:       &maxTools,
+			MaxDurationSeconds: 10,
+		},
+		Checks: CheckSettings{
+			NoProviderStackDump: true,
+			ContextNotExceeded:  true,
+		},
+	}
+
+	result, err := RunCase(context.Background(), c, RunOptions{
+		ConfigPath: cfgPath,
+		OutputPath: filepath.Join(t.TempDir(), "out.jsonl"),
+	})
+	if err != nil {
+		t.Fatalf("RunCase: %v", err)
+	}
+	if result.Status != "passed" || !ChecksPassed(result.Checks) {
+		t.Fatalf("expected gateway rejection to pass the eval: %+v", result)
+	}
+	if result.InputTokens != 0 || result.OutputTokens != 0 || result.ActionToolCalls != 0 {
+		t.Fatalf("rejected input reached provider or tools: %+v", result)
 	}
 }
 

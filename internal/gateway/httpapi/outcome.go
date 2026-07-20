@@ -156,6 +156,11 @@ func reconcileStructuredOutcome(outcome api.RunOutcome) api.RunOutcome {
 		if outcome.CompletionReason == "" || outcome.CompletionReason == "completed" {
 			outcome.CompletionReason = "failed"
 		}
+	case api.RunStatusVerificationPartial:
+		if outcome.CompletionReason == "" || outcome.CompletionReason == "completed" {
+			outcome.CompletionReason = "verification_incomplete"
+		}
+		outcome.Resumable = true
 	}
 	return outcome
 }
@@ -176,6 +181,8 @@ func turnStatusForOutcome(outcome api.RunOutcome) string {
 		if outcome.Resumable {
 			return "interrupted"
 		}
+	case api.RunStatusVerificationPartial:
+		return api.RunStatusVerificationPartial
 	}
 	return "completed"
 }

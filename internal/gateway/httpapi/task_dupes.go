@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"selfmind/internal/control"
+	"selfmind/internal/gateway/api"
 	"selfmind/internal/kernel/memory"
 	"selfmind/internal/platform/log"
 )
@@ -99,7 +100,7 @@ func (d *Server) suggestDuplicatesForPerson(ctx context.Context, tenantID, perso
 // hidden labels can no longer be merged into, so pairing them is noise.
 func openTaskCardStatus(status string) bool {
 	switch strings.ToLower(strings.TrimSpace(status)) {
-	case "new", "in_progress", "interrupted", "blocked", "running", "waiting_external", "waiting_finalization", "waiting_user", "":
+	case "new", "in_progress", "interrupted", api.RunStatusVerificationPartial, "blocked", "running", "waiting_external", "waiting_finalization", "waiting_user", "":
 		return true
 	default:
 		return false

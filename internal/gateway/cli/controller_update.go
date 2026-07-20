@@ -454,12 +454,14 @@ func (m *uiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			// Shift+Enter / Ctrl+J already handled above via KeyCtrlJ.
 			// Here plain Enter submits
 			// Use ExpandValue() to replace paste placeholders with actual content.
-			displayInput := m.editor.Value()
 			input := m.editor.ExpandValue()
 			if input == "" {
 				return m, nil
 			}
-			m.recordInputHistory(displayInput)
+			// Record the EXPANDED input, never displayInput: paste placeholders
+			// are unrecoverable after editor.Reset() clears the snippet buffer
+			// (recordInputHistory also skips secure and oversized inputs).
+			m.recordInputHistory(input)
 
 			if m.clarifyMode {
 				response := m.resolveClarifyResponse(input)

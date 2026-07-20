@@ -180,6 +180,9 @@ func (a *App) gatewayRestart(args []string) int {
 func (a *App) printGatewayStatus(status api.GatewayStatusResponse) {
 	runtime := status.Runtime
 	fmt.Fprintf(a.stdout, "SelfMind gateway: %s\n", status.State)
+	if runtime.BuildFingerprint != "" {
+		fmt.Fprintf(a.stdout, "build: %s\n", runtime.BuildFingerprint)
+	}
 	if runtime.PID > 0 {
 		fmt.Fprintf(a.stdout, "pid: %d\n", runtime.PID)
 	}

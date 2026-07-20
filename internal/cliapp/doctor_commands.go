@@ -158,7 +158,8 @@ func (a *App) gatewayStatusLine() string {
 		var status api.GatewayStatusResponse
 		if json.Unmarshal(data, &status) == nil {
 			rt := status.Runtime
-			return fmt.Sprintf("running (state=%s pid=%d addr=%s active_runs=%d)", status.State, rt.PID, rt.Addr, status.ActiveRunCount)
+			buildState := gatewayBuildState(rt.BuildFingerprint)
+			return fmt.Sprintf("running (state=%s pid=%d addr=%s active_runs=%d build=%s)", status.State, rt.PID, rt.Addr, status.ActiveRunCount, buildState)
 		}
 	}
 	manager := gatewayrt.NewManager(a.gatewayDataDir(), "")

@@ -113,7 +113,7 @@ func (a *App) selfcheckGo() bool {
 		start := time.Now()
 		c := exec.CommandContext(a.ctx, goBin, step.cmd...)
 		c.Dir = root
-		c.Env = append(os.Environ(), "GOWORK=off")
+		c.Env = selfcheckGoEnv(os.Environ())
 		out, runErr := c.CombinedOutput()
 		if runErr != nil {
 			ok = false
@@ -125,6 +125,33 @@ func (a *App) selfcheckGo() bool {
 		fmt.Fprintf(a.stdout, "  ok   %s (%s)\n", step.label, time.Since(start).Round(time.Millisecond))
 	}
 	return ok
+}
+
+// selfcheckGoEnv keeps ordinary build and unit-test processes independent from
+// the eval/flight wrappers that may be enabled in the caller's interactive
+// shell. The eval phase enables replay explicitly in selfcheckEval.
+func selfcheckGoEnv(environ []string) []string {
+	blocked := map[string]struct{}{
+		"SELFMIND_EVAL_VCR":        {},
+		"SELFMIND_EVAL_OFFLINE":    {},
+		"SELFMIND_EVAL_VCR_DIR":    {},
+		"SELFMIND_FLIGHT_RECORDER": {},
+		"SELFMIND_FLIGHT_DIR":      {},
+		"SELFMIND_FLIGHT_KEEP":     {},
+		"GOWORK":                   {},
+	}
+	out := make([]string, 0, len(environ)+1)
+	for _, entry := range environ {
+		key, _, ok := strings.Cut(entry, "=")
+		if !ok {
+			continue
+		}
+		if _, skip := blocked[strings.ToUpper(strings.TrimSpace(key))]; skip {
+			continue
+		}
+		out = append(out, entry)
+	}
+	return append(out, "GOWORK=off")
 }
 
 // selfcheckEval replays recorded eval cases under root with strict offline VCR.

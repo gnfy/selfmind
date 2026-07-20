@@ -198,6 +198,26 @@ func verificationRequiresResume(verification *api.VerificationOutcome, changedFi
 	}
 }
 
+func applyVerificationOutcome(outcome api.RunOutcome) api.RunOutcome {
+	if !verificationRequiresResume(outcome.Verification, outcome.Files) {
+		return outcome
+	}
+	outcome.Status = api.RunStatusVerificationPartial
+	outcome.Resumable = true
+	if outcome.CompletionReason == "" || outcome.CompletionReason == "completed" {
+		switch outcome.Verification.State {
+		case "failed":
+			outcome.CompletionReason = "verification_failed"
+		case "blocked":
+			outcome.CompletionReason = "verification_blocked"
+		default:
+			outcome.CompletionReason = "verification_incomplete"
+		}
+	}
+	outcome.NextSteps = appendUnique(outcome.NextSteps, verificationNextStep(outcome.Verification), 8)
+	return outcome
+}
+
 func hasVerifiableFile(files []string) bool {
 	for _, path := range files {
 		lower := strings.ToLower(path)

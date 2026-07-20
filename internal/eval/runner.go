@@ -216,12 +216,14 @@ func runSingle(ctx context.Context, c *Case, opts RunOptions, sampleIdx, totalSa
 	start := time.Now()
 	rec.StartCase(c, h.provider, h.model, workspace)
 	var taskIDs []string
+	var runIDs []string
 	var inputTokens, outputTokens int
 	var lastStatus string
 	var lastOutcome string
 	var lastCompletionReason string
 	var lastResumable bool
 	var lastVerificationState string
+	var lastHTTPStatus int
 	// Track every person the case touched (the case identity plus any per-turn
 	// platform_user_id "stranger" identities) so post-case run finalization can
 	// sweep exactly the runs this eval created and nothing else.
@@ -282,6 +284,9 @@ func runSingle(ctx context.Context, c *Case, opts RunOptions, sampleIdx, totalSa
 		if resp.Task != nil {
 			taskIDs = append(taskIDs, resp.Task.ID)
 		}
+		if resp.Run != nil {
+			runIDs = append(runIDs, resp.Run.ID)
+		}
 		if resp.Outcome != nil {
 			lastOutcome = resp.Outcome.Status
 			lastCompletionReason = resp.Outcome.CompletionReason
@@ -299,6 +304,7 @@ func runSingle(ctx context.Context, c *Case, opts RunOptions, sampleIdx, totalSa
 		if resp.Error != "" || status >= 400 {
 			lastStatus = "failed"
 		}
+		lastHTTPStatus = status
 		rec.FinishTurn(i, status, resp.Content, resp.Error, resp.Usage.InputTokens, resp.Usage.OutputTokens, turnStart)
 	}
 	// Every eval turn is synchronous, so its run must be terminal once
@@ -309,6 +315,8 @@ func runSingle(ctx context.Context, c *Case, opts RunOptions, sampleIdx, totalSa
 	forceFinalized := finalizeLeftoverRuns(ctx, h.controlStore, h.tenantID, seenPersons, 3*time.Second)
 	snap := rec.Snapshot()
 	snap.TaskIDs = taskIDs
+	snap.RunIDs = runIDs
+	snap.HTTPStatus = lastHTTPStatus
 	snap.Workspace = workspace
 	snap.ExpectedWorkspace = workspace
 	snap.DurationSeconds = time.Since(start).Seconds()
@@ -345,7 +353,8 @@ func runSingle(ctx context.Context, c *Case, opts RunOptions, sampleIdx, totalSa
 	}
 
 	status := "passed"
-	if lastStatus == "failed" || !ChecksPassed(checks) {
+	expectedGatewayRejection := c.Expect.HTTPStatus >= 400 && lastHTTPStatus == c.Expect.HTTPStatus
+	if (lastStatus == "failed" && !expectedGatewayRejection) || !ChecksPassed(checks) {
 		status = "failed"
 	}
 	rec.FinishCase(status, checks, inputTokens, outputTokens)

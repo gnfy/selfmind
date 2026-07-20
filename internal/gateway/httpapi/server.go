@@ -240,6 +240,10 @@ func (d *Server) ProcessMessage(ctx context.Context, req api.MessageRequest) (ap
 	if req.Content == "" {
 		return api.MessageResponse{Error: "content is required", Turn: messageTurn("failed", "", "", "", "", "content is required")}, http.StatusBadRequest
 	}
+	if containsUnresolvedPasteToken(req.Content) {
+		msg := "The pasted content was not expanded by the client. Paste it again and retry."
+		return api.MessageResponse{Error: msg, Turn: messageTurn("failed", "", "", "", "", msg)}, http.StatusBadRequest
+	}
 
 	identity, err := d.Control.ResolveOrCreateAccount(ctx, req.TenantID, req.Platform, req.PlatformUserID, req.DisplayName)
 	if err != nil {

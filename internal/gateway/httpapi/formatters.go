@@ -22,7 +22,7 @@ import (
 // run is live, which the caller checks separately.
 func isParkedTaskStatus(status string) bool {
 	switch strings.TrimSpace(strings.ToLower(status)) {
-	case "in_progress", "interrupted":
+	case "in_progress", "interrupted", api.RunStatusVerificationPartial:
 		return true
 	default:
 		return false
@@ -250,7 +250,11 @@ func formatTaskStatus(task *control.Task, handoff *control.Handoff, active *acti
 	// reads "in_progress" as "still working" and waits on a run that already ended
 	// (observed live: 13 minutes staring at in_progress after the turn completed).
 	if active == nil && isParkedTaskStatus(task.Status) {
-		statusText = task.Status + " (turn finished — reply to continue, or /new)"
+		if strings.EqualFold(strings.TrimSpace(task.Status), api.RunStatusVerificationPartial) {
+			statusText = "verification_partial (work changed; verification incomplete - reply to continue, or /new)"
+		} else {
+			statusText = task.Status + " (turn finished — reply to continue, or /new)"
+		}
 	}
 	fmt.Fprintf(&sb, "Task: %s\nStatus: %s\n", task.Title, statusText)
 	if active != nil {

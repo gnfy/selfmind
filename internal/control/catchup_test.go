@@ -26,6 +26,23 @@ func seedUnconfirmed(t *testing.T, s *Store, personID, channel, content string) 
 	return *d
 }
 
+func seedPendingSession(t *testing.T, s *Store, personID, channel, content string, maxAttempts int) Delivery {
+	t.Helper()
+	ctx := context.Background()
+	d, err := s.EnqueueDelivery(ctx, Delivery{
+		TenantID: "default", PersonID: personID, Platform: "weixin",
+		PlatformUserID: "wx-user", Channel: channel, Content: content,
+		MaxAttempts: maxAttempts,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.MarkDeliveryPendingSession(ctx, d.ID, "fresh session required"); err != nil {
+		t.Fatal(err)
+	}
+	return *d
+}
+
 // TestCatchUpEligibilityAndClaim pins the store-side anti-duplicate rails:
 // oldest-first ordering, the one-shot claim, and the freshness window.
 func TestCatchUpEligibilityAndClaim(t *testing.T) {
@@ -106,5 +123,51 @@ func TestCountOutboundByStatusSince(t *testing.T) {
 	}
 	if counts["sent_unconfirmed"] != 1 || counts["sent"] != 1 {
 		t.Fatalf("counts = %+v, want 1 sent_unconfirmed + 1 sent", counts)
+	}
+}
+
+func TestPendingSessionDiagnosticsAreScopedAndBounded(t *testing.T) {
+	ctx := context.Background()
+	s, err := OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	first := seedPendingSession(t, s, "p1", "wx-chat", "first", 3)
+	seedPendingSession(t, s, "p1", "other-chat", "second", 3)
+
+	count, err := s.CountPendingSessionOutbound(ctx, "default", "p1")
+	if err != nil || count != 2 {
+		t.Fatalf("pending count=%d err=%v, want 2", count, err)
+	}
+	rows, err := s.ListPendingSessionOutbound(ctx, "default", "p1", 5)
+	if err != nil || len(rows) != 2 {
+		t.Fatalf("pending rows=%+v err=%v", rows, err)
+	}
+	ref := first.ID[:8]
+	got, err := s.FindPendingSessionDelivery(ctx, "default", "p1", "weixin", "wx-chat", ref)
+	if err != nil || got.ID != first.ID {
+		t.Fatalf("resolved=%+v err=%v", got, err)
+	}
+	if _, err := s.FindPendingSessionDelivery(ctx, "default", "p1", "weixin", "other-chat", ref); err == nil {
+		t.Fatal("a delivery from another chat must not resolve")
+	}
+	if _, err := s.FindPendingSessionDelivery(ctx, "default", "p1", "weixin", "wx-chat", "%%%%%%%%"); err == nil {
+		t.Fatal("LIKE wildcard input must be rejected")
+	}
+
+	if err := s.MarkDeliveryPendingSession(ctx, first.ID, "still stale"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.MarkDeliveryPendingSession(ctx, first.ID, "still stale"); err != nil {
+		t.Fatal(err)
+	}
+	eligible, err := s.ListCatchUpEligible(ctx, "default", "p1", "weixin", "wx-chat", time.Now().Add(-time.Hour), 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(eligible) != 0 {
+		t.Fatalf("max-attempt pending delivery remained auto-eligible: %+v", eligible)
 	}
 }

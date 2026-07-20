@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"time"
 
+	"selfmind/internal/buildinfo"
 	"selfmind/internal/gateway/api"
 )
 
@@ -50,6 +51,11 @@ func (d *Server) GatewayStatus() api.GatewayStatusResponse {
 	if runtime.State == "" {
 		runtime.State = state
 	}
+	build := buildinfo.Current()
+	runtime.Version = build.Version
+	runtime.Commit = build.Commit
+	runtime.BuiltAt = build.BuiltAt
+	runtime.BuildFingerprint = build.Fingerprint
 	return api.GatewayStatusResponse{
 		Runtime:        runtime,
 		State:          state,

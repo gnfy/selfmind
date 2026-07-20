@@ -158,3 +158,73 @@ func TestCriticalPrepareFailureWaitsForFreshInboundThenRecovers(t *testing.T) {
 		t.Fatalf("confirmed row remained eligible: %+v", rows)
 	}
 }
+
+func TestManualPendingSessionRetryIsPeerScoped(t *testing.T) {
+	ctx := context.Background()
+	store, err := control.OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	sender := &switchableReceiptSender{err: refreshRequiredError("prepare failed")}
+	svc := NewService(store, sender, Options{PollInterval: time.Hour})
+	if err := svc.EnqueueAndTry(ctx, Message{
+		TenantID: "default", PersonID: "p1", Platform: "weixin",
+		PlatformUserID: "wx", Channel: "wx-chat", Content: "durable result", Kind: KindFinalResult,
+	}); err == nil {
+		t.Fatal("initial prepare failure must surface")
+	}
+	rows, err := store.ListPendingSessionOutbound(ctx, "default", "p1", 5)
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("pending rows=%+v err=%v", rows, err)
+	}
+	ref := rows[0].ID[:8]
+	if _, _, err := svc.RetryPendingSession(ctx, "default", "p1", "weixin", "other-chat", ref); err == nil {
+		t.Fatal("manual retry from another chat must fail")
+	}
+
+	sender.err = nil
+	sender.confirmed = true
+	sender.sent = nil
+	id, status, err := svc.RetryPendingSession(ctx, "default", "p1", "weixin", "wx-chat", ref)
+	if err != nil || id != rows[0].ID || status != "sent" {
+		t.Fatalf("retry id=%q status=%q err=%v", id, status, err)
+	}
+	if len(sender.sent) != 1 || sender.sent[0] != "durable result" {
+		t.Fatalf("manual retry sent=%v", sender.sent)
+	}
+	if _, _, err := svc.RetryPendingSession(ctx, "default", "p1", "weixin", "wx-chat", ref); err == nil {
+		t.Fatal("a confirmed delivery must not be manually replayable")
+	}
+}
+
+func TestCatchUpPermanentFailureLeavesNoFakePendingRow(t *testing.T) {
+	ctx := context.Background()
+	store, err := control.OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	sender := &switchableReceiptSender{err: refreshRequiredError("prepare failed")}
+	svc := NewService(store, sender, Options{PollInterval: time.Hour})
+	if err := svc.EnqueueAndTry(ctx, Message{
+		TenantID: "default", PersonID: "p1", Platform: "weixin",
+		PlatformUserID: "wx", Channel: "wx-chat", Content: "result", Kind: KindFinalResult,
+	}); err == nil {
+		t.Fatal("initial prepare failure must surface")
+	}
+	sender.err = context.DeadlineExceeded
+	sender.sent = nil
+	if n := svc.CatchUpRecoverable(ctx, "default", "p1", "weixin", "wx-chat"); n != 0 {
+		t.Fatalf("failed catch-up count=%d, want 0", n)
+	}
+	if rows, _ := store.ListPendingSessionOutbound(ctx, "default", "p1", 5); len(rows) != 0 {
+		t.Fatalf("permanent failure remained pending: %+v", rows)
+	}
+	undelivered, err := store.ListUndeliveredOutbound(ctx, "default", "p1", time.Now().Add(-time.Hour), 5)
+	if err != nil || len(undelivered) != 1 || undelivered[0].Status != "failed" {
+		t.Fatalf("undelivered=%+v err=%v", undelivered, err)
+	}
+}

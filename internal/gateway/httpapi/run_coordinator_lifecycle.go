@@ -58,17 +58,13 @@ func (c *RunCoordinator) finalizeErroredRun(ctx context.Context, identity *contr
 	if len(replay) > 0 {
 		evidence = replay[0]
 	}
-	if err := c.finishRunWithMaintenancePayload(finCtx, identity, task, run, outcome.Status, evidence.WorkspaceID, evidence.UserInput, outcome, evidence.Attach); err != nil {
-		return outcome
-	}
-	_ = c.srv.Control.UpdateTaskStatus(finCtx, identity.TenantID, task.ID, outcome.Status, outcome.Summary, outcome.NextSteps)
-	_, _ = c.srv.Control.SaveHandoff(finCtx, control.Handoff{
+	handoff := control.Handoff{
 		TaskID:    task.ID,
 		Summary:   outcome.Summary,
 		NextSteps: outcome.NextSteps,
 		Risks:     outcome.Risks,
-	})
-	_, _ = c.srv.Control.AppendEvent(finCtx, control.Event{
+	}
+	event := control.Event{
 		TaskID:     task.ID,
 		RunID:      run.ID,
 		Type:       eventType,
@@ -78,7 +74,11 @@ func (c *RunCoordinator) finalizeErroredRun(ctx context.Context, identity *contr
 			"outcome": outcome,
 			"error":   firstString(outcome.Risks),
 		}),
-	})
+	}
+	if err := c.materializeRunFinalization(finCtx, identity, task, run, outcome.Status,
+		evidence.WorkspaceID, evidence.UserInput, channel, "", outcome, evidence.Attach, handoff, event); err != nil {
+		return outcome
+	}
 	return outcome
 }
 

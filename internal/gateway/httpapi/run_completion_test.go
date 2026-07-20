@@ -28,6 +28,14 @@ func TestStructuredWaitingExternalSurvivesGenericTurnCompletion(t *testing.T) {
 	}
 }
 
+func TestTurnStatusCompletesAnOpenTaskOutcome(t *testing.T) {
+	for _, status := range []string{"running", "in_progress"} {
+		if got := turnStatusForOutcome(api.RunOutcome{Status: status}); got != "completed" {
+			t.Fatalf("turn status for %q = %q, want completed", status, got)
+		}
+	}
+}
+
 func TestIncompleteTurnOverridesStructuredWaitingExternal(t *testing.T) {
 	outcome := reconcileTurnCompletion(api.RunOutcome{
 		Status: "waiting_external",

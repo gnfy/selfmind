@@ -36,6 +36,7 @@ func (a *App) tryRunTUIClient(cfg *config.Config) (int, bool) {
 	if res.Started {
 		fmt.Fprintln(a.stderr, "Started local SelfMind gateway daemon.")
 	}
+	warnGatewayBuildMismatch(a.ctx, res.URL, a.stderr)
 
 	tenantID := os.Getenv("SELF_TENANT_ID")
 	if tenantID == "" {

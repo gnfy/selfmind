@@ -172,7 +172,7 @@ func TestRequeueSystemQueuedIsBoundedAndLeavesOrdinaryRowsAlone(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.MarkQueued(ctx, identity.TenantID, system.ID, QueueStatusDone); err != nil {
+	if err := store.MarkQueued(ctx, identity.TenantID, system.ID, QueueStatusFailed); err != nil {
 		t.Fatal(err)
 	}
 	for want := 1; want <= 2; want++ {
@@ -204,6 +204,142 @@ func TestRequeueSystemQueuedIsBoundedAndLeavesOrdinaryRowsAlone(t *testing.T) {
 	}
 	if requeued, err := store.RequeueSystemQueued(ctx, identity.TenantID, ordinary.ID, 2); err != nil || requeued {
 		t.Fatalf("ordinary row requeue = %v, %v; want false", requeued, err)
+	}
+}
+
+func TestDoneSystemQueueOnlyRequeuesWithoutSuccessfulRunEvent(t *testing.T) {
+	ctx := context.Background()
+	store, err := OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "gnfy", "Alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := store.CreateTask(ctx, TaskCreate{
+		TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "finalization",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	row, err := store.EnqueueQueued(ctx, QueuedTask{
+		TenantID: identity.TenantID, PersonID: identity.PersonID,
+		Channel: "cli-session", Platform: "cli", Content: "finalize",
+		IdempotencyKey: "external-watch:done:r1:finalization",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.MarkQueued(ctx, identity.TenantID, row.ID, QueueStatusStarted); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.BindQueuedRun(ctx, identity.TenantID, row.ID, "run_incomplete"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.MarkQueued(ctx, identity.TenantID, row.ID, QueueStatusDone); err != nil {
+		t.Fatal(err)
+	}
+	if requeued, err := store.RequeueDoneSystemQueuedIfUnmaterialized(ctx, identity.TenantID, row.ID, 2); err != nil || !requeued {
+		t.Fatalf("incomplete done row requeue = %v, %v; want true", requeued, err)
+	}
+
+	if err := store.MarkQueued(ctx, identity.TenantID, row.ID, QueueStatusStarted); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.BindQueuedRun(ctx, identity.TenantID, row.ID, "run_complete"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AppendEvent(ctx, Event{TaskID: task.ID, RunID: "run_complete", Type: "run.finished"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.MarkQueued(ctx, identity.TenantID, row.ID, QueueStatusDone); err != nil {
+		t.Fatal(err)
+	}
+	if requeued, err := store.RequeueDoneSystemQueuedIfUnmaterialized(ctx, identity.TenantID, row.ID, 2); err != nil || requeued {
+		t.Fatalf("completed done row requeue = %v, %v; want false", requeued, err)
+	}
+}
+
+func TestRequeueStartedQueuedSettlesMaterializedRunWithoutReplay(t *testing.T) {
+	ctx := context.Background()
+	store, err := OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "gnfy", "Alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := store.CreateTask(ctx, TaskCreate{
+		TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "finalization",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	row, err := store.EnqueueQueued(ctx, QueuedTask{
+		TenantID: identity.TenantID, PersonID: identity.PersonID,
+		Channel: "cli-session", Platform: "cli", Content: "finalize",
+		IdempotencyKey: "external-watch:started:r1:finalization",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.MarkQueued(ctx, identity.TenantID, row.ID, QueueStatusStarted); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.BindQueuedRun(ctx, identity.TenantID, row.ID, "run_materialized"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AppendEvent(ctx, Event{TaskID: task.ID, RunID: "run_materialized", Type: "run.finished"}); err != nil {
+		t.Fatal(err)
+	}
+
+	requeued, dropped, err := store.RequeueStartedQueued(ctx)
+	if err != nil || requeued != 0 || dropped != 0 {
+		t.Fatalf("reconcile materialized started row = %d/%d, %v; want 0/0", requeued, dropped, err)
+	}
+	got, err := store.GetQueued(ctx, identity.TenantID, row.ID)
+	if err != nil || got == nil || got.Status != QueueStatusDone || got.Restarts != 0 || got.RunID != "run_materialized" {
+		t.Fatalf("materialized row = %+v, %v; want done without restart", got, err)
+	}
+}
+
+func TestRequeueStartedQueuedReopensFailedBoundRun(t *testing.T) {
+	ctx := context.Background()
+	store, err := OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "gnfy", "Alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	row, err := store.EnqueueQueued(ctx, QueuedTask{
+		TenantID: identity.TenantID, PersonID: identity.PersonID,
+		Channel: "cli-session", Platform: "cli", Content: "retry",
+		IdempotencyKey: "external-watch:failed:r1:finalization",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.MarkQueued(ctx, identity.TenantID, row.ID, QueueStatusStarted); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.BindQueuedRun(ctx, identity.TenantID, row.ID, "run_failed"); err != nil {
+		t.Fatal(err)
+	}
+
+	requeued, dropped, err := store.RequeueStartedQueued(ctx)
+	if err != nil || requeued != 1 || dropped != 0 {
+		t.Fatalf("reconcile failed started row = %d/%d, %v; want 1/0", requeued, dropped, err)
+	}
+	got, err := store.GetQueued(ctx, identity.TenantID, row.ID)
+	if err != nil || got == nil || got.Status != QueueStatusQueued || got.Restarts != 1 || got.RunID != "" {
+		t.Fatalf("reopened row = %+v, %v; want queued with cleared run", got, err)
 	}
 }
 

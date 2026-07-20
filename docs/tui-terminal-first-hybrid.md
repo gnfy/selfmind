@@ -13,6 +13,17 @@ stays canonical.
   escape hatch to the old renderer (kept one cycle).
 - Overlays (`/help`, `/history`, `/model`, …): ✅ user-verified in hybrid.
 - `/clear` + `ctrl+l`: clear the screen and re-show the startup card in hybrid.
+- **Persistent input history (2026-07-20):** up/down-arrow composer history
+  survives across sessions via `~/.selfmind/input_history.jsonl` (codex-style
+  append-only JSONL). Config: top-level `history:` (`persistence: save-all|none`,
+  `max_bytes`, `load_entries`). Mechanics: single async writer goroutine with a
+  bounded drop-on-full queue (key path never blocks); every append/trim/read
+  holds an advisory flock on a `.lock` sidecar (O_APPEND alone cannot serialize
+  against trim rewrites); startup preloads the persistent prefix and in-session
+  entries append after it. Entries are the EXPANDED submitted text — paste
+  placeholders are never persisted (they die with the editor snippet buffer);
+  secure (password) input and entries over 4 KiB are never recorded, in memory
+  or on disk. See `internal/gateway/cli/input_history_store.go`.
 - **Remaining (deferred follow-ups, not blocking default):**
   - Legacy rendering path + `SELFMIND_TUI_LEGACY`: ✅ deleted 2026-07-10
     (viewport, `controller_mouse.go`, app scroll, `renderCache`).

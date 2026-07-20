@@ -185,6 +185,13 @@ func (d *Server) tryHandleControlCommand(ctx context.Context, identity *control.
 	case lower == "/diag tasks":
 		reply, err := d.tasksDiagReply(ctx, identity)
 		return true, reply, err
+	case strings.HasPrefix(lower, "/diag delivery retry "):
+		ref := strings.TrimSpace(trimmed[len("/diag delivery retry "):])
+		reply, err := d.retryDeliveryReply(ctx, identity, req, ref)
+		return true, reply, err
+	case lower == "/diag delivery":
+		reply, err := d.deliveryDiagReply(ctx, identity)
+		return true, reply, err
 	case lower == "/diag":
 		reply, err := d.diagReply(ctx, identity)
 		return true, reply, err

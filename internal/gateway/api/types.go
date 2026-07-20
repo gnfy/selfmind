@@ -17,14 +17,18 @@ type ActiveRunStatus struct {
 }
 
 type GatewayRuntimeInfo struct {
-	PID             int    `json:"pid"`
-	Addr            string `json:"addr"`
-	DataDir         string `json:"data_dir,omitempty"`
-	RuntimeDir      string `json:"runtime_dir,omitempty"`
-	State           string `json:"state"`
-	StartedAt       string `json:"started_at,omitempty"`
-	UpdatedAt       string `json:"updated_at,omitempty"`
-	DefaultTenantID string `json:"default_tenant_id,omitempty"`
+	PID              int    `json:"pid"`
+	Addr             string `json:"addr"`
+	DataDir          string `json:"data_dir,omitempty"`
+	RuntimeDir       string `json:"runtime_dir,omitempty"`
+	State            string `json:"state"`
+	StartedAt        string `json:"started_at,omitempty"`
+	UpdatedAt        string `json:"updated_at,omitempty"`
+	DefaultTenantID  string `json:"default_tenant_id,omitempty"`
+	Version          string `json:"version,omitempty"`
+	Commit           string `json:"commit,omitempty"`
+	BuiltAt          string `json:"built_at,omitempty"`
+	BuildFingerprint string `json:"build_fingerprint,omitempty"`
 }
 
 type GatewayStatusResponse struct {
@@ -167,6 +171,8 @@ type RunSteerResponse struct {
 	Identity *control.IdentityContext `json:"identity"`
 	Accepted bool                     `json:"accepted"`
 }
+
+const RunStatusVerificationPartial = "verification_partial"
 
 type RunOutcome struct {
 	Status           string               `json:"status"`

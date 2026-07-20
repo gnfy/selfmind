@@ -102,6 +102,29 @@ func TestVerificationFailureMakesCodeRunResumable(t *testing.T) {
 	}
 }
 
+func TestApplyVerificationOutcomeUsesDistinctPartialState(t *testing.T) {
+	outcome := applyVerificationOutcome(api.RunOutcome{
+		Status: "done",
+		Files:  []string{"main.go"},
+		Verification: &api.VerificationOutcome{
+			State:   "failed",
+			Summary: "go test failed",
+		},
+	})
+	if outcome.Status != api.RunStatusVerificationPartial || !outcome.Resumable {
+		t.Fatalf("outcome=%#v", outcome)
+	}
+	if outcome.CompletionReason != "verification_failed" {
+		t.Fatalf("completion reason=%q", outcome.CompletionReason)
+	}
+	if got := terminalRunStatus(outcome.Status); got != "done" {
+		t.Fatalf("terminal run status=%q, want done", got)
+	}
+	if got := turnStatusForOutcome(outcome); got != api.RunStatusVerificationPartial {
+		t.Fatalf("turn status=%q", got)
+	}
+}
+
 func TestVerificationNoticeIsConciseAndEnglish(t *testing.T) {
 	got := withVerificationNotice("Changed the file.", &api.VerificationOutcome{
 		State:   "not_run",

@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -237,6 +238,9 @@ func TestGatewayStatusEndpoint(t *testing.T) {
 	}
 	if status.State != "running" || status.Runtime.PID != 123 {
 		t.Fatalf("status payload = %+v", status)
+	}
+	if status.Runtime.Version == "" || status.Runtime.BuildFingerprint == "" {
+		t.Fatalf("status payload does not expose build identity: %+v", status.Runtime)
 	}
 }
 
@@ -571,6 +575,28 @@ func TestModelCommandDoesNotCreateTask(t *testing.T) {
 	}
 	if current != nil {
 		t.Fatalf("/model command created task: %+v", current)
+	}
+}
+
+func TestUnresolvedPastePlaceholderIsRejectedBeforeDispatch(t *testing.T) {
+	store, err := control.OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	daemon := &Server{Control: store, DefaultTenantID: "default"}
+	resp, status := daemon.ProcessMessage(context.Background(), api.MessageRequest{
+		Platform:       "cli",
+		PlatformUserID: "local",
+		Channel:        "cli",
+		Content:        "inspect this\n[[ paste:0 main.go.. [80 lines] .. end ]]",
+	})
+	if status != http.StatusBadRequest || !strings.Contains(resp.Error, "not expanded") {
+		t.Fatalf("status=%d response=%+v; want unresolved-paste rejection", status, resp)
+	}
+	if resp.Identity != nil || resp.Accepted {
+		t.Fatalf("unresolved paste reached dispatch: %+v", resp)
 	}
 }
 

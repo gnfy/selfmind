@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"selfmind/internal/control"
+	"selfmind/internal/gateway/api"
 )
 
 // TestFormatTaskStatusParkedWording: an in_progress task with NO active run
@@ -27,6 +28,21 @@ func TestInterruptedTaskSuffixUsesCompletionReason(t *testing.T) {
 	got = interruptedTaskSuffix(control.LatestRunOutcome{CompletionReason: "provider_or_transport_error", Resumable: true})
 	if got != "provider connection interrupted - resumable" {
 		t.Fatalf("provider suffix = %q", got)
+	}
+}
+
+func TestVerificationPartialStatusIsExplicitAndResumable(t *testing.T) {
+	task := &control.Task{ID: "task_verify", Title: "change code", Status: api.RunStatusVerificationPartial}
+	card := formatTaskStatus(task, nil, nil, nil)
+	if !strings.Contains(card, "work changed; verification incomplete") {
+		t.Fatalf("status card=%q", card)
+	}
+	if got := taskCardStatus(*task, false, 0, 0); got != "verification" {
+		t.Fatalf("task card status=%q", got)
+	}
+	view := renderTaskCard(1, *task, taskCardView{})
+	if !strings.Contains(view, "verification incomplete - resumable") {
+		t.Fatalf("task view=%q", view)
 	}
 }
 

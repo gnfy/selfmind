@@ -32,6 +32,39 @@ func newSelfcheckTestApp() (*App, *bytes.Buffer) {
 	return &App{ctx: context.Background(), stdout: out, stderr: out}, out
 }
 
+func TestSelfcheckGoEnvRemovesRecorderWrappers(t *testing.T) {
+	env := selfcheckGoEnv([]string{
+		"PATH=/usr/bin",
+		"SELFMIND_EVAL_VCR=replay",
+		"SELFMIND_EVAL_OFFLINE=1",
+		"SELFMIND_EVAL_VCR_DIR=/tmp/vcr",
+		"SELFMIND_FLIGHT_RECORDER=1",
+		"SELFMIND_FLIGHT_DIR=/tmp/flight",
+		"SELFMIND_FLIGHT_KEEP=50",
+		"GOWORK=/tmp/go.work",
+		"SELFMIND_EVAL_MIN_CASES=12",
+	})
+	joined := strings.Join(env, "\n")
+	for _, forbidden := range []string{
+		"SELFMIND_EVAL_VCR=",
+		"SELFMIND_EVAL_OFFLINE=",
+		"SELFMIND_EVAL_VCR_DIR=",
+		"SELFMIND_FLIGHT_RECORDER=",
+		"SELFMIND_FLIGHT_DIR=",
+		"SELFMIND_FLIGHT_KEEP=",
+		"GOWORK=/tmp/go.work",
+	} {
+		if strings.Contains(joined, forbidden) {
+			t.Fatalf("selfcheckGoEnv retained %q in:\n%s", forbidden, joined)
+		}
+	}
+	for _, required := range []string{"PATH=/usr/bin", "SELFMIND_EVAL_MIN_CASES=12", "GOWORK=off"} {
+		if !strings.Contains(joined, required) {
+			t.Fatalf("selfcheckGoEnv dropped %q from:\n%s", required, joined)
+		}
+	}
+}
+
 func TestSelfcheckEvalFailsOnMissingRequiredCassette(t *testing.T) {
 	dir := t.TempDir()
 	writeSelfcheckCase(t, dir, "required_case", true)

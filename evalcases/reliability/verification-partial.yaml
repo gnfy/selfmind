@@ -1,0 +1,36 @@
+id: reliability_verification_partial
+title: "Changed work with failed verification remains resumable"
+suite: reliability
+workspace: isolated
+channel: cli
+setup:
+  files:
+    verification-target.txt: "before\n"
+turns:
+  - input: >-
+      Replace verification-target.txt with the word after, then run the command
+      false exactly once as the verification step. Do not repair or rerun the
+      verification. Report that the change exists but verification is incomplete.
+expect:
+  status: verification_partial
+  completion_reason: verification_failed
+  resumable: true
+  verification_state: failed
+  require_tool_events: true
+  min_tool_calls: 2
+  max_duration_seconds: 120
+checks:
+  no_mojibake: true
+  no_raw_json_leak: true
+  no_provider_stack_dump: true
+  context_not_exceeded: true
+assert_state:
+  - subject: task
+    field: status
+    op: eq
+    value: verification_partial
+  - subject: file
+    path: verification-target.txt
+    field: exists
+    op: eq
+    value: true

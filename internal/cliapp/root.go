@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	"selfmind/internal/buildinfo"
 	"selfmind/internal/platform/config"
 	"selfmind/internal/platform/log"
 )
@@ -35,7 +36,7 @@ type App struct {
 	gatewayEnsured bool
 }
 
-const Version = "v0.1.0"
+const Version = buildinfo.Version
 
 func Run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if ctx == nil {
@@ -58,7 +59,7 @@ func Run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		return 0
 	}
 	if isVersionCommand(args) {
-		fmt.Fprintf(stdout, "SelfMind %s\n", Version)
+		fmt.Fprintf(stdout, "SelfMind %s\n", buildinfo.Display())
 		return 0
 	}
 

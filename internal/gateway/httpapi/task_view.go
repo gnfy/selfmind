@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"selfmind/internal/control"
+	"selfmind/internal/gateway/api"
 	"selfmind/internal/platform/textutil"
 )
 
@@ -360,6 +361,8 @@ func taskCardStatus(t control.Task, isActive bool, pendingApprovals, pendingQues
 		return "running"
 	case terminalTaskStatus(t.Status):
 		return strings.ToLower(strings.TrimSpace(t.Status))
+	case strings.EqualFold(strings.TrimSpace(t.Status), api.RunStatusVerificationPartial):
+		return "verification"
 	case strings.EqualFold(strings.TrimSpace(t.Status), "interrupted"):
 		return "interrupted"
 	case pendingApprovals > 0 || pendingQuestions > 0 || strings.EqualFold(strings.TrimSpace(t.Status), "blocked") || strings.EqualFold(strings.TrimSpace(t.Status), "waiting_external") || strings.EqualFold(strings.TrimSpace(t.Status), "waiting_finalization") || strings.EqualFold(strings.TrimSpace(t.Status), "waiting_user"):
@@ -395,7 +398,9 @@ func renderTaskCard(index int, t control.Task, v taskCardView) string {
 		last = strings.TrimSpace(t.CurrentSummary)
 	}
 	suffix := humanAge(t.UpdatedAt)
-	if !isActive && strings.EqualFold(strings.TrimSpace(t.Status), "interrupted") {
+	if !isActive && strings.EqualFold(strings.TrimSpace(t.Status), api.RunStatusVerificationPartial) {
+		suffix = "verification incomplete - resumable"
+	} else if !isActive && strings.EqualFold(strings.TrimSpace(t.Status), "interrupted") {
 		suffix = interruptedTaskSuffix(v.outcomes[t.ID])
 	} else if !isActive && strings.EqualFold(strings.TrimSpace(t.Status), "waiting_external") {
 		suffix = "external check pending"

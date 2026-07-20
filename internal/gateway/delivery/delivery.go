@@ -210,6 +210,16 @@ func (s *Service) Stop() {
 	}
 }
 
+// CatchUpMaxAge exposes the configured automatic recovery window for
+// diagnostics. Manual recovery remains available for older pending-session
+// rows, but automatic inbound-triggered replay is deliberately bounded.
+func (s *Service) CatchUpMaxAge() time.Duration {
+	if s == nil {
+		return 0
+	}
+	return s.opts.CatchUpMaxAge
+}
+
 // SupportsPlatform reports whether this service can deliver to the platform.
 // It is best-effort: when the configured sender does not expose platform
 // routing information (custom senders, tests), it assumes delivery is possible.
@@ -382,40 +392,83 @@ func (s *Service) CatchUpRecoverable(ctx context.Context, tenantID, personID, pl
 		if err != nil || !claimed {
 			continue
 		}
-		msg := Message{
-			TenantID:       d.TenantID,
-			PersonID:       d.PersonID,
-			Platform:       d.Platform,
-			PlatformUserID: d.PlatformUserID,
-			Channel:        d.Channel,
-			TaskID:         d.TaskID,
-			RunID:          d.RunID,
-			Content:        d.Content,
-			Kind:           d.Kind,
-			ApprovalID:     d.ApprovalID,
-			PartIndex:      d.PartIndex,
-			PartTotal:      d.PartTotal,
-		}
-		confirmed := true
-		if receipted, ok := s.sender.(SenderWithReceipt); ok {
-			confirmed, err = receipted.SendWithReceipt(ctx, msg)
-		} else {
-			err = s.sender.Send(ctx, msg)
-		}
-		if err == nil && confirmed {
-			_ = s.store.MarkDeliveryAttempt(ctx, d.ID, true, "", time.Time{})
+		status, err := s.replayClaimedDelivery(ctx, d)
+		if err == nil && status == "sent" {
 			confirmedCount++
-		} else if err == nil {
-			_ = s.store.MarkDeliverySentUnconfirmed(ctx, d.ID)
-		} else if sessionRefreshRequired(err) {
-			// ret=-2 means the platform did not accept the message. Release the
-			// claim so a later inbound session refresh may retry safely.
-			_ = s.store.MarkDeliveryPendingSession(ctx, d.ID, tools.RedactSensitive(err.Error()))
 		}
-		// Other errors keep the claim consumed, avoiding a retry loop for faults
-		// that a fresh platform session cannot repair.
 	}
 	return confirmedCount
+}
+
+// RetryPendingSession performs one explicit recovery attempt for a durable
+// pending-session row in the current IM peer. It intentionally excludes
+// sent_unconfirmed rows because the platform may already have delivered them.
+// The store claim makes concurrent manual and inbound-triggered retries safe.
+func (s *Service) RetryPendingSession(ctx context.Context, tenantID, personID, platform, channel, ref string) (string, string, error) {
+	if s == nil || s.store == nil || s.sender == nil {
+		return "", "", ErrNoSender
+	}
+	d, err := s.store.FindPendingSessionDelivery(ctx, tenantID, personID, platform, channel, ref)
+	if err != nil {
+		return "", "", err
+	}
+	claimed, err := s.store.ClaimDeliveryCatchUp(ctx, d.ID)
+	if err != nil {
+		return d.ID, "", err
+	}
+	if !claimed {
+		return d.ID, "", fmt.Errorf("delivery is already being recovered or is no longer pending")
+	}
+	status, err := s.replayClaimedDelivery(ctx, d)
+	return d.ID, status, err
+}
+
+func (s *Service) replayClaimedDelivery(ctx context.Context, d *control.Delivery) (string, error) {
+	msg := deliveryMessage(d)
+	confirmed := true
+	var err error
+	if receipted, ok := s.sender.(SenderWithReceipt); ok {
+		confirmed, err = receipted.SendWithReceipt(ctx, msg)
+	} else {
+		err = s.sender.Send(ctx, msg)
+	}
+	if err == nil && confirmed {
+		_ = s.store.MarkDeliveryAttempt(ctx, d.ID, true, "", time.Time{})
+		return "sent", nil
+	}
+	if err == nil {
+		_ = s.store.MarkDeliverySentUnconfirmed(ctx, d.ID)
+		return "sent_unconfirmed", nil
+	}
+	redacted := tools.RedactSensitive(err.Error())
+	if sessionRefreshRequired(err) {
+		// The platform did not accept the message. Clearing catchup_at through
+		// MarkDeliveryPendingSession allows a later fresh inbound to try again.
+		_ = s.store.MarkDeliveryPendingSession(ctx, d.ID, redacted)
+		return "pending_session", err
+	}
+	// A fresh platform session cannot repair an unrelated transport failure.
+	// Mark it failed instead of leaving a claimed pending row that looks
+	// recoverable but can never be selected again.
+	_ = s.store.MarkDeliveryFailedPermanent(ctx, d.ID, redacted)
+	return "failed", err
+}
+
+func deliveryMessage(d *control.Delivery) Message {
+	return Message{
+		TenantID:       d.TenantID,
+		PersonID:       d.PersonID,
+		Platform:       d.Platform,
+		PlatformUserID: d.PlatformUserID,
+		Channel:        d.Channel,
+		TaskID:         d.TaskID,
+		RunID:          d.RunID,
+		Content:        d.Content,
+		Kind:           d.Kind,
+		ApprovalID:     d.ApprovalID,
+		PartIndex:      d.PartIndex,
+		PartTotal:      d.PartTotal,
+	}
 }
 
 // CatchUpUnconfirmed preserves the older API name while extending recovery to

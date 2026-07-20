@@ -240,6 +240,26 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 		}
 		return api.MessageResponse{Identity: identity, Task: task, Error: err.Error(), Turn: messageTurn("failed", task.Status, "idle", task.ID, "", err.Error()), Context: messageContextBudget(llmUsageZero())}, http.StatusInternalServerError
 	}
+	if req.QueueID != "" {
+		if err := d.Control.BindQueuedRun(ctx, identity.TenantID, req.QueueID, run.ID); err != nil {
+			summary := "The queued run could not be bound to its durable queue record."
+			outcome := api.RunOutcome{
+				Status: "failed", Summary: summary,
+				NextSteps: []string{"Retry after checking the durable queue state."},
+			}
+			_ = c.materializeRunFinalization(context.WithoutCancel(ctx), identity, task, run,
+				"interrupted", run.WorkspaceID, req.Content, req.Channel, "", outcome, attach,
+				control.Handoff{
+					TaskID: task.ID, Summary: summary, NextSteps: outcome.NextSteps,
+				},
+				control.Event{
+					TaskID: task.ID, RunID: run.ID, Type: "run.failed", Visibility: "task", Channel: req.Channel,
+					Payload: mustJSON(map[string]string{"error": err.Error()}),
+				})
+			_, _ = d.Control.MarkQueuedIfStatus(context.WithoutCancel(ctx), identity.TenantID, req.QueueID, control.QueueStatusStarted, control.QueueStatusFailed)
+			return api.MessageResponse{Identity: identity, Task: task, Run: run, Error: err.Error(), Turn: messageTurn("failed", "interrupted", "idle", task.ID, run.ID, err.Error()), Context: messageContextBudget(llmUsageZero())}, http.StatusInternalServerError
+		}
+	}
 	stopHeartbeat := c.startRunHeartbeat(ctx, run)
 	defer stopHeartbeat()
 	c.updateActive(identity.PersonID, task, run)
@@ -288,8 +308,9 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 	if d.Gateway == nil {
 		err := fmt.Errorf("gateway is not configured")
 		outcome := api.RunOutcome{Status: "failed", CompletionReason: "gateway_unavailable", Summary: err.Error(), Risks: []string{err.Error()}}
-		_ = c.finishRunWithMaintenancePayload(context.Background(), identity, task, run, outcome.Status, replay.WorkspaceID, replay.UserInput, outcome, replay.Attach)
-		_ = d.Control.UpdateTaskStatus(context.Background(), identity.TenantID, task.ID, "failed", err.Error(), nil)
+		_ = c.materializeRunFinalization(context.Background(), identity, task, run, "failed", replay.WorkspaceID, replay.UserInput, req.Channel, "", outcome, replay.Attach,
+			control.Handoff{TaskID: task.ID, Summary: outcome.Summary, Risks: outcome.Risks},
+			control.Event{Type: "run.failed", Visibility: "task", Channel: req.Channel, Payload: mustJSON(map[string]interface{}{"outcome": outcome, "error": err.Error()})})
 		return api.MessageResponse{Identity: identity, Task: task, Run: run, Error: err.Error(), Turn: messageTurn("failed", "failed", "idle", task.ID, run.ID, err.Error()), Context: messageContextBudget(llmUsageZero())}, http.StatusInternalServerError
 	}
 
@@ -325,14 +346,7 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 	verification, evidenceFiles := c.evidenceOutcome(finCtx, task.ID, run.ID)
 	outcome.Verification, outcome.Files = mergeEvidenceFiles(verification, evidenceFiles, outcome.Files)
 	outcome.ClaimMismatches = verificationClaimMismatches(outcome)
-	if verificationRequiresResume(outcome.Verification, outcome.Files) {
-		outcome.Status = "interrupted"
-		outcome.Resumable = true
-		if outcome.CompletionReason == "" || outcome.CompletionReason == "completed" {
-			outcome.CompletionReason = "verification_" + outcome.Verification.State
-		}
-		outcome.NextSteps = appendUnique(outcome.NextSteps, verificationNextStep(outcome.Verification), 8)
-	}
+	outcome = applyVerificationOutcome(outcome)
 	for _, mismatch := range outcome.ClaimMismatches {
 		outcome.Risks = appendUnique(outcome.Risks, mismatch, 8)
 	}
@@ -347,7 +361,6 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 		log.Error("run finalization failed", "action", action, "task_id", task.ID, "run_id", run.ID, "error", err)
 	}
 
-	recordFinalizeErr("record assistant message", d.Control.RecordChannelMessage(finCtx, *identity, req.Channel, task.ID, "assistant", content))
 	// Invariant: finalization must leave the run terminal and must never leave
 	// the task 'running' with zero live runs. A 'running' outcome means "turn
 	// finished, more work planned", so the task parks as 'in_progress' — still
@@ -358,9 +371,7 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 	if taskStatus == "" || taskStatus == "running" {
 		taskStatus = "in_progress"
 	}
-	recordFinalizeErr("finish run", c.finishRunWithMaintenancePayload(finCtx, identity, task, run, outcome.Status, replay.WorkspaceID, replay.UserInput, outcome, replay.Attach))
-	recordFinalizeErr("update task status", d.Control.UpdateTaskStatus(finCtx, identity.TenantID, task.ID, taskStatus, outcome.Summary, outcome.NextSteps))
-	_, handoffErr := d.Control.SaveHandoff(finCtx, control.Handoff{
+	handoff := control.Handoff{
 		TaskID:       task.ID,
 		Summary:      outcome.Summary,
 		DoneItems:    outcome.Done,
@@ -368,18 +379,18 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 		ChangedFiles: outcome.Files,
 		TestStatus:   strings.Join(outcome.Tests, "\n"),
 		Risks:        outcome.Risks,
-	})
-	recordFinalizeErr("save handoff", handoffErr)
-	c.recordOutcomeArtifacts(finCtx, task, run, req.Channel, outcome.Files)
-	_, eventErr := d.Control.AppendEvent(finCtx, control.Event{
+	}
+	terminalEvent := control.Event{
 		TaskID:     task.ID,
 		RunID:      run.ID,
 		Type:       "run.finished",
 		Visibility: "task",
 		Channel:    req.Channel,
 		Payload:    mustJSON(map[string]interface{}{"outcome": outcome, "usage": usage}),
-	})
-	recordFinalizeErr("append run.finished event", eventErr)
+	}
+	recordFinalizeErr("materialize run finalization", c.materializeRunFinalization(finCtx, identity, task, run, taskStatus,
+		replay.WorkspaceID, replay.UserInput, req.Channel, content, outcome, replay.Attach, handoff, terminalEvent))
+	c.recordOutcomeArtifacts(finCtx, task, run, req.Channel, outcome.Files)
 	if len(finalizeErrs) > 0 {
 		_, _ = d.Control.AppendEvent(context.Background(), control.Event{
 			TaskID:     task.ID,
@@ -520,6 +531,7 @@ func (c *RunCoordinator) recoverAsyncRun(identity *control.IdentityContext, req 
 		NextSteps:        []string{"Reply \"continue\" to resume from the last durable evidence."},
 		Risks:            []string{"The previous run ended unexpectedly before it could report a complete result."},
 	}
+	materialized := false
 	if active.RunID != "" {
 		// Reconstruct the normal atomic finalizer so a panic cannot leave a
 		// terminal run without the durable post-run maintenance evidence used by
@@ -528,9 +540,18 @@ func (c *RunCoordinator) recoverAsyncRun(identity *control.IdentityContext, req 
 		task, taskErr := c.srv.Control.GetTask(ctx, tenant, active.TaskID)
 		run, runErr := c.srv.Control.GetRun(ctx, tenant, active.RunID)
 		if taskErr == nil && runErr == nil && task != nil && run != nil {
-			if err := c.finishRunWithMaintenancePayload(ctx, identity, task, run, "failed", run.WorkspaceID, req.Content, outcome, taskAttach{}); err != nil {
+			event := control.Event{
+				TaskID: task.ID, RunID: run.ID, Type: "run.failed", Visibility: "task", Channel: active.Channel,
+				Payload: mustJSON(map[string]string{"error": "internal error", "reason": "run panicked and was recovered"}),
+			}
+			handoff := control.Handoff{
+				TaskID: task.ID, Summary: outcome.Summary, NextSteps: outcome.NextSteps, Risks: outcome.Risks,
+			}
+			if err := c.materializeRunFinalization(ctx, identity, task, run, "interrupted", run.WorkspaceID, req.Content, active.Channel, "", outcome, taskAttach{}, handoff, event); err != nil {
 				log.Warn("panic recovery: atomic run finalization failed", "run", active.RunID, "error", err)
 				_ = c.srv.Control.FinishRun(ctx, tenant, active.RunID, "failed")
+			} else {
+				materialized = true
 			}
 		} else {
 			log.Warn("panic recovery: run context unavailable; using fallback finalizer",
@@ -538,7 +559,7 @@ func (c *RunCoordinator) recoverAsyncRun(identity *control.IdentityContext, req 
 			_ = c.srv.Control.FinishRun(ctx, tenant, active.RunID, "failed")
 		}
 	}
-	if active.TaskID != "" {
+	if active.TaskID != "" && !materialized {
 		_ = c.srv.Control.UpdateTaskStatus(ctx, tenant, active.TaskID, "interrupted", "run aborted by internal error", nil)
 		_, _ = c.srv.Control.AppendEvent(ctx, control.Event{
 			TaskID:     active.TaskID,

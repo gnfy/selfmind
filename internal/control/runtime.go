@@ -529,9 +529,11 @@ func (s *Store) ListCatchUpEligible(ctx context.Context, tenantID, personID, pla
 		 FROM outbound_messages
 		 WHERE tenant_id = ? AND person_id = ? AND platform = ? AND channel = ?
 		   AND (
-		     status IN ('sent_unconfirmed', 'pending_session')
+		     status = 'sent_unconfirmed'
+		     OR (status = 'pending_session' AND attempts < max_attempts)
 		     OR (status = 'failed'
 		         AND COALESCE(kind, '') IN ('final_result', 'approval', 'clarify', 'external_watch', 'recovery', 'maintenance_health')
+		         AND attempts < max_attempts
 		         AND (last_error LIKE '%ret=-2%' OR lower(last_error) LIKE '%prepare failed%'))
 		   )
 		   AND COALESCE(catchup_at, 0) = 0 AND updated_at >= ?
@@ -622,7 +624,7 @@ func (s *Store) ListUndeliveredOutbound(ctx context.Context, tenantID, personID 
 		        content, COALESCE(kind, ''), COALESCE(approval_id, ''), status, attempts, max_attempts, next_attempt_at, COALESCE(last_error, ''),
 		        part_index, part_total, COALESCE(idempotency_key, ''), created_at, updated_at, COALESCE(delivered_at, 0)
 		 FROM outbound_messages
-		 WHERE tenant_id = ? AND person_id = ? AND status IN ('sent_unconfirmed', 'failed') AND updated_at >= ?
+		 WHERE tenant_id = ? AND person_id = ? AND status IN ('sent_unconfirmed', 'pending_session', 'failed') AND updated_at >= ?
 		 ORDER BY updated_at DESC, created_at DESC LIMIT ?`,
 		normalizeTenant(tenantID), personID, since.Unix(), limit)
 	if err != nil {
@@ -638,6 +640,106 @@ func (s *Store) ListUndeliveredOutbound(ctx context.Context, tenantID, personID 
 		out = append(out, d)
 	}
 	return out, rows.Err()
+}
+
+// CountPendingSessionOutbound returns the person's full pending-session
+// backlog. Unlike the 24-hour health counters, this is intentionally unbounded
+// by age so stale platform sessions cannot hide durable final results forever.
+func (s *Store) CountPendingSessionOutbound(ctx context.Context, tenantID, personID string) (int, error) {
+	if personID == "" {
+		return 0, fmt.Errorf("person id is required")
+	}
+	var count int
+	err := s.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM outbound_messages
+		 WHERE tenant_id = ? AND person_id = ? AND status = 'pending_session'`,
+		normalizeTenant(tenantID), personID).Scan(&count)
+	return count, err
+}
+
+// ListPendingSessionOutbound returns the oldest durable platform-session
+// recoveries first, which makes /diag delivery useful for draining a backlog in
+// the same order the messages were originally created.
+func (s *Store) ListPendingSessionOutbound(ctx context.Context, tenantID, personID string, limit int) ([]Delivery, error) {
+	if personID == "" {
+		return nil, fmt.Errorf("person id is required")
+	}
+	if limit <= 0 || limit > 20 {
+		limit = 5
+	}
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, tenant_id, person_id, platform, COALESCE(platform_user_id, ''), channel, COALESCE(task_id, ''), COALESCE(run_id, ''),
+		        content, COALESCE(kind, ''), COALESCE(approval_id, ''), status, attempts, max_attempts, next_attempt_at, COALESCE(last_error, ''),
+		        part_index, part_total, COALESCE(idempotency_key, ''), created_at, updated_at, COALESCE(delivered_at, 0)
+		 FROM outbound_messages
+		 WHERE tenant_id = ? AND person_id = ? AND status = 'pending_session'
+		 ORDER BY created_at ASC, rowid ASC LIMIT ?`,
+		normalizeTenant(tenantID), personID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Delivery
+	for rows.Next() {
+		d, err := scanDelivery(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, d)
+	}
+	return out, rows.Err()
+}
+
+// FindPendingSessionDelivery resolves an exact delivery ID or a unique ID
+// prefix inside the current IM peer. Scoping by platform and channel prevents a
+// manual recovery command in one chat from replaying a message intended for a
+// different endpoint.
+func (s *Store) FindPendingSessionDelivery(ctx context.Context, tenantID, personID, platform, channel, ref string) (*Delivery, error) {
+	ref = strings.TrimSpace(ref)
+	if personID == "" || platform == "" || channel == "" || len(ref) < 8 || !validDeliveryRef(ref) {
+		return nil, fmt.Errorf("a delivery id prefix of at least 8 characters is required")
+	}
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, tenant_id, person_id, platform, COALESCE(platform_user_id, ''), channel, COALESCE(task_id, ''), COALESCE(run_id, ''),
+		        content, COALESCE(kind, ''), COALESCE(approval_id, ''), status, attempts, max_attempts, next_attempt_at, COALESCE(last_error, ''),
+		        part_index, part_total, COALESCE(idempotency_key, ''), created_at, updated_at, COALESCE(delivered_at, 0)
+		 FROM outbound_messages
+		 WHERE tenant_id = ? AND person_id = ? AND platform = ? AND channel = ?
+		   AND status = 'pending_session' AND (id = ? OR id LIKE ?)
+		 ORDER BY CASE WHEN id = ? THEN 0 ELSE 1 END, updated_at DESC LIMIT 2`,
+		normalizeTenant(tenantID), personID, platform, channel, ref, ref+"%", ref)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var matches []Delivery
+	for rows.Next() {
+		d, err := scanDelivery(rows)
+		if err != nil {
+			return nil, err
+		}
+		matches = append(matches, d)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(matches) == 0 {
+		return nil, sql.ErrNoRows
+	}
+	if matches[0].ID == ref || len(matches) == 1 {
+		return &matches[0], nil
+	}
+	return nil, fmt.Errorf("delivery id prefix is ambiguous")
+}
+
+func validDeliveryRef(ref string) bool {
+	for _, r := range ref {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' || r == '-' {
+			continue
+		}
+		return false
+	}
+	return ref != ""
 }
 
 // ListUndeliveredTaskResults returns recent final answers for one task that

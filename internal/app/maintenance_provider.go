@@ -32,12 +32,24 @@ type namedMaintenanceProvider struct {
 }
 
 type maintenanceProviderChain struct {
-	providers    []namedMaintenanceProvider
-	control      *control.Store
-	tenantID     string
-	probeInitial time.Duration
-	probeMax     time.Duration
-	probeLease   time.Duration
+	providers        []namedMaintenanceProvider
+	control          *control.Store
+	tenantID         string
+	probeInitial     time.Duration
+	probeMax         time.Duration
+	softProbeInitial time.Duration
+	softProbeMax     time.Duration
+	probeLease       time.Duration
+}
+
+func maintenanceRouteIDs(routes []maintenanceRouteIdentity) []string {
+	ids := make([]string, 0, len(routes))
+	for _, route := range routes {
+		if strings.TrimSpace(route.ID) != "" {
+			ids = append(ids, route.ID)
+		}
+	}
+	return ids
 }
 
 // configuredMaintenanceProvider builds one quota-aware provider chain from
@@ -71,9 +83,12 @@ func configuredMaintenanceProvider(mem *memory.MemoryManager, cfg *config.Config
 		return providers[0].provider, routes
 	}
 	initial, maximum := cfg.Tasks.MaintenanceQuotaCircuitPolicy()
+	softInitial, softMaximum := cfg.Tasks.MaintenanceSoftCircuitPolicy()
 	return &maintenanceProviderChain{
 		providers: providers, control: controlStore, tenantID: tenantID,
-		probeInitial: initial, probeMax: maximum, probeLease: 2 * time.Minute,
+		probeInitial: initial, probeMax: maximum,
+		softProbeInitial: softInitial, softProbeMax: softMaximum,
+		probeLease: 2 * time.Minute,
 	}, routes
 }
 
@@ -81,20 +96,27 @@ func (c *maintenanceProviderChain) ChatCompletion(ctx context.Context, messages 
 	var failures []string
 	var lastErr error
 	anyRetryable := false
-	for _, candidate := range c.providers {
+	triggerClass := ""
+	for index, candidate := range c.providers {
 		allowed, probe, err := c.allow(ctx, candidate)
 		if err != nil {
 			log.Warn("maintenance route circuit lookup failed; failing open", "provider", candidate.route.Provider, "error", err)
 			allowed = true
 		}
 		if !allowed {
-			lastErr = c.openCircuitError(candidate, err)
+			lastErr = c.openCircuitError(ctx, candidate, err)
+			c.recordProviderCall(ctx, candidate, index, control.MaintenanceProviderCallCircuitOpen,
+				triggerClass, lastErr, llm.UsageStats{}, "", 1, time.Time{})
 			failures = append(failures, string(candidate.role)+": circuit open")
+			triggerClass = providerErrorClass(lastErr)
 			continue
 		}
+		started := time.Now()
 		content, callErr := candidate.provider.ChatCompletion(ctx, messages)
 		if callErr == nil && strings.TrimSpace(content) != "" {
 			c.recordSuccess(ctx, candidate)
+			c.recordProviderCall(ctx, candidate, index, control.MaintenanceProviderCallSucceeded,
+				triggerClass, nil, llm.UsageStats{}, "", 1, started)
 			return content, nil
 		}
 		if callErr == nil {
@@ -103,11 +125,14 @@ func (c *maintenanceProviderChain) ChatCompletion(ctx context.Context, messages 
 		}
 		callErr = llm.WithProviderRoute(callErr, candidate.route.Provider, candidate.route.ID)
 		c.recordFailure(ctx, candidate, callErr, probe)
+		c.recordProviderCall(ctx, candidate, index, control.MaintenanceProviderCallFailed,
+			triggerClass, callErr, providerErrorUsage(callErr), providerErrorFinishReason(callErr), 1, started)
 		anyRetryable = anyRetryable || llm.IsRetryableError(callErr)
 		if ctx.Err() != nil {
 			return "", ctx.Err()
 		}
 		lastErr = callErr
+		triggerClass = providerErrorClass(callErr)
 		failures = append(failures, fmt.Sprintf("%s: %v", candidate.role, callErr))
 		log.Warn("maintenance provider unavailable; trying explicit fallback", "role", candidate.role, "provider", candidate.route.Provider, "error", callErr)
 	}
@@ -118,33 +143,51 @@ func (c *maintenanceProviderChain) Chat(ctx context.Context, req llm.ChatRequest
 	var failures []string
 	var lastErr error
 	anyRetryable := false
-	for _, candidate := range c.providers {
+	triggerClass := ""
+	batchSize := maintenanceBatchSize(req)
+	for index, candidate := range c.providers {
 		allowed, probe, err := c.allow(ctx, candidate)
 		if err != nil {
 			log.Warn("maintenance route circuit lookup failed; failing open", "provider", candidate.route.Provider, "error", err)
 			allowed = true
 		}
 		if !allowed {
-			lastErr = c.openCircuitError(candidate, err)
+			lastErr = c.openCircuitError(ctx, candidate, err)
+			c.recordProviderCall(ctx, candidate, index, control.MaintenanceProviderCallCircuitOpen,
+				triggerClass, lastErr, llm.UsageStats{}, "", batchSize, time.Time{})
 			failures = append(failures, string(candidate.role)+": circuit open")
+			triggerClass = providerErrorClass(lastErr)
 			continue
 		}
+		started := time.Now()
 		resp, callErr := candidate.provider.Chat(ctx, req)
 		if callErr == nil && resp != nil && (strings.TrimSpace(resp.Content) != "" || len(resp.ToolCalls) > 0) {
 			c.recordSuccess(ctx, candidate)
+			c.recordProviderCall(ctx, candidate, index, control.MaintenanceProviderCallSucceeded,
+				triggerClass, nil, resp.Usage, resp.FinishReason, batchSize, started)
 			return resp, nil
 		}
 		if callErr == nil {
+			usage := llm.UsageStats{}
+			finishReason := ""
+			if resp != nil {
+				usage = resp.Usage
+				finishReason = resp.FinishReason
+			}
 			callErr = &llm.ProviderError{Provider: candidate.route.Provider, RouteID: candidate.route.ID,
-				Class: llm.ProviderErrorEmptyResponse, Message: "maintenance provider returned no usable content"}
+				Class: llm.ProviderErrorEmptyResponse, Message: "maintenance provider returned no usable content",
+				StopReason: finishReason, Usage: usage}
 		}
 		callErr = llm.WithProviderRoute(callErr, candidate.route.Provider, candidate.route.ID)
 		c.recordFailure(ctx, candidate, callErr, probe)
+		c.recordProviderCall(ctx, candidate, index, control.MaintenanceProviderCallFailed,
+			triggerClass, callErr, providerErrorUsage(callErr), providerErrorFinishReason(callErr), batchSize, started)
 		anyRetryable = anyRetryable || llm.IsRetryableError(callErr)
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
 		lastErr = callErr
+		triggerClass = providerErrorClass(callErr)
 		failures = append(failures, fmt.Sprintf("%s: %v", candidate.role, callErr))
 		log.Warn("maintenance provider unavailable; trying explicit fallback", "role", candidate.role, "provider", candidate.route.Provider, "error", callErr)
 	}
@@ -155,20 +198,25 @@ func (c *maintenanceProviderChain) StreamChat(ctx context.Context, req llm.ChatR
 	var failures []string
 	var lastErr error
 	anyRetryable := false
-	for _, candidate := range c.providers {
+	triggerClass := ""
+	for index, candidate := range c.providers {
 		allowed, probe, err := c.allow(ctx, candidate)
 		if err != nil {
 			log.Warn("maintenance route circuit lookup failed; failing open", "provider", candidate.route.Provider, "error", err)
 			allowed = true
 		}
 		if !allowed {
-			lastErr = c.openCircuitError(candidate, err)
+			lastErr = c.openCircuitError(ctx, candidate, err)
+			c.recordProviderCall(ctx, candidate, index, control.MaintenanceProviderCallCircuitOpen,
+				triggerClass, lastErr, llm.UsageStats{}, "", maintenanceBatchSize(req), time.Time{})
 			failures = append(failures, string(candidate.role)+": circuit open")
+			triggerClass = providerErrorClass(lastErr)
 			continue
 		}
+		started := time.Now()
 		stream, callErr := candidate.provider.StreamChat(ctx, req)
 		if callErr == nil && stream != nil {
-			return c.observeStream(ctx, candidate, stream, probe), nil
+			return c.observeStream(ctx, candidate, index, triggerClass, stream, probe, maintenanceBatchSize(req), started), nil
 		}
 		if callErr == nil {
 			callErr = &llm.ProviderError{Provider: candidate.route.Provider, RouteID: candidate.route.ID,
@@ -176,11 +224,14 @@ func (c *maintenanceProviderChain) StreamChat(ctx context.Context, req llm.ChatR
 		}
 		callErr = llm.WithProviderRoute(callErr, candidate.route.Provider, candidate.route.ID)
 		c.recordFailure(ctx, candidate, callErr, probe)
+		c.recordProviderCall(ctx, candidate, index, control.MaintenanceProviderCallFailed,
+			triggerClass, callErr, providerErrorUsage(callErr), providerErrorFinishReason(callErr), maintenanceBatchSize(req), started)
 		anyRetryable = anyRetryable || llm.IsRetryableError(callErr)
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
 		lastErr = callErr
+		triggerClass = providerErrorClass(callErr)
 		failures = append(failures, fmt.Sprintf("%s: %v", candidate.role, callErr))
 		log.Warn("maintenance provider unavailable; trying explicit fallback", "role", candidate.role, "provider", candidate.route.Provider, "error", callErr)
 	}
@@ -192,12 +243,20 @@ func (c *maintenanceProviderChain) StreamChat(ctx context.Context, req llm.ChatR
 // It also closes a half-open probe only after the stream produced semantic
 // output, never merely because request setup succeeded.
 func (c *maintenanceProviderChain) observeStream(ctx context.Context, candidate namedMaintenanceProvider,
-	stream <-chan llm.StreamEvent, probe bool) <-chan llm.StreamEvent {
+	index int, triggerClass string, stream <-chan llm.StreamEvent, probe bool, batchSize int, started time.Time) <-chan llm.StreamEvent {
 	out := make(chan llm.StreamEvent)
 	go func() {
 		defer close(out)
 		sawSemantic := false
+		usage := llm.UsageStats{}
+		finishReason := ""
 		for event := range stream {
+			if event.Usage != nil {
+				usage = *event.Usage
+			}
+			if strings.TrimSpace(event.FinishReason) != "" {
+				finishReason = event.FinishReason
+			}
 			if strings.TrimSpace(event.Content) != "" || len(event.ToolCalls) > 0 ||
 				strings.TrimSpace(event.ToolName) != "" || strings.TrimSpace(event.ToolResult) != "" {
 				sawSemantic = true
@@ -205,6 +264,8 @@ func (c *maintenanceProviderChain) observeStream(ctx context.Context, candidate 
 			if event.Err != nil {
 				event.Err = llm.WithProviderRoute(event.Err, candidate.route.Provider, candidate.route.ID)
 				c.recordFailure(ctx, candidate, event.Err, probe)
+				c.recordProviderCall(ctx, candidate, index, control.MaintenanceProviderCallFailed,
+					triggerClass, event.Err, providerErrorUsageOr(event.Err, usage), providerErrorFinishReasonOr(event.Err, finishReason), batchSize, started)
 				select {
 				case out <- event:
 				case <-ctx.Done():
@@ -219,11 +280,16 @@ func (c *maintenanceProviderChain) observeStream(ctx context.Context, candidate 
 		}
 		if sawSemantic {
 			c.recordSuccess(ctx, candidate)
+			c.recordProviderCall(ctx, candidate, index, control.MaintenanceProviderCallSucceeded,
+				triggerClass, nil, usage, finishReason, batchSize, started)
 			return
 		}
 		err := &llm.ProviderError{Provider: candidate.route.Provider, RouteID: candidate.route.ID,
-			Class: llm.ProviderErrorEmptyResponse, Message: "maintenance provider stream returned no usable content"}
+			Class: llm.ProviderErrorEmptyResponse, Message: "maintenance provider stream returned no usable content",
+			StopReason: finishReason, Usage: usage}
 		c.recordFailure(ctx, candidate, err, probe)
+		c.recordProviderCall(ctx, candidate, index, control.MaintenanceProviderCallFailed,
+			triggerClass, err, usage, finishReason, batchSize, started)
 		select {
 		case out <- llm.StreamEvent{Err: err}:
 		case <-ctx.Done():
@@ -241,13 +307,20 @@ func (c *maintenanceProviderChain) allow(ctx context.Context, candidate namedMai
 	return allowed, probe, err
 }
 
-func (c *maintenanceProviderChain) openCircuitError(candidate namedMaintenanceProvider, lookupErr error) error {
-	message := "provider quota circuit is open; waiting for the next scheduled probe"
+func (c *maintenanceProviderChain) openCircuitError(ctx context.Context, candidate namedMaintenanceProvider, lookupErr error) error {
+	class := llm.ProviderErrorQuota
+	message := "provider circuit is open; waiting for the next scheduled probe"
 	if lookupErr != nil {
 		message = "provider route is unavailable"
+	} else if c != nil && c.control != nil && candidate.route.ID != "" {
+		if health, err := c.control.GetProviderRouteHealth(ctx, c.routeTenant(ctx), candidate.route.ID); err == nil && health != nil {
+			if parsed := llm.ProviderErrorClass(strings.TrimSpace(health.FailureClass)); parsed != "" {
+				class = parsed
+			}
+		}
 	}
 	return &llm.ProviderError{Provider: candidate.route.Provider, RouteID: candidate.route.ID,
-		Class: llm.ProviderErrorQuota, Message: message}
+		Class: class, Message: message}
 }
 
 func (c *maintenanceProviderChain) recordSuccess(ctx context.Context, candidate namedMaintenanceProvider) {
@@ -277,8 +350,19 @@ func (c *maintenanceProviderChain) recordFailure(ctx context.Context, candidate 
 		log.Warn("maintenance provider quota circuit opened", "provider", candidate.route.Provider, "next_probe", next)
 		return
 	}
+	if isMaintenanceOutputExhausted(err) {
+		next, openErr := c.control.OpenProviderRoute(ctx, c.routeTenant(ctx), candidate.route.ID,
+			candidate.route.Provider, candidate.route.Model, string(llm.ProviderErrorEmptyResponse), err.Error(), info.RequestID,
+			time.Now(), c.softProbeInitial, c.softProbeMax)
+		if openErr != nil {
+			log.Warn("maintenance output-exhaustion circuit open failed", "provider", candidate.route.Provider, "error", openErr)
+			return
+		}
+		log.Warn("maintenance provider output-exhaustion circuit opened", "provider", candidate.route.Provider, "next_probe", next)
+		return
+	}
 	if probe {
-		if deferErr := c.control.DeferProviderRouteProbe(ctx, c.routeTenant(ctx), candidate.route.ID, time.Now(), c.probeInitial); deferErr != nil {
+		if deferErr := c.control.DeferProviderRouteProbe(ctx, c.routeTenant(ctx), candidate.route.ID, time.Now(), c.softProbeInitial); deferErr != nil {
 			log.Warn("maintenance quota probe defer failed", "provider", candidate.route.Provider, "error", deferErr)
 		}
 	}

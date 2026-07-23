@@ -93,6 +93,23 @@ func TestPolicyGatewayRoutesRoleProfile(t *testing.T) {
 	}
 }
 
+func TestStablePromptCacheKeySurvivesRunChanges(t *testing.T) {
+	base := ModelContext{TenantID: "tenant-a", PersonID: "person-a", WorkspaceID: "ws-a", TaskID: "task-a", RunID: "run-1", Role: RoleCodingAgent}
+	first := StablePromptCacheKey(WithModelContext(context.Background(), base))
+	base.RunID = "run-2"
+	second := StablePromptCacheKey(WithModelContext(context.Background(), base))
+	if first == "" || first != second {
+		t.Fatalf("cache keys must be stable across runs: %q != %q", first, second)
+	}
+	base.TaskID = "task-b"
+	if other := StablePromptCacheKey(WithModelContext(context.Background(), base)); other == first {
+		t.Fatalf("different tasks reused cache key %q", other)
+	}
+	if got := StablePromptCacheKey(context.Background()); got != "" {
+		t.Fatalf("empty model context cache key = %q", got)
+	}
+}
+
 func TestPolicyGatewayFallsBackForUnconfiguredRole(t *testing.T) {
 	fallback := &recordingProvider{model: "fallback-model", content: "fallback"}
 	gw := NewPolicyGateway(ProviderProfile{

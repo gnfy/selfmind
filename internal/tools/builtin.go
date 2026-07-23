@@ -341,7 +341,7 @@ func NewExecuteCommandTool() *ExecuteCommandTool {
 	return &ExecuteCommandTool{
 		BaseTool: BaseTool{
 			name:        "terminal",
-			description: "Execute a system command and return output",
+			description: "Execute a system command and return output. Linux commands run with Bash.",
 			schema: ToolSchema{
 				Type: "object",
 				Properties: map[string]PropertyDef{
@@ -499,10 +499,11 @@ func executeForegroundCommand(args map[string]interface{}, toolName string, time
 		return out, fmt.Errorf("command cancelled")
 	}
 	if err != nil {
+		failure := fmt.Errorf("command failed: %w", err)
 		if decision.Mode == SandboxIsolated {
-			err = fmt.Errorf("%w; command ran in an isolated sandbox; if it intentionally needs host credentials or network access, retry with sandbox=host (approval required)", err)
+			return out, enrichIsolatedSandboxFailure(toolName, failure, out)
 		}
-		return out, enrichToolFailure(toolName, fmt.Errorf("command failed: %v", err), out)
+		return out, enrichToolFailure(toolName, failure, out)
 	}
 	return out, nil
 }

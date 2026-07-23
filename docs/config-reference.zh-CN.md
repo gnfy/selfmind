@@ -203,6 +203,8 @@ tasks:
   maintenance_batch_max_runs: 10   # 单次模型调用最多处理的 run 数
   maintenance_quota_probe_initial: "15m" # quota 403 后首次探测间隔
   maintenance_quota_probe_max: "4h"      # 指数退避探测的最长间隔
+  maintenance_soft_probe_initial: "15m"  # 200/空响应且输出耗尽后的首次探测间隔
+  maintenance_soft_probe_max: "1h"       # 软故障指数退避的最长间隔
   maintenance_llm_timeout: "2m"    # 单次分析器模型调用的超时上限；过紧会导致 deadline 重试耗尽并丢学习
 ```
 
@@ -239,6 +241,13 @@ person 或 workspace。空值或零时长使用产品默认值。
 探测成功后会自动关闭熔断并重放暂停作业。`/diag` 会显示被阻塞的路由和下次
 探测时间。如果配额耗尽期间也必须继续治理，请把 fallback 角色配置到不同的
 provider 或凭据。
+
+如果接口返回 HTTP 200，但没有可用文本，同时结束原因为 `max_tokens`
+等输出耗尽状态，SelfMind 会使用 `maintenance_soft_probe_initial` 和
+`maintenance_soft_probe_max` 打开较短的软熔断。这样既不会让每个积压批次
+反复发送同一份维护提示词，又能比确认配额耗尽更早恢复。Provider/网络错误
+不会再触发递归拆分批次；只有多 run 返回结构损坏时才允许二分重试。
+`/diag models` 会按维护路由和模型角色显示调用、失败、熔断跳过和 token 用量。
 
 ## 8. 诊断：飞行记录器
 

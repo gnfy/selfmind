@@ -1,6 +1,9 @@
 package kernel
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"strconv"
 	"strings"
 
 	"selfmind/internal/kernel/llm"
@@ -41,9 +44,20 @@ var breakdownMarkers = []struct {
 // token estimate, and the P1-3 stable/volatile classification. Accounting at
 // the append site is exact where the marker scan below is a heuristic.
 type PromptSection struct {
-	Category string // identity | tools | project_context | memory | runtime
-	Tokens   int
-	Stable   bool
+	Category    string // identity | tools | project_context | memory | runtime
+	Tokens      int
+	Stable      bool
+	Fingerprint string // content hash for cache-prefix stability diagnostics
+}
+
+func newPromptSection(category, content string, stable bool) PromptSection {
+	digest := sha256.Sum256([]byte(content))
+	return PromptSection{
+		Category:    category,
+		Tokens:      estimateTokens(content),
+		Stable:      stable,
+		Fingerprint: hex.EncodeToString(digest[:8]),
+	}
 }
 
 // BreakdownFromSections builds the breakdown from assembly-time accounting
@@ -86,6 +100,32 @@ func StableVolatileTokens(sections []PromptSection) (stable, volatile int) {
 		}
 	}
 	return stable, volatile
+}
+
+// StablePrefixFingerprint identifies the ordered stable prompt prefix without
+// exposing its content. A changed value between otherwise similar turns means
+// provider-side prefix caching cannot be expected to hit.
+func StablePrefixFingerprint(sections []PromptSection) string {
+	h := sha256.New()
+	count := 0
+	for _, section := range sections {
+		if !section.Stable {
+			continue
+		}
+		fingerprint := section.Fingerprint
+		if fingerprint == "" {
+			// Legacy/manual sections without a content fingerprint still affect
+			// the diagnostic deterministically through their metadata.
+			fingerprint = section.Category + ":" + strconv.Itoa(section.Tokens)
+		}
+		_, _ = h.Write([]byte(fingerprint))
+		_, _ = h.Write([]byte{0})
+		count++
+	}
+	if count == 0 {
+		return ""
+	}
+	return hex.EncodeToString(h.Sum(nil)[:8])
 }
 
 // ComputeContextBreakdown categorizes the assembled system prompt by section and

@@ -2,6 +2,9 @@ package llm
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"strings"
 	"sync"
 )
 
@@ -48,6 +51,26 @@ func ModelContextFrom(ctx context.Context) ModelContext {
 		return mc
 	}
 	return ModelContext{}
+}
+
+// StablePromptCacheKey returns a Responses-compatible cache namespace that is
+// stable across runs for the same task. Run IDs are intentionally excluded so
+// a resumed task can reuse its stable prompt prefix.
+func StablePromptCacheKey(ctx context.Context) string {
+	mc := ModelContextFrom(ctx)
+	identity := strings.TrimSpace(mc.TaskID)
+	if identity == "" {
+		identity = strings.TrimSpace(mc.WorkspaceID)
+	}
+	if identity == "" {
+		identity = strings.TrimSpace(mc.PersonID)
+	}
+	if identity == "" {
+		return ""
+	}
+	parts := []string{strings.TrimSpace(mc.TenantID), identity, string(mc.Role)}
+	sum := sha256.Sum256([]byte(strings.Join(parts, "|")))
+	return "selfmind-" + hex.EncodeToString(sum[:16])
 }
 
 // ProviderProfile is a resolved provider/model choice for one role.

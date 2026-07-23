@@ -318,7 +318,7 @@ func (c *RunCoordinator) recordStreamEvent(ctx context.Context, channel string, 
 		}
 		delete(payload, "input")
 		payload["message"] = "Mid-turn guidance was applied to the next model step."
-	case "agent.thinking", "agent.step", "strategy.selected", "turn.started", "turn.completed", "token.updated":
+	case "agent.thinking", "agent.step", "strategy.selected", "turn.started", "turn.completed", "token.updated", "provider.call.usage":
 		if event.Content != "" {
 			payload["message"] = tools.RedactSensitive(event.Content)
 		}

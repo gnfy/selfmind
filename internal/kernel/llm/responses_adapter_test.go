@@ -397,6 +397,24 @@ func TestResponsesAdapterSanitizesInvalidReplayToolNames(t *testing.T) {
 	}
 }
 
+func TestResponsesAdapterIncludesPromptCacheKey(t *testing.T) {
+	adapter := NewResponsesAdapter("token", "https://example.test", "gpt-test")
+	wire := adapter.requestFromChat(ChatRequest{
+		Messages:       []Message{{Role: "user", Content: "inspect"}},
+		PromptCacheKey: " selfmind-task-cache ",
+	}, true)
+	if wire.PromptCacheKey != "selfmind-task-cache" {
+		t.Fatalf("prompt cache key = %q", wire.PromptCacheKey)
+	}
+	data, err := json.Marshal(wire)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `"prompt_cache_key":"selfmind-task-cache"`) {
+		t.Fatalf("request omitted prompt_cache_key: %s", data)
+	}
+}
+
 func TestResponsesAdapterReplaysAssistantToolCallsBeforeOutputs(t *testing.T) {
 	adapter := NewResponsesAdapter("token", "https://example.test", "gpt-test")
 	wire := adapter.requestFromChat(ChatRequest{Messages: []Message{

@@ -66,4 +66,31 @@ func TestBuildSystemPromptAccountsSections(t *testing.T) {
 	if stable == 0 {
 		t.Fatal("stable prefix must be accounted")
 	}
+	if StablePrefixFingerprint(sections) == "" {
+		t.Fatal("stable prefix fingerprint must be recorded")
+	}
+}
+
+func TestStablePrefixFingerprintIgnoresVolatileChanges(t *testing.T) {
+	base := []PromptSection{
+		newPromptSection("identity", "stable persona", true),
+		newPromptSection("tools", "stable tool contract", true),
+		newPromptSection("runtime", "turn one", false),
+	}
+	changedVolatile := []PromptSection{
+		newPromptSection("identity", "stable persona", true),
+		newPromptSection("tools", "stable tool contract", true),
+		newPromptSection("runtime", "turn two", false),
+	}
+	changedStable := []PromptSection{
+		newPromptSection("identity", "changed persona", true),
+		newPromptSection("tools", "stable tool contract", true),
+		newPromptSection("runtime", "turn two", false),
+	}
+	if StablePrefixFingerprint(base) != StablePrefixFingerprint(changedVolatile) {
+		t.Fatal("volatile suffix changes must not change the stable prefix fingerprint")
+	}
+	if StablePrefixFingerprint(base) == StablePrefixFingerprint(changedStable) {
+		t.Fatal("stable content changes must change the stable prefix fingerprint")
+	}
 }

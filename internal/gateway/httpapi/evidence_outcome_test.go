@@ -140,3 +140,26 @@ func TestVerificationNoticeIsConciseAndEnglish(t *testing.T) {
 		t.Fatalf("successful verification should not add UI noise: %q", passed)
 	}
 }
+
+func TestPositiveVerificationClaimRequiresVerificationAndSuccessCues(t *testing.T) {
+	for _, claim := range []string{
+		"go test ./... passed",
+		"The TypeScript syntax check succeeded.",
+		"构建检查通过",
+	} {
+		if !hasPositiveVerificationClaim([]string{claim}) {
+			t.Fatalf("expected a positive verification claim: %q", claim)
+		}
+	}
+
+	for _, claim := range []string{
+		"gh api query succeeded",
+		"The read-only inspection succeeded.",
+		"Tests were not run.",
+		"go test ./... failed",
+	} {
+		if hasPositiveVerificationClaim([]string{claim}) {
+			t.Fatalf("ordinary or negative evidence must not count as verified: %q", claim)
+		}
+	}
+}

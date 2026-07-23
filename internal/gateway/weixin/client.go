@@ -298,14 +298,15 @@ func (c *Client) sendTextChunk(ctx context.Context, chatID, text string) error {
 			if isOKCode(ret) && isOKCode(errcode) {
 				return nil
 			}
-			if isSessionExpired(ret, errcode, stringFromMap(resp, "errmsg")) && contextToken != "" && !retriedWithoutToken {
+			errmsg := stringFromMap(resp, "errmsg")
+			if isSessionRefreshFailure(ret, errcode, errmsg) && contextToken != "" && !retriedWithoutToken {
 				retriedWithoutToken = true
 				contextToken = ""
 				c.tokens.Delete(c.cfg.AccountID, chatID)
 				continue
 			}
-			err = &sendMessageError{ret: ret, errcode: errcode, errmsg: stringFromMap(resp, "errmsg")}
-			if ret == rateLimitCode || errcode == rateLimitCode {
+			err = &sendMessageError{ret: ret, errcode: errcode, errmsg: errmsg}
+			if isRateLimitResponse(ret, errcode, errmsg) {
 				lastErr = err
 			} else {
 				return err
@@ -350,7 +351,7 @@ func (e *sendMessageError) SessionRefreshRequired() bool {
 	if e == nil {
 		return false
 	}
-	return e.ret == -2 || e.errcode == -2 || strings.Contains(strings.ToLower(e.errmsg), "prepare failed")
+	return isSessionRefreshFailure(e.ret, e.errcode, e.errmsg)
 }
 
 func (c *Client) sendTextOnce(ctx context.Context, chatID, text, contextToken, clientID string) (map[string]interface{}, error) {
@@ -1339,6 +1340,17 @@ func isSessionExpired(ret, errcode int, errmsg string) bool {
 		return true
 	}
 	return (ret == rateLimitCode || errcode == rateLimitCode) && strings.EqualFold(strings.TrimSpace(errmsg), "unknown error")
+}
+
+func isSessionRefreshFailure(ret, errcode int, errmsg string) bool {
+	if isSessionExpired(ret, errcode, errmsg) {
+		return true
+	}
+	return strings.Contains(strings.ToLower(strings.TrimSpace(errmsg)), "prepare failed")
+}
+
+func isRateLimitResponse(ret, errcode int, errmsg string) bool {
+	return (ret == rateLimitCode || errcode == rateLimitCode) && !isSessionRefreshFailure(ret, errcode, errmsg)
 }
 
 func safeID(value string) string {

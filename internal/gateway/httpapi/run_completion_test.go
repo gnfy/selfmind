@@ -36,6 +36,30 @@ func TestTurnStatusCompletesAnOpenTaskOutcome(t *testing.T) {
 	}
 }
 
+func TestDirectAnswerNormalizesRunningOutcomeToDone(t *testing.T) {
+	outcome := reconcileTurnCompletion(api.RunOutcome{
+		Status:  "running",
+		Summary: "Answered directly without tools.",
+	}, router.TurnCompletion{
+		Status:           "completed",
+		CompletionReason: "completed",
+	}, false)
+
+	if outcome.Status != "done" || outcome.CompletionReason != "completed" || outcome.Resumable {
+		t.Fatalf("outcome = %#v", outcome)
+	}
+}
+
+func TestDirectAnswerCompletesRunWithoutClosingTaskLabel(t *testing.T) {
+	outcome := api.RunOutcome{Status: "done", CompletionReason: "completed"}
+	if got := taskStatusForFinalization(outcome, false); got != "in_progress" {
+		t.Fatalf("plain answer task status = %q, want in_progress", got)
+	}
+	if got := taskStatusForFinalization(outcome, true); got != "done" {
+		t.Fatalf("structured completion task status = %q, want done", got)
+	}
+}
+
 func TestIncompleteTurnOverridesStructuredWaitingExternal(t *testing.T) {
 	outcome := reconcileTurnCompletion(api.RunOutcome{
 		Status: "waiting_external",

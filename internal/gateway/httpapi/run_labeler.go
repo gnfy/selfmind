@@ -5,7 +5,9 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -15,6 +17,11 @@ import (
 	"selfmind/internal/platform/log"
 	"selfmind/internal/platform/textutil"
 )
+
+// ErrPostRunBatchShape marks a semantically malformed aggregate response.
+// Only this class is safe to bisect: replaying a batch after provider/network
+// failure duplicates the same expensive input without isolating bad content.
+var ErrPostRunBatchShape = errors.New("post-run batch response shape is invalid")
 
 // PostRunAnalysis is the one bounded maintenance result produced after an
 // eligible run. TaskDecision is harmless display governance; memory decisions
@@ -189,6 +196,8 @@ type preparedPostRunAnalysis struct {
 	attach        taskAttach
 	candidates    []control.Task
 	labelEligible bool
+	workKey       string
+	outcome       api.RunOutcome
 	request       PostRunAnalysisRequest
 }
 
@@ -198,18 +207,24 @@ func (d *Server) preparePostRunAnalysis(ctx context.Context, identity *control.I
 	}
 	var candidates []control.Task
 	labelEligible := false
+	workKey := uniqueTaskWorkKey(
+		userInput,
+		outcome.Summary,
+		strings.Join(outcome.Done, " "),
+		strings.Join(outcome.NextSteps, " "),
+	)
 	if attach.preLabel {
-		candidates = d.openLabelCandidates(ctx, identity, task.ID)
+		candidates = d.openLabelCandidates(ctx, identity, task.ID, workKey)
 		labelEligible = attach.created || len(candidates) > 0
 	}
 	if !labelEligible && !postRunMemoryEligible(userInput, outcome) {
 		_ = d.Control.SkipMaintenanceJob(ctx, identity.TenantID, run.ID, postRunAnalyzerVersion, "run is not eligible for post-run maintenance")
 		return nil
 	}
-	prompt := buildPostRunAnalysisPrompt(task, attach.created, labelEligible, userInput, outcome, candidates)
+	prompt := buildPostRunAnalysisPrompt(task, attach.created, labelEligible, workKey, userInput, outcome, candidates)
 	return &preparedPostRunAnalysis{
 		identity: identity, task: task, run: run, attach: attach,
-		candidates: candidates, labelEligible: labelEligible,
+		candidates: candidates, labelEligible: labelEligible, workKey: workKey, outcome: outcome,
 		request: PostRunAnalysisRequest{
 			Prompt:          prompt,
 			TurnText:        strings.TrimSpace(userInput + "\n" + outcome.Summary),
@@ -270,7 +285,7 @@ func (d *Server) applyClaimedPostRun(ctx context.Context, prepared *preparedPost
 		}
 	}
 	if prepared.labelEligible {
-		d.applyPostRunLabel(ctx, prepared.identity, prepared.task, prepared.run, prepared.attach, prepared.candidates, analysis.TaskDecision)
+		d.applyPostRunLabel(ctx, prepared.identity, prepared.task, prepared.run, prepared.attach, prepared.candidates, prepared.workKey, prepared.outcome, analysis.TaskDecision)
 	}
 	_ = d.Control.CompleteMaintenanceJob(ctx, req.TenantID, req.RunID, postRunAnalyzerVersion, analysisResultHash(analysis))
 }
@@ -287,7 +302,21 @@ func (d *Server) failClaimedPostRun(ctx context.Context, prepared *preparedPostR
 	d.blockMaintenanceProviderJob(ctx, prepared.identity, prepared.task, prepared.run, postRunAnalyzerVersion, err)
 }
 
-func (d *Server) applyPostRunLabel(ctx context.Context, identity *control.IdentityContext, task *control.Task, run *control.Run, attach taskAttach, candidates []control.Task, rawDecision string) {
+func (d *Server) applyPostRunLabel(ctx context.Context, identity *control.IdentityContext, task *control.Task, run *control.Run, attach taskAttach, candidates []control.Task, workKey string, outcome api.RunOutcome, rawDecision string) {
+	// A unique issue key is stronger display evidence than a maintenance
+	// model's conservative KEEP. This runs only after execution and only moves
+	// to one already-offered open label, so a mistake cannot affect workspace,
+	// context selection, permissions, or the work that already ran.
+	// A newly-created placeholder normally copies the current message into its
+	// title, so it will naturally contain the same key. That is not evidence
+	// that it should win over an established open label carrying the key.
+	if workKey != "" && (attach.created || !taskContainsWorkKey(*task, workKey)) {
+		if target := exactWorkKeyCandidate(candidates, workKey); target != nil {
+			d.applyLabelMove(ctx, identity, task, run, target, attach,
+				"deterministic work key "+workKey+"; model decision "+textutil.Truncate(toOneLine(rawDecision), 80))
+			return
+		}
+	}
 	decision, arg := parseRunLabelReply(rawDecision)
 	switch decision {
 	case "KEEP", "":
@@ -327,6 +356,16 @@ func (d *Server) applyPostRunLabel(ctx context.Context, identity *control.Identi
 		if !d.TaskGovernance.InboxEnabled {
 			return
 		}
+		if !postRunInboxEligible(outcome, workKey) {
+			d.appendLabelAssignedEvent(ctx, task.ID, run.ID, map[string]interface{}{
+				"decision":          "keep",
+				"requested_decision": "inbox",
+				"task_id":           task.ID,
+				"run_id":            run.ID,
+				"reason":            "durable run evidence is not eligible for Inbox",
+			})
+			return
+		}
 		d.applyInboxLabel(ctx, identity, task, run, attach, rawDecision)
 	}
 }
@@ -356,6 +395,23 @@ func postRunMemoryEligible(userInput string, outcome api.RunOutcome) bool {
 		return false
 	}
 	return len([]rune(strings.TrimSpace(userInput)))+len([]rune(strings.TrimSpace(outcome.Summary))) >= 160
+}
+
+// postRunInboxEligible is the deterministic safety boundary around the
+// maintenance model's display-only INBOX decision. A run carrying durable
+// work evidence must remain visible even when the model misclassifies its
+// topic. This guard never routes the user turn or changes execution context.
+func postRunInboxEligible(outcome api.RunOutcome, workKey string) bool {
+	if strings.TrimSpace(workKey) != "" || len(outcome.Files) > 0 || len(outcome.Done) > 0 ||
+		len(outcome.NextSteps) > 0 || len(outcome.Tests) > 0 || len(outcome.Risks) > 0 {
+		return false
+	}
+	if outcome.Verification != nil && strings.TrimSpace(outcome.Verification.State) != "" &&
+		!strings.EqualFold(strings.TrimSpace(outcome.Verification.State), "not_run") {
+		return false
+	}
+	status := strings.ToLower(strings.TrimSpace(outcome.Status))
+	return status == "" || status == "done" || status == "completed"
 }
 
 // applyInboxLabel moves one run into the person's hidden workspace inbox.
@@ -426,7 +482,7 @@ func (d *Server) appendLabelAssignedEvent(ctx context.Context, taskID, runID str
 // openLabelCandidates returns the person's open (non-terminal, non-archived)
 // labels excluding the pre-label itself, newest first, capped at
 // runLabelerMaxOpenLabels.
-func (d *Server) openLabelCandidates(ctx context.Context, identity *control.IdentityContext, excludeTaskID string) []control.Task {
+func (d *Server) openLabelCandidates(ctx context.Context, identity *control.IdentityContext, excludeTaskID, preferredWorkKey string) []control.Task {
 	tasks, err := d.Control.ListTasks(ctx, identity.TenantID, identity.PersonID, 50)
 	if err != nil {
 		return nil
@@ -437,30 +493,45 @@ func (d *Server) openLabelCandidates(ctx context.Context, identity *control.Iden
 			continue
 		}
 		out = append(out, t)
-		if len(out) >= runLabelerMaxOpenLabels {
-			break
-		}
+	}
+	// Preserve newest-first order within both groups while ensuring an exact
+	// key match cannot fall outside the model's bounded candidate window.
+	if preferredWorkKey != "" {
+		sort.SliceStable(out, func(i, j int) bool {
+			return taskContainsWorkKey(out[i], preferredWorkKey) && !taskContainsWorkKey(out[j], preferredWorkKey)
+		})
+	}
+	if len(out) > runLabelerMaxOpenLabels {
+		out = out[:runLabelerMaxOpenLabels]
 	}
 	return out
 }
 
-func buildPostRunAnalysisPrompt(task *control.Task, created, labelEligible bool, userInput string, outcome api.RunOutcome, candidates []control.Task) string {
+func buildPostRunAnalysisPrompt(task *control.Task, created, labelEligible bool, workKey, userInput string, outcome api.RunOutcome, candidates []control.Task) string {
 	var sb strings.Builder
 	sb.WriteString("Analyze this completed run for task-label hygiene and durable memory. Return only the JSON object required by the system prompt.\n\n")
 	sb.WriteString("Task decision rules:\n")
 	if !labelEligible {
 		sb.WriteString("- task_decision MUST be KEEP because this run was explicitly attached or there is no useful label ambiguity.\n")
 	} else {
+		inboxEligible := postRunInboxEligible(outcome, workKey)
 		sb.WriteString("- MOVE only to an exact task id from Open labels, and only when this run clearly belongs there.\n")
 		if created {
 			sb.WriteString("- The current task is a new placeholder. Use TITLE:<short title> for genuinely new durable work, MOVE for clear continuation, or INBOX for nondurable chatter.\n")
 		} else {
 			sb.WriteString("- The current task is established. Never retitle it; use KEEP unless another offered label is clearly correct.\n")
 		}
-		sb.WriteString("- Use INBOX only for casual conversation, identity/model questions, one-off diagnostics, or temporary answers with no resumable work. Never use it for files, artifacts, scheduled work, approvals, or durable decisions.\n")
+		if inboxEligible {
+			sb.WriteString("- INBOX is eligible only if this is casual conversation, an identity/model question, or a temporary answer with no resumable work.\n")
+		} else {
+			sb.WriteString("- INBOX is NOT eligible because this run has durable evidence. Use KEEP, MOVE, or TITLE.\n")
+		}
 	}
 	sb.WriteString("- If uncertain, use KEEP. Task labeling affects display/resume only and must not invent work.\n\n")
 	fmt.Fprintf(&sb, "Current task: %s | %q | new placeholder: %v\n", task.ID, textutil.Truncate(toOneLine(task.Title), 80), created)
+	if workKey != "" {
+		fmt.Fprintf(&sb, "Deterministic work key in this run: %s (display governance only)\n", workKey)
+	}
 	if len(candidates) == 0 {
 		sb.WriteString("Open labels: (none)\n")
 	} else {

@@ -199,6 +199,43 @@ func TestManualPendingSessionRetryIsPeerScoped(t *testing.T) {
 	}
 }
 
+func TestManualPendingSessionDismissIsPeerScopedAndDoesNotSend(t *testing.T) {
+	ctx := context.Background()
+	store, err := control.OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	sender := &switchableReceiptSender{err: refreshRequiredError("prepare failed")}
+	svc := NewService(store, sender, Options{PollInterval: time.Hour})
+	if err := svc.EnqueueAndTry(ctx, Message{
+		TenantID: "default", PersonID: "p1", Platform: "weixin",
+		PlatformUserID: "wx", Channel: "wx-chat", Content: "obsolete result", Kind: KindFinalResult,
+	}); err == nil {
+		t.Fatal("initial prepare failure must surface")
+	}
+	rows, err := store.ListPendingSessionOutbound(ctx, "default", "p1", 5)
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("pending rows=%+v err=%v", rows, err)
+	}
+	ref := rows[0].ID[:8]
+	if _, err := svc.DismissPendingSession(ctx, "default", "p1", "weixin", "other-chat", ref); err == nil {
+		t.Fatal("dismiss from another chat must fail")
+	}
+	sender.sent = nil
+	id, err := svc.DismissPendingSession(ctx, "default", "p1", "weixin", "wx-chat", ref)
+	if err != nil || id != rows[0].ID {
+		t.Fatalf("dismiss id=%q err=%v", id, err)
+	}
+	if len(sender.sent) != 0 {
+		t.Fatalf("dismiss unexpectedly sent messages: %v", sender.sent)
+	}
+	if pending, _ := store.ListPendingSessionOutbound(ctx, "default", "p1", 5); len(pending) != 0 {
+		t.Fatalf("dismissed row remained pending: %+v", pending)
+	}
+}
+
 func TestCatchUpPermanentFailureLeavesNoFakePendingRow(t *testing.T) {
 	ctx := context.Background()
 	store, err := control.OpenStore(t.TempDir())

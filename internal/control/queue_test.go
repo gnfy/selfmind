@@ -2,8 +2,73 @@ package control
 
 import (
 	"context"
+	"fmt"
+	"sync"
 	"testing"
 )
+
+func TestBindQueuedRunAllowsOnlyOneConcurrentLauncher(t *testing.T) {
+	ctx := context.Background()
+	store, err := OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "gnfy", "Alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	row, err := store.EnqueueQueued(ctx, QueuedTask{
+		TenantID: identity.TenantID, PersonID: identity.PersonID,
+		Content: "launch once", Platform: "cli", PlatformUserID: "gnfy",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.MarkQueued(ctx, identity.TenantID, row.ID, QueueStatusStarted); err != nil {
+		t.Fatal(err)
+	}
+
+	const launchers = 16
+	results := make(chan struct {
+		runID string
+		err   error
+	}, launchers)
+	var wg sync.WaitGroup
+	for i := 0; i < launchers; i++ {
+		runID := fmt.Sprintf("run_%02d", i)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			results <- struct {
+				runID string
+				err   error
+			}{runID: runID, err: store.BindQueuedRun(ctx, identity.TenantID, row.ID, runID)}
+		}()
+	}
+	wg.Wait()
+	close(results)
+
+	winner := ""
+	for result := range results {
+		if result.err == nil {
+			if winner != "" {
+				t.Fatalf("multiple launchers bound the queue row: %s and %s", winner, result.runID)
+			}
+			winner = result.runID
+		}
+	}
+	if winner == "" {
+		t.Fatal("no launcher bound the started queue row")
+	}
+	got, err := store.GetQueued(ctx, identity.TenantID, row.ID)
+	if err != nil || got == nil || got.RunID != winner {
+		t.Fatalf("bound row = %+v, %v; want winner %s", got, err, winner)
+	}
+	if err := store.BindQueuedRun(ctx, identity.TenantID, row.ID, winner); err != nil {
+		t.Fatalf("idempotent winner rebind failed: %v", err)
+	}
+}
 
 func TestTaskQueueLifecycle(t *testing.T) {
 	ctx := context.Background()

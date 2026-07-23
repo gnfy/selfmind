@@ -18,9 +18,10 @@ func TestContextBreakdownDetailRendersSections(t *testing.T) {
 	events := []control.Event{eventWith("context.breakdown", map[string]interface{}{
 		"identity": 400, "tools": 1000, "project_context": 15000,
 		"memory": 200, "runtime": 1200, "history": 2200, "total": 20000,
+		"stable": 1400, "volatile": 15000, "stable_prefix_hash": "abcd1234",
 	})}
 	out := contextBreakdownDetail(events)
-	for _, want := range []string{"~20000 tok", "project context (AGENTS.md)", "75%", "history"} {
+	for _, want := range []string{"~20000 tok", "project context (AGENTS.md)", "75%", "history", "prefix abcd1234"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("breakdown detail missing %q:\n%s", want, out)
 		}
@@ -46,18 +47,55 @@ func TestLatestCompactionLine(t *testing.T) {
 }
 
 func TestLatestPromptCacheLine(t *testing.T) {
-	events := []control.Event{eventWith("token.updated", map[string]interface{}{
-		"input_tokens": 1000, "cache_read_input_tokens": 800,
-		"cache_creation_input_tokens": 120, "billed_input_tokens": 200,
-	})}
+	events := []control.Event{
+		eventWith("provider.call.usage", map[string]interface{}{
+			"iteration": 3, "transport": "stream", "status": "succeeded", "duration_ms": 240,
+			"input_tokens": 250, "cache_read_input_tokens": 200,
+			"cache_creation_input_tokens": 20, "cache_creation_reported": true, "billed_input_tokens": 50,
+		}),
+		eventWith("token.updated", map[string]interface{}{
+			"input_tokens": 1000, "cache_read_input_tokens": 800,
+			"cache_creation_input_tokens": 120, "cache_creation_reported": true, "billed_input_tokens": 200,
+		}),
+	}
 	out := latestPromptCacheLine(events)
-	for _, want := range []string{"read 800 tok (80%)", "created 120 tok", "billed input 200 tok"} {
+	for _, want := range []string{
+		"Provider call (#3 stream, succeeded, 240ms)", "input 250 tok", "cache read 200 tok (80%)",
+		"Prompt cache (run snapshot): read 800 tok (80%)", "created 120 tok", "billed input 200 tok",
+	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("prompt cache line missing %q: %s", want, out)
 		}
 	}
 	if !strings.Contains(latestPromptCacheLine(nil), "no provider usage data") {
 		t.Fatal("absence must be explicit")
+	}
+}
+
+func TestLatestPromptCacheLineReportsUnavailableCreationCounter(t *testing.T) {
+	out := latestPromptCacheLine([]control.Event{eventWith("provider.call.usage", map[string]interface{}{
+		"iteration": 1, "transport": "responses", "status": "succeeded",
+		"input_tokens": 100, "cache_read_input_tokens": 80, "billed_input_tokens": 20,
+	})})
+	if !strings.Contains(out, "created n/a") {
+		t.Fatalf("missing creation counter must not look like a real zero: %s", out)
+	}
+}
+
+func TestPromptPrefixStabilityLine(t *testing.T) {
+	stable := []control.Event{
+		eventWith("context.breakdown", map[string]interface{}{"stable_prefix_hash": "same"}),
+		eventWith("context.breakdown", map[string]interface{}{"stable_prefix_hash": "same"}),
+	}
+	if got := promptPrefixStabilityLine(stable); !strings.Contains(got, "stable across") {
+		t.Fatalf("stable prefix not reported: %s", got)
+	}
+	changed := []control.Event{
+		eventWith("context.breakdown", map[string]interface{}{"stable_prefix_hash": "new"}),
+		eventWith("context.breakdown", map[string]interface{}{"stable_prefix_hash": "old"}),
+	}
+	if got := promptPrefixStabilityLine(changed); !strings.Contains(got, "changed") {
+		t.Fatalf("changed prefix not reported: %s", got)
 	}
 }
 

@@ -239,6 +239,8 @@ tasks:
   maintenance_debounce: "5m"
   maintenance_max_wait: "15m"
   maintenance_batch_max_runs: 10
+  maintenance_soft_probe_initial: "15m"
+  maintenance_soft_probe_max: "1h"
 
 # Background learning/review settings for memory and skill evolution.
 evolution:
@@ -639,7 +641,7 @@ The `== Recent errors ==` section aggregates both kinds, newest first:
 - 07-13 09:15 [run:failed] llm chat: responses API error 429: usage limit reached
 ```
 
-`[tool:<name>]` is a single tool call failing; `[run:failed]` is a whole turn / model interface failing. Secrets are redacted. For per-turn context detail (where the prompt tokens went, recall hits, compaction), use the control commands in a chat: `/diag`, `/diag context`, `/diag tasks`, `/diag memory`.
+`[tool:<name>]` is a single tool call failing; `[run:failed]` is a whole turn / model interface failing. Secrets are redacted. For per-turn context detail (where the prompt tokens went, recall hits, compaction), use the control commands in a chat: `/diag`, `/diag context`, `/diag tasks`, `/diag memory`, `/diag models`.
 
 ### 2. Record real turns (flight recorder)
 

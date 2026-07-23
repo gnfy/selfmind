@@ -481,6 +481,30 @@ CREATE TABLE IF NOT EXISTS provider_route_health (
 );
 CREATE INDEX IF NOT EXISTS idx_provider_route_probe
 	ON provider_route_health(tenant_id, state, next_probe_at);
+CREATE TABLE IF NOT EXISTS maintenance_provider_calls (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	tenant_id TEXT NOT NULL,
+	role TEXT NOT NULL DEFAULT '',
+	provider TEXT NOT NULL DEFAULT '',
+	model TEXT NOT NULL DEFAULT '',
+	route_id TEXT NOT NULL DEFAULT '',
+	candidate_index INTEGER NOT NULL DEFAULT 0,
+	status TEXT NOT NULL,
+	trigger_class TEXT NOT NULL DEFAULT '',
+	finish_reason TEXT NOT NULL DEFAULT '',
+	error_class TEXT NOT NULL DEFAULT '',
+	input_tokens INTEGER NOT NULL DEFAULT 0,
+	output_tokens INTEGER NOT NULL DEFAULT 0,
+	cache_read_input_tokens INTEGER NOT NULL DEFAULT 0,
+	cache_creation_input_tokens INTEGER NOT NULL DEFAULT 0,
+	batch_size INTEGER NOT NULL DEFAULT 1,
+	latency_ms INTEGER NOT NULL DEFAULT 0,
+	created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_maintenance_provider_calls_recent
+	ON maintenance_provider_calls(tenant_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_maintenance_provider_calls_route
+	ON maintenance_provider_calls(tenant_id, route_id, created_at);
 CREATE TABLE IF NOT EXISTS external_watches (
 	id TEXT PRIMARY KEY,
 	tenant_id TEXT NOT NULL,

@@ -71,6 +71,34 @@
 | Task governance | ✅ | Reversible label hygiene uses additive task metadata (`kind`, `visibility`, `pinned`, `archived_at`, `last_activity_at`). The daemon-batched `PostRunAnalyzer` produces one logical task decision and memory decision set per run, while one provider request may cover several completed runs. Casual/identity/diagnostic work may move to one hidden Inbox per person/workspace; runs and events remain durable, and Inbox is excluded from normal task/recall/continuation views. `/task <id> pin|unpin` is explicit user authority. The 6h deterministic sweep archives only stale terminal work and suggests same-workspace duplicates without model calls; only explicit `/task <src> merge <dst>` folds labels. `/tasks` stays SQLite-filtered and paged, and `/diag tasks` surfaces possibly stuck work. Tests: `control/task_governance_test.go`, `app/post_run_analyzer_test.go`, `httpapi/run_labeler_test.go`, `httpapi/maintenance_batch_test.go`, `httpapi/task_view_test.go`, `control/task_merge_test.go`, `httpapi/task_dupes_test.go`, `httpapi/diag_w2_test.go`; eval: `evalcases/timeline/timeline-task-governance.yaml`. |
 | Skill variant evolution / sandbox test | ❌ | Old roadmap P3 (doc removed; see git history); not started, and out of scope for the north star. |
 
+### Deterministic Governance And Cache Diagnostics (2026-07-21)
+
+- `/diag context` includes a short stable-prefix fingerprint. It distinguishes
+  provider cache misses from prompt-prefix churn without exposing prompt
+  content.
+- Responses requests now carry a stable `prompt_cache_key` derived from the
+  tenant, work label/workspace, and model role, but never the run id. Repeated
+  turns in the same work line can therefore reuse the provider cache without
+  sharing a cache domain across unrelated work.
+- A unique issue key such as `RUQX-224` is deterministic post-run display
+  evidence. When exactly one offered open label has that key, an ordinary
+  pre-label placeholder moves there even if the maintenance model returns
+  `KEEP`. Ambiguous duplicate labels do nothing. Explicit task attachment stays
+  authoritative, and execution workspace, permissions, and completed-run
+  context never change.
+- Cross-endpoint Delivery Continuity covers `pending_session`,
+  `sent_unconfirmed`, and `failed` final results. It lets an explicit CLI
+  continuation restate a possibly missed IM result without blind resend.
+- Weixin `prepare failed` responses are treated as stale-session failures, not
+  rate limits. When a context token exists, the sender drops it and retries
+  once without the token so an otherwise healthy iLink session can recover.
+- Direct answers now materialize a terminal `run.outcome` before the terminal
+  run event. The run is `done`, while the reusable task label remains open
+  unless a structured `finish_run` outcome explicitly changes its lifecycle.
+- Linux terminal commands consistently execute through `/bin/bash -c`, so the
+  documented shell contract supports `pipefail`, arrays, and Bash syntax in
+  both host and sandbox execution paths.
+
 ### Live Plan Lifecycle (2026-07-16)
 
 - This section supersedes the 2026-07-05 live-plan note in the TUI status row.
@@ -128,6 +156,21 @@
 These are the live gaps, ordered by their distance from the north star
 (`docs/identity-continuity.md` — the three continuity scenarios). This section
 is the only priority list in the repo; other docs must point here.
+
+### Maintenance provider cost controls (2026-07-22)
+
+- Kimi/Anthropic-compatible HTTP 200 responses that contain no usable text but
+  end with `max_tokens` now preserve usage and finish metadata, open a bounded
+  soft circuit, and fail over once instead of repeatedly consuming the same
+  route for every queued maintenance batch.
+- Provider, quota, network, and timeout failures no longer recursively bisect
+  a multi-run maintenance batch. Bisection is reserved for malformed batch
+  result shapes, where it can isolate the bad result without multiplying an
+  upstream outage.
+- Maintenance calls persist per-route success/failure/circuit and token
+  accounting. `/diag models` exposes the recent totals without invoking a
+  model. Batch output budgets are bounded to 3,072 tokens for one run and
+  10,240 tokens for a full batch.
 
 ### ACTIVE PLAN — Loop Engineering: typed state + exact recovery (approved 2026-07-19)
 
@@ -648,6 +691,13 @@ completion/failure; continuity eval replays offline.
   the stable prefix. Tests: `llm/anthropic_prompt_cache_test.go`,
   `kernel/token_usage_event_test.go`, `modelruntime/resolver_test.go`,
   `httpapi/diag_w2_test.go`.
+  **Per-call accounting closure (2026-07-22):** each logical stream or
+  non-stream provider invocation now emits one durable `provider.call.usage`
+  event with duration, transport, status, cache read/create tokens, and billed
+  input. `token.updated` intentionally remains the cumulative run total.
+  `/diag context` renders both views, preventing cumulative run usage from
+  being mistaken for a single oversized provider request. Tests:
+  `kernel/token_usage_event_test.go`, `httpapi/diag_w2_test.go`.
 
 - **Unattended completion + IM recovery closure (2026-07-18, P0/P1).**
   External-watch finalization queue rows now receive a dedicated execution
@@ -681,7 +731,8 @@ completion/failure; continuity eval replays offline.
   shipped 2026-07-16.** Async and cron final answers are now typed as
   `final_result`. An explicit CLI continuation receives a bounded
   `Delivery Continuity` slice when the same task has a recent Weixin/IM final
-  answer in `sent_unconfirmed` or `failed`, allowing the agent to restate the
+  answer in `pending_session`, `sent_unconfirmed`, or `failed`, allowing the
+  agent to restate the
   missing conclusion without adding a second resend path. Mid-turn guidance
   now records `run.steering_consumed` only after it reaches a model step; raw
   guidance is not copied into the durable event. Post-run maintenance can
@@ -706,6 +757,18 @@ completion/failure; continuity eval replays offline.
   provider returns a nil or whitespace-only response, instead of accepting an
   empty proposal as success. Tests: `control/maintenance_jobs_test.go`,
   `app/post_run_analyzer_test.go`, `httpapi/run_completion_test.go`.
+  **Healthy-route replay closure (2026-07-22):** blocked maintenance jobs are
+  replayed when any explicitly configured cheap route in the same analyzer
+  chain is healthy, even if the failed route remains configured. Replay is
+  analyzer-version scoped (`1` post-run, `100` skill review), so one worker
+  cannot steal another worker's jobs; if every configured route is open, jobs
+  remain blocked. Background review uses the same explicit
+  `tasks.maintenance_fallback_roles` chain and still never borrows the
+  foreground coding model. Provider circuit health is daemon-scoped (normally
+  tenant `default`) while durable jobs retain their person tenant; replay keeps
+  those scopes separate and releases matching person-owned jobs across tenants
+  only when the daemon chain has a healthy fallback. Tests:
+  `control/provider_route_health_test.go`.
   **Kimi transport closure (2026-07-17):** every Kimi Coding Plan role remains
   on the provider-default Anthropic Messages transport, matching Hermes and the
   `/coding` route's wire contract; custom gateways may still override protocol
@@ -1045,7 +1108,10 @@ modes, and the self-check/CI gate landed with the Phase-1 work — see
   `/diag delivery`. Automatic catch-up remains inbound-triggered and bounded by
   the delivery attempt limit. An owner may retry one exact pending row with
   `/diag delivery retry <id-prefix>`; lookup is scoped to the current IM peer,
-  and `sent_unconfirmed` remains terminal to prevent blind duplicate sends.
+  or explicitly discard obsolete backlog with
+  `/diag delivery dismiss <id-prefix>`. Diagnostics show age and explain why a
+  stale row is outside automatic catch-up. `sent_unconfirmed` remains terminal
+  to prevent blind duplicate sends.
 - Work whose files changed but whose verification failed or did not complete
   now leaves the task in the distinct, resumable `verification_partial` state.
   The run itself is terminal, while `/status`, `/tasks`, digest, and recent
@@ -1055,6 +1121,24 @@ modes, and the self-check/CI gate landed with the Phase-1 work — see
   that it happened before task/run creation. The unresolved-paste fixture uses
   this contract, and a verification-partial case records the cross-layer state
   expected after changed-but-unverified work.
+
+## Daily-Driver Routing And Execution Closure (2026-07-22)
+
+- Post-run INBOX proposals now pass a deterministic eligibility guard. Work
+  with a work key, changed files, tests, risks, verification evidence, explicit
+  next steps, or a non-done outcome remains on its visible task label even when
+  the maintenance model requests INBOX. The rejected proposal is still written
+  to `label.assigned` for audit; routing mistakes affect display only.
+- `/diag context` reports whether the stable prompt prefix changed between the
+  two latest turns. Prompt-cache creation is rendered as `n/a` for transports
+  such as Responses that do not report that counter, avoiding the false claim
+  that zero cache entries were created. `token.updated` remains a cumulative
+  run snapshot and must not be summed across events.
+- An isolated terminal failure requests one approval-gated host retry only for
+  authentication, network, or environment-state failures. Syntax, path, and
+  command errors stay in the sandbox correction path. Verification-claim
+  reconciliation now requires both a verification cue and a positive result;
+  successful read-only provider queries no longer count as tests passing.
 
 ## Memory Governance Reliability Closure (2026-07-11)
 

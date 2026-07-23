@@ -114,6 +114,7 @@ func TestTaskGovernanceDefaultsAndOverrides(t *testing.T) {
 	doneAfter, cancelledAfter := cfg.Tasks.AutoArchiveDurations()
 	debounce, maxWait, batchMax := cfg.Tasks.MaintenanceBatchPolicy()
 	probeInitial, probeMax := cfg.Tasks.MaintenanceQuotaCircuitPolicy()
+	softProbeInitial, softProbeMax := cfg.Tasks.MaintenanceSoftCircuitPolicy()
 	if !cfg.Tasks.InboxEnabled || cfg.Tasks.ListLimit() != 10 || cfg.Tasks.MaintenanceModelRole != "memory_extract" || len(cfg.Tasks.MaintenanceFallbackRoles) != 2 {
 		t.Fatalf("task defaults = %+v", cfg.Tasks)
 	}
@@ -125,6 +126,9 @@ func TestTaskGovernanceDefaultsAndOverrides(t *testing.T) {
 	}
 	if probeInitial != 15*time.Minute || probeMax != 4*time.Hour {
 		t.Fatalf("quota circuit defaults = %s/%s", probeInitial, probeMax)
+	}
+	if softProbeInitial != 15*time.Minute || softProbeMax != time.Hour {
+		t.Fatalf("soft circuit defaults = %s/%s", softProbeInitial, softProbeMax)
 	}
 
 	overridePath := filepath.Join(t.TempDir(), "override.yaml")
@@ -141,6 +145,8 @@ tasks:
   maintenance_batch_max_runs: 99
   maintenance_quota_probe_initial: "3m"
   maintenance_quota_probe_max: "30m"
+  maintenance_soft_probe_initial: "4m"
+  maintenance_soft_probe_max: "20m"
 `), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -151,6 +157,7 @@ tasks:
 	doneAfter, cancelledAfter = cfg.Tasks.AutoArchiveDurations()
 	debounce, maxWait, batchMax = cfg.Tasks.MaintenanceBatchPolicy()
 	probeInitial, probeMax = cfg.Tasks.MaintenanceQuotaCircuitPolicy()
+	softProbeInitial, softProbeMax = cfg.Tasks.MaintenanceSoftCircuitPolicy()
 	if cfg.Tasks.InboxEnabled || cfg.Tasks.ListLimit() != 50 || cfg.Tasks.MaintenanceModelRole != "fast_classifier" || len(cfg.Tasks.MaintenanceFallbackRoles) != 1 || cfg.Tasks.MaintenanceFallbackRoles[0] != "background_review" {
 		t.Fatalf("task overrides = %+v", cfg.Tasks)
 	}
@@ -162,5 +169,8 @@ tasks:
 	}
 	if probeInitial != 3*time.Minute || probeMax != 30*time.Minute {
 		t.Fatalf("quota circuit overrides = %s/%s", probeInitial, probeMax)
+	}
+	if softProbeInitial != 4*time.Minute || softProbeMax != 20*time.Minute {
+		t.Fatalf("soft circuit overrides = %s/%s", softProbeInitial, softProbeMax)
 	}
 }

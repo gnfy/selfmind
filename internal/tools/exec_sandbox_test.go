@@ -41,7 +41,7 @@ func TestExecSandboxExplicitHostAndRequiredPolicy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if decision.Mode != SandboxHost || cmd.Args[0] != "sh" {
+	if decision.Mode != SandboxHost || cmd.Args[0] != shellArgv("echo hi")[0] {
 		t.Fatalf("host decision=%+v argv=%v", decision, cmd.Args)
 	}
 

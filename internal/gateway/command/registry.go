@@ -61,7 +61,7 @@ var entries = []Entry{
 	{Name: "/tasks", Usage: "/tasks [done|archived|all]", Summary: "List open work (done/archived collapse to counts).", SyncControl: true, Scope: Gateway},
 	{Name: "/task", Usage: "/task <n|id> [runs|rename <name>|pin|unpin|archive|merge <dst>]", Summary: "Show a task's detail, list its runs, rename, pin, archive, or merge it into another task.", SyncControl: true, Scope: Gateway},
 	{Name: "/queue", Usage: "/queue [drop <n>|clear]", Summary: "List queued tasks (or drop all pending queued tasks).", SyncControl: true, Scope: Gateway},
-	{Name: "/diag", Usage: "/diag [memory|context|tasks|delivery]", Summary: "Show runtime, memory, context, task, or outbound-delivery diagnostics.", SyncControl: true, Scope: Gateway},
+	{Name: "/diag", Usage: "/diag [memory|context|tasks|models|delivery]", Summary: "Show runtime, memory, context, task, model-route, or outbound-delivery diagnostics.", SyncControl: true, Scope: Gateway},
 	{Name: "/events", Usage: "/events", Summary: "List recent events for the current task.", SyncControl: true, Scope: Gateway},
 	{Name: "/approvals", Usage: "/approvals", Summary: "List pending approvals.", SyncControl: true, Scope: Gateway},
 	{Name: "/approve", Usage: "/approve <n|id|all> [task|always]", Summary: "Approve a pending action; add task/always to remember its class.", SyncControl: true, Scope: Gateway},

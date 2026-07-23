@@ -167,10 +167,33 @@ func verificationClaimMismatches(outcome api.RunOutcome) []string {
 func hasPositiveVerificationClaim(claims []string) bool {
 	for _, claim := range claims {
 		lower := strings.ToLower(claim)
-		for _, marker := range []string{" pass", "passed", "success", "succeeded", " ok", "green", "通过", "成功", "无错误"} {
-			if strings.Contains(" "+lower, marker) {
-				return true
-			}
+		if verificationClaimContainsAny(lower, []string{
+			"failed", "failure", "not pass", "did not pass", "not run", "was not run",
+			"失败", "未通过", "未运行", "没有运行",
+		}) {
+			continue
+		}
+		verificationCue := verificationClaimContainsAny(lower, []string{
+			"test", "pytest", "go test", "cargo test", "go vet", "lint", "typecheck", "type-check",
+			"go build", "cargo build", "npm run build", "pnpm build", "yarn build", "mvn package", "gradle build",
+			"syntax check", "smoke check", "verification", "verify command",
+			"测试", "构建检查", "构建验证", "语法检查", "冒烟检查", "校验",
+		})
+		positiveCue := verificationClaimContainsAny(" "+lower, []string{
+			" passed", " pass", " success", " succeeded", " ok", " green",
+			"通过", "成功", "无错误",
+		})
+		if verificationCue && positiveCue {
+			return true
+		}
+	}
+	return false
+}
+
+func verificationClaimContainsAny(value string, markers []string) bool {
+	for _, marker := range markers {
+		if strings.Contains(value, marker) {
+			return true
 		}
 	}
 	return false

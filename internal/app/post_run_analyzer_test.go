@@ -182,6 +182,43 @@ func TestMaintenanceProviderChainOpensQuotaCircuitAfterOneRequest(t *testing.T) 
 	}
 }
 
+func TestMaintenanceProviderChainOpensSoftCircuitAfterOutputExhaustion(t *testing.T) {
+	store, err := control.OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	provider := &postRunProviderStub{err: &llm.ProviderError{
+		Provider: "kimi-coding", Class: llm.ProviderErrorEmptyResponse,
+		Message: "HTTP 200 response contained no text or tool use", StopReason: "max_tokens",
+		Usage: llm.UsageStats{InputTokens: 1200, OutputTokens: 3072},
+	}}
+	chain := &maintenanceProviderChain{
+		providers: []namedMaintenanceProvider{{
+			role: llm.RoleMemoryExtract, provider: provider,
+			route: maintenanceRouteIdentity{ID: "route-kimi-soft", Provider: "kimi-coding", Model: "kimi-for-coding"},
+		}},
+		control: store, tenantID: "tenant", softProbeInitial: time.Hour, softProbeMax: time.Hour, probeLease: time.Minute,
+	}
+	if _, err := chain.Chat(context.Background(), llm.ChatRequest{Options: map[string]any{"maintenance_batch_size": 3}}); err == nil {
+		t.Fatal("first output-exhausted request must fail")
+	}
+	if _, err := chain.Chat(context.Background(), llm.ChatRequest{}); err == nil {
+		t.Fatal("open soft circuit must skip the physical provider")
+	}
+	if provider.calls != 1 {
+		t.Fatalf("physical provider calls = %d, want 1", provider.calls)
+	}
+	usage, err := store.MaintenanceProviderUsageSince(context.Background(), "tenant", time.Now().Add(-time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(usage) != 1 || usage[0].Failed != 1 || usage[0].CircuitOpen != 1 || usage[0].OutputTokens != 3072 {
+		t.Fatalf("maintenance provider usage = %+v", usage)
+	}
+}
+
 func TestMaintenanceProviderChainObservesQuotaInsideStream(t *testing.T) {
 	store, err := control.OpenStore(t.TempDir())
 	if err != nil {
@@ -315,8 +352,8 @@ func TestPostRunAnalyzerBatchesProviderCallAndKeysResultsByRun(t *testing.T) {
 	if model.calls != 1 {
 		t.Fatalf("provider calls = %d", model.calls)
 	}
-	if got := model.requests[0].MaxTokens; got != 4096 {
-		t.Fatalf("batch max tokens = %d, want 4096", got)
+	if got := model.requests[0].MaxTokens; got != 3072 {
+		t.Fatalf("batch max tokens = %d, want 3072", got)
 	}
 	if results["run-1"].TaskDecision != "TITLE:Release checks" || results["run-2"].TaskDecision != "INBOX" {
 		t.Fatalf("results = %+v", results)

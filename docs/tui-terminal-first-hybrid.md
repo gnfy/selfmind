@@ -24,6 +24,16 @@ stays canonical.
   placeholders are never persisted (they die with the editor snippet buffer);
   secure (password) input and entries over 4 KiB are never recorded, in memory
   or on disk. See `internal/gateway/cli/input_history_store.go`.
+- **Soft-wrap composer + codex-style Up/Down gate (2026-07-23):** the composer
+  renders soft-wrapped long lines as multiple display rows (up to 4, scrolled
+  to the cursor row) instead of showing only the cursor's wrapped segment. The
+  display wrap clones the embedded bubbles textarea wrap so rows align with
+  `LineInfo` cursor offsets (`internal/ui/components/editor.go`). Up/Down swap
+  in history only when the composer is empty, when a fresh draft fits one
+  display row (shell-style recall), or when the text is exactly the previously
+  recalled entry with the cursor at its start/end (codex
+  `should_handle_navigation`); otherwise the keys move the cursor through
+  multi-line / soft-wrapped drafts (`internal/gateway/cli/history.go`).
 - **Remaining (deferred follow-ups, not blocking default):**
   - Legacy rendering path + `SELFMIND_TUI_LEGACY`: ✅ deleted 2026-07-10
     (viewport, `controller_mouse.go`, app scroll, `renderCache`).

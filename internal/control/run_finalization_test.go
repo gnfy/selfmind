@@ -151,3 +151,67 @@ func TestMaterializeRunFinalizationRollsBackMismatchedTask(t *testing.T) {
 		t.Fatalf("rollback left %d side effects; want 0", sideEffects)
 	}
 }
+
+func TestMaterializeRunFinalizationSynthesizesOutcomeBeforeTerminal(t *testing.T) {
+	ctx := context.Background()
+	store, err := OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := store.CreateTask(ctx, TaskCreate{TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "direct answer"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := store.StartRun(ctx, task, "cli", "answer this")
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := RunFinalization{
+		Identity:   *identity,
+		RunID:      run.ID,
+		TaskID:     task.ID,
+		RunStatus:  "done",
+		TaskStatus: "done",
+		Summary:    "answered",
+		Event: Event{Type: "run.finished", Payload: []byte(
+			`{"outcome":{"status":"done","completion_reason":"completed","summary":"answered"}}`)},
+	}
+	if _, err := store.MaterializeRunFinalization(ctx, input); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.MaterializeRunFinalization(ctx, input); err != nil {
+		t.Fatalf("replay: %v", err)
+	}
+
+	events, err := store.ListTaskEvents(ctx, task.ID, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var outcome, terminal *Event
+	for i := range events {
+		switch events[i].Type {
+		case "run.outcome":
+			outcome = &events[i]
+		case "run.finished":
+			terminal = &events[i]
+		}
+	}
+	if outcome == nil || terminal == nil {
+		t.Fatalf("events = %#v; want outcome and terminal", events)
+	}
+	if outcome.Cursor >= terminal.Cursor {
+		t.Fatalf("outcome cursor %d must precede terminal cursor %d", outcome.Cursor, terminal.Cursor)
+	}
+	var count int
+	if err := store.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM task_events WHERE run_id = ? AND type = 'run.outcome'`, run.ID,
+	).Scan(&count); err != nil || count != 1 {
+		t.Fatalf("outcome count = %d, err=%v", count, err)
+	}
+}

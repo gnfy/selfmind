@@ -2,13 +2,14 @@ package httpapi
 
 import (
 	"context"
-	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"selfmind/internal/gateway/api"
+	"selfmind/internal/kernel/llm"
 )
 
 type fakeBatchPostRunAnalyzer struct {
@@ -17,6 +18,7 @@ type fakeBatchPostRunAnalyzer struct {
 	batchCalls  int
 	batchSizes  []int
 	failAbove   int
+	providerErr error
 }
 
 func (f *fakeBatchPostRunAnalyzer) Analyze(context.Context, PostRunAnalysisRequest) (PostRunAnalysis, error) {
@@ -31,8 +33,11 @@ func (f *fakeBatchPostRunAnalyzer) AnalyzeBatch(_ context.Context, reqs []PostRu
 	defer f.mu.Unlock()
 	f.batchCalls++
 	f.batchSizes = append(f.batchSizes, len(reqs))
+	if f.providerErr != nil {
+		return nil, f.providerErr
+	}
 	if f.failAbove > 0 && len(reqs) > f.failAbove {
-		return nil, errors.New("unexpected end of JSON input")
+		return nil, fmt.Errorf("%w: unexpected end of JSON input", ErrPostRunBatchShape)
 	}
 	out := make(map[string]PostRunAnalysis, len(reqs))
 	for _, req := range reqs {
@@ -41,7 +46,7 @@ func (f *fakeBatchPostRunAnalyzer) AnalyzeBatch(_ context.Context, reqs []PostRu
 	return out, nil
 }
 
-func TestMaintenanceWorkerBisectsRetryableBatchFailure(t *testing.T) {
+func TestMaintenanceWorkerBisectsMalformedBatchResponse(t *testing.T) {
 	provider := newSlowLLMProvider("completed the requested work with durable output")
 	provider.releaseNow()
 	daemon, _, _ := newDetachedRunServer(t, provider)
@@ -69,6 +74,33 @@ func TestMaintenanceWorkerBisectsRetryableBatchFailure(t *testing.T) {
 		if analyzer.batchSizes[i] != want[i] {
 			t.Fatalf("batch sizes = %v, want %v", analyzer.batchSizes, want)
 		}
+	}
+}
+
+func TestMaintenanceWorkerDoesNotBisectProviderFailure(t *testing.T) {
+	provider := newSlowLLMProvider("completed the requested work with durable output")
+	provider.releaseNow()
+	daemon, _, _ := newDetachedRunServer(t, provider)
+	analyzer := &fakeBatchPostRunAnalyzer{providerErr: &llm.ProviderError{
+		Provider: "kimi-coding", Class: llm.ProviderErrorRateLimit, Message: "rate limited",
+	}}
+	daemon.PostRunAnalyzer = analyzer
+
+	for i := 0; i < 2; i++ {
+		resp, status := daemon.ProcessMessage(context.Background(), api.MessageRequest{
+			Platform: "cli", PlatformUserID: "local", Channel: "cli",
+			Content: strings.Repeat("Implement and verify this durable workspace improvement. ", 4),
+		})
+		if status != 200 || resp.Run == nil {
+			t.Fatalf("turn %d failed: status=%d resp=%+v", i, status, resp)
+		}
+	}
+	daemon.PostRunMaintenance = PostRunMaintenanceOptions{
+		Debounce: 5 * time.Minute, MaxWait: 15 * time.Minute, BatchMaxRuns: 2,
+	}
+	daemon.runMaintenancePassAt(context.Background(), time.Now())
+	if analyzer.batchCalls != 1 {
+		t.Fatalf("provider failure must not replay the batch: calls=%d sizes=%v", analyzer.batchCalls, analyzer.batchSizes)
 	}
 }
 

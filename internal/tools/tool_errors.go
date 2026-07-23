@@ -43,7 +43,12 @@ var errorClassRules = []errorClassRule{
 			"unauthorized",
 			"forbidden",
 			"authentication failed",
+			"authentication required",
 			"credential",
+			"no credentials",
+			"not logged in",
+			"login required",
+			"could not read username",
 			"invalid api key",
 			"permission denied (publickey",
 		},
@@ -173,4 +178,21 @@ func enrichToolFailure(toolName string, err error, output string) error {
 	}
 	class := ClassifyToolError(toolName, err, output)
 	return fmt.Errorf("%w\nerror_class: %s; hint: %s", err, class, errorClassHints[class])
+}
+
+// enrichIsolatedSandboxFailure requests a host retry only when the failure
+// actually points to host-only credentials, networking, or environment state.
+// Syntax and path mistakes stay on the normal correction path so they cannot
+// become repeated approval requests.
+func enrichIsolatedSandboxFailure(toolName string, err error, output string) error {
+	if err == nil {
+		return nil
+	}
+	class := ClassifyToolError(toolName, err, output)
+	switch class {
+	case "auth", "network", "environment":
+		return fmt.Errorf("%w\nerror_class: sandbox_host_required; hint: The isolated sandbox lacks required host credentials, network access, or environment state; retry exactly once with sandbox=host (approval required), and do not repeat the isolated variant.", err)
+	default:
+		return fmt.Errorf("%w\nerror_class: %s; hint: %s", err, class, errorClassHints[class])
+	}
 }

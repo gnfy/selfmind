@@ -170,4 +170,15 @@ func TestPendingSessionDiagnosticsAreScopedAndBounded(t *testing.T) {
 	if len(eligible) != 0 {
 		t.Fatalf("max-attempt pending delivery remained auto-eligible: %+v", eligible)
 	}
+	dismissed, err := s.DismissPendingSessionDelivery(ctx, first.ID)
+	if err != nil || !dismissed {
+		t.Fatalf("dismissed=%v err=%v", dismissed, err)
+	}
+	if _, err := s.FindPendingSessionDelivery(ctx, "default", "p1", "weixin", "wx-chat", ref); err == nil {
+		t.Fatal("dismissed delivery remained recoverable")
+	}
+	count, err = s.CountPendingSessionOutbound(ctx, "default", "p1")
+	if err != nil || count != 1 {
+		t.Fatalf("pending count after dismiss=%d err=%v, want 1", count, err)
+	}
 }

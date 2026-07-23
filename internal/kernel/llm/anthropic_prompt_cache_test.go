@@ -24,7 +24,7 @@ func TestAnthropicAdapterParsesCacheUsageNonStream(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Chat failed: %v", err)
 	}
-	want := UsageStats{InputTokens: 12, OutputTokens: 3, CacheReadInputTokens: 900, CacheCreationInputTokens: 40}
+	want := UsageStats{InputTokens: 12, OutputTokens: 3, CacheReadInputTokens: 900, CacheCreationInputTokens: 40, CacheCreationReported: true}
 	if resp.Usage != want {
 		t.Fatalf("usage = %+v, want %+v", resp.Usage, want)
 	}
@@ -75,9 +75,10 @@ func TestAnthropicAdapterParsesCacheUsageFromMessageStart(t *testing.T) {
 			usage.OutputTokens += event.Usage.OutputTokens
 			usage.CacheReadInputTokens += event.Usage.CacheReadInputTokens
 			usage.CacheCreationInputTokens += event.Usage.CacheCreationInputTokens
+			usage.CacheCreationReported = usage.CacheCreationReported || event.Usage.CacheCreationReported
 		}
 	}
-	want := UsageStats{InputTokens: 7, OutputTokens: 2, CacheReadInputTokens: 500, CacheCreationInputTokens: 20}
+	want := UsageStats{InputTokens: 7, OutputTokens: 2, CacheReadInputTokens: 500, CacheCreationInputTokens: 20, CacheCreationReported: true}
 	if usage != want {
 		t.Fatalf("usage = %+v, want %+v", usage, want)
 	}

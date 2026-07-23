@@ -125,6 +125,13 @@ func reconcileTurnCompletion(outcome api.RunOutcome, completion router.TurnCompl
 			return outcome
 		}
 	}
+	if completion.Status == "completed" {
+		outcome.Status = "done"
+		outcome.Resumable = false
+		if completion.CompletionReason == "" {
+			outcome.CompletionReason = "completed"
+		}
+	}
 
 	if completion.CompletionReason != "" {
 		outcome.CompletionReason = completion.CompletionReason
@@ -185,6 +192,21 @@ func turnStatusForOutcome(outcome api.RunOutcome) string {
 		return api.RunStatusVerificationPartial
 	}
 	return "completed"
+}
+
+// taskStatusForFinalization separates one run's terminal state from the
+// longer-lived task label. A direct answer completes its run but leaves the
+// label open for normal follow-ups. Structured finish_run outcomes remain
+// authoritative and may close or park the task explicitly.
+func taskStatusForFinalization(outcome api.RunOutcome, structured bool) string {
+	status := strings.ToLower(strings.TrimSpace(outcome.Status))
+	if !structured && (status == "" || status == "running" || status == "done" || status == "completed") {
+		return "in_progress"
+	}
+	if status == "" || status == "running" {
+		return "in_progress"
+	}
+	return status
 }
 
 func extractOutcomeSection(content string, headings []string) []string {

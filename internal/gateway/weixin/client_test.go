@@ -153,6 +153,55 @@ func TestSendTextMarksPrepareFailureAsSessionRefreshRequired(t *testing.T) {
 	}
 }
 
+func TestSendTextRetriesPrepareFailureWithoutContextToken(t *testing.T) {
+	var requests []map[string]interface{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]interface{}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		requests = append(requests, body)
+		msg := nestedMap(body, "msg")
+		if len(requests) == 1 {
+			if msg["context_token"] != "stale-token" {
+				t.Fatalf("first context token = %#v", msg["context_token"])
+			}
+			_, _ = w.Write([]byte(`{"ret":-2,"errcode":0,"errmsg":"prepare failed"}`))
+			return
+		}
+		if _, ok := msg["context_token"]; ok {
+			t.Fatalf("tokenless retry still contains context_token: %#v", msg)
+		}
+		_, _ = w.Write([]byte(`{"ret":0,"errcode":0}`))
+	}))
+	defer server.Close()
+
+	home := t.TempDir()
+	client := NewClient(RuntimeConfig{
+		AccountID: "wx-account", Token: "token", BaseURL: server.URL,
+		SendChunkRetries: 1, HomeDir: home,
+	})
+	client.tokens.Set("wx-account", "peer-1", "stale-token")
+	if err := client.Send(context.Background(), "peer-1", "important result"); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	if len(requests) != 2 {
+		t.Fatalf("request count = %d, want 2", len(requests))
+	}
+	if got := client.tokens.Get("wx-account", "peer-1"); got != "" {
+		t.Fatalf("stale token was not removed: %q", got)
+	}
+}
+
+func TestPrepareFailureIsNotClassifiedAsRateLimit(t *testing.T) {
+	if isRateLimitResponse(-2, 0, "prepare failed") {
+		t.Fatal("prepare failure must not use rate-limit retries")
+	}
+	if !isRateLimitResponse(-2, 0, "too many requests") {
+		t.Fatal("ret=-2 without a session-refresh signal must remain rate limited")
+	}
+}
+
 // TestContextTokenStoreAgeAndLegacyRestore covers the delivery-confidence
 // contract: fresh tokens have a known age, legacy (timestamp-less) persistence
 // restores as age-unknown, and age-unknown must read as stale.

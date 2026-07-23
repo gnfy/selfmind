@@ -423,6 +423,26 @@ func (s *Service) RetryPendingSession(ctx context.Context, tenantID, personID, p
 	return d.ID, status, err
 }
 
+// DismissPendingSession closes one stale recovery item in the current IM
+// peer. It never sends network traffic and cannot affect another channel.
+func (s *Service) DismissPendingSession(ctx context.Context, tenantID, personID, platform, channel, ref string) (string, error) {
+	if s == nil || s.store == nil {
+		return "", ErrNoSender
+	}
+	d, err := s.store.FindPendingSessionDelivery(ctx, tenantID, personID, platform, channel, ref)
+	if err != nil {
+		return "", err
+	}
+	dismissed, err := s.store.DismissPendingSessionDelivery(ctx, d.ID)
+	if err != nil {
+		return d.ID, err
+	}
+	if !dismissed {
+		return d.ID, fmt.Errorf("delivery is no longer pending")
+	}
+	return d.ID, nil
+}
+
 func (s *Service) replayClaimedDelivery(ctx context.Context, d *control.Delivery) (string, error) {
 	msg := deliveryMessage(d)
 	confirmed := true

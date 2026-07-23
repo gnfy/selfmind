@@ -40,12 +40,12 @@ type AnthropicRequest struct {
 	// SystemPrompt is a plain string by default. With the PromptCache quirk it
 	// becomes a block list so the last block can carry a cache_control
 	// breakpoint; both shapes are valid Anthropic `system` payloads.
-	SystemPrompt interface{} `json:"system,omitempty"`
-	Tools        []AnthropicTool    `json:"tools,omitempty"`
-	ToolChoice   interface{}        `json:"tool_choice,omitempty"`
-	Thinking     interface{}        `json:"thinking,omitempty"`
-	ServiceTier  string             `json:"service_tier,omitempty"`
-	Stream       bool               `json:"stream,omitempty"`
+	SystemPrompt interface{}     `json:"system,omitempty"`
+	Tools        []AnthropicTool `json:"tools,omitempty"`
+	ToolChoice   interface{}     `json:"tool_choice,omitempty"`
+	Thinking     interface{}     `json:"thinking,omitempty"`
+	ServiceTier  string          `json:"service_tier,omitempty"`
+	Stream       bool            `json:"stream,omitempty"`
 }
 
 type AnthropicTool struct {
@@ -139,7 +139,7 @@ func (a *AnthropicAdapter) decodeAnthropicResponseWithMeta(body io.Reader, reque
 		return nil, fmt.Errorf("read response: %w", err)
 	}
 	if len(bytes.TrimSpace(raw)) == 0 {
-		return nil, a.emptyResponseError(requestID, "", "HTTP 200 response body was empty")
+		return nil, a.emptyResponseError(requestID, "", UsageStats{}, "HTTP 200 response body was empty")
 	}
 	var anthropicResp AnthropicResponse
 	if err := json.Unmarshal(raw, &anthropicResp); err != nil {
@@ -167,7 +167,13 @@ func (a *AnthropicAdapter) decodeAnthropicResponseWithMeta(body io.Reader, reque
 		}
 	}
 	if strings.TrimSpace(content) == "" && len(toolCalls) == 0 {
-		return nil, a.emptyResponseError(requestID, anthropicResp.StopReason, "HTTP 200 response contained no text or tool use")
+		return nil, a.emptyResponseError(requestID, anthropicResp.StopReason, UsageStats{
+			InputTokens:              anthropicResp.Usage.InputTokens,
+			OutputTokens:             anthropicResp.Usage.OutputTokens,
+			CacheReadInputTokens:     anthropicResp.Usage.CacheReadInputTokens,
+			CacheCreationInputTokens: anthropicResp.Usage.CacheCreationInputTokens,
+			CacheCreationReported:    true,
+		}, "HTTP 200 response contained no text or tool use")
 	}
 
 	return &ChatResponse{
@@ -179,6 +185,7 @@ func (a *AnthropicAdapter) decodeAnthropicResponseWithMeta(body io.Reader, reque
 			OutputTokens:             anthropicResp.Usage.OutputTokens,
 			CacheReadInputTokens:     anthropicResp.Usage.CacheReadInputTokens,
 			CacheCreationInputTokens: anthropicResp.Usage.CacheCreationInputTokens,
+			CacheCreationReported:    true,
 		},
 	}, nil
 }
@@ -355,6 +362,7 @@ func anthropicStreamEventsForProvider(resp *http.Response, provider string) <-ch
 						InputTokens:              startUsage.InputTokens,
 						CacheReadInputTokens:     startUsage.CacheReadInputTokens,
 						CacheCreationInputTokens: startUsage.CacheCreationInputTokens,
+						CacheCreationReported:    true,
 					}}
 				}
 			case "message_delta":
@@ -387,9 +395,10 @@ func (a *AnthropicAdapter) providerName() string {
 	return "anthropic"
 }
 
-func (a *AnthropicAdapter) emptyResponseError(requestID, stopReason, message string) error {
+func (a *AnthropicAdapter) emptyResponseError(requestID, stopReason string, usage UsageStats, message string) error {
 	return &ProviderError{Provider: a.providerName(), Class: ProviderErrorEmptyResponse,
-		StatusCode: http.StatusOK, Message: message, RequestID: requestID, StopReason: strings.TrimSpace(stopReason)}
+		StatusCode: http.StatusOK, Message: message, RequestID: requestID,
+		StopReason: strings.TrimSpace(stopReason), Usage: usage}
 }
 
 func requestIDFromHeaders(headers http.Header) string {

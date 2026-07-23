@@ -3,7 +3,6 @@ package httpapi
 import (
 	"context"
 	"fmt"
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -310,11 +309,6 @@ func taskSearchFields(t control.Task, view taskCardView) []string {
 	return fields
 }
 
-// taskWorkKeyPattern extracts a deterministic work key (ticket id like
-// RUQX-224 or JIRA-style keys) from a task title. Display-only: grouping by
-// key never affects context selection, workspace binding, or permissions.
-var taskWorkKeyPattern = regexp.MustCompile(`\b([A-Z][A-Z0-9]{1,9}-\d{1,6})\b`)
-
 // groupTasksByWorkKey stably reorders open task cards so tasks sharing a
 // ticket key sit together (anchored at the first occurrence). Tasks without a
 // key keep their relative order. Purely presentational — same cards, adjacent.
@@ -324,7 +318,7 @@ func groupTasksByWorkKey(tasks []control.Task) []control.Task {
 	}
 	anchor := map[string]int{}
 	for i, t := range tasks {
-		key := taskWorkKeyPattern.FindString(t.Title)
+		key := uniqueTaskWorkKey(t.Title)
 		if key == "" {
 			continue
 		}
@@ -335,7 +329,7 @@ func groupTasksByWorkKey(tasks []control.Task) []control.Task {
 	order := make([]int, len(tasks))
 	for i, t := range tasks {
 		order[i] = i
-		if key := taskWorkKeyPattern.FindString(t.Title); key != "" {
+		if key := uniqueTaskWorkKey(t.Title); key != "" {
 			order[i] = anchor[key]
 		}
 	}

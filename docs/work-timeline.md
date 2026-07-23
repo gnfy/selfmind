@@ -152,6 +152,12 @@ authoritative instruction. If it changes direction, the latest message wins."*
 - Label decisions are recorded (`label.assigned` task event: decision,
   from/to, run id, bounded reason) so eval can score labeling accuracy.
   Mislabels are display bugs, not context corruption.
+- A unique issue key (for example `RUQX-224`) is deterministic post-run
+  display evidence. For an ordinary pre-label turn, exactly one offered open
+  label with the same key wins over a conservative model `KEEP`. Duplicate
+  matching labels are intentionally left unchanged. Explicit task attachment
+  remains authoritative, and this rule never changes execution workspace,
+  permissions, or the context used by the completed run.
 
 ### Ingress (simplified) — SHIPPED (P3, 2026-07-06)
 
@@ -170,6 +176,17 @@ message → control-command filter (unchanged)
 - No disambiguation machinery at ingress. Two games in context and an
   ambiguous "这个游戏动画不好看" → the agent asks "九七还是坦克?" as a normal
   turn. Judging with context in hand always beats classifying without it.
+
+### Run completion versus label lifecycle
+
+- Every accepted agent turn has a terminal run outcome and a durable
+  `run.outcome` event, including a direct answer that does not invoke
+  `finish_run`.
+- A direct answer completes that run but leaves its reusable work label open
+  (`in_progress`) for normal follow-ups. It must not silently close the label.
+- A structured `finish_run` outcome is authoritative and may close, park, or
+  mark the label as waiting. Run status and label lifecycle are related but
+  intentionally not the same state machine.
 
 ### /tasks view (same name, aggregated display) — SHIPPED (P3, 2026-07-06)
 

@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -107,6 +108,11 @@ func (d *Server) StartMaintenanceWorker(ctx context.Context) func() {
 		log.Warn("gateway: prune maintenance attempt history failed", "error", err)
 	} else if pruned > 0 {
 		log.Info("gateway: pruned maintenance attempt history", "count", pruned)
+	}
+	if pruned, err := d.Control.PruneMaintenanceProviderCalls(context.Background(), 0); err != nil {
+		log.Warn("gateway: prune maintenance provider call history failed", "error", err)
+	} else if pruned > 0 {
+		log.Info("gateway: pruned maintenance provider call history", "count", pruned)
 	}
 	done := make(chan struct{})
 	var once sync.Once
@@ -293,7 +299,7 @@ func (d *Server) processClaimedPostRunBatch(ctx context.Context, batchAnalyzer P
 	results, err := batchAnalyzer.AnalyzeBatch(callCtx, requests)
 	cancel()
 	if err != nil {
-		if len(claimed) > 1 && llm.IsRetryableError(err) {
+		if len(claimed) > 1 && errors.Is(err, ErrPostRunBatchShape) {
 			mid := len(claimed) / 2
 			d.processClaimedPostRunBatch(ctx, batchAnalyzer, claimed[:mid], requests[:mid])
 			d.processClaimedPostRunBatch(ctx, batchAnalyzer, claimed[mid:], requests[mid:])

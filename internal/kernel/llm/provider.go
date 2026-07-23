@@ -6,12 +6,13 @@ import (
 
 // ChatRequest is the unified request shape for model calls.
 type ChatRequest struct {
-	Model        string
-	Messages     []Message
-	Tools        []ToolDefinition
-	MaxTokens    int
-	SystemPrompt string
-	Options      map[string]interface{}
+	Model          string
+	Messages       []Message
+	Tools          []ToolDefinition
+	MaxTokens      int
+	SystemPrompt   string
+	PromptCacheKey string
+	Options        map[string]interface{}
 }
 
 // Message is one conversation entry.
@@ -78,6 +79,9 @@ type UsageStats struct {
 	// logical input total; billed input is InputTokens - CacheReadInputTokens.
 	CacheReadInputTokens     int `json:"cache_read_input_tokens"`
 	CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
+	// CacheCreationReported distinguishes a real zero from a transport that
+	// does not expose cache-write accounting (for example Responses API).
+	CacheCreationReported bool `json:"cache_creation_reported,omitempty"`
 }
 
 // StreamEvent is one streaming response event.

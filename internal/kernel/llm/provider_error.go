@@ -35,6 +35,11 @@ type ProviderError struct {
 	Message    string
 	RequestID  string
 	StopReason string
+	// Usage preserves provider accounting even when HTTP 200 contains no
+	// semantic output. Some coding-plan endpoints can exhaust max_tokens and
+	// return an empty content array; dropping usage here makes the expensive
+	// failed request invisible to maintenance diagnostics.
+	Usage UsageStats
 }
 
 func (e *ProviderError) Error() string {

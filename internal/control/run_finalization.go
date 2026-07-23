@@ -1,6 +1,7 @@
 package control
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -155,13 +156,56 @@ func (s *Store) MaterializeRunFinalization(ctx context.Context, input RunFinaliz
 		return nil, fmt.Errorf("save handoff: %w", err)
 	}
 
+	if len(input.Event.Payload) == 0 {
+		input.Event.Payload = json.RawMessage(`{}`)
+	}
+	var outcomeEvent *Event
+	if payload := outcomeFromTerminalPayload(input.Event.Payload); len(payload) > 0 {
+		var existing int
+		if err := tx.QueryRowContext(ctx,
+			`SELECT COUNT(*) FROM task_events WHERE run_id = ? AND type = 'run.outcome'`, input.RunID,
+		).Scan(&existing); err != nil {
+			return nil, fmt.Errorf("check run outcome event: %w", err)
+		}
+		if existing == 0 {
+			event := Event{
+				ID:             "event_" + uuid.NewString(),
+				TenantID:       tenant,
+				PersonID:       personID,
+				TaskID:         input.TaskID,
+				RunID:          input.RunID,
+				Type:           "run.outcome",
+				Visibility:     input.Event.Visibility,
+				Channel:        input.Event.Channel,
+				Payload:        payload,
+				IdempotencyKey: "run:" + input.RunID + ":outcome",
+				CreatedAt:      now,
+			}
+			if err := tx.QueryRowContext(ctx,
+				`UPDATE event_sequence SET next_cursor = next_cursor + 1 WHERE id = 1 RETURNING next_cursor`,
+			).Scan(&event.Cursor); err != nil {
+				return nil, fmt.Errorf("allocate outcome event cursor: %w", err)
+			}
+			result, err := tx.ExecContext(ctx,
+				`INSERT INTO task_events
+				 (id, cursor, task_id, run_id, type, visibility, channel, payload_json, idempotency_key, created_at)
+				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+				 ON CONFLICT(idempotency_key) WHERE idempotency_key IS NOT NULL AND idempotency_key != '' DO NOTHING`,
+				event.ID, event.Cursor, event.TaskID, event.RunID, event.Type, event.Visibility,
+				event.Channel, string(event.Payload), event.IdempotencyKey, now.Unix())
+			if err != nil {
+				return nil, fmt.Errorf("append outcome event: %w", err)
+			}
+			if n, _ := result.RowsAffected(); n == 1 {
+				outcomeEvent = &event
+			}
+		}
+	}
+
 	input.Event.ID = "event_" + uuid.NewString()
 	input.Event.CreatedAt = now
 	input.Event.TenantID = tenant
 	input.Event.PersonID = personID
-	if len(input.Event.Payload) == 0 {
-		input.Event.Payload = json.RawMessage(`{}`)
-	}
 	if err := tx.QueryRowContext(ctx,
 		`UPDATE event_sequence SET next_cursor = next_cursor + 1 WHERE id = 1 RETURNING next_cursor`,
 	).Scan(&input.Event.Cursor); err != nil {
@@ -187,7 +231,24 @@ func (s *Store) MaterializeRunFinalization(ctx context.Context, input RunFinaliz
 		return nil, err
 	}
 	if s.events != nil {
+		if outcomeEvent != nil {
+			s.events.publish(*outcomeEvent)
+		}
 		s.events.publish(input.Event)
 	}
 	return &input.Event, nil
+}
+
+func outcomeFromTerminalPayload(payload json.RawMessage) json.RawMessage {
+	var envelope struct {
+		Outcome json.RawMessage `json:"outcome"`
+	}
+	if len(payload) == 0 || json.Unmarshal(payload, &envelope) != nil || len(envelope.Outcome) == 0 {
+		return nil
+	}
+	trimmed := bytes.TrimSpace(envelope.Outcome)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) || !json.Valid(trimmed) {
+		return nil
+	}
+	return append(json.RawMessage(nil), trimmed...)
 }

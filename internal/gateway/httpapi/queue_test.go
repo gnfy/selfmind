@@ -103,14 +103,19 @@ func TestDrainAutoStartsNextQueued(t *testing.T) {
 	// Release the provider so the first run finishes, which drains the queue.
 	provider.releaseNow()
 
-	// The queued item is drained (no longer 'queued') and eventually two tasks exist.
+	// The queued item is drained (no longer 'queued') and becomes another run
+	// on the open work label. Queueing must not force task fragmentation.
 	waitUntil(t, 5*time.Second, func() bool {
 		n, _ := store.CountQueued(ctx, identity.TenantID, identity.PersonID, control.QueueStatusQueued)
 		return n == 0
 	}, "queued item was never drained")
-	waitUntil(t, 5*time.Second, func() bool {
+	waitUntil(t, 10*time.Second, func() bool {
 		tasks, _ := store.ListTasks(ctx, identity.TenantID, identity.PersonID, 20)
-		return len(tasks) >= 2
+		if len(tasks) != 1 {
+			return false
+		}
+		runs, _ := store.ListTaskRuns(ctx, identity.TenantID, tasks[0].ID, 10)
+		return len(runs) == 2
 	}, "drained task never ran")
 	// No run should be left executing.
 	waitUntil(t, 5*time.Second, func() bool {
@@ -148,7 +153,11 @@ func TestQueueSurvivesRestartBootDrain(t *testing.T) {
 	}, "boot drain did not consume the queued rows")
 	waitUntil(t, 30*time.Second, func() bool {
 		tasks, _ := store.ListTasks(ctx, identity.TenantID, identity.PersonID, 20)
-		return len(tasks) >= 2
+		if len(tasks) != 1 {
+			return false
+		}
+		runs, _ := store.ListTaskRuns(ctx, identity.TenantID, tasks[0].ID, 10)
+		return len(runs) == 2
 	}, "boot-drained tasks never ran")
 }
 

@@ -231,6 +231,8 @@ tasks:
   maintenance_batch_max_runs: 10   # never put more than this many runs in one call
   maintenance_quota_probe_initial: "15m" # first provider probe after a quota 403
   maintenance_quota_probe_max: "4h"      # maximum exponential probe interval
+  maintenance_soft_probe_initial: "15m"  # first probe after a 200/empty output-exhaustion response
+  maintenance_soft_probe_max: "1h"       # maximum backoff for soft provider failures
   maintenance_llm_timeout: "2m"    # bound for one analyzer provider call; too tight = deadline-exceeded retries and skipped learning
 ```
 
@@ -271,6 +273,15 @@ retry budgets. SelfMind then permits one half-open probe after
 replays the paused jobs. `/diag` shows blocked routes and the next probe time.
 Configure a fallback role on a different provider or credential when
 maintenance must continue while the primary Coding Plan quota is exhausted.
+
+An HTTP 200 response with no usable text and an output-exhaustion reason such
+as `max_tokens` opens a shorter soft circuit controlled by
+`maintenance_soft_probe_initial` and `maintenance_soft_probe_max`. This avoids
+re-sending the same maintenance prompt through every queued batch while still
+recovering sooner than a confirmed quota outage. Provider/network failures do
+not recursively split a batch; only a malformed multi-run response may be
+bisected. `/diag models` shows calls, failures, circuit skips, and token usage
+by maintenance route and model role.
 
 ## 8. Diagnostics: flight recorder
 

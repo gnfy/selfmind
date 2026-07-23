@@ -40,6 +40,9 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		m.common.Width, m.common.Height = msg.Width, msg.Height
+		if m.editor != nil {
+			m.editor.SetLayoutWidth(msg.Width)
+		}
 		if m.pager != nil {
 			m.pager.Resize(msg.Width, msg.Height)
 		}

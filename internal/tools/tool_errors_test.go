@@ -57,6 +57,18 @@ func TestEveryErrorClassHasHint(t *testing.T) {
 	}
 }
 
+func TestIsolatedSandboxFailureOnlyEscalatesHostStateFailures(t *testing.T) {
+	authErr := enrichIsolatedSandboxFailure("terminal", errors.New("gh: not logged in"), "")
+	if got := authErr.Error(); !strings.Contains(got, "error_class: sandbox_host_required") || !strings.Contains(got, "retry exactly once with sandbox=host") {
+		t.Fatalf("auth failure should request one host retry: %q", got)
+	}
+
+	syntaxErr := enrichIsolatedSandboxFailure("terminal", errors.New("sh: syntax error: unexpected token"), "")
+	if got := syntaxErr.Error(); !strings.Contains(got, "error_class: syntax") || strings.Contains(got, "sandbox=host") {
+		t.Fatalf("syntax failure must stay in the sandbox correction path: %q", got)
+	}
+}
+
 func TestTerminalFailureAppendsErrorClassLine(t *testing.T) {
 	out, err := NewExecuteCommandTool().Execute(map[string]interface{}{
 		"command": "definitely-not-a-real-command-xyz --version",

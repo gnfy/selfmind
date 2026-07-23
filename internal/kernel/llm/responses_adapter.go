@@ -32,12 +32,13 @@ type ResponsesAdapter struct {
 }
 
 type responsesRequest struct {
-	Model     string                   `json:"model"`
-	Input     []responsesInputItem     `json:"input"`
-	Tools     []map[string]interface{} `json:"tools,omitempty"`
-	Stream    bool                     `json:"stream,omitempty"`
-	Store     *bool                    `json:"store,omitempty"`
-	Reasoning *responsesReasoning      `json:"reasoning,omitempty"`
+	Model          string                   `json:"model"`
+	Input          []responsesInputItem     `json:"input"`
+	Tools          []map[string]interface{} `json:"tools,omitempty"`
+	Stream         bool                     `json:"stream,omitempty"`
+	Store          *bool                    `json:"store,omitempty"`
+	Reasoning      *responsesReasoning      `json:"reasoning,omitempty"`
+	PromptCacheKey string                   `json:"prompt_cache_key,omitempty"`
 }
 
 type responsesReasoning struct {
@@ -185,6 +186,7 @@ func (a *ResponsesAdapter) chatViaStream(ctx context.Context, req ChatRequest) (
 			resp.Usage.OutputTokens += event.Usage.OutputTokens
 			resp.Usage.CacheReadInputTokens += event.Usage.CacheReadInputTokens
 			resp.Usage.CacheCreationInputTokens += event.Usage.CacheCreationInputTokens
+			resp.Usage.CacheCreationReported = resp.Usage.CacheCreationReported || event.Usage.CacheCreationReported
 		}
 		if event.FinishReason != "" {
 			resp.FinishReason = event.FinishReason
@@ -385,7 +387,7 @@ func (a *ResponsesAdapter) streamResponse(ctx context.Context, resp *http.Respon
 
 func (a *ResponsesAdapter) requestFromChat(req ChatRequest, stream bool) responsesRequest {
 	model := firstNonEmptyString(req.Model, a.Model)
-	wire := responsesRequest{Model: model, Stream: stream, Store: a.Store}
+	wire := responsesRequest{Model: model, Stream: stream, Store: a.Store, PromptCacheKey: strings.TrimSpace(req.PromptCacheKey)}
 	if effort := strings.TrimSpace(a.ReasoningEffort); effort != "" {
 		wire.Reasoning = &responsesReasoning{Effort: effort}
 	}

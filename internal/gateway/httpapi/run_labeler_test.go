@@ -174,6 +174,43 @@ func TestLabelerMoveRepointsRunAndCleansPlaceholder(t *testing.T) {
 	}
 }
 
+func TestUniqueWorkKeyMovesRunWhenLabelerKeepsPlaceholder(t *testing.T) {
+	provider := newSlowLLMProvider("completed release verification for RUQX-224")
+	provider.releaseNow()
+	daemon, store, _ := newDetachedRunServer(t, provider)
+	ctx := context.Background()
+
+	target := parkEmptyTask(t, daemon, "Release RUQX-224 to production")
+	if err := store.UpdateTaskStatus(ctx, target.TenantID, target.ID, "in_progress", "awaiting deployment", nil); err != nil {
+		t.Fatal(err)
+	}
+	closer := parkEmptyTask(t, daemon, "closed current")
+	if err := store.UpdateTaskStatus(ctx, closer.TenantID, closer.ID, "done", "", nil); err != nil {
+		t.Fatal(err)
+	}
+
+	daemon.PostRunAnalyzer = &fakeLabeler{reply: "KEEP"}
+	resp := runOrdinaryTurn(t, daemon, "RUQX-224 production deployment needs verification")
+	if resp.Task == nil || resp.Task.ID == target.ID {
+		t.Fatalf("setup must create a provisional task before maintenance: %+v", resp.Task)
+	}
+	runs, err := store.ListTaskRuns(ctx, target.TenantID, target.ID, 10)
+	if err != nil || len(runs) != 1 {
+		tasks, _ := store.ListTasks(ctx, target.TenantID, target.PersonID, 20)
+		fake := daemon.PostRunAnalyzer.(*fakeLabeler)
+		fake.mu.Lock()
+		prompts := append([]string(nil), fake.prompts...)
+		fake.mu.Unlock()
+		t.Fatalf("unique work key did not move the run: runs=%+v err=%v tasks=%+v prompts=%q", runs, err, tasks, prompts)
+	}
+	if ghost, _ := store.GetTask(ctx, target.TenantID, resp.Task.ID); ghost != nil {
+		t.Fatalf("provisional task remained after deterministic move: %+v", ghost)
+	}
+	if !hasEventOfType(t, store, target.ID, "label.assigned") {
+		t.Fatal("deterministic work-key move must remain auditable")
+	}
+}
+
 // TestLabelerTitleSetsPlaceholderTitleOnce: TITLE names a NEW placeholder
 // once; an established label (pre-label reuse) is never retitled by the
 // labeler.
@@ -308,6 +345,30 @@ func TestParseRunLabelReplyInbox(t *testing.T) {
 	decision, arg := parseRunLabelReply("INBOX\nignored")
 	if decision != "INBOX" || arg != "" {
 		t.Fatalf("decision=%q arg=%q", decision, arg)
+	}
+}
+
+func TestPostRunInboxEligibilityRequiresNondurableCompletedTurn(t *testing.T) {
+	tests := []struct {
+		name    string
+		outcome api.RunOutcome
+		workKey string
+		want    bool
+	}{
+		{name: "casual completed turn", outcome: api.RunOutcome{Status: "done"}, want: true},
+		{name: "issue key", outcome: api.RunOutcome{Status: "done"}, workKey: "RUQX-248", want: false},
+		{name: "changed file", outcome: api.RunOutcome{Status: "done", Files: []string{"main.go"}}, want: false},
+		{name: "durable result", outcome: api.RunOutcome{Status: "done", Done: []string{"permission inventory recorded"}}, want: false},
+		{name: "next step", outcome: api.RunOutcome{Status: "done", NextSteps: []string{"apply the reviewed change"}}, want: false},
+		{name: "verification evidence", outcome: api.RunOutcome{Status: "done", Verification: &api.VerificationOutcome{State: "passed"}}, want: false},
+		{name: "waiting user", outcome: api.RunOutcome{Status: "waiting_user"}, want: false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := postRunInboxEligible(tc.outcome, tc.workKey); got != tc.want {
+				t.Fatalf("postRunInboxEligible()=%v want %v for %+v", got, tc.want, tc.outcome)
+			}
+		})
 	}
 }
 

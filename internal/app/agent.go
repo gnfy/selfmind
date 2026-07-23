@@ -64,7 +64,6 @@ Example:
 
 SelfMind also supports Anthropic, Google, and custom OpenAI-compatible endpoints.`
 
-
 func (m *mockProvider) ChatCompletion(ctx context.Context, messages []llm.Message) (string, error) {
 	return m.response(), nil
 }
@@ -681,6 +680,7 @@ func InitAgent(mem *memory.MemoryManager, cfg *config.Config, tenantID string, s
 	modelGateway := buildModelGateway(cfg, mem, tenantID, provider)
 	codingProvider := modelGateway.ProviderForRole(llm.RoleCodingAgent)
 	reviewProvider := modelGateway.ProviderForRole(llm.RoleBackgroundReview)
+	var reviewRoutes []maintenanceRouteIdentity
 	memoryExtractProvider := modelGateway.ProviderForRole(llm.RoleMemoryExtract)
 	skillCuratorProvider := modelGateway.ProviderForRole(llm.RoleSkillCurator)
 	semanticRecallProvider := modelGateway.ProviderForRole(llm.RoleSemanticRecall)
@@ -693,7 +693,22 @@ func InitAgent(mem *memory.MemoryManager, cfg *config.Config, tenantID string, s
 		// Background learning shares the same durable physical-route circuit as
 		// post-run analysis and memory consolidation. In daemon mode it must not
 		// silently borrow the foreground coding model.
-		reviewProvider, _ = configuredMaintenanceProvider(mem, cfg, tenantID, stores[0], llm.RoleBackgroundReview)
+		reviewRoles := []llm.ModelRole{llm.RoleBackgroundReview}
+		if cfg != nil {
+			for _, fallback := range cfg.Tasks.MaintenanceFallbackRoles {
+				fallbackRole := llm.ModelRole(strings.TrimSpace(fallback))
+				if fallbackRole == "" || containsModelRole(reviewRoles, fallbackRole) {
+					continue
+				}
+				reviewRoles = append(reviewRoles, fallbackRole)
+			}
+		}
+		reviewProvider, reviewRoutes = configuredMaintenanceProvider(mem, cfg, tenantID, stores[0], reviewRoles...)
+		if replayed, err := stores[0].RequeueBlockedJobsForHealthyProviderRoutesAcrossTenants(context.Background(), tenantID, 100, maintenanceRouteIDs(reviewRoutes), time.Now()); err != nil {
+			log.Warn("background review: failed to migrate jobs to a healthy fallback route", "error", err)
+		} else if replayed > 0 {
+			log.Info("background review: replaying jobs on a healthy fallback route", "jobs", replayed)
+		}
 	}
 
 	skillsBaseDir := cfg.Evolution.SkillsDir

@@ -1021,9 +1021,12 @@ func (p *multiToolProvider) StreamChat(_ context.Context, req llm.ChatRequest) (
 // run still completes — no provider context-window rejection needed.
 func TestMidTurnCompactionFiresWithinRun(t *testing.T) {
 	mem := memory.NewMemoryManager(&mockStorage{})
-	provider := &multiToolProvider{toolTurns: 5}
-	agent := NewAgent(mem, &bigOutputBackend{}, provider, "helpful", 12, 1, nil)
-	agent.SetContextWindow(4000) // small window so accumulated tool output overflows
+	provider := &multiToolProvider{toolTurns: 10}
+	agent := NewAgent(mem, &bigOutputBackend{}, provider, "helpful", 18, 1, nil)
+	// Leave enough room for several tool-call/result pairs before crossing the
+	// threshold. A 4K window is now smaller than the stable system prefix and
+	// exercises deterministic emergency trimming rather than middle compaction.
+	agent.SetContextWindow(6000)
 	agent.SetSummaryProvider(&fakeSummarizer{reply: "## Active Task\ncontinue the work\n## Relevant Files\n- f1.txt"})
 
 	eventCh := make(chan string, 256)

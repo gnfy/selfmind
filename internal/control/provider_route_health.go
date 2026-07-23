@@ -284,6 +284,78 @@ func (s *Store) RequeueBlockedJobsForInactiveProviderRoutes(ctx context.Context,
 	return int(n), err
 }
 
+// RequeueBlockedJobsForHealthyProviderRoutes releases one maintenance class
+// when its configured chain contains a route that is not currently open. A
+// job may have been blocked by the primary route while a later fallback is
+// healthy; keeping it tied to the primary circuit would strand durable work
+// even though the configured chain can execute it. Analyzer versions keep
+// post-run and skill-review jobs isolated from each other.
+func (s *Store) RequeueBlockedJobsForHealthyProviderRoutes(ctx context.Context, tenantID string, analyzerVersion int, routeIDs []string, now time.Time) (int, error) {
+	return s.requeueBlockedJobsForHealthyProviderRoutes(ctx, tenantID, tenantID, analyzerVersion, routeIDs, now)
+}
+
+// RequeueBlockedJobsForHealthyProviderRoutesAcrossTenants releases durable
+// jobs owned by any person when the daemon-wide maintenance chain has a
+// healthy route. Provider circuits currently belong to the configured daemon
+// chain (normally tenant "default"), while jobs retain their person tenant for
+// isolation and replay. Keeping those two scopes separate prevents a healthy
+// fallback from leaving person-owned jobs stranded behind the primary route.
+func (s *Store) RequeueBlockedJobsForHealthyProviderRoutesAcrossTenants(ctx context.Context, healthTenantID string, analyzerVersion int, routeIDs []string, now time.Time) (int, error) {
+	return s.requeueBlockedJobsForHealthyProviderRoutes(ctx, healthTenantID, "", analyzerVersion, routeIDs, now)
+}
+
+func (s *Store) requeueBlockedJobsForHealthyProviderRoutes(ctx context.Context, healthTenantID, jobTenantID string, analyzerVersion int, routeIDs []string, now time.Time) (int, error) {
+	if s == nil || s.db == nil || analyzerVersion <= 0 {
+		return 0, nil
+	}
+	unique := make([]string, 0, len(routeIDs))
+	seen := make(map[string]struct{}, len(routeIDs))
+	healthy := false
+	for _, routeID := range routeIDs {
+		routeID = strings.TrimSpace(routeID)
+		if routeID == "" {
+			continue
+		}
+		if _, exists := seen[routeID]; exists {
+			continue
+		}
+		seen[routeID] = struct{}{}
+		unique = append(unique, routeID)
+		health, err := s.GetProviderRouteHealth(ctx, healthTenantID, routeID)
+		if err != nil {
+			return 0, err
+		}
+		// A route with no failure record is healthy by default.
+		if health == nil || health.State != ProviderRouteOpen {
+			healthy = true
+		}
+	}
+	if !healthy || len(unique) == 0 {
+		return 0, nil
+	}
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(unique)), ",")
+	args := make([]interface{}, 0, len(unique)+5)
+	args = append(args, MaintenanceJobPending, now.Unix(), analyzerVersion, MaintenanceJobBlockedProvider)
+	tenantPredicate := ""
+	if strings.TrimSpace(jobTenantID) != "" {
+		tenantPredicate = " AND tenant_id = ?"
+		args = append(args, normalizeTenant(jobTenantID))
+	}
+	for _, routeID := range unique {
+		args = append(args, routeID)
+	}
+	query := fmt.Sprintf(`UPDATE maintenance_jobs SET status = ?, attempts = 0,
+		next_retry_at = 0, blocked_route_id = '', last_error = '', updated_at = ?
+		WHERE analyzer_version = ? AND status = ?%s
+		AND blocked_route_id IN (%s)`, tenantPredicate, placeholders)
+	res, err := s.db.ExecContext(ctx, query, args...)
+	if err != nil {
+		return 0, err
+	}
+	n, err := res.RowsAffected()
+	return int(n), err
+}
+
 func (s *Store) GetProviderRouteHealth(ctx context.Context, tenantID, routeID string) (*ProviderRouteHealth, error) {
 	row := s.db.QueryRowContext(ctx, `SELECT tenant_id, route_id, provider, model, state, failure_class,
 		consecutive_failures, opened_at, next_probe_at, probe_lease_until, last_error,

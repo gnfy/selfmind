@@ -367,10 +367,10 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 	// non-terminal (resolveContinueTask keeps offering it for `继续`/`/resume`)
 	// but honest in /tasks and /status: nothing is executing anymore.
 	// Store.FinishRun coerces the run-side status to a terminal value itself.
-	taskStatus := outcome.Status
-	if taskStatus == "" || taskStatus == "running" {
-		taskStatus = "in_progress"
-	}
+	// Run completion and task-label lifecycle are different contracts. A plain
+	// answer completes this run, but it must not close the person's reusable
+	// work label. Only an explicit structured outcome may terminalize the task.
+	taskStatus := taskStatusForFinalization(outcome, structuredOutcome)
 	handoff := control.Handoff{
 		TaskID:       task.ID,
 		Summary:      outcome.Summary,

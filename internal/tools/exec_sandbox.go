@@ -129,5 +129,5 @@ func sandboxedCommand(ctx context.Context, inner []string, writableRoot string, 
 }
 
 func sandboxedShellCommand(ctx context.Context, command, writableRoot string, requested SandboxMode) (*exec.Cmd, SandboxDecision, error) {
-	return sandboxedCommand(ctx, []string{"sh", "-c", command}, writableRoot, requested)
+	return sandboxedCommand(ctx, shellArgv(command), writableRoot, requested)
 }

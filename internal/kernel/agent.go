@@ -347,7 +347,7 @@ func (a *Agent) chatResponseWithRetry(ctx context.Context, messages []llm.Messag
 	max := a.retryAttempts()
 	messages = a.prepareMessagesForModel(ctx, messages)
 	for attempt := 1; attempt <= max; attempt++ {
-		req := llm.ChatRequest{Messages: messages, Tools: a.llmToolDefinitions(strategy)}
+		req := llm.ChatRequest{Messages: messages, Tools: a.llmToolDefinitions(strategy), PromptCacheKey: llm.StablePromptCacheKey(ctx)}
 		resp, err := a.activeLLM().Chat(ctx, req)
 		if err == nil {
 			return resp, nil
@@ -392,7 +392,7 @@ func (a *Agent) streamChatWithRetry(ctx context.Context, messages []llm.Message,
 	max := a.retryAttempts()
 	messages = a.prepareMessagesForModel(ctx, messages)
 	for attempt := 1; attempt <= max; attempt++ {
-		req := llm.ChatRequest{Messages: messages, Tools: a.llmToolDefinitions(strategy)}
+		req := llm.ChatRequest{Messages: messages, Tools: a.llmToolDefinitions(strategy), PromptCacheKey: llm.StablePromptCacheKey(ctx)}
 		ch, err := a.activeLLM().StreamChat(ctx, req)
 		if err == nil {
 			return ch, nil
@@ -557,14 +557,18 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 
 	var totalUsage llm.UsageStats
 	eventCh := eventChannelFromContext(ctx, a.EventChannel)
+	addUsage := func(target *llm.UsageStats, usage llm.UsageStats) {
+		target.InputTokens += usage.InputTokens
+		target.OutputTokens += usage.OutputTokens
+		target.CacheReadInputTokens += usage.CacheReadInputTokens
+		target.CacheCreationInputTokens += usage.CacheCreationInputTokens
+		target.CacheCreationReported = target.CacheCreationReported || usage.CacheCreationReported
+	}
 	// recordUsage accumulates provider usage (including prompt-cache reads and
 	// writes) and emits one token.updated snapshot. input_tokens stays the
 	// logical input total; billed_input_tokens subtracts cache-served tokens.
 	recordUsage := func(usage llm.UsageStats) {
-		totalUsage.InputTokens += usage.InputTokens
-		totalUsage.OutputTokens += usage.OutputTokens
-		totalUsage.CacheReadInputTokens += usage.CacheReadInputTokens
-		totalUsage.CacheCreationInputTokens += usage.CacheCreationInputTokens
+		addUsage(&totalUsage, usage)
 		EmitAgentEvent(eventCh, AgentEvent{
 			Type: "token.updated",
 			Payload: map[string]interface{}{
@@ -572,7 +576,25 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 				"output_tokens":               totalUsage.OutputTokens,
 				"cache_read_input_tokens":     totalUsage.CacheReadInputTokens,
 				"cache_creation_input_tokens": totalUsage.CacheCreationInputTokens,
+				"cache_creation_reported":     totalUsage.CacheCreationReported,
 				"billed_input_tokens":         totalUsage.InputTokens - totalUsage.CacheReadInputTokens,
+			},
+		})
+	}
+	emitProviderCallUsage := func(iteration int, transport, status string, started time.Time, usage llm.UsageStats) {
+		EmitAgentEvent(eventCh, AgentEvent{
+			Type: "provider.call.usage",
+			Payload: map[string]interface{}{
+				"iteration":                   iteration,
+				"transport":                   transport,
+				"status":                      status,
+				"duration_ms":                 time.Since(started).Milliseconds(),
+				"input_tokens":                usage.InputTokens,
+				"output_tokens":               usage.OutputTokens,
+				"cache_read_input_tokens":     usage.CacheReadInputTokens,
+				"cache_creation_input_tokens": usage.CacheCreationInputTokens,
+				"cache_creation_reported":     usage.CacheCreationReported,
+				"billed_input_tokens":         usage.InputTokens - usage.CacheReadInputTokens,
 			},
 		})
 	}
@@ -702,6 +724,7 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 	stableTok, volatileTok := StableVolatileTokens(promptSections)
 	breakdownPayload["stable"] = stableTok
 	breakdownPayload["volatile"] = volatileTok
+	breakdownPayload["stable_prefix_hash"] = StablePrefixFingerprint(promptSections)
 	EmitAgentEvent(eventCh, AgentEvent{
 		Type:    "context.breakdown",
 		Payload: breakdownPayload,
@@ -935,9 +958,11 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 		}
 
 		streamCtx, streamCancel := context.WithCancel(ctx)
+		streamCallStarted := time.Now()
 		streamCh, err := a.streamChatWithRetry(streamCtx, messages, iterationStrategy)
 		if err != nil {
 			streamCancel()
+			emitProviderCallUsage(i, "stream", "failed", streamCallStarted, llm.UsageStats{})
 			if ctx.Err() != nil {
 				return "", totalUsage, fmt.Errorf("llm chat: %w", err)
 			}
@@ -953,13 +978,17 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 			} else {
 				emitAgentActivity(eventCh, "Streaming transport failed; retrying without streaming", "transport_recovery", i)
 			}
+			fallbackCallStarted := time.Now()
 			fallbackResp, fallbackErr := a.chatResponseWithRetry(ctx, fallbackMessages, iterationStrategy)
 			if fallbackErr != nil {
+				emitProviderCallUsage(i, "non_stream", "failed", fallbackCallStarted, llm.UsageStats{})
 				return "", totalUsage, fmt.Errorf("llm chat: %w; non-stream fallback failed: %v", err, fallbackErr)
 			}
+			emitProviderCallUsage(i, "non_stream", "succeeded", fallbackCallStarted, fallbackResp.Usage)
 			appendRecoveredChatResponse(fallbackResp)
 		} else {
 			streamStarted := time.Now()
+			var streamCallUsage llm.UsageStats
 			sawModelEvent := false
 			waitTicker := time.NewTicker(2 * time.Second)
 		streamLoop:
@@ -980,6 +1009,7 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 							finishReason = event.FinishReason
 						}
 						if event.Usage != nil {
+							addUsage(&streamCallUsage, *event.Usage)
 							recordUsage(*event.Usage)
 						}
 						if len(event.ToolCalls) > 0 {
@@ -998,6 +1028,7 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 						finishReason = event.FinishReason
 					}
 					if event.Usage != nil {
+						addUsage(&streamCallUsage, *event.Usage)
 						recordUsage(*event.Usage)
 					}
 					if len(event.ToolCalls) > 0 {
@@ -1021,6 +1052,11 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 			}
 			waitTicker.Stop()
 			streamCancel()
+			streamStatus := "succeeded"
+			if streamErr != nil && !legacyToolReady {
+				streamStatus = "failed"
+			}
+			emitProviderCallUsage(i, "stream", streamStatus, streamCallStarted, streamCallUsage)
 
 			if streamErr != nil {
 				if legacyToolReady {
@@ -1046,10 +1082,13 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 					} else {
 						emitAgentActivity(eventCh, "Model stream interrupted; retrying the response", phase, i)
 					}
+					fallbackCallStarted := time.Now()
 					fallbackResp, fallbackErr := a.chatResponseWithRetry(ctx, recoveryMessages, iterationStrategy)
 					if fallbackErr != nil {
+						emitProviderCallUsage(i, "non_stream", "failed", fallbackCallStarted, llm.UsageStats{})
 						return "", totalUsage, fmt.Errorf("stream error: %w; non-stream fallback failed: %v", streamErr, fallbackErr)
 					}
+					emitProviderCallUsage(i, "non_stream", "succeeded", fallbackCallStarted, fallbackResp.Usage)
 					appendRecoveredChatResponse(fallbackResp)
 					streamErr = nil
 				}
@@ -1872,11 +1911,11 @@ func (a *Agent) buildSystemPrompt(ctx context.Context, tenantID string, strategy
 	var sections []PromptSection
 	addStable := func(category, content string) {
 		stable = append(stable, content)
-		sections = append(sections, PromptSection{Category: category, Tokens: estimateTokens(content), Stable: true})
+		sections = append(sections, newPromptSection(category, content, true))
 	}
 	addVolatile := func(category, content string) {
 		volatile = append(volatile, content)
-		sections = append(sections, PromptSection{Category: category, Tokens: estimateTokens(content), Stable: false})
+		sections = append(sections, newPromptSection(category, content, false))
 	}
 
 	// 1. Core Persona (Soul) — stable.

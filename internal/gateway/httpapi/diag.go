@@ -232,11 +232,32 @@ func (d *Server) deliveryDiagReply(ctx context.Context, identity *control.Identi
 		if kind == "" {
 			kind = "message"
 		}
-		fmt.Fprintf(&sb, "- %s | %s | waiting %s\n", ref, kind, humanDuration(time.Since(row.CreatedAt)))
+		age := time.Since(row.UpdatedAt)
+		stale := d.Delivery == nil || age > d.Delivery.CatchUpMaxAge()
+		state := "waiting for fresh session"
+		if stale {
+			state = "outside automatic recovery window"
+		}
+		fmt.Fprintf(&sb, "- %s | %s | %s | age %s\n", ref, kind, state, humanDuration(time.Since(row.CreatedAt)))
 		fmt.Fprintf(&sb, "  Retry here once: /diag delivery retry %s\n", ref)
+		fmt.Fprintf(&sb, "  Dismiss: /diag delivery dismiss %s\n", ref)
 	}
-	sb.WriteString("Automatic recovery also runs after a fresh message in the affected IM chat.")
+	sb.WriteString("Automatic recovery only considers recent messages after a fresh inbound in the affected IM chat.")
 	return strings.TrimSpace(sb.String()), nil
+}
+
+func (d *Server) dismissDeliveryReply(ctx context.Context, identity *control.IdentityContext, req api.MessageRequest, ref string) (string, error) {
+	if d == nil || d.Delivery == nil || identity == nil {
+		return "Delivery recovery unavailable.", nil
+	}
+	if strings.EqualFold(strings.TrimSpace(req.Platform), "cli") || strings.TrimSpace(req.Channel) == "" {
+		return "Run this command in the affected IM chat.", nil
+	}
+	id, err := d.Delivery.DismissPendingSession(ctx, identity.TenantID, identity.PersonID, req.Platform, req.Channel, ref)
+	if err != nil {
+		return "No matching pending delivery was found in this IM chat.", nil
+	}
+	return "Dismissed delivery " + shortDeliveryID(id) + ".", nil
 }
 
 func (d *Server) retryDeliveryReply(ctx context.Context, identity *control.IdentityContext, req api.MessageRequest, ref string) (string, error) {
@@ -348,6 +369,7 @@ func (d *Server) contextDiagReply(ctx context.Context, identity *control.Identit
 	} else {
 		sb.WriteString("Breakdown: no context.breakdown event recorded yet\n")
 	}
+	sb.WriteString(promptPrefixStabilityLine(events))
 	sb.WriteString(latestPromptCacheLine(events))
 	sb.WriteString(latestCompactionLine(events))
 	sb.WriteString(latestRecallLine(events))
@@ -355,30 +377,80 @@ func (d *Server) contextDiagReply(ctx context.Context, identity *control.Identit
 }
 
 func latestPromptCacheLine(events []control.Event) string {
+	var callLine, runLine string
 	for _, e := range events {
-		if e.Type != "token.updated" {
-			continue
-		}
 		var p struct {
-			InputTokens         int `json:"input_tokens"`
-			CacheReadTokens     int `json:"cache_read_input_tokens"`
-			CacheCreationTokens int `json:"cache_creation_input_tokens"`
-			BilledInputTokens   int `json:"billed_input_tokens"`
+			Iteration           int    `json:"iteration"`
+			Transport           string `json:"transport"`
+			Status              string `json:"status"`
+			DurationMS          int64  `json:"duration_ms"`
+			InputTokens         int    `json:"input_tokens"`
+			CacheReadTokens     int    `json:"cache_read_input_tokens"`
+			CacheCreationTokens int    `json:"cache_creation_input_tokens"`
+			CacheCreationReported bool `json:"cache_creation_reported"`
+			BilledInputTokens   int    `json:"billed_input_tokens"`
 		}
 		if json.Unmarshal(e.Payload, &p) != nil {
-			continue
-		}
-		if p.InputTokens <= 0 && p.CacheReadTokens <= 0 && p.CacheCreationTokens <= 0 {
 			continue
 		}
 		hitRate := 0
 		if p.InputTokens > 0 {
 			hitRate = p.CacheReadTokens * 100 / p.InputTokens
 		}
-		return fmt.Sprintf("Prompt cache (run): read %d tok (%d%%), created %d tok, billed input %d tok\n",
-			p.CacheReadTokens, hitRate, p.CacheCreationTokens, p.BilledInputTokens)
+		created := "created n/a"
+		if p.CacheCreationReported {
+			created = fmt.Sprintf("created %d tok", p.CacheCreationTokens)
+		}
+		switch e.Type {
+		case "provider.call.usage":
+			if callLine == "" {
+				callLine = fmt.Sprintf("Provider call (#%d %s, %s, %dms): input %d tok, cache read %d tok (%d%%), %s, billed input %d tok\n",
+					p.Iteration, p.Transport, p.Status, p.DurationMS, p.InputTokens,
+					p.CacheReadTokens, hitRate, created, p.BilledInputTokens)
+			}
+		case "token.updated":
+			if runLine == "" && (p.InputTokens > 0 || p.CacheReadTokens > 0 || p.CacheCreationTokens > 0) {
+				runLine = fmt.Sprintf("Prompt cache (run snapshot): read %d tok (%d%%), %s, billed input %d tok\n",
+					p.CacheReadTokens, hitRate, created, p.BilledInputTokens)
+			}
+		}
+		if callLine != "" && runLine != "" {
+			break
+		}
+	}
+	if callLine != "" || runLine != "" {
+		return callLine + runLine
 	}
 	return "Prompt cache: no provider usage data recorded yet\n"
+}
+
+func promptPrefixStabilityLine(events []control.Event) string {
+	hashes := make([]string, 0, 2)
+	for _, e := range events {
+		if e.Type != "context.breakdown" {
+			continue
+		}
+		var payload struct {
+			StablePrefixHash string `json:"stable_prefix_hash"`
+		}
+		if json.Unmarshal(e.Payload, &payload) != nil || strings.TrimSpace(payload.StablePrefixHash) == "" {
+			continue
+		}
+		hashes = append(hashes, payload.StablePrefixHash)
+		if len(hashes) == 2 {
+			break
+		}
+	}
+	if len(hashes) == 0 {
+		return "Prompt prefix: no fingerprint recorded yet\n"
+	}
+	if len(hashes) == 1 {
+		return fmt.Sprintf("Prompt prefix: %s (need another turn to compare)\n", hashes[0])
+	}
+	if hashes[0] == hashes[1] {
+		return fmt.Sprintf("Prompt prefix: stable across the last two turns (%s)\n", hashes[0])
+	}
+	return fmt.Sprintf("Prompt prefix: changed between the last two turns (%s -> %s)\n", hashes[1], hashes[0])
 }
 
 // contextBreakdownDetail is the multi-line expansion of the newest
@@ -388,27 +460,45 @@ func contextBreakdownDetail(events []control.Event) string {
 		if e.Type != "context.breakdown" {
 			continue
 		}
-		var raw map[string]int
-		if json.Unmarshal(e.Payload, &raw) != nil || raw["total"] <= 0 {
+		var raw struct {
+			Identity         int    `json:"identity"`
+			Tools            int    `json:"tools"`
+			ProjectContext   int    `json:"project_context"`
+			Memory           int    `json:"memory"`
+			Runtime          int    `json:"runtime"`
+			History          int    `json:"history"`
+			Total            int    `json:"total"`
+			Stable           int    `json:"stable"`
+			Volatile         int    `json:"volatile"`
+			StablePrefixHash string `json:"stable_prefix_hash"`
+		}
+		if json.Unmarshal(e.Payload, &raw) != nil || raw.Total <= 0 {
 			return ""
 		}
-		total := raw["total"]
+		total := raw.Total
 		var sb strings.Builder
 		fmt.Fprintf(&sb, "Breakdown (last turn, ~%d tok):\n", total)
-		for _, section := range []struct{ key, label string }{
-			{"identity", "identity/soul"},
-			{"tools", "tool contract"},
-			{"project_context", "project context (AGENTS.md)"},
-			{"memory", "person memory"},
-			{"runtime", "runtime context (task/workspace/recall)"},
-			{"history", "history"},
+		for _, section := range []struct {
+			value int
+			label string
+		}{
+			{raw.Identity, "identity/soul"},
+			{raw.Tools, "tool contract"},
+			{raw.ProjectContext, "project context (AGENTS.md)"},
+			{raw.Memory, "person memory"},
+			{raw.Runtime, "runtime context (task/workspace/recall)"},
+			{raw.History, "history"},
 		} {
-			fmt.Fprintf(&sb, "- %-38s ~%d tok (%d%%)\n", section.label, raw[section.key], raw[section.key]*100/total)
+			fmt.Fprintf(&sb, "- %-38s ~%d tok (%d%%)\n", section.label, section.value, section.value*100/total)
 		}
 		// Assembly-time accounting (W5): the stable share is the cacheable
 		// prompt prefix. Absent on events recorded before the accounting landed.
-		if stable, ok := raw["stable"]; ok && stable+raw["volatile"] > 0 {
-			fmt.Fprintf(&sb, "Prompt cache: ~%d tok stable prefix, ~%d tok volatile suffix\n", stable, raw["volatile"])
+		if raw.Stable+raw.Volatile > 0 {
+			fmt.Fprintf(&sb, "Prompt cache: ~%d tok stable prefix, ~%d tok volatile suffix", raw.Stable, raw.Volatile)
+			if raw.StablePrefixHash != "" {
+				fmt.Fprintf(&sb, " (prefix %s)", raw.StablePrefixHash)
+			}
+			sb.WriteString("\n")
 		}
 		return sb.String()
 	}

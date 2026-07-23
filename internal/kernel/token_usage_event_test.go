@@ -46,12 +46,19 @@ func TestTokenUpdatedEventCarriesCacheAccounting(t *testing.T) {
 	}
 	close(events)
 
-	var last AgentEvent
+	var last, providerCall AgentEvent
 	seen := false
+	callSeen := false
 	for raw := range events {
-		if event, ok := DecodeAgentEvent(raw); ok && event.Type == "token.updated" {
-			last = event
-			seen = true
+		if event, ok := DecodeAgentEvent(raw); ok {
+			switch event.Type {
+			case "token.updated":
+				last = event
+				seen = true
+			case "provider.call.usage":
+				providerCall = event
+				callSeen = true
+			}
 		}
 	}
 	if !seen {
@@ -69,5 +76,17 @@ func TestTokenUpdatedEventCarriesCacheAccounting(t *testing.T) {
 		if !ok || got != value {
 			t.Fatalf("payload[%q] = %v, want %v (payload %+v)", key, last.Payload[key], value, last.Payload)
 		}
+	}
+	if !callSeen {
+		t.Fatal("no provider.call.usage event emitted")
+	}
+	for key, value := range want {
+		got, ok := providerCall.Payload[key].(float64)
+		if !ok || got != value {
+			t.Fatalf("provider call payload[%q] = %v, want %v (payload %+v)", key, providerCall.Payload[key], value, providerCall.Payload)
+		}
+	}
+	if providerCall.Payload["transport"] != "stream" || providerCall.Payload["status"] != "succeeded" {
+		t.Fatalf("provider call metadata = %+v", providerCall.Payload)
 	}
 }

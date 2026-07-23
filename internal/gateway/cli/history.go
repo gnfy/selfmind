@@ -42,8 +42,19 @@ func (m *uiModel) navigateInputHistory(delta int) bool {
 	}
 
 	current := m.editor.Value()
-	if m.historyIndex == -1 && strings.Contains(current, "\n") {
-		return false
+	// Codex-style gate: with non-empty text, Up/Down replace the composer only
+	// when the text is exactly the entry recalled by the previous navigation
+	// and the cursor sits at its start or end, or when a fresh draft still fits
+	// one display row (shell-style recall). Everything else falls through to
+	// normal cursor movement, so multi-line and soft-wrapped drafts stay
+	// editable with the arrow keys.
+	if current != "" {
+		browsingRecalledEntry := m.historyIndex >= 0 && m.historyIndex < len(m.inputHistory) &&
+			current == m.inputHistory[m.historyIndex] && m.editor.CursorAtTextBoundary()
+		singleRowDraft := m.historyIndex == -1 && m.editor.SingleDisplayRow()
+		if !browsingRecalledEntry && !singleRowDraft {
+			return false
+		}
 	}
 
 	switch {

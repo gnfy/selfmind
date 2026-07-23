@@ -165,11 +165,23 @@ func TestExplicitCLIAttachIncludesPossiblyMissedIMFinalResult(t *testing.T) {
 	if err := store.MarkDeliverySentUnconfirmed(ctx, queued.ID); err != nil {
 		t.Fatal(err)
 	}
+	pending, err := store.EnqueueDelivery(ctx, control.Delivery{
+		TenantID: identity.TenantID, PersonID: identity.PersonID, Platform: "weixin", Channel: "wx-chat",
+		TaskID: task.ID, RunID: run.ID, Kind: delivery.KindFinalResult,
+		Content: "Pending-session final result: deployment health is green.",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.MarkDeliveryPendingSession(ctx, pending.ID, "fresh session required"); err != nil {
+		t.Fatal(err)
+	}
 
 	server := &Server{Control: store}
 	selected := server.coordinator().selectedTaskRuntimeContext(ctx, task, run, nil, "cli", "cli", "what was the result?", false)
 	prompt := selected.Prompt(10000)
-	if !strings.Contains(prompt, "Delivery Continuity") || !strings.Contains(prompt, "build id abc-123") {
+	if !strings.Contains(prompt, "Delivery Continuity") || !strings.Contains(prompt, "build id abc-123") ||
+		!strings.Contains(prompt, "deployment health is green") {
 		t.Fatalf("CLI continuation must see a possibly missed IM final result:\n%s", prompt)
 	}
 

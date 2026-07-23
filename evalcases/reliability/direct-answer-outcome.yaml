@@ -1,0 +1,26 @@
+id: reliability_direct_answer_outcome
+title: "A direct answer completes its run without closing the reusable label"
+suite: reliability
+workspace: isolated
+channel: cli
+require_cassette: false
+
+turns:
+  - input: "Reply with exactly: READY"
+
+expect:
+  status: completed
+  completion_reason: completed
+  resumable: false
+  max_tool_calls: 0
+  max_duration_seconds: 60
+
+assert_state:
+  - { on: events, type: "run.outcome", payload_contains: '"status":"done"', count_gte: 1 }
+  - { on: task, field: status, eq: "in_progress" }
+
+checks:
+  no_mojibake: true
+  no_raw_json_leak: true
+  no_empty_response: true
+  no_provider_stack_dump: true

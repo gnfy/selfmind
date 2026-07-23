@@ -144,6 +144,8 @@ tasks:
   maintenance_batch_max_runs: 10
   maintenance_quota_probe_initial: "15m"
   maintenance_quota_probe_max: "4h"
+  maintenance_soft_probe_initial: "15m"
+  maintenance_soft_probe_max: "1h"
 
 editor:
   large_paste_chars: 1000
@@ -326,6 +328,11 @@ type TaskConfig struct {
 	MaintenanceBatchMaxRuns      int      `mapstructure:"maintenance_batch_max_runs" yaml:"maintenance_batch_max_runs,omitempty"`
 	MaintenanceQuotaProbeInitial string   `mapstructure:"maintenance_quota_probe_initial" yaml:"maintenance_quota_probe_initial,omitempty"`
 	MaintenanceQuotaProbeMax     string   `mapstructure:"maintenance_quota_probe_max" yaml:"maintenance_quota_probe_max,omitempty"`
+	// MaintenanceSoftProbe* controls the shorter circuit used when a provider
+	// accepts a request but exhausts max_tokens without producing semantic
+	// output. That is costly but usually recovers sooner than a quota 403.
+	MaintenanceSoftProbeInitial string `mapstructure:"maintenance_soft_probe_initial" yaml:"maintenance_soft_probe_initial,omitempty"`
+	MaintenanceSoftProbeMax     string `mapstructure:"maintenance_soft_probe_max" yaml:"maintenance_soft_probe_max,omitempty"`
 	// MaintenanceLLMTimeout bounds one post-run analyzer provider call.
 	// Cheap-role providers can be slow on real batches; a too-tight bound
 	// converts every job into deadline-exceeded retries and skipped learning.
@@ -341,6 +348,8 @@ const (
 	DefaultTaskMaintenanceBatchMax   = 10
 	DefaultTaskQuotaProbeInitial     = 15 * time.Minute
 	DefaultTaskQuotaProbeMax         = 4 * time.Hour
+	DefaultTaskSoftProbeInitial      = 15 * time.Minute
+	DefaultTaskSoftProbeMax          = time.Hour
 	DefaultTaskMaintenanceLLMTimeout = 2 * time.Minute
 )
 
@@ -389,6 +398,18 @@ func (t TaskConfig) MaintenanceQuotaCircuitPolicy() (time.Duration, time.Duratio
 	maximum := parseTaskDuration(t.MaintenanceQuotaProbeMax, DefaultTaskQuotaProbeMax)
 	if initial <= 0 {
 		initial = DefaultTaskQuotaProbeInitial
+	}
+	if maximum < initial {
+		maximum = initial
+	}
+	return initial, maximum
+}
+
+func (t TaskConfig) MaintenanceSoftCircuitPolicy() (time.Duration, time.Duration) {
+	initial := parseTaskDuration(t.MaintenanceSoftProbeInitial, DefaultTaskSoftProbeInitial)
+	maximum := parseTaskDuration(t.MaintenanceSoftProbeMax, DefaultTaskSoftProbeMax)
+	if initial <= 0 {
+		initial = DefaultTaskSoftProbeInitial
 	}
 	if maximum < initial {
 		maximum = initial
@@ -880,6 +901,8 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("tasks.maintenance_batch_max_runs", DefaultTaskMaintenanceBatchMax)
 	v.SetDefault("tasks.maintenance_quota_probe_initial", "15m")
 	v.SetDefault("tasks.maintenance_quota_probe_max", "4h")
+	v.SetDefault("tasks.maintenance_soft_probe_initial", "15m")
+	v.SetDefault("tasks.maintenance_soft_probe_max", "1h")
 	v.SetDefault("tasks.maintenance_llm_timeout", "2m")
 	v.SetDefault("evolution.enabled", true)
 	v.SetDefault("evolution.nudge_interval", 10)

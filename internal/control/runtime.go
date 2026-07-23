@@ -732,6 +732,26 @@ func (s *Store) FindPendingSessionDelivery(ctx context.Context, tenantID, person
 	return nil, fmt.Errorf("delivery id prefix is ambiguous")
 }
 
+// DismissPendingSessionDelivery explicitly closes one stale recovery item.
+// The caller must resolve the row with FindPendingSessionDelivery first so the
+// action remains scoped to the current IM peer. Dismissed rows are terminal
+// and are excluded from retry, catch-up, and undelivered-health queries.
+func (s *Store) DismissPendingSessionDelivery(ctx context.Context, id string) (bool, error) {
+	if strings.TrimSpace(id) == "" {
+		return false, fmt.Errorf("delivery id is required")
+	}
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE outbound_messages
+		 SET status = 'dismissed', last_error = 'dismissed by user', updated_at = ?
+		 WHERE id = ? AND status = 'pending_session'`,
+		time.Now().Unix(), id)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n == 1, err
+}
+
 func validDeliveryRef(ref string) bool {
 	for _, r := range ref {
 		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' || r == '-' {

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"unicode"
 
 	"github.com/charmbracelet/bubbles/cursor"
 	"github.com/charmbracelet/bubbles/key"
@@ -12,6 +13,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/mattn/go-runewidth"
+	"github.com/rivo/uniseg"
 	"selfmind/internal/platform/config"
 	"selfmind/internal/ui/common"
 	"selfmind/internal/ui/layout"
@@ -48,6 +50,7 @@ type Editor struct {
 	largePasteLines int            // threshold in lines (from config, 0=disabled)
 	cursorVisible   bool
 	hintIndex       int // selected row in the slash-command suggestion popup
+	layoutWidth     int // last known total composer width, for wrap-aware height
 }
 
 type CommandHint struct {
@@ -314,8 +317,51 @@ func (e *Editor) PreferredHeight() int {
 	return e.visibleInputLineCount() + 2 + len(e.matchingCommands())
 }
 
+// SetLayoutWidth records the total composer width so PreferredHeight can
+// account for soft-wrapped rows before the next Draw.
+func (e *Editor) SetLayoutWidth(w int) {
+	if w > 0 {
+		e.layoutWidth = w
+	}
+}
+
+// SingleDisplayRow reports whether the current input renders as one display
+// row: no hard newline and no soft-wrapped overflow at the known width.
+func (e *Editor) SingleDisplayRow() bool {
+	if e.secure {
+		return true
+	}
+	if strings.Contains(e.textarea.Value(), "\n") {
+		return false
+	}
+	return e.visibleInputLineCount() == 1
+}
+
+// CursorAtTextBoundary reports whether the cursor sits at the very start or
+// very end of the whole input. History navigation (codex-style) only replaces
+// the text from a boundary; interior positions keep Up/Down as cursor moves.
+func (e *Editor) CursorAtTextBoundary() bool {
+	if e.secure {
+		return true
+	}
+	value := e.textarea.Value()
+	if value == "" {
+		return true
+	}
+	row := e.textarea.Line()
+	li := e.textarea.LineInfo()
+	col := li.StartColumn + li.ColumnOffset
+	if row == 0 && col == 0 {
+		return true
+	}
+	lines := strings.Split(value, "\n")
+	last := len(lines) - 1
+	return row == last && col >= len([]rune(lines[last]))
+}
+
 // Draw renders the editor into the given layout rect.
 func (e *Editor) Draw(rect layout.Rect) string {
+	e.SetLayoutWidth(rect.W)
 	availableW := rect.W - 2
 	if availableW < 10 {
 		availableW = rect.W
@@ -336,10 +382,7 @@ func (e *Editor) Draw(rect layout.Rect) string {
 	inputH := e.visibleInputLineCount()
 	prompt := e.common.Styles.Editor.Prompt.Render("› ")
 	e.textarea.SetHeight(inputH)
-	textW := availableW - 2
-	if textW < 1 {
-		textW = 1
-	}
+	textW := editorTextWidth(rect.W)
 	e.textarea.SetWidth(textW)
 	view := renderEditorValue(e.textarea.Value(), e.textarea.Placeholder, inputH, textW, e.common.Styles.Editor.Cursor, e.cursorVisible, e.textarea.Line(), e.textarea.LineInfo())
 
@@ -356,8 +399,14 @@ func (e *Editor) Draw(rect layout.Rect) string {
 
 // ─── Helpers ───────────────────────────────────────────────────────────────
 
+// visibleInputLineCount counts display rows including soft-wrapped long lines,
+// not just hard newlines, so a wrapped paragraph is fully visible while typing.
 func (e *Editor) visibleInputLineCount() int {
-	lines := strings.Count(e.textarea.Value(), "\n") + 1
+	value := e.textarea.Value()
+	lines := strings.Count(value, "\n") + 1
+	if e.layoutWidth > 0 && value != "" {
+		lines = editorWrappedRowCount(value, editorTextWidth(e.layoutWidth))
+	}
 	if lines < 1 {
 		return 1
 	}
@@ -365,6 +414,97 @@ func (e *Editor) visibleInputLineCount() int {
 		return maxComposerInputLines
 	}
 	return lines
+}
+
+// editorTextWidth maps the composer's total width to the text-column width,
+// mirroring the prompt and padding math in Draw.
+func editorTextWidth(rectW int) int {
+	availableW := rectW - 2
+	if availableW < 10 {
+		availableW = rectW
+	}
+	textW := availableW - 2
+	if textW < 1 {
+		textW = 1
+	}
+	return textW
+}
+
+// wrapEditorLine soft-wraps one logical line exactly like the embedded bubbles
+// textarea (word wrap with a trailing cursor-cell space), so rendered rows stay
+// aligned with textarea.LineInfo RowOffset/ColumnOffset.
+func wrapEditorLine(runes []rune, width int) [][]rune {
+	if width < 1 {
+		width = 1
+	}
+	var (
+		lines  = [][]rune{{}}
+		word   = []rune{}
+		row    int
+		spaces int
+	)
+
+	for _, r := range runes {
+		if unicode.IsSpace(r) {
+			spaces++
+		} else {
+			word = append(word, r)
+		}
+
+		if spaces > 0 {
+			if uniseg.StringWidth(string(lines[row]))+uniseg.StringWidth(string(word))+spaces > width {
+				row++
+				lines = append(lines, []rune{})
+				lines[row] = append(lines[row], word...)
+				lines[row] = append(lines[row], editorRepeatSpaces(spaces)...)
+			} else {
+				lines[row] = append(lines[row], word...)
+				lines[row] = append(lines[row], editorRepeatSpaces(spaces)...)
+			}
+			spaces = 0
+			word = nil
+		} else {
+			lastCharLen := runewidth.RuneWidth(word[len(word)-1])
+			if uniseg.StringWidth(string(word))+lastCharLen > width {
+				if len(lines[row]) > 0 {
+					row++
+					lines = append(lines, []rune{})
+				}
+				lines[row] = append(lines[row], word...)
+				word = nil
+			}
+		}
+	}
+
+	if uniseg.StringWidth(string(lines[row]))+uniseg.StringWidth(string(word))+spaces >= width {
+		lines = append(lines, []rune{})
+		lines[row+1] = append(lines[row+1], word...)
+		spaces++
+		lines[row+1] = append(lines[row+1], editorRepeatSpaces(spaces)...)
+	} else {
+		lines[row] = append(lines[row], word...)
+		spaces++
+		lines[row] = append(lines[row], editorRepeatSpaces(spaces)...)
+	}
+
+	return lines
+}
+
+func editorRepeatSpaces(n int) []rune {
+	return []rune(strings.Repeat(" ", n))
+}
+
+// editorWrappedRowCount returns the number of soft-wrapped display rows the
+// value occupies at the given text width.
+func editorWrappedRowCount(value string, width int) int {
+	rows := 0
+	for _, line := range strings.Split(value, "\n") {
+		rows += len(wrapEditorLine([]rune(line), width))
+	}
+	if rows < 1 {
+		rows = 1
+	}
+	return rows
 }
 
 func (e *Editor) matchingCommands() []CommandHint {
@@ -477,21 +617,53 @@ func renderEditorValue(value, placeholder string, height, width int, cursorStyle
 		return renderEmptyEditorLine(placeholder, width, cursorStyle, cursorVisible)
 	}
 
-	lines := strings.Split(value, "\n")
-	start := 0
-	if len(lines) > height {
-		start = len(lines) - height
-		if cursorLine < start {
-			start = cursorLine
+	// Soft-wrap every logical line the same way the underlying textarea does,
+	// so the cursor's RowOffset/ColumnOffset map directly onto display rows.
+	logical := strings.Split(value, "\n")
+	rows := make([]string, 0, len(logical))
+	cursorRow := -1
+	cursorOffset := 0
+	for li, line := range logical {
+		wrapped := wrapEditorLine([]rune(line), width)
+		if li == cursorLine {
+			ro := lineInfo.RowOffset
+			if ro < 0 {
+				ro = 0
+			}
+			if ro >= len(wrapped) {
+				ro = len(wrapped) - 1
+			}
+			cursorRow = len(rows) + ro
+			cursorOffset = lineInfo.ColumnOffset
 		}
-		if cursorLine >= start+height {
-			start = cursorLine - height + 1
+		for _, r := range wrapped {
+			rows = append(rows, string(r))
+		}
+	}
+	if cursorRow < 0 || cursorRow >= len(rows) {
+		cursorRow = len(rows) - 1
+		cursorOffset = len([]rune(rows[cursorRow]))
+	}
+
+	// Scroll the visible window so the cursor row is always on screen.
+	start := 0
+	if len(rows) > height {
+		start = len(rows) - height
+		if cursorRow < start {
+			start = cursorRow
+		}
+		if cursorRow >= start+height {
+			start = cursorRow - height + 1
 		}
 		if start < 0 {
 			start = 0
 		}
 	}
-	visible := append([]string{}, lines[start:]...)
+	end := start + height
+	if end > len(rows) {
+		end = len(rows)
+	}
+	visible := append([]string{}, rows[start:end]...)
 	for len(visible) < height {
 		visible = append(visible, "")
 	}
@@ -500,53 +672,42 @@ func renderEditorValue(value, placeholder string, height, width int, cursorStyle
 	lineStyle := lipgloss.NewStyle().Background(bg).Width(width)
 	textStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(common.PaletteEditorText)).Background(bg)
 
-	for i, line := range visible {
-		globalLine := start + i
-		isCursorLine := globalLine == cursorLine
+	for i, row := range visible {
+		globalRow := start + i
 		var rendered string
-		if isCursorLine {
-			rendered = renderEditorCursorLine(line, width, textStyle, cursorStyle, cursorVisible, lineInfo)
+		if globalRow == cursorRow {
+			rendered = renderEditorCursorLine(row, width, textStyle, cursorStyle, cursorVisible, cursorOffset)
 		} else {
-			rendered = textStyle.Render(truncateDisplayWidth(line, width))
+			rendered = textStyle.Render(truncateDisplayWidth(row, width))
 		}
 		visible[i] = lineStyle.Render(rendered)
 	}
 	return strings.Join(visible, "\n")
 }
 
-func renderEditorCursorLine(line string, width int, textStyle, cursorStyle lipgloss.Style, cursorVisible bool, lineInfo textarea.LineInfo) string {
-	before, cursorText, after := editorCursorParts(line, width, lineInfo)
+func renderEditorCursorLine(row string, width int, textStyle, cursorStyle lipgloss.Style, cursorVisible bool, cursorOffset int) string {
+	before, cursorText, after := editorCursorParts(row, width, cursorOffset)
 	if !cursorVisible {
 		return textStyle.Render(before + cursorText + after)
 	}
 	return textStyle.Render(before) + cursorStyle.Render(cursorText) + textStyle.Render(after)
 }
 
-func editorCursorParts(line string, width int, lineInfo textarea.LineInfo) (string, string, string) {
+// editorCursorParts splits one display row around the cursor. cursorOffset is
+// the rune offset of the cursor within the row (LineInfo.ColumnOffset).
+func editorCursorParts(row string, width int, cursorOffset int) (string, string, string) {
 	if width < 1 {
 		width = 1
 	}
-	runes := []rune(line)
-	start := lineInfo.StartColumn
-	if start < 0 {
-		start = 0
-	}
-	if start > len(runes) {
-		start = len(runes)
-	}
-	cursorOffset := lineInfo.ColumnOffset
+	runes := []rune(row)
 	if cursorOffset < 0 {
 		cursorOffset = 0
 	}
-	if start+cursorOffset > len(runes) {
-		cursorOffset = len(runes) - start
-	}
-	segment := runes[start:]
-	if cursorOffset > len(segment) {
-		cursorOffset = len(segment)
+	if cursorOffset > len(runes) {
+		cursorOffset = len(runes)
 	}
 
-	before := string(segment[:cursorOffset])
+	before := string(runes[:cursorOffset])
 	beforeWidth := runewidth.StringWidth(before)
 	if beforeWidth >= width {
 		before = ""
@@ -555,8 +716,8 @@ func editorCursorParts(line string, width int, lineInfo textarea.LineInfo) (stri
 
 	cursorText := " "
 	afterStart := cursorOffset
-	if cursorOffset < len(segment) {
-		cursorText = string(segment[cursorOffset])
+	if cursorOffset < len(runes) {
+		cursorText = string(runes[cursorOffset])
 		afterStart = cursorOffset + 1
 	}
 	cursorWidth := runewidth.StringWidth(cursorText)
@@ -568,8 +729,8 @@ func editorCursorParts(line string, width int, lineInfo textarea.LineInfo) (stri
 		afterWidth = 0
 	}
 	after := ""
-	if afterStart < len(segment) {
-		after = truncateDisplayWidth(string(segment[afterStart:]), afterWidth)
+	if afterStart < len(runes) {
+		after = truncateDisplayWidth(string(runes[afterStart:]), afterWidth)
 	}
 	return before, cursorText, after
 }

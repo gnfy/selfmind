@@ -1157,6 +1157,47 @@ func TestInputHistoryDoesNotStealMultilineArrowNavigation(t *testing.T) {
 	}
 }
 
+func TestInputHistoryDoesNotStealSoftWrappedArrowNavigation(t *testing.T) {
+	model := NewController(nil, nil, nil, "").model
+	model.recordInputHistory("previous")
+
+	// One logical line that soft-wraps across display rows: Up must move the
+	// cursor, not swap in history (matches codex composer behaviour).
+	draft := strings.Repeat("分析仓库结构", 8) // 96 display columns
+	model.editor.SetLayoutWidth(40)      // text width 36 → several wrapped rows
+	model.editor.SetValue(draft)
+
+	updated, _ := model.handleKey(tea.KeyMsg{Type: tea.KeyUp})
+	model = updated.(*uiModel)
+
+	if got := model.editor.Value(); got != draft {
+		t.Fatalf("soft-wrapped value = %q, want unchanged draft", got)
+	}
+	if model.historyIndex != -1 {
+		t.Fatalf("historyIndex = %d, want -1", model.historyIndex)
+	}
+}
+
+func TestInputHistoryContinuesFromRecalledMultilineEntry(t *testing.T) {
+	model := NewController(nil, nil, nil, "").model
+	model.recordInputHistory("older entry")
+	model.recordInputHistory("multi\nline entry")
+
+	updated, _ := model.handleKey(tea.KeyMsg{Type: tea.KeyUp})
+	model = updated.(*uiModel)
+	if got := model.editor.Value(); got != "multi\nline entry" {
+		t.Fatalf("recalled value = %q, want multi-line entry", got)
+	}
+
+	// The recall left the cursor at the end of the entry (a text boundary), so
+	// a second Up keeps browsing history instead of moving the cursor.
+	updated, _ = model.handleKey(tea.KeyMsg{Type: tea.KeyUp})
+	model = updated.(*uiModel)
+	if got := model.editor.Value(); got != "older entry" {
+		t.Fatalf("second recall = %q, want older entry", got)
+	}
+}
+
 // TestTUIGatewayControlCommandsRouteToDaemon proves the cross-endpoint fix: the
 // TUI previously OMITTED gateway control commands (/approve, /reject, /stop,
 // /id, /new, /resume, /workspace(s), /events, /notify), so typing /approve fell

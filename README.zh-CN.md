@@ -233,6 +233,8 @@ tasks:
   maintenance_debounce: "5m"
   maintenance_max_wait: "15m"
   maintenance_batch_max_runs: 10
+  maintenance_soft_probe_initial: "15m"
+  maintenance_soft_probe_max: "1h"
 
 # 后台学习/复盘相关配置，用于沉淀 memory 和 skill。
 evolution:
@@ -655,7 +657,7 @@ selfmind doctor
 - 07-13 09:15 [run:failed] llm chat: responses API error 429: usage limit reached
 ```
 
-`[tool:<名字>]` 是单个工具调用失败；`[run:failed]` 是整轮/模型接口失败。密钥已脱敏。想看单轮上下文细节（token 构成、召回命中、压缩），在对话里用控制命令：`/diag`、`/diag context`、`/diag tasks`、`/diag memory`。
+`[tool:<名字>]` 是单个工具调用失败；`[run:failed]` 是整轮/模型接口失败。密钥已脱敏。想看单轮上下文细节（token 构成、召回命中、压缩），在对话里用控制命令：`/diag`、`/diag context`、`/diag tasks`、`/diag memory`、`/diag models`。
 
 ### 2. 录制真实对话（飞行记录器）
 

@@ -317,7 +317,8 @@ func ReadModelFacts(ctx context.Context, m *MemoryManager, tenantID string) (fac
 		}
 		f := Fact{
 			ID: c.ID, Target: c.Target, Content: c.Content, Scope: c.Scope,
-			Confidence: c.Confidence, CreatedAt: c.CreatedAt, LastVerifiedAt: c.LastVerifiedAt,
+			Category: c.Category, Confidence: c.Confidence, CreatedAt: c.CreatedAt,
+			LastVerifiedAt: c.LastVerifiedAt, Canonical: true,
 		}
 		if c.Pinned {
 			f.Target = "pinned"

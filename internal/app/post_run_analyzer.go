@@ -325,14 +325,9 @@ func (a *llmPostRunAnalyzer) promptWithNeighbors(ctx context.Context, req httpap
 	if strings.TrimSpace(turnText) == "" {
 		turnText = req.Prompt
 	}
-	neighbors := map[string][]memory.Fact{}
-	for _, target := range []string{"user", "memory"} {
-		facts, err := a.memory.GetFacts(ctx, memoryPartition(req), target)
-		if err != nil {
-			log.Warn("post-run analyzer: neighbor read failed", "target", target, "run", req.RunID, "error", err)
-			continue
-		}
-		neighbors[target] = intakeNeighbors(facts, turnText)
+	neighbors, err := a.intakeNeighborMap(ctx, req, turnText)
+	if err != nil {
+		log.Warn("post-run analyzer: neighbor read failed", "run", req.RunID, "error", err)
 	}
 	return prompt + renderNeighborBlock(neighbors)
 }
@@ -348,18 +343,29 @@ func (a *llmPostRunAnalyzer) Apply(ctx context.Context, req httpapi.PostRunAnaly
 	if strings.TrimSpace(turnText) == "" {
 		turnText = req.Prompt
 	}
-	neighbors := map[string][]memory.Fact{}
-	for _, target := range []string{"user", "memory"} {
-		facts, err := a.memory.GetFacts(ctx, memoryPartition(req), target)
-		if err != nil {
-			return fmt.Errorf("load %s memory neighbors: %w", target, err)
-		}
-		neighbors[target] = intakeNeighbors(facts, turnText)
+	neighbors, err := a.intakeNeighborMap(ctx, req, turnText)
+	if err != nil {
+		return err
 	}
 	if err := a.applyMemoryDecisions(ctx, req, analysis.Decisions, neighbors); err != nil {
 		return err
 	}
 	return a.storeFacts(ctx, req, analysis) // compatibility for historic response shape
+}
+
+func (a *llmPostRunAnalyzer) intakeNeighborMap(ctx context.Context, req httpapi.PostRunAnalysisRequest, turnText string) (map[string][]memory.Fact, error) {
+	facts, _ := memory.ReadModelFacts(ctx, a.memory, memoryPartition(req))
+	neighbors := map[string][]memory.Fact{"user": {}, "memory": {}}
+	for _, target := range []string{"user", "memory"} {
+		var targetFacts []memory.Fact
+		for _, fact := range facts {
+			if fact.Target == target {
+				targetFacts = append(targetFacts, fact)
+			}
+		}
+		neighbors[target] = intakeNeighbors(targetFacts, turnText)
+	}
+	return neighbors, nil
 }
 
 type postRunAnalysisWire struct {
@@ -545,10 +551,7 @@ func (a *llmPostRunAnalyzer) storeFacts(ctx context.Context, req httpapi.PostRun
 		"user":   analysis.UserFacts,
 		"memory": analysis.MemoryFacts,
 	} {
-		existing, err := a.memory.GetFacts(ctx, memoryPartition(req), target)
-		if err != nil {
-			return fmt.Errorf("read existing %s facts: %w", target, err)
-		}
+		existing := a.readModelFactsForTarget(ctx, req, target)
 		for _, candidate := range candidates {
 			if memory.ClassifyTransientContent(candidate) == memory.TransientConfirmed {
 				continue // confirmed run-state text is never a durable fact
@@ -595,6 +598,10 @@ func (a *llmPostRunAnalyzer) reinforceFact(ctx context.Context, req httpapi.Post
 	if req.RunID != "" && match.CreatedFromRun == req.RunID {
 		return a.canonicalWrite(ctx, req, "REINFORCE", target, candidate, match.Content, 0, intakeMeta{})
 	}
+	if match.Canonical {
+		tools.RecordMemoryLearningChangeScoped(memoryPartition(req), target, match.Scope, "reinforce", match.Content, candidate, "post_run_analyzer")
+		return a.canonicalWrite(ctx, req, "REINFORCE", target, candidate, match.Content, 0, intakeMeta{})
+	}
 	base := match.Confidence
 	if base <= 0 {
 		base = memory.BaseConfidence(memory.SourceFactExtractor)
@@ -605,6 +612,17 @@ func (a *llmPostRunAnalyzer) reinforceFact(ctx context.Context, req httpapi.Post
 	}
 	tools.RecordMemoryLearningChangeScoped(memoryPartition(req), target, match.Scope, "reinforce", match.Content, candidate, "post_run_analyzer")
 	return a.canonicalWrite(ctx, req, "REINFORCE", target, candidate, match.Content, 0, intakeMeta{})
+}
+
+func (a *llmPostRunAnalyzer) readModelFactsForTarget(ctx context.Context, req httpapi.PostRunAnalysisRequest, target string) []memory.Fact {
+	facts, _ := memory.ReadModelFacts(ctx, a.memory, memoryPartition(req))
+	out := make([]memory.Fact, 0, len(facts))
+	for _, fact := range facts {
+		if fact.Target == target {
+			out = append(out, fact)
+		}
+	}
+	return out
 }
 
 // findDuplicatePostRunFact returns the stored fact a candidate duplicates, so

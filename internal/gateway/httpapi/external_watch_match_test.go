@@ -1,6 +1,8 @@
 package httpapi
 
 import (
+	"context"
+	"runtime"
 	"testing"
 
 	"selfmind/internal/control"
@@ -33,6 +35,42 @@ func TestMatchesExternalWatchPatternNormalizesOutput(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := matchesExternalWatchPattern(tc.pattern, tc.output); got != tc.want {
 				t.Fatalf("matchesExternalWatchPattern(%q, %q) = %v, want %v", tc.pattern, tc.output, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestRunExternalWatchCommandUsesBash(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("SelfMind's production daemon runs on Linux")
+	}
+	output, err := runExternalWatchCommand(context.Background(), t.TempDir(), "set -euo pipefail; printf SUCCESS")
+	if err != nil {
+		t.Fatalf("bash watch command failed: %v (%s)", err, output)
+	}
+	if output != "SUCCESS" {
+		t.Fatalf("output = %q, want SUCCESS", output)
+	}
+}
+
+func TestClassifyExternalWatchCommandDefect(t *testing.T) {
+	cases := []struct {
+		name    string
+		output  string
+		errText string
+		want    bool
+	}{
+		{"illegal shell option", "sh: 1: set: Illegal option -o pipefail", "exit status 2", true},
+		{"syntax error", "bash: syntax error near unexpected token `)'", "exit status 2", true},
+		{"missing command", "bash: gcloudx: command not found", "exit status 127", true},
+		{"ordinary nonzero is retryable", "BUILD STILL RUNNING", "exit status 1", false},
+		{"transient network error is retryable", "connection reset by peer", "exit status 1", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := classifyExternalWatchCommandDefect(tc.output, tc.errText) != ""
+			if got != tc.want {
+				t.Fatalf("classifyExternalWatchCommandDefect(%q, %q) = %v, want %v", tc.output, tc.errText, got, tc.want)
 			}
 		})
 	}

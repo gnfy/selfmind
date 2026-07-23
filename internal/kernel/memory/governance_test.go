@@ -1,6 +1,7 @@
 package memory
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -65,5 +66,30 @@ func TestSelectFactsRanksAndCaps(t *testing.T) {
 	}
 	if pos["legacy"] > pos["low-elsewhere"] {
 		t.Fatalf("legacy (0.5) should outrank down-weighted other-workspace (0.33): %v", pos)
+	}
+}
+
+func TestSelectFactsForPromptBoostsRelevantChineseMemory(t *testing.T) {
+	now := time.Now()
+	facts := []Fact{
+		{Content: "User prefers concise technical explanations.", Confidence: 0.95, Scope: "global", CreatedAt: now},
+		{Content: "日报应按分类标题和编号事项输出，每个事项一行。", Category: "communication", Confidence: 0.65, Scope: "global", CreatedAt: now},
+	}
+
+	got := SelectFactsForPrompt(facts, "global", "整理今天的发布日报，保持之前的格式", now, 1)
+	if len(got) != 1 || !strings.Contains(got[0].Content, "日报") {
+		t.Fatalf("topic-relevant memory should win the bounded prompt slot, got %+v", got)
+	}
+}
+
+func TestSelectFactsForPromptFallsBackToGovernanceRanking(t *testing.T) {
+	now := time.Now()
+	facts := []Fact{
+		{Content: "low", Confidence: 0.5, Scope: "global", CreatedAt: now},
+		{Content: "high", Confidence: 0.9, Scope: "global", CreatedAt: now},
+	}
+	got := SelectFactsForPrompt(facts, "global", "unrelated topic", now, 1)
+	if len(got) != 1 || got[0].Content != "high" {
+		t.Fatalf("unrelated queries should preserve governance ordering, got %+v", got)
 	}
 }

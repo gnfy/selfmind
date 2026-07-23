@@ -202,6 +202,9 @@ gateway:
   # The escrow sweep runs every 60s, so effective latency is this + up to 60s.
   # "0" disables escrow.
   pending_notify_after: "2m"
+  # Terminal delivery history is retained for 14 days. Pending, retryable, and
+  # IM-session recovery rows are never pruned. "0" disables pruning.
+  outbound_retention: "336h"
   # Generic outbound webhook for custom IM relays.
   outbound_webhook_url: ""
   outbound_webhook_token: ""
@@ -214,6 +217,10 @@ gateway:
 agent:
   soul: "You are SelfMind, a helpful AI assistant."
   max_iterations: 90
+  action_tool_budget: 12
+  action_tool_budget_step: 6
+  action_tool_budget_limit: 64
+  max_budget_extensions: 9
   max_retries: 3
   log_level: "INFO"
   # LLM transport resilience (Package Zero). Absent/0 = sensible defaults.

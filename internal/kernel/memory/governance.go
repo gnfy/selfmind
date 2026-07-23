@@ -3,7 +3,9 @@ package memory
 import (
 	"math"
 	"sort"
+	"strings"
 	"time"
+	"unicode"
 )
 
 // Memory governance: confidence scoring (W3b), scope derivation (W3c), and
@@ -112,9 +114,23 @@ func ScoreFact(f Fact, currentScope string, now time.Time) float64 {
 // SelectFacts returns the top `max` facts for the current scope, ranked by
 // ScoreFact (ties broken toward more recently inserted). max<=0 returns all.
 func SelectFacts(facts []Fact, currentScope string, now time.Time, max int) []Fact {
+	return selectFacts(facts, currentScope, "", now, max)
+}
+
+// SelectFactsForPrompt preserves the confidence/scope/freshness ordering while
+// giving facts related to the current turn a bounded boost. It is deliberately
+// lexical and deterministic: memory selection must not add another model call
+// to the foreground path. Unicode word runs and CJK bigrams make the same
+// selector useful for both English and Chinese prompts.
+func SelectFactsForPrompt(facts []Fact, currentScope, query string, now time.Time, max int) []Fact {
+	return selectFacts(facts, currentScope, query, now, max)
+}
+
+func selectFacts(facts []Fact, currentScope, query string, now time.Time, max int) []Fact {
 	if max <= 0 || len(facts) == 0 {
 		return facts
 	}
+	queryTokens := memorySearchTokens(query)
 	type scored struct {
 		f   Fact
 		s   float64
@@ -122,7 +138,12 @@ func SelectFacts(facts []Fact, currentScope string, now time.Time, max int) []Fa
 	}
 	arr := make([]scored, len(facts))
 	for i, f := range facts {
-		arr[i] = scored{f: f, s: ScoreFact(f, currentScope, now), idx: i}
+		score := ScoreFact(f, currentScope, now)
+		if len(queryTokens) > 0 {
+			relevance := lexicalMemoryRelevance(queryTokens, f.Content+" "+f.Category)
+			score *= 1 + 8*relevance
+		}
+		arr[i] = scored{f: f, s: score, idx: i}
 	}
 	sort.SliceStable(arr, func(i, j int) bool {
 		if arr[i].s != arr[j].s {
@@ -139,4 +160,85 @@ func SelectFacts(facts []Fact, currentScope string, now time.Time, max int) []Fa
 		out[i] = arr[i].f
 	}
 	return out
+}
+
+func memorySearchTokens(value string) map[string]struct{} {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if value == "" {
+		return nil
+	}
+	out := make(map[string]struct{})
+	var run []rune
+	var runASCII bool
+	flush := func() {
+		if len(run) == 0 {
+			return
+		}
+		token := string(run)
+		if runASCII {
+			if len(run) >= 2 {
+				out[token] = struct{}{}
+			}
+		} else {
+			out[token] = struct{}{}
+			if len(run) > 1 {
+				for i := 0; i+1 < len(run); i++ {
+					out[string(run[i:i+2])] = struct{}{}
+				}
+			}
+		}
+		run = run[:0]
+	}
+	for _, r := range value {
+		if !unicode.IsLetter(r) && !unicode.IsDigit(r) {
+			flush()
+			continue
+		}
+		ascii := r <= unicode.MaxASCII
+		if len(run) > 0 && ascii != runASCII {
+			flush()
+		}
+		if len(run) == 0 {
+			runASCII = ascii
+		}
+		run = append(run, r)
+	}
+	flush()
+	return out
+}
+
+func lexicalMemoryRelevance(queryTokens map[string]struct{}, value string) float64 {
+	factTokens := memorySearchTokens(value)
+	if len(queryTokens) == 0 || len(factTokens) == 0 {
+		return 0
+	}
+	matches := 0
+	cjkBigrams := 0
+	for token := range queryTokens {
+		if _, ok := factTokens[token]; ok {
+			matches++
+			runes := []rune(token)
+			if len(runes) == 2 && (runes[0] > unicode.MaxASCII || runes[1] > unicode.MaxASCII) {
+				cjkBigrams++
+			}
+		}
+	}
+	if matches == 0 {
+		return 0
+	}
+	denominator := math.Sqrt(float64(len(queryTokens) * len(factTokens)))
+	if denominator <= 0 {
+		return 0
+	}
+	relevance := float64(matches) / denominator
+	if relevance > 1 {
+		return 1
+	}
+	if cjkBoost := 0.15 * float64(cjkBigrams); cjkBoost > relevance {
+		if cjkBoost > 1 {
+			return 1
+		}
+		return cjkBoost
+	}
+	return relevance
 }

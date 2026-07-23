@@ -118,6 +118,10 @@ func (d *Server) executeExternalWatch(ctx context.Context, watch control.Externa
 		d.completeExternalWatch(ctx, watch, status, output, statusErrText(status, errText))
 		return
 	}
+	if reason := classifyExternalWatchCommandDefect(output, errText); reason != "" {
+		d.completeExternalWatch(ctx, watch, control.ExternalWatchFailed, output, reason)
+		return
+	}
 	if deadlinePassed || !watch.TimeoutAt.After(time.Now()) {
 		// The operation is demonstrably still reporting state (the check ran
 		// and produced non-terminal output): grant the single bounded
@@ -162,11 +166,44 @@ func runExternalWatchCommand(ctx context.Context, cwd, command string) (string, 
 	if runtime.GOOS == "windows" {
 		cmd = exec.CommandContext(ctx, "powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", command)
 	} else {
-		cmd = exec.CommandContext(ctx, "sh", "-c", command)
+		cmd = exec.CommandContext(ctx, "bash", "-c", command)
 	}
 	cmd.Dir = cwd
 	bytes, err := cmd.CombinedOutput()
 	return string(bytes), err
+}
+
+// classifyExternalWatchCommandDefect identifies deterministic failures in the
+// frozen check itself. Retrying these cannot reveal a new external state, so a
+// watch should fail immediately instead of reporting a misleading timeout.
+// Ordinary non-zero exits remain retryable because many status CLIs use them
+// while an external operation is still converging.
+func classifyExternalWatchCommandDefect(output, errText string) string {
+	combined := strings.ToLower(strings.TrimSpace(output + "\n" + errText))
+	if combined == "" {
+		return ""
+	}
+	markers := []string{
+		"illegal option",
+		"invalid option",
+		"syntax error",
+		"unexpected token",
+		"command not found",
+		"no such file or directory",
+		"permission denied",
+		"cannot execute",
+		"bad substitution",
+	}
+	for _, marker := range markers {
+		if strings.Contains(combined, marker) {
+			detail := strings.TrimSpace(output)
+			if detail == "" {
+				detail = strings.TrimSpace(errText)
+			}
+			return "watch check is invalid: " + truncate(toOneLine(detail), 240)
+		}
+	}
+	return ""
 }
 
 // matchesExternalWatchPattern normalizes command output before matching so

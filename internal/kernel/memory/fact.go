@@ -19,7 +19,9 @@ type Fact struct {
 	// Governance metadata (optional).
 	Source         string    `json:"source,omitempty"`           // e.g. "fact_extractor", "turn_extractor", "user"
 	Scope          string    `json:"scope,omitempty"`            // e.g. "global", "workspace:<id>", "channel:<name>"
+	Category       string    `json:"category,omitempty"`         // broad browsing and retrieval category
 	Confidence     float64   `json:"confidence,omitempty"`       // 0..1; 0 = unscored (legacy/unknown)
 	CreatedFromRun string    `json:"created_from_run,omitempty"` // run id this fact was extracted from
 	LastVerifiedAt time.Time `json:"last_verified_at,omitempty"` // last time the fact was reaffirmed
+	Canonical      bool      `json:"-"`                          // served from canonical_memories, not legacy facts
 }

@@ -83,6 +83,9 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.scheduleStreamFlush()
 
 	case MsgAgentActivity:
+		if !m.acceptEvent(msg.Event) {
+			return m, spinnerCmd
+		}
 		m.activityText = strings.TrimSpace(msg.Content)
 		m.thinking = true
 		if m.thinkingStart.IsZero() {
@@ -104,6 +107,9 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleKey(msg)
 
 	case MsgStream:
+		if !m.acceptEvent(msg.Event) {
+			return m, spinnerCmd
+		}
 		msg.Content = textutil.CleanUTF8(msg.Content)
 		m.thinking = false
 		m.activityText = ""
@@ -155,8 +161,16 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// is no synchronous answer to finalize — the conversation reply follows
 		// the run's ORIGIN endpoint (docs/identity-continuity.md); this watcher
 		// only reports that the observation ended and the recorded outcome.
+		if !m.watchingRun {
+			return m, spinnerCmd
+		}
+		if msg.RunID != "" && m.watchedRunID != "" && msg.RunID != m.watchedRunID {
+			return m, spinnerCmd
+		}
 		wasWatching := m.watchingRun
+		m.finalizeLiveStream("")
 		m.watchingRun = false
+		m.watchedRunID = ""
 		m.watchedTaskTitle = ""
 		m.watchCancel = nil
 		m.toolExecuting = ""
@@ -173,10 +187,11 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, spinnerCmd
 		}
+		m.runStatus = "done"
 		if summary := strings.TrimSpace(msg.Summary); summary != "" {
-			m.addMessage("system", "The running task finished: "+summary)
+			m.addMessage("notice", "The running task finished: "+summary)
 		} else {
-			m.addMessage("system", "The running task finished. Use /status for details.")
+			m.addMessage("notice", "The running task finished. Use /status for details.")
 		}
 		return m, spinnerCmd
 
@@ -207,6 +222,9 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Tick(3*time.Second, func(t time.Time) tea.Msg { return MsgClearStatus{} })
 
 	case MsgToolStart:
+		if !m.acceptEvent(msg.Event) {
+			return m, spinnerCmd
+		}
 		if isTerminalRunStatus(m.runStatus) || m.toolMessageExists(msg.ToolCallID) {
 			return m, spinnerCmd
 		}
@@ -223,6 +241,9 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, spinnerCmd
 
 	case MsgToolDone:
+		if !m.acceptEvent(msg.Event) {
+			return m, spinnerCmd
+		}
 		if isTerminalRunStatus(m.runStatus) {
 			return m, spinnerCmd
 		}
@@ -261,6 +282,9 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, spinnerCmd
 
 	case MsgPlanUpdated:
+		if !m.acceptEvent(msg.Event) {
+			return m, spinnerCmd
+		}
 		if isTerminalRunStatus(m.runStatus) {
 			return m, spinnerCmd
 		}
@@ -270,6 +294,9 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, spinnerCmd
 
 	case MsgToolOutput:
+		if !m.acceptEvent(msg.Event) {
+			return m, spinnerCmd
+		}
 		if isTerminalRunStatus(m.runStatus) {
 			return m, spinnerCmd
 		}
@@ -279,6 +306,9 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, spinnerCmd
 
 	case MsgToolHeartbeat:
+		if !m.acceptEvent(msg.Event) {
+			return m, spinnerCmd
+		}
 		if isTerminalRunStatus(m.runStatus) {
 			return m, spinnerCmd
 		}
@@ -303,6 +333,9 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, spinnerCmd
 
 	case MsgLearningEvent:
+		if !m.acceptEvent(msg.Event) {
+			return m, spinnerCmd
+		}
 		m.statusMsg = msg.Content
 		m.addMessage("system", msg.Content)
 		return m, nil
@@ -312,6 +345,9 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case MsgTokens:
+		if !m.acceptEvent(msg.Event) {
+			return m, spinnerCmd
+		}
 		// Live cumulative usage snapshot for the active run (token.updated).
 		// Only runTokens ticks here; totalTokens stays untouched so the final
 		// MsgAgentDone usage remains the single authoritative session
@@ -505,6 +541,7 @@ func (m *uiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if m.thinking || m.toolExecuting != "" {
 				return m, m.injectMidRunGuidance(input)
 			}
+			m.detachWatchedRunForNewTurn()
 			m.addMessage("user", input)
 			m.editor.Reset()
 			m.activePlanJSON = ""

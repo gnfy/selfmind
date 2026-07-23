@@ -33,8 +33,8 @@ func TestStartupDigestRendersOnceOnFirstSizedFrame(t *testing.T) {
 	if cmd != nil {
 		t.Fatal("no active run: digest must not start a watcher")
 	}
-	if len(model.messages) != 1 || model.messages[0].Role != "system" {
-		t.Fatalf("digest should render one system message: %+v", model.messages)
+	if len(model.messages) != 1 || model.messages[0].Role != "digest" {
+		t.Fatalf("digest should render one digest message: %+v", model.messages)
 	}
 	text := model.messages[0].Content
 	for _, want := range []string{
@@ -80,13 +80,15 @@ func TestStartupDigestAttachesToActiveRun(t *testing.T) {
 	c := NewController(nil, nil, nil, "")
 	c.SetClientMode(true)
 	watcherStarted := make(chan struct{})
-	c.SetRunWatcher(func(ctx context.Context, observer httpapi.StreamObserver) string {
+	var watchedRunID string
+	c.SetRunWatcher(func(ctx context.Context, runID string, observer httpapi.StreamObserver) string {
+		watchedRunID = runID
 		close(watcherStarted)
 		<-ctx.Done()
 		return ""
 	})
 	c.SetStartupDigest(&api.DigestResponse{
-		ActiveRun: &api.DigestActiveRun{TaskID: "t9", Title: "Long migration", ElapsedSeconds: 720},
+		ActiveRun: &api.DigestActiveRun{RunID: "r9", TaskID: "t9", Title: "Long migration", ElapsedSeconds: 720},
 	})
 	model := c.model
 
@@ -105,6 +107,9 @@ func TestStartupDigestAttachesToActiveRun(t *testing.T) {
 	if model.watchCancel == nil {
 		t.Fatal("attach must install a watch-detach cancel")
 	}
+	if model.watchedRunID != "r9" {
+		t.Fatalf("attached run id = %q, want r9", model.watchedRunID)
+	}
 	if !strings.Contains(model.statusMsg, "Watching Long migration") {
 		t.Fatalf("status line should name the watched task: %q", model.statusMsg)
 	}
@@ -120,9 +125,12 @@ func TestStartupDigestAttachesToActiveRun(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("run watcher was not started")
 	}
+	if watchedRunID != "r9" {
+		t.Fatalf("watcher received run id %q, want r9", watchedRunID)
+	}
 	model.watchCancel()
 
-	updated, _ := model.updateInner(MsgAttachedRunDone{Cancelled: true})
+	updated, _ := model.updateInner(MsgAttachedRunDone{RunID: "r9", Cancelled: true})
 	model = updated.(*uiModel)
 	if model.watchingRun {
 		t.Fatal("detach must clear watch state")
@@ -133,15 +141,33 @@ func TestAttachedRunDoneReportsOutcome(t *testing.T) {
 	c := NewController(nil, nil, nil, "")
 	model := c.model
 	model.watchingRun = true
+	model.watchedRunID = "r9"
 
-	updated, _ := model.updateInner(MsgAttachedRunDone{Summary: "migration complete"})
+	updated, _ := model.updateInner(MsgAttachedRunDone{RunID: "r9", Summary: "migration complete"})
 	model = updated.(*uiModel)
 	if model.watchingRun {
 		t.Fatalf("state after watched run end: watchingRun=%v", model.watchingRun)
 	}
 	last := model.messages[len(model.messages)-1]
-	if last.Role != "system" || !strings.Contains(last.Content, "The running task finished: migration complete") {
+	if last.Role != "notice" || !strings.Contains(last.Content, "The running task finished: migration complete") {
 		t.Fatalf("outcome not reported: %+v", last)
+	}
+}
+
+func TestStaleAttachedRunDoneDoesNotStopCurrentWatcher(t *testing.T) {
+	c := NewController(nil, nil, nil, "")
+	model := c.model
+	model.watchingRun = true
+	model.watchedRunID = "r2"
+
+	updated, _ := model.updateInner(MsgAttachedRunDone{RunID: "r1", Summary: "old run done"})
+	model = updated.(*uiModel)
+
+	if !model.watchingRun || model.watchedRunID != "r2" {
+		t.Fatalf("stale completion changed current watcher: watching=%v run=%q", model.watchingRun, model.watchedRunID)
+	}
+	if len(model.messages) != 0 {
+		t.Fatalf("stale completion should not render: %+v", model.messages)
 	}
 }
 

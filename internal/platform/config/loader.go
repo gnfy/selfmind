@@ -457,12 +457,16 @@ type EvolutionConfig struct {
 }
 
 type AgentConfig struct {
-	Soul          string `mapstructure:"soul" yaml:"soul,omitempty"`
-	Provider      string `mapstructure:"provider" yaml:"-"`
-	Model         string `mapstructure:"model" yaml:"-"`
-	MaxIterations int    `mapstructure:"max_iterations" yaml:"max_iterations,omitempty"`
-	MaxRetries    int    `mapstructure:"max_retries" yaml:"max_retries,omitempty"`
-	LogLevel      string `mapstructure:"log_level" yaml:"log_level,omitempty"`
+	Soul                  string `mapstructure:"soul" yaml:"soul,omitempty"`
+	Provider              string `mapstructure:"provider" yaml:"-"`
+	Model                 string `mapstructure:"model" yaml:"-"`
+	MaxIterations         int    `mapstructure:"max_iterations" yaml:"max_iterations,omitempty"`
+	MaxRetries            int    `mapstructure:"max_retries" yaml:"max_retries,omitempty"`
+	LogLevel              string `mapstructure:"log_level" yaml:"log_level,omitempty"`
+	ActionToolBudget      int    `mapstructure:"action_tool_budget" yaml:"action_tool_budget,omitempty"`
+	ActionToolBudgetStep  int    `mapstructure:"action_tool_budget_step" yaml:"action_tool_budget_step,omitempty"`
+	ActionToolBudgetLimit int    `mapstructure:"action_tool_budget_limit" yaml:"action_tool_budget_limit,omitempty"`
+	MaxBudgetExtensions   int    `mapstructure:"max_budget_extensions" yaml:"max_budget_extensions,omitempty"`
 
 	// LLM transport resilience (Package Zero). Absent/0 values fall back to
 	// built-in defaults; base/cap/idle accept Go durations ("300ms", "30s").
@@ -500,7 +504,12 @@ type GatewayConfig struct {
 	// detached and no notification was sent yet (Fix 2). Duration string;
 	// default "2m"; "0" disables escrow. The sweep runs every 60s, so effective
 	// latency is this value + up to 60s.
-	PendingNotifyAfter      string `mapstructure:"pending_notify_after" yaml:"pending_notify_after,omitempty"`
+	PendingNotifyAfter string `mapstructure:"pending_notify_after" yaml:"pending_notify_after,omitempty"`
+	// OutboundRetention bounds how long terminal outbound delivery rows remain
+	// in control.db. Only sent, dismissed, and non-recoverable failed rows are
+	// pruned; pending/retry/session-recovery rows are never removed. Duration
+	// string; default "336h" (14 days); "0" disables pruning.
+	OutboundRetention       string `mapstructure:"outbound_retention" yaml:"outbound_retention,omitempty"`
 	OutboundWebhookURL      string `mapstructure:"outbound_webhook_url" yaml:"outbound_webhook_url,omitempty"`
 	OutboundWebhookToken    string `mapstructure:"outbound_webhook_token" yaml:"outbound_webhook_token,omitempty"`
 	TelegramToken           string `mapstructure:"telegram_token" yaml:"telegram_token,omitempty"`
@@ -564,6 +573,32 @@ func (g GatewayConfig) PendingNotifyAfterDuration() time.Duration {
 			d = time.Duration(secs) * time.Second
 		} else {
 			return DefaultPendingNotifyAfter
+		}
+	}
+	if d <= 0 {
+		return 0
+	}
+	return d
+}
+
+// DefaultOutboundRetention is the terminal outbound history retained in
+// control.db when gateway.outbound_retention is absent or invalid.
+const DefaultOutboundRetention = 14 * 24 * time.Hour
+
+// OutboundRetentionDuration parses gateway.outbound_retention. Empty or
+// invalid values fall back to DefaultOutboundRetention; zero (or negative)
+// disables pruning.
+func (g GatewayConfig) OutboundRetentionDuration() time.Duration {
+	raw := strings.TrimSpace(g.OutboundRetention)
+	if raw == "" {
+		return DefaultOutboundRetention
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil {
+		if secs, serr := strconv.Atoi(raw); serr == nil {
+			d = time.Duration(secs) * time.Second
+		} else {
+			return DefaultOutboundRetention
 		}
 	}
 	if d <= 0 {
@@ -854,6 +889,10 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("agent.llm_retry_base", "300ms")
 	v.SetDefault("agent.llm_retry_cap", "30s")
 	v.SetDefault("agent.llm_stream_idle_timeout", "180s")
+	v.SetDefault("agent.action_tool_budget", 12)
+	v.SetDefault("agent.action_tool_budget_step", 6)
+	v.SetDefault("agent.action_tool_budget_limit", 64)
+	v.SetDefault("agent.max_budget_extensions", 9)
 	v.SetDefault("delegation.max_iterations", 50)
 	v.SetDefault("agent.log_level", "INFO")
 	v.SetDefault("storage.type", "sqlite")
@@ -911,6 +950,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("intent.thresholds.direct", 0.8)
 	v.SetDefault("intent.thresholds.ask", 0.55)
 	v.SetDefault("gateway.pending_notify_after", "2m")
+	v.SetDefault("gateway.outbound_retention", "336h")
 	v.SetDefault("exec_sandbox.enabled", true)
 	v.SetDefault("exec_sandbox.required", false)
 	v.SetDefault("exec_sandbox.allow_network", false)
@@ -968,6 +1008,7 @@ func (c *Config) Normalize() {
 	c.Gateway.DrainTimeout = expandEnvRef(c.Gateway.DrainTimeout)
 	c.Gateway.PresenceIdleTimeout = expandEnvRef(c.Gateway.PresenceIdleTimeout)
 	c.Gateway.PendingNotifyAfter = expandEnvRef(c.Gateway.PendingNotifyAfter)
+	c.Gateway.OutboundRetention = expandEnvRef(c.Gateway.OutboundRetention)
 	c.Gateway.OutboundWebhookURL = expandEnvRef(c.Gateway.OutboundWebhookURL)
 	c.Gateway.OutboundWebhookToken = expandEnvRef(c.Gateway.OutboundWebhookToken)
 	c.Gateway.TelegramToken = expandEnvRef(c.Gateway.TelegramToken)

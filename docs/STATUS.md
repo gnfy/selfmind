@@ -133,6 +133,25 @@
 - Coverage: `internal/gateway/cli/terminal_text_test.go` and the command-tool
   transcript tests in `internal/gateway/cli/controller_test.go`.
 
+### Run-Scoped TUI Timeline Ordering (2026-07-23)
+
+- Digest replay, live watcher events, and a newly submitted turn no longer
+  share an unowned mutable stream. The digest carries the active `run_id`, the
+  thin client watches that exact run, and each forwarded event preserves its
+  durable event id/cursor plus run identity.
+- Before a new user message is committed, the CLI commits the watched run's
+  final assistant fragment and detaches its live view. Events that arrive late
+  from that old watcher are ignored, so they cannot appear below the new user
+  message or mutate the new run's active cells. Durable event ids and live
+  sequence ids are also deduplicated across reconnect/replay.
+- Attach summaries render as a distinct digest cell, not as `Learning`.
+  Watcher completion renders as a concise notice, and lifecycle-only tools
+  (`update_plan`, `finish_run`) remain control state instead of transcript
+  tool rows.
+- Coverage: `internal/gateway/cli/event_identity_test.go`,
+  `internal/gateway/cli/attach_digest_test.go`, and
+  `internal/gateway/client/client_test.go`.
+
 ### Memory Governance Closeout (2026-07-12)
 
 - Existing canonical references support `/memory pin <ref>` / `unpin <ref>`
@@ -1139,6 +1158,27 @@ modes, and the self-check/CI gate landed with the Phase-1 work — see
   command errors stay in the sandbox correction path. Verification-claim
   reconciliation now requires both a verification cue and a positive result;
   successful read-only provider queries no longer count as tests passing.
+
+## Loop, Recall, And Retention Closure (2026-07-23)
+
+- External watches execute with Bash on Linux and fail fast on deterministic
+  shell defects instead of polling the same invalid command until deadline.
+  Generic transport errors preserve any durable structured completion evidence
+  already recorded by the run.
+- `/diag context` aggregates provider-call cache reads, reported creation
+  tokens, and billed input across its visible event window. A zero creation
+  counter is described as transport-unreported rather than proof that the
+  provider created no cache entry.
+- Prompt memory selection applies bounded query relevance on top of the
+  governance score, including deterministic CJK matching. Post-run maintenance
+  compares proposals against the canonical read model, so an existing
+  canonical memory is reinforced without recreating a legacy shadow fact.
+- Action-tool budgets are provider-agnostic configuration. The defaults are
+  `12 + 6` per evidence-gated extension, a hard ceiling of `64`, and at most
+  nine extensions; tool-free turns remain tool-free.
+- Gateway startup prunes only old terminal outbound history after
+  `gateway.outbound_retention` (default 14 days). Pending, retryable,
+  unconfirmed, session-recovery, and recoverable critical IM rows are retained.
 
 ## Memory Governance Reliability Closure (2026-07-11)
 

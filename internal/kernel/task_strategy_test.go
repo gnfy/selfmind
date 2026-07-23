@@ -111,6 +111,50 @@ func TestTaskStrategyUsesFiniteElasticBudgetAndDurableExternalWait(t *testing.T)
 	}
 }
 
+func TestToolBudgetPolicyAppliesGenericEvidenceGatedEnvelope(t *testing.T) {
+	policy := ToolBudgetPolicy{
+		Initial:       12,
+		Step:          6,
+		Limit:         64,
+		MaxExtensions: 9,
+	}
+	strategy := policy.apply(BuildTaskStrategy("inspect this repository and diagnose the failure", "cli"))
+
+	if strategy.MaxActionTools != 12 {
+		t.Fatalf("initial budget = %d, want 12", strategy.MaxActionTools)
+	}
+	if strategy.ActionToolBudgetStep != 6 {
+		t.Fatalf("budget step = %d, want 6", strategy.ActionToolBudgetStep)
+	}
+	if strategy.ActionToolBudgetLimit != 64 {
+		t.Fatalf("budget limit = %d, want 64", strategy.ActionToolBudgetLimit)
+	}
+	if strategy.MaxBudgetExtensions != 9 {
+		t.Fatalf("extensions = %d, want 9", strategy.MaxBudgetExtensions)
+	}
+}
+
+func TestToolBudgetPolicyDoesNotEnableToolsForToolFreeStrategy(t *testing.T) {
+	strategy := TaskStrategy{
+		ToolMode:              ToolModeNone,
+		MaxActionTools:        0,
+		ActionToolBudgetLimit: 0,
+		MaxBudgetExtensions:   0,
+	}
+	got := (ToolBudgetPolicy{Initial: 12, Step: 6, Limit: 64, MaxExtensions: 9}).apply(strategy)
+
+	if got.MaxActionTools != 0 || got.ActionToolBudgetLimit != 0 || got.MaxBudgetExtensions != 0 {
+		t.Fatalf("tool-free strategy was expanded: %+v", got)
+	}
+}
+
+func TestToolBudgetPolicyClampsInitialBudgetToLimit(t *testing.T) {
+	strategy := (ToolBudgetPolicy{Initial: 100, Limit: 40}).apply(DefaultTaskStrategy())
+	if strategy.MaxActionTools != 40 || strategy.ActionToolBudgetLimit != 40 {
+		t.Fatalf("budget = initial:%d limit:%d, want 40/40", strategy.MaxActionTools, strategy.ActionToolBudgetLimit)
+	}
+}
+
 func TestFilterToolCallsByStrategyOnlyBlocksHiddenWebCalls(t *testing.T) {
 	strategy := BuildTaskStrategy("write a PHP pgsql operation example", "cli")
 	calls := []llm.ToolCall{

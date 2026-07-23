@@ -227,6 +227,22 @@ substrate). Document results in this file.
   hard wrapping, per-row resets, hidden here-doc bodies, bounded head/tail
   output, and the complete commit-to-scrollback boundary.
 
+### H2c - Run-scoped event ordering
+
+- The active-run digest carries the daemon run id. A reconnecting TUI watches
+  that exact run instead of every event associated with the person.
+- Every forwarded event retains its durable event id/cursor, live sequence,
+  task id, and run id. The reducer deduplicates replayed events and accepts
+  watcher events only while their run is still the run being watched.
+- Submitting a new prompt is an ordering barrier: the old assistant fragment
+  is committed first, the old watcher is detached, and only then is the new
+  user cell committed. Late events from the detached run are discarded.
+- Digest text, learning events, and completion notices use distinct cell
+  roles. Lifecycle-only tools update control state without creating noisy
+  transcript rows.
+- Regression coverage: `event_identity_test.go`, `attach_digest_test.go`, and
+  the targeted watcher tests in `gateway/client/client_test.go`.
+
 ### H3 — Commit-time file-change rendering ✅ shipped (patch); ⏳ write_file overwrite deferred
 - `renderPatchCell` (`transcript_renderer.go`) parses the V4A patch input
   (`args["patch"]`) into per-file changes and renders:

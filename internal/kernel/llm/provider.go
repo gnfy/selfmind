@@ -86,6 +86,12 @@ type UsageStats struct {
 
 // StreamEvent is one streaming response event.
 type StreamEvent struct {
+	EventID         string
+	Cursor          int64
+	LiveSeq         uint64
+	TaskID          string
+	RunID           string
+	Durability      string
 	Content         string
 	ToolCalls       []ToolCall
 	Usage           *UsageStats

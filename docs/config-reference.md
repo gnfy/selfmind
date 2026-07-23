@@ -189,6 +189,7 @@ gateway:
   token: ""                    # shared secret; mandatory for non-loopback binds
   presence_idle_timeout: "5m"  # idle CLI stops counting as "attached" (pushes go to IM)
   pending_notify_after: "2m"   # re-push an unanswered approval/question to IM after this
+  outbound_retention: "336h"   # retain terminal delivery history for 14 days; 0 disables pruning
   delivery_max_message_chars: 3500
   delivery_retry_attempts: 3
 ```
@@ -340,6 +341,10 @@ Empty by default. Each server's tools are registered on demand.
 ```yaml
 agent:
   max_iterations: 90            # max tool-loop steps per turn
+  action_tool_budget: 12        # initial action-tool budget for tool-using turns
+  action_tool_budget_step: 6    # evidence-gated extension size
+  action_tool_budget_limit: 64  # hard action-tool ceiling
+  max_budget_extensions: 9      # maximum evidence-gated extensions
   max_retries: 3
   log_level: "INFO"             # DEBUG | INFO | WARN | ERROR
   llm_max_retries: 5            # transport retry attempts
@@ -355,8 +360,10 @@ evolution:
   nudge_interval: 10
 ```
 
-Defaults are tuned for normal use; only touch these when diagnosing transport
-flakiness or tuning the tool loop.
+Tool budgets apply uniformly across languages and task types. Extensions still
+require new evidence; these knobs do not classify prompts or force simple
+answers to use tools. Defaults are tuned for normal use; only touch these when
+diagnosing transport flakiness or tuning the tool loop.
 
 ---
 

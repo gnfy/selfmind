@@ -740,6 +740,12 @@ func InitAgent(mem *memory.MemoryManager, cfg *config.Config, tenantID string, s
 	}
 
 	agent := kernel.NewAgent(mem, nil, codingProvider, cfg.Agent.Soul, maxIter, maxRetries, refl)
+	agent.SetToolBudgetPolicy(kernel.ToolBudgetPolicy{
+		Initial:       cfg.Agent.ActionToolBudget,
+		Step:          cfg.Agent.ActionToolBudgetStep,
+		Limit:         cfg.Agent.ActionToolBudgetLimit,
+		MaxExtensions: cfg.Agent.MaxBudgetExtensions,
+	})
 	// LLM transport resilience (Package Zero): backoff/attempt policy for the
 	// agent retry loop, plus the process-wide SSE idle watchdog default.
 	applyLLMResilience(cfg)

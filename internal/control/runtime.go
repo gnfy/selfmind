@@ -410,6 +410,36 @@ func (s *Store) EnqueueDelivery(ctx context.Context, d Delivery) (*Delivery, err
 	return &d, nil
 }
 
+// PruneOutboundDeliveries removes old terminal delivery history while
+// preserving every row that can still be delivered, retried, or recovered
+// after an IM session refresh. The recoverable failed predicate intentionally
+// mirrors ListCatchUpEligible.
+func (s *Store) PruneOutboundDeliveries(ctx context.Context, olderThan time.Duration) (int64, error) {
+	if olderThan <= 0 {
+		return 0, nil
+	}
+	cutoff := time.Now().Add(-olderThan).Unix()
+	res, err := s.db.ExecContext(ctx,
+		`DELETE FROM outbound_messages
+		 WHERE updated_at < ?
+		   AND (
+		     status IN ('sent', 'dismissed')
+		     OR (
+		       status = 'failed'
+		       AND NOT (
+		         COALESCE(kind, '') IN ('final_result', 'approval', 'clarify', 'external_watch', 'recovery', 'maintenance_health')
+		         AND attempts < max_attempts
+		         AND (last_error LIKE '%ret=-2%' OR lower(last_error) LIKE '%prepare failed%')
+		       )
+		     )
+		   )`,
+		cutoff)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
 // staleSendingSeconds is how long a delivery may sit in 'sending' before the
 // due-poller may reclaim it. A claim normally resolves in seconds; a stale one
 // means the dispatcher crashed mid-send, so the row must become retryable

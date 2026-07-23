@@ -370,25 +370,70 @@ func (d *Server) contextDiagReply(ctx context.Context, identity *control.Identit
 		sb.WriteString("Breakdown: no context.breakdown event recorded yet\n")
 	}
 	sb.WriteString(promptPrefixStabilityLine(events))
+	sb.WriteString(promptCacheAggregateLine(events))
 	sb.WriteString(latestPromptCacheLine(events))
 	sb.WriteString(latestCompactionLine(events))
 	sb.WriteString(latestRecallLine(events))
 	return strings.TrimSpace(sb.String()), nil
 }
 
+func promptCacheAggregateLine(events []control.Event) string {
+	var calls, hits, input, read, created, billed int
+	creationReported := false
+	for _, e := range events {
+		if e.Type != "provider.call.usage" {
+			continue
+		}
+		var p struct {
+			InputTokens           int  `json:"input_tokens"`
+			CacheReadTokens       int  `json:"cache_read_input_tokens"`
+			CacheCreationTokens   int  `json:"cache_creation_input_tokens"`
+			CacheCreationReported bool `json:"cache_creation_reported"`
+			BilledInputTokens     int  `json:"billed_input_tokens"`
+		}
+		if json.Unmarshal(e.Payload, &p) != nil {
+			continue
+		}
+		calls++
+		input += p.InputTokens
+		read += p.CacheReadTokens
+		created += p.CacheCreationTokens
+		billed += p.BilledInputTokens
+		if p.CacheReadTokens > 0 {
+			hits++
+		}
+		creationReported = creationReported || p.CacheCreationReported
+	}
+	if calls == 0 {
+		return ""
+	}
+	hitRate := 0
+	if input > 0 {
+		hitRate = read * 100 / input
+	}
+	creation := "creation not reported by this transport"
+	if creationReported {
+		creation = fmt.Sprintf("created %d tok", created)
+	}
+	return fmt.Sprintf(
+		"Prompt cache (visible %d calls): read %d/%d tok (%d%%), hits %d/%d, %s, billed input %d tok\n",
+		calls, read, input, hitRate, hits, calls, creation, billed,
+	)
+}
+
 func latestPromptCacheLine(events []control.Event) string {
 	var callLine, runLine string
 	for _, e := range events {
 		var p struct {
-			Iteration           int    `json:"iteration"`
-			Transport           string `json:"transport"`
-			Status              string `json:"status"`
-			DurationMS          int64  `json:"duration_ms"`
-			InputTokens         int    `json:"input_tokens"`
-			CacheReadTokens     int    `json:"cache_read_input_tokens"`
-			CacheCreationTokens int    `json:"cache_creation_input_tokens"`
-			CacheCreationReported bool `json:"cache_creation_reported"`
-			BilledInputTokens   int    `json:"billed_input_tokens"`
+			Iteration             int    `json:"iteration"`
+			Transport             string `json:"transport"`
+			Status                string `json:"status"`
+			DurationMS            int64  `json:"duration_ms"`
+			InputTokens           int    `json:"input_tokens"`
+			CacheReadTokens       int    `json:"cache_read_input_tokens"`
+			CacheCreationTokens   int    `json:"cache_creation_input_tokens"`
+			CacheCreationReported bool   `json:"cache_creation_reported"`
+			BilledInputTokens     int    `json:"billed_input_tokens"`
 		}
 		if json.Unmarshal(e.Payload, &p) != nil {
 			continue

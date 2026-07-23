@@ -188,28 +188,33 @@ func cliDisplayName() string {
 }
 
 func (m *uiModel) forwardGatewayEvent(event llm.StreamEvent) {
+	m.forwardGatewayEventFrom(event, eventSourceTurn)
+}
+
+func (m *uiModel) forwardGatewayEventFrom(event llm.StreamEvent, source eventSource) {
 	if m.program == nil {
 		return
 	}
+	ref := eventRefFromStream(event, source)
 	switch event.EventType {
 	case "stream":
 		if event.Content != "" {
-			m.program.Send(MsgStream{Content: event.Content})
+			m.program.Send(MsgStream{Content: event.Content, Event: ref})
 		}
 	case "agent.thinking", "agent.step":
 		if event.Content != "" {
-			m.program.Send(MsgAgentActivity{Content: displayActivityEvent(event.EventType, event.Content)})
+			m.program.Send(MsgAgentActivity{Content: displayActivityEvent(event.EventType, event.Content), Event: ref})
 		}
 	case "tool.started":
 		// update_plan renders as a plan checklist driven by the plan.updated
 		// event (which carries the full structured plan); its raw tool.* events
 		// would only add a redundant summary cell, so skip them here.
-		if event.ToolName == "update_plan" {
+		if isHiddenLifecycleTool(event.ToolName) {
 			return
 		}
-		m.program.Send(MsgToolStart{ToolName: event.ToolName, ToolCallID: event.ToolCallID, Args: event.ToolArgs})
+		m.program.Send(MsgToolStart{ToolName: event.ToolName, ToolCallID: event.ToolCallID, Args: event.ToolArgs, Event: ref})
 	case "tool.completed":
-		if event.ToolName == "update_plan" {
+		if isHiddenLifecycleTool(event.ToolName) {
 			return
 		}
 		m.program.Send(MsgToolDone{
@@ -218,29 +223,30 @@ func (m *uiModel) forwardGatewayEvent(event llm.StreamEvent) {
 			Result:     event.ToolResult,
 			Err:        event.Err,
 			Duration:   event.DurationSeconds,
+			Event:      ref,
 		})
 	case "plan.updated":
 		// A plan is mutable run state, not immutable terminal history. Replace the
 		// live snapshot above the composer so progress updates in place.
 		if planJSON := planJSONFromEvent(event); planJSON != "" {
-			m.program.Send(MsgPlanUpdated{Content: planJSON})
+			m.program.Send(MsgPlanUpdated{Content: planJSON, Event: ref})
 		}
 	case "tool.output":
 		if event.Content != "" {
-			m.program.Send(MsgToolOutput{ToolName: event.ToolName, ToolCallID: event.ToolCallID, Content: event.Content})
+			m.program.Send(MsgToolOutput{ToolName: event.ToolName, ToolCallID: event.ToolCallID, Content: event.Content, Event: ref})
 		}
 	case "tool.heartbeat":
-		m.program.Send(MsgToolHeartbeat{ToolName: event.ToolName, ToolCallID: event.ToolCallID, Content: heartbeatStatus(event)})
+		m.program.Send(MsgToolHeartbeat{ToolName: event.ToolName, ToolCallID: event.ToolCallID, Content: heartbeatStatus(event), Event: ref})
 	case "learning.review":
 		if event.Content != "" {
-			m.program.Send(MsgLearningEvent{Content: event.Content})
+			m.program.Send(MsgLearningEvent{Content: event.Content, Event: ref})
 		}
 	case "token.updated":
 		// Live cumulative usage for the active run. The daemon-client path
 		// carries it in Usage (client.eventToStream); the in-process gateway
 		// path carries the raw payload (agentEventToStream), so read both.
 		if run := runTokensFromEvent(event); run > 0 {
-			m.program.Send(MsgTokens{Run: run})
+			m.program.Send(MsgTokens{Run: run, Event: ref})
 		}
 	case "approval.requested":
 		id, target := "", ""
@@ -266,6 +272,15 @@ func (m *uiModel) forwardGatewayEvent(event llm.StreamEvent) {
 			}
 		}
 		m.program.Send(MsgClarifyRequest{ID: id, Question: event.Content, Choices: clarifyChoicesFromPayload(event.Payload)})
+	}
+}
+
+func isHiddenLifecycleTool(name string) bool {
+	switch strings.TrimSpace(name) {
+	case "update_plan", "finish_run":
+		return true
+	default:
+		return false
 	}
 }
 
@@ -312,6 +327,9 @@ func (m *uiModel) pumpAgentEvents() {
 			case strings.HasPrefix(event, "tool_start:"):
 				parts := strings.SplitN(event[11:], ":", 2)
 				name := parts[0]
+				if isHiddenLifecycleTool(name) {
+					continue
+				}
 				args := ""
 				if len(parts) > 1 {
 					args = parts[1]
@@ -323,6 +341,9 @@ func (m *uiModel) pumpAgentEvents() {
 				rest := strings.TrimPrefix(event, "tool_end:")
 				parts := strings.SplitN(rest, ":", 3)
 				name := parts[0]
+				if isHiddenLifecycleTool(name) {
+					continue
+				}
 				durationStr := "0"
 				result := ""
 				var err error
@@ -362,12 +383,12 @@ func (m *uiModel) handleStructuredAgentEvent(event kernel.AgentEvent) {
 			m.program.Send(MsgAgentActivity{Content: displayActivityEvent(event.Type, event.Content)})
 		}
 	case "tool.started":
-		if event.ToolName == "update_plan" {
+		if isHiddenLifecycleTool(event.ToolName) {
 			return
 		}
 		m.program.Send(MsgToolStart{ToolName: event.ToolName, ToolCallID: event.ToolCallID, Args: event.ToolArgs})
 	case "tool.completed":
-		if event.ToolName == "update_plan" {
+		if isHiddenLifecycleTool(event.ToolName) {
 			return
 		}
 		var err error

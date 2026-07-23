@@ -89,6 +89,55 @@ type TaskStrategy struct {
 	Reason                string
 }
 
+// ToolBudgetPolicy is the configurable envelope around the evidence-gated
+// action-tool budget. It deliberately contains no language, framework, tool,
+// or task-name rules.
+type ToolBudgetPolicy struct {
+	Initial       int
+	Step          int
+	Limit         int
+	MaxExtensions int
+}
+
+func (p ToolBudgetPolicy) normalized() ToolBudgetPolicy {
+	if p.Initial < 0 {
+		p.Initial = 0
+	}
+	if p.Step < 0 {
+		p.Step = 0
+	}
+	if p.Limit < 0 {
+		p.Limit = 0
+	}
+	if p.MaxExtensions < 0 {
+		p.MaxExtensions = 0
+	}
+	if p.Limit > 0 && p.Initial > p.Limit {
+		p.Initial = p.Limit
+	}
+	return p
+}
+
+func (p ToolBudgetPolicy) apply(strategy TaskStrategy) TaskStrategy {
+	p = p.normalized()
+	if strategy.ToolMode == ToolModeNone {
+		return strategy
+	}
+	if p.Initial > 0 {
+		strategy.MaxActionTools = p.Initial
+	}
+	if p.Step > 0 {
+		strategy.ActionToolBudgetStep = p.Step
+	}
+	if p.Limit > 0 {
+		strategy.ActionToolBudgetLimit = p.Limit
+	}
+	if p.MaxExtensions > 0 {
+		strategy.MaxBudgetExtensions = p.MaxExtensions
+	}
+	return strategy.normalized()
+}
+
 // DefaultTaskStrategy is agent-first: expose the local tool surface and let the
 // model decide whether tools are useful. Expensive or externally scoped tools
 // stay hidden until the user explicitly asks for them.

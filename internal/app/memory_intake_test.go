@@ -136,6 +136,69 @@ func TestIntakeDecisionPolicy(t *testing.T) {
 
 // TestIntakeSupersedeConfidenceGate: an under-confident SUPERSEDE never
 // retires the old belief — it degrades to CONFLICT (both kept).
+func TestPostRunAnalyzerReinforcesCanonicalWithoutRecreatingLegacyFact(t *testing.T) {
+	provider, err := memory.NewSQLiteProvider(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer provider.Close()
+	mem := memory.NewMemoryManager(provider)
+	ctx := context.Background()
+	store, ok := mem.Canonical()
+	if !ok {
+		t.Fatal("canonical store missing")
+	}
+	const statement = "User prefers concise daily reports with one item per line"
+	if err := store.ApplyIntakeWrite(ctx, "person", memory.IntakeWrite{
+		Decision:        "ADD",
+		Target:          "user",
+		Scope:           "global",
+		Source:          memory.SourceFactExtractor,
+		Content:         statement,
+		RunID:           "seed-run",
+		Confidence:      0.8,
+		AnalyzerVersion: 1,
+		DecisionKey:     "seed",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	model := &capturingProviderStub{content: `{
+		"task_decision":"KEEP",
+		"user_facts":["User prefers concise daily reports with one item per line"]
+	}`}
+	analyzer := &llmPostRunAnalyzer{provider: model, memory: mem}
+	req := httpapi.PostRunAnalysisRequest{
+		Prompt: "analyze", TurnText: "Please keep the report concise, with one item per line.",
+		TenantID: "tenant", PersonID: "person", WorkspaceID: "ws", TaskID: "task", RunID: "new-run",
+	}
+	analysis, err := analyzer.Analyze(ctx, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(model.lastPrompt, statement) {
+		t.Fatalf("canonical neighbor missing from prompt:\n%s", model.lastPrompt)
+	}
+	if err := analyzer.Apply(ctx, req, analysis); err != nil {
+		t.Fatal(err)
+	}
+
+	legacy, err := mem.GetFacts(ctx, "person", "user")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(legacy) != 0 {
+		t.Fatalf("canonical reinforcement recreated legacy facts: %+v", legacy)
+	}
+	canonicals, err := store.ListCanonicalMemories(ctx, "person", memory.CanonicalFilter{Target: "user"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(canonicals) != 1 || canonicals[0].EvidenceCount < 2 {
+		t.Fatalf("canonical evidence was not reinforced: %+v", canonicals)
+	}
+}
+
 func TestIntakeSupersedeConfidenceGate(t *testing.T) {
 	provider, err := memory.NewSQLiteProvider(t.TempDir())
 	if err != nil {

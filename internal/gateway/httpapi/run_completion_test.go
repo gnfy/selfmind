@@ -151,3 +151,58 @@ func TestFinalizeErroredRunIsDurableAndResumable(t *testing.T) {
 		t.Fatalf("maintenance replay = %#v", replay)
 	}
 }
+
+func TestFinalizeErroredRunPreservesDurableStructuredOutcome(t *testing.T) {
+	ctx := context.Background()
+	store, err := control.OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Local User")
+	if err != nil {
+		t.Fatalf("identity: %v", err)
+	}
+	task, err := store.CreateTask(ctx, control.TaskCreate{
+		TenantID: identity.TenantID,
+		PersonID: identity.PersonID,
+		Title:    "durable finish",
+		Channel:  "cli",
+	})
+	if err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	run, err := store.StartRun(ctx, task, "cli", "finish the work")
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+	_, err = store.AppendEvent(ctx, control.Event{
+		TaskID:     task.ID,
+		RunID:      run.ID,
+		Type:       "run.outcome",
+		Visibility: "task",
+		Channel:    "cli",
+		Payload: mustJSON(api.RunOutcome{
+			Status:  "done",
+			Summary: "The requested work was completed.",
+			Done:    []string{"Merged the pull request."},
+		}),
+	})
+	if err != nil {
+		t.Fatalf("AppendEvent: %v", err)
+	}
+
+	server := &Server{Control: store, DefaultTenantID: "default"}
+	outcome := server.coordinator().finalizeErroredRun(ctx, identity, task, run, "cli", errors.New("unexpected EOF"))
+	if outcome.Status != "done" || outcome.CompletionReason != "completed" || outcome.Resumable {
+		t.Fatalf("outcome = %#v", outcome)
+	}
+	runs, err := store.ListTaskRuns(ctx, identity.TenantID, task.ID, 10)
+	if err != nil || len(runs) != 1 || runs[0].Status != "done" {
+		t.Fatalf("runs = %#v, err=%v", runs, err)
+	}
+	gotTask, err := store.GetTask(ctx, identity.TenantID, task.ID)
+	if err != nil || gotTask.Status != "done" {
+		t.Fatalf("task = %#v, err=%v", gotTask, err)
+	}
+}

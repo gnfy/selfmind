@@ -297,10 +297,7 @@ func (a *llmPostRunAnalyzer) addFactWithDedup(ctx context.Context, req httpapi.P
 	if content == "" {
 		return nil
 	}
-	existing, err := a.memory.GetFacts(ctx, memoryPartition(req), target)
-	if err != nil {
-		return fmt.Errorf("read existing %s facts: %w", target, err)
-	}
+	existing := a.readModelFactsForTarget(ctx, req, target)
 	if match := findDuplicatePostRunFact(content, existing); match != nil {
 		return a.reinforceFact(ctx, req, target, *match, content)
 	}
@@ -326,6 +323,10 @@ func (a *llmPostRunAnalyzer) addFactWithDedup(ctx context.Context, req httpapi.P
 func (a *llmPostRunAnalyzer) supersedeFact(ctx context.Context, req httpapi.PostRunAnalysisRequest, target string, old memory.Fact, content string) error {
 	content = strings.TrimSpace(content)
 	if content == "" {
+		return nil
+	}
+	if old.Canonical {
+		tools.RecordMemoryLearningChangeScoped(memoryPartition(req), target, old.Scope, "replace", old.Content, content, "post_run_analyzer")
 		return nil
 	}
 	if err := a.memory.RemoveFact(ctx, memoryPartition(req), old.ID); err != nil {

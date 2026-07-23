@@ -58,11 +58,30 @@ func (c *RunCoordinator) finalizeErroredRun(ctx context.Context, identity *contr
 	if len(replay) > 0 {
 		evidence = replay[0]
 	}
+	// A successful finish_run is durable before the provider stream necessarily
+	// closes. If the transport fails after that point, preserve the model's
+	// structured business outcome instead of repainting completed work as an
+	// interruption. Cancellation and daemon shutdown remain authoritative.
+	structured := false
+	if outcome.Status == "interrupted" && outcome.CompletionReason == "provider_or_transport_error" {
+		if recorded, ok := c.latestStructuredRunOutcome(finCtx, task.ID, run.ID); ok {
+			structured = true
+			outcome = reconcileStructuredOutcome(recorded)
+			verification, evidenceFiles := c.evidenceOutcome(finCtx, task.ID, run.ID)
+			outcome.Verification, outcome.Files = mergeEvidenceFiles(verification, evidenceFiles, outcome.Files)
+			outcome = applyVerificationOutcome(outcome)
+		}
+	}
 	handoff := control.Handoff{
 		TaskID:    task.ID,
 		Summary:   outcome.Summary,
 		NextSteps: outcome.NextSteps,
 		Risks:     outcome.Risks,
+	}
+	taskStatus := outcome.Status
+	if structured {
+		taskStatus = taskStatusForFinalization(outcome, true)
+		eventType = "run.finished"
 	}
 	event := control.Event{
 		TaskID:     task.ID,
@@ -75,7 +94,7 @@ func (c *RunCoordinator) finalizeErroredRun(ctx context.Context, identity *contr
 			"error":   firstString(outcome.Risks),
 		}),
 	}
-	if err := c.materializeRunFinalization(finCtx, identity, task, run, outcome.Status,
+	if err := c.materializeRunFinalization(finCtx, identity, task, run, taskStatus,
 		evidence.WorkspaceID, evidence.UserInput, channel, "", outcome, evidence.Attach, handoff, event); err != nil {
 		return outcome
 	}

@@ -286,6 +286,7 @@ type DigestPush struct {
 // renders (bounded, pre-rendered lines) plus the latest progress event, so
 // reopening the CLI answers "how far along is it?" at a glance.
 type DigestActiveRun struct {
+	RunID          string `json:"run_id,omitempty"`
 	TaskID         string `json:"task_id,omitempty"`
 	Title          string `json:"title,omitempty"`
 	ElapsedSeconds int64  `json:"elapsed_seconds"`

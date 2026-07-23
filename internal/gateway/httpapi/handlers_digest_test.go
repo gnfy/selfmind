@@ -141,7 +141,8 @@ func TestDigestReportsAwayStateAndActiveRun(t *testing.T) {
 	if strings.Contains(digest.UnconfirmedPushes[0].Preview, "\n") {
 		t.Fatalf("push preview must be one line: %q", digest.UnconfirmedPushes[0].Preview)
 	}
-	if digest.ActiveRun == nil || digest.ActiveRun.TaskID != running.ID ||
+	if digest.ActiveRun == nil || digest.ActiveRun.RunID != "run_1" ||
+		digest.ActiveRun.TaskID != running.ID ||
 		digest.ActiveRun.Title != "Long migration" || digest.ActiveRun.ElapsedSeconds < 11*60 {
 		t.Fatalf("active run = %+v", digest.ActiveRun)
 	}

@@ -25,6 +25,7 @@ var cellRenderers = map[string]cellRenderer{
 	"assistant": func(m ChatMessage, w int) string { return renderAssistantMessage(stripANSI(m.Content), w) },
 	"tool":      func(m ChatMessage, w int) string { return renderToolMessage(m, w) },
 	"system":    func(m ChatMessage, w int) string { return renderSystemMessage(stripANSI(m.Content), w) },
+	"digest":    func(m ChatMessage, w int) string { return renderDigestMessage(stripANSI(m.Content), w) },
 	"notice":    func(m ChatMessage, w int) string { return renderNoticeMessage(stripANSI(m.Content), w) },
 }
 
@@ -936,6 +937,30 @@ func renderSystemMessage(content string, width int) string {
 		sb.WriteString("  " + glyphCorner + " " + line + "\n")
 	}
 	return sb.String()
+}
+
+func renderDigestMessage(content string, width int) string {
+	content = strings.TrimSpace(content)
+	if content == "" {
+		return ""
+	}
+	if width < 12 {
+		width = 12
+	}
+	lines := strings.Split(wrapText(content, width-4), "\n")
+	var sb strings.Builder
+	for i, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		if i == 0 {
+			sb.WriteString(glyphBullet + " " + line + "\n")
+			continue
+		}
+		sb.WriteString("  " + glyphCorner + " " + line + "\n")
+	}
+	return lipgloss.NewStyle().Faint(true).Render(strings.TrimRight(sb.String(), "\n"))
 }
 
 func toolAction(label string, args map[string]interface{}, done bool) string {

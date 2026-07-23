@@ -162,6 +162,7 @@ gateway:
   token: ""                    # 共享密钥；非 loopback 绑定时强制
   presence_idle_timeout: "5m"  # CLI 空闲这么久后不再算"已附着"（推送转到 IM）
   pending_notify_after: "2m"   # 无人应答的审批/提问在此时长后补推到 IM
+  outbound_retention: "336h"   # 终态投递记录保留 14 天；0 表示禁用清理
   delivery_max_message_chars: 3500
   delivery_retry_attempts: 3
 ```
@@ -304,6 +305,10 @@ mcp:
 ```yaml
 agent:
   max_iterations: 90            # 每轮工具循环最大步数
+  action_tool_budget: 12        # 使用工具的回合初始 action 预算
+  action_tool_budget_step: 6    # 有新证据时单次扩展量
+  action_tool_budget_limit: 64  # action 工具硬上限
+  max_budget_extensions: 9      # 最多扩展次数
   max_retries: 3
   log_level: "INFO"             # DEBUG | INFO | WARN | ERROR
   llm_max_retries: 5            # 传输层重试次数
@@ -319,7 +324,9 @@ evolution:
   nudge_interval: 10
 ```
 
-默认值已按常规使用调好；只在排查传输抖动或调工具循环时才动。
+工具预算对所有语言和任务类型统一生效，不使用关键词分类；只有持续产生
+新证据才会扩展，简单回答也不会因此被强制调用工具。默认值已按常规使用
+调好；只在排查传输抖动或调工具循环时才动。
 
 ---
 

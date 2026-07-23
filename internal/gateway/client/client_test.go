@@ -576,6 +576,72 @@ func TestWatchActiveRunStreamsAndDetectsRunEnd(t *testing.T) {
 	}
 }
 
+func TestWatchRunFiltersOtherRunEventsAndPreservesIdentity(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/events/stream" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		flusher := w.(http.Flusher)
+		writeTestRunEvent(w, api.RunEvent{Type: "ready", Durability: api.EventEphemeral})
+		writeTestRunEvent(w, api.RunEvent{
+			EventID:    "other-tool",
+			Cursor:     1,
+			RunID:      "run-other",
+			Type:       "tool.started",
+			Durability: api.EventDurable,
+			Payload:    mustJSON(map[string]any{"tool": "terminal", "args": "echo other"}),
+		})
+		writeTestRunEvent(w, api.RunEvent{
+			EventID:    "other-finished",
+			Cursor:     2,
+			RunID:      "run-other",
+			Type:       "run.finished",
+			Durability: api.EventDurable,
+			Payload:    mustJSON(map[string]any{"outcome": map[string]any{"status": "done", "summary": "other complete"}}),
+		})
+		writeTestRunEvent(w, api.RunEvent{
+			EventID:    "target-tool",
+			Cursor:     3,
+			LiveSeq:    7,
+			RunID:      "run-target",
+			Type:       "tool.started",
+			Durability: api.EventDurable,
+			Payload:    mustJSON(map[string]any{"tool": "read_file", "args": "README.md"}),
+		})
+		writeTestRunEvent(w, api.RunEvent{
+			EventID:    "target-finished",
+			Cursor:     4,
+			RunID:      "run-target",
+			Type:       "run.finished",
+			Durability: api.EventDurable,
+			Payload:    mustJSON(map[string]any{"outcome": map[string]any{"status": "done", "summary": "target complete"}}),
+		})
+		flusher.Flush()
+		<-r.Context().Done()
+	}))
+	defer srv.Close()
+
+	c := New(srv.URL, "")
+	var got []llm.StreamEvent
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	summary := c.WatchRun(ctx, "run-target", func(event llm.StreamEvent) {
+		got = append(got, event)
+	})
+
+	if summary != "target complete" {
+		t.Fatalf("summary = %q, want target complete", summary)
+	}
+	if len(got) != 1 {
+		t.Fatalf("observer events = %+v, want one target event", got)
+	}
+	if got[0].RunID != "run-target" || got[0].EventID != "target-tool" || got[0].Cursor != 3 || got[0].LiveSeq != 7 {
+		t.Fatalf("event identity was not preserved: %+v", got[0])
+	}
+}
+
 // TestWatchActiveRunFallsBackToCurrentTaskProbe: a run that finalizes without
 // a terminal event (failure paths) still ends the watch via the
 // /v1/tasks/current probe.

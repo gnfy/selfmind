@@ -125,6 +125,7 @@ func (d *Server) buildDigest(ctx context.Context, identity *control.IdentityCont
 
 	if active := d.coordinator().currentActive(identity.PersonID); active != nil {
 		run := &api.DigestActiveRun{
+			RunID:          active.RunID,
 			TaskID:         active.TaskID,
 			Title:          strings.TrimSpace(active.Summary),
 			ElapsedSeconds: int64(time.Since(active.StartedAt).Seconds()),

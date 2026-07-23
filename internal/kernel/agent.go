@@ -47,6 +47,7 @@ type Agent struct {
 	contextScanner   *ContextScanner
 	semanticExpander *memory.SemanticExpander
 	useMemoryFence   bool
+	toolBudgetPolicy ToolBudgetPolicy
 	EventChannel     chan string // emits "tool_start:name" and "tool_end:name:result" events
 	runMu            sync.Mutex
 	syncQueue        chan syncTurnRequest
@@ -95,6 +96,13 @@ func (a *Agent) SetNudgeInterval(n int) {
 	if n > 0 {
 		a.nudgeInterval = n
 	}
+}
+
+// SetToolBudgetPolicy configures one generic, evidence-gated tool budget for
+// every language and workflow. Task strategies may still tighten individual
+// turns; the policy only replaces positive values supplied by configuration.
+func (a *Agent) SetToolBudgetPolicy(policy ToolBudgetPolicy) {
+	a.toolBudgetPolicy = policy.normalized()
 }
 
 func (a *Agent) SetBackgroundReviewEngine(engine *BackgroundReviewEngine) {
@@ -626,6 +634,7 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 		strategy = BuildTaskStrategy(initialPrompt, channel)
 	}
 	strategy = strategy.normalized()
+	strategy = a.toolBudgetPolicy.apply(strategy)
 
 	// Route this run's model calls per strategy (simple direct-answer turns may
 	// use a fast model). Safe because runMu serializes RunConversation.
@@ -2056,8 +2065,8 @@ func (a *Agent) buildSystemPrompt(ctx context.Context, tenantID string, strategy
 		currentScope = "workspace:" + ws.ID
 	}
 	now := time.Now()
-	userFacts = memory.SelectFacts(userFacts, currentScope, now, maxFactsEach)
-	memFacts = memory.SelectFacts(memFacts, currentScope, now, maxFactsEach)
+	userFacts = memory.SelectFactsForPrompt(userFacts, currentScope, userInput, now, maxFactsEach)
+	memFacts = memory.SelectFactsForPrompt(memFacts, currentScope, userInput, now, maxFactsEach)
 	accessedIDs := selectedCanonicalAccessIDs(servedCanonicalIDs, pinnedFacts, userFacts, memFacts)
 
 	if len(pinnedFacts) > 0 || len(userFacts) > 0 || len(memFacts) > 0 {

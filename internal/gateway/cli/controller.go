@@ -145,8 +145,11 @@ type uiModel struct {
 	// (no local turn owns it, the composer is NOT captured). Distinct from
 	// m.thinking, which means "a local turn is executing".
 	watchingRun      bool
+	watchedRunID     string
 	watchedTaskTitle string
 	watchCancel      context.CancelFunc
+	seenEventKeys    map[string]struct{}
+	seenEventOrder   []string
 	// exitPromptActive intercepts keys while the quit-with-active-run prompt
 	// is shown (b = background+quit, c = cancel+stay, esc = keep watching).
 	exitPromptActive bool
@@ -162,6 +165,7 @@ type MsgCursorBlinkTick time.Time
 type MsgStreamFlush time.Time
 type MsgAgentActivity struct {
 	Content string
+	Event   uiEventRef
 }
 
 // MsgApprovalRequest is emitted (client mode) when the daemon blocks a run
@@ -598,24 +602,28 @@ type MsgAgentDone struct {
 
 type MsgStream struct {
 	Content string
+	Event   uiEventRef
 }
 
 type MsgToolStart struct {
 	ToolName   string
 	ToolCallID string
 	Args       string
+	Event      uiEventRef
 }
 
 type MsgToolOutput struct {
 	ToolName   string
 	ToolCallID string
 	Content    string
+	Event      uiEventRef
 }
 
 type MsgToolHeartbeat struct {
 	ToolName   string
 	ToolCallID string
 	Content    string
+	Event      uiEventRef
 }
 
 type MsgToolDone struct {
@@ -624,6 +632,7 @@ type MsgToolDone struct {
 	Result     string
 	Err        error
 	Duration   float64
+	Event      uiEventRef
 }
 
 // MsgPlanUpdated replaces the live plan shown above the composer. Plan events
@@ -631,10 +640,12 @@ type MsgToolDone struct {
 // useful while the run is active, and finalized terminal history stays clean.
 type MsgPlanUpdated struct {
 	Content string
+	Event   uiEventRef
 }
 
 type MsgLearningEvent struct {
 	Content string
+	Event   uiEventRef
 }
 
 // MsgTokens is a live cumulative token-usage snapshot for the active run,
@@ -642,7 +653,8 @@ type MsgLearningEvent struct {
 // so far; it updates the status bar mid-run while the final response usage
 // stays authoritative for session totals.
 type MsgTokens struct {
-	Run int
+	Run   int
+	Event uiEventRef
 }
 
 // MsgWorkspaceSwitched reports a successful gateway /workspace switch, carrying

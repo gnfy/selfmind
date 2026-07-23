@@ -196,6 +196,9 @@ gateway:
   # 补推到你的首选 IM。托管扫描每 60 秒一次,所以实际延迟约为该值 + 最多 60 秒。
   # "0" 表示关闭补推。
   pending_notify_after: "2m"
+  # 已终结的投递历史默认保留 14 天；待补投、重试和会话恢复记录不会清理。
+  # "0" 表示禁用清理。
+  outbound_retention: "336h"
   # 通用 outbound webhook，可用于自定义 IM relay 回发。
   outbound_webhook_url: ""
   outbound_webhook_token: ""
@@ -208,6 +211,10 @@ gateway:
 agent:
   soul: "You are SelfMind, a helpful AI assistant."
   max_iterations: 90
+  action_tool_budget: 12
+  action_tool_budget_step: 6
+  action_tool_budget_limit: 64
+  max_budget_extensions: 9
   max_retries: 3
   log_level: "INFO"
   # LLM 传输韧性（Package Zero）。留空或 0 = 使用合理默认值。

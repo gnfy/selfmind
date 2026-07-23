@@ -258,12 +258,15 @@ func forwardRunEvent(event api.RunEvent, observer httpapi.StreamObserver) {
 		var streamEvent llm.StreamEvent
 		if json.Unmarshal(event.Payload, &streamEvent) == nil && streamEvent.Content != "" {
 			streamEvent.EventType = "stream"
-			observer(streamEvent)
+			observer(decorateStreamEvent(streamEvent, event))
 		}
 		return
 	}
 	if event.Type == "stream.gap" {
-		observer(llm.StreamEvent{EventType: "agent.step", Content: "Reconnected to the event stream; recovering durable progress."})
+		observer(decorateStreamEvent(llm.StreamEvent{
+			EventType: "agent.step",
+			Content:   "Reconnected to the event stream; recovering durable progress.",
+		}, event))
 		return
 	}
 	controlEvent := control.Event{
@@ -272,8 +275,18 @@ func forwardRunEvent(event api.RunEvent, observer httpapi.StreamObserver) {
 		Type: event.Type, CreatedAt: event.CreatedAt, Payload: event.Payload,
 	}
 	if streamEvent, ok := eventToStream(controlEvent); ok {
-		observer(streamEvent)
+		observer(decorateStreamEvent(streamEvent, event))
 	}
+}
+
+func decorateStreamEvent(streamEvent llm.StreamEvent, event api.RunEvent) llm.StreamEvent {
+	streamEvent.EventID = event.EventID
+	streamEvent.Cursor = event.Cursor
+	streamEvent.LiveSeq = event.LiveSeq
+	streamEvent.TaskID = event.TaskID
+	streamEvent.RunID = event.RunID
+	streamEvent.Durability = event.Durability
+	return streamEvent
 }
 
 func sleepContext(ctx context.Context, delay time.Duration) bool {
@@ -489,12 +502,34 @@ func (c *Client) Digest(ctx context.Context) (*api.DigestResponse, error) {
 // for older daemons and exceptional finalization paths).
 // Returns the finished run's outcome summary when one is available.
 func (c *Client) WatchActiveRun(ctx context.Context, observer httpapi.StreamObserver) string {
+	return c.watchRun(ctx, "", observer)
+}
+
+// WatchRun follows one explicit daemon run. Person-level event streams may
+// carry activity from a newly queued run before the old stream connection is
+// torn down, so both terminal detection and rendering are filtered by run ID.
+func (c *Client) WatchRun(ctx context.Context, runID string, observer httpapi.StreamObserver) string {
+	return c.watchRun(ctx, strings.TrimSpace(runID), observer)
+}
+
+func (c *Client) watchRun(ctx context.Context, runID string, observer httpapi.StreamObserver) string {
 	req := api.MessageRequest{Platform: "cli", PlatformUserID: clientUserID()}
 	watchCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	terminal := make(chan api.RunEvent, 1)
 	probeNow := make(chan struct{}, 1)
-	go c.streamEvents(watchCtx, req, observer, func(event api.RunEvent) {
+	filteredObserver := observer
+	if runID != "" && observer != nil {
+		filteredObserver = func(event llm.StreamEvent) {
+			if event.RunID == runID {
+				observer(event)
+			}
+		}
+	}
+	go c.streamEvents(watchCtx, req, filteredObserver, func(event api.RunEvent) {
+		if runID != "" && event.RunID != runID {
+			return
+		}
 		switch event.Type {
 		case "run.finished", "run.cancelled", "run.interrupted", "run.failed":
 			select {
@@ -517,11 +552,11 @@ func (c *Client) WatchActiveRun(ctx context.Context, observer httpapi.StreamObse
 		case event := <-terminal:
 			return runEventOutcomeSummary(event)
 		case <-probeNow:
-			if gone, ok := c.activeRunGone(ctx, req); ok && gone {
+			if gone, ok := c.activeRunGone(ctx, req, runID); ok && gone {
 				return ""
 			}
 		case <-ticker.C:
-			if gone, ok := c.activeRunGone(ctx, req); ok && gone {
+			if gone, ok := c.activeRunGone(ctx, req, runID); ok && gone {
 				return ""
 			}
 		}
@@ -531,7 +566,7 @@ func (c *Client) WatchActiveRun(ctx context.Context, observer httpapi.StreamObse
 // activeRunGone probes GET /v1/tasks/current and reports whether the person
 // has no active run anymore. ok=false means the probe itself failed (keep
 // watching rather than mistaking a network blip for run completion).
-func (c *Client) activeRunGone(ctx context.Context, req api.MessageRequest) (gone, ok bool) {
+func (c *Client) activeRunGone(ctx context.Context, req api.MessageRequest, runID string) (gone, ok bool) {
 	q := url.Values{}
 	if req.TenantID != "" {
 		q.Set("tenant_id", req.TenantID)
@@ -559,7 +594,13 @@ func (c *Client) activeRunGone(ctx context.Context, req api.MessageRequest) (gon
 	if json.NewDecoder(httpResp.Body).Decode(&payload) != nil {
 		return false, false
 	}
-	return payload.ActiveRun == nil, true
+	if payload.ActiveRun == nil {
+		return true, true
+	}
+	if runID != "" && payload.ActiveRun.RunID != runID {
+		return true, true
+	}
+	return false, true
 }
 
 // runOutcomeSummary extracts the outcome summary a run.finished event carries

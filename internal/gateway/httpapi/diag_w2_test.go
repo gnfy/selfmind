@@ -82,6 +82,40 @@ func TestLatestPromptCacheLineReportsUnavailableCreationCounter(t *testing.T) {
 	}
 }
 
+func TestPromptCacheAggregateLine(t *testing.T) {
+	events := []control.Event{
+		eventWith("provider.call.usage", map[string]interface{}{
+			"input_tokens": 100, "cache_read_input_tokens": 80,
+			"cache_creation_input_tokens": 10, "cache_creation_reported": true, "billed_input_tokens": 20,
+		}),
+		eventWith("provider.call.usage", map[string]interface{}{
+			"input_tokens": 200, "cache_read_input_tokens": 0,
+			"cache_creation_reported": false, "billed_input_tokens": 200,
+		}),
+		eventWith("token.updated", map[string]interface{}{"input_tokens": 999}),
+	}
+	out := promptCacheAggregateLine(events)
+	for _, want := range []string{
+		"visible 2 calls", "read 80/300 tok (26%)", "hits 1/2", "created 10 tok", "billed input 220 tok",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("aggregate cache line missing %q: %s", want, out)
+		}
+	}
+	if got := promptCacheAggregateLine(nil); got != "" {
+		t.Fatalf("empty events must not add a duplicate absence line: %q", got)
+	}
+}
+
+func TestPromptCacheAggregateLineReportsUnavailableCreationCounter(t *testing.T) {
+	out := promptCacheAggregateLine([]control.Event{eventWith("provider.call.usage", map[string]interface{}{
+		"input_tokens": 100, "cache_read_input_tokens": 80, "billed_input_tokens": 20,
+	})})
+	if !strings.Contains(out, "creation not reported by this transport") {
+		t.Fatalf("missing creation counter must be explicit: %s", out)
+	}
+}
+
 func TestPromptPrefixStabilityLine(t *testing.T) {
 	stable := []control.Event{
 		eventWith("context.breakdown", map[string]interface{}{"stable_prefix_hash": "same"}),

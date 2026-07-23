@@ -94,6 +94,14 @@ func Run(ctx context.Context, opts Options) error {
 		return fmt.Errorf("control.OpenStore failed: %w", err)
 	}
 	defer controlStore.Close()
+	if retention := cfg.Gateway.OutboundRetentionDuration(); retention > 0 {
+		pruned, pruneErr := controlStore.PruneOutboundDeliveries(context.Background(), retention)
+		if pruneErr != nil {
+			log.Warn("gateway: outbound retention sweep failed", "error", pruneErr)
+		} else if pruned > 0 {
+			log.Info("gateway: pruned terminal outbound history", "count", pruned, "retention", retention)
+		}
+	}
 	// Boot-time stuck-run recovery: manager.Acquire above holds the
 	// gateway.lock flock, so this is the ONLY daemon on this control.db and
 	// every run still 'running' here was orphaned by a previous daemon

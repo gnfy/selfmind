@@ -86,7 +86,7 @@ func (a *App) tryRunTUIClient(cfg *config.Config) (int, bool) {
 	ctrl.SetSteerFunc(client.SteerRun)
 	// Re-attach to a mid-flight daemon run (G0-d): when the attach digest
 	// reports one, the controller watches its live events without a user turn.
-	ctrl.SetRunWatcher(client.WatchActiveRun)
+	ctrl.SetRunWatcher(client.WatchRun)
 	// Attach digest (G0-c). Ordering is load-bearing: the digest must be
 	// fetched BEFORE the first presence beat below, because that beat stamps
 	// accounts.last_seen_at — the very "since last CLI presence" anchor the

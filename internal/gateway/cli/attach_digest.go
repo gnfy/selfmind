@@ -22,13 +22,14 @@ import (
 // RunWatcher follows the person's mid-flight daemon run: it streams live
 // events into the observer until the run ends and returns the recorded
 // outcome summary (empty when none). Client mode wires it to
-// client.WatchActiveRun; it must honor ctx cancellation (local detach).
-type RunWatcher func(ctx context.Context, observer httpapi.StreamObserver) string
+// client.WatchRun; it must honor ctx cancellation (local detach).
+type RunWatcher func(ctx context.Context, runID string, observer httpapi.StreamObserver) string
 
 // MsgAttachedRunDone is emitted when a watched (re-attached) run ends.
 // Cancelled marks a local cancel (the user chose c on the exit prompt), which
 // cancelActiveRunLocally has already reported.
 type MsgAttachedRunDone struct {
+	RunID     string
 	Summary   string
 	Cancelled bool
 }
@@ -65,8 +66,9 @@ func (m *uiModel) maybeShowStartupDigest(width int) tea.Cmd {
 	if text == "" {
 		return nil
 	}
-	m.addMessage("system", text)
+	m.addMessage("digest", text)
 	if m.startupDigest.ActiveRun != nil && m.clientMode && m.runWatcher != nil {
+		m.watchedRunID = strings.TrimSpace(m.startupDigest.ActiveRun.RunID)
 		m.watchedTaskTitle = strings.TrimSpace(m.startupDigest.ActiveRun.Title)
 		return m.attachToActiveRun()
 	}
@@ -92,13 +94,38 @@ func (m *uiModel) attachToActiveRun() tea.Cmd {
 	ctx, cancel := context.WithCancel(context.Background())
 	m.watchCancel = cancel
 	watcher := m.runWatcher
+	runID := m.watchedRunID
 	return func() tea.Msg {
-		summary := watcher(ctx, func(event llm.StreamEvent) {
+		summary := watcher(ctx, runID, func(event llm.StreamEvent) {
 			if event.EventType != "" {
-				m.forwardGatewayEvent(event)
+				m.forwardGatewayEventFrom(event, eventSourceWatch)
 			}
 		})
-		return MsgAttachedRunDone{Summary: summary, Cancelled: ctx.Err() != nil}
+		return MsgAttachedRunDone{RunID: runID, Summary: summary, Cancelled: ctx.Err() != nil}
+	}
+}
+
+// detachWatchedRunForNewTurn closes the passive view before a new user cell is
+// committed. The daemon-owned run keeps executing; only this terminal's live
+// projection is detached. This makes transcript order deterministic and lets
+// acceptEvent reject any watcher messages already queued in Bubble Tea.
+func (m *uiModel) detachWatchedRunForNewTurn() {
+	if !m.watchingRun {
+		return
+	}
+	m.finalizeLiveStream("")
+	m.watchingRun = false
+	m.watchedRunID = ""
+	m.watchedTaskTitle = ""
+	if m.watchCancel != nil {
+		m.watchCancel()
+	}
+	m.watchCancel = nil
+	m.toolExecuting = ""
+	m.activePlanJSON = ""
+	m.discardOpenToolMessages()
+	if strings.HasPrefix(m.statusMsg, "Watching ") {
+		m.statusMsg = ""
 	}
 }
 

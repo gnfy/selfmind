@@ -5,11 +5,11 @@ import (
 	"strings"
 )
 
-const Version = "v0.1.0"
-
-// Commit and BuiltAt are populated by release builds through -ldflags. They
-// deliberately remain readable defaults for local `go test` and `go run`.
 var (
+	// Version, Commit, and BuiltAt are populated by release builds through
+	// -ldflags. They deliberately remain readable defaults for local `go test`
+	// and `go run`.
+	Version = "v0.1.0-dev"
 	Commit  = "dev"
 	BuiltAt = ""
 )

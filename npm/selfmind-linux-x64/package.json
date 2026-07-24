@@ -1,0 +1,19 @@
+{
+  "name": "selfmind-linux-x64",
+  "version": "0.0.0-dev",
+  "description": "SelfMind native binary for Linux x64",
+  "license": "Apache-2.0",
+  "os": [
+    "linux"
+  ],
+  "cpu": [
+    "x64"
+  ],
+  "files": [
+    "vendor"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/gnfy/selfmind.git"
+  }
+}

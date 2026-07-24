@@ -428,6 +428,7 @@ func TestPatchToolMessageSummarizesStructuredJSON(t *testing.T) {
 func TestStatusLineShowsTotalElapsedWhileToolRuns(t *testing.T) {
 	model := NewController(nil, nil, nil, "").model
 	model.runStatus = "working"
+	model.localRequestActive = true
 	model.thinkingStart = time.Now().Add(-3 * time.Second)
 	model.toolExecuting = "ls_r"
 

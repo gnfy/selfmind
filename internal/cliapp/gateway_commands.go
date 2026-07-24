@@ -155,9 +155,11 @@ func (a *App) gatewayRestart(args []string) int {
 	fs := flag.NewFlagSet("selfmind gateway restart", flag.ContinueOnError)
 	fs.SetOutput(a.stderr)
 	force := fs.Bool("force", false, "force-kill if graceful shutdown fails")
+	drain := fs.Bool("drain", false, "explicitly wait for a safe turn boundary (the default restart behavior)")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
+	_ = drain // Accepted for an explicit upgrade command; restart already drains by default.
 	dataDir := a.gatewayDataDir()
 	timeout := gatewayrt.ResolveDrainTimeout() + 10*time.Second
 	ctx, cancel := contextWithTimeout(a.ctx, timeout)

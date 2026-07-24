@@ -88,16 +88,16 @@ func (m *uiModel) runAgent(ctx context.Context, input string) tea.Cmd {
 				usage = resp.Usage
 			}
 			if resp.Error != "" {
-				return MsgAgentDone{Response: full.String(), Usage: usage, Err: fmt.Errorf("%s", resp.Error)}
+				return MsgAgentDone{Response: full.String(), Usage: usage, Err: fmt.Errorf("%s", resp.Error), Input: input, Turn: resp.Turn}
 			}
 			if status >= http.StatusBadRequest {
-				return MsgAgentDone{Response: full.String(), Usage: usage, Err: fmt.Errorf("gateway returned HTTP %d", status)}
+				return MsgAgentDone{Response: full.String(), Usage: usage, Err: fmt.Errorf("gateway returned HTTP %d", status), Input: input, Turn: resp.Turn}
 			}
 			content := resp.Content
 			if strings.TrimSpace(content) == "" {
 				content = full.String()
 			}
-			return MsgAgentDone{Response: content, Usage: usage}
+			return MsgAgentDone{Response: content, Usage: usage, Input: input, Turn: resp.Turn}
 		}
 
 		if m.gateway != nil {

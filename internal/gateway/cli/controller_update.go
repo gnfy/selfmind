@@ -63,7 +63,7 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, spinnerCmd
 
 	case MsgWorkingTick:
-		if m.thinking || m.toolExecuting != "" {
+		if m.thinking || m.toolExecuting != "" || m.daemonRunActive {
 			m.thinkingDots++
 			return m, workingTick()
 		}
@@ -87,9 +87,11 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, spinnerCmd
 		}
 		m.activityText = strings.TrimSpace(msg.Content)
-		m.thinking = true
-		if m.thinkingStart.IsZero() {
-			m.thinkingStart = time.Now()
+		if !m.passiveDaemonEvent(msg.Event) {
+			m.thinking = true
+			if m.thinkingStart.IsZero() {
+				m.thinkingStart = time.Now()
+			}
 		}
 		return m, spinnerCmd
 
@@ -120,21 +122,54 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case MsgAgentDone:
 		m.exitPromptActive = false
+		if queuedTurn(msg.Turn) {
+			msg.Response = textutil.CleanUTF8(msg.Response)
+			m.localRequestActive = false
+			m.localRequestInput = ""
+			m.thinking = false
+			m.activityText = ""
+			m.steerCh = nil
+			m.cancelFn = nil
+			if input := strings.TrimSpace(msg.Input); input != "" {
+				m.queuedInputs = append(m.queuedInputs, input)
+				m.queuedCount++
+			}
+			m.finalizeLiveStream(msg.Response)
+			if m.daemonRunActive {
+				m.runStatus = "working"
+			} else {
+				m.runStatus = "queued"
+			}
+			return m, spinnerCmd
+		}
+		newerDaemonRun := m.daemonRunActive && msg.Turn != nil &&
+			strings.TrimSpace(msg.Turn.RunID) != "" &&
+			strings.TrimSpace(msg.Turn.RunID) != m.daemonRunID
 		// The run is over; any unanswered approval row is expired by the daemon
 		// once its waiter is gone, so drop stale approval UI instead of letting a
 		// panel answer into the void.
-		m.clearApprovalFlow()
+		if !newerDaemonRun {
+			m.clearApprovalFlow()
+		}
 		msg.Response = textutil.CleanUTF8(msg.Response)
 		m.thinking = false
 		m.activityText = ""
-		m.activePlanJSON = ""
-		m.toolExecuting = ""
-		m.discardOpenToolMessages()
+		if !newerDaemonRun {
+			m.activePlanJSON = ""
+			m.toolExecuting = ""
+			m.discardOpenToolMessages()
+		}
 		m.steerCh = nil // run finished; stop accepting mid-turn guidance for it
-		m.clarifyMode = false
-		m.clarifyGateway = false
-		m.clarifyChoices = nil
-		m.clarifyReq = tools.ClarifyRequest{}
+		m.cancelFn = nil
+		m.localRequestActive = false
+		m.localRequestInput = ""
+		if !newerDaemonRun {
+			m.daemonRunAwaitingDone = false
+			m.clarifyMode = false
+			m.clarifyGateway = false
+			m.clarifyChoices = nil
+			m.clarifyReq = tools.ClarifyRequest{}
+		}
 		// The mid-turn guidance notice is stale once the run ends — clear it.
 		if strings.HasPrefix(m.statusMsg, "Sent to the running task") || strings.Contains(m.statusMsg, "Guidance queue") {
 			m.statusMsg = ""
@@ -153,6 +188,81 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.runStatus = "error"
 			m.addErrorMessage("Error: model returned an empty response without any error details. Check the provider credentials and endpoint, then retry.")
+		}
+		if newerDaemonRun {
+			m.runStatus = "working"
+		} else if m.queuedCount > 0 {
+			m.runStatus = "queued"
+		}
+		return m, spinnerCmd
+
+	case MsgDaemonRunStarted:
+		if !m.acceptEvent(msg.Event) {
+			return m, spinnerCmd
+		}
+		localMatch := m.localRequestActive && sameQueuedInput(m.localRequestInput, msg.Input)
+		queuedMatch := false
+		if !localMatch {
+			queuedMatch = m.consumeQueuedInput(msg.Input)
+		}
+		m.daemonRunActive = true
+		m.daemonRunID = msg.RunID
+		m.daemonRunStarted = msg.Started
+		if m.daemonRunStarted.IsZero() {
+			m.daemonRunStarted = time.Now()
+		}
+		m.daemonRunAwaitingDone = localMatch
+		m.runStatus = "working"
+		m.runTokens = 0
+		m.activePlanJSON = ""
+		if !localMatch {
+			m.thinking = false
+			m.activityText = ""
+			m.toolExecuting = ""
+			m.discardOpenToolMessages()
+		}
+		if queuedMatch {
+			title := strings.TrimSpace(msg.Input)
+			if title == "" {
+				title = "queued task"
+			}
+			m.addMessage("notice", "Queued task started: "+title)
+		}
+		return m, workingTick()
+
+	case MsgDaemonRunFinished:
+		if !m.acceptEvent(msg.Event) {
+			return m, spinnerCmd
+		}
+		if !m.daemonRunActive {
+			return m, spinnerCmd
+		}
+		if m.daemonRunID != "" && msg.RunID != "" && msg.RunID != m.daemonRunID {
+			return m, spinnerCmd
+		}
+		awaitingSynchronousDone := m.daemonRunAwaitingDone
+		m.daemonRunActive = false
+		m.daemonRunID = ""
+		m.daemonRunStarted = time.Time{}
+		m.daemonRunAwaitingDone = false
+		if awaitingSynchronousDone {
+			return m, spinnerCmd
+		}
+		m.thinking = false
+		m.activityText = ""
+		m.toolExecuting = ""
+		m.activePlanJSON = ""
+		m.discardOpenToolMessages()
+		m.flushLiveStreamPending()
+		if strings.TrimSpace(m.liveStreamContent) != "" {
+			m.finalizeLiveStream("")
+		} else {
+			m.finalizeLiveStream(msg.Summary)
+		}
+		if m.queuedCount > 0 {
+			m.runStatus = "queued"
+		} else {
+			m.runStatus = uiStatusForDaemonOutcome(msg.Status)
 		}
 		return m, spinnerCmd
 
@@ -231,7 +341,9 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.finalizeLiveStream("")
 		m.thinking = false
 		m.activityText = ""
-		m.toolExecuting = msg.ToolName
+		if !m.passiveDaemonEvent(msg.Event) {
+			m.toolExecuting = msg.ToolName
+		}
 		m.addMessage("tool", "")
 		last := &m.messages[len(m.messages)-1]
 		last.ToolName = msg.ToolName
@@ -276,7 +388,7 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// The tool cell is now final — commit it to scrollback (hybrid mode).
 			m.commit(last)
 		}
-		if !m.anyToolRunning() {
+		if !m.anyToolRunning() && !m.passiveDaemonEvent(msg.Event) {
 			m.toolExecuting = ""
 		}
 		return m, spinnerCmd
@@ -314,7 +426,7 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		idx := m.findActiveToolMessageIndex(msg.ToolCallID, msg.ToolName)
 		if idx >= 0 {
-			if msg.ToolName != "" {
+			if msg.ToolName != "" && !m.passiveDaemonEvent(msg.Event) {
 				m.toolExecuting = msg.ToolName
 			}
 			last := &m.messages[idx]
@@ -460,7 +572,7 @@ func (m *uiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			// quitting does NOT cancel — offer the choice explicitly. This
 			// prompt doubles as the moment the user learns the detached-run
 			// design. A second ctrl+c means "background + quit".
-			if m.thinking || m.toolExecuting != "" {
+			if m.localRequestActive {
 				if m.exitPromptActive {
 					return m, tea.Quit
 				}
@@ -538,7 +650,7 @@ func (m *uiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			// Mid-turn steering: if a run is active, inject this as guidance into
 			// the running turn instead of starting a competing run (which the
 			// busy-guard would reject) or overwriting the in-flight cancelFn.
-			if m.thinking || m.toolExecuting != "" {
+			if m.localRequestActive {
 				return m, m.injectMidRunGuidance(input)
 			}
 			m.detachWatchedRunForNewTurn()
@@ -546,6 +658,8 @@ func (m *uiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.editor.Reset()
 			m.activePlanJSON = ""
 			m.steerCh = make(chan string, 16)
+			m.localRequestActive = true
+			m.localRequestInput = input
 			m.thinking = true
 			m.runStatus = "working"
 			m.thinkingStart = time.Now()

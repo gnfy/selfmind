@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"time"
@@ -149,7 +150,24 @@ func (c *Controller) Start() {
 		val, err := p.Run()
 		resCh <- result{val, err}
 	}()
+	// The watcher may immediately deliver an event. Start it only after the
+	// Bubble Tea message loop is running so program.Send cannot stall startup.
+	if c.model.eventWatcher != nil {
+		ctx, cancel := context.WithCancel(context.Background())
+		c.model.eventWatchCancel = cancel
+		go c.model.eventWatcher(
+			ctx,
+			func(event llm.StreamEvent) {
+				c.model.forwardGatewayEventFrom(event, eventSourceDaemon)
+			},
+			c.model.forwardDaemonRunEvent,
+		)
+	}
 	res := <-resCh
+	if c.model.eventWatchCancel != nil {
+		c.model.eventWatchCancel()
+		c.model.eventWatchCancel = nil
+	}
 	if res.err != nil {
 		os.Stderr.WriteString("\x1b[?1049l")
 		os.Stderr.WriteString(fmt.Sprintf("Error: %v\n", res.err))

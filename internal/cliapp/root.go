@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"selfmind/internal/buildinfo"
+	"selfmind/internal/crashreport"
 	"selfmind/internal/platform/config"
 	"selfmind/internal/platform/log"
 )
@@ -36,7 +37,7 @@ type App struct {
 	gatewayEnsured bool
 }
 
-const Version = buildinfo.Version
+var Version = buildinfo.Version
 
 func Run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if ctx == nil {
@@ -91,6 +92,18 @@ func Run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	}
 	app.applyGatewayConfigEnv()
 
+	if handled, exitCode := app.runSetupCommandIfRequested(); handled {
+		return exitCode
+	}
+	if handled, exitCode := app.runUpdateCommandIfRequested(); handled {
+		return exitCode
+	}
+	if handled, exitCode := app.runUninstallCommandIfRequested(); handled {
+		return exitCode
+	}
+	if handled, exitCode := app.runFeedbackCommandIfRequested(); handled {
+		return exitCode
+	}
 	if handled, exitCode := app.runGatewayCommandIfRequested(); handled {
 		return exitCode
 	}
@@ -149,25 +162,46 @@ func isVersionCommand(args []string) bool {
 	}
 }
 
+var documentedCLIUsages = []string{
+	"selfmind [--config PATH] [--resume SESSION_ID]",
+	"selfmind --version",
+	"selfmind setup [--non-interactive] [--skip-model] [--skip-gateway] [--check-model]",
+	"selfmind update [check] [--channel latest|next]",
+	"selfmind uninstall --prepare [--purge-data --yes]",
+	"selfmind feedback [--out FILE|--send] [--repo OWNER/REPO] [--include-crash] <message>",
+	"selfmind send [--async] [--mode MODE] <message>",
+	"selfmind status",
+	"selfmind tasks [done|archived|all|<keyword>]",
+	"selfmind task <n|task_id> [runs|rename <name>|pin|unpin|archive|merge <dst>]",
+	"selfmind resume <n|task_id>",
+	"selfmind workspaces",
+	"selfmind ws [list|add|use|<n|workspace_id>] ...",
+	"selfmind approvals",
+	"selfmind approve [token]",
+	"selfmind reject [token]",
+	"selfmind stop",
+	"selfmind id",
+	"selfmind new [title]",
+	"selfmind config [doctor|upgrade]",
+	"selfmind model [current|check|list|set <provider> <model>]",
+	"selfmind auth [login|status|logout] ...",
+	"selfmind doctor [--out FILE] [--probe-models]",
+	"selfmind selfcheck [--skip-go] [--skip-eval] [--eval-dir DIR]",
+	"selfmind eval [list|run|report|repair|scorecard|capture|clean]",
+	"selfmind maintenance [replay|migrate-memory|memory-audit|memory-dedup] ...",
+	"selfmind gateway [run|start|status|stop|restart] ...",
+	"selfmind weixin [login|status] ...",
+}
+
 func printTopLevelHelp(stdout io.Writer) {
 	fmt.Fprintln(stdout, "SelfMind")
 	fmt.Fprintln(stdout)
 	fmt.Fprintln(stdout, "Usage:")
-	fmt.Fprintln(stdout, "  selfmind [--config PATH] [--resume SESSION_ID]")
-	fmt.Fprintln(stdout, "  selfmind --version")
-	fmt.Fprintln(stdout, "  selfmind resume <n|task_id>")
-	fmt.Fprintln(stdout, "  selfmind task <n|task_id> [runs|rename|pin|unpin|archive]")
-	fmt.Fprintln(stdout, "  selfmind tasks [open|done|archived|all|<keyword>]")
-	fmt.Fprintln(stdout, "  selfmind config [doctor|upgrade]")
-	fmt.Fprintln(stdout, "  selfmind model [current|check|list|set <provider> <model>]")
-	fmt.Fprintln(stdout, "  selfmind auth [login|status|logout] ...")
-	fmt.Fprintln(stdout, "  selfmind eval [list|run|report]")
-	fmt.Fprintln(stdout, "  selfmind selfcheck [--skip-go|--skip-eval]")
-	fmt.Fprintln(stdout, "  selfmind maintenance replay [--limit N]")
-	fmt.Fprintln(stdout, "  selfmind maintenance migrate-memory [--apply] [--data-dir DIR]")
-	fmt.Fprintln(stdout, "  selfmind doctor [--out FILE] [--probe-models]")
-	fmt.Fprintln(stdout, "  selfmind gateway ...")
-	fmt.Fprintln(stdout, "  selfmind weixin ...")
+	for _, usage := range documentedCLIUsages {
+		fmt.Fprintf(stdout, "  %s\n", usage)
+	}
+	fmt.Fprintln(stdout)
+	fmt.Fprintln(stdout, "Full command reference: docs/command-reference.md")
 }
 
 func (a *App) runTUI() int {
@@ -180,6 +214,11 @@ func (a *App) runTUI() int {
 
 	log.Init(log.Options{Level: cfg.Agent.LogLevel})
 	a.printStartupHealthWarnings()
+	if path, ok := crashreport.ConsumeNotice(); ok {
+		fmt.Fprintf(a.stderr, "SelfMind recovered from a previous crash. Report: %s\n", path)
+		fmt.Fprintln(a.stderr, "Review it locally, or send it explicitly with `selfmind feedback --include-crash <message>`.")
+	}
+	a.printUpdateNotice(cfg)
 
 	// Daemon-only: the TUI is ALWAYS a thin client to the single gateway
 	// daemon (ACTIVE PLAN P0-3). The in-process agent path was removed — every

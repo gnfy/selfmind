@@ -45,6 +45,7 @@ func TestCtrlCShowsExitPromptThenCancelViaC(t *testing.T) {
 	cancelled := false
 	model.cancelFn = func() { cancelled = true }
 	model.thinking = true
+	model.localRequestActive = true
 
 	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
 	m := updated.(*uiModel)
@@ -104,6 +105,7 @@ func TestExitPromptBackgroundQuitDoesNotStop(t *testing.T) {
 	cancelled := false
 	model.cancelFn = func() { cancelled = true }
 	model.thinking = true
+	model.localRequestActive = true
 
 	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
 	m := updated.(*uiModel)

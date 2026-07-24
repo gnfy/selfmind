@@ -386,3 +386,31 @@ web:
 Everything else falls back to sensible defaults. Add IM channels, role models,
 and memory governance as your needs grow. **Restart the daemon after any
 change.**
+
+## 13. Update checks and feedback
+
+```yaml
+updates:
+  enabled: true
+  channel: "latest"       # latest | next
+  check_interval: "24h"   # cached; never blocks TUI startup
+
+feedback:
+  repository: "gnfy/selfmind"  # default GitHub Issue destination
+  labels: []                   # optional existing repository labels
+  endpoint: ""                 # optional self-hosted collector override
+```
+
+`selfmind update check` reads npm registry dist-tags and only reports the
+available version. It never replaces the running binary.
+
+`selfmind feedback` writes a private, redacted local report by default.
+`selfmind feedback --send "description"` uses the authenticated GitHub CLI to
+create an Issue in `gnfy/selfmind` unless `feedback.repository` or `--repo`
+overrides it. SelfMind never stores a GitHub token. Install and authenticate
+the CLI with `gh auth login --hostname github.com`. Missing or expired
+authentication leaves the local report intact and prints an actionable error
+plus a pre-filled manual Issue URL.
+
+An explicitly configured `feedback.endpoint` keeps the legacy self-hosted JSON
+submission path and takes precedence over GitHub submission.

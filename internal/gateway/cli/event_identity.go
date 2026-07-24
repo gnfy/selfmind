@@ -12,6 +12,7 @@ type eventSource uint8
 const (
 	eventSourceTurn eventSource = iota
 	eventSourceWatch
+	eventSourceDaemon
 )
 
 // uiEventRef keeps daemon event identity intact until the reducer applies it.

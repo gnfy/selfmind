@@ -8,6 +8,7 @@ import (
 	"math"
 	"strings"
 
+	"selfmind/internal/buildinfo"
 	uicommon "selfmind/internal/ui/common"
 
 	"github.com/charmbracelet/lipgloss"
@@ -109,7 +110,11 @@ func (m *uiModel) renderStartupCard(width int) []string {
 		modelName = "active"
 	}
 	providerName := strings.TrimSpace(m.providerName)
-	title := ">_ SelfMind (v0.1.0)"
+	version := strings.TrimSpace(buildinfo.Version)
+	if version == "" {
+		version = "dev"
+	}
+	title := ">_ SelfMind (" + version + ")"
 	modelLine := "model:     " + modelName + "      /model to change"
 	providerLine := ""
 	if providerName != "" && providerName != modelName && providerName != "active" {
@@ -133,7 +138,7 @@ func (m *uiModel) renderStartupCard(width int) []string {
 
 	lines := []string{
 		startupBorderStyle.Render("+" + strings.Repeat("-", cardW-2) + "+"),
-		renderStartupBoxLine(startupValueStyle.Render(">_ SelfMind ")+startupSubtleStyle.Render("(v0.1.0)"), cardW),
+		renderStartupBoxLine(startupValueStyle.Render(">_ SelfMind ")+startupSubtleStyle.Render("("+version+")"), cardW),
 		renderStartupBoxLine("", cardW),
 		renderStartupDataLine("model:", modelName, cardW, "      /model to change"),
 	}

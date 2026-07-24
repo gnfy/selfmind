@@ -1108,6 +1108,26 @@ modes, and the self-check/CI gate landed with the Phase-1 work — see
 - Do not add per-feature status notes to the historical roadmap docs; record state
   here instead.
 
+## npm Distribution Lifecycle (2026-07-24)
+
+- The release is distributed as the `selfmind` npm launcher plus
+  `selfmind-linux-x64` and `selfmind-linux-arm64` optional native packages.
+  Linux and WSL are official targets; unsupported platforms fail with an
+  actionable message.
+- `selfmind setup`, `update`, `uninstall --prepare`, and `feedback` cover
+  first-run configuration, advisory update checks, drain-aware removal, and
+  explicit privacy-preserving feedback. Existing configs are not rewritten
+  when setup has nothing to change.
+- Git tags are the single version source for Go build metadata, npm packages,
+  and GitHub releases. CI tests both binaries, smoke-tests the packed npm
+  launcher, publishes native packages before the launcher, and uses
+  `latest`/`next` dist-tags.
+- Top-level panics create private local crash reports. Startup reports a crash
+  once; reports and diagnostics are uploaded only by explicit user action.
+- Release operations and compatibility rules are documented in
+  `docs/npm-distribution.md`. npm trusted publishing must be configured for all
+  three package names before the first public release.
+
 ## Run Finalization and Build Identity (2026-07-20)
 
 - Normal, error, and recovery completion paths materialize the terminal run,

@@ -10,6 +10,7 @@ import (
 
 	"selfmind/internal/app"
 	"selfmind/internal/gateway/api"
+	"selfmind/internal/gateway/httpapi"
 	"selfmind/internal/gateway/router"
 	"selfmind/internal/kernel"
 	"selfmind/internal/kernel/llm"
@@ -33,6 +34,7 @@ type Controller struct {
 }
 
 type MessageProcessor func(context.Context, api.MessageRequest) (api.MessageResponse, int)
+type EventWatcher func(context.Context, httpapi.StreamObserver, func(api.RunEvent))
 
 // ChatMessage represents a single message in the conversation history.
 type ChatMessage struct {
@@ -77,6 +79,8 @@ type uiModel struct {
 	agent              *kernel.Agent
 	gateway            *router.Gateway
 	messageProcessor   MessageProcessor
+	eventWatcher       EventWatcher
+	eventWatchCancel   context.CancelFunc
 	tenantID           string
 	channel            string // 'cli' | 'wechat' | 'dingtalk' | 'web'
 	approvalMode       string // codex-style session override: on-request | read-only | auto-edit | full-auto | smart. In client mode "" means "defer to the person's persisted mode".
@@ -104,8 +108,16 @@ type uiModel struct {
 	thinkingStart         time.Time // When current thinking started
 	activityText          string    // Current model/tool phase shown in transcript
 	activePlanJSON        string    // Latest complete plan snapshot, rendered above the composer
-	runStatus             string    // ready | working | done | error | cancelled
-	migrationHint         string    // Hint for migrating Hermes skills
+	runStatus             string    // ready | queued | working | done | error | cancelled
+	queuedCount           int       // requests submitted by this TUI and accepted into the daemon queue
+	queuedInputs          []string  // local queue acknowledgements awaiting run.started
+	localRequestActive    bool      // this TUI currently owns a synchronous POST
+	localRequestInput     string
+	daemonRunActive       bool // person-level daemon stream reports an executing run
+	daemonRunID           string
+	daemonRunStarted      time.Time
+	daemonRunAwaitingDone bool   // final answer still arrives through MsgAgentDone
+	migrationHint         string // Hint for migrating Hermes skills
 	streamController      markdownStreamController
 	liveStreamContent     string
 	streamFlushPending    bool
@@ -214,6 +226,16 @@ func (c *Controller) SetMessageProcessor(processor MessageProcessor) {
 		return
 	}
 	c.model.messageProcessor = processor
+}
+
+// SetEventWatcher installs the person-scoped daemon stream used for the whole
+// TUI lifetime. It is deliberately separate from MessageProcessor: a queued
+// POST may return before its run starts, while this stream remains attached.
+func (c *Controller) SetEventWatcher(watcher EventWatcher) {
+	if c == nil || c.model == nil {
+		return
+	}
+	c.model.eventWatcher = watcher
 }
 
 // SetClientMode marks the controller as a thin client to a gateway daemon. In
@@ -598,6 +620,23 @@ type MsgAgentDone struct {
 	Response string
 	Usage    llm.UsageStats
 	Err      error
+	Input    string
+	Turn     *api.TurnStatus
+}
+
+type MsgDaemonRunStarted struct {
+	RunID   string
+	TaskID  string
+	Input   string
+	Started time.Time
+	Event   uiEventRef
+}
+
+type MsgDaemonRunFinished struct {
+	RunID   string
+	Status  string
+	Summary string
+	Event   uiEventRef
 }
 
 type MsgStream struct {

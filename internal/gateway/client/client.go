@@ -161,6 +161,29 @@ func (c *Client) ProcessMessage(ctx context.Context, req api.MessageRequest) (ap
 	return resp, status
 }
 
+// ProcessMessageDetached posts one message without creating a request-scoped
+// event stream. Long-lived clients should pair this with WatchEvents so queued
+// runs remain visible after this synchronous request has returned.
+func (c *Client) ProcessMessageDetached(ctx context.Context, req api.MessageRequest) (api.MessageResponse, int) {
+	resp, status, err := c.postMessage(ctx, req)
+	if err != nil {
+		return api.MessageResponse{Error: err.Error()}, http.StatusBadGateway
+	}
+	return resp, status
+}
+
+// WatchEvents keeps one person-scoped event stream open for the lifetime of a
+// client UI. Unlike ProcessMessage's compatibility stream, it does not stop
+// when a queued POST returns, so daemon-started queued and background runs stay
+// attached to the terminal.
+func (c *Client) WatchEvents(ctx context.Context, tenantID string, observer httpapi.StreamObserver, onEvent func(api.RunEvent)) {
+	c.streamEvents(ctx, api.MessageRequest{
+		TenantID:       tenantID,
+		Platform:       "cli",
+		PlatformUserID: clientUserID(),
+	}, observer, onEvent, nil)
+}
+
 // streamEvents consumes the daemon's unified person-level SSE stream. Durable
 // events resume from the last committed cursor after reconnect; ephemeral text
 // deltas may be dropped because postMessage still returns the full final answer.

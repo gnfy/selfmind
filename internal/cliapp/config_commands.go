@@ -112,6 +112,11 @@ var configReportDefaultPaths = [][]string{
 	{"exec_sandbox", "enabled"},
 	{"exec_sandbox", "required"},
 	{"exec_sandbox", "allow_network"},
+	{"updates", "enabled"},
+	{"updates", "channel"},
+	{"updates", "check_interval"},
+	{"feedback", "repository"},
+	{"feedback", "endpoint"},
 }
 
 func (a *App) runConfigCommandIfRequested() (bool, int) {

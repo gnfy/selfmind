@@ -1,13 +1,16 @@
 package cliapp
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"strings"
 
 	appcore "selfmind/internal/app"
+	"selfmind/internal/gateway/api"
 	tui "selfmind/internal/gateway/cli"
 	gwclient "selfmind/internal/gateway/client"
+	"selfmind/internal/gateway/httpapi"
 	"selfmind/internal/platform/config"
 	gatewayrt "selfmind/internal/runtime/gateway"
 )
@@ -68,7 +71,13 @@ func (a *App) tryRunTUIClient(cfg *config.Config) (int, bool) {
 	// the absent in-process agent.
 	ctrl := tui.NewControllerWithGateway(nil, nil, nil, displayProvider, displayModel, cfg, tenantID)
 	ctrl.SetSessionChannel(a.resumeChannel)
-	ctrl.SetMessageProcessor(client.ProcessMessage)
+	// One person-scoped SSE stream stays open for the TUI lifetime. The POST
+	// itself is deliberately non-streaming: queued requests return immediately,
+	// while their later daemon runs continue to render through this watcher.
+	ctrl.SetMessageProcessor(client.ProcessMessageDetached)
+	ctrl.SetEventWatcher(func(ctx context.Context, observer httpapi.StreamObserver, onEvent func(api.RunEvent)) {
+		client.WatchEvents(ctx, tenantID, observer, onEvent)
+	})
 	if err := a.pinResumeTask(client.ProcessMessage); err != nil {
 		fmt.Fprintf(a.stderr, "SelfMind resume error: %v\n", err)
 		return 1, true

@@ -209,8 +209,16 @@ func (m *uiModel) statusLine() string {
 		// user, not "working", and definitely not "ready".
 		state = "⏸ waiting approval"
 		stateStyle = st.Status.Warning
-	case m.runStatus == "working" && !m.thinkingStart.IsZero():
+	case m.daemonRunActive && !m.daemonRunStarted.IsZero():
+		state = fmt.Sprintf("working %.1fs", time.Since(m.daemonRunStarted).Seconds())
+	case m.localRequestActive && !m.thinkingStart.IsZero():
 		state = fmt.Sprintf("working %.1fs", time.Since(m.thinkingStart).Seconds())
+	case m.runStatus == "queued":
+		count := m.queuedCount
+		if count < 1 {
+			count = 1
+		}
+		state = fmt.Sprintf("queued %d", count)
 	}
 	parts = append(parts, stateStyle.Render(state))
 
@@ -221,7 +229,7 @@ func (m *uiModel) statusLine() string {
 	parts = append(parts, st.Status.Label.Render("mode:"+m.effectiveApprovalMode()))
 
 	ctrlHint := "Ctrl+C exit"
-	if m.thinking || m.toolExecuting != "" {
+	if m.localRequestActive {
 		ctrlHint = "Ctrl+C cancel"
 	} else if strings.TrimSpace(m.editor.Value()) != "" {
 		ctrlHint = "Ctrl+C clear"

@@ -25,7 +25,7 @@ func (a *App) runMaintenanceCommandIfRequested() (bool, int) {
 	if len(a.args) < 3 || a.args[2] != "replay" {
 		fmt.Fprintln(a.stderr, "usage: selfmind maintenance replay [--limit N]")
 		fmt.Fprintln(a.stderr, "       selfmind maintenance migrate-memory [--apply] [--data-dir DIR]")
-		fmt.Fprintln(a.stderr, "       selfmind maintenance memory-audit [--archive] [--partition P] [--data-dir DIR]")
+		fmt.Fprintln(a.stderr, "       selfmind maintenance memory-audit [--archive-confirmed] [--partition P] [--data-dir DIR]")
 		fmt.Fprintln(a.stderr, "       selfmind maintenance memory-dedup [--apply] [--partition P] [--data-dir DIR]")
 		return true, 2
 	}

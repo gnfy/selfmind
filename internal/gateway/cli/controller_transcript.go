@@ -135,6 +135,9 @@ func (m *uiModel) appendAssistantResponse(content string) {
 	}
 	if len(m.messages) > 0 {
 		last := &m.messages[len(m.messages)-1]
+		if last.Role == "assistant" && !last.IsError && strings.TrimSpace(last.Content) == content {
+			return
+		}
 		// Never merge into a committed cell — in hybrid mode it already lives in
 		// immutable scrollback and cannot be rewritten.
 		if last.Role == "assistant" && !last.IsError && !last.Committed {

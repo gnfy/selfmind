@@ -11,22 +11,28 @@ on:
         required: false
         default: ""
         type: string
-      publish:
-        description: "Publish a GitHub Release. Off = only build and upload artifacts."
+      publish_github:
+        description: "Publish a GitHub Release"
+        required: false
+        default: false
+        type: boolean
+      publish_npm:
+        description: "Publish npm packages using trusted publishing"
         required: false
         default: false
         type: boolean
       prerelease:
-        description: "Mark the GitHub release as a prerelease"
+        description: "Mark the GitHub release and npm packages as prerelease"
         required: false
         default: false
         type: boolean
 
 permissions:
   contents: write
+  id-token: write
 
 concurrency:
-  group: release-${{ github.ref_name || inputs.tag }}
+  group: release-${{ github.ref_name || inputs.tag || github.sha }}
   cancel-in-progress: false
 
 env:
@@ -35,6 +41,67 @@ env:
   GOWORK: "off"
 
 jobs:
+  metadata:
+    name: Resolve release metadata
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.meta.outputs.tag }}
+      npm_version: ${{ steps.meta.outputs.npm_version }}
+      npm_dist_tag: ${{ steps.meta.outputs.npm_dist_tag }}
+      prerelease: ${{ steps.meta.outputs.prerelease }}
+      publish_github: ${{ steps.meta.outputs.publish_github }}
+      publish_npm: ${{ steps.meta.outputs.publish_npm }}
+      built_at: ${{ steps.meta.outputs.built_at }}
+    steps:
+      - name: Resolve version and channels
+        id: meta
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          built_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          if [[ "${{ github.event_name }}" == "push" ]]; then
+            tag="${GITHUB_REF_NAME}"
+            publish_github="true"
+            publish_npm="true"
+            prerelease="false"
+          else
+            tag="${{ inputs.tag }}"
+            publish_github="${{ inputs.publish_github }}"
+            publish_npm="${{ inputs.publish_npm }}"
+            prerelease="${{ inputs.prerelease }}"
+          fi
+
+          if [[ -z "${tag}" ]]; then
+            stamp="$(date -u +%Y%m%d%H%M%S)"
+            tag="v0.0.0-dev.${stamp}.${GITHUB_SHA::7}"
+          fi
+
+          npm_version="${tag#v}"
+          if [[ ! "${npm_version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "tag must contain a valid npm semantic version: ${tag}" >&2
+            exit 1
+          fi
+
+          if [[ "${npm_version}" == *-* ]]; then
+            prerelease="true"
+          fi
+          if [[ "${prerelease}" == "true" ]]; then
+            npm_dist_tag="next"
+          else
+            npm_dist_tag="latest"
+          fi
+
+          {
+            echo "tag=${tag}"
+            echo "npm_version=${npm_version}"
+            echo "npm_dist_tag=${npm_dist_tag}"
+            echo "prerelease=${prerelease}"
+            echo "publish_github=${publish_github}"
+            echo "publish_npm=${publish_npm}"
+            echo "built_at=${built_at}"
+          } >> "${GITHUB_OUTPUT}"
+
   test:
     name: Test
     runs-on: ubuntu-latest
@@ -53,14 +120,18 @@ jobs:
 
   build:
     name: Build linux-${{ matrix.goarch }}
-    needs: test
+    needs:
+      - metadata
+      - test
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         include:
           - goarch: amd64
+            npm_arch: x64
           - goarch: arm64
+            npm_arch: arm64
 
     steps:
       - name: Checkout
@@ -72,39 +143,31 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Resolve release tag
-        id: meta
-        shell: bash
-        run: |
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            tag="${{ inputs.tag }}"
-            if [[ -z "${tag}" ]]; then
-              tag="dev-$(date -u +%Y%m%d)-${GITHUB_SHA::7}"
-            fi
-          else
-            tag="${GITHUB_REF_NAME}"
-          fi
-
-          if [[ -z "${tag}" ]]; then
-            echo "release tag is required" >&2
-            exit 1
-          fi
-
-          echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
-
       - name: Build binary
         env:
           GOOS: linux
           GOARCH: ${{ matrix.goarch }}
+          RELEASE_TAG: ${{ needs.metadata.outputs.tag }}
+          BUILT_AT: ${{ needs.metadata.outputs.built_at }}
         shell: bash
         run: |
-          package_name="${BINARY_NAME}-${{ steps.meta.outputs.tag }}-${GOOS}-${GOARCH}"
+          set -euo pipefail
+
+          package_name="${BINARY_NAME}-${RELEASE_TAG}-${GOOS}-${GOARCH}"
           package_dir="dist/${package_name}"
-          binary_path="${package_dir}/${BINARY_NAME}"
+          artifact_dir="artifact"
 
-          mkdir -p "${package_dir}"
-          go build -trimpath -ldflags="-s -w" -o "${binary_path}" ./cmd/selfmind
+          mkdir -p "${package_dir}" "${artifact_dir}/native" "${artifact_dir}/release-assets"
+          go build \
+            -trimpath \
+            -ldflags="-s -w \
+              -X selfmind/internal/buildinfo.Version=${RELEASE_TAG} \
+              -X selfmind/internal/buildinfo.Commit=${GITHUB_SHA} \
+              -X selfmind/internal/buildinfo.BuiltAt=${BUILT_AT}" \
+            -o "${artifact_dir}/native/${BINARY_NAME}" \
+            ./cmd/selfmind
 
+          cp "${artifact_dir}/native/${BINARY_NAME}" "${package_dir}/${BINARY_NAME}"
           cp README.md "${package_dir}/"
           if [[ -d docs ]]; then
             cp -R docs "${package_dir}/docs"
@@ -112,56 +175,138 @@ jobs:
           cp packaging/linux/install.sh "${package_dir}/install.sh"
           cp packaging/linux/uninstall.sh "${package_dir}/uninstall.sh"
           cp packaging/linux/selfmind.service "${package_dir}/selfmind.service"
-          chmod +x "${package_dir}/install.sh" "${package_dir}/uninstall.sh"
+          chmod +x \
+            "${artifact_dir}/native/${BINARY_NAME}" \
+            "${package_dir}/${BINARY_NAME}" \
+            "${package_dir}/install.sh" \
+            "${package_dir}/uninstall.sh"
 
-      - name: Package
-        shell: bash
-        run: |
-          package_name="${BINARY_NAME}-${{ steps.meta.outputs.tag }}-linux-${{ matrix.goarch }}"
-          mkdir -p release-assets
+          tar -C dist -czf \
+            "${artifact_dir}/release-assets/${package_name}.tar.gz" \
+            "${package_name}"
 
-          tar -C dist -czf "release-assets/${package_name}.tar.gz" "${package_name}"
+          "${artifact_dir}/native/${BINARY_NAME}" --version
 
-      - name: Upload package artifact
+      - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
           name: selfmind-linux-${{ matrix.goarch }}
-          path: release-assets/*
+          path: artifact/
           if-no-files-found: error
           retention-days: 14
 
-  publish:
-    name: Publish GitHub Release
-    needs: build
-    if: ${{ github.event_name == 'push' || inputs.publish }}
+  npm:
+    name: Package and publish npm
+    needs:
+      - metadata
+      - build
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Resolve release tag
-        id: meta
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Install trusted-publishing npm CLI
+        run: npm install --global npm@11.5.1
+
+      - name: Download Linux binaries
+        uses: actions/download-artifact@v4
+        with:
+          pattern: selfmind-linux-*
+          path: downloaded
+
+      - name: Stage npm packages
+        env:
+          NPM_VERSION: ${{ needs.metadata.outputs.npm_version }}
         shell: bash
         run: |
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            tag="${{ inputs.tag }}"
-            prerelease="${{ inputs.prerelease }}"
-            if [[ -z "${tag}" ]]; then
-              tag="dev-$(date -u +%Y%m%d)-${GITHUB_SHA::7}"
-            fi
-          else
-            tag="${GITHUB_REF_NAME}"
-            prerelease="false"
+          set -euo pipefail
+          node scripts/stage-npm-packages.mjs \
+            --version "${NPM_VERSION}" \
+            --linux-x64 downloaded/selfmind-linux-amd64/native/selfmind \
+            --linux-arm64 downloaded/selfmind-linux-arm64/native/selfmind \
+            --out .npm-stage
+
+      - name: Pack npm packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p npm-packs
+          npm pack .npm-stage/selfmind-linux-x64 --pack-destination npm-packs
+          npm pack .npm-stage/selfmind-linux-arm64 --pack-destination npm-packs
+          npm pack .npm-stage/selfmind --pack-destination npm-packs
+          ls -lah npm-packs
+
+      - name: Smoke test npm installation
+        env:
+          EXPECTED_VERSION: ${{ needs.metadata.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p npm-smoke
+          cd npm-smoke
+          npm init -y >/dev/null
+
+          main_package="$(find ../npm-packs -maxdepth 1 -type f -name 'selfmind-[0-9]*.tgz' -print -quit)"
+          platform_package="$(find ../npm-packs -maxdepth 1 -type f -name 'selfmind-linux-x64-*.tgz' -print -quit)"
+          if [[ -z "${main_package}" || -z "${platform_package}" ]]; then
+            echo "npm package archives are missing" >&2
+            exit 1
           fi
 
-          if [[ "${tag}" == *"-"* ]]; then
-            prerelease="true"
-          fi
+          npm install --ignore-scripts "${platform_package}" "${main_package}"
+          installed_version="$(./node_modules/.bin/selfmind --version)"
+          echo "${installed_version}"
+          grep -F "${EXPECTED_VERSION}" <<<"${installed_version}"
 
-          echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
-          echo "prerelease=${prerelease}" >> "${GITHUB_OUTPUT}"
+      - name: Publish platform packages
+        if: ${{ needs.metadata.outputs.publish_npm == 'true' }}
+        env:
+          DIST_TAG: ${{ needs.metadata.outputs.npm_dist_tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm publish .npm-stage/selfmind-linux-x64 \
+            --access public --provenance --tag "${DIST_TAG}"
+          npm publish .npm-stage/selfmind-linux-arm64 \
+            --access public --provenance --tag "${DIST_TAG}"
 
-      - name: Download package artifacts
+      - name: Publish launcher package
+        if: ${{ needs.metadata.outputs.publish_npm == 'true' }}
+        env:
+          DIST_TAG: ${{ needs.metadata.outputs.npm_dist_tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm publish .npm-stage/selfmind \
+            --access public --provenance --tag "${DIST_TAG}"
+
+      - name: Upload npm package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: selfmind-npm-packages
+          path: npm-packs/*.tgz
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    name: Publish GitHub Release
+    needs:
+      - metadata
+      - build
+      - npm
+    if: ${{ needs.metadata.outputs.publish_github == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download release artifacts
         uses: actions/download-artifact@v4
         with:
           path: downloaded-artifacts
@@ -169,8 +314,11 @@ jobs:
       - name: Prepare release assets
         shell: bash
         run: |
+          set -euo pipefail
           mkdir -p release-assets
-          find downloaded-artifacts -type f -name "*.tar.gz" -exec cp {} release-assets/ \;
+          find downloaded-artifacts -type f \
+            \( -name "*.tar.gz" -o -name "*.tgz" \) \
+            -exec cp {} release-assets/ \;
 
           cd release-assets
           sha256sum * > SHA256SUMS.txt
@@ -180,19 +328,16 @@ jobs:
         shell: bash
         run: |
           {
-            echo "SelfMind ${{ steps.meta.outputs.tag }}"
+            echo "SelfMind ${{ needs.metadata.outputs.tag }}"
             echo
-            echo "Official Linux server binaries:"
-            find release-assets -maxdepth 1 -type f \
-              -name "*.tar.gz" \
-              -printf "- %f\n" | sort
+            echo "Install the official Linux/WSL npm package:"
             echo
-            echo "Each package includes:"
-            echo "- selfmind"
-            echo "- install.sh / uninstall.sh"
-            echo "- selfmind.service for systemd"
-            echo "- README.md and docs/"
+            echo '```bash'
+            echo "npm install -g selfmind@${{ needs.metadata.outputs.npm_dist_tag }}"
+            echo "selfmind setup"
+            echo '```'
             echo
+            echo "Linux tarballs and npm package archives are attached below."
             echo "Verify downloads with SHA256SUMS.txt."
           } > RELEASE_NOTES.md
 
@@ -201,15 +346,15 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
-          tag="${{ steps.meta.outputs.tag }}"
-
+          set -euo pipefail
+          tag="${{ needs.metadata.outputs.tag }}"
           release_args=(
             --title "SelfMind ${tag}"
             --notes-file RELEASE_NOTES.md
             --target "${GITHUB_SHA}"
           )
 
-          if [[ "${{ steps.meta.outputs.prerelease }}" == "true" ]]; then
+          if [[ "${{ needs.metadata.outputs.prerelease }}" == "true" ]]; then
             release_args+=(--prerelease)
           fi
 

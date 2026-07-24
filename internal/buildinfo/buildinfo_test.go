@@ -3,11 +3,12 @@ package buildinfo
 import "testing"
 
 func TestFingerprintUsesReleaseIdentity(t *testing.T) {
-	oldCommit, oldBuiltAt := Commit, BuiltAt
+	oldVersion, oldCommit, oldBuiltAt := Version, Commit, BuiltAt
 	t.Cleanup(func() {
-		Commit, BuiltAt = oldCommit, oldBuiltAt
+		Version, Commit, BuiltAt = oldVersion, oldCommit, oldBuiltAt
 	})
 
+	Version = "v0.1.0"
 	Commit = "0123456789abcdef"
 	BuiltAt = "2026-07-20T01:02:03Z"
 

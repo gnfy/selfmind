@@ -1,0 +1,28 @@
+{
+  "name": "selfmind",
+  "version": "0.0.0-dev",
+  "description": "A continuous personal AI work assistant for Linux and WSL",
+  "license": "Apache-2.0",
+  "type": "module",
+  "bin": {
+    "selfmind": "bin/selfmind.js"
+  },
+  "files": [
+    "bin"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/gnfy/selfmind.git"
+  },
+  "homepage": "https://github.com/gnfy/selfmind",
+  "bugs": {
+    "url": "https://github.com/gnfy/selfmind/issues"
+  },
+  "optionalDependencies": {
+    "selfmind-linux-x64": "0.0.0-dev",
+    "selfmind-linux-arm64": "0.0.0-dev"
+  }
+}

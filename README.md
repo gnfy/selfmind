@@ -38,9 +38,48 @@ Still first-version or planned:
 ## Requirements
 
 - Go 1.26+ for local development.
+- Node.js 18+ when installing the release through npm.
 - At least one configured model provider for real AI responses.
 - Official release packaging currently targets Linux server deployments: `linux-amd64` and `linux-arm64`.
 - Windows and macOS can be used for local development and debugging, but are not the current release targets.
+
+## Install With npm
+
+The npm release supports Linux x64, Linux arm64, and WSL. It installs the
+matching native SelfMind binary behind a small Node.js launcher.
+
+```sh
+npm install --global selfmind@latest
+selfmind setup
+selfmind doctor
+selfmind
+```
+
+Check for updates and upgrade without interrupting an active turn:
+
+```sh
+selfmind update check
+npm install --global selfmind@latest
+selfmind gateway restart --drain
+```
+
+Prerelease builds use `selfmind@next`. See
+[`docs/npm-distribution.md`](docs/npm-distribution.md) for package topology,
+release operations, uninstall behavior, and feedback privacy.
+
+Report a problem locally, or explicitly create a GitHub Issue in the official
+`gnfy/selfmind` repository:
+
+```sh
+selfmind feedback "describe what happened"
+gh auth login --hostname github.com
+selfmind feedback --send "describe what happened"
+```
+
+SelfMind saves a private, redacted local report before submission and never
+stores your GitHub token. If `gh` is missing or its login has expired, the
+report is preserved and SelfMind prints recovery instructions and a pre-filled
+manual Issue URL.
 
 ## Build And Run
 
@@ -427,23 +466,25 @@ With a custom config:
 selfmind -f ./config/config.yaml
 ```
 
-Common slash commands:
+Common slash commands are listed below. See the
+[complete command reference](docs/command-reference.md) for every CLI,
+gateway, IM, and TUI command.
 
 | Command | Purpose |
 |---|---|
 | `/help` | Show available commands. |
 | `/status` | Show provider, model, runtime, token usage, current task, and any pending approval/question. |
 | `/tasks` / `/tasks done\|archived\|all` | List open work as compact cards (status, last input, primary file, pending approvals/questions, run count, short id); finished work collapses to a count. |
-| `/task <n\|id>` / `/task <n\|id> runs\|rename <name>\|archive` | Inspect one task (detail, recent runs), rename it, or archive it — `<n>` is the card number from `/tasks`, `<id>` a full or short id. |
+| `/task <n\|id>` / `/task <n\|id> runs\|rename <name>\|pin\|unpin\|archive\|merge <dst>` | Inspect one task (detail, recent runs), rename, pin, archive, or merge it — `<n>` is the card number from `/tasks`, `<id>` a full or short id. |
 | `/queue` / `/queue drop <n>` / `/queue clear` | List queued tasks / drop one by position / drop all. |
 | `/stop` | Cancel the active run — or, if nothing is running, cancel the current (stuck) task. |
 | `/cancel` | Cancel the current task even when no run is active. |
 | `/new [title]` | Start a fresh task instead of continuing the current one. |
 | `/resume <n\|task_id>` | Switch back to an earlier task by its `/tasks` card number, short id, or full id. |
 | `/workspace [n\|id]` (alias `/ws`, also `/workspaces`) | Bare lists workspaces; with a number or id, switches to it. |
-| `/approvals` / `/approve <n>` / `/reject <n>` | List and answer pending tool approvals. |
+| `/approvals` / `/approve <n\|id\|all> [task\|always]` / `/reject <n\|id\|all>` | List and answer pending tool approvals. |
 | `/mode [mode]` | Show or set approval mode: `on-request`, `read-only`, `auto-edit`, `full-auto`, `smart`. |
-| `/diag` | Compact runtime diagnostic snapshot. |
+| `/diag [memory\|context\|tasks\|models\|delivery]` | Compact runtime diagnostics, optionally focused on one subsystem. |
 | `/skills` | Skill list/view/search/catalog/install/audit/archive/pin/unpin/delete/stats/reload. |
 | `/skills history <name>` | View learning audit history for a skill. |
 | `/skills undo <change_id>` | Undo a supported skill learning change. |
@@ -795,6 +836,12 @@ The Linux installer creates `/etc/selfmind/config.yaml`, `/var/lib/selfmind/data
 Edit `/etc/selfmind/config.yaml` to configure the model provider before starting the service.
 
 ## Development
+
+Related documentation:
+
+- [Complete command reference](docs/command-reference.md)
+- [Configuration reference](docs/config-reference.md)
+- [Current development status](docs/STATUS.md)
 
 Run tests:
 

@@ -177,6 +177,19 @@ exec_sandbox:
   enabled: true
   required: false
   allow_network: false
+
+# Startup update checks are cached and never block the CLI.
+updates:
+  enabled: true
+  channel: "latest"
+  check_interval: "24h"
+
+# Feedback stays local unless --send is used. By default, --send creates an
+# issue in the official repository through the authenticated GitHub CLI.
+feedback:
+  repository: "gnfy/selfmind"
+  labels: []
+  endpoint: ""
 `
 
 type Options struct {
@@ -206,6 +219,8 @@ type Config struct {
 	Web              WebConfig                   `mapstructure:"web" yaml:"web,omitempty"`
 	ExecSandbox      ExecSandboxConfig           `mapstructure:"exec_sandbox" yaml:"exec_sandbox,omitempty"`
 	History          HistoryConfig               `mapstructure:"history" yaml:"history,omitempty"`
+	Updates          UpdateConfig                `mapstructure:"updates" yaml:"updates,omitempty"`
+	Feedback         FeedbackConfig              `mapstructure:"feedback" yaml:"feedback,omitempty"`
 }
 
 // ExecSandboxConfig gates bubblewrap isolation for terminal, verify, and
@@ -269,6 +284,24 @@ type HistoryConfig struct {
 	Persistence string `mapstructure:"persistence" yaml:"persistence,omitempty"`
 	MaxBytes    int64  `mapstructure:"max_bytes" yaml:"max_bytes,omitempty"`
 	LoadEntries int    `mapstructure:"load_entries" yaml:"load_entries,omitempty"`
+}
+
+// UpdateConfig controls the non-blocking npm release check. The check is
+// advisory only: SelfMind never upgrades itself or restarts the daemon without
+// an explicit user command.
+type UpdateConfig struct {
+	Enabled       bool   `mapstructure:"enabled" yaml:"enabled"`
+	Channel       string `mapstructure:"channel" yaml:"channel,omitempty"`
+	CheckInterval string `mapstructure:"check_interval" yaml:"check_interval,omitempty"`
+}
+
+// FeedbackConfig configures explicit, user-approved feedback submission.
+// Repository is used by the default GitHub CLI path. Endpoint remains an
+// opt-in compatibility override for self-hosted collectors.
+type FeedbackConfig struct {
+	Repository string   `mapstructure:"repository" yaml:"repository,omitempty"`
+	Labels     []string `mapstructure:"labels" yaml:"labels,omitempty"`
+	Endpoint   string   `mapstructure:"endpoint" yaml:"endpoint,omitempty"`
 }
 
 // PersistEnabled reports whether input history should be written to disk.
@@ -912,6 +945,10 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("history.persistence", "save-all")
 	v.SetDefault("history.max_bytes", 524288)
 	v.SetDefault("history.load_entries", 200)
+	v.SetDefault("updates.enabled", true)
+	v.SetDefault("updates.channel", "latest")
+	v.SetDefault("updates.check_interval", "24h")
+	v.SetDefault("feedback.repository", "gnfy/selfmind")
 	v.SetDefault("memory.auto_extract_interval", 5)
 	v.SetDefault("memory.auto_extract_min_chars", 80)
 	v.SetDefault("memory.semantic_recall", true)

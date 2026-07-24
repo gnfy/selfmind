@@ -46,3 +46,5 @@ Thumbs.db
 *.tmp
 *.log
 *.tar.gz
+*.tgz
+/.npm-stage/

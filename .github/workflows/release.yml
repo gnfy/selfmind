@@ -402,11 +402,11 @@ jobs:
           fi
 
   npm-smoke-macos:
-    name: Smoke npm on macOS x64
+    name: Smoke npm on macOS arm64
     needs:
       - metadata
       - npm
-    runs-on: macos-13
+    runs-on: macos-14
     steps:
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -430,7 +430,7 @@ jobs:
           npm init -y >/dev/null
 
           main_package="$(find ../npm-packs -maxdepth 1 -type f -name 'selfmind-cli-[0-9]*.tgz' -print -quit)"
-          platform_package="$(find ../npm-packs -maxdepth 1 -type f -name 'selfmind-cli-darwin-x64-*.tgz' -print -quit)"
+          platform_package="$(find ../npm-packs -maxdepth 1 -type f -name 'selfmind-cli-darwin-arm64-*.tgz' -print -quit)"
           test -n "${main_package}"
           test -n "${platform_package}"
 

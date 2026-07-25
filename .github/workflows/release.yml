@@ -194,7 +194,7 @@ jobs:
             "${artifact_dir}/release-assets/${package_name}.tar.gz" \
             "${package_name}"
 
-          if [[ "${GOOS}" == "linux" ]]; then
+          if [[ "${GOOS}" == "linux" && "${GOARCH}" == "amd64" ]]; then
             "${artifact_dir}/native/${BINARY_NAME}" --version
           else
             file "${artifact_dir}/native/${BINARY_NAME}"

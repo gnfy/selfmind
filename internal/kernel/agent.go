@@ -673,8 +673,6 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 		var ctxFiles []ContextFile
 		if workspace, ok := WorkspaceContextFromContext(ctx); ok {
 			ctxFiles, _ = a.contextScanner.ScanFrom(workspace.Root)
-		} else {
-			ctxFiles, _ = a.contextScanner.Scan()
 		}
 		if len(ctxFiles) > 0 {
 			ctxPrompt := a.contextScanner.BuildContextPrompt(ctxFiles)
@@ -682,6 +680,15 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 				systemPrompt += "\n\n" + ctxPrompt
 				promptSections = append(promptSections, PromptSection{Category: "project_context", Tokens: estimateTokens(ctxPrompt)})
 			}
+		}
+	}
+	// Add a compact, deterministic build-system profile for coding work. This
+	// is evidence derived from manifests and lockfiles only; prompt assembly
+	// never executes repository code.
+	if workspace, ok := WorkspaceContextFromContext(ctx); ok {
+		if profilePrompt := DetectProjectProfile(workspace.Root).Prompt(); profilePrompt != "" {
+			systemPrompt += "\n\n" + profilePrompt
+			promptSections = append(promptSections, PromptSection{Category: "project_context", Tokens: estimateTokens(profilePrompt)})
 		}
 	}
 

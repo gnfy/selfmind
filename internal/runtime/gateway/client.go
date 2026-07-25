@@ -102,6 +102,12 @@ func RequestShutdown(ctx context.Context, opts StopOptions) error {
 	if timeout <= 0 {
 		timeout = ResolveDrainTimeout() + 5*time.Second
 	}
+	initialPID := 0
+	if opts.DataDir != "" {
+		if rec, ok := NewManager(opts.DataDir, "").RunningRecord(); ok {
+			initialPID = rec.PID
+		}
+	}
 	payload, _ := json.Marshal(map[string]interface{}{"force": opts.Force})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, ResolveURL(opts.URL)+"/v1/gateway/shutdown", bytes.NewReader(payload))
 	if err != nil {
@@ -135,7 +141,7 @@ func RequestShutdown(ctx context.Context, opts StopOptions) error {
 	for time.Now().Before(deadline) {
 		if opts.DataDir != "" {
 			manager := NewManager(opts.DataDir, "")
-			if rec, ok := manager.RunningRecord(); !ok || rec.PID <= 0 {
+			if rec, ok := manager.RunningRecord(); !ok || rec.PID <= 0 || (initialPID > 0 && rec.PID != initialPID) {
 				return nil
 			}
 		}

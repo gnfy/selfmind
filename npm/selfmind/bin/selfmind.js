@@ -10,12 +10,20 @@ const require = createRequire(import.meta.url);
 
 const targets = {
   "linux-x64": {
-    packageName: "selfmind-linux-x64",
+    packageName: "@selfmind/cli-linux-x64",
     triple: "x86_64-unknown-linux-gnu",
   },
   "linux-arm64": {
-    packageName: "selfmind-linux-arm64",
+    packageName: "@selfmind/cli-linux-arm64",
     triple: "aarch64-unknown-linux-gnu",
+  },
+  "darwin-x64": {
+    packageName: "@selfmind/cli-darwin-x64",
+    triple: "x86_64-apple-darwin",
+  },
+  "darwin-arm64": {
+    packageName: "@selfmind/cli-darwin-arm64",
+    triple: "aarch64-apple-darwin",
   },
 };
 
@@ -30,13 +38,13 @@ function packageManager() {
 function reinstallHint() {
   switch (packageManager()) {
     case "pnpm":
-      return "pnpm add -g selfmind@latest";
+      return "pnpm add -g @selfmind/cli@latest";
     case "yarn":
-      return "yarn global add selfmind@latest";
+      return "yarn global add @selfmind/cli@latest";
     case "bun":
-      return "bun add -g selfmind@latest";
+      return "bun add -g @selfmind/cli@latest";
     default:
-      return "npm install -g selfmind@latest";
+      return "npm install -g @selfmind/cli@latest";
   }
 }
 
@@ -45,7 +53,7 @@ const target = targets[targetKey];
 if (!target) {
   console.error(
     `SelfMind does not currently support ${process.platform}/${process.arch}. ` +
-      "The official npm release supports Linux x64, Linux arm64, and WSL.",
+      "The official npm release supports Linux x64/arm64, macOS x64/arm64, and WSL.",
   );
   process.exit(1);
 }
@@ -76,7 +84,8 @@ const child = spawn(binaryPath, process.argv.slice(2), {
     ...process.env,
     SELFMIND_INSTALL_METHOD: packageManager(),
     SELFMIND_NPM_LAUNCHER: launcherPath,
-    SELFMIND_NPM_PACKAGE: "selfmind",
+    SELFMIND_NODE_PATH: process.execPath,
+    SELFMIND_NPM_PACKAGE: "@selfmind/cli",
   },
 });
 

@@ -19,7 +19,7 @@ function parseArgs(argv) {
     if (!key?.startsWith("--") || value === undefined) {
       fail(
         "Usage: stage-npm-packages.mjs --version VERSION --linux-x64 PATH " +
-          "--linux-arm64 PATH --out DIR",
+          "--linux-arm64 PATH --darwin-x64 PATH --darwin-arm64 PATH --out DIR",
       );
     }
     result[key.slice(2)] = value;
@@ -43,7 +43,14 @@ function rewritePackageJson(filePath, version) {
 }
 
 const args = parseArgs(process.argv.slice(2));
-for (const required of ["version", "linux-x64", "linux-arm64", "out"]) {
+for (const required of [
+  "version",
+  "linux-x64",
+  "linux-arm64",
+  "darwin-x64",
+  "darwin-arm64",
+  "out",
+]) {
   if (!args[required]) fail(`Missing --${required}`);
 }
 if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(args.version)) {
@@ -68,6 +75,16 @@ const packages = [
     template: "selfmind-linux-arm64",
     binary: path.resolve(args["linux-arm64"]),
     triple: "aarch64-unknown-linux-gnu",
+  },
+  {
+    template: "selfmind-darwin-x64",
+    binary: path.resolve(args["darwin-x64"]),
+    triple: "x86_64-apple-darwin",
+  },
+  {
+    template: "selfmind-darwin-arm64",
+    binary: path.resolve(args["darwin-arm64"]),
+    triple: "aarch64-apple-darwin",
   },
 ];
 

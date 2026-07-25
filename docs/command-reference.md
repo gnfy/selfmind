@@ -80,7 +80,7 @@ selfmind model [current|check|list|set <provider> <model>]
 selfmind auth [login|status|logout] ...
 selfmind doctor [--out FILE] [--probe-models]
 selfmind selfcheck [--skip-go] [--skip-eval] [--eval-dir DIR]
-selfmind gateway [run|start|status|stop|restart] ...
+selfmind gateway [run|start|status|stop|restart|service] ...
 selfmind weixin [login|status] ...
 ```
 
@@ -96,6 +96,7 @@ selfmind gateway start [--replace]
 selfmind gateway status [--json]
 selfmind gateway stop [--force]
 selfmind gateway restart [--drain] [--force]
+selfmind gateway service [install|status|uninstall]
 
 selfmind weixin login [--timeout 8m] [--owner-person-id ID] [--no-enable]
 selfmind weixin status
@@ -110,6 +111,14 @@ selfmind weixin status
 - `selfcheck` runs repository checks used before release.
 - `gateway restart` drains to a safe turn boundary by default; `--force` is an
   explicit last resort.
+- On macOS, `gateway service install` creates the current user's launchd
+  LaunchAgent. `gateway start`, `stop`, `status`, and `restart` then operate on
+  that stable service; `restart --drain` lets the active turn reach a safe
+  boundary before launchd relaunches the daemon.
+- If Weixin reports an expired iLink session, run `selfmind weixin login`
+  again. The running gateway watches the account credential file and resumes
+  polling after the refreshed credentials are saved; no daemon restart is
+  required.
 
 ## Evaluation and maintenance
 

@@ -76,7 +76,7 @@ selfmind model [current|check|list|set <provider> <model>]
 selfmind auth [login|status|logout] ...
 selfmind doctor [--out FILE] [--probe-models]
 selfmind selfcheck [--skip-go] [--skip-eval] [--eval-dir DIR]
-selfmind gateway [run|start|status|stop|restart] ...
+selfmind gateway [run|start|status|stop|restart|service] ...
 selfmind weixin [login|status] ...
 ```
 
@@ -92,6 +92,7 @@ selfmind gateway start [--replace]
 selfmind gateway status [--json]
 selfmind gateway stop [--force]
 selfmind gateway restart [--drain] [--force]
+selfmind gateway service [install|status|uninstall]
 
 selfmind weixin login [--timeout 8m] [--owner-person-id ID] [--no-enable]
 selfmind weixin status
@@ -103,6 +104,13 @@ selfmind weixin status
 - `doctor` 检查安装和配置；`--probe-models` 会真实调用 provider，可能消耗额度。
 - `selfcheck` 执行发布前使用的仓库检查。
 - `gateway restart` 默认等待安全的 turn 边界；`--force` 仅作为最后手段。
+- 在 macOS 上，`gateway service install` 会为当前用户创建 launchd
+  LaunchAgent。之后 `gateway start`、`stop`、`status`、`restart` 都操作这个
+  稳定服务；`restart --drain` 会先等待活跃 turn 到达安全边界，再由
+  launchd 重新拉起 daemon。
+- 如果微信 iLink 会话过期，重新运行 `selfmind weixin login`。正在运行的
+  gateway 会监听账号凭据文件，在新凭据保存后自动恢复轮询，不需要重启
+  daemon。
 
 ## Eval 与维护命令
 

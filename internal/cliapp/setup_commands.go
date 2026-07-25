@@ -59,6 +59,17 @@ func (a *App) runSetupCommandIfRequested() (bool, int) {
 		if !a.gatewayTargetIsLocal() {
 			fmt.Fprintf(a.stdout, "Gateway: remote (%s); no local daemon was started.\n", a.gatewayURL())
 		} else {
+			if gatewayServiceSupported() {
+				path, err := gatewayServiceInstall(a.configPath)
+				if err != nil {
+					fmt.Fprintf(a.stderr, "Gateway service setup failed: %v\n", err)
+					fmt.Fprintln(a.stderr, "Run `selfmind gateway run` for foreground logs, or `selfmind doctor`.")
+					return true, 1
+				}
+				fmt.Fprintf(a.stdout, "Gateway: launchd service installed and started.\nPlist: %s\n", path)
+				fmt.Fprintln(a.stdout, "Setup complete. Run `selfmind` to start the CLI.")
+				return true, 0
+			}
 			ctx, cancel := contextWithTimeout(a.ctx, 15*time.Second)
 			defer cancel()
 			result, err := gatewayrt.EnsureRunning(ctx, gatewayrt.EnsureOptions{

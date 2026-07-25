@@ -248,9 +248,9 @@ func (s *Store) MarkExternalWatchFinalized(ctx context.Context, tenantID, id str
 	return n == 1, nil
 }
 
-// MarkExternalWatchNotified records that the completion notification was
-// either durably enqueued to an endpoint or intentionally satisfied by an
-// attached CLI rendering the durable completion event.
+// MarkExternalWatchNotified records that the completion notification has a
+// durable delivery path. An attached CLI is not delivery by itself because it
+// may disconnect before rendering the event.
 func (s *Store) MarkExternalWatchNotified(ctx context.Context, tenantID, id string) (bool, error) {
 	result, err := s.db.ExecContext(ctx, `UPDATE external_watches
 		SET notified = 1, updated_at = ?

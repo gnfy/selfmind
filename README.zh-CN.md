@@ -28,7 +28,7 @@ SelfMind 是一个用 Go 编写的个人 AI Agent 运行时。它的目标不是
 - Hermes 风格的原生工具调用：OpenAI-compatible provider 优先使用 native tool calls，失败后回退到旧文本工具调用格式；工具层包含重复失败/无进展 guardrail 和敏感信息脱敏。
 - `models.roles` 模型路由：编码、记忆提取、后台复盘、Skill 整理、语义召回可以使用不同模型。
 - 动态模型 runtime：支持 `provider_profiles`、实时模型列表、本地模型列表缓存，以及 Codex CLI、Claude Code、Gemini CLI、Qwen CLI 的 best-effort 登录复用。其中 Codex CLI 和 SelfMind 自有的 MiniMax OAuth profile 还会自动刷新过期的 access token。
-- 内置 IM 适配器：Telegram、个人/企业微信（Weixin，iLink 协议，内建扫码登录 `selfmind weixin login`）、飞书/Lark、QQ 官方机器人。微信走轮询入站 + 媒体下载；飞书/QQ 入站走通用 webhook、出站走 delivery sender。
+- 内置 IM 适配器：Telegram、个人/企业微信（Weixin，iLink 协议，内建扫码登录 `selfmind weixin login`）、飞书/Lark、QQ 官方机器人。微信走轮询入站 + 媒体下载；飞书/QQ 入站走通用 webhook、出站走 delivery sender。iLink 会话过期后重新运行 `selfmind weixin login` 即可；正在运行的 gateway 会热加载新凭据并恢复轮询，不需要重启。
 - MCP 客户端：基于 stdio/HTTP（JSON-RPC），支持多 server 连接和按需工具注册。
 - 文件/终端之外的扩展内置工具：`web_search`、`web_extract`、`execute_code`，以及并行多 agent 的 `delegate_task`。
 
@@ -43,16 +43,18 @@ SelfMind 是一个用 Go 编写的个人 AI Agent 运行时。它的目标不是
 - 本地开发需要 Go 1.26+。
 - 通过 npm 安装发布版需要 Node.js 18+。
 - 至少配置一个模型供应商，才能获得真实 AI 回复。
-- 官方发布包当前优先面向 Linux 服务器：`linux-amd64` 和 `linux-arm64`。
-- Windows / macOS 可以用于本地开发和调试，但当前不是官方发布目标。
+- 官方 npm 发布包支持 Linux x64/arm64、macOS x64/arm64 和 WSL。
+- 不支持原生 Windows；Windows 用户请使用 WSL。
+- Linux 通过 bubblewrap 提供更强的执行隔离；macOS 当前使用“审批控制的宿主机执行”，
+  如果任务明确要求严格隔离而当前平台无法提供，则会直接拒绝执行。
 
 ## 通过 npm 安装
 
-npm 发布版支持 Linux x64、Linux arm64 和 WSL。npm 只负责安装一个很小的
-启动器和对应架构的 SelfMind 原生二进制。
+npm 发布版支持 Linux x64/arm64、macOS x64/arm64 和 WSL。npm 只负责安装
+一个很小的启动器和对应架构的 SelfMind 原生二进制。
 
 ```sh
-npm install --global selfmind@latest
+npm install --global @selfmind/cli@latest
 selfmind setup
 selfmind doctor
 selfmind
@@ -62,12 +64,24 @@ selfmind
 
 ```sh
 selfmind update check
-npm install --global selfmind@latest
+npm install --global @selfmind/cli@latest
 selfmind gateway restart --drain
 ```
 
 预发布版本使用 `selfmind@next`。完整的发布、升级、卸载和反馈隐私规则见
 [`docs/npm-distribution.md`](docs/npm-distribution.md)。
+
+在 macOS 上，`selfmind setup` 会安装当前用户的 launchd 服务。可以使用下面
+的命令检查或删除：
+
+```sh
+selfmind gateway service status
+selfmind gateway service uninstall
+```
+
+`selfmind gateway start` 会复用已经运行的 LaunchAgent。升级时使用
+`selfmind gateway restart --drain`，让活跃 turn 到达安全边界后再替换
+daemon。
 
 ## 构建与运行
 
@@ -75,12 +89,6 @@ selfmind gateway restart --drain
 
 ```sh
 go build -ldflags="-s -w" -o selfmind ./cmd/selfmind
-```
-
-Windows：
-
-```powershell
-go build -ldflags="-s -w" -o selfmind.exe ./cmd/selfmind
 ```
 
 开发时运行：
@@ -850,6 +858,7 @@ Linux 安装脚本会创建 `/etc/selfmind/config.yaml`、`/var/lib/selfmind/dat
 
 - [完整命令参考](docs/command-reference.zh-CN.md)
 - [配置参考](docs/config-reference.md)
+- [编程 Agent 基础契约](docs/coding-agent-foundations.zh-CN.md)
 - [当前开发状态](docs/STATUS.md)
 
 重要目录：

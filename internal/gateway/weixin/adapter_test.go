@@ -6,12 +6,63 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"selfmind/internal/control"
 	"selfmind/internal/gateway/api"
 	"selfmind/internal/gateway/delivery"
 	"selfmind/internal/gateway/router"
 )
+
+func TestAdapterWaitsForCredentialRefresh(t *testing.T) {
+	home := t.TempDir()
+	adapter := NewAdapter(RuntimeConfig{
+		AccountID: "wx-account",
+		Token:     "expired-token",
+		BaseURL:   "https://old.example",
+		HomeDir:   home,
+	}, nil, nil)
+	adapter.credentialRefreshInterval = time.Millisecond
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	expiredAt := time.Now().UTC()
+	go func() {
+		time.Sleep(10 * time.Millisecond)
+		_ = SaveCredentials(home, &Credentials{
+			AccountID: "wx-account",
+			Token:     "fresh-token",
+			BaseURL:   "https://fresh.example",
+			SavedAt:   time.Now().UTC().Format(time.RFC3339Nano),
+		})
+	}()
+
+	if !adapter.waitForCredentialRefresh(ctx, "expired-token", expiredAt) {
+		t.Fatal("credential refresh was not detected")
+	}
+	client := adapter.clientSnapshot()
+	if client.cfg.Token != "fresh-token" {
+		t.Fatalf("token = %q, want fresh-token", client.cfg.Token)
+	}
+	if client.cfg.BaseURL != "https://fresh.example" {
+		t.Fatalf("base URL = %q", client.cfg.BaseURL)
+	}
+}
+
+func TestCredentialRefreshesSessionWithSameTokenAfterRelogin(t *testing.T) {
+	expiredAt := time.Now().UTC().Add(-time.Second)
+	cred := &Credentials{
+		Token:   "same-token",
+		SavedAt: time.Now().UTC().Format(time.RFC3339Nano),
+	}
+	if !credentialRefreshesSession(cred, "same-token", expiredAt) {
+		t.Fatal("a newer credential file must refresh the session even when the token is unchanged")
+	}
+	cred.SavedAt = expiredAt.Add(-time.Second).Format(time.RFC3339Nano)
+	if credentialRefreshesSession(cred, "same-token", expiredAt) {
+		t.Fatal("an older credential file must not refresh the session")
+	}
+}
 
 func TestAdapterProactiveSendUsesConcreteRecipient(t *testing.T) {
 	var target string

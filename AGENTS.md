@@ -32,6 +32,7 @@ Read the matching document before changing a domain:
 | Gateway workers and daemon clients | `docs/worker-pool-design.md` |
 | Providers, auth, and model routing | `docs/provider-runtime.md` |
 | Tools, approval, and safety | `docs/tool-safety.md` |
+| Coding-agent behavior and project discovery | `docs/coding-agent-foundations.md` |
 | Skills | `docs/skills-architecture.md` |
 | TUI and transcript rendering | `docs/tui-terminal-first-hybrid.md` |
 | Eval cases and cassettes | `docs/eval-loop.md` |
@@ -72,8 +73,10 @@ Read the matching document before changing a domain:
 - File, terminal, patch, process, and workspace-aware memory tools must run
   under the request's `ExecutionScope` and active workspace roots, not the
   daemon process cwd.
-- Linux server builds are the official release target. Windows and macOS are
-  best-effort until explicitly hardened.
+- Linux and macOS x64/arm64 are official CLI/daemon release targets. Linux
+  provides the strongest isolated execution path. macOS uses
+  approval-controlled host execution unless a future native sandbox is
+  explicitly added. Native Windows is unsupported; use WSL.
 
 ## Identity, Gateway, and Runs
 
@@ -197,6 +200,11 @@ Read the matching document before changing a domain:
   evidence. A repeated identical call without changed inputs or state is not
   progress. Completion comes from structured outcome plus execution evidence,
   not from model assertion alone.
+- Project discovery is deterministic, bounded, read-only, and language
+  agnostic. It may suggest verification commands only from detected manifests,
+  lockfiles, and declared scripts. Add ecosystem support to the typed project
+  profile; never add language keyword routing or project-specific commands to
+  the gateway or main loop.
 
 ## Tools and Safety
 

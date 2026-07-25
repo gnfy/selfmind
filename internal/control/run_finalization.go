@@ -108,13 +108,17 @@ func (s *Store) MaterializeRunFinalization(ctx context.Context, input RunFinaliz
 		return nil, fmt.Errorf("finish run affected %d rows", n)
 	}
 
+	taskStatus, err := resolveFinalTaskStatusTx(ctx, tx, tenant, input.TaskID, input.RunID, input.TaskStatus)
+	if err != nil {
+		return nil, fmt.Errorf("reduce task status: %w", err)
+	}
 	result, err = tx.ExecContext(ctx,
 		`UPDATE tasks SET status = ?, current_summary = COALESCE(NULLIF(?, ''), current_summary),
 		 next_steps_json = ?, active_run_id = CASE WHEN active_run_id = ? THEN '' ELSE active_run_id END,
 		 archived_at = CASE WHEN ? = 'archived' THEN COALESCE(archived_at, ?) ELSE NULL END,
 		 last_activity_at = ?, updated_at = ? WHERE tenant_id = ? AND id = ?`,
-		input.TaskStatus, input.Summary, string(nextJSON), input.RunID,
-		input.TaskStatus, now.Unix(), now.Unix(), now.Unix(), tenant, input.TaskID)
+		taskStatus, input.Summary, string(nextJSON), input.RunID,
+		taskStatus, now.Unix(), now.Unix(), now.Unix(), tenant, input.TaskID)
 	if err != nil {
 		return nil, fmt.Errorf("update task: %w", err)
 	}
@@ -237,6 +241,87 @@ func (s *Store) MaterializeRunFinalization(ctx context.Context, input RunFinaliz
 		s.events.publish(input.Event)
 	}
 	return &input.Event, nil
+}
+
+// resolveFinalTaskStatusTx derives the task state from durable blockers before
+// applying the run's proposed terminal status. This prevents a late run from
+// overwriting a task that still has another active run, a pending user gate,
+// an external watch, or a queued watcher finalization.
+func resolveFinalTaskStatusTx(
+	ctx context.Context,
+	tx *sql.Tx,
+	tenantID, taskID, finishingRunID, proposed string,
+) (string, error) {
+	hasRows := func(query string, args ...interface{}) (bool, error) {
+		var found int
+		if err := tx.QueryRowContext(ctx, query, args...).Scan(&found); err != nil {
+			return false, err
+		}
+		return found != 0, nil
+	}
+
+	pendingUser, err := hasRows(
+		`SELECT EXISTS(
+			SELECT 1 FROM approval_requests
+			WHERE tenant_id = ? AND task_id = ? AND status = 'pending'
+			UNION ALL
+			SELECT 1 FROM clarify_requests
+			WHERE tenant_id = ? AND task_id = ? AND status = 'pending'
+		)`,
+		tenantID, taskID, tenantID, taskID,
+	)
+	if err != nil {
+		return "", err
+	}
+	if pendingUser {
+		return "waiting_user", nil
+	}
+
+	activeRun, err := hasRows(
+		`SELECT EXISTS(
+			SELECT 1 FROM task_runs
+			WHERE tenant_id = ? AND task_id = ? AND id <> ? AND status = 'running'
+		)`,
+		tenantID, taskID, finishingRunID,
+	)
+	if err != nil {
+		return "", err
+	}
+	if activeRun {
+		return "in_progress", nil
+	}
+
+	waitingExternal, err := hasRows(
+		`SELECT EXISTS(
+			SELECT 1 FROM external_watches
+			WHERE tenant_id = ? AND task_id = ? AND status IN ('pending', 'running')
+		)`,
+		tenantID, taskID,
+	)
+	if err != nil {
+		return "", err
+	}
+	if waitingExternal {
+		return "waiting_external", nil
+	}
+
+	waitingFinalization, err := hasRows(
+		`SELECT EXISTS(
+			SELECT 1 FROM task_queue
+			WHERE tenant_id = ? AND task_id = ?
+			  AND status IN ('queued', 'started')
+			  AND idempotency_key LIKE 'external-watch:%:finalization'
+			  AND (COALESCE(run_id, '') = '' OR run_id <> ?)
+		)`,
+		tenantID, taskID, finishingRunID,
+	)
+	if err != nil {
+		return "", err
+	}
+	if waitingFinalization {
+		return "waiting_finalization", nil
+	}
+	return proposed, nil
 }
 
 func outcomeFromTerminalPayload(payload json.RawMessage) json.RawMessage {

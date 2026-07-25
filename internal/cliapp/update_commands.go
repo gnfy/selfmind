@@ -80,13 +80,13 @@ func updateInstallCommand(channel string) string {
 	}
 	switch strings.ToLower(strings.TrimSpace(os.Getenv("SELFMIND_INSTALL_METHOD"))) {
 	case "pnpm":
-		return "pnpm add -g selfmind@" + tag
+		return "pnpm add -g @selfmind/cli@" + tag
 	case "yarn":
-		return "yarn global add selfmind@" + tag
+		return "yarn global add @selfmind/cli@" + tag
 	case "bun":
-		return "bun add -g selfmind@" + tag
+		return "bun add -g @selfmind/cli@" + tag
 	default:
-		return "npm install -g selfmind@" + tag
+		return "npm install -g @selfmind/cli@" + tag
 	}
 }
 

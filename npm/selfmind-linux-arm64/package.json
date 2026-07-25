@@ -1,5 +1,5 @@
 {
-  "name": "selfmind-linux-arm64",
+  "name": "@selfmind/cli-linux-arm64",
   "version": "0.0.0-dev",
   "description": "SelfMind native binary for Linux arm64",
   "license": "Apache-2.0",

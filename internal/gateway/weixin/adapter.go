@@ -28,20 +28,23 @@ type Adapter struct {
 	store   *control.Store
 	handler MessageHandler
 
-	mu     sync.Mutex
-	seen   map[string]time.Time
-	cancel context.CancelFunc
-	done   chan struct{}
+	clientMu                  sync.RWMutex
+	credentialRefreshInterval time.Duration
+	mu                        sync.Mutex
+	seen                      map[string]time.Time
+	cancel                    context.CancelFunc
+	done                      chan struct{}
 }
 
 func NewAdapter(cfg RuntimeConfig, store *control.Store, handler MessageHandler) *Adapter {
 	return &Adapter{
-		cfg:     cfg,
-		client:  NewClient(cfg),
-		store:   store,
-		handler: handler,
-		seen:    map[string]time.Time{},
-		done:    make(chan struct{}),
+		cfg:                       cfg,
+		client:                    NewClient(cfg),
+		store:                     store,
+		handler:                   handler,
+		seen:                      map[string]time.Time{},
+		done:                      make(chan struct{}),
+		credentialRefreshInterval: 15 * time.Second,
 	}
 }
 
@@ -61,7 +64,7 @@ func (a *Adapter) Start(ctx context.Context) error {
 	if a.handler == nil {
 		return fmt.Errorf("weixin message handler is required")
 	}
-	a.client.RestoreContextTokens()
+	a.clientSnapshot().RestoreContextTokens()
 	pollCtx, cancel := context.WithCancel(ctx)
 	a.cancel = cancel
 	go a.pollLoop(pollCtx)
@@ -92,7 +95,11 @@ func (a *Adapter) Send(ctx context.Context, msg delivery.Message) error {
 // reaches the phone (observed live 2026-07-04). Delivery confidence therefore
 // comes from token freshness, not from the send response.
 func (a *Adapter) SendWithReceipt(ctx context.Context, msg delivery.Message) (bool, error) {
-	if a == nil || a.client == nil {
+	if a == nil {
+		return false, delivery.ErrNoSender
+	}
+	client := a.clientSnapshot()
+	if client == nil {
 		return false, delivery.ErrNoSender
 	}
 	target := strings.TrimSpace(msg.Channel)
@@ -107,8 +114,8 @@ func (a *Adapter) SendWithReceipt(ctx context.Context, msg delivery.Message) (bo
 	if target == "" {
 		return false, fmt.Errorf("weixin delivery target is empty")
 	}
-	confirmed := a.client.PushConfidence(target)
-	if err := a.client.Send(ctx, target, msg.Content); err != nil {
+	confirmed := client.PushConfidence(target)
+	if err := client.Send(ctx, target, msg.Content); err != nil {
 		return confirmed, err
 	}
 	if !confirmed {
@@ -129,22 +136,22 @@ func (a *Adapter) pollLoop(ctx context.Context) {
 			return
 		default:
 		}
-		resp, err := a.client.GetUpdates(ctx, syncBuf, 50*time.Second)
+		client := a.clientSnapshot()
+		resp, err := client.GetUpdates(ctx, syncBuf, 50*time.Second)
 		if err != nil {
 			if errors.Is(err, ErrSessionExpired) {
-				// Recovery requires a manual re-login; poll slowly instead of
-				// hammering, and shout once per expiry so the owner learns the
-				// channel is down instead of discovering it by silence.
 				if !sessionExpiredLogged {
-					log.Error("weixin session expired — inbound messages are NOT being received; run `selfmind weixin login` and restart the gateway", "error", tools.RedactSensitive(err.Error()))
+					log.Error("weixin session expired - inbound messages are not being received; run `selfmind weixin login` to refresh the account", "error", tools.RedactSensitive(err.Error()))
 					sessionExpiredLogged = true
 				}
-				select {
-				case <-ctx.Done():
-					return
-				case <-time.After(5 * time.Minute):
+				if a.waitForCredentialRefresh(ctx, client.cfg.Token, time.Now()) {
+					syncBuf = a.loadSyncBuf()
+					backoff = time.Second
+					sessionExpiredLogged = false
+					log.Info("weixin credentials refreshed; polling resumed", "account_id", safeID(a.cfg.AccountID))
+					continue
 				}
-				continue
+				return
 			}
 			log.Warn("weixin getupdates failed", "error", tools.RedactSensitive(err.Error()))
 			wait := backoff
@@ -199,15 +206,16 @@ func (a *Adapter) processMessage(ctx context.Context, raw map[string]interface{}
 	if sender == a.cfg.AccountID {
 		return nil
 	}
+	client := a.clientSnapshot()
 	isGroup := isGroupChat(msg, chatID)
 	if !a.allowed(sender, chatID, isGroup) {
 		log.Warn("weixin message ignored by policy", "sender", safeID(sender), "chat", safeID(chatID), "group", isGroup)
 		return nil
 	}
 	if token := stringFromMap(msg, "context_token"); token != "" {
-		a.client.SaveContextToken(chatID, token)
+		client.SaveContextToken(chatID, token)
 	}
-	a.client.FetchTypingTicket(ctx, chatID, stringFromMap(msg, "context_token"))
+	client.FetchTypingTicket(ctx, chatID, stringFromMap(msg, "context_token"))
 
 	text := extractMessageText(msg)
 	attachments := a.extractAttachments(ctx, msg)
@@ -224,8 +232,8 @@ func (a *Adapter) processMessage(ctx context.Context, raw map[string]interface{}
 			return err
 		}
 	}
-	_ = a.client.SendTyping(ctx, chatID, true)
-	defer a.client.SendTyping(context.Background(), chatID, false)
+	_ = client.SendTyping(ctx, chatID, true)
+	defer client.SendTyping(context.Background(), chatID, false)
 
 	req := api.MessageRequest{
 		TenantID:       tenantID,
@@ -240,19 +248,20 @@ func (a *Adapter) processMessage(ctx context.Context, raw map[string]interface{}
 	resp, status := a.handler(ctx, req)
 	if status >= http.StatusBadRequest || strings.TrimSpace(resp.Error) != "" {
 		errText := firstNonEmpty(resp.Error, fmt.Sprintf("weixin request failed: HTTP %d", status))
-		_ = a.client.Send(context.Background(), chatID, "SelfMind error: "+errText)
+		_ = client.Send(context.Background(), chatID, "SelfMind error: "+errText)
 		return nil
 	}
 	if strings.TrimSpace(resp.Content) != "" {
-		return a.client.Send(context.Background(), chatID, resp.Content)
+		return client.Send(context.Background(), chatID, resp.Content)
 	}
 	if resp.Accepted {
-		return a.client.Send(context.Background(), chatID, router.WorkingNotice("weixin"))
+		return client.Send(context.Background(), chatID, router.WorkingNotice("weixin"))
 	}
 	return nil
 }
 
 func (a *Adapter) extractAttachments(ctx context.Context, msg map[string]interface{}) []api.MessageAttachment {
+	client := a.clientSnapshot()
 	items := interfaceSlice(msg["item_list"])
 	if len(items) == 0 {
 		items = interfaceSlice(msg["items"])
@@ -266,7 +275,7 @@ func (a *Adapter) extractAttachments(ctx context.Context, msg map[string]interfa
 		if intFromMap(item, "type") == itemText {
 			continue
 		}
-		att, err := a.client.DownloadAttachment(ctx, item, a.cfg.DataDir)
+		att, err := client.DownloadAttachment(ctx, item, a.cfg.DataDir)
 		if err != nil {
 			log.Warn("weixin media download failed", "error", tools.RedactSensitive(err.Error()))
 			continue
@@ -276,6 +285,60 @@ func (a *Adapter) extractAttachments(ctx context.Context, msg map[string]interfa
 		}
 	}
 	return out
+}
+
+func (a *Adapter) clientSnapshot() *Client {
+	if a == nil {
+		return nil
+	}
+	a.clientMu.RLock()
+	defer a.clientMu.RUnlock()
+	return a.client
+}
+
+func (a *Adapter) replaceClient(client *Client) {
+	a.clientMu.Lock()
+	a.client = client
+	a.clientMu.Unlock()
+}
+
+func (a *Adapter) waitForCredentialRefresh(ctx context.Context, expiredToken string, expiredAt time.Time) bool {
+	interval := a.credentialRefreshInterval
+	if interval <= 0 {
+		interval = 15 * time.Second
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		cred, err := LoadCredentials(a.cfg.HomeDir, a.cfg.AccountID)
+		if err == nil && credentialRefreshesSession(cred, expiredToken, expiredAt) {
+			cfg := a.cfg
+			cfg.Token = strings.TrimSpace(cred.Token)
+			if baseURL := strings.TrimSpace(cred.BaseURL); baseURL != "" {
+				cfg.BaseURL = strings.TrimRight(baseURL, "/")
+			}
+			client := NewClient(cfg)
+			client.RestoreContextTokens()
+			a.replaceClient(client)
+			return true
+		}
+		select {
+		case <-ctx.Done():
+			return false
+		case <-ticker.C:
+		}
+	}
+}
+
+func credentialRefreshesSession(cred *Credentials, expiredToken string, expiredAt time.Time) bool {
+	if cred == nil || strings.TrimSpace(cred.Token) == "" {
+		return false
+	}
+	if strings.TrimSpace(cred.Token) != strings.TrimSpace(expiredToken) {
+		return true
+	}
+	savedAt, err := time.Parse(time.RFC3339, strings.TrimSpace(cred.SavedAt))
+	return err == nil && savedAt.After(expiredAt)
 }
 
 func (a *Adapter) allowed(sender, chat string, isGroup bool) bool {

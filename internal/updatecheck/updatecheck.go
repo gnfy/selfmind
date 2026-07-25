@@ -14,7 +14,7 @@ import (
 )
 
 const (
-	defaultRegistryURL = "https://registry.npmjs.org/selfmind/dist-tags"
+	defaultRegistryURL = "https://registry.npmjs.org/-/package/@selfmind%2Fcli/dist-tags"
 	defaultInterval    = 24 * time.Hour
 )
 

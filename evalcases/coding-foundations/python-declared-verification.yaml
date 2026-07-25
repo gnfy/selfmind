@@ -1,0 +1,46 @@
+id: coding_python_declared_verification
+title: "a Python change discovers and runs the existing test workflow"
+suite: coding-foundations
+workspace: isolated
+channel: cli
+
+# Record after intentional coding-loop changes:
+#   SELFMIND_EVAL_VCR=record selfmind eval run \
+#     evalcases/coding-foundations/python-declared-verification.yaml --live
+setup:
+  files:
+    pyproject.toml: |
+      [project]
+      name = "selfmind-eval-python"
+      version = "0.0.1"
+    calculator.py: |
+      def multiply(a, b):
+          return a + b
+    tests/test_calculator.py: |
+      from calculator import multiply
+
+      def test_multiply():
+          assert multiply(3, 4) == 12
+turns:
+  - input: "Fix the failing Python implementation. Inspect the project first, then run the existing verification after the final edit."
+
+expect:
+  status: completed
+  completion_reason: completed
+  verification_state: passed
+  require_tool_events: true
+  min_tool_calls: 2
+  max_tool_errors: 1
+  max_duration_seconds: 180
+
+assert_state:
+  - on: file
+    path: "calculator.py"
+    exists: true
+    contains: "a * b"
+
+checks:
+  no_mojibake: true
+  no_raw_json_leak: true
+  no_empty_response: true
+  no_provider_stack_dump: true

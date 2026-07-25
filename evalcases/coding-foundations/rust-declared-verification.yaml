@@ -1,0 +1,54 @@
+id: coding_rust_declared_verification
+title: "a Rust change preserves scope and verifies with Cargo"
+suite: coding-foundations
+workspace: isolated
+channel: cli
+
+# Record after intentional coding-loop changes:
+#   SELFMIND_EVAL_VCR=record selfmind eval run \
+#     evalcases/coding-foundations/rust-declared-verification.yaml --live
+setup:
+  files:
+    Cargo.toml: |
+      [package]
+      name = "selfmind-eval-rust"
+      version = "0.1.0"
+      edition = "2021"
+    src/lib.rs: |
+      pub fn is_even(value: i32) -> bool {
+          value % 2 != 0
+      }
+
+      #[cfg(test)]
+      mod tests {
+          use super::is_even;
+
+          #[test]
+          fn classifies_even_values() {
+              assert!(is_even(8));
+              assert!(!is_even(7));
+          }
+      }
+turns:
+  - input: "Fix the Rust bug without changing the public API, then run the project's test workflow."
+
+expect:
+  status: completed
+  completion_reason: completed
+  verification_state: passed
+  require_tool_events: true
+  min_tool_calls: 2
+  max_tool_errors: 1
+  max_duration_seconds: 240
+
+assert_state:
+  - on: file
+    path: "src/lib.rs"
+    exists: true
+    contains: "value % 2 == 0"
+
+checks:
+  no_mojibake: true
+  no_raw_json_leak: true
+  no_empty_response: true
+  no_provider_stack_dump: true

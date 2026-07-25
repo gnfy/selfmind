@@ -27,7 +27,7 @@ env:
 
 jobs:
   gate:
-    name: build · test · offline-eval
+    name: Linux build, test, offline eval
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -58,3 +58,25 @@ jobs:
         env:
           SELFMIND_EVAL_MIN_CASES: "3"
         run: go run ./cmd/selfmind selfcheck --skip-go
+
+  macos:
+    name: macOS build and test
+    runs-on: macos-14
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Build
+        run: go build ./...
+
+      - name: Test
+        run: go test ./...

@@ -189,7 +189,7 @@ var documentedCLIUsages = []string{
 	"selfmind selfcheck [--skip-go] [--skip-eval] [--eval-dir DIR]",
 	"selfmind eval [list|run|report|repair|scorecard|capture|clean]",
 	"selfmind maintenance [replay|migrate-memory|memory-audit|memory-dedup] ...",
-	"selfmind gateway [run|start|status|stop|restart] ...",
+	"selfmind gateway [run|start|status|stop|restart|service] ...",
 	"selfmind weixin [login|status] ...",
 }
 

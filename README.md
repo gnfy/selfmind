@@ -25,7 +25,7 @@ Available for daily personal use:
 - Native tool calling for OpenAI-compatible providers, with legacy text-tool fallback, repeated-failure/no-progress guardrails, and secret redaction.
 - Role-based model routing through `models.roles`, so coding, memory extraction, background review, skill curation, and semantic recall can use different models.
 - Dynamic model runtime with provider profiles, live model-list fetching, local model-list cache, and best-effort auth reuse for Codex CLI, Claude Code, Gemini CLI, and Qwen CLI. Codex CLI and the SelfMind-owned MiniMax OAuth profile additionally auto-refresh expired access tokens.
-- Built-in IM adapters: Telegram, personal/enterprise WeChat (Weixin, iLink protocol with built-in QR login via `selfmind weixin login`), Feishu/Lark, and QQ official bot. WeChat does inbound polling + media; Feishu/QQ use the generic webhook for inbound and a delivery sender for outbound.
+- Built-in IM adapters: Telegram, personal/enterprise WeChat (Weixin, iLink protocol with built-in QR login via `selfmind weixin login`), Feishu/Lark, and QQ official bot. WeChat does inbound polling + media; Feishu/QQ use the generic webhook for inbound and a delivery sender for outbound. If an iLink session expires, run `selfmind weixin login` again; the running gateway hot-reloads the refreshed credentials and resumes polling without a restart.
 - MCP client over stdio/HTTP (JSON-RPC) with multi-server connections and on-demand tool registration.
 - Extended built-in tools beyond file/terminal: `web_search`, `web_extract`, `execute_code`, and parallel multi-agent `delegate_task`.
 
@@ -40,16 +40,19 @@ Still first-version or planned:
 - Go 1.26+ for local development.
 - Node.js 18+ when installing the release through npm.
 - At least one configured model provider for real AI responses.
-- Official release packaging currently targets Linux server deployments: `linux-amd64` and `linux-arm64`.
-- Windows and macOS can be used for local development and debugging, but are not the current release targets.
+- Official npm releases target Linux x64/arm64, macOS x64/arm64, and WSL.
+- Native Windows is not supported; use WSL on Windows.
+- Linux provides the strongest execution isolation through bubblewrap. macOS
+  currently uses approval-controlled host execution and fails closed when
+  strict isolated execution is requested.
 
 ## Install With npm
 
-The npm release supports Linux x64, Linux arm64, and WSL. It installs the
-matching native SelfMind binary behind a small Node.js launcher.
+The npm release supports Linux x64/arm64, macOS x64/arm64, and WSL. It
+installs the matching native SelfMind binary behind a small Node.js launcher.
 
 ```sh
-npm install --global selfmind@latest
+npm install --global @selfmind/cli@latest
 selfmind setup
 selfmind doctor
 selfmind
@@ -59,13 +62,25 @@ Check for updates and upgrade without interrupting an active turn:
 
 ```sh
 selfmind update check
-npm install --global selfmind@latest
+npm install --global @selfmind/cli@latest
 selfmind gateway restart --drain
 ```
 
 Prerelease builds use `selfmind@next`. See
 [`docs/npm-distribution.md`](docs/npm-distribution.md) for package topology,
 release operations, uninstall behavior, and feedback privacy.
+
+On macOS, `selfmind setup` installs a per-user launchd service. Inspect or
+remove it with:
+
+```sh
+selfmind gateway service status
+selfmind gateway service uninstall
+```
+
+`selfmind gateway start` reuses an already running LaunchAgent. Use
+`selfmind gateway restart --drain` for upgrades so the active turn reaches a
+safe boundary before the daemon is replaced.
 
 Report a problem locally, or explicitly create a GitHub Issue in the official
 `gnfy/selfmind` repository:
@@ -87,12 +102,6 @@ Build the user-facing binary:
 
 ```sh
 go build -ldflags="-s -w" -o selfmind ./cmd/selfmind
-```
-
-On Windows:
-
-```powershell
-go build -ldflags="-s -w" -o selfmind.exe ./cmd/selfmind
 ```
 
 Development run:
@@ -841,6 +850,7 @@ Related documentation:
 
 - [Complete command reference](docs/command-reference.md)
 - [Configuration reference](docs/config-reference.md)
+- [Coding agent foundations](docs/coding-agent-foundations.md)
 - [Current development status](docs/STATUS.md)
 
 Run tests:
@@ -862,6 +872,7 @@ Architecture notes:
 - [Identity & Cross-Endpoint Continuity (north star)](docs/identity-continuity.md)
 - [Development Guide](docs/development-guide.md)
 - [Architecture Constraints](docs/architecture-constraints.md)
+- [Coding Agent Foundations](docs/coding-agent-foundations.md)
 - [Implementation Status & Priorities](docs/STATUS.md)
 
 Important directories:

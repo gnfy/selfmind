@@ -35,6 +35,8 @@ func (a *App) runGatewayCommandIfRequested() (bool, int) {
 		return true, a.gatewayStop(args)
 	case "restart":
 		return true, a.gatewayRestart(args)
+	case "service":
+		return true, a.gatewayService(args)
 	default:
 		fmt.Fprintf(a.stderr, "unknown gateway command: %s\n", action)
 		printGatewayUsage(a.stderr)
@@ -71,6 +73,14 @@ func (a *App) gatewayStart(args []string) int {
 	replace := fs.Bool("replace", false, "replace a running gateway")
 	if err := fs.Parse(args); err != nil {
 		return 2
+	}
+	if handled, message, err := gatewayServiceStartIfInstalled(a.configPath); handled {
+		if err != nil {
+			fmt.Fprintln(a.stderr, err)
+			return 1
+		}
+		fmt.Fprintln(a.stdout, message)
+		return 0
 	}
 	result, err := gatewayrt.StartDetached(gatewayrt.StartOptions{Replace: *replace, ConfigPath: a.configPath})
 	if err != nil {
@@ -134,6 +144,15 @@ func (a *App) gatewayStop(args []string) int {
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
+	serviceInstalled := false
+	if gatewayServiceSupported() {
+		var err error
+		serviceInstalled, _, err = gatewayServiceStatus()
+		if err != nil {
+			fmt.Fprintln(a.stderr, err)
+			return 1
+		}
+	}
 	dataDir := a.gatewayDataDir()
 	timeout := gatewayrt.ResolveDrainTimeout() + 10*time.Second
 	ctx, cancel := contextWithTimeout(a.ctx, timeout)
@@ -146,6 +165,19 @@ func (a *App) gatewayStop(args []string) int {
 	}); err != nil {
 		fmt.Fprintln(a.stderr, err)
 		return 1
+	}
+	if serviceInstalled {
+		handled, message, err := gatewayServiceStopIfInstalled()
+		if !handled {
+			fmt.Fprintln(a.stderr, "SelfMind launchd service disappeared while stopping.")
+			return 1
+		}
+		if err != nil {
+			fmt.Fprintln(a.stderr, err)
+			return 1
+		}
+		fmt.Fprintln(a.stdout, message)
+		return 0
 	}
 	fmt.Fprintln(a.stdout, "SelfMind gateway stopped.")
 	return 0
@@ -164,12 +196,36 @@ func (a *App) gatewayRestart(args []string) int {
 	timeout := gatewayrt.ResolveDrainTimeout() + 10*time.Second
 	ctx, cancel := contextWithTimeout(a.ctx, timeout)
 	defer cancel()
-	_ = gatewayrt.RequestShutdown(ctx, gatewayrt.StopOptions{
+	serviceInstalled := false
+	if gatewayServiceSupported() {
+		var err error
+		serviceInstalled, _, err = gatewayServiceStatus()
+		if err != nil {
+			fmt.Fprintln(a.stderr, err)
+			return 1
+		}
+	}
+	if err := gatewayrt.RequestShutdown(ctx, gatewayrt.StopOptions{
 		URL:     a.gatewayURL(),
 		DataDir: dataDir,
 		Force:   *force,
 		Timeout: timeout,
-	})
+	}); err != nil {
+		fmt.Fprintln(a.stderr, err)
+		return 1
+	}
+	if serviceInstalled {
+		if handled, message, err := gatewayServiceRestartIfInstalled(a.configPath); handled {
+			if err != nil {
+				fmt.Fprintln(a.stderr, err)
+				return 1
+			}
+			if message != "" {
+				fmt.Fprintln(a.stdout, message)
+			}
+			return 0
+		}
+	}
 	result, err := gatewayrt.StartDetached(gatewayrt.StartOptions{Replace: true, ConfigPath: a.configPath})
 	if err != nil {
 		fmt.Fprintln(a.stderr, err)
@@ -177,6 +233,80 @@ func (a *App) gatewayRestart(args []string) int {
 	}
 	fmt.Fprintf(a.stdout, "SelfMind gateway restarted (pid %d).\nLog: %s\n", result.PID, result.LogPath)
 	return 0
+}
+
+func (a *App) gatewayService(args []string) int {
+	if !gatewayServiceSupported() {
+		fmt.Fprintln(a.stderr, "launchd service management is only available on macOS.")
+		return 1
+	}
+	action := "status"
+	if len(args) > 0 {
+		action = args[0]
+	}
+	switch action {
+	case "install":
+		installed, _, err := gatewayServiceStatus()
+		if err != nil {
+			fmt.Fprintln(a.stderr, err)
+			return 1
+		}
+		// A legacy detached gateway and launchd must never own the same runtime
+		// at once. Drain the detached process before registering the service.
+		if !installed {
+			timeout := gatewayrt.ResolveDrainTimeout() + 10*time.Second
+			ctx, cancel := contextWithTimeout(a.ctx, timeout)
+			err = gatewayrt.RequestShutdown(ctx, gatewayrt.StopOptions{
+				URL:     a.gatewayURL(),
+				DataDir: a.gatewayDataDir(),
+				Timeout: timeout,
+			})
+			cancel()
+			if err != nil {
+				fmt.Fprintln(a.stderr, err)
+				return 1
+			}
+		}
+		path, err := gatewayServiceInstall(a.configPath)
+		if err != nil {
+			fmt.Fprintln(a.stderr, err)
+			return 1
+		}
+		fmt.Fprintf(a.stdout, "SelfMind launchd service installed and started.\nPlist: %s\n", path)
+		return 0
+	case "status":
+		_, message, err := gatewayServiceStatus()
+		if err != nil {
+			fmt.Fprintln(a.stderr, err)
+			return 1
+		}
+		fmt.Fprintln(a.stdout, message)
+		return 0
+	case "uninstall":
+		timeout := gatewayrt.ResolveDrainTimeout() + 10*time.Second
+		ctx, cancel := contextWithTimeout(a.ctx, timeout)
+		err := gatewayrt.RequestShutdown(ctx, gatewayrt.StopOptions{
+			URL:     a.gatewayURL(),
+			DataDir: a.gatewayDataDir(),
+			Timeout: timeout,
+		})
+		cancel()
+		if err != nil {
+			fmt.Fprintln(a.stderr, err)
+			return 1
+		}
+		_, message, err := gatewayServiceUninstall()
+		if err != nil {
+			fmt.Fprintln(a.stderr, err)
+			return 1
+		}
+		fmt.Fprintln(a.stdout, message)
+		return 0
+	default:
+		fmt.Fprintf(a.stderr, "unknown gateway service command: %s\n", action)
+		fmt.Fprintln(a.stderr, "usage: selfmind gateway service [install|status|uninstall]")
+		return 2
+	}
 }
 
 func (a *App) printGatewayStatus(status api.GatewayStatusResponse) {
@@ -213,5 +343,5 @@ func (a *App) gatewayDataDir() string {
 }
 
 func printGatewayUsage(w io.Writer) {
-	fmt.Fprintln(w, "usage: selfmind gateway [run|start|status|stop|restart]")
+	fmt.Fprintln(w, "usage: selfmind gateway [run|start|status|stop|restart|service]")
 }

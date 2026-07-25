@@ -11,13 +11,18 @@ built_at="${BUILT_AT:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"
 dist_dir="$repo_root/dist/npm-smoke"
 stage_dir="$repo_root/.npm-stage"
 
-mkdir -p "$dist_dir/linux-x64" "$dist_dir/linux-arm64"
+mkdir -p \
+  "$dist_dir/linux-x64" \
+  "$dist_dir/linux-arm64" \
+  "$dist_dir/darwin-x64" \
+  "$dist_dir/darwin-arm64"
 
 build_binary() {
-  local goarch="$1"
-  local output="$2"
+  local goos="$1"
+  local goarch="$2"
+  local output="$3"
 
-  GOWORK=off CGO_ENABLED=0 GOOS=linux GOARCH="$goarch" \
+  GOWORK=off CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" \
     go build \
       -trimpath \
       -ldflags="-s -w -X selfmind/internal/buildinfo.Version=v${version} -X selfmind/internal/buildinfo.Commit=${commit} -X selfmind/internal/buildinfo.BuiltAt=${built_at}" \
@@ -25,13 +30,17 @@ build_binary() {
       ./cmd/selfmind
 }
 
-build_binary amd64 "$dist_dir/linux-x64/selfmind"
-build_binary arm64 "$dist_dir/linux-arm64/selfmind"
+build_binary linux amd64 "$dist_dir/linux-x64/selfmind"
+build_binary linux arm64 "$dist_dir/linux-arm64/selfmind"
+build_binary darwin amd64 "$dist_dir/darwin-x64/selfmind"
+build_binary darwin arm64 "$dist_dir/darwin-arm64/selfmind"
 
 node scripts/stage-npm-packages.mjs \
   --version "$version" \
   --linux-x64 "$dist_dir/linux-x64/selfmind" \
   --linux-arm64 "$dist_dir/linux-arm64/selfmind" \
+  --darwin-x64 "$dist_dir/darwin-x64/selfmind" \
+  --darwin-arm64 "$dist_dir/darwin-arm64/selfmind" \
   --out "$stage_dir"
 
 pack_dir="$stage_dir/packs"
@@ -45,10 +54,34 @@ pack_package() {
 
 pack_package "$stage_dir/selfmind-linux-x64"
 pack_package "$stage_dir/selfmind-linux-arm64"
+pack_package "$stage_dir/selfmind-darwin-x64"
+pack_package "$stage_dir/selfmind-darwin-arm64"
 pack_package "$stage_dir/selfmind"
 
-launcher_tgz="$(find "$pack_dir" -maxdepth 1 -type f -name 'selfmind-[0-9]*.tgz' -print -quit)"
-platform_tgz="$(find "$pack_dir" -maxdepth 1 -type f -name 'selfmind-linux-x64-*.tgz' -print -quit)"
+case "$(uname -s)-$(uname -m)" in
+  Linux-x86_64)
+    platform_pattern="selfmind-cli-linux-x64-*.tgz"
+    ;;
+  Linux-aarch64|Linux-arm64)
+    platform_pattern="selfmind-cli-linux-arm64-*.tgz"
+    ;;
+  Darwin-x86_64)
+    platform_pattern="selfmind-cli-darwin-x64-*.tgz"
+    ;;
+  Darwin-arm64)
+    platform_pattern="selfmind-cli-darwin-arm64-*.tgz"
+    ;;
+  *)
+    printf 'npm smoke: unsupported host %s/%s\n' "$(uname -s)" "$(uname -m)" >&2
+    exit 1
+    ;;
+esac
+
+shopt -s nullglob
+launcher_candidates=("$pack_dir"/selfmind-cli-[0-9]*.tgz)
+platform_candidates=("$pack_dir"/$platform_pattern)
+launcher_tgz="${launcher_candidates[0]:-}"
+platform_tgz="${platform_candidates[0]:-}"
 
 if [[ -z "$launcher_tgz" || -z "$platform_tgz" ]]; then
   printf 'npm smoke: expected package tarballs were not produced\n' >&2

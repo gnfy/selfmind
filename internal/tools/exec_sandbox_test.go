@@ -70,6 +70,56 @@ func TestExecSandboxAutoReflectsHostCapability(t *testing.T) {
 	}
 }
 
+func TestExecSandboxAutoFallsBackOnDarwin(t *testing.T) {
+	SetExecSandbox(true, false, false)
+	resetExecSandbox(t)
+
+	cmd, decision, err := sandboxedCommandForPlatform(
+		context.Background(),
+		[]string{"/bin/bash", "-c", "echo hi"},
+		"/tmp",
+		SandboxAuto,
+		"darwin",
+		false,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cmd == nil || decision.Mode != SandboxHost {
+		t.Fatalf("darwin auto fallback decision=%+v cmd=%v", decision, cmd)
+	}
+	if !strings.Contains(decision.Reason, "approval-controlled host execution") {
+		t.Fatalf("fallback reason = %q", decision.Reason)
+	}
+}
+
+func TestExecSandboxDarwinStrictModesFailClosed(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		requested SandboxMode
+		required  bool
+	}{
+		{name: "isolated", requested: SandboxIsolated},
+		{name: "required", requested: SandboxAuto, required: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			SetExecSandbox(true, tc.required, false)
+			resetExecSandbox(t)
+			_, _, err := sandboxedCommandForPlatform(
+				context.Background(),
+				[]string{"/bin/bash", "-c", "echo hi"},
+				"/tmp",
+				tc.requested,
+				"darwin",
+				false,
+			)
+			if err == nil {
+				t.Fatal("strict sandbox mode must fail closed on darwin")
+			}
+		})
+	}
+}
+
 func TestExecSandboxRequiredButUnavailableRefuses(t *testing.T) {
 	if ExecSandboxAvailable() {
 		t.Skip("bubblewrap is available on this host")

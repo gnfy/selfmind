@@ -86,6 +86,17 @@ func requestedSandboxMode(args map[string]interface{}) (SandboxMode, error) {
 // a shell. Auto is deliberately observable when it must fall back: callers
 // emit the returned decision as a tool.sandbox event and include it in errors.
 func sandboxedCommand(ctx context.Context, inner []string, writableRoot string, requested SandboxMode) (*exec.Cmd, SandboxDecision, error) {
+	return sandboxedCommandForPlatform(ctx, inner, writableRoot, requested, runtime.GOOS, ExecSandboxAvailable())
+}
+
+func sandboxedCommandForPlatform(
+	ctx context.Context,
+	inner []string,
+	writableRoot string,
+	requested SandboxMode,
+	goos string,
+	sandboxAvailable bool,
+) (*exec.Cmd, SandboxDecision, error) {
 	if len(inner) == 0 {
 		return nil, SandboxDecision{}, fmt.Errorf("sandbox command is empty")
 	}
@@ -106,8 +117,20 @@ func sandboxedCommand(ctx context.Context, inner []string, writableRoot string, 
 		}
 		return plain(SandboxDecision{Mode: SandboxHost, Reason: "exec sandbox disabled by configuration"})
 	}
-	if runtime.GOOS != "linux" {
-		return nil, SandboxDecision{}, fmt.Errorf("exec sandbox is enabled but unsupported on %s", runtime.GOOS)
+	if goos != "linux" {
+		if requested == SandboxIsolated || required {
+			return nil, SandboxDecision{}, fmt.Errorf("isolated execution is unavailable on %s", goos)
+		}
+		return plain(SandboxDecision{
+			Mode:   SandboxHost,
+			Reason: fmt.Sprintf("isolated sandbox unsupported on %s; using approval-controlled host execution", goos),
+		})
+	}
+	if !sandboxAvailable {
+		if requested == SandboxIsolated || required {
+			return nil, SandboxDecision{}, fmt.Errorf("isolated execution is unavailable (install bubblewrap and enable unprivileged user namespaces)")
+		}
+		return plain(SandboxDecision{Mode: SandboxHost, Reason: "bubblewrap or unprivileged user namespaces unavailable"})
 	}
 
 	policy := sandbox.Policy{Network: network}

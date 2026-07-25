@@ -1,13 +1,13 @@
 # SelfMind
 
-SelfMind is a long-running personal AI work agent for Linux and WSL. The npm
+SelfMind is a long-running personal AI work agent for Linux, macOS, and WSL. The npm
 package installs the matching native Go binary; Node.js is only used as a small
 launcher.
 
 ## Install
 
 ```sh
-npm install --global selfmind@latest
+npm install --global @selfmind/cli@latest
 selfmind setup
 selfmind doctor
 selfmind
@@ -25,7 +25,7 @@ Native Windows and macOS are not currently supported release targets.
 
 ```sh
 selfmind update check
-npm install --global selfmind@latest
+npm install --global @selfmind/cli@latest
 selfmind gateway restart --drain
 ```
 
@@ -37,14 +37,14 @@ Stop the daemon and preserve configuration, tasks, memory, and credentials:
 
 ```sh
 selfmind uninstall --prepare
-npm uninstall --global selfmind
+npm uninstall --global @selfmind/cli
 ```
 
 To remove local data too, explicitly run:
 
 ```sh
 selfmind uninstall --prepare --purge-data --yes
-npm uninstall --global selfmind
+npm uninstall --global @selfmind/cli
 ```
 
 ## Feedback

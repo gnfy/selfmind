@@ -1,13 +1,13 @@
 {
-  "name": "@selfmind/cli-linux-x64",
+  "name": "@selfmind/cli-darwin-arm64",
   "version": "0.0.0-dev",
-  "description": "SelfMind native binary for Linux x64",
+  "description": "SelfMind native binary for macOS arm64",
   "license": "Apache-2.0",
   "os": [
-    "linux"
+    "darwin"
   ],
   "cpu": [
-    "x64"
+    "arm64"
   ],
   "files": [
     "vendor"

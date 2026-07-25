@@ -1,0 +1,53 @@
+id: coding_node_declared_verification
+title: "a Node.js change uses the repository-declared verification command"
+suite: coding-foundations
+workspace: isolated
+channel: cli
+
+# Record after intentional coding-loop changes:
+#   SELFMIND_EVAL_VCR=record selfmind eval run \
+#     evalcases/coding-foundations/node-declared-verification.yaml --live
+setup:
+  files:
+    package.json: |
+      {
+        "type": "module",
+        "scripts": {
+          "test": "node --test"
+        }
+      }
+    math.js: |
+      export function add(a, b) {
+        return a - b;
+      }
+    math.test.js: |
+      import test from "node:test";
+      import assert from "node:assert/strict";
+      import { add } from "./math.js";
+
+      test("adds two values", () => {
+        assert.equal(add(2, 3), 5);
+      });
+turns:
+  - input: "Fix the bug in this small Node.js project and verify the change using the repository's declared workflow."
+
+expect:
+  status: completed
+  completion_reason: completed
+  verification_state: passed
+  require_tool_events: true
+  min_tool_calls: 2
+  max_tool_errors: 1
+  max_duration_seconds: 180
+
+assert_state:
+  - on: file
+    path: "math.js"
+    exists: true
+    contains: "a + b"
+
+checks:
+  no_mojibake: true
+  no_raw_json_leak: true
+  no_empty_response: true
+  no_provider_stack_dump: true

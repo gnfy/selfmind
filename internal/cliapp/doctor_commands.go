@@ -152,6 +152,13 @@ func (a *App) tenantID() string {
 // status endpoint and falling back to the on-disk PID record so doctor still
 // reports something useful when the daemon is unreachable or down.
 func (a *App) gatewayStatusLine() string {
+	serviceState := strings.TrimSpace(gatewayServiceDoctorLine())
+	withService := func(status string) string {
+		if serviceState == "" {
+			return status
+		}
+		return status + " " + serviceState
+	}
 	ctx, cancel := contextWithTimeout(a.ctx, 3*time.Second)
 	defer cancel()
 	if data, code, err := gatewayrt.RequestStatus(ctx, a.gatewayURL()); err == nil && code < 400 {
@@ -159,14 +166,14 @@ func (a *App) gatewayStatusLine() string {
 		if json.Unmarshal(data, &status) == nil {
 			rt := status.Runtime
 			buildState := gatewayBuildState(rt.BuildFingerprint)
-			return fmt.Sprintf("running (state=%s pid=%d addr=%s active_runs=%d build=%s)", status.State, rt.PID, rt.Addr, status.ActiveRunCount, buildState)
+			return withService(fmt.Sprintf("running (state=%s pid=%d addr=%s active_runs=%d build=%s)", status.State, rt.PID, rt.Addr, status.ActiveRunCount, buildState))
 		}
 	}
 	manager := gatewayrt.NewManager(a.gatewayDataDir(), "")
 	if rec, ok := manager.RunningRecord(); ok {
-		return fmt.Sprintf("running (pid=%d addr=%s), HTTP status unavailable", rec.PID, rec.Addr)
+		return withService(fmt.Sprintf("running (pid=%d addr=%s), HTTP status unavailable", rec.PID, rec.Addr))
 	}
-	return "not running"
+	return withService("not running")
 }
 
 // buildDoctorReport assembles the redacted diagnostic bundle from durable

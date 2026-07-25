@@ -3,6 +3,7 @@ package control
 import (
 	"context"
 	"testing"
+	"time"
 )
 
 func TestMaterializeRunFinalizationIsAtomicAndReplaySafe(t *testing.T) {
@@ -213,5 +214,92 @@ func TestMaterializeRunFinalizationSynthesizesOutcomeBeforeTerminal(t *testing.T
 		`SELECT COUNT(*) FROM task_events WHERE run_id = ? AND type = 'run.outcome'`, run.ID,
 	).Scan(&count); err != nil || count != 1 {
 		t.Fatalf("outcome count = %d, err=%v", count, err)
+	}
+}
+
+func TestMaterializeRunFinalizationReducesDurableTaskBlockers(t *testing.T) {
+	tests := []struct {
+		name   string
+		setup  func(context.Context, *Store, IdentityContext, Task, Run)
+		status string
+	}{
+		{
+			name: "pending approval",
+			setup: func(ctx context.Context, store *Store, identity IdentityContext, task Task, run Run) {
+				if _, err := store.CreateApprovalRequest(ctx, ApprovalRequest{
+					TenantID: identity.TenantID, PersonID: identity.PersonID,
+					TaskID: task.ID, RunID: run.ID, ActionType: "tool_call",
+				}); err != nil {
+					t.Fatal(err)
+				}
+			},
+			status: "waiting_user",
+		},
+		{
+			name: "pending external watch",
+			setup: func(ctx context.Context, store *Store, identity IdentityContext, task Task, run Run) {
+				if _, err := store.CreateExternalWatch(ctx, ExternalWatch{
+					TenantID: identity.TenantID, PersonID: identity.PersonID,
+					TaskID: task.ID, RunID: run.ID, Channel: "cli",
+					CWD: t.TempDir(), Command: "check", SuccessPattern: "done",
+					TimeoutAt: time.Now().Add(time.Hour),
+				}); err != nil {
+					t.Fatal(err)
+				}
+			},
+			status: "waiting_external",
+		},
+		{
+			name: "queued watch finalization",
+			setup: func(ctx context.Context, store *Store, identity IdentityContext, task Task, run Run) {
+				if _, err := store.EnqueueQueued(ctx, QueuedTask{
+					TenantID: identity.TenantID, PersonID: identity.PersonID,
+					TaskID: task.ID, Channel: "cli", Platform: "cli",
+					Content: "finalize watch", IdempotencyKey: "external-watch:test:r1:finalization",
+				}); err != nil {
+					t.Fatal(err)
+				}
+			},
+			status: "waiting_finalization",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			store, err := OpenStore(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer store.Close()
+			identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Alice")
+			if err != nil {
+				t.Fatal(err)
+			}
+			task, err := store.CreateTask(ctx, TaskCreate{
+				TenantID: identity.TenantID, PersonID: identity.PersonID, Title: tt.name,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			run, err := store.StartRun(ctx, task, "cli", "work")
+			if err != nil {
+				t.Fatal(err)
+			}
+			tt.setup(ctx, store, *identity, *task, *run)
+			if _, err := store.MaterializeRunFinalization(ctx, RunFinalization{
+				Identity: *identity, RunID: run.ID, RunStatus: "done",
+				TaskID: task.ID, TaskStatus: "done", Summary: "run finished",
+			}); err != nil {
+				t.Fatal(err)
+			}
+			stored, err := store.GetTask(ctx, identity.TenantID, task.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if stored.Status != tt.status {
+				t.Fatalf("task status=%q want %q", stored.Status, tt.status)
+			}
+		})
 	}
 }

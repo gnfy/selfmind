@@ -102,6 +102,37 @@ jobs:
             echo "built_at=${built_at}"
           } >> "${GITHUB_OUTPUT}"
 
+  tag:
+    name: Ensure release tag exists
+    needs: metadata
+    if: >-
+      ${{ github.event_name == 'workflow_dispatch' && inputs.tag != '' &&
+          (inputs.publish_npm || inputs.publish_github) }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Create tag when missing
+        env:
+          TAG: ${{ needs.metadata.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git ls-remote --exit-code --tags origin "refs/tags/${TAG}" >/dev/null 2>&1; then
+            existing="$(git ls-remote --tags origin "refs/tags/${TAG}" | cut -f1)"
+            echo "tag ${TAG} already exists at ${existing}"
+            if [[ "${existing}" != "${GITHUB_SHA}" ]]; then
+              echo "::warning::existing tag ${TAG} points at ${existing}, not this commit ${GITHUB_SHA}; leaving it untouched"
+            fi
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag "${TAG}" "${GITHUB_SHA}"
+          git push origin "refs/tags/${TAG}"
+          echo "created tag ${TAG} at ${GITHUB_SHA}"
+
   test:
     name: Test
     runs-on: ubuntu-latest

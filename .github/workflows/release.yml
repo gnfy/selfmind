@@ -285,27 +285,42 @@ jobs:
         if: ${{ needs.metadata.outputs.publish_npm == 'true' }}
         env:
           DIST_TAG: ${{ needs.metadata.outputs.npm_dist_tag }}
+          NPM_VERSION: ${{ needs.metadata.outputs.npm_version }}
         shell: bash
         run: |
           set -euo pipefail
-          npm publish .npm-stage/selfmind-linux-x64 \
-            --access public --provenance --tag "${DIST_TAG}"
-          npm publish .npm-stage/selfmind-linux-arm64 \
-            --access public --provenance --tag "${DIST_TAG}"
-          npm publish .npm-stage/selfmind-darwin-x64 \
-            --access public --provenance --tag "${DIST_TAG}"
-          npm publish .npm-stage/selfmind-darwin-arm64 \
-            --access public --provenance --tag "${DIST_TAG}"
+          publish_once() {
+            local dir="$1" name
+            name="$(node -p "require('./${dir}/package.json').name")"
+            if npm view "${name}@${NPM_VERSION}" version >/dev/null 2>&1; then
+              echo "skip ${name}@${NPM_VERSION}: already published"
+              npm dist-tag add "${name}@${NPM_VERSION}" "${DIST_TAG}" \
+                || echo "dist-tag add skipped (already set by the original publish)"
+              return 0
+            fi
+            npm publish "${dir}" --access public --provenance --tag "${DIST_TAG}"
+          }
+          publish_once .npm-stage/selfmind-linux-x64
+          publish_once .npm-stage/selfmind-linux-arm64
+          publish_once .npm-stage/selfmind-darwin-x64
+          publish_once .npm-stage/selfmind-darwin-arm64
 
       - name: Publish launcher package
         if: ${{ needs.metadata.outputs.publish_npm == 'true' }}
         env:
           DIST_TAG: ${{ needs.metadata.outputs.npm_dist_tag }}
+          NPM_VERSION: ${{ needs.metadata.outputs.npm_version }}
         shell: bash
         run: |
           set -euo pipefail
-          npm publish .npm-stage/selfmind \
-            --access public --provenance --tag "${DIST_TAG}"
+          if npm view "@selfmind/cli@${NPM_VERSION}" version >/dev/null 2>&1; then
+            echo "skip @selfmind/cli@${NPM_VERSION}: already published"
+            npm dist-tag add "@selfmind/cli@${NPM_VERSION}" "${DIST_TAG}" \
+              || echo "dist-tag add skipped (already set by the original publish)"
+          else
+            npm publish .npm-stage/selfmind \
+              --access public --provenance --tag "${DIST_TAG}"
+          fi
 
       - name: Upload npm package artifact
         uses: actions/upload-artifact@v4

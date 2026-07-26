@@ -16,8 +16,11 @@ selfmind uninstall --prepare [--purge-data --yes]
 selfmind feedback [--out FILE|--send] [--repo OWNER/REPO] [--include-crash] <message>
 ```
 
-- 直接运行 `selfmind` 打开 TUI。`--config` 指定其他配置文件，
-  `--resume` 恢复已有 TUI 会话。
+- 直接运行 `selfmind` 打开 TUI。首次在交互式终端启动时，如果缺少模型配置，
+  程序会先进入引导设置，并且只在配置完成后启动 daemon。取消设置会直接退出；
+  脚本、cron 和管道等非交互场景不会弹出提示，而会输出可执行的 `setup` 或
+  `model set` 命令。`--config` 指定其他配置文件，`--resume` 恢复已有 TUI
+  会话。
 - `setup` 创建或升级配置、配置模型并启动本地 gateway。各类 `skip`
   参数可用于自动化环境。
 - `update check` 只检查更新；通过 npm 安装时，`update` 会安装指定发布通道。

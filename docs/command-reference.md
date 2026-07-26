@@ -17,8 +17,12 @@ selfmind uninstall --prepare [--purge-data --yes]
 selfmind feedback [--out FILE|--send] [--repo OWNER/REPO] [--include-crash] <message>
 ```
 
-- Running `selfmind` opens the TUI. `--config` selects another configuration
-  file and `--resume` restores a prior TUI session.
+- Running `selfmind` opens the TUI. On the first interactive launch, a missing
+  model configuration opens guided setup before any daemon is started.
+  Cancelling setup exits cleanly. Non-interactive launches never prompt and
+  instead print the exact `setup` or `model set` command to run. `--config`
+  selects another configuration file and `--resume` restores a prior TUI
+  session.
 - `setup` creates or upgrades configuration, configures a model, and starts the
   local gateway. Its skip flags make the flow suitable for automation.
 - `update check` only checks for an update. `update` installs the selected npm

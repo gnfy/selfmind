@@ -63,10 +63,13 @@ Install and configure:
 
 ```sh
 npm install --global @selfmind/cli@latest
-selfmind setup
-selfmind doctor
 selfmind
 ```
+
+The first interactive `selfmind` launch opens guided model setup when no
+default model is ready. It does not start the daemon until setup succeeds.
+`selfmind setup` remains available for explicit reconfiguration, while
+`selfmind doctor` reports detailed configuration and runtime diagnostics.
 
 `selfmind setup`:
 

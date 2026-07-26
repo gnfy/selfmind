@@ -53,10 +53,13 @@ installs the matching native SelfMind binary behind a small Node.js launcher.
 
 ```sh
 npm install --global @selfmind/cli@latest
-selfmind setup
-selfmind doctor
 selfmind
 ```
+
+On the first interactive launch, `selfmind` opens guided model setup before it
+starts the daemon or TUI. You can reuse a supported coding-agent login or enter
+an API key. Run `selfmind setup` later to reconfigure the installation, and
+`selfmind doctor` for detailed diagnostics.
 
 Check for updates and upgrade without interrupting an active turn:
 

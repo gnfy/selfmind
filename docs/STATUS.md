@@ -1114,10 +1114,12 @@ modes, and the self-check/CI gate landed with the Phase-1 work — see
 - The release is distributed as the `selfmind` npm launcher plus Linux and
   macOS x64/arm64 optional native packages. Linux, macOS, and WSL are official
   targets; native Windows fails with an actionable WSL message.
-- `selfmind setup`, `update`, `uninstall --prepare`, and `feedback` cover
-  first-run configuration, advisory update checks, drain-aware removal, and
-  explicit privacy-preserving feedback. Existing configs are not rewritten
-  when setup has nothing to change.
+- A bare interactive `selfmind` launch now opens guided model setup when no
+  model is configured, before the daemon or TUI starts. Cancellation exits
+  cleanly, and non-interactive callers receive actionable commands without an
+  interactive prompt. `selfmind setup`, `update`, `uninstall --prepare`, and
+  `feedback` remain the explicit lifecycle controls. Existing configs are not
+  rewritten when setup has nothing to change.
 - Git tags are the single version source for Go build metadata, npm packages,
   and GitHub releases. CI builds all four Linux/macOS architectures,
   smoke-tests packed launchers on Linux and macOS, publishes native packages

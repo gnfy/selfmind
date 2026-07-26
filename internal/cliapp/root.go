@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/mattn/go-isatty"
+
 	"selfmind/internal/buildinfo"
 	"selfmind/internal/crashreport"
 	"selfmind/internal/platform/config"
@@ -35,6 +37,9 @@ type App struct {
 	// gatewayEnsured guards the one-time local-daemon auto-start so each CLI
 	// client invocation probes/starts the gateway at most once.
 	gatewayEnsured bool
+	// interactive is true only when both stdin and stdout are attached to a
+	// terminal. First-run setup must never prompt scripts, cron, or pipes.
+	interactive bool
 }
 
 var Version = buildinfo.Version
@@ -65,11 +70,12 @@ func Run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	}
 
 	app := &App{
-		ctx:    ctx,
-		args:   args,
-		stdin:  stdin,
-		stdout: stdout,
-		stderr: stderr,
+		ctx:         ctx,
+		args:        args,
+		stdin:       stdin,
+		stdout:      stdout,
+		stderr:      stderr,
+		interactive: interactiveTerminal(stdin, stdout),
 	}
 	cleanedArgs, configPath, err := splitGlobalConfigFlag(args)
 	if err != nil {
@@ -212,6 +218,11 @@ func (a *App) runTUI() int {
 		return 1
 	}
 
+	cfg, code := a.ensureInitialModelSetup(cfg, a.runInteractiveModelPicker)
+	if code != 0 {
+		return code
+	}
+
 	log.Init(log.Options{Level: cfg.Agent.LogLevel})
 	a.printStartupHealthWarnings()
 	if path, ok := crashreport.ConsumeNotice(); ok {
@@ -234,6 +245,16 @@ func (a *App) runTUI() int {
 		return 1
 	}
 	return code
+}
+
+func interactiveTerminal(stdin io.Reader, stdout io.Writer) bool {
+	in, inOK := stdin.(*os.File)
+	out, outOK := stdout.(*os.File)
+	if !inOK || !outOK {
+		return false
+	}
+	return (isatty.IsTerminal(in.Fd()) || isatty.IsCygwinTerminal(in.Fd())) &&
+		(isatty.IsTerminal(out.Fd()) || isatty.IsCygwinTerminal(out.Fd()))
 }
 
 func splitGlobalConfigFlag(args []string) ([]string, string, error) {

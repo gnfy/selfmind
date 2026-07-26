@@ -55,10 +55,12 @@ npm 发布版支持 Linux x64/arm64、macOS x64/arm64 和 WSL。npm 只负责安
 
 ```sh
 npm install --global @selfmind/cli@latest
-selfmind setup
-selfmind doctor
 selfmind
 ```
+
+首次在交互式终端运行 `selfmind` 时，如果尚未配置模型，程序会先打开引导设置，
+完成模型登录或 API Key 配置后再启动 daemon 和 TUI。以后可以运行
+`selfmind setup` 重新配置，或运行 `selfmind doctor` 查看详细诊断。
 
 检查并安装更新：
 

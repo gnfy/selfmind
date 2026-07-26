@@ -12,7 +12,7 @@ binary.
 selfmind [--config PATH] [--resume SESSION_ID]
 selfmind --version
 selfmind setup [--non-interactive] [--skip-model] [--skip-gateway] [--check-model]
-selfmind update [check] [--channel latest|next]
+selfmind update [check] [--channel latest|next] [--force] [--no-restart]
 selfmind uninstall --prepare [--purge-data --yes]
 selfmind feedback [--out FILE|--send] [--repo OWNER/REPO] [--include-crash] <message>
 ```
@@ -25,8 +25,16 @@ selfmind feedback [--out FILE|--send] [--repo OWNER/REPO] [--include-crash] <mes
   session.
 - `setup` creates or upgrades configuration, configures a model, and starts the
   local gateway. Its skip flags make the flow suitable for automation.
-- `update check` only checks for an update. `update` installs the selected npm
-  channel when SelfMind was installed through npm.
+- `update check` only checks for an update. `update` performs the full
+  upgrade: it checks the selected npm channel, runs the package-manager
+  install, verifies the new binary with `selfmind --version`, and restarts a
+  running gateway daemon (drain-by-default) so it picks up the new version.
+  `--force` reinstalls even when up to date or the check fails; `--no-restart`
+  leaves the daemon on the old version until it is restarted manually. A
+  stopped daemon is never started by `update`. The channel defaults to `auto`:
+  a prerelease build follows `next`, a stable build follows `latest`, and an
+  explicit `updates.channel: latest|next` in config pins one line. `--channel`
+  affects only that invocation and never rewrites the config pin.
 - `uninstall --prepare` stops and unregisters the daemon. Data is preserved
   unless `--purge-data --yes` is explicitly supplied.
 - `feedback` writes a redacted diagnostic report locally by default. `--send`

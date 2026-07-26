@@ -178,10 +178,12 @@ exec_sandbox:
   required: false
   allow_network: false
 
-# Startup update checks are cached and never block the CLI.
+# Startup update checks are cached and never block the CLI. channel "auto"
+# follows the installed version line (prerelease -> next, stable -> latest);
+# set "latest" or "next" explicitly to pin one line.
 updates:
   enabled: true
-  channel: "latest"
+  channel: "auto"
   check_interval: "24h"
 
 # Feedback stays local unless --send is used. By default, --send creates an
@@ -946,7 +948,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("history.max_bytes", 524288)
 	v.SetDefault("history.load_entries", 200)
 	v.SetDefault("updates.enabled", true)
-	v.SetDefault("updates.channel", "latest")
+	v.SetDefault("updates.channel", "auto")
 	v.SetDefault("updates.check_interval", "24h")
 	v.SetDefault("feedback.repository", "gnfy/selfmind")
 	v.SetDefault("memory.auto_extract_interval", 5)

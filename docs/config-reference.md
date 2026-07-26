@@ -392,7 +392,7 @@ change.**
 ```yaml
 updates:
   enabled: true
-  channel: "latest"       # latest | next
+  channel: "auto"         # auto (follow the installed version line) | latest | next
   check_interval: "24h"   # cached; never blocks TUI startup
 
 feedback:

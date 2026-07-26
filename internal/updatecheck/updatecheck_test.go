@@ -55,3 +55,36 @@ func TestCheckReadsDistTagAndWritesCache(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// Channel identity lives in the artifact: "auto" follows the running
+// version's line, explicit values are pins that always win.
+func TestResolveChannel(t *testing.T) {
+	cases := []struct {
+		configured string
+		running    string
+		want       string
+	}{
+		{"auto", "v0.1.0-beta.5", "next"},
+		{"auto", "0.2.0", "latest"},
+		{"", "v0.1.0-beta.5", "next"},
+		{"", "1.0.0", "latest"},
+		{"auto", "v0.1.0-dev", "next"},   // dev builds track next
+		{"auto", "not-a-version", "next"}, // unparseable = non-release build
+		{"latest", "v0.1.0-beta.5", "latest"}, // pin wins over inference
+		{"next", "1.0.0", "next"},
+		{"beta", "1.0.0", "next"},
+		{"NEXT", "1.0.0", "next"},
+	}
+	for _, tc := range cases {
+		if got := ResolveChannel(tc.configured, tc.running); got != tc.want {
+			t.Errorf("ResolveChannel(%q, %q) = %q, want %q", tc.configured, tc.running, got, tc.want)
+		}
+	}
+}
+
+func TestIsPrerelease(t *testing.T) {
+	if !IsPrerelease("v0.1.0-beta.5") || IsPrerelease("1.2.3") || !IsPrerelease("garbage") {
+		t.Fatalf("prerelease detection wrong: beta=%v stable=%v garbage=%v",
+			IsPrerelease("v0.1.0-beta.5"), IsPrerelease("1.2.3"), IsPrerelease("garbage"))
+	}
+}

@@ -172,7 +172,7 @@ var documentedCLIUsages = []string{
 	"selfmind [--config PATH] [--resume SESSION_ID]",
 	"selfmind --version",
 	"selfmind setup [--non-interactive] [--skip-model] [--skip-gateway] [--check-model]",
-	"selfmind update [check] [--channel latest|next]",
+	"selfmind update [check] [--channel latest|next] [--force] [--no-restart]",
 	"selfmind uninstall --prepare [--purge-data --yes]",
 	"selfmind feedback [--out FILE|--send] [--repo OWNER/REPO] [--include-crash] <message>",
 	"selfmind send [--async] [--mode MODE] <message>",

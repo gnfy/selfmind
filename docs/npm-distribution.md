@@ -97,13 +97,15 @@ upgrade must move the service to a new binary.
 Check and install an update:
 
 ```sh
-selfmind update check
-npm install --global @selfmind/cli@latest
-selfmind gateway restart --drain
+selfmind update check   # advisory: report only
+selfmind update         # check + package-manager install + verify + drained daemon restart
 ```
 
-The update checker is advisory and never replaces the binary. Restart drains
-the active turn before the process exits. On macOS, launchd observes the clean
+`selfmind update` is the supported one-command path; the manual equivalent is
+`npm install --global @selfmind/cli@<tag>` followed by
+`selfmind gateway restart --drain`. The startup notice is advisory and never
+replaces the binary on its own. Restart drains the active turn before the
+process exits. On macOS, launchd observes the clean
 exit and starts the newly installed version. The CLI verifies the daemon build
 fingerprint so an old daemon cannot look healthy after an upgrade.
 
@@ -197,7 +199,11 @@ The update checker reads npm registry dist-tags and caches the result under
 `~/.selfmind/update.json`. It:
 
 - never blocks TUI startup;
-- respects `updates.enabled`, `updates.channel`, and `updates.check_interval`;
+- respects `updates.enabled`, `updates.channel`, and `updates.check_interval`.
+  The default channel `auto` follows the installed version line (a prerelease
+  build checks `next`, a stable build checks `latest`), so switching lines via
+  plain `npm install -g @selfmind/cli@<tag>` needs no config edit; an explicit
+  `latest`/`next` pins one line;
 - skips development versions;
 - displays one concise notice when a newer version exists.
 

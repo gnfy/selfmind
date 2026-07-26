@@ -37,6 +37,18 @@ func CachePath() string {
 	return filepath.Join(home, ".selfmind", "update.json")
 }
 
+// InvalidateCache removes the cached check result. Callers use it after an
+// install performed by a binary whose own version is unreliable (e.g. the
+// post-install verify step failed), so the next launch re-checks instead of
+// trusting a row written by a replaced binary.
+func InvalidateCache() error {
+	err := os.Remove(CachePath())
+	if err != nil && os.IsNotExist(err) {
+		return nil
+	}
+	return err
+}
+
 func ReadCache(path string) (Result, error) {
 	if strings.TrimSpace(path) == "" {
 		path = CachePath()
@@ -141,6 +153,37 @@ func normalizeChannel(channel string) string {
 	case "next", "beta":
 		return "next"
 	default:
+		return "latest"
+	}
+}
+
+// IsPrerelease reports whether the version carries a prerelease segment
+// (e.g. 0.1.0-beta.5). Unparseable versions count as prerelease: they can
+// only come from non-release builds.
+func IsPrerelease(version string) bool {
+	parsed, ok := parseVersion(version)
+	if !ok {
+		return true
+	}
+	return parsed.pre != ""
+}
+
+// ResolveChannel turns the configured channel into an effective dist-tag.
+// The channel identity lives in the artifact, not in config: "auto" (or
+// empty) follows the version line the running binary came from — a
+// prerelease build can only have been installed from `next`, a stable build
+// from `latest`. Explicit "latest"/"next" ("beta" normalizes to next) is a
+// user pin and always wins.
+func ResolveChannel(configured, runningVersion string) string {
+	switch strings.ToLower(strings.TrimSpace(configured)) {
+	case "next", "beta":
+		return "next"
+	case "latest":
+		return "latest"
+	default: // "auto", "", or anything unrecognized: follow the binary
+		if IsPrerelease(runningVersion) {
+			return "next"
+		}
 		return "latest"
 	}
 }

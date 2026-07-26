@@ -11,7 +11,7 @@
 selfmind [--config PATH] [--resume SESSION_ID]
 selfmind --version
 selfmind setup [--non-interactive] [--skip-model] [--skip-gateway] [--check-model]
-selfmind update [check] [--channel latest|next]
+selfmind update [check] [--channel latest|next] [--force] [--no-restart]
 selfmind uninstall --prepare [--purge-data --yes]
 selfmind feedback [--out FILE|--send] [--repo OWNER/REPO] [--include-crash] <message>
 ```
@@ -23,7 +23,14 @@ selfmind feedback [--out FILE|--send] [--repo OWNER/REPO] [--include-crash] <mes
   会话。
 - `setup` 创建或升级配置、配置模型并启动本地 gateway。各类 `skip`
   参数可用于自动化环境。
-- `update check` 只检查更新；通过 npm 安装时，`update` 会安装指定发布通道。
+- `update check` 只检查更新。`update` 执行完整升级：检查所选 npm 通道、
+  调用包管理器安装、用 `selfmind --version` 验证新二进制，并对运行中的
+  gateway daemon 做默认排空（drain）重启以切换到新版本。`--force`
+  在已是最新或检查失败时仍强制安装；`--no-restart` 跳过重启（daemon
+  在手动重启前继续运行旧版本）。`update` 绝不会拉起未运行的 daemon。
+  渠道默认为 `auto`：预发布版本自动跟随 `next`，正式版本跟随 `latest`；
+  在配置中显式写 `updates.channel: latest|next` 可固定某条线。`--channel`
+  只影响当次执行，绝不改写配置中的固定值。
 - `uninstall --prepare` 停止并注销 daemon。只有显式指定
   `--purge-data --yes` 才会删除数据。
 - `feedback` 默认在本地生成脱敏诊断报告。`--send` 通过已登录的 `gh`

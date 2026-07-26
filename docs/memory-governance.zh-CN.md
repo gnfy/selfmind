@@ -356,11 +356,18 @@ memory:
 
 - **pinned/user_confirmed 的 active canonical 无条件置顶注入**，不衰减、不参与
   截断（数量天然极少）。——修 D1，这是"人类安全出口"能闭环的前提。
-- 其余按 `ScoreFact`（EffectiveConfidence × scopeRelevance，复用
-  `governance.go`）取 top-K；K 随模型窗口动态缩放（参照 `ContextScanner` 的
-  动态预算模式），替换写死的 20+20。
+- 其余 canonical 有两条互补读路径：
+  1. 小型静态兜底块按 `ScoreFact`（EffectiveConfidence × scopeRelevance，
+     复用 `governance.go`）保留高权威全局偏好；
+  2. 查询型召回源注册到 `RecallEngine`，复用 `semantic_recall` 查询扩展、
+     跨来源预算和去重，以 CJK/词法签名从 person 分区的 active canonical
+     中检索与本轮相关的长尾记忆。只允许 global 与当前 logical workspace
+     scope；pinned 不参加检索竞争，因为它已无条件注入。
+- 查询型召回当前为有界词法 v1（最多扫描 2000 条、最终跨来源最多选择 3 个
+  slice）；embedding 仍是后续可注册的 `RecallSource`，不改变选择器形状。
 - `status=forgotten/archived/superseded` 一律不注入；`conflicted` 降权 ×0.5
-  注入或不注入（shadow 期定）。
+  参与查询；超过 `valid_until` 或尚未达到 `valid_from` 的 canonical 不进入
+  静态注入、查询召回或访问打点。
 - **删除 `latestProfileSummary` 注入路径 + 清理 profile target 残留（实测 1
   条）**；画像信号由 pinned + 高分 canonical 承担（与 AGENTS.md"不做 profile
   synthesis call"裁决一致）。
@@ -381,8 +388,10 @@ canonical、支持/矛盾证据、来源、最后确认时间、为何被召回�
 <text>`、`pin <id>`、`forget <id>`、`conflicts`、`raw`、`history`、`undo`；
 `/diag memory` 显示治理统计。search 升级 FTS + CJK bigram（修 D9）。
 
-实现约束（2026-07-12）：`last_accessed_at` 只更新真正通过预算选择并注入 prompt
-的 canonical id；候选扫描不算使用。Agent 原生工具调用透传 `_workspace_id`，因此
+实现约束（2026-07-26）：`last_accessed_at` 只更新真正通过静态或跨来源召回预算
+选择并注入 prompt 的 canonical id；候选扫描不算使用。同一 canonical 若已被
+查询型召回选中，会从静态兜底块排除，避免当轮重复注入。Agent 原生工具调用透传
+`_workspace_id`，因此
 项目/环境记忆按 workspace 落库。`pin <id>`/`unpin <id>` 已接 canonical 保护位，
 pin 同时确认用户权威；unpin 仅取消无条件注入，不抹掉用户确认。
 

@@ -134,10 +134,10 @@ type RuntimeContextBundle struct {
 	Task      *TaskRuntimeContext
 	Memories  []RuntimeMemoryContext
 	// Recall is Composer slice ④ (semantic recall): automatic query-expanded
-	// FTS/embedding recall over spine entries, task label cards, and artifacts.
-	// RESERVED in P1 — the field and its rendering exist so package P2's recall
-	// selector has a single injection point; nothing fills it yet. Budgeted by
-	// ComposerRecallChars. Distinct from Memories (person memory, slice ⑦).
+	// retrieval over indexed sessions, task label cards, and governed canonical
+	// memory. Future embedding sources use the same selector seam. Budgeted by
+	// ComposerRecallChars and distinct from Memories (the small unconditional
+	// person-memory fallback in slice ⑦).
 	Recall         []RuntimeMemoryContext
 	SelectionNotes []string
 	Budget         RuntimeContextBudget

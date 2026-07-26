@@ -21,8 +21,11 @@ type Setup struct {
 }
 
 type SeedFact struct {
-	Target  string `yaml:"target" json:"target"`
-	Content string `yaml:"content" json:"content"`
+	Target    string `yaml:"target" json:"target"`
+	Content   string `yaml:"content" json:"content"`
+	Scope     string `yaml:"scope,omitempty" json:"scope,omitempty"`
+	Category  string `yaml:"category,omitempty" json:"category,omitempty"`
+	Canonical bool   `yaml:"canonical,omitempty" json:"canonical,omitempty"`
 }
 
 type SeedTask struct {
@@ -111,7 +114,35 @@ func applyStateSeeds(ctx context.Context, store *control.Store, mem *memory.Memo
 		if target == "" {
 			target = "user"
 		}
-		if mem != nil && strings.TrimSpace(f.Content) != "" {
+		content := strings.TrimSpace(f.Content)
+		if mem != nil && content != "" && f.Canonical {
+			canonical, ok := mem.Canonical()
+			if !ok {
+				return fmt.Errorf("seed canonical memory: provider has no canonical store")
+			}
+			partition := strings.TrimSpace(identity.PersonID)
+			if partition == "" {
+				partition = strings.TrimSpace(identity.TenantID)
+			}
+			scope := strings.TrimSpace(f.Scope)
+			if scope == "" {
+				scope = "global"
+			}
+			if err := canonical.ApplyIntakeWrite(ctx, partition, memory.IntakeWrite{
+				Decision:    "ADD",
+				DecisionKey: "eval-seed:" + memory.NormalizedContentHash(content),
+				Target:      target,
+				Scope:       scope,
+				Source:      memory.SourceUser,
+				Content:     content,
+				Category:    strings.TrimSpace(f.Category),
+				Confidence:  1,
+			}); err != nil {
+				return err
+			}
+			continue
+		}
+		if mem != nil && content != "" {
 			if err := mem.AddFact(ctx, identity.TenantID, target, f.Content); err != nil {
 				return err
 			}

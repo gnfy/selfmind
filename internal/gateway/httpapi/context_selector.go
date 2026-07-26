@@ -141,7 +141,18 @@ func (c *RunCoordinator) selectedTaskRuntimeContext(ctx context.Context, task *c
 		if preLabel {
 			excludeTaskID = ""
 		}
-		slices, stats := c.srv.Recall.Select(ctx, task.TenantID, task.PersonID, excludeTaskID, userMessage)
+		recallWorkspaceID := selected.WorkspaceID
+		if workspace != nil && strings.TrimSpace(workspace.ID) != "" {
+			recallWorkspaceID = workspace.ID
+		}
+		slices, stats := c.srv.Recall.SelectForWorkspace(
+			ctx,
+			task.TenantID,
+			task.PersonID,
+			recallWorkspaceID,
+			excludeTaskID,
+			userMessage,
+		)
 		selected.RecallSlices = slices
 		runID := ""
 		if run != nil {

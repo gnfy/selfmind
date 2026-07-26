@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -53,6 +54,39 @@ func seedIndexedSession(t *testing.T, mem *memory.MemoryManager, tenantID, sessi
 	if err := mem.IndexSession(context.Background(), tenantID, "cli", sessionID, data); err != nil {
 		t.Fatalf("IndexSession: %v", err)
 	}
+}
+
+func seedCanonicalMemory(t *testing.T, mem *memory.MemoryManager, personID string, write memory.IntakeWrite) memory.CanonicalMemory {
+	t.Helper()
+	store, ok := mem.Canonical()
+	if !ok {
+		t.Fatal("canonical store unavailable")
+	}
+	if write.Decision == "" {
+		write.Decision = "ADD"
+	}
+	if write.Target == "" {
+		write.Target = "memory"
+	}
+	if write.Scope == "" {
+		write.Scope = "global"
+	}
+	if err := store.ApplyIntakeWrite(context.Background(), personID, write); err != nil {
+		t.Fatalf("ApplyIntakeWrite: %v", err)
+	}
+	rows, err := store.ListCanonicalMemories(context.Background(), personID, memory.CanonicalFilter{
+		Statuses: []string{memory.CanonicalActive, memory.CanonicalConflicted},
+	})
+	if err != nil {
+		t.Fatalf("ListCanonicalMemories: %v", err)
+	}
+	for _, row := range rows {
+		if row.Content == write.Content && row.Scope == write.Scope {
+			return row
+		}
+	}
+	t.Fatalf("seeded canonical memory not found: %q", write.Content)
+	return memory.CanonicalMemory{}
 }
 
 func newRecallControl(t *testing.T) (*control.Store, *control.IdentityContext) {
@@ -296,6 +330,161 @@ func TestRecallExpansionAddsVariants(t *testing.T) {
 	}
 	if len(slices) == 0 || slices[0].Ref != "sess-tetris" {
 		t.Fatalf("expansion variant must recall the session, got %+v", slices)
+	}
+}
+
+func TestCanonicalRecallUsesExpansionAndReportsSource(t *testing.T) {
+	mem := newRecallMemory(t)
+	const personID = "person-canonical-expansion"
+	row := seedCanonicalMemory(t, mem, personID, memory.IntakeWrite{
+		Target:  "user",
+		Scope:   "global",
+		Content: "Daily reports use one work item per line.",
+	})
+
+	engine := NewRecallEngine(nil, mem, &scriptedExpander{result: "daily report one item per line"})
+	slices, stats := engine.Select(context.Background(), "default", personID, "", "summarize what happened at work today")
+	if !stats.Expanded {
+		t.Fatal("expected semantic expansion")
+	}
+	if len(slices) == 0 || slices[0].Source != "canonical" || slices[0].Ref != row.ID {
+		t.Fatalf("expected canonical recall hit, got %+v", slices)
+	}
+	if stats.Sources["canonical"] != 1 {
+		t.Fatalf("canonical source missing from stats: %+v", stats.Sources)
+	}
+}
+
+func TestLongRawRecallTermsPreserveExpansionVocabulary(t *testing.T) {
+	raw := make([]string, recallMaxTerms+8)
+	for i := range raw {
+		raw[i] = fmt.Sprintf("raw-%d", i)
+	}
+	terms, rawCount := boundedRecallTerms(raw, []string{"reporting", "format"}, recallMaxTerms)
+	if len(terms) != recallMaxTerms {
+		t.Fatalf("terms=%d want %d", len(terms), recallMaxTerms)
+	}
+	if rawCount != recallMaxTerms-2 {
+		t.Fatalf("rawCount=%d want %d", rawCount, recallMaxTerms-2)
+	}
+	if got := terms[rawCount:]; !reflect.DeepEqual(got, []string{"reporting", "format"}) {
+		t.Fatalf("expansion terms were starved: %v", got)
+	}
+}
+
+func TestCanonicalRecallRespectsWorkspaceValidityAndPinnedBoundary(t *testing.T) {
+	mem := newRecallMemory(t)
+	const personID = "person-canonical-scope"
+	global := seedCanonicalMemory(t, mem, personID, memory.IntakeWrite{
+		Target: "user", Scope: "global", Content: "Use the aurora release checklist.",
+	})
+	workspaceA := seedCanonicalMemory(t, mem, personID, memory.IntakeWrite{
+		Scope: "workspace:ws-a", WorkspaceID: "ws-a", Content: "Aurora alpha deploys require the blue gate.",
+	})
+	workspaceB := seedCanonicalMemory(t, mem, personID, memory.IntakeWrite{
+		Scope: "workspace:ws-b", WorkspaceID: "ws-b", Content: "Aurora beta deploys require the red gate.",
+	})
+	expired := seedCanonicalMemory(t, mem, personID, memory.IntakeWrite{
+		Scope: "global", Content: "Aurora expired deploys require the grey gate.",
+		ValidUntil: time.Now().Add(-time.Hour),
+	})
+	pinned := seedCanonicalMemory(t, mem, personID, memory.IntakeWrite{
+		Target: "user", Scope: "global", Content: "Aurora pinned deploys require the gold gate.",
+	})
+	store, _ := mem.Canonical()
+	if err := store.SetCanonicalPinned(context.Background(), personID, pinned.ID, true, "test"); err != nil {
+		t.Fatal(err)
+	}
+
+	engine := NewRecallEngine(nil, mem, nil)
+	slices, _ := engine.SelectForWorkspace(
+		context.Background(),
+		"default",
+		personID,
+		"ws-a",
+		"",
+		"check the aurora alpha blue gate release checklist",
+	)
+	refs := map[string]bool{}
+	for _, slice := range slices {
+		refs[slice.Ref] = true
+	}
+	if !refs[global.ID] || !refs[workspaceA.ID] {
+		t.Fatalf("expected global and current-workspace memories, got %+v", slices)
+	}
+	for _, excluded := range []string{workspaceB.ID, expired.ID, pinned.ID} {
+		if refs[excluded] {
+			t.Fatalf("memory %s crossed a recall boundary: %+v", excluded, slices)
+		}
+	}
+
+	other, _ := engine.SelectForWorkspace(
+		context.Background(),
+		"default",
+		personID,
+		"ws-a",
+		"",
+		"check the aurora beta red gate deployment",
+	)
+	for _, slice := range other {
+		if slice.Ref == workspaceB.ID {
+			t.Fatalf("workspace B memory leaked into workspace A: %+v", other)
+		}
+	}
+}
+
+func TestCanonicalRecallTouchesOnlyBudgetedSelections(t *testing.T) {
+	mem := newRecallMemory(t)
+	const personID = "person-canonical-touch"
+	for i := 0; i < 5; i++ {
+		seedCanonicalMemory(t, mem, personID, memory.IntakeWrite{
+			Scope:   "global",
+			Content: fmt.Sprintf("Gearbox release checklist variant %d.", i),
+		})
+	}
+	engine := NewRecallEngine(nil, mem, nil)
+	slices, _ := engine.Select(
+		context.Background(),
+		"default",
+		personID,
+		"",
+		"review the gearbox release checklist variants",
+	)
+	if len(slices) != recallMaxSlices {
+		t.Fatalf("expected %d budgeted memories, got %d", recallMaxSlices, len(slices))
+	}
+	selected := map[string]bool{}
+	for _, slice := range slices {
+		selected[slice.Ref] = true
+	}
+
+	store, _ := mem.Canonical()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		rows, err := store.ListCanonicalMemories(context.Background(), personID, memory.CanonicalFilter{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		touched := 0
+		wrong := false
+		for _, row := range rows {
+			if !row.LastAccessedAt.IsZero() {
+				touched++
+				if !selected[row.ID] {
+					wrong = true
+				}
+			}
+		}
+		if wrong {
+			t.Fatalf("a non-selected canonical memory was marked accessed: %+v", rows)
+		}
+		if touched == len(selected) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("selected canonical memories were not marked accessed: selected=%v rows=%+v", selected, rows)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 

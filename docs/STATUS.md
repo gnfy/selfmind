@@ -155,6 +155,16 @@
 
 ### Memory Governance Closeout (2026-07-12)
 
+- Query-aware canonical recall shipped (2026-07-26): governed canonical memory
+  now registers as a bounded `RecallSource` beside task cards and indexed
+  sessions, reusing optional `semantic_recall` query expansion without adding
+  another foreground model call. Selection is person-partitioned, limited to
+  global/current logical-workspace scope, validity-aware, and excludes pinned
+  rows (already injected unconditionally). Only canonical rows surviving the
+  shared three-slice budget are access-touched; the static memory fallback
+  suppresses those ids in the same turn. `context.recall.sources.canonical`
+  exposes actual adoption. Embedding recall remains a later implementation of
+  the same source seam.
 - Existing canonical references support `/memory pin <ref>` / `unpin <ref>`
   without changing evidence or scope. `/diag memory` reports status,
   protection, scope, visible-topic, consolidation-candidate counts, and the

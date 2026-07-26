@@ -2053,6 +2053,10 @@ func (a *Agent) buildSystemPrompt(ctx context.Context, tenantID string, strategy
 	// reach the prompt — falling back to the legacy facts tables while a
 	// partition has no canonical rows yet.
 	pinnedFacts, userFacts, memFacts, servedCanonicalIDs := a.loadMemoryForPrompt(ctx, tenantID)
+	if recalled := recalledCanonicalIDs(ctx); len(recalled) > 0 {
+		userFacts = excludeFactsByID(userFacts, recalled)
+		memFacts = excludeFactsByID(memFacts, recalled)
+	}
 
 	// Pinned facts are user-confirmed ground truth: they are injected first,
 	// unconditionally, and never compete with extracted facts for the bounded
@@ -2144,6 +2148,38 @@ func (a *Agent) loadMemoryForPrompt(ctx context.Context, tenantID string) (pinne
 		}
 	}
 	return pinned, user, mem, served
+}
+
+func recalledCanonicalIDs(ctx context.Context) map[string]struct{} {
+	var slices []RecallSlice
+	if bundle, ok := RuntimeContextBundleFromContext(ctx); ok && bundle.Task != nil {
+		slices = bundle.Task.RecallSlices
+	} else if runtime, ok := TaskRuntimeContextFromContext(ctx); ok {
+		slices = runtime.RecallSlices
+	}
+	ids := make(map[string]struct{})
+	for _, slice := range slices {
+		if slice.Source != "canonical" {
+			continue
+		}
+		if id := strings.TrimSpace(slice.Ref); id != "" {
+			ids[id] = struct{}{}
+		}
+	}
+	return ids
+}
+
+func excludeFactsByID(facts []memory.Fact, excluded map[string]struct{}) []memory.Fact {
+	if len(facts) == 0 || len(excluded) == 0 {
+		return facts
+	}
+	out := facts[:0]
+	for _, fact := range facts {
+		if _, skip := excluded[fact.ID]; !skip {
+			out = append(out, fact)
+		}
+	}
+	return out
 }
 
 // selectedCanonicalAccessIDs returns only canonical rows that actually reach

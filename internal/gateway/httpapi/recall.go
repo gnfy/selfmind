@@ -42,6 +42,8 @@ const (
 	recallMaxSessionProbes = 5  // FTS searches per turn (one per top term)
 	recallSessionProbeHits = 5  // hits fetched per FTS probe
 	recallTaskCardWindow   = 20 // recent task cards scanned per turn
+	recallCanonicalWindow  = 2000
+	recallCanonicalMinSim  = 0.30
 	defaultExpandTimeout   = 3 * time.Second
 )
 
@@ -58,6 +60,13 @@ type RecallSessionSearcher interface {
 	SearchSessions(tenantID, query string, limit int) ([]memory.FTS5Session, error)
 }
 
+// RecallCanonicalProvider exposes the optional layered memory store. The
+// concrete MemoryManager satisfies both this and RecallSessionSearcher, while
+// lightweight search fakes can continue to implement session search only.
+type RecallCanonicalProvider interface {
+	Canonical() (memory.CanonicalStore, bool)
+}
+
 // RecallTaskCardLister is the control-plane label-card boundary, satisfied by
 // *control.Store (read-only query).
 type RecallTaskCardLister interface {
@@ -68,6 +77,9 @@ type RecallTaskCardLister interface {
 type RecallQuery struct {
 	TenantID string
 	PersonID string
+	// WorkspaceID limits workspace-scoped memories to the workspace selected
+	// for this turn. Global memories remain eligible.
+	WorkspaceID string
 	// Terms are the significant search terms: raw-message terms first, then
 	// expansion variants. Bounded by recallMaxTerms.
 	Terms []string
@@ -138,6 +150,12 @@ type RecallSource interface {
 	Search(ctx context.Context, q RecallQuery) ([]RecallHit, error)
 }
 
+// recallSelectionObserver is an optional source hook invoked only for hits
+// that survive cross-source ranking and the final prompt budget.
+type recallSelectionObserver interface {
+	OnSelected(ctx context.Context, q RecallQuery, hits []RecallHit)
+}
+
 // RecallStats is the redacted observability summary for the context.recall
 // task event: source counts and refs only, never excerpts.
 type RecallStats struct {
@@ -170,6 +188,11 @@ func NewRecallEngine(cards RecallTaskCardLister, sessions RecallSessionSearcher,
 	}
 	if sessions != nil {
 		engine.sources = append(engine.sources, &sessionRecallSource{sessions: sessions})
+		if provider, ok := sessions.(RecallCanonicalProvider); ok {
+			if store, available := provider.Canonical(); available && store != nil {
+				engine.sources = append(engine.sources, &canonicalRecallSource{store: store})
+			}
+		}
 	}
 	return engine
 }
@@ -178,6 +201,15 @@ func NewRecallEngine(cards RecallTaskCardLister, sessions RecallSessionSearcher,
 // source, and returns the deduped, budgeted top slices plus redacted stats.
 // It never returns an error: recall degrades, the turn proceeds.
 func (e *RecallEngine) Select(ctx context.Context, tenantID, personID, currentTaskID, message string) (slices []kernel.RecallSlice, stats RecallStats) {
+	return e.selectRecall(ctx, tenantID, personID, "", currentTaskID, message)
+}
+
+// SelectForWorkspace runs bounded recall with the selected workspace scope.
+func (e *RecallEngine) SelectForWorkspace(ctx context.Context, tenantID, personID, workspaceID, currentTaskID, message string) (slices []kernel.RecallSlice, stats RecallStats) {
+	return e.selectRecall(ctx, tenantID, personID, workspaceID, currentTaskID, message)
+}
+
+func (e *RecallEngine) selectRecall(ctx context.Context, tenantID, personID, workspaceID, currentTaskID, message string) (slices []kernel.RecallSlice, stats RecallStats) {
 	stats = RecallStats{Sources: map[string]int{}}
 	started := time.Now()
 	// Named returns so the deferred stamp reaches every exit, skips included.
@@ -197,25 +229,26 @@ func (e *RecallEngine) Select(ctx context.Context, tenantID, personID, currentTa
 		return nil, stats
 	}
 
-	terms := recallTerms(trimmed)
-	rawCount := len(terms)
+	rawTerms := recallTerms(trimmed)
+	var expansionTerms []string
 	if expansion, ok := e.expand(ctx, trimmed); ok {
 		stats.Expanded = true
-		terms = mergeTerms(terms, recallTerms(expansion))
+		expansionTerms = recallTerms(expansion)
 	}
+	terms, rawCount := boundedRecallTerms(rawTerms, expansionTerms, recallMaxTerms)
 	if len(terms) == 0 {
 		stats.Skipped = "no_terms"
 		return nil, stats
 	}
-	if len(terms) > recallMaxTerms {
-		terms = terms[:recallMaxTerms]
-	}
-	if rawCount > len(terms) {
-		rawCount = len(terms)
-	}
 	stats.Terms = len(terms)
 
-	query := RecallQuery{TenantID: tenantID, PersonID: personID, Terms: terms, RawTermCount: rawCount}
+	query := RecallQuery{
+		TenantID:     tenantID,
+		PersonID:     personID,
+		WorkspaceID:  strings.TrimSpace(workspaceID),
+		Terms:        terms,
+		RawTermCount: rawCount,
+	}
 	if strings.TrimSpace(currentTaskID) != "" {
 		query.ExcludeWorkKey = "task:" + strings.TrimSpace(currentTaskID)
 	}
@@ -255,6 +288,7 @@ func (e *RecallEngine) Select(ctx context.Context, tenantID, personID, currentTa
 	})
 
 	usedChars := 0
+	selectedHits := make([]RecallHit, 0, recallMaxSlices)
 	for _, hit := range ranked {
 		if len(slices) >= recallMaxSlices {
 			break
@@ -266,10 +300,31 @@ func (e *RecallEngine) Select(ctx context.Context, tenantID, personID, currentTa
 		}
 		usedChars += len(slice.Excerpt)
 		slices = append(slices, slice)
+		selectedHits = append(selectedHits, hit)
 		stats.Sources[slice.Source]++
 		stats.Refs = append(stats.Refs, slice.Ref)
 	}
+	e.notifySelected(ctx, query, selectedHits)
 	return slices, stats
+}
+
+func (e *RecallEngine) notifySelected(ctx context.Context, query RecallQuery, selected []RecallHit) {
+	if len(selected) == 0 {
+		return
+	}
+	bySource := make(map[string][]RecallHit)
+	for _, hit := range selected {
+		bySource[hit.Slice.Source] = append(bySource[hit.Slice.Source], hit)
+	}
+	for _, source := range e.sources {
+		observer, ok := source.(recallSelectionObserver)
+		if !ok {
+			continue
+		}
+		if hits := bySource[source.Name()]; len(hits) > 0 {
+			observer.OnSelected(context.WithoutCancel(ctx), query, hits)
+		}
+	}
 }
 
 // expand runs the semantic_recall expansion with a hard deadline. The expander
@@ -356,18 +411,48 @@ func recallTerms(text string) []string {
 	return terms
 }
 
-func mergeTerms(base, extra []string) []string {
-	seen := map[string]bool{}
-	for _, t := range base {
-		seen[t] = true
+// boundedRecallTerms preserves the raw/expansion split while enforcing the
+// shared term budget. When expansion contributes new vocabulary, at least two
+// slots (when available) are reserved so a long raw message cannot starve the
+// very terms intended to bridge a vocabulary mismatch.
+func boundedRecallTerms(raw, expanded []string, max int) ([]string, int) {
+	if max <= 0 {
+		return nil, 0
 	}
-	for _, t := range extra {
-		if !seen[t] {
-			seen[t] = true
-			base = append(base, t)
+	rawSeen := make(map[string]bool, len(raw))
+	for _, term := range raw {
+		rawSeen[term] = true
+	}
+	uniqueExpanded := make([]string, 0, len(expanded))
+	expandedSeen := make(map[string]bool, len(expanded))
+	for _, term := range expanded {
+		if term == "" || rawSeen[term] || expandedSeen[term] {
+			continue
 		}
+		expandedSeen[term] = true
+		uniqueExpanded = append(uniqueExpanded, term)
 	}
-	return base
+
+	reserved := len(uniqueExpanded)
+	if reserved > 2 {
+		reserved = 2
+	}
+	if reserved > max {
+		reserved = max
+	}
+	rawLimit := max - reserved
+	if rawLimit > len(raw) {
+		rawLimit = len(raw)
+	}
+	terms := append([]string(nil), raw[:rawLimit]...)
+	rawCount := len(terms)
+	for _, term := range uniqueExpanded {
+		if len(terms) >= max {
+			break
+		}
+		terms = append(terms, term)
+	}
+	return terms, rawCount
 }
 
 // recallStopwords drops the highest-frequency function words that would match
@@ -458,6 +543,117 @@ func taskCardExcerpt(card control.TaskCard) string {
 		parts = append(parts, "files: "+strings.Join(files, ", "))
 	}
 	return textutil.Truncate(strings.Join(parts, "; "), recallExcerptChars)
+}
+
+// --- canonical memory source ------------------------------------------------
+
+// canonicalRecallSource makes the governed long-term memory layer
+// query-addressable. It supplements the small unconditional/ranked memory
+// block in the system prompt; it does not replace that global-preference
+// fallback.
+type canonicalRecallSource struct {
+	store memory.CanonicalStore
+}
+
+func (s *canonicalRecallSource) Name() string { return "canonical" }
+
+func (s *canonicalRecallSource) Search(ctx context.Context, q RecallQuery) ([]RecallHit, error) {
+	partition := strings.TrimSpace(q.PersonID)
+	if partition == "" {
+		partition = strings.TrimSpace(q.TenantID)
+	}
+	rows, err := s.store.ListCanonicalMemories(ctx, partition, memory.CanonicalFilter{
+		Statuses: []string{memory.CanonicalActive, memory.CanonicalConflicted},
+		Limit:    recallCanonicalWindow,
+	})
+	if err != nil {
+		return nil, err
+	}
+	querySignature := memory.BuildSimilaritySignature(strings.Join(q.Terms, " "))
+	now := time.Now()
+	workspaceScope := ""
+	if q.WorkspaceID != "" {
+		workspaceScope = "workspace:" + q.WorkspaceID
+	}
+	hits := make([]RecallHit, 0, len(rows))
+	for _, row := range rows {
+		if row.Pinned || !memory.CanonicalMemoryEffectiveAt(row, now) {
+			continue
+		}
+		scope := strings.TrimSpace(row.Scope)
+		if scope != "" && scope != "global" && scope != workspaceScope {
+			continue
+		}
+		searchText := strings.ToLower(strings.TrimSpace(row.Content + " " + row.Category))
+		directMatches := 0
+		for _, term := range q.Terms {
+			if containsTerm(searchText, term) {
+				directMatches++
+				if directMatches >= 3 {
+					break
+				}
+			}
+		}
+		similarity := memory.SignatureSimilarity(
+			querySignature,
+			memory.BuildSimilaritySignature(searchText),
+		)
+		if directMatches == 0 && similarity < recallCanonicalMinSim {
+			continue
+		}
+		confidence := row.Confidence
+		if confidence < 0 {
+			confidence = 0
+		}
+		if confidence > 1 {
+			confidence = 1
+		}
+		score := float64(directMatches)*1.2 + similarity*2 + confidence*0.25
+		if scope == workspaceScope && workspaceScope != "" {
+			score += 0.2
+		}
+		if row.Status == memory.CanonicalConflicted {
+			score *= 0.5
+		}
+		title := "Remembered context"
+		if row.Target == "user" {
+			title = "Remembered preference"
+		}
+		if row.Category != "" {
+			title += " (" + row.Category + ")"
+		}
+		hits = append(hits, RecallHit{
+			Slice: kernel.RecallSlice{
+				Source:  s.Name(),
+				Title:   title,
+				Excerpt: textutil.Truncate(strings.TrimSpace(row.Content), recallExcerptChars),
+				Ref:     row.ID,
+			},
+			Score:    score,
+			WorkKey:  "memory:" + row.ID,
+			Priority: 0,
+		})
+	}
+	return hits, nil
+}
+
+func (s *canonicalRecallSource) OnSelected(ctx context.Context, q RecallQuery, hits []RecallHit) {
+	partition := strings.TrimSpace(q.PersonID)
+	if partition == "" {
+		partition = strings.TrimSpace(q.TenantID)
+	}
+	ids := make([]string, 0, len(hits))
+	for _, hit := range hits {
+		if id := strings.TrimSpace(hit.Slice.Ref); id != "" {
+			ids = append(ids, id)
+		}
+	}
+	if partition == "" || len(ids) == 0 {
+		return
+	}
+	go func() {
+		_ = s.store.TouchCanonicalAccess(ctx, partition, ids)
+	}()
 }
 
 // --- indexed-session FTS source ----------------------------------------------

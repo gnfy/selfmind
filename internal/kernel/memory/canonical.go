@@ -142,6 +142,20 @@ type CanonicalMemory struct {
 	UpdatedAt      time.Time `json:"updated_at,omitempty"`
 }
 
+// CanonicalMemoryEffectiveAt reports whether a canonical belief is valid at
+// the supplied instant. Zero bounds are open-ended. Status is deliberately not
+// considered here so callers can combine the same temporal rule with their own
+// status policy.
+func CanonicalMemoryEffectiveAt(c CanonicalMemory, now time.Time) bool {
+	if !c.ValidFrom.IsZero() && c.ValidFrom.After(now) {
+		return false
+	}
+	if !c.ValidUntil.IsZero() && !c.ValidUntil.After(now) {
+		return false
+	}
+	return true
+}
+
 // MemoryEvent is one audit record of a governance mutation.
 type MemoryEvent struct {
 	ID            string    `json:"id"`
@@ -311,8 +325,12 @@ func ReadModelFacts(ctx context.Context, m *MemoryManager, tenantID string) (fac
 	for _, c := range all {
 		suppressed[canonicalStatementKey(c.Target, c.Scope, c.NormalizedHash)] = true
 	}
+	now := time.Now()
 	for _, c := range all {
 		if c.Status != CanonicalActive && c.Status != CanonicalConflicted {
+			continue
+		}
+		if !CanonicalMemoryEffectiveAt(c, now) {
 			continue
 		}
 		f := Fact{

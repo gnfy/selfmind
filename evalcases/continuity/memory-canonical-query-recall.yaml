@@ -1,0 +1,32 @@
+id: memory_canonical_query_recall
+title: "query-aware canonical memory participates in automatic recall"
+suite: continuity
+tier: smoke
+workspace: isolated
+channel: cli
+
+# Seed the governed read model directly so this case isolates the query-aware
+# canonical RecallSource from legacy-fact migration and post-run extraction.
+setup:
+  memory:
+    - target: user
+      canonical: true
+      scope: global
+      category: communication
+      content: "For release recaps, use a compact table with service, version, and status columns."
+
+turns:
+  - input: "Prepare a short release recap for api v42 and web v17 using my saved reporting preference. Do not inspect local files."
+
+expect:
+  status: completed
+  max_tool_calls: 0
+  max_duration_seconds: 420
+
+assert_state:
+  - { on: events, type: context.recall, payload_contains: '"canonical":1', count_gte: 1 }
+
+checks:
+  no_mojibake: true
+  no_empty_response: true
+  no_raw_json_leak: true

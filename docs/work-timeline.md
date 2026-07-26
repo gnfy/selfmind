@@ -91,9 +91,10 @@ authoritative instruction. If it changes direction, the latest message wins."*
 
 ### Semantic recall (the new load-bearing wall, built in two tiers)
 
-- **v1 — SHIPPED (P2, 2026-07-06):** `semantic_recall`-role query expansion +
-  FTS (BM25) over spine entries, task label cards, and artifacts, wired into
-  the selector as an automatic slice instead of a model-invoked tool only.
+- **v1 — SHIPPED (P2, 2026-07-06; canonical source 2026-07-26):**
+  `semantic_recall`-role query expansion + bounded retrieval over indexed
+  sessions, task label cards, and governed canonical memory, wired into the
+  selector as an automatic slice instead of a model-invoked tool only.
   Implementation: `internal/gateway/httpapi/recall.go` (`RecallEngine` on
   `Server.Recall`, called from `selectedTaskRuntimeContext`) → new bounded
   `kernel.TaskRuntimeContext.RecallSlices` rendered under
@@ -104,14 +105,19 @@ authoritative instruction. If it changes direction, the latest message wins."*
   cards (title + current_summary + latest handoff summary/changed files via
   the live read-only `control.ListTaskCards` JOIN — queried, not mirrored
   into FTS, so cards can never go stale; artifacts/changed files surface
-  through the card's work line). Budget: ≤3 slices, ~400-char excerpts, one
+  through the card's work line), plus canonical memory (person-partitioned,
+  global/current-workspace scoped, validity-filtered CJK/lexical similarity;
+  pinned rows stay in the unconditional memory block). Budget: ≤3 slices,
+  ~400-char excerpts, one
   slice per work line (label card beats raw session fragment), current task
   excluded; control-command-shaped and <6-rune messages skip recall entirely.
   Expansion runs ONLY when a `semantic_recall` role model is explicitly
   configured (`app.SemanticRecallExpander` — never the main coding model),
   bounded by a 3s timeout, degrading to raw-term FTS on any failure.
   Observability: redacted `context.recall` task event (source counts + refs,
-  no excerpts).
+  no excerpts). Canonical `last_accessed_at` changes only for rows that survive
+  the shared budget and are actually injected; selected canonical rows are
+  excluded from the static fallback block in the same turn.
 - **v2 (later):** true embedding vector index (spine entries + label cards +
   artifacts). Interface reserved in v1: `httpapi.RecallSource`
   (`Search(ctx, RecallQuery) []RecallHit` with work-line dedupe keys) — an

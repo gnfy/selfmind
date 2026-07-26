@@ -72,3 +72,44 @@ func TestPinnedFactsNotTruncatedBySelection(t *testing.T) {
 		t.Fatal("pinned fact was dropped when extracted-fact selection saturated")
 	}
 }
+
+func TestQueryRecalledCanonicalIsNotDuplicatedByStaticMemoryBlock(t *testing.T) {
+	provider, err := memory.NewSQLiteProvider(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer provider.Close()
+	mem := memory.NewMemoryManager(provider)
+	ctx := context.Background()
+	const content = "CANONICAL-RECALL-MARKER daily reports use one item per line"
+	if err := provider.ApplyIntakeWrite(ctx, "tenant", memory.IntakeWrite{
+		Decision: "ADD",
+		Target:   "user",
+		Scope:    "global",
+		Content:  content,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := provider.ListCanonicalMemories(ctx, "tenant", memory.CanonicalFilter{})
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("canonical rows=%+v err=%v", rows, err)
+	}
+	ctx = WithTaskRuntimeContext(ctx, TaskRuntimeContext{
+		TaskID: "task-1",
+		RecallSlices: []RecallSlice{{
+			Source:  "canonical",
+			Title:   "Remembered preference",
+			Excerpt: content,
+			Ref:     rows[0].ID,
+		}},
+	})
+
+	agent := NewAgent(mem, promptToolBackend{}, &textOnlyProvider{}, "You are SelfMind.", 1, 1, nil)
+	prompt, _, err := agent.buildSystemPrompt(ctx, "tenant", DefaultTaskStrategy(), "prepare the daily report")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count := strings.Count(prompt, content); count != 1 {
+		t.Fatalf("query-recalled canonical must appear exactly once, got %d:\n%s", count, prompt)
+	}
+}

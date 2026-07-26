@@ -150,7 +150,9 @@ func (r *Resolver) resolveNamed(providerName string, selection Selection, modelN
 		return Runtime{}, fmt.Errorf("no credentials found for provider %s", profile.ID)
 	}
 	baseURL, protocol = resolveProviderTransport(profile, baseURL, protocol, endpoint, selection, cred)
-	headers := mergeHeaders(profile.Headers, endpoint.Headers, selection.Headers)
+	// Global config headers sit at the BOTTOM: a user-wide User-Agent must
+	// never crush a built-in compatibility header (e.g. kimi-coding's).
+	headers := mergeHeaders(r.cfg.Model.Headers, profile.Headers, endpoint.Headers, selection.Headers)
 	if cred.AccountID != "" {
 		if headers == nil {
 			headers = map[string]string{}
@@ -190,7 +192,7 @@ func (r *Resolver) resolveCustom(providerName string, selection Selection, model
 				APIKey:           firstNonEmpty(selection.APIKey, cp.APIKey),
 				CredentialSource: "config:custom",
 				AuthType:         AuthAPIKey,
-				Headers:          mergeHeaders(selection.Headers),
+				Headers:          mergeHeaders(r.cfg.Model.Headers, selection.Headers),
 				ContextLength:    firstPositive(selection.ContextLength, r.cfg.Model.ContextLength, customModelContextLength(cp, firstNonEmpty(modelName, cp.Model, selection.Model)), KnownContextLength("custom:"+cp.Name, firstNonEmpty(modelName, cp.Model, selection.Model))),
 				MaxTokens:        selection.MaxTokens,
 				ReasoningEffort:  selection.ReasoningEffort,
@@ -298,6 +300,44 @@ func resolveProviderTransport(profile ProviderProfile, baseURL, protocol string,
 		}
 	}
 	return baseURL, NormalizeProtocol(protocol)
+}
+
+// HeaderOrigins labels each resolved header with the layer that supplied its
+// final value, mirroring the merge order in the builtin resolve path
+// (model.headers < built-in profile < provider config < credential).
+// Display-only: `model check` uses it so a user who just added an emergency
+// override can see it actually took effect.
+func (r *Resolver) HeaderOrigins(provider string, headers map[string]string) map[string]string {
+	endpoint := r.endpointFor(provider)
+	var profileHeaders map[string]string
+	if profile, ok := r.registry.Resolve(provider); ok {
+		profileHeaders = profile.Headers
+	}
+	origins := make(map[string]string, len(headers))
+	for key := range headers {
+		switch {
+		case strings.EqualFold(key, "chatgpt-account-id"):
+			origins[key] = "credential"
+		case headerLayerHas(endpoint.Headers, key):
+			origins[key] = "provider config"
+		case headerLayerHas(profileHeaders, key):
+			origins[key] = "built-in profile"
+		case headerLayerHas(r.cfg.Model.Headers, key):
+			origins[key] = "model.headers"
+		default:
+			origins[key] = "selection"
+		}
+	}
+	return origins
+}
+
+func headerLayerHas(layer map[string]string, key string) bool {
+	for k := range layer {
+		if strings.EqualFold(strings.TrimSpace(k), key) {
+			return true
+		}
+	}
+	return false
 }
 
 func mergeHeaders(headerSets ...map[string]string) map[string]string {

@@ -62,6 +62,47 @@ provider_profiles:           # extensible registry (Kimi, MiniMax, DeepSeek, Ope
   those profiles.
 - Use `provider_profiles` for any vendor beyond the three first-class ones;
   reference it by setting `model.provider` to the profile id.
+- **`providers` vs `provider_profiles`**: `providers` holds the three
+  first-class vendor slots plus `custom` (which *creates* a new provider with
+  its own protocol/URL); `provider_profiles` *overrides* any built-in provider
+  by id (Kimi, MiniMax, OpenRouter, codex-cli, …). For `openai`, `anthropic`,
+  and `google` the `providers` slot is authoritative — a `provider_profiles`
+  entry under those three ids is ignored.
+
+### HTTP headers: layers and the emergency escape hatch
+
+Headers merge in five layers; each higher layer overrides lower ones key by
+key:
+
+| Layer (low → high) | Where | Typical use |
+|---|---|---|
+| protocol defaults | code (adapters) | `content-type`, auth header, `anthropic-version`, OpenRouter attribution |
+| `model.headers` | yaml, global | org-wide custom headers on every request |
+| built-in profile | code | vendor compatibility (e.g. kimi-coding `User-Agent`) |
+| `provider_profiles.<id>.headers` | yaml, per provider | vendor-specific overrides |
+| `models.roles.<role>.headers` | yaml, per role | one role diverges |
+
+```yaml
+model:
+  headers:                        # global: lowest yaml layer
+    X-Org-Proxy-Token: "..."
+
+provider_profiles:
+  anthropic-like-vendor:
+    headers:
+      anthropic-version: "2024-10-01"   # emergency compat override
+```
+
+- **Emergency compatibility**: when a vendor starts requiring a new header
+  value and no SelfMind release has shipped the fix yet, set it under
+  `provider_profiles.<id>.headers` — yaml overrides the built-in value.
+  Remove the override once a release carries the fix, so the code default
+  (which keeps evolving) governs again.
+- **Verify it took effect**: `selfmind model check` prints the merged headers
+  with the layer each value came from (secret-looking values are masked).
+- Defaults deliberately live in code, not in generated yaml: a config file is
+  a snapshot, and materialized defaults would pin stale compatibility values
+  across upgrades.
 
 ## 2. Model routing (roles)
 

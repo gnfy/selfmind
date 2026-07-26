@@ -809,7 +809,7 @@ func (a *OpenRouterAdapter) doOpenRouterRequest(ctx context.Context, body []byte
 	}
 	httpReq.Header.Set("Authorization", "Bearer "+apiKey)
 	httpReq.Header.Set("content-type", "application/json")
-	httpReq.Header.Set("HTTP-Referer", "https://selfmind.dev")
+	httpReq.Header.Set("HTTP-Referer", "https://github.com/gnfy/selfmind")
 	httpReq.Header.Set("X-Title", "SelfMind Agent")
 	for key, value := range a.Headers {
 		if strings.TrimSpace(key) != "" {

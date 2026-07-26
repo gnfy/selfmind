@@ -16,6 +16,13 @@ const defaultConfigTemplate = `
 model:
   provider: ""
   default: ""
+  # headers apply to EVERY provider request as the lowest-priority layer;
+  # provider_profiles.<id>.headers and models.roles.<role>.headers override
+  # them key by key, and can also override built-in compatibility headers
+  # (e.g. anthropic-version) as an emergency escape hatch until a release
+  # ships the fix. Example:
+  # headers:
+  #   User-Agent: "my-org-agent/1.0"
 
 providers:
   openai:
@@ -256,6 +263,10 @@ type ModelConfig struct {
 	Provider      string `mapstructure:"provider" yaml:"provider,omitempty"`
 	Default       string `mapstructure:"default" yaml:"default,omitempty"`
 	ContextLength int    `mapstructure:"context_length" yaml:"context_length,omitempty"`
+	// Headers are sent with EVERY provider request as the lowest-priority
+	// layer: built-in profile compatibility headers, provider_profiles
+	// headers, and role/selection headers all override them key by key.
+	Headers map[string]string `mapstructure:"headers" yaml:"headers,omitempty"`
 }
 
 type IntentConfig struct {

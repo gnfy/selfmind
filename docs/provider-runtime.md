@@ -20,6 +20,16 @@ adapters must not contain vendor-specific logic.
 
 User YAML `quirks` currently exposes `auth_header`, `tool_schema`, `system_message_mode`, `thinking_mode`, `user_agent`, `responses_store_false`, and `responses_require_stream`. Capability flags such as tools, streaming, and vision are built-in profile metadata maintained in Go.
 
+HTTP headers merge low-to-high as `model.headers` (global yaml) → built-in
+profile headers → `provider_profiles.<id>.headers` → role/selection headers;
+adapters set protocol defaults (`content-type`, auth, `anthropic-version`,
+OpenRouter attribution) first and then apply the merged map, so yaml can
+override any of them as an emergency compatibility escape hatch until a
+release ships the fix. Compatibility defaults stay in Go (profile/adapters),
+never materialized into generated yaml — a config file is a snapshot and
+would pin stale values across upgrades. `selfmind model check` prints the
+merged headers with per-key origin (`Resolver.HeaderOrigins`).
+
 `ProviderQuirks.PromptCache` opts an Anthropic-protocol provider into explicit prompt-cache breakpoints: the adapter attaches `cache_control: {"type":"ephemeral"}` to the last system content block and a rolling breakpoint on the last content block of the most recent message before the final user message (never more than 4 breakpoints). Built-in native Anthropic and MiniMax profiles enable it because those endpoints document the contract. Custom endpoints default off, and direct Kimi Coding remains off because its native coding endpoint has not established the same contract. With the quirk off, request bytes are unchanged. Usage accounting always parses `cache_read_input_tokens` / `cache_creation_input_tokens` into `llm.UsageStats`, and the kernel `token.updated` event adds `cache_read_input_tokens`, `cache_creation_input_tokens`, and `billed_input_tokens` (= `input_tokens` - `cache_read_input_tokens`). `/diag context` renders the latest run totals and hit rate.
 
 ## Context Window vs Output Cap

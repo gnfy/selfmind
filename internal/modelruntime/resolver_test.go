@@ -348,3 +348,75 @@ func TestResolverMiniMaxOAuthUsesStoredTokenGetter(t *testing.T) {
 		t.Fatalf("TokenGetter() = %q", got)
 	}
 }
+
+// Global model.headers is the lowest layer: it reaches every provider but a
+// built-in compatibility header (kimi's User-Agent) must crush it, and a
+// provider_profiles header must crush both.
+func TestGlobalModelHeadersLayering(t *testing.T) {
+	cfg := &config.Config{
+		Model: config.ModelConfig{
+			Provider: "kimi-coding",
+			Default:  "kimi-for-coding",
+			Headers: map[string]string{
+				"User-Agent":   "my-org/1.0",
+				"X-Org-Header": "org-value",
+				"X-Overridden": "from-global",
+			},
+		},
+		ProviderProfiles: map[string]config.ProviderEndpoint{
+			"kimi-coding": {
+				APIKey:  "sk-kimi-test",
+				Headers: map[string]string{"X-Overridden": "from-provider"},
+			},
+		},
+	}
+	cfg.Normalize()
+
+	rt, err := NewResolver(cfg).Resolve(context.Background(), Selection{})
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if got := rt.Headers["User-Agent"]; got != "claude-code/0.1.0" {
+		t.Fatalf("built-in compatibility UA must beat global headers, got %q", got)
+	}
+	if got := rt.Headers["X-Org-Header"]; got != "org-value" {
+		t.Fatalf("global header should reach the request, got %q", got)
+	}
+	if got := rt.Headers["X-Overridden"]; got != "from-provider" {
+		t.Fatalf("provider_profiles header must beat global, got %q", got)
+	}
+
+	origins := NewResolver(cfg).HeaderOrigins("kimi-coding", rt.Headers)
+	if origins["User-Agent"] != "built-in profile" {
+		t.Fatalf("User-Agent origin = %q", origins["User-Agent"])
+	}
+	if origins["X-Org-Header"] != "model.headers" {
+		t.Fatalf("X-Org-Header origin = %q", origins["X-Org-Header"])
+	}
+	if origins["X-Overridden"] != "provider config" {
+		t.Fatalf("X-Overridden origin = %q", origins["X-Overridden"])
+	}
+}
+
+// The emergency escape hatch: a provider_profiles header can override a
+// built-in compatibility value without a code change.
+func TestProviderProfileHeaderOverridesBuiltin(t *testing.T) {
+	cfg := &config.Config{
+		Model: config.ModelConfig{Provider: "kimi-coding", Default: "kimi-for-coding"},
+		ProviderProfiles: map[string]config.ProviderEndpoint{
+			"kimi-coding": {
+				APIKey:  "sk-kimi-test",
+				Headers: map[string]string{"User-Agent": "claude-code/0.2.0"},
+			},
+		},
+	}
+	cfg.Normalize()
+
+	rt, err := NewResolver(cfg).Resolve(context.Background(), Selection{})
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if got := rt.Headers["User-Agent"]; got != "claude-code/0.2.0" {
+		t.Fatalf("provider_profiles must override the built-in header, got %q", got)
+	}
+}

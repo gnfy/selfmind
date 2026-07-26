@@ -402,6 +402,21 @@ func (a *App) printCurrentModel(cfg *config.Config) {
 	fmt.Fprintf(a.stdout, "Config: %s\n", cfg.Path)
 }
 
+// redactHeaderValue masks values whose header name suggests a secret; other
+// values are shown verbatim so compatibility overrides can be verified.
+func redactHeaderValue(key, value string) string {
+	lower := strings.ToLower(key)
+	for _, marker := range []string{"key", "token", "secret", "authorization", "cookie", "password"} {
+		if strings.Contains(lower, marker) {
+			return "***"
+		}
+	}
+	if len(value) > 120 {
+		return value[:117] + "..."
+	}
+	return value
+}
+
 func (a *App) checkCurrentModel(cfg *config.Config) int {
 	a.printCurrentModel(cfg)
 	rt, err := modelruntime.NewResolver(cfg).Resolve(a.ctx, modelruntime.Selection{})
@@ -427,6 +442,18 @@ func (a *App) checkCurrentModel(cfg *config.Config) int {
 		rt.Quirks.ResponsesStoreFalse,
 		rt.Quirks.ResponsesRequireStream,
 	)
+	if len(rt.Headers) > 0 {
+		fmt.Fprintln(a.stdout, "Headers (merged; protocol headers like content-type/auth are added at request time):")
+		origins := modelruntime.NewResolver(cfg).HeaderOrigins(rt.Provider, rt.Headers)
+		keys := make([]string, 0, len(rt.Headers))
+		for key := range rt.Headers {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			fmt.Fprintf(a.stdout, "  %s: %s  [%s]\n", key, redactHeaderValue(key, rt.Headers[key]), origins[key])
+		}
+	}
 	if strings.Contains(strings.ToLower(rt.BaseURL), "api.kimi.com/coding") && rt.Quirks.DisableHTTP2 {
 		fmt.Fprintln(a.stdout, "Transport: TLS ALPN restricted to http/1.1")
 	}

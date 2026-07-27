@@ -31,7 +31,10 @@ func (d *Server) tryHandleControlCommand(ctx context.Context, identity *control.
 	if handled, reply, err := d.tryHandleClarifyAnswer(ctx, identity, trimmed, req.Channel); handled {
 		return true, reply, err
 	}
-	if !strings.HasPrefix(lower, "/") {
+	// Command-shaped tokens only: a "/"-leading file path ("/mnt/c/pic.png …")
+	// is ordinary message text and must fall through to the agent-first path,
+	// never into the command switch or the near-miss suggester.
+	if !command.LooksLikeCommand(lower) {
 		return false, "", nil
 	}
 	switch {

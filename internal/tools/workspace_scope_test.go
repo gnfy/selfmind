@@ -87,3 +87,53 @@ func TestApprovalProjectRootUsesAllowedSecondaryRoot(t *testing.T) {
 		t.Fatalf("allowed secondary-root read classified dangerous: %s", reason)
 	}
 }
+
+// TestWorkspaceScopeMiddlewareScopesVisionAnalyze pins the vision_analyze
+// scope fix: the tool's local-path branch used to os.ReadFile ANY path,
+// bypassing AllowedRoots entirely. Local refs (bare paths, file://) must now
+// resolve inside the scope like read_file; remote http(s) URLs pass through
+// untouched to the tool's own SSRF/egress handling.
+func TestWorkspaceScopeMiddlewareScopesVisionAnalyze(t *testing.T) {
+	root := t.TempDir()
+	tenantID := "person_vision"
+	cleanup := SetExecutionScope(tenantID, ExecutionScope{WorkspaceRoot: root, AllowedRoots: []string{root}})
+	defer cleanup()
+
+	mw := WorkspaceScopeMiddleware()
+	var seen string
+	exec := mw(func(args map[string]interface{}) (string, error) {
+		seen, _ = args["image_url"].(string)
+		return "ok", nil
+	})
+
+	// In-scope relative path resolves against the workspace root.
+	if _, err := exec(map[string]interface{}{
+		"_tenant_id": tenantID, "_tool_name": "vision_analyze",
+		"image_url": "shots/a.png", "question": "q",
+	}); err != nil {
+		t.Fatalf("in-scope path failed: %v", err)
+	}
+	if want := filepath.Join(root, "shots", "a.png"); seen != want {
+		t.Fatalf("image_url = %q, want %q", seen, want)
+	}
+
+	// Out-of-scope absolute path is rejected before the tool runs.
+	if _, err := exec(map[string]interface{}{
+		"_tenant_id": tenantID, "_tool_name": "vision_analyze",
+		"image_url": "/etc/passwd.png", "question": "q",
+	}); err == nil || !strings.Contains(err.Error(), "escapes workspace") {
+		t.Fatalf("out-of-scope path must fail with escape error, got %v", err)
+	}
+
+	// Remote URL passes through untouched.
+	seen = ""
+	if _, err := exec(map[string]interface{}{
+		"_tenant_id": tenantID, "_tool_name": "vision_analyze",
+		"image_url": "https://example.com/a.png", "question": "q",
+	}); err != nil {
+		t.Fatalf("remote URL must not be scoped: %v", err)
+	}
+	if seen != "https://example.com/a.png" {
+		t.Fatalf("remote URL mutated to %q", seen)
+	}
+}

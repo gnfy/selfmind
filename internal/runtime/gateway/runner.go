@@ -170,6 +170,10 @@ func Run(ctx context.Context, opts Options) error {
 		// match the tool_output_view base dir wired in app.InitTools (both
 		// derive from the same resolved data dir).
 		ToolOutputDir: filepath.Join(dataDir, "tool-output"),
+		// Person-partitioned store for inbound message attachments (e.g. TUI
+		// clipboard-pasted images): files are copied here and the partition
+		// joins the run's scope so tools can read them (httpapi/attachments.go).
+		AttachmentsDir: filepath.Join(dataDir, "attachments"),
 	}
 	doneAfter, cancelledAfter := cfg.Tasks.AutoArchiveDurations()
 	maintenanceDebounce, maintenanceMaxWait, maintenanceBatchMax := cfg.Tasks.MaintenanceBatchPolicy()

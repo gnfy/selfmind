@@ -760,20 +760,20 @@ func (m *uiModel) tryClipboardImagePaste() (tea.Cmd, bool) {
 	return nil, true
 }
 
-// attachClipboardImage drops a saved clipboard-image path into the composer so
-// the submit path turns it into an image attachment, stripping any leading
-// command token first.
+// attachClipboardImage registers a saved clipboard-image path as an editor
+// image attachment shown as a compact [[ image:N name ]] token (mirroring
+// large-paste placeholders), stripping any leading command token first. The
+// raw path never enters the composer text — ExpandValue substitutes it back at
+// submit time, where the existing path→attachment pipeline picks it up. This
+// is what keeps a WSL/Linux path ("/mnt/c/…") from ever being routed as a
+// slash command (observed live) and keeps the sentence readable.
 func (m *uiModel) attachClipboardImage(path, stripPrefix string) {
-	cur := strings.TrimSpace(m.editor.Value())
 	if stripPrefix != "" {
-		cur = strings.TrimSpace(strings.TrimPrefix(cur, stripPrefix))
+		cur := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(m.editor.Value()), stripPrefix))
+		m.editor.SetValue(cur)
 	}
-	if cur == "" {
-		m.editor.SetValue(path + " ")
-	} else {
-		m.editor.SetValue(cur + " " + path + " ")
-	}
-	m.addMessage("assistant", "📎 Image attached from the clipboard. Add your question and press Enter to send.")
+	token := m.editor.AttachImage(path)
+	m.addMessage("assistant", "📎 Image attached from the clipboard as "+token+". Add your question and press Enter to send (delete the token to detach).")
 }
 
 // handleCapture saves the last recorded turn as a replayable eval case (the

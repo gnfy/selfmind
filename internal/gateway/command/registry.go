@@ -13,7 +13,10 @@
 // the two IM async-hint isControlCommand copies, and the TUI command list.
 package command
 
-import "strings"
+import (
+	"regexp"
+	"strings"
+)
 
 // Scope marks where a command is executed.
 type Scope int
@@ -127,6 +130,28 @@ func firstToken(content string) string {
 func Lookup(token string) (Entry, bool) {
 	e, ok := lookupIndex[strings.ToLower(strings.TrimSpace(token))]
 	return e, ok
+}
+
+// commandTokenRe matches a token SHAPED like a slash command: "/" + a letter +
+// letters/digits/_/-. Command and skill names never contain a second slash or
+// a dot, so absolute Unix paths ("/mnt/c/pic.png", "/tmp/a.txt") and bare "/"
+// do not match.
+var commandTokenRe = regexp.MustCompile(`^/[A-Za-z][A-Za-z0-9_-]*$`)
+
+// LooksLikeCommand reports whether the first token of content has the shape of
+// a slash command (registered or not). It is the shared pre-gate for every
+// surface that routes a leading "/" into command handling or an
+// unknown-command reject: only command-shaped tokens enter that path, while a
+// "/"-leading file path or other prose stays on the normal agent-first message
+// path (observed live: a pasted "/mnt/c/...png <question>" was rejected as
+// "Unknown command"). Actual command resolution stays in Lookup /
+// IsGatewayControl / each surface's handler.
+func LooksLikeCommand(content string) bool {
+	fields := strings.Fields(strings.TrimSpace(content))
+	if len(fields) == 0 {
+		return false
+	}
+	return commandTokenRe.MatchString(fields[0])
 }
 
 // IsGatewayControl reports whether the first token of content is a registered

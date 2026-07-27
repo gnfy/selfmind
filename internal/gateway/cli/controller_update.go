@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"selfmind/internal/gateway/command"
 	"selfmind/internal/kernel"
 	"selfmind/internal/platform/textutil"
 	"selfmind/internal/tools"
@@ -605,9 +606,15 @@ func (m *uiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			// Shift+Enter / Ctrl+J already handled above via KeyCtrlJ.
 			// Here plain Enter submits
 			// Use ExpandValue() to replace paste placeholders with actual content.
+			// The display form (with compact [[ paste:N ]] / [[ image:N ]] tokens)
+			// is what the transcript echoes; the expanded form is what runs.
+			display := strings.TrimSpace(m.editor.Value())
 			input := m.editor.ExpandValue()
 			if input == "" {
 				return m, nil
+			}
+			if display == "" {
+				display = input
 			}
 			// Record the EXPANDED input, never displayInput: paste placeholders
 			// are unrecoverable after editor.Reset() clears the snippet buffer
@@ -644,7 +651,11 @@ func (m *uiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m, tea.Batch(m.spinner.Tick, workingTick())
 			}
 
-			if strings.HasPrefix(input, "/") {
+			// Only command-SHAPED tokens enter command handling ("/help",
+			// "/paste-image"). A "/"-leading absolute path ("/mnt/c/pic.png …")
+			// is ordinary agent-first message text (shared predicate with the
+			// gateway reject gate — observed live as a bogus Unknown command).
+			if command.LooksLikeCommand(input) {
 				return m, m.handleCommand(input)
 			}
 			// Mid-turn steering: if a run is active, inject this as guidance into
@@ -654,7 +665,9 @@ func (m *uiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m, m.injectMidRunGuidance(input)
 			}
 			m.detachWatchedRunForNewTurn()
-			m.addMessage("user", input)
+			// Echo the compact display form: a 200-line paste or an attached
+			// image shows as its token, not as the expanded payload.
+			m.addMessage("user", display)
 			m.editor.Reset()
 			m.activePlanJSON = ""
 			m.steerCh = make(chan string, 16)

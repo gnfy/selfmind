@@ -12,6 +12,7 @@ import (
 
 	"selfmind/internal/control"
 	"selfmind/internal/gateway/api"
+	"selfmind/internal/gateway/command"
 	"selfmind/internal/gateway/router"
 	"selfmind/internal/kernel"
 	"selfmind/internal/platform/log"
@@ -278,6 +279,10 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 		analysisWorkspaceID = workspace.ID
 	}
 	replay := runMaintenanceReplay{WorkspaceID: analysisWorkspaceID, UserInput: req.Content, Attach: attach}
+	// Import attachment files into the daemon-managed person partition BEFORE
+	// scope install and context assembly: the rendered attachment paths and
+	// the scope's allowed roots must both point at the managed copies.
+	req.Attachments = c.importAttachments(identity, run, req.Attachments)
 	cleanupScope := c.installExecutionScope(identity, task, run, workspace, req)
 	defer cleanupScope()
 	if workspace != nil && workspace.LocalPath != "" {
@@ -625,12 +630,13 @@ func (c *RunCoordinator) drainQueue(identity *control.IdentityContext) {
 			return
 		}
 		// A queued row is re-validated at drain time with today's inbound
-		// rules: slash-shaped content no control command claims is a mistyped
-		// COMMAND, not work — cancel it instead of launching an agent run.
-		// This also flushes poison rows enqueued before the unknown-slash
+		// rules: command-shaped content no control command claims is a
+		// mistyped COMMAND, not work — cancel it instead of launching an agent
+		// run. This also flushes poison rows enqueued before the unknown-slash
 		// reject gate existed (observed live: a queued "/qwer" resurrected as
-		// an agent task at every boot). Loop on to the next real item.
-		if trimmed := strings.TrimSpace(next.Content); strings.HasPrefix(trimmed, "/") {
+		// an agent task at every boot). A "/"-leading path stays queued work
+		// (command.LooksLikeCommand). Loop on to the next real item.
+		if trimmed := strings.TrimSpace(next.Content); command.LooksLikeCommand(trimmed) {
 			_ = c.srv.Control.MarkQueued(ctx, identity.TenantID, next.ID, control.QueueStatusCancelled)
 			log.Warn("gateway: cancelled queued slash-command row instead of draining it", "content", trimmed)
 			continue

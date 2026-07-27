@@ -67,6 +67,13 @@ type Server struct {
 	// (docs/memory-governance.zh-CN.md §4). Nil disables governance entirely;
 	// the loop is started by the gateway runner via StartMemoryGovernance.
 	MemoryConsolidator MemoryConsolidator
+	// AttachmentsDir is the person-partitioned store for message attachments
+	// (e.g. TUI clipboard-pasted images). importAttachments copies inbound
+	// attachment files here (<AttachmentsDir>/<personID>/<runID>/NN-name) and
+	// the person's partition joins that run's ExecutionScope AllowedRoots so
+	// file tools can read them — external temp paths stay out of scope. Empty
+	// disables importing (attachments keep their original client paths).
+	AttachmentsDir string
 	// ToolOutputDir is the spool root for over-budget tool outputs
 	// (execution-quality W1): each run's sink writes
 	// <ToolOutputDir>/<personID>/<artifactID>.txt and the tool_output_view
@@ -272,13 +279,15 @@ func (d *Server) ProcessMessage(ctx context.Context, req api.MessageRequest) (ap
 		}
 		return api.MessageResponse{Identity: identity, Content: content, Turn: messageTurn("completed", "", "idle", "", "", "")}, http.StatusOK
 	}
-	// A leading-slash message that no control command claimed is a mistyped
+	// A command-SHAPED message that no control command claimed is a mistyped
 	// COMMAND, not conversation or new work. Reject it here so it can never be
 	// dispatched to the agent or queued behind a running task (observed live:
 	// "/qwer" created a task and joined the queue). Skill slash-invocation on
 	// the gateway uses /v1/dispatch, not this message path, so rejecting every
-	// unrecognized slash here is safe.
-	if strings.HasPrefix(strings.TrimSpace(req.Content), "/") {
+	// unrecognized command-shaped token here is safe. A "/"-leading path or
+	// other prose ("/mnt/c/pic.png 看一下") is NOT command-shaped and stays on
+	// the agent-first message path (command.LooksLikeCommand).
+	if command.LooksLikeCommand(req.Content) {
 		msg := "Unknown command " + strings.Fields(strings.TrimSpace(req.Content))[0] + ". Send /help for the list of commands."
 		if suggestion := suggestControlCommand(strings.ToLower(strings.TrimSpace(req.Content))); suggestion != "" {
 			msg = "Unknown command " + strings.Fields(strings.TrimSpace(req.Content))[0] + " — did you mean " + suggestion + "? Send /help for the full list."

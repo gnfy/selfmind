@@ -537,6 +537,10 @@ func newRuntimeHarness(opts RunOptions, c *Case, dataDirOverride string) (*runti
 		// daemon runner, so eval exercises the artifact + read-back flow
 		// inside its isolated data dir.
 		ToolOutputDir: filepath.Join(dataDir, "tool-output"),
+		// Attachment import store: same derivation as the daemon runner so an
+		// eval case with attachments exercises the production import + scope
+		// path inside the isolated data dir.
+		AttachmentsDir: filepath.Join(dataDir, "attachments"),
 	}
 	return &runtimeHarness{
 		cfg:          cfg,

@@ -113,6 +113,19 @@ func WorkspaceScopeMiddleware() Middleware {
 					return "", err
 				}
 				args["path"] = scoped
+			case "vision_analyze":
+				// The tool's local branch is a filesystem read and must obey
+				// the scope like read_file (it used to os.ReadFile any path,
+				// bypassing AllowedRoots entirely). http(s) URLs stay with the
+				// tool's own SSRF/egress handling.
+				rawURL, _ := args["image_url"].(string)
+				if isLocalImageRef(rawURL) {
+					scoped, err := resolveScopedPath(scope, strings.TrimPrefix(strings.TrimSpace(rawURL), "file://"))
+					if err != nil {
+						return "", err
+					}
+					args["image_url"] = scoped
+				}
 			case "patch":
 				patchContent, _ := args["patch"].(string)
 				scoped, err := scopePatchContent(scope, patchContent)
@@ -125,6 +138,20 @@ func WorkspaceScopeMiddleware() Middleware {
 			return next(args)
 		}
 	}
+}
+
+// isLocalImageRef mirrors vision_analyze's own local-vs-remote split: anything
+// without a URL scheme (or with file://) is a local filesystem read; http(s)
+// URLs are remote fetches.
+func isLocalImageRef(raw string) bool {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return false
+	}
+	if strings.HasPrefix(raw, "file://") {
+		return true
+	}
+	return !strings.Contains(raw, "://")
 }
 
 func resolveScopedPath(scope ExecutionScope, raw string) (string, error) {

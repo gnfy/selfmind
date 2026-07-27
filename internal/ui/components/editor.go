@@ -2,6 +2,7 @@ package components
 
 import (
 	"fmt"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"unicode"
@@ -25,9 +26,23 @@ type PasteSnippet struct {
 	Text  string // actual pasted content
 }
 
+// ImageAttachment stores a composer-attached local image behind a display
+// token, mirroring PasteSnippet: the raw absolute path never appears in the
+// input line (a leading "/mnt/…" both reads badly and used to be mistaken for
+// a slash command); ExpandValue substitutes the path back at submit time so
+// the existing path→attachment pipeline picks it up unchanged.
+type ImageAttachment struct {
+	Token string // the placeholder, e.g. "[[ image:0 screenshot.png ]]"
+	Path  string // absolute local file path
+	Name  string // display base name
+}
+
 // pasteTokenRe matches [[ paste:NNN ... ]] style placeholders in submitted text.
 // Hermes format: [[ paste:0 PrivacyDistiller.. [80 lines] .. scrubPII ]]
 var pasteTokenRe = regexp.MustCompile(`\[\[ paste:\d[^\]]*\]\]`)
+
+// imageTokenRe matches [[ image:NNN ... ]] style placeholders in submitted text.
+var imageTokenRe = regexp.MustCompile(`\[\[ image:\d[^\]]*\]\]`)
 
 // wsRe collapses whitespace in previews.
 var wsRe = regexp.MustCompile(`\s+`)
@@ -45,8 +60,9 @@ type Editor struct {
 	textinput       textinput.Model
 	secure          bool
 	commands        []CommandHint
-	snippets        []PasteSnippet // stored snippets for large pastes
-	largePasteChars int            // threshold in characters (from config, 0=disabled)
+	snippets        []PasteSnippet    // stored snippets for large pastes
+	images          []ImageAttachment // stored attachments for pasted/attached images
+	largePasteChars int               // threshold in characters (from config, 0=disabled)
 	largePasteLines int            // threshold in lines (from config, 0=disabled)
 	cursorVisible   bool
 	hintIndex       int // selected row in the slash-command suggestion popup
@@ -236,33 +252,67 @@ func (e *Editor) Value() string {
 	return e.textarea.Value()
 }
 
-// ExpandValue replaces paste placeholders with the actual clipboard content.
-// Call this before submitting.
-func (e *Editor) ExpandValue() string {
-	val := e.Value()
-	if len(e.snippets) == 0 {
-		return val
-	}
-	// Build a map from token → text for efficient replacement.
-	snipMap := make(map[string]string)
-	for _, s := range e.snippets {
-		snipMap[s.Token] = s.Text
-	}
-	// Replace all occurrences of each placeholder.
-	result := pasteTokenRe.ReplaceAllStringFunc(val, func(match string) string {
-		if text, ok := snipMap[match]; ok {
-			return text
+// AttachImage registers a local image file and appends its compact display
+// token to the composer. A token the user deletes before submitting simply
+// never expands — deleting the token IS detaching the image. Returns the token.
+func (e *Editor) AttachImage(path string) string {
+	idx := len(e.images)
+	name := filepath.Base(path)
+	token := fmt.Sprintf("[[ image:%d %s ]]", idx, name)
+	e.images = append(e.images, ImageAttachment{Token: token, Path: path, Name: name})
+
+	current := e.textarea.Value()
+	lead := ""
+	if len(current) > 0 {
+		last := current[len(current)-1]
+		if last != ' ' && last != '\t' && last != '\n' {
+			lead = " "
 		}
-		return match
-	})
-	return result
+	}
+	e.textarea.SetValue(current + lead + token + " ")
+	return token
 }
 
-// Reset clears the editor and all stored paste snippets.
+// ExpandValue replaces paste placeholders with the actual clipboard content
+// and image placeholders with their local file paths. Call this before
+// submitting.
+func (e *Editor) ExpandValue() string {
+	val := e.Value()
+	if len(e.snippets) > 0 {
+		// Build a map from token → text for efficient replacement.
+		snipMap := make(map[string]string)
+		for _, s := range e.snippets {
+			snipMap[s.Token] = s.Text
+		}
+		// Replace all occurrences of each placeholder.
+		val = pasteTokenRe.ReplaceAllStringFunc(val, func(match string) string {
+			if text, ok := snipMap[match]; ok {
+				return text
+			}
+			return match
+		})
+	}
+	if len(e.images) > 0 {
+		imgMap := make(map[string]string)
+		for _, img := range e.images {
+			imgMap[img.Token] = img.Path
+		}
+		val = imageTokenRe.ReplaceAllStringFunc(val, func(match string) string {
+			if p, ok := imgMap[match]; ok {
+				return p
+			}
+			return match
+		})
+	}
+	return val
+}
+
+// Reset clears the editor, all stored paste snippets, and image attachments.
 func (e *Editor) Reset() {
 	e.textarea.Reset()
 	e.textinput.Reset()
 	e.snippets = nil
+	e.images = nil
 }
 
 // SetValue sets the textarea/textinput value without affecting paste snippets.

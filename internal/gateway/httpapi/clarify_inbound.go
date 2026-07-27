@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"selfmind/internal/control"
+	"selfmind/internal/gateway/command"
 )
 
 // Inbound answer routing for pending questions (G3, docs/identity-continuity.md
@@ -33,8 +34,10 @@ func (d *Server) tryHandleClarifyAnswer(ctx context.Context, identity *control.I
 		return false, "", nil
 	}
 	answer := strings.TrimSpace(content)
-	if answer == "" || strings.HasPrefix(answer, "/") {
-		// Slash messages are control commands, never answers.
+	if answer == "" || command.LooksLikeCommand(answer) {
+		// Command-shaped messages are control commands, never answers. A
+		// "/"-leading file path IS a valid answer (the agent may have asked
+		// "which file?"), so the gate is command shape, not the bare prefix.
 		return false, "", nil
 	}
 	pending, err := d.Control.ListClarifyRequests(ctx, identity.TenantID, identity.PersonID, "pending", 100)

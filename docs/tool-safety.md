@@ -12,6 +12,16 @@ before changing `internal/tools`, execution middleware, or kernel tool dispatch.
 - Scope checks must resolve path semantics safely, including wrapper commands
   and symlink-sensitive operations. A workspace switch must affect subsequent
   tool execution without restarting the daemon.
+- `vision_analyze`'s local-path branch is a filesystem read and obeys the
+  scope like `read_file` (`WorkspaceScopeMiddleware`); its http(s) branch
+  stays with the tool's SSRF check. Any new tool that reads a caller-supplied
+  path must join the middleware's scoped-tool list, never `os.ReadFile` raw.
+- Message attachments (e.g. TUI clipboard-pasted images) enter a run only via
+  the gateway import channel (`httpapi/attachments.go`): files are copied into
+  the person-partitioned `<data>/attachments/<person>/<run>/` store and that
+  person's partition joins the run's `AllowedRoots`. Arbitrary out-of-scope
+  client paths (OS temp dirs, other users' files) stay unreadable; do not
+  widen scope to accommodate an attachment path directly.
 - Tools that do not need filesystem or process access must not receive broader
   scope as a convenience.
 

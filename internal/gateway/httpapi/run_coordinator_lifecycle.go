@@ -327,6 +327,20 @@ func (c *RunCoordinator) installExecutionScope(identity *control.IdentityContext
 		scope.WorkspaceRoot = workspace.LocalPath
 		scope.AllowedRoots = workspace.AllowedRoots
 	}
+	// A turn carrying attachments may read the person's imported-attachment
+	// partition (importAttachments copies the files there) in addition to the
+	// workspace roots. Copy-on-append: workspace.AllowedRoots must not be
+	// mutated, and an empty AllowedRoots list must keep its implicit
+	// workspace-root fallback (scopeAllowsPath) rather than lose it.
+	if len(req.Attachments) > 0 {
+		if root := c.personAttachmentsRoot(identity); root != "" {
+			roots := scope.AllowedRoots
+			if len(roots) == 0 && scope.WorkspaceRoot != "" {
+				roots = []string{scope.WorkspaceRoot}
+			}
+			scope.AllowedRoots = append(append([]string{}, roots...), root)
+		}
+	}
 	if task != nil {
 		scope.TaskID = task.ID
 	}

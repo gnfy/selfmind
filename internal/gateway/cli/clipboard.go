@@ -40,12 +40,14 @@ func clipboardImageToFile() (string, error) {
 
 // clipboardImageWindows uses PowerShell to save the clipboard image. On WSL the
 // file is saved to the Windows temp dir and the path is translated back to a WSL
-// path via `wslpath`, so the running Linux process can read it.
+// path via `wslpath`, so the running Linux process can read it. The file name
+// comes from dst's unique timestamped base name so a second paste never
+// overwrites the first (attachments are read lazily at submit/inspect time).
 func clipboardImageWindows(dst string, wsl bool) (string, error) {
-	const ps = `Add-Type -AssemblyName System.Windows.Forms,System.Drawing; ` +
+	ps := `Add-Type -AssemblyName System.Windows.Forms,System.Drawing; ` +
 		`$img=[System.Windows.Forms.Clipboard]::GetImage(); ` +
 		`if($img -eq $null){ Write-Output 'NOIMAGE'; exit 0 }; ` +
-		`$p=[System.IO.Path]::Combine($env:TEMP, 'selfmind-paste.png'); ` +
+		fmt.Sprintf(`$p=[System.IO.Path]::Combine($env:TEMP, '%s'); `, filepath.Base(dst)) +
 		`$img.Save($p, [System.Drawing.Imaging.ImageFormat]::Png); Write-Output $p`
 	out, err := exec.Command("powershell.exe", "-NoProfile", "-Command", ps).Output()
 	if err != nil {

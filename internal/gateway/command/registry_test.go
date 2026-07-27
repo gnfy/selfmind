@@ -121,3 +121,46 @@ func TestKnownMatchesGatewayContract(t *testing.T) {
 		t.Fatalf("Known() = %v, want gateway contract %v", got, want)
 	}
 }
+
+// TestLooksLikeCommand pins the shared command-shape pre-gate: only tokens a
+// command or skill could actually be named enter command handling; a
+// "/"-leading absolute path or other prose stays agent-first (observed live:
+// a pasted "/mnt/c/...png <question>" was rejected as Unknown command).
+func TestLooksLikeCommand(t *testing.T) {
+	commands := []string{
+		"/help",
+		"/paste-image",
+		"/task 3 rename foo",
+		"/skills list",
+		"  /Mode smart  ",
+		"/my_skill do the thing",
+	}
+	for _, in := range commands {
+		if !LooksLikeCommand(in) {
+			t.Errorf("LooksLikeCommand(%q) = false, want true", in)
+		}
+	}
+	notCommands := []string{
+		"",
+		"   ",
+		"/",
+		"/mnt/c/Users/guchao/AppData/Local/Temp/selfmind-paste.png 你看一下这个图片吧",
+		"/tmp/notes.txt has the log",
+		"/etc/hosts",
+		"/1abc",
+		"//server/share",
+		"/名字",
+		"hello /help",
+	}
+	for _, in := range notCommands {
+		if LooksLikeCommand(in) {
+			t.Errorf("LooksLikeCommand(%q) = true, want false", in)
+		}
+	}
+	// Every registered command name must pass its own gate.
+	for _, e := range All() {
+		if !LooksLikeCommand(e.Name) {
+			t.Errorf("registered command %q fails LooksLikeCommand", e.Name)
+		}
+	}
+}

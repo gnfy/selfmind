@@ -108,7 +108,7 @@ Excluded (now in scrollback): all finalized user/assistant/tool/system cells.
 | streaming assistant commit | **rework** | stream in active region; Println final on end |
 | pager overlays (`/help`, detail, status) | **rework** | become full-screen overlay (temporary alt-screen) |
 | input editor, status bar, spinner | **keep** | active region |
-| image paste / attachments | **keep** | input side, unaffected |
+| image paste / attachments | **keep** | input side; 2026-07-27: pasted images register as `[[ image:N name ]]` composer tokens (mirroring `[[ paste:N ]]`), never raw paths — `Editor.AttachImage`/`ExpandValue` substitute the path back at submit, the transcript echoes the compact token, and the gateway imports attachment files into the person-partitioned scope store (`httpapi/attachments.go`) |
 | preamble narration, notification bar restyle, command-output formatting | **keep** | already shipped; renderers reused at commit time |
 
 ## 5. Phases

@@ -346,18 +346,22 @@ func (c *Controller) SessionChannel() string {
 	return c.model.channel
 }
 
-// HasConversationHistory reports whether this TUI session contains user-visible
-// conversation state worth resuming. A freshly opened-and-closed TUI gets a
-// session id for isolation, but should not advertise a useless resume command.
+// HasConversationHistory reports whether THIS session contains a user turn
+// worth resuming. A freshly opened-and-closed TUI gets a session id for
+// isolation, but should not advertise a useless resume command. The signal is
+// a user-role message in the transcript — every submit path (chat, command
+// echo, clarify answer) adds one. inputHistory is deliberately NOT consulted:
+// since persistent input history (2026-07-20) it is pre-seeded from
+// ~/.selfmind/input_history.jsonl at startup, so its length reflects all-time
+// typing, not this session (the regression that made the hint print on every
+// zero-input exit). Assistant/system startup content (digest, notices) must
+// not trigger the hint either.
 func (c *Controller) HasConversationHistory() bool {
 	if c == nil || c.model == nil {
 		return false
 	}
-	if len(c.model.inputHistory) > 0 {
-		return true
-	}
 	for _, msg := range c.model.messages {
-		if strings.TrimSpace(msg.Content) != "" {
+		if msg.Role == "user" && strings.TrimSpace(msg.Content) != "" {
 			return true
 		}
 	}

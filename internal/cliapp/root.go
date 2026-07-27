@@ -13,6 +13,7 @@ import (
 
 	"selfmind/internal/buildinfo"
 	"selfmind/internal/crashreport"
+	tui "selfmind/internal/gateway/cli"
 	"selfmind/internal/platform/config"
 	"selfmind/internal/platform/log"
 )
@@ -37,6 +38,13 @@ type App struct {
 	// gatewayEnsured guards the one-time local-daemon auto-start so each CLI
 	// client invocation probes/starts the gateway at most once.
 	gatewayEnsured bool
+	// updateNotices carries the background update-check result (buffered 1)
+	// into the TUI session for the in-session announcement; nil when the
+	// check was skipped (disabled, dev build, or fresh cache).
+	updateNotices chan tui.UpdateNotice
+	// announcedUpdateVersion is the version the startup cache-based notice
+	// printed, used to dedupe the in-session and exit-time announcements.
+	announcedUpdateVersion string
 	// interactive is true only when both stdin and stdout are attached to a
 	// terminal. First-run setup must never prompt scripts, cron, or pipes.
 	interactive bool

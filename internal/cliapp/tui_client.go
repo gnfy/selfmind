@@ -110,6 +110,10 @@ func (a *App) tryRunTUIClient(cfg *config.Config) (int, bool) {
 	// Presence = recent user input: every keystroke stamps the shared tracker
 	// the client's active=0|1 claim is computed from.
 	ctrl.SetInputActivityHook(inputTracker.Touch)
+	// In-session update announcement: the background check fired at startup
+	// (printUpdateNotice) delivers its result into the live session instead of
+	// waiting for the next launch. Deduped against the startup notice.
+	ctrl.SetUpdateNotices(a.updateNotices, a.announcedUpdateVersion)
 	// Idle-TUI presence heartbeat: the event poller only runs mid-turn, so
 	// without this loop an open-but-idle TUI reads as detached and CLI-origin
 	// approval prompts would ALSO push to IM (double notification). Stopped on
@@ -123,6 +127,9 @@ func (a *App) tryRunTUIClient(cfg *config.Config) (int, bool) {
 	if a.resumeChannel != "" || ctrl.HasConversationHistory() {
 		printResumeHint(a.stdout, ctrl.SessionChannel())
 	}
+	// Session boundary = the safe moment for `selfmind update` (daemon restart
+	// interrupts nothing). Cache-only, never a network call.
+	a.printExitUpdateHint(cfg)
 	fmt.Fprintln(a.stdout, "Goodbye!")
 	return 0, true
 }

@@ -95,6 +95,8 @@ type uiModel struct {
 	historyIndex          int
 	historyDraft          string
 	clarifyBridge         *tools.ClarifyBridge
+	updateNotices         <-chan UpdateNotice // one-shot background update-check result (update_notice.go); nil after consumption
+	updateNoticeAnnounced string              // version already announced (startup notice or in-session), the dedup key
 	cancelFn              context.CancelFunc
 	steerCh               chan string // mid-turn guidance channel for the active run (nil when idle)
 	clarifyMode           bool

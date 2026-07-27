@@ -25,6 +25,9 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 	}
 
+	// In-session update announcement: consumed only when idle (update_notice.go).
+	m.maybeAnnounceUpdate()
+
 	spinnerCmd := tea.Cmd(nil)
 	if m.thinking {
 		var cmd tea.Cmd

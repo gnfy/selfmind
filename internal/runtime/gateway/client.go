@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"strings"
 	"time"
 )
 
@@ -20,6 +21,12 @@ type StartResult struct {
 type StartOptions struct {
 	Replace    bool
 	ConfigPath string
+	// Executable optionally overrides which binary launches the detached
+	// daemon. Empty resolves the current process's executable, falling back
+	// to `selfmind` on PATH when that path no longer exists — a package
+	// upgrade (npm swaps the global package directory) can delete it out from
+	// under a running process.
+	Executable string
 }
 
 type StopOptions struct {
@@ -57,7 +64,7 @@ func StartDetached(opts StartOptions) (StartResult, error) {
 	}
 	defer logFile.Close()
 
-	exe, err := currentExecutable()
+	exe, err := resolveDaemonExecutable(opts.Executable)
 	if err != nil {
 		return StartResult{}, err
 	}
@@ -80,6 +87,37 @@ func StartDetached(opts StartOptions) (StartResult, error) {
 
 func detachedRunArgs() []string {
 	return []string{"gateway", "run"}
+}
+
+// resolveDaemonExecutable picks the binary that runs the detached daemon:
+// explicit override → the current executable → `selfmind` on PATH.
+func resolveDaemonExecutable(override string) (string, error) {
+	current, err := currentExecutable()
+	return pickDaemonExecutable(override, current, err)
+}
+
+// pickDaemonExecutable is the testable core of resolveDaemonExecutable. The
+// existence check on the current executable matters after an in-place package
+// upgrade: npm renames the global package directory to a staging dir and
+// deletes it, so /proc/self/exe points at a path that no longer exists and a
+// fork/exec of it fails (observed live via `selfmind update`).
+func pickDaemonExecutable(override, current string, currentErr error) (string, error) {
+	if s := strings.TrimSpace(override); s != "" {
+		return s, nil
+	}
+	if currentErr == nil && strings.TrimSpace(current) != "" {
+		if _, err := os.Stat(current); err == nil {
+			return current, nil
+		}
+	}
+	fromPath, lookErr := exec.LookPath("selfmind")
+	if lookErr != nil {
+		if currentErr != nil {
+			return "", fmt.Errorf("resolve daemon executable: %v; and `selfmind` is not on PATH: %w", currentErr, lookErr)
+		}
+		return "", fmt.Errorf("current executable %s no longer exists (replaced by an upgrade?) and `selfmind` is not on PATH: %w", current, lookErr)
+	}
+	return fromPath, nil
 }
 
 func RequestStatus(ctx context.Context, url string) ([]byte, int, error) {

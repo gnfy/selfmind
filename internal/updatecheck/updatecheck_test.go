@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestCompare(t *testing.T) {
@@ -86,5 +87,27 @@ func TestIsPrerelease(t *testing.T) {
 	if !IsPrerelease("v0.1.0-beta.5") || IsPrerelease("1.2.3") || !IsPrerelease("garbage") {
 		t.Fatalf("prerelease detection wrong: beta=%v stable=%v garbage=%v",
 			IsPrerelease("v0.1.0-beta.5"), IsPrerelease("1.2.3"), IsPrerelease("garbage"))
+	}
+}
+
+// TestParseInterval pins the clamp semantics: sub-minute values clamp UP to
+// the one-minute floor (the old behavior silently replaced "30s" with the
+// 24h default — the opposite of the user's intent), parse failures fall back
+// to the default, and the default itself is the per-startup 15m throttle.
+func TestParseInterval(t *testing.T) {
+	if got := ParseInterval("30s"); got != time.Minute {
+		t.Fatalf("ParseInterval(30s) = %v, want 1m clamp", got)
+	}
+	if got := ParseInterval("2h"); got != 2*time.Hour {
+		t.Fatalf("ParseInterval(2h) = %v, want 2h", got)
+	}
+	if got := ParseInterval(""); got != defaultInterval {
+		t.Fatalf("ParseInterval(\"\") = %v, want default %v", got, defaultInterval)
+	}
+	if got := ParseInterval("garbage"); got != defaultInterval {
+		t.Fatalf("ParseInterval(garbage) = %v, want default %v", got, defaultInterval)
+	}
+	if defaultInterval != 15*time.Minute {
+		t.Fatalf("defaultInterval = %v, want the per-startup 15m throttle", defaultInterval)
 	}
 }

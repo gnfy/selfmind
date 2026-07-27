@@ -2,6 +2,7 @@ package cliapp
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
@@ -11,6 +12,8 @@ import (
 	"time"
 
 	"selfmind/internal/buildinfo"
+	"selfmind/internal/gateway/api"
+	tui "selfmind/internal/gateway/cli"
 	"selfmind/internal/platform/config"
 	gatewayrt "selfmind/internal/runtime/gateway"
 	"selfmind/internal/updatecheck"
@@ -137,11 +140,72 @@ func (a *App) updateApply(args []string) int {
 		return 0
 	}
 	fmt.Fprintln(a.stdout, "Restarting the gateway daemon (waits for a safe turn boundary)...")
-	if code := a.gatewayRestart(nil); code != 0 {
-		fmt.Fprintln(a.stderr, "Daemon restart failed. The new version is installed but the running daemon is still the old one; run `selfmind gateway restart` manually.")
+	if err := a.restartDaemonViaInstalledLauncher(); err != nil {
+		fmt.Fprintf(a.stderr, "Daemon restart failed: %v\nThe new version is installed but the running daemon is still the old one; run `selfmind gateway restart` manually.\n", err)
 		return 1
 	}
+	a.verifyRestartedDaemonVersion(newVersion)
 	return 0
+}
+
+// restartDaemonViaInstalledLauncher restarts the gateway through the FRESHLY
+// INSTALLED launcher on PATH instead of this process. After the package
+// upgrade above, this process's own executable path may already be gone — npm
+// swaps the global package directory (rename to a .cli-<rand> staging dir,
+// then delete), so an in-process restart fork/execs a deleted path (observed
+// live). The new launcher restarts itself with a valid path, and the daemon
+// it spawns is guaranteed to be the new version.
+func (a *App) restartDaemonViaInstalledLauncher() error {
+	path, err := exec.LookPath("selfmind")
+	if err != nil {
+		return fmt.Errorf("locate the installed `selfmind` launcher on PATH: %w", err)
+	}
+	var args []string
+	if a.configPath != "" {
+		args = append(args, "--config", a.configPath)
+	}
+	args = append(args, "gateway", "restart")
+	ctx, cancel := contextWithTimeout(a.ctx, gatewayrt.ResolveDrainTimeout()+30*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, path, args...)
+	cmd.Stdout = a.stdout
+	cmd.Stderr = a.stderr
+	return cmd.Run()
+}
+
+// verifyRestartedDaemonVersion polls the restarted daemon's status endpoint
+// and confirms it now reports the freshly installed version (codex's daemon
+// updater applies the same restart-then-verify discipline). Best-effort:
+// warnings only, never a failed exit — the restart itself already succeeded.
+// A mismatch usually means another install shadows the updated one on PATH.
+func (a *App) verifyRestartedDaemonVersion(wantVersion string) {
+	want := strings.TrimPrefix(strings.TrimSpace(wantVersion), "v")
+	if want == "" {
+		return
+	}
+	deadline := time.Now().Add(15 * time.Second)
+	got := ""
+	for time.Now().Before(deadline) {
+		ctx, cancel := contextWithTimeout(a.ctx, 2*time.Second)
+		data, status, err := gatewayrt.RequestStatus(ctx, a.gatewayURL())
+		cancel()
+		if err == nil && status < 400 {
+			var resp api.GatewayStatusResponse
+			if json.Unmarshal(data, &resp) == nil && strings.TrimSpace(resp.Runtime.Version) != "" {
+				got = strings.TrimPrefix(strings.TrimSpace(resp.Runtime.Version), "v")
+				if got == want {
+					fmt.Fprintf(a.stdout, "Daemon restarted on SelfMind %s.\n", want)
+					return
+				}
+			}
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	if got == "" {
+		fmt.Fprintln(a.stderr, "Could not verify the restarted daemon's version (status endpoint unreachable or silent). Run `selfmind gateway status` to confirm it runs the new version.")
+		return
+	}
+	fmt.Fprintf(a.stderr, "Warning: the restarted daemon reports version %s, expected %s. Another install may shadow the updated one — check `which -a selfmind` and your PATH order, then run `selfmind gateway restart` from the intended install.\n", got, want)
 }
 
 // updateChannel resolves the effective dist-tag (flag > config pin > version
@@ -216,6 +280,7 @@ func (a *App) printUpdateNotice(cfg *config.Config) {
 	cached, err := updatecheck.ReadCache(cachePath)
 	if err == nil && shouldAnnounceUpdate(cached, buildinfo.Version, effectiveChannel) {
 		fmt.Fprintf(a.stderr, "Update available: SelfMind %s. Run `%s`.\n", cached.Latest, updateInstallCommand(cached.Channel))
+		a.announcedUpdateVersion = cached.Latest
 	}
 	// The cache is only fresh for the binary and channel that wrote it: after
 	// an upgrade the running version no longer matches, and after a channel
@@ -226,12 +291,61 @@ func (a *App) printUpdateNotice(cfg *config.Config) {
 		cached.Channel == effectiveChannel {
 		return
 	}
+	// The result feeds the in-session TUI announcement (buffered 1, one-shot):
+	// a completed check no longer waits for the NEXT startup to become
+	// visible. Best-effort end to end — a failed or not-newer check sends
+	// nothing and the session runs exactly as before.
+	a.updateNotices = make(chan tui.UpdateNotice, 1)
+	notices := a.updateNotices
 	channel := effectiveChannel
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 		defer cancel()
-		_, _ = updatecheck.Check(ctx, buildinfo.Version, channel)
+		result, err := updatecheck.Check(ctx, buildinfo.Version, channel)
+		if err != nil || !shouldAnnounceUpdate(result, buildinfo.Version, channel) {
+			return
+		}
+		select {
+		case notices <- tui.UpdateNotice{Version: result.Latest, Command: "selfmind update"}:
+		default:
+		}
 	}()
+}
+
+// printExitUpdateHint reprints the update reminder at the session boundary —
+// the one moment a `selfmind update` daemon restart cannot interrupt work
+// (codex executes its actual update at the same point). Cache-only: never a
+// network call on the exit path; the in-session check already refreshed the
+// cache, so this reflects the latest known state.
+func (a *App) printExitUpdateHint(cfg *config.Config) {
+	if line := updateHintFromCacheFile(cfg, buildinfo.Version); line != "" {
+		fmt.Fprintln(a.stdout, line)
+	}
+}
+
+func updateHintFromCacheFile(cfg *config.Config, runningVersion string) string {
+	if cfg == nil || !cfg.Updates.Enabled || isDevelopmentVersion(runningVersion) {
+		return ""
+	}
+	cached, err := updatecheck.ReadCache(updatecheck.CachePath())
+	if err != nil {
+		return ""
+	}
+	return updateHintFromCache(cfg, runningVersion, cached)
+}
+
+// updateHintFromCache renders the exit-time reminder line, or "" when there is
+// nothing to say. Pure over its inputs so the gating (channel match, newer
+// version, dev build) is unit-testable without touching the real cache file.
+func updateHintFromCache(cfg *config.Config, runningVersion string, cached updatecheck.Result) string {
+	if cfg == nil || !cfg.Updates.Enabled || isDevelopmentVersion(runningVersion) {
+		return ""
+	}
+	effectiveChannel := updatecheck.ResolveChannel(cfg.Updates.Channel, runningVersion)
+	if !shouldAnnounceUpdate(cached, runningVersion, effectiveChannel) {
+		return ""
+	}
+	return fmt.Sprintf("Update available: SelfMind %s. Run `selfmind update` — between sessions is a safe time (the daemon restarts without interrupting work).", cached.Latest)
 }
 
 // shouldAnnounceUpdate compares the cached latest against the version that is

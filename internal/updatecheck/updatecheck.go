@@ -15,7 +15,17 @@ import (
 
 const (
 	defaultRegistryURL = "https://registry.npmjs.org/-/package/@selfmind%2Fcli/dist-tags"
-	defaultInterval    = 24 * time.Hour
+	// defaultInterval throttles the background refresh: a TUI startup
+	// re-checks unless the cache is younger than this. 15 minutes means
+	// "effectively every startup, but never a request storm from rapid
+	// restarts" — sized for the current daily beta release cadence (codex uses
+	// 20h, hermes 6h; both are stable weekly-release products). Raise via
+	// `updates.check_interval` when the release pace slows.
+	defaultInterval = 15 * time.Minute
+	// minInterval is the floor for configured intervals: values below it are
+	// clamped UP to it, never silently replaced with the default (the old
+	// behavior turned "30s" into 24h — the opposite of the user's intent).
+	minInterval = time.Minute
 )
 
 type Result struct {
@@ -116,8 +126,11 @@ func Fresh(result Result, interval time.Duration) bool {
 
 func ParseInterval(raw string) time.Duration {
 	interval, err := time.ParseDuration(strings.TrimSpace(raw))
-	if err != nil || interval < time.Minute {
+	if err != nil {
 		return defaultInterval
+	}
+	if interval < minInterval {
+		return minInterval
 	}
 	return interval
 }

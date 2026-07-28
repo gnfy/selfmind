@@ -461,6 +461,15 @@ func eventToStream(ev control.Event) (llm.StreamEvent, bool) {
 		}, true
 	case strings.HasPrefix(ev.Type, "learning."):
 		return llm.StreamEvent{EventType: "learning.review", Content: str(p["message"])}, true
+	case ev.Type == "external_watch.completed":
+		return llm.StreamEvent{
+			EventType: "watch.completed",
+			Payload: map[string]interface{}{
+				"watch_id":    str(p["watch_id"]),
+				"status":      str(p["status"]),
+				"task_status": str(p["task_status"]),
+			},
+		}, true
 	case ev.Type == "token.updated":
 		// Live cumulative usage snapshot for the run (kernel emits it after
 		// every model response with run totals). Forward it as a typed Usage

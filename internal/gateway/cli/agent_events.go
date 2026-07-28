@@ -241,6 +241,21 @@ func (m *uiModel) forwardGatewayEventFrom(event llm.StreamEvent, source eventSou
 		if event.Content != "" {
 			m.program.Send(MsgLearningEvent{Content: event.Content, Event: ref})
 		}
+	case "watch.completed":
+		watchID, status, taskStatus := "", "", ""
+		if event.Payload != nil {
+			watchID, _ = event.Payload["watch_id"].(string)
+			status, _ = event.Payload["status"].(string)
+			taskStatus, _ = event.Payload["task_status"].(string)
+		}
+		if strings.TrimSpace(watchID) != "" {
+			m.program.Send(MsgWatcherCompleted{
+				WatchID:    strings.TrimSpace(watchID),
+				Status:     strings.TrimSpace(status),
+				TaskStatus: strings.TrimSpace(taskStatus),
+				Event:      ref,
+			})
+		}
 	case "token.updated":
 		// Live cumulative usage for the active run. The daemon-client path
 		// carries it in Usage (client.eventToStream); the in-process gateway

@@ -1,8 +1,10 @@
 package httpapi
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -294,7 +296,7 @@ func (d *Server) handleWorkspaceRegister(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	ws, err := d.Control.RegisterWorkspace(r.Context(), control.Workspace{
+	workspace := control.Workspace{
 		TenantID:      identity.TenantID,
 		OwnerPersonID: identity.PersonID,
 		Name:          req.Name,
@@ -302,12 +304,178 @@ func (d *Server) handleWorkspaceRegister(w http.ResponseWriter, r *http.Request)
 		LocalPath:     req.LocalPath,
 		DefaultBranch: req.DefaultBranch,
 		AllowedRoots:  req.AllowedRoots,
-	})
+	}
+	var ws *control.Workspace
+	// Only an authenticated local CLI registration is an explicit trust act.
+	// Remote callers may describe a workspace, but cannot elevate repository
+	// content into trusted instructions.
+	if d.localCLIRequest(r, req.Platform) {
+		ws, err = d.Control.RegisterWorkspace(r.Context(), workspace)
+	} else {
+		ws, err = d.Control.EnsureWorkspace(r.Context(), workspace)
+	}
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{"identity": identity, "workspace": ws})
+}
+
+func (d *Server) handleWorkspaceTrust(w http.ResponseWriter, r *http.Request) {
+	if !d.authorized(r) {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req api.WorkspaceTrustRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid json", http.StatusBadRequest)
+		return
+	}
+	if !d.localCLIRequest(r, req.Platform) {
+		http.Error(w, "workspace trust can only be changed by the authenticated local CLI", http.StatusForbidden)
+		return
+	}
+	identity, err := d.Control.ResolveOrCreateAccount(
+		r.Context(),
+		d.tenantID(req.TenantID),
+		"cli",
+		fallback(req.PlatformUserID, "local"),
+		"",
+	)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	workspaceID := strings.TrimSpace(req.WorkspaceID)
+	if workspaceID == "" {
+		current, currentErr := d.Control.CurrentWorkspace(r.Context(), identity.TenantID, identity.PersonID)
+		if currentErr != nil {
+			writeError(w, http.StatusInternalServerError, currentErr)
+			return
+		}
+		if current == nil {
+			http.Error(w, "no current workspace", http.StatusBadRequest)
+			return
+		}
+		workspaceID = current.ID
+	}
+	ws, err := d.Control.SetWorkspaceTrust(
+		r.Context(),
+		identity.TenantID,
+		identity.PersonID,
+		workspaceID,
+		req.TrustLevel,
+		"local_cli",
+	)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{"identity": identity, "workspace": ws})
+}
+
+func (d *Server) handleWorkspaceCapabilities(w http.ResponseWriter, r *http.Request) {
+	if !d.authorized(r) {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	if r.Method != http.MethodGet && r.Method != http.MethodDelete {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req api.WorkspaceCapabilityRequest
+	if r.Method == http.MethodGet {
+		req = api.WorkspaceCapabilityRequest{
+			TenantID:       r.URL.Query().Get("tenant_id"),
+			Platform:       r.URL.Query().Get("platform"),
+			PlatformUserID: r.URL.Query().Get("platform_user_id"),
+			WorkspaceID:    r.URL.Query().Get("workspace_id"),
+		}
+	} else if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid json", http.StatusBadRequest)
+		return
+	}
+	if !d.localCLIRequest(r, req.Platform) {
+		http.Error(w, "workspace capabilities can only be managed by the authenticated local CLI", http.StatusForbidden)
+		return
+	}
+	identity, err := d.Control.ResolveOrCreateAccount(
+		r.Context(),
+		d.tenantID(req.TenantID),
+		"cli",
+		fallback(req.PlatformUserID, "local"),
+		"",
+	)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	workspaceID := strings.TrimSpace(req.WorkspaceID)
+	if workspaceID == "" {
+		current, currentErr := d.Control.CurrentWorkspace(r.Context(), identity.TenantID, identity.PersonID)
+		if currentErr != nil {
+			writeError(w, http.StatusInternalServerError, currentErr)
+			return
+		}
+		if current == nil {
+			http.Error(w, "no current workspace", http.StatusBadRequest)
+			return
+		}
+		workspaceID = current.ID
+	}
+	if r.Method == http.MethodDelete {
+		capability := strings.TrimSpace(req.Capability)
+		if capability == "" {
+			http.Error(w, "capability is required", http.StatusBadRequest)
+			return
+		}
+		if err := d.Control.RevokeExecutionCapability(r.Context(), identity.TenantID, identity.PersonID, workspaceID, capability); err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{"revoked": capability, "workspace_id": workspaceID})
+		return
+	}
+	grants, err := d.Control.ListActiveExecutionCapabilities(r.Context(), identity.TenantID, identity.PersonID, workspaceID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	out := make([]api.WorkspaceCapability, 0, len(grants))
+	for _, grant := range grants {
+		out = append(out, api.WorkspaceCapability{
+			Capability: grant.Capability,
+			GrantedBy:  grant.GrantedBy,
+			ExpiresAt:  grant.ExpiresAt,
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{"workspace_id": workspaceID, "capabilities": out})
+}
+
+func (d *Server) localCLIRequest(r *http.Request, platform string) bool {
+	if r == nil || !strings.EqualFold(strings.TrimSpace(platform), "cli") {
+		return false
+	}
+	expected := strings.TrimSpace(d.LocalControlToken)
+	provided := strings.TrimSpace(r.Header.Get(api.LocalControlTokenHeader))
+	if expected == "" || len(expected) != len(provided) ||
+		subtle.ConstantTimeCompare([]byte(expected), []byte(provided)) != 1 {
+		return false
+	}
+	host := strings.TrimSpace(r.RemoteAddr)
+	if parsed, _, err := net.SplitHostPort(host); err == nil {
+		host = parsed
+	}
+	host = strings.Trim(host, "[]")
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 func (d *Server) handleWorkspaces(w http.ResponseWriter, r *http.Request) {

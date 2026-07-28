@@ -124,6 +124,37 @@ func TestApprovalPatternKeyStability(t *testing.T) {
 	}
 }
 
+func TestHostApprovalPatternIsScopedToWorkspaceAndCommandFamily(t *testing.T) {
+	args := map[string]interface{}{"command": "curl https://example.com", "sandbox": "host"}
+	_, reason := dangerousToolCall("", "terminal", args)
+	scopeA := ExecutionScope{WorkspaceID: "ws-a", WorkspaceRoot: "/work/a"}
+	scopeB := ExecutionScope{WorkspaceID: "ws-b", WorkspaceRoot: "/work/b"}
+
+	keyA := approvalPatternKeyForScope("terminal", args, reason, scopeA, true)
+	keyARepeat := approvalPatternKeyForScope("terminal", args, reason, scopeA, true)
+	keyB := approvalPatternKeyForScope("terminal", args, reason, scopeB, true)
+	if keyA == "" || keyA != keyARepeat {
+		t.Fatalf("workspace host key must be stable, got %q and %q", keyA, keyARepeat)
+	}
+	if keyA == keyB {
+		t.Fatalf("host approval leaked across workspaces: %q", keyA)
+	}
+	if !strings.Contains(keyA, "command:curl") {
+		t.Fatalf("host key must retain the effective command family: %q", keyA)
+	}
+	if got := approvalPatternKeyForScope("terminal", args, reason, ExecutionScope{}, false); got != "" {
+		t.Fatalf("host request without a durable scope must not be remembered: %q", got)
+	}
+}
+
+func TestHostClassificationDoesNotHideInnerDangerousClass(t *testing.T) {
+	args := map[string]interface{}{"command": "chmod +x release.sh", "sandbox": "host"}
+	dangerous, reason := dangerousToolCall("", "terminal", args)
+	if !dangerous || reason != "invokes dangerous command: chmod" {
+		t.Fatalf("host classification hid inner command: dangerous=%v reason=%q", dangerous, reason)
+	}
+}
+
 // fakeGrantStore is an in-memory tools.ApprovalGrantStore for the grant tests.
 type fakeGrantStore struct {
 	granted map[string]bool
@@ -152,6 +183,7 @@ func (f *fakeGrantStore) GrantApproval(ctx context.Context, scopeKind, tenantID,
 // approval suppresses the next same-class ask in the SAME task, but a different
 // task still asks.
 func TestTaskGrantSuppressesSameClassWithinTaskOnly(t *testing.T) {
+	withExecSandboxPolicy(t, true, true, false)
 	store := newFakeGrantStore()
 	asks := 0
 	handler := func(ctx context.Context, req ToolApprovalRequest) (ToolApprovalDecision, error) {
@@ -190,6 +222,7 @@ func TestTaskGrantSuppressesSameClassWithinTaskOnly(t *testing.T) {
 // TestPersonGrantSuppressesAcrossTasks: a "remember for me" approval suppresses
 // the same class in a different task too.
 func TestPersonGrantSuppressesAcrossTasks(t *testing.T) {
+	withExecSandboxPolicy(t, true, true, false)
 	store := newFakeGrantStore()
 	asks := 0
 	handler := func(ctx context.Context, req ToolApprovalRequest) (ToolApprovalDecision, error) {

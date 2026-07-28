@@ -4,9 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os/exec"
 	"regexp"
-	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -162,15 +160,8 @@ func statusErrText(status, errText string) string {
 }
 
 func runExternalWatchCommand(ctx context.Context, cwd, command string) (string, error) {
-	var cmd *exec.Cmd
-	if runtime.GOOS == "windows" {
-		cmd = exec.CommandContext(ctx, "powershell.exe", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", command)
-	} else {
-		cmd = exec.CommandContext(ctx, "bash", "-c", command)
-	}
-	cmd.Dir = cwd
-	bytes, err := cmd.CombinedOutput()
-	return string(bytes), err
+	output, _, err := tools.RunSandboxedShell(ctx, command, cwd, true)
+	return output, err
 }
 
 // classifyExternalWatchCommandDefect identifies deterministic failures in the
@@ -339,6 +330,7 @@ func (d *Server) finalizeExternalWatch(ctx context.Context, watch control.Extern
 		"revision":    watch.VerdictRevision,
 		"description": watch.Description,
 		"status":      status,
+		"task_status": "waiting_finalization",
 		"summary":     summary,
 		"attempts":    watch.Attempts + 1,
 	})
@@ -384,20 +376,13 @@ func (d *Server) notifyExternalWatchCompletion(ctx context.Context, watch contro
 	if watch.Notified {
 		return
 	}
-	summary, _ := externalWatchOutcome(watch, watch.Status, watch.LastOutput, watch.LastError)
-	notice := summary + "\n\nReply continue to resume the task."
-	if watch.Status == control.ExternalWatchSucceeded {
-		notice = summary + "\n\nA finalization run is queued to record the result and close out the task."
-	} else {
-		notice = summary + "\n\nA finalization run is queued to diagnose the result and leave the task in the correct state."
-	}
 	origin := d.externalWatchOriginIdentity(ctx, watch)
 	handled := d.coordinator().routePendingNotification(ctx, origin, watch.Channel, delivery.Message{
 		TenantID: watch.TenantID,
 		PersonID: watch.PersonID,
 		TaskID:   watch.TaskID,
 		RunID:    watch.RunID,
-		Content:  notice,
+		Content:  externalWatchCompletionNotice(watch.ID, watch.Status, "waiting_finalization"),
 		Kind:     "external_watch",
 	})
 	if !handled {
@@ -413,6 +398,24 @@ func (d *Server) notifyExternalWatchCompletion(ctx context.Context, watch contro
 	if _, err := d.Control.MarkExternalWatchNotified(ctx, watch.TenantID, watch.ID); err != nil {
 		log.Warn("external watch notified mark failed", "watch_id", watch.ID, "error", err)
 	}
+}
+
+func externalWatchCompletionNotice(watchID, status, taskStatus string) string {
+	watchID = strings.TrimSpace(watchID)
+	taskStatus = strings.TrimSpace(taskStatus)
+	if taskStatus == "" {
+		taskStatus = "waiting_finalization"
+	}
+	watchStatus := control.ExternalWatchSucceeded
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case control.ExternalWatchFailed:
+		watchStatus = control.ExternalWatchFailed
+	case control.ExternalWatchTimedOut:
+		watchStatus = control.ExternalWatchTimedOut
+	case control.ExternalWatchCancelled:
+		watchStatus = control.ExternalWatchCancelled
+	}
+	return "Watcher " + watchID + " | status: " + watchStatus + " | task: " + taskStatus
 }
 
 // externalWatchOriginIdentity resolves the account behind the watch's channel
@@ -478,6 +481,20 @@ func externalWatchFinalizationContent(watch control.ExternalWatch, summary strin
 
 func externalWatchFinalizationKey(watch control.ExternalWatch) string {
 	return fmt.Sprintf("external-watch:%s:r%d:finalization", watch.ID, watch.VerdictRevision)
+}
+
+func externalWatchIDFromFinalizationKey(key string) string {
+	const prefix = "external-watch:"
+	key = strings.TrimSpace(key)
+	if !strings.HasPrefix(key, prefix) || !strings.HasSuffix(key, ":finalization") {
+		return ""
+	}
+	rest := strings.TrimPrefix(key, prefix)
+	revisionAt := strings.LastIndex(rest, ":r")
+	if revisionAt <= 0 {
+		return ""
+	}
+	return strings.TrimSpace(rest[:revisionAt])
 }
 
 // reconcileExternalWatchFinalizations closes the crash and partial-run gaps

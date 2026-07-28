@@ -225,7 +225,13 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.toolExecuting = ""
 			m.discardOpenToolMessages()
 		}
-		if queuedMatch {
+		if watchID := strings.TrimSpace(msg.WatchID); watchID != "" {
+			taskStatus := strings.TrimSpace(msg.TaskStatus)
+			if taskStatus == "" {
+				taskStatus = "running"
+			}
+			m.addMessage("notice", watcherStatusNotice(watchID, "finalizing", taskStatus))
+		} else if queuedMatch {
 			title := strings.TrimSpace(msg.Input)
 			if title == "" {
 				title = "queued task"
@@ -456,6 +462,13 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.addMessage("system", msg.Content)
 		return m, nil
 
+	case MsgWatcherCompleted:
+		if !m.acceptEvent(msg.Event) {
+			return m, spinnerCmd
+		}
+		m.addMessage("notice", watcherStatusNotice(msg.WatchID, msg.Status, msg.TaskStatus))
+		return m, nil
+
 	case MsgClearStatus:
 		m.statusMsg = ""
 		return m, nil
@@ -578,14 +591,14 @@ func (m *uiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			// design. A second ctrl+c means "background + quit".
 			if m.localRequestActive {
 				if m.exitPromptActive {
-					return m, tea.Quit
+					return m, m.quitNow()
 				}
 				m.exitPromptActive = true
 				m.addMessage("assistant", "A task is still running. Choose:\n  b — quit and leave it running in the background (the result will be pushed to your bound IM)\n  c — cancel the task and stay\n  esc — keep watching")
 				return m, nil
 			}
 			// Priority 3: quit
-			return m, tea.Quit
+			return m, m.quitNow()
 		case "ctrl+l":
 			m.messages = []ChatMessage{}
 			m.clearLiveStream()
@@ -652,6 +665,17 @@ func (m *uiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.runTokens = 0
 				m.activityText = "Thinking about the response"
 				return m, tea.Batch(m.spinner.Tick, workingTick())
+			}
+
+			// An armed /resume picker reads the next bare number as a menu pick.
+			// Anything else disarms it, so a digit-leading sentence typed later
+			// still reaches the agent as ordinary text.
+			if m.resumePickerArmed {
+				m.resumePickerArmed = false
+				if n := bareListNumber(input); n != "" {
+					input = "/resume " + n
+					display = input
+				}
 			}
 
 			// Only command-SHAPED tokens enter command handling ("/help",

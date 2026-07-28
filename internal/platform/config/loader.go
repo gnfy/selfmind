@@ -14,8 +14,6 @@ import (
 
 const defaultConfigTemplate = `
 model:
-  provider: ""
-  default: ""
   # headers apply to EVERY provider request as the lowest-priority layer;
   # provider_profiles.<id>.headers and models.roles.<role>.headers override
   # them key by key, and can also override built-in compatibility headers
@@ -114,6 +112,12 @@ delegation:
 
 models:
   source: "local"
+  primary:
+    provider: ""
+    model: ""
+    # Omit reasoning (or set it to "auto") to use the provider/model default.
+    # Explicit values are validated against discovered model capabilities
+    # when the provider publishes them.
   roles: {}
 
 intent:
@@ -177,13 +181,15 @@ web:
   search_backend: ""   # tavily | brave | serper | firecrawl | searxng | duckduckgo
   api_key: ""
 
-# Shell/Python execution prefers an isolated, no-network Linux sandbox. Calls
-# that intentionally need host credentials or networking can request
-# sandbox=host and go through the normal approval flow.
+# Shell/Python execution prefers an isolated Linux sandbox (read-only host
+# root, writable workspace). allow_network keeps the HOST network namespace
+# inside the sandbox and inherits the daemon's proxy/DNS environment. Set
+# allow_network: false for a fully network-less sandbox — commands needing
+# network must then request sandbox=host through approval.
 exec_sandbox:
   enabled: true
   required: false
-  allow_network: false
+  allow_network: true
 
 # Startup update checks are cached and never block the CLI. channel "auto"
 # follows the installed version line (prerelease -> next, stable -> latest);
@@ -750,19 +756,35 @@ type ProviderQuirks struct {
 }
 
 type ModelsConfig struct {
-	Source string                     `mapstructure:"source" yaml:"source,omitempty"`
-	Roles  map[string]ModelRoleConfig `mapstructure:"roles" yaml:"roles,omitempty"`
+	Source  string                     `mapstructure:"source" yaml:"source,omitempty"`
+	Primary ModelSelectionConfig       `mapstructure:"primary" yaml:"primary,omitempty"`
+	Roles   map[string]ModelRoleConfig `mapstructure:"roles" yaml:"roles,omitempty"`
+}
+
+// ModelSelectionConfig is the single user-facing foreground model selection.
+// Provider profiles own transport/authentication; this block only chooses a
+// model and optional model-level behavior.
+type ModelSelectionConfig struct {
+	Provider      string `mapstructure:"provider" yaml:"provider,omitempty"`
+	Model         string `mapstructure:"model" yaml:"model,omitempty"`
+	Reasoning     string `mapstructure:"reasoning" yaml:"reasoning,omitempty"`
+	ServiceTier   string `mapstructure:"service_tier" yaml:"service_tier,omitempty"`
+	ContextLength int    `mapstructure:"context_length" yaml:"context_length,omitempty"`
 }
 
 type ModelRoleConfig struct {
-	Provider        string                 `mapstructure:"provider" yaml:"provider,omitempty"`
-	Model           string                 `mapstructure:"model" yaml:"model,omitempty"`
-	BaseURL         string                 `mapstructure:"base_url" yaml:"base_url,omitempty"`
-	Protocol        string                 `mapstructure:"protocol" yaml:"protocol,omitempty"`
-	APIKey          string                 `mapstructure:"api_key" yaml:"api_key,omitempty"`
-	ContextLength   int                    `mapstructure:"context_length" yaml:"context_length,omitempty"`
-	MaxTokens       int                    `mapstructure:"max_tokens" yaml:"max_tokens,omitempty"`
-	Headers         map[string]string      `mapstructure:"headers" yaml:"headers,omitempty"`
+	Provider      string            `mapstructure:"provider" yaml:"provider,omitempty"`
+	Model         string            `mapstructure:"model" yaml:"model,omitempty"`
+	BaseURL       string            `mapstructure:"base_url" yaml:"base_url,omitempty"`
+	Protocol      string            `mapstructure:"protocol" yaml:"protocol,omitempty"`
+	APIKey        string            `mapstructure:"api_key" yaml:"api_key,omitempty"`
+	ContextLength int               `mapstructure:"context_length" yaml:"context_length,omitempty"`
+	MaxTokens     int               `mapstructure:"max_tokens" yaml:"max_tokens,omitempty"`
+	Headers       map[string]string `mapstructure:"headers" yaml:"headers,omitempty"`
+	Reasoning     string            `mapstructure:"reasoning" yaml:"reasoning,omitempty"`
+	// ReasoningEffort is the legacy spelling. New configuration should use
+	// reasoning; the resolver keeps accepting reasoning_effort during the
+	// compatibility window.
 	ReasoningEffort string                 `mapstructure:"reasoning_effort" yaml:"reasoning_effort,omitempty"`
 	Thinking        map[string]interface{} `mapstructure:"thinking" yaml:"thinking,omitempty"`
 	ServiceTier     string                 `mapstructure:"service_tier" yaml:"service_tier,omitempty"`
@@ -1003,7 +1025,13 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("gateway.outbound_retention", "336h")
 	v.SetDefault("exec_sandbox.enabled", true)
 	v.SetDefault("exec_sandbox.required", false)
-	v.SetDefault("exec_sandbox.allow_network", false)
+	// Network stays SHARED by default (2026-07-27): the no-network default made
+	// every IP-allowlisted/internal service unreachable from sandboxed commands,
+	// and retrying clients (gRPC, kubectl) disguised the instant failures as
+	// timeouts (observed live against ArgoCD). Filesystem isolation is kept;
+	// egress remains a named dangerous class under approval. Operators wanting
+	// the stricter posture set allow_network: false explicitly.
+	v.SetDefault("exec_sandbox.allow_network", true)
 }
 
 func (c *Config) Normalize() {
@@ -1046,6 +1074,10 @@ func (c *Config) Normalize() {
 		c.Models.Source = "local"
 	}
 
+	c.Models.Primary.Provider = expandEnvRef(c.Models.Primary.Provider)
+	c.Models.Primary.Model = expandEnvRef(c.Models.Primary.Model)
+	c.Models.Primary.Reasoning = normalizeReasoning(c.Models.Primary.Reasoning)
+	c.Models.Primary.ServiceTier = normalizeAutoValue(c.Models.Primary.ServiceTier)
 	c.Model.Provider = expandEnvRef(c.Model.Provider)
 	c.Model.Default = expandEnvRef(c.Model.Default)
 	c.Agent.Provider = expandEnvRef(c.Agent.Provider)
@@ -1112,7 +1144,8 @@ func (c *Config) Normalize() {
 		role.Protocol = expandEnvRef(role.Protocol)
 		role.APIKey = expandEnvRef(role.APIKey)
 		role.Headers = normalizeHeaders(role.Headers)
-		role.ReasoningEffort = expandEnvRef(role.ReasoningEffort)
+		role.Reasoning = normalizeReasoning(role.Reasoning)
+		role.ReasoningEffort = normalizeReasoning(role.ReasoningEffort)
 		role.ServiceTier = expandEnvRef(role.ServiceTier)
 		role.Quirks = normalizeProviderQuirks(role.Quirks)
 		c.Models.Roles[name] = role
@@ -1218,21 +1251,62 @@ func (c *Config) EffectiveProvider() string {
 	if c == nil {
 		return ""
 	}
-	return strings.TrimSpace(firstNonEmpty(c.Model.Provider, c.Agent.Provider))
+	return strings.TrimSpace(firstNonEmpty(c.Models.Primary.Provider, c.Model.Provider, c.Agent.Provider))
 }
 
 func (c *Config) EffectiveModel() string {
 	if c == nil {
 		return ""
 	}
-	return strings.TrimSpace(firstNonEmpty(c.Model.Default, c.Agent.Model))
+	return strings.TrimSpace(firstNonEmpty(c.Models.Primary.Model, c.Model.Default, c.Agent.Model))
+}
+
+func (c *Config) EffectivePrimary() ModelSelectionConfig {
+	if c == nil {
+		return ModelSelectionConfig{}
+	}
+	primary := c.Models.Primary
+	primary.Provider = strings.TrimSpace(firstNonEmpty(primary.Provider, c.Model.Provider, c.Agent.Provider))
+	primary.Model = strings.TrimSpace(firstNonEmpty(primary.Model, c.Model.Default, c.Agent.Model))
+	primary.Reasoning = normalizeReasoning(primary.Reasoning)
+	primary.ServiceTier = normalizeAutoValue(primary.ServiceTier)
+	if primary.ContextLength <= 0 {
+		primary.ContextLength = c.Model.ContextLength
+	}
+	return primary
 }
 
 func (c *Config) SetDefaultModel(provider, model string) {
-	c.Model.Provider = strings.TrimSpace(provider)
-	c.Model.Default = strings.TrimSpace(model)
-	c.Agent.Provider = c.Model.Provider
-	c.Agent.Model = c.Model.Default
+	c.SetPrimaryModel(provider, model, "")
+}
+
+func (c *Config) SetPrimaryModel(provider, model, reasoning string) {
+	c.Models.Primary.Provider = strings.TrimSpace(provider)
+	c.Models.Primary.Model = strings.TrimSpace(model)
+	c.Models.Primary.Reasoning = normalizeReasoning(reasoning)
+
+	// New writes converge on models.primary. The legacy fields remain readable
+	// so old files keep working until `selfmind config upgrade` migrates them.
+	c.Model.Provider = ""
+	c.Model.Default = ""
+	c.Agent.Provider = ""
+	c.Agent.Model = ""
+}
+
+func (r ModelRoleConfig) EffectiveReasoning() string {
+	return normalizeReasoning(firstNonEmpty(r.Reasoning, r.ReasoningEffort))
+}
+
+func normalizeReasoning(value string) string {
+	return normalizeAutoValue(value)
+}
+
+func normalizeAutoValue(value string) string {
+	value = strings.TrimSpace(expandEnvRef(value))
+	if strings.EqualFold(value, "auto") {
+		return ""
+	}
+	return value
 }
 
 func normalizeEndpoint(ep ProviderEndpoint, legacyKey, defaultBaseURL, defaultProtocol string) ProviderEndpoint {

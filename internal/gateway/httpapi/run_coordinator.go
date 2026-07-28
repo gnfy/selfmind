@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"runtime/debug"
 	"strings"
 	"sync"
@@ -264,13 +265,18 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 	stopHeartbeat := c.startRunHeartbeat(ctx, run)
 	defer stopHeartbeat()
 	c.updateActive(identity.PersonID, task, run)
+	startedPayload := map[string]string{"input": truncate(req.Content, 500)}
+	if watchID := strings.TrimSpace(req.WatchID); watchID != "" {
+		startedPayload["watch_id"] = watchID
+		startedPayload["task_status"] = "running"
+	}
 	_, _ = d.Control.AppendEvent(ctx, control.Event{
 		TaskID:     task.ID,
 		RunID:      run.ID,
 		Type:       "run.started",
 		Visibility: "task",
 		Channel:    req.Channel,
-		Payload:    mustJSON(map[string]string{"input": truncate(req.Content, 500)}),
+		Payload:    mustJSON(startedPayload),
 	})
 
 	workspace, _ := c.workspaceForTask(ctx, identity, task, req, attach)
@@ -279,11 +285,46 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 		analysisWorkspaceID = workspace.ID
 	}
 	replay := runMaintenanceReplay{WorkspaceID: analysisWorkspaceID, UserInput: req.Content, Attach: attach}
+	if workspace != nil && strings.TrimSpace(workspace.LocalPath) != "" {
+		if _, statErr := os.Stat(workspace.LocalPath); statErr != nil {
+			summary := fmt.Sprintf("The workspace environment is unavailable: %s", workspace.LocalPath)
+			outcome := api.RunOutcome{
+				Status:           "waiting_user",
+				CompletionReason: "environment_unavailable",
+				Resumable:        true,
+				Summary:          summary,
+				NextSteps:        []string{"Restore or mount the workspace, then reply \"continue\"."},
+				Risks:            []string{tools.RedactSensitive(statErr.Error())},
+			}
+			event := control.Event{
+				TaskID: task.ID, RunID: run.ID, Type: "run.waiting_user", Visibility: "task", Channel: req.Channel,
+				Payload: mustJSON(map[string]interface{}{"outcome": outcome, "reason": "environment_unavailable"}),
+			}
+			_ = c.materializeRunFinalization(context.WithoutCancel(ctx), identity, task, run, "waiting_user",
+				analysisWorkspaceID, req.Content, req.Channel, "", outcome, attach,
+				control.Handoff{TaskID: task.ID, Summary: summary, NextSteps: outcome.NextSteps, Risks: outcome.Risks},
+				event)
+			return api.MessageResponse{
+				Identity: identity, Task: task, Run: run, Outcome: &outcome, Content: summary,
+				Turn:    messageTurn("waiting_user", "waiting_user", "idle", task.ID, run.ID, summary),
+				Context: messageContextBudget(llmUsageZero()),
+			}, http.StatusOK
+		}
+	}
+	lease, leaseErr := c.materializeExecutionLease(ctx, identity, run, workspace)
+	if leaseErr != nil {
+		outcome := c.finalizeErroredRun(ctx, identity, task, run, req.Channel, fmt.Errorf("materialize execution lease: %w", leaseErr), replay)
+		return api.MessageResponse{
+			Identity: identity, Task: task, Run: run, Outcome: &outcome, Error: firstString(outcome.Risks),
+			Turn:    messageTurn(outcome.Status, outcome.Status, "idle", task.ID, run.ID, outcome.Summary),
+			Context: messageContextBudget(llmUsageZero()),
+		}, http.StatusOK
+	}
 	// Import attachment files into the daemon-managed person partition BEFORE
 	// scope install and context assembly: the rendered attachment paths and
 	// the scope's allowed roots must both point at the managed copies.
 	req.Attachments = c.importAttachments(identity, run, req.Attachments)
-	cleanupScope := c.installExecutionScope(identity, task, run, workspace, req)
+	cleanupScope := c.installExecutionScope(identity, task, run, workspace, req, lease)
 	defer cleanupScope()
 	if workspace != nil && workspace.LocalPath != "" {
 		ctx = kernel.WithWorkspaceContext(ctx, kernel.WorkspaceContext{
@@ -662,6 +703,7 @@ func (c *RunCoordinator) drainQueue(identity *control.IdentityContext) {
 	}
 	if strings.HasPrefix(next.IdempotencyKey, "external-watch:") {
 		req.ExecutionProfile = tools.ExecutionProfileWatchFinalization
+		req.WatchID = externalWatchIDFromFinalizationKey(next.IdempotencyKey)
 	}
 	// Reproduce the queued item's route while preserving its durable person.
 	// Never create an account here: system rows may intentionally omit

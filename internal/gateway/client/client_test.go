@@ -98,6 +98,22 @@ func TestEventToStreamMapping(t *testing.T) {
 			},
 		},
 		{
+			name:    "external watcher completion keeps watcher identity",
+			ev:      control.Event{ID: "4b", Type: "external_watch.completed", Payload: mustJSON(map[string]any{"watch_id": "watch_123", "status": "succeeded", "task_status": "waiting_finalization"})},
+			wantTyp: "watch.completed",
+			check: func(t *testing.T, se llm.StreamEvent) {
+				if id, _ := se.Payload["watch_id"].(string); id != "watch_123" {
+					t.Fatalf("watch_id not carried: %+v", se.Payload)
+				}
+				if status, _ := se.Payload["status"].(string); status != "succeeded" {
+					t.Fatalf("watch status not carried: %+v", se.Payload)
+				}
+				if status, _ := se.Payload["task_status"].(string); status != "waiting_finalization" {
+					t.Fatalf("task status not carried: %+v", se.Payload)
+				}
+			},
+		},
+		{
 			name: "clarify requested",
 			ev: control.Event{ID: "6", Type: "clarify.requested", Payload: mustJSON(map[string]any{
 				"clarify_id": "clar_123",

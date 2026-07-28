@@ -62,7 +62,7 @@ func TestExternalWatchCompletesOutsideAgentRun(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		command = "Write-Output READY"
 	}
-	_, err = store.CreateExternalWatch(ctx, control.ExternalWatch{
+	watch, err := store.CreateExternalWatch(ctx, control.ExternalWatch{
 		TenantID:              identity.TenantID,
 		PersonID:              identity.PersonID,
 		TaskID:                task.ID,
@@ -104,8 +104,9 @@ func TestExternalWatchCompletesOutsideAgentRun(t *testing.T) {
 			continue
 		}
 		foundNotice = true
-		if !strings.Contains(msg.Content, "CI build completed") || !strings.Contains(msg.Content, "finalization run is queued to record the result") {
-			t.Fatalf("external watch notice used a stale state: %q", msg.Content)
+		want := "Watcher " + watch.ID + " | status: succeeded | task: waiting_finalization"
+		if msg.Content != want {
+			t.Fatalf("unexpected external watch notice: %q", msg.Content)
 		}
 	}
 	if !foundNotice {

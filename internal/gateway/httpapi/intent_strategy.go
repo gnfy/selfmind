@@ -6,10 +6,16 @@ import (
 	"selfmind/internal/gateway/api"
 	"selfmind/internal/gateway/router"
 	"selfmind/internal/kernel"
+	"selfmind/internal/tools"
 )
 
 func taskStrategyForRequest(req api.MessageRequest, intent router.IntentResult) kernel.TaskStrategy {
 	strategy := kernel.BuildTaskStrategy(req.Content, req.Channel)
+	// The model must KNOW the execution environment (sandbox + network policy)
+	// instead of discovering it through opaque failures — a network-less
+	// sandbox otherwise burns whole turns on blind retries that look like
+	// timeouts. Rendered only for tool-capable turns (SystemPromptNote).
+	strategy.ExecSandboxNote = tools.ExecSandboxPromptNote()
 	if req.AllowWeb {
 		strategy = strategy.WithWebEnabled()
 	}

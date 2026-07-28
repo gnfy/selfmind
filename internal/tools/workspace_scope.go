@@ -1,10 +1,12 @@
 package tools
 
 import (
+	"context"
 	"fmt"
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 )
 
 const ExecutionProfileWatchFinalization = "watch-finalization"
@@ -22,6 +24,9 @@ type ExecutionScope struct {
 	TaskID        string
 	RunID         string
 	Channel       string
+	TrustLevel    string
+	LeaseID       string
+	Capabilities  []string
 	// ExecutionProfile is an internal contract for system-originated work. It
 	// must never be populated from an external request.
 	ExecutionProfile string
@@ -45,6 +50,10 @@ type ExecutionScope struct {
 	// it to skip a human ask for an already-approved class and records new grants
 	// when a decision says "remember" (task/person scope). Nil = no memory.
 	Grants ApprovalGrantStore
+	// CapabilityStore backs time-bounded execution capabilities such as
+	// network:shared. Grants are scoped to this person and workspace and never
+	// contain command text or credential bytes.
+	CapabilityStore ExecutionCapabilityStore
 	// Judge backs the smart-mode LLM triage step (H2): when set, a dangerous
 	// (non-hardline) op that survived the class-grant check is triaged by a
 	// cheap model before the human ask (APPROVE auto-runs + grants the class for
@@ -55,7 +64,43 @@ type ExecutionScope struct {
 	Judge ApprovalJudge
 }
 
+type ExecutionCapabilityStore interface {
+	HasExecutionCapability(ctx context.Context, tenantID, personID, workspaceID, capability, resourceFingerprint string) (bool, error)
+	GrantExecutionCapability(ctx context.Context, tenantID, personID, workspaceID, capability, resourceFingerprint, grantedBy string, expiresAt time.Time) error
+}
+
 var executionScopes sync.Map // tenantID used by the agent -> ExecutionScope
+
+type ExecutionScopeDiagnostic struct {
+	Installed        bool
+	WorkspaceID      string
+	TrustLevel       string
+	LeaseID          string
+	ExecutionProfile string
+	Capabilities     []string
+}
+
+// ExecutionScopeDiagnostics returns only non-secret execution metadata for
+// /diag. It never exposes commands, credential refs, environment names, or
+// approval payloads.
+func ExecutionScopeDiagnostics(personID string) ExecutionScopeDiagnostic {
+	value, ok := executionScopes.Load(strings.TrimSpace(personID))
+	if !ok {
+		return ExecutionScopeDiagnostic{}
+	}
+	scope, ok := value.(ExecutionScope)
+	if !ok {
+		return ExecutionScopeDiagnostic{}
+	}
+	return ExecutionScopeDiagnostic{
+		Installed:        true,
+		WorkspaceID:      scope.WorkspaceID,
+		TrustLevel:       scope.TrustLevel,
+		LeaseID:          scope.LeaseID,
+		ExecutionProfile: scope.ExecutionProfile,
+		Capabilities:     append([]string{}, scope.Capabilities...),
+	}
+}
 
 // SetExecutionScope installs scope for tenantID and returns a cleanup function.
 func SetExecutionScope(tenantID string, scope ExecutionScope) func() {

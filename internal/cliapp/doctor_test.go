@@ -66,7 +66,7 @@ func TestBuildDoctorReportRendersSectionsAndRedacts(t *testing.T) {
 	report := buildDoctorReport(ctx, store, identity, dataDir, "not running", "", 50)
 
 	for _, section := range []string{
-		"== Gateway ==", "== Recent runs ==", "== Pending approvals ==",
+		"== Gateway ==", "== Workspace trust ==", "== Recent runs ==", "== Pending approvals ==",
 		"== Queued tasks ==", "== Unconfirmed / failed pushes ==",
 		"== Presence (bound accounts) ==", "== Activity by channel ==", "== Gateway log",
 	} {

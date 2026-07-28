@@ -192,6 +192,32 @@ func buildDoctorReport(ctx context.Context, store *control.Store, identity *cont
 		sb.WriteString("\n\n")
 	}
 
+	sb.WriteString("== Workspace trust ==\n")
+	if workspaces, err := store.ListWorkspaces(ctx, identity.TenantID, identity.PersonID); err != nil {
+		fmt.Fprintf(&sb, "(error: %v)\n", err)
+	} else {
+		pending := 0
+		for _, workspace := range workspaces {
+			if workspace.TrustSource != "migration_review_required" {
+				continue
+			}
+			pending++
+			fmt.Fprintf(
+				&sb,
+				"- review required: %s (%s)\n    %s\n",
+				oneLine(workspace.Name, 60),
+				workspace.ID,
+				oneLine(workspace.LocalPath, 160),
+			)
+		}
+		if pending == 0 {
+			sb.WriteString("no migrated workspaces require trust review\n")
+		} else {
+			sb.WriteString("Review each path, then run `selfmind ws trust <workspace_id>` or leave it untrusted.\n")
+		}
+	}
+	sb.WriteString("\n")
+
 	// Recent runs.
 	sb.WriteString("== Recent runs ==\n")
 	if runs, err := store.ListRecentRunsForPerson(ctx, identity.TenantID, identity.PersonID, doctorRecentRuns); err != nil {

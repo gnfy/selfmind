@@ -86,7 +86,7 @@ func TestHelpTextListsEveryGatewayCommand(t *testing.T) {
 }
 
 func TestLocalCommandsNotGatewayRoutable(t *testing.T) {
-	local := []string{"/copy", "/paste-image", "/history", "/compact", "/clear",
+	local := []string{"/copy", "/paste-image", "/search", "/compact", "/clear",
 		"/exit", "/skills", "/bundles", "/memory", "/curator", "/checkpoint",
 		"/reload-skills", "/migrate", "/capture"}
 	for _, name := range local {

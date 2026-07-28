@@ -53,7 +53,7 @@ func (a *App) runModelCommandIfRequested() (bool, int) {
 	case "set":
 		return true, a.setModelFromArgs(cfg, args[1:])
 	default:
-		fmt.Fprintln(a.stderr, "usage: selfmind model [current|check|list|set <provider> <model>]")
+		fmt.Fprintln(a.stderr, "usage: selfmind model [current|check|list|set <provider> <model> [--reasoning <level|auto>] [--service-tier <tier|auto>]]")
 		return true, 2
 	}
 }
@@ -188,13 +188,13 @@ func (a *App) configureBuiltinProvider(cfg *config.Config, provider string) int 
 		fmt.Fprintln(a.stderr, err)
 		return 1
 	}
-	endpoint.Model = model
+	endpoint.Model = ""
 	if profile.AuthType == modelruntime.AuthExternalOAuth || profile.AuthType == modelruntime.AuthMiniMaxOAuth {
 		endpoint.APIKey = ""
 	}
 
 	setProviderEndpointForModelCommand(cfg, profile.ID, endpoint)
-	cfg.SetDefaultModel(profile.ID, model)
+	cfg.SetPrimaryModel(profile.ID, model, "")
 	if err := config.SaveConfig(cfg.Path, cfg); err != nil {
 		fmt.Fprintln(a.stderr, err)
 		return 1
@@ -230,7 +230,7 @@ func (a *App) configureSavedCustomProvider(cfg *config.Config, index int) int {
 		cp.Protocol = "openai_compatible"
 	}
 	cfg.Providers.Custom[index] = cp
-	cfg.SetDefaultModel("custom:"+cp.Name, model)
+	cfg.SetPrimaryModel("custom:"+cp.Name, model, "")
 	if err := config.SaveConfig(cfg.Path, cfg); err != nil {
 		fmt.Fprintln(a.stderr, err)
 		return 1
@@ -284,16 +284,6 @@ func (a *App) configureCustomEndpoint(cfg *config.Config) int {
 		return 1
 	}
 
-	contextRaw, err := a.promptInput("Context length (optional)", "")
-	if err != nil {
-		fmt.Fprintln(a.stderr, err)
-		return 1
-	}
-	contextLength := 0
-	if strings.TrimSpace(contextRaw) != "" {
-		contextLength, _ = strconv.Atoi(strings.TrimSpace(contextRaw))
-	}
-
 	cp := config.CustomProvider{
 		Name:     name,
 		BaseURL:  normalizeOpenAIRoot(baseURL),
@@ -301,13 +291,8 @@ func (a *App) configureCustomEndpoint(cfg *config.Config) int {
 		Protocol: "openai_compatible",
 		Model:    model,
 	}
-	if contextLength > 0 && model != "" {
-		cp.Models = map[string]config.CustomModelProperties{
-			model: {ContextLength: contextLength},
-		}
-	}
 	upsertCustomProvider(cfg, cp)
-	cfg.SetDefaultModel("custom:"+name, model)
+	cfg.SetPrimaryModel("custom:"+name, model, "")
 	if err := config.SaveConfig(cfg.Path, cfg); err != nil {
 		fmt.Fprintln(a.stderr, err)
 		return 1
@@ -351,24 +336,24 @@ func (a *App) removeCustomProvider(cfg *config.Config) int {
 
 func (a *App) setModelFromArgs(cfg *config.Config, args []string) int {
 	if len(args) < 2 {
-		fmt.Fprintln(a.stderr, "usage: selfmind model set <provider> <model>")
+		fmt.Fprintln(a.stderr, "usage: selfmind model set <provider> <model> [--reasoning <level|auto>] [--service-tier <tier|auto>]")
 		return 2
 	}
 	provider := strings.TrimSpace(args[0])
-	model := strings.TrimSpace(strings.Join(args[1:], " "))
+	model := strings.TrimSpace(args[1])
 	if provider == "" || model == "" {
 		fmt.Fprintln(a.stderr, "provider and model are required")
 		return 2
 	}
+	reasoning, serviceTier, err := parseModelSetOptions(args[2:])
+	if err != nil {
+		fmt.Fprintln(a.stderr, err)
+		return 2
+	}
 
 	switch strings.ToLower(provider) {
-	case "openai":
-		cfg.Providers.OpenAI.Model = model
-	case "anthropic":
-		cfg.Providers.Anthropic.Model = model
 	case "google", "gemini":
 		provider = "google"
-		cfg.Providers.Google.Model = model
 	default:
 		if strings.HasPrefix(strings.ToLower(provider), "custom:") {
 			name := strings.TrimPrefix(provider, "custom:")
@@ -380,7 +365,7 @@ func (a *App) setModelFromArgs(cfg *config.Config, args []string) int {
 			}
 		} else if profile, ok := modelruntime.NewResolver(cfg).Registry().Resolve(provider); ok {
 			endpoint := providerEndpointForModelCommand(cfg, profile.ID)
-			endpoint.Model = model
+			endpoint.Model = ""
 			endpoint.BaseURL = firstNonEmpty(endpoint.BaseURL, profile.BaseURL)
 			endpoint.Protocol = modelruntime.NormalizeProtocol(firstNonEmpty(endpoint.Protocol, profile.Protocol))
 			setProviderEndpointForModelCommand(cfg, profile.ID, endpoint)
@@ -388,18 +373,117 @@ func (a *App) setModelFromArgs(cfg *config.Config, args []string) int {
 		}
 	}
 
-	cfg.SetDefaultModel(provider, model)
+	if err := validateModelOptions(provider, model, reasoning, serviceTier); err != nil {
+		fmt.Fprintln(a.stderr, err)
+		return 2
+	}
+	cfg.SetPrimaryModel(provider, model, reasoning)
+	cfg.Models.Primary.ServiceTier = normalizeModelOption(serviceTier)
 	if err := config.SaveConfig(cfg.Path, cfg); err != nil {
 		fmt.Fprintln(a.stderr, err)
 		return 1
 	}
-	fmt.Fprintf(a.stdout, "Saved model: %s / %s\nConfig: %s\n", provider, model, cfg.Path)
+	fmt.Fprintf(a.stdout, "Saved model: %s / %s\n", provider, model)
+	fmt.Fprintf(a.stdout, "Reasoning: %s\n", displayModelOption(reasoning))
+	if serviceTier != "" {
+		fmt.Fprintf(a.stdout, "Service tier: %s\n", displayModelOption(serviceTier))
+	}
+	fmt.Fprintf(a.stdout, "Config: %s\n", cfg.Path)
 	return 0
 }
 
 func (a *App) printCurrentModel(cfg *config.Config) {
-	fmt.Fprintf(a.stdout, "Current: provider=%s model=%s\n", blankAsDash(cfg.EffectiveProvider()), blankAsDash(cfg.EffectiveModel()))
+	primary := cfg.EffectivePrimary()
+	fmt.Fprintf(a.stdout, "Current: provider=%s model=%s\n", blankAsDash(primary.Provider), blankAsDash(primary.Model))
+	if descriptor, ok := modelruntime.DiscoverModelDescriptor(primary.Provider, primary.Model); ok {
+		fmt.Fprintf(a.stdout, "Reasoning: %s\n", formatReasoning(primary.Reasoning, descriptor.DefaultReasoning))
+		if primary.ServiceTier != "" || descriptor.DefaultServiceTier != "" {
+			fmt.Fprintf(a.stdout, "Service tier: %s\n", formatModelDefault(primary.ServiceTier, descriptor.DefaultServiceTier))
+		}
+		if descriptor.ContextWindow > 0 {
+			fmt.Fprintf(a.stdout, "Context: %d (%s)\n", descriptor.ContextWindow, descriptor.CapabilitySource)
+		}
+	} else {
+		fmt.Fprintf(a.stdout, "Reasoning: %s\n", displayModelOption(primary.Reasoning))
+		if primary.ServiceTier != "" {
+			fmt.Fprintf(a.stdout, "Service tier: %s\n", displayModelOption(primary.ServiceTier))
+		}
+	}
 	fmt.Fprintf(a.stdout, "Config: %s\n", cfg.Path)
+}
+
+func parseModelSetOptions(args []string) (reasoning, serviceTier string, err error) {
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--reasoning":
+			if i+1 >= len(args) {
+				return "", "", fmt.Errorf("--reasoning requires a value")
+			}
+			reasoning = strings.TrimSpace(args[i+1])
+			i++
+		case "--service-tier":
+			if i+1 >= len(args) {
+				return "", "", fmt.Errorf("--service-tier requires a value")
+			}
+			serviceTier = strings.TrimSpace(args[i+1])
+			i++
+		default:
+			return "", "", fmt.Errorf("unknown model option: %s", args[i])
+		}
+	}
+	return reasoning, serviceTier, nil
+}
+
+func validateModelOptions(provider, model, reasoning, serviceTier string) error {
+	descriptor, ok := modelruntime.DiscoverModelDescriptor(provider, model)
+	if !ok {
+		return nil
+	}
+	if value := normalizeModelOption(reasoning); value != "" && len(descriptor.SupportedReasoning) > 0 && !containsFold(descriptor.SupportedReasoning, value) {
+		return fmt.Errorf("reasoning %q is not supported by %s; supported: %s", value, model, strings.Join(descriptor.SupportedReasoning, ", "))
+	}
+	if value := normalizeModelOption(serviceTier); value != "" && len(descriptor.SupportedServiceTiers) > 0 && !containsFold(descriptor.SupportedServiceTiers, value) {
+		return fmt.Errorf("service tier %q is not supported by %s; supported: %s", value, model, strings.Join(descriptor.SupportedServiceTiers, ", "))
+	}
+	return nil
+}
+
+func containsFold(values []string, want string) bool {
+	for _, value := range values {
+		if strings.EqualFold(strings.TrimSpace(value), strings.TrimSpace(want)) {
+			return true
+		}
+	}
+	return false
+}
+
+func normalizeModelOption(value string) string {
+	value = strings.TrimSpace(value)
+	if strings.EqualFold(value, "auto") {
+		return ""
+	}
+	return value
+}
+
+func displayModelOption(value string) string {
+	if normalized := normalizeModelOption(value); normalized != "" {
+		return normalized
+	}
+	return "auto"
+}
+
+func formatReasoning(explicit, providerDefault string) string {
+	return formatModelDefault(explicit, providerDefault)
+}
+
+func formatModelDefault(explicit, providerDefault string) string {
+	if explicit = normalizeModelOption(explicit); explicit != "" {
+		return explicit + " (explicit)"
+	}
+	if providerDefault = strings.TrimSpace(providerDefault); providerDefault != "" {
+		return "auto (provider default: " + providerDefault + ")"
+	}
+	return "auto"
 }
 
 // redactHeaderValue masks values whose header name suggests a secret; other
@@ -429,9 +513,16 @@ func (a *App) checkCurrentModel(cfg *config.Config) int {
 	fmt.Fprintf(a.stdout, "Base URL: %s\n", rt.BaseURL)
 	fmt.Fprintf(a.stdout, "Credential: %s\n", blankAsDash(rt.CredentialSource))
 	if rt.ContextLength > 0 {
-		fmt.Fprintf(a.stdout, "Context length: %d\n", rt.ContextLength)
+		fmt.Fprintf(a.stdout, "Context length: %d (%s)\n", rt.ContextLength, blankAsDash(rt.ContextSource))
 	} else {
 		fmt.Fprintln(a.stdout, "Context length: unknown")
+	}
+	fmt.Fprintf(a.stdout, "Reasoning: %s\n", formatReasoning(rt.ReasoningEffort, rt.DefaultReasoning))
+	if len(rt.ReasoningLevels) > 0 {
+		fmt.Fprintf(a.stdout, "Reasoning levels: %s\n", strings.Join(rt.ReasoningLevels, ", "))
+	}
+	if rt.CapabilitySource != "" {
+		fmt.Fprintf(a.stdout, "Capabilities: %s\n", rt.CapabilitySource)
 	}
 	fmt.Fprintf(a.stdout, "Quirks: auth=%s tool_schema=%s thinking=%s user_agent=%s disable_http2=%t responses_store_false=%t responses_require_stream=%t\n",
 		blankAsDash(rt.Quirks.AuthHeader),
@@ -479,7 +570,7 @@ func (a *App) printConfiguredProviders(cfg *config.Config) {
 		fmt.Fprintf(a.stdout, "MiniMax legacy: %s\n", configuredMark(cfg.Providers.MiniMaxAPIKey))
 	}
 	for name, ep := range cfg.ProviderProfiles {
-		fmt.Fprintf(a.stdout, "Provider %s: %s %s model=%s protocol=%s\n", name, configuredMark(ep.APIKey), ep.BaseURL, ep.Model, ep.Protocol)
+		fmt.Fprintf(a.stdout, "Provider %s: %s %s protocol=%s\n", name, configuredMark(ep.APIKey), ep.BaseURL, ep.Protocol)
 	}
 	for _, cp := range cfg.Providers.Custom {
 		fmt.Fprintf(a.stdout, "Custom %s: %s %s\n", cp.Name, configuredMark(cp.APIKey), cp.BaseURL)

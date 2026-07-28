@@ -7,6 +7,8 @@ import (
 	"sort"
 	"strings"
 	"unicode/utf8"
+
+	"selfmind/internal/executionenv"
 )
 
 const (
@@ -73,9 +75,21 @@ func SkillRootsForTenant(tenantID string) ([]SkillRoot, error) {
 		}
 	}
 
-	if cwd, err := os.Getwd(); err == nil {
+	workspaceStart := ""
+	workspaceSkillsAllowed := true
+	if scope, ok := currentExecutionScopeAny(map[string]interface{}{"_tenant_id": tenantID}); ok {
+		workspaceStart = strings.TrimSpace(scope.WorkspaceRoot)
+		workspaceSkillsAllowed = scope.TrustLevel != executionenv.TrustUntrusted
+	} else if cwd, err := os.Getwd(); err == nil {
+		// Outside an active run (for example a local TUI slash command), the
+		// caller's cwd is authoritative. During a daemon-owned run the
+		// ExecutionScope above always wins, so daemon cwd can never select a
+		// workspace skill root.
+		workspaceStart = cwd
+	}
+	if workspaceSkillsAllowed && workspaceStart != "" {
 		priority := 10
-		for _, dir := range skillRootAncestors(cwd) {
+		for _, dir := range skillRootAncestors(workspaceStart) {
 			addExistingRoot(filepath.Join(dir, ".selfmind", "skills"), SkillScopeWorkspace, "workspace", true, priority)
 			priority += 10
 			addExistingRoot(filepath.Join(dir, ".agents", "skills"), SkillScopeWorkspace, "codex-compatible", false, priority)
@@ -104,6 +118,11 @@ func SkillRootsForTenant(tenantID string) ([]SkillRoot, error) {
 	})
 
 	return dedupeSkillRoots(roots), nil
+}
+
+func activeSkillWorkspaceUntrusted(tenantID string) bool {
+	scope, ok := currentExecutionScopeAny(map[string]interface{}{"_tenant_id": tenantID})
+	return ok && scope.TrustLevel == executionenv.TrustUntrusted
 }
 
 func skillRootAncestors(start string) []string {

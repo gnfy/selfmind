@@ -53,7 +53,7 @@ selfmind tasks [done|archived|all|<keyword>]
 selfmind task <n|task_id> [runs|rename <name>|pin|unpin|archive|merge <dst>]
 selfmind resume <n|task_id>
 selfmind workspaces
-selfmind ws [list|add|use|<n|workspace_id>] ...
+selfmind ws [list|add|use|trust|untrust|grants|revoke|<n|workspace_id>] ...
 selfmind approvals
 selfmind approve [token]
 selfmind reject [token]
@@ -64,7 +64,8 @@ selfmind new [title]
 
 - `send` dispatches a message without opening the TUI. `--async` returns after
   acceptance. `MODE` is one of `on-request`, `read-only`, `auto-edit`,
-  `full-auto`, or `smart`.
+  `full-auto`, or `smart`. When no preference has been saved, the default is
+  `smart`; without a configured triage model it safely falls back to asking.
 - `tasks` lists open work by default; a status or keyword narrows the result.
 - `task` accepts either the displayed list number or a stable task ID.
 - `resume` reopens an archived task when necessary and starts the TUI on it.
@@ -77,9 +78,18 @@ selfmind ws list
 selfmind ws <n|workspace_id>
 selfmind ws add [path] [name...]
 selfmind ws use <workspace_id>
-selfmind workspace [list|add|use|<n|workspace_id>] ...
+selfmind ws trust [workspace_id]
+selfmind ws untrust [workspace_id]
+selfmind ws grants [workspace_id]
+selfmind ws revoke <capability> [workspace_id]
+selfmind workspace [list|add|use|trust|untrust|grants|revoke|<n|workspace_id>] ...
 ```
 
+- Only an authenticated local CLI can change workspace trust. Omitting the
+  workspace ID targets the current workspace. `untrust` also revokes active
+  execution-capability grants for that workspace.
+- `grants` lists temporary execution capabilities such as `network:shared`;
+  `revoke` removes one immediately. These controls are also local-CLI only.
 - `approve` and `reject` accept a pending approval token when more than one
   request is waiting.
 - `stop` cancels the active run. `new` creates a fresh visible task.
@@ -99,6 +109,8 @@ selfmind weixin [login|status] ...
 Detailed forms:
 
 ```text
+selfmind model set <provider> <model> [--reasoning <level|auto>] [--service-tier <tier|auto>]
+
 selfmind auth login minimax-oauth [--region global|cn] [--no-browser]
 selfmind auth status [provider]
 selfmind auth logout minimax-oauth
@@ -116,6 +128,11 @@ selfmind weixin status
 
 - `config doctor` reports missing or stale configuration without changing it;
   `config upgrade` adds supported defaults while preserving existing values.
+- `model set` writes the single primary selection under `models.primary`.
+  Reasoning/service-tier values are validated against discovered capabilities
+  when available; `auto` leaves the choice to the provider/model.
+- A shared daemon does not hot-switch from TUI `/model`. Restart at a safe turn
+  boundary with `selfmind gateway restart --drain` after changing the model.
 - `model check` resolves credentials, protocol, endpoint, and model without
   exposing secrets.
 - `doctor` checks the installation and configuration. `--probe-models` performs
@@ -183,7 +200,7 @@ before normal agent dispatch.
 /cancel
 /notify <platform|auto>
 /new [title]
-/resume <n|task_id>
+/resume [n|task_id]  (bare = pick from recent tasks)
 /workspace [n|id]  (bare = list; alias: /ws)
 /workspaces  (same as bare /workspace or /ws)
 ```
@@ -212,14 +229,15 @@ These commands depend on local TUI state and are not sent through IM channels.
 /compact
 /paste-image
 /capture [title]
-/history
+/search [current|query]
 /copy
 ```
 
 - `/memory` presents the human-oriented memory index; its subcommands inspect,
   correct, pin, forget, and audit canonical memories.
-- `/history` opens the current transcript, while `/copy` copies the last
-  assistant answer.
+- `/search` is the single look-back entry point: `/search current` opens this
+  conversation with complete diffs, a query finds past working sessions, and
+  bare `/search` lists recent ones. `/copy` copies the last assistant answer.
 - `/capture` turns the last completed turn into an eval-case draft.
 
 ## Documentation policy

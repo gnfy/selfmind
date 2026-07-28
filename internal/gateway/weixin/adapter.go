@@ -64,6 +64,9 @@ func (a *Adapter) Start(ctx context.Context) error {
 	if a.handler == nil {
 		return fmt.Errorf("weixin message handler is required")
 	}
+	if a.cfg.OwnerPersonID != "" && len(a.cfg.AllowFrom) == 0 {
+		log.Warn("weixin owner auto-binding is disabled until gateway.weixin.allow_from explicitly identifies the owner account")
+	}
 	a.clientSnapshot().RestoreContextTokens()
 	pollCtx, cancel := context.WithCancel(ctx)
 	a.cancel = cancel
@@ -227,7 +230,7 @@ func (a *Adapter) processMessage(ctx context.Context, raw map[string]interface{}
 	}
 	displayName := firstNonEmpty(stringFromMap(msg, "sender_nick"), stringFromMap(msg, "display_name"), safeID(sender))
 	tenantID := firstNonEmpty(a.cfg.DefaultTenantID, control.DefaultTenantID)
-	if a.cfg.OwnerPersonID != "" && a.store != nil {
+	if a.ownerBindingAllowed(sender, chatID, isGroup) && a.store != nil {
 		if _, err := a.store.BindAccount(ctx, tenantID, a.cfg.OwnerPersonID, "weixin", sender, displayName); err != nil {
 			return err
 		}
@@ -258,6 +261,19 @@ func (a *Adapter) processMessage(ctx context.Context, raw map[string]interface{}
 		return client.Send(context.Background(), chatID, router.WorkingNotice("weixin"))
 	}
 	return nil
+}
+
+// ownerBindingAllowed is deliberately stricter than message admission. Open
+// DMs may use the bot as separate identities, but only an explicitly
+// allowlisted account may inherit the configured owner's person-level grants.
+func (a *Adapter) ownerBindingAllowed(sender, chat string, isGroup bool) bool {
+	if a == nil || strings.TrimSpace(a.cfg.OwnerPersonID) == "" {
+		return false
+	}
+	if isGroup {
+		return stringInList(chat, a.cfg.GroupAllowFrom) || stringInList(sender, a.cfg.GroupAllowFrom)
+	}
+	return stringInList(sender, a.cfg.AllowFrom) || stringInList(chat, a.cfg.AllowFrom)
 }
 
 func (a *Adapter) extractAttachments(ctx context.Context, msg map[string]interface{}) []api.MessageAttachment {

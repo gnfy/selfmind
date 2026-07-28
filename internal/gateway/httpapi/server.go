@@ -30,6 +30,9 @@ type Server struct {
 	DrainTimeout      time.Duration
 	ShutdownFunc      func()
 	RuntimeStatusFunc func() api.GatewayRuntimeInfo
+	// LocalControlToken authenticates privileged loopback-only operations such
+	// as granting workspace trust. It is not the public gateway bearer token.
+	LocalControlToken string
 	// PendingNotifyAfter is the escrow threshold (Fix 2): an unanswered
 	// approval/clarify older than this, whose person has detached from the CLI and
 	// which was never notified, is re-pushed to the preferred IM by the periodic
@@ -153,6 +156,8 @@ func (d *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/tasks", d.handleTasks)
 	mux.HandleFunc("/v1/tasks/current", d.handleCurrentTask)
 	mux.HandleFunc("/v1/workspaces/register", d.handleWorkspaceRegister)
+	mux.HandleFunc("/v1/workspaces/trust", d.handleWorkspaceTrust)
+	mux.HandleFunc("/v1/workspaces/capabilities", d.handleWorkspaceCapabilities)
 	mux.HandleFunc("/v1/workspaces", d.handleWorkspaces)
 	mux.HandleFunc("/v1/gateway/status", d.handleGatewayStatus)
 	mux.HandleFunc("/v1/gateway/shutdown", d.handleGatewayShutdown)

@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"os"
 	"path"
@@ -115,7 +116,7 @@ func EnvVarMiddleware(requiredVars ...string) Middleware {
 type ApprovalMode string
 
 const (
-	// ApprovalOnRequest (default) asks only when an op trips the dangerous-op
+	// ApprovalOnRequest asks only when an op trips the dangerous-op
 	// heuristic (destructive command, restricted/out-of-workspace path).
 	ApprovalOnRequest ApprovalMode = "on-request"
 	// ApprovalReadOnly asks before ANY file write/edit or command execution.
@@ -134,6 +135,11 @@ const (
 	// everything uncertain to the human ask. With no judge installed it degrades
 	// to on-request (human ask) — it never auto-approves without a judge.
 	ApprovalSmart ApprovalMode = "smart"
+
+	// DefaultApprovalMode is used only when a person has not selected a mode and
+	// the request does not carry one. Smart preserves the hard safety floor and
+	// degrades to a human ask when no triage judge is available.
+	DefaultApprovalMode ApprovalMode = ApprovalSmart
 )
 
 // NormalizeApprovalMode maps free-form input to a known mode, defaulting to
@@ -151,6 +157,16 @@ func NormalizeApprovalMode(s string) ApprovalMode {
 	default:
 		return ApprovalOnRequest
 	}
+}
+
+// EffectiveApprovalMode resolves an optional persisted/request value. Empty
+// selects the product default; invalid non-empty input remains fail-safe and
+// normalizes to on-request.
+func EffectiveApprovalMode(s string) ApprovalMode {
+	if strings.TrimSpace(s) == "" {
+		return DefaultApprovalMode
+	}
+	return NormalizeApprovalMode(s)
 }
 
 // IsKnownApprovalModeWord reports whether s is one of the accepted mode words
@@ -262,6 +278,8 @@ func EvaluateModeDecision(ctx context.Context, mode ApprovalMode, projectRoot, t
 	if args == nil {
 		args = map[string]interface{}{}
 	}
+	args["_tool_name"] = toolName
+	annotateEffectiveSandboxMode(args)
 	// Layer 1: hard floor. Authoritative — no mode bypasses it, and it is never
 	// auto-approved here. Left to a human (ModeAsk); in practice a hardline op
 	// never reaches a pending-approval row, but stay conservative regardless.
@@ -320,6 +338,7 @@ func SmartApprovalMiddleware(projectRoot string) Middleware {
 	return func(next ToolExecutor) ToolExecutor {
 		return func(args map[string]interface{}) (string, error) {
 			toolName, _ := args["_tool_name"].(string)
+			annotateEffectiveSandboxMode(args)
 			scope, hasScope := currentExecutionScopeAny(args)
 			effectiveRoot := projectRoot
 			if hasScope {
@@ -382,7 +401,7 @@ func SmartApprovalMiddleware(projectRoot string) Middleware {
 			// action CLASS; a matching task/person grant skips the human ask.
 			// Hardline never reaches here, so a granted class can never cover a
 			// hard-floor op.
-			patternKey := approvalPatternKey(toolName, approvalArgs(args), reason)
+			patternKey := approvalPatternKeyForScope(toolName, args, reason, scope, hasScope)
 			if hasScope && scope.Grants != nil && patternKey != "" {
 				if granted, _ := scope.Grants.IsApprovalGranted(contextFromArgs(args), scope.TenantID, scope.PersonID, scope.TaskID, patternKey); granted {
 					return next(args)
@@ -398,7 +417,7 @@ func SmartApprovalMiddleware(projectRoot string) Middleware {
 			// human ask — never an auto-approval.
 			if mode == ApprovalSmart && hasScope && scope.Judge != nil {
 				ctx := contextFromArgs(args)
-				verdict, terr := triageApproval(ctx, scope.Judge, toolName, triageSubject(toolName, approvalArgs(args)), reason)
+				verdict, terr := triageApproval(ctx, scope.Judge, toolName, triageSubject(toolName, approvalDisplayArgs(args)), reason)
 				switch verdict {
 				case TriageApprove:
 					// Record a TASK-scope class grant so the judge is consulted at
@@ -425,14 +444,15 @@ func SmartApprovalMiddleware(projectRoot string) Middleware {
 			// Layer 5: human ask.
 			if hasScope && scope.Approval != nil {
 				decision, err := scope.Approval(contextFromArgs(args), ToolApprovalRequest{
-					TenantID: scope.TenantID,
-					PersonID: scope.PersonID,
-					TaskID:   scope.TaskID,
-					RunID:    scope.RunID,
-					Channel:  scope.Channel,
-					ToolName: toolName,
-					Reason:   reason,
-					Args:     approvalArgs(args),
+					TenantID:            scope.TenantID,
+					PersonID:            scope.PersonID,
+					TaskID:              scope.TaskID,
+					RunID:               scope.RunID,
+					Channel:             scope.Channel,
+					ToolName:            toolName,
+					Reason:              reason,
+					Args:                approvalDisplayArgs(args),
+					ResourceFingerprint: approvalResourceFingerprint(scope, toolName, args),
 				})
 				if err != nil {
 					return "", err
@@ -533,13 +553,65 @@ func recordApprovalGrant(ctx context.Context, scope ExecutionScope, decisionScop
 // still buckets by REASON class, which is the intended coarseness. Returns ""
 // when there is nothing meaningful to remember.
 func approvalPatternKey(toolName string, args map[string]interface{}, dangerousReason string) string {
+	return approvalPatternKeyForScope(toolName, args, dangerousReason, ExecutionScope{}, false)
+}
+
+func approvalPatternKeyForScope(toolName string, args map[string]interface{}, dangerousReason string, scope ExecutionScope, hasScope bool) string {
 	if isExecTool(toolName) {
+		base := "exec:" + toolName
 		if dangerousReason != "" {
-			return "exec:" + dangerousReason
+			base = "exec:" + dangerousReason
 		}
-		return "exec:" + toolName
+		if effectiveSandboxModeArg(args) == SandboxHost {
+			if !hasScope {
+				// A host escape without a durable workspace identity may be
+				// approved once, but must never create a reusable broad grant.
+				return ""
+			}
+			resource := approvalResourceFingerprint(scope, toolName, args)
+			if resource == "" {
+				return ""
+			}
+			return base + "|resource=" + resource
+		}
+		return base
 	}
 	return toolName + ":" + patternReasonBucket(dangerousReason)
+}
+
+// approvalResourceFingerprint scopes host-execution approval memory to both
+// the active workspace and the effective command family. Raw paths, commands,
+// tokens, and credential bytes never enter the persisted key.
+func approvalResourceFingerprint(scope ExecutionScope, toolName string, args map[string]interface{}) string {
+	if !isExecTool(toolName) || effectiveSandboxModeArg(args) != SandboxHost {
+		return ""
+	}
+	workspace := strings.TrimSpace(scope.WorkspaceID)
+	if workspace == "" {
+		workspace = filepath.Clean(strings.TrimSpace(scope.WorkspaceRoot))
+	}
+	if workspace == "" || workspace == "." {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(workspace))
+	return fmt.Sprintf("workspace:%x:command:%s", sum[:8], execCommandFamily(toolName, args))
+}
+
+func execCommandFamily(toolName string, args map[string]interface{}) string {
+	if toolName == "execute_code" {
+		return "python"
+	}
+	segs, _ := expandCommandSegments(execCommandPayload(toolName, args), 0)
+	for _, fields := range segs {
+		progIdx, ok := segmentProgram(fields)
+		if !ok {
+			continue
+		}
+		if base := strings.ToLower(strings.TrimSpace(filepath.Base(fields[progIdx]))); base != "" {
+			return base
+		}
+	}
+	return "unknown"
 }
 
 // patternReasonBucket collapses a dangerous/approval reason to its class by
@@ -783,9 +855,6 @@ func egressCommand(cmd string, segs [][]string) (bool, string) {
 
 func dangerousToolCall(projectRoot, toolName string, args map[string]interface{}) (bool, string) {
 	if isExecTool(toolName) {
-		if strings.EqualFold(strings.TrimSpace(stringArg(args, "sandbox")), string(SandboxHost)) {
-			return true, "requests execution on the host outside the isolated sandbox"
-		}
 		cmd := execCommandPayload(toolName, args)
 		for _, pattern := range destructiveSubstrings {
 			if strings.Contains(cmd, pattern) {
@@ -817,6 +886,12 @@ func dangerousToolCall(projectRoot, toolName string, args map[string]interface{}
 		// hardline. This is the "can't parse → dangerous, not hard-blocked" rule.
 		if unparsed {
 			return true, "invokes an opaque wrapped command"
+		}
+		// Host execution remains approval-gated, but only after inspecting the
+		// real payload. This preserves specific classes such as curl/chmod/rm
+		// instead of collapsing every host request into one reusable grant.
+		if effectiveSandboxModeArg(args) == SandboxHost {
+			return true, "requests execution on the host outside the isolated sandbox"
 		}
 	}
 
@@ -1058,6 +1133,17 @@ func approvalArgs(args map[string]interface{}) map[string]interface{} {
 			continue
 		}
 		out[k] = v
+	}
+	return out
+}
+
+func approvalDisplayArgs(args map[string]interface{}) map[string]interface{} {
+	out := approvalArgs(args)
+	if effectiveSandboxModeArg(args) == SandboxHost {
+		requested, _ := requestedSandboxMode(args)
+		if requested != SandboxHost {
+			out["effective_sandbox"] = "host (isolated sandbox unavailable or disabled)"
+		}
 	}
 	return out
 }

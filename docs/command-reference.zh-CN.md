@@ -48,7 +48,7 @@ selfmind tasks [done|archived|all|<keyword>]
 selfmind task <n|task_id> [runs|rename <name>|pin|unpin|archive|merge <dst>]
 selfmind resume <n|task_id>
 selfmind workspaces
-selfmind ws [list|add|use|<n|workspace_id>] ...
+selfmind ws [list|add|use|trust|untrust|grants|revoke|<n|workspace_id>] ...
 selfmind approvals
 selfmind approve [token]
 selfmind reject [token]
@@ -59,7 +59,8 @@ selfmind new [title]
 
 - `send` 在不打开 TUI 的情况下提交消息。`--async` 在 gateway 接收后立即返回。
   `MODE` 可用值为 `on-request`、`read-only`、`auto-edit`、`full-auto`
-  或 `smart`。
+  或 `smart`。未保存个人偏好时默认使用 `smart`；未配置裁决模型时会安全
+  降级为人工审批。
 - `tasks` 默认列出开放工作，也可以按状态或关键词过滤。
 - `task` 支持列表序号或稳定 task ID。
 - `resume` 必要时会重新打开已归档任务，并在该任务上启动 TUI。
@@ -72,9 +73,15 @@ selfmind ws list
 selfmind ws <n|workspace_id>
 selfmind ws add [path] [name...]
 selfmind ws use <workspace_id>
-selfmind workspace [list|add|use|<n|workspace_id>] ...
+selfmind ws trust [workspace_id]
+selfmind ws untrust [workspace_id]
+selfmind ws grants [workspace_id]
+selfmind ws revoke <capability> [workspace_id]
+selfmind workspace [list|add|use|trust|untrust|grants|revoke|<n|workspace_id>] ...
 ```
 
+- 只有已认证的本地 CLI 可以修改工作区信任状态。省略 workspace ID 时操作当前工作区；
+  `untrust` 还会撤销该工作区当前有效的执行能力授权。
 - 同时存在多个审批时，`approve` 和 `reject` 可接审批 token。
 - `stop` 取消活跃 run；`new` 创建新的可见任务。
 
@@ -93,6 +100,8 @@ selfmind weixin [login|status] ...
 详细语法：
 
 ```text
+selfmind model set <provider> <model> [--reasoning <level|auto>] [--service-tier <tier|auto>]
+
 selfmind auth login minimax-oauth [--region global|cn] [--no-browser]
 selfmind auth status [provider]
 selfmind auth logout minimax-oauth
@@ -110,6 +119,10 @@ selfmind weixin status
 
 - `config doctor` 只报告配置缺失或过期项；`config upgrade` 在保留已有值的
   前提下补充受支持的默认项。
+- `model set` 只写入 `models.primary` 这一处主模型配置。能力元数据存在时，
+  会动态校验 reasoning/service tier；`auto` 表示交给 provider/模型默认处理。
+- 共享 daemon 不支持在 TUI `/model` 中热切换。修改后使用
+  `selfmind gateway restart --drain`，在安全 turn 边界重启。
 - `model check` 解析凭证、协议、端点和模型，但不会暴露密钥。
 - `doctor` 检查安装和配置；`--probe-models` 会真实调用 provider，可能消耗额度。
 - `selfcheck` 执行发布前使用的仓库检查。
@@ -171,7 +184,7 @@ Gateway 命令可用于 TUI 和受支持的 IM 渠道，并且会在普通 Agent
 /cancel
 /notify <platform|auto>
 /new [title]
-/resume <n|task_id>
+/resume [n|task_id]  (bare = pick from recent tasks)
 /workspace [n|id]  (bare = list; alias: /ws)
 /workspaces  (same as bare /workspace or /ws)
 ```
@@ -199,13 +212,15 @@ Gateway 命令可用于 TUI 和受支持的 IM 渠道，并且会在普通 Agent
 /compact
 /paste-image
 /capture [title]
-/history
+/search [current|query]
 /copy
 ```
 
 - `/memory` 展示便于人类阅读的记忆索引；子命令可查看、纠正、置顶、遗忘
   和审计 canonical memory。
-- `/history` 打开当前 transcript，`/copy` 复制最近一次 assistant 回复。
+- `/search` 是唯一的回看入口：`/search current` 打开当前对话并展示完整
+  diff，带关键词则搜索过去的工作会话，不带参数列出最近会话。`/copy`
+  复制最近一次 assistant 回复。
 - `/capture` 把最近完成的一轮保存为 eval case 草稿。
 
 ## 文档同步规则

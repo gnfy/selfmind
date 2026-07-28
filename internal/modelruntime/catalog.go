@@ -23,6 +23,22 @@ type Catalog struct {
 	cachePath string
 }
 
+// ModelDescriptor contains optional provider-published model capabilities.
+// Empty fields mean "unknown", not "unsupported": custom and compatible
+// providers often expose only model IDs.
+type ModelDescriptor struct {
+	ID                      string
+	DisplayName             string
+	ContextWindow           int
+	EffectiveContextPercent int
+	DefaultReasoning        string
+	SupportedReasoning      []string
+	DefaultServiceTier      string
+	SupportedServiceTiers   []string
+	SupportsVision          bool
+	CapabilitySource        string
+}
+
 func NewCatalog(cachePath string) *Catalog {
 	return &Catalog{cachePath: expandHome(cachePath)}
 }
@@ -49,6 +65,50 @@ func (c *Catalog) Models(ctx context.Context, profile ProviderProfile, rt Runtim
 		return uniqueSorted(profile.FallbackModels), err
 	}
 	return nil, err
+}
+
+// Descriptors preserves the existing model-list behavior while enriching
+// entries with local provider metadata when available.
+func (c *Catalog) Descriptors(ctx context.Context, profile ProviderProfile, rt Runtime, forceRefresh bool) ([]ModelDescriptor, error) {
+	models, err := c.Models(ctx, profile, rt, forceRefresh)
+	out := make([]ModelDescriptor, 0, len(models))
+	for _, model := range models {
+		if descriptor, ok := DiscoverModelDescriptor(profile.ID, model); ok {
+			out = append(out, descriptor)
+			continue
+		}
+		out = append(out, ModelDescriptor{
+			ID:               model,
+			ContextWindow:    KnownContextLength(profile.ID, model),
+			CapabilitySource: "built-in fallback",
+		})
+	}
+	return out, err
+}
+
+// DiscoverModelDescriptor performs local, non-blocking capability discovery.
+// The resolver hot path must never depend on a network model-list request.
+func DiscoverModelDescriptor(providerID, model string) (ModelDescriptor, bool) {
+	providerID = NormalizeProviderID(providerID)
+	model = strings.TrimSpace(model)
+	if providerID == "codex-cli" {
+		for _, descriptor := range codexLocalModelDescriptors() {
+			if strings.EqualFold(descriptor.ID, model) {
+				return descriptor, true
+			}
+		}
+	}
+	if model == "" {
+		return ModelDescriptor{}, false
+	}
+	if contextWindow := KnownContextLength(providerID, model); contextWindow > 0 {
+		return ModelDescriptor{
+			ID:               model,
+			ContextWindow:    contextWindow,
+			CapabilitySource: "built-in fallback",
+		}, true
+	}
+	return ModelDescriptor{}, false
 }
 
 func (c *Catalog) fetch(ctx context.Context, profile ProviderProfile, rt Runtime) ([]string, error) {
@@ -145,11 +205,12 @@ func fetchCodexModels(ctx context.Context, apiKey string) ([]string, error) {
 }
 
 func codexLocalModels() []string {
-	codexHome := firstNonEmpty(os.Getenv("CODEX_HOME"), filepath.Join(homeDir(), ".codex"))
-	var out []string
-	if payload, err := readJSONFile(filepath.Join(codexHome, "models_cache.json")); err == nil {
-		out = append(out, collectModelIDs(payload)...)
+	descriptors := codexLocalModelDescriptors()
+	out := make([]string, 0, len(descriptors))
+	for _, descriptor := range descriptors {
+		out = append(out, descriptor.ID)
 	}
+	codexHome := firstNonEmpty(os.Getenv("CODEX_HOME"), filepath.Join(homeDir(), ".codex"))
 	if data, err := os.ReadFile(filepath.Join(codexHome, "config.toml")); err == nil {
 		for _, line := range strings.Split(string(data), "\n") {
 			line = strings.TrimSpace(line)
@@ -163,6 +224,140 @@ func codexLocalModels() []string {
 		}
 	}
 	return uniqueSorted(out)
+}
+
+func codexLocalModelDescriptors() []ModelDescriptor {
+	codexHome := firstNonEmpty(os.Getenv("CODEX_HOME"), filepath.Join(homeDir(), ".codex"))
+	payload, err := readJSONFile(filepath.Join(codexHome, "models_cache.json"))
+	if err != nil {
+		return nil
+	}
+	return collectModelDescriptors(payload, "codex models cache")
+}
+
+func collectModelDescriptors(value interface{}, source string) []ModelDescriptor {
+	byID := make(map[string]ModelDescriptor)
+	var walk func(interface{})
+	walk = func(v interface{}) {
+		switch item := v.(type) {
+		case map[string]interface{}:
+			id := firstNonEmpty(
+				stringFromInterface(item["slug"]),
+				stringFromInterface(item["id"]),
+				stringFromInterface(item["name"]),
+			)
+			if id != "" && looksLikeModelDescriptor(item) {
+				descriptor := ModelDescriptor{
+					ID:                      cleanModelID(id),
+					DisplayName:             firstNonEmpty(stringFromInterface(item["display_name"]), stringFromInterface(item["name"])),
+					ContextWindow:           firstPositiveInt(item["context_window"], item["max_context_window"]),
+					EffectiveContextPercent: intFromInterface(item["effective_context_window_percent"]),
+					DefaultReasoning:        stringFromInterface(item["default_reasoning_level"]),
+					SupportedReasoning:      collectNamedValues(item["supported_reasoning_levels"], "effort"),
+					DefaultServiceTier:      stringFromInterface(item["default_service_tier"]),
+					SupportedServiceTiers:   collectNamedValues(item["service_tiers"], "id"),
+					SupportsVision:          containsStringValue(item["input_modalities"], "image"),
+					CapabilitySource:        source,
+				}
+				if descriptor.ID != "" {
+					byID[strings.ToLower(descriptor.ID)] = descriptor
+				}
+			}
+			for key, child := range item {
+				if key == "data" || key == "models" {
+					walk(child)
+				}
+			}
+		case []interface{}:
+			for _, child := range item {
+				walk(child)
+			}
+		}
+	}
+	walk(value)
+	out := make([]ModelDescriptor, 0, len(byID))
+	for _, descriptor := range byID {
+		out = append(out, descriptor)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out
+}
+
+func looksLikeModelDescriptor(item map[string]interface{}) bool {
+	if stringFromInterface(item["slug"]) != "" {
+		return true
+	}
+	for _, key := range []string{"context_window", "max_context_window", "default_reasoning_level", "supported_reasoning_levels", "input_modalities"} {
+		if _, ok := item[key]; ok {
+			return true
+		}
+	}
+	// Generic OpenAI-compatible model list entries usually contain an id and
+	// object/model metadata but no capability fields.
+	return stringFromInterface(item["id"]) != ""
+}
+
+func firstPositiveInt(values ...interface{}) int {
+	for _, value := range values {
+		if n := intFromInterface(value); n > 0 {
+			return n
+		}
+	}
+	return 0
+}
+
+func intFromInterface(value interface{}) int {
+	switch v := value.(type) {
+	case float64:
+		return int(v)
+	case float32:
+		return int(v)
+	case int:
+		return v
+	case int64:
+		return int(v)
+	case json.Number:
+		n, _ := v.Int64()
+		return int(n)
+	default:
+		return 0
+	}
+}
+
+func collectNamedValues(value interface{}, key string) []string {
+	items, _ := value.([]interface{})
+	out := make([]string, 0, len(items))
+	for _, raw := range items {
+		item, _ := raw.(map[string]interface{})
+		if value := strings.TrimSpace(stringFromInterface(item[key])); value != "" {
+			out = append(out, value)
+		}
+	}
+	return uniquePreservingOrder(out)
+}
+
+func containsStringValue(value interface{}, want string) bool {
+	items, _ := value.([]interface{})
+	for _, item := range items {
+		if strings.EqualFold(strings.TrimSpace(stringFromInterface(item)), want) {
+			return true
+		}
+	}
+	return false
+}
+
+func uniquePreservingOrder(values []string) []string {
+	seen := make(map[string]bool, len(values))
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" || seen[value] {
+			continue
+		}
+		seen[value] = true
+		out = append(out, value)
+	}
+	return out
 }
 
 func fetchModelIDs(ctx context.Context, modelURL, apiKey string, headers map[string]string) ([]string, error) {

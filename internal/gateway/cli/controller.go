@@ -167,10 +167,19 @@ type uiModel struct {
 	// exitPromptActive intercepts keys while the quit-with-active-run prompt
 	// is shown (b = background+quit, c = cancel+stay, esc = keep watching).
 	exitPromptActive bool
-	onUserInput      func()   // presence honesty: stamped on every keystroke (SetInputActivityHook, input_activity.go)
-	hybrid           bool     // terminal-first hybrid mode (SELFMIND_TUI_HYBRID)
-	pendingPrintln   []string // hybrid: cells to emit to scrollback at end of Update
-	startupCommitted bool     // hybrid: startup card already printed to scrollback
+	// quitting is set by quitNow on every quit path so the final repaint
+	// clears the active region instead of stranding an empty composer between
+	// the transcript and the shell prompt.
+	quitting bool
+	// resumePickerArmed is set by a bare /resume: the daemon-rendered task list
+	// becomes a menu, so the next bare number is read as "resume that entry"
+	// and expanded to /resume <n>. Resolution stays on the daemon, which owns
+	// the ordering that produced the list.
+	resumePickerArmed bool
+	onUserInput       func()   // presence honesty: stamped on every keystroke (SetInputActivityHook, input_activity.go)
+	hybrid            bool     // terminal-first hybrid mode (SELFMIND_TUI_HYBRID)
+	pendingPrintln    []string // hybrid: cells to emit to scrollback at end of Update
+	startupCommitted  bool     // hybrid: startup card already printed to scrollback
 }
 
 type MsgClearStatus struct{}
@@ -273,7 +282,7 @@ func (c *Controller) SetPersistedApprovalMode(mode string) {
 
 // effectiveApprovalMode is the mode shown in the status bar and used for
 // display: a session override wins, else the persisted mode from the digest,
-// else the on-request default.
+// else the smart product default.
 func (m *uiModel) effectiveApprovalMode() string {
 	if mode := strings.TrimSpace(m.approvalMode); mode != "" {
 		return mode
@@ -281,7 +290,7 @@ func (m *uiModel) effectiveApprovalMode() string {
 	if mode := strings.TrimSpace(m.persistedApprovalMode); mode != "" {
 		return mode
 	}
-	return "on-request"
+	return string(tools.DefaultApprovalMode)
 }
 
 // SetApprovalResponder installs the function used to answer a daemon
@@ -616,6 +625,15 @@ func (m *uiModel) resolveClarifyResponse(input string) string {
 }
 
 func (m *uiModel) View() string {
+	// A graceful shutdown repaints the model one final time, so the active
+	// region has to render itself away or the composer stays on screen above
+	// the resume hint. One blank line rather than "": the renderer skips a
+	// frame whose buffer is empty, and its stop() erases exactly the last
+	// rendered line — so a single line both clears the region below and
+	// removes itself.
+	if m.quitting {
+		return " "
+	}
 	if m.width == 0 || m.height == 0 {
 		return "Initializing..."
 	}
@@ -631,11 +649,13 @@ type MsgAgentDone struct {
 }
 
 type MsgDaemonRunStarted struct {
-	RunID   string
-	TaskID  string
-	Input   string
-	Started time.Time
-	Event   uiEventRef
+	RunID      string
+	TaskID     string
+	WatchID    string
+	TaskStatus string
+	Input      string
+	Started    time.Time
+	Event      uiEventRef
 }
 
 type MsgDaemonRunFinished struct {
@@ -693,6 +713,13 @@ type MsgLearningEvent struct {
 	Event   uiEventRef
 }
 
+type MsgWatcherCompleted struct {
+	WatchID    string
+	Status     string
+	TaskStatus string
+	Event      uiEventRef
+}
+
 // MsgTokens is a live cumulative token-usage snapshot for the active run,
 // derived from the daemon's token.updated events. Run is input+output tokens
 // so far; it updates the status bar mid-run while the final response usage
@@ -737,11 +764,19 @@ var _ tea.Model = (*uiModel)(nil)
 // handleExitPromptKey resolves the quit-with-active-run prompt. handled=false
 // lets unrelated keys fall through (they are ignored with a re-hint rather
 // than typed into the editor, so a stray keystroke cannot half-answer).
+// quitNow records that a quit path was taken and returns the quit command.
+// Every exit route goes through it so View can blank the active region on the
+// final repaint.
+func (m *uiModel) quitNow() tea.Cmd {
+	m.quitting = true
+	return tea.Quit
+}
+
 func (m *uiModel) handleExitPromptKey(key string) (tea.Cmd, bool) {
 	switch key {
 	case "b", "B":
 		m.exitPromptActive = false
-		return tea.Quit, true
+		return m.quitNow(), true
 	case "c", "C":
 		m.exitPromptActive = false
 		return m.cancelActiveRunLocally(), true

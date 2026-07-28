@@ -32,7 +32,7 @@ func TestModeCommandPersistsAndResolves(t *testing.T) {
 
 	// Default: on-request when nothing is persisted.
 	resp, status := daemon.ProcessMessage(ctx, api.MessageRequest{Content: "/mode"})
-	if status != http.StatusOK || !strings.Contains(resp.Content, "on-request") {
+	if status != http.StatusOK || !strings.Contains(resp.Content, "smart") {
 		t.Fatalf("/mode default: status=%d content=%q", status, resp.Content)
 	}
 

@@ -1,0 +1,32 @@
+id: execution_environment_diagnostics
+title: "execution environment diagnostics remain safe and actionable"
+suite: continuity
+workspace: isolated
+channel: cli
+
+# /diag execution is a deterministic pre-agent command: it must not spend
+# model tokens or expose credential names/values while reporting the active
+# workspace boundary.
+turns:
+  - input: "/diag execution"
+
+expect:
+  status: completed
+  max_tool_calls: 0
+  max_tool_errors: 0
+  max_duration_seconds: 30
+  contains:
+    - "Execution diagnostics"
+    - "Sandbox backend:"
+    - "Workspace trust:"
+    - "Credential values: hidden"
+  must_not_contain:
+    - "API_KEY"
+    - "TOKEN="
+    - "SECRET="
+
+checks:
+  no_mojibake: true
+  no_raw_json_leak: true
+  no_empty_response: true
+  no_provider_stack_dump: true

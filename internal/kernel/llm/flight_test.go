@@ -16,8 +16,10 @@ func (fakeStreamProvider) StreamChat(ctx context.Context, req ChatRequest) (<-ch
 	close(ch)
 	return ch, nil
 }
-func (fakeStreamProvider) Chat(context.Context, ChatRequest) (*ChatResponse, error) { return &ChatResponse{}, nil }
-func (fakeStreamProvider) ChatCompletion(context.Context, []Message) (string, error)  { return "", nil }
+func (fakeStreamProvider) Chat(context.Context, ChatRequest) (*ChatResponse, error) {
+	return &ChatResponse{}, nil
+}
+func (fakeStreamProvider) ChatCompletion(context.Context, []Message) (string, error) { return "", nil }
 
 func TestFlightRecorderWritesCassette(t *testing.T) {
 	dir := t.TempDir()
@@ -39,5 +41,43 @@ func TestFlightRecorderWritesCassette(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, "flight-test-1", "0000.json")); err != nil {
 		t.Fatalf("expected a recorded cassette: %v", err)
+	}
+}
+
+func TestWriteFlightMetaSecuresExistingRecordings(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("SELFMIND_FLIGHT_DIR", root)
+
+	oldDir := filepath.Join(root, "flight-old")
+	if err := os.MkdirAll(oldDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	oldFile := filepath.Join(oldDir, "0000.json")
+	if err := os.WriteFile(oldFile, []byte(`{"method":"stream"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(oldDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(oldFile, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := WriteFlightMeta(FlightMeta{TurnID: "flight-new"}); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(oldDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o700 {
+		t.Fatalf("old flight dir mode = %v, want 0700", info.Mode().Perm())
+	}
+	info, err = os.Stat(oldFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("old cassette mode = %v, want 0600", info.Mode().Perm())
 	}
 }

@@ -193,6 +193,10 @@ func (a *App) gatewayRestart(args []string) int {
 	}
 	_ = drain // Accepted for an explicit upgrade command; restart already drains by default.
 	dataDir := a.gatewayDataDir()
+	// Capture before RequestShutdown removes the old PID record. A restart may
+	// be invoked from an updater or IDE that lacks the login shell's PATH or
+	// proxy variables; the new daemon must retain its tool and network paths.
+	inheritedRestartEnv := gatewayrt.RunningRestartEnvironment(dataDir)
 	timeout := gatewayrt.ResolveDrainTimeout() + 10*time.Second
 	ctx, cancel := contextWithTimeout(a.ctx, timeout)
 	defer cancel()
@@ -226,7 +230,11 @@ func (a *App) gatewayRestart(args []string) int {
 			return 0
 		}
 	}
-	result, err := gatewayrt.StartDetached(gatewayrt.StartOptions{Replace: true, ConfigPath: a.configPath})
+	result, err := gatewayrt.StartDetached(gatewayrt.StartOptions{
+		Replace:                     true,
+		ConfigPath:                  a.configPath,
+		InheritedRestartEnvironment: inheritedRestartEnv,
+	})
 	if err != nil {
 		fmt.Fprintln(a.stderr, err)
 		return 1

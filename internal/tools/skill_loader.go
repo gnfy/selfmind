@@ -82,6 +82,9 @@ func (sl *SkillLoader) LoadFile(path string) (SkillDefinition, error) {
 	if err != nil {
 		return SkillDefinition{}, fmt.Errorf("front matter parse error: %w", err)
 	}
+	if err := validateSkillEnvironmentDeclarations(string(data)); err != nil {
+		return SkillDefinition{}, err
+	}
 	def.Source = path
 	if def.Name == "" {
 		if filepath.Base(path) == "SKILL.md" {
@@ -107,6 +110,58 @@ func (sl *SkillLoader) LoadFile(path string) (SkillDefinition, error) {
 }
 
 // parseFrontMatter 提取 YAML front matter 和 Markdown body
+// validateSkillEnvironmentDeclarations rejects credential-shaped environment
+// passthrough requests in skill front matter. Skills may describe ordinary
+// configuration, but they cannot declare their way into daemon/operator
+// credentials; such access must cross the execution capability boundary.
+func validateSkillEnvironmentDeclarations(content string) error {
+	lines := strings.Split(strings.ReplaceAll(content, "\r\n", "\n"), "\n")
+	if len(lines) < 3 || strings.TrimSpace(lines[0]) != "---" {
+		return nil
+	}
+	inDeclaration := false
+	for i := 1; i < len(lines); i++ {
+		raw := lines[i]
+		line := strings.TrimSpace(raw)
+		if line == "---" {
+			break
+		}
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if !strings.HasPrefix(raw, " ") && !strings.HasPrefix(raw, "\t") {
+			inDeclaration = false
+			if key, value, ok := strings.Cut(line, ":"); ok {
+				switch strings.ToLower(strings.TrimSpace(key)) {
+				case "env", "environment", "environment_variables", "required_env", "passthrough", "env_passthrough":
+					inDeclaration = true
+					if err := rejectCredentialNames(value); err != nil {
+						return err
+					}
+				}
+			}
+			continue
+		}
+		if inDeclaration {
+			if err := rejectCredentialNames(line); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+var environmentNamePattern = regexp.MustCompile(`[A-Za-z_][A-Za-z0-9_]*`)
+
+func rejectCredentialNames(value string) error {
+	for _, name := range environmentNamePattern.FindAllString(value, -1) {
+		if isCredentialShapedName(name) {
+			return fmt.Errorf("skill environment declaration %q is credential-shaped and is not allowed; request credential access through the execution capability boundary", name)
+		}
+	}
+	return nil
+}
+
 func parseFrontMatter(content string) (SkillDefinition, string, error) {
 	lines := strings.Split(content, "\n")
 	if len(lines) < 3 || lines[0] != "---" {

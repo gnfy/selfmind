@@ -359,6 +359,7 @@ func NewExecuteCommandTool() *ExecuteCommandTool {
 						Description: "Timeout in seconds",
 						Default:     30,
 					},
+					"execution_class": toolExecutionClassProperty(),
 					"background": {
 						Type:        "boolean",
 						Description: "Whether to run in background",
@@ -366,7 +367,7 @@ func NewExecuteCommandTool() *ExecuteCommandTool {
 					},
 					"sandbox": {
 						Type:        "string",
-						Description: "Execution isolation: auto prefers an isolated no-network sandbox; isolated requires it; host uses host credentials/network and requires approval",
+						Description: "Execution isolation: auto prefers an isolated filesystem sandbox whose network follows exec_sandbox.allow_network; isolated requires it; host uses host credentials/network and requires approval",
 						Enum:        []string{"auto", "isolated", "host"},
 						Default:     "auto",
 					},
@@ -387,11 +388,6 @@ func (t *ExecuteCommandTool) Execute(args map[string]interface{}) (string, error
 		cwd = "."
 	}
 	background, _ := args["background"].(bool)
-	timeoutSeconds, _ := args["timeout"].(int)
-	if timeoutSeconds <= 0 {
-		timeoutSeconds = 30
-	}
-
 	if background {
 		mode, err := requestedSandboxMode(args)
 		if err != nil {
@@ -408,7 +404,7 @@ func (t *ExecuteCommandTool) Execute(args map[string]interface{}) (string, error
 		return fmt.Sprintf("Started background process with ID: %s", id), nil
 	}
 
-	return executeForegroundCommand(args, "terminal", timeoutSeconds)
+	return executeForegroundCommand(args, "terminal", 30)
 }
 
 // VerifyTool runs a foreground check whose result is recorded as verification
@@ -423,9 +419,10 @@ func NewVerifyTool() *VerifyTool {
 		schema: ToolSchema{
 			Type: "object",
 			Properties: map[string]PropertyDef{
-				"command": {Type: "string", Description: "Full verification command to execute"},
-				"cwd":     {Type: "string", Description: "Working directory", Default: "."},
-				"timeout": {Type: "integer", Description: "Timeout in seconds", Default: 120},
+				"command":         {Type: "string", Description: "Full verification command to execute"},
+				"cwd":             {Type: "string", Description: "Working directory", Default: "."},
+				"timeout":         {Type: "integer", Description: "Timeout in seconds", Default: 120},
+				"execution_class": toolExecutionClassProperty(),
 				"kind": {
 					Type:        "string",
 					Description: "Verification category",
@@ -434,7 +431,7 @@ func NewVerifyTool() *VerifyTool {
 				},
 				"sandbox": {
 					Type:        "string",
-					Description: "Execution isolation: auto prefers an isolated no-network sandbox; isolated requires it; host uses host credentials/network and requires approval",
+					Description: "Execution isolation: auto prefers an isolated filesystem sandbox whose network follows exec_sandbox.allow_network; isolated requires it; host uses host credentials/network and requires approval",
 					Enum:        []string{"auto", "isolated", "host"},
 					Default:     "auto",
 				},
@@ -448,28 +445,35 @@ func (t *VerifyTool) Execute(args map[string]interface{}) (string, error) {
 	if strings.TrimSpace(stringArg(args, "command")) == "" {
 		return "", fmt.Errorf("command is required")
 	}
-	timeoutSeconds, _ := args["timeout"].(int)
-	if timeoutSeconds <= 0 {
-		timeoutSeconds = 120
-	}
-	return executeForegroundCommand(args, "verify", timeoutSeconds)
+	return executeForegroundCommand(args, "verify", 120)
 }
 
-func executeForegroundCommand(args map[string]interface{}, toolName string, timeoutSeconds int) (string, error) {
+func executeForegroundCommand(args map[string]interface{}, toolName string, standardDefaultSeconds int) (string, error) {
 	cmdStr, _ := args["command"].(string)
 	cwd, _ := args["cwd"].(string)
 	if cwd == "" {
 		cwd = "."
 	}
+	profile, profileErr := resolveToolProfile(args, standardDefaultSeconds)
+	if profileErr != nil {
+		return "", profileErr
+	}
+	timeoutSeconds := int(profile.Timeout / time.Second)
+	args["_execution_class"] = string(profile.Class)
+	args["_timeout_seconds"] = timeoutSeconds
+	args["_timeout_clamped"] = profile.TimeoutClamped
+	if profile.RequestedTimeout > 0 {
+		args["_timeout_requested_seconds"] = int(profile.RequestedTimeout / time.Second)
+	}
 	parentCtx := contextFromArgs(args)
-	runCtx, cancel := context.WithTimeout(parentCtx, time.Duration(timeoutSeconds)*time.Second)
+	runCtx, cancel := context.WithTimeout(parentCtx, profile.Timeout)
 	defer cancel()
 
 	requestedMode, modeErr := requestedSandboxMode(args)
 	if modeErr != nil {
 		return "", enrichToolFailure(toolName, modeErr, "")
 	}
-	cmd, decision, sandboxErr := sandboxedShellCommand(runCtx, cmdStr, cwd, requestedMode)
+	cmd, decision, sandboxErr := sandboxedShellCommand(runCtx, cmdStr, cwd, requestedMode, networkSharedArg(args))
 	if sandboxErr != nil {
 		return "", enrichToolFailure(toolName, sandboxErr, "")
 	}
@@ -480,10 +484,11 @@ func executeForegroundCommand(args map[string]interface{}, toolName string, time
 		"tool_call_id": stringArg(args, "_tool_call_id"),
 		"mode":         string(decision.Mode),
 		"reason":       decision.Reason,
+		"network":      decision.NetworkShared,
 	}, string(decision.Mode))
 	cmd.Dir = cwd
 
-	out, err := runCommandStreaming(runCtx, cmd, cmdStr, toolName, stringArg(args, "_tool_call_id"))
+	out, err := runCommandStreaming(runCtx, cmd, cmdStr, toolName, stringArg(args, "_tool_call_id"), profile)
 	exitCode := 0
 	if exitErr, ok := err.(interface{ ExitCode() int }); ok {
 		exitCode = exitErr.ExitCode()
@@ -492,7 +497,8 @@ func executeForegroundCommand(args map[string]interface{}, toolName string, time
 	}
 	args["_command_exit_code"] = exitCode
 	if runCtx.Err() == context.DeadlineExceeded {
-		return out, enrichToolFailure(toolName, fmt.Errorf("command timed out after %d seconds", timeoutSeconds), out)
+		failure := fmt.Errorf("command timed out after %s", timeoutSummary(profile))
+		return out, enrichSandboxTimeout(toolName, failure, out, decision)
 	}
 	if runCtx.Err() == context.Canceled {
 		// Cancellation is a lifecycle decision, not a diagnosable failure.
@@ -508,7 +514,7 @@ func executeForegroundCommand(args map[string]interface{}, toolName string, time
 	return out, nil
 }
 
-func runCommandStreaming(ctx context.Context, cmd commandRunner, command, toolName, toolCallID string) (string, error) {
+func runCommandStreaming(ctx context.Context, cmd commandRunner, command, toolName, toolCallID string, profiles ...ToolProfile) (string, error) {
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return "", err
@@ -553,7 +559,11 @@ func runCommandStreaming(ctx context.Context, cmd commandRunner, command, toolNa
 		done <- err
 	}()
 
-	ticker := time.NewTicker(time.Second)
+	heartbeat := 5 * time.Second
+	if len(profiles) > 0 && profiles[0].HeartbeatInterval > 0 {
+		heartbeat = profiles[0].HeartbeatInterval
+	}
+	ticker := time.NewTicker(heartbeat)
 	defer ticker.Stop()
 	start := time.Now()
 	for {

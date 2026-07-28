@@ -63,18 +63,24 @@ func flightKeep() int {
 // VCR provider into the same <FlightDir>/<turnID>/ directory.
 func WriteFlightMeta(meta FlightMeta) error {
 	dir := filepath.Join(FlightDir(), sanitizeVCR(meta.TurnID))
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
+	_ = os.Chmod(dir, 0o700)
 	data, err := json.MarshalIndent(meta, "", "  ")
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(filepath.Join(dir, "meta.json"), data, 0o644); err != nil {
+	metaPath := filepath.Join(dir, "meta.json")
+	if err := os.WriteFile(metaPath, data, 0o600); err != nil {
 		return err
 	}
-	_ = os.WriteFile(filepath.Join(FlightDir(), "latest"), []byte(meta.TurnID), 0o644)
+	_ = os.Chmod(metaPath, 0o600)
+	latestPath := filepath.Join(FlightDir(), "latest")
+	_ = os.WriteFile(latestPath, []byte(meta.TurnID), 0o600)
+	_ = os.Chmod(latestPath, 0o600)
 	PruneFlights(flightKeep())
+	secureFlightTree(FlightDir())
 	return nil
 }
 
@@ -124,6 +130,29 @@ func PruneFlights(keep int) {
 	for _, old := range turns[:len(turns)-keep] {
 		_ = os.RemoveAll(filepath.Join(root, old))
 	}
+}
+
+// secureFlightTree upgrades recordings created by older releases. Flight
+// cassettes can contain prompts, model output, and tool results, so neither the
+// directories nor files should be readable by other local users.
+func secureFlightTree(root string) {
+	_ = filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if entry.Type()&os.ModeSymlink != 0 {
+			if entry.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if entry.IsDir() {
+			_ = os.Chmod(path, 0o700)
+		} else {
+			_ = os.Chmod(path, 0o600)
+		}
+		return nil
+	})
 }
 
 // VCRSessionForTest exposes the context session for tests in dependent packages.

@@ -3,10 +3,24 @@ package kernel
 import (
 	"encoding/json"
 	"strings"
+	"sync"
 	"time"
 )
 
 const agentEventPrefix = "event:"
+
+var (
+	agentEventRedactorMu sync.RWMutex
+	agentEventRedactor   func(string) string
+)
+
+// SetAgentEventRedactor installs the output-boundary redactor without making
+// kernel depend on a concrete tools implementation.
+func SetAgentEventRedactor(redactor func(string) string) {
+	agentEventRedactorMu.Lock()
+	agentEventRedactor = redactor
+	agentEventRedactorMu.Unlock()
+}
 
 type PlanItem struct {
 	Step   string `json:"step"`
@@ -27,11 +41,55 @@ type AgentEvent struct {
 }
 
 func EncodeAgentEvent(event AgentEvent) string {
+	event = redactAgentEvent(event)
 	data, err := json.Marshal(event)
 	if err != nil {
 		return agentEventPrefix + `{"type":"agent.event","error":"encode failed"}`
 	}
 	return agentEventPrefix + string(data)
+}
+
+func redactAgentEvent(event AgentEvent) AgentEvent {
+	agentEventRedactorMu.RLock()
+	redactor := agentEventRedactor
+	agentEventRedactorMu.RUnlock()
+	if redactor == nil {
+		return event
+	}
+	event.Content = redactor(event.Content)
+	event.ToolArgs = redactor(event.ToolArgs)
+	event.ToolResult = redactor(event.ToolResult)
+	event.Error = redactor(event.Error)
+	event.Payload = redactEventMap(event.Payload, redactor)
+	return event
+}
+
+func redactEventMap(input map[string]interface{}, redactor func(string) string) map[string]interface{} {
+	if len(input) == 0 {
+		return input
+	}
+	out := make(map[string]interface{}, len(input))
+	for key, value := range input {
+		switch typed := value.(type) {
+		case string:
+			out[key] = redactor(typed)
+		case map[string]interface{}:
+			out[key] = redactEventMap(typed, redactor)
+		case []interface{}:
+			items := make([]interface{}, len(typed))
+			for i, item := range typed {
+				if text, ok := item.(string); ok {
+					items[i] = redactor(text)
+				} else {
+					items[i] = item
+				}
+			}
+			out[key] = items
+		default:
+			out[key] = value
+		}
+	}
+	return out
 }
 
 func DecodeAgentEvent(raw string) (AgentEvent, bool) {

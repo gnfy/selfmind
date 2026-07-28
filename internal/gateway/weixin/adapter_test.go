@@ -128,6 +128,7 @@ func TestAdapterProcessesMessageThroughGatewayHandler(t *testing.T) {
 		BaseURL:          server.URL,
 		CDNBaseURL:       server.URL,
 		DMPolicy:         "open",
+		AllowFrom:        []string{"wx-user"},
 		GroupPolicy:      "disabled",
 		OwnerPersonID:    owner.PersonID,
 		DefaultTenantID:  "default",
@@ -176,6 +177,20 @@ func TestAdapterProcessesMessageThroughGatewayHandler(t *testing.T) {
 	if bound.PersonID != owner.PersonID {
 		payload, _ := json.MarshalIndent(bound, "", "  ")
 		t.Fatalf("bound account = %s, owner=%s", payload, owner.PersonID)
+	}
+}
+
+func TestOpenDMDoesNotAutoBindUnknownSenderToOwner(t *testing.T) {
+	adapter := NewAdapter(RuntimeConfig{
+		DMPolicy:      "open",
+		OwnerPersonID: "person-owner",
+	}, nil, nil)
+	if adapter.ownerBindingAllowed("unknown-user", "unknown-user", false) {
+		t.Fatal("an open-DM sender must not inherit the owner identity")
+	}
+	adapter.cfg.AllowFrom = []string{"known-owner"}
+	if !adapter.ownerBindingAllowed("known-owner", "known-owner", false) {
+		t.Fatal("an explicitly allowlisted owner account should bind")
 	}
 }
 

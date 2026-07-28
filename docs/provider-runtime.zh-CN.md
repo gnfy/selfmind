@@ -63,13 +63,25 @@ SelfMind 区分两个容易混淆的字段：
 
 解析优先级：
 
-1. role/selection 的 `context_length`
-2. `model.context_length`
-3. `provider_profiles.<id>.context_length`
-4. custom provider 的 `models.<model>.context_length`
-5. 内置 provider/profile 或 `internal/modelruntime/context_length.go` 的模型族 fallback
+1. role/primary 显式设置的 `context_length`
+2. `provider_profiles.<id>.context_length`
+3. 内置 provider profile 元数据
+4. provider/本地模型能力元数据（例如 Codex 的 `models_cache.json`）
+5. custom provider 的 `models.<model>.context_length`
+6. `internal/modelruntime/context_length.go` 的保守 fallback
 
 不要把 `max_tokens` 当作上下文窗口展示，也不要在 CLI、IM 或 web 状态栏硬编码 `1M` 这类看起来真实但不可追溯的数字。无法解析时应显示未知或提示用户配置 `context_length`。
+
+普通用户应省略 `context_length`。它只作为私有/本地模型无法提供能力元数据时
+的高级覆盖项。
+
+## 推理等级与 service tier
+
+主模型只在 `models.primary` 选择。`reasoning` 和 `service_tier` 都是可选项；
+省略或写 `auto` 表示使用 provider/模型默认值，resolver 不会强制发送该字段。
+支持哪些取值由具体模型的能力元数据决定，不维护一份全局硬编码枚举。
+`selfmind model set` 在能发现元数据时动态校验；私有 endpoint 没有元数据时，
+仍会保留用户显式配置的兼容值。
 
 ## ProviderProfile
 
@@ -191,9 +203,10 @@ token。若服务端返回 `401 token_expired`、`invalid_token` 等认证失败
 推荐最小配置：
 
 ```yaml
-model:
-  provider: "kimi-coding"
-  default: "kimi-for-coding"
+models:
+  primary:
+    provider: "kimi-coding"
+    model: "kimi-for-coding"
 
 provider_profiles:
   kimi-coding:
@@ -219,7 +232,6 @@ provider_profiles:
     api_key: "${KIMI_CODING_API_KEY}"
     base_url: "https://api.kimi.com/coding/v1"
     protocol: "openai_compatible"
-    model: "kimi-for-coding"
 ```
 
 resolver 会避免重复拼出 `/coding/v1/v1`，并对 OpenAI-compatible 请求发送 `reasoning_effort` 与 `thinking`。
@@ -229,9 +241,10 @@ resolver 会避免重复拼出 `/coding/v1/v1`，并对 OpenAI-compatible 请求
 API key 方式：
 
 ```yaml
-model:
-  provider: "minimax"
-  default: "MiniMax-M3"
+models:
+  primary:
+    provider: "minimax"
+    model: "MiniMax-M3"
 
 provider_profiles:
   minimax:
@@ -241,9 +254,10 @@ provider_profiles:
 中国区 API key：
 
 ```yaml
-model:
-  provider: "minimax-cn"
-  default: "MiniMax-M3"
+models:
+  primary:
+    provider: "minimax-cn"
+    model: "MiniMax-M3"
 
 provider_profiles:
   minimax-cn:
@@ -271,18 +285,18 @@ selfmind model set minimax-oauth MiniMax-M3
 如果某个 provider 不值得内置，但需要稳定保存，可以用 `provider_profiles`：
 
 ```yaml
-model:
-  provider: "example"
-  default: "example-coder"
+models:
+  primary:
+    provider: "example"
+    model: "example-coder"
+    reasoning: "medium"
 
 provider_profiles:
   example:
     api_key: "${EXAMPLE_API_KEY}"
     base_url: "https://api.example.com/v1"
     protocol: "openai_compatible"
-    model: "example-coder"
     max_tokens: 32768
-    reasoning_effort: "medium"
     headers:
       X-Client-Name: "SelfMind"
     quirks:

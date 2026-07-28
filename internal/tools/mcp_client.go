@@ -106,7 +106,7 @@ func (c *MCPClient) connectStdio() error {
 
 	cmd := exec.Command(c.config.Command, c.config.Args...)
 	cmd.Dir, _ = os.Getwd()
-	cmd.Env = filterEnv(c.config.EnvFilter)
+	cmd.Env = BuildProcessEnv(filterEnv(c.config.EnvFilter), DefaultProcessEnvPolicy())
 
 	parentStdin, childStdin, err := os.Pipe()
 	if err != nil {

@@ -286,6 +286,9 @@ func createSkill(tenantID, name, content, description, source string) (string, e
 	}
 
 	content = ensureFrontMatter(content, safeName, description)
+	if err := validateSkillEnvironmentDeclarations(content); err != nil {
+		return "", err
+	}
 	if err := kernel.ScanSkillForDangers(content); err != nil {
 		return "", fmt.Errorf("security scan failed: %w", err)
 	}
@@ -319,6 +322,9 @@ func editSkill(tenantID, name, content, description string) (string, error) {
 		return "", err
 	}
 	content = ensureFrontMatter(content, info.Name, description)
+	if err := validateSkillEnvironmentDeclarations(content); err != nil {
+		return "", err
+	}
 	if err := kernel.ScanSkillForDangers(content); err != nil {
 		return "", fmt.Errorf("security scan failed: %w", err)
 	}
@@ -376,6 +382,11 @@ func patchSkill(tenantID, name, oldText, newText, filePath string, replaceAll bo
 	}
 	if err := kernel.ScanSkillForDangers(updated); err != nil {
 		return "", fmt.Errorf("security scan failed: %w", err)
+	}
+	if filePath == "" {
+		if err := validateSkillEnvironmentDeclarations(updated); err != nil {
+			return "", err
+		}
 	}
 	if err := atomicWriteFile(target, updated); err != nil {
 		return "", err
@@ -568,6 +579,9 @@ func UndoSkillLearningChangeForTenant(tenantID, changeID string) (string, error)
 		}
 		target := skillMainFilePath(info)
 		current, _ := os.ReadFile(target)
+		if err := validateSkillEnvironmentDeclarations(change.Before); err != nil {
+			return "", err
+		}
 		if err := kernel.ScanSkillForDangers(change.Before); err != nil {
 			return "", fmt.Errorf("security scan failed: %w", err)
 		}
@@ -595,6 +609,9 @@ func UndoSkillLearningChangeForTenant(tenantID, changeID string) (string, error)
 			return "", err
 		}
 		current, _ := os.ReadFile(target)
+		if err := validateSkillEnvironmentDeclarations(change.Before); err != nil {
+			return "", err
+		}
 		if err := kernel.ScanSkillForDangers(change.Before); err != nil {
 			return "", fmt.Errorf("security scan failed: %w", err)
 		}

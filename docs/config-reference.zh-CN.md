@@ -22,9 +22,11 @@
 唯一必须配的东西：谁来回答你。
 
 ```yaml
-model:
-  provider: "codex-cli"      # 下面的 provider id、custom:<名字> 或 profile id
-  default: "gpt-5.5"         # 模型名
+models:
+  primary:
+    provider: "codex-cli"    # provider id、custom:<名字> 或 profile id
+    model: "gpt-5.6-sol"
+    reasoning: "xhigh"       # 可选；省略或 auto 表示模型默认值
 
 providers:                   # 一等公民供应商
   openai:
@@ -46,19 +48,19 @@ provider_profiles:           # 可扩展注册表（Kimi、MiniMax、DeepSeek、
     api_key: "${KIMI_API_KEY}"
     base_url: "https://api.kimi.com/coding"
     protocol: "anthropic_messages"
-    model: "kimi-for-coding"
   codex-cli:
     base_url: "https://chatgpt.com/backend-api/codex"
     protocol: "codex_responses"
-    model: "gpt-5.5"
 ```
 
 - `protocol` 取值：`openai_chat`、`openai_compatible`、`anthropic_messages`、
   `codex_responses`，按你的 endpoint 协议选。
 - **复用外部 CLI 登录**：Codex CLI、Claude Code、Gemini CLI、Qwen CLI 的凭据
   可直接复用，无需 API key（这些 profile 可以不写 `api_key`）。
-- 三个一等公民之外的任何供应商都走 `provider_profiles`，把 `model.provider`
-  指向该 profile id 即可。
+- 三个一等公民之外的供应商可走 `provider_profiles`，再由
+  `models.primary.provider` 引用该 profile。
+- provider 配置只管理连接和认证；模型选择统一写在 `models.primary`。
+  endpoint 中旧的 `model` 字段仅为兼容历史配置继续读取。
 
 ## 2. 模型路由（角色）
 
@@ -67,6 +69,10 @@ provider_profiles:           # 可扩展注册表（Kimi、MiniMax、DeepSeek、
 ```yaml
 models:
   source: "local"
+  primary:
+    provider: "codex-cli"
+    model: "gpt-5.6-sol"
+    reasoning: "xhigh"       # 可选
   roles:
     memory_extract:          # 记忆写入 + 整理 + 压缩摘要
       provider: "kimi-coding"
@@ -83,13 +89,18 @@ models:
     fast_classifier: { provider: "kimi-coding", model: "kimi-for-coding" }
 ```
 
+`models.primary` 是唯一的默认模型入口。`reasoning` 和 `service_tier`
+都可省略；省略或写 `auto` 时使用 provider/模型默认值，不强制向接口发送。
+存在能力元数据时，`selfmind model set` 会动态校验取值，
+`selfmind model current` 会显示探测到的默认值。
+
 `kimi-coding` 的全部角色都使用供应商默认的 Anthropic Messages 传输
 （`https://api.kimi.com/coding/v1/messages`），与 Hermes 和 Kimi Coding
 Plan `/coding` 路径的实际协议一致。角色级 `protocol` 只用于自定义网关
 或协议不同的特殊部署；正常使用 Kimi Coding Plan 时应省略。
 
 角色名固定；没配的角色回退到主模型。指向便宜模型可以把后台工作从主 provider
-挪开。
+挪开。不需要也不存在 `default` 角色；`models.roles` 只写真正需要覆盖主模型的例外。
 
 ## 3. 存储与认证
 
@@ -118,6 +129,28 @@ web:
 - 后端和 key 都留空 = 尽力而为的 DuckDuckGo（常被拦，只在拿不到 key 时用）。
 - 单后端、无 fallback 链：配的后端失败会返回错误（让模型如实报告故障），而不是
   偷偷换引擎。
+
+### 执行沙箱与网络
+
+Linux 上的 `terminal`、`verify` 和 `execute_code` 默认优先使用 Bubblewrap：
+宿主根目录只读，工作区可写。默认共享 daemon 的网络命名空间，因此可继续使用
+daemon 继承到的代理和 DNS 配置。
+
+```yaml
+exec_sandbox:
+  enabled: true
+  required: false
+  allow_network: true   # false 表示创建无网络命名空间
+```
+
+每个执行工具也可指定 `sandbox: auto|isolated|host`。`isolated` 在隔离能力不可用
+时直接失败；`host` 会经过审批，并在 `required: true` 时禁用。
+`selfmind gateway restart` 会合并当前终端和旧 daemon 的 `PATH`：当前目录优先，
+旧 daemon 独有的工具目录追加在后，因此 IDE 或更新器触发重启时不会隐藏
+`~/.local/bin`、Cloud SDK 等用户安装命令。同时会保留旧 daemon 的
+`HTTP_PROXY`、`HTTPS_PROXY`、`ALL_PROXY`、`NO_PROXY` 及其小写形式；当前终端
+显式设置的代理值始终优先。其他环境变量（包括凭据）不会复制。Linux 可通过
+`apt install bubblewrap` 安装 Bubblewrap。
 
 ## 5. 记忆与治理
 
@@ -333,14 +366,15 @@ evolution:
 ## 最小可用配置
 
 ```yaml
-model:
-  provider: "codex-cli"
-  default: "gpt-5.5"
+models:
+  primary:
+    provider: "codex-cli"
+    model: "gpt-5.6-sol"
+    reasoning: "xhigh"
 provider_profiles:
   codex-cli:
     base_url: "https://chatgpt.com/backend-api/codex"
     protocol: "codex_responses"
-    model: "gpt-5.5"
 web:
   search_backend: "tavily"
   api_key: "tvly-xxxx"

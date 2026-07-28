@@ -3,6 +3,7 @@ package app
 import (
 	"os"
 	"path/filepath"
+	"strings"
 
 	"selfmind/internal/control"
 	"selfmind/internal/kernel"
@@ -19,11 +20,17 @@ func InitTools(mem *memory.MemoryManager, cfg *config.Config, ag *kernel.Agent, 
 	if tenantID == "" {
 		tenantID = "default"
 	}
+	registerConfiguredSecrets(cfg)
+	kernel.SetAgentEventRedactor(tools.RedactSensitive)
 
+	// Redaction is outermost so every model/event/artifact result surface sees
+	// the masked form, including errors returned by inner policy middleware.
+	disp.InjectMiddleware(tools.RedactionMiddleware())
 	// 1. Register auth middleware (load permissions from persistent layer)
 	disp.InjectMiddleware(tools.AuthMiddleware(mem))
 	disp.InjectMiddleware(tools.WorkspaceScopeMiddleware())
 	disp.InjectMiddleware(tools.NewToolGuardrails().Middleware)
+	disp.InjectMiddleware(tools.ExecutionCapabilityMiddleware())
 	disp.InjectMiddleware(tools.EvidenceMiddleware())
 
 	tools.RegisterBuiltins(disp)
@@ -84,4 +91,74 @@ func InitTools(mem *memory.MemoryManager, cfg *config.Config, ag *kernel.Agent, 
 	}
 
 	return disp, nil
+}
+
+// registerConfiguredSecrets feeds opaque daemon-owned credentials into the
+// shared output redactor. Registration stores values in memory only; it does
+// not make credentials available to tool child processes.
+func registerConfiguredSecrets(cfg *config.Config) {
+	if cfg == nil {
+		return
+	}
+	registerEndpoint := func(endpoint config.ProviderEndpoint) {
+		tools.RegisterSensitiveValue(endpoint.APIKey)
+		registerSensitiveHeaders(endpoint.Headers)
+	}
+	registerEndpoint(cfg.Providers.OpenAI)
+	registerEndpoint(cfg.Providers.Anthropic)
+	registerEndpoint(cfg.Providers.Google)
+	for _, endpoint := range cfg.ProviderProfiles {
+		registerEndpoint(endpoint)
+	}
+	for _, provider := range cfg.Providers.Custom {
+		tools.RegisterSensitiveValue(provider.APIKey)
+	}
+	for _, role := range cfg.Models.Roles {
+		tools.RegisterSensitiveValue(role.APIKey)
+		registerSensitiveHeaders(role.Headers)
+	}
+	registerSensitiveHeaders(cfg.Model.Headers)
+	for _, value := range []string{
+		cfg.Providers.AnthropicAPIKey,
+		cfg.Providers.OpenAIAPIKey,
+		cfg.Providers.OpenRouterAPIKey,
+		cfg.Providers.GeminiAPIKey,
+		cfg.Providers.MiniMaxAPIKey,
+		cfg.Gateway.Token,
+		cfg.Gateway.OutboundWebhookToken,
+		cfg.Gateway.TelegramToken,
+		cfg.Gateway.Weixin.Token,
+		cfg.Gateway.Wechat.AppSecret,
+		cfg.Gateway.Wechat.Token,
+		cfg.Gateway.Feishu.AppSecret,
+		cfg.Gateway.Feishu.VerificationToken,
+		cfg.Gateway.Feishu.EncryptKey,
+		cfg.Gateway.QQ.Secret,
+		cfg.Gateway.QQ.Token,
+		cfg.Delegation.APIKey,
+		cfg.Web.APIKey,
+	} {
+		tools.RegisterSensitiveValue(value)
+	}
+}
+
+func registerSensitiveHeaders(headers map[string]string) {
+	for name, value := range headers {
+		lower := strings.ToLower(strings.TrimSpace(name))
+		if strings.Contains(lower, "authorization") ||
+			strings.Contains(lower, "token") ||
+			strings.Contains(lower, "api-key") ||
+			strings.Contains(lower, "apikey") ||
+			strings.Contains(lower, "secret") ||
+			strings.Contains(lower, "cookie") {
+			tools.RegisterSensitiveValue(value)
+			fields := strings.Fields(value)
+			if len(fields) == 2 {
+				switch strings.ToLower(fields[0]) {
+				case "bearer", "basic", "token":
+					tools.RegisterSensitiveValue(fields[1])
+				}
+			}
+		}
+	}
 }

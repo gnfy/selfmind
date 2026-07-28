@@ -115,7 +115,7 @@ func (m *uiModel) renderStartupCard(width int) []string {
 		version = "dev"
 	}
 	title := ">_ SelfMind (" + version + ")"
-	modelLine := "model:     " + modelName + "      /model to change"
+	modelLine := "model:     " + modelName + "      /model for details"
 	providerLine := ""
 	if providerName != "" && providerName != modelName && providerName != "active" {
 		providerLine = "provider:  " + providerName
@@ -140,7 +140,7 @@ func (m *uiModel) renderStartupCard(width int) []string {
 		startupBorderStyle.Render("+" + strings.Repeat("-", cardW-2) + "+"),
 		renderStartupBoxLine(startupValueStyle.Render(">_ SelfMind ")+startupSubtleStyle.Render("("+version+")"), cardW),
 		renderStartupBoxLine("", cardW),
-		renderStartupDataLine("model:", modelName, cardW, "      /model to change"),
+		renderStartupDataLine("model:", modelName, cardW, "      /model for details"),
 	}
 	if providerLine != "" {
 		lines = append(lines, renderStartupDataLine("provider:", providerName, cardW, ""))
@@ -740,7 +740,7 @@ func renderPatchCell(patch string, duration float64, width, maxLines int) string
 }
 
 // maxWriteFileDiffPreview bounds the diff body shown inline for a write_file
-// cell; the full diff is available via /history.
+// cell; the full diff is available via /search current.
 const maxWriteFileDiffPreview = 30
 
 // renderWriteFileCell renders write_file's "Created/Edited <path> (+A -B)"

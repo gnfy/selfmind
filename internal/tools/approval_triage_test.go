@@ -144,6 +144,7 @@ func runSmart(t *testing.T, scope ExecutionScope, personKey, cmd string) (ran bo
 // AND records a task-scope class grant, so a second same-class op in the same
 // task does NOT consult the judge again.
 func TestSmartTriageApproveRunsAndGrantsClass(t *testing.T) {
+	withExecSandboxPolicy(t, true, true, false)
 	store := newFakeGrantStore()
 	judge := &fakeJudge{reply: "APPROVE"}
 	scope := ExecutionScope{

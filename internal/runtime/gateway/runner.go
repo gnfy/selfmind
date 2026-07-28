@@ -76,6 +76,10 @@ func Run(ctx context.Context, opts Options) error {
 	if err := manager.Acquire(); err != nil {
 		return err
 	}
+	localControlToken, err := EnsureLocalControlToken(dataDir)
+	if err != nil {
+		return fmt.Errorf("initialize local control token: %w", err)
+	}
 	exitReason := ""
 	defer func() {
 		manager.Cleanup(exitReason)
@@ -142,10 +146,11 @@ func Run(ctx context.Context, opts Options) error {
 	app.InitMCP(disp, cfg)
 
 	gatewayAPI := &httpapi.Server{
-		Control:         controlStore,
-		Gateway:         gwDeps.Gateway,
-		DefaultTenantID: defaultTenantID,
-		DrainTimeout:    drainTimeout,
+		Control:           controlStore,
+		Gateway:           gwDeps.Gateway,
+		DefaultTenantID:   defaultTenantID,
+		DrainTimeout:      drainTimeout,
+		LocalControlToken: localControlToken,
 		// Pending-approval/clarify escrow threshold (Fix 2); "0" disables.
 		PendingNotifyAfter: cfg.Gateway.PendingNotifyAfterDuration(),
 		// Smart-mode approval triage (H2): build the cheap-model judge from the

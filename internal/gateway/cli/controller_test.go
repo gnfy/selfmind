@@ -460,8 +460,8 @@ func TestStatusLineAlwaysShowsEffectiveApprovalMode(t *testing.T) {
 	// Unknown (client mode, digest gave nothing) → on-request fallback.
 	unknown := NewController(nil, nil, nil, "")
 	unknown.SetClientMode(true)
-	if line := stripANSI(unknown.model.statusLine()); !strings.Contains(line, "mode:on-request") {
-		t.Fatalf("status line should fall back to on-request: %q", line)
+	if line := stripANSI(unknown.model.statusLine()); !strings.Contains(line, "mode:smart") {
+		t.Fatalf("status line should fall back to smart: %q", line)
 	}
 
 	// After /mode the bar updates to the new session mode.

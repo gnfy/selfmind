@@ -158,16 +158,26 @@ selfmind model
 selfmind model current
 selfmind model list
 selfmind model set openai gpt-4o
+selfmind model set codex-cli gpt-5.6-sol --reasoning xhigh
 selfmind model set custom:local-llm qwen2.5-coder
 ```
 
 ### 配置示例
 
 ```yaml
-# 默认对话模型。model.provider 可以指向 providers、providers.custom 或 provider_profiles。
-model:
-  provider: "openai"
-  default: "gpt-4o"
+# 唯一的前台主模型。reasoning 省略或写 auto 时使用 provider/模型默认值。
+models:
+  source: "local"
+  primary:
+    provider: "openai"
+    model: "gpt-4o"
+    reasoning: "auto"
+  # 角色模型只写例外；未配置的角色继承 primary。
+  roles:
+    memory_extract: { provider: "google", model: "gemini-1.5-flash" }
+    background_review: { provider: "google", model: "gemini-1.5-flash" }
+    skill_curator: { provider: "google", model: "gemini-1.5-flash" }
+    semantic_recall: { provider: "google", model: "gemini-1.5-flash" }
 
 # 核心 provider 配置区，适合 OpenAI / Anthropic / Google 这类一等公民供应商。
 providers:
@@ -185,7 +195,7 @@ providers:
     base_url: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
     protocol: "openai_compatible"
   # 一次性或本地自定义 endpoint，例如 Ollama、本地模型网关、临时企业代理。
-  # 使用时把 model.provider 设置为 custom:ollama。
+  # 使用时把 models.primary.provider 设置为 custom:ollama。
   custom:
     - name: "ollama"
       base_url: "http://localhost:11434/v1"
@@ -204,12 +214,10 @@ provider_profiles:
     api_key: "${MINIMAX_API_KEY}"
     base_url: "https://api.minimax.io/anthropic"
     protocol: "anthropic_messages"
-    model: "MiniMax-M2.7"
   kimi-coding:
     api_key: "${KIMI_CODING_API_KEY}"
     base_url: "https://api.kimi.com/coding/v1"
     protocol: "openai_compatible"
-    model: "kimi-for-coding"
 
 # 可选：SelfMind 自己的 JSON 凭证文件，用来把密钥从 config.yaml 拆出去。
 auth:
@@ -285,31 +293,6 @@ evolution:
   auto_archive_confidence: 0.8
   nudge_interval: 10
 
-# 角色模型路由。不同后台任务可以使用更便宜或更快的模型。
-models:
-  source: "local"
-  roles:
-    # 主编码/任务执行模型。
-    coding_agent:
-      provider: "openai"
-      model: "gpt-4o"
-    # 记忆抽取模型。
-    memory_extract:
-      provider: "google"
-      model: "gemini-1.5-flash"
-    # 任务结束后的后台复盘模型。
-    background_review:
-      provider: "google"
-      model: "gemini-1.5-flash"
-    # Skill 整理、归档、治理模型。
-    skill_curator:
-      provider: "google"
-      model: "gemini-1.5-flash"
-    # 历史会话语义召回模型。
-    semantic_recall:
-      provider: "google"
-      model: "gemini-1.5-flash"
-
 # MCP server 列表，默认关闭。
 mcp:
   servers: []
@@ -352,12 +335,15 @@ flight_recorder:
 
 ### 模型配置字段说明
 
-`model` 是当前默认模型选择：
+`models.primary` 是唯一的默认模型选择：
 
 | 字段 | 说明 |
 |---|---|
-| `model.provider` | 默认 provider ID，可以是 `openai`、`anthropic`、`google`，也可以是 `custom:<name>` 或 `provider_profiles` 里的 ID。 |
-| `model.default` | 默认模型名，例如 `gpt-4o`、`kimi-for-coding`、`MiniMax-M2.7`。 |
+| `models.primary.provider` | provider ID，可以是内置 provider、`custom:<name>` 或 `provider_profiles` 里的 ID。 |
+| `models.primary.model` | 主模型名。 |
+| `models.primary.reasoning` | 可选推理等级；省略或写 `auto` 使用模型默认值，支持值会按模型动态发现。 |
+| `models.primary.service_tier` | 可选服务层级；省略或写 `auto` 使用 provider 默认值。 |
+| `models.primary.context_length` | 仅作为高级兜底。正常应省略并使用自动发现的模型元数据。 |
 
 `providers` 是核心 provider 配置区，适合放 SelfMind 内置的一等公民供应商：
 
@@ -366,7 +352,7 @@ flight_recorder:
 | `providers.openai` | OpenAI 官方接口配置。默认协议通常是 `openai_chat`。 |
 | `providers.anthropic` | Anthropic Messages API 配置。默认协议通常是 `anthropic_messages`。 |
 | `providers.google` | Google Gemini 的 OpenAI-compatible endpoint 配置。 |
-| `providers.custom` | 一次性或本地自定义 endpoint 列表，例如 Ollama、本地网关、临时企业代理。使用时 `model.provider` 写成 `custom:<name>`。 |
+| `providers.custom` | 一次性或本地自定义 endpoint 列表，例如 Ollama、本地网关、临时企业代理。使用时 `models.primary.provider` 写成 `custom:<name>`。 |
 
 `provider_profiles` 是可扩展 provider 注册表，适合放 MiniMax、Kimi、DeepSeek、Z.AI、OpenRouter、企业内部模型网关，或未来新增但协议兼容的厂商：
 
@@ -376,7 +362,7 @@ flight_recorder:
 | `api_key` | API key，支持 `${ENV_NAME}` 环境变量展开。也可以留空，改用环境变量或 `auth.credentials_file`。 |
 | `base_url` | 供应商 endpoint。OpenAI-compatible 通常以 `/v1` 结尾；Anthropic-compatible 通常填供应商的 Anthropic 网关根地址。 |
 | `protocol` | 协议族：`openai_chat`、`openai_compatible`、`anthropic_messages`、`codex_responses`。只要新厂商兼容这些协议，就不需要改代码。 |
-| `model` | 该 profile 的默认模型名。 |
+| `model` | 历史 endpoint fallback；新配置应在 `models.primary` 或角色覆盖中选择模型。 |
 
 `auth.credentials_file` 是可选的本地 JSON 凭证文件，用来把密钥从 `config.yaml` 里拆出去：
 
@@ -406,21 +392,20 @@ SelfMind 当前的模型解析走 `internal/modelruntime`。它支持：
 示例：
 
 ```yaml
-model:
-  provider: "kimi-coding"
-  default: "kimi-for-coding"
+models:
+  primary:
+    provider: "kimi-coding"
+    model: "kimi-for-coding"
 
 provider_profiles:
   kimi-coding:
     api_key: "${KIMI_CODING_API_KEY}"
     base_url: "https://api.kimi.com/coding/v1"
     protocol: "openai_compatible"
-    model: "kimi-for-coding"
   minimax:
     api_key: "${MINIMAX_API_KEY}"
     base_url: "https://api.minimax.io/anthropic"
     protocol: "anthropic_messages"
-    model: "MiniMax-M2.7"
 
 auth:
   credentials_file: "~/.selfmind/auth.json"
@@ -446,19 +431,24 @@ MiniMax 和 Kimi Coding Plan 接入：
 - 如果要走 Kimi Code 的 Anthropic-compatible endpoint，把 `provider_profiles.kimi-coding.base_url` 设置为 `https://api.kimi.com/coding`，`protocol` 设置为 `anthropic_messages`，模型仍然使用 `kimi-for-coding`。
 - 如果要用普通 Kimi Open Platform API，而不是 Coding Plan 额度，使用自定义 OpenAI-compatible endpoint，`base_url` 设置为 `https://api.moonshot.ai/v1`。
 
-旧配置仍兼容：`providers.openai_api_key`、`providers.anthropic_api_key`、`providers.gemini_api_key`、`providers.openrouter_api_key`、`providers.minimax_api_key`、`agent.provider`、`agent.model` 仍会读取，但新的保存格式会使用 `model`、嵌套 `providers` 和 `provider_profiles`。
+旧配置仍兼容：旧 provider key、`agent.provider`、`agent.model`、
+`model.provider`、`model.default` 都会继续读取。`selfmind config upgrade`
+会先备份文件，再把模型选择迁移到 `models.primary`；已有凭证和未知配置不会丢失。
 
 ## 模型路由
 
-默认模型放在：
+默认模型只放在：
 
 ```yaml
-model:
-  provider: "openai"
-  default: "gpt-4o"
+models:
+  primary:
+    provider: "openai"
+    model: "gpt-4o"
+    reasoning: "auto"
 ```
 
-不同任务角色可以通过 `models.roles` 指定不同模型：
+不同任务角色可以通过 `models.roles` 指定例外模型。未配置的角色继承
+`models.primary`，不需要额外的 `default` role：
 
 - `coding_agent`：主 Agent 编码和任务执行。
 - `memory_extract`：记忆事实提取。
@@ -498,7 +488,7 @@ selfmind -f ./config/config.yaml
 | `/resume <n\|task_id>` | 按 `/tasks` 卡片序号、短 id 或完整 id 切换回之前的某个任务。 |
 | `/workspace [n\|id]`（简称 `/ws`，`/workspaces` 亦可） | 无参列出工作区；带序号或 id 则切换到它。 |
 | `/approvals` / `/approve <n\|id\|all> [task\|always]` / `/reject <n\|id\|all>` | 列出并回应待处理的工具审批。 |
-| `/mode [模式]` | 查看或设置审批模式:`on-request`、`read-only`、`auto-edit`、`full-auto`、`smart`。 |
+| `/mode [模式]` | 查看或设置审批模式:`on-request`、`read-only`、`auto-edit`、`full-auto`、`smart`（默认；裁决不可用时安全转人工审批）。 |
 | `/diag [memory\|context\|tasks\|models\|delivery]` | 精简的运行时诊断快照，也可聚焦某一子系统。 |
 | `/skills` | Skill 的 list/view/search/catalog/install/audit/archive/pin/unpin/delete/stats/reload。 |
 | `/skills history <name>` | 查看某个 Skill 的学习审计记录。 |
@@ -509,7 +499,7 @@ selfmind -f ./config/config.yaml
 | `/curator` | 查看、预览、生成报告、运行或恢复 Skill curator 操作。 |
 | `/checkpoint` | 保存、读取、列出或删除会话 checkpoint。 |
 | `/migrate` | 从 Hermes Agent 迁移 Skills。 |
-| `/model` | 在 TUI 内查看或切换当前模型。 |
+| `/model` | 查看 daemon 当前模型，以及用于修改模型的 CLI 命令。 |
 | `/clear` | 清屏。 |
 | `/exit` | 退出。 |
 
@@ -699,7 +689,7 @@ selfmind doctor
 - 07-13 09:15 [run:failed] llm chat: responses API error 429: usage limit reached
 ```
 
-`[tool:<名字>]` 是单个工具调用失败；`[run:failed]` 是整轮/模型接口失败。密钥已脱敏。想看单轮上下文细节（token 构成、召回命中、压缩），在对话里用控制命令：`/diag`、`/diag context`、`/diag tasks`、`/diag memory`、`/diag models`。
+`[tool:<名字>]` 是单个工具调用失败；`[run:failed]` 是整轮/模型接口失败。密钥已脱敏。可在对话里使用不调用模型的诊断命令：`/diag`、`/diag context`、`/diag tasks`、`/diag memory`、`/diag models`、`/diag delivery`、`/diag execution`。其中 `/diag execution` 显示沙箱、网络策略、子进程环境策略与工作区根目录，不显示凭证值。
 
 ### 2. 录制真实对话（飞行记录器）
 
@@ -767,6 +757,10 @@ selfmind approve <approval_id>
 selfmind reject <approval_id>
 selfmind ws add .                 # 把当前目录注册为工作区
 selfmind ws use <workspace_id>    # 或：selfmind ws <n>  按列表序号切换
+selfmind ws trust [workspace_id]  # 仅本地 CLI；省略 id 时信任当前工作区
+selfmind ws untrust [workspace_id]# 取消信任并撤销当前执行能力授权
+selfmind ws grants [workspace_id] # 查看当前有效的临时执行能力
+selfmind ws revoke <capability> [workspace_id] # 立即撤销能力
 selfmind new "实现 checkout 页面"
 ```
 
@@ -805,6 +799,7 @@ gateway 运行时文件位于：
 | `GET` | `/v1/tasks/current` | 查看当前任务和 active run。 |
 | `GET` | `/v1/tasks/events` | 查看当前任务或指定 `task_id` 的最近 run/tool/learning 事件。 |
 | `POST` | `/v1/workspaces/register` | 注册本地 workspace。 |
+| `POST` | `/v1/workspaces/trust` | 修改 workspace 信任状态；仅允许本机 CLI。 |
 | `GET` | `/v1/workspaces` | 查看 workspace。 |
 | `GET` | `/v1/gateway/status` | 查看 gateway 进程状态和 active runs。 |
 | `POST` | `/v1/gateway/shutdown` | 请求 gateway 优雅停机。 |

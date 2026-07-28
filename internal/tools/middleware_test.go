@@ -127,6 +127,45 @@ func TestExplicitHostSandboxRequiresApproval(t *testing.T) {
 	}
 }
 
+func TestAutoSandboxHostFallbackIsApprovedAsHost(t *testing.T) {
+	withExecSandboxPolicy(t, false, false, false)
+	approvalCalled := false
+	cleanup := SetExecutionScope("person-host-fallback", ExecutionScope{
+		TenantID:     "tenant-host",
+		PersonID:     "person-host-fallback",
+		WorkspaceID:  "workspace-host-fallback",
+		ApprovalMode: ApprovalOnRequest,
+		Approval: func(_ context.Context, req ToolApprovalRequest) (ToolApprovalDecision, error) {
+			approvalCalled = true
+			if !strings.Contains(req.Reason, "host") {
+				t.Fatalf("fallback approval reason = %q", req.Reason)
+			}
+			if got := req.Args["effective_sandbox"]; got != "host (isolated sandbox unavailable or disabled)" {
+				t.Fatalf("effective sandbox = %#v", got)
+			}
+			if req.ResourceFingerprint == "" {
+				t.Fatalf("host fallback must have a workspace-scoped fingerprint")
+			}
+			return ToolApprovalDecision{Approved: true}, nil
+		},
+	})
+	defer cleanup()
+
+	executed := false
+	exec := SmartApprovalMiddleware("")(func(args map[string]interface{}) (string, error) {
+		executed = true
+		return "executed", nil
+	})
+	result, err := exec(map[string]interface{}{
+		"_tenant_id": "person-host-fallback",
+		"_tool_name": "terminal",
+		"command":    "printf ok",
+	})
+	if err != nil || result != "executed" || !approvalCalled || !executed {
+		t.Fatalf("result=%q err=%v approval=%v executed=%v", result, err, approvalCalled, executed)
+	}
+}
+
 func TestWatchFinalizationProfileNeverWaitsForShellApproval(t *testing.T) {
 	approvalCalled := false
 	cleanup := SetExecutionScope("person-watch", ExecutionScope{

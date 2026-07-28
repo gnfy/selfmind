@@ -51,8 +51,11 @@ var configMigrations = []configMigration{
 	{From: []string{"providers", "gemini_api_key"}, To: []string{"providers", "google", "api_key"}, Label: "providers.gemini_api_key -> providers.google.api_key"},
 	{From: []string{"providers", "openrouter_api_key"}, To: []string{"provider_profiles", "openrouter", "api_key"}, Label: "providers.openrouter_api_key -> provider_profiles.openrouter.api_key"},
 	{From: []string{"providers", "minimax_api_key"}, To: []string{"provider_profiles", "minimax", "api_key"}, Label: "providers.minimax_api_key -> provider_profiles.minimax.api_key"},
-	{From: []string{"agent", "provider"}, To: []string{"model", "provider"}, Label: "agent.provider -> model.provider"},
-	{From: []string{"agent", "model"}, To: []string{"model", "default"}, Label: "agent.model -> model.default"},
+	{From: []string{"model", "provider"}, To: []string{"models", "primary", "provider"}, Label: "model.provider -> models.primary.provider"},
+	{From: []string{"model", "default"}, To: []string{"models", "primary", "model"}, Label: "model.default -> models.primary.model"},
+	{From: []string{"model", "context_length"}, To: []string{"models", "primary", "context_length"}, Label: "model.context_length -> models.primary.context_length"},
+	{From: []string{"agent", "provider"}, To: []string{"models", "primary", "provider"}, Label: "agent.provider -> models.primary.provider"},
+	{From: []string{"agent", "model"}, To: []string{"models", "primary", "model"}, Label: "agent.model -> models.primary.model"},
 	{From: []string{"intent", "continue_window"}, Label: "intent.continue_window is deprecated", Deprecated: true},
 }
 
@@ -327,11 +330,18 @@ func (d configDiagnostics) startupWarnings() []string {
 }
 
 func sandboxDiagnostic(cfg *config.Config) (line, warning string) {
+	return sandboxDiagnosticWithAvailability(cfg, tools.ExecSandboxAvailable())
+}
+
+func sandboxDiagnosticWithAvailability(cfg *config.Config, available bool) (line, warning string) {
 	if cfg == nil || !cfg.ExecSandbox.Enabled {
 		return "disabled", ""
 	}
-	if tools.ExecSandboxAvailable() {
-		return "ready (auto uses isolated no-network execution)", ""
+	if available {
+		if cfg.ExecSandbox.AllowNetwork {
+			return "ready (isolated filesystem; daemon network and proxy settings shared)", ""
+		}
+		return "ready (isolated filesystem; network disabled)", ""
 	}
 	if cfg.ExecSandbox.Required {
 		return "blocked (bubblewrap or unprivileged user namespaces unavailable)", "execution sandbox is required but unavailable"
@@ -586,6 +596,9 @@ func hasKimiCodingConfig(root *yaml.Node) bool {
 	if root == nil {
 		return false
 	}
+	if strings.EqualFold(strings.TrimSpace(yamlScalarString(yamlPathNode(root, []string{"models", "primary", "provider"}))), "kimi-coding") {
+		return true
+	}
 	if strings.EqualFold(strings.TrimSpace(yamlScalarString(yamlPathNode(root, []string{"model", "provider"}))), "kimi-coding") {
 		return true
 	}
@@ -666,6 +679,7 @@ func applyConfigMigrations(doc *yaml.Node) {
 		moveYAMLPath(root, m.From, m.To)
 	}
 	pruneEmptyMapping(root, []string{"agent"})
+	pruneEmptyMapping(root, []string{"model"})
 }
 
 func moveYAMLPath(root *yaml.Node, from, to []string) {

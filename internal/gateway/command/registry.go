@@ -74,7 +74,7 @@ var entries = []Entry{
 	{Name: "/cancel", Usage: "/cancel", Summary: "Cancel the current task even if no run is active.", SyncControl: true, Scope: Gateway},
 	{Name: "/notify", Usage: "/notify <platform|auto>", Summary: "Choose where CLI-origin notifications go when the CLI is detached.", SyncControl: true, Scope: Gateway},
 	{Name: "/new", Usage: "/new [title]", Summary: "Create a new task.", SyncControl: true, Scope: Gateway},
-	{Name: "/resume", Usage: "/resume <n|task_id>", Summary: "Resume a task by list number or id (an archived id reopens it).", SyncControl: true, Scope: Gateway},
+	{Name: "/resume", Usage: "/resume [n|task_id]  (bare = pick from recent tasks)", Summary: "Resume a task by list number or id; bare lists recent tasks to pick from (an archived id reopens it).", SyncControl: true, Scope: Gateway},
 	{Name: "/workspace", Aliases: []string{"/ws"}, Usage: "/workspace [n|id]  (bare = list; alias: /ws)", Summary: "List workspaces (bare) or select one by list number or id.", SyncControl: true, Scope: Gateway},
 	{Name: "/workspaces", Usage: "/workspaces  (same as bare /workspace or /ws)", Summary: "List workspaces.", SyncControl: true, Scope: Gateway},
 
@@ -91,7 +91,7 @@ var entries = []Entry{
 	{Name: "/compact", Usage: "/compact", Summary: "Compact older conversation history to free context.", Scope: Local},
 	{Name: "/paste-image", Usage: "/paste-image", Summary: "Attach a screenshot from the clipboard (local GUI only, not over SSH).", Scope: Local},
 	{Name: "/capture", Usage: "/capture [title]", Summary: "Save the last turn as a replayable eval case.", Scope: Local},
-	{Name: "/history", Usage: "/history", Summary: "Open a scrollable view of the full conversation with complete diffs.", Scope: Local},
+	{Name: "/search", Usage: "/search [current|query]", Summary: "Review this conversation with full diffs (current), or search past working sessions (bare = recent sessions).", Scope: Local},
 	{Name: "/copy", Usage: "/copy", Summary: "Copy the last assistant response to the clipboard.", Scope: Local},
 }
 

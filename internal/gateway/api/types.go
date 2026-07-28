@@ -1,9 +1,13 @@
 package api
 
 import (
+	"time"
+
 	"selfmind/internal/control"
 	"selfmind/internal/kernel/llm"
 )
+
+const LocalControlTokenHeader = "X-SelfMind-Local-Control-Token"
 
 type ActiveRunStatus struct {
 	TenantID       string `json:"tenant_id"`
@@ -57,7 +61,7 @@ type MessageRequest struct {
 	// summary). It does not force web use; it only makes the tools available.
 	AllowWeb bool `json:"allow_web,omitempty"`
 	// ApprovalMode is the codex-style approval policy chosen by the client
-	// (read-only / auto-edit / full-auto / on-request). Empty = on-request.
+	// (read-only / auto-edit / full-auto / smart / on-request). Empty = smart.
 	ApprovalMode string `json:"approval_mode,omitempty"`
 	// QueueID is set ONLY by the coordinator when it drains a queued task into an
 	// async run, so the run's finalization can mark that queue row done (and thus
@@ -68,6 +72,11 @@ type MessageRequest struct {
 	// system work. It is never accepted from the wire. Ordinary user turns leave
 	// it empty; watcher finalization uses a constrained unattended profile.
 	ExecutionProfile string `json:"-"`
+	// WatchID identifies internal work materialized from one durable external
+	// watcher. It is never accepted from the wire; the queue drain derives it
+	// from the stable watcher finalization key so clients can render a concise
+	// run boundary without exposing the internal finalization prompt.
+	WatchID string `json:"-"`
 }
 
 // DispatchRequest runs a single management tool on the daemon. It backs
@@ -311,6 +320,28 @@ type WorkspaceRegisterRequest struct {
 	LocalPath      string   `json:"local_path"`
 	DefaultBranch  string   `json:"default_branch"`
 	AllowedRoots   []string `json:"allowed_roots"`
+}
+
+type WorkspaceTrustRequest struct {
+	TenantID       string `json:"tenant_id"`
+	Platform       string `json:"platform"`
+	PlatformUserID string `json:"platform_user_id"`
+	WorkspaceID    string `json:"workspace_id"`
+	TrustLevel     string `json:"trust_level"`
+}
+
+type WorkspaceCapabilityRequest struct {
+	TenantID       string `json:"tenant_id"`
+	Platform       string `json:"platform"`
+	PlatformUserID string `json:"platform_user_id"`
+	WorkspaceID    string `json:"workspace_id"`
+	Capability     string `json:"capability,omitempty"`
+}
+
+type WorkspaceCapability struct {
+	Capability string    `json:"capability"`
+	GrantedBy  string    `json:"granted_by,omitempty"`
+	ExpiresAt  time.Time `json:"expires_at"`
 }
 
 type BindAccountRequest struct {

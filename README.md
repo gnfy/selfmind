@@ -173,17 +173,27 @@ Useful non-interactive commands:
 selfmind model current
 selfmind model list
 selfmind model set openai gpt-4o
+selfmind model set codex-cli gpt-5.6-sol --reasoning xhigh
 selfmind model set custom:local-llm qwen2.5-coder
 ```
 
 ### Config Example
 
 ```yaml
-# Default chat model. model.provider can point to providers,
-# providers.custom, or provider_profiles.
-model:
-  provider: "openai"
-  default: "gpt-4o"
+# One primary foreground model. Omit reasoning or use "auto" to keep the
+# provider/model default.
+models:
+  source: "local"
+  primary:
+    provider: "openai"
+    model: "gpt-4o"
+    reasoning: "auto"
+  # Role-based exceptions. Any omitted role inherits primary.
+  roles:
+    memory_extract: { provider: "google", model: "gemini-1.5-flash" }
+    background_review: { provider: "google", model: "gemini-1.5-flash" }
+    skill_curator: { provider: "google", model: "gemini-1.5-flash" }
+    semantic_recall: { provider: "google", model: "gemini-1.5-flash" }
 
 # Core provider config for first-class providers such as OpenAI, Anthropic,
 # and Google.
@@ -202,7 +212,7 @@ providers:
     base_url: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
     protocol: "openai_compatible"
   # One-off or local custom endpoints, such as Ollama, a local model gateway,
-  # or a temporary enterprise proxy. Use with model.provider: "custom:ollama".
+  # or a temporary enterprise proxy. Select it as custom:ollama.
   custom:
     - name: "ollama"
       base_url: "http://localhost:11434/v1"
@@ -221,12 +231,10 @@ provider_profiles:
     api_key: "${MINIMAX_API_KEY}"
     base_url: "https://api.minimax.io/anthropic"
     protocol: "anthropic_messages"
-    model: "MiniMax-M2.7"
   kimi-coding:
     api_key: "${KIMI_CODING_API_KEY}"
     base_url: "https://api.kimi.com/coding/v1"
     protocol: "openai_compatible"
-    model: "kimi-for-coding"
 
 # Optional SelfMind-owned JSON credential file that keeps secrets out of YAML.
 auth:
@@ -308,31 +316,6 @@ evolution:
   auto_archive_confidence: 0.8
   nudge_interval: 10
 
-# Role-based model routing. Background jobs can use cheaper or faster models.
-models:
-  source: "local"
-  roles:
-    # Main coding/task execution model.
-    coding_agent:
-      provider: "openai"
-      model: "gpt-4o"
-    # Memory extraction model.
-    memory_extract:
-      provider: "google"
-      model: "gemini-1.5-flash"
-    # After-task background review model.
-    background_review:
-      provider: "google"
-      model: "gemini-1.5-flash"
-    # Skill curation, archival, and governance model.
-    skill_curator:
-      provider: "google"
-      model: "gemini-1.5-flash"
-    # Semantic session recall model.
-    semantic_recall:
-      provider: "google"
-      model: "gemini-1.5-flash"
-
 # MCP servers. Empty by default.
 mcp:
   servers: []
@@ -377,12 +360,15 @@ flight_recorder:
 
 ### Model Config Fields
 
-`model` selects the default provider and model:
+`models.primary` is the single default selection:
 
 | Field | Purpose |
 |---|---|
-| `model.provider` | Default provider ID. It can be a built-in provider such as `openai`, `anthropic`, or `google`, a custom endpoint such as `custom:<name>`, or an ID from `provider_profiles`. |
-| `model.default` | Default model name, such as `gpt-4o`, `kimi-for-coding`, or `MiniMax-M2.7`. |
+| `models.primary.provider` | Provider ID: built-in, `custom:<name>`, or an ID from `provider_profiles`. |
+| `models.primary.model` | Primary model name. |
+| `models.primary.reasoning` | Optional model reasoning level. Omit/use `auto` for the provider default; supported values are discovered per model when available. |
+| `models.primary.service_tier` | Optional provider service tier. Omit/use `auto` for the provider default. |
+| `models.primary.context_length` | Advanced fallback only. Normally omit it and let SelfMind discover model metadata. |
 
 `providers` is the core provider config area for first-class built-in providers:
 
@@ -391,7 +377,7 @@ flight_recorder:
 | `providers.openai` | Official OpenAI API settings. The default protocol is usually `openai_chat`. |
 | `providers.anthropic` | Anthropic Messages API settings. The default protocol is usually `anthropic_messages`. |
 | `providers.google` | Google Gemini through its OpenAI-compatible endpoint. |
-| `providers.custom` | One-off or local custom endpoints, such as Ollama, a local gateway, or a temporary enterprise proxy. Use them with `model.provider: "custom:<name>"`. |
+| `providers.custom` | One-off or local custom endpoints, such as Ollama, a local gateway, or a temporary enterprise proxy. Select them with `models.primary.provider: "custom:<name>"`. |
 
 `provider_profiles` is the extensible provider registry for MiniMax, Kimi, DeepSeek, Z.AI, OpenRouter, internal model gateways, or future compatible vendors:
 
@@ -401,7 +387,7 @@ flight_recorder:
 | `api_key` | API key. `${ENV_NAME}` values are expanded from the environment. You can leave it empty and use env vars or `auth.credentials_file` instead. |
 | `base_url` | Provider endpoint. OpenAI-compatible endpoints usually end in `/v1`; Anthropic-compatible endpoints usually use the vendor's Anthropic gateway root. |
 | `protocol` | Protocol family: `openai_chat`, `openai_compatible`, `anthropic_messages`, or `codex_responses`. Compatible new vendors do not need code changes. |
-| `model` | Default model for this profile. |
+| `model` | Legacy endpoint fallback. New configurations select the model in `models.primary` or a role override. |
 
 `auth.credentials_file` is an optional SelfMind-owned JSON credential file that keeps secrets out of reusable YAML:
 
@@ -419,7 +405,11 @@ Recommended usage:
 - MiniMax, Kimi, DeepSeek, Z.AI, OpenRouter, internal model gateways: use `provider_profiles`.
 - Secrets that should not live in YAML: use `auth.credentials_file` or environment variables.
 
-Old flat provider keys such as `providers.openai_api_key`, `providers.openrouter_api_key`, `providers.minimax_api_key`, and legacy `agent.provider` / `agent.model` are still read for compatibility, but new saves use the `model`, nested `providers`, and `provider_profiles` schema.
+Old flat provider keys and legacy `agent.provider` / `agent.model` /
+`model.provider` / `model.default` are still read for compatibility.
+`selfmind config upgrade` backs up the file and converges model selection on
+`models.primary` without replacing existing provider credentials or unknown
+settings.
 
 ### Provider Profiles And Auth Reuse
 
@@ -452,7 +442,9 @@ MiniMax and Kimi Coding Plan:
 
 ### Model Routing
 
-The default model is configured under `model`. Role routing is configured under `models.roles`.
+The default model is configured under `models.primary`. Role routing is
+configured under `models.roles`; absent roles inherit the primary selection,
+so no `default` role is needed.
 
 Current role names:
 
@@ -495,7 +487,7 @@ gateway, IM, and TUI command.
 | `/resume <n\|task_id>` | Switch back to an earlier task by its `/tasks` card number, short id, or full id. |
 | `/workspace [n\|id]` (alias `/ws`, also `/workspaces`) | Bare lists workspaces; with a number or id, switches to it. |
 | `/approvals` / `/approve <n\|id\|all> [task\|always]` / `/reject <n\|id\|all>` | List and answer pending tool approvals. |
-| `/mode [mode]` | Show or set approval mode: `on-request`, `read-only`, `auto-edit`, `full-auto`, `smart`. |
+| `/mode [mode]` | Show or set approval mode: `on-request`, `read-only`, `auto-edit`, `full-auto`, `smart` (default; safely asks when triage is unavailable). |
 | `/diag [memory\|context\|tasks\|models\|delivery]` | Compact runtime diagnostics, optionally focused on one subsystem. |
 | `/skills` | Skill list/view/search/catalog/install/audit/archive/pin/unpin/delete/stats/reload. |
 | `/skills history <name>` | View learning audit history for a skill. |
@@ -506,7 +498,7 @@ gateway, IM, and TUI command.
 | `/curator` | Check, dry-run, report, run, or restore skill curator actions. |
 | `/checkpoint` | Save, load, list, or delete conversation checkpoints. |
 | `/migrate` | Migrate Hermes Agent skills. |
-| `/model` | Show or switch the current model inside the TUI. |
+| `/model` | Show the daemon's configured model and the CLI command used to change it. |
 | `/clear` | Clear the screen. |
 | `/exit` | Exit. |
 
@@ -701,7 +693,7 @@ The `== Recent errors ==` section aggregates both kinds, newest first:
 - 07-13 09:15 [run:failed] llm chat: responses API error 429: usage limit reached
 ```
 
-`[tool:<name>]` is a single tool call failing; `[run:failed]` is a whole turn / model interface failing. Secrets are redacted. For per-turn context detail (where the prompt tokens went, recall hits, compaction), use the control commands in a chat: `/diag`, `/diag context`, `/diag tasks`, `/diag memory`, `/diag models`.
+`[tool:<name>]` is a single tool call failing; `[run:failed]` is a whole turn / model interface failing. Secrets are redacted. For subsystem detail use the model-free control commands in a chat: `/diag`, `/diag context`, `/diag tasks`, `/diag memory`, `/diag models`, `/diag delivery`, and `/diag execution` (sandbox, network posture, process environment policy, and workspace roots; never credential values).
 
 ### 2. Record real turns (flight recorder)
 
@@ -769,6 +761,10 @@ selfmind approve <approval_id>
 selfmind reject <approval_id>
 selfmind ws add .                 # register the current dir as a workspace
 selfmind ws use <workspace_id>    # or: selfmind ws <n>  to switch by list number
+selfmind ws trust [workspace_id]  # local CLI only; omit id for the current workspace
+selfmind ws untrust [workspace_id]# revoke trust and active execution capabilities
+selfmind ws grants [workspace_id] # list active temporary execution capabilities
+selfmind ws revoke <capability> [workspace_id]
 selfmind new "implement the checkout page"
 ```
 
@@ -802,6 +798,7 @@ If the gateway is exposed beyond localhost, set `gateway.token` in `config.yaml`
 | `GET` | `/v1/tasks/current` | Get current task and active run. |
 | `GET` | `/v1/tasks/events` | List recent run/tool/learning events for the current or specified task. |
 | `POST` | `/v1/workspaces/register` | Register a local workspace. |
+| `POST` | `/v1/workspaces/trust` | Change workspace trust. Loopback CLI requests only. |
 | `GET` | `/v1/workspaces` | List workspaces. |
 | `GET` | `/v1/gateway/status` | Inspect process state and active runs. |
 | `POST` | `/v1/gateway/shutdown` | Request graceful shutdown. |

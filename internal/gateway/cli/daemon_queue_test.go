@@ -78,6 +78,37 @@ func TestDaemonFinishWithoutObservedStartDoesNotChangeStatus(t *testing.T) {
 	}
 }
 
+func TestWatcherLifecycleUsesCompactIDNotices(t *testing.T) {
+	model := NewController(nil, nil, nil, "").model
+
+	updated, _ := model.Update(MsgWatcherCompleted{
+		WatchID:    "watch_123",
+		Status:     "succeeded",
+		TaskStatus: "waiting_finalization",
+		Event:      uiEventRef{Source: eventSourceDaemon, RunID: "run_origin", EventID: "evt_watch_done"},
+	})
+	m := updated.(*uiModel)
+	if got := m.messages[len(m.messages)-1].Content; got != "Watcher watch_123 | status: succeeded | task: waiting_finalization" {
+		t.Fatalf("completion notice = %q", got)
+	}
+
+	updated, _ = m.Update(MsgDaemonRunStarted{
+		RunID:      "run_finalize",
+		WatchID:    "watch_123",
+		TaskStatus: "running",
+		Input:      "internal finalization prompt that must not be rendered",
+		Started:    time.Now(),
+		Event:      uiEventRef{Source: eventSourceDaemon, RunID: "run_finalize", EventID: "evt_finalize_start"},
+	})
+	m = updated.(*uiModel)
+	if got := m.messages[len(m.messages)-1].Content; got != "Watcher watch_123 | status: finalizing | task: running" {
+		t.Fatalf("finalization notice = %q", got)
+	}
+	if strings.Contains(m.messages[len(m.messages)-1].Content, "internal finalization prompt") {
+		t.Fatalf("internal finalization prompt leaked into notice")
+	}
+}
+
 func TestOlderSynchronousReplyDoesNotClearNewerDaemonRun(t *testing.T) {
 	model := NewController(nil, nil, nil, "").model
 	model.localRequestActive = true

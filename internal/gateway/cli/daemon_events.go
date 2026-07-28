@@ -25,7 +25,9 @@ func (m *uiModel) forwardDaemonRunEvent(event api.RunEvent) {
 	switch event.Type {
 	case "run.started":
 		var payload struct {
-			Input string `json:"input"`
+			Input      string `json:"input"`
+			WatchID    string `json:"watch_id"`
+			TaskStatus string `json:"task_status"`
 		}
 		_ = json.Unmarshal(event.Payload, &payload)
 		started := event.CreatedAt
@@ -33,11 +35,13 @@ func (m *uiModel) forwardDaemonRunEvent(event api.RunEvent) {
 			started = time.Now()
 		}
 		m.program.Send(MsgDaemonRunStarted{
-			RunID:   strings.TrimSpace(event.RunID),
-			TaskID:  strings.TrimSpace(event.TaskID),
-			Input:   strings.TrimSpace(payload.Input),
-			Started: started,
-			Event:   eventRefFromRunEvent(event),
+			RunID:      strings.TrimSpace(event.RunID),
+			TaskID:     strings.TrimSpace(event.TaskID),
+			WatchID:    strings.TrimSpace(payload.WatchID),
+			TaskStatus: strings.TrimSpace(payload.TaskStatus),
+			Input:      strings.TrimSpace(payload.Input),
+			Started:    started,
+			Event:      eventRefFromRunEvent(event),
 		})
 	case "run.finished", "run.cancelled", "run.interrupted", "run.failed":
 		var payload struct {
@@ -98,6 +102,26 @@ func uiStatusForDaemonOutcome(status string) string {
 	default:
 		return "error"
 	}
+}
+
+func watcherStatusNotice(watchID, status, taskStatus string) string {
+	watchID = strings.TrimSpace(watchID)
+	taskStatus = strings.TrimSpace(taskStatus)
+	if taskStatus == "" {
+		taskStatus = "waiting_finalization"
+	}
+	watchStatus := "succeeded"
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "failed":
+		watchStatus = "failed"
+	case "timed_out", "timeout":
+		watchStatus = "timed_out"
+	case "cancelled", "canceled":
+		watchStatus = "cancelled"
+	case "finalizing":
+		watchStatus = "finalizing"
+	}
+	return "Watcher " + watchID + " | status: " + watchStatus + " | task: " + taskStatus
 }
 
 func (m *uiModel) passiveDaemonEvent(ref uiEventRef) bool {

@@ -46,6 +46,52 @@ func TestModelSetWritesExplicitConfigPath(t *testing.T) {
 	if got, want := cfg.EffectiveModel(), "gpt-test"; got != want {
 		t.Fatalf("model = %q, want %q", got, want)
 	}
+	if cfg.Models.Primary.Provider != "openai" || cfg.Models.Primary.Model != "gpt-test" {
+		t.Fatalf("primary = %+v", cfg.Models.Primary)
+	}
+	if cfg.Model.Provider != "" || cfg.Agent.Provider != "" {
+		t.Fatalf("legacy selection was persisted: model=%+v agent=%+v", cfg.Model, cfg.Agent)
+	}
+}
+
+func TestModelSetValidatesDynamicCodexReasoning(t *testing.T) {
+	codexHome := t.TempDir()
+	t.Setenv("CODEX_HOME", codexHome)
+	if err := os.WriteFile(filepath.Join(codexHome, "models_cache.json"), []byte(`{
+  "models": [{
+    "slug": "gpt-5.6-sol",
+    "context_window": 272000,
+    "default_reasoning_level": "medium",
+    "supported_reasoning_levels": [{"effort":"low"},{"effort":"xhigh"}]
+  }]
+}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	app := &App{
+		ctx:        context.Background(),
+		args:       []string{"selfmind", "model", "set", "codex-cli", "gpt-5.6-sol", "--reasoning", "xhigh"},
+		stdout:     &bytes.Buffer{},
+		stderr:     &bytes.Buffer{},
+		configPath: path,
+	}
+	_, code := app.runModelCommandIfRequested()
+	if code != 0 {
+		t.Fatalf("code=%d stderr=%s", code, app.stderr)
+	}
+	cfg, err := config.LoadConfig(config.Options{Path: path})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.EffectivePrimary(); got.Reasoning != "xhigh" || got.Model != "gpt-5.6-sol" {
+		t.Fatalf("primary = %+v", got)
+	}
+
+	app.args = []string{"selfmind", "model", "set", "codex-cli", "gpt-5.6-sol", "--reasoning", "unsupported"}
+	if _, code := app.runModelCommandIfRequested(); code != 2 {
+		t.Fatalf("unsupported reasoning code=%d, want 2", code)
+	}
 }
 
 func TestModelCheckResolvesConfiguredProvider(t *testing.T) {

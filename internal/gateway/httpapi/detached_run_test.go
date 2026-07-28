@@ -183,12 +183,23 @@ func TestSyncRunSurvivesClientDisconnect(t *testing.T) {
 	if err := <-clientErr; err == nil {
 		t.Fatal("expected the aborted client request to error")
 	}
+	// The client-side abort confirms the CLIENT gave up, but the SERVER
+	// notices the dropped connection asynchronously (net/http's connection
+	// reader cancels r.Context() after processing the FIN). The
+	// detached-finish check runs once at run completion, so let the
+	// cancellation propagate BEFORE releasing the run — otherwise completion
+	// can win the race and classify the turn as still-attached (observed as a
+	// macOS-runner flake in CI; Linux consistently won the race the other
+	// way). The same few-ms window exists in production and is an accepted
+	// residual: the result still lands in the run outcome/handoff, only the
+	// push is skipped.
+	time.Sleep(500 * time.Millisecond)
 	// The run must still be executing on the daemon (detach, not cancel).
 	provider.releaseNow()
 
 	// The detached result is routed like an async one: to the single
 	// preferred IM endpoint (the only bound account here).
-	waitUntil(t, 5*time.Second, func() bool { return len(sender.snapshot()) > 0 },
+	waitUntil(t, 10*time.Second, func() bool { return len(sender.snapshot()) > 0 },
 		"detached sync result was not delivered to the preferred IM endpoint")
 	msg := sender.snapshot()[0]
 	if msg.Platform != "weixin" || msg.PlatformUserID != "wxid_detached" {
@@ -199,7 +210,7 @@ func TestSyncRunSurvivesClientDisconnect(t *testing.T) {
 	}
 
 	// The run reached a terminal state and the task is not interrupted.
-	waitUntil(t, 5*time.Second, func() bool {
+	waitUntil(t, 10*time.Second, func() bool {
 		runs, err := store.ListRunningRuns(ctx, identity.TenantID, []string{identity.PersonID})
 		return err == nil && len(runs) == 0
 	}, "run did not reach a terminal status")

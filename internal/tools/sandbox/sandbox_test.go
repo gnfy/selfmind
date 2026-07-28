@@ -30,6 +30,9 @@ func TestWrapArgvReadOnlyRootAndWritableWorkspace(t *testing.T) {
 	if argv[0] != "/usr/bin/bwrap" {
 		t.Fatalf("bwrap binary must lead argv: %v", argv)
 	}
+	if strings.Contains(joined, "--setenv") {
+		t.Fatalf("credentials and environment values must never enter bwrap argv: %v", argv)
+	}
 }
 
 func TestWrapArgvNetworkOptIn(t *testing.T) {

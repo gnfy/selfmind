@@ -22,6 +22,69 @@ import (
 
 const diagRecentEvents = 5
 
+func (d *Server) executionDiagReply(ctx context.Context, identity *control.IdentityContext) (string, error) {
+	if d == nil || d.Control == nil || identity == nil {
+		return "Execution diagnostics unavailable.", nil
+	}
+	diag := tools.ExecSandboxDiagnostics()
+	var sb strings.Builder
+	sb.WriteString("Execution diagnostics\n")
+	fmt.Fprintf(&sb, "Platform: %s\n", diag.Platform)
+	fmt.Fprintf(&sb, "Sandbox backend: %s\n", diag.Backend)
+	fmt.Fprintf(&sb, "Sandbox policy: enabled=%t, required=%t, available=%t\n",
+		diag.Enabled, diag.Required, diag.Available)
+	fmt.Fprintf(&sb, "Sandbox network: %s\n", diag.Network)
+	fmt.Fprintf(&sb, "Process environment: %s\n", diag.Environment)
+	if ws, err := d.Control.CurrentWorkspace(ctx, identity.TenantID, identity.PersonID); err == nil && ws != nil {
+		fmt.Fprintf(&sb, "Workspace: %s\n", ws.Name)
+		fmt.Fprintf(&sb, "Workspace trust: %s\n", fallback(ws.TrustLevel, "untrusted"))
+		fmt.Fprintf(&sb, "Writable root: %s\n", ws.LocalPath)
+		if len(ws.AllowedRoots) > 1 {
+			fmt.Fprintf(&sb, "Allowed roots: %d\n", len(ws.AllowedRoots))
+		}
+		if grants, err := d.Control.ListActiveExecutionCapabilities(ctx, identity.TenantID, identity.PersonID, ws.ID); err == nil {
+			names := make([]string, 0, len(grants))
+			for _, grant := range grants {
+				names = append(names, grant.Capability)
+			}
+			sort.Strings(names)
+			if len(names) == 0 {
+				sb.WriteString("Workspace capabilities: none\n")
+			} else {
+				fmt.Fprintf(&sb, "Workspace capabilities: %s\n", strings.Join(names, ", "))
+			}
+		}
+	} else {
+		sb.WriteString("Workspace: none\n")
+	}
+	active := d.coordinator().currentActive(identity.PersonID)
+	if active != nil && active.RunID != "" {
+		if lease, err := d.Control.GetExecutionLeaseByRun(ctx, identity.TenantID, active.RunID); err == nil && lease != nil {
+			fmt.Fprintf(&sb, "Environment lease: %s (%s snapshot)\n", shortOpaqueID(lease.ID), lease.EnvironmentProfile)
+			fmt.Fprintf(&sb, "Credential references: %d hidden\n", len(lease.CredentialRefs))
+		}
+		if scope := tools.ExecutionScopeDiagnostics(identity.PersonID); scope.Installed {
+			profile := strings.TrimSpace(scope.ExecutionProfile)
+			if profile == "" {
+				profile = "default"
+			}
+			fmt.Fprintf(&sb, "Execution profile: %s\n", profile)
+		}
+	} else {
+		sb.WriteString("Environment lease: none (no active run)\n")
+	}
+	sb.WriteString("Credential values: hidden\n")
+	return strings.TrimSpace(sb.String()), nil
+}
+
+func shortOpaqueID(value string) string {
+	value = strings.TrimSpace(value)
+	if len(value) <= 12 {
+		return value
+	}
+	return value[:12]
+}
+
 func (d *Server) diagReply(ctx context.Context, identity *control.IdentityContext) (string, error) {
 	if d == nil || d.Control == nil || identity == nil {
 		return "Diagnostics unavailable.", nil

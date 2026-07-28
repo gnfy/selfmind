@@ -169,8 +169,8 @@ func TestDigestReportsApprovalMode(t *testing.T) {
 
 	// Unset → on-request default, and the digest still reads as empty.
 	digest := fetchDigest(t, daemon)
-	if digest.ApprovalMode != "on-request" {
-		t.Fatalf("default approval mode = %q, want on-request", digest.ApprovalMode)
+	if digest.ApprovalMode != "smart" {
+		t.Fatalf("default approval mode = %q, want smart", digest.ApprovalMode)
 	}
 	if !digest.Empty() {
 		t.Fatalf("approval mode must not make the digest non-empty: %+v", digest)

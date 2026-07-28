@@ -37,13 +37,83 @@ storage:
 	}
 }
 
+func TestModelsPrimaryOverridesLegacySelectionAndNormalizesAuto(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte(`
+model:
+  provider: "legacy"
+  default: "legacy-model"
+models:
+  primary:
+    provider: "codex-cli"
+    model: "gpt-5.6-sol"
+    reasoning: "auto"
+`), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadConfig(Options{Path: path})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := cfg.EffectiveProvider(), "codex-cli"; got != want {
+		t.Fatalf("provider = %q, want %q", got, want)
+	}
+	if got, want := cfg.EffectiveModel(), "gpt-5.6-sol"; got != want {
+		t.Fatalf("model = %q, want %q", got, want)
+	}
+	if got := cfg.EffectivePrimary().Reasoning; got != "" {
+		t.Fatalf("reasoning = %q, want provider default", got)
+	}
+}
+
+func TestSetPrimaryModelConvergesAwayFromLegacySelection(t *testing.T) {
+	cfg := &Config{
+		Model: ModelConfig{Provider: "legacy", Default: "legacy-model"},
+		Agent: AgentConfig{Provider: "legacy", Model: "legacy-model"},
+	}
+	cfg.SetPrimaryModel("codex-cli", "gpt-5.6-sol", "xhigh")
+
+	if got := cfg.EffectivePrimary(); got.Provider != "codex-cli" || got.Model != "gpt-5.6-sol" || got.Reasoning != "xhigh" {
+		t.Fatalf("primary = %+v", got)
+	}
+	if cfg.Model.Provider != "" || cfg.Model.Default != "" || cfg.Agent.Provider != "" || cfg.Agent.Model != "" {
+		t.Fatalf("legacy selection fields were not cleared: model=%+v agent=%+v", cfg.Model, cfg.Agent)
+	}
+}
+
+func TestExecSandboxNetworkDefaultAndExplicitOverride(t *testing.T) {
+	defaultPath := filepath.Join(t.TempDir(), "default.yaml")
+	cfg, err := LoadConfig(Options{Path: defaultPath, CreateIfMissing: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.ExecSandbox.AllowNetwork {
+		t.Fatal("exec sandbox network must default to shared")
+	}
+
+	overridePath := filepath.Join(t.TempDir(), "override.yaml")
+	if err := os.WriteFile(overridePath, []byte("exec_sandbox:\n  allow_network: false\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err = LoadConfig(Options{Path: overridePath})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ExecSandbox.AllowNetwork {
+		t.Fatal("explicit allow_network=false must be preserved")
+	}
+}
+
 func TestSaveConfigWritesNewProviderSchema(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	cfg := &Config{
 		Path: path,
-		Model: ModelConfig{
-			Provider: "openai",
-			Default:  "gpt-test",
+		Models: ModelsConfig{
+			Primary: ModelSelectionConfig{
+				Provider: "openai",
+				Model:    "gpt-test",
+			},
 		},
 		Providers: ProvidersConfig{
 			OpenAI: ProviderEndpoint{APIKey: "${OPENAI_API_KEY}", BaseURL: "https://api.openai.com/v1"},
@@ -62,7 +132,7 @@ func TestSaveConfigWritesNewProviderSchema(t *testing.T) {
 			t.Fatalf("saved config should not contain legacy key %q:\n%s", unexpected, text)
 		}
 	}
-	if !strings.Contains(text, "model:") || !strings.Contains(text, "providers:") || !strings.Contains(text, "openai:") {
+	if !strings.Contains(text, "models:") || !strings.Contains(text, "primary:") || !strings.Contains(text, "providers:") || !strings.Contains(text, "openai:") {
 		t.Fatalf("saved config missing new schema sections:\n%s", text)
 	}
 }

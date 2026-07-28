@@ -12,23 +12,29 @@ import (
 // Runtime is the fully resolved provider choice that the app layer can turn
 // into an llm.Provider without knowing where credentials or defaults came from.
 type Runtime struct {
-	Provider         string
-	DisplayName      string
-	Model            string
-	Protocol         string
-	BaseURL          string
-	APIKey           string
-	CredentialSource string
-	AuthType         string
-	Headers          map[string]string
-	ContextLength    int
-	MaxTokens        int
-	ReasoningEffort  string
-	Thinking         map[string]interface{}
-	ServiceTier      string
-	Quirks           ProviderQuirks
-	TokenGetter      func() string
-	TokenRefresher   func() string
+	Provider           string
+	DisplayName        string
+	Model              string
+	Protocol           string
+	BaseURL            string
+	APIKey             string
+	CredentialSource   string
+	AuthType           string
+	Headers            map[string]string
+	ContextLength      int
+	ContextSource      string
+	MaxTokens          int
+	ReasoningEffort    string
+	DefaultReasoning   string
+	ReasoningLevels    []string
+	Thinking           map[string]interface{}
+	ServiceTier        string
+	DefaultServiceTier string
+	ServiceTiers       []string
+	CapabilitySource   string
+	Quirks             ProviderQuirks
+	TokenGetter        func() string
+	TokenRefresher     func() string
 }
 
 // Selection carries per-command or per-role overrides. Empty fields mean the
@@ -97,15 +103,33 @@ func (r *Resolver) Registry() *Registry {
 // and CLI model commands so future SaaS policy can swap config sources safely.
 func (r *Resolver) Resolve(ctx context.Context, selection Selection) (Runtime, error) {
 	_ = ctx
-	providerName := firstNonEmpty(selection.Provider, r.cfg.EffectiveProvider())
-	modelName := firstNonEmpty(selection.Model, r.cfg.EffectiveModel())
+	providerExplicit := strings.TrimSpace(selection.Provider) != ""
+	modelExplicit := strings.TrimSpace(selection.Model) != ""
+	primary := r.cfg.EffectivePrimary()
+	if !providerExplicit {
+		selection.Provider = primary.Provider
+	}
+	if !modelExplicit && !providerExplicit {
+		selection.Model = primary.Model
+		if strings.TrimSpace(selection.ReasoningEffort) == "" {
+			selection.ReasoningEffort = primary.Reasoning
+		}
+		if strings.TrimSpace(selection.ServiceTier) == "" {
+			selection.ServiceTier = primary.ServiceTier
+		}
+		if selection.ContextLength <= 0 {
+			selection.ContextLength = primary.ContextLength
+		}
+	}
+	providerName := strings.TrimSpace(selection.Provider)
+	modelName := strings.TrimSpace(selection.Model)
 	if providerName == "" {
-		return r.resolveAuto(modelName)
+		return r.resolveAuto(selection, modelName)
 	}
 	return r.resolveNamed(providerName, selection, modelName)
 }
 
-func (r *Resolver) resolveAuto(modelName string) (Runtime, error) {
+func (r *Resolver) resolveAuto(selection Selection, modelName string) (Runtime, error) {
 	// Auto mode probes likely local choices in a stable order and only succeeds
 	// when usable credentials were actually found.
 	candidates := []string{
@@ -122,7 +146,7 @@ func (r *Resolver) resolveAuto(modelName string) (Runtime, error) {
 		if strings.TrimSpace(candidate) == "" {
 			continue
 		}
-		rt, err := r.resolveNamed(candidate, Selection{}, modelName)
+		rt, err := r.resolveNamed(candidate, selection, modelName)
 		if err == nil && rt.APIKey != "" {
 			return rt, nil
 		}
@@ -160,19 +184,33 @@ func (r *Resolver) resolveNamed(providerName string, selection Selection, modelN
 		// Required by the ChatGPT Codex backend; missing it can cause EOF.
 		headers["chatgpt-account-id"] = cred.AccountID
 	}
+	descriptor, _ := DiscoverModelDescriptor(profile.ID, model)
+	contextLength, contextSource := resolvedContextLength(
+		selection.ContextLength,
+		endpoint.ContextLength,
+		profile.ContextLength,
+		descriptor.ContextWindow,
+		KnownContextLength(profile.ID, model),
+	)
 	return Runtime{
 		Provider: profile.ID, DisplayName: firstNonEmpty(profile.DisplayName, profile.ID),
 		Model: model, Protocol: protocol, BaseURL: baseURL,
 		APIKey: cred.Token, CredentialSource: cred.Source, AuthType: profile.AuthType,
-		Headers:         headers,
-		ContextLength:   firstPositive(selection.ContextLength, r.cfg.Model.ContextLength, endpoint.ContextLength, profile.ContextLength, KnownContextLength(profile.ID, model)),
-		MaxTokens:       firstPositive(selection.MaxTokens, endpoint.MaxTokens, profile.MaxTokens),
-		ReasoningEffort: firstNonEmpty(selection.ReasoningEffort, endpoint.ReasoningEffort, profile.ReasoningEffort),
-		Thinking:        firstThinking(selection.Thinking, endpoint.Thinking, profile.Thinking),
-		ServiceTier:     firstNonEmpty(selection.ServiceTier, endpoint.ServiceTier, profile.ServiceTier),
-		Quirks:          mergeProviderQuirks(profile.Quirks, quirksFromConfig(endpoint.Quirks), selection.Quirks),
-		TokenGetter:     cred.Getter,
-		TokenRefresher:  cred.Refresher,
+		Headers:            headers,
+		ContextLength:      contextLength,
+		ContextSource:      contextSource,
+		MaxTokens:          firstPositive(selection.MaxTokens, endpoint.MaxTokens, profile.MaxTokens),
+		ReasoningEffort:    firstNonEmpty(selection.ReasoningEffort, endpoint.ReasoningEffort, profile.ReasoningEffort),
+		DefaultReasoning:   descriptor.DefaultReasoning,
+		ReasoningLevels:    append([]string(nil), descriptor.SupportedReasoning...),
+		Thinking:           firstThinking(selection.Thinking, endpoint.Thinking, profile.Thinking),
+		ServiceTier:        firstNonEmpty(selection.ServiceTier, endpoint.ServiceTier, profile.ServiceTier),
+		DefaultServiceTier: descriptor.DefaultServiceTier,
+		ServiceTiers:       append([]string(nil), descriptor.SupportedServiceTiers...),
+		CapabilitySource:   descriptor.CapabilitySource,
+		Quirks:             mergeProviderQuirks(profile.Quirks, quirksFromConfig(endpoint.Quirks), selection.Quirks),
+		TokenGetter:        cred.Getter,
+		TokenRefresher:     cred.Refresher,
 	}, nil
 }
 
@@ -184,16 +222,23 @@ func (r *Resolver) resolveCustom(providerName string, selection Selection, model
 	for _, cp := range r.cfg.Providers.Custom {
 		if strings.EqualFold(cp.Name, name) || strings.EqualFold("custom:"+cp.Name, providerName) {
 			protocol := NormalizeProtocol(firstNonEmpty(selection.Protocol, cp.Protocol, ProtocolOpenAICompatible))
+			model := firstNonEmpty(modelName, cp.Model, selection.Model)
+			contextLength, contextSource := resolvedCustomContextLength(
+				selection.ContextLength,
+				customModelContextLength(cp, model),
+				KnownContextLength("custom:"+cp.Name, model),
+			)
 			return Runtime{
 				Provider: "custom:" + cp.Name, DisplayName: cp.Name,
-				Model:            firstNonEmpty(modelName, cp.Model, selection.Model),
+				Model:            model,
 				Protocol:         protocol,
 				BaseURL:          firstNonEmpty(selection.BaseURL, cp.BaseURL),
 				APIKey:           firstNonEmpty(selection.APIKey, cp.APIKey),
 				CredentialSource: "config:custom",
 				AuthType:         AuthAPIKey,
 				Headers:          mergeHeaders(r.cfg.Model.Headers, selection.Headers),
-				ContextLength:    firstPositive(selection.ContextLength, r.cfg.Model.ContextLength, customModelContextLength(cp, firstNonEmpty(modelName, cp.Model, selection.Model)), KnownContextLength("custom:"+cp.Name, firstNonEmpty(modelName, cp.Model, selection.Model))),
+				ContextLength:    contextLength,
+				ContextSource:    contextSource,
 				MaxTokens:        selection.MaxTokens,
 				ReasoningEffort:  selection.ReasoningEffort,
 				Thinking:         selection.Thinking,
@@ -203,6 +248,34 @@ func (r *Resolver) resolveCustom(providerName string, selection Selection, model
 		}
 	}
 	return Runtime{}, fmt.Errorf("unknown provider: %s", providerName)
+}
+
+func resolvedContextLength(values ...int) (int, string) {
+	sources := []string{"explicit config", "provider profile", "built-in profile", "provider model metadata", "built-in fallback"}
+	for i, value := range values {
+		if value <= 0 {
+			continue
+		}
+		source := "resolved"
+		if i < len(sources) {
+			source = sources[i]
+		}
+		return value, source
+	}
+	return 0, "unknown"
+}
+
+func resolvedCustomContextLength(explicit, modelMetadata, fallback int) (int, string) {
+	switch {
+	case explicit > 0:
+		return explicit, "explicit config"
+	case modelMetadata > 0:
+		return modelMetadata, "custom model metadata"
+	case fallback > 0:
+		return fallback, "built-in fallback"
+	default:
+		return 0, "unknown"
+	}
 }
 
 func customModelContextLength(cp config.CustomProvider, model string) int {

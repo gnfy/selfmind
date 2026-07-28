@@ -73,6 +73,13 @@ Read the matching document before changing a domain:
 - File, terminal, patch, process, and workspace-aware memory tools must run
   under the request's `ExecutionScope` and active workspace roots, not the
   daemon process cwd.
+- Every tool-owned child process builds its environment through
+  `BuildProcessEnv`. Never inject daemon/control-plane credentials, persist
+  raw credential bytes in an environment lease, or put secrets in process
+  arguments; execution state stores references and policy only.
+- Derive sandbox writable views and tool compatibility from `ExecutionScope`,
+  data-driven `ToolProfile` metadata, and generic platform conventions. Do not
+  add per-vendor filesystem, credential, timeout, or network branches.
 - Linux and macOS x64/arm64 are official CLI/daemon release targets. Linux
   provides the strongest isolated execution path. macOS uses
   approval-controlled host execution unless a future native sandbox is

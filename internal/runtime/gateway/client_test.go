@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -48,5 +49,64 @@ func TestPickDaemonExecutable(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
 	if _, err := pickDaemonExecutable("", "/nonexistent/selfmind", nil); err == nil {
 		t.Fatal("deleted current with empty PATH must error")
+	}
+}
+
+func TestMergeRestartEnvironmentPreservesPathAndProxy(t *testing.T) {
+	sep := string(os.PathListSeparator)
+	current := []string{"PATH=" + strings.Join([]string{"/usr/bin"}, sep), "HTTP_PROXY=http://new-proxy:8080", "NO_PROXY="}
+	previous := []string{
+		"PATH=" + strings.Join([]string{"/home/test/.local/bin", "/usr/bin", "/home/test/google-cloud-sdk/bin"}, sep),
+		"HTTP_PROXY=http://old-proxy:8080",
+		"http_proxy=http://old-proxy:8080",
+		"https_proxy=http://old-proxy:8080",
+		"NO_PROXY=localhost",
+		"SECRET_TOKEN=must-not-copy",
+	}
+	got := mergeRestartEnvironment(current, previous)
+	joined := strings.Join(got, "\n")
+
+	wantPath := "PATH=" + strings.Join([]string{"/usr/bin", "/home/test/.local/bin", "/home/test/google-cloud-sdk/bin"}, sep)
+	if !strings.Contains(joined, wantPath) {
+		t.Fatalf("current PATH must lead while old-only tool directories survive: %v", got)
+	}
+	if !strings.Contains(joined, "HTTP_PROXY=http://new-proxy:8080") {
+		t.Fatalf("current proxy must win: %v", got)
+	}
+	if strings.Contains(joined, "HTTP_PROXY=http://old-proxy:8080") {
+		t.Fatalf("old proxy must not override current proxy: %v", got)
+	}
+	if strings.Contains(joined, "http_proxy=http://old-proxy:8080") {
+		t.Fatalf("old case variant must not override a current proxy: %v", got)
+	}
+	if !strings.Contains(joined, "https_proxy=http://old-proxy:8080") {
+		t.Fatalf("missing proxy key must survive restart: %v", got)
+	}
+	if strings.Contains(joined, "NO_PROXY=localhost") {
+		t.Fatalf("an explicitly empty current value must clear the old value: %v", got)
+	}
+	if strings.Contains(joined, "SECRET_TOKEN") {
+		t.Fatalf("non-proxy environment must never be copied: %v", got)
+	}
+}
+
+func TestMergeRestartEnvironmentKeepsProxyCaseVariantsFromOldDaemon(t *testing.T) {
+	got := mergeRestartEnvironment(
+		[]string{"PATH=/usr/bin"},
+		[]string{"HTTP_PROXY=http://proxy:8080", "http_proxy=http://proxy:8080"},
+	)
+	joined := strings.Join(got, "\n")
+	if !strings.Contains(joined, "HTTP_PROXY=http://proxy:8080") ||
+		!strings.Contains(joined, "http_proxy=http://proxy:8080") {
+		t.Fatalf("proxy case variants must survive an environment-less restart: %v", got)
+	}
+}
+
+func TestRestartEnvironmentFromBlockFiltersKeys(t *testing.T) {
+	block := []byte("PATH=/usr/bin\x00HTTPS_PROXY=http://proxy:8080\x00no_proxy=localhost\x00TOKEN=secret\x00")
+	got := restartEnvironmentFromBlock(block)
+	want := []string{"PATH=/usr/bin", "HTTPS_PROXY=http://proxy:8080", "no_proxy=localhost"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("restartEnvironmentFromBlock() = %v, want %v", got, want)
 	}
 }

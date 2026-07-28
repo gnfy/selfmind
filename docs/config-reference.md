@@ -24,9 +24,11 @@ mirror is `docs/config-reference.zh-CN.md`.
 The one thing you must configure: which model answers you.
 
 ```yaml
-model:
-  provider: "codex-cli"      # a provider id below, or custom:<name>, or a profile id
-  default: "gpt-5.5"         # model name
+models:
+  primary:
+    provider: "codex-cli"    # provider id, custom:<name>, or profile id
+    model: "gpt-5.6-sol"
+    reasoning: "xhigh"       # optional; omit or use auto for the model default
 
 providers:                   # first-class vendors
   openai:
@@ -48,11 +50,9 @@ provider_profiles:           # extensible registry (Kimi, MiniMax, DeepSeek, Ope
     api_key: "${KIMI_API_KEY}"
     base_url: "https://api.kimi.com/coding"
     protocol: "anthropic_messages"
-    model: "kimi-for-coding"
   codex-cli:
     base_url: "https://chatgpt.com/backend-api/codex"
     protocol: "codex_responses"
-    model: "gpt-5.5"
 ```
 
 - `protocol` is one of `openai_chat`, `openai_compatible`, `anthropic_messages`,
@@ -61,7 +61,10 @@ provider_profiles:           # extensible registry (Kimi, MiniMax, DeepSeek, Ope
   credentials can be reused instead of an API key — no `api_key` needed for
   those profiles.
 - Use `provider_profiles` for any vendor beyond the three first-class ones;
-  reference it by setting `model.provider` to the profile id.
+  reference it with `models.primary.provider`.
+- Provider blocks own connection/authentication. Model choice belongs in
+  `models.primary`; endpoint-level `model` remains readable only for backward
+  compatibility.
 - **`providers` vs `provider_profiles`**: `providers` holds the three
   first-class vendor slots plus `custom` (which *creates* a new provider with
   its own protocol/URL); `provider_profiles` *overrides* any built-in provider
@@ -112,6 +115,10 @@ memory/skill work never spends your primary quota.
 ```yaml
 models:
   source: "local"
+  primary:
+    provider: "codex-cli"
+    model: "gpt-5.6-sol"
+    reasoning: "xhigh"       # optional
   roles:
     memory_extract:          # memory intake + consolidation + compaction summaries
       provider: "kimi-coding"
@@ -128,6 +135,12 @@ models:
     fast_classifier: { provider: "kimi-coding", model: "kimi-for-coding" }
 ```
 
+`models.primary` is the only default model selection. `reasoning` and
+`service_tier` are optional; `auto` or omission means the provider/model
+default and sends no forced value. When capability metadata is available,
+`selfmind model set` validates requested values and `selfmind model current`
+shows the discovered defaults.
+
 For `kimi-coding`, every role uses the provider default Anthropic Messages
 transport (`https://api.kimi.com/coding/v1/messages`). This matches Hermes and
 the wire contract of Kimi Coding Plan's `/coding` route. A role-level `protocol`
@@ -136,6 +149,7 @@ wire contract; it should normally be omitted for Kimi Coding Plan.
 
 Role names are stable; a role with no override falls back to the main model.
 Point them at a cheap model to keep background work off your primary provider.
+There is no `default` role: `models.roles` contains exceptions only.
 
 ## 3. Storage & auth
 
@@ -162,20 +176,30 @@ web:
 
 Bubblewrap isolation for `terminal`, `verify`, and `execute_code` on Linux.
 **Default ON, best effort.** `sandbox: auto` prefers an isolated read-only-root,
-workspace-writable, no-network process. If bubblewrap is unavailable, auto
-records a degraded host fallback; `required: true` fails closed instead.
+workspace-writable process that shares the daemon's network namespace by
+default. If bubblewrap is unavailable, auto records a degraded host fallback;
+`required: true` fails closed instead.
 
 ```yaml
 exec_sandbox:
   enabled: true         # prefer bwrap for auto-mode exec calls
   required: false       # if true, refuse to exec when the sandbox is unavailable (fail-closed)
-  allow_network: false  # keep the host network namespace (default: no egress inside the sandbox)
+  allow_network: true   # share the daemon network namespace and inherited proxy/DNS settings
 ```
 
 Each exec tool accepts `sandbox: auto|isolated|host`. `isolated` refuses when
-the host cannot isolate. `host` is an explicit escape hatch for cloud CLIs,
-credentials, and networking; it always goes through the approval funnel and is
-disabled entirely when `required: true`. Install with `apt install bubblewrap`.
+the host cannot isolate. With `allow_network: true` (the default), isolated
+commands keep filesystem isolation while sharing the daemon process's network
+namespace and inherited proxy/DNS settings. Set it to `false` for a network-less
+sandbox. `host` is an explicit escape hatch for host credentials or writable
+host paths; it always goes through the approval funnel and is disabled entirely
+when `required: true`. `selfmind gateway restart` preserves the running
+daemon's executable search path plus `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`,
+and `NO_PROXY` (including lowercase variants). Current `PATH` entries lead and
+old-only tool directories are appended, so a restart from an IDE or updater
+does not hide user-installed commands. Explicit proxy values from the caller
+always win. Other environment variables, including credentials, are not
+copied. Install with `apt install bubblewrap`.
 
 - Recommended: **Tavily** (https://tavily.com, AI-native, free tier, good CN
   coverage). Alternatives: Brave (https://brave.com/search/api/), Serper
@@ -411,14 +435,15 @@ diagnosing transport flakiness or tuning the tool loop.
 ## Minimal config to get started
 
 ```yaml
-model:
-  provider: "codex-cli"
-  default: "gpt-5.5"
+models:
+  primary:
+    provider: "codex-cli"
+    model: "gpt-5.6-sol"
+    reasoning: "xhigh"
 provider_profiles:
   codex-cli:
     base_url: "https://chatgpt.com/backend-api/codex"
     protocol: "codex_responses"
-    model: "gpt-5.5"
 web:
   search_backend: "tavily"
   api_key: "tvly-xxxx"

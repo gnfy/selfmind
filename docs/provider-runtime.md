@@ -41,13 +41,26 @@ SelfMind distinguishes two commonly confused fields:
 
 Resolution priority:
 
-1. role/selection `context_length`
-2. `model.context_length`
-3. `provider_profiles.<id>.context_length`
-4. custom provider `models.<model>.context_length`
-5. built-in provider/profile metadata or the fallback table in `internal/modelruntime/context_length.go`
+1. explicit role/primary `context_length` override
+2. `provider_profiles.<id>.context_length`
+3. built-in provider profile metadata
+4. provider/local model metadata (for example Codex `models_cache.json`)
+5. custom provider `models.<model>.context_length`
+6. the conservative fallback table in `internal/modelruntime/context_length.go`
 
 Do not display `max_tokens` as the model context window, and do not hardcode fake values such as `1M` in CLI, IM, or web status surfaces. If the context window cannot be resolved, show it as unknown or ask the user to configure `context_length`.
+
+Normal users should omit `context_length`. It is an advanced override for
+private/local models whose provider publishes no capability metadata.
+
+## Reasoning and service tier
+
+The primary selection lives only under `models.primary`. `reasoning` and
+`service_tier` are optional. Omission or `auto` means provider/model default;
+the resolver deliberately does not send a forced value. Supported values are
+model capabilities, not a global hardcoded enum. `selfmind model set`
+validates them when metadata is discoverable and otherwise preserves the
+explicit value for compatible private endpoints.
 
 ## Core Files
 
@@ -88,9 +101,10 @@ Do not display `max_tokens` as the model context window, and do not hardcode fak
 Recommended minimal config:
 
 ```yaml
-model:
-  provider: "kimi-coding"
-  default: "kimi-for-coding"
+models:
+  primary:
+    provider: "kimi-coding"
+    model: "kimi-for-coding"
 
 provider_profiles:
   kimi-coding:
@@ -112,9 +126,10 @@ Default behavior:
 API key config:
 
 ```yaml
-model:
-  provider: "minimax"
-  default: "MiniMax-M3"
+models:
+  primary:
+    provider: "minimax"
+    model: "MiniMax-M3"
 
 provider_profiles:
   minimax:

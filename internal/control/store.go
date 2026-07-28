@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 	_ "modernc.org/sqlite"
+	"selfmind/internal/executionenv"
 )
 
 const DefaultTenantID = "default"
@@ -31,17 +32,20 @@ type IdentityContext struct {
 }
 
 type Workspace struct {
-	ID            string    `json:"id"`
-	TenantID      string    `json:"tenant_id"`
-	OwnerPersonID string    `json:"owner_person_id"`
-	Name          string    `json:"name"`
-	RepoURL       string    `json:"repo_url,omitempty"`
-	LocalPath     string    `json:"local_path"`
-	DefaultBranch string    `json:"default_branch,omitempty"`
-	AllowedRoots  []string  `json:"allowed_roots,omitempty"`
-	Status        string    `json:"status"`
-	CreatedAt     time.Time `json:"created_at"`
-	UpdatedAt     time.Time `json:"updated_at"`
+	ID            string     `json:"id"`
+	TenantID      string     `json:"tenant_id"`
+	OwnerPersonID string     `json:"owner_person_id"`
+	Name          string     `json:"name"`
+	RepoURL       string     `json:"repo_url,omitempty"`
+	LocalPath     string     `json:"local_path"`
+	DefaultBranch string     `json:"default_branch,omitempty"`
+	AllowedRoots  []string   `json:"allowed_roots,omitempty"`
+	Status        string     `json:"status"`
+	TrustLevel    string     `json:"trust_level"`
+	TrustSource   string     `json:"trust_source,omitempty"`
+	TrustedAt     *time.Time `json:"trusted_at,omitempty"`
+	CreatedAt     time.Time  `json:"created_at"`
+	UpdatedAt     time.Time  `json:"updated_at"`
 }
 
 type Task struct {
@@ -212,6 +216,9 @@ CREATE TABLE IF NOT EXISTS workspaces (
 	default_branch TEXT,
 	allowed_roots_json TEXT,
 	status TEXT NOT NULL DEFAULT 'active',
+	trust_level TEXT NOT NULL DEFAULT 'untrusted',
+	trust_source TEXT,
+	trusted_at INTEGER,
 	created_at INTEGER NOT NULL,
 	updated_at INTEGER NOT NULL,
 	UNIQUE(tenant_id, owner_person_id, local_path)
@@ -223,6 +230,37 @@ CREATE TABLE IF NOT EXISTS current_workspace (
 	updated_at INTEGER NOT NULL,
 	PRIMARY KEY(tenant_id, person_id)
 );
+CREATE TABLE IF NOT EXISTS execution_leases (
+	id TEXT PRIMARY KEY,
+	run_id TEXT NOT NULL UNIQUE,
+	tenant_id TEXT NOT NULL,
+	person_id TEXT NOT NULL,
+	workspace_id TEXT,
+	environment_profile TEXT NOT NULL,
+	credential_refs_json TEXT NOT NULL DEFAULT '[]',
+	principal_fingerprint TEXT,
+	capabilities_json TEXT NOT NULL DEFAULT '[]',
+	created_at INTEGER NOT NULL,
+	updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_execution_leases_person
+	ON execution_leases(tenant_id, person_id, created_at);
+CREATE TABLE IF NOT EXISTS execution_capability_grants (
+	id TEXT PRIMARY KEY,
+	tenant_id TEXT NOT NULL,
+	person_id TEXT NOT NULL,
+	workspace_id TEXT NOT NULL,
+	capability TEXT NOT NULL,
+	resource_fingerprint TEXT NOT NULL DEFAULT '',
+	granted_by TEXT,
+	expires_at INTEGER NOT NULL,
+	revoked_at INTEGER,
+	created_at INTEGER NOT NULL,
+	updated_at INTEGER NOT NULL,
+	UNIQUE(tenant_id, person_id, workspace_id, capability, resource_fingerprint)
+);
+CREATE INDEX IF NOT EXISTS idx_execution_capability_active
+	ON execution_capability_grants(tenant_id, person_id, workspace_id, capability, expires_at);
 CREATE TABLE IF NOT EXISTS tasks (
 	id TEXT PRIMARY KEY,
 	tenant_id TEXT NOT NULL,
@@ -685,6 +723,33 @@ CREATE INDEX IF NOT EXISTS idx_external_watches_owner
 			return err
 		}
 	}
+	// Existing workspaces predate an explicit trust act, so migration must not
+	// promote every path ever observed by a client into trusted instructions.
+	// They remain usable but require a one-time local-CLI review.
+	if added, err := s.ensureColumnAdded(ctx, "workspaces", "trust_level", "TEXT NOT NULL DEFAULT 'untrusted'"); err != nil {
+		return err
+	} else {
+		if err := s.ensureColumn(ctx, "workspaces", "trust_source", "TEXT"); err != nil {
+			return err
+		}
+		if err := s.ensureColumn(ctx, "workspaces", "trusted_at", "INTEGER"); err != nil {
+			return err
+		}
+		if added {
+			if _, err := s.db.ExecContext(ctx, `UPDATE workspaces
+				SET trust_level = ?, trust_source = 'migration_review_required', trusted_at = NULL
+				WHERE status = 'active'`, executionenv.TrustUntrusted); err != nil {
+				return err
+			}
+		}
+		// Correct installations that briefly shipped the overly broad
+		// migration_local promotion. Explicit local_cli trust is untouched.
+		if _, err := s.db.ExecContext(ctx, `UPDATE workspaces
+			SET trust_level = ?, trust_source = 'migration_review_required', trusted_at = NULL
+			WHERE trust_source = 'migration_local'`, executionenv.TrustUntrusted); err != nil {
+			return err
+		}
+	}
 	// finalized marks that a terminal watch's completion side effects (task
 	// update, event, notification, finalization run) actually ran. The
 	// terminal-status CAS and the side effects are not one transaction, so
@@ -1055,6 +1120,13 @@ func (s *Store) registerWorkspace(ctx context.Context, ws Workspace, replaceConf
 		ws.Status = "active"
 	}
 	now := time.Now()
+	if replaceConfiguration {
+		ws.TrustLevel = executionenv.TrustTrusted
+		ws.TrustSource = "local_cli"
+		ws.TrustedAt = &now
+	} else {
+		ws.TrustLevel = executionenv.TrustUntrusted
+	}
 	if len(ws.AllowedRoots) == 0 {
 		ws.AllowedRoots = []string{ws.LocalPath}
 	}
@@ -1078,18 +1150,30 @@ func (s *Store) registerWorkspace(ctx context.Context, ws Workspace, replaceConf
 		}
 	}
 	ws.ID = existingID
-	_, err = s.db.ExecContext(ctx,
-		`INSERT INTO workspaces
-		   (id, tenant_id, owner_person_id, name, repo_url, local_path, default_branch, allowed_roots_json, status, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	trustedAt := interface{}(nil)
+	if ws.TrustedAt != nil {
+		trustedAt = ws.TrustedAt.Unix()
+	}
+	upsert := `INSERT INTO workspaces
+		   (id, tenant_id, owner_person_id, name, repo_url, local_path, default_branch, allowed_roots_json, status,
+		    trust_level, trust_source, trusted_at, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(tenant_id, owner_person_id, local_path) DO UPDATE SET
 		   name = excluded.name,
 		   repo_url = excluded.repo_url,
 		   default_branch = excluded.default_branch,
 		   allowed_roots_json = excluded.allowed_roots_json,
 		   status = excluded.status,
-		   updated_at = excluded.updated_at`,
-		ws.ID, ws.TenantID, ws.OwnerPersonID, ws.Name, ws.RepoURL, ws.LocalPath, ws.DefaultBranch, string(roots), ws.Status, now.Unix(), now.Unix())
+		   updated_at = excluded.updated_at`
+	if replaceConfiguration {
+		upsert += `,
+		   trust_level = excluded.trust_level,
+		   trust_source = excluded.trust_source,
+		   trusted_at = excluded.trusted_at`
+	}
+	_, err = s.db.ExecContext(ctx, upsert,
+		ws.ID, ws.TenantID, ws.OwnerPersonID, ws.Name, ws.RepoURL, ws.LocalPath, ws.DefaultBranch, string(roots), ws.Status,
+		ws.TrustLevel, ws.TrustSource, trustedAt, now.Unix(), now.Unix())
 	if err != nil {
 		return nil, err
 	}
@@ -1130,14 +1214,17 @@ func (s *Store) CurrentWorkspace(ctx context.Context, tenantID, personID string)
 func (s *Store) GetWorkspace(ctx context.Context, tenantID, workspaceID string) (*Workspace, error) {
 	var ws Workspace
 	var roots string
+	var trustedAt sql.NullInt64
 	var created, updated int64
 	err := s.db.QueryRowContext(ctx,
 		`SELECT id, tenant_id, owner_person_id, name, COALESCE(repo_url, ''), local_path,
 		        COALESCE(default_branch, ''), COALESCE(allowed_roots_json, '[]'),
-		        status, created_at, updated_at
+		        status, COALESCE(trust_level, 'untrusted'), COALESCE(trust_source, ''), trusted_at,
+		        created_at, updated_at
 		 FROM workspaces WHERE tenant_id = ? AND id = ?`,
 		normalizeTenant(tenantID), workspaceID).
-		Scan(&ws.ID, &ws.TenantID, &ws.OwnerPersonID, &ws.Name, &ws.RepoURL, &ws.LocalPath, &ws.DefaultBranch, &roots, &ws.Status, &created, &updated)
+		Scan(&ws.ID, &ws.TenantID, &ws.OwnerPersonID, &ws.Name, &ws.RepoURL, &ws.LocalPath, &ws.DefaultBranch,
+			&roots, &ws.Status, &ws.TrustLevel, &ws.TrustSource, &trustedAt, &created, &updated)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -1145,6 +1232,10 @@ func (s *Store) GetWorkspace(ctx context.Context, tenantID, workspaceID string) 
 		return nil, err
 	}
 	_ = json.Unmarshal([]byte(roots), &ws.AllowedRoots)
+	if trustedAt.Valid {
+		value := time.Unix(trustedAt.Int64, 0)
+		ws.TrustedAt = &value
+	}
 	ws.CreatedAt = time.Unix(created, 0)
 	ws.UpdatedAt = time.Unix(updated, 0)
 	return &ws, nil
@@ -1154,7 +1245,8 @@ func (s *Store) ListWorkspaces(ctx context.Context, tenantID, personID string) (
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT id, tenant_id, owner_person_id, name, COALESCE(repo_url, ''), local_path,
 		        COALESCE(default_branch, ''), COALESCE(allowed_roots_json, '[]'),
-		        status, created_at, updated_at
+		        status, COALESCE(trust_level, 'untrusted'), COALESCE(trust_source, ''), trusted_at,
+		        created_at, updated_at
 		 FROM workspaces WHERE tenant_id = ? AND owner_person_id = ? ORDER BY updated_at DESC`,
 		normalizeTenant(tenantID), personID)
 	if err != nil {
@@ -1165,16 +1257,60 @@ func (s *Store) ListWorkspaces(ctx context.Context, tenantID, personID string) (
 	for rows.Next() {
 		var ws Workspace
 		var roots string
+		var trustedAt sql.NullInt64
 		var created, updated int64
-		if err := rows.Scan(&ws.ID, &ws.TenantID, &ws.OwnerPersonID, &ws.Name, &ws.RepoURL, &ws.LocalPath, &ws.DefaultBranch, &roots, &ws.Status, &created, &updated); err != nil {
+		if err := rows.Scan(&ws.ID, &ws.TenantID, &ws.OwnerPersonID, &ws.Name, &ws.RepoURL, &ws.LocalPath,
+			&ws.DefaultBranch, &roots, &ws.Status, &ws.TrustLevel, &ws.TrustSource, &trustedAt, &created, &updated); err != nil {
 			return nil, err
 		}
 		_ = json.Unmarshal([]byte(roots), &ws.AllowedRoots)
+		if trustedAt.Valid {
+			value := time.Unix(trustedAt.Int64, 0)
+			ws.TrustedAt = &value
+		}
 		ws.CreatedAt = time.Unix(created, 0)
 		ws.UpdatedAt = time.Unix(updated, 0)
 		out = append(out, ws)
 	}
 	return out, rows.Err()
+}
+
+func (s *Store) SetWorkspaceTrust(ctx context.Context, tenantID, personID, workspaceID, trustLevel, source string) (*Workspace, error) {
+	trustLevel = strings.ToLower(strings.TrimSpace(trustLevel))
+	if trustLevel != executionenv.TrustTrusted && trustLevel != executionenv.TrustUntrusted {
+		return nil, fmt.Errorf("invalid workspace trust level %q", trustLevel)
+	}
+	var trustedAt interface{}
+	if trustLevel == executionenv.TrustTrusted {
+		trustedAt = time.Now().Unix()
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	result, err := tx.ExecContext(ctx, `UPDATE workspaces
+		SET trust_level = ?, trust_source = ?, trusted_at = ?, updated_at = ?
+		WHERE tenant_id = ? AND owner_person_id = ? AND id = ?`,
+		trustLevel, strings.TrimSpace(source), trustedAt, time.Now().Unix(),
+		normalizeTenant(tenantID), personID, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	if count, _ := result.RowsAffected(); count != 1 {
+		return nil, fmt.Errorf("workspace not found")
+	}
+	if trustLevel == executionenv.TrustUntrusted {
+		if _, err := tx.ExecContext(ctx, `UPDATE execution_capability_grants SET revoked_at = ?, updated_at = ?
+			WHERE tenant_id = ? AND person_id = ? AND workspace_id = ? AND revoked_at IS NULL`,
+			time.Now().Unix(), time.Now().Unix(), normalizeTenant(tenantID), personID, workspaceID); err != nil {
+			return nil, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return s.GetWorkspace(ctx, tenantID, workspaceID)
 }
 
 func (s *Store) CreateTask(ctx context.Context, req TaskCreate) (*Task, error) {

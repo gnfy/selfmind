@@ -202,6 +202,50 @@ func (m *uiModel) handleControlPassthrough(command string, args []string) tea.Cm
 	}
 }
 
+// handleResumeSelect backs /resume. With a reference it is a plain relay. Bare,
+// it turns into a picker: the daemon owns task ordering, so the TUI relays
+// /tasks and presents that reply as the menu rather than numbering a list of
+// its own — a locally numbered menu would drift from the resolver that
+// /resume <n> actually uses. armResumePicker makes the next bare number expand
+// to /resume <n>.
+func (m *uiModel) handleResumeSelect(args []string) tea.Cmd {
+	if len(args) > 0 {
+		m.resumePickerArmed = false
+		return m.handleControlPassthrough("/resume", args)
+	}
+	list := m.handleControlPassthrough("/tasks", nil)
+	return func() tea.Msg {
+		msg := list()
+		done, ok := msg.(MsgAgentDone)
+		if !ok || strings.TrimSpace(done.Response) == "" {
+			return msg
+		}
+		m.resumePickerArmed = true
+		done.Response = strings.TrimRight(done.Response, "\n") +
+			"\n\nType a number to resume that task (or /resume <task_id>)."
+		return done
+	}
+}
+
+// bareListNumber returns the input as a list index when it is nothing but a
+// positive integer, else "". It gates the armed /resume picker so ordinary
+// messages that merely start with a digit still reach the agent.
+func bareListNumber(input string) string {
+	trimmed := strings.TrimSpace(input)
+	if trimmed == "" {
+		return ""
+	}
+	for _, r := range trimmed {
+		if r < '0' || r > '9' {
+			return ""
+		}
+	}
+	if strings.Trim(trimmed, "0") == "" {
+		return ""
+	}
+	return trimmed
+}
+
 func (m *uiModel) controlMessageRequest(content string) api.MessageRequest {
 	return api.MessageRequest{
 		TenantID:       m.tenantID,
@@ -512,6 +556,14 @@ func (m *uiModel) handleBundles(args []string) tea.Cmd {
 // in-process path removal (ACTIVE PLAN P0-3).
 func (m *uiModel) handleSessionSearch(args []string) tea.Cmd {
 	query := strings.TrimSpace(strings.Join(args, " "))
+	// `/search current` is the full-fidelity view of the conversation in
+	// progress — the escape hatch the immutable hybrid transcript otherwise
+	// gives up, since committed cells carry bounded diffs. It lives here rather
+	// than under its own command so "look back at work" has one entry point.
+	if strings.EqualFold(query, "current") {
+		m.openHistory()
+		return nil
+	}
 	return func() tea.Msg {
 		dispatchArgs := map[string]interface{}{"limit": 10, "_tenant_id": m.tenantID}
 		if query != "" {
@@ -803,7 +855,7 @@ func (m *uiModel) handleMode(args []string) tea.Cmd {
 			current = "not set this session (your saved /mode preference applies; on-request if none)"
 		}
 		m.addMessage("assistant", fmt.Sprintf(
-			"Approval mode: %s\n\n  on-request  ask only on risky ops (default)\n  read-only   ask before any file write or command\n  auto-edit   auto-apply in-workspace edits; ask before commands\n  full-auto   run everything without asking (hard-floor safety limits still apply)\n  smart       auto-run clearly safe risky ops after LLM triage; ask otherwise\n\nUsage: /mode <on-request|read-only|auto-edit|full-auto|smart>",
+			"Approval mode: %s\n\n  on-request  ask only on risky ops\n  read-only   ask before any file write or command\n  auto-edit   auto-apply in-workspace edits; ask before commands\n  full-auto   run everything without asking (hard-floor safety limits still apply)\n  smart       auto-run clearly safe risky ops after LLM triage; ask otherwise (default)\n\nUsage: /mode <on-request|read-only|auto-edit|full-auto|smart>",
 			m.effectiveApprovalMode()))
 		return nil
 	}

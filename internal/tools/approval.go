@@ -11,6 +11,10 @@ type ToolApprovalRequest struct {
 	ToolName string                 `json:"tool_name"`
 	Reason   string                 `json:"reason"`
 	Args     map[string]interface{} `json:"args,omitempty"`
+	// ResourceFingerprint is a non-secret, stable scope for reusable grants.
+	// It identifies the workspace and command family, never raw command text,
+	// paths, tokens, or credential bytes.
+	ResourceFingerprint string `json:"resource_fingerprint,omitempty"`
 }
 
 type ToolApprovalDecision struct {

@@ -1,8 +1,6 @@
 package cli
 
 import (
-	"fmt"
-
 	tea "github.com/charmbracelet/bubbletea"
 	"selfmind/internal/ui/components"
 )
@@ -21,7 +19,7 @@ type slashCommand struct {
 
 var slashCommandMetas = []slashCommandMeta{
 	{Name: "/help", Usage: "/help", Description: "Open this temporary help page", Hint: "show available commands"},
-	{Name: "/model", Usage: "/model [model-name]", Description: "Show or switch model", Hint: "choose model, provider, and reasoning"},
+	{Name: "/model", Usage: "/model", Description: "Show the daemon model and configuration command", Hint: "show model, provider, and how to change them"},
 	{Name: "/status", Usage: "/status", Description: "Show runtime status and background processes", Hint: "show runtime, gateway, and model state"},
 	{Name: "/tasks", Usage: "/tasks [open|done|archived|all|search <text>] [--workspace <id>] [--page <n>]", Description: "List or search paged work labels", Hint: "view and manage gateway tasks"},
 	{Name: "/skills", Usage: "/skills [list|view|history|undo|search|install|audit|delete|archive|pin|unpin|stats|reload]", Description: "Manage learned skills", Hint: "list, view, undo, install, or archive skills"},
@@ -35,13 +33,12 @@ var slashCommandMetas = []slashCommandMeta{
 	{Name: "/exit", Usage: "/exit", Description: "Exit SelfMind", Hint: "leave SelfMind"},
 	{Name: "/compact", Usage: "/compact", Description: "Compact older conversation history to free context", Hint: "summarize and shrink the transcript"},
 	{Name: "/paste-image", Usage: "/paste-image", Description: "Attach a screenshot from the clipboard (local GUI only, not over SSH)", Hint: "attach a clipboard screenshot"},
-	{Name: "/mode", Usage: "/mode [on-request|read-only|auto-edit|full-auto]", Description: "Show or set the approval mode", Hint: "choose what runs without asking"},
+	{Name: "/mode", Usage: "/mode [on-request|read-only|auto-edit|full-auto|smart]", Description: "Show or set the approval mode", Hint: "choose what runs without asking"},
 	{Name: "/capture", Usage: "/capture [title]", Description: "Save the last turn as a replayable eval case", Hint: "turn this turn into a regression test"},
-	{Name: "/history", Usage: "/history", Description: "Open a scrollable view of the full conversation with complete diffs", Hint: "review past turns and full diffs"},
 	{Name: "/copy", Usage: "/copy", Description: "Copy the last assistant response to the clipboard", Hint: "copy the last response"},
 	{Name: "/queue", Usage: "/queue [clear]", Description: "List queued tasks, or drop all pending queued tasks", Hint: "view or clear queued work"},
-	{Name: "/diag", Usage: "/diag [memory|context|tasks|models|delivery]", Description: "Show runtime and subsystem diagnostics", Hint: "runs, queues, memory, context, tasks, model routes, delivery"},
-	{Name: "/search", Usage: "/search [query]", Description: "Search past working sessions (empty = recent sessions)", Hint: "find prior work by keyword"},
+	{Name: "/diag", Usage: "/diag [memory|context|tasks|models|delivery|execution]", Description: "Show runtime and subsystem diagnostics", Hint: "runs, queues, memory, context, tasks, models, delivery, execution"},
+	{Name: "/search", Usage: "/search [current|query]", Description: "Review this conversation with full diffs (current), or search past working sessions (empty = recent sessions)", Hint: "review this conversation or find prior work"},
 	// Gateway control commands the TUI relays to the daemon. Previously the TUI
 	// OMITTED these, so typing /approve fell through to the skill/unknown path
 	// and never reached the approve lifecycle. They now route through the shared
@@ -54,7 +51,7 @@ var slashCommandMetas = []slashCommandMeta{
 	{Name: "/cancel", Usage: "/cancel", Description: "Cancel the current task even if no run is active", Hint: "cancel the current task"},
 	{Name: "/id", Usage: "/id", Description: "Show your resolved account identity", Hint: "show your account identity"},
 	{Name: "/new", Usage: "/new [title]", Description: "Create a new task", Hint: "create a new task"},
-	{Name: "/resume", Usage: "/resume <n|task_id>", Description: "Resume a task by list number or id (an archived id reopens it)", Hint: "resume a task by number or id"},
+	{Name: "/resume", Usage: "/resume [n|task_id]", Description: "Pick a recent task to resume (bare), or resume one by number or id", Hint: "pick a task to resume"},
 	{Name: "/task", Usage: "/task <n|id> [runs|rename <name>|archive]", Description: "Show a task's detail, runs, rename it, or archive it", Hint: "inspect or manage one task"},
 	{Name: "/workspace", Usage: "/workspace [n|id]", Description: "List workspaces (bare) or select one by number/id", Hint: "list or select a workspace"},
 	{Name: "/ws", Usage: "/ws [n|id]", Description: "Short alias for /workspace (bare lists, arg selects)", Hint: "list or select a workspace"},
@@ -80,18 +77,11 @@ var slashCommands = []slashCommand{
 	{
 		slashCommandMeta: slashCommandMetas[1],
 		Run: func(m *uiModel, args []string) tea.Cmd {
-			if len(args) < 1 {
-				current := "(unknown)"
-				if m.agent != nil {
-					current = m.agent.CurrentModel()
-				} else if m.modelName != "" {
-					current = m.modelName // client mode: show the daemon's display model
-				}
-				m.addMessage("assistant", fmt.Sprintf("Current model: %s", current))
-				m.addMessage("assistant", "Usage: /model <model-name>  (e.g. /model claude-3-5-haiku-20241022)")
-				return nil
+			if len(args) > 0 {
+				m.addMessage("assistant", "Runtime model switching is intentionally disabled for the shared daemon.")
+				m.addMessage("assistant", "Use: selfmind model set <provider> <model> [--reasoning <level|auto>]")
 			}
-			return m.handleModelSwitch(args[0])
+			return m.handleControlPassthrough("/model", nil)
 		},
 	},
 	{
@@ -163,7 +153,7 @@ var slashCommands = []slashCommand{
 	{
 		slashCommandMeta: slashCommandMetas[12],
 		Run: func(m *uiModel, args []string) tea.Cmd {
-			return tea.Quit
+			return m.quitNow()
 		},
 	},
 	{
@@ -191,26 +181,19 @@ var slashCommands = []slashCommand{
 		},
 	},
 	{
-		slashCommandMeta: slashCommandMetas[17],
-		Run: func(m *uiModel, args []string) tea.Cmd {
-			m.openHistory()
-			return nil
-		},
-	},
-	{
-		slashCommandMeta: slashCommandMetas[18],
+		slashCommandMeta: metaByName("/copy"),
 		Run: func(m *uiModel, args []string) tea.Cmd {
 			return m.handleCopyLast()
 		},
 	},
 	{
-		slashCommandMeta: slashCommandMetas[19],
+		slashCommandMeta: metaByName("/queue"),
 		Run: func(m *uiModel, args []string) tea.Cmd {
 			return m.handleControlPassthrough("/queue", args)
 		},
 	},
 	{
-		slashCommandMeta: slashCommandMetas[20],
+		slashCommandMeta: metaByName("/diag"),
 		Run: func(m *uiModel, args []string) tea.Cmd {
 			return m.handleControlPassthrough("/diag", args)
 		},
@@ -250,6 +233,13 @@ var allSlashCommands = func() []slashCommand {
 		if name == "/workspace" || name == "/ws" {
 			run = func(m *uiModel, args []string) tea.Cmd {
 				return m.handleWorkspaceSelect(args)
+			}
+		}
+		// Bare /resume becomes a task picker instead of a usage error — see
+		// handleResumeSelect. With an argument it is the same relay as before.
+		if name == "/resume" {
+			run = func(m *uiModel, args []string) tea.Cmd {
+				return m.handleResumeSelect(args)
 			}
 		}
 		out = append(out, slashCommand{

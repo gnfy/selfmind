@@ -21,6 +21,18 @@ func TestNormalizeApprovalMode(t *testing.T) {
 	}
 }
 
+func TestEffectiveApprovalModeUsesSmartOnlyForEmpty(t *testing.T) {
+	if got := EffectiveApprovalMode(""); got != ApprovalSmart {
+		t.Fatalf("empty effective mode = %q, want smart", got)
+	}
+	if got := EffectiveApprovalMode("nonsense"); got != ApprovalOnRequest {
+		t.Fatalf("invalid effective mode = %q, want on-request", got)
+	}
+	if got := EffectiveApprovalMode("read-only"); got != ApprovalReadOnly {
+		t.Fatalf("explicit effective mode = %q, want read-only", got)
+	}
+}
+
 func TestApprovalNeeded(t *testing.T) {
 	type row struct {
 		mode      ApprovalMode

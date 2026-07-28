@@ -15,10 +15,14 @@ func shellArgv(command string) []string {
 
 func shellCommandContext(ctx context.Context, command string) *exec.Cmd {
 	argv := shellArgv(command)
-	return exec.CommandContext(ctx, argv[0], argv[1:]...)
+	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	cmd.Env = currentToolProcessEnv()
+	return cmd
 }
 
 func shellCommand(command string) *exec.Cmd {
 	argv := shellArgv(command)
-	return exec.Command(argv[0], argv[1:]...)
+	cmd := exec.Command(argv[0], argv[1:]...)
+	cmd.Env = currentToolProcessEnv()
+	return cmd
 }

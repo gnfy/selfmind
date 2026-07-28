@@ -184,14 +184,44 @@ func enrichToolFailure(toolName string, err error, output string) error {
 // actually points to host-only credentials, networking, or environment state.
 // Syntax and path mistakes stay on the normal correction path so they cannot
 // become repeated approval requests.
+// isolatedSandboxTimeoutHint is appended to a command-timeout failure that ran
+// inside the isolated sandbox. Timeouts bypass the error classifier (they have
+// no diagnostic stderr), so without this the ONE failure shape a network-less
+// sandbox most often produces — a retrying client (gRPC, kubectl) disguising
+// instant connect failures as a hang — carried zero sandbox context and read
+// as "the network is slow" (observed live against an IP-allowlisted ArgoCD).
+// Empty when the sandbox shares the host network: a timeout there is a real
+// timeout and must not be blamed on the sandbox.
+func isolatedSandboxTimeoutHint(decision SandboxDecision) string {
+	if decision.Mode != SandboxIsolated {
+		return ""
+	}
+	if decision.NetworkShared {
+		return ""
+	}
+	return "\nsandbox_context: isolated network-disabled; hint: The command timed out while isolated. Inspect the captured output before deciding whether it needs network:shared, different credentials, or a longer timeout."
+}
+
+func enrichSandboxTimeout(toolName string, err error, output string, decision SandboxDecision) error {
+	if err == nil {
+		return nil
+	}
+	if hint := isolatedSandboxTimeoutHint(decision); hint != "" {
+		return fmt.Errorf("%w%s", err, hint)
+	}
+	return enrichToolFailure(toolName, err, output)
+}
+
 func enrichIsolatedSandboxFailure(toolName string, err error, output string) error {
 	if err == nil {
 		return nil
 	}
 	class := ClassifyToolError(toolName, err, output)
 	switch class {
-	case "auth", "network", "environment":
-		return fmt.Errorf("%w\nerror_class: sandbox_host_required; hint: The isolated sandbox lacks required host credentials, network access, or environment state; retry exactly once with sandbox=host (approval required), and do not repeat the isolated variant.", err)
+	case "network":
+		return fmt.Errorf("%w\nerror_class: sandbox_no_network; hint: The isolated command needs network access. Request the workspace-scoped network:shared capability; do not switch to host execution.", err)
+	case "auth", "environment":
+		return fmt.Errorf("%w\nerror_class: %s; hint: %s Host execution is not an authentication or setup fix.", err, class, errorClassHints[class])
 	default:
 		return fmt.Errorf("%w\nerror_class: %s; hint: %s", err, class, errorClassHints[class])
 	}

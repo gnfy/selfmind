@@ -191,6 +191,9 @@ func (d *Server) tryHandleControlCommand(ctx context.Context, identity *control.
 	case lower == "/diag models":
 		reply, err := d.modelsDiagReply(ctx, identity)
 		return true, reply, err
+	case lower == "/diag execution":
+		reply, err := d.executionDiagReply(ctx, identity)
+		return true, reply, err
 	case strings.HasPrefix(lower, "/diag delivery retry "):
 		ref := strings.TrimSpace(trimmed[len("/diag delivery retry "):])
 		reply, err := d.retryDeliveryReply(ctx, identity, req, ref)
@@ -360,7 +363,7 @@ func (d *Server) approvalModeReply(ctx context.Context, identity *control.Identi
 			return "", err
 		}
 		if strings.TrimSpace(current) == "" {
-			current = string(tools.ApprovalOnRequest) + " (default)"
+			current = string(tools.DefaultApprovalMode) + " (default)"
 		}
 		return "Approval mode: " + current + "\n" + usage, nil
 	}

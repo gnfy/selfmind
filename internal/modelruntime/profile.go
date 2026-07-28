@@ -216,11 +216,9 @@ func BuiltinProfiles() []ProviderProfile {
 			BaseURL: "https://chatgpt.com/backend-api/codex", ExternalSource: "codex-cli",
 			ModelList:      ModelListCodex,
 			FallbackModels: []string{"gpt-5.5", "gpt-5.3-codex"},
-			// Match the official Codex CLI, which reasons at high effort by
-			// default; this is a major driver of its output quality. Override
-			// via provider_profiles/models.roles reasoning_effort.
-			ReasoningEffort: "high",
-			Quirks:          codexResponsesQuirks(),
+			// Omit reasoning by default so the selected model/provider owns its
+			// default. Explicit models.primary.reasoning is still forwarded.
+			Quirks: codexResponsesQuirks(),
 		},
 		{
 			ID: "openrouter", DisplayName: "OpenRouter",
@@ -264,13 +262,12 @@ func BuiltinProfiles() []ProviderProfile {
 			Protocol: ProtocolAnthropic, AuthType: AuthAPIKey,
 			BaseURL: "https://api.kimi.com/coding", APIKeyEnvVars: []string{"KIMI_CODING_API_KEY", "KIMI_API_KEY"},
 			BaseURLEnvVar: "KIMI_BASE_URL", ModelList: ModelListStatic,
-			FallbackModels:  []string{"kimi-for-coding", "kimi-for-coding-highspeed"},
-			ContextLength:   262144,
-			Headers:         map[string]string{"User-Agent": "claude-code/0.1.0"},
-			MaxTokens:       32000,
-			ReasoningEffort: "medium",
-			Thinking:        map[string]interface{}{"type": "enabled"},
-			Quirks:          kimiQuirks(),
+			FallbackModels: []string{"kimi-for-coding", "kimi-for-coding-highspeed"},
+			ContextLength:  262144,
+			Headers:        map[string]string{"User-Agent": "claude-code/0.1.0"},
+			MaxTokens:      32000,
+			Thinking:       map[string]interface{}{"type": "enabled"},
+			Quirks:         kimiQuirks(),
 		},
 		{
 			ID: "deepseek", DisplayName: "DeepSeek",

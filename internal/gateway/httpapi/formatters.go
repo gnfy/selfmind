@@ -56,7 +56,11 @@ func formatWorkspaces(workspaces []control.Workspace, currentID string) string {
 		if currentID != "" && ws.ID == currentID {
 			marker = "   ← current"
 		}
-		fmt.Fprintf(&sb, "%d. %s (%s)%s\n   %s\n", i+1, ws.Name, ws.ID, marker, ws.LocalPath)
+		trust := ""
+		if ws.TrustLevel == "untrusted" {
+			trust = " [untrusted]"
+		}
+		fmt.Fprintf(&sb, "%d. %s (%s)%s%s\n   %s\n", i+1, ws.Name, ws.ID, marker, trust, ws.LocalPath)
 	}
 	sb.WriteString("\nUse /workspace <number> (or the id) to switch.")
 	return strings.TrimSpace(sb.String())
@@ -77,7 +81,11 @@ func formatWorkspacesForIM(workspaces []control.Workspace, currentID string) str
 		if currentID != "" && ws.ID == currentID {
 			marker = " [current]"
 		}
-		fmt.Fprintf(&sb, "[%d] %s%s | %s\n", i+1, ws.Name, marker, ws.LocalPath)
+		trust := ""
+		if ws.TrustLevel == "untrusted" {
+			trust = " [untrusted]"
+		}
+		fmt.Fprintf(&sb, "[%d] %s%s%s | %s\n", i+1, ws.Name, marker, trust, ws.LocalPath)
 	}
 	sb.WriteString("\nSwitch: /ws 2")
 	return strings.TrimSpace(sb.String())

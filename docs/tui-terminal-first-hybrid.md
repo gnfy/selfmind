@@ -11,7 +11,7 @@ stays canonical.
 - H1–H5: ✅ shipped (see §5).
 - **hybrid is the ONLY renderer (2026-07-10).** The legacy path and `SELFMIND_TUI_LEGACY` were DELETED. (Historical note: it used to be the
   escape hatch to the old renderer (kept one cycle).
-- Overlays (`/help`, `/history`, `/model`, …): ✅ user-verified in hybrid.
+- Overlays (`/help`, `/search current`, `/model`, …): ✅ user-verified in hybrid.
 - `/clear` + `ctrl+l`: clear the screen and re-show the startup card in hybrid.
 - **Persistent input history (2026-07-20):** up/down-arrow composer history
   survives across sessions via `~/.selfmind/input_history.jsonl` (codex-style
@@ -38,7 +38,7 @@ stays canonical.
   - Legacy rendering path + `SELFMIND_TUI_LEGACY`: ✅ deleted 2026-07-10
     (viewport, `controller_mouse.go`, app scroll, `renderCache`).
   - write_file overwrite real diff (needs a pre-image; tool-contract change).
-  - `/history` in-overlay search + `control.db`-backed history beyond the window.
+  - `/search current` in-overlay search + `control.db`-backed history beyond the window.
 
 ## 1. Decision
 
@@ -240,8 +240,17 @@ substrate). Document results in this file.
 - Digest text, learning events, and completion notices use distinct cell
   roles. Lifecycle-only tools update control state without creating noisy
   transcript rows.
+- External watcher lifecycle uses the durable watcher id as its only display
+  identity. Completion renders one compact, transport-neutral status line
+  (`Watcher <id> | status: succeeded | task: waiting_finalization`), and the
+  system finalization run opens with
+  `Watcher <id> | status: finalizing | task: running` instead of exposing its
+  internal prompt. The
+  current user run is never interrupted; finalization still obeys the
+  per-person durable queue.
 - Regression coverage: `event_identity_test.go`, `attach_digest_test.go`, and
-  the targeted watcher tests in `gateway/client/client_test.go`.
+  the targeted watcher tests in `gateway/client/client_test.go` and
+  `gateway/cli/daemon_queue_test.go`.
 
 ### H3 — Commit-time file-change rendering ✅ shipped (patch); ⏳ write_file overwrite deferred
 - `renderPatchCell` (`transcript_renderer.go`) parses the V4A patch input
@@ -261,7 +270,7 @@ substrate). Document results in this file.
   `TestPatchCellBoundsLargeAdd`.
 
 ### H4 — Full-screen history browser overlay ✅ shipped (basic)
-- `/history` opens the existing `Pager` over the in-memory log
+- `/search current` opens the existing `Pager` over the in-memory log
   (`renderHistoryContent`), rendering **unbounded** diffs (the "expand the full
   diff" escape hatch the bounded scrollback hint points to).
 - Deferred: in-overlay text search and `control.db`-backed history beyond the

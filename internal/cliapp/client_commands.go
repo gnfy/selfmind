@@ -7,12 +7,14 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"selfmind/internal/gateway/api"
 	"selfmind/internal/platform/config"
+	gatewayrt "selfmind/internal/runtime/gateway"
 	"selfmind/internal/tools"
 )
 
@@ -275,9 +277,190 @@ func (a *App) handleWorkspaceCommand(args []string) int {
 		return a.sendGatewayMessage("/workspace " + args[1])
 	case "list":
 		return a.sendGatewayMessage("/workspaces")
+	case "trust", "untrust":
+		workspaceID := ""
+		if len(args) >= 2 {
+			workspaceID = args[1]
+		}
+		level := "trusted"
+		if args[0] == "untrust" {
+			level = "untrusted"
+		}
+		return a.setWorkspaceTrust(workspaceID, level)
+	case "grants":
+		workspaceID := ""
+		if len(args) >= 2 {
+			workspaceID = args[1]
+		}
+		return a.listWorkspaceCapabilities(workspaceID)
+	case "revoke":
+		if len(args) < 2 {
+			fmt.Fprintln(a.stderr, "usage: selfmind ws revoke <capability> [workspace_id]")
+			return 2
+		}
+		workspaceID := ""
+		if len(args) >= 3 {
+			workspaceID = args[2]
+		}
+		return a.revokeWorkspaceCapability(args[1], workspaceID)
 	default:
 		// A bare number or id selects the workspace (ws 2, ws ws_abc123).
 		return a.sendGatewayMessage("/workspace " + args[0])
+	}
+}
+
+func (a *App) listWorkspaceCapabilities(workspaceID string) int {
+	a.ensureLocalGateway()
+	query := url.Values{
+		"tenant_id":        []string{os.Getenv("SELF_TENANT_ID")},
+		"platform":         []string{"cli"},
+		"platform_user_id": []string{platformUserID()},
+	}
+	if workspaceID = strings.TrimSpace(workspaceID); workspaceID != "" {
+		query.Set("workspace_id", workspaceID)
+	}
+	httpReq, err := http.NewRequestWithContext(
+		a.ctx,
+		http.MethodGet,
+		a.gatewayURL()+"/v1/workspaces/capabilities?"+query.Encode(),
+		nil,
+	)
+	if err != nil {
+		fmt.Fprintln(a.stderr, err)
+		return 1
+	}
+	a.attachGatewayAuth(httpReq)
+	a.attachLocalControlAuth(httpReq)
+	httpResp, err := http.DefaultClient.Do(httpReq)
+	if err != nil {
+		fmt.Fprintln(a.stderr, err)
+		return 1
+	}
+	defer httpResp.Body.Close()
+	if httpResp.StatusCode >= 400 {
+		data, _ := io.ReadAll(httpResp.Body)
+		fmt.Fprintln(a.stderr, gatewayErrorLine(httpResp.Status, data))
+		return 1
+	}
+	var payload struct {
+		WorkspaceID  string                    `json:"workspace_id"`
+		Capabilities []api.WorkspaceCapability `json:"capabilities"`
+	}
+	if err := json.NewDecoder(httpResp.Body).Decode(&payload); err != nil {
+		fmt.Fprintln(a.stderr, err)
+		return 1
+	}
+	if len(payload.Capabilities) == 0 {
+		fmt.Fprintf(a.stdout, "No active execution capabilities for workspace %s.\n", payload.WorkspaceID)
+		return 0
+	}
+	fmt.Fprintf(a.stdout, "Execution capabilities for workspace %s:\n", payload.WorkspaceID)
+	for _, grant := range payload.Capabilities {
+		fmt.Fprintf(a.stdout, "- %s (expires %s", grant.Capability, grant.ExpiresAt.Local().Format("2006-01-02 15:04 MST"))
+		if strings.TrimSpace(grant.GrantedBy) != "" {
+			fmt.Fprintf(a.stdout, ", granted by %s", grant.GrantedBy)
+		}
+		fmt.Fprintln(a.stdout, ")")
+	}
+	return 0
+}
+
+func (a *App) revokeWorkspaceCapability(capability, workspaceID string) int {
+	a.ensureLocalGateway()
+	req := api.WorkspaceCapabilityRequest{
+		TenantID:       os.Getenv("SELF_TENANT_ID"),
+		Platform:       "cli",
+		PlatformUserID: platformUserID(),
+		WorkspaceID:    strings.TrimSpace(workspaceID),
+		Capability:     strings.TrimSpace(capability),
+	}
+	body, _ := json.Marshal(req)
+	httpReq, err := http.NewRequestWithContext(
+		a.ctx,
+		http.MethodDelete,
+		a.gatewayURL()+"/v1/workspaces/capabilities",
+		bytes.NewReader(body),
+	)
+	if err != nil {
+		fmt.Fprintln(a.stderr, err)
+		return 1
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	a.attachGatewayAuth(httpReq)
+	a.attachLocalControlAuth(httpReq)
+	httpResp, err := http.DefaultClient.Do(httpReq)
+	if err != nil {
+		fmt.Fprintln(a.stderr, err)
+		return 1
+	}
+	defer httpResp.Body.Close()
+	if httpResp.StatusCode >= 400 {
+		data, _ := io.ReadAll(httpResp.Body)
+		fmt.Fprintln(a.stderr, gatewayErrorLine(httpResp.Status, data))
+		return 1
+	}
+	var payload struct {
+		Revoked     string `json:"revoked"`
+		WorkspaceID string `json:"workspace_id"`
+	}
+	if err := json.NewDecoder(httpResp.Body).Decode(&payload); err != nil {
+		fmt.Fprintln(a.stderr, err)
+		return 1
+	}
+	fmt.Fprintf(a.stdout, "Revoked %s for workspace %s.\n", payload.Revoked, payload.WorkspaceID)
+	return 0
+}
+
+func (a *App) setWorkspaceTrust(workspaceID, trustLevel string) int {
+	a.ensureLocalGateway()
+	req := api.WorkspaceTrustRequest{
+		TenantID:       os.Getenv("SELF_TENANT_ID"),
+		Platform:       "cli",
+		PlatformUserID: platformUserID(),
+		WorkspaceID:    strings.TrimSpace(workspaceID),
+		TrustLevel:     trustLevel,
+	}
+	body, _ := json.Marshal(req)
+	httpReq, err := http.NewRequestWithContext(a.ctx, http.MethodPost, a.gatewayURL()+"/v1/workspaces/trust", bytes.NewReader(body))
+	if err != nil {
+		fmt.Fprintln(a.stderr, err)
+		return 1
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	a.attachGatewayAuth(httpReq)
+	a.attachLocalControlAuth(httpReq)
+	httpResp, err := http.DefaultClient.Do(httpReq)
+	if err != nil {
+		fmt.Fprintln(a.stderr, err)
+		return 1
+	}
+	defer httpResp.Body.Close()
+	if httpResp.StatusCode >= 400 {
+		data, _ := io.ReadAll(httpResp.Body)
+		fmt.Fprintln(a.stderr, gatewayErrorLine(httpResp.Status, data))
+		return 1
+	}
+	var payload struct {
+		Workspace struct {
+			Name       string `json:"name"`
+			LocalPath  string `json:"local_path"`
+			TrustLevel string `json:"trust_level"`
+		} `json:"workspace"`
+	}
+	if err := json.NewDecoder(httpResp.Body).Decode(&payload); err != nil {
+		fmt.Fprintln(a.stderr, err)
+		return 1
+	}
+	fmt.Fprintf(a.stdout, "Workspace %s is now %s.\n%s\n", payload.Workspace.Name, payload.Workspace.TrustLevel, payload.Workspace.LocalPath)
+	return 0
+}
+
+func (a *App) attachLocalControlAuth(req *http.Request) {
+	if req == nil {
+		return
+	}
+	if token, err := gatewayrt.ReadLocalControlToken(a.gatewayDataDir()); err == nil {
+		req.Header.Set(api.LocalControlTokenHeader, token)
 	}
 }
 
@@ -300,6 +483,7 @@ func (a *App) registerWorkspace(path, name string) int {
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	a.attachGatewayAuth(httpReq)
+	a.attachLocalControlAuth(httpReq)
 	httpResp, err := http.DefaultClient.Do(httpReq)
 	if err != nil {
 		fmt.Fprintln(a.stderr, err)

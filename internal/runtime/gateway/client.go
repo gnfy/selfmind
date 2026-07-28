@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -21,6 +22,12 @@ type StartResult struct {
 type StartOptions struct {
 	Replace    bool
 	ConfigPath string
+	// InheritedRestartEnvironment carries the running daemon's executable
+	// search path and proxy variables across a restart that stops the old
+	// process before StartDetached runs. Only PATH and recognized proxy keys
+	// are accepted. Current PATH entries win, while old-only entries remain
+	// available to tools installed outside system directories.
+	InheritedRestartEnvironment []string
 	// Executable optionally overrides which binary launches the detached
 	// daemon. Empty resolves the current process's executable, falling back
 	// to `selfmind` on PATH when that path no longer exists — a package
@@ -43,10 +50,16 @@ func StartDetached(opts StartOptions) (StartResult, error) {
 	}
 	dataDir := resolveDataDir(cfg)
 	manager := NewManager(dataDir, ResolveAddr(cfg.Gateway.Addr))
+	previousRestartEnv := append([]string(nil), opts.InheritedRestartEnvironment...)
 	if rec, ok := manager.RunningRecord(); ok {
 		if !opts.Replace {
 			return StartResult{}, AlreadyRunningError{Record: rec}
 		}
+		// A restart may be invoked by an IDE, updater, or another non-login
+		// process that does not carry the login shell's executable search path
+		// or proxy variables. Capture only those restart-safe values before the
+		// old daemon exits; arbitrary credentials are never copied.
+		previousRestartEnv = append(previousRestartEnv, processRestartEnvironment(rec.PID)...)
 		drainTimeout := resolveDrainTimeout(cfg.Gateway.DrainTimeout)
 		ctx, cancel := context.WithTimeout(context.Background(), drainTimeout+15*time.Second)
 		err := stopExistingForReplace(ctx, manager, drainTimeout)
@@ -58,8 +71,14 @@ func StartDetached(opts StartOptions) (StartResult, error) {
 	if err := os.MkdirAll(manager.Paths.RuntimeDir, 0755); err != nil {
 		return StartResult{}, err
 	}
-	logFile, err := os.OpenFile(manager.Paths.LogPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+	logFile, err := os.OpenFile(manager.Paths.LogPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
 	if err != nil {
+		return StartResult{}, err
+	}
+	// Older installs created this diagnostic log as 0644. Tighten it whenever
+	// the daemon starts because it can contain command lines and provider errors.
+	if err := os.Chmod(manager.Paths.LogPath, 0600); err != nil {
+		_ = logFile.Close()
 		return StartResult{}, err
 	}
 	defer logFile.Close()
@@ -70,7 +89,7 @@ func StartDetached(opts StartOptions) (StartResult, error) {
 	}
 	args := detachedRunArgs()
 	cmd := exec.Command(exe, args...)
-	cmd.Env = os.Environ()
+	cmd.Env = mergeRestartEnvironment(os.Environ(), previousRestartEnv)
 	if opts.ConfigPath != "" {
 		cmd.Env = append(cmd.Env, "SELF_CONFIG="+opts.ConfigPath)
 	}
@@ -85,8 +104,110 @@ func StartDetached(opts StartOptions) (StartResult, error) {
 	return StartResult{PID: pid, LogPath: manager.Paths.LogPath}, nil
 }
 
+// RunningRestartEnvironment returns only PATH and proxy-related environment
+// values from the currently running local gateway. It is intentionally narrow:
+// restart callers must not copy arbitrary daemon credentials or process state.
+func RunningRestartEnvironment(dataDir string) []string {
+	rec, ok := NewManager(dataDir, "").RunningRecord()
+	if !ok {
+		return nil
+	}
+	return processRestartEnvironment(rec.PID)
+}
+
 func detachedRunArgs() []string {
 	return []string{"gateway", "run"}
+}
+
+func mergeRestartEnvironment(current, previous []string) []string {
+	merged := append([]string(nil), current...)
+	currentGroups := make(map[string]struct{}, len(current))
+	exactKeys := make(map[string]struct{}, len(current))
+	pathIndex := -1
+	currentPath := ""
+	for i, entry := range current {
+		if key, value, ok := strings.Cut(entry, "="); ok {
+			key = strings.TrimSpace(key)
+			currentGroups[strings.ToLower(key)] = struct{}{}
+			exactKeys[key] = struct{}{}
+			if strings.EqualFold(key, "PATH") {
+				pathIndex = i
+				currentPath = value
+			}
+		}
+	}
+	previousPath := ""
+	for _, entry := range previous {
+		key, value, ok := strings.Cut(entry, "=")
+		if !ok || !isRestartEnvironmentKey(key) {
+			continue
+		}
+		key = strings.TrimSpace(key)
+		if strings.EqualFold(key, "PATH") {
+			previousPath = value
+			continue
+		}
+		if _, ok := currentGroups[strings.ToLower(key)]; ok {
+			continue
+		}
+		if _, ok := exactKeys[key]; ok {
+			continue
+		}
+		merged = append(merged, entry)
+		exactKeys[key] = struct{}{}
+	}
+	if path := mergePathValues(currentPath, previousPath); path != "" {
+		entry := "PATH=" + path
+		if pathIndex >= 0 {
+			merged[pathIndex] = entry
+		} else {
+			merged = append(merged, entry)
+		}
+	}
+	return merged
+}
+
+func restartEnvironmentFromBlock(data []byte) []string {
+	entries := bytes.Split(data, []byte{0})
+	out := make([]string, 0, len(entries))
+	for _, raw := range entries {
+		entry := string(raw)
+		key, _, ok := strings.Cut(entry, "=")
+		if ok && isRestartEnvironmentKey(key) {
+			out = append(out, entry)
+		}
+	}
+	return out
+}
+
+func isRestartEnvironmentKey(key string) bool {
+	switch strings.ToLower(strings.TrimSpace(key)) {
+	case "path", "http_proxy", "https_proxy", "all_proxy", "no_proxy":
+		return true
+	default:
+		return false
+	}
+}
+
+func mergePathValues(current, previous string) string {
+	parts := make([]string, 0)
+	seen := make(map[string]struct{})
+	appendParts := func(value string) {
+		for _, part := range filepath.SplitList(value) {
+			part = strings.TrimSpace(part)
+			if part == "" {
+				continue
+			}
+			if _, ok := seen[part]; ok {
+				continue
+			}
+			seen[part] = struct{}{}
+			parts = append(parts, part)
+		}
+	}
+	appendParts(current)
+	appendParts(previous)
+	return strings.Join(parts, string(os.PathListSeparator))
 }
 
 // resolveDaemonExecutable picks the binary that runs the detached daemon:

@@ -87,6 +87,13 @@ type TaskStrategy struct {
 	RequireProgressEvents bool
 	ChannelMode           string
 	Reason                string
+	// ExecSandboxNote is a gateway-supplied one-liner describing the effective
+	// command-execution environment (sandbox on/off, network policy). Rendered
+	// into the system prompt for tool-capable turns so the model can diagnose
+	// sandbox-caused failures instead of blind-retrying. Empty = no note.
+	// Populated by the gateway (tools.ExecSandboxPromptNote); kernel stays free
+	// of tool-package dependencies.
+	ExecSandboxNote string
 }
 
 // ToolBudgetPolicy is the configurable envelope around the evidence-gated
@@ -361,6 +368,9 @@ func (s TaskStrategy) SystemPromptNote() string {
 			// Inspect-before-build: the workspace is the shared source of truth
 			// across endpoints, so reuse existing code instead of reinventing it.
 			sb.WriteString("Before writing new code or creating a file, search the workspace for an existing implementation (grep or list/read files) and extend or reuse it instead of reinventing; the workspace is the shared source of truth.\n")
+		}
+		if s.ExecSandboxNote != "" {
+			sb.WriteString(s.ExecSandboxNote)
 		}
 		if s.MaxActionTools > 0 {
 			sb.WriteString(fmt.Sprintf("Keep tool use economical. This turn starts with about %d non-lifecycle tool call(s). SelfMind may extend that budget when completed tools produce new evidence, but it will never exceed %d. update_plan and finish_run are lifecycle tools with their own small per-turn caps; do not call them repeatedly.\n", s.MaxActionTools, s.ActionToolBudgetLimit))

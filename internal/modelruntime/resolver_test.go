@@ -50,6 +50,93 @@ func TestResolverReusesCodexCLIAuthFromSelfMindStore(t *testing.T) {
 	}
 }
 
+func TestResolverUsesPrimarySelectionAndCodexCapabilities(t *testing.T) {
+	codexHome := t.TempDir()
+	t.Setenv("CODEX_HOME", codexHome)
+	if err := os.WriteFile(filepath.Join(codexHome, "models_cache.json"), []byte(`{
+  "models": [{
+    "slug": "gpt-5.6-sol",
+    "context_window": 272000,
+    "default_reasoning_level": "medium",
+    "supported_reasoning_levels": [{"effort":"low"},{"effort":"xhigh"}]
+  }]
+}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := &config.Config{
+		Models: config.ModelsConfig{Primary: config.ModelSelectionConfig{
+			Provider:  "codex-cli",
+			Model:     "gpt-5.6-sol",
+			Reasoning: "xhigh",
+		}},
+		ProviderProfiles: map[string]config.ProviderEndpoint{
+			"codex-cli": {APIKey: "test-token"},
+		},
+	}
+	cfg.Normalize()
+
+	rt, err := NewResolver(cfg).Resolve(context.Background(), Selection{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rt.Model != "gpt-5.6-sol" || rt.ReasoningEffort != "xhigh" {
+		t.Fatalf("runtime selection = %+v", rt)
+	}
+	if rt.ContextLength != 272000 || rt.ContextSource != "provider model metadata" {
+		t.Fatalf("context = %d from %q", rt.ContextLength, rt.ContextSource)
+	}
+	if rt.DefaultReasoning != "medium" || len(rt.ReasoningLevels) != 2 {
+		t.Fatalf("capabilities = %+v", rt)
+	}
+}
+
+func TestResolverRoleOptionInheritsPrimaryWithoutLosingOverride(t *testing.T) {
+	cfg := &config.Config{
+		Models: config.ModelsConfig{Primary: config.ModelSelectionConfig{
+			Provider:  "openai",
+			Model:     "gpt-primary",
+			Reasoning: "medium",
+		}},
+		Providers: config.ProvidersConfig{
+			OpenAI: config.ProviderEndpoint{APIKey: "test-token"},
+		},
+	}
+	cfg.Normalize()
+
+	rt, err := NewResolver(cfg).Resolve(context.Background(), Selection{ReasoningEffort: "high"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rt.Provider != "openai" || rt.Model != "gpt-primary" || rt.ReasoningEffort != "high" {
+		t.Fatalf("role option did not inherit primary selection: %+v", rt)
+	}
+}
+
+func TestResolverExplicitRoleProviderUsesItsOwnModelDefault(t *testing.T) {
+	cfg := &config.Config{
+		Models: config.ModelsConfig{Primary: config.ModelSelectionConfig{
+			Provider:  "openai",
+			Model:     "gpt-primary",
+			Reasoning: "high",
+		}},
+		ProviderProfiles: map[string]config.ProviderEndpoint{
+			"kimi-coding": {APIKey: "test-token"},
+		},
+	}
+	cfg.Normalize()
+
+	rt, err := NewResolver(cfg).Resolve(context.Background(), Selection{Provider: "kimi-coding"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rt.Provider != "kimi-coding" || rt.Model != "kimi-for-coding" {
+		t.Fatalf("explicit role provider inherited an incompatible primary model: %+v", rt)
+	}
+	if rt.ReasoningEffort != "" {
+		t.Fatalf("explicit role provider inherited primary reasoning: %q", rt.ReasoningEffort)
+	}
+}
+
 func TestResolverKeepsLegacyOpenRouterKeyCompatible(t *testing.T) {
 	cfg := &config.Config{
 		Model: config.ModelConfig{Provider: "openrouter", Default: "anthropic/claude-3.5-sonnet"},
@@ -166,8 +253,8 @@ func TestResolverKimiOpenAICompatibleUsesCodingV1Root(t *testing.T) {
 	if rt.BaseURL != "https://api.kimi.com/coding/v1" {
 		t.Fatalf("baseURL = %q", rt.BaseURL)
 	}
-	if rt.ReasoningEffort != "medium" {
-		t.Fatalf("reasoning effort = %q", rt.ReasoningEffort)
+	if rt.ReasoningEffort != "" {
+		t.Fatalf("reasoning effort should use the provider default, got %q", rt.ReasoningEffort)
 	}
 	if rt.Thinking["type"] != "enabled" {
 		t.Fatalf("thinking = %#v", rt.Thinking)

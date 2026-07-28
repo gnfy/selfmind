@@ -292,6 +292,7 @@ func (a *Agent) executeSingleToolCall(ctx context.Context, tenantID string, even
 	}
 
 	args := parseToolCallArgs(call.Args)
+	stripModelRuntimeArgs(args)
 	args["_tenant_id"] = tenantID
 	args["_context"] = ctx
 	args["_tool_call_id"] = call.ID
@@ -397,6 +398,17 @@ func (a *Agent) executeSingleToolCall(ctx context.Context, tenantID string, even
 			Name:       name,
 			ToolCallID: call.ID,
 		},
+	}
+}
+
+// stripModelRuntimeArgs enforces the namespace boundary between model input
+// and daemon-owned execution metadata. Every underscore-prefixed argument is
+// reserved for the runtime and is rebuilt below from authenticated context.
+func stripModelRuntimeArgs(args map[string]interface{}) {
+	for key := range args {
+		if strings.HasPrefix(strings.TrimSpace(key), "_") {
+			delete(args, key)
+		}
 	}
 }
 

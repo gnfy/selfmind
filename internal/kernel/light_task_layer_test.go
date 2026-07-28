@@ -479,3 +479,25 @@ func TestSystemPromptNote_InspectBeforeBuild(t *testing.T) {
 		t.Fatalf("direct-answer (no-tools) turn should not include inspect-before-build rule")
 	}
 }
+
+func TestSystemPromptNote_ExecSandboxNote(t *testing.T) {
+	const note = "Shell/exec tools run inside an OS sandbox: NETWORK IS DISABLED test-note.\n"
+	// A tool-capable turn renders the gateway-supplied sandbox note verbatim.
+	withTools := DefaultTaskStrategy()
+	withTools.ExecSandboxNote = note
+	if !strings.Contains(withTools.SystemPromptNote(), "NETWORK IS DISABLED test-note") {
+		t.Fatalf("tool-capable turn should include the exec sandbox note")
+	}
+	// A direct-answer turn never mentions the execution environment.
+	none := DefaultTaskStrategy()
+	none.ToolMode = ToolModeNone
+	none.ExecSandboxNote = note
+	if strings.Contains(none.SystemPromptNote(), "test-note") {
+		t.Fatalf("no-tools turn should not include the exec sandbox note")
+	}
+	// Empty note adds nothing.
+	empty := DefaultTaskStrategy()
+	if strings.Contains(empty.SystemPromptNote(), "OS sandbox") {
+		t.Fatalf("empty note must not inject sandbox text")
+	}
+}

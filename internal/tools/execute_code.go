@@ -1,7 +1,6 @@
 package tools
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -49,9 +48,10 @@ func NewExecuteCodeTool() *ExecuteCodeTool {
 						Description: "超时秒数，默认 300",
 						Default:     300,
 					},
+					"execution_class": toolExecutionClassProperty(),
 					"sandbox": {
 						Type:        "string",
-						Description: "Execution isolation: auto prefers an isolated no-network sandbox; isolated requires it; host uses host credentials/network and requires approval",
+						Description: "Execution isolation: auto prefers an isolated filesystem sandbox whose network follows exec_sandbox.allow_network; isolated requires it; host uses host credentials/network and requires approval",
 						Enum:        []string{"auto", "isolated", "host"},
 						Default:     "auto",
 					},
@@ -75,9 +75,16 @@ func (t *ExecuteCodeTool) Execute(args map[string]interface{}) (string, error) {
 		language = "python"
 	}
 
-	timeout := 300
-	if to, ok := args["timeout"].(int); ok {
-		timeout = to
+	profile, profileErr := resolveToolProfile(args, 300)
+	if profileErr != nil {
+		return "", profileErr
+	}
+	timeout := int(profile.Timeout / time.Second)
+	args["_execution_class"] = string(profile.Class)
+	args["_timeout_seconds"] = timeout
+	args["_timeout_clamped"] = profile.TimeoutClamped
+	if profile.RequestedTimeout > 0 {
+		args["_timeout_requested_seconds"] = int(profile.RequestedTimeout / time.Second)
 	}
 
 	if language != "python" {
@@ -111,14 +118,14 @@ func (t *ExecuteCodeTool) Execute(args map[string]interface{}) (string, error) {
 	}
 	defer os.Remove(scriptPath)
 
-	ctx, cancel := context.WithTimeout(contextFromArgs(args), time.Duration(timeout)*time.Second)
+	ctx, cancel := context.WithTimeout(contextFromArgs(args), profile.Timeout)
 	defer cancel()
 
 	requestedMode, modeErr := requestedSandboxMode(args)
 	if modeErr != nil {
 		return "", enrichToolFailure("execute_code", modeErr, "")
 	}
-	cmd, decision, sandboxErr := sandboxedCommand(ctx, []string{"python3", "-I", scriptPath}, tmpDir, requestedMode)
+	cmd, decision, sandboxErr := sandboxedCommand(ctx, []string{"python3", "-I", scriptPath}, tmpDir, requestedMode, networkSharedArg(args))
 	if sandboxErr != nil {
 		return "", enrichToolFailure("execute_code", sandboxErr, "")
 	}
@@ -129,6 +136,7 @@ func (t *ExecuteCodeTool) Execute(args map[string]interface{}) (string, error) {
 		"tool_call_id": stringArg(args, "_tool_call_id"),
 		"mode":         string(decision.Mode),
 		"reason":       decision.Reason,
+		"network":      decision.NetworkShared,
 	}, string(decision.Mode))
 	if decision.Mode == SandboxHost {
 		sandboxWarnOnce.Do(func() {
@@ -138,22 +146,16 @@ func (t *ExecuteCodeTool) Execute(args map[string]interface{}) (string, error) {
 	cmd.Dir = tmpDir
 	applySandboxLimits(cmd)
 
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	err = cmd.Run()
+	output, err := runCommandStreaming(ctx, cmd, "python3 -I <script>", "execute_code", stringArg(args, "_tool_call_id"), profile)
 	if err != nil {
 		if ctx.Err() == context.DeadlineExceeded {
-			return "", fmt.Errorf("execution timed out after %d seconds", timeout)
+			failure := fmt.Errorf("execution timed out after %s", timeoutSummary(profile))
+			return output, enrichSandboxTimeout("execute_code", failure, output, decision)
 		}
-		return "", fmt.Errorf("execution error: %v\n%s", err, stderr.String())
+		return output, enrichToolFailure("execute_code", fmt.Errorf("execution error: %w", err), output)
 	}
 
-	result := stdout.String()
-	if stderr.Len() > 0 {
-		result += stderr.String()
-	}
+	result := output
 	if len(result) > 50*1024 {
 		result = result[:50*1024] + "\n... (output truncated)"
 	}

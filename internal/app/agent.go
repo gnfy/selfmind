@@ -100,7 +100,16 @@ func buildLLMProvider(cfg *config.Config) llm.Provider {
 	} else {
 		log.Warn("no LLM provider adapter available, using mock provider", "hint", "run `selfmind model` or edit config.yaml")
 	}
-	return &mockProvider{message: modelSetupDiagnostic(cfg, err)}
+	// The setup-diagnostic mock must still pass through MaybeWrapVCR: in eval
+	// replay mode (selfcheck, CI) the VCR wrapper is what serves recorded
+	// cassettes, and it normally rides the transport construction inside
+	// buildProviderFromRuntime — which never ran when no credentials resolved.
+	// Without this wrap a credential-less environment silently bypassed every
+	// cassette: CI's offline gate answered from the mock instead of the
+	// recording and failed 8 replay cases on every push while the same gate
+	// passed on any machine with credentials (observed live 2026-07-27). The
+	// wrap is a no-op outside VCR/flight modes, so production is untouched.
+	return llm.MaybeWrapVCR(&mockProvider{message: modelSetupDiagnostic(cfg, err)})
 }
 
 // ResolveModelDisplay returns the runtime model metadata that the TUI should
@@ -263,7 +272,7 @@ func codingContextLength(cfg *config.Config) int {
 			Headers:         roleCfg.Headers,
 			ContextLength:   roleCfg.ContextLength,
 			MaxTokens:       roleCfg.MaxTokens,
-			ReasoningEffort: roleCfg.ReasoningEffort,
+			ReasoningEffort: roleCfg.EffectiveReasoning(),
 			Thinking:        roleCfg.Thinking,
 			ServiceTier:     roleCfg.ServiceTier,
 			Quirks:          runtimeQuirksFromConfig(roleCfg.Quirks),
@@ -594,7 +603,7 @@ func buildModelGateway(cfg *config.Config, mem *memory.MemoryManager, tenantID s
 func roleConfigEmpty(roleCfg config.ModelRoleConfig) bool {
 	return roleCfg.Provider == "" && roleCfg.Model == "" && roleCfg.BaseURL == "" && roleCfg.Protocol == "" && roleCfg.APIKey == "" &&
 		roleCfg.ContextLength <= 0 && roleCfg.MaxTokens <= 0 && len(roleCfg.Headers) == 0 &&
-		roleCfg.ReasoningEffort == "" && len(roleCfg.Thinking) == 0 && roleCfg.ServiceTier == "" &&
+		roleCfg.EffectiveReasoning() == "" && len(roleCfg.Thinking) == 0 && roleCfg.ServiceTier == "" &&
 		emptyConfigQuirks(roleCfg.Quirks)
 }
 
@@ -611,7 +620,10 @@ func buildRoleProvider(cfg *config.Config, role llm.ModelRole, roleProviderName 
 // custom gateways or installations with a different wire contract.
 func roleProviderSelection(_ llm.ModelRole, roleProviderName string, roleCfg config.ModelRoleConfig) modelruntime.Selection {
 	return modelruntime.Selection{
-		Provider:        roleProviderName,
+		// Keep an omitted provider omitted so the resolver can inherit the full
+		// primary selection. roleProviderName is still used by the caller for
+		// registration and credential bookkeeping.
+		Provider:        roleCfg.Provider,
 		Model:           roleCfg.Model,
 		BaseURL:         roleCfg.BaseURL,
 		Protocol:        roleCfg.Protocol,
@@ -619,7 +631,7 @@ func roleProviderSelection(_ llm.ModelRole, roleProviderName string, roleCfg con
 		Headers:         roleCfg.Headers,
 		ContextLength:   roleCfg.ContextLength,
 		MaxTokens:       roleCfg.MaxTokens,
-		ReasoningEffort: roleCfg.ReasoningEffort,
+		ReasoningEffort: roleCfg.EffectiveReasoning(),
 		Thinking:        roleCfg.Thinking,
 		ServiceTier:     roleCfg.ServiceTier,
 		Quirks:          runtimeQuirksFromConfig(roleCfg.Quirks),

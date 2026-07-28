@@ -155,6 +155,9 @@ func InstallSkillFromSource(tenantID, source, name string, force bool) (string, 
 	}
 	safeName := kernel.SanitizeSkillName(name)
 	content = ensureFrontMatter(content, safeName, def.Description)
+	if err := validateSkillEnvironmentDeclarations(content); err != nil {
+		return "", err
+	}
 	if err := kernel.ScanSkillForDangers(content); err != nil {
 		return "", fmt.Errorf("security scan failed: %w", err)
 	}
@@ -293,6 +296,9 @@ func AuditSkillsForTenant(tenantID, name string) (string, error) {
 func auditSkillInfo(info SkillInfo) error {
 	content, err := readSkillContent(info)
 	if err != nil {
+		return err
+	}
+	if err := validateSkillEnvironmentDeclarations(content); err != nil {
 		return err
 	}
 	if err := kernel.ScanSkillForDangers(content); err != nil {

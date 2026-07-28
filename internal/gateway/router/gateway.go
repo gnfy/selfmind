@@ -342,7 +342,7 @@ func modelStatusReplyText(label string) string {
 	if strings.TrimSpace(label) == "" {
 		return "I am SelfMind. No usable AI model configuration was resolved. Run `selfmind model check` to inspect the problem."
 	}
-	return fmt.Sprintf("I am SelfMind. The current model is %s.", label)
+	return fmt.Sprintf("I am SelfMind. The current model is %s. Change it with `selfmind model set <provider> <model> [--reasoning <level|auto>]`, then run `selfmind gateway restart --drain`.", label)
 }
 
 func (g *Gateway) modelDisplayLabel() string {

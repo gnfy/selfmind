@@ -15,23 +15,25 @@ const (
 )
 
 type Paths struct {
-	DataDir    string
-	RuntimeDir string
-	PIDPath    string
-	StatePath  string
-	LockPath   string
-	LogPath    string
+	DataDir               string
+	RuntimeDir            string
+	PIDPath               string
+	StatePath             string
+	LockPath              string
+	LogPath               string
+	LocalControlTokenPath string
 }
 
 func ResolvePaths(dataDir string) Paths {
 	runtimeDir := filepath.Join(dataDir, "gateway")
 	return Paths{
-		DataDir:    dataDir,
-		RuntimeDir: runtimeDir,
-		PIDPath:    filepath.Join(runtimeDir, "gateway.pid"),
-		StatePath:  filepath.Join(runtimeDir, "gateway_state.json"),
-		LockPath:   filepath.Join(runtimeDir, "gateway.lock"),
-		LogPath:    filepath.Join(runtimeDir, "gateway.log"),
+		DataDir:               dataDir,
+		RuntimeDir:            runtimeDir,
+		PIDPath:               filepath.Join(runtimeDir, "gateway.pid"),
+		StatePath:             filepath.Join(runtimeDir, "gateway_state.json"),
+		LockPath:              filepath.Join(runtimeDir, "gateway.lock"),
+		LogPath:               filepath.Join(runtimeDir, "gateway.log"),
+		LocalControlTokenPath: filepath.Join(runtimeDir, "local_control.token"),
 	}
 }
 

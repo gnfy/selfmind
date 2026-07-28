@@ -59,8 +59,13 @@ func TestEveryErrorClassHasHint(t *testing.T) {
 
 func TestIsolatedSandboxFailureOnlyEscalatesHostStateFailures(t *testing.T) {
 	authErr := enrichIsolatedSandboxFailure("terminal", errors.New("gh: not logged in"), "")
-	if got := authErr.Error(); !strings.Contains(got, "error_class: sandbox_host_required") || !strings.Contains(got, "retry exactly once with sandbox=host") {
-		t.Fatalf("auth failure should request one host retry: %q", got)
+	if got := authErr.Error(); !strings.Contains(got, "error_class: auth") || strings.Contains(got, "sandbox=host") {
+		t.Fatalf("auth failure must preserve its diagnosis without host escalation: %q", got)
+	}
+
+	networkErr := enrichIsolatedSandboxFailure("terminal", errors.New("network is unreachable"), "")
+	if got := networkErr.Error(); !strings.Contains(got, "error_class: sandbox_no_network") || !strings.Contains(got, "network:shared") || strings.Contains(got, "sandbox=host") {
+		t.Fatalf("network failure must request the narrow capability: %q", got)
 	}
 
 	syntaxErr := enrichIsolatedSandboxFailure("terminal", errors.New("sh: syntax error: unexpected token"), "")

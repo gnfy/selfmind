@@ -47,7 +47,7 @@ agent:
 		"Missing defaults:",
 		"Migratable legacy keys:",
 		"providers.openai_api_key -> providers.openai.api_key",
-		"agent.provider -> model.provider",
+		"agent.provider -> models.primary.provider",
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("doctor output missing %q:\n%s", want, out)
@@ -59,6 +59,23 @@ agent:
 	}
 	if !bytes.Equal(after, original) {
 		t.Fatalf("doctor modified config:\n%s", string(after))
+	}
+}
+
+func TestSandboxDiagnosticReportsEffectiveNetworkPolicy(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.ExecSandbox.Enabled = true
+	cfg.ExecSandbox.AllowNetwork = true
+
+	line, warning := sandboxDiagnosticWithAvailability(cfg, true)
+	if warning != "" || line != "ready (isolated filesystem; daemon network and proxy settings shared)" {
+		t.Fatalf("shared-network diagnostic = %q, %q", line, warning)
+	}
+
+	cfg.ExecSandbox.AllowNetwork = false
+	line, warning = sandboxDiagnosticWithAvailability(cfg, true)
+	if warning != "" || line != "ready (isolated filesystem; network disabled)" {
+		t.Fatalf("network-less diagnostic = %q, %q", line, warning)
 	}
 }
 
@@ -122,9 +139,10 @@ intent:
 	text := string(upgraded)
 	for _, want := range []string{
 		"x_custom:",
-		"model:",
+		"models:",
+		"primary:",
 		"provider: openai",
-		"default: gpt-test",
+		"model: gpt-test",
 		"openai:",
 		"storage:",
 		"gateway:",
@@ -137,7 +155,7 @@ intent:
 			t.Fatalf("upgraded config missing %q:\n%s", want, text)
 		}
 	}
-	for _, unexpected := range []string{"real-secret", "openai_api_key", "continue_window"} {
+	for _, unexpected := range []string{"real-secret", "openai_api_key", "continue_window", "default: gpt-test"} {
 		if strings.Contains(text, unexpected) {
 			t.Fatalf("upgraded config contains %q:\n%s", unexpected, text)
 		}

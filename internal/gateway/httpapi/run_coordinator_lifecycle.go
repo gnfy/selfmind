@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"selfmind/internal/control"
+	"selfmind/internal/executionenv"
 	"selfmind/internal/gateway/api"
 	"selfmind/internal/gateway/delivery"
 	"selfmind/internal/gateway/router"
@@ -313,7 +314,7 @@ func (c *RunCoordinator) workspaceForTask(ctx context.Context, identity *control
 	return store.GetWorkspace(ctx, identity.TenantID, workspaceID)
 }
 
-func (c *RunCoordinator) installExecutionScope(identity *control.IdentityContext, task *control.Task, run *control.Run, workspace *control.Workspace, req api.MessageRequest) func() {
+func (c *RunCoordinator) installExecutionScope(identity *control.IdentityContext, task *control.Task, run *control.Run, workspace *control.Workspace, req api.MessageRequest, leases ...*executionenv.Lease) func() {
 	if identity == nil {
 		return func() {}
 	}
@@ -326,6 +327,11 @@ func (c *RunCoordinator) installExecutionScope(identity *control.IdentityContext
 		scope.WorkspaceID = workspace.ID
 		scope.WorkspaceRoot = workspace.LocalPath
 		scope.AllowedRoots = workspace.AllowedRoots
+		scope.TrustLevel = workspace.TrustLevel
+	}
+	if len(leases) > 0 && leases[0] != nil {
+		scope.LeaseID = leases[0].ID
+		scope.Capabilities = append([]string{}, leases[0].ExecutionCapabilities...)
 	}
 	// A turn carrying attachments may read the person's imported-attachment
 	// partition (importAttachments copies the files there) in addition to the
@@ -363,6 +369,7 @@ func (c *RunCoordinator) installExecutionScope(identity *control.IdentityContext
 	// the control store satisfies tools.ApprovalGrantStore structurally.
 	if c.srv != nil && c.srv.Control != nil {
 		scope.Grants = c.srv.Control
+		scope.CapabilityStore = c.srv.Control
 	}
 	// Judge backs smart-mode LLM approval triage (H2). Optional: nil leaves smart
 	// mode on the human-ask path (never auto-approves without a judge).
@@ -372,9 +379,44 @@ func (c *RunCoordinator) installExecutionScope(identity *control.IdentityContext
 	return tools.SetExecutionScope(identity.PersonID, scope)
 }
 
+// materializeExecutionLease binds one run to the operator environment that
+// existed when the run started. Durable state contains credential source names
+// and a non-secret principal fingerprint only; raw values stay process-local.
+func (c *RunCoordinator) materializeExecutionLease(ctx context.Context, identity *control.IdentityContext, run *control.Run, workspace *control.Workspace) (*executionenv.Lease, error) {
+	if c == nil || c.srv == nil || c.srv.Control == nil || identity == nil || run == nil {
+		return nil, fmt.Errorf("execution lease dependencies are unavailable")
+	}
+	refs, principal := tools.SnapshotCredentialRefs(os.Environ())
+	capabilities := make([]string, 0, 4)
+	workspaceID := ""
+	if workspace != nil {
+		workspaceID = workspace.ID
+		grants, err := c.srv.Control.ListActiveExecutionCapabilities(ctx, identity.TenantID, identity.PersonID, workspace.ID)
+		if err != nil {
+			return nil, fmt.Errorf("list execution capabilities: %w", err)
+		}
+		for _, grant := range grants {
+			capabilities = append(capabilities, grant.Capability)
+		}
+		if workspace.TrustLevel == executionenv.TrustTrusted && tools.ExecSandboxAllowsNetwork() {
+			capabilities = append(capabilities, executionenv.CapabilityNetworkShared)
+		}
+	}
+	return c.srv.Control.MaterializeExecutionLease(ctx, executionenv.Lease{
+		RunID:                 run.ID,
+		TenantID:              identity.TenantID,
+		PersonID:              identity.PersonID,
+		WorkspaceID:           workspaceID,
+		EnvironmentProfile:    "operator",
+		CredentialRefs:        refs,
+		PrincipalFingerprint:  principal,
+		ExecutionCapabilities: capabilities,
+	})
+}
+
 // resolveApprovalMode applies the approval-mode precedence: an explicit
 // per-request mode wins; otherwise the person's persisted /mode preference
-// (approval_mode); otherwise on-request. This is what makes an IM `/mode smart`
+// (approval_mode); otherwise the smart product default. This is what makes an IM `/mode smart`
 // apply to later messages that carry no mode of their own.
 func (c *RunCoordinator) resolveApprovalMode(identity *control.IdentityContext, reqMode string) tools.ApprovalMode {
 	modeStr := strings.TrimSpace(reqMode)
@@ -383,7 +425,7 @@ func (c *RunCoordinator) resolveApprovalMode(identity *control.IdentityContext, 
 			modeStr = pref
 		}
 	}
-	return tools.NormalizeApprovalMode(modeStr)
+	return tools.EffectiveApprovalMode(modeStr)
 }
 
 // gatewayClarify answers the clarify tool as a FIRST-CLASS pending question,

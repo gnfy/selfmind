@@ -192,6 +192,7 @@ func MaybeWrapVCR(inner Provider) Provider {
 	if FlightEnabled() {
 		// Flight recording is VCR record mode writing to the flight dir, keyed by
 		// the per-turn session the kernel sets.
+		secureFlightTree(FlightDir())
 		return &vcrProvider{inner: inner, mode: "record", dir: FlightDir()}
 	}
 	return inner
@@ -262,15 +263,19 @@ func cassetteMiss(path, method string, recorded *cassette, loadErr error) error 
 }
 
 func (v *vcrProvider) save(ctx context.Context, path string, c cassette) {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return
 	}
+	_ = os.Chmod(dir, 0o700)
 	c = rewriteCassette(c, vcrWorkspaceFromContext(ctx), vcrWorkspacePlaceholder)
 	data, err := json.MarshalIndent(c, "", "  ")
 	if err != nil {
 		return
 	}
-	_ = os.WriteFile(path, data, 0o644)
+	if os.WriteFile(path, data, 0o600) == nil {
+		_ = os.Chmod(path, 0o600)
+	}
 }
 
 func (v *vcrProvider) StreamChat(ctx context.Context, req ChatRequest) (<-chan StreamEvent, error) {

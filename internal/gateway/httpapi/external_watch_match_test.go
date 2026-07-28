@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"selfmind/internal/control"
+	"selfmind/internal/tools"
 )
 
 // Regression for the 2026-07-17 incident: gcloud/aws CLI output carries a
@@ -40,6 +41,35 @@ func TestMatchesExternalWatchPatternNormalizesOutput(t *testing.T) {
 	}
 }
 
+func TestExternalWatchIDFromFinalizationKey(t *testing.T) {
+	if got := externalWatchIDFromFinalizationKey("external-watch:watch_123:r2:finalization"); got != "watch_123" {
+		t.Fatalf("watch id = %q", got)
+	}
+	for _, key := range []string{
+		"",
+		"external-watch:watch_123:finalization",
+		"other:watch_123:r2:finalization",
+	} {
+		if got := externalWatchIDFromFinalizationKey(key); got != "" {
+			t.Fatalf("invalid key %q produced watch id %q", key, got)
+		}
+	}
+}
+
+func TestExternalWatchCompletionNoticeUsesStableID(t *testing.T) {
+	cases := map[string]string{
+		control.ExternalWatchSucceeded: "Watcher watch_123 | status: succeeded | task: waiting_finalization",
+		control.ExternalWatchFailed:    "Watcher watch_123 | status: failed | task: waiting_finalization",
+		control.ExternalWatchTimedOut:  "Watcher watch_123 | status: timed_out | task: waiting_finalization",
+		control.ExternalWatchCancelled: "Watcher watch_123 | status: cancelled | task: waiting_finalization",
+	}
+	for status, want := range cases {
+		if got := externalWatchCompletionNotice("watch_123", status, "waiting_finalization"); got != want {
+			t.Fatalf("status %q notice = %q, want %q", status, got, want)
+		}
+	}
+}
+
 func TestRunExternalWatchCommandUsesBash(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("SelfMind's production daemon runs on Linux")
@@ -50,6 +80,27 @@ func TestRunExternalWatchCommandUsesBash(t *testing.T) {
 	}
 	if output != "SUCCESS" {
 		t.Fatalf("output = %q, want SUCCESS", output)
+	}
+}
+
+func TestExternalWatchCommandDoesNotInheritControlPlaneSecret(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("SelfMind's production daemon runs on Linux")
+	}
+	t.Setenv("SELF_GATEWAY_TOKEN", "must-not-leak")
+	tools.SetExecSandbox(false, false, false)
+	t.Cleanup(func() { tools.SetExecSandbox(false, false, false) })
+
+	output, err := runExternalWatchCommand(
+		context.Background(),
+		t.TempDir(),
+		`printf '%s' "${SELF_GATEWAY_TOKEN:-}"`,
+	)
+	if err != nil {
+		t.Fatalf("watch command failed: %v (%s)", err, output)
+	}
+	if output != "" {
+		t.Fatalf("watcher inherited control-plane secret: %q", output)
 	}
 }
 

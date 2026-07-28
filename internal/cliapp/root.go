@@ -189,7 +189,7 @@ var documentedCLIUsages = []string{
 	"selfmind task <n|task_id> [runs|rename <name>|pin|unpin|archive|merge <dst>]",
 	"selfmind resume <n|task_id>",
 	"selfmind workspaces",
-	"selfmind ws [list|add|use|<n|workspace_id>] ...",
+	"selfmind ws [list|add|use|trust|untrust|grants|revoke|<n|workspace_id>] ...",
 	"selfmind approvals",
 	"selfmind approve [token]",
 	"selfmind reject [token]",

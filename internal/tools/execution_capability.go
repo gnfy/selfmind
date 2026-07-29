@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"selfmind/internal/executionenv"
+	"selfmind/internal/tools/envprofiles"
 )
 
 // ExecutionCapabilityMiddleware provides a narrow, approval-backed escape
@@ -53,6 +54,17 @@ func ExecutionCapabilityMiddleware() Middleware {
 				}
 			}
 			args["_network_shared"] = networkShared
+			// Credential access is resolved here too, and BEFORE execution.
+			//
+			// Without this, `credential:read` existed as a constant that only
+			// ever got READ: an untrusted workspace could never obtain operator
+			// credentials, so the only way to run a credential CLI was to trust
+			// the whole workspace — exactly the all-or-nothing escalation this
+			// capability exists to avoid. Deciding after the failure is not an
+			// option either: the tool would already have reported "not logged
+			// in", and the model would chase a login problem that does not
+			// exist.
+			resolveCredentialCapability(args, scope, toolName)
 			// Commands that clearly require egress are approved before their
 			// first execution. This keeps the capability middleware from
 			// replaying a compound command after its local side effects have
@@ -106,7 +118,7 @@ func approveNetworkCapability(args map[string]interface{}, scope ExecutionScope,
 	}
 
 	if scope.CapabilityStore != nil {
-		if expiry := capabilityExpiry(decision.Scope); !expiry.IsZero() {
+		if expiry := capabilityExpiryFromDecision(decision); !expiry.IsZero() {
 			if err := scope.CapabilityStore.GrantExecutionCapability(
 				context.Background(),
 				scope.TenantID,
@@ -150,6 +162,17 @@ func executionCapabilityFingerprint(workspaceID, capability string) string {
 	return fmt.Sprintf("%x", sum[:12])
 }
 
+// capabilityExpiryFromDecision prefers the deadline the CONTROL PLANE returned.
+// The execution layer keeps a conservative fallback for a decision that carries
+// none, but it must not be the authority on how long its own authorization
+// lasts — that ruling belongs where approvals are decided.
+func capabilityExpiryFromDecision(decision ToolApprovalDecision) time.Time {
+	if !decision.ExpiresAt.IsZero() {
+		return decision.ExpiresAt
+	}
+	return capabilityExpiry(decision.Scope)
+}
+
 func capabilityExpiry(scope string) time.Time {
 	switch strings.ToLower(strings.TrimSpace(scope)) {
 	case "task":
@@ -167,4 +190,106 @@ func fallbackCapabilitySource(channel string) string {
 		return "unknown"
 	}
 	return channel
+}
+
+// resolveCredentialCapability decides whether this call may use the operator's
+// credential state, asking the human exactly once when it would change the
+// outcome.
+//
+// It asks only when all of these hold, so a trusted workspace and a command that
+// touches no credential CLI are never interrupted:
+//
+//   - the workspace is untrusted (a trusted one already has access);
+//   - the command's programs match a profile that declares operator credentials;
+//   - no live grant already covers this workspace.
+//
+// A refusal is not an error: the command still runs, the state overlay stays
+// empty, and the tool reports its own "not logged in" — which is the honest
+// diagnosis and leaves the decision with the person.
+func resolveCredentialCapability(args map[string]interface{}, scope ExecutionScope, toolName string) {
+	if scope.TrustLevel == executionenv.TrustTrusted {
+		args[credentialReadArgKey] = true
+		return
+	}
+	if scopeHasCapability(scope, executionenv.CapabilityCredentialRead) {
+		args[credentialReadArgKey] = true
+		return
+	}
+	fingerprint := executionCapabilityFingerprint(scope.WorkspaceID, executionenv.CapabilityCredentialRead)
+	if scope.CapabilityStore != nil {
+		granted, err := scope.CapabilityStore.HasExecutionCapability(
+			contextFromArgs(args), scope.TenantID, scope.PersonID, scope.WorkspaceID,
+			executionenv.CapabilityCredentialRead, fingerprint,
+		)
+		if err == nil && granted {
+			args[credentialReadArgKey] = true
+			return
+		}
+	}
+	if !commandNeedsOperatorCredentials(toolName, args) {
+		return
+	}
+	if err := approveCredentialCapability(args, scope, fingerprint); err != nil {
+		// Declining leaves the command runnable without credentials. Turning a
+		// refusal into a hard failure would remove the option of running the
+		// read-only part of a command, and a rejection is a decision, not a
+		// fault.
+		return
+	}
+	args[credentialReadArgKey] = true
+}
+
+// credentialReadArgKey carries the resolved decision to material preparation.
+const credentialReadArgKey = "_credential_read"
+
+// commandNeedsOperatorCredentials reports whether any program in the command is
+// covered by a profile that declares operator credential access. The program set
+// comes from the shell AST, so a compound command is judged by what it will
+// actually run.
+func commandNeedsOperatorCredentials(toolName string, args map[string]interface{}) bool {
+	for _, profile := range envprofiles.Match(execCommandPrograms(toolName, args)) {
+		if profile != nil && profile.CredentialAccess == envprofiles.CredentialAccessOperator {
+			return true
+		}
+	}
+	return false
+}
+
+func approveCredentialCapability(args map[string]interface{}, scope ExecutionScope, fingerprint string) error {
+	if scope.Approval == nil {
+		return fmt.Errorf("operation rejected: credential:read requires approval")
+	}
+	decision, approvalErr := scope.Approval(contextFromArgs(args), ToolApprovalRequest{
+		TenantID: scope.TenantID,
+		PersonID: scope.PersonID,
+		TaskID:   scope.TaskID,
+		RunID:    scope.RunID,
+		Channel:  scope.Channel,
+		ToolName: executionenv.CapabilityCredentialRead,
+		Reason:   "this untrusted workspace needs read access to your existing tool credentials",
+		Args: map[string]interface{}{
+			"capability":   executionenv.CapabilityCredentialRead,
+			"workspace_id": scope.WorkspaceID,
+		},
+		GrantClass:          "read your existing tool credentials in this workspace",
+		ResourceFingerprint: fingerprint,
+	})
+	if approvalErr != nil {
+		return approvalErr
+	}
+	if !decision.Approved {
+		return fmt.Errorf("operation rejected: credential:read was not approved")
+	}
+	if scope.CapabilityStore != nil {
+		if expiry := capabilityExpiryFromDecision(decision); !expiry.IsZero() {
+			if err := scope.CapabilityStore.GrantExecutionCapability(
+				context.Background(), scope.TenantID, scope.PersonID, scope.WorkspaceID,
+				executionenv.CapabilityCredentialRead, fingerprint,
+				"human:"+fallbackCapabilitySource(scope.Channel), expiry,
+			); err != nil {
+				return fmt.Errorf("persist credential capability: %w", err)
+			}
+		}
+	}
+	return nil
 }

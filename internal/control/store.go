@@ -240,6 +240,10 @@ CREATE TABLE IF NOT EXISTS execution_leases (
 	credential_refs_json TEXT NOT NULL DEFAULT '[]',
 	principal_fingerprint TEXT,
 	capabilities_json TEXT NOT NULL DEFAULT '[]',
+	environment_snapshot_id TEXT NOT NULL DEFAULT '',
+	environment_generation INTEGER NOT NULL DEFAULT 0,
+	environment_fingerprint TEXT NOT NULL DEFAULT '',
+	credential_source_hash TEXT NOT NULL DEFAULT '',
 	created_at INTEGER NOT NULL,
 	updated_at INTEGER NOT NULL
 );
@@ -383,6 +387,8 @@ CREATE TABLE IF NOT EXISTS approval_grants (
 	scope_id TEXT NOT NULL,
 	pattern_key TEXT NOT NULL,
 	created_at INTEGER NOT NULL,
+	expires_at INTEGER NOT NULL DEFAULT 0,
+	revoked_at INTEGER NOT NULL DEFAULT 0,
 	UNIQUE(tenant_id, person_id, scope_kind, scope_id, pattern_key)
 );
 CREATE INDEX IF NOT EXISTS idx_approval_grants_lookup ON approval_grants(tenant_id, person_id, pattern_key);
@@ -718,6 +724,33 @@ CREATE INDEX IF NOT EXISTS idx_external_watches_owner
 		{"steering_mailbox", "platform_user_id", "TEXT NOT NULL DEFAULT ''"},
 		{"steering_mailbox", "workspace_id", "TEXT NOT NULL DEFAULT ''"},
 		{"steering_mailbox", "approval_mode", "TEXT NOT NULL DEFAULT ''"},
+		// A remembered approval class used to be permanent and irrevocable:
+		// the table only ever supported INSERT and an existence check, so a
+		// grant recorded from one over-broad class key stayed authoritative
+		// forever with no surface that could show or withdraw it. expires_at
+		// bounds the blast radius of any future key defect; revoked_at makes
+		// withdrawal durable and auditable. 0 keeps the legacy "no expiry"
+		// meaning for rows written before this column existed.
+		{"approval_grants", "expires_at", "INTEGER NOT NULL DEFAULT 0"},
+		{"approval_grants", "revoked_at", "INTEGER NOT NULL DEFAULT 0"},
+		// A lease binds a run to ONE in-process environment snapshot. Without
+		// these columns a restarted daemon could not tell whether rebuilding
+		// the snapshot preserves the environment the run started with, so it
+		// would silently continue under a different PATH or account.
+		{"execution_leases", "environment_snapshot_id", "TEXT NOT NULL DEFAULT ''"},
+		{"execution_leases", "environment_generation", "INTEGER NOT NULL DEFAULT 0"},
+		{"execution_leases", "environment_fingerprint", "TEXT NOT NULL DEFAULT ''"},
+		{"execution_leases", "credential_source_hash", "TEXT NOT NULL DEFAULT ''"},
+		// A durable watch outlives its run and survives restarts, so it is the
+		// execution path most likely to straddle an environment change. Without
+		// its own recorded identity a watch registered under one account would
+		// silently continue under whichever account the daemon happens to have
+		// after a restart.
+		{"external_watches", "environment_snapshot_id", "TEXT NOT NULL DEFAULT ''"},
+		{"external_watches", "environment_generation", "INTEGER NOT NULL DEFAULT 0"},
+		{"external_watches", "principal_fingerprint", "TEXT NOT NULL DEFAULT ''"},
+		{"external_watches", "environment_fingerprint", "TEXT NOT NULL DEFAULT ''"},
+		{"external_watches", "credential_source_hash", "TEXT NOT NULL DEFAULT ''"},
 	} {
 		if err := s.ensureColumn(ctx, col.table, col.name, col.def); err != nil {
 			return err

@@ -1,0 +1,38 @@
+id: execution_state_overlay_first_try
+title: "a tool that must write its own state directory succeeds on first use in the sandbox"
+suite: continuity
+workspace: isolated
+channel: cli
+
+# The headline defect: 26 of 293 sandboxed commands failed writing their OWN state
+# directory under $HOME. gcloud cannot even READ credentials without writing
+# credentials.db, so `gcloud auth list` failed on first use, and the failure was
+# classified as an authentication problem with guidance that explicitly forbade
+# the only correct remedy. Host escalation then climbed to 28% of all commands.
+#
+# The case uses `git config --global --list` rather than a cloud CLI: it is present
+# on every developer machine, needs no account, and exercises the same mechanism
+# (a tool reading state from a directory it also writes). What is under test is the
+# ENGINE — that a state-directory write does not surface as an auth error and does
+# not force host execution — not any particular vendor.
+turns:
+  - input: "Run `git config --global --list` with the terminal tool and summarise in one line whether it worked. Do not switch to host execution."
+
+expect:
+  status: completed
+  max_tool_errors: 1
+  max_duration_seconds: 180
+  must_not_contain:
+    # The misdiagnosis that sent the model chasing a login problem.
+    - "fix auth state first"
+    - "not an authentication or setup fix"
+  disallowed_error_category:
+    - auth
+    - credential_missing
+    - credential_expired
+
+checks:
+  no_mojibake: true
+  no_raw_json_leak: true
+  no_empty_response: true
+  no_provider_stack_dump: true

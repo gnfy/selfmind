@@ -34,6 +34,14 @@ type StartOptions struct {
 	// upgrade (npm swaps the global package directory) can delete it out from
 	// under a running process.
 	Executable string
+	// Environment, when set, becomes the daemon's environment verbatim instead
+	// of this process's.
+	//
+	// Without it a restart could only ever inherit the CLI's own environment,
+	// which made "sample a login shell, then restart to adopt it" impossible:
+	// the sample was discarded and the daemon came back with exactly the stale
+	// environment the operator was trying to replace.
+	Environment []string
 }
 
 type StopOptions struct {
@@ -89,7 +97,11 @@ func StartDetached(opts StartOptions) (StartResult, error) {
 	}
 	args := detachedRunArgs()
 	cmd := exec.Command(exe, args...)
-	cmd.Env = mergeRestartEnvironment(os.Environ(), previousRestartEnv)
+	parentEnv := os.Environ()
+	if len(opts.Environment) > 0 {
+		parentEnv = opts.Environment
+	}
+	cmd.Env = mergeRestartEnvironment(parentEnv, previousRestartEnv)
 	if opts.ConfigPath != "" {
 		cmd.Env = append(cmd.Env, "SELF_CONFIG="+opts.ConfigPath)
 	}

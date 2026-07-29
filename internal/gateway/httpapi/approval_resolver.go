@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"selfmind/internal/control"
+	"selfmind/internal/platform/textutil"
 )
 
 // Approval-reference resolution shared by every surface that responds to an
@@ -250,20 +251,36 @@ func (d *Server) respondApprovalCommand(ctx context.Context, identity *control.I
 			title = task.Title
 		}
 	}
-	return fmt.Sprintf("%s%s %s\n%s", verb, grantScopeNote(approval.DecisionScope), approvalSummaryLine(*approval, title), approval.ID)
+	note := grantScopeNoteWithClass(approval.DecisionScope, decodeApprovalPayload(*approval).GrantClass)
+	return fmt.Sprintf("%s%s %s\n%s", verb, note, approvalSummaryLine(*approval, title), approval.ID)
 }
 
 // grantScopeNote renders the human-facing "remembered" suffix for an approval
 // that also recorded a class-level grant. Empty for a once-only decision.
+//
+// It names the CLASS, not just the scope: a user who cannot see what was
+// remembered cannot notice when the class is wider than they intended, which is
+// how ten person-scope host grants — two of them keyed on a shell prologue —
+// accumulated unnoticed in a single day. When the eligibility floor refused to
+// persist anything, the note says so instead of claiming a grant was made.
 func grantScopeNote(scope string) string {
+	return grantScopeNoteWithClass(scope, "")
+}
+
+func grantScopeNoteWithClass(scope, grantClass string) string {
 	switch scope {
-	case "task":
-		return " (this class remembered for this task)"
-	case "person":
-		return " (this class remembered for you across tasks)"
+	case "task", "person":
 	default:
 		return ""
 	}
+	if strings.TrimSpace(grantClass) == "" {
+		return " (not remembered: this command's class cannot be reused)"
+	}
+	window := "for this task"
+	if scope == "person" {
+		window = "for you across tasks, 8h"
+	}
+	return fmt.Sprintf(" (remembered %s: %s)", window, textutil.Truncate(toOneLine(grantClass), 80))
 }
 
 // respondAllApprovals backs "/approve all" and "/reject all": it decides every

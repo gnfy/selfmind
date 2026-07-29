@@ -42,6 +42,21 @@ type ExternalWatch struct {
 	NextCheckAt           time.Time
 	Attempts              int
 	Extensions            int
+	// Environment identity, captured when the watch was registered.
+	//
+	// A watch outlives the run that created it and survives daemon restarts, so
+	// it is the execution path MOST likely to straddle an environment change. A
+	// check registered while account A was active must never silently start
+	// running under account B: the operator asked to watch a specific external
+	// operation with a specific identity, and quietly changing who is asking can
+	// read a different cluster or project entirely. These fields are non-secret
+	// (fingerprints and a snapshot id, never values) and are compared before
+	// every check.
+	EnvironmentSnapshotID  string
+	EnvironmentGeneration  int64
+	PrincipalFingerprint   string
+	EnvironmentFingerprint string
+	CredentialSourceHash   string
 	// VerdictRevision counts terminal-verdict revisions; it keys all
 	// finalization products so a replay of the SAME verdict is a no-op while
 	// a revised verdict emits one fresh correction run/event/notice.
@@ -91,13 +106,17 @@ func (s *Store) CreateExternalWatch(ctx context.Context, watch ExternalWatch) (*
 		id, tenant_id, person_id, workspace_id, task_id, run_id, channel,
 		description, cwd, command, success_pattern, failure_pattern, status,
 		interval_seconds, command_timeout_seconds, timeout_at, next_check_at,
-		attempts, last_output, last_error, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, '', '', ?, ?)`,
+		attempts, last_output, last_error,
+		environment_snapshot_id, environment_generation, principal_fingerprint,
+		environment_fingerprint, credential_source_hash, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, '', '', ?, ?, ?, ?, ?, ?, ?)`,
 		watch.ID, watch.TenantID, watch.PersonID, watch.WorkspaceID, watch.TaskID,
 		watch.RunID, watch.Channel, watch.Description, watch.CWD, watch.Command,
 		watch.SuccessPattern, watch.FailurePattern, watch.Status,
 		watch.IntervalSeconds, watch.CommandTimeoutSeconds, watch.TimeoutAt.Unix(),
-		watch.NextCheckAt.Unix(), now.Unix(), now.Unix())
+		watch.NextCheckAt.Unix(),
+		watch.EnvironmentSnapshotID, watch.EnvironmentGeneration, watch.PrincipalFingerprint,
+		watch.EnvironmentFingerprint, watch.CredentialSourceHash, now.Unix(), now.Unix())
 	if err != nil {
 		return nil, err
 	}
@@ -114,7 +133,10 @@ func (s *Store) ListDueExternalWatches(ctx context.Context, limit int) ([]Extern
 		COALESCE(workspace_id, ''), task_id, COALESCE(run_id, ''), COALESCE(channel, ''),
 		description, cwd, command, success_pattern, failure_pattern, status,
 		interval_seconds, command_timeout_seconds, timeout_at, next_check_at, attempts,
-		COALESCE(extensions, 0), COALESCE(verdict_revision, 1), COALESCE(notified, 0), last_output, last_error, created_at, updated_at, finished_at
+		COALESCE(extensions, 0), COALESCE(verdict_revision, 1), COALESCE(notified, 0), last_output, last_error,
+		COALESCE(environment_snapshot_id, ''), COALESCE(environment_generation, 0),
+		COALESCE(principal_fingerprint, ''), COALESCE(environment_fingerprint, ''),
+		COALESCE(credential_source_hash, ''), created_at, updated_at, finished_at
 		FROM external_watches
 		WHERE status IN (?, ?) AND next_check_at <= ?
 		ORDER BY next_check_at ASC LIMIT ?`,
@@ -196,7 +218,10 @@ func (s *Store) ListExternalWatchesFinishedSince(ctx context.Context, status str
 		COALESCE(workspace_id, ''), task_id, COALESCE(run_id, ''), COALESCE(channel, ''),
 		description, cwd, command, success_pattern, failure_pattern, status,
 		interval_seconds, command_timeout_seconds, timeout_at, next_check_at, attempts,
-		COALESCE(extensions, 0), COALESCE(verdict_revision, 1), COALESCE(notified, 0), last_output, last_error, created_at, updated_at, finished_at
+		COALESCE(extensions, 0), COALESCE(verdict_revision, 1), COALESCE(notified, 0), last_output, last_error,
+		COALESCE(environment_snapshot_id, ''), COALESCE(environment_generation, 0),
+		COALESCE(principal_fingerprint, ''), COALESCE(environment_fingerprint, ''),
+		COALESCE(credential_source_hash, ''), created_at, updated_at, finished_at
 		FROM external_watches
 		WHERE status = ? AND finished_at IS NOT NULL AND finished_at >= ?
 		ORDER BY finished_at DESC LIMIT ?`,
@@ -274,7 +299,10 @@ func (s *Store) ListUnfinalizedExternalWatches(ctx context.Context, since time.T
 		COALESCE(workspace_id, ''), task_id, COALESCE(run_id, ''), COALESCE(channel, ''),
 		description, cwd, command, success_pattern, failure_pattern, status,
 		interval_seconds, command_timeout_seconds, timeout_at, next_check_at, attempts,
-		COALESCE(extensions, 0), COALESCE(verdict_revision, 1), COALESCE(notified, 0), last_output, last_error, created_at, updated_at, finished_at
+		COALESCE(extensions, 0), COALESCE(verdict_revision, 1), COALESCE(notified, 0), last_output, last_error,
+		COALESCE(environment_snapshot_id, ''), COALESCE(environment_generation, 0),
+		COALESCE(principal_fingerprint, ''), COALESCE(environment_fingerprint, ''),
+		COALESCE(credential_source_hash, ''), created_at, updated_at, finished_at
 		FROM external_watches
 		WHERE status IN (?, ?, ?) AND COALESCE(finalized, 0) = 0
 		AND finished_at IS NOT NULL AND finished_at >= ?
@@ -306,7 +334,10 @@ func (s *Store) ListUnnotifiedExternalWatches(ctx context.Context, since time.Ti
 		COALESCE(workspace_id, ''), task_id, COALESCE(run_id, ''), COALESCE(channel, ''),
 		description, cwd, command, success_pattern, failure_pattern, status,
 		interval_seconds, command_timeout_seconds, timeout_at, next_check_at, attempts,
-		COALESCE(extensions, 0), COALESCE(verdict_revision, 1), COALESCE(notified, 0), last_output, last_error, created_at, updated_at, finished_at
+		COALESCE(extensions, 0), COALESCE(verdict_revision, 1), COALESCE(notified, 0), last_output, last_error,
+		COALESCE(environment_snapshot_id, ''), COALESCE(environment_generation, 0),
+		COALESCE(principal_fingerprint, ''), COALESCE(environment_fingerprint, ''),
+		COALESCE(credential_source_hash, ''), created_at, updated_at, finished_at
 		FROM external_watches
 		WHERE status IN (?, ?, ?) AND COALESCE(finalized, 0) = 1 AND COALESCE(notified, 0) = 0
 		AND finished_at IS NOT NULL AND finished_at >= ?
@@ -385,6 +416,8 @@ func scanExternalWatch(scanner externalWatchScanner) (ExternalWatch, error) {
 		&watch.Command, &watch.SuccessPattern, &watch.FailurePattern, &watch.Status,
 		&watch.IntervalSeconds, &watch.CommandTimeoutSeconds, &timeoutAt, &nextCheckAt,
 		&watch.Attempts, &watch.Extensions, &watch.VerdictRevision, &notified, &watch.LastOutput, &watch.LastError,
+		&watch.EnvironmentSnapshotID, &watch.EnvironmentGeneration, &watch.PrincipalFingerprint,
+		&watch.EnvironmentFingerprint, &watch.CredentialSourceHash,
 		&createdAt, &updatedAt, &finishedAt)
 	if err != nil {
 		return ExternalWatch{}, err

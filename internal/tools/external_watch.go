@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"regexp"
 	"strings"
 	"time"
 
 	"selfmind/internal/control"
+	"selfmind/internal/executionenv"
 )
 
 // ExternalWatchTool registers a durable daemon-side condition check. The
@@ -82,6 +84,14 @@ func (t *ExternalWatchTool) Execute(args map[string]interface{}) (string, error)
 		description = "External operation"
 	}
 
+	// Record the environment this watch was registered under. A watch outlives
+	// its run and survives restarts, so without its own identity it would
+	// silently adopt whatever account the daemon has later — the check would
+	// still "succeed", against a different project.
+	identity := executionenv.DefaultRegistry().Current()
+	if identity == nil {
+		identity = InstallEnvironmentSnapshot(os.Environ(), "inherited")
+	}
 	watch, err := t.store.CreateExternalWatch(context.Background(), control.ExternalWatch{
 		TenantID:              scope.TenantID,
 		PersonID:              scope.PersonID,
@@ -97,6 +107,12 @@ func (t *ExternalWatchTool) Execute(args map[string]interface{}) (string, error)
 		IntervalSeconds:       interval,
 		CommandTimeoutSeconds: commandTimeout,
 		TimeoutAt:             time.Now().Add(time.Duration(totalTimeout) * time.Second),
+
+		EnvironmentSnapshotID:  identity.ID,
+		EnvironmentGeneration:  identity.Generation,
+		PrincipalFingerprint:   identity.PrincipalFingerprint,
+		EnvironmentFingerprint: identity.EnvironmentFingerprint,
+		CredentialSourceHash:   identity.CredentialSourceHash,
 	})
 	if err != nil {
 		return "", err

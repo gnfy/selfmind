@@ -331,6 +331,8 @@ func (c *RunCoordinator) installExecutionScope(identity *control.IdentityContext
 	}
 	if len(leases) > 0 && leases[0] != nil {
 		scope.LeaseID = leases[0].ID
+		scope.EnvironmentSnapshotID = leases[0].EnvironmentSnapshotID
+		scope.EnvironmentGeneration = leases[0].EnvironmentGeneration
 		scope.Capabilities = append([]string{}, leases[0].ExecutionCapabilities...)
 	}
 	// A turn carrying attachments may read the person's imported-attachment
@@ -354,6 +356,11 @@ func (c *RunCoordinator) installExecutionScope(identity *control.IdentityContext
 		scope.RunID = run.ID
 		scope.Channel = run.Channel
 	}
+	// Carry the execution policy WITH the request. Reading it from a process
+	// global at execution time meant one daemon could only ever have one policy;
+	// snapshotting it here makes the request self-describing and is what a
+	// separate execution node would receive.
+	scope.SandboxPolicy = tools.CurrentExecSandboxPolicy()
 	scope.Approval = c.toolApprovalHandler(identity, task, run, scope.Channel)
 	scope.Clarify = c.gatewayClarify(identity, task, run, scope.Channel)
 	scope.ApprovalMode = c.resolveApprovalMode(identity, req.ApprovalMode)
@@ -376,7 +383,19 @@ func (c *RunCoordinator) installExecutionScope(identity *control.IdentityContext
 	if c.srv != nil {
 		scope.Judge = c.srv.ApprovalJudge
 	}
-	return tools.SetExecutionScope(identity.PersonID, scope)
+	releaseScope := tools.SetExecutionScope(identity.PersonID, scope)
+	leaseID := scope.LeaseID
+	return func() {
+		releaseScope()
+		// The lease→snapshot binding is per-run process state. Dropping it when
+		// the run's scope goes away keeps the map bounded on a long-lived daemon;
+		// the snapshot itself stays available for other runs on the same
+		// generation, and the scratch directory survives for its TTL so a
+		// finished run's intermediates remain inspectable.
+		if leaseID != "" {
+			executionenv.DefaultRegistry().ReleaseLease(leaseID)
+		}
+	}
 }
 
 // materializeExecutionLease binds one run to the operator environment that
@@ -387,6 +406,13 @@ func (c *RunCoordinator) materializeExecutionLease(ctx context.Context, identity
 		return nil, fmt.Errorf("execution lease dependencies are unavailable")
 	}
 	refs, principal := tools.SnapshotCredentialRefs(os.Environ())
+	snapshot := executionenv.DefaultRegistry().Current()
+	if snapshot == nil {
+		// First run after a start that did not install one (e.g. an embedded
+		// gateway in a test): install now rather than letting the execution
+		// path fall back to a raw read of the daemon environment.
+		snapshot = tools.InstallEnvironmentSnapshot(os.Environ(), "inherited")
+	}
 	capabilities := make([]string, 0, 4)
 	workspaceID := ""
 	if workspace != nil {
@@ -402,15 +428,99 @@ func (c *RunCoordinator) materializeExecutionLease(ctx context.Context, identity
 			capabilities = append(capabilities, executionenv.CapabilityNetworkShared)
 		}
 	}
-	return c.srv.Control.MaterializeExecutionLease(ctx, executionenv.Lease{
-		RunID:                 run.ID,
-		TenantID:              identity.TenantID,
-		PersonID:              identity.PersonID,
-		WorkspaceID:           workspaceID,
-		EnvironmentProfile:    "operator",
-		CredentialRefs:        refs,
-		PrincipalFingerprint:  principal,
-		ExecutionCapabilities: capabilities,
+	lease, err := c.srv.Control.MaterializeExecutionLease(ctx, executionenv.Lease{
+		RunID:                  run.ID,
+		TenantID:               identity.TenantID,
+		PersonID:               identity.PersonID,
+		WorkspaceID:            workspaceID,
+		EnvironmentProfile:     "operator",
+		CredentialRefs:         refs,
+		PrincipalFingerprint:   principal,
+		ExecutionCapabilities:  capabilities,
+		EnvironmentSnapshotID:  snapshot.ID,
+		EnvironmentGeneration:  snapshot.Generation,
+		EnvironmentFingerprint: snapshot.EnvironmentFingerprint,
+		CredentialSourceHash:   snapshot.CredentialSourceHash,
+	})
+	if err != nil {
+		return nil, err
+	}
+	// A replayed or recovered run returns its ORIGINAL lease, whose snapshot may
+	// no longer exist in this process (a restart clears the registry). Rebinding
+	// is only safe when the environment still describes the same account,
+	// toolchain and credential sources; otherwise the run must not silently
+	// continue under a different environment.
+	bound, err := c.rebindLeaseEnvironment(ctx, lease, snapshot)
+	if err != nil {
+		return nil, err
+	}
+	return bound, nil
+}
+
+// rebindLeaseEnvironment resolves a lease's environment binding for this
+// process. Fresh leases bind to the current snapshot. A lease that predates a
+// restart is rebuilt only when all three fingerprints match; a changed PATH,
+// account, or credential source is reported so the caller can park the work
+// instead of continuing under an environment the run never agreed to.
+func (c *RunCoordinator) rebindLeaseEnvironment(ctx context.Context, lease *executionenv.Lease, snapshot *executionenv.Snapshot) (*executionenv.Lease, error) {
+	if lease == nil || snapshot == nil {
+		return lease, nil
+	}
+	registry := executionenv.DefaultRegistry()
+	if _, ok := registry.Get(lease.EnvironmentSnapshotID); ok {
+		registry.BindLease(lease.ID, lease.EnvironmentSnapshotID)
+		return lease, nil
+	}
+	if lease.EnvironmentSnapshotID == "" {
+		// A lease written before environment binding existed: adopt the current
+		// snapshot and record it, so later commands of this run are stable.
+		registry.BindLease(lease.ID, snapshot.ID)
+		return c.srv.Control.UpdateExecutionLeaseEnvironment(ctx, lease.TenantID, lease.ID, snapshot.ID,
+			snapshot.Generation, snapshot.EnvironmentFingerprint, snapshot.CredentialSourceHash)
+	}
+	rebuilt := lease.EnvironmentFingerprint == snapshot.EnvironmentFingerprint &&
+		lease.CredentialSourceHash == snapshot.CredentialSourceHash &&
+		lease.PrincipalFingerprint == snapshot.PrincipalFingerprint
+	if !rebuilt {
+		return nil, &executionenv.EnvironmentChangedError{
+			LeaseID: lease.ID,
+			Changed: executionenv.DescribeEnvironmentChange(lease, snapshot),
+		}
+	}
+	registry.BindLease(lease.ID, snapshot.ID)
+	updated, err := c.srv.Control.UpdateExecutionLeaseEnvironment(ctx, lease.TenantID, lease.ID, snapshot.ID,
+		snapshot.Generation, snapshot.EnvironmentFingerprint, snapshot.CredentialSourceHash)
+	if err != nil {
+		return nil, err
+	}
+	c.appendEnvironmentRebuiltEvent(ctx, lease, snapshot)
+	return updated, nil
+}
+
+// appendEnvironmentRebuiltEvent records that a recovered run's environment
+// snapshot was rebuilt after a restart. The generation change must be visible:
+// silently rebinding is how a run would appear to continue unchanged while its
+// environment binding was replaced. Non-secret metadata only.
+func (c *RunCoordinator) appendEnvironmentRebuiltEvent(ctx context.Context, lease *executionenv.Lease, snapshot *executionenv.Snapshot) {
+	if c == nil || c.srv == nil || c.srv.Control == nil || lease == nil || snapshot == nil {
+		return
+	}
+	run, err := c.srv.Control.GetRun(ctx, lease.TenantID, lease.RunID)
+	if err != nil || run == nil || run.TaskID == "" {
+		return
+	}
+	_, _ = c.srv.Control.AppendEvent(ctx, control.Event{
+		TaskID:     run.TaskID,
+		RunID:      lease.RunID,
+		Type:       "environment.snapshot_rebuilt",
+		Visibility: "internal",
+		Payload: mustJSON(map[string]interface{}{
+			"lease_id":       lease.ID,
+			"snapshot_id":    snapshot.ID,
+			"generation":     snapshot.Generation,
+			"volatile_count": snapshot.VolatileCount,
+			"source":         snapshot.Source,
+		}),
 	})
 }
 
@@ -542,9 +652,10 @@ func (c *RunCoordinator) toolApprovalHandler(identity *control.IdentityContext, 
 			ActionType:       "tool_call",
 			RequestedChannel: fallback(channel, identity.Platform),
 			Payload: mustJSON(map[string]interface{}{
-				"tool":   req.ToolName,
-				"reason": req.Reason,
-				"args":   redactApprovalArgs(req.Args),
+				"tool":        req.ToolName,
+				"reason":      req.Reason,
+				"args":        redactApprovalArgs(req.Args),
+				"grant_class": req.GrantClass,
 			}),
 		})
 		if err != nil {
@@ -600,7 +711,14 @@ func (c *RunCoordinator) toolApprovalHandler(identity *control.IdentityContext, 
 					// DecisionScope (set when the human answered with a grant
 					// scope) tells the middleware whether to remember this class
 					// for the task/person.
-					return tools.ToolApprovalDecision{Approved: true, ApprovalID: approval.ID, Scope: current.DecisionScope}, nil
+					return tools.ToolApprovalDecision{
+						Approved:   true,
+						ApprovalID: approval.ID,
+						Scope:      current.DecisionScope,
+						// The control plane rules on how long its authorization
+						// lasts; the execution layer only redeems it.
+						ExpiresAt: approvalDecisionExpiry(current.DecisionScope),
+					}, nil
 				case "rejected":
 					return tools.ToolApprovalDecision{Approved: false, ApprovalID: approval.ID, Reason: "rejected"}, nil
 				}
@@ -858,4 +976,19 @@ func (c *RunCoordinator) withGatewayContext(input string, identity *control.Iden
 	sb.WriteString("[/SelfMind daemon context]\n\n")
 	sb.WriteString(input)
 	return sb.String()
+}
+
+// approvalDecisionExpiry is the control plane's ruling on how long a remembered
+// decision authorizes work. Task scope is bounded by the task itself and needs no
+// deadline; person scope outlives every task, so it is time-bounded — the same
+// 8h window the approval-grant ledger uses, so the two cannot disagree.
+func approvalDecisionExpiry(scope string) time.Time {
+	switch strings.ToLower(strings.TrimSpace(scope)) {
+	case "person":
+		return time.Now().Add(8 * time.Hour)
+	case "task":
+		return time.Now().Add(time.Hour)
+	default:
+		return time.Time{}
+	}
 }

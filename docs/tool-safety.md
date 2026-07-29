@@ -95,17 +95,20 @@ Workspace trust is enforced as a durable owner-controlled boundary:
   capability rather than forcing users to mark the whole workspace trusted.
   A task grant lasts one hour and a person grant lasts eight hours. Marking a
   workspace untrusted revokes its active execution capabilities;
-- the planned credential-aware private-HOME view will make credential files
-  override toolchain convenience when classifications overlap. `~/.npmrc`,
-  `~/.docker/config.json`, `~/.netrc`, and credential helpers will require a
-  credential capability even when a CLI normally reads them;
-- that future view must never grant all of `~/.config`; access is
-  tool-subdirectory or file scoped.
+- operator credential state is reached through `credential:read`, which is
+  approvable, workspace-scoped and time-bounded on the same terms as
+  `network:shared`. It is asked for BEFORE execution and only when the command's
+  program set matches a profile declaring operator credentials, so a trusted
+  workspace and a command that touches no credential CLI are never interrupted.
+  Declining leaves the command runnable with an empty state overlay;
+- access is never granted to all of `~/.config`. A profile names the files and
+  subdirectories it needs, bounded by `copy_in` limits, and the operator's own
+  files are never modified.
 
-Private package installation in an untrusted workspace currently requires a
-shared-network capability and uses the compatibility environment. After the
-private-HOME view ships it may also require credential-read approval. Do not
-bypass either boundary with a vendor-specific exception.
+Private package installation in an untrusted workspace requires a shared-network
+capability, and credential-backed registries additionally require
+`credential:read`. Do not bypass either boundary with a vendor-specific
+exception.
 
 ## Dispatch and Delegation
 
@@ -237,6 +240,108 @@ and `execute_code` accept a vendor-neutral `execution_class`:
 An explicit shorter timeout still wins. The profile is generic execution
 metadata; do not solve one vendor's timeout by hard-coding its binary name in
 execution middleware.
+
+## Execution engine
+
+`docs/execution-engine.zh-CN.md` owns the mechanics: environment snapshots and
+fingerprints, run scratch, the tool environment profile catalog, the five state
+primitives, and the sandbox-gated failure classes. This section fixes only the
+cross-cutting rules that other domains must not violate.
+
+### Three layers, and the floor between them
+
+Execution policy is layered, and each layer has exactly one home:
+
+- **L1 built-in behaviour data lives in Go source**, versioned with the binary
+  and reviewed in a pull request: the reusable-grant floor
+  (`tools/grant_floor.go`), the hard-floor protected roots and dangerous/egress
+  binaries (`tools/middleware.go`), failure-class rules
+  (`tools/tool_errors.go`), and the tool environment profile catalog. These
+  define behaviour, not preference. Do not move them into configuration and do
+  not add a per-vendor branch in engine code — a profile is data in the
+  catalog.
+- **L2 user-approved rules live in the durable ledgers**: `approval_grants` and
+  `execution_capability_grants`. Anything a human approved must be listable,
+  time-bounded, and revocable, and the surface that reports a decision must
+  name the class that was remembered.
+- **L3 user configuration stays small.** `exec_sandbox` keeps `enabled`,
+  `required`, and `allow_network`. New execution behaviour does not earn a new
+  configuration key.
+
+**L1 is the floor on L2.** A class may be remembered only when it actually
+bounds what can run: payloads that reach an interpreter or shell, a
+general-purpose exec facility, an irreversible operation, shell control flow, or
+any redirection/substitution/expansion/wildcard are approvable once and never
+remembered. Ordinary dangerous operations remain approvable classes — that
+distinction is the same one the hard floor draws. A boot-time review re-applies
+the current floor to already-stored keys and withdraws what no longer qualifies;
+it only ever removes authority and is idempotent.
+
+### One execution entry
+
+`tools.Execute(ctx, ExecutionRequest, args)` is the only place a sandboxed
+command is constructed, asserted by test. `terminal`, `verify`, `execute_code`
+and `watch_external` all pass through it. `background: true` shares the same
+prepared material (environment binding, scratch, tool profiles) but is not
+routed through `Execute`: a detached process has no streamed output or exit code
+to return. It is bounded by a ceiling so a wedged process cannot hold its
+process slot, scratch, and copied credential state until the daemon restarts,
+and a durable wait belongs in `watch_external` instead.
+
+`SandboxPlan` is serializable and carries the environment binding (snapshot id,
+generation, scratch handle) plus the filesystem view; `ProcessMaterial` carries
+the values and has no exported fields, no `String`, and no JSON marshaller, so
+an environment cannot be logged or shipped by accident. Execution policy travels
+on the request (`ExecutionScope.SandboxPolicy`) rather than being read from a
+process global at execution time.
+
+### Tool environment profiles
+
+A profile declares what host state a command-line tool needs. The engine
+understands five primitives and nothing about any vendor: `copy_in` (bounded,
+selective, staged then atomically renamed), `map_ro`, `map_rw`, `map_rw_at`
+(a writable state directory bound OVER a host path, for state whose location the
+tool does not let us configure — the AWS SSO token cache derives from `HOME`),
+and `env_redirect`. `write_back` is a reserved slot and is not implemented, so a
+permanent identity change (`gcloud auth login`, `docker login`, `gh auth login`)
+does not persist from inside the sandbox and belongs in approved host execution.
+
+A dependency between profiles is either inherent (`RequiresProfiles`) or proven
+(`ConditionalRequires`, which pulls a credential helper in only when the tool's
+own configuration names it). Assuming a dependency is a defect in both
+directions: it breaks the tools that do not need it and widens credential
+exposure for commands that never touch that provider.
+
+Credential access is a POLICY decision, never a catalog one. A trusted workspace
+may use operator credential state; an untrusted one needs the `credential:read`
+capability, which is asked for before execution and only when the command's
+program set actually matches a profile that declares operator credentials.
+Declining is not an error: the command still runs with an empty state overlay and
+the tool reports its own "not logged in", which is the honest diagnosis.
+
+### Durable execution identity
+
+A `watch_external` check outlives its run and survives restarts, so it records
+the environment identity it was registered under (snapshot id, generation, and
+the three fingerprints — never values) and verifies it before every check. The
+failure mode being prevented is not an error but a check that SUCCEEDS against a
+different account. A watch whose identity no longer matches is stopped with
+`environment_changed`; watches registered before identity existed are
+grandfathered rather than stranded.
+
+### Failure classification
+
+"Was there a sandbox" is a precondition, not one cue among many. A command that
+ran isolated is classified for filesystem denial FIRST
+(`sandbox_fs_denied`, `credential_state_readonly`), before the generic
+taxonomy, and shell-level rejections (exit 2/126/127) are never sandbox
+denials. A denied write to a tool's own state directory must never be reported
+as an authentication problem, and must never carry guidance that forbids the
+only correct remedy.
+
+Event `error_category` comes from the structured class the tools layer already
+appended, not from re-reading the prose hint. Do not add a second classifier
+that parses enriched error text.
 
 ## Known Gaps
 

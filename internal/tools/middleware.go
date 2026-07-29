@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"selfmind/internal/platform/log"
 )
@@ -423,7 +424,7 @@ func SmartApprovalMiddleware(projectRoot string) Middleware {
 					// Record a TASK-scope class grant so the judge is consulted at
 					// most once per class per task, then proceed.
 					if scope.Grants != nil && patternKey != "" {
-						recordApprovalGrant(ctx, scope, "task", patternKey)
+						recordApprovalGrant(ctx, scope, "task", patternKey, approvalGrantExpiry("task", args))
 					}
 					log.Info("smart approval: auto-approved by triage", "tool", toolName, "reason", reason, "class", patternKey)
 					return next(args)
@@ -452,6 +453,7 @@ func SmartApprovalMiddleware(projectRoot string) Middleware {
 					ToolName:            toolName,
 					Reason:              reason,
 					Args:                approvalDisplayArgs(args),
+					GrantClass:          grantClassForDecision(toolName, reason, args, patternKey),
 					ResourceFingerprint: approvalResourceFingerprint(scope, toolName, args),
 				})
 				if err != nil {
@@ -470,7 +472,7 @@ func SmartApprovalMiddleware(projectRoot string) Middleware {
 				// Remember an "approve this class" decision so the next same-class
 				// call skips the ask.
 				if scope.Grants != nil && patternKey != "" {
-					recordApprovalGrant(contextFromArgs(args), scope, decision.Scope, patternKey)
+					recordApprovalGrant(contextFromArgs(args), scope, decision.Scope, patternKey, approvalGrantExpiry(decision.Scope, args))
 				}
 				return next(args)
 			}
@@ -525,20 +527,40 @@ func approvalProjectRoot(fallback string, scope ExecutionScope, args map[string]
 // grants across all of the person's tasks (persistent memory). "" (once) and an
 // empty scope record nothing. Failures are swallowed: a lost grant only costs
 // one extra ask, never correctness.
-func recordApprovalGrant(ctx context.Context, scope ExecutionScope, decisionScope, patternKey string) {
+func recordApprovalGrant(ctx context.Context, scope ExecutionScope, decisionScope, patternKey string, expiresAt time.Time) {
 	if scope.Grants == nil || patternKey == "" {
 		return
 	}
 	switch decisionScope {
 	case "task":
 		if scope.TaskID != "" {
-			_ = scope.Grants.GrantApproval(ctx, "task", scope.TenantID, scope.PersonID, scope.TaskID, patternKey)
+			_ = scope.Grants.GrantApproval(ctx, "task", scope.TenantID, scope.PersonID, scope.TaskID, patternKey, expiresAt)
 		}
 	case "person":
 		if scope.PersonID != "" {
-			_ = scope.Grants.GrantApproval(ctx, "person", scope.TenantID, scope.PersonID, scope.PersonID, patternKey)
+			_ = scope.Grants.GrantApproval(ctx, "person", scope.TenantID, scope.PersonID, scope.PersonID, patternKey, expiresAt)
 		}
 	}
+}
+
+// approvalGrantTTL bounds a remembered class. Host execution is the broadest
+// boundary a grant can authorize, so it is always time-bounded no matter which
+// scope the human chose; a person-scope grant is bounded because it outlives
+// every task. A task-scope grant of a sandboxed class stays unbounded because
+// the task id already bounds it and the task is durable, visible state.
+//
+// The 8h person window matches the execution-capability policy so the two
+// ledgers cannot disagree about how long "remember this" lasts.
+const approvalGrantPersonTTL = 8 * time.Hour
+
+func approvalGrantExpiry(decisionScope string, args map[string]interface{}) time.Time {
+	if effectiveSandboxModeArg(args) == SandboxHost {
+		return time.Now().Add(approvalGrantPersonTTL)
+	}
+	if strings.EqualFold(strings.TrimSpace(decisionScope), "person") {
+		return time.Now().Add(approvalGrantPersonTTL)
+	}
+	return time.Time{}
 }
 
 // approvalPatternKey returns a COARSE class identifier for an approval decision,
@@ -558,6 +580,11 @@ func approvalPatternKey(toolName string, args map[string]interface{}, dangerousR
 
 func approvalPatternKeyForScope(toolName string, args map[string]interface{}, dangerousReason string, scope ExecutionScope, hasScope bool) string {
 	if isExecTool(toolName) {
+		// Floor first: a payload whose class cannot bound what will run is
+		// approvable once but never remembered (see grant_floor.go).
+		if _, eligible := grantCommandFamily(toolName, args); !eligible {
+			return ""
+		}
 		base := "exec:" + toolName
 		if dangerousReason != "" {
 			base = "exec:" + dangerousReason
@@ -597,19 +624,14 @@ func approvalResourceFingerprint(scope ExecutionScope, toolName string, args map
 	return fmt.Sprintf("workspace:%x:command:%s", sum[:8], execCommandFamily(toolName, args))
 }
 
+// execCommandFamily names the command family for a host-execution resource
+// fingerprint. It delegates to the grant floor so the fingerprint can never
+// disagree with the eligibility decision: an ineligible payload has no family,
+// and approvalPatternKeyForScope has already refused a reusable key by the time
+// this is reached.
 func execCommandFamily(toolName string, args map[string]interface{}) string {
-	if toolName == "execute_code" {
-		return "python"
-	}
-	segs, _ := expandCommandSegments(execCommandPayload(toolName, args), 0)
-	for _, fields := range segs {
-		progIdx, ok := segmentProgram(fields)
-		if !ok {
-			continue
-		}
-		if base := strings.ToLower(strings.TrimSpace(filepath.Base(fields[progIdx]))); base != "" {
-			return base
-		}
+	if family, ok := grantCommandFamily(toolName, args); ok {
+		return family
 	}
 	return "unknown"
 }
@@ -891,7 +913,7 @@ func dangerousToolCall(projectRoot, toolName string, args map[string]interface{}
 		// real payload. This preserves specific classes such as curl/chmod/rm
 		// instead of collapsing every host request into one reusable grant.
 		if effectiveSandboxModeArg(args) == SandboxHost {
-			return true, "requests execution on the host outside the isolated sandbox"
+			return true, HostEscapeApprovalReason
 		}
 	}
 

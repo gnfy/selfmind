@@ -105,6 +105,9 @@ type approvalPayload struct {
 	Tool   string                 `json:"tool"`
 	Reason string                 `json:"reason"`
 	Args   map[string]interface{} `json:"args"`
+	// GrantClass describes what a "remember this" decision authorizes. Empty
+	// means the class is not reusable, so no grant was or will be recorded.
+	GrantClass string `json:"grant_class,omitempty"`
 }
 
 func decodeApprovalPayload(approval control.ApprovalRequest) approvalPayload {

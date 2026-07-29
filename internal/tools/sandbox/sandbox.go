@@ -21,10 +21,28 @@ type Policy struct {
 	// WritableRoots are absolute paths mounted read-write inside the sandbox
 	// (typically the active workspace root). Everything else is read-only.
 	WritableRoots []string
+	// ScratchTmp, when set, is the run's durable temp directory. It replaces the
+	// private tmpfs so temp files survive from one command of a run to the next,
+	// and it is bound TWICE — at its real absolute path and at /tmp — so the
+	// path exported as $SELFMIND_RUN_TMP is literally the same under host and
+	// isolated execution. It must not live under /tmp: the /tmp bind shadows
+	// every real path beneath it.
+	ScratchTmp string
+	// OverlayMounts bind a writable directory over another path. They exist for
+	// tool state whose location is not configurable, so no environment redirect
+	// can move it; the host is untouched because the bind is visible only inside
+	// this sandbox.
+	OverlayMounts []OverlayMount
 	// Network allows egress. Default false: external side effects that need
 	// the network must either use an operator-enabled isolated network policy
 	// or explicitly request the approval-gated host mode.
 	Network bool
+}
+
+// OverlayMount binds Source over Target inside the sandbox.
+type OverlayMount struct {
+	Source string
+	Target string
 }
 
 // detector abstracts capability probing for tests.
@@ -102,7 +120,13 @@ func WrapArgv(bwrap string, policy Policy, innerArgv []string) []string {
 		"--ro-bind", "/", "/", // read-only view of the host root
 		"--dev", "/dev",
 		"--proc", "/proc",
-		"--tmpfs", "/tmp",
+	}
+	if scratch := strings.TrimSpace(policy.ScratchTmp); scratch != "" {
+		// Real path first so $SELFMIND_RUN_TMP resolves, then /tmp for tools
+		// that hardcode it. Both are the same directory (same inode).
+		argv = append(argv, "--bind", scratch, scratch, "--bind", scratch, "/tmp")
+	} else {
+		argv = append(argv, "--tmpfs", "/tmp")
 	}
 	if policy.Network {
 		// Keep the host network namespace: egress allowed.
@@ -114,7 +138,18 @@ func WrapArgv(bwrap string, policy Policy, innerArgv []string) []string {
 		if root == "" {
 			continue
 		}
-		argv = append(argv, "--bind", root, root) // rw bind overrides the ro-bind
+		argv = append(argv, "--bind-try", root, root) // rw bind overrides the ro-bind
+	}
+	// Overlay binds come after the writable roots so they win over them, and
+	// use --bind-try so a target that does not exist on this host is skipped
+	// rather than aborting the whole sandbox.
+	for _, overlay := range policy.OverlayMounts {
+		source := strings.TrimSpace(overlay.Source)
+		target := strings.TrimSpace(overlay.Target)
+		if source == "" || target == "" {
+			continue
+		}
+		argv = append(argv, "--bind-try", source, target)
 	}
 	argv = append(argv, "--")
 	argv = append(argv, innerArgv...)

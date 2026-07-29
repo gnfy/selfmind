@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"selfmind/internal/control"
+	"selfmind/internal/executionenv"
 	"selfmind/internal/gateway/api"
 	"selfmind/internal/gateway/command"
 	"selfmind/internal/gateway/router"
@@ -313,6 +314,38 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 	}
 	lease, leaseErr := c.materializeExecutionLease(ctx, identity, run, workspace)
 	if leaseErr != nil {
+		// A recovered run whose environment no longer matches what it started
+		// with is a lifecycle decision, not a failure: continuing under a
+		// different PATH, account, or credential source would silently change
+		// what the remaining steps do. Park it for a human like an unavailable
+		// workspace, on the same resume path.
+		var changed *executionenv.EnvironmentChangedError
+		if errors.As(leaseErr, &changed) {
+			summary := "The execution environment changed since this run started (" +
+				strings.Join(changed.Changed, ", ") + ")."
+			outcome := api.RunOutcome{
+				Status:           "waiting_user",
+				CompletionReason: "environment_changed",
+				Resumable:        true,
+				Summary:          summary,
+				NextSteps: []string{
+					"Confirm the intended account and toolchain, then reply \"continue\" to start a fresh run under the current environment.",
+				},
+			}
+			event := control.Event{
+				TaskID: task.ID, RunID: run.ID, Type: "run.waiting_user", Visibility: "task", Channel: req.Channel,
+				Payload: mustJSON(map[string]interface{}{"outcome": outcome, "reason": "environment_changed", "changed": changed.Changed}),
+			}
+			_ = c.materializeRunFinalization(context.WithoutCancel(ctx), identity, task, run, "waiting_user",
+				analysisWorkspaceID, req.Content, req.Channel, "", outcome, attach,
+				control.Handoff{TaskID: task.ID, Summary: summary, NextSteps: outcome.NextSteps},
+				event)
+			return api.MessageResponse{
+				Identity: identity, Task: task, Run: run, Outcome: &outcome, Content: summary,
+				Turn:    messageTurn("waiting_user", "waiting_user", "idle", task.ID, run.ID, summary),
+				Context: messageContextBudget(llmUsageZero()),
+			}, http.StatusOK
+		}
 		outcome := c.finalizeErroredRun(ctx, identity, task, run, req.Channel, fmt.Errorf("materialize execution lease: %w", leaseErr), replay)
 		return api.MessageResponse{
 			Identity: identity, Task: task, Run: run, Outcome: &outcome, Error: firstString(outcome.Risks),
@@ -326,6 +359,11 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 	req.Attachments = c.importAttachments(identity, run, req.Attachments)
 	cleanupScope := c.installExecutionScope(identity, task, run, workspace, req, lease)
 	defer cleanupScope()
+	// Tag the turn with its run-scoped key so tool calls resolve exactly this
+	// run's scope instead of the person's most recent one.
+	if run != nil {
+		ctx = tools.WithExecutionScopeKey(ctx, tools.ExecutionScopeKeyForRun(run.ID))
+	}
 	if workspace != nil && workspace.LocalPath != "" {
 		ctx = kernel.WithWorkspaceContext(ctx, kernel.WorkspaceContext{
 			ID:   workspace.ID,

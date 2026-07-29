@@ -52,8 +52,58 @@ func isSelfMindControlEnv(name string) bool {
 	return strings.HasPrefix(upper, "SELF_") || strings.HasPrefix(upper, "SELFMIND_")
 }
 
-func currentToolProcessEnv() []string {
+// InstallEnvironmentSnapshot samples the operator environment, filters it
+// through the single construction path, and installs it as the process's
+// current snapshot. It is the ONLY place a snapshot is created, so the filter
+// can never be bypassed. Credential-shaped values are registered with the
+// redactor and their names become the snapshot's credential sources.
+func InstallEnvironmentSnapshot(parent []string, source string) *executionenv.Snapshot {
+	refs, principal := SnapshotCredentialRefs(parent)
+	sources := make([]string, 0, len(refs))
+	for _, ref := range refs {
+		sources = append(sources, ref.Kind+":"+ref.Source)
+	}
+	filtered := BuildProcessEnv(parent, DefaultProcessEnvPolicy())
+	return executionenv.DefaultRegistry().Install(filtered, source, principal, sources)
+}
+
+// SampleEnvironmentSnapshot builds a snapshot without installing it, so a
+// caller can compare a fresh reading against the binding a run already holds.
+func SampleEnvironmentSnapshot(parent []string, source string) *executionenv.Snapshot {
+	refs, principal := SnapshotCredentialRefs(parent)
+	sources := make([]string, 0, len(refs))
+	for _, ref := range refs {
+		sources = append(sources, ref.Kind+":"+ref.Source)
+	}
+	filtered := BuildProcessEnv(parent, DefaultProcessEnvPolicy())
+	return executionenv.DefaultRegistry().Sample(filtered, source, principal, sources)
+}
+
+// leaseProcessEnv resolves the child environment for one tool call through the
+// run's lease. Reading os.Environ() at the execution callsite is what let a
+// long-lived daemon hand a stale or mid-run-changed environment to a child; the
+// lease binding makes every command of a run — including a retry — use the same
+// values. Falling back to a fresh filtered sample keeps non-run callers (local
+// CLI helpers, tests) working, and is still built through BuildProcessEnv.
+func leaseProcessEnv(args map[string]interface{}) []string {
+	if scope, ok := currentExecutionScopeAny(args); ok {
+		if snapshot, found := executionenv.DefaultRegistry().ForLease(scope.LeaseID); found {
+			return snapshot.Env()
+		}
+		if snapshot, found := executionenv.DefaultRegistry().Get(scope.EnvironmentSnapshotID); found {
+			return snapshot.Env()
+		}
+	}
+	if snapshot := executionenv.DefaultRegistry().Current(); snapshot != nil {
+		return snapshot.Env()
+	}
 	return BuildProcessEnv(os.Environ(), DefaultProcessEnvPolicy())
+}
+
+// currentToolProcessEnv is the no-scope fallback used by callers that have no
+// request context at all.
+func currentToolProcessEnv() []string {
+	return leaseProcessEnv(nil)
 }
 
 // SnapshotCredentialRefs derives durable, non-secret references from the
@@ -123,4 +173,19 @@ func isPrincipalCarrierName(name string) bool {
 		}
 	}
 	return false
+}
+
+// resolvedSnapshotForArgs returns the snapshot a call will actually use, so a
+// plan can name its binding instead of leaving the field empty.
+func resolvedSnapshotForArgs(args map[string]interface{}) *executionenv.Snapshot {
+	registry := executionenv.DefaultRegistry()
+	if scope, ok := currentExecutionScopeAny(args); ok {
+		if snapshot, found := registry.ForLease(scope.LeaseID); found {
+			return snapshot
+		}
+		if snapshot, found := registry.Get(scope.EnvironmentSnapshotID); found {
+			return snapshot
+		}
+	}
+	return registry.Current()
 }

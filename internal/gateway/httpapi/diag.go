@@ -16,8 +16,10 @@ import (
 	"time"
 
 	"selfmind/internal/control"
+	"selfmind/internal/executionenv"
 	"selfmind/internal/gateway/api"
 	"selfmind/internal/tools"
+	"selfmind/internal/tools/envprofiles"
 )
 
 const diagRecentEvents = 5
@@ -35,6 +37,23 @@ func (d *Server) executionDiagReply(ctx context.Context, identity *control.Ident
 		diag.Enabled, diag.Required, diag.Available)
 	fmt.Fprintf(&sb, "Sandbox network: %s\n", diag.Network)
 	fmt.Fprintf(&sb, "Process environment: %s\n", diag.Environment)
+	// Snapshot state: without this, "the daemon is using a stale PATH" is
+	// invisible and a first-command failure has no diagnosable cause.
+	if snapshot := executionenv.DefaultRegistry().Current(); snapshot != nil {
+		fmt.Fprintf(&sb, "Environment snapshot: generation %d, sampled %s ago, source %s\n",
+			snapshot.Generation, compactDuration(snapshot.Age(time.Now())), fallback(snapshot.Source, "inherited"))
+		if snapshot.VolatileCount > 0 {
+			fmt.Fprintf(&sb, "Environment volatile entries dropped: %d\n", snapshot.VolatileCount)
+		}
+	} else {
+		sb.WriteString("Environment snapshot: none installed\n")
+	}
+	if root := executionenv.RuntimeRoot(); root != "" {
+		sb.WriteString("Run scratch: available\n")
+	} else {
+		sb.WriteString("Run scratch: unavailable (falling back to a private tmpfs)\n")
+	}
+	fmt.Fprintf(&sb, "Environment profiles available: %s\n", strings.Join(envprofiles.IDs(), ", "))
 	if ws, err := d.Control.CurrentWorkspace(ctx, identity.TenantID, identity.PersonID); err == nil && ws != nil {
 		fmt.Fprintf(&sb, "Workspace: %s\n", ws.Name)
 		fmt.Fprintf(&sb, "Workspace trust: %s\n", fallback(ws.TrustLevel, "untrusted"))
@@ -62,6 +81,15 @@ func (d *Server) executionDiagReply(ctx context.Context, identity *control.Ident
 		if lease, err := d.Control.GetExecutionLeaseByRun(ctx, identity.TenantID, active.RunID); err == nil && lease != nil {
 			fmt.Fprintf(&sb, "Environment lease: %s (%s snapshot)\n", shortOpaqueID(lease.ID), lease.EnvironmentProfile)
 			fmt.Fprintf(&sb, "Credential references: %d hidden\n", len(lease.CredentialRefs))
+			if lease.EnvironmentGeneration > 0 {
+				fmt.Fprintf(&sb, "Lease environment generation: %d\n", lease.EnvironmentGeneration)
+			}
+			if bytes, err := executionenv.ScratchBytes(lease.ID); err == nil {
+				fmt.Fprintf(&sb, "Run scratch size: %s%s\n", compactBytes(bytes), scratchQuotaNote(bytes))
+			}
+		}
+		if summary := d.recentExecutionSummary(ctx, identity.TenantID, active.TaskID, active.RunID); summary != "" {
+			sb.WriteString(summary)
 		}
 		if scope := tools.ExecutionScopeDiagnostics(identity.PersonID); scope.Installed {
 			profile := strings.TrimSpace(scope.ExecutionProfile)
@@ -835,4 +863,112 @@ func latestContextBreakdownLine(events []control.Event) string {
 			p.Total, pct(p.Identity), pct(p.Tools), pct(p.ProjectContext), pct(p.Memory), pct(p.Runtime), pct(p.History))
 	}
 	return ""
+}
+
+// scratchQuotaNote reports the soft-limit state using the execution layer's
+// single constant, so the diagnostic and the enforcement can never disagree.
+func scratchQuotaNote(bytes int64) string {
+	if bytes < tools.ScratchQuotaSoftLimitBytes {
+		return ""
+	}
+	return " (over the 2 GiB soft limit; the next command is blocked until it is cleaned up)"
+}
+
+func compactBytes(bytes int64) string {
+	switch {
+	case bytes >= 1<<30:
+		return fmt.Sprintf("%.1f GiB", float64(bytes)/float64(1<<30))
+	case bytes >= 1<<20:
+		return fmt.Sprintf("%.1f MiB", float64(bytes)/float64(1<<20))
+	case bytes >= 1<<10:
+		return fmt.Sprintf("%.1f KiB", float64(bytes)/float64(1<<10))
+	default:
+		return fmt.Sprintf("%d B", bytes)
+	}
+}
+
+func compactDuration(d time.Duration) string {
+	switch {
+	case d >= time.Hour:
+		return fmt.Sprintf("%.1fh", d.Hours())
+	case d >= time.Minute:
+		return fmt.Sprintf("%.0fm", d.Minutes())
+	default:
+		return fmt.Sprintf("%.0fs", d.Seconds())
+	}
+}
+
+// recentExecutionSummary reports the execution evidence the metrics in
+// docs/execution-engine.zh-CN.md depend on: which profiles were applied, how
+// recovery went, and why any command left the sandbox. Without the host-escape
+// REASON the only measurable number is the raw host share, which mixes a
+// deliberate login with a sandbox defect.
+func (d *Server) recentExecutionSummary(ctx context.Context, tenantID, taskID, runID string) string {
+	_ = tenantID
+	if d == nil || d.Control == nil || strings.TrimSpace(taskID) == "" {
+		return ""
+	}
+	events, err := d.Control.ListTaskEvents(ctx, taskID, 200)
+	if err != nil {
+		return ""
+	}
+	profiles := map[string]bool{}
+	notes := 0
+	recoveries := 0
+	escapes := map[string]int{}
+	for _, event := range events {
+		if strings.TrimSpace(runID) != "" && event.RunID != runID {
+			continue
+		}
+		switch event.Type {
+		case "tool.environment":
+			var payload struct {
+				Profiles []string `json:"profiles"`
+				Notes    []string `json:"notes"`
+			}
+			if json.Unmarshal(event.Payload, &payload) == nil {
+				for _, id := range payload.Profiles {
+					profiles[id] = true
+				}
+				notes += len(payload.Notes)
+			}
+		case "tool.recovery":
+			recoveries++
+		case "tool.sandbox":
+			var payload struct {
+				Mode             string `json:"mode"`
+				HostEscapeReason string `json:"host_escape_reason"`
+			}
+			if json.Unmarshal(event.Payload, &payload) == nil && payload.Mode == "host" {
+				escapes[fallback(payload.HostEscapeReason, "unclassified")]++
+			}
+		}
+	}
+	if len(profiles) == 0 && recoveries == 0 && len(escapes) == 0 {
+		return ""
+	}
+	var sb strings.Builder
+	if len(profiles) > 0 {
+		names := make([]string, 0, len(profiles))
+		for id := range profiles {
+			names = append(names, id)
+		}
+		sort.Strings(names)
+		fmt.Fprintf(&sb, "Environment profiles applied this run: %s\n", strings.Join(names, ", "))
+	}
+	if notes > 0 {
+		fmt.Fprintf(&sb, "Environment notes this run: %d (see run events)\n", notes)
+	}
+	if recoveries > 0 {
+		fmt.Fprintf(&sb, "Environment recoveries this run: %d\n", recoveries)
+	}
+	if len(escapes) > 0 {
+		reasons := make([]string, 0, len(escapes))
+		for reason, count := range escapes {
+			reasons = append(reasons, fmt.Sprintf("%s=%d", reason, count))
+		}
+		sort.Strings(reasons)
+		fmt.Fprintf(&sb, "Host escapes this run: %s\n", strings.Join(reasons, ", "))
+	}
+	return sb.String()
 }

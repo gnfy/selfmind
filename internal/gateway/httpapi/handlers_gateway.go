@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"selfmind/internal/buildinfo"
+	"selfmind/internal/executionenv"
 	"selfmind/internal/gateway/api"
 )
 
@@ -56,6 +57,13 @@ func (d *Server) GatewayStatus() api.GatewayStatusResponse {
 	runtime.Commit = build.Commit
 	runtime.BuiltAt = build.BuiltAt
 	runtime.BuildFingerprint = build.Fingerprint
+	if snapshot := executionenv.DefaultRegistry().Current(); snapshot != nil {
+		runtime.EnvironmentGeneration = snapshot.Generation
+		runtime.EnvironmentSnapshotID = snapshot.ID
+		runtime.PrincipalFingerprint = snapshot.PrincipalFingerprint
+		runtime.EnvironmentFingerprint = snapshot.EnvironmentFingerprint
+		runtime.CredentialSourceHash = snapshot.CredentialSourceHash
+	}
 	return api.GatewayStatusResponse{
 		Runtime:        runtime,
 		State:          state,

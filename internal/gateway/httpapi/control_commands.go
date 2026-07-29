@@ -243,7 +243,15 @@ func (d *Server) tryHandleControlCommand(ctx context.Context, identity *control.
 			return true, formatWorkspacesForIM(workspaces, currentID), nil
 		}
 		return true, formatWorkspaces(workspaces, currentID), nil
-	case lower == "/approvals":
+	case lower == "/approvals" || strings.HasPrefix(lower, "/approvals "):
+		rest := strings.TrimSpace(trimmed[len("/approvals"):])
+		if rest != "" {
+			// Remembered classes are user-owned state, so they must be listable
+			// and revocable. Without this surface ten person-scope host grants
+			// accumulated in a single day with nothing able to show or withdraw
+			// them.
+			return true, d.approvalGrantsReply(ctx, identity, rest), nil
+		}
 		approvals, titles, err := d.pendingApprovalsForDisplay(ctx, identity)
 		if err != nil {
 			return true, "", err

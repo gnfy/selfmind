@@ -396,11 +396,47 @@ func (t *ExecuteCommandTool) Execute(args map[string]interface{}) (string, error
 		if mode != SandboxHost {
 			return "", fmt.Errorf("background commands require sandbox=host and approval; use watch_external for durable unattended waits")
 		}
+		// A background command belongs to its run: it gets the run's environment
+		// binding, scratch space, and tool state overlays like any other command.
+		// Skipping that made the same command behave differently depending only
+		// on whether it was backgrounded.
+		material := execMaterialForArgs(args, absoluteCWD(cwd))
+		if material.ProfileError != nil {
+			return "", enrichToolFailure("terminal", fmt.Errorf("prepare execution environment: %w", material.ProfileError), "")
+		}
+		runCtx := contextFromArgs(args)
+		emitProfilePreparation(runCtx, "terminal", stringArg(args, "_tool_call_id"), material)
 		registry := ProcessRegistryForArgs(args)
-		id, err := registry.StartProcess(cmdStr, cwd)
+		// The long-running class ceiling bounds a leaked background process. It
+		// is not a work limit: watch_external is the durable, observable way to
+		// wait a long time for something external.
+		ceiling := backgroundProcessCeiling(args)
+		id, err := registry.StartProcess(cmdStr, cwd, material.Env, ceiling)
 		if err != nil {
 			return "", err
 		}
+		// Background execution is host execution by contract above, so it is
+		// recorded as such: an unattributed host escape is invisible to the
+		// avoidable-escape metric.
+		decision := SandboxDecision{Mode: SandboxHost, Reason: "background execution requires host mode", NetworkShared: true}
+		plan := planFromMaterial(material, decision)
+		emitToolProgress(kernel.EventChannelFromContext(runCtx), "tool.sandbox", map[string]interface{}{
+			"tool_name":    "terminal",
+			"tool_call_id": stringArg(args, "_tool_call_id"),
+			"mode":         string(decision.Mode),
+			"reason":       decision.Reason,
+			"network":      decision.NetworkShared,
+			"background":   true,
+			"profiles":     material.Profiles,
+			// The plan is recorded even though a detached process cannot report a
+			// streamed result: an execution with no auditable boundary is exactly
+			// what made background commands invisible.
+			"snapshot_id":        plan.SnapshotID,
+			"generation":         plan.Generation,
+			"scratch_handle":     plan.ScratchHandle,
+			"ceiling_seconds":    int(ceiling / time.Second),
+			"host_escape_reason": HostEscapeHostWrite,
+		}, string(decision.Mode))
 		return fmt.Sprintf("Started background process with ID: %s", id), nil
 	}
 
@@ -448,15 +484,27 @@ func (t *VerifyTool) Execute(args map[string]interface{}) (string, error) {
 	return executeForegroundCommand(args, "verify", 120)
 }
 
+// executeForegroundCommand is the thin adapter between a tool's argument map and
+// the execution engine. It builds an ExecutionRequest, runs it, and converts the
+// ExecutionResult back into the (output, error) pair tools return.
+//
+// Everything the sandbox needs now travels in the request; args remains only the
+// dispatcher-side envelope (approval decisions, event ids, and the fields the
+// middleware writes back). That separation is what makes the engine movable: a
+// remote execution node receives a request and returns a result, and nothing
+// about this function's callers changes.
 func executeForegroundCommand(args map[string]interface{}, toolName string, standardDefaultSeconds int) (string, error) {
-	cmdStr, _ := args["command"].(string)
+	profile, profileErr := resolveToolProfile(args, standardDefaultSeconds)
+	if profileErr != nil {
+		return "", profileErr
+	}
 	cwd, _ := args["cwd"].(string)
 	if cwd == "" {
 		cwd = "."
 	}
-	profile, profileErr := resolveToolProfile(args, standardDefaultSeconds)
-	if profileErr != nil {
-		return "", profileErr
+	requestedMode, modeErr := requestedSandboxMode(args)
+	if modeErr != nil {
+		return "", enrichToolFailure(toolName, modeErr, "")
 	}
 	timeoutSeconds := int(profile.Timeout / time.Second)
 	args["_execution_class"] = string(profile.Class)
@@ -465,53 +513,29 @@ func executeForegroundCommand(args map[string]interface{}, toolName string, stan
 	if profile.RequestedTimeout > 0 {
 		args["_timeout_requested_seconds"] = int(profile.RequestedTimeout / time.Second)
 	}
-	parentCtx := contextFromArgs(args)
-	runCtx, cancel := context.WithTimeout(parentCtx, profile.Timeout)
-	defer cancel()
 
-	requestedMode, modeErr := requestedSandboxMode(args)
-	if modeErr != nil {
-		return "", enrichToolFailure(toolName, modeErr, "")
+	scope, _ := currentExecutionScopeAny(args)
+	request := ExecutionRequest{
+		ToolName:       toolName,
+		ToolCallID:     stringArg(args, "_tool_call_id"),
+		RunID:          scope.RunID,
+		LeaseID:        scope.LeaseID,
+		Payload:        stringArg(args, "command"),
+		Shell:          true,
+		CWD:            cwd,
+		WorkspaceRoots: append([]string{}, scope.AllowedRoots...),
+		Sandbox:        requestedMode,
+		NetworkShared:  networkSharedArg(args),
+		Timeout:        profile.Timeout,
+		ToolProfile:    profile,
 	}
-	cmd, decision, sandboxErr := sandboxedShellCommand(runCtx, cmdStr, cwd, requestedMode, networkSharedArg(args))
-	if sandboxErr != nil {
-		return "", enrichToolFailure(toolName, sandboxErr, "")
+	result, err := Execute(contextFromArgs(args), request, args)
+	args["_command_exit_code"] = result.ExitCode
+	args["_recovery_outcome"] = result.RecoveryOutcome
+	if result.Plan.Mode != "" {
+		args["_sandbox_mode"] = string(result.Plan.Mode)
 	}
-	args["_sandbox_mode"] = string(decision.Mode)
-	args["_sandbox_reason"] = decision.Reason
-	emitToolProgress(kernel.EventChannelFromContext(runCtx), "tool.sandbox", map[string]interface{}{
-		"tool_name":    toolName,
-		"tool_call_id": stringArg(args, "_tool_call_id"),
-		"mode":         string(decision.Mode),
-		"reason":       decision.Reason,
-		"network":      decision.NetworkShared,
-	}, string(decision.Mode))
-	cmd.Dir = cwd
-
-	out, err := runCommandStreaming(runCtx, cmd, cmdStr, toolName, stringArg(args, "_tool_call_id"), profile)
-	exitCode := 0
-	if exitErr, ok := err.(interface{ ExitCode() int }); ok {
-		exitCode = exitErr.ExitCode()
-	} else if err != nil {
-		exitCode = -1
-	}
-	args["_command_exit_code"] = exitCode
-	if runCtx.Err() == context.DeadlineExceeded {
-		failure := fmt.Errorf("command timed out after %s", timeoutSummary(profile))
-		return out, enrichSandboxTimeout(toolName, failure, out, decision)
-	}
-	if runCtx.Err() == context.Canceled {
-		// Cancellation is a lifecycle decision, not a diagnosable failure.
-		return out, fmt.Errorf("command cancelled")
-	}
-	if err != nil {
-		failure := fmt.Errorf("command failed: %w", err)
-		if decision.Mode == SandboxIsolated {
-			return out, enrichIsolatedSandboxFailure(toolName, failure, out)
-		}
-		return out, enrichToolFailure(toolName, failure, out)
-	}
-	return out, nil
+	return result.Output, err
 }
 
 func runCommandStreaming(ctx context.Context, cmd commandRunner, command, toolName, toolCallID string, profiles ...ToolProfile) (string, error) {

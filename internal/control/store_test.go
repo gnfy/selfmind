@@ -334,7 +334,7 @@ func TestApprovalGrantsScopes(t *testing.T) {
 	}
 
 	// Task grant applies only to that task.
-	if err := store.GrantApproval(ctx, "task", tenant, person, "task-1", pk); err != nil {
+	if err := store.GrantApproval(ctx, "task", tenant, person, "task-1", pk, time.Time{}); err != nil {
 		t.Fatalf("GrantApproval task: %v", err)
 	}
 	if ok, _ := store.IsApprovalGranted(ctx, tenant, person, "task-1", pk); !ok {
@@ -345,7 +345,7 @@ func TestApprovalGrantsScopes(t *testing.T) {
 	}
 
 	// Person grant applies across all tasks.
-	if err := store.GrantApproval(ctx, "person", tenant, person, person, pk); err != nil {
+	if err := store.GrantApproval(ctx, "person", tenant, person, person, pk, time.Time{}); err != nil {
 		t.Fatalf("GrantApproval person: %v", err)
 	}
 	if ok, _ := store.IsApprovalGranted(ctx, tenant, person, "task-2", pk); !ok {
@@ -361,7 +361,7 @@ func TestApprovalGrantsScopes(t *testing.T) {
 	}
 
 	// Grants are idempotent.
-	if err := store.GrantApproval(ctx, "task", tenant, person, "task-1", pk); err != nil {
+	if err := store.GrantApproval(ctx, "task", tenant, person, "task-1", pk, time.Time{}); err != nil {
 		t.Fatalf("re-grant should be idempotent: %v", err)
 	}
 }

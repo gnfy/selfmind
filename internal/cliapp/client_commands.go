@@ -41,6 +41,11 @@ func (a *App) runGatewayClientIfRequested() (bool, int) {
 			// add/use manage).
 			return true, a.handleWorkspaceCommand(a.args[2:])
 		case "approvals":
+			// Subcommands (grants | revoke <n>) forward verbatim so CLI and IM
+			// share one grammar and one resolver.
+			if len(a.args) > 2 {
+				return true, a.sendGatewayMessage("/approvals " + strings.Join(a.args[2:], " "))
+			}
 			return true, a.sendGatewayMessage("/approvals")
 		case "approve":
 			// Token is optional: the daemon resolves ordinals ("1"), unique apr_

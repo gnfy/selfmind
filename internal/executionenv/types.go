@@ -34,8 +34,19 @@ type Lease struct {
 	CredentialRefs        []CredentialRef `json:"credential_refs,omitempty"`
 	PrincipalFingerprint  string          `json:"principal_fingerprint,omitempty"`
 	ExecutionCapabilities []string        `json:"execution_capabilities,omitempty"`
-	CreatedAt             time.Time       `json:"created_at"`
-	UpdatedAt             time.Time       `json:"updated_at"`
+	// EnvironmentSnapshotID and EnvironmentGeneration bind the run to one
+	// in-process environment snapshot. The lease is the control point, not just
+	// an audit record: every command of the run resolves its child environment
+	// through this binding instead of re-reading the daemon's own environment.
+	EnvironmentSnapshotID string `json:"environment_snapshot_id,omitempty"`
+	EnvironmentGeneration int64  `json:"environment_generation,omitempty"`
+	// EnvironmentFingerprint and CredentialSourceHash are the non-secret
+	// descriptions that let a restarted daemon decide whether rebuilding the
+	// snapshot is safe. See Snapshot.Matches.
+	EnvironmentFingerprint string    `json:"environment_fingerprint,omitempty"`
+	CredentialSourceHash   string    `json:"credential_source_hash,omitempty"`
+	CreatedAt              time.Time `json:"created_at"`
+	UpdatedAt              time.Time `json:"updated_at"`
 }
 
 // CapabilityGrant is a time-bounded workspace capability. It deliberately

@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestHardlineToolCall pins the unbypassable deny set. These patterns must be
@@ -174,7 +175,7 @@ func (f *fakeGrantStore) IsApprovalGranted(ctx context.Context, tenantID, person
 	return false, nil
 }
 
-func (f *fakeGrantStore) GrantApproval(ctx context.Context, scopeKind, tenantID, personID, scopeID, patternKey string) error {
+func (f *fakeGrantStore) GrantApproval(ctx context.Context, scopeKind, tenantID, personID, scopeID, patternKey string, expiresAt time.Time) error {
 	f.granted[f.key(scopeKind, scopeID, patternKey)] = true
 	return nil
 }

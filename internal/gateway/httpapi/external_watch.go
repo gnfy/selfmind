@@ -11,6 +11,7 @@ import (
 	"unicode/utf8"
 
 	"selfmind/internal/control"
+	"selfmind/internal/executionenv"
 	"selfmind/internal/gateway/delivery"
 	"selfmind/internal/platform/log"
 	"selfmind/internal/tools"
@@ -103,9 +104,16 @@ func (d *Server) executeExternalWatch(ctx context.Context, watch control.Externa
 			return
 		}
 	}
+	// A watch must never silently change identity. It is checked BEFORE the
+	// command runs, because the failure mode is not an error — it is a check
+	// that succeeds against the wrong account, project, or cluster.
+	if changed := externalWatchEnvironmentChange(watch); len(changed) > 0 {
+		d.completeExternalWatchEnvironmentChanged(ctx, watch, changed)
+		return
+	}
 	checkCtx, cancel := context.WithTimeout(ctx, time.Duration(watch.CommandTimeoutSeconds)*time.Second)
 	defer cancel()
-	output, commandErr := runExternalWatchCommand(checkCtx, watch.CWD, watch.Command)
+	output, commandErr := d.runExternalWatchCommand(checkCtx, watch)
 	output = truncateExternalWatchOutput(tools.RedactSensitive(output))
 	errText := ""
 	if commandErr != nil {
@@ -159,8 +167,33 @@ func statusErrText(status, errText string) string {
 	return errText
 }
 
-func runExternalWatchCommand(ctx context.Context, cwd, command string) (string, error) {
-	output, _, err := tools.RunSandboxedShell(ctx, command, cwd, true)
+// runExternalWatchCommand executes one durable check with the same execution
+// material a foreground command gets.
+//
+// This path has no host escape hatch, so an unprepared environment is fatal
+// rather than recoverable: a live gcloud watch failed on all six of its targets
+// with CHECK_ERROR purely because it could not write its own credential store,
+// while aws watches in the same workspace succeeded (the AWS CLI reads its
+// config without writing it). The scratch key is the watch id, so the state
+// overlay is materialized once and reused by every poll.
+func (d *Server) runExternalWatchCommand(ctx context.Context, watch control.ExternalWatch) (string, error) {
+	durable := tools.DurableExecutionScope{
+		ScratchKey:  watch.ID,
+		TenantID:    watch.TenantID,
+		PersonID:    watch.PersonID,
+		WorkspaceID: watch.WorkspaceID,
+	}
+	if d != nil && d.Control != nil && strings.TrimSpace(watch.WorkspaceID) != "" {
+		if workspace, err := d.Control.GetWorkspace(ctx, watch.TenantID, watch.WorkspaceID); err == nil && workspace != nil {
+			durable.TrustLevel = workspace.TrustLevel
+		}
+		if grants, err := d.Control.ListActiveExecutionCapabilities(ctx, watch.TenantID, watch.PersonID, watch.WorkspaceID); err == nil {
+			for _, grant := range grants {
+				durable.Capabilities = append(durable.Capabilities, grant.Capability)
+			}
+		}
+	}
+	output, _, err := tools.RunSandboxedShellScoped(ctx, watch.Command, watch.CWD, true, durable)
 	return output, err
 }
 
@@ -250,6 +283,11 @@ func (d *Server) completeExternalWatch(ctx context.Context, watch control.Extern
 	}
 	if !finished {
 		return
+	}
+	// The watch's state overlay (a copied credential store) is no longer needed
+	// once the watch reaches a terminal state.
+	if err := executionenv.CleanupLeaseScratch(watch.ID); err != nil {
+		log.Debug("external watch scratch cleanup failed", "watch_id", watch.ID, "error", err)
 	}
 	d.finalizeExternalWatch(ctx, watch, status, output, lastError)
 }
@@ -729,4 +767,59 @@ func externalWatchOutcome(watch control.ExternalWatch, status, output, lastError
 		}
 		return message, []string{"Inspect the failure evidence and continue with a corrected action."}
 	}
+}
+
+// externalWatchEnvironmentChange reports which non-secret dimensions of the
+// execution environment moved since the watch was registered.
+//
+// Watches created before this identity existed carry no fingerprints; they are
+// grandfathered rather than parked, because parking them would strand work the
+// operator already started for a property that was never recorded.
+func externalWatchEnvironmentChange(watch control.ExternalWatch) []string {
+	if strings.TrimSpace(watch.EnvironmentFingerprint) == "" &&
+		strings.TrimSpace(watch.PrincipalFingerprint) == "" &&
+		strings.TrimSpace(watch.CredentialSourceHash) == "" {
+		return nil
+	}
+	current := executionenv.DefaultRegistry().Current()
+	if current == nil {
+		return nil
+	}
+	changed := make([]string, 0, 3)
+	if watch.PrincipalFingerprint != "" && watch.PrincipalFingerprint != current.PrincipalFingerprint {
+		changed = append(changed, "account/profile")
+	}
+	if watch.EnvironmentFingerprint != "" && watch.EnvironmentFingerprint != current.EnvironmentFingerprint {
+		changed = append(changed, "PATH/HOME/proxy")
+	}
+	if watch.CredentialSourceHash != "" && watch.CredentialSourceHash != current.CredentialSourceHash {
+		changed = append(changed, "credential source")
+	}
+	return changed
+}
+
+// completeExternalWatchEnvironmentChanged parks a watch whose environment moved.
+// It is finished as failed with a structured reason so the existing notification
+// and handoff path reports it, and the task is left waiting for a human decision
+// rather than being retried under an identity nobody chose.
+func (d *Server) completeExternalWatchEnvironmentChanged(ctx context.Context, watch control.ExternalWatch, changed []string) {
+	reason := "environment_changed: " + strings.Join(changed, ", ") +
+		" changed since this watch was registered; it was stopped instead of checking under a different identity. " +
+		"Confirm the intended account and re-register the watch."
+	if d != nil && d.Control != nil {
+		_, _ = d.Control.AppendEvent(ctx, control.Event{
+			TaskID:     watch.TaskID,
+			RunID:      watch.RunID,
+			Type:       "external_watch.environment_changed",
+			Visibility: "task",
+			Channel:    watch.Channel,
+			Payload: mustJSON(map[string]interface{}{
+				"watch_id":    watch.ID,
+				"description": watch.Description,
+				"changed":     changed,
+			}),
+			IdempotencyKey: "watch:" + watch.ID + ":environment-changed",
+		})
+	}
+	d.completeExternalWatch(ctx, watch, control.ExternalWatchFailed, watch.LastOutput, reason)
 }

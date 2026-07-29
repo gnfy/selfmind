@@ -184,6 +184,14 @@ func (a *App) gatewayStop(args []string) int {
 }
 
 func (a *App) gatewayRestart(args []string) int {
+	return a.gatewayRestartWithEnvironment(args, nil)
+}
+
+// gatewayRestartWithEnvironment restarts the daemon, optionally starting it with
+// a supplied environment instead of this process's. `selfmind env refresh` uses
+// it to actually ADOPT a freshly sampled login-shell environment: a plain
+// restart inherits the CLI's own environment, which is the stale one.
+func (a *App) gatewayRestartWithEnvironment(args []string, environment []string) int {
 	fs := flag.NewFlagSet("selfmind gateway restart", flag.ContinueOnError)
 	fs.SetOutput(a.stderr)
 	force := fs.Bool("force", false, "force-kill if graceful shutdown fails")
@@ -234,6 +242,7 @@ func (a *App) gatewayRestart(args []string) int {
 		Replace:                     true,
 		ConfigPath:                  a.configPath,
 		InheritedRestartEnvironment: inheritedRestartEnv,
+		Environment:                 environment,
 	})
 	if err != nil {
 		fmt.Fprintln(a.stderr, err)

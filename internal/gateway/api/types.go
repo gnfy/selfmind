@@ -33,6 +33,16 @@ type GatewayRuntimeInfo struct {
 	Commit           string `json:"commit,omitempty"`
 	BuiltAt          string `json:"built_at,omitempty"`
 	BuildFingerprint string `json:"build_fingerprint,omitempty"`
+	// Environment identity of the RUNNING daemon. `env refresh` must compare a
+	// fresh login-shell sample against THIS, not against the CLI's own
+	// environment: the CLI is usually the first process to see a new toolchain,
+	// so comparing against itself reported "unchanged" precisely when the daemon
+	// was the stale one. Fingerprints only — never variable names or values.
+	EnvironmentGeneration  int64  `json:"environment_generation,omitempty"`
+	EnvironmentSnapshotID  string `json:"environment_snapshot_id,omitempty"`
+	PrincipalFingerprint   string `json:"principal_fingerprint,omitempty"`
+	EnvironmentFingerprint string `json:"environment_fingerprint,omitempty"`
+	CredentialSourceHash   string `json:"credential_source_hash,omitempty"`
 }
 
 type GatewayStatusResponse struct {

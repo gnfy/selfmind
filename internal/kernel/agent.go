@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math/rand"
 	"os"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -523,12 +524,24 @@ func emitToolEndEventWithDuration(ch chan string, name, toolCallID string, resul
 	}
 }
 
+// toolErrorClassMarker is the structured class the tools layer already appended
+// to the failure text ("error_class: <class>; hint: ..."). Preferring it keeps
+// the event category identical to the class the model was shown, instead of
+// re-guessing from prose. The prose fallback below matched the word
+// "permission" — which appears in the tools layer's own HINT text — so genuine
+// sandbox and permission failures were reported as `workspace_scope` in run
+// events, making the category useless for diagnosis and metrics.
+var toolErrorClassMarker = regexp.MustCompile(`(?m)^error_class:\s*([a-z0-9_]+)`)
+
 func classifyToolFailure(message string) (string, string) {
 	lower := strings.ToLower(strings.TrimSpace(message))
+	if match := toolErrorClassMarker.FindStringSubmatch(lower); len(match) == 2 {
+		return match[1], toolFailureHintForClass(match[1])
+	}
 	switch {
 	case lower == "":
 		return "unknown", "Inspect the tool input and retry with corrected arguments if useful."
-	case strings.Contains(lower, "escapes workspace") || strings.Contains(lower, "permission") || strings.Contains(lower, "denied"):
+	case strings.Contains(lower, "escapes workspace"):
 		return "workspace_scope", "Inspect the active workspace root and use a path inside the allowed workspace."
 	case strings.Contains(lower, "timeout") || strings.Contains(lower, "deadline exceeded"):
 		return "timeout", "Narrow the command or inspect progress before retrying with a smaller scope."
@@ -540,6 +553,36 @@ func classifyToolFailure(message string) (string, string) {
 		return "auth", "Check the relevant credential or login state before retrying."
 	default:
 		return "unknown", "Inspect the failed tool result and continue with a corrected next step unless this is a blocker."
+	}
+}
+
+// toolFailureHintForClass renders the operator-facing hint for a structured
+// class. The model already received the tools layer's own hint inside the error
+// text; this is the shorter diagnostic surface for events and transcripts.
+func toolFailureHintForClass(class string) string {
+	switch class {
+	case "sandbox_fs_denied":
+		return "The sandbox denied a write outside the writable roots; target a workspace path instead of escalating."
+	case "credential_state_readonly":
+		return "The tool could not write its own state directory inside the sandbox; this is an execution-environment gap, not a login problem."
+	case "sandbox_no_network":
+		return "The isolated command needs the workspace-scoped network capability."
+	case "credential_missing", "credential_expired", "auth":
+		return "Check the relevant credential or login state before retrying."
+	case "timeout":
+		return "Narrow the command or inspect progress before retrying with a smaller scope."
+	case "permission":
+		return "Choose an accessible target instead of retrying the same path."
+	case "network":
+		return "Verify host reachability and the endpoint before retrying."
+	case "environment":
+		return "Set up the missing interpreter, package, or variable before retrying."
+	case "not_found":
+		return "Check cwd and that the executable or file exists before retrying."
+	case "syntax":
+		return "Fix the command syntax or quoting before retrying."
+	default:
+		return "Treat the output as evidence; inspect cwd, env, files, or command help before retrying."
 	}
 }
 

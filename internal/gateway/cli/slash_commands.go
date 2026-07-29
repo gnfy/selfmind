@@ -44,7 +44,7 @@ var slashCommandMetas = []slashCommandMeta{
 	// and never reached the approve lifecycle. They now route through the shared
 	// control passthrough (see gatewayPassthroughCommands) so /approve means the
 	// same thing on every surface.
-	{Name: "/approvals", Usage: "/approvals", Description: "List pending approvals", Hint: "list pending approvals"},
+	{Name: "/approvals", Usage: "/approvals [grants|revoke <n>]", Description: "Pending approvals; grants lists remembered classes", Hint: "list pending approvals or remembered classes"},
 	{Name: "/approve", Usage: "/approve <n|id|all> [task|always]", Description: "Approve a pending action", Hint: "approve a pending action"},
 	{Name: "/reject", Usage: "/reject <n|id|all>", Description: "Reject a pending action (or all of them)", Hint: "reject a pending action"},
 	{Name: "/stop", Usage: "/stop", Description: "Cancel the active run", Hint: "cancel the active run"},

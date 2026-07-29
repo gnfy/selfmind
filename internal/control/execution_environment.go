@@ -41,10 +41,14 @@ func (s *Store) MaterializeExecutionLease(ctx context.Context, lease executionen
 	caps, _ := json.Marshal(uniqueStrings(lease.ExecutionCapabilities))
 	_, err := s.db.ExecContext(ctx, `INSERT OR IGNORE INTO execution_leases
 		(id, run_id, tenant_id, person_id, workspace_id, environment_profile,
-		 credential_refs_json, principal_fingerprint, capabilities_json, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		 credential_refs_json, principal_fingerprint, capabilities_json,
+		 environment_snapshot_id, environment_generation, environment_fingerprint,
+		 credential_source_hash, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		lease.ID, lease.RunID, lease.TenantID, lease.PersonID, lease.WorkspaceID,
 		lease.EnvironmentProfile, string(refs), lease.PrincipalFingerprint, string(caps),
+		lease.EnvironmentSnapshotID, lease.EnvironmentGeneration,
+		lease.EnvironmentFingerprint, lease.CredentialSourceHash,
 		now.Unix(), now.Unix())
 	if err != nil {
 		return nil, err
@@ -65,12 +69,14 @@ func (s *Store) GetExecutionLeaseByRun(ctx context.Context, tenantID, runID stri
 	var created, updated int64
 	err := s.db.QueryRowContext(ctx, `SELECT id, run_id, tenant_id, person_id, COALESCE(workspace_id, ''),
 		environment_profile, credential_refs_json, COALESCE(principal_fingerprint, ''),
-		capabilities_json, created_at, updated_at
+		capabilities_json, environment_snapshot_id, environment_generation,
+		environment_fingerprint, credential_source_hash, created_at, updated_at
 		FROM execution_leases WHERE tenant_id = ? AND run_id = ?`,
 		normalizeTenant(tenantID), runID).Scan(
 		&lease.ID, &lease.RunID, &lease.TenantID, &lease.PersonID, &lease.WorkspaceID,
 		&lease.EnvironmentProfile, &refsJSON, &lease.PrincipalFingerprint,
-		&capsJSON, &created, &updated)
+		&capsJSON, &lease.EnvironmentSnapshotID, &lease.EnvironmentGeneration,
+		&lease.EnvironmentFingerprint, &lease.CredentialSourceHash, &created, &updated)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -183,4 +189,61 @@ func uniqueStrings(values []string) []string {
 		out = append(out, value)
 	}
 	return out
+}
+
+// UpdateExecutionLeaseEnvironment rebinds a lease to an environment snapshot in
+// this process. It is called when a lease outlives the snapshot it was created
+// with — a daemon restart clears the in-process registry — and only after the
+// caller has verified that the environment still describes the same account,
+// toolchain, and credential sources.
+func (s *Store) UpdateExecutionLeaseEnvironment(
+	ctx context.Context,
+	tenantID, leaseID, snapshotID string,
+	generation int64,
+	environmentFingerprint, credentialSourceHash string,
+) (*executionenv.Lease, error) {
+	if s == nil || s.db == nil {
+		return nil, fmt.Errorf("control store is unavailable")
+	}
+	if strings.TrimSpace(leaseID) == "" {
+		return nil, fmt.Errorf("lease id is required")
+	}
+	if _, err := s.db.ExecContext(ctx, `UPDATE execution_leases
+		SET environment_snapshot_id = ?, environment_generation = ?,
+		    environment_fingerprint = ?, credential_source_hash = ?, updated_at = ?
+		WHERE tenant_id = ? AND id = ?`,
+		strings.TrimSpace(snapshotID), generation,
+		strings.TrimSpace(environmentFingerprint), strings.TrimSpace(credentialSourceHash),
+		time.Now().Unix(), normalizeTenant(tenantID), strings.TrimSpace(leaseID)); err != nil {
+		return nil, err
+	}
+	return s.GetExecutionLease(ctx, tenantID, leaseID)
+}
+
+// GetExecutionLease reads one lease by id.
+func (s *Store) GetExecutionLease(ctx context.Context, tenantID, leaseID string) (*executionenv.Lease, error) {
+	var lease executionenv.Lease
+	var refsJSON, capsJSON string
+	var created, updated int64
+	err := s.db.QueryRowContext(ctx, `SELECT id, run_id, tenant_id, person_id, COALESCE(workspace_id, ''),
+		environment_profile, credential_refs_json, COALESCE(principal_fingerprint, ''),
+		capabilities_json, environment_snapshot_id, environment_generation,
+		environment_fingerprint, credential_source_hash, created_at, updated_at
+		FROM execution_leases WHERE tenant_id = ? AND id = ?`,
+		normalizeTenant(tenantID), strings.TrimSpace(leaseID)).Scan(
+		&lease.ID, &lease.RunID, &lease.TenantID, &lease.PersonID, &lease.WorkspaceID,
+		&lease.EnvironmentProfile, &refsJSON, &lease.PrincipalFingerprint,
+		&capsJSON, &lease.EnvironmentSnapshotID, &lease.EnvironmentGeneration,
+		&lease.EnvironmentFingerprint, &lease.CredentialSourceHash, &created, &updated)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	_ = json.Unmarshal([]byte(refsJSON), &lease.CredentialRefs)
+	_ = json.Unmarshal([]byte(capsJSON), &lease.ExecutionCapabilities)
+	lease.CreatedAt = time.Unix(created, 0)
+	lease.UpdatedAt = time.Unix(updated, 0)
+	return &lease, nil
 }

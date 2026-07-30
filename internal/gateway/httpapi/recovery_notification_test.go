@@ -327,3 +327,122 @@ func TestExternalWatchFinalizationDoesNotReopenLaterUserCancellation(t *testing.
 		t.Fatalf("explicitly cancelled task = %+v, %v; want cancelled", updated, err)
 	}
 }
+
+// Regression for the live AWS watcher: the check could not even build its
+// sandbox, and the watcher polled that identical failure 65 times until its
+// deadline. An environment failure must stop the watch on the FIRST check, and
+// it must not be reported as a failure of the external operation.
+func TestExternalWatchParksEnvironmentFailureOnFirstCheck(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("SelfMind's production daemon runs on Linux")
+	}
+	daemon, store, identity, task, _ := newApprovalTestServer(t)
+	ctx := context.Background()
+	recorder := &recordingSender{}
+	daemon.Delivery = delivery.NewService(store, recorder, delivery.Options{})
+	run, err := store.StartRun(ctx, task, "cli", "monitor the external build")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A command whose only output is the sandbox's own state-write denial: the
+	// engine classifies it as credential_state_readonly, exactly as the live
+	// bwrap failure did.
+	watch, err := store.CreateExternalWatch(ctx, control.ExternalWatch{
+		TenantID:              identity.TenantID,
+		PersonID:              identity.PersonID,
+		TaskID:                task.ID,
+		RunID:                 run.ID,
+		Channel:               "cli",
+		Description:           "CodeBuild batch",
+		CWD:                   t.TempDir(),
+		Command:               `echo "Unable to create private file [/home/u/.aws/credentials]: Read-only file system" >&2; exit 1`,
+		SuccessPattern:        "SUCCEEDED",
+		FailurePattern:        "FAILED",
+		IntervalSeconds:       5,
+		CommandTimeoutSeconds: 10,
+		TimeoutAt:             time.Now().Add(time.Hour),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	daemon.runExternalWatchPass(ctx)
+
+	stored, err := store.GetExternalWatch(ctx, identity.TenantID, watch.ID)
+	if err != nil || stored == nil {
+		t.Fatalf("watch = %+v err=%v", stored, err)
+	}
+	if stored.Status != control.ExternalWatchBlocked {
+		t.Fatalf("watch status = %q, want blocked_environment", stored.Status)
+	}
+	if stored.Attempts != 1 {
+		t.Fatalf("attempts = %d, want the watch to stop after one check", stored.Attempts)
+	}
+	reason, ok := watchCheckDefect(stored.LastError)
+	if !ok || reason != watchReasonBlockedEnvironment {
+		t.Fatalf("parked reason = %q (recognized=%v), want blocked_environment: %q", reason, ok, stored.LastError)
+	}
+	if !hasEventOfType(t, store, task.ID, "external_watch.blocked") {
+		t.Fatal("blocked event missing")
+	}
+	for _, msg := range recorder.messages {
+		if msg.Kind != "external_watch" {
+			continue
+		}
+		if !strings.Contains(msg.Content, "blocked:") || strings.Contains(msg.Content, "status: failed") {
+			t.Fatalf("blocked watch notice must not read as an operation failure: %q", msg.Content)
+		}
+	}
+}
+
+// The same guarantee for the check-script case: a defective check must never be
+// matched against the declared business patterns.
+func TestExternalWatchDoesNotMatchPatternsForDefectiveCheck(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("SelfMind's production daemon runs on Linux")
+	}
+	daemon, store, identity, task, _ := newApprovalTestServer(t)
+	ctx := context.Background()
+	run, err := store.StartRun(ctx, task, "cli", "monitor the external build")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The command prints the watch's own failure pattern while failing for a
+	// diagnosable reason of its own. The business verdict must not be taken.
+	watch, err := store.CreateExternalWatch(ctx, control.ExternalWatch{
+		TenantID:              identity.TenantID,
+		PersonID:              identity.PersonID,
+		TaskID:                task.ID,
+		RunID:                 run.ID,
+		Channel:               "cli",
+		Description:           "Cloud Build reruns",
+		CWD:                   t.TempDir(),
+		Command:               `echo BUILD_FAILED; echo "gcloudx: command not found" >&2; exit 127`,
+		SuccessPattern:        "ALL_SUCCESS",
+		FailurePattern:        "BUILD_FAILED",
+		IntervalSeconds:       5,
+		CommandTimeoutSeconds: 10,
+		TimeoutAt:             time.Now().Add(time.Hour),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	daemon.runExternalWatchPass(ctx)
+
+	stored, err := store.GetExternalWatch(ctx, identity.TenantID, watch.ID)
+	if err != nil || stored == nil {
+		t.Fatalf("watch = %+v err=%v", stored, err)
+	}
+	reason, ok := watchCheckDefect(stored.LastError)
+	if !ok || reason != watchReasonInvalidCheck {
+		t.Fatalf("a defective check was treated as a business verdict: status=%q err=%q", stored.Status, stored.LastError)
+	}
+	queued, err := store.GetQueuedByIdempotencyKey(ctx, externalWatchFinalizationKey(*stored))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if queued != nil && !strings.Contains(queued.Content, "real state is unknown") {
+		t.Fatalf("finalization prompt let a blocked check imply a verdict: %q", queued.Content)
+	}
+}

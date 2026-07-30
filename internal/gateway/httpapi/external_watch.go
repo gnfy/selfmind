@@ -99,7 +99,7 @@ func (d *Server) executeExternalWatch(ctx context.Context, watch control.Externa
 	if deadlinePassed {
 		// A terminal state recorded on the last checkpoint wins over the
 		// deadline: the external operation finished, we just noticed late.
-		if status := classifyExternalWatchOutput(watch, watch.LastOutput); status != "" {
+		if status := classifyStoredExternalWatchOutput(watch); status != "" {
 			d.completeExternalWatch(ctx, watch, status, watch.LastOutput, "")
 			return
 		}
@@ -113,19 +113,46 @@ func (d *Server) executeExternalWatch(ctx context.Context, watch control.Externa
 	}
 	checkCtx, cancel := context.WithTimeout(ctx, time.Duration(watch.CommandTimeoutSeconds)*time.Second)
 	defer cancel()
-	output, commandErr := d.runExternalWatchCommand(checkCtx, watch)
-	output = truncateExternalWatchOutput(tools.RedactSensitive(output))
+	result, commandErr := d.runExternalWatchCommand(checkCtx, watch)
+	output := truncateExternalWatchOutput(tools.RedactSensitive(result.Output))
 	errText := ""
 	if commandErr != nil {
 		errText = tools.RedactSensitive(commandErr.Error())
 	}
 
-	if status := classifyExternalWatchOutput(watch, output); status != "" {
-		d.completeExternalWatch(ctx, watch, status, output, statusErrText(status, errText))
+	// The layer order is fixed and must stay fixed: a lower-layer failure is
+	// never matched against the declared patterns. Reversing these two steps is
+	// what let a check that could not query anything report a business verdict.
+	verdict := classifyWatchCheck(result.FailureClass, result.ExitCode, commandErr != nil)
+	if verdict.Action == watchCheckPark {
+		d.parkExternalWatch(ctx, watch, verdict, result.FailureClass, output, errText)
 		return
 	}
-	if reason := classifyExternalWatchCommandDefect(output, errText); reason != "" {
-		d.completeExternalWatch(ctx, watch, control.ExternalWatchFailed, output, reason)
+	if verdict.Action == watchCheckObserve {
+		if status := classifyExternalWatchOutput(watch, output, result.ExitCode); status != "" {
+			d.completeExternalWatch(ctx, watch, status, output, statusErrText(status, errText))
+			return
+		}
+	}
+	// A failed check is not an observation. Its streak is recorded so an
+	// identical failure cannot be repeated until the deadline.
+	if commandErr != nil || strings.TrimSpace(result.FailureClass) != "" || result.ExitCode != 0 {
+		signature := watchCheckSignature(result.FailureClass, output)
+		streak, err := d.Control.RecordExternalWatchFailure(ctx, watch.TenantID, watch.ID,
+			output, errText, result.FailureClass, signature)
+		if err != nil {
+			log.Warn("external watch failure checkpoint failed", "watch_id", watch.ID, "error", err)
+			return
+		}
+		if streak >= watchRepeatedFailureLimit {
+			repeated := watchCheckVerdict{
+				Action: watchCheckPark,
+				Layer:  verdict.Layer,
+				Reason: watchReasonRepeatedFailure,
+				Detail: fmt.Sprintf("the same check failure repeated %d times without observing the external state", streak),
+			}
+			d.parkExternalWatch(ctx, watch, repeated, result.FailureClass, output, errText)
+		}
 		return
 	}
 	if deadlinePassed || !watch.TimeoutAt.After(time.Now()) {
@@ -176,7 +203,7 @@ func statusErrText(status, errText string) string {
 // while aws watches in the same workspace succeeded (the AWS CLI reads its
 // config without writing it). The scratch key is the watch id, so the state
 // overlay is materialized once and reused by every poll.
-func (d *Server) runExternalWatchCommand(ctx context.Context, watch control.ExternalWatch) (string, error) {
+func (d *Server) runExternalWatchCommand(ctx context.Context, watch control.ExternalWatch) (tools.ExecutionResult, error) {
 	durable := tools.DurableExecutionScope{
 		ScratchKey:  watch.ID,
 		TenantID:    watch.TenantID,
@@ -193,41 +220,48 @@ func (d *Server) runExternalWatchCommand(ctx context.Context, watch control.Exte
 			}
 		}
 	}
-	output, _, err := tools.RunSandboxedShellScoped(ctx, watch.Command, watch.CWD, true, durable)
-	return output, err
+	return tools.RunDurableCheck(ctx, watch.Command, watch.CWD, true, durable)
 }
 
-// classifyExternalWatchCommandDefect identifies deterministic failures in the
-// frozen check itself. Retrying these cannot reveal a new external state, so a
-// watch should fail immediately instead of reporting a misleading timeout.
-// Ordinary non-zero exits remain retryable because many status CLIs use them
-// while an external operation is still converging.
-func classifyExternalWatchCommandDefect(output, errText string) string {
-	combined := strings.ToLower(strings.TrimSpace(output + "\n" + errText))
-	if combined == "" {
-		return ""
+// parkExternalWatch stops a watch whose CHECK failed, recording the structured
+// reason that keeps the failure attributable to the check rather than to the
+// external operation.
+//
+// It reuses the failed terminal status (as the environment-change path does)
+// so the existing finalization, notification, and recovery machinery applies
+// unchanged; the reason prefix is what downstream surfaces read.
+func (d *Server) parkExternalWatch(
+	ctx context.Context,
+	watch control.ExternalWatch,
+	verdict watchCheckVerdict,
+	failureClass, output, errText string,
+) {
+	evidence := strings.TrimSpace(output)
+	if evidence == "" {
+		evidence = strings.TrimSpace(errText)
 	}
-	markers := []string{
-		"illegal option",
-		"invalid option",
-		"syntax error",
-		"unexpected token",
-		"command not found",
-		"no such file or directory",
-		"permission denied",
-		"cannot execute",
-		"bad substitution",
+	reason := parkedWatchReason(verdict.Reason, verdict.Detail, evidence)
+	if d != nil && d.Control != nil {
+		_, _ = d.Control.AppendEvent(ctx, control.Event{
+			TaskID:     watch.TaskID,
+			RunID:      watch.RunID,
+			Type:       "external_watch.blocked",
+			Visibility: "task",
+			Channel:    watch.Channel,
+			Payload: mustJSON(map[string]interface{}{
+				"watch_id":      watch.ID,
+				"description":   watch.Description,
+				"reason":        verdict.Reason,
+				"layer":         verdict.Layer,
+				"failure_class": failureClass,
+				"detail":        verdict.Detail,
+			}),
+			IdempotencyKey: fmt.Sprintf("watch:%s:blocked:%s", watch.ID, verdict.Reason),
+		})
 	}
-	for _, marker := range markers {
-		if strings.Contains(combined, marker) {
-			detail := strings.TrimSpace(output)
-			if detail == "" {
-				detail = strings.TrimSpace(errText)
-			}
-			return "watch check is invalid: " + truncate(toOneLine(detail), 240)
-		}
-	}
-	return ""
+	log.Warn("external watch parked",
+		"watch_id", watch.ID, "reason", verdict.Reason, "layer", verdict.Layer, "failure_class", failureClass)
+	d.completeExternalWatch(ctx, watch, control.ExternalWatchBlocked, output, reason)
 }
 
 // matchesExternalWatchPattern normalizes command output before matching so
@@ -254,10 +288,28 @@ func matchesExternalWatchPattern(pattern, output string) bool {
 	return false
 }
 
+// classifyStoredExternalWatchOutput re-examines a recorded checkpoint.
+//
+// A row carrying a failure class recorded a FAILED CHECK, not an observation,
+// so re-matching its text would resurrect the defect this file exists to
+// prevent — on the recovery path, where nobody is watching. Rows written before
+// the class existed carry none and keep the previous behaviour.
+func classifyStoredExternalWatchOutput(watch control.ExternalWatch) string {
+	if strings.TrimSpace(watch.FailureClass) != "" {
+		return ""
+	}
+	return classifyExternalWatchOutput(watch, watch.LastOutput, 0)
+}
+
 // classifyExternalWatchOutput maps an output to the watch's declared terminal
 // states. Empty string means non-terminal.
-func classifyExternalWatchOutput(watch control.ExternalWatch, output string) string {
-	if matchesExternalWatchPattern(watch.SuccessPattern, output) {
+//
+// Success requires a clean exit; failure does not. The asymmetry is deliberate:
+// a status CLI may exit non-zero while reporting a genuine terminal failure, but
+// a "success" printed by a check that itself failed is self-contradictory
+// evidence, and accepting it would let a broken check close a release.
+func classifyExternalWatchOutput(watch control.ExternalWatch, output string, exitCode int) string {
+	if exitCode == 0 && matchesExternalWatchPattern(watch.SuccessPattern, output) {
 		return control.ExternalWatchSucceeded
 	}
 	if watch.FailurePattern != "" && matchesExternalWatchPattern(watch.FailurePattern, output) {
@@ -310,7 +362,7 @@ func (d *Server) recoverExternalWatchVerdicts(ctx context.Context) {
 	}
 	for i := range watches {
 		watch := watches[i]
-		status := classifyExternalWatchOutput(watch, watch.LastOutput)
+		status := classifyStoredExternalWatchOutput(watch)
 		if status == "" {
 			continue
 		}
@@ -420,7 +472,7 @@ func (d *Server) notifyExternalWatchCompletion(ctx context.Context, watch contro
 		PersonID: watch.PersonID,
 		TaskID:   watch.TaskID,
 		RunID:    watch.RunID,
-		Content:  externalWatchCompletionNotice(watch.ID, watch.Status, "waiting_finalization"),
+		Content:  externalWatchNotice(watch, "waiting_finalization"),
 		Kind:     "external_watch",
 	})
 	if !handled {
@@ -438,6 +490,18 @@ func (d *Server) notifyExternalWatchCompletion(ctx context.Context, watch contro
 	}
 }
 
+// externalWatchNotice renders the one-line endpoint notice. A parked watch says
+// "blocked" and names the layer that failed, because "status: failed" on a check
+// that never reached the external system reads as a failed deployment.
+// Details stay out of the notice; `/diag execution` carries them.
+func externalWatchNotice(watch control.ExternalWatch, taskStatus string) string {
+	if reason, ok := watchCheckDefect(watch.LastError); ok {
+		return "Watcher " + strings.TrimSpace(watch.ID) + " blocked: " + reason +
+			" | the external state was not observed | task: " + taskStatus
+	}
+	return externalWatchCompletionNotice(watch.ID, watch.Status, taskStatus)
+}
+
 func externalWatchCompletionNotice(watchID, status, taskStatus string) string {
 	watchID = strings.TrimSpace(watchID)
 	taskStatus = strings.TrimSpace(taskStatus)
@@ -452,6 +516,8 @@ func externalWatchCompletionNotice(watchID, status, taskStatus string) string {
 		watchStatus = control.ExternalWatchTimedOut
 	case control.ExternalWatchCancelled:
 		watchStatus = control.ExternalWatchCancelled
+	case control.ExternalWatchBlocked:
+		watchStatus = control.ExternalWatchBlocked
 	}
 	return "Watcher " + watchID + " | status: " + watchStatus + " | task: " + taskStatus
 }
@@ -506,6 +572,18 @@ func externalWatchFinalizationContent(watch control.ExternalWatch, summary strin
 			firstNonEmpty(strings.TrimSpace(watch.Status), "failed"),
 		)
 		finalInstruction = "Diagnose the recorded terminal evidence, preserve any completed work, and finish as failed, blocked, waiting_user, or waiting_external as the evidence requires."
+	}
+	// A parked watch says nothing about the external operation, and saying
+	// otherwise here is how a check defect became a release record claiming a
+	// build had failed. The finalization run must not convert it into a business
+	// outcome in either direction.
+	if reason, ok := watchCheckDefect(watch.LastError); ok {
+		verdictInstruction = fmt.Sprintf(
+			"The daemon's durable external watcher STOPPED because its own check could not observe the external state (%s). "+
+				"This is NOT evidence about the external operation: its real state is unknown.",
+			reason)
+		finalInstruction = "Record that the check was blocked and why, leave every external-state claim unresolved (never write succeeded or failed), " +
+			"and finish with waiting_user so a human can restore the check environment or verify the external state directly."
 	}
 	return fmt.Sprintf(
 		"%s "+
@@ -756,10 +834,27 @@ func externalWatchOutcome(watch control.ExternalWatch, status, output, lastError
 			message += " Last observed output: " + preview
 		}
 		return message, []string{"Inspect the external service status, then continue or register a new watch."}
+	case control.ExternalWatchBlocked:
+		reason := truncate(toOneLine(strings.TrimSpace(lastError)), 180)
+		return fmt.Sprintf("The watcher for %s was stopped: %s", description, firstNonEmpty(reason, preview)),
+			[]string{
+				"Restore the check environment or fix the check command, then verify the external state directly.",
+				"Do not record the external operation as succeeded or failed until it has actually been observed.",
+			}
 	default:
 		reason := truncate(toOneLine(strings.TrimSpace(lastError)), 180)
 		if reason == "" {
 			reason = preview
+		}
+		// The check failed, not the operation. Naming the watcher (not the
+		// operation) is the difference between "the release failed" and "we
+		// could not look".
+		if _, ok := watchCheckDefect(lastError); ok {
+			return fmt.Sprintf("The watcher for %s was stopped: %s", description, reason),
+				[]string{
+					"Restore the check environment or fix the check command, then verify the external state directly.",
+					"Do not record the external operation as succeeded or failed until it has actually been observed.",
+				}
 		}
 		message := fmt.Sprintf("%s reported a failure.", description)
 		if reason != "" {
@@ -821,5 +916,5 @@ func (d *Server) completeExternalWatchEnvironmentChanged(ctx context.Context, wa
 			IdempotencyKey: "watch:" + watch.ID + ":environment-changed",
 		})
 	}
-	d.completeExternalWatch(ctx, watch, control.ExternalWatchFailed, watch.LastOutput, reason)
+	d.completeExternalWatch(ctx, watch, control.ExternalWatchBlocked, watch.LastOutput, reason)
 }

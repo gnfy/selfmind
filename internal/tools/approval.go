@@ -24,7 +24,52 @@ type ToolApprovalRequest struct {
 	// It identifies the workspace and command family, never raw command text,
 	// paths, tokens, or credential bytes.
 	ResourceFingerprint string `json:"resource_fingerprint,omitempty"`
+	// Environment and Cwd say WHERE the operation would run. A decision made
+	// without them is a guess: the same command is routine in the workspace root
+	// and alarming somewhere else, and the daemon's cwd is not the workspace
+	// (docs/tool-safety.md "Execution scope"). Both are display-only context;
+	// authorization still comes from the scope that produced them.
+	Environment string `json:"environment,omitempty"`
+	Cwd         string `json:"cwd,omitempty"`
+	// ChangeSummary is a compact, content-free description of what a write would
+	// do ("2 files +48/-12", "120 lines, 3.4 KB"). It carries counts only — never
+	// file content or diff text — so an approval surface can show the SIZE of a
+	// change without becoming a content channel.
+	ChangeSummary string `json:"change_summary,omitempty"`
+	// RuleCandidates are the narrow authorizations this call could create — a
+	// command prefix, a network host, a writable root. The surface renders them
+	// as answer options; a decision may name at most one, and only one of these
+	// (see approvalRuleByKey). Empty means nothing narrower than the action class
+	// can be described for this call.
+	RuleCandidates []ApprovalRuleCandidate `json:"rule_candidates,omitempty"`
+	// TriageRationale is the judge's one-line reasoning when automatic triage ran
+	// and handed the call to a human. It is shown at decision time so the person
+	// inherits the judgement instead of starting from scratch, and it is stored
+	// with the request so a later reader can audit why the ask happened.
+	TriageRationale string `json:"triage_rationale,omitempty"`
+	// TriageRisk and TriageAuthorization are the judge's structured assessment:
+	// how risky the action is, and how directly the person's own words authorize
+	// it. They are separate axes on purpose — a low-risk action nobody asked for
+	// still deserves a human, and that distinction is invisible in a single
+	// verdict word.
+	TriageRisk          string `json:"triage_risk,omitempty"`
+	TriageAuthorization string `json:"triage_authorization,omitempty"`
+	// TriageState explains why a human is being asked in smart mode:
+	// TriageStateUnavailable means automatic triage could not rule on this call
+	// (no judge configured, or the judge errored/timed out), so the ask is a
+	// fail-safe fallback rather than a considered escalation. Empty means the
+	// mode simply asks for this class. It exists because "why am I being asked so
+	// much?" was unanswerable from any surface.
+	TriageState string `json:"triage_state,omitempty"`
 }
+
+// TriageStateUnavailable marks an ask that happened because smart-mode triage
+// was unavailable (missing judge, error, or timeout) rather than because the
+// judge deliberately escalated.
+const TriageStateUnavailable = "unavailable"
+
+// TriageStateEscalated marks an ask the judge deliberately handed to the human.
+const TriageStateEscalated = "escalated"
 
 type ToolApprovalDecision struct {
 	Approved   bool   `json:"approved"`
@@ -41,7 +86,24 @@ type ToolApprovalDecision struct {
 	// (grant it for the person across tasks). It drives class-level approval
 	// memory in SmartApprovalMiddleware — the key approval-fatigue reducer.
 	Scope string `json:"scope,omitempty"`
+	// GrantKey names a RULE the human chose instead of the action class ("don't
+	// ask again for commands that start with `git status`"). It is honored only
+	// when it matches a candidate the SAME call offered, so a decision can never
+	// introduce an authorization the daemon did not propose.
+	GrantKey string `json:"grant_key,omitempty"`
+	// Outcome distinguishes an unanswered approval from a refused one. Both stop
+	// the call, but a rejection is a decision (never retry a variant) while a
+	// timeout means nobody was there — the model should park the work instead.
+	Outcome string `json:"outcome,omitempty"`
 }
+
+// Approval outcomes. Empty means "approved" for compatibility with callers that
+// only set Approved.
+const (
+	ApprovalOutcomeApproved = "approved"
+	ApprovalOutcomeDenied   = "denied"
+	ApprovalOutcomeTimedOut = "timed_out"
+)
 
 type ToolApprovalHandler func(ctx context.Context, req ToolApprovalRequest) (ToolApprovalDecision, error)
 

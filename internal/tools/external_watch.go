@@ -44,7 +44,10 @@ func NewExternalWatchTool(store *control.Store) *ExternalWatchTool {
 		metadata: ToolMetadata{
 			Category:       "terminal",
 			RiskLevel:      ToolRiskHigh,
-			TimeoutSeconds: 5,
+			// Registration itself is a database write, but it now runs the check
+			// once first (see preflightExternalWatch), so the tool's own budget
+			// must cover one bounded check plus the write.
+			TimeoutSeconds: 45,
 		},
 	}
 	return t
@@ -82,6 +85,24 @@ func (t *ExternalWatchTool) Execute(args map[string]interface{}) (string, error)
 	description := strings.TrimSpace(stringArg(args, "description"))
 	if description == "" {
 		description = "External operation"
+	}
+
+	// Preflight: run the frozen check ONCE, here, with this run's material.
+	//
+	// Both live watcher failures were unrecoverable in the background — the
+	// durable path has no host escape hatch and no model to diagnose it — and
+	// both were detectable at registration. Running the check while the agent is
+	// still in its turn converts "two hours of retries plus a misleading verdict"
+	// into an error the model can act on immediately.
+	//
+	// It adds no approval surface: registration already passed approval, and the
+	// same command was going to run unattended seconds later.
+	verdict, err := preflightExternalWatch(args, command, cwd, successPattern, failurePattern, commandTimeout)
+	if err != nil {
+		return "", err
+	}
+	if verdict != "" {
+		return verdict, nil
 	}
 
 	// Record the environment this watch was registered under. A watch outlives

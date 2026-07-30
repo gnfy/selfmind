@@ -42,7 +42,7 @@ func TestSuggestDuplicateTasks(t *testing.T) {
 	a := dupeTask(t, d, identity, "拳皇97风格格斗游戏 优化打击感", "ws1")
 	b := dupeTask(t, d, identity, "拳皇97风格格斗游戏 优化打击感和跳跃", "ws1")
 	dupeTask(t, d, identity, "拳皇97风格格斗游戏 优化打击感", "ws2") // other workspace
-	dupeTask(t, d, identity, "周报数据统计脚本", "ws1")               // unrelated
+	dupeTask(t, d, identity, "周报数据统计脚本", "ws1")         // unrelated
 
 	if got := d.suggestDuplicateTasks(ctx); got != 1 {
 		t.Fatalf("expected exactly 1 suggestion, got %d", got)

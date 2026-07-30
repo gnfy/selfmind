@@ -29,7 +29,10 @@ import (
 // SandboxPlanVersion is the wire version of SandboxPlan. Bump it when the
 // meaning of a field changes so an older execution node can refuse a plan it
 // would misinterpret.
-const SandboxPlanVersion = 1
+//
+// 2 adds SynthesizedDirs: a node that ignores them mounts overlay targets that
+// do not exist, which aborts the sandbox instead of degrading.
+const SandboxPlanVersion = 2
 
 // SandboxPlan is the serializable description of an execution boundary.
 //
@@ -52,6 +55,11 @@ type SandboxPlan struct {
 	// OverlayMounts shadow a host path with a writable state directory, for
 	// state whose location the tool does not let us configure.
 	OverlayMounts []SandboxOverlayMount `json:"overlay_mounts,omitempty"`
+	// SynthesizedDirs replace a state root with a writable shell that keeps only
+	// the named children readable. An execution node that ignored this field
+	// would mount the overlays above into a path it cannot create, so a plan
+	// carrying them is not interpretable by an older node — hence the version.
+	SynthesizedDirs []SandboxSynthesizedDir `json:"synthesized_dirs,omitempty"`
 	// NetworkMode is "isolated" or "shared".
 	NetworkMode string `json:"network_mode"`
 	// Profiles are the tool environment profiles applied.
@@ -174,11 +182,13 @@ func planFromMaterial(material execMaterial, decision SandboxDecision) SandboxPl
 		WritableRoots: dedupePaths(material.WritableRoots),
 		ReadOnlyPaths: dedupePaths(material.ReadOnlyPaths),
 		OverlayMounts: append([]SandboxOverlayMount{}, material.OverlayMounts...),
-		NetworkMode:   network,
-		Profiles:      append([]string{}, material.Profiles...),
-		Backend:       backend,
-		Mode:          decision.Mode,
-		Notes:         append([]string{}, material.ProfileNotes...),
+		SynthesizedDirs: append([]SandboxSynthesizedDir{},
+			material.SynthesizedDirs...),
+		NetworkMode: network,
+		Profiles:    append([]string{}, material.Profiles...),
+		Backend:     backend,
+		Mode:        decision.Mode,
+		Notes:       append([]string{}, material.ProfileNotes...),
 	}
 }
 
@@ -186,6 +196,14 @@ func planFromMaterial(material execMaterial, decision SandboxDecision) SandboxPl
 type SandboxOverlayMount struct {
 	Source string `json:"source"`
 	Target string `json:"target"`
+}
+
+// SandboxSynthesizedDir replaces Target with a writable directory that keeps
+// only ReadOnlyChildren readable. It is the mount point provider for overlay
+// targets the host does not have.
+type SandboxSynthesizedDir struct {
+	Target           string   `json:"target"`
+	ReadOnlyChildren []string `json:"read_only_children,omitempty"`
 }
 
 const (

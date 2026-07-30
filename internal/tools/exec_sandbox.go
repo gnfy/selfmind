@@ -240,15 +240,23 @@ type execMaterial struct {
 	// OverlayMounts bind a writable state directory over a host path whose
 	// location a tool does not let us change (the AWS SSO token cache).
 	OverlayMounts []SandboxOverlayMount
-	ScratchTmp    string
-	Env           []string
+	// SynthesizedDirs replace a tool's state root with a writable shell so the
+	// overlay targets above are mountable even when the host lacks them.
+	SynthesizedDirs []SandboxSynthesizedDir
+	ScratchTmp      string
+	Env             []string
 	// Profiles, ProfileNotes and the copy counters are reported as execution
 	// evidence so a withheld credential or a bounded state copy is visible
 	// instead of surfacing later as a mysterious "not logged in".
-	Profiles         []string
-	ProfileNotes     []string
-	CopiedStateFiles int
-	CopiedStateBytes int64
+	Profiles []string
+	// ProfilesFromInventory are the profiles prepared because the HOST has their
+	// state, not because the command named their tool. Reported as evidence: a
+	// command that received credential state without naming the tool must be
+	// explainable from the event stream alone.
+	ProfilesFromInventory []string
+	ProfileNotes          []string
+	CopiedStateFiles      int
+	CopiedStateBytes      int64
 	// ScratchBytes is the run's accumulated scratch size, reported as evidence
 	// so an unbounded run is visible before it fills the disk.
 	ScratchBytes int64
@@ -359,23 +367,23 @@ type DurableExecutionScope struct {
 	Capabilities []string
 }
 
-// RunSandboxedShell is the daemon-owned execution path for durable background
-// checks such as external watchers. It applies the same filtered child
-// environment and sandbox policy as foreground exec tools, rather than
-// inheriting gateway control-plane credentials through os/exec.
-func RunSandboxedShell(ctx context.Context, command, cwd string, networkShared bool) (string, SandboxDecision, error) {
-	return RunSandboxedShellScoped(ctx, command, cwd, networkShared, DurableExecutionScope{})
-}
-
-// RunSandboxedShellScoped runs a durable check with the same execution material
-// a foreground command receives: request-derived writable roots, run scratch,
-// and the tool environment profiles the command's programs need.
-func RunSandboxedShellScoped(ctx context.Context, command, cwd string, networkShared bool, durable DurableExecutionScope) (string, SandboxDecision, error) {
+// RunDurableCheck runs a daemon-owned check with the same execution material a
+// foreground command receives: request-derived writable roots, run scratch, and
+// the tool environment profiles the command's programs need.
+//
+// It returns the FULL typed result on purpose. The earlier signature returned
+// only (output, error), so the caller had to re-derive a diagnosis from text —
+// and a watch whose sandbox could not even be constructed
+// (FailureClass=credential_state_readonly) was retried every 30 seconds for two
+// hours, because the string it inspected did not happen to contain a marker from
+// its own private list. The typed class already exists at this boundary; the one
+// thing a durable caller must not do is throw it away.
+func RunDurableCheck(ctx context.Context, command, cwd string, networkShared bool, durable DurableExecutionScope) (ExecutionResult, error) {
 	// The durable path uses the SAME engine entry as a foreground command. It
 	// previously had its own construction, which is how it ended up with neither
 	// state overlays nor an environment binding — and it is the one path with no
 	// host escape hatch, so an unprepared environment there is unrecoverable.
-	result, err := Execute(ctx, ExecutionRequest{
+	return Execute(ctx, ExecutionRequest{
 		ToolName:       "watch_external",
 		Payload:        command,
 		Shell:          true,
@@ -386,8 +394,6 @@ func RunSandboxedShellScoped(ctx context.Context, command, cwd string, networkSh
 		Durable:        &durable,
 		ToolProfile:    ToolProfile{Class: ToolExecutionStandard, HeartbeatInterval: time.Second},
 	}, nil)
-	decision := SandboxDecision{Mode: result.Plan.Mode, NetworkShared: result.Plan.NetworkMode == "shared"}
-	return result.Output, decision, err
 }
 
 // ExecSandboxPolicy is the execution policy for one request.

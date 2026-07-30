@@ -15,10 +15,10 @@ import (
 	"selfmind/internal/control"
 	"selfmind/internal/gateway/api"
 	"selfmind/internal/gateway/delivery"
+	"selfmind/internal/gateway/router"
 	"selfmind/internal/kernel"
 	"selfmind/internal/kernel/llm"
 	"selfmind/internal/kernel/memory"
-	"selfmind/internal/gateway/router"
 )
 
 // panicLLMProvider panics on the streaming path, synchronously on the caller's

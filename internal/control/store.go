@@ -658,6 +658,11 @@ CREATE INDEX IF NOT EXISTS idx_external_watches_owner
 		// (""/task/person) recorded when an approval is answered; older DBs
 		// created before the layered approval funnel lack the column.
 		{"approval_requests", "decision_scope", "TEXT"},
+		// decision_grant_key stores the narrow RULE a person picked instead of the
+		// action class; decision_note stores their words when they refused. Both
+		// arrived with the structured-decision batch, so older DBs lack them.
+		{"approval_requests", "decision_grant_key", "TEXT"},
+		{"approval_requests", "decision_note", "TEXT"},
 		// notified_at (unix seconds) records when an IM notification was actually
 		// SENT for a pending approval/clarify (never when a CLI-attached push was
 		// suppressed). The escrow sweep uses NULL to find pendings that left the
@@ -746,6 +751,14 @@ CREATE INDEX IF NOT EXISTS idx_external_watches_owner
 		// its own recorded identity a watch registered under one account would
 		// silently continue under whichever account the daemon happens to have
 		// after a restart.
+		// A watcher used to keep only the raw text of its last check, so the
+		// worker re-derived a diagnosis from that string with its own marker
+		// list. The typed class, a signature of the failure, and the streak
+		// length make "the same environment failure again" a decidable fact and
+		// let the watch stop instead of retrying until its deadline.
+		{"external_watches", "failure_class", "TEXT NOT NULL DEFAULT ''"},
+		{"external_watches", "check_signature", "TEXT NOT NULL DEFAULT ''"},
+		{"external_watches", "consecutive_failures", "INTEGER NOT NULL DEFAULT 0"},
 		{"external_watches", "environment_snapshot_id", "TEXT NOT NULL DEFAULT ''"},
 		{"external_watches", "environment_generation", "INTEGER NOT NULL DEFAULT 0"},
 		{"external_watches", "principal_fingerprint", "TEXT NOT NULL DEFAULT ''"},

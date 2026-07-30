@@ -580,7 +580,21 @@ func approvalNotificationText(approval control.ApprovalRequest, taskTitle string
 	// the serial interactive path). The task concept stays in the control
 	// plane, out of the IM UX. /approve <n> remains available for the rare
 	// parallel-run case; /approvals still lists ids.
-	return "Approval needed — reply y or n:\n" + approvalSummaryLine(approval, "")
+	//
+	// The answer MENU comes from the same server-issued decision list the
+	// terminal panel renders (batch B1), so a person answering on WeChat is
+	// choosing from the same options — including "don't ask again for commands
+	// that start with `git status`" — instead of a poorer two-way yes/no.
+	var sb strings.Builder
+	sb.WriteString("Approval needed — reply y or n:\n")
+	sb.WriteString(approvalSummaryLine(approval, ""))
+	if payload := decodeApprovalPayload(approval); payload.TriageRationale != "" {
+		sb.WriteString("\nWhy you are being asked: " + payload.TriageRationale)
+	}
+	if lines := approvalOptionLines(decodeApprovalDecisions(approval.Payload)); lines != "" {
+		sb.WriteString("\nOptions:\n" + strings.TrimRight(lines, "\n"))
+	}
+	return sb.String()
 }
 
 // clarifyNotificationText is the outbound pending-question body: the question,

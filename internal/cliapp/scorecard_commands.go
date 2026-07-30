@@ -65,10 +65,10 @@ func (a *App) evalScorecard(args []string) int {
 	}
 
 	type row struct {
-		id, title, status     string
-		tools, errs           int
-		dur                   time.Duration
-		failedChecks          []string
+		id, title, status string
+		tools, errs       int
+		dur               time.Duration
+		failedChecks      []string
 	}
 	var rows []row
 	passed := 0

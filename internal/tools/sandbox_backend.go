@@ -42,6 +42,18 @@ func (b bubblewrapBackend) Command(ctx context.Context, argv []string, plan Sand
 			policy.WritableRoots = append(policy.WritableRoots, resolved)
 		}
 	}
+	// Synthesized roots must reach the policy before the overlays that land
+	// inside them; sandbox.WrapArgv emits them in that order.
+	for _, dir := range plan.SynthesizedDirs {
+		target := strings.TrimSpace(dir.Target)
+		if target == "" {
+			continue
+		}
+		policy.SynthesizedDirs = append(policy.SynthesizedDirs, sandbox.SynthesizedDir{
+			Target:           target,
+			ReadOnlyChildren: dir.ReadOnlyChildren,
+		})
+	}
 	for _, overlay := range plan.OverlayMounts {
 		source := resolveWritableRoot(overlay.Source)
 		target := strings.TrimSpace(overlay.Target)

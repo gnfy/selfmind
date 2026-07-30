@@ -108,6 +108,22 @@ type approvalPayload struct {
 	// GrantClass describes what a "remember this" decision authorizes. Empty
 	// means the class is not reusable, so no grant was or will be recorded.
 	GrantClass string `json:"grant_class,omitempty"`
+	// Environment, Cwd, and ChangeSummary are the decision context written by
+	// toolApprovalHandler: where the operation would run and how large the write
+	// is. Display-only; they never widen what the approval authorizes.
+	Environment   string `json:"environment,omitempty"`
+	Cwd           string `json:"cwd,omitempty"`
+	ChangeSummary string `json:"change_summary,omitempty"`
+	// TriageState is tools.TriageStateUnavailable when smart-mode triage could
+	// not rule on this call (no judge, error, timeout), so the ask is a fail-safe
+	// fallback rather than a considered escalation.
+	TriageState string `json:"triage_state,omitempty"`
+	// TriageRationale, TriageRisk, and TriageAuthorization are the judge's
+	// structured assessment when triage ran and handed the call to a human. They
+	// are shown at decision time and kept for audit.
+	TriageRationale     string `json:"triage_rationale,omitempty"`
+	TriageRisk          string `json:"triage_risk,omitempty"`
+	TriageAuthorization string `json:"triage_authorization,omitempty"`
 }
 
 func decodeApprovalPayload(approval control.ApprovalRequest) approvalPayload {

@@ -98,17 +98,13 @@ func applyEnvProfiles(
 	material *execMaterial,
 ) ([]string, error) {
 	toolName := stringArg(args, "_tool_name")
-	programs := execCommandPrograms(toolName, args)
-	profiles := envprofiles.Match(programs)
-	if len(profiles) == 0 {
-		return nil, nil
-	}
+	programs, opaque := execCommandProgramSet(toolName, args)
 	toolchainRoot := ""
 	if root, err := executionenv.ToolchainDir(scope.PersonID, "."); err == nil {
 		toolchainRoot = root
 	}
 	snapshotEnv := material.Env
-	result, err := envprofiles.Apply(profiles, envprofiles.ApplyContext{
+	applyCtx := envprofiles.ApplyContext{
 		Home:              envValue(snapshotEnv, "HOME"),
 		StateRoot:         scratch.StateDir,
 		ScratchTmp:        scratch.TmpDir,
@@ -116,12 +112,53 @@ func applyEnvProfiles(
 		Lookup:            func(name string) (string, bool) { return lookupEnv(snapshotEnv, name) },
 		Trust:             scope.TrustLevel,
 		HasCredentialRead: credentialReadAllowed(scope, args),
-	})
+	}
+	// The command's own program set, plus — ONLY when the payload hides what it
+	// will run — every operator profile this host actually has.
+	//
+	// The narrow case must stay narrow: a non-GKE kubectl deliberately does not
+	// receive Google credentials, because that widens the credential surface for
+	// commands that never touch Google. But when the payload carries a script
+	// (`python3 - <<'PY' … subprocess.run(['gcloud', …])`, `./deploy.sh`, `make
+	// release`), the program set is not decidable at all — that is precisely the
+	// live failure — and preparing the host's inventory is the only thing that
+	// can work. So: decidable payload → exactly what it names; undecidable
+	// payload → what the host has.
+	profiles := envprofiles.Match(programs)
+	if opaque {
+		profiles = envprofiles.Union(profiles, envprofiles.AvailableOnHost(applyCtx))
+	}
+	if len(profiles) == 0 {
+		return nil, nil
+	}
+	// Resolve conditional dependencies BEFORE keying the cache: the set Apply
+	// uses depends on the tool's own configuration, which can change within a
+	// lease.
+	profiles = envprofiles.Resolve(profiles, applyCtx)
+	material.ProfilesFromInventory = profileIDsNotMatched(profiles, programs)
+	if cached, ok := lookupPreparedProfiles(scratch.StateDir, profiles, applyCtx); ok {
+		applyPreparedResult(material, cached)
+		return cached.Applied, nil
+	}
+	result, err := envprofiles.Apply(profiles, applyCtx)
 	if err != nil {
 		return nil, err
 	}
+	storePreparedProfiles(scratch.StateDir, profiles, applyCtx, result)
+	applyPreparedResult(material, result)
+	return result.Applied, nil
+}
+
+// applyPreparedResult folds a prepared profile result into the command's
+// material. It is shared by the fresh and cached paths so a reused preparation
+// can never produce a different sandbox view than the one that materialized it.
+func applyPreparedResult(material *execMaterial, result envprofiles.Result) {
 	material.WritableRoots = append(material.WritableRoots, result.WritableRoots...)
 	material.ReadOnlyPaths = append(material.ReadOnlyPaths, result.ReadOnlyPaths...)
+	for _, dir := range result.SynthesizedDirs {
+		material.SynthesizedDirs = append(material.SynthesizedDirs,
+			SandboxSynthesizedDir{Target: dir.Target, ReadOnlyChildren: dir.ReadOnlyChildren})
+	}
 	for _, overlay := range result.OverlayMounts {
 		material.OverlayMounts = append(material.OverlayMounts,
 			SandboxOverlayMount{Source: overlay.Source, Target: overlay.Target})
@@ -130,7 +167,25 @@ func applyEnvProfiles(
 	material.ProfileNotes = append(material.ProfileNotes, result.Notes...)
 	material.CopiedStateFiles = result.CopiedFiles
 	material.CopiedStateBytes = result.CopiedBytes
-	return result.Applied, nil
+}
+
+// profileIDsNotMatched lists the profiles that came from the host inventory
+// rather than from the command text. It is reported as evidence: a command that
+// received Google credential state without naming gcloud must be explainable.
+func profileIDsNotMatched(profiles []*envprofiles.EnvProfile, programs []string) []string {
+	matched := map[string]bool{}
+	for _, profile := range envprofiles.Match(programs) {
+		if profile != nil {
+			matched[profile.ID] = true
+		}
+	}
+	out := make([]string, 0, len(profiles))
+	for _, profile := range profiles {
+		if profile != nil && !matched[profile.ID] {
+			out = append(out, profile.ID)
+		}
+	}
+	return out
 }
 
 // execCommandPrograms returns every real program a command will run, skipping
@@ -138,8 +193,24 @@ func applyEnvProfiles(
 // safety floor uses, so profile matching and approval classification can never
 // disagree about what a command actually invokes.
 func execCommandPrograms(toolName string, args map[string]interface{}) []string {
+	programs, _ := execCommandProgramSet(toolName, args)
+	return programs
+}
+
+// execCommandProgramSet also reports whether the program set is UNDECIDABLE:
+// the payload runs a script through an interpreter, a script file, or a
+// general-purpose exec facility, so the programs it will actually invoke cannot
+// be read from the command text.
+//
+// This is not a heuristic about danger — the safety floor already covers that —
+// it is a statement about what parsing can know. `python3 - <<'PY' …
+// subprocess.run(['gcloud', …])` has program set {python3}, and treating that as
+// the truth is what left gcloud without credential state in a durable check
+// that had no way to recover.
+func execCommandProgramSet(toolName string, args map[string]interface{}) ([]string, bool) {
 	if strings.EqualFold(strings.TrimSpace(toolName), "execute_code") {
-		return []string{"python3"}
+		// Arbitrary Python: it can invoke anything, by construction.
+		return []string{"python3"}, true
 	}
 	payload := strings.TrimSpace(execCommandPayload(toolName, args))
 	if payload == "" {
@@ -148,11 +219,12 @@ func execCommandPrograms(toolName string, args map[string]interface{}) []string 
 		payload = strings.TrimSpace(stringArg(args, "command"))
 	}
 	if payload == "" {
-		return nil
+		return nil, false
 	}
-	segments, _ := expandCommandSegments(payload, 0)
+	segments, unparsed := expandCommandSegments(payload, 0)
 	seen := map[string]bool{}
 	programs := make([]string, 0, len(segments))
+	opaque := unparsed
 	for _, fields := range segments {
 		base := segmentRealProgram(fields)
 		if base == "" || seen[base] {
@@ -160,8 +232,57 @@ func execCommandPrograms(toolName string, args map[string]interface{}) []string 
 		}
 		seen[base] = true
 		programs = append(programs, base)
+		if scriptCarryingPrograms[base] {
+			opaque = true
+		}
 	}
-	return programs
+	// A heredoc feeds a script body the segmentation cannot attribute to any
+	// program, so its content is invisible whatever the leading word was.
+	if strings.Contains(payload, "<<") {
+		opaque = true
+	}
+	if !opaque {
+		for _, fields := range segments {
+			for _, token := range fields {
+				if isScriptFileToken(token) {
+					opaque = true
+					break
+				}
+			}
+		}
+	}
+	return programs, opaque
+}
+
+// scriptCarryingPrograms run a script (or an arbitrary command) supplied as
+// data, so what they invoke is not in the command text. Deliberately narrow:
+// `git` and `env` can also reach arbitrary programs, but they appear in almost
+// every command, and treating them as undecidable would widen credential
+// preparation to nearly everything.
+var scriptCarryingPrograms = map[string]bool{
+	"python": true, "python3": true, "node": true, "nodejs": true,
+	"deno": true, "bun": true, "perl": true, "ruby": true, "php": true,
+	"lua": true, "rscript": true, "osascript": true,
+	"make": true, "xargs": true, "find": true,
+	"npm": true, "pnpm": true, "yarn": true,
+}
+
+// isScriptFileToken recognizes an executed script file: its contents, not the
+// command line, decide what runs.
+func isScriptFileToken(token string) bool {
+	token = strings.TrimSpace(token)
+	if token == "" || strings.HasPrefix(token, "-") {
+		return false
+	}
+	if strings.HasPrefix(token, "./") || strings.HasPrefix(token, "../") {
+		return true
+	}
+	for _, suffix := range []string{".sh", ".bash", ".zsh", ".py", ".rb", ".pl", ".js", ".mjs", ".ts"} {
+		if strings.HasSuffix(strings.ToLower(token), suffix) {
+			return true
+		}
+	}
+	return false
 }
 
 // segmentRealProgram finds the program a segment actually runs.
@@ -315,6 +436,9 @@ func emitProfilePreparation(ctx context.Context, toolName, toolCallID string, ma
 	if material.CopiedStateFiles > 0 {
 		payload["state_files"] = material.CopiedStateFiles
 		payload["state_bytes"] = material.CopiedStateBytes
+	}
+	if len(material.ProfilesFromInventory) > 0 {
+		payload["from_host_inventory"] = material.ProfilesFromInventory
 	}
 	if len(material.ProfileNotes) > 0 {
 		payload["notes"] = material.ProfileNotes

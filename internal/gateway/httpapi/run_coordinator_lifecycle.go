@@ -372,6 +372,13 @@ func (c *RunCoordinator) installExecutionScope(identity *control.IdentityContext
 	scope.ModeGetter = func() tools.ApprovalMode {
 		return c.resolveApprovalMode(identity, reqMode)
 	}
+	// The person's own words for this turn, so smart-mode triage can judge
+	// AUTHORIZATION and not only risk: "delete the build directory" makes a
+	// destructive-looking command an instruction, while the same command with no
+	// such request is the model acting alone. Bounded and redacted here because
+	// the judge prompt treats it as untrusted data (docs/tool-safety.md).
+	triageIntent := triageIntentFromRequest(req.Content)
+	scope.TriageIntent = func() string { return triageIntent }
 	// Grants back class-level approval memory (session/persistent allowlist);
 	// the control store satisfies tools.ApprovalGrantStore structurally.
 	if c.srv != nil && c.srv.Control != nil {
@@ -644,6 +651,7 @@ func (c *RunCoordinator) toolApprovalHandler(identity *control.IdentityContext, 
 		if runID == "" && run != nil {
 			runID = run.ID
 		}
+		decisions := buildApprovalDecisions(req)
 		approval, err := store.CreateApprovalRequest(waitCtx, control.ApprovalRequest{
 			TenantID:         identity.TenantID,
 			PersonID:         identity.PersonID,
@@ -656,6 +664,22 @@ func (c *RunCoordinator) toolApprovalHandler(identity *control.IdentityContext, 
 				"reason":      req.Reason,
 				"args":        redactApprovalArgs(req.Args),
 				"grant_class": req.GrantClass,
+				// WHERE it runs and HOW BIG the change is: a decision made without
+				// them is a guess. All four are display-only context produced by the
+				// execution scope, never by the model's args.
+				"environment":    req.Environment,
+				"cwd":            req.Cwd,
+				"change_summary": req.ChangeSummary,
+				"triage_state":   req.TriageState,
+				// The judge's reasoning and its two assessment axes, so the person
+				// inherits the judgement instead of redoing it, and a later reader
+				// can audit why the ask happened at all.
+				"triage_rationale":      req.TriageRationale,
+				"triage_risk":           req.TriageRisk,
+				"triage_authorization":  req.TriageAuthorization,
+				// The authoritative answer set for this ask (batch B1). Every
+				// surface renders THIS list instead of inventing one.
+				"decisions": decisions,
 			}),
 		})
 		if err != nil {
@@ -677,6 +701,19 @@ func (c *RunCoordinator) toolApprovalHandler(identity *control.IdentityContext, 
 					// so one-line UI surfaces (the TUI approval panel) can show
 					// "tool → target" without decoding full args.
 					"target": approvalActionTarget(req.Args),
+					// Decision context for the panel: where it runs, how big the
+					// change is, what a "remember this" would authorize, and
+					// whether automatic triage was even able to rule. The TUI
+					// builds its panel from this event, so anything absent here
+					// is invisible at decision time.
+					"environment":      req.Environment,
+					"cwd":              req.Cwd,
+					"change_summary":   req.ChangeSummary,
+					"grant_class":      req.GrantClass,
+					"triage_state":     req.TriageState,
+					"triage_rationale": req.TriageRationale,
+					"triage_risk":      req.TriageRisk,
+					"decisions":        decisions,
 				}),
 			})
 		}
@@ -696,7 +733,12 @@ func (c *RunCoordinator) toolApprovalHandler(identity *control.IdentityContext, 
 				return tools.ToolApprovalDecision{
 					Approved:   false,
 					ApprovalID: approval.ID,
-					Reason:     "approval expired; do not request another approval or retry a variant; finish waiting_user",
+					// Typed as a TIMEOUT, not a rejection (batch B2): nobody
+					// refused this, nobody answered. The execution layer renders a
+					// different sentence for each so the model parks the work
+					// instead of trying a variant of a "rejected" action.
+					Outcome: tools.ApprovalOutcomeTimedOut,
+					Reason:  "approval expired; do not request another approval or retry a variant; finish waiting_user",
 				}, nil
 			case <-ticker.C:
 				current, err := store.GetApprovalRequest(waitCtx, identity.TenantID, approval.ID)
@@ -715,12 +757,22 @@ func (c *RunCoordinator) toolApprovalHandler(identity *control.IdentityContext, 
 						Approved:   true,
 						ApprovalID: approval.ID,
 						Scope:      current.DecisionScope,
+						Outcome:    tools.ApprovalOutcomeApproved,
+						// The rule the human picked, when they picked one. The
+						// execution layer validates it against the candidates this
+						// call offered before storing anything.
+						GrantKey: current.DecisionGrantKey,
 						// The control plane rules on how long its authorization
 						// lasts; the execution layer only redeems it.
 						ExpiresAt: approvalDecisionExpiry(current.DecisionScope),
 					}, nil
 				case "rejected":
-					return tools.ToolApprovalDecision{Approved: false, ApprovalID: approval.ID, Reason: "rejected"}, nil
+					return tools.ToolApprovalDecision{
+						Approved:   false,
+						ApprovalID: approval.ID,
+						Outcome:    tools.ApprovalOutcomeDenied,
+						Reason:     fallbackApprovalReason(current.DecisionNote, "rejected"),
+					}, nil
 				}
 			}
 		}

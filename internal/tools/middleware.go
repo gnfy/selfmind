@@ -212,21 +212,36 @@ func isWriteTool(name string) bool { _, ok := writeTools[name]; return ok }
 func isExecTool(name string) bool  { _, ok := execTools[name]; return ok }
 
 // approvalNeeded decides whether a tool call requires human approval under the
-// given mode. dangerous is the dangerous-op heuristic result.
-func approvalNeeded(mode ApprovalMode, toolName string, dangerous bool) bool {
+// given mode. dangerous is the dangerous-op heuristic result; contained is the
+// sandbox-containment judgement (execSandboxContained) and is only ever true for
+// an exec call proven to run isolated with no network.
+func approvalNeeded(mode ApprovalMode, toolName string, dangerous, contained bool) bool {
 	switch mode {
 	case ApprovalFullAuto:
 		return false
 	case ApprovalSmart:
-		// Gates on any arbitrary-code exec tool OR a dangerous op. Running
-		// arbitrary commands/code is inherently approval-worthy: the `dangerous`
-		// heuristic is a NARROWING optimization for known-safe reads, never a
-		// gate that lets arbitrary exec through unprompted (it historically only
-		// inspected args["command"], so execute_code's args["code"] payload slid
-		// past it entirely and ran with NO approval). In smart mode the exec ask
-		// is then triaged by the LLM judge in SmartApprovalMiddleware; the gate
-		// itself stays here.
-		return isExecTool(toolName) || dangerous
+		// A dangerous op always asks: out-of-workspace targets, destructive
+		// programs, and network egress keep their gate no matter what the
+		// sandbox can do.
+		if dangerous {
+			return true
+		}
+		// Exec asks UNLESS the sandbox can contain it (batch C1). Arbitrary
+		// commands/code are not approval-worthy because they are commands; they
+		// are approval-worthy because of what they can reach. An isolated,
+		// network-disabled run can only touch workspace files — the same blast
+		// radius as the write tools smart mode already allows unprompted — so
+		// asking about it was fatigue with no safety return. Everything the
+		// sandbox cannot contain (host mode, missing sandbox platform, egress
+		// policy on) still asks and is still triaged.
+		//
+		// The `dangerous` heuristic remains a gate, never an authorization: it
+		// once inspected only args["command"], so execute_code's args["code"]
+		// payload slid past it entirely and ran with NO approval.
+		if isExecTool(toolName) {
+			return !contained
+		}
+		return false
 	case ApprovalReadOnly:
 		return isWriteTool(toolName) || isExecTool(toolName) || dangerous
 	case ApprovalAutoEdit:
@@ -294,14 +309,25 @@ func EvaluateModeDecision(ctx context.Context, mode ApprovalMode, projectRoot, t
 	}
 	// Layer 2: mode gate. If the mode would not require an ask for this op, it is
 	// auto-approved (full-auto for everything; auto-edit for non-dangerous edits).
-	if !approvalNeeded(mode, toolName, dangerous) {
+	//
+	// Containment is deliberately passed as FALSE here. This classifier also
+	// re-evaluates ALREADY-PENDING approvals from redacted display args, where a
+	// host-mode call's effective-mode marker may be gone; claiming containment
+	// from a policy inference would auto-approve a host escape that the person
+	// was asked about. A pending op is therefore never released by containment —
+	// only by an explicit mode that covers it, or by a judge/human decision.
+	if !approvalNeeded(mode, toolName, dangerous, false) {
 		return ModeApprove
 	}
 	// Layer 4: smart-mode LLM triage. APPROVE auto-runs, DENY blocks as a
 	// decision, everything else (ESCALATE / no judge / error / timeout) falls
 	// through to the human ask — fail SAFE, exactly like the middleware.
 	if mode == ApprovalSmart && judge != nil {
-		verdict, _ := triageApproval(ctx, judge, toolName, triageSubject(toolName, args), reason)
+		// No intent context here: this path re-judges an ALREADY-PENDING approval
+		// from persisted args, where the run's live conversation is not available.
+		// Missing intent reads as unknown authorization, which biases the judge
+		// toward escalating — the safe direction for a retro decision.
+		verdict, _, _ := triageApproval(ctx, judge, toolName, triageSubject(toolName, args), reason, "")
 		switch verdict {
 		case TriageApprove:
 			return ModeApprove
@@ -390,8 +416,15 @@ func SmartApprovalMiddleware(projectRoot string) Middleware {
 				return next(args)
 			}
 
-			// Layer 2: mode bypass.
-			if !approvalNeeded(mode, toolName, dangerous) {
+			// Layer 2: mode bypass, including sandbox containment (C1). A
+			// contained exec call is recorded so /diag can show how much of the
+			// old ask volume was pure fatigue rather than judgement.
+			contained := execSandboxContained(toolName, args)
+			if !approvalNeeded(mode, toolName, dangerous, contained) {
+				if contained && mode == ApprovalSmart && hasScope {
+					RecordTriageOutcome(scope.TenantID, scope.PersonID, TriageOutcomeContained, nil)
+					log.Debug("smart approval: sandbox-contained exec, no ask", "tool", toolName, "reason", containedExecReason)
+				}
 				return next(args)
 			}
 			if !dangerous && reason == "" {
@@ -403,8 +436,28 @@ func SmartApprovalMiddleware(projectRoot string) Middleware {
 			// Hardline never reaches here, so a granted class can never cover a
 			// hard-floor op.
 			patternKey := approvalPatternKeyForScope(toolName, args, reason, scope, hasScope)
-			if hasScope && scope.Grants != nil && patternKey != "" {
-				if granted, _ := scope.Grants.IsApprovalGranted(contextFromArgs(args), scope.TenantID, scope.PersonID, scope.TaskID, patternKey); granted {
+			// Rule candidates (batch B2) are the narrow authorizations this call
+			// could create — a command prefix, a host, a writable root — and the
+			// keys a previously granted rule is looked up under.
+			ruleCandidates := approvalRuleCandidates(toolName, args, scope, reason)
+			targetKeys := approvalTargetRuleKeys(toolName, args, scope)
+			if hasScope && scope.Grants != nil {
+				grantCtx := contextFromArgs(args)
+				isGranted := func(key string) bool {
+					if key == "" {
+						return false
+					}
+					granted, _ := scope.Grants.IsApprovalGranted(grantCtx, scope.TenantID, scope.PersonID, scope.TaskID, key)
+					return granted
+				}
+				switch {
+				case isGranted(patternKey):
+					return next(args)
+				// ALL targets must be covered (batch B3): a patch touching three
+				// roots must not be released by a grant that covers one of them.
+				case len(targetKeys) > 0 && allApprovalKeysGranted(targetKeys, isGranted):
+					return next(args)
+				case anyApprovalKeyGranted(approvalRuleKeys(ruleCandidates), isGranted):
 					return next(args)
 				}
 			}
@@ -416,28 +469,78 @@ func SmartApprovalMiddleware(projectRoot string) Middleware {
 			// (non-hardline) op reaches here in smart mode. Fails SAFE: with no
 			// judge, or on ESCALATE / any error / timeout, we fall through to the
 			// human ask — never an auto-approval.
-			if mode == ApprovalSmart && hasScope && scope.Judge != nil {
-				ctx := contextFromArgs(args)
-				verdict, terr := triageApproval(ctx, scope.Judge, toolName, triageSubject(toolName, approvalDisplayArgs(args)), reason)
-				switch verdict {
-				case TriageApprove:
-					// Record a TASK-scope class grant so the judge is consulted at
-					// most once per class per task, then proceed.
-					if scope.Grants != nil && patternKey != "" {
-						recordApprovalGrant(ctx, scope, "task", patternKey, approvalGrantExpiry("task", args))
-					}
-					log.Info("smart approval: auto-approved by triage", "tool", toolName, "reason", reason, "class", patternKey)
-					return next(args)
-				case TriageDeny:
-					// Rejection contract: reuse the "operation rejected" prefix so
-					// kernel's isUserRejectionErr treats it as a decision (do NOT
-					// retry a variant), not a diagnosable failure.
-					log.Warn("smart approval: blocked by safety triage", "tool", toolName, "reason", reason)
-					return "", fmt.Errorf("operation rejected: blocked by safety triage")
+			// triageState travels to the human ask so the surface can say WHY it is
+			// asking: a deliberate escalation and a broken judge are indistinguishable
+			// at the prompt, and the second one silently degrades smart mode to
+			// on-request.
+			triageState := ""
+			triageRationale := ""
+			triageRisk := ""
+			triageAuthorization := ""
+			if mode == ApprovalSmart && hasScope {
+				switch {
+				case scope.Judge == nil:
+					// No judge wired: smart mode cannot triage at all. Count it so
+					// /diag can say the funnel is disabled rather than strict.
+					triageState = TriageStateUnavailable
+					RecordTriageOutcome(scope.TenantID, scope.PersonID, TriageOutcomeUnavailable, nil)
+				case triageDenyBreakerTripped(scope.RunID):
+					// The model is circling a denied action (batch C2). Stop
+					// spending judge calls on it and put the person in the loop,
+					// who is the only one who can end the loop. Never the reverse:
+					// a tripped breaker cannot approve anything.
+					triageState = TriageStateEscalated
+					RecordTriageOutcome(scope.TenantID, scope.PersonID, TriageOutcomeEscalated, nil)
+					log.Info("smart approval: triage stepped aside after repeated denials in this run", "tool", toolName, "run", scope.RunID)
 				default:
-					// ESCALATE (and any error/timeout) → fall through to the human ask.
-					if terr != nil {
-						log.Debug("smart approval: triage escalated on error", "tool", toolName, "error", terr)
+					ctx := contextFromArgs(args)
+					intent := ""
+					if scope.TriageIntent != nil {
+						intent = scope.TriageIntent()
+					}
+					verdict, assessment, terr := triageApproval(ctx, scope.Judge, toolName, triageSubject(toolName, approvalDisplayArgs(args)), reason, intent)
+					triageRationale = assessment.Rationale
+					triageRisk = assessment.Risk
+					triageAuthorization = assessment.Authorization
+					switch verdict {
+					case TriageApprove:
+						// Record a TASK-scope class grant so the judge is consulted at
+						// most once per class per task, then proceed.
+						if scope.Grants != nil && patternKey != "" {
+							recordApprovalGrant(ctx, scope, "task", patternKey, approvalGrantExpiry("task", args))
+						}
+						RecordTriageOutcome(scope.TenantID, scope.PersonID, TriageOutcomeApproved, nil)
+						clearTriageDenials(scope.RunID)
+						log.Info("smart approval: auto-approved by triage", "tool", toolName, "reason", reason, "class", patternKey,
+							"risk", assessment.Risk, "authorization", assessment.Authorization)
+						return next(args)
+					case TriageDeny:
+						// Rejection contract: reuse the "operation rejected" prefix so
+						// kernel's isUserRejectionErr treats it as a decision (do NOT
+						// retry a variant), not a diagnosable failure. The rationale
+						// travels with it so the model learns WHY instead of trying a
+						// variant of the same idea.
+						RecordTriageOutcome(scope.TenantID, scope.PersonID, TriageOutcomeDenied, nil)
+						tripped := recordTriageDenial(scope.RunID)
+						log.Warn("smart approval: blocked by safety triage", "tool", toolName, "reason", reason,
+							"risk", assessment.Risk, "breaker_tripped", tripped)
+						if assessment.Rationale != "" {
+							return "", fmt.Errorf("operation rejected: blocked by safety triage: %s", assessment.Rationale)
+						}
+						return "", fmt.Errorf("operation rejected: blocked by safety triage")
+					default:
+						// ESCALATE (and any error/timeout) → fall through to the human
+						// ask. An error is NOT an escalation: it means the funnel did
+						// not run, so it is reported separately.
+						clearTriageDenials(scope.RunID)
+						if terr != nil {
+							triageState = TriageStateUnavailable
+							RecordTriageOutcome(scope.TenantID, scope.PersonID, TriageOutcomeUnavailable, terr)
+							log.Debug("smart approval: triage escalated on error", "tool", toolName, "error", terr)
+						} else {
+							triageState = TriageStateEscalated
+							RecordTriageOutcome(scope.TenantID, scope.PersonID, TriageOutcomeEscalated, nil)
+						}
 					}
 				}
 			}
@@ -455,24 +558,59 @@ func SmartApprovalMiddleware(projectRoot string) Middleware {
 					Args:                approvalDisplayArgs(args),
 					GrantClass:          grantClassForDecision(toolName, reason, args, patternKey),
 					ResourceFingerprint: approvalResourceFingerprint(scope, toolName, args),
+					Environment:         scope.EnvironmentSnapshotID,
+					Cwd:                 approvalDisplayCwd(scope),
+					ChangeSummary:       ApprovalChangeSummary(toolName, args),
+					TriageState:         triageState,
+					TriageRationale:     triageRationale,
+					TriageRisk:          triageRisk,
+					TriageAuthorization: triageAuthorization,
+					RuleCandidates:      ruleCandidates,
 				})
 				if err != nil {
 					return "", err
 				}
 				if !decision.Approved {
-					// The "operation rejected" prefix is a stable contract:
-					// kernel's isUserRejectionErr matches it to tell the model
-					// a rejection is a user decision (never retry a variant),
-					// not a diagnosable failure. Keep the wording in sync.
+					// A rejection and a TIMEOUT are different facts (batch B2):
+					// the first is a decision the model must not work around, the
+					// second means nobody answered. Both stop the call, but only
+					// the rejection carries the do-not-retry user-decision
+					// contract that kernel's isUserRejectionErr matches; a timeout
+					// must read as "the person is not here", so the model parks
+					// the work instead of trying a variant.
+					if decision.Outcome == ApprovalOutcomeTimedOut {
+						return "", fmt.Errorf("approval timed out with no answer: %s (nobody is at the keyboard; do not retry a variant, finish waiting_user)", fallbackReason(decision.Reason, "no answer before the approval expired"))
+					}
 					if decision.Reason != "" {
 						return "", fmt.Errorf("operation rejected: %s", decision.Reason)
 					}
 					return "", fmt.Errorf("operation rejected by approval %s", decision.ApprovalID)
 				}
-				// Remember an "approve this class" decision so the next same-class
-				// call skips the ask.
-				if scope.Grants != nil && patternKey != "" {
-					recordApprovalGrant(contextFromArgs(args), scope, decision.Scope, patternKey, approvalGrantExpiry(decision.Scope, args))
+				// Remember what the human actually chose (batch B2): a rule they
+				// picked, else the action class. A rule key is honored ONLY when
+				// it is one this call offered — a decision arriving from any
+				// surface must not be able to mint an authorization of its own.
+				if scope.Grants != nil {
+					grantCtx := contextFromArgs(args)
+					if rule, ok := approvalRuleByKey(ruleCandidates, decision.GrantKey); ok {
+						recordApprovalGrant(grantCtx, scope, decision.Scope, rule.Key, approvalGrantExpiry(decision.Scope, args))
+						log.Info("approval rule granted", "kind", rule.Kind, "scope", decision.Scope, "tool", toolName)
+					} else {
+						if strings.TrimSpace(decision.GrantKey) != "" {
+							log.Warn("approval rule refused: not offered for this call", "tool", toolName)
+						}
+						if patternKey != "" {
+							recordApprovalGrant(grantCtx, scope, decision.Scope, patternKey, approvalGrantExpiry(decision.Scope, args))
+						}
+						// A remembered decision on a multi-target write must cover
+						// EVERY target, otherwise the next call re-asks for the
+						// files this answer already authorized (batch B3).
+						if decision.Scope != "" {
+							for _, key := range targetKeys {
+								recordApprovalGrant(grantCtx, scope, decision.Scope, key, approvalGrantExpiry(decision.Scope, args))
+							}
+						}
+					}
 				}
 				return next(args)
 			}
@@ -488,6 +626,23 @@ func SmartApprovalMiddleware(projectRoot string) Middleware {
 			return next(args)
 		}
 	}
+}
+
+// approvalDisplayCwd is the working root shown on the approval surface: where
+// the operation would actually run. It reports the scope's own root, never the
+// daemon process cwd (which is not the active workspace) and never a path taken
+// from the model's args, so the displayed location cannot be spoofed by the call
+// being approved.
+func approvalDisplayCwd(scope ExecutionScope) string {
+	if root := strings.TrimSpace(scope.WorkspaceRoot); root != "" {
+		return filepath.Clean(root)
+	}
+	for _, root := range scope.AllowedRoots {
+		if trimmed := strings.TrimSpace(root); trimmed != "" {
+			return filepath.Clean(trimmed)
+		}
+	}
+	return ""
 }
 
 // approvalProjectRoot aligns approval heuristics with the workspace scope that

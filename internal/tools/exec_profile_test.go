@@ -494,3 +494,75 @@ func (s *recordingCapabilityStore) GrantExecutionCapability(_ context.Context, _
 	s.granted = capability
 	return nil
 }
+
+// Regression for the 2026-07-30 GCP watcher: the check ran gcloud inside a
+// python heredoc, so the program set was {python3} and gcloud received no
+// credential state — CLOUDSDK_CONFIG was unset and it tried to write the
+// operator's real config directory. An undecidable payload must receive the
+// host's operator profiles; a decidable one must not.
+func TestOpaquePayloadReceivesHostInventory(t *testing.T) {
+	base := fixtureBase(t)
+	home, _, _ := fakeGcloudHome(t, base)
+	tenant, workspace := profileExecScope(t, home, fakeGcloudOnPath(t, base), executionenv.TrustTrusted)
+
+	args := func(command string) map[string]interface{} {
+		return map[string]interface{}{
+			"_tenant_id": tenant,
+			"_tool_name": "terminal",
+			"command":    command,
+			"cwd":        workspace,
+		}
+	}
+
+	// The live failure shape: gcloud is invoked from inside a python script.
+	material := execMaterialForArgs(args("python3 - <<'PY'\nimport subprocess\nsubprocess.run(['gcloud','builds','describe','x'])\nPY"), workspace)
+	if material.ProfileError != nil {
+		t.Fatal(material.ProfileError)
+	}
+	if !strings.Contains(strings.Join(material.Env, " "), "CLOUDSDK_CONFIG=") {
+		t.Fatalf("an interpreter payload must still get gcloud state: profiles=%v", material.Profiles)
+	}
+	if len(material.ProfilesFromInventory) == 0 {
+		t.Fatal("evidence must name the profiles that came from the host inventory")
+	}
+
+	// A decidable command that names no credential tool keeps today's narrow
+	// preparation: least privilege is preserved where parsing can decide.
+	material = execMaterialForArgs(args("printf hello"), workspace)
+	if material.ProfileError != nil {
+		t.Fatal(material.ProfileError)
+	}
+	if strings.Contains(strings.Join(material.Env, " "), "CLOUDSDK_CONFIG=") {
+		t.Fatalf("a decidable command must not receive unrelated credential state: profiles=%v", material.Profiles)
+	}
+	if len(material.ProfilesFromInventory) != 0 {
+		t.Fatalf("inventory must stay out of decidable payloads: %v", material.ProfilesFromInventory)
+	}
+}
+
+func TestExecCommandProgramSetDecidability(t *testing.T) {
+	cases := []struct {
+		command string
+		opaque  bool
+	}{
+		{"printf hello", false},
+		{"set -euo pipefail; gcloud builds describe x", false},
+		{"bash -lc 'gcloud builds list'", false},
+		{"kubectl get ns", false},
+		{"python3 - <<'PY'\nprint(1)\nPY", true},
+		{"python3 script.py", true},
+		{"./deploy.sh", true},
+		{"make release", true},
+		{"find . -name '*.tmp' -exec rm {} ;", true},
+		{"cat notes.txt", false},
+	}
+	for _, tc := range cases {
+		_, opaque := execCommandProgramSet("terminal", map[string]interface{}{"command": tc.command})
+		if opaque != tc.opaque {
+			t.Fatalf("%q decidability = %v, want opaque=%v", tc.command, opaque, tc.opaque)
+		}
+	}
+	if _, opaque := execCommandProgramSet("execute_code", map[string]interface{}{"code": "print(1)"}); !opaque {
+		t.Fatal("execute_code runs arbitrary python and is undecidable by construction")
+	}
+}

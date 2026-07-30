@@ -73,6 +73,12 @@ type ExecutionScope struct {
 	// gateway/app installs a judge backed by a cheap role model, kept OFF the
 	// run's main provider.
 	Judge ApprovalJudge
+	// TriageIntent supplies the person's own words for this run so the judge can
+	// rule on AUTHORIZATION, not only on risk: the same command is a different
+	// decision when the person asked for it. The gateway installs it (it owns the
+	// work spine); it must return bounded, redacted text and is treated as
+	// untrusted data by the triage prompt. Nil means authorization is unknown.
+	TriageIntent func() string
 }
 
 type ExecutionCapabilityStore interface {

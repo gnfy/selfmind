@@ -13,9 +13,17 @@ import (
 // class-grant memory scope — "" (once), "task", or "person".
 type ApprovalOption struct {
 	Label    string
-	Key      string // single-key shortcut ("y", "t", "a", "n")
+	Key      string // single-key shortcut ("y", "t", "a", "n", or a rule letter)
 	Decision string
 	Scope    string
+	// GrantKey names a narrow RULE this option would persist ("commands that
+	// start with `git status`"). It is opaque here: the panel renders the label
+	// and hands the key back untouched, because only the daemon may decide
+	// whether a rule is honored.
+	GrantKey string
+	// RuleLabel is the rule in plain words, used for the transcript record so it
+	// says what was remembered rather than a scope noun.
+	RuleLabel string
 }
 
 // DefaultApprovalOptions is the Codex-style answer set for a tool approval:
@@ -39,17 +47,74 @@ type ApprovalPrompt struct {
 	tool    string
 	target  string // compact object of the action (path/command); may be empty
 	reason  string
+	details ApprovalDetails
 	options []ApprovalOption
 	cursor  int
 }
 
-// NewApprovalPrompt builds a panel with the default option set.
+// ApprovalDetails is the decision context the daemon publishes with an approval:
+// WHERE the operation would run, HOW LARGE the write is, WHAT a "remember this"
+// answer would authorize, and WHETHER automatic triage was able to rule at all.
+// Every field is display-only — none of it widens what the approval authorizes —
+// and every field is optional, because non-exec approvals and older daemons
+// carry only some of it.
+type ApprovalDetails struct {
+	Tool   string
+	Target string
+	Reason string
+	// Environment is the bound environment snapshot id; Cwd is the working root
+	// the operation would run in (the scope's root, never the daemon cwd).
+	Environment string
+	Cwd         string
+	// ChangeSummary is a content-free size line ("2 files +48/-12").
+	ChangeSummary string
+	// GrantClass names what "allow this kind" would authorize, or "" when the
+	// daemon did not publish one. It is rendered, not acted on: whether a grant
+	// is actually persisted is the grant floor's decision, so the panel must not
+	// infer an option set from it.
+	GrantClass string
+	// TriageUnavailable is true when smart-mode triage could not rule (no judge,
+	// error, timeout). The panel says so, because otherwise a broken judge and a
+	// strict judge are indistinguishable and the person just sees more prompts.
+	TriageUnavailable bool
+	// TriageRationale and TriageRisk are the judge's assessment when triage ran
+	// and escalated. Showing them means the person inherits the reasoning instead
+	// of redoing it.
+	TriageRationale string
+	TriageRisk      string
+	// Options is the server-issued answer set for THIS ask (batch B1). Nil falls
+	// back to the built-in four so an older daemon still renders a usable panel;
+	// the panel never invents an option the daemon did not offer.
+	Options []ApprovalOption
+}
+
+// NewApprovalPrompt builds a panel with the default option set and no extra
+// decision context.
 func NewApprovalPrompt(tool, target, reason string) *ApprovalPrompt {
+	return NewApprovalPromptDetailed(ApprovalDetails{Tool: tool, Target: target, Reason: reason})
+}
+
+// NewApprovalPromptDetailed builds a panel that also renders execution context.
+// The option set is unchanged: what a decision authorizes is the gateway's and
+// the grant floor's contract, and the panel must not narrow it locally.
+func NewApprovalPromptDetailed(d ApprovalDetails) *ApprovalPrompt {
+	d.Tool = strings.TrimSpace(d.Tool)
+	d.Target = strings.TrimSpace(d.Target)
+	d.Reason = strings.TrimSpace(d.Reason)
+	d.Environment = strings.TrimSpace(d.Environment)
+	d.Cwd = strings.TrimSpace(d.Cwd)
+	d.ChangeSummary = strings.TrimSpace(d.ChangeSummary)
+	d.GrantClass = strings.TrimSpace(d.GrantClass)
+	options := d.Options
+	if len(options) == 0 {
+		options = DefaultApprovalOptions()
+	}
 	return &ApprovalPrompt{
-		tool:    strings.TrimSpace(tool),
-		target:  strings.TrimSpace(target),
-		reason:  strings.TrimSpace(reason),
-		options: DefaultApprovalOptions(),
+		tool:    d.Tool,
+		target:  d.Target,
+		reason:  d.Reason,
+		details: d,
+		options: options,
 	}
 }
 
@@ -95,13 +160,56 @@ func (p *ApprovalPrompt) HandleKey(key string) *ApprovalOption {
 	return nil
 }
 
+// approvalTargetMaxLines and approvalContextMaxLines bound the wrapped blocks so
+// a long command or reason can never push the answer options off screen — the
+// panel must always end with a visible decision.
+const (
+	approvalTargetMaxLines  = 3
+	approvalContextMaxLines = 2
+)
+
+// approvalTriageUnavailableNotice is shown when smart-mode triage could not rule
+// on the call. Without it, a person in smart mode reads a flood of prompts as
+// "the policy is strict" when the real cause is a missing or failing judge.
+const approvalTriageUnavailableNotice = "automatic triage unavailable — asking you instead of auto-approving"
+
 var (
 	approvalBorderStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
 	approvalTitleStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Bold(true)
 	approvalToolStyle   = lipgloss.NewStyle().Bold(true)
 	approvalDimStyle    = lipgloss.NewStyle().Faint(true)
 	approvalSelStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("39")).Bold(true)
+	approvalNoticeStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
 )
+
+// locationLine renders WHERE the operation would run: the working root, plus the
+// bound environment snapshot when the daemon published one.
+func (p *ApprovalPrompt) locationLine() string {
+	var parts []string
+	if p.details.Cwd != "" {
+		parts = append(parts, p.details.Cwd)
+	}
+	if p.details.Environment != "" {
+		parts = append(parts, "env "+p.details.Environment)
+	}
+	return strings.Join(parts, " · ")
+}
+
+// addLabeledRows appends "label: value" with the value wrapped and continuation
+// lines indented under the label, so a wrapped path stays visually attached to
+// the field that owns it.
+func (p *ApprovalPrompt) addLabeledRows(addRow func(styled, plain string), label, value string, inner, maxLines int) {
+	labelW := runewidth.StringWidth(label)
+	lines := WrapDisplay(value, maxInt(8, inner-labelW), maxLines)
+	if len(lines) == 0 {
+		return
+	}
+	addRow(approvalDimStyle.Render(label)+lines[0], label+lines[0])
+	indent := strings.Repeat(" ", labelW)
+	for _, line := range lines[1:] {
+		addRow(indent+line, indent+line)
+	}
+}
 
 // approvalPanelMaxWidth caps the panel so it stays a compact dialog even in a
 // very wide terminal.
@@ -141,13 +249,45 @@ func (p *ApprovalPrompt) View(width int) string {
 	}
 	head = TruncateMiddle(head, inner)
 	addRow(headStyled, head)
+	// The full object gets WRAPPED, not middle-truncated: a command whose middle
+	// is replaced by "…" cannot be judged, and judging it is the entire point of
+	// the panel. Wrapping stays bounded (approvalTargetMaxLines) so one giant
+	// argument list can never push the options off screen.
 	if p.target != "" && p.target != pathBaseName(p.target) {
-		full := TruncateMiddle(p.target, inner)
-		addRow(approvalDimStyle.Render(full), full)
+		for _, line := range WrapDisplay(p.target, inner, approvalTargetMaxLines) {
+			addRow(approvalDimStyle.Render(line), line)
+		}
+	}
+	// Execution context: where it runs, and how big the write is. Order matters —
+	// location before size before rationale, because "wrong directory" is the
+	// cheapest rejection to spot.
+	if p.details.ChangeSummary != "" {
+		p.addLabeledRows(addRow, "change: ", p.details.ChangeSummary, inner, 1)
+	}
+	if where := p.locationLine(); where != "" {
+		p.addLabeledRows(addRow, "where: ", where, inner, approvalContextMaxLines)
 	}
 	if p.reason != "" {
-		reason := TruncateMiddle(p.reason, inner-8)
-		addRow(approvalDimStyle.Render("reason: ")+reason, "reason: "+reason)
+		p.addLabeledRows(addRow, "reason: ", p.reason, inner, approvalContextMaxLines)
+	}
+	// What a "remember this" answer would authorize, in the same words the
+	// gateway used when it decided the class was reusable.
+	if p.details.GrantClass != "" {
+		p.addLabeledRows(addRow, "remembering allows: ", p.details.GrantClass, inner, approvalContextMaxLines)
+	}
+	// The judge's own reasoning, when it ran and escalated: the person decides
+	// faster reading one sentence than re-deriving it.
+	if p.details.TriageRationale != "" {
+		label := "triage: "
+		if risk := p.details.TriageRisk; risk != "" {
+			label = "triage (" + risk + " risk): "
+		}
+		p.addLabeledRows(addRow, label, p.details.TriageRationale, inner, approvalContextMaxLines)
+	}
+	if p.details.TriageUnavailable {
+		for _, line := range WrapDisplay(approvalTriageUnavailableNotice, inner, approvalContextMaxLines) {
+			addRow(approvalNoticeStyle.Render(line), line)
+		}
 	}
 	addRow("", "")
 
@@ -207,6 +347,57 @@ func pathBaseName(s string) string {
 		return s
 	}
 	return base
+}
+
+// WrapDisplay wraps s into at most maxLines lines of at most width display
+// columns each, breaking at spaces when one is available in the second half of
+// the line and hard-breaking otherwise (paths and commands often have no spaces
+// at all). Whitespace, including newlines, is normalized first so a multi-line
+// payload cannot break the panel's box drawing. When the text does not fit in
+// maxLines, the final line is middle-truncated: for a path or command the head
+// and tail carry the meaning, so that beats dropping the tail outright.
+func WrapDisplay(s string, width, maxLines int) []string {
+	if width <= 0 || maxLines <= 0 {
+		return nil
+	}
+	normalized := strings.Join(strings.Fields(s), " ")
+	if normalized == "" {
+		return nil
+	}
+	runes := []rune(normalized)
+	var lines []string
+	for len(runes) > 0 {
+		if len(lines) == maxLines-1 {
+			return append(lines, TruncateMiddle(string(runes), width))
+		}
+		taken, used := 0, 0
+		for taken < len(runes) {
+			w := runewidth.RuneWidth(runes[taken])
+			if used+w > width {
+				break
+			}
+			used += w
+			taken++
+		}
+		if taken == len(runes) {
+			return append(lines, string(runes))
+		}
+		if taken == 0 {
+			// A single rune wider than the whole line: emit the marker rather
+			// than loop forever.
+			return append(lines, "…")
+		}
+		breakAt := taken
+		for i := taken; i > taken/2; i-- {
+			if runes[i-1] == ' ' {
+				breakAt = i
+				break
+			}
+		}
+		lines = append(lines, strings.TrimRight(string(runes[:breakAt]), " "))
+		runes = []rune(strings.TrimLeft(string(runes[breakAt:]), " "))
+	}
+	return lines
 }
 
 // TruncateMiddle shortens a string to at most max display columns by removing

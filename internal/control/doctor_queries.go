@@ -83,7 +83,7 @@ func (s *Store) ListRecentRunsForPerson(ctx context.Context, tenantID, personID 
 // per-run event logs by hand.
 type ErrorEntry struct {
 	When    time.Time `json:"when"`
-	Kind    string    `json:"kind"`  // "run" | "tool"
+	Kind    string    `json:"kind"`   // "run" | "tool"
 	Source  string    `json:"source"` // run status, or the failing tool name
 	Message string    `json:"message"`
 	TaskID  string    `json:"task_id,omitempty"`

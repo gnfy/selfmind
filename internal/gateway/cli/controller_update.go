@@ -103,6 +103,9 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.onUserInput != nil {
 			m.onUserInput() // presence honesty: every keystroke counts as "the person is here" (input_activity.go)
 		}
+		// Same signal, different purpose: the approval panel must not arm while
+		// the person is mid-keystroke (approvalTypingIdleDelay).
+		m.noteInputActivity(time.Now())
 		if m.pager != nil {
 			closed, cmd := m.pager.Update(msg)
 			if closed {
@@ -323,8 +326,20 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.approvalQueue = append(m.approvalQueue, msg)
 			return m, nil
 		}
+		// Typing-idle guard: a panel that arms mid-keystroke can read the next
+		// letter as a decision. Hold it (FIFO with anything already held) until
+		// input settles; the daemon-side request is durable meanwhile.
+		if len(m.delayedApprovals) > 0 {
+			return m, m.holdApprovalRequest(msg, approvalTypingIdleDelay)
+		}
+		if wait := m.approvalDelayRemaining(time.Now()); wait > 0 {
+			return m, m.holdApprovalRequest(msg, wait)
+		}
 		m.armApprovalPrompt(msg)
 		return m, nil
+
+	case MsgApprovalDelayElapsed:
+		return m, m.releaseDelayedApprovals(time.Now())
 
 	case MsgClarifyRequest:
 		m.armClarifyPrompt(tools.ClarifyRequest{Question: msg.Question, Choices: msg.Choices}, true)

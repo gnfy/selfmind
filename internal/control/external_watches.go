@@ -17,7 +17,19 @@ const (
 	ExternalWatchFailed    = "failed"
 	ExternalWatchTimedOut  = "timed_out"
 	ExternalWatchCancelled = "cancelled"
+	// ExternalWatchBlocked means the CHECK could not observe the external state
+	// (its environment or its own definition failed). It is terminal and
+	// deliberately distinct from failed: "we could not look" and "the operation
+	// failed" have different remedies, and collapsing them is what let a
+	// blocked check be reported as a failed deployment.
+	ExternalWatchBlocked = "blocked_environment"
 )
+
+// externalWatchTerminalStatuses are the statuses that own completion side
+// effects. Cancelled is excluded: it is born finalized and notified.
+var externalWatchTerminalStatuses = []any{
+	ExternalWatchSucceeded, ExternalWatchFailed, ExternalWatchTimedOut, ExternalWatchBlocked,
+}
 
 // ExternalWatch is a durable, deterministic check owned by the daemon. It is
 // intentionally separate from an agent run: waiting for CI/CD must not keep a
@@ -66,10 +78,34 @@ type ExternalWatch struct {
 	Notified   bool
 	LastOutput string
 	LastError  string
-	CreatedAt  time.Time
-	UpdatedAt  time.Time
-	FinishedAt *time.Time
+	// FailureClass is the typed diagnosis of the last failed check, from the
+	// same classifier the foreground tool path uses. CheckSignature identifies
+	// "the same failure again" (class + output hash) and ConsecutiveFailures
+	// counts the streak, so a watch that cannot succeed stops after a few
+	// attempts instead of retrying until its deadline.
+	FailureClass        string
+	CheckSignature      string
+	ConsecutiveFailures int
+	CreatedAt           time.Time
+	UpdatedAt           time.Time
+	FinishedAt          *time.Time
 }
+
+// externalWatchColumns is the single SELECT list for a full watch row.
+//
+// It exists because the same column list was repeated in four queries against
+// one positional scanner: adding a column meant editing five places, and
+// missing one produces a scan/column mismatch at runtime rather than at build
+// time. Every reader now shares this list and scanExternalWatch.
+const externalWatchColumns = `id, tenant_id, person_id,
+	COALESCE(workspace_id, ''), task_id, COALESCE(run_id, ''), COALESCE(channel, ''),
+	description, cwd, command, success_pattern, failure_pattern, status,
+	interval_seconds, command_timeout_seconds, timeout_at, next_check_at, attempts,
+	COALESCE(extensions, 0), COALESCE(verdict_revision, 1), COALESCE(notified, 0), last_output, last_error,
+	COALESCE(failure_class, ''), COALESCE(check_signature, ''), COALESCE(consecutive_failures, 0),
+	COALESCE(environment_snapshot_id, ''), COALESCE(environment_generation, 0),
+	COALESCE(principal_fingerprint, ''), COALESCE(environment_fingerprint, ''),
+	COALESCE(credential_source_hash, ''), created_at, updated_at, finished_at`
 
 func (s *Store) CreateExternalWatch(ctx context.Context, watch ExternalWatch) (*ExternalWatch, error) {
 	if s == nil || s.db == nil {
@@ -123,20 +159,33 @@ func (s *Store) CreateExternalWatch(ctx context.Context, watch ExternalWatch) (*
 	return &watch, nil
 }
 
+// GetExternalWatch reads one watch by id. Callers that need the current row
+// (diagnostics, a parked-watch reason, a streak check) must not have to scan a
+// due-list, which by design excludes a watch that was just claimed.
+func (s *Store) GetExternalWatch(ctx context.Context, tenantID, id string) (*ExternalWatch, error) {
+	if s == nil || s.db == nil {
+		return nil, fmt.Errorf("control store is unavailable")
+	}
+	row := s.db.QueryRowContext(ctx, `SELECT `+externalWatchColumns+`
+		FROM external_watches WHERE tenant_id = ? AND id = ?`,
+		normalizeTenant(tenantID), strings.TrimSpace(id))
+	watch, err := scanExternalWatch(row)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &watch, nil
+}
+
 // ListDueExternalWatches returns a bounded due snapshot. ClaimExternalWatch is
 // the ownership CAS, so concurrent ticks cannot execute the same check twice.
 func (s *Store) ListDueExternalWatches(ctx context.Context, limit int) ([]ExternalWatch, error) {
 	if limit <= 0 || limit > 100 {
 		limit = 20
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT id, tenant_id, person_id,
-		COALESCE(workspace_id, ''), task_id, COALESCE(run_id, ''), COALESCE(channel, ''),
-		description, cwd, command, success_pattern, failure_pattern, status,
-		interval_seconds, command_timeout_seconds, timeout_at, next_check_at, attempts,
-		COALESCE(extensions, 0), COALESCE(verdict_revision, 1), COALESCE(notified, 0), last_output, last_error,
-		COALESCE(environment_snapshot_id, ''), COALESCE(environment_generation, 0),
-		COALESCE(principal_fingerprint, ''), COALESCE(environment_fingerprint, ''),
-		COALESCE(credential_source_hash, ''), created_at, updated_at, finished_at
+	rows, err := s.db.QueryContext(ctx, `SELECT `+externalWatchColumns+`
 		FROM external_watches
 		WHERE status IN (?, ?) AND next_check_at <= ?
 		ORDER BY next_check_at ASC LIMIT ?`,
@@ -171,17 +220,52 @@ func (s *Store) ClaimExternalWatch(ctx context.Context, watch ExternalWatch) (bo
 	return n == 1, nil
 }
 
+// RecordExternalWatchCheck records a checkpoint for a check that produced usable
+// observation output. It clears the failure streak: a check that works again is
+// new evidence, and leaving a stale streak behind would park a healthy watch.
 func (s *Store) RecordExternalWatchCheck(ctx context.Context, tenantID, id, output, lastError string) error {
 	_, err := s.db.ExecContext(ctx, `UPDATE external_watches
-		SET last_output = ?, last_error = ?, updated_at = ?
+		SET last_output = ?, last_error = ?, failure_class = '', check_signature = '',
+			consecutive_failures = 0, updated_at = ?
 		WHERE tenant_id = ? AND id = ? AND status = ?`,
 		output, lastError, time.Now().Unix(), normalizeTenant(tenantID), id, ExternalWatchRunning)
 	return err
 }
 
+// RecordExternalWatchFailure records a failed check and returns the length of
+// the identical-failure streak, so the caller can stop a watch that is repeating
+// one diagnosis instead of observing anything.
+//
+// The streak is computed in the UPDATE itself: reading, comparing, and writing
+// from the worker would race the boot compensation pass over the same row.
+func (s *Store) RecordExternalWatchFailure(ctx context.Context, tenantID, id, output, lastError, failureClass, signature string) (int, error) {
+	if s == nil || s.db == nil {
+		return 0, fmt.Errorf("control store is unavailable")
+	}
+	tenant := normalizeTenant(tenantID)
+	if _, err := s.db.ExecContext(ctx, `UPDATE external_watches
+		SET last_output = ?, last_error = ?, failure_class = ?, check_signature = ?,
+			consecutive_failures = CASE
+				WHEN COALESCE(check_signature, '') = ? THEN COALESCE(consecutive_failures, 0) + 1
+				ELSE 1 END,
+			updated_at = ?
+		WHERE tenant_id = ? AND id = ? AND status = ?`,
+		output, lastError, failureClass, signature, signature, time.Now().Unix(),
+		tenant, id, ExternalWatchRunning); err != nil {
+		return 0, err
+	}
+	var streak int
+	if err := s.db.QueryRowContext(ctx, `SELECT COALESCE(consecutive_failures, 0)
+		FROM external_watches WHERE tenant_id = ? AND id = ?`, tenant, id).Scan(&streak); err != nil {
+		return 0, err
+	}
+	return streak, nil
+}
+
 func (s *Store) FinishExternalWatch(ctx context.Context, tenantID, id, status, output, lastError string) (bool, error) {
 	switch status {
-	case ExternalWatchSucceeded, ExternalWatchFailed, ExternalWatchTimedOut, ExternalWatchCancelled:
+	case ExternalWatchSucceeded, ExternalWatchFailed, ExternalWatchTimedOut,
+		ExternalWatchCancelled, ExternalWatchBlocked:
 	default:
 		return false, fmt.Errorf("invalid external watch terminal status %q", status)
 	}
@@ -214,14 +298,7 @@ func (s *Store) ListExternalWatchesFinishedSince(ctx context.Context, status str
 	if limit <= 0 || limit > 200 {
 		limit = 50
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT id, tenant_id, person_id,
-		COALESCE(workspace_id, ''), task_id, COALESCE(run_id, ''), COALESCE(channel, ''),
-		description, cwd, command, success_pattern, failure_pattern, status,
-		interval_seconds, command_timeout_seconds, timeout_at, next_check_at, attempts,
-		COALESCE(extensions, 0), COALESCE(verdict_revision, 1), COALESCE(notified, 0), last_output, last_error,
-		COALESCE(environment_snapshot_id, ''), COALESCE(environment_generation, 0),
-		COALESCE(principal_fingerprint, ''), COALESCE(environment_fingerprint, ''),
-		COALESCE(credential_source_hash, ''), created_at, updated_at, finished_at
+	rows, err := s.db.QueryContext(ctx, `SELECT `+externalWatchColumns+`
 		FROM external_watches
 		WHERE status = ? AND finished_at IS NOT NULL AND finished_at >= ?
 		ORDER BY finished_at DESC LIMIT ?`,
@@ -295,19 +372,12 @@ func (s *Store) ListUnfinalizedExternalWatches(ctx context.Context, since time.T
 	if limit <= 0 || limit > 200 {
 		limit = 50
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT id, tenant_id, person_id,
-		COALESCE(workspace_id, ''), task_id, COALESCE(run_id, ''), COALESCE(channel, ''),
-		description, cwd, command, success_pattern, failure_pattern, status,
-		interval_seconds, command_timeout_seconds, timeout_at, next_check_at, attempts,
-		COALESCE(extensions, 0), COALESCE(verdict_revision, 1), COALESCE(notified, 0), last_output, last_error,
-		COALESCE(environment_snapshot_id, ''), COALESCE(environment_generation, 0),
-		COALESCE(principal_fingerprint, ''), COALESCE(environment_fingerprint, ''),
-		COALESCE(credential_source_hash, ''), created_at, updated_at, finished_at
+	rows, err := s.db.QueryContext(ctx, `SELECT `+externalWatchColumns+`
 		FROM external_watches
-		WHERE status IN (?, ?, ?) AND COALESCE(finalized, 0) = 0
+		WHERE status IN (?, ?, ?, ?) AND COALESCE(finalized, 0) = 0
 		AND finished_at IS NOT NULL AND finished_at >= ?
 		ORDER BY finished_at DESC LIMIT ?`,
-		ExternalWatchSucceeded, ExternalWatchFailed, ExternalWatchTimedOut, since.Unix(), limit)
+		append(append([]any{}, externalWatchTerminalStatuses...), since.Unix(), limit)...)
 	if err != nil {
 		return nil, err
 	}
@@ -330,19 +400,12 @@ func (s *Store) ListUnnotifiedExternalWatches(ctx context.Context, since time.Ti
 	if limit <= 0 || limit > 200 {
 		limit = 50
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT id, tenant_id, person_id,
-		COALESCE(workspace_id, ''), task_id, COALESCE(run_id, ''), COALESCE(channel, ''),
-		description, cwd, command, success_pattern, failure_pattern, status,
-		interval_seconds, command_timeout_seconds, timeout_at, next_check_at, attempts,
-		COALESCE(extensions, 0), COALESCE(verdict_revision, 1), COALESCE(notified, 0), last_output, last_error,
-		COALESCE(environment_snapshot_id, ''), COALESCE(environment_generation, 0),
-		COALESCE(principal_fingerprint, ''), COALESCE(environment_fingerprint, ''),
-		COALESCE(credential_source_hash, ''), created_at, updated_at, finished_at
+	rows, err := s.db.QueryContext(ctx, `SELECT `+externalWatchColumns+`
 		FROM external_watches
-		WHERE status IN (?, ?, ?) AND COALESCE(finalized, 0) = 1 AND COALESCE(notified, 0) = 0
+		WHERE status IN (?, ?, ?, ?) AND COALESCE(finalized, 0) = 1 AND COALESCE(notified, 0) = 0
 		AND finished_at IS NOT NULL AND finished_at >= ?
 		ORDER BY finished_at ASC LIMIT ?`,
-		ExternalWatchSucceeded, ExternalWatchFailed, ExternalWatchTimedOut, since.Unix(), limit)
+		append(append([]any{}, externalWatchTerminalStatuses...), since.Unix(), limit)...)
 	if err != nil {
 		return nil, err
 	}
@@ -416,6 +479,7 @@ func scanExternalWatch(scanner externalWatchScanner) (ExternalWatch, error) {
 		&watch.Command, &watch.SuccessPattern, &watch.FailurePattern, &watch.Status,
 		&watch.IntervalSeconds, &watch.CommandTimeoutSeconds, &timeoutAt, &nextCheckAt,
 		&watch.Attempts, &watch.Extensions, &watch.VerdictRevision, &notified, &watch.LastOutput, &watch.LastError,
+		&watch.FailureClass, &watch.CheckSignature, &watch.ConsecutiveFailures,
 		&watch.EnvironmentSnapshotID, &watch.EnvironmentGeneration, &watch.PrincipalFingerprint,
 		&watch.EnvironmentFingerprint, &watch.CredentialSourceHash,
 		&createdAt, &updatedAt, &finishedAt)

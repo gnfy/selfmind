@@ -121,6 +121,29 @@ type MapRWAt struct {
 	Seed *CopyIn
 }
 
+// SynthesizeDir replaces a tool's state ROOT with a writable directory shell
+// that keeps only the declared children readable.
+//
+// MapRWAt alone was not enough, and the gap was structural rather than
+// tool-specific: a bind mount needs a mount point, and under a read-only host
+// root bwrap cannot create one. `~/.aws/sso/cache` does not exist on a host
+// that has never used SSO, so the overlay could not be mounted and the sandbox
+// aborted before the command ran — turning a missing cache directory into
+// "every command that touches this profile fails". Declaring the state root
+// makes the nested writable paths mountable, because a tmpfs parent is writable.
+//
+// It is fail-closed: children that are not declared are hidden by the mount.
+type SynthesizeDir struct {
+	// At is the state root to synthesize (e.g. `~/.aws`). When the host has no
+	// such directory the engine skips it: there is no state to shell in, and
+	// mounting over a path the host lacks has the same mount-point problem.
+	At StateSource
+	// KeepReadOnly are the state files/directories that must remain readable
+	// inside the shell. They are declared as sources, not literal paths, so a
+	// tool honouring its own configuration variable still resolves correctly.
+	KeepReadOnly []StateSource
+}
+
 // EnvRedirect points a tool's own configuration variable at the mapped location.
 // Only generic, tool-declared variable names appear here; the engine has no
 // knowledge of what any of them mean.
@@ -183,8 +206,11 @@ type EnvProfile struct {
 	CopyIn              []CopyIn
 	MapRO               []MapRO
 	MapRW               []MapRW
-	MapRWAt             []MapRWAt
-	EnvRedirect         []EnvRedirect
+	// SynthesizeDir must precede MapRWAt entries that land inside it; Apply
+	// emits them in that order for exactly that reason.
+	SynthesizeDir []SynthesizeDir
+	MapRWAt       []MapRWAt
+	EnvRedirect   []EnvRedirect
 	// WriteBack stays nil in P0; the field exists so the protocol slot is
 	// reserved rather than retrofitted later.
 	WriteBack *WriteBackSpec

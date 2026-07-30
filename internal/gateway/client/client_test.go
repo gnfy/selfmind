@@ -456,14 +456,14 @@ func TestRespondApproval(t *testing.T) {
 	defer srv.Close()
 
 	c := New(srv.URL, "")
-	if err := c.RespondApproval("appr-123", "approved", ""); err != nil {
+	if err := c.RespondApproval("appr-123", "approved", "", ""); err != nil {
 		t.Fatalf("RespondApproval: %v", err)
 	}
 	if gotID != "appr-123" || gotDecision != "approved" || gotScope != "" {
 		t.Fatalf("server saw id=%q decision=%q scope=%q", gotID, gotDecision, gotScope)
 	}
 	// The TUI panel's grant scope rides the same request.
-	if err := c.RespondApproval("appr-123", "approved", "task"); err != nil {
+	if err := c.RespondApproval("appr-123", "approved", "task", ""); err != nil {
 		t.Fatalf("RespondApproval with scope: %v", err)
 	}
 	if gotScope != "task" {

@@ -143,9 +143,25 @@ func (d *Server) diagReply(ctx context.Context, identity *control.IdentityContex
 	}
 	if watches, err := d.Control.CountExternalWatchesByStatus(ctx, identity.TenantID, identity.PersonID); err == nil {
 		activeWatches := watches[control.ExternalWatchPending] + watches[control.ExternalWatchRunning]
-		if activeWatches+watches[control.ExternalWatchFailed]+watches[control.ExternalWatchTimedOut] > 0 {
-			fmt.Fprintf(&sb, "External watches: active %d, failed %d, timed out %d\n",
-				activeWatches, watches[control.ExternalWatchFailed], watches[control.ExternalWatchTimedOut])
+		if activeWatches+watches[control.ExternalWatchFailed]+watches[control.ExternalWatchTimedOut]+watches[control.ExternalWatchBlocked] > 0 {
+			fmt.Fprintf(&sb, "External watches: active %d, failed %d, timed out %d, blocked %d\n",
+				activeWatches, watches[control.ExternalWatchFailed], watches[control.ExternalWatchTimedOut],
+				watches[control.ExternalWatchBlocked])
+		}
+		// A blocked watch is the actionable one: it stopped because its own check
+		// could not observe anything, so the operator needs the reason and the
+		// remedy here rather than in the run history.
+		if watches[control.ExternalWatchBlocked] > 0 {
+			if blocked, err := d.Control.ListExternalWatchesFinishedSince(ctx, control.ExternalWatchBlocked, time.Now().Add(-externalWatchRecoveryLookback), 10); err == nil {
+				for _, watch := range blocked {
+					reason, _ := watchCheckDefect(watch.LastError)
+					fmt.Fprintf(&sb, "- watch blocked: %s | %s | class %s | %s\n",
+						truncate(toOneLine(watch.Description), 48),
+						firstNonEmpty(reason, "check_failed"),
+						firstNonEmpty(strings.TrimSpace(watch.FailureClass), "unknown"),
+						truncate(toOneLine(strings.TrimSpace(watch.LastError)), 120))
+				}
+			}
 		}
 		// A timed_out watch whose recorded output already matches a declared
 		// terminal pattern is a misjudgment the startup recovery pass will
@@ -153,7 +169,7 @@ func (d *Server) diagReply(ctx context.Context, identity *control.IdentityContex
 		if watches[control.ExternalWatchTimedOut] > 0 {
 			if finished, err := d.Control.ListExternalWatchesFinishedSince(ctx, control.ExternalWatchTimedOut, time.Now().Add(-externalWatchRecoveryLookback), 10); err == nil {
 				for _, watch := range finished {
-					if status := classifyExternalWatchOutput(watch, watch.LastOutput); status != "" {
+					if status := classifyStoredExternalWatchOutput(watch); status != "" {
 						fmt.Fprintf(&sb, "- watch verdict suspect: %s timed out but last output matches %s (%s)\n",
 							truncate(toOneLine(watch.Description), 60), status,
 							truncate(toOneLine(strings.TrimSpace(watch.LastOutput)), 40))
@@ -223,6 +239,7 @@ func (d *Server) diagReply(ctx context.Context, identity *control.IdentityContex
 	for _, approval := range approvals {
 		fmt.Fprintf(&sb, "- %s (%s)\n", approvalSummaryLine(approval, titles[approval.TaskID]), approval.ID)
 	}
+	sb.WriteString(d.smartTriageDiagLines(ctx, identity))
 
 	// Pending questions: a run blocked on a clarify is just as "stuck" as one
 	// blocked on an approval, so it belongs in the same snapshot.

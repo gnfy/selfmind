@@ -432,14 +432,14 @@ func (d *Server) retroResolvePendingApprovals(ctx context.Context, identity *con
 		case tools.ModeApprove:
 			// Internal channel "mode-change", empty grant scope (a retro approval
 			// is a one-off, it records no class grant).
-			if _, err := d.Control.RespondApprovalRequest(ctx, identity.TenantID, identity.PersonID, ap.ID, "approved", "mode-change", ""); err == nil {
+			if _, err := d.Control.RespondApprovalRequest(ctx, identity.TenantID, identity.PersonID, ap.ID, "approved", "mode-change", control.ApprovalDecisionInput{}); err == nil {
 				approved++
 				d.appendApprovalModeEvent(ctx, ap, "approval.auto_approved", string(mode))
 			} else {
 				stillPending++
 			}
 		case tools.ModeDeny:
-			if _, err := d.Control.RespondApprovalRequest(ctx, identity.TenantID, identity.PersonID, ap.ID, "rejected", "mode-change", ""); err == nil {
+			if _, err := d.Control.RespondApprovalRequest(ctx, identity.TenantID, identity.PersonID, ap.ID, "rejected", "mode-change", control.ApprovalDecisionInput{}); err == nil {
 				denied++
 				d.appendApprovalModeEvent(ctx, ap, "approval.auto_rejected", string(mode))
 			} else {

@@ -205,7 +205,7 @@ func TestApproveEmptyTokenWithSinglePending(t *testing.T) {
 func TestApproveAlreadyDecidedReportsStatus(t *testing.T) {
 	daemon, store, identity, _, approval := newApprovalTestServer(t)
 	ctx := context.Background()
-	if _, err := store.RespondApprovalRequest(ctx, identity.TenantID, identity.PersonID, approval.ID, "approved", "cli", ""); err != nil {
+	if _, err := store.RespondApprovalRequest(ctx, identity.TenantID, identity.PersonID, approval.ID, "approved", "cli", control.ApprovalDecisionInput{}); err != nil {
 		t.Fatal(err)
 	}
 	resp, status := daemon.ProcessMessage(ctx, api.MessageRequest{Content: "/approve " + approval.ID})
@@ -446,7 +446,7 @@ func TestBareYesResolvesLonePendingApproval(t *testing.T) {
 func TestBareReplyIgnoredWithNoPending(t *testing.T) {
 	daemon, store, identity, _, approval := newApprovalTestServer(t)
 	ctx := context.Background()
-	if _, err := store.RespondApprovalRequest(ctx, identity.TenantID, identity.PersonID, approval.ID, "approved", "cli", ""); err != nil {
+	if _, err := store.RespondApprovalRequest(ctx, identity.TenantID, identity.PersonID, approval.ID, "approved", "cli", control.ApprovalDecisionInput{}); err != nil {
 		t.Fatal(err)
 	}
 	handled, _, _ := daemon.tryHandleBareApprovalReply(ctx, identity, "y", "weixin")
@@ -486,7 +486,7 @@ func TestOrphanedApprovalsExpireAndStopPoisoningTheList(t *testing.T) {
 
 	// The fixture's approval has no run id (left alone by the sweep); make the
 	// stale one explicitly: an approval bound to a dead (non-running) run.
-	if _, err := store.RespondApprovalRequest(ctx, identity.TenantID, identity.PersonID, stale.ID, "rejected", "cli", ""); err != nil {
+	if _, err := store.RespondApprovalRequest(ctx, identity.TenantID, identity.PersonID, stale.ID, "rejected", "cli", control.ApprovalDecisionInput{}); err != nil {
 		t.Fatal(err)
 	}
 	deadRun, err := store.StartRun(ctx, task, "cli", "old attempt")

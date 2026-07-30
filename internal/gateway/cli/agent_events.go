@@ -264,17 +264,33 @@ func (m *uiModel) forwardGatewayEventFrom(event llm.StreamEvent, source eventSou
 			m.program.Send(MsgTokens{Run: run, Event: ref})
 		}
 	case "approval.requested":
-		id, target := "", ""
-		if event.Payload != nil {
-			if v, ok := event.Payload["approval_id"].(string); ok {
-				id = v
+		payloadString := func(key string) string {
+			if event.Payload == nil {
+				return ""
 			}
-			if v, ok := event.Payload["target"].(string); ok {
-				target = v
-			}
+			v, _ := event.Payload[key].(string)
+			return v
 		}
+		id := payloadString("approval_id")
 		if id != "" {
-			m.program.Send(MsgApprovalRequest{ID: id, Tool: event.ToolName, Target: target, Reason: event.Content})
+			m.program.Send(MsgApprovalRequest{
+				ID:     id,
+				Tool:   event.ToolName,
+				Target: payloadString("target"),
+				Reason: event.Content,
+				// Decision context; absent from an older daemon's event, in which
+				// case the panel renders exactly what it did before.
+				Environment:   payloadString("environment"),
+				Cwd:           payloadString("cwd"),
+				ChangeSummary: payloadString("change_summary"),
+				GrantClass:    payloadString("grant_class"),
+				TriageState:   payloadString("triage_state"),
+				Rationale:     payloadString("triage_rationale"),
+				Risk:          payloadString("triage_risk"),
+				// The daemon's own answer set for this ask. Absent (older daemon)
+				// leaves it nil and the panel falls back to its built-in options.
+				Options: approvalOptionsFromPayload(event.Payload),
+			})
 		}
 	case "clarify.requested":
 		if strings.TrimSpace(event.Content) == "" {

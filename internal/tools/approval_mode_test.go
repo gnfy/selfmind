@@ -38,39 +38,48 @@ func TestApprovalNeeded(t *testing.T) {
 		mode      ApprovalMode
 		tool      string
 		dangerous bool
+		contained bool
 		want      bool
 	}
 	rows := []row{
 		// full-auto never asks, even on dangerous.
-		{ApprovalFullAuto, "terminal", true, false},
-		{ApprovalFullAuto, "write_file", false, false},
-		// read-only asks for any write or exec, plus dangerous reads.
-		{ApprovalReadOnly, "write_file", false, true},
-		{ApprovalReadOnly, "terminal", false, true},
-		{ApprovalReadOnly, "read_file", false, false},
-		{ApprovalReadOnly, "read_file", true, true},
+		{ApprovalFullAuto, "terminal", true, false, false},
+		{ApprovalFullAuto, "write_file", false, false, false},
+		// read-only asks for any write or exec, plus dangerous reads. Containment
+		// does NOT relax it: read-only is a literal contract.
+		{ApprovalReadOnly, "write_file", false, false, true},
+		{ApprovalReadOnly, "terminal", false, false, true},
+		{ApprovalReadOnly, "terminal", false, true, true},
+		{ApprovalReadOnly, "read_file", false, false, false},
+		{ApprovalReadOnly, "read_file", true, false, true},
 		// auto-edit lets in-workspace edits through, asks for commands.
-		{ApprovalAutoEdit, "write_file", false, false},
-		{ApprovalAutoEdit, "patch", false, false},
-		{ApprovalAutoEdit, "write_file", true, true}, // flagged edit (e.g. out of workspace)
-		{ApprovalAutoEdit, "terminal", false, true},
+		{ApprovalAutoEdit, "write_file", false, false, false},
+		{ApprovalAutoEdit, "patch", false, false, false},
+		{ApprovalAutoEdit, "write_file", true, false, true}, // flagged edit (e.g. out of workspace)
+		{ApprovalAutoEdit, "terminal", false, false, true},
+		{ApprovalAutoEdit, "terminal", false, true, true}, // containment is smart-only
 		// on-request asks on dangerous OR any arbitrary-code exec tool (running
 		// commands/code is inherently approval-worthy, not gated on the heuristic).
-		{ApprovalOnRequest, "write_file", false, false},
-		{ApprovalOnRequest, "terminal", false, true},
-		{ApprovalOnRequest, "terminal", true, true},
-		{ApprovalOnRequest, "execute_code", false, true},
-		{ApprovalOnRequest, "shell", false, true},
-		{ApprovalOnRequest, "read_file", false, false},
-		// smart gates on exec tools too (then the LLM judge triages the ask).
-		{ApprovalSmart, "terminal", false, true},
-		{ApprovalSmart, "execute_code", false, true},
-		{ApprovalSmart, "read_file", false, false},
-		{ApprovalSmart, "write_file", true, true},
+		{ApprovalOnRequest, "write_file", false, false, false},
+		{ApprovalOnRequest, "terminal", false, false, true},
+		{ApprovalOnRequest, "terminal", true, false, true},
+		{ApprovalOnRequest, "terminal", false, true, true}, // containment is smart-only
+		{ApprovalOnRequest, "execute_code", false, false, true},
+		{ApprovalOnRequest, "shell", false, false, true},
+		{ApprovalOnRequest, "read_file", false, false, false},
+		// smart gates exec tools UNLESS the sandbox contains them (batch C1); a
+		// dangerous op asks regardless of containment.
+		{ApprovalSmart, "terminal", false, false, true},
+		{ApprovalSmart, "terminal", false, true, false},
+		{ApprovalSmart, "execute_code", false, false, true},
+		{ApprovalSmart, "execute_code", false, true, false},
+		{ApprovalSmart, "terminal", true, true, true},
+		{ApprovalSmart, "read_file", false, false, false},
+		{ApprovalSmart, "write_file", true, false, true},
 	}
 	for _, r := range rows {
-		if got := approvalNeeded(r.mode, r.tool, r.dangerous); got != r.want {
-			t.Errorf("approvalNeeded(%s,%s,dangerous=%v)=%v want %v", r.mode, r.tool, r.dangerous, got, r.want)
+		if got := approvalNeeded(r.mode, r.tool, r.dangerous, r.contained); got != r.want {
+			t.Errorf("approvalNeeded(%s,%s,dangerous=%v,contained=%v)=%v want %v", r.mode, r.tool, r.dangerous, r.contained, got, r.want)
 		}
 	}
 }

@@ -28,6 +28,11 @@ type Policy struct {
 	// isolated execution. It must not live under /tmp: the /tmp bind shadows
 	// every real path beneath it.
 	ScratchTmp string
+	// SynthesizedDirs replace a host directory with a writable shell, keeping
+	// only the named children readable. They are mounted BEFORE writable roots
+	// and overlays, because an overlay target inside one of them only becomes
+	// mountable once its writable parent exists.
+	SynthesizedDirs []SynthesizedDir
 	// OverlayMounts bind a writable directory over another path. They exist for
 	// tool state whose location is not configurable, so no environment redirect
 	// can move it; the host is untouched because the bind is visible only inside
@@ -43,6 +48,27 @@ type Policy struct {
 type OverlayMount struct {
 	Source string
 	Target string
+}
+
+// SynthesizedDir is a tmpfs mounted at Target with ReadOnlyChildren bound back
+// in read-only.
+//
+// It exists because a bind mount needs a mount POINT: bwrap must create the
+// target path, and under a read-only host root it cannot. A tool whose state
+// directory is only partially present on the host — `~/.aws` holding `config`
+// but no `sso/` — therefore could not receive a writable `~/.aws/sso/cache`
+// overlay at all, and the whole sandbox aborted before the command started
+// ("Can't mkdir parents for /home/<user>/.aws/sso/cache: Read-only file
+// system"), which made every command matching that profile fail rather than
+// degrade. A tmpfs at the state root is writable, so bwrap can create any
+// nested mount point inside it, and the named children stay readable.
+//
+// The host directory is never modified; the tmpfs is visible only inside this
+// sandbox. Children that are NOT named become invisible — the mount hides the
+// host directory — so the declaration is fail-closed by construction.
+type SynthesizedDir struct {
+	Target           string
+	ReadOnlyChildren []string
 }
 
 // detector abstracts capability probing for tests.
@@ -133,6 +159,23 @@ func WrapArgv(bwrap string, policy Policy, innerArgv []string) []string {
 	} else {
 		argv = append(argv, "--unshare-net")
 	}
+	// Synthesized directories come FIRST: a later bind whose target lives inside
+	// one of them needs its writable parent to already exist. Their read-only
+	// children are re-bound immediately after the tmpfs that hides them.
+	for _, dir := range policy.SynthesizedDirs {
+		target := strings.TrimSpace(dir.Target)
+		if target == "" {
+			continue
+		}
+		argv = append(argv, "--tmpfs", target)
+		for _, child := range dir.ReadOnlyChildren {
+			child = strings.TrimSpace(child)
+			if child == "" {
+				continue
+			}
+			argv = append(argv, "--ro-bind-try", child, child)
+		}
+	}
 	for _, root := range policy.WritableRoots {
 		root = strings.TrimSpace(root)
 		if root == "" {
@@ -140,9 +183,10 @@ func WrapArgv(bwrap string, policy Policy, innerArgv []string) []string {
 		}
 		argv = append(argv, "--bind-try", root, root) // rw bind overrides the ro-bind
 	}
-	// Overlay binds come after the writable roots so they win over them, and
-	// use --bind-try so a target that does not exist on this host is skipped
-	// rather than aborting the whole sandbox.
+	// Overlay binds come after the writable roots so they win over them. The
+	// -try suffix only tolerates a missing SOURCE: the TARGET must still be a
+	// creatable mount point, which is why an overlay into a path the host does
+	// not have needs a SynthesizedDir above it.
 	for _, overlay := range policy.OverlayMounts {
 		source := strings.TrimSpace(overlay.Source)
 		target := strings.TrimSpace(overlay.Target)

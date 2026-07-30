@@ -163,6 +163,14 @@ type ApprovalRespondRequest struct {
 	// Scope records class-level approval memory on an approve: "" (once),
 	// "task" (remember for this task), or "person" (remember across tasks).
 	Scope string `json:"scope,omitempty"`
+	// GrantKey names a narrow RULE the person picked from the ask's own
+	// server-issued option list ("commands that start with `git status`"). The
+	// daemon honors it only if that ask offered it, so a client cannot invent an
+	// authorization.
+	GrantKey string `json:"grant_key,omitempty"`
+	// Note is the person's guidance when refusing, stored with the decision so
+	// the reason survives on any endpoint that reads the row later.
+	Note string `json:"note,omitempty"`
 }
 
 type ApprovalRespondResponse struct {

@@ -51,6 +51,9 @@ type Result struct {
 	// OverlayMounts bind a writable state directory over a host path whose
 	// location the tool does not let us change.
 	OverlayMounts []OverlayMount
+	// SynthesizedDirs replace a tool's state root with a writable shell so
+	// nested overlay targets the host does not have become mountable.
+	SynthesizedDirs []SynthesizedDir
 	// Notes are non-secret, user-visible explanations — most importantly when
 	// operator credentials were withheld, so a resulting "not logged in" is
 	// diagnosable instead of mysterious.
@@ -64,6 +67,13 @@ type Result struct {
 type OverlayMount struct {
 	Source string
 	Target string
+}
+
+// SynthesizedDir is a writable replacement for a tool's state root, keeping
+// only the named children readable.
+type SynthesizedDir struct {
+	Target           string
+	ReadOnlyChildren []string
 }
 
 // Apply materializes the profiles' state and returns the resulting material.
@@ -142,9 +152,47 @@ func Apply(profiles []*EnvProfile, ctx ApplyContext) (Result, error) {
 			}
 		}
 
+		// Synthesized roots are emitted before this profile's overlays: an
+		// overlay target inside one of them is only mountable once its writable
+		// parent exists.
+		for _, spec := range profile.SynthesizeDir {
+			target := ctx.resolveSource(spec.At)
+			if target == "" {
+				continue
+			}
+			if info, err := os.Stat(target); err != nil || !info.IsDir() {
+				// No state root on this host: nothing to shell in, and the mount
+				// would hit the same missing-mount-point problem it exists to fix.
+				continue
+			}
+			children := make([]string, 0, len(spec.KeepReadOnly))
+			for _, source := range spec.KeepReadOnly {
+				for _, path := range ctx.resolveSources(source) {
+					if path == "" || !withinDir(target, path) {
+						continue
+					}
+					if _, err := os.Stat(path); err != nil {
+						continue
+					}
+					children = append(children, path)
+				}
+			}
+			result.SynthesizedDirs = append(result.SynthesizedDirs,
+				SynthesizedDir{Target: target, ReadOnlyChildren: children})
+		}
+
 		for _, mapping := range profile.MapRWAt {
 			target := ctx.resolveSource(mapping.At)
 			if target == "" {
+				continue
+			}
+			if !mountable(target, result.SynthesizedDirs) {
+				// Emitting this overlay would abort the whole sandbox, so the
+				// command would not run at all. Skipping it leaves the tool to
+				// report its own missing state, which is diagnosable.
+				result.Notes = append(result.Notes, fmt.Sprintf(
+					"%s: %s is not a mountable path on this host, so its writable state was not prepared; the tool may report missing or unwritable state",
+					profile.ID, target))
 				continue
 			}
 			source, err := ctx.leaseStatePath(mapping.Key)
@@ -217,6 +265,59 @@ func Apply(profiles []*EnvProfile, ctx ApplyContext) (Result, error) {
 		result.WritableRoots = append(result.WritableRoots, ctx.StateRoot)
 	}
 	return result, nil
+}
+
+// mountable reports whether a bind target can be created inside the sandbox: it
+// either already exists on the read-only host root, or it lives under a
+// synthesized (writable) root where bwrap can create the mount point.
+func mountable(target string, synthesized []SynthesizedDir) bool {
+	if strings.TrimSpace(target) == "" {
+		return false
+	}
+	if _, err := os.Stat(target); err == nil {
+		return true
+	}
+	for _, dir := range synthesized {
+		if withinDir(dir.Target, target) {
+			return true
+		}
+	}
+	// A path whose nearest existing ancestor is writable is also creatable, but
+	// the only writable roots at this point are SelfMind-owned, so treating an
+	// unknown target as unmountable is the fail-closed answer.
+	return false
+}
+
+// withinDir reports whether path is dir itself or below it.
+func withinDir(dir, path string) bool {
+	dir = filepath.Clean(strings.TrimSpace(dir))
+	path = filepath.Clean(strings.TrimSpace(path))
+	if dir == "" || path == "" || dir == "." || path == "." {
+		return false
+	}
+	if dir == path {
+		return true
+	}
+	rel, err := filepath.Rel(dir, path)
+	if err != nil {
+		return false
+	}
+	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+// Resolve returns the profile set Apply will actually use, including profiles
+// pulled in by a ConditionalRequire.
+//
+// It is exported so a caller that CACHES a preparation can key on the real set:
+// keying on the pre-expansion set would let a kubeconfig that changed from a
+// generic cluster to a GKE one reuse a preparation without gcloud, and the
+// resulting "not logged in" would be indistinguishable from a credential
+// problem. Resolution is bounded and idempotent, and Apply expands again anyway.
+func Resolve(profiles []*EnvProfile, ctx ApplyContext) []*EnvProfile {
+	if ctx.Lookup == nil {
+		ctx.Lookup = func(string) (string, bool) { return "", false }
+	}
+	return ctx.expandConditionalRequires(profiles)
 }
 
 // credentialAccessAllowed is the trust decision. A trusted workspace may use the

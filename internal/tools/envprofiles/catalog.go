@@ -151,6 +151,18 @@ var Catalog = []EnvProfile{
 			{From: StateSource{EnvVar: "AWS_CONFIG_FILE", HomeRelPath: ".aws/config"}},
 			{From: StateSource{EnvVar: "AWS_SHARED_CREDENTIALS_FILE", HomeRelPath: ".aws/credentials"}},
 		},
+		// The writable paths below live under `~/.aws`, and a host that has never
+		// used SSO has no `sso/` directory at all — so there was no mount point
+		// for them and the sandbox aborted before running anything. Declaring the
+		// state root replaces it with a writable shell that keeps config and
+		// credentials readable, which is what makes the nested caches mountable.
+		SynthesizeDir: []SynthesizeDir{{
+			At: StateSource{HomeRelPath: ".aws"},
+			KeepReadOnly: []StateSource{
+				{EnvVar: "AWS_CONFIG_FILE", HomeRelPath: ".aws/config"},
+				{EnvVar: "AWS_SHARED_CREDENTIALS_FILE", HomeRelPath: ".aws/credentials"},
+			},
+		}},
 		// SSO is the exception, and it is the same failure shape as gcloud: the
 		// CLI WRITES its SSO token cache on every refresh, and the location is
 		// derived from HOME (`~/.aws/sso/cache`) rather than from

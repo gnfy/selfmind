@@ -373,6 +373,29 @@ ID 且无环；`CopyIn.Include` 非空且三个上限均 > 0；所有相对路�
 
 ### 8.4 匹配规则
 
+> **2026-07-30 更正（批次 2 已实现）：匹配规则按"可判定性"分岔。**
+> 任何能执行代码的载荷都能把真实程序藏起来：`python3 - <<'PY' …
+> subprocess.run(['gcloud',…])` 的程序集只有 `python3`，于是 gcloud 拿不到
+> 凭据状态（当日 GCP watcher 失败链的第一因）。同类还有脚本文件、`make`、
+> `npm run`、`find -exec`、`execute_code`。
+>
+> 现行规则：
+>
+> - **可判定载荷** → 只准备它点名的 profile。非 GKE 的 kubectl 依然拿不到
+>   Google 凭据（round 2(e) 的最小权限结论不被推翻，有测试钉住）。
+> - **不可判定载荷** → 并上 `AvailableOnHost`（宿主上确实存在状态的
+>   operator profile）。理由是此时"它会跑什么"不可知，能依据的只有宿主事实。
+> - 准备结果按 lease 记忆（`exec_prepared.go`），键包含 state 目录、**解析后**
+>   的 profile 集合（`envprofiles.Resolve`，否则 kubeconfig 中途变成 GKE 会复用
+>   缺 gcloud 的准备）、trust 与 credential 访问位。
+> - inventory 只收 `credential_access=operator` 且宿主有状态者；toolchain 缓存
+>   没有工具就没有意义，仍然只走匹配；缺 toolchain root 时不擅自引入需要它的
+>   profile（否则会让从未提到该工具的命令硬失败）。
+>
+> 副作用必须记录：整包应用 inventory 后，catalog 里两个 profile 重定向同一个
+> 环境变量将变成**所有命令**的硬失败，因此唯一性改为构建期断言
+> （`TestCatalogRedirectVariablesAreUnique`）。
+
 用 shell AST 提取命令**所有 segment 的真实程序集合**，跳过内建与控制结构
 （`set`/`for`/`if`/`while`/`cd`/`export`/`trap`/`echo`/`printf`），对集合逐个
 查 catalog，命中的 profile **叠加**：
@@ -381,17 +404,36 @@ ID 且无环；`CopyIn.Include` 非空且三个上限均 > 0；所有相对路�
 - `RequiresProfiles` 递归引入，已引入则跳过；
 - **同一环境变量被两个 profile 重定向到不同目标 → 硬失败并报错**，不静默取其一。
 
-## 9. 五原语
+## 9. 原语
 
 | 原语 | 语义 | P0 |
 |---|---|---|
 `copy_in` | 有界、选择性复制进 lease state | ✅ |
 `map_ro` | 将已批准的宿主路径只读映射 | ✅ |
 `map_rw` | 映射 lease state 或 person 缓存内的可写目录 | ✅ |
+`map_rw_at` | 把 lease state 的可写目录绑定到不可配置的宿主路径上 | ✅ |
+`synthesize_dir` | 在声明的 state root 上挂可写 tmpfs，仅保留声明的子项可读 | ✅ 2026-07-30 |
 `env_redirect` | 把工具环境变量指向 lease state / toolchain / scratch | ✅ |
 `write_back` | 把 state 变更写回宿主 | ❌ **仅占协议位** |
 
-引擎只理解这五个原语，不含任何 vendor 分支；具体规则全在 catalog。
+引擎只理解这些原语，不含任何 vendor 分支；具体规则全在 catalog。
+
+### 9.3 `synthesize_dir` 存在的理由（挂载点，不是权限）
+
+`map_rw_at` 单独不成立：bind mount 需要**挂载点**，而只读根下 bwrap 无法创建它。
+宿主从未用过 SSO 时 `~/.aws/sso/cache` 不存在，于是 overlay 挂不上，bwrap 在命令
+启动前整体失败（`Can't mkdir parents for …/.aws/sso/cache: Read-only file
+system`）——后果不是"SSO 刷新失败"而是**命中该 profile 的所有命令全部失败**，
+包括 `aws --version`；durable watcher 无 host 逃逸，只能重试到超时。
+
+tmpfs 是可写的，因此声明 state root 后其下任意嵌套挂载点都能创建。语义要点：
+
+- 未声明的子项被 mount 遮蔽 → **fail-closed**（`credentials_bak` 在沙箱内不可见）；
+- 宿主没有该 state root 时跳过（没有可壳化的状态，且同样缺挂载点）；
+- 挂载顺序固定为 `tmpfs → 只读子项 → 可写 overlay`，顺序错了等于没修；
+- plan 构造后自校验：目标既不存在、又不在任何 synthesized root 之下的 overlay
+  **不进 plan**，改为记录 note——宁可让工具自己报"状态缺失"，也不要交出一个
+  执行面无法兑付的 plan。这条校验就是 §12 接缝 10（节点可拒绝 plan）的本地版。
 
 ### 9.1 `copy_in` 实现硬约束
 
@@ -460,6 +502,46 @@ exit_code ∈ {2,126,127} → 不算沙箱拒绝
 必须修的现存 bug：`tool_errors.go:39` 的 `auth` 规则含裸 `credential` 子串且排
 在 `permission` 之前；`:223` 对 auth 追加的"host 不是修复手段"必须只在**真
 auth** 时出现。
+
+**单一分类路径（2026-07-30 收口）**：`ClassifyToolError` 是唯一分类器。watcher
+曾另有一张 marker 表（`classifyExternalWatchCommandDefect`），两张表恰好在关键
+用例上分歧——`read-only file system` 只在其中一张里——于是一个连沙箱都构造不出
+的 watch 被判为"仍在运行"，每 30 秒重试到两小时超时。该表已删除；durable 路径
+返回完整 `ExecutionResult`，`httpapi/external_watch_policy.go` 只做**策略**
+（park / retry / observe），不做分类。新增失败类只改分类器与策略表两处。
+
+### 11.1.1 Durable check 的四层与策略表
+
+| 层 | 判定来源 | 失败后的动作 |
+|---|---|---|
+L0 环境 | `credential_state_readonly` / `sandbox_fs_denied` / `permission` / `credential_missing` / `credential_expired` / `auth` / `environment` | **park**（`blocked_environment`），零重试 |
+L1 执行 | `syntax` / `not_found` | **park**（`invalid_check`） |
+L1 瞬时 | `timeout` / `network` | retry |
+L2 观察 | 其余（含 `unknown` + 非零退出） | observe：允许匹配 pattern |
+L3 业务 | success/failure pattern | 终态 |
+
+### 11.1.2 注册前预检（批次 2）
+
+durable check 是唯一没有 host 逃逸、也没有模型在环的执行路径，所以那里的环境或
+命令缺陷是终局的：daemon 只能重复它。因此 `watch_external` 注册时先用**本 run 的
+材料**跑一次，四种结果不对称：
+
+| 预检结果 | 动作 |
+|---|---|
+观察到成功 | 不注册，直接告诉 agent 已完成 |
+观察到**失败**（首次即命中 failure_pattern） | **返回错误**，不产生终态。首检失败正是歧义最大的情形（当日 GCP 检查打印自己的 `BUILD_FAILED`，而两个构建其实都成功），agent 还在回合内、有工具可以直接核实 |
+阻塞类失败（环境 / syntax / not_found） | 拒绝注册，带上 typed class |
+非终态 | 正常注册 |
+
+预检不新增审批面：`watch_external` 本身就是 exec tool，其 `command` 在注册时已过
+安全下限与审批；同一条命令原本几秒后就会被 daemon 无人值守地执行。
+
+硬约束：**L0/L1 失败永不进入 pattern 匹配**；`success_pattern` 额外要求
+`ExitCode==0`（失败的检查打印出的 "SUCCESS" 是自相矛盾的证据），`failure_pattern`
+不要求（状态类 CLI 会以非零退出报告真实失败）。同一 `failure_class + output_hash`
+连续 3 次即熔断 park，并落 `external_watch.blocked` 事件。park 的 `last_error`
+带结构化前缀，下游（finalization prompt、任务摘要、IM 通知）据此声明"外部状态
+未被观察"，绝不写入 succeeded/failed。
 
 ### 11.2 恢复许可（按引擎阶段判定，不猜命令语义）
 
@@ -533,6 +615,13 @@ var bannedGrantPrograms = map[string]struct{}{
 6 | 执行策略进 request/plan，不用进程级全局 | ❌ `exec_sandbox.go:46-61` 是 package 变量 | 降级为默认值来源 |
 7 | `executionScopes` 按 runID key | ❌ `workspace_scope.go:72` 按 tenantID | 迁移（约 10 处） |
 8 | `SandboxBackend` 平台无关接口 | ❌ 直接调 `sandbox.Wrap` | 抽接口（约 30 行） |
+9 | 环境需求是 job 信封里的**声明**，不是从命令文本推断 | ❌ §8.4 仍是推断 | 批次 2：lease 级 inventory；`SandboxPlan.Profiles` 由"结果记录"升级为"输入声明" |
+10 | 节点可**拒绝**自己无法兑付的 plan（能力协商，vision §3.9） | 🔶 已有本地版：不可挂载的 overlay 不进 plan（§9.3） | 远端化时把同一校验放到节点侧 |
+11 | typed 执行结果是唯一回执格式 | ✅ 2026-07-30：durable 路径返回 `ExecutionResult`，gateway 只做 reducer | 不要再增加"输出字符串 + 正则"的回执路径 |
+
+Runner 的第一个 workload 应当是 watcher：它已经是"控制面创建、执行面重复执行、
+无交互审批、结果结构化回执"的形状，`waiting_external` 与 `waiting_runner` 同构。
+前置条件是它先满足 `docs/STATUS.md` 里批次 1–3 的验收，否则只是把误判搬到远端。
 
 macOS：本轮统一 `SandboxPlan` 语义即可。Linux 由 bubblewrap 实现；macOS 第一
 阶段用审批控制的 host 执行，但**复用同一份环境快照、scratch 与 profile**；

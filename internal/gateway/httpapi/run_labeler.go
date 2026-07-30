@@ -358,11 +358,11 @@ func (d *Server) applyPostRunLabel(ctx context.Context, identity *control.Identi
 		}
 		if !postRunInboxEligible(outcome, workKey) {
 			d.appendLabelAssignedEvent(ctx, task.ID, run.ID, map[string]interface{}{
-				"decision":          "keep",
+				"decision":           "keep",
 				"requested_decision": "inbox",
-				"task_id":           task.ID,
-				"run_id":            run.ID,
-				"reason":            "durable run evidence is not eligible for Inbox",
+				"task_id":            task.ID,
+				"run_id":             run.ID,
+				"reason":             "durable run evidence is not eligible for Inbox",
 			})
 			return
 		}

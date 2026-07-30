@@ -118,3 +118,47 @@ func TestWrapArgvKeepsPrivateTmpfsWithoutScratch(t *testing.T) {
 		t.Fatalf("expected a private tmpfs fallback: %v", argv)
 	}
 }
+
+// A writable overlay whose target does not exist on the host needs a writable
+// parent, or bwrap aborts the whole sandbox trying to create the mount point.
+// The tmpfs for the state root must therefore be emitted BEFORE the overlay,
+// and the kept children immediately after it.
+func TestWrapArgvEmitsSynthesizedRootBeforeOverlay(t *testing.T) {
+	argv := WrapArgv("/usr/bin/bwrap", Policy{
+		SynthesizedDirs: []SynthesizedDir{{
+			Target:           "/home/u/.aws",
+			ReadOnlyChildren: []string{"/home/u/.aws/config"},
+		}},
+		OverlayMounts: []OverlayMount{{Source: "/lease/state/aws/sso-cache", Target: "/home/u/.aws/sso/cache"}},
+	}, []string{"sh", "-c", "aws --version"})
+
+	joined := strings.Join(argv, " ")
+	tmpfsAt := strings.Index(joined, "--tmpfs /home/u/.aws")
+	childAt := strings.Index(joined, "--ro-bind-try /home/u/.aws/config /home/u/.aws/config")
+	overlayAt := strings.Index(joined, "--bind-try /lease/state/aws/sso-cache /home/u/.aws/sso/cache")
+	if tmpfsAt < 0 || childAt < 0 || overlayAt < 0 {
+		t.Fatalf("missing mount arguments: %s", joined)
+	}
+	if !(tmpfsAt < childAt && childAt < overlayAt) {
+		t.Fatalf("mount order must be tmpfs -> children -> overlay: %s", joined)
+	}
+}
+
+func TestWrapArgvSkipsEmptySynthesizedEntries(t *testing.T) {
+	argv := WrapArgv("/usr/bin/bwrap", Policy{
+		SynthesizedDirs: []SynthesizedDir{
+			{Target: "  ", ReadOnlyChildren: []string{"/x"}},
+			{Target: "/home/u/.aws", ReadOnlyChildren: []string{"  "}},
+		},
+	}, []string{"sh", "-c", "true"})
+	joined := strings.Join(argv, " ")
+	if strings.Contains(joined, "--ro-bind-try /x /x") {
+		t.Fatalf("a child of a blank root was mounted: %s", joined)
+	}
+	if strings.Count(joined, "--ro-bind-try") != 0 {
+		t.Fatalf("a blank child was mounted: %s", joined)
+	}
+	if !strings.Contains(joined, "--tmpfs /home/u/.aws") {
+		t.Fatalf("valid synthesized root missing: %s", joined)
+	}
+}

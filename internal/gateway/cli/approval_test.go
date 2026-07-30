@@ -10,7 +10,7 @@ import (
 // approvalRespondCall records one call to the approval responder so tests can
 // assert the decision AND the grant scope reach the existing respond path.
 type approvalRespondCall struct {
-	id, decision, scope string
+	id, decision, scope, grantKey string
 }
 
 func newApprovalTestModel() (*uiModel, *[]approvalRespondCall) {
@@ -18,8 +18,8 @@ func newApprovalTestModel() (*uiModel, *[]approvalRespondCall) {
 	model.width = 100
 	model.height = 30
 	calls := &[]approvalRespondCall{}
-	model.approvalResponder = func(id, decision, scope string) error {
-		*calls = append(*calls, approvalRespondCall{id, decision, scope})
+	model.approvalResponder = func(id, decision, scope, grantKey string) error {
+		*calls = append(*calls, approvalRespondCall{id, decision, scope, grantKey})
 		return nil
 	}
 	return model, calls

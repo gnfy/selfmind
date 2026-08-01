@@ -6,7 +6,12 @@ import (
 	"time"
 
 	"selfmind/internal/gateway/api"
+	"selfmind/internal/platform/textutil"
 )
+
+// backgroundSummaryMaxBytes bounds the outcome summary carried by a background
+// run's result notice: it is a status line, not a transcript.
+const backgroundSummaryMaxBytes = 800
 
 func eventRefFromRunEvent(event api.RunEvent) uiEventRef {
 	return uiEventRef{
@@ -28,6 +33,7 @@ func (m *uiModel) forwardDaemonRunEvent(event api.RunEvent) {
 			Input      string `json:"input"`
 			WatchID    string `json:"watch_id"`
 			TaskStatus string `json:"task_status"`
+			Origin     string `json:"origin"`
 		}
 		_ = json.Unmarshal(event.Payload, &payload)
 		started := event.CreatedAt
@@ -39,6 +45,7 @@ func (m *uiModel) forwardDaemonRunEvent(event api.RunEvent) {
 			TaskID:     strings.TrimSpace(event.TaskID),
 			WatchID:    strings.TrimSpace(payload.WatchID),
 			TaskStatus: strings.TrimSpace(payload.TaskStatus),
+			Origin:     strings.TrimSpace(payload.Origin),
 			Input:      strings.TrimSpace(payload.Input),
 			Started:    started,
 			Event:      eventRefFromRunEvent(event),
@@ -122,6 +129,79 @@ func watcherStatusNotice(watchID, status, taskStatus string) string {
 		watchStatus = "finalizing"
 	}
 	return "Watcher " + watchID + " | status: " + watchStatus + " | task: " + taskStatus
+}
+
+// backgroundResultNotice is the single line a background run is allowed to
+// leave behind: what ran, the run's recorded task status, and its outcome
+// summary. The status is the raw run outcome, not the collapsed UI status —
+// "waiting_user" is exactly what a blocked watcher check produces and must
+// stay distinguishable from "done". A watcher keeps its durable id as the
+// label so the line joins its earlier notices; any other origin names itself.
+func backgroundResultNotice(watchID, origin, taskStatus, summary string) string {
+	label := "Background run (" + firstNonEmptyText(origin, "background") + ")"
+	if watchID = strings.TrimSpace(watchID); watchID != "" {
+		label = "Watcher " + watchID + " | status: finalized"
+	}
+	notice := label + " | task: " + firstNonEmptyText(taskStatus, "done")
+	if summary = strings.TrimSpace(textutil.Truncate(summary, backgroundSummaryMaxBytes)); summary != "" {
+		notice += "\n" + summary
+	}
+	return notice
+}
+
+func firstNonEmptyText(value, fallback string) string {
+	if value = strings.TrimSpace(value); value != "" {
+		return value
+	}
+	return fallback
+}
+
+// markBackgroundRun records a daemon run the person did not type at any
+// endpoint: the daemon started it on their behalf, and `run.started` names the
+// initiator (a watcher finalization, a cron fire, any future one).
+//
+// Moving work off the agent turn is pointless if the terminal then replays the
+// whole background transcript, so its progress is deliberately dropped: at
+// most a start notice and one result line are rendered, and `/diag execution`
+// keeps the detail. Approvals, clarifications, watcher notices, and the run
+// lifecycle itself are NOT filtered — a background run that needs a human must
+// still be able to reach one, and the person must still see why their next
+// message queues.
+//
+// A turn the person typed at another endpoint is NOT background work: they are
+// doing it right now, just elsewhere, so it is left alone here.
+func (m *uiModel) markBackgroundRun(runID, watchID, origin string) {
+	runID = strings.TrimSpace(runID)
+	if runID == "" {
+		return
+	}
+	m.backgroundRunID = runID
+	m.backgroundWatchID = strings.TrimSpace(watchID)
+	m.backgroundOrigin = strings.TrimSpace(origin)
+	m.backgroundResultPending = true
+}
+
+// backgroundRunEvent reports whether this event belongs to the background run.
+// The run id is kept after that run ends and is replaced only by the next
+// background run, so a trailing event (a late tool.completed, a buffered
+// delta) cannot land under whatever the person does next.
+func (m *uiModel) backgroundRunEvent(ref uiEventRef) bool {
+	return m.backgroundRunID != "" && ref.RunID != "" && ref.RunID == m.backgroundRunID
+}
+
+// finishedBackgroundRun consumes the result line this background run is owed,
+// returning its watcher id (empty for other origins) and its origin. A second
+// call for the same run returns false, so a replayed finish cannot print the
+// outcome twice.
+func (m *uiModel) finishedBackgroundRun(runID string) (watchID, origin string, ok bool) {
+	if !m.backgroundResultPending || m.backgroundRunID == "" {
+		return "", "", false
+	}
+	if strings.TrimSpace(runID) != m.backgroundRunID {
+		return "", "", false
+	}
+	m.backgroundResultPending = false
+	return m.backgroundWatchID, m.backgroundOrigin, true
 }
 
 func (m *uiModel) passiveDaemonEvent(ref uiEventRef) bool {

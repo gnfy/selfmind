@@ -1,13 +1,81 @@
 package httpapi
 
 import (
+	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"selfmind/internal/control"
 	"selfmind/internal/executionenv"
 	"selfmind/internal/tools"
 )
+
+func TestExternalWatchFrozenGrantCanBeRevokedButNotExpanded(t *testing.T) {
+	server, store, identity, _, _ := newClarifyTestServer(t)
+	ctx := context.Background()
+	workspace, err := store.RegisterWorkspace(ctx, control.Workspace{
+		TenantID: identity.TenantID, OwnerPersonID: identity.PersonID,
+		Name: "workspace", LocalPath: t.TempDir(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspace, err = store.SetWorkspaceTrust(ctx, identity.TenantID, identity.PersonID,
+		workspace.ID, executionenv.TrustUntrusted, "local_cli")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.GrantExecutionCapability(ctx, identity.TenantID, identity.PersonID,
+		workspace.ID, executionenv.CapabilityNetworkShared, "network-resource", "human:cli",
+		time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	grants, err := store.ListActiveExecutionCapabilities(ctx, identity.TenantID, identity.PersonID, workspace.ID)
+	if err != nil || len(grants) != 1 {
+		t.Fatalf("active grants = %#v, err=%v", grants, err)
+	}
+	binding := executionenv.Binding{
+		Version:               executionenv.BindingVersion,
+		TenantID:              identity.TenantID,
+		PersonID:              identity.PersonID,
+		WorkspaceID:           workspace.ID,
+		TrustLevel:            executionenv.TrustUntrusted,
+		ExecutionCapabilities: []string{executionenv.CapabilityNetworkShared},
+		CapabilityBindings: []executionenv.CapabilityBinding{{
+			Capability: executionenv.CapabilityNetworkShared,
+			Source:     executionenv.CapabilitySourceGrant,
+			GrantID:    grants[0].ID,
+		}},
+	}
+	watch := control.ExternalWatch{
+		TenantID: identity.TenantID, PersonID: identity.PersonID,
+		WorkspaceID: workspace.ID, ExecutionBinding: binding,
+	}
+	got, err := server.validateExternalWatchCapabilities(ctx, watch, binding)
+	if err != nil || len(got) != 1 || got[0] != executionenv.CapabilityNetworkShared {
+		t.Fatalf("frozen grant was not accepted: %v, %v", got, err)
+	}
+
+	// A later unrelated grant must not expand this binding.
+	if err := store.GrantExecutionCapability(ctx, identity.TenantID, identity.PersonID,
+		workspace.ID, executionenv.CapabilityCredentialRead, "credential-resource", "human:cli",
+		time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	got, err = server.validateExternalWatchCapabilities(ctx, watch, binding)
+	if err != nil || len(got) != 1 || got[0] != executionenv.CapabilityNetworkShared {
+		t.Fatalf("later grant changed frozen capabilities: %v, %v", got, err)
+	}
+
+	if err := store.RevokeExecutionCapability(ctx, identity.TenantID, identity.PersonID,
+		workspace.ID, executionenv.CapabilityNetworkShared); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := server.validateExternalWatchCapabilities(ctx, watch, binding); err == nil {
+		t.Fatal("revoked capability must stop the watcher before its next command")
+	}
+}
 
 // A durable watch outlives its run and survives restarts, so it is the execution
 // path most likely to straddle an environment change — and the failure mode is

@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -102,6 +103,14 @@ func applyEnvProfiles(
 	toolchainRoot := ""
 	if root, err := executionenv.ToolchainDir(scope.PersonID, "."); err == nil {
 		toolchainRoot = root
+	} else {
+		// Shared caches are an optimization, not a precondition. A durable
+		// watcher must still be able to prepare tools when its person-scoped cache
+		// is unavailable (for example after moving the runtime to a runner).
+		toolchainRoot = filepath.Join(scratch.Root, "toolchain")
+		if mkdirErr := os.MkdirAll(toolchainRoot, 0o700); mkdirErr != nil {
+			return nil, fmt.Errorf("prepare fallback toolchain cache: %w", mkdirErr)
+		}
 	}
 	snapshotEnv := material.Env
 	applyCtx := envprofiles.ApplyContext{
@@ -454,10 +463,26 @@ func emitProfilePreparation(ctx context.Context, toolName, toolCallID string, ma
 // It mirrors execMaterialForArgs but takes its identity from the durable record
 // instead of an ExecutionScope, because no agent run is live.
 func durableExecMaterial(ctx context.Context, command, cwd string, durable DurableExecutionScope) (execMaterial, error) {
-	material := execMaterial{Env: leaseProcessEnv(nil)}
-	if snapshot := executionenv.DefaultRegistry().Current(); snapshot != nil {
+	material := execMaterial{}
+	if durable.Binding.Version > 0 {
+		snapshot, err := executionenv.ResolveBinding(executionenv.DefaultRegistry(), durable.Binding)
+		if err != nil {
+			return material, err
+		}
+		if snapshot == nil {
+			return material, fmt.Errorf("durable execution environment is unavailable")
+		}
+		material.Env = snapshot.Env()
 		material.SnapshotID = snapshot.ID
 		material.Generation = snapshot.Generation
+	} else {
+		// Legacy durable rows did not record a binding. Keep them operable during
+		// migration, while every newly registered watch takes the strict path.
+		material.Env = leaseProcessEnv(nil)
+		if snapshot := executionenv.DefaultRegistry().Current(); snapshot != nil {
+			material.SnapshotID = snapshot.ID
+			material.Generation = snapshot.Generation
+		}
 	}
 	if root := absoluteCWD(cwd); root != "" {
 		material.WritableRoots = append(material.WritableRoots, root)
@@ -482,6 +507,13 @@ func durableExecMaterial(ctx context.Context, command, cwd string, durable Durab
 		WorkspaceID:  durable.WorkspaceID,
 		TrustLevel:   durable.TrustLevel,
 		Capabilities: durable.Capabilities,
+	}
+	if durable.Binding.Version > 0 {
+		scope.TenantID = durable.Binding.TenantID
+		scope.PersonID = durable.Binding.PersonID
+		scope.WorkspaceID = durable.Binding.WorkspaceID
+		scope.TrustLevel = durable.Binding.TrustLevel
+		scope.Capabilities = append([]string{}, durable.Binding.ExecutionCapabilities...)
 	}
 	args := map[string]interface{}{"_tool_name": "terminal", "command": command}
 	applied, profileErr := applyEnvProfiles(args, scope, scratch, &material)

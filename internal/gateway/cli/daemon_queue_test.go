@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"selfmind/internal/gateway/api"
+
+	tea "github.com/charmbracelet/bubbletea"
 )
 
 func TestQueuedTurnTransitionsThroughDaemonLifecycle(t *testing.T) {
@@ -106,6 +108,160 @@ func TestWatcherLifecycleUsesCompactIDNotices(t *testing.T) {
 	}
 	if strings.Contains(m.messages[len(m.messages)-1].Content, "internal finalization prompt") {
 		t.Fatalf("internal finalization prompt leaked into notice")
+	}
+}
+
+// A watcher finalization run executes in the daemon on the person's behalf.
+// Moving the wait off the agent turn is pointless if the terminal then
+// replays the whole background transcript, so only its start notice and its
+// recorded outcome may reach this terminal.
+func TestWatcherFinalizationRunRendersResultNotProcess(t *testing.T) {
+	model := NewController(nil, nil, nil, "").model
+	const runID = "run_finalize"
+	ref := func(eventID string) uiEventRef {
+		return uiEventRef{Source: eventSourceDaemon, RunID: runID, EventID: eventID}
+	}
+
+	updated, _ := model.Update(MsgDaemonRunStarted{
+		RunID:      runID,
+		WatchID:    "watch_123",
+		Origin:     "watch",
+		TaskStatus: "running",
+		Started:    time.Now(),
+		Event:      ref("evt_start"),
+	})
+	m := updated.(*uiModel)
+	afterStart := len(m.messages)
+
+	for _, msg := range []tea.Msg{
+		MsgAgentActivity{Content: "Reading the release record", Event: ref("evt_activity")},
+		MsgStream{Content: "Backfilling the release record now.", Event: ref("evt_delta")},
+		MsgToolStart{ToolName: "read_file", ToolCallID: "call_1", Event: ref("evt_tool_start")},
+		MsgToolOutput{ToolName: "read_file", ToolCallID: "call_1", Content: "file body", Event: ref("evt_tool_output")},
+		MsgToolHeartbeat{ToolName: "read_file", ToolCallID: "call_1", Event: ref("evt_tool_beat")},
+		MsgToolDone{ToolName: "read_file", ToolCallID: "call_1", Result: "ok", Event: ref("evt_tool_done")},
+		MsgPlanUpdated{Content: `{"steps":[{"title":"backfill"}]}`, Event: ref("evt_plan")},
+		MsgLearningEvent{Content: "Learning: release records need a status field", Event: ref("evt_learning")},
+	} {
+		updated, _ = m.Update(msg)
+		m = updated.(*uiModel)
+	}
+
+	if len(m.messages) != afterStart {
+		t.Fatalf("background run added %d transcript cells: %+v", len(m.messages)-afterStart, m.messages[afterStart:])
+	}
+	if m.liveStreamContent != "" || m.activePlanJSON != "" || m.activityText != "" || m.statusMsg != "" {
+		t.Fatalf("background run leaked live state: stream=%q plan=%q activity=%q status=%q",
+			m.liveStreamContent, m.activePlanJSON, m.activityText, m.statusMsg)
+	}
+
+	updated, _ = m.Update(MsgDaemonRunFinished{
+		RunID:   runID,
+		Status:  "waiting_user",
+		Summary: "The check environment was blocked; the external state was not observed.",
+		Event:   ref("evt_finished"),
+	})
+	m = updated.(*uiModel)
+	last := m.messages[len(m.messages)-1]
+	if last.Role != "notice" {
+		t.Fatalf("finalization result role = %q", last.Role)
+	}
+	if !strings.HasPrefix(last.Content, "Watcher watch_123 | status: finalized | task: waiting_user") {
+		t.Fatalf("finalization result = %q", last.Content)
+	}
+	if !strings.Contains(last.Content, "the external state was not observed") {
+		t.Fatalf("finalization result dropped the summary: %q", last.Content)
+	}
+	if len(m.messages) != afterStart+1 {
+		t.Fatalf("finish added %d cells, want 1", len(m.messages)-afterStart)
+	}
+
+	// A trailing event from that run must not surface after it ended.
+	updated, _ = m.Update(MsgStream{Content: "late delta", Event: ref("evt_late")})
+	m = updated.(*uiModel)
+	if m.liveStreamContent != "" || len(m.messages) != afterStart+1 {
+		t.Fatalf("trailing background event rendered: stream=%q cells=%d", m.liveStreamContent, len(m.messages))
+	}
+}
+
+// The rule is the run's origin, not the watcher: any run the daemon starts on
+// the person's behalf reports its result instead of its process. A cron fire
+// has no boundary the person already saw, so it stays silent until it has
+// something to report.
+func TestCronRunRendersResultWithoutStartNoticeOrProcess(t *testing.T) {
+	model := NewController(nil, nil, nil, "").model
+	const runID = "run_cron"
+	ref := func(eventID string) uiEventRef {
+		return uiEventRef{Source: eventSourceDaemon, RunID: runID, EventID: eventID}
+	}
+
+	updated, _ := model.Update(MsgDaemonRunStarted{
+		RunID:   runID,
+		Origin:  "cron",
+		Input:   "summarize yesterday's builds",
+		Started: time.Now(),
+		Event:   ref("evt_start"),
+	})
+	m := updated.(*uiModel)
+	if len(m.messages) != 0 {
+		t.Fatalf("cron start wrote %d cells: %+v", len(m.messages), m.messages)
+	}
+	if !m.daemonRunActive || m.runStatus != "working" {
+		t.Fatalf("cron run must stay visible as daemon work: active=%v status=%q", m.daemonRunActive, m.runStatus)
+	}
+
+	for _, msg := range []tea.Msg{
+		MsgStream{Content: "Three builds succeeded.", Event: ref("evt_delta")},
+		MsgToolStart{ToolName: "terminal", ToolCallID: "call_1", Event: ref("evt_tool_start")},
+		MsgToolDone{ToolName: "terminal", ToolCallID: "call_1", Result: "ok", Event: ref("evt_tool_done")},
+	} {
+		updated, _ = m.Update(msg)
+		m = updated.(*uiModel)
+	}
+	if len(m.messages) != 0 || m.liveStreamContent != "" {
+		t.Fatalf("cron progress leaked: cells=%d stream=%q", len(m.messages), m.liveStreamContent)
+	}
+
+	updated, _ = m.Update(MsgDaemonRunFinished{
+		RunID:   runID,
+		Status:  "done",
+		Summary: "Three builds succeeded overnight.",
+		Event:   ref("evt_finished"),
+	})
+	m = updated.(*uiModel)
+	if len(m.messages) != 1 {
+		t.Fatalf("cron finish wrote %d cells, want 1", len(m.messages))
+	}
+	last := m.messages[0]
+	if last.Role != "notice" || !strings.HasPrefix(last.Content, "Background run (cron) | task: done") {
+		t.Fatalf("cron result = role %q content %q", last.Role, last.Content)
+	}
+	if !strings.Contains(last.Content, "Three builds succeeded overnight.") {
+		t.Fatalf("cron result dropped the summary: %q", last.Content)
+	}
+}
+
+// The suppression is scoped to the background run id: an ordinary daemon run
+// that starts afterwards still streams its progress to this terminal.
+func TestForegroundRunStillStreamsAfterBackgroundRun(t *testing.T) {
+	model := NewController(nil, nil, nil, "").model
+	model.markBackgroundRun("run_finalize", "watch_123", "watch")
+
+	updated, _ := model.Update(MsgDaemonRunStarted{
+		RunID:   "run_user",
+		Input:   "fix the failing test",
+		Started: time.Now(),
+		Event:   uiEventRef{Source: eventSourceDaemon, RunID: "run_user", EventID: "evt_user_start"},
+	})
+	m := updated.(*uiModel)
+	updated, _ = m.Update(MsgToolStart{
+		ToolName:   "read_file",
+		ToolCallID: "call_user",
+		Event:      uiEventRef{Source: eventSourceDaemon, RunID: "run_user", EventID: "evt_user_tool"},
+	})
+	m = updated.(*uiModel)
+	if last := m.messages[len(m.messages)-1]; last.Role != "tool" || last.ToolName != "read_file" {
+		t.Fatalf("foreground tool cell missing: role=%q tool=%q", last.Role, last.ToolName)
 	}
 }
 

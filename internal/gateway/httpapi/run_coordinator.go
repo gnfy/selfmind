@@ -271,6 +271,9 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 		startedPayload["watch_id"] = watchID
 		startedPayload["task_status"] = "running"
 	}
+	if origin := runOrigin(ctx, req); origin != "" {
+		startedPayload["origin"] = origin
+	}
 	_, _ = d.Control.AppendEvent(ctx, control.Event{
 		TaskID:     task.ID,
 		RunID:      run.ID,
@@ -514,6 +517,29 @@ func (c *RunCoordinator) syncCurrentTask(ctx context.Context, identity *control.
 	_ = c.srv.Control.SetCurrentTask(ctx, identity.TenantID, identity.PersonID, task.ID)
 }
 
+// Origins of a run the daemon started on the person's behalf. A turn the
+// person typed at any endpoint has no origin: it is their own foreground work,
+// wherever they typed it.
+const (
+	runOriginWatch = "watch"
+	runOriginCron  = "cron"
+)
+
+// runOrigin names the initiator of a daemon-started run, or "" for a person's
+// own turn. Explicit request state wins; a watcher finalization is inferred
+// from the watch id the queue drain derives from its durable key; the kernel
+// turn-source tag is the last resort, because it only survives synchronous
+// paths — an async run executes under a fresh context.Background().
+func runOrigin(ctx context.Context, req api.MessageRequest) string {
+	if origin := strings.TrimSpace(req.Origin); origin != "" {
+		return origin
+	}
+	if strings.TrimSpace(req.WatchID) != "" {
+		return runOriginWatch
+	}
+	return strings.TrimSpace(kernel.TurnSourceFromContext(ctx))
+}
+
 // startAsyncRun accepts a turn immediately and runs it in the background,
 // delivering the result back to the source channel when it finishes.
 func (c *RunCoordinator) startAsyncRun(identity *control.IdentityContext, req api.MessageRequest, intent router.IntentResult) api.MessageResponse {
@@ -742,6 +768,7 @@ func (c *RunCoordinator) drainQueue(identity *control.IdentityContext) {
 	if strings.HasPrefix(next.IdempotencyKey, "external-watch:") {
 		req.ExecutionProfile = tools.ExecutionProfileWatchFinalization
 		req.WatchID = externalWatchIDFromFinalizationKey(next.IdempotencyKey)
+		req.Origin = runOriginWatch
 	}
 	// Reproduce the queued item's route while preserving its durable person.
 	// Never create an account here: system rows may intentionally omit

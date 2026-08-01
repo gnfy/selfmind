@@ -674,9 +674,9 @@ func (c *RunCoordinator) toolApprovalHandler(identity *control.IdentityContext, 
 				// The judge's reasoning and its two assessment axes, so the person
 				// inherits the judgement instead of redoing it, and a later reader
 				// can audit why the ask happened at all.
-				"triage_rationale":      req.TriageRationale,
-				"triage_risk":           req.TriageRisk,
-				"triage_authorization":  req.TriageAuthorization,
+				"triage_rationale":     req.TriageRationale,
+				"triage_risk":          req.TriageRisk,
+				"triage_authorization": req.TriageAuthorization,
 				// The authoritative answer set for this ask (batch B1). Every
 				// surface renders THIS list instead of inventing one.
 				"decisions": decisions,

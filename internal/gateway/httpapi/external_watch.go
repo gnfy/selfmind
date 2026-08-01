@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
@@ -204,13 +205,30 @@ func statusErrText(status, errText string) string {
 // config without writing it). The scratch key is the watch id, so the state
 // overlay is materialized once and reused by every poll.
 func (d *Server) runExternalWatchCommand(ctx context.Context, watch control.ExternalWatch) (tools.ExecutionResult, error) {
-	durable := tools.DurableExecutionScope{
-		ScratchKey:  watch.ID,
-		TenantID:    watch.TenantID,
-		PersonID:    watch.PersonID,
-		WorkspaceID: watch.WorkspaceID,
+	binding := watch.ExecutionBinding
+	capabilities := []string(nil)
+	networkShared := true // grandfathered rows predate explicit capability binding
+	if binding.Version > 0 {
+		var err error
+		capabilities, err = d.validateExternalWatchCapabilities(ctx, watch, binding)
+		if err != nil {
+			return tools.ExecutionResult{FailureClass: "environment"}, err
+		}
+		networkShared = hasExecutionCapability(capabilities, executionenv.CapabilityNetworkShared)
+		if !networkShared {
+			return tools.ExecutionResult{FailureClass: "environment"},
+				fmt.Errorf("external watch execution binding does not include network:shared")
+		}
 	}
-	if d != nil && d.Control != nil && strings.TrimSpace(watch.WorkspaceID) != "" {
+	durable := tools.DurableExecutionScope{
+		ScratchKey:   watch.ID,
+		TenantID:     watch.TenantID,
+		PersonID:     watch.PersonID,
+		WorkspaceID:  watch.WorkspaceID,
+		Capabilities: capabilities,
+		Binding:      binding,
+	}
+	if binding.Version == 0 && d != nil && d.Control != nil && strings.TrimSpace(watch.WorkspaceID) != "" {
 		if workspace, err := d.Control.GetWorkspace(ctx, watch.TenantID, watch.WorkspaceID); err == nil && workspace != nil {
 			durable.TrustLevel = workspace.TrustLevel
 		}
@@ -220,7 +238,84 @@ func (d *Server) runExternalWatchCommand(ctx context.Context, watch control.Exte
 			}
 		}
 	}
-	return tools.RunDurableCheck(ctx, watch.Command, watch.CWD, true, durable)
+	return tools.RunDurableCheck(ctx, watch.Command, watch.CWD, networkShared, durable)
+}
+
+// validateExternalWatchCapabilities permits only capabilities present when the
+// watch was registered. Later grants never widen a running watch; withdrawal
+// of workspace trust or a persisted grant stops it before the next command.
+func (d *Server) validateExternalWatchCapabilities(
+	ctx context.Context,
+	watch control.ExternalWatch,
+	binding executionenv.Binding,
+) ([]string, error) {
+	if d == nil || d.Control == nil {
+		return nil, fmt.Errorf("external watch capability store is unavailable")
+	}
+	workspace, err := d.Control.GetWorkspace(ctx, watch.TenantID, watch.WorkspaceID)
+	if err != nil {
+		return nil, fmt.Errorf("read external watch workspace trust: %w", err)
+	}
+	if binding.TrustLevel == executionenv.TrustTrusted &&
+		(workspace == nil || workspace.TrustLevel != executionenv.TrustTrusted) {
+		return nil, fmt.Errorf("external watch workspace trust was revoked")
+	}
+
+	activeGrants, err := d.Control.ListActiveExecutionCapabilities(
+		ctx, watch.TenantID, watch.PersonID, watch.WorkspaceID)
+	if err != nil {
+		return nil, fmt.Errorf("read external watch capability grants: %w", err)
+	}
+	activeGrantIDs := map[string]bool{}
+	for _, grant := range activeGrants {
+		activeGrantIDs[grant.ID] = true
+	}
+
+	bindings := map[string]executionenv.CapabilityBinding{}
+	for _, bound := range binding.CapabilityBindings {
+		bindings[bound.Capability] = bound
+	}
+	out := make([]string, 0, len(binding.ExecutionCapabilities))
+	for _, capability := range binding.ExecutionCapabilities {
+		bound, described := bindings[capability]
+		if !described {
+			// Early v1 rows froze the capability names but not provenance. They
+			// remain bounded (later grants are ignored); a trusted binding is
+			// already covered by the trust check above.
+			out = append(out, capability)
+			continue
+		}
+		switch bound.Source {
+		case executionenv.CapabilitySourceTrust:
+			if workspace == nil || workspace.TrustLevel != executionenv.TrustTrusted {
+				return nil, fmt.Errorf("external watch capability %s was revoked with workspace trust", capability)
+			}
+			if capability == executionenv.CapabilityNetworkShared && !tools.ExecSandboxAllowsNetwork() {
+				return nil, fmt.Errorf("external watch network capability is disabled by current sandbox policy")
+			}
+		case executionenv.CapabilitySourceGrant:
+			if strings.TrimSpace(bound.GrantID) == "" || !activeGrantIDs[bound.GrantID] {
+				return nil, fmt.Errorf("external watch capability %s grant is expired or revoked", capability)
+			}
+		case executionenv.CapabilitySourceRegistration:
+			if !bound.ExpiresAt.IsZero() && !bound.ExpiresAt.After(time.Now()) {
+				return nil, fmt.Errorf("external watch capability %s registration approval expired", capability)
+			}
+		default:
+			return nil, fmt.Errorf("external watch capability %s has unknown authorization source", capability)
+		}
+		out = append(out, capability)
+	}
+	return out, nil
+}
+
+func hasExecutionCapability(capabilities []string, target string) bool {
+	for _, capability := range capabilities {
+		if capability == target {
+			return true
+		}
+	}
+	return false
 }
 
 // parkExternalWatch stops a watch whose CHECK failed, recording the structured
@@ -871,6 +966,16 @@ func externalWatchOutcome(watch control.ExternalWatch, status, output, lastError
 // grandfathered rather than parked, because parking them would strand work the
 // operator already started for a property that was never recorded.
 func externalWatchEnvironmentChange(watch control.ExternalWatch) []string {
+	if watch.ExecutionBinding.Version > 0 {
+		if _, err := executionenv.ResolveBinding(executionenv.DefaultRegistry(), watch.ExecutionBinding); err != nil {
+			var changed *executionenv.EnvironmentChangedError
+			if errors.As(err, &changed) {
+				return append([]string{}, changed.Changed...)
+			}
+			return []string{"environment unavailable"}
+		}
+		return nil
+	}
 	if strings.TrimSpace(watch.EnvironmentFingerprint) == "" &&
 		strings.TrimSpace(watch.PrincipalFingerprint) == "" &&
 		strings.TrimSpace(watch.CredentialSourceHash) == "" {

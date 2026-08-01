@@ -321,6 +321,24 @@ the tool reports its own "not logged in", which is the honest diagnosis.
 
 ### Durable execution identity
 
+As of 2026-08-01, new watches carry a versioned, secret-free
+`executionenv.Binding` derived from the creating run's lease. It freezes the
+environment profile, credential references, workspace trust level, effective
+capability names, and the provenance of each capability together with the
+snapshot id/generation and three fingerprints. The same binding is the future
+Runner request contract; node-local secret values remain in
+`Snapshot`/`ProcessMaterial` and are never serialized.
+
+Preflight and background polls resolve the same binding. An in-process exact
+snapshot wins even if the daemon later samples another shell; after restart, a
+snapshot id is only an index and all three fingerprints must still match before
+the current environment may be rebound. Capabilities are frozen at
+registration: later grants cannot widen a running watch, while trust withdrawal
+or a persisted grant's revocation/expiry stops it before the next command. A
+one-shot registration approval is bounded by the watch deadline and can be
+withdrawn by cancelling that watch. Pre-binding watches remain on the legacy
+path so an upgrade does not strand already-running work.
+
 A `watch_external` check outlives its run and survives restarts, so it records
 the environment identity it was registered under (snapshot id, generation, and
 the three fingerprints — never values) and verifies it before every check. The
@@ -358,9 +376,13 @@ that parses enriched error text.
   come from `ExecutionScope` rather than daemon cwd, and credential-shaped
   environment passthrough declarations fail closed. User-installed trusted
   skills remain available.
-- Credential-aware private HOME views and `credential:read` approval are not
-implemented yet. Generic operator environment compatibility remains in
-place behind `BuildProcessEnv`.
+- Credential-aware private HOME views and `credential:read` approval are
+  implemented through data-driven tool profiles. Refreshed tokens written by a
+  CLI stay in the run/watch overlay; permanent login changes still require an
+  approved host flow because `write_back` is intentionally not implemented.
+- Durable execution falls back to a private per-binding toolchain cache when a
+  person-level cache cannot be materialized. Cache availability must never turn
+  a valid watcher into an environment failure.
 - `/diag execution` reports backend/network policy, workspace trust, active
   capability names, the current run's lease/profile, and only the count of
   hidden credential references. It never displays credential names or values.
@@ -379,6 +401,8 @@ Changes in this domain need focused coverage for:
 - exact-value redaction without persisting raw secrets;
 - local-CLI-only workspace trust and capability revocation on untrust;
 - immutable per-run leases and expiry of execution capabilities;
+- secret-free durable binding round trips, restart fingerprint validation,
+  frozen capability sets, and revocation before the next poll;
 - untrusted workspace skill fencing and credential-shaped declaration denial;
 - long-running timeout bounds and heartbeat behavior;
 - host grants scoped by workspace and command family;

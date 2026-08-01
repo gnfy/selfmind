@@ -87,6 +87,12 @@ type MessageRequest struct {
 	// from the stable watcher finalization key so clients can render a concise
 	// run boundary without exposing the internal finalization prompt.
 	WatchID string `json:"-"`
+	// Origin names the initiator of a run the daemon started on the person's
+	// behalf ("cron", "watch", and any future background initiator) rather than
+	// a turn the person typed at an endpoint, which leaves it empty. It is
+	// never accepted from the wire. Clients read it back from `run.started` and
+	// render such a run as a result line instead of replaying its progress.
+	Origin string `json:"-"`
 }
 
 // DispatchRequest runs a single management tool on the daemon. It backs

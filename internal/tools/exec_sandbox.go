@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"selfmind/internal/executionenv"
 	"selfmind/internal/tools/sandbox"
 )
 
@@ -365,6 +366,7 @@ type DurableExecutionScope struct {
 	WorkspaceID  string
 	TrustLevel   string
 	Capabilities []string
+	Binding      executionenv.Binding
 }
 
 // RunDurableCheck runs a daemon-owned check with the same execution material a

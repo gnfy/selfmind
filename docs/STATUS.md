@@ -162,9 +162,52 @@
   rather than leaking the internal finalization prompt. Lifecycle-only tools
   (`update_plan`, `finish_run`) remain control
   state instead of transcript tool rows.
+- **Background runs render as a result, not a transcript (2026-07-31).** The
+  person-level SSE stream carries every run, so a watcher finalization run —
+  work deliberately moved off the agent turn — was replayed into the terminal
+  as a full turn: thinking lines, tool cells, tool output, plan snapshots and
+  streamed text, arriving unannounced under whatever the person was doing.
+  Cron fires had the same shape.
+  - The rule is **run origin**, not the watcher. `api.MessageRequest.Origin`
+    (internal, `json:"-"`) names the initiator of a run the daemon started on
+    the person's behalf; `runOrigin` resolves it as explicit request state →
+    watcher inferred from `WatchID` → `kernel.TurnSourceFromContext` last,
+    because an async run executes under a fresh `context.Background()` and the
+    ctx tag does not survive it. The cron executor and the external-watch queue
+    drain set it; `run.started` publishes it as `origin`.
+  - A turn the person typed at another endpoint has NO origin and is left
+    alone: they are working right now, just elsewhere. (Whether an IM turn's
+    tool progress should mirror into an attached CLI at all is a separate
+    identity-continuity decision, not settled here.)
+  - The CLI marks that run id (`markBackgroundRun`) and drops its content
+    events at reduction time (`backgroundRunEvent`): stream deltas, thinking,
+    tool start/output/heartbeat/done, plan snapshots, learning notices. It
+    renders one closing line — `Watcher <id> | status: finalized | task: <run
+    status>` or `Background run (<origin>) | task: <run status>` — with the
+    bounded outcome summary. The raw run status is used, so a blocked watcher
+    check's `waiting_user` stays distinguishable from `done`. A watcher also
+    keeps its opening notice (it continues a boundary the person already saw);
+    a bare background run stays silent until it has something to report.
+  - Approvals, clarifications, watcher notices and the run lifecycle are NOT
+    filtered: a background run that needs a human must still reach one, and
+    `runStatus`/`daemonRunActive` stay accurate so the person still sees why
+    their next message queues. The run id is retained after the run ends, so
+    trailing events cannot land under the next turn. Detail stays in
+    `/diag execution`.
+  - Not covered: a TUI that starts while such a run is already in flight still
+    attaches to it through the digest re-attach path (an explicit, separately
+    labelled "Watching" mode). Follow-up: `kernel.WithTurnSource` is now the
+    third of three origin signals and only survives synchronous paths — the
+    spine's `[cron]` tag is lost on an async cron run, and could be derived
+    from `req.Origin` instead.
 - Coverage: `internal/gateway/cli/event_identity_test.go`,
-  `internal/gateway/cli/attach_digest_test.go`, and
-  `internal/gateway/client/client_test.go`.
+  `internal/gateway/cli/attach_digest_test.go`,
+  `internal/gateway/cli/daemon_queue_test.go`
+  (`TestWatcherFinalizationRunRendersResultNotProcess`,
+  `TestCronRunRendersResultWithoutStartNoticeOrProcess`,
+  `TestForegroundRunStillStreamsAfterBackgroundRun`),
+  `internal/gateway/httpapi/run_origin_test.go` (classification plus the
+  `run.started` wire contract), and `internal/gateway/client/client_test.go`.
 
 ### Memory Governance Closeout (2026-07-12)
 
@@ -277,6 +320,29 @@ L0 environment → L1 execution → L2 observation → L3 business.
     guard, catalog redirect uniqueness — applying the whole inventory makes a
     duplicate redirect a global failure, so it is now a build-time assertion),
     `tools/external_watch_preflight_test.go` (five outcomes).
+- **Batch 2.5 shipped (2026-08-01): frozen durable execution binding.**
+  - New watches persist a versioned, secret-free `executionenv.Binding`
+    derived from the creating run's lease. Registration no longer samples
+    `Registry.Current()` after preflight, and polling no longer reconstructs
+    trust/capabilities from whatever the daemon currently exposes.
+  - The binding freezes environment profile, credential references, trust,
+    effective capability names and capability provenance. Later grants cannot
+    widen a running watch; trust withdrawal and persisted-grant revocation or
+    expiry stop it before the next command. A one-shot registration approval is
+    bounded by the watch deadline.
+  - Snapshot ids are process-local indices rather than authorization material:
+    after restart all three fingerprints are checked even when an id collides.
+    Compatible restarts rebind; account/toolchain/credential-source changes
+    park with `environment_changed`. Exact in-process snapshots keep the
+    environment and authentication material that passed preflight.
+  - `DurableExecutionScope` now carries the same binding future runners can
+    consume. Tool credential overlays stay stable across polls, and a missing
+    person-level toolchain cache falls back to private watcher scratch instead
+    of failing valid work.
+  - Coverage: `executionenv/binding_test.go`,
+    `control/external_watch_binding_test.go`, `tools/durable_binding_test.go`,
+    and `httpapi/external_watch_environment_test.go` (frozen grant, no later
+    expansion, immediate revocation).
 - **Still owed.** A dedicated `/watchers` command (batch 2 uses
   `/diag execution`), and lease-level preparation for `start_process`
   background children beyond the material they already share.

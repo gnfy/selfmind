@@ -3,11 +3,13 @@ package control
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
+	"selfmind/internal/executionenv"
 )
 
 const (
@@ -54,6 +56,10 @@ type ExternalWatch struct {
 	NextCheckAt           time.Time
 	Attempts              int
 	Extensions            int
+	// ExecutionBinding freezes the creator run's environment, identity, trust,
+	// and approved capabilities without persisting secret values. It is the
+	// transport contract future runners can consume unchanged.
+	ExecutionBinding executionenv.Binding
 	// Environment identity, captured when the watch was registered.
 	//
 	// A watch outlives the run that created it and survives daemon restarts, so
@@ -105,7 +111,8 @@ const externalWatchColumns = `id, tenant_id, person_id,
 	COALESCE(failure_class, ''), COALESCE(check_signature, ''), COALESCE(consecutive_failures, 0),
 	COALESCE(environment_snapshot_id, ''), COALESCE(environment_generation, 0),
 	COALESCE(principal_fingerprint, ''), COALESCE(environment_fingerprint, ''),
-	COALESCE(credential_source_hash, ''), created_at, updated_at, finished_at`
+	COALESCE(credential_source_hash, ''), COALESCE(execution_binding_json, '{}'),
+	created_at, updated_at, finished_at`
 
 func (s *Store) CreateExternalWatch(ctx context.Context, watch ExternalWatch) (*ExternalWatch, error) {
 	if s == nil || s.db == nil {
@@ -134,25 +141,39 @@ func (s *Store) CreateExternalWatch(ctx context.Context, watch ExternalWatch) (*
 		watch.TimeoutAt = now.Add(2 * time.Hour)
 	}
 	watch.ID = "watch_" + uuid.NewString()
+	if watch.ExecutionBinding.Version > 0 {
+		if strings.TrimSpace(watch.ExecutionBinding.ID) == "" {
+			watch.ExecutionBinding.ID = "binding:" + watch.ID
+		}
+		watch.ExecutionBinding.TenantID = watch.TenantID
+		watch.ExecutionBinding.PersonID = watch.PersonID
+		watch.ExecutionBinding.WorkspaceID = watch.WorkspaceID
+	}
+	bindingJSON, err := json.Marshal(watch.ExecutionBinding)
+	if err != nil {
+		return nil, fmt.Errorf("encode external watch execution binding: %w", err)
+	}
 	watch.Status = ExternalWatchPending
 	watch.NextCheckAt = now
 	watch.CreatedAt = now
 	watch.UpdatedAt = now
-	_, err := s.db.ExecContext(ctx, `INSERT INTO external_watches (
+	_, err = s.db.ExecContext(ctx, `INSERT INTO external_watches (
 		id, tenant_id, person_id, workspace_id, task_id, run_id, channel,
 		description, cwd, command, success_pattern, failure_pattern, status,
 		interval_seconds, command_timeout_seconds, timeout_at, next_check_at,
 		attempts, last_output, last_error,
 		environment_snapshot_id, environment_generation, principal_fingerprint,
-		environment_fingerprint, credential_source_hash, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, '', '', ?, ?, ?, ?, ?, ?, ?)`,
+		environment_fingerprint, credential_source_hash, execution_binding_json,
+		created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, '', '', ?, ?, ?, ?, ?, ?, ?, ?)`,
 		watch.ID, watch.TenantID, watch.PersonID, watch.WorkspaceID, watch.TaskID,
 		watch.RunID, watch.Channel, watch.Description, watch.CWD, watch.Command,
 		watch.SuccessPattern, watch.FailurePattern, watch.Status,
 		watch.IntervalSeconds, watch.CommandTimeoutSeconds, watch.TimeoutAt.Unix(),
 		watch.NextCheckAt.Unix(),
 		watch.EnvironmentSnapshotID, watch.EnvironmentGeneration, watch.PrincipalFingerprint,
-		watch.EnvironmentFingerprint, watch.CredentialSourceHash, now.Unix(), now.Unix())
+		watch.EnvironmentFingerprint, watch.CredentialSourceHash, string(bindingJSON),
+		now.Unix(), now.Unix())
 	if err != nil {
 		return nil, err
 	}
@@ -471,6 +492,7 @@ type externalWatchScanner interface {
 
 func scanExternalWatch(scanner externalWatchScanner) (ExternalWatch, error) {
 	var watch ExternalWatch
+	var bindingJSON string
 	var timeoutAt, nextCheckAt, createdAt, updatedAt int64
 	var notified int
 	var finishedAt sql.NullInt64
@@ -482,6 +504,7 @@ func scanExternalWatch(scanner externalWatchScanner) (ExternalWatch, error) {
 		&watch.FailureClass, &watch.CheckSignature, &watch.ConsecutiveFailures,
 		&watch.EnvironmentSnapshotID, &watch.EnvironmentGeneration, &watch.PrincipalFingerprint,
 		&watch.EnvironmentFingerprint, &watch.CredentialSourceHash,
+		&bindingJSON,
 		&createdAt, &updatedAt, &finishedAt)
 	if err != nil {
 		return ExternalWatch{}, err
@@ -491,6 +514,9 @@ func scanExternalWatch(scanner externalWatchScanner) (ExternalWatch, error) {
 	watch.CreatedAt = time.Unix(createdAt, 0)
 	watch.UpdatedAt = time.Unix(updatedAt, 0)
 	watch.Notified = notified != 0
+	if err := json.Unmarshal([]byte(bindingJSON), &watch.ExecutionBinding); err != nil {
+		return ExternalWatch{}, fmt.Errorf("decode external watch execution binding: %w", err)
+	}
 	if finishedAt.Valid {
 		value := time.Unix(finishedAt.Int64, 0)
 		watch.FinishedAt = &value

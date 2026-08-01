@@ -245,6 +245,27 @@ PATH / 账号 / 凭证来源任一变化 | `waiting_user: environment_changed` |
 
 **绝不允许静默用新环境续跑。**
 
+### 6.5 Durable Binding（2026-08-01）
+
+新 watcher 持久化版本化、无密钥的 `executionenv.Binding`。它由创建 run 的
+lease 派生，冻结环境 profile、`CredentialRef`、workspace 信任等级、实际获批
+capability 及其来源，同时记录 snapshot id/generation 与三类非秘密指纹。该
+Binding 也是未来 Runner job envelope 的执行环境契约；真实环境变量值只存在于
+节点内存的 `Snapshot`/`ProcessMaterial`，绝不序列化。
+
+注册 preflight 与后台轮询解析同一个 Binding。同一进程内优先使用精确 snapshot；
+重启后 snapshot id 只能当索引，仍须校验 principal/environment/
+credential-source 三类指纹才能重绑。后续新增授权不能扩大已运行 watcher 的
+权限；workspace trust 被撤销，或持久 capability 被撤销/过期时，watcher 必须在
+下一次命令前停止。一次性注册授权只活到 watcher 的有界 deadline，并可通过取消
+watcher 收回。旧版本没有 Binding 的 watcher 继续走兼容路径，升级不会直接遗弃
+历史工作。
+
+凭证值不进入 Binding。文件型 token 由每个 watch 的稳定 overlay 承载，CLI 在
+overlay 内刷新的 token 可供后续轮询继续使用；永久登录变更仍需获批 host 流程，
+因为 `write_back` 有意未实现。person 级 toolchain cache 不可用时降级为 watch
+私有 cache，缓存缺失不得让合法 durable work 失败。
+
 ## 7. Run scratch
 
 ```

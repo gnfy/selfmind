@@ -574,6 +574,7 @@ CREATE TABLE IF NOT EXISTS external_watches (
 	notified INTEGER NOT NULL DEFAULT 0,
 	last_output TEXT NOT NULL DEFAULT '',
 	last_error TEXT NOT NULL DEFAULT '',
+	execution_binding_json TEXT NOT NULL DEFAULT '{}',
 	created_at INTEGER NOT NULL,
 	updated_at INTEGER NOT NULL,
 	finished_at INTEGER
@@ -764,6 +765,10 @@ CREATE INDEX IF NOT EXISTS idx_external_watches_owner
 		{"external_watches", "principal_fingerprint", "TEXT NOT NULL DEFAULT ''"},
 		{"external_watches", "environment_fingerprint", "TEXT NOT NULL DEFAULT ''"},
 		{"external_watches", "credential_source_hash", "TEXT NOT NULL DEFAULT ''"},
+		// Durable execution stores one secret-free binding rather than
+		// reconstructing environment and permissions from daemon-global state on
+		// every poll. Legacy identity columns remain during the migration window.
+		{"external_watches", "execution_binding_json", "TEXT NOT NULL DEFAULT '{}'"},
 	} {
 		if err := s.ensureColumn(ctx, col.table, col.name, col.def); err != nil {
 			return err

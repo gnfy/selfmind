@@ -118,13 +118,23 @@ type uiModel struct {
 	daemonRunActive       bool // person-level daemon stream reports an executing run
 	daemonRunID           string
 	daemonRunStarted      time.Time
-	daemonRunAwaitingDone bool   // final answer still arrives through MsgAgentDone
-	migrationHint         string // Hint for migrating Hermes skills
-	streamController      markdownStreamController
-	liveStreamContent     string
-	streamFlushPending    bool
-	cursorVisible         bool
-	clientMode            bool // daemon-client mode: no in-process agent/gateway; chat routes to the daemon
+	daemonRunAwaitingDone bool // final answer still arrives through MsgAgentDone
+	// backgroundRunID is the daemon run whose progress this terminal must NOT
+	// render: the daemon started it on the person's behalf (a watcher
+	// finalization, a cron fire). backgroundOrigin names that initiator and
+	// backgroundWatchID is set only for a watcher; backgroundResultPending
+	// tracks the one result line the run still owes. See markBackgroundRun in
+	// daemon_events.go.
+	backgroundRunID         string
+	backgroundWatchID       string
+	backgroundOrigin        string
+	backgroundResultPending bool
+	migrationHint           string // Hint for migrating Hermes skills
+	streamController        markdownStreamController
+	liveStreamContent       string
+	streamFlushPending      bool
+	cursorVisible           bool
+	clientMode              bool // daemon-client mode: no in-process agent/gateway; chat routes to the daemon
 	// workspaceOverride* pin this session's execution workspace after a
 	// successful `/workspace <n|id>` switch (mirrors the approvalMode session
 	// override). Without it the next CLI turn silently re-derived a workspace
@@ -143,13 +153,13 @@ type uiModel struct {
 	// the active panel; approvalQueue holds requests that arrived while one was
 	// already up (FIFO re-arm); approvalDenyFollowup captures the composer after
 	// "No" so the user can attach guidance to the rejection.
-	approvalPrompt       *components.ApprovalPrompt
-	approvalQueue        []MsgApprovalRequest
+	approvalPrompt *components.ApprovalPrompt
+	approvalQueue  []MsgApprovalRequest
 	// delayedApprovals hold requests that arrived while the person was typing;
 	// they are armed once input goes idle (approvalTypingIdleDelay) so a panel
 	// cannot swallow an in-flight keystroke as a decision.
-	delayedApprovals    []MsgApprovalRequest
-	lastInputActivityAt time.Time
+	delayedApprovals     []MsgApprovalRequest
+	lastInputActivityAt  time.Time
 	approvalDenyFollowup bool
 	pendingApprovalID    string
 	pendingApprovalTool  string
@@ -673,9 +683,13 @@ type MsgDaemonRunStarted struct {
 	TaskID     string
 	WatchID    string
 	TaskStatus string
-	Input      string
-	Started    time.Time
-	Event      uiEventRef
+	// Origin is set when the daemon started this run on the person's behalf
+	// (a watcher finalization, a cron fire) rather than from a turn they typed
+	// at an endpoint. Empty for the person's own work, wherever they typed it.
+	Origin  string
+	Input   string
+	Started time.Time
+	Event   uiEventRef
 }
 
 type MsgDaemonRunFinished struct {

@@ -116,9 +116,15 @@ Read the matching document before changing a domain:
 - External operations that require minutes of polling use the durable
   `watch_external` handoff. Do not occupy an active agent turn with repeated
   model-driven polling or create an unsupervised polling goroutine.
-- CLI streams assistant and tool progress. IM sends a concise working notice,
-  meaningful milestones or approvals, and a final answer or handoff; it never
-  streams token deltas.
+- A run the daemon starts on the person's behalf carries an origin (cron fire,
+  watcher finalization, any future initiator); a turn the person typed at any
+  endpoint carries none. Clients render an origin-carrying run as a result
+  line, never as replayed progress — moving work off the agent turn must also
+  keep it out of the transcript. Approvals and clarifications are never
+  suppressed, and the run stays visible as daemon activity so queueing behind
+  it is explainable. CLI streams assistant and tool progress for the person's
+  own runs. IM sends a concise working notice, meaningful milestones or
+  approvals, and a final answer or handoff; it never streams token deltas.
 - `sent_unconfirmed` is terminal for blind retry. Only the bounded,
   inbound-triggered catch-up path may claim and resend an unconfirmed message.
   Do not introduce another resend path that can duplicate delivery.

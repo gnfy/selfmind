@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"selfmind/internal/control"
+	"selfmind/internal/executionenv"
 	"selfmind/internal/gateway/api"
 	"selfmind/internal/gateway/command"
 	"selfmind/internal/gateway/router"
@@ -270,6 +271,9 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 		startedPayload["watch_id"] = watchID
 		startedPayload["task_status"] = "running"
 	}
+	if origin := runOrigin(ctx, req); origin != "" {
+		startedPayload["origin"] = origin
+	}
 	_, _ = d.Control.AppendEvent(ctx, control.Event{
 		TaskID:     task.ID,
 		RunID:      run.ID,
@@ -313,6 +317,38 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 	}
 	lease, leaseErr := c.materializeExecutionLease(ctx, identity, run, workspace)
 	if leaseErr != nil {
+		// A recovered run whose environment no longer matches what it started
+		// with is a lifecycle decision, not a failure: continuing under a
+		// different PATH, account, or credential source would silently change
+		// what the remaining steps do. Park it for a human like an unavailable
+		// workspace, on the same resume path.
+		var changed *executionenv.EnvironmentChangedError
+		if errors.As(leaseErr, &changed) {
+			summary := "The execution environment changed since this run started (" +
+				strings.Join(changed.Changed, ", ") + ")."
+			outcome := api.RunOutcome{
+				Status:           "waiting_user",
+				CompletionReason: "environment_changed",
+				Resumable:        true,
+				Summary:          summary,
+				NextSteps: []string{
+					"Confirm the intended account and toolchain, then reply \"continue\" to start a fresh run under the current environment.",
+				},
+			}
+			event := control.Event{
+				TaskID: task.ID, RunID: run.ID, Type: "run.waiting_user", Visibility: "task", Channel: req.Channel,
+				Payload: mustJSON(map[string]interface{}{"outcome": outcome, "reason": "environment_changed", "changed": changed.Changed}),
+			}
+			_ = c.materializeRunFinalization(context.WithoutCancel(ctx), identity, task, run, "waiting_user",
+				analysisWorkspaceID, req.Content, req.Channel, "", outcome, attach,
+				control.Handoff{TaskID: task.ID, Summary: summary, NextSteps: outcome.NextSteps},
+				event)
+			return api.MessageResponse{
+				Identity: identity, Task: task, Run: run, Outcome: &outcome, Content: summary,
+				Turn:    messageTurn("waiting_user", "waiting_user", "idle", task.ID, run.ID, summary),
+				Context: messageContextBudget(llmUsageZero()),
+			}, http.StatusOK
+		}
 		outcome := c.finalizeErroredRun(ctx, identity, task, run, req.Channel, fmt.Errorf("materialize execution lease: %w", leaseErr), replay)
 		return api.MessageResponse{
 			Identity: identity, Task: task, Run: run, Outcome: &outcome, Error: firstString(outcome.Risks),
@@ -326,6 +362,11 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 	req.Attachments = c.importAttachments(identity, run, req.Attachments)
 	cleanupScope := c.installExecutionScope(identity, task, run, workspace, req, lease)
 	defer cleanupScope()
+	// Tag the turn with its run-scoped key so tool calls resolve exactly this
+	// run's scope instead of the person's most recent one.
+	if run != nil {
+		ctx = tools.WithExecutionScopeKey(ctx, tools.ExecutionScopeKeyForRun(run.ID))
+	}
 	if workspace != nil && workspace.LocalPath != "" {
 		ctx = kernel.WithWorkspaceContext(ctx, kernel.WorkspaceContext{
 			ID:   workspace.ID,
@@ -474,6 +515,29 @@ func (c *RunCoordinator) syncCurrentTask(ctx context.Context, identity *control.
 		return
 	}
 	_ = c.srv.Control.SetCurrentTask(ctx, identity.TenantID, identity.PersonID, task.ID)
+}
+
+// Origins of a run the daemon started on the person's behalf. A turn the
+// person typed at any endpoint has no origin: it is their own foreground work,
+// wherever they typed it.
+const (
+	runOriginWatch = "watch"
+	runOriginCron  = "cron"
+)
+
+// runOrigin names the initiator of a daemon-started run, or "" for a person's
+// own turn. Explicit request state wins; a watcher finalization is inferred
+// from the watch id the queue drain derives from its durable key; the kernel
+// turn-source tag is the last resort, because it only survives synchronous
+// paths — an async run executes under a fresh context.Background().
+func runOrigin(ctx context.Context, req api.MessageRequest) string {
+	if origin := strings.TrimSpace(req.Origin); origin != "" {
+		return origin
+	}
+	if strings.TrimSpace(req.WatchID) != "" {
+		return runOriginWatch
+	}
+	return strings.TrimSpace(kernel.TurnSourceFromContext(ctx))
 }
 
 // startAsyncRun accepts a turn immediately and runs it in the background,
@@ -704,6 +768,7 @@ func (c *RunCoordinator) drainQueue(identity *control.IdentityContext) {
 	if strings.HasPrefix(next.IdempotencyKey, "external-watch:") {
 		req.ExecutionProfile = tools.ExecutionProfileWatchFinalization
 		req.WatchID = externalWatchIDFromFinalizationKey(next.IdempotencyKey)
+		req.Origin = runOriginWatch
 	}
 	// Reproduce the queued item's route while preserving its durable person.
 	// Never create an account here: system rows may intentionally omit

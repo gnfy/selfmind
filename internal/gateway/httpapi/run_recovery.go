@@ -18,10 +18,12 @@ package httpapi
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
 	"selfmind/internal/control"
+	"selfmind/internal/executionenv"
 	"selfmind/internal/gateway/delivery"
 	"selfmind/internal/platform/log"
 )
@@ -93,6 +95,11 @@ func (d *Server) startStuckRunSweeper(ctx context.Context, interval, threshold t
 				// left uninformed once the CLI detaches (Fix 2). No-op when the
 				// escrow threshold is unset (PendingNotifyAfter <= 0).
 				d.sweepPendingNotifications(d.PendingNotifyAfter)
+				// Run scratch was only swept at boot, so a daemon that stays up
+				// for weeks never reclaimed it: the per-run soft quota cannot
+				// help, because a hundred finished runs holding a gigabyte each
+				// never trip a per-lease limit.
+				d.sweepRunScratch()
 			}
 		}
 	}()
@@ -176,4 +183,59 @@ func (d *Server) sweepPendingNotifications(threshold time.Duration) {
 			coord.escrowClarifyNotification(ctx, &clarifies[i])
 		}
 	}
+}
+
+// runScratchRetention is how long a finished run's scratch stays inspectable
+// before it is reclaimed.
+const runScratchRetention = 24 * time.Hour
+
+// sweepRunScratch reclaims scratch from runs that finished more than the
+// retention window ago. A lease belonging to a run that is still live is never
+// removed, no matter how old the directory looks: the age of the directory says
+// nothing about whether the run is still writing to it.
+func (d *Server) sweepRunScratch() {
+	if d == nil || executionenv.RuntimeRoot() == "" {
+		return
+	}
+	active := d.activeLeaseIDs()
+	removed, err := executionenv.SweepExpiredScratch(runScratchRetention, func(leaseID string) bool {
+		return active[leaseID]
+	}, time.Now())
+	if err != nil {
+		log.Debug("run scratch sweep failed", "error", err)
+		return
+	}
+	if removed > 0 {
+		log.Info("reclaimed expired run scratch", "count", removed, "retention", runScratchRetention)
+	}
+}
+
+// activeLeaseIDs collects the leases of runs that are currently executing, so
+// their scratch is never reclaimed underneath them.
+func (d *Server) activeLeaseIDs() map[string]bool {
+	active := map[string]bool{}
+	if d == nil || d.Control == nil {
+		return active
+	}
+	for _, status := range d.coordinator().activeRunStatuses() {
+		if strings.TrimSpace(status.RunID) == "" {
+			continue
+		}
+		lease, err := d.Control.GetExecutionLeaseByRun(context.Background(), d.DefaultTenantID, status.RunID)
+		if err != nil || lease == nil {
+			continue
+		}
+		active[lease.ID] = true
+	}
+	// A durable watch keys its scratch by watch id and may be mid-check or
+	// waiting for its next poll, so any watch that is not finished counts as
+	// active. Its scratch holds the credential overlay every poll reuses.
+	watches, err := d.Control.ListUnfinalizedExternalWatches(context.Background(),
+		time.Now().Add(-30*24*time.Hour), 500)
+	if err == nil {
+		for _, watch := range watches {
+			active[watch.ID] = true
+		}
+	}
+	return active
 }

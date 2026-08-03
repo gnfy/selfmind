@@ -708,7 +708,9 @@ func (c *Client) StartPresencePing(ctx context.Context) func() {
 // (decision "approved" or "rejected"), unblocking the waiting run. It backs the
 // client TUI's approval panel. scope carries class-grant memory on an approve:
 // "" (once), "task", or "person" — same grammar as `/approve [n] task|always`.
-func (c *Client) RespondApproval(approvalID, decision, scope string) error {
+// grantKey names a narrow RULE the person picked from the ask's own
+// server-issued option list; the daemon refuses a key that ask did not offer.
+func (c *Client) RespondApproval(approvalID, decision, scope, grantKey string) error {
 	req := api.ApprovalRespondRequest{
 		Platform:       "cli",
 		PlatformUserID: clientUserID(),
@@ -716,6 +718,7 @@ func (c *Client) RespondApproval(approvalID, decision, scope string) error {
 		ApprovalID:     approvalID,
 		Decision:       decision,
 		Scope:          scope,
+		GrantKey:       grantKey,
 	}
 	body, _ := json.Marshal(req)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

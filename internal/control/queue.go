@@ -30,6 +30,46 @@ const (
 	QueueStatusCancelled = "cancelled"
 )
 
+func normalizeQueueClass(class string) string {
+	switch strings.ToLower(strings.TrimSpace(class)) {
+	case QueueClassFinalization:
+		return QueueClassFinalization
+	case QueueClassBackground:
+		return QueueClassBackground
+	case QueueClassCron:
+		return QueueClassCron
+	default:
+		return QueueClassForeground
+	}
+}
+
+func queuePriorityForClass(class string) int {
+	switch normalizeQueueClass(class) {
+	case QueueClassFinalization:
+		return QueuePriorityFinalization
+	case QueueClassBackground:
+		return QueuePriorityBackground
+	case QueueClassCron:
+		return QueuePriorityCron
+	default:
+		return QueuePriorityForeground
+	}
+}
+
+const (
+	QueueClassForeground   = "foreground"
+	QueueClassFinalization = "finalization"
+	QueueClassBackground   = "background"
+	QueueClassCron         = "cron"
+)
+
+const (
+	QueuePriorityForeground   = 100
+	QueuePriorityFinalization = 80
+	QueuePriorityBackground   = 50
+	QueuePriorityCron         = 20
+)
+
 // QueuedTask is one deferred piece of new work for a person. It carries the
 // minimum an async run needs to route its result back to the origin endpoint
 // (channel/platform/platform_user_id) and to reproduce the request scope
@@ -55,6 +95,9 @@ type QueuedTask struct {
 	// IdempotencyKey deduplicates system-originated enqueues across crash
 	// recovery replays. Empty (ordinary inbound) rows never deduplicate.
 	IdempotencyKey string    `json:"idempotency_key,omitempty"`
+	Class          string    `json:"class,omitempty"`
+	Priority       int       `json:"priority,omitempty"`
+	NotBefore      time.Time `json:"not_before,omitempty"`
 	Status         string    `json:"status"`
 	Restarts       int       `json:"restarts,omitempty"`
 	CreatedAt      time.Time `json:"created_at"`
@@ -78,13 +121,21 @@ func (s *Store) EnqueueQueued(ctx context.Context, q QueuedTask) (*QueuedTask, e
 	q.Status = QueueStatusQueued
 	q.CreatedAt = time.Now()
 	q.IdempotencyKey = strings.TrimSpace(q.IdempotencyKey)
-	query := `INSERT INTO task_queue (id, tenant_id, person_id, channel, platform, platform_user_id, content, approval_mode, workspace_id, task_id, idempotency_key, status, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	q.Class = normalizeQueueClass(q.Class)
+	if q.Priority == 0 {
+		q.Priority = queuePriorityForClass(q.Class)
+	}
+	notBefore := q.NotBefore.Unix()
+	if q.NotBefore.IsZero() {
+		notBefore = 0
+	}
+	query := `INSERT INTO task_queue (id, tenant_id, person_id, channel, platform, platform_user_id, content, approval_mode, workspace_id, task_id, idempotency_key, class, priority, not_before, status, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 	if q.IdempotencyKey != "" {
 		query += ` ON CONFLICT(idempotency_key) WHERE idempotency_key != '' DO NOTHING`
 	}
 	result, err := s.db.ExecContext(ctx, query,
-		q.ID, q.TenantID, q.PersonID, q.Channel, q.Platform, q.PlatformUserID, q.Content, q.ApprovalMode, q.WorkspaceID, q.TaskID, q.IdempotencyKey, q.Status, q.CreatedAt.Unix())
+		q.ID, q.TenantID, q.PersonID, q.Channel, q.Platform, q.PlatformUserID, q.Content, q.ApprovalMode, q.WorkspaceID, q.TaskID, q.IdempotencyKey, q.Class, q.Priority, notBefore, q.Status, q.CreatedAt.Unix())
 	if err != nil {
 		return nil, err
 	}
@@ -109,21 +160,27 @@ func scanQueuedTask(rows interface {
 	Scan(dest ...interface{}) error
 }) (QueuedTask, error) {
 	var q QueuedTask
-	var created int64
+	var created, notBefore int64
 	if err := rows.Scan(&q.ID, &q.TenantID, &q.PersonID, &q.Channel, &q.Platform, &q.PlatformUserID,
-		&q.Content, &q.ApprovalMode, &q.WorkspaceID, &q.TaskID, &q.RunID, &q.IdempotencyKey, &q.Status, &q.Restarts, &created); err != nil {
+		&q.Content, &q.ApprovalMode, &q.WorkspaceID, &q.TaskID, &q.RunID, &q.IdempotencyKey,
+		&q.Class, &q.Priority, &notBefore, &q.Status, &q.Restarts, &created); err != nil {
 		return QueuedTask{}, err
 	}
 	q.CreatedAt = time.Unix(created, 0)
+	if notBefore > 0 {
+		q.NotBefore = time.Unix(notBefore, 0)
+	}
 	return q, nil
 }
 
 const queueSelectColumns = `id, tenant_id, person_id, channel, platform, COALESCE(platform_user_id, ''),
 	content, COALESCE(approval_mode, ''), COALESCE(workspace_id, ''), COALESCE(task_id, ''),
-	COALESCE(run_id, ''), COALESCE(idempotency_key, ''), status, COALESCE(restarts, 0), created_at`
+	COALESCE(run_id, ''), COALESCE(idempotency_key, ''), COALESCE(class, 'foreground'),
+	COALESCE(priority, 100), COALESCE(not_before, 0), status, COALESCE(restarts, 0), created_at`
 
-// ListQueued returns a person's queue rows in FIFO order (oldest first) for the
-// given status. An empty status defaults to "queued".
+// ListQueued returns a person's queue rows in scheduler order (priority first,
+// FIFO within one priority) for the given status. An empty status defaults to
+// "queued". Future not_before rows remain visible to diagnostics and /queue.
 func (s *Store) ListQueued(ctx context.Context, tenantID, personID, status string) ([]QueuedTask, error) {
 	if strings.TrimSpace(personID) == "" {
 		return nil, fmt.Errorf("person id is required")
@@ -132,7 +189,7 @@ func (s *Store) ListQueued(ctx context.Context, tenantID, personID, status strin
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT `+queueSelectColumns+`
 		 FROM task_queue WHERE tenant_id = ? AND person_id = ? AND status = ?
-		 ORDER BY created_at ASC, rowid ASC`,
+		 ORDER BY priority DESC, created_at ASC, rowid ASC`,
 		normalizeTenant(tenantID), personID, status)
 	if err != nil {
 		return nil, err
@@ -149,18 +206,18 @@ func (s *Store) ListQueued(ctx context.Context, tenantID, personID, status strin
 	return out, rows.Err()
 }
 
-// NextQueued returns the oldest still-queued task for a person, or nil when the
-// queue is empty. It never mutates state; the caller marks the row started only
-// once it has committed to launching it.
+// NextQueued returns the highest-priority due task for a person, or nil when no
+// row is currently due. It never mutates state; the caller marks the row
+// started only once it has committed to launching it.
 func (s *Store) NextQueued(ctx context.Context, tenantID, personID string) (*QueuedTask, error) {
 	if strings.TrimSpace(personID) == "" {
 		return nil, fmt.Errorf("person id is required")
 	}
 	row := s.db.QueryRowContext(ctx,
 		`SELECT `+queueSelectColumns+`
-		 FROM task_queue WHERE tenant_id = ? AND person_id = ? AND status = ?
-		 ORDER BY created_at ASC, rowid ASC LIMIT 1`,
-		normalizeTenant(tenantID), personID, QueueStatusQueued)
+		 FROM task_queue WHERE tenant_id = ? AND person_id = ? AND status = ? AND COALESCE(not_before, 0) <= ?
+		 ORDER BY priority DESC, created_at ASC, rowid ASC LIMIT 1`,
+		normalizeTenant(tenantID), personID, QueueStatusQueued, time.Now().Unix())
 	q, err := scanQueuedTask(row)
 	if err != nil {
 		if strings.Contains(err.Error(), "no rows") {
@@ -400,15 +457,15 @@ func (s *Store) ClearQueued(ctx context.Context, tenantID, personID string) (int
 	return int(n), err
 }
 
-// ListAllQueued returns queued rows across all persons/tenants for the given
-// status, oldest first. The boot drain uses it to find every person with
-// pending work after a restart.
+// ListAllQueued returns due rows across all persons/tenants in scheduler order.
+// The boot drain uses it to find every person with runnable work after restart.
 func (s *Store) ListAllQueued(ctx context.Context, status string) ([]QueuedTask, error) {
 	status = normalizeName(status, QueueStatusQueued)
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT `+queueSelectColumns+`
-		 FROM task_queue WHERE status = ? ORDER BY created_at ASC, rowid ASC`,
-		status)
+		 FROM task_queue WHERE status = ? AND COALESCE(not_before, 0) <= ?
+		 ORDER BY priority DESC, created_at ASC, rowid ASC`,
+		status, time.Now().Unix())
 	if err != nil {
 		return nil, err
 	}

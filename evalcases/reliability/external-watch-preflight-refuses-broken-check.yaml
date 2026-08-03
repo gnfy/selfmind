@@ -1,0 +1,39 @@
+id: reliability_external_watch_preflight_refuses_broken_check
+title: "a durable watch whose check cannot run is refused at registration, not parked in the background"
+suite: reliability
+workspace: isolated
+channel: cli
+require_cassette: false
+
+# Regression for the 2026-07-30 watcher incidents. A durable check has no host
+# escape hatch and no model in the loop, so a check that cannot run is terminal:
+# the daemon can only repeat it. One live watch repeated one identical
+# environment failure 65 times until its two-hour deadline. Registration now runs
+# the check once, so the failure surfaces while the agent can still fix it.
+#
+# The assertion is on the MESSAGE PATH, not on the fix: the run must not end as
+# waiting_external (there is nothing durable to wait for), and the reply must not
+# claim the external operation itself failed.
+#
+# Record this case with a live provider before promoting it to a mandatory
+# offline gate:
+#   SELFMIND_EVAL_VCR=record selfmind eval run \
+#     evalcases/reliability/external-watch-preflight-refuses-broken-check.yaml --live
+turns:
+  - input: "Register a durable external watch named deploy status. In the current workspace, poll the command `selfmind-no-such-release-cli describe --status`, treat SUCCEEDED as success and FAILED as failure, use a 30 second interval and a 300 second timeout. Do not run the polling command directly yourself. If the watch cannot be registered, explain why in one short paragraph and stop; do not invent a substitute command and do not claim anything about the deployment's state."
+
+expect:
+  # The watch must not be registered, so the run cannot park on an external wait.
+  must_not_contain:
+    - "waiting_external"
+  max_duration_seconds: 180
+  # The refusal arrives as a tool error; one is expected, and the model must not
+  # keep retrying variants of a check whose executable does not exist.
+  max_tool_errors: 2
+
+checks:
+  no_mojibake: true
+  no_raw_json_leak: true
+  no_tool_xml_leak: true
+  no_empty_response: true
+  no_provider_stack_dump: true

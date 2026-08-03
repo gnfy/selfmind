@@ -64,6 +64,10 @@ func (e *CronExecutor) RunCronJob(ctx context.Context, job cron.CronJob) error {
 		Channel:        channel,
 		Content:        prompt,
 		AllowWeb:       job.Web,
+		// A schedule fired this turn, not the person. Attached clients render
+		// it as a result line instead of replaying its progress (run.started
+		// carries the origin; the ctx tag below does not survive an async run).
+		Origin: runOriginCron,
 	}
 	// Stable label binding (W6): a learned task id rides the request as
 	// explicit attach evidence, so every fire of a daily job lands on the

@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 	"selfmind/internal/kernel/memory"
+	"selfmind/internal/platform/log"
 )
 
 // ProcessInfo holds information about a background process
@@ -21,6 +22,9 @@ type ProcessInfo struct {
 	Output    *bytes.Buffer
 	StartedAt time.Time
 	mu        sync.Mutex
+	// finished closes when the process is reaped, so the ceiling watchdog exits
+	// instead of lingering for its full duration on every completed process.
+	finished chan struct{}
 }
 
 // ProcessRegistry manages background processes
@@ -77,10 +81,20 @@ func (r *ProcessRegistry) Init(mem *memory.MemoryManager, tenantID string) {
 	r.Recover()
 }
 
-func (r *ProcessRegistry) StartProcess(command string, cwd string) (string, error) {
+// StartProcess launches a detached background command.
+//
+// env must be the RUN's prepared environment, not the process default. A
+// background command used to fall back to whatever the current snapshot was, so
+// a run whose foreground gcloud succeeded through its state overlay could have
+// its background gcloud fail — same run, same command, different environment.
+// Passing nil keeps the previous behaviour for callers with no request context.
+func (r *ProcessRegistry) StartProcess(command string, cwd string, env []string, ceiling time.Duration) (string, error) {
 	id := uuid.New().String()
 	cmd := shellCommand(command)
 	cmd.Dir = cwd
+	if len(env) > 0 {
+		cmd.Env = env
+	}
 
 	output := &bytes.Buffer{}
 	cmd.Stdout = output
@@ -96,6 +110,7 @@ func (r *ProcessRegistry) StartProcess(command string, cwd string) (string, erro
 		Cmd:       cmd,
 		Output:    output,
 		StartedAt: time.Now(),
+		finished:  make(chan struct{}),
 	}
 
 	r.mu.Lock()
@@ -114,9 +129,33 @@ func (r *ProcessRegistry) StartProcess(command string, cwd string) (string, erro
 		})
 	}
 
+	// A background process outlives its run, so nothing else will ever stop it.
+	// Without a ceiling a wedged command holds a process (and its scratch, and
+	// its copied credential state) until the daemon restarts. The ceiling is
+	// generous — this exists to stop a leak, not to bound legitimate work; a
+	// genuinely long external wait belongs in watch_external, which is durable
+	// and observable.
+	if ceiling > 0 {
+		go func() {
+			timer := time.NewTimer(ceiling)
+			defer timer.Stop()
+			select {
+			case <-info.finished:
+				return
+			case <-timer.C:
+			}
+			if cmd.Process != nil {
+				log.Warn("background process exceeded its ceiling and was stopped",
+					"process", id, "ceiling", ceiling)
+				_ = cmd.Process.Kill()
+			}
+		}()
+	}
+
 	// Handle cleanup in background
 	go func() {
 		err := cmd.Wait()
+		close(info.finished)
 		exitCode := 0
 		status := "exited"
 		if err != nil {

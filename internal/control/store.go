@@ -240,6 +240,10 @@ CREATE TABLE IF NOT EXISTS execution_leases (
 	credential_refs_json TEXT NOT NULL DEFAULT '[]',
 	principal_fingerprint TEXT,
 	capabilities_json TEXT NOT NULL DEFAULT '[]',
+	environment_snapshot_id TEXT NOT NULL DEFAULT '',
+	environment_generation INTEGER NOT NULL DEFAULT 0,
+	environment_fingerprint TEXT NOT NULL DEFAULT '',
+	credential_source_hash TEXT NOT NULL DEFAULT '',
 	created_at INTEGER NOT NULL,
 	updated_at INTEGER NOT NULL
 );
@@ -383,6 +387,8 @@ CREATE TABLE IF NOT EXISTS approval_grants (
 	scope_id TEXT NOT NULL,
 	pattern_key TEXT NOT NULL,
 	created_at INTEGER NOT NULL,
+	expires_at INTEGER NOT NULL DEFAULT 0,
+	revoked_at INTEGER NOT NULL DEFAULT 0,
 	UNIQUE(tenant_id, person_id, scope_kind, scope_id, pattern_key)
 );
 CREATE INDEX IF NOT EXISTS idx_approval_grants_lookup ON approval_grants(tenant_id, person_id, pattern_key);
@@ -458,6 +464,9 @@ CREATE TABLE IF NOT EXISTS task_queue (
 	task_id TEXT NOT NULL DEFAULT '',
 	run_id TEXT NOT NULL DEFAULT '',
 	idempotency_key TEXT NOT NULL DEFAULT '',
+	class TEXT NOT NULL DEFAULT 'foreground',
+	priority INTEGER NOT NULL DEFAULT 100,
+	not_before INTEGER NOT NULL DEFAULT 0,
 	status TEXT NOT NULL DEFAULT 'queued',
 	restarts INTEGER NOT NULL DEFAULT 0,
 	created_at INTEGER NOT NULL
@@ -568,6 +577,7 @@ CREATE TABLE IF NOT EXISTS external_watches (
 	notified INTEGER NOT NULL DEFAULT 0,
 	last_output TEXT NOT NULL DEFAULT '',
 	last_error TEXT NOT NULL DEFAULT '',
+	execution_binding_json TEXT NOT NULL DEFAULT '{}',
 	created_at INTEGER NOT NULL,
 	updated_at INTEGER NOT NULL,
 	finished_at INTEGER
@@ -652,6 +662,11 @@ CREATE INDEX IF NOT EXISTS idx_external_watches_owner
 		// (""/task/person) recorded when an approval is answered; older DBs
 		// created before the layered approval funnel lack the column.
 		{"approval_requests", "decision_scope", "TEXT"},
+		// decision_grant_key stores the narrow RULE a person picked instead of the
+		// action class; decision_note stores their words when they refused. Both
+		// arrived with the structured-decision batch, so older DBs lack them.
+		{"approval_requests", "decision_grant_key", "TEXT"},
+		{"approval_requests", "decision_note", "TEXT"},
 		// notified_at (unix seconds) records when an IM notification was actually
 		// SENT for a pending approval/clarify (never when a CLI-attached push was
 		// suppressed). The escrow sweep uses NULL to find pendings that left the
@@ -674,6 +689,12 @@ CREATE INDEX IF NOT EXISTS idx_external_watches_owner
 		// finalization) replay-safe: a crash-recovery re-enqueue with the
 		// same stable key is one row, never a duplicate run.
 		{"task_queue", "idempotency_key", "TEXT NOT NULL DEFAULT ''"},
+		// Queue class is an execution-quality property, not a task label. It
+		// keeps interactive work, watcher closure and scheduled work from being
+		// forced through one undifferentiated FIFO policy.
+		{"task_queue", "class", "TEXT NOT NULL DEFAULT 'foreground'"},
+		{"task_queue", "priority", "INTEGER NOT NULL DEFAULT 100"},
+		{"task_queue", "not_before", "INTEGER NOT NULL DEFAULT 0"},
 		// verdict_revision counts terminal-verdict revisions (timed_out ->
 		// succeeded). It keys all finalization products, so replaying the
 		// SAME verdict creates nothing new while a REVISED verdict emits one
@@ -718,6 +739,45 @@ CREATE INDEX IF NOT EXISTS idx_external_watches_owner
 		{"steering_mailbox", "platform_user_id", "TEXT NOT NULL DEFAULT ''"},
 		{"steering_mailbox", "workspace_id", "TEXT NOT NULL DEFAULT ''"},
 		{"steering_mailbox", "approval_mode", "TEXT NOT NULL DEFAULT ''"},
+		// A remembered approval class used to be permanent and irrevocable:
+		// the table only ever supported INSERT and an existence check, so a
+		// grant recorded from one over-broad class key stayed authoritative
+		// forever with no surface that could show or withdraw it. expires_at
+		// bounds the blast radius of any future key defect; revoked_at makes
+		// withdrawal durable and auditable. 0 keeps the legacy "no expiry"
+		// meaning for rows written before this column existed.
+		{"approval_grants", "expires_at", "INTEGER NOT NULL DEFAULT 0"},
+		{"approval_grants", "revoked_at", "INTEGER NOT NULL DEFAULT 0"},
+		// A lease binds a run to ONE in-process environment snapshot. Without
+		// these columns a restarted daemon could not tell whether rebuilding
+		// the snapshot preserves the environment the run started with, so it
+		// would silently continue under a different PATH or account.
+		{"execution_leases", "environment_snapshot_id", "TEXT NOT NULL DEFAULT ''"},
+		{"execution_leases", "environment_generation", "INTEGER NOT NULL DEFAULT 0"},
+		{"execution_leases", "environment_fingerprint", "TEXT NOT NULL DEFAULT ''"},
+		{"execution_leases", "credential_source_hash", "TEXT NOT NULL DEFAULT ''"},
+		// A durable watch outlives its run and survives restarts, so it is the
+		// execution path most likely to straddle an environment change. Without
+		// its own recorded identity a watch registered under one account would
+		// silently continue under whichever account the daemon happens to have
+		// after a restart.
+		// A watcher used to keep only the raw text of its last check, so the
+		// worker re-derived a diagnosis from that string with its own marker
+		// list. The typed class, a signature of the failure, and the streak
+		// length make "the same environment failure again" a decidable fact and
+		// let the watch stop instead of retrying until its deadline.
+		{"external_watches", "failure_class", "TEXT NOT NULL DEFAULT ''"},
+		{"external_watches", "check_signature", "TEXT NOT NULL DEFAULT ''"},
+		{"external_watches", "consecutive_failures", "INTEGER NOT NULL DEFAULT 0"},
+		{"external_watches", "environment_snapshot_id", "TEXT NOT NULL DEFAULT ''"},
+		{"external_watches", "environment_generation", "INTEGER NOT NULL DEFAULT 0"},
+		{"external_watches", "principal_fingerprint", "TEXT NOT NULL DEFAULT ''"},
+		{"external_watches", "environment_fingerprint", "TEXT NOT NULL DEFAULT ''"},
+		{"external_watches", "credential_source_hash", "TEXT NOT NULL DEFAULT ''"},
+		// Durable execution stores one secret-free binding rather than
+		// reconstructing environment and permissions from daemon-global state on
+		// every poll. Legacy identity columns remain during the migration window.
+		{"external_watches", "execution_binding_json", "TEXT NOT NULL DEFAULT '{}'"},
 	} {
 		if err := s.ensureColumn(ctx, col.table, col.name, col.def); err != nil {
 			return err
@@ -797,7 +857,11 @@ CREATE INDEX IF NOT EXISTS idx_external_watches_owner
 			ON tasks(tenant_id, person_id, COALESCE(workspace_id, ''))
 			WHERE kind = 'inbox';
 		CREATE UNIQUE INDEX IF NOT EXISTS idx_task_queue_idempotency ON task_queue(idempotency_key)
-			WHERE idempotency_key != '';`); err != nil {
+			WHERE idempotency_key != '';
+		UPDATE task_queue SET class = 'finalization', priority = 80
+			WHERE idempotency_key LIKE 'external-watch:%' AND class = 'foreground';
+		CREATE INDEX IF NOT EXISTS idx_task_queue_schedule
+			ON task_queue(status, not_before, priority DESC, created_at);`); err != nil {
 		return err
 	}
 	return nil

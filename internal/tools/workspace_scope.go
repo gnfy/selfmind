@@ -26,6 +26,17 @@ type ExecutionScope struct {
 	Channel       string
 	TrustLevel    string
 	LeaseID       string
+	// EnvironmentSnapshotID and EnvironmentGeneration mirror the lease's
+	// environment binding so a tool call can resolve its child environment
+	// without a control-plane lookup.
+	EnvironmentSnapshotID string
+	EnvironmentGeneration int64
+	// SandboxPolicy carries the execution policy WITH THE REQUEST. The policy
+	// used to exist only as process-wide state installed at startup, which meant
+	// one daemon could only ever have one policy — wrong the moment execution
+	// serves several workspaces with different trust levels. Nil keeps the
+	// process default.
+	SandboxPolicy *ExecSandboxPolicy
 	Capabilities  []string
 	// ExecutionProfile is an internal contract for system-originated work. It
 	// must never be populated from an external request.
@@ -62,6 +73,12 @@ type ExecutionScope struct {
 	// gateway/app installs a judge backed by a cheap role model, kept OFF the
 	// run's main provider.
 	Judge ApprovalJudge
+	// TriageIntent supplies the person's own words for this run so the judge can
+	// rule on AUTHORIZATION, not only on risk: the same command is a different
+	// decision when the person asked for it. The gateway installs it (it owns the
+	// work spine); it must return bounded, redacted text and is treated as
+	// untrusted data by the triage prompt. Nil means authorization is unknown.
+	TriageIntent func() string
 }
 
 type ExecutionCapabilityStore interface {
@@ -69,7 +86,35 @@ type ExecutionCapabilityStore interface {
 	GrantExecutionCapability(ctx context.Context, tenantID, personID, workspaceID, capability, resourceFingerprint, grantedBy string, expiresAt time.Time) error
 }
 
-var executionScopes sync.Map // tenantID used by the agent -> ExecutionScope
+// executionScopes is keyed by scope key. Historically the only key was the
+// person id (passed as "tenantID" because the agent's storage tenant IS the
+// person), which silently assumed one active execution per person. A run-scoped
+// key is also registered so a caller that knows its run resolves exactly its own
+// scope — the shape a separate execution node needs, where one process serves
+// many runs.
+var executionScopes sync.Map // scope key -> ExecutionScope
+
+type scopeKeyContextKey struct{}
+
+// WithExecutionScopeKey tags a context with the run-scoped key its tool calls
+// should resolve. The gateway installs it alongside the workspace context.
+func WithExecutionScopeKey(ctx context.Context, key string) context.Context {
+	key = strings.TrimSpace(key)
+	if ctx == nil || key == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, scopeKeyContextKey{}, key)
+}
+
+func executionScopeKeyFromContext(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	if key, ok := ctx.Value(scopeKeyContextKey{}).(string); ok {
+		return key
+	}
+	return ""
+}
 
 type ExecutionScopeDiagnostic struct {
 	Installed        bool
@@ -102,16 +147,39 @@ func ExecutionScopeDiagnostics(personID string) ExecutionScopeDiagnostic {
 	}
 }
 
-// SetExecutionScope installs scope for tenantID and returns a cleanup function.
-func SetExecutionScope(tenantID string, scope ExecutionScope) func() {
-	tenantID = strings.TrimSpace(tenantID)
-	if tenantID == "" {
+// SetExecutionScope installs scope under the person key and, when the scope
+// carries a run id, under a run-scoped key as well. The returned cleanup removes
+// both.
+func SetExecutionScope(personKey string, scope ExecutionScope) func() {
+	personKey = strings.TrimSpace(personKey)
+	runKey := ExecutionScopeKeyForRun(scope.RunID)
+	if personKey == "" && runKey == "" {
 		return func() {}
 	}
-	executionScopes.Store(tenantID, scope)
-	return func() {
-		executionScopes.Delete(tenantID)
+	if personKey != "" {
+		executionScopes.Store(personKey, scope)
 	}
+	if runKey != "" {
+		executionScopes.Store(runKey, scope)
+	}
+	return func() {
+		if personKey != "" {
+			executionScopes.Delete(personKey)
+		}
+		if runKey != "" {
+			executionScopes.Delete(runKey)
+		}
+	}
+}
+
+// ExecutionScopeKeyForRun builds the run-scoped key. Empty for a scope with no
+// run (a local CLI helper), which then resolves by person as before.
+func ExecutionScopeKeyForRun(runID string) string {
+	runID = strings.TrimSpace(runID)
+	if runID == "" {
+		return ""
+	}
+	return "run:" + runID
 }
 
 func currentExecutionScope(args map[string]interface{}) (ExecutionScope, bool) {
@@ -120,6 +188,15 @@ func currentExecutionScope(args map[string]interface{}) (ExecutionScope, bool) {
 }
 
 func currentExecutionScopeAny(args map[string]interface{}) (ExecutionScope, bool) {
+	// Prefer the run-scoped key: it identifies exactly one execution even when
+	// the process serves several.
+	if key := executionScopeKeyFromContext(contextFromArgs(args)); key != "" {
+		if value, ok := executionScopes.Load(key); ok {
+			if scope, ok := value.(ExecutionScope); ok {
+				return scope, true
+			}
+		}
+	}
 	tenantID, _ := args["_tenant_id"].(string)
 	if tenantID == "" {
 		return ExecutionScope{}, false

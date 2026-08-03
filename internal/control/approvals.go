@@ -26,9 +26,20 @@ type ApprovalRequest struct {
 	// (this call only), "task", or "person". It is set when the decision is
 	// recorded and read back by the approval waiter to drive class-level
 	// approval grants. Empty for pending rows and for reject/expire.
-	DecisionScope string    `json:"decision_scope,omitempty"`
-	CreatedAt     time.Time `json:"created_at"`
-	UpdatedAt     time.Time `json:"updated_at"`
+	DecisionScope string `json:"decision_scope,omitempty"`
+	// DecisionGrantKey is the narrow RULE the person chose instead of the action
+	// class ("commands that start with `git status`"). It is stored verbatim and
+	// re-validated by the execution layer against the candidates the SAME call
+	// offered, so a decision arriving from any surface cannot mint an
+	// authorization the daemon never proposed.
+	DecisionGrantKey string `json:"decision_grant_key,omitempty"`
+	// DecisionNote is the person's own words when they refused ("use the staging
+	// bucket instead"). A rejection with a reason is worth far more to the model
+	// than a bare no, and it must be stored rather than only steered, so any
+	// endpoint that reads the row later sees why.
+	DecisionNote string    `json:"decision_note,omitempty"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
 }
 
 func (s *Store) CreateApprovalRequest(ctx context.Context, req ApprovalRequest) (*ApprovalRequest, error) {
@@ -73,7 +84,7 @@ func (s *Store) ListApprovalRequests(ctx context.Context, tenantID, personID, st
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT id, tenant_id, person_id, COALESCE(task_id, ''), COALESCE(run_id, ''), action_type,
 		        COALESCE(payload_json, '{}'), status, COALESCE(requested_channel, ''), COALESCE(approved_channel, ''),
-		        COALESCE(decision_scope, ''), created_at, updated_at
+		        COALESCE(decision_scope, ''), COALESCE(decision_grant_key, ''), COALESCE(decision_note, ''), created_at, updated_at
 		 FROM approval_requests
 		 WHERE tenant_id = ? AND person_id = ? AND status = ?
 		 ORDER BY created_at DESC, id DESC LIMIT ?`,
@@ -101,7 +112,7 @@ func (s *Store) GetApprovalRequest(ctx context.Context, tenantID, approvalID str
 	row := s.db.QueryRowContext(ctx,
 		`SELECT id, tenant_id, person_id, COALESCE(task_id, ''), COALESCE(run_id, ''), action_type,
 		        COALESCE(payload_json, '{}'), status, COALESCE(requested_channel, ''), COALESCE(approved_channel, ''),
-		        COALESCE(decision_scope, ''), created_at, updated_at
+		        COALESCE(decision_scope, ''), COALESCE(decision_grant_key, ''), COALESCE(decision_note, ''), created_at, updated_at
 		 FROM approval_requests WHERE tenant_id = ? AND id = ?`,
 		normalizeTenant(tenantID), approvalID)
 	item, err := scanApprovalRequest(row)
@@ -162,7 +173,7 @@ func (s *Store) ListPendingApprovalsForEscrow(ctx context.Context, createdBefore
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT id, tenant_id, person_id, COALESCE(task_id, ''), COALESCE(run_id, ''), action_type,
 		        COALESCE(payload_json, '{}'), status, COALESCE(requested_channel, ''), COALESCE(approved_channel, ''),
-		        COALESCE(decision_scope, ''), created_at, updated_at
+		        COALESCE(decision_scope, ''), COALESCE(decision_grant_key, ''), COALESCE(decision_note, ''), created_at, updated_at
 		 FROM approval_requests
 		 WHERE status = 'pending' AND notified_at IS NULL AND created_at <= ?
 		 ORDER BY created_at ASC, id ASC LIMIT 100`,
@@ -185,7 +196,21 @@ func (s *Store) ListPendingApprovalsForEscrow(ctx context.Context, createdBefore
 // RespondApprovalRequest records a decision. grantScope (""/"task"/"person")
 // is persisted only for an approval and drives class-level approval memory; it
 // is ignored for a rejection.
-func (s *Store) RespondApprovalRequest(ctx context.Context, tenantID, personID, approvalID, decision, channel, grantScope string) (*ApprovalRequest, error) {
+// ApprovalDecisionInput carries the optional parts of a decision beyond
+// approve/reject: how long to remember it, WHICH narrow rule the person picked,
+// and their words when refusing. It is a struct rather than more positional
+// parameters because every caller sets a different subset.
+type ApprovalDecisionInput struct {
+	GrantScope string
+	// GrantKey is a rule key the surface offered with this ask. The store keeps
+	// it verbatim; the execution layer decides whether it is honored.
+	GrantKey string
+	// Note is the person's refusal guidance, stored so any endpoint reading the
+	// row later sees why the action was refused.
+	Note string
+}
+
+func (s *Store) RespondApprovalRequest(ctx context.Context, tenantID, personID, approvalID, decision, channel string, input ApprovalDecisionInput) (*ApprovalRequest, error) {
 	tenantID = normalizeTenant(tenantID)
 	if personID == "" {
 		return nil, fmt.Errorf("person id is required")
@@ -198,15 +223,21 @@ func (s *Store) RespondApprovalRequest(ctx context.Context, tenantID, personID, 
 	if err != nil {
 		return nil, err
 	}
-	grantScope = normalizeGrantScope(grantScope)
+	grantScope := normalizeGrantScope(input.GrantScope)
+	grantKey := strings.TrimSpace(input.GrantKey)
+	note := strings.TrimSpace(input.Note)
 	if status != "approved" {
-		grantScope = "" // a grant only makes sense on approval
+		// A grant only makes sense on approval; a note only on refusal. Keeping
+		// the pairing here means no caller can store a rule alongside a rejection.
+		grantScope, grantKey = "", ""
+	} else {
+		note = ""
 	}
 	result, err := s.db.ExecContext(ctx,
 		`UPDATE approval_requests
-		 SET status = ?, approved_channel = ?, decision_scope = ?, updated_at = ?
+		 SET status = ?, approved_channel = ?, decision_scope = ?, decision_grant_key = ?, decision_note = ?, updated_at = ?
 		 WHERE tenant_id = ? AND person_id = ? AND id = ? AND status = 'pending'`,
-		status, channel, grantScope, time.Now().Unix(), tenantID, personID, approvalID)
+		status, channel, grantScope, grantKey, note, time.Now().Unix(), tenantID, personID, approvalID)
 	if err != nil {
 		return nil, err
 	}
@@ -256,7 +287,8 @@ func scanApprovalRequest(rows interface {
 	var payload string
 	var created, updated int64
 	if err := rows.Scan(&item.ID, &item.TenantID, &item.PersonID, &item.TaskID, &item.RunID, &item.ActionType,
-		&payload, &item.Status, &item.RequestedChannel, &item.ApprovedChannel, &item.DecisionScope, &created, &updated); err != nil {
+		&payload, &item.Status, &item.RequestedChannel, &item.ApprovedChannel, &item.DecisionScope,
+		&item.DecisionGrantKey, &item.DecisionNote, &created, &updated); err != nil {
 		return ApprovalRequest{}, err
 	}
 	item.Payload = json.RawMessage(payload)

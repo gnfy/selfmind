@@ -206,6 +206,7 @@ func (s *Store) DeferSteering(ctx context.Context, m SteeringMessage) error {
 		WorkspaceID:    m.WorkspaceID,
 		TaskID:         m.TaskID,
 		IdempotencyKey: "steering:" + m.ID,
+		Class:          QueueClassForeground,
 	}); err != nil {
 		return err
 	}

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"selfmind/internal/control"
+	"selfmind/internal/executionenv"
 )
 
 // ExternalWatchTool registers a durable daemon-side condition check. The
@@ -40,9 +41,12 @@ func NewExternalWatchTool(store *control.Store) *ExternalWatchTool {
 			Required: []string{"command", "success_pattern"},
 		},
 		metadata: ToolMetadata{
-			Category:       "terminal",
-			RiskLevel:      ToolRiskHigh,
-			TimeoutSeconds: 5,
+			Category:  "terminal",
+			RiskLevel: ToolRiskHigh,
+			// Registration itself is a database write, but it now runs the check
+			// once first (see preflightExternalWatch), so the tool's own budget
+			// must cover one bounded check plus the write.
+			TimeoutSeconds: 45,
 		},
 	}
 	return t
@@ -73,6 +77,7 @@ func (t *ExternalWatchTool) Execute(args map[string]interface{}) (string, error)
 	interval := clampInt(intArg(args, "interval_seconds", 30), 5, 300)
 	totalTimeout := clampInt(intArg(args, "timeout_seconds", 7200), 60, 86400)
 	commandTimeout := clampInt(intArg(args, "command_timeout_seconds", 30), 1, 120)
+	timeoutAt := time.Now().Add(time.Duration(totalTimeout) * time.Second)
 	cwd := strings.TrimSpace(stringArg(args, "cwd"))
 	if cwd == "" {
 		cwd = scope.WorkspaceRoot
@@ -82,6 +87,76 @@ func (t *ExternalWatchTool) Execute(args map[string]interface{}) (string, error)
 		description = "External operation"
 	}
 
+	// Preflight: run the frozen check ONCE, here, with this run's material.
+	//
+	// Both live watcher failures were unrecoverable in the background — the
+	// durable path has no host escape hatch and no model to diagnose it — and
+	// both were detectable at registration. Running the check while the agent is
+	// still in its turn converts "two hours of retries plus a misleading verdict"
+	// into an error the model can act on immediately.
+	//
+	// It adds no approval surface: registration already passed approval, and the
+	// same command was going to run unattended seconds later.
+	verdict, err := preflightExternalWatch(args, command, cwd, successPattern, failurePattern, commandTimeout)
+	if err != nil {
+		return "", err
+	}
+	if verdict != "" {
+		return verdict, nil
+	}
+
+	// Record the environment this watch was registered under. A watch outlives
+	// its run and survives restarts, so without its own identity it would
+	// silently adopt whatever account the daemon has later — the check would
+	// still "succeed", against a different project.
+	lease, err := t.store.GetExecutionLeaseByRun(context.Background(), scope.TenantID, scope.RunID)
+	if err != nil {
+		return "", fmt.Errorf("load execution lease for external watch: %w", err)
+	}
+	if lease == nil {
+		return "", fmt.Errorf("external watch requires the creating run's execution lease")
+	}
+	leaseBinding := executionenv.BindingFromLease(lease.ID, *lease, scope.TrustLevel, nil, nil)
+	identity, err := executionenv.ResolveBinding(executionenv.DefaultRegistry(), leaseBinding)
+	if err != nil {
+		return "", fmt.Errorf("resolve external watch execution environment: %w", err)
+	}
+	// Freeze only capabilities that were effective for THIS registration call.
+	// A lease records what was available when its run started; copying that list
+	// could revive a grant that expired or was revoked before the watch was
+	// registered. The middleware resolves these booleans immediately before
+	// Execute, after consulting current trust, grants, and one-shot approvals.
+	capabilities := externalWatchEffectiveCapabilities(args)
+	binding := executionenv.BindingFromLease("", *lease, scope.TrustLevel, capabilities, identity)
+	activeGrants, err := t.store.ListActiveExecutionCapabilities(
+		context.Background(), scope.TenantID, scope.PersonID, scope.WorkspaceID)
+	if err != nil {
+		return "", fmt.Errorf("freeze external watch capabilities: %w", err)
+	}
+	for _, capability := range binding.ExecutionCapabilities {
+		bound := executionenv.CapabilityBinding{
+			Capability: capability,
+			Source:     executionenv.CapabilitySourceRegistration,
+			ExpiresAt:  timeoutAt,
+		}
+		for _, grant := range activeGrants {
+			if grant.Capability == capability {
+				bound.Source = executionenv.CapabilitySourceGrant
+				bound.GrantID = grant.ID
+				bound.ResourceFingerprint = grant.ResourceFingerprint
+				bound.ExpiresAt = grant.ExpiresAt
+				break
+			}
+		}
+		if bound.Source == executionenv.CapabilitySourceRegistration && scope.TrustLevel == executionenv.TrustTrusted {
+			if capability == executionenv.CapabilityCredentialRead ||
+				(capability == executionenv.CapabilityNetworkShared && ExecSandboxAllowsNetwork()) {
+				bound.Source = executionenv.CapabilitySourceTrust
+				bound.ExpiresAt = time.Time{}
+			}
+		}
+		binding.CapabilityBindings = append(binding.CapabilityBindings, bound)
+	}
 	watch, err := t.store.CreateExternalWatch(context.Background(), control.ExternalWatch{
 		TenantID:              scope.TenantID,
 		PersonID:              scope.PersonID,
@@ -96,7 +171,14 @@ func (t *ExternalWatchTool) Execute(args map[string]interface{}) (string, error)
 		FailurePattern:        failurePattern,
 		IntervalSeconds:       interval,
 		CommandTimeoutSeconds: commandTimeout,
-		TimeoutAt:             time.Now().Add(time.Duration(totalTimeout) * time.Second),
+		TimeoutAt:             timeoutAt,
+		ExecutionBinding:      binding,
+
+		EnvironmentSnapshotID:  identity.ID,
+		EnvironmentGeneration:  identity.Generation,
+		PrincipalFingerprint:   identity.PrincipalFingerprint,
+		EnvironmentFingerprint: identity.EnvironmentFingerprint,
+		CredentialSourceHash:   identity.CredentialSourceHash,
 	})
 	if err != nil {
 		return "", err
@@ -116,6 +198,17 @@ func (t *ExternalWatchTool) Execute(args map[string]interface{}) (string, error)
 		Payload:    payload,
 	})
 	return fmt.Sprintf("External watch registered: %s (%s). End this turn with finish_run status waiting_external. The daemon will notify the user when it completes, fails, or times out.", watch.ID, watch.Description), nil
+}
+
+func externalWatchEffectiveCapabilities(args map[string]interface{}) []string {
+	capabilities := make([]string, 0, 2)
+	if enabled, _ := args["_network_shared"].(bool); enabled {
+		capabilities = append(capabilities, executionenv.CapabilityNetworkShared)
+	}
+	if enabled, _ := args[credentialReadArgKey].(bool); enabled {
+		capabilities = append(capabilities, executionenv.CapabilityCredentialRead)
+	}
+	return capabilities
 }
 
 func clampInt(value, minValue, maxValue int) int {

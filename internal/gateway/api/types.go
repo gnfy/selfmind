@@ -33,6 +33,16 @@ type GatewayRuntimeInfo struct {
 	Commit           string `json:"commit,omitempty"`
 	BuiltAt          string `json:"built_at,omitempty"`
 	BuildFingerprint string `json:"build_fingerprint,omitempty"`
+	// Environment identity of the RUNNING daemon. `env refresh` must compare a
+	// fresh login-shell sample against THIS, not against the CLI's own
+	// environment: the CLI is usually the first process to see a new toolchain,
+	// so comparing against itself reported "unchanged" precisely when the daemon
+	// was the stale one. Fingerprints only — never variable names or values.
+	EnvironmentGeneration  int64  `json:"environment_generation,omitempty"`
+	EnvironmentSnapshotID  string `json:"environment_snapshot_id,omitempty"`
+	PrincipalFingerprint   string `json:"principal_fingerprint,omitempty"`
+	EnvironmentFingerprint string `json:"environment_fingerprint,omitempty"`
+	CredentialSourceHash   string `json:"credential_source_hash,omitempty"`
 }
 
 type GatewayStatusResponse struct {
@@ -77,6 +87,12 @@ type MessageRequest struct {
 	// from the stable watcher finalization key so clients can render a concise
 	// run boundary without exposing the internal finalization prompt.
 	WatchID string `json:"-"`
+	// Origin names the initiator of a run the daemon started on the person's
+	// behalf ("cron", "watch", and any future background initiator) rather than
+	// a turn the person typed at an endpoint, which leaves it empty. It is
+	// never accepted from the wire. Clients read it back from `run.started` and
+	// render such a run as a result line instead of replaying its progress.
+	Origin string `json:"-"`
 }
 
 // DispatchRequest runs a single management tool on the daemon. It backs
@@ -153,6 +169,14 @@ type ApprovalRespondRequest struct {
 	// Scope records class-level approval memory on an approve: "" (once),
 	// "task" (remember for this task), or "person" (remember across tasks).
 	Scope string `json:"scope,omitempty"`
+	// GrantKey names a narrow RULE the person picked from the ask's own
+	// server-issued option list ("commands that start with `git status`"). The
+	// daemon honors it only if that ask offered it, so a client cannot invent an
+	// authorization.
+	GrantKey string `json:"grant_key,omitempty"`
+	// Note is the person's guidance when refusing, stored with the decision so
+	// the reason survives on any endpoint that reads the row later.
+	Note string `json:"note,omitempty"`
 }
 
 type ApprovalRespondResponse struct {

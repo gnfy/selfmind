@@ -75,11 +75,90 @@ func indexOf(argv []string, tok string) int {
 	return -1
 }
 
+// indexOfBindTo accepts --bind-try as well as --bind: a declared workspace root
+// that does not exist on disk must be skipped rather than aborting the whole
+// sandbox setup.
 func indexOfBindTo(argv []string, target string) int {
 	for i := 0; i+2 < len(argv); i++ {
-		if argv[i] == "--bind" && argv[i+1] == target && argv[i+2] == target {
+		if (argv[i] == "--bind" || argv[i] == "--bind-try") && argv[i+1] == target && argv[i+2] == target {
 			return i
 		}
 	}
 	return -1
+}
+
+// A run's scratch directory replaces the private tmpfs and is bound TWICE: at
+// its real absolute path (so $SELFMIND_RUN_TMP resolves inside the sandbox) and
+// at /tmp (for tools that hardcode it). Both must be the same directory, which
+// is what makes temp state survive from one command of a run to the next.
+func TestWrapArgvBindsRunScratchAtRealPathAndTmp(t *testing.T) {
+	const scratch = "/home/u/.selfmind/runtime/leases/lease-1/tmp"
+	argv := WrapArgv("/usr/bin/bwrap", Policy{ScratchTmp: scratch}, []string{"sh", "-c", "true"})
+	joined := strings.Join(argv, " ")
+	if strings.Contains(joined, "--tmpfs /tmp") {
+		t.Fatalf("a private tmpfs must not shadow the run scratch: %v", argv)
+	}
+	if !strings.Contains(joined, "--bind "+scratch+" "+scratch) {
+		t.Fatalf("scratch must be bound at its real path: %v", argv)
+	}
+	if !strings.Contains(joined, "--bind "+scratch+" /tmp") {
+		t.Fatalf("scratch must also be bound at /tmp: %v", argv)
+	}
+	// Ordering: /tmp must come from the scratch bind, not from a later tmpfs.
+	if strings.LastIndex(joined, "--tmpfs") > strings.Index(joined, "--bind "+scratch) {
+		t.Fatalf("a tmpfs after the scratch bind would shadow it: %v", argv)
+	}
+}
+
+// Without a scratch directory the previous private-tmpfs behaviour must remain,
+// so an install with no runtime root keeps working.
+func TestWrapArgvKeepsPrivateTmpfsWithoutScratch(t *testing.T) {
+	argv := WrapArgv("/usr/bin/bwrap", Policy{}, []string{"sh", "-c", "true"})
+	if !strings.Contains(strings.Join(argv, " "), "--tmpfs /tmp") {
+		t.Fatalf("expected a private tmpfs fallback: %v", argv)
+	}
+}
+
+// A writable overlay whose target does not exist on the host needs a writable
+// parent, or bwrap aborts the whole sandbox trying to create the mount point.
+// The tmpfs for the state root must therefore be emitted BEFORE the overlay,
+// and the kept children immediately after it.
+func TestWrapArgvEmitsSynthesizedRootBeforeOverlay(t *testing.T) {
+	argv := WrapArgv("/usr/bin/bwrap", Policy{
+		SynthesizedDirs: []SynthesizedDir{{
+			Target:           "/home/u/.aws",
+			ReadOnlyChildren: []string{"/home/u/.aws/config"},
+		}},
+		OverlayMounts: []OverlayMount{{Source: "/lease/state/aws/sso-cache", Target: "/home/u/.aws/sso/cache"}},
+	}, []string{"sh", "-c", "aws --version"})
+
+	joined := strings.Join(argv, " ")
+	tmpfsAt := strings.Index(joined, "--tmpfs /home/u/.aws")
+	childAt := strings.Index(joined, "--ro-bind-try /home/u/.aws/config /home/u/.aws/config")
+	overlayAt := strings.Index(joined, "--bind-try /lease/state/aws/sso-cache /home/u/.aws/sso/cache")
+	if tmpfsAt < 0 || childAt < 0 || overlayAt < 0 {
+		t.Fatalf("missing mount arguments: %s", joined)
+	}
+	if !(tmpfsAt < childAt && childAt < overlayAt) {
+		t.Fatalf("mount order must be tmpfs -> children -> overlay: %s", joined)
+	}
+}
+
+func TestWrapArgvSkipsEmptySynthesizedEntries(t *testing.T) {
+	argv := WrapArgv("/usr/bin/bwrap", Policy{
+		SynthesizedDirs: []SynthesizedDir{
+			{Target: "  ", ReadOnlyChildren: []string{"/x"}},
+			{Target: "/home/u/.aws", ReadOnlyChildren: []string{"  "}},
+		},
+	}, []string{"sh", "-c", "true"})
+	joined := strings.Join(argv, " ")
+	if strings.Contains(joined, "--ro-bind-try /x /x") {
+		t.Fatalf("a child of a blank root was mounted: %s", joined)
+	}
+	if strings.Count(joined, "--ro-bind-try") != 0 {
+		t.Fatalf("a blank child was mounted: %s", joined)
+	}
+	if !strings.Contains(joined, "--tmpfs /home/u/.aws") {
+		t.Fatalf("valid synthesized root missing: %s", joined)
+	}
 }

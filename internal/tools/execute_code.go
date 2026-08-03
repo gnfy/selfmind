@@ -8,7 +8,6 @@ import (
 	"sync"
 	"time"
 
-	"selfmind/internal/kernel"
 	"selfmind/internal/platform/log"
 )
 
@@ -125,39 +124,39 @@ func (t *ExecuteCodeTool) Execute(args map[string]interface{}) (string, error) {
 	if modeErr != nil {
 		return "", enrichToolFailure("execute_code", modeErr, "")
 	}
-	cmd, decision, sandboxErr := sandboxedCommand(ctx, []string{"python3", "-I", scriptPath}, tmpDir, requestedMode, networkSharedArg(args))
-	if sandboxErr != nil {
-		return "", enrichToolFailure("execute_code", sandboxErr, "")
+	// Same engine entry as the shell tools: an argv request instead of a shell
+	// one. Routing it separately is how execute_code previously missed the run's
+	// environment binding and scratch space.
+	scope, _ := currentExecutionScopeAny(args)
+	request := ExecutionRequest{
+		ToolName:       "execute_code",
+		ToolCallID:     stringArg(args, "_tool_call_id"),
+		RunID:          scope.RunID,
+		LeaseID:        scope.LeaseID,
+		Command:        []string{"python3", "-I", scriptPath},
+		CWD:            tmpDir,
+		WorkspaceRoots: append(append([]string{}, scope.AllowedRoots...), tmpDir),
+		Sandbox:        requestedMode,
+		NetworkShared:  networkSharedArg(args),
+		Timeout:        profile.Timeout,
+		ToolProfile:    profile,
 	}
+	result, execErr := Execute(ctx, request, args)
+	decision := SandboxDecision{Mode: result.Plan.Mode, NetworkShared: result.Plan.NetworkMode == "shared"}
 	args["_sandbox_mode"] = string(decision.Mode)
-	args["_sandbox_reason"] = decision.Reason
-	emitToolProgress(kernel.EventChannelFromContext(ctx), "tool.sandbox", map[string]interface{}{
-		"tool_name":    "execute_code",
-		"tool_call_id": stringArg(args, "_tool_call_id"),
-		"mode":         string(decision.Mode),
-		"reason":       decision.Reason,
-		"network":      decision.NetworkShared,
-	}, string(decision.Mode))
+	args["_command_exit_code"] = result.ExitCode
+	args["_recovery_outcome"] = result.RecoveryOutcome
 	if decision.Mode == SandboxHost {
 		sandboxWarnOnce.Do(func() {
 			log.Warn("execute_code is running on the host without OS isolation", "reason", decision.Reason)
 		})
 	}
-	cmd.Dir = tmpDir
-	applySandboxLimits(cmd)
-
-	output, err := runCommandStreaming(ctx, cmd, "python3 -I <script>", "execute_code", stringArg(args, "_tool_call_id"), profile)
-	if err != nil {
-		if ctx.Err() == context.DeadlineExceeded {
-			failure := fmt.Errorf("execution timed out after %s", timeoutSummary(profile))
-			return output, enrichSandboxTimeout("execute_code", failure, output, decision)
-		}
-		return output, enrichToolFailure("execute_code", fmt.Errorf("execution error: %w", err), output)
+	if execErr != nil {
+		return result.Output, execErr
 	}
-
-	result := output
-	if len(result) > 50*1024 {
-		result = result[:50*1024] + "\n... (output truncated)"
+	output := result.Output
+	if len(output) > 50*1024 {
+		output = output[:50*1024] + "\n... (output truncated)"
 	}
-	return result, nil
+	return output, nil
 }

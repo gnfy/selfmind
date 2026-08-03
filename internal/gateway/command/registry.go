@@ -66,7 +66,7 @@ var entries = []Entry{
 	{Name: "/queue", Usage: "/queue [drop <n>|clear]", Summary: "List queued tasks (or drop all pending queued tasks).", SyncControl: true, Scope: Gateway},
 	{Name: "/diag", Usage: "/diag [memory|context|tasks|models|delivery]", Summary: "Show runtime, memory, context, task, model-route, or outbound-delivery diagnostics.", SyncControl: true, Scope: Gateway},
 	{Name: "/events", Usage: "/events", Summary: "List recent events for the current task.", SyncControl: true, Scope: Gateway},
-	{Name: "/approvals", Usage: "/approvals", Summary: "List pending approvals.", SyncControl: true, Scope: Gateway},
+	{Name: "/approvals", Usage: "/approvals [grants|revoke <n>]", Summary: "List pending approvals; grants lists remembered classes and revoke withdraws one.", SyncControl: true, Scope: Gateway},
 	{Name: "/approve", Usage: "/approve <n|id|all> [task|always]", Summary: "Approve a pending action; add task/always to remember its class.", SyncControl: true, Scope: Gateway},
 	{Name: "/reject", Usage: "/reject <n|id|all>", Summary: "Reject a pending action (or all of them).", SyncControl: true, Scope: Gateway},
 	{Name: "/mode", Usage: "/mode [mode]", Summary: "Show or set your approval mode (on-request|read-only|auto-edit|full-auto|smart).", SyncControl: true, Scope: Gateway},

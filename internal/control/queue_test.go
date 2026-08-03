@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sync"
 	"testing"
+	"time"
 )
 
 func TestBindQueuedRunAllowsOnlyOneConcurrentLauncher(t *testing.T) {
@@ -148,6 +149,50 @@ func TestTaskQueueLifecycle(t *testing.T) {
 	}
 	if next, _ := store.NextQueued(ctx, tenant, person); next != nil {
 		t.Fatalf("NextQueued after clear = %+v; want nil", next)
+	}
+}
+
+func TestTaskQueueUsesClassPriorityAndNotBefore(t *testing.T) {
+	ctx := context.Background()
+	store, err := OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	identity, _ := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Alice")
+	enqueue := func(content, class string, notBefore time.Time) *QueuedTask {
+		t.Helper()
+		q, err := store.EnqueueQueued(ctx, QueuedTask{
+			TenantID: identity.TenantID, PersonID: identity.PersonID,
+			Platform: "cli", Channel: "cli", Content: content,
+			Class: class, NotBefore: notBefore,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return q
+	}
+	enqueue("cron first", QueueClassCron, time.Time{})
+	foreground := enqueue("foreground later", QueueClassForeground, time.Time{})
+	enqueue("delayed foreground", QueueClassForeground, time.Now().Add(time.Hour))
+
+	rows, err := store.ListQueued(ctx, identity.TenantID, identity.PersonID, QueueStatusQueued)
+	if err != nil || len(rows) != 3 {
+		t.Fatalf("ListQueued = %d, %v", len(rows), err)
+	}
+	if rows[0].ID != foreground.ID || rows[0].Priority != QueuePriorityForeground {
+		t.Fatalf("scheduler order = %+v", rows)
+	}
+	next, err := store.NextQueued(ctx, identity.TenantID, identity.PersonID)
+	if err != nil || next == nil || next.ID != foreground.ID {
+		t.Fatalf("NextQueued = %+v, %v", next, err)
+	}
+	if err := store.MarkQueued(ctx, identity.TenantID, foreground.ID, QueueStatusStarted); err != nil {
+		t.Fatal(err)
+	}
+	next, err = store.NextQueued(ctx, identity.TenantID, identity.PersonID)
+	if err != nil || next == nil || next.Content != "cron first" {
+		t.Fatalf("delayed row became runnable: %+v, %v", next, err)
 	}
 }
 

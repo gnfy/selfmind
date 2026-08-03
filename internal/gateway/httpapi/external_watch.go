@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
@@ -11,6 +12,7 @@ import (
 	"unicode/utf8"
 
 	"selfmind/internal/control"
+	"selfmind/internal/executionenv"
 	"selfmind/internal/gateway/delivery"
 	"selfmind/internal/platform/log"
 	"selfmind/internal/tools"
@@ -98,26 +100,60 @@ func (d *Server) executeExternalWatch(ctx context.Context, watch control.Externa
 	if deadlinePassed {
 		// A terminal state recorded on the last checkpoint wins over the
 		// deadline: the external operation finished, we just noticed late.
-		if status := classifyExternalWatchOutput(watch, watch.LastOutput); status != "" {
+		if status := classifyStoredExternalWatchOutput(watch); status != "" {
 			d.completeExternalWatch(ctx, watch, status, watch.LastOutput, "")
 			return
 		}
 	}
+	// A watch must never silently change identity. It is checked BEFORE the
+	// command runs, because the failure mode is not an error — it is a check
+	// that succeeds against the wrong account, project, or cluster.
+	if changed := externalWatchEnvironmentChange(watch); len(changed) > 0 {
+		d.completeExternalWatchEnvironmentChanged(ctx, watch, changed)
+		return
+	}
 	checkCtx, cancel := context.WithTimeout(ctx, time.Duration(watch.CommandTimeoutSeconds)*time.Second)
 	defer cancel()
-	output, commandErr := runExternalWatchCommand(checkCtx, watch.CWD, watch.Command)
-	output = truncateExternalWatchOutput(tools.RedactSensitive(output))
+	result, commandErr := d.runExternalWatchCommand(checkCtx, watch)
+	output := truncateExternalWatchOutput(tools.RedactSensitive(result.Output))
 	errText := ""
 	if commandErr != nil {
 		errText = tools.RedactSensitive(commandErr.Error())
 	}
 
-	if status := classifyExternalWatchOutput(watch, output); status != "" {
-		d.completeExternalWatch(ctx, watch, status, output, statusErrText(status, errText))
+	// The layer order is fixed and must stay fixed: a lower-layer failure is
+	// never matched against the declared patterns. Reversing these two steps is
+	// what let a check that could not query anything report a business verdict.
+	verdict := classifyWatchCheck(result.FailureClass, result.ExitCode, commandErr != nil)
+	if verdict.Action == watchCheckPark {
+		d.parkExternalWatch(ctx, watch, verdict, result.FailureClass, output, errText)
 		return
 	}
-	if reason := classifyExternalWatchCommandDefect(output, errText); reason != "" {
-		d.completeExternalWatch(ctx, watch, control.ExternalWatchFailed, output, reason)
+	if verdict.Action == watchCheckObserve {
+		if status := classifyExternalWatchOutput(watch, output, result.ExitCode); status != "" {
+			d.completeExternalWatch(ctx, watch, status, output, statusErrText(status, errText))
+			return
+		}
+	}
+	// A failed check is not an observation. Its streak is recorded so an
+	// identical failure cannot be repeated until the deadline.
+	if commandErr != nil || strings.TrimSpace(result.FailureClass) != "" || result.ExitCode != 0 {
+		signature := watchCheckSignature(result.FailureClass, output)
+		streak, err := d.Control.RecordExternalWatchFailure(ctx, watch.TenantID, watch.ID,
+			output, errText, result.FailureClass, signature)
+		if err != nil {
+			log.Warn("external watch failure checkpoint failed", "watch_id", watch.ID, "error", err)
+			return
+		}
+		if streak >= watchRepeatedFailureLimit {
+			repeated := watchCheckVerdict{
+				Action: watchCheckPark,
+				Layer:  verdict.Layer,
+				Reason: watchReasonRepeatedFailure,
+				Detail: fmt.Sprintf("the same check failure repeated %d times without observing the external state", streak),
+			}
+			d.parkExternalWatch(ctx, watch, repeated, result.FailureClass, output, errText)
+		}
 		return
 	}
 	if deadlinePassed || !watch.TimeoutAt.After(time.Now()) {
@@ -159,42 +195,168 @@ func statusErrText(status, errText string) string {
 	return errText
 }
 
-func runExternalWatchCommand(ctx context.Context, cwd, command string) (string, error) {
-	output, _, err := tools.RunSandboxedShell(ctx, command, cwd, true)
-	return output, err
-}
-
-// classifyExternalWatchCommandDefect identifies deterministic failures in the
-// frozen check itself. Retrying these cannot reveal a new external state, so a
-// watch should fail immediately instead of reporting a misleading timeout.
-// Ordinary non-zero exits remain retryable because many status CLIs use them
-// while an external operation is still converging.
-func classifyExternalWatchCommandDefect(output, errText string) string {
-	combined := strings.ToLower(strings.TrimSpace(output + "\n" + errText))
-	if combined == "" {
-		return ""
-	}
-	markers := []string{
-		"illegal option",
-		"invalid option",
-		"syntax error",
-		"unexpected token",
-		"command not found",
-		"no such file or directory",
-		"permission denied",
-		"cannot execute",
-		"bad substitution",
-	}
-	for _, marker := range markers {
-		if strings.Contains(combined, marker) {
-			detail := strings.TrimSpace(output)
-			if detail == "" {
-				detail = strings.TrimSpace(errText)
-			}
-			return "watch check is invalid: " + truncate(toOneLine(detail), 240)
+// runExternalWatchCommand executes one durable check with the same execution
+// material a foreground command gets.
+//
+// This path has no host escape hatch, so an unprepared environment is fatal
+// rather than recoverable: a live gcloud watch failed on all six of its targets
+// with CHECK_ERROR purely because it could not write its own credential store,
+// while aws watches in the same workspace succeeded (the AWS CLI reads its
+// config without writing it). The scratch key is the watch id, so the state
+// overlay is materialized once and reused by every poll.
+func (d *Server) runExternalWatchCommand(ctx context.Context, watch control.ExternalWatch) (tools.ExecutionResult, error) {
+	binding := watch.ExecutionBinding
+	capabilities := []string(nil)
+	networkShared := true // grandfathered rows predate explicit capability binding
+	if binding.Version > 0 {
+		var err error
+		capabilities, err = d.validateExternalWatchCapabilities(ctx, watch, binding)
+		if err != nil {
+			return tools.ExecutionResult{FailureClass: "environment"}, err
+		}
+		networkShared = hasExecutionCapability(capabilities, executionenv.CapabilityNetworkShared)
+		if !networkShared {
+			return tools.ExecutionResult{FailureClass: "environment"},
+				fmt.Errorf("external watch execution binding does not include network:shared")
 		}
 	}
-	return ""
+	durable := tools.DurableExecutionScope{
+		ScratchKey:   watch.ID,
+		TenantID:     watch.TenantID,
+		PersonID:     watch.PersonID,
+		WorkspaceID:  watch.WorkspaceID,
+		Capabilities: capabilities,
+		Binding:      binding,
+	}
+	if binding.Version == 0 && d != nil && d.Control != nil && strings.TrimSpace(watch.WorkspaceID) != "" {
+		if workspace, err := d.Control.GetWorkspace(ctx, watch.TenantID, watch.WorkspaceID); err == nil && workspace != nil {
+			durable.TrustLevel = workspace.TrustLevel
+		}
+		if grants, err := d.Control.ListActiveExecutionCapabilities(ctx, watch.TenantID, watch.PersonID, watch.WorkspaceID); err == nil {
+			for _, grant := range grants {
+				durable.Capabilities = append(durable.Capabilities, grant.Capability)
+			}
+		}
+	}
+	return tools.RunDurableCheck(ctx, watch.Command, watch.CWD, networkShared, durable)
+}
+
+// validateExternalWatchCapabilities permits only capabilities present when the
+// watch was registered. Later grants never widen a running watch; withdrawal
+// of workspace trust or a persisted grant stops it before the next command.
+func (d *Server) validateExternalWatchCapabilities(
+	ctx context.Context,
+	watch control.ExternalWatch,
+	binding executionenv.Binding,
+) ([]string, error) {
+	if d == nil || d.Control == nil {
+		return nil, fmt.Errorf("external watch capability store is unavailable")
+	}
+	workspace, err := d.Control.GetWorkspace(ctx, watch.TenantID, watch.WorkspaceID)
+	if err != nil {
+		return nil, fmt.Errorf("read external watch workspace trust: %w", err)
+	}
+	if binding.TrustLevel == executionenv.TrustTrusted &&
+		(workspace == nil || workspace.TrustLevel != executionenv.TrustTrusted) {
+		return nil, fmt.Errorf("external watch workspace trust was revoked")
+	}
+
+	activeGrants, err := d.Control.ListActiveExecutionCapabilities(
+		ctx, watch.TenantID, watch.PersonID, watch.WorkspaceID)
+	if err != nil {
+		return nil, fmt.Errorf("read external watch capability grants: %w", err)
+	}
+	activeGrantIDs := map[string]bool{}
+	for _, grant := range activeGrants {
+		activeGrantIDs[grant.ID] = true
+	}
+
+	bindings := map[string]executionenv.CapabilityBinding{}
+	for _, bound := range binding.CapabilityBindings {
+		bindings[bound.Capability] = bound
+	}
+	out := make([]string, 0, len(binding.ExecutionCapabilities))
+	for _, capability := range binding.ExecutionCapabilities {
+		bound, described := bindings[capability]
+		if !described {
+			// Early v1 rows froze the capability names but not provenance. They
+			// remain bounded (later grants are ignored); a trusted binding is
+			// already covered by the trust check above.
+			out = append(out, capability)
+			continue
+		}
+		switch bound.Source {
+		case executionenv.CapabilitySourceTrust:
+			if workspace == nil || workspace.TrustLevel != executionenv.TrustTrusted {
+				return nil, fmt.Errorf("external watch capability %s was revoked with workspace trust", capability)
+			}
+			if capability == executionenv.CapabilityNetworkShared && !tools.ExecSandboxAllowsNetwork() {
+				return nil, fmt.Errorf("external watch network capability is disabled by current sandbox policy")
+			}
+		case executionenv.CapabilitySourceGrant:
+			if strings.TrimSpace(bound.GrantID) == "" || !activeGrantIDs[bound.GrantID] {
+				return nil, fmt.Errorf("external watch capability %s grant is expired or revoked", capability)
+			}
+		case executionenv.CapabilitySourceRegistration:
+			if !bound.ExpiresAt.IsZero() && !bound.ExpiresAt.After(time.Now()) {
+				return nil, fmt.Errorf("external watch capability %s registration approval expired", capability)
+			}
+		default:
+			return nil, fmt.Errorf("external watch capability %s has unknown authorization source", capability)
+		}
+		out = append(out, capability)
+	}
+	return out, nil
+}
+
+func hasExecutionCapability(capabilities []string, target string) bool {
+	for _, capability := range capabilities {
+		if capability == target {
+			return true
+		}
+	}
+	return false
+}
+
+// parkExternalWatch stops a watch whose CHECK failed, recording the structured
+// reason that keeps the failure attributable to the check rather than to the
+// external operation.
+//
+// It reuses the failed terminal status (as the environment-change path does)
+// so the existing finalization, notification, and recovery machinery applies
+// unchanged; the reason prefix is what downstream surfaces read.
+func (d *Server) parkExternalWatch(
+	ctx context.Context,
+	watch control.ExternalWatch,
+	verdict watchCheckVerdict,
+	failureClass, output, errText string,
+) {
+	evidence := strings.TrimSpace(output)
+	if evidence == "" {
+		evidence = strings.TrimSpace(errText)
+	}
+	reason := parkedWatchReason(verdict.Reason, verdict.Detail, evidence)
+	if d != nil && d.Control != nil {
+		_, _ = d.Control.AppendEvent(ctx, control.Event{
+			TaskID:     watch.TaskID,
+			RunID:      watch.RunID,
+			Type:       "external_watch.blocked",
+			Visibility: "task",
+			Channel:    watch.Channel,
+			Payload: mustJSON(map[string]interface{}{
+				"watch_id":      watch.ID,
+				"description":   watch.Description,
+				"reason":        verdict.Reason,
+				"layer":         verdict.Layer,
+				"failure_class": failureClass,
+				"detail":        verdict.Detail,
+			}),
+			IdempotencyKey: fmt.Sprintf("watch:%s:blocked:%s", watch.ID, verdict.Reason),
+		})
+	}
+	log.Warn("external watch parked",
+		"watch_id", watch.ID, "reason", verdict.Reason, "layer", verdict.Layer, "failure_class", failureClass)
+	d.completeExternalWatch(ctx, watch, control.ExternalWatchBlocked, output, reason)
 }
 
 // matchesExternalWatchPattern normalizes command output before matching so
@@ -221,10 +383,28 @@ func matchesExternalWatchPattern(pattern, output string) bool {
 	return false
 }
 
+// classifyStoredExternalWatchOutput re-examines a recorded checkpoint.
+//
+// A row carrying a failure class recorded a FAILED CHECK, not an observation,
+// so re-matching its text would resurrect the defect this file exists to
+// prevent — on the recovery path, where nobody is watching. Rows written before
+// the class existed carry none and keep the previous behaviour.
+func classifyStoredExternalWatchOutput(watch control.ExternalWatch) string {
+	if strings.TrimSpace(watch.FailureClass) != "" {
+		return ""
+	}
+	return classifyExternalWatchOutput(watch, watch.LastOutput, 0)
+}
+
 // classifyExternalWatchOutput maps an output to the watch's declared terminal
 // states. Empty string means non-terminal.
-func classifyExternalWatchOutput(watch control.ExternalWatch, output string) string {
-	if matchesExternalWatchPattern(watch.SuccessPattern, output) {
+//
+// Success requires a clean exit; failure does not. The asymmetry is deliberate:
+// a status CLI may exit non-zero while reporting a genuine terminal failure, but
+// a "success" printed by a check that itself failed is self-contradictory
+// evidence, and accepting it would let a broken check close a release.
+func classifyExternalWatchOutput(watch control.ExternalWatch, output string, exitCode int) string {
+	if exitCode == 0 && matchesExternalWatchPattern(watch.SuccessPattern, output) {
 		return control.ExternalWatchSucceeded
 	}
 	if watch.FailurePattern != "" && matchesExternalWatchPattern(watch.FailurePattern, output) {
@@ -251,6 +431,11 @@ func (d *Server) completeExternalWatch(ctx context.Context, watch control.Extern
 	if !finished {
 		return
 	}
+	// The watch's state overlay (a copied credential store) is no longer needed
+	// once the watch reaches a terminal state.
+	if err := executionenv.CleanupLeaseScratch(watch.ID); err != nil {
+		log.Debug("external watch scratch cleanup failed", "watch_id", watch.ID, "error", err)
+	}
 	d.finalizeExternalWatch(ctx, watch, status, output, lastError)
 }
 
@@ -272,7 +457,7 @@ func (d *Server) recoverExternalWatchVerdicts(ctx context.Context) {
 	}
 	for i := range watches {
 		watch := watches[i]
-		status := classifyExternalWatchOutput(watch, watch.LastOutput)
+		status := classifyStoredExternalWatchOutput(watch)
 		if status == "" {
 			continue
 		}
@@ -382,7 +567,7 @@ func (d *Server) notifyExternalWatchCompletion(ctx context.Context, watch contro
 		PersonID: watch.PersonID,
 		TaskID:   watch.TaskID,
 		RunID:    watch.RunID,
-		Content:  externalWatchCompletionNotice(watch.ID, watch.Status, "waiting_finalization"),
+		Content:  externalWatchNotice(watch, "waiting_finalization"),
 		Kind:     "external_watch",
 	})
 	if !handled {
@@ -400,6 +585,18 @@ func (d *Server) notifyExternalWatchCompletion(ctx context.Context, watch contro
 	}
 }
 
+// externalWatchNotice renders the one-line endpoint notice. A parked watch says
+// "blocked" and names the layer that failed, because "status: failed" on a check
+// that never reached the external system reads as a failed deployment.
+// Details stay out of the notice; `/diag execution` carries them.
+func externalWatchNotice(watch control.ExternalWatch, taskStatus string) string {
+	if reason, ok := watchCheckDefect(watch.LastError); ok {
+		return "Watcher " + strings.TrimSpace(watch.ID) + " blocked: " + reason +
+			" | the external state was not observed | task: " + taskStatus
+	}
+	return externalWatchCompletionNotice(watch.ID, watch.Status, taskStatus)
+}
+
 func externalWatchCompletionNotice(watchID, status, taskStatus string) string {
 	watchID = strings.TrimSpace(watchID)
 	taskStatus = strings.TrimSpace(taskStatus)
@@ -414,6 +611,8 @@ func externalWatchCompletionNotice(watchID, status, taskStatus string) string {
 		watchStatus = control.ExternalWatchTimedOut
 	case control.ExternalWatchCancelled:
 		watchStatus = control.ExternalWatchCancelled
+	case control.ExternalWatchBlocked:
+		watchStatus = control.ExternalWatchBlocked
 	}
 	return "Watcher " + watchID + " | status: " + watchStatus + " | task: " + taskStatus
 }
@@ -443,6 +642,7 @@ func (d *Server) enqueueExternalWatchFinalization(ctx context.Context, watch con
 		PlatformUserID: origin.PlatformUserID,
 		Content:        content,
 		TaskID:         watch.TaskID,
+		Class:          control.QueueClassFinalization,
 		// Stable per-verdict key: a crash-recovery replay of the SAME verdict
 		// is one row; a revised verdict earns one fresh finalization run.
 		IdempotencyKey: externalWatchFinalizationKey(watch),
@@ -468,6 +668,18 @@ func externalWatchFinalizationContent(watch control.ExternalWatch, summary strin
 			firstNonEmpty(strings.TrimSpace(watch.Status), "failed"),
 		)
 		finalInstruction = "Diagnose the recorded terminal evidence, preserve any completed work, and finish as failed, blocked, waiting_user, or waiting_external as the evidence requires."
+	}
+	// A parked watch says nothing about the external operation, and saying
+	// otherwise here is how a check defect became a release record claiming a
+	// build had failed. The finalization run must not convert it into a business
+	// outcome in either direction.
+	if reason, ok := watchCheckDefect(watch.LastError); ok {
+		verdictInstruction = fmt.Sprintf(
+			"The daemon's durable external watcher STOPPED because its own check could not observe the external state (%s). "+
+				"This is NOT evidence about the external operation: its real state is unknown.",
+			reason)
+		finalInstruction = "Record that the check was blocked and why, leave every external-state claim unresolved (never write succeeded or failed), " +
+			"and finish with waiting_user so a human can restore the check environment or verify the external state directly."
 	}
 	return fmt.Sprintf(
 		"%s "+
@@ -718,10 +930,27 @@ func externalWatchOutcome(watch control.ExternalWatch, status, output, lastError
 			message += " Last observed output: " + preview
 		}
 		return message, []string{"Inspect the external service status, then continue or register a new watch."}
+	case control.ExternalWatchBlocked:
+		reason := truncate(toOneLine(strings.TrimSpace(lastError)), 180)
+		return fmt.Sprintf("The watcher for %s was stopped: %s", description, firstNonEmpty(reason, preview)),
+			[]string{
+				"Restore the check environment or fix the check command, then verify the external state directly.",
+				"Do not record the external operation as succeeded or failed until it has actually been observed.",
+			}
 	default:
 		reason := truncate(toOneLine(strings.TrimSpace(lastError)), 180)
 		if reason == "" {
 			reason = preview
+		}
+		// The check failed, not the operation. Naming the watcher (not the
+		// operation) is the difference between "the release failed" and "we
+		// could not look".
+		if _, ok := watchCheckDefect(lastError); ok {
+			return fmt.Sprintf("The watcher for %s was stopped: %s", description, reason),
+				[]string{
+					"Restore the check environment or fix the check command, then verify the external state directly.",
+					"Do not record the external operation as succeeded or failed until it has actually been observed.",
+				}
 		}
 		message := fmt.Sprintf("%s reported a failure.", description)
 		if reason != "" {
@@ -729,4 +958,69 @@ func externalWatchOutcome(watch control.ExternalWatch, status, output, lastError
 		}
 		return message, []string{"Inspect the failure evidence and continue with a corrected action."}
 	}
+}
+
+// externalWatchEnvironmentChange reports which non-secret dimensions of the
+// execution environment moved since the watch was registered.
+//
+// Watches created before this identity existed carry no fingerprints; they are
+// grandfathered rather than parked, because parking them would strand work the
+// operator already started for a property that was never recorded.
+func externalWatchEnvironmentChange(watch control.ExternalWatch) []string {
+	if watch.ExecutionBinding.Version > 0 {
+		if _, err := executionenv.ResolveBinding(executionenv.DefaultRegistry(), watch.ExecutionBinding); err != nil {
+			var changed *executionenv.EnvironmentChangedError
+			if errors.As(err, &changed) {
+				return append([]string{}, changed.Changed...)
+			}
+			return []string{"environment unavailable"}
+		}
+		return nil
+	}
+	if strings.TrimSpace(watch.EnvironmentFingerprint) == "" &&
+		strings.TrimSpace(watch.PrincipalFingerprint) == "" &&
+		strings.TrimSpace(watch.CredentialSourceHash) == "" {
+		return nil
+	}
+	current := executionenv.DefaultRegistry().Current()
+	if current == nil {
+		return nil
+	}
+	changed := make([]string, 0, 3)
+	if watch.PrincipalFingerprint != "" && watch.PrincipalFingerprint != current.PrincipalFingerprint {
+		changed = append(changed, "account/profile")
+	}
+	if watch.EnvironmentFingerprint != "" && watch.EnvironmentFingerprint != current.EnvironmentFingerprint {
+		changed = append(changed, "PATH/HOME/proxy")
+	}
+	if watch.CredentialSourceHash != "" && watch.CredentialSourceHash != current.CredentialSourceHash {
+		changed = append(changed, "credential source")
+	}
+	return changed
+}
+
+// completeExternalWatchEnvironmentChanged parks a watch whose environment moved.
+// It is finished as failed with a structured reason so the existing notification
+// and handoff path reports it, and the task is left waiting for a human decision
+// rather than being retried under an identity nobody chose.
+func (d *Server) completeExternalWatchEnvironmentChanged(ctx context.Context, watch control.ExternalWatch, changed []string) {
+	reason := "environment_changed: " + strings.Join(changed, ", ") +
+		" changed since this watch was registered; it was stopped instead of checking under a different identity. " +
+		"Confirm the intended account and re-register the watch."
+	if d != nil && d.Control != nil {
+		_, _ = d.Control.AppendEvent(ctx, control.Event{
+			TaskID:     watch.TaskID,
+			RunID:      watch.RunID,
+			Type:       "external_watch.environment_changed",
+			Visibility: "task",
+			Channel:    watch.Channel,
+			Payload: mustJSON(map[string]interface{}{
+				"watch_id":    watch.ID,
+				"description": watch.Description,
+				"changed":     changed,
+			}),
+			IdempotencyKey: "watch:" + watch.ID + ":environment-changed",
+		})
+	}
+	d.completeExternalWatch(ctx, watch, control.ExternalWatchBlocked, watch.LastOutput, reason)
 }

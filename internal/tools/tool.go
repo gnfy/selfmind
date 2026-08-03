@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -14,6 +15,26 @@ type Tool interface {
 	Description() string
 	Execute(args map[string]interface{}) (string, error)
 	Schema() ToolSchema
+}
+
+// ContextTool is implemented by tools whose work can block or perform enough
+// computation that cancellation must reach the execution body. Tool remains
+// backward-compatible for small, deterministic helpers; the dispatcher prefers
+// ExecuteContext whenever a tool implements this interface.
+type ContextTool interface {
+	ExecuteContext(context.Context, map[string]interface{}) (string, error)
+}
+
+// ContextFromArgs returns the authenticated run context installed by the
+// kernel. Direct management/test dispatches have no run context and therefore
+// use Background rather than manufacturing a cancellable lifetime.
+func ContextFromArgs(args map[string]interface{}) context.Context {
+	if args != nil {
+		if ctx, ok := args["_context"].(context.Context); ok && ctx != nil {
+			return ctx
+		}
+	}
+	return context.Background()
 }
 
 type ToolExposure string

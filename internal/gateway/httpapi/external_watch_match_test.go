@@ -74,12 +74,18 @@ func TestRunExternalWatchCommandUsesBash(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("SelfMind's production daemon runs on Linux")
 	}
-	output, err := runExternalWatchCommand(context.Background(), t.TempDir(), "set -euo pipefail; printf SUCCESS")
+	server := &Server{}
+	result, err := server.runExternalWatchCommand(context.Background(), control.ExternalWatch{
+		CWD: t.TempDir(), Command: "set -euo pipefail; printf SUCCESS",
+	})
 	if err != nil {
-		t.Fatalf("bash watch command failed: %v (%s)", err, output)
+		t.Fatalf("bash watch command failed: %v (%s)", err, result.Output)
 	}
-	if output != "SUCCESS" {
-		t.Fatalf("output = %q, want SUCCESS", output)
+	if result.Output != "SUCCESS" {
+		t.Fatalf("output = %q, want SUCCESS", result.Output)
+	}
+	if result.FailureClass != "" || result.ExitCode != 0 {
+		t.Fatalf("clean check reported class %q exit %d", result.FailureClass, result.ExitCode)
 	}
 }
 
@@ -91,39 +97,16 @@ func TestExternalWatchCommandDoesNotInheritControlPlaneSecret(t *testing.T) {
 	tools.SetExecSandbox(false, false, false)
 	t.Cleanup(func() { tools.SetExecSandbox(false, false, false) })
 
-	output, err := runExternalWatchCommand(
-		context.Background(),
-		t.TempDir(),
-		`printf '%s' "${SELF_GATEWAY_TOKEN:-}"`,
-	)
+	server := &Server{}
+	result, err := server.runExternalWatchCommand(context.Background(), control.ExternalWatch{
+		CWD:     t.TempDir(),
+		Command: `printf '%s' "${SELF_GATEWAY_TOKEN:-}"`,
+	})
 	if err != nil {
-		t.Fatalf("watch command failed: %v (%s)", err, output)
+		t.Fatalf("watch command failed: %v (%s)", err, result.Output)
 	}
-	if output != "" {
-		t.Fatalf("watcher inherited control-plane secret: %q", output)
-	}
-}
-
-func TestClassifyExternalWatchCommandDefect(t *testing.T) {
-	cases := []struct {
-		name    string
-		output  string
-		errText string
-		want    bool
-	}{
-		{"illegal shell option", "sh: 1: set: Illegal option -o pipefail", "exit status 2", true},
-		{"syntax error", "bash: syntax error near unexpected token `)'", "exit status 2", true},
-		{"missing command", "bash: gcloudx: command not found", "exit status 127", true},
-		{"ordinary nonzero is retryable", "BUILD STILL RUNNING", "exit status 1", false},
-		{"transient network error is retryable", "connection reset by peer", "exit status 1", false},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			got := classifyExternalWatchCommandDefect(tc.output, tc.errText) != ""
-			if got != tc.want {
-				t.Fatalf("classifyExternalWatchCommandDefect(%q, %q) = %v, want %v", tc.output, tc.errText, got, tc.want)
-			}
-		})
+	if result.Output != "" {
+		t.Fatalf("watcher inherited control-plane secret: %q", result.Output)
 	}
 }
 
@@ -132,17 +115,27 @@ func TestClassifyExternalWatchOutput(t *testing.T) {
 		SuccessPattern: "^SUCCESS$",
 		FailurePattern: "^(FAILURE|CANCELLED)$",
 	}
-	if got := classifyExternalWatchOutput(watch, "SUCCESS\n"); got != control.ExternalWatchSucceeded {
+	if got := classifyExternalWatchOutput(watch, "SUCCESS\n", 0); got != control.ExternalWatchSucceeded {
 		t.Fatalf("success output classified as %q", got)
 	}
-	if got := classifyExternalWatchOutput(watch, "CANCELLED\n"); got != control.ExternalWatchFailed {
+	if got := classifyExternalWatchOutput(watch, "CANCELLED\n", 0); got != control.ExternalWatchFailed {
 		t.Fatalf("failure output classified as %q", got)
 	}
-	if got := classifyExternalWatchOutput(watch, "QUEUED\n"); got != "" {
+	if got := classifyExternalWatchOutput(watch, "QUEUED\n", 0); got != "" {
 		t.Fatalf("non-terminal output classified as %q", got)
 	}
 	noFailure := control.ExternalWatch{SuccessPattern: "^SUCCESS$"}
-	if got := classifyExternalWatchOutput(noFailure, "FAILURE\n"); got != "" {
+	if got := classifyExternalWatchOutput(noFailure, "FAILURE\n", 0); got != "" {
 		t.Fatalf("output without failure pattern classified as %q", got)
+	}
+	// A check that itself exited non-zero must not be able to declare success:
+	// a "SUCCESS" printed by a broken check is contradictory evidence.
+	if got := classifyExternalWatchOutput(watch, "SUCCESS\n", 1); got != "" {
+		t.Fatalf("success from a failed check classified as %q", got)
+	}
+	// A terminal FAILURE reported with a non-zero exit stays valid: status CLIs
+	// legitimately exit non-zero while reporting a real failure.
+	if got := classifyExternalWatchOutput(watch, "FAILURE\n", 1); got != control.ExternalWatchFailed {
+		t.Fatalf("failure with non-zero exit classified as %q", got)
 	}
 }

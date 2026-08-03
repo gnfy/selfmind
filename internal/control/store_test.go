@@ -294,7 +294,7 @@ func TestStoreApprovalFlow(t *testing.T) {
 	if len(pending) != 1 || pending[0].ID != approval.ID {
 		t.Fatalf("pending approvals = %+v", pending)
 	}
-	approved, err := store.RespondApprovalRequest(ctx, identity.TenantID, identity.PersonID, approval.ID, "approved", "wechat", "")
+	approved, err := store.RespondApprovalRequest(ctx, identity.TenantID, identity.PersonID, approval.ID, "approved", "wechat", ApprovalDecisionInput{})
 	if err != nil {
 		t.Fatalf("RespondApprovalRequest failed: %v", err)
 	}
@@ -308,7 +308,7 @@ func TestStoreApprovalFlow(t *testing.T) {
 	if len(pending) != 0 {
 		t.Fatalf("expected no pending approvals, got %+v", pending)
 	}
-	if _, err := store.RespondApprovalRequest(ctx, identity.TenantID, identity.PersonID, approval.ID, "rejected", "cli", ""); err == nil {
+	if _, err := store.RespondApprovalRequest(ctx, identity.TenantID, identity.PersonID, approval.ID, "rejected", "cli", ApprovalDecisionInput{}); err == nil {
 		t.Fatal("expected duplicate response to fail")
 	}
 }
@@ -334,7 +334,7 @@ func TestApprovalGrantsScopes(t *testing.T) {
 	}
 
 	// Task grant applies only to that task.
-	if err := store.GrantApproval(ctx, "task", tenant, person, "task-1", pk); err != nil {
+	if err := store.GrantApproval(ctx, "task", tenant, person, "task-1", pk, time.Time{}); err != nil {
 		t.Fatalf("GrantApproval task: %v", err)
 	}
 	if ok, _ := store.IsApprovalGranted(ctx, tenant, person, "task-1", pk); !ok {
@@ -345,7 +345,7 @@ func TestApprovalGrantsScopes(t *testing.T) {
 	}
 
 	// Person grant applies across all tasks.
-	if err := store.GrantApproval(ctx, "person", tenant, person, person, pk); err != nil {
+	if err := store.GrantApproval(ctx, "person", tenant, person, person, pk, time.Time{}); err != nil {
 		t.Fatalf("GrantApproval person: %v", err)
 	}
 	if ok, _ := store.IsApprovalGranted(ctx, tenant, person, "task-2", pk); !ok {
@@ -361,7 +361,7 @@ func TestApprovalGrantsScopes(t *testing.T) {
 	}
 
 	// Grants are idempotent.
-	if err := store.GrantApproval(ctx, "task", tenant, person, "task-1", pk); err != nil {
+	if err := store.GrantApproval(ctx, "task", tenant, person, "task-1", pk, time.Time{}); err != nil {
 		t.Fatalf("re-grant should be idempotent: %v", err)
 	}
 }
@@ -390,7 +390,7 @@ func TestRespondApprovalRecordsDecisionScope(t *testing.T) {
 		return a
 	}
 	a1 := mk()
-	got, err := store.RespondApprovalRequest(ctx, identity.TenantID, identity.PersonID, a1.ID, "approved", "cli", "task")
+	got, err := store.RespondApprovalRequest(ctx, identity.TenantID, identity.PersonID, a1.ID, "approved", "cli", ApprovalDecisionInput{GrantScope: "task"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -398,7 +398,7 @@ func TestRespondApprovalRecordsDecisionScope(t *testing.T) {
 		t.Fatalf("approve should keep task scope, got %q", got.DecisionScope)
 	}
 	a2 := mk()
-	got, err = store.RespondApprovalRequest(ctx, identity.TenantID, identity.PersonID, a2.ID, "rejected", "cli", "person")
+	got, err = store.RespondApprovalRequest(ctx, identity.TenantID, identity.PersonID, a2.ID, "rejected", "cli", ApprovalDecisionInput{GrantScope: "person"})
 	if err != nil {
 		t.Fatal(err)
 	}

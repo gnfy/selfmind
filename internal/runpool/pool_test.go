@@ -128,3 +128,71 @@ func TestPoolWorkersClampedToOne(t *testing.T) {
 		t.Fatalf("New(0).Workers() = %d, want 1", got)
 	}
 }
+
+func TestPoolReportsResourceWait(t *testing.T) {
+	p := New(2)
+	holding := make(chan struct{})
+	release := make(chan struct{})
+	go func() {
+		_ = p.Run(context.Background(), "workspace", func() error {
+			close(holding)
+			<-release
+			return nil
+		})
+	}()
+	<-holding
+
+	ctx, cancel := context.WithCancel(context.Background())
+	states := make(chan State, 2)
+	done := make(chan error, 1)
+	go func() {
+		done <- p.RunObserved(ctx, "workspace", func(state State) { states <- state }, func() error { return nil })
+	}()
+	select {
+	case state := <-states:
+		if state != StateWaitingResource {
+			t.Fatalf("first state = %q, want %q", state, StateWaitingResource)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("missing waiting_resource state")
+	}
+	cancel()
+	if err := <-done; err == nil {
+		t.Fatal("cancelled resource waiter returned nil")
+	}
+	close(release)
+}
+
+func TestPoolReportsWorkerWait(t *testing.T) {
+	p := New(1)
+	holding := make(chan struct{})
+	release := make(chan struct{})
+	go func() {
+		_ = p.Run(context.Background(), "", func() error {
+			close(holding)
+			<-release
+			return nil
+		})
+	}()
+	<-holding
+
+	ctx, cancel := context.WithCancel(context.Background())
+	states := make(chan State, 2)
+	done := make(chan error, 1)
+	go func() {
+		done <- p.RunObserved(ctx, "", func(state State) { states <- state }, func() error { return nil })
+	}()
+	select {
+	case state := <-states:
+		if state != StateWaitingWorker {
+			t.Fatalf("first state = %q, want %q", state, StateWaitingWorker)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("missing waiting_worker state")
+	}
+	cancel()
+	if err := <-done; err == nil {
+		t.Fatal("cancelled worker waiter returned nil")
+	}
+	close(release)
+}

@@ -75,7 +75,18 @@ func (g *Gateway) runConversation(ctx context.Context, uid, channel, input strin
 		usage  llm.UsageStats
 		runErr error
 	)
-	poolErr := g.pool.Run(ctx, workspaceSerialKey(ctx), func() error {
+	serialKey := workspaceSerialKey(ctx)
+	poolErr := g.pool.RunObserved(ctx, serialKey, func(state runpool.State) {
+		payload := map[string]interface{}{"state": string(state)}
+		if serialKey != "" {
+			payload["resource"] = "workspace:" + serialKey
+		}
+		kernel.EmitAgentEvent(kernel.EventChannelFromContext(ctx), kernel.AgentEvent{
+			Type:    "run.scheduler",
+			Content: schedulerStateMessage(state),
+			Payload: payload,
+		})
+	}, func() error {
 		ag := <-g.agents
 		defer func() { g.agents <- ag }()
 		resp, usage, runErr = ag.RunConversation(ctx, uid, channel, input)
@@ -86,6 +97,19 @@ func (g *Gateway) runConversation(ctx context.Context, uid, channel, input strin
 		return "", usage, poolErr
 	}
 	return resp, usage, runErr
+}
+
+func schedulerStateMessage(state runpool.State) string {
+	switch state {
+	case runpool.StateWaitingResource:
+		return "Waiting for the workspace write lock."
+	case runpool.StateWaitingWorker:
+		return "Waiting for an agent worker."
+	case runpool.StateRunning:
+		return "Agent worker acquired."
+	default:
+		return "Agent scheduler state changed."
+	}
 }
 
 // workspaceSerialKey serializes WRITE turns on the same workspace; an empty key

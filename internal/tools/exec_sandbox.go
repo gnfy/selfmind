@@ -4,11 +4,12 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
-	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
+	"time"
 
+	"selfmind/internal/executionenv"
 	"selfmind/internal/tools/sandbox"
 )
 
@@ -152,10 +153,14 @@ func requestedSandboxMode(args map[string]interface{}) (SandboxMode, error) {
 // than trusting the model-visible request: auto falls back to host when the
 // configured OS sandbox is disabled or unavailable.
 func effectiveSandboxModeForRequest(requested SandboxMode) SandboxMode {
+	enabled, required, _ := execSandboxPolicy()
+	return effectiveSandboxModeForPolicy(requested, enabled, required)
+}
+
+func effectiveSandboxModeForPolicy(requested SandboxMode, enabled, required bool) SandboxMode {
 	if requested == SandboxHost {
 		return SandboxHost
 	}
-	enabled, required, _ := execSandboxPolicy()
 	if requested == SandboxIsolated || required {
 		return SandboxIsolated
 	}
@@ -176,7 +181,8 @@ func annotateEffectiveSandboxMode(args map[string]interface{}) {
 	if err != nil {
 		return
 	}
-	args["_effective_sandbox_mode"] = string(effectiveSandboxModeForRequest(requested))
+	enabled, required, _ := execSandboxPolicyForArgs(args)
+	args["_effective_sandbox_mode"] = string(effectiveSandboxModeForPolicy(requested, enabled, required))
 }
 
 func effectiveSandboxModeArg(args map[string]interface{}) SandboxMode {
@@ -194,7 +200,8 @@ func networkSharedArg(args map[string]interface{}) bool {
 	if value, ok := args["_network_shared"].(bool); ok {
 		return value
 	}
-	return ExecSandboxAllowsNetwork()
+	_, _, network := execSandboxPolicyForArgs(args)
+	return network
 }
 
 // sandboxedCommand applies the execution policy to an argv without involving
@@ -213,12 +220,83 @@ func sandboxedCommandForPlatform(
 	sandboxAvailable bool,
 	networkOverride ...bool,
 ) (*exec.Cmd, SandboxDecision, error) {
+	return sandboxedCommandWithMaterial(ctx, inner, execMaterial{
+		WritableRoots: []string{writableRoot},
+		Env:           currentToolProcessEnv(),
+	}, requested, goos, sandboxAvailable, networkOverride...)
+}
+
+// execMaterial is everything the sandbox needs that is derived from the request
+// rather than from process-wide policy: the writable view, the run's scratch
+// space, and the child environment. Keeping it in one value is what lets every
+// exec path (terminal, verify, execute_code, durable watch) share one
+// construction site.
+type execMaterial struct {
+	WritableRoots []string
+	// ReadOnlyPaths are approved host paths a profile mapped read-only (a
+	// kubeconfig, an aws credentials file). They are already readable under the
+	// read-only host root today; keeping them explicit is what lets a future
+	// restricted-read backend narrow the view without changing callers.
+	ReadOnlyPaths []string
+	// OverlayMounts bind a writable state directory over a host path whose
+	// location a tool does not let us change (the AWS SSO token cache).
+	OverlayMounts []SandboxOverlayMount
+	// SynthesizedDirs replace a tool's state root with a writable shell so the
+	// overlay targets above are mountable even when the host lacks them.
+	SynthesizedDirs []SandboxSynthesizedDir
+	ScratchTmp      string
+	Env             []string
+	// Profiles, ProfileNotes and the copy counters are reported as execution
+	// evidence so a withheld credential or a bounded state copy is visible
+	// instead of surfacing later as a mysterious "not logged in".
+	Profiles []string
+	// ProfilesFromInventory are the profiles prepared because the HOST has their
+	// state, not because the command named their tool. Reported as evidence: a
+	// command that received credential state without naming the tool must be
+	// explainable from the event stream alone.
+	ProfilesFromInventory []string
+	ProfileNotes          []string
+	CopiedStateFiles      int
+	CopiedStateBytes      int64
+	// ScratchBytes is the run's accumulated scratch size, reported as evidence
+	// so an unbounded run is visible before it fills the disk.
+	ScratchBytes int64
+	// Identity is the environment binding this material was built from. It is
+	// what makes an emitted SandboxPlan self-describing: a plan with empty
+	// snapshot/generation/scratch fields cannot be audited or replayed, and it
+	// hides exactly the binding a remote execution node would need to verify.
+	SnapshotID    string
+	Generation    int64
+	ScratchHandle string
+	// ProfileError records a failure while preparing state. The command must not
+	// run: a half-prepared credential overlay fails later with a misleading
+	// error.
+	ProfileError error
+}
+
+func sandboxedCommandWithMaterial(
+	ctx context.Context,
+	inner []string,
+	material execMaterial,
+	requested SandboxMode,
+	goos string,
+	sandboxAvailable bool,
+	networkOverride ...bool,
+) (*exec.Cmd, SandboxDecision, error) {
 	if len(inner) == 0 {
 		return nil, SandboxDecision{}, fmt.Errorf("sandbox command is empty")
 	}
+	env := material.Env
+	if len(env) == 0 {
+		env = currentToolProcessEnv()
+	}
 	plain := func(decision SandboxDecision) (*exec.Cmd, SandboxDecision, error) {
-		cmd := exec.CommandContext(ctx, inner[0], inner[1:]...)
-		cmd.Env = currentToolProcessEnv()
+		plan := planFromMaterial(material, decision)
+		processMaterial := ProcessMaterial{env: env, scratchTmp: strings.TrimSpace(material.ScratchTmp)}
+		cmd, err := SandboxBackendForMode(SandboxHost).Command(ctx, inner, plan, processMaterial)
+		if err != nil {
+			return nil, SandboxDecision{}, err
+		}
 		return cmd, decision, nil
 	}
 	enabled, required, network := execSandboxPolicy()
@@ -255,42 +333,92 @@ func sandboxedCommandForPlatform(
 		return plain(SandboxDecision{Mode: SandboxHost, Reason: "bubblewrap or unprivileged user namespaces unavailable", NetworkShared: true})
 	}
 
-	policy := sandbox.Policy{Network: network}
-	if strings.TrimSpace(writableRoot) != "" {
-		root, err := filepath.Abs(writableRoot)
-		if err != nil {
-			return nil, SandboxDecision{}, fmt.Errorf("resolve sandbox writable root: %w", err)
-		}
-		policy.WritableRoots = []string{filepath.Clean(root)}
-	}
-	wrapped, ok := sandbox.Wrap(policy, inner)
-	if !ok {
+	decision := SandboxDecision{Mode: SandboxIsolated, NetworkShared: network}
+	plan := planFromMaterial(material, decision)
+	processMaterial := ProcessMaterial{env: env, scratchTmp: strings.TrimSpace(material.ScratchTmp)}
+	cmd, err := SandboxBackendForMode(SandboxIsolated).Command(ctx, inner, plan, processMaterial)
+	if err != nil {
 		if requested == SandboxIsolated || required {
 			return nil, SandboxDecision{}, fmt.Errorf("isolated execution is unavailable (install bubblewrap and enable unprivileged user namespaces)")
 		}
 		return plain(SandboxDecision{Mode: SandboxHost, Reason: "bubblewrap or unprivileged user namespaces unavailable", NetworkShared: true})
 	}
-	cmd := exec.CommandContext(ctx, wrapped[0], wrapped[1:]...)
-	// Secrets are passed only through the child environment. Never encode them
-	// into bwrap argv with --setenv: argv is visible through process listings.
-	cmd.Env = currentToolProcessEnv()
-	return cmd, SandboxDecision{Mode: SandboxIsolated, NetworkShared: network}, nil
+	return cmd, decision, nil
 }
 
 func sandboxedShellCommand(ctx context.Context, command, writableRoot string, requested SandboxMode, networkOverride ...bool) (*exec.Cmd, SandboxDecision, error) {
 	return sandboxedCommand(ctx, shellArgv(command), writableRoot, requested, networkOverride...)
 }
 
-// RunSandboxedShell is the daemon-owned execution path for durable background
-// checks such as external watchers. It applies the same filtered child
-// environment and sandbox policy as foreground exec tools, rather than
-// inheriting gateway control-plane credentials through os/exec.
-func RunSandboxedShell(ctx context.Context, command, cwd string, networkShared bool) (string, SandboxDecision, error) {
-	cmd, decision, err := sandboxedShellCommand(ctx, command, cwd, SandboxAuto, networkShared)
-	if err != nil {
-		return "", decision, err
+// DurableExecutionScope describes a daemon-owned execution that has no live
+// agent run — an external watch, a scheduled check — but still needs the same
+// environment preparation as a foreground command.
+//
+// This path has NO host escape hatch by design, which is exactly why it must
+// get state overlays: a durable gcloud check failed on every attempt with
+// CHECK_ERROR because it could not write its own credential store, and no
+// amount of model reasoning could recover it. ScratchKey is stable per watch, so
+// the overlay is materialized once and reused by every poll.
+type DurableExecutionScope struct {
+	ScratchKey   string
+	TenantID     string
+	PersonID     string
+	WorkspaceID  string
+	TrustLevel   string
+	Capabilities []string
+	Binding      executionenv.Binding
+}
+
+// RunDurableCheck runs a daemon-owned check with the same execution material a
+// foreground command receives: request-derived writable roots, run scratch, and
+// the tool environment profiles the command's programs need.
+//
+// It returns the FULL typed result on purpose. The earlier signature returned
+// only (output, error), so the caller had to re-derive a diagnosis from text —
+// and a watch whose sandbox could not even be constructed
+// (FailureClass=credential_state_readonly) was retried every 30 seconds for two
+// hours, because the string it inspected did not happen to contain a marker from
+// its own private list. The typed class already exists at this boundary; the one
+// thing a durable caller must not do is throw it away.
+func RunDurableCheck(ctx context.Context, command, cwd string, networkShared bool, durable DurableExecutionScope) (ExecutionResult, error) {
+	// The durable path uses the SAME engine entry as a foreground command. It
+	// previously had its own construction, which is how it ended up with neither
+	// state overlays nor an environment binding — and it is the one path with no
+	// host escape hatch, so an unprepared environment there is unrecoverable.
+	return Execute(ctx, ExecutionRequest{
+		ToolName:       "watch_external",
+		Payload:        command,
+		Shell:          true,
+		CWD:            cwd,
+		WorkspaceRoots: []string{cwd},
+		Sandbox:        SandboxAuto,
+		NetworkShared:  networkShared,
+		Durable:        &durable,
+		ToolProfile:    ToolProfile{Class: ToolExecutionStandard, HeartbeatInterval: time.Second},
+	}, nil)
+}
+
+// ExecSandboxPolicy is the execution policy for one request.
+type ExecSandboxPolicy struct {
+	Enabled      bool
+	Required     bool
+	AllowNetwork bool
+}
+
+// CurrentExecSandboxPolicy snapshots the operator policy so a request can carry
+// it explicitly instead of reading a process global at execution time.
+func CurrentExecSandboxPolicy() *ExecSandboxPolicy {
+	enabled, required, network := execSandboxPolicy()
+	return &ExecSandboxPolicy{Enabled: enabled, Required: required, AllowNetwork: network}
+}
+
+// execSandboxPolicyForArgs resolves the policy for a call: the request's own
+// policy when the scope carries one, else the process default. Threading policy
+// through the request is what lets one process serve executions that must not
+// share a single global setting.
+func execSandboxPolicyForArgs(args map[string]interface{}) (enabled, required, network bool) {
+	if scope, ok := currentExecutionScopeAny(args); ok && scope.SandboxPolicy != nil {
+		return scope.SandboxPolicy.Enabled, scope.SandboxPolicy.Required, scope.SandboxPolicy.AllowNetwork
 	}
-	cmd.Dir = cwd
-	output, runErr := cmd.CombinedOutput()
-	return string(output), decision, runErr
+	return execSandboxPolicy()
 }

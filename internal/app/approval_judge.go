@@ -26,9 +26,23 @@ type llmApprovalJudge struct {
 // prompt-injection defense.
 const judgeSystemPrompt = "You are a command-safety triage judge. Reply with exactly one word: APPROVE, DENY, or ESCALATE. No explanation."
 
-// judgeMaxTokens caps the reply. A verdict is one word; a tiny cap keeps the
-// call cheap and blocks a chatty model from burning tokens.
-const judgeMaxTokens = 8
+// judgeMaxTokens caps the reply. The verdict itself is one word, but the cap
+// must also cover any REASONING the model emits before it — and every cheap role
+// model in practice is a reasoning model. At the previous cap of 8 the thinking
+// consumed the whole budget, so anthropic-protocol judges returned a response
+// with no text block at all ("HTTP 200 response contained no text or tool use",
+// stop_reason=max_tokens) and OpenAI-protocol judges returned truncated prose
+// that no strict verdict parse could accept. Both outcomes escalate, which
+// silently turned smart mode into on-request: the funnel looked strict when it
+// was simply never ruling.
+//
+// 512 is measured, not guessed: it is the smallest budget at which the three
+// cheap routes in use (nvidia/nemotron via OpenAI chat, kimi-for-coding and
+// MiniMax via anthropic messages) all emit a bare verdict, and all answer in
+// 0.4-5.4s — comfortably inside tools' 15s triage bound. Thinking blocks are
+// dropped by the adapter, so the judge still receives exactly one word and the
+// strict parser stays strict.
+const judgeMaxTokens = 512
 
 // NewApprovalJudge builds a tools.ApprovalJudge backed by the given cheap role
 // provider. Returns nil when the provider is nil so callers can wire it

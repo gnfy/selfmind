@@ -118,13 +118,23 @@ type uiModel struct {
 	daemonRunActive       bool // person-level daemon stream reports an executing run
 	daemonRunID           string
 	daemonRunStarted      time.Time
-	daemonRunAwaitingDone bool   // final answer still arrives through MsgAgentDone
-	migrationHint         string // Hint for migrating Hermes skills
-	streamController      markdownStreamController
-	liveStreamContent     string
-	streamFlushPending    bool
-	cursorVisible         bool
-	clientMode            bool // daemon-client mode: no in-process agent/gateway; chat routes to the daemon
+	daemonRunAwaitingDone bool // final answer still arrives through MsgAgentDone
+	// backgroundRunID is the daemon run whose progress this terminal must NOT
+	// render: the daemon started it on the person's behalf (a watcher
+	// finalization, a cron fire). backgroundOrigin names that initiator and
+	// backgroundWatchID is set only for a watcher; backgroundResultPending
+	// tracks the one result line the run still owes. See markBackgroundRun in
+	// daemon_events.go.
+	backgroundRunID         string
+	backgroundWatchID       string
+	backgroundOrigin        string
+	backgroundResultPending bool
+	migrationHint           string // Hint for migrating Hermes skills
+	streamController        markdownStreamController
+	liveStreamContent       string
+	streamFlushPending      bool
+	cursorVisible           bool
+	clientMode              bool // daemon-client mode: no in-process agent/gateway; chat routes to the daemon
 	// workspaceOverride* pin this session's execution workspace after a
 	// successful `/workspace <n|id>` switch (mirrors the approvalMode session
 	// override). Without it the next CLI turn silently re-derived a workspace
@@ -137,14 +147,19 @@ type uiModel struct {
 	workspaceOverrideName string
 	workspaceOverridePath string
 	toolDispatchFn        func(tool string, args map[string]interface{}) (string, error) // client mode: run management tools on the daemon
-	approvalResponder     func(approvalID, decision, scope string) error                 // client mode: answer a daemon tool-approval request (scope: ""|task|person)
+	approvalResponder     func(approvalID, decision, scope, grantKey string) error       // client mode: answer a daemon tool-approval request (scope: ""|task|person; grantKey: a rule the ask offered)
 	steerFn               func(text string) error                                        // client mode: forward mid-turn guidance to the daemon's active run
 	// Interactive approval panel state (see approval_flow.go). approvalPrompt is
 	// the active panel; approvalQueue holds requests that arrived while one was
 	// already up (FIFO re-arm); approvalDenyFollowup captures the composer after
 	// "No" so the user can attach guidance to the rejection.
-	approvalPrompt       *components.ApprovalPrompt
-	approvalQueue        []MsgApprovalRequest
+	approvalPrompt *components.ApprovalPrompt
+	approvalQueue  []MsgApprovalRequest
+	// delayedApprovals hold requests that arrived while the person was typing;
+	// they are armed once input goes idle (approvalTypingIdleDelay) so a panel
+	// cannot swallow an in-flight keystroke as a decision.
+	delayedApprovals     []MsgApprovalRequest
+	lastInputActivityAt  time.Time
 	approvalDenyFollowup bool
 	pendingApprovalID    string
 	pendingApprovalTool  string
@@ -199,6 +214,21 @@ type MsgApprovalRequest struct {
 	Tool   string
 	Target string // compact object of the action (path/command); may be empty
 	Reason string
+	// Decision context published with the approval.requested event: where the
+	// operation would run, how large the write is, what a "remember this" answer
+	// authorizes, and whether smart-mode triage could rule at all. All optional —
+	// an older daemon sends none of it and the panel simply omits those lines.
+	Environment   string
+	Cwd           string
+	ChangeSummary string
+	GrantClass    string
+	TriageState   string
+	// Rationale and Risk are the judge's assessment when triage ran and handed
+	// the call over; Options is the daemon's authoritative answer set for this
+	// ask (nil for an older daemon, which falls back to the built-in options).
+	Rationale string
+	Risk      string
+	Options   []components.ApprovalOption
 }
 
 // MsgClarifyRequest is emitted in daemon-client mode when a remote run blocks
@@ -298,7 +328,7 @@ func (m *uiModel) effectiveApprovalMode() string {
 // class-grant memory ("" once, "task", "person") through the existing
 // /v1/approvals/respond path. Only set in client mode; in-process approvals use
 // the clarify bridge instead.
-func (c *Controller) SetApprovalResponder(fn func(approvalID, decision, scope string) error) {
+func (c *Controller) SetApprovalResponder(fn func(approvalID, decision, scope, grantKey string) error) {
 	if c == nil || c.model == nil {
 		return
 	}
@@ -653,9 +683,13 @@ type MsgDaemonRunStarted struct {
 	TaskID     string
 	WatchID    string
 	TaskStatus string
-	Input      string
-	Started    time.Time
-	Event      uiEventRef
+	// Origin is set when the daemon started this run on the person's behalf
+	// (a watcher finalization, a cron fire) rather than from a turn they typed
+	// at an endpoint. Empty for the person's own work, wherever they typed it.
+	Origin  string
+	Input   string
+	Started time.Time
+	Event   uiEventRef
 }
 
 type MsgDaemonRunFinished struct {

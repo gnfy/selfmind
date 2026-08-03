@@ -98,6 +98,7 @@ selfmind workspace [list|add|use|trust|untrust|grants|revoke|<n|workspace_id>] .
 
 ```text
 selfmind config [doctor|upgrade]
+selfmind env [show|refresh]
 selfmind model [current|check|list|set <provider> <model>]
 selfmind auth [login|status|logout] ...
 selfmind doctor [--out FILE] [--probe-models]
@@ -192,7 +193,7 @@ before normal agent dispatch.
 /queue [drop <n>|clear]
 /diag [memory|context|tasks|models|delivery]
 /events
-/approvals
+/approvals [grants|revoke <n>]
 /approve <n|id|all> [task|always]
 /reject <n|id|all>
 /mode [mode]

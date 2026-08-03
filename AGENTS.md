@@ -116,9 +116,15 @@ Read the matching document before changing a domain:
 - External operations that require minutes of polling use the durable
   `watch_external` handoff. Do not occupy an active agent turn with repeated
   model-driven polling or create an unsupervised polling goroutine.
-- CLI streams assistant and tool progress. IM sends a concise working notice,
-  meaningful milestones or approvals, and a final answer or handoff; it never
-  streams token deltas.
+- A run the daemon starts on the person's behalf carries an origin (cron fire,
+  watcher finalization, any future initiator); a turn the person typed at any
+  endpoint carries none. Clients render an origin-carrying run as a result
+  line, never as replayed progress — moving work off the agent turn must also
+  keep it out of the transcript. Approvals and clarifications are never
+  suppressed, and the run stays visible as daemon activity so queueing behind
+  it is explainable. CLI streams assistant and tool progress for the person's
+  own runs. IM sends a concise working notice, meaningful milestones or
+  approvals, and a final answer or handoff; it never streams token deltas.
 - `sent_unconfirmed` is terminal for blind retry. Only the bounded,
   inbound-triggered catch-up path may claim and resend an unconfirmed message.
   Do not introduce another resend path that can duplicate delivery.
@@ -229,11 +235,28 @@ Read the matching document before changing a domain:
   bypassed by full-auto or an LLM judge. Ordinary dangerous operations remain
   approvable; keep the two classes distinct.
 - Approval rejection is a user decision and must not trigger automatic retry.
-  Smart approval triage is cheap-role-only and fails closed to a human prompt.
-  Missing judge, timeout, parse error, or provider failure never auto-approves.
-- Arbitrary code execution requires approval in on-request and smart modes.
-  Network egress is a named dangerous class. Tool and wrapper parsing must
-  inspect the actual executable payload rather than only a top-level command.
+  An unanswered approval is a timeout, not a rejection, and must read as "park
+  the work", never as "try a variant". Smart approval triage is cheap-role-only,
+  returns a structured assessment (risk, user authorization, rationale), and
+  fails closed to a human prompt. Missing judge, timeout, parse error, or
+  provider failure never auto-approves. Repeated triage denials inside one run
+  hand the decision to the human instead of looping.
+- Arbitrary code execution requires approval in on-request, read-only, and
+  auto-edit modes. In smart mode the judgement is sandbox containment, not
+  command shape: an exec call proven to run isolated with writes confined to the
+  scope and no network may run unprompted, because its blast radius equals the
+  in-workspace writes smart mode already allows. Anything the sandbox cannot
+  contain — host execution, an unavailable sandbox platform, egress-enabled
+  policy — still asks. Network egress remains a named dangerous class. Tool and
+  wrapper parsing must inspect the actual executable payload rather than only a
+  top-level command.
+- The daemon issues the approval answer set; clients render it and never invent
+  options. A decision may name one reusable rule (command prefix, network host,
+  writable root) and is honored only when that same ask offered it. A rule must
+  be narrower than the action class, must not be minted through a privilege
+  wrapper, and a multi-target write needs every target covered before a stored
+  grant can skip the ask. `request_permissions` is the reverse channel — one ask
+  for a task's roots and hosts — and creates no authority beyond those rules.
 - Tool failures are diagnostic evidence. Inspect cwd, files, environment,
   authentication, runtime, and package-manager state before changing the next
   command. Never bake project-specific environment overrides into generic

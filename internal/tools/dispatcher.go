@@ -109,6 +109,9 @@ type ToolExecutor func(args map[string]interface{}) (string, error)
 // Wrap wraps a handler with middleware chain
 func (r *Registry) Wrap(t Tool, mw []Middleware) ToolExecutor {
 	exec := func(args map[string]interface{}) (string, error) {
+		if contextual, ok := t.(ContextTool); ok {
+			return contextual.ExecuteContext(ContextFromArgs(args), args)
+		}
 		return t.Execute(args)
 	}
 	// 逆序应用 middleware（从最外层到最内层）

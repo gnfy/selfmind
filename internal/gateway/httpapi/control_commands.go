@@ -61,14 +61,16 @@ func (d *Server) tryHandleControlCommand(ctx context.Context, identity *control.
 		}
 		if active.RunID != "" {
 			_ = d.Control.RequestRunCancel(context.Background(), identity.TenantID, active.RunID)
-			_ = d.Control.FinishRun(context.Background(), identity.TenantID, active.RunID, "cancelled")
 		}
-		if active.TaskID != "" {
-			_ = d.Control.UpdateTaskStatus(context.Background(), identity.TenantID, active.TaskID, "cancelled", "Cancelled by user.", nil)
+		if active.TaskID != "" && active.RunID != "" {
+			// Cancellation is a request until the execution body actually exits.
+			// The run goroutine owns terminal materialization; declaring cancelled
+			// here used to let a non-cooperative tool keep running after the DB said
+			// it was gone, and could start queued work against the same workspace.
 			_, _ = d.Control.AppendEvent(context.Background(), control.Event{
 				TaskID:     active.TaskID,
 				RunID:      active.RunID,
-				Type:       "run.cancelled",
+				Type:       "run.cancel_requested",
 				Visibility: "task",
 				Channel:    req.Channel,
 				Payload:    mustJSON(map[string]string{"reason": "user requested stop"}),
@@ -243,7 +245,15 @@ func (d *Server) tryHandleControlCommand(ctx context.Context, identity *control.
 			return true, formatWorkspacesForIM(workspaces, currentID), nil
 		}
 		return true, formatWorkspaces(workspaces, currentID), nil
-	case lower == "/approvals":
+	case lower == "/approvals" || strings.HasPrefix(lower, "/approvals "):
+		rest := strings.TrimSpace(trimmed[len("/approvals"):])
+		if rest != "" {
+			// Remembered classes are user-owned state, so they must be listable
+			// and revocable. Without this surface ten person-scope host grants
+			// accumulated in a single day with nothing able to show or withdraw
+			// them.
+			return true, d.approvalGrantsReply(ctx, identity, rest), nil
+		}
 		approvals, titles, err := d.pendingApprovalsForDisplay(ctx, identity)
 		if err != nil {
 			return true, "", err
@@ -424,14 +434,14 @@ func (d *Server) retroResolvePendingApprovals(ctx context.Context, identity *con
 		case tools.ModeApprove:
 			// Internal channel "mode-change", empty grant scope (a retro approval
 			// is a one-off, it records no class grant).
-			if _, err := d.Control.RespondApprovalRequest(ctx, identity.TenantID, identity.PersonID, ap.ID, "approved", "mode-change", ""); err == nil {
+			if _, err := d.Control.RespondApprovalRequest(ctx, identity.TenantID, identity.PersonID, ap.ID, "approved", "mode-change", control.ApprovalDecisionInput{}); err == nil {
 				approved++
 				d.appendApprovalModeEvent(ctx, ap, "approval.auto_approved", string(mode))
 			} else {
 				stillPending++
 			}
 		case tools.ModeDeny:
-			if _, err := d.Control.RespondApprovalRequest(ctx, identity.TenantID, identity.PersonID, ap.ID, "rejected", "mode-change", ""); err == nil {
+			if _, err := d.Control.RespondApprovalRequest(ctx, identity.TenantID, identity.PersonID, ap.ID, "rejected", "mode-change", control.ApprovalDecisionInput{}); err == nil {
 				denied++
 				d.appendApprovalModeEvent(ctx, ap, "approval.auto_rejected", string(mode))
 			} else {

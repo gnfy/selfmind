@@ -354,3 +354,72 @@ func TestExternalWatchFinalizationIdempotencyKeys(t *testing.T) {
 		t.Fatalf("cancelled watch must not need compensation: %+v err=%v", pending, err)
 	}
 }
+
+// The circuit breaker's input: an identical failure must accumulate, a different
+// one must reset, and a recovered check must clear the streak. Without this a
+// watch that can never observe anything keeps polling until its deadline.
+func TestExternalWatchFailureStreak(t *testing.T) {
+	ctx := context.Background()
+	store, identity, task, run := newRecoveryFixture(t)
+	watch, err := store.CreateExternalWatch(ctx, ExternalWatch{
+		TenantID:              identity.TenantID,
+		PersonID:              identity.PersonID,
+		TaskID:                task.ID,
+		RunID:                 run.ID,
+		CWD:                   t.TempDir(),
+		Command:               "check-build",
+		SuccessPattern:        "SUCCEEDED",
+		IntervalSeconds:       5,
+		CommandTimeoutSeconds: 10,
+		TimeoutAt:             time.Now().Add(time.Hour),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	due, err := store.ListDueExternalWatches(ctx, 10)
+	if err != nil || len(due) != 1 {
+		t.Fatalf("due = %+v err=%v", due, err)
+	}
+	if claimed, err := store.ClaimExternalWatch(ctx, due[0]); err != nil || !claimed {
+		t.Fatalf("claim: claimed=%v err=%v", claimed, err)
+	}
+
+	for want := 1; want <= 3; want++ {
+		streak, err := store.RecordExternalWatchFailure(ctx, watch.TenantID, watch.ID,
+			"bwrap: Can't mkdir parents", "exit status 1", "credential_state_readonly", "sig-a")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if streak != want {
+			t.Fatalf("streak = %d, want %d", streak, want)
+		}
+	}
+
+	streak, err := store.RecordExternalWatchFailure(ctx, watch.TenantID, watch.ID,
+		"connection reset", "exit status 1", "network", "sig-b")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if streak != 1 {
+		t.Fatalf("a different failure must restart the streak, got %d", streak)
+	}
+
+	stored, err := store.GetExternalWatch(ctx, watch.TenantID, watch.ID)
+	if err != nil || stored == nil {
+		t.Fatalf("get watch: %+v err=%v", stored, err)
+	}
+	if stored.FailureClass != "network" || stored.ConsecutiveFailures != 1 {
+		t.Fatalf("stored failure state = %+v", stored)
+	}
+
+	if err := store.RecordExternalWatchCheck(ctx, watch.TenantID, watch.ID, "WORKING", ""); err != nil {
+		t.Fatal(err)
+	}
+	stored, err = store.GetExternalWatch(ctx, watch.TenantID, watch.ID)
+	if err != nil || stored == nil {
+		t.Fatalf("get watch: %+v err=%v", stored, err)
+	}
+	if stored.FailureClass != "" || stored.ConsecutiveFailures != 0 {
+		t.Fatalf("a healthy check must clear the streak: %+v", stored)
+	}
+}

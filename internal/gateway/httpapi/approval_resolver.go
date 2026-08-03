@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"selfmind/internal/control"
+	"selfmind/internal/platform/textutil"
 )
 
 // Approval-reference resolution shared by every surface that responds to an
@@ -98,7 +99,7 @@ func resolveApprovalReference(pending []control.ApprovalRequest, token string) (
 // empty for a lone pending approval) for the person and records the decision.
 // All validation failures come back as user-facing errors; only storage
 // problems surface as internal errors.
-func (d *Server) respondApprovalByToken(ctx context.Context, identity *control.IdentityContext, token, decision, channel, grantScope string) (*control.ApprovalRequest, error) {
+func (d *Server) respondApprovalByToken(ctx context.Context, identity *control.IdentityContext, token, decision, channel string, input control.ApprovalDecisionInput) (*control.ApprovalRequest, error) {
 	if d == nil || d.Control == nil || identity == nil {
 		return nil, fmt.Errorf("approval store is not available")
 	}
@@ -118,7 +119,7 @@ func (d *Server) respondApprovalByToken(ctx context.Context, identity *control.I
 		}
 		return nil, resolveErr
 	}
-	approval, err := d.Control.RespondApprovalRequest(ctx, identity.TenantID, identity.PersonID, resolved.ID, decision, channel, grantScope)
+	approval, err := d.Control.RespondApprovalRequest(ctx, identity.TenantID, identity.PersonID, resolved.ID, decision, channel, input)
 	if err != nil {
 		return nil, err
 	}
@@ -133,22 +134,29 @@ func (d *Server) respondApprovalByToken(ctx context.Context, identity *control.I
 // only invokes this when an approval is pending, so a blocking approval wins
 // that collision by construction. The scope shortcuts mirror the /approve
 // grammar: "yt" grants the class for the task, "ya" grants it for the person.
-func parseBareApprovalReply(content string) (decision, scope string, ok bool) {
+// shortcut, when non-empty, is a server-issued option letter ("p", "h", "w")
+// from the ask's own decision list: the caller resolves it against that list, so
+// the same letters mean the same things in IM and in the terminal.
+func parseBareApprovalReply(content string) (decision, scope, shortcut string, ok bool) {
 	s := strings.ToLower(strings.TrimSpace(content))
 	s = strings.Trim(s, " \t\r\n.!?。！？，,")
 	switch s {
 	case "yt":
-		return "approved", "task", true
+		return "approved", "task", "", true
 	case "ya":
-		return "approved", "person", true
+		return "approved", "person", "", true
+	case "yp", "yh", "yw":
+		// "y" + a rule letter: approve AND persist the rule that letter names on
+		// this ask. The scope travels with the resolved option, not from here.
+		return "approved", "", strings.TrimPrefix(s, "y"), true
 	case "y", "yes", "ok", "okay", "approve", "approved", "sure",
 		"好", "好的", "可以", "同意", "批准", "行":
-		return "approved", "", true
+		return "approved", "", "", true
 	case "n", "no", "reject", "rejected", "deny", "denied", "cancel",
 		"不", "不行", "不可以", "拒绝", "取消":
-		return "rejected", "", true
+		return "rejected", "", "", true
 	}
-	return "", "", false
+	return "", "", "", false
 }
 
 // parseApprovalScopeWord maps a grant-scope word from the /approve grammar to
@@ -172,7 +180,7 @@ func parseApprovalScopeWord(word string) string {
 // the per-person active-run guard serializes interactive approvals) → the word
 // is ambiguous, so return the numbered list and ask for /approve <n>.
 func (d *Server) tryHandleBareApprovalReply(ctx context.Context, identity *control.IdentityContext, content, channel string) (bool, string, error) {
-	decision, grantScope, ok := parseBareApprovalReply(content)
+	decision, grantScope, shortcut, ok := parseBareApprovalReply(content)
 	if !ok || d == nil || d.Control == nil || identity == nil {
 		return false, "", nil
 	}
@@ -192,7 +200,19 @@ func (d *Server) tryHandleBareApprovalReply(ctx context.Context, identity *contr
 		return true, fmt.Sprintf("%d approvals are pending, so I cannot tell which one you mean. Reply /%s <n>:\n%s",
 			len(pending), verb, formatApprovals(pending, titles)), nil
 	}
-	approval, err := d.respondApprovalByToken(ctx, identity, pending[0].ID, decision, channel, grantScope)
+	// A rule shortcut ("yp") means whatever `p` meant on THIS ask: resolve it
+	// against the options the daemon actually offered for this row, so IM answers
+	// from the same menu the terminal panel drew (batch B1). An unknown letter
+	// degrades to a plain approval rather than guessing a rule.
+	input := control.ApprovalDecisionInput{GrantScope: grantScope}
+	if shortcut != "" {
+		if option, found := approvalOptionByShortcut(decodeApprovalDecisions(pending[0].Payload), shortcut); found {
+			input.GrantScope = option.Scope
+			input.GrantKey = option.GrantKey
+			decision = option.Decision
+		}
+	}
+	approval, err := d.respondApprovalByToken(ctx, identity, pending[0].ID, decision, channel, input)
 	if err != nil {
 		return true, "Could not record the decision: " + err.Error(), nil
 	}
@@ -236,7 +256,7 @@ func (d *Server) respondApprovalCommand(ctx context.Context, identity *control.I
 	if strings.EqualFold(token, "all") {
 		return d.respondAllApprovals(ctx, identity, decision, channel, verbBase)
 	}
-	approval, err := d.respondApprovalByToken(ctx, identity, token, decision, channel, grantScope)
+	approval, err := d.respondApprovalByToken(ctx, identity, token, decision, channel, control.ApprovalDecisionInput{GrantScope: grantScope})
 	if err != nil {
 		return "Cannot " + verbBase + ": " + err.Error()
 	}
@@ -250,20 +270,36 @@ func (d *Server) respondApprovalCommand(ctx context.Context, identity *control.I
 			title = task.Title
 		}
 	}
-	return fmt.Sprintf("%s%s %s\n%s", verb, grantScopeNote(approval.DecisionScope), approvalSummaryLine(*approval, title), approval.ID)
+	note := grantScopeNoteWithClass(approval.DecisionScope, decodeApprovalPayload(*approval).GrantClass)
+	return fmt.Sprintf("%s%s %s\n%s", verb, note, approvalSummaryLine(*approval, title), approval.ID)
 }
 
 // grantScopeNote renders the human-facing "remembered" suffix for an approval
 // that also recorded a class-level grant. Empty for a once-only decision.
+//
+// It names the CLASS, not just the scope: a user who cannot see what was
+// remembered cannot notice when the class is wider than they intended, which is
+// how ten person-scope host grants — two of them keyed on a shell prologue —
+// accumulated unnoticed in a single day. When the eligibility floor refused to
+// persist anything, the note says so instead of claiming a grant was made.
 func grantScopeNote(scope string) string {
+	return grantScopeNoteWithClass(scope, "")
+}
+
+func grantScopeNoteWithClass(scope, grantClass string) string {
 	switch scope {
-	case "task":
-		return " (this class remembered for this task)"
-	case "person":
-		return " (this class remembered for you across tasks)"
+	case "task", "person":
 	default:
 		return ""
 	}
+	if strings.TrimSpace(grantClass) == "" {
+		return " (not remembered: this command's class cannot be reused)"
+	}
+	window := "for this task"
+	if scope == "person" {
+		window = "for you across tasks, 8h"
+	}
+	return fmt.Sprintf(" (remembered %s: %s)", window, textutil.Truncate(toOneLine(grantClass), 80))
 }
 
 // respondAllApprovals backs "/approve all" and "/reject all": it decides every
@@ -289,7 +325,7 @@ func (d *Server) respondAllApprovals(ctx context.Context, identity *control.Iden
 	for _, item := range pending {
 		// Bulk decisions are always once-only: remembering a whole batch as a
 		// class grant would be too coarse a decision to infer.
-		approval, err := d.Control.RespondApprovalRequest(ctx, identity.TenantID, identity.PersonID, item.ID, decision, channel, "")
+		approval, err := d.Control.RespondApprovalRequest(ctx, identity.TenantID, identity.PersonID, item.ID, decision, channel, control.ApprovalDecisionInput{})
 		if err != nil {
 			fmt.Fprintf(&sb, "- failed: %s (%s)\n", approvalSummaryLine(item, ""), err.Error())
 			continue

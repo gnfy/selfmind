@@ -17,6 +17,7 @@ import (
 
 	"selfmind/internal/app"
 	"selfmind/internal/control"
+	"selfmind/internal/executionenv"
 	"selfmind/internal/gateway/api"
 	"selfmind/internal/gateway/delivery"
 	"selfmind/internal/gateway/httpapi"
@@ -25,7 +26,13 @@ import (
 	"selfmind/internal/kernel/memory"
 	"selfmind/internal/platform/config"
 	"selfmind/internal/platform/log"
+	"selfmind/internal/tools"
 )
+
+// runScratchTTL delays scratch cleanup after a run reaches a terminal state, so
+// a finished run's intermediate files stay inspectable for a while instead of
+// vanishing the moment it ends.
+const runScratchTTL = 24 * time.Hour
 
 type Options struct {
 	Addr         string
@@ -93,6 +100,32 @@ func Run(ctx context.Context, opts Options) error {
 		return err
 	}
 
+	// Environment snapshot: take ONE reading of the operator environment at
+	// start and bind runs to it through their lease. A long-lived daemon that
+	// re-reads os.Environ() per command hands children a stale PATH from the
+	// shell that happened to start it, and can change account or toolchain in
+	// the middle of a run.
+	if snapshot := tools.InstallEnvironmentSnapshot(os.Environ(), "inherited"); snapshot != nil {
+		log.Info("gateway: environment snapshot installed",
+			"snapshot", snapshot.ID, "generation", snapshot.Generation,
+			"volatile_entries_dropped", snapshot.VolatileCount)
+	}
+
+	// Execution runtime root: run scratch and person-level toolchain caches. It
+	// deliberately sits BESIDE the data directory, not inside it — this tree is
+	// large, disposable, and must never be swept into artifacts, memory, search
+	// indexes, or a data backup.
+	runtimeRoot := filepath.Join(filepath.Dir(dataDir), "runtime")
+	if err := executionenv.SetRuntimeRoot(runtimeRoot); err != nil {
+		// Degrade rather than refuse to start: without scratch the sandbox falls
+		// back to a private tmpfs, which is the previous behaviour.
+		log.Warn("gateway: execution runtime root unavailable", "path", runtimeRoot, "error", err)
+	} else if removed, sweepErr := executionenv.SweepExpiredScratch(runScratchTTL, nil, time.Now()); sweepErr != nil {
+		log.Warn("gateway: run scratch sweep failed", "error", sweepErr)
+	} else if removed > 0 {
+		log.Info("gateway: removed expired run scratch", "count", removed, "ttl", runScratchTTL)
+	}
+
 	controlStore, err := control.OpenStore(dataDir)
 	if err != nil {
 		return fmt.Errorf("control.OpenStore failed: %w", err)
@@ -115,6 +148,16 @@ func Run(ctx context.Context, opts Options) error {
 		log.Warn("gateway: stuck-run boot sweep failed", "error", err)
 	} else if interrupted > 0 {
 		log.Warn("gateway: recovered interrupted runs/tasks from previous daemon", "count", interrupted)
+	}
+	// Boot-time approval-grant review: remembered classes minted before the
+	// current eligibility floor may authorise far more than the human intended
+	// (a key naming a shell prologue, or a host grant with no workspace/command
+	// resource). Withdraw those before any traffic; the sweep only removes
+	// authority and is idempotent.
+	if revoked, kept, err := app.ReviewApprovalGrants(context.Background(), controlStore); err != nil {
+		log.Warn("gateway: approval grant review failed", "error", err)
+	} else if revoked > 0 {
+		log.Warn("gateway: withdrew over-broad approval grants", "revoked", revoked, "remaining", len(kept))
 	}
 
 	agent, err := app.InitAgent(mem, cfg, defaultTenantID, controlStore)

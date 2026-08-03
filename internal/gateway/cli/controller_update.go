@@ -87,7 +87,7 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.scheduleStreamFlush()
 
 	case MsgAgentActivity:
-		if !m.acceptEvent(msg.Event) {
+		if !m.acceptEvent(msg.Event) || m.backgroundRunEvent(msg.Event) {
 			return m, spinnerCmd
 		}
 		m.activityText = strings.TrimSpace(msg.Content)
@@ -103,6 +103,9 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.onUserInput != nil {
 			m.onUserInput() // presence honesty: every keystroke counts as "the person is here" (input_activity.go)
 		}
+		// Same signal, different purpose: the approval panel must not arm while
+		// the person is mid-keystroke (approvalTypingIdleDelay).
+		m.noteInputActivity(time.Now())
 		if m.pager != nil {
 			closed, cmd := m.pager.Update(msg)
 			if closed {
@@ -113,7 +116,7 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleKey(msg)
 
 	case MsgStream:
-		if !m.acceptEvent(msg.Event) {
+		if !m.acceptEvent(msg.Event) || m.backgroundRunEvent(msg.Event) {
 			return m, spinnerCmd
 		}
 		msg.Content = textutil.CleanUTF8(msg.Content)
@@ -225,13 +228,22 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.toolExecuting = ""
 			m.discardOpenToolMessages()
 		}
-		if watchID := strings.TrimSpace(msg.WatchID); watchID != "" {
+		watchID := strings.TrimSpace(msg.WatchID)
+		// The daemon started this run on the person's behalf, so it reports its
+		// result and not its process (markBackgroundRun). A watcher also opens
+		// with a notice, because it continues a boundary the person already
+		// saw; a bare background run stays silent until it has something to
+		// report — the status bar already shows the daemon is busy.
+		if watchID != "" || strings.TrimSpace(msg.Origin) != "" {
+			m.markBackgroundRun(msg.RunID, watchID, msg.Origin)
+		}
+		if watchID != "" {
 			taskStatus := strings.TrimSpace(msg.TaskStatus)
 			if taskStatus == "" {
 				taskStatus = "running"
 			}
 			m.addMessage("notice", watcherStatusNotice(watchID, "finalizing", taskStatus))
-		} else if queuedMatch {
+		} else if queuedMatch && strings.TrimSpace(msg.Origin) == "" {
 			title := strings.TrimSpace(msg.Input)
 			if title == "" {
 				title = "queued task"
@@ -256,6 +268,19 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.daemonRunStarted = time.Time{}
 		m.daemonRunAwaitingDone = false
 		if awaitingSynchronousDone {
+			return m, spinnerCmd
+		}
+		if backgroundWatchID, backgroundOrigin, backgroundRun := m.finishedBackgroundRun(msg.RunID); backgroundRun {
+			// Nothing of this run entered the transcript, the live stream, or
+			// the tool cells, so none of the foreground cleanup below applies —
+			// running it would discard state that belongs to this terminal.
+			// The recorded outcome is the whole visible result.
+			if m.queuedCount > 0 {
+				m.runStatus = "queued"
+			} else {
+				m.runStatus = uiStatusForDaemonOutcome(msg.Status)
+			}
+			m.addMessage("notice", backgroundResultNotice(backgroundWatchID, backgroundOrigin, msg.Status, msg.Summary))
 			return m, spinnerCmd
 		}
 		m.thinking = false
@@ -323,8 +348,20 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.approvalQueue = append(m.approvalQueue, msg)
 			return m, nil
 		}
+		// Typing-idle guard: a panel that arms mid-keystroke can read the next
+		// letter as a decision. Hold it (FIFO with anything already held) until
+		// input settles; the daemon-side request is durable meanwhile.
+		if len(m.delayedApprovals) > 0 {
+			return m, m.holdApprovalRequest(msg, approvalTypingIdleDelay)
+		}
+		if wait := m.approvalDelayRemaining(time.Now()); wait > 0 {
+			return m, m.holdApprovalRequest(msg, wait)
+		}
 		m.armApprovalPrompt(msg)
 		return m, nil
+
+	case MsgApprovalDelayElapsed:
+		return m, m.releaseDelayedApprovals(time.Now())
 
 	case MsgClarifyRequest:
 		m.armClarifyPrompt(tools.ClarifyRequest{Question: msg.Question, Choices: msg.Choices}, true)
@@ -342,7 +379,7 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Tick(3*time.Second, func(t time.Time) tea.Msg { return MsgClearStatus{} })
 
 	case MsgToolStart:
-		if !m.acceptEvent(msg.Event) {
+		if !m.acceptEvent(msg.Event) || m.backgroundRunEvent(msg.Event) {
 			return m, spinnerCmd
 		}
 		if isTerminalRunStatus(m.runStatus) || m.toolMessageExists(msg.ToolCallID) {
@@ -363,7 +400,7 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, spinnerCmd
 
 	case MsgToolDone:
-		if !m.acceptEvent(msg.Event) {
+		if !m.acceptEvent(msg.Event) || m.backgroundRunEvent(msg.Event) {
 			return m, spinnerCmd
 		}
 		if isTerminalRunStatus(m.runStatus) {
@@ -404,7 +441,7 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, spinnerCmd
 
 	case MsgPlanUpdated:
-		if !m.acceptEvent(msg.Event) {
+		if !m.acceptEvent(msg.Event) || m.backgroundRunEvent(msg.Event) {
 			return m, spinnerCmd
 		}
 		if isTerminalRunStatus(m.runStatus) {
@@ -416,7 +453,7 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, spinnerCmd
 
 	case MsgToolOutput:
-		if !m.acceptEvent(msg.Event) {
+		if !m.acceptEvent(msg.Event) || m.backgroundRunEvent(msg.Event) {
 			return m, spinnerCmd
 		}
 		if isTerminalRunStatus(m.runStatus) {
@@ -428,7 +465,7 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, spinnerCmd
 
 	case MsgToolHeartbeat:
-		if !m.acceptEvent(msg.Event) {
+		if !m.acceptEvent(msg.Event) || m.backgroundRunEvent(msg.Event) {
 			return m, spinnerCmd
 		}
 		if isTerminalRunStatus(m.runStatus) {
@@ -455,7 +492,7 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, spinnerCmd
 
 	case MsgLearningEvent:
-		if !m.acceptEvent(msg.Event) {
+		if !m.acceptEvent(msg.Event) || m.backgroundRunEvent(msg.Event) {
 			return m, spinnerCmd
 		}
 		m.statusMsg = msg.Content

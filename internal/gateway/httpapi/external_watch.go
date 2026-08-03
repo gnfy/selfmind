@@ -642,6 +642,7 @@ func (d *Server) enqueueExternalWatchFinalization(ctx context.Context, watch con
 		PlatformUserID: origin.PlatformUserID,
 		Content:        content,
 		TaskID:         watch.TaskID,
+		Class:          control.QueueClassFinalization,
 		// Stable per-verdict key: a crash-recovery replay of the SAME verdict
 		// is one row; a revised verdict earns one fresh finalization run.
 		IdempotencyKey: externalWatchFinalizationKey(watch),

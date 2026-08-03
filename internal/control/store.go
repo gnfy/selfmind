@@ -464,6 +464,9 @@ CREATE TABLE IF NOT EXISTS task_queue (
 	task_id TEXT NOT NULL DEFAULT '',
 	run_id TEXT NOT NULL DEFAULT '',
 	idempotency_key TEXT NOT NULL DEFAULT '',
+	class TEXT NOT NULL DEFAULT 'foreground',
+	priority INTEGER NOT NULL DEFAULT 100,
+	not_before INTEGER NOT NULL DEFAULT 0,
 	status TEXT NOT NULL DEFAULT 'queued',
 	restarts INTEGER NOT NULL DEFAULT 0,
 	created_at INTEGER NOT NULL
@@ -686,6 +689,12 @@ CREATE INDEX IF NOT EXISTS idx_external_watches_owner
 		// finalization) replay-safe: a crash-recovery re-enqueue with the
 		// same stable key is one row, never a duplicate run.
 		{"task_queue", "idempotency_key", "TEXT NOT NULL DEFAULT ''"},
+		// Queue class is an execution-quality property, not a task label. It
+		// keeps interactive work, watcher closure and scheduled work from being
+		// forced through one undifferentiated FIFO policy.
+		{"task_queue", "class", "TEXT NOT NULL DEFAULT 'foreground'"},
+		{"task_queue", "priority", "INTEGER NOT NULL DEFAULT 100"},
+		{"task_queue", "not_before", "INTEGER NOT NULL DEFAULT 0"},
 		// verdict_revision counts terminal-verdict revisions (timed_out ->
 		// succeeded). It keys all finalization products, so replaying the
 		// SAME verdict creates nothing new while a REVISED verdict emits one
@@ -848,7 +857,11 @@ CREATE INDEX IF NOT EXISTS idx_external_watches_owner
 			ON tasks(tenant_id, person_id, COALESCE(workspace_id, ''))
 			WHERE kind = 'inbox';
 		CREATE UNIQUE INDEX IF NOT EXISTS idx_task_queue_idempotency ON task_queue(idempotency_key)
-			WHERE idempotency_key != '';`); err != nil {
+			WHERE idempotency_key != '';
+		UPDATE task_queue SET class = 'finalization', priority = 80
+			WHERE idempotency_key LIKE 'external-watch:%' AND class = 'foreground';
+		CREATE INDEX IF NOT EXISTS idx_task_queue_schedule
+			ON task_queue(status, not_before, priority DESC, created_at);`); err != nil {
 		return err
 	}
 	return nil

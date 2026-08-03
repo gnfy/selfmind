@@ -61,14 +61,16 @@ func (d *Server) tryHandleControlCommand(ctx context.Context, identity *control.
 		}
 		if active.RunID != "" {
 			_ = d.Control.RequestRunCancel(context.Background(), identity.TenantID, active.RunID)
-			_ = d.Control.FinishRun(context.Background(), identity.TenantID, active.RunID, "cancelled")
 		}
-		if active.TaskID != "" {
-			_ = d.Control.UpdateTaskStatus(context.Background(), identity.TenantID, active.TaskID, "cancelled", "Cancelled by user.", nil)
+		if active.TaskID != "" && active.RunID != "" {
+			// Cancellation is a request until the execution body actually exits.
+			// The run goroutine owns terminal materialization; declaring cancelled
+			// here used to let a non-cooperative tool keep running after the DB said
+			// it was gone, and could start queued work against the same workspace.
 			_, _ = d.Control.AppendEvent(context.Background(), control.Event{
 				TaskID:     active.TaskID,
 				RunID:      active.RunID,
-				Type:       "run.cancelled",
+				Type:       "run.cancel_requested",
 				Visibility: "task",
 				Channel:    req.Channel,
 				Payload:    mustJSON(map[string]string{"reason": "user requested stop"}),

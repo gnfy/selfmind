@@ -248,7 +248,7 @@ func (c *RunCoordinator) recordStreamEvent(ctx context.Context, channel string, 
 	// agent.step is the per-iteration state-machine trace (P0-B): live
 	// observability only, never durable task history — persisting one row per
 	// loop iteration would bloat task_events for no recall value.
-	if eventType == "stream" || eventType == "" || eventType == "tool.heartbeat" || eventType == "agent.step" {
+	if eventType == "stream" || eventType == "" || eventType == "tool.heartbeat" || eventType == "tool.output" || eventType == "agent.step" {
 		return
 	}
 	payload := map[string]interface{}{}
@@ -282,12 +282,6 @@ func (c *RunCoordinator) recordStreamEvent(ctx context.Context, channel string, 
 		if event.Err != nil {
 			payload["error"] = tools.RedactSensitive(event.Err.Error())
 		}
-	case "tool.output":
-		payload["tool"] = event.ToolName
-		if event.ToolCallID != "" {
-			payload["tool_call_id"] = event.ToolCallID
-		}
-		payload["message"] = tools.RedactSensitive(event.Content)
 	case "learning.review":
 		payload["message"] = tools.RedactSensitive(event.Content)
 		eventType = classifyLearningReviewEvent(event.Content)

@@ -2,7 +2,6 @@ package httpapi
 
 import (
 	"context"
-	"encoding/json"
 	"strings"
 	"testing"
 
@@ -46,7 +45,7 @@ func TestCLIAsyncResultRoutesToPreferredIM(t *testing.T) {
 	}
 }
 
-func TestRecordToolOutputKeepsCorrelationFields(t *testing.T) {
+func TestRecordToolOutputIsLiveOnly(t *testing.T) {
 	store, err := control.OpenStore(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -79,19 +78,10 @@ func TestRecordToolOutputKeepsCorrelationFields(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, event := range events {
-		if event.Type != "tool.output" {
-			continue
+		if event.Type == "tool.output" {
+			t.Fatalf("tool.output must remain live-only, got durable event %+v", event)
 		}
-		var payload map[string]interface{}
-		if err := json.Unmarshal(event.Payload, &payload); err != nil {
-			t.Fatal(err)
-		}
-		if payload["tool"] != "terminal" || payload["tool_call_id"] != "call-1" || payload["message"] != "line one" {
-			t.Fatalf("payload = %+v", payload)
-		}
-		return
 	}
-	t.Fatal("tool.output event was not recorded")
 }
 
 func TestRecordSteeringConsumedIsDurableAndRedacted(t *testing.T) {

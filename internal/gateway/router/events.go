@@ -13,17 +13,23 @@ import (
 	"selfmind/internal/runpool"
 )
 
-// runIdleTimeout reads SELFMIND_RUN_IDLE_TIMEOUT (e.g. "5m"). 0/unset disables
-// the progress watchdog (default → behavior unchanged). When set, a run that
-// emits no progress event for this long is cancelled so it frees its worker
-// instead of hanging the tool (W1c).
+// runIdleTimeout reads SELFMIND_RUN_IDLE_TIMEOUT (e.g. "5m"). The personal
+// daemon defaults to a conservative ten-minute idle ceiling: commands emit
+// heartbeats while they make progress, so silence for that long means the run
+// has stopped producing evidence. Set 0/off/disabled to opt out.
 func runIdleTimeout() time.Duration {
-	if v := strings.TrimSpace(os.Getenv("SELFMIND_RUN_IDLE_TIMEOUT")); v != "" {
-		if d, err := time.ParseDuration(v); err == nil && d > 0 {
-			return d
-		}
+	v := strings.TrimSpace(os.Getenv("SELFMIND_RUN_IDLE_TIMEOUT"))
+	if v == "" {
+		return 10 * time.Minute
 	}
-	return 0
+	switch strings.ToLower(v) {
+	case "0", "off", "disabled":
+		return 0
+	}
+	if d, err := time.ParseDuration(v); err == nil && d > 0 {
+		return d
+	}
+	return 10 * time.Minute
 }
 
 func (g *Gateway) HandleWithEvents(ctx context.Context, unifiedUID, channel, input string) (*HandleResponse, error) {

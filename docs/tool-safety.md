@@ -295,6 +295,15 @@ an environment cannot be logged or shipped by accident. Execution policy travels
 on the request (`ExecutionScope.SandboxPolicy`) rather than being read from a
 process global at execution time.
 
+Cancellation is part of the same boundary. Tools that can block on I/O or spend
+meaningful time in local computation implement `tools.ContextTool`; the
+dispatcher supplies the authenticated run context, never a context accepted from
+model arguments. Loops must check it at bounded intervals. A tool must not use an
+unbounded approximate-search fallback: `patch`, in particular, accepts a unique
+exact or bounded same-line-count normalized match and otherwise fails without
+writing. `/stop` records a cancellation request, while terminal run state is
+owned by the goroutine after the execution body exits.
+
 ### Tool environment profiles
 
 A profile declares what host state a command-line tool needs. The engine
@@ -405,6 +414,8 @@ Changes in this domain need focused coverage for:
   frozen capability sets, and revocation before the next poll;
 - untrusted workspace skill fencing and credential-shaped declaration denial;
 - long-running timeout bounds and heartbeat behavior;
+- context cancellation of command execution and CPU-bound tool loops;
+- bounded, ambiguity-safe patch misses on large files;
 - host grants scoped by workspace and command family;
 - smart triage fail-closed behavior;
 - delegation depth and parent-backend isolation;

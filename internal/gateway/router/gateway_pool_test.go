@@ -3,22 +3,27 @@ package router
 import (
 	"context"
 	"testing"
+	"time"
 
 	"selfmind/internal/kernel"
 )
 
 func TestRunIdleTimeoutParsesEnv(t *testing.T) {
 	t.Setenv("SELFMIND_RUN_IDLE_TIMEOUT", "")
-	if runIdleTimeout() != 0 {
-		t.Fatal("unset → disabled (0)")
+	if got := runIdleTimeout(); got != 10*time.Minute {
+		t.Fatalf("unset = %s, want 10m", got)
 	}
 	t.Setenv("SELFMIND_RUN_IDLE_TIMEOUT", "5m")
 	if got := runIdleTimeout(); got.String() != "5m0s" {
 		t.Fatalf("5m → %s", got)
 	}
 	t.Setenv("SELFMIND_RUN_IDLE_TIMEOUT", "garbage")
-	if runIdleTimeout() != 0 {
-		t.Fatal("invalid → disabled (0)")
+	if got := runIdleTimeout(); got != 10*time.Minute {
+		t.Fatalf("invalid = %s, want safe default", got)
+	}
+	t.Setenv("SELFMIND_RUN_IDLE_TIMEOUT", "off")
+	if got := runIdleTimeout(); got != 0 {
+		t.Fatalf("off = %s, want disabled", got)
 	}
 }
 

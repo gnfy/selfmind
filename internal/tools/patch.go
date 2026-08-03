@@ -2,6 +2,7 @@ package tools
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -247,76 +248,79 @@ func parseV4APatch(patchContent string) ([]PatchOperation, error) {
 }
 
 // =============================================================================
-// Fuzzy find-and-replace (LCS-based)
+// Bounded find-and-replace
 // =============================================================================
+
+var patchWhitespaceRE = regexp.MustCompile(`\s+`)
+
+// maxPatchFuzzyComparisons prevents a malformed or stale hunk from turning a
+// patch miss into an unbounded CPU job. Exact matching is attempted first; the
+// bounded fallback compares only same-length line windows.
+const maxPatchFuzzyComparisons = 2_000_000
 
 // fuzzyFindAndReplace finds searchPattern in text and replaces it with replacement.
 // Returns (newText, count, strategy, error).
 // Strategy is a description of how the match was found.
-func fuzzyFindAndReplace(text, searchPattern, replacement string) (string, int, string, error) {
+func fuzzyFindAndReplace(ctx context.Context, text, searchPattern, replacement string) (string, int, string, error) {
 	if searchPattern == "" {
 		return text, 0, "", fmt.Errorf("search pattern cannot be empty")
+	}
+	if err := ctx.Err(); err != nil {
+		return text, 0, "", err
 	}
 
 	searchLines := strings.Split(searchPattern, "\n")
 	replLines := strings.Split(replacement, "\n")
 
-	// Try exact match first
-	exactIdx := strings.Index(text, searchPattern)
-	if exactIdx != -1 {
+	// Exact replacement is safe only when the hunk identifies one location.
+	// Picking the first of several equal blocks silently edits the wrong code.
+	exactCount := strings.Count(text, searchPattern)
+	if exactCount > 1 {
+		return text, 0, "", fmt.Errorf("pattern is ambiguous (%d exact matches)", exactCount)
+	}
+	if exactCount == 1 {
+		exactIdx := strings.Index(text, searchPattern)
 		newText := text[:exactIdx] + replacement + text[exactIdx+len(searchPattern):]
 		return newText, 1, "exact", nil
 	}
 
-	// Try line-by-line fuzzy match
-	count := 0
-	result := text
+	// The only fallback normalizes whitespace while preserving line count and
+	// order. It is O(file lines * hunk lines), cancellable, and bounded.
 	lines := strings.Split(text, "\n")
-
+	if len(searchLines) > len(lines) {
+		return text, 0, "", fmt.Errorf("pattern not found")
+	}
+	comparisons := (len(lines) - len(searchLines) + 1) * len(searchLines)
+	if comparisons > maxPatchFuzzyComparisons {
+		return text, 0, "", fmt.Errorf("fuzzy match exceeds safety limit (%d line comparisons)", comparisons)
+	}
+	matchStart := -1
 	for i := 0; i <= len(lines)-len(searchLines); i++ {
-		// Check if searchLines[0] matches starting at line i
-		matchStart := i
+		if i%64 == 0 {
+			if err := ctx.Err(); err != nil {
+				return text, 0, "", err
+			}
+		}
 		found := true
 		for j := 0; j < len(searchLines); j++ {
-			if lines[i+j] != searchLines[j] && !fuzzyEqual(lines[i+j], searchLines[j]) {
+			if !fuzzyEqual(lines[i+j], searchLines[j]) {
 				found = false
 				break
 			}
 		}
 		if found {
-			// Replace these lines
-			newLines := append(lines[:matchStart], replLines...)
-			newLines = append(newLines, lines[matchStart+len(searchLines):]...)
-			result = strings.Join(newLines, "\n")
-			count++
-		}
-	}
-
-	if count > 0 {
-		return result, count, "fuzzy", nil
-	}
-
-	// Last resort: use Longest Common Subsequence to find best match
-	bestScore := 0
-	bestStart, bestEnd := -1, -1
-
-	for start := 0; start < len(lines); start++ {
-		for end := start + 1; end <= len(lines); end++ {
-			segment := strings.Join(lines[start:end], "\n")
-			score := lcsScore(segment, searchPattern)
-			if score > bestScore && score > len(searchPattern)/3 { // at least 33% match
-				bestScore = score
-				bestStart = start
-				bestEnd = end
+			if matchStart >= 0 {
+				return text, 0, "", fmt.Errorf("pattern is ambiguous (multiple normalized matches)")
 			}
+			matchStart = i
 		}
 	}
-
-	if bestStart != -1 {
-		newLines := append(lines[:bestStart], replLines...)
-		newLines = append(newLines, lines[bestEnd:]...)
-		result = strings.Join(newLines, "\n")
-		return result, 1, "lcs", nil
+	if matchStart >= 0 {
+		newLines := make([]string, 0, len(lines)-len(searchLines)+len(replLines))
+		newLines = append(newLines, lines[:matchStart]...)
+		newLines = append(newLines, replLines...)
+		newLines = append(newLines, lines[matchStart+len(searchLines):]...)
+		return strings.Join(newLines, "\n"), 1, "normalized-whitespace", nil
 	}
 
 	return text, 0, "", fmt.Errorf("pattern not found")
@@ -334,37 +338,8 @@ func fuzzyEqual(a, b string) bool {
 		return true
 	}
 	// Check if they're the same after removing whitespace
-	normalize := func(s string) string {
-		s = strings.TrimSpace(s)
-		s = regexp.MustCompile(`\s+`).ReplaceAllString(s, " ")
-		return s
-	}
+	normalize := func(s string) string { return patchWhitespaceRE.ReplaceAllString(strings.TrimSpace(s), " ") }
 	return normalize(a) == normalize(b)
-}
-
-// lcsScore returns the length of the longest common subsequence
-func lcsScore(a, b string) int {
-	aLines := strings.Split(a, "\n")
-	bLines := strings.Split(b, "\n")
-
-	n := len(bLines)
-	// Use only 2 rows to save memory
-	prev := make([]int, n+1)
-
-	for _, aLine := range aLines {
-		curr := make([]int, n+1)
-		for j, bLine := range bLines {
-			if aLine == bLine {
-				curr[j+1] = prev[j] + 1
-			} else if curr[j] > prev[j+1] {
-				curr[j+1] = curr[j]
-			} else {
-				curr[j+1] = prev[j+1]
-			}
-		}
-		prev = curr
-	}
-	return prev[n]
 }
 
 // =============================================================================
@@ -372,9 +347,16 @@ func lcsScore(a, b string) int {
 // =============================================================================
 
 func validateOperations(ops []PatchOperation) []string {
+	return validateOperationsContext(context.Background(), ops)
+}
+
+func validateOperationsContext(ctx context.Context, ops []PatchOperation) []string {
 	var errors []string
 
 	for _, op := range ops {
+		if err := ctx.Err(); err != nil {
+			return append(errors, fmt.Sprintf("patch cancelled: %v", err))
+		}
 		if op.Operation == OpUpdate {
 			data, err := os.ReadFile(op.FilePath)
 			if err != nil {
@@ -417,17 +399,19 @@ func validateOperations(ops []PatchOperation) []string {
 				}
 				replacement := strings.Join(replaceLines, "\n")
 
-				_, count, _, _ := fuzzyFindAndReplace(content, searchPattern, replacement)
-				if count == 0 {
+				newContent, count, _, matchErr := fuzzyFindAndReplace(ctx, content, searchPattern, replacement)
+				if count == 0 || matchErr != nil {
 					label := fmt.Sprintf("%q", hunk.ContextHint)
 					if hunk.ContextHint == "" {
 						label = "(no hint)"
 					}
-					errors = append(errors,
-						fmt.Sprintf("%s: hunk %s not found", op.FilePath, label))
+					detail := "not found"
+					if matchErr != nil {
+						detail = matchErr.Error()
+					}
+					errors = append(errors, fmt.Sprintf("%s: hunk %s %s", op.FilePath, label, detail))
 				} else {
-					// Advance simulation
-					content, _, _, _ = fuzzyFindAndReplace(content, searchPattern, replacement)
+					content = newContent
 				}
 			}
 
@@ -517,6 +501,10 @@ func applyMove(op PatchOperation) (string, error) {
 }
 
 func applyUpdate(op PatchOperation) (string, error) {
+	return applyUpdateContext(context.Background(), op)
+}
+
+func applyUpdateContext(ctx context.Context, op PatchOperation) (string, error) {
 	data, err := os.ReadFile(op.FilePath)
 	if err != nil {
 		return "", fmt.Errorf("cannot read %s: %w", op.FilePath, err)
@@ -525,6 +513,9 @@ func applyUpdate(op PatchOperation) (string, error) {
 
 	var allDiffs []string
 	for _, hunk := range op.Hunks {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
 		var searchLines, replaceLines []string
 		for _, l := range hunk.Lines {
 			if l.Prefix == "-" || l.Prefix == " " {
@@ -537,7 +528,7 @@ func applyUpdate(op PatchOperation) (string, error) {
 		searchPattern := strings.Join(searchLines, "\n")
 		replacement := strings.Join(replaceLines, "\n")
 
-		newContent, count, strategy, err := fuzzyFindAndReplace(content, searchPattern, replacement)
+		newContent, count, strategy, err := fuzzyFindAndReplace(ctx, content, searchPattern, replacement)
 		if err != nil {
 			return "", fmt.Errorf("hunk apply failed: %w", err)
 		}
@@ -560,10 +551,14 @@ func applyUpdate(op PatchOperation) (string, error) {
 }
 
 func applyV4AOperations(ops []PatchOperation) *PatchResult {
+	return applyV4AOperationsContext(context.Background(), ops)
+}
+
+func applyV4AOperationsContext(ctx context.Context, ops []PatchOperation) *PatchResult {
 	result := &PatchResult{}
 
 	// Phase 1: validate
-	validationErrors := validateOperations(ops)
+	validationErrors := validateOperationsContext(ctx, ops)
 	if len(validationErrors) > 0 {
 		var buf bytes.Buffer
 		buf.WriteString("Patch validation failed (no files were modified):\n")
@@ -580,6 +575,10 @@ func applyV4AOperations(ops []PatchOperation) *PatchResult {
 	var applyErrors []string
 
 	for _, op := range ops {
+		if err := ctx.Err(); err != nil {
+			applyErrors = append(applyErrors, fmt.Sprintf("patch cancelled: %v", err))
+			break
+		}
 		var diff string
 		var err error
 
@@ -600,7 +599,7 @@ func applyV4AOperations(ops []PatchOperation) *PatchResult {
 				result.FilesModified = append(result.FilesModified, fmt.Sprintf("%s -> %s", op.FilePath, op.NewPath))
 			}
 		case OpUpdate:
-			diff, err = applyUpdate(op)
+			diff, err = applyUpdateContext(ctx, op)
 			if err == nil {
 				result.FilesModified = append(result.FilesModified, op.FilePath)
 			}
@@ -663,6 +662,10 @@ func NewPatchTool() *PatchTool {
 }
 
 func (t *PatchTool) Execute(args map[string]interface{}) (string, error) {
+	return t.ExecuteContext(ContextFromArgs(args), args)
+}
+
+func (t *PatchTool) ExecuteContext(ctx context.Context, args map[string]interface{}) (string, error) {
 	patchContent, ok := args["patch"].(string)
 	if !ok || patchContent == "" {
 		return "", fmt.Errorf("patch content is required")
@@ -683,7 +686,7 @@ func (t *PatchTool) Execute(args map[string]interface{}) (string, error) {
 	}
 
 	if mode == "validate" {
-		errors := validateOperations(ops)
+		errors := validateOperationsContext(ctx, ops)
 		if len(errors) > 0 {
 			var buf bytes.Buffer
 			buf.WriteString("Validation failed:\n")
@@ -695,7 +698,7 @@ func (t *PatchTool) Execute(args map[string]interface{}) (string, error) {
 		return fmt.Sprintf("Validation passed for %d operation(s)", len(ops)), nil
 	}
 
-	result := applyV4AOperations(ops)
+	result := applyV4AOperationsContext(ctx, ops)
 	b, _ := json.Marshal(result)
 	return string(b), nil
 }

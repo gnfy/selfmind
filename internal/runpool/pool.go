@@ -11,6 +11,18 @@ import (
 	"sync"
 )
 
+// State describes where a job is in pool admission.
+type State string
+
+const (
+	StateWaitingResource State = "waiting_resource"
+	StateWaitingWorker   State = "waiting_worker"
+	StateRunning         State = "running"
+)
+
+// StateObserver receives edge-triggered admission state changes.
+type StateObserver func(State)
+
 // Pool bounds concurrent jobs and provides per-key serialization.
 type Pool struct {
 	sem      chan struct{} // capacity = worker count (total concurrency bound)
@@ -44,22 +56,45 @@ func (p *Pool) Workers() int { return cap(p.sem) }
 // Acquisition order is key-lock then worker-slot: a job waiting on a busy key
 // does not hold a worker slot, so it cannot starve other keys.
 func (p *Pool) Run(ctx context.Context, key string, fn func() error) error {
+	return p.RunObserved(ctx, key, nil, fn)
+}
+
+// RunObserved is Run with best-effort admission-state notifications.
+func (p *Pool) RunObserved(ctx context.Context, key string, observe StateObserver, fn func() error) error {
+	waited := false
+	notify := func(state State) {
+		if state == StateWaitingResource || state == StateWaitingWorker {
+			waited = true
+		}
+		if observe != nil {
+			observe(state)
+		}
+	}
 	if key != "" {
-		if err := p.lockKey(ctx, key); err != nil {
+		if err := p.lockKey(ctx, key, notify); err != nil {
 			return err
 		}
 		defer p.unlockKey(key)
 	}
 	select {
 	case p.sem <- struct{}{}:
-	case <-ctx.Done():
-		return ctx.Err()
+		// Acquired without waiting.
+	default:
+		notify(StateWaitingWorker)
+		select {
+		case p.sem <- struct{}{}:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 	}
 	defer func() { <-p.sem }()
+	if waited {
+		notify(StateRunning)
+	}
 	return fn()
 }
 
-func (p *Pool) lockKey(ctx context.Context, key string) error {
+func (p *Pool) lockKey(ctx context.Context, key string, observe StateObserver) error {
 	p.mu.Lock()
 	kl := p.keyLocks[key]
 	if kl == nil {
@@ -69,6 +104,14 @@ func (p *Pool) lockKey(ctx context.Context, key string) error {
 	kl.refs++
 	p.mu.Unlock()
 
+	select {
+	case kl.ch <- struct{}{}:
+		return nil
+	default:
+	}
+	if observe != nil {
+		observe(StateWaitingResource)
+	}
 	select {
 	case kl.ch <- struct{}{}: // acquired the per-key mutex
 		return nil

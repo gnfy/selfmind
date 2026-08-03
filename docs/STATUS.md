@@ -75,6 +75,30 @@
 | Task governance | ✅ | Reversible label hygiene uses additive task metadata (`kind`, `visibility`, `pinned`, `archived_at`, `last_activity_at`). The daemon-batched `PostRunAnalyzer` produces one logical task decision and memory decision set per run, while one provider request may cover several completed runs. Casual/identity/diagnostic work may move to one hidden Inbox per person/workspace; runs and events remain durable, and Inbox is excluded from normal task/recall/continuation views. `/task <id> pin|unpin` is explicit user authority. The 6h deterministic sweep archives only stale terminal work and suggests same-workspace duplicates without model calls; only explicit `/task <src> merge <dst>` folds labels. `/tasks` stays SQLite-filtered and paged, and `/diag tasks` surfaces possibly stuck work. Tests: `control/task_governance_test.go`, `app/post_run_analyzer_test.go`, `httpapi/run_labeler_test.go`, `httpapi/maintenance_batch_test.go`, `httpapi/task_view_test.go`, `control/task_merge_test.go`, `httpapi/task_dupes_test.go`, `httpapi/diag_w2_test.go`; eval: `evalcases/timeline/timeline-task-governance.yaml`. |
 | Skill variant evolution / sandbox test | ❌ | Old roadmap P3 (doc removed; see git history); not started, and out of scope for the north star. |
 
+### Execution Stall Hardening (2026-08-03)
+
+- The `patch` tool no longer uses the unbounded arbitrary-subsequence LCS
+  fallback. Misses use one cancellable, same-line-count whitespace-normalized
+  scan with a hard comparison ceiling; ambiguous matches fail without writing.
+- Context-aware tools receive the authenticated run context through the
+  dispatcher. `patch` now honors cancellation, making the existing run idle
+  watchdog effective for the incident path; the default idle ceiling is 10m
+  and `SELFMIND_RUN_IDLE_TIMEOUT=off` disables it.
+- `/stop` records `run.cancel_requested`; only the run goroutine materializes a
+  terminal outcome after execution has actually exited. Database state can no
+  longer claim cancellation while a tool is still mutating the workspace.
+- Worker-pool admission emits `run.scheduler` only when a run really waits for
+  a workspace write lock or worker, followed by a resumed state after admission.
+- Queue rows now carry a class and priority. Interactive work remains first,
+  watcher finalization is explicitly classified, and ordering stays FIFO within
+  a priority. Worker count remains 1 by default pending a multi-run ownership
+  soak; this is a local scheduling seam, not a remote Runner implementation.
+- Line-level `tool.output` remains live for the TUI but is not stored in
+  `task_events`; `tool.completed` keeps the bounded durable result.
+
+Tests: `internal/tools/patch_safety_test.go`, `internal/runpool/pool_test.go`,
+`internal/control/queue_test.go`, `internal/gateway/httpapi/run_events_test.go`.
+
 ### Smart Approval Default (2026-07-28)
 
 - A person with no persisted `/mode` preference now starts in `smart`.
@@ -698,9 +722,11 @@ completion/failure; continuity eval replays offline.
   `httpapi/evidence_outcome_test.go`, `httpapi/run_completion_test.go`,
   `control/runtime_test.go`, `eval/checks_test.go`. Eval:
   `evalcases/reliability/create-and-verify.yaml` (live cassette pending).
-  **Terminal reconciliation (2026-07-15):** `tool.output` preserves
-  `tool_call_id` through builtin execution, daemon persistence, SSE replay, and
-  the TUI. Only a matching active call can update a tool cell; unmatched and
+  **Terminal reconciliation (2026-07-15; storage bounded 2026-08-03):**
+  `tool.output` preserves `tool_call_id` through builtin execution and the live
+  SSE/TUI path, but line-level output is intentionally not persisted. The
+  bounded `tool.completed` preview is the durable replay/audit record. Only a
+  matching active call can update a tool cell; unmatched and
   late events are ignored, active output is a three-line tail, and terminal run
   states remove unfinished transient cells. Verification control text stays
   concise English and successful verification adds no extra transcript line.

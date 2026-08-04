@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"crypto/sha256"
 	"fmt"
 	"strings"
 )
@@ -28,7 +29,44 @@ func ApprovalChangeSummary(toolName string, args map[string]interface{}) string 
 	if content, ok := args["content"].(string); ok && isWriteTool(toolName) {
 		return contentChangeSummary(content)
 	}
+	if code, ok := args["code"].(string); ok && toolName == "execute_code" {
+		language, _ := args["language"].(string)
+		if strings.TrimSpace(language) == "" {
+			language = "python"
+		}
+		return language + " script, " + contentChangeSummary(code)
+	}
 	return ""
+}
+
+// ApprovalPersistentArgs builds the durable, display-only argument envelope
+// for an approval. Arbitrary code is execution input, not audit metadata: keep
+// a bounded redacted preview and a digest, never the complete source.
+func ApprovalPersistentArgs(toolName string, args map[string]interface{}) map[string]interface{} {
+	out := make(map[string]interface{})
+	for key, value := range args {
+		if strings.HasPrefix(key, "_") || (toolName == "execute_code" && key == "code") {
+			continue
+		}
+		out[key] = RedactSensitive(fmt.Sprintf("%v", value))
+	}
+	if toolName != "execute_code" {
+		return out
+	}
+	code, _ := args["code"].(string)
+	sum := sha256.Sum256([]byte(code))
+	preview := code
+	if lines := strings.Split(preview, "\n"); len(lines) > 20 {
+		preview = strings.Join(lines[:20], "\n")
+	}
+	if len(preview) > 2048 {
+		preview = preview[:2048]
+	}
+	out["code_lines"] = strings.Count(code, "\n") + 1
+	out["code_bytes"] = len(code)
+	out["code_sha256"] = fmt.Sprintf("%x", sum[:])
+	out["code_preview"] = RedactSensitive(preview)
+	return out
 }
 
 // patchChangeSummary counts V4A patch envelopes and their added/removed lines.

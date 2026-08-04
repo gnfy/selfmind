@@ -153,9 +153,6 @@ func (c *RunCoordinator) materializeRunFinalization(ctx context.Context, identit
 }
 
 func terminalRunStatus(status string) string {
-	if strings.EqualFold(strings.TrimSpace(status), api.RunStatusVerificationPartial) {
-		return "done"
-	}
 	return status
 }
 

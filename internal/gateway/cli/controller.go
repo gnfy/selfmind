@@ -222,7 +222,12 @@ type MsgApprovalRequest struct {
 	Cwd           string
 	ChangeSummary string
 	GrantClass    string
+	Containment   string
 	TriageState   string
+	CodePreview   string
+	CodeSHA256    string
+	CodeLines     int
+	CodeBytes     int
 	// Rationale and Risk are the judge's assessment when triage ran and handed
 	// the call over; Options is the daemon's authoritative answer set for this
 	// ask (nil for an older daemon, which falls back to the built-in options).

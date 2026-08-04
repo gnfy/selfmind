@@ -119,12 +119,33 @@ func (d *Server) respondApprovalByToken(ctx context.Context, identity *control.I
 		}
 		return nil, resolveErr
 	}
+	options := decodeApprovalDecisions(resolved.Payload)
+	if input.DecisionID == "" {
+		if option, ok := approvalOptionForDecision(options, decision, input.GrantScope, input.GrantKey); ok {
+			input.DecisionID = option.ID
+		}
+	}
 	approval, err := d.Control.RespondApprovalRequest(ctx, identity.TenantID, identity.PersonID, resolved.ID, decision, channel, input)
 	if err != nil {
 		return nil, err
 	}
 	appendApprovalEvent(ctx, d.Control, approval, channel)
 	return approval, nil
+}
+
+// approvalOptionForDecision recovers the exact server-issued answer from the
+// decision fields older clients already send. This keeps the wire compatible
+// while making the durable audit explicit instead of guessing from scope later.
+func approvalOptionForDecision(options []approvalDecisionOption, decision, scope, grantKey string) (approvalDecisionOption, bool) {
+	decision = strings.TrimSpace(decision)
+	scope = strings.TrimSpace(scope)
+	grantKey = strings.TrimSpace(grantKey)
+	for _, option := range options {
+		if option.Decision == decision && option.Scope == scope && option.GrantKey == grantKey {
+			return option, true
+		}
+	}
+	return approvalDecisionOption{}, false
 }
 
 // parseBareApprovalReply maps a conversational one-word answer to an approval
@@ -141,6 +162,8 @@ func parseBareApprovalReply(content string) (decision, scope, shortcut string, o
 	s := strings.ToLower(strings.TrimSpace(content))
 	s = strings.Trim(s, " \t\r\n.!?。！？，,")
 	switch s {
+	case "yr":
+		return "approved", "run", "", true
 	case "yt":
 		return "approved", "task", "", true
 	case "ya":
@@ -164,6 +187,8 @@ func parseBareApprovalReply(content string) (decision, scope, shortcut string, o
 // for person scope.
 func parseApprovalScopeWord(word string) string {
 	switch strings.ToLower(strings.TrimSpace(word)) {
+	case "run":
+		return "run"
 	case "task", "session":
 		return "task"
 	case "always", "person", "persistent":
@@ -209,6 +234,7 @@ func (d *Server) tryHandleBareApprovalReply(ctx context.Context, identity *contr
 		if option, found := approvalOptionByShortcut(decodeApprovalDecisions(pending[0].Payload), shortcut); found {
 			input.GrantScope = option.Scope
 			input.GrantKey = option.GrantKey
+			input.DecisionID = option.ID
 			decision = option.Decision
 		}
 	}

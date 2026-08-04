@@ -61,14 +61,14 @@ const triageMaxIntentBytes = 1500
 // a different decision when the person asked for it than when the model thought
 // of it. Empty intent is normal (no context installed) and simply means the judge
 // treats authorization as unknown.
-func triageApproval(ctx context.Context, judge ApprovalJudge, toolName, subject, reason, intent string) (TriageVerdict, TriageAssessment, error) {
+func triageApproval(ctx context.Context, judge ApprovalJudge, toolName, subject, reason, intent string, containment ...ContainmentAssessment) (TriageVerdict, TriageAssessment, error) {
 	if judge == nil {
 		return TriageEscalate, TriageAssessment{}, nil
 	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	prompt := buildTriagePrompt(toolName, subject, reason, intent)
+	prompt := buildTriagePrompt(toolName, subject, reason, intent, containment...)
 
 	// Bound the wait independently of the judge honoring ctx: run the call on a
 	// goroutine and race it against a timeout. A judge that hangs must not hang
@@ -121,7 +121,7 @@ func parseTriageVerdict(raw string) TriageVerdict {
 // `# ...`), wraps the command in <command></command> delimiters, and explicitly
 // tells the judge to treat the delimited text as untrusted DATA — a
 // prompt-injection defense, since the "command" originates from model output.
-func buildTriagePrompt(toolName, subject, reason, intent string) string {
+func buildTriagePrompt(toolName, subject, reason, intent string, containment ...ContainmentAssessment) string {
 	subject = stripShellComments(subject)
 	subject = strings.TrimSpace(subject)
 	if len(subject) > triageMaxSubjectBytes {
@@ -144,6 +144,11 @@ func buildTriagePrompt(toolName, subject, reason, intent string) string {
 	if strings.TrimSpace(reason) != "" {
 		b.WriteString("Flagged because: ")
 		b.WriteString(strings.TrimSpace(reason))
+		b.WriteString("\n")
+	}
+	if len(containment) > 0 {
+		b.WriteString("Execution containment: ")
+		b.WriteString(containment[0].Summary())
 		b.WriteString("\n")
 	}
 	b.WriteString("<command>\n")

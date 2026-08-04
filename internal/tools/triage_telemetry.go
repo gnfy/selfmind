@@ -46,6 +46,13 @@ const (
 	// network), so no ask and no judge call happened at all (batch C1). Counted
 	// because it answers "how much of the old prompt volume was fatigue?".
 	TriageOutcomeContained TriageOutcome = "contained"
+	// TriageOutcomeGrantHit is a reusable class/rule grant hit.
+	TriageOutcomeGrantHit TriageOutcome = "grant_hit"
+	// TriageOutcomeExactRunHit is a byte-identical action explicitly approved
+	// for this run. It is separated from broader grants for auditability.
+	TriageOutcomeExactRunHit TriageOutcome = "exact_run_hit"
+	// TriageOutcomeHumanAsk counts calls that reached a person.
+	TriageOutcomeHumanAsk TriageOutcome = "human_ask"
 )
 
 type triageEntry struct {
@@ -114,7 +121,10 @@ type TriageStats struct {
 	Unavailable int
 	// Contained counts exec calls the sandbox could contain, which skip both the
 	// ask and the judge.
-	Contained int
+	Contained    int
+	GrantHits    int
+	ExactRunHits int
+	HumanAsks    int
 	// LastError is the most recent judge failure in the window, already
 	// redacted and one-lined. Empty when triage never failed.
 	LastError   string
@@ -124,7 +134,7 @@ type TriageStats struct {
 // Total returns how many gated ops the funnel resolved in the window, including
 // the ones containment settled before triage.
 func (s TriageStats) Total() int {
-	return s.Approved + s.Denied + s.Escalated + s.Unavailable + s.Contained
+	return s.Approved + s.Denied + s.Escalated + s.Unavailable + s.Contained + s.GrantHits + s.ExactRunHits + s.HumanAsks
 }
 
 // Judged returns how many ops actually reached the judge, which is the
@@ -159,6 +169,12 @@ func TriageDiagnostics(tenantID, personID string) TriageStats {
 			stats.Unavailable++
 		case TriageOutcomeContained:
 			stats.Contained++
+		case TriageOutcomeGrantHit:
+			stats.GrantHits++
+		case TriageOutcomeExactRunHit:
+			stats.ExactRunHits++
+		case TriageOutcomeHumanAsk:
+			stats.HumanAsks++
 		}
 		if entry.err != "" && !entry.at.Before(stats.LastErrorAt) {
 			stats.LastError = entry.err

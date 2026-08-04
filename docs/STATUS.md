@@ -87,6 +87,31 @@
 - `/stop` records `run.cancel_requested`; only the run goroutine materializes a
   terminal outcome after execution has actually exited. Database state can no
   longer claim cancellation while a tool is still mutating the workspace.
+- The idle watchdog is now phase-aware: approval and clarify waits pause the
+  stall timer and keep their own durable expiry, while model/tool execution
+  remains bounded. A real idle expiry finalizes with completion reason
+  `stalled`; cancellation still reaches clarify waiters through the run ctx.
+- Tool-ledger completion uses a context detached from run cancellation after
+  the executor returns, so `/stop` cannot strand a cooperative call in
+  `started`. Crash-left `started` calls remain explicit uncertain evidence on
+  recovery rather than being falsely declared failed.
+- Approval answers persist the exact server-issued decision id. A new `run`
+  option remembers an eligible action class only in memory for the current run;
+  task/person grants remain durable. `execute_code` approval rows retain only a
+  redacted bounded preview, language/size metadata, and a source digest.
+- Smart approval now evaluates enforced containment on separate filesystem,
+  network, and credential axes. Shared-network or credentialed calls bypass a
+  human only when a conservative declarative catalog proves they are read-only
+  observations; arbitrary scripts and unknown Agent CLIs remain gated. Opaque
+  code may be approved for a byte-identical repeat in the same run only, never
+  as durable task/person authority. `/diag` exposes containment, grant hits,
+  exact-run hits, judge outcomes, and human asks; `/status` shows how long the
+  oldest pending approval or clarification has waited.
+- Task reduction now preserves an older resumable run until a deliberate
+  continuation links it through `resumed_by_run_id`. A single explicit issue
+  key (for example `RUQX-369`) is resolved at ingress before the current-label
+  guess and is recorded as an auditable `label.assigned` decision; it remains
+  display-only and never selects workspace or context.
 - Worker-pool admission emits `run.scheduler` only when a run really waits for
   a workspace write lock or worker, followed by a resumed state after admission.
 - Queue rows now carry a class and priority. Interactive work remains first,

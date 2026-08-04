@@ -1,0 +1,30 @@
+id: continuity_start_execution
+title: "An explicit start-execution cue resumes the current task"
+suite: continuity
+workspace: isolated
+channel: cli
+require_cassette: false
+
+# "Start execution" is explicit continuation evidence, not a new task. This
+# locks the gateway attachment contract while keeping the model work trivial;
+# deterministic state coverage also lives in continue_resolver_test.go.
+turns:
+  - input: >-
+      Propose a two-step README cleanup plan. Do not inspect files or use tools.
+  - input: >-
+      开始执行，但在本次评估中只回复：CONTINUED。不要查看文件或使用工具。
+
+expect:
+  status: completed
+  require_same_task: true
+  require_continuation: true
+  max_tool_calls: 0
+  max_duration_seconds: 120
+  contains:
+    - "CONTINUED"
+
+checks:
+  no_mojibake: true
+  no_raw_json_leak: true
+  no_tool_xml_leak: true
+  no_empty_response: true

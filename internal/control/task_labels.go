@@ -240,6 +240,23 @@ func (s *Store) ListTaskRuns(ctx context.Context, tenantID, taskID string, limit
 	return out, rows.Err()
 }
 
+// MarkTaskRunsResumed records that a deliberate task continuation has taken
+// ownership of every prior resumable run. A later successful run may close the
+// task only after this link exists; an unrelated new turn under the same label
+// cannot silently erase unfinished work.
+func (s *Store) MarkTaskRunsResumed(ctx context.Context, tenantID, taskID, resumedByRunID string) error {
+	if strings.TrimSpace(taskID) == "" || strings.TrimSpace(resumedByRunID) == "" {
+		return nil
+	}
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE task_runs SET resumed_by_run_id = ?
+		 WHERE tenant_id = ? AND task_id = ? AND id <> ?
+		   AND status IN ('interrupted', 'waiting_user', 'verification_partial', 'blocked')
+		   AND COALESCE(resumed_by_run_id, '') = ''`,
+		resumedByRunID, normalizeTenant(tenantID), taskID, resumedByRunID)
+	return err
+}
+
 // ReassignRun re-points one finished run from fromTaskID to toTaskID: the
 // task_runs row plus that run's task_events and task_artifacts move in ONE
 // transaction, so the timeline never shows a run whose events belong to a

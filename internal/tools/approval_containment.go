@@ -5,61 +5,95 @@ import (
 	"strings"
 )
 
-// Sandbox containment as an approval judgement (batch C1).
-//
-// The old question was "does this command look dangerous?", which asks about the
-// COMMAND. The better question — the one codex's safety layer asks — is "can the
-// sandbox contain this?", which asks about the BLAST RADIUS. They differ sharply
-// for the common case: `python3 build.py` inside an isolated sandbox can only
-// touch workspace files and cannot reach the network, so it is no more dangerous
-// than the file writes smart mode already performs unprompted, yet the
-// command-shaped question asked about it every single time.
-//
-// Containment is claimed only when ALL of these hold:
-//
-//   - the call is an exec tool whose EFFECTIVE mode is isolated, explicitly
-//     annotated for THIS call (never inferred here — see execSandboxContained);
-//   - the sandbox is enabled and actually available on this platform, so the
-//     policy is enforced rather than aspirational (Linux + bubblewrap; macOS has
-//     no native sandbox path, so it never claims containment);
-//   - the policy does not allow network egress, because the sandbox's own
-//     guarantee is "workspace-writable, no network" (internal/tools/sandbox:
-//     --unshare-net) and egress is what turns a contained write into
-//     exfiltration;
-//   - the dangerous heuristic did NOT fire, so out-of-workspace targets,
-//     destructive programs, and egress commands keep their ask.
-//
-// It is also strictly narrower than the hard floor: hardlineToolCall runs and
-// returns before containment is consulted, so a hardline op can never be
-// contained into silence. Containment applies to smart mode only; on-request and
-// read-only keep their literal contracts (docs/tool-safety.md).
-
-// execSandboxContained reports whether this exec call will run under an enforced
-// isolated sandbox with no network.
-//
-// It reads the EXPLICIT effective-mode annotation only. Inferring the mode from
-// the operator policy would be wrong in the one place it matters most: the /mode
-// retro-resolution path re-evaluates a PENDING approval from redacted display
-// args, where a host-mode call's marker may be missing entirely — inferring
-// "isolated" there would auto-approve a host escape. A missing annotation means
-// "not proven contained", which asks.
-func execSandboxContained(toolName string, args map[string]interface{}) bool {
-	if !isExecTool(toolName) {
-		return false
-	}
-	if strings.ToLower(strings.TrimSpace(stringArg(args, "_effective_sandbox_mode"))) != string(SandboxIsolated) {
-		return false
-	}
-	enabled, _, network := execSandboxPolicyForArgs(args)
-	if !enabled || network {
-		return false
-	}
-	// Enforceability, not configuration: a policy that cannot be applied on this
-	// host contains nothing.
-	return runtime.GOOS == "linux" && ExecSandboxAvailable()
+// ContainmentAssessment keeps the three execution boundaries independent.
+// Collapsing them into one bool made a network-enabled filesystem sandbox look
+// identical to host execution, even though their blast radii are very
+// different. The assessment is derived from the effective execution request;
+// it is never inferred from a pending approval's redacted display payload.
+type ContainmentAssessment struct {
+	Filesystem      string `json:"filesystem"`
+	Network         string `json:"network"`
+	Credentials     string `json:"credentials"`
+	Enforced        bool   `json:"enforced"`
+	ObservationOnly bool   `json:"observation_only,omitempty"`
 }
 
-// containedExecReason is the diagnostic line recorded when containment replaces
-// an ask. It names the guarantee being relied on so a later reader can tell this
-// apart from a judge approval or a human decision.
-const containedExecReason = "sandboxed execution: workspace-writable, network disabled"
+const (
+	containmentFilesystemIsolated  = "isolated"
+	containmentFilesystemHost      = "host"
+	containmentFilesystemUnknown   = "unknown"
+	containmentNetworkNone         = "none"
+	containmentNetworkShared       = "shared"
+	containmentCredentialsNone     = "none"
+	containmentCredentialsSelected = "selected"
+)
+
+// assessExecContainment describes what THIS exec call can reach. The effective
+// sandbox annotation is required so /mode retro-resolution can never infer that
+// a pending host escape was isolated.
+func assessExecContainment(toolName string, args map[string]interface{}) ContainmentAssessment {
+	assessment := ContainmentAssessment{
+		Filesystem:  containmentFilesystemUnknown,
+		Network:     containmentNetworkNone,
+		Credentials: containmentCredentialsNone,
+	}
+	if !isExecTool(toolName) {
+		return assessment
+	}
+
+	switch SandboxMode(strings.ToLower(strings.TrimSpace(stringArg(args, "_effective_sandbox_mode")))) {
+	case SandboxHost:
+		assessment.Filesystem = containmentFilesystemHost
+	case SandboxIsolated:
+		assessment.Filesystem = containmentFilesystemIsolated
+		enabled, _, _ := execSandboxPolicyForArgs(args)
+		assessment.Enforced = enabled && runtime.GOOS == "linux" && ExecSandboxAvailable()
+	}
+	if networkSharedArg(args) {
+		assessment.Network = containmentNetworkShared
+	}
+	if allowed, _ := args[credentialReadArgKey].(bool); allowed {
+		assessment.Credentials = containmentCredentialsSelected
+	}
+	assessment.ObservationOnly = deterministicObservationExec(toolName, args)
+	return assessment
+}
+
+// AutoApprove reports whether smart mode may skip both judge and human. A fully
+// isolated no-network/no-credential call retains the original C1 behaviour.
+// Shared-network or credential-bearing calls are released only when a bounded,
+// declarative command rule proves they are observation-only. Arbitrary scripts
+// and unknown agent CLIs never satisfy that rule.
+func (a ContainmentAssessment) AutoApprove() bool {
+	if a.Filesystem != containmentFilesystemIsolated || !a.Enforced {
+		return false
+	}
+	if a.Network == containmentNetworkNone && a.Credentials == containmentCredentialsNone {
+		return true
+	}
+	return a.ObservationOnly
+}
+
+func (a ContainmentAssessment) Summary() string {
+	parts := []string{
+		"filesystem=" + a.Filesystem,
+		"network=" + a.Network,
+		"credentials=" + a.Credentials,
+	}
+	if a.ObservationOnly {
+		parts = append(parts, "operation=observation-only")
+	}
+	if !a.Enforced && a.Filesystem == containmentFilesystemIsolated {
+		parts = append(parts, "enforcement=unavailable")
+	}
+	return strings.Join(parts, ", ")
+}
+
+// execSandboxContained is retained as the narrow compatibility predicate used
+// by mode tests and retro-resolution. New approval decisions should use the
+// full assessment so network and credential exposure remain observable.
+func execSandboxContained(toolName string, args map[string]interface{}) bool {
+	return assessExecContainment(toolName, args).AutoApprove()
+}
+
+const containedExecReason = "sandbox containment"

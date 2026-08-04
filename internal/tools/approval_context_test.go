@@ -193,6 +193,26 @@ func TestApprovalChangeSummaryCountsWithoutContent(t *testing.T) {
 	}
 }
 
+func TestApprovalPersistentArgsBoundsExecuteCode(t *testing.T) {
+	code := strings.Repeat("print('safe')\n", 300) + "token=secret-value"
+	got := ApprovalPersistentArgs("execute_code", map[string]interface{}{
+		"code": code, "language": "python", "timeout": 30,
+	})
+	if _, leaked := got["code"]; leaked {
+		t.Fatal("complete execute_code source must not be persisted")
+	}
+	preview, _ := got["code_preview"].(string)
+	if len(preview) > 2048 || strings.Contains(preview, strings.Repeat("print('safe')\n", 30)) {
+		t.Fatalf("preview is not bounded: %d bytes", len(preview))
+	}
+	if got["code_sha256"] == "" || got["code_bytes"] != len(code) {
+		t.Fatalf("missing code audit metadata: %#v", got)
+	}
+	if summary := ApprovalChangeSummary("execute_code", map[string]interface{}{"code": code, "language": "python"}); !strings.Contains(summary, "python script") {
+		t.Fatalf("execute_code summary = %q", summary)
+	}
+}
+
 // resetTriageTelemetryForTest clears the process-wide triage read model and
 // restores the clock, so counts never leak between tests.
 func resetTriageTelemetryForTest(t *testing.T) {

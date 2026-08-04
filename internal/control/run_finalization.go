@@ -321,6 +321,22 @@ func resolveFinalTaskStatusTx(
 	if waitingFinalization {
 		return "waiting_finalization", nil
 	}
+
+	unresolvedResume, err := hasRows(
+		`SELECT EXISTS(
+			SELECT 1 FROM task_runs
+			WHERE tenant_id = ? AND task_id = ? AND id <> ?
+			  AND status IN ('interrupted', 'waiting_user', 'verification_partial', 'blocked')
+			  AND COALESCE(resumed_by_run_id, '') = ''
+		)`,
+		tenantID, taskID, finishingRunID,
+	)
+	if err != nil {
+		return "", err
+	}
+	if unresolvedResume {
+		return "interrupted", nil
+	}
 	return proposed, nil
 }
 

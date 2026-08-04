@@ -180,7 +180,7 @@ func TestStatusSurfacesPendingApproval(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"Waiting for your approval", "reply y or n", "[terminal]", "rm -rf build"} {
+	for _, want := range []string{"Waiting for your approval", "elapsed)", "reply y or n", "[terminal]", "rm -rf build"} {
 		if !strings.Contains(reply, want) {
 			t.Fatalf("status card missing %q:\n%s", want, reply)
 		}

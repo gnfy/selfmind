@@ -419,11 +419,12 @@ func SmartApprovalMiddleware(projectRoot string) Middleware {
 			// Layer 2: mode bypass, including sandbox containment (C1). A
 			// contained exec call is recorded so /diag can show how much of the
 			// old ask volume was pure fatigue rather than judgement.
-			contained := execSandboxContained(toolName, args)
+			containment := assessExecContainment(toolName, args)
+			contained := containment.AutoApprove()
 			if !approvalNeeded(mode, toolName, dangerous, contained) {
 				if contained && mode == ApprovalSmart && hasScope {
 					RecordTriageOutcome(scope.TenantID, scope.PersonID, TriageOutcomeContained, nil)
-					log.Debug("smart approval: sandbox-contained exec, no ask", "tool", toolName, "reason", containedExecReason)
+					log.Debug("smart approval: sandbox-contained exec, no ask", "tool", toolName, "reason", containedExecReason, "assessment", containment.Summary())
 				}
 				return next(args)
 			}
@@ -436,11 +437,29 @@ func SmartApprovalMiddleware(projectRoot string) Middleware {
 			// Hardline never reaches here, so a granted class can never cover a
 			// hard-floor op.
 			patternKey := approvalPatternKeyForScope(toolName, args, reason, scope, hasScope)
+			exactRunKey := approvalExactRunKey(toolName, args, scope, hasScope)
 			// Rule candidates (batch B2) are the narrow authorizations this call
 			// could create — a command prefix, a host, a writable root — and the
 			// keys a previously granted rule is looked up under.
 			ruleCandidates := approvalRuleCandidates(toolName, args, scope, reason)
 			targetKeys := approvalTargetRuleKeys(toolName, args, scope)
+			isRunGranted := func(key string) bool {
+				return hasScope && scope.runGrants != nil && scope.runGrants.has(key)
+			}
+			switch {
+			case isRunGranted(patternKey):
+				RecordTriageOutcome(scope.TenantID, scope.PersonID, TriageOutcomeGrantHit, nil)
+				return next(args)
+			case isRunGranted(exactRunKey):
+				RecordTriageOutcome(scope.TenantID, scope.PersonID, TriageOutcomeExactRunHit, nil)
+				return next(args)
+			case len(targetKeys) > 0 && allApprovalKeysGranted(targetKeys, isRunGranted):
+				RecordTriageOutcome(scope.TenantID, scope.PersonID, TriageOutcomeGrantHit, nil)
+				return next(args)
+			case anyApprovalKeyGranted(approvalRuleKeys(ruleCandidates), isRunGranted):
+				RecordTriageOutcome(scope.TenantID, scope.PersonID, TriageOutcomeGrantHit, nil)
+				return next(args)
+			}
 			if hasScope && scope.Grants != nil {
 				grantCtx := contextFromArgs(args)
 				isGranted := func(key string) bool {
@@ -452,12 +471,15 @@ func SmartApprovalMiddleware(projectRoot string) Middleware {
 				}
 				switch {
 				case isGranted(patternKey):
+					RecordTriageOutcome(scope.TenantID, scope.PersonID, TriageOutcomeGrantHit, nil)
 					return next(args)
 				// ALL targets must be covered (batch B3): a patch touching three
 				// roots must not be released by a grant that covers one of them.
 				case len(targetKeys) > 0 && allApprovalKeysGranted(targetKeys, isGranted):
+					RecordTriageOutcome(scope.TenantID, scope.PersonID, TriageOutcomeGrantHit, nil)
 					return next(args)
 				case anyApprovalKeyGranted(approvalRuleKeys(ruleCandidates), isGranted):
+					RecordTriageOutcome(scope.TenantID, scope.PersonID, TriageOutcomeGrantHit, nil)
 					return next(args)
 				}
 			}
@@ -498,7 +520,7 @@ func SmartApprovalMiddleware(projectRoot string) Middleware {
 					if scope.TriageIntent != nil {
 						intent = scope.TriageIntent()
 					}
-					verdict, assessment, terr := triageApproval(ctx, scope.Judge, toolName, triageSubject(toolName, approvalDisplayArgs(args)), reason, intent)
+					verdict, assessment, terr := triageApproval(ctx, scope.Judge, toolName, triageSubject(toolName, approvalDisplayArgs(args)), reason, intent, containment)
 					triageRationale = assessment.Rationale
 					triageRisk = assessment.Risk
 					triageAuthorization = assessment.Authorization
@@ -547,6 +569,7 @@ func SmartApprovalMiddleware(projectRoot string) Middleware {
 
 			// Layer 5: human ask.
 			if hasScope && scope.Approval != nil {
+				RecordTriageOutcome(scope.TenantID, scope.PersonID, TriageOutcomeHumanAsk, nil)
 				decision, err := scope.Approval(contextFromArgs(args), ToolApprovalRequest{
 					TenantID:            scope.TenantID,
 					PersonID:            scope.PersonID,
@@ -557,6 +580,7 @@ func SmartApprovalMiddleware(projectRoot string) Middleware {
 					Reason:              reason,
 					Args:                approvalDisplayArgs(args),
 					GrantClass:          grantClassForDecision(toolName, reason, args, patternKey),
+					RunGrantClass:       exactRunGrantDescription(patternKey, exactRunKey),
 					ResourceFingerprint: approvalResourceFingerprint(scope, toolName, args),
 					Environment:         scope.EnvironmentSnapshotID,
 					Cwd:                 approvalDisplayCwd(scope),
@@ -565,6 +589,7 @@ func SmartApprovalMiddleware(projectRoot string) Middleware {
 					TriageRationale:     triageRationale,
 					TriageRisk:          triageRisk,
 					TriageAuthorization: triageAuthorization,
+					Containment:         containment.Summary(),
 					RuleCandidates:      ruleCandidates,
 				})
 				if err != nil {
@@ -590,7 +615,7 @@ func SmartApprovalMiddleware(projectRoot string) Middleware {
 				// picked, else the action class. A rule key is honored ONLY when
 				// it is one this call offered — a decision arriving from any
 				// surface must not be able to mint an authorization of its own.
-				if scope.Grants != nil {
+				if scope.Grants != nil || scope.runGrants != nil {
 					grantCtx := contextFromArgs(args)
 					if rule, ok := approvalRuleByKey(ruleCandidates, decision.GrantKey); ok {
 						recordApprovalGrant(grantCtx, scope, decision.Scope, rule.Key, approvalGrantExpiry(decision.Scope, args))
@@ -601,6 +626,8 @@ func SmartApprovalMiddleware(projectRoot string) Middleware {
 						}
 						if patternKey != "" {
 							recordApprovalGrant(grantCtx, scope, decision.Scope, patternKey, approvalGrantExpiry(decision.Scope, args))
+						} else if decision.Scope == "run" && exactRunKey != "" {
+							recordApprovalGrant(grantCtx, scope, "run", exactRunKey, time.Time{})
 						}
 						// A remembered decision on a multi-target write must cover
 						// EVERY target, otherwise the next call re-asks for the
@@ -626,6 +653,36 @@ func SmartApprovalMiddleware(projectRoot string) Middleware {
 			return next(args)
 		}
 	}
+}
+
+// approvalExactRunKey fingerprints an exec action that the reusable-grant floor
+// deliberately refuses to classify. The raw payload never leaves this function;
+// the key is in-memory only and includes the environment/blast-radius identity,
+// so changing code, sandbox, workspace, credentials, or network asks again.
+func approvalExactRunKey(toolName string, args map[string]interface{}, scope ExecutionScope, hasScope bool) string {
+	if !hasScope || !isExecTool(toolName) || strings.TrimSpace(scope.RunID) == "" {
+		return ""
+	}
+	payload := strings.TrimSpace(execCommandPayload(toolName, args))
+	if payload == "" {
+		return ""
+	}
+	assessment := assessExecContainment(toolName, args)
+	material := strings.Join([]string{
+		strings.ToLower(strings.TrimSpace(toolName)), payload,
+		strings.TrimSpace(scope.RunID), strings.TrimSpace(scope.WorkspaceID),
+		strings.TrimSpace(scope.EnvironmentSnapshotID), fmt.Sprint(scope.EnvironmentGeneration),
+		assessment.Summary(),
+	}, "\x00")
+	sum := sha256.Sum256([]byte(material))
+	return fmt.Sprintf("run:exact:%x", sum[:16])
+}
+
+func exactRunGrantDescription(patternKey, exactRunKey string) string {
+	if patternKey != "" || exactRunKey == "" {
+		return ""
+	}
+	return "this exact action for this run"
 }
 
 // approvalDisplayCwd is the working root shown on the approval surface: where
@@ -677,22 +734,26 @@ func approvalProjectRoot(fallback string, scope ExecutionScope, args map[string]
 	return fallback
 }
 
-// recordApprovalGrant persists an "approve this class" decision. Scope "task"
-// grants for the current task (session memory, needs a task id); "person"
-// grants across all of the person's tasks (persistent memory). "" (once) and an
-// empty scope record nothing. Failures are swallowed: a lost grant only costs
-// one extra ask, never correctness.
+// recordApprovalGrant remembers an "approve this class" decision. Scope "run"
+// stays in memory for the live run; "task" persists for the current task;
+// "person" persists across the person's tasks. "" (once) records nothing.
+// Failures are swallowed: a lost grant only costs one extra ask, never
+// correctness.
 func recordApprovalGrant(ctx context.Context, scope ExecutionScope, decisionScope, patternKey string, expiresAt time.Time) {
-	if scope.Grants == nil || patternKey == "" {
+	if patternKey == "" {
 		return
 	}
 	switch decisionScope {
+	case "run":
+		if scope.runGrants != nil {
+			scope.runGrants.add(patternKey)
+		}
 	case "task":
-		if scope.TaskID != "" {
+		if scope.Grants != nil && scope.TaskID != "" {
 			_ = scope.Grants.GrantApproval(ctx, "task", scope.TenantID, scope.PersonID, scope.TaskID, patternKey, expiresAt)
 		}
 	case "person":
-		if scope.PersonID != "" {
+		if scope.Grants != nil && scope.PersonID != "" {
 			_ = scope.Grants.GrantApproval(ctx, "person", scope.TenantID, scope.PersonID, scope.PersonID, patternKey, expiresAt)
 		}
 	}

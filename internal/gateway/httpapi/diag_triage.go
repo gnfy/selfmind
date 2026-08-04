@@ -30,12 +30,12 @@ func (d *Server) smartTriageDiagLines(ctx context.Context, identity *control.Ide
 	}
 
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "Smart triage (24h) [mode: %s]: ", mode)
+	fmt.Fprintf(&sb, "Approval funnel (24h) [mode: %s]: ", mode)
 	if stats.Total() == 0 {
 		sb.WriteString("no dangerous operation reached triage yet\n")
 	} else {
-		fmt.Fprintf(&sb, "auto-approved %d, blocked %d, escalated %d, unavailable %d\n",
-			stats.Approved, stats.Denied, stats.Escalated, stats.Unavailable)
+		fmt.Fprintf(&sb, "contained %d, grant-hit %d, exact-run-hit %d, auto-approved %d, blocked %d, escalated %d, unavailable %d, human-ask %d\n",
+			stats.Contained, stats.GrantHits, stats.ExactRunHits, stats.Approved, stats.Denied, stats.Escalated, stats.Unavailable, stats.HumanAsks)
 	}
 	// An unavailable-only window is the actionable case: the funnel is not
 	// strict, it is off, so every dangerous op becomes a human ask.

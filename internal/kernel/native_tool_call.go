@@ -351,7 +351,11 @@ func (a *Agent) executeSingleToolCall(ctx context.Context, tenantID string, even
 
 	var ledgerErr error
 	if ledgerRunID != "" && ledger != nil {
-		ledgerErr = ledger.RecordOutcome(ctx, ledgerRunID, call.ID, err == nil)
+		// The execution context may be cancelled precisely because the tool was
+		// stopped by /stop or the watchdog. Closing the durable ledger is cleanup,
+		// not more execution; it must survive that cancellation or the call remains
+		// falsely "started" and every resume treats the side effect as uncertain.
+		ledgerErr = ledger.RecordOutcome(context.WithoutCancel(ctx), ledgerRunID, call.ID, err == nil)
 	}
 
 	if err != nil {

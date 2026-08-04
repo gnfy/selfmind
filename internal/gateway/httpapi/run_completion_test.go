@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"testing"
 
 	"selfmind/internal/control"
 	"selfmind/internal/gateway/api"
 	"selfmind/internal/gateway/router"
+	"selfmind/internal/runpool"
 )
 
 func TestStructuredWaitingExternalSurvivesGenericTurnCompletion(t *testing.T) {
@@ -149,6 +151,40 @@ func TestFinalizeErroredRunIsDurableAndResumable(t *testing.T) {
 	}
 	if replay.Outcome.Status != "interrupted" || replay.Run.ID != run.ID {
 		t.Fatalf("maintenance replay = %#v", replay)
+	}
+}
+
+func TestFinalizeErroredRunPreservesStallAttributionAcrossGatewayBoundary(t *testing.T) {
+	ctx := context.Background()
+	store, err := control.OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "stalled", "Local User")
+	if err != nil {
+		t.Fatalf("identity: %v", err)
+	}
+	task, err := store.CreateTask(ctx, control.TaskCreate{
+		TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "stalled run", Channel: "cli",
+	})
+	if err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	run, err := store.StartRun(ctx, task, "cli", "run the tool")
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+
+	server := &Server{Control: store, DefaultTenantID: "default"}
+	outcome := server.coordinator().finalizeErroredRun(ctx, identity, task, run, "cli",
+		fmt.Errorf("watchdog boundary: %w", runpool.ErrStalled))
+	if outcome.Status != "interrupted" || outcome.CompletionReason != "stalled" || !outcome.Resumable {
+		t.Fatalf("outcome = %#v", outcome)
+	}
+	storedRuns, err := store.ListTaskRuns(ctx, identity.TenantID, task.ID, 10)
+	if err != nil || len(storedRuns) != 1 || storedRuns[0].Status != "interrupted" {
+		t.Fatalf("runs = %#v, err=%v", storedRuns, err)
 	}
 }
 

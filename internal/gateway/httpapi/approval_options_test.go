@@ -25,6 +25,15 @@ func TestBuildApprovalDecisionsIsTheSingleAnswerSet(t *testing.T) {
 	if len(options) < 4 {
 		t.Fatalf("expected once + rule + class + deny, got %+v", options)
 	}
+	foundRun := false
+	for _, option := range options {
+		if option.ID == "run" && option.Scope == "run" && option.Key == "r" {
+			foundRun = true
+		}
+	}
+	if !foundRun {
+		t.Fatalf("run-scoped decision is missing: %+v", options)
+	}
 	if options[0].ID != "once" || options[0].Key != "y" {
 		t.Fatalf("the narrowest answer must come first: %+v", options[0])
 	}
@@ -55,6 +64,22 @@ func TestBuildApprovalDecisionsIsTheSingleAnswerSet(t *testing.T) {
 	}
 	if len(noClass) != 2 {
 		t.Fatalf("an unrememberable action offers only once + deny, got %+v", noClass)
+	}
+
+	exact := buildApprovalDecisions(tools.ToolApprovalRequest{
+		ToolName: "execute_code", RunGrantClass: "this exact action for this run",
+	})
+	foundExact := false
+	for _, option := range exact {
+		if option.ID == "run_exact" && option.Scope == "run" && option.Key == "r" {
+			foundExact = true
+		}
+		if option.Scope == "task" || option.Scope == "person" {
+			t.Fatalf("an exact script grant must never become durable: %+v", exact)
+		}
+	}
+	if !foundExact {
+		t.Fatalf("exact run option missing: %+v", exact)
 	}
 }
 
@@ -143,6 +168,9 @@ func TestBareReplyRuleShortcutPersistsTheOfferedRule(t *testing.T) {
 	if stored.DecisionScope != "person" {
 		t.Fatalf("rule decisions carry their own scope, got %q", stored.DecisionScope)
 	}
+	if stored.DecisionID != "rule:exec_prefix" {
+		t.Fatalf("decision id = %q, want the exact server-issued option", stored.DecisionID)
+	}
 }
 
 // TestRejectionNoteIsStoredNotOnlySteered: a refusal with guidance is worth far
@@ -158,6 +186,9 @@ func TestRejectionNoteIsStoredNotOnlySteered(t *testing.T) {
 	}
 	if updated.DecisionNote != "use the staging bucket instead" {
 		t.Fatalf("note = %q", updated.DecisionNote)
+	}
+	if updated.DecisionID != "deny" {
+		t.Fatalf("decision id = %q, want deny", updated.DecisionID)
 	}
 	if got := fallbackApprovalReason(updated.DecisionNote, "rejected"); got != "use the staging bucket instead" {
 		t.Fatalf("the model should receive the guidance, got %q", got)

@@ -72,9 +72,22 @@ func buildApprovalDecisions(req tools.ToolApprovalRequest) []approvalDecisionOpt
 			Key:      approvalDecisionShortcuts[rule.Kind],
 		})
 	}
+	// An unclassifiable script may still be approved as a byte-identical action
+	// for this live run. This is explicit, in-memory, and cannot become task or
+	// person authority.
+	if strings.TrimSpace(req.GrantClass) == "" && strings.TrimSpace(req.RunGrantClass) != "" && len(options) < approvalDecisionMaxOptions-1 {
+		options = append(options, approvalDecisionOption{
+			ID: "run_exact", Label: "Yes, and allow " + req.RunGrantClass, Decision: "approved", Scope: "run", Key: "r",
+		})
+	}
 	// Class memory is offered only when the grant floor actually minted a class.
 	// Offering it otherwise promises memory that would be silently discarded —
 	// the exact dishonesty tools.ToolApprovalRequest.GrantClass exists to prevent.
+	if strings.TrimSpace(req.GrantClass) != "" && len(options) < approvalDecisionMaxOptions-1 {
+		options = append(options,
+			approvalDecisionOption{ID: "run", Label: "Yes, and allow " + req.GrantClass + " for this run", Decision: "approved", Scope: "run", Key: "r"},
+		)
+	}
 	if strings.TrimSpace(req.GrantClass) != "" && len(options) < approvalDecisionMaxOptions-1 {
 		options = append(options,
 			approvalDecisionOption{ID: "task", Label: "Yes, and allow " + req.GrantClass + " for this task", Decision: "approved", Scope: "task", Key: "t"},

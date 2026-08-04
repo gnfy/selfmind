@@ -20,6 +20,10 @@ type ToolApprovalRequest struct {
 	// cannot claim something was remembered when the eligibility floor refused
 	// to persist it. It carries a class, never a command or a secret.
 	GrantClass string `json:"grant_class,omitempty"`
+	// RunGrantClass describes the only non-persistent reuse option available for
+	// an unclassifiable exec payload: the byte-identical action in this live run.
+	// It never carries the command and can never be promoted to task/person scope.
+	RunGrantClass string `json:"run_grant_class,omitempty"`
 	// ResourceFingerprint is a non-secret, stable scope for reusable grants.
 	// It identifies the workspace and command family, never raw command text,
 	// paths, tokens, or credential bytes.
@@ -61,6 +65,9 @@ type ToolApprovalRequest struct {
 	// mode simply asks for this class. It exists because "why am I being asked so
 	// much?" was unanswerable from any surface.
 	TriageState string `json:"triage_state,omitempty"`
+	// Containment is the non-secret three-axis execution view supplied to the
+	// judge and approval surfaces. It is context, never an authorization.
+	Containment string `json:"containment,omitempty"`
 }
 
 // TriageStateUnavailable marks an ask that happened because smart-mode triage
@@ -82,8 +89,9 @@ type ToolApprovalDecision struct {
 	// conservative default.
 	ExpiresAt time.Time `json:"expires_at,omitempty"`
 	// Scope records how long the approval should be remembered: "" (this call
-	// only), "task" (grant the action's class for the current task) or "person"
-	// (grant it for the person across tasks). It drives class-level approval
+	// only), "run" (in-memory for the live run), "task" (grant the action's class
+	// for the current task) or "person" (grant it for the person across tasks).
+	// It drives class-level approval
 	// memory in SmartApprovalMiddleware — the key approval-fatigue reducer.
 	Scope string `json:"scope,omitempty"`
 	// GrantKey names a RULE the human chose instead of the action class ("don't

@@ -306,7 +306,8 @@ CREATE TABLE IF NOT EXISTS task_runs (
 	finished_at INTEGER,
 	heartbeat_at INTEGER,
 	cancel_requested INTEGER NOT NULL DEFAULT 0,
-	last_error TEXT
+	last_error TEXT,
+	resumed_by_run_id TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_task_runs_task_started ON task_runs(tenant_id, task_id, started_at);
 CREATE INDEX IF NOT EXISTS idx_task_runs_person_status ON task_runs(tenant_id, person_id, status, started_at);
@@ -375,6 +376,7 @@ CREATE TABLE IF NOT EXISTS approval_requests (
 	requested_channel TEXT,
 	approved_channel TEXT,
 	decision_scope TEXT,
+	decision_id TEXT,
 	created_at INTEGER NOT NULL,
 	updated_at INTEGER NOT NULL
 );
@@ -647,6 +649,7 @@ CREATE INDEX IF NOT EXISTS idx_external_watches_owner
 		{"task_runs", "heartbeat_at", "INTEGER"},
 		{"task_runs", "cancel_requested", "INTEGER NOT NULL DEFAULT 0"},
 		{"task_runs", "last_error", "TEXT"},
+		{"task_runs", "resumed_by_run_id", "TEXT NOT NULL DEFAULT ''"},
 		{"outbound_messages", "platform_user_id", "TEXT"},
 		// kind/approval_id let retried deliveries keep their typed rendering
 		// (e.g. Telegram approval inline buttons) instead of degrading to plain
@@ -662,6 +665,7 @@ CREATE INDEX IF NOT EXISTS idx_external_watches_owner
 		// (""/task/person) recorded when an approval is answered; older DBs
 		// created before the layered approval funnel lack the column.
 		{"approval_requests", "decision_scope", "TEXT"},
+		{"approval_requests", "decision_id", "TEXT"},
 		// decision_grant_key stores the narrow RULE a person picked instead of the
 		// action class; decision_note stores their words when they refused. Both
 		// arrived with the structured-decision batch, so older DBs lack them.

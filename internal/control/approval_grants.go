@@ -62,7 +62,7 @@ func (g ApprovalGrant) Active(now time.Time) bool { return !g.Revoked() && !g.Ex
 // caller has just made a fresh human decision.
 func (s *Store) GrantApproval(ctx context.Context, scopeKind, tenantID, personID, scopeID, patternKey string, expiresAt time.Time) error {
 	scopeKind = normalizeGrantScope(scopeKind)
-	if scopeKind == "" {
+	if scopeKind != "task" && scopeKind != "person" {
 		return fmt.Errorf("grant scope must be task or person")
 	}
 	tenantID = normalizeTenant(tenantID)

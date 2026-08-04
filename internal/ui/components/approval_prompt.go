@@ -1,6 +1,7 @@
 package components
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -73,6 +74,16 @@ type ApprovalDetails struct {
 	// is actually persisted is the grant floor's decision, so the panel must not
 	// infer an option set from it.
 	GrantClass string
+	// Containment is the daemon's filesystem/network/credential assessment.
+	// It helps the person distinguish an isolated read from a host escape.
+	Containment string
+	// Execute-code approvals carry only a bounded, redacted preview plus
+	// metadata. The full source remains execution input and is never persisted
+	// or rendered by the approval surface.
+	CodePreview string
+	CodeSHA256  string
+	CodeLines   int
+	CodeBytes   int
 	// TriageUnavailable is true when smart-mode triage could not rule (no judge,
 	// error, timeout). The panel says so, because otherwise a broken judge and a
 	// strict judge are indistinguishable and the person just sees more prompts.
@@ -105,6 +116,9 @@ func NewApprovalPromptDetailed(d ApprovalDetails) *ApprovalPrompt {
 	d.Cwd = strings.TrimSpace(d.Cwd)
 	d.ChangeSummary = strings.TrimSpace(d.ChangeSummary)
 	d.GrantClass = strings.TrimSpace(d.GrantClass)
+	d.Containment = strings.TrimSpace(d.Containment)
+	d.CodePreview = strings.TrimSpace(d.CodePreview)
+	d.CodeSHA256 = strings.TrimSpace(d.CodeSHA256)
 	options := d.Options
 	if len(options) == 0 {
 		options = DefaultApprovalOptions()
@@ -267,8 +281,31 @@ func (p *ApprovalPrompt) View(width int) string {
 	if where := p.locationLine(); where != "" {
 		p.addLabeledRows(addRow, "where: ", where, inner, approvalContextMaxLines)
 	}
+	if p.details.Containment != "" {
+		p.addLabeledRows(addRow, "access: ", p.details.Containment, inner, approvalContextMaxLines)
+	}
 	if p.reason != "" {
 		p.addLabeledRows(addRow, "reason: ", p.reason, inner, approvalContextMaxLines)
+	}
+	if p.details.CodePreview != "" {
+		p.addLabeledRows(addRow, "code: ", p.details.CodePreview, inner, 4)
+		var metadata []string
+		if p.details.CodeLines > 0 {
+			metadata = append(metadata, fmt.Sprintf("%d lines", p.details.CodeLines))
+		}
+		if p.details.CodeBytes > 0 {
+			metadata = append(metadata, fmt.Sprintf("%d bytes", p.details.CodeBytes))
+		}
+		if p.details.CodeSHA256 != "" {
+			digest := p.details.CodeSHA256
+			if len(digest) > 12 {
+				digest = digest[:12]
+			}
+			metadata = append(metadata, "sha256 "+digest)
+		}
+		if len(metadata) > 0 {
+			p.addLabeledRows(addRow, "script: ", strings.Join(metadata, ", "), inner, 1)
+		}
 	}
 	// What a "remember this" answer would authorize, in the same words the
 	// gateway used when it decided the class was reusable.

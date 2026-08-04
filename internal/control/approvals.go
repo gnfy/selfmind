@@ -27,6 +27,10 @@ type ApprovalRequest struct {
 	// recorded and read back by the approval waiter to drive class-level
 	// approval grants. Empty for pending rows and for reject/expire.
 	DecisionScope string `json:"decision_scope,omitempty"`
+	// DecisionID is the exact server-issued answer selected for this request
+	// (once/task/person/rule:*/deny). Audit must not infer it from scope: a
+	// once-only approval legitimately has an empty scope.
+	DecisionID string `json:"decision_id,omitempty"`
 	// DecisionGrantKey is the narrow RULE the person chose instead of the action
 	// class ("commands that start with `git status`"). It is stored verbatim and
 	// re-validated by the execution layer against the candidates the SAME call
@@ -84,7 +88,7 @@ func (s *Store) ListApprovalRequests(ctx context.Context, tenantID, personID, st
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT id, tenant_id, person_id, COALESCE(task_id, ''), COALESCE(run_id, ''), action_type,
 		        COALESCE(payload_json, '{}'), status, COALESCE(requested_channel, ''), COALESCE(approved_channel, ''),
-		        COALESCE(decision_scope, ''), COALESCE(decision_grant_key, ''), COALESCE(decision_note, ''), created_at, updated_at
+		        COALESCE(decision_scope, ''), COALESCE(decision_id, ''), COALESCE(decision_grant_key, ''), COALESCE(decision_note, ''), created_at, updated_at
 		 FROM approval_requests
 		 WHERE tenant_id = ? AND person_id = ? AND status = ?
 		 ORDER BY created_at DESC, id DESC LIMIT ?`,
@@ -112,7 +116,7 @@ func (s *Store) GetApprovalRequest(ctx context.Context, tenantID, approvalID str
 	row := s.db.QueryRowContext(ctx,
 		`SELECT id, tenant_id, person_id, COALESCE(task_id, ''), COALESCE(run_id, ''), action_type,
 		        COALESCE(payload_json, '{}'), status, COALESCE(requested_channel, ''), COALESCE(approved_channel, ''),
-		        COALESCE(decision_scope, ''), COALESCE(decision_grant_key, ''), COALESCE(decision_note, ''), created_at, updated_at
+		        COALESCE(decision_scope, ''), COALESCE(decision_id, ''), COALESCE(decision_grant_key, ''), COALESCE(decision_note, ''), created_at, updated_at
 		 FROM approval_requests WHERE tenant_id = ? AND id = ?`,
 		normalizeTenant(tenantID), approvalID)
 	item, err := scanApprovalRequest(row)
@@ -173,7 +177,7 @@ func (s *Store) ListPendingApprovalsForEscrow(ctx context.Context, createdBefore
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT id, tenant_id, person_id, COALESCE(task_id, ''), COALESCE(run_id, ''), action_type,
 		        COALESCE(payload_json, '{}'), status, COALESCE(requested_channel, ''), COALESCE(approved_channel, ''),
-		        COALESCE(decision_scope, ''), COALESCE(decision_grant_key, ''), COALESCE(decision_note, ''), created_at, updated_at
+		        COALESCE(decision_scope, ''), COALESCE(decision_id, ''), COALESCE(decision_grant_key, ''), COALESCE(decision_note, ''), created_at, updated_at
 		 FROM approval_requests
 		 WHERE status = 'pending' AND notified_at IS NULL AND created_at <= ?
 		 ORDER BY created_at ASC, id ASC LIMIT 100`,
@@ -202,6 +206,7 @@ func (s *Store) ListPendingApprovalsForEscrow(ctx context.Context, createdBefore
 // parameters because every caller sets a different subset.
 type ApprovalDecisionInput struct {
 	GrantScope string
+	DecisionID string
 	// GrantKey is a rule key the surface offered with this ask. The store keeps
 	// it verbatim; the execution layer decides whether it is honored.
 	GrantKey string
@@ -224,20 +229,38 @@ func (s *Store) RespondApprovalRequest(ctx context.Context, tenantID, personID, 
 		return nil, err
 	}
 	grantScope := normalizeGrantScope(input.GrantScope)
+	decisionID := strings.TrimSpace(input.DecisionID)
 	grantKey := strings.TrimSpace(input.GrantKey)
 	note := strings.TrimSpace(input.Note)
 	if status != "approved" {
 		// A grant only makes sense on approval; a note only on refusal. Keeping
 		// the pairing here means no caller can store a rule alongside a rejection.
 		grantScope, grantKey = "", ""
+		if decisionID == "" {
+			decisionID = "deny"
+		}
 	} else {
 		note = ""
+		if decisionID == "" {
+			switch {
+			case grantKey != "":
+				decisionID = "rule"
+			case grantScope == "run":
+				decisionID = "run"
+			case grantScope == "task":
+				decisionID = "task"
+			case grantScope == "person":
+				decisionID = "person"
+			default:
+				decisionID = "once"
+			}
+		}
 	}
 	result, err := s.db.ExecContext(ctx,
 		`UPDATE approval_requests
-		 SET status = ?, approved_channel = ?, decision_scope = ?, decision_grant_key = ?, decision_note = ?, updated_at = ?
+		 SET status = ?, approved_channel = ?, decision_scope = ?, decision_id = ?, decision_grant_key = ?, decision_note = ?, updated_at = ?
 		 WHERE tenant_id = ? AND person_id = ? AND id = ? AND status = 'pending'`,
-		status, channel, grantScope, grantKey, note, time.Now().Unix(), tenantID, personID, approvalID)
+		status, channel, grantScope, decisionID, grantKey, note, time.Now().Unix(), tenantID, personID, approvalID)
 	if err != nil {
 		return nil, err
 	}
@@ -257,9 +280,13 @@ func (s *Store) RespondApprovalRequest(ctx context.Context, tenantID, personID, 
 	return s.GetApprovalRequest(ctx, tenantID, approvalID)
 }
 
-// normalizeGrantScope maps free-form scope input to "", "task", or "person".
+// normalizeGrantScope maps free-form scope input to the exact decision scope.
+// "run" is audit-only here: transient run grants live in the execution scope,
+// never in the durable approval_grants table.
 func normalizeGrantScope(scope string) string {
 	switch strings.ToLower(strings.TrimSpace(scope)) {
+	case "run":
+		return "run"
 	case "task", "session":
 		return "task"
 	case "person", "always", "persistent":
@@ -287,7 +314,7 @@ func scanApprovalRequest(rows interface {
 	var payload string
 	var created, updated int64
 	if err := rows.Scan(&item.ID, &item.TenantID, &item.PersonID, &item.TaskID, &item.RunID, &item.ActionType,
-		&payload, &item.Status, &item.RequestedChannel, &item.ApprovedChannel, &item.DecisionScope,
+		&payload, &item.Status, &item.RequestedChannel, &item.ApprovedChannel, &item.DecisionScope, &item.DecisionID,
 		&item.DecisionGrantKey, &item.DecisionNote, &created, &updated); err != nil {
 		return ApprovalRequest{}, err
 	}

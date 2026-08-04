@@ -441,14 +441,15 @@ func eventToStream(ev control.Event) (llm.StreamEvent, bool) {
 		// Surface the pending approval so the client TUI can prompt; approval_id
 		// and the compact action target ride in Payload, tool in ToolName,
 		// reason in Content.
+		payload := make(map[string]interface{}, len(p))
+		for key, value := range p {
+			payload[key] = value
+		}
 		return llm.StreamEvent{
 			EventType: "approval.requested",
 			ToolName:  str(p["tool"]),
 			Content:   str(p["reason"]),
-			Payload: map[string]interface{}{
-				"approval_id": str(p["approval_id"]),
-				"target":      str(p["target"]),
-			},
+			Payload:   payload,
 		}, true
 	case ev.Type == "clarify.requested":
 		return llm.StreamEvent{

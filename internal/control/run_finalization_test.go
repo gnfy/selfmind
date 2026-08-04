@@ -303,3 +303,183 @@ func TestMaterializeRunFinalizationReducesDurableTaskBlockers(t *testing.T) {
 		})
 	}
 }
+
+func TestMaterializeRunFinalizationPreservesUnresumedPriorRun(t *testing.T) {
+	ctx := context.Background()
+	store, err := OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := store.CreateTask(ctx, TaskCreate{
+		TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "resume safety",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	prior, err := store.StartRun(ctx, task, "cli", "first attempt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.MaterializeRunFinalization(ctx, RunFinalization{
+		Identity: *identity, RunID: prior.ID, RunStatus: "interrupted",
+		TaskID: task.ID, TaskStatus: "interrupted", Summary: "needs continuation",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	current, err := store.StartRun(ctx, task, "cli", "unrelated follow-up")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.MaterializeRunFinalization(ctx, RunFinalization{
+		Identity: *identity, RunID: current.ID, RunStatus: "done",
+		TaskID: task.ID, TaskStatus: "done", Summary: "follow-up done",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := store.GetTask(ctx, identity.TenantID, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.Status != "interrupted" {
+		t.Fatalf("task status=%q want interrupted", stored.Status)
+	}
+}
+
+func TestMaterializeRunFinalizationPrefersActiveLifecycleOverPriorInterruption(t *testing.T) {
+	tests := []struct {
+		name   string
+		setup  func(context.Context, *Store, IdentityContext, Task, Run)
+		status string
+	}{
+		{
+			name: "external watch",
+			setup: func(ctx context.Context, store *Store, identity IdentityContext, task Task, run Run) {
+				if _, err := store.CreateExternalWatch(ctx, ExternalWatch{
+					TenantID: identity.TenantID, PersonID: identity.PersonID,
+					TaskID: task.ID, RunID: run.ID, Channel: "cli",
+					CWD: t.TempDir(), Command: "check", SuccessPattern: "done",
+					TimeoutAt: time.Now().Add(time.Hour),
+				}); err != nil {
+					t.Fatal(err)
+				}
+			},
+			status: "waiting_external",
+		},
+		{
+			name: "watch finalization",
+			setup: func(ctx context.Context, store *Store, identity IdentityContext, task Task, run Run) {
+				if _, err := store.EnqueueQueued(ctx, QueuedTask{
+					TenantID: identity.TenantID, PersonID: identity.PersonID,
+					TaskID: task.ID, Channel: "cli", Platform: "cli",
+					Content: "finalize watch", IdempotencyKey: "external-watch:combined:r1:finalization",
+				}); err != nil {
+					t.Fatal(err)
+				}
+			},
+			status: "waiting_finalization",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			store, err := OpenStore(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer store.Close()
+			identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Alice")
+			if err != nil {
+				t.Fatal(err)
+			}
+			task, err := store.CreateTask(ctx, TaskCreate{
+				TenantID: identity.TenantID, PersonID: identity.PersonID, Title: tt.name,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			prior, err := store.StartRun(ctx, task, "cli", "prior attempt")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := store.MaterializeRunFinalization(ctx, RunFinalization{
+				Identity: *identity, RunID: prior.ID, RunStatus: "interrupted",
+				TaskID: task.ID, TaskStatus: "interrupted", Summary: "needs continuation",
+			}); err != nil {
+				t.Fatal(err)
+			}
+			current, err := store.StartRun(ctx, task, "cli", "current work")
+			if err != nil {
+				t.Fatal(err)
+			}
+			tt.setup(ctx, store, *identity, *task, *current)
+			if _, err := store.MaterializeRunFinalization(ctx, RunFinalization{
+				Identity: *identity, RunID: current.ID, RunStatus: "done",
+				TaskID: task.ID, TaskStatus: "done", Summary: "current run finished",
+			}); err != nil {
+				t.Fatal(err)
+			}
+			stored, err := store.GetTask(ctx, identity.TenantID, task.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if stored.Status != tt.status {
+				t.Fatalf("task status=%q want %q", stored.Status, tt.status)
+			}
+		})
+	}
+}
+
+func TestMaterializeRunFinalizationClosesDeliberatelyResumedRun(t *testing.T) {
+	ctx := context.Background()
+	store, err := OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := store.CreateTask(ctx, TaskCreate{
+		TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "resume completion",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	prior, err := store.StartRun(ctx, task, "cli", "first attempt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.MaterializeRunFinalization(ctx, RunFinalization{
+		Identity: *identity, RunID: prior.ID, RunStatus: "interrupted",
+		TaskID: task.ID, TaskStatus: "interrupted", Summary: "needs continuation",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	current, err := store.StartRun(ctx, task, "cli", "continue")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.MarkTaskRunsResumed(ctx, identity.TenantID, task.ID, current.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.MaterializeRunFinalization(ctx, RunFinalization{
+		Identity: *identity, RunID: current.ID, RunStatus: "done",
+		TaskID: task.ID, TaskStatus: "done", Summary: "completed",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := store.GetTask(ctx, identity.TenantID, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.Status != "done" {
+		t.Fatalf("task status=%q want done", stored.Status)
+	}
+}

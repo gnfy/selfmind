@@ -122,6 +122,58 @@ func TestNetworkPolicyDefeatsContainment(t *testing.T) {
 	}
 }
 
+func TestThreeAxisContainmentReleasesOnlyDeclaredObservations(t *testing.T) {
+	if runtime.GOOS != "linux" || !ExecSandboxAvailable() {
+		t.Skip("containment requires an enforceable sandbox on this host")
+	}
+	withExecSandboxPolicy(t, true, true, true)
+	read := map[string]interface{}{
+		"_tool_name": "terminal", "_effective_sandbox_mode": string(SandboxIsolated),
+		"_network_shared": true, credentialReadArgKey: true,
+		"command": "gcloud builds describe build-123",
+	}
+	assessment := assessExecContainment("terminal", read)
+	if assessment.Filesystem != containmentFilesystemIsolated || assessment.Network != containmentNetworkShared || assessment.Credentials != containmentCredentialsSelected {
+		t.Fatalf("three axes lost: %+v", assessment)
+	}
+	if !assessment.ObservationOnly || !assessment.AutoApprove() {
+		t.Fatalf("declared observation should be contained: %+v", assessment)
+	}
+
+	for name, args := range map[string]map[string]interface{}{
+		"arbitrary code": {
+			"_tool_name": "execute_code", "_effective_sandbox_mode": string(SandboxIsolated),
+			"_network_shared": true, credentialReadArgKey: true, "code": "print('x')",
+		},
+		"sensitive kubernetes read": {
+			"_tool_name": "terminal", "_effective_sandbox_mode": string(SandboxIsolated),
+			"_network_shared": true, credentialReadArgKey: true, "command": "kubectl get secrets -A",
+		},
+		"unknown agent cli": {
+			"_tool_name": "terminal", "_effective_sandbox_mode": string(SandboxIsolated),
+			"_network_shared": true, credentialReadArgKey: true, "command": "future-agent inspect repo",
+		},
+		"generic reader with credentials": {
+			"_tool_name": "terminal", "_effective_sandbox_mode": string(SandboxIsolated),
+			"_network_shared": true, credentialReadArgKey: true, "command": "cat ~/.config/gcloud/application_default_credentials.json",
+		},
+		"rg preprocessor": {
+			"_tool_name": "terminal", "_effective_sandbox_mode": string(SandboxIsolated),
+			"_network_shared": true, "command": "rg --pre ./helper pattern .",
+		},
+		"in-place jq": {
+			"_tool_name": "terminal", "_effective_sandbox_mode": string(SandboxIsolated),
+			"_network_shared": true, "command": "jq -i . config.json",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := assessExecContainment(stringArg(args, "_tool_name"), args); got.AutoApprove() {
+				t.Fatalf("must remain approval-gated: %+v", got)
+			}
+		})
+	}
+}
+
 // TestContainmentRequiresExplicitEffectiveMode protects the /mode retro path: it
 // re-judges a PENDING approval from redacted args, where a host-mode call's marker
 // may be gone. Inferring "isolated" there would auto-approve a host escape.

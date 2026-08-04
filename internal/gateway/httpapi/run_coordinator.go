@@ -282,6 +282,14 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 		Channel:    req.Channel,
 		Payload:    mustJSON(startedPayload),
 	})
+	if attach.workKey != "" {
+		d.appendLabelAssignedEvent(ctx, task.ID, run.ID, map[string]interface{}{
+			"decision": "ingress_work_key",
+			"work_key": attach.workKey,
+			"task_id":  task.ID,
+			"run_id":   run.ID,
+		})
+	}
 
 	workspace, _ := c.workspaceForTask(ctx, identity, task, req, attach)
 	analysisWorkspaceID := run.WorkspaceID
@@ -360,7 +368,7 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 	// scope install and context assembly: the rendered attachment paths and
 	// the scope's allowed roots must both point at the managed copies.
 	req.Attachments = c.importAttachments(identity, run, req.Attachments)
-	cleanupScope := c.installExecutionScope(identity, task, run, workspace, req, lease)
+	cleanupScope := c.installExecutionScope(ctx, identity, task, run, workspace, req, lease)
 	defer cleanupScope()
 	// Tag the turn with its run-scoped key so tool calls resolve exactly this
 	// run's scope instead of the person's most recent one.
@@ -385,7 +393,7 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 	ctx = kernel.WithTaskRuntimeContext(ctx, c.selectedTaskRuntimeContext(ctx, task, run, workspace, req.Platform, req.Channel, req.Content, attach.preLabel))
 	ctx = c.withLoopCheckpointResume(ctx, identity, task, run, intent)
 	agentInput := c.withGatewayContext(req.Content, identity, task, workspace, req.Attachments)
-	agentInput = c.withResumeContext(ctx, identity, task, run, intent, agentInput)
+	agentInput = c.withResumeContext(ctx, identity, task, run, intent, attach.resumes, agentInput)
 	// Independent of continuation intent: any run on a task with uncertain
 	// (crash-orphaned) side-effect tool calls must verify before repeating
 	// (P0-B closure — a boot-requeued run re-drains as a "new" message).

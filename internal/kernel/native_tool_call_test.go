@@ -1,10 +1,71 @@
 package kernel
 
 import (
+	"context"
+	"errors"
 	"testing"
+	"time"
 
 	"selfmind/internal/kernel/llm"
 )
+
+type cancelledOutcomeLedger struct {
+	recorded bool
+	ctxErr   error
+}
+
+func (l *cancelledOutcomeLedger) ClaimDispatch(context.Context, ToolLedgerEntry) (ToolDispatchDecision, error) {
+	return ToolDispatchDecision{Execute: true, Status: "started"}, nil
+}
+
+func (l *cancelledOutcomeLedger) RecordOutcome(ctx context.Context, _, _ string, ok bool) error {
+	l.recorded = true
+	l.ctxErr = ctx.Err()
+	if ok {
+		return errors.New("cancelled tool unexpectedly succeeded")
+	}
+	return nil
+}
+
+type cancellationBackend struct{ entered chan struct{} }
+
+func (b cancellationBackend) Dispatch(_ string, args map[string]interface{}) (string, error) {
+	ctx, _ := args["_context"].(context.Context)
+	close(b.entered)
+	<-ctx.Done()
+	return "", ctx.Err()
+}
+
+func (cancellationBackend) GetToolDefinitions() []map[string]interface{} { return nil }
+
+func TestCancelledToolClosesLedgerWithCleanupContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	ctx = WithTaskRuntimeContext(ctx, TaskRuntimeContext{RunID: "run-cancel"})
+	ledger := &cancelledOutcomeLedger{}
+	ctx = WithToolLedger(ctx, ledger)
+	entered := make(chan struct{})
+	agent := &Agent{backend: cancellationBackend{entered: entered}}
+
+	done := make(chan toolExecutionResult, 1)
+	go func() {
+		done <- agent.executeSingleToolCall(ctx, "default", nil, 0, llm.ToolCall{
+			ID: "call-cancel", Function: "terminal", Args: `{"command":"sleep 60"}`,
+		})
+	}()
+	<-entered
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("cancelled tool did not return")
+	}
+	if !ledger.recorded {
+		t.Fatal("cancelled tool left its durable ledger entry open")
+	}
+	if ledger.ctxErr != nil {
+		t.Fatalf("ledger cleanup context was cancelled: %v", ledger.ctxErr)
+	}
+}
 
 func TestShouldParallelizeToolCalls(t *testing.T) {
 	tests := []struct {

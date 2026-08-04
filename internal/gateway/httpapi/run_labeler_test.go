@@ -174,7 +174,7 @@ func TestLabelerMoveRepointsRunAndCleansPlaceholder(t *testing.T) {
 	}
 }
 
-func TestUniqueWorkKeyMovesRunWhenLabelerKeepsPlaceholder(t *testing.T) {
+func TestUniqueWorkKeyAttachesBeforeLabeler(t *testing.T) {
 	provider := newSlowLLMProvider("completed release verification for RUQX-224")
 	provider.releaseNow()
 	daemon, store, _ := newDetachedRunServer(t, provider)
@@ -191,8 +191,8 @@ func TestUniqueWorkKeyMovesRunWhenLabelerKeepsPlaceholder(t *testing.T) {
 
 	daemon.PostRunAnalyzer = &fakeLabeler{reply: "KEEP"}
 	resp := runOrdinaryTurn(t, daemon, "RUQX-224 production deployment needs verification")
-	if resp.Task == nil || resp.Task.ID == target.ID {
-		t.Fatalf("setup must create a provisional task before maintenance: %+v", resp.Task)
+	if resp.Task == nil || resp.Task.ID != target.ID {
+		t.Fatalf("ingress work key must attach directly to %s: %+v", target.ID, resp.Task)
 	}
 	runs, err := store.ListTaskRuns(ctx, target.TenantID, target.ID, 10)
 	if err != nil || len(runs) != 1 {
@@ -201,13 +201,10 @@ func TestUniqueWorkKeyMovesRunWhenLabelerKeepsPlaceholder(t *testing.T) {
 		fake.mu.Lock()
 		prompts := append([]string(nil), fake.prompts...)
 		fake.mu.Unlock()
-		t.Fatalf("unique work key did not move the run: runs=%+v err=%v tasks=%+v prompts=%q", runs, err, tasks, prompts)
-	}
-	if ghost, _ := store.GetTask(ctx, target.TenantID, resp.Task.ID); ghost != nil {
-		t.Fatalf("provisional task remained after deterministic move: %+v", ghost)
+		t.Fatalf("unique work key did not attach the run: runs=%+v err=%v tasks=%+v prompts=%q", runs, err, tasks, prompts)
 	}
 	if !hasEventOfType(t, store, target.ID, "label.assigned") {
-		t.Fatal("deterministic work-key move must remain auditable")
+		t.Fatal("deterministic ingress work-key decision must remain auditable")
 	}
 }
 

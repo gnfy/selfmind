@@ -10,6 +10,7 @@ import (
 	"selfmind/internal/tools"
 	"strconv"
 	"strings"
+	"time"
 )
 
 func (d *Server) tryHandleControlCommand(ctx context.Context, identity *control.IdentityContext, req api.MessageRequest) (bool, string, error) {
@@ -543,6 +544,7 @@ func (d *Server) statusReply(ctx context.Context, identity *control.IdentityCont
 	// conversational summary the push uses.
 	if pending, err := d.Control.ListApprovalRequests(ctx, identity.TenantID, identity.PersonID, "pending", 5); err == nil && len(pending) > 0 {
 		sortApprovalsForDisplay(pending)
+		waitAge := humanDuration(time.Since(pending[0].CreatedAt))
 		card += "\n⚠ Waiting for your approval — reply y or n:\n"
 		titles := d.taskTitlesFor(ctx, identity.TenantID, pending)
 		for i, approval := range pending {
@@ -552,12 +554,14 @@ func (d *Server) statusReply(ctx context.Context, identity *control.IdentityCont
 			}
 			card += fmt.Sprintf("%d. %s\n", i+1, approvalSummaryLine(approval, titles[approval.TaskID]))
 		}
+		card = strings.Replace(card, "Waiting for your approval", fmt.Sprintf("Waiting for your approval (%s elapsed)", waitAge), 1)
 	}
 	// A run blocked on a clarify looks just as "stuck" as one blocked on an
 	// approval: surface the pending question(s) so the person knows their reply
 	// is what unblocks the run. ListClarifyRequests is already oldest-first, the
 	// order tryHandleClarifyAnswer answers in.
 	if clarifies, err := d.Control.ListClarifyRequests(ctx, identity.TenantID, identity.PersonID, "pending", 5); err == nil && len(clarifies) > 0 {
+		waitAge := humanDuration(time.Since(clarifies[0].CreatedAt))
 		card += "\n⚠ Waiting for your answer — just reply with it:\n"
 		for i, clarify := range clarifies {
 			if len(clarifies) == 1 {
@@ -566,6 +570,7 @@ func (d *Server) statusReply(ctx context.Context, identity *control.IdentityCont
 			}
 			card += fmt.Sprintf("%d. %s\n", i+1, clarifySummaryLine(clarify))
 		}
+		card = strings.Replace(card, "Waiting for your answer", fmt.Sprintf("Waiting for your answer (%s elapsed)", waitAge), 1)
 	}
 	return card, nil
 }

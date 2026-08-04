@@ -145,8 +145,8 @@ for an explicit protocol/debug request.
 Approval evaluation is ordered. A lower layer cannot override a higher one:
 
 1. unbypassable hard safety floor;
-2. explicit approval mode and persistent policy;
-3. matching task/person class grant;
+2. explicit approval mode and enforced execution containment;
+3. matching run/task/person authorization;
 4. optional smart-mode cheap-model triage;
 5. human approval prompt.
 
@@ -158,6 +158,24 @@ block is a policy decision and remains distinguishable from user rejection.
 Approval memory uses coarse action classes, not exact command strings. Hard
 floor denials and content-level denials are never grantable. Numbered approval
 references resolve in the gateway with the same order used by every client.
+
+Containment is assessed on three independent axes: filesystem
+(`isolated|host|unknown`), network (`none|shared`), and credentials
+(`none|selected`). On Linux, an enforceable isolated filesystem with no network
+or credentials may release an ordinary exec call in smart mode. When shared
+network or selected credentials are present, only operations in the declarative
+observation catalog may be released. Unknown programs, arbitrary scripts,
+`execute_code`, secret reads, mutations, and unparseable command forms remain
+approval-gated. Extending the catalog is a reviewed data change with focused
+tests; it must not become a permissive shell heuristic.
+
+An exec payload that is too opaque to mint a safe class authorization may offer
+an exact-run decision. Its key hashes the raw action plus run, workspace,
+environment, and containment metadata; raw code is never persisted. The grant
+exists only in memory for that run, releases only a byte-identical repeat, and
+cannot be promoted to task or person scope. `/diag` reports containment,
+class/rule grant hits, exact-run hits, judge outcomes, and human asks as funnel
+events rather than pretending they are unique operation counts.
 
 Host execution is a special case: a reusable host grant is additionally scoped
 to a non-secret fingerprint of the active workspace and the effective command
@@ -405,6 +423,8 @@ Changes in this domain need focused coverage for:
 - hard-floor precedence over every mode and grant;
 - rejection versus safety-block semantics;
 - code-execution approval;
+- three-axis containment and the observation-only catalog;
+- exact-run authorization isolation and byte-identical reuse;
 - egress classification;
 - child-process environment construction and daemon-secret exclusion;
 - exact-value redaction without persisting raw secrets;

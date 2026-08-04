@@ -666,6 +666,15 @@ func (m *uiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if input == "" {
 				return m, nil
 			}
+			// A placeholder that survived expansion means its payload can no
+			// longer be recovered (an edited token, or one restored from an older
+			// client). Refuse locally and KEEP the composer: resetting it here is
+			// what previously turned the daemon's "paste it again" into a dead
+			// end, because the snippet buffer was already gone.
+			if stranded := m.editor.UnresolvedToken(); stranded != "" {
+				m.addMessage("notice", "This paste placeholder lost its content and was not sent: "+stranded+"\nThe text is still in your clipboard — delete the placeholder and paste it again.")
+				return m, nil
+			}
 			if display == "" {
 				display = input
 			}

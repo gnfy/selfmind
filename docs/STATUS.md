@@ -75,6 +75,39 @@
 | Task governance | ✅ | Reversible label hygiene uses additive task metadata (`kind`, `visibility`, `pinned`, `archived_at`, `last_activity_at`). The daemon-batched `PostRunAnalyzer` produces one logical task decision and memory decision set per run, while one provider request may cover several completed runs. Casual/identity/diagnostic work may move to one hidden Inbox per person/workspace; runs and events remain durable, and Inbox is excluded from normal task/recall/continuation views. `/task <id> pin|unpin` is explicit user authority. The 6h deterministic sweep archives only stale terminal work and suggests same-workspace duplicates without model calls; only explicit `/task <src> merge <dst>` folds labels. `/tasks` stays SQLite-filtered and paged, and `/diag tasks` surfaces possibly stuck work. Tests: `control/task_governance_test.go`, `app/post_run_analyzer_test.go`, `httpapi/run_labeler_test.go`, `httpapi/maintenance_batch_test.go`, `httpapi/task_view_test.go`, `control/task_merge_test.go`, `httpapi/task_dupes_test.go`, `httpapi/diag_w2_test.go`; eval: `evalcases/timeline/timeline-task-governance.yaml`. |
 | Skill variant evolution / sandbox test | ❌ | Old roadmap P3 (doc removed; see git history); not started, and out of scope for the north star. |
 
+### Composer Paste Integrity (2026-08-04)
+
+- Large-paste placeholders expand again. The composer's own label embedded
+  `[80 lines]` while its expansion pattern forbade `]` inside a token, so every
+  paste over the threshold reached the daemon as literal placeholder text and was
+  rejected ("the pasted content was not expanded by the client"). Observed live
+  on 2026-08-04 10:49 with zero runs created; the same shape sits in
+  `input_history.jsonl` from 2026-07-20, when the failure was still silent.
+- `internal/platform/pastetoken` now owns the token contract for both sides: the
+  composer builds every token through `Format` (label sanitized, so a token can
+  never carry a bracket or a line break) and the daemon guard delegates to
+  `ContainsUnresolved`, which stays permissive enough to keep rejecting tokens
+  minted by older clients.
+- Expansion is exact string replacement against the registered token, never a
+  pattern match, so a label change can no longer strand a payload. A token that
+  survives expansion (edited by hand, or recalled from an older client) is
+  refused in the composer with the placeholder named, and the composer is kept
+  intact — the previous flow reset the snippet buffer before the daemon replied,
+  which made "paste it again" impossible. Unexpanded text is also no longer
+  written to input history.
+- Paste line counting accepts CR, LF, and CRLF, and the stored payload is
+  normalized to LF. A terminal bracketed paste separates lines with bare CR, so
+  the old `\n`-only count reported every pasted document as "1 lines" and left
+  `editor.large_paste_lines` permanently unreachable.
+- Image attachments were never affected (a normal file name carries no `]`), but
+  now survive brackets in the name (`Screenshot [1].png`) through the same
+  builder.
+
+Tests: `internal/platform/pastetoken/pastetoken_test.go`,
+`internal/ui/components/editor_paste_test.go`,
+`internal/gateway/httpapi/input_validation_test.go`; eval:
+`evalcases/reliability/unresolved-paste-rejected.yaml`.
+
 ### Execution Stall Hardening (2026-08-03)
 
 - The `patch` tool no longer uses the unbounded arbitrary-subsequence LCS

@@ -1,6 +1,10 @@
 package cli
 
-import "strings"
+import (
+	"strings"
+
+	"selfmind/internal/platform/pastetoken"
+)
 
 const maxInputHistory = 200
 
@@ -20,6 +24,12 @@ func (m *uiModel) recordInputHistory(input string) {
 	}
 	input = strings.TrimSpace(input)
 	if input == "" || len(input) > maxInputHistoryEntryBytes {
+		return
+	}
+	// Belt and braces for the contract above: a placeholder that reached this
+	// point is already unrecoverable, and persisting it would hand the same dead
+	// token back on the next Up-arrow (observed in input_history.jsonl).
+	if pastetoken.ContainsUnresolved(input) {
 		return
 	}
 	if len(m.inputHistory) > 0 && m.inputHistory[len(m.inputHistory)-1] == input {

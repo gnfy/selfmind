@@ -1,14 +1,15 @@
 package httpapi
 
-import "regexp"
+import "selfmind/internal/platform/pastetoken"
 
-// unresolvedPasteTokenRE mirrors the composer's display tokens — large-paste
-// ([[ paste:N … ]]) and image-attachment ([[ image:N … ]]). The daemon must
-// reject an unexpanded token because the real payload (clipboard text, image
-// path) lives only in the submitting client and cannot be recovered after
-// submission.
-var unresolvedPasteTokenRE = regexp.MustCompile(`\[\[ (?:paste|image):[0-9]+ [^\r\n]*\]\]`)
-
+// The daemon must reject an unexpanded composer placeholder ([[ paste:N … ]] /
+// [[ image:N … ]]) because the real payload (clipboard text, image path) lives
+// only in the submitting client and cannot be recovered after submission.
+//
+// The pattern itself is owned by internal/platform/pastetoken, shared with the
+// composer that produces the tokens. Keeping a second literal here is what let
+// the two sides disagree: the composer could not expand a label containing "]",
+// while this guard rejected exactly that token.
 func containsUnresolvedPasteToken(content string) bool {
-	return unresolvedPasteTokenRE.MatchString(content)
+	return pastetoken.ContainsUnresolved(content)
 }

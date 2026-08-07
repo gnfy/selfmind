@@ -73,7 +73,7 @@ func (s *Store) RunCancelRequested(ctx context.Context, tenantID, runID string) 
 // before the harness tears down (phantom `running` rows are what polluted real
 // control.db files before eval isolation).
 func (s *Store) ListRunningRuns(ctx context.Context, tenantID string, personIDs []string) ([]Run, error) {
-	query := `SELECT id, task_id, tenant_id, person_id, COALESCE(workspace_id, ''), channel, COALESCE(input_summary, ''), status, started_at
+	query := `SELECT id, task_id, tenant_id, person_id, COALESCE(workspace_id, ''), channel, COALESCE(input_summary, ''), COALESCE(work_key, ''), status, started_at
 	          FROM task_runs WHERE tenant_id = ? AND status = 'running'`
 	args := []any{normalizeTenant(tenantID)}
 	if len(personIDs) > 0 {
@@ -89,7 +89,7 @@ func (s *Store) ListRunningRuns(ctx context.Context, tenantID string, personIDs 
 	for rows.Next() {
 		var r Run
 		var started int64
-		if err := rows.Scan(&r.ID, &r.TaskID, &r.TenantID, &r.PersonID, &r.WorkspaceID, &r.Channel, &r.InputSummary, &r.Status, &started); err != nil {
+		if err := rows.Scan(&r.ID, &r.TaskID, &r.TenantID, &r.PersonID, &r.WorkspaceID, &r.Channel, &r.InputSummary, &r.WorkKey, &r.Status, &started); err != nil {
 			return nil, err
 		}
 		r.StartedAt = time.Unix(started, 0)
@@ -119,7 +119,7 @@ func (s *Store) MarkInterruptedRuns(ctx context.Context, olderThan time.Duration
 	if olderThan <= 0 {
 		cutoff = time.Now().Unix()
 	}
-	query := `SELECT id, task_id, tenant_id FROM task_runs
+	query := `SELECT id, task_id, tenant_id, person_id FROM task_runs
 		 WHERE status = 'running' AND COALESCE(heartbeat_at, started_at) <= ?`
 	args := []any{cutoff}
 	if len(exceptRunIDs) > 0 {
@@ -135,11 +135,12 @@ func (s *Store) MarkInterruptedRuns(ctx context.Context, olderThan time.Duration
 		runID    string
 		taskID   string
 		tenantID string
+		personID string
 	}
 	var runs []row
 	for rows.Next() {
 		var r row
-		if err := rows.Scan(&r.runID, &r.taskID, &r.tenantID); err != nil {
+		if err := rows.Scan(&r.runID, &r.taskID, &r.tenantID, &r.personID); err != nil {
 			return 0, err
 		}
 		runs = append(runs, r)
@@ -172,6 +173,10 @@ func (s *Store) MarkInterruptedRuns(ctx context.Context, olderThan time.Duration
 			`UPDATE tasks SET status = 'interrupted', active_run_id = '', current_summary = COALESCE(NULLIF(current_summary, ''), 'Interrupted by gateway restart.'), updated_at = ?
 			 WHERE tenant_id = ? AND id = ? AND active_run_id = ?`,
 			now, r.tenantID, r.taskID, r.runID); err != nil {
+			return 0, err
+		}
+		if err := ensureRunBlockerTx(ctx, tx, r.tenantID, r.personID, r.taskID, r.runID,
+			"interrupted", "Interrupted by gateway restart.", []string{"Resume this work from the last durable evidence."}, time.Unix(now, 0)); err != nil {
 			return 0, err
 		}
 	}
@@ -423,7 +428,7 @@ func (s *Store) PruneOutboundDeliveries(ctx context.Context, olderThan time.Dura
 		`DELETE FROM outbound_messages
 		 WHERE updated_at < ?
 		   AND (
-		     status IN ('sent', 'dismissed')
+		     status IN ('sent', 'dismissed', 'superseded')
 		     OR (
 		       status = 'failed'
 		       AND NOT (
@@ -507,6 +512,19 @@ func (s *Store) MarkDeliveryFailedPermanent(ctx context.Context, id, reason stri
 	now := time.Now().Unix()
 	_, err := s.db.ExecContext(ctx,
 		`UPDATE outbound_messages SET status = 'failed', last_error = ?, updated_at = ? WHERE id = ?`,
+		reason, now, id)
+	return err
+}
+
+// MarkDeliverySuperseded closes a queued notification whose source request is
+// no longer actionable. Unlike failed delivery, this is a healthy terminal
+// state: it is excluded from retry, catch-up, and undelivered diagnostics.
+func (s *Store) MarkDeliverySuperseded(ctx context.Context, id, reason string) error {
+	now := time.Now().Unix()
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE outbound_messages
+		 SET status = 'superseded', last_error = ?, updated_at = ?
+		 WHERE id = ? AND status IN ('pending', 'retry', 'sending', 'sent_unconfirmed', 'pending_session', 'failed')`,
 		reason, now, id)
 	return err
 }

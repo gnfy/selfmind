@@ -174,6 +174,63 @@ func TestThreeAxisContainmentReleasesOnlyDeclaredObservations(t *testing.T) {
 	}
 }
 
+func TestObservationCatalogCoversOperationalReadCommands(t *testing.T) {
+	for _, command := range []string{
+		"gcloud auth list",
+		"gcloud builds triggers describe release-prod --region=asia-east1",
+		`gcloud --project demo builds list --format="value(id,status)"`,
+		"gcloud projects get-iam-policy demo-project --format=json",
+		"aws --profile prod --region ap-southeast-1 iam list-roles --output json",
+		"aws iam list-attached-role-policies --role-name deployer",
+		"aws iam simulate-principal-policy --policy-source-arn arn:aws:iam::123456789012:role/deployer --action-names s3:GetObject",
+		"aws kms get-key-policy --key-id alias/prod --policy-name default",
+		"aws ssm describe-parameters --max-results 10",
+		`kubectl --context prod -n platform get pods -o json | jq '.items[] | .metadata.name'`,
+		`bash -lc "gcloud --project demo builds list --format='value(id,status)'"`,
+		"timeout --kill-after 2s 30s gcloud --project demo builds list --limit=1",
+		"gcloud builds list --limit=1 >/dev/null 2>&1",
+	} {
+		t.Run(command, func(t *testing.T) {
+			args := map[string]interface{}{
+				"_tool_name":              "terminal",
+				"_effective_sandbox_mode": string(SandboxIsolated),
+				"_network_shared":         true,
+				credentialReadArgKey:      true,
+				"command":                 command,
+			}
+			if !deterministicObservationExec("terminal", args) {
+				t.Fatalf("operational read command is not recognized: %s", command)
+			}
+		})
+	}
+
+	for _, command := range []string{
+		"gcloud projects add-iam-policy-binding demo-project --member=user:a@example.com --role=roles/viewer",
+		"aws iam attach-role-policy --role-name deployer --policy-arn arn:aws:iam::aws:policy/AdministratorAccess",
+		"aws ssm get-parameter --name /prod/password --with-decryption",
+		"python3 - <<'PY'\nprint('looks read-only')\nPY",
+		`gcloud builds list > /tmp/builds.txt`,
+		`gcloud builds list --format="$(cat /etc/passwd)"`,
+		`sudo gcloud builds list`,
+		`bash -lc "gcloud builds list" positional-parameter`,
+		`env PATH=/tmp git status --short`,
+		`gcloud --future-global-option value builds list`,
+	} {
+		t.Run("reject "+command, func(t *testing.T) {
+			args := map[string]interface{}{
+				"_tool_name":              "terminal",
+				"_effective_sandbox_mode": string(SandboxIsolated),
+				"_network_shared":         true,
+				credentialReadArgKey:      true,
+				"command":                 command,
+			}
+			if deterministicObservationExec("terminal", args) {
+				t.Fatalf("mutating or opaque command must remain approval-gated: %s", command)
+			}
+		})
+	}
+}
+
 // TestContainmentRequiresExplicitEffectiveMode protects the /mode retro path: it
 // re-judges a PENDING approval from redacted args, where a host-mode call's marker
 // may be gone. Inferring "isolated" there would auto-approve a host escape.

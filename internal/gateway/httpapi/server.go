@@ -526,15 +526,35 @@ type taskAttach struct {
 	// continuation evidence): the post-run labeler may re-point the run, and
 	// the execution workspace follows the REQUEST, not the guessed label.
 	preLabel bool
-	// resumes marks deliberate task continuation evidence. Unlike preLabel, it
-	// may close unresolved prior runs when the new run starts: caller task_id,
-	// an explicit continuation intent, the one-shot /resume pin, or a unique
-	// work key that resolves to an existing open label.
-	resumes bool
+	// reason records the deterministic evidence that selected this label. A
+	// display-only work-key match must stay distinct from an explicit resume:
+	// one issue may contain several independent work lines, so sharing a Jira
+	// key is not authority to close an older unfinished run.
+	reason taskAttachReason
 	// workKey records a deterministic issue key used at ingress. It does not
 	// make the label a context/workspace boundary; it only makes the display
 	// decision auditable after the run id exists.
 	workKey string
+}
+
+type taskAttachReason string
+
+const (
+	taskAttachNewLabel        taskAttachReason = "new_label"
+	taskAttachCurrentPreLabel taskAttachReason = "current_prelabel"
+	taskAttachWorkKeyPreLabel taskAttachReason = "work_key_prelabel"
+	taskAttachExplicitTaskID  taskAttachReason = "explicit_task_id"
+	taskAttachContinuation    taskAttachReason = "continuation_cue"
+	taskAttachResumePin       taskAttachReason = "resume_pin"
+)
+
+func (a taskAttach) claimsPriorRuns() bool {
+	switch a.reason {
+	case taskAttachContinuation:
+		return true
+	default:
+		return false
+	}
 }
 
 // clarifyFallbackSentinel is returned when a question goes unanswered (timeout

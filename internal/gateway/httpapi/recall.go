@@ -159,11 +159,14 @@ type recallSelectionObserver interface {
 // RecallStats is the redacted observability summary for the context.recall
 // task event: source counts and refs only, never excerpts.
 type RecallStats struct {
-	Sources  map[string]int
-	Refs     []string
-	Expanded bool
-	Terms    int
-	Skipped  string // non-empty when recall was skipped ("control_command", "short_message")
+	// Candidates counts eligible source hits before cross-source dedupe and the
+	// final prompt budget. Sources counts the slices that actually survived.
+	Candidates map[string]int
+	Sources    map[string]int
+	Refs       []string
+	Expanded   bool
+	Terms      int
+	Skipped    string // non-empty when recall was skipped ("control_command", "short_message")
 	// ElapsedMS is the wall-clock cost of the whole Select call (expansion
 	// included) — the number /diag context reports per turn.
 	ElapsedMS int64
@@ -210,7 +213,7 @@ func (e *RecallEngine) SelectForWorkspace(ctx context.Context, tenantID, personI
 }
 
 func (e *RecallEngine) selectRecall(ctx context.Context, tenantID, personID, workspaceID, currentTaskID, message string) (slices []kernel.RecallSlice, stats RecallStats) {
-	stats = RecallStats{Sources: map[string]int{}}
+	stats = RecallStats{Candidates: map[string]int{}, Sources: map[string]int{}}
 	started := time.Now()
 	// Named returns so the deferred stamp reaches every exit, skips included.
 	defer func() { stats.ElapsedMS = time.Since(started).Milliseconds() }()
@@ -219,12 +222,14 @@ func (e *RecallEngine) selectRecall(ctx context.Context, tenantID, personID, wor
 	}
 	trimmed := strings.TrimSpace(message)
 	// Cheap skips before any work: control-command-shaped input never reaches
-	// the agent anyway, and trivially short messages carry no searchable signal.
+	// the agent anyway. A trivially short ordinary message carries no searchable
+	// signal, but an explicitly attached continuation has a current task id and
+	// must not lose recall solely because the user said "continue" or "start".
 	if strings.HasPrefix(trimmed, "/") {
 		stats.Skipped = "control_command"
 		return nil, stats
 	}
-	if utf8.RuneCountInString(trimmed) < recallMinMessageRunes {
+	if utf8.RuneCountInString(trimmed) < recallMinMessageRunes && strings.TrimSpace(currentTaskID) == "" {
 		stats.Skipped = "short_message"
 		return nil, stats
 	}
@@ -265,6 +270,7 @@ func (e *RecallEngine) selectRecall(ctx context.Context, tenantID, personID, wor
 			if hit.WorkKey == "" || hit.WorkKey == query.ExcludeWorkKey {
 				continue
 			}
+			stats.Candidates[source.Name()]++
 			existing, ok := best[hit.WorkKey]
 			if !ok || hit.Priority < existing.Priority ||
 				(hit.Priority == existing.Priority && hit.Score > existing.Score) {

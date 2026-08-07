@@ -29,6 +29,7 @@ type RunFinalization struct {
 	AnalyzerVersion    int
 	MaintenancePayload string
 	Event              Event
+	ResolvedBlockerIDs []string
 }
 
 // MaterializeRunFinalization commits the run, task, assistant message,
@@ -95,6 +96,13 @@ func (s *Store) MaterializeRunFinalization(ctx context.Context, input RunFinaliz
 	}
 	if input.Identity.PersonID != "" && input.Identity.PersonID != personID {
 		return nil, fmt.Errorf("finalization identity does not own task")
+	}
+	if err := resolveTaskBlockersTx(ctx, tx, tenant, input.TaskID, input.RunID, input.ResolvedBlockerIDs, now); err != nil {
+		return nil, fmt.Errorf("resolve task blockers: %w", err)
+	}
+	if err := ensureRunBlockerTx(ctx, tx, tenant, personID, input.TaskID, input.RunID,
+		input.TaskStatus, input.Summary, input.NextSteps, now); err != nil {
+		return nil, fmt.Errorf("record task blocker: %w", err)
 	}
 
 	result, err := tx.ExecContext(ctx,
@@ -322,20 +330,12 @@ func resolveFinalTaskStatusTx(
 		return "waiting_finalization", nil
 	}
 
-	unresolvedResume, err := hasRows(
-		`SELECT EXISTS(
-			SELECT 1 FROM task_runs
-			WHERE tenant_id = ? AND task_id = ? AND id <> ?
-			  AND status IN ('interrupted', 'waiting_user', 'verification_partial', 'blocked')
-			  AND COALESCE(resumed_by_run_id, '') = ''
-		)`,
-		tenantID, taskID, finishingRunID,
-	)
+	blockerStatus, err := openTaskBlockerStatusTx(ctx, tx, tenantID, taskID)
 	if err != nil {
 		return "", err
 	}
-	if unresolvedResume {
-		return "interrupted", nil
+	if blockerStatus != "" {
+		return blockerStatus, nil
 	}
 	return proposed, nil
 }

@@ -125,14 +125,14 @@ models:
       model: "kimi-for-coding"
       # Optional per-role override for custom gateways. The Kimi Coding Plan
       # default is anthropic_messages, matching its /coding endpoint.
-    background_review:       # skill/memory self-review, smart-mode approval triage
+    background_review:       # skill/memory self-review
       provider: "kimi-coding"
       model: "kimi-for-coding"
     semantic_recall:         # optional query expansion for recall
       provider: "kimi-coding"
       model: "kimi-for-coding"
     skill_curator: { provider: "kimi-coding", model: "kimi-for-coding" }
-    fast_classifier: { provider: "kimi-coding", model: "kimi-for-coding" }
+    fast_classifier: { provider: "kimi-coding", model: "kimi-for-coding" } # direct answers, cheap classification, smart approval triage
 ```
 
 `models.primary` is the only default model selection. `reasoning` and
@@ -150,6 +150,12 @@ wire contract; it should normally be omitted for Kimi Coding Plan.
 Role names are stable; a role with no override falls back to the main model.
 Point them at a cheap model to keep background work off your primary provider.
 There is no `default` role: `models.roles` contains exceptions only.
+
+Smart approval is intentionally stricter than ordinary role inheritance. It
+uses an explicitly configured `fast_classifier`; legacy configurations may
+fall back to an explicitly configured `background_review`, but approval triage
+never silently uses `models.primary`. If neither route exists or responds in
+time, the operation is escalated to the person.
 
 ## 3. Storage & auth
 
@@ -416,6 +422,7 @@ agent:
   llm_retry_base: "300ms"       # backoff base
   llm_retry_cap: "30s"          # backoff cap
   llm_stream_idle_timeout: "180s"  # abort a stalled SSE stream after this
+  approval_triage_timeout: "30s"   # smart-mode cheap judge foreground budget
 editor:
   large_paste_chars: 1000       # TUI large-paste detection
   large_paste_lines: 10
@@ -429,6 +436,12 @@ Tool budgets apply uniformly across languages and task types. Extensions still
 require new evidence; these knobs do not classify prompts or force simple
 answers to use tools. Defaults are tuned for normal use; only touch these when
 diagnosing transport flakiness or tuning the tool loop.
+
+`approval_triage_timeout` is independent from the primary model transport
+timeout. If the explicitly configured `fast_classifier` does not return within
+this budget, smart mode fails safe to a human approval prompt. The default is
+30 seconds; lower values can turn a healthy reasoning-capable cheap model into
+an apparent outage.
 
 ---
 

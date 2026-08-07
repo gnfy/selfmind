@@ -281,13 +281,11 @@ func TestBackgroundProcessCeilingKillsAWedgedCommand(t *testing.T) {
 	}
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		registry.mu.Lock()
-		info := registry.processes[id]
-		registry.mu.Unlock()
-		if info == nil || info.Cmd == nil {
-			t.Fatal("process record disappeared")
+		_, status, pollErr := registry.Poll(id)
+		if pollErr != nil {
+			t.Fatal(pollErr)
 		}
-		if info.Cmd.ProcessState != nil {
+		if status != "running" {
 			return // reaped
 		}
 		time.Sleep(25 * time.Millisecond)

@@ -14,9 +14,8 @@ import (
 
 // Intake policy layer (docs/memory-governance.zh-CN.md §3): the model only
 // PROPOSES a ruling per candidate fact; this file decides deterministically
-// whether it takes effect. Every path degrades toward the safe side — an
-// invalid reference becomes ADD (worst case: today's duplicate, cleaned up by
-// background consolidation later), an under-confident or protected SUPERSEDE
+// whether it takes effect. Every path degrades toward the safe side: an
+// invalid reference becomes KEEP (no write), an under-confident or protected SUPERSEDE
 // becomes CONFLICT (both statements kept), and nothing here can fail the run.
 
 const (
@@ -118,6 +117,29 @@ func resolveNeighborRef(offered []memory.Fact, ref string) *memory.Fact {
 	return match
 }
 
+// resolveOfferedRef searches every offered target bucket. Identity wins over a
+// stale model-supplied target, and ambiguous prefixes fail closed.
+func resolveOfferedRef(neighbors map[string][]memory.Fact, ref string) *memory.Fact {
+	ref = strings.TrimSpace(ref)
+	if len(ref) < 6 {
+		return nil
+	}
+	var match *memory.Fact
+	for _, target := range []string{"user", "memory"} {
+		for i := range neighbors[target] {
+			candidate := &neighbors[target][i]
+			if candidate.ID != ref && !strings.HasPrefix(candidate.ID, ref) {
+				continue
+			}
+			if match != nil && match.ID != candidate.ID {
+				return nil
+			}
+			match = candidate
+		}
+	}
+	return match
+}
+
 // intakeMeta carries the durability ruling into the canonical write.
 type intakeMeta struct {
 	ValidUntil time.Time
@@ -187,15 +209,19 @@ func memoryPartition(req httpapi.PostRunAnalysisRequest) string {
 // (best-effort: the legacy facts write is authoritative during the
 // transition. Errors are returned so the maintenance job can replay its frozen
 // proposal; exact replay is idempotent by observation id.
-func (a *llmPostRunAnalyzer) canonicalWrite(ctx context.Context, req httpapi.PostRunAnalysisRequest, decision, target, content, refContent string, confidence float64, meta intakeMeta) error {
+func (a *llmPostRunAnalyzer) canonicalWrite(ctx context.Context, req httpapi.PostRunAnalysisRequest, decision, target, content, refContent string, confidence float64, meta intakeMeta, scopeOverride ...string) error {
 	store, ok := a.memory.Canonical()
 	if !ok {
 		return nil
 	}
+	scope := memory.DeriveFactScope(target, req.WorkspaceID)
+	if len(scopeOverride) > 0 && strings.TrimSpace(scopeOverride[0]) != "" {
+		scope = strings.TrimSpace(scopeOverride[0])
+	}
 	err := store.ApplyIntakeWrite(ctx, memoryPartition(req), memory.IntakeWrite{
 		Decision:        decision,
 		Target:          target,
-		Scope:           memory.DeriveFactScope(target, req.WorkspaceID),
+		Scope:           scope,
 		Source:          memory.SourceFactExtractor,
 		Content:         content,
 		RefContent:      refContent,
@@ -231,13 +257,11 @@ func (a *llmPostRunAnalyzer) applyMemoryDecisions(ctx context.Context, req httpa
 			continue
 
 		case "REINFORCE":
-			ref := resolveNeighborRef(neighbors[target], d.Ref)
+			ref := resolveOfferedRef(neighbors, d.Ref)
 			if ref == nil {
-				if err := a.addFactWithDedup(ctx, req, target, d.Content, meta); err != nil {
-					return err
-				}
-				continue
+				continue // a stale reference is not evidence for a new belief
 			}
+			target = normalizeMemoryTarget(ref.Target, target)
 			if d.Confidence > 0 && d.Confidence < reinforceConfidenceGate {
 				continue // under-confident: leave the stored fact untouched
 			}
@@ -246,12 +270,13 @@ func (a *llmPostRunAnalyzer) applyMemoryDecisions(ctx context.Context, req httpa
 			}
 
 		case "SUPERSEDE":
-			ref := resolveNeighborRef(neighbors[target], d.Ref)
+			ref := resolveOfferedRef(neighbors, d.Ref)
 			if ref == nil {
-				if err := a.addFactWithDedup(ctx, req, target, d.Content, meta); err != nil {
-					return err
-				}
 				continue
+			}
+			target = normalizeMemoryTarget(ref.Target, target)
+			if meta.Category == "" {
+				meta.Category = ref.Category
 			}
 			protected := strings.EqualFold(ref.Source, memory.SourceUser)
 			if protected || d.Confidence < supersedeConfidenceGate {
@@ -262,7 +287,7 @@ func (a *llmPostRunAnalyzer) applyMemoryDecisions(ctx context.Context, req httpa
 				}
 				continue
 			}
-			if err := a.canonicalWrite(ctx, req, "SUPERSEDE", target, d.Content, ref.Content, d.Confidence, meta); err != nil {
+			if err := a.canonicalWrite(ctx, req, "SUPERSEDE", target, d.Content, ref.Content, d.Confidence, meta, ref.Scope); err != nil {
 				return err
 			}
 			if err := a.supersedeFact(ctx, req, target, *ref, d.Content); err != nil {
@@ -270,24 +295,35 @@ func (a *llmPostRunAnalyzer) applyMemoryDecisions(ctx context.Context, req httpa
 			}
 
 		case "CONFLICT":
-			ref := resolveNeighborRef(neighbors[target], d.Ref)
+			ref := resolveOfferedRef(neighbors, d.Ref)
 			if ref == nil {
-				if err := a.addFactWithDedup(ctx, req, target, d.Content, meta); err != nil {
-					return err
-				}
 				continue
+			}
+			target = normalizeMemoryTarget(ref.Target, target)
+			if meta.Category == "" {
+				meta.Category = ref.Category
 			}
 			if err := a.addConflictFact(ctx, req, target, *ref, d.Content, meta); err != nil {
 				return err
 			}
 
-		default: // ADD and anything unparseable degrade to the dedup-net add
+		case "ADD", "":
 			if err := a.addFactWithDedup(ctx, req, target, d.Content, meta); err != nil {
 				return err
 			}
+		default:
+			continue // unknown output must not mint durable memory
 		}
 	}
 	return nil
+}
+
+func normalizeMemoryTarget(candidate, fallback string) string {
+	candidate = strings.ToLower(strings.TrimSpace(candidate))
+	if candidate == "user" || candidate == "memory" {
+		return candidate
+	}
+	return fallback
 }
 
 // addFactWithDedup runs the deterministic dedup net before writing: an
@@ -365,14 +401,17 @@ func (a *llmPostRunAnalyzer) addConflictFact(ctx context.Context, req httpapi.Po
 		Target:         target,
 		Content:        content,
 		Source:         memory.SourceFactExtractor,
-		Scope:          memory.DeriveFactScope(target, req.WorkspaceID),
+		Scope:          ref.Scope,
 		Confidence:     memory.BaseConfidence(memory.SourceFactExtractor),
 		CreatedFromRun: req.RunID,
 		LastVerifiedAt: time.Now(),
+	}
+	if fact.Scope == "" {
+		fact.Scope = memory.DeriveFactScope(target, req.WorkspaceID)
 	}
 	if err := a.memory.AddFactMeta(ctx, memoryPartition(req), fact); err != nil {
 		return fmt.Errorf("store conflicting %s fact: %w", target, err)
 	}
 	tools.RecordMemoryLearningChangeScoped(memoryPartition(req), target, fact.Scope, "add", ref.Content, content, "post_run_analyzer_conflict")
-	return a.canonicalWrite(ctx, req, "CONFLICT", target, content, ref.Content, 0, meta)
+	return a.canonicalWrite(ctx, req, "CONFLICT", target, content, ref.Content, 0, meta, ref.Scope)
 }

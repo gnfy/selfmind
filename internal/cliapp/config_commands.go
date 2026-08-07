@@ -66,6 +66,7 @@ var configReportDefaultPaths = [][]string{
 	{"agent", "llm_retry_base"},
 	{"agent", "llm_retry_cap"},
 	{"agent", "llm_stream_idle_timeout"},
+	{"agent", "approval_triage_timeout"},
 	{"agent", "log_level"},
 	{"auth", "credentials_file"},
 	{"delegation", "max_iterations"},

@@ -157,6 +157,109 @@ Tests: `internal/platform/pastetoken/pastetoken_test.go`,
 Tests: `internal/tools/patch_safety_test.go`, `internal/runpool/pool_test.go`,
 `internal/control/queue_test.go`, `internal/gateway/httpapi/run_events_test.go`.
 
+### Execution Quality Closure (2026-08-05)
+
+- Smart approval no longer treats every trusted-workspace command as a
+  credentialed call. Credential capability is derived only for a recognized
+  credential-bearing tool profile, so contained local observations keep their
+  automatic path. The conservative read-only catalog now covers common GCP
+  build/trigger/project-policy observations and AWS IAM/KMS metadata reads;
+  scripts, unknown Agent CLIs, secret reads, and mutations remain gated.
+- Approval-triage outcomes are persisted as a command-free diagnostic
+  projection. `/diag` can now distinguish judge approvals, deliberate
+  escalation, containment/grant hits, and provider failure across daemon
+  restarts. Only a bounded redacted error is retained for 14 days; diagnostic
+  writes have a short deadline and never become a foreground dependency.
+- Run continuation ownership is intent- and work-key scoped.
+  `task_runs.work_key` is written atomically with run creation, but selecting a
+  label through an explicit task id, work-key pre-label, or one-shot `/resume`
+  pin remains display-only. Only an explicit continuation may create
+  `resumed_by_run_id`; it claims exactly one matching unfinished work line, or
+  one unambiguous keyless legacy predecessor. Reused keys and other ambiguity
+  remain visible instead of being guessed away.
+- Smart approval observation proof now uses a separate quote-aware Bash AST.
+  Static read-only pipelines, provider global flags, and quoted format filters
+  can take the deterministic path without weakening the security tokenizer;
+  substitutions, heredocs, assignments, opaque scripts, privilege wrappers,
+  unknown flags, and writes remain gated. Model triage uses the explicit
+  `fast_classifier` route with a configurable bounded wait and a structured JSON contract;
+  `background_review` is legacy fallback only and the primary model is never
+  borrowed silently.
+- Watch registration now rejects a first check that consumes its complete
+  per-check timeout. Repeating an already over-budget aggregate check cannot
+  produce a useful durable watcher, so the agent is told to split targets or use
+  one bounded status query while the foreground turn can still repair it.
+- Background-process status no longer reads `exec.Cmd.ProcessState` concurrently
+  with `Wait`, and its output buffer is synchronized. `/process` polling and the
+  process ceiling now share an explicit registry-owned status instead of racing
+  on `os/exec` internals.
+- Retryable post-run and skill-review jobs now park as provider-blocked after
+  their bounded retry budget, preserve the concrete provider error, remain
+  visible in `/diag`, and receive the existing one-shot restart probe instead
+  of being permanently discarded as `skipped`.
+
+Tests: `internal/tools/approval_containment_test.go`,
+`internal/tools/approval_context_test.go`,
+`internal/tools/execution_capability_test.go`,
+`internal/tools/external_watch_preflight_test.go`,
+`internal/tools/exec_scratch_test.go` (including `-race`),
+`internal/control/approval_triage_test.go`,
+`internal/control/maintenance_jobs_test.go`,
+`internal/control/run_finalization_test.go`,
+`internal/gateway/httpapi/server_test.go`; eval:
+`evalcases/reliability/external-watch-preflight-refuses-timeout.yaml`.
+
+### Runtime Truth, Blockers, Watch V2, And Diagnostic Closure (2026-08-05)
+
+- Gateway liveness is derived from an instance id, PID identity, and a 15-second
+  heartbeat instead of a stale `running` file. Startup reconciles an unclean
+  predecessor once into `gateway_runtime_events`; `gateway status` and doctor
+  expose the last exit reason without guessing from a recycled PID.
+- Unfinished work is represented by durable `task_blockers`. A later run may
+  resolve only blocker ids it was explicitly shown, and task status is reduced
+  from the latest outcome plus currently open blockers instead of scanning all
+  historical run statuses. Approval, clarification, and deterministic resume
+  paths settle only their owned blocker.
+- WatchSpec v2 separates a desired intermediate target from terminal success
+  and terminal failure. Failure wins, then terminal success, then target;
+  unchanged output backs off from 10 to 60 seconds and resets when evidence
+  changes. V1 watches keep their original success/failure semantics.
+- Smart triage has a configurable foreground bound (`agent.approval_triage_timeout`,
+  30 seconds by default), a 1024-token low-reasoning
+  verdict budget, and a durable command-free audit row containing run/tool-call
+  identity, risk, authorization, grant key, provider route, latency, policy
+  version, rationale, and a bounded redacted error. Resolved approval pushes
+  become `superseded` immediately before delivery, including catch-up replay.
+- Execution-quality closeout (2026-08-07): smart triage no longer mistakes a
+  healthy reasoning-capable cheap model for an outage under the regressed
+  5-second bound; `watch_external` registration now requires one clean,
+  non-empty, check-definition-safe first execution; `selfmind doctor` resolves
+  the real CLI account without creating a phantom person; and explicitly
+  attached short continuation cues no longer skip bounded recall solely due to
+  message length. Focused tests cover each boundary.
+- Invalid memory references now fail closed instead of degrading into ADD;
+  referenced target/scope/category are inherited. The agent memory tool and
+  post-run intake share the same conservative transient-state classifier, so
+  per-build creation/backfill/status facts remain in task handoffs/artifacts.
+- `provider.call.context_breakdown` records a per-call token estimate for stable
+  system text, native tool schemas, history, tool results, workspace, task
+  runtime, recall, memory, and artifacts. Recall events separately report
+  source candidates and budget-surviving selected slices; `/diag context`
+  renders both, avoiding the old misleading `memory_count=0` shorthand.
+
+Tests: `internal/runtime/gateway/state_test.go`,
+`internal/control/gateway_runtime_events_test.go`,
+`internal/control/run_finalization_test.go`,
+`internal/control/external_watches_test.go`,
+`internal/control/approval_triage_test.go`,
+`internal/gateway/delivery/delivery_test.go`,
+`internal/gateway/delivery/catchup_test.go`,
+`internal/kernel/prompt_accounting_test.go`,
+`internal/kernel/memory/transient_classifier_test.go`; eval cases:
+`evalcases/reliability/task-done-with-resolved-blocker.yaml`,
+`evalcases/reliability/task-stays-waiting-on-open-blocker.yaml`, and
+`evalcases/reliability/external-watch-target-state-skipped.yaml`.
+
 ### Smart Approval Default (2026-07-28)
 
 - A person with no persisted `/mode` preference now starts in `smart`.
@@ -425,6 +528,18 @@ L0 environment → L1 execution → L2 observation → L3 business.
     `control/external_watch_binding_test.go`, `tools/durable_binding_test.go`,
     and `httpapi/external_watch_environment_test.go` (frozen grant, no later
     expansion, immediate revocation).
+- **Deterministic reliability closeout shipped (2026-08-06).** A v2 watch that
+  declares `target_pattern` must also declare both terminal success and failure
+  patterns, so an external operation that skips an intermediate handoff state
+  reaches a real verdict instead of timing out. Gateway single-owner admission
+  now treats `gateway.lock` as authoritative and PID/heartbeat files as health
+  metadata, avoiding false already-running results after PID reuse. Legacy
+  lifecycle records receive a stable derived instance id before their unclean
+  exit event is written. Historical parked-task cleanup is deliberately
+  offline and evidence-bound: `selfmind maintenance task-audit` is dry-run by
+  default; `--apply` only backfills a missing blocker when the inactive task and
+  newest finished run have exactly the same blocker status, never rewriting
+  task/run state. Smart-approval routing remains unchanged pending live evidence.
 - **Still owed.** A dedicated `/watchers` command (batch 2 uses
   `/diag execution`), and lease-level preparation for `start_process`
   background children beyond the material they already share.

@@ -17,9 +17,9 @@ import (
 // the execution-scope registry in this package (ExecutionScopeDiagnostics), so
 // no counter is ever shared across tenants or people. Records are in-memory,
 // bounded per person, and pruned to the reporting window — this is a diagnostic
-// read model, never an audit log, and it is deliberately not persisted: a
-// restart resetting it is correct, because the question is always about the
-// recent past.
+// read model. A gateway may additionally install a narrow durable sink so the
+// same recent counters survive daemon restarts; the sink receives no command
+// text or arguments.
 
 // triageWindow bounds how far back TriageDiagnostics reports.
 const triageWindow = 24 * time.Hour
@@ -61,12 +61,56 @@ type triageEntry struct {
 	err     string
 }
 
+const ApprovalTriagePolicyVersion = "smart-v2"
+
+// TriageAuditEvent is the non-secret decision envelope persisted by the
+// gateway. It intentionally excludes command text and arguments; those remain
+// in the separately redacted approval request when a human decision is needed.
+type TriageAuditEvent struct {
+	TenantID      string
+	PersonID      string
+	TaskID        string
+	RunID         string
+	ToolName      string
+	Outcome       TriageOutcome
+	RiskLevel     string
+	Authorization string
+	GrantKey      string
+	ProviderRoute string
+	Latency       time.Duration
+	ErrorClass    string
+	Rationale     string
+	PolicyVersion string
+	RedactedError string
+	At            time.Time
+}
+
 var triageRecords = struct {
 	mu     sync.Mutex
 	byKey  map[string][]triageEntry
 	nowFn  func() time.Time
 	people int
 }{byKey: map[string][]triageEntry{}}
+
+var triageDurableSink = struct {
+	mu sync.RWMutex
+	fn func(TriageAuditEvent)
+}{}
+
+// SetTriageTelemetrySink installs the gateway-owned durable projection. The
+// tools package stays independent of control.db; personal/in-process uses may
+// leave the sink nil. The returned cleanup restores the previous sink.
+func SetTriageTelemetrySink(fn func(TriageAuditEvent)) func() {
+	triageDurableSink.mu.Lock()
+	previous := triageDurableSink.fn
+	triageDurableSink.fn = fn
+	triageDurableSink.mu.Unlock()
+	return func() {
+		triageDurableSink.mu.Lock()
+		triageDurableSink.fn = previous
+		triageDurableSink.mu.Unlock()
+	}
+}
 
 // triageMaxPeople bounds how many partitions are retained. Well past any
 // personal-scale install; it only exists so a pathological id churn cannot grow
@@ -88,6 +132,19 @@ func triageKey(tenantID, personID string) string {
 // is the judge failure, when there was one; it is stored redacted and bounded
 // because a provider error can echo request material.
 func RecordTriageOutcome(tenantID, personID string, outcome TriageOutcome, err error) {
+	RecordTriageAuditEvent(TriageAuditEvent{
+		TenantID: tenantID, PersonID: personID, Outcome: outcome,
+		PolicyVersion: ApprovalTriagePolicyVersion,
+	}, err)
+}
+
+// RecordTriageAuditEvent records a structured, bounded approval-funnel event.
+// It preserves the historical aggregate API while giving the durable sink the
+// evidence needed to explain a particular run without storing raw commands.
+func RecordTriageAuditEvent(event TriageAuditEvent, err error) {
+	tenantID := event.TenantID
+	personID := event.PersonID
+	outcome := event.Outcome
 	if strings.TrimSpace(personID) == "" {
 		return
 	}
@@ -96,21 +153,39 @@ func RecordTriageOutcome(tenantID, personID string, outcome TriageOutcome, err e
 		message = truncateRunes(RedactSensitive(toSingleLine(err.Error())), 160)
 	}
 	key := triageKey(tenantID, personID)
-	now := triageNow()
+	now := event.At
+	if now.IsZero() {
+		now = triageNow()
+	}
+	event.At = now
+	event.RedactedError = message
+	event.Rationale = truncateRunes(toSingleLine(RedactSensitive(event.Rationale)), 240)
+	if event.PolicyVersion == "" {
+		event.PolicyVersion = ApprovalTriagePolicyVersion
+	}
 
 	triageRecords.mu.Lock()
-	defer triageRecords.mu.Unlock()
 	if _, known := triageRecords.byKey[key]; !known && len(triageRecords.byKey) >= triageMaxPeople {
 		pruneEmptyTriagePartitionsLocked(now)
-		if len(triageRecords.byKey) >= triageMaxPeople {
-			return
+		if len(triageRecords.byKey) < triageMaxPeople {
+			triageRecords.byKey[key] = nil
 		}
 	}
-	entries := append(triageRecords.byKey[key], triageEntry{at: now, outcome: outcome, err: message})
-	if len(entries) > triageMaxEntriesPerPerson {
-		entries = entries[len(entries)-triageMaxEntriesPerPerson:]
+	if _, known := triageRecords.byKey[key]; known || len(triageRecords.byKey) < triageMaxPeople {
+		entries := append(triageRecords.byKey[key], triageEntry{at: now, outcome: outcome, err: message})
+		if len(entries) > triageMaxEntriesPerPerson {
+			entries = entries[len(entries)-triageMaxEntriesPerPerson:]
+		}
+		triageRecords.byKey[key] = entries
 	}
-	triageRecords.byKey[key] = entries
+	triageRecords.mu.Unlock()
+
+	triageDurableSink.mu.RLock()
+	sink := triageDurableSink.fn
+	triageDurableSink.mu.RUnlock()
+	if sink != nil {
+		sink(event)
+	}
 }
 
 // TriageStats is the bounded 24h view of automatic triage for one person.

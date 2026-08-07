@@ -176,6 +176,7 @@ models:
   roles:
     memory_extract: { provider: "google", model: "gemini-1.5-flash" }
     background_review: { provider: "google", model: "gemini-1.5-flash" }
+    fast_classifier: { provider: "google", model: "gemini-1.5-flash" }
     skill_curator: { provider: "google", model: "gemini-1.5-flash" }
     semantic_recall: { provider: "google", model: "gemini-1.5-flash" }
 
@@ -453,10 +454,14 @@ models:
 - `coding_agent`：主 Agent 编码和任务执行。
 - `memory_extract`：记忆事实提取。
 - `background_review`：任务结束后的后台学习复盘。
+- `fast_classifier`：直答路由、廉价分类和低延迟 smart 审批裁决。
 - `skill_curator`：Skill 整理和治理。
 - `semantic_recall`：历史会话语义召回。
 
 个人版从本地 YAML 读取。后续 SaaS 版可以沿用同样的 role 名称，从数据库中的租户、用户、workspace、预算策略里解析模型配置。
+
+smart 审批优先使用显式配置的 `fast_classifier`。旧配置可以兼容回退到显式配置的
+`background_review`，但绝不会静默借用 `models.primary`；两者都没配置时会安全地询问用户。
 
 ## 本地 TUI
 

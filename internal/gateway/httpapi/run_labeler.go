@@ -148,6 +148,7 @@ func (c *RunCoordinator) materializeRunFinalization(ctx context.Context, identit
 		AnalyzerVersion:    postRunAnalyzerVersion,
 		MaintenancePayload: payload,
 		Event:              event,
+		ResolvedBlockerIDs: outcome.ResolvedBlockerIDs,
 	})
 	return err
 }

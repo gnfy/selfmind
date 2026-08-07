@@ -48,6 +48,32 @@ func TestMemoryToolListAction(t *testing.T) {
 	}
 }
 
+func TestMemoryToolRejectsTransientRunState(t *testing.T) {
+	provider, err := memory.NewSQLiteProvider(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer provider.Close()
+	mem := memory.NewMemoryManager(provider)
+	tool := NewMemoryTool(mem)
+
+	_, err = tool.Execute(map[string]interface{}{
+		"action": "add", "target": "memory",
+		"content":    "Build ID: cw-prod:0d4a9e81 has been created",
+		"_tenant_id": "tenant-transient",
+	})
+	if err == nil || !strings.Contains(err.Error(), "task handoff") {
+		t.Fatalf("expected transient memory rejection, got %v", err)
+	}
+	rows, err := provider.ListCanonicalMemories(context.Background(), "tenant-transient", memory.CanonicalFilter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 0 {
+		t.Fatalf("transient memory reached canonical store: %+v", rows)
+	}
+}
+
 func TestMemoryToolOverviewGroupsEvidenceWithoutDeletingIt(t *testing.T) {
 	if got := namedProjectName("user refers to 'selfmind' as a project/codebase to analyze."); got != "selfmind" {
 		t.Fatalf("named project extraction = %q, want selfmind", got)

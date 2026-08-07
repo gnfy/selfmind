@@ -222,11 +222,16 @@ func (c *RunCoordinator) recordOutcomeArtifacts(ctx context.Context, task *contr
 // (queue/approvals/busy/steer) is untouched.
 func (c *RunCoordinator) resolveTask(ctx context.Context, identity *control.IdentityContext, req api.MessageRequest, intent router.IntentResult) (*control.Task, taskAttach, error) {
 	store := c.srv.Control
+	inputWorkKey := uniqueTaskWorkKey(req.Content)
 	if req.TaskID != "" {
 		task, err := store.GetTask(ctx, identity.TenantID, req.TaskID)
 		if err != nil || task != nil {
 			task, err = c.bindTaskWorkspaceIfMissing(ctx, identity, task, req, err)
-			return task, taskAttach{resumes: true}, err
+			reason := taskAttachExplicitTaskID
+			if intent.Intent == router.IntentContinue {
+				reason = taskAttachContinuation
+			}
+			return task, taskAttach{reason: reason, workKey: continuationWorkKey(inputWorkKey, task)}, err
 		}
 	}
 	// The /resume pin covers exactly the NEXT agent-bound message, so it is
@@ -237,7 +242,7 @@ func (c *RunCoordinator) resolveTask(ctx context.Context, identity *control.Iden
 		task, err := c.srv.resolveContinueTask(ctx, identity)
 		if err != nil || task != nil {
 			task, err = c.bindTaskWorkspaceIfMissing(ctx, identity, task, req, err)
-			return task, taskAttach{resumes: true}, err
+			return task, taskAttach{reason: taskAttachContinuation, workKey: continuationWorkKey(inputWorkKey, task)}, err
 		}
 		return nil, taskAttach{}, fmt.Errorf("no task to continue; start a new task or use /resume <task_id>")
 	}
@@ -246,17 +251,17 @@ func (c *RunCoordinator) resolveTask(ctx context.Context, identity *control.Iden
 	// closed to the pin exactly as before.
 	if pinned != nil && (!terminalTaskStatus(pinned.Status) || archivedTaskStatus(pinned.Status)) {
 		task, err := c.bindTaskWorkspaceIfMissing(ctx, identity, pinned, req, nil)
-		return task, taskAttach{resumes: true}, err
+		return task, taskAttach{reason: taskAttachResumePin, workKey: continuationWorkKey(inputWorkKey, task)}, err
 	}
 	// A single explicit issue key is stronger display evidence than the current
 	// pre-label pointer. Resolve it before the ordinary current-task guess so a
 	// release for RUQX-123 cannot be absorbed into an unrelated open label. This
 	// remains a PRE-LABEL attach: labels never select the execution workspace or
 	// gate context, and ambiguous/multiple keys deliberately fall through.
-	if workKey := uniqueTaskWorkKey(req.Content); workKey != "" {
+	if workKey := inputWorkKey; workKey != "" {
 		candidates := c.srv.openLabelCandidates(ctx, identity, "", workKey)
 		if target := exactWorkKeyCandidate(candidates, workKey); target != nil && target.IsVisible() && !target.IsInbox() {
-			return target, taskAttach{preLabel: true, resumes: true, workKey: workKey}, nil
+			return target, taskAttach{preLabel: true, reason: taskAttachWorkKeyPreLabel, workKey: workKey}, nil
 		}
 		task, attach, err := c.createPreLabelTask(ctx, identity, req)
 		attach.workKey = workKey
@@ -267,11 +272,21 @@ func (c *RunCoordinator) resolveTask(ctx context.Context, identity *control.Iden
 	// post-run labeler corrects a wrong guess.
 	if current, err := store.CurrentTask(ctx, identity.TenantID, identity.PersonID); err == nil &&
 		current != nil && current.IsVisible() && !current.IsInbox() && !terminalTaskStatus(current.Status) {
-		return current, taskAttach{preLabel: true}, nil
+		return current, taskAttach{preLabel: true, reason: taskAttachCurrentPreLabel}, nil
 	}
 	// No open label → new placeholder. An explicit request workspace wins;
 	// otherwise the person's current workspace seeds the task scope.
 	return c.createPreLabelTask(ctx, identity, req)
+}
+
+func continuationWorkKey(inputWorkKey string, task *control.Task) string {
+	if inputWorkKey != "" {
+		return inputWorkKey
+	}
+	if task == nil {
+		return ""
+	}
+	return uniqueTaskWorkKey(task.Title, task.CurrentSummary)
 }
 
 // createPreLabelTask creates the display placeholder for genuinely new work.
@@ -292,7 +307,7 @@ func (c *RunCoordinator) createPreLabelTask(ctx context.Context, identity *contr
 		Title:       titleFromInput(req.Content),
 		Channel:     req.Channel,
 	})
-	return task, taskAttach{created: true, preLabel: true}, err
+	return task, taskAttach{created: true, preLabel: true, reason: taskAttachNewLabel}, err
 }
 
 func (c *RunCoordinator) bindTaskWorkspaceIfMissing(ctx context.Context, identity *control.IdentityContext, task *control.Task, req api.MessageRequest, priorErr error) (*control.Task, error) {

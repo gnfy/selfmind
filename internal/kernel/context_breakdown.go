@@ -3,6 +3,7 @@ package kernel
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"strconv"
 	"strings"
 
@@ -20,8 +21,11 @@ type ContextBreakdown struct {
 	Tools          int `json:"tools"`           // # TOOL USE INSTRUCTIONS block
 	ProjectContext int `json:"project_context"` // # PROJECT CONTEXT (AGENTS.md et al.)
 	Memory         int `json:"memory"`          // <user-profile> + <memory-context>
-	Runtime        int `json:"runtime"`         // # SELECTED RUNTIME CONTEXT (task/ws/recall)
+	Runtime        int `json:"runtime"`         // task/run state and other runtime metadata
+	Recall         int `json:"recall"`          // semantic/session/canonical recall slices
+	Artifacts      int `json:"artifacts"`       // artifact references selected for this turn
 	History        int `json:"history"`         // replayed conversation messages
+	ToolResults    int `json:"tool_results"`    // bounded tool-result messages replayed to the model
 	Total          int `json:"total"`
 }
 
@@ -48,6 +52,7 @@ type PromptSection struct {
 	Tokens      int
 	Stable      bool
 	Fingerprint string // content hash for cache-prefix stability diagnostics
+	Content     string // transient assembly-only copy used for detailed accounting
 }
 
 func newPromptSection(category, content string, stable bool) PromptSection {
@@ -57,6 +62,7 @@ func newPromptSection(category, content string, stable bool) PromptSection {
 		Tokens:      estimateTokens(content),
 		Stable:      stable,
 		Fingerprint: hex.EncodeToString(digest[:8]),
+		Content:     content,
 	}
 }
 
@@ -73,6 +79,10 @@ func BreakdownFromSections(sections []PromptSection, messages []llm.Message) Con
 			b.Tools += s.Tokens
 		case "runtime":
 			b.Runtime += s.Tokens
+		case "recall":
+			b.Recall += s.Tokens
+		case "artifacts":
+			b.Artifacts += s.Tokens
 		case "memory":
 			b.Memory += s.Tokens
 		default:
@@ -83,10 +93,110 @@ func BreakdownFromSections(sections []PromptSection, messages []llm.Message) Con
 		if msg.Role == "system" {
 			continue
 		}
-		b.History += estimateTokens(msg.Content)
+		if msg.Role == "tool" {
+			b.ToolResults += estimateSingleMessageTokens(msg)
+		} else {
+			b.History += estimateSingleMessageTokens(msg)
+		}
 	}
-	b.Total = b.Identity + b.Tools + b.ProjectContext + b.Memory + b.Runtime + b.History
+	b.Total = b.Identity + b.Tools + b.ProjectContext + b.Memory + b.Runtime + b.Recall + b.Artifacts + b.History + b.ToolResults
 	return b
+}
+
+// SplitRuntimePromptSections attributes the bounded runtime bundle without
+// changing its rendered bytes. This keeps the prompt-cache prefix stable while
+// making task state, workspace, recall, memory, and artifacts independently
+// visible in diagnostics.
+func SplitRuntimePromptSections(content string) []PromptSection {
+	if strings.TrimSpace(content) == "" {
+		return nil
+	}
+	category := "runtime"
+	parts := map[string]*strings.Builder{}
+	order := make([]string, 0, 5)
+	write := func(cat, line string) {
+		b := parts[cat]
+		if b == nil {
+			b = &strings.Builder{}
+			parts[cat] = b
+			order = append(order, cat)
+		}
+		b.WriteString(line)
+		b.WriteByte('\n')
+	}
+	for _, line := range strings.Split(content, "\n") {
+		trimmed := strings.TrimSpace(line)
+		switch {
+		case strings.HasPrefix(trimmed, "## Workspace"):
+			category = "project_context"
+		case strings.HasPrefix(trimmed, "## Semantic Recall"),
+			strings.HasPrefix(trimmed, "## [Recall"):
+			category = "recall"
+		case strings.HasPrefix(trimmed, "## Selected Indexed Memory"):
+			category = "memory"
+		case strings.HasPrefix(trimmed, "## Relevant Artifacts"):
+			category = "artifacts"
+		case strings.HasPrefix(trimmed, "## Delivery Continuity"),
+			strings.HasPrefix(trimmed, "## Recent Events"),
+			strings.HasPrefix(trimmed, "# DURABLE TASK CONTEXT"),
+			strings.HasPrefix(trimmed, "## Current Summary"),
+			strings.HasPrefix(trimmed, "## Next Steps"),
+			strings.HasPrefix(trimmed, "## Open Blockers"),
+			strings.HasPrefix(trimmed, "## Latest Handoff"):
+			category = "runtime"
+		}
+		write(category, line)
+	}
+	sections := make([]PromptSection, 0, len(order))
+	for _, cat := range order {
+		sections = append(sections, newPromptSection(cat, parts[cat].String(), false))
+	}
+	return sections
+}
+
+// ProviderCallContextBreakdown reports the estimated request shape for one
+// physical provider call. Provider usage remains authoritative for the total;
+// these fields explain which SelfMind-owned components produced that total.
+func ProviderCallContextBreakdown(sections []PromptSection, messages []llm.Message, tools []llm.ToolDefinition) map[string]interface{} {
+	b := BreakdownFromSections(sections, messages)
+	stableSystem := 0
+	for _, section := range sections {
+		if section.Stable {
+			stableSystem += section.Tokens
+		}
+	}
+	toolSchemaTokens := 0
+	if raw, err := json.Marshal(tools); err == nil {
+		toolSchemaTokens = estimateTokens(string(raw))
+	}
+	return map[string]interface{}{
+		"stable_system":        stableSystem,
+		"tool_schemas":         toolSchemaTokens,
+		"history":              b.History,
+		"current_tool_results": b.ToolResults,
+		"recall":               b.Recall,
+		"workspace":            b.ProjectContext,
+		"artifacts":            b.Artifacts,
+		"memory":               b.Memory,
+		"task_runtime":         b.Runtime,
+		"estimated_total":      b.Total + toolSchemaTokens,
+	}
+}
+
+func estimateSingleMessageTokens(msg llm.Message) int {
+	total := estimateTokens(msg.Content)
+	for _, part := range msg.MultiContent {
+		total += estimateTokens(part.Text)
+		if part.ImageURL != "" || part.Data != "" {
+			// Images are provider-priced differently; record a conservative
+			// placeholder so their presence is not silently invisible.
+			total += 256
+		}
+	}
+	for _, call := range msg.ToolCalls {
+		total += estimateTokens(call.Function) + estimateTokens(call.Args)
+	}
+	return total
 }
 
 // StableVolatileTokens sums the accounted sections by mutability — the
@@ -159,9 +269,13 @@ func ComputeContextBreakdown(systemPrompt string, messages []llm.Message) Contex
 		if msg.Role == "system" {
 			continue
 		}
-		b.History += estimateTokens(msg.Content)
+		if msg.Role == "tool" {
+			b.ToolResults += estimateSingleMessageTokens(msg)
+		} else {
+			b.History += estimateSingleMessageTokens(msg)
+		}
 	}
-	b.Total = b.Identity + b.Tools + b.ProjectContext + b.Memory + b.Runtime + b.History
+	b.Total = b.Identity + b.Tools + b.ProjectContext + b.Memory + b.Runtime + b.Recall + b.Artifacts + b.History + b.ToolResults
 	return b
 }
 
@@ -174,7 +288,10 @@ func (b ContextBreakdown) Payload() map[string]interface{} {
 		"project_context": b.ProjectContext,
 		"memory":          b.Memory,
 		"runtime":         b.Runtime,
+		"recall":          b.Recall,
+		"artifacts":       b.Artifacts,
 		"history":         b.History,
+		"tool_results":    b.ToolResults,
 		"total":           b.Total,
 	}
 }

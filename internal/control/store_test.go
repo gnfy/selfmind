@@ -119,6 +119,28 @@ func TestStoreIdentityWorkspaceTaskFlow(t *testing.T) {
 	}
 }
 
+func TestResolveAccountIsReadOnly(t *testing.T) {
+	ctx := context.Background()
+	store, err := OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+	defer store.Close()
+
+	missing, err := store.ResolveAccount(ctx, "default", "cli", "doctor-only")
+	if err != nil || missing != nil {
+		t.Fatalf("missing read-only lookup = %+v, err=%v", missing, err)
+	}
+	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "doctor-only", "Owner")
+	if err != nil {
+		t.Fatalf("create account: %v", err)
+	}
+	found, err := store.ResolveAccount(ctx, "default", "cli", "doctor-only")
+	if err != nil || found == nil || found.PersonID != identity.PersonID {
+		t.Fatalf("existing read-only lookup = %+v, err=%v, want person %s", found, err, identity.PersonID)
+	}
+}
+
 func TestEnsureWorkspacePreservesExplicitAllowedRoots(t *testing.T) {
 	ctx := context.Background()
 	store, err := OpenStore(t.TempDir())

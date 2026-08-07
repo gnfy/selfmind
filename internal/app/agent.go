@@ -697,10 +697,11 @@ func InitAgent(mem *memory.MemoryManager, cfg *config.Config, tenantID string, s
 	skillCuratorProvider := modelGateway.ProviderForRole(llm.RoleSkillCurator)
 	semanticRecallProvider := modelGateway.ProviderForRole(llm.RoleSemanticRecall)
 	fastProvider := modelGateway.ProviderForRole(llm.RoleFastClassifier)
-	// Smart-mode approval triage (H2) uses the background_review role: a cheap
-	// side-task model kept OFF the main coding provider. Falls back to the
-	// default model when no background_review role is configured.
-	judgeProvider := modelGateway.ProviderForRole(llm.RoleBackgroundReview)
+	// Smart-mode approval triage is latency-sensitive foreground policy work.
+	// Prefer an explicitly configured fast_classifier and retain
+	// background_review only as a legacy config fallback; never borrow the main
+	// coding model silently.
+	judgeProvider, _ := configuredApprovalJudgeProvider(mem, cfg, tenantID)
 	if len(stores) > 0 && stores[0] != nil {
 		// Background learning shares the same durable physical-route circuit as
 		// post-run analysis and memory consolidation. In daemon mode it must not

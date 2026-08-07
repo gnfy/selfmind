@@ -44,7 +44,7 @@ func (p *capturingProviderStub) StreamChat(context.Context, llm.ChatRequest) (<-
 // TestIntakeDecisionPolicy pins the deterministic policy layer of intake
 // (docs/memory-governance.zh-CN.md §3.4): the model proposes rulings against
 // OFFERED neighbors only; SUPERSEDE retires a belief in place, protected
-// (user-stated) facts degrade to CONFLICT, an invalid ref degrades to ADD,
+// (user-stated) facts degrade to CONFLICT, an invalid ref is ignored,
 // and REINFORCE bumps confidence without rewriting content.
 func TestIntakeDecisionPolicy(t *testing.T) {
 	provider, err := memory.NewSQLiteProvider(t.TempDir())
@@ -113,9 +113,9 @@ func TestIntakeDecisionPolicy(t *testing.T) {
 		t.Fatalf("reinforce must bump confidence without rewriting: %+v", f)
 	}
 
-	// Invalid ref degrades to ADD.
-	if _, ok := byContent["A fact with an unknown reference"]; !ok {
-		t.Fatal("unknown ref must degrade to ADD")
+	// Invalid refs are maintenance mistakes, not evidence for a new belief.
+	if _, ok := byContent["A fact with an unknown reference"]; ok {
+		t.Fatal("unknown ref must not create memory")
 	}
 
 	// Protected user-stated fact: SUPERSEDE degrades to CONFLICT — both kept.
@@ -131,6 +131,14 @@ func TestIntakeDecisionPolicy(t *testing.T) {
 	}
 	if !oldKept || !newKept {
 		t.Fatalf("protected supersede must keep both statements: old=%v new=%v %+v", oldKept, newKept, userFacts)
+	}
+}
+
+func TestResolveOfferedRefUsesIdentityAcrossTargetBuckets(t *testing.T) {
+	fact := memory.Fact{ID: "abcdef12-3456", Target: "user", Scope: "global", Content: "User prefers concise replies"}
+	got := resolveOfferedRef(map[string][]memory.Fact{"user": {fact}}, "abcdef12")
+	if got == nil || got.ID != fact.ID || got.Target != "user" || got.Scope != "global" {
+		t.Fatalf("resolved = %+v", got)
 	}
 }
 

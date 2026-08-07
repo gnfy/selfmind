@@ -404,6 +404,18 @@ func classifyStoredExternalWatchOutput(watch control.ExternalWatch) string {
 // a "success" printed by a check that itself failed is self-contradictory
 // evidence, and accepting it would let a broken check close a release.
 func classifyExternalWatchOutput(watch control.ExternalWatch, output string, exitCode int) string {
+	if watch.SpecVersion >= 2 {
+		if watch.TerminalFailurePattern != "" && matchesExternalWatchPattern(watch.TerminalFailurePattern, output) {
+			return control.ExternalWatchFailed
+		}
+		if exitCode == 0 && watch.TerminalSuccessPattern != "" && matchesExternalWatchPattern(watch.TerminalSuccessPattern, output) {
+			return control.ExternalWatchSucceeded
+		}
+		if exitCode == 0 && watch.TargetPattern != "" && matchesExternalWatchPattern(watch.TargetPattern, output) {
+			return control.ExternalWatchSucceeded
+		}
+		return ""
+	}
 	if exitCode == 0 && matchesExternalWatchPattern(watch.SuccessPattern, output) {
 		return control.ExternalWatchSucceeded
 	}

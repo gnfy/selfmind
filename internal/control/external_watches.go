@@ -2,6 +2,7 @@ package control
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -37,25 +38,30 @@ var externalWatchTerminalStatuses = []any{
 // intentionally separate from an agent run: waiting for CI/CD must not keep a
 // model turn, worker slot, or person active-run slot alive.
 type ExternalWatch struct {
-	ID                    string
-	TenantID              string
-	PersonID              string
-	WorkspaceID           string
-	TaskID                string
-	RunID                 string
-	Channel               string
-	Description           string
-	CWD                   string
-	Command               string
-	SuccessPattern        string
-	FailurePattern        string
-	Status                string
-	IntervalSeconds       int
-	CommandTimeoutSeconds int
-	TimeoutAt             time.Time
-	NextCheckAt           time.Time
-	Attempts              int
-	Extensions            int
+	ID                     string
+	TenantID               string
+	PersonID               string
+	WorkspaceID            string
+	TaskID                 string
+	RunID                  string
+	Channel                string
+	Description            string
+	CWD                    string
+	Command                string
+	SuccessPattern         string
+	FailurePattern         string
+	SpecVersion            int
+	TargetPattern          string
+	TerminalSuccessPattern string
+	TerminalFailurePattern string
+	Status                 string
+	IntervalSeconds        int
+	CurrentIntervalSeconds int
+	CommandTimeoutSeconds  int
+	TimeoutAt              time.Time
+	NextCheckAt            time.Time
+	Attempts               int
+	Extensions             int
 	// ExecutionBinding freezes the creator run's environment, identity, trust,
 	// and approved capabilities without persisting secret values. It is the
 	// transport contract future runners can consume unchanged.
@@ -81,9 +87,10 @@ type ExternalWatch struct {
 	VerdictRevision int
 	// Notified is separate from Finalized: durable task/event/queue products
 	// may be complete while endpoint delivery still awaits a usable channel.
-	Notified   bool
-	LastOutput string
-	LastError  string
+	Notified       bool
+	LastOutput     string
+	LastOutputHash string
+	LastError      string
 	// FailureClass is the typed diagnosis of the last failed check, from the
 	// same classifier the foreground tool path uses. CheckSignature identifies
 	// "the same failure again" (class + output hash) and ConsecutiveFailures
@@ -105,9 +112,12 @@ type ExternalWatch struct {
 // time. Every reader now shares this list and scanExternalWatch.
 const externalWatchColumns = `id, tenant_id, person_id,
 	COALESCE(workspace_id, ''), task_id, COALESCE(run_id, ''), COALESCE(channel, ''),
-	description, cwd, command, success_pattern, failure_pattern, status,
-	interval_seconds, command_timeout_seconds, timeout_at, next_check_at, attempts,
+	description, cwd, command, success_pattern, failure_pattern,
+	COALESCE(spec_version, 1), COALESCE(target_pattern, ''),
+	COALESCE(terminal_success_pattern, ''), COALESCE(terminal_failure_pattern, ''), status,
+	interval_seconds, COALESCE(current_interval_seconds, 0), command_timeout_seconds, timeout_at, next_check_at, attempts,
 	COALESCE(extensions, 0), COALESCE(verdict_revision, 1), COALESCE(notified, 0), last_output, last_error,
+	COALESCE(last_output_hash, ''),
 	COALESCE(failure_class, ''), COALESCE(check_signature, ''), COALESCE(consecutive_failures, 0),
 	COALESCE(environment_snapshot_id, ''), COALESCE(environment_generation, 0),
 	COALESCE(principal_fingerprint, ''), COALESCE(environment_fingerprint, ''),
@@ -124,12 +134,27 @@ func (s *Store) CreateExternalWatch(ctx context.Context, watch ExternalWatch) (*
 	watch.CWD = strings.TrimSpace(watch.CWD)
 	watch.Command = strings.TrimSpace(watch.Command)
 	watch.SuccessPattern = strings.TrimSpace(watch.SuccessPattern)
-	if watch.PersonID == "" || watch.TaskID == "" || watch.CWD == "" || watch.Command == "" || watch.SuccessPattern == "" {
-		return nil, fmt.Errorf("person, task, cwd, command, and success pattern are required")
+	watch.FailurePattern = strings.TrimSpace(watch.FailurePattern)
+	watch.TargetPattern = strings.TrimSpace(watch.TargetPattern)
+	watch.TerminalSuccessPattern = strings.TrimSpace(watch.TerminalSuccessPattern)
+	watch.TerminalFailurePattern = strings.TrimSpace(watch.TerminalFailurePattern)
+	if watch.SpecVersion <= 0 {
+		if watch.TargetPattern != "" || watch.TerminalSuccessPattern != "" || watch.TerminalFailurePattern != "" {
+			watch.SpecVersion = 2
+		} else {
+			watch.SpecVersion = 1
+		}
+	}
+	if watch.PersonID == "" || watch.TaskID == "" || watch.CWD == "" || watch.Command == "" {
+		return nil, fmt.Errorf("person, task, cwd, and command are required")
+	}
+	if err := ValidateExternalWatchSpec(watch); err != nil {
+		return nil, err
 	}
 	if watch.IntervalSeconds < 5 {
 		watch.IntervalSeconds = 30
 	}
+	watch.CurrentIntervalSeconds = watch.IntervalSeconds
 	if watch.CommandTimeoutSeconds < 1 {
 		watch.CommandTimeoutSeconds = 30
 	}
@@ -159,17 +184,19 @@ func (s *Store) CreateExternalWatch(ctx context.Context, watch ExternalWatch) (*
 	watch.UpdatedAt = now
 	_, err = s.db.ExecContext(ctx, `INSERT INTO external_watches (
 		id, tenant_id, person_id, workspace_id, task_id, run_id, channel,
-		description, cwd, command, success_pattern, failure_pattern, status,
-		interval_seconds, command_timeout_seconds, timeout_at, next_check_at,
-		attempts, last_output, last_error,
+		description, cwd, command, success_pattern, failure_pattern,
+		spec_version, target_pattern, terminal_success_pattern, terminal_failure_pattern, status,
+		interval_seconds, current_interval_seconds, command_timeout_seconds, timeout_at, next_check_at,
+		attempts, last_output, last_output_hash, last_error,
 		environment_snapshot_id, environment_generation, principal_fingerprint,
 		environment_fingerprint, credential_source_hash, execution_binding_json,
 		created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, '', '', ?, ?, ?, ?, ?, ?, ?, ?)`,
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, '', '', '', ?, ?, ?, ?, ?, ?, ?, ?)`,
 		watch.ID, watch.TenantID, watch.PersonID, watch.WorkspaceID, watch.TaskID,
 		watch.RunID, watch.Channel, watch.Description, watch.CWD, watch.Command,
-		watch.SuccessPattern, watch.FailurePattern, watch.Status,
-		watch.IntervalSeconds, watch.CommandTimeoutSeconds, watch.TimeoutAt.Unix(),
+		watch.SuccessPattern, watch.FailurePattern, watch.SpecVersion, watch.TargetPattern,
+		watch.TerminalSuccessPattern, watch.TerminalFailurePattern, watch.Status,
+		watch.IntervalSeconds, watch.CurrentIntervalSeconds, watch.CommandTimeoutSeconds, watch.TimeoutAt.Unix(),
 		watch.NextCheckAt.Unix(),
 		watch.EnvironmentSnapshotID, watch.EnvironmentGeneration, watch.PrincipalFingerprint,
 		watch.EnvironmentFingerprint, watch.CredentialSourceHash, string(bindingJSON),
@@ -178,6 +205,30 @@ func (s *Store) CreateExternalWatch(ctx context.Context, watch ExternalWatch) (*
 		return nil, err
 	}
 	return &watch, nil
+}
+
+// ValidateExternalWatchSpec pins the durable verdict contract before a check
+// is executed or stored. A desired intermediate target can be skipped by an
+// external system, so target-based watches must also describe both terminal
+// outcomes. Without those exits a successful or failed operation can only age
+// into timed_out even though the check output is conclusive.
+func ValidateExternalWatchSpec(watch ExternalWatch) error {
+	if watch.SpecVersion <= 1 {
+		if strings.TrimSpace(watch.SuccessPattern) == "" {
+			return fmt.Errorf("success pattern is required for watch spec v1")
+		}
+		return nil
+	}
+	target := strings.TrimSpace(watch.TargetPattern)
+	terminalSuccess := strings.TrimSpace(watch.TerminalSuccessPattern)
+	terminalFailure := strings.TrimSpace(watch.TerminalFailurePattern)
+	if target == "" && terminalSuccess == "" && terminalFailure == "" {
+		return fmt.Errorf("watch spec v2 requires at least one target or terminal pattern")
+	}
+	if target != "" && (terminalSuccess == "" || terminalFailure == "") {
+		return fmt.Errorf("watch spec v2 target_pattern requires both terminal_success_pattern and terminal_failure_pattern because the target may be skipped")
+	}
+	return nil
 }
 
 // GetExternalWatch reads one watch by id. Callers that need the current row
@@ -228,7 +279,11 @@ func (s *Store) ListDueExternalWatches(ctx context.Context, limit int) ([]Extern
 
 func (s *Store) ClaimExternalWatch(ctx context.Context, watch ExternalWatch) (bool, error) {
 	now := time.Now()
-	next := now.Add(time.Duration(watch.IntervalSeconds) * time.Second)
+	interval := watch.CurrentIntervalSeconds
+	if interval < watch.IntervalSeconds {
+		interval = watch.IntervalSeconds
+	}
+	next := now.Add(time.Duration(interval) * time.Second)
 	result, err := s.db.ExecContext(ctx, `UPDATE external_watches
 		SET status = ?, attempts = attempts + 1, next_check_at = ?, updated_at = ?
 		WHERE id = ? AND tenant_id = ? AND status IN (?, ?) AND next_check_at <= ?`,
@@ -245,12 +300,44 @@ func (s *Store) ClaimExternalWatch(ctx context.Context, watch ExternalWatch) (bo
 // observation output. It clears the failure streak: a check that works again is
 // new evidence, and leaving a stale streak behind would park a healthy watch.
 func (s *Store) RecordExternalWatchCheck(ctx context.Context, tenantID, id, output, lastError string) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE external_watches
-		SET last_output = ?, last_error = ?, failure_class = '', check_signature = '',
-			consecutive_failures = 0, updated_at = ?
+	tenant := normalizeTenant(tenantID)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	var baseInterval, currentInterval int
+	var previousHash string
+	if err := tx.QueryRowContext(ctx, `SELECT interval_seconds,
+		COALESCE(current_interval_seconds, 0), COALESCE(last_output_hash, '')
+		FROM external_watches WHERE tenant_id = ? AND id = ? AND status = ?`,
+		tenant, id, ExternalWatchRunning).Scan(&baseInterval, &currentInterval, &previousHash); err != nil {
+		return err
+	}
+	if baseInterval < 5 {
+		baseInterval = 30
+	}
+	if currentInterval < baseInterval {
+		currentInterval = baseInterval
+	}
+	hash := fmt.Sprintf("%x", sha256.Sum256([]byte(strings.TrimSpace(output))))
+	nextInterval := baseInterval
+	if previousHash != "" && previousHash == hash {
+		nextInterval = currentInterval * 2
+		if nextInterval > 60 {
+			nextInterval = 60
+		}
+	}
+	now := time.Now()
+	if _, err := tx.ExecContext(ctx, `UPDATE external_watches
+		SET last_output = ?, last_output_hash = ?, last_error = ?, failure_class = '', check_signature = '',
+			consecutive_failures = 0, current_interval_seconds = ?, next_check_at = ?, updated_at = ?
 		WHERE tenant_id = ? AND id = ? AND status = ?`,
-		output, lastError, time.Now().Unix(), normalizeTenant(tenantID), id, ExternalWatchRunning)
-	return err
+		output, hash, lastError, nextInterval, now.Add(time.Duration(nextInterval)*time.Second).Unix(), now.Unix(),
+		tenant, id, ExternalWatchRunning); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // RecordExternalWatchFailure records a failed check and returns the length of
@@ -498,9 +585,11 @@ func scanExternalWatch(scanner externalWatchScanner) (ExternalWatch, error) {
 	var finishedAt sql.NullInt64
 	err := scanner.Scan(&watch.ID, &watch.TenantID, &watch.PersonID, &watch.WorkspaceID,
 		&watch.TaskID, &watch.RunID, &watch.Channel, &watch.Description, &watch.CWD,
-		&watch.Command, &watch.SuccessPattern, &watch.FailurePattern, &watch.Status,
-		&watch.IntervalSeconds, &watch.CommandTimeoutSeconds, &timeoutAt, &nextCheckAt,
+		&watch.Command, &watch.SuccessPattern, &watch.FailurePattern,
+		&watch.SpecVersion, &watch.TargetPattern, &watch.TerminalSuccessPattern, &watch.TerminalFailurePattern, &watch.Status,
+		&watch.IntervalSeconds, &watch.CurrentIntervalSeconds, &watch.CommandTimeoutSeconds, &timeoutAt, &nextCheckAt,
 		&watch.Attempts, &watch.Extensions, &watch.VerdictRevision, &notified, &watch.LastOutput, &watch.LastError,
+		&watch.LastOutputHash,
 		&watch.FailureClass, &watch.CheckSignature, &watch.ConsecutiveFailures,
 		&watch.EnvironmentSnapshotID, &watch.EnvironmentGeneration, &watch.PrincipalFingerprint,
 		&watch.EnvironmentFingerprint, &watch.CredentialSourceHash,

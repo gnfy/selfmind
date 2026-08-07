@@ -21,6 +21,11 @@ func TestNoDoubleDispatch(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
+	if _, err := store.CreateApprovalRequest(ctx, control.ApprovalRequest{
+		ID: "apr_test", TenantID: "default", PersonID: "p1",
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	var sends int32
 	svc := NewService(store, SenderFunc(func(ctx context.Context, msg Message) error {
@@ -50,6 +55,45 @@ func TestNoDoubleDispatch(t *testing.T) {
 	}
 	if len(due) != 0 {
 		t.Fatalf("nothing should remain due after a successful send: %+v", due)
+	}
+}
+
+func TestResolvedApprovalDeliveryIsSupersededBeforeSend(t *testing.T) {
+	ctx := context.Background()
+	store, err := control.OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if _, err := store.CreateApprovalRequest(ctx, control.ApprovalRequest{
+		ID: "apr_resolved", TenantID: "default", PersonID: "p1",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.ExpireApprovalRequest(ctx, "default", "apr_resolved", "run ended"); err != nil {
+		t.Fatal(err)
+	}
+
+	var sends int32
+	svc := NewService(store, SenderFunc(func(context.Context, Message) error {
+		atomic.AddInt32(&sends, 1)
+		return nil
+	}), Options{PollInterval: time.Hour})
+	if err := svc.EnqueueAndTry(ctx, Message{
+		TenantID: "default", PersonID: "p1", Platform: "weixin", Channel: "wx-chat",
+		Content: "obsolete approval", Kind: KindApproval, ApprovalID: "apr_resolved",
+	}); err != nil {
+		t.Fatalf("superseding stale approval: %v", err)
+	}
+	if got := atomic.LoadInt32(&sends); got != 0 {
+		t.Fatalf("stale approval sent %d times", got)
+	}
+	counts, err := store.CountOutboundByStatusSince(ctx, "default", "p1", time.Now().Add(-time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if counts["superseded"] != 1 || counts["failed"] != 0 || counts["pending_session"] != 0 {
+		t.Fatalf("delivery counts = %#v", counts)
 	}
 }
 

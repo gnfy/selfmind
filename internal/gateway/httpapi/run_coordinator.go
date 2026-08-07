@@ -236,7 +236,7 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 	c.syncCurrentTask(ctx, identity, task)
 	_ = d.Control.RecordChannelMessage(ctx, *identity, req.Channel, task.ID, "user", req.Content)
 
-	run, err := d.Control.StartRun(ctx, task, req.Channel, truncate(req.Content, 240))
+	run, err := d.Control.StartRunWithWorkKey(ctx, task, req.Channel, truncate(req.Content, 240), attach.workKey)
 	if err != nil {
 		if attach.created {
 			_, _ = d.Control.DeleteEmptyTask(context.WithoutCancel(ctx), identity.TenantID, identity.PersonID, task.ID)
@@ -393,7 +393,7 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 	ctx = kernel.WithTaskRuntimeContext(ctx, c.selectedTaskRuntimeContext(ctx, task, run, workspace, req.Platform, req.Channel, req.Content, attach.preLabel))
 	ctx = c.withLoopCheckpointResume(ctx, identity, task, run, intent)
 	agentInput := c.withGatewayContext(req.Content, identity, task, workspace, req.Attachments)
-	agentInput = c.withResumeContext(ctx, identity, task, run, intent, attach.resumes, agentInput)
+	agentInput = c.withResumeContext(ctx, identity, task, run, intent, attach.claimsPriorRuns(), attach.workKey, agentInput)
 	// Independent of continuation intent: any run on a task with uncertain
 	// (crash-orphaned) side-effect tool calls must verify before repeating
 	// (P0-B closure — a boot-requeued run re-drains as a "new" message).

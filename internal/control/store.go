@@ -77,6 +77,7 @@ type Run struct {
 	WorkspaceID  string     `json:"workspace_id,omitempty"`
 	Channel      string     `json:"channel"`
 	InputSummary string     `json:"input_summary,omitempty"`
+	WorkKey      string     `json:"work_key,omitempty"`
 	Status       string     `json:"status"`
 	StartedAt    time.Time  `json:"started_at"`
 	FinishedAt   *time.Time `json:"finished_at,omitempty"`
@@ -307,10 +308,27 @@ CREATE TABLE IF NOT EXISTS task_runs (
 	heartbeat_at INTEGER,
 	cancel_requested INTEGER NOT NULL DEFAULT 0,
 	last_error TEXT,
-	resumed_by_run_id TEXT NOT NULL DEFAULT ''
+	resumed_by_run_id TEXT NOT NULL DEFAULT '',
+	work_key TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_task_runs_task_started ON task_runs(tenant_id, task_id, started_at);
 CREATE INDEX IF NOT EXISTS idx_task_runs_person_status ON task_runs(tenant_id, person_id, status, started_at);
+CREATE TABLE IF NOT EXISTS task_blockers (
+	id TEXT PRIMARY KEY,
+	tenant_id TEXT NOT NULL,
+	person_id TEXT NOT NULL,
+	task_id TEXT NOT NULL,
+	origin_run_id TEXT NOT NULL DEFAULT '',
+	kind TEXT NOT NULL,
+	status TEXT NOT NULL DEFAULT 'open',
+	detail_json TEXT NOT NULL DEFAULT '{}',
+	resolved_by_run_id TEXT NOT NULL DEFAULT '',
+	created_at INTEGER NOT NULL,
+	resolved_at INTEGER,
+	UNIQUE(origin_run_id, kind)
+);
+CREATE INDEX IF NOT EXISTS idx_task_blockers_open
+	ON task_blockers(tenant_id, task_id, status, created_at);
 CREATE TABLE IF NOT EXISTS task_events (
 	id TEXT PRIMARY KEY,
 	cursor INTEGER,
@@ -554,6 +572,37 @@ CREATE INDEX IF NOT EXISTS idx_maintenance_provider_calls_recent
 	ON maintenance_provider_calls(tenant_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_maintenance_provider_calls_route
 	ON maintenance_provider_calls(tenant_id, route_id, created_at);
+CREATE TABLE IF NOT EXISTS approval_triage_events (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	tenant_id TEXT NOT NULL,
+	person_id TEXT NOT NULL,
+	task_id TEXT NOT NULL DEFAULT '',
+	run_id TEXT NOT NULL DEFAULT '',
+	tool_name TEXT NOT NULL DEFAULT '',
+	outcome TEXT NOT NULL,
+	risk_level TEXT NOT NULL DEFAULT '',
+	user_authorization TEXT NOT NULL DEFAULT '',
+	grant_key TEXT NOT NULL DEFAULT '',
+	provider_route TEXT NOT NULL DEFAULT '',
+	latency_ms INTEGER NOT NULL DEFAULT 0,
+	error_class TEXT NOT NULL DEFAULT '',
+	policy_version TEXT NOT NULL DEFAULT '',
+	rationale TEXT NOT NULL DEFAULT '',
+	error TEXT NOT NULL DEFAULT '',
+	created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_approval_triage_events_recent
+	ON approval_triage_events(tenant_id, person_id, created_at);
+CREATE TABLE IF NOT EXISTS gateway_runtime_events (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	instance_id TEXT NOT NULL,
+	event_type TEXT NOT NULL,
+	payload_json TEXT NOT NULL DEFAULT '{}',
+	created_at INTEGER NOT NULL,
+	UNIQUE(instance_id, event_type)
+);
+CREATE INDEX IF NOT EXISTS idx_gateway_runtime_events_recent
+	ON gateway_runtime_events(created_at);
 CREATE TABLE IF NOT EXISTS external_watches (
 	id TEXT PRIMARY KEY,
 	tenant_id TEXT NOT NULL,
@@ -567,8 +616,13 @@ CREATE TABLE IF NOT EXISTS external_watches (
 	command TEXT NOT NULL,
 	success_pattern TEXT NOT NULL,
 	failure_pattern TEXT NOT NULL DEFAULT '',
+	spec_version INTEGER NOT NULL DEFAULT 1,
+	target_pattern TEXT NOT NULL DEFAULT '',
+	terminal_success_pattern TEXT NOT NULL DEFAULT '',
+	terminal_failure_pattern TEXT NOT NULL DEFAULT '',
 	status TEXT NOT NULL DEFAULT 'pending',
 	interval_seconds INTEGER NOT NULL DEFAULT 30,
+	current_interval_seconds INTEGER NOT NULL DEFAULT 0,
 	command_timeout_seconds INTEGER NOT NULL DEFAULT 30,
 	timeout_at INTEGER NOT NULL,
 	next_check_at INTEGER NOT NULL,
@@ -578,6 +632,7 @@ CREATE TABLE IF NOT EXISTS external_watches (
 	verdict_revision INTEGER NOT NULL DEFAULT 1,
 	notified INTEGER NOT NULL DEFAULT 0,
 	last_output TEXT NOT NULL DEFAULT '',
+	last_output_hash TEXT NOT NULL DEFAULT '',
 	last_error TEXT NOT NULL DEFAULT '',
 	execution_binding_json TEXT NOT NULL DEFAULT '{}',
 	created_at INTEGER NOT NULL,
@@ -650,6 +705,7 @@ CREATE INDEX IF NOT EXISTS idx_external_watches_owner
 		{"task_runs", "cancel_requested", "INTEGER NOT NULL DEFAULT 0"},
 		{"task_runs", "last_error", "TEXT"},
 		{"task_runs", "resumed_by_run_id", "TEXT NOT NULL DEFAULT ''"},
+		{"task_runs", "work_key", "TEXT NOT NULL DEFAULT ''"},
 		{"outbound_messages", "platform_user_id", "TEXT"},
 		// kind/approval_id let retried deliveries keep their typed rendering
 		// (e.g. Telegram approval inline buttons) instead of degrading to plain
@@ -677,6 +733,17 @@ CREATE INDEX IF NOT EXISTS idx_external_watches_owner
 		// person uninformed and re-pushes them once the CLI detaches (Fix 2).
 		{"approval_requests", "notified_at", "INTEGER"},
 		{"clarify_requests", "notified_at", "INTEGER"},
+		{"approval_triage_events", "task_id", "TEXT NOT NULL DEFAULT ''"},
+		{"approval_triage_events", "run_id", "TEXT NOT NULL DEFAULT ''"},
+		{"approval_triage_events", "tool_name", "TEXT NOT NULL DEFAULT ''"},
+		{"approval_triage_events", "risk_level", "TEXT NOT NULL DEFAULT ''"},
+		{"approval_triage_events", "user_authorization", "TEXT NOT NULL DEFAULT ''"},
+		{"approval_triage_events", "grant_key", "TEXT NOT NULL DEFAULT ''"},
+		{"approval_triage_events", "provider_route", "TEXT NOT NULL DEFAULT ''"},
+		{"approval_triage_events", "latency_ms", "INTEGER NOT NULL DEFAULT 0"},
+		{"approval_triage_events", "error_class", "TEXT NOT NULL DEFAULT ''"},
+		{"approval_triage_events", "policy_version", "TEXT NOT NULL DEFAULT ''"},
+		{"approval_triage_events", "rationale", "TEXT NOT NULL DEFAULT ''"},
 		// restarts counts boot requeues of a 'started' row. Without a cap a
 		// queued task whose run never finishes before the next daemon restart
 		// resurrects FOREVER (observed live: a 10-min task + repeated deploy
@@ -771,6 +838,12 @@ CREATE INDEX IF NOT EXISTS idx_external_watches_owner
 		// length make "the same environment failure again" a decidable fact and
 		// let the watch stop instead of retrying until its deadline.
 		{"external_watches", "failure_class", "TEXT NOT NULL DEFAULT ''"},
+		{"external_watches", "spec_version", "INTEGER NOT NULL DEFAULT 1"},
+		{"external_watches", "target_pattern", "TEXT NOT NULL DEFAULT ''"},
+		{"external_watches", "terminal_success_pattern", "TEXT NOT NULL DEFAULT ''"},
+		{"external_watches", "terminal_failure_pattern", "TEXT NOT NULL DEFAULT ''"},
+		{"external_watches", "current_interval_seconds", "INTEGER NOT NULL DEFAULT 0"},
+		{"external_watches", "last_output_hash", "TEXT NOT NULL DEFAULT ''"},
 		{"external_watches", "check_signature", "TEXT NOT NULL DEFAULT ''"},
 		{"external_watches", "consecutive_failures", "INTEGER NOT NULL DEFAULT 0"},
 		{"external_watches", "environment_snapshot_id", "TEXT NOT NULL DEFAULT ''"},
@@ -786,6 +859,10 @@ CREATE INDEX IF NOT EXISTS idx_external_watches_owner
 		if err := s.ensureColumn(ctx, col.table, col.name, col.def); err != nil {
 			return err
 		}
+	}
+	if _, err := s.db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_task_runs_work_key
+		ON task_runs(tenant_id, task_id, work_key, status, started_at)`); err != nil {
+		return err
 	}
 	// Existing workspaces predate an explicit trust act, so migration must not
 	// promote every path ever observed by a client into trusted instructions.
@@ -920,6 +997,29 @@ func (s *Store) EnsureTenant(ctx context.Context, tenantID, name string) error {
 	return err
 }
 
+// ResolveAccount returns an existing platform binding without creating a
+// tenant, person, or account. Read-only commands such as doctor must use this
+// method so observing a store cannot mutate its identity graph.
+func (s *Store) ResolveAccount(ctx context.Context, tenantID, platform, platformUserID string) (*IdentityContext, error) {
+	tenantID = normalizeTenant(tenantID)
+	platform = normalizeName(platform, "cli")
+	platformUserID = normalizeName(platformUserID, "local")
+	var out IdentityContext
+	err := s.db.QueryRowContext(ctx, `
+		SELECT id, tenant_id, person_id, platform, platform_user_id, display_name
+		FROM accounts
+		WHERE tenant_id = ? AND platform = ? AND platform_user_id = ?`,
+		tenantID, platform, platformUserID).
+		Scan(&out.AccountID, &out.TenantID, &out.PersonID, &out.Platform, &out.PlatformUserID, &out.DisplayName)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 func (s *Store) ResolveOrCreateAccount(ctx context.Context, tenantID, platform, platformUserID, displayName string) (*IdentityContext, error) {
 	tenantID = normalizeTenant(tenantID)
 	platform = normalizeName(platform, "cli")
@@ -928,18 +1028,10 @@ func (s *Store) ResolveOrCreateAccount(ctx context.Context, tenantID, platform, 
 		return nil, err
 	}
 
-	var out IdentityContext
-	err := s.db.QueryRowContext(ctx, `
-		SELECT id, tenant_id, person_id, platform, platform_user_id, display_name
-		FROM accounts
-		WHERE tenant_id = ? AND platform = ? AND platform_user_id = ?`,
-		tenantID, platform, platformUserID).
-		Scan(&out.AccountID, &out.TenantID, &out.PersonID, &out.Platform, &out.PlatformUserID, &out.DisplayName)
-	if err == nil {
-		return &out, nil
-	}
-	if err != sql.ErrNoRows {
+	if out, err := s.ResolveAccount(ctx, tenantID, platform, platformUserID); err != nil {
 		return nil, err
+	} else if out != nil {
+		return out, nil
 	}
 
 	now := time.Now().Unix()
@@ -1620,6 +1712,18 @@ func (s *Store) UpdateTaskStatus(ctx context.Context, tenantID, taskID, status, 
 }
 
 func (s *Store) StartRun(ctx context.Context, task *Task, channel, inputSummary string) (*Run, error) {
+	return s.startRun(ctx, task, channel, inputSummary, "")
+}
+
+// StartRunWithWorkKey atomically creates a run with its deterministic work
+// identity. Keeping the key in the same transaction as the run prevents a
+// daemon crash between admission and a follow-up UPDATE from turning an
+// explicit continuation into an ambiguous one.
+func (s *Store) StartRunWithWorkKey(ctx context.Context, task *Task, channel, inputSummary, workKey string) (*Run, error) {
+	return s.startRun(ctx, task, channel, inputSummary, workKey)
+}
+
+func (s *Store) startRun(ctx context.Context, task *Task, channel, inputSummary, workKey string) (*Run, error) {
 	if task == nil {
 		return nil, fmt.Errorf("task is required")
 	}
@@ -1631,6 +1735,7 @@ func (s *Store) StartRun(ctx context.Context, task *Task, channel, inputSummary 
 		WorkspaceID:  task.WorkspaceID,
 		Channel:      normalizeName(channel, "cli"),
 		InputSummary: inputSummary,
+		WorkKey:      strings.ToUpper(strings.TrimSpace(workKey)),
 		Status:       "running",
 		StartedAt:    time.Now(),
 	}
@@ -1642,9 +1747,9 @@ func (s *Store) StartRun(ctx context.Context, task *Task, channel, inputSummary 
 	}
 	defer func() { _ = tx.Rollback() }()
 	if _, err = tx.ExecContext(ctx,
-		`INSERT INTO task_runs (id, task_id, tenant_id, person_id, workspace_id, channel, input_summary, status, started_at, heartbeat_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		run.ID, run.TaskID, run.TenantID, run.PersonID, run.WorkspaceID, run.Channel, run.InputSummary, run.Status, run.StartedAt.Unix(), run.StartedAt.Unix()); err != nil {
+		`INSERT INTO task_runs (id, task_id, tenant_id, person_id, workspace_id, channel, input_summary, work_key, status, started_at, heartbeat_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		run.ID, run.TaskID, run.TenantID, run.PersonID, run.WorkspaceID, run.Channel, run.InputSummary, run.WorkKey, run.Status, run.StartedAt.Unix(), run.StartedAt.Unix()); err != nil {
 		return nil, err
 	}
 	if _, err = tx.ExecContext(ctx,
@@ -1695,11 +1800,11 @@ func (s *Store) GetRun(ctx context.Context, tenantID, runID string) (*Run, error
 	var finished sql.NullInt64
 	err := s.db.QueryRowContext(ctx,
 		`SELECT id, task_id, tenant_id, person_id, COALESCE(workspace_id, ''), channel,
-		        COALESCE(input_summary, ''), status, started_at, finished_at
+		        COALESCE(input_summary, ''), COALESCE(work_key, ''), status, started_at, finished_at
 		 FROM task_runs WHERE tenant_id = ? AND id = ?`,
 		normalizeTenant(tenantID), runID).
 		Scan(&r.ID, &r.TaskID, &r.TenantID, &r.PersonID, &r.WorkspaceID, &r.Channel,
-			&r.InputSummary, &r.Status, &started, &finished)
+			&r.InputSummary, &r.WorkKey, &r.Status, &started, &finished)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}

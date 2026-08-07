@@ -68,6 +68,20 @@ func TestFinishRunToolNormalizesApprovalStatus(t *testing.T) {
 	}
 }
 
+func TestFinishRunToolPreservesResolvedBlockerIDs(t *testing.T) {
+	tool := NewFinishRunTool()
+	result, err := tool.Execute(map[string]interface{}{
+		"status": "done", "summary": "verified",
+		"resolved_blocker_ids": []interface{}{"blocker_one", "blocker_two"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(result, `"resolved_blocker_ids":["blocker_one","blocker_two"]`) {
+		t.Fatalf("result=%s", result)
+	}
+}
+
 func TestFinishRunRequiresResolvedSharedPlan(t *testing.T) {
 	store := NewPlanStore()
 	plan := NewUpdatePlanToolWithStore(store)

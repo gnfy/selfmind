@@ -32,10 +32,23 @@ const (
 	TriageDeny
 )
 
-// triageWaitTimeout bounds how long the triage judge may take before the funnel
-// gives up and escalates to the human ask. A slow/hung judge must never stall
-// the run: on timeout we escalate (fail safe), we do not auto-approve.
-const triageWaitTimeout = 15 * time.Second
+// defaultTriageWaitTimeout bounds a judge that does not publish its configured
+// foreground budget. A slow/hung judge must never stall the run: on timeout we
+// escalate (fail safe), we do not auto-approve.
+const defaultTriageWaitTimeout = 30 * time.Second
+
+// ApprovalJudgeRoute is implemented by configured judges that can identify
+// their cheap role route without exposing credentials or provider internals.
+type ApprovalJudgeRoute interface {
+	ApprovalJudgeRoute() string
+}
+
+// ApprovalJudgeTimeout is an optional capability implemented by configured
+// judges. Keeping the budget on the judge avoids leaking provider policy into
+// the generic tool middleware.
+type ApprovalJudgeTimeout interface {
+	ApprovalJudgeTimeout() time.Duration
+}
 
 // triageMaxSubjectBytes bounds how much of the command/args we hand the judge.
 // A safety judgment needs the head of the command, not a megabyte of payload,
@@ -73,7 +86,13 @@ func triageApproval(ctx context.Context, judge ApprovalJudge, toolName, subject,
 	// Bound the wait independently of the judge honoring ctx: run the call on a
 	// goroutine and race it against a timeout. A judge that hangs must not hang
 	// the run — timeout escalates to a human.
-	tctx, cancel := context.WithTimeout(ctx, triageWaitTimeout)
+	timeout := defaultTriageWaitTimeout
+	if configured, ok := judge.(ApprovalJudgeTimeout); ok {
+		if value := configured.ApprovalJudgeTimeout(); value > 0 {
+			timeout = value
+		}
+	}
+	tctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	type judgeResult struct {
 		reply string

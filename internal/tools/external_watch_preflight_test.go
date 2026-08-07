@@ -4,6 +4,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 func preflightArgs(command string) map[string]interface{} {
@@ -87,9 +88,9 @@ func TestPreflightAllowsPendingCheck(t *testing.T) {
 	}
 }
 
-// A status CLI that exits non-zero while its operation converges must still be
-// watchable: only diagnosable environment/definition failures block.
-func TestPreflightAllowsOrdinaryNonZeroExit(t *testing.T) {
+// A non-zero first check is not a valid durable contract. The agent can retry
+// or repair it in the foreground; the daemon must not freeze and repeat it.
+func TestPreflightRefusesOrdinaryNonZeroExit(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("SelfMind's production daemon runs on Linux")
 	}
@@ -98,8 +99,63 @@ func TestPreflightAllowsOrdinaryNonZeroExit(t *testing.T) {
 
 	command := "printf 'STILL RUNNING\\n'; exit 1"
 	verdict, err := preflightExternalWatch(preflightArgs(command), command, t.TempDir(), "SUCCEEDED", "FAILED", 10)
-	if err != nil || verdict != "" {
-		t.Fatalf("an ordinary non-zero status check must register: verdict=%q err=%v", verdict, err)
+	if err == nil || verdict != "" {
+		t.Fatalf("a non-zero status check must be repaired before registration: verdict=%q err=%v", verdict, err)
+	}
+	if !strings.Contains(err.Error(), "exits 0") {
+		t.Fatalf("error must state the clean-exit contract: %v", err)
+	}
+}
+
+func TestPreflightRefusesSwallowedScriptFailure(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("SelfMind's production daemon runs on Linux")
+	}
+	SetExecSandbox(false, false, false)
+	t.Cleanup(func() { SetExecSandbox(false, false, false) })
+
+	command := "printf 'Traceback (most recent call last):\\nKeyError: status\\n'; exit 0"
+	verdict, err := preflightExternalWatch(preflightArgs(command), command, t.TempDir(), "SUCCEEDED", "FAILED", 10)
+	if err == nil || verdict != "" {
+		t.Fatalf("a swallowed script failure must be rejected: verdict=%q err=%v", verdict, err)
+	}
+	if !strings.Contains(err.Error(), "check-definition") {
+		t.Fatalf("error must identify the invalid check definition: %v", err)
+	}
+}
+
+func TestPreflightRefusesEmptySuccessfulCheck(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("SelfMind's production daemon runs on Linux")
+	}
+	SetExecSandbox(false, false, false)
+	t.Cleanup(func() { SetExecSandbox(false, false, false) })
+
+	command := "true"
+	verdict, err := preflightExternalWatch(preflightArgs(command), command, t.TempDir(), "SUCCEEDED", "FAILED", 10)
+	if err == nil || verdict != "" {
+		t.Fatalf("an empty check cannot provide durable evidence: verdict=%q err=%v", verdict, err)
+	}
+}
+
+func TestPreflightRefusesCheckThatAlreadyTimesOut(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("SelfMind's production daemon runs on Linux")
+	}
+	SetExecSandbox(false, false, false)
+	t.Cleanup(func() { SetExecSandbox(false, false, false) })
+
+	command := "sleep 2; printf 'WORKING\\n'"
+	started := time.Now()
+	verdict, err := preflightExternalWatch(preflightArgs(command), command, t.TempDir(), "SUCCEEDED", "FAILED", 1)
+	if verdict != "" || err == nil {
+		t.Fatalf("over-budget check must be rejected: verdict=%q err=%v", verdict, err)
+	}
+	if !strings.Contains(err.Error(), "Split aggregate or multi-target checks") {
+		t.Fatalf("error must tell the agent how to make the check bounded: %v", err)
+	}
+	if time.Since(started) > 3*time.Second {
+		t.Fatalf("preflight did not enforce its budget: %s", time.Since(started))
 	}
 }
 
@@ -107,13 +163,13 @@ func TestPreflightBlockingClasses(t *testing.T) {
 	for _, class := range []string{
 		"credential_state_readonly", "sandbox_fs_denied", "permission",
 		"credential_missing", "credential_expired", "auth", "environment",
-		"syntax", "not_found",
+		"syntax", "not_found", "timeout", "check_definition",
 	} {
 		if !preflightBlockingClass(class) {
 			t.Fatalf("%s must block registration", class)
 		}
 	}
-	for _, class := range []string{"timeout", "network", "unknown", ""} {
+	for _, class := range []string{"network", "unknown", ""} {
 		if preflightBlockingClass(class) {
 			t.Fatalf("%s must not block registration", class)
 		}

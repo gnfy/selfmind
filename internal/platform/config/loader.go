@@ -530,6 +530,28 @@ type AgentConfig struct {
 	LLMRetryBase         string `mapstructure:"llm_retry_base" yaml:"llm_retry_base,omitempty"`
 	LLMRetryCap          string `mapstructure:"llm_retry_cap" yaml:"llm_retry_cap,omitempty"`
 	LLMStreamIdleTimeout string `mapstructure:"llm_stream_idle_timeout" yaml:"llm_stream_idle_timeout,omitempty"`
+	// ApprovalTriageTimeout bounds the cheap-model decision in smart approval
+	// mode. It is intentionally separate from provider transport timeouts: an
+	// unavailable judge must fail safe to a human ask without stalling the run.
+	ApprovalTriageTimeout string `mapstructure:"approval_triage_timeout" yaml:"approval_triage_timeout,omitempty"`
+}
+
+// DefaultApprovalTriageTimeout leaves enough room for reasoning-capable cheap
+// models while keeping smart approval a bounded foreground operation.
+const DefaultApprovalTriageTimeout = 30 * time.Second
+
+// ApprovalTriageTimeoutDuration parses approval_triage_timeout. Empty,
+// invalid, and non-positive values use the safe default.
+func (a AgentConfig) ApprovalTriageTimeoutDuration() time.Duration {
+	raw := strings.TrimSpace(a.ApprovalTriageTimeout)
+	if raw == "" {
+		return DefaultApprovalTriageTimeout
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil || d <= 0 {
+		return DefaultApprovalTriageTimeout
+	}
+	return d
 }
 
 type StorageConfig struct {
@@ -957,6 +979,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("agent.llm_retry_base", "300ms")
 	v.SetDefault("agent.llm_retry_cap", "30s")
 	v.SetDefault("agent.llm_stream_idle_timeout", "180s")
+	v.SetDefault("agent.approval_triage_timeout", "30s")
 	v.SetDefault("agent.action_tool_budget", 12)
 	v.SetDefault("agent.action_tool_budget_step", 6)
 	v.SetDefault("agent.action_tool_budget_limit", 64)
@@ -1089,6 +1112,7 @@ func (c *Config) Normalize() {
 	c.Gateway.Token = expandEnvRef(c.Gateway.Token)
 	c.Gateway.DrainTimeout = expandEnvRef(c.Gateway.DrainTimeout)
 	c.Gateway.PresenceIdleTimeout = expandEnvRef(c.Gateway.PresenceIdleTimeout)
+	c.Agent.ApprovalTriageTimeout = expandEnvRef(c.Agent.ApprovalTriageTimeout)
 	c.Gateway.PendingNotifyAfter = expandEnvRef(c.Gateway.PendingNotifyAfter)
 	c.Gateway.OutboundRetention = expandEnvRef(c.Gateway.OutboundRetention)
 	c.Gateway.OutboundWebhookURL = expandEnvRef(c.Gateway.OutboundWebhookURL)

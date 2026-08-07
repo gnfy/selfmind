@@ -30,12 +30,31 @@ import (
 //	non-terminal       → register the watch.
 const preflightMaxTimeout = 30 * time.Second
 
+type externalWatchPreflightPatterns struct {
+	Success         string
+	Failure         string
+	Target          string
+	TerminalSuccess string
+	TerminalFailure string
+}
+
 // preflightExternalWatch returns a non-empty tool reply when the watch must NOT
 // be registered but the outcome is already known and benign (observed success).
 // Anything the agent must fix comes back as an error.
 func preflightExternalWatch(
 	args map[string]interface{},
 	command, cwd, successPattern, failurePattern string,
+	commandTimeoutSeconds int,
+) (string, error) {
+	return preflightExternalWatchPatterns(args, command, cwd, externalWatchPreflightPatterns{
+		Success: successPattern, Failure: failurePattern,
+	}, commandTimeoutSeconds)
+}
+
+func preflightExternalWatchPatterns(
+	args map[string]interface{},
+	command, cwd string,
+	patterns externalWatchPreflightPatterns,
 	commandTimeoutSeconds int,
 ) (string, error) {
 	timeout := time.Duration(commandTimeoutSeconds) * time.Second
@@ -57,6 +76,13 @@ func preflightExternalWatch(
 		ToolProfile:    ToolProfile{Class: ToolExecutionStandard, MaxTimeout: timeout, HeartbeatInterval: time.Second},
 	}, args)
 	output := strings.TrimSpace(RedactSensitive(result.Output))
+	if strings.EqualFold(strings.TrimSpace(result.FailureClass), "timeout") {
+		return "", fmt.Errorf(
+			"watch not registered: its first check exceeded the %s registration budget. "+
+				"A durable watcher repeats the same check unattended, so a command that is already too slow here would monopolize every poll. "+
+				"Split aggregate or multi-target checks into independent bounded checks, or replace the script with one status query that completes within the budget. Detail: %s",
+			timeout, truncatePreflight(firstNonEmptyPreflight(output, errText(runErr))))
+	}
 
 	// L0/L1: the check could not run, or is not a valid check. The typed class is
 	// carried through verbatim so the model reads the same diagnosis a foreground
@@ -69,22 +95,70 @@ func preflightExternalWatch(
 			class, truncatePreflight(firstNonEmptyPreflight(output, errText(runErr))))
 	}
 
-	// L2/L3: the check ran. Only a clean exit may declare success.
-	if result.ExitCode == 0 && preflightMatches(successPattern, output) {
+	// A durable watcher has no model in its polling loop. Registration therefore
+	// requires one clean execution now; a non-zero/failed first check is evidence
+	// that the frozen command is not yet safe to repeat unattended. This also
+	// prevents an unknown script failure from being mistaken for a pending state.
+	if runErr != nil || result.ExitCode != 0 {
+		class := strings.TrimSpace(result.FailureClass)
+		if class == "" {
+			class = ClassifyToolError("watch_external", runErr, output)
+		}
+		return "", fmt.Errorf(
+			"watch not registered: its first check did not complete successfully (exit=%d, class=%s). "+
+				"Detail: %s\nFix or retry the foreground check until it exits 0, then register the durable watch",
+			result.ExitCode, firstNonEmptyPreflight(class, "unknown"),
+			truncatePreflight(firstNonEmptyPreflight(output, errText(runErr))))
+	}
+	if output == "" {
+		return "", fmt.Errorf(
+			"watch not registered: its first check exited 0 but produced no observable state. " +
+				"Make the check print one bounded status value that the registered patterns can evaluate")
+	}
+	if class := ClassifyToolError("watch_external", nil, output); class == "check_definition" {
+		return "", fmt.Errorf(
+			"watch not registered: its first check output shows a check-definition failure. Detail: %s\n%s",
+			truncatePreflight(output), errorClassHints[class])
+	}
+
+	// V2 terminal failures are authoritative and evaluated before success or a
+	// desired handoff state. V1 keeps its historical success-first behavior.
+	if patterns.TerminalFailure != "" && preflightMatches(patterns.TerminalFailure, output) {
+		return "", preflightObservedFailure(output)
+	}
+	if result.ExitCode == 0 && preflightMatches(patterns.TerminalSuccess, output) {
+		return preflightObservedSuccess(output), nil
+	}
+	if result.ExitCode == 0 && preflightMatches(patterns.Target, output) {
 		return fmt.Sprintf(
-			"Watch not registered: the check already reports the success condition, so there is nothing to wait for. "+
-				"Observed output: %s\nTreat the operation as complete and finish the task normally.",
+			"Watch not registered: the check already reports the desired handoff state. Observed output: %s\nContinue from that state in the current run.",
 			truncatePreflight(output)), nil
 	}
-	if failurePattern != "" && preflightMatches(failurePattern, output) {
-		return "", fmt.Errorf(
-			"watch not registered: its first check already matches the failure pattern. "+
-				"Observed output: %s\nThis is the case a background watcher must never decide alone — the check may be "+
-				"reporting its own inability to query rather than a real failure. Verify the external state directly now, "+
-				"while you can still inspect logs and credentials, before recording any outcome",
-			truncatePreflight(output))
+
+	// L2/L3 V1 compatibility: only a clean exit may declare success.
+	if result.ExitCode == 0 && preflightMatches(patterns.Success, output) {
+		return preflightObservedSuccess(output), nil
+	}
+	if patterns.Failure != "" && preflightMatches(patterns.Failure, output) {
+		return "", preflightObservedFailure(output)
 	}
 	return "", nil
+}
+
+func preflightObservedSuccess(output string) string {
+	return fmt.Sprintf(
+		"Watch not registered: the check already reports the success condition, so there is nothing to wait for. "+
+			"Observed output: %s\nTreat the operation as complete and finish the task normally.",
+		truncatePreflight(output))
+}
+
+func preflightObservedFailure(output string) error {
+	return fmt.Errorf(
+		"watch not registered: its first check already matches the failure pattern. "+
+			"Observed output: %s\nThis is the case a background watcher must never decide alone — the check may be "+
+			"reporting its own inability to query rather than a real failure. Verify the external state directly now, "+
+			"while you can still inspect logs and credentials, before recording any outcome",
+		truncatePreflight(output))
 }
 
 // preflightBlockingClass reports whether a failure class means "registering this
@@ -94,11 +168,12 @@ func preflightBlockingClass(class string) bool {
 	switch strings.ToLower(strings.TrimSpace(class)) {
 	case "credential_state_readonly", "sandbox_fs_denied", "permission",
 		"credential_missing", "credential_expired", "auth", "environment",
-		"syntax", "not_found":
+		"syntax", "not_found", "timeout", "check_definition":
 		return true
 	default:
-		// timeout / network / unknown: a status check may legitimately be slow or
-		// exit non-zero while the external operation converges.
+		// Non-zero network/unknown failures are rejected by the clean-exit
+		// contract above. This helper identifies typed failures that are terminal
+		// even before that generic gate.
 		return false
 	}
 }

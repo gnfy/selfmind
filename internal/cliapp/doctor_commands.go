@@ -66,9 +66,10 @@ func (a *App) doctor(args []string) int {
 	ctx, cancel := contextWithTimeout(a.ctx, 10*time.Second)
 	defer cancel()
 
-	// Resolve the local CLI owner identity (lazily creates it, exactly like any
-	// other CLI invocation). Diagnostics are scoped to this person.
-	identity, err := store.ResolveOrCreateAccount(ctx, a.tenantID(), "cli", "local", "")
+	// Diagnostics are read-only. Resolve the same platform identity used by
+	// normal CLI requests, but never create a phantom person merely by running
+	// doctor on a fresh or differently configured installation.
+	identity, err := resolveDoctorIdentity(ctx, store, a.tenantID(), platformUserID())
 	if err != nil {
 		fmt.Fprintf(a.stderr, "doctor: cannot resolve identity: %v\n", err)
 		return 1
@@ -108,6 +109,21 @@ func (a *App) doctor(args []string) int {
 		return 1
 	}
 	return 0
+}
+
+func resolveDoctorIdentity(ctx context.Context, store *control.Store, tenantID, userID string) (*control.IdentityContext, error) {
+	identity, err := store.ResolveAccount(ctx, tenantID, "cli", userID)
+	if err != nil {
+		return nil, err
+	}
+	if identity != nil {
+		return identity, nil
+	}
+	return &control.IdentityContext{
+		TenantID:       tenantID,
+		Platform:       "cli",
+		PlatformUserID: userID,
+	}, nil
 }
 
 func formatModelRoleProbes(probes []appcore.ModelRoleProbe) (string, bool) {
@@ -171,7 +187,13 @@ func (a *App) gatewayStatusLine() string {
 	}
 	manager := gatewayrt.NewManager(a.gatewayDataDir(), "")
 	if rec, ok := manager.RunningRecord(); ok {
+		if rec.HeartbeatStale(time.Now()) {
+			return withService(fmt.Sprintf("unreachable (pid=%d heartbeat stale since=%s); inspect daemon logs", rec.PID, rec.HeartbeatAt))
+		}
 		return withService(fmt.Sprintf("running (pid=%d addr=%s), HTTP status unavailable", rec.PID, rec.Addr))
+	}
+	if rec, err := gatewayrt.ReadStatusRecord(manager.Paths.StatePath); err == nil && rec.State == "crashed" {
+		return withService(fmt.Sprintf("crashed (instance=%s reason=%s last_heartbeat=%s)", rec.InstanceID, rec.ExitReason, rec.HeartbeatAt))
 	}
 	return withService("not running")
 }

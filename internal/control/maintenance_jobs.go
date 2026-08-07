@@ -349,6 +349,41 @@ func (s *Store) BlockMaintenanceJobForRoute(ctx context.Context, tenantID, runID
 	return n > 0, err
 }
 
+// BlockMaintenanceJobAfterRetries parks a retryable job after its bounded
+// retry budget is exhausted. Unlike SkipMaintenanceJob, this state remains
+// visible in maintenance health and is eligible for the existing restart
+// probe after the operator repairs or changes the provider. The last concrete
+// provider error is preserved instead of being replaced by a generic limit.
+func (s *Store) BlockMaintenanceJobAfterRetries(ctx context.Context, tenantID, runID string, analyzerVersion int, lastError string) (bool, error) {
+	if analyzerVersion <= 0 {
+		analyzerVersion = 1
+	}
+	if len(lastError) > 500 {
+		lastError = lastError[:500]
+	}
+	if lastError == "" {
+		lastError = "maintenance retries exhausted without a recorded provider error"
+	}
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE maintenance_jobs
+		 SET status = ?, blocked_route_id = '',
+		     last_error = CASE WHEN TRIM(COALESCE(last_error, '')) = '' THEN ? ELSE last_error END,
+		     next_retry_at = 0, updated_at = ?
+		 WHERE tenant_id = ? AND run_id = ? AND analyzer_version = ?
+		   AND status IN (?, ?)`,
+		MaintenanceJobBlockedProvider, lastError, time.Now().Unix(),
+		normalizeTenant(tenantID), runID, analyzerVersion,
+		MaintenanceJobPending, MaintenanceJobFailed)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	if err == nil && n > 0 {
+		s.recordMaintenanceAttempt(ctx, tenantID, runID, analyzerVersion, "blocked_retry_limit", lastError, "")
+	}
+	return n > 0, err
+}
+
 // ResetLegacyBlockedMaintenanceJobs grants one restart probe only to rows
 // created before route-aware quota circuits (or fatal errors without a route).
 // Route-bound quota jobs must survive daemon restarts and follow their durable

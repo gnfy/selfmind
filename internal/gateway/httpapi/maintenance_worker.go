@@ -181,7 +181,7 @@ func (d *Server) runMaintenancePassAt(ctx context.Context, now time.Time) {
 			continue
 		}
 		if job.Attempts >= maintenanceMaxAttempts {
-			_ = d.Control.SkipMaintenanceJob(ctx, job.TenantID, job.RunID, job.AnalyzerVersion, "maintenance retry limit reached")
+			_, _ = d.Control.BlockMaintenanceJobAfterRetries(ctx, job.TenantID, job.RunID, job.AnalyzerVersion, job.LastError)
 			continue
 		}
 		var payload postRunJobPayload
@@ -378,7 +378,7 @@ func (d *Server) runSkillReviewPass(ctx context.Context) {
 			return
 		}
 		if job.Attempts >= maintenanceMaxAttempts {
-			_ = d.Control.SkipMaintenanceJob(ctx, job.TenantID, job.RunID, job.AnalyzerVersion, "review retry limit reached")
+			_, _ = d.Control.BlockMaintenanceJobAfterRetries(ctx, job.TenantID, job.RunID, job.AnalyzerVersion, job.LastError)
 			continue
 		}
 		claimed, err := d.Control.ClaimMaintenanceJob(ctx, job.TenantID, job.RunID, job.AnalyzerVersion)

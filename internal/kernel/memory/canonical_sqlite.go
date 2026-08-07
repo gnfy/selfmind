@@ -365,6 +365,14 @@ func applyIntakeWrite(db *sql.DB, w IntakeWrite) error {
 	}
 
 	decision := strings.ToUpper(strings.TrimSpace(w.Decision))
+	if decision == "REINFORCE" || decision == "SUPERSEDE" || decision == "CONFLICT" {
+		if _, _, ok := findActive(w.RefContent); !ok {
+			// The proposal referred to a belief that vanished before this
+			// transaction. Do not reinterpret that stale reference as ADD.
+			_, _ = tx.Exec(`DELETE FROM memory_observations WHERE id = ?`, obsID)
+			return tx.Commit()
+		}
+	}
 	switch decision {
 	case "REINFORCE":
 		if id, conf, ok := findActive(w.RefContent); ok {
@@ -379,8 +387,7 @@ func applyIntakeWrite(db *sql.DB, w IntakeWrite) error {
 			}
 			return tx.Commit()
 		}
-		decision = "ADD" // ref vanished: degrade like the policy layer does
-		fallthrough
+		return tx.Commit()
 
 	case "ADD", "":
 		if id, conf, ok := findActive(content); ok {

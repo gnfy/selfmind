@@ -139,3 +139,24 @@ func TestClassifyExternalWatchOutput(t *testing.T) {
 		t.Fatalf("failure with non-zero exit classified as %q", got)
 	}
 }
+
+func TestClassifyExternalWatchOutputV2PrioritizesTerminalFailure(t *testing.T) {
+	watch := control.ExternalWatch{
+		SpecVersion:            2,
+		TargetPattern:          "PENDING_APPROVAL",
+		TerminalSuccessPattern: "SUCCEEDED",
+		TerminalFailurePattern: "FAILED",
+	}
+	if got := classifyExternalWatchOutput(watch, "PENDING_APPROVAL\nFAILED\n", 0); got != control.ExternalWatchFailed {
+		t.Fatalf("failure and target classified as %q", got)
+	}
+	if got := classifyExternalWatchOutput(watch, "PENDING_APPROVAL\n", 0); got != control.ExternalWatchSucceeded {
+		t.Fatalf("target classified as %q", got)
+	}
+	if got := classifyExternalWatchOutput(watch, "SUCCEEDED\n", 0); got != control.ExternalWatchSucceeded {
+		t.Fatalf("terminal success classified as %q", got)
+	}
+	if got := classifyExternalWatchOutput(watch, "PENDING_APPROVAL\n", 1); got != "" {
+		t.Fatalf("non-clean target classified as %q", got)
+	}
+}

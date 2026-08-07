@@ -291,6 +291,18 @@ func TestRecallSkipsControlCommandsAndShortMessages(t *testing.T) {
 	}
 }
 
+func TestRecallDoesNotSkipShortExplicitContinuation(t *testing.T) {
+	searcher := &countingSessionSearcher{}
+	engine := NewRecallEngine(nil, searcher, nil)
+	_, stats := engine.Select(context.Background(), "default", "person", "task-current", "继续")
+	if stats.Skipped == "short_message" {
+		t.Fatalf("an explicit continuation must not be skipped solely for length: %+v", stats)
+	}
+	if searcher.count() == 0 {
+		t.Fatal("an explicit continuation should reach bounded recall sources")
+	}
+}
+
 // scriptedExpander is a fake semantic_recall expander.
 type scriptedExpander struct {
 	result string

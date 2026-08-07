@@ -163,6 +163,25 @@ func TestTriageDiagnosticsPartitionsAndAges(t *testing.T) {
 	}
 }
 
+func TestTriageTelemetrySinkReceivesRedactedBoundedEvent(t *testing.T) {
+	var gotTenant, gotPerson string
+	var gotOutcome TriageOutcome
+	var gotError string
+	stop := SetTriageTelemetrySink(func(event TriageAuditEvent) {
+		gotTenant, gotPerson, gotOutcome, gotError = event.TenantID, event.PersonID, event.Outcome, event.RedactedError
+	})
+	defer stop()
+
+	RecordTriageOutcome("tenant-sink", "person-sink", TriageOutcomeUnavailable,
+		errors.New("provider failed with api_key: sk-testsecret123456789"))
+	if gotTenant != "tenant-sink" || gotPerson != "person-sink" || gotOutcome != TriageOutcomeUnavailable {
+		t.Fatalf("sink identity/outcome = %q %q %q", gotTenant, gotPerson, gotOutcome)
+	}
+	if strings.Contains(gotError, "sk-testsecret") || gotError == "" {
+		t.Fatalf("sink error was not redacted: %q", gotError)
+	}
+}
+
 // TestApprovalChangeSummaryCountsWithoutContent pins that the summary carries
 // counts only — never patch or file content, which approval payloads redact.
 func TestApprovalChangeSummaryCountsWithoutContent(t *testing.T) {

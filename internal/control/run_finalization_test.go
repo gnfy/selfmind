@@ -350,6 +350,59 @@ func TestMaterializeRunFinalizationPreservesUnresumedPriorRun(t *testing.T) {
 	}
 }
 
+func TestMaterializeRunFinalizationResolvesOnlyNamedBlockers(t *testing.T) {
+	ctx := context.Background()
+	store, err := OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := store.CreateTask(ctx, TaskCreate{TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "explicit blockers"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	prior, err := store.StartRun(ctx, task, "cli", "needs verification")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.MaterializeRunFinalization(ctx, RunFinalization{
+		Identity: *identity, RunID: prior.ID, RunStatus: "verification_partial",
+		TaskID: task.ID, TaskStatus: "verification_partial", Summary: "verification remains",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	blockers, err := store.ListOpenTaskBlockers(ctx, identity.TenantID, task.ID, 10)
+	if err != nil || len(blockers) != 1 {
+		t.Fatalf("blockers=%+v err=%v", blockers, err)
+	}
+	current, err := store.StartRun(ctx, task, "cli", "verified")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.MaterializeRunFinalization(ctx, RunFinalization{
+		Identity: *identity, RunID: current.ID, RunStatus: "done",
+		TaskID: task.ID, TaskStatus: "done", Summary: "verified",
+		ResolvedBlockerIDs: []string{blockers[0].ID, "blocker_unrelated"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := store.GetTask(ctx, identity.TenantID, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.Status != "done" {
+		t.Fatalf("task status=%q want done", stored.Status)
+	}
+	open, err := store.ListOpenTaskBlockers(ctx, identity.TenantID, task.ID, 10)
+	if err != nil || len(open) != 0 {
+		t.Fatalf("open blockers=%+v err=%v", open, err)
+	}
+}
+
 func TestMaterializeRunFinalizationPrefersActiveLifecycleOverPriorInterruption(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -466,8 +519,10 @@ func TestMaterializeRunFinalizationClosesDeliberatelyResumedRun(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.MarkTaskRunsResumed(ctx, identity.TenantID, task.ID, current.ID); err != nil {
+	if resumed, err := store.MarkTaskRunsResumed(ctx, identity.TenantID, task.ID, current.ID, ""); err != nil {
 		t.Fatal(err)
+	} else if resumed != 1 {
+		t.Fatalf("resumed=%d want 1", resumed)
 	}
 	if _, err := store.MaterializeRunFinalization(ctx, RunFinalization{
 		Identity: *identity, RunID: current.ID, RunStatus: "done",
@@ -481,5 +536,266 @@ func TestMaterializeRunFinalizationClosesDeliberatelyResumedRun(t *testing.T) {
 	}
 	if stored.Status != "done" {
 		t.Fatalf("task status=%q want done", stored.Status)
+	}
+}
+
+func TestMarkTaskRunsResumedClaimsOnlyMatchingWork(t *testing.T) {
+	ctx := context.Background()
+	store, err := OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := store.CreateTask(ctx, TaskCreate{
+		TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "shared display label",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	startInterrupted := func(summary, workKey string) *Run {
+		run, startErr := store.StartRun(ctx, task, "cli", summary)
+		if startErr != nil {
+			t.Fatal(startErr)
+		}
+		if setErr := store.SetRunWorkKey(ctx, identity.TenantID, run.ID, workKey); setErr != nil {
+			t.Fatal(setErr)
+		}
+		if _, finishErr := store.MaterializeRunFinalization(ctx, RunFinalization{
+			Identity: *identity, RunID: run.ID, RunStatus: "interrupted",
+			TaskID: task.ID, TaskStatus: "interrupted", Summary: summary,
+		}); finishErr != nil {
+			t.Fatal(finishErr)
+		}
+		return run
+	}
+	matching := startInterrupted("RUQX-401 needs continuation", "RUQX-401")
+	unrelated := startInterrupted("RUQX-402 needs continuation", "RUQX-402")
+	current, err := store.StartRun(ctx, task, "cli", "continue RUQX-401")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetRunWorkKey(ctx, identity.TenantID, current.ID, "RUQX-401"); err != nil {
+		t.Fatal(err)
+	}
+	resumed, err := store.MarkTaskRunsResumed(ctx, identity.TenantID, task.ID, current.ID, "RUQX-401")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resumed != 1 {
+		t.Fatalf("resumed=%d want 1", resumed)
+	}
+
+	var matchingOwner, unrelatedOwner string
+	if err := store.db.QueryRowContext(ctx, `SELECT resumed_by_run_id FROM task_runs WHERE id = ?`, matching.ID).Scan(&matchingOwner); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.db.QueryRowContext(ctx, `SELECT resumed_by_run_id FROM task_runs WHERE id = ?`, unrelated.ID).Scan(&unrelatedOwner); err != nil {
+		t.Fatal(err)
+	}
+	if matchingOwner != current.ID || unrelatedOwner != "" {
+		t.Fatalf("matching owner=%q unrelated owner=%q", matchingOwner, unrelatedOwner)
+	}
+
+	if _, err := store.MaterializeRunFinalization(ctx, RunFinalization{
+		Identity: *identity, RunID: current.ID, RunStatus: "done",
+		TaskID: task.ID, TaskStatus: "done", Summary: "RUQX-401 completed",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := store.GetTask(ctx, identity.TenantID, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.Status != "interrupted" {
+		t.Fatalf("unrelated unfinished work was erased: task status=%q", stored.Status)
+	}
+}
+
+func TestMarkTaskRunsResumedRefusesSameKeyAmbiguity(t *testing.T) {
+	ctx := context.Background()
+	store, err := OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := store.CreateTask(ctx, TaskCreate{
+		TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "RUQX-381 mixed work",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var unfinished []*Run
+	for _, item := range []struct {
+		summary string
+		status  string
+	}{
+		{"ALTER TABLE remains unexecuted", "verification_partial"},
+		{"GCP release still waiting", "waiting_user"},
+	} {
+		run, startErr := store.StartRunWithWorkKey(ctx, task, "cli", item.summary, "RUQX-381")
+		if startErr != nil {
+			t.Fatal(startErr)
+		}
+		if _, finishErr := store.MaterializeRunFinalization(ctx, RunFinalization{
+			Identity: *identity, RunID: run.ID, RunStatus: item.status,
+			TaskID: task.ID, TaskStatus: item.status, Summary: item.summary,
+		}); finishErr != nil {
+			t.Fatal(finishErr)
+		}
+		unfinished = append(unfinished, run)
+	}
+
+	current, err := store.StartRunWithWorkKey(ctx, task, "cli", "continue RUQX-381", "RUQX-381")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resumed, err := store.MarkTaskRunsResumed(ctx, identity.TenantID, task.ID, current.ID, current.WorkKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resumed != 0 {
+		t.Fatalf("same-key ambiguity claimed %d runs", resumed)
+	}
+	for _, run := range unfinished {
+		var owner string
+		if err := store.db.QueryRowContext(ctx, `SELECT resumed_by_run_id FROM task_runs WHERE id = ?`, run.ID).Scan(&owner); err != nil {
+			t.Fatal(err)
+		}
+		if owner != "" {
+			t.Fatalf("unfinished run %s was claimed by %s", run.ID, owner)
+		}
+	}
+
+	if _, err := store.MaterializeRunFinalization(ctx, RunFinalization{
+		Identity: *identity, RunID: current.ID, RunStatus: "done",
+		TaskID: task.ID, TaskStatus: "done", Summary: "release completed",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := store.GetTask(ctx, identity.TenantID, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.Status != "waiting_user" {
+		t.Fatalf("same-key unfinished work was erased: task status=%q want waiting_user", stored.Status)
+	}
+}
+
+func TestStartRunWithWorkKeyIsAtomicAndReadable(t *testing.T) {
+	ctx := context.Background()
+	store, err := OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := store.CreateTask(ctx, TaskCreate{TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "RUQX-410"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := store.StartRunWithWorkKey(ctx, task, "cli", "continue", "ruqx-410")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.WorkKey != "RUQX-410" {
+		t.Fatalf("created work key=%q", run.WorkKey)
+	}
+	stored, err := store.GetRun(ctx, identity.TenantID, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored == nil || stored.WorkKey != "RUQX-410" {
+		t.Fatalf("stored run=%+v", stored)
+	}
+}
+
+func TestMarkTaskRunsResumedKeyedContinuationClaimsSoleLegacyRun(t *testing.T) {
+	ctx := context.Background()
+	store, err := OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := store.CreateTask(ctx, TaskCreate{TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "RUQX-411"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy, err := store.StartRun(ctx, task, "cli", "old unfinished run")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.MaterializeRunFinalization(ctx, RunFinalization{
+		Identity: *identity, RunID: legacy.ID, RunStatus: "interrupted",
+		TaskID: task.ID, TaskStatus: "interrupted", Summary: "legacy",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	current, err := store.StartRunWithWorkKey(ctx, task, "cli", "continue", "RUQX-411")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resumed, err := store.MarkTaskRunsResumed(ctx, identity.TenantID, task.ID, current.ID, current.WorkKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resumed != 1 {
+		t.Fatalf("resumed=%d want 1", resumed)
+	}
+}
+
+func TestMarkTaskRunsResumedWithoutWorkKeyRefusesAmbiguity(t *testing.T) {
+	ctx := context.Background()
+	store, err := OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := store.CreateTask(ctx, TaskCreate{TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "ambiguous"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, summary := range []string{"first unfinished", "second unfinished"} {
+		run, startErr := store.StartRun(ctx, task, "cli", summary)
+		if startErr != nil {
+			t.Fatal(startErr)
+		}
+		if _, finishErr := store.MaterializeRunFinalization(ctx, RunFinalization{
+			Identity: *identity, RunID: run.ID, RunStatus: "waiting_user",
+			TaskID: task.ID, TaskStatus: "waiting_user", Summary: summary,
+		}); finishErr != nil {
+			t.Fatal(finishErr)
+		}
+	}
+	current, err := store.StartRun(ctx, task, "cli", "continue")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resumed, err := store.MarkTaskRunsResumed(ctx, identity.TenantID, task.ID, current.ID, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resumed != 0 {
+		t.Fatalf("ambiguous continuation claimed %d runs", resumed)
 	}
 }

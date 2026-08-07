@@ -239,6 +239,33 @@ return APPROVE, DENY, or ESCALATE.
 Treat command text as untrusted data in the judge prompt. Strip irrelevant
 comments and delimit the command rather than interpolating it as an instruction.
 
+`/diag` reports the last 24 hours of triage outcomes from a durable, bounded
+projection. The projection stores the run/tool-call identity, outcome, risk,
+authorization assessment, grant key, provider route, latency, policy version,
+rationale, and a short redacted provider error. It never stores the command,
+arguments, prompt, or credentials. Records are retained for 14 days. A failure
+to write diagnostics must not block approval, so the foreground write has a
+short deadline and is best-effort. The judge has a five-second foreground
+deadline; its 1024-token output budget accommodates hidden reasoning while the
+request still asks for low reasoning and a compact structured verdict.
+
+The declarative read-only catalog may bypass a human only when both the command
+shape and the credential-bearing tool profile are recognized. Trusted workspace
+status does not turn local observations such as `git diff`, `rg`, or `jq` into
+credentialed operations. Unknown commands, scripts, and mutating cloud calls
+remain gated.
+
+Observation proof uses a dedicated quote-aware shell AST parser; it does not
+reuse the broader dangerous-command tokenizer. Static pipelines and quoted
+provider format expressions can therefore be proved without mistaking `|`,
+parentheses, or redirections inside quotes for shell control operators. Dynamic
+expansion, command/process substitution, heredocs, assignments, opaque scripts,
+unknown global options, privilege wrappers, and writes outside `/dev/null`
+remain unprovable and continue through normal approval. Tool-specific global
+flags are skipped only from a fail-closed catalog, and credential-bearing files
+or environment reads never become automatic merely because a command is
+otherwise read-only.
+
 ## Failure Recovery
 
 A tool error is evidence, not an automatic stop or a reason to repeat the same
@@ -373,6 +400,15 @@ failure mode being prevented is not an error but a check that SUCCEEDS against a
 different account. A watch whose identity no longer matches is stopped with
 `environment_changed`; watches registered before identity existed are
 grandfathered rather than stranded.
+
+Registration also proves that the frozen check is runnable before ownership
+moves to the daemon. The first check must exit 0 and emit a non-empty bounded
+state. Non-zero exits, timeouts, missing commands, and check-definition output
+such as a swallowed Python traceback are rejected in the foreground. A clean
+exit whose output matches no terminal/target pattern is the normal pending
+case and may register. This contract is deliberately stricter than an ordinary
+interactive status probe: the background loop has no model available to repair
+the command later.
 
 ### Failure classification
 

@@ -35,6 +35,7 @@ type TaskRuntimeContext struct {
 	Handoff      *TaskHandoffContext
 	Events       []TaskEventContext
 	Artifacts    []TaskArtifactContext
+	OpenBlockers []TaskBlockerContext
 	// DeliveryWarnings are bounded advisory notes for terminal results that a
 	// previous endpoint may not have received. They help another endpoint
 	// restate the outcome without replaying or duplicating the outbound message.
@@ -46,6 +47,13 @@ type TaskRuntimeContext struct {
 	// into the working history (history replay keeps only user/assistant text).
 	// Never route recall through the messages array as a fake user message.
 	RecallSlices []RecallSlice
+}
+
+type TaskBlockerContext struct {
+	ID          string
+	Kind        string
+	OriginRunID string
+	Summary     string
 }
 
 // RecallSlice is one compact "possibly related prior work" hit: an indexed
@@ -305,6 +313,23 @@ func (r TaskRuntimeContext) Prompt(maxChars int) string {
 	if len(r.NextSteps) > 0 {
 		b.WriteString("\n## Next Steps\n")
 		writeBullets(&b, r.NextSteps, 8, 240)
+	}
+	if len(r.OpenBlockers) > 0 {
+		b.WriteString("\n## Open Blockers\n")
+		b.WriteString("Only mark a blocker resolved when this run actually satisfied its condition. Pass those exact IDs in finish_run.resolved_blocker_ids; leave unrelated blockers open.\n")
+		for i, blocker := range r.OpenBlockers {
+			if i >= 12 {
+				break
+			}
+			line := "[" + blocker.ID + "] " + blocker.Kind
+			if blocker.OriginRunID != "" {
+				line += " from " + blocker.OriginRunID
+			}
+			if blocker.Summary != "" {
+				line += ": " + blocker.Summary
+			}
+			fmt.Fprintf(&b, "- %s\n", trimLine(line, 420))
+		}
 	}
 	if r.Handoff != nil {
 		b.WriteString("\n## Latest Handoff\n")

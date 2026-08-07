@@ -132,21 +132,19 @@ func looksLikeAffirmativeContinuation(input string) bool {
 	}
 }
 
-func (c *RunCoordinator) withResumeContext(ctx context.Context, identity *control.IdentityContext, task *control.Task, run *control.Run, intent router.IntentResult, explicitResume bool, input string) string {
+func (c *RunCoordinator) withResumeContext(ctx context.Context, identity *control.IdentityContext, task *control.Task, run *control.Run, intent router.IntentResult, explicitResume bool, workKey, input string) string {
 	if c == nil || c.srv == nil || c.srv.Control == nil || identity == nil || task == nil || (!explicitResume && intent.Intent != router.IntentContinue) {
 		return input
 	}
 	store := c.srv.Control
-	handoff, _ := store.LatestHandoff(ctx, task.ID)
-	events, _ := store.ListTaskEvents(ctx, task.ID, 8)
-	if handoff == nil && len(events) == 0 {
-		return input
-	}
 	runID := ""
+	resumedRuns := int64(0)
 	if run != nil {
 		runID = run.ID
-		_ = store.MarkTaskRunsResumed(ctx, identity.TenantID, task.ID, run.ID)
+		resumedRuns, _ = store.MarkTaskRunsResumed(ctx, identity.TenantID, task.ID, run.ID, workKey)
 	}
+	handoff, _ := store.LatestHandoff(ctx, task.ID)
+	events, _ := store.ListTaskEvents(ctx, task.ID, 8)
 	_, _ = store.AppendEvent(ctx, control.Event{
 		TaskID:     task.ID,
 		RunID:      runID,
@@ -156,9 +154,14 @@ func (c *RunCoordinator) withResumeContext(ctx context.Context, identity *contro
 		Payload: mustJSON(map[string]interface{}{
 			"reason":            intent.Reason,
 			"confidence":        intent.Confidence,
-			"resumes_task_runs": true,
+			"resumes_task_runs": resumedRuns > 0,
+			"resumed_run_count": resumedRuns,
+			"work_key":          strings.ToUpper(strings.TrimSpace(workKey)),
 		}),
 	})
+	if handoff == nil && len(events) == 0 {
+		return input
+	}
 	if kernel.HasLoopResumeMessages(ctx) {
 		return input
 	}

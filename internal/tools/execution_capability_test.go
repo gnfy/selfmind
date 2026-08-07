@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -130,5 +131,44 @@ func TestExecutionCapabilityMiddlewareUsesExistingGrantWithoutApproval(t *testin
 		"command":    "curl https://example.test",
 	}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestTrustedWorkspaceSelectsCredentialsOnlyForMatchingTools(t *testing.T) {
+	withExecSandboxPolicy(t, true, true, false)
+	cleanup := SetExecutionScope("person-trusted-credentials", ExecutionScope{
+		TenantID:    "tenant-trusted",
+		PersonID:    "person-trusted-credentials",
+		WorkspaceID: "workspace-trusted",
+		TrustLevel:  executionenv.TrustTrusted,
+	})
+	defer cleanup()
+
+	executor := ExecutionCapabilityMiddleware()(func(args map[string]interface{}) (string, error) {
+		allowed, _ := args[credentialReadArgKey].(bool)
+		return fmt.Sprintf("credentials=%t", allowed), nil
+	})
+	local, err := executor(map[string]interface{}{
+		"_tenant_id": "person-trusted-credentials",
+		"_tool_name": "terminal",
+		"command":    "git diff --stat",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if local != "credentials=false" {
+		t.Fatalf("local observation unexpectedly received operator credentials: %s", local)
+	}
+
+	cloud, err := executor(map[string]interface{}{
+		"_tenant_id": "person-trusted-credentials",
+		"_tool_name": "terminal",
+		"command":    "gcloud projects get-iam-policy demo-project",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cloud != "credentials=true" {
+		t.Fatalf("credential-bearing CLI did not receive operator credentials: %s", cloud)
 	}
 }

@@ -2,6 +2,7 @@ package kernel
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"selfmind/internal/kernel/llm"
@@ -34,6 +35,36 @@ func TestBreakdownFromSections(t *testing.T) {
 	stable, volatile := StableVolatileTokens(sections)
 	if stable != 300 || volatile != 430 {
 		t.Fatalf("stable/volatile split wrong: %d/%d", stable, volatile)
+	}
+}
+
+func TestSplitRuntimePromptSectionsAndProviderCallBreakdown(t *testing.T) {
+	runtimePrompt := strings.Join([]string{
+		"# SELECTED RUNTIME CONTEXT",
+		"## Workspace",
+		"workspace_root: /repo",
+		"# DURABLE TASK CONTEXT",
+		"status: in_progress",
+		"## Relevant Artifacts",
+		"- report.json",
+		"## Semantic Recall",
+		"- canonical mem_1: preferred report format",
+		"## Selected Indexed Memory",
+		"- user: concise replies",
+	}, "\n")
+	sections := append([]PromptSection{
+		newPromptSection("identity", "stable persona", true),
+	}, SplitRuntimePromptSections(runtimePrompt)...)
+	payload := ProviderCallContextBreakdown(sections, []llm.Message{
+		{Role: "system", Content: "ignored"},
+		{Role: "user", Content: "prepare report"},
+		{Role: "tool", Content: "bounded command output"},
+	}, []llm.ToolDefinition{{Name: "read_file", Description: "Read one file"}})
+	for _, key := range []string{"stable_system", "tool_schemas", "history", "current_tool_results", "recall", "workspace", "artifacts", "memory", "task_runtime", "estimated_total"} {
+		value, ok := payload[key].(int)
+		if !ok || value <= 0 {
+			t.Fatalf("expected positive %s in %+v", key, payload)
+		}
 	}
 }
 

@@ -59,6 +59,51 @@ func TestManagerLockAndRunningRecord(t *testing.T) {
 	}
 }
 
+func TestAcquireTrustsRuntimeLockOverRecycledPIDRecord(t *testing.T) {
+	manager := NewManager(t.TempDir(), "127.0.0.1:9999")
+	legacy := StatusRecord{
+		PID: os.Getpid(), Kind: gatewayKind, State: "running",
+		StartedAt: time.Now().Add(-time.Hour).UTC().Format(time.RFC3339Nano),
+	}
+	if err := writeJSONFile(manager.Paths.PIDPath, legacy); err != nil {
+		t.Fatal(err)
+	}
+	// The PID is alive because it is this test process, but nobody owns the
+	// gateway flock. This is the exact PID-reuse shape that used to reject boot.
+	if err := manager.Acquire(); err != nil {
+		t.Fatalf("stale live PID metadata must not override an available runtime lock: %v", err)
+	}
+	defer manager.Release()
+}
+
+func TestRuntimeOwnerRecordUsesLockAsAuthority(t *testing.T) {
+	owner := NewManager(t.TempDir(), "127.0.0.1:9999")
+	if err := owner.Acquire(); err != nil {
+		t.Fatal(err)
+	}
+	defer owner.Release()
+	if err := owner.WriteStatus("running", "default", ""); err != nil {
+		t.Fatal(err)
+	}
+	probe := NewManager(owner.Paths.DataDir, owner.Addr)
+	rec, owned, err := probe.RuntimeOwnerRecord()
+	if err != nil || !owned || rec.PID != os.Getpid() {
+		t.Fatalf("owner probe = %+v owned=%v err=%v", rec, owned, err)
+	}
+}
+
+func TestLegacyStatusRecordHasStableInstanceID(t *testing.T) {
+	rec := StatusRecord{PID: 42, StartedAt: "2026-08-05T01:02:03Z", Addr: "127.0.0.1:7777", DataDir: "/tmp/selfmind"}
+	first := rec.StableInstanceID()
+	if first == "" || first != rec.StableInstanceID() || first[:15] != "gateway_legacy_" {
+		t.Fatalf("legacy id is not stable: %q", first)
+	}
+	rec.InstanceID = "gateway_explicit"
+	if got := rec.StableInstanceID(); got != rec.InstanceID {
+		t.Fatalf("explicit instance id changed: %q", got)
+	}
+}
+
 func TestManagerCleansStalePID(t *testing.T) {
 	manager := NewManager(t.TempDir(), "127.0.0.1:9999")
 	if err := writeJSONFile(manager.Paths.PIDPath, StatusRecord{
@@ -74,5 +119,72 @@ func TestManagerCleansStalePID(t *testing.T) {
 	}
 	if _, err := os.Stat(manager.Paths.PIDPath); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("pid file should be removed, err = %v", err)
+	}
+	state, err := ReadStatusRecord(manager.Paths.StatePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.State != "crashed" || state.ExitReason == "" {
+		t.Fatalf("stale state was not reconciled: %+v", state)
+	}
+}
+
+func TestHeartbeatOnlyRefreshesLiveLease(t *testing.T) {
+	manager := NewManager(t.TempDir(), "127.0.0.1:9999")
+	if err := manager.WriteStatus("running", "default", ""); err != nil {
+		t.Fatal(err)
+	}
+	stateBefore, err := os.ReadFile(manager.Paths.StatePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(5 * time.Millisecond)
+	if err := manager.Heartbeat(); err != nil {
+		t.Fatal(err)
+	}
+	stateAfter, err := os.ReadFile(manager.Paths.StatePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(stateAfter) != string(stateBefore) {
+		t.Fatal("heartbeat rewrote lifecycle state")
+	}
+	lease, err := ReadStatusRecord(manager.Paths.PIDPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lease.InstanceID != manager.InstanceID || lease.HeartbeatAt == "" {
+		t.Fatalf("lease = %+v", lease)
+	}
+}
+
+func TestReconcilePreviousActiveStateAfterLock(t *testing.T) {
+	manager := NewManager(t.TempDir(), "127.0.0.1:9999")
+	previous := StatusRecord{
+		PID: 12345, Kind: gatewayKind, InstanceID: "gateway_previous",
+		State: "running", StartedAt: time.Now().Add(-time.Hour).UTC().Format(time.RFC3339),
+	}
+	if err := writeJSONFile(manager.Paths.StatePath, previous); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.Acquire(); err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Release()
+	reconciled, ok := manager.ReconcilePreviousState()
+	if !ok || reconciled.State != "crashed" || reconciled.InstanceID != previous.InstanceID {
+		t.Fatalf("reconciled = %+v, ok=%v", reconciled, ok)
+	}
+}
+
+func TestStatusRecordHeartbeatStaleness(t *testing.T) {
+	now := time.Now().UTC()
+	rec := StatusRecord{State: "running", HeartbeatAt: now.Add(-time.Minute).Format(time.RFC3339Nano)}
+	if !rec.HeartbeatStale(now) {
+		t.Fatal("expected stale heartbeat")
+	}
+	rec.HeartbeatAt = now.Add(-time.Second).Format(time.RFC3339Nano)
+	if rec.HeartbeatStale(now) {
+		t.Fatal("fresh heartbeat reported stale")
 	}
 }

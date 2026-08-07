@@ -313,6 +313,12 @@ func (s *Service) tryDelivery(ctx context.Context, d *control.Delivery) error {
 	if !claimed {
 		return nil
 	}
+	if actionable, err := s.deliveryStillActionable(ctx, d); err != nil {
+		_ = s.store.MarkDeliveryAttempt(ctx, d.ID, false, tools.RedactSensitive(err.Error()), time.Now().Add(s.nextDelay(d.Attempts+1)))
+		return err
+	} else if !actionable {
+		return s.store.MarkDeliverySuperseded(ctx, d.ID, "approval is no longer pending")
+	}
 	msg := Message{
 		TenantID:       d.TenantID,
 		PersonID:       d.PersonID,
@@ -444,9 +450,20 @@ func (s *Service) DismissPendingSession(ctx context.Context, tenantID, personID,
 }
 
 func (s *Service) replayClaimedDelivery(ctx context.Context, d *control.Delivery) (string, error) {
+	actionable, err := s.deliveryStillActionable(ctx, d)
+	if err != nil {
+		_ = s.store.MarkDeliveryPendingSession(ctx, d.ID, tools.RedactSensitive(err.Error()))
+		return "pending_session", err
+	}
+	if !actionable {
+		if err := s.store.MarkDeliverySuperseded(ctx, d.ID, "approval is no longer pending"); err != nil {
+			return "", err
+		}
+		return "superseded", nil
+	}
 	msg := deliveryMessage(d)
 	confirmed := true
-	var err error
+	err = nil
 	if receipted, ok := s.sender.(SenderWithReceipt); ok {
 		confirmed, err = receipted.SendWithReceipt(ctx, msg)
 	} else {
@@ -472,6 +489,13 @@ func (s *Service) replayClaimedDelivery(ctx context.Context, d *control.Delivery
 	// recoverable but can never be selected again.
 	_ = s.store.MarkDeliveryFailedPermanent(ctx, d.ID, redacted)
 	return "failed", err
+}
+
+func (s *Service) deliveryStillActionable(ctx context.Context, d *control.Delivery) (bool, error) {
+	if d == nil || strings.TrimSpace(d.Kind) != KindApproval {
+		return true, nil
+	}
+	return s.store.IsApprovalPending(ctx, d.TenantID, d.PersonID, d.ApprovalID)
 }
 
 func deliveryMessage(d *control.Delivery) Message {

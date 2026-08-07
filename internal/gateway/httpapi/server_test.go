@@ -588,8 +588,106 @@ func TestResolveTaskUsesExplicitWorkKeyBeforeCurrentPreLabel(t *testing.T) {
 	if resolved == nil || resolved.ID != target.ID {
 		t.Fatalf("explicit work key resolved to %+v, want %s", resolved, target.ID)
 	}
-	if !attach.preLabel || attach.created || !attach.resumes {
-		t.Fatalf("an existing work-key attach must resume through the harmless pre-label: %+v", attach)
+	if !attach.preLabel || attach.created || attach.claimsPriorRuns() {
+		t.Fatalf("an existing work-key attach must stay display-only: %+v", attach)
+	}
+	if attach.workKey != "RUQX-369" {
+		t.Fatalf("work key=%q want RUQX-369", attach.workKey)
+	}
+}
+
+func TestResolveContinuationDerivesWorkKeyFromSelectedTask(t *testing.T) {
+	store, err := control.OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	ctx := context.Background()
+	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local-continuation-key", "Local User")
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := store.CreateTask(ctx, control.TaskCreate{
+		TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "RUQX-371 release", Channel: "cli",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetCurrentTask(ctx, identity.TenantID, identity.PersonID, task.ID); err != nil {
+		t.Fatal(err)
+	}
+	daemon := &Server{Control: store, DefaultTenantID: "default"}
+	resolved, attach, err := daemon.coordinator().resolveTask(ctx, identity, api.MessageRequest{
+		Platform: "cli", PlatformUserID: "local-continuation-key", Channel: "cli", Content: "continue",
+	}, router.IntentResult{Intent: router.IntentContinue})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved == nil || resolved.ID != task.ID || !attach.claimsPriorRuns() || attach.workKey != "RUQX-371" {
+		t.Fatalf("resolved=%+v attach=%+v", resolved, attach)
+	}
+}
+
+func TestExplicitTaskDetailedMessageDoesNotClaimPriorWork(t *testing.T) {
+	store, err := control.OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	ctx := context.Background()
+	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local-explicit-detail", "Local User")
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := store.CreateTask(ctx, control.TaskCreate{
+		TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "RUQX-381 mixed work", Channel: "cli",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	daemon := &Server{Control: store, DefaultTenantID: "default"}
+	resolved, attach, err := daemon.coordinator().resolveTask(ctx, identity, api.MessageRequest{
+		Platform: "cli", PlatformUserID: "local-explicit-detail", Channel: "cli",
+		TaskID: task.ID, Content: "发布 RUQX-381 的 GCP 服务",
+	}, router.IntentResult{Intent: router.IntentTask})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved == nil || resolved.ID != task.ID || attach.claimsPriorRuns() {
+		t.Fatalf("detailed explicit attach must select the label without claiming old work: resolved=%+v attach=%+v", resolved, attach)
+	}
+}
+
+func TestResumePinDetailedMessageDoesNotClaimPriorWork(t *testing.T) {
+	store, err := control.OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	ctx := context.Background()
+	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local-pin-detail", "Local User")
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := store.CreateTask(ctx, control.TaskCreate{
+		TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "RUQX-381 mixed work", Channel: "cli",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetPersonSetting(ctx, identity.TenantID, identity.PersonID, resumePinKey, task.ID); err != nil {
+		t.Fatal(err)
+	}
+	daemon := &Server{Control: store, DefaultTenantID: "default"}
+	resolved, attach, err := daemon.coordinator().resolveTask(ctx, identity, api.MessageRequest{
+		Platform: "cli", PlatformUserID: "local-pin-detail", Channel: "cli",
+		Content: "发布 RUQX-381 的另一个 GCP 服务",
+	}, router.IntentResult{Intent: router.IntentTask})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved == nil || resolved.ID != task.ID || attach.claimsPriorRuns() {
+		t.Fatalf("detailed resume-pin attach must not claim old work: resolved=%+v attach=%+v", resolved, attach)
 	}
 }
 
@@ -626,7 +724,7 @@ func TestResolveTaskCreatesLabelForNewExplicitWorkKey(t *testing.T) {
 	if resolved == nil || resolved.ID == old.ID || !taskContainsWorkKey(*resolved, "RUQX-370") {
 		t.Fatalf("new work key did not get a distinct label: old=%s resolved=%+v", old.ID, resolved)
 	}
-	if !attach.preLabel || !attach.created || attach.resumes {
+	if !attach.preLabel || !attach.created || attach.claimsPriorRuns() {
 		t.Fatalf("new work-key label flags = %+v", attach)
 	}
 }
@@ -735,7 +833,7 @@ func TestResumeContextIncludesLatestHandoff(t *testing.T) {
 	}
 
 	daemon := &Server{Control: store, DefaultTenantID: "default"}
-	content := daemon.coordinator().withResumeContext(ctx, identity, task, nil, router.IntentResult{Intent: router.IntentContinue, Confidence: 0.9, Reason: "test"}, false, "continue")
+	content := daemon.coordinator().withResumeContext(ctx, identity, task, nil, router.IntentResult{Intent: router.IntentContinue, Confidence: 0.9, Reason: "test"}, false, "", "continue")
 	for _, want := range []string{"[SelfMind resume context]", "patched gateway", "wired store", "run tests", "internal/gateway/httpapi/server.go"} {
 		if !strings.Contains(content, want) {
 			t.Fatalf("resume context missing %q:\n%s", want, content)
@@ -786,7 +884,7 @@ func TestExplicitTaskAttachResumesPriorRun(t *testing.T) {
 	}
 
 	daemon := &Server{Control: store, DefaultTenantID: "default"}
-	_ = daemon.coordinator().withResumeContext(ctx, identity, task, current, router.IntentResult{Intent: router.IntentTask}, true, "continue explicitly")
+	_ = daemon.coordinator().withResumeContext(ctx, identity, task, current, router.IntentResult{Intent: router.IntentTask}, true, "", "continue explicitly")
 	if _, err := store.MaterializeRunFinalization(ctx, control.RunFinalization{
 		Identity: *identity, RunID: current.ID, RunStatus: "done",
 		TaskID: task.ID, TaskStatus: "done", Summary: "completed",
@@ -847,7 +945,7 @@ func TestResumeContextIncludesCreatedFilesFromEvents(t *testing.T) {
 	}
 
 	daemon := &Server{Control: store, DefaultTenantID: "default"}
-	content := daemon.coordinator().withResumeContext(ctx, identity, task, nil, router.IntentResult{Intent: router.IntentContinue, Confidence: 0.9, Reason: "test"}, false, "继续")
+	content := daemon.coordinator().withResumeContext(ctx, identity, task, nil, router.IntentResult{Intent: router.IntentContinue, Confidence: 0.9, Reason: "test"}, false, "", "继续")
 	for _, want := range []string{"files_this_task_created_or_changed", "arcade-fury-97.html", "Edit these existing files directly"} {
 		if !strings.Contains(content, want) {
 			t.Fatalf("resume context missing %q:\n%s", want, content)

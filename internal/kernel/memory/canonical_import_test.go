@@ -299,6 +299,28 @@ func TestCanonicalIntakeIsScopedAndReplayIdempotent(t *testing.T) {
 	}
 }
 
+func TestCanonicalIntakeInvalidReferenceDoesNotDegradeToAdd(t *testing.T) {
+	ctx := context.Background()
+	p, err := NewSQLiteProvider(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	if err := p.ApplyIntakeWrite(ctx, "tenant", IntakeWrite{
+		Decision: "REINFORCE", Target: "memory", Scope: "workspace:a", Source: SourceFactExtractor,
+		Content: "A new statement", RefContent: "A belief that does not exist", RunID: "run-invalid-ref",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := p.ListCanonicalMemories(ctx, "tenant", CanonicalFilter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 0 {
+		t.Fatalf("invalid reference created canonical memory: %+v", rows)
+	}
+}
+
 func TestCanonicalStatusByHashIsScoped(t *testing.T) {
 	ctx := context.Background()
 	p, err := NewSQLiteProvider(t.TempDir())

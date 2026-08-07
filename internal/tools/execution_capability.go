@@ -207,6 +207,13 @@ func fallbackCapabilitySource(channel string) string {
 // empty, and the tool reports its own "not logged in" — which is the honest
 // diagnosis and leaves the decision with the person.
 func resolveCredentialCapability(args map[string]interface{}, scope ExecutionScope, toolName string) {
+	// A trusted workspace may use operator credentials without another human
+	// decision, but only when the command actually invokes a credential-bearing
+	// tool profile. Marking every trusted command as credentialed made harmless
+	// local observations (git diff, rg, jq, ...) lose sandbox auto-approval.
+	if !commandNeedsOperatorCredentials(toolName, args) {
+		return
+	}
 	if scope.TrustLevel == executionenv.TrustTrusted {
 		args[credentialReadArgKey] = true
 		return
@@ -225,9 +232,6 @@ func resolveCredentialCapability(args map[string]interface{}, scope ExecutionSco
 			args[credentialReadArgKey] = true
 			return
 		}
-	}
-	if !commandNeedsOperatorCredentials(toolName, args) {
-		return
 	}
 	if err := approveCredentialCapability(args, scope, fingerprint); err != nil {
 		// Declining leaves the command runnable without credentials. Turning a

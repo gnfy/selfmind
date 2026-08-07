@@ -140,7 +140,7 @@ selfmind weixin status
 
 ```text
 selfmind eval [list|run|report|repair|scorecard|capture|clean]
-selfmind maintenance [replay|migrate-memory|memory-audit|memory-dedup] ...
+selfmind maintenance [replay|migrate-memory|memory-audit|memory-dedup|task-audit] ...
 ```
 
 ```text
@@ -156,7 +156,12 @@ selfmind maintenance replay [--limit N]
 selfmind maintenance migrate-memory [--apply] [--data-dir DIR]
 selfmind maintenance memory-audit [--archive-confirmed] [--partition P] [--data-dir DIR]
 selfmind maintenance memory-dedup [--apply] [--partition P] [--data-dir DIR]
+selfmind maintenance task-audit [--apply] [--limit N] [--data-dir DIR]
 ```
+
+- `task-audit` 默认只读，列出缺少持久 blocker 证据的暂停任务。只有任务当前无
+  active run，且状态与最新已结束 run 完全一致时，`--apply` 才补写 blocker；
+  历史混杂或状态冲突只报告，不修改 task/run 状态。
 
 - Eval 命令用于可复现的 Agent 质量测试。`--live` 允许真实 provider 调用；
   `--record-content` 可能持久化敏感内容，应谨慎使用。

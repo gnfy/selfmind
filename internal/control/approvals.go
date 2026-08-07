@@ -129,6 +129,24 @@ func (s *Store) GetApprovalRequest(ctx context.Context, tenantID, approvalID str
 	return &item, nil
 }
 
+// IsApprovalPending reports whether an approval delivery still represents an
+// actionable request for the same person. Delivery workers call this at the
+// final network boundary so delayed retries and IM catch-up cannot resurrect
+// an approval that was already approved, denied, or expired.
+func (s *Store) IsApprovalPending(ctx context.Context, tenantID, personID, approvalID string) (bool, error) {
+	approvalID = strings.TrimSpace(approvalID)
+	personID = strings.TrimSpace(personID)
+	if approvalID == "" || personID == "" {
+		return false, nil
+	}
+	var n int
+	err := s.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM approval_requests
+		 WHERE tenant_id = ? AND person_id = ? AND id = ? AND status = 'pending'`,
+		normalizeTenant(tenantID), personID, approvalID).Scan(&n)
+	return n == 1, err
+}
+
 // ExpireApprovalRequest finalizes a pending approval whose waiter is gone
 // (run cancelled/interrupted/timed out). A stale 'pending' row poisons every
 // later interaction: bare y/n turns ambiguous and ordinals hit dead requests.

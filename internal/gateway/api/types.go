@@ -22,12 +22,15 @@ type ActiveRunStatus struct {
 
 type GatewayRuntimeInfo struct {
 	PID              int    `json:"pid"`
+	InstanceID       string `json:"instance_id,omitempty"`
 	Addr             string `json:"addr"`
 	DataDir          string `json:"data_dir,omitempty"`
 	RuntimeDir       string `json:"runtime_dir,omitempty"`
 	State            string `json:"state"`
 	StartedAt        string `json:"started_at,omitempty"`
 	UpdatedAt        string `json:"updated_at,omitempty"`
+	HeartbeatAt      string `json:"heartbeat_at,omitempty"`
+	ExitReason       string `json:"exit_reason,omitempty"`
 	DefaultTenantID  string `json:"default_tenant_id,omitempty"`
 	Version          string `json:"version,omitempty"`
 	Commit           string `json:"commit,omitempty"`
@@ -208,18 +211,19 @@ type RunSteerResponse struct {
 const RunStatusVerificationPartial = "verification_partial"
 
 type RunOutcome struct {
-	Status           string               `json:"status"`
-	CompletionReason string               `json:"completion_reason,omitempty"`
-	Resumable        bool                 `json:"resumable,omitempty"`
-	Summary          string               `json:"summary,omitempty"`
-	Done             []string             `json:"done,omitempty"`
-	NextSteps        []string             `json:"next_steps,omitempty"`
-	Files            []string             `json:"files,omitempty"`
-	Tests            []string             `json:"tests,omitempty"`
-	Risks            []string             `json:"risks,omitempty"`
-	NeedApprove      bool                 `json:"need_approve,omitempty"`
-	Verification     *VerificationOutcome `json:"verification,omitempty"`
-	ClaimMismatches  []string             `json:"claim_mismatches,omitempty"`
+	Status             string               `json:"status"`
+	CompletionReason   string               `json:"completion_reason,omitempty"`
+	Resumable          bool                 `json:"resumable,omitempty"`
+	Summary            string               `json:"summary,omitempty"`
+	Done               []string             `json:"done,omitempty"`
+	NextSteps          []string             `json:"next_steps,omitempty"`
+	Files              []string             `json:"files,omitempty"`
+	Tests              []string             `json:"tests,omitempty"`
+	Risks              []string             `json:"risks,omitempty"`
+	NeedApprove        bool                 `json:"need_approve,omitempty"`
+	ResolvedBlockerIDs []string             `json:"resolved_blocker_ids,omitempty"`
+	Verification       *VerificationOutcome `json:"verification,omitempty"`
+	ClaimMismatches    []string             `json:"claim_mismatches,omitempty"`
 }
 
 // VerificationOutcome is derived from tool-runtime evidence. It never trusts

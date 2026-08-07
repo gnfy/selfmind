@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"selfmind/internal/control"
 	"selfmind/internal/tools"
@@ -24,6 +25,11 @@ func (d *Server) smartTriageDiagLines(ctx context.Context, identity *control.Ide
 		return ""
 	}
 	stats := tools.TriageDiagnostics(identity.TenantID, identity.PersonID)
+	if d.Control != nil {
+		if durable, err := d.Control.ApprovalTriageStatsSince(ctx, identity.TenantID, identity.PersonID, time.Now().Add(-24*time.Hour)); err == nil && durableTriageTotal(durable) > 0 {
+			stats = triageStatsFromDurable(durable)
+		}
+	}
 	mode := d.effectiveApprovalModeForDiag(ctx, identity)
 	if mode != tools.ApprovalSmart && stats.Total() == 0 {
 		return ""
@@ -41,13 +47,36 @@ func (d *Server) smartTriageDiagLines(ctx context.Context, identity *control.Ide
 	// strict, it is off, so every dangerous op becomes a human ask.
 	if stats.Unavailable > 0 && stats.Approved == 0 {
 		sb.WriteString("- automatic triage is not ruling: every dangerous operation falls through to a human ask\n")
-		sb.WriteString("- check the models.roles.background_review route (`selfmind model check`); a nil or failing judge never auto-approves\n")
+		sb.WriteString("- check the models.roles.fast_classifier route (`selfmind model check`); legacy configs may fall back to background_review, but a nil or failing judge never auto-approves\n")
 	}
 	if stats.LastError != "" {
 		fmt.Fprintf(&sb, "- last judge error %s: %s\n",
 			stats.LastErrorAt.Format("15:04"), truncate(toOneLine(tools.RedactSensitive(stats.LastError)), 140))
 	}
 	return sb.String()
+}
+
+func durableTriageTotal(stats control.ApprovalTriageStats) int {
+	total := 0
+	for _, count := range stats.Counts {
+		total += count
+	}
+	return total
+}
+
+func triageStatsFromDurable(stats control.ApprovalTriageStats) tools.TriageStats {
+	return tools.TriageStats{
+		Approved:     stats.Counts[string(tools.TriageOutcomeApproved)],
+		Denied:       stats.Counts[string(tools.TriageOutcomeDenied)],
+		Escalated:    stats.Counts[string(tools.TriageOutcomeEscalated)],
+		Unavailable:  stats.Counts[string(tools.TriageOutcomeUnavailable)],
+		Contained:    stats.Counts[string(tools.TriageOutcomeContained)],
+		GrantHits:    stats.Counts[string(tools.TriageOutcomeGrantHit)],
+		ExactRunHits: stats.Counts[string(tools.TriageOutcomeExactRunHit)],
+		HumanAsks:    stats.Counts[string(tools.TriageOutcomeHumanAsk)],
+		LastError:    stats.LastError,
+		LastErrorAt:  stats.LastErrorAt,
+	}
 }
 
 // effectiveApprovalModeForDiag resolves the person's mode with the SAME

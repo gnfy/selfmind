@@ -71,6 +71,40 @@ Person (cross-endpoint identity, unchanged)
                  display/resume handle only; NEVER gates what the model sees)
 ```
 
+### Run ownership inside a label
+
+A task is still only a display/resume label, so one label may contain more than
+one unfinished work line. Completing a later run must never erase every older
+unfinished run under that label.
+
+- A deterministic issue key found at ingress is stored atomically on the run as
+  `task_runs.work_key`. It is display/closure evidence only: it never selects a
+  workspace, context slice, permission, sandbox, or execution environment.
+- Selecting a label by explicit task id or one-shot `/resume` pin does not by
+  itself claim unfinished runs. Only a message classified as an explicit
+  continuation creates a durable ownership edge.
+- An explicit continuation with a key owns its predecessor only when exactly
+  one unresolved run carries that key. Reusing the same external issue key for
+  independent work lines is treated as ambiguous, not as permission to close
+  both. A keyless continuation may own a predecessor only when there is exactly
+  one unresolved candidate.
+- Legacy runs created before `work_key` may be claimed only when one such run is
+  the sole unresolved predecessor. Ambiguity remains visible as interrupted
+  work instead of being guessed away.
+- `resumed_by_run_id` is the durable ownership edge. Final reduction may close
+  only the work represented by that edge; unrelated unfinished work keeps the
+  label open.
+- A durable `task_blockers` row is the source of truth for a concrete unresolved
+  condition (approval, clarification, verification, environment, or an explicit
+  interrupted handoff). Historical run statuses are evidence, not live
+  blockers. Each turn receives the bounded open-blocker list and may resolve
+  only exact ids through `finish_run.resolved_blocker_ids`; deterministic
+  approval/clarification/resume events settle only the blocker they own.
+- Task display status is reduced from the latest run outcome plus current open
+  blockers. A newer successful run therefore cannot erase unrelated unfinished
+  work, while a resolved old blocker cannot keep an otherwise completed label
+  permanently interrupted.
+
 ### Per-turn context (ContextComposer)
 
 The existing selector + `RuntimeContextBundle` formalized into a fixed slice

@@ -19,6 +19,13 @@ type fakeJudge struct {
 	lastArg string
 }
 
+type boundedFakeJudge struct {
+	fakeJudge
+	timeout time.Duration
+}
+
+func (j *boundedFakeJudge) ApprovalJudgeTimeout() time.Duration { return j.timeout }
+
 func (f *fakeJudge) Judge(ctx context.Context, prompt string) (string, error) {
 	f.calls++
 	f.lastArg = prompt
@@ -123,6 +130,18 @@ func TestTriageApprovalTimeoutEscalates(t *testing.T) {
 	}
 	if time.Since(start) > 5*time.Second {
 		t.Fatalf("timeout path took too long: %v", time.Since(start))
+	}
+}
+
+func TestTriageApprovalUsesJudgeSpecificTimeout(t *testing.T) {
+	judge := &boundedFakeJudge{fakeJudge: fakeJudge{block: true}, timeout: 20 * time.Millisecond}
+	started := time.Now()
+	v, _, err := triageApproval(context.Background(), judge, "terminal", "ls", "r", "")
+	if v != TriageEscalate || err == nil {
+		t.Fatalf("bounded timeout must fail safe: verdict=%v err=%v", v, err)
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("judge-specific timeout was not honored: %v", elapsed)
 	}
 }
 

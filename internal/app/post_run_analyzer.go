@@ -596,11 +596,11 @@ func (a *llmPostRunAnalyzer) reinforceFact(ctx context.Context, req httpapi.Post
 	// canonical write is itself idempotent by observation id, so still invoke it
 	// to finish a legacy-write-before-canonical crash window.
 	if req.RunID != "" && match.CreatedFromRun == req.RunID {
-		return a.canonicalWrite(ctx, req, "REINFORCE", target, candidate, match.Content, 0, intakeMeta{})
+		return a.canonicalWrite(ctx, req, "REINFORCE", target, candidate, match.Content, 0, intakeMeta{Category: match.Category}, match.Scope)
 	}
 	if match.Canonical {
 		tools.RecordMemoryLearningChangeScoped(memoryPartition(req), target, match.Scope, "reinforce", match.Content, candidate, "post_run_analyzer")
-		return a.canonicalWrite(ctx, req, "REINFORCE", target, candidate, match.Content, 0, intakeMeta{})
+		return a.canonicalWrite(ctx, req, "REINFORCE", target, candidate, match.Content, 0, intakeMeta{Category: match.Category}, match.Scope)
 	}
 	base := match.Confidence
 	if base <= 0 {
@@ -611,7 +611,7 @@ func (a *llmPostRunAnalyzer) reinforceFact(ctx context.Context, req httpapi.Post
 		return fmt.Errorf("reinforce %s fact: %w", target, err)
 	}
 	tools.RecordMemoryLearningChangeScoped(memoryPartition(req), target, match.Scope, "reinforce", match.Content, candidate, "post_run_analyzer")
-	return a.canonicalWrite(ctx, req, "REINFORCE", target, candidate, match.Content, 0, intakeMeta{})
+	return a.canonicalWrite(ctx, req, "REINFORCE", target, candidate, match.Content, 0, intakeMeta{Category: match.Category}, match.Scope)
 }
 
 func (a *llmPostRunAnalyzer) readModelFactsForTarget(ctx context.Context, req httpapi.PostRunAnalysisRequest, target string) []memory.Fact {

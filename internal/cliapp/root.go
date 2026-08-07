@@ -206,7 +206,7 @@ var documentedCLIUsages = []string{
 	"selfmind doctor [--out FILE] [--probe-models]",
 	"selfmind selfcheck [--skip-go] [--skip-eval] [--eval-dir DIR]",
 	"selfmind eval [list|run|report|repair|scorecard|capture|clean]",
-	"selfmind maintenance [replay|migrate-memory|memory-audit|memory-dedup] ...",
+	"selfmind maintenance [replay|migrate-memory|memory-audit|memory-dedup|task-audit] ...",
 	"selfmind gateway [run|start|status|stop|restart|service] ...",
 	"selfmind weixin [login|status] ...",
 }

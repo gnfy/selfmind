@@ -273,6 +273,19 @@ func (m *uiModel) forwardGatewayEventFrom(event llm.StreamEvent, source eventSou
 		}
 		id := payloadString("approval_id")
 		if id != "" {
+			approvalArg := func(key string) interface{} {
+				if event.Payload == nil {
+					return nil
+				}
+				if args, ok := event.Payload["args"].(map[string]interface{}); ok {
+					return args[key]
+				}
+				return nil
+			}
+			approvalArgString := func(key string) string {
+				value, _ := approvalArg(key).(string)
+				return value
+			}
 			m.program.Send(MsgApprovalRequest{
 				ID:     id,
 				Tool:   event.ToolName,
@@ -284,9 +297,14 @@ func (m *uiModel) forwardGatewayEventFrom(event llm.StreamEvent, source eventSou
 				Cwd:           payloadString("cwd"),
 				ChangeSummary: payloadString("change_summary"),
 				GrantClass:    payloadString("grant_class"),
+				Containment:   payloadString("containment"),
 				TriageState:   payloadString("triage_state"),
 				Rationale:     payloadString("triage_rationale"),
 				Risk:          payloadString("triage_risk"),
+				CodePreview:   approvalArgString("code_preview"),
+				CodeSHA256:    approvalArgString("code_sha256"),
+				CodeLines:     payloadTokenCount(approvalArg("code_lines")),
+				CodeBytes:     payloadTokenCount(approvalArg("code_bytes")),
 				// The daemon's own answer set for this ask. Absent (older daemon)
 				// leaves it nil and the panel falls back to its built-in options.
 				Options: approvalOptionsFromPayload(event.Payload),

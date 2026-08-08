@@ -19,12 +19,30 @@ type ProcessInfo struct {
 	ID        string
 	Command   string
 	Cmd       *exec.Cmd
-	Output    *bytes.Buffer
+	Output    *synchronizedBuffer
 	StartedAt time.Time
 	mu        sync.Mutex
+	status    string
 	// finished closes when the process is reaped, so the ceiling watchdog exits
 	// instead of lingering for its full duration on every completed process.
 	finished chan struct{}
+}
+
+type synchronizedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *synchronizedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *synchronizedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
 }
 
 // ProcessRegistry manages background processes
@@ -96,7 +114,7 @@ func (r *ProcessRegistry) StartProcess(command string, cwd string, env []string,
 		cmd.Env = env
 	}
 
-	output := &bytes.Buffer{}
+	output := &synchronizedBuffer{}
 	cmd.Stdout = output
 	cmd.Stderr = output
 
@@ -110,6 +128,7 @@ func (r *ProcessRegistry) StartProcess(command string, cwd string, env []string,
 		Cmd:       cmd,
 		Output:    output,
 		StartedAt: time.Now(),
+		status:    "running",
 		finished:  make(chan struct{}),
 	}
 
@@ -155,7 +174,6 @@ func (r *ProcessRegistry) StartProcess(command string, cwd string, env []string,
 	// Handle cleanup in background
 	go func() {
 		err := cmd.Wait()
-		close(info.finished)
 		exitCode := 0
 		status := "exited"
 		if err != nil {
@@ -166,6 +184,10 @@ func (r *ProcessRegistry) StartProcess(command string, cwd string, env []string,
 				exitCode = -1
 			}
 		}
+		info.mu.Lock()
+		info.status = status
+		info.mu.Unlock()
+		close(info.finished)
 
 		if r.mem != nil {
 			r.mem.UpdateProcessStatus(context.Background(), r.tenantID, id, status, exitCode)
@@ -201,10 +223,9 @@ func (r *ProcessRegistry) List() []map[string]interface{} {
 
 	// Add currently running in-memory processes
 	for id, p := range r.processes {
-		status := "running"
-		if p.Cmd.ProcessState != nil && p.Cmd.ProcessState.Exited() {
-			status = "exited"
-		}
+		p.mu.Lock()
+		status := p.status
+		p.mu.Unlock()
 		list = append(list, map[string]interface{}{
 			"id":         id,
 			"command":    p.Command,
@@ -251,12 +272,8 @@ func (r *ProcessRegistry) Poll(id string) (string, string, error) {
 	}
 
 	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	status := "running"
-	if p.Cmd.ProcessState != nil && p.Cmd.ProcessState.Exited() {
-		status = "exited"
-	}
+	status := p.status
+	p.mu.Unlock()
 
 	return p.Output.String(), status, nil
 }

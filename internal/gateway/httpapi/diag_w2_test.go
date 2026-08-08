@@ -17,17 +17,32 @@ func eventWith(eventType string, payload map[string]interface{}) control.Event {
 func TestContextBreakdownDetailRendersSections(t *testing.T) {
 	events := []control.Event{eventWith("context.breakdown", map[string]interface{}{
 		"identity": 400, "tools": 1000, "project_context": 15000,
-		"memory": 200, "runtime": 1200, "history": 2200, "total": 20000,
+		"memory": 200, "runtime": 600, "recall": 200, "artifacts": 200,
+		"history": 2200, "tool_results": 200, "total": 20000,
 		"stable": 1400, "volatile": 15000, "stable_prefix_hash": "abcd1234",
 	})}
 	out := contextBreakdownDetail(events)
-	for _, want := range []string{"~20000 tok", "project context (AGENTS.md)", "75%", "history", "prefix abcd1234"} {
+	for _, want := range []string{"~20000 tok", "project context (AGENTS.md)", "75%", "semantic recall", "artifact references", "tool results", "history", "prefix abcd1234"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("breakdown detail missing %q:\n%s", want, out)
 		}
 	}
 	if contextBreakdownDetail(nil) != "" {
 		t.Fatal("no events must render empty")
+	}
+}
+
+func TestLatestProviderContextBreakdownLine(t *testing.T) {
+	out := latestProviderContextBreakdownLine([]control.Event{eventWith("provider.call.context_breakdown", map[string]interface{}{
+		"iteration": 2, "transport": "stream", "estimated_total": 1234,
+		"stable_system": 300, "tool_schemas": 400, "history": 200,
+		"current_tool_results": 100, "workspace": 80, "task_runtime": 60,
+		"recall": 40, "memory": 30, "artifacts": 24,
+	})})
+	for _, want := range []string{"#2 stream", "~1234 tok", "tool schemas 400", "tool results 100", "recall 40", "artifacts 24"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("provider breakdown missing %q: %s", want, out)
+		}
 	}
 }
 
@@ -135,10 +150,11 @@ func TestPromptPrefixStabilityLine(t *testing.T) {
 
 func TestLatestRecallLine(t *testing.T) {
 	hit := []control.Event{eventWith("context.recall", map[string]interface{}{
-		"sources": map[string]int{"taskcard": 1, "session": 2}, "slices": 3, "expanded": true, "elapsed_ms": 45,
+		"candidates": map[string]int{"canonical": 4, "taskcard": 2, "session": 5},
+		"sources":    map[string]int{"taskcard": 1, "session": 2}, "slices": 3, "expanded": true, "elapsed_ms": 45,
 	})}
 	out := latestRecallLine(hit)
-	for _, want := range []string{"3 slice(s)", "session=2", "taskcard=1", "query expanded", "45ms"} {
+	for _, want := range []string{"candidates [canonical=4", "selected 3 slice(s)", "session=2", "taskcard=1", "query expanded", "45ms"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("recall line missing %q: %s", want, out)
 		}

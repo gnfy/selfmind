@@ -16,6 +16,7 @@ import (
 	"github.com/mattn/go-runewidth"
 	"github.com/rivo/uniseg"
 	"selfmind/internal/platform/config"
+	"selfmind/internal/platform/pastetoken"
 	"selfmind/internal/ui/common"
 	"selfmind/internal/ui/layout"
 )
@@ -37,15 +38,14 @@ type ImageAttachment struct {
 	Name  string // display base name
 }
 
-// pasteTokenRe matches [[ paste:NNN ... ]] style placeholders in submitted text.
-// Hermes format: [[ paste:0 PrivacyDistiller.. [80 lines] .. scrubPII ]]
-var pasteTokenRe = regexp.MustCompile(`\[\[ paste:\d[^\]]*\]\]`)
-
-// imageTokenRe matches [[ image:NNN ... ]] style placeholders in submitted text.
-var imageTokenRe = regexp.MustCompile(`\[\[ image:\d[^\]]*\]\]`)
-
 // wsRe collapses whitespace in previews.
 var wsRe = regexp.MustCompile(`\s+`)
+
+// pasteLineBreakRe matches every line separator a terminal can deliver. A
+// bracketed paste arrives with bare CR in Windows Terminal/WSL, so counting
+// only "\n" reported every multi-line document as "1 lines" and left the
+// configured line threshold permanently unreachable.
+var pasteLineBreakRe = regexp.MustCompile(`\r\n|\r|\n`)
 
 const maxComposerInputLines = 4
 
@@ -194,11 +194,13 @@ func (e *Editor) handlePasteFromKey(keyMsg tea.KeyMsg) tea.Cmd {
 		return nil
 	}
 
-	// Clean trailing newlines (Hermes behavior).
-	cleaned := stripTrailingPasteNewlines(pasted)
+	// Normalize line endings before anything measures or stores the payload: a
+	// terminal paste may separate lines with bare CR, which both hid the real
+	// line count and would have reached the model as one long line.
+	cleaned := stripTrailingPasteNewlines(normalizePasteNewlines(pasted))
 
-	// Count lines.
-	lineCount := strings.Count(cleaned, "\n") + 1
+	// Count lines across every separator form.
+	lineCount := len(pasteLineBreakRe.FindAllString(cleaned, -1)) + 1
 	if lineCount == 0 {
 		lineCount = 1
 	}
@@ -220,10 +222,13 @@ func (e *Editor) handlePasteFromKey(keyMsg tea.KeyMsg) tea.Cmd {
 
 	var display string
 	if isLarge {
-		// Large paste: store content, show placeholder token.
+		// Large paste: store content, show placeholder token. The token text is
+		// the registry key ExpandValue substitutes back, so it must come from
+		// pastetoken.Format — the only builder that guarantees a bracket-free,
+		// single-line token.
 		idx := len(e.snippets)
 		label := pasteTokenLabel(cleaned, lineCount)
-		display = fmt.Sprintf("[[ paste:%d %s ]]", idx, label)
+		display = pastetoken.Format(pastetoken.KindPaste, idx, label)
 		e.snippets = append(e.snippets, PasteSnippet{Token: display, Text: cleaned})
 	} else {
 		// Small paste: show raw content.
@@ -258,7 +263,10 @@ func (e *Editor) Value() string {
 func (e *Editor) AttachImage(path string) string {
 	idx := len(e.images)
 	name := filepath.Base(path)
-	token := fmt.Sprintf("[[ image:%d %s ]]", idx, name)
+	// A file name may legitimately contain brackets ("Screenshot [1].png"); the
+	// sanitized label keeps the token well-formed while the untouched Path stays
+	// the value ExpandValue substitutes back.
+	token := pastetoken.Format(pastetoken.KindImage, idx, name)
 	e.images = append(e.images, ImageAttachment{Token: token, Path: path, Name: name})
 
 	current := e.textarea.Value()
@@ -276,35 +284,33 @@ func (e *Editor) AttachImage(path string) string {
 // ExpandValue replaces paste placeholders with the actual clipboard content
 // and image placeholders with their local file paths. Call this before
 // submitting.
+//
+// Substitution is EXACT: every registered token is replaced by its payload
+// through a plain string replacer. Matching by pattern instead made expansion
+// depend on the label's shape, and one bracket in the label ("[80 lines]") was
+// enough to strand every large paste as literal placeholder text.
 func (e *Editor) ExpandValue() string {
 	val := e.Value()
-	if len(e.snippets) > 0 {
-		// Build a map from token → text for efficient replacement.
-		snipMap := make(map[string]string)
-		for _, s := range e.snippets {
-			snipMap[s.Token] = s.Text
-		}
-		// Replace all occurrences of each placeholder.
-		val = pasteTokenRe.ReplaceAllStringFunc(val, func(match string) string {
-			if text, ok := snipMap[match]; ok {
-				return text
-			}
-			return match
-		})
+	if len(e.snippets) == 0 && len(e.images) == 0 {
+		return val
 	}
-	if len(e.images) > 0 {
-		imgMap := make(map[string]string)
-		for _, img := range e.images {
-			imgMap[img.Token] = img.Path
-		}
-		val = imageTokenRe.ReplaceAllStringFunc(val, func(match string) string {
-			if p, ok := imgMap[match]; ok {
-				return p
-			}
-			return match
-		})
+	pairs := make([]string, 0, 2*(len(e.snippets)+len(e.images)))
+	for _, s := range e.snippets {
+		pairs = append(pairs, s.Token, s.Text)
 	}
-	return val
+	for _, img := range e.images {
+		pairs = append(pairs, img.Token, img.Path)
+	}
+	return strings.NewReplacer(pairs...).Replace(val)
+}
+
+// UnresolvedToken returns a placeholder that survived ExpandValue, or "" when
+// the value is safe to submit. It only fires when the token text itself was
+// edited (or came from an older client), because a registered token always
+// substitutes exactly. The caller must keep the composer intact and let the
+// person fix it: the payload is unrecoverable once the composer is reset.
+func (e *Editor) UnresolvedToken() string {
+	return pastetoken.FindUnresolved(e.ExpandValue())
 }
 
 // Reset clears the editor, all stored paste snippets, and image attachments.
@@ -860,7 +866,12 @@ func stripTrailingPasteNewlines(text string) string {
 }
 
 // edgePreview returns a short preview of text showing head and tail.
-// head: first N chars, tail: last M chars. If text fits, returns it unchanged.
+// head: first N runes, tail: last M runes. If text fits, returns it unchanged.
+//
+// Cutting is rune-based on purpose: byte slicing split a CJK character in half,
+// and the resulting invalid byte was then repaired differently by each consumer
+// (the textarea coerces to U+FFFD, the token registry kept the raw byte), so the
+// composer's own token no longer matched itself.
 func edgePreview(s string, head int, tail int) string {
 	if s == "" {
 		return ""
@@ -868,10 +879,11 @@ func edgePreview(s string, head int, tail int) string {
 	// Collapse whitespace for preview (same as Hermes).
 	one := wsRe.ReplaceAllString(s, " ")
 	one = strings.TrimSpace(one)
-	if len(one) <= head+tail+4 {
+	runes := []rune(one)
+	if len(runes) <= head+tail+4 {
 		return one
 	}
-	return strings.TrimRight(one[:head], " \t") + ".. " + strings.TrimLeft(one[len(one)-tail:], " \t")
+	return strings.TrimRight(string(runes[:head]), " \t") + ".. " + strings.TrimLeft(string(runes[len(runes)-tail:]), " \t")
 }
 
 // fmtK formats a number in compact form (e.g. 1234 → "1.2K").
@@ -889,16 +901,29 @@ func fmtK(n int) string {
 // pasteTokenLabel generates a user-visible placeholder label matching Hermes exactly:
 // "PrivacyDistiller implementation.. [80 lines] .. scrubPII"
 // or: "[80 lines]" if no preview available.
+// pasteTokenLabel renders the size hint shown inside a paste token. It uses
+// parentheses, not brackets: pastetoken.Format would sanitize brackets away
+// anyway, and keeping them out here means the displayed label matches the token
+// byte for byte.
 func pasteTokenLabel(text string, lineCount int) string {
 	preview := edgePreview(text, 16, 28)
 	if preview == "" {
-		return fmt.Sprintf("[%s lines]", fmtK(lineCount))
+		return fmt.Sprintf("(%s lines)", fmtK(lineCount))
 	}
 	// Split preview on ".. " boundary (from edgePreview).
 	if idx := strings.Index(preview, ".. "); idx >= 0 {
 		head := strings.TrimRight(preview[:idx], " \t")
 		tail := strings.TrimLeft(preview[idx+3:], " \t")
-		return fmt.Sprintf("%s.. [%s lines] .. %s", head, fmtK(lineCount), tail)
+		return fmt.Sprintf("%s.. (%s lines) .. %s", head, fmtK(lineCount), tail)
 	}
-	return fmt.Sprintf("%s [%s lines]", preview, fmtK(lineCount))
+	return fmt.Sprintf("%s (%s lines)", preview, fmtK(lineCount))
+}
+
+// normalizePasteNewlines turns CRLF and bare CR into LF so a pasted document
+// keeps its line structure end to end (count, label, stored payload, prompt).
+func normalizePasteNewlines(text string) string {
+	if !strings.ContainsRune(text, '\r') {
+		return text
+	}
+	return pasteLineBreakRe.ReplaceAllString(text, "\n")
 }

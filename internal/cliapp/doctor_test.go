@@ -86,3 +86,23 @@ func TestBuildDoctorReportRendersSectionsAndRedacts(t *testing.T) {
 		t.Fatalf("doctor report leaked the planted secret:\n%s", report)
 	}
 }
+
+func TestResolveDoctorIdentityDoesNotCreateAccount(t *testing.T) {
+	ctx := context.Background()
+	store, err := control.OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+	defer store.Close()
+
+	identity, err := resolveDoctorIdentity(ctx, store, "default", "fresh-user")
+	if err != nil {
+		t.Fatalf("resolveDoctorIdentity: %v", err)
+	}
+	if identity.PersonID != "" || identity.PlatformUserID != "fresh-user" {
+		t.Fatalf("unexpected synthetic diagnostic identity: %+v", identity)
+	}
+	if persisted, err := store.ResolveAccount(ctx, "default", "cli", "fresh-user"); err != nil || persisted != nil {
+		t.Fatalf("doctor lookup mutated identity storage: persisted=%+v err=%v", persisted, err)
+	}
+}

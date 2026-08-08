@@ -1,0 +1,29 @@
+id: reliability_external_watch_target_state_skipped
+title: "A v2 watch distinguishes desired intermediate state from terminal success"
+suite: reliability
+workspace: isolated
+channel: cli
+require_cassette: false
+
+turns:
+  - input: >-
+      Register a v2 durable external watch named skipped target. Use the check
+      command printf 'SUCCEEDED\n'. The desired intermediate target pattern is
+      ^PENDING_APPROVAL$, terminal success is ^SUCCEEDED$, terminal failure is
+      ^FAILED$, interval is 10 seconds, and total timeout is 60 seconds. Do not
+      run a foreground polling loop. Finish this run as waiting_external after
+      registration.
+
+expect:
+  status: waiting_external
+  require_tool_events: true
+  min_tool_calls: 1
+  max_tool_errors: 0
+  max_duration_seconds: 120
+
+checks:
+  no_mojibake: true
+  no_raw_json_leak: true
+  no_empty_response: true
+  no_provider_stack_dump: true
+

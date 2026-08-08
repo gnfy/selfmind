@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"selfmind/internal/control"
+	"selfmind/internal/gateway/api"
 	"selfmind/internal/tools"
 )
 
@@ -24,6 +25,15 @@ func TestBuildApprovalDecisionsIsTheSingleAnswerSet(t *testing.T) {
 	})
 	if len(options) < 4 {
 		t.Fatalf("expected once + rule + class + deny, got %+v", options)
+	}
+	foundRun := false
+	for _, option := range options {
+		if option.ID == "run" && option.Scope == "run" && option.Key == "r" {
+			foundRun = true
+		}
+	}
+	if !foundRun {
+		t.Fatalf("run-scoped decision is missing: %+v", options)
 	}
 	if options[0].ID != "once" || options[0].Key != "y" {
 		t.Fatalf("the narrowest answer must come first: %+v", options[0])
@@ -55,6 +65,22 @@ func TestBuildApprovalDecisionsIsTheSingleAnswerSet(t *testing.T) {
 	}
 	if len(noClass) != 2 {
 		t.Fatalf("an unrememberable action offers only once + deny, got %+v", noClass)
+	}
+
+	exact := buildApprovalDecisions(tools.ToolApprovalRequest{
+		ToolName: "execute_code", RunGrantClass: "this exact action for this run",
+	})
+	foundExact := false
+	for _, option := range exact {
+		if option.ID == "run_exact" && option.Scope == "run" && option.Key == "r" {
+			foundExact = true
+		}
+		if option.Scope == "task" || option.Scope == "person" {
+			t.Fatalf("an exact script grant must never become durable: %+v", exact)
+		}
+	}
+	if !foundExact {
+		t.Fatalf("exact run option missing: %+v", exact)
 	}
 }
 
@@ -143,6 +169,9 @@ func TestBareReplyRuleShortcutPersistsTheOfferedRule(t *testing.T) {
 	if stored.DecisionScope != "person" {
 		t.Fatalf("rule decisions carry their own scope, got %q", stored.DecisionScope)
 	}
+	if stored.DecisionID != "rule:exec_prefix" {
+		t.Fatalf("decision id = %q, want the exact server-issued option", stored.DecisionID)
+	}
 }
 
 // TestRejectionNoteIsStoredNotOnlySteered: a refusal with guidance is worth far
@@ -159,6 +188,9 @@ func TestRejectionNoteIsStoredNotOnlySteered(t *testing.T) {
 	if updated.DecisionNote != "use the staging bucket instead" {
 		t.Fatalf("note = %q", updated.DecisionNote)
 	}
+	if updated.DecisionID != "deny" {
+		t.Fatalf("decision id = %q, want deny", updated.DecisionID)
+	}
 	if got := fallbackApprovalReason(updated.DecisionNote, "rejected"); got != "use the staging bucket instead" {
 		t.Fatalf("the model should receive the guidance, got %q", got)
 	}
@@ -172,5 +204,34 @@ func TestRejectionNoteIsStoredNotOnlySteered(t *testing.T) {
 	}
 	if rejected.DecisionGrantKey != "" || rejected.DecisionScope != "" {
 		t.Fatalf("a refusal must not carry an authorization: %+v", rejected)
+	}
+}
+
+func TestRunIntentSnapshotSeparatesTaskContextFromAuthorization(t *testing.T) {
+	task := &control.Task{Title: "Deploy RUQX-500", CurrentSummary: "Ready for production"}
+	run := &control.Run{WorkKey: "RUQX-500"}
+	workspace := &control.Workspace{ID: "ws-1"}
+	snapshot := runIntentSnapshot(api.MessageRequest{Content: "开始执行"}, task, run, workspace)
+	if snapshot.RawUserText != "开始执行" || snapshot.GoalSummary == "" || snapshot.WorkKey != "RUQX-500" || snapshot.WorkspaceID != "ws-1" {
+		t.Fatalf("snapshot = %+v", snapshot)
+	}
+	if snapshot.Source != "continuation" || len(snapshot.ExplicitAllow) != 1 {
+		t.Fatalf("continuation evidence = %+v", snapshot)
+	}
+	if len(snapshot.ExplicitDeny) != 0 {
+		t.Fatalf("unexpected deny evidence = %+v", snapshot.ExplicitDeny)
+	}
+}
+
+func TestRunIntentSnapshotSystemContinuationIsNotAuthorization(t *testing.T) {
+	snapshot := runIntentSnapshot(api.MessageRequest{
+		Content: "continue",
+		Origin:  "external-watch-finalization",
+	}, &control.Task{Title: "Deploy RUQX-500"}, &control.Run{WorkKey: "RUQX-500"}, nil)
+	if snapshot.Source != "system:external-watch-finalization" {
+		t.Fatalf("source = %q", snapshot.Source)
+	}
+	if len(snapshot.ExplicitAllow) != 0 || snapshot.UserAuthored() {
+		t.Fatalf("system continuation became human authorization: %+v", snapshot)
 	}
 }

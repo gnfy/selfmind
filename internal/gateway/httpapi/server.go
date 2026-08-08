@@ -526,6 +526,38 @@ type taskAttach struct {
 	// continuation evidence): the post-run labeler may re-point the run, and
 	// the execution workspace follows the REQUEST, not the guessed label.
 	preLabel bool
+	// reason records the deterministic evidence that selected this label. A
+	// display-only work-key match must stay distinct from an explicit resume:
+	// one issue may contain several independent work lines, so sharing a Jira
+	// key is not authority to close an older unfinished run.
+	reason taskAttachReason
+	// workKey records a deterministic issue key used at ingress. It does not
+	// make the label a context/workspace boundary; it only makes the display
+	// decision auditable after the run id exists.
+	workKey string
+	// effectKey is present only for durable system work whose logical products
+	// must remain exactly-once across retry runs.
+	effectKey string
+}
+
+type taskAttachReason string
+
+const (
+	taskAttachNewLabel        taskAttachReason = "new_label"
+	taskAttachCurrentPreLabel taskAttachReason = "current_prelabel"
+	taskAttachWorkKeyPreLabel taskAttachReason = "work_key_prelabel"
+	taskAttachExplicitTaskID  taskAttachReason = "explicit_task_id"
+	taskAttachContinuation    taskAttachReason = "continuation_cue"
+	taskAttachResumePin       taskAttachReason = "resume_pin"
+)
+
+func (a taskAttach) claimsPriorRuns() bool {
+	switch a.reason {
+	case taskAttachContinuation:
+		return true
+	default:
+		return false
+	}
 }
 
 // clarifyFallbackSentinel is returned when a question goes unanswered (timeout
@@ -539,19 +571,18 @@ const clarifyFallbackSentinel = "No answer arrived in time (the user may be away
 // same 30-minute bound approvals use.
 const clarifyWaitTimeout = 30 * time.Minute
 
-func redactApprovalArgs(args map[string]interface{}) map[string]interface{} {
-	out := make(map[string]interface{})
-	for k, v := range args {
-		out[k] = tools.RedactSensitive(fmt.Sprintf("%v", v))
-	}
-	return out
-}
-
 // approvalActionTarget derives a compact single-string object of the pending
 // action (a path, command, pattern, or name) from the tool args, redacted like
 // the stored args. One-line UI surfaces use it; the full redacted args stay on
 // the approval row.
-func approvalActionTarget(args map[string]interface{}) string {
+func approvalActionTarget(toolName string, args map[string]interface{}) string {
+	if toolName == "execute_code" {
+		language, _ := args["language"].(string)
+		if strings.TrimSpace(language) == "" {
+			language = "python"
+		}
+		return strings.TrimSpace(language) + " script"
+	}
 	for _, key := range []string{"path", "file_path", "filename", "command", "pattern", "query", "name", "action", "url"} {
 		if v, ok := args[key].(string); ok && strings.TrimSpace(v) != "" {
 			return tools.RedactSensitive(strings.TrimSpace(v))

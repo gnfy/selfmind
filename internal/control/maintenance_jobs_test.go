@@ -223,6 +223,51 @@ func TestReplayRetryLimitedMaintenanceJobsIsSelective(t *testing.T) {
 	}
 }
 
+func TestBlockMaintenanceJobAfterRetriesPreservesProviderError(t *testing.T) {
+	ctx := context.Background()
+	store, identity, _, run := newRecoveryFixture(t)
+	if err := store.FinishRunWithMaintenancePayload(ctx, identity.TenantID, run.ID, "done", 1, `{"run":"retryable"}`); err != nil {
+		t.Fatal(err)
+	}
+	if claimed, err := store.ClaimMaintenanceJob(ctx, identity.TenantID, run.ID, 1); err != nil || !claimed {
+		t.Fatalf("claim: claimed=%v err=%v", claimed, err)
+	}
+	const providerError = "context deadline exceeded while calling maintenance provider"
+	if err := store.FailMaintenanceJob(ctx, identity.TenantID, run.ID, 1, providerError, 0); err != nil {
+		t.Fatal(err)
+	}
+	blocked, err := store.BlockMaintenanceJobAfterRetries(ctx, identity.TenantID, run.ID, 1, "generic retry limit")
+	if err != nil || !blocked {
+		t.Fatalf("block after retries: blocked=%v err=%v", blocked, err)
+	}
+	job, err := store.GetMaintenanceJob(ctx, identity.TenantID, run.ID, 1)
+	if err != nil || job == nil {
+		t.Fatalf("job=%+v err=%v", job, err)
+	}
+	if job.Status != MaintenanceJobBlockedProvider || job.LastError != providerError {
+		t.Fatalf("blocked job=%+v", job)
+	}
+	attempts, err := store.RecentMaintenanceAttempts(ctx, identity.TenantID, time.Now().Add(-time.Hour), 10)
+	if err != nil || len(attempts) != 2 {
+		t.Fatalf("attempts=%+v err=%v", attempts, err)
+	}
+	if attempts[0].Outcome != "blocked_retry_limit" || attempts[0].Error != "generic retry limit" {
+		t.Fatalf("latest attempt=%+v", attempts[0])
+	}
+	if attempts[1].Outcome != "failed" || attempts[1].Error != providerError {
+		t.Fatalf("provider failure=%+v", attempts[1])
+	}
+
+	reset, err := store.ResetLegacyBlockedMaintenanceJobs(ctx)
+	if err != nil || reset != 1 {
+		t.Fatalf("restart probe: reset=%d err=%v", reset, err)
+	}
+	job, _ = store.GetMaintenanceJob(ctx, identity.TenantID, run.ID, 1)
+	if job == nil || job.Status != MaintenanceJobPending {
+		t.Fatalf("requeued job=%+v", job)
+	}
+}
+
 // TestMaintenanceAttemptHistory pins the append-only failure timeline: the
 // job row's last_error is overwritten on every transition, so fail/skip/block
 // must each leave a durable history row with the REAL error, and retention

@@ -606,7 +606,7 @@ func TestApprovalActionTarget(t *testing.T) {
 		{nil, ""},
 	}
 	for _, tc := range cases {
-		if got := approvalActionTarget(tc.args); got != tc.want {
+		if got := approvalActionTarget("terminal", tc.args); got != tc.want {
 			t.Errorf("approvalActionTarget(%v) = %q, want %q", tc.args, got, tc.want)
 		}
 	}

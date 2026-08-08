@@ -43,6 +43,16 @@ func TestAsyncRunMovesCurrentTaskPointer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// A second open label keeps the attachment genuinely ambiguous. Without a
+	// post-run analyzer the guessed current label must retain its lifecycle.
+	if _, err := store.CreateTask(ctx, control.TaskCreate{
+		TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "Other open work", Channel: "cli",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetCurrentTask(ctx, identity.TenantID, identity.PersonID, currentTask.ID); err != nil {
+		t.Fatal(err)
+	}
 	if current, _ := store.CurrentTask(ctx, identity.TenantID, identity.PersonID); current == nil || current.ID != currentTask.ID {
 		t.Fatalf("test setup: current task = %+v, want %s", current, currentTask.ID)
 	}
@@ -59,16 +69,19 @@ func TestAsyncRunMovesCurrentTaskPointer(t *testing.T) {
 		t.Fatalf("async accept failed: status=%d resp=%+v", status, resp)
 	}
 
-	// The run executes in the background on the pre-labeled current task; wait
-	// for the label to visibly carry it (a run stamps last_channel and moves
-	// the status off 'new').
+	// The run executes in the background on the pre-labeled current task. A weak
+	// guess may stamp channel activity but must preserve the established task's
+	// lifecycle until post-run labeling confirms KEEP or MOVE.
 	deadline := time.Now().Add(5 * time.Second)
 	for {
 		after, err := store.GetTask(ctx, identity.TenantID, currentTask.ID)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if after != nil && after.LastChannel == "send" && after.Status != "new" {
+		if after != nil && after.LastChannel == "send" {
+			if after.Status != currentTask.Status {
+				t.Fatalf("weak pre-label changed task lifecycle from %q to %q", currentTask.Status, after.Status)
+			}
 			break
 		}
 		if time.Now().After(deadline) {
@@ -80,6 +93,51 @@ func TestAsyncRunMovesCurrentTaskPointer(t *testing.T) {
 	current, _ := store.CurrentTask(ctx, identity.TenantID, identity.PersonID)
 	if current == nil || current.ID != currentTask.ID {
 		t.Fatalf("pointer should stay on the pre-labeled task; got %+v", current)
+	}
+}
+
+func TestWeakAttachWithSoleOpenLabelReconcilesWithoutAnalyzer(t *testing.T) {
+	t.Setenv("SELF_GATEWAY_TOKEN", "")
+	t.Setenv("SELF_DAEMON_TOKEN", "")
+	store, err := control.OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	ctx := httptest.NewRequest(http.MethodGet, "/", nil).Context()
+	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Local User")
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := store.CreateTask(ctx, control.TaskCreate{
+		TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "Only open work", Channel: "cli",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	daemon := &Server{Control: store, DefaultTenantID: "default"}
+	resp, status := daemon.ProcessMessage(ctx, api.MessageRequest{
+		Platform: "cli", PlatformUserID: "local", Channel: "send", Content: "continue the only open work", Async: true,
+	})
+	if status != http.StatusOK || !resp.Accepted {
+		t.Fatalf("async accept failed: status=%d resp=%+v", status, resp)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		stored, err := store.GetTask(ctx, identity.TenantID, task.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// This fixture deliberately has no agent gateway, so its run ends failed.
+		// The assertion is that the deterministic sole label receives that real
+		// lifecycle even though no post-run analyzer exists.
+		if stored != nil && stored.LastChannel == "send" && stored.Status == "failed" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("sole weak label did not reconcile deterministically: %+v", stored)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 
@@ -180,7 +238,7 @@ func TestStatusSurfacesPendingApproval(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"Waiting for your approval", "reply y or n", "[terminal]", "rm -rf build"} {
+	for _, want := range []string{"Waiting for your approval", "elapsed)", "reply y or n", "[terminal]", "rm -rf build"} {
 		if !strings.Contains(reply, want) {
 			t.Fatalf("status card missing %q:\n%s", want, reply)
 		}

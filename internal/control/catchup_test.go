@@ -43,6 +43,38 @@ func seedPendingSession(t *testing.T, s *Store, personID, channel, content strin
 	return *d
 }
 
+func TestDeliveryHealthByPlatformSeparatesTransportStates(t *testing.T) {
+	ctx := context.Background()
+	store, err := OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	unconfirmed := seedUnconfirmed(t, store, "p1", "wx", "maybe")
+	_ = unconfirmed
+	sent, err := store.EnqueueDelivery(ctx, Delivery{TenantID: "default", PersonID: "p1", Platform: "telegram", Channel: "tg", Content: "ok"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if claimed, _ := store.ClaimDelivery(ctx, sent.ID); !claimed {
+		t.Fatal("claim sent delivery")
+	}
+	if err := store.MarkDeliveryAttempt(ctx, sent.ID, true, "", time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	health, err := store.DeliveryHealthByPlatformSince(ctx, "default", "p1", time.Now().Add(-time.Hour))
+	if err != nil || len(health) != 2 {
+		t.Fatalf("health = %+v, %v", health, err)
+	}
+	byPlatform := map[string]DeliveryPlatformHealth{}
+	for _, item := range health {
+		byPlatform[item.Platform] = item
+	}
+	if byPlatform["weixin"].Unconfirmed != 1 || byPlatform["telegram"].Sent != 1 {
+		t.Fatalf("health = %+v", health)
+	}
+}
+
 // TestCatchUpEligibilityAndClaim pins the store-side anti-duplicate rails:
 // oldest-first ordering, the one-shot claim, and the freshness window.
 func TestCatchUpEligibilityAndClaim(t *testing.T) {

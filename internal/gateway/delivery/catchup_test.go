@@ -159,6 +159,48 @@ func TestCriticalPrepareFailureWaitsForFreshInboundThenRecovers(t *testing.T) {
 	}
 }
 
+func TestCatchUpDropsApprovalResolvedWhileSessionWasStale(t *testing.T) {
+	ctx := context.Background()
+	store, err := control.OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if _, err := store.CreateApprovalRequest(ctx, control.ApprovalRequest{
+		ID: "apr_stale", TenantID: "default", PersonID: "p1",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	sender := &switchableReceiptSender{err: refreshRequiredError("prepare failed")}
+	svc := NewService(store, sender, Options{PollInterval: time.Hour})
+	if err := svc.EnqueueAndTry(ctx, Message{
+		TenantID: "default", PersonID: "p1", Platform: "weixin", Channel: "wx-chat",
+		Content: "approval needed", Kind: KindApproval, ApprovalID: "apr_stale",
+	}); err == nil {
+		t.Fatal("initial session failure must surface")
+	}
+	if err := store.ExpireApprovalRequest(ctx, "default", "apr_stale", "run ended"); err != nil {
+		t.Fatal(err)
+	}
+	sender.err = nil
+	sender.confirmed = true
+	sender.sent = nil
+	if n := svc.CatchUpRecoverable(ctx, "default", "p1", "weixin", "wx-chat"); n != 0 {
+		t.Fatalf("confirmed catch-up = %d, want 0", n)
+	}
+	if len(sender.sent) != 0 {
+		t.Fatalf("resolved approval was replayed: %v", sender.sent)
+	}
+	counts, err := store.CountOutboundByStatusSince(ctx, "default", "p1", time.Now().Add(-time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if counts["superseded"] != 1 || counts["pending_session"] != 0 {
+		t.Fatalf("delivery counts = %#v", counts)
+	}
+}
+
 func TestManualPendingSessionRetryIsPeerScoped(t *testing.T) {
 	ctx := context.Background()
 	store, err := control.OpenStore(t.TempDir())

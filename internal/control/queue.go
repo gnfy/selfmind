@@ -94,13 +94,16 @@ type QueuedTask struct {
 	RunID string `json:"run_id,omitempty"`
 	// IdempotencyKey deduplicates system-originated enqueues across crash
 	// recovery replays. Empty (ordinary inbound) rows never deduplicate.
-	IdempotencyKey string    `json:"idempotency_key,omitempty"`
-	Class          string    `json:"class,omitempty"`
-	Priority       int       `json:"priority,omitempty"`
-	NotBefore      time.Time `json:"not_before,omitempty"`
-	Status         string    `json:"status"`
-	Restarts       int       `json:"restarts,omitempty"`
-	CreatedAt      time.Time `json:"created_at"`
+	IdempotencyKey    string    `json:"idempotency_key,omitempty"`
+	Class             string    `json:"class,omitempty"`
+	Priority          int       `json:"priority,omitempty"`
+	NotBefore         time.Time `json:"not_before,omitempty"`
+	Status            string    `json:"status"`
+	Restarts          int       `json:"restarts,omitempty"`
+	ClaimToken        string    `json:"claim_token,omitempty"`
+	LeaseUntil        time.Time `json:"lease_until,omitempty"`
+	AttemptGeneration int       `json:"attempt_generation,omitempty"`
+	CreatedAt         time.Time `json:"created_at"`
 }
 
 // EnqueueQueued appends a new queued task for a person and returns the stored
@@ -132,7 +135,7 @@ func (s *Store) EnqueueQueued(ctx context.Context, q QueuedTask) (*QueuedTask, e
 	query := `INSERT INTO task_queue (id, tenant_id, person_id, channel, platform, platform_user_id, content, approval_mode, workspace_id, task_id, idempotency_key, class, priority, not_before, status, created_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 	if q.IdempotencyKey != "" {
-		query += ` ON CONFLICT(idempotency_key) WHERE idempotency_key != '' DO NOTHING`
+		query += ` ON CONFLICT(tenant_id, idempotency_key) WHERE idempotency_key != '' DO NOTHING`
 	}
 	result, err := s.db.ExecContext(ctx, query,
 		q.ID, q.TenantID, q.PersonID, q.Channel, q.Platform, q.PlatformUserID, q.Content, q.ApprovalMode, q.WorkspaceID, q.TaskID, q.IdempotencyKey, q.Class, q.Priority, notBefore, q.Status, q.CreatedAt.Unix())
@@ -146,7 +149,7 @@ func (s *Store) EnqueueQueued(ctx context.Context, q QueuedTask) (*QueuedTask, e
 		// The stable idempotency key already has a row: a replayed enqueue is
 		// success, never an error (a recovery loop must not spin on it).
 		existing := s.db.QueryRowContext(ctx,
-			`SELECT `+queueSelectColumns+` FROM task_queue WHERE idempotency_key = ?`, q.IdempotencyKey)
+			`SELECT `+queueSelectColumns+` FROM task_queue WHERE tenant_id = ? AND idempotency_key = ?`, q.TenantID, q.IdempotencyKey)
 		dup, err := scanQueuedTask(existing)
 		if err != nil {
 			return nil, fmt.Errorf("load duplicate queued task %q: %w", q.IdempotencyKey, err)
@@ -160,15 +163,19 @@ func scanQueuedTask(rows interface {
 	Scan(dest ...interface{}) error
 }) (QueuedTask, error) {
 	var q QueuedTask
-	var created, notBefore int64
+	var created, notBefore, leaseUntil int64
 	if err := rows.Scan(&q.ID, &q.TenantID, &q.PersonID, &q.Channel, &q.Platform, &q.PlatformUserID,
 		&q.Content, &q.ApprovalMode, &q.WorkspaceID, &q.TaskID, &q.RunID, &q.IdempotencyKey,
-		&q.Class, &q.Priority, &notBefore, &q.Status, &q.Restarts, &created); err != nil {
+		&q.Class, &q.Priority, &notBefore, &q.Status, &q.Restarts, &q.ClaimToken, &leaseUntil,
+		&q.AttemptGeneration, &created); err != nil {
 		return QueuedTask{}, err
 	}
 	q.CreatedAt = time.Unix(created, 0)
 	if notBefore > 0 {
 		q.NotBefore = time.Unix(notBefore, 0)
+	}
+	if leaseUntil > 0 {
+		q.LeaseUntil = time.Unix(leaseUntil, 0)
 	}
 	return q, nil
 }
@@ -176,7 +183,57 @@ func scanQueuedTask(rows interface {
 const queueSelectColumns = `id, tenant_id, person_id, channel, platform, COALESCE(platform_user_id, ''),
 	content, COALESCE(approval_mode, ''), COALESCE(workspace_id, ''), COALESCE(task_id, ''),
 	COALESCE(run_id, ''), COALESCE(idempotency_key, ''), COALESCE(class, 'foreground'),
-	COALESCE(priority, 100), COALESCE(not_before, 0), status, COALESCE(restarts, 0), created_at`
+	COALESCE(priority, 100), COALESCE(not_before, 0), status, COALESCE(restarts, 0),
+	COALESCE(claim_token, ''), COALESCE(lease_until, 0), COALESCE(attempt_generation, 0), created_at`
+
+const defaultQueueClaimLease = 2 * time.Minute
+
+// ClaimQueued atomically gives one worker ownership of a due queued row. The
+// token is required for binding and renewal, so a stale worker cannot extend a
+// later attempt after recovery has reassigned the stable queue row.
+func (s *Store) ClaimQueued(ctx context.Context, tenantID, id string, leaseFor time.Duration) (string, bool, error) {
+	if strings.TrimSpace(id) == "" {
+		return "", false, fmt.Errorf("queue id is required")
+	}
+	if leaseFor <= 0 {
+		leaseFor = defaultQueueClaimLease
+	}
+	token := "claim_" + uuid.NewString()
+	now := time.Now()
+	result, err := s.db.ExecContext(ctx,
+		`UPDATE task_queue SET status = ?, claim_token = ?, lease_until = ?, attempt_generation = attempt_generation + 1
+		 WHERE tenant_id = ? AND id = ? AND status = ? AND COALESCE(not_before, 0) <= ?`,
+		QueueStatusStarted, token, now.Add(leaseFor).Unix(), normalizeTenant(tenantID), id,
+		QueueStatusQueued, now.Unix())
+	if err != nil {
+		return "", false, err
+	}
+	n, _ := result.RowsAffected()
+	if n != 1 {
+		return "", false, nil
+	}
+	return token, true, nil
+}
+
+// RenewQueuedClaim keeps a live worker's ownership independent of model/tool
+// latency. It is deliberately keyed by the opaque claim token, not only row id.
+func (s *Store) RenewQueuedClaim(ctx context.Context, tenantID, id, token string, leaseFor time.Duration) (bool, error) {
+	if strings.TrimSpace(id) == "" || strings.TrimSpace(token) == "" {
+		return false, nil
+	}
+	if leaseFor <= 0 {
+		leaseFor = defaultQueueClaimLease
+	}
+	result, err := s.db.ExecContext(ctx,
+		`UPDATE task_queue SET lease_until = ?
+		 WHERE tenant_id = ? AND id = ? AND status = ? AND claim_token = ?`,
+		time.Now().Add(leaseFor).Unix(), normalizeTenant(tenantID), id, QueueStatusStarted, token)
+	if err != nil {
+		return false, err
+	}
+	n, _ := result.RowsAffected()
+	return n == 1, nil
+}
 
 // ListQueued returns a person's queue rows in scheduler order (priority first,
 // FIFO within one priority) for the given status. An empty status defaults to
@@ -247,13 +304,13 @@ func (s *Store) GetQueued(ctx context.Context, tenantID, id string) (*QueuedTask
 // GetQueuedByIdempotencyKey fetches one system-originated queue row. Ordinary
 // inbound rows intentionally have no idempotency key and are not addressable
 // through this recovery API.
-func (s *Store) GetQueuedByIdempotencyKey(ctx context.Context, key string) (*QueuedTask, error) {
+func (s *Store) GetQueuedByIdempotencyKey(ctx context.Context, tenantID, key string) (*QueuedTask, error) {
 	key = strings.TrimSpace(key)
 	if key == "" {
 		return nil, nil
 	}
 	row := s.db.QueryRowContext(ctx,
-		`SELECT `+queueSelectColumns+` FROM task_queue WHERE idempotency_key = ?`, key)
+		`SELECT `+queueSelectColumns+` FROM task_queue WHERE tenant_id = ? AND idempotency_key = ?`, normalizeTenant(tenantID), key)
 	q, err := scanQueuedTask(row)
 	if err != nil {
 		if strings.Contains(err.Error(), "no rows") {
@@ -297,11 +354,13 @@ func (s *Store) RequeueSystemQueued(ctx context.Context, tenantID, id string, ma
 		maxRestarts = 1
 	}
 	result, err := s.db.ExecContext(ctx,
-		`UPDATE task_queue SET status = ?, run_id = '', restarts = restarts + 1
+		`UPDATE task_queue SET status = ?, run_id = '', restarts = restarts + 1,
+			claim_token = '', lease_until = 0
 		 WHERE tenant_id = ? AND id = ? AND idempotency_key != ''
-		   AND status IN (?, ?) AND restarts < ?`,
+		   AND (status = ? OR (status = ? AND COALESCE(lease_until, 0) <= ?))
+		   AND restarts < ?`,
 		QueueStatusQueued, normalizeTenant(tenantID), id,
-		QueueStatusStarted, QueueStatusFailed, maxRestarts)
+		QueueStatusFailed, QueueStatusStarted, time.Now().Unix(), maxRestarts)
 	if err != nil {
 		return false, err
 	}
@@ -324,6 +383,25 @@ func (s *Store) BindQueuedRun(ctx context.Context, tenantID, id, runID string) e
 	}
 	if n, _ := result.RowsAffected(); n != 1 {
 		return fmt.Errorf("queue row is not started or is already bound to another run")
+	}
+	return nil
+}
+
+// BindQueuedRunClaimed binds a run only for the worker that owns the current
+// claim epoch. Legacy recovery/tests may keep using BindQueuedRun.
+func (s *Store) BindQueuedRunClaimed(ctx context.Context, tenantID, id, runID, token string) error {
+	if strings.TrimSpace(id) == "" || strings.TrimSpace(runID) == "" || strings.TrimSpace(token) == "" {
+		return fmt.Errorf("queue id, run id, and claim token are required")
+	}
+	result, err := s.db.ExecContext(ctx,
+		`UPDATE task_queue SET run_id = ?
+		 WHERE tenant_id = ? AND id = ? AND status = ? AND claim_token = ? AND (run_id = '' OR run_id = ?)`,
+		runID, normalizeTenant(tenantID), id, QueueStatusStarted, token, runID)
+	if err != nil {
+		return err
+	}
+	if n, _ := result.RowsAffected(); n != 1 {
+		return fmt.Errorf("queue claim is stale or already bound to another run")
 	}
 	return nil
 }
@@ -367,7 +445,8 @@ func (s *Store) RequeueDoneSystemQueuedIfUnmaterialized(ctx context.Context, ten
 		return false, nil
 	}
 	result, err := tx.ExecContext(ctx,
-		`UPDATE task_queue SET status = ?, run_id = '', restarts = restarts + 1
+		`UPDATE task_queue SET status = ?, run_id = '', restarts = restarts + 1,
+			claim_token = '', lease_until = 0
 		 WHERE tenant_id = ? AND id = ? AND status = ? AND run_id = ? AND restarts = ?`,
 		QueueStatusQueued, tenant, id, QueueStatusDone, runID, restarts)
 	if err != nil {
@@ -417,7 +496,8 @@ func (s *Store) MarkQueued(ctx context.Context, tenantID, id, status string) err
 		return fmt.Errorf("queue id is required")
 	}
 	_, err := s.db.ExecContext(ctx,
-		`UPDATE task_queue SET status = ? WHERE tenant_id = ? AND id = ?`,
+		`UPDATE task_queue SET status = ?, claim_token = '', lease_until = 0
+		 WHERE tenant_id = ? AND id = ?`,
 		normalizeName(status, QueueStatusQueued), normalizeTenant(tenantID), id)
 	return err
 }
@@ -431,7 +511,8 @@ func (s *Store) MarkQueuedIfStatus(ctx context.Context, tenantID, id, fromStatus
 		return false, fmt.Errorf("queue id is required")
 	}
 	result, err := s.db.ExecContext(ctx,
-		`UPDATE task_queue SET status = ? WHERE tenant_id = ? AND id = ? AND status = ?`,
+		`UPDATE task_queue SET status = ?, claim_token = '', lease_until = 0
+		 WHERE tenant_id = ? AND id = ? AND status = ?`,
 		normalizeName(toStatus, QueueStatusQueued), normalizeTenant(tenantID), id,
 		normalizeName(fromStatus, QueueStatusQueued))
 	if err != nil {
@@ -508,13 +589,23 @@ func (s *Store) RequeueStartedQueued(ctx context.Context) (requeued, dropped int
 		   AND EXISTS (
 		       SELECT 1 FROM task_events e
 		       WHERE e.run_id = task_queue.run_id AND e.type = 'run.finished'
+		   )
+		   AND (
+		       idempotency_key NOT LIKE 'external-watch:%:finalization'
+		       OR EXISTS (
+		           SELECT 1 FROM effect_receipts r
+		           WHERE r.tenant_id = task_queue.tenant_id
+		             AND r.effect_key = task_queue.idempotency_key
+		             AND r.delivery_enqueued = 1
+		       )
 		   )`,
 		QueueStatusDone, QueueStatusStarted); err != nil {
 		return 0, 0, err
 	}
 
 	res, err := tx.ExecContext(ctx,
-		`UPDATE task_queue SET status = ?, run_id = '', restarts = restarts + 1
+		`UPDATE task_queue SET status = ?, run_id = '', restarts = restarts + 1,
+			claim_token = '', lease_until = 0
 		 WHERE status = ? AND restarts < ?`,
 		QueueStatusQueued, QueueStatusStarted, maxQueueRestarts)
 	if err != nil {

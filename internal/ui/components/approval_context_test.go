@@ -85,6 +85,22 @@ func TestApprovalPromptShowsTriageUnavailable(t *testing.T) {
 	}
 }
 
+func TestApprovalPromptRendersBoundedCodePreview(t *testing.T) {
+	view := NewApprovalPromptDetailed(ApprovalDetails{
+		Tool:        "execute_code",
+		Target:      "python script",
+		CodePreview: "print('first')\nprint('second')",
+		CodeSHA256:  "0123456789abcdef",
+		CodeLines:   2,
+		CodeBytes:   31,
+	}).View(90)
+	for _, want := range []string{"code: print('first') print('second')", "2 lines", "31 bytes", "sha256 0123456789ab"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("execute-code approval is missing %q:\n%s", want, view)
+		}
+	}
+}
+
 func TestWrapDisplayBoundsLinesAndNormalizesWhitespace(t *testing.T) {
 	lines := WrapDisplay("alpha beta gamma delta epsilon zeta eta theta", 12, 2)
 	if len(lines) != 2 {

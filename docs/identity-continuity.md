@@ -188,6 +188,13 @@ WeChat-dispatched task from the CLI does not move its answer). Presence is
 derived from the event-poll heartbeat, never persisted as authority; a
 terminal crash is an implicit detach identical to a graceful close.
 
+**Delivery truth — accepted is not delivered.** A message persisted for an IM
+sender may still be `pending_session` or `sent_unconfirmed`; neither state may
+mark the source notification delivered. Only confirmed transport delivery does
+so. Pending/unconfirmed rows remain eligible for the bounded, idempotent
+catch-up path. Diagnostics aggregate this health per platform without exposing
+peer/channel identifiers.
+
 Re-attaching (next morning, back home on the same machine → same `cli/local`
 account → same person) flips rule 3/4 back and shows an **attach digest**:
 what finished/failed while away, pending approvals/questions, queued tasks —

@@ -1,0 +1,26 @@
+id: reliability_task_stays_waiting_on_open_blocker
+title: "An unresolved user blocker keeps the task waiting"
+suite: reliability
+workspace: isolated
+channel: cli
+require_cassette: false
+
+turns:
+  - input: >-
+      Park this task because the user must provide a production change ticket.
+      Finish the run as waiting_user and do not invent or resolve that input.
+
+expect:
+  status: waiting_user
+  resumable: true
+  max_duration_seconds: 120
+
+assert_state:
+  - { on: task, field: status, eq: "waiting_user" }
+
+checks:
+  no_mojibake: true
+  no_raw_json_leak: true
+  no_empty_response: true
+  no_provider_stack_dump: true
+

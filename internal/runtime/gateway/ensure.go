@@ -52,11 +52,17 @@ func EnsureRunning(ctx context.Context, opts EnsureOptions) (EnsureResult, error
 		timeout = 10 * time.Second
 	}
 
-	// Fast path: a live record that already answers /health.
-	if rec, ok := manager.RunningRecord(); ok {
-		if pingHealth(ctx, url) == nil {
-			return EnsureResult{URL: url, Record: rec}, nil
-		}
+	// Fast path: a healthy endpoint is stronger evidence than process metadata
+	// and also keeps compatibility with externally supervised gateways.
+	if pingHealth(ctx, url) == nil {
+		rec, _ := manager.RunningRecord()
+		return EnsureResult{URL: url, Record: rec}, nil
+	}
+	// If the endpoint is not ready but the runtime lock is owned, wait for that
+	// owner rather than spawning a duplicate. PID metadata is descriptive only.
+	if _, owned, probeErr := manager.RuntimeOwnerRecord(); probeErr != nil {
+		return EnsureResult{}, probeErr
+	} else if owned {
 		// Recorded but not answering yet (still starting): wait it out rather
 		// than spawning a duplicate that would just lose the flock race.
 		if err := waitHealthy(ctx, url, timeout); err == nil {

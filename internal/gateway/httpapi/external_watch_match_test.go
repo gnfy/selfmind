@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"runtime"
+	"strings"
 	"testing"
 
 	"selfmind/internal/control"
@@ -138,4 +139,60 @@ func TestClassifyExternalWatchOutput(t *testing.T) {
 	if got := classifyExternalWatchOutput(watch, "FAILURE\n", 1); got != control.ExternalWatchFailed {
 		t.Fatalf("failure with non-zero exit classified as %q", got)
 	}
+}
+
+func TestClassifyExternalWatchOutputV2PrioritizesTerminalFailure(t *testing.T) {
+	watch := control.ExternalWatch{
+		SpecVersion:            2,
+		TargetPattern:          "PENDING_APPROVAL",
+		TerminalSuccessPattern: "SUCCEEDED",
+		TerminalFailurePattern: "FAILED",
+	}
+	if got := classifyExternalWatchOutput(watch, "PENDING_APPROVAL\nFAILED\n", 0); got != control.ExternalWatchFailed {
+		t.Fatalf("failure and target classified as %q", got)
+	}
+	if got := classifyExternalWatchOutput(watch, "PENDING_APPROVAL\n", 0); got != control.ExternalWatchSucceeded {
+		t.Fatalf("target classified as %q", got)
+	}
+	if got := classifyExternalWatchOutput(watch, "SUCCEEDED\n", 0); got != control.ExternalWatchSucceeded {
+		t.Fatalf("terminal success classified as %q", got)
+	}
+	if got := classifyExternalWatchOutput(watch, "PENDING_APPROVAL\n", 1); got != "" {
+		t.Fatalf("non-clean target classified as %q", got)
+	}
+}
+
+func TestOperationSuccessSurvivesLaterVerifierFailure(t *testing.T) {
+	watch := control.ExternalWatch{
+		SpecVersion:            2,
+		TerminalSuccessPattern: `CD_STATUS=SUCCESS`,
+		TerminalFailurePattern: `CD_STATUS=FAILED`,
+	}
+	output := "CD_STATUS=SUCCESS\nERROR: get-credentials requires authentication\n"
+	if got := operationStatusFromOutput(watch, output); got != control.WatchOperationSucceeded {
+		t.Fatalf("operation status = %q", got)
+	}
+	watch.OperationStatus = control.WatchOperationSucceeded
+	watch.VerificationStatus = control.WatchVerificationBlocked
+	if notice := externalWatchNotice(watch, "waiting_finalization"); !strings.Contains(notice, "operation: succeeded") || !strings.Contains(notice, "verification: blocked_environment") {
+		t.Fatalf("notice lost split verdict: %q", notice)
+	}
+}
+
+func TestOperationFailureSurvivesLaterVerifierFailure(t *testing.T) {
+	watch := control.ExternalWatch{
+		SpecVersion:            2,
+		TerminalSuccessPattern: `CD_STATUS=SUCCESS`,
+		TerminalFailurePattern: `CD_STATUS=FAILED`,
+	}
+	output := "CD_STATUS=FAILED\nERROR: get-credentials requires authentication\n"
+	if got := operationStatusFromOutput(watch, output); got != control.WatchOperationFailed {
+		t.Fatalf("operation status = %q", got)
+	}
+	verdict := classifyWatchCheck("credential_missing", 1, true)
+	if verdict.Action != watchCheckPark {
+		t.Fatalf("fixture no longer exercises verifier parking: %+v", verdict)
+	}
+	// The poll loop handles the authoritative operation marker before this
+	// verifier verdict, so the terminal failure remains visible to finalization.
 }

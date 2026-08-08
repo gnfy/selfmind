@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -83,6 +84,7 @@ func Run(ctx context.Context, opts Options) error {
 	if err := manager.Acquire(); err != nil {
 		return err
 	}
+	previousUnclean, hadUncleanExit := manager.ReconcilePreviousState()
 	localControlToken, err := EnsureLocalControlToken(dataDir)
 	if err != nil {
 		return fmt.Errorf("initialize local control token: %w", err)
@@ -131,6 +133,43 @@ func Run(ctx context.Context, opts Options) error {
 		return fmt.Errorf("control.OpenStore failed: %w", err)
 	}
 	defer controlStore.Close()
+	if hadUncleanExit {
+		previousUnclean.InstanceID = previousUnclean.StableInstanceID()
+		payload, _ := json.Marshal(map[string]interface{}{
+			"pid": previousUnclean.PID, "state": previousUnclean.State,
+			"started_at": previousUnclean.StartedAt, "heartbeat_at": previousUnclean.HeartbeatAt,
+			"exit_reason": previousUnclean.ExitReason,
+		})
+		if inserted, recordErr := controlStore.RecordGatewayRuntimeEvent(context.Background(), control.GatewayRuntimeEvent{
+			InstanceID: previousUnclean.InstanceID,
+			EventType:  "gateway.unclean_exit",
+			Payload:    payload,
+		}); recordErr != nil {
+			log.Warn("gateway: record previous unclean exit failed", "error", recordErr)
+		} else if inserted {
+			log.Warn("gateway: previous instance ended without a clean shutdown",
+				"instance", previousUnclean.InstanceID, "reason", previousUnclean.ExitReason)
+		}
+	}
+	stopTriageTelemetry := tools.SetTriageTelemetrySink(func(event tools.TriageAuditEvent) {
+		// Diagnostics are best-effort and must never turn a busy SQLite writer
+		// into approval latency on the foreground tool path.
+		writeCtx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
+		defer cancel()
+		_ = controlStore.RecordApprovalTriageAudit(writeCtx, control.ApprovalTriageEvent{
+			TenantID: event.TenantID, PersonID: event.PersonID, TaskID: event.TaskID, RunID: event.RunID,
+			ToolName: event.ToolName, Outcome: string(event.Outcome), RiskLevel: event.RiskLevel,
+			UserAuthorization: event.Authorization, GrantKey: event.GrantKey, ProviderRoute: event.ProviderRoute,
+			LatencyMS: event.Latency.Milliseconds(), ErrorClass: event.ErrorClass, PolicyVersion: event.PolicyVersion,
+			Rationale: event.Rationale, LastError: event.RedactedError, At: event.At,
+		})
+	})
+	defer stopTriageTelemetry()
+	if pruned, pruneErr := controlStore.PruneApprovalTriageEvents(context.Background(), time.Now().Add(-14*24*time.Hour)); pruneErr != nil {
+		log.Warn("gateway: prune approval triage history failed", "error", pruneErr)
+	} else if pruned > 0 {
+		log.Info("gateway: pruned approval triage history", "count", pruned)
+	}
 	if retention := cfg.Gateway.OutboundRetentionDuration(); retention > 0 {
 		pruned, pruneErr := controlStore.PruneOutboundDeliveries(context.Background(), retention)
 		if pruneErr != nil {
@@ -301,14 +340,18 @@ func Run(ctx context.Context, opts Options) error {
 		})
 	}
 	gatewayAPI.RuntimeStatusFunc = func() api.GatewayRuntimeInfo {
+		record := manager.Snapshot()
 		return api.GatewayRuntimeInfo{
 			PID:             os.Getpid(),
+			InstanceID:      record.InstanceID,
 			Addr:            addr,
 			DataDir:         dataDir,
 			RuntimeDir:      manager.Paths.RuntimeDir,
 			State:           gatewayAPI.GatewayState(),
-			StartedAt:       manager.Started.UTC().Format(time.RFC3339),
-			UpdatedAt:       time.Now().UTC().Format(time.RFC3339),
+			StartedAt:       record.StartedAt,
+			UpdatedAt:       record.UpdatedAt,
+			HeartbeatAt:     record.HeartbeatAt,
+			ExitReason:      record.ExitReason,
 			DefaultTenantID: defaultTenantID,
 		}
 	}
@@ -327,6 +370,22 @@ func Run(ctx context.Context, opts Options) error {
 	if err := manager.WriteStatus("running", defaultTenantID, ""); err != nil {
 		return err
 	}
+	stopHeartbeat := make(chan struct{})
+	defer close(stopHeartbeat)
+	go func() {
+		ticker := time.NewTicker(15 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stopHeartbeat:
+				return
+			case <-ticker.C:
+				if err := manager.Heartbeat(); err != nil {
+					log.Warn("gateway: heartbeat write failed", "error", err)
+				}
+			}
+		}
+	}()
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)

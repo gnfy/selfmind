@@ -192,6 +192,7 @@ models:
   roles:
     memory_extract: { provider: "google", model: "gemini-1.5-flash" }
     background_review: { provider: "google", model: "gemini-1.5-flash" }
+    fast_classifier: { provider: "google", model: "gemini-1.5-flash" }
     skill_curator: { provider: "google", model: "gemini-1.5-flash" }
     semantic_recall: { provider: "google", model: "gemini-1.5-flash" }
 
@@ -451,10 +452,16 @@ Current role names:
 - `coding_agent`: main agent loop.
 - `memory_extract`: fact and turn extraction.
 - `background_review`: after-turn learning review.
+- `fast_classifier`: direct-answer routing, cheap classification, and low-latency smart approval triage.
 - `skill_curator`: skill review and curation.
 - `semantic_recall`: semantic session recall.
 
 In personal mode these are read from local YAML. In the future SaaS mode, the same role names can be resolved from a database-backed tenant/person/workspace model policy.
+
+Smart approval uses an explicitly configured `fast_classifier`. For legacy
+configs it may fall back to an explicitly configured `background_review`, but
+it never silently borrows `models.primary`; without either route it safely asks
+the person.
 
 ## Local TUI
 

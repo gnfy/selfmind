@@ -290,6 +290,11 @@ func NewFinishRunToolWithStore(store *PlanStore) *FinishRunTool {
 						Type:        "boolean",
 						Description: "Whether user approval is needed.",
 					},
+					"resolved_blocker_ids": {
+						Type:        "array",
+						Description: "Exact open blocker IDs resolved by this run. Include only blockers whose stated condition this run actually satisfied.",
+						Items:       &PropertyDef{Type: "string"},
+					},
 				},
 				Required: []string{"status", "summary"},
 			},
@@ -330,14 +335,15 @@ func (t *FinishRunTool) Execute(args map[string]interface{}) (string, error) {
 		}
 	}
 	out := map[string]interface{}{
-		"status":       status,
-		"summary":      summary,
-		"done":         taskStringSliceArg(args, "done"),
-		"next_steps":   taskStringSliceArg(args, "next_steps"),
-		"files":        taskStringSliceArg(args, "files"),
-		"tests":        taskStringSliceArg(args, "tests"),
-		"risks":        taskStringSliceArg(args, "risks"),
-		"need_approve": taskBoolArg(args, "need_approve"),
+		"status":               status,
+		"summary":              summary,
+		"done":                 taskStringSliceArg(args, "done"),
+		"next_steps":           taskStringSliceArg(args, "next_steps"),
+		"files":                taskStringSliceArg(args, "files"),
+		"tests":                taskStringSliceArg(args, "tests"),
+		"risks":                taskStringSliceArg(args, "risks"),
+		"need_approve":         taskBoolArg(args, "need_approve"),
+		"resolved_blocker_ids": taskStringSliceArg(args, "resolved_blocker_ids"),
 	}
 	data, _ := json.Marshal(out)
 	if t.store != nil {

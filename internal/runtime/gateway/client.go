@@ -59,7 +59,9 @@ func StartDetached(opts StartOptions) (StartResult, error) {
 	dataDir := resolveDataDir(cfg)
 	manager := NewManager(dataDir, ResolveAddr(cfg.Gateway.Addr))
 	previousRestartEnv := append([]string(nil), opts.InheritedRestartEnvironment...)
-	if rec, ok := manager.RunningRecord(); ok {
+	if rec, owned, probeErr := manager.RuntimeOwnerRecord(); probeErr != nil {
+		return StartResult{}, probeErr
+	} else if owned {
 		if !opts.Replace {
 			return StartResult{}, AlreadyRunningError{Record: rec}
 		}

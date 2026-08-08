@@ -58,8 +58,8 @@ type ExecutionScope struct {
 	// an empty result) falls back to ApprovalMode.
 	ModeGetter func() ApprovalMode
 	// Grants backs class-level approval memory: the approval middleware consults
-	// it to skip a human ask for an already-approved class and records new grants
-	// when a decision says "remember" (task/person scope). Nil = no memory.
+	// it to skip a human ask for an already-approved class and records durable
+	// task/person grants. Run-scoped grants use the in-memory set below.
 	Grants ApprovalGrantStore
 	// CapabilityStore backs time-bounded execution capabilities such as
 	// network:shared. Grants are scoped to this person and workspace and never
@@ -79,6 +79,42 @@ type ExecutionScope struct {
 	// work spine); it must return bounded, redacted text and is treated as
 	// untrusted data by the triage prompt. Nil means authorization is unknown.
 	TriageIntent func() string
+	// IntentSnapshot is the source-aware replacement for TriageIntent. Keeping
+	// both lets older embedders install a bounded string while the daemon supplies
+	// structured evidence. When present, this field wins.
+	IntentSnapshot func() RunIntentSnapshot
+	// runGrants remembers an explicit human approval only for this live run.
+	// It is intentionally in-memory and dies with SetExecutionScope cleanup:
+	// useful for repeated verification calls without minting durable authority.
+	runGrants *runApprovalGrantSet
+}
+
+type runApprovalGrantSet struct {
+	mu   sync.RWMutex
+	keys map[string]struct{}
+}
+
+func newRunApprovalGrantSet() *runApprovalGrantSet {
+	return &runApprovalGrantSet{keys: make(map[string]struct{})}
+}
+
+func (s *runApprovalGrantSet) has(key string) bool {
+	if s == nil || strings.TrimSpace(key) == "" {
+		return false
+	}
+	s.mu.RLock()
+	_, ok := s.keys[key]
+	s.mu.RUnlock()
+	return ok
+}
+
+func (s *runApprovalGrantSet) add(key string) {
+	if s == nil || strings.TrimSpace(key) == "" {
+		return
+	}
+	s.mu.Lock()
+	s.keys[key] = struct{}{}
+	s.mu.Unlock()
 }
 
 type ExecutionCapabilityStore interface {
@@ -153,6 +189,9 @@ func ExecutionScopeDiagnostics(personID string) ExecutionScopeDiagnostic {
 func SetExecutionScope(personKey string, scope ExecutionScope) func() {
 	personKey = strings.TrimSpace(personKey)
 	runKey := ExecutionScopeKeyForRun(scope.RunID)
+	if runKey != "" && scope.runGrants == nil {
+		scope.runGrants = newRunApprovalGrantSet()
+	}
 	if personKey == "" && runKey == "" {
 		return func() {}
 	}

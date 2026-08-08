@@ -97,6 +97,15 @@ func (c *RunCoordinator) selectedTaskRuntimeContext(ctx context.Context, task *c
 			})
 		}
 	}
+	if blockers, _ := c.srv.Control.ListOpenTaskBlockers(ctx, task.TenantID, task.ID, 12); len(blockers) > 0 && !preLabel {
+		selected.OpenBlockers = make([]kernel.TaskBlockerContext, 0, len(blockers))
+		for _, blocker := range blockers {
+			selected.OpenBlockers = append(selected.OpenBlockers, kernel.TaskBlockerContext{
+				ID: blocker.ID, Kind: blocker.Kind, OriginRunID: blocker.OriginRunID,
+				Summary: taskBlockerSummary(blocker.Detail),
+			})
+		}
+	}
 	// Fetch a larger candidate window, then keep the most relevant events
 	// within the budget (W3d) rather than just the most recent 8.
 	if events, _ := c.srv.Control.ListTaskEvents(ctx, task.ID, 40); len(events) > 0 && !preLabel {
@@ -164,6 +173,7 @@ func (c *RunCoordinator) selectedTaskRuntimeContext(ctx context.Context, task *c
 		// turns emit too — "recall found nothing" and "recall never ran" are
 		// different diagnoses (W2).
 		payload := map[string]interface{}{
+			"candidates": stats.Candidates,
 			"sources":    stats.Sources,
 			"refs":       stats.Refs,
 			"expanded":   stats.Expanded,
@@ -184,6 +194,16 @@ func (c *RunCoordinator) selectedTaskRuntimeContext(ctx context.Context, task *c
 		})
 	}
 	return selected
+}
+
+func taskBlockerSummary(raw json.RawMessage) string {
+	var detail struct {
+		Summary string `json:"summary"`
+	}
+	if json.Unmarshal(raw, &detail) == nil {
+		return textutil.Truncate(strings.TrimSpace(detail.Summary), 240)
+	}
+	return ""
 }
 
 func reverseEvents(events []control.Event) []control.Event {

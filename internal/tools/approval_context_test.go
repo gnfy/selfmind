@@ -163,6 +163,25 @@ func TestTriageDiagnosticsPartitionsAndAges(t *testing.T) {
 	}
 }
 
+func TestTriageTelemetrySinkReceivesRedactedBoundedEvent(t *testing.T) {
+	var gotTenant, gotPerson string
+	var gotOutcome TriageOutcome
+	var gotError string
+	stop := SetTriageTelemetrySink(func(event TriageAuditEvent) {
+		gotTenant, gotPerson, gotOutcome, gotError = event.TenantID, event.PersonID, event.Outcome, event.RedactedError
+	})
+	defer stop()
+
+	RecordTriageOutcome("tenant-sink", "person-sink", TriageOutcomeUnavailable,
+		errors.New("provider failed with api_key: sk-testsecret123456789"))
+	if gotTenant != "tenant-sink" || gotPerson != "person-sink" || gotOutcome != TriageOutcomeUnavailable {
+		t.Fatalf("sink identity/outcome = %q %q %q", gotTenant, gotPerson, gotOutcome)
+	}
+	if strings.Contains(gotError, "sk-testsecret") || gotError == "" {
+		t.Fatalf("sink error was not redacted: %q", gotError)
+	}
+}
+
 // TestApprovalChangeSummaryCountsWithoutContent pins that the summary carries
 // counts only — never patch or file content, which approval payloads redact.
 func TestApprovalChangeSummaryCountsWithoutContent(t *testing.T) {
@@ -190,6 +209,26 @@ func TestApprovalChangeSummaryCountsWithoutContent(t *testing.T) {
 	}
 	if got := ApprovalChangeSummary("terminal", map[string]interface{}{"command": "ls"}); got != "" {
 		t.Fatalf("non-write tools have no change summary, got %q", got)
+	}
+}
+
+func TestApprovalPersistentArgsBoundsExecuteCode(t *testing.T) {
+	code := strings.Repeat("print('safe')\n", 300) + "token=secret-value"
+	got := ApprovalPersistentArgs("execute_code", map[string]interface{}{
+		"code": code, "language": "python", "timeout": 30,
+	})
+	if _, leaked := got["code"]; leaked {
+		t.Fatal("complete execute_code source must not be persisted")
+	}
+	preview, _ := got["code_preview"].(string)
+	if len(preview) > 2048 || strings.Contains(preview, strings.Repeat("print('safe')\n", 30)) {
+		t.Fatalf("preview is not bounded: %d bytes", len(preview))
+	}
+	if got["code_sha256"] == "" || got["code_bytes"] != len(code) {
+		t.Fatalf("missing code audit metadata: %#v", got)
+	}
+	if summary := ApprovalChangeSummary("execute_code", map[string]interface{}{"code": code, "language": "python"}); !strings.Contains(summary, "python script") {
+		t.Fatalf("execute_code summary = %q", summary)
 	}
 }
 

@@ -103,6 +103,11 @@ func (m *uiModel) armApprovalPrompt(msg MsgApprovalRequest) {
 		Cwd:           msg.Cwd,
 		ChangeSummary: msg.ChangeSummary,
 		GrantClass:    msg.GrantClass,
+		Containment:   msg.Containment,
+		CodePreview:   msg.CodePreview,
+		CodeSHA256:    msg.CodeSHA256,
+		CodeLines:     msg.CodeLines,
+		CodeBytes:     msg.CodeBytes,
 		// Only the explicit "triage could not rule" state earns the notice. A
 		// deliberate escalation is the funnel working, and saying "unavailable"
 		// there would be a lie the person would learn to ignore.

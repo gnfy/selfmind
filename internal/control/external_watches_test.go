@@ -55,6 +55,81 @@ func TestExternalWatchLifecycle(t *testing.T) {
 	}
 }
 
+func TestExternalWatchV2PersistsAndBacksOffUnchangedOutput(t *testing.T) {
+	ctx := context.Background()
+	store, identity, task, run := newRecoveryFixture(t)
+	watch, err := store.CreateExternalWatch(ctx, ExternalWatch{
+		TenantID: identity.TenantID, PersonID: identity.PersonID,
+		TaskID: task.ID, RunID: run.ID, Channel: "cli",
+		CWD: t.TempDir(), Command: "check", SpecVersion: 2,
+		TargetPattern: "PENDING_APPROVAL", TerminalSuccessPattern: "SUCCEEDED",
+		TerminalFailurePattern: "FAILED", IntervalSeconds: 5,
+		TimeoutAt: time.Now().Add(time.Hour),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	checkpoint := func(output string) *ExternalWatch {
+		if _, err := store.db.ExecContext(ctx, `UPDATE external_watches SET next_check_at = 0 WHERE id = ?`, watch.ID); err != nil {
+			t.Fatal(err)
+		}
+		current, err := store.GetExternalWatch(ctx, watch.TenantID, watch.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if claimed, err := store.ClaimExternalWatch(ctx, *current); err != nil || !claimed {
+			t.Fatalf("claim=%v err=%v", claimed, err)
+		}
+		if err := store.RecordExternalWatchCheck(ctx, watch.TenantID, watch.ID, output, ""); err != nil {
+			t.Fatal(err)
+		}
+		current, err = store.GetExternalWatch(ctx, watch.TenantID, watch.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return current
+	}
+	if got := checkpoint("QUEUED"); got.SpecVersion != 2 || got.CurrentIntervalSeconds != 5 {
+		t.Fatalf("first checkpoint=%+v", got)
+	}
+	if got := checkpoint("QUEUED"); got.CurrentIntervalSeconds != 10 {
+		t.Fatalf("second interval=%d want 10", got.CurrentIntervalSeconds)
+	}
+	if got := checkpoint("RUNNING"); got.CurrentIntervalSeconds != 5 {
+		t.Fatalf("changed output interval=%d want reset to 5", got.CurrentIntervalSeconds)
+	}
+}
+
+func TestExternalWatchV2TargetRequiresBothTerminalOutcomes(t *testing.T) {
+	ctx := context.Background()
+	store, identity, task, run := newRecoveryFixture(t)
+	base := ExternalWatch{
+		TenantID: identity.TenantID, PersonID: identity.PersonID,
+		TaskID: task.ID, RunID: run.ID, Channel: "cli",
+		CWD: t.TempDir(), Command: "check", SpecVersion: 2,
+		TargetPattern: "PENDING_APPROVAL", TimeoutAt: time.Now().Add(time.Hour),
+	}
+	for name, mutate := range map[string]func(*ExternalWatch){
+		"neither terminal": func(*ExternalWatch) {},
+		"success only":     func(w *ExternalWatch) { w.TerminalSuccessPattern = "SUCCEEDED" },
+		"failure only":     func(w *ExternalWatch) { w.TerminalFailurePattern = "FAILED" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			watch := base
+			mutate(&watch)
+			if _, err := store.CreateExternalWatch(ctx, watch); err == nil {
+				t.Fatal("target-based V2 watch without both terminal outcomes must be rejected")
+			}
+		})
+	}
+	complete := base
+	complete.TerminalSuccessPattern = "SUCCEEDED"
+	complete.TerminalFailurePattern = "FAILED"
+	if _, err := store.CreateExternalWatch(ctx, complete); err != nil {
+		t.Fatalf("complete V2 verdict contract rejected: %v", err)
+	}
+}
+
 func TestExternalWatchVerdictRevision(t *testing.T) {
 	ctx := context.Background()
 	store, identity, task, run := newRecoveryFixture(t)

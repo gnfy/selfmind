@@ -117,8 +117,8 @@ func TestApplyVerificationOutcomeUsesDistinctPartialState(t *testing.T) {
 	if outcome.CompletionReason != "verification_failed" {
 		t.Fatalf("completion reason=%q", outcome.CompletionReason)
 	}
-	if got := terminalRunStatus(outcome.Status); got != "done" {
-		t.Fatalf("terminal run status=%q, want done", got)
+	if got := terminalRunStatus(outcome.Status); got != api.RunStatusVerificationPartial {
+		t.Fatalf("terminal run status=%q, want %s", got, api.RunStatusVerificationPartial)
 	}
 	if got := turnStatusForOutcome(outcome); got != api.RunStatusVerificationPartial {
 		t.Fatalf("turn status=%q", got)

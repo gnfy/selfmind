@@ -20,6 +20,7 @@ require (
 	golang.org/x/sync v0.19.0
 	golang.org/x/sys v0.42.0
 	modernc.org/sqlite v1.48.2
+	mvdan.cc/sh/v3 v3.13.1
 )
 
 require (

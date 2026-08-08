@@ -2,9 +2,12 @@ package app
 
 import (
 	"context"
+	"strings"
 	"testing"
+	"time"
 
 	"selfmind/internal/kernel/llm"
+	"selfmind/internal/platform/config"
 	"selfmind/internal/tools"
 )
 
@@ -31,8 +34,8 @@ func (p *judgeCaptureProvider) StreamChat(ctx context.Context, req llm.ChatReque
 }
 
 // TestApprovalJudgeBudgetCoversReasoning pins the fix for a silent failure mode:
-// every cheap role model in use is a REASONING model, so an output cap sized for
-// the one-word verdict alone (the old 8) was consumed by thinking. The judge then
+// every cheap role model in use may be a REASONING model, so an output cap sized
+// for the verdict alone (the old 8) was consumed by thinking. The judge then
 // returned nothing parseable, triage escalated every time, and smart mode became
 // on-request while still looking strict. The budget must leave room for reasoning
 // plus the verdict.
@@ -45,11 +48,63 @@ func TestApprovalJudgeBudgetCoversReasoning(t *testing.T) {
 	if _, err := judge.Judge(context.Background(), "Tool: terminal\nCommand: git status"); err != nil {
 		t.Fatalf("judge: %v", err)
 	}
-	if provider.last.MaxTokens < 256 {
+	if provider.last.MaxTokens < 512 {
 		t.Fatalf("MaxTokens = %d: too small for a reasoning model's thinking plus verdict", provider.last.MaxTokens)
 	}
-	if provider.last.SystemPrompt == "" {
-		t.Fatal("the one-word contract must be reinforced at the system level")
+	if !strings.Contains(provider.last.SystemPrompt, `"risk_level"`) || !strings.Contains(provider.last.SystemPrompt, `"rationale"`) {
+		t.Fatal("the structured guardian contract must be reinforced at the system level")
+	}
+}
+
+func TestConfiguredApprovalJudgeProviderPrefersFastClassifier(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Models.Primary = config.ModelSelectionConfig{Provider: "openai", Model: "primary-model"}
+	cfg.Models.Roles = map[string]config.ModelRoleConfig{
+		string(llm.RoleFastClassifier):   {Provider: "openai", Model: "fast-model", APIKey: "test-key"},
+		string(llm.RoleBackgroundReview): {Provider: "openai", Model: "review-model", APIKey: "test-key"},
+	}
+	cfg.Normalize()
+	provider, role := configuredApprovalJudgeProvider(nil, cfg, "default")
+	if provider == nil || role != llm.RoleFastClassifier {
+		t.Fatalf("provider=%T role=%q, want explicit fast_classifier", provider, role)
+	}
+	if got := llm.GetModelName(provider); got != "fast-model" {
+		t.Fatalf("model=%q, want fast-model", got)
+	}
+}
+
+func TestConfiguredApprovalJudgeProviderLegacyFallbackOnly(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Models.Primary = config.ModelSelectionConfig{Provider: "openai", Model: "primary-model"}
+	cfg.Models.Roles = map[string]config.ModelRoleConfig{
+		string(llm.RoleBackgroundReview): {Provider: "openai", Model: "review-model", APIKey: "test-key"},
+	}
+	cfg.Normalize()
+	provider, role := configuredApprovalJudgeProvider(nil, cfg, "default")
+	if provider == nil || role != llm.RoleBackgroundReview {
+		t.Fatalf("provider=%T role=%q, want legacy background_review", provider, role)
+	}
+
+	cfg.Models.Roles = nil
+	if provider, role := configuredApprovalJudgeProvider(nil, cfg, "default"); provider != nil || role != "" {
+		t.Fatalf("primary-only config must not feed approval triage: provider=%T role=%q", provider, role)
+	}
+}
+
+func TestConfiguredApprovalJudgeUsesConfiguredTimeout(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Agent.ApprovalTriageTimeout = "45s"
+	cfg.Models.Roles = map[string]config.ModelRoleConfig{
+		string(llm.RoleFastClassifier): {Provider: "openai", Model: "fast-model", APIKey: "test-key"},
+	}
+	cfg.Normalize()
+	judge := NewConfiguredApprovalJudge(nil, cfg, "default")
+	timed, ok := judge.(tools.ApprovalJudgeTimeout)
+	if !ok {
+		t.Fatalf("configured judge does not expose its foreground timeout: %T", judge)
+	}
+	if got := timed.ApprovalJudgeTimeout(); got != 45*time.Second {
+		t.Fatalf("ApprovalJudgeTimeout = %v, want 45s", got)
 	}
 }
 

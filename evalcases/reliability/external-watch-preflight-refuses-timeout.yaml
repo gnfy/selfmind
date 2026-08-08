@@ -1,0 +1,26 @@
+id: reliability_external_watch_preflight_refuses_timeout
+title: "an over-budget watcher check is refused during registration"
+suite: reliability
+workspace: isolated
+channel: cli
+require_cassette: false
+
+# A watcher repeats the same frozen check without a model in the loop. If its
+# very first check already consumes the complete per-check budget, registering
+# it only turns one slow command into durable background load. The foreground
+# agent must receive the timeout and keep the run out of waiting_external.
+turns:
+  - input: "Register a durable external watch named slow aggregate. In the current workspace, use the command `sleep 2; printf 'PENDING\\n'`, success pattern `SUCCEEDED`, interval 30 seconds, total timeout 300 seconds, and command timeout 1 second. Do not execute the command directly and do not replace it with another command. If registration is refused, explain the timeout briefly and stop."
+
+expect:
+  must_not_contain:
+    - "waiting_external"
+  max_tool_errors: 2
+  max_duration_seconds: 180
+
+checks:
+  no_mojibake: true
+  no_raw_json_leak: true
+  no_tool_xml_leak: true
+  no_empty_response: true
+  no_provider_stack_dump: true

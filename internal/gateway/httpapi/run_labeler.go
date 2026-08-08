@@ -119,6 +119,7 @@ func buildPostRunMaintenancePayload(identity *control.IdentityContext, task *con
 	payload, err := json.Marshal(postRunJobPayload{
 		Identity: *identity, Task: *task, Run: *run, WorkspaceID: workspaceID,
 		UserInput: userInput, Outcome: outcome, AttachCreated: attach.created, AttachPreLabel: attach.preLabel,
+		AttachReason: string(attach.reason),
 	})
 	if err != nil {
 		return "", fmt.Errorf("encode maintenance replay payload: %w", err)
@@ -148,14 +149,20 @@ func (c *RunCoordinator) materializeRunFinalization(ctx context.Context, identit
 		AnalyzerVersion:    postRunAnalyzerVersion,
 		MaintenancePayload: payload,
 		Event:              event,
+		ResolvedBlockerIDs: outcome.ResolvedBlockerIDs,
+		EffectKey:          attach.effectKey,
+		PreserveTaskCard:   attach.preLabel && !attach.created,
+		PreservedTaskStatus: func() string {
+			if attach.preLabel && !attach.created {
+				return task.Status
+			}
+			return ""
+		}(),
 	})
 	return err
 }
 
 func terminalRunStatus(status string) string {
-	if strings.EqualFold(strings.TrimSpace(status), api.RunStatusVerificationPartial) {
-		return "done"
-	}
 	return status
 }
 
@@ -168,6 +175,7 @@ type postRunJobPayload struct {
 	Outcome        api.RunOutcome          `json:"outcome"`
 	AttachCreated  bool                    `json:"attach_created,omitempty"`
 	AttachPreLabel bool                    `json:"attach_pre_label,omitempty"`
+	AttachReason   string                  `json:"attach_reason,omitempty"`
 }
 
 func (d *Server) analyzeFinishedRun(ctx context.Context, identity *control.IdentityContext, task *control.Task, run *control.Run, workspaceID, userInput string, outcome api.RunOutcome, attach taskAttach) {
@@ -202,7 +210,7 @@ type preparedPostRunAnalysis struct {
 }
 
 func (d *Server) preparePostRunAnalysis(ctx context.Context, identity *control.IdentityContext, task *control.Task, run *control.Run, workspaceID, userInput string, outcome api.RunOutcome, attach taskAttach) *preparedPostRunAnalysis {
-	if d == nil || d.Control == nil || d.PostRunAnalyzer == nil || identity == nil || task == nil || run == nil {
+	if d == nil || d.Control == nil || identity == nil || task == nil || run == nil {
 		return nil
 	}
 	var candidates []control.Task
@@ -214,8 +222,24 @@ func (d *Server) preparePostRunAnalysis(ctx context.Context, identity *control.I
 		strings.Join(outcome.NextSteps, " "),
 	)
 	if attach.preLabel {
-		candidates = d.openLabelCandidates(ctx, identity, task.ID, workKey)
+		var err error
+		candidates, err = d.openLabelCandidates(ctx, identity, task.ID, workKey)
+		if err != nil {
+			log.Warn("gateway: open-label candidate lookup failed; preserving weak-label lifecycle", "task", task.ID, "run", run.ID, "error", err)
+			return nil
+		}
+		if !attach.created && len(candidates) == 0 {
+			// With no other open label, KEEP is deterministic and needs no model.
+			// Apply lifecycle now; a later memory-only analysis cannot change it.
+			if err := d.Control.ReconcileTaskAfterRun(ctx, identity.TenantID, task.ID, run.ID, taskStatusForFinalization(outcome, true)); err != nil {
+				log.Warn("gateway: deterministic weak-label lifecycle reconciliation failed", "task", task.ID, "run", run.ID, "error", err)
+				return nil
+			}
+		}
 		labelEligible = attach.created || len(candidates) > 0
+	}
+	if d.PostRunAnalyzer == nil {
+		return nil
 	}
 	if !labelEligible && !postRunMemoryEligible(userInput, outcome) {
 		_ = d.Control.SkipMaintenanceJob(ctx, identity.TenantID, run.ID, postRunAnalyzerVersion, "run is not eligible for post-run maintenance")
@@ -302,6 +326,18 @@ func (d *Server) failClaimedPostRun(ctx context.Context, prepared *preparedPostR
 	d.blockMaintenanceProviderJob(ctx, prepared.identity, prepared.task, prepared.run, postRunAnalyzerVersion, err)
 }
 
+// reconcileWeakLabelKeep closes the lifecycle gap left by a weak ingress
+// guess. Any rejected or malformed label decision is semantically KEEP, so
+// the guessed established label should receive the run's real terminal state.
+func (d *Server) reconcileWeakLabelKeep(ctx context.Context, identity *control.IdentityContext, task *control.Task, run *control.Run, attach taskAttach, outcome api.RunOutcome) {
+	if d == nil || d.Control == nil || identity == nil || task == nil || run == nil || !attach.preLabel || attach.created {
+		return
+	}
+	if err := d.Control.ReconcileTaskAfterRun(ctx, identity.TenantID, task.ID, run.ID, taskStatusForFinalization(outcome, true)); err != nil {
+		log.Warn("gateway: weak-label task lifecycle reconciliation failed", "task", task.ID, "run", run.ID, "error", err)
+	}
+}
+
 func (d *Server) applyPostRunLabel(ctx context.Context, identity *control.IdentityContext, task *control.Task, run *control.Run, attach taskAttach, candidates []control.Task, workKey string, outcome api.RunOutcome, rawDecision string) {
 	// A unique issue key is stronger display evidence than a maintenance
 	// model's conservative KEEP. This runs only after execution and only moves
@@ -320,12 +356,14 @@ func (d *Server) applyPostRunLabel(ctx context.Context, identity *control.Identi
 	decision, arg := parseRunLabelReply(rawDecision)
 	switch decision {
 	case "KEEP", "":
+		d.reconcileWeakLabelKeep(ctx, identity, task, run, attach, outcome)
 		return
 	case "MOVE":
 		target := matchOpenLabel(candidates, arg)
 		if target == nil {
 			log.Warn("gateway: run labeler MOVE target not an offered open label; keeping pre-label",
 				"run", run.ID, "target", arg)
+			d.reconcileWeakLabelKeep(ctx, identity, task, run, attach, outcome)
 			return
 		}
 		d.applyLabelMove(ctx, identity, task, run, target, attach, rawDecision)
@@ -335,6 +373,7 @@ func (d *Server) applyPostRunLabel(ctx context.Context, identity *control.Identi
 		// truncated input). Established labels are renamed by humans only
 		// (/task <id> rename).
 		if !attach.created {
+			d.reconcileWeakLabelKeep(ctx, identity, task, run, attach, outcome)
 			return
 		}
 		title := strings.TrimSpace(arg)
@@ -354,6 +393,7 @@ func (d *Server) applyPostRunLabel(ctx context.Context, identity *control.Identi
 		})
 	case "INBOX":
 		if !d.TaskGovernance.InboxEnabled {
+			d.reconcileWeakLabelKeep(ctx, identity, task, run, attach, outcome)
 			return
 		}
 		if !postRunInboxEligible(outcome, workKey) {
@@ -364,6 +404,7 @@ func (d *Server) applyPostRunLabel(ctx context.Context, identity *control.Identi
 				"run_id":             run.ID,
 				"reason":             "durable run evidence is not eligible for Inbox",
 			})
+			d.reconcileWeakLabelKeep(ctx, identity, task, run, attach, outcome)
 			return
 		}
 		d.applyInboxLabel(ctx, identity, task, run, attach, rawDecision)
@@ -482,10 +523,10 @@ func (d *Server) appendLabelAssignedEvent(ctx context.Context, taskID, runID str
 // openLabelCandidates returns the person's open (non-terminal, non-archived)
 // labels excluding the pre-label itself, newest first, capped at
 // runLabelerMaxOpenLabels.
-func (d *Server) openLabelCandidates(ctx context.Context, identity *control.IdentityContext, excludeTaskID, preferredWorkKey string) []control.Task {
+func (d *Server) openLabelCandidates(ctx context.Context, identity *control.IdentityContext, excludeTaskID, preferredWorkKey string) ([]control.Task, error) {
 	tasks, err := d.Control.ListTasks(ctx, identity.TenantID, identity.PersonID, 50)
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	var out []control.Task
 	for _, t := range tasks {
@@ -504,7 +545,7 @@ func (d *Server) openLabelCandidates(ctx context.Context, identity *control.Iden
 	if len(out) > runLabelerMaxOpenLabels {
 		out = out[:runLabelerMaxOpenLabels]
 	}
-	return out
+	return out, nil
 }
 
 func buildPostRunAnalysisPrompt(task *control.Task, created, labelEligible bool, workKey, userInput string, outcome api.RunOutcome, candidates []control.Task) string {

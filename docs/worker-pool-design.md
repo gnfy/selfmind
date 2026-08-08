@@ -59,6 +59,13 @@ single-threaded by construction, so it's uncontended).
   "queued" event** (don't silently block the caller; surface progress per the
   AGENTS.md "hard tasks must not look stalled" rule).
 
+Durable queue ownership (shipped 2026-08-08) is a lease, not a status guess.
+Claiming a row atomically writes an opaque claim token, lease deadline, and
+attempt generation; only that token may bind the created run or renew the
+lease. Recovery may requeue a started system row only after the lease expires.
+This contract is deliberately runner-ready: a future remote worker can carry
+the same token without changing queue semantics.
+
 ## 3a. Scheduling primitive — shipped
 
 `internal/runpool` (`Pool`, race-tested) implements §3's core: bound total

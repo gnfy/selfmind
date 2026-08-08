@@ -1,0 +1,30 @@
+id: reliability_task_done_with_resolved_blocker
+title: "An explicitly resolved blocker no longer keeps completed work interrupted"
+suite: reliability
+workspace: isolated
+channel: cli
+require_cassette: false
+
+turns:
+  - input: >-
+      This task requires one user confirmation before completion. Finish this
+      run as waiting_user and state that confirmation is the only blocker.
+  - input: >-
+      Confirmed. Continue the same task, complete it, and resolve the exact open
+      blocker ID shown in the durable task context.
+
+expect:
+  status: completed
+  completion_reason: completed
+  resumable: false
+  max_duration_seconds: 180
+
+assert_state:
+  - { on: task, field: status, eq: "done" }
+
+checks:
+  no_mojibake: true
+  no_raw_json_leak: true
+  no_empty_response: true
+  no_provider_stack_dump: true
+

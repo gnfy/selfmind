@@ -788,6 +788,13 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 		Type:    "context.breakdown",
 		Payload: breakdownPayload,
 	})
+	emitProviderCallContext := func(iteration int, transport string, callMessages []llm.Message, callStrategy TaskStrategy) {
+		prepared := a.prepareMessagesForModel(ctx, callMessages)
+		payload := ProviderCallContextBreakdown(promptSections, prepared, a.llmToolDefinitions(callStrategy))
+		payload["iteration"] = iteration
+		payload["transport"] = transport
+		EmitAgentEvent(eventCh, AgentEvent{Type: "provider.call.context_breakdown", Payload: payload})
+	}
 
 	history := TaskHistory{
 		Goal:  initialPrompt,
@@ -1017,6 +1024,7 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 		}
 
 		streamCtx, streamCancel := context.WithCancel(ctx)
+		emitProviderCallContext(i, "stream", messages, iterationStrategy)
 		streamCallStarted := time.Now()
 		streamCh, err := a.streamChatWithRetry(streamCtx, messages, iterationStrategy)
 		if err != nil {
@@ -1037,6 +1045,7 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 			} else {
 				emitAgentActivity(eventCh, "Streaming transport failed; retrying without streaming", "transport_recovery", i)
 			}
+			emitProviderCallContext(i, "non_stream", fallbackMessages, iterationStrategy)
 			fallbackCallStarted := time.Now()
 			fallbackResp, fallbackErr := a.chatResponseWithRetry(ctx, fallbackMessages, iterationStrategy)
 			if fallbackErr != nil {
@@ -1141,6 +1150,7 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 					} else {
 						emitAgentActivity(eventCh, "Model stream interrupted; retrying the response", phase, i)
 					}
+					emitProviderCallContext(i, "non_stream", recoveryMessages, iterationStrategy)
 					fallbackCallStarted := time.Now()
 					fallbackResp, fallbackErr := a.chatResponseWithRetry(ctx, recoveryMessages, iterationStrategy)
 					if fallbackErr != nil {
@@ -1601,15 +1611,41 @@ func (a *Agent) selectRuntimeContext(ctx context.Context, tenantID, channel, pro
 		Type:    "context.selected",
 		Content: strings.Join(bundle.SelectionNotes, "; "),
 		Payload: map[string]interface{}{
-			"channel":        bundle.Channel,
-			"has_workspace":  bundle.Workspace != nil,
-			"has_task":       bundle.Task != nil,
-			"memory_count":   len(bundle.Memories),
-			"budget_chars":   bundle.Budget.TotalChars,
-			"workspace_root": workspaceRootForBundle(bundle),
+			"channel":                bundle.Channel,
+			"has_workspace":          bundle.Workspace != nil,
+			"has_task":               bundle.Task != nil,
+			"indexed_memory_count":   len(bundle.Memories),
+			"recall_slice_count":     runtimeRecallSliceCount(bundle),
+			"canonical_recall_count": runtimeRecallSourceCount(bundle, "canonical"),
+			"budget_chars":           bundle.Budget.TotalChars,
+			"workspace_root":         workspaceRootForBundle(bundle),
 		},
 	})
 	return WithRuntimeContextBundle(ctx, bundle)
+}
+
+func runtimeRecallSliceCount(bundle RuntimeContextBundle) int {
+	if bundle.Task != nil {
+		return len(bundle.Task.RecallSlices)
+	}
+	return len(bundle.Recall)
+}
+
+func runtimeRecallSourceCount(bundle RuntimeContextBundle, source string) int {
+	count := 0
+	if bundle.Task != nil {
+		for _, slice := range bundle.Task.RecallSlices {
+			if strings.EqualFold(strings.TrimSpace(slice.Source), source) {
+				count++
+			}
+		}
+	}
+	for _, item := range bundle.Recall {
+		if strings.EqualFold(strings.TrimSpace(item.Source), source) {
+			count++
+		}
+	}
+	return count
 }
 
 func (a *Agent) shouldRecallMemory(strategy TaskStrategy, bundle RuntimeContextBundle) bool {
@@ -1988,7 +2024,8 @@ func (a *Agent) buildSystemPrompt(ctx context.Context, tenantID string, strategy
 	// (where it would bust the cacheable prefix, the pre-P1-3 bug).
 	if bundle, ok := RuntimeContextBundleFromContext(ctx); ok {
 		if prompt := bundle.Prompt(8000); strings.TrimSpace(prompt) != "" {
-			addVolatile("runtime", prompt)
+			volatile = append(volatile, prompt)
+			sections = append(sections, SplitRuntimePromptSections(prompt)...)
 		}
 	} else {
 		if workspace, ok := WorkspaceContextFromContext(ctx); ok {

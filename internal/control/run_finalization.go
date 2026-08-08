@@ -29,6 +29,19 @@ type RunFinalization struct {
 	AnalyzerVersion    int
 	MaintenancePayload string
 	Event              Event
+	ResolvedBlockerIDs []string
+	// PreserveTaskCard keeps a weakly attached run from rewriting an existing
+	// task's stable summary and next steps. The run, handoff, events, and
+	// maintenance proposal are still materialized in full.
+	PreserveTaskCard bool
+	// PreservedTaskStatus is the task lifecycle observed before a weak
+	// pre-label run started. Weak attachment is display provenance, not
+	// authority to close or park an established task before post-run labeling.
+	PreservedTaskStatus string
+	// EffectKey identifies one logical side effect across retry runs. Ordinary
+	// turns leave it empty; durable watcher finalization uses its stable
+	// watch+verdict-revision key.
+	EffectKey string
 }
 
 // MaterializeRunFinalization commits the run, task, assistant message,
@@ -53,6 +66,7 @@ func (s *Store) MaterializeRunFinalization(ctx context.Context, input RunFinaliz
 	if input.AnalyzerVersion <= 0 {
 		input.AnalyzerVersion = 1
 	}
+	input.EffectKey = strings.TrimSpace(input.EffectKey)
 	input.Event.TaskID = input.TaskID
 	input.Event.RunID = input.RunID
 	if input.Event.Type == "" {
@@ -87,14 +101,37 @@ func (s *Store) MaterializeRunFinalization(ctx context.Context, input RunFinaliz
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	var personID string
+	var personID, originalTaskStatus string
 	if err := tx.QueryRowContext(ctx,
-		`SELECT person_id FROM tasks WHERE tenant_id = ? AND id = ?`, tenant, input.TaskID,
-	).Scan(&personID); err != nil {
+		`SELECT person_id, status FROM tasks WHERE tenant_id = ? AND id = ?`, tenant, input.TaskID,
+	).Scan(&personID, &originalTaskStatus); err != nil {
 		return nil, fmt.Errorf("load finalization task: %w", err)
 	}
 	if input.Identity.PersonID != "" && input.Identity.PersonID != personID {
 		return nil, fmt.Errorf("finalization identity does not own task")
+	}
+	duplicateEffect := false
+	if input.EffectKey != "" {
+		result, err := tx.ExecContext(ctx,
+			`INSERT OR IGNORE INTO effect_receipts
+			 (effect_key, tenant_id, task_id, run_id, kind, created_at)
+			 VALUES (?, ?, ?, ?, 'run_finalization', ?)`,
+			input.EffectKey, tenant, input.TaskID, input.RunID, now.Unix())
+		if err != nil {
+			return nil, fmt.Errorf("claim finalization effect: %w", err)
+		}
+		if n, _ := result.RowsAffected(); n == 0 {
+			duplicateEffect = true
+		}
+	}
+	if !duplicateEffect {
+		if err := resolveTaskBlockersTx(ctx, tx, tenant, input.TaskID, input.RunID, input.ResolvedBlockerIDs, now); err != nil {
+			return nil, fmt.Errorf("resolve task blockers: %w", err)
+		}
+		if err := ensureRunBlockerTx(ctx, tx, tenant, personID, input.TaskID, input.RunID,
+			input.TaskStatus, input.Summary, input.NextSteps, now); err != nil {
+			return nil, fmt.Errorf("record task blocker: %w", err)
+		}
 	}
 
 	result, err := tx.ExecContext(ctx,
@@ -108,29 +145,49 @@ func (s *Store) MaterializeRunFinalization(ctx context.Context, input RunFinaliz
 		return nil, fmt.Errorf("finish run affected %d rows", n)
 	}
 
-	taskStatus, err := resolveFinalTaskStatusTx(ctx, tx, tenant, input.TaskID, input.RunID, input.TaskStatus)
-	if err != nil {
-		return nil, fmt.Errorf("reduce task status: %w", err)
-	}
-	result, err = tx.ExecContext(ctx,
-		`UPDATE tasks SET status = ?, current_summary = COALESCE(NULLIF(?, ''), current_summary),
-		 next_steps_json = ?, active_run_id = CASE WHEN active_run_id = ? THEN '' ELSE active_run_id END,
+	taskStatus := input.TaskStatus
+	if !duplicateEffect {
+		taskStatus, err = resolveFinalTaskStatusTx(ctx, tx, tenant, input.TaskID, input.RunID, input.TaskStatus)
+		if err != nil {
+			return nil, fmt.Errorf("reduce task status: %w", err)
+		}
+		if input.PreserveTaskCard {
+			taskStatus = strings.TrimSpace(input.PreservedTaskStatus)
+			if taskStatus == "" {
+				taskStatus = originalTaskStatus
+			}
+		}
+		result, err = tx.ExecContext(ctx,
+			`UPDATE tasks SET status = ?,
+		 current_summary = CASE WHEN ? THEN current_summary ELSE COALESCE(NULLIF(?, ''), current_summary) END,
+		 next_steps_json = CASE WHEN ? THEN next_steps_json ELSE ? END,
+		 active_run_id = CASE WHEN active_run_id = ? THEN '' ELSE active_run_id END,
 		 archived_at = CASE WHEN ? = 'archived' THEN COALESCE(archived_at, ?) ELSE NULL END,
 		 last_activity_at = ?, updated_at = ? WHERE tenant_id = ? AND id = ?`,
-		taskStatus, input.Summary, string(nextJSON), input.RunID,
-		taskStatus, now.Unix(), now.Unix(), now.Unix(), tenant, input.TaskID)
-	if err != nil {
-		return nil, fmt.Errorf("update task: %w", err)
-	}
-	if n, _ := result.RowsAffected(); n != 1 {
-		return nil, fmt.Errorf("update task affected %d rows", n)
+			taskStatus, input.PreserveTaskCard, input.Summary, input.PreserveTaskCard, string(nextJSON), input.RunID,
+			taskStatus, now.Unix(), now.Unix(), now.Unix(), tenant, input.TaskID)
+		if err != nil {
+			return nil, fmt.Errorf("update task: %w", err)
+		}
+		if n, _ := result.RowsAffected(); n != 1 {
+			return nil, fmt.Errorf("update task affected %d rows", n)
+		}
+	} else {
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE tasks SET active_run_id = CASE WHEN active_run_id = ? THEN '' ELSE active_run_id END,
+			 last_activity_at = ?, updated_at = ? WHERE tenant_id = ? AND id = ?`,
+			input.RunID, now.Unix(), now.Unix(), tenant, input.TaskID); err != nil {
+			return nil, fmt.Errorf("settle duplicate finalization run: %w", err)
+		}
 	}
 
-	if err := createMaintenanceJobTx(ctx, tx, tenant, input.RunID, input.AnalyzerVersion, input.MaintenancePayload); err != nil {
-		return nil, fmt.Errorf("create maintenance job: %w", err)
+	if !duplicateEffect {
+		if err := createMaintenanceJobTx(ctx, tx, tenant, input.RunID, input.AnalyzerVersion, input.MaintenancePayload); err != nil {
+			return nil, fmt.Errorf("create maintenance job: %w", err)
+		}
 	}
 
-	if strings.TrimSpace(input.AssistantContent) != "" {
+	if !duplicateEffect && strings.TrimSpace(input.AssistantContent) != "" {
 		_, err = tx.ExecContext(ctx,
 			`INSERT OR IGNORE INTO channel_messages
 			 (id, tenant_id, person_id, account_id, channel, task_id, role, content, created_at)
@@ -150,14 +207,25 @@ func (s *Store) MaterializeRunFinalization(ctx context.Context, input RunFinaliz
 		input.Handoff.NextSteps = input.NextSteps
 		handoffNextJSON, _ = json.Marshal(input.Handoff.NextSteps)
 	}
-	_, err = tx.ExecContext(ctx,
-		`INSERT OR IGNORE INTO task_handoffs
+	if !duplicateEffect {
+		_, err = tx.ExecContext(ctx,
+			`INSERT OR IGNORE INTO task_handoffs
 		 (id, task_id, summary, done_items_json, next_steps_json, changed_files_json, test_status, risks_json, created_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		"handoff_run_"+input.RunID, input.TaskID, input.Handoff.Summary, string(doneJSON),
-		string(handoffNextJSON), string(filesJSON), input.Handoff.TestStatus, string(risksJSON), now.Unix())
-	if err != nil {
-		return nil, fmt.Errorf("save handoff: %w", err)
+			"handoff_run_"+input.RunID, input.TaskID, input.Handoff.Summary, string(doneJSON),
+			string(handoffNextJSON), string(filesJSON), input.Handoff.TestStatus, string(risksJSON), now.Unix())
+		if err != nil {
+			return nil, fmt.Errorf("save handoff: %w", err)
+		}
+	}
+	if duplicateEffect {
+		var payload map[string]interface{}
+		if json.Unmarshal(input.Event.Payload, &payload) != nil || payload == nil {
+			payload = map[string]interface{}{}
+		}
+		payload["effect_suppressed"] = true
+		payload["effect_key"] = input.EffectKey
+		input.Event.Payload, _ = json.Marshal(payload)
 	}
 
 	if len(input.Event.Payload) == 0 {
@@ -243,6 +311,85 @@ func (s *Store) MaterializeRunFinalization(ctx context.Context, input RunFinaliz
 	return &input.Event, nil
 }
 
+// ReconcileTaskAfterRun applies one finished run's lifecycle only after its
+// display label is known. It is the second half of weak pre-labeling: storage
+// is durable immediately, while task status waits until KEEP or MOVE is
+// resolved so a guessed label cannot be closed by mistake.
+func (s *Store) ReconcileTaskAfterRun(ctx context.Context, tenantID, taskID, runID, proposed string) error {
+	tenant := normalizeTenant(tenantID)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	status, err := resolveFinalTaskStatusTx(ctx, tx, tenant, taskID, runID, proposed)
+	if err != nil {
+		return err
+	}
+	now := time.Now().Unix()
+	result, err := tx.ExecContext(ctx,
+		`UPDATE tasks SET status = ?, last_activity_at = ?, updated_at = ?
+		 WHERE tenant_id = ? AND id = ?`,
+		status, now, now, tenant, taskID)
+	if err != nil {
+		return err
+	}
+	if n, _ := result.RowsAffected(); n != 1 {
+		return fmt.Errorf("reconcile task affected %d rows", n)
+	}
+	return tx.Commit()
+}
+
+// EffectOwnedByRun reports whether runID won a logical effect claim. Delivery
+// uses it to suppress duplicate endpoint results after storage has already
+// settled the retry run itself.
+func (s *Store) EffectOwnedByRun(ctx context.Context, tenantID, effectKey, runID string) (bool, error) {
+	effectKey = strings.TrimSpace(effectKey)
+	if effectKey == "" {
+		return true, nil
+	}
+	var owner string
+	err := s.db.QueryRowContext(ctx, `SELECT run_id FROM effect_receipts WHERE tenant_id = ? AND effect_key = ?`, normalizeTenant(tenantID), effectKey).Scan(&owner)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	return owner == runID, err
+}
+
+// MarkEffectDeliveryEnqueued records that the logical effect's result crossed
+// the durable outbox boundary. Queue recovery may settle the source row only
+// after this bit is true.
+func (s *Store) MarkEffectDeliveryEnqueued(ctx context.Context, tenantID, effectKey string) error {
+	if strings.TrimSpace(effectKey) == "" {
+		return nil
+	}
+	result, err := s.db.ExecContext(ctx,
+		`UPDATE effect_receipts SET delivery_enqueued = 1
+		 WHERE tenant_id = ? AND effect_key = ?`,
+		normalizeTenant(tenantID), strings.TrimSpace(effectKey))
+	if err != nil {
+		return err
+	}
+	if n, _ := result.RowsAffected(); n != 1 {
+		return fmt.Errorf("effect receipt not found")
+	}
+	return nil
+}
+
+func (s *Store) EffectDeliveryEnqueued(ctx context.Context, tenantID, effectKey string) (bool, error) {
+	if strings.TrimSpace(effectKey) == "" {
+		return true, nil
+	}
+	var value int
+	err := s.db.QueryRowContext(ctx,
+		`SELECT delivery_enqueued FROM effect_receipts WHERE tenant_id = ? AND effect_key = ?`,
+		normalizeTenant(tenantID), strings.TrimSpace(effectKey)).Scan(&value)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	return value != 0, err
+}
+
 // resolveFinalTaskStatusTx derives the task state from durable blockers before
 // applying the run's proposed terminal status. This prevents a late run from
 // overwriting a task that still has another active run, a pending user gate,
@@ -320,6 +467,14 @@ func resolveFinalTaskStatusTx(
 	}
 	if waitingFinalization {
 		return "waiting_finalization", nil
+	}
+
+	blockerStatus, err := openTaskBlockerStatusTx(ctx, tx, tenantID, taskID)
+	if err != nil {
+		return "", err
+	}
+	if blockerStatus != "" {
+		return blockerStatus, nil
 	}
 	return proposed, nil
 }

@@ -425,6 +425,10 @@ func TestEventToStreamApprovalRequested(t *testing.T) {
 			"tool":        "write_file",
 			"reason":      "edits main.go",
 			"target":      "main.go",
+			"cwd":         "/workspace",
+			"args": map[string]any{
+				"code_preview": "print('ok')",
+			},
 		}),
 	})
 	if !ok || se.EventType != "approval.requested" {
@@ -438,6 +442,13 @@ func TestEventToStreamApprovalRequested(t *testing.T) {
 	}
 	if target, _ := se.Payload["target"].(string); target != "main.go" {
 		t.Fatalf("target not carried: %+v", se.Payload)
+	}
+	if cwd, _ := se.Payload["cwd"].(string); cwd != "/workspace" {
+		t.Fatalf("decision context not carried: %+v", se.Payload)
+	}
+	args, _ := se.Payload["args"].(map[string]interface{})
+	if preview, _ := args["code_preview"].(string); preview != "print('ok')" {
+		t.Fatalf("bounded code preview not carried: %+v", se.Payload)
 	}
 }
 

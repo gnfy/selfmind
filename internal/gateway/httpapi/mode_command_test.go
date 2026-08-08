@@ -115,7 +115,7 @@ func TestApprovalModeLiveLookupMidRun(t *testing.T) {
 
 	// The run starts with NO explicit request mode and no persisted preference:
 	// the snapshot is on-request, exactly the live-defect setup.
-	cleanup := coord.installExecutionScope(identity, nil, nil, nil, api.MessageRequest{})
+	cleanup := coord.installExecutionScope(context.Background(), identity, nil, nil, nil, api.MessageRequest{})
 	defer cleanup()
 
 	ran := 0
@@ -165,7 +165,7 @@ func TestApprovalModeLiveLookupMidRun(t *testing.T) {
 	if err := store.SetPersonSetting(ctx, identity.TenantID, identity.PersonID, personSettingApprovalMode, "on-request"); err != nil {
 		t.Fatal(err)
 	}
-	cleanupExplicit := coord.installExecutionScope(identity, nil, nil, nil, api.MessageRequest{ApprovalMode: "full-auto"})
+	cleanupExplicit := coord.installExecutionScope(context.Background(), identity, nil, nil, nil, api.MessageRequest{ApprovalMode: "full-auto"})
 	defer cleanupExplicit()
 	if _, err := exec(dangerousOp); err != nil {
 		t.Fatalf("explicit request mode must win over the persisted preference: %v", err)

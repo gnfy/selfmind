@@ -196,6 +196,40 @@ func TestTaskQueueUsesClassPriorityAndNotBefore(t *testing.T) {
 	}
 }
 
+func TestQueueIdempotencyIsTenantScoped(t *testing.T) {
+	ctx := context.Background()
+	store, err := OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	first, err := store.EnqueueQueued(ctx, QueuedTask{
+		TenantID: "tenant-a", PersonID: "person-a", Platform: "cli", Channel: "cli",
+		Content: "first tenant", IdempotencyKey: "shared-effect",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := store.EnqueueQueued(ctx, QueuedTask{
+		TenantID: "tenant-b", PersonID: "person-b", Platform: "cli", Channel: "cli",
+		Content: "second tenant", IdempotencyKey: "shared-effect",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.ID == second.ID || first.TenantID == second.TenantID {
+		t.Fatalf("tenant-scoped queue keys collided: first=%+v second=%+v", first, second)
+	}
+	replayed, err := store.EnqueueQueued(ctx, QueuedTask{
+		TenantID: "tenant-b", PersonID: "person-b", Platform: "cli", Channel: "cli",
+		Content: "ignored replay", IdempotencyKey: "shared-effect",
+	})
+	if err != nil || replayed.ID != second.ID || replayed.Content != second.Content {
+		t.Fatalf("tenant replay = %+v, %v; want existing tenant-b row %+v", replayed, err, second)
+	}
+}
+
 func TestListAllQueuedAcrossPersons(t *testing.T) {
 	ctx := context.Background()
 	store, err := OpenStore(t.TempDir())
@@ -290,7 +324,7 @@ func TestRequeueSystemQueuedIsBoundedAndLeavesOrdinaryRowsAlone(t *testing.T) {
 		if err != nil || !requeued {
 			t.Fatalf("requeue %d = %v, %v", want, requeued, err)
 		}
-		row, err := store.GetQueuedByIdempotencyKey(ctx, system.IdempotencyKey)
+		row, err := store.GetQueuedByIdempotencyKey(ctx, system.TenantID, system.IdempotencyKey)
 		if err != nil || row == nil || row.Status != QueueStatusQueued || row.Restarts != want {
 			t.Fatalf("row after requeue %d = %+v, %v", want, row, err)
 		}
@@ -314,6 +348,61 @@ func TestRequeueSystemQueuedIsBoundedAndLeavesOrdinaryRowsAlone(t *testing.T) {
 	}
 	if requeued, err := store.RequeueSystemQueued(ctx, identity.TenantID, ordinary.ID, 2); err != nil || requeued {
 		t.Fatalf("ordinary row requeue = %v, %v; want false", requeued, err)
+	}
+}
+
+func TestQueueClaimLeasePreventsLiveSystemRequeue(t *testing.T) {
+	ctx := context.Background()
+	store, err := OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "gnfy", "Alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	row, err := store.EnqueueQueued(ctx, QueuedTask{
+		TenantID: identity.TenantID, PersonID: identity.PersonID,
+		Content: "finalize", IdempotencyKey: "external-watch:lease:r1:finalization",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	token, claimed, err := store.ClaimQueued(ctx, identity.TenantID, row.ID, time.Hour)
+	if err != nil || !claimed || token == "" {
+		t.Fatalf("claim = %q/%v, %v", token, claimed, err)
+	}
+	if err := store.BindQueuedRunClaimed(ctx, identity.TenantID, row.ID, "run_live", token); err != nil {
+		t.Fatal(err)
+	}
+	if requeued, err := store.RequeueSystemQueued(ctx, identity.TenantID, row.ID, 3); err != nil || requeued {
+		t.Fatalf("live leased row requeue = %v, %v; want false", requeued, err)
+	}
+	stored, err := store.GetQueued(ctx, identity.TenantID, row.ID)
+	if err != nil || stored == nil || stored.Status != QueueStatusStarted || stored.AttemptGeneration != 1 {
+		t.Fatalf("leased row = %+v, %v", stored, err)
+	}
+}
+
+func TestQueueClaimRejectsStaleWorker(t *testing.T) {
+	ctx := context.Background()
+	store, err := OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	identity, _ := store.ResolveOrCreateAccount(ctx, "default", "cli", "gnfy", "Alice")
+	row, _ := store.EnqueueQueued(ctx, QueuedTask{TenantID: identity.TenantID, PersonID: identity.PersonID, Content: "work"})
+	token, claimed, err := store.ClaimQueued(ctx, identity.TenantID, row.ID, time.Minute)
+	if err != nil || !claimed {
+		t.Fatalf("claim = %v, %v", claimed, err)
+	}
+	if err := store.BindQueuedRunClaimed(ctx, identity.TenantID, row.ID, "run_1", "stale-token"); err == nil {
+		t.Fatal("stale worker unexpectedly bound the queue row")
+	}
+	if err := store.BindQueuedRunClaimed(ctx, identity.TenantID, row.ID, "run_1", token); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -406,6 +495,12 @@ func TestRequeueStartedQueuedSettlesMaterializedRunWithoutReplay(t *testing.T) {
 	if _, err := store.AppendEvent(ctx, Event{TaskID: task.ID, RunID: "run_materialized", Type: "run.finished"}); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := store.db.ExecContext(ctx, `INSERT INTO effect_receipts
+		(effect_key, tenant_id, task_id, run_id, kind, delivery_enqueued, created_at)
+		VALUES (?, ?, ?, ?, 'run_finalization', 1, ?)`,
+		row.IdempotencyKey, identity.TenantID, task.ID, "run_materialized", time.Now().Unix()); err != nil {
+		t.Fatal(err)
+	}
 
 	requeued, dropped, err := store.RequeueStartedQueued(ctx)
 	if err != nil || requeued != 0 || dropped != 0 {
@@ -414,6 +509,70 @@ func TestRequeueStartedQueuedSettlesMaterializedRunWithoutReplay(t *testing.T) {
 	got, err := store.GetQueued(ctx, identity.TenantID, row.ID)
 	if err != nil || got == nil || got.Status != QueueStatusDone || got.Restarts != 0 || got.RunID != "run_materialized" {
 		t.Fatalf("materialized row = %+v, %v; want done without restart", got, err)
+	}
+}
+
+func TestRequeueStartedQueuedReplaysUntilFinalResultIsDurable(t *testing.T) {
+	ctx := context.Background()
+	store, err := OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	identity, _ := store.ResolveOrCreateAccount(ctx, "default", "cli", "gnfy", "Alice")
+	task, _ := store.CreateTask(ctx, TaskCreate{TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "finalization"})
+	row, err := store.EnqueueQueued(ctx, QueuedTask{
+		TenantID: identity.TenantID, PersonID: identity.PersonID, Channel: "cli", Platform: "cli",
+		Content: "finalize", IdempotencyKey: "external-watch:outbox:r1:finalization",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.MarkQueued(ctx, identity.TenantID, row.ID, QueueStatusStarted); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.BindQueuedRun(ctx, identity.TenantID, row.ID, "run_materialized"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AppendEvent(ctx, Event{TaskID: task.ID, RunID: "run_materialized", Type: "run.finished"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.ExecContext(ctx, `INSERT INTO effect_receipts
+		(effect_key, tenant_id, task_id, run_id, kind, delivery_enqueued, created_at)
+		VALUES (?, ?, ?, ?, 'run_finalization', 0, ?)`,
+		row.IdempotencyKey, identity.TenantID, task.ID, "run_materialized", time.Now().Unix()); err != nil {
+		t.Fatal(err)
+	}
+
+	requeued, dropped, err := store.RequeueStartedQueued(ctx)
+	if err != nil || requeued != 1 || dropped != 0 {
+		t.Fatalf("reconcile pending outbox row = %d/%d, %v; want 1/0", requeued, dropped, err)
+	}
+	got, err := store.GetQueued(ctx, identity.TenantID, row.ID)
+	if err != nil || got == nil || got.Status != QueueStatusQueued || got.RunID != "" {
+		t.Fatalf("pending outbox row = %+v, %v; want queued for replay", got, err)
+	}
+}
+
+func TestEffectReceiptsAreTenantScoped(t *testing.T) {
+	ctx := context.Background()
+	store, err := OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	for _, tenant := range []string{"tenant-a", "tenant-b"} {
+		if _, err := store.db.ExecContext(ctx, `INSERT INTO effect_receipts
+			(effect_key, tenant_id, task_id, run_id, kind, delivery_enqueued, created_at)
+			VALUES ('same-effect', ?, 'task', 'run', 'test', 0, ?)`, tenant, time.Now().Unix()); err != nil {
+			t.Fatalf("insert receipt for %s: %v", tenant, err)
+		}
+	}
+	for _, tenant := range []string{"tenant-a", "tenant-b"} {
+		owned, err := store.EffectOwnedByRun(ctx, tenant, "same-effect", "run")
+		if err != nil || !owned {
+			t.Fatalf("tenant %s receipt = %v, %v", tenant, owned, err)
+		}
 	}
 }
 

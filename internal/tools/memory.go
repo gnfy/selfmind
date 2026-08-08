@@ -104,6 +104,9 @@ func (t *MemoryTool) Execute(args map[string]interface{}) (string, error) {
 		if content == "" {
 			return "", fmt.Errorf("content is required for add")
 		}
+		if target != "pinned" && memory.ClassifyTransientContent(content) == memory.TransientConfirmed {
+			return "", fmt.Errorf("transient run/build state belongs in the task handoff or artifact, not long-term memory")
+		}
 		// The pinned target is user authority by definition (/memory pin routes
 		// here); everything else the agent saves on its own initiative.
 		source := memory.SourceAgent

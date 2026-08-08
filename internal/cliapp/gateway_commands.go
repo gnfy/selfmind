@@ -126,7 +126,19 @@ func (a *App) gatewayStatus(args []string) int {
 			_ = json.NewEncoder(a.stdout).Encode(rec)
 			return 0
 		}
-		fmt.Fprintf(a.stdout, "SelfMind gateway appears to be running (pid %d, addr %s), but HTTP status is unavailable.\n", rec.PID, rec.Addr)
+		if rec.HeartbeatStale(time.Now()) {
+			fmt.Fprintf(a.stdout, "SelfMind gateway process exists (pid %d), but its heartbeat is stale and HTTP is unreachable. Run `selfmind doctor`.\n", rec.PID)
+		} else {
+			fmt.Fprintf(a.stdout, "SelfMind gateway appears to be running (pid %d, addr %s), but HTTP status is unavailable.\n", rec.PID, rec.Addr)
+		}
+		return 1
+	}
+	if rec, readErr := gatewayrt.ReadStatusRecord(manager.Paths.StatePath); readErr == nil && rec.State == "crashed" {
+		if *jsonOut {
+			_ = json.NewEncoder(a.stdout).Encode(rec)
+			return 1
+		}
+		fmt.Fprintf(a.stdout, "SelfMind gateway stopped unexpectedly: %s\n", rec.ExitReason)
 		return 1
 	}
 	if *jsonOut {
@@ -334,6 +346,12 @@ func (a *App) printGatewayStatus(status api.GatewayStatusResponse) {
 	}
 	if runtime.PID > 0 {
 		fmt.Fprintf(a.stdout, "pid: %d\n", runtime.PID)
+	}
+	if runtime.InstanceID != "" {
+		fmt.Fprintf(a.stdout, "instance: %s\n", runtime.InstanceID)
+	}
+	if runtime.HeartbeatAt != "" {
+		fmt.Fprintf(a.stdout, "heartbeat: %s\n", runtime.HeartbeatAt)
 	}
 	if runtime.Addr != "" {
 		fmt.Fprintf(a.stdout, "addr: http://%s\n", runtime.Addr)

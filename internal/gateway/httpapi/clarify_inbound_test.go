@@ -97,7 +97,7 @@ func TestClarifySlashNotTreatedAsAnswer(t *testing.T) {
 // endpoint is returned verbatim as the tool result.
 func TestGatewayClarifyAnswerRoundTrip(t *testing.T) {
 	daemon, store, identity, task, run := newClarifyTestServer(t)
-	handler := daemon.coordinator().gatewayClarify(identity, task, run, "cli")
+	handler := daemon.coordinator().gatewayClarify(context.Background(), identity, task, run, "cli")
 
 	resultCh := make(chan string, 1)
 	go func() { resultCh <- handler("Which environment?", []string{"staging", "prod"}) }()
@@ -121,7 +121,7 @@ func TestGatewayClarifyAnswerRoundTrip(t *testing.T) {
 // returns the best-judgment sentinel instead of hanging.
 func TestGatewayClarifyExpireFallsBack(t *testing.T) {
 	daemon, store, identity, task, run := newClarifyTestServer(t)
-	handler := daemon.coordinator().gatewayClarify(identity, task, run, "cli")
+	handler := daemon.coordinator().gatewayClarify(context.Background(), identity, task, run, "cli")
 
 	resultCh := make(chan string, 1)
 	go func() { resultCh <- handler("Which environment?", nil) }()
@@ -137,6 +137,33 @@ func TestGatewayClarifyExpireFallsBack(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("gatewayClarify did not fall back after the question expired")
+	}
+}
+
+func TestGatewayClarifyStopsWhenRunIsCancelled(t *testing.T) {
+	daemon, store, identity, task, run := newClarifyTestServer(t)
+	runCtx, cancel := context.WithCancel(context.Background())
+	handler := daemon.coordinator().gatewayClarify(runCtx, identity, task, run, "cli")
+
+	resultCh := make(chan string, 1)
+	go func() { resultCh <- handler("Which environment?", nil) }()
+	clarify := waitForPendingClarify(t, store, identity)
+	cancel()
+
+	select {
+	case got := <-resultCh:
+		if got != clarifyFallbackSentinel {
+			t.Fatalf("clarify result = %q, want fallback sentinel", got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("gatewayClarify ignored run cancellation")
+	}
+	stored, err := store.GetClarifyRequest(context.Background(), identity.TenantID, clarify.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored == nil || stored.Status != "expired" {
+		t.Fatalf("clarify after cancellation = %+v, want expired", stored)
 	}
 }
 
@@ -158,7 +185,7 @@ func TestStatusShowsPendingClarify(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(reply, "Waiting for your answer") || !strings.Contains(reply, "Which environment") {
+	if !strings.Contains(reply, "Waiting for your answer") || !strings.Contains(reply, "elapsed)") || !strings.Contains(reply, "Which environment") {
 		t.Fatalf("status = %q", reply)
 	}
 }

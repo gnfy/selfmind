@@ -130,7 +130,7 @@ func TestExternalWatchFinalizationUsesRecordedEvidence(t *testing.T) {
 	if err := daemon.enqueueExternalWatchFinalization(ctx, watch, identity, "CI build completed."); err != nil {
 		t.Fatal(err)
 	}
-	row, err := store.GetQueuedByIdempotencyKey(ctx, externalWatchFinalizationKey(watch))
+	row, err := store.GetQueuedByIdempotencyKey(ctx, watch.TenantID, externalWatchFinalizationKey(watch))
 	if err != nil || row == nil {
 		t.Fatalf("queue row = %+v, %v", row, err)
 	}
@@ -438,7 +438,7 @@ func TestExternalWatchDoesNotMatchPatternsForDefectiveCheck(t *testing.T) {
 	if !ok || reason != watchReasonInvalidCheck {
 		t.Fatalf("a defective check was treated as a business verdict: status=%q err=%q", stored.Status, stored.LastError)
 	}
-	queued, err := store.GetQueuedByIdempotencyKey(ctx, externalWatchFinalizationKey(*stored))
+	queued, err := store.GetQueuedByIdempotencyKey(ctx, stored.TenantID, externalWatchFinalizationKey(*stored))
 	if err != nil {
 		t.Fatal(err)
 	}

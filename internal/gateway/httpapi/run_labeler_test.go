@@ -174,7 +174,7 @@ func TestLabelerMoveRepointsRunAndCleansPlaceholder(t *testing.T) {
 	}
 }
 
-func TestUniqueWorkKeyMovesRunWhenLabelerKeepsPlaceholder(t *testing.T) {
+func TestUniqueWorkKeyAttachesBeforeLabeler(t *testing.T) {
 	provider := newSlowLLMProvider("completed release verification for RUQX-224")
 	provider.releaseNow()
 	daemon, store, _ := newDetachedRunServer(t, provider)
@@ -191,8 +191,8 @@ func TestUniqueWorkKeyMovesRunWhenLabelerKeepsPlaceholder(t *testing.T) {
 
 	daemon.PostRunAnalyzer = &fakeLabeler{reply: "KEEP"}
 	resp := runOrdinaryTurn(t, daemon, "RUQX-224 production deployment needs verification")
-	if resp.Task == nil || resp.Task.ID == target.ID {
-		t.Fatalf("setup must create a provisional task before maintenance: %+v", resp.Task)
+	if resp.Task == nil || resp.Task.ID != target.ID {
+		t.Fatalf("ingress work key must attach directly to %s: %+v", target.ID, resp.Task)
 	}
 	runs, err := store.ListTaskRuns(ctx, target.TenantID, target.ID, 10)
 	if err != nil || len(runs) != 1 {
@@ -201,13 +201,10 @@ func TestUniqueWorkKeyMovesRunWhenLabelerKeepsPlaceholder(t *testing.T) {
 		fake.mu.Lock()
 		prompts := append([]string(nil), fake.prompts...)
 		fake.mu.Unlock()
-		t.Fatalf("unique work key did not move the run: runs=%+v err=%v tasks=%+v prompts=%q", runs, err, tasks, prompts)
-	}
-	if ghost, _ := store.GetTask(ctx, target.TenantID, resp.Task.ID); ghost != nil {
-		t.Fatalf("provisional task remained after deterministic move: %+v", ghost)
+		t.Fatalf("unique work key did not attach the run: runs=%+v err=%v tasks=%+v prompts=%q", runs, err, tasks, prompts)
 	}
 	if !hasEventOfType(t, store, target.ID, "label.assigned") {
-		t.Fatal("deterministic work-key move must remain auditable")
+		t.Fatal("deterministic ingress work-key decision must remain auditable")
 	}
 }
 
@@ -478,6 +475,39 @@ func TestLabelerMoveTargetMustBeOffered(t *testing.T) {
 	runs, _ := store.ListTaskRuns(ctx, resp.Task.TenantID, task.ID, 10)
 	if len(runs) != 1 {
 		t.Fatalf("run must stay on the pre-label, got %d runs", len(runs))
+	}
+}
+
+func TestRejectedLabelDecisionReconcilesWeakTaskLifecycle(t *testing.T) {
+	provider := newSlowLLMProvider("making progress on the requested work")
+	provider.releaseNow()
+	daemon, store, _ := newDetachedRunServer(t, provider)
+	ctx := context.Background()
+	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Me")
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := store.CreateTask(ctx, control.TaskCreate{
+		TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "Established work", Channel: "cli",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	target, err := store.CreateTask(ctx, control.TaskCreate{
+		TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "Other offered work", Channel: "cli",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := &control.Run{ID: "run_rejected_label"}
+	daemon.applyPostRunLabel(ctx, identity, task, run, taskAttach{preLabel: true}, []control.Task{*target}, "", api.RunOutcome{Status: "done"}, "MOVE:task_not_offered")
+
+	stored, err := store.GetTask(ctx, identity.TenantID, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored == nil || stored.Status != "done" {
+		t.Fatalf("rejected label decision must degrade to KEEP and reconcile lifecycle: %+v", stored)
 	}
 }
 

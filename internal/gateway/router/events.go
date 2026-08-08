@@ -110,7 +110,7 @@ func (g *Gateway) withAgentEvents(ctx context.Context, run func(context.Context)
 // surfaces the underlying cancellation.
 func watchdogError(ctx context.Context) error {
 	if cause := context.Cause(ctx); cause == runpool.ErrStalled {
-		return fmt.Errorf("run stalled: no progress for %s — freed the worker; please retry or refine the request", runIdleTimeout())
+		return fmt.Errorf("%w: no progress for %s; freed the worker; please retry or refine the request", runpool.ErrStalled, runIdleTimeout())
 	}
 	return ctx.Err()
 }

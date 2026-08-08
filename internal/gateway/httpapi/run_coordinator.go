@@ -214,11 +214,6 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 	// panic unwinding through this defer. Marking it done (not leaving it
 	// 'started') is what stops boot recovery from re-running already-completed
 	// work. Uses a fresh context so a cancelled turn ctx cannot skip the write.
-	if req.QueueID != "" && d != nil && d.Control != nil {
-		defer func() {
-			_, _ = d.Control.MarkQueuedIfStatus(context.Background(), identity.TenantID, req.QueueID, control.QueueStatusStarted, control.QueueStatusDone)
-		}()
-	}
 	if _, err := c.prepareRequestWorkspace(ctx, identity, &req); err != nil {
 		return api.MessageResponse{Identity: identity, Error: err.Error(), Turn: messageTurn("failed", "", "idle", "", "", err.Error()), Context: messageContextBudget(llmUsageZero())}, http.StatusInternalServerError
 	}
@@ -229,6 +224,7 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 		}
 		return api.MessageResponse{Identity: identity, Error: err.Error(), Turn: messageTurn("failed", "", "idle", "", "", err.Error()), Context: messageContextBudget(llmUsageZero())}, http.StatusInternalServerError
 	}
+	attach.effectKey = strings.TrimSpace(req.EffectKey)
 	// Keep the per-person current_task pointer on the task this run actually
 	// attached to. Channel-scoped resolution (and async sends in particular)
 	// can pick a task that differs from the pointer; without this sync,
@@ -236,7 +232,10 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 	c.syncCurrentTask(ctx, identity, task)
 	_ = d.Control.RecordChannelMessage(ctx, *identity, req.Channel, task.ID, "user", req.Content)
 
-	run, err := d.Control.StartRun(ctx, task, req.Channel, truncate(req.Content, 240))
+	run, err := d.Control.StartRunWithOptions(ctx, task, req.Channel, truncate(req.Content, 240), control.StartRunOptions{
+		WorkKey:               attach.workKey,
+		PreserveTaskLifecycle: attach.preLabel && !attach.created,
+	})
 	if err != nil {
 		if attach.created {
 			_, _ = d.Control.DeleteEmptyTask(context.WithoutCancel(ctx), identity.TenantID, identity.PersonID, task.ID)
@@ -244,7 +243,13 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 		return api.MessageResponse{Identity: identity, Task: task, Error: err.Error(), Turn: messageTurn("failed", task.Status, "idle", task.ID, "", err.Error()), Context: messageContextBudget(llmUsageZero())}, http.StatusInternalServerError
 	}
 	if req.QueueID != "" {
-		if err := d.Control.BindQueuedRun(ctx, identity.TenantID, req.QueueID, run.ID); err != nil {
+		var bindErr error
+		if req.QueueClaimToken != "" {
+			bindErr = d.Control.BindQueuedRunClaimed(ctx, identity.TenantID, req.QueueID, run.ID, req.QueueClaimToken)
+		} else {
+			bindErr = d.Control.BindQueuedRun(ctx, identity.TenantID, req.QueueID, run.ID)
+		}
+		if bindErr != nil {
 			summary := "The queued run could not be bound to its durable queue record."
 			outcome := api.RunOutcome{
 				Status: "failed", Summary: summary,
@@ -257,13 +262,13 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 				},
 				control.Event{
 					TaskID: task.ID, RunID: run.ID, Type: "run.failed", Visibility: "task", Channel: req.Channel,
-					Payload: mustJSON(map[string]string{"error": err.Error()}),
+					Payload: mustJSON(map[string]string{"error": bindErr.Error()}),
 				})
 			_, _ = d.Control.MarkQueuedIfStatus(context.WithoutCancel(ctx), identity.TenantID, req.QueueID, control.QueueStatusStarted, control.QueueStatusFailed)
-			return api.MessageResponse{Identity: identity, Task: task, Run: run, Error: err.Error(), Turn: messageTurn("failed", "interrupted", "idle", task.ID, run.ID, err.Error()), Context: messageContextBudget(llmUsageZero())}, http.StatusInternalServerError
+			return api.MessageResponse{Identity: identity, Task: task, Run: run, Error: bindErr.Error(), Turn: messageTurn("failed", "interrupted", "idle", task.ID, run.ID, bindErr.Error()), Context: messageContextBudget(llmUsageZero())}, http.StatusInternalServerError
 		}
 	}
-	stopHeartbeat := c.startRunHeartbeat(ctx, run)
+	stopHeartbeat := c.startRunHeartbeat(ctx, run, req.QueueID, req.QueueClaimToken)
 	defer stopHeartbeat()
 	c.updateActive(identity.PersonID, task, run)
 	startedPayload := map[string]string{"input": truncate(req.Content, 500)}
@@ -282,6 +287,14 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 		Channel:    req.Channel,
 		Payload:    mustJSON(startedPayload),
 	})
+	if attach.workKey != "" {
+		d.appendLabelAssignedEvent(ctx, task.ID, run.ID, map[string]interface{}{
+			"decision": "ingress_work_key",
+			"work_key": attach.workKey,
+			"task_id":  task.ID,
+			"run_id":   run.ID,
+		})
+	}
 
 	workspace, _ := c.workspaceForTask(ctx, identity, task, req, attach)
 	analysisWorkspaceID := run.WorkspaceID
@@ -360,7 +373,7 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 	// scope install and context assembly: the rendered attachment paths and
 	// the scope's allowed roots must both point at the managed copies.
 	req.Attachments = c.importAttachments(identity, run, req.Attachments)
-	cleanupScope := c.installExecutionScope(identity, task, run, workspace, req, lease)
+	cleanupScope := c.installExecutionScope(ctx, identity, task, run, workspace, req, lease)
 	defer cleanupScope()
 	// Tag the turn with its run-scoped key so tool calls resolve exactly this
 	// run's scope instead of the person's most recent one.
@@ -385,7 +398,7 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 	ctx = kernel.WithTaskRuntimeContext(ctx, c.selectedTaskRuntimeContext(ctx, task, run, workspace, req.Platform, req.Channel, req.Content, attach.preLabel))
 	ctx = c.withLoopCheckpointResume(ctx, identity, task, run, intent)
 	agentInput := c.withGatewayContext(req.Content, identity, task, workspace, req.Attachments)
-	agentInput = c.withResumeContext(ctx, identity, task, run, intent, agentInput)
+	agentInput = c.withResumeContext(ctx, identity, task, run, intent, attach.claimsPriorRuns(), attach.workKey, agentInput)
 	// Independent of continuation intent: any run on a task with uncertain
 	// (crash-orphaned) side-effect tool calls must verify before repeating
 	// (P0-B closure — a boot-requeued run re-drains as a "new" message).
@@ -589,11 +602,13 @@ func (c *RunCoordinator) startAsyncRun(identity *control.IdentityContext, req ap
 		// left wedged behind a dead run.
 		defer func() {
 			if r := recover(); r != nil {
-				c.recoverAsyncRun(identity, req, r)
+				accepted := c.recoverAsyncRun(identity, req, r)
+				c.settleAsyncQueue(identity, req, accepted)
 			}
 		}()
 		resp, _ := c.runMessage(runCtx, identity, req, intent)
-		c.deliverAsyncResult(context.Background(), identity, req, resp)
+		accepted := c.deliverAsyncResult(context.Background(), identity, req, resp)
+		c.settleAsyncQueue(identity, req, accepted)
 	}()
 
 	notice := router.WorkingNotice(req.Channel)
@@ -615,18 +630,18 @@ func (c *RunCoordinator) startAsyncRun(identity *control.IdentityContext, req ap
 // deferred endActive + drainQueue still run afterward, freeing the person's slot
 // so they are not wedged. It never re-panics. Run/task ids come from the active
 // registry snapshot (still present because this defer unwinds before endActive).
-func (c *RunCoordinator) recoverAsyncRun(identity *control.IdentityContext, req api.MessageRequest, r interface{}) {
+func (c *RunCoordinator) recoverAsyncRun(identity *control.IdentityContext, req api.MessageRequest, r interface{}) bool {
 	log.Error("async run panicked; recovered to keep the gateway alive",
 		"person", identity.PersonID, "channel", req.Channel,
 		"panic", fmt.Sprintf("%v", r), "stack", string(debug.Stack()))
 	if c.srv == nil || c.srv.Control == nil {
-		return
+		return false
 	}
 	active := c.currentActive(identity.PersonID)
 	if active == nil {
 		// Panic before the run was registered (e.g. during workspace/task
 		// resolution): nothing to finalize; endActive/drainQueue handle the slot.
-		return
+		return false
 	}
 	ctx := context.Background()
 	tenant := active.TenantID
@@ -681,12 +696,22 @@ func (c *RunCoordinator) recoverAsyncRun(identity *control.IdentityContext, req 
 		})
 	}
 	// Let the origin endpoint know the turn ended instead of hanging forever.
-	c.deliverAsyncResult(ctx, identity, req, api.MessageResponse{
+	return c.deliverAsyncResult(ctx, identity, req, api.MessageResponse{
 		Identity: identity,
 		Outcome:  &outcome,
 		Error:    "internal error: the run was aborted",
 		Turn:     messageTurn("failed", "interrupted", "idle", active.TaskID, active.RunID, "run aborted by internal error"),
 	})
+}
+
+func (c *RunCoordinator) settleAsyncQueue(identity *control.IdentityContext, req api.MessageRequest, deliveryAccepted bool) {
+	if c == nil || c.srv == nil || c.srv.Control == nil || identity == nil || req.QueueID == "" {
+		return
+	}
+	if req.EffectKey != "" && !deliveryAccepted {
+		return
+	}
+	_, _ = c.srv.Control.MarkQueuedIfStatus(context.Background(), identity.TenantID, req.QueueID, control.QueueStatusStarted, control.QueueStatusDone)
 }
 
 // drainQueue starts the next queued task for a person as an async run, once no
@@ -725,13 +750,16 @@ func (c *RunCoordinator) drainQueue(identity *control.IdentityContext) {
 
 	ctx := context.Background()
 	var next *control.QueuedTask
+	var claimToken string
 	for {
 		var err error
 		next, err = c.srv.Control.NextQueued(ctx, identity.TenantID, personID)
 		if err != nil || next == nil {
 			return
 		}
-		if err := c.srv.Control.MarkQueued(ctx, identity.TenantID, next.ID, control.QueueStatusStarted); err != nil {
+		var claimed bool
+		claimToken, claimed, err = c.srv.Control.ClaimQueued(ctx, identity.TenantID, next.ID, 0)
+		if err != nil || !claimed {
 			return
 		}
 		// A queued row is re-validated at drain time with today's inbound
@@ -763,7 +791,9 @@ func (c *RunCoordinator) drainQueue(identity *control.IdentityContext) {
 		// Carry the queue row id so the drained run's finalization marks it done
 		// (QueueStatusDone) — otherwise the row stays 'started' and boot recovery
 		// re-runs the already-completed work.
-		QueueID: next.ID,
+		QueueID:         next.ID,
+		QueueClaimToken: claimToken,
+		EffectKey:       next.IdempotencyKey,
 	}
 	if strings.HasPrefix(next.IdempotencyKey, "external-watch:") {
 		req.ExecutionProfile = tools.ExecutionProfileWatchFinalization

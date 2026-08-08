@@ -11,6 +11,7 @@ import (
 	"selfmind/internal/gateway/api"
 	"selfmind/internal/gateway/delivery"
 	"selfmind/internal/gateway/router"
+	"selfmind/internal/runpool"
 	"selfmind/internal/tools"
 	"strings"
 	"time"
@@ -38,11 +39,16 @@ func (c *RunCoordinator) finalizeErroredRun(ctx context.Context, identity *contr
 		if runErr != nil {
 			outcome.Risks = nil
 		}
+	} else if errors.Is(context.Cause(ctx), runpool.ErrStalled) || errors.Is(runErr, runpool.ErrStalled) {
+		outcome.CompletionReason = "stalled"
+		outcome.Summary = "The run stopped after execution made no progress within the watchdog window."
+		outcome.NextSteps = []string{"Reply \"continue\" to resume from the durable run history."}
+		outcome.Risks = []string{"An execution step stopped responding and was cancelled by the watchdog."}
+	} else if ctx.Err() != nil || errors.Is(runErr, context.Canceled) {
 		// A caller cancellation or caller deadline is terminal: request/eval turn
 		// budgets deliberately bound the daemon-owned run. Provider-internal
 		// timeouts, EOF, and rate-limit exhaustion leave ctx live and remain
 		// resumable interruptions because durable evidence may already exist.
-	} else if ctx.Err() != nil || errors.Is(runErr, context.Canceled) {
 		outcome.Status = "cancelled"
 		outcome.CompletionReason = "cancelled"
 		outcome.Resumable = false
@@ -205,8 +211,9 @@ func (c *RunCoordinator) recordOutcomeArtifacts(ctx context.Context, task *contr
 // resolveTask decides which task label this turn runs under (Work Timeline P3,
 // docs/work-timeline.md "Labels"/"Ingress"). Explicit evidence is
 // deterministic and wins: a caller-supplied task id, an IntentContinue
-// classification (router cue or short acceptance), or the one-shot /resume
-// pin. Everything else gets a harmless PRE-LABEL guess: the person's current
+// classification (router cue or short acceptance), the one-shot /resume pin,
+// or a unique work key resolving to an existing open label. Everything else
+// gets a harmless PRE-LABEL guess: the person's current
 // task when it is OPEN (non-terminal, non-archived), else a fresh placeholder
 // label. The guess is safe because context is spine-based (P1) and recall
 // (P2) — labels never gate what the model sees — and the post-run labeler
@@ -215,11 +222,16 @@ func (c *RunCoordinator) recordOutcomeArtifacts(ctx context.Context, task *contr
 // (queue/approvals/busy/steer) is untouched.
 func (c *RunCoordinator) resolveTask(ctx context.Context, identity *control.IdentityContext, req api.MessageRequest, intent router.IntentResult) (*control.Task, taskAttach, error) {
 	store := c.srv.Control
+	inputWorkKey := uniqueTaskWorkKey(req.Content)
 	if req.TaskID != "" {
 		task, err := store.GetTask(ctx, identity.TenantID, req.TaskID)
 		if err != nil || task != nil {
 			task, err = c.bindTaskWorkspaceIfMissing(ctx, identity, task, req, err)
-			return task, taskAttach{}, err
+			reason := taskAttachExplicitTaskID
+			if intent.Intent == router.IntentContinue {
+				reason = taskAttachContinuation
+			}
+			return task, taskAttach{reason: reason, workKey: continuationWorkKey(inputWorkKey, task)}, err
 		}
 	}
 	// The /resume pin covers exactly the NEXT agent-bound message, so it is
@@ -230,7 +242,7 @@ func (c *RunCoordinator) resolveTask(ctx context.Context, identity *control.Iden
 		task, err := c.srv.resolveContinueTask(ctx, identity)
 		if err != nil || task != nil {
 			task, err = c.bindTaskWorkspaceIfMissing(ctx, identity, task, req, err)
-			return task, taskAttach{}, err
+			return task, taskAttach{reason: taskAttachContinuation, workKey: continuationWorkKey(inputWorkKey, task)}, err
 		}
 		return nil, taskAttach{}, fmt.Errorf("no task to continue; start a new task or use /resume <task_id>")
 	}
@@ -239,17 +251,52 @@ func (c *RunCoordinator) resolveTask(ctx context.Context, identity *control.Iden
 	// closed to the pin exactly as before.
 	if pinned != nil && (!terminalTaskStatus(pinned.Status) || archivedTaskStatus(pinned.Status)) {
 		task, err := c.bindTaskWorkspaceIfMissing(ctx, identity, pinned, req, nil)
-		return task, taskAttach{}, err
+		return task, taskAttach{reason: taskAttachResumePin, workKey: continuationWorkKey(inputWorkKey, task)}, err
+	}
+	// A single explicit issue key is stronger display evidence than the current
+	// pre-label pointer. Resolve it before the ordinary current-task guess so a
+	// release for RUQX-123 cannot be absorbed into an unrelated open label. This
+	// remains a PRE-LABEL attach: labels never select the execution workspace or
+	// gate context, and ambiguous/multiple keys deliberately fall through.
+	if workKey := inputWorkKey; workKey != "" {
+		candidates, err := c.srv.openLabelCandidates(ctx, identity, "", workKey)
+		if err != nil {
+			return nil, taskAttach{}, fmt.Errorf("list open task labels: %w", err)
+		}
+		if target := exactWorkKeyCandidate(candidates, workKey); target != nil && target.IsVisible() && !target.IsInbox() {
+			return target, taskAttach{preLabel: true, reason: taskAttachWorkKeyPreLabel, workKey: workKey}, nil
+		}
+		task, attach, err := c.createPreLabelTask(ctx, identity, req)
+		attach.workKey = workKey
+		return task, attach, err
 	}
 	// Pre-label guess: reuse the person's current OPEN label. Display-only —
 	// the workspace still follows the request (workspaceForTask) and the
 	// post-run labeler corrects a wrong guess.
 	if current, err := store.CurrentTask(ctx, identity.TenantID, identity.PersonID); err == nil &&
 		current != nil && current.IsVisible() && !current.IsInbox() && !terminalTaskStatus(current.Status) {
-		return current, taskAttach{preLabel: true}, nil
+		return current, taskAttach{preLabel: true, reason: taskAttachCurrentPreLabel}, nil
 	}
 	// No open label → new placeholder. An explicit request workspace wins;
 	// otherwise the person's current workspace seeds the task scope.
+	return c.createPreLabelTask(ctx, identity, req)
+}
+
+func continuationWorkKey(inputWorkKey string, task *control.Task) string {
+	if inputWorkKey != "" {
+		return inputWorkKey
+	}
+	if task == nil {
+		return ""
+	}
+	return uniqueTaskWorkKey(task.Title, task.CurrentSummary)
+}
+
+// createPreLabelTask creates the display placeholder for genuinely new work.
+// An explicit request workspace wins; otherwise the person's current
+// workspace seeds the label without making it an execution boundary.
+func (c *RunCoordinator) createPreLabelTask(ctx context.Context, identity *control.IdentityContext, req api.MessageRequest) (*control.Task, taskAttach, error) {
+	store := c.srv.Control
 	workspaceID := req.WorkspaceID
 	if workspaceID == "" {
 		if ws, _ := store.CurrentWorkspace(ctx, identity.TenantID, identity.PersonID); ws != nil {
@@ -263,7 +310,7 @@ func (c *RunCoordinator) resolveTask(ctx context.Context, identity *control.Iden
 		Title:       titleFromInput(req.Content),
 		Channel:     req.Channel,
 	})
-	return task, taskAttach{created: true, preLabel: true}, err
+	return task, taskAttach{created: true, preLabel: true, reason: taskAttachNewLabel}, err
 }
 
 func (c *RunCoordinator) bindTaskWorkspaceIfMissing(ctx context.Context, identity *control.IdentityContext, task *control.Task, req api.MessageRequest, priorErr error) (*control.Task, error) {
@@ -314,7 +361,7 @@ func (c *RunCoordinator) workspaceForTask(ctx context.Context, identity *control
 	return store.GetWorkspace(ctx, identity.TenantID, workspaceID)
 }
 
-func (c *RunCoordinator) installExecutionScope(identity *control.IdentityContext, task *control.Task, run *control.Run, workspace *control.Workspace, req api.MessageRequest, leases ...*executionenv.Lease) func() {
+func (c *RunCoordinator) installExecutionScope(ctx context.Context, identity *control.IdentityContext, task *control.Task, run *control.Run, workspace *control.Workspace, req api.MessageRequest, leases ...*executionenv.Lease) func() {
 	if identity == nil {
 		return func() {}
 	}
@@ -362,7 +409,7 @@ func (c *RunCoordinator) installExecutionScope(identity *control.IdentityContext
 	// separate execution node would receive.
 	scope.SandboxPolicy = tools.CurrentExecSandboxPolicy()
 	scope.Approval = c.toolApprovalHandler(identity, task, run, scope.Channel)
-	scope.Clarify = c.gatewayClarify(identity, task, run, scope.Channel)
+	scope.Clarify = c.gatewayClarify(ctx, identity, task, run, scope.Channel)
 	scope.ApprovalMode = c.resolveApprovalMode(identity, req.ApprovalMode)
 	// Live mode: re-resolve at EACH ask with the same precedence as run start
 	// (explicit request mode wins, else the person's CURRENT persisted /mode).
@@ -377,8 +424,8 @@ func (c *RunCoordinator) installExecutionScope(identity *control.IdentityContext
 	// destructive-looking command an instruction, while the same command with no
 	// such request is the model acting alone. Bounded and redacted here because
 	// the judge prompt treats it as untrusted data (docs/tool-safety.md).
-	triageIntent := triageIntentFromRequest(req.Content)
-	scope.TriageIntent = func() string { return triageIntent }
+	intentSnapshot := runIntentSnapshot(req, task, run, workspace)
+	scope.IntentSnapshot = func() tools.RunIntentSnapshot { return intentSnapshot }
 	// Grants back class-level approval memory (session/persistent allowlist);
 	// the control store satisfies tools.ApprovalGrantStore structurally.
 	if c.srv != nil && c.srv.Control != nil {
@@ -554,7 +601,7 @@ func (c *RunCoordinator) resolveApprovalMode(identity *control.IdentityContext, 
 // the tool result; a timeout expires the row and returns the best-judgment
 // sentinel so the run never hangs. This is what lets a question survive the CLI
 // closing (docs/identity-continuity.md "Runtime attachment model").
-func (c *RunCoordinator) gatewayClarify(identity *control.IdentityContext, task *control.Task, run *control.Run, channel string) tools.ClarifyHandler {
+func (c *RunCoordinator) gatewayClarify(runCtx context.Context, identity *control.IdentityContext, task *control.Task, run *control.Run, channel string) tools.ClarifyHandler {
 	return func(question string, choices []string) string {
 		if c == nil || c.srv == nil || c.srv.Control == nil || identity == nil {
 			return clarifyFallbackSentinel
@@ -568,11 +615,10 @@ func (c *RunCoordinator) gatewayClarify(identity *control.IdentityContext, task 
 			runID = run.ID
 		}
 		reqChannel := fallback(channel, identity.Platform)
-		// The run ctx is not available here (the clarify handler signature carries
-		// no ctx), so the wait is bounded purely by clarifyWaitTimeout; the
-		// orphan sweep (ExpireOrphanedClarifies) is the backstop if the daemon is
-		// killed mid-wait.
-		waitCtx, cancel := context.WithTimeout(context.Background(), clarifyWaitTimeout)
+		if runCtx == nil {
+			runCtx = context.Background()
+		}
+		waitCtx, cancel := context.WithTimeout(runCtx, clarifyWaitTimeout)
 		defer cancel()
 
 		clarify, err := store.CreateClarifyRequest(waitCtx, control.ClarifyRequest{
@@ -598,6 +644,8 @@ func (c *RunCoordinator) gatewayClarify(identity *control.IdentityContext, task 
 				Payload:    mustJSON(map[string]interface{}{"clarify_id": clarify.ID, "question": question, "choices": choices}),
 			})
 		}
+		resumeWatchdog := runpool.BeginPersonWait(runCtx, runpool.PhaseWaitingClarify)
+		defer resumeWatchdog()
 		c.notifyClarifyRequested(context.Background(), identity, taskID, runID, reqChannel, clarify)
 
 		ticker := time.NewTicker(time.Second)
@@ -652,6 +700,7 @@ func (c *RunCoordinator) toolApprovalHandler(identity *control.IdentityContext, 
 			runID = run.ID
 		}
 		decisions := buildApprovalDecisions(req)
+		persistentArgs := tools.ApprovalPersistentArgs(req.ToolName, req.Args)
 		approval, err := store.CreateApprovalRequest(waitCtx, control.ApprovalRequest{
 			TenantID:         identity.TenantID,
 			PersonID:         identity.PersonID,
@@ -660,10 +709,12 @@ func (c *RunCoordinator) toolApprovalHandler(identity *control.IdentityContext, 
 			ActionType:       "tool_call",
 			RequestedChannel: fallback(channel, identity.Platform),
 			Payload: mustJSON(map[string]interface{}{
-				"tool":        req.ToolName,
-				"reason":      req.Reason,
-				"args":        redactApprovalArgs(req.Args),
-				"grant_class": req.GrantClass,
+				"tool":            req.ToolName,
+				"reason":          req.Reason,
+				"args":            persistentArgs,
+				"grant_class":     req.GrantClass,
+				"run_grant_class": req.RunGrantClass,
+				"containment":     req.Containment,
 				// WHERE it runs and HOW BIG the change is: a decision made without
 				// them is a guess. All four are display-only context produced by the
 				// execution scope, never by the model's args.
@@ -700,7 +751,8 @@ func (c *RunCoordinator) toolApprovalHandler(identity *control.IdentityContext, 
 					// Compact single-string object of the action (path/command)
 					// so one-line UI surfaces (the TUI approval panel) can show
 					// "tool → target" without decoding full args.
-					"target": approvalActionTarget(req.Args),
+					"target": approvalActionTarget(req.ToolName, req.Args),
+					"args":   persistentArgs,
 					// Decision context for the panel: where it runs, how big the
 					// change is, what a "remember this" would authorize, and
 					// whether automatic triage was even able to rule. The TUI
@@ -710,6 +762,8 @@ func (c *RunCoordinator) toolApprovalHandler(identity *control.IdentityContext, 
 					"cwd":              req.Cwd,
 					"change_summary":   req.ChangeSummary,
 					"grant_class":      req.GrantClass,
+					"run_grant_class":  req.RunGrantClass,
+					"containment":      req.Containment,
 					"triage_state":     req.TriageState,
 					"triage_rationale": req.TriageRationale,
 					"triage_risk":      req.TriageRisk,
@@ -717,6 +771,8 @@ func (c *RunCoordinator) toolApprovalHandler(identity *control.IdentityContext, 
 				}),
 			})
 		}
+		resumeWatchdog := runpool.BeginPersonWait(ctx, runpool.PhaseWaitingApproval)
+		defer resumeWatchdog()
 		c.notifyApprovalRequested(context.Background(), identity, taskID, runID, fallback(channel, identity.Platform), approval)
 
 		ticker := time.NewTicker(time.Second)
@@ -861,7 +917,8 @@ func (c *RunCoordinator) routePendingNotification(ctx context.Context, identity 
 		msg.Platform = identity.Platform
 		msg.PlatformUserID = identity.PlatformUserID
 		msg.Channel = channel
-		return c.srv.Delivery.EnqueueAndTry(ctx, msg) == nil
+		confirmed, _ := c.srv.Delivery.EnqueueAndTryConfirmed(ctx, msg)
+		return confirmed
 	}
 	if c.srv.presenceTracker().IsAttached(identity.PersonID, "cli") {
 		return false
@@ -978,7 +1035,24 @@ func (c *RunCoordinator) deliverToPreferredIM(ctx context.Context, identity *con
 	// Without a live chat context the platform user id is the DM target;
 	// senders fall back to it when Channel is not a real chat id.
 	msg.Channel = account.PlatformUserID
-	return c.srv.Delivery.EnqueueAndTry(ctx, msg) == nil
+	confirmed, _ := c.srv.Delivery.EnqueueAndTryConfirmed(ctx, msg)
+	return confirmed
+}
+
+// deliverToPreferredIMAccepted is the durable-outbox variant used by effect
+// finalization. Platform confirmation may arrive later; an inserted outbound
+// row is sufficient to make crash recovery replay-safe.
+func (c *RunCoordinator) deliverToPreferredIMAccepted(ctx context.Context, identity *control.IdentityContext, base delivery.Message) bool {
+	account := c.preferredIMAccount(ctx, identity)
+	if account == nil {
+		return false
+	}
+	msg := base
+	msg.Platform = account.Platform
+	msg.PlatformUserID = account.PlatformUserID
+	msg.Channel = account.PlatformUserID
+	accepted, _ := c.srv.Delivery.EnqueueAndTryAccepted(ctx, msg)
+	return accepted
 }
 
 func (c *RunCoordinator) withGatewayContext(input string, identity *control.IdentityContext, task *control.Task, workspace *control.Workspace, attachments []api.MessageAttachment) string {

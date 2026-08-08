@@ -77,6 +77,7 @@ type Run struct {
 	WorkspaceID  string     `json:"workspace_id,omitempty"`
 	Channel      string     `json:"channel"`
 	InputSummary string     `json:"input_summary,omitempty"`
+	WorkKey      string     `json:"work_key,omitempty"`
 	Status       string     `json:"status"`
 	StartedAt    time.Time  `json:"started_at"`
 	FinishedAt   *time.Time `json:"finished_at,omitempty"`
@@ -306,10 +307,28 @@ CREATE TABLE IF NOT EXISTS task_runs (
 	finished_at INTEGER,
 	heartbeat_at INTEGER,
 	cancel_requested INTEGER NOT NULL DEFAULT 0,
-	last_error TEXT
+	last_error TEXT,
+	resumed_by_run_id TEXT NOT NULL DEFAULT '',
+	work_key TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_task_runs_task_started ON task_runs(tenant_id, task_id, started_at);
 CREATE INDEX IF NOT EXISTS idx_task_runs_person_status ON task_runs(tenant_id, person_id, status, started_at);
+CREATE TABLE IF NOT EXISTS task_blockers (
+	id TEXT PRIMARY KEY,
+	tenant_id TEXT NOT NULL,
+	person_id TEXT NOT NULL,
+	task_id TEXT NOT NULL,
+	origin_run_id TEXT NOT NULL DEFAULT '',
+	kind TEXT NOT NULL,
+	status TEXT NOT NULL DEFAULT 'open',
+	detail_json TEXT NOT NULL DEFAULT '{}',
+	resolved_by_run_id TEXT NOT NULL DEFAULT '',
+	created_at INTEGER NOT NULL,
+	resolved_at INTEGER,
+	UNIQUE(origin_run_id, kind)
+);
+CREATE INDEX IF NOT EXISTS idx_task_blockers_open
+	ON task_blockers(tenant_id, task_id, status, created_at);
 CREATE TABLE IF NOT EXISTS task_events (
 	id TEXT PRIMARY KEY,
 	cursor INTEGER,
@@ -375,6 +394,7 @@ CREATE TABLE IF NOT EXISTS approval_requests (
 	requested_channel TEXT,
 	approved_channel TEXT,
 	decision_scope TEXT,
+	decision_id TEXT,
 	created_at INTEGER NOT NULL,
 	updated_at INTEGER NOT NULL
 );
@@ -469,9 +489,23 @@ CREATE TABLE IF NOT EXISTS task_queue (
 	not_before INTEGER NOT NULL DEFAULT 0,
 	status TEXT NOT NULL DEFAULT 'queued',
 	restarts INTEGER NOT NULL DEFAULT 0,
+	claim_token TEXT NOT NULL DEFAULT '',
+	lease_until INTEGER NOT NULL DEFAULT 0,
+	attempt_generation INTEGER NOT NULL DEFAULT 0,
 	created_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_task_queue_person ON task_queue(tenant_id, person_id, status, created_at);
+CREATE TABLE IF NOT EXISTS effect_receipts (
+	effect_key TEXT NOT NULL,
+	tenant_id TEXT NOT NULL,
+	task_id TEXT NOT NULL,
+	run_id TEXT NOT NULL,
+	kind TEXT NOT NULL DEFAULT '',
+	delivery_enqueued INTEGER NOT NULL DEFAULT 0,
+	created_at INTEGER NOT NULL,
+	PRIMARY KEY (tenant_id, effect_key)
+);
+CREATE INDEX IF NOT EXISTS idx_effect_receipts_run ON effect_receipts(tenant_id, run_id);
 CREATE TABLE IF NOT EXISTS inbound_dedup (
 	platform TEXT NOT NULL,
 	message_id TEXT NOT NULL,
@@ -552,6 +586,37 @@ CREATE INDEX IF NOT EXISTS idx_maintenance_provider_calls_recent
 	ON maintenance_provider_calls(tenant_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_maintenance_provider_calls_route
 	ON maintenance_provider_calls(tenant_id, route_id, created_at);
+CREATE TABLE IF NOT EXISTS approval_triage_events (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	tenant_id TEXT NOT NULL,
+	person_id TEXT NOT NULL,
+	task_id TEXT NOT NULL DEFAULT '',
+	run_id TEXT NOT NULL DEFAULT '',
+	tool_name TEXT NOT NULL DEFAULT '',
+	outcome TEXT NOT NULL,
+	risk_level TEXT NOT NULL DEFAULT '',
+	user_authorization TEXT NOT NULL DEFAULT '',
+	grant_key TEXT NOT NULL DEFAULT '',
+	provider_route TEXT NOT NULL DEFAULT '',
+	latency_ms INTEGER NOT NULL DEFAULT 0,
+	error_class TEXT NOT NULL DEFAULT '',
+	policy_version TEXT NOT NULL DEFAULT '',
+	rationale TEXT NOT NULL DEFAULT '',
+	error TEXT NOT NULL DEFAULT '',
+	created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_approval_triage_events_recent
+	ON approval_triage_events(tenant_id, person_id, created_at);
+CREATE TABLE IF NOT EXISTS gateway_runtime_events (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	instance_id TEXT NOT NULL,
+	event_type TEXT NOT NULL,
+	payload_json TEXT NOT NULL DEFAULT '{}',
+	created_at INTEGER NOT NULL,
+	UNIQUE(instance_id, event_type)
+);
+CREATE INDEX IF NOT EXISTS idx_gateway_runtime_events_recent
+	ON gateway_runtime_events(created_at);
 CREATE TABLE IF NOT EXISTS external_watches (
 	id TEXT PRIMARY KEY,
 	tenant_id TEXT NOT NULL,
@@ -565,8 +630,16 @@ CREATE TABLE IF NOT EXISTS external_watches (
 	command TEXT NOT NULL,
 	success_pattern TEXT NOT NULL,
 	failure_pattern TEXT NOT NULL DEFAULT '',
+	spec_version INTEGER NOT NULL DEFAULT 1,
+	target_pattern TEXT NOT NULL DEFAULT '',
+	terminal_success_pattern TEXT NOT NULL DEFAULT '',
+	terminal_failure_pattern TEXT NOT NULL DEFAULT '',
 	status TEXT NOT NULL DEFAULT 'pending',
+	checker_status TEXT NOT NULL DEFAULT '',
+	operation_status TEXT NOT NULL DEFAULT 'pending',
+	verification_status TEXT NOT NULL DEFAULT 'not_required',
 	interval_seconds INTEGER NOT NULL DEFAULT 30,
+	current_interval_seconds INTEGER NOT NULL DEFAULT 0,
 	command_timeout_seconds INTEGER NOT NULL DEFAULT 30,
 	timeout_at INTEGER NOT NULL,
 	next_check_at INTEGER NOT NULL,
@@ -576,6 +649,7 @@ CREATE TABLE IF NOT EXISTS external_watches (
 	verdict_revision INTEGER NOT NULL DEFAULT 1,
 	notified INTEGER NOT NULL DEFAULT 0,
 	last_output TEXT NOT NULL DEFAULT '',
+	last_output_hash TEXT NOT NULL DEFAULT '',
 	last_error TEXT NOT NULL DEFAULT '',
 	execution_binding_json TEXT NOT NULL DEFAULT '{}',
 	created_at INTEGER NOT NULL,
@@ -647,6 +721,8 @@ CREATE INDEX IF NOT EXISTS idx_external_watches_owner
 		{"task_runs", "heartbeat_at", "INTEGER"},
 		{"task_runs", "cancel_requested", "INTEGER NOT NULL DEFAULT 0"},
 		{"task_runs", "last_error", "TEXT"},
+		{"task_runs", "resumed_by_run_id", "TEXT NOT NULL DEFAULT ''"},
+		{"task_runs", "work_key", "TEXT NOT NULL DEFAULT ''"},
 		{"outbound_messages", "platform_user_id", "TEXT"},
 		// kind/approval_id let retried deliveries keep their typed rendering
 		// (e.g. Telegram approval inline buttons) instead of degrading to plain
@@ -662,6 +738,7 @@ CREATE INDEX IF NOT EXISTS idx_external_watches_owner
 		// (""/task/person) recorded when an approval is answered; older DBs
 		// created before the layered approval funnel lack the column.
 		{"approval_requests", "decision_scope", "TEXT"},
+		{"approval_requests", "decision_id", "TEXT"},
 		// decision_grant_key stores the narrow RULE a person picked instead of the
 		// action class; decision_note stores their words when they refused. Both
 		// arrived with the structured-decision batch, so older DBs lack them.
@@ -673,6 +750,17 @@ CREATE INDEX IF NOT EXISTS idx_external_watches_owner
 		// person uninformed and re-pushes them once the CLI detaches (Fix 2).
 		{"approval_requests", "notified_at", "INTEGER"},
 		{"clarify_requests", "notified_at", "INTEGER"},
+		{"approval_triage_events", "task_id", "TEXT NOT NULL DEFAULT ''"},
+		{"approval_triage_events", "run_id", "TEXT NOT NULL DEFAULT ''"},
+		{"approval_triage_events", "tool_name", "TEXT NOT NULL DEFAULT ''"},
+		{"approval_triage_events", "risk_level", "TEXT NOT NULL DEFAULT ''"},
+		{"approval_triage_events", "user_authorization", "TEXT NOT NULL DEFAULT ''"},
+		{"approval_triage_events", "grant_key", "TEXT NOT NULL DEFAULT ''"},
+		{"approval_triage_events", "provider_route", "TEXT NOT NULL DEFAULT ''"},
+		{"approval_triage_events", "latency_ms", "INTEGER NOT NULL DEFAULT 0"},
+		{"approval_triage_events", "error_class", "TEXT NOT NULL DEFAULT ''"},
+		{"approval_triage_events", "policy_version", "TEXT NOT NULL DEFAULT ''"},
+		{"approval_triage_events", "rationale", "TEXT NOT NULL DEFAULT ''"},
 		// restarts counts boot requeues of a 'started' row. Without a cap a
 		// queued task whose run never finishes before the next daemon restart
 		// resurrects FOREVER (observed live: a 10-min task + repeated deploy
@@ -695,6 +783,13 @@ CREATE INDEX IF NOT EXISTS idx_external_watches_owner
 		{"task_queue", "class", "TEXT NOT NULL DEFAULT 'foreground'"},
 		{"task_queue", "priority", "INTEGER NOT NULL DEFAULT 100"},
 		{"task_queue", "not_before", "INTEGER NOT NULL DEFAULT 0"},
+		// Queue claims are durable worker ownership, separate from the run
+		// heartbeat. A finalization reconciler may reopen a started row only after
+		// this lease expires; attempt_generation makes every ownership epoch
+		// observable without changing the row's stable idempotency key.
+		{"task_queue", "claim_token", "TEXT NOT NULL DEFAULT ''"},
+		{"task_queue", "lease_until", "INTEGER NOT NULL DEFAULT 0"},
+		{"task_queue", "attempt_generation", "INTEGER NOT NULL DEFAULT 0"},
 		// verdict_revision counts terminal-verdict revisions (timed_out ->
 		// succeeded). It keys all finalization products, so replaying the
 		// SAME verdict creates nothing new while a REVISED verdict emits one
@@ -767,6 +862,15 @@ CREATE INDEX IF NOT EXISTS idx_external_watches_owner
 		// length make "the same environment failure again" a decidable fact and
 		// let the watch stop instead of retrying until its deadline.
 		{"external_watches", "failure_class", "TEXT NOT NULL DEFAULT ''"},
+		{"external_watches", "spec_version", "INTEGER NOT NULL DEFAULT 1"},
+		{"external_watches", "target_pattern", "TEXT NOT NULL DEFAULT ''"},
+		{"external_watches", "terminal_success_pattern", "TEXT NOT NULL DEFAULT ''"},
+		{"external_watches", "terminal_failure_pattern", "TEXT NOT NULL DEFAULT ''"},
+		{"external_watches", "checker_status", "TEXT NOT NULL DEFAULT ''"},
+		{"external_watches", "operation_status", "TEXT NOT NULL DEFAULT 'pending'"},
+		{"external_watches", "verification_status", "TEXT NOT NULL DEFAULT 'not_required'"},
+		{"external_watches", "current_interval_seconds", "INTEGER NOT NULL DEFAULT 0"},
+		{"external_watches", "last_output_hash", "TEXT NOT NULL DEFAULT ''"},
 		{"external_watches", "check_signature", "TEXT NOT NULL DEFAULT ''"},
 		{"external_watches", "consecutive_failures", "INTEGER NOT NULL DEFAULT 0"},
 		{"external_watches", "environment_snapshot_id", "TEXT NOT NULL DEFAULT ''"},
@@ -778,10 +882,20 @@ CREATE INDEX IF NOT EXISTS idx_external_watches_owner
 		// reconstructing environment and permissions from daemon-global state on
 		// every poll. Legacy identity columns remain during the migration window.
 		{"external_watches", "execution_binding_json", "TEXT NOT NULL DEFAULT '{}'"},
+		// A finalization effect is complete only after its user-facing result is
+		// in the durable outbound queue (or the local transcript is the target).
+		{"effect_receipts", "delivery_enqueued", "INTEGER NOT NULL DEFAULT 0"},
 	} {
 		if err := s.ensureColumn(ctx, col.table, col.name, col.def); err != nil {
 			return err
 		}
+	}
+	if err := s.migrateEffectReceiptsTenantScope(ctx); err != nil {
+		return err
+	}
+	if _, err := s.db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_task_runs_work_key
+		ON task_runs(tenant_id, task_id, work_key, status, started_at)`); err != nil {
+		return err
 	}
 	// Existing workspaces predate an explicit trust act, so migration must not
 	// promote every path ever observed by a client into trusted instructions.
@@ -856,15 +970,70 @@ CREATE INDEX IF NOT EXISTS idx_external_watches_owner
 		CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_inbox_unique
 			ON tasks(tenant_id, person_id, COALESCE(workspace_id, ''))
 			WHERE kind = 'inbox';
-		CREATE UNIQUE INDEX IF NOT EXISTS idx_task_queue_idempotency ON task_queue(idempotency_key)
+		DROP INDEX IF EXISTS idx_task_queue_idempotency;
+		CREATE UNIQUE INDEX IF NOT EXISTS idx_task_queue_idempotency ON task_queue(tenant_id, idempotency_key)
 			WHERE idempotency_key != '';
 		UPDATE task_queue SET class = 'finalization', priority = 80
 			WHERE idempotency_key LIKE 'external-watch:%' AND class = 'foreground';
 		CREATE INDEX IF NOT EXISTS idx_task_queue_schedule
-			ON task_queue(status, not_before, priority DESC, created_at);`); err != nil {
+			ON task_queue(status, not_before, priority DESC, created_at);
+		CREATE INDEX IF NOT EXISTS idx_task_queue_claims
+			ON task_queue(status, lease_until);`); err != nil {
 		return err
 	}
 	return nil
+}
+
+func (s *Store) migrateEffectReceiptsTenantScope(ctx context.Context) error {
+	rows, err := s.db.QueryContext(ctx, `PRAGMA table_info(effect_receipts)`)
+	if err != nil {
+		return err
+	}
+	legacyPrimaryKey := false
+	for rows.Next() {
+		var cid, notNull, pk int
+		var name, colType string
+		var defaultValue interface{}
+		if err := rows.Scan(&cid, &name, &colType, &notNull, &defaultValue, &pk); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		if name == "effect_key" && pk == 1 {
+			legacyPrimaryKey = true
+		}
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	if !legacyPrimaryKey {
+		return nil
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.ExecContext(ctx, `
+		CREATE TABLE effect_receipts_v2 (
+			effect_key TEXT NOT NULL,
+			tenant_id TEXT NOT NULL,
+			task_id TEXT NOT NULL,
+			run_id TEXT NOT NULL,
+			kind TEXT NOT NULL DEFAULT '',
+			delivery_enqueued INTEGER NOT NULL DEFAULT 0,
+			created_at INTEGER NOT NULL,
+			PRIMARY KEY (tenant_id, effect_key)
+		);
+		INSERT OR IGNORE INTO effect_receipts_v2
+			(effect_key, tenant_id, task_id, run_id, kind, delivery_enqueued, created_at)
+		SELECT effect_key, tenant_id, task_id, run_id, kind, delivery_enqueued, created_at
+		FROM effect_receipts;
+		DROP TABLE effect_receipts;
+		ALTER TABLE effect_receipts_v2 RENAME TO effect_receipts;
+		CREATE INDEX idx_effect_receipts_run ON effect_receipts(tenant_id, run_id);`); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s *Store) ensureColumn(ctx context.Context, table, name, definition string) error {
@@ -916,6 +1085,29 @@ func (s *Store) EnsureTenant(ctx context.Context, tenantID, name string) error {
 	return err
 }
 
+// ResolveAccount returns an existing platform binding without creating a
+// tenant, person, or account. Read-only commands such as doctor must use this
+// method so observing a store cannot mutate its identity graph.
+func (s *Store) ResolveAccount(ctx context.Context, tenantID, platform, platformUserID string) (*IdentityContext, error) {
+	tenantID = normalizeTenant(tenantID)
+	platform = normalizeName(platform, "cli")
+	platformUserID = normalizeName(platformUserID, "local")
+	var out IdentityContext
+	err := s.db.QueryRowContext(ctx, `
+		SELECT id, tenant_id, person_id, platform, platform_user_id, display_name
+		FROM accounts
+		WHERE tenant_id = ? AND platform = ? AND platform_user_id = ?`,
+		tenantID, platform, platformUserID).
+		Scan(&out.AccountID, &out.TenantID, &out.PersonID, &out.Platform, &out.PlatformUserID, &out.DisplayName)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 func (s *Store) ResolveOrCreateAccount(ctx context.Context, tenantID, platform, platformUserID, displayName string) (*IdentityContext, error) {
 	tenantID = normalizeTenant(tenantID)
 	platform = normalizeName(platform, "cli")
@@ -924,18 +1116,10 @@ func (s *Store) ResolveOrCreateAccount(ctx context.Context, tenantID, platform, 
 		return nil, err
 	}
 
-	var out IdentityContext
-	err := s.db.QueryRowContext(ctx, `
-		SELECT id, tenant_id, person_id, platform, platform_user_id, display_name
-		FROM accounts
-		WHERE tenant_id = ? AND platform = ? AND platform_user_id = ?`,
-		tenantID, platform, platformUserID).
-		Scan(&out.AccountID, &out.TenantID, &out.PersonID, &out.Platform, &out.PlatformUserID, &out.DisplayName)
-	if err == nil {
-		return &out, nil
-	}
-	if err != sql.ErrNoRows {
+	if out, err := s.ResolveAccount(ctx, tenantID, platform, platformUserID); err != nil {
 		return nil, err
+	} else if out != nil {
+		return out, nil
 	}
 
 	now := time.Now().Unix()
@@ -1616,6 +1800,30 @@ func (s *Store) UpdateTaskStatus(ctx context.Context, tenantID, taskID, status, 
 }
 
 func (s *Store) StartRun(ctx context.Context, task *Task, channel, inputSummary string) (*Run, error) {
+	return s.startRun(ctx, task, channel, inputSummary, StartRunOptions{})
+}
+
+type StartRunOptions struct {
+	WorkKey               string
+	PreserveTaskLifecycle bool
+}
+
+// StartRunWithWorkKey atomically creates a run with its deterministic work
+// identity. Keeping the key in the same transaction as the run prevents a
+// daemon crash between admission and a follow-up UPDATE from turning an
+// explicit continuation into an ambiguous one.
+func (s *Store) StartRunWithWorkKey(ctx context.Context, task *Task, channel, inputSummary, workKey string) (*Run, error) {
+	return s.startRun(ctx, task, channel, inputSummary, StartRunOptions{WorkKey: workKey})
+}
+
+// StartRunWithOptions is used when ingress attached a run to a display-only
+// weak label. The run is durable and active, but the guessed task lifecycle is
+// left untouched until deterministic or post-run label resolution.
+func (s *Store) StartRunWithOptions(ctx context.Context, task *Task, channel, inputSummary string, options StartRunOptions) (*Run, error) {
+	return s.startRun(ctx, task, channel, inputSummary, options)
+}
+
+func (s *Store) startRun(ctx context.Context, task *Task, channel, inputSummary string, options StartRunOptions) (*Run, error) {
 	if task == nil {
 		return nil, fmt.Errorf("task is required")
 	}
@@ -1627,6 +1835,7 @@ func (s *Store) StartRun(ctx context.Context, task *Task, channel, inputSummary 
 		WorkspaceID:  task.WorkspaceID,
 		Channel:      normalizeName(channel, "cli"),
 		InputSummary: inputSummary,
+		WorkKey:      strings.ToUpper(strings.TrimSpace(options.WorkKey)),
 		Status:       "running",
 		StartedAt:    time.Now(),
 	}
@@ -1638,15 +1847,15 @@ func (s *Store) StartRun(ctx context.Context, task *Task, channel, inputSummary 
 	}
 	defer func() { _ = tx.Rollback() }()
 	if _, err = tx.ExecContext(ctx,
-		`INSERT INTO task_runs (id, task_id, tenant_id, person_id, workspace_id, channel, input_summary, status, started_at, heartbeat_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		run.ID, run.TaskID, run.TenantID, run.PersonID, run.WorkspaceID, run.Channel, run.InputSummary, run.Status, run.StartedAt.Unix(), run.StartedAt.Unix()); err != nil {
+		`INSERT INTO task_runs (id, task_id, tenant_id, person_id, workspace_id, channel, input_summary, work_key, status, started_at, heartbeat_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		run.ID, run.TaskID, run.TenantID, run.PersonID, run.WorkspaceID, run.Channel, run.InputSummary, run.WorkKey, run.Status, run.StartedAt.Unix(), run.StartedAt.Unix()); err != nil {
 		return nil, err
 	}
 	if _, err = tx.ExecContext(ctx,
-		`UPDATE tasks SET active_run_id = ?, status = 'running', last_channel = ?,
+		`UPDATE tasks SET active_run_id = ?, status = CASE WHEN ? THEN status ELSE 'running' END, last_channel = ?,
 		 archived_at = NULL, last_activity_at = ?, updated_at = ? WHERE id = ?`,
-		run.ID, run.Channel, time.Now().Unix(), time.Now().Unix(), run.TaskID); err != nil {
+		run.ID, options.PreserveTaskLifecycle, run.Channel, time.Now().Unix(), time.Now().Unix(), run.TaskID); err != nil {
 		return nil, err
 	}
 	if err = tx.Commit(); err != nil {
@@ -1691,11 +1900,11 @@ func (s *Store) GetRun(ctx context.Context, tenantID, runID string) (*Run, error
 	var finished sql.NullInt64
 	err := s.db.QueryRowContext(ctx,
 		`SELECT id, task_id, tenant_id, person_id, COALESCE(workspace_id, ''), channel,
-		        COALESCE(input_summary, ''), status, started_at, finished_at
+		        COALESCE(input_summary, ''), COALESCE(work_key, ''), status, started_at, finished_at
 		 FROM task_runs WHERE tenant_id = ? AND id = ?`,
 		normalizeTenant(tenantID), runID).
 		Scan(&r.ID, &r.TaskID, &r.TenantID, &r.PersonID, &r.WorkspaceID, &r.Channel,
-			&r.InputSummary, &r.Status, &started, &finished)
+			&r.InputSummary, &r.WorkKey, &r.Status, &started, &finished)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}

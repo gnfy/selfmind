@@ -121,16 +121,50 @@ func (d *Server) executeExternalWatch(ctx context.Context, watch control.Externa
 		errText = tools.RedactSensitive(commandErr.Error())
 	}
 
-	// The layer order is fixed and must stay fixed: a lower-layer failure is
-	// never matched against the declared patterns. Reversing these two steps is
-	// what let a check that could not query anything report a business verdict.
+	// A v2 terminal operation marker is authoritative even when a LATER
+	// verification command in the same script fails. Preserve that operation
+	// truth, then park the verification layer; otherwise a completed deployment
+	// is polled until a false timeout merely because kubectl/gcloud auth broke.
+	operation := operationStatusFromOutput(watch, output)
 	verdict := classifyWatchCheck(result.FailureClass, result.ExitCode, commandErr != nil)
+	// A declared terminal business failure is authoritative. Authentication or
+	// verifier errors printed later in the same check must not rewrite a failed
+	// deployment as blocked_environment and hide the actual outcome.
+	if operation == control.WatchOperationFailed {
+		watch.CheckerStatus = control.WatchCheckerOK
+		watch.OperationStatus = operation
+		watch.VerificationStatus = control.WatchVerificationNotRequired
+		_ = d.Control.RecordExternalWatchPhases(ctx, watch.TenantID, watch.ID,
+			watch.CheckerStatus, watch.OperationStatus, watch.VerificationStatus)
+		d.completeExternalWatch(ctx, watch, control.ExternalWatchFailed, output, statusErrText(control.ExternalWatchFailed, errText))
+		return
+	}
+	if operation == control.WatchOperationSucceeded && verdict.Action != watchCheckObserve {
+		watch.CheckerStatus = checkerStatusForVerdict(verdict)
+		watch.OperationStatus = operation
+		watch.VerificationStatus = control.WatchVerificationBlocked
+		_ = d.Control.RecordExternalWatchPhases(ctx, watch.TenantID, watch.ID,
+			watch.CheckerStatus, watch.OperationStatus, watch.VerificationStatus)
+		verdict.Detail = firstNonEmpty(verdict.Detail,
+			"the external operation reached its declared success state, but the verification check could not complete")
+		d.parkExternalWatch(ctx, watch, verdict, result.FailureClass, output, errText)
+		return
+	}
 	if verdict.Action == watchCheckPark {
+		watch.CheckerStatus = checkerStatusForVerdict(verdict)
+		watch.OperationStatus = firstNonEmpty(operation, control.WatchOperationRunning)
+		watch.VerificationStatus = control.WatchVerificationPending
+		_ = d.Control.RecordExternalWatchPhases(ctx, watch.TenantID, watch.ID,
+			watch.CheckerStatus, watch.OperationStatus, watch.VerificationStatus)
 		d.parkExternalWatch(ctx, watch, verdict, result.FailureClass, output, errText)
 		return
 	}
 	if verdict.Action == watchCheckObserve {
 		if status := classifyExternalWatchOutput(watch, output, result.ExitCode); status != "" {
+			watch.CheckerStatus = control.WatchCheckerOK
+			watch.OperationStatus, watch.VerificationStatus = terminalWatchPhases(watch, status)
+			_ = d.Control.RecordExternalWatchPhases(ctx, watch.TenantID, watch.ID,
+				watch.CheckerStatus, watch.OperationStatus, watch.VerificationStatus)
 			d.completeExternalWatch(ctx, watch, status, output, statusErrText(status, errText))
 			return
 		}
@@ -138,6 +172,8 @@ func (d *Server) executeExternalWatch(ctx context.Context, watch control.Externa
 	// A failed check is not an observation. Its streak is recorded so an
 	// identical failure cannot be repeated until the deadline.
 	if commandErr != nil || strings.TrimSpace(result.FailureClass) != "" || result.ExitCode != 0 {
+		_ = d.Control.RecordExternalWatchPhases(ctx, watch.TenantID, watch.ID,
+			control.WatchCheckerCommandFailed, firstNonEmpty(operation, control.WatchOperationRunning), control.WatchVerificationPending)
 		signature := watchCheckSignature(result.FailureClass, output)
 		streak, err := d.Control.RecordExternalWatchFailure(ctx, watch.TenantID, watch.ID,
 			output, errText, result.FailureClass, signature)
@@ -180,9 +216,16 @@ func (d *Server) executeExternalWatch(ctx context.Context, watch control.Externa
 				return
 			}
 		}
+		watch.CheckerStatus = control.WatchCheckerOK
+		watch.OperationStatus = control.WatchOperationTimedOut
+		watch.VerificationStatus = control.WatchVerificationPending
+		_ = d.Control.RecordExternalWatchPhases(ctx, watch.TenantID, watch.ID,
+			watch.CheckerStatus, watch.OperationStatus, watch.VerificationStatus)
 		d.completeExternalWatch(ctx, watch, control.ExternalWatchTimedOut, output, firstNonEmpty(errText, "watch deadline reached"))
 		return
 	}
+	_ = d.Control.RecordExternalWatchPhases(ctx, watch.TenantID, watch.ID,
+		control.WatchCheckerOK, control.WatchOperationRunning, control.WatchVerificationPending)
 	if err := d.Control.RecordExternalWatchCheck(ctx, watch.TenantID, watch.ID, output, errText); err != nil {
 		log.Warn("external watch checkpoint failed", "watch_id", watch.ID, "error", err)
 	}
@@ -193,6 +236,39 @@ func statusErrText(status, errText string) string {
 		return ""
 	}
 	return errText
+}
+
+func operationStatusFromOutput(watch control.ExternalWatch, output string) string {
+	if watch.SpecVersion >= 2 {
+		if watch.TerminalFailurePattern != "" && matchesExternalWatchPattern(watch.TerminalFailurePattern, output) {
+			return control.WatchOperationFailed
+		}
+		if watch.TerminalSuccessPattern != "" && matchesExternalWatchPattern(watch.TerminalSuccessPattern, output) {
+			return control.WatchOperationSucceeded
+		}
+	}
+	return ""
+}
+
+func checkerStatusForVerdict(verdict watchCheckVerdict) string {
+	if verdict.Reason == watchReasonBlockedEnvironment || verdict.Reason == watchReasonEnvironmentChanged {
+		return control.WatchCheckerCapabilityBlocked
+	}
+	return control.WatchCheckerCommandFailed
+}
+
+func terminalWatchPhases(watch control.ExternalWatch, status string) (string, string) {
+	switch status {
+	case control.ExternalWatchSucceeded:
+		if watch.SpecVersion >= 2 {
+			return control.WatchOperationSucceeded, control.WatchVerificationPassed
+		}
+		return control.WatchOperationSucceeded, control.WatchVerificationNotRequired
+	case control.ExternalWatchFailed:
+		return control.WatchOperationFailed, control.WatchVerificationNotRequired
+	default:
+		return control.WatchOperationTimedOut, control.WatchVerificationPending
+	}
 }
 
 // runExternalWatchCommand executes one durable check with the same execution
@@ -404,6 +480,18 @@ func classifyStoredExternalWatchOutput(watch control.ExternalWatch) string {
 // a "success" printed by a check that itself failed is self-contradictory
 // evidence, and accepting it would let a broken check close a release.
 func classifyExternalWatchOutput(watch control.ExternalWatch, output string, exitCode int) string {
+	if watch.SpecVersion >= 2 {
+		if watch.TerminalFailurePattern != "" && matchesExternalWatchPattern(watch.TerminalFailurePattern, output) {
+			return control.ExternalWatchFailed
+		}
+		if exitCode == 0 && watch.TerminalSuccessPattern != "" && matchesExternalWatchPattern(watch.TerminalSuccessPattern, output) {
+			return control.ExternalWatchSucceeded
+		}
+		if exitCode == 0 && watch.TargetPattern != "" && matchesExternalWatchPattern(watch.TargetPattern, output) {
+			return control.ExternalWatchSucceeded
+		}
+		return ""
+	}
 	if exitCode == 0 && matchesExternalWatchPattern(watch.SuccessPattern, output) {
 		return control.ExternalWatchSucceeded
 	}
@@ -574,7 +662,7 @@ func (d *Server) notifyExternalWatchCompletion(ctx context.Context, watch contro
 		// The finalization queue is itself a durable user-visible intent. An
 		// attached CLI is not delivery evidence, but a persisted follow-up
 		// prevents this terminal watch from disappearing across restarts.
-		queued, err := d.Control.GetQueuedByIdempotencyKey(ctx, externalWatchFinalizationKey(watch))
+		queued, err := d.Control.GetQueuedByIdempotencyKey(ctx, watch.TenantID, externalWatchFinalizationKey(watch))
 		handled = err == nil && queued != nil
 	}
 	if !handled {
@@ -590,6 +678,9 @@ func (d *Server) notifyExternalWatchCompletion(ctx context.Context, watch contro
 // that never reached the external system reads as a failed deployment.
 // Details stay out of the notice; `/diag execution` carries them.
 func externalWatchNotice(watch control.ExternalWatch, taskStatus string) string {
+	if watch.OperationStatus == control.WatchOperationSucceeded && watch.VerificationStatus == control.WatchVerificationBlocked {
+		return fmt.Sprintf("Watcher %s | operation: succeeded | verification: blocked_environment | task: %s", watch.ID, taskStatus)
+	}
 	if reason, ok := watchCheckDefect(watch.LastError); ok {
 		return "Watcher " + strings.TrimSpace(watch.ID) + " blocked: " + reason +
 			" | the external state was not observed | task: " + taskStatus
@@ -759,7 +850,7 @@ func (d *Server) reconcileExternalWatchFinalizations(ctx context.Context) {
 		}
 
 		key := externalWatchFinalizationKey(watch)
-		queued, err := d.Control.GetQueuedByIdempotencyKey(ctx, key)
+		queued, err := d.Control.GetQueuedByIdempotencyKey(ctx, watch.TenantID, key)
 		if err != nil {
 			log.Warn("external watch finalization queue lookup failed", "watch_id", watch.ID, "error", err)
 			continue
@@ -804,6 +895,20 @@ func (d *Server) reconcileExternalWatchFinalizations(ctx context.Context) {
 					log.Warn("external watch completed finalization settlement failed", "watch_id", watch.ID, "queue_id", queued.ID, "error", err)
 				}
 				continue
+			}
+			// The queue claim lease is the primary worker-ownership signal. Keep
+			// this direct run lookup as a migration and crash-window guard: rows
+			// created before leases existed (or briefly observed before their first
+			// renewal) must never be reopened while the bound run is still live.
+			if queued.RunID != "" {
+				boundRun, runErr := d.Control.GetRun(ctx, watch.TenantID, queued.RunID)
+				if runErr != nil {
+					log.Warn("external watch started finalization run lookup failed", "watch_id", watch.ID, "run_id", queued.RunID, "error", runErr)
+					continue
+				}
+				if boundRun != nil && strings.EqualFold(boundRun.Status, "running") {
+					continue
+				}
 			}
 			fallthrough
 		case control.QueueStatusFailed:
@@ -917,6 +1022,13 @@ func externalWatchOutcome(watch control.ExternalWatch, status, output, lastError
 		description = "External operation"
 	}
 	preview := truncate(toOneLine(strings.TrimSpace(output)), 240)
+	if watch.OperationStatus == control.WatchOperationSucceeded && watch.VerificationStatus == control.WatchVerificationBlocked {
+		message := fmt.Sprintf("%s completed, but verification was blocked by the checker environment.", description)
+		if preview != "" {
+			message += " " + preview
+		}
+		return message, []string{"Restore the verification environment, then verify the completed operation without rerunning it."}
+	}
 	switch status {
 	case control.ExternalWatchSucceeded:
 		message := fmt.Sprintf("%s completed.", description)

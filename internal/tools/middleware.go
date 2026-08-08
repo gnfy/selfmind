@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"os"
 	"path"
@@ -419,15 +420,25 @@ func SmartApprovalMiddleware(projectRoot string) Middleware {
 			// Layer 2: mode bypass, including sandbox containment (C1). A
 			// contained exec call is recorded so /diag can show how much of the
 			// old ask volume was pure fatigue rather than judgement.
-			contained := execSandboxContained(toolName, args)
-			if !approvalNeeded(mode, toolName, dangerous, contained) {
+			containment := assessExecContainment(toolName, args)
+			intentSnapshot := RunIntentSnapshot{}
+			if hasScope && scope.IntentSnapshot != nil {
+				intentSnapshot = scope.IntentSnapshot()
+			} else if hasScope && scope.TriageIntent != nil {
+				intentSnapshot.RawUserText = scope.TriageIntent()
+			}
+			denyForcesHuman := intentSnapshot.HasExplicitDeny() && (dangerous || isWriteTool(toolName) || isExecTool(toolName))
+			contained := containment.AutoApprove() && !denyForcesHuman
+			if !denyForcesHuman && !approvalNeeded(mode, toolName, dangerous, contained) {
 				if contained && mode == ApprovalSmart && hasScope {
-					RecordTriageOutcome(scope.TenantID, scope.PersonID, TriageOutcomeContained, nil)
-					log.Debug("smart approval: sandbox-contained exec, no ask", "tool", toolName, "reason", containedExecReason)
+					recordScopeTriage(scope, toolName, "", TriageOutcomeContained, TriageAssessment{}, 0, nil)
+					log.Debug("smart approval: sandbox-contained exec, no ask", "tool", toolName, "reason", containedExecReason, "assessment", containment.Summary())
 				}
 				return next(args)
 			}
-			if !dangerous && reason == "" {
+			if denyForcesHuman {
+				reason = "the current request contains an explicit deny; a person must confirm any override"
+			} else if !dangerous && reason == "" {
 				reason = fmt.Sprintf("%s requires approval in %s mode", toolName, mode)
 			}
 
@@ -436,12 +447,33 @@ func SmartApprovalMiddleware(projectRoot string) Middleware {
 			// Hardline never reaches here, so a granted class can never cover a
 			// hard-floor op.
 			patternKey := approvalPatternKeyForScope(toolName, args, reason, scope, hasScope)
+			exactRunKey := approvalExactRunKey(toolName, args, scope, hasScope)
 			// Rule candidates (batch B2) are the narrow authorizations this call
 			// could create — a command prefix, a host, a writable root — and the
 			// keys a previously granted rule is looked up under.
 			ruleCandidates := approvalRuleCandidates(toolName, args, scope, reason)
 			targetKeys := approvalTargetRuleKeys(toolName, args, scope)
-			if hasScope && scope.Grants != nil {
+			isRunGranted := func(key string) bool {
+				return hasScope && scope.runGrants != nil && scope.runGrants.has(key)
+			}
+			switch {
+			case denyForcesHuman:
+				// A current deny outranks full-auto, containment, and every stored
+				// grant. Continue directly to the human ask below.
+			case isRunGranted(patternKey):
+				recordScopeTriage(scope, toolName, patternKey, TriageOutcomeGrantHit, TriageAssessment{}, 0, nil)
+				return next(args)
+			case isRunGranted(exactRunKey):
+				recordScopeTriage(scope, toolName, exactRunKey, TriageOutcomeExactRunHit, TriageAssessment{}, 0, nil)
+				return next(args)
+			case len(targetKeys) > 0 && allApprovalKeysGranted(targetKeys, isRunGranted):
+				recordScopeTriage(scope, toolName, strings.Join(targetKeys, ","), TriageOutcomeGrantHit, TriageAssessment{}, 0, nil)
+				return next(args)
+			case anyApprovalKeyGranted(approvalRuleKeys(ruleCandidates), isRunGranted):
+				recordScopeTriage(scope, toolName, "rule", TriageOutcomeGrantHit, TriageAssessment{}, 0, nil)
+				return next(args)
+			}
+			if !denyForcesHuman && hasScope && scope.Grants != nil {
 				grantCtx := contextFromArgs(args)
 				isGranted := func(key string) bool {
 					if key == "" {
@@ -452,12 +484,15 @@ func SmartApprovalMiddleware(projectRoot string) Middleware {
 				}
 				switch {
 				case isGranted(patternKey):
+					recordScopeTriage(scope, toolName, patternKey, TriageOutcomeGrantHit, TriageAssessment{}, 0, nil)
 					return next(args)
 				// ALL targets must be covered (batch B3): a patch touching three
 				// roots must not be released by a grant that covers one of them.
 				case len(targetKeys) > 0 && allApprovalKeysGranted(targetKeys, isGranted):
+					recordScopeTriage(scope, toolName, strings.Join(targetKeys, ","), TriageOutcomeGrantHit, TriageAssessment{}, 0, nil)
 					return next(args)
 				case anyApprovalKeyGranted(approvalRuleKeys(ruleCandidates), isGranted):
+					recordScopeTriage(scope, toolName, "rule", TriageOutcomeGrantHit, TriageAssessment{}, 0, nil)
 					return next(args)
 				}
 			}
@@ -477,28 +512,26 @@ func SmartApprovalMiddleware(projectRoot string) Middleware {
 			triageRationale := ""
 			triageRisk := ""
 			triageAuthorization := ""
-			if mode == ApprovalSmart && hasScope {
+			if mode == ApprovalSmart && hasScope && !denyForcesHuman {
 				switch {
 				case scope.Judge == nil:
 					// No judge wired: smart mode cannot triage at all. Count it so
 					// /diag can say the funnel is disabled rather than strict.
 					triageState = TriageStateUnavailable
-					RecordTriageOutcome(scope.TenantID, scope.PersonID, TriageOutcomeUnavailable, nil)
+					recordScopeTriage(scope, toolName, patternKey, TriageOutcomeUnavailable, TriageAssessment{}, 0, nil)
 				case triageDenyBreakerTripped(scope.RunID):
 					// The model is circling a denied action (batch C2). Stop
 					// spending judge calls on it and put the person in the loop,
 					// who is the only one who can end the loop. Never the reverse:
 					// a tripped breaker cannot approve anything.
 					triageState = TriageStateEscalated
-					RecordTriageOutcome(scope.TenantID, scope.PersonID, TriageOutcomeEscalated, nil)
+					recordScopeTriage(scope, toolName, patternKey, TriageOutcomeEscalated, TriageAssessment{}, 0, nil)
 					log.Info("smart approval: triage stepped aside after repeated denials in this run", "tool", toolName, "run", scope.RunID)
 				default:
 					ctx := contextFromArgs(args)
-					intent := ""
-					if scope.TriageIntent != nil {
-						intent = scope.TriageIntent()
-					}
-					verdict, assessment, terr := triageApproval(ctx, scope.Judge, toolName, triageSubject(toolName, approvalDisplayArgs(args)), reason, intent)
+					triageStarted := time.Now()
+					verdict, assessment, terr := triageApprovalWithIntent(ctx, scope.Judge, toolName, triageSubject(toolName, approvalDisplayArgs(args)), reason, intentSnapshot, containment)
+					triageLatency := time.Since(triageStarted)
 					triageRationale = assessment.Rationale
 					triageRisk = assessment.Risk
 					triageAuthorization = assessment.Authorization
@@ -509,7 +542,7 @@ func SmartApprovalMiddleware(projectRoot string) Middleware {
 						if scope.Grants != nil && patternKey != "" {
 							recordApprovalGrant(ctx, scope, "task", patternKey, approvalGrantExpiry("task", args))
 						}
-						RecordTriageOutcome(scope.TenantID, scope.PersonID, TriageOutcomeApproved, nil)
+						recordScopeTriage(scope, toolName, patternKey, TriageOutcomeApproved, assessment, triageLatency, nil)
 						clearTriageDenials(scope.RunID)
 						log.Info("smart approval: auto-approved by triage", "tool", toolName, "reason", reason, "class", patternKey,
 							"risk", assessment.Risk, "authorization", assessment.Authorization)
@@ -520,7 +553,7 @@ func SmartApprovalMiddleware(projectRoot string) Middleware {
 						// retry a variant), not a diagnosable failure. The rationale
 						// travels with it so the model learns WHY instead of trying a
 						// variant of the same idea.
-						RecordTriageOutcome(scope.TenantID, scope.PersonID, TriageOutcomeDenied, nil)
+						recordScopeTriage(scope, toolName, patternKey, TriageOutcomeDenied, assessment, triageLatency, nil)
 						tripped := recordTriageDenial(scope.RunID)
 						log.Warn("smart approval: blocked by safety triage", "tool", toolName, "reason", reason,
 							"risk", assessment.Risk, "breaker_tripped", tripped)
@@ -535,11 +568,11 @@ func SmartApprovalMiddleware(projectRoot string) Middleware {
 						clearTriageDenials(scope.RunID)
 						if terr != nil {
 							triageState = TriageStateUnavailable
-							RecordTriageOutcome(scope.TenantID, scope.PersonID, TriageOutcomeUnavailable, terr)
+							recordScopeTriage(scope, toolName, patternKey, TriageOutcomeUnavailable, assessment, triageLatency, terr)
 							log.Debug("smart approval: triage escalated on error", "tool", toolName, "error", terr)
 						} else {
 							triageState = TriageStateEscalated
-							RecordTriageOutcome(scope.TenantID, scope.PersonID, TriageOutcomeEscalated, nil)
+							recordScopeTriage(scope, toolName, patternKey, TriageOutcomeEscalated, assessment, triageLatency, nil)
 						}
 					}
 				}
@@ -547,6 +580,9 @@ func SmartApprovalMiddleware(projectRoot string) Middleware {
 
 			// Layer 5: human ask.
 			if hasScope && scope.Approval != nil {
+				recordScopeTriage(scope, toolName, patternKey, TriageOutcomeHumanAsk, TriageAssessment{
+					Risk: triageRisk, Authorization: triageAuthorization, Rationale: triageRationale,
+				}, 0, nil)
 				decision, err := scope.Approval(contextFromArgs(args), ToolApprovalRequest{
 					TenantID:            scope.TenantID,
 					PersonID:            scope.PersonID,
@@ -557,6 +593,7 @@ func SmartApprovalMiddleware(projectRoot string) Middleware {
 					Reason:              reason,
 					Args:                approvalDisplayArgs(args),
 					GrantClass:          grantClassForDecision(toolName, reason, args, patternKey),
+					RunGrantClass:       exactRunGrantDescription(patternKey, exactRunKey),
 					ResourceFingerprint: approvalResourceFingerprint(scope, toolName, args),
 					Environment:         scope.EnvironmentSnapshotID,
 					Cwd:                 approvalDisplayCwd(scope),
@@ -565,6 +602,7 @@ func SmartApprovalMiddleware(projectRoot string) Middleware {
 					TriageRationale:     triageRationale,
 					TriageRisk:          triageRisk,
 					TriageAuthorization: triageAuthorization,
+					Containment:         containment.Summary(),
 					RuleCandidates:      ruleCandidates,
 				})
 				if err != nil {
@@ -590,7 +628,7 @@ func SmartApprovalMiddleware(projectRoot string) Middleware {
 				// picked, else the action class. A rule key is honored ONLY when
 				// it is one this call offered — a decision arriving from any
 				// surface must not be able to mint an authorization of its own.
-				if scope.Grants != nil {
+				if scope.Grants != nil || scope.runGrants != nil {
 					grantCtx := contextFromArgs(args)
 					if rule, ok := approvalRuleByKey(ruleCandidates, decision.GrantKey); ok {
 						recordApprovalGrant(grantCtx, scope, decision.Scope, rule.Key, approvalGrantExpiry(decision.Scope, args))
@@ -601,6 +639,8 @@ func SmartApprovalMiddleware(projectRoot string) Middleware {
 						}
 						if patternKey != "" {
 							recordApprovalGrant(grantCtx, scope, decision.Scope, patternKey, approvalGrantExpiry(decision.Scope, args))
+						} else if decision.Scope == "run" && exactRunKey != "" {
+							recordApprovalGrant(grantCtx, scope, "run", exactRunKey, time.Time{})
 						}
 						// A remembered decision on a multi-target write must cover
 						// EVERY target, otherwise the next call re-asks for the
@@ -626,6 +666,61 @@ func SmartApprovalMiddleware(projectRoot string) Middleware {
 			return next(args)
 		}
 	}
+}
+
+func recordScopeTriage(scope ExecutionScope, toolName, grantKey string, outcome TriageOutcome, assessment TriageAssessment, latency time.Duration, err error) {
+	route := ""
+	if routed, ok := scope.Judge.(ApprovalJudgeRoute); ok {
+		route = strings.TrimSpace(routed.ApprovalJudgeRoute())
+	}
+	errorClass := ""
+	if err != nil {
+		switch {
+		case errors.Is(err, context.DeadlineExceeded), errors.Is(err, context.Canceled):
+			errorClass = "timeout"
+		default:
+			errorClass = "provider_error"
+		}
+	} else if outcome == TriageOutcomeUnavailable && scope.Judge == nil {
+		errorClass = "not_configured"
+	}
+	RecordTriageAuditEvent(TriageAuditEvent{
+		TenantID: scope.TenantID, PersonID: scope.PersonID, TaskID: scope.TaskID, RunID: scope.RunID,
+		ToolName: toolName, Outcome: outcome, RiskLevel: assessment.Risk,
+		Authorization: assessment.Authorization, GrantKey: grantKey, ProviderRoute: route,
+		Latency: latency, ErrorClass: errorClass, Rationale: assessment.Rationale,
+		PolicyVersion: ApprovalTriagePolicyVersion,
+	}, err)
+}
+
+// approvalExactRunKey fingerprints an exec action that the reusable-grant floor
+// deliberately refuses to classify. The raw payload never leaves this function;
+// the key is in-memory only and includes the environment/blast-radius identity,
+// so changing code, sandbox, workspace, credentials, or network asks again.
+func approvalExactRunKey(toolName string, args map[string]interface{}, scope ExecutionScope, hasScope bool) string {
+	if !hasScope || !isExecTool(toolName) || strings.TrimSpace(scope.RunID) == "" {
+		return ""
+	}
+	payload := strings.TrimSpace(execCommandPayload(toolName, args))
+	if payload == "" {
+		return ""
+	}
+	assessment := assessExecContainment(toolName, args)
+	material := strings.Join([]string{
+		strings.ToLower(strings.TrimSpace(toolName)), payload,
+		strings.TrimSpace(scope.RunID), strings.TrimSpace(scope.WorkspaceID),
+		strings.TrimSpace(scope.EnvironmentSnapshotID), fmt.Sprint(scope.EnvironmentGeneration),
+		assessment.Summary(),
+	}, "\x00")
+	sum := sha256.Sum256([]byte(material))
+	return fmt.Sprintf("run:exact:%x", sum[:16])
+}
+
+func exactRunGrantDescription(patternKey, exactRunKey string) string {
+	if patternKey != "" || exactRunKey == "" {
+		return ""
+	}
+	return "this exact action for this run"
 }
 
 // approvalDisplayCwd is the working root shown on the approval surface: where
@@ -677,22 +772,26 @@ func approvalProjectRoot(fallback string, scope ExecutionScope, args map[string]
 	return fallback
 }
 
-// recordApprovalGrant persists an "approve this class" decision. Scope "task"
-// grants for the current task (session memory, needs a task id); "person"
-// grants across all of the person's tasks (persistent memory). "" (once) and an
-// empty scope record nothing. Failures are swallowed: a lost grant only costs
-// one extra ask, never correctness.
+// recordApprovalGrant remembers an "approve this class" decision. Scope "run"
+// stays in memory for the live run; "task" persists for the current task;
+// "person" persists across the person's tasks. "" (once) records nothing.
+// Failures are swallowed: a lost grant only costs one extra ask, never
+// correctness.
 func recordApprovalGrant(ctx context.Context, scope ExecutionScope, decisionScope, patternKey string, expiresAt time.Time) {
-	if scope.Grants == nil || patternKey == "" {
+	if patternKey == "" {
 		return
 	}
 	switch decisionScope {
+	case "run":
+		if scope.runGrants != nil {
+			scope.runGrants.add(patternKey)
+		}
 	case "task":
-		if scope.TaskID != "" {
+		if scope.Grants != nil && scope.TaskID != "" {
 			_ = scope.Grants.GrantApproval(ctx, "task", scope.TenantID, scope.PersonID, scope.TaskID, patternKey, expiresAt)
 		}
 	case "person":
-		if scope.PersonID != "" {
+		if scope.Grants != nil && scope.PersonID != "" {
 			_ = scope.Grants.GrantApproval(ctx, "person", scope.TenantID, scope.PersonID, scope.PersonID, patternKey, expiresAt)
 		}
 	}

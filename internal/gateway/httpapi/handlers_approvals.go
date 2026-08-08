@@ -96,6 +96,11 @@ func appendApprovalEvent(ctx context.Context, store *control.Store, approval *co
 		Type:       "approval." + approval.Status,
 		Visibility: "task",
 		Channel:    channel,
-		Payload:    mustJSON(map[string]string{"approval_id": approval.ID, "action_type": approval.ActionType}),
+		Payload: mustJSON(map[string]string{
+			"approval_id": approval.ID,
+			"action_type": approval.ActionType,
+			"decision_id": approval.DecisionID,
+			"scope":       approval.DecisionScope,
+		}),
 	})
 }

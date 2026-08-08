@@ -273,6 +273,13 @@ func (d *Server) diagReply(ctx context.Context, identity *control.IdentityContex
 	if pending, err := d.Control.CountPendingSessionOutbound(ctx, identity.TenantID, identity.PersonID); err == nil && pending > 0 {
 		fmt.Fprintf(&sb, "Pending session recovery: %d (use /diag delivery)\n", pending)
 	}
+	if health, err := d.Control.DeliveryHealthByPlatformSince(ctx, identity.TenantID, identity.PersonID, time.Now().Add(-24*time.Hour)); err == nil && len(health) > 0 {
+		sb.WriteString("Delivery channels (24h):\n")
+		for _, item := range health {
+			fmt.Fprintf(&sb, "- %s: sent %d, unconfirmed %d, pending %d, failed %d\n",
+				item.Platform, item.Sent, item.Unconfirmed, item.PendingSession, item.Failed)
+		}
+	}
 
 	// Last run error across the person's recent runs.
 	if runs, err := d.Control.ListRecentRunsForPerson(ctx, identity.TenantID, identity.PersonID, 10); err == nil {
@@ -477,6 +484,7 @@ func (d *Server) contextDiagReply(ctx context.Context, identity *control.Identit
 	} else {
 		sb.WriteString("Breakdown: no context.breakdown event recorded yet\n")
 	}
+	sb.WriteString(latestProviderContextBreakdownLine(events))
 	sb.WriteString(promptPrefixStabilityLine(events))
 	sb.WriteString(promptCacheAggregateLine(events))
 	sb.WriteString(latestPromptCacheLine(events))
@@ -619,7 +627,10 @@ func contextBreakdownDetail(events []control.Event) string {
 			ProjectContext   int    `json:"project_context"`
 			Memory           int    `json:"memory"`
 			Runtime          int    `json:"runtime"`
+			Recall           int    `json:"recall"`
+			Artifacts        int    `json:"artifacts"`
 			History          int    `json:"history"`
+			ToolResults      int    `json:"tool_results"`
 			Total            int    `json:"total"`
 			Stable           int    `json:"stable"`
 			Volatile         int    `json:"volatile"`
@@ -639,8 +650,11 @@ func contextBreakdownDetail(events []control.Event) string {
 			{raw.Tools, "tool contract"},
 			{raw.ProjectContext, "project context (AGENTS.md)"},
 			{raw.Memory, "person memory"},
-			{raw.Runtime, "runtime context (task/workspace/recall)"},
+			{raw.Runtime, "task/run context"},
+			{raw.Recall, "semantic recall"},
+			{raw.Artifacts, "artifact references"},
 			{raw.History, "history"},
+			{raw.ToolResults, "tool results"},
 		} {
 			fmt.Fprintf(&sb, "- %-38s ~%d tok (%d%%)\n", section.label, section.value, section.value*100/total)
 		}
@@ -656,6 +670,37 @@ func contextBreakdownDetail(events []control.Event) string {
 		return sb.String()
 	}
 	return ""
+}
+
+func latestProviderContextBreakdownLine(events []control.Event) string {
+	for _, event := range events {
+		if event.Type != "provider.call.context_breakdown" {
+			continue
+		}
+		var p struct {
+			Iteration          int    `json:"iteration"`
+			Transport          string `json:"transport"`
+			StableSystem       int    `json:"stable_system"`
+			ToolSchemas        int    `json:"tool_schemas"`
+			History            int    `json:"history"`
+			CurrentToolResults int    `json:"current_tool_results"`
+			Recall             int    `json:"recall"`
+			Workspace          int    `json:"workspace"`
+			Artifacts          int    `json:"artifacts"`
+			Memory             int    `json:"memory"`
+			TaskRuntime        int    `json:"task_runtime"`
+			EstimatedTotal     int    `json:"estimated_total"`
+		}
+		if json.Unmarshal(event.Payload, &p) != nil {
+			continue
+		}
+		return fmt.Sprintf(
+			"Provider request (#%d %s, ~%d tok): stable system %d, tool schemas %d, history %d, tool results %d, workspace %d, task %d, recall %d, memory %d, artifacts %d\n",
+			p.Iteration, p.Transport, p.EstimatedTotal, p.StableSystem, p.ToolSchemas,
+			p.History, p.CurrentToolResults, p.Workspace, p.TaskRuntime, p.Recall, p.Memory, p.Artifacts,
+		)
+	}
+	return "Provider request: no per-call context breakdown recorded yet\n"
 }
 
 // latestCompactionLine renders the newest context.compacted event, or an
@@ -689,11 +734,12 @@ func latestRecallLine(events []control.Event) string {
 			continue
 		}
 		var p struct {
-			Sources   map[string]int `json:"sources"`
-			Slices    int            `json:"slices"`
-			Expanded  bool           `json:"expanded"`
-			Skipped   string         `json:"skipped"`
-			ElapsedMS int64          `json:"elapsed_ms"`
+			Candidates map[string]int `json:"candidates"`
+			Sources    map[string]int `json:"sources"`
+			Slices     int            `json:"slices"`
+			Expanded   bool           `json:"expanded"`
+			Skipped    string         `json:"skipped"`
+			ElapsedMS  int64          `json:"elapsed_ms"`
 		}
 		if json.Unmarshal(e.Payload, &p) != nil {
 			continue
@@ -714,7 +760,16 @@ func latestRecallLine(events []control.Event) string {
 		if p.Expanded {
 			expanded = ", query expanded"
 		}
-		return fmt.Sprintf("Recall (last turn): %d slice(s) [%s]%s, %dms\n", p.Slices, src, expanded, p.ElapsedMS)
+		candidateParts := make([]string, 0, len(p.Candidates))
+		for name, count := range p.Candidates {
+			candidateParts = append(candidateParts, fmt.Sprintf("%s=%d", name, count))
+		}
+		sort.Strings(candidateParts)
+		candidateText := strings.Join(candidateParts, ", ")
+		if candidateText == "" {
+			candidateText = "none"
+		}
+		return fmt.Sprintf("Recall (last turn): candidates [%s], selected %d slice(s) [%s]%s, %dms\n", candidateText, p.Slices, src, expanded, p.ElapsedMS)
 	}
 	return "Recall: no recall event recorded yet\n"
 }

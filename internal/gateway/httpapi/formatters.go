@@ -107,7 +107,9 @@ type approvalPayload struct {
 	Args   map[string]interface{} `json:"args"`
 	// GrantClass describes what a "remember this" decision authorizes. Empty
 	// means the class is not reusable, so no grant was or will be recorded.
-	GrantClass string `json:"grant_class,omitempty"`
+	GrantClass    string `json:"grant_class,omitempty"`
+	RunGrantClass string `json:"run_grant_class,omitempty"`
+	Containment   string `json:"containment,omitempty"`
 	// Environment, Cwd, and ChangeSummary are the decision context written by
 	// toolApprovalHandler: where the operation would run and how large the write
 	// is. Display-only; they never widen what the approval authorizes.

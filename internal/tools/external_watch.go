@@ -29,16 +29,19 @@ func NewExternalWatchTool(store *control.Store) *ExternalWatchTool {
 		schema: ToolSchema{
 			Type: "object",
 			Properties: map[string]PropertyDef{
-				"description":             {Type: "string", Description: "Short user-facing description of what is being watched"},
-				"command":                 {Type: "string", Description: "Read-only command that checks the external state"},
-				"success_pattern":         {Type: "string", Description: "Regular expression that marks the watch successful when matched in command output"},
-				"failure_pattern":         {Type: "string", Description: "Optional regular expression that marks the watch failed when matched"},
-				"cwd":                     {Type: "string", Description: "Working directory within the active workspace", Default: "."},
-				"interval_seconds":        {Type: "integer", Description: "Seconds between checks (5-300)", Default: 30},
-				"timeout_seconds":         {Type: "integer", Description: "Maximum total watch duration in seconds (60-86400)", Default: 7200},
-				"command_timeout_seconds": {Type: "integer", Description: "Maximum duration of one check (1-120 seconds)", Default: 30},
+				"description":              {Type: "string", Description: "Short user-facing description of what is being watched"},
+				"command":                  {Type: "string", Description: "Read-only command that checks the external state"},
+				"success_pattern":          {Type: "string", Description: "V1 regular expression that marks the watch successful"},
+				"failure_pattern":          {Type: "string", Description: "V1 optional regular expression that marks the watch failed"},
+				"target_pattern":           {Type: "string", Description: "V2 desired handoff state, such as PENDING_APPROVAL; when set, both terminal patterns are required because an external system may skip this state"},
+				"terminal_success_pattern": {Type: "string", Description: "V2 terminal success state; required with target_pattern so a skipped target can still finish successfully"},
+				"terminal_failure_pattern": {Type: "string", Description: "V2 terminal failure state; required with target_pattern and evaluated before success and target"},
+				"cwd":                      {Type: "string", Description: "Working directory within the active workspace", Default: "."},
+				"interval_seconds":         {Type: "integer", Description: "Seconds between checks (5-300)", Default: 30},
+				"timeout_seconds":          {Type: "integer", Description: "Maximum total watch duration in seconds (60-86400)", Default: 7200},
+				"command_timeout_seconds":  {Type: "integer", Description: "Maximum duration of one check (1-120 seconds)", Default: 30},
 			},
-			Required: []string{"command", "success_pattern"},
+			Required: []string{"command"},
 		},
 		metadata: ToolMetadata{
 			Category:  "terminal",
@@ -63,15 +66,37 @@ func (t *ExternalWatchTool) Execute(args map[string]interface{}) (string, error)
 	command := strings.TrimSpace(stringArg(args, "command"))
 	successPattern := strings.TrimSpace(stringArg(args, "success_pattern"))
 	failurePattern := strings.TrimSpace(stringArg(args, "failure_pattern"))
-	if command == "" || successPattern == "" {
-		return "", fmt.Errorf("command and success_pattern are required")
+	targetPattern := strings.TrimSpace(stringArg(args, "target_pattern"))
+	terminalSuccessPattern := strings.TrimSpace(stringArg(args, "terminal_success_pattern"))
+	terminalFailurePattern := strings.TrimSpace(stringArg(args, "terminal_failure_pattern"))
+	specVersion := 1
+	if targetPattern != "" || terminalSuccessPattern != "" || terminalFailurePattern != "" {
+		specVersion = 2
 	}
-	if _, err := regexp.Compile(successPattern); err != nil {
-		return "", fmt.Errorf("invalid success_pattern: %w", err)
+	if command == "" {
+		return "", fmt.Errorf("command is required")
 	}
-	if failurePattern != "" {
-		if _, err := regexp.Compile(failurePattern); err != nil {
-			return "", fmt.Errorf("invalid failure_pattern: %w", err)
+	if specVersion == 1 && successPattern == "" {
+		return "", fmt.Errorf("success_pattern is required for watch spec v1")
+	}
+	if err := control.ValidateExternalWatchSpec(control.ExternalWatch{
+		SpecVersion:            specVersion,
+		SuccessPattern:         successPattern,
+		TargetPattern:          targetPattern,
+		TerminalSuccessPattern: terminalSuccessPattern,
+		TerminalFailurePattern: terminalFailurePattern,
+	}); err != nil {
+		return "", err
+	}
+	for name, pattern := range map[string]string{
+		"success_pattern": successPattern, "failure_pattern": failurePattern,
+		"target_pattern": targetPattern, "terminal_success_pattern": terminalSuccessPattern,
+		"terminal_failure_pattern": terminalFailurePattern,
+	} {
+		if pattern != "" {
+			if _, err := regexp.Compile(pattern); err != nil {
+				return "", fmt.Errorf("invalid %s: %w", name, err)
+			}
 		}
 	}
 	interval := clampInt(intArg(args, "interval_seconds", 30), 5, 300)
@@ -97,7 +122,13 @@ func (t *ExternalWatchTool) Execute(args map[string]interface{}) (string, error)
 	//
 	// It adds no approval surface: registration already passed approval, and the
 	// same command was going to run unattended seconds later.
-	verdict, err := preflightExternalWatch(args, command, cwd, successPattern, failurePattern, commandTimeout)
+	patterns := externalWatchPreflightPatterns{Success: successPattern, Failure: failurePattern}
+	if specVersion >= 2 {
+		patterns = externalWatchPreflightPatterns{
+			Target: targetPattern, TerminalSuccess: terminalSuccessPattern, TerminalFailure: terminalFailurePattern,
+		}
+	}
+	verdict, err := preflightExternalWatchPatterns(args, command, cwd, patterns, commandTimeout)
 	if err != nil {
 		return "", err
 	}
@@ -158,21 +189,25 @@ func (t *ExternalWatchTool) Execute(args map[string]interface{}) (string, error)
 		binding.CapabilityBindings = append(binding.CapabilityBindings, bound)
 	}
 	watch, err := t.store.CreateExternalWatch(context.Background(), control.ExternalWatch{
-		TenantID:              scope.TenantID,
-		PersonID:              scope.PersonID,
-		WorkspaceID:           scope.WorkspaceID,
-		TaskID:                scope.TaskID,
-		RunID:                 scope.RunID,
-		Channel:               scope.Channel,
-		Description:           description,
-		CWD:                   cwd,
-		Command:               command,
-		SuccessPattern:        successPattern,
-		FailurePattern:        failurePattern,
-		IntervalSeconds:       interval,
-		CommandTimeoutSeconds: commandTimeout,
-		TimeoutAt:             timeoutAt,
-		ExecutionBinding:      binding,
+		TenantID:               scope.TenantID,
+		PersonID:               scope.PersonID,
+		WorkspaceID:            scope.WorkspaceID,
+		TaskID:                 scope.TaskID,
+		RunID:                  scope.RunID,
+		Channel:                scope.Channel,
+		Description:            description,
+		CWD:                    cwd,
+		Command:                command,
+		SuccessPattern:         successPattern,
+		FailurePattern:         failurePattern,
+		SpecVersion:            specVersion,
+		TargetPattern:          targetPattern,
+		TerminalSuccessPattern: terminalSuccessPattern,
+		TerminalFailurePattern: terminalFailurePattern,
+		IntervalSeconds:        interval,
+		CommandTimeoutSeconds:  commandTimeout,
+		TimeoutAt:              timeoutAt,
+		ExecutionBinding:       binding,
 
 		EnvironmentSnapshotID:  identity.ID,
 		EnvironmentGeneration:  identity.Generation,

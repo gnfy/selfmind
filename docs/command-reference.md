@@ -154,7 +154,7 @@ selfmind weixin status
 
 ```text
 selfmind eval [list|run|report|repair|scorecard|capture|clean]
-selfmind maintenance [replay|migrate-memory|memory-audit|memory-dedup] ...
+selfmind maintenance [replay|migrate-memory|memory-audit|memory-dedup|task-audit] ...
 ```
 
 ```text
@@ -170,6 +170,7 @@ selfmind maintenance replay [--limit N]
 selfmind maintenance migrate-memory [--apply] [--data-dir DIR]
 selfmind maintenance memory-audit [--archive-confirmed] [--partition P] [--data-dir DIR]
 selfmind maintenance memory-dedup [--apply] [--partition P] [--data-dir DIR]
+selfmind maintenance task-audit [--apply] [--limit N] [--data-dir DIR]
 ```
 
 - Eval commands are intended for reproducible agent-quality testing. `--live`
@@ -177,6 +178,10 @@ selfmind maintenance memory-dedup [--apply] [--partition P] [--data-dir DIR]
   should be used deliberately.
 - Destructive maintenance commands are dry-run by default and require the
   explicit apply/archive flag shown above.
+- `task-audit` reports parked tasks without durable blocker evidence. `--apply`
+  only backfills a blocker when the inactive task status exactly matches its
+  newest finished run; conflicting or mixed histories remain review-only, and
+  task/run statuses are never rewritten.
 
 ## Gateway slash commands
 

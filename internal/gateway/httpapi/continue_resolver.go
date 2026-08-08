@@ -124,6 +124,7 @@ func looksLikeAffirmativeContinuation(input string) bool {
 	case "ok", "okay", "yes", "y", "sure", "go ahead", "proceed", "sounds good",
 		"\u53ef\u4ee5", "\u597d", "\u597d\u7684", "\u884c", "\u6ca1\u95ee\u9898",
 		"\u540c\u610f", "\u5f00\u59cb", "\u5f00\u59cb\u5427", "\u6309\u8fd9\u4e2a\u505a",
+		"\u5f00\u59cb\u6267\u884c", "\u6267\u884c\u5427", "\u8bf7\u6267\u884c",
 		"\u5c31\u8fd9\u6837", "\u90a3\u5c31\u8fd9\u6837":
 		return true
 	default:
@@ -131,20 +132,19 @@ func looksLikeAffirmativeContinuation(input string) bool {
 	}
 }
 
-func (c *RunCoordinator) withResumeContext(ctx context.Context, identity *control.IdentityContext, task *control.Task, run *control.Run, intent router.IntentResult, input string) string {
-	if c == nil || c.srv == nil || c.srv.Control == nil || task == nil || intent.Intent != router.IntentContinue {
+func (c *RunCoordinator) withResumeContext(ctx context.Context, identity *control.IdentityContext, task *control.Task, run *control.Run, intent router.IntentResult, explicitResume bool, workKey, input string) string {
+	if c == nil || c.srv == nil || c.srv.Control == nil || identity == nil || task == nil || (!explicitResume && intent.Intent != router.IntentContinue) {
 		return input
 	}
 	store := c.srv.Control
-	handoff, _ := store.LatestHandoff(ctx, task.ID)
-	events, _ := store.ListTaskEvents(ctx, task.ID, 8)
-	if handoff == nil && len(events) == 0 {
-		return input
-	}
 	runID := ""
+	resumedRuns := int64(0)
 	if run != nil {
 		runID = run.ID
+		resumedRuns, _ = store.MarkTaskRunsResumed(ctx, identity.TenantID, task.ID, run.ID, workKey)
 	}
+	handoff, _ := store.LatestHandoff(ctx, task.ID)
+	events, _ := store.ListTaskEvents(ctx, task.ID, 8)
 	_, _ = store.AppendEvent(ctx, control.Event{
 		TaskID:     task.ID,
 		RunID:      runID,
@@ -152,10 +152,16 @@ func (c *RunCoordinator) withResumeContext(ctx context.Context, identity *contro
 		Visibility: "task",
 		Channel:    task.LastChannel,
 		Payload: mustJSON(map[string]interface{}{
-			"reason":     intent.Reason,
-			"confidence": intent.Confidence,
+			"reason":            intent.Reason,
+			"confidence":        intent.Confidence,
+			"resumes_task_runs": resumedRuns > 0,
+			"resumed_run_count": resumedRuns,
+			"work_key":          strings.ToUpper(strings.TrimSpace(workKey)),
 		}),
 	})
+	if handoff == nil && len(events) == 0 {
+		return input
+	}
 	if kernel.HasLoopResumeMessages(ctx) {
 		return input
 	}

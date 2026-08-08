@@ -88,6 +88,19 @@ var errorClassRules = []errorClassRule{
 		},
 	},
 	{
+		// A status-check script can swallow its own exception and still exit 0.
+		// Keep these cues distinct from shell syntax so durable watchers can
+		// reject an invalid check definition before registering it.
+		class: "check_definition",
+		substrings: []string{
+			"traceback (most recent call last)",
+			"jsondecodeerror",
+			"keyerror:",
+			"nameerror:",
+			"attributeerror:",
+		},
+	},
+	{
 		class: "syntax",
 		substrings: []string{
 			"syntax error",
@@ -168,12 +181,13 @@ var errorClassHints = map[string]string{
 	"permission":                "The current user lacks permission for this path or operation; choose an accessible target instead of retrying as-is.",
 	"network":                   "A network or TLS connection failed; verify host reachability and the endpoint before retrying.",
 	"environment":               "A required interpreter, package, or environment variable is missing; set up the environment before retrying.",
+	"check_definition":          "The check script itself failed; fix its parsing, variables, or status query before retrying or registering a durable watch.",
 	"unknown":                   "Read the error and captured output to identify a cause before changing the next command.",
 }
 
 // ClassifyToolError returns a coarse failure class for a failed tool call:
 // one of "syntax", "auth", "timeout", "not_found", "permission", "network",
-// "environment", or "unknown". It is a pure function over the error text and
+// "environment", "check_definition", or "unknown". It is a pure function over the error text and
 // the captured output; toolName is accepted so future rules can specialize
 // per tool without changing callers.
 func ClassifyToolError(toolName string, err error, output string) string {

@@ -33,7 +33,7 @@ const (
 
 var (
 	transientStatusTokens = regexp.MustCompile(
-		`(?i)\b(IN_PROGRESS|QUEUED|PRE_BUILD|PREPARED_NOT_EXECUTED)\b|尚未执行|待执行|正在等待|正在执行|当前状态`)
+		`(?i)\b((?:[A-Z][A-Z0-9]{1,15}_)?(?:IN_PROGRESS|QUEUED|PRE_BUILD|PREPARED_NOT_EXECUTED|PENDING(?:_APPROVAL|_EXECUTION|_VERIFICATION)?|WAITING_USER|BLOCKED|SUCCEEDED|FAILED|CANCELLED|TIMED_OUT))\b|尚未执行|待执行|正在等待|正在执行|当前状态`)
 	// Explanatory semantics mark a probable long-term rule; they veto the
 	// confirmed tier no matter what else matches.
 	transientRuleCues = regexp.MustCompile(
@@ -41,21 +41,28 @@ var (
 	// A concrete work instance: ticket key, run id, build id, or a UUID-ish
 	// identifier.
 	transientInstanceCues = regexp.MustCompile(
-		`\b[A-Z][A-Z0-9]{1,9}-\d{1,6}\b|\brun_[A-Za-z0-9-]{6,}|(?i)\bbuild id\b|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}`)
+		`\b[A-Z][A-Z0-9]{1,9}-\d{1,6}\b|\brun_[A-Za-z0-9-]{6,}|(?i)\bbuild(?:\s+id)?\s*[:=#]\s*[A-Za-z0-9][A-Za-z0-9:._/-]{5,}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}`)
 	// Current-state semantics: this specific moment/run, not a general claim.
 	transientTemporalCues = regexp.MustCompile(
 		`当前|目前|现在|刚刚|本次|已按|状态标记为|状态[:：]?\s*(?:为|是)|(?i)\bcurrently\b|(?i)\bthis run\b|(?i)\bright now\b`)
+	// A completed per-instance operation is still episodic even when the text
+	// no longer contains an explicit status token. Durable procedures use rule
+	// language and are vetoed above before this cue is considered.
+	transientInstanceActionCues = regexp.MustCompile(
+		`已创建|已回填|已生成|已触发|已提交|已发布|创建完成|回填完成|(?i)\b(?:was|has been)\s+(?:created|backfilled|triggered|submitted|deployed)\b`)
 )
 
 // ClassifyTransientContent grades content for run-state transience.
 func ClassifyTransientContent(content string) TransientVerdict {
-	if !transientStatusTokens.MatchString(content) {
+	hasStatus := transientStatusTokens.MatchString(content)
+	hasAction := transientInstanceActionCues.MatchString(content)
+	if !hasStatus && !hasAction {
 		return TransientNone
 	}
 	if transientRuleCues.MatchString(content) {
 		return TransientCandidate
 	}
-	if transientInstanceCues.MatchString(content) && transientTemporalCues.MatchString(content) {
+	if transientInstanceCues.MatchString(content) && (transientTemporalCues.MatchString(content) || hasAction) {
 		return TransientConfirmed
 	}
 	return TransientCandidate

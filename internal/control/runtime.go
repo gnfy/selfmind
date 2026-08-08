@@ -42,6 +42,15 @@ type Delivery struct {
 	DeliveredAt    *time.Time `json:"delivered_at,omitempty"`
 }
 
+type DeliveryPlatformHealth struct {
+	Platform       string
+	Sent           int
+	Unconfirmed    int
+	PendingSession int
+	Failed         int
+	LastActivityAt time.Time
+}
+
 func (s *Store) UpdateRunHeartbeat(ctx context.Context, tenantID, runID string) error {
 	_, err := s.db.ExecContext(ctx,
 		`UPDATE task_runs SET heartbeat_at = ? WHERE tenant_id = ? AND id = ? AND status = 'running'`,
@@ -73,7 +82,7 @@ func (s *Store) RunCancelRequested(ctx context.Context, tenantID, runID string) 
 // before the harness tears down (phantom `running` rows are what polluted real
 // control.db files before eval isolation).
 func (s *Store) ListRunningRuns(ctx context.Context, tenantID string, personIDs []string) ([]Run, error) {
-	query := `SELECT id, task_id, tenant_id, person_id, COALESCE(workspace_id, ''), channel, COALESCE(input_summary, ''), status, started_at
+	query := `SELECT id, task_id, tenant_id, person_id, COALESCE(workspace_id, ''), channel, COALESCE(input_summary, ''), COALESCE(work_key, ''), status, started_at
 	          FROM task_runs WHERE tenant_id = ? AND status = 'running'`
 	args := []any{normalizeTenant(tenantID)}
 	if len(personIDs) > 0 {
@@ -89,7 +98,7 @@ func (s *Store) ListRunningRuns(ctx context.Context, tenantID string, personIDs 
 	for rows.Next() {
 		var r Run
 		var started int64
-		if err := rows.Scan(&r.ID, &r.TaskID, &r.TenantID, &r.PersonID, &r.WorkspaceID, &r.Channel, &r.InputSummary, &r.Status, &started); err != nil {
+		if err := rows.Scan(&r.ID, &r.TaskID, &r.TenantID, &r.PersonID, &r.WorkspaceID, &r.Channel, &r.InputSummary, &r.WorkKey, &r.Status, &started); err != nil {
 			return nil, err
 		}
 		r.StartedAt = time.Unix(started, 0)
@@ -119,7 +128,7 @@ func (s *Store) MarkInterruptedRuns(ctx context.Context, olderThan time.Duration
 	if olderThan <= 0 {
 		cutoff = time.Now().Unix()
 	}
-	query := `SELECT id, task_id, tenant_id FROM task_runs
+	query := `SELECT id, task_id, tenant_id, person_id FROM task_runs
 		 WHERE status = 'running' AND COALESCE(heartbeat_at, started_at) <= ?`
 	args := []any{cutoff}
 	if len(exceptRunIDs) > 0 {
@@ -135,11 +144,12 @@ func (s *Store) MarkInterruptedRuns(ctx context.Context, olderThan time.Duration
 		runID    string
 		taskID   string
 		tenantID string
+		personID string
 	}
 	var runs []row
 	for rows.Next() {
 		var r row
-		if err := rows.Scan(&r.runID, &r.taskID, &r.tenantID); err != nil {
+		if err := rows.Scan(&r.runID, &r.taskID, &r.tenantID, &r.personID); err != nil {
 			return 0, err
 		}
 		runs = append(runs, r)
@@ -172,6 +182,10 @@ func (s *Store) MarkInterruptedRuns(ctx context.Context, olderThan time.Duration
 			`UPDATE tasks SET status = 'interrupted', active_run_id = '', current_summary = COALESCE(NULLIF(current_summary, ''), 'Interrupted by gateway restart.'), updated_at = ?
 			 WHERE tenant_id = ? AND id = ? AND active_run_id = ?`,
 			now, r.tenantID, r.taskID, r.runID); err != nil {
+			return 0, err
+		}
+		if err := ensureRunBlockerTx(ctx, tx, r.tenantID, r.personID, r.taskID, r.runID,
+			"interrupted", "Interrupted by gateway restart.", []string{"Resume this work from the last durable evidence."}, time.Unix(now, 0)); err != nil {
 			return 0, err
 		}
 	}
@@ -396,7 +410,7 @@ func (s *Store) EnqueueDelivery(ctx context.Context, d Delivery) (*Delivery, err
 	}
 	d.CreatedAt = now
 	d.UpdatedAt = now
-	_, err := s.db.ExecContext(ctx,
+	result, err := s.db.ExecContext(ctx,
 		`INSERT OR IGNORE INTO outbound_messages
 		   (id, tenant_id, person_id, platform, platform_user_id, channel, task_id, run_id, content, kind, approval_id, status, attempts, max_attempts,
 		    next_attempt_at, last_error, part_index, part_total, idempotency_key, created_at, updated_at)
@@ -404,6 +418,26 @@ func (s *Store) EnqueueDelivery(ctx context.Context, d Delivery) (*Delivery, err
 		`,
 		d.ID, d.TenantID, d.PersonID, d.Platform, d.PlatformUserID, d.Channel, d.TaskID, d.RunID, d.Content, d.Kind, d.ApprovalID, d.Status, d.Attempts,
 		d.MaxAttempts, d.NextAttemptAt.Unix(), d.LastError, d.PartIndex, d.PartTotal, d.IdempotencyKey, d.CreatedAt.Unix(), d.UpdatedAt.Unix())
+	if err != nil {
+		return nil, err
+	}
+	if n, _ := result.RowsAffected(); n == 0 && strings.TrimSpace(d.IdempotencyKey) != "" {
+		return s.DeliveryByIdempotencyKey(ctx, d.TenantID, d.IdempotencyKey)
+	}
+	return &d, nil
+}
+
+// DeliveryByIdempotencyKey returns the row that won a durable enqueue race.
+// Callers must receive this real ID rather than the discarded candidate ID,
+// otherwise status checks report sql.ErrNoRows and recovery loops forever.
+func (s *Store) DeliveryByIdempotencyKey(ctx context.Context, tenantID, key string) (*Delivery, error) {
+	row := s.db.QueryRowContext(ctx,
+		`SELECT id, tenant_id, person_id, platform, COALESCE(platform_user_id, ''), channel, COALESCE(task_id, ''), COALESCE(run_id, ''),
+		        content, COALESCE(kind, ''), COALESCE(approval_id, ''), status, attempts, max_attempts, next_attempt_at, COALESCE(last_error, ''),
+		        part_index, part_total, COALESCE(idempotency_key, ''), created_at, updated_at, COALESCE(delivered_at, 0)
+		 FROM outbound_messages WHERE tenant_id = ? AND idempotency_key = ?`,
+		normalizeTenant(tenantID), strings.TrimSpace(key))
+	d, err := scanDelivery(row)
 	if err != nil {
 		return nil, err
 	}
@@ -423,7 +457,7 @@ func (s *Store) PruneOutboundDeliveries(ctx context.Context, olderThan time.Dura
 		`DELETE FROM outbound_messages
 		 WHERE updated_at < ?
 		   AND (
-		     status IN ('sent', 'dismissed')
+		     status IN ('sent', 'dismissed', 'superseded')
 		     OR (
 		       status = 'failed'
 		       AND NOT (
@@ -501,12 +535,34 @@ func (s *Store) ClaimDelivery(ctx context.Context, id string) (bool, error) {
 	return n == 1, nil
 }
 
+// DeliveryStatus returns the durable transport state after an immediate send.
+// Callers use it to distinguish "queued" from "confirmed delivered"; enqueue
+// success alone is never evidence that a person received the message.
+func (s *Store) DeliveryStatus(ctx context.Context, id string) (string, error) {
+	var status string
+	err := s.db.QueryRowContext(ctx, `SELECT status FROM outbound_messages WHERE id = ?`, strings.TrimSpace(id)).Scan(&status)
+	return status, err
+}
+
 // MarkDeliveryFailedPermanent finalizes an undeliverable row (no sender for
 // its platform). Terminal: excluded from due/claim scans, surfaced by digests.
 func (s *Store) MarkDeliveryFailedPermanent(ctx context.Context, id, reason string) error {
 	now := time.Now().Unix()
 	_, err := s.db.ExecContext(ctx,
 		`UPDATE outbound_messages SET status = 'failed', last_error = ?, updated_at = ? WHERE id = ?`,
+		reason, now, id)
+	return err
+}
+
+// MarkDeliverySuperseded closes a queued notification whose source request is
+// no longer actionable. Unlike failed delivery, this is a healthy terminal
+// state: it is excluded from retry, catch-up, and undelivered diagnostics.
+func (s *Store) MarkDeliverySuperseded(ctx context.Context, id, reason string) error {
+	now := time.Now().Unix()
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE outbound_messages
+		 SET status = 'superseded', last_error = ?, updated_at = ?
+		 WHERE id = ? AND status IN ('pending', 'retry', 'sending', 'sent_unconfirmed', 'pending_session', 'failed')`,
 		reason, now, id)
 	return err
 }
@@ -631,6 +687,36 @@ func (s *Store) CountOutboundByStatusSince(ctx context.Context, tenantID, person
 			return nil, err
 		}
 		out[status] = n
+	}
+	return out, rows.Err()
+}
+
+// DeliveryHealthByPlatformSince keeps endpoint health visible without exposing
+// peer/channel identifiers in diagnostics.
+func (s *Store) DeliveryHealthByPlatformSince(ctx context.Context, tenantID, personID string, since time.Time) ([]DeliveryPlatformHealth, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT platform,
+		 SUM(CASE WHEN status = 'sent' THEN 1 ELSE 0 END),
+		 SUM(CASE WHEN status = 'sent_unconfirmed' THEN 1 ELSE 0 END),
+		 SUM(CASE WHEN status = 'pending_session' THEN 1 ELSE 0 END),
+		 SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END),
+		 MAX(updated_at)
+		 FROM outbound_messages
+		 WHERE tenant_id = ? AND person_id = ? AND updated_at >= ?
+		 GROUP BY platform ORDER BY platform`, normalizeTenant(tenantID), personID, since.Unix())
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []DeliveryPlatformHealth
+	for rows.Next() {
+		var item DeliveryPlatformHealth
+		var updated int64
+		if err := rows.Scan(&item.Platform, &item.Sent, &item.Unconfirmed, &item.PendingSession, &item.Failed, &updated); err != nil {
+			return nil, err
+		}
+		item.LastActivityAt = time.Unix(updated, 0)
+		out = append(out, item)
 	}
 	return out, rows.Err()
 }

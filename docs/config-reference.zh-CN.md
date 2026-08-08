@@ -79,14 +79,14 @@ models:
       model: "kimi-for-coding"
       # 可选的角色级覆盖，仅用于自定义网关。Kimi Coding Plan 的
       # 默认协议是 anthropic_messages，与 /coding endpoint 一致。
-    background_review:       # 技能/记忆自审、smart 模式审批裁决
+    background_review:       # 技能/记忆自审
       provider: "kimi-coding"
       model: "kimi-for-coding"
     semantic_recall:         # 召回的查询扩展（可选）
       provider: "kimi-coding"
       model: "kimi-for-coding"
     skill_curator: { provider: "kimi-coding", model: "kimi-for-coding" }
-    fast_classifier: { provider: "kimi-coding", model: "kimi-for-coding" }
+    fast_classifier: { provider: "kimi-coding", model: "kimi-for-coding" } # 直答、廉价分类、smart 审批裁决
 ```
 
 `models.primary` 是唯一的默认模型入口。`reasoning` 和 `service_tier`
@@ -101,6 +101,10 @@ Plan `/coding` 路径的实际协议一致。角色级 `protocol` 只用于自�
 
 角色名固定；没配的角色回退到主模型。指向便宜模型可以把后台工作从主 provider
 挪开。不需要也不存在 `default` 角色；`models.roles` 只写真正需要覆盖主模型的例外。
+
+smart 审批比普通角色继承更严格：它使用显式配置的 `fast_classifier`；旧配置可以
+兼容回退到显式配置的 `background_review`，但审批裁决绝不会静默使用
+`models.primary`。两条路由都不存在或未及时响应时，操作会升级为人工确认。
 
 ## 3. 存储与认证
 
@@ -348,6 +352,7 @@ agent:
   llm_retry_base: "300ms"       # 退避基数
   llm_retry_cap: "30s"          # 退避上限
   llm_stream_idle_timeout: "180s"  # SSE 流卡住多久后中断
+  approval_triage_timeout: "30s"   # smart 模式廉价裁决模型的前台预算
 editor:
   large_paste_chars: 1000       # TUI 大段粘贴识别
   large_paste_lines: 10
@@ -360,6 +365,10 @@ evolution:
 工具预算对所有语言和任务类型统一生效，不使用关键词分类；只有持续产生
 新证据才会扩展，简单回答也不会因此被强制调用工具。默认值已按常规使用
 调好；只在排查传输抖动或调工具循环时才动。
+
+`approval_triage_timeout` 与主模型的传输超时相互独立。显式配置的
+`fast_classifier` 如果未在该预算内返回，smart 模式会安全降级为人工审批。
+默认值是 30 秒；设置过短会把可用的推理型廉价模型误判成不可用。
 
 ---
 

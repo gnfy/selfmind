@@ -44,7 +44,7 @@ func (p *capturingProviderStub) StreamChat(context.Context, llm.ChatRequest) (<-
 // TestIntakeDecisionPolicy pins the deterministic policy layer of intake
 // (docs/memory-governance.zh-CN.md §3.4): the model proposes rulings against
 // OFFERED neighbors only; SUPERSEDE retires a belief in place, protected
-// (user-stated) facts degrade to CONFLICT, an invalid ref degrades to ADD,
+// (user-stated) facts degrade to CONFLICT, an invalid ref is ignored,
 // and REINFORCE bumps confidence without rewriting content.
 func TestIntakeDecisionPolicy(t *testing.T) {
 	provider, err := memory.NewSQLiteProvider(t.TempDir())
@@ -113,9 +113,9 @@ func TestIntakeDecisionPolicy(t *testing.T) {
 		t.Fatalf("reinforce must bump confidence without rewriting: %+v", f)
 	}
 
-	// Invalid ref degrades to ADD.
-	if _, ok := byContent["A fact with an unknown reference"]; !ok {
-		t.Fatal("unknown ref must degrade to ADD")
+	// Invalid refs are maintenance mistakes, not evidence for a new belief.
+	if _, ok := byContent["A fact with an unknown reference"]; ok {
+		t.Fatal("unknown ref must not create memory")
 	}
 
 	// Protected user-stated fact: SUPERSEDE degrades to CONFLICT — both kept.
@@ -131,6 +131,14 @@ func TestIntakeDecisionPolicy(t *testing.T) {
 	}
 	if !oldKept || !newKept {
 		t.Fatalf("protected supersede must keep both statements: old=%v new=%v %+v", oldKept, newKept, userFacts)
+	}
+}
+
+func TestResolveOfferedRefUsesIdentityAcrossTargetBuckets(t *testing.T) {
+	fact := memory.Fact{ID: "abcdef12-3456", Target: "user", Scope: "global", Content: "User prefers concise replies"}
+	got := resolveOfferedRef(map[string][]memory.Fact{"user": {fact}}, "abcdef12")
+	if got == nil || got.ID != fact.ID || got.Target != "user" || got.Scope != "global" {
+		t.Fatalf("resolved = %+v", got)
 	}
 }
 
@@ -280,11 +288,11 @@ func TestIntakeDurabilityEnforcement(t *testing.T) {
 	}
 
 	facts, _ := mem.GetFacts(ctx, "person", "memory")
-	if len(facts) != 3 {
-		t.Fatalf("stored facts = %d (%+v), want durable + time_bounded + marker-suspect-durable", len(facts), facts)
+	if len(facts) != 2 {
+		t.Fatalf("stored facts = %d (%+v), want durable + time_bounded", len(facts), facts)
 	}
 	for _, f := range facts {
-		if strings.Contains(f.Content, "PREPARED_NOT_EXECUTED") || strings.Contains(f.Content, "release freeze") {
+		if strings.Contains(f.Content, "IN_PROGRESS") || strings.Contains(f.Content, "PREPARED_NOT_EXECUTED") || strings.Contains(f.Content, "release freeze") {
 			t.Fatalf("episodic/unlabeled-transient content stored: %q", f.Content)
 		}
 	}
@@ -294,10 +302,10 @@ func TestIntakeDurabilityEnforcement(t *testing.T) {
 		t.Fatal("canonical store missing")
 	}
 	canonicals, err := store.ListCanonicalMemories(ctx, "person", memory.CanonicalFilter{})
-	if err != nil || len(canonicals) != 3 {
+	if err != nil || len(canonicals) != 2 {
 		t.Fatalf("canonicals=%+v err=%v", canonicals, err)
 	}
-	var sawBounded, sawDurable, sawSuspect bool
+	var sawBounded, sawDurable bool
 	for _, c := range canonicals {
 		switch {
 		case strings.Contains(c.Content, "cw2 profile"):
@@ -314,16 +322,11 @@ func TestIntakeDurabilityEnforcement(t *testing.T) {
 				t.Fatalf("category lost: %+v", c)
 			}
 		case strings.Contains(c.Content, "IN_PROGRESS"):
-			// Explicit durable + transient markers: stored, but NEVER
-			// permanent — a mislabeled run-state fact must expire.
-			sawSuspect = true
-			if c.ValidUntil.IsZero() {
-				t.Fatalf("marker-suspect durable canonical must carry valid_until: %+v", c)
-			}
+			t.Fatalf("confirmed run-state canonical must be dropped: %+v", c)
 		}
 	}
-	if !sawBounded || !sawDurable || !sawSuspect {
-		t.Fatalf("expected bounded+durable+suspect facts in canonical store: %+v", canonicals)
+	if !sawBounded || !sawDurable {
+		t.Fatalf("expected bounded+durable facts in canonical store: %+v", canonicals)
 	}
 }
 

@@ -15,6 +15,7 @@ func TestClassifyTransientContent(t *testing.T) {
 		{"chinese prepared record", "RUQX-222 已按 PREPARED_NOT_EXECUTED 记录到 gcp-run.md，待执行", TransientConfirmed},
 		{"chinese status assignment", "已为 RUQX-213 生成发布命令，状态标记为 PREPARED_NOT_EXECUTED，尚未执行", TransientConfirmed},
 		{"english instance currently", "Build RUQX-31 is currently IN_PROGRESS", TransientConfirmed},
+		{"prefixed operational status", "RUQX-401 当前状态为 CI_PENDING_APPROVAL", TransientConfirmed},
 		{"build id created", "Build ID: cw-prod:0d4a9e81 has been created", TransientConfirmed},
 		{"ticket record backfilled", "RUQX-369 已回填到 gcp-run.md", TransientConfirmed},
 		{"ticket build triggered", "RUQX-370 的生产构建已触发", TransientConfirmed},

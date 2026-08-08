@@ -230,6 +230,14 @@ Smart-mode triage is below the hard floor and class grants and above the human
 prompt. It uses a configured cheap role, not the run's coding model, and may
 return APPROVE, DENY, or ESCALATE.
 
+The judge receives a typed `RunIntentSnapshot`, not one blended prose intent:
+raw user text is authoritative; deterministic allow/deny evidence and
+control-plane workspace/source/work-key facts are separate fields; the task
+summary is advisory context only. An explicit deny disables containment-based
+auto-approval and forces a human decision even in full-auto or when a durable
+grant exists. The hard floor remains unconditional, so this snapshot cannot
+grant an otherwise forbidden capability.
+
 - APPROVE records a bounded task-scope class grant.
 - DENY uses the user-rejection contract and must not trigger retry.
 - ESCALATE asks the human.

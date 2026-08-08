@@ -34,6 +34,10 @@ type Message struct {
 	ApprovalID string `json:"approval_id,omitempty"`
 	PartIndex  int    `json:"part_index,omitempty"`
 	PartTotal  int    `json:"part_total,omitempty"`
+	// LogicalKey is a control-plane effect key used to replay a durable result
+	// after a daemon crash without creating a second outbound row. It is never
+	// sent to the endpoint and ordinary messages leave it empty.
+	LogicalKey string `json:"-"`
 }
 
 // KindApproval marks an approval-request notification.
@@ -234,11 +238,35 @@ func (s *Service) SupportsPlatform(platform string) bool {
 }
 
 func (s *Service) EnqueueAndTry(ctx context.Context, msg Message) error {
+	_, _, err := s.enqueueAndTry(ctx, msg)
+	return err
+}
+
+// EnqueueAndTryConfirmed reports true only when every message part reached the
+// durable "sent" state. pending_session and sent_unconfirmed remain recoverable
+// outcomes, but callers must not stamp their source event as notified yet.
+func (s *Service) EnqueueAndTryConfirmed(ctx context.Context, msg Message) (bool, error) {
+	_, confirmed, err := s.enqueueAndTry(ctx, msg)
+	return confirmed, err
+}
+
+// EnqueueAndTryAccepted reports whether every part exists in the durable
+// outbound queue, independently of immediate endpoint confirmation. This is
+// the outbox boundary used by queue finalization: once true, a daemon crash
+// cannot lose the result even when the platform session is temporarily down.
+func (s *Service) EnqueueAndTryAccepted(ctx context.Context, msg Message) (bool, error) {
+	accepted, _, err := s.enqueueAndTry(ctx, msg)
+	return accepted, err
+}
+
+func (s *Service) enqueueAndTry(ctx context.Context, msg Message) (bool, bool, error) {
 	if s == nil || s.store == nil {
-		return ErrNoSender
+		return false, false, ErrNoSender
 	}
 	parts := splitMessage(msg.Content, s.opts.MaxMessageChars)
 	var lastErr error
+	accepted := true
+	confirmed := true
 	for i, part := range parts {
 		partMsg := msg
 		partMsg.Content = part
@@ -262,13 +290,24 @@ func (s *Service) EnqueueAndTry(ctx context.Context, msg Message) error {
 		})
 		if err != nil {
 			lastErr = err
+			accepted = false
+			confirmed = false
 			continue
 		}
 		if err := s.tryDelivery(ctx, d); err != nil {
 			lastErr = err
 		}
+		status, err := s.store.DeliveryStatus(ctx, d.ID)
+		if err != nil {
+			lastErr = err
+			confirmed = false
+			continue
+		}
+		if status != "sent" {
+			confirmed = false
+		}
 	}
-	return lastErr
+	return accepted, confirmed, lastErr
 }
 
 func (s *Service) loop(ctx context.Context) {
@@ -574,6 +613,12 @@ func splitMessage(content string, max int) []string {
 }
 
 func idempotencyKey(msg Message) string {
+	logical := strings.TrimSpace(msg.LogicalKey)
+	if logical != "" {
+		base := fmt.Sprintf("%s|%s|%s|%s|%s|%d", msg.TenantID, msg.PersonID, msg.Platform, msg.Channel, logical, msg.PartIndex)
+		sum := sha256.Sum256([]byte(base))
+		return fmt.Sprintf("%x", sum[:])
+	}
 	base := fmt.Sprintf("%s|%s|%s|%s|%s|%s|%s|%d|%s",
 		msg.TenantID, msg.PersonID, msg.Platform, msg.PlatformUserID, msg.Channel, msg.TaskID, msg.RunID, msg.PartIndex, msg.Content)
 	sum := sha256.Sum256([]byte(base))

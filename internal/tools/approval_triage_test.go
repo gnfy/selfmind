@@ -81,6 +81,76 @@ func TestBuildTriagePromptStripsCommentsAndWraps(t *testing.T) {
 	}
 }
 
+func TestBuildTriagePromptSeparatesIntentSources(t *testing.T) {
+	prompt := buildTriagePromptWithIntent("terminal", "git status", "reason", RunIntentSnapshot{
+		RawUserText:   "继续",
+		GoalSummary:   "Deploy RUQX-500",
+		WorkKey:       "RUQX-500",
+		WorkspaceID:   "ws-1",
+		Source:        "continuation",
+		ExplicitAllow: []string{"continue-current-task"},
+	}, ContainmentAssessment{})
+	for _, want := range []string{"<person_asked>", "Advisory task context (NOT authorization)", "explicit_allow=continue-current-task", "RUQX-500", "ws-1", "Request source: continuation"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("prompt missing %q:\n%s", want, prompt)
+		}
+	}
+}
+
+func TestBuildTriagePromptMarksSystemRequestAsNonAuthorization(t *testing.T) {
+	prompt := buildTriagePromptWithIntent("terminal", "deploy prod", "reason", RunIntentSnapshot{
+		RawUserText: "continue",
+		GoalSummary: "Deploy RUQX-500",
+		Source:      "system:external-watch-finalization",
+	}, ContainmentAssessment{})
+	for _, want := range []string{"<system_request>", "NOT current human authorization", "Request source: system:external-watch-finalization"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("prompt missing %q:\n%s", want, prompt)
+		}
+	}
+	if strings.Contains(prompt, "<person_asked>\ncontinue\n</person_asked>") {
+		t.Fatalf("system request was presented as current person authorization:\n%s", prompt)
+	}
+}
+
+func TestExplicitDenyDisablesContainedAutoApproval(t *testing.T) {
+	withExecSandboxPolicy(t, true, true, false)
+	asked := false
+	scope := ExecutionScope{
+		TenantID: "tenant-a", PersonID: "person-a", TaskID: "task-1", RunID: "run-1",
+		ApprovalMode:   ApprovalSmart,
+		IntentSnapshot: func() RunIntentSnapshot { return RunIntentSnapshot{ExplicitDeny: []string{"不要执行"}} },
+		Approval: func(context.Context, ToolApprovalRequest) (ToolApprovalDecision, error) {
+			asked = true
+			return ToolApprovalDecision{Approved: false, Outcome: ApprovalOutcomeDenied}, nil
+		},
+	}
+	ran, err := runSmart(t, scope, "person-a", "ls")
+	if err == nil || ran || !asked {
+		t.Fatalf("explicit deny must prevent contained auto-approval: ran=%v asked=%v err=%v", ran, asked, err)
+	}
+}
+
+func TestExplicitDenyOverridesFullAuto(t *testing.T) {
+	withExecSandboxPolicy(t, true, true, false)
+	asked := false
+	scope := ExecutionScope{
+		TenantID: "tenant-a", PersonID: "person-a", TaskID: "task-1", RunID: "run-1",
+		ApprovalMode: ApprovalFullAuto,
+		IntentSnapshot: func() RunIntentSnapshot {
+			return RunIntentSnapshot{RawUserText: "do not run commands", Source: "direct", ExplicitDeny: []string{"do not"}}
+		},
+		Approval: func(context.Context, ToolApprovalRequest) (ToolApprovalDecision, error) {
+			asked = true
+			return ToolApprovalDecision{Approved: false, Outcome: ApprovalOutcomeDenied}, nil
+		},
+	}
+	ran, err := runSmart(t, scope, "person-a", "ls")
+	if err == nil || ran || !asked {
+		t.Fatalf("explicit deny must outrank full-auto: ran=%v asked=%v err=%v", ran, asked, err)
+	}
+}
+
 func TestTriageApprovalNilJudgeEscalates(t *testing.T) {
 	v, _, err := triageApproval(context.Background(), nil, "terminal", "rm -rf build", "reason", "")
 	if err != nil {

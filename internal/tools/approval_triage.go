@@ -75,13 +75,17 @@ const triageMaxIntentBytes = 1500
 // of it. Empty intent is normal (no context installed) and simply means the judge
 // treats authorization as unknown.
 func triageApproval(ctx context.Context, judge ApprovalJudge, toolName, subject, reason, intent string, containment ...ContainmentAssessment) (TriageVerdict, TriageAssessment, error) {
+	return triageApprovalWithIntent(ctx, judge, toolName, subject, reason, RunIntentSnapshot{RawUserText: intent}, containment...)
+}
+
+func triageApprovalWithIntent(ctx context.Context, judge ApprovalJudge, toolName, subject, reason string, intent RunIntentSnapshot, containment ...ContainmentAssessment) (TriageVerdict, TriageAssessment, error) {
 	if judge == nil {
 		return TriageEscalate, TriageAssessment{}, nil
 	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	prompt := buildTriagePrompt(toolName, subject, reason, intent, containment...)
+	prompt := buildTriagePromptWithIntent(toolName, subject, reason, intent, containment...)
 
 	// Bound the wait independently of the judge honoring ctx: run the call on a
 	// goroutine and race it against a timeout. A judge that hangs must not hang
@@ -141,6 +145,10 @@ func parseTriageVerdict(raw string) TriageVerdict {
 // tells the judge to treat the delimited text as untrusted DATA — a
 // prompt-injection defense, since the "command" originates from model output.
 func buildTriagePrompt(toolName, subject, reason, intent string, containment ...ContainmentAssessment) string {
+	return buildTriagePromptWithIntent(toolName, subject, reason, RunIntentSnapshot{RawUserText: intent}, containment...)
+}
+
+func buildTriagePromptWithIntent(toolName, subject, reason string, intent RunIntentSnapshot, containment ...ContainmentAssessment) string {
 	subject = stripShellComments(subject)
 	subject = strings.TrimSpace(subject)
 	if len(subject) > triageMaxSubjectBytes {
@@ -176,13 +184,50 @@ func buildTriagePrompt(toolName, subject, reason, intent string, containment ...
 	// The person's own words are the authorization evidence. They are delimited
 	// and declared untrusted for the same reason the command is: they arrive from
 	// a channel an attacker may also write to.
-	if trimmed := strings.TrimSpace(intent); trimmed != "" {
+	if trimmed := strings.TrimSpace(intent.RawUserText); trimmed != "" {
 		if len(trimmed) > triageMaxIntentBytes {
 			trimmed = trimmed[:triageMaxIntentBytes] + "\n…(truncated)"
 		}
-		b.WriteString("\nPerson asked:\n<person_asked>\n")
+		if intent.UserAuthored() {
+			b.WriteString("\nPerson asked (current authorization evidence):\n<person_asked>\n")
+		} else {
+			b.WriteString("\nStored system request (NOT current human authorization):\n<system_request>\n")
+		}
 		b.WriteString(trimmed)
-		b.WriteString("\n</person_asked>")
+		if intent.UserAuthored() {
+			b.WriteString("\n</person_asked>")
+		} else {
+			b.WriteString("\n</system_request>")
+		}
+	}
+	if summary := strings.TrimSpace(intent.GoalSummary); summary != "" {
+		if len(summary) > triageMaxIntentBytes {
+			summary = summary[:triageMaxIntentBytes] + "\n(truncated)"
+		}
+		b.WriteString("\nAdvisory task context (NOT authorization):\n<goal_summary>\n")
+		b.WriteString(summary)
+		b.WriteString("\n</goal_summary>")
+	}
+	if len(intent.ExplicitAllow) > 0 {
+		b.WriteString("\nDeterministic user signal: explicit_allow=")
+		b.WriteString(strings.Join(intent.ExplicitAllow, ","))
+	}
+	if len(intent.ExplicitDeny) > 0 {
+		b.WriteString("\nDeterministic user signal: explicit_deny=")
+		b.WriteString(strings.Join(intent.ExplicitDeny, ","))
+		b.WriteString(". A deny can never be converted into authorization.")
+	}
+	if value := strings.TrimSpace(intent.WorkKey); value != "" {
+		b.WriteString("\nControl-plane work key: ")
+		b.WriteString(value)
+	}
+	if value := strings.TrimSpace(intent.WorkspaceID); value != "" {
+		b.WriteString("\nControl-plane workspace: ")
+		b.WriteString(value)
+	}
+	if value := strings.TrimSpace(intent.Source); value != "" {
+		b.WriteString("\nRequest source: ")
+		b.WriteString(value)
 	}
 	return b.String()
 }

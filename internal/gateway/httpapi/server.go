@@ -535,6 +535,9 @@ type taskAttach struct {
 	// make the label a context/workspace boundary; it only makes the display
 	// decision auditable after the run id exists.
 	workKey string
+	// effectKey is present only for durable system work whose logical products
+	// must remain exactly-once across retry runs.
+	effectKey string
 }
 
 type taskAttachReason string

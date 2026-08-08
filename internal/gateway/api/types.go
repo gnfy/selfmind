@@ -81,6 +81,12 @@ type MessageRequest struct {
 	// never be re-run at the next boot drain). It is internal routing state, never
 	// part of the wire request — hence json:"-".
 	QueueID string `json:"-"`
+	// QueueClaimToken proves that the draining worker owns QueueID's current
+	// attempt. It is process-internal and never accepted over the wire.
+	QueueClaimToken string `json:"-"`
+	// EffectKey deduplicates the logical products of durable system work across
+	// retry runs. It is derived from the queue row, never from a client.
+	EffectKey string `json:"-"`
 	// ExecutionProfile carries an internal execution contract for durable
 	// system work. It is never accepted from the wire. Ordinary user turns leave
 	// it empty; watcher finalization uses a constrained unattended profile.

@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"selfmind/internal/control"
+	"selfmind/internal/gateway/api"
 	"selfmind/internal/tools"
 )
 
@@ -203,5 +204,34 @@ func TestRejectionNoteIsStoredNotOnlySteered(t *testing.T) {
 	}
 	if rejected.DecisionGrantKey != "" || rejected.DecisionScope != "" {
 		t.Fatalf("a refusal must not carry an authorization: %+v", rejected)
+	}
+}
+
+func TestRunIntentSnapshotSeparatesTaskContextFromAuthorization(t *testing.T) {
+	task := &control.Task{Title: "Deploy RUQX-500", CurrentSummary: "Ready for production"}
+	run := &control.Run{WorkKey: "RUQX-500"}
+	workspace := &control.Workspace{ID: "ws-1"}
+	snapshot := runIntentSnapshot(api.MessageRequest{Content: "开始执行"}, task, run, workspace)
+	if snapshot.RawUserText != "开始执行" || snapshot.GoalSummary == "" || snapshot.WorkKey != "RUQX-500" || snapshot.WorkspaceID != "ws-1" {
+		t.Fatalf("snapshot = %+v", snapshot)
+	}
+	if snapshot.Source != "continuation" || len(snapshot.ExplicitAllow) != 1 {
+		t.Fatalf("continuation evidence = %+v", snapshot)
+	}
+	if len(snapshot.ExplicitDeny) != 0 {
+		t.Fatalf("unexpected deny evidence = %+v", snapshot.ExplicitDeny)
+	}
+}
+
+func TestRunIntentSnapshotSystemContinuationIsNotAuthorization(t *testing.T) {
+	snapshot := runIntentSnapshot(api.MessageRequest{
+		Content: "continue",
+		Origin:  "external-watch-finalization",
+	}, &control.Task{Title: "Deploy RUQX-500"}, &control.Run{WorkKey: "RUQX-500"}, nil)
+	if snapshot.Source != "system:external-watch-finalization" {
+		t.Fatalf("source = %q", snapshot.Source)
+	}
+	if len(snapshot.ExplicitAllow) != 0 || snapshot.UserAuthored() {
+		t.Fatalf("system continuation became human authorization: %+v", snapshot)
 	}
 }

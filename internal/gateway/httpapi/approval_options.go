@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strings"
 
+	"selfmind/internal/control"
+	"selfmind/internal/gateway/api"
 	"selfmind/internal/tools"
 )
 
@@ -151,6 +153,42 @@ func triageIntentFromRequest(content string) string {
 		return ""
 	}
 	return truncate(tools.RedactSensitive(trimmed), triageIntentMaxChars)
+}
+
+// runIntentSnapshot captures approval evidence once at run start. Task text is
+// advisory context; deterministic user allow/deny signals remain separate so a
+// model-generated summary can never silently become authorization.
+func runIntentSnapshot(req api.MessageRequest, task *control.Task, run *control.Run, workspace *control.Workspace) tools.RunIntentSnapshot {
+	raw := triageIntentFromRequest(req.Content)
+	snapshot := tools.RunIntentSnapshot{RawUserText: raw, Source: "direct"}
+	if origin := strings.TrimSpace(req.Origin); origin != "" {
+		snapshot.Source = "system:" + origin
+	} else if req.ExecutionProfile != "" {
+		snapshot.Source = "system:" + req.ExecutionProfile
+	}
+	if task != nil {
+		snapshot.GoalSummary = truncate(tools.RedactSensitive(strings.TrimSpace(task.Title+"\n"+task.CurrentSummary)), triageIntentMaxChars)
+	}
+	if run != nil {
+		snapshot.WorkKey = run.WorkKey
+	}
+	if workspace != nil {
+		snapshot.WorkspaceID = workspace.ID
+	}
+	compact := strings.ToLower(strings.Trim(strings.TrimSpace(raw), "。.!！?？ \t\r\n"))
+	switch compact {
+	case "continue", "resume", "keep going", "go on", "继续", "开始执行", "执行吧", "请执行", "可以", "同意", "确认执行":
+		if snapshot.UserAuthored() {
+			snapshot.Source = "continuation"
+			snapshot.ExplicitAllow = []string{"continue-current-task"}
+		}
+	}
+	for _, marker := range []string{"不要", "禁止", "别执行", "do not", "don't", "must not", "never"} {
+		if strings.Contains(compact, marker) {
+			snapshot.ExplicitDeny = append(snapshot.ExplicitDeny, marker)
+		}
+	}
+	return snapshot
 }
 
 // fallbackApprovalReason prefers the person's own refusal words over a generic

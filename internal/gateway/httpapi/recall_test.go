@@ -500,6 +500,41 @@ func TestCanonicalRecallTouchesOnlyBudgetedSelections(t *testing.T) {
 	}
 }
 
+func TestCanonicalRecallTouchSurvivesRequestCancellation(t *testing.T) {
+	mem := newRecallMemory(t)
+	const personID = "person-canonical-cancelled-touch"
+	row := seedCanonicalMemory(t, mem, personID, memory.IntakeWrite{
+		Scope:   "global",
+		Content: "Prefer concise release summaries.",
+	})
+	store, ok := mem.Canonical()
+	if !ok {
+		t.Fatal("canonical store missing")
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	source := &canonicalRecallSource{store: store}
+	source.OnSelected(ctx, RecallQuery{PersonID: personID}, []RecallHit{{
+		Slice: kernel.RecallSlice{Ref: row.ID},
+	}})
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		rows, err := store.ListCanonicalMemories(context.Background(), personID, memory.CanonicalFilter{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(rows) == 1 && !rows[0].LastAccessedAt.IsZero() {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("selected canonical access was lost with cancelled request: %+v", rows)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 func TestRecallExpansionTimeoutFallsBackToRawTerms(t *testing.T) {
 	store, identity := newRecallControl(t)
 	mem := newRecallMemory(t)

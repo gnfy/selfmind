@@ -273,6 +273,13 @@ func (d *Server) diagReply(ctx context.Context, identity *control.IdentityContex
 	if pending, err := d.Control.CountPendingSessionOutbound(ctx, identity.TenantID, identity.PersonID); err == nil && pending > 0 {
 		fmt.Fprintf(&sb, "Pending session recovery: %d (use /diag delivery)\n", pending)
 	}
+	if health, err := d.Control.DeliveryHealthByPlatformSince(ctx, identity.TenantID, identity.PersonID, time.Now().Add(-24*time.Hour)); err == nil && len(health) > 0 {
+		sb.WriteString("Delivery channels (24h):\n")
+		for _, item := range health {
+			fmt.Fprintf(&sb, "- %s: sent %d, unconfirmed %d, pending %d, failed %d\n",
+				item.Platform, item.Sent, item.Unconfirmed, item.PendingSession, item.Failed)
+		}
+	}
 
 	// Last run error across the person's recent runs.
 	if runs, err := d.Control.ListRecentRunsForPerson(ctx, identity.TenantID, identity.PersonID, 10); err == nil {

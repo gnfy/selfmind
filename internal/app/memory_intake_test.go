@@ -288,11 +288,11 @@ func TestIntakeDurabilityEnforcement(t *testing.T) {
 	}
 
 	facts, _ := mem.GetFacts(ctx, "person", "memory")
-	if len(facts) != 3 {
-		t.Fatalf("stored facts = %d (%+v), want durable + time_bounded + marker-suspect-durable", len(facts), facts)
+	if len(facts) != 2 {
+		t.Fatalf("stored facts = %d (%+v), want durable + time_bounded", len(facts), facts)
 	}
 	for _, f := range facts {
-		if strings.Contains(f.Content, "PREPARED_NOT_EXECUTED") || strings.Contains(f.Content, "release freeze") {
+		if strings.Contains(f.Content, "IN_PROGRESS") || strings.Contains(f.Content, "PREPARED_NOT_EXECUTED") || strings.Contains(f.Content, "release freeze") {
 			t.Fatalf("episodic/unlabeled-transient content stored: %q", f.Content)
 		}
 	}
@@ -302,10 +302,10 @@ func TestIntakeDurabilityEnforcement(t *testing.T) {
 		t.Fatal("canonical store missing")
 	}
 	canonicals, err := store.ListCanonicalMemories(ctx, "person", memory.CanonicalFilter{})
-	if err != nil || len(canonicals) != 3 {
+	if err != nil || len(canonicals) != 2 {
 		t.Fatalf("canonicals=%+v err=%v", canonicals, err)
 	}
-	var sawBounded, sawDurable, sawSuspect bool
+	var sawBounded, sawDurable bool
 	for _, c := range canonicals {
 		switch {
 		case strings.Contains(c.Content, "cw2 profile"):
@@ -322,16 +322,11 @@ func TestIntakeDurabilityEnforcement(t *testing.T) {
 				t.Fatalf("category lost: %+v", c)
 			}
 		case strings.Contains(c.Content, "IN_PROGRESS"):
-			// Explicit durable + transient markers: stored, but NEVER
-			// permanent — a mislabeled run-state fact must expire.
-			sawSuspect = true
-			if c.ValidUntil.IsZero() {
-				t.Fatalf("marker-suspect durable canonical must carry valid_until: %+v", c)
-			}
+			t.Fatalf("confirmed run-state canonical must be dropped: %+v", c)
 		}
 	}
-	if !sawBounded || !sawDurable || !sawSuspect {
-		t.Fatalf("expected bounded+durable+suspect facts in canonical store: %+v", canonicals)
+	if !sawBounded || !sawDurable {
+		t.Fatalf("expected bounded+durable facts in canonical store: %+v", canonicals)
 	}
 }
 

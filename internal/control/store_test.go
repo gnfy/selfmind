@@ -628,6 +628,51 @@ INSERT INTO task_queue (id, tenant_id, person_id, channel, content, idempotency_
 VALUES ('queue-2', 'default', 'person-1', 'cli', 'two', 'stable-queue-key', 'queued', 2);`); err == nil {
 		t.Fatal("duplicate queue idempotency key must be rejected after migration")
 	}
+	if _, err := store.db.ExecContext(ctx, `
+INSERT INTO task_queue (id, tenant_id, person_id, channel, content, idempotency_key, status, created_at)
+VALUES ('queue-3', 'other', 'person-2', 'cli', 'three', 'stable-queue-key', 'queued', 3);`); err != nil {
+		t.Fatalf("same queue idempotency key in another tenant must survive migration: %v", err)
+	}
+}
+
+func TestEffectReceiptTenantMigrationOnExistingDB(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	db, err := sql.Open("sqlite", filepath.Join(dir, "control.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `
+CREATE TABLE effect_receipts (
+	effect_key TEXT PRIMARY KEY,
+	tenant_id TEXT NOT NULL,
+	task_id TEXT NOT NULL,
+	run_id TEXT NOT NULL,
+	kind TEXT NOT NULL DEFAULT '',
+	created_at INTEGER NOT NULL
+);
+INSERT INTO effect_receipts (effect_key, tenant_id, task_id, run_id, kind, created_at)
+VALUES ('legacy-effect', 'tenant-a', 'task-a', 'run-a', 'test', 1);`); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := OpenStore(dir)
+	if err != nil {
+		t.Fatalf("OpenStore on legacy effect schema: %v", err)
+	}
+	defer store.Close()
+	owned, err := store.EffectOwnedByRun(ctx, "tenant-a", "legacy-effect", "run-a")
+	if err != nil || !owned {
+		t.Fatalf("legacy effect was not preserved: %v, %v", owned, err)
+	}
+	if _, err := store.db.ExecContext(ctx, `
+INSERT INTO effect_receipts (effect_key, tenant_id, task_id, run_id, kind, delivery_enqueued, created_at)
+VALUES ('legacy-effect', 'tenant-b', 'task-b', 'run-b', 'test', 0, 2);`); err != nil {
+		t.Fatalf("tenant-scoped effect key was not enabled: %v", err)
+	}
 }
 
 func TestMostRecentIMAccount(t *testing.T) {

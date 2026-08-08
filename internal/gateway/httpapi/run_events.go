@@ -15,7 +15,7 @@ import (
 	"selfmind/internal/tools"
 )
 
-func (c *RunCoordinator) startRunHeartbeat(ctx context.Context, run *control.Run) func() {
+func (c *RunCoordinator) startRunHeartbeat(ctx context.Context, run *control.Run, queueID, claimToken string) func() {
 	if c == nil || c.srv == nil || c.srv.Control == nil || run == nil {
 		return func() {}
 	}
@@ -34,6 +34,9 @@ func (c *RunCoordinator) startRunHeartbeat(ctx context.Context, run *control.Run
 				return
 			case <-ticker.C:
 				_ = store.UpdateRunHeartbeat(context.Background(), run.TenantID, run.ID)
+				if queueID != "" && claimToken != "" {
+					_, _ = store.RenewQueuedClaim(context.Background(), run.TenantID, queueID, claimToken, 0)
+				}
 			}
 		}
 	}()
@@ -88,10 +91,20 @@ func (c *RunCoordinator) startAsyncProgressNotices(ctx context.Context, identity
 	}
 }
 
-func (c *RunCoordinator) deliverAsyncResult(ctx context.Context, identity *control.IdentityContext, req api.MessageRequest, resp api.MessageResponse) {
+func (c *RunCoordinator) deliverAsyncResult(ctx context.Context, identity *control.IdentityContext, req api.MessageRequest, resp api.MessageResponse) bool {
 	if c == nil || c.srv == nil || c.srv.Delivery == nil || identity == nil {
-		return
+		return false
 	}
+	base := delivery.Message{
+		TenantID:   identity.TenantID,
+		PersonID:   identity.PersonID,
+		TaskID:     taskIDForResponse(resp),
+		RunID:      runIDForResponse(resp),
+		Kind:       delivery.KindFinalResult,
+		Content:    deliveryContent(resp),
+		LogicalKey: strings.TrimSpace(req.EffectKey),
+	}
+	accepted := false
 	// Platform-only check: TUI channels are session UUIDs, not "cli".
 	if req.Platform == "cli" {
 		// A terminal has no push surface for a fire-and-forget run, so the
@@ -101,27 +114,24 @@ func (c *RunCoordinator) deliverAsyncResult(ctx context.Context, identity *contr
 		// person's single preferred IM endpoint — never a fan-out to every
 		// bound account (conversation-layer rule 4). Task/run identity stays in
 		// delivery metadata; a mutable task title must not pollute the answer.
-		c.deliverToPreferredIM(ctx, identity, delivery.Message{
-			TenantID: identity.TenantID,
-			PersonID: identity.PersonID,
-			TaskID:   taskIDForResponse(resp),
-			RunID:    runIDForResponse(resp),
-			Kind:     delivery.KindFinalResult,
-			Content:  deliveryContent(resp),
-		})
-		return
+		accepted = c.deliverToPreferredIMAccepted(ctx, identity, base)
+		if !accepted && c.preferredIMAccount(ctx, identity) == nil {
+			// The atomic finalizer already wrote the result to channel_messages.
+			// For a CLI-only user that transcript is the intended durable target.
+			accepted = true
+		}
+	} else {
+		base.Platform = req.Platform
+		base.PlatformUserID = identity.PlatformUserID
+		base.Channel = req.Channel
+		accepted, _ = c.srv.Delivery.EnqueueAndTryAccepted(ctx, base)
 	}
-	_ = c.srv.Delivery.EnqueueAndTry(ctx, delivery.Message{
-		TenantID:       identity.TenantID,
-		PersonID:       identity.PersonID,
-		Platform:       req.Platform,
-		PlatformUserID: identity.PlatformUserID,
-		Channel:        req.Channel,
-		TaskID:         taskIDForResponse(resp),
-		RunID:          runIDForResponse(resp),
-		Kind:           delivery.KindFinalResult,
-		Content:        deliveryContent(resp),
-	})
+	if accepted && req.EffectKey != "" && c.srv.Control != nil {
+		if err := c.srv.Control.MarkEffectDeliveryEnqueued(ctx, identity.TenantID, req.EffectKey); err != nil {
+			return false
+		}
+	}
+	return accepted
 }
 
 // deliverCronResult pushes a scheduled job's result to its channel. Unlike the

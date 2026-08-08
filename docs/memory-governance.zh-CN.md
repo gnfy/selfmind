@@ -395,6 +395,12 @@ canonical、支持/矛盾证据、来源、最后确认时间、为何被召回�
 项目/环境记忆按 workspace 落库。`pin <id>`/`unpin <id>` 已接 canonical 保护位，
 pin 同时确认用户权威；unpin 仅取消无条件注入，不抹掉用户确认。
 
+写入边界（2026-08-08）：可归属于具体工单、build 或 run 的“当前状态”是
+task card、handoff 与工作脊柱的职责，即使维护模型将其标为 `durable`，确定性
+intake 也必须丢弃，不能进入长期 canonical。带业务前缀的运行态（例如
+`CI_PENDING_APPROVAL`）同样识别。召回命中后的访问打点使用脱离前台取消信号的
+短事务；只有已进入 prompt 预算的 canonical 才会被 touch。
+
 ### 5.3 纠正与遗忘语义（P2）
 
 | 操作 | 语义 |

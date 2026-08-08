@@ -79,6 +79,10 @@ type ExecutionScope struct {
 	// work spine); it must return bounded, redacted text and is treated as
 	// untrusted data by the triage prompt. Nil means authorization is unknown.
 	TriageIntent func() string
+	// IntentSnapshot is the source-aware replacement for TriageIntent. Keeping
+	// both lets older embedders install a bounded string while the daemon supplies
+	// structured evidence. When present, this field wins.
+	IntentSnapshot func() RunIntentSnapshot
 	// runGrants remembers an explicit human approval only for this live run.
 	// It is intentionally in-memory and dies with SetExecutionScope cleanup:
 	// useful for repeated verification calls without minting durable authority.

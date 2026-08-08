@@ -153,6 +153,130 @@ func TestMaterializeRunFinalizationRollsBackMismatchedTask(t *testing.T) {
 	}
 }
 
+func TestMaterializeRunFinalizationSuppressesDuplicateLogicalEffect(t *testing.T) {
+	ctx := context.Background()
+	store, err := OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	identity, _ := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Alice")
+	task, _ := store.CreateTask(ctx, TaskCreate{TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "watch closure"})
+	firstRun, _ := store.StartRun(ctx, task, "cli", "first finalization")
+	effectKey := "external-watch:watch_1:r1:finalization"
+	makeInput := func(run *Run, summary string) RunFinalization {
+		return RunFinalization{
+			Identity: *identity, RunID: run.ID, RunStatus: "done", TaskID: task.ID,
+			TaskStatus: "done", Summary: summary, Channel: "cli", AssistantContent: summary,
+			Handoff: Handoff{Summary: summary}, AnalyzerVersion: 1,
+			MaintenancePayload: `{}`, EffectKey: effectKey,
+			Event: Event{Type: "run.finished", Payload: []byte(`{"outcome":{"status":"done"}}`)},
+		}
+	}
+	if _, err := store.MaterializeRunFinalization(ctx, makeInput(firstRun, "first result")); err != nil {
+		t.Fatal(err)
+	}
+	secondRun, err := store.StartRun(ctx, task, "cli", "duplicate finalization")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.MaterializeRunFinalization(ctx, makeInput(secondRun, "duplicate result")); err != nil {
+		t.Fatal(err)
+	}
+	for table, query := range map[string]string{
+		"handoffs":    `SELECT COUNT(*) FROM task_handoffs WHERE task_id = ?`,
+		"messages":    `SELECT COUNT(*) FROM channel_messages WHERE task_id = ? AND role = 'assistant'`,
+		"maintenance": `SELECT COUNT(*) FROM maintenance_jobs WHERE run_id IN (?, ?)`,
+		"receipt":     `SELECT COUNT(*) FROM effect_receipts WHERE effect_key = ?`,
+	} {
+		var count int
+		var err error
+		switch table {
+		case "maintenance":
+			err = store.db.QueryRowContext(ctx, query, firstRun.ID, secondRun.ID).Scan(&count)
+		case "receipt":
+			err = store.db.QueryRowContext(ctx, query, effectKey).Scan(&count)
+		default:
+			err = store.db.QueryRowContext(ctx, query, task.ID).Scan(&count)
+		}
+		if err != nil || count != 1 {
+			t.Fatalf("%s count = %d, %v; want 1", table, count, err)
+		}
+	}
+	storedTask, _ := store.GetTask(ctx, identity.TenantID, task.ID)
+	if storedTask == nil || storedTask.CurrentSummary != "first result" {
+		t.Fatalf("duplicate effect overwrote task: %+v", storedTask)
+	}
+	owned, err := store.EffectOwnedByRun(ctx, identity.TenantID, effectKey, secondRun.ID)
+	if err != nil || owned {
+		t.Fatalf("duplicate run owns effect = %v, %v", owned, err)
+	}
+	storedRun, _ := store.GetRun(ctx, identity.TenantID, secondRun.ID)
+	if storedRun == nil || storedRun.Status != "done" {
+		t.Fatalf("duplicate run was not settled: %+v", storedRun)
+	}
+}
+
+func TestMaterializeRunFinalizationPreservesStableTaskCardForWeakAttach(t *testing.T) {
+	ctx := context.Background()
+	store, err := OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	identity, _ := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Alice")
+	task, _ := store.CreateTask(ctx, TaskCreate{TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "Stable work"})
+	if err := store.UpdateTaskStatus(ctx, identity.TenantID, task.ID, "in_progress", "stable summary", []string{"stable next"}); err != nil {
+		t.Fatal(err)
+	}
+	run, _ := store.StartRun(ctx, task, "cli", "possibly unrelated request")
+	_, err = store.MaterializeRunFinalization(ctx, RunFinalization{
+		Identity: *identity, RunID: run.ID, RunStatus: "done", TaskID: task.ID,
+		TaskStatus: "done", PreservedTaskStatus: "in_progress", Summary: "weak run summary", NextSteps: []string{"weak next"},
+		PreserveTaskCard: true, Handoff: Handoff{Summary: "weak run summary"},
+		MaintenancePayload: `{}`, Event: Event{Type: "run.finished", Payload: []byte(`{"outcome":{"status":"done"}}`)},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored, _ := store.GetTask(ctx, identity.TenantID, task.ID)
+	if stored.Status != "in_progress" {
+		t.Fatalf("weak attach changed stable lifecycle: %+v", stored)
+	}
+	if stored.CurrentSummary != "stable summary" || len(stored.NextSteps) != 1 || stored.NextSteps[0] != "stable next" {
+		t.Fatalf("weak attach overwrote stable task card: %+v", stored)
+	}
+	var handoffSummary string
+	err = store.db.QueryRowContext(ctx, `SELECT summary FROM task_handoffs WHERE task_id = ?`, task.ID).Scan(&handoffSummary)
+	if err != nil || handoffSummary != "weak run summary" {
+		t.Fatalf("run evidence was not preserved: %q, %v", handoffSummary, err)
+	}
+}
+
+func TestWeakStartRunPreservesTaskLifecycle(t *testing.T) {
+	ctx := context.Background()
+	store, err := OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	identity, _ := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Alice")
+	task, _ := store.CreateTask(ctx, TaskCreate{TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "Stable work"})
+	if err := store.UpdateTaskStatus(ctx, identity.TenantID, task.ID, "waiting_user", "stable", nil); err != nil {
+		t.Fatal(err)
+	}
+	run, err := store.StartRunWithOptions(ctx, task, "cli", "possibly unrelated", StartRunOptions{
+		PreserveTaskLifecycle: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored, err := store.GetTask(ctx, identity.TenantID, task.ID)
+	if err != nil || stored == nil || stored.Status != "waiting_user" || stored.ActiveRunID != run.ID {
+		t.Fatalf("weak start changed lifecycle or lost active run: %+v, %v", stored, err)
+	}
+}
+
 func TestMaterializeRunFinalizationSynthesizesOutcomeBeforeTerminal(t *testing.T) {
 	ctx := context.Background()
 	store, err := OpenStore(t.TempDir())

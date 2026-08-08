@@ -503,8 +503,23 @@ func (s *Store) ReassignRun(ctx context.Context, tenantID, runID, fromTaskID, to
 		return err
 	}
 	if _, err := tx.ExecContext(ctx,
-		`UPDATE tasks SET last_activity_at = ?, updated_at = ? WHERE tenant_id = ? AND id = ?`,
-		now, now, tenant, toTaskID); err != nil {
+		`UPDATE task_blockers SET task_id = ? WHERE tenant_id = ? AND origin_run_id = ?`,
+		toTaskID, tenant, runID); err != nil {
+		return err
+	}
+	var targetStatus string
+	if err := tx.QueryRowContext(ctx,
+		`SELECT status FROM tasks WHERE tenant_id = ? AND id = ?`,
+		tenant, toTaskID).Scan(&targetStatus); err != nil {
+		return err
+	}
+	targetStatus, err = resolveFinalTaskStatusTx(ctx, tx, tenant, toTaskID, runID, targetStatus)
+	if err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx,
+		`UPDATE tasks SET status = ?, last_activity_at = ?, updated_at = ? WHERE tenant_id = ? AND id = ?`,
+		targetStatus, now, now, tenant, toTaskID); err != nil {
 		return err
 	}
 

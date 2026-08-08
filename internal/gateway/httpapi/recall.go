@@ -657,8 +657,9 @@ func (s *canonicalRecallSource) OnSelected(ctx context.Context, q RecallQuery, h
 	if partition == "" || len(ids) == 0 {
 		return
 	}
+	touchCtx := context.WithoutCancel(ctx)
 	go func() {
-		_ = s.store.TouchCanonicalAccess(ctx, partition, ids)
+		_ = s.store.TouchCanonicalAccess(touchCtx, partition, ids)
 	}()
 }
 

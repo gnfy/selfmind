@@ -478,6 +478,39 @@ func TestLabelerMoveTargetMustBeOffered(t *testing.T) {
 	}
 }
 
+func TestRejectedLabelDecisionReconcilesWeakTaskLifecycle(t *testing.T) {
+	provider := newSlowLLMProvider("making progress on the requested work")
+	provider.releaseNow()
+	daemon, store, _ := newDetachedRunServer(t, provider)
+	ctx := context.Background()
+	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Me")
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := store.CreateTask(ctx, control.TaskCreate{
+		TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "Established work", Channel: "cli",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	target, err := store.CreateTask(ctx, control.TaskCreate{
+		TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "Other offered work", Channel: "cli",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := &control.Run{ID: "run_rejected_label"}
+	daemon.applyPostRunLabel(ctx, identity, task, run, taskAttach{preLabel: true}, []control.Task{*target}, "", api.RunOutcome{Status: "done"}, "MOVE:task_not_offered")
+
+	stored, err := store.GetTask(ctx, identity.TenantID, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored == nil || stored.Status != "done" {
+		t.Fatalf("rejected label decision must degrade to KEEP and reconcile lifecycle: %+v", stored)
+	}
+}
+
 // TestLabelerPromptCarriesTurnAndCandidates sanity-checks the prompt contract:
 // current label, open candidates, and the turn inside data delimiters.
 func TestLabelerPromptCarriesTurnAndCandidates(t *testing.T) {

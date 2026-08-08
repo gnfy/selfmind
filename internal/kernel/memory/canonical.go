@@ -33,7 +33,7 @@ const (
 
 var (
 	transientStatusTokens = regexp.MustCompile(
-		`(?i)\b(IN_PROGRESS|QUEUED|PRE_BUILD|PREPARED_NOT_EXECUTED|PENDING(?:_APPROVAL|_EXECUTION|_VERIFICATION)?|SUCCEEDED|FAILED|CANCELLED|TIMED_OUT)\b|尚未执行|待执行|正在等待|正在执行|当前状态`)
+		`(?i)\b((?:[A-Z][A-Z0-9]{1,15}_)?(?:IN_PROGRESS|QUEUED|PRE_BUILD|PREPARED_NOT_EXECUTED|PENDING(?:_APPROVAL|_EXECUTION|_VERIFICATION)?|WAITING_USER|BLOCKED|SUCCEEDED|FAILED|CANCELLED|TIMED_OUT))\b|尚未执行|待执行|正在等待|正在执行|当前状态`)
 	// Explanatory semantics mark a probable long-term rule; they veto the
 	// confirmed tier no matter what else matches.
 	transientRuleCues = regexp.MustCompile(

@@ -259,7 +259,10 @@ func (c *RunCoordinator) resolveTask(ctx context.Context, identity *control.Iden
 	// remains a PRE-LABEL attach: labels never select the execution workspace or
 	// gate context, and ambiguous/multiple keys deliberately fall through.
 	if workKey := inputWorkKey; workKey != "" {
-		candidates := c.srv.openLabelCandidates(ctx, identity, "", workKey)
+		candidates, err := c.srv.openLabelCandidates(ctx, identity, "", workKey)
+		if err != nil {
+			return nil, taskAttach{}, fmt.Errorf("list open task labels: %w", err)
+		}
 		if target := exactWorkKeyCandidate(candidates, workKey); target != nil && target.IsVisible() && !target.IsInbox() {
 			return target, taskAttach{preLabel: true, reason: taskAttachWorkKeyPreLabel, workKey: workKey}, nil
 		}
@@ -421,8 +424,8 @@ func (c *RunCoordinator) installExecutionScope(ctx context.Context, identity *co
 	// destructive-looking command an instruction, while the same command with no
 	// such request is the model acting alone. Bounded and redacted here because
 	// the judge prompt treats it as untrusted data (docs/tool-safety.md).
-	triageIntent := triageIntentFromRequest(req.Content)
-	scope.TriageIntent = func() string { return triageIntent }
+	intentSnapshot := runIntentSnapshot(req, task, run, workspace)
+	scope.IntentSnapshot = func() tools.RunIntentSnapshot { return intentSnapshot }
 	// Grants back class-level approval memory (session/persistent allowlist);
 	// the control store satisfies tools.ApprovalGrantStore structurally.
 	if c.srv != nil && c.srv.Control != nil {
@@ -914,7 +917,8 @@ func (c *RunCoordinator) routePendingNotification(ctx context.Context, identity 
 		msg.Platform = identity.Platform
 		msg.PlatformUserID = identity.PlatformUserID
 		msg.Channel = channel
-		return c.srv.Delivery.EnqueueAndTry(ctx, msg) == nil
+		confirmed, _ := c.srv.Delivery.EnqueueAndTryConfirmed(ctx, msg)
+		return confirmed
 	}
 	if c.srv.presenceTracker().IsAttached(identity.PersonID, "cli") {
 		return false
@@ -1031,7 +1035,24 @@ func (c *RunCoordinator) deliverToPreferredIM(ctx context.Context, identity *con
 	// Without a live chat context the platform user id is the DM target;
 	// senders fall back to it when Channel is not a real chat id.
 	msg.Channel = account.PlatformUserID
-	return c.srv.Delivery.EnqueueAndTry(ctx, msg) == nil
+	confirmed, _ := c.srv.Delivery.EnqueueAndTryConfirmed(ctx, msg)
+	return confirmed
+}
+
+// deliverToPreferredIMAccepted is the durable-outbox variant used by effect
+// finalization. Platform confirmation may arrive later; an inserted outbound
+// row is sufficient to make crash recovery replay-safe.
+func (c *RunCoordinator) deliverToPreferredIMAccepted(ctx context.Context, identity *control.IdentityContext, base delivery.Message) bool {
+	account := c.preferredIMAccount(ctx, identity)
+	if account == nil {
+		return false
+	}
+	msg := base
+	msg.Platform = account.Platform
+	msg.PlatformUserID = account.PlatformUserID
+	msg.Channel = account.PlatformUserID
+	accepted, _ := c.srv.Delivery.EnqueueAndTryAccepted(ctx, msg)
+	return accepted
 }
 
 func (c *RunCoordinator) withGatewayContext(input string, identity *control.IdentityContext, task *control.Task, workspace *control.Workspace, attachments []api.MessageAttachment) string {

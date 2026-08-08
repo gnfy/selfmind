@@ -198,6 +198,13 @@ authoritative instruction. If it changes direction, the latest message wins."*
   matching labels are intentionally left unchanged. Explicit task attachment
   remains authoritative, and this rule never changes execution workspace,
   permissions, or the context used by the completed run.
+- Task cards have source protection (2026-08-08): an ordinary weak pre-label
+  attachment to an existing label may add its run, events, handoff, and
+  maintenance proposal, but it cannot overwrite that label's stable lifecycle,
+  summary, or next steps before label resolution. A deterministic sole label
+  or a successful KEEP decision reconciles lifecycle afterward. A placeholder
+  created for the current turn may receive its first card. Post-run relabeling
+  remains display-only.
 
 ### Ingress (simplified) — SHIPPED (P3, 2026-07-06)
 

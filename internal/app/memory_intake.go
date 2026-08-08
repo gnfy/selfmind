@@ -152,27 +152,20 @@ const defaultTimeBoundedTTL = 30 * 24 * time.Hour
 
 // decisionMeta enforces the durability contract deterministically, keyed on
 // the two-tier transient verdict (memory.ClassifyTransientContent). The
-// matrix fails CLOSED against permanence and OPEN toward keeping rules —
-// the acceptance bar is: rather miss a transient candidate than wrongly
-// discard one long-term rule.
-//
-//	durable  + confirmed-transient  → time-bounded TTL (suspect: expires
-//	                                  instead of poisoning recall forever)
-//	durable  + candidate/none       → permanent
-//	time_bounded                    → valid_until (model value or default)
-//	episodic                        → dropped
-//	empty    + confirmed-transient  → dropped (the observed live pollution)
-//	empty    + candidate/none       → time-bounded TTL (an omitted field
-//	                                  never mints permanent memory; an
-//	                                  ambiguous candidate survives bounded)
+// matrix fails closed against permanence and open toward keeping rules. A
+// concrete run-state observation is always dropped, even when the model calls
+// it durable. Ambiguous candidates survive with a bounded lifetime.
 func decisionMeta(d httpapi.MemoryDecision) (intakeMeta, bool) {
 	verdict := memory.ClassifyTransientContent(d.Content)
 	meta := intakeMeta{Category: strings.TrimSpace(d.Category)}
+	// Concrete run/build/ticket state belongs to task cards, handoffs, and the
+	// work spine. A model-provided durability label must not promote it into
+	// long-term memory.
+	if verdict == memory.TransientConfirmed {
+		return intakeMeta{}, true
+	}
 	switch strings.ToLower(strings.TrimSpace(d.Durability)) {
 	case "durable":
-		if verdict == memory.TransientConfirmed {
-			meta.ValidUntil = time.Now().Add(defaultTimeBoundedTTL)
-		}
 		return meta, false
 	case "time_bounded":
 		if parsed, err := time.Parse(time.RFC3339, strings.TrimSpace(d.ValidUntil)); err == nil && parsed.After(time.Now()) {
@@ -184,9 +177,6 @@ func decisionMeta(d httpapi.MemoryDecision) (intakeMeta, bool) {
 	case "episodic":
 		return intakeMeta{}, true
 	default:
-		if verdict == memory.TransientConfirmed {
-			return intakeMeta{}, true
-		}
 		meta.ValidUntil = time.Now().Add(defaultTimeBoundedTTL)
 		return meta, false
 	}

@@ -421,15 +421,24 @@ func SmartApprovalMiddleware(projectRoot string) Middleware {
 			// contained exec call is recorded so /diag can show how much of the
 			// old ask volume was pure fatigue rather than judgement.
 			containment := assessExecContainment(toolName, args)
-			contained := containment.AutoApprove()
-			if !approvalNeeded(mode, toolName, dangerous, contained) {
+			intentSnapshot := RunIntentSnapshot{}
+			if hasScope && scope.IntentSnapshot != nil {
+				intentSnapshot = scope.IntentSnapshot()
+			} else if hasScope && scope.TriageIntent != nil {
+				intentSnapshot.RawUserText = scope.TriageIntent()
+			}
+			denyForcesHuman := intentSnapshot.HasExplicitDeny() && (dangerous || isWriteTool(toolName) || isExecTool(toolName))
+			contained := containment.AutoApprove() && !denyForcesHuman
+			if !denyForcesHuman && !approvalNeeded(mode, toolName, dangerous, contained) {
 				if contained && mode == ApprovalSmart && hasScope {
 					recordScopeTriage(scope, toolName, "", TriageOutcomeContained, TriageAssessment{}, 0, nil)
 					log.Debug("smart approval: sandbox-contained exec, no ask", "tool", toolName, "reason", containedExecReason, "assessment", containment.Summary())
 				}
 				return next(args)
 			}
-			if !dangerous && reason == "" {
+			if denyForcesHuman {
+				reason = "the current request contains an explicit deny; a person must confirm any override"
+			} else if !dangerous && reason == "" {
 				reason = fmt.Sprintf("%s requires approval in %s mode", toolName, mode)
 			}
 
@@ -448,6 +457,9 @@ func SmartApprovalMiddleware(projectRoot string) Middleware {
 				return hasScope && scope.runGrants != nil && scope.runGrants.has(key)
 			}
 			switch {
+			case denyForcesHuman:
+				// A current deny outranks full-auto, containment, and every stored
+				// grant. Continue directly to the human ask below.
 			case isRunGranted(patternKey):
 				recordScopeTriage(scope, toolName, patternKey, TriageOutcomeGrantHit, TriageAssessment{}, 0, nil)
 				return next(args)
@@ -461,7 +473,7 @@ func SmartApprovalMiddleware(projectRoot string) Middleware {
 				recordScopeTriage(scope, toolName, "rule", TriageOutcomeGrantHit, TriageAssessment{}, 0, nil)
 				return next(args)
 			}
-			if hasScope && scope.Grants != nil {
+			if !denyForcesHuman && hasScope && scope.Grants != nil {
 				grantCtx := contextFromArgs(args)
 				isGranted := func(key string) bool {
 					if key == "" {
@@ -500,7 +512,7 @@ func SmartApprovalMiddleware(projectRoot string) Middleware {
 			triageRationale := ""
 			triageRisk := ""
 			triageAuthorization := ""
-			if mode == ApprovalSmart && hasScope {
+			if mode == ApprovalSmart && hasScope && !denyForcesHuman {
 				switch {
 				case scope.Judge == nil:
 					// No judge wired: smart mode cannot triage at all. Count it so
@@ -517,12 +529,8 @@ func SmartApprovalMiddleware(projectRoot string) Middleware {
 					log.Info("smart approval: triage stepped aside after repeated denials in this run", "tool", toolName, "run", scope.RunID)
 				default:
 					ctx := contextFromArgs(args)
-					intent := ""
-					if scope.TriageIntent != nil {
-						intent = scope.TriageIntent()
-					}
 					triageStarted := time.Now()
-					verdict, assessment, terr := triageApproval(ctx, scope.Judge, toolName, triageSubject(toolName, approvalDisplayArgs(args)), reason, intent, containment)
+					verdict, assessment, terr := triageApprovalWithIntent(ctx, scope.Judge, toolName, triageSubject(toolName, approvalDisplayArgs(args)), reason, intentSnapshot, containment)
 					triageLatency := time.Since(triageStarted)
 					triageRationale = assessment.Rationale
 					triageRisk = assessment.Risk

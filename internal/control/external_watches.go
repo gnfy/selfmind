@@ -26,6 +26,20 @@ const (
 	// failed" have different remedies, and collapsing them is what let a
 	// blocked check be reported as a failed deployment.
 	ExternalWatchBlocked = "blocked_environment"
+
+	WatchCheckerOK                = "ok"
+	WatchCheckerCapabilityBlocked = "capability_blocked"
+	WatchCheckerCommandFailed     = "command_failed"
+	WatchOperationPending         = "pending"
+	WatchOperationRunning         = "running"
+	WatchOperationSucceeded       = "succeeded"
+	WatchOperationFailed          = "failed"
+	WatchOperationTimedOut        = "timed_out"
+	WatchVerificationNotRequired  = "not_required"
+	WatchVerificationPending      = "pending"
+	WatchVerificationPassed       = "passed"
+	WatchVerificationBlocked      = "blocked_environment"
+	WatchVerificationFailed       = "failed"
 )
 
 // externalWatchTerminalStatuses are the statuses that own completion side
@@ -55,6 +69,9 @@ type ExternalWatch struct {
 	TerminalSuccessPattern string
 	TerminalFailurePattern string
 	Status                 string
+	CheckerStatus          string
+	OperationStatus        string
+	VerificationStatus     string
 	IntervalSeconds        int
 	CurrentIntervalSeconds int
 	CommandTimeoutSeconds  int
@@ -115,6 +132,7 @@ const externalWatchColumns = `id, tenant_id, person_id,
 	description, cwd, command, success_pattern, failure_pattern,
 	COALESCE(spec_version, 1), COALESCE(target_pattern, ''),
 	COALESCE(terminal_success_pattern, ''), COALESCE(terminal_failure_pattern, ''), status,
+	COALESCE(checker_status, ''), COALESCE(operation_status, 'pending'), COALESCE(verification_status, 'not_required'),
 	interval_seconds, COALESCE(current_interval_seconds, 0), command_timeout_seconds, timeout_at, next_check_at, attempts,
 	COALESCE(extensions, 0), COALESCE(verdict_revision, 1), COALESCE(notified, 0), last_output, last_error,
 	COALESCE(last_output_hash, ''),
@@ -338,6 +356,18 @@ func (s *Store) RecordExternalWatchCheck(ctx context.Context, tenantID, id, outp
 		return err
 	}
 	return tx.Commit()
+}
+
+// RecordExternalWatchPhases persists the independently observable layers of a
+// watch. A checker failure must not erase a terminal operation result, and a
+// successful operation must not imply that its post-deploy verification ran.
+func (s *Store) RecordExternalWatchPhases(ctx context.Context, tenantID, id, checker, operation, verification string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE external_watches
+		SET checker_status = ?, operation_status = ?, verification_status = ?, updated_at = ?
+		WHERE tenant_id = ? AND id = ? AND status IN (?, ?)`,
+		strings.TrimSpace(checker), strings.TrimSpace(operation), strings.TrimSpace(verification),
+		time.Now().Unix(), normalizeTenant(tenantID), id, ExternalWatchPending, ExternalWatchRunning)
+	return err
 }
 
 // RecordExternalWatchFailure records a failed check and returns the length of
@@ -587,6 +617,7 @@ func scanExternalWatch(scanner externalWatchScanner) (ExternalWatch, error) {
 		&watch.TaskID, &watch.RunID, &watch.Channel, &watch.Description, &watch.CWD,
 		&watch.Command, &watch.SuccessPattern, &watch.FailurePattern,
 		&watch.SpecVersion, &watch.TargetPattern, &watch.TerminalSuccessPattern, &watch.TerminalFailurePattern, &watch.Status,
+		&watch.CheckerStatus, &watch.OperationStatus, &watch.VerificationStatus,
 		&watch.IntervalSeconds, &watch.CurrentIntervalSeconds, &watch.CommandTimeoutSeconds, &timeoutAt, &nextCheckAt,
 		&watch.Attempts, &watch.Extensions, &watch.VerdictRevision, &notified, &watch.LastOutput, &watch.LastError,
 		&watch.LastOutputHash,

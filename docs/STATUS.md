@@ -8,7 +8,7 @@
 > planning docs were removed from the tree (2026-07-03; retrieve via git
 > history) — never resurrect their backlog items or code samples.
 >
-> **Snapshot date:** 2026-07-20. When you finish a change that moves a row,
+> **Snapshot date:** 2026-08-08. When you finish a change that moves a row,
 > update this table in the same PR. See `docs/phase1-modules.md` for the
 > Phase-1 feature-module index.
 
@@ -427,6 +427,65 @@ Tests: `internal/runtime/gateway/state_test.go`,
 These are the live gaps, ordered by their distance from the north star
 (`docs/identity-continuity.md` — the three continuity scenarios). This section
 is the only priority list in the repo; other docs must point here.
+
+### Execution-quality closeout — shipped 2026-08-08
+
+The 2026-08-07 live review exposed five related correctness gaps: a recovered
+system queue row could be reclaimed while its worker was still alive; watcher
+checker failures could overwrite a successful external operation; retry runs
+could repeat one logical finalization effect; approval triage blurred task
+context with the user's current authorization; and weak task attachment could
+rewrite an established task card. The following boundaries are now enforced:
+
+- **Leased queue claims.** `task_queue` carries an opaque `claim_token`,
+  `lease_until`, and `attempt_generation`. Claim, bind, and heartbeat renewal
+  are token-checked; recovery only requeues a started system row after its
+  lease expires. A stale worker cannot bind or renew a newer attempt.
+- **Effect-level finalization idempotency.** `effect_receipts` owns one stable
+  logical effect key (watch id + verdict revision) across retry run ids. A
+  duplicate retry still receives its own terminal run events, but task status,
+  handoff, assistant message, maintenance job, and final delivery are emitted
+  only by the effect owner.
+- **Watcher phase separation.** Durable watches persist independent
+  `checker_status`, `operation_status`, and `verification_status`. Once the
+  external operation is terminal-success, a later checker or verification
+  failure parks verification without rewriting the business verdict as a
+  timeout or failure.
+- **Typed approval intent.** Smart triage receives a `RunIntentSnapshot` with
+  raw user text, advisory task summary, deterministic allow/deny facts,
+  workspace id, source, and work key. The task summary is explicitly context,
+  never authorization. A current explicit deny forces a human decision and
+  outranks full-auto, deterministic containment, durable grants, and the
+  judge; hard safety floors remain unconditional.
+- **Task-card source protection.** A weak pre-label attachment to an existing
+  task may add the run, events, handoff, and maintenance proposal, but cannot
+  overwrite the task's stable lifecycle, summary, or next steps before its
+  display label is resolved. A deterministic sole label or a successful KEEP
+  decision reconciles lifecycle afterward; a new placeholder can still receive
+  its first card and be relabeled after the run.
+- **Delivery truth.** Delivery distinguishes durable acceptance from confirmed
+  transport delivery. `pending_session` and `sent_unconfirmed` remain eligible
+  for the existing catch-up path and no longer mark the source notification as
+  delivered. `/diag` reports sent/unconfirmed/pending/failed health per
+  platform without exposing peer ids.
+- **Memory boundary.** Concrete ticket/build/run current state is discarded at
+  intake even if a model labels it durable; prefixed operational states such as
+  `CI_PENDING_APPROVAL` are classified too. Canonical recall access touches use
+  a cancellation-independent context, so a selected memory's usage evidence is
+  not lost when the foreground request closes. Maintenance remains one logical
+  batched analyzer result per run; this closeout adds no foreground model call.
+
+Regression coverage: `control/queue_test.go`,
+`control/run_finalization_test.go`, `control/catchup_test.go`,
+`gateway/httpapi/external_watch_match_test.go`,
+`gateway/httpapi/approval_options_test.go`, `gateway/delivery/delivery_test.go`,
+`tools/approval_triage_test.go`, `app/memory_intake_test.go`, and
+`kernel/memory/transient_classifier_test.go`.
+
+Next evidence gates: exercise queue recovery during a real long-running run,
+observe one watcher operation-success/verification-blocked case, and calibrate
+per-platform delivery health from live IM traffic. These are runtime
+validation gates, not unfinished alternate code paths.
 
 ### ACTIVE PLAN — watcher four-layer boundary (2026-07-30)
 

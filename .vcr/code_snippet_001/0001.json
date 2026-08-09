@@ -1,0 +1,310 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "content": "```"
+    },
+    {
+      "content": "go"
+    },
+    {
+      "content": "\n"
+    },
+    {
+      "content": "func"
+    },
+    {
+      "content": " Binary"
+    },
+    {
+      "content": "Search"
+    },
+    {
+      "content": "(nums"
+    },
+    {
+      "content": " []"
+    },
+    {
+      "content": "int"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " target"
+    },
+    {
+      "content": " int"
+    },
+    {
+      "content": ")"
+    },
+    {
+      "content": " int"
+    },
+    {
+      "content": " {\n"
+    },
+    {
+      "content": "\tleft"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " right"
+    },
+    {
+      "content": " :="
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "0"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " len"
+    },
+    {
+      "content": "(nums"
+    },
+    {
+      "content": ")-"
+    },
+    {
+      "content": "1"
+    },
+    {
+      "content": "\n"
+    },
+    {
+      "content": "\tfor"
+    },
+    {
+      "content": " left"
+    },
+    {
+      "content": " \u003c="
+    },
+    {
+      "content": " right"
+    },
+    {
+      "content": " {\n"
+    },
+    {
+      "content": "\t"
+    },
+    {
+      "content": "\tm"
+    },
+    {
+      "content": "id"
+    },
+    {
+      "content": " :="
+    },
+    {
+      "content": " left"
+    },
+    {
+      "content": " +"
+    },
+    {
+      "content": " ("
+    },
+    {
+      "content": "right"
+    },
+    {
+      "content": "-left"
+    },
+    {
+      "content": ")/"
+    },
+    {
+      "content": "2"
+    },
+    {
+      "content": "\n"
+    },
+    {
+      "content": "\t"
+    },
+    {
+      "content": "\tif"
+    },
+    {
+      "content": " nums"
+    },
+    {
+      "content": "[mid"
+    },
+    {
+      "content": "]"
+    },
+    {
+      "content": " =="
+    },
+    {
+      "content": " target"
+    },
+    {
+      "content": " {\n"
+    },
+    {
+      "content": "\t\t"
+    },
+    {
+      "content": "\treturn"
+    },
+    {
+      "content": " mid"
+    },
+    {
+      "content": "\n"
+    },
+    {
+      "content": "\t"
+    },
+    {
+      "content": "\t"
+    },
+    {
+      "content": "}\n"
+    },
+    {
+      "content": "\t"
+    },
+    {
+      "content": "\tif"
+    },
+    {
+      "content": " nums"
+    },
+    {
+      "content": "[mid"
+    },
+    {
+      "content": "]"
+    },
+    {
+      "content": " \u003c"
+    },
+    {
+      "content": " target"
+    },
+    {
+      "content": " {\n"
+    },
+    {
+      "content": "\t\t"
+    },
+    {
+      "content": "\tleft"
+    },
+    {
+      "content": " ="
+    },
+    {
+      "content": " mid"
+    },
+    {
+      "content": " +"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "1"
+    },
+    {
+      "content": "\n"
+    },
+    {
+      "content": "\t"
+    },
+    {
+      "content": "\t"
+    },
+    {
+      "content": "}"
+    },
+    {
+      "content": " else"
+    },
+    {
+      "content": " {\n"
+    },
+    {
+      "content": "\t\t"
+    },
+    {
+      "content": "\tright"
+    },
+    {
+      "content": " ="
+    },
+    {
+      "content": " mid"
+    },
+    {
+      "content": " -"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "1"
+    },
+    {
+      "content": "\n"
+    },
+    {
+      "content": "\t"
+    },
+    {
+      "content": "\t"
+    },
+    {
+      "content": "}\n"
+    },
+    {
+      "content": "\t"
+    },
+    {
+      "content": "}\n"
+    },
+    {
+      "content": "\treturn"
+    },
+    {
+      "content": " -"
+    },
+    {
+      "content": "1"
+    },
+    {
+      "content": "\n"
+    },
+    {
+      "content": "}\n"
+    },
+    {
+      "content": "```"
+    },
+    {
+      "usage": {
+        "input_tokens": 10290,
+        "output_tokens": 103,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0
+      }
+    }
+  ]
+}

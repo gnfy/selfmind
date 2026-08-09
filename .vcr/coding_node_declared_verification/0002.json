@@ -1,0 +1,52 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "content": "Preparing to run ls_r",
+      "event_type": "agent.thinking"
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_JRz3joMea2drOyg6YHsJ0SC0",
+          "Function": "ls_r",
+          "Args": "{\"path\":\"{{SELFMIND_VCR_WORKSPACE}}\",\"recursive\":true,\"max_entries\":200}"
+        }
+      ]
+    },
+    {
+      "content": "Preparing to run read_file",
+      "event_type": "agent.thinking"
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_ufL9D7xDki1zBwZZkJmirh36",
+          "Function": "read_file",
+          "Args": "{\"path\":\"{{SELFMIND_VCR_WORKSPACE}}/package.json\"}"
+        }
+      ]
+    },
+    {
+      "content": "Preparing to run search_files",
+      "event_type": "agent.thinking"
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_GgfnQ6GcUos1snOl0ATrDrXe",
+          "Function": "search_files",
+          "Args": "{\"path\":\"{{SELFMIND_VCR_WORKSPACE}}\",\"pattern\":\"TODO|FIXME|BUG\",\"file_glob\":\"*.js\",\"limit\":50}"
+        }
+      ]
+    },
+    {
+      "usage": {
+        "input_tokens": 6040,
+        "output_tokens": 151,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0
+      }
+    }
+  ]
+}

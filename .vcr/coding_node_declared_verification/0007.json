@@ -1,0 +1,77 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "content": "The"
+    },
+    {
+      "content": " declared"
+    },
+    {
+      "content": " test"
+    },
+    {
+      "content": " workflow"
+    },
+    {
+      "content": " now"
+    },
+    {
+      "content": " passes"
+    },
+    {
+      "content": ";"
+    },
+    {
+      "content": " I"
+    },
+    {
+      "content": "’ll"
+    },
+    {
+      "content": " record"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " completed"
+    },
+    {
+      "content": " fix"
+    },
+    {
+      "content": " and"
+    },
+    {
+      "content": " verification"
+    },
+    {
+      "content": " result"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": "Preparing to run update_plan",
+      "event_type": "agent.thinking"
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_ddwL77CXDpsMmjIuO7tLq3IC",
+          "Function": "update_plan",
+          "Args": "{\"plan\":[{\"step\":\"Inspect project files and declared workflow\",\"status\":\"completed\"},{\"step\":\"Reproduce and diagnose the failing behavior\",\"status\":\"completed\"},{\"step\":\"Implement the minimal fix\",\"status\":\"completed\"},{\"step\":\"Run the repository-declared verification\",\"status\":\"completed\"}]}"
+        }
+      ]
+    },
+    {
+      "usage": {
+        "input_tokens": 7292,
+        "output_tokens": 105,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0
+      }
+    }
+  ]
+}

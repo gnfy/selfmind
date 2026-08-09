@@ -1,0 +1,26 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "content": "Preparing to run verify",
+      "event_type": "agent.thinking"
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_YTmgRIUp2UInXG7E1AKcypMy",
+          "Function": "verify",
+          "Args": "{\"command\":\"npm test\",\"cwd\":\"{{SELFMIND_VCR_WORKSPACE}}\",\"kind\":\"test\",\"timeout\":120}"
+        }
+      ]
+    },
+    {
+      "usage": {
+        "input_tokens": 7136,
+        "output_tokens": 49,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0
+      }
+    }
+  ]
+}

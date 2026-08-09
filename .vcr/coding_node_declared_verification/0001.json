@@ -1,0 +1,77 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "content": "I"
+    },
+    {
+      "content": "’ll"
+    },
+    {
+      "content": " inspect"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " project"
+    },
+    {
+      "content": " structure"
+    },
+    {
+      "content": " and"
+    },
+    {
+      "content": " declared"
+    },
+    {
+      "content": " scripts"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " then"
+    },
+    {
+      "content": " reproduce"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " bug"
+    },
+    {
+      "content": " before"
+    },
+    {
+      "content": " editing"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": "Preparing to run update_plan",
+      "event_type": "agent.thinking"
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_5Bd4MOr5R30awuWMxVQrJGBG",
+          "Function": "update_plan",
+          "Args": "{\"plan\":[{\"step\":\"Inspect project files and declared workflow\",\"status\":\"in_progress\"},{\"step\":\"Reproduce and diagnose the failing behavior\",\"status\":\"pending\"},{\"step\":\"Implement the minimal fix\",\"status\":\"pending\"},{\"step\":\"Run the repository-declared verification\",\"status\":\"pending\"}]}"
+        }
+      ]
+    },
+    {
+      "usage": {
+        "input_tokens": 5874,
+        "output_tokens": 120,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0
+      }
+    }
+  ]
+}

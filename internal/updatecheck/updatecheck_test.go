@@ -111,3 +111,38 @@ func TestParseInterval(t *testing.T) {
 		t.Fatalf("defaultInterval = %v, want the per-startup 15m throttle", defaultInterval)
 	}
 }
+
+// TestComparePrereleaseNumericRollover pins the 9->10 rollover that silently
+// disabled the update prompt: lexical ordering put every beta.10+ release
+// BELOW the running beta.9, so UpdateAvailable stayed false forever.
+func TestComparePrereleaseNumericRollover(t *testing.T) {
+	cases := []struct {
+		left, right string
+		want        int
+	}{
+		{"0.1.0-beta.10", "0.1.0-beta.9", 1},
+		{"0.1.0-beta.11", "0.1.0-beta.9", 1},
+		{"0.1.0-beta.100", "0.1.0-beta.20", 1},
+		{"0.1.0-beta.9", "0.1.0-beta.10", -1},
+		{"0.1.0-beta.9", "0.1.0-beta.9", 0},
+		{"0.1.0-beta.9", "0.1.0-beta.8", 1},
+		// Numeric identifiers rank below alphanumeric ones (SemVer 11.4.3).
+		{"0.1.0-beta.1", "0.1.0-beta.rc", -1},
+		// A longer identifier set wins when the prefix matches (SemVer 11.4.4).
+		{"0.1.0-beta.1.1", "0.1.0-beta.1", 1},
+		// Release always outranks any prerelease of the same numbers.
+		{"0.1.0", "0.1.0-beta.10", 1},
+	}
+	for _, tc := range cases {
+		if got := Compare(tc.left, tc.right); got != tc.want {
+			t.Errorf("Compare(%q, %q) = %d, want %d", tc.left, tc.right, got, tc.want)
+		}
+	}
+}
+
+func TestUpdateAvailableAcrossBetaRollover(t *testing.T) {
+	result := Result{Current: "0.1.0-beta.9", Latest: "0.1.0-beta.10"}
+	if !result.UpdateAvailable() {
+		t.Fatal("beta.10 must be offered as an update over beta.9")
+	}
+}

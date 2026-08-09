@@ -3,6 +3,7 @@ package httpapi
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"selfmind/internal/control"
@@ -183,12 +184,125 @@ func runIntentSnapshot(req api.MessageRequest, task *control.Task, run *control.
 			snapshot.ExplicitAllow = []string{"continue-current-task"}
 		}
 	}
-	for _, marker := range []string{"不要", "禁止", "别执行", "do not", "don't", "must not", "never"} {
-		if strings.Contains(compact, marker) {
-			snapshot.ExplicitDeny = append(snapshot.ExplicitDeny, marker)
+	snapshot.ExplicitDeny, snapshot.DenyScopes = extractDenyScopes(compact)
+	return snapshot
+}
+
+// denyMarkers are the prohibition phrases we recognize. Scanning for them over
+// a whole message was the original defect: one "不要修改文件" made every write,
+// exec, and dangerous call in the run demand a human decision.
+var denyMarkers = []string{"不要", "不得", "禁止", "别执行", "别改", "do not", "don't", "must not", "never"}
+
+// denyClassWords map a clause's own words to what it forbids. Order matters
+// only in that every entry is tested; a clause may forbid several classes.
+var denyClassWords = []struct {
+	words   []string
+	classes []tools.OperationClass
+}{
+	{[]string{"修改", "改动", "更改", "编辑", "写入", "覆盖", "modify", "edit", "write", "overwrite", "change"}, []tools.OperationClass{tools.OpClassWrite}},
+	{[]string{"删除", "移除", "rm ", "delete", "remove"}, []tools.OperationClass{tools.OpClassDelete}},
+	{[]string{"执行", "运行", "跑", "调用命令", "run", "execute", "invoke"}, []tools.OperationClass{tools.OpClassExec}},
+	{[]string{"联网", "下载", "上传", "访问网络", "network", "download", "upload", "curl", "fetch"}, []tools.OperationClass{tools.OpClassNetwork}},
+}
+
+// mannerWords qualify HOW something must not be done rather than whether it
+// may happen at all. "Do not execute the polling command directly" asks for
+// delegation; reading it as a blanket execution ban inverts the instruction.
+var mannerWords = []string{"直接", "自己", "亲自", "手动", "本轮", "directly", "yourself", "manually", "in this turn", "by hand"}
+
+// clauseSplitter ends a clause at sentence and list punctuation, in both
+// scripts. A prohibition binds to the clause it appears in.
+//
+// Only "." needs a lookahead: splitting on every one of them tore
+// "config.yaml" in half and left the prohibition with no object to protect.
+// The rest split unconditionally, because an ASCII comma inside Chinese text
+// is usually written without a trailing space.
+var clauseSplitter = regexp.MustCompile(`[。！？；，\n\r,;!?]|\.(?:\s|$)`)
+
+const denyClauseMaxChars = 300
+
+// extractDenyScopes turns a lowercased message into prohibition records bound
+// to their own clauses. It is deterministic string work — no model call — and
+// a clause it cannot classify is recorded unresolved, which keeps the old
+// blanket effect for that prohibition.
+func extractDenyScopes(compact string) ([]string, []tools.DenyScope) {
+	var markers []string
+	var scopes []tools.DenyScope
+	seenMarker := map[string]bool{}
+	for _, clause := range clauseSplitter.Split(compact, -1) {
+		clause = strings.TrimSpace(clause)
+		if clause == "" {
+			continue
+		}
+		for _, marker := range denyMarkers {
+			if !strings.Contains(clause, marker) {
+				continue
+			}
+			if !seenMarker[marker] {
+				seenMarker[marker] = true
+				markers = append(markers, marker)
+			}
+			scopes = append(scopes, denyScopeForClause(marker, clause))
 		}
 	}
-	return snapshot
+	return markers, scopes
+}
+
+func denyScopeForClause(marker, clause string) tools.DenyScope {
+	scope := tools.DenyScope{Marker: marker, Clause: truncate(clause, denyClauseMaxChars)}
+	manner := containsAny(clause, mannerWords)
+	for _, entry := range denyClassWords {
+		if !containsAny(clause, entry.words) {
+			continue
+		}
+		for _, class := range entry.classes {
+			if class == tools.OpClassExec && manner {
+				// Qualified as "directly"/"yourself": the person is ruling out
+				// the agent running it in this turn, not ruling out handing it
+				// to the daemon.
+				class = tools.OpClassExecInTurn
+			}
+			scope.Classes = append(scope.Classes, class)
+		}
+	}
+	scope.Resolved = len(scope.Classes) > 0
+	if scope.Resolved {
+		scope.Targets = denyClauseTargets(clause)
+	}
+	return scope
+}
+
+// denyClauseTargets picks out literal objects named in the clause: paths, file
+// names, and quoted command fragments. A prohibition with no literal object
+// covers its whole class, which is the conservative reading.
+func denyClauseTargets(clause string) []string {
+	var targets []string
+	for _, quoted := range quotedFragments(clause) {
+		targets = append(targets, quoted)
+	}
+	for _, field := range strings.Fields(clause) {
+		field = strings.Trim(field, "\"'`,()[]{}：:。，")
+		if field == "" {
+			continue
+		}
+		if strings.ContainsAny(field, "/\\") || (strings.Contains(field, ".") && !strings.HasSuffix(field, ".")) {
+			targets = append(targets, field)
+		}
+	}
+	return targets
+}
+
+func quotedFragments(clause string) []string {
+	var out []string
+	for _, quote := range []string{"\"", "'", "`"} {
+		parts := strings.Split(clause, quote)
+		for i := 1; i < len(parts); i += 2 {
+			if fragment := strings.TrimSpace(parts[i]); fragment != "" {
+				out = append(out, fragment)
+			}
+		}
+	}
+	return out
 }
 
 // fallbackApprovalReason prefers the person's own refusal words over a generic

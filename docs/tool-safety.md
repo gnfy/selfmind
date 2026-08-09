@@ -235,7 +235,21 @@ raw user text is authoritative; deterministic allow/deny evidence and
 control-plane workspace/source/work-key facts are separate fields; the task
 summary is advisory context only. An explicit deny disables containment-based
 auto-approval and forces a human decision even in full-auto or when a durable
-grant exists. The hard floor remains unconditional, so this snapshot cannot
+grant exists.
+
+A deny constrains the operation it names, not every side-effecting tool in the
+run. Prohibitions are extracted deterministically (no model call), bound to the
+clause they appear in, and resolved to operation classes — write, delete,
+exec.in_turn, exec.delegated, network — plus any literal path or command
+fragment the clause names. A pending call is compared in that vocabulary, so
+"do not modify files" no longer stops a read-only probe, and a prohibition
+qualified as directly/yourself/manually resolves to `exec.in_turn` and leaves a
+durable delegation alone. An unqualified execution ban still covers both
+shapes. Narrowing applies only to what can be read: a prohibition that cannot
+be classified keeps the blanket effect, and the dangerous-op heuristic alone
+never activates an unrelated deny. Prohibitions that do not match still reach
+the judge as the person's stated limits — they simply no longer force the ask
+by themselves. The hard floor remains unconditional, so this snapshot cannot
 grant an otherwise forbidden capability.
 
 - APPROVE records a bounded task-scope class grant.

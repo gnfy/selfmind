@@ -212,6 +212,51 @@ var execTools = map[string]struct{}{
 func isWriteTool(name string) bool { _, ok := writeTools[name]; return ok }
 func isExecTool(name string) bool  { _, ok := execTools[name]; return ok }
 
+// delegatedExecTools hand a command to the DAEMON to run later, unattended,
+// instead of running it inside this turn. The distinction matters to a
+// prohibition: "do not execute the polling command directly" forbids the agent
+// running it now, and asks for exactly this delegation instead.
+var delegatedExecTools = map[string]struct{}{
+	"watch_external": {},
+}
+
+// operationClassesFor names what this call can do, in the same vocabulary a
+// prohibition is expressed in. `dangerous` only contributes a fallback class:
+// the heuristic says an op looked risky, which is never something the person
+// said, so it must not make an unrelated deny apply.
+func operationClassesFor(toolName string, dangerous bool) []OperationClass {
+	var classes []OperationClass
+	if isWriteTool(toolName) {
+		classes = append(classes, OpClassWrite)
+	}
+	if isExecTool(toolName) {
+		if _, delegated := delegatedExecTools[toolName]; delegated {
+			classes = append(classes, OpClassExecDelegated)
+		} else {
+			classes = append(classes, OpClassExecInTurn)
+		}
+	}
+	if dangerous {
+		classes = append(classes, OpClassDangerous)
+	}
+	return classes
+}
+
+// operationTargetsFor collects the literal objects this call acts on, so a
+// prohibition that named a file constrains that file and not its neighbours.
+func operationTargetsFor(args map[string]interface{}) []string {
+	if args == nil {
+		return nil
+	}
+	var targets []string
+	for _, key := range []string{"path", "file_path", "filename", "target", "command", "code", "cmd"} {
+		if value := strings.TrimSpace(stringArg(args, key)); value != "" {
+			targets = append(targets, value)
+		}
+	}
+	return targets
+}
+
 // approvalNeeded decides whether a tool call requires human approval under the
 // given mode. dangerous is the dangerous-op heuristic result; contained is the
 // sandbox-containment judgement (execSandboxContained) and is only ever true for
@@ -427,7 +472,15 @@ func SmartApprovalMiddleware(projectRoot string) Middleware {
 			} else if hasScope && scope.TriageIntent != nil {
 				intentSnapshot.RawUserText = scope.TriageIntent()
 			}
-			denyForcesHuman := intentSnapshot.HasExplicitDeny() && (dangerous || isWriteTool(toolName) || isExecTool(toolName))
+			// A prohibition constrains the operation it points at, not every
+			// side-effecting tool in the run. "Do not modify files" used to
+			// stop a read-only `go test` probe and a durable-watch
+			// registration alike, forcing a human ask that nobody was there
+			// to answer.
+			denyForcesHuman := intentSnapshot.DenyBlocks(
+				operationClassesFor(toolName, dangerous),
+				operationTargetsFor(args),
+			)
 			contained := containment.AutoApprove() && !denyForcesHuman
 			if !denyForcesHuman && !approvalNeeded(mode, toolName, dangerous, contained) {
 				if contained && mode == ApprovalSmart && hasScope {

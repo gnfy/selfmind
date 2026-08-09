@@ -5,10 +5,17 @@ workspace: isolated
 channel: cli
 require_cassette: false
 
+# The check command must report something non-terminal. Registration runs a
+# preflight whose "observed success" outcome declines to register a watch for
+# work that is already finished, so a command matching the terminal success
+# pattern on its first run can never produce the registration this case
+# asserts. QUEUED matches none of the three v2 patterns, which is exactly the
+# pending state a watch exists for; the patterns themselves are unchanged.
+
 turns:
   - input: >-
       Register a v2 durable external watch named skipped target. Use the check
-      command printf 'SUCCEEDED\n'. The desired intermediate target pattern is
+      command printf 'QUEUED\n'. The desired intermediate target pattern is
       ^PENDING_APPROVAL$, terminal success is ^SUCCEEDED$, terminal failure is
       ^FAILED$, interval is 10 seconds, and total timeout is 60 seconds. Do not
       run a foreground polling loop. Finish this run as waiting_external after

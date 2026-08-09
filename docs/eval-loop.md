@@ -244,6 +244,17 @@ regression shows up in `go test ./...` rather than as a CI-only mystery:
 - **No empty cassette directories.** An empty directory reads as "this case has
   a recording" while replay finds nothing at ordinal `0000`.
 
+### Recording a `workspace: "."` case
+
+Those cases run their tools against the repository itself, so record them from
+a clean checkout of the commit you are going to push — `git archive HEAD | tar
+-x -C <dir>` — and never from a dirty tree. Recorded against a tree carrying
+uncommitted files, the model's answers describe files CI does not have, the
+replayed tool calls return something else, and the case fails on CI while
+passing locally. Recording also gets its own turn budget (a floor well above
+`max_duration_seconds`, which is a replay assertion) because live runs pay full
+model latency — measured at roughly seven times replay.
+
 ## Continuity Suite
 
 `evalcases/continuity/` covers the cross-endpoint north-star scenarios: a task

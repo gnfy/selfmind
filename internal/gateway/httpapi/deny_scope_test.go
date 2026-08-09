@@ -208,3 +208,34 @@ func TestDenyScopeIgnoresWordsBeforeTheMarker(t *testing.T) {
 		t.Fatal("a clause that names no operation must stay unresolved")
 	}
 }
+
+// Single-character Chinese verbs are how people actually write this. Matching
+// only the two-character compounds left the most ordinary "don't touch the
+// code" unclassified, which meant the blanket fail-safe and a run where every
+// tool asked for approval nobody was there to give.
+func TestDenyScopeClassifiesSingleCharacterVerbs(t *testing.T) {
+	cases := []struct {
+		content string
+		want    tools.OperationClass
+	}{
+		{"先给一个优化 CLI 交互体验的三步方案，不要改代码。", tools.OpClassWrite},
+		{"不要写文件", tools.OpClassWrite},
+		{"不要删这个目录", tools.OpClassDelete},
+	}
+	for _, tc := range cases {
+		t.Run(tc.content, func(t *testing.T) {
+			snapshot := denyScopesFor(t, tc.content)
+			if len(snapshot.DenyScopes) != 1 {
+				t.Fatalf("want one prohibition, got %+v", snapshot.DenyScopes)
+			}
+			scope := snapshot.DenyScopes[0]
+			if !scope.Resolved || len(scope.Classes) != 1 || scope.Classes[0] != tc.want {
+				t.Fatalf("classes = %v (resolved=%v), want [%s]", scope.Classes, scope.Resolved, tc.want)
+			}
+			// A plan-only turn touches nothing writable, so it must run.
+			if snapshot.DenyBlocks([]tools.OperationClass{tools.OpClassExecInTurn}, []string{"ls"}) {
+				t.Fatal("a write prohibition must not block a read-only exec probe")
+			}
+		})
+	}
+}

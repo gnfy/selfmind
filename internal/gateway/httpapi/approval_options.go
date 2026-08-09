@@ -200,8 +200,12 @@ var denyClassWords = []struct {
 	words   []string
 	classes []tools.OperationClass
 }{
-	{[]string{"修改", "改动", "更改", "编辑", "写入", "覆盖", "modify", "edit", "write", "overwrite", "change"}, []tools.OperationClass{tools.OpClassWrite}},
-	{[]string{"删除", "移除", "rm ", "delete", "remove"}, []tools.OperationClass{tools.OpClassDelete}},
+	// Single-character Chinese verbs matter: "不要改代码" and "不要写文件" are
+	// how people actually phrase this, and matching only the two-character
+	// compounds left both unclassified — which meant the blanket fail-safe, so
+	// the most ordinary "don't touch the code" blocked every tool in the run.
+	{[]string{"修改", "改动", "更改", "改", "编辑", "写入", "写", "覆盖", "modify", "edit", "write", "overwrite", "change"}, []tools.OperationClass{tools.OpClassWrite}},
+	{[]string{"删除", "移除", "删", "rm ", "delete", "remove"}, []tools.OperationClass{tools.OpClassDelete}},
 	{[]string{"执行", "运行", "跑", "调用命令", "run", "rerun", "re-run", "execute", "invoke"}, []tools.OperationClass{tools.OpClassExec}},
 	{[]string{"联网", "下载", "上传", "访问网络", "network", "download", "upload", "curl", "fetch"}, []tools.OperationClass{tools.OpClassNetwork}},
 }

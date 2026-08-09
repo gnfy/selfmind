@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -257,7 +258,7 @@ func TestExecuteAcceptsEveryRequestShape(t *testing.T) {
 		Timeout: 20 * time.Second, ToolProfile: ToolProfile{Class: ToolExecutionStandard},
 	}, nil)
 	if err != nil || !strings.Contains(shell.Output, "shell-shape") {
-		t.Fatalf("shell request failed: %v (%q)", err, shell.Output)
+		t.Fatalf("shell request did not produce its output\n%s", describeExecution(shell, err))
 	}
 	if shell.Plan.Version != SandboxPlanVersion || shell.Plan.Mode == "" {
 		t.Fatalf("every execution must produce a plan: %+v", shell.Plan)
@@ -269,7 +270,7 @@ func TestExecuteAcceptsEveryRequestShape(t *testing.T) {
 		Timeout: 20 * time.Second, ToolProfile: ToolProfile{Class: ToolExecutionStandard},
 	}, nil)
 	if err != nil || !strings.Contains(argv.Output, "argv-shape") {
-		t.Fatalf("argv request failed: %v (%q)", err, argv.Output)
+		t.Fatalf("argv request did not produce its output\n%s", describeExecution(argv, err))
 	}
 
 	durable, err := Execute(context.Background(), ExecutionRequest{
@@ -280,6 +281,32 @@ func TestExecuteAcceptsEveryRequestShape(t *testing.T) {
 		ToolProfile: ToolProfile{Class: ToolExecutionStandard},
 	}, nil)
 	if err != nil || !strings.Contains(durable.Output, "durable-shape") {
-		t.Fatalf("durable request failed: %v (%q)", err, durable.Output)
+		t.Fatalf("durable request did not produce its output\n%s", describeExecution(durable, err))
 	}
+}
+
+// describeExecution renders everything Execute reports about one run. The
+// original assertion printed only the error and the output, so a CI failure
+// where err was nil and output was empty said nothing at all about WHY: not
+// the exit code, not whether the sandbox was used or escaped, not whether
+// recovery ran. Every field below is already on ExecutionResult; the test just
+// was not showing them.
+func describeExecution(result ExecutionResult, err error) string {
+	return fmt.Sprintf(
+		"  err:                %v\n"+
+			"  exit_code:          %d\n"+
+			"  output (%3d bytes): %q\n"+
+			"  failure_class:      %q\n"+
+			"  plan.version:       %d\n"+
+			"  plan.mode:          %q\n"+
+			"  host_escape_reason: %q\n"+
+			"  recovery_attempted: %v\n"+
+			"  recovery_outcome:   %q\n"+
+			"  profiles_matched:   %v\n"+
+			"  scratch_bytes:      %d\n"+
+			"  sandbox_available:  %v",
+		err, result.ExitCode, len(result.Output), result.Output, result.FailureClass,
+		result.Plan.Version, result.Plan.Mode, result.HostEscapeReason,
+		result.RecoveryAttempted, result.RecoveryOutcome, result.ProfilesMatched,
+		result.ScratchBytes, ExecSandboxAvailable())
 }

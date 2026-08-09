@@ -57,6 +57,15 @@ jobs:
         # replayed than required (so the gate can never quietly verify ~0 cases).
         env:
           SELFMIND_EVAL_MIN_CASES: "3"
+          # SELFMIND_EVAL_MAX_CASE_SECONDS can cap the gate by a case's
+          # declared max_duration_seconds. It is deliberately NOT set here.
+          # That field is an author-chosen ceiling, not a measure of replay
+          # cost: continuity_resume declares 420s and replays in 1s, while the
+          # genuinely slow case declares 540s because it really does run the
+          # test suite. Filtering on it drops fast, high-value cases and keeps
+          # the slow one. The whole step is 64s for 32 cases, and the tool-heavy
+          # cases are exactly the ones that surface races a single machine never
+          # reproduces, so the coverage is worth the minute.
         run: go run ./cmd/selfmind selfcheck --skip-go
 
   macos:

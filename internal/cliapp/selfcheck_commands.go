@@ -172,7 +172,18 @@ func (a *App) selfcheckEval(root string) bool {
 		fmt.Fprintf(a.stdout, "  no eval cases: %v\n", err)
 		return true
 	}
-	passed, failed, skipped, replayed := 0, 0, 0, 0
+	// A duration ceiling lets CI run the fast cases and leave the long ones to
+	// the local loop. Long cases are the ones whose value is mostly model
+	// behaviour, and their replay cost is real: skipping them keeps the shared
+	// gate quick without giving up the race and environment coverage that only
+	// a different machine provides. The count is reported, never silent.
+	maxCaseSeconds := 0
+	if v := strings.TrimSpace(os.Getenv("SELFMIND_EVAL_MAX_CASE_SECONDS")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			maxCaseSeconds = n
+		}
+	}
+	passed, failed, skipped, replayed, tooLong := 0, 0, 0, 0, 0
 	for _, file := range files {
 		c, err := selfeval.LoadCase(file)
 		if err != nil {
@@ -191,6 +202,14 @@ func (a *App) selfcheckEval(root string) bool {
 			skipped++
 			continue
 		}
+		// Ordering matters: the cassette check runs first so "no cassette" stays
+		// an accurate count, and the duration ceiling only ever reports cases
+		// that COULD have run here. A mandatory case is never dropped by a cost
+		// policy.
+		if maxCaseSeconds > 0 && c.Expect.MaxDurationSeconds > maxCaseSeconds && !c.RequireCassette {
+			tooLong++
+			continue
+		}
 		replayed++
 		result, err := selfeval.RunCaseFile(a.ctx, file, selfeval.RunOptions{ConfigPath: a.configPath})
 		if err != nil {
@@ -207,6 +226,9 @@ func (a *App) selfcheckEval(root string) bool {
 		}
 	}
 	fmt.Fprintf(a.stdout, "  summary: %d passed, %d failed, %d skipped (no cassette), %d replayed\n", passed, failed, skipped, replayed)
+	if tooLong > 0 {
+		fmt.Fprintf(a.stdout, "  note: %d case(s) skipped by SELFMIND_EVAL_MAX_CASE_SECONDS=%d; run `selfmind selfcheck` locally to cover them\n", tooLong, maxCaseSeconds)
+	}
 	if passed == 0 && failed == 0 {
 		fmt.Fprintln(a.stdout, "  note: no recorded cassettes yet; record with `selfmind eval run --live` then commit cassettes locally")
 	}

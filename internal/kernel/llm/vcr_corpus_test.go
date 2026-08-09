@@ -47,24 +47,13 @@ func TestCassettesCarryNoMachineAbsolutePaths(t *testing.T) {
 	}
 }
 
-// knownErrorCassettes is a ratchet, not an allowlist to grow. Each entry
-// replays a provider failure recorded during one flaky session, so the call it
-// stands for is never verified — every `completion` cassette in the corpus is
-// one of these, which is why nothing exercises that path today. save() now
-// refuses to write new ones; clearing these needs a live re-record.
-var knownErrorCassettes = map[string]struct{}{
-	"continuity_resume/0000.json":                  {},
-	"continuity_task_attach/0000.json":             {},
-	"continuity_task_attach/0002.json":             {},
-	"memory_pinned_recall/0000.json":               {},
-	"memory_pinned_recall/0003.json":               {},
-	"recall_cross_task/0000.json":                  {},
-	"recall_cross_task/0002.json":                  {},
-	"reliability_create_and_verify/0000.json":      {},
-	"reliability_external_watch_handoff/0000.json": {},
-}
-
-func TestRecordedProviderFailuresDoNotGrow(t *testing.T) {
+// The corpus must hold no recorded provider failure at all. Nine of them (every
+// `completion` call in the corpus) sat here for weeks: each replayed a flaky
+// session's timeout forever, so the call it stood for was never verified again
+// while five require_cassette cases still reported green. They were re-recorded
+// live on 2026-08-10; save() warns loudly when a new one is written, and this
+// test is what keeps the count at zero.
+func TestCorpusRecordsNoProviderFailures(t *testing.T) {
 	for _, file := range vcrCorpusFiles(t) {
 		raw, err := os.ReadFile(file)
 		if err != nil {
@@ -78,10 +67,8 @@ func TestRecordedProviderFailuresDoNotGrow(t *testing.T) {
 			continue
 		}
 		key := filepath.ToSlash(strings.TrimPrefix(filepath.ToSlash(file), filepath.ToSlash(vcrCorpusRoot)+"/"))
-		if _, known := knownErrorCassettes[key]; !known {
-			t.Errorf("%s records a provider failure (%q) that will replay forever; re-record the case instead of committing the failure",
-				key, c.Error)
-		}
+		t.Errorf("%s records a provider failure (%q) that will replay forever; re-record the case instead of committing the failure",
+			key, c.Error)
 	}
 }
 

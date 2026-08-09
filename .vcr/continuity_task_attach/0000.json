@@ -1,4 +1,4 @@
 {
   "method": "completion",
-  "error": "anthropic request failed: Post \"https://api.kimi.com/coding/v1/messages\": context deadline exceeded"
+  "completion": "配置加载重构 配置管理重构 配置初始化优化 配置加载方案 配置重构策略"
 }

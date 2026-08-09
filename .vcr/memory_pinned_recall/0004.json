@@ -2,12 +2,6 @@
   "method": "stream",
   "events": [
     {
-      "usage": {
-        "input_tokens": 15917,
-        "output_tokens": 0
-      }
-    },
-    {
       "content": "ACK"
     },
     {
@@ -26,12 +20,11 @@
       "content": "2"
     },
     {
-      "finish_reason": "end_turn"
-    },
-    {
       "usage": {
-        "input_tokens": 0,
-        "output_tokens": 89
+        "input_tokens": 10291,
+        "output_tokens": 10,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0
       }
     }
   ]

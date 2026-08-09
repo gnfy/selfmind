@@ -17,7 +17,7 @@
       "content": " watch"
     },
     {
-      "content": " “"
+      "content": " **"
     },
     {
       "content": "CI"
@@ -26,36 +26,164 @@
       "content": " completion"
     },
     {
-      "content": "”"
+      "content": "**"
     },
     {
-      "content": " and"
+      "content": ":\n\n"
     },
     {
-      "content": " marked"
+      "content": "-"
     },
     {
-      "content": " the"
+      "content": " Command"
     },
     {
-      "content": " run"
+      "content": ":"
     },
     {
-      "content": " as"
+      "content": " `"
     },
     {
-      "content": " waiting"
+      "content": "printf"
+    },
+    {
+      "content": " '"
+    },
+    {
+      "content": "P"
+    },
+    {
+      "content": "ENDING"
+    },
+    {
+      "content": "\\n"
+    },
+    {
+      "content": "'"
+    },
+    {
+      "content": "`\n"
+    },
+    {
+      "content": "-"
+    },
+    {
+      "content": " Success"
+    },
+    {
+      "content": " condition"
+    },
+    {
+      "content": ":"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "SU"
+    },
+    {
+      "content": "CCEEDED"
+    },
+    {
+      "content": "`\n"
+    },
+    {
+      "content": "-"
+    },
+    {
+      "content": " Poll"
+    },
+    {
+      "content": " interval"
+    },
+    {
+      "content": ":"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "5"
+    },
+    {
+      "content": " seconds"
+    },
+    {
+      "content": "\n"
+    },
+    {
+      "content": "-"
+    },
+    {
+      "content": " Timeout"
+    },
+    {
+      "content": ":"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "60"
+    },
+    {
+      "content": " seconds"
+    },
+    {
+      "content": "\n"
+    },
+    {
+      "content": "-"
+    },
+    {
+      "content": " Status"
+    },
+    {
+      "content": ":"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "waiting"
     },
     {
       "content": "_external"
+    },
+    {
+      "content": "`\n\n"
+    },
+    {
+      "content": "The"
+    },
+    {
+      "content": " polling"
+    },
+    {
+      "content": " command"
+    },
+    {
+      "content": " was"
+    },
+    {
+      "content": " not"
+    },
+    {
+      "content": " executed"
+    },
+    {
+      "content": " directly"
     },
     {
       "content": "."
     },
     {
       "usage": {
-        "input_tokens": 5328,
-        "output_tokens": 21
+        "input_tokens": 6088,
+        "output_tokens": 63,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0
       }
     }
   ]

@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"runtime"
 	"strings"
 	"testing"
@@ -83,7 +84,12 @@ func TestExternalWatchCompletesOutsideAgentRun(t *testing.T) {
 	daemon.runExternalWatchPass(ctx)
 	counts, err := store.CountExternalWatchesByStatus(ctx, identity.TenantID, identity.PersonID)
 	if err != nil || counts[control.ExternalWatchSucceeded] != 1 {
-		t.Fatalf("watch counts = %+v err=%v", counts, err)
+		// The counts alone only say the watch did not succeed. Whether the
+		// check ran at all, what it decided, and how many attempts it made are
+		// all on the row, and without them a CI-only failure reads as
+		// "map[running:1] err=<nil>" and names nothing.
+		t.Fatalf("watch did not complete in one pass: counts=%+v err=%v\n%s",
+			counts, err, describeWatch(ctx, t, store, identity.TenantID, watch.ID))
 	}
 	updated, err := store.GetTask(ctx, identity.TenantID, task.ID)
 	if err != nil || updated == nil {
@@ -445,4 +451,33 @@ func TestExternalWatchDoesNotMatchPatternsForDefectiveCheck(t *testing.T) {
 	if queued != nil && !strings.Contains(queued.Content, "real state is unknown") {
 		t.Fatalf("finalization prompt let a blocked check imply a verdict: %q", queued.Content)
 	}
+}
+
+// describeWatch renders the durable row behind a watch assertion. A watch that
+// stays "running" has already recorded why: the checker/operation/verification
+// verdicts, the attempt count, and when the next check was due.
+func describeWatch(ctx context.Context, t *testing.T, store *control.Store, tenantID, watchID string) string {
+	t.Helper()
+	row, err := store.GetExternalWatch(ctx, tenantID, watchID)
+	if err != nil || row == nil {
+		return fmt.Sprintf("  <watch row unavailable: %v>", err)
+	}
+	return fmt.Sprintf(
+		"  status:              %q\n"+
+			"  last_output:         %q\n"+
+			"  last_error:          %q\n"+
+			"  checker_status:      %q\n"+
+			"  operation_status:    %q\n"+
+			"  verification_status: %q\n"+
+			"  attempts:            %d\n"+
+			"  command:             %q\n"+
+			"  success_pattern:     %q\n"+
+			"  cwd:                 %q\n"+
+			"  next_check_in:       %s\n"+
+			"  timeout_in:          %s",
+		row.Status, row.LastOutput, row.LastError,
+		row.CheckerStatus, row.OperationStatus, row.VerificationStatus,
+		row.Attempts, row.Command, row.SuccessPattern, row.CWD,
+		time.Until(row.NextCheckAt).Round(time.Millisecond),
+		time.Until(row.TimeoutAt).Round(time.Millisecond))
 }

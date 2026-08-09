@@ -578,9 +578,19 @@ func runCommandStreaming(ctx context.Context, cmd commandRunner, command, toolNa
 
 	done := make(chan error, 1)
 	go func() {
-		err := cmd.Wait()
+		// Drain BEFORE reaping. os/exec closes the pipes returned by
+		// StdoutPipe/StderrPipe as soon as the process exits, so calling Wait
+		// while the scanners are still reading is documented as incorrect: the
+		// close races the in-flight read and the output is truncated or lost
+		// entirely. A short command that writes once and exits — `printf READY`
+		// — has the widest window, and on a contended machine it surfaced as a
+		// successful run with empty output and a nil error, which then read as
+		// "the command produced nothing" to every caller above.
+		//
+		// This does not change how long the goroutine blocks: it already waited
+		// on both the process and the scanners before signalling.
 		wg.Wait()
-		done <- err
+		done <- cmd.Wait()
 	}()
 
 	heartbeat := 5 * time.Second

@@ -1,0 +1,175 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "content": "我"
+    },
+    {
+      "content": "会"
+    },
+    {
+      "content": "对"
+    },
+    {
+      "content": "照"
+    },
+    {
+      "content": "唯一"
+    },
+    {
+      "content": "优"
+    },
+    {
+      "content": "先"
+    },
+    {
+      "content": "级"
+    },
+    {
+      "content": "清"
+    },
+    {
+      "content": "单"
+    },
+    {
+      "content": "与"
+    },
+    {
+      "content": "实际"
+    },
+    {
+      "content": "热点"
+    },
+    {
+      "content": "，"
+    },
+    {
+      "content": "避免"
+    },
+    {
+      "content": "把"
+    },
+    {
+      "content": "低"
+    },
+    {
+      "content": "价值"
+    },
+    {
+      "content": "缺"
+    },
+    {
+      "content": "口"
+    },
+    {
+      "content": "误"
+    },
+    {
+      "content": "判"
+    },
+    {
+      "content": "为"
+    },
+    {
+      "content": "首"
+    },
+    {
+      "content": "要"
+    },
+    {
+      "content": "改"
+    },
+    {
+      "content": "进"
+    },
+    {
+      "content": "。"
+    },
+    {
+      "content": "Preparing to run terminal",
+      "event_type": "agent.thinking"
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_hdRPNSEYRfFsQFmKHug9b68M",
+          "Function": "terminal",
+          "Args": "{\"command\":\"sed -n '430,530p' docs/STATUS.md; printf '\\\\n-- status 530-640 --\\\\n'; sed -n '530,640p' docs/STATUS.md\",\"cwd\":\"{{SELFMIND_VCR_WORKSPACE}}\",\"timeout\":20}"
+        }
+      ]
+    },
+    {
+      "content": "Preparing to run read_file",
+      "event_type": "agent.thinking"
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_RDDdV3MOtdv4ib5q6bHCBAfG",
+          "Function": "read_file",
+          "Args": "{\"path\":\"{{SELFMIND_VCR_WORKSPACE}}/docs/identity-continuity.md\",\"limit\":320}"
+        }
+      ]
+    },
+    {
+      "content": "Preparing to run search_files",
+      "event_type": "agent.thinking"
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_zzaSGDgQU2fh7YX20PraPTYu",
+          "Function": "search_files",
+          "Args": "{\"path\":\"{{SELFMIND_VCR_WORKSPACE}}/internal/cliapp\",\"file_glob\":\"*.go\",\"pattern\":\"func Run\\\\(|func run|gateway run|NewApp|Init\",\"limit\":80}"
+        }
+      ]
+    },
+    {
+      "content": "Preparing to run search_files",
+      "event_type": "agent.thinking"
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_a28y9G5xzfDDA7X06TNo0jSJ",
+          "Function": "search_files",
+          "Args": "{\"path\":\"{{SELFMIND_VCR_WORKSPACE}}/internal/app\",\"file_glob\":\"*.go\",\"pattern\":\"func New|func Init|type App|InitTools|NewAgent\",\"limit\":100}"
+        }
+      ]
+    },
+    {
+      "content": "Preparing to run search_files",
+      "event_type": "agent.thinking"
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_oesnVSnTAzWkgKpawo0p20hv",
+          "Function": "search_files",
+          "Args": "{\"path\":\"{{SELFMIND_VCR_WORKSPACE}}/internal/gateway/httpapi\",\"file_glob\":\"*.go\",\"pattern\":\"type Server|type RunCoordinator|func NewServer|func \\\\(.*\\\\) Handle|func \\\\(.*\\\\) Start\",\"limit\":100}"
+        }
+      ]
+    },
+    {
+      "content": "Preparing to run terminal",
+      "event_type": "agent.thinking"
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_Ll6xwYVjdKHe2q6JQKhzuDji",
+          "Function": "terminal",
+          "Args": "{\"command\":\"printf '%s\\\\n' '-- test topology --'; find . -name '*_test.go' -type f | wc -l; find evalcases -name '*.yaml' -type f | wc -l; printf '%s\\\\n' '-- internal subpackages --'; go list ./internal/... 2\u003e/dev/null | sed -n '1,220p'\",\"cwd\":\"{{SELFMIND_VCR_WORKSPACE}}\",\"timeout\":30}"
+        }
+      ]
+    },
+    {
+      "usage": {
+        "input_tokens": 32209,
+        "output_tokens": 850,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0
+      }
+    }
+  ]
+}

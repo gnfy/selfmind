@@ -1,0 +1,125 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "content": "结"
+    },
+    {
+      "content": "论"
+    },
+    {
+      "content": "已"
+    },
+    {
+      "content": "稳定"
+    },
+    {
+      "content": "："
+    },
+    {
+      "content": "核心"
+    },
+    {
+      "content": "前"
+    },
+    {
+      "content": "台"
+    },
+    {
+      "content": "链"
+    },
+    {
+      "content": "路"
+    },
+    {
+      "content": "已"
+    },
+    {
+      "content": "统一"
+    },
+    {
+      "content": "，"
+    },
+    {
+      "content": "最大"
+    },
+    {
+      "content": "缺"
+    },
+    {
+      "content": "口"
+    },
+    {
+      "content": "是"
+    },
+    {
+      "content": "委"
+    },
+    {
+      "content": "派"
+    },
+    {
+      "content": "子"
+    },
+    {
+      "content": "代理"
+    },
+    {
+      "content": "仍"
+    },
+    {
+      "content": "绕"
+    },
+    {
+      "content": "过"
+    },
+    {
+      "content": " runtime"
+    },
+    {
+      "content": "、"
+    },
+    {
+      "content": "只"
+    },
+    {
+      "content": "支持"
+    },
+    {
+      "content": "两"
+    },
+    {
+      "content": "家"
+    },
+    {
+      "content": "服务"
+    },
+    {
+      "content": "商"
+    },
+    {
+      "content": "。"
+    },
+    {
+      "content": "Preparing to run update_plan",
+      "event_type": "agent.thinking"
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_LXaqvSd1Iv2TUk4A7MkFbJIF",
+          "Function": "update_plan",
+          "Args": "{\"explanation\":\"已完成设计、实现边界、例外路径与聚焦测试核对。\",\"plan\":[{\"step\":\"阅读状态文档与 provider runtime 设计文档\",\"status\":\"completed\"},{\"step\":\"追踪多服务商解析、认证、路由与传输实现\",\"status\":\"completed\"},{\"step\":\"检查相关测试并归纳最需要补强的一点\",\"status\":\"completed\"}]}"
+        }
+      ]
+    },
+    {
+      "usage": {
+        "input_tokens": 57341,
+        "output_tokens": 757,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0
+      }
+    }
+  ]
+}

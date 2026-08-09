@@ -1,0 +1,892 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "content": "###"
+    },
+    {
+      "content": " Self"
+    },
+    {
+      "content": "Mind"
+    },
+    {
+      "content": " CLI"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "交"
+    },
+    {
+      "content": "互"
+    },
+    {
+      "content": "体验"
+    },
+    {
+      "content": "三"
+    },
+    {
+      "content": "步"
+    },
+    {
+      "content": "优化"
+    },
+    {
+      "content": "方案"
+    },
+    {
+      "content": "\n\n"
+    },
+    {
+      "content": "1"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": " **"
+    },
+    {
+      "content": "统一"
+    },
+    {
+      "content": "信息"
+    },
+    {
+      "content": "层"
+    },
+    {
+      "content": "级"
+    },
+    {
+      "content": "与"
+    },
+    {
+      "content": "输出"
+    },
+    {
+      "content": "格式"
+    },
+    {
+      "content": "**"
+    },
+    {
+      "content": "  \n"
+    },
+    {
+      "content": "  "
+    },
+    {
+      "content": " 将"
+    },
+    {
+      "content": " CLI"
+    },
+    {
+      "content": " 输出"
+    },
+    {
+      "content": "明确"
+    },
+    {
+      "content": "分"
+    },
+    {
+      "content": "为"
+    },
+    {
+      "content": "："
+    },
+    {
+      "content": "用户"
+    },
+    {
+      "content": "输入"
+    },
+    {
+      "content": "、"
+    },
+    {
+      "content": "执行"
+    },
+    {
+      "content": "进"
+    },
+    {
+      "content": "度"
+    },
+    {
+      "content": "、"
+    },
+    {
+      "content": "工具"
+    },
+    {
+      "content": "调用"
+    },
+    {
+      "content": "、"
+    },
+    {
+      "content": "审批"
+    },
+    {
+      "content": "/"
+    },
+    {
+      "content": "澄"
+    },
+    {
+      "content": "清"
+    },
+    {
+      "content": "、"
+    },
+    {
+      "content": "最终"
+    },
+    {
+      "content": "结果"
+    },
+    {
+      "content": "与"
+    },
+    {
+      "content": "错误"
+    },
+    {
+      "content": "提示"
+    },
+    {
+      "content": "。"
+    },
+    {
+      "content": "统一"
+    },
+    {
+      "content": "颜色"
+    },
+    {
+      "content": "、"
+    },
+    {
+      "content": "图"
+    },
+    {
+      "content": "标"
+    },
+    {
+      "content": "和"
+    },
+    {
+      "content": "措"
+    },
+    {
+      "content": "辞"
+    },
+    {
+      "content": "，"
+    },
+    {
+      "content": "默认"
+    },
+    {
+      "content": "隐藏"
+    },
+    {
+      "content": "协议"
+    },
+    {
+      "content": " JSON"
+    },
+    {
+      "content": " 与"
+    },
+    {
+      "content": "冗"
+    },
+    {
+      "content": "余"
+    },
+    {
+      "content": "调"
+    },
+    {
+      "content": "试"
+    },
+    {
+      "content": "信息"
+    },
+    {
+      "content": "，"
+    },
+    {
+      "content": "长"
+    },
+    {
+      "content": "内容"
+    },
+    {
+      "content": "进入"
+    },
+    {
+      "content": "分页"
+    },
+    {
+      "content": "视"
+    },
+    {
+      "content": "图"
+    },
+    {
+      "content": "，"
+    },
+    {
+      "content": "保证"
+    },
+    {
+      "content": "输出"
+    },
+    {
+      "content": "清"
+    },
+    {
+      "content": "晰"
+    },
+    {
+      "content": "、"
+    },
+    {
+      "content": "紧"
+    },
+    {
+      "content": "凑"
+    },
+    {
+      "content": "且"
+    },
+    {
+      "content": " UTF"
+    },
+    {
+      "content": "-"
+    },
+    {
+      "content": "8"
+    },
+    {
+      "content": " 安"
+    },
+    {
+      "content": "全"
+    },
+    {
+      "content": "。\n\n"
+    },
+    {
+      "content": "2"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": " **"
+    },
+    {
+      "content": "优化"
+    },
+    {
+      "content": "任务"
+    },
+    {
+      "content": "反馈"
+    },
+    {
+      "content": "与"
+    },
+    {
+      "content": "交"
+    },
+    {
+      "content": "互"
+    },
+    {
+      "content": "控制"
+    },
+    {
+      "content": "**"
+    },
+    {
+      "content": "  \n"
+    },
+    {
+      "content": "  "
+    },
+    {
+      "content": " 对"
+    },
+    {
+      "content": "排"
+    },
+    {
+      "content": "队"
+    },
+    {
+      "content": "、"
+    },
+    {
+      "content": "执行"
+    },
+    {
+      "content": "、"
+    },
+    {
+      "content": "等待"
+    },
+    {
+      "content": "审批"
+    },
+    {
+      "content": "、"
+    },
+    {
+      "content": "等待"
+    },
+    {
+      "content": "外"
+    },
+    {
+      "content": "部"
+    },
+    {
+      "content": "结果"
+    },
+    {
+      "content": "、"
+    },
+    {
+      "content": "失败"
+    },
+    {
+      "content": "和"
+    },
+    {
+      "content": "完成"
+    },
+    {
+      "content": "等"
+    },
+    {
+      "content": "状态"
+    },
+    {
+      "content": "提供"
+    },
+    {
+      "content": "即时"
+    },
+    {
+      "content": "且"
+    },
+    {
+      "content": "可"
+    },
+    {
+      "content": "操作"
+    },
+    {
+      "content": "的"
+    },
+    {
+      "content": "提示"
+    },
+    {
+      "content": "；"
+    },
+    {
+      "content": "让"
+    },
+    {
+      "content": " `/"
+    },
+    {
+      "content": "status"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": "、"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": "/"
+    },
+    {
+      "content": "tasks"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": "、"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": "/"
+    },
+    {
+      "content": "resume"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": "、"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": "/"
+    },
+    {
+      "content": "stop"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": "、"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": "/"
+    },
+    {
+      "content": "approve"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " 等"
+    },
+    {
+      "content": "命"
+    },
+    {
+      "content": "令"
+    },
+    {
+      "content": "具"
+    },
+    {
+      "content": "备"
+    },
+    {
+      "content": "一致"
+    },
+    {
+      "content": "的"
+    },
+    {
+      "content": "帮助"
+    },
+    {
+      "content": "、"
+    },
+    {
+      "content": "编号"
+    },
+    {
+      "content": "引用"
+    },
+    {
+      "content": "和"
+    },
+    {
+      "content": "下一"
+    },
+    {
+      "content": "步"
+    },
+    {
+      "content": "建议"
+    },
+    {
+      "content": "，"
+    },
+    {
+      "content": "避免"
+    },
+    {
+      "content": "用户"
+    },
+    {
+      "content": "不知道"
+    },
+    {
+      "content": "“"
+    },
+    {
+      "content": "正在"
+    },
+    {
+      "content": "发生"
+    },
+    {
+      "content": "什么"
+    },
+    {
+      "content": "”"
+    },
+    {
+      "content": "或"
+    },
+    {
+      "content": "“"
+    },
+    {
+      "content": "接"
+    },
+    {
+      "content": "下来"
+    },
+    {
+      "content": "做"
+    },
+    {
+      "content": "什么"
+    },
+    {
+      "content": "”。\n\n"
+    },
+    {
+      "content": "3"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": " **"
+    },
+    {
+      "content": "建立"
+    },
+    {
+      "content": "场"
+    },
+    {
+      "content": "景"
+    },
+    {
+      "content": "化"
+    },
+    {
+      "content": "验证"
+    },
+    {
+      "content": "与"
+    },
+    {
+      "content": "迭"
+    },
+    {
+      "content": "代"
+    },
+    {
+      "content": "闭"
+    },
+    {
+      "content": "环"
+    },
+    {
+      "content": "**"
+    },
+    {
+      "content": "  \n"
+    },
+    {
+      "content": "  "
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "选"
+    },
+    {
+      "content": "取"
+    },
+    {
+      "content": "首次"
+    },
+    {
+      "content": "启动"
+    },
+    {
+      "content": "、"
+    },
+    {
+      "content": "长"
+    },
+    {
+      "content": "任务"
+    },
+    {
+      "content": "、"
+    },
+    {
+      "content": "工具"
+    },
+    {
+      "content": "失败"
+    },
+    {
+      "content": "、"
+    },
+    {
+      "content": "审批"
+    },
+    {
+      "content": "、"
+    },
+    {
+      "content": "断"
+    },
+    {
+      "content": "线"
+    },
+    {
+      "content": "恢复"
+    },
+    {
+      "content": "、"
+    },
+    {
+      "content": "跨"
+    },
+    {
+      "content": "端"
+    },
+    {
+      "content": "续"
+    },
+    {
+      "content": "接"
+    },
+    {
+      "content": "等"
+    },
+    {
+      "content": "高"
+    },
+    {
+      "content": "频"
+    },
+    {
+      "content": "场"
+    },
+    {
+      "content": "景"
+    },
+    {
+      "content": "，"
+    },
+    {
+      "content": "记录"
+    },
+    {
+      "content": "完成"
+    },
+    {
+      "content": "时间"
+    },
+    {
+      "content": "、"
+    },
+    {
+      "content": "无"
+    },
+    {
+      "content": "效"
+    },
+    {
+      "content": "输入"
+    },
+    {
+      "content": "次数"
+    },
+    {
+      "content": "、"
+    },
+    {
+      "content": "错误"
+    },
+    {
+      "content": "恢复"
+    },
+    {
+      "content": "率"
+    },
+    {
+      "content": "和"
+    },
+    {
+      "content": "用户"
+    },
+    {
+      "content": "等待"
+    },
+    {
+      "content": "感"
+    },
+    {
+      "content": "知"
+    },
+    {
+      "content": "；"
+    },
+    {
+      "content": "为"
+    },
+    {
+      "content": "关键"
+    },
+    {
+      "content": "交"
+    },
+    {
+      "content": "互"
+    },
+    {
+      "content": "建立"
+    },
+    {
+      "content": "快"
+    },
+    {
+      "content": "照"
+    },
+    {
+      "content": "或"
+    },
+    {
+      "content": " eval"
+    },
+    {
+      "content": " 用"
+    },
+    {
+      "content": "例"
+    },
+    {
+      "content": "，再"
+    },
+    {
+      "content": "按"
+    },
+    {
+      "content": "影响"
+    },
+    {
+      "content": "与"
+    },
+    {
+      "content": "成本"
+    },
+    {
+      "content": "排序"
+    },
+    {
+      "content": "实施"
+    },
+    {
+      "content": "，"
+    },
+    {
+      "content": "优"
+    },
+    {
+      "content": "先"
+    },
+    {
+      "content": "解决"
+    },
+    {
+      "content": "阻"
+    },
+    {
+      "content": "断"
+    },
+    {
+      "content": "性"
+    },
+    {
+      "content": "和"
+    },
+    {
+      "content": "高"
+    },
+    {
+      "content": "频"
+    },
+    {
+      "content": "问题"
+    },
+    {
+      "content": "。\n\n"
+    },
+    {
+      "content": "本"
+    },
+    {
+      "content": "轮"
+    },
+    {
+      "content": "仅"
+    },
+    {
+      "content": "提供"
+    },
+    {
+      "content": "方案"
+    },
+    {
+      "content": "，"
+    },
+    {
+      "content": "未"
+    },
+    {
+      "content": "修改"
+    },
+    {
+      "content": "任何"
+    },
+    {
+      "content": "代码"
+    },
+    {
+      "content": "。"
+    },
+    {
+      "usage": {
+        "input_tokens": 10333,
+        "output_tokens": 374,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0
+      }
+    }
+  ]
+}

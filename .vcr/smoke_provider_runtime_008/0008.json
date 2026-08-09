@@ -1,0 +1,155 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "content": "这些"
+    },
+    {
+      "content": "例"
+    },
+    {
+      "content": "外"
+    },
+    {
+      "content": "不"
+    },
+    {
+      "content": "只"
+    },
+    {
+      "content": "在"
+    },
+    {
+      "content": "遗"
+    },
+    {
+      "content": "留"
+    },
+    {
+      "content": "回"
+    },
+    {
+      "content": "退"
+    },
+    {
+      "content": "，还"
+    },
+    {
+      "content": "进入"
+    },
+    {
+      "content": " delegation"
+    },
+    {
+      "content": " 和"
+    },
+    {
+      "content": " Open"
+    },
+    {
+      "content": "AI"
+    },
+    {
+      "content": "-compatible"
+    },
+    {
+      "content": " transport"
+    },
+    {
+      "content": "；"
+    },
+    {
+      "content": "我"
+    },
+    {
+      "content": "核"
+    },
+    {
+      "content": "对"
+    },
+    {
+      "content": "影响"
+    },
+    {
+      "content": "范围"
+    },
+    {
+      "content": "后"
+    },
+    {
+      "content": "给"
+    },
+    {
+      "content": "出"
+    },
+    {
+      "content": "结"
+    },
+    {
+      "content": "论"
+    },
+    {
+      "content": "。"
+    },
+    {
+      "content": "Preparing to run read_file",
+      "event_type": "agent.thinking"
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_h3yIFQjZzDAEvYqOwOomwdgd",
+          "Function": "read_file",
+          "Args": "{\"path\":\"{{SELFMIND_VCR_WORKSPACE}}/internal/app/delegation.go\",\"limit\":280}"
+        }
+      ]
+    },
+    {
+      "content": "Preparing to run read_file",
+      "event_type": "agent.thinking"
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_uni2RjLwDuCdF3PMNwdNAu26",
+          "Function": "read_file",
+          "Args": "{\"path\":\"{{SELFMIND_VCR_WORKSPACE}}/internal/modelruntime/credentials.go\",\"limit\":180}"
+        }
+      ]
+    },
+    {
+      "content": "Preparing to run read_file",
+      "event_type": "agent.thinking"
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_JDxs8Idsin0Gsz7bfynNhzvQ",
+          "Function": "read_file",
+          "Args": "{\"path\":\"{{SELFMIND_VCR_WORKSPACE}}/internal/modelruntime/context_length.go\",\"limit\":180}"
+        }
+      ]
+    },
+    {
+      "content": "Preparing to run verify",
+      "event_type": "agent.thinking"
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_SnqgmtOmrmxNfiTQFADfbp39",
+          "Function": "verify",
+          "Args": "{\"command\":\"GOWORK=off go test ./internal/modelruntime ./internal/kernel/llm ./internal/app\",\"cwd\":\"{{SELFMIND_VCR_WORKSPACE}}\",\"kind\":\"test\",\"timeout\":120,\"execution_class\":\"standard\"}"
+        }
+      ]
+    },
+    {
+      "usage": {
+        "input_tokens": 51880,
+        "output_tokens": 395,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0
+      }
+    }
+  ]
+}

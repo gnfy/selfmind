@@ -1,0 +1,427 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "content": "|"
+    },
+    {
+      "content": " 对"
+    },
+    {
+      "content": "比"
+    },
+    {
+      "content": "项"
+    },
+    {
+      "content": " |"
+    },
+    {
+      "content": " CLI"
+    },
+    {
+      "content": " |"
+    },
+    {
+      "content": " 微信"
+    },
+    {
+      "content": " |\n"
+    },
+    {
+      "content": "|"
+    },
+    {
+      "content": "---"
+    },
+    {
+      "content": "|"
+    },
+    {
+      "content": "---"
+    },
+    {
+      "content": "|"
+    },
+    {
+      "content": "---"
+    },
+    {
+      "content": "|\n"
+    },
+    {
+      "content": "|"
+    },
+    {
+      "content": " 提"
+    },
+    {
+      "content": "示"
+    },
+    {
+      "content": "方式"
+    },
+    {
+      "content": " |"
+    },
+    {
+      "content": " 持"
+    },
+    {
+      "content": "续"
+    },
+    {
+      "content": "展示"
+    },
+    {
+      "content": "流"
+    },
+    {
+      "content": "式"
+    },
+    {
+      "content": "输出"
+    },
+    {
+      "content": "、"
+    },
+    {
+      "content": "工具"
+    },
+    {
+      "content": "调用"
+    },
+    {
+      "content": "和"
+    },
+    {
+      "content": "进"
+    },
+    {
+      "content": "度"
+    },
+    {
+      "content": " |"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "先"
+    },
+    {
+      "content": "发送"
+    },
+    {
+      "content": "一"
+    },
+    {
+      "content": "条"
+    },
+    {
+      "content": "简"
+    },
+    {
+      "content": "短"
+    },
+    {
+      "content": "的"
+    },
+    {
+      "content": "“"
+    },
+    {
+      "content": "正在"
+    },
+    {
+      "content": "处理"
+    },
+    {
+      "content": "”"
+    },
+    {
+      "content": "通知"
+    },
+    {
+      "content": " |\n"
+    },
+    {
+      "content": "|"
+    },
+    {
+      "content": " 更新"
+    },
+    {
+      "content": "频"
+    },
+    {
+      "content": "率"
+    },
+    {
+      "content": " |"
+    },
+    {
+      "content": " 实"
+    },
+    {
+      "content": "时"
+    },
+    {
+      "content": "更新"
+    },
+    {
+      "content": " |"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "仅"
+    },
+    {
+      "content": "在"
+    },
+    {
+      "content": "关键"
+    },
+    {
+      "content": "里"
+    },
+    {
+      "content": "程"
+    },
+    {
+      "content": "碑"
+    },
+    {
+      "content": "、"
+    },
+    {
+      "content": "需"
+    },
+    {
+      "content": "审批"
+    },
+    {
+      "content": "或"
+    },
+    {
+      "content": "完成"
+    },
+    {
+      "content": "时"
+    },
+    {
+      "content": "更新"
+    },
+    {
+      "content": " |\n"
+    },
+    {
+      "content": "|"
+    },
+    {
+      "content": " 内容"
+    },
+    {
+      "content": "粒"
+    },
+    {
+      "content": "度"
+    },
+    {
+      "content": " |"
+    },
+    {
+      "content": " 较"
+    },
+    {
+      "content": "详细"
+    },
+    {
+      "content": "，"
+    },
+    {
+      "content": "便"
+    },
+    {
+      "content": "于"
+    },
+    {
+      "content": "观察"
+    },
+    {
+      "content": "执行"
+    },
+    {
+      "content": "过程"
+    },
+    {
+      "content": " |"
+    },
+    {
+      "content": " 简"
+    },
+    {
+      "content": "洁"
+    },
+    {
+      "content": "，"
+    },
+    {
+      "content": "避免"
+    },
+    {
+      "content": "频"
+    },
+    {
+      "content": "繁"
+    },
+    {
+      "content": "刷"
+    },
+    {
+      "content": "屏"
+    },
+    {
+      "content": " |\n"
+    },
+    {
+      "content": "|"
+    },
+    {
+      "content": " 最"
+    },
+    {
+      "content": "终"
+    },
+    {
+      "content": "结果"
+    },
+    {
+      "content": " |"
+    },
+    {
+      "content": " 在"
+    },
+    {
+      "content": "当前"
+    },
+    {
+      "content": "终"
+    },
+    {
+      "content": "端"
+    },
+    {
+      "content": "会"
+    },
+    {
+      "content": "话"
+    },
+    {
+      "content": "中"
+    },
+    {
+      "content": "直接"
+    },
+    {
+      "content": "输出"
+    },
+    {
+      "content": " |"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "发送"
+    },
+    {
+      "content": "最终"
+    },
+    {
+      "content": "答"
+    },
+    {
+      "content": "复"
+    },
+    {
+      "content": "或"
+    },
+    {
+      "content": "后"
+    },
+    {
+      "content": "续"
+    },
+    {
+      "content": "处理"
+    },
+    {
+      "content": "说明"
+    },
+    {
+      "content": " |\n\n"
+    },
+    {
+      "content": "```"
+    },
+    {
+      "content": "go"
+    },
+    {
+      "content": "\n"
+    },
+    {
+      "content": "type"
+    },
+    {
+      "content": " Work"
+    },
+    {
+      "content": "Notice"
+    },
+    {
+      "content": " struct"
+    },
+    {
+      "content": " {\n"
+    },
+    {
+      "content": "\t"
+    },
+    {
+      "content": "Channel"
+    },
+    {
+      "content": " string"
+    },
+    {
+      "content": "\n"
+    },
+    {
+      "content": "\tMessage"
+    },
+    {
+      "content": " string"
+    },
+    {
+      "content": "\n"
+    },
+    {
+      "content": "}\n"
+    },
+    {
+      "content": "```"
+    },
+    {
+      "usage": {
+        "input_tokens": 10350,
+        "output_tokens": 144,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0
+      }
+    }
+  ]
+}

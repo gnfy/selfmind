@@ -263,6 +263,20 @@ func cassetteMiss(path, method string, recorded *cassette, loadErr error) error 
 }
 
 func (v *vcrProvider) save(ctx context.Context, path string, c cassette) {
+	if strings.TrimSpace(c.Error) != "" {
+		// Recording the failure is REQUIRED: cassettes replay by ordinal, so a
+		// hole here would desynchronize every later call in the case. Say so
+		// loudly instead. A committed failure cassette replays that failure
+		// forever, which is how every `completion` call in the corpus ended up
+		// standing for a flaky session and verifying nothing while its case
+		// still reported green. vcr_corpus_test.go ratchets the known set so a
+		// new one cannot land quietly.
+		fmt.Fprintf(os.Stderr,
+			"[vcr] recorded a PROVIDER FAILURE at %s: %s\n"+
+				"[vcr] this cassette will replay that failure on every run — fix the provider and re-record the case\n"+
+				"[vcr] before committing it, unless the case is deliberately testing a failure path.\n",
+			path, c.Error)
+	}
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return

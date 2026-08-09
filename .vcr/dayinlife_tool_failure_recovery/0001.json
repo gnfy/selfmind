@@ -21,7 +21,7 @@
         {
           "ID": "tool_JITUOnyDcqRsUg0MBFApjS7N",
           "Function": "ls_r",
-          "Args": "{\"path\": \"/mnt/d/wwwroot/ai/selfmind\", \"recursive\": false, \"max_entries\": 50}"
+          "Args": "{\"path\": \"{{SELFMIND_VCR_WORKSPACE}}\", \"recursive\": false, \"max_entries\": 50}"
         }
       ]
     }

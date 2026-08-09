@@ -224,6 +224,26 @@ the gate honest:
   quietly degrade the gate to verifying ~0 cases. Unset (the local default)
   keeps the grow-as-you-record behavior.
 
+### Cassette hygiene
+
+Three properties are enforced by `internal/kernel/llm/vcr_corpus_test.go`, so a
+regression shows up in `go test ./...` rather than as a CI-only mystery:
+
+- **No machine absolute paths.** Recording rewrites the workspace prefix to
+  `{{SELFMIND_VCR_WORKSPACE}}` and replay expands it to the current run's
+  workspace. Cassettes recorded before that mechanism existed carried the
+  recording machine's paths verbatim, so their case passed locally and failed
+  in CI for weeks with every replayed tool call pointing at a missing
+  directory.
+- **Recorded provider failures do not grow.** A failed call MUST still be
+  recorded — replay is ordinal, so a hole desynchronizes every later call in
+  the case — but a committed failure cassette replays that failure forever and
+  the call it stands for is never verified again. Recording one now prints a
+  loud warning, and the corpus test ratchets the known set. Clearing an entry
+  requires a live re-record.
+- **No empty cassette directories.** An empty directory reads as "this case has
+  a recording" while replay finds nothing at ordinal `0000`.
+
 ## Continuity Suite
 
 `evalcases/continuity/` covers the cross-endpoint north-star scenarios: a task

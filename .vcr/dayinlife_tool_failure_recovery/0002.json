@@ -21,7 +21,7 @@
         {
           "ID": "tool_cRes9cKnxb9kGMBW5FPMCWRN",
           "Function": "read_file",
-          "Args": "{\"path\": \"/mnt/d/wwwroot/ai/selfmind/go.mod\"}"
+          "Args": "{\"path\": \"{{SELFMIND_VCR_WORKSPACE}}/go.mod\"}"
         }
       ]
     }

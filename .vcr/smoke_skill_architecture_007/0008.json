@@ -1,0 +1,121 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "content": "最后"
+    },
+    {
+      "content": "我"
+    },
+    {
+      "content": "核"
+    },
+    {
+      "content": "对"
+    },
+    {
+      "content": " registry"
+    },
+    {
+      "content": " 的"
+    },
+    {
+      "content": "覆盖"
+    },
+    {
+      "content": "语"
+    },
+    {
+      "content": "义"
+    },
+    {
+      "content": "与"
+    },
+    {
+      "content": "错误"
+    },
+    {
+      "content": "处理"
+    },
+    {
+      "content": "，以"
+    },
+    {
+      "content": "确定"
+    },
+    {
+      "content": "缺"
+    },
+    {
+      "content": "口"
+    },
+    {
+      "content": "是"
+    },
+    {
+      "content": "事实"
+    },
+    {
+      "content": "而"
+    },
+    {
+      "content": "非"
+    },
+    {
+      "content": "推"
+    },
+    {
+      "content": "测"
+    },
+    {
+      "content": "。"
+    },
+    {
+      "content": "Preparing to run search_files",
+      "event_type": "agent.thinking"
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_WneeSUK7TpwPIlu6OUaOTpil",
+          "Function": "search_files",
+          "Args": "{\"path\":\"{{SELFMIND_VCR_WORKSPACE}}/internal/tools\",\"pattern\":\"func (r *Registry) Register\",\"file_glob\":\"*.go\",\"limit\":20}"
+        }
+      ]
+    },
+    {
+      "content": "Preparing to run search_files",
+      "event_type": "agent.thinking"
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_VSx5B6A7zcmFekG0eDSNwIvs",
+          "Function": "search_files",
+          "Args": "{\"path\":\"{{SELFMIND_VCR_WORKSPACE}}/internal/tools\",\"pattern\":\"func readSkillContent\",\"file_glob\":\"*.go\",\"limit\":20}"
+        }
+      ]
+    },
+    {
+      "content": "Preparing to run search_files",
+      "event_type": "agent.thinking"
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_95TpwFGlsZV1q5feSFdsOjXr",
+          "Function": "search_files",
+          "Args": "{\"path\":\"{{SELFMIND_VCR_WORKSPACE}}/internal\",\"pattern\":\"InitTools(\",\"file_glob\":\"*.go\",\"limit\":100}"
+        }
+      ]
+    },
+    {
+      "usage": {
+        "input_tokens": 40571,
+        "output_tokens": 835,
+        "cache_read_input_tokens": 2560,
+        "cache_creation_input_tokens": 0
+      }
+    }
+  ]
+}

@@ -1,0 +1,184 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "content": "文"
+    },
+    {
+      "content": "档"
+    },
+    {
+      "content": "中的"
+    },
+    {
+      "content": "符"
+    },
+    {
+      "content": "号"
+    },
+    {
+      "content": "名"
+    },
+    {
+      "content": "与"
+    },
+    {
+      "content": "当前"
+    },
+    {
+      "content": "代码"
+    },
+    {
+      "content": "似"
+    },
+    {
+      "content": "乎"
+    },
+    {
+      "content": "已有"
+    },
+    {
+      "content": "偏"
+    },
+    {
+      "content": "差"
+    },
+    {
+      "content": "；"
+    },
+    {
+      "content": "我"
+    },
+    {
+      "content": "读取"
+    },
+    {
+      "content": "核心"
+    },
+    {
+      "content": "实现"
+    },
+    {
+      "content": "和"
+    },
+    {
+      "content": "调用"
+    },
+    {
+      "content": "方"
+    },
+    {
+      "content": "，"
+    },
+    {
+      "content": "区"
+    },
+    {
+      "content": "分"
+    },
+    {
+      "content": "设计"
+    },
+    {
+      "content": "描述"
+    },
+    {
+      "content": "与"
+    },
+    {
+      "content": "实际"
+    },
+    {
+      "content": "行为"
+    },
+    {
+      "content": "。"
+    },
+    {
+      "content": "Preparing to run read_file",
+      "event_type": "agent.thinking"
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_vk00iwQNshaxvOr5FxOiIelv",
+          "Function": "read_file",
+          "Args": "{\"path\":\"{{SELFMIND_VCR_WORKSPACE}}/internal/tools/skill_service.go\",\"limit\":500}"
+        }
+      ]
+    },
+    {
+      "content": "Preparing to run read_file",
+      "event_type": "agent.thinking"
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_2HEQ1NPkq1jNojw0Y41CEgVN",
+          "Function": "read_file",
+          "Args": "{\"path\":\"{{SELFMIND_VCR_WORKSPACE}}/internal/tools/skill_loader.go\",\"limit\":500}"
+        }
+      ]
+    },
+    {
+      "content": "Preparing to run read_file",
+      "event_type": "agent.thinking"
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_oD75JhwKDkLsXuPkbW6Jzbmk",
+          "Function": "read_file",
+          "Args": "{\"path\":\"{{SELFMIND_VCR_WORKSPACE}}/internal/tools/skill_runtime.go\",\"limit\":500}"
+        }
+      ]
+    },
+    {
+      "content": "Preparing to run read_file",
+      "event_type": "agent.thinking"
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_bYqQCbeaWqZYZbUXIbXzZLX5",
+          "Function": "read_file",
+          "Args": "{\"path\":\"{{SELFMIND_VCR_WORKSPACE}}/internal/tools/skill_usage.go\",\"limit\":360}"
+        }
+      ]
+    },
+    {
+      "content": "Preparing to run search_files",
+      "event_type": "agent.thinking"
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_O3FJgj1X1P3aPOb5XDUUOUpE",
+          "Function": "search_files",
+          "Args": "{\"path\":\"{{SELFMIND_VCR_WORKSPACE}}\",\"pattern\":\"SkillService\",\"file_glob\":\"*.go\",\"limit\":200}"
+        }
+      ]
+    },
+    {
+      "content": "Preparing to run search_files",
+      "event_type": "agent.thinking"
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_Q1IpXtZW6ykMxATF3v0jEsVO",
+          "Function": "search_files",
+          "Args": "{\"path\":\"{{SELFMIND_VCR_WORKSPACE}}\",\"pattern\":\"RegisterSkill\",\"file_glob\":\"*.go\",\"limit\":200}"
+        }
+      ]
+    },
+    {
+      "usage": {
+        "input_tokens": 18869,
+        "output_tokens": 491,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0
+      }
+    }
+  ]
+}

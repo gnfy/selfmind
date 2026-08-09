@@ -1,0 +1,78 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "content": "Preparing to run read_file",
+      "event_type": "agent.thinking"
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_73vieiYkYlX37jJIcKBmYNGe",
+          "Function": "read_file",
+          "Args": "{\"path\":\"{{SELFMIND_VCR_WORKSPACE}}/internal/tools/skill_manage.go\",\"limit\":460}"
+        }
+      ]
+    },
+    {
+      "content": "Preparing to run read_file",
+      "event_type": "agent.thinking"
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_qf9O7VjUPsCZAoctUWDa9SPa",
+          "Function": "read_file",
+          "Args": "{\"path\":\"{{SELFMIND_VCR_WORKSPACE}}/internal/app/tools.go\",\"limit\":260}"
+        }
+      ]
+    },
+    {
+      "content": "Preparing to run read_file",
+      "event_type": "agent.thinking"
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_z43aCiWON8kF5DGFHOs6X22X",
+          "Function": "read_file",
+          "Args": "{\"path\":\"{{SELFMIND_VCR_WORKSPACE}}/internal/gateway/cli/command_handlers.go\",\"limit\":260}"
+        }
+      ]
+    },
+    {
+      "content": "Preparing to run read_file",
+      "event_type": "agent.thinking"
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_sRtzW8UWypl6Vc5HPMxXto4h",
+          "Function": "read_file",
+          "Args": "{\"path\":\"{{SELFMIND_VCR_WORKSPACE}}/internal/tools/skill_runtime_test.go\",\"limit\":500}"
+        }
+      ]
+    },
+    {
+      "content": "Preparing to run read_file",
+      "event_type": "agent.thinking"
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_EdMMm3VeEvjdnmirfkqw47Re",
+          "Function": "read_file",
+          "Args": "{\"path\":\"{{SELFMIND_VCR_WORKSPACE}}/internal/tools/skill_trust_test.go\",\"limit\":300}"
+        }
+      ]
+    },
+    {
+      "usage": {
+        "input_tokens": 25452,
+        "output_tokens": 359,
+        "cache_read_input_tokens": 2560,
+        "cache_creation_input_tokens": 0
+      }
+    }
+  ]
+}

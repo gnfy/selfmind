@@ -1,0 +1,3478 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "content": "已"
+    },
+    {
+      "content": "查看"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "internal"
+    },
+    {
+      "content": "/tools"
+    },
+    {
+      "content": "/"
+    },
+    {
+      "content": "skill"
+    },
+    {
+      "content": "_service"
+    },
+    {
+      "content": ".go"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": "、"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": "skill"
+    },
+    {
+      "content": "_loader"
+    },
+    {
+      "content": ".go"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": "、"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": "skill"
+    },
+    {
+      "content": "_manage"
+    },
+    {
+      "content": ".go"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": "、"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": "skill"
+    },
+    {
+      "content": "_runtime"
+    },
+    {
+      "content": ".go"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "以及"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "internal"
+    },
+    {
+      "content": "/app"
+    },
+    {
+      "content": "/tools"
+    },
+    {
+      "content": ".go"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " 等"
+    },
+    {
+      "content": "调用"
+    },
+    {
+      "content": "入口"
+    },
+    {
+      "content": "。\n\n"
+    },
+    {
+      "content": "###"
+    },
+    {
+      "content": " 当前"
+    },
+    {
+      "content": "加载"
+    },
+    {
+      "content": "顺"
+    },
+    {
+      "content": "序"
+    },
+    {
+      "content": "\n\n"
+    },
+    {
+      "content": "1"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": " **"
+    },
+    {
+      "content": "确定"
+    },
+    {
+      "content": "查"
+    },
+    {
+      "content": "找"
+    },
+    {
+      "content": "起"
+    },
+    {
+      "content": "点"
+    },
+    {
+      "content": "**\n"
+    },
+    {
+      "content": "  "
+    },
+    {
+      "content": " -"
+    },
+    {
+      "content": " Agent"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "运行"
+    },
+    {
+      "content": "中"
+    },
+    {
+      "content": "优"
+    },
+    {
+      "content": "先"
+    },
+    {
+      "content": "使用"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "Execution"
+    },
+    {
+      "content": "Scope"
+    },
+    {
+      "content": ".Work"
+    },
+    {
+      "content": "space"
+    },
+    {
+      "content": "Root"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": "。\n"
+    },
+    {
+      "content": "  "
+    },
+    {
+      "content": " -"
+    },
+    {
+      "content": " 没"
+    },
+    {
+      "content": "有"
+    },
+    {
+      "content": "执行"
+    },
+    {
+      "content": "作用"
+    },
+    {
+      "content": "域"
+    },
+    {
+      "content": "时"
+    },
+    {
+      "content": "使用"
+    },
+    {
+      "content": "进"
+    },
+    {
+      "content": "程"
+    },
+    {
+      "content": "当前"
+    },
+    {
+      "content": "目录"
+    },
+    {
+      "content": "。\n"
+    },
+    {
+      "content": "  "
+    },
+    {
+      "content": " -"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "un"
+    },
+    {
+      "content": "trusted"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " 工作"
+    },
+    {
+      "content": "区"
+    },
+    {
+      "content": "不会"
+    },
+    {
+      "content": "暴"
+    },
+    {
+      "content": "露"
+    },
+    {
+      "content": "工作"
+    },
+    {
+      "content": "区"
+    },
+    {
+      "content": " skills"
+    },
+    {
+      "content": "。"
+    },
+    {
+      "content": "  \n"
+    },
+    {
+      "content": "  "
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "见"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "Skill"
+    },
+    {
+      "content": "Roots"
+    },
+    {
+      "content": "For"
+    },
+    {
+      "content": "Tenant"
+    },
+    {
+      "content": "()`"
+    },
+    {
+      "content": "："
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": "internal"
+    },
+    {
+      "content": "/tools"
+    },
+    {
+      "content": "/"
+    },
+    {
+      "content": "skill"
+    },
+    {
+      "content": "_service"
+    },
+    {
+      "content": ".go"
+    },
+    {
+      "content": ":"
+    },
+    {
+      "content": "60"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": "。\n\n"
+    },
+    {
+      "content": "2"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": " **"
+    },
+    {
+      "content": "发现"
+    },
+    {
+      "content": " roots"
+    },
+    {
+      "content": "**\n"
+    },
+    {
+      "content": "  "
+    },
+    {
+      "content": " -"
+    },
+    {
+      "content": " 从"
+    },
+    {
+      "content": "起"
+    },
+    {
+      "content": "点"
+    },
+    {
+      "content": "向"
+    },
+    {
+      "content": "父"
+    },
+    {
+      "content": "目录"
+    },
+    {
+      "content": "最多"
+    },
+    {
+      "content": "查"
+    },
+    {
+      "content": "找"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "8"
+    },
+    {
+      "content": " 层"
+    },
+    {
+      "content": "，每"
+    },
+    {
+      "content": "层"
+    },
+    {
+      "content": "依"
+    },
+    {
+      "content": "次"
+    },
+    {
+      "content": "检查"
+    },
+    {
+      "content": "：\n"
+    },
+    {
+      "content": "    "
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "1"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": " `."
+    },
+    {
+      "content": "self"
+    },
+    {
+      "content": "mind"
+    },
+    {
+      "content": "/"
+    },
+    {
+      "content": "skills"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": "，"
+    },
+    {
+      "content": "可"
+    },
+    {
+      "content": "写"
+    },
+    {
+      "content": "；\n"
+    },
+    {
+      "content": "    "
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "2"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": " `."
+    },
+    {
+      "content": "agents"
+    },
+    {
+      "content": "/"
+    },
+    {
+      "content": "skills"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": "，"
+    },
+    {
+      "content": "只"
+    },
+    {
+      "content": "读"
+    },
+    {
+      "content": "，"
+    },
+    {
+      "content": "兼"
+    },
+    {
+      "content": "容"
+    },
+    {
+      "content": " Cod"
+    },
+    {
+      "content": "ex"
+    },
+    {
+      "content": "；\n"
+    },
+    {
+      "content": "    "
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "3"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "skills"
+    },
+    {
+      "content": "/"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": "，"
+    },
+    {
+      "content": "只"
+    },
+    {
+      "content": "读"
+    },
+    {
+      "content": "。\n"
+    },
+    {
+      "content": "  "
+    },
+    {
+      "content": " -"
+    },
+    {
+      "content": " 然"
+    },
+    {
+      "content": "后"
+    },
+    {
+      "content": "加入"
+    },
+    {
+      "content": "：\n"
+    },
+    {
+      "content": "    "
+    },
+    {
+      "content": " -"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "SEL"
+    },
+    {
+      "content": "FM"
+    },
+    {
+      "content": "IND"
+    },
+    {
+      "content": "_SK"
+    },
+    {
+      "content": "ILLS"
+    },
+    {
+      "content": "_ROOT"
+    },
+    {
+      "content": "S"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": "；\n"
+    },
+    {
+      "content": "    "
+    },
+    {
+      "content": " -"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "SEL"
+    },
+    {
+      "content": "FM"
+    },
+    {
+      "content": "IND"
+    },
+    {
+      "content": "_SK"
+    },
+    {
+      "content": "ILLS"
+    },
+    {
+      "content": "_DIR"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": "；\n"
+    },
+    {
+      "content": "    "
+    },
+    {
+      "content": " -"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "~"
+    },
+    {
+      "content": "/."
+    },
+    {
+      "content": "self"
+    },
+    {
+      "content": "mind"
+    },
+    {
+      "content": "/\u003c"
+    },
+    {
+      "content": "tenant"
+    },
+    {
+      "content": "\u003e/"
+    },
+    {
+      "content": "skills"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " 用户"
+    },
+    {
+      "content": "目录"
+    },
+    {
+      "content": "。\n"
+    },
+    {
+      "content": "  "
+    },
+    {
+      "content": " -"
+    },
+    {
+      "content": " 最"
+    },
+    {
+      "content": "后"
+    },
+    {
+      "content": "按"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "Priority"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " 排"
+    },
+    {
+      "content": "序"
+    },
+    {
+      "content": "并"
+    },
+    {
+      "content": "按"
+    },
+    {
+      "content": "绝"
+    },
+    {
+      "content": "对"
+    },
+    {
+      "content": "路径"
+    },
+    {
+      "content": "去"
+    },
+    {
+      "content": "重"
+    },
+    {
+      "content": "。\n\n"
+    },
+    {
+      "content": "3"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": " **"
+    },
+    {
+      "content": "枚"
+    },
+    {
+      "content": "举"
+    },
+    {
+      "content": " skill"
+    },
+    {
+      "content": "**\n"
+    },
+    {
+      "content": "  "
+    },
+    {
+      "content": " -"
+    },
+    {
+      "content": " 每"
+    },
+    {
+      "content": "个"
+    },
+    {
+      "content": " root"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "只"
+    },
+    {
+      "content": "扫描"
+    },
+    {
+      "content": "第一"
+    },
+    {
+      "content": "层"
+    },
+    {
+      "content": "：\n"
+    },
+    {
+      "content": "    "
+    },
+    {
+      "content": " -"
+    },
+    {
+      "content": " `\u003c"
+    },
+    {
+      "content": "name"
+    },
+    {
+      "content": "\u003e/"
+    },
+    {
+      "content": "SK"
+    },
+    {
+      "content": "ILL"
+    },
+    {
+      "content": ".md"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": "；\n"
+    },
+    {
+      "content": "    "
+    },
+    {
+      "content": " -"
+    },
+    {
+      "content": " 或"
+    },
+    {
+      "content": "旧"
+    },
+    {
+      "content": "格式"
+    },
+    {
+      "content": " `\u003c"
+    },
+    {
+      "content": "name"
+    },
+    {
+      "content": "\u003e."
+    },
+    {
+      "content": "md"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": "。\n"
+    },
+    {
+      "content": "  "
+    },
+    {
+      "content": " -"
+    },
+    {
+      "content": " 隐"
+    },
+    {
+      "content": "藏"
+    },
+    {
+      "content": "文件"
+    },
+    {
+      "content": "和"
+    },
+    {
+      "content": "目录"
+    },
+    {
+      "content": "被"
+    },
+    {
+      "content": "跳"
+    },
+    {
+      "content": "过"
+    },
+    {
+      "content": "。\n"
+    },
+    {
+      "content": "  "
+    },
+    {
+      "content": " -"
+    },
+    {
+      "content": " 从"
+    },
+    {
+      "content": " front"
+    },
+    {
+      "content": " matter"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "读取"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "name"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": "、"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": "description"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " 等"
+    },
+    {
+      "content": "；"
+    },
+    {
+      "content": "没有"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "name"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " 时"
+    },
+    {
+      "content": "使用"
+    },
+    {
+      "content": "目录"
+    },
+    {
+      "content": "名"
+    },
+    {
+      "content": "或"
+    },
+    {
+      "content": "文件"
+    },
+    {
+      "content": "名"
+    },
+    {
+      "content": "。\n"
+    },
+    {
+      "content": "  "
+    },
+    {
+      "content": " -"
+    },
+    {
+      "content": " 按"
+    },
+    {
+      "content": "规范"
+    },
+    {
+      "content": "化"
+    },
+    {
+      "content": "后的"
+    },
+    {
+      "content": " skill"
+    },
+    {
+      "content": " 名"
+    },
+    {
+      "content": "去"
+    },
+    {
+      "content": "重"
+    },
+    {
+      "content": "，"
+    },
+    {
+      "content": "**"
+    },
+    {
+      "content": "root"
+    },
+    {
+      "content": " 顺"
+    },
+    {
+      "content": "序"
+    },
+    {
+      "content": "中"
+    },
+    {
+      "content": "第"
+    },
+    {
+      "content": "一个"
+    },
+    {
+      "content": "同"
+    },
+    {
+      "content": "名"
+    },
+    {
+      "content": " skill"
+    },
+    {
+      "content": " 胜"
+    },
+    {
+      "content": "出"
+    },
+    {
+      "content": "**"
+    },
+    {
+      "content": "。"
+    },
+    {
+      "content": "  \n"
+    },
+    {
+      "content": "  "
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "见"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "List"
+    },
+    {
+      "content": "Skills"
+    },
+    {
+      "content": "For"
+    },
+    {
+      "content": "Tenant"
+    },
+    {
+      "content": "()`"
+    },
+    {
+      "content": "："
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": "internal"
+    },
+    {
+      "content": "/tools"
+    },
+    {
+      "content": "/"
+    },
+    {
+      "content": "skill"
+    },
+    {
+      "content": "_manage"
+    },
+    {
+      "content": ".go"
+    },
+    {
+      "content": ":"
+    },
+    {
+      "content": "714"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": "。\n\n"
+    },
+    {
+      "content": "4"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": " **"
+    },
+    {
+      "content": "运行"
+    },
+    {
+      "content": "时"
+    },
+    {
+      "content": "读取"
+    },
+    {
+      "content": "**\n"
+    },
+    {
+      "content": "  "
+    },
+    {
+      "content": " -"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "skills"
+    },
+    {
+      "content": "_list"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "只"
+    },
+    {
+      "content": "返回"
+    },
+    {
+      "content": "元"
+    },
+    {
+      "content": "数据"
+    },
+    {
+      "content": "。\n"
+    },
+    {
+      "content": "  "
+    },
+    {
+      "content": " -"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "skill"
+    },
+    {
+      "content": "_view"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " 才"
+    },
+    {
+      "content": "读取"
+    },
+    {
+      "content": "完整"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "SK"
+    },
+    {
+      "content": "ILL"
+    },
+    {
+      "content": ".md"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " 或"
+    },
+    {
+      "content": " support"
+    },
+    {
+      "content": " file"
+    },
+    {
+      "content": "。\n"
+    },
+    {
+      "content": "  "
+    },
+    {
+      "content": " -"
+    },
+    {
+      "content": " `/"
+    },
+    {
+      "content": "name"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " 调"
+    },
+    {
+      "content": "用"
+    },
+    {
+      "content": "时"
+    },
+    {
+      "content": "先"
+    },
+    {
+      "content": "尝"
+    },
+    {
+      "content": "试"
+    },
+    {
+      "content": " bundle"
+    },
+    {
+      "content": "，再"
+    },
+    {
+      "content": "匹"
+    },
+    {
+      "content": "配"
+    },
+    {
+      "content": " skill"
+    },
+    {
+      "content": "；"
+    },
+    {
+      "content": "完整"
+    },
+    {
+      "content": "内容"
+    },
+    {
+      "content": "限制"
+    },
+    {
+      "content": "为"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "48"
+    },
+    {
+      "content": " Ki"
+    },
+    {
+      "content": "B"
+    },
+    {
+      "content": "，并"
+    },
+    {
+      "content": "附"
+    },
+    {
+      "content": "上"
+    },
+    {
+      "content": " linked"
+    },
+    {
+      "content": "-file"
+    },
+    {
+      "content": " 列"
+    },
+    {
+      "content": "表"
+    },
+    {
+      "content": "。"
+    },
+    {
+      "content": "  \n"
+    },
+    {
+      "content": "  "
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "见"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "Resolve"
+    },
+    {
+      "content": "Skill"
+    },
+    {
+      "content": "Invocation"
+    },
+    {
+      "content": "For"
+    },
+    {
+      "content": "Tenant"
+    },
+    {
+      "content": "()`"
+    },
+    {
+      "content": "、"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": "Build"
+    },
+    {
+      "content": "Skill"
+    },
+    {
+      "content": "Invocation"
+    },
+    {
+      "content": "Message"
+    },
+    {
+      "content": "For"
+    },
+    {
+      "content": "Tenant"
+    },
+    {
+      "content": "()`"
+    },
+    {
+      "content": "："
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": "internal"
+    },
+    {
+      "content": "/tools"
+    },
+    {
+      "content": "/"
+    },
+    {
+      "content": "skill"
+    },
+    {
+      "content": "_runtime"
+    },
+    {
+      "content": ".go"
+    },
+    {
+      "content": ":"
+    },
+    {
+      "content": "212"
+    },
+    {
+      "content": "-"
+    },
+    {
+      "content": "258"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": "。\n\n"
+    },
+    {
+      "content": "5"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": " **"
+    },
+    {
+      "content": "兼"
+    },
+    {
+      "content": "容"
+    },
+    {
+      "content": "的"
+    },
+    {
+      "content": "动态"
+    },
+    {
+      "content": "工具"
+    },
+    {
+      "content": "注册"
+    },
+    {
+      "content": "**\n"
+    },
+    {
+      "content": "  "
+    },
+    {
+      "content": " -"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "Init"
+    },
+    {
+      "content": "Tools"
+    },
+    {
+      "content": "()`"
+    },
+    {
+      "content": " 启"
+    },
+    {
+      "content": "动"
+    },
+    {
+      "content": "时"
+    },
+    {
+      "content": "调用"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "Reload"
+    },
+    {
+      "content": "Skill"
+    },
+    {
+      "content": "Tools"
+    },
+    {
+      "content": "For"
+    },
+    {
+      "content": "Tenant"
+    },
+    {
+      "content": "()`"
+    },
+    {
+      "content": "。\n"
+    },
+    {
+      "content": "  "
+    },
+    {
+      "content": " -"
+    },
+    {
+      "content": " 注册"
+    },
+    {
+      "content": "时"
+    },
+    {
+      "content": "反"
+    },
+    {
+      "content": "向"
+    },
+    {
+      "content": "遍"
+    },
+    {
+      "content": "历"
+    },
+    {
+      "content": " roots"
+    },
+    {
+      "content": "，即"
+    },
+    {
+      "content": "先"
+    },
+    {
+      "content": "注册"
+    },
+    {
+      "content": "低"
+    },
+    {
+      "content": "优"
+    },
+    {
+      "content": "先"
+    },
+    {
+      "content": "级"
+    },
+    {
+      "content": " root"
+    },
+    {
+      "content": "，再"
+    },
+    {
+      "content": "注册"
+    },
+    {
+      "content": "高"
+    },
+    {
+      "content": "优"
+    },
+    {
+      "content": "先"
+    },
+    {
+      "content": "级"
+    },
+    {
+      "content": " root"
+    },
+    {
+      "content": "；"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": "Registry"
+    },
+    {
+      "content": ".Register"
+    },
+    {
+      "content": "()`"
+    },
+    {
+      "content": " 对"
+    },
+    {
+      "content": "同"
+    },
+    {
+      "content": "名"
+    },
+    {
+      "content": "工具"
+    },
+    {
+      "content": "直接"
+    },
+    {
+      "content": "覆盖"
+    },
+    {
+      "content": "，因此"
+    },
+    {
+      "content": "最终"
+    },
+    {
+      "content": "高"
+    },
+    {
+      "content": "优"
+    },
+    {
+      "content": "先"
+    },
+    {
+      "content": "级"
+    },
+    {
+      "content": "版本"
+    },
+    {
+      "content": "胜"
+    },
+    {
+      "content": "出"
+    },
+    {
+      "content": "。\n"
+    },
+    {
+      "content": "  "
+    },
+    {
+      "content": " -"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "这些"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "skill"
+    },
+    {
+      "content": ":\u003c"
+    },
+    {
+      "content": "name"
+    },
+    {
+      "content": "\u003e`"
+    },
+    {
+      "content": " 工"
+    },
+    {
+      "content": "具"
+    },
+    {
+      "content": "目前"
+    },
+    {
+      "content": "只"
+    },
+    {
+      "content": "返回"
+    },
+    {
+      "content": "“"
+    },
+    {
+      "content": "请"
+    },
+    {
+      "content": "通过"
+    },
+    {
+      "content": " slash"
+    },
+    {
+      "content": " 或"
+    },
+    {
+      "content": " skill"
+    },
+    {
+      "content": "_view"
+    },
+    {
+      "content": " 加"
+    },
+    {
+      "content": "载"
+    },
+    {
+      "content": "”的"
+    },
+    {
+      "content": "提示"
+    },
+    {
+      "content": "，不"
+    },
+    {
+      "content": "执行"
+    },
+    {
+      "content": " skill"
+    },
+    {
+      "content": " 内"
+    },
+    {
+      "content": "代码"
+    },
+    {
+      "content": "。"
+    },
+    {
+      "content": "  \n"
+    },
+    {
+      "content": "  "
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "见"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "internal"
+    },
+    {
+      "content": "/app"
+    },
+    {
+      "content": "/tools"
+    },
+    {
+      "content": ".go"
+    },
+    {
+      "content": ":"
+    },
+    {
+      "content": "76"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": "、"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": "internal"
+    },
+    {
+      "content": "/tools"
+    },
+    {
+      "content": "/"
+    },
+    {
+      "content": "skill"
+    },
+    {
+      "content": "_runtime"
+    },
+    {
+      "content": ".go"
+    },
+    {
+      "content": ":"
+    },
+    {
+      "content": "290"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": "。\n\n"
+    },
+    {
+      "content": "###"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "目前"
+    },
+    {
+      "content": "可能"
+    },
+    {
+      "content": "的"
+    },
+    {
+      "content": "缺"
+    },
+    {
+      "content": "口"
+    },
+    {
+      "content": "\n\n"
+    },
+    {
+      "content": "1"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": " **"
+    },
+    {
+      "content": "实际"
+    },
+    {
+      "content": " root"
+    },
+    {
+      "content": " 优"
+    },
+    {
+      "content": "先"
+    },
+    {
+      "content": "级"
+    },
+    {
+      "content": "与"
+    },
+    {
+      "content": "文"
+    },
+    {
+      "content": "档"
+    },
+    {
+      "content": "描述"
+    },
+    {
+      "content": "不"
+    },
+    {
+      "content": "完全"
+    },
+    {
+      "content": "一致"
+    },
+    {
+      "content": "**\n"
+    },
+    {
+      "content": "  "
+    },
+    {
+      "content": " -"
+    },
+    {
+      "content": " 父"
+    },
+    {
+      "content": "目录"
+    },
+    {
+      "content": "每"
+    },
+    {
+      "content": "层"
+    },
+    {
+      "content": "会"
+    },
+    {
+      "content": "增加"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "30"
+    },
+    {
+      "content": "，但"
+    },
+    {
+      "content": "环境"
+    },
+    {
+      "content": " roots"
+    },
+    {
+      "content": " 固"
+    },
+    {
+      "content": "定"
+    },
+    {
+      "content": "为"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "40"
+    },
+    {
+      "content": "/"
+    },
+    {
+      "content": "45"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": "，"
+    },
+    {
+      "content": "用户"
+    },
+    {
+      "content": " root"
+    },
+    {
+      "content": " 固"
+    },
+    {
+      "content": "定"
+    },
+    {
+      "content": "为"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "100"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": "。\n"
+    },
+    {
+      "content": "  "
+    },
+    {
+      "content": " -"
+    },
+    {
+      "content": " 因"
+    },
+    {
+      "content": "此"
+    },
+    {
+      "content": "环境"
+    },
+    {
+      "content": " root"
+    },
+    {
+      "content": " 会"
+    },
+    {
+      "content": "插"
+    },
+    {
+      "content": "入"
+    },
+    {
+      "content": "父"
+    },
+    {
+      "content": "目录"
+    },
+    {
+      "content": " roots"
+    },
+    {
+      "content": " 中"
+    },
+    {
+      "content": "间"
+    },
+    {
+      "content": "；"
+    },
+    {
+      "content": "用户"
+    },
+    {
+      "content": " root"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "也"
+    },
+    {
+      "content": "可能"
+    },
+    {
+      "content": "排"
+    },
+    {
+      "content": "在"
+    },
+    {
+      "content": "较"
+    },
+    {
+      "content": "远"
+    },
+    {
+      "content": "父"
+    },
+    {
+      "content": "目录"
+    },
+    {
+      "content": " roots"
+    },
+    {
+      "content": " 前"
+    },
+    {
+      "content": "面"
+    },
+    {
+      "content": "，而"
+    },
+    {
+      "content": "不是"
+    },
+    {
+      "content": "严格"
+    },
+    {
+      "content": "的"
+    },
+    {
+      "content": "“"
+    },
+    {
+      "content": "全部"
+    },
+    {
+      "content": " workspace"
+    },
+    {
+      "content": " →"
+    },
+    {
+      "content": " env"
+    },
+    {
+      "content": " →"
+    },
+    {
+      "content": " user"
+    },
+    {
+      "content": "”"
+    },
+    {
+      "content": "。\n"
+    },
+    {
+      "content": "  "
+    },
+    {
+      "content": " -"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "这是"
+    },
+    {
+      "content": "目前"
+    },
+    {
+      "content": "最"
+    },
+    {
+      "content": "明确"
+    },
+    {
+      "content": "的"
+    },
+    {
+      "content": "顺"
+    },
+    {
+      "content": "序"
+    },
+    {
+      "content": "问题"
+    },
+    {
+      "content": "。\n\n"
+    },
+    {
+      "content": "2"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": " **"
+    },
+    {
+      "content": "父"
+    },
+    {
+      "content": "目录"
+    },
+    {
+      "content": "扫描"
+    },
+    {
+      "content": "没有"
+    },
+    {
+      "content": "仓"
+    },
+    {
+      "content": "库"
+    },
+    {
+      "content": "边"
+    },
+    {
+      "content": "界"
+    },
+    {
+      "content": "**\n"
+    },
+    {
+      "content": "  "
+    },
+    {
+      "content": " -"
+    },
+    {
+      "content": " 固"
+    },
+    {
+      "content": "定"
+    },
+    {
+      "content": "向"
+    },
+    {
+      "content": "上"
+    },
+    {
+      "content": "最多"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "8"
+    },
+    {
+      "content": " 层"
+    },
+    {
+      "content": "，不"
+    },
+    {
+      "content": "会"
+    },
+    {
+      "content": "在"
+    },
+    {
+      "content": " Git"
+    },
+    {
+      "content": " 根"
+    },
+    {
+      "content": "目录"
+    },
+    {
+      "content": "或"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "Workspace"
+    },
+    {
+      "content": "Root"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " 边"
+    },
+    {
+      "content": "界"
+    },
+    {
+      "content": "停止"
+    },
+    {
+      "content": "。\n"
+    },
+    {
+      "content": "  "
+    },
+    {
+      "content": " -"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "可能"
+    },
+    {
+      "content": "意"
+    },
+    {
+      "content": "外"
+    },
+    {
+      "content": "读取"
+    },
+    {
+      "content": "共享"
+    },
+    {
+      "content": "父"
+    },
+    {
+      "content": "目录"
+    },
+    {
+      "content": "、"
+    },
+    {
+      "content": "临"
+    },
+    {
+      "content": "时"
+    },
+    {
+      "content": "目录"
+    },
+    {
+      "content": "中的"
+    },
+    {
+      "content": " `."
+    },
+    {
+      "content": "self"
+    },
+    {
+      "content": "mind"
+    },
+    {
+      "content": "/"
+    },
+    {
+      "content": "skills"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " 或"
+    },
+    {
+      "content": " `."
+    },
+    {
+      "content": "agents"
+    },
+    {
+      "content": "/"
+    },
+    {
+      "content": "skills"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": "。\n\n"
+    },
+    {
+      "content": "3"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": " **"
+    },
+    {
+      "content": "两"
+    },
+    {
+      "content": "条"
+    },
+    {
+      "content": "读取"
+    },
+    {
+      "content": "路径"
+    },
+    {
+      "content": "的"
+    },
+    {
+      "content": "校"
+    },
+    {
+      "content": "验"
+    },
+    {
+      "content": "不"
+    },
+    {
+      "content": "一致"
+    },
+    {
+      "content": "**\n"
+    },
+    {
+      "content": "  "
+    },
+    {
+      "content": " -"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "Skill"
+    },
+    {
+      "content": "Loader"
+    },
+    {
+      "content": ".Load"
+    },
+    {
+      "content": "File"
+    },
+    {
+      "content": "()`"
+    },
+    {
+      "content": " 会"
+    },
+    {
+      "content": "执行"
+    },
+    {
+      "content": "环境"
+    },
+    {
+      "content": "变量"
+    },
+    {
+      "content": "声明"
+    },
+    {
+      "content": "校"
+    },
+    {
+      "content": "验"
+    },
+    {
+      "content": "，并"
+    },
+    {
+      "content": "在"
+    },
+    {
+      "content": "出"
+    },
+    {
+      "content": "错"
+    },
+    {
+      "content": "时"
+    },
+    {
+      "content": "跳"
+    },
+    {
+      "content": "过"
+    },
+    {
+      "content": "注册"
+    },
+    {
+      "content": "。\n"
+    },
+    {
+      "content": "  "
+    },
+    {
+      "content": " -"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "但"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "List"
+    },
+    {
+      "content": "Skills"
+    },
+    {
+      "content": "For"
+    },
+    {
+      "content": "Tenant"
+    },
+    {
+      "content": "()`"
+    },
+    {
+      "content": " /"
+    },
+    {
+      "content": " slash"
+    },
+    {
+      "content": " /"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "skill"
+    },
+    {
+      "content": "_view"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " 使用"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "read"
+    },
+    {
+      "content": "Skill"
+    },
+    {
+      "content": "Info"
+    },
+    {
+      "content": "()`"
+    },
+    {
+      "content": " 和"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "read"
+    },
+    {
+      "content": "Skill"
+    },
+    {
+      "content": "Content"
+    },
+    {
+      "content": "()`"
+    },
+    {
+      "content": "，"
+    },
+    {
+      "content": "front"
+    },
+    {
+      "content": " matter"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "解析"
+    },
+    {
+      "content": "错误"
+    },
+    {
+      "content": "被"
+    },
+    {
+      "content": "忽"
+    },
+    {
+      "content": "略"
+    },
+    {
+      "content": "，也"
+    },
+    {
+      "content": "没有"
+    },
+    {
+      "content": "调用"
+    },
+    {
+      "content": "同"
+    },
+    {
+      "content": "一"
+    },
+    {
+      "content": "套"
+    },
+    {
+      "content": "声明"
+    },
+    {
+      "content": "校"
+    },
+    {
+      "content": "验"
+    },
+    {
+      "content": "。\n"
+    },
+    {
+      "content": "  "
+    },
+    {
+      "content": " -"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "结果"
+    },
+    {
+      "content": "可能"
+    },
+    {
+      "content": "是"
+    },
+    {
+      "content": "："
+    },
+    {
+      "content": "某"
+    },
+    {
+      "content": " skill"
+    },
+    {
+      "content": " 没"
+    },
+    {
+      "content": "有"
+    },
+    {
+      "content": "注册"
+    },
+    {
+      "content": "为"
+    },
+    {
+      "content": "兼"
+    },
+    {
+      "content": "容"
+    },
+    {
+      "content": "工具"
+    },
+    {
+      "content": "，却"
+    },
+    {
+      "content": "仍"
+    },
+    {
+      "content": "能"
+    },
+    {
+      "content": "被"
+    },
+    {
+      "content": "列"
+    },
+    {
+      "content": "出"
+    },
+    {
+      "content": "和"
+    },
+    {
+      "content": "通过"
+    },
+    {
+      "content": " slash"
+    },
+    {
+      "content": " 注"
+    },
+    {
+      "content": "入"
+    },
+    {
+      "content": "。\n\n"
+    },
+    {
+      "content": "4"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": " **"
+    },
+    {
+      "content": "兼"
+    },
+    {
+      "content": "容"
+    },
+    {
+      "content": " registry"
+    },
+    {
+      "content": " 是"
+    },
+    {
+      "content": "快"
+    },
+    {
+      "content": "照"
+    },
+    {
+      "content": "，"
+    },
+    {
+      "content": "可能"
+    },
+    {
+      "content": "陈"
+    },
+    {
+      "content": "旧"
+    },
+    {
+      "content": "**\n"
+    },
+    {
+      "content": "  "
+    },
+    {
+      "content": " -"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "skill"
+    },
+    {
+      "content": ":*"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " 在"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "Init"
+    },
+    {
+      "content": "Tools"
+    },
+    {
+      "content": "()`"
+    },
+    {
+      "content": " 或"
+    },
+    {
+      "content": "显"
+    },
+    {
+      "content": "式"
+    },
+    {
+      "content": " reload"
+    },
+    {
+      "content": " 时"
+    },
+    {
+      "content": "更新"
+    },
+    {
+      "content": "，没有"
+    },
+    {
+      "content": "文件"
+    },
+    {
+      "content": "监听"
+    },
+    {
+      "content": "。\n"
+    },
+    {
+      "content": "  "
+    },
+    {
+      "content": " -"
+    },
+    {
+      "content": " 切"
+    },
+    {
+      "content": "换"
+    },
+    {
+      "content": "工作"
+    },
+    {
+      "content": "区"
+    },
+    {
+      "content": "或"
+    },
+    {
+      "content": "手"
+    },
+    {
+      "content": "工"
+    },
+    {
+      "content": "修改"
+    },
+    {
+      "content": "本"
+    },
+    {
+      "content": "地"
+    },
+    {
+      "content": " skill"
+    },
+    {
+      "content": " 后"
+    },
+    {
+      "content": "，"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": "skills"
+    },
+    {
+      "content": "_list"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": "、"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": "skill"
+    },
+    {
+      "content": "_view"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": "、"
+    },
+    {
+      "content": "slash"
+    },
+    {
+      "content": " 会"
+    },
+    {
+      "content": "动态"
+    },
+    {
+      "content": "读取"
+    },
+    {
+      "content": "新"
+    },
+    {
+      "content": "内容"
+    },
+    {
+      "content": "，但"
+    },
+    {
+      "content": "旧"
+    },
+    {
+      "content": "的"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "skill"
+    },
+    {
+      "content": ":*"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " registry"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "可能"
+    },
+    {
+      "content": "仍"
+    },
+    {
+      "content": "对应"
+    },
+    {
+      "content": "启动"
+    },
+    {
+      "content": "时"
+    },
+    {
+      "content": "的"
+    },
+    {
+      "content": "工作"
+    },
+    {
+      "content": "区"
+    },
+    {
+      "content": "。\n"
+    },
+    {
+      "content": "  "
+    },
+    {
+      "content": " -"
+    },
+    {
+      "content": " 启"
+    },
+    {
+      "content": "动"
+    },
+    {
+      "content": "处"
+    },
+    {
+      "content": "还"
+    },
+    {
+      "content": "忽"
+    },
+    {
+      "content": "略"
+    },
+    {
+      "content": "了"
+    },
+    {
+      "content": " reload"
+    },
+    {
+      "content": " 返回"
+    },
+    {
+      "content": "的"
+    },
+    {
+      "content": "错误"
+    },
+    {
+      "content": "："
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": "_,"
+    },
+    {
+      "content": " _"
+    },
+    {
+      "content": " ="
+    },
+    {
+      "content": " Reload"
+    },
+    {
+      "content": "Skill"
+    },
+    {
+      "content": "Tools"
+    },
+    {
+      "content": "For"
+    },
+    {
+      "content": "Tenant"
+    },
+    {
+      "content": "(...)"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": "，"
+    },
+    {
+      "content": "失败"
+    },
+    {
+      "content": "可能"
+    },
+    {
+      "content": "静"
+    },
+    {
+      "content": "默"
+    },
+    {
+      "content": "降"
+    },
+    {
+      "content": "级"
+    },
+    {
+      "content": "。\n\n"
+    },
+    {
+      "content": "5"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": " **"
+    },
+    {
+      "content": "usage"
+    },
+    {
+      "content": " 状"
+    },
+    {
+      "content": "态"
+    },
+    {
+      "content": "写"
+    },
+    {
+      "content": "入"
+    },
+    {
+      "content": "位置"
+    },
+    {
+      "content": "可能"
+    },
+    {
+      "content": "偏"
+    },
+    {
+      "content": "离"
+    },
+    {
+      "content": "文"
+    },
+    {
+      "content": "档"
+    },
+    {
+      "content": "**\n"
+    },
+    {
+      "content": "  "
+    },
+    {
+      "content": " -"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "Mark"
+    },
+    {
+      "content": "Skill"
+    },
+    {
+      "content": "Used"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": "、"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": "Set"
+    },
+    {
+      "content": "Skill"
+    },
+    {
+      "content": "State"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " 等"
+    },
+    {
+      "content": "通过"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "get"
+    },
+    {
+      "content": "Skills"
+    },
+    {
+      "content": "Dir"
+    },
+    {
+      "content": "()`"
+    },
+    {
+      "content": " 写"
+    },
+    {
+      "content": "入"
+    },
+    {
+      "content": " usage"
+    },
+    {
+      "content": "。\n"
+    },
+    {
+      "content": "  "
+    },
+    {
+      "content": " -"
+    },
+    {
+      "content": " 若"
+    },
+    {
+      "content": "设置"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "SEL"
+    },
+    {
+      "content": "FM"
+    },
+    {
+      "content": "IND"
+    },
+    {
+      "content": "_SK"
+    },
+    {
+      "content": "ILLS"
+    },
+    {
+      "content": "_WRITE"
+    },
+    {
+      "content": "_SCOPE"
+    },
+    {
+      "content": "="
+    },
+    {
+      "content": "workspace"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": "，"
+    },
+    {
+      "content": "状态"
+    },
+    {
+      "content": "可能"
+    },
+    {
+      "content": "写"
+    },
+    {
+      "content": "进"
+    },
+    {
+      "content": "工作"
+    },
+    {
+      "content": "区"
+    },
+    {
+      "content": " `."
+    },
+    {
+      "content": "usage"
+    },
+    {
+      "content": ".json"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": "，"
+    },
+    {
+      "content": "而"
+    },
+    {
+      "content": "架"
+    },
+    {
+      "content": "构"
+    },
+    {
+      "content": "文"
+    },
+    {
+      "content": "档"
+    },
+    {
+      "content": "声明"
+    },
+    {
+      "content": " pins"
+    },
+    {
+      "content": "、"
+    },
+    {
+      "content": "views"
+    },
+    {
+      "content": "、"
+    },
+    {
+      "content": "disable"
+    },
+    {
+      "content": " 状"
+    },
+    {
+      "content": "态"
+    },
+    {
+      "content": "应"
+    },
+    {
+      "content": "始"
+    },
+    {
+      "content": "终"
+    },
+    {
+      "content": "保"
+    },
+    {
+      "content": "存在"
+    },
+    {
+      "content": " tenant"
+    },
+    {
+      "content": " 用户"
+    },
+    {
+      "content": "目录"
+    },
+    {
+      "content": "。\n\n"
+    },
+    {
+      "content": "整体"
+    },
+    {
+      "content": "而言"
+    },
+    {
+      "content": "，"
+    },
+    {
+      "content": "现代"
+    },
+    {
+      "content": "的"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "list"
+    },
+    {
+      "content": " →"
+    },
+    {
+      "content": " view"
+    },
+    {
+      "content": "/sl"
+    },
+    {
+      "content": "ash"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " 渐"
+    },
+    {
+      "content": "进"
+    },
+    {
+      "content": "加载"
+    },
+    {
+      "content": "路径"
+    },
+    {
+      "content": "已经"
+    },
+    {
+      "content": "比较"
+    },
+    {
+      "content": "完整"
+    },
+    {
+      "content": "；"
+    },
+    {
+      "content": "最"
+    },
+    {
+      "content": "值得"
+    },
+    {
+      "content": "优"
+    },
+    {
+      "content": "先"
+    },
+    {
+      "content": "修"
+    },
+    {
+      "content": "的是"
+    },
+    {
+      "content": " **"
+    },
+    {
+      "content": "root"
+    },
+    {
+      "content": " 优"
+    },
+    {
+      "content": "先"
+    },
+    {
+      "content": "级"
+    },
+    {
+      "content": "排序"
+    },
+    {
+      "content": "、"
+    },
+    {
+      "content": "两"
+    },
+    {
+      "content": "条"
+    },
+    {
+      "content": "读取"
+    },
+    {
+      "content": "路径"
+    },
+    {
+      "content": "统一"
+    },
+    {
+      "content": "校"
+    },
+    {
+      "content": "验"
+    },
+    {
+      "content": "，以及"
+    },
+    {
+      "content": " registry"
+    },
+    {
+      "content": " 随"
+    },
+    {
+      "content": "工作"
+    },
+    {
+      "content": "区"
+    },
+    {
+      "content": "变化"
+    },
+    {
+      "content": "的"
+    },
+    {
+      "content": "刷新"
+    },
+    {
+      "content": "问题"
+    },
+    {
+      "content": "**"
+    },
+    {
+      "content": "。"
+    },
+    {
+      "usage": {
+        "input_tokens": 44282,
+        "output_tokens": 3249,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0
+      }
+    }
+  ]
+}

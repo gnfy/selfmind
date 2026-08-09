@@ -1,0 +1,52 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "content": "Preparing to run terminal",
+      "event_type": "agent.thinking"
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_NwzLtHgNbDYMFNrflqnyvj4Q",
+          "Function": "terminal",
+          "Args": "{\"command\":\"rg -n -C 18 'func \\\\(r \\\\*Registry\\\\) (Register|Unregister|List)' internal/tools/dispatcher.go\",\"cwd\":\"{{SELFMIND_VCR_WORKSPACE}}\",\"timeout\":20}"
+        }
+      ]
+    },
+    {
+      "content": "Preparing to run terminal",
+      "event_type": "agent.thinking"
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_Yh6wRf1YtHQD21uRmHupSkih",
+          "Function": "terminal",
+          "Args": "{\"command\":\"rg -n -C 12 'func readSkillContent' internal/tools/skill_manage.go \u0026\u0026 rg -n -C 10 'InitTools\\\\(' internal/app/workerpool.go internal/eval/runner.go internal/runtime/gateway/runner.go\",\"cwd\":\"{{SELFMIND_VCR_WORKSPACE}}\",\"timeout\":20}"
+        }
+      ]
+    },
+    {
+      "content": "Preparing to run terminal",
+      "event_type": "agent.thinking"
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_o1UVEZu8f4Aaa8zMU1vJKwiG",
+          "Function": "terminal",
+          "Args": "{\"command\":\"rg -n 'SkillRootsForTenant|ListSkillsForTenant|ReloadSkillToolsForTenant|ResolveSkillInvocationForTenant|BuildSkillInvocationMessageForTenant' internal/tools/skill_service.go internal/tools/skill_manage.go internal/tools/skill_runtime.go internal/app/tools.go internal/gateway/cli/command_handlers.go\",\"cwd\":\"{{SELFMIND_VCR_WORKSPACE}}\",\"timeout\":20}"
+        }
+      ]
+    },
+    {
+      "usage": {
+        "input_tokens": 41479,
+        "output_tokens": 357,
+        "cache_read_input_tokens": 9728,
+        "cache_creation_input_tokens": 0
+      }
+    }
+  ]
+}

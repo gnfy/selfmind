@@ -1,0 +1,167 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "content": "仓"
+    },
+    {
+      "content": "库"
+    },
+    {
+      "content": "状态"
+    },
+    {
+      "content": "命"
+    },
+    {
+      "content": "令"
+    },
+    {
+      "content": "未"
+    },
+    {
+      "content": "返回"
+    },
+    {
+      "content": "具体"
+    },
+    {
+      "content": "诊"
+    },
+    {
+      "content": "断"
+    },
+    {
+      "content": "；"
+    },
+    {
+      "content": "我"
+    },
+    {
+      "content": "改"
+    },
+    {
+      "content": "用"
+    },
+    {
+      "content": "只"
+    },
+    {
+      "content": "读"
+    },
+    {
+      "content": "文件"
+    },
+    {
+      "content": "检"
+    },
+    {
+      "content": "索"
+    },
+    {
+      "content": "，"
+    },
+    {
+      "content": "直接"
+    },
+    {
+      "content": "追"
+    },
+    {
+      "content": "踪"
+    },
+    {
+      "content": "根"
+    },
+    {
+      "content": "目录"
+    },
+    {
+      "content": "解析"
+    },
+    {
+      "content": "、"
+    },
+    {
+      "content": "优"
+    },
+    {
+      "content": "先"
+    },
+    {
+      "content": "级"
+    },
+    {
+      "content": "和"
+    },
+    {
+      "content": "注册"
+    },
+    {
+      "content": "流程"
+    },
+    {
+      "content": "。"
+    },
+    {
+      "content": "Preparing to run ls_r",
+      "event_type": "agent.thinking"
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_1M3tPK4jkz70kfwCS6GNP6kT",
+          "Function": "ls_r",
+          "Args": "{\"path\":\"{{SELFMIND_VCR_WORKSPACE}}/internal/tools\",\"recursive\":false,\"max_entries\":300}"
+        }
+      ]
+    },
+    {
+      "content": "Preparing to run search_files",
+      "event_type": "agent.thinking"
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_7vkzKbgDkd8kMctbbTyKbKko",
+          "Function": "search_files",
+          "Args": "{\"path\":\"{{SELFMIND_VCR_WORKSPACE}}\",\"pattern\":\"SkillRootsForTenant|WritableSkillRootForTenant|SELFMIND_SKILLS_ROOTS|SELFMIND_SKILLS_DIR\",\"file_glob\":\"*.go\",\"limit\":200}"
+        }
+      ]
+    },
+    {
+      "content": "Preparing to run search_files",
+      "event_type": "agent.thinking"
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_iQcZTSImOf08svdYkX9SNdNd",
+          "Function": "search_files",
+          "Args": "{\"path\":\"{{SELFMIND_VCR_WORKSPACE}}\",\"pattern\":\"RegisterSkills|ReloadSkills|skill_service|NewSkillService|LoadSkills\",\"file_glob\":\"*.go\",\"limit\":200}"
+        }
+      ]
+    },
+    {
+      "content": "Preparing to run search_files",
+      "event_type": "agent.thinking"
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_D5bCWuX5XEIv65wSZovWmahE",
+          "Function": "search_files",
+          "Args": "{\"path\":\"{{SELFMIND_VCR_WORKSPACE}}/docs\",\"pattern\":\"Skills |Skill |skills\",\"file_glob\":\"STATUS.md\",\"limit\":60}"
+        }
+      ]
+    },
+    {
+      "usage": {
+        "input_tokens": 17444,
+        "output_tokens": 431,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0
+      }
+    }
+  ]
+}

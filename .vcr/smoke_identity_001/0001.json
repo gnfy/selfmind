@@ -1,0 +1,550 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "content": "我是"
+    },
+    {
+      "content": "运行"
+    },
+    {
+      "content": "在"
+    },
+    {
+      "content": " Self"
+    },
+    {
+      "content": "Mind"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "网关"
+    },
+    {
+      "content": "里的"
+    },
+    {
+      "content": "编码"
+    },
+    {
+      "content": "智能"
+    },
+    {
+      "content": "体"
+    },
+    {
+      "content": "（"
+    },
+    {
+      "content": "coding"
+    },
+    {
+      "content": " agent"
+    },
+    {
+      "content": "），"
+    },
+    {
+      "content": "负责"
+    },
+    {
+      "content": "执行"
+    },
+    {
+      "content": "你的"
+    },
+    {
+      "content": "任务"
+    },
+    {
+      "content": "："
+    },
+    {
+      "content": "规划"
+    },
+    {
+      "content": "、"
+    },
+    {
+      "content": "调用"
+    },
+    {
+      "content": "工具"
+    },
+    {
+      "content": "、"
+    },
+    {
+      "content": "诊断"
+    },
+    {
+      "content": "、"
+    },
+    {
+      "content": "验证"
+    },
+    {
+      "content": "并把"
+    },
+    {
+      "content": "结果"
+    },
+    {
+      "content": "汇报"
+    },
+    {
+      "content": "给你"
+    },
+    {
+      "content": "。"
+    },
+    {
+      "content": "当前"
+    },
+    {
+      "content": "这个"
+    },
+    {
+      "content": "会话"
+    },
+    {
+      "content": "是通过"
+    },
+    {
+      "content": " CLI"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "通道"
+    },
+    {
+      "content": "进入"
+    },
+    {
+      "content": "的"
+    },
+    {
+      "content": "，"
+    },
+    {
+      "content": "工作"
+    },
+    {
+      "content": "区"
+    },
+    {
+      "content": "为"
+    },
+    {
+      "content": "本次"
+    },
+    {
+      "content": "任务"
+    },
+    {
+      "content": "分配的"
+    },
+    {
+      "content": "独立"
+    },
+    {
+      "content": "沙"
+    },
+    {
+      "content": "箱"
+    },
+    {
+      "content": "目录"
+    },
+    {
+      "content": "。\n\n"
+    },
+    {
+      "content": "关于"
+    },
+    {
+      "content": "当前"
+    },
+    {
+      "content": "连接的"
+    },
+    {
+      "content": "模型"
+    },
+    {
+      "content": "："
+    },
+    {
+      "content": "我在"
+    },
+    {
+      "content": "这一"
+    },
+    {
+      "content": "轮的"
+    },
+    {
+      "content": "上下文"
+    },
+    {
+      "content": "里"
+    },
+    {
+      "content": "没有"
+    },
+    {
+      "content": "直接"
+    },
+    {
+      "content": "暴露"
+    },
+    {
+      "content": "确"
+    },
+    {
+      "content": "切的"
+    },
+    {
+      "content": "模型"
+    },
+    {
+      "content": " ID"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "或"
+    },
+    {
+      "content": "提供商"
+    },
+    {
+      "content": "配置"
+    },
+    {
+      "content": "，"
+    },
+    {
+      "content": "所以"
+    },
+    {
+      "content": "我不"
+    },
+    {
+      "content": "应该"
+    },
+    {
+      "content": "编"
+    },
+    {
+      "content": "造"
+    },
+    {
+      "content": "一个"
+    },
+    {
+      "content": "型号"
+    },
+    {
+      "content": "。"
+    },
+    {
+      "content": "从"
+    },
+    {
+      "content": "运行"
+    },
+    {
+      "content": "特征"
+    },
+    {
+      "content": "看"
+    },
+    {
+      "content": "，"
+    },
+    {
+      "content": "我"
+    },
+    {
+      "content": "由"
+    },
+    {
+      "content": " Anthrop"
+    },
+    {
+      "content": "ic"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "的"
+    },
+    {
+      "content": " Claude"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "系列"
+    },
+    {
+      "content": "模型"
+    },
+    {
+      "content": "驱动"
+    },
+    {
+      "content": "，"
+    },
+    {
+      "content": "但"
+    },
+    {
+      "content": "具体"
+    },
+    {
+      "content": "是"
+    },
+    {
+      "content": "哪个"
+    },
+    {
+      "content": "版本"
+    },
+    {
+      "content": "（"
+    },
+    {
+      "content": "例如"
+    },
+    {
+      "content": " Claude"
+    },
+    {
+      "content": " Son"
+    },
+    {
+      "content": "net"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "还是"
+    },
+    {
+      "content": " Op"
+    },
+    {
+      "content": "us"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "系列"
+    },
+    {
+      "content": "）"
+    },
+    {
+      "content": "取决于"
+    },
+    {
+      "content": "网关"
+    },
+    {
+      "content": "的"
+    },
+    {
+      "content": "模型"
+    },
+    {
+      "content": "路由"
+    },
+    {
+      "content": "配置"
+    },
+    {
+      "content": "。\n\n"
+    },
+    {
+      "content": "如果你想"
+    },
+    {
+      "content": "确认"
+    },
+    {
+      "content": "确"
+    },
+    {
+      "content": "切的"
+    },
+    {
+      "content": "模型"
+    },
+    {
+      "content": "，"
+    },
+    {
+      "content": "可以"
+    },
+    {
+      "content": "运行"
+    },
+    {
+      "content": "：\n\n"
+    },
+    {
+      "content": "-"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "self"
+    },
+    {
+      "content": "mind"
+    },
+    {
+      "content": " model"
+    },
+    {
+      "content": " check"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " ——"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "查看"
+    },
+    {
+      "content": "当前"
+    },
+    {
+      "content": "配置"
+    },
+    {
+      "content": "的"
+    },
+    {
+      "content": "模型"
+    },
+    {
+      "content": "与"
+    },
+    {
+      "content": "路由"
+    },
+    {
+      "content": "状态"
+    },
+    {
+      "content": "\n"
+    },
+    {
+      "content": "-"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "或"
+    },
+    {
+      "content": "查看"
+    },
+    {
+      "content": " provider"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "配置文件"
+    },
+    {
+      "content": "中的"
+    },
+    {
+      "content": " model"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "设置"
+    },
+    {
+      "content": "\n\n"
+    },
+    {
+      "content": "需要"
+    },
+    {
+      "content": "我"
+    },
+    {
+      "content": "帮你"
+    },
+    {
+      "content": "查"
+    },
+    {
+      "content": "一下"
+    },
+    {
+      "content": "当前"
+    },
+    {
+      "content": "环境"
+    },
+    {
+      "content": "里"
+    },
+    {
+      "content": "实际"
+    },
+    {
+      "content": "配置"
+    },
+    {
+      "content": "的"
+    },
+    {
+      "content": "模型"
+    },
+    {
+      "content": "吗"
+    },
+    {
+      "content": "？"
+    },
+    {
+      "finish_reason": "stop"
+    },
+    {
+      "usage": {
+        "input_tokens": 12301,
+        "output_tokens": 774,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0
+      }
+    }
+  ]
+}

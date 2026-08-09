@@ -1,0 +1,146 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "content": "我"
+    },
+    {
+      "content": "已"
+    },
+    {
+      "content": "看到"
+    },
+    {
+      "content": "管理"
+    },
+    {
+      "content": "层"
+    },
+    {
+      "content": "入口"
+    },
+    {
+      "content": "；"
+    },
+    {
+      "content": "现在"
+    },
+    {
+      "content": "精"
+    },
+    {
+      "content": "确"
+    },
+    {
+      "content": "抽"
+    },
+    {
+      "content": "取"
+    },
+    {
+      "content": "关键"
+    },
+    {
+      "content": "函数"
+    },
+    {
+      "content": "上下"
+    },
+    {
+      "content": "文"
+    },
+    {
+      "content": "，"
+    },
+    {
+      "content": "避免"
+    },
+    {
+      "content": "被"
+    },
+    {
+      "content": "大"
+    },
+    {
+      "content": "文件"
+    },
+    {
+      "content": "其"
+    },
+    {
+      "content": "余"
+    },
+    {
+      "content": "实现"
+    },
+    {
+      "content": "干"
+    },
+    {
+      "content": "扰"
+    },
+    {
+      "content": "。"
+    },
+    {
+      "content": "Preparing to run terminal",
+      "event_type": "agent.thinking"
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_j1bGgywWjrtfJFek5q2JyUro",
+          "Function": "terminal",
+          "Args": "{\"command\":\"rg -n -C 35 'func (ListSkillsForTenant|findSkill|scanSkillRoot|skillInfo)' internal/tools/skill_manage.go\",\"cwd\":\"{{SELFMIND_VCR_WORKSPACE}}\",\"timeout\":20}"
+        }
+      ]
+    },
+    {
+      "content": "Preparing to run terminal",
+      "event_type": "agent.thinking"
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_hpdWnxgtu48nWlvKaOiLv4vj",
+          "Function": "terminal",
+          "Args": "{\"command\":\"rg -n -C 20 'ReloadSkillToolsForTenant' internal/app/tools.go internal/tools/skill_manage.go\",\"cwd\":\"{{SELFMIND_VCR_WORKSPACE}}\",\"timeout\":20}"
+        }
+      ]
+    },
+    {
+      "content": "Preparing to run terminal",
+      "event_type": "agent.thinking"
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_4jBEQGmKJsL1Ph7ZSjoRt2kI",
+          "Function": "terminal",
+          "Args": "{\"command\":\"rg -n -C 30 'ResolveSkillInvocationForTenant' internal/gateway/cli/command_handlers.go\",\"cwd\":\"{{SELFMIND_VCR_WORKSPACE}}\",\"timeout\":20}"
+        }
+      ]
+    },
+    {
+      "content": "Preparing to run terminal",
+      "event_type": "agent.thinking"
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_epSE4HhDgytXgFCGlYMpFtKA",
+          "Function": "terminal",
+          "Args": "{\"command\":\"rg -n -C 12 'precedence|workspace|SELFMIND_SKILLS|Reload|duplicate|untrusted|ancestor' internal/tools/*skill*_test.go\",\"cwd\":\"{{SELFMIND_VCR_WORKSPACE}}\",\"timeout\":20}"
+        }
+      ]
+    },
+    {
+      "usage": {
+        "input_tokens": 29431,
+        "output_tokens": 516,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0
+      }
+    }
+  ]
+}

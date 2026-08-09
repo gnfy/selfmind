@@ -1,0 +1,168 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "content": "还"
+    },
+    {
+      "content": "需"
+    },
+    {
+      "content": "确认"
+    },
+    {
+      "content": "两个"
+    },
+    {
+      "content": "潜"
+    },
+    {
+      "content": "在"
+    },
+    {
+      "content": "缺"
+    },
+    {
+      "content": "口"
+    },
+    {
+      "content": "："
+    },
+    {
+      "content": "同"
+    },
+    {
+      "content": "名"
+    },
+    {
+      "content": "判"
+    },
+    {
+      "content": "定"
+    },
+    {
+      "content": "按"
+    },
+    {
+      "content": "目录"
+    },
+    {
+      "content": "名"
+    },
+    {
+      "content": "还是"
+    },
+    {
+      "content": " front"
+    },
+    {
+      "content": " matter"
+    },
+    {
+      "content": " 名"
+    },
+    {
+      "content": "，以及"
+    },
+    {
+      "content": "动态"
+    },
+    {
+      "content": " registry"
+    },
+    {
+      "content": " 是否"
+    },
+    {
+      "content": "跨"
+    },
+    {
+      "content": "工作"
+    },
+    {
+      "content": "区"
+    },
+    {
+      "content": "陈"
+    },
+    {
+      "content": "旧"
+    },
+    {
+      "content": "。"
+    },
+    {
+      "content": "Preparing to run terminal",
+      "event_type": "agent.thinking"
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_P0Qt9zxNMv96raci8Ln8Cdww",
+          "Function": "terminal",
+          "Args": "{\"command\":\"sed -n '714,875p' internal/tools/skill_manage.go\",\"cwd\":\"{{SELFMIND_VCR_WORKSPACE}}\",\"timeout\":20}"
+        }
+      ]
+    },
+    {
+      "content": "Preparing to run read_file",
+      "event_type": "agent.thinking"
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_P07l8Yked4b8GWVTeeD1Kbgl",
+          "Function": "read_file",
+          "Args": "{\"path\":\"{{SELFMIND_VCR_WORKSPACE}}/internal/app/tools.go\",\"limit\":130}"
+        }
+      ]
+    },
+    {
+      "content": "Preparing to run search_files",
+      "event_type": "agent.thinking"
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_16L84ObWHqGUuQwvgzEium56",
+          "Function": "search_files",
+          "Args": "{\"path\":\"{{SELFMIND_VCR_WORKSPACE}}/internal\",\"pattern\":\"BuildTools(\",\"file_glob\":\"*.go\",\"limit\":100}"
+        }
+      ]
+    },
+    {
+      "content": "Preparing to run search_files",
+      "event_type": "agent.thinking"
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_8KCY0xx4mkGLQJQOu6vDZ6jn",
+          "Function": "search_files",
+          "Args": "{\"path\":\"{{SELFMIND_VCR_WORKSPACE}}/internal\",\"pattern\":\"NewDispatcherWithRegistry\",\"file_glob\":\"*.go\",\"limit\":100}"
+        }
+      ]
+    },
+    {
+      "content": "Preparing to run search_files",
+      "event_type": "agent.thinking"
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_iMKBxoC7cPKK051ot9A1AmbW",
+          "Function": "search_files",
+          "Args": "{\"path\":\"{{SELFMIND_VCR_WORKSPACE}}\",\"pattern\":\"SELFMIND_SKILLS_ROOTS\",\"file_glob\":\"*\",\"limit\":100}"
+        }
+      ]
+    },
+    {
+      "usage": {
+        "input_tokens": 37877,
+        "output_tokens": 451,
+        "cache_read_input_tokens": 9728,
+        "cache_creation_input_tokens": 0
+      }
+    }
+  ]
+}

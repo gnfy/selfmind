@@ -1,0 +1,26 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "content": "Preparing to run finish_run",
+      "event_type": "agent.thinking"
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_WRV2djoficb1OeSDloFAB8Wz",
+          "Function": "finish_run",
+          "Args": "{\"status\":\"blocked\",\"summary\":\"The durable watch “slow aggregate” was not registered because its preflight check exceeded the 1-second command timeout.\",\"done\":[\"Submitted the exact requested command, success pattern, 30-second interval, 300-second total timeout, and 1-second command timeout without executing the command directly.\"],\"risks\":[\"The command sleeps for 2 seconds, so it cannot complete within the watch’s 1-second per-check timeout.\"],\"need_approve\":false}"
+        }
+      ]
+    },
+    {
+      "usage": {
+        "input_tokens": 6351,
+        "output_tokens": 141,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0
+      }
+    }
+  ]
+}

@@ -1,0 +1,121 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "content": "The"
+    },
+    {
+      "content": " durable"
+    },
+    {
+      "content": " watch"
+    },
+    {
+      "content": " **"
+    },
+    {
+      "content": "“"
+    },
+    {
+      "content": "slow"
+    },
+    {
+      "content": " aggregate"
+    },
+    {
+      "content": "”"
+    },
+    {
+      "content": "**"
+    },
+    {
+      "content": " was"
+    },
+    {
+      "content": " not"
+    },
+    {
+      "content": " registered"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": " Its"
+    },
+    {
+      "content": " pre"
+    },
+    {
+      "content": "flight"
+    },
+    {
+      "content": " check"
+    },
+    {
+      "content": " exceeded"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " **"
+    },
+    {
+      "content": "1"
+    },
+    {
+      "content": "-second"
+    },
+    {
+      "content": " command"
+    },
+    {
+      "content": " timeout"
+    },
+    {
+      "content": "**"
+    },
+    {
+      "content": " because"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " exact"
+    },
+    {
+      "content": " command"
+    },
+    {
+      "content": " begins"
+    },
+    {
+      "content": " with"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "sleep"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "2"
+    },
+    {
+      "content": "`."
+    },
+    {
+      "usage": {
+        "input_tokens": 6402,
+        "output_tokens": 40,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0
+      }
+    }
+  ]
+}

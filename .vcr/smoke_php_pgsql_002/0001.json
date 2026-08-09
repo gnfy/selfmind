@@ -1,0 +1,424 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "content": "```"
+    },
+    {
+      "content": "php"
+    },
+    {
+      "content": "\n"
+    },
+    {
+      "content": "\u003c?"
+    },
+    {
+      "content": "php"
+    },
+    {
+      "content": "\n\n"
+    },
+    {
+      "content": "$"
+    },
+    {
+      "content": "pdo"
+    },
+    {
+      "content": " ="
+    },
+    {
+      "content": " new"
+    },
+    {
+      "content": " PDO"
+    },
+    {
+      "content": "(\n"
+    },
+    {
+      "content": "   "
+    },
+    {
+      "content": " '"
+    },
+    {
+      "content": "pgsql"
+    },
+    {
+      "content": ":"
+    },
+    {
+      "content": "host"
+    },
+    {
+      "content": "="
+    },
+    {
+      "content": "127"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": "0"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": "0"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": "1"
+    },
+    {
+      "content": ";"
+    },
+    {
+      "content": "port"
+    },
+    {
+      "content": "="
+    },
+    {
+      "content": "543"
+    },
+    {
+      "content": "2"
+    },
+    {
+      "content": ";"
+    },
+    {
+      "content": "dbname"
+    },
+    {
+      "content": "=my"
+    },
+    {
+      "content": "db"
+    },
+    {
+      "content": "',\n"
+    },
+    {
+      "content": "   "
+    },
+    {
+      "content": " '"
+    },
+    {
+      "content": "my"
+    },
+    {
+      "content": "user"
+    },
+    {
+      "content": "',\n"
+    },
+    {
+      "content": "   "
+    },
+    {
+      "content": " '"
+    },
+    {
+      "content": "myp"
+    },
+    {
+      "content": "assword"
+    },
+    {
+      "content": "',\n"
+    },
+    {
+      "content": "   "
+    },
+    {
+      "content": " ["
+    },
+    {
+      "content": "PDO"
+    },
+    {
+      "content": "::"
+    },
+    {
+      "content": "ATTR"
+    },
+    {
+      "content": "_ERR"
+    },
+    {
+      "content": "MODE"
+    },
+    {
+      "content": " =\u003e"
+    },
+    {
+      "content": " PDO"
+    },
+    {
+      "content": "::"
+    },
+    {
+      "content": "ERR"
+    },
+    {
+      "content": "MODE"
+    },
+    {
+      "content": "_EXCEPTION"
+    },
+    {
+      "content": "]\n"
+    },
+    {
+      "content": ");\n\n"
+    },
+    {
+      "content": "$stmt"
+    },
+    {
+      "content": " ="
+    },
+    {
+      "content": " $"
+    },
+    {
+      "content": "pdo"
+    },
+    {
+      "content": "-\u003e"
+    },
+    {
+      "content": "query"
+    },
+    {
+      "content": "('"
+    },
+    {
+      "content": "SELECT"
+    },
+    {
+      "content": " id"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " name"
+    },
+    {
+      "content": " FROM"
+    },
+    {
+      "content": " users"
+    },
+    {
+      "content": " LIMIT"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "1"
+    },
+    {
+      "content": "');\n"
+    },
+    {
+      "content": "$row"
+    },
+    {
+      "content": " ="
+    },
+    {
+      "content": " $"
+    },
+    {
+      "content": "stmt"
+    },
+    {
+      "content": "-\u003e"
+    },
+    {
+      "content": "fetch"
+    },
+    {
+      "content": "(PDO"
+    },
+    {
+      "content": "::"
+    },
+    {
+      "content": "FETCH"
+    },
+    {
+      "content": "_ASSOC"
+    },
+    {
+      "content": ");\n\n"
+    },
+    {
+      "content": "var"
+    },
+    {
+      "content": "_dump"
+    },
+    {
+      "content": "($"
+    },
+    {
+      "content": "row"
+    },
+    {
+      "content": ");\n"
+    },
+    {
+      "content": "``"
+    },
+    {
+      "content": "`\n\n"
+    },
+    {
+      "content": "需要"
+    },
+    {
+      "content": "安装"
+    },
+    {
+      "content": "并"
+    },
+    {
+      "content": "启"
+    },
+    {
+      "content": "用"
+    },
+    {
+      "content": " PHP"
+    },
+    {
+      "content": " 的"
+    },
+    {
+      "content": " Postgre"
+    },
+    {
+      "content": "SQL"
+    },
+    {
+      "content": " PDO"
+    },
+    {
+      "content": " 扩"
+    },
+    {
+      "content": "展"
+    },
+    {
+      "content": "（"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": "pdo"
+    },
+    {
+      "content": "_pg"
+    },
+    {
+      "content": "sql"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": "）。"
+    },
+    {
+      "content": "请"
+    },
+    {
+      "content": "将"
+    },
+    {
+      "content": "数据库"
+    },
+    {
+      "content": "名"
+    },
+    {
+      "content": "、"
+    },
+    {
+      "content": "用户名"
+    },
+    {
+      "content": "、"
+    },
+    {
+      "content": "密码"
+    },
+    {
+      "content": "及"
+    },
+    {
+      "content": " SQL"
+    },
+    {
+      "content": " 中"
+    },
+    {
+      "content": "的"
+    },
+    {
+      "content": "表"
+    },
+    {
+      "content": "名"
+    },
+    {
+      "content": "和"
+    },
+    {
+      "content": "字段"
+    },
+    {
+      "content": "名"
+    },
+    {
+      "content": "替"
+    },
+    {
+      "content": "换"
+    },
+    {
+      "content": "为"
+    },
+    {
+      "content": "实际"
+    },
+    {
+      "content": "值"
+    },
+    {
+      "content": "。"
+    },
+    {
+      "usage": {
+        "input_tokens": 10423,
+        "output_tokens": 142,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0
+      }
+    }
+  ]
+}

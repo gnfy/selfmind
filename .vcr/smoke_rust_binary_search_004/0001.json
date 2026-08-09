@@ -1,0 +1,415 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "content": "```"
+    },
+    {
+      "content": "rust"
+    },
+    {
+      "content": "\n"
+    },
+    {
+      "content": "fn"
+    },
+    {
+      "content": " binary"
+    },
+    {
+      "content": "_search"
+    },
+    {
+      "content": "\u003cT"
+    },
+    {
+      "content": ":"
+    },
+    {
+      "content": " Ord"
+    },
+    {
+      "content": "\u003e("
+    },
+    {
+      "content": "slice"
+    },
+    {
+      "content": ":"
+    },
+    {
+      "content": " \u0026["
+    },
+    {
+      "content": "T"
+    },
+    {
+      "content": "],"
+    },
+    {
+      "content": " target"
+    },
+    {
+      "content": ":"
+    },
+    {
+      "content": " \u0026"
+    },
+    {
+      "content": "T"
+    },
+    {
+      "content": ")"
+    },
+    {
+      "content": " -\u003e"
+    },
+    {
+      "content": " Option"
+    },
+    {
+      "content": "\u003c"
+    },
+    {
+      "content": "usize"
+    },
+    {
+      "content": "\u003e"
+    },
+    {
+      "content": " {\n"
+    },
+    {
+      "content": "   "
+    },
+    {
+      "content": " let"
+    },
+    {
+      "content": " ("
+    },
+    {
+      "content": "mut"
+    },
+    {
+      "content": " left"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " mut"
+    },
+    {
+      "content": " right"
+    },
+    {
+      "content": ")"
+    },
+    {
+      "content": " ="
+    },
+    {
+      "content": " ("
+    },
+    {
+      "content": "0"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " slice"
+    },
+    {
+      "content": ".len"
+    },
+    {
+      "content": "());\n\n"
+    },
+    {
+      "content": "   "
+    },
+    {
+      "content": " while"
+    },
+    {
+      "content": " left"
+    },
+    {
+      "content": " \u003c"
+    },
+    {
+      "content": " right"
+    },
+    {
+      "content": " {\n"
+    },
+    {
+      "content": "       "
+    },
+    {
+      "content": " let"
+    },
+    {
+      "content": " mid"
+    },
+    {
+      "content": " ="
+    },
+    {
+      "content": " left"
+    },
+    {
+      "content": " +"
+    },
+    {
+      "content": " ("
+    },
+    {
+      "content": "right"
+    },
+    {
+      "content": " -"
+    },
+    {
+      "content": " left"
+    },
+    {
+      "content": ")"
+    },
+    {
+      "content": " /"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "2"
+    },
+    {
+      "content": ";\n\n"
+    },
+    {
+      "content": "       "
+    },
+    {
+      "content": " match"
+    },
+    {
+      "content": " slice"
+    },
+    {
+      "content": "[mid"
+    },
+    {
+      "content": "]."
+    },
+    {
+      "content": "cmp"
+    },
+    {
+      "content": "(target"
+    },
+    {
+      "content": ")"
+    },
+    {
+      "content": " {\n"
+    },
+    {
+      "content": "           "
+    },
+    {
+      "content": " std"
+    },
+    {
+      "content": "::"
+    },
+    {
+      "content": "cmp"
+    },
+    {
+      "content": "::"
+    },
+    {
+      "content": "Ordering"
+    },
+    {
+      "content": "::"
+    },
+    {
+      "content": "Equal"
+    },
+    {
+      "content": " =\u003e"
+    },
+    {
+      "content": " return"
+    },
+    {
+      "content": " Some"
+    },
+    {
+      "content": "(mid"
+    },
+    {
+      "content": "),\n"
+    },
+    {
+      "content": "           "
+    },
+    {
+      "content": " std"
+    },
+    {
+      "content": "::"
+    },
+    {
+      "content": "cmp"
+    },
+    {
+      "content": "::"
+    },
+    {
+      "content": "Ordering"
+    },
+    {
+      "content": "::"
+    },
+    {
+      "content": "Less"
+    },
+    {
+      "content": " =\u003e"
+    },
+    {
+      "content": " left"
+    },
+    {
+      "content": " ="
+    },
+    {
+      "content": " mid"
+    },
+    {
+      "content": " +"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "1"
+    },
+    {
+      "content": ",\n"
+    },
+    {
+      "content": "           "
+    },
+    {
+      "content": " std"
+    },
+    {
+      "content": "::"
+    },
+    {
+      "content": "cmp"
+    },
+    {
+      "content": "::"
+    },
+    {
+      "content": "Ordering"
+    },
+    {
+      "content": "::"
+    },
+    {
+      "content": "Greater"
+    },
+    {
+      "content": " =\u003e"
+    },
+    {
+      "content": " right"
+    },
+    {
+      "content": " ="
+    },
+    {
+      "content": " mid"
+    },
+    {
+      "content": ",\n"
+    },
+    {
+      "content": "       "
+    },
+    {
+      "content": " }\n"
+    },
+    {
+      "content": "   "
+    },
+    {
+      "content": " }\n\n"
+    },
+    {
+      "content": "   "
+    },
+    {
+      "content": " None"
+    },
+    {
+      "content": "\n"
+    },
+    {
+      "content": "}\n"
+    },
+    {
+      "content": "``"
+    },
+    {
+      "content": "`\n\n"
+    },
+    {
+      "content": "要求"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "slice"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " 已"
+    },
+    {
+      "content": "按"
+    },
+    {
+      "content": "升"
+    },
+    {
+      "content": "序"
+    },
+    {
+      "content": "排列"
+    },
+    {
+      "content": "。"
+    },
+    {
+      "usage": {
+        "input_tokens": 10444,
+        "output_tokens": 138,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0
+      }
+    }
+  ]
+}

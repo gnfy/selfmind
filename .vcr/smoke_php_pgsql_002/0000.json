@@ -1,0 +1,4 @@
+{
+  "method": "completion",
+  "completion": "PHP PDO pg_connect pg_fetch_assoc PostgreSQL 查询示例"
+}

@@ -244,6 +244,19 @@ grant an otherwise forbidden capability.
 - Missing judge, timeout, provider failure, malformed output, or an unknown
   decision always escalates. Triage never fails open.
 
+The human ask itself is bounded, and the bound is the SMALLER of the configured
+budget and whatever the caller's own deadline leaves (`agent.approval_wait`,
+`agent.approval_wait_unattended`). The waiter must return its typed decision
+before the caller's context expires: the timeout path parks the work as
+`waiting_user`, and a waiter killed mid-cleanup reports a bare transport
+timeout instead, losing the answer entirely. When nothing can answer — no live
+endpoint and no bound account — the shorter unattended budget applies; a bound
+account keeps the full budget, because presence expires long before a person
+stops being reachable. With no time left to ask at all, the ask is recorded as
+an `approval.skipped_no_budget` run event and the work parks without creating a
+durable row that would expire in the same breath. None of this changes the
+OUTCOME contract: a timeout is never a rejection and never an approval.
+
 Treat command text as untrusted data in the judge prompt. Strip irrelevant
 comments and delimit the command rather than interpolating it as an instruction.
 

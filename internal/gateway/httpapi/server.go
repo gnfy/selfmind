@@ -38,6 +38,14 @@ type Server struct {
 	// which was never notified, is re-pushed to the preferred IM by the periodic
 	// sweep. Zero disables escrow.
 	PendingNotifyAfter time.Duration
+	// ApprovalWait bounds how long a run parks on an unanswered approval while
+	// an endpoint could still answer, and ApprovalWaitUnattended is the much
+	// shorter bound used when nothing can answer (no attached endpoint, no
+	// bound account). Both are resolved from config by `app`; zero means the
+	// package default. Neither ever changes the OUTCOME of a timeout — an
+	// unanswered approval parks the work, it is never a rejection.
+	ApprovalWait           time.Duration
+	ApprovalWaitUnattended time.Duration
 	// ApprovalJudge is the optional cheap-model judge for smart-mode LLM approval
 	// triage (H2). Installed on every execution scope so a dangerous
 	// (non-hardline) op in smart mode is triaged before the human ask. Nil (e.g.

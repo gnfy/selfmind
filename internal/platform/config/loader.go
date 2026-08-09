@@ -534,6 +534,14 @@ type AgentConfig struct {
 	// mode. It is intentionally separate from provider transport timeouts: an
 	// unavailable judge must fail safe to a human ask without stalling the run.
 	ApprovalTriageTimeout string `mapstructure:"approval_triage_timeout" yaml:"approval_triage_timeout,omitempty"`
+	// ApprovalWait bounds how long a run parks on an unanswered approval while
+	// an endpoint could still answer it. A timeout is never a rejection: it
+	// parks the work (see docs/tool-safety.md).
+	ApprovalWait string `mapstructure:"approval_wait" yaml:"approval_wait,omitempty"`
+	// ApprovalWaitUnattended is the much shorter bound used when NOTHING can
+	// answer — no attached endpoint and no bound account. Waiting the full
+	// budget there burns the run's time for a decision that cannot arrive.
+	ApprovalWaitUnattended string `mapstructure:"approval_wait_unattended" yaml:"approval_wait_unattended,omitempty"`
 }
 
 // DefaultApprovalTriageTimeout leaves enough room for reasoning-capable cheap
@@ -550,6 +558,43 @@ func (a AgentConfig) ApprovalTriageTimeoutDuration() time.Duration {
 	d, err := time.ParseDuration(raw)
 	if err != nil || d <= 0 {
 		return DefaultApprovalTriageTimeout
+	}
+	return d
+}
+
+// Approval wait budgets. The attended default matches the historical
+// hardcoded bound; the unattended one only applies when no endpoint and no
+// bound account could produce an answer.
+const (
+	DefaultApprovalWait           = 30 * time.Minute
+	DefaultApprovalWaitUnattended = 30 * time.Second
+	// minApprovalWait clamps UP rather than falling back to the default: a
+	// person who configured "5s" wants a short wait, not a silent 30 minutes
+	// (same lesson as updatecheck.ParseInterval).
+	minApprovalWait = 5 * time.Second
+)
+
+// ApprovalWaitDuration is the bound used while an endpoint could still answer.
+func (a AgentConfig) ApprovalWaitDuration() time.Duration {
+	return parseApprovalWait(a.ApprovalWait, DefaultApprovalWait)
+}
+
+// ApprovalWaitUnattendedDuration is the bound used when nothing can answer.
+func (a AgentConfig) ApprovalWaitUnattendedDuration() time.Duration {
+	return parseApprovalWait(a.ApprovalWaitUnattended, DefaultApprovalWaitUnattended)
+}
+
+func parseApprovalWait(raw string, fallback time.Duration) time.Duration {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return fallback
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil || d <= 0 {
+		return fallback
+	}
+	if d < minApprovalWait {
+		return minApprovalWait
 	}
 	return d
 }

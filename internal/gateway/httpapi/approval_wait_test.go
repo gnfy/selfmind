@@ -54,19 +54,22 @@ func TestApprovalWaitBudgetPresenceCountsAsAttended(t *testing.T) {
 func TestApprovalWaitBudgetBoundedByCallerDeadline(t *testing.T) {
 	srv, _, identity, _, _ := newApprovalTestServer(t)
 	coordinator := &RunCoordinator{srv: srv}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	const callerBudget = 5 * time.Minute
+	ctx, cancel := context.WithTimeout(context.Background(), callerBudget)
 	defer cancel()
 
 	got := coordinator.approvalWaitBudget(ctx, identity)
-	if got <= 0 || got > 10*time.Second-approvalWaitReserve {
-		t.Fatalf("budget = %s, want a positive value at most %s", got, 10*time.Second-approvalWaitReserve)
+	if got <= 0 || got > callerBudget-approvalWaitReserve {
+		t.Fatalf("budget = %s, want a positive value at most %s", got, callerBudget-approvalWaitReserve)
 	}
 }
 
+// A caller with less time than the reserve cannot afford the ask AND the turn
+// that reports the parked work, so there is no budget to spend.
 func TestApprovalWaitBudgetNoTimeLeft(t *testing.T) {
 	srv, _, identity, _, _ := newApprovalTestServer(t)
 	coordinator := &RunCoordinator{srv: srv}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), approvalWaitReserve/2)
 	defer cancel()
 
 	if got := coordinator.approvalWaitBudget(ctx, identity); got > 0 {
@@ -80,7 +83,7 @@ func TestApprovalWaitBudgetNoTimeLeft(t *testing.T) {
 func TestToolApprovalHandlerParksWhenNoBudget(t *testing.T) {
 	srv, store, identity, task, seeded := newApprovalTestServer(t)
 	coordinator := &RunCoordinator{srv: srv}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), approvalWaitReserve/2)
 	defer cancel()
 
 	decision, err := coordinator.toolApprovalHandler(identity, task, nil, "cli")(ctx, tools.ToolApprovalRequest{
@@ -132,7 +135,10 @@ func TestToolApprovalHandlerParksWhenNoBudget(t *testing.T) {
 func TestToolApprovalHandlerReturnsBeforeCallerDeadline(t *testing.T) {
 	srv, _, identity, task, _ := newApprovalTestServer(t)
 	coordinator := &RunCoordinator{srv: srv}
-	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
+	// Long enough to leave a real wait after the reserve, short enough to keep
+	// the test quick: the waiter must return on its own budget, not on the
+	// caller's deadline.
+	ctx, cancel := context.WithTimeout(context.Background(), approvalWaitReserve+5*time.Second)
 	defer cancel()
 
 	start := time.Now()

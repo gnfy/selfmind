@@ -680,12 +680,18 @@ func (c *RunCoordinator) gatewayClarify(runCtx context.Context, identity *contro
 }
 
 // approvalWaitReserve is the slice of the caller's remaining budget kept for
-// the waiter itself: expiring the durable row, appending the event, and
-// handing the typed decision back through the tool middleware. Without it the
-// caller's deadline kills the waiter mid-cleanup and the run reports a bare
-// transport timeout instead of parked work.
+// everything that has to happen AFTER the wait: expiring the durable row,
+// appending the event, handing the typed decision back through the tool
+// middleware, and — the part that made the first value too small — one more
+// model round-trip for the agent to actually park the work and say so.
+//
+// Three seconds covered only the waiter's own cleanup. The decision came back
+// in time, the agent then had no budget left to finalize, and the run still
+// died on a bare transport timeout with nothing to show for it. The reserve
+// has to cover the turn that reports the parked work, not just the bookkeeping
+// that precedes it.
 const (
-	approvalWaitReserve = 3 * time.Second
+	approvalWaitReserve = 30 * time.Second
 	// Defaults mirror config.DefaultApprovalWait{,Unattended}. They are
 	// duplicated rather than imported on purpose: httpapi takes resolved
 	// policy through Server fields and does not depend on the config package.

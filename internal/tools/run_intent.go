@@ -37,6 +37,11 @@ type DenyScope struct {
 	Classes []OperationClass `json:"classes,omitempty"`
 	// Targets are literal paths or command fragments named in the clause.
 	Targets []string `json:"targets,omitempty"`
+	// Repetition marks a prohibition qualified as "not again" (rerun, retry,
+	// 重新). It forbids a SECOND execution, not the first, so it does not force
+	// a human ask for the call the person just asked for. Repeated identical
+	// calls remain bounded by ToolGuardrails.
+	Repetition bool `json:"repetition,omitempty"`
 	// Resolved is false when a prohibition was detected but could not be
 	// classified. Such a deny keeps the old blanket effect: narrowing applies
 	// to what we can read, never to what we cannot.
@@ -106,6 +111,11 @@ func (s RunIntentSnapshot) DenyBlocks(classes []OperationClass, targets []string
 func (d DenyScope) blocks(classes []OperationClass, targets []string) bool {
 	if !d.Resolved {
 		return true
+	}
+	if d.Repetition {
+		// "Do not rerun it" authorizes the first execution. Blocking it inverts
+		// the instruction, and nothing here can tell a first call from a second.
+		return false
 	}
 	if !anyClassMatches(d.Classes, classes) {
 		return false

@@ -140,3 +140,71 @@ func TestUnmatchedDenyStillReachesTheJudge(t *testing.T) {
 		t.Fatal("the prohibition must remain visible as judge context")
 	}
 }
+
+// Real eval-case wording that the first scoping pass still blocked. Each row
+// is a sentence a person actually wrote, paired with the operation the agent
+// was asked to perform in the very same message.
+func TestDenyScopeDoesNotBlockWhatTheSentenceAsksFor(t *testing.T) {
+	cases := []struct {
+		name    string
+		content string
+		classes []tools.OperationClass
+		blocked bool
+	}{
+		{
+			// "run" used to match inside "rerun", so forbidding a SECOND run
+			// blocked the first one the same sentence requested.
+			name:    "do not rerun leaves the requested first run alone",
+			content: "Run the command false exactly once as the verification step. Do not repair or rerun the verification.",
+			classes: []tools.OperationClass{tools.OpClassExecInTurn},
+			blocked: false,
+		},
+		{
+			// "foreground" is the manner qualifier here: the person is ruling
+			// out an in-turn poll loop and asking for delegation instead.
+			name:    "forbidding a foreground loop still allows delegation",
+			content: "Register a durable external watch for the deployment. Do not run a foreground polling loop.",
+			classes: []tools.OperationClass{tools.OpClassExecDelegated},
+			blocked: false,
+		},
+		{
+			name:    "forbidding a foreground loop still stops an in-turn run",
+			content: "Register a durable external watch for the deployment. Do not run a foreground polling loop.",
+			classes: []tools.OperationClass{tools.OpClassExecInTurn},
+			blocked: true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			snapshot := denyScopesFor(t, tc.content)
+			if !snapshot.HasExplicitDeny() {
+				t.Fatalf("fixture should record a prohibition: %q", tc.content)
+			}
+			if got := snapshot.DenyBlocks(tc.classes, nil); got != tc.blocked {
+				t.Fatalf("DenyBlocks(%v) = %v, want %v (scopes=%+v)", tc.classes, got, tc.blocked, snapshot.DenyScopes)
+			}
+		})
+	}
+}
+
+// A prohibition governs what follows it. "Finish the run as waiting_user and
+// do not invent or resolve that input" forbids inventing input; the noun "run"
+// ahead of the marker used to classify the whole clause as an execution ban.
+//
+// The clause still blocks — it names no operation this code can classify, and
+// an unclassifiable prohibition deliberately keeps its blanket effect — but it
+// now does so honestly, as "unresolved", rather than by claiming the person
+// forbade execution.
+func TestDenyScopeIgnoresWordsBeforeTheMarker(t *testing.T) {
+	snapshot := denyScopesFor(t, "Finish the run as waiting_user and do not invent or resolve that input.")
+	if len(snapshot.DenyScopes) != 1 {
+		t.Fatalf("want exactly one prohibition, got %+v", snapshot.DenyScopes)
+	}
+	scope := snapshot.DenyScopes[0]
+	if len(scope.Classes) != 0 {
+		t.Fatalf("classes = %v, want none: nothing after the marker names an operation", scope.Classes)
+	}
+	if scope.Resolved {
+		t.Fatal("a clause that names no operation must stay unresolved")
+	}
+}

@@ -227,7 +227,13 @@ func applyVerificationOutcome(outcome api.RunOutcome) api.RunOutcome {
 	}
 	outcome.Status = api.RunStatusVerificationPartial
 	outcome.Resumable = true
-	if outcome.CompletionReason == "" || outcome.CompletionReason == "completed" {
+	// A bare "failed" is replaced too. Once the status is forced to
+	// verification_partial the reason has to describe the VERIFICATION, because
+	// that is what the status now asserts and what consumers switch on
+	// (task_view.go groups verification_incomplete/verification_failed). The
+	// model's own account of the failure survives in Summary and Risks, so
+	// nothing is lost by preferring the specific reason over the generic one.
+	if outcome.CompletionReason == "" || outcome.CompletionReason == "completed" || outcome.CompletionReason == "failed" {
 		switch outcome.Verification.State {
 		case "failed":
 			outcome.CompletionReason = "verification_failed"

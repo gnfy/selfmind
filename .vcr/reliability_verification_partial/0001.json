@@ -1,0 +1,93 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "content": "I"
+    },
+    {
+      "content": "’ll"
+    },
+    {
+      "content": " inspect"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " target"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " replace"
+    },
+    {
+      "content": " its"
+    },
+    {
+      "content": " contents"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " then"
+    },
+    {
+      "content": " run"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " required"
+    },
+    {
+      "content": " verification"
+    },
+    {
+      "content": " exactly"
+    },
+    {
+      "content": " once"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": "Preparing to run ls_r",
+      "event_type": "agent.thinking"
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_UdLz5H1QsZpEbRZnPIvIEbmu",
+          "Function": "ls_r",
+          "Args": "{\"path\":\"{{SELFMIND_VCR_WORKSPACE}}\",\"recursive\":false,\"max_entries\":50}"
+        }
+      ]
+    },
+    {
+      "content": "Preparing to run read_file",
+      "event_type": "agent.thinking"
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_SrpzkkrHyUtR8jvXQzq4uMva",
+          "Function": "read_file",
+          "Args": "{\"path\":\"{{SELFMIND_VCR_WORKSPACE}}/verification-target.txt\",\"limit\":20,\"max_bytes\":1024}"
+        }
+      ]
+    },
+    {
+      "usage": {
+        "input_tokens": 5847,
+        "output_tokens": 209,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0
+      }
+    }
+  ]
+}

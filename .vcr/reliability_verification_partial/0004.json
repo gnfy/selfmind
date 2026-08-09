@@ -1,0 +1,166 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "content": "Updated"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "verification"
+    },
+    {
+      "content": "-target"
+    },
+    {
+      "content": ".txt"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " to"
+    },
+    {
+      "content": ":\n\n"
+    },
+    {
+      "content": "```"
+    },
+    {
+      "content": "text"
+    },
+    {
+      "content": "\n"
+    },
+    {
+      "content": "after"
+    },
+    {
+      "content": "\n"
+    },
+    {
+      "content": "``"
+    },
+    {
+      "content": "`\n\n"
+    },
+    {
+      "content": "Ran"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "false"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " exactly"
+    },
+    {
+      "content": " once"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": " It"
+    },
+    {
+      "content": " exited"
+    },
+    {
+      "content": " with"
+    },
+    {
+      "content": " status"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "1"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " as"
+    },
+    {
+      "content": " expected"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": " The"
+    },
+    {
+      "content": " file"
+    },
+    {
+      "content": " change"
+    },
+    {
+      "content": " exists"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " but"
+    },
+    {
+      "content": " verification"
+    },
+    {
+      "content": " is"
+    },
+    {
+      "content": " incomplete"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": " No"
+    },
+    {
+      "content": " repair"
+    },
+    {
+      "content": " or"
+    },
+    {
+      "content": " verification"
+    },
+    {
+      "content": " rer"
+    },
+    {
+      "content": "un"
+    },
+    {
+      "content": " was"
+    },
+    {
+      "content": " performed"
+    },
+    {
+      "content": "."
+    },
+    {
+      "usage": {
+        "input_tokens": 6352,
+        "output_tokens": 234,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0
+      }
+    }
+  ]
+}

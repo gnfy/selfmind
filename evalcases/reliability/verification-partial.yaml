@@ -25,12 +25,14 @@ checks:
   no_provider_stack_dump: true
   context_not_exceeded: true
 assert_state:
-  - subject: task
+  # The runner keys predicates on `on:`; `subject:`/`op:` were never a
+  # supported spelling, so both entries silently resolved to an empty target
+  # and reported "unknown predicate target" the first time this case actually
+  # ran end to end.
+  - on: task
     field: status
-    op: eq
-    value: verification_partial
-  - subject: file
+    eq: verification_partial
+  - on: file
     path: verification-target.txt
-    field: exists
-    op: eq
-    value: true
+    exists: true
+    contains: "after"

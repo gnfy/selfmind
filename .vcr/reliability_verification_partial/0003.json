@@ -1,0 +1,92 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "content": "The"
+    },
+    {
+      "content": " change"
+    },
+    {
+      "content": " is"
+    },
+    {
+      "content": " written"
+    },
+    {
+      "content": ";"
+    },
+    {
+      "content": " I"
+    },
+    {
+      "content": "’m"
+    },
+    {
+      "content": " now"
+    },
+    {
+      "content": " running"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "false"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " once"
+    },
+    {
+      "content": " and"
+    },
+    {
+      "content": " will"
+    },
+    {
+      "content": " not"
+    },
+    {
+      "content": " repair"
+    },
+    {
+      "content": " or"
+    },
+    {
+      "content": " rer"
+    },
+    {
+      "content": "un"
+    },
+    {
+      "content": " it"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": "Preparing to run verify",
+      "event_type": "agent.thinking"
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_FHAyR8zlINDh865WpN4imBhz",
+          "Function": "verify",
+          "Args": "{\"command\":\"false\",\"cwd\":\"{{SELFMIND_VCR_WORKSPACE}}\",\"kind\":\"custom\",\"execution_class\":\"standard\",\"sandbox\":\"auto\",\"timeout\":120}"
+        }
+      ]
+    },
+    {
+      "usage": {
+        "input_tokens": 6173,
+        "output_tokens": 84,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0
+      }
+    }
+  ]
+}

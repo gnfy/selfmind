@@ -158,7 +158,66 @@ func Compare(left, right string) int {
 	if b.pre == "" {
 		return -1
 	}
-	return strings.Compare(a.pre, b.pre)
+	return comparePrerelease(a.pre, b.pre)
+}
+
+// comparePrerelease orders two non-empty prerelease segments by SemVer §11.4:
+// dot-separated identifiers compare field by field, numeric identifiers compare
+// NUMERICALLY, a numeric identifier ranks below a non-numeric one, and when one
+// side is a prefix of the other the longer set wins.
+//
+// A plain strings.Compare here silently broke the update prompt at the 9->10
+// rollover: "beta.10" sorts BEFORE "beta.9" lexicographically, so every release
+// from beta.10 onward read as older than the running beta.9 and no update was
+// ever offered.
+func comparePrerelease(left, right string) int {
+	a := strings.Split(left, ".")
+	b := strings.Split(right, ".")
+	for i := 0; i < len(a) && i < len(b); i++ {
+		if a[i] == b[i] {
+			continue
+		}
+		aNum, aIsNum := prereleaseNumber(a[i])
+		bNum, bIsNum := prereleaseNumber(b[i])
+		switch {
+		case aIsNum && bIsNum:
+			if aNum != bNum {
+				if aNum < bNum {
+					return -1
+				}
+				return 1
+			}
+		case aIsNum:
+			// Numeric identifiers have lower precedence than alphanumeric ones.
+			return -1
+		case bIsNum:
+			return 1
+		default:
+			return strings.Compare(a[i], b[i])
+		}
+	}
+	if len(a) == len(b) {
+		return 0
+	}
+	if len(a) < len(b) {
+		return -1
+	}
+	return 1
+}
+
+// prereleaseNumber reports whether an identifier is purely numeric, and its
+// value. Leading zeros are not special-cased: SemVer forbids them, and treating
+// "01" as 1 keeps a malformed tag ordered sanely instead of flipping to the
+// lexical branch.
+func prereleaseNumber(identifier string) (int, bool) {
+	if identifier == "" {
+		return 0, false
+	}
+	value, err := strconv.Atoi(identifier)
+	if err != nil || value < 0 {
+		return 0, false
+	}
+	return value, true
 }
 
 func normalizeChannel(channel string) string {

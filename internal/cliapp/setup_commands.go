@@ -62,6 +62,12 @@ func (a *App) runSetupCommandIfRequested() (bool, int) {
 			return true, code
 		}
 	}
+	if !*skipModel {
+		// Before the gateway starts: the daemon reads models.roles once at
+		// startup, so filling them afterwards would leave this run's daemon
+		// with approval triage and memory work still disabled.
+		cfg = a.ensureBackgroundRoleSetup(cfg)
+	}
 
 	if !*skipGateway {
 		if !a.gatewayTargetIsLocal() {
@@ -145,6 +151,8 @@ func (a *App) ensureInitialModelSetup(cfg *config.Config, setup modelSetupFunc) 
 		fmt.Fprintln(a.stderr, "Run `selfmind setup` to choose another provider, or `selfmind doctor` for details.")
 		return nil, 1
 	}
+
+	reloaded = a.ensureBackgroundRoleSetup(reloaded)
 
 	fmt.Fprintf(a.stdout, "\nSetup complete: %s/%s\n", reloaded.EffectiveProvider(), reloaded.EffectiveModel())
 	fmt.Fprintln(a.stdout, "Starting SelfMind...")

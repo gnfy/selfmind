@@ -31,7 +31,11 @@ func vcrCorpusFiles(t *testing.T) []string {
 func TestCassettesCarryNoMachineAbsolutePaths(t *testing.T) {
 	// Anything rooted at a real user's home or mount point. The portable form
 	// is the {{SELFMIND_VCR_WORKSPACE}} placeholder that save() writes.
-	markers := []string{"/home/", "/Users/", "/mnt/", "/root/", "c:\\", "C:\\"}
+	// "/tmp/" belongs here even though the workspace placeholder covers the
+	// eval scratch directory: a recording session's HOME can itself live under
+	// /tmp (mine did), and nothing else would have caught a path leaking from
+	// there into a committed cassette.
+	markers := []string{"/home/", "/Users/", "/mnt/", "/root/", "/tmp/", "c:\\", "C:\\"}
 	for _, file := range vcrCorpusFiles(t) {
 		raw, err := os.ReadFile(file)
 		if err != nil {

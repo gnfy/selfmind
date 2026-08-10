@@ -3,6 +3,8 @@ title: "inspect provider runtime design"
 suite: smoke-10
 workspace: "."
 channel: cli
+# Measured replay cost: 59.1s — excluded from `selfcheck --fast`.
+slow: true
 
 turns:
   - input: "查看 selfmind 的 provider runtime 相关代码和文档，说明它如何支持多模型服务商，以及最需要补强的一点。"

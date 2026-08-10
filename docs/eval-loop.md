@@ -244,6 +244,23 @@ regression shows up in `go test ./...` rather than as a CI-only mystery:
 - **No empty cassette directories.** An empty directory reads as "this case has
   a recording" while replay finds nothing at ordinal `0000`.
 
+### Tiers: `--fast` and the full gate
+
+Four cases carry roughly 90% of the replay cost — measured, not guessed:
+`smoke_codebase_overview_006` 143s, `dayinlife_tool_failure_recovery` 78s
+(it really does run the test suite), `smoke_provider_runtime_008` 59s,
+`smoke_skill_architecture_007` 46s. The other 30 cases together take about 30s.
+
+They carry `slow: true` with the measurement in a comment, and
+`selfmind selfcheck --fast` skips them: eval drops from 6m to 28s, so the loop
+you run after every change stays affordable. The count skipped is always
+printed, a `require_cassette` case is never skipped, and the full gate — run it
+before pushing — still runs everything.
+
+Do NOT filter on `max_duration_seconds` instead. It is an author-chosen ceiling
+with little relation to cost: `continuity_resume` declares 420s and replays in
+one second, while the genuinely slow case declares 540s.
+
 ### Recording a `workspace: "."` case
 
 Those cases run their tools against the repository itself, so record them from

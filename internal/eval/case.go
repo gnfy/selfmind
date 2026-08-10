@@ -29,6 +29,13 @@ type Case struct {
 	// there is no shared state to inherit — only pollution to leave behind. It
 	// cannot be combined with setup/assert_state/workspace:isolated, which
 	// require a fresh world.
+	// Slow marks a case whose MEASURED replay cost is high enough to keep it
+	// out of the fast local loop (`selfmind selfcheck --fast`). It is set from
+	// a measurement, never a guess: max_duration_seconds is an author-chosen
+	// ceiling and a poor proxy — continuity_resume declares 420s and replays in
+	// one. The full gate always runs every case; --fast is for the loop you run
+	// after each change, and the count it skips is always reported.
+	Slow       bool          `yaml:"slow" json:"slow,omitempty"`
 	SharedData bool          `yaml:"shared_data" json:"shared_data,omitempty"`
 	Turns      []Turn        `yaml:"turns" json:"turns"`
 	Expect     Expectations  `yaml:"expect" json:"expect,omitempty"`

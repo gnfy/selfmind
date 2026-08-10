@@ -292,20 +292,20 @@ Read the matching document before changing a domain:
   JSON, visible tool events, and bounded duration remain mandatory even when a
   later model judge is added.
 
-Run repository tests from PowerShell:
-
-```powershell
-$env:PATH="$env:USERPROFILE\.cache\selfmind-tools\go1.26.3\go\bin;" + $env:PATH
-$env:GOWORK='off'
-go test ./...
-```
-
-Run from WSL:
+Verify in tiers. Run the fast loop after each change and the full gate before
+pushing; `--fast` drops only the few cases marked `slow:` (measured replay
+cost) and always reports how many, and never drops a `require_cassette` case.
 
 ```sh
 cd /mnt/d/wwwroot/ai/selfmind
-GOWORK=off /usr/local/go/bin/go test ./...
+GOWORK=off /usr/local/go/bin/go test ./...   # ~1m, after each change
+selfmind selfcheck --fast                    # ~2.5m, adds 30 eval cases
+selfmind selfcheck                           # ~7m, before pushing
 ```
+
+From PowerShell, prefix `go` with
+`$env:PATH="$env:USERPROFILE\.cache\selfmind-tools\go1.26.3\go\bin;" + $env:PATH`
+and `$env:GOWORK='off'`.
 
 Provider changes also run:
 

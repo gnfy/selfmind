@@ -3,6 +3,8 @@ title: "inspect SelfMind codebase overview"
 suite: smoke-10
 workspace: "."
 channel: cli
+# Measured replay cost: 143.5s — excluded from `selfcheck --fast`.
+slow: true
 
 turns:
   - input: "分析一下当前 selfmind 项目的代码结构，列出已经实现的核心能力和两个最值得改进的地方。"

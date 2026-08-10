@@ -31,7 +31,7 @@ func (a *App) runSelfcheckCommandIfRequested() (bool, int) {
 		return true, 0
 	}
 
-	skipGo, skipEval := false, false
+	skipGo, skipEval, fast := false, false, false
 	evalDir := "evalcases"
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
@@ -39,6 +39,8 @@ func (a *App) runSelfcheckCommandIfRequested() (bool, int) {
 			skipGo = true
 		case "--skip-eval":
 			skipEval = true
+		case "--fast":
+			fast = true
 		case "--eval-dir":
 			i++
 			if i >= len(args) {
@@ -59,7 +61,7 @@ func (a *App) runSelfcheckCommandIfRequested() (bool, int) {
 		}
 	}
 	if !skipEval {
-		if !a.selfcheckEval(evalDir) {
+		if !a.selfcheckEval(evalDir, fast) {
 			failed = true
 		}
 	}
@@ -77,8 +79,11 @@ func (a *App) printSelfcheckHelp() {
 	fmt.Fprintln(a.stdout, "SelfMind selfcheck — local regression gate (build + test + offline eval)")
 	fmt.Fprintln(a.stdout)
 	fmt.Fprintln(a.stdout, "Usage:")
-	fmt.Fprintln(a.stdout, "  selfmind selfcheck [--skip-go] [--skip-eval] [--eval-dir DIR]")
+	fmt.Fprintln(a.stdout, "  selfmind selfcheck [--fast] [--skip-go] [--skip-eval] [--eval-dir DIR]")
 	fmt.Fprintln(a.stdout)
+	fmt.Fprintln(a.stdout, "  --fast        skip the few cases whose measured replay cost dominates the")
+	fmt.Fprintln(a.stdout, "                run — the loop to use after each change. Run with no flags")
+	fmt.Fprintln(a.stdout, "                before pushing; mandatory cases are never skipped.")
 	fmt.Fprintln(a.stdout, "  --skip-go     skip `go build` / `go test` (eval gate only; used by CI)")
 	fmt.Fprintln(a.stdout, "  --skip-eval   skip the offline eval suite (build/test only)")
 	fmt.Fprintln(a.stdout)
@@ -155,7 +160,7 @@ func selfcheckGoEnv(environ []string) []string {
 }
 
 // selfcheckEval replays recorded eval cases under root with strict offline VCR.
-func (a *App) selfcheckEval(root string) bool {
+func (a *App) selfcheckEval(root string, fast bool) bool {
 	fmt.Fprintf(a.stdout, "== offline eval (%s) ==\n", root)
 	// Force strict offline replay so a cassette miss errors instead of calling
 	// out. Preserve any caller-set values and restore them after.
@@ -183,7 +188,7 @@ func (a *App) selfcheckEval(root string) bool {
 			maxCaseSeconds = n
 		}
 	}
-	passed, failed, skipped, replayed, tooLong := 0, 0, 0, 0, 0
+	passed, failed, skipped, replayed, tooLong, slowSkipped := 0, 0, 0, 0, 0, 0
 	for _, file := range files {
 		c, err := selfeval.LoadCase(file)
 		if err != nil {
@@ -210,6 +215,13 @@ func (a *App) selfcheckEval(root string) bool {
 			tooLong++
 			continue
 		}
+		// --fast drops the handful of cases whose measured replay cost dominates
+		// the run, so the loop you run after every change stays in the tens of
+		// seconds. A mandatory case is never dropped, and the count is reported.
+		if fast && c.Slow && !c.RequireCassette {
+			slowSkipped++
+			continue
+		}
 		replayed++
 		result, err := selfeval.RunCaseFile(a.ctx, file, selfeval.RunOptions{ConfigPath: a.configPath})
 		if err != nil {
@@ -226,6 +238,9 @@ func (a *App) selfcheckEval(root string) bool {
 		}
 	}
 	fmt.Fprintf(a.stdout, "  summary: %d passed, %d failed, %d skipped (no cassette), %d replayed\n", passed, failed, skipped, replayed)
+	if slowSkipped > 0 {
+		fmt.Fprintf(a.stdout, "  note: %d slow case(s) skipped by --fast; run `selfmind selfcheck` with no flags before pushing\n", slowSkipped)
+	}
 	if tooLong > 0 {
 		fmt.Fprintf(a.stdout, "  note: %d case(s) skipped by SELFMIND_EVAL_MAX_CASE_SECONDS=%d; run `selfmind selfcheck` locally to cover them\n", tooLong, maxCaseSeconds)
 	}

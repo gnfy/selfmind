@@ -32,6 +32,40 @@ merged headers with per-key origin (`Resolver.HeaderOrigins`).
 
 `ProviderQuirks.PromptCache` opts an Anthropic-protocol provider into explicit prompt-cache breakpoints: the adapter attaches `cache_control: {"type":"ephemeral"}` to the last system content block and a rolling breakpoint on the last content block of the most recent message before the final user message (never more than 4 breakpoints). Built-in native Anthropic and MiniMax profiles enable it because those endpoints document the contract. Custom endpoints default off, and direct Kimi Coding remains off because its native coding endpoint has not established the same contract. With the quirk off, request bytes are unchanged. Usage accounting always parses `cache_read_input_tokens` / `cache_creation_input_tokens` into `llm.UsageStats`, and the kernel `token.updated` event adds `cache_read_input_tokens`, `cache_creation_input_tokens`, and `billed_input_tokens` (= `input_tokens` - `cache_read_input_tokens`). `/diag context` renders the latest run totals and hit rate.
 
+## Tool Schema Governance
+
+Tool schemas cross two separate compatibility boundaries:
+
+1. `tools.Registry` compiles every schema once into a provider-neutral,
+   detached JSON Schema snapshot at registration time.
+2. Each protocol adapter applies only its final wire rule to another detached
+   copy. Adapters remain defensive, but they do not own catalogue validity.
+
+The compiler auto-repairs only deterministic shape defects: null/empty or
+duplicate `required`, missing object `properties`, missing array `items`, and
+type-invalid defaults. Ambiguous defects such as an unknown required property,
+invalid type, malformed composition, or enum/type conflict are never guessed.
+Built-in tools make startup fail on any repair or error, so defects are caught
+in CI. External MCP/plugin tools are quarantined individually: the daemon and
+the rest of the catalogue continue, while the bad tool is neither advertised
+nor executable.
+
+MCP tools retain their complete raw `inputSchema` for compilation; the legacy
+`ToolSchema` projection is used only for local argument coercion. Nested
+objects, arrays, composition keywords, definitions, and additional-properties
+rules therefore survive provider serialization. Long MCP names are normalized
+to provider-safe 64-character names with a stable collision-resistant suffix.
+
+`/diag tools` shows active/repaired/quarantined counts and redacted issue
+paths. The gateway status endpoint carries the same aggregate, and
+`selfmind doctor` includes it in the gateway health line. Schema hashes and
+issue classes are observable; raw external schemas are not.
+
+Runtime retry after a provider rejects a schema is deliberately not part of
+this layer. Retrying the same turn with a silently changed tool contract can
+alter behavior and duplicate work. Compatibility must be established before
+dispatch by the compiler, adapter normalization, tests, and live model probes.
+
 ## Context Window vs Output Cap
 
 SelfMind distinguishes two commonly confused fields:
@@ -170,9 +204,16 @@ parsing, OAuth refresh payloads, or provider login state inside an LLM adapter.
   `ProviderQuirks.ResponsesRequireStream=true`; the adapter must serialize
   `"store": false` and use streaming even when a caller asks for non-streaming
   fallback. Do not rely on provider defaults for these flags.
-- Responses-compatible adapters must normalize tool schemas before sending.
-  In particular, `required` must be a JSON array, never `null`; nil Go slices
-  from tool definitions must be converted to `[]`.
+- Every native-tool adapter normalizes tool schemas before sending. Empty or
+  invalid `required` values are omitted for Chat Completions and Anthropic
+  Messages, so optional-only tools never serialize `required: null`.
+  Responses-compatible adapters apply their stricter protocol rule afterwards
+  and serialize an empty required set as `[]`.
+- `selfmind model check --live [--role <name>]` sends one bounded request with
+  an optional-only probe tool when the resolved transport advertises native
+  tools. This verifies the real protocol adapter and endpoint rather than only
+  resolving configuration. `doctor --probe-models` uses the same schema probe
+  while grouping roles that share one provider route.
 - Responses-compatible adapters must also normalize tool names on the wire.
   The provider-facing name must match `^[a-zA-Z0-9_-]+$`; keep an alias table
   inside the adapter so returned tool calls are mapped back to SelfMind's

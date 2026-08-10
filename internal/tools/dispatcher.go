@@ -3,22 +3,26 @@ package tools
 import (
 	"encoding/json"
 	"fmt"
-	"selfmind/internal/kernel/llm"
+	"sort"
 	"strings"
 	"sync"
+
+	"selfmind/internal/kernel/llm"
 )
 
 // Registry 是全局工具注册表
 type Registry struct {
 	mu        sync.RWMutex
 	tools     map[string]Tool
+	schemas   map[string]compiledToolSchema
 	clarifyFn ClarifyHandler
 	// middleware 链
 	middleware []Middleware
 }
 
 var globalRegistry = &Registry{
-	tools: make(map[string]Tool),
+	tools:   make(map[string]Tool),
+	schemas: make(map[string]compiledToolSchema),
 }
 
 // GlobalRegistry returns the singleton global tool registry.
@@ -30,15 +34,19 @@ func GlobalRegistry() *Registry {
 // NewRegistry creates a new tool registry (can be used for isolation)
 func NewRegistry() *Registry {
 	return &Registry{
-		tools: make(map[string]Tool),
+		tools:   make(map[string]Tool),
+		schemas: make(map[string]compiledToolSchema),
 	}
 }
 
 // Register adds a tool to the registry
 func (r *Registry) Register(t Tool) {
+	compiled := compileToolSchema(t)
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	r.ensureMaps()
 	r.tools[t.Name()] = t
+	r.schemas[t.Name()] = compiled
 }
 
 // Unregister removes a tool from the registry
@@ -46,6 +54,7 @@ func (r *Registry) Unregister(name string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	delete(r.tools, name)
+	delete(r.schemas, name)
 }
 
 // Get returns a tool by name
@@ -62,13 +71,20 @@ func (r *Registry) List() []string {
 	defer r.mu.RUnlock()
 	names := make([]string, 0, len(r.tools))
 	for name := range r.tools {
+		if compiled, ok := r.schemas[name]; ok && compiled.Report.Status == ToolSchemaQuarantined {
+			continue
+		}
 		names = append(names, name)
 	}
+	sort.Strings(names)
 	return names
 }
 
 // Dispatch executes a registered tool by name (used by SkillTool to call execute_command)
 func (r *Registry) Dispatch(name string, args map[string]interface{}) (string, error) {
+	if err := r.schemaAvailabilityError(name); err != nil {
+		return "", err
+	}
 	t, ok := r.Get(name)
 	if !ok {
 		return "", fmt.Errorf("tool %s not found", name)
@@ -92,10 +108,79 @@ func (r *Registry) ToolDefinitions() []map[string]interface{} {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	defs := make([]map[string]interface{}, 0, len(r.tools))
-	for _, t := range r.tools {
-		defs = append(defs, ToToolDefinition(t))
+	names := make([]string, 0, len(r.tools))
+	for name := range r.tools {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		compiled, ok := r.schemas[name]
+		if !ok || compiled.Report.Status == ToolSchemaQuarantined {
+			continue
+		}
+		parameters, err := detachedSchemaMap(compiled.Parameters)
+		if err != nil {
+			continue
+		}
+		defs = append(defs, toolDefinitionFromCompiled(r.tools[name], parameters))
 	}
 	return defs
+}
+
+func (r *Registry) ensureMaps() {
+	if r.tools == nil {
+		r.tools = make(map[string]Tool)
+	}
+	if r.schemas == nil {
+		r.schemas = make(map[string]compiledToolSchema)
+	}
+}
+
+func (r *Registry) schemaAvailabilityError(name string) error {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	compiled, ok := r.schemas[name]
+	if !ok || compiled.Report.Status != ToolSchemaQuarantined {
+		return nil
+	}
+	reason := "invalid schema"
+	for _, issue := range compiled.Report.Issues {
+		if issue.Severity == ToolSchemaError {
+			reason = issue.Code + " at " + issue.Path
+			break
+		}
+	}
+	return fmt.Errorf("tool %s unavailable: schema quarantined (%s)", name, reason)
+}
+
+// ToolSchemaReport returns a stable, detached diagnostic catalogue.
+func (r *Registry) ToolSchemaReport() []ToolSchemaReport {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	reports := make([]ToolSchemaReport, 0, len(r.schemas))
+	for _, compiled := range r.schemas {
+		report := compiled.Report
+		report.Issues = append([]ToolSchemaIssue(nil), report.Issues...)
+		reports = append(reports, report)
+	}
+	sort.Slice(reports, func(i, j int) bool { return reports[i].Name < reports[j].Name })
+	return reports
+}
+
+// ValidateInternalToolSchemas makes built-in schema mistakes a startup error.
+// External schemas are isolated at registration and intentionally excluded.
+func (r *Registry) ValidateInternalToolSchemas() error {
+	for _, report := range r.ToolSchemaReport() {
+		if report.Origin == ToolSchemaOriginExternal || report.Status == ToolSchemaActive {
+			continue
+		}
+		reason := "invalid schema"
+		if len(report.Issues) > 0 {
+			reason = report.Issues[0].Code + " at " + report.Issues[0].Path
+		}
+		return fmt.Errorf("built-in tool %s schema is not strict: %s", report.Name, reason)
+	}
+	return nil
 }
 
 // ---- Middleware pipeline ----
@@ -205,6 +290,9 @@ func (d *Dispatcher) UnregisterTool(name string) {
 
 // Dispatch 调用已注册的工具，自动执行 middleware 链
 func (d *Dispatcher) Dispatch(name string, args map[string]interface{}) (string, error) {
+	if err := d.registry.schemaAvailabilityError(name); err != nil {
+		return "", err
+	}
 	t, ok := d.registry.Get(name)
 	if !ok {
 		return "", fmt.Errorf("tool %s not found", name)
@@ -252,6 +340,9 @@ func (d *Dispatcher) CoerceArgs(toolName string, args map[string]interface{}) (m
 
 // ToolExists checks if a tool is registered
 func (d *Dispatcher) ToolExists(name string) bool {
+	if err := d.registry.schemaAvailabilityError(name); err != nil {
+		return false
+	}
 	_, ok := d.registry.Get(name)
 	return ok
 }
@@ -277,6 +368,14 @@ func (d *Dispatcher) ListTools() []string {
 // GetToolDefinitions returns all tools as LLM tool definitions
 func (d *Dispatcher) GetToolDefinitions() []map[string]interface{} {
 	return d.registry.ToolDefinitions()
+}
+
+func (d *Dispatcher) ToolSchemaReport() []ToolSchemaReport {
+	return d.registry.ToolSchemaReport()
+}
+
+func (d *Dispatcher) ValidateInternalToolSchemas() error {
+	return d.registry.ValidateInternalToolSchemas()
 }
 
 // InjectMiddleware adds a middleware to the dispatcher (for Approval/Auth chain)

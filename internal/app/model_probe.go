@@ -19,17 +19,86 @@ const modelRoleProbeTimeout = 20 * time.Second
 // does not spend duplicate quota merely because several maintenance roles use
 // the same Coding Plan profile.
 type ModelRoleProbe struct {
-	Roles    []string
-	Provider string
-	Model    string
-	Latency  time.Duration
-	Err      error
+	Roles             []string
+	Provider          string
+	Model             string
+	Latency           time.Duration
+	NativeToolsTested bool
+	Err               error
 }
 
 type roleProbeTarget struct {
 	roles    []string
 	runtime  modelruntime.Runtime
 	provider llm.Provider
+}
+
+// ResolveModelRuntime resolves the primary model or one explicit role through
+// the same selection path used by the daemon.
+func ResolveModelRuntime(ctx context.Context, cfg *config.Config, role string) (modelruntime.Runtime, error) {
+	if cfg == nil {
+		return modelruntime.Runtime{}, fmt.Errorf("config is required")
+	}
+	role = strings.TrimSpace(role)
+	selection := modelruntime.Selection{}
+	if role != "" && !strings.EqualFold(role, "primary") {
+		roleCfg, ok := cfg.Models.Roles[role]
+		if !ok || roleConfigEmpty(roleCfg) {
+			return modelruntime.Runtime{}, fmt.Errorf("model role %q is not configured", role)
+		}
+		selection = roleProviderSelection(llm.ModelRole(role), firstNonEmpty(roleCfg.Provider, defaultProviderName(cfg)), roleCfg)
+	}
+	return modelruntime.NewResolver(cfg).Resolve(ctx, selection)
+}
+
+// ProbeResolvedModel performs one bounded request against a resolved runtime.
+// Native-tool transports receive an optional-only schema with a typed nil
+// required slice so this check catches adapter serialization regressions.
+func ProbeResolvedModel(ctx context.Context, rt modelruntime.Runtime) ModelRoleProbe {
+	probe := ModelRoleProbe{Provider: rt.Provider, Model: rt.Model}
+	provider := buildProviderFromRuntime(rt)
+	start := time.Now()
+	if provider == nil {
+		probe.Err = fmt.Errorf("provider could not be built")
+		probe.Latency = time.Since(start)
+		return probe
+	}
+	probe.NativeToolsTested = llm.ProviderSupportsNativeTools(provider)
+	probeCtx, cancel := context.WithTimeout(ctx, modelRoleProbeTimeout)
+	defer cancel()
+	resp, err := provider.Chat(probeCtx, modelProbeRequest(rt.Model, probe.NativeToolsTested))
+	switch {
+	case err != nil:
+		probe.Err = err
+	case resp == nil || strings.TrimSpace(resp.Content) == "":
+		probe.Err = fmt.Errorf("model returned an empty response")
+	}
+	probe.Latency = time.Since(start)
+	return probe
+}
+
+func modelProbeRequest(model string, includeTools bool) llm.ChatRequest {
+	req := llm.ChatRequest{
+		Model:        model,
+		MaxTokens:    64,
+		SystemPrompt: "This is a model health check. Return exactly OK and do not call tools.",
+		Messages:     []llm.Message{{Role: "user", Content: "Reply with OK."}},
+	}
+	if includeTools {
+		var required []string
+		req.Tools = []llm.ToolDefinition{{
+			Name:        "selfmind_model_check",
+			Description: "Optional no-op tool used only to validate tool schema compatibility.",
+			Parameters: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"value": map[string]interface{}{"type": "string"},
+				},
+				"required": required,
+			},
+		}}
+	}
+	return req
 }
 
 // ProbeConfiguredModelRoles performs a bounded live health check for explicitly
@@ -85,12 +154,8 @@ func ProbeConfiguredModelRoles(ctx context.Context, cfg *config.Config) []ModelR
 		} else {
 			probeCtx, cancel := context.WithTimeout(ctx, modelRoleProbeTimeout)
 			probeCtx = llm.WithModelContext(probeCtx, llm.ModelContext{Role: llm.ModelRole(target.roles[0])})
-			resp, err := target.provider.Chat(probeCtx, llm.ChatRequest{
-				Model:        target.runtime.Model,
-				MaxTokens:    64,
-				SystemPrompt: "This is a model health check. Return exactly OK.",
-				Messages:     []llm.Message{{Role: "user", Content: "Reply with OK."}},
-			})
+			probe.NativeToolsTested = llm.ProviderSupportsNativeTools(target.provider)
+			resp, err := target.provider.Chat(probeCtx, modelProbeRequest(target.runtime.Model, probe.NativeToolsTested))
 			cancel()
 			switch {
 			case err != nil:

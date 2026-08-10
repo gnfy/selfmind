@@ -115,20 +115,17 @@ func (b *BaseTool) Execute(args map[string]interface{}) (string, error) {
 
 // toToolDefinition converts a Tool to LLM tool definition format
 func ToToolDefinition(t Tool) map[string]interface{} {
-	props := make(map[string]interface{})
-	for k, v := range t.Schema().Properties {
-		props[k] = propertyDefinition(v)
-	}
+	compiled := compileToolSchema(t)
+	return toolDefinitionFromCompiled(t, compiled.Parameters)
+}
+
+func toolDefinitionFromCompiled(t Tool, parameters map[string]interface{}) map[string]interface{} {
 	def := map[string]interface{}{
 		"type": "function",
 		"function": map[string]interface{}{
 			"name":        t.Name(),
 			"description": t.Description(),
-			"parameters": map[string]interface{}{
-				"type":       "object",
-				"properties": props,
-				"required":   t.Schema().Required,
-			},
+			"parameters":  parameters,
 		},
 	}
 	meta := ToolMetadataFor(t)
@@ -143,9 +140,9 @@ func ToToolDefinition(t Tool) map[string]interface{} {
 }
 
 func propertyDefinition(def PropertyDef) map[string]interface{} {
-	out := map[string]interface{}{
-		"type":        def.Type,
-		"description": def.Description,
+	out := map[string]interface{}{"type": def.Type}
+	if strings.TrimSpace(def.Description) != "" {
+		out["description"] = def.Description
 	}
 	if def.Default != nil {
 		out["default"] = def.Default

@@ -2,7 +2,9 @@ package tools
 
 import (
 	"bufio"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -545,6 +547,17 @@ type MCPTool struct {
 	client      *MCPClient
 }
 
+// RawToolSchema preserves the MCP server's complete inputSchema for the
+// provider-neutral compiler. The compiler always clones it before repair, so
+// the server-owned discovery record remains immutable.
+func (t *MCPTool) RawToolSchema() map[string]interface{} {
+	return t.inputSchema
+}
+
+func (t *MCPTool) SchemaOrigin() ToolSchemaOrigin {
+	return ToolSchemaOriginExternal
+}
+
 func (c *MCPClient) WrapTool(def MCPToolDef) *MCPTool {
 	return c.WrapToolNamed(def, def.Name)
 }
@@ -593,19 +606,7 @@ func convertJSONSchema(input map[string]interface{}) ToolSchema {
 	if propsRaw, ok := input["properties"].(map[string]interface{}); ok {
 		for name, propRaw := range propsRaw {
 			if prop, ok := propRaw.(map[string]interface{}); ok {
-				p := PropertyDef{}
-				if t, ok := prop["type"].(string); ok {
-					p.Type = t
-				}
-				if desc, ok := prop["description"].(string); ok {
-					p.Description = desc
-				}
-				if e, ok := prop["enum"].([]interface{}); ok {
-					for _, v := range e {
-						p.Enum = append(p.Enum, fmt.Sprintf("%v", v))
-					}
-				}
-				props[name] = p
+				props[name] = convertJSONSchemaProperty(prop)
 			}
 		}
 	}
@@ -623,6 +624,44 @@ func convertJSONSchema(input map[string]interface{}) ToolSchema {
 		Properties: props,
 		Required:   required,
 	}
+}
+
+func convertJSONSchemaProperty(prop map[string]interface{}) PropertyDef {
+	p := PropertyDef{}
+	if t, ok := prop["type"].(string); ok {
+		p.Type = t
+	}
+	if desc, ok := prop["description"].(string); ok {
+		p.Description = desc
+	}
+	if value, exists := prop["default"]; exists {
+		p.Default = value
+	}
+	if e, ok := prop["enum"].([]interface{}); ok {
+		for _, v := range e {
+			p.Enum = append(p.Enum, fmt.Sprintf("%v", v))
+		}
+	}
+	if items, ok := prop["items"].(map[string]interface{}); ok {
+		converted := convertJSONSchemaProperty(items)
+		p.Items = &converted
+	}
+	if nested, ok := prop["properties"].(map[string]interface{}); ok {
+		p.Properties = make(map[string]PropertyDef, len(nested))
+		for name, raw := range nested {
+			if child, ok := raw.(map[string]interface{}); ok {
+				p.Properties[name] = convertJSONSchemaProperty(child)
+			}
+		}
+	}
+	if required, ok := prop["required"].([]interface{}); ok {
+		for _, raw := range required {
+			if name, ok := raw.(string); ok {
+				p.Required = append(p.Required, name)
+			}
+		}
+	}
+	return p
 }
 
 // =============================================================================
@@ -740,7 +779,17 @@ func filterEnv(whitelist []string) []string {
 }
 
 func MCPToolLocalName(serverName, toolName string) string {
-	return "mcp_" + sanitizeMCPName(serverName) + "_" + sanitizeMCPName(toolName)
+	name := "mcp_" + sanitizeMCPName(serverName) + "_" + sanitizeMCPName(toolName)
+	// OpenAI-compatible function names are commonly capped at 64 ASCII
+	// characters. Preserve a readable prefix and append a source-derived hash
+	// so truncation cannot make two external tools collide.
+	const maxToolName = 64
+	if len(name) <= maxToolName {
+		return name
+	}
+	digest := sha256.Sum256([]byte(serverName + "\x00" + toolName))
+	suffix := "_" + hex.EncodeToString(digest[:6])
+	return strings.TrimRight(name[:maxToolName-len(suffix)], "_") + suffix
 }
 
 func sanitizeMCPName(value string) string {

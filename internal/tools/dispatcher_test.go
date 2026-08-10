@@ -3,6 +3,7 @@ package tools
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 )
 
@@ -74,6 +75,28 @@ func TestCoerceArgsRejectsInvalidNumbers(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected invalid number to fail")
+	}
+}
+
+func TestToToolDefinitionOmitsEmptyRequired(t *testing.T) {
+	definition := ToToolDefinition(NewDelegateTool())
+	function, ok := definition["function"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("function = %T", definition["function"])
+	}
+	parameters, ok := function["parameters"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("parameters = %T", function["parameters"])
+	}
+	if required, exists := parameters["required"]; exists {
+		t.Fatalf("empty required must be omitted, got %#v", required)
+	}
+	data, err := json.Marshal(definition)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), `"required":null`) {
+		t.Fatalf("definition contains null required: %s", data)
 	}
 }
 

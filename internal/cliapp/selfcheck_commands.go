@@ -1,10 +1,13 @@
 package cliapp
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -13,14 +16,33 @@ import (
 	"selfmind/internal/kernel/llm"
 )
 
-// selfcheck is the Phase 0 regression gate ("catch" net): build + test + offline
-// eval, aggregated into one pass/fail. It must never make live model calls — the
-// eval phase runs in strict offline VCR replay, so it cannot burn provider quota
-// and stays deterministic. Cases without a recorded cassette are reported and
-// skipped so the gate grows as cassettes are recorded — EXCEPT cases marked
-// `require_cassette: true`, whose missing cassette is a failure, and the
-// SELFMIND_EVAL_MIN_CASES floor, which fails the gate when fewer cases were
-// actually replayed than required (keeps CI honest about verifying ~0 cases).
+type selfcheckOutcome int
+
+const (
+	selfcheckPassed selfcheckOutcome = iota
+	selfcheckFailed
+	selfcheckUnavailable
+)
+
+type selfcheckProfile string
+
+const (
+	selfcheckLocalFull selfcheckProfile = "local-full"
+	selfcheckLocalFast selfcheckProfile = "local-fast"
+	selfcheckCI        selfcheckProfile = "ci"
+)
+
+func mergeSelfcheckOutcome(current, next selfcheckOutcome) selfcheckOutcome {
+	if next > current {
+		return next
+	}
+	return current
+}
+
+// selfcheck is the local Phase 0 regression gate: build + test + provider-
+// offline eval. Provider calls replay from VCR without quota, while tool calls
+// still exercise the host. Profiles keep local coverage authoritative and make
+// CI ownership explicit instead of inferring value from a case count.
 func (a *App) runSelfcheckCommandIfRequested() (bool, int) {
 	if len(a.args) < 2 || a.args[1] != "selfcheck" {
 		return false, 0
@@ -31,7 +53,9 @@ func (a *App) runSelfcheckCommandIfRequested() (bool, int) {
 		return true, 0
 	}
 
-	skipGo, skipEval, fast := false, false, false
+	skipGo, skipEval := false, false
+	profile := selfcheckLocalFull
+	profileSet, fastSet := false, false
 	evalDir := "evalcases"
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
@@ -40,7 +64,20 @@ func (a *App) runSelfcheckCommandIfRequested() (bool, int) {
 		case "--skip-eval":
 			skipEval = true
 		case "--fast":
-			fast = true
+			fastSet = true
+			profile = selfcheckLocalFast
+		case "--profile":
+			i++
+			if i >= len(args) {
+				fmt.Fprintln(a.stderr, "--profile requires local-full, local-fast, or ci")
+				return true, 2
+			}
+			profileSet = true
+			profile = selfcheckProfile(strings.ToLower(strings.TrimSpace(args[i])))
+			if profile != selfcheckLocalFull && profile != selfcheckLocalFast && profile != selfcheckCI {
+				fmt.Fprintf(a.stderr, "invalid --profile %q (expected local-full, local-fast, or ci)\n", args[i])
+				return true, 2
+			}
 		case "--eval-dir":
 			i++
 			if i >= len(args) {
@@ -53,59 +90,71 @@ func (a *App) runSelfcheckCommandIfRequested() (bool, int) {
 			return true, 2
 		}
 	}
+	if fastSet && profileSet {
+		fmt.Fprintln(a.stderr, "--fast cannot be combined with --profile; use --profile local-fast")
+		return true, 2
+	}
+	if skipGo && skipEval {
+		fmt.Fprintln(a.stderr, "--skip-go and --skip-eval cannot be combined: selfcheck would verify nothing")
+		return true, 2
+	}
 
-	failed := false
+	outcome := selfcheckPassed
 	if !skipGo {
-		if !a.selfcheckGo() {
-			failed = true
-		}
+		outcome = mergeSelfcheckOutcome(outcome, a.selfcheckGo())
 	}
 	if !skipEval {
-		if !a.selfcheckEval(evalDir, fast) {
-			failed = true
-		}
+		outcome = mergeSelfcheckOutcome(outcome, a.selfcheckEval(evalDir, profile))
 	}
 
 	fmt.Fprintln(a.stdout)
-	if failed {
+	switch outcome {
+	case selfcheckUnavailable:
+		fmt.Fprintln(a.stdout, "selfcheck: UNAVAILABLE")
+		return true, 2
+	case selfcheckFailed:
 		fmt.Fprintln(a.stdout, "selfcheck: FAIL")
 		return true, 1
+	default:
+		fmt.Fprintln(a.stdout, "selfcheck: OK")
+		return true, 0
 	}
-	fmt.Fprintln(a.stdout, "selfcheck: OK")
-	return true, 0
 }
 
 func (a *App) printSelfcheckHelp() {
 	fmt.Fprintln(a.stdout, "SelfMind selfcheck — local regression gate (build + test + offline eval)")
 	fmt.Fprintln(a.stdout)
 	fmt.Fprintln(a.stdout, "Usage:")
-	fmt.Fprintln(a.stdout, "  selfmind selfcheck [--fast] [--skip-go] [--skip-eval] [--eval-dir DIR]")
+	fmt.Fprintln(a.stdout, "  selfmind selfcheck [--fast | --profile PROFILE] [--skip-go] [--skip-eval] [--eval-dir DIR]")
 	fmt.Fprintln(a.stdout)
 	fmt.Fprintln(a.stdout, "  --fast        skip the few cases whose measured replay cost dominates the")
 	fmt.Fprintln(a.stdout, "                run — the loop to use after each change. Run with no flags")
 	fmt.Fprintln(a.stdout, "                before pushing; mandatory cases are never skipped.")
+	fmt.Fprintln(a.stdout, "  --profile     local-full (default), local-fast, or ci. The ci profile runs")
+	fmt.Fprintln(a.stdout, "                only cases explicitly owned by CI for the current platform.")
 	fmt.Fprintln(a.stdout, "  --skip-go     skip `go build` / `go test` (eval gate only; used by CI)")
 	fmt.Fprintln(a.stdout, "  --skip-eval   skip the offline eval suite (build/test only)")
 	fmt.Fprintln(a.stdout)
-	fmt.Fprintln(a.stdout, "The eval phase runs strictly offline (VCR replay). Cases without a recorded")
+	fmt.Fprintln(a.stdout, "The provider phase runs strictly offline (VCR replay); replayed tool calls")
+	fmt.Fprintln(a.stdout, "still execute against the current host toolchain. Cases without a recorded")
 	fmt.Fprintln(a.stdout, "cassette are skipped — unless the case sets `require_cassette: true`, which")
-	fmt.Fprintln(a.stdout, "makes a missing cassette a failure. Set SELFMIND_EVAL_MIN_CASES=N to fail")
-	fmt.Fprintln(a.stdout, "when fewer than N cases were actually replayed. No live model calls are made.")
+	fmt.Fprintln(a.stdout, "makes a missing cassette a failure. No live model calls are made. Missing")
+	fmt.Fprintln(a.stdout, "host tools are reported as environment unavailable (exit 2), never as green.")
 }
 
 // selfcheckGo runs `go build ./...` then `go test ./...` from the repo root with
 // GOWORK=off. It degrades gracefully when the Go toolchain or repo is absent.
-func (a *App) selfcheckGo() bool {
+func (a *App) selfcheckGo() selfcheckOutcome {
 	fmt.Fprintln(a.stdout, "== build & test ==")
 	goBin, err := exec.LookPath("go")
 	if err != nil {
-		fmt.Fprintln(a.stdout, "  go toolchain not found on PATH; skipping build/test")
-		return true
+		fmt.Fprintln(a.stdout, "  UNAVAILABLE go toolchain not found on PATH")
+		return selfcheckUnavailable
 	}
 	root := repoRoot()
 	if root == "" {
-		fmt.Fprintln(a.stdout, "  go.mod not found from cwd upward; skipping build/test")
-		return true
+		fmt.Fprintln(a.stdout, "  UNAVAILABLE go.mod not found from cwd upward")
+		return selfcheckUnavailable
 	}
 	ok := true
 	for _, step := range []struct {
@@ -129,7 +178,10 @@ func (a *App) selfcheckGo() bool {
 		}
 		fmt.Fprintf(a.stdout, "  ok   %s (%s)\n", step.label, time.Since(start).Round(time.Millisecond))
 	}
-	return ok
+	if !ok {
+		return selfcheckFailed
+	}
+	return selfcheckPassed
 }
 
 // selfcheckGoEnv keeps ordinary build and unit-test processes independent from
@@ -159,74 +211,131 @@ func selfcheckGoEnv(environ []string) []string {
 	return append(out, "GOWORK=off")
 }
 
-// selfcheckEval replays recorded eval cases under root with strict offline VCR.
-func (a *App) selfcheckEval(root string, fast bool) bool {
-	fmt.Fprintf(a.stdout, "== offline eval (%s) ==\n", root)
-	// Force strict offline replay so a cassette miss errors instead of calling
-	// out. Preserve any caller-set values and restore them after.
-	restore := setEnvScoped(map[string]string{
-		"SELFMIND_EVAL_VCR":     "replay",
-		"SELFMIND_EVAL_OFFLINE": "1",
-	})
-	defer restore()
+type selfcheckEvalCase struct {
+	file    string
+	caseDef *selfeval.Case
+}
 
-	vcrDir := strings.TrimSpace(os.Getenv("SELFMIND_EVAL_VCR_DIR"))
-
-	files, err := selfeval.ListCaseFiles(root)
+// selfcheckEval replays recorded provider responses under root. Provider calls
+// are strictly offline; tool calls still run against the host and are therefore
+// preflighted before any case starts.
+func (a *App) selfcheckEval(root string, profile selfcheckProfile) selfcheckOutcome {
+	resolvedRoot, err := resolveSelfcheckEvalRoot(root)
 	if err != nil {
-		fmt.Fprintf(a.stdout, "  no eval cases: %v\n", err)
-		return true
+		fmt.Fprintf(a.stdout, "== provider-offline eval (%s) ==\n  UNAVAILABLE %v\n", root, err)
+		return selfcheckUnavailable
 	}
-	// A duration ceiling lets CI run the fast cases and leave the long ones to
-	// the local loop. Long cases are the ones whose value is mostly model
-	// behaviour, and their replay cost is real: skipping them keeps the shared
-	// gate quick without giving up the race and environment coverage that only
-	// a different machine provides. The count is reported, never silent.
-	maxCaseSeconds := 0
-	if v := strings.TrimSpace(os.Getenv("SELFMIND_EVAL_MAX_CASE_SECONDS")); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
-			maxCaseSeconds = n
+	fmt.Fprintf(a.stdout, "== provider-offline eval (%s; profile=%s; platform=%s) ==\n", resolvedRoot, profile, runtime.GOOS)
+
+	files, err := selfeval.ListCaseFiles(resolvedRoot)
+	if err != nil {
+		fmt.Fprintf(a.stdout, "  UNAVAILABLE cannot list eval cases: %v\n", err)
+		return selfcheckUnavailable
+	}
+	if len(files) == 0 {
+		fmt.Fprintln(a.stdout, "  UNAVAILABLE eval directory contains no YAML cases")
+		return selfcheckUnavailable
+	}
+	vcrDir := strings.TrimSpace(os.Getenv("SELFMIND_EVAL_VCR_DIR"))
+	if vcrDir == "" {
+		repo := repoRoot()
+		if repo == "" {
+			fmt.Fprintln(a.stdout, "  UNAVAILABLE cannot resolve the default .vcr directory without a repository root")
+			return selfcheckUnavailable
 		}
+		vcrDir = filepath.Join(repo, ".vcr")
+	} else if !filepath.IsAbs(vcrDir) {
+		vcrDir = filepath.Clean(vcrDir)
 	}
-	passed, failed, skipped, replayed, tooLong, slowSkipped := 0, 0, 0, 0, 0, 0
+
+	failed := 0
+	profileSkipped := 0
+	loadedCount, recordedSessions := 0, 0
+	selected := make([]selfcheckEvalCase, 0, len(files))
 	for _, file := range files {
-		c, err := selfeval.LoadCase(file)
-		if err != nil {
+		c, loadErr := selfeval.LoadCase(file)
+		if loadErr != nil {
 			failed++
-			fmt.Fprintf(a.stdout, "  FAIL %s (invalid: %v)\n", file, err)
+			fmt.Fprintf(a.stdout, "  FAIL %s (invalid: %v)\n", file, loadErr)
 			continue
 		}
+		loadedCount++
+		if llm.HasCassetteSession(vcrDir, c.ID) {
+			recordedSessions++
+		}
+		if profile == selfcheckCI && !c.RequiredOnCI(runtime.GOOS) {
+			profileSkipped++
+			continue
+		}
+		selected = append(selected, selfcheckEvalCase{file: file, caseDef: c})
+	}
+	if len(selected) == 0 {
+		fmt.Fprintf(a.stdout, "  UNAVAILABLE profile %s selected no cases for %s (%d excluded)\n", profile, runtime.GOOS, profileSkipped)
+		return selfcheckUnavailable
+	}
+	recordFiles, _ := filepath.Glob(filepath.Join(vcrDir, "*", "*.json"))
+	fmt.Fprintf(a.stdout, "  corpus: %d valid cases, %d recorded sessions, %d cassette records, %d selected\n", loadedCount, recordedSessions, len(recordFiles), len(selected))
+	maxCaseSeconds := 0
+	if v := strings.TrimSpace(os.Getenv("SELFMIND_EVAL_MAX_CASE_SECONDS")); v != "" {
+		n, parseErr := strconv.Atoi(v)
+		if parseErr != nil || n < 0 {
+			fmt.Fprintf(a.stdout, "  UNAVAILABLE invalid SELFMIND_EVAL_MAX_CASE_SECONDS=%q (expected a non-negative integer)\n", v)
+			return selfcheckUnavailable
+		}
+		maxCaseSeconds = n
+	}
+
+	skipped, tooLong, slowSkipped := 0, 0, 0
+	runnable := make([]selfcheckEvalCase, 0, len(selected))
+	for _, item := range selected {
+		c := item.caseDef
 		if !llm.HasCassetteSession(vcrDir, c.ID) {
-			// Mandatory cases must not silently drop out of the gate: a missing
-			// cassette is a failure, not a skip.
-			if c.RequireCassette {
+			if c.RequireCassette || profile == selfcheckCI {
 				failed++
-				fmt.Fprintf(a.stdout, "  FAIL %s (require_cassette: true but no cassette recorded; run `SELFMIND_EVAL_VCR=record selfmind eval run %s` and commit .vcr/%s/)\n", c.ID, file, c.ID)
+				fmt.Fprintf(a.stdout, "  FAIL %s (selected case has no cassette; run `SELFMIND_EVAL_VCR=record selfmind eval run %s` and commit .vcr/%s/)\n", c.ID, item.file, c.ID)
 				continue
 			}
 			skipped++
 			continue
 		}
-		// Ordering matters: the cassette check runs first so "no cassette" stays
-		// an accurate count, and the duration ceiling only ever reports cases
-		// that COULD have run here. A mandatory case is never dropped by a cost
-		// policy.
-		if maxCaseSeconds > 0 && c.Expect.MaxDurationSeconds > maxCaseSeconds && !c.RequireCassette {
+		if profile != selfcheckCI && maxCaseSeconds > 0 && c.Expect.MaxDurationSeconds > maxCaseSeconds && !c.RequireCassette {
 			tooLong++
 			continue
 		}
-		// --fast drops the handful of cases whose measured replay cost dominates
-		// the run, so the loop you run after every change stays in the tens of
-		// seconds. A mandatory case is never dropped, and the count is reported.
-		if fast && c.Slow && !c.RequireCassette {
+		if profile == selfcheckLocalFast && c.Slow && !c.RequireCassette {
 			slowSkipped++
 			continue
 		}
+		runnable = append(runnable, item)
+	}
+
+	evalPath := selfcheckEvalPath(os.Getenv("PATH"))
+	restore := setEnvScoped(map[string]string{
+		"PATH":                  evalPath,
+		"SELFMIND_EVAL_VCR":     "replay",
+		"SELFMIND_EVAL_OFFLINE": "1",
+		"SELFMIND_EVAL_VCR_DIR": vcrDir,
+	})
+	defer restore()
+
+	if runtime.GOOS == "linux" && isWSL() {
+		fmt.Fprintln(a.stdout, "  environment: WSL detected; Windows PATH entries are excluded from replayed tool calls")
+	}
+	if unavailable := a.selfcheckToolRequirements(runnable); unavailable {
+		return selfcheckUnavailable
+	}
+
+	passed, replayed := 0, 0
+	for _, item := range runnable {
+		c := item.caseDef
+		if profile == selfcheckCI {
+			fmt.Fprintf(a.stdout, "  run  %s (ci:%s)\n", c.ID, c.CI.Reason)
+		}
 		replayed++
-		result, err := selfeval.RunCaseFile(a.ctx, file, selfeval.RunOptions{ConfigPath: a.configPath})
-		if err != nil {
+		result, runErr := selfeval.RunCaseFile(a.ctx, item.file, selfeval.RunOptions{ConfigPath: a.configPath})
+		if runErr != nil {
 			failed++
-			fmt.Fprintf(a.stdout, "  FAIL %s (%v)\n", c.ID, err)
+			fmt.Fprintf(a.stdout, "  FAIL %s (%v)\n", c.ID, runErr)
 			continue
 		}
 		if result.Status == "passed" {
@@ -237,33 +346,134 @@ func (a *App) selfcheckEval(root string, fast bool) bool {
 			fmt.Fprintf(a.stdout, "  FAIL %s (%s)\n", c.ID, result.Status)
 		}
 	}
-	fmt.Fprintf(a.stdout, "  summary: %d passed, %d failed, %d skipped (no cassette), %d replayed\n", passed, failed, skipped, replayed)
+	fmt.Fprintf(a.stdout, "  summary: %d passed, %d failed, %d skipped (no cassette), %d replayed, %d excluded by profile\n", passed, failed, skipped, replayed, profileSkipped)
 	if slowSkipped > 0 {
-		fmt.Fprintf(a.stdout, "  note: %d slow case(s) skipped by --fast; run `selfmind selfcheck` with no flags before pushing\n", slowSkipped)
+		fmt.Fprintf(a.stdout, "  note: %d slow case(s) skipped by --fast/local-fast; run `selfmind selfcheck` before pushing\n", slowSkipped)
 	}
 	if tooLong > 0 {
-		fmt.Fprintf(a.stdout, "  note: %d case(s) skipped by SELFMIND_EVAL_MAX_CASE_SECONDS=%d; run `selfmind selfcheck` locally to cover them\n", tooLong, maxCaseSeconds)
+		fmt.Fprintf(a.stdout, "  note: %d case(s) skipped by SELFMIND_EVAL_MAX_CASE_SECONDS=%d\n", tooLong, maxCaseSeconds)
 	}
-	if passed == 0 && failed == 0 {
-		fmt.Fprintln(a.stdout, "  note: no recorded cassettes yet; record with `selfmind eval run --live` then commit cassettes locally")
-	}
-	// SELFMIND_EVAL_MIN_CASES is the CI floor: it fails the gate when the number
-	// of actually-replayed (non-skipped) cases falls below the threshold, so the
-	// gate cannot quietly degrade to verifying ~0 cases (e.g. cassettes deleted
-	// or case IDs renamed away from their cassettes). Unset keeps the local
-	// grow-as-you-record default.
 	if raw := strings.TrimSpace(os.Getenv("SELFMIND_EVAL_MIN_CASES")); raw != "" {
-		min, err := strconv.Atoi(raw)
-		if err != nil || min < 0 {
-			fmt.Fprintf(a.stdout, "  FAIL invalid SELFMIND_EVAL_MIN_CASES=%q (expected a non-negative integer)\n", raw)
-			return false
+		min, parseErr := strconv.Atoi(raw)
+		if parseErr != nil || min < 0 {
+			fmt.Fprintf(a.stdout, "  UNAVAILABLE invalid SELFMIND_EVAL_MIN_CASES=%q (expected a non-negative integer)\n", raw)
+			return selfcheckUnavailable
 		}
 		if replayed < min {
-			fmt.Fprintf(a.stdout, "  FAIL eval gate replayed %d case(s) but SELFMIND_EVAL_MIN_CASES=%d requires at least %d; record missing cassettes with `SELFMIND_EVAL_VCR=record selfmind eval run <case-or-dir>` and commit .vcr/<case-id>/\n", replayed, min, min)
-			return false
+			fmt.Fprintf(a.stdout, "  FAIL eval gate replayed %d case(s) but SELFMIND_EVAL_MIN_CASES=%d requires at least %d\n", replayed, min, min)
+			return selfcheckFailed
 		}
 	}
-	return failed == 0
+	if replayed == 0 && failed == 0 {
+		fmt.Fprintln(a.stdout, "  UNAVAILABLE selected profile replayed no cases")
+		return selfcheckUnavailable
+	}
+	if failed > 0 {
+		return selfcheckFailed
+	}
+	return selfcheckPassed
+}
+
+func resolveSelfcheckEvalRoot(root string) (string, error) {
+	root = strings.TrimSpace(root)
+	if root == "" {
+		root = "evalcases"
+	}
+	if !filepath.IsAbs(root) {
+		repo := repoRoot()
+		if repo == "" {
+			return "", fmt.Errorf("cannot resolve relative eval path %q: go.mod not found from cwd upward", root)
+		}
+		root = filepath.Join(repo, root)
+	}
+	root = filepath.Clean(root)
+	if _, err := os.Stat(root); err != nil {
+		return "", fmt.Errorf("eval path %s is unavailable: %w", root, err)
+	}
+	return root, nil
+}
+
+func selfcheckEvalPath(pathValue string) string {
+	if runtime.GOOS != "linux" {
+		return pathValue
+	}
+	parts := filepath.SplitList(pathValue)
+	filtered := parts[:0]
+	for _, part := range parts {
+		clean := strings.ToLower(filepath.ToSlash(strings.TrimSpace(part)))
+		if clean == "/mnt/c" || strings.HasPrefix(clean, "/mnt/c/") {
+			continue
+		}
+		filtered = append(filtered, part)
+	}
+	return strings.Join(filtered, string(os.PathListSeparator))
+}
+
+func isWSL() bool {
+	if runtime.GOOS != "linux" {
+		return false
+	}
+	data, err := os.ReadFile("/proc/sys/kernel/osrelease")
+	return err == nil && strings.Contains(strings.ToLower(string(data)), "microsoft")
+}
+
+func incompatibleLinuxExecutable(path string) bool {
+	if runtime.GOOS != "linux" {
+		return false
+	}
+	lower := strings.ToLower(filepath.ToSlash(strings.TrimSpace(path)))
+	return strings.HasSuffix(lower, ".exe") || strings.HasSuffix(lower, ".cmd") || strings.HasSuffix(lower, ".bat") ||
+		lower == "/mnt/c" || strings.HasPrefix(lower, "/mnt/c/")
+}
+
+func (a *App) selfcheckToolRequirements(cases []selfcheckEvalCase) bool {
+	commands := make(map[string][]string)
+	for _, item := range cases {
+		for _, command := range item.caseDef.Requires.Commands {
+			commands[command] = append(commands[command], item.caseDef.ID)
+		}
+	}
+	if len(commands) == 0 {
+		return false
+	}
+	names := make([]string, 0, len(commands))
+	for name := range commands {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	unavailable := false
+	for _, name := range names {
+		path, err := exec.LookPath(name)
+		if err != nil || incompatibleLinuxExecutable(path) {
+			unavailable = true
+			fmt.Fprintf(a.stdout, "  UNAVAILABLE required command %q for cases %s is not a native %s executable on PATH\n", name, strings.Join(commands[name], ","), runtime.GOOS)
+			continue
+		}
+		version := selfcheckCommandVersion(a.ctx, path)
+		if version != "" {
+			fmt.Fprintf(a.stdout, "  tool %s: %s (%s)\n", name, path, version)
+		} else {
+			fmt.Fprintf(a.stdout, "  tool %s: %s\n", name, path)
+		}
+	}
+	return unavailable
+}
+
+func selfcheckCommandVersion(parent context.Context, path string) string {
+	ctx, cancel := context.WithTimeout(parent, 3*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, path, "--version").CombinedOutput()
+	if err != nil {
+		return ""
+	}
+	line := strings.TrimSpace(string(out))
+	if before, _, ok := strings.Cut(line, "\n"); ok {
+		line = strings.TrimSpace(before)
+	}
+	if len(line) > 120 {
+		line = line[:120]
+	}
+	return line
 }
 
 // repoRoot walks up from the working directory to find a go.mod.

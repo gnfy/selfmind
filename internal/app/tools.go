@@ -90,6 +90,13 @@ func InitTools(mem *memory.MemoryManager, cfg *config.Config, ag *kernel.Agent, 
 		disp.InjectMiddleware(tools.SkillMetricsMiddleware(skillStore))
 	}
 
+	// Built-in schemas are application code and must be valid before the
+	// daemon accepts traffic. External MCP/plugin schemas are quarantined by
+	// the registry instead and never make startup depend on a third party.
+	if err := disp.ValidateInternalToolSchemas(); err != nil {
+		return nil, err
+	}
+
 	return disp, nil
 }
 

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -127,6 +128,57 @@ func TestModelCheckResolvesConfiguredProvider(t *testing.T) {
 	}
 	if strings.Contains(stdout.String(), "sk-kimi-test") {
 		t.Fatalf("stdout leaked API key: %s", stdout.String())
+	}
+}
+
+func TestModelCheckLiveRoleValidatesNativeToolSchema(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request struct {
+			Tools []map[string]interface{} `json:"tools"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		function := request.Tools[0]["function"].(map[string]interface{})
+		parameters := function["parameters"].(map[string]interface{})
+		if required, exists := parameters["required"]; exists {
+			t.Fatalf("required must be omitted, got %#v", required)
+		}
+		w.Header().Set("content-type", "application/json")
+		fmt.Fprint(w, `{"choices":[{"message":{"content":"OK"}}]}`)
+	}))
+	defer server.Close()
+
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := config.SaveConfig(path, &config.Config{
+		Models: config.ModelsConfig{Roles: map[string]config.ModelRoleConfig{
+			"fast_classifier": {
+				Provider: "deepseek",
+				Model:    "deepseek-v4-flash",
+				BaseURL:  server.URL,
+				Protocol: "openai_compatible",
+				APIKey:   "test-key",
+			},
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	stdout := &bytes.Buffer{}
+	stderr := &bytes.Buffer{}
+	app := &App{
+		ctx:        context.Background(),
+		args:       []string{"selfmind", "model", "check", "--live", "--role", "fast_classifier"},
+		stdout:     stdout,
+		stderr:     stderr,
+		configPath: path,
+	}
+	handled, code := app.runModelCommandIfRequested()
+	if !handled || code != 0 {
+		t.Fatalf("handled=%t code=%d stdout=%s stderr=%s", handled, code, stdout.String(), stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "native tool schema: passed") {
+		t.Fatalf("stdout missing schema result: %s", stdout.String())
 	}
 }
 

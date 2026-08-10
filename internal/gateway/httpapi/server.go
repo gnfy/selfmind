@@ -30,6 +30,10 @@ type Server struct {
 	DrainTimeout      time.Duration
 	ShutdownFunc      func()
 	RuntimeStatusFunc func() api.GatewayRuntimeInfo
+	// ToolSchemaReportFunc exposes the registration-time, redacted schema
+	// catalogue. It contains hashes and issue classes only, never raw external
+	// schemas. Nil keeps test/minimal servers independent from a dispatcher.
+	ToolSchemaReportFunc func() []tools.ToolSchemaReport
 	// LocalControlToken authenticates privileged loopback-only operations such
 	// as granting workspace trust. It is not the public gateway bearer token.
 	LocalControlToken string

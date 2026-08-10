@@ -86,6 +86,63 @@ func TestOpenAIAdapterChatUsesNativeTools(t *testing.T) {
 	}
 }
 
+func TestOpenAIAdapterOmitsNilRequiredFromNativeToolSchema(t *testing.T) {
+	var got OpenAIRequest
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		w.Header().Set("content-type", "application/json")
+		fmt.Fprint(w, `{"choices":[{"message":{"content":"OK"}}]}`)
+	}))
+	defer server.Close()
+
+	var required []string
+	adapter := NewOpenAIAdapter("test-key")
+	adapter.BaseURL = server.URL
+	_, err := adapter.Chat(context.Background(), ChatRequest{
+		Messages: []Message{{Role: "user", Content: "probe"}},
+		Tools: []ToolDefinition{{
+			Name: "delegate_task",
+			Parameters: map[string]interface{}{
+				"type":       "object",
+				"properties": map[string]interface{}{},
+				"required":   required,
+			},
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	function := got.Tools[0]["function"].(map[string]interface{})
+	parameters := function["parameters"].(map[string]interface{})
+	if required, exists := parameters["required"]; exists {
+		t.Fatalf("required must be omitted, got %#v", required)
+	}
+}
+
+func TestAnthropicAdapterOmitsNilRequiredFromNativeToolSchema(t *testing.T) {
+	var required []string
+	adapter := NewAnthropicAdapter("test-key")
+	wire := adapter.requestFromChat(ChatRequest{
+		Messages: []Message{{Role: "user", Content: "probe"}},
+		Tools: []ToolDefinition{{
+			Name: "delegate_task",
+			Parameters: map[string]interface{}{
+				"type":       "object",
+				"properties": map[string]interface{}{},
+				"required":   required,
+			},
+		}},
+	}, false)
+	if len(wire.Tools) != 1 {
+		t.Fatalf("tools = %d", len(wire.Tools))
+	}
+	if required, exists := wire.Tools[0].InputSchema["required"]; exists {
+		t.Fatalf("required must be omitted, got %#v", required)
+	}
+}
+
 func TestOpenAIAdapterRefreshesTokenAfterUnauthorized(t *testing.T) {
 	var seen []string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

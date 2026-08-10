@@ -225,14 +225,18 @@ func Run(ctx context.Context, opts Options) error {
 	}
 	defer app.StopCron(gwDeps.CronScheduler)
 	app.RegisterCronTool(disp, gwDeps.CronScheduler)
+	if err := disp.ValidateInternalToolSchemas(); err != nil {
+		return fmt.Errorf("validate registered tool schemas: %w", err)
+	}
 	app.InitMCP(disp, cfg)
 
 	gatewayAPI := &httpapi.Server{
-		Control:           controlStore,
-		Gateway:           gwDeps.Gateway,
-		DefaultTenantID:   defaultTenantID,
-		DrainTimeout:      drainTimeout,
-		LocalControlToken: localControlToken,
+		Control:              controlStore,
+		Gateway:              gwDeps.Gateway,
+		DefaultTenantID:      defaultTenantID,
+		ToolSchemaReportFunc: disp.ToolSchemaReport,
+		DrainTimeout:         drainTimeout,
+		LocalControlToken:    localControlToken,
 		// Pending-approval/clarify escrow threshold (Fix 2); "0" disables.
 		PendingNotifyAfter: cfg.Gateway.PendingNotifyAfterDuration(),
 		// How long a run may park on an unanswered approval. The unattended

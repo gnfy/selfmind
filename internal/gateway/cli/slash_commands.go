@@ -37,7 +37,7 @@ var slashCommandMetas = []slashCommandMeta{
 	{Name: "/capture", Usage: "/capture [title]", Description: "Save the last turn as a replayable eval case", Hint: "turn this turn into a regression test"},
 	{Name: "/copy", Usage: "/copy", Description: "Copy the last assistant response to the clipboard", Hint: "copy the last response"},
 	{Name: "/queue", Usage: "/queue [clear]", Description: "List queued tasks, or drop all pending queued tasks", Hint: "view or clear queued work"},
-	{Name: "/diag", Usage: "/diag [memory|context|tasks|models|delivery|execution]", Description: "Show runtime and subsystem diagnostics", Hint: "runs, queues, memory, context, tasks, models, delivery, execution"},
+	{Name: "/diag", Usage: "/diag [memory|context|tasks|models|delivery|execution|tools]", Description: "Show runtime and subsystem diagnostics", Hint: "runs, queues, memory, context, tasks, models, delivery, execution, tools"},
 	{Name: "/search", Usage: "/search [current|query]", Description: "Review this conversation with full diffs (current), or search past working sessions (empty = recent sessions)", Hint: "review this conversation or find prior work"},
 	// Gateway control commands the TUI relays to the daemon. Previously the TUI
 	// OMITTED these, so typing /approve fell through to the skill/unknown path

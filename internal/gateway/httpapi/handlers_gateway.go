@@ -8,6 +8,7 @@ import (
 	"selfmind/internal/buildinfo"
 	"selfmind/internal/executionenv"
 	"selfmind/internal/gateway/api"
+	"selfmind/internal/tools"
 )
 
 func (d *Server) handleGatewayStatus(w http.ResponseWriter, r *http.Request) {
@@ -64,6 +65,19 @@ func (d *Server) GatewayStatus() api.GatewayStatusResponse {
 		runtime.EnvironmentFingerprint = snapshot.EnvironmentFingerprint
 		runtime.CredentialSourceHash = snapshot.CredentialSourceHash
 	}
+	toolSchemas := api.ToolSchemaHealth{}
+	if d.ToolSchemaReportFunc != nil {
+		for _, report := range d.ToolSchemaReportFunc() {
+			switch report.Status {
+			case tools.ToolSchemaRepaired:
+				toolSchemas.Repaired++
+			case tools.ToolSchemaQuarantined:
+				toolSchemas.Quarantined++
+			default:
+				toolSchemas.Active++
+			}
+		}
+	}
 	return api.GatewayStatusResponse{
 		Runtime:        runtime,
 		State:          state,
@@ -71,6 +85,7 @@ func (d *Server) GatewayStatus() api.GatewayStatusResponse {
 		DrainReason:    reason,
 		ActiveRuns:     active,
 		ActiveRunCount: len(active),
+		ToolSchemas:    toolSchemas,
 	}
 }
 

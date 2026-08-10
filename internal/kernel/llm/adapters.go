@@ -555,10 +555,13 @@ func (a *OpenAIAdapter) applyOptions(openaiReq *OpenAIRequest, req ChatRequest) 
 }
 
 func (a *OpenAIAdapter) requestWithQuirks(req ChatRequest) ChatRequest {
-	if !strings.EqualFold(strings.TrimSpace(a.Quirks.ToolSchema), "moonshot") || len(req.Tools) == 0 {
+	if len(req.Tools) == 0 {
 		return req
 	}
-	req.Tools = sanitizeMoonshotToolDefinitions(req.Tools)
+	req.Tools = normalizeToolDefinitions(req.Tools)
+	if strings.EqualFold(strings.TrimSpace(a.Quirks.ToolSchema), "moonshot") {
+		req.Tools = sanitizeMoonshotToolDefinitions(req.Tools)
+	}
 	return req
 }
 

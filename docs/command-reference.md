@@ -99,10 +99,10 @@ selfmind workspace [list|add|use|trust|untrust|grants|revoke|<n|workspace_id>] .
 ```text
 selfmind config [doctor|upgrade]
 selfmind env [show|refresh]
-selfmind model [current|check|list|set <provider> <model>]
+selfmind model [current|check [--live] [--role <name>]|list|set <provider> <model>]
 selfmind auth [login|status|logout] ...
 selfmind doctor [--out FILE] [--probe-models]
-selfmind selfcheck [--skip-go] [--skip-eval] [--eval-dir DIR]
+selfmind selfcheck [--fast | --profile local-full|local-fast|ci] [--skip-go] [--skip-eval] [--eval-dir DIR]
 selfmind gateway [run|start|status|stop|restart|service] ...
 selfmind weixin [login|status] ...
 ```
@@ -111,6 +111,7 @@ Detailed forms:
 
 ```text
 selfmind model set <provider> <model> [--reasoning <level|auto>] [--service-tier <tier|auto>]
+selfmind model check [--live] [--role <name>]
 
 selfmind auth login minimax-oauth [--region global|cn] [--no-browser]
 selfmind auth status [provider]
@@ -135,10 +136,17 @@ selfmind weixin status
 - A shared daemon does not hot-switch from TUI `/model`. Restart at a safe turn
   boundary with `selfmind gateway restart --drain` after changing the model.
 - `model check` resolves credentials, protocol, endpoint, and model without
-  exposing secrets.
+  exposing secrets. `--role <name>` checks one configured maintenance role;
+  `--live` sends one bounded request and validates native tool-schema
+  compatibility, so it may consume a small amount of provider quota.
 - `doctor` checks the installation and configuration. `--probe-models` performs
   live provider probes and may consume provider quota.
-- `selfcheck` runs repository checks used before release.
+- `selfcheck` is the local release gate. The default `local-full` profile runs
+  all recorded cases; `--fast`/`local-fast` skips measured slow cases;
+  `--profile ci` runs only cases explicitly assigned to CI for this platform.
+  Provider responses replay offline, while tool calls still use the current
+  host toolchain. Exit codes are `0` pass, `1` regression, and `2` invalid or
+  unavailable environment.
 - `gateway restart` drains to a safe turn boundary by default; `--force` is an
   explicit last resort.
 - On macOS, `gateway service install` creates the current user's launchd
@@ -196,7 +204,7 @@ before normal agent dispatch.
 /tasks [done|archived|all]
 /task <n|id> [runs|rename <name>|pin|unpin|archive|merge <dst>]
 /queue [drop <n>|clear]
-/diag [memory|context|tasks|models|delivery]
+/diag [memory|context|tasks|models|delivery|execution|tools]
 /events
 /approvals [grants|revoke <n>]
 /approve <n|id|all> [task|always]
@@ -217,6 +225,10 @@ before normal agent dispatch.
   `smart`.
 - `/notify` chooses the bound IM destination for CLI-origin progress and final
   notifications.
+- `/diag tools` reports the registration-time tool schema catalogue. Repaired
+  and quarantined external tools are listed by name, issue class, and schema
+  hash; raw schemas and values are never printed. Quarantined tools are not
+  sent to models and cannot execute.
 
 ## Local TUI slash commands
 

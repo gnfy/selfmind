@@ -37,6 +37,8 @@ type Case struct {
 	// after each change, and the count it skips is always reported.
 	Slow       bool          `yaml:"slow" json:"slow,omitempty"`
 	SharedData bool          `yaml:"shared_data" json:"shared_data,omitempty"`
+	CI         CISettings    `yaml:"ci,omitempty" json:"ci,omitempty"`
+	Requires   Requirements  `yaml:"requires,omitempty" json:"requires,omitempty"`
 	Turns      []Turn        `yaml:"turns" json:"turns"`
 	Expect     Expectations  `yaml:"expect" json:"expect,omitempty"`
 	Checks     CheckSettings `yaml:"checks" json:"checks,omitempty"`
@@ -50,6 +52,35 @@ type Case struct {
 	PassRate    float64          `yaml:"pass_rate,omitempty" json:"pass_rate,omitempty"`
 
 	path string
+}
+
+type CISettings struct {
+	// Required marks a case as complementary CI evidence. It does not make the
+	// case mandatory in the local fast/full profiles; RequireCassette owns that
+	// independent concern.
+	Required  bool     `yaml:"required" json:"required,omitempty"`
+	Reason    string   `yaml:"reason" json:"reason,omitempty"`
+	Platforms []string `yaml:"platforms" json:"platforms,omitempty"`
+}
+
+type Requirements struct {
+	// Commands lists host tools used by the replayed tool calls. Selfcheck
+	// validates these before starting a case so a missing or incompatible host
+	// tool is reported as an environment error, not a product regression.
+	Commands []string `yaml:"commands" json:"commands,omitempty"`
+}
+
+var validCIReasons = map[string]struct{}{
+	"clean_checkout": {},
+	"cross_platform": {},
+	"credentialless": {},
+	"concurrency":    {},
+	"timing":         {},
+}
+
+var validCIPlatforms = map[string]struct{}{
+	"linux":  {},
+	"darwin": {},
 }
 
 type Turn struct {
@@ -154,6 +185,12 @@ func (c *Case) normalize() error {
 	if c.SharedData && needsWorkspaceIsolation(c) {
 		return fmt.Errorf("shared_data cannot be combined with setup, assert_state, or workspace: isolated")
 	}
+	if err := c.normalizeCI(); err != nil {
+		return err
+	}
+	if err := c.normalizeRequirements(); err != nil {
+		return err
+	}
 	if !c.Checks.NoMojibake && !c.Checks.NoRawJSONLeak && !c.Checks.NoToolXMLLeak &&
 		!c.Checks.NoEmptyResponse && !c.Checks.NoProviderStackDump &&
 		!c.Checks.ToolFailureShouldRecover && !c.Checks.WorkspaceShouldMatch &&
@@ -161,6 +198,77 @@ func (c *Case) normalize() error {
 		c.Checks = DefaultCheckSettings()
 	}
 	return nil
+}
+
+func (c *Case) normalizeCI() error {
+	c.CI.Reason = strings.ToLower(strings.TrimSpace(c.CI.Reason))
+	if !c.CI.Required {
+		if c.CI.Reason != "" || len(c.CI.Platforms) > 0 {
+			return fmt.Errorf("ci.reason/ci.platforms require ci.required: true")
+		}
+		return nil
+	}
+	if _, ok := validCIReasons[c.CI.Reason]; !ok {
+		return fmt.Errorf("ci.required cases need ci.reason in clean_checkout, cross_platform, credentialless, concurrency, timing")
+	}
+	if len(c.CI.Platforms) == 0 {
+		return fmt.Errorf("ci.required cases need at least one ci.platforms entry")
+	}
+	seen := make(map[string]struct{}, len(c.CI.Platforms))
+	platforms := make([]string, 0, len(c.CI.Platforms))
+	for _, raw := range c.CI.Platforms {
+		platform := strings.ToLower(strings.TrimSpace(raw))
+		if platform == "macos" {
+			platform = "darwin"
+		}
+		if _, ok := validCIPlatforms[platform]; !ok {
+			return fmt.Errorf("unsupported ci platform %q (expected linux or darwin)", raw)
+		}
+		if _, ok := seen[platform]; ok {
+			continue
+		}
+		seen[platform] = struct{}{}
+		platforms = append(platforms, platform)
+	}
+	c.CI.Platforms = platforms
+	return nil
+}
+
+func (c *Case) normalizeRequirements() error {
+	seen := make(map[string]struct{}, len(c.Requires.Commands))
+	commands := make([]string, 0, len(c.Requires.Commands))
+	for _, raw := range c.Requires.Commands {
+		command := strings.TrimSpace(raw)
+		if command == "" {
+			return fmt.Errorf("requires.commands cannot contain an empty command")
+		}
+		if filepath.Base(command) != command {
+			return fmt.Errorf("requires.commands entry %q must be a command name, not a path", raw)
+		}
+		key := strings.ToLower(command)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		commands = append(commands, command)
+	}
+	c.Requires.Commands = commands
+	return nil
+}
+
+// RequiredOnCI reports whether this case belongs to the complementary CI gate
+// on goos. Local profiles intentionally ignore this ownership marker.
+func (c *Case) RequiredOnCI(goos string) bool {
+	if c == nil || !c.CI.Required {
+		return false
+	}
+	goos = strings.ToLower(strings.TrimSpace(goos))
+	for _, platform := range c.CI.Platforms {
+		if platform == goos {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *Case) validateTextEncoding() error {

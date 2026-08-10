@@ -3,6 +3,12 @@ title: "a Node.js change uses the repository-declared verification command"
 suite: coding-foundations
 workspace: isolated
 channel: cli
+ci:
+  required: true
+  reason: cross_platform
+  platforms: [linux, darwin]
+requires:
+  commands: [node, npm]
 
 # Record after intentional coding-loop changes:
 #   SELFMIND_EVAL_VCR=record selfmind eval run \

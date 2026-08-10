@@ -199,10 +199,10 @@ turns:
     platform_user_id: "eval-stranger"   # a different person; must see nothing
 ```
 
-`require_cassette: true` marks a case as mandatory for the offline gate:
+`require_cassette: true` marks a case as mandatory for the local gate:
 `selfmind selfcheck` FAILS (instead of skipping) when no cassette is recorded
 for the case ID. Use it for north-star scenarios that must never silently drop
-out of CI. Optional cases (the default) are still skipped when unrecorded, so
+out of local release evidence. Optional cases (the default) are skipped when unrecorded, so
 the gate keeps growing as cassettes are recorded.
 
 ```yaml
@@ -210,23 +210,52 @@ id: continuity_resume
 require_cassette: true
 ```
 
-## Selfcheck Gate Floor
+## Selfcheck Profiles And Ownership
 
-`selfmind selfcheck` runs the eval phase in strict offline replay
-(`SELFMIND_EVAL_VCR=replay` + `SELFMIND_EVAL_OFFLINE=1`). Two mechanisms keep
-the gate honest:
+`selfmind selfcheck` replays provider responses strictly offline
+(`SELFMIND_EVAL_VCR=replay` + `SELFMIND_EVAL_OFFLINE=1`). Replayed tool calls
+still execute against the current host toolchain. Cases that depend on host
+commands declare them explicitly:
 
-- `require_cassette: true` cases fail selfcheck when their cassette is missing
-  (see above).
-- `SELFMIND_EVAL_MIN_CASES=N` fails selfcheck when fewer than N cases were
-  actually replayed (skipped cases do not count). CI sets it in
-  `.github/workflows/ci.yml` so deleted cassettes or renamed case IDs cannot
-  quietly degrade the gate to verifying ~0 cases. Unset (the local default)
-  keeps the grow-as-you-record behavior.
+```yaml
+requires:
+  commands: [node, npm]
+```
+
+The command fails with exit code `2` when the required environment is missing
+or incompatible. It never reports such a skip as green. Profiles divide
+ownership without changing cassette semantics:
+
+- `local-full` (default) replays every recorded case and is authoritative
+  before pushing.
+- `local-fast` / `--fast` skips measured `slow: true` cases for edit loops.
+- `ci` runs only cases whose value specifically depends on a clean checkout,
+  credentialless host, another platform, concurrency, or timing.
+
+```yaml
+ci:
+  required: true
+  reason: cross_platform
+  platforms: [linux, darwin]
+```
+
+Valid reasons are `clean_checkout`, `cross_platform`, `credentialless`,
+`concurrency`, and `timing`. A CI-owned case must have a cassette; missing one
+fails by identity, so CI does not rely on a numeric case-count proxy.
+
+Three exit codes keep the gate honest:
+
+- `0`: all selected checks passed.
+- `1`: a build, test, or behavioral assertion regressed.
+- `2`: arguments or the verification environment are unavailable, including a
+  missing Go toolchain, repository root, eval directory, or required command.
+
+`SELFMIND_EVAL_MIN_CASES=N` remains a compatibility guard for custom local
+automation, but the repository CI uses explicit case ownership instead.
 
 ### Cassette hygiene
 
-Three properties are enforced by `internal/kernel/llm/vcr_corpus_test.go`, so a
+Four properties are enforced by `internal/kernel/llm/vcr_corpus_test.go`, so a
 regression shows up in `go test ./...` rather than as a CI-only mystery:
 
 - **No machine absolute paths.** Recording rewrites the workspace prefix to
@@ -241,8 +270,9 @@ regression shows up in `go test ./...` rather than as a CI-only mystery:
   the call it stands for is never verified again. Recording one now prints a
   loud warning, and the corpus test ratchets the known set. Clearing an entry
   requires a live re-record.
-- **No empty cassette directories.** An empty directory reads as "this case has
-  a recording" while replay finds nothing at ordinal `0000`.
+- **Valid, contiguous recordings.** Every numbered file is valid JSON; each
+  case starts at `0000.json` with no ordinal gaps; a directory with no numbered
+  cassette is rejected.
 
 ### Tiers: `--fast` and the full gate
 

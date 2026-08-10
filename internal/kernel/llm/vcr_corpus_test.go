@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -35,7 +37,8 @@ func TestCassettesCarryNoMachineAbsolutePaths(t *testing.T) {
 	// eval scratch directory: a recording session's HOME can itself live under
 	// /tmp (mine did), and nothing else would have caught a path leaking from
 	// there into a committed cassette.
-	markers := []string{"/home/", "/Users/", "/mnt/", "/root/", "/tmp/", "c:\\", "C:\\"}
+	markers := []string{"/home/", "/Users/", "/mnt/", "/root/", "/tmp/"}
+	windowsDrivePath := regexp.MustCompile(`(?i)[a-z]:[\\/]`)
 	for _, file := range vcrCorpusFiles(t) {
 		raw, err := os.ReadFile(file)
 		if err != nil {
@@ -47,6 +50,22 @@ func TestCassettesCarryNoMachineAbsolutePaths(t *testing.T) {
 				t.Errorf("%s contains the recording machine's path %q; re-record it, or migrate the literal workspace prefix to %s",
 					file, marker, vcrWorkspacePlaceholder)
 			}
+		}
+		if match := windowsDrivePath.FindString(text); match != "" {
+			t.Errorf("%s contains the recording machine's Windows path prefix %q; use %s", file, match, vcrWorkspacePlaceholder)
+		}
+	}
+}
+
+func TestCorpusFilesContainValidJSON(t *testing.T) {
+	for _, file := range vcrCorpusFiles(t) {
+		raw, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var value interface{}
+		if err := json.Unmarshal(raw, &value); err != nil {
+			t.Errorf("%s is not valid JSON: %v", file, err)
 		}
 	}
 }
@@ -91,8 +110,54 @@ func TestNoEmptyCassetteDirectories(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(files) == 0 {
-			t.Errorf(".vcr/%s is empty; delete it or record the case", entry.Name())
+		ordinalCount := 0
+		for _, file := range files {
+			if !file.IsDir() && isCassetteOrdinalName(file.Name()) {
+				ordinalCount++
+			}
+		}
+		if ordinalCount == 0 {
+			t.Errorf(".vcr/%s contains no numbered cassette JSON; delete it or record the case", entry.Name())
 		}
 	}
+}
+
+func TestCassetteOrdinalsAreContiguous(t *testing.T) {
+	entries, err := os.ReadDir(vcrCorpusRoot)
+	if err != nil {
+		t.Skip("no cassette corpus checked out")
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		files, err := os.ReadDir(filepath.Join(vcrCorpusRoot, entry.Name()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		ordinals := make([]int, 0, len(files))
+		for _, file := range files {
+			if file.IsDir() || !isCassetteOrdinalName(file.Name()) {
+				continue
+			}
+			n, err := strconv.Atoi(strings.TrimSuffix(file.Name(), ".json"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			ordinals = append(ordinals, n)
+		}
+		sort.Ints(ordinals)
+		for i, ordinal := range ordinals {
+			if ordinal != i {
+				t.Errorf(".vcr/%s has an ordinal gap: got %04d.json at position %d; recordings must start at 0000 and stay contiguous", entry.Name(), ordinal, i)
+				break
+			}
+		}
+	}
+}
+
+var cassetteOrdinalName = regexp.MustCompile(`^\d{4}\.json$`)
+
+func isCassetteOrdinalName(name string) bool {
+	return cassetteOrdinalName.MatchString(name)
 }

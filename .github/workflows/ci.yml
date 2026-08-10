@@ -1,9 +1,8 @@
 name: CI
 
-# Regression gate: build + test + offline eval on every push/PR.
-# This is the "catch" net (Phase 0 / W0.2). It must never make live model
-# calls — eval cases run in offline replay so CI cannot burn provider quota
-# and stays deterministic.
+# CI complements the authoritative local selfcheck gate. It owns evidence a
+# developer workstation cannot prove reliably: clean checkout, credentialless
+# startup, cross-platform behavior, concurrency, and timing.
 
 on:
   push:
@@ -29,6 +28,7 @@ jobs:
   gate:
     name: Linux build, test, offline eval
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -48,29 +48,23 @@ jobs:
       - name: Test
         run: go test ./...
 
-      - name: Offline eval (replay only)
-        # Runs the same gate developers run locally via `selfmind selfcheck`.
-        # Optional cases without a recorded cassette are reported and skipped so
-        # the gate grows as cassettes are recorded — but cases marked
-        # `require_cassette: true` FAIL when their cassette is missing, and
-        # SELFMIND_EVAL_MIN_CASES fails the step when fewer cases actually
-        # replayed than required (so the gate can never quietly verify ~0 cases).
-        env:
-          SELFMIND_EVAL_MIN_CASES: "3"
-          # SELFMIND_EVAL_MAX_CASE_SECONDS can cap the gate by a case's
-          # declared max_duration_seconds. It is deliberately NOT set here.
-          # That field is an author-chosen ceiling, not a measure of replay
-          # cost: continuity_resume declares 420s and replays in 1s, while the
-          # genuinely slow case declares 540s because it really does run the
-          # test suite. Filtering on it drops fast, high-value cases and keeps
-          # the slow one. The whole step is 64s for 32 cases, and the tool-heavy
-          # cases are exactly the ones that surface races a single machine never
-          # reproduces, so the coverage is worth the minute.
-        run: go run ./cmd/selfmind selfcheck --skip-go
+      - name: CI-owned eval (provider replay only)
+        # Case ownership is explicit in eval YAML (`ci.required/reason/platforms`).
+        # A selected case without a cassette fails; no numeric count can hide it.
+        run: go run ./cmd/selfmind selfcheck --profile ci --skip-go
+
+      - name: Upload eval diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: selfmind-eval-linux
+          path: evalruns/
+          if-no-files-found: warn
 
   macos:
     name: macOS build and test
     runs-on: macos-14
+    timeout-minutes: 10
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -89,3 +83,14 @@ jobs:
 
       - name: Test
         run: go test ./...
+
+      - name: CI-owned platform eval (provider replay only)
+        run: go run ./cmd/selfmind selfcheck --profile ci --skip-go
+
+      - name: Upload eval diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: selfmind-eval-macos
+          path: evalruns/
+          if-no-files-found: warn

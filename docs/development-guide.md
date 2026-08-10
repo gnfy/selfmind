@@ -516,6 +516,30 @@ Run all tests:
 GOWORK=off go test ./...
 ```
 
+Run the product gate in two local tiers:
+
+```sh
+selfmind selfcheck --fast   # edit loop: build/test + recorded non-slow cases
+selfmind selfcheck          # before push: build/test + every recorded case
+```
+
+Provider responses replay offline, but tool calls use the host toolchain. A
+missing Go binary, repository root, eval directory, or case-required command is
+an unavailable environment (exit `2`), not a pass. CI deliberately runs only
+cases marked with `ci.required/reason/platforms`; local full remains the
+authoritative behavior gate.
+
+For a regression introduced within a known range:
+
+```sh
+git bisect start HEAD <known-good-tag>
+git bisect run bash scripts/bisect-selfcheck.sh
+git bisect reset
+```
+
+The script maps build or environment failures to bisect exit `125` (skip), uses
+a temporary HOME, and runs `local-fast` unless passed `full`.
+
 Useful checks:
 
 ```sh

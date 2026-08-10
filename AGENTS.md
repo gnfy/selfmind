@@ -288,6 +288,13 @@ Read the matching document before changing a domain:
 - Eval data is isolated by default. Local `evalruns/` traces are never
   committed. Required cassettes must exist and replay before the offline gate
   may pass; mock-provider success does not satisfy a live cassette requirement.
+- Provider replay is offline, but replayed tool calls use the host toolchain.
+  Cases declare required commands; a missing or cross-OS executable is an
+  unavailable environment, never a passing skip or a product regression.
+- CI complements the local gate. A case enters CI only through explicit
+  `ci.required`, `ci.reason`, and `ci.platforms` metadata for evidence that a
+  workstation cannot prove (clean checkout, credentialless, cross-platform,
+  concurrency, or timing). Case counts are not a substitute for ownership.
 - Deterministic P0 checks such as non-empty output, no mojibake, no raw provider
   JSON, visible tool events, and bounded duration remain mandatory even when a
   later model judge is added.
@@ -301,6 +308,7 @@ cd /mnt/d/wwwroot/ai/selfmind
 GOWORK=off /usr/local/go/bin/go test ./...   # ~1m, after each change
 selfmind selfcheck --fast                    # ~2.5m, adds 30 eval cases
 selfmind selfcheck                           # ~7m, before pushing
+selfmind selfcheck --profile ci --skip-go    # CI-owned cases for this platform
 ```
 
 From PowerShell, prefix `go` with

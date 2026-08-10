@@ -512,6 +512,28 @@ POST /v1/im/{platform}
 GOWORK=off go test ./...
 ```
 
+本地产品门禁分为两档：
+
+```sh
+selfmind selfcheck --fast   # 编辑循环：构建/测试 + 已录制的非慢用例
+selfmind selfcheck          # 推送前：构建/测试 + 全部已录制用例
+```
+
+Provider 响应离线回放，但工具调用使用主机工具链。缺少 Go、仓库根目录、
+eval 目录或用例声明的命令时，门禁返回环境不可用（退出码 `2`），不会误报通过。
+CI 只运行带 `ci.required/reason/platforms` 的补充性用例；本地 full 仍是完整行为门禁。
+
+在已知提交范围内定位回归：
+
+```sh
+git bisect start HEAD <known-good-tag>
+git bisect run bash scripts/bisect-selfcheck.sh
+git bisect reset
+```
+
+脚本使用临时 HOME，将构建或环境不可用映射为 bisect 的 `125`（跳过），默认运行
+`local-fast`，传入 `full` 时运行完整门禁。
+
 常用检查：
 
 ```sh

@@ -3,6 +3,10 @@ title: "an over-budget watcher check is refused during registration"
 suite: reliability
 workspace: isolated
 channel: cli
+ci:
+  required: true
+  reason: timing
+  platforms: [linux, darwin]
 require_cassette: false
 
 # A watcher repeats the same frozen check without a model in the loop. If its

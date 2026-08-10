@@ -7,6 +7,10 @@ suite: continuity
 workspace: isolated
 channel: cli
 require_cassette: true
+ci:
+  required: true
+  reason: credentialless
+  platforms: [linux, darwin]
 
 # North-star isolation scenario: turn 1 creates task context under the case's
 # default eval identity; turn 2 overrides `platform_user_id` to simulate a

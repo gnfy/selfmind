@@ -5,6 +5,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -72,10 +73,10 @@ func TestSelfcheckEvalFailsOnMissingRequiredCassette(t *testing.T) {
 	t.Setenv("SELFMIND_EVAL_MIN_CASES", "")
 
 	app, out := newSelfcheckTestApp()
-	if app.selfcheckEval(dir, false) {
+	if got := app.selfcheckEval(dir, selfcheckLocalFull); got != selfcheckFailed {
 		t.Fatalf("selfcheckEval should fail when a require_cassette case has no cassette; output:\n%s", out.String())
 	}
-	if !strings.Contains(out.String(), "require_cassette") {
+	if !strings.Contains(out.String(), "selected case has no cassette") {
 		t.Fatalf("failure output should explain the missing required cassette; got:\n%s", out.String())
 	}
 	if !strings.Contains(out.String(), "required_case") {
@@ -90,8 +91,8 @@ func TestSelfcheckEvalSkipsOptionalMissingCassette(t *testing.T) {
 	t.Setenv("SELFMIND_EVAL_MIN_CASES", "")
 
 	app, out := newSelfcheckTestApp()
-	if !app.selfcheckEval(dir, false) {
-		t.Fatalf("selfcheckEval should pass when an optional case merely lacks a cassette; output:\n%s", out.String())
+	if got := app.selfcheckEval(dir, selfcheckLocalFull); got != selfcheckUnavailable {
+		t.Fatalf("selfcheckEval should be unavailable when every optional case lacks a cassette; got=%v output:\n%s", got, out.String())
 	}
 	if !strings.Contains(out.String(), "1 skipped") {
 		t.Fatalf("summary should count the skipped case; got:\n%s", out.String())
@@ -105,7 +106,7 @@ func TestSelfcheckEvalMinCasesFailsWhenBelowThreshold(t *testing.T) {
 	t.Setenv("SELFMIND_EVAL_MIN_CASES", "2")
 
 	app, out := newSelfcheckTestApp()
-	if app.selfcheckEval(dir, false) {
+	if got := app.selfcheckEval(dir, selfcheckLocalFull); got != selfcheckFailed {
 		t.Fatalf("selfcheckEval should fail when fewer cases replay than SELFMIND_EVAL_MIN_CASES; output:\n%s", out.String())
 	}
 	// The failure message must print actual vs required so CI logs are actionable.
@@ -121,8 +122,8 @@ func TestSelfcheckEvalMinCasesUnsetKeepsSkipBehavior(t *testing.T) {
 	t.Setenv("SELFMIND_EVAL_MIN_CASES", "")
 
 	app, out := newSelfcheckTestApp()
-	if !app.selfcheckEval(dir, false) {
-		t.Fatalf("selfcheckEval with SELFMIND_EVAL_MIN_CASES unset must keep the skip-only default; output:\n%s", out.String())
+	if got := app.selfcheckEval(dir, selfcheckLocalFull); got != selfcheckUnavailable {
+		t.Fatalf("selfcheckEval must not report green when no case can replay; got=%v output:\n%s", got, out.String())
 	}
 }
 
@@ -133,7 +134,7 @@ func TestSelfcheckEvalMinCasesRejectsInvalidValue(t *testing.T) {
 	t.Setenv("SELFMIND_EVAL_MIN_CASES", "three")
 
 	app, out := newSelfcheckTestApp()
-	if app.selfcheckEval(dir, false) {
+	if got := app.selfcheckEval(dir, selfcheckLocalFull); got != selfcheckUnavailable {
 		t.Fatalf("selfcheckEval should fail on an unparseable SELFMIND_EVAL_MIN_CASES; output:\n%s", out.String())
 	}
 	if !strings.Contains(out.String(), "invalid SELFMIND_EVAL_MIN_CASES") {
@@ -163,15 +164,74 @@ func TestSelfcheckFastSkipsSlowCasesButReportsAndKeepsMandatory(t *testing.T) {
 	t.Setenv("SELFMIND_EVAL_MIN_CASES", "")
 
 	app, out := newSelfcheckTestApp()
-	ok := app.selfcheckEval(dir, true)
+	outcome := app.selfcheckEval(dir, selfcheckLocalFast)
 	text := out.String()
 
 	if !strings.Contains(text, "1 slow case(s) skipped by --fast") {
 		t.Fatalf("the skipped count must be reported; got:\n%s", text)
 	}
 	// The mandatory case still ran, found no cassette, and failed the gate.
-	if ok || !strings.Contains(text, "require_cassette") {
-		t.Fatalf("a mandatory case must not be dropped by --fast; ok=%v output:\n%s", ok, text)
+	if outcome != selfcheckFailed || !strings.Contains(text, "selected case has no cassette") {
+		t.Fatalf("a mandatory case must not be dropped by --fast; outcome=%v output:\n%s", outcome, text)
+	}
+}
+
+func TestSelfcheckEvalMissingDirectoryIsUnavailable(t *testing.T) {
+	t.Setenv("SELFMIND_EVAL_MIN_CASES", "")
+	app, out := newSelfcheckTestApp()
+	got := app.selfcheckEval(filepath.Join(t.TempDir(), "missing"), selfcheckLocalFull)
+	if got != selfcheckUnavailable || !strings.Contains(out.String(), "UNAVAILABLE") {
+		t.Fatalf("missing eval directory must be unavailable; got=%v output:\n%s", got, out.String())
+	}
+}
+
+func TestSelfcheckCISelectsOnlyCurrentPlatformCases(t *testing.T) {
+	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
+		t.Skip("CI eval profiles currently target Linux and macOS")
+	}
+	dir := t.TempDir()
+	content := "id: ci_current\ntitle: ci\nsuite: selfcheck-test\nchannel: cli\nci:\n  required: true\n  reason: clean_checkout\n  platforms: [" + runtime.GOOS + "]\nturns:\n  - input: hello\n"
+	if err := os.WriteFile(filepath.Join(dir, "ci.yaml"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeSelfcheckCase(t, dir, "local_only", false)
+	t.Setenv("SELFMIND_EVAL_VCR_DIR", filepath.Join(t.TempDir(), "vcr"))
+	t.Setenv("SELFMIND_EVAL_MIN_CASES", "")
+
+	app, out := newSelfcheckTestApp()
+	got := app.selfcheckEval(dir, selfcheckCI)
+	if got != selfcheckFailed {
+		t.Fatalf("selected CI case without cassette must fail; got=%v output:\n%s", got, out.String())
+	}
+	if !strings.Contains(out.String(), "1 excluded by profile") || !strings.Contains(out.String(), "ci_current") {
+		t.Fatalf("CI profile must exclude local-only cases and name selected failures; output:\n%s", out.String())
+	}
+}
+
+func TestSelfcheckEvalPathDropsWindowsPATHFromLinux(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("Linux-specific PATH policy")
+	}
+	got := selfcheckEvalPath("/mnt/c/Program Files/nodejs:/usr/local/bin:/usr/bin")
+	if strings.Contains(strings.ToLower(got), "/mnt/c/") || !strings.Contains(got, "/usr/bin") {
+		t.Fatalf("sanitized PATH = %q", got)
+	}
+}
+
+func TestSelfcheckGoMissingToolchainIsUnavailable(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+	app, out := newSelfcheckTestApp()
+	if got := app.selfcheckGo(); got != selfcheckUnavailable || !strings.Contains(out.String(), "UNAVAILABLE") {
+		t.Fatalf("missing Go must be unavailable; got=%v output:\n%s", got, out.String())
+	}
+}
+
+func TestSelfcheckRejectsSkippingEveryGate(t *testing.T) {
+	app, out := newSelfcheckTestApp()
+	app.args = []string{"selfmind", "selfcheck", "--skip-go", "--skip-eval"}
+	handled, code := app.runSelfcheckCommandIfRequested()
+	if !handled || code != 2 || !strings.Contains(out.String(), "would verify nothing") {
+		t.Fatalf("skip-all should be rejected; handled=%v code=%d output:\n%s", handled, code, out.String())
 	}
 }
 

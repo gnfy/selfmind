@@ -1,7 +1,10 @@
 id: smoke_rust_binary_search_004
 title: "generate a Rust binary search snippet"
 suite: smoke-10
-workspace: "."
+# Declared isolated because this case makes no tool calls: nothing here
+# reads the repository, and a workspace of "." would let one added tool
+# call silently make the cassette depend on the tree it was recorded in.
+workspace: isolated
 channel: cli
 
 turns:

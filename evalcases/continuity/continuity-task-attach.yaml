@@ -6,7 +6,10 @@ title: "pre-label semantics: an ordinary follow-up runs under the open current l
 # Commit the gap-free .vcr/continuity_task_attach/ generation with this file.
 require_cassette: true
 suite: continuity
-workspace: "."
+# Declared isolated because this case makes no tool calls: nothing here
+# reads the repository, and a workspace of "." would let one added tool
+# call silently make the cassette depend on the tree it was recorded in.
+workspace: isolated
 channel: cli
 
 # Work Timeline P3 (docs/work-timeline.md "Labels"/"Ingress"): an ordinary

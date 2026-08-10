@@ -1,7 +1,10 @@
 id: dayinlife_snippet_no_tools
 title: "produce a correct code snippet without touching the workspace"
 suite: dayinlife
-workspace: "."
+# Declared isolated because this case makes no tool calls: nothing here
+# reads the repository, and a workspace of "." would let one added tool
+# call silently make the cassette depend on the tree it was recorded in.
+workspace: isolated
 channel: cli
 turns:
   - input: "用 Go 写一个并发安全的计数器(用 sync.Mutex),直接给代码,不要查看或修改本地文件。最多 30 行。"

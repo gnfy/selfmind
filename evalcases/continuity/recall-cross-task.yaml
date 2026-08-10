@@ -2,7 +2,10 @@ id: recall_cross_task
 title: "automatic recall v1: related prior work surfaces on a NEW task's turn"
 require_cassette: true
 suite: continuity
-workspace: "."
+# Declared isolated because this case makes no tool calls: nothing here
+# reads the repository, and a workspace of "." would let one added tool
+# call silently make the cassette depend on the tree it was recorded in.
+workspace: isolated
 channel: cli
 
 # Work Timeline P2: turn 1 parks a planning task about the KOF game. An

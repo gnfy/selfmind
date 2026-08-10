@@ -8,37 +8,25 @@
       "content": "燃"
     },
     {
-      "content": "街"
-    },
-    {
-      "content": "机"
-    },
-    {
-      "content": "黄金"
-    },
-    {
-      "content": "时代"
-    },
-    {
-      "content": "的"
-    },
-    {
       "content": "热"
     },
     {
       "content": "血"
     },
     {
-      "content": "对"
+      "content": "街"
     },
     {
-      "content": "决"
+      "content": "机"
     },
     {
-      "content": "，在"
+      "content": "时代"
     },
     {
-      "content": "网页版"
+      "content": "，"
+    },
+    {
+      "content": "经典"
     },
     {
       "content": "九"
@@ -53,22 +41,28 @@
       "content": "斗"
     },
     {
-      "content": "游戏"
+      "content": "网页版"
     },
     {
-      "content": "中"
+      "content": "让"
     },
     {
-      "content": "用"
+      "content": "你"
     },
     {
-      "content": "拳"
+      "content": "随"
     },
     {
-      "content": "脚"
+      "content": "时"
     },
     {
-      "content": "、"
+      "content": "开"
+    },
+    {
+      "content": "战"
+    },
+    {
+      "content": "，用"
     },
     {
       "content": "连"
@@ -89,94 +83,76 @@
       "content": "技"
     },
     {
-      "content": "夺"
+      "content": "点"
     },
     {
-      "content": "回"
+      "content": "燃"
     },
     {
-      "content": "属于"
+      "content": "每"
     },
     {
-      "content": "你的"
+      "content": "一"
     },
     {
-      "content": "荣耀"
+      "content": "场"
     },
     {
-      "content": "。"
+      "content": "巅"
+    },
+    {
+      "content": "峰"
+    },
+    {
+      "content": "对"
+    },
+    {
+      "content": "决"
+    },
+    {
+      "content": "！"
+    },
+    {
+      "content": "  \n"
     },
     {
       "content": "无需"
     },
     {
-      "content": "安装"
-    },
-    {
-      "content": "，即"
-    },
-    {
-      "content": "开"
-    },
-    {
-      "content": "即"
-    },
-    {
-      "content": "战"
-    },
-    {
-      "content": "，"
-    },
-    {
-      "content": "和"
-    },
-    {
-      "content": "好友"
-    },
-    {
-      "content": "在"
-    },
-    {
-      "content": "浏览"
-    },
-    {
-      "content": "器"
-    },
-    {
-      "content": "里"
-    },
-    {
-      "content": "体验"
-    },
-    {
-      "content": "速度"
+      "content": "下载"
     },
     {
       "content": "、"
     },
     {
-      "content": "策略"
+      "content": "即"
     },
     {
-      "content": "与"
+      "content": "点"
     },
     {
-      "content": "爆"
+      "content": "即"
     },
     {
-      "content": "发"
+      "content": "玩"
     },
     {
-      "content": "并"
+      "content": "，"
     },
     {
-      "content": "存"
+      "content": "叫"
     },
     {
-      "content": "的"
+      "content": "上"
     },
     {
-      "content": "经典"
+      "content": "好友"
+    },
+    {
+      "content": "争"
+    },
+    {
+      "content": "夺"
     },
     {
       "content": "格"
@@ -185,18 +161,53 @@
       "content": "斗"
     },
     {
-      "content": "快"
+      "content": "之"
     },
     {
-      "content": "感"
+      "content": "王"
     },
     {
-      "content": "。"
+      "content": "，"
+    },
+    {
+      "content": "看看"
+    },
+    {
+      "content": "谁"
+    },
+    {
+      "content": "才"
+    },
+    {
+      "content": "是真"
+    },
+    {
+      "content": "正"
+    },
+    {
+      "content": "的"
+    },
+    {
+      "content": "竞技"
+    },
+    {
+      "content": "场"
+    },
+    {
+      "content": "霸"
+    },
+    {
+      "content": "主"
+    },
+    {
+      "content": "！"
     },
     {
       "usage": {
-        "input_tokens": 4766,
-        "output_tokens": 68
+        "input_tokens": 6173,
+        "output_tokens": 99,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0
       }
     }
   ]

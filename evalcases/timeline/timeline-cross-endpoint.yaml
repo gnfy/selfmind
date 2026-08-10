@@ -2,7 +2,10 @@ id: timeline_cross_endpoint
 title: "scenario 5: a WeChat follow-up continues CLI work with full spine context"
 require_cassette: true
 suite: timeline
-workspace: "."
+# Declared isolated because this case makes no tool calls: nothing here
+# reads the repository, and a workspace of "." would let one added tool
+# call silently make the cassette depend on the tree it was recorded in.
+workspace: isolated
 channel: cli
 
 # Scenario 5: the spine is person-level and cross-endpoint — turn 2 arrives on

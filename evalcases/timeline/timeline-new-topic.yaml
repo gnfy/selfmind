@@ -2,7 +2,10 @@ id: timeline_new_topic
 title: "scenario 3: unrelated new work mid-stream answers cleanly despite prior chatter"
 require_cassette: true
 suite: timeline
-workspace: "."
+# Declared isolated because this case makes no tool calls: nothing here
+# reads the repository, and a workspace of "." would let one added tool
+# call silently make the cassette depend on the tree it was recorded in.
+workspace: isolated
 channel: cli
 
 # Scenario 3: after some prior work sits in the spine, a completely unrelated

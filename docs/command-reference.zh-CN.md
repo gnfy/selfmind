@@ -90,10 +90,10 @@ selfmind workspace [list|add|use|trust|untrust|grants|revoke|<n|workspace_id>] .
 ```text
 selfmind config [doctor|upgrade]
 selfmind env [show|refresh]
-selfmind model [current|check|list|set <provider> <model>]
+selfmind model [current|check [--live] [--role <name>]|list|set <provider> <model>]
 selfmind auth [login|status|logout] ...
 selfmind doctor [--out FILE] [--probe-models]
-selfmind selfcheck [--skip-go] [--skip-eval] [--eval-dir DIR]
+selfmind selfcheck [--fast | --profile local-full|local-fast|ci] [--skip-go] [--skip-eval] [--eval-dir DIR]
 selfmind gateway [run|start|status|stop|restart|service] ...
 selfmind weixin [login|status] ...
 ```
@@ -102,6 +102,7 @@ selfmind weixin [login|status] ...
 
 ```text
 selfmind model set <provider> <model> [--reasoning <level|auto>] [--service-tier <tier|auto>]
+selfmind model check [--live] [--role <name>]
 
 selfmind auth login minimax-oauth [--region global|cn] [--no-browser]
 selfmind auth status [provider]
@@ -124,9 +125,14 @@ selfmind weixin status
   会动态校验 reasoning/service tier；`auto` 表示交给 provider/模型默认处理。
 - 共享 daemon 不支持在 TUI `/model` 中热切换。修改后使用
   `selfmind gateway restart --drain`，在安全 turn 边界重启。
-- `model check` 解析凭证、协议、端点和模型，但不会暴露密钥。
+- `model check` 解析凭证、协议、端点和模型，但不会暴露密钥。`--role <name>`
+  检查一个已配置的维护角色；`--live` 会发起一次有界请求并验证原生工具 schema
+  兼容性，因此会消耗少量 provider 额度。
 - `doctor` 检查安装和配置；`--probe-models` 会真实调用 provider，可能消耗额度。
-- `selfcheck` 执行发布前使用的仓库检查。
+- `selfcheck` 是本地发布门禁。默认 `local-full` 运行全部已录制用例；
+  `--fast`/`local-fast` 跳过已测量的慢用例；`--profile ci` 只运行明确分配给
+  当前平台 CI 的用例。Provider 响应离线回放，但工具调用仍使用当前主机工具链。
+  退出码：`0` 通过、`1` 回归失败、`2` 参数或环境不可用。
 - `gateway restart` 默认等待安全的 turn 边界；`--force` 仅作为最后手段。
 - 在 macOS 上，`gateway service install` 会为当前用户创建 launchd
   LaunchAgent。之后 `gateway start`、`stop`、`status`、`restart` 都操作这个
@@ -180,7 +186,7 @@ Gateway 命令可用于 TUI 和受支持的 IM 渠道，并且会在普通 Agent
 /tasks [done|archived|all]
 /task <n|id> [runs|rename <name>|pin|unpin|archive|merge <dst>]
 /queue [drop <n>|clear]
-/diag [memory|context|tasks|models|delivery]
+/diag [memory|context|tasks|models|delivery|execution|tools]
 /events
 /approvals [grants|revoke <n>]
 /approve <n|id|all> [task|always]
@@ -200,6 +206,9 @@ Gateway 命令可用于 TUI 和受支持的 IM 渠道，并且会在普通 Agent
 - `/mode` 支持 `on-request`、`read-only`、`auto-edit`、`full-auto`
   和 `smart`。
 - `/notify` 选择 CLI 脱离后接收进度和最终结果的已绑定 IM 渠道。
+- `/diag tools` 显示注册期工具 schema 目录。被修复或隔离的外部工具只显示
+  工具名、问题类别和 schema 哈希，不显示原始 schema 或参数值。隔离工具不会
+  发送给模型，也不能执行。
 
 ## 本地 TUI slash commands
 

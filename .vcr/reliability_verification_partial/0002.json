@@ -1,0 +1,89 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "content": "The"
+    },
+    {
+      "content": " existing"
+    },
+    {
+      "content": " content"
+    },
+    {
+      "content": " is"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "before"
+    },
+    {
+      "content": "`;"
+    },
+    {
+      "content": " I"
+    },
+    {
+      "content": "’m"
+    },
+    {
+      "content": " replacing"
+    },
+    {
+      "content": " it"
+    },
+    {
+      "content": " with"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "after"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " before"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " single"
+    },
+    {
+      "content": " required"
+    },
+    {
+      "content": " check"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": "Preparing to run write_file",
+      "event_type": "agent.thinking"
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_tX8z5K3XLriFPHPQS6v7QlPP",
+          "Function": "write_file",
+          "Args": "{\"path\":\"{{SELFMIND_VCR_WORKSPACE}}/verification-target.txt\",\"content\":\"after\"}"
+        }
+      ]
+    },
+    {
+      "usage": {
+        "input_tokens": 6058,
+        "output_tokens": 247,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0
+      }
+    }
+  ]
+}

@@ -2,28 +2,25 @@
   "method": "stream",
   "events": [
     {
-      "usage": {
-        "input_tokens": 15854,
-        "output_tokens": 0
-      }
-    },
-    {
-      "finish_reason": "tool_use"
-    },
-    {
-      "usage": {
-        "input_tokens": 0,
-        "output_tokens": 266
-      }
+      "content": "Preparing to run memory",
+      "event_type": "agent.thinking"
     },
     {
       "tool_calls": [
         {
-          "ID": "tool_MJvbSXenjstfnKqjKuHII2GC",
+          "ID": "call_9ZWJVx1maiLUD4lZIlbdq6ZX",
           "Function": "memory",
-          "Args": "{\"action\": \"add\", \"target\": \"pinned\", \"content\": \"用户的部署标记是 ACK-MEM-4482。\"}"
+          "Args": "{\"action\":\"add\",\"category\":\"other\",\"content\":\"用户的部署标记是 ACK-MEM-4482。\",\"target\":\"pinned\"}"
         }
       ]
+    },
+    {
+      "usage": {
+        "input_tokens": 10233,
+        "output_tokens": 94,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0
+      }
     }
   ]
 }

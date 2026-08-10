@@ -174,3 +174,66 @@ turns:
 		t.Fatalf("error should identify mojibake field, got: %v", err)
 	}
 }
+
+func TestLoadCaseParsesCIAndCommandRequirements(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "case.yaml")
+	if err := os.WriteFile(path, []byte(`
+id: ci_case
+ci:
+  required: true
+  reason: cross_platform
+  platforms: [linux, macos]
+requires:
+  commands: [node, npm, node]
+turns:
+  - input: "hello"
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	c, err := LoadCase(path)
+	if err != nil {
+		t.Fatalf("LoadCase failed: %v", err)
+	}
+	if !c.RequiredOnCI("linux") || !c.RequiredOnCI("darwin") || c.RequiredOnCI("windows") {
+		t.Fatalf("unexpected CI platforms: %+v", c.CI)
+	}
+	if got := strings.Join(c.Requires.Commands, ","); got != "node,npm" {
+		t.Fatalf("commands = %q, want node,npm", got)
+	}
+}
+
+func TestLoadCaseRejectsIncompleteCIMetadata(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "case.yaml")
+	if err := os.WriteFile(path, []byte(`
+id: bad_ci
+ci:
+  required: true
+  platforms: [linux]
+turns:
+  - input: "hello"
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadCase(path); err == nil || !strings.Contains(err.Error(), "ci.reason") {
+		t.Fatalf("expected actionable ci.reason error, got %v", err)
+	}
+}
+
+func TestLoadCaseRejectsCommandPaths(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "case.yaml")
+	if err := os.WriteFile(path, []byte(`
+id: bad_command
+requires:
+  commands: [/usr/bin/node]
+turns:
+  - input: "hello"
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadCase(path); err == nil || !strings.Contains(err.Error(), "command name") {
+		t.Fatalf("expected command-name validation error, got %v", err)
+	}
+}

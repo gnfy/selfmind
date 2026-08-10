@@ -2,7 +2,10 @@ id: timeline_iterate
 title: "scenarios 1+2: new work opens a label; an iteration continues it via the spine"
 require_cassette: true
 suite: timeline
-workspace: "."
+# Declared isolated because this case makes no tool calls: nothing here
+# reads the repository, and a workspace of "." would let one added tool
+# call silently make the cassette depend on the tree it was recorded in.
+workspace: isolated
 channel: cli
 
 # Work Timeline acceptance scenarios 1+2 (docs/work-timeline.md): turn 1 is

@@ -225,16 +225,25 @@ func Run(ctx context.Context, opts Options) error {
 	}
 	defer app.StopCron(gwDeps.CronScheduler)
 	app.RegisterCronTool(disp, gwDeps.CronScheduler)
+	if err := disp.ValidateInternalToolSchemas(); err != nil {
+		return fmt.Errorf("validate registered tool schemas: %w", err)
+	}
 	app.InitMCP(disp, cfg)
 
 	gatewayAPI := &httpapi.Server{
-		Control:           controlStore,
-		Gateway:           gwDeps.Gateway,
-		DefaultTenantID:   defaultTenantID,
-		DrainTimeout:      drainTimeout,
-		LocalControlToken: localControlToken,
+		Control:              controlStore,
+		Gateway:              gwDeps.Gateway,
+		DefaultTenantID:      defaultTenantID,
+		ToolSchemaReportFunc: disp.ToolSchemaReport,
+		DrainTimeout:         drainTimeout,
+		LocalControlToken:    localControlToken,
 		// Pending-approval/clarify escrow threshold (Fix 2); "0" disables.
 		PendingNotifyAfter: cfg.Gateway.PendingNotifyAfterDuration(),
+		// How long a run may park on an unanswered approval. The unattended
+		// bound applies only when no endpoint is live AND no account is bound,
+		// so a person who simply looked away keeps the full budget.
+		ApprovalWait:           cfg.Agent.ApprovalWaitDuration(),
+		ApprovalWaitUnattended: cfg.Agent.ApprovalWaitUnattendedDuration(),
 		// Smart-mode approval triage (H2): build the cheap-model judge from the
 		// agent's dedicated triage provider (a cheap role kept OFF the main run
 		// provider). Nil when no provider is available → smart mode asks a human.

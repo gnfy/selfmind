@@ -1,0 +1,143 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "content": "当前"
+    },
+    {
+      "content": "目录"
+    },
+    {
+      "content": "可能"
+    },
+    {
+      "content": "不是"
+    },
+    {
+      "content": " Git"
+    },
+    {
+      "content": " 工作"
+    },
+    {
+      "content": "树"
+    },
+    {
+      "content": "；"
+    },
+    {
+      "content": "我"
+    },
+    {
+      "content": "改"
+    },
+    {
+      "content": "用"
+    },
+    {
+      "content": "文件"
+    },
+    {
+      "content": "树"
+    },
+    {
+      "content": "和"
+    },
+    {
+      "content": "源码"
+    },
+    {
+      "content": "搜索"
+    },
+    {
+      "content": "继续"
+    },
+    {
+      "content": "确认"
+    },
+    {
+      "content": "实现"
+    },
+    {
+      "content": "，不"
+    },
+    {
+      "content": "依"
+    },
+    {
+      "content": "赖"
+    },
+    {
+      "content": " Git"
+    },
+    {
+      "content": " 元"
+    },
+    {
+      "content": "数据"
+    },
+    {
+      "content": "。"
+    },
+    {
+      "content": "Preparing to run ls_r",
+      "event_type": "agent.thinking"
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_RPZ8peCWaA1uC1peazka6N1q",
+          "Function": "ls_r",
+          "Args": "{\"path\":\"{{SELFMIND_VCR_WORKSPACE}}/internal/modelruntime\",\"recursive\":true,\"max_entries\":250}"
+        }
+      ]
+    },
+    {
+      "content": "Preparing to run ls_r",
+      "event_type": "agent.thinking"
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_LhHeGDTgdkEIZL50eIDceh6O",
+          "Function": "ls_r",
+          "Args": "{\"path\":\"{{SELFMIND_VCR_WORKSPACE}}/internal/kernel/llm\",\"recursive\":true,\"max_entries\":250}"
+        }
+      ]
+    },
+    {
+      "content": "Preparing to run search_files",
+      "event_type": "agent.thinking"
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_teRt3kVLInBGrMT3D9phgYBy",
+          "Function": "search_files",
+          "Args": "{\"path\":\"{{SELFMIND_VCR_WORKSPACE}}/docs\",\"file_glob\":\"STATUS.md\",\"pattern\":\"Provider runtime|OAuth / token refresh|LLM protocol adapters|model catalog|provider\"}"
+        }
+      ]
+    },
+    {
+      "content": "Preparing to run search_files",
+      "event_type": "agent.thinking"
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_ul5O1StiONr6lDjDBotkSnoe",
+          "Function": "search_files",
+          "Args": "{\"path\":\"{{SELFMIND_VCR_WORKSPACE}}/internal\",\"file_glob\":\"*.go\",\"pattern\":\"type ProviderProfile|type Runtime struct|type Resolver|TransportConfig|RegisterTransport|ProviderQuirks\"}"
+        }
+      ]
+    },
+    {
+      "usage": {
+        "input_tokens": 19568,
+        "output_tokens": 422,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0
+      }
+    }
+  ]
+}

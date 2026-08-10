@@ -54,6 +54,35 @@ config.yaml / env / auth.json / CLI selection
 
 `Runtime` 是 app 层和 modelruntime 层之间的唯一 provider 合约；`TransportConfig` 是 app 层和 LLM 传输层之间的唯一 provider 合约。新增渠道时不要绕过它们。
 
+## 工具 Schema 治理
+
+工具 schema 需要经过两个相互独立的兼容边界：
+
+1. `tools.Registry` 在注册时把每个 schema 编译成 provider-neutral、与
+   来源对象分离的 JSON Schema 快照。
+2. 协议 adapter 只对另一个副本应用最终 wire 规则。adapter 保留防御性
+   归一化，但不再负责判断工具目录本身是否合法。
+
+编译器只自动修复语义确定的结构问题：`required` 为 null、空集合或有重复项，
+对象缺少 `properties`，数组缺少 `items`，以及 default 与声明类型明显冲突。
+required 指向不存在属性、非法 type、损坏的组合 schema、enum/type 冲突等歧义
+问题不会被猜测修复。内置工具只要发生修复或错误，就让启动失败，从而在 CI
+和发布前暴露缺陷；MCP/plugin 等外部工具则只隔离单个坏工具，daemon 和其余
+工具继续工作，被隔离工具既不会发给模型，也不能执行。
+
+MCP 工具保留完整原始 `inputSchema` 供编译，旧 `ToolSchema` 投影只服务于本地
+参数转换。因此嵌套对象、数组、组合关键字、definitions 和
+additional-properties 规则都能完整进入 provider 请求。过长 MCP 工具名会稳定
+收敛到 64 字符，并追加防碰撞哈希。
+
+`/diag tools` 显示 active/repaired/quarantined 数量以及脱敏后的问题路径；gateway
+状态接口携带同一聚合，`selfmind doctor` 会把它放进 gateway 健康行。系统只展示
+schema 哈希和问题类别，不展示外部原始 schema。
+
+本层明确不做 provider 拒绝 schema 后的自动重试。静默改变工具契约后重放同一
+轮可能改变行为或重复副作用；兼容性应在分发前通过编译器、adapter 归一化、测试
+和 live model probe 建立。
+
 ## 上下文窗口与输出上限
 
 SelfMind 区分两个容易混淆的字段：
@@ -164,8 +193,14 @@ token。若服务端返回 `401 token_expired`、`invalid_token` 等认证失败
   `ProviderQuirks.ResponsesStoreFalse=true` 和 `ProviderQuirks.ResponsesRequireStream=true`；
   adapter 必须序列化 `"store": false`，即使调用方要求非流式也必须走流式。不要依赖
   服务端默认值。
-- Responses-compatible adapter 发送前必须规范化 tool schema：`required` 必须是
-  JSON 数组，绝不能是 `null`；Go 的 nil slice 必须转换为 `[]`。
+- 所有原生工具 adapter 在发送前都必须规范化 tool schema。Chat Completions 与
+  Anthropic Messages 对空值或非法的 `required` 直接省略，确保纯可选参数工具不会
+  序列化为 `required: null`；Responses-compatible adapter 再应用其更严格的协议
+  规则，把空 required 集合序列化为 `[]`。
+- `selfmind model check --live [--role <name>]` 会在目标 transport 声明支持原生工具时，
+  发起一次携带纯可选参数探测工具的有界请求。这样验证的是实际协议 adapter 和端点，
+  而不只是配置解析。`doctor --probe-models` 复用同一 schema 探测，并继续合并共享同一
+  provider 路由的角色，避免重复消耗额度。
 - Responses-compatible adapter 必须在线上规范化工具名：provider 侧名称必须匹配
   `^[a-zA-Z0-9_-]+$`；adapter 内部维护别名表，把返回的 tool call 映射回 SelfMind
   原始内部名称后再分发。

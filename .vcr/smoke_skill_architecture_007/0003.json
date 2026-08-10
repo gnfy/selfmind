@@ -1,0 +1,174 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "content": "文"
+    },
+    {
+      "content": "档"
+    },
+    {
+      "content": "给"
+    },
+    {
+      "content": "出了"
+    },
+    {
+      "content": "预"
+    },
+    {
+      "content": "期"
+    },
+    {
+      "content": "优"
+    },
+    {
+      "content": "先"
+    },
+    {
+      "content": "级"
+    },
+    {
+      "content": "；"
+    },
+    {
+      "content": "接"
+    },
+    {
+      "content": "下来"
+    },
+    {
+      "content": "核"
+    },
+    {
+      "content": "对"
+    },
+    {
+      "content": "根"
+    },
+    {
+      "content": "目录"
+    },
+    {
+      "content": "构"
+    },
+    {
+      "content": "造"
+    },
+    {
+      "content": "、"
+    },
+    {
+      "content": "扫描"
+    },
+    {
+      "content": "去"
+    },
+    {
+      "content": "重"
+    },
+    {
+      "content": "、"
+    },
+    {
+      "content": "注册"
+    },
+    {
+      "content": "与"
+    },
+    {
+      "content": "请求"
+    },
+    {
+      "content": "时"
+    },
+    {
+      "content": "解析"
+    },
+    {
+      "content": "四"
+    },
+    {
+      "content": "层"
+    },
+    {
+      "content": "实现"
+    },
+    {
+      "content": "。"
+    },
+    {
+      "content": "Preparing to run read_file",
+      "event_type": "agent.thinking"
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_6UNiGRqt31SSHFoD4cWjU6nn",
+          "Function": "read_file",
+          "Args": "{\"path\":\"{{SELFMIND_VCR_WORKSPACE}}/internal/tools/skill_service.go\",\"limit\":500}"
+        }
+      ]
+    },
+    {
+      "content": "Preparing to run read_file",
+      "event_type": "agent.thinking"
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_gG28vlCZPEWlVamLJJsihp3i",
+          "Function": "read_file",
+          "Args": "{\"path\":\"{{SELFMIND_VCR_WORKSPACE}}/internal/tools/skill_loader.go\",\"limit\":500}"
+        }
+      ]
+    },
+    {
+      "content": "Preparing to run read_file",
+      "event_type": "agent.thinking"
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_LvWasERacT18ptEnLJOAmB2Z",
+          "Function": "read_file",
+          "Args": "{\"path\":\"{{SELFMIND_VCR_WORKSPACE}}/internal/tools/skill_runtime.go\",\"limit\":500}"
+        }
+      ]
+    },
+    {
+      "content": "Preparing to run read_file",
+      "event_type": "agent.thinking"
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_YwhEFwtUmiLJTXtPbNAnPgC4",
+          "Function": "read_file",
+          "Args": "{\"path\":\"{{SELFMIND_VCR_WORKSPACE}}/internal/kernel/skill_store.go\",\"limit\":400}"
+        }
+      ]
+    },
+    {
+      "content": "Preparing to run terminal",
+      "event_type": "agent.thinking"
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_jtzjPZa3Pu6fpj8vlrJW7Urp",
+          "Function": "terminal",
+          "Args": "{\"command\":\"rg -n \\\"SkillRootsForTenant|NewSkillService|LoadSkills|ReloadSkills|Register.*Skill|SkillService|skill_view|skills_list|Resolve.*Skill|Invoke.*Skill\\\" internal cmd --glob '*.go'\",\"cwd\":\"{{SELFMIND_VCR_WORKSPACE}}\",\"timeout\":30}"
+        }
+      ]
+    },
+    {
+      "usage": {
+        "input_tokens": 20505,
+        "output_tokens": 481,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0
+      }
+    }
+  ]
+}

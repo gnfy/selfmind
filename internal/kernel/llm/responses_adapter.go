@@ -556,10 +556,7 @@ func responsesToolParameters(params map[string]interface{}) map[string]interface
 			"required":   []interface{}{},
 		}
 	}
-	out, ok := sanitizeResponsesSchema(params).(map[string]interface{})
-	if !ok {
-		out = map[string]interface{}{}
-	}
+	out := normalizeToolParameters(params)
 	if strings.TrimSpace(stringValue(out["type"])) == "" {
 		out["type"] = "object"
 	}
@@ -567,53 +564,11 @@ func responsesToolParameters(params map[string]interface{}) map[string]interface
 		if _, ok := out["properties"].(map[string]interface{}); !ok {
 			out["properties"] = map[string]interface{}{}
 		}
-		if !requiredIsJSONArray(out["required"]) {
+		if _, ok := out["required"]; !ok {
 			out["required"] = []interface{}{}
 		}
 	}
 	return out
-}
-
-func sanitizeResponsesSchema(value interface{}) interface{} {
-	switch v := value.(type) {
-	case map[string]interface{}:
-		out := make(map[string]interface{}, len(v))
-		for key, child := range v {
-			if key == "required" {
-				if requiredIsJSONArray(child) {
-					out[key] = child
-				} else {
-					out[key] = []interface{}{}
-				}
-				continue
-			}
-			if key == "properties" && child == nil {
-				out[key] = map[string]interface{}{}
-				continue
-			}
-			out[key] = sanitizeResponsesSchema(child)
-		}
-		return out
-	case []interface{}:
-		out := make([]interface{}, len(v))
-		for i, child := range v {
-			out[i] = sanitizeResponsesSchema(child)
-		}
-		return out
-	default:
-		return value
-	}
-}
-
-func requiredIsJSONArray(value interface{}) bool {
-	switch v := value.(type) {
-	case []interface{}:
-		return v != nil
-	case []string:
-		return v != nil
-	default:
-		return false
-	}
 }
 
 func (a *ResponsesAdapter) chatResponseFromResponses(payload responsesResponse) *ChatResponse {

@@ -24,6 +24,52 @@ import (
 
 const diagRecentEvents = 5
 
+func (d *Server) toolsDiagReply(_ context.Context, _ *control.IdentityContext) (string, error) {
+	if d == nil || d.ToolSchemaReportFunc == nil {
+		return "Tool schema diagnostics unavailable.", nil
+	}
+	reports := d.ToolSchemaReportFunc()
+	active, repaired, quarantined := 0, 0, 0
+	attention := make([]tools.ToolSchemaReport, 0)
+	for _, report := range reports {
+		switch report.Status {
+		case tools.ToolSchemaRepaired:
+			repaired++
+			attention = append(attention, report)
+		case tools.ToolSchemaQuarantined:
+			quarantined++
+			attention = append(attention, report)
+		default:
+			active++
+		}
+	}
+	var sb strings.Builder
+	sb.WriteString("Tool schema diagnostics\n")
+	fmt.Fprintf(&sb, "Catalog: %d active, %d repaired, %d quarantined\n", active, repaired, quarantined)
+	if len(attention) == 0 {
+		sb.WriteString("Status: healthy; all registered tool schemas are provider-ready.")
+		return sb.String(), nil
+	}
+	sb.WriteString("Attention:\n")
+	const maxEntries = 12
+	for index, report := range attention {
+		if index >= maxEntries {
+			fmt.Fprintf(&sb, "- ... %d more\n", len(attention)-maxEntries)
+			break
+		}
+		issue := "schema normalized"
+		if len(report.Issues) > 0 {
+			issue = report.Issues[0].Code + " at " + report.Issues[0].Path
+		}
+		fmt.Fprintf(&sb, "- %s [%s/%s] %s (schema %s)\n",
+			report.Name, report.Origin, report.Status, issue, report.Hash)
+	}
+	if quarantined > 0 {
+		sb.WriteString("Quarantined tools are not sent to models and cannot execute.")
+	}
+	return strings.TrimSpace(sb.String()), nil
+}
+
 func (d *Server) executionDiagReply(ctx context.Context, identity *control.IdentityContext) (string, error) {
 	if d == nil || d.Control == nil || identity == nil {
 		return "Execution diagnostics unavailable.", nil

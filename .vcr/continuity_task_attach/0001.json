@@ -2,25 +2,22 @@
   "method": "stream",
   "events": [
     {
-      "usage": {
-        "input_tokens": 15932,
-        "output_tokens": 0
-      }
-    },
-    {
       "content": "1"
     },
     {
       "content": "."
     },
     {
-      "content": " "
+      "content": " 梳"
     },
     {
-      "content": "梳理"
+      "content": "理"
     },
     {
-      "content": "现有"
+      "content": "现"
+    },
+    {
+      "content": "有"
     },
     {
       "content": "配置"
@@ -29,10 +26,37 @@
       "content": "来源"
     },
     {
-      "content": "与"
+      "content": "、"
     },
     {
-      "content": "优先级"
+      "content": "优"
+    },
+    {
+      "content": "先"
+    },
+    {
+      "content": "级"
+    },
+    {
+      "content": "、"
+    },
+    {
+      "content": "默认"
+    },
+    {
+      "content": "值"
+    },
+    {
+      "content": "及"
+    },
+    {
+      "content": "错误"
+    },
+    {
+      "content": "处理"
+    },
+    {
+      "content": "规则"
     },
     {
       "content": "，"
@@ -41,40 +65,31 @@
       "content": "明确"
     },
     {
-      "content": "环境"
+      "content": "重"
     },
     {
-      "content": "变量"
+      "content": "构"
     },
     {
-      "content": "、"
+      "content": "后的"
     },
     {
-      "content": "配置文件"
-    },
-    {
-      "content": "、"
-    },
-    {
-      "content": "默认值"
-    },
-    {
-      "content": "之间的"
-    },
-    {
-      "content": "覆盖"
-    },
-    {
-      "content": "关系和"
+      "content": "统一"
     },
     {
       "content": "加载"
     },
     {
-      "content": "顺序"
+      "content": "契"
     },
     {
-      "content": "。\n"
+      "content": "约"
+    },
+    {
+      "content": "。"
+    },
+    {
+      "content": "  \n"
     },
     {
       "content": "2"
@@ -83,10 +98,7 @@
       "content": "."
     },
     {
-      "content": " "
-    },
-    {
-      "content": "收敛"
+      "content": " 将"
     },
     {
       "content": "配置"
@@ -95,58 +107,85 @@
       "content": "读取"
     },
     {
-      "content": "入口"
-    },
-    {
-      "content": "，"
-    },
-    {
-      "content": "统一"
-    },
-    {
-      "content": "校验"
-    },
-    {
       "content": "、"
-    },
-    {
-      "content": "转换"
-    },
-    {
-      "content": "和"
-    },
-    {
-      "content": "错误"
-    },
-    {
-      "content": "提示"
-    },
-    {
-      "content": "，"
-    },
-    {
-      "content": "消除"
-    },
-    {
-      "content": "分散"
-    },
-    {
-      "content": "在各"
-    },
-    {
-      "content": "处的"
-    },
-    {
-      "content": "重复"
     },
     {
       "content": "解析"
     },
     {
-      "content": "逻辑"
+      "content": "校"
     },
     {
-      "content": "。\n"
+      "content": "验"
+    },
+    {
+      "content": "、"
+    },
+    {
+      "content": "合"
+    },
+    {
+      "content": "并"
+    },
+    {
+      "content": "覆盖"
+    },
+    {
+      "content": "与"
+    },
+    {
+      "content": "业务"
+    },
+    {
+      "content": "消费"
+    },
+    {
+      "content": "解"
+    },
+    {
+      "content": "耦"
+    },
+    {
+      "content": "，并"
+    },
+    {
+      "content": "设计"
+    },
+    {
+      "content": "可"
+    },
+    {
+      "content": "替"
+    },
+    {
+      "content": "换"
+    },
+    {
+      "content": "、"
+    },
+    {
+      "content": "可"
+    },
+    {
+      "content": "测试"
+    },
+    {
+      "content": "的"
+    },
+    {
+      "content": "模块"
+    },
+    {
+      "content": "边"
+    },
+    {
+      "content": "界"
+    },
+    {
+      "content": "。"
+    },
+    {
+      "content": "  \n"
     },
     {
       "content": "3"
@@ -155,99 +194,95 @@
       "content": "."
     },
     {
-      "content": " "
+      "content": " 制"
     },
     {
-      "content": "补充"
+      "content": "定"
     },
     {
-      "content": "加载"
+      "content": "兼"
     },
     {
-      "content": "过程的"
+      "content": "容"
     },
     {
-      "content": "日志"
+      "content": "迁"
     },
     {
-      "content": "与"
-    },
-    {
-      "content": "埋"
-    },
-    {
-      "content": "点"
-    },
-    {
-      "content": "，"
-    },
-    {
-      "content": "并"
-    },
-    {
-      "content": "针对"
-    },
-    {
-      "content": "非法"
-    },
-    {
-      "content": "配置"
-    },
-    {
-      "content": "提供"
-    },
-    {
-      "content": "可"
-    },
-    {
-      "content": "执行的"
-    },
-    {
-      "content": "报错"
+      "content": "移"
     },
     {
       "content": "与"
     },
     {
-      "content": "降级"
+      "content": "验证"
     },
     {
-      "content": "策略"
+      "content": "方案"
     },
     {
-      "content": "，"
+      "content": "，通过"
     },
     {
-      "content": "确保"
+      "content": "分"
     },
     {
-      "content": "可"
+      "content": "阶段"
     },
     {
-      "content": "观测"
+      "content": "切"
     },
     {
-      "content": "与"
+      "content": "换"
     },
     {
-      "content": "可"
+      "content": "、"
     },
     {
       "content": "回"
     },
     {
-      "content": "滚"
+      "content": "归"
+    },
+    {
+      "content": "测试"
+    },
+    {
+      "content": "和"
+    },
+    {
+      "content": "可"
+    },
+    {
+      "content": "观"
+    },
+    {
+      "content": "测"
+    },
+    {
+      "content": "性"
+    },
+    {
+      "content": "保障"
+    },
+    {
+      "content": "平"
+    },
+    {
+      "content": "稳"
+    },
+    {
+      "content": "上线"
     },
     {
       "content": "。"
     },
     {
-      "finish_reason": "end_turn"
-    },
-    {
       "usage": {
-        "input_tokens": 0,
-        "output_tokens": 144
+        "input_tokens": 10318,
+        "output_tokens": 98,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0
       }
     }
   ]

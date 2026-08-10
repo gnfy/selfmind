@@ -143,8 +143,12 @@ func formatModelRoleProbes(probes []appcore.ModelRoleProbe) (string, bool) {
 				oneLine(tools.RedactSensitive(probe.Err.Error()), 180))
 			continue
 		}
-		fmt.Fprintf(&sb, "- OK roles=%s provider=%s model=%s latency=%s\n",
-			roles, valueOrUnknown(probe.Provider), valueOrUnknown(probe.Model), probe.Latency.Round(time.Millisecond))
+		toolsStatus := "skipped"
+		if probe.NativeToolsTested {
+			toolsStatus = "passed"
+		}
+		fmt.Fprintf(&sb, "- OK roles=%s provider=%s model=%s latency=%s native_tools=%s\n",
+			roles, valueOrUnknown(probe.Provider), valueOrUnknown(probe.Model), probe.Latency.Round(time.Millisecond), toolsStatus)
 	}
 	return strings.TrimSpace(sb.String()), failed
 }
@@ -182,7 +186,11 @@ func (a *App) gatewayStatusLine() string {
 		if json.Unmarshal(data, &status) == nil {
 			rt := status.Runtime
 			buildState := gatewayBuildState(rt.BuildFingerprint)
-			return withService(fmt.Sprintf("running (state=%s pid=%d addr=%s active_runs=%d build=%s)", status.State, rt.PID, rt.Addr, status.ActiveRunCount, buildState))
+			schemaState := ""
+			if status.ToolSchemas.Active+status.ToolSchemas.Repaired+status.ToolSchemas.Quarantined > 0 {
+				schemaState = fmt.Sprintf(" tools=active:%d,repaired:%d,quarantined:%d", status.ToolSchemas.Active, status.ToolSchemas.Repaired, status.ToolSchemas.Quarantined)
+			}
+			return withService(fmt.Sprintf("running (state=%s pid=%d addr=%s active_runs=%d build=%s%s)", status.State, rt.PID, rt.Addr, status.ActiveRunCount, buildState, schemaState))
 		}
 	}
 	manager := gatewayrt.NewManager(a.gatewayDataDir(), "")

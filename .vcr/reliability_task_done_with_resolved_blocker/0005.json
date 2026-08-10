@@ -1,0 +1,157 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "content": "Task"
+    },
+    {
+      "content": " completed"
+    },
+    {
+      "content": " successfully"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": " The"
+    },
+    {
+      "content": " required"
+    },
+    {
+      "content": " confirmation"
+    },
+    {
+      "content": " was"
+    },
+    {
+      "content": " received"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " and"
+    },
+    {
+      "content": " blocker"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "block"
+    },
+    {
+      "content": "er"
+    },
+    {
+      "content": "_run"
+    },
+    {
+      "content": "_"
+    },
+    {
+      "content": "83"
+    },
+    {
+      "content": "e"
+    },
+    {
+      "content": "470"
+    },
+    {
+      "content": "2"
+    },
+    {
+      "content": "b"
+    },
+    {
+      "content": "-"
+    },
+    {
+      "content": "8"
+    },
+    {
+      "content": "c"
+    },
+    {
+      "content": "35"
+    },
+    {
+      "content": "-"
+    },
+    {
+      "content": "4"
+    },
+    {
+      "content": "d"
+    },
+    {
+      "content": "53"
+    },
+    {
+      "content": "-"
+    },
+    {
+      "content": "84"
+    },
+    {
+      "content": "ac"
+    },
+    {
+      "content": "-"
+    },
+    {
+      "content": "276"
+    },
+    {
+      "content": "6"
+    },
+    {
+      "content": "a"
+    },
+    {
+      "content": "13"
+    },
+    {
+      "content": "bc"
+    },
+    {
+      "content": "58"
+    },
+    {
+      "content": "b"
+    },
+    {
+      "content": "_wait"
+    },
+    {
+      "content": "ing"
+    },
+    {
+      "content": "_user"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " is"
+    },
+    {
+      "content": " resolved"
+    },
+    {
+      "content": "."
+    },
+    {
+      "usage": {
+        "input_tokens": 6966,
+        "output_tokens": 52,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0
+      }
+    }
+  ]
+}

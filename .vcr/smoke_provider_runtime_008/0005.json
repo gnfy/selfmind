@@ -1,0 +1,185 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "content": "实现"
+    },
+    {
+      "content": "总体"
+    },
+    {
+      "content": "遵"
+    },
+    {
+      "content": "守"
+    },
+    {
+      "content": "分"
+    },
+    {
+      "content": "层"
+    },
+    {
+      "content": "，但"
+    },
+    {
+      "content": "已"
+    },
+    {
+      "content": "出现"
+    },
+    {
+      "content": "两"
+    },
+    {
+      "content": "处"
+    },
+    {
+      "content": "供应"
+    },
+    {
+      "content": "商"
+    },
+    {
+      "content": "名"
+    },
+    {
+      "content": "分"
+    },
+    {
+      "content": "支"
+    },
+    {
+      "content": "；"
+    },
+    {
+      "content": "我"
+    },
+    {
+      "content": "继续"
+    },
+    {
+      "content": "检查"
+    },
+    {
+      "content": "兼"
+    },
+    {
+      "content": "容"
+    },
+    {
+      "content": "回"
+    },
+    {
+      "content": "退"
+    },
+    {
+      "content": "、"
+    },
+    {
+      "content": "模型"
+    },
+    {
+      "content": "目录"
+    },
+    {
+      "content": "和"
+    },
+    {
+      "content": "测试"
+    },
+    {
+      "content": "覆盖"
+    },
+    {
+      "content": "，"
+    },
+    {
+      "content": "判断"
+    },
+    {
+      "content": "它"
+    },
+    {
+      "content": "是否"
+    },
+    {
+      "content": "是"
+    },
+    {
+      "content": "首"
+    },
+    {
+      "content": "要"
+    },
+    {
+      "content": "短"
+    },
+    {
+      "content": "板"
+    },
+    {
+      "content": "。"
+    },
+    {
+      "content": "Preparing to run read_file",
+      "event_type": "agent.thinking"
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_9TYQBbSNvgY6izjdFplp6Fg9",
+          "Function": "read_file",
+          "Args": "{\"path\":\"{{SELFMIND_VCR_WORKSPACE}}/internal/app/agent.go\",\"limit\":260,\"max_bytes\":50000}"
+        }
+      ]
+    },
+    {
+      "content": "Preparing to run read_file",
+      "event_type": "agent.thinking"
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_kaTk4POPIKxB4xJNJ5aP7B81",
+          "Function": "read_file",
+          "Args": "{\"path\":\"{{SELFMIND_VCR_WORKSPACE}}/internal/modelruntime/catalog.go\",\"limit\":500}"
+        }
+      ]
+    },
+    {
+      "content": "Preparing to run read_file",
+      "event_type": "agent.thinking"
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_OpUImac6OZRB25wZ9Bbkdjc7",
+          "Function": "read_file",
+          "Args": "{\"path\":\"{{SELFMIND_VCR_WORKSPACE}}/internal/modelruntime/credentials.go\",\"limit\":500}"
+        }
+      ]
+    },
+    {
+      "content": "Preparing to run search_files",
+      "event_type": "agent.thinking"
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_z5th13JHr4SRRFt2MwPybK8q",
+          "Function": "search_files",
+          "Args": "{\"path\":\"{{SELFMIND_VCR_WORKSPACE}}\",\"file_glob\":\"*.go\",\"pattern\":\"switch provider|switch pType|case \\\"openrouter\\\"|case \\\"google\\\"|case \\\"kimi-coding\\\"|TODO.*provider|provider-name|provider-specific\"}"
+        }
+      ]
+    },
+    {
+      "usage": {
+        "input_tokens": 36452,
+        "output_tokens": 457,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0
+      }
+    }
+  ]
+}

@@ -1,0 +1,481 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "content": "继续"
+    },
+    {
+      "content": "细"
+    },
+    {
+      "content": "化"
+    },
+    {
+      "content": "第"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "1"
+    },
+    {
+      "content": " 步"
+    },
+    {
+      "content": "“"
+    },
+    {
+      "content": "现"
+    },
+    {
+      "content": "状"
+    },
+    {
+      "content": "盘"
+    },
+    {
+      "content": "点"
+    },
+    {
+      "content": "”"
+    },
+    {
+      "content": "：\n\n"
+    },
+    {
+      "content": "1"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": " 列"
+    },
+    {
+      "content": "出"
+    },
+    {
+      "content": "全部"
+    },
+    {
+      "content": "配置"
+    },
+    {
+      "content": "来源"
+    },
+    {
+      "content": "，包括"
+    },
+    {
+      "content": "默认"
+    },
+    {
+      "content": "值"
+    },
+    {
+      "content": "、"
+    },
+    {
+      "content": "配置"
+    },
+    {
+      "content": "文件"
+    },
+    {
+      "content": "、"
+    },
+    {
+      "content": "环境"
+    },
+    {
+      "content": "变量"
+    },
+    {
+      "content": "、"
+    },
+    {
+      "content": "命"
+    },
+    {
+      "content": "令"
+    },
+    {
+      "content": "行"
+    },
+    {
+      "content": "参数"
+    },
+    {
+      "content": "及"
+    },
+    {
+      "content": "远"
+    },
+    {
+      "content": "程"
+    },
+    {
+      "content": "配置"
+    },
+    {
+      "content": "。"
+    },
+    {
+      "content": "  \n"
+    },
+    {
+      "content": "2"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": " 建"
+    },
+    {
+      "content": "立"
+    },
+    {
+      "content": "配置"
+    },
+    {
+      "content": "项"
+    },
+    {
+      "content": "清"
+    },
+    {
+      "content": "单"
+    },
+    {
+      "content": "，"
+    },
+    {
+      "content": "记录"
+    },
+    {
+      "content": "类型"
+    },
+    {
+      "content": "、"
+    },
+    {
+      "content": "必"
+    },
+    {
+      "content": "填"
+    },
+    {
+      "content": "性"
+    },
+    {
+      "content": "、"
+    },
+    {
+      "content": "默认"
+    },
+    {
+      "content": "值"
+    },
+    {
+      "content": "、"
+    },
+    {
+      "content": "敏"
+    },
+    {
+      "content": "感"
+    },
+    {
+      "content": "性"
+    },
+    {
+      "content": "、"
+    },
+    {
+      "content": "覆盖"
+    },
+    {
+      "content": "规则"
+    },
+    {
+      "content": "和"
+    },
+    {
+      "content": "使用"
+    },
+    {
+      "content": "方"
+    },
+    {
+      "content": "。"
+    },
+    {
+      "content": "  \n"
+    },
+    {
+      "content": "3"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": " 固"
+    },
+    {
+      "content": "化"
+    },
+    {
+      "content": "当前"
+    },
+    {
+      "content": "行为"
+    },
+    {
+      "content": "基"
+    },
+    {
+      "content": "线"
+    },
+    {
+      "content": "，"
+    },
+    {
+      "content": "重点"
+    },
+    {
+      "content": "确认"
+    },
+    {
+      "content": "缺"
+    },
+    {
+      "content": "失"
+    },
+    {
+      "content": "值"
+    },
+    {
+      "content": "、"
+    },
+    {
+      "content": "非法"
+    },
+    {
+      "content": "值"
+    },
+    {
+      "content": "、"
+    },
+    {
+      "content": "重复"
+    },
+    {
+      "content": "配置"
+    },
+    {
+      "content": "和"
+    },
+    {
+      "content": "加载"
+    },
+    {
+      "content": "失败"
+    },
+    {
+      "content": "时"
+    },
+    {
+      "content": "的"
+    },
+    {
+      "content": "处理"
+    },
+    {
+      "content": "方式"
+    },
+    {
+      "content": "。"
+    },
+    {
+      "content": "  \n"
+    },
+    {
+      "content": "4"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": " 标"
+    },
+    {
+      "content": "注"
+    },
+    {
+      "content": "兼"
+    },
+    {
+      "content": "容"
+    },
+    {
+      "content": "性"
+    },
+    {
+      "content": "约"
+    },
+    {
+      "content": "束"
+    },
+    {
+      "content": "，"
+    },
+    {
+      "content": "明确"
+    },
+    {
+      "content": "哪些"
+    },
+    {
+      "content": "配置"
+    },
+    {
+      "content": "名"
+    },
+    {
+      "content": "、"
+    },
+    {
+      "content": "优"
+    },
+    {
+      "content": "先"
+    },
+    {
+      "content": "级"
+    },
+    {
+      "content": "和"
+    },
+    {
+      "content": "错误"
+    },
+    {
+      "content": "行为"
+    },
+    {
+      "content": "暂"
+    },
+    {
+      "content": "时"
+    },
+    {
+      "content": "不能"
+    },
+    {
+      "content": "改变"
+    },
+    {
+      "content": "。"
+    },
+    {
+      "content": "  \n"
+    },
+    {
+      "content": "5"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "形成"
+    },
+    {
+      "content": "盘"
+    },
+    {
+      "content": "点"
+    },
+    {
+      "content": "结"
+    },
+    {
+      "content": "论"
+    },
+    {
+      "content": "与"
+    },
+    {
+      "content": "差"
+    },
+    {
+      "content": "异"
+    },
+    {
+      "content": "清"
+    },
+    {
+      "content": "单"
+    },
+    {
+      "content": "，"
+    },
+    {
+      "content": "作为"
+    },
+    {
+      "content": "后"
+    },
+    {
+      "content": "续"
+    },
+    {
+      "content": "统一"
+    },
+    {
+      "content": "加载"
+    },
+    {
+      "content": "流程"
+    },
+    {
+      "content": "的"
+    },
+    {
+      "content": "设计"
+    },
+    {
+      "content": "输入"
+    },
+    {
+      "content": "和"
+    },
+    {
+      "content": "回"
+    },
+    {
+      "content": "归"
+    },
+    {
+      "content": "基"
+    },
+    {
+      "content": "准"
+    },
+    {
+      "content": "。"
+    },
+    {
+      "usage": {
+        "input_tokens": 11820,
+        "output_tokens": 307,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0
+      }
+    }
+  ]
+}

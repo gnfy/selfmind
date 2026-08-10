@@ -1,0 +1,26 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "content": "Preparing to run patch",
+      "event_type": "agent.thinking"
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_eVas48qzgVPeoADOgXIV2XOL",
+          "Function": "patch",
+          "Args": "{\"patch\":\"*** Begin Patch\\n*** Update File: {{SELFMIND_VCR_WORKSPACE}}/math.js\\n@@\\n export function add(a, b) {\\n-  return a - b;\\n+  return a + b;\\n }\\n*** End Patch\"}"
+        }
+      ]
+    },
+    {
+      "usage": {
+        "input_tokens": 7012,
+        "output_tokens": 80,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0
+      }
+    }
+  ]
+}

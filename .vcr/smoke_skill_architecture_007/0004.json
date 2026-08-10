@@ -1,0 +1,158 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "content": "还"
+    },
+    {
+      "content": "需"
+    },
+    {
+      "content": "确认"
+    },
+    {
+      "content": "“"
+    },
+    {
+      "content": "首"
+    },
+    {
+      "content": "个"
+    },
+    {
+      "content": "同"
+    },
+    {
+      "content": "名"
+    },
+    {
+      "content": "胜"
+    },
+    {
+      "content": "出"
+    },
+    {
+      "content": "”"
+    },
+    {
+      "content": "是否"
+    },
+    {
+      "content": "真正"
+    },
+    {
+      "content": "贯"
+    },
+    {
+      "content": "穿"
+    },
+    {
+      "content": "列表"
+    },
+    {
+      "content": "、"
+    },
+    {
+      "content": "查看"
+    },
+    {
+      "content": "、"
+    },
+    {
+      "content": "斜"
+    },
+    {
+      "content": "杠"
+    },
+    {
+      "content": "调用"
+    },
+    {
+      "content": "，以及"
+    },
+    {
+      "content": "何"
+    },
+    {
+      "content": "时"
+    },
+    {
+      "content": "触"
+    },
+    {
+      "content": "发"
+    },
+    {
+      "content": "热"
+    },
+    {
+      "content": "重"
+    },
+    {
+      "content": "载"
+    },
+    {
+      "content": "。"
+    },
+    {
+      "content": "Preparing to run search_files",
+      "event_type": "agent.thinking"
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_OhJSv63SjODzMc0ATTrerC9g",
+          "Function": "search_files",
+          "Args": "{\"path\":\"{{SELFMIND_VCR_WORKSPACE}}/internal\",\"pattern\":\"func ListSkillsForTenant|func findSkill\\\\(|func SearchSkillsForTenant\",\"file_glob\":\"*.go\",\"limit\":100,\"timeout\":20}"
+        }
+      ]
+    },
+    {
+      "content": "Preparing to run search_files",
+      "event_type": "agent.thinking"
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_pPG48jaz4RJSfvDBLfUT5oZN",
+          "Function": "search_files",
+          "Args": "{\"path\":\"{{SELFMIND_VCR_WORKSPACE}}/internal\",\"pattern\":\"ReloadSkillToolsForTenant\",\"file_glob\":\"*.go\",\"limit\":100,\"timeout\":20}"
+        }
+      ]
+    },
+    {
+      "content": "Preparing to run search_files",
+      "event_type": "agent.thinking"
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_FebJTGvRdtI6x13aR9vvUNAY",
+          "Function": "search_files",
+          "Args": "{\"path\":\"{{SELFMIND_VCR_WORKSPACE}}/internal\",\"pattern\":\"ResolveSkillInvocationForTenant\",\"file_glob\":\"*.go\",\"limit\":100,\"timeout\":20}"
+        }
+      ]
+    },
+    {
+      "content": "Preparing to run search_files",
+      "event_type": "agent.thinking"
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_ENfAjMU3kRtN6exyGyyGg0Bp",
+          "Function": "search_files",
+          "Args": "{\"path\":\"{{SELFMIND_VCR_WORKSPACE}}/internal/tools\",\"pattern\":\"ReadDir\\\\(|WalkDir\\\\(\",\"file_glob\":\"skill*.go\",\"limit\":100,\"timeout\":20}"
+        }
+      ]
+    },
+    {
+      "usage": {
+        "input_tokens": 29614,
+        "output_tokens": 429,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0
+      }
+    }
+  ]
+}

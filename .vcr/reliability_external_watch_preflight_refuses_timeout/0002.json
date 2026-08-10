@@ -1,0 +1,86 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "content": "The"
+    },
+    {
+      "content": " first"
+    },
+    {
+      "content": " registration"
+    },
+    {
+      "content": " used"
+    },
+    {
+      "content": " an"
+    },
+    {
+      "content": " unsupported"
+    },
+    {
+      "content": " optional"
+    },
+    {
+      "content": " failure"
+    },
+    {
+      "content": " regex"
+    },
+    {
+      "content": ";"
+    },
+    {
+      "content": " I"
+    },
+    {
+      "content": "’m"
+    },
+    {
+      "content": " retry"
+    },
+    {
+      "content": "ing"
+    },
+    {
+      "content": " without"
+    },
+    {
+      "content": " that"
+    },
+    {
+      "content": " un"
+    },
+    {
+      "content": "requested"
+    },
+    {
+      "content": " field"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": "Preparing to run watch_external",
+      "event_type": "agent.thinking"
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_yvmrjRG2v4EAAWcMc7r1TpBg",
+          "Function": "watch_external",
+          "Args": "{\"command\":\"sleep 2; printf 'PENDING\\\\n'\",\"command_timeout_seconds\":1,\"cwd\":\"{{SELFMIND_VCR_WORKSPACE}}\",\"description\":\"slow aggregate\",\"interval_seconds\":30,\"success_pattern\":\"SUCCEEDED\",\"timeout_seconds\":300}"
+        }
+      ]
+    },
+    {
+      "usage": {
+        "input_tokens": 6075,
+        "output_tokens": 146,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0
+      }
+    }
+  ]
+}

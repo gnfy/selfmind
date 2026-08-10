@@ -1,0 +1,74 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "content": "I"
+    },
+    {
+      "content": "’m"
+    },
+    {
+      "content": " pa"
+    },
+    {
+      "content": "using"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " run"
+    },
+    {
+      "content": " now"
+    },
+    {
+      "content": ";"
+    },
+    {
+      "content": " your"
+    },
+    {
+      "content": " confirmation"
+    },
+    {
+      "content": " is"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " only"
+    },
+    {
+      "content": " remaining"
+    },
+    {
+      "content": " blocker"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": "Preparing to run finish_run",
+      "event_type": "agent.thinking"
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_NgHkzUzxiJsmUSgmPE1Un2nJ",
+          "Function": "finish_run",
+          "Args": "{\"status\":\"waiting_user\",\"summary\":\"All preparatory work is complete, and the run is waiting for the required user confirmation.\",\"done\":[\"Prepared the task for completion.\"],\"next_steps\":[\"Provide confirmation to complete the run.\"],\"files\":[],\"tests\":[],\"risks\":[\"The only blocker is the required user confirmation.\"],\"need_approve\":true}"
+        }
+      ]
+    },
+    {
+      "usage": {
+        "input_tokens": 5931,
+        "output_tokens": 141,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0
+      }
+    }
+  ]
+}

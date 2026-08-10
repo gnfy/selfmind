@@ -3,6 +3,8 @@ title: "inspect local skill loading architecture"
 suite: smoke-10
 workspace: "."
 channel: cli
+# Measured replay cost: 46.2s — excluded from `selfcheck --fast`.
+slow: true
 
 turns:
   - input: "查看 selfmind 读取本地 skills 的相关代码，简要说明加载顺序和目前可能的缺口。"

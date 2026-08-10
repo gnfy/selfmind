@@ -1,0 +1,376 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "content": "```"
+    },
+    {
+      "content": "go"
+    },
+    {
+      "content": "\n"
+    },
+    {
+      "content": "//"
+    },
+    {
+      "content": " Binary"
+    },
+    {
+      "content": "Search"
+    },
+    {
+      "content": " 在"
+    },
+    {
+      "content": "升"
+    },
+    {
+      "content": "序"
+    },
+    {
+      "content": "数组"
+    },
+    {
+      "content": "中"
+    },
+    {
+      "content": "查"
+    },
+    {
+      "content": "找"
+    },
+    {
+      "content": " target"
+    },
+    {
+      "content": "，"
+    },
+    {
+      "content": "找到"
+    },
+    {
+      "content": "则"
+    },
+    {
+      "content": "返回"
+    },
+    {
+      "content": "索"
+    },
+    {
+      "content": "引"
+    },
+    {
+      "content": "，否则"
+    },
+    {
+      "content": "返回"
+    },
+    {
+      "content": " -"
+    },
+    {
+      "content": "1"
+    },
+    {
+      "content": "。\n"
+    },
+    {
+      "content": "func"
+    },
+    {
+      "content": " Binary"
+    },
+    {
+      "content": "Search"
+    },
+    {
+      "content": "(nums"
+    },
+    {
+      "content": " []"
+    },
+    {
+      "content": "int"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " target"
+    },
+    {
+      "content": " int"
+    },
+    {
+      "content": ")"
+    },
+    {
+      "content": " int"
+    },
+    {
+      "content": " {\n"
+    },
+    {
+      "content": "\tleft"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " right"
+    },
+    {
+      "content": " :="
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "0"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " len"
+    },
+    {
+      "content": "(nums"
+    },
+    {
+      "content": ")-"
+    },
+    {
+      "content": "1"
+    },
+    {
+      "content": "\n\n"
+    },
+    {
+      "content": "\tfor"
+    },
+    {
+      "content": " left"
+    },
+    {
+      "content": " \u003c="
+    },
+    {
+      "content": " right"
+    },
+    {
+      "content": " {\n"
+    },
+    {
+      "content": "\t"
+    },
+    {
+      "content": "\tm"
+    },
+    {
+      "content": "id"
+    },
+    {
+      "content": " :="
+    },
+    {
+      "content": " left"
+    },
+    {
+      "content": " +"
+    },
+    {
+      "content": " ("
+    },
+    {
+      "content": "right"
+    },
+    {
+      "content": "-left"
+    },
+    {
+      "content": ")/"
+    },
+    {
+      "content": "2"
+    },
+    {
+      "content": "\n\n"
+    },
+    {
+      "content": "\t"
+    },
+    {
+      "content": "\tif"
+    },
+    {
+      "content": " nums"
+    },
+    {
+      "content": "[mid"
+    },
+    {
+      "content": "]"
+    },
+    {
+      "content": " =="
+    },
+    {
+      "content": " target"
+    },
+    {
+      "content": " {\n"
+    },
+    {
+      "content": "\t\t"
+    },
+    {
+      "content": "\treturn"
+    },
+    {
+      "content": " mid"
+    },
+    {
+      "content": "\n"
+    },
+    {
+      "content": "\t"
+    },
+    {
+      "content": "\t"
+    },
+    {
+      "content": "}\n"
+    },
+    {
+      "content": "\t"
+    },
+    {
+      "content": "\tif"
+    },
+    {
+      "content": " nums"
+    },
+    {
+      "content": "[mid"
+    },
+    {
+      "content": "]"
+    },
+    {
+      "content": " \u003c"
+    },
+    {
+      "content": " target"
+    },
+    {
+      "content": " {\n"
+    },
+    {
+      "content": "\t\t"
+    },
+    {
+      "content": "\tleft"
+    },
+    {
+      "content": " ="
+    },
+    {
+      "content": " mid"
+    },
+    {
+      "content": " +"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "1"
+    },
+    {
+      "content": "\n"
+    },
+    {
+      "content": "\t"
+    },
+    {
+      "content": "\t"
+    },
+    {
+      "content": "}"
+    },
+    {
+      "content": " else"
+    },
+    {
+      "content": " {\n"
+    },
+    {
+      "content": "\t\t"
+    },
+    {
+      "content": "\tright"
+    },
+    {
+      "content": " ="
+    },
+    {
+      "content": " mid"
+    },
+    {
+      "content": " -"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "1"
+    },
+    {
+      "content": "\n"
+    },
+    {
+      "content": "\t"
+    },
+    {
+      "content": "\t"
+    },
+    {
+      "content": "}\n"
+    },
+    {
+      "content": "\t"
+    },
+    {
+      "content": "}\n\n"
+    },
+    {
+      "content": "\treturn"
+    },
+    {
+      "content": " -"
+    },
+    {
+      "content": "1"
+    },
+    {
+      "content": "\n"
+    },
+    {
+      "content": "}\n"
+    },
+    {
+      "content": "```"
+    },
+    {
+      "usage": {
+        "input_tokens": 10446,
+        "output_tokens": 125,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0
+      }
+    }
+  ]
+}

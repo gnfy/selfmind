@@ -5,12 +5,18 @@ workspace: isolated
 channel: cli
 require_cassette: false
 
+# The polled command must report PENDING, not SUCCEEDED. Registration runs a
+# preflight (added 2026-07-30) whose "observed success" outcome declines to
+# register a watch for work that is already finished — correct behavior, but it
+# makes a check that succeeds on its first run unable to produce the handoff
+# this case exists to assert.
+#
 # Record this case with a live provider before promoting it to a mandatory
 # offline gate:
 #   SELFMIND_EVAL_VCR=record selfmind eval run \
 #     evalcases/reliability/external-watch-handoff.yaml --live
 turns:
-  - input: "Register a durable external watch named CI completion. In the current workspace, poll the command printf 'SUCCEEDED\\n', treat SUCCEEDED as success, use a 5 second interval and a 60 second timeout, then finish this run as waiting_external. Do not execute the polling command directly."
+  - input: "Register a durable external watch named CI completion. In the current workspace, poll the command printf 'PENDING\\n', treat SUCCEEDED as success, use a 5 second interval and a 60 second timeout, then finish this run as waiting_external. Do not execute the polling command directly."
 
 expect:
   status: waiting_external

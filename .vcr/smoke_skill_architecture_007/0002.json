@@ -1,0 +1,140 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "content": "当前"
+    },
+    {
+      "content": "目录"
+    },
+    {
+      "content": "可能"
+    },
+    {
+      "content": "是"
+    },
+    {
+      "content": "导"
+    },
+    {
+      "content": "出的"
+    },
+    {
+      "content": "源码"
+    },
+    {
+      "content": "快"
+    },
+    {
+      "content": "照"
+    },
+    {
+      "content": "而"
+    },
+    {
+      "content": "非"
+    },
+    {
+      "content": " Git"
+    },
+    {
+      "content": " 工作"
+    },
+    {
+      "content": "树"
+    },
+    {
+      "content": "；"
+    },
+    {
+      "content": "我"
+    },
+    {
+      "content": "先"
+    },
+    {
+      "content": "确认"
+    },
+    {
+      "content": "目录"
+    },
+    {
+      "content": "结构"
+    },
+    {
+      "content": "和"
+    },
+    {
+      "content": " Skills"
+    },
+    {
+      "content": " 文件"
+    },
+    {
+      "content": "位置"
+    },
+    {
+      "content": "。"
+    },
+    {
+      "content": "Preparing to run ls_r",
+      "event_type": "agent.thinking"
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_6zAxPJtYzrEYlDb5NmIPcOwN",
+          "Function": "ls_r",
+          "Args": "{\"path\":\"{{SELFMIND_VCR_WORKSPACE}}\",\"recursive\":false,\"max_entries\":100}"
+        }
+      ]
+    },
+    {
+      "content": "Preparing to run terminal",
+      "event_type": "agent.thinking"
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_es1FCYeMlYvXzJwzYJruQH2e",
+          "Function": "terminal",
+          "Args": "{\"command\":\"pwd; printf '\\\\n-- top --\\\\n'; ls -la; printf '\\\\n-- git --\\\\n'; git rev-parse --show-toplevel 2\u003e\u00261 || true; printf '\\\\n-- skill files --\\\\n'; find . -type f \\\\( -iname '*skill*.go' -o -name 'SKILL.md' \\\\) | head -100\",\"cwd\":\"{{SELFMIND_VCR_WORKSPACE}}\",\"timeout\":30}"
+        }
+      ]
+    },
+    {
+      "content": "Preparing to run search_files",
+      "event_type": "agent.thinking"
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_CiMZjiBhjwnnNbiw6sNueeji",
+          "Function": "search_files",
+          "Args": "{\"path\":\"{{SELFMIND_VCR_WORKSPACE}}\",\"pattern\":\"SkillRootsForTenant\",\"file_glob\":\"*\",\"limit\":100,\"timeout\":20}"
+        }
+      ]
+    },
+    {
+      "content": "Preparing to run search_files",
+      "event_type": "agent.thinking"
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_9uVQVNvGIIVZBV7Ki7LumO8F",
+          "Function": "search_files",
+          "Args": "{\"path\":\"{{SELFMIND_VCR_WORKSPACE}}\",\"pattern\":\"SELFMIND_SKILLS\",\"file_glob\":\"*\",\"limit\":100,\"timeout\":20}"
+        }
+      ]
+    },
+    {
+      "usage": {
+        "input_tokens": 17589,
+        "output_tokens": 496,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0
+      }
+    }
+  ]
+}

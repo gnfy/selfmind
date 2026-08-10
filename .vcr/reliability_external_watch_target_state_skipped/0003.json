@@ -1,0 +1,208 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "content": "Dur"
+    },
+    {
+      "content": "able"
+    },
+    {
+      "content": " external"
+    },
+    {
+      "content": " watch"
+    },
+    {
+      "content": " **"
+    },
+    {
+      "content": "“"
+    },
+    {
+      "content": "sk"
+    },
+    {
+      "content": "ipped"
+    },
+    {
+      "content": " target"
+    },
+    {
+      "content": "”"
+    },
+    {
+      "content": "**"
+    },
+    {
+      "content": " registered"
+    },
+    {
+      "content": " successfully"
+    },
+    {
+      "content": ".\n\n"
+    },
+    {
+      "content": "-"
+    },
+    {
+      "content": " Watch"
+    },
+    {
+      "content": " ID"
+    },
+    {
+      "content": ":"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "watch"
+    },
+    {
+      "content": "_be"
+    },
+    {
+      "content": "ea"
+    },
+    {
+      "content": "834"
+    },
+    {
+      "content": "b"
+    },
+    {
+      "content": "-"
+    },
+    {
+      "content": "3"
+    },
+    {
+      "content": "bc"
+    },
+    {
+      "content": "2"
+    },
+    {
+      "content": "-"
+    },
+    {
+      "content": "42"
+    },
+    {
+      "content": "f"
+    },
+    {
+      "content": "4"
+    },
+    {
+      "content": "-"
+    },
+    {
+      "content": "969"
+    },
+    {
+      "content": "4"
+    },
+    {
+      "content": "-e"
+    },
+    {
+      "content": "15"
+    },
+    {
+      "content": "e"
+    },
+    {
+      "content": "946"
+    },
+    {
+      "content": "3"
+    },
+    {
+      "content": "e"
+    },
+    {
+      "content": "7"
+    },
+    {
+      "content": "da"
+    },
+    {
+      "content": "`\n"
+    },
+    {
+      "content": "-"
+    },
+    {
+      "content": " Interval"
+    },
+    {
+      "content": ":"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "10"
+    },
+    {
+      "content": " seconds"
+    },
+    {
+      "content": "\n"
+    },
+    {
+      "content": "-"
+    },
+    {
+      "content": " Timeout"
+    },
+    {
+      "content": ":"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "60"
+    },
+    {
+      "content": " seconds"
+    },
+    {
+      "content": "\n"
+    },
+    {
+      "content": "-"
+    },
+    {
+      "content": " Status"
+    },
+    {
+      "content": ":"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "waiting"
+    },
+    {
+      "content": "_external"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "usage": {
+        "input_tokens": 6302,
+        "output_tokens": 69,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0
+      }
+    }
+  ]
+}

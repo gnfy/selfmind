@@ -10,7 +10,7 @@
         {
           "ID": "call_pRjSv6YQcj0r9FLJyCmah7cM",
           "Function": "read_file",
-          "Args": "{\"path\":\"/mnt/d/wwwroot/ai/selfmind/cmd/selfmind/main.go\",\"limit\":80}"
+          "Args": "{\"path\":\"{{SELFMIND_VCR_WORKSPACE}}/cmd/selfmind/main.go\",\"limit\":80}"
         }
       ]
     },

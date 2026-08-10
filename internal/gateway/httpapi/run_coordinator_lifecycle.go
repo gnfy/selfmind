@@ -679,6 +679,81 @@ func (c *RunCoordinator) gatewayClarify(runCtx context.Context, identity *contro
 	}
 }
 
+// approvalWaitReserve is the slice of the caller's remaining budget kept for
+// everything that has to happen AFTER the wait: expiring the durable row,
+// appending the event, handing the typed decision back through the tool
+// middleware, and — the part that made the first value too small — one more
+// model round-trip for the agent to actually park the work and say so.
+//
+// Three seconds covered only the waiter's own cleanup. The decision came back
+// in time, the agent then had no budget left to finalize, and the run still
+// died on a bare transport timeout with nothing to show for it. The reserve
+// has to cover the turn that reports the parked work, not just the bookkeeping
+// that precedes it.
+const (
+	approvalWaitReserve = 30 * time.Second
+	// Defaults mirror config.DefaultApprovalWait{,Unattended}. They are
+	// duplicated rather than imported on purpose: httpapi takes resolved
+	// policy through Server fields and does not depend on the config package.
+	defaultApprovalWait           = 30 * time.Minute
+	defaultApprovalWaitUnattended = 30 * time.Second
+	// approvalPollTimeout bounds one status read of the pending row. It is
+	// independent of the wait budget so a lapsing budget cannot turn a poll
+	// into a reported transport error.
+	approvalPollTimeout = 5 * time.Second
+)
+
+// approvalWaitBudget bounds one approval wait. It is the smaller of the
+// configured budget for this person's reachability and whatever the caller's
+// own deadline leaves. A non-positive result means "there is no time to ask".
+func (c *RunCoordinator) approvalWaitBudget(ctx context.Context, identity *control.IdentityContext) time.Duration {
+	budget := c.srv.ApprovalWait
+	if budget <= 0 {
+		budget = defaultApprovalWait
+	}
+	if !c.personCanAnswer(ctx, identity) {
+		budget = c.srv.ApprovalWaitUnattended
+		if budget <= 0 {
+			budget = defaultApprovalWaitUnattended
+		}
+	}
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return budget
+	}
+	if remaining := time.Until(deadline) - approvalWaitReserve; remaining < budget {
+		return remaining
+	}
+	return budget
+}
+
+// personCanAnswer reports whether ANY endpoint could produce a decision: a
+// live attachment, or a bound account an approval push can reach.
+//
+// Presence alone is not enough — its TTL is 90s, so someone who typed a
+// request and then looked away already reads as detached while still being
+// perfectly able to answer. A bound account keeps them "attended".
+//
+// A store error counts as attended on purpose: the cost of a wasted wait is
+// run time, the cost of a wrong "nobody is there" is cutting a real person out
+// of their own decision.
+func (c *RunCoordinator) personCanAnswer(ctx context.Context, identity *control.IdentityContext) bool {
+	if identity == nil {
+		return false
+	}
+	if c.srv.presenceTracker().AnyAttached(identity.PersonID) {
+		return true
+	}
+	if c.srv.Control == nil {
+		return false
+	}
+	accounts, err := c.srv.Control.ListAccountsByPerson(ctx, identity.TenantID, identity.PersonID)
+	if err != nil {
+		return true
+	}
+	return len(accounts) > 0
+}
+
 func (c *RunCoordinator) toolApprovalHandler(identity *control.IdentityContext, task *control.Task, run *control.Run, channel string) tools.ToolApprovalHandler {
 	return func(ctx context.Context, req tools.ToolApprovalRequest) (tools.ToolApprovalDecision, error) {
 		if c == nil || c.srv == nil || c.srv.Control == nil || identity == nil {
@@ -688,9 +763,6 @@ func (c *RunCoordinator) toolApprovalHandler(identity *control.IdentityContext, 
 		if ctx == nil {
 			ctx = context.Background()
 		}
-		waitCtx, cancel := context.WithTimeout(ctx, 30*time.Minute)
-		defer cancel()
-
 		taskID := req.TaskID
 		runID := req.RunID
 		if taskID == "" && task != nil {
@@ -699,6 +771,40 @@ func (c *RunCoordinator) toolApprovalHandler(identity *control.IdentityContext, 
 		if runID == "" && run != nil {
 			runID = run.ID
 		}
+
+		// The wait must END BEFORE the caller's deadline. The timeout branch
+		// below is the designed "park the work" path, but it only runs if this
+		// waiter is still alive to return its decision: when the run context
+		// expired first, the whole turn died with a bare "context deadline
+		// exceeded" and produced no answer at all (observed in eval, where the
+		// case budget is far below the old hardcoded 30 minutes).
+		budget := c.approvalWaitBudget(ctx, identity)
+		if budget <= 0 {
+			// No time left to ask. Creating a durable row plus a push
+			// notification for a request that would expire in the same breath
+			// is pure noise, so record it as a run event instead and park.
+			if taskID != "" {
+				_, _ = store.AppendEvent(context.WithoutCancel(ctx), control.Event{
+					TaskID:     taskID,
+					RunID:      runID,
+					Type:       "approval.skipped_no_budget",
+					Visibility: "task",
+					Channel:    fallback(channel, identity.Platform),
+					Payload: mustJSON(map[string]interface{}{
+						"tool":   req.ToolName,
+						"reason": req.Reason,
+						"target": approvalActionTarget(req.ToolName, req.Args),
+					}),
+				})
+			}
+			return tools.ToolApprovalDecision{
+				Approved: false,
+				Outcome:  tools.ApprovalOutcomeTimedOut,
+				Reason:   "no time left in this run to ask for approval; do not request another approval or retry a variant; finish waiting_user",
+			}, nil
+		}
+		waitCtx, cancel := context.WithTimeout(ctx, budget)
+		defer cancel()
 		decisions := buildApprovalDecisions(req)
 		persistentArgs := tools.ApprovalPersistentArgs(req.ToolName, req.Args)
 		approval, err := store.CreateApprovalRequest(waitCtx, control.ApprovalRequest{
@@ -775,29 +881,52 @@ func (c *RunCoordinator) toolApprovalHandler(identity *control.IdentityContext, 
 		defer resumeWatchdog()
 		c.notifyApprovalRequested(context.Background(), identity, taskID, runID, fallback(channel, identity.Platform), approval)
 
+		// The waiter is gone (timeout / run cancelled): a row left 'pending'
+		// would pollute every later list — bare y turns ambiguous and
+		// /approve 1 hits a dead request (observed live). Expire it; the
+		// recovery sweep is the backstop for waiters that die without
+		// reaching this line.
+		park := func() (tools.ToolApprovalDecision, error) {
+			cause := "waiter gone"
+			if err := waitCtx.Err(); err != nil {
+				cause += ": " + err.Error()
+			}
+			_ = store.ExpireApprovalRequest(context.WithoutCancel(waitCtx), identity.TenantID, approval.ID, cause)
+			return tools.ToolApprovalDecision{
+				Approved:   false,
+				ApprovalID: approval.ID,
+				// Typed as a TIMEOUT, not a rejection (batch B2): nobody
+				// refused this, nobody answered. The execution layer renders a
+				// different sentence for each so the model parks the work
+				// instead of trying a variant of a "rejected" action.
+				Outcome: tools.ApprovalOutcomeTimedOut,
+				Reason:  "approval expired; do not request another approval or retry a variant; finish waiting_user",
+			}, nil
+		}
+
 		ticker := time.NewTicker(time.Second)
 		defer ticker.Stop()
 		for {
 			select {
 			case <-waitCtx.Done():
-				// The waiter is gone (timeout / run cancelled): a row left
-				// 'pending' would pollute every later list — bare y turns
-				// ambiguous and /approve 1 hits a dead request (observed
-				// live). Expire it; the recovery sweep is the backstop for
-				// waiters that die without reaching this line.
-				_ = store.ExpireApprovalRequest(context.WithoutCancel(waitCtx), identity.TenantID, approval.ID, "waiter gone: "+waitCtx.Err().Error())
-				return tools.ToolApprovalDecision{
-					Approved:   false,
-					ApprovalID: approval.ID,
-					// Typed as a TIMEOUT, not a rejection (batch B2): nobody
-					// refused this, nobody answered. The execution layer renders a
-					// different sentence for each so the model parks the work
-					// instead of trying a variant of a "rejected" action.
-					Outcome: tools.ApprovalOutcomeTimedOut,
-					Reason:  "approval expired; do not request another approval or retry a variant; finish waiting_user",
-				}, nil
+				return park()
 			case <-ticker.C:
-				current, err := store.GetApprovalRequest(waitCtx, identity.TenantID, approval.ID)
+				// Both branches can be ready on the same tick, and select then
+				// picks at random. Polling with an already-expired waitCtx
+				// returned the context error to the tool layer, which reported
+				// an unanswered approval as a transport failure roughly half
+				// the time it timed out on a tick boundary.
+				if waitCtx.Err() != nil {
+					return park()
+				}
+				// The poll must NOT inherit the wait deadline. Checking
+				// waitCtx above still leaves a window where the budget lapses
+				// between the check and the read, and the store then returns
+				// the context error — reporting an unanswered approval as a
+				// transport failure. Loop exit is owned by the Done branch.
+				pollCtx, cancelPoll := context.WithTimeout(context.WithoutCancel(waitCtx), approvalPollTimeout)
+				current, err := store.GetApprovalRequest(pollCtx, identity.TenantID, approval.ID)
+				cancelPoll()
 				if err != nil {
 					return tools.ToolApprovalDecision{ApprovalID: approval.ID}, err
 				}

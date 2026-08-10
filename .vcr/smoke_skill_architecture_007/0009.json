@@ -1,0 +1,114 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "content": "注册"
+    },
+    {
+      "content": "覆盖"
+    },
+    {
+      "content": "语"
+    },
+    {
+      "content": "义"
+    },
+    {
+      "content": "决定"
+    },
+    {
+      "content": "反"
+    },
+    {
+      "content": "向"
+    },
+    {
+      "content": "装"
+    },
+    {
+      "content": "载"
+    },
+    {
+      "content": "是否"
+    },
+    {
+      "content": "可靠"
+    },
+    {
+      "content": "；"
+    },
+    {
+      "content": "我"
+    },
+    {
+      "content": "核"
+    },
+    {
+      "content": "对"
+    },
+    {
+      "content": "这一"
+    },
+    {
+      "content": "点"
+    },
+    {
+      "content": "后"
+    },
+    {
+      "content": "直接"
+    },
+    {
+      "content": "汇"
+    },
+    {
+      "content": "总"
+    },
+    {
+      "content": "，不"
+    },
+    {
+      "content": "修改"
+    },
+    {
+      "content": "代码"
+    },
+    {
+      "content": "。"
+    },
+    {
+      "content": "Preparing to run terminal",
+      "event_type": "agent.thinking"
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_sn5bablpifjmab89RirGWWcG",
+          "Function": "terminal",
+          "Args": "{\"command\":\"nl -ba internal/tools/dispatcher.go | sed -n '20,58p'; printf '\\\\n--- mutations ---\\\\n'; nl -ba internal/tools/skill_manage.go | sed -n '145,205p'; printf '\\\\n--- init reload ---\\\\n'; nl -ba internal/app/tools.go | sed -n '58,88p'\",\"cwd\":\"{{SELFMIND_VCR_WORKSPACE}}\",\"timeout\":30}"
+        }
+      ]
+    },
+    {
+      "content": "Preparing to run search_files",
+      "event_type": "agent.thinking"
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_H5W7B5VTCxHt16L32w5Hu8i8",
+          "Function": "search_files",
+          "Args": "{\"path\":\"{{SELFMIND_VCR_WORKSPACE}}/internal\",\"pattern\":\"slashCommandIndex\",\"file_glob\":\"*.go\",\"limit\":30,\"timeout\":15}"
+        }
+      ]
+    },
+    {
+      "usage": {
+        "input_tokens": 42712,
+        "output_tokens": 301,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0
+      }
+    }
+  ]
+}

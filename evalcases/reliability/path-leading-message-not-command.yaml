@@ -3,6 +3,10 @@ title: "A '/'-leading file path message is agent work, not an unknown command"
 suite: reliability
 workspace: isolated
 channel: cli
+ci:
+  required: true
+  reason: cross_platform
+  platforms: [linux, darwin]
 require_cassette: false
 
 # Observed live (2026-07-27): pasting a clipboard image put its WSL path at the

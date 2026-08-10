@@ -8,43 +8,28 @@
       "content": "."
     },
     {
-      "content": " "
+      "content": " 明"
     },
     {
-      "content": "先"
-    },
-    {
-      "content": "确定"
-    },
-    {
-      "content": "网页版"
-    },
-    {
-      "content": "格"
-    },
-    {
-      "content": "斗"
-    },
-    {
-      "content": "游戏"
-    },
-    {
-      "content": "的"
+      "content": "确"
     },
     {
       "content": "核心"
     },
     {
-      "content": "范围"
+      "content": "玩法"
     },
     {
-      "content": "："
+      "content": "、"
     },
     {
       "content": "角色"
     },
     {
-      "content": "数量"
+      "content": "阵"
+    },
+    {
+      "content": "容"
     },
     {
       "content": "、"
@@ -56,55 +41,67 @@
       "content": "方式"
     },
     {
-      "content": "、"
+      "content": "与"
     },
     {
-      "content": "单"
+      "content": "版权"
     },
     {
-      "content": "人"
+      "content": "边"
     },
     {
-      "content": "/"
+      "content": "界"
     },
     {
-      "content": "双"
+      "content": "，"
     },
     {
-      "content": "人"
+      "content": "确定"
     },
     {
-      "content": "模式"
+      "content": "采用"
     },
     {
-      "content": "、"
+      "content": "原创"
     },
     {
-      "content": "胜"
+      "content": "或"
     },
     {
-      "content": "负"
+      "content": "已"
     },
     {
-      "content": "规则"
+      "content": "获"
+    },
+    {
+      "content": "授权"
+    },
+    {
+      "content": "的"
+    },
+    {
+      "content": "美"
+    },
+    {
+      "content": "术"
     },
     {
       "content": "和"
     },
     {
-      "content": "基础"
+      "content": "音"
     },
     {
-      "content": "招"
+      "content": "效"
     },
     {
-      "content": "式"
+      "content": "资源"
     },
     {
-      "content": "系统"
+      "content": "。"
     },
     {
-      "content": "。\n\n"
+      "content": "  \n"
     },
     {
       "content": "2"
@@ -113,40 +110,31 @@
       "content": "."
     },
     {
-      "content": " 再"
+      "content": " 使用"
     },
     {
-      "content": "设计"
+      "content": " HTML"
     },
     {
-      "content": "技术"
-    },
-    {
-      "content": "架"
-    },
-    {
-      "content": "构"
-    },
-    {
-      "content": "："
-    },
-    {
-      "content": "用"
+      "content": "5"
     },
     {
       "content": " Canvas"
     },
     {
-      "content": "/Web"
+      "content": " 与"
     },
     {
-      "content": "GL"
+      "content": " Type"
     },
     {
-      "content": " 实"
+      "content": "Script"
     },
     {
-      "content": "现"
+      "content": " 搭"
+    },
+    {
+      "content": "建"
     },
     {
       "content": "战"
@@ -155,34 +143,19 @@
       "content": "斗"
     },
     {
-      "content": "画"
+      "content": "系统"
     },
     {
-      "content": "面"
+      "content": "，实现"
     },
     {
-      "content": "，用"
-    },
-    {
-      "content": "前"
-    },
-    {
-      "content": "端"
+      "content": "角色"
     },
     {
       "content": "状态"
     },
     {
       "content": "机"
-    },
-    {
-      "content": "管理"
-    },
-    {
-      "content": "角色"
-    },
-    {
-      "content": "动作"
     },
     {
       "content": "、"
@@ -194,13 +167,10 @@
       "content": "撞"
     },
     {
-      "content": "、"
+      "content": "判"
     },
     {
-      "content": "血"
-    },
-    {
-      "content": "量"
+      "content": "定"
     },
     {
       "content": "、"
@@ -212,19 +182,31 @@
       "content": "招"
     },
     {
+      "content": "、"
+    },
+    {
+      "content": "必"
+    },
+    {
+      "content": "杀"
+    },
+    {
+      "content": "技"
+    },
+    {
       "content": "和"
     },
     {
-      "content": "回"
+      "content": "基础"
     },
     {
-      "content": "合"
+      "content": " AI"
     },
     {
-      "content": "流程"
+      "content": "。"
     },
     {
-      "content": "。\n\n"
+      "content": "  \n"
     },
     {
       "content": "3"
@@ -233,109 +215,19 @@
       "content": "."
     },
     {
-      "content": " 最"
+      "content": " 完"
     },
     {
-      "content": "后"
+      "content": "成"
     },
     {
-      "content": "按"
+      "content": "选"
     },
     {
-      "content": " MVP"
-    },
-    {
-      "content": " 推"
-    },
-    {
-      "content": "进"
-    },
-    {
-      "content": "："
-    },
-    {
-      "content": "先"
-    },
-    {
-      "content": "做"
-    },
-    {
-      "content": "一个"
-    },
-    {
-      "content": "场"
-    },
-    {
-      "content": "景"
+      "content": "人"
     },
     {
       "content": "、"
-    },
-    {
-      "content": "两个"
-    },
-    {
-      "content": "角色"
-    },
-    {
-      "content": "、"
-    },
-    {
-      "content": "基础"
-    },
-    {
-      "content": "移动"
-    },
-    {
-      "content": "攻击"
-    },
-    {
-      "content": "和"
-    },
-    {
-      "content": "血"
-    },
-    {
-      "content": "条"
-    },
-    {
-      "content": "，再"
-    },
-    {
-      "content": "逐"
-    },
-    {
-      "content": "步"
-    },
-    {
-      "content": "加入"
-    },
-    {
-      "content": "音"
-    },
-    {
-      "content": "效"
-    },
-    {
-      "content": "、"
-    },
-    {
-      "content": "特"
-    },
-    {
-      "content": "效"
-    },
-    {
-      "content": "、"
-    },
-    {
-      "content": "AI"
-    },
-    {
-      "content": "、"
-    },
-    {
-      "content": "联网"
     },
     {
       "content": "对"
@@ -344,24 +236,89 @@
       "content": "战"
     },
     {
-      "content": "和"
+      "content": "及"
     },
     {
-      "content": "角色"
+      "content": "结"
     },
     {
-      "content": "扩"
+      "content": "算"
     },
     {
-      "content": "展"
+      "content": "界"
+    },
+    {
+      "content": "面"
+    },
+    {
+      "content": "，"
+    },
+    {
+      "content": "加入"
+    },
+    {
+      "content": "移动"
+    },
+    {
+      "content": "端"
+    },
+    {
+      "content": "适"
+    },
+    {
+      "content": "配"
+    },
+    {
+      "content": "、"
+    },
+    {
+      "content": "性能"
+    },
+    {
+      "content": "优化"
+    },
+    {
+      "content": "、"
+    },
+    {
+      "content": "联"
+    },
+    {
+      "content": "机"
+    },
+    {
+      "content": "能力"
+    },
+    {
+      "content": "与"
+    },
+    {
+      "content": "自动"
+    },
+    {
+      "content": "化"
+    },
+    {
+      "content": "测试"
+    },
+    {
+      "content": "后"
+    },
+    {
+      "content": "部署"
+    },
+    {
+      "content": "上线"
     },
     {
       "content": "。"
     },
     {
       "usage": {
-        "input_tokens": 4531,
-        "output_tokens": 165
+        "input_tokens": 5938,
+        "output_tokens": 148,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0
       }
     }
   ]

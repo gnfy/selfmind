@@ -14,8 +14,10 @@ import (
 	"strings"
 	"time"
 
+	appcore "selfmind/internal/app"
 	"selfmind/internal/modelruntime"
 	"selfmind/internal/platform/config"
+	"selfmind/internal/tools"
 )
 
 type modelChoice struct {
@@ -46,14 +48,19 @@ func (a *App) runModelCommandIfRequested() (bool, int) {
 		a.printCurrentModel(cfg)
 		return true, 0
 	case "check":
-		return true, a.checkCurrentModel(cfg)
+		options, err := parseModelCheckOptions(args[1:])
+		if err != nil {
+			fmt.Fprintln(a.stderr, err)
+			return true, 2
+		}
+		return true, a.checkCurrentModel(cfg, options)
 	case "list":
 		a.printConfiguredProviders(cfg)
 		return true, 0
 	case "set":
 		return true, a.setModelFromArgs(cfg, args[1:])
 	default:
-		fmt.Fprintln(a.stderr, "usage: selfmind model [current|check|list|set <provider> <model> [--reasoning <level|auto>] [--service-tier <tier|auto>]]")
+		fmt.Fprintln(a.stderr, "usage: selfmind model [current|check [--live] [--role <name>]|list|set <provider> <model> [--reasoning <level|auto>] [--service-tier <tier|auto>]]")
 		return true, 2
 	}
 }
@@ -501,9 +508,37 @@ func redactHeaderValue(key, value string) string {
 	return value
 }
 
-func (a *App) checkCurrentModel(cfg *config.Config) int {
-	a.printCurrentModel(cfg)
-	rt, err := modelruntime.NewResolver(cfg).Resolve(a.ctx, modelruntime.Selection{})
+type modelCheckOptions struct {
+	Live bool
+	Role string
+}
+
+func parseModelCheckOptions(args []string) (modelCheckOptions, error) {
+	var options modelCheckOptions
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--live":
+			options.Live = true
+		case "--role":
+			i++
+			if i >= len(args) || strings.TrimSpace(args[i]) == "" {
+				return modelCheckOptions{}, fmt.Errorf("--role requires a configured role name")
+			}
+			options.Role = strings.TrimSpace(args[i])
+		default:
+			return modelCheckOptions{}, fmt.Errorf("unknown model check option: %s", args[i])
+		}
+	}
+	return options, nil
+}
+
+func (a *App) checkCurrentModel(cfg *config.Config, options modelCheckOptions) int {
+	if options.Role == "" || strings.EqualFold(options.Role, "primary") {
+		a.printCurrentModel(cfg)
+	} else {
+		fmt.Fprintf(a.stdout, "Role: %s\n", options.Role)
+	}
+	rt, err := appcore.ResolveModelRuntime(a.ctx, cfg, options.Role)
 	if err != nil {
 		fmt.Fprintf(a.stderr, "Model check failed: %v\n", err)
 		fmt.Fprintln(a.stderr, "Hint: run `selfmind model` and enter the API key, or set the provider API key environment variable before starting SelfMind.")
@@ -553,6 +588,19 @@ func (a *App) checkCurrentModel(cfg *config.Config) int {
 	}
 	if rt.TokenRefresher != nil {
 		fmt.Fprintln(a.stdout, "Token refresher: configured")
+	}
+	if options.Live {
+		fmt.Fprintln(a.stdout, "Live probe: sending one bounded request")
+		probe := appcore.ProbeResolvedModel(a.ctx, rt)
+		if probe.Err != nil {
+			fmt.Fprintf(a.stderr, "Live probe failed after %s: %s\n", probe.Latency.Round(time.Millisecond), tools.RedactSensitive(probe.Err.Error()))
+			return 1
+		}
+		toolStatus := "skipped (transport does not advertise native tools)"
+		if probe.NativeToolsTested {
+			toolStatus = "passed"
+		}
+		fmt.Fprintf(a.stdout, "Live probe: OK in %s; native tool schema: %s\n", probe.Latency.Round(time.Millisecond), toolStatus)
 	}
 	return 0
 }

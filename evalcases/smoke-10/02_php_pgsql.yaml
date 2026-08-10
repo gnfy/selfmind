@@ -1,7 +1,10 @@
 id: smoke_php_pgsql_002
 title: "generate a PHP PostgreSQL example"
 suite: smoke-10
-workspace: "."
+# Declared isolated because this case makes no tool calls: nothing here
+# reads the repository, and a workspace of "." would let one added tool
+# call silently make the cassette depend on the tree it was recorded in.
+workspace: isolated
 channel: cli
 
 turns:

@@ -199,10 +199,10 @@ turns:
     platform_user_id: "eval-stranger"   # a different person; must see nothing
 ```
 
-`require_cassette: true` marks a case as mandatory for the offline gate:
+`require_cassette: true` marks a case as mandatory for the local gate:
 `selfmind selfcheck` FAILS (instead of skipping) when no cassette is recorded
 for the case ID. Use it for north-star scenarios that must never silently drop
-out of CI. Optional cases (the default) are still skipped when unrecorded, so
+out of local release evidence. Optional cases (the default) are skipped when unrecorded, so
 the gate keeps growing as cassettes are recorded.
 
 ```yaml
@@ -210,19 +210,97 @@ id: continuity_resume
 require_cassette: true
 ```
 
-## Selfcheck Gate Floor
+## Selfcheck Profiles And Ownership
 
-`selfmind selfcheck` runs the eval phase in strict offline replay
-(`SELFMIND_EVAL_VCR=replay` + `SELFMIND_EVAL_OFFLINE=1`). Two mechanisms keep
-the gate honest:
+`selfmind selfcheck` replays provider responses strictly offline
+(`SELFMIND_EVAL_VCR=replay` + `SELFMIND_EVAL_OFFLINE=1`). Replayed tool calls
+still execute against the current host toolchain. Cases that depend on host
+commands declare them explicitly:
 
-- `require_cassette: true` cases fail selfcheck when their cassette is missing
-  (see above).
-- `SELFMIND_EVAL_MIN_CASES=N` fails selfcheck when fewer than N cases were
-  actually replayed (skipped cases do not count). CI sets it in
-  `.github/workflows/ci.yml` so deleted cassettes or renamed case IDs cannot
-  quietly degrade the gate to verifying ~0 cases. Unset (the local default)
-  keeps the grow-as-you-record behavior.
+```yaml
+requires:
+  commands: [node, npm]
+```
+
+The command fails with exit code `2` when the required environment is missing
+or incompatible. It never reports such a skip as green. Profiles divide
+ownership without changing cassette semantics:
+
+- `local-full` (default) replays every recorded case and is authoritative
+  before pushing.
+- `local-fast` / `--fast` skips measured `slow: true` cases for edit loops.
+- `ci` runs only cases whose value specifically depends on a clean checkout,
+  credentialless host, another platform, concurrency, or timing.
+
+```yaml
+ci:
+  required: true
+  reason: cross_platform
+  platforms: [linux, darwin]
+```
+
+Valid reasons are `clean_checkout`, `cross_platform`, `credentialless`,
+`concurrency`, and `timing`. A CI-owned case must have a cassette; missing one
+fails by identity, so CI does not rely on a numeric case-count proxy.
+
+Three exit codes keep the gate honest:
+
+- `0`: all selected checks passed.
+- `1`: a build, test, or behavioral assertion regressed.
+- `2`: arguments or the verification environment are unavailable, including a
+  missing Go toolchain, repository root, eval directory, or required command.
+
+`SELFMIND_EVAL_MIN_CASES=N` remains a compatibility guard for custom local
+automation, but the repository CI uses explicit case ownership instead.
+
+### Cassette hygiene
+
+Four properties are enforced by `internal/kernel/llm/vcr_corpus_test.go`, so a
+regression shows up in `go test ./...` rather than as a CI-only mystery:
+
+- **No machine absolute paths.** Recording rewrites the workspace prefix to
+  `{{SELFMIND_VCR_WORKSPACE}}` and replay expands it to the current run's
+  workspace. Cassettes recorded before that mechanism existed carried the
+  recording machine's paths verbatim, so their case passed locally and failed
+  in CI for weeks with every replayed tool call pointing at a missing
+  directory.
+- **Recorded provider failures do not grow.** A failed call MUST still be
+  recorded — replay is ordinal, so a hole desynchronizes every later call in
+  the case — but a committed failure cassette replays that failure forever and
+  the call it stands for is never verified again. Recording one now prints a
+  loud warning, and the corpus test ratchets the known set. Clearing an entry
+  requires a live re-record.
+- **Valid, contiguous recordings.** Every numbered file is valid JSON; each
+  case starts at `0000.json` with no ordinal gaps; a directory with no numbered
+  cassette is rejected.
+
+### Tiers: `--fast` and the full gate
+
+Four cases carry roughly 90% of the replay cost — measured, not guessed:
+`smoke_codebase_overview_006` 143s, `dayinlife_tool_failure_recovery` 78s
+(it really does run the test suite), `smoke_provider_runtime_008` 59s,
+`smoke_skill_architecture_007` 46s. The other 30 cases together take about 30s.
+
+They carry `slow: true` with the measurement in a comment, and
+`selfmind selfcheck --fast` skips them: eval drops from 6m to 28s, so the loop
+you run after every change stays affordable. The count skipped is always
+printed, a `require_cassette` case is never skipped, and the full gate — run it
+before pushing — still runs everything.
+
+Do NOT filter on `max_duration_seconds` instead. It is an author-chosen ceiling
+with little relation to cost: `continuity_resume` declares 420s and replays in
+one second, while the genuinely slow case declares 540s.
+
+### Recording a `workspace: "."` case
+
+Those cases run their tools against the repository itself, so record them from
+a clean checkout of the commit you are going to push — `git archive HEAD | tar
+-x -C <dir>` — and never from a dirty tree. Recorded against a tree carrying
+uncommitted files, the model's answers describe files CI does not have, the
+replayed tool calls return something else, and the case fails on CI while
+passing locally. Recording also gets its own turn budget (a floor well above
+`max_duration_seconds`, which is a replay assertion) because live runs pay full
+model latency — measured at roughly seven times replay.
 
 ## Continuity Suite
 

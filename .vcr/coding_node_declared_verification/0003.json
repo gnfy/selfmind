@@ -1,0 +1,115 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "content": "The"
+    },
+    {
+      "content": " repository"
+    },
+    {
+      "content": " declares"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "npm"
+    },
+    {
+      "content": " test"
+    },
+    {
+      "content": "`;"
+    },
+    {
+      "content": " I"
+    },
+    {
+      "content": "’ll"
+    },
+    {
+      "content": " read"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " implementation"
+    },
+    {
+      "content": " and"
+    },
+    {
+      "content": " tests"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " then"
+    },
+    {
+      "content": " run"
+    },
+    {
+      "content": " that"
+    },
+    {
+      "content": " exact"
+    },
+    {
+      "content": " workflow"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": "Preparing to run read_file",
+      "event_type": "agent.thinking"
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_r2U2h5S1ynFaJs19s6uUgJkv",
+          "Function": "read_file",
+          "Args": "{\"path\":\"{{SELFMIND_VCR_WORKSPACE}}/math.js\"}"
+        }
+      ]
+    },
+    {
+      "content": "Preparing to run read_file",
+      "event_type": "agent.thinking"
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_uZjpKa9Yt2GEpXe3y05NRw6H",
+          "Function": "read_file",
+          "Args": "{\"path\":\"{{SELFMIND_VCR_WORKSPACE}}/math.test.js\"}"
+        }
+      ]
+    },
+    {
+      "content": "Preparing to run verify",
+      "event_type": "agent.thinking"
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_Wyf5lNubuuVpIv8a3VZ9AcWS",
+          "Function": "verify",
+          "Args": "{\"command\":\"npm test\",\"cwd\":\"{{SELFMIND_VCR_WORKSPACE}}\",\"kind\":\"test\",\"timeout\":120}"
+        }
+      ]
+    },
+    {
+      "usage": {
+        "input_tokens": 6468,
+        "output_tokens": 177,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0
+      }
+    }
+  ]
+}

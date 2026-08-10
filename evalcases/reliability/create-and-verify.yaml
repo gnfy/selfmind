@@ -4,6 +4,12 @@ suite: reliability
 workspace: isolated
 channel: cli
 require_cassette: true
+ci:
+  required: true
+  reason: cross_platform
+  platforms: [linux, darwin]
+requires:
+  commands: [python3]
 
 # Re-record this case after intentional execution-contract changes:
 #   SELFMIND_EVAL_VCR=record selfmind eval run \

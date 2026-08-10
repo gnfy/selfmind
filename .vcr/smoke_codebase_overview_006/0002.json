@@ -1,0 +1,65 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "content": "Preparing to run terminal",
+      "event_type": "agent.thinking"
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_4gc4DrgqV32GsrdKAS6jz7mj",
+          "Function": "terminal",
+          "Args": "{\"command\":\"git status --short \u0026\u0026 printf '\\\\n-- top level --\\\\n' \u0026\u0026 find . -maxdepth 2 -type d | sort | sed -n '1,180p' \u0026\u0026 printf '\\\\n-- root files --\\\\n' \u0026\u0026 find . -maxdepth 1 -type f -printf '%f\\\\n' | sort\",\"cwd\":\"{{SELFMIND_VCR_WORKSPACE}}\",\"timeout\":20}"
+        }
+      ]
+    },
+    {
+      "content": "Preparing to run read_file",
+      "event_type": "agent.thinking"
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_USdeHCxeX2HzjNgc9EDQFTMS",
+          "Function": "read_file",
+          "Args": "{\"path\":\"{{SELFMIND_VCR_WORKSPACE}}/docs/STATUS.md\",\"limit\":400}"
+        }
+      ]
+    },
+    {
+      "content": "Preparing to run read_file",
+      "event_type": "agent.thinking"
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_aK6VeRGrChNM9dpLj0lfvw3O",
+          "Function": "read_file",
+          "Args": "{\"path\":\"{{SELFMIND_VCR_WORKSPACE}}/go.mod\",\"limit\":220}"
+        }
+      ]
+    },
+    {
+      "content": "Preparing to run read_file",
+      "event_type": "agent.thinking"
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_rtjUm6dpx3DuwdXC0bczoBbU",
+          "Function": "read_file",
+          "Args": "{\"path\":\"{{SELFMIND_VCR_WORKSPACE}}/README.md\",\"limit\":300}"
+        }
+      ]
+    },
+    {
+      "usage": {
+        "input_tokens": 10527,
+        "output_tokens": 345,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0
+      }
+    }
+  ]
+}

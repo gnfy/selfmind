@@ -3,6 +3,10 @@ title: "A direct answer completes its run without closing the reusable label"
 suite: reliability
 workspace: isolated
 channel: cli
+ci:
+  required: true
+  reason: clean_checkout
+  platforms: [linux, darwin]
 require_cassette: false
 
 turns:

@@ -3,7 +3,9 @@ package httpapi
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
+	"sync"
 
 	"selfmind/internal/control"
 	"selfmind/internal/gateway/api"
@@ -183,12 +185,192 @@ func runIntentSnapshot(req api.MessageRequest, task *control.Task, run *control.
 			snapshot.ExplicitAllow = []string{"continue-current-task"}
 		}
 	}
-	for _, marker := range []string{"不要", "禁止", "别执行", "do not", "don't", "must not", "never"} {
-		if strings.Contains(compact, marker) {
-			snapshot.ExplicitDeny = append(snapshot.ExplicitDeny, marker)
+	snapshot.ExplicitDeny, snapshot.DenyScopes = extractDenyScopes(compact)
+	return snapshot
+}
+
+// denyMarkers are the prohibition phrases we recognize. Scanning for them over
+// a whole message was the original defect: one "不要修改文件" made every write,
+// exec, and dangerous call in the run demand a human decision.
+var denyMarkers = []string{"不要", "不得", "禁止", "别执行", "别改", "do not", "don't", "must not", "never"}
+
+// denyClassWords map a clause's own words to what it forbids. Order matters
+// only in that every entry is tested; a clause may forbid several classes.
+var denyClassWords = []struct {
+	words   []string
+	classes []tools.OperationClass
+}{
+	// Single-character Chinese verbs matter: "不要改代码" and "不要写文件" are
+	// how people actually phrase this, and matching only the two-character
+	// compounds left both unclassified — which meant the blanket fail-safe, so
+	// the most ordinary "don't touch the code" blocked every tool in the run.
+	{[]string{"修改", "改动", "更改", "改", "编辑", "写入", "写", "覆盖", "modify", "edit", "write", "overwrite", "change"}, []tools.OperationClass{tools.OpClassWrite}},
+	{[]string{"删除", "移除", "删", "rm ", "delete", "remove"}, []tools.OperationClass{tools.OpClassDelete}},
+	{[]string{"执行", "运行", "跑", "调用命令", "run", "rerun", "re-run", "execute", "invoke"}, []tools.OperationClass{tools.OpClassExec}},
+	{[]string{"联网", "下载", "上传", "访问网络", "network", "download", "upload", "curl", "fetch"}, []tools.OperationClass{tools.OpClassNetwork}},
+}
+
+// mannerWords qualify HOW something must not be done rather than whether it
+// may happen at all. "Do not execute the polling command directly" asks for
+// delegation; reading it as a blanket execution ban inverts the instruction.
+var mannerWords = []string{"直接", "自己", "亲自", "手动", "本轮", "前台", "directly", "yourself", "manually", "in this turn", "by hand", "foreground", "in the foreground"}
+
+// repetitionWords qualify a prohibition as "not AGAIN". "Run the command once,
+// do not rerun it" authorizes the first execution and forbids the second, so
+// blocking the call the person just asked for inverts the instruction. The
+// middleware cannot count executions, and it does not need to: repeated
+// identical calls are already stopped by ToolGuardrails.
+var repetitionWords = []string{"重新", "再次", "又一次", "第二次", "rerun", "re-run", "retry", "again", "repeat", "once more", "a second time"}
+
+// clauseSplitter ends a clause at sentence and list punctuation, in both
+// scripts. A prohibition binds to the clause it appears in.
+//
+// Only "." needs a lookahead: splitting on every one of them tore
+// "config.yaml" in half and left the prohibition with no object to protect.
+// The rest split unconditionally, because an ASCII comma inside Chinese text
+// is usually written without a trailing space.
+var clauseSplitter = regexp.MustCompile(`[。！？；，\n\r,;!?]|\.(?:\s|$)`)
+
+const denyClauseMaxChars = 300
+
+// extractDenyScopes turns a lowercased message into prohibition records bound
+// to their own clauses. It is deterministic string work — no model call — and
+// a clause it cannot classify is recorded unresolved, which keeps the old
+// blanket effect for that prohibition.
+func extractDenyScopes(compact string) ([]string, []tools.DenyScope) {
+	var markers []string
+	var scopes []tools.DenyScope
+	seenMarker := map[string]bool{}
+	for _, clause := range clauseSplitter.Split(compact, -1) {
+		clause = strings.TrimSpace(clause)
+		if clause == "" {
+			continue
+		}
+		for _, marker := range denyMarkers {
+			if !strings.Contains(clause, marker) {
+				continue
+			}
+			if !seenMarker[marker] {
+				seenMarker[marker] = true
+				markers = append(markers, marker)
+			}
+			scopes = append(scopes, denyScopeForClause(marker, clause))
 		}
 	}
-	return snapshot
+	return markers, scopes
+}
+
+func denyScopeForClause(marker, clause string) tools.DenyScope {
+	scope := tools.DenyScope{Marker: marker, Clause: truncate(clause, denyClauseMaxChars)}
+	// A prohibition governs what FOLLOWS it. "Finish the run as waiting_user
+	// and do not invent or resolve that input" forbids inventing input; reading
+	// the whole clause let the noun "run" ahead of the marker classify it as an
+	// execution ban and block the tool the person was asking for.
+	governed := clause
+	if idx := strings.Index(clause, marker); idx >= 0 {
+		governed = clause[idx+len(marker):]
+	}
+	manner := containsAnyWord(governed, mannerWords)
+	scope.Repetition = containsAnyWord(governed, repetitionWords)
+	for _, entry := range denyClassWords {
+		if !containsAnyWord(governed, entry.words) {
+			continue
+		}
+		for _, class := range entry.classes {
+			if class == tools.OpClassExec && manner {
+				// Qualified as "directly"/"yourself"/"foreground": the person is
+				// ruling out the agent running it in this turn, not ruling out
+				// handing it to the daemon.
+				class = tools.OpClassExecInTurn
+			}
+			scope.Classes = append(scope.Classes, class)
+		}
+	}
+	scope.Resolved = len(scope.Classes) > 0
+	if scope.Resolved {
+		scope.Targets = denyClauseTargets(governed)
+	}
+	return scope
+}
+
+// containsAnyWord matches CJK needles as substrings (the script has no word
+// boundaries) and ASCII needles only on word boundaries. Plain substring
+// matching made "run" fire inside "rerun" and inside the noun "the run", which
+// is how prohibitions came to block operations they never named.
+func containsAnyWord(text string, needles []string) bool {
+	for _, needle := range needles {
+		if needle == "" {
+			continue
+		}
+		if !isASCIIWord(needle) {
+			if strings.Contains(text, needle) {
+				return true
+			}
+			continue
+		}
+		if asciiWordRegexp(needle).MatchString(text) {
+			return true
+		}
+	}
+	return false
+}
+
+func isASCIIWord(s string) bool {
+	for _, r := range s {
+		if r > 127 {
+			return false
+		}
+	}
+	return true
+}
+
+var (
+	asciiWordCacheMu sync.Mutex
+	asciiWordCache   = map[string]*regexp.Regexp{}
+)
+
+func asciiWordRegexp(needle string) *regexp.Regexp {
+	asciiWordCacheMu.Lock()
+	defer asciiWordCacheMu.Unlock()
+	if re, ok := asciiWordCache[needle]; ok {
+		return re
+	}
+	re := regexp.MustCompile(`\b` + regexp.QuoteMeta(needle) + `\b`)
+	asciiWordCache[needle] = re
+	return re
+}
+
+// denyClauseTargets picks out literal objects named in the clause: paths, file
+// names, and quoted command fragments. A prohibition with no literal object
+// covers its whole class, which is the conservative reading.
+func denyClauseTargets(clause string) []string {
+	var targets []string
+	for _, quoted := range quotedFragments(clause) {
+		targets = append(targets, quoted)
+	}
+	for _, field := range strings.Fields(clause) {
+		field = strings.Trim(field, "\"'`,()[]{}：:。，")
+		if field == "" {
+			continue
+		}
+		if strings.ContainsAny(field, "/\\") || (strings.Contains(field, ".") && !strings.HasSuffix(field, ".")) {
+			targets = append(targets, field)
+		}
+	}
+	return targets
+}
+
+func quotedFragments(clause string) []string {
+	var out []string
+	for _, quote := range []string{"\"", "'", "`"} {
+		parts := strings.Split(clause, quote)
+		for i := 1; i < len(parts); i += 2 {
+			if fragment := strings.TrimSpace(parts[i]); fragment != "" {
+				out = append(out, fragment)
+			}
+		}
+	}
+	return out
 }
 
 // fallbackApprovalReason prefers the person's own refusal words over a generic

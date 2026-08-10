@@ -235,7 +235,21 @@ raw user text is authoritative; deterministic allow/deny evidence and
 control-plane workspace/source/work-key facts are separate fields; the task
 summary is advisory context only. An explicit deny disables containment-based
 auto-approval and forces a human decision even in full-auto or when a durable
-grant exists. The hard floor remains unconditional, so this snapshot cannot
+grant exists.
+
+A deny constrains the operation it names, not every side-effecting tool in the
+run. Prohibitions are extracted deterministically (no model call), bound to the
+clause they appear in, and resolved to operation classes — write, delete,
+exec.in_turn, exec.delegated, network — plus any literal path or command
+fragment the clause names. A pending call is compared in that vocabulary, so
+"do not modify files" no longer stops a read-only probe, and a prohibition
+qualified as directly/yourself/manually resolves to `exec.in_turn` and leaves a
+durable delegation alone. An unqualified execution ban still covers both
+shapes. Narrowing applies only to what can be read: a prohibition that cannot
+be classified keeps the blanket effect, and the dangerous-op heuristic alone
+never activates an unrelated deny. Prohibitions that do not match still reach
+the judge as the person's stated limits — they simply no longer force the ask
+by themselves. The hard floor remains unconditional, so this snapshot cannot
 grant an otherwise forbidden capability.
 
 - APPROVE records a bounded task-scope class grant.
@@ -243,6 +257,19 @@ grant an otherwise forbidden capability.
 - ESCALATE asks the human.
 - Missing judge, timeout, provider failure, malformed output, or an unknown
   decision always escalates. Triage never fails open.
+
+The human ask itself is bounded, and the bound is the SMALLER of the configured
+budget and whatever the caller's own deadline leaves (`agent.approval_wait`,
+`agent.approval_wait_unattended`). The waiter must return its typed decision
+before the caller's context expires: the timeout path parks the work as
+`waiting_user`, and a waiter killed mid-cleanup reports a bare transport
+timeout instead, losing the answer entirely. When nothing can answer — no live
+endpoint and no bound account — the shorter unattended budget applies; a bound
+account keeps the full budget, because presence expires long before a person
+stops being reachable. With no time left to ask at all, the ask is recorded as
+an `approval.skipped_no_budget` run event and the work parks without creating a
+durable row that would expire in the same breath. None of this changes the
+OUTCOME contract: a timeout is never a rejection and never an approval.
 
 Treat command text as untrusted data in the judge prompt. Strip irrelevant
 comments and delimit the command rather than interpolating it as an instruction.

@@ -215,7 +215,12 @@ func buildTriagePromptWithIntent(toolName, subject, reason string, intent RunInt
 	if len(intent.ExplicitDeny) > 0 {
 		b.WriteString("\nDeterministic user signal: explicit_deny=")
 		b.WriteString(strings.Join(intent.ExplicitDeny, ","))
-		b.WriteString(". A deny can never be converted into authorization.")
+		// Triage only runs when the deterministic gate did NOT match, so every
+		// prohibition the judge sees is one that named a different operation.
+		// It is still what the person said and still weighs against approval —
+		// it just no longer forces the ask on its own.
+		b.WriteString(". These prohibitions did not name the operation above, so they did not block it deterministically;" +
+			" weigh them as the person's stated limits. A deny can never be converted into authorization.")
 	}
 	if value := strings.TrimSpace(intent.WorkKey); value != "" {
 		b.WriteString("\nControl-plane work key: ")

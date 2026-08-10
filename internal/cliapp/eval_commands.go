@@ -47,7 +47,7 @@ func (a *App) printEvalHelp() {
 	fmt.Fprintln(a.stdout)
 	fmt.Fprintln(a.stdout, "Usage:")
 	fmt.Fprintln(a.stdout, "  selfmind eval list [path]")
-	fmt.Fprintln(a.stdout, "  selfmind eval run [case-or-dir] [--suite NAME] [--provider ID] [--model ID] [--tenant ID] [--workspace PATH] [--output PATH] [--record-content] [--live]")
+	fmt.Fprintln(a.stdout, "  selfmind eval run [case-or-dir] [--suite NAME] [--provider ID] [--model ID] [--tenant ID] [--workspace PATH] [--output PATH] [--record-content] [--turn-timeout D] [--live]")
 	fmt.Fprintln(a.stdout, "  selfmind eval report <jsonl-or-dir>")
 	fmt.Fprintln(a.stdout, "  selfmind eval repair [case-or-dir] [--worktree]")
 	fmt.Fprintln(a.stdout, "  selfmind eval scorecard [case-or-dir] [--provider ID] [--out PATH] [--live]")
@@ -166,6 +166,16 @@ func (a *App) parseEvalRunArgs(args []string) (string, selfeval.RunOptions, erro
 				return "", opts, fmt.Errorf("--output requires a path")
 			}
 			opts.OutputPath = args[i]
+		case "--turn-timeout":
+			i++
+			if i >= len(args) {
+				return "", opts, fmt.Errorf("--turn-timeout requires a duration, e.g. 20m")
+			}
+			d, err := time.ParseDuration(args[i])
+			if err != nil || d <= 0 {
+				return "", opts, fmt.Errorf("--turn-timeout: invalid duration %q", args[i])
+			}
+			opts.TurnTimeout = d
 		case "--record-content":
 			opts.RecordContent = true
 		case "--live":

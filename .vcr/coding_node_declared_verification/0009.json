@@ -1,0 +1,193 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "content": "Fixed"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " bug"
+    },
+    {
+      "content": " in"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "math"
+    },
+    {
+      "content": ".js"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": ":\n\n"
+    },
+    {
+      "content": "-"
+    },
+    {
+      "content": " Changed"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "add"
+    },
+    {
+      "content": "(a"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " b"
+    },
+    {
+      "content": ")`"
+    },
+    {
+      "content": " from"
+    },
+    {
+      "content": " subtraction"
+    },
+    {
+      "content": " (`"
+    },
+    {
+      "content": "a"
+    },
+    {
+      "content": " -"
+    },
+    {
+      "content": " b"
+    },
+    {
+      "content": "`)"
+    },
+    {
+      "content": " to"
+    },
+    {
+      "content": " addition"
+    },
+    {
+      "content": " (`"
+    },
+    {
+      "content": "a"
+    },
+    {
+      "content": " +"
+    },
+    {
+      "content": " b"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": ").\n\n"
+    },
+    {
+      "content": "Verification"
+    },
+    {
+      "content": " using"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " repository"
+    },
+    {
+      "content": "’s"
+    },
+    {
+      "content": " declared"
+    },
+    {
+      "content": " workflow"
+    },
+    {
+      "content": ":\n\n"
+    },
+    {
+      "content": "```"
+    },
+    {
+      "content": "text"
+    },
+    {
+      "content": "\n"
+    },
+    {
+      "content": "npm"
+    },
+    {
+      "content": " test"
+    },
+    {
+      "content": "\n"
+    },
+    {
+      "content": "``"
+    },
+    {
+      "content": "`\n\n"
+    },
+    {
+      "content": "Result"
+    },
+    {
+      "content": ":"
+    },
+    {
+      "content": " **"
+    },
+    {
+      "content": "1"
+    },
+    {
+      "content": " test"
+    },
+    {
+      "content": " passed"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "0"
+    },
+    {
+      "content": " failed"
+    },
+    {
+      "content": "**"
+    },
+    {
+      "content": "."
+    },
+    {
+      "usage": {
+        "input_tokens": 7514,
+        "output_tokens": 64,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0
+      }
+    }
+  ]
+}

@@ -1,0 +1,83 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "content": "Your"
+    },
+    {
+      "content": " confirmation"
+    },
+    {
+      "content": " satisfies"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " sole"
+    },
+    {
+      "content": " remaining"
+    },
+    {
+      "content": " condition"
+    },
+    {
+      "content": ";"
+    },
+    {
+      "content": " I"
+    },
+    {
+      "content": "’m"
+    },
+    {
+      "content": " completing"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " run"
+    },
+    {
+      "content": " and"
+    },
+    {
+      "content": " resolving"
+    },
+    {
+      "content": " that"
+    },
+    {
+      "content": " blocker"
+    },
+    {
+      "content": " now"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": "Preparing to run finish_run",
+      "event_type": "agent.thinking"
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_lqTsnrV9zJLreYd9f9cNV9H9",
+          "Function": "finish_run",
+          "Args": "{\"status\":\"done\",\"summary\":\"The required user confirmation was received, so the task is complete and the sole open blocker is resolved.\",\"done\":[\"Prepared the task for completion.\",\"Received the required user confirmation.\",\"Completed the run.\"],\"next_steps\":[],\"files\":[],\"tests\":[\"Verified that the user's explicit confirmation satisfies the only stated completion condition.\"],\"risks\":[],\"need_approve\":false,\"resolved_blocker_ids\":[\"blocker_run_83e4702b-8c35-4d53-84ac-2766a13bc58b_waiting_user\"]}"
+        }
+      ]
+    },
+    {
+      "usage": {
+        "input_tokens": 6870,
+        "output_tokens": 195,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0
+      }
+    }
+  ]
+}

@@ -55,6 +55,13 @@ type GatewayStatusResponse struct {
 	DrainReason    string             `json:"drain_reason,omitempty"`
 	ActiveRuns     []ActiveRunStatus  `json:"active_runs"`
 	ActiveRunCount int                `json:"active_run_count"`
+	ToolSchemas    ToolSchemaHealth   `json:"tool_schemas,omitempty"`
+}
+
+type ToolSchemaHealth struct {
+	Active      int `json:"active"`
+	Repaired    int `json:"repaired"`
+	Quarantined int `json:"quarantined"`
 }
 
 type MessageRequest struct {

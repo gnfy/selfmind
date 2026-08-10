@@ -1,0 +1,131 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "content": "我"
+    },
+    {
+      "content": "先"
+    },
+    {
+      "content": "定位"
+    },
+    {
+      "content": " Skills"
+    },
+    {
+      "content": " 架"
+    },
+    {
+      "content": "构"
+    },
+    {
+      "content": "文"
+    },
+    {
+      "content": "档"
+    },
+    {
+      "content": "与"
+    },
+    {
+      "content": "入口"
+    },
+    {
+      "content": "代码"
+    },
+    {
+      "content": "，再"
+    },
+    {
+      "content": "沿"
+    },
+    {
+      "content": "调用"
+    },
+    {
+      "content": "链"
+    },
+    {
+      "content": "核"
+    },
+    {
+      "content": "对"
+    },
+    {
+      "content": "实际"
+    },
+    {
+      "content": "加载"
+    },
+    {
+      "content": "顺"
+    },
+    {
+      "content": "序"
+    },
+    {
+      "content": "。"
+    },
+    {
+      "content": "Preparing to run terminal",
+      "event_type": "agent.thinking"
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_J7OxSXn4IcrkjS4EZabF9oJ0",
+          "Function": "terminal",
+          "Args": "{\"command\":\"git status --short\",\"cwd\":\"{{SELFMIND_VCR_WORKSPACE}}\",\"timeout\":30}"
+        }
+      ]
+    },
+    {
+      "content": "Preparing to run read_file",
+      "event_type": "agent.thinking"
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_ZLgGEJPp23dLGos8ff8nPbSy",
+          "Function": "read_file",
+          "Args": "{\"path\":\"{{SELFMIND_VCR_WORKSPACE}}/docs/STATUS.md\",\"limit\":240}"
+        }
+      ]
+    },
+    {
+      "content": "Preparing to run read_file",
+      "event_type": "agent.thinking"
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_pMDvkdjWG4mlnrG47QRFWyZ3",
+          "Function": "read_file",
+          "Args": "{\"path\":\"{{SELFMIND_VCR_WORKSPACE}}/docs/skills-architecture.md\",\"limit\":400}"
+        }
+      ]
+    },
+    {
+      "content": "Preparing to run search_files",
+      "event_type": "agent.thinking"
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_uyIUTUQVujihnulMjG7jjlGK",
+          "Function": "search_files",
+          "Args": "{\"path\":\"{{SELFMIND_VCR_WORKSPACE}}\",\"pattern\":\"skills|Skills|SKILL.md\",\"file_glob\":\"*.go\",\"limit\":200,\"timeout\":20}"
+        }
+      ]
+    },
+    {
+      "usage": {
+        "input_tokens": 10325,
+        "output_tokens": 378,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0
+      }
+    }
+  ]
+}

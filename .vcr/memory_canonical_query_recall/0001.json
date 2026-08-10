@@ -1,0 +1,112 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "content": "|"
+    },
+    {
+      "content": " Service"
+    },
+    {
+      "content": " |"
+    },
+    {
+      "content": " Version"
+    },
+    {
+      "content": " |"
+    },
+    {
+      "content": " Status"
+    },
+    {
+      "content": " |\n"
+    },
+    {
+      "content": "|"
+    },
+    {
+      "content": "---"
+    },
+    {
+      "content": "|"
+    },
+    {
+      "content": "---"
+    },
+    {
+      "content": ":"
+    },
+    {
+      "content": "|"
+    },
+    {
+      "content": "---"
+    },
+    {
+      "content": "|\n"
+    },
+    {
+      "content": "|"
+    },
+    {
+      "content": " API"
+    },
+    {
+      "content": " |"
+    },
+    {
+      "content": " v"
+    },
+    {
+      "content": "42"
+    },
+    {
+      "content": " |"
+    },
+    {
+      "content": " Not"
+    },
+    {
+      "content": " provided"
+    },
+    {
+      "content": " |\n"
+    },
+    {
+      "content": "|"
+    },
+    {
+      "content": " Web"
+    },
+    {
+      "content": " |"
+    },
+    {
+      "content": " v"
+    },
+    {
+      "content": "17"
+    },
+    {
+      "content": " |"
+    },
+    {
+      "content": " Not"
+    },
+    {
+      "content": " provided"
+    },
+    {
+      "content": " |"
+    },
+    {
+      "usage": {
+        "input_tokens": 5871,
+        "output_tokens": 93,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0
+      }
+    }
+  ]
+}

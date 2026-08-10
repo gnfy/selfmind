@@ -1,0 +1,104 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "content": "结构"
+    },
+    {
+      "content": "与"
+    },
+    {
+      "content": "能力"
+    },
+    {
+      "content": "证"
+    },
+    {
+      "content": "据"
+    },
+    {
+      "content": "已"
+    },
+    {
+      "content": "足"
+    },
+    {
+      "content": "够"
+    },
+    {
+      "content": "；"
+    },
+    {
+      "content": "最后"
+    },
+    {
+      "content": "运行"
+    },
+    {
+      "content": "全"
+    },
+    {
+      "content": "量"
+    },
+    {
+      "content": "测试"
+    },
+    {
+      "content": "，并"
+    },
+    {
+      "content": "抽"
+    },
+    {
+      "content": "查"
+    },
+    {
+      "content": "三个"
+    },
+    {
+      "content": "核心"
+    },
+    {
+      "content": "装"
+    },
+    {
+      "content": "配"
+    },
+    {
+      "content": "入口"
+    },
+    {
+      "content": "确认"
+    },
+    {
+      "content": "调用"
+    },
+    {
+      "content": "链"
+    },
+    {
+      "content": "。"
+    },
+    {
+      "content": "Preparing to run update_plan",
+      "event_type": "agent.thinking"
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_P7rX62wVTRHOspUxt4ZO4xYt",
+          "Function": "update_plan",
+          "Args": "{\"explanation\":\"已完成目录、状态、架构和优先级检查，进入实现抽查与验证阶段。\",\"plan\":[{\"step\":\"检查仓库状态、清单与核心目录结构\",\"status\":\"completed\"},{\"step\":\"阅读状态和架构文档并定位关键实现\",\"status\":\"in_progress\"},{\"step\":\"归纳已实现能力与两个高价值改进点\",\"status\":\"pending\"}]}"
+        }
+      ]
+    },
+    {
+      "usage": {
+        "input_tokens": 37557,
+        "output_tokens": 227,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0
+      }
+    }
+  ]
+}

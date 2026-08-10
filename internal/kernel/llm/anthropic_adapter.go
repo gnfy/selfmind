@@ -438,7 +438,7 @@ func (a *AnthropicAdapter) requestFromChat(req ChatRequest, stream bool) Anthrop
 		Stream:    stream,
 	}
 	if len(req.Tools) > 0 {
-		tools := req.Tools
+		tools := normalizeToolDefinitions(req.Tools)
 		if a.usesMoonshotSchema(req) {
 			tools = sanitizeMoonshotToolDefinitions(tools)
 		}
@@ -701,14 +701,10 @@ func (a *AnthropicAdapter) serviceTierForRequest(req ChatRequest) string {
 func anthropicTools(tools []ToolDefinition) []AnthropicTool {
 	out := make([]AnthropicTool, 0, len(tools))
 	for _, tool := range tools {
-		schema := tool.Parameters
-		if schema == nil {
-			schema = map[string]interface{}{"type": "object"}
-		}
 		out = append(out, AnthropicTool{
 			Name:        tool.Name,
 			Description: tool.Description,
-			InputSchema: schema,
+			InputSchema: normalizeToolParameters(tool.Parameters),
 		})
 	}
 	return out

@@ -58,7 +58,7 @@ func (a *App) runSetupCommandIfRequested() (bool, int) {
 		fmt.Fprintf(a.stdout, "Model: %s/%s\n", blankAsDash(cfg.EffectiveProvider()), blankAsDash(cfg.EffectiveModel()))
 	}
 	if *checkModel && !*skipModel {
-		if code := a.checkCurrentModel(cfg); code != 0 {
+		if code := a.checkCurrentModel(cfg, modelCheckOptions{}); code != 0 {
 			return true, code
 		}
 	}

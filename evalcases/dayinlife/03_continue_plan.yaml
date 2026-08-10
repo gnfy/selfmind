@@ -1,7 +1,10 @@
 id: dayinlife_continue_plan
 title: "multi-turn plan refinement keeps the same task and continues"
 suite: dayinlife
-workspace: "."
+# Declared isolated because this case makes no tool calls: nothing here
+# reads the repository, and a workspace of "." would let one added tool
+# call silently make the cassette depend on the tree it was recorded in.
+workspace: isolated
 channel: cli
 turns:
   - input: "帮我规划'给一个目录的图片批量加水印'的小工具,先给 3 步方案,不要写代码、不要看本地文件,每步一句话。"

@@ -1,9 +1,16 @@
 id: continuity_stranger
 title: "identity isolation: a different platform user must not see the task"
 suite: continuity
-workspace: "."
+# Declared isolated because this case makes no tool calls: nothing here
+# reads the repository, and a workspace of "." would let one added tool
+# call silently make the cassette depend on the tree it was recorded in.
+workspace: isolated
 channel: cli
 require_cassette: true
+ci:
+  required: true
+  reason: credentialless
+  platforms: [linux, darwin]
 
 # North-star isolation scenario: turn 1 creates task context under the case's
 # default eval identity; turn 2 overrides `platform_user_id` to simulate a

@@ -1,0 +1,68 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "content": "The"
+    },
+    {
+      "content": " watch"
+    },
+    {
+      "content": " is"
+    },
+    {
+      "content": " registered"
+    },
+    {
+      "content": ";"
+    },
+    {
+      "content": " I"
+    },
+    {
+      "content": "’m"
+    },
+    {
+      "content": " handing"
+    },
+    {
+      "content": " monitoring"
+    },
+    {
+      "content": " to"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " daemon"
+    },
+    {
+      "content": " now"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": "Preparing to run finish_run",
+      "event_type": "agent.thinking"
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_qxvJZGKJeOBH7KnGfAnXn0nD",
+          "Function": "finish_run",
+          "Args": "{\"done\":[\"Registered v2 durable external watch \\\"skipped target\\\" with command `printf 'QUEUED\\\\n'`.\",\"Configured target `^PENDING_APPROVAL$`, success `^SUCCEEDED$`, failure `^FAILED$`, 10-second interval, and 60-second timeout.\"],\"need_approve\":false,\"next_steps\":[\"Daemon will monitor the external check and notify when it succeeds, fails, reaches the target, or times out.\"],\"risks\":[\"The current check output is `QUEUED`, which matches none of the configured patterns; unless it changes, the watch will time out.\"],\"status\":\"waiting_external\",\"summary\":\"Durable watch registered and delegated to daemon monitoring.\",\"tests\":[\"Watch registration succeeded with ID `watch_beea834b-3bc2-42f4-9694-e15e9463e7da`.\"],\"files\":[]}"
+        }
+      ]
+    },
+    {
+      "usage": {
+        "input_tokens": 6077,
+        "output_tokens": 215,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0
+      }
+    }
+  ]
+}

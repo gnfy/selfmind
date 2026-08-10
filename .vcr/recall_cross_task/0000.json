@@ -1,4 +1,4 @@
 {
   "method": "completion",
-  "error": "anthropic request failed: Post \"https://api.kimi.com/coding/v1/messages\": context deadline exceeded"
+  "completion": "拳皇97 KOF97 格斗游戏 网页版 HTML5格斗"
 }

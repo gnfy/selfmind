@@ -163,3 +163,23 @@ func TestPositiveVerificationClaimRequiresVerificationAndSuccessCues(t *testing.
 		}
 	}
 }
+
+// A run forced to verification_partial must carry a verification reason. The
+// model reports a generic "failed", which left the outcome self-contradictory:
+// the status said "work changed, verification incomplete, resumable" while the
+// reason said only "failed", and the task view groups on the verification_*
+// family so it classified the run into neither bucket.
+func TestVerificationOutcomeReplacesGenericFailureReason(t *testing.T) {
+	got := applyVerificationOutcome(api.RunOutcome{
+		Status:           "completed",
+		CompletionReason: "failed",
+		Verification:     &api.VerificationOutcome{State: "failed"},
+		Files:            []string{"verification-target.txt"},
+	})
+	if got.Status != api.RunStatusVerificationPartial {
+		t.Fatalf("status = %q, want %q", got.Status, api.RunStatusVerificationPartial)
+	}
+	if got.CompletionReason != "verification_failed" {
+		t.Fatalf("completion reason = %q, want verification_failed", got.CompletionReason)
+	}
+}

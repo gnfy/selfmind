@@ -14,9 +14,6 @@
       "content": " the"
     },
     {
-      "content": " requested"
-    },
-    {
       "content": " durable"
     },
     {
@@ -29,22 +26,28 @@
       "content": " watch"
     },
     {
-      "content": " without"
-    },
-    {
-      "content": " running"
+      "content": " with"
     },
     {
       "content": " the"
     },
     {
-      "content": " poll"
+      "content": " requested"
     },
     {
-      "content": " command"
+      "content": " polling"
     },
     {
-      "content": " directly"
+      "content": " limits"
+    },
+    {
+      "content": " and"
+    },
+    {
+      "content": " success"
+    },
+    {
+      "content": " condition"
     },
     {
       "content": "."
@@ -56,16 +59,18 @@
     {
       "tool_calls": [
         {
-          "ID": "call_RAZIGwKJl1aXN3tiIcGOPte3",
+          "ID": "call_HA5rsc7XuMHUSNsXOxyvDy8v",
           "Function": "watch_external",
-          "Args": "{\"command\":\"printf 'SUCCEEDED\\\\n'\",\"cwd\":\"{{SELFMIND_VCR_WORKSPACE}}\",\"description\":\"CI completion\",\"interval_seconds\":5,\"success_pattern\":\"SUCCEEDED\",\"timeout_seconds\":60,\"command_timeout_seconds\":30}"
+          "Args": "{\"command\":\"printf 'PENDING\\\\n'\",\"command_timeout_seconds\":30,\"cwd\":\"{{SELFMIND_VCR_WORKSPACE}}\",\"description\":\"CI completion\",\"interval_seconds\":5,\"success_pattern\":\"SUCCEEDED\",\"timeout_seconds\":60}"
         }
       ]
     },
     {
       "usage": {
-        "input_tokens": 5052,
-        "output_tokens": 225
+        "input_tokens": 5856,
+        "output_tokens": 151,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0
       }
     }
   ]

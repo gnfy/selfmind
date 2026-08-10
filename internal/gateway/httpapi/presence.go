@@ -83,6 +83,24 @@ func (p *presenceRegistry) IsAttached(personID, platform string) bool {
 	return ok && p.now().Sub(last) < p.ttl
 }
 
+// AnyAttached reports whether ANY of the person's endpoints is alive right
+// now, without naming a platform. Approval waiting needs "could someone answer
+// this at all", not "which surface do I render on".
+func (p *presenceRegistry) AnyAttached(personID string) bool {
+	if p == nil || personID == "" {
+		return false
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	now := p.now()
+	for key, last := range p.seen {
+		if key.personID == personID && now.Sub(last) < p.ttl {
+			return true
+		}
+	}
+	return false
+}
+
 // pruneLocked drops long-expired entries so the maps stay bounded on a
 // long-lived daemon. Caller holds p.mu.
 func (p *presenceRegistry) pruneLocked(now time.Time) {

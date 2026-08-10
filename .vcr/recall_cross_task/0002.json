@@ -1,4 +1,4 @@
 {
   "method": "completion",
-  "error": "anthropic request failed: Post \"https://api.kimi.com/coding/v1/messages\": context deadline exceeded"
+  "completion": "KOF97 promotional copy advertising text game blurb marketing slogan"
 }

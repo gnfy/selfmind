@@ -28,7 +28,7 @@
 | Personal daily-driver | Partial | Continue real coding/operations use and close regressions from daily run reviews. |
 | Phase-1 continuity | Partial | Repeat CLI-to-IM approval, progress, completion, recovery, and stranger-isolation live scenarios. |
 | npm beta distribution | Partial | Clean tagged release through GitHub Actions plus install/update/daemon-restart verification on Linux and macOS. |
-| SaaS / enterprise | Deferred | No implementation until the triggers and readiness gates in `vision-saas-enterprise.zh-CN.md` are met. |
+| SaaS / enterprise | Deferred | No implementation until maintainers approve a dedicated strategy decision and its evidence gates. |
 
 ## Capability Map
 

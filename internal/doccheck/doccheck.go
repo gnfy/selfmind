@@ -24,8 +24,14 @@ const (
 var markdownLinkPattern = regexp.MustCompile(`\[[^\]]*\]\(([^)]+)\)`)
 
 type Manifest struct {
-	Version   int        `yaml:"version"`
-	Documents []Document `yaml:"documents"`
+	Version           int                `yaml:"version"`
+	Documents         []Document         `yaml:"documents"`
+	ExcludedDocuments []ExcludedDocument `yaml:"excluded_documents,omitempty"`
+}
+
+type ExcludedDocument struct {
+	Path   string `yaml:"path"`
+	Reason string `yaml:"reason"`
 }
 
 type Document struct {
@@ -61,7 +67,7 @@ func Check(root string, now time.Time) Report {
 
 	checkSizeLimits(root, &report)
 	checkManifest(root, manifest, now, &report)
-	checkMarkdown(root, &report)
+	checkMarkdown(root, manifest, &report)
 
 	want := []byte(RenderIndex(manifest))
 	got, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(IndexPath)))
@@ -161,6 +167,21 @@ func checkManifest(root string, manifest Manifest, now time.Time, report *Report
 	allowedClass := map[string]bool{"archive": true, "contract": true, "decision": true, "guide": true, "plan": true, "reference": true, "status": true}
 	allowedState := map[string]bool{"active": true, "archived": true, "current": true, "paused": true}
 	seen := make(map[string]bool, len(manifest.Documents))
+	excluded := make(map[string]bool, len(manifest.ExcludedDocuments))
+	for _, doc := range manifest.ExcludedDocuments {
+		path := filepath.ToSlash(filepath.Clean(doc.Path))
+		if path != doc.Path || !strings.HasPrefix(path, "docs/") || !strings.HasSuffix(path, ".md") {
+			report.Errors = append(report.Errors, fmt.Sprintf("manifest has invalid excluded document path %q", doc.Path))
+			continue
+		}
+		if excluded[path] {
+			report.Errors = append(report.Errors, fmt.Sprintf("manifest excludes %s more than once", path))
+		}
+		excluded[path] = true
+		if strings.TrimSpace(doc.Reason) == "" {
+			report.Errors = append(report.Errors, fmt.Sprintf("excluded document %s must declare a reason", path))
+		}
+	}
 	for _, doc := range manifest.Documents {
 		path := filepath.ToSlash(filepath.Clean(doc.Path))
 		if path != doc.Path || !strings.HasPrefix(path, "docs/") || !strings.HasSuffix(path, ".md") {
@@ -171,6 +192,9 @@ func checkManifest(root string, manifest Manifest, now time.Time, report *Report
 			report.Errors = append(report.Errors, fmt.Sprintf("manifest lists %s more than once", path))
 		}
 		seen[path] = true
+		if excluded[path] {
+			report.Errors = append(report.Errors, fmt.Sprintf("%s cannot be both public and excluded", path))
+		}
 		if !allowedClass[doc.Class] {
 			report.Errors = append(report.Errors, fmt.Sprintf("%s has invalid class %q", path, doc.Class))
 		}
@@ -211,7 +235,7 @@ func checkManifest(root string, manifest Manifest, now time.Time, report *Report
 	for _, path := range paths {
 		rel, _ := filepath.Rel(root, path)
 		rel = filepath.ToSlash(rel)
-		if !seen[rel] {
+		if !seen[rel] && !excluded[rel] {
 			report.Errors = append(report.Errors, fmt.Sprintf("%s is missing from %s", rel, ManifestPath))
 		}
 	}
@@ -237,7 +261,7 @@ func checkPlanReview(doc Document, now time.Time, report *Report) {
 	}
 }
 
-func checkMarkdown(root string, report *Report) {
+func checkMarkdown(root string, manifest Manifest, report *Report) {
 	paths := []string{filepath.Join(root, "AGENTS.md")}
 	docs, err := markdownFiles(filepath.Join(root, "docs"))
 	if err != nil {
@@ -245,7 +269,14 @@ func checkMarkdown(root string, report *Report) {
 		return
 	}
 	paths = append(paths, docs...)
+	excluded := make(map[string]bool, len(manifest.ExcludedDocuments))
+	for _, doc := range manifest.ExcludedDocuments {
+		excluded[filepath.Clean(filepath.Join(root, filepath.FromSlash(doc.Path)))] = true
+	}
 	for _, path := range paths {
+		if excluded[filepath.Clean(path)] {
+			continue
+		}
 		data, err := os.ReadFile(path)
 		if err != nil {
 			report.Errors = append(report.Errors, fmt.Sprintf("%s: %v", relative(root, path), err))
@@ -264,6 +295,10 @@ func checkMarkdown(root string, report *Report) {
 				continue
 			}
 			resolved := filepath.Clean(filepath.Join(filepath.Dir(path), filepath.FromSlash(target)))
+			if excluded[resolved] {
+				report.Errors = append(report.Errors, fmt.Sprintf("%s links to excluded document %q", relative(root, path), target))
+				continue
+			}
 			if _, err := os.Stat(resolved); err != nil {
 				report.Errors = append(report.Errors, fmt.Sprintf("%s has broken local link %q", relative(root, path), target))
 			}

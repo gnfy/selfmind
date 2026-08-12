@@ -243,5 +243,7 @@ Read the relevant domain document before editing that domain:
 - English is canonical for public user/developer pairs; Chinese translations
   carry the canonical source hash in the manifest. A changed canonical file
   makes `selfmind docs check` fail until the translation is reviewed.
+- Private documents are declared under `excluded_documents` with a reason.
+  Public documents and generated indexes must never link to an excluded file.
 - `selfmind selfcheck` always runs the documentation contract. Do not bypass or
   weaken this gate to publish a package.

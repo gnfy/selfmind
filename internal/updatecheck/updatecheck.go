@@ -14,6 +14,10 @@ import (
 )
 
 const (
+	// UpdateCommand is the only user-facing installation command. Package
+	// manager details stay behind this command so npm, pnpm, yarn, and bun
+	// installs receive the same guidance.
+	UpdateCommand      = "selfmind update"
 	defaultRegistryURL = "https://registry.npmjs.org/-/package/@selfmind%2Fcli/dist-tags"
 	// RequestTimeout bounds every registry lookup. Startup checks run in the
 	// background, while explicit check/update commands need enough room for
@@ -31,6 +35,10 @@ const (
 	// behavior turned "30s" into 24h — the opposite of the user's intent).
 	minInterval = time.Minute
 )
+
+func AvailableNotice(version string) string {
+	return fmt.Sprintf("Update available: SelfMind %s. Run `%s`.", strings.TrimSpace(version), UpdateCommand)
+}
 
 type Result struct {
 	Current   string    `json:"current"`

@@ -1,6 +1,10 @@
 package cli
 
-import "strings"
+import (
+	"strings"
+
+	"selfmind/internal/updatecheck"
+)
 
 // UpdateNotice is a completed background update-check result the CLI layer
 // forwards into the live TUI session, so the user learns about a release in
@@ -10,9 +14,6 @@ import "strings"
 type UpdateNotice struct {
 	// Version is the available version, e.g. "0.1.0-beta.9".
 	Version string
-	// Command is the suggested install command; empty falls back to
-	// "selfmind update".
-	Command string
 }
 
 // SetUpdateNotices wires the background update-check result channel into the
@@ -45,11 +46,7 @@ func (m *uiModel) maybeAnnounceUpdate() {
 			return
 		}
 		m.updateNoticeAnnounced = version
-		command := strings.TrimSpace(n.Command)
-		if command == "" {
-			command = "selfmind update"
-		}
-		m.addMessage("notice", "⬆ Update available: SelfMind "+version+" → run `"+command+"`")
+		m.addMessage("notice", updatecheck.AvailableNotice(version))
 	default:
 	}
 }

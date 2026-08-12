@@ -50,7 +50,7 @@
 | External watchers | Partial | Durable registration, environment/auth snapshots, restart recovery, idempotent finalization, status commands, and concise notifications exist. Keep validating provider-specific terminal behavior and delivery. |
 | IM delivery | Partial | Weixin and other adapters share durable outbound state, delivery diagnostics, session refresh classification, bounded catch-up, and preferred-channel routing. Live platform behavior remains an external dependency. |
 | TUI | Done | Daemon event stream, stable transcript cells, bottom plan panel, pagers, persistent input history, resume transcript, and build-fingerprint detection exist. |
-| Distribution and updates | Partial | npm platform packages, launcher, setup, update checks, feedback, service management, and macOS launchd support exist. Public beta still requires release evidence. |
+| Distribution and updates | Partial | npm platform packages, launcher, setup, unified `selfmind update` notices, equal-version package refresh, feedback, service management, and macOS launchd support exist. Public beta still requires release evidence. |
 
 `Done` means the capability is implemented and covered at its current personal
 edition boundary. `Partial` means usable with a known evidence gap or platform

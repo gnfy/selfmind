@@ -66,8 +66,7 @@ selfmind
 
 ```sh
 selfmind update check
-npm install --global @selfmind/cli@latest
-selfmind gateway restart --drain
+selfmind update
 ```
 
 预发布版本使用 `selfmind@next`。完整的发布、升级、卸载和反馈隐私规则见

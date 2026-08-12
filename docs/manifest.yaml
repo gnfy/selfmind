@@ -53,7 +53,7 @@ documents:
     state: current
     language: zh-CN
     translation_of: docs/command-reference.md
-    source_hash: 293309d8da4a254c
+    source_hash: ce53b6e9fe73caf6
   - path: docs/config-reference.md
     title: Configuration Reference
     class: guide
@@ -67,7 +67,7 @@ documents:
     state: current
     language: zh-CN
     translation_of: docs/config-reference.md
-    source_hash: 686d17a87dd6ca3c
+    source_hash: a9bcbf39f552633f
   - path: docs/context-lifecycle.zh-CN.md
     title: 上下文生命周期
     class: reference

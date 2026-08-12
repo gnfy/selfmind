@@ -109,6 +109,12 @@ process exits. On macOS, launchd observes the clean
 exit and starts the newly installed version. The CLI verifies the daemon build
 fingerprint so an old daemon cannot look healthy after an upgrade.
 
+Running `selfmind update` also refreshes an equal-version npm release. This
+restores package contents after a developer temporarily replaces the staged
+binary without requiring the person to know which package manager owns the
+launcher. A running build newer than the selected dist-tag is not downgraded
+unless `--force` is explicit.
+
 Before promoting the first stable macOS release, run this smoke test on a real
 Apple Silicon Mac:
 

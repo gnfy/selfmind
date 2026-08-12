@@ -527,6 +527,10 @@ feedback:
 
 `selfmind update check` reads npm registry dist-tags and only reports the
 available version. It never replaces the running binary.
+`selfmind update` is the single supported installation command shown by update
+notices. It installs or refreshes the selected npm release, verifies the
+launcher, and drains/restarts a running daemon. An equal version is refreshed;
+a newer local build is preserved unless `--force` is explicit.
 
 `selfmind feedback` writes a private, redacted local report by default.
 `selfmind feedback --send "description"` uses the authenticated GitHub CLI to

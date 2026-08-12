@@ -17,12 +17,13 @@ type ChatRequest struct {
 
 // Message is one conversation entry.
 type Message struct {
-	Role         string
-	Content      string
-	MultiContent []ContentPart
-	Name         string
-	ToolCallID   string
-	ToolCalls    []ToolCall
+	Role             string
+	Content          string
+	ReasoningContent string
+	MultiContent     []ContentPart
+	Name             string
+	ToolCallID       string
+	ToolCalls        []ToolCall
 }
 
 // ContentPart is one multimodal content block.
@@ -46,7 +47,9 @@ type ProviderQuirks struct {
 	ToolSchema        string
 	SystemMessageMode string
 	ThinkingMode      string
+	UserIdentityField string
 	UserAgent         string
+	HTTPVersion       string
 	DisableHTTP2      bool
 	// PromptCache opts a provider into explicit prompt-cache breakpoints
 	// (Anthropic cache_control). Off by default: request bytes must be
@@ -59,10 +62,11 @@ type ProviderQuirks struct {
 
 // ChatResponse is the unified response shape.
 type ChatResponse struct {
-	Content      string
-	ToolCalls    []ToolCall
-	Usage        UsageStats
-	FinishReason string
+	Content          string
+	ReasoningContent string
+	ToolCalls        []ToolCall
+	Usage            UsageStats
+	FinishReason     string
 }
 
 type ToolCall struct {
@@ -74,11 +78,15 @@ type ToolCall struct {
 type UsageStats struct {
 	InputTokens  int `json:"input_tokens"`
 	OutputTokens int `json:"output_tokens"`
-	// Prompt-cache accounting (Anthropic-style): tokens served from the
-	// provider prompt cache and tokens written into it. InputTokens stays the
-	// logical input total; billed input is InputTokens - CacheReadInputTokens.
+	// Prompt-cache accounting. InputTokens stays the logical input total;
+	// CacheMissInputTokens is the full-price input when the provider reports it.
 	CacheReadInputTokens     int `json:"cache_read_input_tokens"`
+	CacheMissInputTokens     int `json:"cache_miss_input_tokens"`
 	CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
+	ReasoningOutputTokens    int `json:"reasoning_output_tokens"`
+	// CacheUsageReported distinguishes a real zero hit from a transport that
+	// does not expose cache read/miss accounting.
+	CacheUsageReported bool `json:"cache_usage_reported,omitempty"`
 	// CacheCreationReported distinguishes a real zero from a transport that
 	// does not expose cache-write accounting (for example Responses API).
 	CacheCreationReported bool `json:"cache_creation_reported,omitempty"`
@@ -86,24 +94,25 @@ type UsageStats struct {
 
 // StreamEvent is one streaming response event.
 type StreamEvent struct {
-	EventID         string
-	Cursor          int64
-	LiveSeq         uint64
-	TaskID          string
-	RunID           string
-	Durability      string
-	Content         string
-	ToolCalls       []ToolCall
-	Usage           *UsageStats
-	FinishReason    string
-	Err             error
-	EventType       string
-	ToolName        string
-	ToolCallID      string
-	ToolArgs        string
-	ToolResult      string
-	DurationSeconds float64
-	Payload         map[string]interface{}
+	EventID          string
+	Cursor           int64
+	LiveSeq          uint64
+	TaskID           string
+	RunID            string
+	Durability       string
+	Content          string
+	ReasoningContent string
+	ToolCalls        []ToolCall
+	Usage            *UsageStats
+	FinishReason     string
+	Err              error
+	EventType        string
+	ToolName         string
+	ToolCallID       string
+	ToolArgs         string
+	ToolResult       string
+	DurationSeconds  float64
+	Payload          map[string]interface{}
 }
 
 // Provider is the LLM invocation interface.

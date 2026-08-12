@@ -23,6 +23,8 @@ func (a *App) runGatewayClientIfRequested() (bool, int) {
 		switch a.args[1] {
 		case "status":
 			return true, a.sendGatewayMessage("/status")
+		case "usage":
+			return true, a.sendGatewayMessage("/diag context")
 		case "tasks":
 			// Forward the view variant (done|archived|all) so `selfmind tasks
 			// done` matches the gateway /tasks grammar instead of dropping it.

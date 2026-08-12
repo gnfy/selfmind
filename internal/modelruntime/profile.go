@@ -1,6 +1,7 @@
 package modelruntime
 
 import (
+	"fmt"
 	"sort"
 	"strings"
 )
@@ -10,6 +11,16 @@ const (
 	ProtocolOpenAICompatible = "openai_compatible"
 	ProtocolAnthropic        = "anthropic_messages"
 	ProtocolResponses        = "codex_responses"
+)
+
+const (
+	UserIdentityAuto      = "auto"
+	UserIdentityOpenAI    = "user_id"
+	UserIdentityAnthropic = "metadata.user_id"
+	UserIdentityOff       = "off"
+	HTTPVersionAuto       = "auto"
+	HTTPVersion1          = "http1"
+	HTTPVersion2          = "http2"
 )
 
 const (
@@ -41,24 +52,86 @@ const (
 	ThinkingModeKimi      = "kimi"
 	ThinkingModeMiniMax   = "minimax"
 	ThinkingModeOpenAI    = "openai"
+	ThinkingModeDeepSeek  = "deepseek"
 	ThinkingModeOmit      = "omit"
 )
 
 // ProviderQuirks describes provider-specific wire behavior in declarative form.
 // Transports consume these knobs instead of scattering provider-name conditionals.
 type ProviderQuirks struct {
-	AuthHeader             string
-	ToolSchema             string
-	SystemMessageMode      string
-	ThinkingMode           string
-	UserAgent              string
-	DisableHTTP2           bool
-	PromptCache            bool
-	ResponsesStoreFalse    bool
-	ResponsesRequireStream bool
-	SupportsTools          bool
-	SupportsStreaming      bool
-	SupportsVision         bool
+	AuthHeader                string
+	ToolSchema                string
+	SystemMessageMode         string
+	ThinkingMode              string
+	UserIdentityField         string
+	UserAgent                 string
+	HTTPVersion               string
+	DisableHTTP2              bool
+	PromptCache               bool
+	PromptCacheSet            bool
+	ResponsesStoreFalse       bool
+	ResponsesStoreFalseSet    bool
+	ResponsesRequireStream    bool
+	ResponsesRequireStreamSet bool
+	SupportsTools             bool
+	SupportsStreaming         bool
+	SupportsVision            bool
+}
+
+// ValidateProviderQuirks rejects misspelled compatibility values before an
+// adapter can silently ignore them. Protocol applicability is reported by
+// QuirkDiagnostics because existing custom endpoints may intentionally use a
+// provider-specific extension on a compatible wire protocol.
+func ValidateProviderQuirks(q ProviderQuirks) error {
+	if !oneOf(q.AuthHeader, "", AuthHeaderAuto, AuthHeaderBearer, AuthHeaderXAPIKey, "x-api-key") {
+		return fmt.Errorf("unsupported auth_header quirk %q", q.AuthHeader)
+	}
+	if !oneOf(q.ToolSchema, "", ToolSchemaOpenAI, ToolSchemaAnthropic, ToolSchemaMoonshot) {
+		return fmt.Errorf("unsupported tool_schema quirk %q", q.ToolSchema)
+	}
+	if !oneOf(q.ThinkingMode, "", ThinkingModeAnthropic, ThinkingModeKimi, ThinkingModeMiniMax, ThinkingModeOpenAI, ThinkingModeDeepSeek, ThinkingModeOmit) {
+		return fmt.Errorf("unsupported thinking_mode quirk %q", q.ThinkingMode)
+	}
+	if !oneOf(q.UserIdentityField, "", UserIdentityAuto, UserIdentityOpenAI, UserIdentityAnthropic, UserIdentityOff) {
+		return fmt.Errorf("unsupported user_identity_field quirk %q", q.UserIdentityField)
+	}
+	if !oneOf(q.HTTPVersion, "", HTTPVersionAuto, HTTPVersion1, HTTPVersion2) {
+		return fmt.Errorf("unsupported http_version quirk %q", q.HTTPVersion)
+	}
+	return nil
+}
+
+// QuirkDiagnostics explains compatibility settings that are accepted for a
+// migration window but do not apply to the selected wire protocol.
+func QuirkDiagnostics(protocol string, q ProviderQuirks) []string {
+	protocol = NormalizeProtocol(protocol)
+	var out []string
+	if strings.TrimSpace(q.SystemMessageMode) != "" {
+		out = append(out, "system_message_mode is deprecated and ignored; protocol adapters own system-message placement")
+	}
+	if q.PromptCache && protocol != ProtocolAnthropic {
+		out = append(out, "prompt_cache only controls Anthropic cache_control; this protocol may still provide automatic server-side caching")
+	}
+	if (q.ResponsesStoreFalse || q.ResponsesRequireStream) && protocol != ProtocolResponses {
+		out = append(out, "responses_* quirks are ignored outside the Responses protocol")
+	}
+	if q.UserIdentityField == UserIdentityAnthropic && protocol != ProtocolAnthropic {
+		out = append(out, "metadata.user_id is only emitted by the Anthropic Messages protocol")
+	}
+	if q.UserIdentityField == UserIdentityOpenAI && protocol == ProtocolAnthropic {
+		out = append(out, "user_id is an OpenAI-compatible field; use auto or metadata.user_id for Anthropic Messages")
+	}
+	return out
+}
+
+func oneOf(value string, values ...string) bool {
+	value = strings.ToLower(strings.TrimSpace(value))
+	for _, candidate := range values {
+		if value == strings.ToLower(strings.TrimSpace(candidate)) {
+			return true
+		}
+	}
+	return false
 }
 
 // ProviderProfile describes one model provider without owning credentials or
@@ -103,8 +176,8 @@ func openAIQuirks() ProviderQuirks {
 	return ProviderQuirks{
 		AuthHeader:        AuthHeaderBearer,
 		ToolSchema:        ToolSchemaOpenAI,
-		SystemMessageMode: SystemMessageInline,
 		ThinkingMode:      ThinkingModeOpenAI,
+		HTTPVersion:       "auto",
 		SupportsTools:     true,
 		SupportsStreaming: true,
 		SupportsVision:    true,
@@ -115,8 +188,8 @@ func anthropicQuirks() ProviderQuirks {
 	return ProviderQuirks{
 		AuthHeader:        AuthHeaderXAPIKey,
 		ToolSchema:        ToolSchemaAnthropic,
-		SystemMessageMode: SystemMessageTopLevel,
 		ThinkingMode:      ThinkingModeAnthropic,
+		HTTPVersion:       "auto",
 		SupportsTools:     true,
 		SupportsStreaming: true,
 		SupportsVision:    true,
@@ -145,7 +218,15 @@ func kimiQuirks() ProviderQuirks {
 	// HTTP/1.1 path. Go's default client eagerly negotiates HTTP/2, which this
 	// endpoint can close with unexpected EOF on POST/stream requests.
 	q.DisableHTTP2 = true
+	q.HTTPVersion = "http1"
 	q.SupportsVision = false
+	return q
+}
+
+func deepSeekQuirks() ProviderQuirks {
+	q := openAIQuirks()
+	q.ThinkingMode = ThinkingModeDeepSeek
+	q.UserIdentityField = "user_id"
 	return q
 }
 
@@ -214,6 +295,11 @@ func BuiltinProfiles() []ProviderProfile {
 			ID: "codex-cli", DisplayName: "Codex CLI", Aliases: []string{"openai-codex", "codex"},
 			Protocol: ProtocolResponses, AuthType: AuthExternalOAuth,
 			BaseURL: "https://chatgpt.com/backend-api/codex", ExternalSource: "codex-cli",
+			Headers: map[string]string{
+				"originator":  "codex_cli_rs",
+				"OpenAI-Beta": "responses=experimental",
+				"User-Agent":  "codex_cli_rs/0.142.2",
+			},
 			ModelList:      ModelListCodex,
 			FallbackModels: []string{"gpt-5.5", "gpt-5.3-codex"},
 			// Omit reasoning by default so the selected model/provider owns its
@@ -274,8 +360,10 @@ func BuiltinProfiles() []ProviderProfile {
 			Protocol: ProtocolOpenAICompatible, AuthType: AuthAPIKey,
 			BaseURL: "https://api.deepseek.com/v1", APIKeyEnvVars: []string{"DEEPSEEK_API_KEY"},
 			BaseURLEnvVar: "DEEPSEEK_BASE_URL", ModelList: ModelListOpenAICompatible,
-			FallbackModels: []string{"deepseek-chat", "deepseek-reasoner"},
-			Quirks:         openAIQuirks(),
+			FallbackModels:  []string{"deepseek-v4-flash", "deepseek-v4-pro"},
+			ReasoningEffort: "high",
+			Thinking:        map[string]interface{}{"type": "enabled"},
+			Quirks:          deepSeekQuirks(),
 		},
 		{
 			ID: "zai", DisplayName: "Z.AI / GLM", Aliases: []string{"glm", "z-ai", "zhipu"},

@@ -10,10 +10,11 @@ import (
 
 var sensitivePatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)(authorization\s*[:=]\s*Bearer\s+)[A-Za-z0-9._~+/=-]{8,}`),
-	regexp.MustCompile(`(?i)(api[_-]?key|token|secret|password|credential|authorization)\s*[:=]\s*["']?([^\s"',}]+)`),
 	regexp.MustCompile(`(?i)(Bearer\s+)[A-Za-z0-9._~+/=-]{12,}`),
 	regexp.MustCompile(`sk-[A-Za-z0-9_-]{16,}`),
 }
+
+var sensitiveAssignmentPattern = regexp.MustCompile(`(?i)((?:[A-Za-z0-9]+[_-])*(?:api[_-]?key|token|secret|password|credential|authorization))(\s*[:=]\s*)(["']?)([^\s"',}]+)`)
 
 // SecretRegistry holds exact runtime secret values that cannot be recognized
 // reliably by shape alone (for example an opaque gateway token). It is shared
@@ -83,10 +84,28 @@ func RedactSensitive(value string) string {
 	}
 	out := defaultSecretRegistry.Redact(value)
 	out = sensitivePatterns[0].ReplaceAllString(out, `${1}[REDACTED]`)
-	out = sensitivePatterns[1].ReplaceAllString(out, `$1=[REDACTED]`)
-	out = sensitivePatterns[2].ReplaceAllString(out, `${1}[REDACTED]`)
-	out = sensitivePatterns[3].ReplaceAllString(out, `sk-[REDACTED]`)
+	out = redactSensitiveAssignments(out)
+	out = sensitivePatterns[1].ReplaceAllString(out, `${1}[REDACTED]`)
+	out = sensitivePatterns[2].ReplaceAllString(out, `sk-[REDACTED]`)
 	return out
+}
+
+func redactSensitiveAssignments(value string) string {
+	return sensitiveAssignmentPattern.ReplaceAllStringFunc(value, func(match string) string {
+		parts := sensitiveAssignmentPattern.FindStringSubmatch(match)
+		if len(parts) != 5 || isCredentialReference(parts[4]) ||
+			(strings.EqualFold(parts[1], "authorization") && strings.EqualFold(parts[4], "bearer")) {
+			return match
+		}
+		return parts[1] + parts[2] + parts[3] + "[REDACTED]"
+	})
+}
+
+func isCredentialReference(value string) bool {
+	value = strings.TrimSpace(value)
+	return strings.HasPrefix(value, "$(") || strings.HasPrefix(value, "${") ||
+		strings.HasPrefix(value, "$") || strings.HasPrefix(value, "`") ||
+		(strings.HasPrefix(value, "%") && strings.HasSuffix(value, "%"))
 }
 
 // RedactionMiddleware is the single tool-result exit boundary. The redacted

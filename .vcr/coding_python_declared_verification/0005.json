@@ -1,0 +1,115 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "reasoning_content": "The"
+    },
+    {
+      "reasoning_content": " test"
+    },
+    {
+      "reasoning_content": " passes"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " The"
+    },
+    {
+      "reasoning_content": " task"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " done"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Let"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " record"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " outcome"
+    },
+    {
+      "reasoning_content": " with"
+    },
+    {
+      "reasoning_content": " finish"
+    },
+    {
+      "reasoning_content": "_run"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "content": "The"
+    },
+    {
+      "content": " verification"
+    },
+    {
+      "content": " passes"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": " Let"
+    },
+    {
+      "content": " me"
+    },
+    {
+      "content": " record"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " task"
+    },
+    {
+      "content": " outcome"
+    },
+    {
+      "content": "."
+    },
+    {
+      "finish_reason": "tool_calls"
+    },
+    {
+      "usage": {
+        "input_tokens": 9223,
+        "output_tokens": 232,
+        "cache_read_input_tokens": 9088,
+        "cache_miss_input_tokens": 135,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 18,
+        "cache_usage_reported": true
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_00_jI951SNoSjzlbMI2sD2H3608",
+          "Function": "finish_run",
+          "Args": "{\"status\": \"done\", \"summary\": \"Fixed the failing Python implementation: multiply() was returning a + b instead of a * b. All tests pass.\", \"done\": [\"Inspected project: calculator.py, tests/test_calculator.py, Makefile\", \"Fixed multiply() to return a * b instead of a + b\", \"Ran declared check `make test` exactly once — 1 test passed\"], \"tests\": [\"make test (python3 -m unittest discover -s tests -v) — OK, 1 test passed\"], \"files\": [\"calculator.py\"]}"
+        }
+      ]
+    }
+  ]
+}

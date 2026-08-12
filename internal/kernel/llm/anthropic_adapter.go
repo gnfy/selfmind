@@ -22,6 +22,8 @@ type AnthropicAdapter struct {
 	BaseURL         string
 	MaxTokens       int
 	Headers         map[string]string
+	ExtraBody       map[string]interface{}
+	ExtraQuery      map[string]interface{}
 	ReasoningEffort string
 	Thinking        map[string]interface{}
 	ServiceTier     string
@@ -40,12 +42,13 @@ type AnthropicRequest struct {
 	// SystemPrompt is a plain string by default. With the PromptCache quirk it
 	// becomes a block list so the last block can carry a cache_control
 	// breakpoint; both shapes are valid Anthropic `system` payloads.
-	SystemPrompt interface{}     `json:"system,omitempty"`
-	Tools        []AnthropicTool `json:"tools,omitempty"`
-	ToolChoice   interface{}     `json:"tool_choice,omitempty"`
-	Thinking     interface{}     `json:"thinking,omitempty"`
-	ServiceTier  string          `json:"service_tier,omitempty"`
-	Stream       bool            `json:"stream,omitempty"`
+	SystemPrompt interface{}            `json:"system,omitempty"`
+	Tools        []AnthropicTool        `json:"tools,omitempty"`
+	ToolChoice   interface{}            `json:"tool_choice,omitempty"`
+	Thinking     interface{}            `json:"thinking,omitempty"`
+	Metadata     map[string]interface{} `json:"metadata,omitempty"`
+	ServiceTier  string                 `json:"service_tier,omitempty"`
+	Stream       bool                   `json:"stream,omitempty"`
 }
 
 type AnthropicTool struct {
@@ -94,9 +97,9 @@ func (a *AnthropicAdapter) GetModel() string {
 }
 
 func (a *AnthropicAdapter) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, error) {
-	anthropicReq := a.requestFromChat(req, false)
+	anthropicReq := a.requestFromChatContext(ctx, req, false)
 
-	body, err := json.Marshal(anthropicReq)
+	body, err := marshalWithExtraBody(anthropicReq, a.ExtraBody)
 	if err != nil {
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}
@@ -214,9 +217,9 @@ func decodeAnthropicContent(raw json.RawMessage) ([]anthropicContentBlock, strin
 }
 
 func (a *AnthropicAdapter) StreamChat(ctx context.Context, req ChatRequest) (<-chan StreamEvent, error) {
-	anthropicReq := a.requestFromChat(req, true)
+	anthropicReq := a.requestFromChatContext(ctx, req, true)
 
-	body, err := json.Marshal(anthropicReq)
+	body, err := marshalWithExtraBody(anthropicReq, a.ExtraBody)
 	if err != nil {
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}
@@ -248,7 +251,11 @@ func (a *AnthropicAdapter) StreamChat(ctx context.Context, req ChatRequest) (<-c
 }
 
 func (a *AnthropicAdapter) doAnthropicRequest(ctx context.Context, body []byte, apiKey string) (*http.Response, error) {
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, a.BaseURL, bytes.NewReader(body))
+	requestURL, err := urlWithExtraQuery(a.BaseURL, a.ExtraQuery)
+	if err != nil {
+		return nil, fmt.Errorf("create request URL: %w", err)
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, requestURL, bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
 	}
@@ -432,6 +439,10 @@ func isAnthropicOAuthToken(token string) bool {
 }
 
 func (a *AnthropicAdapter) requestFromChat(req ChatRequest, stream bool) AnthropicRequest {
+	return a.requestFromChatContext(context.Background(), req, stream)
+}
+
+func (a *AnthropicAdapter) requestFromChatContext(ctx context.Context, req ChatRequest, stream bool) AnthropicRequest {
 	anthropicReq := AnthropicRequest{
 		Model:     a.Model,
 		MaxTokens: firstPositiveInt(req.MaxTokens, a.MaxTokens, 1024),
@@ -450,6 +461,10 @@ func (a *AnthropicAdapter) requestFromChat(req ChatRequest, stream bool) Anthrop
 		}
 	}
 	anthropicReq.Thinking = a.thinkingForRequest(req)
+	if budget := anthropicThinkingBudget(anthropicReq.Thinking); budget > 0 && anthropicReq.MaxTokens <= budget {
+		anthropicReq.MaxTokens = budget + 1024
+	}
+	a.applyProviderIdentity(ctx, &anthropicReq)
 	anthropicReq.ServiceTier = a.serviceTierForRequest(req)
 	systemPrompt := req.SystemPrompt
 	systemParts := []string{}
@@ -608,11 +623,7 @@ func (a *AnthropicAdapter) setHeaders(req *http.Request, apiKey string) {
 	case "x_api_key", "x-api-key":
 		req.Header.Set("x-api-key", apiKey)
 	default:
-		if isMiniMaxAnthropicEndpoint(a.BaseURL) {
-			req.Header.Set("Authorization", "Bearer "+apiKey)
-		} else {
-			req.Header.Set("x-api-key", apiKey)
-		}
+		req.Header.Set("x-api-key", apiKey)
 	}
 	if req.Header.Get("x-api-key") != "" {
 		if isAnthropicOAuthToken(apiKey) {
@@ -623,8 +634,6 @@ func (a *AnthropicAdapter) setHeaders(req *http.Request, apiKey string) {
 	}
 	if userAgent := strings.TrimSpace(a.Quirks.UserAgent); userAgent != "" && !hasHeader(a.Headers, "User-Agent") {
 		req.Header.Set("User-Agent", userAgent)
-	} else if isKimiCodingEndpoint(a.BaseURL) && !hasHeader(a.Headers, "User-Agent") {
-		req.Header.Set("User-Agent", "claude-code/0.1.0")
 	}
 	req.Header.Set("anthropic-version", "2023-06-01")
 	req.Header.Set("content-type", "application/json")
@@ -636,7 +645,7 @@ func (a *AnthropicAdapter) setHeaders(req *http.Request, apiKey string) {
 }
 
 func (a *AnthropicAdapter) httpClient() *http.Client {
-	if !a.Quirks.DisableHTTP2 && !isKimiCodingEndpoint(a.BaseURL) {
+	if !a.Quirks.DisableHTTP2 && !strings.EqualFold(strings.TrimSpace(a.Quirks.HTTPVersion), "http1") {
 		return ProviderHTTPClient()
 	}
 	transport := newProviderTransport()
@@ -656,9 +665,6 @@ func (a *AnthropicAdapter) thinkingForRequest(req ChatRequest) interface{} {
 	case "omit", "kimi":
 		return nil
 	}
-	if isKimiCodingEndpoint(a.BaseURL) {
-		return nil
-	}
 	if req.Options != nil {
 		if value, ok := req.Options["thinking"]; ok {
 			return value
@@ -667,11 +673,8 @@ func (a *AnthropicAdapter) thinkingForRequest(req ChatRequest) interface{} {
 	if len(a.Thinking) > 0 {
 		return a.Thinking
 	}
-	isMiniMax := a.Quirks.ThinkingMode == "minimax" || isMiniMaxAnthropicEndpoint(a.BaseURL)
-	if !isMiniMax {
-		return nil
-	}
-	if strings.EqualFold(a.Model, "MiniMax-M3") && requestRole(req) == string(RoleCodingAgent) {
+	mode := strings.ToLower(strings.TrimSpace(a.Quirks.ThinkingMode))
+	if mode == "minimax" && strings.EqualFold(a.Model, "MiniMax-M3") && requestRole(req) == string(RoleCodingAgent) {
 		return map[string]interface{}{"type": "adaptive"}
 	}
 	effort := a.ReasoningEffort
@@ -680,13 +683,38 @@ func (a *AnthropicAdapter) thinkingForRequest(req ChatRequest) interface{} {
 			effort = value
 		}
 	}
-	if effort != "" && strings.HasPrefix(strings.ToLower(a.Model), "minimax-m2") {
+	if effort == "" || strings.EqualFold(strings.TrimSpace(effort), "auto") {
+		return nil
+	}
+	if mode == "anthropic" || (mode == "minimax" && strings.HasPrefix(strings.ToLower(a.Model), "minimax-m2")) {
 		return map[string]interface{}{
 			"type":          "enabled",
 			"budget_tokens": thinkingBudget(effort),
 		}
 	}
 	return nil
+}
+
+func (a *AnthropicAdapter) applyProviderIdentity(ctx context.Context, req *AnthropicRequest) {
+	if req == nil {
+		return
+	}
+	field := strings.ToLower(strings.TrimSpace(a.Quirks.UserIdentityField))
+	if field != "auto" && field != "metadata.user_id" {
+		return
+	}
+	if userID := StableProviderUserID(ctx); userID != "" {
+		req.Metadata = map[string]interface{}{"user_id": userID}
+	}
+}
+
+func anthropicThinkingBudget(thinking interface{}) int {
+	values, ok := thinking.(map[string]interface{})
+	if !ok {
+		return 0
+	}
+	budget, _ := intOption(values["budget_tokens"])
+	return budget
 }
 
 func (a *AnthropicAdapter) serviceTierForRequest(req ChatRequest) string {
@@ -711,10 +739,8 @@ func anthropicTools(tools []ToolDefinition) []AnthropicTool {
 }
 
 func (a *AnthropicAdapter) usesMoonshotSchema(req ChatRequest) bool {
-	if strings.EqualFold(strings.TrimSpace(a.Quirks.ToolSchema), "moonshot") {
-		return true
-	}
-	return isKimiFamilyEndpoint(a.BaseURL, firstNonEmptyString(req.Model, a.Model))
+	_ = req
+	return strings.EqualFold(strings.TrimSpace(a.Quirks.ToolSchema), "moonshot")
 }
 
 func sanitizeMoonshotToolDefinitions(tools []ToolDefinition) []ToolDefinition {
@@ -984,6 +1010,8 @@ func thinkingBudget(effort string) int {
 		return 4096
 	case "high":
 		return 16384
+	case "xhigh", "max":
+		return 32768
 	default:
 		return 8192
 	}
@@ -997,33 +1025,6 @@ func requestRole(req ChatRequest) string {
 		return role
 	}
 	return ""
-}
-
-func isMiniMaxAnthropicEndpoint(baseURL string) bool {
-	lower := strings.ToLower(strings.TrimSpace(baseURL))
-	return strings.Contains(lower, "api.minimax.io") || strings.Contains(lower, "api.minimaxi.com")
-}
-
-func isKimiCodingEndpoint(baseURL string) bool {
-	lower := strings.ToLower(strings.TrimSpace(baseURL))
-	return strings.Contains(lower, "api.kimi.com/coding")
-}
-
-func isKimiFamilyEndpoint(baseURL, model string) bool {
-	lowerURL := strings.ToLower(strings.TrimSpace(baseURL))
-	if strings.Contains(lowerURL, "api.kimi.com") || strings.Contains(lowerURL, "moonshot.ai") || strings.Contains(lowerURL, "moonshot.cn") {
-		return true
-	}
-	lowerModel := strings.ToLower(strings.TrimSpace(model))
-	if idx := strings.LastIndex(lowerModel, "/"); idx >= 0 {
-		lowerModel = lowerModel[idx+1:]
-	}
-	for _, prefix := range []string{"kimi-", "kimi_", "moonshot-", "moonshot_", "k1.", "k1-", "k2.", "k2-", "k25"} {
-		if strings.HasPrefix(lowerModel, prefix) {
-			return true
-		}
-	}
-	return false
 }
 
 func hasHeader(headers map[string]string, name string) bool {

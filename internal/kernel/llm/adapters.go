@@ -20,6 +20,8 @@ type OpenAIAdapter struct {
 	Model           string
 	BaseURL         string
 	Headers         map[string]string
+	ExtraBody       map[string]interface{}
+	ExtraQuery      map[string]interface{}
 	MaxTokens       int
 	ReasoningEffort string
 	Thinking        map[string]interface{}
@@ -29,11 +31,12 @@ type OpenAIAdapter struct {
 
 // OpenAIMessage OpenAI 格式的 message
 type OpenAIMessage struct {
-	Role       string           `json:"role"`
-	Content    interface{}      `json:"content"` // string or []interface{}
-	Name       string           `json:"name,omitempty"`
-	ToolCallID string           `json:"tool_call_id,omitempty"`
-	ToolCalls  []OpenAIToolCall `json:"tool_calls,omitempty"`
+	Role             string           `json:"role"`
+	Content          interface{}      `json:"content"` // string or []interface{}
+	ReasoningContent string           `json:"reasoning_content,omitempty"`
+	Name             string           `json:"name,omitempty"`
+	ToolCallID       string           `json:"tool_call_id,omitempty"`
+	ToolCalls        []OpenAIToolCall `json:"tool_calls,omitempty"`
 }
 
 type OpenAIToolCall struct {
@@ -68,6 +71,7 @@ type OpenAIRequest struct {
 	ReasoningEffort   string                   `json:"reasoning_effort,omitempty"`
 	Thinking          interface{}              `json:"thinking,omitempty"`
 	ServiceTier       string                   `json:"service_tier,omitempty"`
+	UserID            string                   `json:"user_id,omitempty"`
 	Stream            bool                     `json:"stream,omitempty"`
 	StreamOptions     map[string]interface{}   `json:"stream_options,omitempty"`
 }
@@ -76,16 +80,13 @@ type OpenAIRequest struct {
 type OpenAIResponse struct {
 	Choices []struct {
 		Message struct {
-			Content   *string          `json:"content"`
-			ToolCalls []OpenAIToolCall `json:"tool_calls"`
+			Content          *string          `json:"content"`
+			ReasoningContent string           `json:"reasoning_content"`
+			ToolCalls        []OpenAIToolCall `json:"tool_calls"`
 		} `json:"message"`
 		FinishReason string `json:"finish_reason"`
 	} `json:"choices"`
-	Usage struct {
-		PromptTokens     int `json:"prompt_tokens"`
-		CompletionTokens int `json:"completion_tokens"`
-		TotalTokens      int `json:"total_tokens"`
-	} `json:"usage"`
+	Usage openAIStreamUsage `json:"usage"`
 }
 
 func openAIRequestFromChat(model string, req ChatRequest, stream bool) OpenAIRequest {
@@ -137,7 +138,7 @@ func openAIMessageFromLLM(m Message, nativeTools bool) OpenAIMessage {
 		}
 	}
 
-	msg := OpenAIMessage{Role: role, Content: content, Name: m.Name}
+	msg := OpenAIMessage{Role: role, Content: content, ReasoningContent: m.ReasoningContent, Name: m.Name}
 	if role == "assistant" && len(m.ToolCalls) > 0 {
 		msg.ToolCalls = openAIToolCallsFromLLM(m.ToolCalls)
 		if msg.Content == nil {
@@ -257,13 +258,11 @@ func chatResponseFromOpenAI(openaiResp OpenAIResponse) *ChatResponse {
 		content = *openaiResp.Choices[0].Message.Content
 	}
 	return &ChatResponse{
-		Content:      content,
-		ToolCalls:    llmToolCallsFromOpenAI(openaiResp.Choices[0].Message.ToolCalls),
-		FinishReason: openaiResp.Choices[0].FinishReason,
-		Usage: UsageStats{
-			InputTokens:  openaiResp.Usage.PromptTokens,
-			OutputTokens: openaiResp.Usage.CompletionTokens,
-		},
+		Content:          content,
+		ReasoningContent: openaiResp.Choices[0].Message.ReasoningContent,
+		ToolCalls:        llmToolCallsFromOpenAI(openaiResp.Choices[0].Message.ToolCalls),
+		FinishReason:     openaiResp.Choices[0].FinishReason,
+		Usage:            openaiResp.Usage.usageStats(),
 	}
 }
 
@@ -327,9 +326,9 @@ func (a *OpenAIAdapter) GetModel() string {
 func (a *OpenAIAdapter) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, error) {
 	wireReq := a.requestWithQuirks(req)
 	openaiReq := openAIRequestFromChat(a.Model, wireReq, false)
-	a.applyOptions(&openaiReq, wireReq)
+	a.applyOptions(ctx, &openaiReq, wireReq)
 
-	body, err := json.Marshal(openaiReq)
+	body, err := marshalWithExtraBody(openaiReq, a.ExtraBody)
 	if err != nil {
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}
@@ -381,9 +380,9 @@ func (a *OpenAIAdapter) Chat(ctx context.Context, req ChatRequest) (*ChatRespons
 func (a *OpenAIAdapter) StreamChat(ctx context.Context, req ChatRequest) (<-chan StreamEvent, error) {
 	wireReq := a.requestWithQuirks(req)
 	openaiReq := openAIRequestFromChat(a.Model, wireReq, true)
-	a.applyOptions(&openaiReq, wireReq)
+	a.applyOptions(ctx, &openaiReq, wireReq)
 
-	body, err := json.Marshal(openaiReq)
+	body, err := marshalWithExtraBody(openaiReq, a.ExtraBody)
 	if err != nil {
 		return nil, err
 	}
@@ -421,7 +420,11 @@ func (a *OpenAIAdapter) StreamChat(ctx context.Context, req ChatRequest) (<-chan
 }
 
 func (a *OpenAIAdapter) doOpenAIRequest(ctx context.Context, body []byte, apiKey string) (*http.Response, error) {
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, a.BaseURL, bytes.NewReader(body))
+	requestURL, err := urlWithExtraQuery(a.BaseURL, a.ExtraQuery)
+	if err != nil {
+		return nil, err
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, requestURL, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
@@ -470,8 +473,9 @@ func openAIStreamEvents(resp *http.Response) <-chan StreamEvent {
 					var chunk struct {
 						Choices []struct {
 							Delta struct {
-								Content   *string               `json:"content"`
-								ToolCalls []openAIToolCallDelta `json:"tool_calls"`
+								Content          *string               `json:"content"`
+								ReasoningContent *string               `json:"reasoning_content"`
+								ToolCalls        []openAIToolCallDelta `json:"tool_calls"`
 							} `json:"delta"`
 							FinishReason string `json:"finish_reason"`
 						} `json:"choices"`
@@ -484,6 +488,9 @@ func openAIStreamEvents(resp *http.Response) <-chan StreamEvent {
 					if len(chunk.Choices) > 0 && chunk.Choices[0].Delta.Content != nil && *chunk.Choices[0].Delta.Content != "" {
 						ch <- StreamEvent{Content: *chunk.Choices[0].Delta.Content}
 					}
+					if len(chunk.Choices) > 0 && chunk.Choices[0].Delta.ReasoningContent != nil && *chunk.Choices[0].Delta.ReasoningContent != "" {
+						ch <- StreamEvent{ReasoningContent: *chunk.Choices[0].Delta.ReasoningContent}
+					}
 					if len(chunk.Choices) > 0 && len(chunk.Choices[0].Delta.ToolCalls) > 0 {
 						accumulateOpenAIToolDeltas(toolDeltas, chunk.Choices[0].Delta.ToolCalls)
 					}
@@ -492,7 +499,7 @@ func openAIStreamEvents(resp *http.Response) <-chan StreamEvent {
 					}
 					if chunk.Usage != nil {
 						stats := chunk.Usage.usageStats()
-						if stats.InputTokens != 0 || stats.OutputTokens != 0 {
+						if stats != (UsageStats{}) {
 							ch <- StreamEvent{Usage: &stats}
 						}
 					}
@@ -510,10 +517,18 @@ func openAIStreamEvents(resp *http.Response) <-chan StreamEvent {
 }
 
 type openAIStreamUsage struct {
-	PromptTokens     int `json:"prompt_tokens"`
-	CompletionTokens int `json:"completion_tokens"`
-	InputTokens      int `json:"input_tokens"`
-	OutputTokens     int `json:"output_tokens"`
+	PromptTokens        int  `json:"prompt_tokens"`
+	CompletionTokens    int  `json:"completion_tokens"`
+	InputTokens         int  `json:"input_tokens"`
+	OutputTokens        int  `json:"output_tokens"`
+	PromptCacheHit      *int `json:"prompt_cache_hit_tokens"`
+	PromptCacheMiss     *int `json:"prompt_cache_miss_tokens"`
+	PromptTokensDetails *struct {
+		CachedTokens *int `json:"cached_tokens"`
+	} `json:"prompt_tokens_details"`
+	CompletionTokensDetails *struct {
+		ReasoningTokens int `json:"reasoning_tokens"`
+	} `json:"completion_tokens_details"`
 }
 
 func (u openAIStreamUsage) usageStats() UsageStats {
@@ -525,10 +540,37 @@ func (u openAIStreamUsage) usageStats() UsageStats {
 	if out == 0 {
 		out = u.CompletionTokens
 	}
-	return UsageStats{InputTokens: in, OutputTokens: out}
+	stats := UsageStats{InputTokens: in, OutputTokens: out}
+	if u.PromptCacheHit != nil || u.PromptCacheMiss != nil {
+		stats.CacheUsageReported = true
+		if u.PromptCacheHit != nil {
+			stats.CacheReadInputTokens = maxUsageInt(*u.PromptCacheHit, 0)
+		}
+		if u.PromptCacheMiss != nil {
+			stats.CacheMissInputTokens = maxUsageInt(*u.PromptCacheMiss, 0)
+		}
+		if stats.InputTokens == 0 {
+			stats.InputTokens = stats.CacheReadInputTokens + stats.CacheMissInputTokens
+		}
+	} else if u.PromptTokensDetails != nil && u.PromptTokensDetails.CachedTokens != nil {
+		stats.CacheUsageReported = true
+		stats.CacheReadInputTokens = maxUsageInt(*u.PromptTokensDetails.CachedTokens, 0)
+		stats.CacheMissInputTokens = maxUsageInt(stats.InputTokens-stats.CacheReadInputTokens, 0)
+	}
+	if u.CompletionTokensDetails != nil {
+		stats.ReasoningOutputTokens = maxUsageInt(u.CompletionTokensDetails.ReasoningTokens, 0)
+	}
+	return stats
 }
 
-func (a *OpenAIAdapter) applyOptions(openaiReq *OpenAIRequest, req ChatRequest) {
+func maxUsageInt(value, minimum int) int {
+	if value < minimum {
+		return minimum
+	}
+	return value
+}
+
+func (a *OpenAIAdapter) applyOptions(ctx context.Context, openaiReq *OpenAIRequest, req ChatRequest) {
 	if req.MaxTokens > 0 {
 		openaiReq.MaxTokens = req.MaxTokens
 	} else if a.MaxTokens > 0 {
@@ -537,20 +579,55 @@ func (a *OpenAIAdapter) applyOptions(openaiReq *OpenAIRequest, req ChatRequest) 
 	openaiReq.ReasoningEffort = a.ReasoningEffort
 	openaiReq.Thinking = a.Thinking
 	openaiReq.ServiceTier = a.ServiceTier
-	if req.Options == nil {
+	if req.Options != nil {
+		if value, ok := req.Options["reasoning_effort"].(string); ok && value != "" {
+			openaiReq.ReasoningEffort = value
+		}
+		if value, ok := req.Options["thinking"]; ok {
+			openaiReq.Thinking = value
+		}
+		if value, ok := req.Options["service_tier"].(string); ok && value != "" {
+			openaiReq.ServiceTier = value
+		}
+		if value, ok := intOption(req.Options["max_tokens"]); ok && value > 0 {
+			openaiReq.MaxTokens = value
+		}
+	}
+	a.applyProviderRequestOptions(ctx, openaiReq)
+}
+
+func (a *OpenAIAdapter) applyProviderRequestOptions(ctx context.Context, openaiReq *OpenAIRequest) {
+	if openaiReq == nil {
 		return
 	}
-	if value, ok := req.Options["reasoning_effort"].(string); ok && value != "" {
-		openaiReq.ReasoningEffort = value
+	if strings.EqualFold(strings.TrimSpace(a.Quirks.ThinkingMode), "deepseek") {
+		if !thinkingOptionConfigured(openaiReq.Thinking) {
+			openaiReq.Thinking = map[string]interface{}{"type": "enabled"}
+		}
+		switch strings.ToLower(strings.TrimSpace(openaiReq.ReasoningEffort)) {
+		case "xhigh", "max":
+			openaiReq.ReasoningEffort = "max"
+		case "low", "medium", "high":
+			openaiReq.ReasoningEffort = "high"
+		}
+		// DeepSeek thinking mode does not accept tool_choice.
+		openaiReq.ToolChoice = nil
 	}
-	if value, ok := req.Options["thinking"]; ok {
-		openaiReq.Thinking = value
+	identityField := strings.ToLower(strings.TrimSpace(a.Quirks.UserIdentityField))
+	if identityField == "auto" || identityField == "user_id" {
+		openaiReq.UserID = StableProviderUserID(ctx)
 	}
-	if value, ok := req.Options["service_tier"].(string); ok && value != "" {
-		openaiReq.ServiceTier = value
+}
+
+func thinkingOptionConfigured(value interface{}) bool {
+	if value == nil {
+		return false
 	}
-	if value, ok := intOption(req.Options["max_tokens"]); ok && value > 0 {
-		openaiReq.MaxTokens = value
+	switch typed := value.(type) {
+	case map[string]interface{}:
+		return len(typed) > 0
+	default:
+		return true
 	}
 }
 
@@ -594,6 +671,8 @@ func (a *OpenRouterAdapter) StreamChat(ctx context.Context, req ChatRequest) (<-
 		Model:           a.Model,
 		BaseURL:         a.BaseURL,
 		Headers:         a.Headers,
+		ExtraBody:       a.ExtraBody,
+		ExtraQuery:      a.ExtraQuery,
 		MaxTokens:       a.MaxTokens,
 		ReasoningEffort: a.ReasoningEffort,
 		Thinking:        a.Thinking,
@@ -708,6 +787,8 @@ type OpenRouterAdapter struct {
 	Model           string
 	BaseURL         string
 	Headers         map[string]string
+	ExtraBody       map[string]interface{}
+	ExtraQuery      map[string]interface{}
 	MaxTokens       int
 	ReasoningEffort string
 	Thinking        map[string]interface{}
@@ -751,12 +832,13 @@ func (a *OpenRouterAdapter) Chat(ctx context.Context, req ChatRequest) (*ChatRes
 		Thinking:        a.Thinking,
 		ServiceTier:     a.ServiceTier,
 		Quirks:          a.Quirks,
+		ExtraBody:       a.ExtraBody,
 	}
 	wireReq := options.requestWithQuirks(req)
 	openaiReq := openAIRequestFromChat(a.Model, wireReq, false)
-	options.applyOptions(&openaiReq, wireReq)
+	options.applyOptions(ctx, &openaiReq, wireReq)
 
-	body, err := json.Marshal(openaiReq)
+	body, err := marshalWithExtraBody(openaiReq, a.ExtraBody)
 	if err != nil {
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}
@@ -806,7 +888,11 @@ func (a *OpenRouterAdapter) Chat(ctx context.Context, req ChatRequest) (*ChatRes
 }
 
 func (a *OpenRouterAdapter) doOpenRouterRequest(ctx context.Context, body []byte, apiKey string) (*http.Response, error) {
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, a.BaseURL, bytes.NewReader(body))
+	requestURL, err := urlWithExtraQuery(a.BaseURL, a.ExtraQuery)
+	if err != nil {
+		return nil, fmt.Errorf("create request URL: %w", err)
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, requestURL, bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
 	}

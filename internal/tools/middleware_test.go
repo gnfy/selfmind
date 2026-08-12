@@ -346,3 +346,29 @@ func TestRedactSensitive(t *testing.T) {
 		t.Fatalf("sensitive data was not redacted: %s", out)
 	}
 }
+
+func TestRedactSensitivePreservesCredentialReferences(t *testing.T) {
+	input := `TOKEN="$(gcloud auth print-access-token)" curl -H "Authorization: Bearer ${TOKEN}"`
+	if got := RedactSensitive(input); got != input {
+		t.Fatalf("credential reference structure changed:\n got: %s\nwant: %s", got, input)
+	}
+	literal := `GH_TOKEN="literal-secret-value" api_key=another-secret-value`
+	got := RedactSensitive(literal)
+	if strings.Contains(got, "literal-secret-value") || strings.Contains(got, "another-secret-value") {
+		t.Fatalf("literal credentials leaked: %s", got)
+	}
+}
+
+func TestApprovalDisplayArgsRedactsNestedSecrets(t *testing.T) {
+	got := approvalDisplayArgs(map[string]interface{}{
+		"command": `curl -H "Authorization: Bearer literal-secret-token"`,
+		"env": map[string]interface{}{
+			"API_TOKEN": "plain-secret-value",
+		},
+	})
+	command, _ := got["command"].(string)
+	nested, _ := got["env"].(map[string]interface{})
+	if strings.Contains(command, "literal-secret-token") || strings.Contains(fmt.Sprintf("%v", nested), "plain-secret-value") {
+		t.Fatalf("approval args leaked a credential: %#v", got)
+	}
+}

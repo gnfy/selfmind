@@ -19,6 +19,11 @@ type Case struct {
 	Model         string `yaml:"model" json:"model,omitempty"`
 	Channel       string `yaml:"channel" json:"channel,omitempty"`
 	RecordContent bool   `yaml:"record_content" json:"record_content,omitempty"`
+	// ModelRequired distinguishes agent-backed scenarios from deterministic
+	// gateway/control-plane scenarios. It defaults to true. A false value lets
+	// selfcheck execute the case strictly offline without a VCR cassette; if the
+	// message path unexpectedly reaches the model, replay still fails closed.
+	ModelRequired *bool `yaml:"model_required,omitempty" json:"model_required,omitempty"`
 	// RequireCassette marks a case as mandatory for the offline gate: selfcheck
 	// must FAIL (not skip) when no recorded cassette exists for the case ID.
 	// Use it for north-star scenarios that must never silently drop out of CI.
@@ -179,6 +184,9 @@ func (c *Case) normalize() error {
 	if len(c.Turns) == 0 {
 		return fmt.Errorf("at least one turn is required")
 	}
+	if !c.RequiresModel() && c.RequireCassette {
+		return fmt.Errorf("model_required: false cannot be combined with require_cassette: true")
+	}
 	// shared_data reuses the configured control.db, which contradicts scenarios
 	// that seed or assert a fresh world; reject the combination early so a case
 	// author gets a clear error instead of surprising cross-run state bleed.
@@ -198,6 +206,13 @@ func (c *Case) normalize() error {
 		c.Checks = DefaultCheckSettings()
 	}
 	return nil
+}
+
+// RequiresModel reports whether the case is expected to enter the agent/model
+// path. The default is deliberately true so a missing annotation cannot make a
+// provider-backed regression silently pass without replay evidence.
+func (c *Case) RequiresModel() bool {
+	return c == nil || c.ModelRequired == nil || *c.ModelRequired
 }
 
 func (c *Case) normalizeCI() error {

@@ -73,6 +73,23 @@ func StablePromptCacheKey(ctx context.Context) string {
 	return "selfmind-" + hex.EncodeToString(sum[:16])
 }
 
+// StableProviderUserID derives a provider-safe, non-PII identity from the
+// authenticated tenant/person scope. It is stable across channels and runs,
+// while remaining unlinkable to the original local or IM user identifier.
+func StableProviderUserID(ctx context.Context) string {
+	mc := ModelContextFrom(ctx)
+	tenantID := strings.TrimSpace(mc.TenantID)
+	personID := strings.TrimSpace(mc.PersonID)
+	if personID == "" {
+		personID = tenantID
+	}
+	if personID == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(strings.Join([]string{"v1", tenantID, personID}, "|")))
+	return "sm_" + hex.EncodeToString(sum[:16])
+}
+
 // ProviderProfile is a resolved provider/model choice for one role.
 type ProviderProfile struct {
 	Name         string

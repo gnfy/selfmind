@@ -129,6 +129,58 @@ func TestManagerCleansStalePID(t *testing.T) {
 	}
 }
 
+func TestManagerCrashPreservesReasonAndReleasesLease(t *testing.T) {
+	manager := NewManager(t.TempDir(), "127.0.0.1:9999")
+	if err := manager.Acquire(); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.WriteStatus("starting", "default", ""); err != nil {
+		t.Fatal(err)
+	}
+	manager.Crash("bind failed")
+
+	rec, err := ReadStatusRecord(manager.Paths.StatePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec.State != "crashed" || rec.ExitReason != "bind failed" {
+		t.Fatalf("crash record = %+v", rec)
+	}
+	if _, err := os.Stat(manager.Paths.PIDPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("live lease survived crash: %v", err)
+	}
+	probe := NewManager(manager.Paths.DataDir, manager.Addr)
+	if err := probe.Acquire(); err != nil {
+		t.Fatalf("crash did not release owner lock: %v", err)
+	}
+	_ = probe.Release()
+}
+
+func TestReconcilePreviousStateUsesLatestLeaseHeartbeat(t *testing.T) {
+	manager := NewManager(t.TempDir(), "127.0.0.1:9999")
+	previous := StatusRecord{
+		PID: 12345, Kind: gatewayKind, InstanceID: "gateway_previous", State: "running",
+		StartedAt: "2026-08-01T00:00:00Z", HeartbeatAt: "2026-08-01T00:00:01Z",
+	}
+	lease := previous
+	lease.HeartbeatAt = "2026-08-01T00:15:00Z"
+	lease.UpdatedAt = lease.HeartbeatAt
+	if err := writeJSONFile(manager.Paths.StatePath, previous); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeJSONFile(manager.Paths.PIDPath, lease); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.Acquire(); err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Release()
+	reconciled, ok := manager.ReconcilePreviousState()
+	if !ok || reconciled.HeartbeatAt != lease.HeartbeatAt {
+		t.Fatalf("reconciled = %+v, ok=%v", reconciled, ok)
+	}
+}
+
 func TestHeartbeatOnlyRefreshesLiveLease(t *testing.T) {
 	manager := NewManager(t.TempDir(), "127.0.0.1:9999")
 	if err := manager.WriteStatus("running", "default", ""); err != nil {

@@ -3,6 +3,11 @@ title: "Unexpanded paste placeholders are rejected before dispatch"
 suite: reliability
 workspace: isolated
 channel: cli
+model_required: false
+ci:
+  required: true
+  reason: credentialless
+  platforms: [linux, darwin]
 turns:
   # The current composer's token shape (parenthesised label). The legacy
   # bracketed form must stay rejected too and is pinned by

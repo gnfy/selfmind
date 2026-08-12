@@ -1,0 +1,1009 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "reasoning_content": "Let"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " understand"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " task"
+    },
+    {
+      "reasoning_content": ":\n\n"
+    },
+    {
+      "reasoning_content": "1"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Use"
+    },
+    {
+      "reasoning_content": " watch"
+    },
+    {
+      "reasoning_content": "_ex"
+    },
+    {
+      "reasoning_content": "ternal"
+    },
+    {
+      "reasoning_content": " exactly"
+    },
+    {
+      "reasoning_content": " once"
+    },
+    {
+      "reasoning_content": " to"
+    },
+    {
+      "reasoning_content": " register"
+    },
+    {
+      "reasoning_content": " a"
+    },
+    {
+      "reasoning_content": " durable"
+    },
+    {
+      "reasoning_content": " watch"
+    },
+    {
+      "reasoning_content": " named"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "de"
+    },
+    {
+      "reasoning_content": "ploy"
+    },
+    {
+      "reasoning_content": " status"
+    },
+    {
+      "reasoning_content": "\"\n"
+    },
+    {
+      "reasoning_content": "2"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Poll"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " command"
+    },
+    {
+      "reasoning_content": " `"
+    },
+    {
+      "reasoning_content": "self"
+    },
+    {
+      "reasoning_content": "mind"
+    },
+    {
+      "reasoning_content": "-no"
+    },
+    {
+      "reasoning_content": "-s"
+    },
+    {
+      "reasoning_content": "uch"
+    },
+    {
+      "reasoning_content": "-release"
+    },
+    {
+      "reasoning_content": "-cl"
+    },
+    {
+      "reasoning_content": "i"
+    },
+    {
+      "reasoning_content": " describe"
+    },
+    {
+      "reasoning_content": " --"
+    },
+    {
+      "reasoning_content": "status"
+    },
+    {
+      "reasoning_content": "`\n"
+    },
+    {
+      "reasoning_content": "3"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Treat"
+    },
+    {
+      "reasoning_content": " SU"
+    },
+    {
+      "reasoning_content": "CC"
+    },
+    {
+      "reasoning_content": "E"
+    },
+    {
+      "reasoning_content": "ED"
+    },
+    {
+      "reasoning_content": "ED"
+    },
+    {
+      "reasoning_content": " as"
+    },
+    {
+      "reasoning_content": " success"
+    },
+    {
+      "reasoning_content": " and"
+    },
+    {
+      "reasoning_content": " FAIL"
+    },
+    {
+      "reasoning_content": "ED"
+    },
+    {
+      "reasoning_content": " as"
+    },
+    {
+      "reasoning_content": " failure"
+    },
+    {
+      "reasoning_content": "\n"
+    },
+    {
+      "reasoning_content": "4"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Use"
+    },
+    {
+      "reasoning_content": " "
+    },
+    {
+      "reasoning_content": "30"
+    },
+    {
+      "reasoning_content": " second"
+    },
+    {
+      "reasoning_content": " interval"
+    },
+    {
+      "reasoning_content": " and"
+    },
+    {
+      "reasoning_content": " "
+    },
+    {
+      "reasoning_content": "300"
+    },
+    {
+      "reasoning_content": " second"
+    },
+    {
+      "reasoning_content": " timeout"
+    },
+    {
+      "reasoning_content": "\n"
+    },
+    {
+      "reasoning_content": "5"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " The"
+    },
+    {
+      "reasoning_content": " deployment"
+    },
+    {
+      "reasoning_content": " state"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " unknown"
+    },
+    {
+      "reasoning_content": " unless"
+    },
+    {
+      "reasoning_content": " registration"
+    },
+    {
+      "reasoning_content": " pre"
+    },
+    {
+      "reasoning_content": "flight"
+    },
+    {
+      "reasoning_content": " observes"
+    },
+    {
+      "reasoning_content": " it"
+    },
+    {
+      "reasoning_content": "\n"
+    },
+    {
+      "reasoning_content": "6"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " If"
+    },
+    {
+      "reasoning_content": " registration"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " refused"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " explain"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " refusal"
+    },
+    {
+      "reasoning_content": " in"
+    },
+    {
+      "reasoning_content": " one"
+    },
+    {
+      "reasoning_content": " short"
+    },
+    {
+      "reasoning_content": " paragraph"
+    },
+    {
+      "reasoning_content": " and"
+    },
+    {
+      "reasoning_content": " stop"
+    },
+    {
+      "reasoning_content": "\n\n"
+    },
+    {
+      "reasoning_content": "The"
+    },
+    {
+      "reasoning_content": " key"
+    },
+    {
+      "reasoning_content": " thing"
+    },
+    {
+      "reasoning_content": " here"
+    },
+    {
+      "reasoning_content": ":"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " command"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " `"
+    },
+    {
+      "reasoning_content": "self"
+    },
+    {
+      "reasoning_content": "mind"
+    },
+    {
+      "reasoning_content": "-no"
+    },
+    {
+      "reasoning_content": "-s"
+    },
+    {
+      "reasoning_content": "uch"
+    },
+    {
+      "reasoning_content": "-release"
+    },
+    {
+      "reasoning_content": "-cl"
+    },
+    {
+      "reasoning_content": "i"
+    },
+    {
+      "reasoning_content": "`"
+    },
+    {
+      "reasoning_content": " which"
+    },
+    {
+      "reasoning_content": " doesn"
+    },
+    {
+      "reasoning_content": "'t"
+    },
+    {
+      "reasoning_content": " exist"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " This"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " a"
+    },
+    {
+      "reasoning_content": " reliability"
+    },
+    {
+      "reasoning_content": " test"
+    },
+    {
+      "reasoning_content": " -"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "external"
+    },
+    {
+      "reasoning_content": "_w"
+    },
+    {
+      "reasoning_content": "atch"
+    },
+    {
+      "reasoning_content": "_pre"
+    },
+    {
+      "reasoning_content": "flight"
+    },
+    {
+      "reasoning_content": "_ref"
+    },
+    {
+      "reasoning_content": "uses"
+    },
+    {
+      "reasoning_content": "_b"
+    },
+    {
+      "reasoning_content": "ro"
+    },
+    {
+      "reasoning_content": "ken"
+    },
+    {
+      "reasoning_content": "_check"
+    },
+    {
+      "reasoning_content": "\"."
+    },
+    {
+      "reasoning_content": " The"
+    },
+    {
+      "reasoning_content": " watch"
+    },
+    {
+      "reasoning_content": "_ex"
+    },
+    {
+      "reasoning_content": "ternal"
+    },
+    {
+      "reasoning_content": " tool"
+    },
+    {
+      "reasoning_content": " should"
+    },
+    {
+      "reasoning_content": " have"
+    },
+    {
+      "reasoning_content": " a"
+    },
+    {
+      "reasoning_content": " pre"
+    },
+    {
+      "reasoning_content": "flight"
+    },
+    {
+      "reasoning_content": " check"
+    },
+    {
+      "reasoning_content": " that"
+    },
+    {
+      "reasoning_content": " detects"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " command"
+    },
+    {
+      "reasoning_content": " doesn"
+    },
+    {
+      "reasoning_content": "'t"
+    },
+    {
+      "reasoning_content": " exist"
+    },
+    {
+      "reasoning_content": " and"
+    },
+    {
+      "reasoning_content": " refuses"
+    },
+    {
+      "reasoning_content": " registration"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "So"
+    },
+    {
+      "reasoning_content": " my"
+    },
+    {
+      "reasoning_content": " task"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " to"
+    },
+    {
+      "reasoning_content": " call"
+    },
+    {
+      "reasoning_content": " watch"
+    },
+    {
+      "reasoning_content": "_ex"
+    },
+    {
+      "reasoning_content": "ternal"
+    },
+    {
+      "reasoning_content": " exactly"
+    },
+    {
+      "reasoning_content": " once"
+    },
+    {
+      "reasoning_content": " with"
+    },
+    {
+      "reasoning_content": ":\n"
+    },
+    {
+      "reasoning_content": "-"
+    },
+    {
+      "reasoning_content": " command"
+    },
+    {
+      "reasoning_content": ":"
+    },
+    {
+      "reasoning_content": " `"
+    },
+    {
+      "reasoning_content": "self"
+    },
+    {
+      "reasoning_content": "mind"
+    },
+    {
+      "reasoning_content": "-no"
+    },
+    {
+      "reasoning_content": "-s"
+    },
+    {
+      "reasoning_content": "uch"
+    },
+    {
+      "reasoning_content": "-release"
+    },
+    {
+      "reasoning_content": "-cl"
+    },
+    {
+      "reasoning_content": "i"
+    },
+    {
+      "reasoning_content": " describe"
+    },
+    {
+      "reasoning_content": " --"
+    },
+    {
+      "reasoning_content": "status"
+    },
+    {
+      "reasoning_content": "`\n"
+    },
+    {
+      "reasoning_content": "-"
+    },
+    {
+      "reasoning_content": " success"
+    },
+    {
+      "reasoning_content": "_pattern"
+    },
+    {
+      "reasoning_content": ":"
+    },
+    {
+      "reasoning_content": " SU"
+    },
+    {
+      "reasoning_content": "CC"
+    },
+    {
+      "reasoning_content": "E"
+    },
+    {
+      "reasoning_content": "ED"
+    },
+    {
+      "reasoning_content": "ED"
+    },
+    {
+      "reasoning_content": "\n"
+    },
+    {
+      "reasoning_content": "-"
+    },
+    {
+      "reasoning_content": " failure"
+    },
+    {
+      "reasoning_content": "_pattern"
+    },
+    {
+      "reasoning_content": ":"
+    },
+    {
+      "reasoning_content": " FAIL"
+    },
+    {
+      "reasoning_content": "ED"
+    },
+    {
+      "reasoning_content": "\n"
+    },
+    {
+      "reasoning_content": "-"
+    },
+    {
+      "reasoning_content": " interval"
+    },
+    {
+      "reasoning_content": "_"
+    },
+    {
+      "reasoning_content": "seconds"
+    },
+    {
+      "reasoning_content": ":"
+    },
+    {
+      "reasoning_content": " "
+    },
+    {
+      "reasoning_content": "30"
+    },
+    {
+      "reasoning_content": "\n"
+    },
+    {
+      "reasoning_content": "-"
+    },
+    {
+      "reasoning_content": " timeout"
+    },
+    {
+      "reasoning_content": "_"
+    },
+    {
+      "reasoning_content": "seconds"
+    },
+    {
+      "reasoning_content": ":"
+    },
+    {
+      "reasoning_content": " "
+    },
+    {
+      "reasoning_content": "300"
+    },
+    {
+      "reasoning_content": "\n"
+    },
+    {
+      "reasoning_content": "-"
+    },
+    {
+      "reasoning_content": " description"
+    },
+    {
+      "reasoning_content": ":"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "de"
+    },
+    {
+      "reasoning_content": "ploy"
+    },
+    {
+      "reasoning_content": " status"
+    },
+    {
+      "reasoning_content": "\""
+    },
+    {
+      "reasoning_content": " ("
+    },
+    {
+      "reasoning_content": "the"
+    },
+    {
+      "reasoning_content": " durable"
+    },
+    {
+      "reasoning_content": " watch"
+    },
+    {
+      "reasoning_content": " named"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "de"
+    },
+    {
+      "reasoning_content": "ploy"
+    },
+    {
+      "reasoning_content": " status"
+    },
+    {
+      "reasoning_content": "\")\n\n"
+    },
+    {
+      "reasoning_content": "If"
+    },
+    {
+      "reasoning_content": " registration"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " refused"
+    },
+    {
+      "reasoning_content": " ("
+    },
+    {
+      "reasoning_content": "pre"
+    },
+    {
+      "reasoning_content": "flight"
+    },
+    {
+      "reasoning_content": " fails"
+    },
+    {
+      "reasoning_content": " because"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " command"
+    },
+    {
+      "reasoning_content": " doesn"
+    },
+    {
+      "reasoning_content": "'t"
+    },
+    {
+      "reasoning_content": " exist"
+    },
+    {
+      "reasoning_content": "),"
+    },
+    {
+      "reasoning_content": " I"
+    },
+    {
+      "reasoning_content": " should"
+    },
+    {
+      "reasoning_content": " explain"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " refusal"
+    },
+    {
+      "reasoning_content": " in"
+    },
+    {
+      "reasoning_content": " one"
+    },
+    {
+      "reasoning_content": " short"
+    },
+    {
+      "reasoning_content": " paragraph"
+    },
+    {
+      "reasoning_content": " and"
+    },
+    {
+      "reasoning_content": " stop"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "Let"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " call"
+    },
+    {
+      "reasoning_content": " watch"
+    },
+    {
+      "reasoning_content": "_ex"
+    },
+    {
+      "reasoning_content": "ternal"
+    },
+    {
+      "reasoning_content": " with"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " proper"
+    },
+    {
+      "reasoning_content": " parameters"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " The"
+    },
+    {
+      "reasoning_content": " command"
+    },
+    {
+      "reasoning_content": " likely"
+    },
+    {
+      "reasoning_content": " won"
+    },
+    {
+      "reasoning_content": "'t"
+    },
+    {
+      "reasoning_content": " exist"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " so"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " pre"
+    },
+    {
+      "reasoning_content": "flight"
+    },
+    {
+      "reasoning_content": " should"
+    },
+    {
+      "reasoning_content": " refuse"
+    },
+    {
+      "reasoning_content": " registration"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Then"
+    },
+    {
+      "reasoning_content": " I"
+    },
+    {
+      "reasoning_content": " explain"
+    },
+    {
+      "reasoning_content": " and"
+    },
+    {
+      "reasoning_content": " stop"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "Let"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " do"
+    },
+    {
+      "reasoning_content": " this"
+    },
+    {
+      "reasoning_content": " in"
+    },
+    {
+      "reasoning_content": " one"
+    },
+    {
+      "reasoning_content": " call"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "content": "I"
+    },
+    {
+      "content": "'ll"
+    },
+    {
+      "content": " register"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " durable"
+    },
+    {
+      "content": " watch"
+    },
+    {
+      "content": " with"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " specified"
+    },
+    {
+      "content": " command"
+    },
+    {
+      "content": " and"
+    },
+    {
+      "content": " patterns"
+    },
+    {
+      "content": "."
+    },
+    {
+      "finish_reason": "tool_calls"
+    },
+    {
+      "usage": {
+        "input_tokens": 8243,
+        "output_tokens": 475,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 8243,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 314,
+        "cache_usage_reported": true
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_00_7klnDFre3Cg5KS3CDOFe7564",
+          "Function": "watch_external",
+          "Args": "{\"command\": \"selfmind-no-such-release-cli describe --status\", \"description\": \"deploy status\", \"success_pattern\": \"SUCCEEDED\", \"failure_pattern\": \"FAILED\", \"interval_seconds\": 30, \"timeout_seconds\": 300}"
+        }
+      ]
+    }
+  ]
+}

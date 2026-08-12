@@ -186,12 +186,19 @@ func (d *Server) analyzeFinishedRun(ctx context.Context, identity *control.Ident
 	// Claim the run's maintenance job before any model work: one run has ONE
 	// logical maintenance result. A lost claim means another worker already
 	// owns (or finished) this pass.
-	claimed, err := d.Control.ClaimMaintenanceJob(ctx, identity.TenantID, run.ID, postRunAnalyzerVersion)
+	maxAttempts := maintenanceMaxAttempts
+	if job, _ := d.Control.GetMaintenanceJob(ctx, identity.TenantID, run.ID, postRunAnalyzerVersion); job != nil && strings.TrimSpace(job.ProposalJSON) != "" {
+		maxAttempts = 0
+	}
+	claimed, exhausted, err := d.Control.ClaimMaintenanceJobWithLimit(ctx, identity.TenantID, run.ID, postRunAnalyzerVersion, maxAttempts)
 	if err != nil {
 		log.Warn("gateway: maintenance job claim failed; skipping analyzer", "run", run.ID, "error", err)
 		return
 	}
 	if !claimed {
+		if exhausted {
+			log.Warn("gateway: maintenance retry budget exhausted; analyzer not called", "run", run.ID)
+		}
 		return
 	}
 	d.analyzeClaimedPostRun(ctx, prepared)

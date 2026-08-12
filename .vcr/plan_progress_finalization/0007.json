@@ -1,0 +1,364 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "reasoning_content": "The"
+    },
+    {
+      "reasoning_content": " verify"
+    },
+    {
+      "reasoning_content": " passed"
+    },
+    {
+      "reasoning_content": ":"
+    },
+    {
+      "reasoning_content": " content"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " exactly"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "PL"
+    },
+    {
+      "reasoning_content": "AN"
+    },
+    {
+      "reasoning_content": "-"
+    },
+    {
+      "reasoning_content": "COMP"
+    },
+    {
+      "reasoning_content": "L"
+    },
+    {
+      "reasoning_content": "ETE"
+    },
+    {
+      "reasoning_content": "\""
+    },
+    {
+      "reasoning_content": " and"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " file"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " "
+    },
+    {
+      "reasoning_content": "13"
+    },
+    {
+      "reasoning_content": " bytes"
+    },
+    {
+      "reasoning_content": " ("
+    },
+    {
+      "reasoning_content": "which"
+    },
+    {
+      "reasoning_content": " matches"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "PL"
+    },
+    {
+      "reasoning_content": "AN"
+    },
+    {
+      "reasoning_content": "-"
+    },
+    {
+      "reasoning_content": "COMP"
+    },
+    {
+      "reasoning_content": "L"
+    },
+    {
+      "reasoning_content": "ETE"
+    },
+    {
+      "reasoning_content": "\""
+    },
+    {
+      "reasoning_content": " being"
+    },
+    {
+      "reasoning_content": " "
+    },
+    {
+      "reasoning_content": "13"
+    },
+    {
+      "reasoning_content": " characters"
+    },
+    {
+      "reasoning_content": " with"
+    },
+    {
+      "reasoning_content": " no"
+    },
+    {
+      "reasoning_content": " trailing"
+    },
+    {
+      "reasoning_content": " new"
+    },
+    {
+      "reasoning_content": "line"
+    },
+    {
+      "reasoning_content": ")."
+    },
+    {
+      "reasoning_content": " Actually"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "PL"
+    },
+    {
+      "reasoning_content": "AN"
+    },
+    {
+      "reasoning_content": "-"
+    },
+    {
+      "reasoning_content": "COMP"
+    },
+    {
+      "reasoning_content": "L"
+    },
+    {
+      "reasoning_content": "ETE"
+    },
+    {
+      "reasoning_content": "\""
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " "
+    },
+    {
+      "reasoning_content": "13"
+    },
+    {
+      "reasoning_content": " characters"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " So"
+    },
+    {
+      "reasoning_content": " there"
+    },
+    {
+      "reasoning_content": "'s"
+    },
+    {
+      "reasoning_content": " no"
+    },
+    {
+      "reasoning_content": " trailing"
+    },
+    {
+      "reasoning_content": " new"
+    },
+    {
+      "reasoning_content": "line"
+    },
+    {
+      "reasoning_content": " —"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " content"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " exactly"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "PL"
+    },
+    {
+      "reasoning_content": "AN"
+    },
+    {
+      "reasoning_content": "-"
+    },
+    {
+      "reasoning_content": "COMP"
+    },
+    {
+      "reasoning_content": "L"
+    },
+    {
+      "reasoning_content": "ETE"
+    },
+    {
+      "reasoning_content": "\".\n\n"
+    },
+    {
+      "reasoning_content": "Now"
+    },
+    {
+      "reasoning_content": " update"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " plan"
+    },
+    {
+      "reasoning_content": " to"
+    },
+    {
+      "reasoning_content": " mark"
+    },
+    {
+      "reasoning_content": " verify"
+    },
+    {
+      "reasoning_content": " as"
+    },
+    {
+      "reasoning_content": " completed"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " then"
+    },
+    {
+      "reasoning_content": " finish"
+    },
+    {
+      "reasoning_content": "_run"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "content": "Ver"
+    },
+    {
+      "content": "ification"
+    },
+    {
+      "content": " passed"
+    },
+    {
+      "content": " —"
+    },
+    {
+      "content": " content"
+    },
+    {
+      "content": " is"
+    },
+    {
+      "content": " exactly"
+    },
+    {
+      "content": " \""
+    },
+    {
+      "content": "PL"
+    },
+    {
+      "content": "AN"
+    },
+    {
+      "content": "-"
+    },
+    {
+      "content": "COMP"
+    },
+    {
+      "content": "L"
+    },
+    {
+      "content": "ETE"
+    },
+    {
+      "content": "\"."
+    },
+    {
+      "content": " All"
+    },
+    {
+      "content": " plan"
+    },
+    {
+      "content": " steps"
+    },
+    {
+      "content": " are"
+    },
+    {
+      "content": " complete"
+    },
+    {
+      "content": "."
+    },
+    {
+      "finish_reason": "tool_calls"
+    },
+    {
+      "usage": {
+        "input_tokens": 9533,
+        "output_tokens": 235,
+        "cache_read_input_tokens": 9472,
+        "cache_miss_input_tokens": 61,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 91,
+        "cache_usage_reported": true
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_00_4icX5szP4m9WiOFAORGS1155",
+          "Function": "update_plan",
+          "Args": "{\"explanation\": \"Verification succeeded; all steps complete.\", \"plan\": [{\"step\": \"Inspect workspace state\", \"status\": \"completed\"}, {\"step\": \"Write plan-progress.txt with exactly PLAN-COMPLETE\", \"status\": \"completed\"}, {\"step\": \"Verify file contents with verify tool\", \"status\": \"completed\"}]}"
+        }
+      ]
+    }
+  ]
+}

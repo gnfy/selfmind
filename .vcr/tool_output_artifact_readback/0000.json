@@ -1,0 +1,4 @@
+{
+  "method": "completion",
+  "completion": "terminal command execution awk script run as-is no pipeline modification"
+}

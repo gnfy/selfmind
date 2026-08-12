@@ -27,6 +27,8 @@ type ResponsesAdapter struct {
 	RequireStream   bool
 	ReasoningEffort string            // e.g. "low"/"medium"/"high"; drives the Responses reasoning field
 	Headers         map[string]string // extra request headers (e.g. chatgpt-account-id)
+	ExtraBody       map[string]interface{}
+	ExtraQuery      map[string]interface{}
 	mu              sync.RWMutex
 	toolNameAlias   map[string]string
 }
@@ -127,7 +129,7 @@ func (a *ResponsesAdapter) Chat(ctx context.Context, req ChatRequest) (*ChatResp
 		return a.chatViaStream(ctx, req)
 	}
 	wire := a.requestFromChat(req, false)
-	body, err := json.Marshal(wire)
+	body, err := marshalWithExtraBody(wire, a.ExtraBody)
 	if err != nil {
 		return nil, fmt.Errorf("marshal responses request: %w", err)
 	}
@@ -197,7 +199,7 @@ func (a *ResponsesAdapter) chatViaStream(ctx context.Context, req ChatRequest) (
 
 func (a *ResponsesAdapter) StreamChat(ctx context.Context, req ChatRequest) (<-chan StreamEvent, error) {
 	wire := a.requestFromChat(req, true)
-	body, err := json.Marshal(wire)
+	body, err := marshalWithExtraBody(wire, a.ExtraBody)
 	if err != nil {
 		return nil, err
 	}
@@ -475,7 +477,11 @@ func responsesCallArguments(args string) string {
 }
 
 func (a *ResponsesAdapter) doRequest(ctx context.Context, body []byte, key string) (*http.Response, error) {
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, a.BaseURL, bytes.NewReader(body))
+	requestURL, err := urlWithExtraQuery(a.BaseURL, a.ExtraQuery)
+	if err != nil {
+		return nil, err
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, requestURL, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
@@ -490,18 +496,9 @@ func (a *ResponsesAdapter) apiKey() string {
 func (a *ResponsesAdapter) setHeaders(req *http.Request, key string) {
 	req.Header.Set("Authorization", "Bearer "+key)
 	req.Header.Set("Content-Type", "application/json")
-	// The ChatGPT Codex backend expects the official client's headers; without
-	// them (notably originator + chatgpt-account-id) the server can drop the
-	// connection mid-request, surfacing as EOF. These are scoped to the codex
-	// backend so generic OpenAI Responses endpoints are unaffected.
-	if strings.Contains(a.BaseURL, "chatgpt.com") {
-		req.Header.Set("originator", "codex_cli_rs")
-		req.Header.Set("OpenAI-Beta", "responses=experimental")
-		if req.Header.Get("User-Agent") == "" {
-			req.Header.Set("User-Agent", "codex_cli_rs/0.142.2")
-		}
-	}
-	// Custom headers (incl. chatgpt-account-id from the resolved runtime) win.
+	// Provider-profile headers (including Codex compatibility headers and
+	// chatgpt-account-id) are resolved before transport construction. The
+	// adapter never infers wire behavior from endpoint names.
 	for k, v := range a.Headers {
 		if strings.TrimSpace(k) == "" || strings.TrimSpace(v) == "" {
 			continue

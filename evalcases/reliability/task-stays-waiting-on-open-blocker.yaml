@@ -3,7 +3,7 @@ title: "An unresolved user blocker keeps the task waiting"
 suite: reliability
 workspace: isolated
 channel: cli
-require_cassette: false
+require_cassette: true
 
 turns:
   - input: >-
@@ -12,7 +12,8 @@ turns:
 
 expect:
   status: waiting_user
-  resumable: true
+  completion_reason: waiting_user
+  resumable: false
   max_duration_seconds: 120
 
 assert_state:
@@ -23,4 +24,3 @@ checks:
   no_raw_json_leak: true
   no_empty_response: true
   no_provider_stack_dump: true
-

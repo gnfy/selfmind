@@ -180,10 +180,6 @@ func (d *Server) runMaintenancePassAt(ctx context.Context, now time.Time) {
 			_ = d.Control.SkipMaintenanceJob(ctx, job.TenantID, job.RunID, job.AnalyzerVersion, "terminal run has no replay payload")
 			continue
 		}
-		if job.Attempts >= maintenanceMaxAttempts {
-			_, _ = d.Control.BlockMaintenanceJobAfterRetries(ctx, job.TenantID, job.RunID, job.AnalyzerVersion, job.LastError)
-			continue
-		}
 		var payload postRunJobPayload
 		if err := json.Unmarshal([]byte(job.PayloadJSON), &payload); err != nil {
 			_ = d.Control.SkipMaintenanceJob(ctx, job.TenantID, job.RunID, job.AnalyzerVersion, "invalid replay payload: "+err.Error())
@@ -270,7 +266,7 @@ func (d *Server) runPostRunMaintenanceBatch(ctx context.Context, items []*queued
 	claimed := make([]*queuedPostRunMaintenance, 0, len(items))
 	requests := make([]PostRunAnalysisRequest, 0, len(items))
 	for _, item := range items {
-		ok, err := d.Control.ClaimMaintenanceJob(ctx, item.job.TenantID, item.job.RunID, postRunAnalyzerVersion)
+		ok, _, err := d.Control.ClaimMaintenanceJobWithLimit(ctx, item.job.TenantID, item.job.RunID, postRunAnalyzerVersion, maintenanceMaxAttempts)
 		if err != nil {
 			log.Warn("gateway: maintenance batch claim failed", "run", item.job.RunID, "error", err)
 			continue
@@ -377,11 +373,7 @@ func (d *Server) runSkillReviewPass(ctx context.Context) {
 		if ctx.Err() != nil {
 			return
 		}
-		if job.Attempts >= maintenanceMaxAttempts {
-			_, _ = d.Control.BlockMaintenanceJobAfterRetries(ctx, job.TenantID, job.RunID, job.AnalyzerVersion, job.LastError)
-			continue
-		}
-		claimed, err := d.Control.ClaimMaintenanceJob(ctx, job.TenantID, job.RunID, job.AnalyzerVersion)
+		claimed, _, err := d.Control.ClaimMaintenanceJobWithLimit(ctx, job.TenantID, job.RunID, job.AnalyzerVersion, maintenanceMaxAttempts)
 		if err != nil || !claimed {
 			continue
 		}

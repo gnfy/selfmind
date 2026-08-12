@@ -1,0 +1,145 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "reasoning_content": "The"
+    },
+    {
+      "reasoning_content": " user"
+    },
+    {
+      "reasoning_content": " wants"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " to"
+    },
+    {
+      "reasoning_content": " run"
+    },
+    {
+      "reasoning_content": " `"
+    },
+    {
+      "reasoning_content": "git"
+    },
+    {
+      "reasoning_content": " config"
+    },
+    {
+      "reasoning_content": " --"
+    },
+    {
+      "reasoning_content": "global"
+    },
+    {
+      "reasoning_content": " --"
+    },
+    {
+      "reasoning_content": "list"
+    },
+    {
+      "reasoning_content": "`"
+    },
+    {
+      "reasoning_content": " with"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " terminal"
+    },
+    {
+      "reasoning_content": " tool"
+    },
+    {
+      "reasoning_content": " using"
+    },
+    {
+      "reasoning_content": " sand"
+    },
+    {
+      "reasoning_content": "box"
+    },
+    {
+      "reasoning_content": "="
+    },
+    {
+      "reasoning_content": "auto"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " then"
+    },
+    {
+      "reasoning_content": " summarize"
+    },
+    {
+      "reasoning_content": " in"
+    },
+    {
+      "reasoning_content": " one"
+    },
+    {
+      "reasoning_content": " line"
+    },
+    {
+      "reasoning_content": " whether"
+    },
+    {
+      "reasoning_content": " it"
+    },
+    {
+      "reasoning_content": " worked"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "Let"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " run"
+    },
+    {
+      "reasoning_content": " that"
+    },
+    {
+      "reasoning_content": " command"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "finish_reason": "tool_calls"
+    },
+    {
+      "usage": {
+        "input_tokens": 8176,
+        "output_tokens": 104,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 8176,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 39,
+        "cache_usage_reported": true
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_00_BsPfea2ighWLAHH9prUi2896",
+          "Function": "terminal",
+          "Args": "{\"command\": \"git config --global --list\", \"sandbox\": \"auto\"}"
+        }
+      ]
+    }
+  ]
+}

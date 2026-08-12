@@ -1,0 +1,448 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "reasoning_content": "The"
+    },
+    {
+      "reasoning_content": " user"
+    },
+    {
+      "reasoning_content": " wants"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " to"
+    },
+    {
+      "reasoning_content": " run"
+    },
+    {
+      "reasoning_content": " a"
+    },
+    {
+      "reasoning_content": " specific"
+    },
+    {
+      "reasoning_content": " command"
+    },
+    {
+      "reasoning_content": " exactly"
+    },
+    {
+      "reasoning_content": " as"
+    },
+    {
+      "reasoning_content": " given"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " without"
+    },
+    {
+      "reasoning_content": " modification"
+    },
+    {
+      "reasoning_content": " or"
+    },
+    {
+      "reasoning_content": " pipe"
+    },
+    {
+      "reasoning_content": " filtering"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " The"
+    },
+    {
+      "reasoning_content": " command"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": ":\n\n"
+    },
+    {
+      "reasoning_content": "```\n"
+    },
+    {
+      "reasoning_content": "awk"
+    },
+    {
+      "reasoning_content": " '"
+    },
+    {
+      "reasoning_content": "BEGIN"
+    },
+    {
+      "reasoning_content": "{"
+    },
+    {
+      "reasoning_content": "for"
+    },
+    {
+      "reasoning_content": "(i"
+    },
+    {
+      "reasoning_content": "="
+    },
+    {
+      "reasoning_content": "1"
+    },
+    {
+      "reasoning_content": ";i"
+    },
+    {
+      "reasoning_content": "\u003c="
+    },
+    {
+      "reasoning_content": "300"
+    },
+    {
+      "reasoning_content": "0"
+    },
+    {
+      "reasoning_content": ";i"
+    },
+    {
+      "reasoning_content": "++)"
+    },
+    {
+      "reasoning_content": "{"
+    },
+    {
+      "reasoning_content": "if"
+    },
+    {
+      "reasoning_content": "(i"
+    },
+    {
+      "reasoning_content": "=="
+    },
+    {
+      "reasoning_content": "150"
+    },
+    {
+      "reasoning_content": "0"
+    },
+    {
+      "reasoning_content": "){"
+    },
+    {
+      "reasoning_content": "print"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "MARK"
+    },
+    {
+      "reasoning_content": "ER"
+    },
+    {
+      "reasoning_content": "-"
+    },
+    {
+      "reasoning_content": "CODE"
+    },
+    {
+      "reasoning_content": ":"
+    },
+    {
+      "reasoning_content": " Q"
+    },
+    {
+      "reasoning_content": "LX"
+    },
+    {
+      "reasoning_content": "-"
+    },
+    {
+      "reasoning_content": "773"
+    },
+    {
+      "reasoning_content": "4"
+    },
+    {
+      "reasoning_content": "-M"
+    },
+    {
+      "reasoning_content": "ID"
+    },
+    {
+      "reasoning_content": "\"}"
+    },
+    {
+      "reasoning_content": "else"
+    },
+    {
+      "reasoning_content": "{"
+    },
+    {
+      "reasoning_content": "print"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "line"
+    },
+    {
+      "reasoning_content": "\","
+    },
+    {
+      "reasoning_content": "i"
+    },
+    {
+      "reasoning_content": ",\""
+    },
+    {
+      "reasoning_content": "padding"
+    },
+    {
+      "reasoning_content": " padding"
+    },
+    {
+      "reasoning_content": " padding"
+    },
+    {
+      "reasoning_content": " padding"
+    },
+    {
+      "reasoning_content": " padding"
+    },
+    {
+      "reasoning_content": " padding"
+    },
+    {
+      "reasoning_content": "\""
+    },
+    {
+      "reasoning_content": "}}}"
+    },
+    {
+      "reasoning_content": "'\n"
+    },
+    {
+      "reasoning_content": "```\n\n"
+    },
+    {
+      "reasoning_content": "This"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " a"
+    },
+    {
+      "reasoning_content": " simple"
+    },
+    {
+      "reasoning_content": " command"
+    },
+    {
+      "reasoning_content": " execution"
+    },
+    {
+      "reasoning_content": " task"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Let"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " run"
+    },
+    {
+      "reasoning_content": " it"
+    },
+    {
+      "reasoning_content": " in"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " terminal"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " The"
+    },
+    {
+      "reasoning_content": " output"
+    },
+    {
+      "reasoning_content": " will"
+    },
+    {
+      "reasoning_content": " be"
+    },
+    {
+      "reasoning_content": " "
+    },
+    {
+      "reasoning_content": "300"
+    },
+    {
+      "reasoning_content": "0"
+    },
+    {
+      "reasoning_content": " lines"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " which"
+    },
+    {
+      "reasoning_content": " might"
+    },
+    {
+      "reasoning_content": " get"
+    },
+    {
+      "reasoning_content": " truncated"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " But"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " user"
+    },
+    {
+      "reasoning_content": " says"
+    },
+    {
+      "reasoning_content": " not"
+    },
+    {
+      "reasoning_content": " to"
+    },
+    {
+      "reasoning_content": " add"
+    },
+    {
+      "reasoning_content": " pipe"
+    },
+    {
+      "reasoning_content": " filtering"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " so"
+    },
+    {
+      "reasoning_content": " I"
+    },
+    {
+      "reasoning_content": " should"
+    },
+    {
+      "reasoning_content": " run"
+    },
+    {
+      "reasoning_content": " it"
+    },
+    {
+      "reasoning_content": " as"
+    },
+    {
+      "reasoning_content": "-is"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "Let"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " run"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " command"
+    },
+    {
+      "reasoning_content": " exactly"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "content": "我来"
+    },
+    {
+      "content": "原"
+    },
+    {
+      "content": "样"
+    },
+    {
+      "content": "运行"
+    },
+    {
+      "content": "这条"
+    },
+    {
+      "content": "命令"
+    },
+    {
+      "content": "。"
+    },
+    {
+      "finish_reason": "tool_calls"
+    },
+    {
+      "usage": {
+        "input_tokens": 8201,
+        "output_tokens": 251,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 8201,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 133,
+        "cache_usage_reported": true
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_00_RB2wD5vqeYX9wIEkiY6U2578",
+          "Function": "terminal",
+          "Args": "{\"command\": \"awk 'BEGIN{for(i=1;i\u003c=3000;i++){if(i==1500){print \\\"MARKER-CODE: QLX-7734-MID\\\"}else{print \\\"line\\\",i,\\\"padding padding padding padding padding padding\\\"}}}'\", \"timeout\": 60}"
+        }
+      ]
+    }
+  ]
+}

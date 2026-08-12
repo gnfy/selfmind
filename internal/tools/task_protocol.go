@@ -345,11 +345,31 @@ func (t *FinishRunTool) Execute(args map[string]interface{}) (string, error) {
 		"need_approve":         taskBoolArg(args, "need_approve"),
 		"resolved_blocker_ids": taskStringSliceArg(args, "resolved_blocker_ids"),
 	}
+	if reason := finishRunCompletionReason(status); reason != "" {
+		out["completion_reason"] = reason
+	}
 	data, _ := json.Marshal(out)
 	if t.store != nil {
 		t.store.Purge(key)
 	}
 	return string(data), nil
+}
+
+func finishRunCompletionReason(status string) string {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "done", "completed":
+		return "completed"
+	case "waiting_external":
+		return "waiting_external"
+	case "waiting_user":
+		return "waiting_user"
+	case "blocked":
+		return "blocked"
+	case "failed":
+		return "failed"
+	default:
+		return ""
+	}
 }
 
 type ToolSearchTool struct {

@@ -296,6 +296,9 @@ func (a *Agent) executeSingleToolCall(ctx context.Context, tenantID string, even
 	args["_tenant_id"] = tenantID
 	args["_context"] = ctx
 	args["_tool_call_id"] = call.ID
+	if invocationScope, ok := ToolInvocationScopeFromContext(ctx); ok {
+		args["_invocation_scope"] = invocationScope
+	}
 	if workspace, ok := WorkspaceContextFromContext(ctx); ok && strings.TrimSpace(workspace.ID) != "" {
 		// Mutation tools need the logical workspace id as well as the root used
 		// by WorkspaceScopeMiddleware. Memory uses this hidden value to keep

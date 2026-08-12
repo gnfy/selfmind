@@ -1,0 +1,169 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "reasoning_content": "The"
+    },
+    {
+      "reasoning_content": " issue"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " clear"
+    },
+    {
+      "reasoning_content": ":"
+    },
+    {
+      "reasoning_content": " `"
+    },
+    {
+      "reasoning_content": "mult"
+    },
+    {
+      "reasoning_content": "iply"
+    },
+    {
+      "reasoning_content": "`"
+    },
+    {
+      "reasoning_content": " returns"
+    },
+    {
+      "reasoning_content": " `"
+    },
+    {
+      "reasoning_content": "a"
+    },
+    {
+      "reasoning_content": " +"
+    },
+    {
+      "reasoning_content": " b"
+    },
+    {
+      "reasoning_content": "`"
+    },
+    {
+      "reasoning_content": " instead"
+    },
+    {
+      "reasoning_content": " of"
+    },
+    {
+      "reasoning_content": " `"
+    },
+    {
+      "reasoning_content": "a"
+    },
+    {
+      "reasoning_content": " *"
+    },
+    {
+      "reasoning_content": " b"
+    },
+    {
+      "reasoning_content": "`."
+    },
+    {
+      "reasoning_content": " Let"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " fix"
+    },
+    {
+      "reasoning_content": " it"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "content": "The"
+    },
+    {
+      "content": " bug"
+    },
+    {
+      "content": " is"
+    },
+    {
+      "content": " clear"
+    },
+    {
+      "content": ":"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "mult"
+    },
+    {
+      "content": "iply"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " adds"
+    },
+    {
+      "content": " instead"
+    },
+    {
+      "content": " of"
+    },
+    {
+      "content": " multiplying"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": " I"
+    },
+    {
+      "content": "'ll"
+    },
+    {
+      "content": " fix"
+    },
+    {
+      "content": " it"
+    },
+    {
+      "content": " now"
+    },
+    {
+      "content": "."
+    },
+    {
+      "finish_reason": "tool_calls"
+    },
+    {
+      "usage": {
+        "input_tokens": 8872,
+        "output_tokens": 124,
+        "cache_read_input_tokens": 8704,
+        "cache_miss_input_tokens": 168,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 27,
+        "cache_usage_reported": true
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_00_H8icPqmeKO9SwUVdJkAt9782",
+          "Function": "patch",
+          "Args": "{\"patch\": \"*** Begin Patch\\n*** Update File: calculator.py\\n@@\\n def multiply(a, b):\\n-    return a + b\\n+    return a * b\\n*** End Patch\"}"
+        }
+      ]
+    }
+  ]
+}

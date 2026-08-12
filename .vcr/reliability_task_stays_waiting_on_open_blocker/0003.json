@@ -1,0 +1,196 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "content": "Task"
+    },
+    {
+      "content": " parked"
+    },
+    {
+      "content": " as"
+    },
+    {
+      "content": " **"
+    },
+    {
+      "content": "wait"
+    },
+    {
+      "content": "ing"
+    },
+    {
+      "content": "_user"
+    },
+    {
+      "content": "**.\n\n"
+    },
+    {
+      "content": "Status"
+    },
+    {
+      "content": ":"
+    },
+    {
+      "content": " The"
+    },
+    {
+      "content": " run"
+    },
+    {
+      "content": " is"
+    },
+    {
+      "content": " finished"
+    },
+    {
+      "content": " and"
+    },
+    {
+      "content": " waiting"
+    },
+    {
+      "content": " on"
+    },
+    {
+      "content": " you"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": " This"
+    },
+    {
+      "content": " task"
+    },
+    {
+      "content": " cannot"
+    },
+    {
+      "content": " proceed"
+    },
+    {
+      "content": " until"
+    },
+    {
+      "content": " you"
+    },
+    {
+      "content": " provide"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " production"
+    },
+    {
+      "content": " change"
+    },
+    {
+      "content": " ticket"
+    },
+    {
+      "content": " —"
+    },
+    {
+      "content": " I"
+    },
+    {
+      "content": " will"
+    },
+    {
+      "content": " not"
+    },
+    {
+      "content": " invent"
+    },
+    {
+      "content": " or"
+    },
+    {
+      "content": " guess"
+    },
+    {
+      "content": " that"
+    },
+    {
+      "content": " input"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": " Once"
+    },
+    {
+      "content": " you"
+    },
+    {
+      "content": " supply"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " ticket"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " task"
+    },
+    {
+      "content": " can"
+    },
+    {
+      "content": " resume"
+    },
+    {
+      "content": " and"
+    },
+    {
+      "content": " move"
+    },
+    {
+      "content": " forward"
+    },
+    {
+      "content": " with"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " production"
+    },
+    {
+      "content": " change"
+    },
+    {
+      "content": " work"
+    },
+    {
+      "content": "."
+    },
+    {
+      "finish_reason": "stop"
+    },
+    {
+      "usage": {
+        "input_tokens": 8592,
+        "output_tokens": 60,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 8592,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0,
+        "cache_usage_reported": true
+      }
+    }
+  ]
+}

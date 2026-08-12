@@ -86,6 +86,34 @@ func TestBuildTransportProviderUsesProtocolFamilies(t *testing.T) {
 	}
 }
 
+func TestBuildTransportProviderCarriesGenericRequestExtras(t *testing.T) {
+	extraBody := map[string]interface{}{"user_id": "user-42"}
+	extraQuery := map[string]interface{}{"api-version": "2026-08-11"}
+	headers := map[string]string{"X-Vendor": "test"}
+	base := TransportConfig{APIKey: "k", Model: "test", Headers: headers, ExtraBody: extraBody, ExtraQuery: extraQuery}
+
+	base.Protocol = TransportOpenAICompatible
+	base.Provider = "deepseek"
+	openai := BuildTransportProvider(base).(*GenericOpenAIAdapter)
+	if openai.ExtraBody["user_id"] != "user-42" || openai.ExtraQuery["api-version"] != "2026-08-11" || openai.Headers["X-Vendor"] != "test" {
+		t.Fatalf("openai extras = body:%#v query:%#v headers:%#v", openai.ExtraBody, openai.ExtraQuery, openai.Headers)
+	}
+
+	base.Protocol = TransportAnthropic
+	base.Provider = "anthropic"
+	anthropic := BuildTransportProvider(base).(*AnthropicAdapter)
+	if anthropic.ExtraBody["user_id"] != "user-42" || anthropic.ExtraQuery["api-version"] != "2026-08-11" {
+		t.Fatalf("anthropic extras = body:%#v query:%#v", anthropic.ExtraBody, anthropic.ExtraQuery)
+	}
+
+	base.Protocol = TransportResponses
+	base.Provider = "codex-cli"
+	responses := BuildTransportProvider(base).(*ResponsesAdapter)
+	if responses.ExtraBody["user_id"] != "user-42" || responses.ExtraQuery["api-version"] != "2026-08-11" {
+		t.Fatalf("responses extras = body:%#v query:%#v", responses.ExtraBody, responses.ExtraQuery)
+	}
+}
+
 func modelOf(value interface{}) string {
 	if getter, ok := value.(interface{ GetModel() string }); ok {
 		return getter.GetModel()

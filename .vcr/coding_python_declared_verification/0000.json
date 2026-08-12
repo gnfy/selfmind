@@ -1,0 +1,4 @@
+{
+  "method": "completion",
+  "completion": "debug repair patch verify test"
+}

@@ -72,42 +72,85 @@ provider_profiles:           # extensible registry (Kimi, MiniMax, DeepSeek, Ope
   and `google` the `providers` slot is authoritative — a `provider_profiles`
   entry under those three ids is ignored.
 
-### HTTP headers: layers and the emergency escape hatch
+### Generic provider request options
 
-Headers merge in five layers; each higher layer overrides lower ones key by
-key:
+SelfMind supports the same escape-hatch names used by the OpenAI Python SDK:
+`extra_headers`, `extra_body`, and `extra_query`. Put vendor-wide values under
+`provider_profiles.<id>`; use `models.roles.<role>` only when one bounded role
+needs a different value. These options work across OpenAI Chat/Compatible,
+Anthropic Messages, and Responses transports. See the
+[OpenAI Python request-options documentation](https://github.com/openai/openai-python#undocumented-request-params)
+and [DeepSeek user isolation documentation](https://api-docs.deepseek.com/quick_start/rate_limit).
+
+Headers merge in layers; each higher layer overrides lower ones key by key:
 
 | Layer (low → high) | Where | Typical use |
 |---|---|---|
 | protocol defaults | code (adapters) | `content-type`, auth header, `anthropic-version`, OpenRouter attribution |
-| `model.headers` | yaml, global | org-wide custom headers on every request |
+| `model.extra_headers` | yaml, global | org-wide custom headers on every request |
 | built-in profile | code | vendor compatibility (e.g. kimi-coding `User-Agent`) |
-| `provider_profiles.<id>.headers` | yaml, per provider | vendor-specific overrides |
-| `models.roles.<role>.headers` | yaml, per role | one role diverges |
+| `provider_profiles.<id>.extra_headers` | yaml, per provider | vendor-specific overrides |
+| `models.roles.<role>.extra_headers` | yaml, per role | one role diverges |
 
 ```yaml
 model:
-  headers:                        # global: lowest yaml layer
+  extra_headers:                  # global: lowest yaml layer
     X-Org-Proxy-Token: "..."
 
 provider_profiles:
-  anthropic-like-vendor:
-    headers:
-      anthropic-version: "2024-10-01"   # emergency compat override
+  deepseek:
+    extra_headers:
+      X-Org-Proxy-Token: "${ORG_PROXY_TOKEN}"
+    extra_body:
+      user_id: "selfmind-workstation-01"
+    extra_query:
+      api-version: "2026-08-11"
 ```
 
-- **Emergency compatibility**: when a vendor starts requiring a new header
-  value and no SelfMind release has shipped the fix yet, set it under
-  `provider_profiles.<id>.headers` — yaml overrides the built-in value.
-  Remove the override once a release carries the fix, so the code default
-  (which keeps evolving) governs again.
+- `extra_body` is recursively merged over the normal typed request. An
+  explicit value therefore overrides an automatically derived optional value;
+  for example, `extra_body.user_id` overrides SelfMind's opaque DeepSeek
+  `user_id`. When omitted, the derived non-personal value remains the default.
+- `extra_query` preserves existing URL query values and replaces only keys it
+  declares. Lists are encoded as repeated query parameters.
+- String values inside all three maps support `${ENV_VAR}` expansion.
+- DeepSeek documents `user_id` as an account-scoped scheduling/isolation key,
+  not a credential. Still use an opaque stable identifier and do not put a
+  name, email, phone number, prompt, or other personal data in it.
+- **Emergency compatibility**: when a vendor starts requiring a new parameter
+  and no SelfMind release has shipped the fix yet, add the matching `extra_*`
+  option under its provider profile, then remove it after the built-in profile
+  catches up.
 - **Verify it took effect**: `selfmind model check` prints the merged headers
-  with the layer each value came from (secret-looking values are masked).
+  with their origins and lists extra body/query keys without printing values.
+- Legacy `headers` remains readable for compatibility, but new and generated
+  configuration should use `extra_headers`; the latter wins on duplicate keys.
 - Defaults deliberately live in code, not in generated yaml: a config file is
   a snapshot, and materialized defaults would pin stale compatibility values
   across upgrades.
 
-## 2. Model routing (roles)
+Typed wire compatibility belongs under `quirks`; arbitrary vendor request
+parameters belong under `extra_*`:
+
+```yaml
+provider_profiles:
+  example-anthropic:
+    quirks:
+      auth_header: bearer
+      tool_schema: anthropic
+      thinking_mode: anthropic
+      user_identity_field: auto
+      http_version: auto
+      prompt_cache: false       # explicit false overrides a built-in true
+```
+
+Omit a boolean quirk to inherit the built-in profile. Set it explicitly to
+`true` or `false` only when the endpoint contract differs. Valid identity
+values are `auto`, `user_id`, `metadata.user_id`, and `off`; valid HTTP values
+are `auto`, `http1`, and `http2`. `system_message_mode` is deprecated and
+ignored. `selfmind model check` shows the resolved contract and warnings.
+
+## 2. Model routing
 
 Background jobs run on cheaper/faster models than your main chat, so heavy
 memory/skill work never spends your primary quota.
@@ -119,23 +162,21 @@ models:
     provider: "codex-cli"
     model: "gpt-5.6-sol"
     reasoning: "xhigh"       # optional
+  auxiliary:                  # default for bounded background work
+    provider: "kimi-coding"
+    model: "kimi-for-coding"
   roles:
-    memory_extract:          # memory intake + consolidation + compaction summaries
-      provider: "kimi-coding"
-      model: "kimi-for-coding"
-      # Optional per-role override for custom gateways. The Kimi Coding Plan
-      # default is anthropic_messages, matching its /coding endpoint.
-    background_review:       # skill/memory self-review
-      provider: "kimi-coding"
-      model: "kimi-for-coding"
-    semantic_recall:         # optional query expansion for recall
-      provider: "kimi-coding"
-      model: "kimi-for-coding"
-    skill_curator: { provider: "kimi-coding", model: "kimi-for-coding" }
-    fast_classifier: { provider: "kimi-coding", model: "kimi-for-coding" } # direct answers, cheap classification, smart approval triage
+    # Optional advanced exceptions. Unlisted background roles use auxiliary.
+    fast_classifier: { model: "kimi-for-coding-fast" }
 ```
 
-`models.primary` is the only default model selection. `reasoning` and
+`models.primary` owns the foreground conversation. `models.auxiliary` is the
+single default for `fast_classifier`, `memory_extract`, `background_review`,
+`skill_curator`, `semantic_recall`, and `summarizer`. `models.roles.<role>` is
+optional and has the highest priority; a partial override inherits missing
+provider/model behavior from `models.auxiliary`.
+
+`reasoning` and
 `service_tier` are optional; `auto` or omission means the provider/model
 default and sends no forced value. When capability metadata is available,
 `selfmind model set` validates requested values and `selfmind model current`
@@ -147,12 +188,13 @@ the wire contract of Kimi Coding Plan's `/coding` route. A role-level `protocol`
 value is available only for custom gateways or installations with a different
 wire contract; it should normally be omitted for Kimi Coding Plan.
 
-Role names are stable; a role with no override falls back to the main model.
-Point them at a cheap model to keep background work off your primary provider.
-There is no `default` role: `models.roles` contains exceptions only.
+There is no `default` role. Capability-specific roles such as `vision` do not
+inherit the auxiliary model and must be configured explicitly when needed.
+Old configurations that list every background role remain valid.
 
 Smart approval is intentionally stricter than ordinary role inheritance. It
-uses an explicitly configured `fast_classifier`; legacy configurations may
+uses `fast_classifier` resolved from an explicit role or `models.auxiliary`;
+legacy configurations may
 fall back to an explicitly configured `background_review`, but approval triage
 never silently uses `models.primary`. If neither route exists or responds in
 time, the operation is escalated to the person.
@@ -402,7 +444,7 @@ mcp:
       command: "my-mcp-server"  # for stdio
       args: []
       url: ""                   # for http
-      headers: {}
+      extra_headers: {}
 ```
 
 Empty by default. Each server's tools are registered on demand.
@@ -438,7 +480,7 @@ answers to use tools. Defaults are tuned for normal use; only touch these when
 diagnosing transport flakiness or tuning the tool loop.
 
 `approval_triage_timeout` is independent from the primary model transport
-timeout. If the explicitly configured `fast_classifier` does not return within
+timeout. If the auxiliary/explicit `fast_classifier` does not return within
 this budget, smart mode fails safe to a human approval prompt. The default is
 30 seconds; lower values can turn a healthy reasoning-capable cheap model into
 an apparent outage.
@@ -453,6 +495,9 @@ models:
     provider: "codex-cli"
     model: "gpt-5.6-sol"
     reasoning: "xhigh"
+  auxiliary:
+    provider: "deepseek"
+    model: "deepseek-v4-flash"
 provider_profiles:
   codex-cli:
     base_url: "https://chatgpt.com/backend-api/codex"
@@ -462,8 +507,8 @@ web:
   api_key: "tvly-xxxx"
 ```
 
-Everything else falls back to sensible defaults. Add IM channels, role models,
-and memory governance as your needs grow. **Restart the daemon after any
+Everything else falls back to sensible defaults. Add IM channels, per-role
+model exceptions, and memory governance as your needs grow. **Restart the daemon after any
 change.**
 
 ## 13. Update checks and feedback
@@ -472,7 +517,7 @@ change.**
 updates:
   enabled: true
   channel: "auto"         # auto (follow the installed version line) | latest | next
-  check_interval: "24h"   # cached; never blocks TUI startup
+  check_interval: "15m"   # cached; never blocks TUI startup
 
 feedback:
   repository: "gnfy/selfmind"  # default GitHub Issue destination

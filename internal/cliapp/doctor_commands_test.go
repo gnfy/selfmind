@@ -10,6 +10,7 @@ import (
 	"time"
 
 	appcore "selfmind/internal/app"
+	"selfmind/internal/tools"
 
 	_ "modernc.org/sqlite"
 )
@@ -34,8 +35,26 @@ func TestFormatModelRoleProbesGroupsResultsAndReportsFailure(t *testing.T) {
 
 func TestFormatModelRoleProbesHandlesNoConfiguredRoles(t *testing.T) {
 	section, failed := formatModelRoleProbes(nil)
-	if failed || !strings.Contains(section, "no explicitly configured roles") {
+	if failed || !strings.Contains(section, "no auxiliary model or explicit role overrides") {
 		t.Fatalf("section=%q failed=%v", section, failed)
+	}
+}
+
+func TestFormatSkillPartitionDiagnosticsIsActionable(t *testing.T) {
+	healthy := formatSkillPartitionDiagnostics(tools.SkillMigrationReport{}, nil)
+	if !strings.Contains(healthy, "healthy") {
+		t.Fatalf("healthy section = %q", healthy)
+	}
+	pending := formatSkillPartitionDiagnostics(tools.SkillMigrationReport{
+		Partitions: 2,
+		Migrated:   3,
+		Deduped:    1,
+		Conflicts:  1,
+	}, nil)
+	for _, want := range []string{"partitions=2", "migrate-skills", "conflicts=1"} {
+		if !strings.Contains(pending, want) {
+			t.Fatalf("pending section missing %q: %s", want, pending)
+		}
 	}
 }
 

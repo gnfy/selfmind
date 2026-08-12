@@ -1,0 +1,4 @@
+{
+  "method": "completion",
+  "completion": "git config global list terminal sandbox auto verify"
+}

@@ -199,10 +199,12 @@ kept verbatim. 这取代了旧的"默认直接丢弃最旧消息"行为——长
   创建/修改/读取的文件路径)。另有一个确定性兜底:从工具调用参数
   (`path`/`file_path`/`output_path`/`workdir` 和 V4A `patch`/`apply_patch` 头)
   抽取路径,模型漏写时自动补上,保证 artifact 清单不丢。
-- 兜底策略:没有 summarizer 时退回确定性裁剪(旧行为);摘要为空、摘要不比被替换
+- 兜底策略:没有配置 `summarizer`(且未启用旧兼容开关)时退回确定性裁剪;
+  摘要为空、摘要不比被替换
   的片段更小、或中段本身已是上一份摘要时,都跳过压缩,永不增长窗口或递归叠加摘要。
 - `SELFMIND_SYNC_CONTEXT_SUMMARY` 现为遗留开关:压缩默认已开,不再需要它;它仅在
-  没有配置 summarizer 角色时,允许回退用主 provider 做压缩。
+  没有配置 `summarizer` 角色时,允许回退用主 provider 做压缩。新配置应使用
+  `models.auxiliary` 或显式的 `models.roles.summarizer`。
 
 Streaming feedback now relies on larger event buffers and critical-event
 delivery backpressure. CLI/TUI should show tool and assistant progress live;

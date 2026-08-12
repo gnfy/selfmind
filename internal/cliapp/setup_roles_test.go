@@ -38,8 +38,8 @@ func roleSetupApp(t *testing.T, stdin string) (*App, string, *bytes.Buffer, *byt
 	}, configPath, stdout, stderr
 }
 
-// Choosing "reuse the foreground model" must persist every missing role, so the
-// daemon stops disabling approval triage and memory work on the next start.
+// Choosing "reuse the foreground model" persists one auxiliary selection that
+// covers every missing background role.
 func TestEnsureBackgroundRoleSetupReusesForegroundModel(t *testing.T) {
 	app, configPath, stdout, _ := roleSetupApp(t, "1\n")
 	cfg, err := config.LoadConfig(config.Options{Path: configPath})
@@ -59,13 +59,10 @@ func TestEnsureBackgroundRoleSetupReusesForegroundModel(t *testing.T) {
 	if missing := missingBackgroundRoles(saved); len(missing) != 0 {
 		t.Fatalf("roles still missing after setup: %v", missing)
 	}
-	for _, spec := range backgroundRoleSpecs {
-		role := saved.Models.Roles[string(spec.role)]
-		if role.Provider != "deepseek" || role.Model != "deepseek-v4-flash" {
-			t.Errorf("role %s = %s/%s, want deepseek/deepseek-v4-flash", spec.role, role.Provider, role.Model)
-		}
+	if got := saved.EffectiveAuxiliary(); got.Provider != "deepseek" || got.Model != "deepseek-v4-flash" {
+		t.Fatalf("auxiliary = %+v, want deepseek/deepseek-v4-flash", got)
 	}
-	if !strings.Contains(stdout.String(), "Background models:") {
+	if !strings.Contains(stdout.String(), "Auxiliary model:") {
 		t.Errorf("expected a confirmation line, got %q", stdout.String())
 	}
 }
@@ -85,7 +82,7 @@ func TestEnsureBackgroundRoleSetupSkipKeepsConfigClean(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(missingBackgroundRoles(saved)) != len(backgroundRoleSpecs) {
-		t.Fatal("skipping must not write any role")
+		t.Fatal("skipping must not write an auxiliary model")
 	}
 }
 
@@ -110,8 +107,8 @@ func TestEnsureBackgroundRoleSetupOnlyFillsGaps(t *testing.T) {
 	if kept.Provider != "minimax" || kept.Model != "MiniMax-M2.7" {
 		t.Fatalf("existing role was overwritten: %s/%s", kept.Provider, kept.Model)
 	}
-	if filled := saved.Models.Roles["fast_classifier"]; filled.Model != "deepseek-v4-flash" {
-		t.Fatalf("missing role was not filled: %+v", filled)
+	if got := saved.EffectiveAuxiliary(); got.Model != "deepseek-v4-flash" {
+		t.Fatalf("auxiliary model was not filled: %+v", got)
 	}
 }
 
@@ -125,7 +122,7 @@ func TestEnsureBackgroundRoleSetupNonInteractiveGuidance(t *testing.T) {
 
 	app.ensureBackgroundRoleSetup(cfg)
 
-	if !strings.Contains(stderr.String(), "models.roles.fast_classifier") {
+	if !strings.Contains(stderr.String(), "models.auxiliary.provider") {
 		t.Errorf("expected actionable guidance, got %q", stderr.String())
 	}
 	saved, err := config.LoadConfig(config.Options{Path: configPath})
@@ -150,7 +147,7 @@ func TestEnsureBackgroundRoleSetupInteractiveWithoutStdin(t *testing.T) {
 
 	app.ensureBackgroundRoleSetup(cfg)
 
-	if !strings.Contains(stderr.String(), "models.roles.fast_classifier") {
+	if !strings.Contains(stderr.String(), "models.auxiliary.provider") {
 		t.Errorf("expected guidance instead of a prompt, got %q", stderr.String())
 	}
 }

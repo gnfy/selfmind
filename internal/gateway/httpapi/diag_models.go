@@ -41,9 +41,10 @@ func (d *Server) modelsDiagReply(ctx context.Context, identity *control.Identity
 		}
 		fmt.Fprintf(&sb, "- %s [%s]: calls %d (ok %d, failed %d, circuit %d)\n",
 			provider, role, item.Calls, item.Succeeded, item.Failed, item.CircuitOpen)
-		fmt.Fprintf(&sb, "  tokens: input %s, output %s, cache read %s, cache write %s\n",
+		fmt.Fprintf(&sb, "  tokens: input %s, output %s, cache read %s, cache miss %s, cache write %s, reasoning %s\n",
 			formatMaintenanceTokens(item.InputTokens), formatMaintenanceTokens(item.OutputTokens),
-			formatMaintenanceTokens(item.CacheReadInputTokens), formatMaintenanceTokens(item.CacheCreationInputTokens))
+			formatMaintenanceTokens(item.CacheReadInputTokens), formatMaintenanceTokens(item.CacheMissInputTokens),
+			formatMaintenanceTokens(item.CacheCreationInputTokens), formatMaintenanceTokens(item.ReasoningOutputTokens))
 	}
 	return strings.TrimSpace(sb.String()), nil
 }

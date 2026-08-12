@@ -12,6 +12,7 @@ import (
 
 	appcore "selfmind/internal/app"
 	"selfmind/internal/control"
+	"selfmind/internal/executionenv"
 	"selfmind/internal/gateway/api"
 	"selfmind/internal/gateway/httpapi"
 	"selfmind/internal/kernel"
@@ -139,7 +140,7 @@ func runSingle(ctx context.Context, c *Case, opts RunOptions, sampleIdx, totalSa
 	}
 	isolateWorkspace := needsWorkspaceIsolation(c)
 	if !c.SharedData || isolateWorkspace {
-		root, err := os.MkdirTemp("", "selfmind-eval-"+sanitizeFilePart(c.ID)+"-")
+		root, err := makeEvalTempRoot(c.ID)
 		if err != nil {
 			return nil, err
 		}
@@ -488,12 +489,7 @@ func newRuntimeHarness(opts RunOptions, c *Case, dataDirOverride string) (*runti
 	}
 	provider := firstNonEmpty(opts.Provider, c.Provider)
 	model := firstNonEmpty(opts.Model, c.Model)
-	if provider != "" {
-		cfg.Model.Provider = provider
-	}
-	if model != "" {
-		cfg.Model.Default = model
-	}
+	applyEvalModelOverride(cfg, provider, model)
 	// Isolated scenarios get a fresh data dir so control.db / memory start clean
 	// and never touch the user's real ~/.selfmind data.
 	isolatedEvalConfig(cfg, dataDirOverride)
@@ -505,6 +501,18 @@ func newRuntimeHarness(opts RunOptions, c *Case, dataDirOverride string) (*runti
 	mem, dataDir, err := appcore.InitStorage(cfg)
 	if err != nil {
 		return nil, err
+	}
+	if dataDirOverride != "" {
+		// The real gateway installs this before constructing tools. Eval must do
+		// the same or $SELFMIND_RUN_TMP is absent and a command such as
+		// "$SELFMIND_RUN_TMP/file" becomes an out-of-workspace /file write that
+		// can wait forever for an approval no eval user can answer.
+		if err := executionenv.SetRuntimeRoot(filepath.Join(filepath.Dir(dataDirOverride), "runtime")); err != nil {
+			if mem != nil {
+				_ = mem.Close()
+			}
+			return nil, fmt.Errorf("configure eval execution runtime: %w", err)
+		}
 	}
 	tenantID := firstNonEmpty(opts.TenantID, os.Getenv("SELF_TENANT_ID"))
 	if tenantID == "" {
@@ -548,13 +556,23 @@ func newRuntimeHarness(opts RunOptions, c *Case, dataDirOverride string) (*runti
 	disp.RegisterTool(tools.NewExternalWatchTool(controlStore))
 	appcore.InitMCP(disp, cfg)
 	displayProvider, displayModel, _ := appcore.ResolveModelDisplay(cfg)
+	recallOptions := []httpapi.RecallEngineOption(nil)
+	if llm.VCRRecordMode() {
+		// The production recall deadline intentionally favors foreground
+		// latency and degrades to raw terms after three seconds. Recording is
+		// different: a timed-out auxiliary request becomes a permanent failure
+		// cassette and poisons every offline replay. Give the one-time live
+		// capture enough time while leaving production and replay behavior
+		// unchanged.
+		recallOptions = append(recallOptions, httpapi.WithRecallExpandTimeout(30*time.Second))
+	}
 	server := &httpapi.Server{
 		Control:         controlStore,
 		Gateway:         gwDeps.Gateway,
 		DefaultTenantID: tenantID,
 		// Automatic semantic recall (Work Timeline P2): eval runs the same
 		// selector path as real input — no eval-only shortcut around recall.
-		Recall: httpapi.NewRecallEngine(controlStore, mem, appcore.SemanticRecallExpander(mem, cfg, tenantID)),
+		Recall: httpapi.NewRecallEngine(controlStore, mem, appcore.SemanticRecallExpander(mem, cfg, tenantID), recallOptions...),
 		// Tool-output spool (execution-quality W1): same derivation as the
 		// daemon runner, so eval exercises the artifact + read-back flow
 		// inside its isolated data dir.
@@ -574,6 +592,75 @@ func newRuntimeHarness(opts RunOptions, c *Case, dataDirOverride string) (*runti
 		provider:     firstNonEmpty(displayProvider, provider, "default"),
 		model:        firstNonEmpty(displayModel, model, "default"),
 	}, nil
+}
+
+// makeEvalTempRoot keeps isolated workspaces away from the system temp tree.
+// Bubblewrap binds a run's scratch directory at /tmp; placing the runtime root
+// beneath /tmp would hide its own real path inside the sandbox. Prefer the user
+// cache directory and fall back to the current directory only when HOME itself
+// is a test temp directory.
+func makeEvalTempRoot(caseID string) (string, error) {
+	prefix := "selfmind-eval-" + sanitizeFilePart(caseID) + "-"
+	if cacheDir, err := os.UserCacheDir(); err == nil && strings.TrimSpace(cacheDir) != "" && !pathWithin(os.TempDir(), cacheDir) {
+		base := filepath.Join(cacheDir, "selfmind", "eval")
+		if err := os.MkdirAll(base, 0o700); err == nil {
+			return os.MkdirTemp(base, prefix)
+		}
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return "", err
+	}
+	return os.MkdirTemp(cwd, "."+prefix)
+}
+
+func pathWithin(parent, candidate string) bool {
+	parentAbs, err := filepath.Abs(parent)
+	if err != nil {
+		return false
+	}
+	candidateAbs, err := filepath.Abs(candidate)
+	if err != nil {
+		return false
+	}
+	rel, err := filepath.Rel(filepath.Clean(parentAbs), filepath.Clean(candidateAbs))
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+func applyEvalModelOverride(cfg *config.Config, provider, model string) {
+	if cfg == nil {
+		return
+	}
+	provider = strings.TrimSpace(provider)
+	model = strings.TrimSpace(model)
+	if provider == "" && model == "" {
+		return
+	}
+	current := cfg.EffectivePrimary()
+	if provider == "" {
+		provider = current.Provider
+	}
+	reasoning := ""
+	if provider == current.Provider {
+		if model == "" {
+			model = current.Model
+		}
+		reasoning = current.Reasoning
+	}
+	// The current resolver reads models.primary before all legacy fields. Use
+	// the same canonical setter as `selfmind model`; writing only cfg.Model here
+	// silently left eval --provider/--model on the configured primary route.
+	cfg.SetPrimaryModel(provider, model, reasoning)
+	// A recording must use one explicit route for every model call, including
+	// semantic recall and other bounded roles. Otherwise a healthy --provider
+	// can still record an unrelated auxiliary provider's failure at ordinal 0,
+	// permanently poisoning the cassette before the foreground turn starts.
+	cfg.Models.Auxiliary = config.ModelSelectionConfig{
+		Provider:  provider,
+		Model:     model,
+		Reasoning: reasoning,
+	}
+	cfg.Models.Roles = nil
 }
 
 // isolatedEvalConfig redirects every config-derived durable path into the

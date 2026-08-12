@@ -1,0 +1,844 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "reasoning_content": "The"
+    },
+    {
+      "reasoning_content": " user"
+    },
+    {
+      "reasoning_content": " asks"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " to"
+    },
+    {
+      "reasoning_content": " propose"
+    },
+    {
+      "reasoning_content": " a"
+    },
+    {
+      "reasoning_content": " two"
+    },
+    {
+      "reasoning_content": "-step"
+    },
+    {
+      "reasoning_content": " READ"
+    },
+    {
+      "reasoning_content": "ME"
+    },
+    {
+      "reasoning_content": " cleanup"
+    },
+    {
+      "reasoning_content": " plan"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " and"
+    },
+    {
+      "reasoning_content": " explicitly"
+    },
+    {
+      "reasoning_content": " says"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "Do"
+    },
+    {
+      "reasoning_content": " not"
+    },
+    {
+      "reasoning_content": " inspect"
+    },
+    {
+      "reasoning_content": " files"
+    },
+    {
+      "reasoning_content": " or"
+    },
+    {
+      "reasoning_content": " use"
+    },
+    {
+      "reasoning_content": " tools"
+    },
+    {
+      "reasoning_content": ".\""
+    },
+    {
+      "reasoning_content": " So"
+    },
+    {
+      "reasoning_content": " I"
+    },
+    {
+      "reasoning_content": " should"
+    },
+    {
+      "reasoning_content": " just"
+    },
+    {
+      "reasoning_content": " answer"
+    },
+    {
+      "reasoning_content": " directly"
+    },
+    {
+      "reasoning_content": " with"
+    },
+    {
+      "reasoning_content": " a"
+    },
+    {
+      "reasoning_content": " plan"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " No"
+    },
+    {
+      "reasoning_content": " tools"
+    },
+    {
+      "reasoning_content": " needed"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "content": "Here"
+    },
+    {
+      "content": "'s"
+    },
+    {
+      "content": " a"
+    },
+    {
+      "content": " two"
+    },
+    {
+      "content": "-step"
+    },
+    {
+      "content": " READ"
+    },
+    {
+      "content": "ME"
+    },
+    {
+      "content": " cleanup"
+    },
+    {
+      "content": " plan"
+    },
+    {
+      "content": ":\n\n"
+    },
+    {
+      "content": "**"
+    },
+    {
+      "content": "Step"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "1"
+    },
+    {
+      "content": ":"
+    },
+    {
+      "content": " Audit"
+    },
+    {
+      "content": " \u0026"
+    },
+    {
+      "content": " Rest"
+    },
+    {
+      "content": "ructure"
+    },
+    {
+      "content": "**\n"
+    },
+    {
+      "content": "-"
+    },
+    {
+      "content": " Read"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " READ"
+    },
+    {
+      "content": "ME"
+    },
+    {
+      "content": " top"
+    },
+    {
+      "content": " to"
+    },
+    {
+      "content": " bottom"
+    },
+    {
+      "content": " and"
+    },
+    {
+      "content": " categorize"
+    },
+    {
+      "content": " every"
+    },
+    {
+      "content": " section"
+    },
+    {
+      "content": " as"
+    },
+    {
+      "content": ":"
+    },
+    {
+      "content": " keep"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " rewrite"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " or"
+    },
+    {
+      "content": " delete"
+    },
+    {
+      "content": " ("
+    },
+    {
+      "content": "e"
+    },
+    {
+      "content": ".g"
+    },
+    {
+      "content": ".,"
+    },
+    {
+      "content": " outdated"
+    },
+    {
+      "content": " setup"
+    },
+    {
+      "content": " instructions"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " stale"
+    },
+    {
+      "content": " badges"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " duplicated"
+    },
+    {
+      "content": " info"
+    },
+    {
+      "content": " already"
+    },
+    {
+      "content": " in"
+    },
+    {
+      "content": " docs"
+    },
+    {
+      "content": "/,"
+    },
+    {
+      "content": " screens"
+    },
+    {
+      "content": "hots"
+    },
+    {
+      "content": " that"
+    },
+    {
+      "content": " no"
+    },
+    {
+      "content": " longer"
+    },
+    {
+      "content": " match"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " UI"
+    },
+    {
+      "content": ").\n"
+    },
+    {
+      "content": "-"
+    },
+    {
+      "content": " Rew"
+    },
+    {
+      "content": "rite"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " kept"
+    },
+    {
+      "content": " sections"
+    },
+    {
+      "content": " into"
+    },
+    {
+      "content": " a"
+    },
+    {
+      "content": " clean"
+    },
+    {
+      "content": " structure"
+    },
+    {
+      "content": ":"
+    },
+    {
+      "content": " a"
+    },
+    {
+      "content": " one"
+    },
+    {
+      "content": "-par"
+    },
+    {
+      "content": "agraph"
+    },
+    {
+      "content": " description"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " quick"
+    },
+    {
+      "content": "-start"
+    },
+    {
+      "content": " /"
+    },
+    {
+      "content": " installation"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " usage"
+    },
+    {
+      "content": " example"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " configuration"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " and"
+    },
+    {
+      "content": " a"
+    },
+    {
+      "content": " short"
+    },
+    {
+      "content": " \""
+    },
+    {
+      "content": "contrib"
+    },
+    {
+      "content": "uting"
+    },
+    {
+      "content": " /"
+    },
+    {
+      "content": " docs"
+    },
+    {
+      "content": "\""
+    },
+    {
+      "content": " pointer"
+    },
+    {
+      "content": ".\n"
+    },
+    {
+      "content": "-"
+    },
+    {
+      "content": " Remove"
+    },
+    {
+      "content": " anything"
+    },
+    {
+      "content": " that"
+    },
+    {
+      "content": "'s"
+    },
+    {
+      "content": " now"
+    },
+    {
+      "content": " redundant"
+    },
+    {
+      "content": " or"
+    },
+    {
+      "content": " broken"
+    },
+    {
+      "content": " ("
+    },
+    {
+      "content": "dead"
+    },
+    {
+      "content": " links"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " deprecated"
+    },
+    {
+      "content": " commands"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " placeholder"
+    },
+    {
+      "content": " text"
+    },
+    {
+      "content": ").\n\n"
+    },
+    {
+      "content": "**"
+    },
+    {
+      "content": "Step"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "2"
+    },
+    {
+      "content": ":"
+    },
+    {
+      "content": " Verify"
+    },
+    {
+      "content": " \u0026"
+    },
+    {
+      "content": " Polish"
+    },
+    {
+      "content": "**\n"
+    },
+    {
+      "content": "-"
+    },
+    {
+      "content": " Re"
+    },
+    {
+      "content": "-read"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " final"
+    },
+    {
+      "content": " draft"
+    },
+    {
+      "content": " for"
+    },
+    {
+      "content": " accuracy"
+    },
+    {
+      "content": " against"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " actual"
+    },
+    {
+      "content": " project"
+    },
+    {
+      "content": " state"
+    },
+    {
+      "content": " —"
+    },
+    {
+      "content": " confirm"
+    },
+    {
+      "content": " every"
+    },
+    {
+      "content": " command"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " link"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " and"
+    },
+    {
+      "content": " file"
+    },
+    {
+      "content": " path"
+    },
+    {
+      "content": " it"
+    },
+    {
+      "content": " references"
+    },
+    {
+      "content": " is"
+    },
+    {
+      "content": " real"
+    },
+    {
+      "content": ".\n"
+    },
+    {
+      "content": "-"
+    },
+    {
+      "content": " Tight"
+    },
+    {
+      "content": "en"
+    },
+    {
+      "content": " formatting"
+    },
+    {
+      "content": ":"
+    },
+    {
+      "content": " consistent"
+    },
+    {
+      "content": " heading"
+    },
+    {
+      "content": " levels"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " code"
+    },
+    {
+      "content": " blocks"
+    },
+    {
+      "content": " with"
+    },
+    {
+      "content": " correct"
+    },
+    {
+      "content": " language"
+    },
+    {
+      "content": " tags"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " and"
+    },
+    {
+      "content": " a"
+    },
+    {
+      "content": " concise"
+    },
+    {
+      "content": " table"
+    },
+    {
+      "content": " of"
+    },
+    {
+      "content": " contents"
+    },
+    {
+      "content": " if"
+    },
+    {
+      "content": " it"
+    },
+    {
+      "content": "'s"
+    },
+    {
+      "content": " long"
+    },
+    {
+      "content": ".\n"
+    },
+    {
+      "content": "-"
+    },
+    {
+      "content": " Fix"
+    },
+    {
+      "content": " ty"
+    },
+    {
+      "content": "pos"
+    },
+    {
+      "content": " and"
+    },
+    {
+      "content": " grammar"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " then"
+    },
+    {
+      "content": " do"
+    },
+    {
+      "content": " a"
+    },
+    {
+      "content": " final"
+    },
+    {
+      "content": " skim"
+    },
+    {
+      "content": " to"
+    },
+    {
+      "content": " confirm"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " READ"
+    },
+    {
+      "content": "ME"
+    },
+    {
+      "content": " reads"
+    },
+    {
+      "content": " well"
+    },
+    {
+      "content": " for"
+    },
+    {
+      "content": " a"
+    },
+    {
+      "content": " first"
+    },
+    {
+      "content": "-time"
+    },
+    {
+      "content": " user"
+    },
+    {
+      "content": " and"
+    },
+    {
+      "content": " matches"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " project"
+    },
+    {
+      "content": "'s"
+    },
+    {
+      "content": " actual"
+    },
+    {
+      "content": " workflow"
+    },
+    {
+      "content": ".\n\n"
+    },
+    {
+      "content": "Want"
+    },
+    {
+      "content": " me"
+    },
+    {
+      "content": " to"
+    },
+    {
+      "content": " proceed"
+    },
+    {
+      "content": " with"
+    },
+    {
+      "content": " Step"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "1"
+    },
+    {
+      "content": " ("
+    },
+    {
+      "content": "I"
+    },
+    {
+      "content": "'d"
+    },
+    {
+      "content": " inspect"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " workspace"
+    },
+    {
+      "content": " then"
+    },
+    {
+      "content": ")?"
+    },
+    {
+      "finish_reason": "stop"
+    },
+    {
+      "usage": {
+        "input_tokens": 8071,
+        "output_tokens": 276,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 8071,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 40,
+        "cache_usage_reported": true
+      }
+    }
+  ]
+}

@@ -3,14 +3,14 @@ title: "A visible implementation plan is updated and fully resolved"
 suite: quality
 workspace: isolated
 channel: cli
-require_cassette: false
+require_cassette: true
 
 turns:
   - input: >-
       Create plan-progress.txt containing exactly PLAN-COMPLETE. Maintain a
       visible three-step plan for inspect, write, and verify. Update the plan
-      after each meaningful transition, verify the exact file contents, and do
-      not finish while any plan step is pending or in progress.
+      after each meaningful transition, use the verify tool to check the exact
+      file contents, and finish only after every plan step is completed.
 
 expect:
   status: completed

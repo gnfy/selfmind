@@ -72,9 +72,9 @@ func TestMemoryConsolidationJudgeLive(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load SelfMind config: %v", err)
 	}
-	provider := explicitRoleProvider(nil, cfg, "default", llm.RoleMemoryExtract)
+	provider := configuredAuxiliaryRoleProvider(nil, cfg, "default", llm.RoleMemoryExtract)
 	if provider == nil {
-		t.Fatal("models.roles.memory_extract is not configured; refusing to use the primary coding model implicitly")
+		t.Fatal("models.auxiliary or models.roles.memory_extract is not configured; refusing to use the primary coding model implicitly")
 	}
 
 	limit := envPositiveInt("SELFMIND_MEMORY_JUDGE_LIMIT", 16)

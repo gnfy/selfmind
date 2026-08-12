@@ -1,0 +1,361 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "content": "All"
+    },
+    {
+      "content": " done"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": " I"
+    },
+    {
+      "content": " followed"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " three"
+    },
+    {
+      "content": "-step"
+    },
+    {
+      "content": " plan"
+    },
+    {
+      "content": " ("
+    },
+    {
+      "content": "in"
+    },
+    {
+      "content": "spect"
+    },
+    {
+      "content": " →"
+    },
+    {
+      "content": " write"
+    },
+    {
+      "content": " →"
+    },
+    {
+      "content": " verify"
+    },
+    {
+      "content": "),"
+    },
+    {
+      "content": " updating"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " visible"
+    },
+    {
+      "content": " plan"
+    },
+    {
+      "content": " after"
+    },
+    {
+      "content": " each"
+    },
+    {
+      "content": " transition"
+    },
+    {
+      "content": ":\n\n"
+    },
+    {
+      "content": "1"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": " **"
+    },
+    {
+      "content": "In"
+    },
+    {
+      "content": "spect"
+    },
+    {
+      "content": "**"
+    },
+    {
+      "content": " —"
+    },
+    {
+      "content": " confirmed"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " workspace"
+    },
+    {
+      "content": " was"
+    },
+    {
+      "content": " empty"
+    },
+    {
+      "content": ".\n"
+    },
+    {
+      "content": "2"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": " **"
+    },
+    {
+      "content": "Write"
+    },
+    {
+      "content": "**"
+    },
+    {
+      "content": " —"
+    },
+    {
+      "content": " created"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "plan"
+    },
+    {
+      "content": "-pro"
+    },
+    {
+      "content": "gress"
+    },
+    {
+      "content": ".txt"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " with"
+    },
+    {
+      "content": " exactly"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "PL"
+    },
+    {
+      "content": "AN"
+    },
+    {
+      "content": "-"
+    },
+    {
+      "content": "COMP"
+    },
+    {
+      "content": "L"
+    },
+    {
+      "content": "ETE"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " ("
+    },
+    {
+      "content": "13"
+    },
+    {
+      "content": " bytes"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " no"
+    },
+    {
+      "content": " extra"
+    },
+    {
+      "content": " characters"
+    },
+    {
+      "content": " or"
+    },
+    {
+      "content": " new"
+    },
+    {
+      "content": "line"
+    },
+    {
+      "content": ").\n"
+    },
+    {
+      "content": "3"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": " **"
+    },
+    {
+      "content": "Verify"
+    },
+    {
+      "content": "**"
+    },
+    {
+      "content": " —"
+    },
+    {
+      "content": " ran"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " verify"
+    },
+    {
+      "content": " tool"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " which"
+    },
+    {
+      "content": " confirmed"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " file"
+    },
+    {
+      "content": " content"
+    },
+    {
+      "content": " is"
+    },
+    {
+      "content": " exactly"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "PL"
+    },
+    {
+      "content": "AN"
+    },
+    {
+      "content": "-"
+    },
+    {
+      "content": "COMP"
+    },
+    {
+      "content": "L"
+    },
+    {
+      "content": "ETE"
+    },
+    {
+      "content": "`.\n\n"
+    },
+    {
+      "content": "The"
+    },
+    {
+      "content": " file"
+    },
+    {
+      "content": " is"
+    },
+    {
+      "content": " ready"
+    },
+    {
+      "content": " at"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "plan"
+    },
+    {
+      "content": "-pro"
+    },
+    {
+      "content": "gress"
+    },
+    {
+      "content": ".txt"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " in"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " workspace"
+    },
+    {
+      "content": " root"
+    },
+    {
+      "content": "."
+    },
+    {
+      "finish_reason": "stop"
+    },
+    {
+      "usage": {
+        "input_tokens": 9797,
+        "output_tokens": 115,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 9797,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0,
+        "cache_usage_reported": true
+      }
+    }
+  ]
+}

@@ -155,6 +155,9 @@ func reconcileStructuredOutcome(outcome api.RunOutcome) api.RunOutcome {
 		// blocked (an obstacle) so task health reads correctly.
 		outcome.CompletionReason = "waiting_user"
 		outcome.Resumable = false
+	case "waiting_finalization":
+		outcome.CompletionReason = "waiting_finalization"
+		outcome.Resumable = false
 	case "blocked":
 		if outcome.CompletionReason == "" || outcome.CompletionReason == "completed" {
 			outcome.CompletionReason = "blocked"

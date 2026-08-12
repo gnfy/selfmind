@@ -3,7 +3,11 @@ title: "a durable watch whose check cannot run is refused at registration, not p
 suite: reliability
 workspace: isolated
 channel: cli
-require_cassette: false
+require_cassette: true
+ci:
+  required: true
+  reason: credentialless
+  platforms: [linux, darwin]
 
 # Regression for the 2026-07-30 watcher incidents. A durable check has no host
 # escape hatch and no model in the loop, so a check that cannot run is terminal:
@@ -15,12 +19,11 @@ require_cassette: false
 # waiting_external (there is nothing durable to wait for), and the reply must not
 # claim the external operation itself failed.
 #
-# Record this case with a live provider before promoting it to a mandatory
-# offline gate:
+# Re-record this case after intentional watcher preflight changes:
 #   SELFMIND_EVAL_VCR=record selfmind eval run \
 #     evalcases/reliability/external-watch-preflight-refuses-broken-check.yaml --live
 turns:
-  - input: "Register a durable external watch named deploy status. In the current workspace, poll the command `selfmind-no-such-release-cli describe --status`, treat SUCCEEDED as success and FAILED as failure, use a 30 second interval and a 300 second timeout. Do not run the polling command directly yourself. If the watch cannot be registered, explain why in one short paragraph and stop; do not invent a substitute command and do not claim anything about the deployment's state."
+  - input: "Use watch_external exactly once to register a durable watch named deploy status. In the current workspace, poll the command `selfmind-no-such-release-cli describe --status`, treat SUCCEEDED as success and FAILED as failure, use a 30 second interval and a 300 second timeout. The deployment state is unknown unless registration preflight observes it. If registration is refused, explain the refusal in one short paragraph and stop."
 
 expect:
   # The watch must not be registered, so the run cannot park on an external wait.

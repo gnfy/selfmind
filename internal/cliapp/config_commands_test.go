@@ -165,7 +165,7 @@ intent:
 	}
 }
 
-func TestConfigUpgradeAddsKimiCheapRoleDefaults(t *testing.T) {
+func TestConfigUpgradeAddsKimiAuxiliaryDefault(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	original := []byte(`model:
   provider: "codex-cli"
@@ -200,16 +200,14 @@ models:
 		t.Fatal(err)
 	}
 	text := string(upgraded)
-	for _, role := range []string{"fast_classifier", "memory_extract", "skill_curator", "semantic_recall"} {
-		if !strings.Contains(text, role+":") {
-			t.Fatalf("upgraded config missing role %q:\n%s", role, text)
-		}
+	if !strings.Contains(text, "auxiliary:") {
+		t.Fatalf("upgraded config missing auxiliary model:\n%s", text)
 	}
 	if !strings.Contains(text, `provider: "custom"`) || !strings.Contains(text, `model: "keep-me"`) {
 		t.Fatalf("existing role was overwritten:\n%s", text)
 	}
 	if !strings.Contains(text, `provider: kimi-coding`) || !strings.Contains(text, `model: kimi-for-coding`) {
-		t.Fatalf("kimi role defaults missing:\n%s", text)
+		t.Fatalf("kimi auxiliary default missing:\n%s", text)
 	}
 	if _, err := config.LoadConfig(config.Options{Path: path}); err != nil {
 		t.Fatalf("upgraded config is not loadable: %v\n%s", err, text)

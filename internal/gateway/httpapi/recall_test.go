@@ -345,6 +345,17 @@ func TestRecallExpansionAddsVariants(t *testing.T) {
 	}
 }
 
+func TestRecallExpandTimeoutOption(t *testing.T) {
+	engine := NewRecallEngine(nil, &countingSessionSearcher{}, &scriptedExpander{}, WithRecallExpandTimeout(17*time.Second))
+	if engine.expandTimeout != 17*time.Second {
+		t.Fatalf("expand timeout = %s, want 17s", engine.expandTimeout)
+	}
+	NewRecallEngine(nil, &countingSessionSearcher{}, nil, WithRecallExpandTimeout(0))
+	if got := NewRecallEngine(nil, &countingSessionSearcher{}, nil, WithRecallExpandTimeout(-time.Second)).expandTimeout; got != defaultExpandTimeout {
+		t.Fatalf("invalid timeout changed default: %s", got)
+	}
+}
+
 func TestCanonicalRecallUsesExpansionAndReportsSource(t *testing.T) {
 	mem := newRecallMemory(t)
 	const personID = "person-canonical-expansion"

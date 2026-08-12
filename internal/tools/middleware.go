@@ -8,6 +8,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -1468,6 +1469,9 @@ func approvalArgs(args map[string]interface{}) map[string]interface{} {
 
 func approvalDisplayArgs(args map[string]interface{}) map[string]interface{} {
 	out := approvalArgs(args)
+	for key, value := range out {
+		out[key] = redactApprovalNamedValue(key, value)
+	}
 	if effectiveSandboxModeArg(args) == SandboxHost {
 		requested, _ := requestedSandboxMode(args)
 		if requested != SandboxHost {
@@ -1475,6 +1479,42 @@ func approvalDisplayArgs(args map[string]interface{}) map[string]interface{} {
 		}
 	}
 	return out
+}
+
+func redactApprovalValue(value interface{}) interface{} {
+	switch typed := value.(type) {
+	case string:
+		return RedactSensitive(typed)
+	case []string:
+		out := make([]string, len(typed))
+		for i, item := range typed {
+			out[i] = RedactSensitive(item)
+		}
+		return out
+	case []interface{}:
+		out := make([]interface{}, len(typed))
+		for i, item := range typed {
+			out[i] = redactApprovalValue(item)
+		}
+		return out
+	case map[string]interface{}:
+		out := make(map[string]interface{}, len(typed))
+		for key, item := range typed {
+			out[key] = redactApprovalNamedValue(key, item)
+		}
+		return out
+	default:
+		return value
+	}
+}
+
+var sensitiveApprovalField = regexp.MustCompile(`(?i)(^|[_-])(api[_-]?key|token|secret|password|credential|authorization)($|[_-])`)
+
+func redactApprovalNamedValue(key string, value interface{}) interface{} {
+	if text, ok := value.(string); ok && sensitiveApprovalField.MatchString(strings.TrimSpace(key)) && !isCredentialReference(text) {
+		return "[REDACTED]"
+	}
+	return redactApprovalValue(value)
 }
 
 func SkillMetricsMiddleware(skillStore interface {

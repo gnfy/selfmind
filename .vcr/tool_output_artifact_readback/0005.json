@@ -1,0 +1,145 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "reasoning_content": "I"
+    },
+    {
+      "reasoning_content": " found"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " marker"
+    },
+    {
+      "reasoning_content": " line"
+    },
+    {
+      "reasoning_content": ":"
+    },
+    {
+      "reasoning_content": " MARK"
+    },
+    {
+      "reasoning_content": "ER"
+    },
+    {
+      "reasoning_content": "-"
+    },
+    {
+      "reasoning_content": "CODE"
+    },
+    {
+      "reasoning_content": ":"
+    },
+    {
+      "reasoning_content": " Q"
+    },
+    {
+      "reasoning_content": "LX"
+    },
+    {
+      "reasoning_content": "-"
+    },
+    {
+      "reasoning_content": "773"
+    },
+    {
+      "reasoning_content": "4"
+    },
+    {
+      "reasoning_content": "-M"
+    },
+    {
+      "reasoning_content": "ID"
+    },
+    {
+      "reasoning_content": "\n\n"
+    },
+    {
+      "reasoning_content": "The"
+    },
+    {
+      "reasoning_content": " user"
+    },
+    {
+      "reasoning_content": " asked"
+    },
+    {
+      "reasoning_content": " to"
+    },
+    {
+      "reasoning_content": " only"
+    },
+    {
+      "reasoning_content": " output"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " marker"
+    },
+    {
+      "reasoning_content": " value"
+    },
+    {
+      "reasoning_content": " itself"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "content": "MARK"
+    },
+    {
+      "content": "ER"
+    },
+    {
+      "content": "-"
+    },
+    {
+      "content": "CODE"
+    },
+    {
+      "content": ":"
+    },
+    {
+      "content": " Q"
+    },
+    {
+      "content": "LX"
+    },
+    {
+      "content": "-"
+    },
+    {
+      "content": "773"
+    },
+    {
+      "content": "4"
+    },
+    {
+      "content": "-M"
+    },
+    {
+      "content": "ID"
+    },
+    {
+      "finish_reason": "stop"
+    },
+    {
+      "usage": {
+        "input_tokens": 14336,
+        "output_tokens": 43,
+        "cache_read_input_tokens": 9600,
+        "cache_miss_input_tokens": 4736,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 30,
+        "cache_usage_reported": true
+      }
+    }
+  ]
+}

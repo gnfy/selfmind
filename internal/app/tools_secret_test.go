@@ -29,3 +29,14 @@ func TestRegisterSensitiveHeadersOnlyRegistersCredentialHeaders(t *testing.T) {
 		t.Fatalf("bare bearer payload leaked: %q", got)
 	}
 }
+
+func TestRegisterSensitiveExtrasProtectsCredentialLikeValues(t *testing.T) {
+	const secret = "opaque-extra-query-token-7d102e"
+	registerSensitiveExtras(map[string]interface{}{
+		"user_id":  "ordinary-user-id",
+		"metadata": map[string]interface{}{"access_token": secret},
+	})
+	if got := tools.RedactSensitive("value=" + secret); strings.Contains(got, secret) {
+		t.Fatalf("extra option credential leaked: %q", got)
+	}
+}

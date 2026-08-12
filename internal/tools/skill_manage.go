@@ -20,17 +20,18 @@ var allowedSkillSubdirs = map[string]bool{
 
 // SkillInfo is the filesystem + usage view used by skill_manage and the CLI.
 type SkillInfo struct {
-	Name        string
-	Description string
-	Path        string
-	Format      string
-	State       string
-	Source      string
-	Scope       string
-	Root        string
-	Writable    bool
-	LastUsed    string
-	Pinned      bool
+	Name                string
+	Description         string
+	Path                string
+	Format              string
+	State               string
+	Source              string
+	Scope               string
+	Root                string
+	Writable            bool
+	LastUsed            string
+	Pinned              bool
+	GovernanceNotBefore string
 }
 
 // SkillManageTool allows the agent to actively maintain reusable skills.
@@ -117,14 +118,11 @@ func (t *SkillManageTool) Execute(args map[string]interface{}) (string, error) {
 	source, _ := args["source"].(string)
 	changeID, _ := args["change_id"].(string)
 
-	tenantID, _ := args["_tenant_id"].(string)
-	if tenantID == "" {
-		tenantID = "default"
-	}
+	tenantID := skillStorageTenantID(args)
 
 	switch action {
 	case "list":
-		skills, err := ListSkillsForTenant(tenantID, false)
+		skills, err := ListSkillsForTenant(tenantID, false, args)
 		if err != nil {
 			return "", err
 		}
@@ -133,7 +131,7 @@ func (t *SkillManageTool) Execute(args map[string]interface{}) (string, error) {
 		if strings.TrimSpace(query) == "" {
 			return "", fmt.Errorf("query is required for search")
 		}
-		skills, err := SearchSkillsForTenant(tenantID, query)
+		skills, err := SearchSkillsForTenant(tenantID, query, args)
 		if err != nil {
 			return "", err
 		}
@@ -142,7 +140,7 @@ func (t *SkillManageTool) Execute(args map[string]interface{}) (string, error) {
 		if name == "" {
 			return "", fmt.Errorf("name is required for read")
 		}
-		return ReadSkillForTenant(tenantID, name)
+		return ReadSkillForTenant(tenantID, name, args)
 	case "history":
 		if name == "" {
 			return "", fmt.Errorf("name is required for history")
@@ -160,38 +158,38 @@ func (t *SkillManageTool) Execute(args map[string]interface{}) (string, error) {
 		reloadSkillToolsFromArgs(tenantID, args)
 		return result, err
 	case "create":
-		result, err := createSkill(tenantID, name, content, description, source)
+		result, err := createSkill(tenantID, name, content, description, source, args)
 		reloadSkillToolsFromArgs(tenantID, args)
 		return result, err
 	case "update", "edit":
-		result, err := editSkill(tenantID, name, content, description)
+		result, err := editSkill(tenantID, name, content, description, args)
 		reloadSkillToolsFromArgs(tenantID, args)
 		return result, err
 	case "patch":
-		result, err := patchSkill(tenantID, name, oldText, newText, filePath, replaceAll)
+		result, err := patchSkill(tenantID, name, oldText, newText, filePath, replaceAll, args)
 		reloadSkillToolsFromArgs(tenantID, args)
 		return result, err
 	case "delete":
-		result, err := deleteSkill(tenantID, name)
+		result, err := deleteSkill(tenantID, name, args)
 		reloadSkillToolsFromArgs(tenantID, args)
 		return result, err
 	case "archive":
-		result, err := ArchiveSkillForTenant(tenantID, name)
+		result, err := ArchiveSkillForTenant(tenantID, name, args)
 		reloadSkillToolsFromArgs(tenantID, args)
 		return result, err
 	case "write_file":
-		result, err := writeSkillSupportFile(tenantID, name, filePath, fileContent)
+		result, err := writeSkillSupportFile(tenantID, name, filePath, fileContent, args)
 		reloadSkillToolsFromArgs(tenantID, args)
 		return result, err
 	case "remove_file":
-		result, err := removeSkillSupportFile(tenantID, name, filePath)
+		result, err := removeSkillSupportFile(tenantID, name, filePath, args)
 		reloadSkillToolsFromArgs(tenantID, args)
 		return result, err
 	case "pin":
 		if name == "" {
 			return "", fmt.Errorf("name is required for pin")
 		}
-		info, err := findSkill(tenantID, name)
+		info, err := findSkill(tenantID, name, args)
 		if err != nil {
 			return "", err
 		}
@@ -204,7 +202,7 @@ func (t *SkillManageTool) Execute(args map[string]interface{}) (string, error) {
 		if name == "" {
 			return "", fmt.Errorf("name is required for unpin")
 		}
-		info, err := findSkill(tenantID, name)
+		info, err := findSkill(tenantID, name, args)
 		if err != nil {
 			return "", err
 		}
@@ -217,7 +215,7 @@ func (t *SkillManageTool) Execute(args map[string]interface{}) (string, error) {
 		if name == "" {
 			return "", fmt.Errorf("name is required for enable")
 		}
-		info, err := findSkill(tenantID, name)
+		info, err := findSkill(tenantID, name, args)
 		if err != nil {
 			return "", err
 		}
@@ -230,7 +228,7 @@ func (t *SkillManageTool) Execute(args map[string]interface{}) (string, error) {
 		if name == "" {
 			return "", fmt.Errorf("name is required for disable")
 		}
-		info, err := findSkill(tenantID, name)
+		info, err := findSkill(tenantID, name, args)
 		if err != nil {
 			return "", err
 		}
@@ -241,7 +239,7 @@ func (t *SkillManageTool) Execute(args map[string]interface{}) (string, error) {
 		return fmt.Sprintf("Skill %q disabled.", info.Name), nil
 	case "reload":
 		registry, _ := args["_registry"].(*Registry)
-		loaded, err := ReloadSkillToolsForTenant(tenantID, registry)
+		loaded, err := ReloadSkillToolsForTenant(tenantID, registry, args)
 		if err != nil {
 			return "", err
 		}
@@ -253,26 +251,26 @@ func (t *SkillManageTool) Execute(args map[string]interface{}) (string, error) {
 
 func reloadSkillToolsFromArgs(tenantID string, args map[string]interface{}) {
 	if registry, _ := args["_registry"].(*Registry); registry != nil {
-		_, _ = ReloadSkillToolsForTenant(tenantID, registry)
+		_, _ = ReloadSkillToolsForTenant(tenantID, registry, args)
 	}
 }
 
-func getSkillsDir(tenantID string) (string, error) {
-	root, err := WritableSkillRootForTenant(tenantID)
+func getSkillsDir(tenantID string, invocation ...map[string]interface{}) (string, error) {
+	root, err := WritableSkillRootForTenant(tenantID, invocation...)
 	if err != nil {
 		return "", err
 	}
 	return root.Path, nil
 }
 
-func createSkill(tenantID, name, content, description, source string) (string, error) {
+func createSkill(tenantID, name, content, description, source string, invocation ...map[string]interface{}) (string, error) {
 	if name == "" {
 		return "", fmt.Errorf("name is required for create")
 	}
 	if content == "" {
 		return "", fmt.Errorf("content is required for create")
 	}
-	dir, err := getSkillsDir(tenantID)
+	dir, err := getSkillsDir(tenantID, invocation...)
 	if err != nil {
 		return "", err
 	}
@@ -307,14 +305,14 @@ func createSkill(tenantID, name, content, description, source string) (string, e
 	return fmt.Sprintf("Skill %q created at %s", safeName, target), nil
 }
 
-func editSkill(tenantID, name, content, description string) (string, error) {
+func editSkill(tenantID, name, content, description string, invocation ...map[string]interface{}) (string, error) {
 	if name == "" {
 		return "", fmt.Errorf("name is required for edit")
 	}
 	if content == "" {
 		return "", fmt.Errorf("content is required for edit")
 	}
-	info, err := findSkill(tenantID, name)
+	info, err := findSkill(tenantID, name, invocation...)
 	if err != nil {
 		return "", err
 	}
@@ -341,14 +339,14 @@ func editSkill(tenantID, name, content, description string) (string, error) {
 	return fmt.Sprintf("Skill %q edited at %s", info.Name, target), nil
 }
 
-func patchSkill(tenantID, name, oldText, newText, filePath string, replaceAll bool) (string, error) {
+func patchSkill(tenantID, name, oldText, newText, filePath string, replaceAll bool, invocation ...map[string]interface{}) (string, error) {
 	if name == "" {
 		return "", fmt.Errorf("name is required for patch")
 	}
 	if oldText == "" {
 		return "", fmt.Errorf("old_text is required for patch")
 	}
-	info, err := findSkill(tenantID, name)
+	info, err := findSkill(tenantID, name, invocation...)
 	if err != nil {
 		return "", err
 	}
@@ -396,11 +394,11 @@ func patchSkill(tenantID, name, oldText, newText, filePath string, replaceAll bo
 	return fmt.Sprintf("Skill %q patched at %s (%d replacement, strategy=%s)", info.Name, target, matches, strategy), nil
 }
 
-func deleteSkill(tenantID, name string) (string, error) {
+func deleteSkill(tenantID, name string, invocation ...map[string]interface{}) (string, error) {
 	if name == "" {
 		return "", fmt.Errorf("name is required for delete")
 	}
-	info, err := findSkill(tenantID, name)
+	info, err := findSkill(tenantID, name, invocation...)
 	if err != nil {
 		return "", err
 	}
@@ -424,11 +422,11 @@ func deleteSkill(tenantID, name string) (string, error) {
 	return fmt.Sprintf("Skill %q deleted.", info.Name), nil
 }
 
-func ArchiveSkillForTenant(tenantID, name string) (string, error) {
+func ArchiveSkillForTenant(tenantID, name string, invocation ...map[string]interface{}) (string, error) {
 	if name == "" {
 		return "", fmt.Errorf("name is required for archive")
 	}
-	info, err := findSkill(tenantID, name)
+	info, err := findSkill(tenantID, name, invocation...)
 	if err != nil {
 		return "", err
 	}
@@ -438,7 +436,7 @@ func ArchiveSkillForTenant(tenantID, name string) (string, error) {
 	if info.Pinned {
 		return "", fmt.Errorf("skill %q is pinned; unpin it before archiving", info.Name)
 	}
-	dir, err := getSkillsDir(tenantID)
+	dir, err := getSkillsDir(tenantID, invocation...)
 	if err != nil {
 		return "", err
 	}
@@ -460,14 +458,14 @@ func ArchiveSkillForTenant(tenantID, name string) (string, error) {
 	return fmt.Sprintf("Skill %q archived to %s", info.Name, dest), nil
 }
 
-func writeSkillSupportFile(tenantID, name, filePath, fileContent string) (string, error) {
+func writeSkillSupportFile(tenantID, name, filePath, fileContent string, invocation ...map[string]interface{}) (string, error) {
 	if name == "" {
 		return "", fmt.Errorf("name is required for write_file")
 	}
 	if filePath == "" {
 		return "", fmt.Errorf("file_path is required for write_file")
 	}
-	info, err := findSkill(tenantID, name)
+	info, err := findSkill(tenantID, name, invocation...)
 	if err != nil {
 		return "", err
 	}
@@ -497,14 +495,14 @@ func writeSkillSupportFile(tenantID, name, filePath, fileContent string) (string
 	return fmt.Sprintf("Wrote support file for skill %q: %s", info.Name, target), nil
 }
 
-func removeSkillSupportFile(tenantID, name, filePath string) (string, error) {
+func removeSkillSupportFile(tenantID, name, filePath string, invocation ...map[string]interface{}) (string, error) {
 	if name == "" {
 		return "", fmt.Errorf("name is required for remove_file")
 	}
 	if filePath == "" {
 		return "", fmt.Errorf("file_path is required for remove_file")
 	}
-	info, err := findSkill(tenantID, name)
+	info, err := findSkill(tenantID, name, invocation...)
 	if err != nil {
 		return "", err
 	}
@@ -711,8 +709,8 @@ func activeSkillMainPathForRestore(tenantID, name string) (string, SkillInfo, er
 	return path, SkillInfo{Name: safeName, Path: filepath.Dir(path), Format: "dir", Source: SkillSourceAgentCreated, Scope: SkillScopeUser, Root: dir, Writable: true}, nil
 }
 
-func ListSkillsForTenant(tenantID string, includeArchived bool) ([]SkillInfo, error) {
-	roots, err := SkillRootsForTenant(tenantID)
+func ListSkillsForTenant(tenantID string, includeArchived bool, invocation ...map[string]interface{}) ([]SkillInfo, error) {
+	roots, err := SkillRootsForTenant(tenantID, invocation...)
 	if err != nil {
 		return nil, err
 	}
@@ -723,9 +721,6 @@ func ListSkillsForTenant(tenantID string, includeArchived bool) ([]SkillInfo, er
 	var skills []SkillInfo
 	seen := map[string]bool{}
 	for _, root := range roots {
-		if root.Writable {
-			_ = os.MkdirAll(root.Path, 0755)
-		}
 		usage, _ := loadSkillUsageForDir(root.Path)
 		for name, rec := range userUsage {
 			if _, ok := usage[name]; !ok {
@@ -772,8 +767,8 @@ func ListSkillsForTenant(tenantID string, includeArchived bool) ([]SkillInfo, er
 	return skills, nil
 }
 
-func SearchSkillsForTenant(tenantID, query string) ([]SkillInfo, error) {
-	skills, err := ListSkillsForTenant(tenantID, false)
+func SearchSkillsForTenant(tenantID, query string, invocation ...map[string]interface{}) ([]SkillInfo, error) {
+	skills, err := ListSkillsForTenant(tenantID, false, invocation...)
 	if err != nil {
 		return nil, err
 	}
@@ -789,8 +784,8 @@ func SearchSkillsForTenant(tenantID, query string) ([]SkillInfo, error) {
 	return matches, nil
 }
 
-func ReadSkillForTenant(tenantID, name string) (string, error) {
-	info, err := findSkill(tenantID, name)
+func ReadSkillForTenant(tenantID, name string, invocation ...map[string]interface{}) (string, error) {
+	info, err := findSkill(tenantID, name, invocation...)
 	if err != nil {
 		return "", err
 	}
@@ -817,8 +812,8 @@ func ReadSkillForTenant(tenantID, name string) (string, error) {
 	return sb.String(), nil
 }
 
-func findSkill(tenantID, name string) (SkillInfo, error) {
-	skills, err := ListSkillsForTenant(tenantID, false)
+func findSkill(tenantID, name string, invocation ...map[string]interface{}) (SkillInfo, error) {
+	skills, err := ListSkillsForTenant(tenantID, false, invocation...)
 	if err != nil {
 		return SkillInfo{}, err
 	}
@@ -861,17 +856,18 @@ func readSkillInfo(path, format string, usage map[string]SkillUsageRecord, root 
 		source = SkillSourceManual
 	}
 	return SkillInfo{
-		Name:        name,
-		Description: def.Description,
-		Path:        path,
-		Format:      format,
-		State:       state,
-		Source:      source,
-		Scope:       root.Scope,
-		Root:        root.Path,
-		Writable:    root.Writable,
-		LastUsed:    rec.LastUsed,
-		Pinned:      rec.Pinned,
+		Name:                name,
+		Description:         def.Description,
+		Path:                path,
+		Format:              format,
+		State:               state,
+		Source:              source,
+		Scope:               root.Scope,
+		Root:                root.Path,
+		Writable:            root.Writable,
+		LastUsed:            rec.LastUsed,
+		Pinned:              rec.Pinned,
+		GovernanceNotBefore: rec.GovernanceNotBefore,
 	}, true
 }
 

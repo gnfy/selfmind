@@ -3,7 +3,7 @@ title: "An explicit start-execution cue resumes the current task"
 suite: continuity
 workspace: isolated
 channel: cli
-require_cassette: false
+require_cassette: true
 
 # "Start execution" is explicit continuation evidence, not a new task. This
 # locks the gateway attachment contract while keeping the model work trivial;

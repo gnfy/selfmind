@@ -21,6 +21,8 @@ type Runtime struct {
 	CredentialSource   string
 	AuthType           string
 	Headers            map[string]string
+	ExtraBody          map[string]interface{}
+	ExtraQuery         map[string]interface{}
 	ContextLength      int
 	ContextSource      string
 	MaxTokens          int
@@ -46,6 +48,9 @@ type Selection struct {
 	Protocol        string
 	APIKey          string
 	Headers         map[string]string
+	ExtraHeaders    map[string]string
+	ExtraBody       map[string]interface{}
+	ExtraQuery      map[string]interface{}
 	ContextLength   int
 	MaxTokens       int
 	ReasoningEffort string
@@ -176,7 +181,8 @@ func (r *Resolver) resolveNamed(providerName string, selection Selection, modelN
 	baseURL, protocol = resolveProviderTransport(profile, baseURL, protocol, endpoint, selection, cred)
 	// Global config headers sit at the BOTTOM: a user-wide User-Agent must
 	// never crush a built-in compatibility header (e.g. kimi-coding's).
-	headers := mergeHeaders(r.cfg.Model.Headers, profile.Headers, endpoint.Headers, selection.Headers)
+	headers := mergeHeaders(r.cfg.Model.Headers, r.cfg.Model.ExtraHeaders, profile.Headers,
+		endpoint.Headers, endpoint.ExtraHeaders, selection.Headers, selection.ExtraHeaders)
 	if cred.AccountID != "" {
 		if headers == nil {
 			headers = map[string]string{}
@@ -192,11 +198,17 @@ func (r *Resolver) resolveNamed(providerName string, selection Selection, modelN
 		descriptor.ContextWindow,
 		KnownContextLength(profile.ID, model),
 	)
+	resolvedQuirks := mergeProviderQuirks(profile.Quirks, quirksFromConfig(endpoint.Quirks), selection.Quirks)
+	if err := ValidateProviderQuirks(resolvedQuirks); err != nil {
+		return Runtime{}, fmt.Errorf("provider %s quirks: %w", profile.ID, err)
+	}
 	return Runtime{
 		Provider: profile.ID, DisplayName: firstNonEmpty(profile.DisplayName, profile.ID),
 		Model: model, Protocol: protocol, BaseURL: baseURL,
 		APIKey: cred.Token, CredentialSource: cred.Source, AuthType: profile.AuthType,
 		Headers:            headers,
+		ExtraBody:          mergeExtraMaps(endpoint.ExtraBody, selection.ExtraBody),
+		ExtraQuery:         mergeExtraMaps(endpoint.ExtraQuery, selection.ExtraQuery),
 		ContextLength:      contextLength,
 		ContextSource:      contextSource,
 		MaxTokens:          firstPositive(selection.MaxTokens, endpoint.MaxTokens, profile.MaxTokens),
@@ -208,7 +220,7 @@ func (r *Resolver) resolveNamed(providerName string, selection Selection, modelN
 		DefaultServiceTier: descriptor.DefaultServiceTier,
 		ServiceTiers:       append([]string(nil), descriptor.SupportedServiceTiers...),
 		CapabilitySource:   descriptor.CapabilitySource,
-		Quirks:             mergeProviderQuirks(profile.Quirks, quirksFromConfig(endpoint.Quirks), selection.Quirks),
+		Quirks:             resolvedQuirks,
 		TokenGetter:        cred.Getter,
 		TokenRefresher:     cred.Refresher,
 	}, nil
@@ -228,6 +240,10 @@ func (r *Resolver) resolveCustom(providerName string, selection Selection, model
 				customModelContextLength(cp, model),
 				KnownContextLength("custom:"+cp.Name, model),
 			)
+			resolvedQuirks := mergeProviderQuirks(defaultQuirksForProtocol(protocol), selection.Quirks)
+			if err := ValidateProviderQuirks(resolvedQuirks); err != nil {
+				return Runtime{}, fmt.Errorf("provider custom:%s quirks: %w", cp.Name, err)
+			}
 			return Runtime{
 				Provider: "custom:" + cp.Name, DisplayName: cp.Name,
 				Model:            model,
@@ -236,14 +252,16 @@ func (r *Resolver) resolveCustom(providerName string, selection Selection, model
 				APIKey:           firstNonEmpty(selection.APIKey, cp.APIKey),
 				CredentialSource: "config:custom",
 				AuthType:         AuthAPIKey,
-				Headers:          mergeHeaders(r.cfg.Model.Headers, selection.Headers),
+				Headers:          mergeHeaders(r.cfg.Model.Headers, r.cfg.Model.ExtraHeaders, selection.Headers, selection.ExtraHeaders),
+				ExtraBody:        mergeExtraMaps(selection.ExtraBody),
+				ExtraQuery:       mergeExtraMaps(selection.ExtraQuery),
 				ContextLength:    contextLength,
 				ContextSource:    contextSource,
 				MaxTokens:        selection.MaxTokens,
 				ReasoningEffort:  selection.ReasoningEffort,
 				Thinking:         selection.Thinking,
 				ServiceTier:      selection.ServiceTier,
-				Quirks:           mergeProviderQuirks(defaultQuirksForProtocol(protocol), selection.Quirks),
+				Quirks:           resolvedQuirks,
 			}, nil
 		}
 	}
@@ -391,10 +409,14 @@ func (r *Resolver) HeaderOrigins(provider string, headers map[string]string) map
 		switch {
 		case strings.EqualFold(key, "chatgpt-account-id"):
 			origins[key] = "credential"
+		case headerLayerHas(endpoint.ExtraHeaders, key):
+			origins[key] = "provider config extra_headers"
 		case headerLayerHas(endpoint.Headers, key):
 			origins[key] = "provider config"
 		case headerLayerHas(profileHeaders, key):
 			origins[key] = "built-in profile"
+		case headerLayerHas(r.cfg.Model.ExtraHeaders, key):
+			origins[key] = "model.extra_headers"
 		case headerLayerHas(r.cfg.Model.Headers, key):
 			origins[key] = "model.headers"
 		default:
@@ -415,12 +437,18 @@ func headerLayerHas(layer map[string]string, key string) bool {
 
 func mergeHeaders(headerSets ...map[string]string) map[string]string {
 	out := map[string]string{}
+	canonical := map[string]string{}
 	for _, headers := range headerSets {
 		for key, value := range headers {
 			key = strings.TrimSpace(key)
 			if key == "" {
 				continue
 			}
+			lower := strings.ToLower(key)
+			if previous := canonical[lower]; previous != "" && previous != key {
+				delete(out, previous)
+			}
+			canonical[lower] = key
 			out[key] = strings.TrimSpace(value)
 		}
 	}
@@ -428,6 +456,44 @@ func mergeHeaders(headerSets ...map[string]string) map[string]string {
 		return nil
 	}
 	return out
+}
+
+func mergeExtraMaps(layers ...map[string]interface{}) map[string]interface{} {
+	out := map[string]interface{}{}
+	for _, layer := range layers {
+		for key, value := range layer {
+			key = strings.TrimSpace(key)
+			if key == "" {
+				continue
+			}
+			if current, ok := out[key].(map[string]interface{}); ok {
+				if incoming, ok := value.(map[string]interface{}); ok {
+					out[key] = mergeExtraMaps(current, incoming)
+					continue
+				}
+			}
+			out[key] = cloneExtraValue(value)
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func cloneExtraValue(value interface{}) interface{} {
+	switch typed := value.(type) {
+	case map[string]interface{}:
+		return mergeExtraMaps(typed)
+	case []interface{}:
+		out := make([]interface{}, len(typed))
+		for i, item := range typed {
+			out[i] = cloneExtraValue(item)
+		}
+		return out
+	default:
+		return value
+	}
 }
 
 func firstPositive(values ...int) int {
@@ -460,16 +526,28 @@ func defaultQuirksForProtocol(protocol string) ProviderQuirks {
 }
 
 func quirksFromConfig(q config.ProviderQuirks) ProviderQuirks {
-	return ProviderQuirks{
-		AuthHeader:             strings.TrimSpace(q.AuthHeader),
-		ToolSchema:             strings.TrimSpace(q.ToolSchema),
-		SystemMessageMode:      strings.TrimSpace(q.SystemMessageMode),
-		ThinkingMode:           strings.TrimSpace(q.ThinkingMode),
-		UserAgent:              strings.TrimSpace(q.UserAgent),
-		ResponsesStoreFalse:    q.ResponsesStoreFalse,
-		ResponsesRequireStream: q.ResponsesRequireStream,
-		PromptCache:            q.PromptCache,
+	out := ProviderQuirks{
+		AuthHeader:        strings.TrimSpace(q.AuthHeader),
+		ToolSchema:        strings.TrimSpace(q.ToolSchema),
+		SystemMessageMode: strings.TrimSpace(q.SystemMessageMode),
+		ThinkingMode:      strings.TrimSpace(q.ThinkingMode),
+		UserIdentityField: strings.TrimSpace(q.UserIdentityField),
+		UserAgent:         strings.TrimSpace(q.UserAgent),
+		HTTPVersion:       strings.TrimSpace(q.HTTPVersion),
 	}
+	if q.ResponsesStoreFalse != nil {
+		out.ResponsesStoreFalse = *q.ResponsesStoreFalse
+		out.ResponsesStoreFalseSet = true
+	}
+	if q.ResponsesRequireStream != nil {
+		out.ResponsesRequireStream = *q.ResponsesRequireStream
+		out.ResponsesRequireStreamSet = true
+	}
+	if q.PromptCache != nil {
+		out.PromptCache = *q.PromptCache
+		out.PromptCacheSet = true
+	}
+	return out
 }
 
 func mergeProviderQuirks(base ProviderQuirks, overlays ...ProviderQuirks) ProviderQuirks {
@@ -487,19 +565,32 @@ func mergeProviderQuirks(base ProviderQuirks, overlays ...ProviderQuirks) Provid
 		if strings.TrimSpace(overlay.ThinkingMode) != "" {
 			out.ThinkingMode = strings.TrimSpace(overlay.ThinkingMode)
 		}
+		if strings.TrimSpace(overlay.UserIdentityField) != "" {
+			out.UserIdentityField = strings.TrimSpace(overlay.UserIdentityField)
+		}
 		if strings.TrimSpace(overlay.UserAgent) != "" {
 			out.UserAgent = strings.TrimSpace(overlay.UserAgent)
 		}
-		if overlay.DisableHTTP2 {
+		if strings.TrimSpace(overlay.HTTPVersion) != "" && !strings.EqualFold(strings.TrimSpace(overlay.HTTPVersion), "auto") {
+			out.HTTPVersion = strings.TrimSpace(overlay.HTTPVersion)
+			out.DisableHTTP2 = strings.EqualFold(out.HTTPVersion, "http1")
+		} else if overlay.DisableHTTP2 {
 			out.DisableHTTP2 = true
+			out.HTTPVersion = "http1"
 		}
-		if overlay.PromptCache {
+		if overlay.PromptCacheSet {
+			out.PromptCache = overlay.PromptCache
+		} else if overlay.PromptCache {
 			out.PromptCache = true
 		}
-		if overlay.ResponsesStoreFalse {
+		if overlay.ResponsesStoreFalseSet {
+			out.ResponsesStoreFalse = overlay.ResponsesStoreFalse
+		} else if overlay.ResponsesStoreFalse {
 			out.ResponsesStoreFalse = true
 		}
-		if overlay.ResponsesRequireStream {
+		if overlay.ResponsesRequireStreamSet {
+			out.ResponsesRequireStream = overlay.ResponsesRequireStream
+		} else if overlay.ResponsesRequireStream {
 			out.ResponsesRequireStream = true
 		}
 		if overlay.SupportsTools {
@@ -520,7 +611,16 @@ func normalizeProviderQuirks(q ProviderQuirks) ProviderQuirks {
 	q.ToolSchema = strings.ToLower(strings.TrimSpace(q.ToolSchema))
 	q.SystemMessageMode = strings.ToLower(strings.TrimSpace(q.SystemMessageMode))
 	q.ThinkingMode = strings.ToLower(strings.TrimSpace(q.ThinkingMode))
+	q.UserIdentityField = strings.ToLower(strings.TrimSpace(q.UserIdentityField))
 	q.UserAgent = strings.TrimSpace(q.UserAgent)
+	q.HTTPVersion = strings.ToLower(strings.TrimSpace(q.HTTPVersion))
+	if q.HTTPVersion == "" {
+		if q.DisableHTTP2 {
+			q.HTTPVersion = "http1"
+		} else {
+			q.HTTPVersion = "auto"
+		}
+	}
 	return q
 }
 

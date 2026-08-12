@@ -380,6 +380,26 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 	if run != nil {
 		ctx = tools.WithExecutionScopeKey(ctx, tools.ExecutionScopeKeyForRun(run.ID))
 	}
+	runScopeKey := ""
+	if run != nil {
+		runScopeKey = tools.ExecutionScopeKeyForRun(run.ID)
+	}
+	invocationScope := kernel.ToolInvocationScope{
+		ControlTenantID:   identity.TenantID,
+		PersonID:          identity.PersonID,
+		WorkspaceID:       req.WorkspaceID,
+		ExecutionScopeKey: runScopeKey,
+	}
+	if run != nil {
+		invocationScope.RunID = run.ID
+	}
+	if workspace != nil {
+		invocationScope.WorkspaceID = workspace.ID
+	}
+	if lease != nil {
+		invocationScope.LeaseID = lease.ID
+	}
+	ctx = kernel.WithToolInvocationScope(ctx, invocationScope)
 	if workspace != nil && workspace.LocalPath != "" {
 		ctx = kernel.WithWorkspaceContext(ctx, kernel.WorkspaceContext{
 			ID:   workspace.ID,

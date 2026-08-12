@@ -80,6 +80,62 @@ turns:
 	}
 }
 
+func TestLoadCaseDefaultsToModelRequired(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "case.yaml")
+	if err := os.WriteFile(path, []byte(`
+id: default_model
+turns:
+  - input: "hello"
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	c, err := LoadCase(path)
+	if err != nil {
+		t.Fatalf("LoadCase failed: %v", err)
+	}
+	if !c.RequiresModel() {
+		t.Fatal("model_required must default to true")
+	}
+}
+
+func TestLoadCaseParsesProviderlessContract(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "case.yaml")
+	if err := os.WriteFile(path, []byte(`
+id: providerless
+model_required: false
+turns:
+  - input: "/status"
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	c, err := LoadCase(path)
+	if err != nil {
+		t.Fatalf("LoadCase failed: %v", err)
+	}
+	if c.RequiresModel() {
+		t.Fatal("model_required: false was not preserved")
+	}
+}
+
+func TestLoadCaseRejectsProviderlessCassetteRequirement(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "case.yaml")
+	if err := os.WriteFile(path, []byte(`
+id: contradictory
+model_required: false
+require_cassette: true
+turns:
+  - input: "/status"
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadCase(path); err == nil || !strings.Contains(err.Error(), "model_required") {
+		t.Fatalf("expected model/cassette contract error, got %v", err)
+	}
+}
+
 func TestLoadCaseParsesStructuredCompletionExpectations(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "case.yaml")

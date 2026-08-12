@@ -15,6 +15,10 @@ import (
 
 const (
 	defaultRegistryURL = "https://registry.npmjs.org/-/package/@selfmind%2Fcli/dist-tags"
+	// RequestTimeout bounds every registry lookup. Startup checks run in the
+	// background, while explicit check/update commands need enough room for
+	// WSL DNS and proxy handshakes that routinely exceed the old 8s budget.
+	RequestTimeout = 15 * time.Second
 	// defaultInterval throttles the background refresh: a TUI startup
 	// re-checks unless the cache is younger than this. 15 minutes means
 	// "effectively every startup, but never a request storm from rapid
@@ -111,9 +115,11 @@ func Check(ctx context.Context, current, channel string) (Result, error) {
 		Channel:   channel,
 		CheckedAt: time.Now().UTC(),
 	}
-	if err := writeCache(CachePath(), result); err != nil {
-		return Result{}, err
-	}
+	// Cache persistence is advisory. A read-only HOME, a concurrent startup,
+	// or a transient filesystem error must not turn a successful registry
+	// lookup into "Update check failed". The next startup may re-check sooner,
+	// but the caller still receives the authoritative dist-tag result.
+	_ = writeCache(CachePath(), result)
 	return result, nil
 }
 
@@ -299,10 +305,22 @@ func writeCache(path string, result Result) error {
 	if err != nil {
 		return err
 	}
-	tmp := path + ".tmp"
-	defer os.Remove(tmp)
-	if err := os.WriteFile(tmp, append(data, '\n'), 0600); err != nil {
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".update-*.tmp")
+	if err != nil {
 		return err
 	}
-	return os.Rename(tmp, path)
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath)
+	if err := tmp.Chmod(0600); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if _, err := tmp.Write(append(data, '\n')); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpPath, path)
 }

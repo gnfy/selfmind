@@ -207,8 +207,8 @@ func TestApprovalChangeSummaryCountsWithoutContent(t *testing.T) {
 	if got := ApprovalChangeSummary("write_file", map[string]interface{}{"content": ""}); got != "empty file" {
 		t.Fatalf("empty write summary = %q", got)
 	}
-	if got := ApprovalChangeSummary("terminal", map[string]interface{}{"command": "ls"}); got != "" {
-		t.Fatalf("non-write tools have no change summary, got %q", got)
+	if got := ApprovalChangeSummary("terminal", map[string]interface{}{"command": "ls"}); got != "shell command, 1 line, 2 B" {
+		t.Fatalf("terminal summary = %q", got)
 	}
 }
 
@@ -229,6 +229,16 @@ func TestApprovalPersistentArgsBoundsExecuteCode(t *testing.T) {
 	}
 	if summary := ApprovalChangeSummary("execute_code", map[string]interface{}{"code": code, "language": "python"}); !strings.Contains(summary, "python script") {
 		t.Fatalf("execute_code summary = %q", summary)
+	}
+}
+
+func TestApprovalPersistentArgsRedactsNamedCredentialFields(t *testing.T) {
+	got := ApprovalPersistentArgs("terminal", map[string]interface{}{
+		"command": "echo safe",
+		"token":   "opaque-literal-value",
+	})
+	if got["token"] != "[REDACTED]" {
+		t.Fatalf("named credential persisted: %#v", got)
 	}
 }
 

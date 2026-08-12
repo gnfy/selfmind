@@ -1,0 +1,151 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "reasoning_content": "The"
+    },
+    {
+      "reasoning_content": " user"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " asking"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " to"
+    },
+    {
+      "reasoning_content": " respond"
+    },
+    {
+      "reasoning_content": " with"
+    },
+    {
+      "reasoning_content": " only"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "CONT"
+    },
+    {
+      "reasoning_content": "IN"
+    },
+    {
+      "reasoning_content": "U"
+    },
+    {
+      "reasoning_content": "ED"
+    },
+    {
+      "reasoning_content": "\""
+    },
+    {
+      "reasoning_content": " and"
+    },
+    {
+      "reasoning_content": " not"
+    },
+    {
+      "reasoning_content": " inspect"
+    },
+    {
+      "reasoning_content": " files"
+    },
+    {
+      "reasoning_content": " or"
+    },
+    {
+      "reasoning_content": " use"
+    },
+    {
+      "reasoning_content": " tools"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " This"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " part"
+    },
+    {
+      "reasoning_content": " of"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " evaluation"
+    },
+    {
+      "reasoning_content": " context"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " I"
+    },
+    {
+      "reasoning_content": " should"
+    },
+    {
+      "reasoning_content": " just"
+    },
+    {
+      "reasoning_content": " reply"
+    },
+    {
+      "reasoning_content": " with"
+    },
+    {
+      "reasoning_content": " CONTIN"
+    },
+    {
+      "reasoning_content": "U"
+    },
+    {
+      "reasoning_content": "ED"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "content": "CONT"
+    },
+    {
+      "content": "IN"
+    },
+    {
+      "content": "U"
+    },
+    {
+      "content": "ED"
+    },
+    {
+      "finish_reason": "stop"
+    },
+    {
+      "usage": {
+        "input_tokens": 8230,
+        "output_tokens": 45,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 8230,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 40,
+        "cache_usage_reported": true
+      }
+    }
+  ]
+}

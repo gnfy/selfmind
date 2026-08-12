@@ -53,11 +53,11 @@ func NewApprovalJudge(provider llm.Provider) tools.ApprovalJudge {
 func NewConfiguredApprovalJudge(mem *memory.MemoryManager, cfg *config.Config, tenantID string) tools.ApprovalJudge {
 	provider, role := configuredApprovalJudgeProvider(mem, cfg, tenantID)
 	if provider == nil {
-		log.Info("smart approval judge disabled: configure models.roles.fast_classifier to enable model triage without using the main model")
+		log.Info("smart approval judge disabled: configure models.auxiliary or models.roles.fast_classifier to enable model triage without using the main model")
 		return nil
 	}
 	if role != llm.RoleFastClassifier {
-		log.Info("smart approval judge using legacy background_review role; configure models.roles.fast_classifier for lower latency")
+		log.Info("smart approval judge using legacy background_review role; configure models.auxiliary or models.roles.fast_classifier for lower latency")
 	}
 	return &llmApprovalJudge{
 		provider: provider,
@@ -79,7 +79,7 @@ func (j *llmApprovalJudge) ApprovalJudgeTimeout() time.Duration {
 // background review. Older configs that only declared background_review remain
 // functional, but the foreground coding provider is never borrowed silently.
 func configuredApprovalJudgeProvider(mem *memory.MemoryManager, cfg *config.Config, tenantID string) (llm.Provider, llm.ModelRole) {
-	if provider := explicitRoleProvider(mem, cfg, tenantID, llm.RoleFastClassifier); provider != nil {
+	if provider := configuredAuxiliaryRoleProvider(mem, cfg, tenantID, llm.RoleFastClassifier); provider != nil {
 		return provider, llm.RoleFastClassifier
 	}
 	if provider := explicitRoleProvider(mem, cfg, tenantID, llm.RoleBackgroundReview); provider != nil {

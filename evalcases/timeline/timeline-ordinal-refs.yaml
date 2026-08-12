@@ -3,6 +3,7 @@ title: "ordinal references: /task <n> and /resume <n> follow the /tasks card ord
 suite: timeline
 workspace: "."
 channel: cli
+model_required: false
 
 # Control-command turns only — no model calls, so this case runs offline
 # without a cassette. The number printed by the /tasks card must resolve the

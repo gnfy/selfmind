@@ -12,8 +12,7 @@ safety checks.
 - Keep skill discovery progressive: compact metadata first, full `SKILL.md`
   only when explicitly viewed or invoked.
 - Preserve multi-endpoint behavior. CLI, HTTP, IM, scheduled jobs, and
-  background review must use the same skill service and tenant-scoped audit
-  log.
+  background review use the same control-tenant skill service and audit log.
 - Avoid context bloat. Large skill content is truncated safely on direct
   invocation and should point to linked files for details.
 
@@ -28,7 +27,7 @@ Default visible roots, in priority order:
 3. Workspace `skills/` for lightweight project-local skills.
 4. Optional environment roots from `SELFMIND_SKILLS_ROOTS`.
 5. Optional writable environment root from `SELFMIND_SKILLS_DIR`.
-6. User root `~/.selfmind/<tenant>/skills`.
+6. Control-tenant root `~/.selfmind/<control-tenant>/skills`.
 
 The first matching skill name wins for list/view/slash invocation. Registry
 reload registers lower-priority roots first, then higher-priority roots, so the
@@ -58,9 +57,29 @@ Disable/enable is user-scoped lifecycle metadata. Disabling a read-only skill
 does not edit the skill file; it writes tenant usage state and makes slash or
 bundle invocation skip that skill until it is enabled again.
 
-User-visible usage state, pins, views, and audit records stay tenant-scoped
-under `~/.selfmind/<tenant>/`, so read-only workspace skills can be used without
-modifying repository files.
+User-visible usage state, pins, views, and skill audit records stay under the
+control-tenant partition, so all accounts belonging to the same local control
+plane see the same durable procedural assets. Person memory/session data does
+not move into that partition, and workspace trust still follows the execution
+scope rather than the skill storage owner.
+
+## Invocation Identity And Migration
+
+Every native tool receives a typed invocation scope. Skill storage resolves
+from `ControlTenantID`; workspace discovery, trust, approval, and process
+control resolve from `WorkspaceID`, `RunID`, `LeaseID`, and
+`ExecutionScopeKey`; person memory/session assets resolve from `PersonID`.
+`_tenant_id` remains a compatibility view only and must not become the source
+of truth for new tools.
+
+Historic builds could write agent-created skills and skill audit rows under a
+`person_*` partition. Read-only discovery keeps those assets visible for one
+compatibility window, while new mutations always target the control tenant.
+Use `selfmind maintenance migrate-skills` to preview the migration and add
+`--apply` only after reviewing conflicts. The control copy wins; identical
+content is deduplicated; conflicting person copies remain untouched. Migrated
+agent-created skills carry provenance and a governance grace period so the
+curator cannot archive them immediately after migration.
 
 ## Invocation Surfaces
 
@@ -104,12 +123,12 @@ audit helpers. Do not add channel-specific or tool-specific history files.
 
 Catalog installs must preserve durable install provenance:
 
-- Store install records under `~/.selfmind/<tenant>/skills/.catalog/lock.json`
+- Store install records under `~/.selfmind/<control-tenant>/skills/.catalog/lock.json`
   and mark usage source as `catalog-installed`.
 - Reject same-name directory or legacy `.md` collisions by default; only
   overwrite when the user explicitly passes `--force`.
 - A forced reinstall must move the previous copy into
-  `~/.selfmind/<tenant>/skills/.catalog/backups/` before writing the new one.
+  `~/.selfmind/<control-tenant>/skills/.catalog/backups/` before writing the new one.
   Never silently replace a user-installed or hand-written skill.
 
 ## Adding New Skill Features

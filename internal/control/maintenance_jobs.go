@@ -3,6 +3,7 @@ package control
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"time"
 )
 
@@ -261,25 +262,64 @@ func createMaintenanceJobTx(ctx context.Context, tx *sql.Tx, tenantID, runID str
 // Zero rows affected means another worker already owns or finished the job —
 // the caller must skip the maintenance pass, not retry it.
 func (s *Store) ClaimMaintenanceJob(ctx context.Context, tenantID, runID string, analyzerVersion int) (bool, error) {
+	claimed, _, err := s.ClaimMaintenanceJobWithLimit(ctx, tenantID, runID, analyzerVersion, 0)
+	return claimed, err
+}
+
+// ClaimMaintenanceJobWithLimit is the shared claim policy for immediate and
+// background maintenance paths. maxAttempts <= 0 preserves the unbounded CAS
+// used to materialize an already-frozen proposal. When the retry budget is
+// exhausted the job becomes visibly blocked instead of being claimed again.
+func (s *Store) ClaimMaintenanceJobWithLimit(ctx context.Context, tenantID, runID string, analyzerVersion, maxAttempts int) (claimed, exhausted bool, err error) {
 	if analyzerVersion <= 0 {
 		analyzerVersion = 1
 	}
 	now := time.Now().Unix()
-	res, err := s.db.ExecContext(ctx,
+	query :=
 		`UPDATE maintenance_jobs SET status = ?, attempts = attempts + 1, updated_at = ?
 		 WHERE tenant_id = ? AND run_id = ? AND analyzer_version = ?
-		   AND (status = ? OR (status = ? AND next_retry_at <= ?))`,
+		   AND (status = ? OR (status = ? AND next_retry_at <= ?))`
+	args := []interface{}{
 		MaintenanceJobRunning, now,
 		normalizeTenant(tenantID), runID, analyzerVersion,
-		MaintenanceJobPending, MaintenanceJobFailed, now)
+		MaintenanceJobPending, MaintenanceJobFailed, now,
+	}
+	if maxAttempts > 0 {
+		query += ` AND attempts < ?`
+		args = append(args, maxAttempts)
+	}
+	res, err := s.db.ExecContext(ctx, query, args...)
 	if err != nil {
-		return false, err
+		return false, false, err
 	}
 	n, err := res.RowsAffected()
 	if err != nil {
-		return false, err
+		return false, false, err
 	}
-	return n > 0, nil
+	if n > 0 || maxAttempts <= 0 {
+		return n > 0, false, nil
+	}
+	var status string
+	var attempts int
+	var lastError string
+	err = s.db.QueryRowContext(ctx,
+		`SELECT status, attempts, COALESCE(last_error, '') FROM maintenance_jobs
+		 WHERE tenant_id = ? AND run_id = ? AND analyzer_version = ?`,
+		normalizeTenant(tenantID), runID, analyzerVersion).Scan(&status, &attempts, &lastError)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, false, nil
+		}
+		return false, false, err
+	}
+	if attempts < maxAttempts || (status != MaintenanceJobPending && status != MaintenanceJobFailed) {
+		return false, false, nil
+	}
+	blocked, err := s.BlockMaintenanceJobAfterRetries(ctx, tenantID, runID, analyzerVersion, lastError)
+	if err != nil {
+		return false, false, err
+	}
+	return false, blocked || status == MaintenanceJobBlockedProvider, nil
 }
 
 // CompleteMaintenanceJob records the terminal success with the result hash so
@@ -451,9 +491,11 @@ func (s *Store) ReplayRetryLimitedMaintenanceJobs(ctx context.Context, tenantID 
 // reason; raw provider payloads remain in logs.
 type MaintenanceHealth struct {
 	Pending         int
+	Failed          int
 	Running         int
 	Blocked         int
 	OldestPendingAt time.Time
+	LastSuccessAt   time.Time
 	LastError       string
 	BlockedRoutes   []ProviderRouteHealth
 }
@@ -461,36 +503,41 @@ type MaintenanceHealth struct {
 func (s *Store) MaintenanceHealthForPerson(ctx context.Context, tenantID, personID string) (MaintenanceHealth, error) {
 	tenantID = normalizeTenant(tenantID)
 	var health MaintenanceHealth
-	var oldest int64
+	var oldest, lastSuccess int64
 	err := s.db.QueryRowContext(ctx,
 		`SELECT
-		 COALESCE(SUM(CASE WHEN mj.status IN (?, ?) THEN 1 ELSE 0 END), 0),
 		 COALESCE(SUM(CASE WHEN mj.status = ? THEN 1 ELSE 0 END), 0),
 		 COALESCE(SUM(CASE WHEN mj.status = ? THEN 1 ELSE 0 END), 0),
-		 COALESCE(MIN(CASE WHEN mj.status IN (?, ?) THEN mj.created_at ELSE NULL END), 0)
+		 COALESCE(SUM(CASE WHEN mj.status = ? THEN 1 ELSE 0 END), 0),
+		 COALESCE(SUM(CASE WHEN mj.status = ? THEN 1 ELSE 0 END), 0),
+		 COALESCE(MIN(CASE WHEN mj.status IN (?, ?) THEN mj.created_at ELSE NULL END), 0),
+		 COALESCE(MAX(CASE WHEN mj.status = ? THEN mj.updated_at ELSE NULL END), 0)
 		 FROM maintenance_jobs mj
 		 JOIN task_runs r ON r.tenant_id = mj.tenant_id AND r.id = mj.run_id
 		 WHERE mj.tenant_id = ? AND r.person_id = ?`,
 		MaintenanceJobPending, MaintenanceJobFailed, MaintenanceJobRunning, MaintenanceJobBlockedProvider,
-		MaintenanceJobPending, MaintenanceJobFailed, tenantID, personID).
-		Scan(&health.Pending, &health.Running, &health.Blocked, &oldest)
+		MaintenanceJobPending, MaintenanceJobFailed, MaintenanceJobSucceeded, tenantID, personID).
+		Scan(&health.Pending, &health.Failed, &health.Running, &health.Blocked, &oldest, &lastSuccess)
 	if err != nil {
 		return health, err
 	}
 	if oldest > 0 {
 		health.OldestPendingAt = time.Unix(oldest, 0)
 	}
-	if health.Blocked == 0 {
-		return health, nil
+	if lastSuccess > 0 {
+		health.LastSuccessAt = time.Unix(lastSuccess, 0)
 	}
 	err = s.db.QueryRowContext(ctx,
 		`SELECT COALESCE(mj.last_error, '') FROM maintenance_jobs mj
 		 JOIN task_runs r ON r.tenant_id = mj.tenant_id AND r.id = mj.run_id
-		 WHERE mj.tenant_id = ? AND r.person_id = ? AND mj.status = ?
+		 WHERE mj.tenant_id = ? AND r.person_id = ? AND mj.status IN (?, ?)
 		 ORDER BY mj.updated_at DESC LIMIT 1`,
-		tenantID, personID, MaintenanceJobBlockedProvider).Scan(&health.LastError)
-	if err != nil {
+		tenantID, personID, MaintenanceJobFailed, MaintenanceJobBlockedProvider).Scan(&health.LastError)
+	if err != nil && err != sql.ErrNoRows {
 		return health, err
+	}
+	if health.Blocked == 0 {
+		return health, nil
 	}
 	rows, err := s.db.QueryContext(ctx, `SELECT DISTINCT pr.tenant_id, pr.route_id, pr.provider, pr.model,
 		pr.state, pr.failure_class, pr.consecutive_failures, pr.opened_at, pr.next_probe_at,

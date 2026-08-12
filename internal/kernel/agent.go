@@ -140,7 +140,7 @@ func (a *Agent) SetFastProvider(p llm.Provider) {
 }
 
 // SetSummaryProvider installs the cheap provider used to compact over-budget
-// context into a summary (the memory_extract role, kept OFF the main coding
+// context into a summary (the summarizer role, kept OFF the main coding
 // provider). It is remembered so SetContextWindow, which rebuilds the context
 // engine, can re-apply it. When unset the context engine falls back to
 // deterministic trimming.
@@ -612,7 +612,10 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 		target.InputTokens += usage.InputTokens
 		target.OutputTokens += usage.OutputTokens
 		target.CacheReadInputTokens += usage.CacheReadInputTokens
+		target.CacheMissInputTokens += usage.CacheMissInputTokens
 		target.CacheCreationInputTokens += usage.CacheCreationInputTokens
+		target.ReasoningOutputTokens += usage.ReasoningOutputTokens
+		target.CacheUsageReported = target.CacheUsageReported || usage.CacheUsageReported
 		target.CacheCreationReported = target.CacheCreationReported || usage.CacheCreationReported
 	}
 	// recordUsage accumulates provider usage (including prompt-cache reads and
@@ -626,9 +629,13 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 				"input_tokens":                totalUsage.InputTokens,
 				"output_tokens":               totalUsage.OutputTokens,
 				"cache_read_input_tokens":     totalUsage.CacheReadInputTokens,
+				"cache_miss_input_tokens":     totalUsage.CacheMissInputTokens,
 				"cache_creation_input_tokens": totalUsage.CacheCreationInputTokens,
+				"reasoning_output_tokens":     totalUsage.ReasoningOutputTokens,
+				"cache_usage_reported":        totalUsage.CacheUsageReported,
 				"cache_creation_reported":     totalUsage.CacheCreationReported,
-				"billed_input_tokens":         totalUsage.InputTokens - totalUsage.CacheReadInputTokens,
+				"uncached_input_tokens":       uncachedInputTokens(totalUsage),
+				"billed_input_tokens":         uncachedInputTokens(totalUsage),
 			},
 		})
 	}
@@ -643,9 +650,13 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 				"input_tokens":                usage.InputTokens,
 				"output_tokens":               usage.OutputTokens,
 				"cache_read_input_tokens":     usage.CacheReadInputTokens,
+				"cache_miss_input_tokens":     usage.CacheMissInputTokens,
 				"cache_creation_input_tokens": usage.CacheCreationInputTokens,
+				"reasoning_output_tokens":     usage.ReasoningOutputTokens,
+				"cache_usage_reported":        usage.CacheUsageReported,
 				"cache_creation_reported":     usage.CacheCreationReported,
-				"billed_input_tokens":         usage.InputTokens - usage.CacheReadInputTokens,
+				"uncached_input_tokens":       uncachedInputTokens(usage),
+				"billed_input_tokens":         uncachedInputTokens(usage),
 			},
 		})
 	}
@@ -658,7 +669,16 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 	})
 	modelCtx := llm.ModelContext{
 		TenantID: tenantID,
+		PersonID: tenantID,
 		Role:     llm.RoleCodingAgent,
+	}
+	if invocationScope, ok := ToolInvocationScopeFromContext(ctx); ok {
+		if strings.TrimSpace(invocationScope.ControlTenantID) != "" {
+			modelCtx.TenantID = strings.TrimSpace(invocationScope.ControlTenantID)
+		}
+		if strings.TrimSpace(invocationScope.PersonID) != "" {
+			modelCtx.PersonID = strings.TrimSpace(invocationScope.PersonID)
+		}
 	}
 	if workspace, ok := WorkspaceContextFromContext(ctx); ok {
 		modelCtx.WorkspaceID = workspace.ID
@@ -946,6 +966,7 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 			iterationStrategy = iterationStrategy.WithHiddenTools(cappedLifecycleTools...)
 		}
 		var fullResp strings.Builder
+		var reasoningResp strings.Builder
 		var nativeCalls []llm.ToolCall
 		var streamErr error
 		finishReason := ""
@@ -999,6 +1020,9 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 		appendChatResponse := func(chatResp *llm.ChatResponse) {
 			if chatResp.Content != "" {
 				fullResp.WriteString(textutil.CleanUTF8(chatResp.Content))
+			}
+			if chatResp.ReasoningContent != "" {
+				reasoningResp.WriteString(textutil.CleanUTF8(chatResp.ReasoningContent))
 			}
 			if chatResp.FinishReason != "" {
 				finishReason = chatResp.FinishReason
@@ -1092,6 +1116,9 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 					if event.Content != "" {
 						handleStreamContent(textutil.CleanUTF8(event.Content))
 					}
+					if event.ReasoningContent != "" {
+						reasoningResp.WriteString(textutil.CleanUTF8(event.ReasoningContent))
+					}
 					if event.FinishReason != "" {
 						finishReason = event.FinishReason
 					}
@@ -1146,6 +1173,7 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 						// No tool has executed yet. Discard calls from the broken stream;
 						// the recovery response must emit a complete call before execution.
 						nativeCalls = nil
+						reasoningResp.Reset()
 						emitAgentActivity(eventCh, "Model stream interrupted; continuing from the partial response", phase, i)
 					} else {
 						emitAgentActivity(eventCh, "Model stream interrupted; retrying the response", phase, i)
@@ -1187,7 +1215,10 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 			assistantContent = toolBudgetSafeAssistantContent(resp)
 		}
 
-		messages = append(messages, llm.Message{Role: "assistant", Content: assistantContent, ToolCalls: calls})
+		messages = append(messages, llm.Message{
+			Role: "assistant", Content: assistantContent,
+			ReasoningContent: reasoningResp.String(), ToolCalls: calls,
+		})
 		history.Steps = append(history.Steps, assistantContent)
 
 		// Sync turn to external memory providers after each assistant response
@@ -1358,6 +1389,13 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 	recordStep(maxIterations, StepCompleteTurn, completion.Reason)
 	emitTurnCompleted(eventCh, outcome, completion)
 	return outcome, totalUsage, nil
+}
+
+func uncachedInputTokens(usage llm.UsageStats) int {
+	if usage.CacheUsageReported {
+		return max(usage.CacheMissInputTokens, 0)
+	}
+	return max(usage.InputTokens-usage.CacheReadInputTokens, 0)
 }
 
 // toolNamesForTrace renders a compact tool-name list for the agent.step trace.

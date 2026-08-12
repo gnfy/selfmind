@@ -53,7 +53,8 @@ func providerErrorUsage(err error) llm.UsageStats {
 func providerErrorUsageOr(err error, fallback llm.UsageStats) llm.UsageStats {
 	usage := providerErrorUsage(err)
 	if usage.InputTokens == 0 && usage.OutputTokens == 0 &&
-		usage.CacheReadInputTokens == 0 && usage.CacheCreationInputTokens == 0 {
+		usage.CacheReadInputTokens == 0 && usage.CacheMissInputTokens == 0 &&
+		usage.CacheCreationInputTokens == 0 && usage.ReasoningOutputTokens == 0 {
 		return fallback
 	}
 	return usage
@@ -113,7 +114,10 @@ func (c *maintenanceProviderChain) recordProviderCall(ctx context.Context, candi
 		InputTokens:              usage.InputTokens,
 		OutputTokens:             usage.OutputTokens,
 		CacheReadInputTokens:     usage.CacheReadInputTokens,
+		CacheMissInputTokens:     usage.CacheMissInputTokens,
 		CacheCreationInputTokens: usage.CacheCreationInputTokens,
+		ReasoningOutputTokens:    usage.ReasoningOutputTokens,
+		CacheUsageReported:       usage.CacheUsageReported,
 		BatchSize:                batchSize,
 		LatencyMS:                latency,
 		CreatedAt:                time.Now(),

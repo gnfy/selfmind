@@ -16,6 +16,11 @@ profile.cov
 # --- Eval local diagnostics (never commit; cassettes live in .vcr/) ---
 # AGENTS.md: JSONL traces under evalruns/ are local diagnostics.
 /evalruns/
+# Captured real-user turns are private drafts until reviewed and promoted into
+# evalcases/ + .vcr/. Keeping both roots ignored prevents accidental prompt or
+# weak-assertion commits from diluting the release gate.
+/evaldrafts/
+/.vcr-drafts/
 
 # Flight recorder dumps if ever written inside the repo
 # (default path is ~/.selfmind/flight — keep this for overrides)

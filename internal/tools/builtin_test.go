@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"selfmind/internal/kernel"
 )
@@ -67,6 +68,33 @@ func TestReadFileToolTruncatesLargeFiles(t *testing.T) {
 	}
 	if !strings.Contains(out, "file truncated after") {
 		t.Fatalf("expected truncation marker, got %q", out[len(out)-80:])
+	}
+}
+
+func TestReadFileToolExplainsEmptyAndDirectoryInputs(t *testing.T) {
+	root := t.TempDir()
+	empty := filepath.Join(root, "empty.txt")
+	if err := os.WriteFile(empty, nil, 0644); err != nil {
+		t.Fatal(err)
+	}
+	out, err := NewReadFileTool().Execute(map[string]interface{}{"path": empty})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload struct {
+		Empty bool `json:"empty"`
+		Bytes int  `json:"bytes"`
+	}
+	if err := json.Unmarshal([]byte(out), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if !payload.Empty || payload.Bytes != 0 {
+		t.Fatalf("empty file result = %s", out)
+	}
+
+	_, err = NewReadFileTool().Execute(map[string]interface{}{"path": root})
+	if err == nil || !strings.Contains(err.Error(), "use list_dir or ls_r") {
+		t.Fatalf("directory error = %v", err)
 	}
 }
 
@@ -171,6 +199,30 @@ func TestSearchFilesToolHonorsLimitAndSkipsIgnoredDirs(t *testing.T) {
 	}
 	if !payload.Truncated {
 		t.Fatalf("expected search result to be marked truncated: %s", out)
+	}
+}
+
+func TestSearchFilesToolPreservesPartialEnvelopeOnDeadline(t *testing.T) {
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+	out, err := NewSearchFilesTool().Execute(map[string]interface{}{
+		"path":     t.TempDir(),
+		"pattern":  "needle",
+		"_context": ctx,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload struct {
+		Partial    bool     `json:"partial"`
+		ErrorClass string   `json:"error_class"`
+		Matches    []string `json:"matches"`
+	}
+	if err := json.Unmarshal([]byte(out), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if !payload.Partial || payload.ErrorClass != "timeout" || payload.Matches == nil {
+		t.Fatalf("partial timeout result = %s", out)
 	}
 }
 

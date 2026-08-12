@@ -225,6 +225,15 @@ func applyVerificationOutcome(outcome api.RunOutcome) api.RunOutcome {
 	if !verificationRequiresResume(outcome.Verification, outcome.Files) {
 		return outcome
 	}
+	if verificationPreservesParkedStatus(outcome.Status) {
+		// A registered external wait, an explicit user gate, or another durable
+		// parked state is the primary reason this turn stopped. Verification is
+		// still useful evidence, but must not erase the wake-up semantics by
+		// converting the task to verification_partial.
+		outcome = reconcileStructuredOutcome(outcome)
+		outcome.NextSteps = appendUnique(outcome.NextSteps, verificationNextStep(outcome.Verification), 8)
+		return outcome
+	}
 	outcome.Status = api.RunStatusVerificationPartial
 	outcome.Resumable = true
 	// A bare "failed" is replaced too. Once the status is forced to
@@ -245,6 +254,15 @@ func applyVerificationOutcome(outcome api.RunOutcome) api.RunOutcome {
 	}
 	outcome.NextSteps = appendUnique(outcome.NextSteps, verificationNextStep(outcome.Verification), 8)
 	return outcome
+}
+
+func verificationPreservesParkedStatus(status string) bool {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "waiting_external", "waiting_user", "waiting_finalization", "blocked":
+		return true
+	default:
+		return false
+	}
 }
 
 func hasVerifiableFile(files []string) bool {

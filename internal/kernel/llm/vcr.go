@@ -206,18 +206,19 @@ type vcrProvider struct {
 }
 
 type recordedEvent struct {
-	Content         string                 `json:"content,omitempty"`
-	ToolCalls       []ToolCall             `json:"tool_calls,omitempty"`
-	Usage           *UsageStats            `json:"usage,omitempty"`
-	FinishReason    string                 `json:"finish_reason,omitempty"`
-	EventType       string                 `json:"event_type,omitempty"`
-	ToolName        string                 `json:"tool_name,omitempty"`
-	ToolCallID      string                 `json:"tool_call_id,omitempty"`
-	ToolArgs        string                 `json:"tool_args,omitempty"`
-	ToolResult      string                 `json:"tool_result,omitempty"`
-	DurationSeconds float64                `json:"duration_seconds,omitempty"`
-	Payload         map[string]interface{} `json:"payload,omitempty"`
-	Err             string                 `json:"err,omitempty"`
+	Content          string                 `json:"content,omitempty"`
+	ReasoningContent string                 `json:"reasoning_content,omitempty"`
+	ToolCalls        []ToolCall             `json:"tool_calls,omitempty"`
+	Usage            *UsageStats            `json:"usage,omitempty"`
+	FinishReason     string                 `json:"finish_reason,omitempty"`
+	EventType        string                 `json:"event_type,omitempty"`
+	ToolName         string                 `json:"tool_name,omitempty"`
+	ToolCallID       string                 `json:"tool_call_id,omitempty"`
+	ToolArgs         string                 `json:"tool_args,omitempty"`
+	ToolResult       string                 `json:"tool_result,omitempty"`
+	DurationSeconds  float64                `json:"duration_seconds,omitempty"`
+	Payload          map[string]interface{} `json:"payload,omitempty"`
+	Err              string                 `json:"err,omitempty"`
 }
 
 type cassette struct {
@@ -414,7 +415,7 @@ func replayStream(events []recordedEvent) <-chan StreamEvent {
 
 func toRecorded(e StreamEvent) recordedEvent {
 	r := recordedEvent{
-		Content: e.Content, ToolCalls: e.ToolCalls, Usage: e.Usage, FinishReason: e.FinishReason,
+		Content: e.Content, ReasoningContent: e.ReasoningContent, ToolCalls: e.ToolCalls, Usage: e.Usage, FinishReason: e.FinishReason,
 		EventType: e.EventType, ToolName: e.ToolName, ToolCallID: e.ToolCallID, ToolArgs: e.ToolArgs,
 		ToolResult: e.ToolResult, DurationSeconds: e.DurationSeconds, Payload: e.Payload,
 	}
@@ -426,7 +427,7 @@ func toRecorded(e StreamEvent) recordedEvent {
 
 func fromRecorded(r recordedEvent) StreamEvent {
 	e := StreamEvent{
-		Content: r.Content, ToolCalls: r.ToolCalls, Usage: r.Usage, FinishReason: r.FinishReason,
+		Content: r.Content, ReasoningContent: r.ReasoningContent, ToolCalls: r.ToolCalls, Usage: r.Usage, FinishReason: r.FinishReason,
 		EventType: r.EventType, ToolName: r.ToolName, ToolCallID: r.ToolCallID, ToolArgs: r.ToolArgs,
 		ToolResult: r.ToolResult, DurationSeconds: r.DurationSeconds, Payload: r.Payload,
 	}
@@ -445,6 +446,7 @@ func rewriteCassette(c cassette, from, to string) cassette {
 	if c.Chat != nil {
 		chat := *c.Chat
 		chat.Content = rewriteVCRString(chat.Content, from, to)
+		chat.ReasoningContent = rewriteVCRString(chat.ReasoningContent, from, to)
 		chat.ToolCalls = rewriteVCRToolCalls(chat.ToolCalls, from, to)
 		c.Chat = &chat
 	}
@@ -452,6 +454,7 @@ func rewriteCassette(c cassette, from, to string) cassette {
 		events := make([]recordedEvent, len(c.Events))
 		for i, event := range c.Events {
 			event.Content = rewriteVCRString(event.Content, from, to)
+			event.ReasoningContent = rewriteVCRString(event.ReasoningContent, from, to)
 			event.ToolCalls = rewriteVCRToolCalls(event.ToolCalls, from, to)
 			event.ToolArgs = rewriteVCRString(event.ToolArgs, from, to)
 			event.ToolResult = rewriteVCRString(event.ToolResult, from, to)

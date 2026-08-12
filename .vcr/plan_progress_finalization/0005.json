@@ -1,0 +1,55 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "content": "File"
+    },
+    {
+      "content": " written"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": " Moving"
+    },
+    {
+      "content": " to"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " verify"
+    },
+    {
+      "content": " step"
+    },
+    {
+      "content": "."
+    },
+    {
+      "finish_reason": "tool_calls"
+    },
+    {
+      "usage": {
+        "input_tokens": 9138,
+        "output_tokens": 130,
+        "cache_read_input_tokens": 8960,
+        "cache_miss_input_tokens": 178,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0,
+        "cache_usage_reported": true
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_00_ET_qobp66kNHY6Zyz5ZSPMN6731",
+          "Function": "update_plan",
+          "Args": "{\"explanation\": \"File written successfully.\", \"plan\": [{\"step\": \"Inspect workspace state\", \"status\": \"completed\"}, {\"step\": \"Write plan-progress.txt with exactly PLAN-COMPLETE\", \"status\": \"completed\"}, {\"step\": \"Verify file contents with verify tool\", \"status\": \"in_progress\"}]}"
+        }
+      ]
+    }
+  ]
+}

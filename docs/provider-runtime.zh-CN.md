@@ -8,7 +8,9 @@
 - `Resolver` 把配置、环境变量、OAuth、本地凭据解析成一次可执行的 `Runtime`。
 - `llm.TransportConfig` 是 app/runtime 进入 LLM 层的唯一交接结构。
 - `llm` transport 只实现协议族传输，例如 OpenAI Chat、Anthropic Messages、Codex Responses。
-- `ProviderQuirks` 描述厂商差异，例如认证头、tool schema、thinking 参数、User-Agent。
+- `ProviderQuirks` 只描述会改变协议编码方式的厂商差异，例如认证方式、tool
+  schema 修复、thinking 形状和 User-Agent 兼容。任意厂商请求参数应使用
+  `extra_headers`、`extra_body`、`extra_query`，不再继续扩张 quirks。
 
 CLI、IM、HTTP webhook、未来 SaaS 多端入口都必须复用同一套 runtime。渠道层只负责身份、任务、进度和消息呈现，不应该直接判断 Kimi、MiniMax、OpenAI 这类 provider 细节。
 
@@ -23,7 +25,11 @@ CLI、IM、HTTP webhook、未来 SaaS 多端入口都必须复用同一套 runti
 5. 用户 YAML 和命令行覆盖放在 `internal/modelruntime/resolver.go` 合并。
 6. app 层只负责把 `Runtime` 转成 `llm.TransportConfig`，不按 provider/protocol 选择具体 adapter。
 7. 传输层只消费 `TransportConfig`，不再自行读取全局 config。
-8. provider-specific 行为先落到 `ProviderQuirks`，避免在 adapter 中不断新增厂商 if。
+8. 协议行为差异落到 `ProviderQuirks`；普通厂商参数落到 `extra_*`，避免在
+   adapter 中不断新增厂商 if。
+9. `extra_body` 与 `extra_query` 按 provider → role 合并，角色层优先；请求体
+   对象递归合并。它们只在最终 HTTP transport 边界生效，CLI、IM、cron 与未来
+   远程入口不会各自实现一套。
 
 ## 核心文件
 
@@ -112,6 +118,17 @@ SelfMind 区分两个容易混淆的字段：
 `selfmind model set` 在能发现元数据时动态校验；私有 endpoint 没有元数据时，
 仍会保留用户显式配置的兼容值。
 
+Anthropic Messages 在 `thinking_mode: anthropic` 下，会把显式推理等级映射为 thinking
+预算：`low=4096`、`medium/default=8192`、`high=16384`、
+`xhigh/max=32768`，必要时同步提高响应上限。OpenAI-compatible transport 使用协议的
+`reasoning_effort` 或 provider 专属 thinking 契约。优先使用这些有类型字段；
+`extra_body` 只作为最终 wire 边界的应急覆盖。
+
+`user_identity_field: auto` 在 OpenAI-compatible 请求中映射为 `user_id`，在
+Anthropic Messages 中映射为 `metadata.user_id`。值是从认证身份派生的稳定匿名 ID，
+不会发送原始 tenant、person、channel、邮箱或平台 ID；`off` 可以禁用。显式
+`extra_body.user_id` 或 `extra_body.metadata.user_id` 的优先级更高。
+
 ## ProviderProfile
 
 内置 provider 在 `BuiltinProfiles()` 中注册。一个 profile 至少应该声明：
@@ -157,16 +174,30 @@ ProviderProfile{
 |---|---|---|
 | `AuthHeader` | 请求认证头策略 | `bearer`、`x_api_key`、`auto` |
 | `ToolSchema` | tool JSON schema 修复策略 | `openai`、`anthropic`、`moonshot` |
-| `SystemMessageMode` | system message 放置方式 | `top_level`、`inline` |
-| `ThinkingMode` | thinking 参数策略 | `openai`、`anthropic`、`kimi`、`minimax`、`omit` |
+| `SystemMessageMode` | 已废弃的兼容字段；system 形态由协议 adapter 决定 | 不建议配置 |
+| `ThinkingMode` | thinking 参数策略 | `openai`、`anthropic`、`kimi`、`minimax`、`deepseek`、`omit` |
+| `UserIdentityField` | 可选的 provider 侧稳定匿名用户字段 | `auto`、`user_id`、`metadata.user_id`、`off` |
 | `UserAgent` | provider 需要的客户端标识 | 例如 `claude-code/0.1.0` |
+| `HTTPVersion` | transport 的 HTTP 版本约束 | `auto`、`http1`、`http2` |
+| `PromptCache` | Anthropic 显式 `cache_control` | bool |
 | `ResponsesStoreFalse` | Responses 请求强制 `"store": false`（无状态服务端） | bool |
 | `ResponsesRequireStream` | Responses 请求强制流式（服务端拒绝非流式） | bool |
 | `SupportsTools` | 是否支持 native tools | bool |
 | `SupportsStreaming` | 是否支持 stream | bool |
 | `SupportsVision` | 是否支持视觉输入 | bool |
 
-用户 YAML 里的 `quirks` 目前开放 `auth_header`、`tool_schema`、`system_message_mode`、`thinking_mode`、`user_agent`，以及面向 Responses-compatible endpoint 的 `responses_store_false` 和 `responses_require_stream`（要求无状态/仅流式请求的服务端）。`SupportsTools`、`SupportsStreaming`、`SupportsVision` 属于内置 profile 元数据，新增内置 provider 时在 Go 代码中维护。
+用户 YAML 里的 `quirks` 开放 `auth_header`、`tool_schema`、`thinking_mode`、
+`user_identity_field`、`user_agent`、`http_version`、`prompt_cache`，以及
+Responses-compatible endpoint 使用的 `responses_store_false` 和
+`responses_require_stream`。布尔 quirks 是三态：省略表示继承内置 profile，显式
+`true` 或 `false` 表示覆盖；因此私有 endpoint 可以关闭内置缓存或 Responses 行为。
+`system_message_mode` 只为兼容旧配置继续读取，现已忽略。`SupportsTools`、
+`SupportsStreaming`、`SupportsVision` 属于内置 profile 元数据。
+
+resolver 会校验 quirks 取值，`selfmind model check` 展示最终值并提示协议不匹配。
+协议 adapter 不再根据 endpoint hostname 猜测厂商；内置 profile 声明 header、HTTP
+版本、schema 修复、匿名身份和 thinking 形态，自定义代理解析到同一 profile 时得到
+相同契约。
 
 现有默认 helper：
 
@@ -232,6 +263,22 @@ token。若服务端返回 `401 token_expired`、`invalid_token` 等认证失败
 | `claude-code` | `anthropic_messages` | 外部 OAuth（Claude Code 登录态） | `claude-3-5-sonnet-20241022` |
 | `gemini-cli` | `openai_compatible` | 外部 OAuth（Gemini CLI 登录态） | `gemini-1.5-pro` |
 | `qwen-cli` | `openai_compatible` | 外部 OAuth（Qwen CLI 登录态） | `qwen3-coder-plus` |
+
+## DeepSeek V4
+
+内置 `deepseek` profile 使用 OpenAI-compatible transport，并启用 DeepSeek 的
+思考/工具调用契约。`models.primary.reasoning: high` 会发送
+`thinking.type=enabled` 和 `level=high`；`xhigh` 会映射为 provider 的 `max`。
+当思考响应调用工具时，adapter 会把 `reasoning_content` 与 assistant tool call
+一起保存，并在 tool result 之前原样回放；缺少这段内容会使下一次 provider 请求无效。
+
+DeepSeek 请求还可携带 `user_id`。SelfMind 不会发送原始 person、tenant、channel、
+邮箱或平台 ID；`StableProviderUserID` 根据已认证的 tenant/person 派生带版本的
+匿名 `sm_...` 值。它跨渠道和 run 稳定、不同用户不同，并且只在 provider profile
+声明 `user_identity_field: user_id` 时发送。
+
+`selfmind model check --role <role> --live` 除了验证普通原生工具 schema，还会验证
+完整思考工具循环：思考与工具调用、工具结果回放、最终 assistant 答复。
 
 ## Kimi Coding Plan
 
@@ -332,7 +379,7 @@ provider_profiles:
     base_url: "https://api.example.com/v1"
     protocol: "openai_compatible"
     max_tokens: 32768
-    headers:
+    extra_headers:
       X-Client-Name: "SelfMind"
     quirks:
       auth_header: "bearer"

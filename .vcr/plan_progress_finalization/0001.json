@@ -1,0 +1,358 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "reasoning_content": "The"
+    },
+    {
+      "reasoning_content": " user"
+    },
+    {
+      "reasoning_content": " wants"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " to"
+    },
+    {
+      "reasoning_content": ":\n"
+    },
+    {
+      "reasoning_content": "1"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Create"
+    },
+    {
+      "reasoning_content": " plan"
+    },
+    {
+      "reasoning_content": "-pro"
+    },
+    {
+      "reasoning_content": "gress"
+    },
+    {
+      "reasoning_content": ".txt"
+    },
+    {
+      "reasoning_content": " containing"
+    },
+    {
+      "reasoning_content": " exactly"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "PL"
+    },
+    {
+      "reasoning_content": "AN"
+    },
+    {
+      "reasoning_content": "-"
+    },
+    {
+      "reasoning_content": "COMP"
+    },
+    {
+      "reasoning_content": "L"
+    },
+    {
+      "reasoning_content": "ETE"
+    },
+    {
+      "reasoning_content": "\"\n"
+    },
+    {
+      "reasoning_content": "2"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Maintain"
+    },
+    {
+      "reasoning_content": " a"
+    },
+    {
+      "reasoning_content": " visible"
+    },
+    {
+      "reasoning_content": " three"
+    },
+    {
+      "reasoning_content": "-step"
+    },
+    {
+      "reasoning_content": " plan"
+    },
+    {
+      "reasoning_content": " for"
+    },
+    {
+      "reasoning_content": " inspect"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " write"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " and"
+    },
+    {
+      "reasoning_content": " verify"
+    },
+    {
+      "reasoning_content": "\n"
+    },
+    {
+      "reasoning_content": "3"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Update"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " plan"
+    },
+    {
+      "reasoning_content": " after"
+    },
+    {
+      "reasoning_content": " each"
+    },
+    {
+      "reasoning_content": " meaningful"
+    },
+    {
+      "reasoning_content": " transition"
+    },
+    {
+      "reasoning_content": "\n"
+    },
+    {
+      "reasoning_content": "4"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Use"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " verify"
+    },
+    {
+      "reasoning_content": " tool"
+    },
+    {
+      "reasoning_content": " to"
+    },
+    {
+      "reasoning_content": " check"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " exact"
+    },
+    {
+      "reasoning_content": " file"
+    },
+    {
+      "reasoning_content": " contents"
+    },
+    {
+      "reasoning_content": "\n"
+    },
+    {
+      "reasoning_content": "5"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Finish"
+    },
+    {
+      "reasoning_content": " only"
+    },
+    {
+      "reasoning_content": " after"
+    },
+    {
+      "reasoning_content": " every"
+    },
+    {
+      "reasoning_content": " plan"
+    },
+    {
+      "reasoning_content": " step"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " completed"
+    },
+    {
+      "reasoning_content": "\n\n"
+    },
+    {
+      "reasoning_content": "Let"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " start"
+    },
+    {
+      "reasoning_content": " with"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " plan"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " then"
+    },
+    {
+      "reasoning_content": " inspect"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " workspace"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " write"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " file"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " and"
+    },
+    {
+      "reasoning_content": " verify"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "content": "I"
+    },
+    {
+      "content": "'ll"
+    },
+    {
+      "content": " start"
+    },
+    {
+      "content": " by"
+    },
+    {
+      "content": " setting"
+    },
+    {
+      "content": " up"
+    },
+    {
+      "content": " a"
+    },
+    {
+      "content": " three"
+    },
+    {
+      "content": "-step"
+    },
+    {
+      "content": " plan"
+    },
+    {
+      "content": " for"
+    },
+    {
+      "content": " inspect"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " write"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " and"
+    },
+    {
+      "content": " verify"
+    },
+    {
+      "content": "."
+    },
+    {
+      "finish_reason": "tool_calls"
+    },
+    {
+      "usage": {
+        "input_tokens": 8196,
+        "output_tokens": 237,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 8196,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 92,
+        "cache_usage_reported": true
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_00_wUCIx1yTZWhZqgkuFDLi3782",
+          "Function": "update_plan",
+          "Args": "{\"plan\": [{\"step\": \"Inspect workspace state\", \"status\": \"in_progress\"}, {\"step\": \"Write plan-progress.txt with exactly PLAN-COMPLETE\", \"status\": \"pending\"}, {\"step\": \"Verify file contents with verify tool\", \"status\": \"pending\"}], \"explanation\": \"Three-step plan: inspect, write, verify.\"}"
+        }
+      ]
+    }
+  ]
+}

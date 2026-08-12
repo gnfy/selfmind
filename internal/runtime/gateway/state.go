@@ -37,6 +37,7 @@ type StatusRecord struct {
 	UpdatedAt       string   `json:"updated_at"`
 	HeartbeatAt     string   `json:"heartbeat_at,omitempty"`
 	ExitReason      string   `json:"exit_reason,omitempty"`
+	HostBootID      string   `json:"host_boot_id,omitempty"`
 }
 
 func (r StatusRecord) HeartbeatStale(now time.Time) bool {
@@ -75,6 +76,7 @@ type Manager struct {
 	state      string
 	tenantID   string
 	exitReason string
+	hostBootID string
 }
 
 func NewManager(dataDir, addr string) *Manager {
@@ -83,6 +85,7 @@ func NewManager(dataDir, addr string) *Manager {
 		Addr:       ResolveAddr(addr),
 		Started:    time.Now(),
 		InstanceID: "gateway_" + uuid.NewString(),
+		hostBootID: hostBootID(),
 	}
 }
 
@@ -130,6 +133,18 @@ func (m *Manager) Release() error {
 
 func (m *Manager) Cleanup(exitReason string) {
 	_ = m.WriteStatus("stopped", "", exitReason)
+	_ = os.Remove(m.Paths.PIDPath)
+	_ = m.Release()
+}
+
+// Crash preserves an actionable terminal lifecycle record while releasing the
+// single-owner lock. It is used for startup failures and top-level panics; a
+// clean signal/drain path continues to use Cleanup.
+func (m *Manager) Crash(exitReason string) {
+	if strings.TrimSpace(exitReason) == "" {
+		exitReason = "gateway exited unexpectedly"
+	}
+	_ = m.WriteStatus("crashed", "", exitReason)
 	_ = os.Remove(m.Paths.PIDPath)
 	_ = m.Release()
 }
@@ -185,6 +200,7 @@ func (m *Manager) statusRecordLocked(now time.Time) StatusRecord {
 		UpdatedAt:       now.Format(time.RFC3339Nano),
 		HeartbeatAt:     now.Format(time.RFC3339Nano),
 		ExitReason:      m.exitReason,
+		HostBootID:      m.hostBootID,
 	}
 }
 
@@ -232,10 +248,26 @@ func (m *Manager) ReconcilePreviousState() (StatusRecord, bool) {
 	if !activeGatewayState(rec.State) {
 		return StatusRecord{}, false
 	}
-	m.reconcileCrashedRecord(rec, "previous gateway instance did not shut down cleanly")
+	// The lifecycle record changes only on state transitions. Merge the live
+	// lease before diagnosing an orphan so last_heartbeat reports when the
+	// process actually disappeared rather than when it first started.
+	if lease, leaseErr := ReadStatusRecord(m.Paths.PIDPath); leaseErr == nil && lease.InstanceID == rec.InstanceID {
+		rec.PID = lease.PID
+		rec.HeartbeatAt = lease.HeartbeatAt
+		rec.UpdatedAt = lease.UpdatedAt
+		rec.Argv = lease.Argv
+		if lease.HostBootID != "" {
+			rec.HostBootID = lease.HostBootID
+		}
+	}
+	reason := "previous gateway instance did not shut down cleanly"
+	if rec.HostBootID != "" && m.hostBootID != "" && rec.HostBootID != m.hostBootID {
+		reason = "host or WSL session restarted before gateway shutdown"
+	}
+	m.reconcileCrashedRecord(rec, reason)
 	_ = os.Remove(m.Paths.PIDPath)
 	rec.State = "crashed"
-	rec.ExitReason = "previous gateway instance did not shut down cleanly"
+	rec.ExitReason = reason
 	rec.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
 	return rec, true
 }

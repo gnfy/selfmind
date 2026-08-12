@@ -53,7 +53,7 @@ type ContextEngine struct {
 	reserveTokens      int
 	summaryThreshold   int
 	provider           llm.Provider // main run provider (legacy flag path only)
-	summaryProvider    llm.Provider // cheap compaction summarizer (memory_extract role)
+	summaryProvider    llm.Provider // auxiliary/dedicated compaction summarizer
 	tokenizer          *TokenEstimator
 	lastSummaryFailure time.Time
 	summaryCooldown    time.Duration
@@ -79,8 +79,8 @@ func (c *ContextEngine) SetProvider(p llm.Provider) {
 	c.provider = p
 }
 
-// SetSummaryProvider installs the cheap compaction summarizer (the
-// memory_extract role, kept OFF the run's main coding provider). When set,
+// SetSummaryProvider installs the auxiliary/dedicated compaction summarizer,
+// kept OFF the run's main coding provider. When set,
 // over-threshold context compaction runs by DEFAULT — no env flag needed. When
 // nil (tests, offline, no role wired), TruncateMessages falls back to
 // deterministic trimming and never blocks on an LLM call.

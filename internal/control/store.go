@@ -577,7 +577,10 @@ CREATE TABLE IF NOT EXISTS maintenance_provider_calls (
 	input_tokens INTEGER NOT NULL DEFAULT 0,
 	output_tokens INTEGER NOT NULL DEFAULT 0,
 	cache_read_input_tokens INTEGER NOT NULL DEFAULT 0,
+	cache_miss_input_tokens INTEGER NOT NULL DEFAULT 0,
 	cache_creation_input_tokens INTEGER NOT NULL DEFAULT 0,
+	reasoning_output_tokens INTEGER NOT NULL DEFAULT 0,
+	cache_usage_reported INTEGER NOT NULL DEFAULT 0,
 	batch_size INTEGER NOT NULL DEFAULT 1,
 	latency_ms INTEGER NOT NULL DEFAULT 0,
 	created_at INTEGER NOT NULL
@@ -816,6 +819,11 @@ CREATE INDEX IF NOT EXISTS idx_external_watches_owner
 		// that caused it. A successful half-open probe requeues only jobs for
 		// that route; unrelated provider/configuration failures remain blocked.
 		{"maintenance_jobs", "blocked_route_id", "TEXT NOT NULL DEFAULT ''"},
+		// Compatible providers such as DeepSeek report cache hit/miss and
+		// reasoning-token details outside the base OpenAI usage fields.
+		{"maintenance_provider_calls", "cache_miss_input_tokens", "INTEGER NOT NULL DEFAULT 0"},
+		{"maintenance_provider_calls", "reasoning_output_tokens", "INTEGER NOT NULL DEFAULT 0"},
+		{"maintenance_provider_calls", "cache_usage_reported", "INTEGER NOT NULL DEFAULT 0"},
 		// cursor is a daemon-wide, never-reused append sequence for resumable
 		// event streams. It cannot rely on SQLite's implicit rowid because
 		// cleanup or VACUUM may reuse/change rowids.

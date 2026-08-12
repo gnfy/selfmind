@@ -72,7 +72,7 @@ where it lives. For per-capability status (Done/Partial/Missing) see
 | Flight recorder | Configured via `flight_recorder.enabled` in `config.yaml` (env overrides): records each real user turn's model interaction (bounded, auto-pruned) for later promotion. Free — it saves what already streamed. | `internal/kernel/llm/flight.go`, `internal/kernel/flight_recorder.go`, `internal/platform/config/loader.go` |
 | Capture (friction → test) | `/capture` (TUI) / `selfmind eval capture` promotes the last recorded turn into a replayable eval case + copies its cassette, seeding a P0-check + `assert_state` draft. Everyday friction becomes a permanent offline regression test. | `internal/eval/capture.go`, `internal/cliapp/eval_commands.go` |
 | Liveness canary | Optional periodic self-check job that alerts the channel only on failure. | `internal/kernel/task/cron/`, `internal/gateway/httpapi/cron_executor.go` |
-| Day-in-the-life suite | Representative daily scenarios with recorded cassettes, replayed by the gate. | `evalcases/dayinlife/`, `evalcases/handoff-v1/` |
+| Day-in-the-life suite | Representative daily scenarios with recorded cassettes, replayed by the gate. | `evalcases/dayinlife/`, `evalcases/continuity/` |
 
 ---
 

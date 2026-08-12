@@ -60,10 +60,7 @@ func NewSkillBundleTool() *SkillBundleTool {
 }
 
 func (t *SkillBundleTool) Execute(args map[string]interface{}) (string, error) {
-	tenantID, _ := args["_tenant_id"].(string)
-	if tenantID == "" {
-		tenantID = "default"
-	}
+	tenantID := skillStorageTenantID(args)
 	action, _ := args["action"].(string)
 	name, _ := args["name"].(string)
 	description, _ := args["description"].(string)
@@ -103,11 +100,11 @@ func (t *SkillBundleTool) Execute(args map[string]interface{}) (string, error) {
 }
 
 func SkillBundlesDirForTenant(tenantID string) (string, error) {
-	skillsDir, err := getSkillsDir(tenantID)
+	tenantDir, err := userTenantDirForTenant(tenantID)
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(filepath.Dir(skillsDir), "skill-bundles"), nil
+	return filepath.Join(tenantDir, "skill-bundles"), nil
 }
 
 func ListSkillBundlesForTenant(tenantID string) ([]SkillBundle, error) {

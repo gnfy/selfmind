@@ -270,6 +270,9 @@ func codingContextLength(cfg *config.Config) int {
 			BaseURL:         roleCfg.BaseURL,
 			APIKey:          roleCfg.APIKey,
 			Headers:         roleCfg.Headers,
+			ExtraHeaders:    roleCfg.ExtraHeaders,
+			ExtraBody:       roleCfg.ExtraBody,
+			ExtraQuery:      roleCfg.ExtraQuery,
 			ContextLength:   roleCfg.ContextLength,
 			MaxTokens:       roleCfg.MaxTokens,
 			ReasoningEffort: roleCfg.EffectiveReasoning(),
@@ -291,7 +294,9 @@ func llmQuirks(q modelruntime.ProviderQuirks) llm.ProviderQuirks {
 		ToolSchema:        q.ToolSchema,
 		SystemMessageMode: q.SystemMessageMode,
 		ThinkingMode:      q.ThinkingMode,
+		UserIdentityField: q.UserIdentityField,
 		UserAgent:         q.UserAgent,
+		HTTPVersion:       q.HTTPVersion,
 		DisableHTTP2:      q.DisableHTTP2,
 		PromptCache:       q.PromptCache,
 		SupportsTools:     q.SupportsTools,
@@ -301,15 +306,28 @@ func llmQuirks(q modelruntime.ProviderQuirks) llm.ProviderQuirks {
 }
 
 func runtimeQuirksFromConfig(q config.ProviderQuirks) modelruntime.ProviderQuirks {
-	return modelruntime.ProviderQuirks{
-		AuthHeader:             q.AuthHeader,
-		ToolSchema:             q.ToolSchema,
-		SystemMessageMode:      q.SystemMessageMode,
-		ThinkingMode:           q.ThinkingMode,
-		UserAgent:              q.UserAgent,
-		ResponsesStoreFalse:    q.ResponsesStoreFalse,
-		ResponsesRequireStream: q.ResponsesRequireStream,
+	out := modelruntime.ProviderQuirks{
+		AuthHeader:        q.AuthHeader,
+		ToolSchema:        q.ToolSchema,
+		SystemMessageMode: q.SystemMessageMode,
+		ThinkingMode:      q.ThinkingMode,
+		UserIdentityField: q.UserIdentityField,
+		UserAgent:         q.UserAgent,
+		HTTPVersion:       q.HTTPVersion,
 	}
+	if q.ResponsesStoreFalse != nil {
+		out.ResponsesStoreFalse = *q.ResponsesStoreFalse
+		out.ResponsesStoreFalseSet = true
+	}
+	if q.ResponsesRequireStream != nil {
+		out.ResponsesRequireStream = *q.ResponsesRequireStream
+		out.ResponsesRequireStreamSet = true
+	}
+	if q.PromptCache != nil {
+		out.PromptCache = *q.PromptCache
+		out.PromptCacheSet = true
+	}
+	return out
 }
 
 func emptyConfigQuirks(q config.ProviderQuirks) bool {
@@ -317,9 +335,12 @@ func emptyConfigQuirks(q config.ProviderQuirks) bool {
 		strings.TrimSpace(q.ToolSchema) == "" &&
 		strings.TrimSpace(q.SystemMessageMode) == "" &&
 		strings.TrimSpace(q.ThinkingMode) == "" &&
+		strings.TrimSpace(q.UserIdentityField) == "" &&
 		strings.TrimSpace(q.UserAgent) == "" &&
-		!q.ResponsesStoreFalse &&
-		!q.ResponsesRequireStream
+		strings.TrimSpace(q.HTTPVersion) == "" &&
+		q.ResponsesStoreFalse == nil &&
+		q.ResponsesRequireStream == nil &&
+		q.PromptCache == nil
 }
 
 func buildProviderFromRuntime(rt modelruntime.Runtime) llm.Provider {
@@ -335,6 +356,8 @@ func buildProviderFromRuntime(rt modelruntime.Runtime) llm.Provider {
 		KeyGetter:              rt.TokenGetter,
 		TokenRefresher:         rt.TokenRefresher,
 		Headers:                rt.Headers,
+		ExtraBody:              rt.ExtraBody,
+		ExtraQuery:             rt.ExtraQuery,
 		MaxTokens:              rt.MaxTokens,
 		ReasoningEffort:        rt.ReasoningEffort,
 		Thinking:               rt.Thinking,
@@ -364,6 +387,9 @@ func buildProviderForSelectionWithRuntime(cfg *config.Config, selection modelrun
 		Protocol:        selection.Protocol,
 		APIKey:          selection.APIKey,
 		Headers:         selection.Headers,
+		ExtraHeaders:    selection.ExtraHeaders,
+		ExtraBody:       selection.ExtraBody,
+		ExtraQuery:      selection.ExtraQuery,
 		ContextLength:   selection.ContextLength,
 		MaxTokens:       selection.MaxTokens,
 		ReasoningEffort: selection.ReasoningEffort,
@@ -571,6 +597,16 @@ func buildModelGateway(cfg *config.Config, mem *memory.MemoryManager, tenantID s
 	}
 	gateway := llm.NewPolicyGateway(fallbackProfile)
 
+	registered := make(map[string]struct{})
+	for _, role := range auxiliaryModelRoles() {
+		roleCfg, _, ok := cfg.ResolveAuxiliaryRole(string(role))
+		if !ok || roleConfigEmpty(roleCfg) {
+			continue
+		}
+		registerModelRoleProfile(gateway, cfg, mem, tenantID, pName, role, roleCfg)
+		registered[string(role)] = struct{}{}
+	}
+
 	for roleName, roleCfg := range cfg.Models.Roles {
 		roleName = strings.TrimSpace(roleName)
 		if roleName == "" {
@@ -579,30 +615,37 @@ func buildModelGateway(cfg *config.Config, mem *memory.MemoryManager, tenantID s
 		if roleConfigEmpty(roleCfg) {
 			continue
 		}
-
-		roleProviderName := firstNonEmpty(roleCfg.Provider, pName)
-		roleProvider := buildRoleProvider(cfg, llm.ModelRole(roleName), roleProviderName, roleCfg)
-		if roleProvider == nil {
-			log.Warn("model role skipped: provider unavailable", "role", roleName, "provider", roleProviderName)
+		if _, ok := registered[roleName]; ok {
 			continue
 		}
-		applyDynamicKeyGetter(roleProvider, mem, tenantID, roleProviderName)
-
-		gateway.RegisterRoleProfile(llm.ModelRole(roleName), llm.ProviderProfile{
-			Name:         roleName,
-			ProviderName: roleProviderName,
-			Model:        firstNonEmpty(roleCfg.Model, llm.GetModelName(roleProvider)),
-			Provider:     roleProvider,
-		})
+		registerModelRoleProfile(gateway, cfg, mem, tenantID, pName, llm.ModelRole(roleName), roleCfg)
 	}
 	return gateway
+}
+
+func registerModelRoleProfile(gateway *llm.PolicyGateway, cfg *config.Config, mem *memory.MemoryManager,
+	tenantID, primaryProvider string, role llm.ModelRole, roleCfg config.ModelRoleConfig) {
+	roleProviderName := firstNonEmpty(roleCfg.Provider, primaryProvider)
+	roleProvider := buildRoleProvider(cfg, role, roleProviderName, roleCfg)
+	if roleProvider == nil {
+		log.Warn("model role skipped: provider unavailable", "role", role, "provider", roleProviderName)
+		return
+	}
+	applyDynamicKeyGetter(roleProvider, mem, tenantID, roleProviderName)
+	gateway.RegisterRoleProfile(role, llm.ProviderProfile{
+		Name:         string(role),
+		ProviderName: roleProviderName,
+		Model:        firstNonEmpty(roleCfg.Model, llm.GetModelName(roleProvider)),
+		Provider:     roleProvider,
+	})
 }
 
 // roleConfigEmpty reports whether a models.roles entry carries no actual
 // override — such entries never register a role profile.
 func roleConfigEmpty(roleCfg config.ModelRoleConfig) bool {
 	return roleCfg.Provider == "" && roleCfg.Model == "" && roleCfg.BaseURL == "" && roleCfg.Protocol == "" && roleCfg.APIKey == "" &&
-		roleCfg.ContextLength <= 0 && roleCfg.MaxTokens <= 0 && len(roleCfg.Headers) == 0 &&
+		roleCfg.ContextLength <= 0 && roleCfg.MaxTokens <= 0 && len(roleCfg.Headers) == 0 && len(roleCfg.ExtraHeaders) == 0 &&
+		len(roleCfg.ExtraBody) == 0 && len(roleCfg.ExtraQuery) == 0 &&
 		roleCfg.EffectiveReasoning() == "" && len(roleCfg.Thinking) == 0 && roleCfg.ServiceTier == "" &&
 		emptyConfigQuirks(roleCfg.Quirks)
 }
@@ -629,6 +672,9 @@ func roleProviderSelection(_ llm.ModelRole, roleProviderName string, roleCfg con
 		Protocol:        roleCfg.Protocol,
 		APIKey:          roleCfg.APIKey,
 		Headers:         roleCfg.Headers,
+		ExtraHeaders:    roleCfg.ExtraHeaders,
+		ExtraBody:       roleCfg.ExtraBody,
+		ExtraQuery:      roleCfg.ExtraQuery,
 		ContextLength:   roleCfg.ContextLength,
 		MaxTokens:       roleCfg.MaxTokens,
 		ReasoningEffort: roleCfg.EffectiveReasoning(),
@@ -643,7 +689,8 @@ func roleProviderSelection(_ llm.ModelRole, roleProviderName string, roleCfg con
 // Unlike the agent-side expander behind the model-invoked session_search tool
 // (which falls back to the default provider), automatic recall runs at the
 // start of every eligible turn — so it only expands when a semantic_recall
-// role model is EXPLICITLY configured, and never spends main-model tokens.
+// role model is configured explicitly or through models.auxiliary, and never
+// spends main-model tokens implicitly.
 // Returns nil when the role is unconfigured, its provider cannot be built, or
 // memory.semantic_recall is disabled; the recall engine then degrades to
 // raw-term FTS.
@@ -651,7 +698,7 @@ func SemanticRecallExpander(mem *memory.MemoryManager, cfg *config.Config, tenan
 	if cfg == nil || !cfg.Memory.SemanticRecall {
 		return nil
 	}
-	roleCfg, ok := cfg.Models.Roles[string(llm.RoleSemanticRecall)]
+	roleCfg, _, ok := cfg.ResolveAuxiliaryRole(string(llm.RoleSemanticRecall))
 	if !ok || roleConfigEmpty(roleCfg) {
 		return nil
 	}
@@ -691,14 +738,19 @@ func InitAgent(mem *memory.MemoryManager, cfg *config.Config, tenantID string, s
 
 	modelGateway := buildModelGateway(cfg, mem, tenantID, provider)
 	codingProvider := modelGateway.ProviderForRole(llm.RoleCodingAgent)
-	reviewProvider := modelGateway.ProviderForRole(llm.RoleBackgroundReview)
+	reviewProvider := configuredAuxiliaryRoleProvider(mem, cfg, tenantID, llm.RoleBackgroundReview)
 	var reviewRoutes []maintenanceRouteIdentity
-	memoryExtractProvider := modelGateway.ProviderForRole(llm.RoleMemoryExtract)
-	skillCuratorProvider := modelGateway.ProviderForRole(llm.RoleSkillCurator)
-	semanticRecallProvider := modelGateway.ProviderForRole(llm.RoleSemanticRecall)
-	fastProvider := modelGateway.ProviderForRole(llm.RoleFastClassifier)
+	skillCuratorProvider := configuredAuxiliaryRoleProvider(mem, cfg, tenantID, llm.RoleSkillCurator)
+	semanticRecallProvider := configuredAuxiliaryRoleProvider(mem, cfg, tenantID, llm.RoleSemanticRecall)
+	fastProvider := configuredAuxiliaryRoleProvider(mem, cfg, tenantID, llm.RoleFastClassifier)
+	summaryProvider := configuredAuxiliaryRoleProvider(mem, cfg, tenantID, llm.RoleSummarizer)
+	if summaryProvider == nil {
+		// Legacy configurations used memory_extract for compaction before the
+		// dedicated summarizer role existed.
+		summaryProvider = explicitRoleProvider(mem, cfg, tenantID, llm.RoleMemoryExtract)
+	}
 	// Smart-mode approval triage is latency-sensitive foreground policy work.
-	// Prefer an explicitly configured fast_classifier and retain
+	// Prefer fast_classifier resolved through auxiliary/role config and retain
 	// background_review only as a legacy config fallback; never borrow the main
 	// coding model silently.
 	judgeProvider, _ := configuredApprovalJudgeProvider(mem, cfg, tenantID)
@@ -778,9 +830,9 @@ func InitAgent(mem *memory.MemoryManager, cfg *config.Config, tenantID string, s
 	// Simple direct-answer turns use the fast-classifier role (falls back to the
 	// default model when no fast model is configured).
 	agent.SetFastProvider(fastProvider)
-	// Over-budget context compaction runs by default on the cheap memory_extract
-	// role (kept OFF the main coding provider) instead of dropping oldest turns.
-	agent.SetSummaryProvider(memoryExtractProvider)
+	// Over-budget context compaction uses the auxiliary/dedicated summarizer
+	// (kept OFF the main coding provider) instead of dropping oldest turns.
+	agent.SetSummaryProvider(summaryProvider)
 	// Carry the cheap triage provider so the gateway can build the smart-mode
 	// approval judge (H2) from it, without kernel depending on concrete tools.
 	agent.SetApprovalJudgeProvider(judgeProvider)
@@ -797,6 +849,7 @@ func InitAgent(mem *memory.MemoryManager, cfg *config.Config, tenantID string, s
 		NudgeInterval:          cfg.Evolution.NudgeInterval,
 		SkillsDir:              skillsDir,
 	}, 8, maxRetries)
+	reviewEngine.SetControlTenantID(tenantID)
 	agent.SetBackgroundReviewEngine(reviewEngine)
 
 	// Configure the nudge interval.

@@ -98,6 +98,53 @@ func TestCheckRejectsMultipleActivePlansAndInvalidUTF8(t *testing.T) {
 	}
 }
 
+func TestCheckAllowsExcludedDocumentPresentOrAbsent(t *testing.T) {
+	root := testRepo(t)
+	manifestPath := filepath.Join(root, ManifestPath)
+	data, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data = append(data, []byte("excluded_documents:\n  - path: docs/private.md\n    reason: private strategy\n")...)
+	if err := os.WriteFile(manifestPath, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteIndex(root); err != nil {
+		t.Fatal(err)
+	}
+	for _, present := range []bool{false, true} {
+		if present {
+			mustWrite(t, filepath.Join(root, "docs/private.md"), "# Private\n")
+		}
+		report := Check(root, time.Date(2026, 8, 12, 0, 0, 0, 0, time.UTC))
+		if !report.OK() {
+			t.Fatalf("Check() present=%v errors:\n%s", present, strings.Join(report.Errors, "\n"))
+		}
+	}
+}
+
+func TestCheckRejectsPublicLinkToExcludedDocument(t *testing.T) {
+	root := testRepo(t)
+	manifestPath := filepath.Join(root, ManifestPath)
+	data, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data = append(data, []byte("excluded_documents:\n  - path: docs/private.md\n    reason: private strategy\n")...)
+	if err := os.WriteFile(manifestPath, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mustWrite(t, filepath.Join(root, "docs/private.md"), "# Private\n")
+	mustWrite(t, filepath.Join(root, "docs/source.md"), "# Source\n\n[private](private.md)\n")
+	if err := WriteIndex(root); err != nil {
+		t.Fatal(err)
+	}
+	report := Check(root, time.Date(2026, 8, 12, 0, 0, 0, 0, time.UTC))
+	if joined := strings.Join(report.Errors, "\n"); !strings.Contains(joined, "links to excluded document") {
+		t.Fatalf("Check() did not reject excluded link:\n%s", joined)
+	}
+}
+
 func testRepo(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()

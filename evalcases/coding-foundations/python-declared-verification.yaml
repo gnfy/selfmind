@@ -24,11 +24,7 @@ setup:
       ```sh
       make test
       ```
-    Makefile: |
-      .RECIPEPREFIX := >
-      .PHONY: test
-      test:
-      >python3 -m unittest discover -s tests -v
+    Makefile: ".PHONY: test\ntest:\n\tpython3 -m unittest discover -s tests -v\n"
     calculator.py: |
       def multiply(a, b):
           return a + b

@@ -18,7 +18,6 @@ Generated from `docs/manifest.yaml` by `selfmind docs index`. Do not edit this f
 ## Decision
 
 - [Execution Concurrency Design](execution-concurrency-plan.md) - paused, zh-CN
-- [SaaS 与企业版远期图景](vision-saas-enterprise.zh-CN.md) - paused, zh-CN
 
 ## Guide
 

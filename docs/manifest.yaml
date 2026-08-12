@@ -198,12 +198,6 @@ documents:
     owner: tui
     state: current
     language: en
-  - path: docs/vision-saas-enterprise.zh-CN.md
-    title: SaaS 与企业版远期图景
-    class: decision
-    owner: product
-    state: paused
-    language: zh-CN
   - path: docs/weixin-live-test.md
     title: Weixin Live Test
     class: guide
@@ -222,3 +216,6 @@ documents:
     owner: execution
     state: current
     language: en
+excluded_documents:
+  - path: docs/vision-saas-enterprise.zh-CN.md
+    reason: Private strategy and enterprise vision; intentionally absent from public source distributions.

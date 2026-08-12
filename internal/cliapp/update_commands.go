@@ -52,7 +52,7 @@ func (a *App) updateCheck(args []string) int {
 	}
 	fmt.Fprintf(a.stdout, "Current: %s\nAvailable (%s): %s\n", result.Current, result.Channel, result.Latest)
 	if result.UpdateAvailable() {
-		fmt.Fprintf(a.stdout, "Update with: %s\n", updateInstallCommand(result.Channel))
+		fmt.Fprintln(a.stdout, updatecheck.AvailableNotice(result.Latest))
 	} else {
 		fmt.Fprintln(a.stdout, "SelfMind is up to date.")
 	}
@@ -66,12 +66,12 @@ func (a *App) updateApply(args []string) int {
 	fs := flag.NewFlagSet("selfmind update", flag.ContinueOnError)
 	fs.SetOutput(a.stderr)
 	channel := fs.String("channel", "", "npm dist-tag to install: latest or next")
-	force := fs.Bool("force", false, "reinstall even when already up to date or the check fails")
+	force := fs.Bool("force", false, "install even when the check fails or this would replace a newer local build")
 	noRestart := fs.Bool("no-restart", false, "skip the gateway daemon restart after installing")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
-	if isDevelopmentVersion(buildinfo.Version) && !*force {
+	if isDevelopmentVersion(buildinfo.Version) && !*force && !runningFromNPMInstall() {
 		fmt.Fprintln(a.stderr, "This is a development build; use `selfmind update --force` to overwrite it with the npm release.")
 		return 1
 	}
@@ -91,9 +91,13 @@ func (a *App) updateApply(args []string) int {
 		fmt.Fprintf(a.stderr, "Update check failed: %v — continuing because --force was set.\n", err)
 	} else {
 		fmt.Fprintf(a.stdout, "Current: %s\nAvailable (%s): %s\n", result.Current, result.Channel, result.Latest)
-		if !result.UpdateAvailable() && !*force {
-			fmt.Fprintln(a.stdout, "SelfMind is already up to date.")
+		disposition := chooseUpdateDisposition(result.Current, result.Latest, *force)
+		if disposition == updateSkipNewer {
+			fmt.Fprintf(a.stdout, "SelfMind %s is newer than the %s channel (%s); nothing was installed. Use `selfmind update --force` to replace it with that channel.\n", result.Current, result.Channel, result.Latest)
 			return 0
+		}
+		if disposition == updateRefresh {
+			fmt.Fprintln(a.stdout, "Refreshing the current npm release so locally replaced package files are restored.")
 		}
 	}
 
@@ -279,7 +283,7 @@ func (a *App) printUpdateNotice(cfg *config.Config) {
 	effectiveChannel := updatecheck.ResolveChannel(cfg.Updates.Channel, buildinfo.Version)
 	cached, err := updatecheck.ReadCache(cachePath)
 	if err == nil && shouldAnnounceUpdate(cached, buildinfo.Version, effectiveChannel) {
-		fmt.Fprintf(a.stderr, "Update available: SelfMind %s. Run `%s`.\n", cached.Latest, updateInstallCommand(cached.Channel))
+		fmt.Fprintln(a.stderr, updatecheck.AvailableNotice(cached.Latest))
 		a.announcedUpdateVersion = cached.Latest
 	}
 	// The cache is only fresh for the binary and channel that wrote it: after
@@ -306,7 +310,7 @@ func (a *App) printUpdateNotice(cfg *config.Config) {
 			return
 		}
 		select {
-		case notices <- tui.UpdateNotice{Version: result.Latest, Command: "selfmind update"}:
+		case notices <- tui.UpdateNotice{Version: result.Latest}:
 		default:
 		}
 	}()
@@ -345,7 +349,7 @@ func updateHintFromCache(cfg *config.Config, runningVersion string, cached updat
 	if !shouldAnnounceUpdate(cached, runningVersion, effectiveChannel) {
 		return ""
 	}
-	return fmt.Sprintf("Update available: SelfMind %s. Run `selfmind update` — between sessions is a safe time (the daemon restarts without interrupting work).", cached.Latest)
+	return updatecheck.AvailableNotice(cached.Latest)
 }
 
 // shouldAnnounceUpdate compares the cached latest against the version that is
@@ -385,11 +389,34 @@ func updateInstallArgs(channel, method string) []string {
 	}
 }
 
-func updateInstallCommand(channel string) string {
-	return strings.Join(updateInstallArgs(channel, os.Getenv("SELFMIND_INSTALL_METHOD")), " ")
+type updateDisposition uint8
+
+const (
+	updateInstall updateDisposition = iota
+	updateRefresh
+	updateSkipNewer
+)
+
+func chooseUpdateDisposition(current, available string, force bool) updateDisposition {
+	if force || isDevelopmentVersion(current) {
+		return updateInstall
+	}
+	switch updatecheck.Compare(available, current) {
+	case -1:
+		return updateSkipNewer
+	case 0:
+		return updateRefresh
+	default:
+		return updateInstall
+	}
 }
 
 func isDevelopmentVersion(version string) bool {
 	version = strings.ToLower(strings.TrimSpace(version))
 	return version == "" || strings.Contains(version, "dev")
+}
+
+func runningFromNPMInstall() bool {
+	return strings.TrimSpace(os.Getenv("SELFMIND_NPM_LAUNCHER")) != "" ||
+		strings.EqualFold(strings.TrimSpace(os.Getenv("SELFMIND_NPM_PACKAGE")), "@selfmind/cli")
 }

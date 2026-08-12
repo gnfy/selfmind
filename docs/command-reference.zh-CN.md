@@ -26,12 +26,16 @@ selfmind feedback [--out FILE|--send] [--repo OWNER/REPO] [--include-crash] <mes
   YAML 中作为高级配置完成。各类 `skip` 参数可用于自动化环境。
 - `update check` 只检查更新。`update` 执行完整升级：检查所选 npm 通道、
   调用包管理器安装、用 `selfmind --version` 验证新二进制，并对运行中的
-  gateway daemon 做默认排空（drain）重启以切换到新版本。`--force`
-  在已是最新或检查失败时仍强制安装；`--no-restart` 跳过重启（daemon
+  gateway daemon 做默认排空（drain）重启以切换到新版本。同版本也会重新
+  安装，用于恢复本地开发过程中临时替换过的 npm 包内容；若当前构建比所选
+  通道更新，则默认不降级。`--force` 允许显式降级，也会在检查失败时继续安装；
+  `--no-restart` 跳过重启（daemon
   在手动重启前继续运行旧版本）。`update` 绝不会拉起未运行的 daemon。
   渠道默认为 `auto`：预发布版本自动跟随 `next`，正式版本跟随 `latest`；
   在配置中显式写 `updates.channel: latest|next` 可固定某条线。`--channel`
   只影响当次执行，绝不改写配置中的固定值。
+  从 npm 包启动的开发替换版可直接用 `selfmind update` 恢复；独立源码构建仍需
+  显式使用 `--force`，SelfMind 才会覆盖它。
 - `uninstall --prepare` 停止并注销 daemon。只有显式指定
   `--purge-data --yes` 才会删除数据。
 - `feedback` 默认在本地生成脱敏诊断报告。`--send` 通过已登录的 `gh`

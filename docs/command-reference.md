@@ -32,12 +32,17 @@ selfmind feedback [--out FILE|--send] [--repo OWNER/REPO] [--include-crash] <mes
   upgrade: it checks the selected npm channel, runs the package-manager
   install, verifies the new binary with `selfmind --version`, and restarts a
   running gateway daemon (drain-by-default) so it picks up the new version.
-  `--force` reinstalls even when up to date or the check fails; `--no-restart`
+  An equal version is reinstalled so local package replacements are restored;
+  a running build newer than the selected channel is left untouched unless
+  `--force` is set. `--force` also continues when the check fails; `--no-restart`
   leaves the daemon on the old version until it is restarted manually. A
   stopped daemon is never started by `update`. The channel defaults to `auto`:
   a prerelease build follows `next`, a stable build follows `latest`, and an
   explicit `updates.channel: latest|next` in config pins one line. `--channel`
   affects only that invocation and never rewrites the config pin.
+  A development binary launched from the npm package can be restored directly
+  with `selfmind update`; an independent source build still requires
+  `--force` before SelfMind overwrites it.
 - `uninstall --prepare` stops and unregisters the daemon. Data is preserved
   unless `--purge-data --yes` is explicitly supplied.
 - `feedback` writes a redacted diagnostic report locally by default. `--send`

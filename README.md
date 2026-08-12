@@ -65,8 +65,7 @@ Check for updates and upgrade without interrupting an active turn:
 
 ```sh
 selfmind update check
-npm install --global @selfmind/cli@latest
-selfmind gateway restart --drain
+selfmind update
 ```
 
 Prerelease builds use `selfmind@next`. See

@@ -88,6 +88,38 @@ func TestUpdateInstallArgsPerPackageManager(t *testing.T) {
 	}
 }
 
+func TestUpdateAvailableHintUsesSelfMindUpdate(t *testing.T) {
+	got := updatecheck.AvailableNotice("0.1.0-beta.14")
+	if got != "Update available: SelfMind 0.1.0-beta.14. Run `selfmind update`." {
+		t.Fatalf("update hint = %q", got)
+	}
+	if strings.Contains(got, "npm install") {
+		t.Fatalf("user-facing hint must hide package-manager details: %q", got)
+	}
+}
+
+func TestChooseUpdateDisposition(t *testing.T) {
+	cases := []struct {
+		name               string
+		current, available string
+		force              bool
+		want               updateDisposition
+	}{
+		{"older upgrades", "0.1.0-beta.12", "0.1.0-beta.13", false, updateInstall},
+		{"equal refreshes package", "0.1.0-beta.13", "0.1.0-beta.13", false, updateRefresh},
+		{"newer local build is preserved", "0.1.0-beta.14", "0.1.0-beta.13", false, updateSkipNewer},
+		{"force permits replacement", "0.1.0-beta.14", "0.1.0-beta.13", true, updateInstall},
+		{"npm-managed development replacement restores release", "0.1.0-dev", "0.1.0-beta.13", false, updateInstall},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := chooseUpdateDisposition(tc.current, tc.available, tc.force); got != tc.want {
+				t.Fatalf("chooseUpdateDisposition(%q, %q, %v) = %v, want %v", tc.current, tc.available, tc.force, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestUpdateVersionPatternExtractsSemverFromBanner(t *testing.T) {
 	cases := []struct {
 		banner string
@@ -108,6 +140,8 @@ func TestUpdateVersionPatternExtractsSemverFromBanner(t *testing.T) {
 // A development build must refuse to self-overwrite unless --force is given,
 // and must not touch the network before that guard fires.
 func TestUpdateApplyRefusesDevelopmentBuildWithoutForce(t *testing.T) {
+	t.Setenv("SELFMIND_NPM_LAUNCHER", "")
+	t.Setenv("SELFMIND_NPM_PACKAGE", "")
 	stdout := &bytes.Buffer{}
 	stderr := &bytes.Buffer{}
 	app := &App{
@@ -125,5 +159,17 @@ func TestUpdateApplyRefusesDevelopmentBuildWithoutForce(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "--force") {
 		t.Fatalf("error should point at --force, got: %s", stderr.String())
+	}
+}
+
+func TestRunningFromNPMInstall(t *testing.T) {
+	t.Setenv("SELFMIND_NPM_LAUNCHER", "/prefix/lib/node_modules/@selfmind/cli/bin/selfmind.js")
+	if !runningFromNPMInstall() {
+		t.Fatal("npm launcher marker must identify an npm-managed development replacement")
+	}
+	t.Setenv("SELFMIND_NPM_LAUNCHER", "")
+	t.Setenv("SELFMIND_NPM_PACKAGE", "@selfmind/cli")
+	if !runningFromNPMInstall() {
+		t.Fatal("npm package marker must identify an npm-managed development replacement")
 	}
 }

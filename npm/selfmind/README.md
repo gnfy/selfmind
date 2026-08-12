@@ -25,8 +25,7 @@ Native Windows and macOS are not currently supported release targets.
 
 ```sh
 selfmind update check
-npm install --global @selfmind/cli@latest
-selfmind gateway restart --drain
+selfmind update
 ```
 
 Use `selfmind@next` for prerelease builds.

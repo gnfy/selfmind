@@ -438,7 +438,10 @@ feedback:
 
 启动检查只负责发现新版本并提示，不会在工作过程中静默替换二进制。
 `selfmind update check` 只查询版本；`selfmind update` 会调用当前包管理器安装、
-验证新二进制，并在安全回合边界重启正在运行的 gateway。预发布版本在
+验证新二进制，并在安全回合边界重启正在运行的 gateway。所有升级提示统一
+使用 `selfmind update`。版本相同时也会刷新 npm 安装，以恢复本地临时替换过的
+包内容；当前构建比通道版本更新时不会自动降级，除非显式使用 `--force`。
+预发布版本在
 `channel: auto` 下跟随 `next`，稳定版本跟随 `latest`。
 
 `selfmind feedback` 默认只生成本地脱敏报告；显式使用 `--send` 时，才会通过

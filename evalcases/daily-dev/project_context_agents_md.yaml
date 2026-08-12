@@ -3,6 +3,7 @@ title: "a workspace AGENTS.md convention is read and honored end-to-end"
 suite: daily-dev
 workspace: isolated
 channel: cli
+require_cassette: true
 
 # Route-3 project-context injection (docs/STATUS.md "Project context injection"):
 # an AGENTS.md in the workspace must reach the model through the REAL gateway
@@ -15,9 +16,8 @@ channel: cli
 # head/tail-with-pointer truncation, untrusted-data fence) are pinned by Go unit
 # tests in internal/kernel/context_scanner_test.go.
 #
-# Cassette pending: recording needs a live provider; until then the offline gate
-# SKIPS this case (require_cassette intentionally unset so selfcheck is not
-# broken). Record with: selfmind eval run daily-dev/project_context_agents_md --live
+# This is release evidence, so the case and its cassette are promoted together.
+# Re-record with: selfmind eval run daily-dev/project_context_agents_md --live
 setup:
   files:
     AGENTS.md: |

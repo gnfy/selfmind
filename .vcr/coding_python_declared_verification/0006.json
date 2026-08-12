@@ -1,0 +1,178 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "content": "Fixed"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": " The"
+    },
+    {
+      "content": " implementation"
+    },
+    {
+      "content": " in"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "calculator"
+    },
+    {
+      "content": ".py"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " had"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "mult"
+    },
+    {
+      "content": "iply"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " returning"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "a"
+    },
+    {
+      "content": " +"
+    },
+    {
+      "content": " b"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " instead"
+    },
+    {
+      "content": " of"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "a"
+    },
+    {
+      "content": " *"
+    },
+    {
+      "content": " b"
+    },
+    {
+      "content": "`."
+    },
+    {
+      "content": " I"
+    },
+    {
+      "content": " corrected"
+    },
+    {
+      "content": " it"
+    },
+    {
+      "content": " to"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "return"
+    },
+    {
+      "content": " a"
+    },
+    {
+      "content": " *"
+    },
+    {
+      "content": " b"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " and"
+    },
+    {
+      "content": " ran"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " declared"
+    },
+    {
+      "content": " check"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "make"
+    },
+    {
+      "content": " test"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " exactly"
+    },
+    {
+      "content": " once"
+    },
+    {
+      "content": " —"
+    },
+    {
+      "content": " all"
+    },
+    {
+      "content": " tests"
+    },
+    {
+      "content": " pass"
+    },
+    {
+      "content": "."
+    },
+    {
+      "finish_reason": "stop"
+    },
+    {
+      "usage": {
+        "input_tokens": 9258,
+        "output_tokens": 54,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 9258,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0,
+        "cache_usage_reported": true
+      }
+    }
+  ]
+}

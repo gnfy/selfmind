@@ -57,7 +57,7 @@ func userTenantDirForTenant(tenantID string) (string, error) {
 // SkillRootsForTenant returns all roots visible to a tenant, ordered by lookup
 // priority. Workspace roots are read first; the user root is always available
 // and remains the default write target.
-func SkillRootsForTenant(tenantID string) ([]SkillRoot, error) {
+func SkillRootsForTenant(tenantID string, invocation ...map[string]interface{}) ([]SkillRoot, error) {
 	var roots []SkillRoot
 	addExistingRoot := func(path, scope, source string, writable bool, priority int) {
 		if strings.TrimSpace(path) == "" {
@@ -77,7 +77,11 @@ func SkillRootsForTenant(tenantID string) ([]SkillRoot, error) {
 
 	workspaceStart := ""
 	workspaceSkillsAllowed := true
-	if scope, ok := currentExecutionScopeAny(map[string]interface{}{"_tenant_id": tenantID}); ok {
+	args := map[string]interface{}{"_tenant_id": tenantID}
+	if len(invocation) > 0 && invocation[0] != nil {
+		args = invocation[0]
+	}
+	if scope, ok := currentExecutionScopeAny(args); ok {
 		workspaceStart = strings.TrimSpace(scope.WorkspaceRoot)
 		workspaceSkillsAllowed = scope.TrustLevel != executionenv.TrustUntrusted
 	} else if cwd, err := os.Getwd(); err == nil {
@@ -116,12 +120,27 @@ func SkillRootsForTenant(tenantID string) ([]SkillRoot, error) {
 		Writable: true,
 		Priority: 100,
 	})
+	// One-release compatibility window: skills previously written under the
+	// person partition remain readable, but the control-tenant root wins on
+	// name conflicts and all new writes continue to target the control tenant.
+	if scope, ok := InvocationScopeFromArgs(args); ok {
+		personID := strings.TrimSpace(scope.PersonID)
+		if personID != "" && personID != fallbackTenant(tenantID) {
+			if legacyDir, legacyErr := userSkillsDirForTenant(personID); legacyErr == nil {
+				addExistingRoot(legacyDir, SkillScopeUser, "legacy-person", false, 110)
+			}
+		}
+	}
 
 	return dedupeSkillRoots(roots), nil
 }
 
-func activeSkillWorkspaceUntrusted(tenantID string) bool {
-	scope, ok := currentExecutionScopeAny(map[string]interface{}{"_tenant_id": tenantID})
+func activeSkillWorkspaceUntrusted(tenantID string, invocation ...map[string]interface{}) bool {
+	args := map[string]interface{}{"_tenant_id": tenantID}
+	if len(invocation) > 0 && invocation[0] != nil {
+		args = invocation[0]
+	}
+	scope, ok := currentExecutionScopeAny(args)
 	return ok && scope.TrustLevel == executionenv.TrustUntrusted
 }
 
@@ -139,8 +158,8 @@ func skillRootAncestors(start string) []string {
 	return dirs
 }
 
-func WritableSkillRootForTenant(tenantID string) (SkillRoot, error) {
-	roots, err := SkillRootsForTenant(tenantID)
+func WritableSkillRootForTenant(tenantID string, invocation ...map[string]interface{}) (SkillRoot, error) {
+	roots, err := SkillRootsForTenant(tenantID, invocation...)
 	if err != nil {
 		return SkillRoot{}, err
 	}

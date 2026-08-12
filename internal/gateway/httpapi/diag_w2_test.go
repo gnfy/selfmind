@@ -65,18 +65,20 @@ func TestLatestPromptCacheLine(t *testing.T) {
 	events := []control.Event{
 		eventWith("provider.call.usage", map[string]interface{}{
 			"iteration": 3, "transport": "stream", "status": "succeeded", "duration_ms": 240,
-			"input_tokens": 250, "cache_read_input_tokens": 200,
-			"cache_creation_input_tokens": 20, "cache_creation_reported": true, "billed_input_tokens": 50,
+			"input_tokens": 250, "output_tokens": 40, "cache_read_input_tokens": 200,
+			"cache_miss_input_tokens": 50, "cache_usage_reported": true,
+			"cache_creation_input_tokens": 20, "cache_creation_reported": true, "uncached_input_tokens": 50,
 		}),
 		eventWith("token.updated", map[string]interface{}{
-			"input_tokens": 1000, "cache_read_input_tokens": 800,
-			"cache_creation_input_tokens": 120, "cache_creation_reported": true, "billed_input_tokens": 200,
+			"input_tokens": 1000, "output_tokens": 80, "cache_read_input_tokens": 800,
+			"cache_miss_input_tokens": 200, "cache_usage_reported": true,
+			"cache_creation_input_tokens": 120, "cache_creation_reported": true, "uncached_input_tokens": 200,
 		}),
 	}
 	out := latestPromptCacheLine(events)
 	for _, want := range []string{
-		"Provider call (#3 stream, succeeded, 240ms)", "input 250 tok", "cache read 200 tok (80%)",
-		"Prompt cache (run snapshot): read 800 tok (80%)", "created 120 tok", "billed input 200 tok",
+		"Provider call (#3 stream, succeeded, 240ms)", "input 250 tok", "cache hit 200 tok (80%)",
+		"cache miss 50 tok", "Prompt cache (run snapshot): hit 800 tok (80%)", "created 120 tok", "uncached 200 tok",
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("prompt cache line missing %q: %s", want, out)
@@ -90,7 +92,7 @@ func TestLatestPromptCacheLine(t *testing.T) {
 func TestLatestPromptCacheLineReportsUnavailableCreationCounter(t *testing.T) {
 	out := latestPromptCacheLine([]control.Event{eventWith("provider.call.usage", map[string]interface{}{
 		"iteration": 1, "transport": "responses", "status": "succeeded",
-		"input_tokens": 100, "cache_read_input_tokens": 80, "billed_input_tokens": 20,
+		"input_tokens": 100, "cache_read_input_tokens": 80, "uncached_input_tokens": 20,
 	})})
 	if !strings.Contains(out, "created n/a") {
 		t.Fatalf("missing creation counter must not look like a real zero: %s", out)
@@ -100,18 +102,18 @@ func TestLatestPromptCacheLineReportsUnavailableCreationCounter(t *testing.T) {
 func TestPromptCacheAggregateLine(t *testing.T) {
 	events := []control.Event{
 		eventWith("provider.call.usage", map[string]interface{}{
-			"input_tokens": 100, "cache_read_input_tokens": 80,
-			"cache_creation_input_tokens": 10, "cache_creation_reported": true, "billed_input_tokens": 20,
+			"input_tokens": 100, "cache_read_input_tokens": 80, "cache_miss_input_tokens": 20,
+			"cache_usage_reported": true, "cache_creation_input_tokens": 10, "cache_creation_reported": true,
 		}),
 		eventWith("provider.call.usage", map[string]interface{}{
-			"input_tokens": 200, "cache_read_input_tokens": 0,
-			"cache_creation_reported": false, "billed_input_tokens": 200,
+			"input_tokens": 200, "cache_read_input_tokens": 0, "cache_miss_input_tokens": 200,
+			"cache_usage_reported": true, "cache_creation_reported": false,
 		}),
 		eventWith("token.updated", map[string]interface{}{"input_tokens": 999}),
 	}
 	out := promptCacheAggregateLine(events)
 	for _, want := range []string{
-		"visible 2 calls", "read 80/300 tok (26%)", "hits 1/2", "created 10 tok", "billed input 220 tok",
+		"visible 2 calls", "hit 80/300 tok (26%)", "cache miss 220 tok", "hits 1/2", "created 10 tok",
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("aggregate cache line missing %q: %s", want, out)
@@ -124,7 +126,7 @@ func TestPromptCacheAggregateLine(t *testing.T) {
 
 func TestPromptCacheAggregateLineReportsUnavailableCreationCounter(t *testing.T) {
 	out := promptCacheAggregateLine([]control.Event{eventWith("provider.call.usage", map[string]interface{}{
-		"input_tokens": 100, "cache_read_input_tokens": 80, "billed_input_tokens": 20,
+		"input_tokens": 100, "cache_read_input_tokens": 80, "uncached_input_tokens": 20,
 	})})
 	if !strings.Contains(out, "creation not reported by this transport") {
 		t.Fatalf("missing creation counter must be explicit: %s", out)

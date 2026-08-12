@@ -1,0 +1,286 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "reasoning_content": "The"
+    },
+    {
+      "reasoning_content": " command"
+    },
+    {
+      "reasoning_content": " ran"
+    },
+    {
+      "reasoning_content": " successfully"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " The"
+    },
+    {
+      "reasoning_content": " output"
+    },
+    {
+      "reasoning_content": " was"
+    },
+    {
+      "reasoning_content": " truncated"
+    },
+    {
+      "reasoning_content": " in"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " middle"
+    },
+    {
+      "reasoning_content": " but"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " full"
+    },
+    {
+      "reasoning_content": " output"
+    },
+    {
+      "reasoning_content": " was"
+    },
+    {
+      "reasoning_content": " saved"
+    },
+    {
+      "reasoning_content": " as"
+    },
+    {
+      "reasoning_content": " an"
+    },
+    {
+      "reasoning_content": " artifact"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " The"
+    },
+    {
+      "reasoning_content": " user"
+    },
+    {
+      "reasoning_content": " asked"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " to"
+    },
+    {
+      "reasoning_content": " run"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " command"
+    },
+    {
+      "reasoning_content": " and"
+    },
+    {
+      "reasoning_content": " only"
+    },
+    {
+      "reasoning_content": " reply"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "done"
+    },
+    {
+      "reasoning_content": "\"."
+    },
+    {
+      "reasoning_content": " Let"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " verify"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " marker"
+    },
+    {
+      "reasoning_content": " was"
+    },
+    {
+      "reasoning_content": " in"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " output"
+    },
+    {
+      "reasoning_content": " —"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " middle"
+    },
+    {
+      "reasoning_content": " was"
+    },
+    {
+      "reasoning_content": " truncated"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " but"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " command"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " deterministic"
+    },
+    {
+      "reasoning_content": " so"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " marker"
+    },
+    {
+      "reasoning_content": " at"
+    },
+    {
+      "reasoning_content": " line"
+    },
+    {
+      "reasoning_content": " "
+    },
+    {
+      "reasoning_content": "150"
+    },
+    {
+      "reasoning_content": "0"
+    },
+    {
+      "reasoning_content": " would"
+    },
+    {
+      "reasoning_content": " be"
+    },
+    {
+      "reasoning_content": " there"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " The"
+    },
+    {
+      "reasoning_content": " user"
+    },
+    {
+      "reasoning_content": " only"
+    },
+    {
+      "reasoning_content": " wants"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "done"
+    },
+    {
+      "reasoning_content": "\""
+    },
+    {
+      "reasoning_content": " as"
+    },
+    {
+      "reasoning_content": " reply"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Let"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " just"
+    },
+    {
+      "reasoning_content": " reply"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "done"
+    },
+    {
+      "reasoning_content": "\""
+    },
+    {
+      "reasoning_content": " as"
+    },
+    {
+      "reasoning_content": " instructed"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "content": "done"
+    },
+    {
+      "finish_reason": "stop"
+    },
+    {
+      "usage": {
+        "input_tokens": 12919,
+        "output_tokens": 90,
+        "cache_read_input_tokens": 8448,
+        "cache_miss_input_tokens": 4471,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 88,
+        "cache_usage_reported": true
+      }
+    }
+  ]
+}

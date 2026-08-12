@@ -3,6 +3,7 @@ title: "scenarios 6: /tasks aggregates open work; done work collapses"
 suite: timeline
 workspace: "."
 channel: cli
+model_required: false
 
 # Scenario 6: control-command turns only — no model calls, so this case runs
 # offline without a cassette. /new opens a label; /tasks must render the

@@ -21,19 +21,21 @@ const (
 // SkillUsageRecord stores operational metadata outside SKILL.md so user-authored
 // skill content does not fight with lifecycle bookkeeping.
 type SkillUsageRecord struct {
-	Name        string `json:"name"`
-	Source      string `json:"source"`
-	CreatedBy   string `json:"created_by"`
-	State       string `json:"state"`
-	CreatedAt   string `json:"created_at"`
-	UpdatedAt   string `json:"updated_at"`
-	LastUsed    string `json:"last_used"`
-	LastViewed  string `json:"last_viewed,omitempty"`
-	LastPatched string `json:"last_patched,omitempty"`
-	UseCount    int    `json:"use_count,omitempty"`
-	ViewCount   int    `json:"view_count,omitempty"`
-	PatchCount  int    `json:"patch_count"`
-	Pinned      bool   `json:"pinned"`
+	Name                string `json:"name"`
+	Source              string `json:"source"`
+	CreatedBy           string `json:"created_by"`
+	State               string `json:"state"`
+	CreatedAt           string `json:"created_at"`
+	UpdatedAt           string `json:"updated_at"`
+	LastUsed            string `json:"last_used"`
+	LastViewed          string `json:"last_viewed,omitempty"`
+	LastPatched         string `json:"last_patched,omitempty"`
+	UseCount            int    `json:"use_count,omitempty"`
+	ViewCount           int    `json:"view_count,omitempty"`
+	PatchCount          int    `json:"patch_count"`
+	Pinned              bool   `json:"pinned"`
+	MigratedFrom        string `json:"migrated_from,omitempty"`
+	GovernanceNotBefore string `json:"governance_not_before,omitempty"`
 }
 
 func usageFilePath(skillsDir string) string {

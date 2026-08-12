@@ -101,6 +101,15 @@ func DiscoverModelDescriptor(providerID, model string) (ModelDescriptor, bool) {
 	if model == "" {
 		return ModelDescriptor{}, false
 	}
+	if providerID == "deepseek" && strings.HasPrefix(strings.ToLower(model), "deepseek-v4-") {
+		return ModelDescriptor{
+			ID:                 model,
+			ContextWindow:      KnownContextLength(providerID, model),
+			DefaultReasoning:   "high",
+			SupportedReasoning: []string{"high", "xhigh"},
+			CapabilitySource:   "built-in DeepSeek V4 metadata",
+		}, true
+	}
 	if contextWindow := KnownContextLength(providerID, model); contextWindow > 0 {
 		return ModelDescriptor{
 			ID:               model,

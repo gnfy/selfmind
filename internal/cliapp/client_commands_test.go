@@ -128,6 +128,17 @@ func TestTaskCommandUsesShortLivedGatewayRequest(t *testing.T) {
 	}
 }
 
+func TestUsageCommandUsesContextDiagnostics(t *testing.T) {
+	app, recorded, _, _ := newSendTestApp(t, []string{"selfmind", "usage"})
+	handled, code := app.runGatewayClientIfRequested()
+	if !handled || code != 0 {
+		t.Fatalf("handled = %v, code = %d", handled, code)
+	}
+	if recorded.Content != "/diag context" {
+		t.Fatalf("content = %q", recorded.Content)
+	}
+}
+
 func TestExtractTaskResumeCommand(t *testing.T) {
 	stdout := &bytes.Buffer{}
 	stderr := &bytes.Buffer{}

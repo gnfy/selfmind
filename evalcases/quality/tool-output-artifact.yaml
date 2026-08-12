@@ -1,8 +1,11 @@
 id: tool_output_artifact_readback
 title: "truncated large tool output is read back by artifact reference, not re-run"
 suite: quality
-workspace: "."
+workspace: isolated
 channel: cli
+require_cassette: true
+requires:
+  commands: [awk]
 
 # Execution-quality W1 (docs/execution-quality-plan.zh-CN.md): a tool output
 # beyond the 24KB model budget is spooled as a task artifact; the truncation
@@ -12,9 +15,7 @@ channel: cli
 # head/tail window, so a passing answer can only come from the artifact read
 # (or a forbidden re-run, which the prompt excludes).
 #
-# Cassette PENDING: both live providers hit quota limits on 2026-07-12
-# (codex 429, kimi 403); the offline gate skips this case until recorded
-# (require_cassette intentionally unset). Record when quota refreshes:
+# Re-record after intentional artifact-contract changes:
 # SELFMIND_EVAL_VCR=record selfmind eval run \
 #   evalcases/quality/tool-output-artifact.yaml --provider kimi-coding
 turns:

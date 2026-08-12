@@ -63,9 +63,9 @@ func (a *App) runSetupCommandIfRequested() (bool, int) {
 		}
 	}
 	if !*skipModel {
-		// Before the gateway starts: the daemon reads models.roles once at
-		// startup, so filling them afterwards would leave this run's daemon
-		// with approval triage and memory work still disabled.
+		// Before the gateway starts: the daemon reads models.auxiliary and role
+		// overrides once at startup, so configuring them afterwards would leave
+		// this run's background services disabled.
 		cfg = a.ensureBackgroundRoleSetup(cfg)
 	}
 
@@ -125,7 +125,8 @@ func (a *App) ensureInitialModelSetup(cfg *config.Config, setup modelSetupFunc) 
 	}
 
 	fmt.Fprintln(a.stdout, "Welcome to SelfMind.")
-	fmt.Fprintln(a.stdout, "Before we start, choose the AI model SelfMind should use.")
+	fmt.Fprintln(a.stdout, "Before we start, choose the primary model for conversations and task execution.")
+	fmt.Fprintln(a.stdout, "Next, you can choose one auxiliary model for approval, memory, recall, summaries, and skills.")
 	fmt.Fprintln(a.stdout, "You can reuse an existing Codex, Claude Code, Gemini, or Qwen login, or configure an API key.")
 	fmt.Fprintln(a.stdout)
 

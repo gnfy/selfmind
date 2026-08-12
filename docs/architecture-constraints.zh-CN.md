@@ -38,12 +38,18 @@
 
 ## 模型和工具约束
 
-- 模型选择走 role-based routing，例如 `coding_agent`、`memory_extract`、`background_review`、`skill_curator`、`semantic_recall`。
+- 前台模型走 `models.primary`；有界后台角色先使用显式的
+  `models.roles.<role>` 覆盖，再继承 `models.auxiliary`，例如
+  `fast_classifier`、`memory_extract`、`background_review`、`skill_curator`、
+  `semantic_recall`、`summarizer`。
 - Provider 发现、认证解析、实时模型列表、provider profile 覆盖都属于 `internal/modelruntime`。不要把新的厂商认证探测或模型列表拉取逻辑直接写进 `internal/app` 或 LLM adapter。
 - P2 外部认证复用目前只覆盖 Codex CLI、Claude Code、Gemini CLI、Qwen CLI。其它厂商使用 API key、自定义 OpenAI-compatible endpoint 或 `provider_profiles`。
 - 新 provider 适配器不要堆到单个大文件里；协议、provider、model listing、streaming 应拆分。
 - 工具调用优先使用 provider 原生 tool call；文本 `[TOOL:...]` 只作为兼容 fallback。
 - 只读工具可以并行，写文件、patch、终端、memory、skill mutation、进程控制和未知工具默认串行。
+- 工具调用身份必须类型化。控制租户的 Skill/Catalog 归属、person 的
+  memory/session 归属和执行作用域中的 workspace/process 权限必须分别解析，
+  不得继续让单个 `_tenant_id` 同时代表这些边界。
 - Skill 处理必须保持渐进和分层：`skills_list` 只暴露元数据，`skill_view` 读取内容，`skill_manage` 负责变更，`skill_catalog` 负责安装/审计，`skill_bundle` 负责组合。
 - Skill 修改应尽量热加载当前 registry；直接 slash 调用时先解析 bundle，再解析单个 skill。
 - Curator 自动治理默认只能处理 agent-created skills；manual、catalog-installed、bundled 或 pinned skills 不应被自动归档。

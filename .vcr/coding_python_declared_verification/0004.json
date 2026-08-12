@@ -1,0 +1,85 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "content": "Fix"
+    },
+    {
+      "content": " applied"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": " Now"
+    },
+    {
+      "content": " running"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " declared"
+    },
+    {
+      "content": " project"
+    },
+    {
+      "content": " check"
+    },
+    {
+      "content": " exactly"
+    },
+    {
+      "content": " once"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " as"
+    },
+    {
+      "content": " required"
+    },
+    {
+      "content": " by"
+    },
+    {
+      "content": " AG"
+    },
+    {
+      "content": "ENTS"
+    },
+    {
+      "content": ".md"
+    },
+    {
+      "content": "."
+    },
+    {
+      "finish_reason": "tool_calls"
+    },
+    {
+      "usage": {
+        "input_tokens": 9048,
+        "output_tokens": 118,
+        "cache_read_input_tokens": 8960,
+        "cache_miss_input_tokens": 88,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0,
+        "cache_usage_reported": true
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_00_ET_7RgZpsANLwiOjQOqna5H0319",
+          "Function": "verify",
+          "Args": "{\"command\": \"make test\", \"cwd\": \"{{SELFMIND_VCR_WORKSPACE}}\", \"kind\": \"test\"}"
+        }
+      ]
+    }
+  ]
+}

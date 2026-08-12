@@ -1,0 +1,382 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "content": "The"
+    },
+    {
+      "content": " durable"
+    },
+    {
+      "content": " external"
+    },
+    {
+      "content": " watch"
+    },
+    {
+      "content": " named"
+    },
+    {
+      "content": " \""
+    },
+    {
+      "content": "de"
+    },
+    {
+      "content": "ploy"
+    },
+    {
+      "content": " status"
+    },
+    {
+      "content": "\""
+    },
+    {
+      "content": " could"
+    },
+    {
+      "content": " not"
+    },
+    {
+      "content": " be"
+    },
+    {
+      "content": " registered"
+    },
+    {
+      "content": ":"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " registration"
+    },
+    {
+      "content": " attempt"
+    },
+    {
+      "content": " required"
+    },
+    {
+      "content": " an"
+    },
+    {
+      "content": " approval"
+    },
+    {
+      "content": " for"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " pre"
+    },
+    {
+      "content": "flight"
+    },
+    {
+      "content": "/"
+    },
+    {
+      "content": "check"
+    },
+    {
+      "content": " of"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " polling"
+    },
+    {
+      "content": " command"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "self"
+    },
+    {
+      "content": "mind"
+    },
+    {
+      "content": "-no"
+    },
+    {
+      "content": "-s"
+    },
+    {
+      "content": "uch"
+    },
+    {
+      "content": "-release"
+    },
+    {
+      "content": "-cl"
+    },
+    {
+      "content": "i"
+    },
+    {
+      "content": " describe"
+    },
+    {
+      "content": " --"
+    },
+    {
+      "content": "status"
+    },
+    {
+      "content": "`,"
+    },
+    {
+      "content": " and"
+    },
+    {
+      "content": " that"
+    },
+    {
+      "content": " approval"
+    },
+    {
+      "content": " timed"
+    },
+    {
+      "content": " out"
+    },
+    {
+      "content": " with"
+    },
+    {
+      "content": " no"
+    },
+    {
+      "content": " answer"
+    },
+    {
+      "content": " ("
+    },
+    {
+      "content": "n"
+    },
+    {
+      "content": "obody"
+    },
+    {
+      "content": " is"
+    },
+    {
+      "content": " at"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " keyboard"
+    },
+    {
+      "content": "),"
+    },
+    {
+      "content": " so"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " environment"
+    },
+    {
+      "content": " refused"
+    },
+    {
+      "content": " to"
+    },
+    {
+      "content": " register"
+    },
+    {
+      "content": " or"
+    },
+    {
+      "content": " execute"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " watch"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": " I"
+    },
+    {
+      "content": " did"
+    },
+    {
+      "content": " not"
+    },
+    {
+      "content": " run"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " polling"
+    },
+    {
+      "content": " command"
+    },
+    {
+      "content": " myself"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " I"
+    },
+    {
+      "content": " did"
+    },
+    {
+      "content": " not"
+    },
+    {
+      "content": " invent"
+    },
+    {
+      "content": " a"
+    },
+    {
+      "content": " substitute"
+    },
+    {
+      "content": " command"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " and"
+    },
+    {
+      "content": " I"
+    },
+    {
+      "content": " am"
+    },
+    {
+      "content": " making"
+    },
+    {
+      "content": " no"
+    },
+    {
+      "content": " claim"
+    },
+    {
+      "content": " about"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " deployment"
+    },
+    {
+      "content": "'s"
+    },
+    {
+      "content": " state"
+    },
+    {
+      "content": " —"
+    },
+    {
+      "content": " it"
+    },
+    {
+      "content": " remains"
+    },
+    {
+      "content": " unknown"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": " The"
+    },
+    {
+      "content": " run"
+    },
+    {
+      "content": " has"
+    },
+    {
+      "content": " been"
+    },
+    {
+      "content": " finished"
+    },
+    {
+      "content": " as"
+    },
+    {
+      "content": " waiting"
+    },
+    {
+      "content": " on"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " user"
+    },
+    {
+      "content": ";"
+    },
+    {
+      "content": " no"
+    },
+    {
+      "content": " watch"
+    },
+    {
+      "content": " is"
+    },
+    {
+      "content": " currently"
+    },
+    {
+      "content": " active"
+    },
+    {
+      "content": "."
+    },
+    {
+      "finish_reason": "stop"
+    },
+    {
+      "usage": {
+        "input_tokens": 11987,
+        "output_tokens": 122,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 11987,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0,
+        "cache_usage_reported": true
+      }
+    }
+  ]
+}

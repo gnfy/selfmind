@@ -65,6 +65,10 @@ func NewProcessRegistry(tenantID string) *ProcessRegistry {
 }
 
 var processRegistries sync.Map
+var processRegistryRuntime struct {
+	sync.RWMutex
+	mem *memory.MemoryManager
+}
 
 func GetProcessRegistry() *ProcessRegistry {
 	return GetProcessRegistryForTenant("default")
@@ -80,16 +84,28 @@ func GetProcessRegistryForTenant(tenantID string) *ProcessRegistry {
 }
 
 func ProcessRegistryForArgs(args map[string]interface{}) *ProcessRegistry {
-	if scope, ok := currentExecutionScope(args); ok && scope.TenantID != "" {
-		return GetProcessRegistryForTenant(scope.TenantID)
+	key := processRegistryScopeID(args)
+	persistenceTenantID := "default"
+	if scope, ok := InvocationScopeFromArgs(args); ok && strings.TrimSpace(scope.PersonID) != "" {
+		persistenceTenantID = strings.TrimSpace(scope.PersonID)
+	} else if tenantID, _ := args["_tenant_id"].(string); strings.TrimSpace(tenantID) != "" {
+		persistenceTenantID = strings.TrimSpace(tenantID)
 	}
-	if tenantID, _ := args["_tenant_id"].(string); strings.TrimSpace(tenantID) != "" {
-		return GetProcessRegistryForTenant(tenantID)
+	if registry, ok := processRegistries.Load(key); ok {
+		return registry.(*ProcessRegistry)
 	}
-	return GetProcessRegistry()
+	registry := NewProcessRegistry(persistenceTenantID)
+	processRegistryRuntime.RLock()
+	registry.mem = processRegistryRuntime.mem
+	processRegistryRuntime.RUnlock()
+	actual, _ := processRegistries.LoadOrStore(key, registry)
+	return actual.(*ProcessRegistry)
 }
 
 func (r *ProcessRegistry) Init(mem *memory.MemoryManager, tenantID string) {
+	processRegistryRuntime.Lock()
+	processRegistryRuntime.mem = mem
+	processRegistryRuntime.Unlock()
 	r.mu.Lock()
 	r.mem = mem
 	if tenantID != "" {

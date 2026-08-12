@@ -25,6 +25,8 @@ type TransportConfig struct {
 	KeyGetter       func() string
 	TokenRefresher  func() string
 	Headers         map[string]string
+	ExtraBody       map[string]interface{}
+	ExtraQuery      map[string]interface{}
 	MaxTokens       int
 	ReasoningEffort string
 	Thinking        map[string]interface{}
@@ -116,6 +118,8 @@ func buildAnthropicTransport(cfg TransportConfig) Provider {
 	ad.KeyGetter = cfg.KeyGetter
 	ad.TokenRefresher = cfg.TokenRefresher
 	ad.Headers = cfg.Headers
+	ad.ExtraBody = cfg.ExtraBody
+	ad.ExtraQuery = cfg.ExtraQuery
 	ad.MaxTokens = firstPositiveTransport(cfg.MaxTokens, ad.MaxTokens)
 	ad.ReasoningEffort = cfg.ReasoningEffort
 	ad.Thinking = cfg.Thinking
@@ -129,6 +133,8 @@ func buildResponsesTransport(cfg TransportConfig) Provider {
 	ad.KeyGetter = cfg.KeyGetter
 	ad.TokenRefresher = cfg.TokenRefresher
 	ad.Headers = cfg.Headers
+	ad.ExtraBody = cfg.ExtraBody
+	ad.ExtraQuery = cfg.ExtraQuery
 	ad.ReasoningEffort = cfg.ReasoningEffort
 	if cfg.ResponsesStoreFalse {
 		store := false
@@ -173,6 +179,8 @@ func applyOpenAITransportConfig(ad *OpenAIAdapter, cfg TransportConfig, baseURL 
 	ad.KeyGetter = cfg.KeyGetter
 	ad.TokenRefresher = cfg.TokenRefresher
 	ad.Headers = cfg.Headers
+	ad.ExtraBody = cfg.ExtraBody
+	ad.ExtraQuery = cfg.ExtraQuery
 	ad.MaxTokens = cfg.MaxTokens
 	ad.ReasoningEffort = cfg.ReasoningEffort
 	ad.Thinking = cfg.Thinking
@@ -191,6 +199,8 @@ func applyOpenRouterTransportConfig(ad *OpenRouterAdapter, cfg TransportConfig, 
 	ad.KeyGetter = cfg.KeyGetter
 	ad.TokenRefresher = cfg.TokenRefresher
 	ad.Headers = cfg.Headers
+	ad.ExtraBody = cfg.ExtraBody
+	ad.ExtraQuery = cfg.ExtraQuery
 	ad.MaxTokens = cfg.MaxTokens
 	ad.ReasoningEffort = cfg.ReasoningEffort
 	ad.Thinking = cfg.Thinking

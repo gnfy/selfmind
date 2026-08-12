@@ -20,6 +20,8 @@ turns:
 
 expect:
   status: waiting_external
+  completion_reason: waiting_external
+  resumable: false
   require_tool_events: true
   # finish_run is a lifecycle tool and intentionally does not count as an
   # action tool; watch_external is the single required action.

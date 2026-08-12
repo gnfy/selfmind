@@ -4,10 +4,9 @@ These cases assert the core product promise: one person, many endpoints. A task
 started from the CLI must be visible (`/status`), resumable (`继续`), and
 identity-isolated (a different platform user sees nothing) from another channel.
 
-The three original cases are marked `require_cassette: true`: `selfmind
-selfcheck` (and CI) FAILS — does not skip — while their cassettes are missing.
-They need one local recording run against a configured live provider before
-the CI gate goes green.
+The north-star cases are marked `require_cassette: true`, so they run even in
+the fast local profile. Their cassettes are committed; `selfmind selfcheck`
+fails if any recording is missing or invalid.
 
 `continuity-task-attach.yaml` was rewritten for the Work Timeline P3
 pre-label semantics (2026-07-06): an ordinary follow-up now runs under the
@@ -18,7 +17,7 @@ the semantics change. Deterministic coverage lives in
 `internal/gateway/httpapi/task_attach_test.go` and
 `internal/gateway/httpapi/run_labeler_test.go`.
 
-## Recording the cassettes (one command)
+## Re-recording after intentional behavior changes
 
 From the repo root, with a working model provider configured:
 
@@ -34,7 +33,7 @@ Cassettes land in `.vcr/<case-id>/` (one numbered JSON file per model call):
 - `.vcr/continuity_resume/`
 - `.vcr/continuity_stranger/`
 
-**Commit the `.vcr/continuity_*` directories.** Cassettes are what make the
+**Commit the updated `.vcr/continuity_*` directories.** Cassettes are what make the
 gate real: `selfmind selfcheck` replays them strictly offline
 (`SELFMIND_EVAL_VCR=replay` + `SELFMIND_EVAL_OFFLINE=1`), so CI never burns
 provider quota.
@@ -45,7 +44,7 @@ provider quota.
 selfmind selfcheck --skip-go
 ```
 
-All three `continuity_*` cases must report `ok`. If a case fails right after
+All selected `continuity_*` cases must report `ok`. If a case fails right after
 recording, the recorded model output violated an assertion (for example, the
 `continuity_stranger` reply echoed the `ZWX417` marker even though the prompt
 forbids it): delete that case's `.vcr/<case-id>/` directory and re-record.

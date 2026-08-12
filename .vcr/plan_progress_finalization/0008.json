@@ -1,0 +1,28 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "finish_reason": "tool_calls"
+    },
+    {
+      "usage": {
+        "input_tokens": 9845,
+        "output_tokens": 176,
+        "cache_read_input_tokens": 9728,
+        "cache_miss_input_tokens": 117,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0,
+        "cache_usage_reported": true
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_00_ET_8QCcVYUHFMewv8cvtlOr8035",
+          "Function": "finish_run",
+          "Args": "{\"status\": \"done\", \"summary\": \"Created plan-progress.txt containing exactly PLAN-COMPLETE and verified it.\", \"done\": [\"Inspected workspace (empty)\", \"Wrote plan-progress.txt with exactly PLAN-COMPLETE\", \"Verified exact file contents with verify tool\"], \"files\": [\"plan-progress.txt\"], \"tests\": [\"verify: content equals PLAN-COMPLETE (13 bytes, no extra characters)\"]}"
+        }
+      ]
+    }
+  ]
+}

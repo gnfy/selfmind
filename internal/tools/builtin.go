@@ -213,6 +213,9 @@ func (t *ReadFileTool) Execute(args map[string]interface{}) (string, error) {
 	if maxBytes < 64*1024 {
 		maxBytes = 64 * 1024
 	}
+	if info, err := os.Stat(path); err == nil && info.IsDir() {
+		return "", fmt.Errorf("read_file requires a file, but %q is a directory; use list_dir or ls_r", path)
+	}
 
 	if limit > 0 {
 		return readFileLineLimited(path, limit, maxBytes)
@@ -230,6 +233,9 @@ func (t *ReadFileTool) Execute(args map[string]interface{}) (string, error) {
 	content := string(data)
 	if len(data) > maxBytes {
 		content = textutil.TruncateBytes(content, maxBytes) + fmt.Sprintf("\n... (file truncated after %d bytes)", maxBytes)
+	}
+	if len(data) == 0 {
+		return emptyFileResult(path), nil
 	}
 	return content, nil
 }
@@ -253,7 +259,20 @@ func readFileLineLimited(path string, limit, maxBytes int) (string, error) {
 	if err := scanner.Err(); err != nil {
 		return strings.Join(lines, "\n"), err
 	}
+	if len(lines) == 0 {
+		return emptyFileResult(path), nil
+	}
 	return strings.Join(lines, "\n"), nil
+}
+
+func emptyFileResult(path string) string {
+	b, _ := json.Marshal(map[string]interface{}{
+		"path":  path,
+		"empty": true,
+		"bytes": 0,
+		"lines": 0,
+	})
+	return string(b)
 }
 
 // WriteFileTool writes file contents.
@@ -741,7 +760,7 @@ func (t *SearchFilesTool) Execute(args map[string]interface{}) (string, error) {
 		maxFileBytes = 1024 * 1024
 	}
 
-	var matches []string
+	matches := make([]string, 0)
 	parentCtx := contextFromArgs(args)
 	ctx, cancel := context.WithTimeout(parentCtx, time.Duration(timeoutSeconds)*time.Second)
 	defer cancel()
@@ -807,7 +826,18 @@ func (t *SearchFilesTool) Execute(args map[string]interface{}) (string, error) {
 	})
 	if err != nil {
 		if err == context.DeadlineExceeded {
-			return "", enrichToolFailure("search_files", fmt.Errorf("search_files timed out after %d seconds", timeoutSeconds), "")
+			b, _ := json.Marshal(map[string]interface{}{
+				"path":          path,
+				"pattern":       pattern,
+				"file_glob":     glob,
+				"matches":       matches,
+				"count":         len(matches),
+				"scanned_files": scanned,
+				"partial":       true,
+				"error_class":   "timeout",
+				"message":       fmt.Sprintf("search timed out after %d seconds; partial results are preserved", timeoutSeconds),
+			})
+			return string(b), nil
 		}
 		if err == context.Canceled {
 			return "", fmt.Errorf("search_files cancelled")

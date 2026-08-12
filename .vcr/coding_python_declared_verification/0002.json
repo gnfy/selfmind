@@ -1,0 +1,92 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "content": "Now"
+    },
+    {
+      "content": " let"
+    },
+    {
+      "content": " me"
+    },
+    {
+      "content": " read"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " implementation"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " tests"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " and"
+    },
+    {
+      "content": " Make"
+    },
+    {
+      "content": "file"
+    },
+    {
+      "content": " to"
+    },
+    {
+      "content": " understand"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " failing"
+    },
+    {
+      "content": " behavior"
+    },
+    {
+      "content": "."
+    },
+    {
+      "finish_reason": "tool_calls"
+    },
+    {
+      "usage": {
+        "input_tokens": 8553,
+        "output_tokens": 203,
+        "cache_read_input_tokens": 8192,
+        "cache_miss_input_tokens": 361,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0,
+        "cache_usage_reported": true
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_00_ET_LYlogV02Fvt6L5abTeXD7207",
+          "Function": "read_file",
+          "Args": "{\"path\": \"{{SELFMIND_VCR_WORKSPACE}}/calculator.py\"}"
+        },
+        {
+          "ID": "call_01_ET_lyPzngoAWA8axZpa7FlW3983",
+          "Function": "read_file",
+          "Args": "{\"path\": \"{{SELFMIND_VCR_WORKSPACE}}/tests/test_calculator.py\"}"
+        },
+        {
+          "ID": "call_02_ET_PlbjZY1hB6XJx4BViacS6721",
+          "Function": "read_file",
+          "Args": "{\"path\": \"{{SELFMIND_VCR_WORKSPACE}}/Makefile\"}"
+        }
+      ]
+    }
+  ]
+}

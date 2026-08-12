@@ -82,6 +82,33 @@ func TestFinishRunToolPreservesResolvedBlockerIDs(t *testing.T) {
 	}
 }
 
+func TestFinishRunToolEmitsCanonicalCompletionReason(t *testing.T) {
+	tool := NewFinishRunTool()
+	for status, want := range map[string]string{
+		"done":             "completed",
+		"waiting_external": "waiting_external",
+		"waiting_user":     "waiting_user",
+		"blocked":          "blocked",
+		"failed":           "failed",
+	} {
+		t.Run(status, func(t *testing.T) {
+			result, err := tool.Execute(map[string]interface{}{
+				"status": status, "summary": "recorded",
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var payload map[string]interface{}
+			if err := json.Unmarshal([]byte(result), &payload); err != nil {
+				t.Fatal(err)
+			}
+			if payload["completion_reason"] != want {
+				t.Fatalf("completion_reason=%v, want %q", payload["completion_reason"], want)
+			}
+		})
+	}
+}
+
 func TestFinishRunRequiresResolvedSharedPlan(t *testing.T) {
 	store := NewPlanStore()
 	plan := NewUpdatePlanToolWithStore(store)

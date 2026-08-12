@@ -15,10 +15,11 @@ stream, and model-provider path as normal CLI or IM requests.
 
 ```bash
 selfmind eval list [path]
-selfmind eval run evalcases/daily-dev/chat_basic.yaml
+selfmind eval run evalcases/daily-dev/project_context_agents_md.yaml
 selfmind eval run --suite daily-dev --provider kimi-coding --model kimi-for-coding
 selfmind eval report evalruns/2026-06-25
-selfmind selfcheck                 # build + test + offline-replay eval gate (no quota)
+selfmind selfcheck                 # docs + build + test + offline-replay eval gate (no quota)
+selfmind selfcheck --skip-go --skip-eval # documentation-only release gate
 selfmind eval repair [case-or-dir] # re-run failures, print a repair brief (apply stays manual)
 selfmind eval scorecard [dir]      # per-scenario daily-driver readiness report
 selfmind eval capture [latest]     # promote the last recorded turn into an eval case
@@ -104,17 +105,20 @@ tests, for free.
    - In the TUI: `/capture continuation should keep the same task`
    - Or from a shell: `selfmind eval capture latest --title "..."`
 
-   This writes a draft case to `evalcases/captured/` and copies that turn's
-   cassette into `.vcr/<case-id>/` so it replays offline.
+   This writes a private draft to `evaldrafts/captured/` and copies that turn's
+   cassette into `.vcr-drafts/<case-id>/`. Both roots are gitignored: a captured
+   prompt is not release evidence until somebody reviews it.
 
 3. **Edit the draft** to encode *what should have happened* — fill in
    `assert_state` (e.g. a file that must exist, a task that must continue) and/or
    `expect`. The recorded model output is the negative example; you pin the
    desired terminal state.
 
-4. **Lock it in.** `selfmind selfcheck` now replays your captured cases offline
-   (zero quota) before every change, so the things that annoyed you can't
-   silently regress.
+4. **Promote it.** Replay the draft directly, then move the reviewed YAML into
+   the appropriate `evalcases/<suite>/` directory and its cassette directory
+   into `.vcr/<case-id>/`. Only then does `selfmind selfcheck` treat it as
+   release evidence. A model-backed promoted case without its cassette fails
+   the gate immediately.
 
 What this catches well: UX / harness / behavior regressions (mojibake, raw-JSON
 or tool-XML leaks, broken continuation, wrong workspace, missing tool events,
@@ -199,11 +203,17 @@ turns:
     platform_user_id: "eval-stranger"   # a different person; must see nothing
 ```
 
-`require_cassette: true` marks a case as mandatory for the local gate:
-`selfmind selfcheck` FAILS (instead of skipping) when no cassette is recorded
-for the case ID. Use it for north-star scenarios that must never silently drop
-out of local release evidence. Optional cases (the default) are skipped when unrecorded, so
-the gate keeps growing as cassettes are recorded.
+Every model-backed case under `evalcases/` requires a committed cassette. This
+is derived from `model_required` (default `true`), not from whether somebody
+remembered to set an optional flag. Missing evidence is always a gate failure.
+
+Deterministic gateway/control-plane cases that cannot reach a model declare
+`model_required: false`; they execute offline without a cassette. Replay still
+fails closed if such a case unexpectedly reaches the provider path.
+
+`require_cassette: true` is retained for the smaller set of north-star cases
+that must also run in `local-fast`: it prevents measured-slow/profile caps from
+excluding the case. It does not make other model-backed cases optional.
 
 ```yaml
 id: continuity_resume
@@ -222,12 +232,14 @@ requires:
   commands: [node, npm]
 ```
 
-The command fails with exit code `2` when the required environment is missing
-or incompatible. It never reports such a skip as green. Profiles divide
-ownership without changing cassette semantics:
+An unowned missing tool fails with exit code `2`. When a case is explicitly
+owned by CI for the current platform, a local machine missing that tool reports
+`CI-DEFERRED` and excludes only that case. This is not standalone release
+approval: the matching GitHub Actions job must pass. Profiles divide ownership
+without changing cassette semantics:
 
-- `local-full` (default) replays every recorded case and is authoritative
-  before pushing.
+- `local-full` (default) replays every release case the local host can prove and
+  reports any explicit CI delegation. Run it before pushing.
 - `local-fast` / `--fast` skips measured `slow: true` cases for edit loops.
 - `ci` runs only cases whose value specifically depends on a clean checkout,
   credentialless host, another platform, concurrency, or timing.
@@ -242,6 +254,17 @@ ci:
 Valid reasons are `clean_checkout`, `cross_platform`, `credentialless`,
 `concurrency`, and `timing`. A CI-owned case must have a cassette; missing one
 fails by identity, so CI does not rely on a numeric case-count proxy.
+
+A release requires both `selfmind selfcheck` and the Linux/macOS Actions jobs.
+CI also runs race-sensitive runtime tests and packages, installs, and launches
+the npm distribution on both platforms. Local success cannot substitute for
+those checks, and CI does not repeat ordinary workstation behavior without one
+of the ownership reasons above.
+
+Before replay begins, selfcheck prints one bounded coverage line per suite:
+valid cases, recorded cassettes, providerless cases, selected/runnable cases,
+CI-deferred cases, and missing evidence. Missing model cassettes are named and
+fail. This makes a green run state exactly what it proved.
 
 Three exit codes keep the gate honest:
 
@@ -276,16 +299,10 @@ regression shows up in `go test ./...` rather than as a CI-only mystery:
 
 ### Tiers: `--fast` and the full gate
 
-Four cases carry roughly 90% of the replay cost — measured, not guessed:
-`smoke_codebase_overview_006` 143s, `dayinlife_tool_failure_recovery` 78s
-(it really does run the test suite), `smoke_provider_runtime_008` 59s,
-`smoke_skill_architecture_007` 46s. The other 30 cases together take about 30s.
-
-They carry `slow: true` with the measurement in a comment, and
-`selfmind selfcheck --fast` skips them: eval drops from 6m to 28s, so the loop
-you run after every change stays affordable. The count skipped is always
-printed, a `require_cassette` case is never skipped, and the full gate — run it
-before pushing — still runs everything.
+Cases whose measured host-tool replay dominates the edit loop carry
+`slow: true`. `selfmind selfcheck --fast` skips only those non-mandatory cases
+and prints the count; a `require_cassette` north-star case is never skipped.
+The full gate still runs every locally provable release case before pushing.
 
 Do NOT filter on `max_duration_seconds` instead. It is an author-chosen ceiling
 with little relation to cost: `continuity_resume` declares 420s and replays in
@@ -335,19 +352,20 @@ same path a user sees in CLI or IM. When adding new product behavior, add or
 update eval cases first, then keep implementation fixes grounded in failed
 events.
 
-## P0/P1 Coverage
+## Corpus maintenance
 
-Use `evalcases/p0-p1-5/` as the small regression suite for the current
-agent-first contract:
+`evalcases/` is the active release corpus, not an archive or brainstorming
+folder. A case belongs there only when it protects a distinct user-visible or
+stateful boundary with deterministic assertions. Prefer Go tests for pure
+algorithm/storage mechanics; use an eval when the production message path,
+model/tool contract, cross-endpoint rendering, or final world state matters.
 
-- direct identity/model questions should complete without tool calls;
-- small code snippets should produce clean, readable output;
-- short approval/continuation turns should reuse the active task;
-- codebase inspection should emit visible tool progress;
-- command or environment diagnosis should first identify the project ecosystem,
-  manifests, scripts, CI files, runtime versions, and workspace boundaries
-  before recommending any command or override. Fixtures should cover this as a
-  language-agnostic behavior, not as a Go-only workaround.
+When two cases protect the same boundary, keep the stronger one. Delete stale
+or weak duplicates together with their cassette directory. The corpus guard
+rejects duplicate IDs, missing model cassettes, providerless cases carrying
+cassettes, and orphan cassette directories, while the VCR guard rejects invalid
+JSON, ordinal gaps, recorded provider failures, empty directories, and machine
+absolute paths.
 
 `eval report` now aggregates first-token latency and tool call/error totals so
 streaming responsiveness and tool visibility regressions are easier to spot.

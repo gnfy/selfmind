@@ -55,6 +55,55 @@ func writeRunnerCase(t *testing.T, id string, extra string) *Case {
 	return c
 }
 
+func TestApplyEvalModelOverrideUsesCanonicalPrimarySelection(t *testing.T) {
+	cfg := &config.Config{
+		Models: config.ModelsConfig{
+			Primary: config.ModelSelectionConfig{
+				Provider:  "codex-cli",
+				Model:     "gpt-5.6-sol",
+				Reasoning: "high",
+			},
+		},
+		Model: config.ModelConfig{Provider: "legacy", Default: "legacy-model"},
+	}
+	applyEvalModelOverride(cfg, "openrouter", "nemotron-test")
+	got := cfg.EffectivePrimary()
+	if got.Provider != "openrouter" || got.Model != "nemotron-test" {
+		t.Fatalf("primary override = %+v", got)
+	}
+	if cfg.Model.Provider != "" || cfg.Model.Default != "" {
+		t.Fatalf("legacy selection survived canonical override: %+v", cfg.Model)
+	}
+	if got := cfg.EffectiveAuxiliary(); got.Provider != "openrouter" || got.Model != "nemotron-test" {
+		t.Fatalf("auxiliary override = %+v", got)
+	}
+	if len(cfg.Models.Roles) != 0 {
+		t.Fatalf("role-specific routes survived deterministic eval override: %+v", cfg.Models.Roles)
+	}
+}
+
+func TestMakeEvalTempRootAvoidsSystemTemp(t *testing.T) {
+	root, err := makeEvalTempRoot("scratch-root")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(root) })
+	if pathWithin(os.TempDir(), root) {
+		t.Fatalf("eval root %s must not live under system temp %s", root, os.TempDir())
+	}
+}
+
+func TestApplyEvalModelOverridePreservesProviderForModelOnlyOverride(t *testing.T) {
+	cfg := &config.Config{Models: config.ModelsConfig{Primary: config.ModelSelectionConfig{
+		Provider: "deepseek", Model: "old-model", Reasoning: "high",
+	}}}
+	applyEvalModelOverride(cfg, "", "new-model")
+	got := cfg.EffectivePrimary()
+	if got.Provider != "deepseek" || got.Model != "new-model" || got.Reasoning != "high" {
+		t.Fatalf("model-only override = %+v", got)
+	}
+}
+
 // TestRunCaseDefaultsToIsolatedDataDir is the regression test for the eval
 // pollution bug: a plain case (no setup/assert_state/workspace:isolated) must
 // NOT touch the configured data dir — its control.db/memory go to a throwaway

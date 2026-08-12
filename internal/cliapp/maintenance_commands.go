@@ -16,6 +16,9 @@ func (a *App) runMaintenanceCommandIfRequested() (bool, int) {
 	if len(a.args) >= 3 && a.args[2] == "migrate-memory" {
 		return true, a.runMaintenanceMigrateMemory(a.args[3:])
 	}
+	if len(a.args) >= 3 && a.args[2] == "migrate-skills" {
+		return true, a.runMaintenanceMigrateSkills(a.args[3:])
+	}
 	if len(a.args) >= 3 && a.args[2] == "memory-audit" {
 		return true, a.runMaintenanceMemoryAudit(a.args[3:])
 	}
@@ -28,6 +31,7 @@ func (a *App) runMaintenanceCommandIfRequested() (bool, int) {
 	if len(a.args) < 3 || a.args[2] != "replay" {
 		fmt.Fprintln(a.stderr, "usage: selfmind maintenance replay [--limit N]")
 		fmt.Fprintln(a.stderr, "       selfmind maintenance migrate-memory [--apply] [--data-dir DIR]")
+		fmt.Fprintln(a.stderr, "       selfmind maintenance migrate-skills [--apply] [--root DIR] [--governance-grace 30d]")
 		fmt.Fprintln(a.stderr, "       selfmind maintenance memory-audit [--archive-confirmed] [--partition P] [--data-dir DIR]")
 		fmt.Fprintln(a.stderr, "       selfmind maintenance memory-dedup [--apply] [--partition P] [--data-dir DIR]")
 		fmt.Fprintln(a.stderr, "       selfmind maintenance task-audit [--apply] [--limit N] [--data-dir DIR]")

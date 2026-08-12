@@ -1,0 +1,108 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "reasoning_content": "Let"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " start"
+    },
+    {
+      "reasoning_content": " by"
+    },
+    {
+      "reasoning_content": " inspecting"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " project"
+    },
+    {
+      "reasoning_content": " structure"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "content": "I"
+    },
+    {
+      "content": "'ll"
+    },
+    {
+      "content": " start"
+    },
+    {
+      "content": " by"
+    },
+    {
+      "content": " inspecting"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " project"
+    },
+    {
+      "content": " structure"
+    },
+    {
+      "content": " to"
+    },
+    {
+      "content": " understand"
+    },
+    {
+      "content": " what"
+    },
+    {
+      "content": " we"
+    },
+    {
+      "content": "'re"
+    },
+    {
+      "content": " working"
+    },
+    {
+      "content": " with"
+    },
+    {
+      "content": "."
+    },
+    {
+      "finish_reason": "tool_calls"
+    },
+    {
+      "usage": {
+        "input_tokens": 8112,
+        "output_tokens": 165,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 8112,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 9,
+        "cache_usage_reported": true
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_00_dSVpmGv9YUdVDjh6VmzR7907",
+          "Function": "ls_r",
+          "Args": "{\"path\": \"{{SELFMIND_VCR_WORKSPACE}}\", \"recursive\": true}"
+        },
+        {
+          "ID": "call_01_TiVY7XsVVrNEbV87ANGy0229",
+          "Function": "read_file",
+          "Args": "{\"path\": \"{{SELFMIND_VCR_WORKSPACE}}/AGENTS.md\"}"
+        }
+      ]
+    }
+  ]
+}

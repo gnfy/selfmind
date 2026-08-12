@@ -38,9 +38,9 @@ GOWORK=off go test ./internal/app \
   -run TestMemoryConsolidationJudgeLive -v
 ```
 
-The second command uses only an explicitly configured
-`models.roles.memory_extract` provider. It never falls back to the main coding
-model.
+The second command uses the resolved `memory_extract` auxiliary route. It may
+come from `models.auxiliary` or an explicit `models.roles.memory_extract`
+override, and never falls back to the main coding model.
 
 ## Acceptance Gates
 

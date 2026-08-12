@@ -87,10 +87,11 @@ func TestSpawnReviewCreatesSkillThroughRealToolchain(t *testing.T) {
 
 	provider := &scriptedReviewProvider{}
 	engine := kernel.NewBackgroundReviewEngine(mem, disp, provider, kernel.EvolutionConfig{Enabled: true}, 4, 1)
+	engine.SetControlTenantID("default")
 	notify := make(chan string, 1)
 	engine.SetNotifyChannel(notify)
 
-	engine.SpawnReview("default", "cli", []llm.Message{
+	engine.SpawnReview("person_review", "cli", []llm.Message{
 		{Role: "user", Content: "please review my Go change and run the tests"},
 		{Role: "assistant", Content: "Reviewed the diff, ran focused tests, summarized findings."},
 	}, false, true)
@@ -170,6 +171,13 @@ func TestSpawnReviewCreatesSkillThroughRealToolchain(t *testing.T) {
 	}
 	if usage["review-flow"].Source != SkillSourceAgentCreated {
 		t.Fatalf("expected agent-created source, got %+v", usage["review-flow"])
+	}
+	personDir, err := getSkillsDir("person_review")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(personDir, "review-flow")); !os.IsNotExist(err) {
+		t.Fatalf("background review leaked skill into person partition: %v", err)
 	}
 
 	// Durable effect 3: a learning-audit create record exists.

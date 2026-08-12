@@ -44,16 +44,42 @@ func TestCassettesCarryNoMachineAbsolutePaths(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		text := string(raw)
-		for _, marker := range markers {
-			if strings.Contains(text, marker) {
-				t.Errorf("%s contains the recording machine's path %q; re-record it, or migrate the literal workspace prefix to %s",
-					file, marker, vcrWorkspacePlaceholder)
+		var decoded interface{}
+		if err := json.Unmarshal(raw, &decoded); err != nil {
+			t.Fatalf("%s is not valid JSON: %v", file, err)
+		}
+		for _, text := range stringValues(decoded) {
+			for _, marker := range markers {
+				if strings.Contains(text, marker) {
+					t.Errorf("%s contains the recording machine's path %q; re-record it, or migrate the literal workspace prefix to %s",
+						file, marker, vcrWorkspacePlaceholder)
+				}
+			}
+			if match := windowsDrivePath.FindString(text); match != "" {
+				t.Errorf("%s contains the recording machine's Windows path prefix %q; use %s", file, match, vcrWorkspacePlaceholder)
 			}
 		}
-		if match := windowsDrivePath.FindString(text); match != "" {
-			t.Errorf("%s contains the recording machine's Windows path prefix %q; use %s", file, match, vcrWorkspacePlaceholder)
+	}
+}
+
+func stringValues(value interface{}) []string {
+	switch typed := value.(type) {
+	case string:
+		return []string{typed}
+	case []interface{}:
+		var out []string
+		for _, item := range typed {
+			out = append(out, stringValues(item)...)
 		}
+		return out
+	case map[string]interface{}:
+		var out []string
+		for _, item := range typed {
+			out = append(out, stringValues(item)...)
+		}
+		return out
+	default:
+		return nil
 	}
 }
 

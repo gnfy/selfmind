@@ -1,339 +1,247 @@
 # SelfMind Agent Notes
 
-This file is auto-injected into coding-agent sessions. Keep it limited to rules
-that matter on nearly every task. Domain mechanics, implementation history, and
-live priorities belong in the mandatory documents linked below.
+This file is injected into coding-agent sessions. Keep it limited to rules that
+apply across most tasks. Domain mechanics belong in the referenced documents;
+current priorities belong only in `docs/STATUS.md`.
 
 ## Product Direction
 
-SelfMind Phase 1 is an always-on personal AI gateway with cross-endpoint work
-continuity. One person may use CLI, Weixin, Telegram, cron, and HTTP while work
-state follows that person. Chat transcripts remain channel-local. Agent
-execution quality - planning, reliable tools, diagnosis, recovery, bounded
-context, and verification - is the competence floor.
+SelfMind Phase 1 is an always-on personal AI gateway. One person may work from
+CLI, IM, cron, and HTTP while tasks, runs, approvals, memory, and handoffs follow
+that person. Chat transcripts remain channel-local. Execution quality - sound
+planning, reliable tools, recovery, bounded context, and evidence-backed
+verification - is the competence floor.
 
-Keep `tenant_id` boundaries intact for future SaaS work, but do not add SaaS
-complexity without an explicit request. Judge product progress by the Phase-1
-scenarios and eval scorecard, not by superficial command or UI parity.
+Preserve tenant boundaries for future SaaS work, but do not add SaaS or Runner
+complexity without an explicit active plan. Judge progress by the Phase-1
+scenarios and daily-driver evidence, not feature-count parity.
 
 Read before making assumptions:
 
-- `docs/STATUS.md`: implementation snapshot and the only live priority list.
-- `docs/identity-continuity.md`: north star, identity, and cross-endpoint rules.
-- `docs/architecture-constraints.md`: package and file-size guardrails.
+- `docs/STATUS.md`: current implementation snapshot and only priority list.
+- `docs/identity-continuity.md`: product north star and acceptance scenarios.
+- `docs/architecture-constraints.md`: package and size constraints.
+- `docs/README.md`: generated documentation index and lifecycle state.
 
-Read the matching document before changing a domain:
+Read the relevant domain document before editing that domain:
 
-| Domain | Mandatory document |
+| Domain | Document |
 | --- | --- |
 | Tasks, work history, recall | `docs/work-timeline.md` |
 | Context lifecycle | `docs/context-lifecycle.zh-CN.md` |
 | Memory and maintenance | `docs/memory-governance.zh-CN.md` |
-| Gateway workers and daemon clients | `docs/worker-pool-design.md` |
-| Providers, auth, and model routing | `docs/provider-runtime.md` |
-| Tools, approval, and safety | `docs/tool-safety.md` |
-| Coding-agent behavior and project discovery | `docs/coding-agent-foundations.md` |
+| Workers and daemon clients | `docs/worker-pool-design.md` |
+| Providers, auth, model routing | `docs/provider-runtime.md` |
+| Execution engine and sandbox | `docs/execution-engine.zh-CN.md` |
+| Tools and approvals | `docs/tool-safety.md` |
+| Coding-agent behavior | `docs/coding-agent-foundations.md` |
 | Skills | `docs/skills-architecture.md` |
 | TUI and transcript rendering | `docs/tui-terminal-first-hybrid.md` |
-| Eval cases and cassettes | `docs/eval-loop.md` |
+| Eval and cassettes | `docs/eval-loop.md` |
 
 ## Working Protocol
 
 1. Read this file, `docs/STATUS.md`, and the relevant domain document.
-2. Run `git status --short`. The worktree is often dirty; never revert or
-   overwrite unrelated user or agent changes.
+2. Run `git status --short`. The tree is often dirty; never revert unrelated
+   user or agent work.
 3. Locate the current boundary with `rg` and focused reads before editing.
-4. For analysis-only requests, do not edit. For implementation requests, carry
-   the change through focused tests and, when relevant, a WSL binary install.
-5. Keep changes scoped. Record a larger follow-up instead of hiding a risky
-   refactor inside a narrow fix.
-6. Add tests at the behavioral boundary. A user-visible message-path change
-   also updates its eval case and the matching `docs/STATUS.md` row.
-7. Update this file only when a cross-cutting invariant changes. Put domain
-   behavior in its domain document and current progress in `docs/STATUS.md`.
+4. Respect analysis-only requests. For implementation requests, carry the
+   change through focused tests, the release gate when appropriate, and the
+   installed WSL binary when the user is testing it.
+5. Keep edits scoped. Record a larger follow-up instead of hiding a risky
+   refactor in a narrow fix.
+6. Test at the behavioral boundary. A user-visible message-path change also
+   updates or adds its eval case.
+7. Update `docs/STATUS.md` only when current capability or priority changes.
+   Update `AGENTS.md` only when a cross-cutting invariant changes.
 
-## Architecture Invariants
+## Architecture and Runtime
 
-- `selfmind` is the only binary. The daemon runs as `selfmind gateway run`.
-  Keep `cmd/selfmind/main.go` thin; command behavior belongs in
-  `internal/cliapp`.
-- All CLI, IM, cron, and HTTP agent work executes in the daemon. The TUI is a
-  daemon client, with no in-process agent path or fallback. A daemon failure
-  must produce an actionable error, never silently start a second runtime.
-- The daemon is the single owner of the worker pool, auth manager, per-workspace
-  scheduling, and `control.db`. Do not add business-level cross-process locks;
-  the daemon single-instance lock is the only legitimate process lock.
-- Preserve package ownership: `cliapp` owns entrypoints, `gateway/httpapi`
-  owns API and orchestration, `gateway/cli` owns TUI orchestration,
-  `ui/components` owns reusable UI, `app` owns wiring, `kernel` owns the agent
-  loop, `modelruntime` owns provider resolution, and `tools` owns tool behavior.
-- `kernel` must not depend on gateway packages or concrete tools. Process-wide
-  state has explicit lifecycle ownership and is injected by `app` or the
-  gateway runner. Never add cross-tenant or cross-test mutable globals.
-- File, terminal, patch, process, and workspace-aware memory tools must run
-  under the request's `ExecutionScope` and active workspace roots, not the
-  daemon process cwd.
-- Every tool-owned child process builds its environment through
-  `BuildProcessEnv`. Never inject daemon/control-plane credentials, persist
-  raw credential bytes in an environment lease, or put secrets in process
-  arguments; execution state stores references and policy only.
-- Derive sandbox writable views and tool compatibility from `ExecutionScope`,
-  data-driven `ToolProfile` metadata, and generic platform conventions. Do not
-  add per-vendor filesystem, credential, timeout, or network branches.
-- Linux and macOS x64/arm64 are official CLI/daemon release targets. Linux
-  provides the strongest isolated execution path. macOS uses
-  approval-controlled host execution unless a future native sandbox is
-  explicitly added. Native Windows is unsupported; use WSL.
+- `selfmind` is the only binary. `cmd/selfmind/main.go` stays thin; command
+  behavior belongs in `internal/cliapp`.
+- CLI, IM, cron, and HTTP agent work executes in the daemon. The TUI is a daemon
+  client with no in-process fallback. A daemon failure must be actionable and
+  must never start a divergent second runtime.
+- The daemon owns the worker pool, auth manager, scheduling, and `control.db`.
+  Do not add business-level cross-process locks.
+- Preserve package ownership: `cliapp` owns entrypoints; `gateway/httpapi`
+  owns orchestration; `gateway/cli` owns TUI orchestration; `ui/components`
+  owns reusable UI; `app` owns wiring; `kernel` owns the loop;
+  `modelruntime` owns provider resolution; `tools` owns tool behavior.
+- `kernel` must not depend on gateway packages or concrete tools. Inject
+  process-wide state through `app` or the gateway runner; avoid mutable globals.
+- Filesystem and process tools run under the request's `ExecutionScope` and
+  workspace roots, never the daemon cwd. Every child process environment is
+  built through `BuildProcessEnv`; execution state persists references and
+  policy, not raw credentials.
+- Derive sandbox views and compatibility from typed scope, `ToolProfile`, and
+  platform conventions. Do not add project- or vendor-specific branches to
+  generic execution code.
+- Linux and macOS x64/arm64 are official targets. Linux has the strongest
+  isolation. macOS uses approval-controlled host execution until a reviewed
+  native sandbox exists. Native Windows is unsupported; use WSL.
 
-## Identity, Gateway, and Runs
+## Identity, Runs, and Delivery
 
-- `person_id` identifies one human across endpoints; `account_id` identifies a
-  bound platform account. Tasks, runs, events, handoffs, approvals, workspace,
-  memory, and skills follow the person. Raw channel transcripts never mirror
-  automatically across endpoints.
-- Platform adapters authenticate, normalize, and send payloads. Identity,
-  workspace selection, task/run lifecycle, queueing, and approvals belong to
-  the gateway. Numbered command references must use the same ordered resolver
-  as their rendered list.
-- Explicit gateway commands such as `/status`, `/tasks`, `/workspace`,
-  `/resume`, `/approve`, and `/stop` stay model-free. All other natural
-  language is agent-first; do not add greeting, identity, snippet, or casual
-  direct-answer bypasses.
-- Keep one active run per person until the worker model explicitly changes.
-  New work queues durably. A continuation steers the active run and is never
-  queued. Accepted steering and agent-consumed steering are distinct durable
-  events; do not persist raw steering text in metadata.
-- Run events use the per-run channel installed with
-  `kernel.WithEventChannel`. Gateway code must not swap a shared Agent event
-  channel.
-- User-visible task state comes from structured run outcomes, handoffs, and
-  events, not prose parsing. Distinguish normal between-turn parking, daemon
-  recovery, provider interruption, context overflow, verification incomplete,
-  waiting external, failure, and completion.
-- A task may be `running` only while a run is executing. Finalization and
-  recovery must not leave a running task without a live run. Recovery emits one
-  durable, deduplicated, actionable notification.
-- External operations that require minutes of polling use the durable
-  `watch_external` handoff. Do not occupy an active agent turn with repeated
-  model-driven polling or create an unsupervised polling goroutine.
-- A run the daemon starts on the person's behalf carries an origin (cron fire,
-  watcher finalization, any future initiator); a turn the person typed at any
-  endpoint carries none. Clients render an origin-carrying run as a result
-  line, never as replayed progress — moving work off the agent turn must also
-  keep it out of the transcript. Approvals and clarifications are never
-  suppressed, and the run stays visible as daemon activity so queueing behind
-  it is explainable. CLI streams assistant and tool progress for the person's
-  own runs. IM sends a concise working notice, meaningful milestones or
-  approvals, and a final answer or handoff; it never streams token deltas.
+- `person_id` is one human across endpoints; `account_id` is one platform
+  binding. Adapters authenticate and normalize; only the gateway resolves
+  identity, workspace, task, run, queue, approval, and delivery state.
+- Raw transcripts stay channel-local. Shared state is limited to structured
+  tasks, runs, events, handoffs, approvals, artifacts, memory, and skills.
+- Explicit control commands such as `/status`, `/tasks`, `/workspace`,
+  `/resume`, `/approve`, and `/stop` remain model-free. Other natural language
+  is agent-first; do not add greeting or keyword bypasses.
+- Keep one active run per person until an active plan explicitly changes the
+  concurrency contract. New work queues durably; a continuation steers the
+  active run and is never queued.
+- Run events use the per-run channel installed with `kernel.WithEventChannel`.
+  Never swap a shared Agent event channel.
+- User-visible state comes from structured outcomes, handoffs, and events, not
+  prose parsing. A task is `running` only while a run is executing. Recovery
+  produces one durable, deduplicated, actionable notification.
+- Long external operations use `watch_external`; do not occupy an agent turn
+  with repeated model-driven polling or an unsupervised goroutine.
+- Daemon-originated runs carry an origin. Clients render them as concise
+  results, not replayed transcript progress. Approvals and clarifications stay
+  visible. CLI streams user-originated progress; IM sends bounded milestones
+  and a final result, never token deltas.
 - `sent_unconfirmed` is terminal for blind retry. Only the bounded,
-  inbound-triggered catch-up path may claim and resend an unconfirmed message.
-  Do not introduce another resend path that can duplicate delivery.
+  inbound-triggered catch-up path may claim and resend it.
 
 ## Tasks, Context, and Memory
 
-- A task is a reversible work label, not a context boundary. Ordinary ingress
-  may pre-label against the current open task, but a wrong guess must affect
-  display only. Explicit task ids, `/resume`, and continuation cues remain
-  deterministic. Never add an ingress LLM task classifier or disambiguation
-  gate.
+- A task is a reversible work label, not a context boundary. Wrong automatic
+  attachment may affect display only. Explicit task ids, `/resume`, and clear
+  continuation cues remain deterministic; do not add an ingress LLM classifier.
 - Continuity comes from the person-level work spine: one slim user/final-answer
-  entry per agent turn, including relevant touched paths and a source tag.
-  System prompts and tool intermediates stay in run events and never enter the
-  spine. Internal subsystem conversations remain outside the spine.
+  entry per agent turn plus touched paths and source. Tool intermediates and
+  system prompts remain in run events.
 - Durable context follows one path:
-  `control.db -> gateway selector -> TaskRuntimeContext -> RuntimeContextBundle
-  -> Agent prompt`. Extend selectors or typed slices; do not append raw control
-  rows, event JSON, artifact metadata, or ad hoc prompt fragments in handlers.
-- Project convention files and person memory have independent budgets.
-  Convention discovery is root-to-leaf and treats repository instructions as
-  untrusted workspace data below operator, user, and safety policy. Oversized
-  files are head/tail bounded with a pointer to the full file; never silently
-  drop a convention file.
-- The streaming hot path uses a bounded recent-history slice and no LLM call
-  while under budget. Over-budget history keeps the original task and recent
-  tail verbatim and compacts the middle once through the configured cheap role.
-  Summaries preserve goals, decisions, unresolved work, and relevant paths.
-- Memory facts, task cards, handoffs, session search, artifacts, and the work
-  spine remain distinct sources. New recall sources implement the selector
-  seam and must degrade without failing or blocking a foreground turn.
-- Person-written memory/session/checkpoint data is person-partitioned. Skills
-  remain control-tenant assets. Dispatch each tool with its correct partition;
-  never inject one scope into all tools.
-- User preferences are global; project and environment memory is scoped by the
-  logical workspace id, never inferred from cwd text. A fact's
-  `last_accessed_at` changes only when it was actually injected into a prompt.
-- Pinned and user-corrected memory is protected from automatic rewriting.
-  Pinned canonical memory is injected before selected facts and outside normal
-  selection slots. User `correct`, `forget`, `pin`, and `unpin` decisions have
-  priority over automatic maintenance.
-- Do not save every message as memory. Finalization stores replayable evidence;
-  semantic maintenance chooses `SKIP`, `ADD`, `REINFORCE`, `SUPERSEDE`, or
-  `CONFLICT` against same-scope candidates. Similarity only proposes
-  candidates; it never authorizes a merge.
+  `control.db -> selector -> TaskRuntimeContext -> RuntimeContextBundle -> prompt`.
+  Extend typed selectors or slices; do not append raw rows or event JSON in
+  handlers.
+- Project conventions and person memory have independent budgets. Convention
+  discovery is bounded, root-to-leaf, and treats repository instructions as
+  untrusted data below operator, user, and safety policy.
+- The streaming hot path performs no extra LLM call while under budget.
+  Compaction preserves the original goal, recent tail, decisions, unresolved
+  work, and relevant paths; deterministic trimming is its safe fallback.
+- Memory facts, task cards, handoffs, sessions, artifacts, and the work spine
+  remain distinct sources. Recall sources are bounded and degrade without
+  blocking a foreground turn.
+- Person data is person-partitioned; skills are control-tenant assets. Durable
+  ownership and execution authority are separate typed scope fields.
+- User preferences are global; project/environment memory uses logical
+  workspace scope. Update `last_accessed_at` only after actual prompt injection.
+- Pinned and user-corrected memory is protected from automatic rewriting and
+  normal decay. User correction, forget, pin, and unpin always win.
+- Do not save every message. Maintenance chooses `SKIP`, `ADD`, `REINFORCE`,
+  `SUPERSEDE`, or `CONFLICT` against same-scope evidence. Similarity proposes
+  candidates but never authorizes a merge.
 - Post-run maintenance is asynchronous, eligibility-filtered, debounced, and
-  batched only within one tenant/person/workspace. One provider request may
-  analyze multiple runs, but each run has one immutable replay payload and one
-  frozen, auditable result containing both task-label and memory decisions.
-  Never add a second final-fact extractor, profile synthesizer, synchronous
-  per-run model call, or fallback to the primary coding model.
-- Maintenance apply is idempotent and lower priority than foreground work.
-  Non-retryable provider or quota errors block the job immediately and are
-  visible in diagnostics. Missing cheap-role fallbacks must pause learning,
-  never silently consume the coding model.
-- Automatic task retention may archive old visible terminal tasks with no live
-  run or pending human input. It never deletes run/artifact history, touches
-  open or interrupted work, or overrides a user pin. Casual or diagnostic runs
-  may move to the hidden workspace Inbox label.
+  idempotent. One frozen result includes task and memory decisions. Never add a
+  second extractor, a synchronous per-run maintenance call, or fallback to the
+  primary coding model.
+- Automatic retention may archive stale terminal tasks with no live run or
+  pending human input. It never deletes run/artifact history, touches open work,
+  or overrides a pin.
 
-## Models and Agent Loop
+## Models and Loop
 
 - Provider integration follows
   `ProviderProfile -> Resolver -> Runtime -> llm.TransportConfig -> transport`.
-  Provider discovery, credentials, model listing, auth reuse, and profile
-  overrides belong in `internal/modelruntime`; application wiring never selects
-  adapters with provider-name switches.
-- Prefer existing protocol transports. Put vendor behavior in
-  `ProviderQuirks`; add a new adapter only for a genuinely different wire
-  protocol. Preserve per-request token retrieval and one bounded auth-refresh
-  replay where supported.
-- Native tool calling is primary. Preserve tool call ids and paired results.
-  Text `[TOOL:...]` is compatibility fallback only. Stateless Responses
-  providers must replay each function call before its matching output and map
-  internal tool names to provider-safe names at the adapter boundary.
-- Keep role names stable: `coding_agent`, `memory_extract`,
-  `background_review`, `skill_curator`, and `semantic_recall`. Role overrides
-  carry the same runtime fields and resolver behavior as the primary model.
-- `context_length` is the total context window; `max_tokens` is an output cap.
-  Never substitute one for the other or display a fabricated context size.
-- Strategy is coarse policy, not a keyword taxonomy. It may control plan, web,
-  tool, and safety budgets but never bypass the agent. `update_plan` is
-  model-decided for genuinely multi-step work; each update is a complete
-  snapshot and all steps resolve before a done outcome.
-- Tool budgets are bounded but elastic when completed calls produce new
-  evidence. A repeated identical call without changed inputs or state is not
-  progress. Completion comes from structured outcome plus execution evidence,
-  not from model assertion alone.
+  Discovery, credentials, model metadata, and overrides belong in
+  `internal/modelruntime`.
+- Prefer existing protocol transports. Put vendor behavior in typed quirks or
+  documented `extra_headers`, `extra_body`, and `extra_query`; never branch on
+  endpoint hostnames outside provider resolution.
+- Native tool calling is primary. Preserve call ids and paired results.
+  `[TOOL:...]` is compatibility fallback only. Normalize detached tool schemas
+  at registration and adapter boundaries; quarantine invalid external tools,
+  but fail startup for an invalid active built-in.
+- Keep role names stable: `coding_agent`, `auxiliary`, `fast_classifier`,
+  `memory_extract`, `background_review`, `skill_curator`, `semantic_recall`,
+  and `summarizer`. Explicit role overrides win; otherwise bounded background
+  work inherits `models.auxiliary`, never the primary model silently.
+- `context_length` is total context; `max_tokens` is output capacity. Never
+  substitute one or fabricate model metadata.
+- Strategy is coarse policy, not keyword taxonomy. `update_plan` is
+  model-decided for genuinely multi-step work; every update is a complete
+  snapshot, and all steps resolve before a done outcome.
+- Tool budgets are bounded and may extend only after real new evidence.
+  Repeating an identical call without changed input/state is not progress.
+  Completion requires structured outcome plus execution evidence.
 - Project discovery is deterministic, bounded, read-only, and language
-  agnostic. It may suggest verification commands only from detected manifests,
-  lockfiles, and declared scripts. Add ecosystem support to the typed project
-  profile; never add language keyword routing or project-specific commands to
-  the gateway or main loop.
+  agnostic. Verification suggestions come only from detected manifests,
+  lockfiles, and declared scripts.
 
-## Tools and Safety
+## Tools, Safety, and Skills
 
-- Read `docs/tool-safety.md` before changing tool middleware, execution scope,
-  approvals, egress, delegation, or result envelopes.
-- Only clearly read-only batches may execute in parallel. Writes, patches,
-  terminals, process control, memory/skill mutation, delegation, and unknown
-  tools execute sequentially unless a dedicated reviewed policy says otherwise.
-- Delegation is structurally depth-bounded. Sub-agents receive a freshly cloned
-  backend; never mutate or hand them the shared parent dispatcher.
-- Tool results have separate raw capture, model-bounded content, and compact
-  user preview surfaces. Large output is artifact-backed and recoverable by a
-  read-only view tool. Never dump raw JSON in normal CLI or IM output.
-- The safety hard floor runs before approval modes and grants and cannot be
-  bypassed by full-auto or an LLM judge. Ordinary dangerous operations remain
-  approvable; keep the two classes distinct.
-- Approval rejection is a user decision and must not trigger automatic retry.
-  An unanswered approval is a timeout, not a rejection, and must read as "park
-  the work", never as "try a variant". Smart approval triage is cheap-role-only,
-  returns a structured assessment (risk, user authorization, rationale), and
-  fails closed to a human prompt. Missing judge, timeout, parse error, or
-  provider failure never auto-approves. Repeated triage denials inside one run
-  hand the decision to the human instead of looping.
-- Arbitrary code execution requires approval in on-request, read-only, and
-  auto-edit modes. In smart mode the judgement is sandbox containment, not
-  command shape: an exec call proven to run isolated with writes confined to the
-  scope and no network may run unprompted, because its blast radius equals the
-  in-workspace writes smart mode already allows. Anything the sandbox cannot
-  contain — host execution, an unavailable sandbox platform, egress-enabled
-  policy — still asks. Network egress remains a named dangerous class. Tool and
-  wrapper parsing must inspect the actual executable payload rather than only a
-  top-level command.
-- The daemon issues the approval answer set; clients render it and never invent
-  options. A decision may name one reusable rule (command prefix, network host,
-  writable root) and is honored only when that same ask offered it. A rule must
-  be narrower than the action class, must not be minted through a privilege
-  wrapper, and a multi-target write needs every target covered before a stored
-  grant can skip the ask. `request_permissions` is the reverse channel — one ask
-  for a task's roots and hosts — and creates no authority beyond those rules.
-- Tool failures are diagnostic evidence. Inspect cwd, files, environment,
-  authentication, runtime, and package-manager state before changing the next
-  command. Never bake project-specific environment overrides into generic
-  tools.
+- Every invocation has typed `ToolInvocationScope`. Asset ownership
+  (`ControlTenantID`, `PersonID`) and execution authority (`WorkspaceID`,
+  `RunID`, `LeaseID`) must not collapse into one tenant string.
+- Only clearly read-only batches may run concurrently. Writes, terminals,
+  process control, mutation, delegation, and unknown tools are sequential unless
+  a reviewed policy says otherwise.
+- Delegation is depth-bounded. Sub-agents receive cloned dispatchers and never
+  mutate the parent's backend.
+- Tool results have raw capture, model-bounded content, and compact user preview
+  surfaces. Large output is artifact-backed and recoverable; normal UI never
+  dumps raw protocol JSON.
+- The safety hard floor runs before modes and grants and cannot be bypassed by
+  full-auto or an LLM judge. Distinguish forbidden operations from actions a
+  human may approve.
+- Rejection is a user decision and must not cause retry. An unanswered approval
+  parks work. Smart triage is cheap-role-only, structured, and fail-closed;
+  missing judge, timeout, parse error, or provider failure asks the human.
+- Arbitrary code runs unprompted in smart mode only when enforced isolation
+  proves writes confined to scope and no network/credential escape. Host,
+  uncontained, networked, privileged, or unknown execution asks.
+- The daemon defines approval choices. Clients render them and never invent
+  authority. Stored grants must be narrower than the action and cover every
+  target.
+- Tool failures are evidence. Inspect cwd, files, environment, authentication,
+  runtime, and package-manager state before changing the next command.
+- Skills are instruction assets, not auto-executed scripts. Their scripts still
+  pass through normal tools and safety. Catalog replacement preserves
+  provenance; automatic curation governs agent-created assets only.
 
-## Skills, TUI, and Commands
+## UI and Commands
 
-- Skills are instruction assets, not auto-executed scripts. Scripts mentioned
-  by a skill still pass through normal tools, scope, and safety middleware.
-  Keep skill handling layered: list, view, manage, catalog, and bundle.
-- Catalog installs preserve provenance and back up replaced content. Automatic
-  curation governs agent-created assets only unless the user explicitly opts in.
-- Do not grow `internal/gateway/cli/controller.go` with reusable rendering or
-  business behavior. Use dedicated gateway/cli modules or `ui/components`.
-  Transient pages use the shared pager and do not enter chat history.
-- Command metadata is cross-endpoint and comes from
-  `internal/gateway/command`. Gateway, IM, and TUI read the catalog; they do not
-  maintain separate command lists or help text. Execution remains in the
-  authoritative gateway/local handlers.
-- User-facing controls and notices are English. Functional parsers may retain
-  multilingual cues. Rendering must be human-readable, bounded, UTF-8 safe,
-  and free of raw protocol JSON or mojibake.
+- Keep reusable rendering out of `internal/gateway/cli/controller.go`; use
+  focused gateway/cli modules or `ui/components`. Transient pages use the pager
+  and do not enter chat history.
+- Cross-endpoint command metadata comes from `internal/gateway/command`.
+  Gateway, IM, and TUI do not maintain separate slash-command catalogs.
+- User-facing controls and notices are English. Parsers may recognize
+  multilingual cues. Output is bounded, human-readable UTF-8 without mojibake
+  or raw protocol JSON.
 
-## Eval and Verification
+## Eval, Release, and Documentation
 
-- Repeatable message-path defects get an `evalcases/**/*.yaml` case. Eval uses
-  the production gateway, identity, workspace, strategy, context, tool, and
-  adapter paths; no eval-only shortcut may make a case pass.
-- Eval data is isolated by default. Local `evalruns/` traces are never
-  committed. Required cassettes must exist and replay before the offline gate
-  may pass; mock-provider success does not satisfy a live cassette requirement.
-- Provider replay is offline, but replayed tool calls use the host toolchain.
-  Cases declare required commands; a missing or cross-OS executable is an
-  unavailable environment, never a passing skip or a product regression.
-- CI complements the local gate. A case enters CI only through explicit
-  `ci.required`, `ci.reason`, and `ci.platforms` metadata for evidence that a
-  workstation cannot prove (clean checkout, credentialless, cross-platform,
-  concurrency, or timing). Case counts are not a substitute for ownership.
-- Deterministic P0 checks such as non-empty output, no mojibake, no raw provider
-  JSON, visible tool events, and bounded duration remain mandatory even when a
-  later model judge is added.
-
-Verify in tiers. Run the fast loop after each change and the full gate before
-pushing; `--fast` drops only the few cases marked `slow:` (measured replay
-cost) and always reports how many, and never drops a `require_cassette` case.
-
-```sh
-cd /mnt/d/wwwroot/ai/selfmind
-GOWORK=off /usr/local/go/bin/go test ./...   # ~1m, after each change
-selfmind selfcheck --fast                    # ~2.5m, adds 30 eval cases
-selfmind selfcheck                           # ~7m, before pushing
-selfmind selfcheck --profile ci --skip-go    # CI-owned cases for this platform
-```
-
-From PowerShell, prefix `go` with
-`$env:PATH="$env:USERPROFILE\.cache\selfmind-tools\go1.26.3\go\bin;" + $env:PATH`
-and `$env:GOWORK='off'`.
-
-Provider changes also run:
-
-```sh
-GOWORK=off /usr/local/go/bin/go test ./internal/modelruntime ./internal/kernel/llm ./internal/app
-```
-
-When the user is testing a CLI, TUI, provider, gateway-startup, or config
-change through `~/.local/bin/selfmind`, build and atomically replace the Linux
-binary, then run `selfmind --help` and `selfmind model check`.
-
-## Documentation Ownership
-
-- `AGENTS.md` is the root cross-cutting rule set. Keep it below 20 KiB and do
-  not add dates, shipped markers, active plans, implementation snapshots, long
-  code maps, vendor tables, or detailed algorithms. Link a domain document.
-- `docs/STATUS.md` is the only live status and priority list.
-- `docs/identity-continuity.md` owns the product direction and continuity
-  contract. Domain documents own mechanics and rationale.
-- `CLAUDE.md`, `GEMINI.md`, and `QWEN.md` only point to this file; never copy
-  rules into tool-specific entry files.
-- Broader engineering explanation belongs in `docs/development-guide*.md`.
-  Keep canonical and translated documents synchronized or mark translations.
+- Repeatable message-path defects get an `evalcases/**/*.yaml` case using the
+  production path. Pure algorithms, migrations, and mechanics belong in Go
+  tests.
+- `evalcases/` is release evidence. Every model-backed case has a committed
+  replay cassette; deterministic cases declare `model_required: false`.
+  Drafts stay under ignored draft directories. Mock success is never evidence.
+- Provider replay is offline, but tools use the host. Cases declare required
+  commands. Only evidence a workstation cannot prove may be explicitly owned
+  by CI; local output then says `CI-DEFERRED` and release still requires Action.
+- Delete superseded cases and cassette directories together. Missing, orphaned,
+  or invalid evidence fails corpus tests.
+- Run `selfmind selfcheck --fast` during edits and full `selfmind selfcheck`
+  before pushing. Provider changes also test `internal/modelruntime`,
+  `internal/kernel/llm`, and `internal/app`.
+- `AGENTS.md` is cross-cutting policy and stays below 20 KiB.
+  `docs/STATUS.md` is current state and stays below 300 lines. Domain documents
+  own mechanisms; `docs/manifest.yaml` owns document lifecycle metadata;
+  `docs/README.md` is generated.
+- At most one plan is active. Active or paused plans declare an approver and a
+  review date; an expired plan needs a verdict. Historical plans are archived
+  or decisions, never silently left active.
+- English is canonical for public user/developer pairs; Chinese translations
+  carry the canonical source hash in the manifest. A changed canonical file
+  makes `selfmind docs check` fail until the translation is reviewed.
+- `selfmind selfcheck` always runs the documentation contract. Do not bypass or
+  weaken this gate to publish a package.

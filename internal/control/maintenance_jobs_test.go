@@ -182,6 +182,56 @@ func TestMaintenanceJobProviderBlockAndRestartProbe(t *testing.T) {
 	}
 }
 
+func TestMaintenanceHealthReportsFailedWithoutProviderBlock(t *testing.T) {
+	ctx := context.Background()
+	store, identity, _, run := newRecoveryFixture(t)
+	if err := store.FinishRun(ctx, identity.TenantID, run.ID, "done"); err != nil {
+		t.Fatal(err)
+	}
+	if claimed, err := store.ClaimMaintenanceJob(ctx, identity.TenantID, run.ID, 1); err != nil || !claimed {
+		t.Fatalf("claim: claimed=%v err=%v", claimed, err)
+	}
+	if err := store.FailMaintenanceJob(ctx, identity.TenantID, run.ID, 1, "maintenance contract truncated", time.Hour); err != nil {
+		t.Fatal(err)
+	}
+
+	health, err := store.MaintenanceHealthForPerson(ctx, identity.TenantID, identity.PersonID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if health.Failed != 1 || health.Pending != 0 || health.Blocked != 0 {
+		t.Fatalf("health counts = %+v", health)
+	}
+	if health.LastError != "maintenance contract truncated" {
+		t.Fatalf("last error = %q", health.LastError)
+	}
+}
+
+func TestMaintenanceClaimLimitIsSharedAndVisible(t *testing.T) {
+	ctx := context.Background()
+	store, identity, _, run := newRecoveryFixture(t)
+	if err := store.FinishRun(ctx, identity.TenantID, run.ID, "done"); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 2; i++ {
+		claimed, exhausted, err := store.ClaimMaintenanceJobWithLimit(ctx, identity.TenantID, run.ID, 1, 2)
+		if err != nil || !claimed || exhausted {
+			t.Fatalf("claim %d: claimed=%v exhausted=%v err=%v", i+1, claimed, exhausted, err)
+		}
+		if err := store.FailMaintenanceJob(ctx, identity.TenantID, run.ID, 1, "temporary failure", 0); err != nil {
+			t.Fatal(err)
+		}
+	}
+	claimed, exhausted, err := store.ClaimMaintenanceJobWithLimit(ctx, identity.TenantID, run.ID, 1, 2)
+	if err != nil || claimed || !exhausted {
+		t.Fatalf("limit claim: claimed=%v exhausted=%v err=%v", claimed, exhausted, err)
+	}
+	job, err := store.GetMaintenanceJob(ctx, identity.TenantID, run.ID, 1)
+	if err != nil || job == nil || job.Status != MaintenanceJobBlockedProvider || job.Attempts != 2 {
+		t.Fatalf("unexpected limited job: %#v err=%v", job, err)
+	}
+}
+
 func TestReplayRetryLimitedMaintenanceJobsIsSelective(t *testing.T) {
 	ctx := context.Background()
 	store, identity, _, run := newRecoveryFixture(t)

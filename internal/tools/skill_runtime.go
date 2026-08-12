@@ -56,13 +56,10 @@ func NewSkillsListTool() *SkillsListTool {
 }
 
 func (t *SkillsListTool) Execute(args map[string]interface{}) (string, error) {
-	tenantID, _ := args["_tenant_id"].(string)
-	if tenantID == "" {
-		tenantID = "default"
-	}
+	tenantID := skillStorageTenantID(args)
 	query, _ := args["query"].(string)
 	includeArchived, _ := args["include_archived"].(bool)
-	return SkillsListJSONForTenant(tenantID, query, includeArchived)
+	return SkillsListJSONForTenant(tenantID, query, includeArchived, args)
 }
 
 type SkillViewTool struct {
@@ -93,22 +90,19 @@ func NewSkillViewTool() *SkillViewTool {
 }
 
 func (t *SkillViewTool) Execute(args map[string]interface{}) (string, error) {
-	tenantID, _ := args["_tenant_id"].(string)
-	if tenantID == "" {
-		tenantID = "default"
-	}
+	tenantID := skillStorageTenantID(args)
 	name, _ := args["name"].(string)
 	filePath, _ := args["file_path"].(string)
-	return SkillViewJSONForTenant(tenantID, name, filePath)
+	return SkillViewJSONForTenant(tenantID, name, filePath, args)
 }
 
-func SkillsListJSONForTenant(tenantID, query string, includeArchived bool) (string, error) {
+func SkillsListJSONForTenant(tenantID, query string, includeArchived bool, invocation ...map[string]interface{}) (string, error) {
 	var skills []SkillInfo
 	var err error
 	if strings.TrimSpace(query) != "" {
-		skills, err = SearchSkillsForTenant(tenantID, query)
+		skills, err = SearchSkillsForTenant(tenantID, query, invocation...)
 	} else {
-		skills, err = ListSkillsForTenant(tenantID, includeArchived)
+		skills, err = ListSkillsForTenant(tenantID, includeArchived, invocation...)
 	}
 	if err != nil {
 		return "", err
@@ -147,8 +141,8 @@ func SkillsListJSONForTenant(tenantID, query string, includeArchived bool) (stri
 	return string(data), nil
 }
 
-func SkillViewJSONForTenant(tenantID, name, filePath string) (string, error) {
-	info, content, files, err := ReadSkillPayloadForTenant(tenantID, name, filePath)
+func SkillViewJSONForTenant(tenantID, name, filePath string, invocation ...map[string]interface{}) (string, error) {
+	info, content, files, err := ReadSkillPayloadForTenant(tenantID, name, filePath, invocation...)
 	if err != nil {
 		return "", err
 	}
@@ -176,11 +170,11 @@ func SkillViewJSONForTenant(tenantID, name, filePath string) (string, error) {
 	return string(data), nil
 }
 
-func ReadSkillPayloadForTenant(tenantID, name, filePath string) (SkillInfo, string, []string, error) {
+func ReadSkillPayloadForTenant(tenantID, name, filePath string, invocation ...map[string]interface{}) (SkillInfo, string, []string, error) {
 	if strings.TrimSpace(name) == "" {
 		return SkillInfo{}, "", nil, fmt.Errorf("name is required")
 	}
-	info, err := findSkill(tenantID, name)
+	info, err := findSkill(tenantID, name, invocation...)
 	if err != nil {
 		return SkillInfo{}, "", nil, err
 	}
@@ -287,7 +281,7 @@ func normalizeSkillCommandName(name string) string {
 	}, name), "-")
 }
 
-func ReloadSkillToolsForTenant(tenantID string, registry *Registry) ([]SkillDefinition, error) {
+func ReloadSkillToolsForTenant(tenantID string, registry *Registry, invocation ...map[string]interface{}) ([]SkillDefinition, error) {
 	if registry == nil {
 		return nil, fmt.Errorf("registry is required")
 	}
@@ -296,16 +290,13 @@ func ReloadSkillToolsForTenant(tenantID string, registry *Registry) ([]SkillDefi
 			registry.Unregister(name)
 		}
 	}
-	roots, err := SkillRootsForTenant(tenantID)
+	roots, err := SkillRootsForTenant(tenantID, invocation...)
 	if err != nil {
 		return nil, err
 	}
 	var loaded []SkillDefinition
 	for i := len(roots) - 1; i >= 0; i-- {
 		root := roots[i]
-		if root.Writable {
-			_ = os.MkdirAll(root.Path, 0755)
-		}
 		loader := NewSkillLoader(root.Path, registry)
 		defs, err := loader.LoadAll()
 		if err != nil {

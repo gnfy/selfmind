@@ -43,7 +43,7 @@ func (a *App) updateCheck(args []string) int {
 	if code != 0 {
 		return code
 	}
-	ctx, cancel := context.WithTimeout(a.ctx, 8*time.Second)
+	ctx, cancel := context.WithTimeout(a.ctx, updatecheck.RequestTimeout)
 	defer cancel()
 	result, err := updatecheck.Check(ctx, buildinfo.Version, selectedChannel)
 	if err != nil {
@@ -80,7 +80,7 @@ func (a *App) updateApply(args []string) int {
 		return code
 	}
 
-	checkCtx, cancelCheck := context.WithTimeout(a.ctx, 8*time.Second)
+	checkCtx, cancelCheck := context.WithTimeout(a.ctx, updatecheck.RequestTimeout)
 	result, err := updatecheck.Check(checkCtx, buildinfo.Version, selectedChannel)
 	cancelCheck()
 	if err != nil {
@@ -118,7 +118,7 @@ func (a *App) updateApply(args []string) int {
 		fmt.Fprintf(a.stdout, "Installed: SelfMind %s\n", newVersion)
 		// Re-stamp the notice cache as the NEW version so a startup that
 		// races the next background check never re-announces this update.
-		refreshCtx, cancelRefresh := context.WithTimeout(a.ctx, 8*time.Second)
+		refreshCtx, cancelRefresh := context.WithTimeout(a.ctx, updatecheck.RequestTimeout)
 		if _, err := updatecheck.Check(refreshCtx, newVersion, selectedChannel); err != nil {
 			_ = updatecheck.InvalidateCache()
 		}
@@ -299,7 +299,7 @@ func (a *App) printUpdateNotice(cfg *config.Config) {
 	notices := a.updateNotices
 	channel := effectiveChannel
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), updatecheck.RequestTimeout)
 		defer cancel()
 		result, err := updatecheck.Check(ctx, buildinfo.Version, channel)
 		if err != nil || !shouldAnnounceUpdate(result, buildinfo.Version, channel) {

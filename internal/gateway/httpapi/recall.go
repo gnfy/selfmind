@@ -181,10 +181,26 @@ type RecallEngine struct {
 	expandTimeout time.Duration
 }
 
+// RecallEngineOption customizes bounded recall behavior for specialized
+// callers. Production uses the defaults; the eval recorder may extend the
+// expansion deadline so a healthy but slower live provider can be captured
+// without changing the production turn-latency budget.
+type RecallEngineOption func(*RecallEngine)
+
+// WithRecallExpandTimeout overrides the semantic expansion deadline. Invalid
+// values are ignored so callers cannot accidentally remove the bound.
+func WithRecallExpandTimeout(timeout time.Duration) RecallEngineOption {
+	return func(engine *RecallEngine) {
+		if engine != nil && timeout > 0 {
+			engine.expandTimeout = timeout
+		}
+	}
+}
+
 // NewRecallEngine wires the v1 sources: task label cards (control.db, live
 // query) and indexed sessions (FTS). Either dependency may be nil — the
 // matching source is simply not registered. expander may be nil (raw terms).
-func NewRecallEngine(cards RecallTaskCardLister, sessions RecallSessionSearcher, expander RecallQueryExpander) *RecallEngine {
+func NewRecallEngine(cards RecallTaskCardLister, sessions RecallSessionSearcher, expander RecallQueryExpander, opts ...RecallEngineOption) *RecallEngine {
 	engine := &RecallEngine{expander: expander, expandTimeout: defaultExpandTimeout}
 	if cards != nil {
 		engine.sources = append(engine.sources, &taskCardRecallSource{cards: cards})
@@ -195,6 +211,11 @@ func NewRecallEngine(cards RecallTaskCardLister, sessions RecallSessionSearcher,
 			if store, available := provider.Canonical(); available && store != nil {
 				engine.sources = append(engine.sources, &canonicalRecallSource{store: store})
 			}
+		}
+	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(engine)
 		}
 	}
 	return engine

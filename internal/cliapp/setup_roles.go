@@ -8,16 +8,14 @@ import (
 	"selfmind/internal/platform/config"
 )
 
-// Background model roles are what the daemon needs to run approval triage,
-// post-run analysis, task labelling, and memory governance WITHOUT borrowing
-// the foreground coding model. When they are absent the daemon does not fall
-// back to the coding model — it disables those subsystems and logs a line at
-// startup. That is the safe behavior, but on a fresh install it is also
-// invisible: the person sees a working agent that silently never learns and
-// asks for approval on every dangerous operation.
+// Auxiliary model roles let the daemon run approval triage, post-run analysis,
+// task labelling, memory governance, skill curation, recall, and summaries
+// without borrowing the foreground coding model. When they are absent, the
+// daemon disables or deterministically degrades those subsystems. That is the
+// safe behavior, but on a fresh install it is easy to overlook.
 //
 // Setup therefore asks once, at the same moment the foreground model is
-// chosen. Reusing the foreground model stays an explicit, labelled choice —
+// chosen. Reusing the foreground model stays an explicit, labelled choice,
 // never a silent default.
 type backgroundRoleSpec struct {
 	role llm.ModelRole
@@ -27,17 +25,23 @@ type backgroundRoleSpec struct {
 
 var backgroundRoleSpecs = []backgroundRoleSpec{
 	{llm.RoleFastClassifier, "smart approval triage (every dangerous operation asks a human)"},
-	{llm.RoleBackgroundReview, "background review, and approval triage on pre-beta.10 builds"},
+	{llm.RoleBackgroundReview, "background review and reusable skill learning"},
 	{llm.RoleMemoryExtract, "post-run analysis, task labels, and memory governance (SelfMind never learns)"},
+	{llm.RoleSkillCurator, "skill curation"},
+	{llm.RoleSemanticRecall, "semantic query expansion (recall falls back to literal search)"},
+	{llm.RoleSummarizer, "low-cost context summaries"},
 }
 
 // missingBackgroundRoles lists the roles that carry no explicit provider/model.
 // A role with a provider but no model is treated as missing: the resolver
 // cannot route it, so it produces the same disabled subsystem.
 func missingBackgroundRoles(cfg *config.Config) []llm.ModelRole {
+	if cfg == nil {
+		return nil
+	}
 	var missing []llm.ModelRole
 	for _, spec := range backgroundRoleSpecs {
-		roleCfg, ok := cfg.Models.Roles[string(spec.role)]
+		roleCfg, _, ok := cfg.ResolveAuxiliaryRole(string(spec.role))
 		if !ok || strings.TrimSpace(roleCfg.Model) == "" {
 			missing = append(missing, spec.role)
 		}
@@ -60,9 +64,9 @@ func (a *App) ensureBackgroundRoleSetup(cfg *config.Config) *config.Config {
 	}
 
 	fmt.Fprintln(a.stdout)
-	fmt.Fprintln(a.stdout, "Background models are not configured yet.")
-	fmt.Fprintln(a.stdout, "SelfMind runs approval triage and memory work on a separate cheap model so it")
-	fmt.Fprintln(a.stdout, "never spends your coding model on background jobs. Until they are set:")
+	fmt.Fprintln(a.stdout, "An auxiliary model is not configured yet.")
+	fmt.Fprintln(a.stdout, "SelfMind uses one auxiliary model for approval triage, memory, recall, and")
+	fmt.Fprintln(a.stdout, "skill work so background jobs do not silently spend your coding model. Until it is set:")
 	for _, spec := range backgroundRoleSpecs {
 		if containsRole(missing, spec.role) {
 			fmt.Fprintf(a.stdout, "  - %s is off: %s\n", spec.role, spec.disables)
@@ -74,10 +78,10 @@ func (a *App) ensureBackgroundRoleSetup(cfg *config.Config) *config.Config {
 
 	printGuidance := func() {
 		fmt.Fprintln(a.stderr)
-		fmt.Fprintln(a.stderr, "Add them under `models.roles` in the config, for example:")
-		for _, role := range missing {
-			fmt.Fprintf(a.stderr, "  models.roles.%s = %s/%s\n", role, blankAsDash(provider), blankAsDash(model))
-		}
+		fmt.Fprintln(a.stderr, "Set one default auxiliary model in the config:")
+		fmt.Fprintf(a.stderr, "  models.auxiliary.provider = %s\n", blankAsDash(provider))
+		fmt.Fprintf(a.stderr, "  models.auxiliary.model = %s\n", blankAsDash(model))
+		fmt.Fprintln(a.stderr, "Use `models.roles.<role>` only for advanced per-role overrides.")
 		fmt.Fprintln(a.stderr, "Then restart the gateway so the daemon picks them up.")
 	}
 
@@ -93,10 +97,10 @@ func (a *App) ensureBackgroundRoleSetup(cfg *config.Config) *config.Config {
 
 	labels := []string{
 		fmt.Sprintf("Reuse the foreground model (%s/%s)", blankAsDash(provider), blankAsDash(model)),
-		"Choose a different provider and model for background work",
+		"Choose a different auxiliary provider and model",
 		"Skip for now",
 	}
-	choice, err := a.promptChoice("Configure background models?", labels)
+	choice, err := a.promptChoice("Configure an auxiliary model?", labels)
 	if err != nil {
 		// Closed or exhausted stdin (piped input, cancelled terminal): fall
 		// back to the same actionable guidance rather than exiting silently.
@@ -107,16 +111,16 @@ func (a *App) ensureBackgroundRoleSetup(cfg *config.Config) *config.Config {
 	switch choice {
 	case 0:
 		if provider == "" || model == "" {
-			fmt.Fprintln(a.stderr, "No foreground model is available to reuse; skipping background models.")
+			fmt.Fprintln(a.stderr, "No foreground model is available to reuse; skipping the auxiliary model.")
 			return cfg
 		}
 	case 1:
-		provider, err = a.promptInput("Background provider", provider)
+		provider, err = a.promptInput("Auxiliary provider", provider)
 		if err != nil {
 			printGuidance()
 			return cfg
 		}
-		model, err = a.promptInput("Background model", model)
+		model, err = a.promptInput("Auxiliary model", model)
 		if err != nil {
 			printGuidance()
 			return cfg
@@ -124,33 +128,26 @@ func (a *App) ensureBackgroundRoleSetup(cfg *config.Config) *config.Config {
 		provider = strings.TrimSpace(provider)
 		model = strings.TrimSpace(model)
 		if provider == "" || model == "" {
-			fmt.Fprintln(a.stderr, "Provider and model are both required; skipping background models.")
+			fmt.Fprintln(a.stderr, "Provider and model are both required; skipping the auxiliary model.")
 			return cfg
 		}
 	default:
-		fmt.Fprintln(a.stdout, "Skipped. Run `selfmind setup` again, or set `models.roles` in the config.")
+		fmt.Fprintln(a.stdout, "Skipped. Run `selfmind setup` again, or set `models.auxiliary` in the config.")
 		return cfg
 	}
 
-	if cfg.Models.Roles == nil {
-		cfg.Models.Roles = make(map[string]config.ModelRoleConfig)
-	}
-	for _, role := range missing {
-		// Only fill the gaps: a role the person already tuned by hand keeps
-		// its own provider, model, base URL, and headers.
-		existing := cfg.Models.Roles[string(role)]
-		existing.Provider = provider
-		existing.Model = model
-		cfg.Models.Roles[string(role)] = existing
-	}
+	// Existing models.roles entries remain higher-priority overrides and are
+	// intentionally untouched.
+	cfg.Models.Auxiliary.Provider = provider
+	cfg.Models.Auxiliary.Model = model
 
 	if err := config.SaveConfig(a.configPath, cfg); err != nil {
-		fmt.Fprintf(a.stderr, "Could not save background models: %v\n", err)
-		fmt.Fprintln(a.stderr, "Set `models.roles` in the config manually.")
+		fmt.Fprintf(a.stderr, "Could not save the auxiliary model: %v\n", err)
+		fmt.Fprintln(a.stderr, "Set `models.auxiliary` in the config manually.")
 		return cfg
 	}
 
-	fmt.Fprintf(a.stdout, "Background models: %s/%s for %s\n", provider, model, joinRoles(missing))
+	fmt.Fprintf(a.stdout, "Auxiliary model: %s/%s (covers %s)\n", provider, model, joinRoles(missing))
 	return cfg
 }
 

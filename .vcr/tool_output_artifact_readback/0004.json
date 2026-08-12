@@ -1,0 +1,1048 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "reasoning_content": "The"
+    },
+    {
+      "reasoning_content": " user"
+    },
+    {
+      "reasoning_content": " wants"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " to"
+    },
+    {
+      "reasoning_content": " read"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " artifact"
+    },
+    {
+      "reasoning_content": " with"
+    },
+    {
+      "reasoning_content": " tool"
+    },
+    {
+      "reasoning_content": "_output"
+    },
+    {
+      "reasoning_content": "_view"
+    },
+    {
+      "reasoning_content": " to"
+    },
+    {
+      "reasoning_content": " find"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " MARK"
+    },
+    {
+      "reasoning_content": "ER"
+    },
+    {
+      "reasoning_content": "-"
+    },
+    {
+      "reasoning_content": "CODE"
+    },
+    {
+      "reasoning_content": " line"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " The"
+    },
+    {
+      "reasoning_content": " artifact"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " art"
+    },
+    {
+      "reasoning_content": "_"
+    },
+    {
+      "reasoning_content": "352"
+    },
+    {
+      "reasoning_content": "7"
+    },
+    {
+      "reasoning_content": "d"
+    },
+    {
+      "reasoning_content": "21"
+    },
+    {
+      "reasoning_content": "d"
+    },
+    {
+      "reasoning_content": "-c"
+    },
+    {
+      "reasoning_content": "0"
+    },
+    {
+      "reasoning_content": "b"
+    },
+    {
+      "reasoning_content": "8"
+    },
+    {
+      "reasoning_content": "-"
+    },
+    {
+      "reasoning_content": "4"
+    },
+    {
+      "reasoning_content": "d"
+    },
+    {
+      "reasoning_content": "99"
+    },
+    {
+      "reasoning_content": "-"
+    },
+    {
+      "reasoning_content": "9"
+    },
+    {
+      "reasoning_content": "a"
+    },
+    {
+      "reasoning_content": "2"
+    },
+    {
+      "reasoning_content": "a"
+    },
+    {
+      "reasoning_content": "-"
+    },
+    {
+      "reasoning_content": "eb"
+    },
+    {
+      "reasoning_content": "260"
+    },
+    {
+      "reasoning_content": "66"
+    },
+    {
+      "reasoning_content": "b"
+    },
+    {
+      "reasoning_content": "6"
+    },
+    {
+      "reasoning_content": "e"
+    },
+    {
+      "reasoning_content": "20"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " "
+    },
+    {
+      "reasoning_content": "172"
+    },
+    {
+      "reasoning_content": "860"
+    },
+    {
+      "reasoning_content": " bytes"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " The"
+    },
+    {
+      "reasoning_content": " marker"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " at"
+    },
+    {
+      "reasoning_content": " line"
+    },
+    {
+      "reasoning_content": " "
+    },
+    {
+      "reasoning_content": "150"
+    },
+    {
+      "reasoning_content": "0"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " so"
+    },
+    {
+      "reasoning_content": " roughly"
+    },
+    {
+      "reasoning_content": " at"
+    },
+    {
+      "reasoning_content": " byte"
+    },
+    {
+      "reasoning_content": " "
+    },
+    {
+      "reasoning_content": "150"
+    },
+    {
+      "reasoning_content": "0"
+    },
+    {
+      "reasoning_content": " *"
+    },
+    {
+      "reasoning_content": " ~"
+    },
+    {
+      "reasoning_content": "68"
+    },
+    {
+      "reasoning_content": " bytes"
+    },
+    {
+      "reasoning_content": " ="
+    },
+    {
+      "reasoning_content": " ~"
+    },
+    {
+      "reasoning_content": "102"
+    },
+    {
+      "reasoning_content": "000"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Let"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " read"
+    },
+    {
+      "reasoning_content": " from"
+    },
+    {
+      "reasoning_content": " an"
+    },
+    {
+      "reasoning_content": " offset"
+    },
+    {
+      "reasoning_content": " around"
+    },
+    {
+      "reasoning_content": " there"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Each"
+    },
+    {
+      "reasoning_content": " line"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " like"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "line"
+    },
+    {
+      "reasoning_content": " "
+    },
+    {
+      "reasoning_content": "150"
+    },
+    {
+      "reasoning_content": "0"
+    },
+    {
+      "reasoning_content": " padding"
+    },
+    {
+      "reasoning_content": " padding"
+    },
+    {
+      "reasoning_content": " padding"
+    },
+    {
+      "reasoning_content": " padding"
+    },
+    {
+      "reasoning_content": " padding"
+    },
+    {
+      "reasoning_content": " padding"
+    },
+    {
+      "reasoning_content": "\\n"
+    },
+    {
+      "reasoning_content": "\""
+    },
+    {
+      "reasoning_content": " —"
+    },
+    {
+      "reasoning_content": " roughly"
+    },
+    {
+      "reasoning_content": " "
+    },
+    {
+      "reasoning_content": "60"
+    },
+    {
+      "reasoning_content": "-"
+    },
+    {
+      "reasoning_content": "70"
+    },
+    {
+      "reasoning_content": " bytes"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Line"
+    },
+    {
+      "reasoning_content": " "
+    },
+    {
+      "reasoning_content": "150"
+    },
+    {
+      "reasoning_content": "0"
+    },
+    {
+      "reasoning_content": " would"
+    },
+    {
+      "reasoning_content": " start"
+    },
+    {
+      "reasoning_content": " around"
+    },
+    {
+      "reasoning_content": " byte"
+    },
+    {
+      "reasoning_content": " "
+    },
+    {
+      "reasoning_content": "150"
+    },
+    {
+      "reasoning_content": "0"
+    },
+    {
+      "reasoning_content": "*"
+    },
+    {
+      "reasoning_content": "~"
+    },
+    {
+      "reasoning_content": "66"
+    },
+    {
+      "reasoning_content": " ="
+    },
+    {
+      "reasoning_content": " "
+    },
+    {
+      "reasoning_content": "990"
+    },
+    {
+      "reasoning_content": "00"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Let"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " read"
+    },
+    {
+      "reasoning_content": " a"
+    },
+    {
+      "reasoning_content": " chunk"
+    },
+    {
+      "reasoning_content": " around"
+    },
+    {
+      "reasoning_content": " there"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "I"
+    },
+    {
+      "reasoning_content": " can"
+    },
+    {
+      "reasoning_content": " use"
+    },
+    {
+      "reasoning_content": " tool"
+    },
+    {
+      "reasoning_content": "_output"
+    },
+    {
+      "reasoning_content": "_view"
+    },
+    {
+      "reasoning_content": " with"
+    },
+    {
+      "reasoning_content": " offset"
+    },
+    {
+      "reasoning_content": "_bytes"
+    },
+    {
+      "reasoning_content": " to"
+    },
+    {
+      "reasoning_content": " read"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " middle"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Let"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " first"
+    },
+    {
+      "reasoning_content": " read"
+    },
+    {
+      "reasoning_content": " a"
+    },
+    {
+      "reasoning_content": " range"
+    },
+    {
+      "reasoning_content": " around"
+    },
+    {
+      "reasoning_content": " byte"
+    },
+    {
+      "reasoning_content": " "
+    },
+    {
+      "reasoning_content": "100"
+    },
+    {
+      "reasoning_content": "000"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "Actually"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " marker"
+    },
+    {
+      "reasoning_content": " line"
+    },
+    {
+      "reasoning_content": " itself"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "MARK"
+    },
+    {
+      "reasoning_content": "ER"
+    },
+    {
+      "reasoning_content": "-"
+    },
+    {
+      "reasoning_content": "CODE"
+    },
+    {
+      "reasoning_content": ":"
+    },
+    {
+      "reasoning_content": " Q"
+    },
+    {
+      "reasoning_content": "LX"
+    },
+    {
+      "reasoning_content": "-"
+    },
+    {
+      "reasoning_content": "773"
+    },
+    {
+      "reasoning_content": "4"
+    },
+    {
+      "reasoning_content": "-M"
+    },
+    {
+      "reasoning_content": "ID"
+    },
+    {
+      "reasoning_content": "\"."
+    },
+    {
+      "reasoning_content": " Let"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " just"
+    },
+    {
+      "reasoning_content": " read"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " middle"
+    },
+    {
+      "reasoning_content": " portion"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " The"
+    },
+    {
+      "reasoning_content": " output"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " "
+    },
+    {
+      "reasoning_content": "172"
+    },
+    {
+      "reasoning_content": "860"
+    },
+    {
+      "reasoning_content": " bytes"
+    },
+    {
+      "reasoning_content": " for"
+    },
+    {
+      "reasoning_content": " "
+    },
+    {
+      "reasoning_content": "300"
+    },
+    {
+      "reasoning_content": "0"
+    },
+    {
+      "reasoning_content": " lines"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " so"
+    },
+    {
+      "reasoning_content": " average"
+    },
+    {
+      "reasoning_content": " ~"
+    },
+    {
+      "reasoning_content": "57"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": "6"
+    },
+    {
+      "reasoning_content": " bytes"
+    },
+    {
+      "reasoning_content": " per"
+    },
+    {
+      "reasoning_content": " line"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Line"
+    },
+    {
+      "reasoning_content": " "
+    },
+    {
+      "reasoning_content": "150"
+    },
+    {
+      "reasoning_content": "0"
+    },
+    {
+      "reasoning_content": " starts"
+    },
+    {
+      "reasoning_content": " at"
+    },
+    {
+      "reasoning_content": " approximately"
+    },
+    {
+      "reasoning_content": " "
+    },
+    {
+      "reasoning_content": "150"
+    },
+    {
+      "reasoning_content": "0"
+    },
+    {
+      "reasoning_content": "*"
+    },
+    {
+      "reasoning_content": "57"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": "6"
+    },
+    {
+      "reasoning_content": " ≈"
+    },
+    {
+      "reasoning_content": " "
+    },
+    {
+      "reasoning_content": "864"
+    },
+    {
+      "reasoning_content": "00"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Let"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " read"
+    },
+    {
+      "reasoning_content": " from"
+    },
+    {
+      "reasoning_content": " offset"
+    },
+    {
+      "reasoning_content": " "
+    },
+    {
+      "reasoning_content": "860"
+    },
+    {
+      "reasoning_content": "00"
+    },
+    {
+      "reasoning_content": " or"
+    },
+    {
+      "reasoning_content": " so"
+    },
+    {
+      "reasoning_content": " with"
+    },
+    {
+      "reasoning_content": " "
+    },
+    {
+      "reasoning_content": "240"
+    },
+    {
+      "reasoning_content": "00"
+    },
+    {
+      "reasoning_content": " bytes"
+    },
+    {
+      "reasoning_content": " limit"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " That"
+    },
+    {
+      "reasoning_content": " should"
+    },
+    {
+      "reasoning_content": " cover"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " marker"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "But"
+    },
+    {
+      "reasoning_content": " to"
+    },
+    {
+      "reasoning_content": " be"
+    },
+    {
+      "reasoning_content": " precise"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " I"
+    },
+    {
+      "reasoning_content": " could"
+    },
+    {
+      "reasoning_content": " read"
+    },
+    {
+      "reasoning_content": " multiple"
+    },
+    {
+      "reasoning_content": " chunks"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Let"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " start"
+    },
+    {
+      "reasoning_content": " at"
+    },
+    {
+      "reasoning_content": " offset"
+    },
+    {
+      "reasoning_content": " "
+    },
+    {
+      "reasoning_content": "800"
+    },
+    {
+      "reasoning_content": "00"
+    },
+    {
+      "reasoning_content": " with"
+    },
+    {
+      "reasoning_content": " "
+    },
+    {
+      "reasoning_content": "240"
+    },
+    {
+      "reasoning_content": "00"
+    },
+    {
+      "reasoning_content": " bytes"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " which"
+    },
+    {
+      "reasoning_content": " covers"
+    },
+    {
+      "reasoning_content": " bytes"
+    },
+    {
+      "reasoning_content": " "
+    },
+    {
+      "reasoning_content": "800"
+    },
+    {
+      "reasoning_content": "00"
+    },
+    {
+      "reasoning_content": "-"
+    },
+    {
+      "reasoning_content": "104"
+    },
+    {
+      "reasoning_content": "000"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Line"
+    },
+    {
+      "reasoning_content": " "
+    },
+    {
+      "reasoning_content": "150"
+    },
+    {
+      "reasoning_content": "0"
+    },
+    {
+      "reasoning_content": " at"
+    },
+    {
+      "reasoning_content": " ~"
+    },
+    {
+      "reasoning_content": "864"
+    },
+    {
+      "reasoning_content": "00"
+    },
+    {
+      "reasoning_content": " would"
+    },
+    {
+      "reasoning_content": " be"
+    },
+    {
+      "reasoning_content": " in"
+    },
+    {
+      "reasoning_content": " that"
+    },
+    {
+      "reasoning_content": " range"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Good"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "content": "输出"
+    },
+    {
+      "content": "已"
+    },
+    {
+      "content": "保存"
+    },
+    {
+      "content": "为"
+    },
+    {
+      "content": " artifact"
+    },
+    {
+      "content": "，"
+    },
+    {
+      "content": "我用"
+    },
+    {
+      "content": " tool"
+    },
+    {
+      "content": "_output"
+    },
+    {
+      "content": "_view"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "按"
+    },
+    {
+      "content": "引用"
+    },
+    {
+      "content": "读取"
+    },
+    {
+      "content": "中"
+    },
+    {
+      "content": "段"
+    },
+    {
+      "content": "，"
+    },
+    {
+      "content": "定位"
+    },
+    {
+      "content": " MARK"
+    },
+    {
+      "content": "ER"
+    },
+    {
+      "content": "-"
+    },
+    {
+      "content": "CODE"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "行"
+    },
+    {
+      "content": "。"
+    },
+    {
+      "finish_reason": "tool_calls"
+    },
+    {
+      "usage": {
+        "input_tokens": 9237,
+        "output_tokens": 448,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 9237,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 315,
+        "cache_usage_reported": true
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_00_SyBPQJOBxy1gsrSpNhXE3137",
+          "Function": "tool_output_view",
+          "Args": "{\"artifact_id\": \"art_3527d21d-c0b8-4d99-9a2a-eb26066b6e20\", \"offset_bytes\": 82000, \"limit_bytes\": 24000}"
+        }
+      ]
+    }
+  ]
+}

@@ -37,6 +37,86 @@ storage:
 	}
 }
 
+func TestProviderExtraOptionsNormalizeEnvironmentAndPreserveLegacyHeaders(t *testing.T) {
+	t.Setenv("PROVIDER_USER", "team-user-42")
+	t.Setenv("PROVIDER_TOKEN", "opaque-token-42")
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte(`
+provider_profiles:
+  deepseek:
+    headers:
+      X-Legacy: legacy
+    extra_headers:
+      X-Token: ${PROVIDER_TOKEN}
+    extra_body:
+      user_id: ${PROVIDER_USER}
+      nested:
+        enabled: true
+    extra_query:
+      api-version: "2026-08-11"
+models:
+  auxiliary:
+    provider: deepseek
+    model: deepseek-v4-flash
+  roles:
+    memory_extract:
+      extra_body:
+        nested:
+          mode: compact
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadConfig(Options{Path: path})
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile := cfg.ProviderProfiles["deepseek"]
+	if profile.Headers["x-legacy"] != "legacy" || profile.ExtraHeaders["x-token"] != "opaque-token-42" {
+		t.Fatalf("headers = legacy:%q extra:%q profiles=%#v", profile.Headers["x-legacy"], profile.ExtraHeaders["x-token"], cfg.ProviderProfiles)
+	}
+	if profile.ExtraBody["user_id"] != "team-user-42" || profile.ExtraQuery["api-version"] != "2026-08-11" {
+		t.Fatalf("extra options = body:%#v query:%#v", profile.ExtraBody, profile.ExtraQuery)
+	}
+	role, _, ok := cfg.ResolveAuxiliaryRole("memory_extract")
+	if !ok || role.ExtraBody["nested"].(map[string]interface{})["mode"] != "compact" {
+		t.Fatalf("role extra_body = %#v", role.ExtraBody)
+	}
+}
+
+func TestProviderQuirkBooleansPreserveExplicitFalse(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte(`
+provider_profiles:
+  anthropic:
+    quirks:
+      prompt_cache: false
+      responses_store_false: true
+      responses_require_stream: false
+      http_version: http2
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := LoadConfig(Options{Path: path})
+	if err != nil {
+		t.Fatal(err)
+	}
+	quirks := cfg.ProviderProfiles["anthropic"].Quirks
+	if quirks.PromptCache == nil || *quirks.PromptCache {
+		t.Fatalf("prompt_cache = %v, want explicit false", quirks.PromptCache)
+	}
+	if quirks.ResponsesStoreFalse == nil || !*quirks.ResponsesStoreFalse {
+		t.Fatalf("responses_store_false = %v, want explicit true", quirks.ResponsesStoreFalse)
+	}
+	if quirks.ResponsesRequireStream == nil || *quirks.ResponsesRequireStream {
+		t.Fatalf("responses_require_stream = %v, want explicit false", quirks.ResponsesRequireStream)
+	}
+	if quirks.HTTPVersion != "http2" {
+		t.Fatalf("http_version = %q, want http2", quirks.HTTPVersion)
+	}
+}
+
 func TestModelsPrimaryOverridesLegacySelectionAndNormalizesAuto(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	if err := os.WriteFile(path, []byte(`
@@ -82,6 +162,43 @@ func TestSetPrimaryModelConvergesAwayFromLegacySelection(t *testing.T) {
 	}
 }
 
+func TestAuxiliaryModelRoutesBackgroundRolesWithExplicitOverride(t *testing.T) {
+	cfg := &Config{Models: ModelsConfig{
+		Primary:   ModelSelectionConfig{Provider: "codex-cli", Model: "gpt-primary"},
+		Auxiliary: ModelSelectionConfig{Provider: "deepseek", Model: "deepseek-v4-flash", Reasoning: "low"},
+		Roles: map[string]ModelRoleConfig{
+			"memory_extract": {Model: "deepseek-memory", MaxTokens: 2048},
+		},
+	}}
+	cfg.Normalize()
+
+	fast, source, ok := cfg.ResolveAuxiliaryRole("fast_classifier")
+	if !ok || source != "auxiliary" || fast.Provider != "deepseek" || fast.Model != "deepseek-v4-flash" {
+		t.Fatalf("fast classifier route = %+v source=%q ok=%v", fast, source, ok)
+	}
+	memory, source, ok := cfg.ResolveAuxiliaryRole("memory_extract")
+	if !ok || source != "role" || memory.Provider != "deepseek" || memory.Model != "deepseek-memory" || memory.MaxTokens != 2048 {
+		t.Fatalf("memory route = %+v source=%q ok=%v", memory, source, ok)
+	}
+	if _, _, ok := cfg.ResolveAuxiliaryRole("vision"); !ok {
+		// ResolveAuxiliaryRole is intentionally generic; callers decide which
+		// roles may inherit auxiliary. This assertion documents only that the
+		// config layer can provide a base when requested.
+		t.Fatal("expected generic auxiliary resolution")
+	}
+}
+
+func TestMissingAuxiliaryDoesNotInheritPrimary(t *testing.T) {
+	cfg := &Config{Models: ModelsConfig{Primary: ModelSelectionConfig{Provider: "codex-cli", Model: "gpt-primary"}}}
+	cfg.Normalize()
+	if got := cfg.EffectiveAuxiliary(); got.Provider != "" || got.Model != "" {
+		t.Fatalf("auxiliary unexpectedly inherited primary: %+v", got)
+	}
+	if _, _, ok := cfg.ResolveAuxiliaryRole("memory_extract"); ok {
+		t.Fatal("missing auxiliary role must stay unresolved")
+	}
+}
+
 func TestExecSandboxNetworkDefaultAndExplicitOverride(t *testing.T) {
 	defaultPath := filepath.Join(t.TempDir(), "default.yaml")
 	cfg, err := LoadConfig(Options{Path: defaultPath, CreateIfMissing: true})
@@ -102,6 +219,17 @@ func TestExecSandboxNetworkDefaultAndExplicitOverride(t *testing.T) {
 	}
 	if cfg.ExecSandbox.AllowNetwork {
 		t.Fatal("explicit allow_network=false must be preserved")
+	}
+}
+
+func TestUpdateCheckDefaults(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	cfg, err := LoadConfig(Options{Path: path, CreateIfMissing: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.Updates.Enabled || cfg.Updates.Channel != "auto" || cfg.Updates.CheckInterval != "15m" {
+		t.Fatalf("update defaults = %+v, want enabled/auto/15m", cfg.Updates)
 	}
 }
 

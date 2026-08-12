@@ -1,0 +1,193 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "reasoning_content": "The"
+    },
+    {
+      "reasoning_content": " command"
+    },
+    {
+      "reasoning_content": " worked"
+    },
+    {
+      "reasoning_content": " and"
+    },
+    {
+      "reasoning_content": " returned"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " global"
+    },
+    {
+      "reasoning_content": " git"
+    },
+    {
+      "reasoning_content": " config"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Now"
+    },
+    {
+      "reasoning_content": " summarize"
+    },
+    {
+      "reasoning_content": " in"
+    },
+    {
+      "reasoning_content": " one"
+    },
+    {
+      "reasoning_content": " line"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "content": "It"
+    },
+    {
+      "content": " worked"
+    },
+    {
+      "content": " —"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "git"
+    },
+    {
+      "content": " config"
+    },
+    {
+      "content": " --"
+    },
+    {
+      "content": "global"
+    },
+    {
+      "content": " --"
+    },
+    {
+      "content": "list"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " succeeded"
+    },
+    {
+      "content": " with"
+    },
+    {
+      "content": " sand"
+    },
+    {
+      "content": "box"
+    },
+    {
+      "content": "="
+    },
+    {
+      "content": "auto"
+    },
+    {
+      "content": " and"
+    },
+    {
+      "content": " printed"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " full"
+    },
+    {
+      "content": " global"
+    },
+    {
+      "content": " config"
+    },
+    {
+      "content": " ("
+    },
+    {
+      "content": "user"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " ali"
+    },
+    {
+      "content": "ases"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " diff"
+    },
+    {
+      "content": "/"
+    },
+    {
+      "content": "merge"
+    },
+    {
+      "content": " tools"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " credential"
+    },
+    {
+      "content": " helpers"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " and"
+    },
+    {
+      "content": " URL"
+    },
+    {
+      "content": " rew"
+    },
+    {
+      "content": "rites"
+    },
+    {
+      "content": ")."
+    },
+    {
+      "finish_reason": "stop"
+    },
+    {
+      "usage": {
+        "input_tokens": 8753,
+        "output_tokens": 59,
+        "cache_read_input_tokens": 8192,
+        "cache_miss_input_tokens": 561,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 16,
+        "cache_usage_reported": true
+      }
+    }
+  ]
+}

@@ -1,12 +1,75 @@
 package tools
 
 import (
+	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"selfmind/internal/kernel"
 )
+
+func TestReadOnlySkillOperationsDoNotCreateTenantDirectories(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	registry := NewRegistry()
+
+	for i := 0; i < 100; i++ {
+		tenantID := fmt.Sprintf("person-readonly-%03d", i)
+		if _, err := ListSkillsForTenant(tenantID, false); err != nil {
+			t.Fatalf("list %s: %v", tenantID, err)
+		}
+		if _, err := ReloadSkillToolsForTenant(tenantID, registry); err != nil {
+			t.Fatalf("reload %s: %v", tenantID, err)
+		}
+	}
+
+	entries, err := os.ReadDir(filepath.Join(home, ".selfmind"))
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatalf("read selfmind root: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("read-only skill operations created %d tenant directories", len(entries))
+	}
+}
+
+func TestAgentSkillStorageUsesControlTenantWithoutChangingExecutionScope(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	personID := "person-skill-owner"
+	runID := "run-skill-owner"
+	cleanup := SetExecutionScope(personID, ExecutionScope{
+		TenantID: "control", PersonID: personID, RunID: runID, WorkspaceRoot: t.TempDir(),
+	})
+	defer cleanup()
+	ctx := WithExecutionScopeKey(context.Background(), ExecutionScopeKeyForRun(runID))
+	args := map[string]interface{}{
+		"action":     "create",
+		"name":       "tenant-visible",
+		"content":    "Reusable tenant workflow.",
+		"_tenant_id": personID,
+		"_context":   ctx,
+		"_invocation_scope": kernel.ToolInvocationScope{
+			ControlTenantID: "control", PersonID: personID, RunID: runID,
+		},
+	}
+
+	if _, err := NewSkillManageTool().Execute(args); err != nil {
+		t.Fatalf("create skill: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".selfmind", "control", "skills", "tenant-visible", "SKILL.md")); err != nil {
+		t.Fatalf("control-tenant skill missing: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".selfmind", personID, "skills")); !os.IsNotExist(err) {
+		t.Fatalf("person skill directory should not be created, err=%v", err)
+	}
+	if scope, ok := currentExecutionScopeAny(args); !ok || scope.PersonID != personID || scope.RunID != runID {
+		t.Fatalf("execution scope changed while routing storage: ok=%v scope=%+v", ok, scope)
+	}
+}
 
 func TestSkillRuntimeListViewReloadAndSlashInvocation(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())

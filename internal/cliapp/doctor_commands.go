@@ -77,6 +77,10 @@ func (a *App) doctor(args []string) int {
 
 	configSection := a.collectConfigDiagnostics().section()
 	report := buildDoctorReport(ctx, store, identity, dataDir, a.gatewayStatusLine(), configSection, doctorLogLines)
+	if home, homeErr := selfMindHome(); homeErr == nil {
+		migration, migrationErr := tools.MigratePersonSkillsToControl(home, a.tenantID(), false, tools.DefaultSkillMigrationGrace)
+		report += "\n\n" + formatSkillPartitionDiagnostics(migration, migrationErr)
+	}
 	probeFailed := false
 	if *probeModels {
 		cfg, loadErr := config.LoadConfig(config.Options{Path: a.configPath})
@@ -111,6 +115,23 @@ func (a *App) doctor(args []string) int {
 	return 0
 }
 
+func formatSkillPartitionDiagnostics(report tools.SkillMigrationReport, err error) string {
+	var sb strings.Builder
+	sb.WriteString("== Skill partitions ==\n")
+	if err != nil {
+		fmt.Fprintf(&sb, "- inspect failed: %s", oneLine(tools.RedactSensitive(err.Error()), 180))
+		return sb.String()
+	}
+	if report.Partitions == 0 && report.EmptyPartitions == 0 {
+		sb.WriteString("- healthy: no person-partitioned skill assets need migration")
+		return sb.String()
+	}
+	fmt.Fprintf(&sb, "- migration needed: partitions=%d empty=%d migrate=%d dedupe=%d conflicts=%d\n", report.Partitions, report.EmptyPartitions, report.Migrated, report.Deduped, report.Conflicts)
+	sb.WriteString("- preview: selfmind maintenance migrate-skills\n")
+	sb.WriteString("- apply after review: selfmind maintenance migrate-skills --apply")
+	return sb.String()
+}
+
 func resolveDoctorIdentity(ctx context.Context, store *control.Store, tenantID, userID string) (*control.IdentityContext, error) {
 	identity, err := store.ResolveAccount(ctx, tenantID, "cli", userID)
 	if err != nil {
@@ -130,7 +151,7 @@ func formatModelRoleProbes(probes []appcore.ModelRoleProbe) (string, bool) {
 	var sb strings.Builder
 	sb.WriteString("== Model role probes ==\n")
 	if len(probes) == 0 {
-		sb.WriteString("(no explicitly configured roles)")
+		sb.WriteString("(no auxiliary model or explicit role overrides)")
 		return sb.String(), false
 	}
 	failed := false
@@ -147,8 +168,22 @@ func formatModelRoleProbes(probes []appcore.ModelRoleProbe) (string, bool) {
 		if probe.NativeToolsTested {
 			toolsStatus = "passed"
 		}
-		fmt.Fprintf(&sb, "- OK roles=%s provider=%s model=%s latency=%s native_tools=%s\n",
-			roles, valueOrUnknown(probe.Provider), valueOrUnknown(probe.Model), probe.Latency.Round(time.Millisecond), toolsStatus)
+		thinkingStatus := ""
+		if probe.ThinkingToolLoopTested {
+			thinkingStatus = " thinking=failed"
+			if probe.ThinkingToolLoopPassed {
+				thinkingStatus = " thinking=passed"
+			}
+		}
+		contractStatus := "n/a"
+		if probe.MaintenanceContractTested {
+			contractStatus = "failed"
+			if probe.MaintenanceContractPassed {
+				contractStatus = "passed"
+			}
+		}
+		fmt.Fprintf(&sb, "- OK roles=%s provider=%s model=%s latency=%s native_tools=%s maintenance_contract=%s%s\n",
+			roles, valueOrUnknown(probe.Provider), valueOrUnknown(probe.Model), probe.Latency.Round(time.Millisecond), toolsStatus, contractStatus, thinkingStatus)
 	}
 	return strings.TrimSpace(sb.String()), failed
 }
@@ -201,6 +236,9 @@ func (a *App) gatewayStatusLine() string {
 		return withService(fmt.Sprintf("running (pid=%d addr=%s), HTTP status unavailable", rec.PID, rec.Addr))
 	}
 	if rec, err := gatewayrt.ReadStatusRecord(manager.Paths.StatePath); err == nil && rec.State == "crashed" {
+		if strings.Contains(strings.ToLower(rec.ExitReason), "host or wsl session restarted") {
+			return withService(fmt.Sprintf("not running (previous host/session ended; instance=%s last_heartbeat=%s)", rec.InstanceID, rec.HeartbeatAt))
+		}
 		return withService(fmt.Sprintf("crashed (instance=%s reason=%s last_heartbeat=%s)", rec.InstanceID, rec.ExitReason, rec.HeartbeatAt))
 	}
 	return withService("not running")
@@ -244,6 +282,39 @@ func buildDoctorReport(ctx context.Context, store *control.Store, identity *cont
 			sb.WriteString("no migrated workspaces require trust review\n")
 		} else {
 			sb.WriteString("Review each path, then run `selfmind ws trust <workspace_id>` or leave it untrusted.\n")
+		}
+	}
+	sb.WriteString("\n")
+
+	sb.WriteString("== Background learning ==\n")
+	if health, err := store.MaintenanceHealthForPerson(ctx, identity.TenantID, identity.PersonID); err != nil {
+		fmt.Fprintf(&sb, "(error: %v)\n", err)
+	} else {
+		fmt.Fprintf(&sb, "queued: %d  retrying: %d  running: %d  provider-blocked: %d\n",
+			health.Pending, health.Failed, health.Running, health.Blocked)
+		if !health.OldestPendingAt.IsZero() {
+			fmt.Fprintf(&sb, "oldest unfinished: %s\n", time.Since(health.OldestPendingAt).Round(time.Second))
+		}
+		if !health.LastSuccessAt.IsZero() {
+			fmt.Fprintf(&sb, "last success: %s\n", health.LastSuccessAt.UTC().Format(time.RFC3339))
+		}
+		if reason := strings.TrimSpace(health.LastError); reason != "" {
+			fmt.Fprintf(&sb, "last error: %s\n", oneLine(tools.RedactSensitive(reason), 200))
+		}
+		for i, route := range health.BlockedRoutes {
+			if i >= 3 {
+				break
+			}
+			nextProbe := "probe pending"
+			if !route.NextProbeAt.IsZero() {
+				nextProbe = route.NextProbeAt.UTC().Format(time.RFC3339)
+			}
+			fmt.Fprintf(&sb, "blocked route: %s/%s  next probe: %s\n", route.Provider, route.Model, nextProbe)
+		}
+		if health.Failed > 0 || health.Blocked > 0 {
+			sb.WriteString("status: foreground work can continue; background learning is degraded\n")
+		} else {
+			sb.WriteString("status: healthy\n")
 		}
 	}
 	sb.WriteString("\n")

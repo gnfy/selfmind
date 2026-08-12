@@ -26,7 +26,7 @@ SelfMind 是一个用 Go 编写的个人 AI Agent 运行时。它的目标不是
 - workspace 隔离：文件、搜索、补丁、终端工具会限制在允许的工作目录内。
 - 长期记忆、历史会话检索、Skill 管理、后台复盘、Skill curator。
 - Hermes 风格的原生工具调用：OpenAI-compatible provider 优先使用 native tool calls，失败后回退到旧文本工具调用格式；工具层包含重复失败/无进展 guardrail 和敏感信息脱敏。
-- `models.roles` 模型路由：编码、记忆提取、后台复盘、Skill 整理、语义召回可以使用不同模型。
+- 主模型 + 辅助模型的简化路由；需要高级调优时再用 `models.roles` 单独覆盖。
 - 动态模型 runtime：支持 `provider_profiles`、实时模型列表、本地模型列表缓存，以及 Codex CLI、Claude Code、Gemini CLI、Qwen CLI 的 best-effort 登录复用。其中 Codex CLI 和 SelfMind 自有的 MiniMax OAuth profile 还会自动刷新过期的 access token。
 - 内置 IM 适配器：Telegram、个人/企业微信（Weixin，iLink 协议，内建扫码登录 `selfmind weixin login`）、飞书/Lark、QQ 官方机器人。微信走轮询入站 + 媒体下载；飞书/QQ 入站走通用 webhook、出站走 delivery sender。iLink 会话过期后重新运行 `selfmind weixin login` 即可；正在运行的 gateway 会热加载新凭据并恢复轮询，不需要重启。
 - MCP 客户端：基于 stdio/HTTP（JSON-RPC），支持多 server 连接和按需工具注册。
@@ -172,13 +172,13 @@ models:
     provider: "openai"
     model: "gpt-4o"
     reasoning: "auto"
-  # 角色模型只写例外；未配置的角色继承 primary。
+  # 审批、记忆、召回、摘要和 Skill 工作统一使用的辅助模型。
+  auxiliary:
+    provider: "google"
+    model: "gemini-1.5-flash"
+  # 可选的高级例外；未填写的字段继承 auxiliary。
   roles:
-    memory_extract: { provider: "google", model: "gemini-1.5-flash" }
-    background_review: { provider: "google", model: "gemini-1.5-flash" }
-    fast_classifier: { provider: "google", model: "gemini-1.5-flash" }
-    skill_curator: { provider: "google", model: "gemini-1.5-flash" }
-    semantic_recall: { provider: "google", model: "gemini-1.5-flash" }
+    fast_classifier: { model: "gemini-2.0-flash-lite" }
 
 # 核心 provider 配置区，适合 OpenAI / Anthropic / Google 这类一等公民供应商。
 providers:
@@ -448,8 +448,9 @@ models:
     reasoning: "auto"
 ```
 
-不同任务角色可以通过 `models.roles` 指定例外模型。未配置的角色继承
-`models.primary`，不需要额外的 `default` role：
+`models.auxiliary` 为审批、记忆、召回、摘要和 Skill 等后台工作提供统一默认模型。
+只有真正需要不同模型的角色才写进 `models.roles`；它的优先级高于 auxiliary，
+不需要额外的 `default` role：
 
 - `coding_agent`：主 Agent 编码和任务执行。
 - `memory_extract`：记忆事实提取。
@@ -457,10 +458,11 @@ models:
 - `fast_classifier`：直答路由、廉价分类和低延迟 smart 审批裁决。
 - `skill_curator`：Skill 整理和治理。
 - `semantic_recall`：历史会话语义召回。
+- `summarizer`：有界上下文压缩摘要。
 
 个人版从本地 YAML 读取。后续 SaaS 版可以沿用同样的 role 名称，从数据库中的租户、用户、workspace、预算策略里解析模型配置。
 
-smart 审批优先使用显式配置的 `fast_classifier`。旧配置可以兼容回退到显式配置的
+smart 审批使用显式配置或由 auxiliary 继承的 `fast_classifier`。旧配置可以兼容回退到显式配置的
 `background_review`，但绝不会静默借用 `models.primary`；两者都没配置时会安全地询问用户。
 
 ## 本地 TUI
@@ -713,18 +715,17 @@ flight_recorder:
 当某一轮出现值得永久防住的问题时，把它提升成离线 eval 用例：
 
 ```sh
-# 提升最近一轮（也可用 turn-id 代替 latest）
+# 把最近一轮捕获为私有草稿（也可用 turn-id 代替 latest）
 selfmind eval capture latest --title "搜索后端不可用时应报故障而非编造否定结论" --suite quality
 
-# 离线回放验证（用录制，不烧 provider 配额）
-SELFMIND_EVAL_VCR=replay selfmind eval run evalcases/quality/<case>.yaml
-# 或跑整个回归门禁：
+# 补充确定性断言并离线回放后，把 YAML 从 evaldrafts/ 移到 evalcases/，
+# cassette 从 .vcr-drafts/ 移到 .vcr/。之后完整发布门禁会自动包含它：
 selfmind selfcheck
 ```
 
 **提交 git 前务必打开生成的 YAML 脱敏**——飞行记录是明文对话，请去掉真实姓名、隐私 query、任何不该进仓库的内容。
 
-整条闭环：正常使用 → `selfmind doctor` 发现问题 → `eval capture` 冻结坏 turn → `eval run` 确认以后能被抓到。
+整条闭环：正常使用 → `selfmind doctor` 发现问题 → `eval capture` 冻结私有草稿 → 补断言并回放 → 显式提升进发布语料。
 
 ## Gateway 模式
 

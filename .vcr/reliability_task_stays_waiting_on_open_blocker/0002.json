@@ -1,0 +1,373 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "reasoning_content": "The"
+    },
+    {
+      "reasoning_content": " workspace"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " empty"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " The"
+    },
+    {
+      "reasoning_content": " task"
+    },
+    {
+      "reasoning_content": " instruction"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " clear"
+    },
+    {
+      "reasoning_content": ":"
+    },
+    {
+      "reasoning_content": " park"
+    },
+    {
+      "reasoning_content": " this"
+    },
+    {
+      "reasoning_content": " task"
+    },
+    {
+      "reasoning_content": " because"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " user"
+    },
+    {
+      "reasoning_content": " must"
+    },
+    {
+      "reasoning_content": " provide"
+    },
+    {
+      "reasoning_content": " a"
+    },
+    {
+      "reasoning_content": " production"
+    },
+    {
+      "reasoning_content": " change"
+    },
+    {
+      "reasoning_content": " ticket"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Finish"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " run"
+    },
+    {
+      "reasoning_content": " as"
+    },
+    {
+      "reasoning_content": " waiting"
+    },
+    {
+      "reasoning_content": "_user"
+    },
+    {
+      "reasoning_content": " and"
+    },
+    {
+      "reasoning_content": " do"
+    },
+    {
+      "reasoning_content": " not"
+    },
+    {
+      "reasoning_content": " invent"
+    },
+    {
+      "reasoning_content": " or"
+    },
+    {
+      "reasoning_content": " resolve"
+    },
+    {
+      "reasoning_content": " that"
+    },
+    {
+      "reasoning_content": " input"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "So"
+    },
+    {
+      "reasoning_content": " I"
+    },
+    {
+      "reasoning_content": " should"
+    },
+    {
+      "reasoning_content": " call"
+    },
+    {
+      "reasoning_content": " finish"
+    },
+    {
+      "reasoning_content": "_run"
+    },
+    {
+      "reasoning_content": " with"
+    },
+    {
+      "reasoning_content": " status"
+    },
+    {
+      "reasoning_content": " waiting"
+    },
+    {
+      "reasoning_content": "_user"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " and"
+    },
+    {
+      "reasoning_content": " clearly"
+    },
+    {
+      "reasoning_content": " state"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " task"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " parked"
+    },
+    {
+      "reasoning_content": " waiting"
+    },
+    {
+      "reasoning_content": " on"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " user"
+    },
+    {
+      "reasoning_content": " to"
+    },
+    {
+      "reasoning_content": " provide"
+    },
+    {
+      "reasoning_content": " a"
+    },
+    {
+      "reasoning_content": " production"
+    },
+    {
+      "reasoning_content": " change"
+    },
+    {
+      "reasoning_content": " ticket"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " I"
+    },
+    {
+      "reasoning_content": " should"
+    },
+    {
+      "reasoning_content": " not"
+    },
+    {
+      "reasoning_content": " invent"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " ticket"
+    },
+    {
+      "reasoning_content": " or"
+    },
+    {
+      "reasoning_content": " resolve"
+    },
+    {
+      "reasoning_content": " it"
+    },
+    {
+      "reasoning_content": " myself"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "content": "The"
+    },
+    {
+      "content": " workspace"
+    },
+    {
+      "content": " is"
+    },
+    {
+      "content": " empty"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " and"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " task"
+    },
+    {
+      "content": " is"
+    },
+    {
+      "content": " waiting"
+    },
+    {
+      "content": " on"
+    },
+    {
+      "content": " user"
+    },
+    {
+      "content": " input"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": " I"
+    },
+    {
+      "content": "'ll"
+    },
+    {
+      "content": " park"
+    },
+    {
+      "content": " it"
+    },
+    {
+      "content": " as"
+    },
+    {
+      "content": " waiting"
+    },
+    {
+      "content": "_user"
+    },
+    {
+      "content": " per"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " task"
+    },
+    {
+      "content": " instruction"
+    },
+    {
+      "content": ","
+    },
+    {
+      "content": " without"
+    },
+    {
+      "content": " invent"
+    },
+    {
+      "content": "ing"
+    },
+    {
+      "content": " or"
+    },
+    {
+      "content": " resolving"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " production"
+    },
+    {
+      "content": " change"
+    },
+    {
+      "content": " ticket"
+    },
+    {
+      "content": "."
+    },
+    {
+      "finish_reason": "tool_calls"
+    },
+    {
+      "usage": {
+        "input_tokens": 8465,
+        "output_tokens": 331,
+        "cache_read_input_tokens": 8320,
+        "cache_miss_input_tokens": 145,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 79,
+        "cache_usage_reported": true
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_00_7hvqGq26iX698QzsZEh06303",
+          "Function": "finish_run",
+          "Args": "{\"status\": \"waiting_user\", \"summary\": \"Task parked. Work cannot proceed until the user provides a production change ticket; the run is finishing as waiting_user and will not invent or resolve that input.\", \"done\": [\"Inspected workspace (empty; no in-progress artifacts to preserve)\"], \"next_steps\": [\"Wait for the user to provide the production change ticket\", \"Once the ticket is supplied, resume the task and proceed with the production change work\"], \"risks\": [\"Production change is blocked pending user-provided change ticket\"], \"need_approve\": false}"
+        }
+      ]
+    }
+  ]
+}

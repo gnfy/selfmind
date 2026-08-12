@@ -1,0 +1,343 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "reasoning_content": "The"
+    },
+    {
+      "reasoning_content": " user"
+    },
+    {
+      "reasoning_content": " asks"
+    },
+    {
+      "reasoning_content": " a"
+    },
+    {
+      "reasoning_content": " simple"
+    },
+    {
+      "reasoning_content": " question"
+    },
+    {
+      "reasoning_content": ":"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "用"
+    },
+    {
+      "reasoning_content": "一句话"
+    },
+    {
+      "reasoning_content": "说明"
+    },
+    {
+      "reasoning_content": " HTTP"
+    },
+    {
+      "reasoning_content": " "
+    },
+    {
+      "reasoning_content": "状态"
+    },
+    {
+      "reasoning_content": "码"
+    },
+    {
+      "reasoning_content": " "
+    },
+    {
+      "reasoning_content": "200"
+    },
+    {
+      "reasoning_content": " "
+    },
+    {
+      "reasoning_content": "表示"
+    },
+    {
+      "reasoning_content": "什么"
+    },
+    {
+      "reasoning_content": "。\""
+    },
+    {
+      "reasoning_content": " ("
+    },
+    {
+      "reasoning_content": "Explain"
+    },
+    {
+      "reasoning_content": " in"
+    },
+    {
+      "reasoning_content": " one"
+    },
+    {
+      "reasoning_content": " sentence"
+    },
+    {
+      "reasoning_content": " what"
+    },
+    {
+      "reasoning_content": " HTTP"
+    },
+    {
+      "reasoning_content": " status"
+    },
+    {
+      "reasoning_content": " code"
+    },
+    {
+      "reasoning_content": " "
+    },
+    {
+      "reasoning_content": "200"
+    },
+    {
+      "reasoning_content": " means"
+    },
+    {
+      "reasoning_content": ".)\n\n"
+    },
+    {
+      "reasoning_content": "According"
+    },
+    {
+      "reasoning_content": " to"
+    },
+    {
+      "reasoning_content": " AG"
+    },
+    {
+      "reasoning_content": "ENTS"
+    },
+    {
+      "reasoning_content": ".md"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " I"
+    },
+    {
+      "reasoning_content": " must"
+    },
+    {
+      "reasoning_content": " end"
+    },
+    {
+      "reasoning_content": " every"
+    },
+    {
+      "reasoning_content": " reply"
+    },
+    {
+      "reasoning_content": " with"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " exact"
+    },
+    {
+      "reasoning_content": " token"
+    },
+    {
+      "reasoning_content": " `"
+    },
+    {
+      "reasoning_content": "ACK"
+    },
+    {
+      "reasoning_content": "-CT"
+    },
+    {
+      "reasoning_content": "X"
+    },
+    {
+      "reasoning_content": "-"
+    },
+    {
+      "reasoning_content": "773"
+    },
+    {
+      "reasoning_content": "1"
+    },
+    {
+      "reasoning_content": "`"
+    },
+    {
+      "reasoning_content": " on"
+    },
+    {
+      "reasoning_content": " its"
+    },
+    {
+      "reasoning_content": " own"
+    },
+    {
+      "reasoning_content": " final"
+    },
+    {
+      "reasoning_content": " line"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Also"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " answer"
+    },
+    {
+      "reasoning_content": " in"
+    },
+    {
+      "reasoning_content": " one"
+    },
+    {
+      "reasoning_content": " short"
+    },
+    {
+      "reasoning_content": " sentence"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "This"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " a"
+    },
+    {
+      "reasoning_content": " direct"
+    },
+    {
+      "reasoning_content": " answer"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " no"
+    },
+    {
+      "reasoning_content": " tools"
+    },
+    {
+      "reasoning_content": " needed"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "content": "HTTP"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "状态"
+    },
+    {
+      "content": "码"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "200"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "表示"
+    },
+    {
+      "content": "请求"
+    },
+    {
+      "content": "已"
+    },
+    {
+      "content": "成功"
+    },
+    {
+      "content": "处理"
+    },
+    {
+      "content": "，"
+    },
+    {
+      "content": "服务器"
+    },
+    {
+      "content": "正常"
+    },
+    {
+      "content": "返回"
+    },
+    {
+      "content": "了"
+    },
+    {
+      "content": "所"
+    },
+    {
+      "content": "请求"
+    },
+    {
+      "content": "的内容"
+    },
+    {
+      "content": "。\n\n"
+    },
+    {
+      "content": "ACK"
+    },
+    {
+      "content": "-CT"
+    },
+    {
+      "content": "X"
+    },
+    {
+      "content": "-"
+    },
+    {
+      "content": "773"
+    },
+    {
+      "content": "1"
+    },
+    {
+      "finish_reason": "stop"
+    },
+    {
+      "usage": {
+        "input_tokens": 8116,
+        "output_tokens": 109,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 8116,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 81,
+        "cache_usage_reported": true
+      }
+    }
+  ]
+}

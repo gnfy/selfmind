@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 )
@@ -57,6 +58,60 @@ func TestCheckReadsDistTagAndWritesCache(t *testing.T) {
 	}
 }
 
+func TestCheckSucceedsWhenCacheCannotBeWritten(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"latest":"1.2.3"}`)
+	}))
+	defer server.Close()
+
+	t.Setenv("SELFMIND_UPDATE_REGISTRY_URL", server.URL)
+	// CachePath becomes <HOME>/.selfmind/update.json. Making .selfmind a
+	// regular file makes persistence fail on every OS without relying on Unix
+	// permission semantics (root can write through chmod-based tests).
+	home := t.TempDir()
+	if err := os.WriteFile(filepath.Join(home, ".selfmind"), []byte("occupied"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+
+	result, err := Check(context.Background(), "1.2.0", "latest")
+	if err != nil {
+		t.Fatalf("registry success must survive cache failure: %v", err)
+	}
+	if result.Latest != "1.2.3" || !result.UpdateAvailable() {
+		t.Fatalf("unexpected result: %+v", result)
+	}
+}
+
+func TestWriteCacheConcurrentWritersRemainReadable(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "update.json")
+	const writers = 16
+	var wg sync.WaitGroup
+	errs := make(chan error, writers)
+	for i := 0; i < writers; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			errs <- writeCache(path, Result{
+				Current:   "1.0.0",
+				Latest:    fmt.Sprintf("1.0.%d", i),
+				Channel:   "latest",
+				CheckedAt: time.Now().UTC(),
+			})
+		}(i)
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("concurrent write failed: %v", err)
+		}
+	}
+	if _, err := ReadCache(path); err != nil {
+		t.Fatalf("final cache is unreadable: %v", err)
+	}
+}
+
 // Channel identity lives in the artifact: "auto" follows the running
 // version's line, explicit values are pins that always win.
 func TestResolveChannel(t *testing.T) {
@@ -69,8 +124,8 @@ func TestResolveChannel(t *testing.T) {
 		{"auto", "0.2.0", "latest"},
 		{"", "v0.1.0-beta.5", "next"},
 		{"", "1.0.0", "latest"},
-		{"auto", "v0.1.0-dev", "next"},   // dev builds track next
-		{"auto", "not-a-version", "next"}, // unparseable = non-release build
+		{"auto", "v0.1.0-dev", "next"},        // dev builds track next
+		{"auto", "not-a-version", "next"},     // unparseable = non-release build
 		{"latest", "v0.1.0-beta.5", "latest"}, // pin wins over inference
 		{"next", "1.0.0", "next"},
 		{"beta", "1.0.0", "next"},

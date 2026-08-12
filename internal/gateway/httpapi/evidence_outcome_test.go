@@ -125,6 +125,32 @@ func TestApplyVerificationOutcomeUsesDistinctPartialState(t *testing.T) {
 	}
 }
 
+func TestApplyVerificationOutcomePreservesDurableParkedStatus(t *testing.T) {
+	for _, status := range []string{"waiting_external", "waiting_user", "waiting_finalization", "blocked"} {
+		t.Run(status, func(t *testing.T) {
+			outcome := applyVerificationOutcome(api.RunOutcome{
+				Status: status,
+				Files:  []string{"main.go"},
+				Verification: &api.VerificationOutcome{
+					State: "not_run",
+				},
+			})
+			if outcome.Status != status {
+				t.Fatalf("status=%q, want %q", outcome.Status, status)
+			}
+			if outcome.CompletionReason != status {
+				t.Fatalf("completion reason=%q, want %q", outcome.CompletionReason, status)
+			}
+			if outcome.Resumable {
+				t.Fatal("durable parked status must retain its own wake-up semantics")
+			}
+			if len(outcome.NextSteps) == 0 {
+				t.Fatal("verification follow-up was not retained")
+			}
+		})
+	}
+}
+
 func TestVerificationNoticeIsConciseAndEnglish(t *testing.T) {
 	got := withVerificationNotice("Changed the file.", &api.VerificationOutcome{
 		State:   "not_run",

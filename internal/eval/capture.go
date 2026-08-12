@@ -13,9 +13,9 @@ import (
 // CaptureOptions configures how a recorded flight turn becomes an eval case.
 type CaptureOptions struct {
 	Title  string // one-line human title / intent ("continuation should keep task")
-	Suite  string // suite dir under evalcases/ (default "captured")
-	VCRDir string // cassette root (default ".vcr")
-	OutDir string // case output dir (default "evalcases/<suite>")
+	Suite  string // suite dir under evaldrafts/ (default "captured")
+	VCRDir string // draft cassette root (default ".vcr-drafts")
+	OutDir string // draft case output dir (default "evaldrafts/<suite>")
 }
 
 // CaptureResult reports where the new case + cassette landed.
@@ -45,8 +45,8 @@ func CaptureFromFlight(turnID string, opts CaptureOptions) (*CaptureResult, erro
 	}
 
 	suite := firstNonEmpty(opts.Suite, "captured")
-	vcrDir := firstNonEmpty(opts.VCRDir, ".vcr")
-	outDir := firstNonEmpty(opts.OutDir, filepath.Join("evalcases", suite))
+	vcrDir := firstNonEmpty(opts.VCRDir, ".vcr-drafts")
+	outDir := firstNonEmpty(opts.OutDir, filepath.Join("evaldrafts", suite))
 	caseID := slugifyCase(opts.Title, turnID)
 
 	// Copy the recorded cassette (NNNN.json only, not meta.json) so the case
@@ -105,7 +105,8 @@ func renderCaseYAML(caseID, title, suite, channel, prompt string) string {
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Captured from a real run on %s. Edit assert_state/expect below to\n", time.Now().Format("2006-01-02"))
-	fmt.Fprintf(&b, "# encode WHAT SHOULD HAVE HAPPENED, then it replays offline in selfcheck/CI.\n")
+	fmt.Fprintf(&b, "# encode WHAT SHOULD HAVE HAPPENED. Promote the reviewed YAML to evalcases/\n")
+	fmt.Fprintf(&b, "# and its cassette to .vcr/ before it becomes release evidence.\n")
 	fmt.Fprintf(&b, "id: %s\n", caseID)
 	fmt.Fprintf(&b, "title: %q\n", title)
 	fmt.Fprintf(&b, "suite: %s\n", suite)

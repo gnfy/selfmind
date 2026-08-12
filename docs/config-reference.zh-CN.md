@@ -62,7 +62,60 @@ provider_profiles:           # 可扩展注册表（Kimi、MiniMax、DeepSeek、
 - provider 配置只管理连接和认证；模型选择统一写在 `models.primary`。
   endpoint 中旧的 `model` 字段仅为兼容历史配置继续读取。
 
-## 2. 模型路由（角色）
+### 通用 Provider 请求扩展
+
+SelfMind 采用与 OpenAI Python SDK 一致的三个名称：`extra_headers`、
+`extra_body`、`extra_query`。Provider 通用参数放在
+`provider_profiles.<id>`；只有某个后台角色需要不同参数时，才放在
+`models.roles.<role>`。它们统一适用于 OpenAI Chat/Compatible、Anthropic
+Messages 和 Responses 协议。可对照
+[OpenAI Python 请求扩展说明](https://github.com/openai/openai-python#undocumented-request-params)
+与 [DeepSeek 用户隔离说明](https://api-docs.deepseek.com/zh-cn/quick_start/rate_limit)。
+
+```yaml
+provider_profiles:
+  deepseek:
+    extra_headers:
+      X-Org-Proxy-Token: "${ORG_PROXY_TOKEN}"
+    extra_body:
+      user_id: "selfmind-workstation-01"
+    extra_query:
+      api-version: "2026-08-11"
+```
+
+- `extra_body` 会递归合并到标准请求体之后，因此显式字段可以覆盖自动派生的
+  可选字段。例如配置 `extra_body.user_id` 后，它会覆盖 SelfMind 自动生成的
+  DeepSeek 匿名 `user_id`；不配置则继续使用匿名派生值。
+- `extra_query` 保留 URL 原有查询参数，只覆盖自己声明的键；列表会编码为同名
+  多值参数。
+- 三个映射中的字符串都支持 `${ENV_VAR}` 展开。
+- DeepSeek 将 `user_id` 定义为同一账号下用于调度与隔离的标识，并非凭证；但仍
+  建议使用稳定、无业务含义的值，不要写姓名、邮箱、手机号、提示词等隐私信息。
+- `selfmind model check` 会显示合并后的 header 来源，以及 body/query 的键名，
+  但不会回显 body/query 的值。
+- 旧 `headers` 继续兼容；新配置和文档统一使用 `extra_headers`，同名键由新字段
+  覆盖。
+
+有类型的传输兼容规则放在 `quirks`，任意厂商请求参数放在 `extra_*`：
+
+```yaml
+provider_profiles:
+  example-anthropic:
+    quirks:
+      auth_header: bearer
+      tool_schema: anthropic
+      thinking_mode: anthropic
+      user_identity_field: auto
+      http_version: auto
+      prompt_cache: false       # 显式 false 可以覆盖内置 true
+```
+
+布尔 quirk 省略时继承内置 profile；只有 endpoint 契约不同时才显式写 `true` 或
+`false`。匿名身份可用 `auto`、`user_id`、`metadata.user_id`、`off`；HTTP 版本可用
+`auto`、`http1`、`http2`。`system_message_mode` 已废弃并被忽略。
+`selfmind model check` 会显示最终契约和警告。
+
+## 2. 模型路由
 
 后台任务用比主对话更便宜/更快的模型，让重的记忆/技能工作不占用你的主配额。
 
@@ -73,23 +126,21 @@ models:
     provider: "codex-cli"
     model: "gpt-5.6-sol"
     reasoning: "xhigh"       # 可选
+  auxiliary:                  # 后台工作的统一默认模型
+    provider: "kimi-coding"
+    model: "kimi-for-coding"
   roles:
-    memory_extract:          # 记忆写入 + 整理 + 压缩摘要
-      provider: "kimi-coding"
-      model: "kimi-for-coding"
-      # 可选的角色级覆盖，仅用于自定义网关。Kimi Coding Plan 的
-      # 默认协议是 anthropic_messages，与 /coding endpoint 一致。
-    background_review:       # 技能/记忆自审
-      provider: "kimi-coding"
-      model: "kimi-for-coding"
-    semantic_recall:         # 召回的查询扩展（可选）
-      provider: "kimi-coding"
-      model: "kimi-for-coding"
-    skill_curator: { provider: "kimi-coding", model: "kimi-for-coding" }
-    fast_classifier: { provider: "kimi-coding", model: "kimi-for-coding" } # 直答、廉价分类、smart 审批裁决
+    # 可选的高级例外；没有列出的后台角色使用 auxiliary。
+    fast_classifier: { model: "kimi-for-coding-fast" }
 ```
 
-`models.primary` 是唯一的默认模型入口。`reasoning` 和 `service_tier`
+`models.primary` 只负责主对话和前台执行。`models.auxiliary` 是
+`fast_classifier`、`memory_extract`、`background_review`、`skill_curator`、
+`semantic_recall` 和 `summarizer` 的统一默认模型。`models.roles.<role>`
+是可选的高级覆盖，优先级最高；只覆盖 `model` 等局部字段时，其余字段继承
+`models.auxiliary`。
+
+`reasoning` 和 `service_tier`
 都可省略；省略或写 `auto` 时使用 provider/模型默认值，不强制向接口发送。
 存在能力元数据时，`selfmind model set` 会动态校验取值，
 `selfmind model current` 会显示探测到的默认值。
@@ -99,10 +150,11 @@ models:
 Plan `/coding` 路径的实际协议一致。角色级 `protocol` 只用于自定义网关
 或协议不同的特殊部署；正常使用 Kimi Coding Plan 时应省略。
 
-角色名固定；没配的角色回退到主模型。指向便宜模型可以把后台工作从主 provider
-挪开。不需要也不存在 `default` 角色；`models.roles` 只写真正需要覆盖主模型的例外。
+不需要也不存在 `default` 角色。`vision` 等能力特定角色不会自动继承辅助模型，
+需要时应显式配置。旧配置继续逐项列出后台角色也完全兼容。
 
-smart 审批比普通角色继承更严格：它使用显式配置的 `fast_classifier`；旧配置可以
+smart 审批比普通角色继承更严格：它使用显式配置或由 `models.auxiliary` 继承的
+`fast_classifier`；旧配置可以
 兼容回退到显式配置的 `background_review`，但审批裁决绝不会静默使用
 `models.primary`。两条路由都不存在或未及时响应时，操作会升级为人工确认。
 
@@ -332,7 +384,7 @@ mcp:
       command: "my-mcp-server"  # stdio 用
       args: []
       url: ""                   # http 用
-      headers: {}
+      extra_headers: {}
 ```
 
 默认为空。每个服务器的工具按需注册。
@@ -366,9 +418,31 @@ evolution:
 新证据才会扩展，简单回答也不会因此被强制调用工具。默认值已按常规使用
 调好；只在排查传输抖动或调工具循环时才动。
 
-`approval_triage_timeout` 与主模型的传输超时相互独立。显式配置的
+`approval_triage_timeout` 与主模型的传输超时相互独立。辅助或显式配置的
 `fast_classifier` 如果未在该预算内返回，smart 模式会安全降级为人工审批。
 默认值是 30 秒；设置过短会把可用的推理型廉价模型误判成不可用。
+
+## 13. 更新检查与反馈
+
+```yaml
+updates:
+  enabled: true
+  channel: "auto"         # auto（跟随已安装版本线）| latest | next
+  check_interval: "15m"   # 使用本地缓存，不阻塞 TUI 启动
+
+feedback:
+  repository: "gnfy/selfmind"
+  labels: []
+  endpoint: ""
+```
+
+启动检查只负责发现新版本并提示，不会在工作过程中静默替换二进制。
+`selfmind update check` 只查询版本；`selfmind update` 会调用当前包管理器安装、
+验证新二进制，并在安全回合边界重启正在运行的 gateway。预发布版本在
+`channel: auto` 下跟随 `next`，稳定版本跟随 `latest`。
+
+`selfmind feedback` 默认只生成本地脱敏报告；显式使用 `--send` 时，才会通过
+已登录的 GitHub CLI 向配置的仓库创建 Issue。SelfMind 不保存 GitHub token。
 
 ---
 
@@ -380,6 +454,9 @@ models:
     provider: "codex-cli"
     model: "gpt-5.6-sol"
     reasoning: "xhigh"
+  auxiliary:
+    provider: "deepseek"
+    model: "deepseek-v4-flash"
 provider_profiles:
   codex-cli:
     base_url: "https://chatgpt.com/backend-api/codex"
@@ -389,5 +466,5 @@ web:
   api_key: "tvly-xxxx"
 ```
 
-其余全部回退到合理默认值。随需求增长再加 IM 渠道、角色模型、记忆治理。
+其余全部回退到合理默认值。随需求增长再加 IM 渠道、逐角色例外和记忆治理。
 **任何改动后都要重启 daemon。**

@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -47,6 +48,12 @@ func TestResolverReusesCodexCLIAuthFromSelfMindStore(t *testing.T) {
 	}
 	if !rt.Quirks.ResponsesRequireStream {
 		t.Fatalf("ResponsesRequireStream = false, want true for codex-cli")
+	}
+	if rt.Headers["originator"] != "codex_cli_rs" {
+		t.Fatalf("originator header = %q, want codex_cli_rs", rt.Headers["originator"])
+	}
+	if rt.Headers["OpenAI-Beta"] != "responses=experimental" {
+		t.Fatalf("OpenAI-Beta header = %q", rt.Headers["OpenAI-Beta"])
 	}
 }
 
@@ -318,6 +325,43 @@ func TestBuiltinPromptCachePolicy(t *testing.T) {
 	}
 }
 
+func TestProviderConfigCanDisableBuiltinPromptCacheAndForceHTTP2(t *testing.T) {
+	disabled := false
+	cfg := &config.Config{
+		Models: config.ModelsConfig{Primary: config.ModelSelectionConfig{Provider: "anthropic", Model: "claude-test"}},
+		Providers: config.ProvidersConfig{
+			Anthropic: config.ProviderEndpoint{
+				APIKey: "test-key",
+				Quirks: config.ProviderQuirks{PromptCache: &disabled, HTTPVersion: "http2"},
+			},
+		},
+	}
+	cfg.Normalize()
+	rt, err := NewResolver(cfg).Resolve(context.Background(), Selection{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rt.Quirks.PromptCache {
+		t.Fatal("explicit prompt_cache: false did not override the built-in Anthropic profile")
+	}
+	if rt.Quirks.DisableHTTP2 || rt.Quirks.HTTPVersion != "http2" {
+		t.Fatalf("HTTP override = version=%q disable_http2=%t", rt.Quirks.HTTPVersion, rt.Quirks.DisableHTTP2)
+	}
+}
+
+func TestResolverRejectsUnknownQuirkValues(t *testing.T) {
+	cfg := &config.Config{
+		Models: config.ModelsConfig{Primary: config.ModelSelectionConfig{Provider: "deepseek", Model: "deepseek-test"}},
+		ProviderProfiles: map[string]config.ProviderEndpoint{
+			"deepseek": {APIKey: "test-key", Quirks: config.ProviderQuirks{HTTPVersion: "http3"}},
+		},
+	}
+	cfg.Normalize()
+	if _, err := NewResolver(cfg).Resolve(context.Background(), Selection{}); err == nil || !strings.Contains(err.Error(), "unsupported http_version") {
+		t.Fatalf("Resolve error = %v, want unsupported http_version", err)
+	}
+}
+
 func TestResolverContextLengthOverrides(t *testing.T) {
 	cfg := &config.Config{
 		Model: config.ModelConfig{Provider: "kimi-coding", Default: "kimi-for-coding", ContextLength: 131072},
@@ -505,5 +549,45 @@ func TestProviderProfileHeaderOverridesBuiltin(t *testing.T) {
 	}
 	if got := rt.Headers["User-Agent"]; got != "claude-code/0.2.0" {
 		t.Fatalf("provider_profiles must override the built-in header, got %q", got)
+	}
+}
+
+func TestProviderRequestExtrasMergeWithSelectionOverrides(t *testing.T) {
+	cfg := &config.Config{
+		Model: config.ModelConfig{Provider: "deepseek", Default: "deepseek-v4-flash"},
+		ProviderProfiles: map[string]config.ProviderEndpoint{
+			"deepseek": {
+				APIKey:       "sk-test",
+				Protocol:     "openai_compatible",
+				ExtraHeaders: map[string]string{"X-Profile": "profile", "X-Override": "profile"},
+				ExtraBody: map[string]interface{}{
+					"user_id":  "profile-user",
+					"metadata": map[string]interface{}{"profile": true, "override": "profile"},
+				},
+				ExtraQuery: map[string]interface{}{"api-version": "profile"},
+			},
+		},
+	}
+	cfg.Normalize()
+	rt, err := NewResolver(cfg).Resolve(context.Background(), Selection{
+		ExtraHeaders: map[string]string{"X-Override": "role"},
+		ExtraBody: map[string]interface{}{
+			"user_id":  "role-user",
+			"metadata": map[string]interface{}{"override": "role"},
+		},
+		ExtraQuery: map[string]interface{}{"api-version": "role"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rt.Headers["X-Profile"] != "profile" || rt.Headers["X-Override"] != "role" {
+		t.Fatalf("headers = %#v", rt.Headers)
+	}
+	if rt.ExtraBody["user_id"] != "role-user" || rt.ExtraQuery["api-version"] != "role" {
+		t.Fatalf("extras = body:%#v query:%#v", rt.ExtraBody, rt.ExtraQuery)
+	}
+	metadata := rt.ExtraBody["metadata"].(map[string]interface{})
+	if metadata["profile"] != true || metadata["override"] != "role" {
+		t.Fatalf("nested metadata = %#v", metadata)
 	}
 }

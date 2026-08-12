@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"syscall"
@@ -42,7 +43,7 @@ type Options struct {
 	ConfigPath   string
 }
 
-func Run(ctx context.Context, opts Options) error {
+func Run(ctx context.Context, opts Options) (runErr error) {
 	cfg, err := config.LoadConfig(config.Options{Path: opts.ConfigPath})
 	if err != nil {
 		// Fail fast: LoadConfig auto-creates the default template when the file
@@ -91,6 +92,18 @@ func Run(ctx context.Context, opts Options) error {
 	}
 	exitReason := ""
 	defer func() {
+		if recovered := recover(); recovered != nil {
+			reason := tools.RedactSensitive(fmt.Sprintf("panic: %v", recovered))
+			log.Error("gateway: top-level panic", "error", reason, "stack", string(debug.Stack()))
+			manager.Crash(reason)
+			panic(recovered)
+		}
+		if runErr != nil {
+			reason := tools.RedactSensitive(runErr.Error())
+			log.Error("gateway: stopped because of an error", "error", reason)
+			manager.Crash(reason)
+			return
+		}
 		manager.Cleanup(exitReason)
 	}()
 

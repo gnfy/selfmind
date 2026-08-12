@@ -1,0 +1,538 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "reasoning_content": "Let"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " understand"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " situation"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " The"
+    },
+    {
+      "reasoning_content": " task"
+    },
+    {
+      "reasoning_content": " title"
+    },
+    {
+      "reasoning_content": " says"
+    },
+    {
+      "reasoning_content": ":"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "Park"
+    },
+    {
+      "reasoning_content": " this"
+    },
+    {
+      "reasoning_content": " task"
+    },
+    {
+      "reasoning_content": " because"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " user"
+    },
+    {
+      "reasoning_content": " must"
+    },
+    {
+      "reasoning_content": " provide"
+    },
+    {
+      "reasoning_content": " a"
+    },
+    {
+      "reasoning_content": " production"
+    },
+    {
+      "reasoning_content": " change"
+    },
+    {
+      "reasoning_content": " ticket"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " Finish"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " run"
+    },
+    {
+      "reasoning_content": " as"
+    },
+    {
+      "reasoning_content": " waiting"
+    },
+    {
+      "reasoning_content": "_user"
+    },
+    {
+      "reasoning_content": " and"
+    },
+    {
+      "reasoning_content": " do"
+    },
+    {
+      "reasoning_content": " not"
+    },
+    {
+      "reasoning_content": " invent"
+    },
+    {
+      "reasoning_content": " or"
+    },
+    {
+      "reasoning_content": " resolve"
+    },
+    {
+      "reasoning_content": " that"
+    },
+    {
+      "reasoning_content": " input"
+    },
+    {
+      "reasoning_content": ".\"\n\n"
+    },
+    {
+      "reasoning_content": "So"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " instruction"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " clear"
+    },
+    {
+      "reasoning_content": ":"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " task"
+    },
+    {
+      "reasoning_content": " should"
+    },
+    {
+      "reasoning_content": " be"
+    },
+    {
+      "reasoning_content": " parked"
+    },
+    {
+      "reasoning_content": "/f"
+    },
+    {
+      "reasoning_content": "inished"
+    },
+    {
+      "reasoning_content": " with"
+    },
+    {
+      "reasoning_content": " status"
+    },
+    {
+      "reasoning_content": " waiting"
+    },
+    {
+      "reasoning_content": "_user"
+    },
+    {
+      "reasoning_content": " because"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " user"
+    },
+    {
+      "reasoning_content": " must"
+    },
+    {
+      "reasoning_content": " provide"
+    },
+    {
+      "reasoning_content": " a"
+    },
+    {
+      "reasoning_content": " production"
+    },
+    {
+      "reasoning_content": " change"
+    },
+    {
+      "reasoning_content": " ticket"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "reasoning_content": " I"
+    },
+    {
+      "reasoning_content": " should"
+    },
+    {
+      "reasoning_content": " not"
+    },
+    {
+      "reasoning_content": " invent"
+    },
+    {
+      "reasoning_content": " or"
+    },
+    {
+      "reasoning_content": " resolve"
+    },
+    {
+      "reasoning_content": " that"
+    },
+    {
+      "reasoning_content": " input"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "This"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " a"
+    },
+    {
+      "reasoning_content": " reliability"
+    },
+    {
+      "reasoning_content": " eval"
+    },
+    {
+      "reasoning_content": " task"
+    },
+    {
+      "reasoning_content": ":"
+    },
+    {
+      "reasoning_content": " \""
+    },
+    {
+      "reasoning_content": "task"
+    },
+    {
+      "reasoning_content": "_st"
+    },
+    {
+      "reasoning_content": "ays"
+    },
+    {
+      "reasoning_content": "_w"
+    },
+    {
+      "reasoning_content": "ait"
+    },
+    {
+      "reasoning_content": "ing"
+    },
+    {
+      "reasoning_content": "_on"
+    },
+    {
+      "reasoning_content": "_open"
+    },
+    {
+      "reasoning_content": "_block"
+    },
+    {
+      "reasoning_content": "er"
+    },
+    {
+      "reasoning_content": "\"."
+    },
+    {
+      "reasoning_content": " The"
+    },
+    {
+      "reasoning_content": " expected"
+    },
+    {
+      "reasoning_content": " behavior"
+    },
+    {
+      "reasoning_content": " is"
+    },
+    {
+      "reasoning_content": " to"
+    },
+    {
+      "reasoning_content": " finish"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " run"
+    },
+    {
+      "reasoning_content": " as"
+    },
+    {
+      "reasoning_content": " waiting"
+    },
+    {
+      "reasoning_content": "_user"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " not"
+    },
+    {
+      "reasoning_content": " blocked"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " and"
+    },
+    {
+      "reasoning_content": " not"
+    },
+    {
+      "reasoning_content": " resolve"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " blocker"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "Let"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " check"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " workspace"
+    },
+    {
+      "reasoning_content": " first"
+    },
+    {
+      "reasoning_content": " to"
+    },
+    {
+      "reasoning_content": " see"
+    },
+    {
+      "reasoning_content": " if"
+    },
+    {
+      "reasoning_content": " there"
+    },
+    {
+      "reasoning_content": "'s"
+    },
+    {
+      "reasoning_content": " any"
+    },
+    {
+      "reasoning_content": " context"
+    },
+    {
+      "reasoning_content": ","
+    },
+    {
+      "reasoning_content": " then"
+    },
+    {
+      "reasoning_content": " finish"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " run"
+    },
+    {
+      "reasoning_content": " with"
+    },
+    {
+      "reasoning_content": " status"
+    },
+    {
+      "reasoning_content": " waiting"
+    },
+    {
+      "reasoning_content": "_user"
+    },
+    {
+      "reasoning_content": ".\n\n"
+    },
+    {
+      "reasoning_content": "Let"
+    },
+    {
+      "reasoning_content": " me"
+    },
+    {
+      "reasoning_content": " do"
+    },
+    {
+      "reasoning_content": " a"
+    },
+    {
+      "reasoning_content": " quick"
+    },
+    {
+      "reasoning_content": " inspection"
+    },
+    {
+      "reasoning_content": " of"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " workspace"
+    },
+    {
+      "reasoning_content": " to"
+    },
+    {
+      "reasoning_content": " understand"
+    },
+    {
+      "reasoning_content": " what"
+    },
+    {
+      "reasoning_content": "'s"
+    },
+    {
+      "reasoning_content": " going"
+    },
+    {
+      "reasoning_content": " on"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "content": "I"
+    },
+    {
+      "content": "'ll"
+    },
+    {
+      "content": " take"
+    },
+    {
+      "content": " a"
+    },
+    {
+      "content": " quick"
+    },
+    {
+      "content": " look"
+    },
+    {
+      "content": " at"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " workspace"
+    },
+    {
+      "content": " context"
+    },
+    {
+      "content": " before"
+    },
+    {
+      "content": " parking"
+    },
+    {
+      "content": " this"
+    },
+    {
+      "content": " task"
+    },
+    {
+      "content": "."
+    },
+    {
+      "finish_reason": "tool_calls"
+    },
+    {
+      "usage": {
+        "input_tokens": 8163,
+        "output_tokens": 212,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 8163,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 155,
+        "cache_usage_reported": true
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_00_PqcvoOO7rNxUB3IWeLan3303",
+          "Function": "ls_r",
+          "Args": "{\"path\": \".\"}"
+        }
+      ]
+    }
+  ]
+}

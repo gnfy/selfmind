@@ -197,7 +197,7 @@ exec_sandbox:
 updates:
   enabled: true
   channel: "auto"
-  check_interval: "24h"
+  check_interval: "15m"
 
 # Feedback stays local unless --send is used. By default, --send creates an
 # issue in the official repository through the authenticated GitHub CLI.
@@ -269,9 +269,11 @@ type ModelConfig struct {
 	Provider      string `mapstructure:"provider" yaml:"provider,omitempty"`
 	Default       string `mapstructure:"default" yaml:"default,omitempty"`
 	ContextLength int    `mapstructure:"context_length" yaml:"context_length,omitempty"`
-	// Headers are sent with EVERY provider request as the lowest-priority
-	// layer: built-in profile compatibility headers, provider_profiles
-	// headers, and role/selection headers all override them key by key.
+	// ExtraHeaders are sent with every provider request as the lowest-priority
+	// operator layer. Prefer provider_profiles for vendor-specific values.
+	ExtraHeaders map[string]string `mapstructure:"extra_headers" yaml:"extra_headers,omitempty"`
+	// Headers is the legacy spelling kept for config compatibility. New config
+	// should use extra_headers, which wins on duplicate keys.
 	Headers map[string]string `mapstructure:"headers" yaml:"headers,omitempty"`
 }
 
@@ -794,11 +796,15 @@ type ProvidersConfig struct {
 }
 
 type ProviderEndpoint struct {
-	APIKey          string                 `mapstructure:"api_key" yaml:"api_key,omitempty"`
-	BaseURL         string                 `mapstructure:"base_url" yaml:"base_url,omitempty"`
-	Protocol        string                 `mapstructure:"protocol" yaml:"protocol,omitempty"`
-	Model           string                 `mapstructure:"model" yaml:"model,omitempty"`
-	ContextLength   int                    `mapstructure:"context_length" yaml:"context_length,omitempty"`
+	APIKey        string                 `mapstructure:"api_key" yaml:"api_key,omitempty"`
+	BaseURL       string                 `mapstructure:"base_url" yaml:"base_url,omitempty"`
+	Protocol      string                 `mapstructure:"protocol" yaml:"protocol,omitempty"`
+	Model         string                 `mapstructure:"model" yaml:"model,omitempty"`
+	ContextLength int                    `mapstructure:"context_length" yaml:"context_length,omitempty"`
+	ExtraHeaders  map[string]string      `mapstructure:"extra_headers" yaml:"extra_headers,omitempty"`
+	ExtraBody     map[string]interface{} `mapstructure:"extra_body" yaml:"extra_body,omitempty"`
+	ExtraQuery    map[string]interface{} `mapstructure:"extra_query" yaml:"extra_query,omitempty"`
+	// Headers is the legacy spelling kept for one compatibility window.
 	Headers         map[string]string      `mapstructure:"headers" yaml:"headers,omitempty"`
 	MaxTokens       int                    `mapstructure:"max_tokens" yaml:"max_tokens,omitempty"`
 	ReasoningEffort string                 `mapstructure:"reasoning_effort" yaml:"reasoning_effort,omitempty"`
@@ -808,29 +814,36 @@ type ProviderEndpoint struct {
 }
 
 type ProviderQuirks struct {
-	AuthHeader             string `mapstructure:"auth_header" yaml:"auth_header,omitempty"`
-	ToolSchema             string `mapstructure:"tool_schema" yaml:"tool_schema,omitempty"`
-	SystemMessageMode      string `mapstructure:"system_message_mode" yaml:"system_message_mode,omitempty"`
-	ThinkingMode           string `mapstructure:"thinking_mode" yaml:"thinking_mode,omitempty"`
-	UserAgent              string `mapstructure:"user_agent" yaml:"user_agent,omitempty"`
-	ResponsesStoreFalse    bool   `mapstructure:"responses_store_false" yaml:"responses_store_false,omitempty"`
-	ResponsesRequireStream bool   `mapstructure:"responses_require_stream" yaml:"responses_require_stream,omitempty"`
+	AuthHeader string `mapstructure:"auth_header" yaml:"auth_header,omitempty"`
+	ToolSchema string `mapstructure:"tool_schema" yaml:"tool_schema,omitempty"`
+	// Deprecated: protocol adapters own system-message placement.
+	SystemMessageMode string `mapstructure:"system_message_mode" yaml:"system_message_mode,omitempty"`
+	ThinkingMode      string `mapstructure:"thinking_mode" yaml:"thinking_mode,omitempty"`
+	UserIdentityField string `mapstructure:"user_identity_field" yaml:"user_identity_field,omitempty"`
+	UserAgent         string `mapstructure:"user_agent" yaml:"user_agent,omitempty"`
+	// Empty/auto preserves the provider default; http1/http2 explicitly
+	// override the transport. This replaces endpoint-name inference.
+	HTTPVersion string `mapstructure:"http_version" yaml:"http_version,omitempty"`
+	// Pointer booleans distinguish inheritance (nil) from an explicit false.
+	ResponsesStoreFalse    *bool `mapstructure:"responses_store_false" yaml:"responses_store_false,omitempty"`
+	ResponsesRequireStream *bool `mapstructure:"responses_require_stream" yaml:"responses_require_stream,omitempty"`
 	// PromptCache opts an anthropic-protocol endpoint into cache_control
 	// breakpoints (stable system prefix + rolling history breakpoint).
 	// Off by default: providers that ignore the field are unaffected, but
 	// enabling it should be a deliberate, per-provider decision.
-	PromptCache bool `mapstructure:"prompt_cache" yaml:"prompt_cache,omitempty"`
+	PromptCache *bool `mapstructure:"prompt_cache" yaml:"prompt_cache,omitempty"`
 }
 
 type ModelsConfig struct {
-	Source  string                     `mapstructure:"source" yaml:"source,omitempty"`
-	Primary ModelSelectionConfig       `mapstructure:"primary" yaml:"primary,omitempty"`
-	Roles   map[string]ModelRoleConfig `mapstructure:"roles" yaml:"roles,omitempty"`
+	Source    string                     `mapstructure:"source" yaml:"source,omitempty"`
+	Primary   ModelSelectionConfig       `mapstructure:"primary" yaml:"primary,omitempty"`
+	Auxiliary ModelSelectionConfig       `mapstructure:"auxiliary" yaml:"auxiliary,omitempty"`
+	Roles     map[string]ModelRoleConfig `mapstructure:"roles" yaml:"roles,omitempty"`
 }
 
-// ModelSelectionConfig is the single user-facing foreground model selection.
-// Provider profiles own transport/authentication; this block only chooses a
-// model and optional model-level behavior.
+// ModelSelectionConfig is a user-facing model selection. Primary owns the
+// foreground conversation; auxiliary supplies the default for bounded
+// background roles. Provider profiles own transport/authentication.
 type ModelSelectionConfig struct {
 	Provider      string `mapstructure:"provider" yaml:"provider,omitempty"`
 	Model         string `mapstructure:"model" yaml:"model,omitempty"`
@@ -840,15 +853,19 @@ type ModelSelectionConfig struct {
 }
 
 type ModelRoleConfig struct {
-	Provider      string            `mapstructure:"provider" yaml:"provider,omitempty"`
-	Model         string            `mapstructure:"model" yaml:"model,omitempty"`
-	BaseURL       string            `mapstructure:"base_url" yaml:"base_url,omitempty"`
-	Protocol      string            `mapstructure:"protocol" yaml:"protocol,omitempty"`
-	APIKey        string            `mapstructure:"api_key" yaml:"api_key,omitempty"`
-	ContextLength int               `mapstructure:"context_length" yaml:"context_length,omitempty"`
-	MaxTokens     int               `mapstructure:"max_tokens" yaml:"max_tokens,omitempty"`
-	Headers       map[string]string `mapstructure:"headers" yaml:"headers,omitempty"`
-	Reasoning     string            `mapstructure:"reasoning" yaml:"reasoning,omitempty"`
+	Provider      string                 `mapstructure:"provider" yaml:"provider,omitempty"`
+	Model         string                 `mapstructure:"model" yaml:"model,omitempty"`
+	BaseURL       string                 `mapstructure:"base_url" yaml:"base_url,omitempty"`
+	Protocol      string                 `mapstructure:"protocol" yaml:"protocol,omitempty"`
+	APIKey        string                 `mapstructure:"api_key" yaml:"api_key,omitempty"`
+	ContextLength int                    `mapstructure:"context_length" yaml:"context_length,omitempty"`
+	MaxTokens     int                    `mapstructure:"max_tokens" yaml:"max_tokens,omitempty"`
+	ExtraHeaders  map[string]string      `mapstructure:"extra_headers" yaml:"extra_headers,omitempty"`
+	ExtraBody     map[string]interface{} `mapstructure:"extra_body" yaml:"extra_body,omitempty"`
+	ExtraQuery    map[string]interface{} `mapstructure:"extra_query" yaml:"extra_query,omitempty"`
+	// Headers is the legacy spelling kept for config compatibility.
+	Headers   map[string]string `mapstructure:"headers" yaml:"headers,omitempty"`
+	Reasoning string            `mapstructure:"reasoning" yaml:"reasoning,omitempty"`
 	// ReasoningEffort is the legacy spelling. New configuration should use
 	// reasoning; the resolver keeps accepting reasoning_effort during the
 	// compatibility window.
@@ -1050,7 +1067,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("history.load_entries", 200)
 	v.SetDefault("updates.enabled", true)
 	v.SetDefault("updates.channel", "auto")
-	v.SetDefault("updates.check_interval", "24h")
+	v.SetDefault("updates.check_interval", "15m")
 	v.SetDefault("feedback.repository", "gnfy/selfmind")
 	v.SetDefault("memory.auto_extract_interval", 5)
 	v.SetDefault("memory.auto_extract_min_chars", 80)
@@ -1146,8 +1163,14 @@ func (c *Config) Normalize() {
 	c.Models.Primary.Model = expandEnvRef(c.Models.Primary.Model)
 	c.Models.Primary.Reasoning = normalizeReasoning(c.Models.Primary.Reasoning)
 	c.Models.Primary.ServiceTier = normalizeAutoValue(c.Models.Primary.ServiceTier)
+	c.Models.Auxiliary.Provider = expandEnvRef(c.Models.Auxiliary.Provider)
+	c.Models.Auxiliary.Model = expandEnvRef(c.Models.Auxiliary.Model)
+	c.Models.Auxiliary.Reasoning = normalizeReasoning(c.Models.Auxiliary.Reasoning)
+	c.Models.Auxiliary.ServiceTier = normalizeAutoValue(c.Models.Auxiliary.ServiceTier)
 	c.Model.Provider = expandEnvRef(c.Model.Provider)
 	c.Model.Default = expandEnvRef(c.Model.Default)
+	c.Model.Headers = normalizeHeaders(c.Model.Headers)
+	c.Model.ExtraHeaders = normalizeHeaders(c.Model.ExtraHeaders)
 	c.Agent.Provider = expandEnvRef(c.Agent.Provider)
 	c.Agent.Model = expandEnvRef(c.Agent.Model)
 	c.Agent.Soul = expandEnvRef(c.Agent.Soul)
@@ -1198,6 +1221,9 @@ func (c *Config) Normalize() {
 		endpoint.Protocol = expandEnvRef(endpoint.Protocol)
 		endpoint.Model = expandEnvRef(endpoint.Model)
 		endpoint.Headers = normalizeHeaders(endpoint.Headers)
+		endpoint.ExtraHeaders = normalizeHeaders(endpoint.ExtraHeaders)
+		endpoint.ExtraBody = normalizeExtraMap(endpoint.ExtraBody)
+		endpoint.ExtraQuery = normalizeExtraMap(endpoint.ExtraQuery)
 		endpoint.ReasoningEffort = expandEnvRef(endpoint.ReasoningEffort)
 		endpoint.ServiceTier = expandEnvRef(endpoint.ServiceTier)
 		endpoint.Quirks = normalizeProviderQuirks(endpoint.Quirks)
@@ -1213,6 +1239,9 @@ func (c *Config) Normalize() {
 		role.Protocol = expandEnvRef(role.Protocol)
 		role.APIKey = expandEnvRef(role.APIKey)
 		role.Headers = normalizeHeaders(role.Headers)
+		role.ExtraHeaders = normalizeHeaders(role.ExtraHeaders)
+		role.ExtraBody = normalizeExtraMap(role.ExtraBody)
+		role.ExtraQuery = normalizeExtraMap(role.ExtraQuery)
 		role.Reasoning = normalizeReasoning(role.Reasoning)
 		role.ReasoningEffort = normalizeReasoning(role.ReasoningEffort)
 		role.ServiceTier = expandEnvRef(role.ServiceTier)
@@ -1345,6 +1374,124 @@ func (c *Config) EffectivePrimary() ModelSelectionConfig {
 	return primary
 }
 
+// EffectiveAuxiliary returns the optional default selection for bounded
+// background work. Unlike EffectivePrimary it never inherits legacy primary
+// fields: an absent auxiliary model must remain visible to safety-sensitive
+// callers instead of silently spending the foreground model.
+func (c *Config) EffectiveAuxiliary() ModelSelectionConfig {
+	if c == nil {
+		return ModelSelectionConfig{}
+	}
+	auxiliary := c.Models.Auxiliary
+	auxiliary.Provider = strings.TrimSpace(auxiliary.Provider)
+	auxiliary.Model = strings.TrimSpace(auxiliary.Model)
+	auxiliary.Reasoning = normalizeReasoning(auxiliary.Reasoning)
+	auxiliary.ServiceTier = normalizeAutoValue(auxiliary.ServiceTier)
+	return auxiliary
+}
+
+// ResolveAuxiliaryRole applies the model routing precedence used by automatic
+// background work: an explicit role override wins, then models.auxiliary.
+// Explicit role fields may be partial and inherit the auxiliary selection.
+// The caller chooses which logical roles are auxiliary; capability-specific
+// roles such as vision are not redirected merely because this method exists.
+func (c *Config) ResolveAuxiliaryRole(role string) (ModelRoleConfig, string, bool) {
+	if c == nil {
+		return ModelRoleConfig{}, "", false
+	}
+	role = strings.TrimSpace(role)
+	explicit, hasExplicit := c.Models.Roles[role]
+	hasExplicit = hasExplicit && !modelRoleConfigEmpty(explicit)
+	auxiliary := c.EffectiveAuxiliary()
+	hasAuxiliary := !modelSelectionConfigEmpty(auxiliary)
+	if !hasExplicit && !hasAuxiliary {
+		return ModelRoleConfig{}, "", false
+	}
+
+	resolved := modelRoleConfigFromSelection(auxiliary)
+	source := "auxiliary"
+	if hasExplicit {
+		resolved = overlayModelRoleConfig(resolved, explicit)
+		source = "role"
+	}
+	return resolved, source, true
+}
+
+func modelSelectionConfigEmpty(selection ModelSelectionConfig) bool {
+	return strings.TrimSpace(selection.Provider) == "" && strings.TrimSpace(selection.Model) == "" &&
+		strings.TrimSpace(selection.Reasoning) == "" && strings.TrimSpace(selection.ServiceTier) == "" &&
+		selection.ContextLength <= 0
+}
+
+func modelRoleConfigEmpty(role ModelRoleConfig) bool {
+	return strings.TrimSpace(role.Provider) == "" && strings.TrimSpace(role.Model) == "" &&
+		strings.TrimSpace(role.BaseURL) == "" && strings.TrimSpace(role.Protocol) == "" &&
+		strings.TrimSpace(role.APIKey) == "" && role.ContextLength <= 0 && role.MaxTokens <= 0 &&
+		len(role.Headers) == 0 && len(role.ExtraHeaders) == 0 && len(role.ExtraBody) == 0 && len(role.ExtraQuery) == 0 &&
+		strings.TrimSpace(role.EffectiveReasoning()) == "" &&
+		len(role.Thinking) == 0 && strings.TrimSpace(role.ServiceTier) == "" && role.Quirks == (ProviderQuirks{})
+}
+
+func modelRoleConfigFromSelection(selection ModelSelectionConfig) ModelRoleConfig {
+	return ModelRoleConfig{
+		Provider:      selection.Provider,
+		Model:         selection.Model,
+		Reasoning:     selection.Reasoning,
+		ServiceTier:   selection.ServiceTier,
+		ContextLength: selection.ContextLength,
+	}
+}
+
+func overlayModelRoleConfig(base, override ModelRoleConfig) ModelRoleConfig {
+	if override.Provider != "" {
+		base.Provider = override.Provider
+	}
+	if override.Model != "" {
+		base.Model = override.Model
+	}
+	if override.BaseURL != "" {
+		base.BaseURL = override.BaseURL
+	}
+	if override.Protocol != "" {
+		base.Protocol = override.Protocol
+	}
+	if override.APIKey != "" {
+		base.APIKey = override.APIKey
+	}
+	if override.ContextLength > 0 {
+		base.ContextLength = override.ContextLength
+	}
+	if override.MaxTokens > 0 {
+		base.MaxTokens = override.MaxTokens
+	}
+	if len(override.Headers) > 0 {
+		base.Headers = override.Headers
+	}
+	if len(override.ExtraHeaders) > 0 {
+		base.ExtraHeaders = mergeHeaderConfig(base.ExtraHeaders, override.ExtraHeaders)
+	}
+	if len(override.ExtraBody) > 0 {
+		base.ExtraBody = mergeExtraConfig(base.ExtraBody, override.ExtraBody)
+	}
+	if len(override.ExtraQuery) > 0 {
+		base.ExtraQuery = mergeExtraConfig(base.ExtraQuery, override.ExtraQuery)
+	}
+	if override.Reasoning != "" || override.ReasoningEffort != "" {
+		base.Reasoning = override.Reasoning
+		base.ReasoningEffort = override.ReasoningEffort
+	}
+	if len(override.Thinking) > 0 {
+		base.Thinking = override.Thinking
+	}
+	if override.ServiceTier != "" {
+		base.ServiceTier = override.ServiceTier
+	}
+	if override.Quirks != (ProviderQuirks{}) {
+		base.Quirks = override.Quirks
+	}
+	return base
+}
+
 func (c *Config) SetDefaultModel(provider, model string) {
 	c.SetPrimaryModel(provider, model, "")
 }
@@ -1384,6 +1531,9 @@ func normalizeEndpoint(ep ProviderEndpoint, legacyKey, defaultBaseURL, defaultPr
 	ep.Protocol = firstNonEmpty(ep.Protocol, defaultProtocol)
 	ep.Model = expandEnvRef(ep.Model)
 	ep.Headers = normalizeHeaders(ep.Headers)
+	ep.ExtraHeaders = normalizeHeaders(ep.ExtraHeaders)
+	ep.ExtraBody = normalizeExtraMap(ep.ExtraBody)
+	ep.ExtraQuery = normalizeExtraMap(ep.ExtraQuery)
 	ep.ReasoningEffort = expandEnvRef(ep.ReasoningEffort)
 	ep.ServiceTier = expandEnvRef(ep.ServiceTier)
 	ep.Quirks = normalizeProviderQuirks(ep.Quirks)
@@ -1395,7 +1545,9 @@ func normalizeProviderQuirks(q ProviderQuirks) ProviderQuirks {
 	q.ToolSchema = strings.ToLower(strings.TrimSpace(expandEnvRef(q.ToolSchema)))
 	q.SystemMessageMode = strings.ToLower(strings.TrimSpace(expandEnvRef(q.SystemMessageMode)))
 	q.ThinkingMode = strings.ToLower(strings.TrimSpace(expandEnvRef(q.ThinkingMode)))
+	q.UserIdentityField = strings.ToLower(strings.TrimSpace(expandEnvRef(q.UserIdentityField)))
 	q.UserAgent = strings.TrimSpace(expandEnvRef(q.UserAgent))
+	q.HTTPVersion = strings.ToLower(strings.TrimSpace(expandEnvRef(q.HTTPVersion)))
 	return q
 }
 
@@ -1410,6 +1562,75 @@ func normalizeHeaders(headers map[string]string) map[string]string {
 			continue
 		}
 		out[key] = expandEnvRef(value)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func normalizeExtraMap(values map[string]interface{}) map[string]interface{} {
+	if len(values) == 0 {
+		return nil
+	}
+	out := make(map[string]interface{}, len(values))
+	for key, value := range values {
+		key = strings.TrimSpace(key)
+		if key == "" {
+			continue
+		}
+		out[key] = normalizeExtraValue(value)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func normalizeExtraValue(value interface{}) interface{} {
+	switch typed := value.(type) {
+	case string:
+		return expandEnvRef(typed)
+	case map[string]interface{}:
+		return normalizeExtraMap(typed)
+	case []interface{}:
+		out := make([]interface{}, len(typed))
+		for i, item := range typed {
+			out[i] = normalizeExtraValue(item)
+		}
+		return out
+	default:
+		return value
+	}
+}
+
+func mergeHeaderConfig(base, override map[string]string) map[string]string {
+	out := make(map[string]string, len(base)+len(override))
+	for key, value := range base {
+		out[key] = value
+	}
+	for key, value := range override {
+		out[key] = value
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func mergeExtraConfig(base, override map[string]interface{}) map[string]interface{} {
+	out := make(map[string]interface{}, len(base)+len(override))
+	for key, value := range base {
+		out[key] = normalizeExtraValue(value)
+	}
+	for key, value := range override {
+		if existing, ok := out[key].(map[string]interface{}); ok {
+			if incoming, ok := value.(map[string]interface{}); ok {
+				out[key] = mergeExtraConfig(existing, incoming)
+				continue
+			}
+		}
+		out[key] = normalizeExtraValue(value)
 	}
 	if len(out) == 0 {
 		return nil

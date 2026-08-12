@@ -54,10 +54,7 @@ func NewSkillCatalogTool() *SkillCatalogTool {
 }
 
 func (t *SkillCatalogTool) Execute(args map[string]interface{}) (string, error) {
-	tenantID, _ := args["_tenant_id"].(string)
-	if tenantID == "" {
-		tenantID = "default"
-	}
+	tenantID := skillStorageTenantID(args)
 	action, _ := args["action"].(string)
 	source, _ := args["source"].(string)
 	name, _ := args["name"].(string)
@@ -66,13 +63,13 @@ func (t *SkillCatalogTool) Execute(args map[string]interface{}) (string, error) 
 	case "list":
 		return OfficialSkillCatalogJSON()
 	case "install":
-		result, err := InstallSkillFromSource(tenantID, source, name, force)
+		result, err := InstallSkillFromSource(tenantID, source, name, force, args)
 		if err == nil {
 			reloadSkillToolsFromArgs(tenantID, args)
 		}
 		return result, err
 	case "audit":
-		return AuditSkillsForTenant(tenantID, name)
+		return AuditSkillsForTenant(tenantID, name, args)
 	default:
 		return "", fmt.Errorf("unknown action: %s", action)
 	}
@@ -123,7 +120,7 @@ func officialSkillCatalog() ([]skillListEntry, error) {
 	return items, nil
 }
 
-func InstallSkillFromSource(tenantID, source, name string, force bool) (string, error) {
+func InstallSkillFromSource(tenantID, source, name string, force bool, invocation ...map[string]interface{}) (string, error) {
 	source = strings.TrimSpace(source)
 	if source == "" {
 		return "", fmt.Errorf("source is required for install")
@@ -167,12 +164,12 @@ func InstallSkillFromSource(tenantID, source, name string, force bool) (string, 
 		}
 	}
 
-	dir, err := getSkillsDir(tenantID)
+	dir, err := getSkillsDir(tenantID, invocation...)
 	if err != nil {
 		return "", err
 	}
 	skillDir := filepath.Join(dir, safeName)
-	if existing, err := findSkill(tenantID, safeName); err == nil && filepath.Clean(existing.Root) != filepath.Clean(dir) && !force {
+	if existing, err := findSkill(tenantID, safeName, invocation...); err == nil && filepath.Clean(existing.Root) != filepath.Clean(dir) && !force {
 		return "", fmt.Errorf("skill %q already exists in %s root (%s); pass force only if you want the user skill root to shadow it", safeName, emptyDefault(existing.Scope, "unknown"), existing.Path)
 	}
 	collisions := existingSkillInstallCollisions(dir, safeName)
@@ -258,16 +255,16 @@ func readInstallCollisionContent(collisions []skillInstallCollision) string {
 	return strings.Join(parts, "\n\n")
 }
 
-func AuditSkillsForTenant(tenantID, name string) (string, error) {
+func AuditSkillsForTenant(tenantID, name string, invocation ...map[string]interface{}) (string, error) {
 	var targets []SkillInfo
 	if strings.TrimSpace(name) != "" {
-		info, err := findSkill(tenantID, name)
+		info, err := findSkill(tenantID, name, invocation...)
 		if err != nil {
 			return "", err
 		}
 		targets = []SkillInfo{info}
 	} else {
-		skills, err := ListSkillsForTenant(tenantID, false)
+		skills, err := ListSkillsForTenant(tenantID, false, invocation...)
 		if err != nil {
 			return "", err
 		}

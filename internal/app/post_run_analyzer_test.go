@@ -23,6 +23,7 @@ type postRunProviderStub struct {
 	err          error
 	requests     []llm.ChatRequest
 	streamEvents []llm.StreamEvent
+	responses    []*llm.ChatResponse
 }
 
 func (p *postRunProviderStub) ChatCompletion(context.Context, []llm.Message) (string, error) {
@@ -39,10 +40,91 @@ func (p *postRunProviderStub) chat(req llm.ChatRequest) (*llm.ChatResponse, erro
 	if p.err != nil {
 		return nil, p.err
 	}
+	if len(p.responses) > 0 {
+		resp := p.responses[0]
+		p.responses = p.responses[1:]
+		return resp, nil
+	}
 	if p.response != nil {
 		return p.response, nil
 	}
 	return &llm.ChatResponse{Content: p.content}, nil
+}
+
+func TestPostRunAnalyzerAcceptsObjectTaskDecision(t *testing.T) {
+	got, err := decodePostRunAnalysis(`{"task_decision":{"action":"MOVE","task_id":"task-42"}}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.TaskDecision != "MOVE:task-42" {
+		t.Fatalf("task decision = %q", got.TaskDecision)
+	}
+}
+
+func TestPostRunAnalyzerRetriesTruncatedContractOnce(t *testing.T) {
+	provider := &postRunProviderStub{responses: []*llm.ChatResponse{
+		{Content: `{"task_decision":`, FinishReason: "length"},
+		{Content: `{"task_decision":"KEEP"}`, FinishReason: "stop"},
+	}}
+	analyzer := &llmPostRunAnalyzer{provider: provider, maxTokens: 1024, batchMaxTokens: 4096, contractRouteID: "contract:test"}
+	got, err := analyzer.Analyze(context.Background(), httpapi.PostRunAnalysisRequest{RunID: "run-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.TaskDecision != "KEEP" || provider.calls != 2 {
+		t.Fatalf("analysis=%+v calls=%d", got, provider.calls)
+	}
+	if provider.requests[0].MaxTokens != 1024 || provider.requests[1].MaxTokens != 2048 {
+		t.Fatalf("max tokens = %d then %d", provider.requests[0].MaxTokens, provider.requests[1].MaxTokens)
+	}
+}
+
+func TestPostRunAnalyzerRetriesEmptyTruncatedContractOnce(t *testing.T) {
+	provider := &postRunProviderStub{responses: []*llm.ChatResponse{
+		{Content: "", FinishReason: "length", Usage: llm.UsageStats{OutputTokens: 8192}},
+		{Content: `{"task_decision":"KEEP"}`, FinishReason: "stop"},
+	}}
+	analyzer := &llmPostRunAnalyzer{provider: provider, maxTokens: 8192, batchMaxTokens: 32768, contractRouteID: "contract:test"}
+	got, err := analyzer.Analyze(context.Background(), httpapi.PostRunAnalysisRequest{RunID: "run-empty-truncated"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.TaskDecision != "KEEP" || provider.calls != 2 {
+		t.Fatalf("analysis=%+v calls=%d", got, provider.calls)
+	}
+	if provider.requests[0].MaxTokens != 8192 || provider.requests[1].MaxTokens != 16384 {
+		t.Fatalf("max tokens = %d then %d", provider.requests[0].MaxTokens, provider.requests[1].MaxTokens)
+	}
+}
+
+func TestPostRunAnalyzerContractCircuitStopsQueuedRepeatCalls(t *testing.T) {
+	store, err := control.OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	provider := &postRunProviderStub{content: `{"task_decision":`}
+	analyzer := &llmPostRunAnalyzer{
+		provider: provider, maxTokens: 1024, batchMaxTokens: 4096,
+		contractRouteID: "contract:test", controlStore: store,
+		routeTenantID: "default", routeProvider: "deepseek", routeModel: "deepseek-v4-flash",
+	}
+	if _, err := analyzer.Analyze(context.Background(), httpapi.PostRunAnalysisRequest{RunID: "run-1"}); err == nil {
+		t.Fatal("first malformed contract should fail")
+	}
+	if provider.calls != 2 {
+		t.Fatalf("first contract calls = %d, want one adaptive retry", provider.calls)
+	}
+	if _, err := analyzer.Analyze(context.Background(), httpapi.PostRunAnalysisRequest{RunID: "run-2"}); err == nil {
+		t.Fatal("open contract circuit should reject the next job")
+	}
+	if provider.calls != 2 {
+		t.Fatalf("open circuit issued another provider call: %d", provider.calls)
+	}
+	health, err := store.GetProviderRouteHealth(context.Background(), "default", "contract:test")
+	if err != nil || health == nil || health.State != control.ProviderRouteOpen || health.FailureClass != "output_contract" {
+		t.Fatalf("contract health=%+v err=%v", health, err)
+	}
 }
 
 func (p *postRunProviderStub) StreamChat(context.Context, llm.ChatRequest) (<-chan llm.StreamEvent, error) {
@@ -80,6 +162,50 @@ func TestMaintenanceProviderChainFallsBackOnEmptyResponse(t *testing.T) {
 	}}
 
 	resp, err := chain.Chat(context.Background(), llm.ChatRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp == nil || strings.TrimSpace(resp.Content) == "" || primary.calls != 1 || fallback.calls != 1 {
+		t.Fatalf("resp=%+v primary_calls=%d fallback_calls=%d", resp, primary.calls, fallback.calls)
+	}
+}
+
+func TestMaintenanceProviderChainReturnsFirstTruncatedEmptyResponseForAdaptiveRetry(t *testing.T) {
+	primary := &postRunProviderStub{response: &llm.ChatResponse{
+		FinishReason: "length",
+		Usage:        llm.UsageStats{OutputTokens: 8192},
+	}}
+	fallback := &postRunProviderStub{content: `{"task_decision":"KEEP"}`}
+	chain := &maintenanceProviderChain{providers: []namedMaintenanceProvider{
+		{role: llm.RoleMemoryExtract, provider: primary},
+		{role: llm.RoleBackgroundReview, provider: fallback},
+	}}
+
+	resp, err := chain.Chat(context.Background(), llm.ChatRequest{Options: map[string]interface{}{
+		"maintenance_contract_attempt": 1,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp == nil || resp.FinishReason != "length" || primary.calls != 1 || fallback.calls != 0 {
+		t.Fatalf("resp=%+v primary_calls=%d fallback_calls=%d", resp, primary.calls, fallback.calls)
+	}
+}
+
+func TestMaintenanceProviderChainFallsBackAfterAdaptiveRetryStillTruncates(t *testing.T) {
+	primary := &postRunProviderStub{response: &llm.ChatResponse{
+		FinishReason: "max_tokens",
+		Usage:        llm.UsageStats{OutputTokens: 16384},
+	}}
+	fallback := &postRunProviderStub{content: `{"task_decision":"KEEP"}`}
+	chain := &maintenanceProviderChain{providers: []namedMaintenanceProvider{
+		{role: llm.RoleMemoryExtract, provider: primary},
+		{role: llm.RoleBackgroundReview, provider: fallback},
+	}}
+
+	resp, err := chain.Chat(context.Background(), llm.ChatRequest{Options: map[string]interface{}{
+		"maintenance_contract_attempt": 2,
+	}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -352,8 +478,8 @@ func TestPostRunAnalyzerBatchesProviderCallAndKeysResultsByRun(t *testing.T) {
 	if model.calls != 1 {
 		t.Fatalf("provider calls = %d", model.calls)
 	}
-	if got := model.requests[0].MaxTokens; got != 3072 {
-		t.Fatalf("batch max tokens = %d, want 3072", got)
+	if got := model.requests[0].MaxTokens; got != postRunAnalyzerMaxTokens {
+		t.Fatalf("batch max tokens = %d, want %d", got, postRunAnalyzerMaxTokens)
 	}
 	if results["run-1"].TaskDecision != "TITLE:Release checks" || results["run-2"].TaskDecision != "INBOX" {
 		t.Fatalf("results = %+v", results)
@@ -426,11 +552,7 @@ func TestConfiguredMaintenanceRouteIDsIncludeAllBackgroundSubsystems(t *testing.
 	}
 	cfg.Normalize()
 	got := configuredMaintenanceRouteIDs(cfg)
-	want := map[string]bool{
-		maintenanceRoleRouteKey(cfg, llm.RoleMemoryExtract):              true,
-		maintenanceRoleRouteKey(cfg, llm.ModelRole("memory_governance")): true,
-		maintenanceRoleRouteKey(cfg, llm.RoleBackgroundReview):           true,
-	}
+	want := maintenanceRouteSet(cfg, llm.RoleMemoryExtract, llm.ModelRole("memory_governance"), llm.RoleBackgroundReview)
 	if len(got) != len(want) {
 		t.Fatalf("route ids = %v, want %d distinct routes", got, len(want))
 	}
@@ -439,6 +561,51 @@ func TestConfiguredMaintenanceRouteIDsIncludeAllBackgroundSubsystems(t *testing.
 			t.Fatalf("unexpected route id %q in %v", id, got)
 		}
 	}
+}
+
+func TestConfiguredMaintenanceRouteIDsUseAuxiliaryAndExplicitOverrides(t *testing.T) {
+	cfg := &config.Config{
+		ProviderProfiles: map[string]config.ProviderEndpoint{
+			"aux-provider":      {APIKey: "aux-key", BaseURL: "https://aux.example/v1", Protocol: "openai_compatible"},
+			"override-provider": {APIKey: "override-key", BaseURL: "https://override.example/v1", Protocol: "openai_compatible"},
+		},
+		Models: config.ModelsConfig{
+			Auxiliary: config.ModelSelectionConfig{Provider: "aux-provider", Model: "aux-model"},
+			Roles: map[string]config.ModelRoleConfig{
+				"background_review": {Provider: "override-provider", Model: "review-model"},
+			},
+		},
+		Tasks: config.TaskConfig{
+			MaintenanceModelRole:     "memory_extract",
+			MaintenanceFallbackRoles: []string{"background_review", "fast_classifier"},
+		},
+	}
+	cfg.Normalize()
+
+	got := configuredMaintenanceRouteIDs(cfg)
+	want := maintenanceRouteSet(cfg, llm.RoleMemoryExtract, llm.RoleBackgroundReview)
+	if len(got) != len(want) {
+		t.Fatalf("route ids = %v, want %d physical routes", got, len(want))
+	}
+	for _, id := range got {
+		if !want[id] {
+			t.Fatalf("unexpected route id %q in %v", id, got)
+		}
+	}
+}
+
+func maintenanceRouteSet(cfg *config.Config, roles ...llm.ModelRole) map[string]bool {
+	out := make(map[string]bool, len(roles)*2)
+	for _, role := range roles {
+		route := maintenanceRoleRouteIdentity(cfg, role)
+		if route.ID != "" {
+			out[route.ID] = true
+		}
+		if route.ContractID != "" {
+			out[route.ContractID] = true
+		}
+	}
+	return out
 }
 
 func TestKimiAuxiliaryRolesUseProviderDefaultTransport(t *testing.T) {

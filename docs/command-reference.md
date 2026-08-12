@@ -23,8 +23,11 @@ selfmind feedback [--out FILE|--send] [--repo OWNER/REPO] [--include-crash] <mes
   instead print the exact `setup` or `model set` command to run. `--config`
   selects another configuration file and `--resume` restores a prior TUI
   session.
-- `setup` creates or upgrades configuration, configures a model, and starts the
-  local gateway. Its skip flags make the flow suitable for automation.
+- `setup` creates or upgrades configuration, guides the person through one
+  primary model and one optional auxiliary model, then starts the local
+  gateway. The auxiliary model covers approval triage, memory, recall,
+  summaries, and skill work; per-role tuning remains an advanced YAML option.
+  Its skip flags make the flow suitable for automation.
 - `update check` only checks for an update. `update` performs the full
   upgrade: it checks the selected npm channel, runs the package-manager
   install, verifies the new binary with `selfmind --version`, and restarts a
@@ -102,6 +105,8 @@ selfmind env [show|refresh]
 selfmind model [current|check [--live] [--role <name>]|list|set <provider> <model>]
 selfmind auth [login|status|logout] ...
 selfmind doctor [--out FILE] [--probe-models]
+selfmind usage
+selfmind docs [check|index]
 selfmind selfcheck [--fast | --profile local-full|local-fast|ci] [--skip-go] [--skip-eval] [--eval-dir DIR]
 selfmind gateway [run|start|status|stop|restart|service] ...
 selfmind weixin [login|status] ...
@@ -128,6 +133,13 @@ selfmind weixin login [--timeout 8m] [--owner-person-id ID] [--no-enable]
 selfmind weixin status
 ```
 
+- `docs check` validates the source documentation contract: UTF-8, complete
+  manifest coverage, local links, language-pair source hashes, document size,
+  and active-plan lifecycle. `docs index` regenerates `docs/README.md` from
+  `docs/manifest.yaml`; it does not accept a stale translation automatically.
+- `selfcheck` always runs the documentation contract. Combining `--skip-go`
+  and `--skip-eval` is therefore a valid docs-only release check.
+
 - `config doctor` reports missing or stale configuration without changing it;
   `config upgrade` adds supported defaults while preserving existing values.
 - `model set` writes the single primary selection under `models.primary`.
@@ -136,17 +148,25 @@ selfmind weixin status
 - A shared daemon does not hot-switch from TUI `/model`. Restart at a safe turn
   boundary with `selfmind gateway restart --drain` after changing the model.
 - `model check` resolves credentials, protocol, endpoint, and model without
-  exposing secrets. `--role <name>` checks one configured maintenance role;
-  `--live` sends one bounded request and validates native tool-schema
-  compatibility, so it may consume a small amount of provider quota.
+  exposing secrets. `--role auxiliary` checks the shared auxiliary route;
+  `--role <name>` checks that role after auxiliary/override resolution;
+  `--live` sends bounded requests and validates native tool-schema
+  compatibility. Providers with a multi-turn thinking/tool contract, such as
+  DeepSeek V4, also replay one no-op tool result and verify the final answer;
+  the probe therefore consumes a small amount of provider quota.
+- `usage` is a CLI alias for `/diag context`. It reports provider-call input,
+  cache-hit/cache-miss input, output, and reasoning-token totals when the
+  provider supplies those fields. It reports tokens, not estimated currency.
 - `doctor` checks the installation and configuration. `--probe-models` performs
   live provider probes and may consume provider quota.
 - `selfcheck` is the local release gate. The default `local-full` profile runs
-  all recorded cases; `--fast`/`local-fast` skips measured slow cases;
+  all locally provable release cases; `--fast`/`local-fast` skips measured slow cases;
   `--profile ci` runs only cases explicitly assigned to CI for this platform.
   Provider responses replay offline, while tool calls still use the current
-  host toolchain. Exit codes are `0` pass, `1` regression, and `2` invalid or
-  unavailable environment.
+  host toolchain. A missing tool fails unless the case is explicitly CI-owned
+  for this platform; then local output says `CI-DEFERRED` and release requires
+  the matching Action job. Exit codes are `0` pass, `1` regression, and `2`
+  invalid or unavailable environment.
 - `gateway restart` drains to a safe turn boundary by default; `--force` is an
   explicit last resort.
 - On macOS, `gateway service install` creates the current user's launchd
@@ -162,7 +182,7 @@ selfmind weixin status
 
 ```text
 selfmind eval [list|run|report|repair|scorecard|capture|clean]
-selfmind maintenance [replay|migrate-memory|memory-audit|memory-dedup|task-audit] ...
+selfmind maintenance [replay|migrate-memory|migrate-skills|memory-audit|memory-dedup|task-audit] ...
 ```
 
 ```text
@@ -176,6 +196,7 @@ selfmind eval clean [--yes]
 
 selfmind maintenance replay [--limit N]
 selfmind maintenance migrate-memory [--apply] [--data-dir DIR]
+selfmind maintenance migrate-skills [--apply] [--root DIR] [--governance-grace 30d]
 selfmind maintenance memory-audit [--archive-confirmed] [--partition P] [--data-dir DIR]
 selfmind maintenance memory-dedup [--apply] [--partition P] [--data-dir DIR]
 selfmind maintenance task-audit [--apply] [--limit N] [--data-dir DIR]

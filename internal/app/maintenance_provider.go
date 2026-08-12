@@ -17,14 +17,15 @@ import (
 // digest of provider/endpoint/credential; raw credentials never leave the
 // runtime resolver.
 type maintenanceRouteIdentity struct {
-	ID       string
-	Provider string
-	Model    string
+	ID         string
+	ContractID string
+	Provider   string
+	Model      string
 }
 
-// namedMaintenanceProvider is an explicitly configured cheap/background
-// provider. The chain never invents a fallback to the primary coding model;
-// every role in it must be listed under models.roles.
+// namedMaintenanceProvider is a configured cheap/background provider. The
+// chain resolves explicit role overrides before models.auxiliary and never
+// invents a fallback to the primary coding model.
 type namedMaintenanceProvider struct {
 	role     llm.ModelRole
 	provider llm.Provider
@@ -53,7 +54,7 @@ func maintenanceRouteIDs(routes []maintenanceRouteIdentity) []string {
 }
 
 // configuredMaintenanceProvider builds one quota-aware provider chain from
-// explicitly configured maintenance roles. Roles resolving to the same
+// configured maintenance roles. Roles resolving to the same
 // endpoint and credential are de-duplicated before any request is sent.
 func configuredMaintenanceProvider(mem *memory.MemoryManager, cfg *config.Config, tenantID string,
 	controlStore *control.Store, roles ...llm.ModelRole) (llm.Provider, []maintenanceRouteIdentity) {
@@ -61,7 +62,7 @@ func configuredMaintenanceProvider(mem *memory.MemoryManager, cfg *config.Config
 	routes := make([]maintenanceRouteIdentity, 0, len(roles))
 	seenRoutes := make(map[string]struct{}, len(roles))
 	for _, role := range roles {
-		provider := explicitRoleProvider(mem, cfg, tenantID, role)
+		provider := configuredAuxiliaryRoleProvider(mem, cfg, tenantID, role)
 		if provider == nil {
 			continue
 		}
@@ -167,6 +168,28 @@ func (c *maintenanceProviderChain) Chat(ctx context.Context, req llm.ChatRequest
 				triggerClass, nil, resp.Usage, resp.FinishReason, batchSize, started)
 			return resp, nil
 		}
+		if callErr == nil && resp != nil && maintenanceFinishReasonTruncated(resp.FinishReason) {
+			contractErr := &llm.ProviderError{
+				Provider: candidate.route.Provider, RouteID: candidate.route.ID,
+				Class:      llm.ProviderErrorEmptyResponse,
+				Message:    "maintenance provider exhausted its output budget before producing usable content",
+				StopReason: resp.FinishReason, Usage: resp.Usage,
+			}
+			c.recordProviderCall(ctx, candidate, index, control.MaintenanceProviderCallFailed,
+				triggerClass, contractErr, resp.Usage, resp.FinishReason, batchSize, started)
+			// A truncated empty body is an output-contract failure, not evidence
+			// that the physical provider or credential is unhealthy. Let the
+			// analyzer increase its budget once before moving to an independent
+			// fallback; otherwise this path opens the quota circuit and the
+			// adaptive retry in post_run_analyzer can never run.
+			if maintenanceContractAttempt(req) <= 1 || index == len(c.providers)-1 {
+				return resp, nil
+			}
+			lastErr = contractErr
+			triggerClass = "output_contract"
+			failures = append(failures, fmt.Sprintf("%s: %v", candidate.role, contractErr))
+			continue
+		}
 		if callErr == nil {
 			usage := llm.UsageStats{}
 			finishReason := ""
@@ -192,6 +215,22 @@ func (c *maintenanceProviderChain) Chat(ctx context.Context, req llm.ChatRequest
 		log.Warn("maintenance provider unavailable; trying explicit fallback", "role", candidate.role, "provider", candidate.route.Provider, "error", callErr)
 	}
 	return nil, maintenanceAggregateError(failures, lastErr, anyRetryable)
+}
+
+func maintenanceContractAttempt(req llm.ChatRequest) int {
+	if req.Options == nil {
+		return 0
+	}
+	switch value := req.Options["maintenance_contract_attempt"].(type) {
+	case int:
+		return value
+	case int64:
+		return int(value)
+	case float64:
+		return int(value)
+	default:
+		return 0
+	}
 }
 
 func (c *maintenanceProviderChain) StreamChat(ctx context.Context, req llm.ChatRequest) (<-chan llm.StreamEvent, error) {

@@ -10,7 +10,10 @@ The runtime follows four boundaries:
 - `Resolver` combines config, environment variables, auth store entries, and per-command selections into a `Runtime`.
 - `llm.TransportConfig` is the only handoff from app/runtime into the LLM layer.
 - `llm` transports implement one protocol family, such as OpenAI Chat, Anthropic Messages, or Codex Responses.
-- `ProviderQuirks` carries provider-specific wire behavior, such as auth headers, tool schema fixes, thinking parameters, User-Agent, and Responses request flags.
+- `ProviderQuirks` carries provider-specific wire behavior that changes how a
+  protocol is encoded, such as auth style, tool-schema fixes, thinking shape,
+  User-Agent compatibility, and Responses flags. Arbitrary vendor parameters
+  belong in `extra_headers`, `extra_body`, or `extra_query`, not in quirks.
 
 Provider
 differences are declarative profile/quirk data, while protocol adapters
@@ -18,19 +21,39 @@ normalize requests, streaming, tool calls, and usage into SelfMind's shared
 `llm.Provider` interface. Channel code, gateway routing, task strategy, and IM
 adapters must not contain vendor-specific logic.
 
-User YAML `quirks` currently exposes `auth_header`, `tool_schema`, `system_message_mode`, `thinking_mode`, `user_agent`, `responses_store_false`, and `responses_require_stream`. Capability flags such as tools, streaming, and vision are built-in profile metadata maintained in Go.
+User YAML `quirks` exposes `auth_header`, `tool_schema`, `thinking_mode`,
+`user_identity_field`, `user_agent`, `http_version`, `prompt_cache`,
+`responses_store_false`, and `responses_require_stream`.
+`system_message_mode` remains readable for compatibility but is deprecated and
+ignored: protocol adapters own the system-message shape. Boolean quirks are
+three-state in YAML: omission inherits the built-in profile, while explicit
+`true` or `false` overrides it. This matters when a private endpoint needs to
+disable a built-in cache or Responses behavior. Capability flags such as
+tools, streaming, and vision are built-in profile metadata maintained in Go.
 
-HTTP headers merge low-to-high as `model.headers` (global yaml) → built-in
-profile headers → `provider_profiles.<id>.headers` → role/selection headers;
+Quirk values are validated during resolution and `selfmind model check` prints
+their effective values plus protocol-mismatch warnings. Adapters never infer a
+vendor contract from the endpoint hostname. Built-in providers declare their
+headers, HTTP version, schema repair, identity field, and thinking shape in the
+profile; custom proxies receive the same behavior when they resolve the same
+profile.
+
+HTTP headers merge low-to-high as legacy `model.headers`,
+`model.extra_headers`, built-in profile headers, legacy provider `headers`,
+`provider_profiles.<id>.extra_headers`, and role/selection extra headers;
 adapters set protocol defaults (`content-type`, auth, `anthropic-version`,
 OpenRouter attribution) first and then apply the merged map, so yaml can
 override any of them as an emergency compatibility escape hatch until a
 release ships the fix. Compatibility defaults stay in Go (profile/adapters),
 never materialized into generated yaml — a config file is a snapshot and
 would pin stale values across upgrades. `selfmind model check` prints the
-merged headers with per-key origin (`Resolver.HeaderOrigins`).
+merged headers with per-key origin (`Resolver.HeaderOrigins`). `extra_body`
+and `extra_query` merge provider-to-role, with the higher layer winning;
+request-body objects merge recursively. The transport applies those options
+only at the final HTTP boundary, so CLI, IM, cron, and future remote clients
+share one wire contract.
 
-`ProviderQuirks.PromptCache` opts an Anthropic-protocol provider into explicit prompt-cache breakpoints: the adapter attaches `cache_control: {"type":"ephemeral"}` to the last system content block and a rolling breakpoint on the last content block of the most recent message before the final user message (never more than 4 breakpoints). Built-in native Anthropic and MiniMax profiles enable it because those endpoints document the contract. Custom endpoints default off, and direct Kimi Coding remains off because its native coding endpoint has not established the same contract. With the quirk off, request bytes are unchanged. Usage accounting always parses `cache_read_input_tokens` / `cache_creation_input_tokens` into `llm.UsageStats`, and the kernel `token.updated` event adds `cache_read_input_tokens`, `cache_creation_input_tokens`, and `billed_input_tokens` (= `input_tokens` - `cache_read_input_tokens`). `/diag context` renders the latest run totals and hit rate.
+`ProviderQuirks.PromptCache` opts an Anthropic-protocol provider into explicit prompt-cache breakpoints: the adapter attaches `cache_control: {"type":"ephemeral"}` to the last system content block and a rolling breakpoint on the last content block of the most recent message before the final user message (never more than 4 breakpoints). Built-in native Anthropic and MiniMax profiles enable it because those endpoints document the contract. Custom endpoints default off, and direct Kimi Coding remains off because its native coding endpoint has not established the same contract. With the quirk off, request bytes are unchanged. Usage accounting normalizes Anthropic cache reads/creation and OpenAI-compatible `prompt_cache_hit_tokens` / `prompt_cache_miss_tokens`, plus reported reasoning tokens, into `llm.UsageStats`. The kernel `token.updated` event records hit, miss, creation, output, and reasoning totals. `/diag context` and `selfmind usage` render the latest run totals and hit rate; they deliberately do not embed provider prices.
 
 ## Tool Schema Governance
 
@@ -96,6 +119,21 @@ model capabilities, not a global hardcoded enum. `selfmind model set`
 validates them when metadata is discoverable and otherwise preserves the
 explicit value for compatible private endpoints.
 
+For Anthropic Messages, `thinking_mode: anthropic` maps an explicit reasoning
+effort to an enabled thinking budget (`low=4096`, `medium/default=8192`,
+`high=16384`, `xhigh/max=32768`) and raises the response cap when necessary.
+For OpenAI-compatible transports the adapter uses the protocol's
+`reasoning_effort` or provider-specific thinking contract. An explicit typed
+field is preferred; `extra_body` remains the emergency override at the final
+wire boundary.
+
+`user_identity_field: auto` maps to `user_id` for OpenAI-compatible requests
+and `metadata.user_id` for Anthropic Messages. The value is a stable opaque
+SelfMind identifier derived from authenticated identity, never a raw tenant,
+person, channel, email, or platform id. `off` disables it. An explicit
+`extra_body.user_id` or `extra_body.metadata.user_id` wins over the automatic
+value.
+
 ## Core Files
 
 | File | Responsibility |
@@ -129,6 +167,26 @@ explicit value for compatible private endpoints.
 | `claude-code` | `anthropic_messages` | External OAuth (Claude Code login) | `claude-3-5-sonnet-20241022` |
 | `gemini-cli` | `openai_compatible` | External OAuth (Gemini CLI login) | `gemini-1.5-pro` |
 | `qwen-cli` | `openai_compatible` | External OAuth (Qwen CLI login) | `qwen3-coder-plus` |
+
+## DeepSeek V4
+
+The built-in `deepseek` profile uses the OpenAI-compatible transport and
+enables DeepSeek's thinking/tool contract. `models.primary.reasoning: high`
+is sent as `thinking.type=enabled` with level `high`; `xhigh` maps to the
+provider's `max` level. When a thinking response calls a tool, the adapter
+preserves and replays `reasoning_content` with the assistant tool call before
+the matching tool result. Dropping it makes the next provider request invalid.
+
+DeepSeek requests also carry an optional `user_id`. SelfMind never sends a raw
+person, tenant, channel, email, or platform ID. `StableProviderUserID` derives
+an opaque, versioned `sm_...` value from the authenticated tenant/person pair;
+it remains stable across channels and runs but changes across people. The
+field is sent only when a provider profile declares
+`user_identity_field: user_id`.
+
+`selfmind model check --role <role> --live` validates both the ordinary native
+tool schema and the complete thinking tool loop: reasoning + tool call, tool
+result replay, then a final assistant answer.
 
 ## Kimi Coding Plan
 

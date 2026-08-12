@@ -80,6 +80,10 @@ func RunCuratorForTenantWithOptions(tenantID string, opts CuratorOptions) (strin
 			skippedCount++
 			continue
 		}
+		if notBefore, err := time.Parse(time.RFC3339, s.GovernanceNotBefore); err == nil && now.Before(notBefore) {
+			skippedCount++
+			continue
+		}
 		last := parseSkillActivityTime(s)
 		if last.IsZero() {
 			// Newly-created but never-used skills get a grace period from UpdatedAt in sidecar.

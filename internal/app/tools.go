@@ -110,6 +110,9 @@ func registerConfiguredSecrets(cfg *config.Config) {
 	registerEndpoint := func(endpoint config.ProviderEndpoint) {
 		tools.RegisterSensitiveValue(endpoint.APIKey)
 		registerSensitiveHeaders(endpoint.Headers)
+		registerSensitiveHeaders(endpoint.ExtraHeaders)
+		registerSensitiveExtras(endpoint.ExtraBody)
+		registerSensitiveExtras(endpoint.ExtraQuery)
 	}
 	registerEndpoint(cfg.Providers.OpenAI)
 	registerEndpoint(cfg.Providers.Anthropic)
@@ -123,8 +126,12 @@ func registerConfiguredSecrets(cfg *config.Config) {
 	for _, role := range cfg.Models.Roles {
 		tools.RegisterSensitiveValue(role.APIKey)
 		registerSensitiveHeaders(role.Headers)
+		registerSensitiveHeaders(role.ExtraHeaders)
+		registerSensitiveExtras(role.ExtraBody)
+		registerSensitiveExtras(role.ExtraQuery)
 	}
 	registerSensitiveHeaders(cfg.Model.Headers)
+	registerSensitiveHeaders(cfg.Model.ExtraHeaders)
 	for _, value := range []string{
 		cfg.Providers.AnthropicAPIKey,
 		cfg.Providers.OpenAIAPIKey,
@@ -168,4 +175,38 @@ func registerSensitiveHeaders(headers map[string]string) {
 			}
 		}
 	}
+}
+
+func registerSensitiveExtras(values map[string]interface{}) {
+	for key, value := range values {
+		registerSensitiveExtraValue(key, value, sensitiveExtraKey(key))
+	}
+}
+
+func registerSensitiveExtraValue(key string, value interface{}, inheritedSensitive bool) {
+	sensitive := inheritedSensitive || sensitiveExtraKey(key)
+	switch typed := value.(type) {
+	case string:
+		if sensitive {
+			tools.RegisterSensitiveValue(typed)
+		}
+	case map[string]interface{}:
+		for childKey, child := range typed {
+			registerSensitiveExtraValue(childKey, child, sensitive)
+		}
+	case []interface{}:
+		for _, child := range typed {
+			registerSensitiveExtraValue(key, child, sensitive)
+		}
+	}
+}
+
+func sensitiveExtraKey(key string) bool {
+	key = strings.ToLower(strings.NewReplacer("-", "_", ".", "_").Replace(strings.TrimSpace(key)))
+	for _, marker := range []string{"authorization", "api_key", "apikey", "token", "secret", "password", "credential"} {
+		if strings.Contains(key, marker) {
+			return true
+		}
+	}
+	return false
 }

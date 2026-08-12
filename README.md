@@ -23,7 +23,7 @@ Available for daily personal use:
 - Long-term memory, session search, skill management, background review, and skill curator.
 - Tenant learning audit records for memory and skill mutations, including skill/memory history and basic undo.
 - Native tool calling for OpenAI-compatible providers, with legacy text-tool fallback, repeated-failure/no-progress guardrails, and secret redaction.
-- Role-based model routing through `models.roles`, so coding, memory extraction, background review, skill curation, and semantic recall can use different models.
+- Simple primary/auxiliary model routing, with optional `models.roles` overrides for advanced tuning.
 - Dynamic model runtime with provider profiles, live model-list fetching, local model-list cache, and best-effort auth reuse for Codex CLI, Claude Code, Gemini CLI, and Qwen CLI. Codex CLI and the SelfMind-owned MiniMax OAuth profile additionally auto-refresh expired access tokens.
 - Built-in IM adapters: Telegram, personal/enterprise WeChat (Weixin, iLink protocol with built-in QR login via `selfmind weixin login`), Feishu/Lark, and QQ official bot. WeChat does inbound polling + media; Feishu/QQ use the generic webhook for inbound and a delivery sender for outbound. If an iLink session expires, run `selfmind weixin login` again; the running gateway hot-reloads the refreshed credentials and resumes polling without a restart.
 - MCP client over stdio/HTTP (JSON-RPC) with multi-server connections and on-demand tool registration.
@@ -188,13 +188,13 @@ models:
     provider: "openai"
     model: "gpt-4o"
     reasoning: "auto"
-  # Role-based exceptions. Any omitted role inherits primary.
+  # One default for approval triage, memory, recall, summaries, and skill work.
+  auxiliary:
+    provider: "google"
+    model: "gemini-1.5-flash"
+  # Optional advanced exceptions. Missing fields inherit auxiliary.
   roles:
-    memory_extract: { provider: "google", model: "gemini-1.5-flash" }
-    background_review: { provider: "google", model: "gemini-1.5-flash" }
-    fast_classifier: { provider: "google", model: "gemini-1.5-flash" }
-    skill_curator: { provider: "google", model: "gemini-1.5-flash" }
-    semantic_recall: { provider: "google", model: "gemini-1.5-flash" }
+    fast_classifier: { model: "gemini-2.0-flash-lite" }
 
 # Core provider config for first-class providers such as OpenAI, Anthropic,
 # and Google.
@@ -443,9 +443,10 @@ MiniMax and Kimi Coding Plan:
 
 ### Model Routing
 
-The default model is configured under `models.primary`. Role routing is
-configured under `models.roles`; absent roles inherit the primary selection,
-so no `default` role is needed.
+The foreground model is configured under `models.primary`. One optional
+`models.auxiliary` selection covers bounded background work. Per-role entries
+under `models.roles` are advanced exceptions and override auxiliary. There is
+no `default` role.
 
 Current role names:
 
@@ -455,11 +456,12 @@ Current role names:
 - `fast_classifier`: direct-answer routing, cheap classification, and low-latency smart approval triage.
 - `skill_curator`: skill review and curation.
 - `semantic_recall`: semantic session recall.
+- `summarizer`: bounded context compaction summaries.
 
 In personal mode these are read from local YAML. In the future SaaS mode, the same role names can be resolved from a database-backed tenant/person/workspace model policy.
 
-Smart approval uses an explicitly configured `fast_classifier`. For legacy
-configs it may fall back to an explicitly configured `background_review`, but
+Smart approval uses `fast_classifier` from an explicit role or the auxiliary
+selection. For legacy configs it may fall back to an explicitly configured `background_review`, but
 it never silently borrows `models.primary`; without either route it safely asks
 the person.
 
@@ -719,18 +721,18 @@ Restart the gateway (`selfmind gateway restart`) after changing config. Recordin
 When a turn shows a bug worth preventing forever, promote it into an offline eval case:
 
 ```sh
-# Promote the most recent recorded turn (or pass a turn id instead of "latest")
+# Capture the most recent recorded turn as a private draft
 selfmind eval capture latest --title "search backend outage must report failure, not a false negative" --suite quality
 
-# Verify it replays offline (uses the recording — no provider quota)
-SELFMIND_EVAL_VCR=replay selfmind eval run evalcases/quality/<case>.yaml
-# or run the whole regression gate:
+# Add deterministic assertions, replay it without provider quota, then move the
+# reviewed YAML from evaldrafts/ to evalcases/ and its cassette from
+# .vcr-drafts/ to .vcr/. The full release gate then includes it:
 selfmind selfcheck
 ```
 
 **Before committing a captured case, open its YAML and scrub it** — flight recordings are plaintext conversations, so remove any real names, private queries, or anything that should not enter the repo.
 
-The loop: use SelfMind normally → `selfmind doctor` to spot problems → `eval capture` to freeze a bad turn → `eval run` to confirm it is caught from now on.
+The loop: use SelfMind normally → `selfmind doctor` to spot problems → `eval capture` to freeze a private draft → add assertions and replay → explicitly promote it into the release corpus.
 
 ## Gateway Mode
 

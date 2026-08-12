@@ -136,6 +136,9 @@ func Run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	if handled, exitCode := app.runEvalCommandIfRequested(); handled {
 		return exitCode
 	}
+	if handled, exitCode := app.runDocsCommandIfRequested(); handled {
+		return exitCode
+	}
 	if handled, exitCode := app.runSelfcheckCommandIfRequested(); handled {
 		return exitCode
 	}
@@ -188,6 +191,7 @@ var documentedCLIUsages = []string{
 	"selfmind feedback [--out FILE|--send] [--repo OWNER/REPO] [--include-crash] <message>",
 	"selfmind send [--async] [--mode MODE] <message>",
 	"selfmind status",
+	"selfmind usage",
 	"selfmind tasks [done|archived|all|<keyword>]",
 	"selfmind task <n|task_id> [runs|rename <name>|pin|unpin|archive|merge <dst>]",
 	"selfmind resume <n|task_id>",
@@ -204,9 +208,10 @@ var documentedCLIUsages = []string{
 	"selfmind model [current|check [--live] [--role <name>]|list|set <provider> <model>]",
 	"selfmind auth [login|status|logout] ...",
 	"selfmind doctor [--out FILE] [--probe-models]",
+	"selfmind docs [check|index]",
 	"selfmind selfcheck [--fast | --profile local-full|local-fast|ci] [--skip-go] [--skip-eval] [--eval-dir DIR]",
 	"selfmind eval [list|run|report|repair|scorecard|capture|clean]",
-	"selfmind maintenance [replay|migrate-memory|memory-audit|memory-dedup|task-audit] ...",
+	"selfmind maintenance [replay|migrate-memory|migrate-skills|memory-audit|memory-dedup|task-audit] ...",
 	"selfmind gateway [run|start|status|stop|restart|service] ...",
 	"selfmind weixin [login|status] ...",
 }

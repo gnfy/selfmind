@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { spawn } from "node:child_process";
+import { existsSync, realpathSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import process from "node:process";
@@ -27,11 +28,57 @@ const targets = {
   },
 };
 
+function isPnpmOwnedInstall(packageRoot, nodeModulesDir) {
+  if (!existsSync(path.join(nodeModulesDir, ".modules.yaml"))) return false;
+  try {
+    return (
+      realpathSync(path.join(nodeModulesDir, "@selfmind", "cli")) ===
+      realpathSync(packageRoot)
+    );
+  } catch {
+    return false;
+  }
+}
+
+// Package-manager environment variables are normally absent when a globally
+// installed launcher is invoked from an ordinary shell. Inspect the install
+// layout first (the same discipline used by Codex), then use environment and
+// path hints, with npm as the conservative fallback.
 function packageManager() {
+  const launcherDir = path.dirname(fileURLToPath(import.meta.url));
+  const packageRoot = path.dirname(launcherDir);
+  const entrypointDir = path.dirname(path.resolve(process.argv[1]));
+  for (const startDir of new Set([packageRoot, entrypointDir])) {
+    const filesystemRoot = path.parse(startDir).root;
+    for (
+      let currentDir = startDir;
+      currentDir !== filesystemRoot;
+      currentDir = path.dirname(currentDir)
+    ) {
+      if (isPnpmOwnedInstall(packageRoot, path.join(currentDir, "node_modules"))) {
+        return "pnpm";
+      }
+    }
+  }
+
   const userAgent = process.env.npm_config_user_agent ?? "";
-  if (userAgent.startsWith("pnpm/")) return "pnpm";
-  if (userAgent.startsWith("yarn/")) return "yarn";
-  if (userAgent.startsWith("bun/")) return "bun";
+  if (/\bpnpm\//.test(userAgent)) return "pnpm";
+  if (/\byarn\//.test(userAgent)) return "yarn";
+  if (/\bbun\//.test(userAgent)) return "bun";
+
+  const execPath = process.env.npm_execpath ?? "";
+  if (execPath.includes("pnpm")) return "pnpm";
+  if (execPath.includes("yarn")) return "yarn";
+  if (execPath.includes("bun")) return "bun";
+
+  const normalizedLauncher = launcherDir.replaceAll("\\", "/");
+  if (normalizedLauncher.includes("/.bun/install/global/")) return "bun";
+  if (
+    normalizedLauncher.includes("/.config/yarn/global/") ||
+    normalizedLauncher.includes("/yarn/global/")
+  ) {
+    return "yarn";
+  }
   return "npm";
 }
 

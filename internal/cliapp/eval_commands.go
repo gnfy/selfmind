@@ -55,7 +55,7 @@ func (a *App) printEvalHelp() {
 	fmt.Fprintln(a.stdout, "  selfmind eval clean [--yes]   remove eval residue from the configured control.db and on-disk eval-* dirs (dry-run by default)")
 	fmt.Fprintln(a.stdout)
 	fmt.Fprintln(a.stdout, "Examples:")
-	fmt.Fprintln(a.stdout, "  selfmind eval run evalcases/daily-dev/chat_basic.yaml")
+	fmt.Fprintln(a.stdout, "  selfmind eval run evalcases/daily-dev/project_context_agents_md.yaml")
 	fmt.Fprintln(a.stdout, "  selfmind eval run --suite daily-dev --provider kimi-coding")
 }
 
@@ -229,8 +229,8 @@ func (a *App) evalCapture(args []string) int {
 		fmt.Fprintln(a.stderr, err)
 		return 1
 	}
-	fmt.Fprintf(a.stdout, "Captured eval case: %s\n  case:     %s\n  cassette: %s (%d files)\n", res.CaseID, res.CasePath, res.VCRPath, res.Cassettes)
-	fmt.Fprintf(a.stdout, "Next: edit %s to add `assert_state` (what should have happened), then run `selfmind selfcheck`.\n", res.CasePath)
+	fmt.Fprintf(a.stdout, "Captured eval draft: %s\n  case:     %s\n  cassette: %s (%d files)\n", res.CaseID, res.CasePath, res.VCRPath, res.Cassettes)
+	fmt.Fprintf(a.stdout, "Next: add deterministic assertions, replay the draft, then promote its YAML to evalcases/ and cassette directory to .vcr/ before running `selfmind selfcheck`.\n")
 	return 0
 }
 

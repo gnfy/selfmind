@@ -2,6 +2,7 @@ package llm
 
 import (
 	"context"
+	"strings"
 	"testing"
 )
 
@@ -107,6 +108,23 @@ func TestStablePromptCacheKeySurvivesRunChanges(t *testing.T) {
 	}
 	if got := StablePromptCacheKey(context.Background()); got != "" {
 		t.Fatalf("empty model context cache key = %q", got)
+	}
+}
+
+func TestStableProviderUserIDIsRunIndependentAndOpaque(t *testing.T) {
+	base := ModelContext{TenantID: "tenant-a", PersonID: "weixin-user-123", RunID: "run-1"}
+	first := StableProviderUserID(WithModelContext(context.Background(), base))
+	base.RunID = "run-2"
+	second := StableProviderUserID(WithModelContext(context.Background(), base))
+	if first == "" || first != second {
+		t.Fatalf("provider user id must be stable across runs: %q %q", first, second)
+	}
+	if strings.Contains(first, "tenant") || strings.Contains(first, "weixin") || strings.Contains(first, "123") {
+		t.Fatalf("provider user id leaked source identity: %q", first)
+	}
+	base.PersonID = "other-person"
+	if other := StableProviderUserID(WithModelContext(context.Background(), base)); other == first {
+		t.Fatal("different people must not share a provider user id")
 	}
 }
 

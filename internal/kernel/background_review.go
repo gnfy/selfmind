@@ -15,14 +15,15 @@ import (
 )
 
 type BackgroundReviewEngine struct {
-	mem            *memory.MemoryManager
-	backend        AgentBackend
-	provider       llm.Provider
-	config         EvolutionConfig
-	maxIterations  int
-	maxRetries     int
-	useMemoryFence bool
-	notifyCh       chan string
+	mem             *memory.MemoryManager
+	backend         AgentBackend
+	provider        llm.Provider
+	config          EvolutionConfig
+	maxIterations   int
+	maxRetries      int
+	useMemoryFence  bool
+	notifyCh        chan string
+	controlTenantID string
 	// enqueue, when set, hands a serialized ReviewJobPayload to the durable
 	// maintenance queue instead of spawning an immediate goroutine (W7).
 	enqueue func(tenantID, payloadJSON string) bool
@@ -55,6 +56,12 @@ func (e *BackgroundReviewEngine) SetNotifyChannel(ch chan string) {
 
 func (e *BackgroundReviewEngine) SetUseMemoryFence(enabled bool) {
 	e.useMemoryFence = enabled
+}
+
+// SetControlTenantID separates daemon-owned Skill/Catalog assets from the
+// person partition used for memory and session review evidence.
+func (e *BackgroundReviewEngine) SetControlTenantID(tenantID string) {
+	e.controlTenantID = strings.TrimSpace(tenantID)
 }
 
 // SetEnqueue installs the durable-job hand-off (execution-quality W7). When
@@ -163,6 +170,15 @@ func (e *BackgroundReviewEngine) ExecuteReview(ctx context.Context, tenantID, ch
 // must see quota failures so they can be blocked on the shared route circuit
 // instead of being incorrectly marked complete.
 func (e *BackgroundReviewEngine) executeReview(ctx context.Context, tenantID, channel string, snapshot []llm.Message, reviewMemory, reviewSkills bool) (string, error) {
+	invocationScope := ToolInvocationScope{
+		ControlTenantID:   e.controlTenantID,
+		PersonID:          tenantID,
+		ExecutionScopeKey: "background-review:" + tenantID,
+	}
+	if invocationScope.ControlTenantID == "" {
+		invocationScope.ControlTenantID = "default"
+	}
+	ctx = WithToolInvocationScope(ctx, invocationScope)
 	restricted := &restrictedReviewBackend{
 		inner: e.backend,
 		allowed: map[string]bool{
@@ -182,7 +198,7 @@ func (e *BackgroundReviewEngine) executeReview(ctx context.Context, tenantID, ch
 	// forward a change claim that reality does not confirm — verify each
 	// claimed skill through the same restricted backend before notifying.
 	if err == nil {
-		if unverified := unverifiedSkillClaims(restricted, tenantID, resp); len(unverified) > 0 {
+		if unverified := unverifiedSkillClaims(restricted, tenantID, resp, invocationScope); len(unverified) > 0 {
 			log.Warn("background review claimed a skill change that did not happen",
 				"claimed_skills", strings.Join(unverified, ", "),
 				"tenant", tenantID,
@@ -301,13 +317,17 @@ func extractSkillChangeClaims(resp string) []string {
 // no skill on disk. Any claim that cannot be confirmed (missing skill, or a
 // backend without skill_view) is treated as unverified — this check never
 // fails open into crediting an unconfirmed change.
-func unverifiedSkillClaims(backend AgentBackend, tenantID, resp string) []string {
+func unverifiedSkillClaims(backend AgentBackend, tenantID, resp string, scopes ...ToolInvocationScope) []string {
 	var failed []string
 	for _, name := range extractSkillChangeClaims(resp) {
-		_, err := backend.Dispatch("skill_view", map[string]interface{}{
+		args := map[string]interface{}{
 			"name":       name,
 			"_tenant_id": tenantID,
-		})
+		}
+		if len(scopes) > 0 {
+			args["_invocation_scope"] = scopes[0]
+		}
+		_, err := backend.Dispatch("skill_view", args)
 		if err != nil {
 			failed = append(failed, name)
 		}

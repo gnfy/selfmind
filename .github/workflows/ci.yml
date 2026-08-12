@@ -28,7 +28,7 @@ jobs:
   gate:
     name: Linux build, test, offline eval
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -39,6 +39,14 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Documentation contract
+        run: go run ./cmd/selfmind docs check
+
       - name: Vet
         run: go vet ./...
 
@@ -48,10 +56,18 @@ jobs:
       - name: Test
         run: go test ./...
 
-      - name: CI-owned eval (provider replay only)
+      - name: Race-sensitive runtime tests
+        env:
+          CGO_ENABLED: "1"
+        run: go test -race ./internal/runpool ./internal/control ./internal/gateway/httpapi
+
+      - name: Release docs and CI-owned eval
         # Case ownership is explicit in eval YAML (`ci.required/reason/platforms`).
         # A selected case without a cassette fails; no numeric count can hide it.
         run: go run ./cmd/selfmind selfcheck --profile ci --skip-go
+
+      - name: Package and install npm distribution
+        run: bash scripts/smoke-npm-packages.sh 0.0.0-ci
 
       - name: Upload eval diagnostics
         if: failure()
@@ -64,7 +80,7 @@ jobs:
   macos:
     name: macOS build and test
     runs-on: macos-14
-    timeout-minutes: 10
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -74,6 +90,11 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
 
       - name: Vet
         run: go vet ./...
@@ -86,6 +107,9 @@ jobs:
 
       - name: CI-owned platform eval (provider replay only)
         run: go run ./cmd/selfmind selfcheck --profile ci --skip-go
+
+      - name: Package and install npm distribution
+        run: bash scripts/smoke-npm-packages.sh 0.0.0-ci
 
       - name: Upload eval diagnostics
         if: failure()

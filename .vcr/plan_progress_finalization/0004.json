@@ -1,0 +1,61 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "content": "Writing"
+    },
+    {
+      "content": " plan"
+    },
+    {
+      "content": "-pro"
+    },
+    {
+      "content": "gress"
+    },
+    {
+      "content": ".txt"
+    },
+    {
+      "content": " with"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " exact"
+    },
+    {
+      "content": " required"
+    },
+    {
+      "content": " content"
+    },
+    {
+      "content": "."
+    },
+    {
+      "finish_reason": "tool_calls"
+    },
+    {
+      "usage": {
+        "input_tokens": 8967,
+        "output_tokens": 110,
+        "cache_read_input_tokens": 8832,
+        "cache_miss_input_tokens": 135,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0,
+        "cache_usage_reported": true
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_00_ET_QWmBRabIvjA2nsoIRGwt2855",
+          "Function": "write_file",
+          "Args": "{\"path\": \"{{SELFMIND_VCR_WORKSPACE}}/plan-progress.txt\", \"content\": \"PLAN-COMPLETE\"}"
+        }
+      ]
+    }
+  ]
+}

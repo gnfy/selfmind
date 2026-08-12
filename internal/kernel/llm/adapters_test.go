@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -83,6 +84,178 @@ func TestOpenAIAdapterChatUsesNativeTools(t *testing.T) {
 	}
 	if resp.Usage.InputTokens != 2 || resp.Usage.OutputTokens != 3 {
 		t.Fatalf("unexpected usage: %+v", resp.Usage)
+	}
+}
+
+func TestDeepSeekUsageAndReasoningAreNormalized(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("content-type", "application/json")
+		fmt.Fprint(w, `{"choices":[{"message":{"content":null,"reasoning_content":"inspect first","tool_calls":[{"id":"call-1","type":"function","function":{"name":"read_file","arguments":"{}"}}]}}],"usage":{"prompt_tokens":100,"completion_tokens":20,"prompt_cache_hit_tokens":80,"prompt_cache_miss_tokens":20,"completion_tokens_details":{"reasoning_tokens":12}}}`)
+	}))
+	defer server.Close()
+
+	adapter := NewOpenAIAdapter("test-key")
+	adapter.BaseURL = server.URL
+	resp, err := adapter.Chat(context.Background(), ChatRequest{Messages: []Message{{Role: "user", Content: "inspect"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.ReasoningContent != "inspect first" {
+		t.Fatalf("reasoning_content = %q", resp.ReasoningContent)
+	}
+	want := UsageStats{
+		InputTokens: 100, OutputTokens: 20, CacheReadInputTokens: 80,
+		CacheMissInputTokens: 20, ReasoningOutputTokens: 12, CacheUsageReported: true,
+	}
+	if resp.Usage != want {
+		t.Fatalf("usage = %+v, want %+v", resp.Usage, want)
+	}
+}
+
+func TestDeepSeekThinkingToolLoopReplaysReasoningAndDerivesUserID(t *testing.T) {
+	var got OpenAIRequest
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			t.Fatal(err)
+		}
+		w.Header().Set("content-type", "application/json")
+		fmt.Fprint(w, `{"choices":[{"message":{"content":"done"}}]}`)
+	}))
+	defer server.Close()
+
+	adapter := NewOpenAIAdapter("test-key")
+	adapter.BaseURL = server.URL
+	adapter.Model = "deepseek-v4-flash"
+	adapter.ReasoningEffort = "xhigh"
+	adapter.Quirks = ProviderQuirks{
+		ThinkingMode: "deepseek", UserIdentityField: "user_id", SupportsTools: true,
+	}
+	ctx := WithModelContext(context.Background(), ModelContext{TenantID: "tenant-a", PersonID: "person-a"})
+	var optionsProbe OpenAIRequest
+	adapter.applyOptions(ctx, &optionsProbe, ChatRequest{})
+	if optionsProbe.Thinking == nil {
+		t.Fatal("DeepSeek defaults must enable thinking before serialization")
+	}
+	_, err := adapter.Chat(ctx, ChatRequest{
+		Messages: []Message{
+			{Role: "user", Content: "inspect"},
+			{Role: "assistant", ReasoningContent: "need evidence", ToolCalls: []ToolCall{{ID: "call-1", Function: "read_file", Args: "{}"}}},
+			{Role: "tool", ToolCallID: "call-1", Content: "evidence"},
+		},
+		Tools:   []ToolDefinition{{Name: "read_file", Parameters: map[string]interface{}{"type": "object"}}},
+		Options: map[string]interface{}{"tool_choice": "auto"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ReasoningEffort != "max" {
+		t.Fatalf("reasoning_effort = %q, want max", got.ReasoningEffort)
+	}
+	thinking, _ := got.Thinking.(map[string]interface{})
+	if thinking["type"] != "enabled" || got.ToolChoice != nil {
+		t.Fatalf("thinking/tool_choice = %#v/%#v", got.Thinking, got.ToolChoice)
+	}
+	if got.UserID != StableProviderUserID(ctx) || got.UserID == "" || strings.Contains(got.UserID, "person-a") {
+		t.Fatalf("derived user_id = %q", got.UserID)
+	}
+	if len(got.Messages) < 2 || got.Messages[1].ReasoningContent != "need evidence" {
+		t.Fatalf("assistant reasoning was not replayed: %+v", got.Messages)
+	}
+}
+
+func TestOpenAIExtraOptionsOverrideDerivedUserIDAndReachTransport(t *testing.T) {
+	var got map[string]interface{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			t.Fatal(err)
+		}
+		if r.Header.Get("X-Vendor") != "selfmind-test" {
+			t.Fatalf("extra header = %q", r.Header.Get("X-Vendor"))
+		}
+		if r.URL.Query().Get("api-version") != "2026-08-11" {
+			t.Fatalf("extra query = %q", r.URL.RawQuery)
+		}
+		w.Header().Set("content-type", "application/json")
+		fmt.Fprint(w, `{"choices":[{"message":{"content":"done"}}]}`)
+	}))
+	defer server.Close()
+
+	adapter := NewOpenAIAdapter("test-key")
+	adapter.BaseURL = server.URL
+	adapter.Headers = map[string]string{"X-Vendor": "selfmind-test"}
+	adapter.ExtraQuery = map[string]interface{}{"api-version": "2026-08-11"}
+	adapter.ExtraBody = map[string]interface{}{
+		"user_id":  "operator-selected-user",
+		"metadata": map[string]interface{}{"source": "config"},
+	}
+	adapter.Quirks = ProviderQuirks{UserIdentityField: "user_id"}
+	ctx := WithModelContext(context.Background(), ModelContext{TenantID: "tenant-a", PersonID: "person-a"})
+	if _, err := adapter.Chat(ctx, ChatRequest{Messages: []Message{{Role: "user", Content: "hello"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if got["user_id"] != "operator-selected-user" {
+		t.Fatalf("user_id = %#v", got["user_id"])
+	}
+	metadata, _ := got["metadata"].(map[string]interface{})
+	if metadata["source"] != "config" {
+		t.Fatalf("metadata = %#v", metadata)
+	}
+}
+
+func TestAnthropicAdapterMapsReasoningAndOpaqueUserIdentity(t *testing.T) {
+	var got map[string]interface{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		w.Header().Set("content-type", "application/json")
+		fmt.Fprint(w, `{"content":[{"type":"text","text":"ok"}],"usage":{"input_tokens":3,"output_tokens":1}}`)
+	}))
+	defer server.Close()
+
+	adapter := NewAnthropicAdapter("test-key")
+	adapter.BaseURL = server.URL
+	adapter.Model = "claude-test"
+	adapter.ReasoningEffort = "high"
+	adapter.Quirks = ProviderQuirks{ThinkingMode: "anthropic", UserIdentityField: "auto"}
+	ctx := WithModelContext(context.Background(), ModelContext{TenantID: "tenant-a", PersonID: "person-a"})
+	if _, err := adapter.Chat(ctx, ChatRequest{Messages: []Message{{Role: "user", Content: "inspect"}}}); err != nil {
+		t.Fatal(err)
+	}
+	metadata, _ := got["metadata"].(map[string]interface{})
+	if userID, _ := metadata["user_id"].(string); !strings.HasPrefix(userID, "sm_") || strings.Contains(userID, "person-a") {
+		t.Fatalf("metadata.user_id = %#v", metadata["user_id"])
+	}
+	thinking, _ := got["thinking"].(map[string]interface{})
+	if thinking["type"] != "enabled" || thinking["budget_tokens"] != float64(16384) {
+		t.Fatalf("thinking = %#v", thinking)
+	}
+	if maxTokens, _ := got["max_tokens"].(float64); maxTokens <= 16384 {
+		t.Fatalf("max_tokens = %.0f, must exceed thinking budget", maxTokens)
+	}
+}
+
+func TestAnthropicExtraBodyOverridesAutomaticUserIdentity(t *testing.T) {
+	var got map[string]interface{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			t.Fatal(err)
+		}
+		w.Header().Set("content-type", "application/json")
+		fmt.Fprint(w, `{"content":[{"type":"text","text":"ok"}],"usage":{}}`)
+	}))
+	defer server.Close()
+	adapter := NewAnthropicAdapter("test-key")
+	adapter.BaseURL = server.URL
+	adapter.Quirks = ProviderQuirks{UserIdentityField: "auto"}
+	adapter.ExtraBody = map[string]interface{}{"metadata": map[string]interface{}{"user_id": "operator-selected"}}
+	ctx := WithModelContext(context.Background(), ModelContext{TenantID: "tenant-a", PersonID: "person-a"})
+	if _, err := adapter.Chat(ctx, ChatRequest{Messages: []Message{{Role: "user", Content: "hello"}}}); err != nil {
+		t.Fatal(err)
+	}
+	metadata := got["metadata"].(map[string]interface{})
+	if metadata["user_id"] != "operator-selected" {
+		t.Fatalf("metadata.user_id = %#v", metadata["user_id"])
 	}
 }
 
@@ -564,6 +737,7 @@ func TestAnthropicAdapterUsesMiniMaxBearerAuthAndTools(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "https://api.minimax.io/anthropic/v1/messages", nil)
 	mini := NewAnthropicAdapter("mm-key")
 	mini.BaseURL = "https://api.minimax.io/anthropic/v1/messages"
+	mini.Quirks = ProviderQuirks{AuthHeader: "bearer", ThinkingMode: "minimax"}
 	mini.setHeaders(req, "mm-key")
 	if req.Header.Get("Authorization") != "Bearer mm-key" || req.Header.Get("x-api-key") != "" {
 		t.Fatalf("minimax auth headers authorization=%q x-api-key=%q", req.Header.Get("Authorization"), req.Header.Get("x-api-key"))
@@ -594,6 +768,7 @@ func TestAnthropicAdapterUsesMiniMaxBearerAuthAndTools(t *testing.T) {
 func TestAnthropicAdapterKimiDefaultUserAgent(t *testing.T) {
 	adapter := NewAnthropicAdapter("kimi-key")
 	adapter.BaseURL = "https://api.kimi.com/coding/v1/messages"
+	adapter.Quirks = ProviderQuirks{UserAgent: "claude-code/0.1.0"}
 	req := httptest.NewRequest(http.MethodPost, adapter.BaseURL, nil)
 	adapter.setHeaders(req, "kimi-key")
 	if got := req.Header.Get("User-Agent"); got != "claude-code/0.1.0" {
@@ -688,6 +863,7 @@ func TestAnthropicAdapterSanitizesKimiToolSchema(t *testing.T) {
 	adapter := NewAnthropicAdapter("kimi-key")
 	adapter.BaseURL = "https://api.kimi.com/coding/v1/messages"
 	adapter.Model = "kimi-for-coding"
+	adapter.Quirks = ProviderQuirks{ToolSchema: "moonshot"}
 
 	req := adapter.requestFromChat(ChatRequest{
 		Messages: []Message{{Role: "user", Content: "use a tool"}},

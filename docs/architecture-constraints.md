@@ -40,12 +40,18 @@ This document is for maintainers and future AI coding tools. It defines the guar
 
 ## Model And Tool Constraints
 
-- Model selection goes through role-based routing such as `coding_agent`, `memory_extract`, `background_review`, `skill_curator`, and `semantic_recall`.
+- Model selection resolves `models.primary` for foreground work, then explicit
+  `models.roles.<role>` overrides before `models.auxiliary` for bounded
+  background roles such as `fast_classifier`, `memory_extract`,
+  `background_review`, `skill_curator`, `semantic_recall`, and `summarizer`.
 - Provider discovery, credential resolution, live model listing, and provider profile overrides belong in `internal/modelruntime`. Do not add new vendor credential probing or model-list fetch logic directly to `internal/app` or LLM adapters.
 - P2 external auth reuse is currently limited to Codex CLI, Claude Code, Gemini CLI, and Qwen CLI. Other vendors should use API keys, custom OpenAI-compatible endpoints, or `provider_profiles`.
 - New provider adapters should not be packed into one large file. Split protocol handling, providers, model listing, and streaming behavior.
 - Prefer provider-native tool calls. Text `[TOOL:...]` remains only a compatibility fallback.
 - Clearly read-only tools may run in parallel. File writes, patches, terminals, memory/skill mutations, process control, and unknown tools run sequentially by default.
+- Tool invocation identity is typed. Control-tenant skill/catalog ownership,
+  person memory/session ownership, and execution-scope workspace/process
+  authority must be resolved independently rather than from one `_tenant_id`.
 - Skill handling must remain progressive and layered: `skills_list` for metadata, `skill_view` for full content/files, `skill_manage` for mutation, `skill_catalog` for install/audit, and `skill_bundle` for bundle CRUD.
 - Skill mutations should hot-reload the active registry when possible. Direct slash invocation resolves bundles first, then individual skills.
 - Curator automation must only govern `agent-created` skills by default. Manual, catalog-installed, bundled, or pinned skills must not be auto-archived.

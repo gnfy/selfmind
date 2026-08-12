@@ -225,12 +225,12 @@ func (d *Server) diagReply(ctx context.Context, identity *control.IdentityContex
 		}
 	}
 	if health, err := d.Control.MaintenanceHealthForPerson(ctx, identity.TenantID, identity.PersonID); err == nil {
-		if health.Pending > 0 || health.Running > 0 {
+		if health.Pending > 0 || health.Failed > 0 || health.Running > 0 {
 			oldest := ""
 			if !health.OldestPendingAt.IsZero() {
 				oldest = fmt.Sprintf(", oldest %s", time.Since(health.OldestPendingAt).Round(time.Second))
 			}
-			fmt.Fprintf(&sb, "Background learning: queued %d, running %d (batched%s)\n", health.Pending, health.Running, oldest)
+			fmt.Fprintf(&sb, "Background learning: queued %d, retrying %d, running %d (batched%s)\n", health.Pending, health.Failed, health.Running, oldest)
 		}
 		if health.Blocked > 0 {
 			fmt.Fprintf(&sb, "Background learning: paused (%d job(s))\n", health.Blocked)
@@ -252,6 +252,8 @@ func (d *Server) diagReply(ctx context.Context, identity *control.IdentityContex
 			if reason := strings.TrimSpace(health.LastError); reason != "" {
 				fmt.Fprintf(&sb, "- provider: %s\n", truncate(toOneLine(tools.RedactSensitive(reason)), 140))
 			}
+		} else if health.Failed > 0 && strings.TrimSpace(health.LastError) != "" {
+			fmt.Fprintf(&sb, "- last learning error: %s\n", truncate(toOneLine(tools.RedactSensitive(health.LastError)), 140))
 		}
 	}
 	// Maintenance failure history (24h): the job row's last_error is
@@ -540,31 +542,38 @@ func (d *Server) contextDiagReply(ctx context.Context, identity *control.Identit
 }
 
 func promptCacheAggregateLine(events []control.Event) string {
-	var calls, hits, input, read, created, billed int
+	var calls, hits, input, output, read, miss, created, reasoning int
 	creationReported := false
+	usageReported := false
 	for _, e := range events {
 		if e.Type != "provider.call.usage" {
 			continue
 		}
 		var p struct {
 			InputTokens           int  `json:"input_tokens"`
+			OutputTokens          int  `json:"output_tokens"`
 			CacheReadTokens       int  `json:"cache_read_input_tokens"`
+			CacheMissTokens       int  `json:"cache_miss_input_tokens"`
 			CacheCreationTokens   int  `json:"cache_creation_input_tokens"`
+			ReasoningOutputTokens int  `json:"reasoning_output_tokens"`
+			CacheUsageReported    bool `json:"cache_usage_reported"`
 			CacheCreationReported bool `json:"cache_creation_reported"`
-			BilledInputTokens     int  `json:"billed_input_tokens"`
 		}
 		if json.Unmarshal(e.Payload, &p) != nil {
 			continue
 		}
 		calls++
 		input += p.InputTokens
+		output += p.OutputTokens
 		read += p.CacheReadTokens
+		miss += p.CacheMissTokens
 		created += p.CacheCreationTokens
-		billed += p.BilledInputTokens
+		reasoning += p.ReasoningOutputTokens
 		if p.CacheReadTokens > 0 {
 			hits++
 		}
 		creationReported = creationReported || p.CacheCreationReported
+		usageReported = usageReported || p.CacheUsageReported
 	}
 	if calls == 0 {
 		return ""
@@ -577,9 +586,13 @@ func promptCacheAggregateLine(events []control.Event) string {
 	if creationReported {
 		creation = fmt.Sprintf("created %d tok", created)
 	}
+	missText := fmt.Sprintf("uncached ~%d tok", max(input-read, 0))
+	if usageReported {
+		missText = fmt.Sprintf("cache miss %d tok", miss)
+	}
 	return fmt.Sprintf(
-		"Prompt cache (visible %d calls): read %d/%d tok (%d%%), hits %d/%d, %s, billed input %d tok\n",
-		calls, read, input, hitRate, hits, calls, creation, billed,
+		"Prompt cache (visible %d calls): hit %d/%d tok (%d%%), %s, output %d tok (reasoning %d), hits %d/%d, %s\n",
+		calls, read, input, hitRate, missText, output, reasoning, hits, calls, creation,
 	)
 }
 
@@ -592,10 +605,14 @@ func latestPromptCacheLine(events []control.Event) string {
 			Status                string `json:"status"`
 			DurationMS            int64  `json:"duration_ms"`
 			InputTokens           int    `json:"input_tokens"`
+			OutputTokens          int    `json:"output_tokens"`
 			CacheReadTokens       int    `json:"cache_read_input_tokens"`
+			CacheMissTokens       int    `json:"cache_miss_input_tokens"`
 			CacheCreationTokens   int    `json:"cache_creation_input_tokens"`
+			ReasoningOutputTokens int    `json:"reasoning_output_tokens"`
+			CacheUsageReported    bool   `json:"cache_usage_reported"`
 			CacheCreationReported bool   `json:"cache_creation_reported"`
-			BilledInputTokens     int    `json:"billed_input_tokens"`
+			UncachedInputTokens   int    `json:"uncached_input_tokens"`
 		}
 		if json.Unmarshal(e.Payload, &p) != nil {
 			continue
@@ -611,14 +628,14 @@ func latestPromptCacheLine(events []control.Event) string {
 		switch e.Type {
 		case "provider.call.usage":
 			if callLine == "" {
-				callLine = fmt.Sprintf("Provider call (#%d %s, %s, %dms): input %d tok, cache read %d tok (%d%%), %s, billed input %d tok\n",
+				callLine = fmt.Sprintf("Provider call (#%d %s, %s, %dms): input %d tok, cache hit %d tok (%d%%), cache miss %d tok, output %d tok (reasoning %d), %s\n",
 					p.Iteration, p.Transport, p.Status, p.DurationMS, p.InputTokens,
-					p.CacheReadTokens, hitRate, created, p.BilledInputTokens)
+					p.CacheReadTokens, hitRate, p.UncachedInputTokens, p.OutputTokens, p.ReasoningOutputTokens, created)
 			}
 		case "token.updated":
 			if runLine == "" && (p.InputTokens > 0 || p.CacheReadTokens > 0 || p.CacheCreationTokens > 0) {
-				runLine = fmt.Sprintf("Prompt cache (run snapshot): read %d tok (%d%%), %s, billed input %d tok\n",
-					p.CacheReadTokens, hitRate, created, p.BilledInputTokens)
+				runLine = fmt.Sprintf("Prompt cache (run snapshot): hit %d tok (%d%%), uncached %d tok, output %d tok (reasoning %d), %s\n",
+					p.CacheReadTokens, hitRate, p.UncachedInputTokens, p.OutputTokens, p.ReasoningOutputTokens, created)
 			}
 		}
 		if callLine != "" && runLine != "" {

@@ -3,6 +3,7 @@ title: "task governance: pin state is visible and reversible"
 suite: timeline
 workspace: "."
 channel: cli
+model_required: false
 
 # Control-only task-governance flow. No model or cassette is required.
 turns:

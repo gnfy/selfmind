@@ -73,6 +73,21 @@ func TestConfiguredApprovalJudgeProviderPrefersFastClassifier(t *testing.T) {
 	}
 }
 
+func TestConfiguredApprovalJudgeProviderUsesAuxiliaryModel(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Models.Primary = config.ModelSelectionConfig{Provider: "openai", Model: "primary-model"}
+	cfg.Models.Auxiliary = config.ModelSelectionConfig{Provider: "openai", Model: "aux-model"}
+	cfg.Providers.OpenAI.APIKey = "test-key"
+	cfg.Normalize()
+	provider, role := configuredApprovalJudgeProvider(nil, cfg, "default")
+	if provider == nil || role != llm.RoleFastClassifier {
+		t.Fatalf("provider=%T role=%q, want auxiliary fast_classifier", provider, role)
+	}
+	if got := llm.GetModelName(provider); got != "aux-model" {
+		t.Fatalf("model=%q, want aux-model", got)
+	}
+}
+
 func TestConfiguredApprovalJudgeProviderLegacyFallbackOnly(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.Models.Primary = config.ModelSelectionConfig{Provider: "openai", Model: "primary-model"}

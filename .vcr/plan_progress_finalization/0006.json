@@ -1,0 +1,61 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "content": "Now"
+    },
+    {
+      "content": " verifying"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " exact"
+    },
+    {
+      "content": " file"
+    },
+    {
+      "content": " contents"
+    },
+    {
+      "content": " with"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " verify"
+    },
+    {
+      "content": " tool"
+    },
+    {
+      "content": "."
+    },
+    {
+      "finish_reason": "tool_calls"
+    },
+    {
+      "usage": {
+        "input_tokens": 9343,
+        "output_tokens": 159,
+        "cache_read_input_tokens": 9216,
+        "cache_miss_input_tokens": 127,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0,
+        "cache_usage_reported": true
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_00_ET_vABDIzZ3wng2L9FJ8Sse7474",
+          "Function": "verify",
+          "Args": "{\"command\": \"test \\\"$(cat plan-progress.txt)\\\" = \\\"PLAN-COMPLETE\\\" \u0026\u0026 echo \\\"VERIFY-OK: content is exactly PLAN-COMPLETE\\\" \u0026\u0026 wc -c plan-progress.txt\", \"cwd\": \"{{SELFMIND_VCR_WORKSPACE}}\", \"kind\": \"custom\"}"
+        }
+      ]
+    }
+  ]
+}

@@ -396,7 +396,7 @@ func inspectConfigUpgrade(path string, originalDoc, canonicalDoc *yaml.Node) con
 			report.Legacy = append(report.Legacy, m.Label)
 		}
 	}
-	report.Missing = append(report.Missing, missingKimiCheapRoleDefaults(originalRoot)...)
+	report.Missing = append(report.Missing, missingKimiAuxiliaryDefault(originalRoot)...)
 	sort.Strings(report.Missing)
 	sort.Strings(report.Legacy)
 	sort.Strings(report.Deprecated)
@@ -553,44 +553,31 @@ func yamlEnsureMappingPath(root *yaml.Node, path []string) *yaml.Node {
 func addMissingConfigDefaults(targetDoc, canonicalDoc *yaml.Node) {
 	root := yamlDocumentRoot(targetDoc)
 	addMissingYAMLMapping(root, yamlDocumentRoot(canonicalDoc), nil)
-	addMissingKimiCheapRoleDefaults(root)
+	addMissingKimiAuxiliaryDefault(root)
 }
 
-var kimiCheapRoleDefaults = []string{
-	"fast_classifier",
-	"memory_extract",
-	"background_review",
-	"skill_curator",
-	"semantic_recall",
-}
-
-func missingKimiCheapRoleDefaults(root *yaml.Node) []string {
+func missingKimiAuxiliaryDefault(root *yaml.Node) []string {
 	if !hasKimiCodingConfig(root) {
 		return nil
 	}
-	var missing []string
-	for _, role := range kimiCheapRoleDefaults {
-		if !yamlPathExists(root, []string{"models", "roles", role}) {
-			missing = append(missing, "models.roles."+role)
-		}
+	if !yamlPathExists(root, []string{"models", "auxiliary"}) {
+		return []string{"models.auxiliary"}
 	}
-	return missing
+	return nil
 }
 
-func addMissingKimiCheapRoleDefaults(root *yaml.Node) {
+func addMissingKimiAuxiliaryDefault(root *yaml.Node) {
 	if !hasKimiCodingConfig(root) {
 		return
 	}
-	roles := yamlEnsureMappingPath(root, []string{"models", "roles"})
-	for _, role := range kimiCheapRoleDefaults {
-		if yamlMappingValue(roles, role) != nil {
-			continue
-		}
-		roleConfig := &yaml.Node{Kind: yaml.MappingNode}
-		yamlSetMappingValue(roleConfig, "provider", &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "kimi-coding"})
-		yamlSetMappingValue(roleConfig, "model", &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "kimi-for-coding"})
-		yamlSetMappingValue(roles, role, roleConfig)
+	models := yamlEnsureMappingPath(root, []string{"models"})
+	if yamlMappingValue(models, "auxiliary") != nil {
+		return
 	}
+	auxiliary := &yaml.Node{Kind: yaml.MappingNode}
+	yamlSetMappingValue(auxiliary, "provider", &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "kimi-coding"})
+	yamlSetMappingValue(auxiliary, "model", &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "kimi-for-coding"})
+	yamlSetMappingValue(models, "auxiliary", auxiliary)
 }
 
 func hasKimiCodingConfig(root *yaml.Node) bool {

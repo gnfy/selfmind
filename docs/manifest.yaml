@@ -1,0 +1,224 @@
+version: 1
+documents:
+  - path: docs/README.md
+    title: Documentation Index
+    class: guide
+    owner: documentation
+    state: current
+    language: en
+  - path: docs/STATUS.md
+    title: Implementation Status
+    class: status
+    owner: maintainers
+    state: current
+    language: en
+  - path: docs/architecture-constraints.md
+    title: Architecture Constraints
+    class: contract
+    owner: architecture
+    state: current
+    language: en
+  - path: docs/architecture-constraints.zh-CN.md
+    title: 架构约束
+    class: contract
+    owner: architecture
+    state: current
+    language: zh-CN
+    translation_of: docs/architecture-constraints.md
+    source_hash: 1b2ae0a59572960a
+  - path: docs/coding-agent-foundations.md
+    title: Coding Agent Foundations
+    class: reference
+    owner: agent-runtime
+    state: current
+    language: en
+  - path: docs/coding-agent-foundations.zh-CN.md
+    title: 编程 Agent 基础
+    class: reference
+    owner: agent-runtime
+    state: current
+    language: zh-CN
+    translation_of: docs/coding-agent-foundations.md
+    source_hash: eb42e2f033b8de44
+  - path: docs/command-reference.md
+    title: Command Reference
+    class: guide
+    owner: cli
+    state: current
+    language: en
+  - path: docs/command-reference.zh-CN.md
+    title: 命令参考
+    class: guide
+    owner: cli
+    state: current
+    language: zh-CN
+    translation_of: docs/command-reference.md
+    source_hash: 293309d8da4a254c
+  - path: docs/config-reference.md
+    title: Configuration Reference
+    class: guide
+    owner: configuration
+    state: current
+    language: en
+  - path: docs/config-reference.zh-CN.md
+    title: 配置参考
+    class: guide
+    owner: configuration
+    state: current
+    language: zh-CN
+    translation_of: docs/config-reference.md
+    source_hash: 686d17a87dd6ca3c
+  - path: docs/context-lifecycle.zh-CN.md
+    title: 上下文生命周期
+    class: reference
+    owner: context
+    state: current
+    language: zh-CN
+  - path: docs/daily-driver-readiness-plan.md
+    title: Daily Driver Readiness Plan
+    class: archive
+    owner: maintainers
+    state: archived
+    language: en
+  - path: docs/development-guide.md
+    title: Development Guide
+    class: guide
+    owner: maintainers
+    state: current
+    language: en
+  - path: docs/development-guide.zh-CN.md
+    title: 开发指南
+    class: guide
+    owner: maintainers
+    state: current
+    language: zh-CN
+    translation_of: docs/development-guide.md
+    source_hash: 6345cf6eae54f4e4
+  - path: docs/eval-loop.md
+    title: Evaluation Loop
+    class: reference
+    owner: evaluation
+    state: current
+    language: en
+  - path: docs/execution-concurrency-plan.md
+    title: Execution Concurrency Design
+    class: decision
+    owner: execution
+    state: paused
+    language: zh-CN
+  - path: docs/execution-engine.zh-CN.md
+    title: 执行引擎
+    class: reference
+    owner: execution
+    state: current
+    language: zh-CN
+  - path: docs/execution-quality-plan.zh-CN.md
+    title: 执行质量历史方案
+    class: archive
+    owner: execution
+    state: archived
+    language: zh-CN
+  - path: docs/external-auth-manager.md
+    title: External Authentication Manager
+    class: reference
+    owner: authentication
+    state: current
+    language: en
+  - path: docs/identity-continuity.md
+    title: Identity and Cross-Endpoint Continuity
+    class: contract
+    owner: product
+    state: current
+    language: en
+  - path: docs/memory-governance.zh-CN.md
+    title: 记忆治理
+    class: reference
+    owner: memory
+    state: current
+    language: zh-CN
+  - path: docs/memory-self-organization-eval.md
+    title: Memory Self-Organization Evaluation
+    class: reference
+    owner: memory
+    state: current
+    language: en
+  - path: docs/npm-distribution.md
+    title: npm Distribution
+    class: guide
+    owner: distribution
+    state: current
+    language: en
+  - path: docs/phase1-modules.md
+    title: Phase 1 Feature Modules
+    class: reference
+    owner: product
+    state: current
+    language: en
+  - path: docs/plans/document-governance.md
+    title: Documentation and Release-Gate Governance
+    class: archive
+    owner: maintainers
+    state: archived
+    language: en
+  - path: docs/provider-runtime.md
+    title: Provider Runtime
+    class: reference
+    owner: providers
+    state: current
+    language: en
+  - path: docs/provider-runtime.zh-CN.md
+    title: Provider Runtime 中文规范
+    class: reference
+    owner: providers
+    state: current
+    language: zh-CN
+    translation_of: docs/provider-runtime.md
+    source_hash: bd555f9b4988f803
+  - path: docs/skills-architecture.md
+    title: Skills Architecture
+    class: reference
+    owner: skills
+    state: current
+    language: en
+  - path: docs/tool-safety.md
+    title: Tool Safety
+    class: reference
+    owner: safety
+    state: current
+    language: en
+  - path: docs/tui-claude-code-alignment.md
+    title: TUI Claude Code Alignment Record
+    class: archive
+    owner: tui
+    state: archived
+    language: en
+  - path: docs/tui-terminal-first-hybrid.md
+    title: Terminal-First Hybrid TUI
+    class: reference
+    owner: tui
+    state: current
+    language: en
+  - path: docs/vision-saas-enterprise.zh-CN.md
+    title: SaaS 与企业版远期图景
+    class: decision
+    owner: product
+    state: paused
+    language: zh-CN
+  - path: docs/weixin-live-test.md
+    title: Weixin Live Test
+    class: guide
+    owner: delivery
+    state: current
+    language: en
+  - path: docs/work-timeline.md
+    title: Work Timeline
+    class: reference
+    owner: tasks
+    state: current
+    language: en
+  - path: docs/worker-pool-design.md
+    title: Worker Pool Design
+    class: reference
+    owner: execution
+    state: current
+    language: en

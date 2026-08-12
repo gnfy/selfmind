@@ -1,0 +1,73 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "reasoning_content": "Now"
+    },
+    {
+      "reasoning_content": " inspect"
+    },
+    {
+      "reasoning_content": " the"
+    },
+    {
+      "reasoning_content": " workspace"
+    },
+    {
+      "reasoning_content": "."
+    },
+    {
+      "content": "Insp"
+    },
+    {
+      "content": "ecting"
+    },
+    {
+      "content": " the"
+    },
+    {
+      "content": " workspace"
+    },
+    {
+      "content": " to"
+    },
+    {
+      "content": " see"
+    },
+    {
+      "content": " what"
+    },
+    {
+      "content": " already"
+    },
+    {
+      "content": " exists"
+    },
+    {
+      "content": "."
+    },
+    {
+      "finish_reason": "tool_calls"
+    },
+    {
+      "usage": {
+        "input_tokens": 8514,
+        "output_tokens": 105,
+        "cache_read_input_tokens": 8320,
+        "cache_miss_input_tokens": 194,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 5,
+        "cache_usage_reported": true
+      }
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_00_dJntxwPCy6NmRKvYCigi5308",
+          "Function": "ls_r",
+          "Args": "{\"path\": \"{{SELFMIND_VCR_WORKSPACE}}\", \"recursive\": true}"
+        }
+      ]
+    }
+  ]
+}

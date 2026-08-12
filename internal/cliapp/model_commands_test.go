@@ -17,6 +17,17 @@ import (
 	"selfmind/internal/platform/config"
 )
 
+func TestRedactHeaderValueMasksSecretsAndAccountIdentity(t *testing.T) {
+	for _, key := range []string{"Authorization", "X-API-Key", "chatgpt-account-id", "X-User-ID"} {
+		if got := redactHeaderValue(key, "sensitive-value"); got != "***" {
+			t.Fatalf("redactHeaderValue(%q) = %q, want masked", key, got)
+		}
+	}
+	if got := redactHeaderValue("User-Agent", "selfmind-test"); got != "selfmind-test" {
+		t.Fatalf("User-Agent = %q, want visible compatibility value", got)
+	}
+}
+
 func TestModelSetWritesExplicitConfigPath(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	stdout := &bytes.Buffer{}
@@ -158,6 +169,7 @@ func TestModelCheckLiveRoleValidatesNativeToolSchema(t *testing.T) {
 				BaseURL:  server.URL,
 				Protocol: "openai_compatible",
 				APIKey:   "test-key",
+				Quirks:   config.ProviderQuirks{ThinkingMode: "openai"},
 			},
 		}},
 	}); err != nil {

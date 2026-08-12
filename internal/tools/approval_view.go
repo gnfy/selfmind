@@ -36,6 +36,16 @@ func ApprovalChangeSummary(toolName string, args map[string]interface{}) string 
 		}
 		return language + " script, " + contentChangeSummary(code)
 	}
+	if command, ok := args["command"].(string); ok && isExecTool(toolName) {
+		kind := "shell command"
+		switch toolName {
+		case "verify":
+			kind = "verification command"
+		case "watch_external":
+			kind = "external watch command"
+		}
+		return kind + ", " + contentChangeSummary(command)
+	}
 	return ""
 }
 
@@ -48,7 +58,7 @@ func ApprovalPersistentArgs(toolName string, args map[string]interface{}) map[st
 		if strings.HasPrefix(key, "_") || (toolName == "execute_code" && key == "code") {
 			continue
 		}
-		out[key] = RedactSensitive(fmt.Sprintf("%v", value))
+		out[key] = fmt.Sprintf("%v", redactApprovalNamedValue(key, value))
 	}
 	if toolName != "execute_code" {
 		return out

@@ -493,11 +493,11 @@ func formatModelDefault(explicit, providerDefault string) string {
 	return "auto"
 }
 
-// redactHeaderValue masks values whose header name suggests a secret; other
+// redactHeaderValue masks secrets and account-scoped identity headers; other
 // values are shown verbatim so compatibility overrides can be verified.
 func redactHeaderValue(key, value string) string {
 	lower := strings.ToLower(key)
-	for _, marker := range []string{"key", "token", "secret", "authorization", "cookie", "password"} {
+	for _, marker := range []string{"key", "token", "secret", "authorization", "cookie", "password", "account", "user-id", "userid"} {
 		if strings.Contains(lower, marker) {
 			return "***"
 		}
@@ -541,7 +541,7 @@ func (a *App) checkCurrentModel(cfg *config.Config, options modelCheckOptions) i
 	rt, err := appcore.ResolveModelRuntime(a.ctx, cfg, options.Role)
 	if err != nil {
 		fmt.Fprintf(a.stderr, "Model check failed: %v\n", err)
-		fmt.Fprintln(a.stderr, "Hint: run `selfmind model` and enter the API key, or set the provider API key environment variable before starting SelfMind.")
+		fmt.Fprintln(a.stderr, modelCheckFailureHint(options.Role))
 		return 1
 	}
 	fmt.Fprintf(a.stdout, "Resolved: provider=%s model=%s protocol=%s\n", rt.Provider, rt.Model, rt.Protocol)
@@ -559,17 +559,25 @@ func (a *App) checkCurrentModel(cfg *config.Config, options modelCheckOptions) i
 	if rt.CapabilitySource != "" {
 		fmt.Fprintf(a.stdout, "Capabilities: %s\n", rt.CapabilitySource)
 	}
-	fmt.Fprintf(a.stdout, "Quirks: auth=%s tool_schema=%s thinking=%s user_agent=%s disable_http2=%t responses_store_false=%t responses_require_stream=%t\n",
+	fmt.Fprintf(a.stdout, "Quirks: auth=%s tool_schema=%s thinking=%s user_identity=%s system=%s http=%s prompt_cache=%s responses_store_false=%t responses_require_stream=%t\n",
 		blankAsDash(rt.Quirks.AuthHeader),
 		blankAsDash(rt.Quirks.ToolSchema),
 		blankAsDash(rt.Quirks.ThinkingMode),
-		blankAsDash(rt.Quirks.UserAgent),
-		rt.Quirks.DisableHTTP2,
+		effectiveUserIdentityDisplay(rt.Protocol, rt.Quirks.UserIdentityField),
+		blankAsDash(rt.Quirks.SystemMessageMode),
+		blankAsDash(rt.Quirks.HTTPVersion),
+		promptCacheDisplay(rt.Provider, rt.Protocol, rt.Quirks.PromptCache),
 		rt.Quirks.ResponsesStoreFalse,
 		rt.Quirks.ResponsesRequireStream,
 	)
+	if userAgent := strings.TrimSpace(rt.Quirks.UserAgent); userAgent != "" {
+		fmt.Fprintf(a.stdout, "Quirk user agent: %s\n", userAgent)
+	}
+	for _, warning := range modelruntime.QuirkDiagnostics(rt.Protocol, rt.Quirks) {
+		fmt.Fprintf(a.stdout, "Warning: %s\n", warning)
+	}
 	if len(rt.Headers) > 0 {
-		fmt.Fprintln(a.stdout, "Headers (merged; protocol headers like content-type/auth are added at request time):")
+		fmt.Fprintln(a.stdout, "Extra headers (merged; protocol headers like content-type/auth are added at request time):")
 		origins := modelruntime.NewResolver(cfg).HeaderOrigins(rt.Provider, rt.Headers)
 		keys := make([]string, 0, len(rt.Headers))
 		for key := range rt.Headers {
@@ -580,7 +588,13 @@ func (a *App) checkCurrentModel(cfg *config.Config, options modelCheckOptions) i
 			fmt.Fprintf(a.stdout, "  %s: %s  [%s]\n", key, redactHeaderValue(key, rt.Headers[key]), origins[key])
 		}
 	}
-	if strings.Contains(strings.ToLower(rt.BaseURL), "api.kimi.com/coding") && rt.Quirks.DisableHTTP2 {
+	if keys := sortedInterfaceMapKeys(rt.ExtraBody); len(keys) > 0 {
+		fmt.Fprintf(a.stdout, "Extra body keys: %s\n", strings.Join(keys, ", "))
+	}
+	if keys := sortedInterfaceMapKeys(rt.ExtraQuery); len(keys) > 0 {
+		fmt.Fprintf(a.stdout, "Extra query keys: %s\n", strings.Join(keys, ", "))
+	}
+	if rt.Quirks.DisableHTTP2 || strings.EqualFold(rt.Quirks.HTTPVersion, "http1") {
 		fmt.Fprintln(a.stdout, "Transport: TLS ALPN restricted to http/1.1")
 	}
 	if rt.TokenGetter != nil {
@@ -591,7 +605,7 @@ func (a *App) checkCurrentModel(cfg *config.Config, options modelCheckOptions) i
 	}
 	if options.Live {
 		fmt.Fprintln(a.stdout, "Live probe: sending one bounded request")
-		probe := appcore.ProbeResolvedModel(a.ctx, rt)
+		probe := appcore.ProbeResolvedModelForRole(a.ctx, rt, options.Role)
 		if probe.Err != nil {
 			fmt.Fprintf(a.stderr, "Live probe failed after %s: %s\n", probe.Latency.Round(time.Millisecond), tools.RedactSensitive(probe.Err.Error()))
 			return 1
@@ -600,9 +614,72 @@ func (a *App) checkCurrentModel(cfg *config.Config, options modelCheckOptions) i
 		if probe.NativeToolsTested {
 			toolStatus = "passed"
 		}
-		fmt.Fprintf(a.stdout, "Live probe: OK in %s; native tool schema: %s\n", probe.Latency.Round(time.Millisecond), toolStatus)
+		fmt.Fprintf(a.stdout, "Live probe: OK in %s\n", probe.Latency.Round(time.Millisecond))
+		fmt.Fprintf(a.stdout, "  transport: passed\n  native tool schema: %s\n", toolStatus)
+		if probe.ThinkingToolLoopTested {
+			thinkingStatus := "failed"
+			if probe.ThinkingToolLoopPassed {
+				thinkingStatus = "passed"
+			}
+			fmt.Fprintf(a.stdout, "  thinking tool loop: %s\n", thinkingStatus)
+		}
+		if probe.MaintenanceContractTested {
+			contractStatus := "failed"
+			if probe.MaintenanceContractPassed {
+				contractStatus = "passed"
+			}
+			fmt.Fprintf(a.stdout, "  maintenance contract: %s\n", contractStatus)
+		}
 	}
 	return 0
+}
+
+func sortedInterfaceMapKeys(values map[string]interface{}) []string {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		if key = strings.TrimSpace(key); key != "" {
+			keys = append(keys, key)
+		}
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func effectiveUserIdentityDisplay(protocol, field string) string {
+	field = strings.ToLower(strings.TrimSpace(field))
+	if field == "" || field == "off" {
+		return "off"
+	}
+	if field == "auto" {
+		if modelruntime.NormalizeProtocol(protocol) == modelruntime.ProtocolAnthropic {
+			return "auto->metadata.user_id"
+		}
+		return "auto->user_id"
+	}
+	return field
+}
+
+func promptCacheDisplay(provider, protocol string, enabled bool) string {
+	if modelruntime.NormalizeProtocol(protocol) == modelruntime.ProtocolAnthropic {
+		if enabled {
+			return "cache_control:on"
+		}
+		return "cache_control:off"
+	}
+	if strings.EqualFold(strings.TrimSpace(provider), "deepseek") {
+		return "provider-managed"
+	}
+	return "n/a"
+}
+
+func modelCheckFailureHint(role string) string {
+	if strings.EqualFold(strings.TrimSpace(role), "auxiliary") {
+		return "Hint: run `selfmind setup`, or configure `models.auxiliary` and restart the gateway."
+	}
+	if strings.TrimSpace(role) != "" && !strings.EqualFold(role, "primary") {
+		return "Hint: configure `models.roles." + strings.TrimSpace(role) + "` (or `models.auxiliary` for a background role), then restart the gateway."
+	}
+	return "Hint: run `selfmind model` and enter the API key, or set the provider API key environment variable before starting SelfMind."
 }
 
 func (a *App) printConfiguredProviders(cfg *config.Config) {

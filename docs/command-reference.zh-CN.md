@@ -21,8 +21,9 @@ selfmind feedback [--out FILE|--send] [--repo OWNER/REPO] [--include-crash] <mes
   脚本、cron 和管道等非交互场景不会弹出提示，而会输出可执行的 `setup` 或
   `model set` 命令。`--config` 指定其他配置文件，`--resume` 恢复已有 TUI
   会话。
-- `setup` 创建或升级配置、配置模型并启动本地 gateway。各类 `skip`
-  参数可用于自动化环境。
+- `setup` 创建或升级配置，引导选择一个主模型和一个可选辅助模型，然后启动本地
+  gateway。辅助模型统一承担审批、记忆、召回、摘要和 Skill 工作；逐角色调优仍可在
+  YAML 中作为高级配置完成。各类 `skip` 参数可用于自动化环境。
 - `update check` 只检查更新。`update` 执行完整升级：检查所选 npm 通道、
   调用包管理器安装、用 `selfmind --version` 验证新二进制，并对运行中的
   gateway daemon 做默认排空（drain）重启以切换到新版本。`--force`
@@ -93,6 +94,8 @@ selfmind env [show|refresh]
 selfmind model [current|check [--live] [--role <name>]|list|set <provider> <model>]
 selfmind auth [login|status|logout] ...
 selfmind doctor [--out FILE] [--probe-models]
+selfmind usage
+selfmind docs [check|index]
 selfmind selfcheck [--fast | --profile local-full|local-fast|ci] [--skip-go] [--skip-eval] [--eval-dir DIR]
 selfmind gateway [run|start|status|stop|restart|service] ...
 selfmind weixin [login|status] ...
@@ -119,20 +122,33 @@ selfmind weixin login [--timeout 8m] [--owner-person-id ID] [--no-enable]
 selfmind weixin status
 ```
 
+- `docs check` 检查源码文档契约：UTF-8、清单完整性、本地链接、中英文源
+  哈希、文档体积和活跃方案生命周期。`docs index` 根据
+  `docs/manifest.yaml` 重新生成 `docs/README.md`，不会自动把过期译文标为
+  已同步。
+- `selfcheck` 始终执行文档契约，因此同时指定 `--skip-go --skip-eval`
+  会执行一次有效的纯文档发布检查。
+
 - `config doctor` 只报告配置缺失或过期项；`config upgrade` 在保留已有值的
   前提下补充受支持的默认项。
 - `model set` 只写入 `models.primary` 这一处主模型配置。能力元数据存在时，
   会动态校验 reasoning/service tier；`auto` 表示交给 provider/模型默认处理。
 - 共享 daemon 不支持在 TUI `/model` 中热切换。修改后使用
   `selfmind gateway restart --drain`，在安全 turn 边界重启。
-- `model check` 解析凭证、协议、端点和模型，但不会暴露密钥。`--role <name>`
-  检查一个已配置的维护角色；`--live` 会发起一次有界请求并验证原生工具 schema
-  兼容性，因此会消耗少量 provider 额度。
+- `model check` 解析凭证、协议、端点和模型，但不会暴露密钥。`--role auxiliary`
+  检查共享辅助路由；`--role <name>` 按 auxiliary/角色覆盖规则检查具体角色；
+  `--live` 会发起有界请求并验证原生工具 schema 兼容性。对于 DeepSeek V4
+  这类具有多轮思考/工具契约的 provider，还会回放一次无副作用工具结果并验证
+  最终答复，因此会消耗少量 provider 额度。
+- `usage` 是 `/diag context` 的 CLI 别名。若 provider 上报相应字段，会展示调用级
+  输入、缓存命中/未命中输入、输出和推理 token；它展示 token，不估算货币成本。
 - `doctor` 检查安装和配置；`--probe-models` 会真实调用 provider，可能消耗额度。
-- `selfcheck` 是本地发布门禁。默认 `local-full` 运行全部已录制用例；
+- `selfcheck` 是本地发布门禁。默认 `local-full` 运行本机能够证明的全部发布用例；
   `--fast`/`local-fast` 跳过已测量的慢用例；`--profile ci` 只运行明确分配给
   当前平台 CI 的用例。Provider 响应离线回放，但工具调用仍使用当前主机工具链。
-  退出码：`0` 通过、`1` 回归失败、`2` 参数或环境不可用。
+  缺少工具时默认以环境不可用失败；只有明确由当前平台 CI 负责的用例才会显示
+  `CI-DEFERRED`，且发布仍要求对应 Action 通过。退出码：`0` 通过、`1` 回归失败、
+  `2` 参数或环境不可用。
 - `gateway restart` 默认等待安全的 turn 边界；`--force` 仅作为最后手段。
 - 在 macOS 上，`gateway service install` 会为当前用户创建 launchd
   LaunchAgent。之后 `gateway start`、`stop`、`status`、`restart` 都操作这个
@@ -146,7 +162,7 @@ selfmind weixin status
 
 ```text
 selfmind eval [list|run|report|repair|scorecard|capture|clean]
-selfmind maintenance [replay|migrate-memory|memory-audit|memory-dedup|task-audit] ...
+selfmind maintenance [replay|migrate-memory|migrate-skills|memory-audit|memory-dedup|task-audit] ...
 ```
 
 ```text
@@ -160,6 +176,7 @@ selfmind eval clean [--yes]
 
 selfmind maintenance replay [--limit N]
 selfmind maintenance migrate-memory [--apply] [--data-dir DIR]
+selfmind maintenance migrate-skills [--apply] [--root DIR] [--governance-grace 30d]
 selfmind maintenance memory-audit [--archive-confirmed] [--partition P] [--data-dir DIR]
 selfmind maintenance memory-dedup [--apply] [--partition P] [--data-dir DIR]
 selfmind maintenance task-audit [--apply] [--limit N] [--data-dir DIR]

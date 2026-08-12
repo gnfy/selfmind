@@ -3,6 +3,13 @@ title: "a tool that must write its own state directory succeeds on first use in 
 suite: continuity
 workspace: isolated
 channel: cli
+require_cassette: true
+ci:
+  required: true
+  reason: cross_platform
+  platforms: [linux, darwin]
+requires:
+  commands: [git]
 
 # The headline defect: 26 of 293 sandboxed commands failed writing their OWN state
 # directory under $HOME. gcloud cannot even READ credentials without writing
@@ -16,7 +23,7 @@ channel: cli
 # ENGINE — that a state-directory write does not surface as an auth error and does
 # not force host execution — not any particular vendor.
 turns:
-  - input: "Run `git config --global --list` with the terminal tool and summarise in one line whether it worked. Do not switch to host execution."
+  - input: "Run `git config --global --list` with the terminal tool using sandbox=auto, then summarise in one line whether it worked."
 
 expect:
   status: completed

@@ -22,18 +22,68 @@ func TestApprovalWaitBudgetUnattendedUsesShortBound(t *testing.T) {
 	}
 }
 
-// Presence expires after 90s, so a person who typed a request and then looked
-// away reads as detached while still being perfectly able to answer. A bound
-// account must keep them on the full budget.
-func TestApprovalWaitBudgetBoundAccountCountsAsAttended(t *testing.T) {
-	srv, _, identity, _, _ := newApprovalTestServer(t)
+// Presence expires after 90s, so a person who typed on IM and then looked away
+// reads as detached while still being able to answer. Recent IM activity keeps
+// the full budget; the fixture's CLI account alone must not.
+func TestApprovalWaitBudgetRecentIMAccountCountsAsAttended(t *testing.T) {
+	srv, store, identity, _, _ := newApprovalTestServer(t)
 	coordinator := &RunCoordinator{srv: srv}
+	bound, err := store.BindAccount(context.Background(), identity.TenantID, identity.PersonID, "weixin", "wx-user", "WX User")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.TouchAccountLastSeen(context.Background(), identity.TenantID, bound.AccountID); err != nil {
+		t.Fatal(err)
+	}
 
 	if srv.presenceTracker().AnyAttached(identity.PersonID) {
 		t.Fatal("fixture should start with no live attachment")
 	}
 	if got := coordinator.approvalWaitBudget(context.Background(), identity); got != defaultApprovalWait {
-		t.Fatalf("bound account budget = %s, want %s", got, defaultApprovalWait)
+		t.Fatalf("recent IM account budget = %s, want %s", got, defaultApprovalWait)
+	}
+}
+
+func TestApprovalWaitBudgetStaleBindingUsesShortBound(t *testing.T) {
+	srv, store, identity, _, _ := newApprovalTestServer(t)
+	coordinator := &RunCoordinator{srv: srv}
+	if _, err := store.BindAccount(context.Background(), identity.TenantID, identity.PersonID, "weixin", "stale-wx-user", "Stale WX User"); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := coordinator.approvalWaitBudget(context.Background(), identity); got != defaultApprovalWaitUnattended {
+		t.Fatalf("stale IM account budget = %s, want %s", got, defaultApprovalWaitUnattended)
+	}
+}
+
+func TestApprovalWaitBudgetRecentIMWithNewerDeliveryFailureUsesShortBound(t *testing.T) {
+	srv, store, identity, _, _ := newApprovalTestServer(t)
+	coordinator := &RunCoordinator{srv: srv}
+	bound, err := store.BindAccount(context.Background(), identity.TenantID, identity.PersonID, "weixin", "wx-unreachable", "WX User")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.TouchAccountLastSeen(context.Background(), identity.TenantID, bound.AccountID); err != nil {
+		t.Fatal(err)
+	}
+	delivery, err := store.EnqueueDelivery(context.Background(), control.Delivery{
+		TenantID:       identity.TenantID,
+		PersonID:       identity.PersonID,
+		Platform:       "weixin",
+		PlatformUserID: "wx-unreachable",
+		Channel:        "wx-unreachable",
+		Content:        "approval needed",
+		Kind:           "approval",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.MarkDeliveryPendingSession(context.Background(), delivery.ID, "iLink prepare failed: ret=-2"); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := coordinator.approvalWaitBudget(context.Background(), identity); got != defaultApprovalWaitUnattended {
+		t.Fatalf("unreachable recent IM budget = %s, want %s", got, defaultApprovalWaitUnattended)
 	}
 }
 

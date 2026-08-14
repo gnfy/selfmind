@@ -28,6 +28,19 @@ const (
 	// A daemon restart resets these rows once, which is also the normal boundary
 	// after the owner updates provider configuration.
 	MaintenanceJobBlockedProvider = "blocked_provider"
+	// maintenanceRetryLimitRouteID is a durable policy identity, not a
+	// physical provider route. It prevents daemon restarts and provider-route
+	// recovery sweeps from replaying the same retry-exhausted job. Operators
+	// can still requeue it explicitly with maintenance replay.
+	maintenanceRetryLimitRouteID = "policy:retry-limit"
+	// maintenanceLegacyProbeRouteID makes the one-time migration probe durable.
+	// Without it, a daemon that restarts before the probe is claimed sees the
+	// same blank legacy row again and replays it on every boot.
+	maintenanceLegacyProbeRouteID = "policy:legacy-restart-probe"
+	// Modern fatal failures without a physical route still need a durable
+	// identity; leaving them blank would incorrectly classify them as legacy on
+	// the next daemon start.
+	maintenanceUnclassifiedProviderRouteID = "policy:provider-unclassified"
 )
 
 // MaintenanceJob mirrors one maintenance_jobs row.
@@ -374,6 +387,9 @@ func (s *Store) BlockMaintenanceJobForRoute(ctx context.Context, tenantID, runID
 	if len(lastError) > 500 {
 		lastError = lastError[:500]
 	}
+	if routeID == "" {
+		routeID = maintenanceUnclassifiedProviderRouteID
+	}
 	res, err := s.db.ExecContext(ctx,
 		`UPDATE maintenance_jobs SET status = ?, blocked_route_id = ?, last_error = ?, next_retry_at = 0, updated_at = ?
 		 WHERE tenant_id = ? AND run_id = ? AND analyzer_version = ? AND status = ?`,
@@ -406,12 +422,12 @@ func (s *Store) BlockMaintenanceJobAfterRetries(ctx context.Context, tenantID, r
 	}
 	res, err := s.db.ExecContext(ctx,
 		`UPDATE maintenance_jobs
-		 SET status = ?, blocked_route_id = '',
+		 SET status = ?, blocked_route_id = ?,
 		     last_error = CASE WHEN TRIM(COALESCE(last_error, '')) = '' THEN ? ELSE last_error END,
 		     next_retry_at = 0, updated_at = ?
 		 WHERE tenant_id = ? AND run_id = ? AND analyzer_version = ?
 		   AND status IN (?, ?)`,
-		MaintenanceJobBlockedProvider, lastError, time.Now().Unix(),
+		MaintenanceJobBlockedProvider, maintenanceRetryLimitRouteID, lastError, time.Now().Unix(),
 		normalizeTenant(tenantID), runID, analyzerVersion,
 		MaintenanceJobPending, MaintenanceJobFailed)
 	if err != nil {
@@ -419,21 +435,20 @@ func (s *Store) BlockMaintenanceJobAfterRetries(ctx context.Context, tenantID, r
 	}
 	n, err := res.RowsAffected()
 	if err == nil && n > 0 {
-		s.recordMaintenanceAttempt(ctx, tenantID, runID, analyzerVersion, "blocked_retry_limit", lastError, "")
+		s.recordMaintenanceAttempt(ctx, tenantID, runID, analyzerVersion, "blocked_retry_limit", lastError, maintenanceRetryLimitRouteID)
 	}
 	return n > 0, err
 }
 
-// ResetLegacyBlockedMaintenanceJobs grants one restart probe only to rows
-// created before route-aware quota circuits (or fatal errors without a route).
-// Route-bound quota jobs must survive daemon restarts and follow their durable
-// next_probe_at schedule.
+// ResetLegacyBlockedMaintenanceJobs grants one migration probe only to rows
+// created before route-aware quota circuits. Newly retry-exhausted jobs carry
+// a durable policy route, so they are not replayed on every daemon restart.
 func (s *Store) ResetLegacyBlockedMaintenanceJobs(ctx context.Context) (int, error) {
 	now := time.Now().Unix()
 	res, err := s.db.ExecContext(ctx,
-		`UPDATE maintenance_jobs SET status = ?, next_retry_at = 0, updated_at = ?
+		`UPDATE maintenance_jobs SET status = ?, blocked_route_id = ?, next_retry_at = 0, updated_at = ?
 		 WHERE status = ? AND TRIM(COALESCE(blocked_route_id, '')) = ''`,
-		MaintenanceJobPending, now, MaintenanceJobBlockedProvider)
+		MaintenanceJobPending, maintenanceLegacyProbeRouteID, now, MaintenanceJobBlockedProvider)
 	if err != nil {
 		return 0, err
 	}
@@ -473,12 +488,15 @@ func (s *Store) ReplayRetryLimitedMaintenanceJobs(ctx context.Context, tenantID 
 		 SET status = ?, attempts = 0, next_retry_at = 0, last_error = '', updated_at = ?
 		 WHERE rowid IN (
 		   SELECT rowid FROM maintenance_jobs
-		   WHERE tenant_id = ? AND status = ?
-		     AND last_error = 'maintenance retry limit reached'
+		   WHERE tenant_id = ?
+		     AND ((status = ? AND blocked_route_id = ?)
+		       OR (status = ? AND last_error = 'maintenance retry limit reached'))
 		     AND TRIM(COALESCE(payload_json, '')) != ''
 		   ORDER BY updated_at ASC, run_id ASC LIMIT ?
 		 )`,
-		MaintenanceJobPending, now, normalizeTenant(tenantID), MaintenanceJobSkipped, limit)
+		MaintenanceJobPending, now, normalizeTenant(tenantID),
+		MaintenanceJobBlockedProvider, maintenanceRetryLimitRouteID,
+		MaintenanceJobSkipped, limit)
 	if err != nil {
 		return 0, err
 	}

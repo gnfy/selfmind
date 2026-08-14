@@ -697,6 +697,11 @@ const (
 	// policy through Server fields and does not depend on the config package.
 	defaultApprovalWait           = 30 * time.Minute
 	defaultApprovalWaitUnattended = 30 * time.Second
+	// A historical account binding is not proof that a person can answer now.
+	// IM session credentials commonly expire while the account row remains
+	// active, so only recent non-CLI activity without a newer delivery failure
+	// earns the long synchronous wait.
+	approvalAccountReachabilityWindow = 24 * time.Hour
 	// approvalPollTimeout bounds one status read of the pending row. It is
 	// independent of the wait budget so a lapsing budget cannot turn a poll
 	// into a reported transport error.
@@ -728,11 +733,12 @@ func (c *RunCoordinator) approvalWaitBudget(ctx context.Context, identity *contr
 }
 
 // personCanAnswer reports whether ANY endpoint could produce a decision: a
-// live attachment, or a bound account an approval push can reach.
+// live attachment, or a recently active IM account an approval push can reach.
 //
 // Presence alone is not enough — its TTL is 90s, so someone who typed a
 // request and then looked away already reads as detached while still being
-// perfectly able to answer. A bound account keeps them "attended".
+// perfectly able to answer. A recently active IM account keeps them
+// "attended"; a stale historical binding does not.
 //
 // A store error counts as attended on purpose: the cost of a wasted wait is
 // run time, the cost of a wrong "nobody is there" is cutting a real person out
@@ -751,7 +757,27 @@ func (c *RunCoordinator) personCanAnswer(ctx context.Context, identity *control.
 	if err != nil {
 		return true
 	}
-	return len(accounts) > 0
+	cutoff := time.Now().Add(-approvalAccountReachabilityWindow).Unix()
+	for _, account := range accounts {
+		if strings.EqualFold(strings.TrimSpace(account.Platform), "cli") {
+			continue
+		}
+		if account.LastSeenAt < cutoff {
+			continue
+		}
+		state, stateErr := c.srv.Control.LatestDeliveryEndpointState(ctx, identity.TenantID, identity.PersonID, account.Platform, account.PlatformUserID)
+		if stateErr != nil {
+			return true
+		}
+		if state != nil && state.UpdatedAt.Unix() >= account.LastSeenAt {
+			switch strings.ToLower(strings.TrimSpace(state.Status)) {
+			case "pending_session", "failed", "sent_unconfirmed":
+				continue
+			}
+		}
+		return true
+	}
+	return false
 }
 
 func (c *RunCoordinator) toolApprovalHandler(identity *control.IdentityContext, task *control.Task, run *control.Run, channel string) tools.ToolApprovalHandler {
@@ -824,10 +850,11 @@ func (c *RunCoordinator) toolApprovalHandler(identity *control.IdentityContext, 
 				// WHERE it runs and HOW BIG the change is: a decision made without
 				// them is a guess. All four are display-only context produced by the
 				// execution scope, never by the model's args.
-				"environment":    req.Environment,
-				"cwd":            req.Cwd,
-				"change_summary": req.ChangeSummary,
-				"triage_state":   req.TriageState,
+				"environment":     req.Environment,
+				"cwd":             req.Cwd,
+				"change_summary":  req.ChangeSummary,
+				"triage_state":    req.TriageState,
+				"decision_policy": req.DecisionPolicy,
 				// The judge's reasoning and its two assessment axes, so the person
 				// inherits the judgement instead of redoing it, and a later reader
 				// can audit why the ask happened at all.
@@ -871,6 +898,7 @@ func (c *RunCoordinator) toolApprovalHandler(identity *control.IdentityContext, 
 					"run_grant_class":  req.RunGrantClass,
 					"containment":      req.Containment,
 					"triage_state":     req.TriageState,
+					"decision_policy":  req.DecisionPolicy,
 					"triage_rationale": req.TriageRationale,
 					"triage_risk":      req.TriageRisk,
 					"decisions":        decisions,

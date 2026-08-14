@@ -208,6 +208,12 @@ func activeRunCopy(active *activeRun) *activeRun {
 // assemble runtime context, drive the agent with events, then persist the
 // structured outcome, handoff, artifacts, and finishing event.
 func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.IdentityContext, req api.MessageRequest, intent router.IntentResult) (api.MessageResponse, int) {
+	// Install the watchdog before installExecutionScope captures ctx for
+	// approval and clarify callbacks. Previously the router created it later,
+	// so a clarify wait paused a different context and the real watchdog killed
+	// an otherwise healthy run after ten quiet minutes.
+	ctx, stopWatchdog := router.PrepareRunWatchdog(ctx)
+	defer stopWatchdog()
 	d := c.srv
 	// A drained queue row transitions to 'done' the moment its async run returns
 	// through ANY terminal path — normal completion, an early error return, or a
@@ -440,7 +446,7 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 		return api.MessageResponse{Identity: identity, Task: task, Run: run, Outcome: &outcome, Error: firstString(outcome.Risks), Turn: messageTurn(outcome.Status, outcome.Status, "idle", task.ID, run.ID, outcome.Summary), Context: messageContextBudget(llmUsageZero())}, http.StatusOK
 	}
 
-	content, usage, eventSummary, err := c.aggregateGatewayResponse(ctx, req.Channel, task, run, resp)
+	content, usage, eventSummary, hasFinalContent, err := c.aggregateGatewayResponse(ctx, req.Channel, task, run, resp)
 	if err != nil {
 		outcome := c.finalizeErroredRun(ctx, identity, task, run, req.Channel, err, replay)
 		return api.MessageResponse{Identity: identity, Task: task, Run: run, Outcome: &outcome, Content: content, Usage: usage, Error: firstString(outcome.Risks), Turn: messageTurn(outcome.Status, outcome.Status, "idle", task.ID, run.ID, outcome.Summary), Context: messageContextBudget(usage)}, http.StatusOK
@@ -463,10 +469,24 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 		}
 	}
 	outcome = reconcileTurnCompletion(outcome, eventSummary.Completion(), structuredOutcome)
+	outcome = reconcileMissingFinalResponse(outcome, structuredOutcome, hasFinalContent)
+	if !hasFinalContent && structuredOutcome && strings.TrimSpace(outcome.Summary) != "" {
+		// finish_run is a durable structured result. When a provider ends the
+		// stream without separate prose, expose that result instead of storing
+		// the router's generic missing-response fallback as a successful answer.
+		content = strings.TrimSpace(outcome.Summary)
+	}
 	verification, evidenceFiles := c.evidenceOutcome(finCtx, task.ID, run.ID)
 	outcome.Verification, outcome.Files = mergeEvidenceFiles(verification, evidenceFiles, outcome.Files)
 	outcome.ClaimMismatches = verificationClaimMismatches(outcome)
 	outcome = applyVerificationOutcome(outcome)
+	if watchID := strings.TrimSpace(req.WatchID); watchID != "" {
+		if watch, watchErr := d.Control.GetExternalWatch(finCtx, identity.TenantID, watchID); watchErr == nil {
+			outcome = reconcileExternalWatchOutcome(outcome, watch)
+		} else {
+			log.Warn("external watch outcome lookup failed", "watch_id", watchID, "run_id", run.ID, "error", watchErr)
+		}
+	}
 	for _, mismatch := range outcome.ClaimMismatches {
 		outcome.Risks = appendUnique(outcome.Risks, mismatch, 8)
 	}
@@ -510,6 +530,7 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 	}
 	recordFinalizeErr("materialize run finalization", c.materializeRunFinalization(finCtx, identity, task, run, taskStatus,
 		replay.WorkspaceID, replay.UserInput, req.Channel, content, outcome, replay.Attach, handoff, terminalEvent))
+	c.recordRecallOutputOverlap(finCtx, task, run, req.Channel, content)
 	c.recordOutcomeArtifacts(finCtx, task, run, req.Channel, outcome.Files)
 	if len(finalizeErrs) > 0 {
 		_, _ = d.Control.AppendEvent(context.Background(), control.Event{

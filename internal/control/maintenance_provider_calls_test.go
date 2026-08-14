@@ -59,3 +59,27 @@ func TestPruneMaintenanceProviderCalls(t *testing.T) {
 		t.Fatalf("removed=%d err=%v", removed, err)
 	}
 }
+
+func TestMaintenanceProviderUsageForPersonIsIsolated(t *testing.T) {
+	store, err := OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	now := time.Now()
+	for _, personID := range []string{"person-a", "person-b"} {
+		if err := store.RecordMaintenanceProviderCall(context.Background(), MaintenanceProviderCall{
+			TenantID: "tenant", PersonID: personID, Provider: "deepseek", Model: "v4",
+			Status: MaintenanceProviderCallSucceeded, InputTokens: 100, CreatedAt: now,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	usage, err := store.MaintenanceProviderUsageForPersonSince(context.Background(), "tenant", "person-a", now.Add(-time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(usage) != 1 || usage[0].Calls != 1 || usage[0].InputTokens != 100 {
+		t.Fatalf("person usage = %+v", usage)
+	}
+}

@@ -62,6 +62,73 @@ func TestDirectAnswerCompletesRunWithoutClosingTaskLabel(t *testing.T) {
 	}
 }
 
+func TestExternalFailureDoesNotBecomeAgentFailure(t *testing.T) {
+	outcome := reconcileExternalWatchOutcome(api.RunOutcome{
+		Status: "failed", CompletionReason: "failed", Summary: "The build failed.",
+	}, &control.ExternalWatch{
+		ID: "watch_123", Status: control.ExternalWatchFailed,
+		CheckerStatus: control.WatchCheckerOK, OperationStatus: control.WatchOperationFailed,
+	})
+	if outcome.Status != "done" || outcome.CompletionReason != "completed_with_external_failure" {
+		t.Fatalf("outcome = %#v", outcome)
+	}
+	if outcome.External == nil || outcome.External.Status != control.ExternalWatchFailed {
+		t.Fatalf("external outcome = %#v", outcome.External)
+	}
+	if got := taskStatusForFinalization(outcome, true); got != "blocked" {
+		t.Fatalf("task status = %q, want blocked", got)
+	}
+}
+
+func TestExternalFailureDoesNotHideFinalizerVerificationFailure(t *testing.T) {
+	outcome := reconcileExternalWatchOutcome(api.RunOutcome{
+		Status:       api.RunStatusVerificationPartial,
+		Verification: &api.VerificationOutcome{State: "failed"},
+	}, &control.ExternalWatch{ID: "watch_123", Status: control.ExternalWatchFailed})
+	if outcome.Status != api.RunStatusVerificationPartial {
+		t.Fatalf("outcome = %#v", outcome)
+	}
+}
+
+func TestExternalTimeoutParksTaskForUser(t *testing.T) {
+	outcome := reconcileExternalWatchOutcome(api.RunOutcome{Status: "waiting_external"}, &control.ExternalWatch{
+		ID: "watch_456", Status: control.ExternalWatchTimedOut,
+	})
+	if outcome.Status != "done" || outcome.CompletionReason != "completed_with_external_timeout" {
+		t.Fatalf("outcome = %#v", outcome)
+	}
+	if got := taskStatusForFinalization(outcome, true); got != "waiting_user" {
+		t.Fatalf("task status = %q, want waiting_user", got)
+	}
+}
+
+func TestMissingFinalResponseCannotCompleteRun(t *testing.T) {
+	outcome := reconcileMissingFinalResponse(api.RunOutcome{
+		Status:           "done",
+		CompletionReason: "completed",
+		Summary:          "SelfMind finished this turn without producing a final response.",
+	}, false, false)
+
+	if outcome.Status != "interrupted" || outcome.CompletionReason != "missing_final_response" || !outcome.Resumable {
+		t.Fatalf("outcome = %#v", outcome)
+	}
+	if got := taskStatusForFinalization(outcome, false); got != "interrupted" {
+		t.Fatalf("task status = %q, want interrupted", got)
+	}
+}
+
+func TestStructuredOutcomeIsFinalWithoutSeparateProse(t *testing.T) {
+	outcome := reconcileMissingFinalResponse(api.RunOutcome{
+		Status:           "done",
+		CompletionReason: "completed",
+		Summary:          "Implemented and verified.",
+	}, true, false)
+
+	if outcome.Status != "done" || outcome.CompletionReason != "completed" || outcome.Resumable {
+		t.Fatalf("outcome = %#v", outcome)
+	}
+}
+
 func TestIncompleteTurnOverridesStructuredWaitingExternal(t *testing.T) {
 	outcome := reconcileTurnCompletion(api.RunOutcome{
 		Status: "waiting_external",

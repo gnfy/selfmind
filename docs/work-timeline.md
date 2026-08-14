@@ -151,7 +151,10 @@ authoritative instruction. If it changes direction, the latest message wins."*
   Observability: redacted `context.recall` task event (source counts + refs,
   no excerpts). Canonical `last_accessed_at` changes only for rows that survive
   the shared budget and are actually injected; selected canonical rows are
-  excluded from the static fallback block in the same turn.
+  excluded from the static fallback block in the same turn. A separate
+  redacted `context.recall_usage` event records lexical overlap between the
+  selected slices and the final answer. This is a trend signal for adoption,
+  not proof that recall caused the answer.
 - **v2 (later):** true embedding vector index (spine entries + label cards +
   artifacts). Interface reserved in v1: `httpapi.RecallSource`
   (`Search(ctx, RecallQuery) []RecallHit` with work-line dedupe keys) — an
@@ -234,6 +237,12 @@ message → control-command filter (unchanged)
 - A structured `finish_run` outcome is authoritative and may close, park, or
   mark the label as waiting. Run status and label lifecycle are related but
   intentionally not the same state machine.
+- A watcher finalization outcome carries a nested `external` result. The outer
+  status reports whether the agent successfully verified and recorded the
+  result; `external.status` reports the observed build, deployment, or other
+  target. A failed external target can therefore coexist with a successful
+  finalization run while the task reducer keeps the label blocked. This avoids
+  misreporting an external failure as an agent execution failure.
 
 ### /tasks view (same name, aggregated display) — SHIPPED (P3, 2026-07-06)
 

@@ -27,14 +27,12 @@ type ApprovalOption struct {
 	RuleLabel string
 }
 
-// DefaultApprovalOptions is the Codex-style answer set for a tool approval:
-// approve once, approve + remember for this task, approve + remember for the
-// person, or deny (with optional follow-up guidance, handled by the caller).
+// DefaultApprovalOptions is the compatibility answer set used with an older
+// daemon that did not publish choices. It is intentionally once-only: a client
+// must never invent durable authority that the daemon did not offer.
 func DefaultApprovalOptions() []ApprovalOption {
 	return []ApprovalOption{
 		{Label: "Yes, run it once", Key: "y", Decision: "approved", Scope: ""},
-		{Label: "Yes, and allow this kind for this task", Key: "t", Decision: "approved", Scope: "task"},
-		{Label: "Yes, always allow this kind", Key: "a", Decision: "approved", Scope: "person"},
 		{Label: "No, and tell the agent what to do instead", Key: "n", Decision: "rejected", Scope: ""},
 	}
 }
@@ -69,7 +67,7 @@ type ApprovalDetails struct {
 	Cwd         string
 	// ChangeSummary is a content-free size line ("2 files +48/-12").
 	ChangeSummary string
-	// GrantClass names what "allow this kind" would authorize, or "" when the
+	// GrantClass names what a run-local reuse choice would authorize, or "" when the
 	// daemon did not publish one. It is rendered, not acted on: whether a grant
 	// is actually persisted is the grant floor's decision, so the panel must not
 	// infer an option set from it.

@@ -86,9 +86,9 @@ Headers merge in layers; each higher layer overrides lower ones key by key:
 
 | Layer (low → high) | Where | Typical use |
 |---|---|---|
-| protocol defaults | code (adapters) | `content-type`, auth header, `anthropic-version`, OpenRouter attribution |
+| protocol defaults | code (adapters) | `content-type`, auth header, `anthropic-version` |
 | `model.extra_headers` | yaml, global | org-wide custom headers on every request |
-| built-in profile | code | vendor compatibility (e.g. kimi-coding `User-Agent`) |
+| built-in profile | code | vendor compatibility (e.g. kimi-coding `User-Agent`), OpenRouter app attribution |
 | `provider_profiles.<id>.extra_headers` | yaml, per provider | vendor-specific overrides |
 | `models.roles.<role>.extra_headers` | yaml, per role | one role diverges |
 

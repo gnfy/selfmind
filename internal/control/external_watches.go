@@ -102,6 +102,9 @@ type ExternalWatch struct {
 	// finalization products so a replay of the SAME verdict is a no-op while
 	// a revised verdict emits one fresh correction run/event/notice.
 	VerdictRevision int
+	// Finalized records whether the durable task/event/queue products for this
+	// verdict have been materialized. It is separate from endpoint delivery.
+	Finalized bool
 	// Notified is separate from Finalized: durable task/event/queue products
 	// may be complete while endpoint delivery still awaits a usable channel.
 	Notified       bool
@@ -134,7 +137,7 @@ const externalWatchColumns = `id, tenant_id, person_id,
 	COALESCE(terminal_success_pattern, ''), COALESCE(terminal_failure_pattern, ''), status,
 	COALESCE(checker_status, ''), COALESCE(operation_status, 'pending'), COALESCE(verification_status, 'not_required'),
 	interval_seconds, COALESCE(current_interval_seconds, 0), command_timeout_seconds, timeout_at, next_check_at, attempts,
-	COALESCE(extensions, 0), COALESCE(verdict_revision, 1), COALESCE(notified, 0), last_output, last_error,
+	COALESCE(extensions, 0), COALESCE(verdict_revision, 1), COALESCE(finalized, 0), COALESCE(notified, 0), last_output, last_error,
 	COALESCE(last_output_hash, ''),
 	COALESCE(failure_class, ''), COALESCE(check_signature, ''), COALESCE(consecutive_failures, 0),
 	COALESCE(environment_snapshot_id, ''), COALESCE(environment_generation, 0),
@@ -267,6 +270,194 @@ func (s *Store) GetExternalWatch(ctx context.Context, tenantID, id string) (*Ext
 		return nil, err
 	}
 	return &watch, nil
+}
+
+const (
+	ExternalWatchListSummary   = "summary"
+	ExternalWatchListActive    = "active"
+	ExternalWatchListAttention = "attention"
+	ExternalWatchListRecent    = "recent"
+	ExternalWatchListAll       = "all"
+)
+
+// ListExternalWatchesForPerson is the human-facing watcher query. Ownership is
+// enforced in SQL so a guessed watch id or a future multi-person tenant cannot
+// leak another person's durable execution state.
+func (s *Store) ListExternalWatchesForPerson(ctx context.Context, tenantID, personID, mode string, limit, offset int) ([]ExternalWatch, error) {
+	if s == nil || s.db == nil {
+		return nil, fmt.Errorf("control store is unavailable")
+	}
+	if limit <= 0 || limit > 50 {
+		limit = 8
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	where := ""
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case "", ExternalWatchListSummary, ExternalWatchListAll:
+		// Summary/all share the same stable ordering; summary is only a smaller
+		// page chosen by the caller.
+	case ExternalWatchListActive:
+		where = " AND status IN ('pending', 'running')"
+	case ExternalWatchListAttention:
+		where = ` AND (status IN ('failed', 'timed_out', 'blocked_environment')
+			OR (status IN ('succeeded', 'failed', 'timed_out', 'blocked_environment')
+				AND (COALESCE(finalized, 0) = 0 OR COALESCE(notified, 0) = 0)))`
+	case ExternalWatchListRecent:
+		where = " AND status IN ('succeeded', 'failed', 'timed_out', 'cancelled', 'blocked_environment')"
+	default:
+		return nil, fmt.Errorf("invalid external watch list mode %q", mode)
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT `+externalWatchColumns+`
+		FROM external_watches
+		WHERE tenant_id = ? AND person_id = ?`+where+`
+		ORDER BY CASE
+			WHEN status IN ('pending', 'running') THEN 0
+			WHEN status IN ('failed', 'timed_out', 'blocked_environment') THEN 1
+			WHEN COALESCE(finalized, 0) = 0 OR COALESCE(notified, 0) = 0 THEN 2
+			ELSE 3 END,
+			COALESCE(finished_at, updated_at) DESC, id ASC
+		LIMIT ? OFFSET ?`, normalizeTenant(tenantID), strings.TrimSpace(personID), limit, offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []ExternalWatch
+	for rows.Next() {
+		watch, err := scanExternalWatch(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, watch)
+	}
+	return out, rows.Err()
+}
+
+// ResolveExternalWatchForPerson resolves a full id or a unique displayed
+// prefix. It never falls back to a tenant-wide lookup.
+func (s *Store) ResolveExternalWatchForPerson(ctx context.Context, tenantID, personID, ref string) (*ExternalWatch, bool, error) {
+	if s == nil || s.db == nil {
+		return nil, false, fmt.Errorf("control store is unavailable")
+	}
+	ref = strings.TrimSpace(strings.TrimSuffix(ref, "..."))
+	if ref == "" {
+		return nil, false, nil
+	}
+	if !strings.HasPrefix(ref, "watch_") {
+		ref = "watch_" + ref
+	}
+	if len(ref) < len("watch_")+4 {
+		return nil, false, nil
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT `+externalWatchColumns+`
+		FROM external_watches
+		WHERE tenant_id = ? AND person_id = ? AND substr(id, 1, length(?)) = ?
+		ORDER BY CASE WHEN id = ? THEN 0 ELSE 1 END, updated_at DESC LIMIT 2`,
+		normalizeTenant(tenantID), strings.TrimSpace(personID), ref, ref, ref)
+	if err != nil {
+		return nil, false, err
+	}
+	defer rows.Close()
+	var found []ExternalWatch
+	for rows.Next() {
+		watch, err := scanExternalWatch(rows)
+		if err != nil {
+			return nil, false, err
+		}
+		found = append(found, watch)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, false, err
+	}
+	if len(found) == 0 {
+		return nil, false, nil
+	}
+	if found[0].ID == ref || len(found) == 1 {
+		return &found[0], false, nil
+	}
+	return nil, true, nil
+}
+
+// CancelExternalWatchForPerson atomically cancels one owned active watcher.
+// If it was the task's final live watcher, a waiting_external task is parked
+// as waiting_user instead of being left with nothing capable of waking it.
+func (s *Store) CancelExternalWatchForPerson(ctx context.Context, tenantID, personID, id string) (bool, error) {
+	if s == nil || s.db == nil {
+		return false, fmt.Errorf("control store is unavailable")
+	}
+	tenantID = normalizeTenant(tenantID)
+	personID = strings.TrimSpace(personID)
+	id = strings.TrimSpace(id)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var taskID string
+	if err := tx.QueryRowContext(ctx, `SELECT task_id FROM external_watches
+		WHERE tenant_id = ? AND person_id = ? AND id = ?`, tenantID, personID, id).Scan(&taskID); err != nil {
+		if err == sql.ErrNoRows {
+			return false, nil
+		}
+		return false, err
+	}
+	now := time.Now().Unix()
+	result, err := tx.ExecContext(ctx, `UPDATE external_watches
+		SET status = ?, last_error = ?, finalized = 1, notified = 1,
+			finished_at = ?, updated_at = ?
+		WHERE tenant_id = ? AND person_id = ? AND id = ? AND status IN (?, ?)`,
+		ExternalWatchCancelled, "cancelled by user", now, now,
+		tenantID, personID, id, ExternalWatchPending, ExternalWatchRunning)
+	if err != nil {
+		return false, err
+	}
+	n, _ := result.RowsAffected()
+	if n != 1 {
+		return false, nil
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE tasks
+		SET status = 'waiting_user', blocked_reason = 'external watcher cancelled by user',
+			next_steps_json = '["Resume the task to continue or register a new watcher."]',
+			last_activity_at = ?, updated_at = ?
+		WHERE tenant_id = ? AND person_id = ? AND id = ? AND status = 'waiting_external'
+			AND NOT EXISTS (SELECT 1 FROM external_watches
+				WHERE tenant_id = ? AND person_id = ? AND task_id = ? AND status IN ('pending', 'running'))`,
+		now, now, tenantID, personID, taskID, tenantID, personID, taskID); err != nil {
+		return false, err
+	}
+	if err := tx.Commit(); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// ListExternalWatchesFinishedSinceForPerson is the owner-scoped diagnostics
+// variant. Daemon recovery intentionally uses the tenant-wide method above;
+// user-visible diagnostics must not.
+func (s *Store) ListExternalWatchesFinishedSinceForPerson(ctx context.Context, tenantID, personID, status string, since time.Time, limit int) ([]ExternalWatch, error) {
+	if limit <= 0 || limit > 50 {
+		limit = 10
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT `+externalWatchColumns+`
+		FROM external_watches
+		WHERE tenant_id = ? AND person_id = ? AND status = ?
+			AND finished_at IS NOT NULL AND finished_at >= ?
+		ORDER BY finished_at DESC LIMIT ?`, normalizeTenant(tenantID), strings.TrimSpace(personID), status, since.Unix(), limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []ExternalWatch
+	for rows.Next() {
+		watch, err := scanExternalWatch(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, watch)
+	}
+	return out, rows.Err()
 }
 
 // ListDueExternalWatches returns a bounded due snapshot. ClaimExternalWatch is
@@ -488,9 +679,9 @@ func (s *Store) MarkExternalWatchFinalized(ctx context.Context, tenantID, id str
 	return n == 1, nil
 }
 
-// MarkExternalWatchNotified records that the completion notification has a
-// durable delivery path. An attached CLI is not delivery by itself because it
-// may disconnect before rendering the event.
+// MarkExternalWatchNotified records that the completion has a confirmed user
+// surface: either endpoint delivery was confirmed, or the durable completion
+// event was published while that person's CLI was attached.
 func (s *Store) MarkExternalWatchNotified(ctx context.Context, tenantID, id string) (bool, error) {
 	result, err := s.db.ExecContext(ctx, `UPDATE external_watches
 		SET notified = 1, updated_at = ?
@@ -611,7 +802,7 @@ func scanExternalWatch(scanner externalWatchScanner) (ExternalWatch, error) {
 	var watch ExternalWatch
 	var bindingJSON string
 	var timeoutAt, nextCheckAt, createdAt, updatedAt int64
-	var notified int
+	var finalized, notified int
 	var finishedAt sql.NullInt64
 	err := scanner.Scan(&watch.ID, &watch.TenantID, &watch.PersonID, &watch.WorkspaceID,
 		&watch.TaskID, &watch.RunID, &watch.Channel, &watch.Description, &watch.CWD,
@@ -619,7 +810,7 @@ func scanExternalWatch(scanner externalWatchScanner) (ExternalWatch, error) {
 		&watch.SpecVersion, &watch.TargetPattern, &watch.TerminalSuccessPattern, &watch.TerminalFailurePattern, &watch.Status,
 		&watch.CheckerStatus, &watch.OperationStatus, &watch.VerificationStatus,
 		&watch.IntervalSeconds, &watch.CurrentIntervalSeconds, &watch.CommandTimeoutSeconds, &timeoutAt, &nextCheckAt,
-		&watch.Attempts, &watch.Extensions, &watch.VerdictRevision, &notified, &watch.LastOutput, &watch.LastError,
+		&watch.Attempts, &watch.Extensions, &watch.VerdictRevision, &finalized, &notified, &watch.LastOutput, &watch.LastError,
 		&watch.LastOutputHash,
 		&watch.FailureClass, &watch.CheckSignature, &watch.ConsecutiveFailures,
 		&watch.EnvironmentSnapshotID, &watch.EnvironmentGeneration, &watch.PrincipalFingerprint,
@@ -633,6 +824,7 @@ func scanExternalWatch(scanner externalWatchScanner) (ExternalWatch, error) {
 	watch.NextCheckAt = time.Unix(nextCheckAt, 0)
 	watch.CreatedAt = time.Unix(createdAt, 0)
 	watch.UpdatedAt = time.Unix(updatedAt, 0)
+	watch.Finalized = finalized != 0
 	watch.Notified = notified != 0
 	if err := json.Unmarshal([]byte(bindingJSON), &watch.ExecutionBinding); err != nil {
 		return ExternalWatch{}, fmt.Errorf("decode external watch execution binding: %w", err)

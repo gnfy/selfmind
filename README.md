@@ -494,7 +494,7 @@ gateway, IM, and TUI command.
 | `/new [title]` | Start a fresh task instead of continuing the current one. |
 | `/resume <n\|task_id>` | Switch back to an earlier task by its `/tasks` card number, short id, or full id. |
 | `/workspace [n\|id]` (alias `/ws`, also `/workspaces`) | Bare lists workspaces; with a number or id, switches to it. |
-| `/approvals` / `/approve <n\|id\|all> [task\|always]` / `/reject <n\|id\|all>` | List and answer pending tool approvals. |
+| `/approvals` / `/approve <n\|id\|all> [run]` / `/reject <n\|id\|all>` | List and answer pending tool approvals. `run` is accepted only when that request offers run-local reuse. |
 | `/mode [mode]` | Show or set approval mode: `on-request`, `read-only`, `auto-edit`, `full-auto`, `smart` (default; safely asks when triage is unavailable). |
 | `/diag [memory\|context\|tasks\|models\|delivery]` | Compact runtime diagnostics, optionally focused on one subsystem. |
 | `/skills` | Skill list/view/search/catalog/install/audit/archive/pin/unpin/delete/stats/reload. |

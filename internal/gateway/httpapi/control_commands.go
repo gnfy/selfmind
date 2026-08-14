@@ -182,6 +182,9 @@ func (d *Server) tryHandleControlCommand(ctx context.Context, identity *control.
 			return true, "Dropped queued task: " + textutil.Truncate(toOneLine(target.Content), 60), nil
 		}
 		return true, formatQueue(queued), nil
+	case lower == "/watchers" || strings.HasPrefix(lower, "/watchers "):
+		reply, err := d.watchersCommandReply(ctx, identity, strings.Fields(trimmed)[1:])
+		return true, reply, err
 	case lower == "/diag memory":
 		reply, err := d.memoryDiagReply(ctx, identity)
 		return true, reply, err
@@ -213,6 +216,15 @@ func (d *Server) tryHandleControlCommand(ctx context.Context, identity *control.
 		return true, reply, err
 	case lower == "/diag":
 		reply, err := d.diagReply(ctx, identity)
+		return true, reply, err
+	case lower == "/report":
+		return true, "Usage: /report daily [--since 24h]", nil
+	case lower == "/report daily" || strings.HasPrefix(lower, "/report daily "):
+		window, err := parseDailyReportWindow(trimmed)
+		if err != nil {
+			return true, "Usage: /report daily [--since 24h]", nil
+		}
+		reply, err := d.dailyQualityReport(ctx, identity, window)
 		return true, reply, err
 	case strings.HasPrefix(lower, "/workspace ") || strings.HasPrefix(lower, "/ws "):
 		// Unified workspace verb: WITH an argument it selects; bare it lists
@@ -438,14 +450,14 @@ func (d *Server) retroResolvePendingApprovals(ctx context.Context, identity *con
 		case tools.ModeApprove:
 			// Internal channel "mode-change", empty grant scope (a retro approval
 			// is a one-off, it records no class grant).
-			if _, err := d.Control.RespondApprovalRequest(ctx, identity.TenantID, identity.PersonID, ap.ID, "approved", "mode-change", control.ApprovalDecisionInput{}); err == nil {
+			if _, err := d.respondApprovalByToken(ctx, identity, ap.ID, "approved", "mode-change", control.ApprovalDecisionInput{}); err == nil {
 				approved++
 				d.appendApprovalModeEvent(ctx, ap, "approval.auto_approved", string(mode))
 			} else {
 				stillPending++
 			}
 		case tools.ModeDeny:
-			if _, err := d.Control.RespondApprovalRequest(ctx, identity.TenantID, identity.PersonID, ap.ID, "rejected", "mode-change", control.ApprovalDecisionInput{}); err == nil {
+			if _, err := d.respondApprovalByToken(ctx, identity, ap.ID, "rejected", "mode-change", control.ApprovalDecisionInput{}); err == nil {
 				denied++
 				d.appendApprovalModeEvent(ctx, ap, "approval.auto_rejected", string(mode))
 			} else {

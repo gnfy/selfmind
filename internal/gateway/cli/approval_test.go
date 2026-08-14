@@ -5,6 +5,8 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+
+	"selfmind/internal/ui/components"
 )
 
 // approvalRespondCall records one call to the approval responder so tests can
@@ -105,8 +107,6 @@ func TestApprovalShortcutScopes(t *testing.T) {
 		note     string
 	}{
 		{"y", "approved", "", "(this time)"},
-		{"t", "approved", "task", "(allowed for this task)"},
-		{"a", "approved", "person", "(always allowed)"},
 	}
 	for _, tc := range cases {
 		model, calls := newApprovalTestModel()
@@ -138,18 +138,22 @@ func TestApprovalShortcutScopes(t *testing.T) {
 
 func TestApprovalEnterSelectsHighlightedOption(t *testing.T) {
 	model, calls := newApprovalTestModel()
-	updated, _ := model.Update(sampleApproval("apr_1"))
+	msg := sampleApproval("apr_1")
+	msg.Options = []components.ApprovalOption{
+		{Label: "Yes, run it once", Key: "y", Decision: "approved"},
+		{Label: "Yes, allow writes for this run", Key: "r", Decision: "approved", Scope: "run"},
+		{Label: "No", Key: "n", Decision: "rejected"},
+	}
+	updated, _ := model.Update(msg)
 	model = updated.(*uiModel)
 
-	for _, key := range []tea.KeyMsg{{Type: tea.KeyDown}, {Type: tea.KeyDown}} {
-		updated, _ = model.Update(key)
-		model = updated.(*uiModel)
-	}
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyDown})
+	model = updated.(*uiModel)
 	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	model = updated.(*uiModel)
 
-	if len(*calls) != 1 || (*calls)[0].scope != "person" || (*calls)[0].decision != "approved" {
-		t.Fatalf("down,down,enter should approve with person scope: %v", *calls)
+	if len(*calls) != 1 || (*calls)[0].scope != "run" || (*calls)[0].decision != "approved" {
+		t.Fatalf("down,enter should approve for this run: %v", *calls)
 	}
 }
 

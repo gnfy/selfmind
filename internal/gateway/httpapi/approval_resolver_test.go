@@ -214,36 +214,22 @@ func TestApproveAlreadyDecidedReportsStatus(t *testing.T) {
 	}
 }
 
-// TestApproveScopeGrammarRecordsDecisionScope pins the reply-scope mapping:
-// "/approve task" records task scope, "/approve always" records person scope,
-// and a bare "y" records nothing.
-func TestApproveScopeGrammarRecordsDecisionScope(t *testing.T) {
+// TestApproveScopeGrammarRejectsUnissuedAuthority pins the current contract:
+// legacy task/person grammar cannot mint authority that the row did not offer.
+func TestApproveScopeGrammarRejectsUnissuedAuthority(t *testing.T) {
 	ctx := context.Background()
-
-	check := func(content, wantScope string) {
+	for _, content := range []string{"/approve 1 task", "/approve 1 always", "/approve task", "yt", "ya"} {
 		t.Helper()
 		daemon, store, identity, _, approval := newApprovalTestServer(t)
 		resp, status := daemon.ProcessMessage(ctx, api.MessageRequest{Content: content})
-		if status != http.StatusOK {
-			t.Fatalf("%q: status = %d, resp = %+v", content, status, resp)
+		if status != http.StatusOK || (!strings.Contains(resp.Content, "not offered") && !strings.Contains(resp.Content, "unavailable")) {
+			t.Fatalf("%q: expected offered-only rejection, status=%d resp=%+v", content, status, resp)
 		}
 		current, _ := store.GetApprovalRequest(ctx, identity.TenantID, approval.ID)
-		if current == nil || current.Status != "approved" {
-			t.Fatalf("%q: approval not approved: %+v", content, current)
-		}
-		if current.DecisionScope != wantScope {
-			t.Fatalf("%q: decision scope = %q, want %q", content, current.DecisionScope, wantScope)
+		if current == nil || current.Status != "pending" {
+			t.Fatalf("%q: invalid choice changed the row: %+v", content, current)
 		}
 	}
-
-	check("/approve 1 task", "task")
-	check("/approve 1 always", "person")
-	check("/approve 1 person", "person")
-	check("/approve 1", "")
-	check("/approve task", "task") // bare scope word targets the lone pending
-	check("y", "")                 // bare conversational approve remembers nothing
-	check("yt", "task")            // conversational task-scope shortcut
-	check("ya", "person")          // conversational person-scope shortcut
 }
 
 func TestApprovalsListShowsRichContent(t *testing.T) {

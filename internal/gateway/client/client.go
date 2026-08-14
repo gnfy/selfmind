@@ -707,8 +707,8 @@ func (c *Client) StartPresencePing(ctx context.Context) func() {
 
 // RespondApproval answers a pending tool-approval request on the daemon
 // (decision "approved" or "rejected"), unblocking the waiting run. It backs the
-// client TUI's approval panel. scope carries class-grant memory on an approve:
-// "" (once), "task", or "person" — same grammar as `/approve [n] task|always`.
+// client TUI's approval panel. Scope and grantKey must match one of the
+// daemon's server-issued choices; current asks use "" (once) or "run" only.
 // grantKey names a narrow RULE the person picked from the ask's own
 // server-issued option list; the daemon refuses a key that ask did not offer.
 func (c *Client) RespondApproval(approvalID, decision, scope, grantKey string) error {

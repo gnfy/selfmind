@@ -581,7 +581,16 @@ func (a *OpenAIAdapter) applyOptions(ctx context.Context, openaiReq *OpenAIReque
 	openaiReq.ServiceTier = a.ServiceTier
 	if req.Options != nil {
 		if value, ok := req.Options["reasoning_effort"].(string); ok && value != "" {
-			openaiReq.ReasoningEffort = value
+			if reasoningDisabled(value) {
+				openaiReq.ReasoningEffort = ""
+				if strings.EqualFold(strings.TrimSpace(a.Quirks.ThinkingMode), "deepseek") {
+					openaiReq.Thinking = map[string]interface{}{"type": "disabled"}
+				} else {
+					openaiReq.Thinking = nil
+				}
+			} else {
+				openaiReq.ReasoningEffort = value
+			}
 		}
 		if value, ok := req.Options["thinking"]; ok {
 			openaiReq.Thinking = value
@@ -670,7 +679,7 @@ func (a *OpenRouterAdapter) StreamChat(ctx context.Context, req ChatRequest) (<-
 		TokenRefresher:  a.TokenRefresher,
 		Model:           a.Model,
 		BaseURL:         a.BaseURL,
-		Headers:         a.Headers,
+		Headers:         openRouterStreamHeaders(a.Headers),
 		ExtraBody:       a.ExtraBody,
 		ExtraQuery:      a.ExtraQuery,
 		MaxTokens:       a.MaxTokens,
@@ -776,6 +785,38 @@ func NewGenericOpenAIAdapter(name, baseURL, apiKey, model string) *GenericOpenAI
 }
 
 // ---- OpenRouter 统一适配器 ----
+
+// OpenRouter app attribution. The resolver-driven path carries these as
+// built-in profile headers (modelruntime), which reach every protocol; these
+// constants keep the legacy direct-construction path (app.buildProvider with a
+// bare API key) attributed as well.
+const (
+	openRouterRefererHeader = "HTTP-Referer"
+	openRouterTitleHeader   = "X-Title"
+	openRouterReferer       = "https://github.com/gnfy/selfmind"
+	openRouterTitle         = "SelfMind Agent"
+)
+
+// openRouterStreamHeaders keeps attribution on the streaming path. StreamChat
+// delegates to a plain OpenAI adapter that knows nothing about OpenRouter's
+// request builder, so the headers have to travel as ordinary headers or they
+// are simply lost — which is what happened to every streamed call. Configured
+// headers still win, including a differently cased spelling of the same name.
+func openRouterStreamHeaders(headers map[string]string) map[string]string {
+	merged := make(map[string]string, len(headers)+2)
+	if !hasHeader(headers, openRouterRefererHeader) {
+		merged[openRouterRefererHeader] = openRouterReferer
+	}
+	if !hasHeader(headers, openRouterTitleHeader) {
+		merged[openRouterTitleHeader] = openRouterTitle
+	}
+	for key, value := range headers {
+		if strings.TrimSpace(key) != "" {
+			merged[key] = value
+		}
+	}
+	return merged
+}
 
 // OpenRouterAdapter 通过 OpenRouter 路由到多个模型
 func (a *GenericOpenAIAdapter) SupportsNativeTools() bool { return a.Quirks.SupportsTools }
@@ -898,8 +939,8 @@ func (a *OpenRouterAdapter) doOpenRouterRequest(ctx context.Context, body []byte
 	}
 	httpReq.Header.Set("Authorization", "Bearer "+apiKey)
 	httpReq.Header.Set("content-type", "application/json")
-	httpReq.Header.Set("HTTP-Referer", "https://github.com/gnfy/selfmind")
-	httpReq.Header.Set("X-Title", "SelfMind Agent")
+	httpReq.Header.Set(openRouterRefererHeader, openRouterReferer)
+	httpReq.Header.Set(openRouterTitleHeader, openRouterTitle)
 	for key, value := range a.Headers {
 		if strings.TrimSpace(key) != "" {
 			httpReq.Header.Set(key, value)

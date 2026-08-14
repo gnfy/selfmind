@@ -60,6 +60,21 @@ func TestApprovalMiddleware_Allow(t *testing.T) {
 	}
 }
 
+func TestOperationClassesSeparateObservationFromMutation(t *testing.T) {
+	observe := operationClassesFor("terminal", map[string]interface{}{
+		"command": "gcloud builds describe build-1",
+	}, false)
+	if len(observe) != 1 || observe[0] != OpClassObserve {
+		t.Fatalf("observation classes = %v, want [%s]", observe, OpClassObserve)
+	}
+	mutate := operationClassesFor("terminal", map[string]interface{}{
+		"command": "gcloud builds triggers run deploy",
+	}, false)
+	if len(mutate) != 1 || mutate[0] != OpClassExecInTurn {
+		t.Fatalf("mutation classes = %v, want [%s]", mutate, OpClassExecInTurn)
+	}
+}
+
 func TestSmartApprovalMiddlewareUsesExecutionScopeApproval(t *testing.T) {
 	cleanup := SetExecutionScope("person-a", ExecutionScope{
 		TenantID: "tenant-a",

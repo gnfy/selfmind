@@ -493,7 +493,7 @@ selfmind -f ./config/config.yaml
 | `/new [标题]` | 另起一个新任务,而不是继续当前任务。 |
 | `/resume <n\|task_id>` | 按 `/tasks` 卡片序号、短 id 或完整 id 切换回之前的某个任务。 |
 | `/workspace [n\|id]`（简称 `/ws`，`/workspaces` 亦可） | 无参列出工作区；带序号或 id 则切换到它。 |
-| `/approvals` / `/approve <n\|id\|all> [task\|always]` / `/reject <n\|id\|all>` | 列出并回应待处理的工具审批。 |
+| `/approvals` / `/approve <n\|id\|all> [run]` / `/reject <n\|id\|all>` | 列出并回应待处理的工具审批；仅当该请求提供 run 内复用时才接受 `run`。 |
 | `/mode [模式]` | 查看或设置审批模式:`on-request`、`read-only`、`auto-edit`、`full-auto`、`smart`（默认；裁决不可用时安全转人工审批）。 |
 | `/diag [memory\|context\|tasks\|models\|delivery]` | 精简的运行时诊断快照，也可聚焦某一子系统。 |
 | `/skills` | Skill 的 list/view/search/catalog/install/audit/archive/pin/unpin/delete/stats/reload。 |

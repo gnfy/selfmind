@@ -199,20 +199,28 @@ func runIDForResponse(resp api.MessageResponse) string {
 	return resp.Run.ID
 }
 
-func (c *RunCoordinator) aggregateGatewayResponse(ctx context.Context, channel string, task *control.Task, run *control.Run, resp *router.HandleResponse) (string, llm.UsageStats, router.EventSummary, error) {
+func (c *RunCoordinator) aggregateGatewayResponse(ctx context.Context, channel string, task *control.Task, run *control.Run, resp *router.HandleResponse) (string, llm.UsageStats, router.EventSummary, bool, error) {
 	if resp == nil {
-		return "", llm.UsageStats{}, router.EventSummary{}, nil
+		return "", llm.UsageStats{}, router.EventSummary{}, false, nil
 	}
 	if !resp.IsStreaming {
-		return resp.Content, resp.Usage, router.EventSummary{}, nil
+		return resp.Content, resp.Usage, router.EventSummary{}, strings.TrimSpace(resp.Content) != "", nil
 	}
-	var content strings.Builder
+	var finalContent strings.Builder
 	var usage llm.UsageStats
 	sawStream := false
+	hasFinalContent := false
 	var summary router.EventSummary
 	observer := streamObserverFromContext(ctx)
 	for event := range resp.Stream {
 		if event.EventType != "" {
+			// Assistant prose emitted before a tool call is progress narration,
+			// not the final answer. Keep publishing it live, but only materialize
+			// prose produced after the last tool starts as the run's answer.
+			if event.EventType == "tool.started" {
+				finalContent.Reset()
+				hasFinalContent = false
+			}
 			if event.EventType == "stream" && task != nil {
 				c.srv.events().publishAssistant(task, run, event)
 			}
@@ -223,7 +231,10 @@ func (c *RunCoordinator) aggregateGatewayResponse(ctx context.Context, channel s
 			c.recordStreamEvent(ctx, channel, task, run, event)
 			if event.EventType == "stream" {
 				sawStream = true
-				content.WriteString(event.Content)
+				finalContent.WriteString(event.Content)
+				if strings.TrimSpace(event.Content) != "" {
+					hasFinalContent = true
+				}
 			}
 			if event.Usage != nil {
 				usage = *event.Usage
@@ -231,7 +242,7 @@ func (c *RunCoordinator) aggregateGatewayResponse(ctx context.Context, channel s
 			continue
 		}
 		if event.Err != nil {
-			return content.String(), usage, summary, event.Err
+			return finalContent.String(), usage, summary, hasFinalContent, event.Err
 		}
 		if event.Content != "" && !sawStream {
 			streamEvent := llm.StreamEvent{EventType: "stream", Content: event.Content}
@@ -241,13 +252,16 @@ func (c *RunCoordinator) aggregateGatewayResponse(ctx context.Context, channel s
 			if observer != nil {
 				observer(streamEvent)
 			}
-			content.WriteString(event.Content)
+			finalContent.WriteString(event.Content)
+			if strings.TrimSpace(event.Content) != "" {
+				hasFinalContent = true
+			}
 		}
 		if event.Usage != nil {
 			usage = *event.Usage
 		}
 	}
-	return summary.WithContent(content.String()), usage, summary, nil
+	return summary.WithContent(finalContent.String()), usage, summary, hasFinalContent, nil
 }
 
 func (c *RunCoordinator) recordStreamEvent(ctx context.Context, channel string, task *control.Task, run *control.Run, event llm.StreamEvent) {

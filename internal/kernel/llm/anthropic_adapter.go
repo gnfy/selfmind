@@ -666,6 +666,9 @@ func (a *AnthropicAdapter) thinkingForRequest(req ChatRequest) interface{} {
 		return nil
 	}
 	if req.Options != nil {
+		if effort, ok := req.Options["reasoning_effort"].(string); ok && reasoningDisabled(effort) {
+			return nil
+		}
 		if value, ok := req.Options["thinking"]; ok {
 			return value
 		}

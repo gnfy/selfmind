@@ -63,3 +63,14 @@ func TestRankTaskEventsUnderBudgetSortsChronologically(t *testing.T) {
 		t.Fatalf("under budget should keep all, chronological: %+v", out)
 	}
 }
+
+func TestRankTaskEventsExcludesRecallUsageTelemetry(t *testing.T) {
+	now := time.Now()
+	out := rankTaskEvents([]control.Event{
+		{Type: "context.recall_usage", CreatedAt: now},
+		{Type: "run.outcome", CreatedAt: now.Add(time.Second)},
+	}, 8)
+	if len(out) != 1 || out[0].Type != "run.outcome" {
+		t.Fatalf("ranked events = %+v", out)
+	}
+}

@@ -198,7 +198,7 @@ func (d *Server) diagReply(ctx context.Context, identity *control.IdentityContex
 		// could not observe anything, so the operator needs the reason and the
 		// remedy here rather than in the run history.
 		if watches[control.ExternalWatchBlocked] > 0 {
-			if blocked, err := d.Control.ListExternalWatchesFinishedSince(ctx, control.ExternalWatchBlocked, time.Now().Add(-externalWatchRecoveryLookback), 10); err == nil {
+			if blocked, err := d.Control.ListExternalWatchesFinishedSinceForPerson(ctx, identity.TenantID, identity.PersonID, control.ExternalWatchBlocked, time.Now().Add(-externalWatchRecoveryLookback), 10); err == nil {
 				for _, watch := range blocked {
 					reason, _ := watchCheckDefect(watch.LastError)
 					fmt.Fprintf(&sb, "- watch blocked: %s | %s | class %s | %s\n",
@@ -213,7 +213,7 @@ func (d *Server) diagReply(ctx context.Context, identity *control.IdentityContex
 		// terminal pattern is a misjudgment the startup recovery pass will
 		// revise — surface it instead of leaving a silently wrong verdict.
 		if watches[control.ExternalWatchTimedOut] > 0 {
-			if finished, err := d.Control.ListExternalWatchesFinishedSince(ctx, control.ExternalWatchTimedOut, time.Now().Add(-externalWatchRecoveryLookback), 10); err == nil {
+			if finished, err := d.Control.ListExternalWatchesFinishedSinceForPerson(ctx, identity.TenantID, identity.PersonID, control.ExternalWatchTimedOut, time.Now().Add(-externalWatchRecoveryLookback), 10); err == nil {
 				for _, watch := range finished {
 					if status := classifyStoredExternalWatchOutput(watch); status != "" {
 						fmt.Fprintf(&sb, "- watch verdict suspect: %s timed out but last output matches %s (%s)\n",
@@ -792,6 +792,7 @@ func latestCompactionLine(events []control.Event) string {
 // reason, and cost. Zero-hit turns emit too, so absence here means recall is
 // not wired at all.
 func latestRecallLine(events []control.Event) string {
+	overlapLine := latestRecallUsageLine(events)
 	for _, e := range events {
 		if e.Type != "context.recall" {
 			continue
@@ -808,7 +809,7 @@ func latestRecallLine(events []control.Event) string {
 			continue
 		}
 		if p.Skipped != "" {
-			return fmt.Sprintf("Recall (last turn): skipped (%s)\n", p.Skipped)
+			return fmt.Sprintf("Recall (last turn): skipped (%s)\n", p.Skipped) + overlapLine
 		}
 		parts := make([]string, 0, len(p.Sources))
 		for name, count := range p.Sources {
@@ -832,9 +833,37 @@ func latestRecallLine(events []control.Event) string {
 		if candidateText == "" {
 			candidateText = "none"
 		}
-		return fmt.Sprintf("Recall (last turn): candidates [%s], selected %d slice(s) [%s]%s, %dms\n", candidateText, p.Slices, src, expanded, p.ElapsedMS)
+		return fmt.Sprintf("Recall (last turn): candidates [%s], selected %d slice(s) [%s]%s, %dms\n", candidateText, p.Slices, src, expanded, p.ElapsedMS) + overlapLine
 	}
-	return "Recall: no recall event recorded yet\n"
+	return "Recall: no recall event recorded yet\n" + overlapLine
+}
+
+func latestRecallUsageLine(events []control.Event) string {
+	for _, e := range events {
+		if e.Type != "context.recall_usage" {
+			continue
+		}
+		var p struct {
+			Selected      int            `json:"selected"`
+			OutputOverlap int            `json:"output_overlap"`
+			Sources       map[string]int `json:"overlap_sources"`
+			Method        string         `json:"method"`
+		}
+		if json.Unmarshal(e.Payload, &p) != nil {
+			continue
+		}
+		parts := make([]string, 0, len(p.Sources))
+		for source, count := range p.Sources {
+			parts = append(parts, fmt.Sprintf("%s=%d", source, count))
+		}
+		sort.Strings(parts)
+		detail := strings.Join(parts, ", ")
+		if detail == "" {
+			detail = "none"
+		}
+		return fmt.Sprintf("Recall output overlap: %d/%d slice(s) [%s] (trend signal, not causal proof)\n", p.OutputOverlap, p.Selected, detail)
+	}
+	return ""
 }
 
 // tasksDiagReply is /diag tasks: label hygiene counts plus a bounded

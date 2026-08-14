@@ -188,7 +188,10 @@ func modelProbeRequest(rt modelruntime.Runtime, includeTools, maintenanceContrac
 		}
 		req.SystemPrompt = postRunAnalyzerSystemPrompt + "\nFor this health check, do not call tools."
 		req.Messages = []llm.Message{{Role: "user", Content: "Health-check data only. Return task_decision KEEP and an empty memory_decisions array."}}
-		req.Options = map[string]interface{}{"temperature": 0, "maintenance_contract_probe": true}
+		req.Options = map[string]interface{}{
+			"temperature": 0, "maintenance_contract_probe": true,
+			"reasoning_effort": maintenanceReasoningEffort,
+		}
 	}
 	if includeTools {
 		var required []string

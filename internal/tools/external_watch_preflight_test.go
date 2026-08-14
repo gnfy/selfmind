@@ -159,6 +159,24 @@ func TestPreflightRefusesCheckThatAlreadyTimesOut(t *testing.T) {
 	}
 }
 
+func TestPreflightAllowsBoundedSlowObservation(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("SelfMind's production daemon runs on Linux")
+	}
+	SetExecSandbox(false, false, false)
+	t.Cleanup(func() { SetExecSandbox(false, false, false) })
+
+	command := "sleep 2; printf 'WORKING\\n'"
+	started := time.Now()
+	verdict, err := preflightExternalWatch(preflightArgs(command), command, t.TempDir(), "SUCCEEDED", "FAILED", 3)
+	if err != nil || verdict != "" {
+		t.Fatalf("bounded slow observation must register: verdict=%q err=%v", verdict, err)
+	}
+	if elapsed := time.Since(started); elapsed < 2*time.Second || elapsed > 4*time.Second {
+		t.Fatalf("preflight duration = %s, want bounded slow execution", elapsed)
+	}
+}
+
 func TestPreflightBlockingClasses(t *testing.T) {
 	for _, class := range []string{
 		"credential_state_readonly", "sandbox_fs_denied", "permission",

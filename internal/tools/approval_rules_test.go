@@ -190,8 +190,8 @@ func TestUnofferedRuleKeyIsRefused(t *testing.T) {
 	exec := SmartApprovalMiddleware("")(func(args map[string]interface{}) (string, error) { return "ok", nil })
 	if _, err := exec(map[string]interface{}{
 		"_tenant_id": "person-forge", "_tool_name": "terminal", "command": "git status",
-	}); err != nil {
-		t.Fatalf("approved call should run: %v", err)
+	}); err == nil || !strings.Contains(err.Error(), "was not offered") {
+		t.Fatalf("forged scope must reject the call, got %v", err)
 	}
 	forged := grants.key("person", "person-forge", approvalRuleKey(ApprovalRuleKindPathRoot, "/"))
 	if grants.granted[forged] {

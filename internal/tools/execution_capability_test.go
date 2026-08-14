@@ -41,12 +41,13 @@ func TestExecutionCapabilityMiddlewareApprovesBeforeKnownNetworkCommand(t *testi
 	cleanup := SetExecutionScope("person-network", ExecutionScope{
 		TenantID:        "tenant-network",
 		PersonID:        "person-network",
+		RunID:           "run-network",
 		WorkspaceID:     "workspace-network",
 		TrustLevel:      executionenv.TrustUntrusted,
 		CapabilityStore: store,
 		Approval: func(context.Context, ToolApprovalRequest) (ToolApprovalDecision, error) {
 			approvals++
-			return ToolApprovalDecision{Approved: true, Scope: "task"}, nil
+			return ToolApprovalDecision{Approved: true, Scope: "run"}, nil
 		},
 	})
 	defer cleanup()
@@ -68,8 +69,11 @@ func TestExecutionCapabilityMiddlewareApprovesBeforeKnownNetworkCommand(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	if output != "connected" || calls != 1 || approvals != 1 || store.writes != 1 {
+	if output != "connected" || calls != 1 || approvals != 1 || store.writes != 0 {
 		t.Fatalf("output=%q calls=%d approvals=%d writes=%d", output, calls, approvals, store.writes)
+	}
+	if _, err := executor(args); err != nil || approvals != 1 {
+		t.Fatalf("run-local network grant was not reused: err=%v approvals=%d", err, approvals)
 	}
 }
 
@@ -79,27 +83,35 @@ func TestExecutionCapabilityMiddlewareNeverReplaysUnknownCommand(t *testing.T) {
 	cleanup := SetExecutionScope("person-network-unknown", ExecutionScope{
 		TenantID:        "tenant-network",
 		PersonID:        "person-network-unknown",
+		RunID:           "run-network-unknown",
 		WorkspaceID:     "workspace-network",
 		TrustLevel:      executionenv.TrustUntrusted,
 		CapabilityStore: store,
 		Approval: func(context.Context, ToolApprovalRequest) (ToolApprovalDecision, error) {
-			return ToolApprovalDecision{Approved: true, Scope: "task"}, nil
+			return ToolApprovalDecision{Approved: true, Scope: "run"}, nil
 		},
 	})
 	defer cleanup()
 
 	calls := 0
-	executor := ExecutionCapabilityMiddleware()(func(map[string]interface{}) (string, error) {
+	executor := ExecutionCapabilityMiddleware()(func(args map[string]interface{}) (string, error) {
 		calls++
+		if shared, _ := args["_network_shared"].(bool); shared {
+			return "connected", nil
+		}
 		return "local side effect completed", errors.New("network is disabled")
 	})
-	_, err := executor(map[string]interface{}{
+	args := map[string]interface{}{
 		"_tenant_id": "person-network-unknown",
 		"_tool_name": "terminal",
 		"command":    "custom-agent sync",
-	})
-	if err == nil || calls != 1 || store.writes != 1 {
+	}
+	_, err := executor(args)
+	if err == nil || calls != 1 || store.writes != 0 {
 		t.Fatalf("err=%v calls=%d writes=%d", err, calls, store.writes)
+	}
+	if output, retryErr := executor(args); retryErr != nil || output != "connected" || calls != 2 {
+		t.Fatalf("explicit retry did not use run grant: output=%q err=%v calls=%d", output, retryErr, calls)
 	}
 }
 

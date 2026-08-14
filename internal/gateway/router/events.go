@@ -32,6 +32,18 @@ func runIdleTimeout() time.Duration {
 	return 10 * time.Minute
 }
 
+// PrepareRunWatchdog installs the run watchdog before execution-scope
+// callbacks capture the context. This is intentionally owned by the run
+// coordinator; withAgentEvents only supplies progress activity and remains a
+// fallback for embedders that call the router directly.
+func PrepareRunWatchdog(ctx context.Context) (context.Context, func()) {
+	if runpool.HasWatchdog(ctx) {
+		return ctx, func() {}
+	}
+	ctx, _, stop := runpool.WithWatchdog(ctx, runIdleTimeout())
+	return ctx, stop
+}
+
 func (g *Gateway) HandleWithEvents(ctx context.Context, unifiedUID, channel, input string) (*HandleResponse, error) {
 	if g == nil || g.agent == nil {
 		if g == nil {
@@ -62,7 +74,11 @@ func (g *Gateway) withAgentEvents(ctx context.Context, run func(context.Context)
 
 	// Progress watchdog: cancels the run if it goes silent for too long, so a
 	// stuck provider/tool frees its worker. Disabled by default (idle<=0).
-	ctx, activity, stop := runpool.WithWatchdog(ctx, runIdleTimeout())
+	activity := func() { runpool.RecordActivity(ctx) }
+	stop := func() {}
+	if !runpool.HasWatchdog(ctx) {
+		ctx, activity, stop = runpool.WithWatchdog(ctx, runIdleTimeout())
+	}
 
 	resp, err := run(ctx)
 	if err != nil || resp == nil || !resp.IsStreaming {

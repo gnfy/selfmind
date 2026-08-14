@@ -658,12 +658,13 @@ func (d *Server) notifyExternalWatchCompletion(ctx context.Context, watch contro
 		Content:  externalWatchNotice(watch, "waiting_finalization"),
 		Kind:     "external_watch",
 	})
-	if !handled {
-		// The finalization queue is itself a durable user-visible intent. An
-		// attached CLI is not delivery evidence, but a persisted follow-up
-		// prevents this terminal watch from disappearing across restarts.
-		queued, err := d.Control.GetQueuedByIdempotencyKey(ctx, watch.TenantID, externalWatchFinalizationKey(watch))
-		handled = err == nil && queued != nil
+	if !handled && origin != nil && origin.Platform == "cli" &&
+		d.presenceTracker().IsAttached(watch.PersonID, "cli") {
+		// external_watch.completed was committed before this method and is
+		// published through the durable event stream. An attached CLI therefore
+		// has a real user-visible surface even though routePendingNotification
+		// correctly suppresses a duplicate IM push.
+		handled = true
 	}
 	if !handled {
 		return
@@ -679,17 +680,17 @@ func (d *Server) notifyExternalWatchCompletion(ctx context.Context, watch contro
 // Details stay out of the notice; `/diag execution` carries them.
 func externalWatchNotice(watch control.ExternalWatch, taskStatus string) string {
 	if watch.OperationStatus == control.WatchOperationSucceeded && watch.VerificationStatus == control.WatchVerificationBlocked {
-		return fmt.Sprintf("Watcher %s | operation: succeeded | verification: blocked_environment | task: %s", watch.ID, taskStatus)
+		return fmt.Sprintf("Watcher %s | operation: succeeded | verification: blocked_environment | task: %s", shortExternalWatchID(watch.ID), taskStatus)
 	}
 	if reason, ok := watchCheckDefect(watch.LastError); ok {
-		return "Watcher " + strings.TrimSpace(watch.ID) + " blocked: " + reason +
+		return "Watcher " + shortExternalWatchID(watch.ID) + " blocked: " + reason +
 			" | the external state was not observed | task: " + taskStatus
 	}
 	return externalWatchCompletionNotice(watch.ID, watch.Status, taskStatus)
 }
 
 func externalWatchCompletionNotice(watchID, status, taskStatus string) string {
-	watchID = strings.TrimSpace(watchID)
+	watchID = shortExternalWatchID(watchID)
 	taskStatus = strings.TrimSpace(taskStatus)
 	if taskStatus == "" {
 		taskStatus = "waiting_finalization"
@@ -758,7 +759,7 @@ func externalWatchFinalizationContent(watch control.ExternalWatch, summary strin
 			"The daemon's durable external watcher recorded terminal status %s for this operation.",
 			firstNonEmpty(strings.TrimSpace(watch.Status), "failed"),
 		)
-		finalInstruction = "Diagnose the recorded terminal evidence, preserve any completed work, and finish as failed, blocked, waiting_user, or waiting_external as the evidence requires."
+		finalInstruction = "Diagnose and record the external result, preserve any completed work, then finish this finalization run as done. The daemon records the external failure or timeout separately and will keep the task blocked or waiting for the user."
 	}
 	// A parked watch says nothing about the external operation, and saying
 	// otherwise here is how a check defect became a release record claiming a

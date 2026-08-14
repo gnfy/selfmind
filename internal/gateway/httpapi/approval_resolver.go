@@ -120,10 +120,27 @@ func (d *Server) respondApprovalByToken(ctx context.Context, identity *control.I
 		return nil, resolveErr
 	}
 	options := decodeApprovalDecisions(resolved.Payload)
-	if input.DecisionID == "" {
-		if option, ok := approvalOptionForDecision(options, decision, input.GrantScope, input.GrantKey); ok {
-			input.DecisionID = option.ID
+	if len(options) > 0 {
+		option, ok := approvalOptionForDecision(options, decision, input.GrantScope, input.GrantKey)
+		if !ok && decision == "approved" && strings.TrimSpace(input.GrantScope) == "" && strings.TrimSpace(input.GrantKey) == "" {
+			if defaultOption, found := approvalOptionByShortcut(options, "y"); found && defaultOption.Decision == decision {
+				option, ok = defaultOption, true
+				input.GrantScope = option.Scope
+				input.GrantKey = option.GrantKey
+			}
 		}
+		if !ok && strings.TrimSpace(input.GrantKey) == "" {
+			option, ok = uniqueApprovalOptionForScope(options, decision, input.GrantScope)
+			if ok {
+				input.GrantKey = option.GrantKey
+			}
+		}
+		if !ok || (input.DecisionID != "" && input.DecisionID != option.ID) {
+			return nil, fmt.Errorf("that approval choice was not offered for this request")
+		}
+		input.DecisionID = option.ID
+	} else if strings.TrimSpace(input.GrantScope) != "" || strings.TrimSpace(input.GrantKey) != "" {
+		return nil, fmt.Errorf("remembered approval is unavailable for this legacy request; approve it once instead")
 	}
 	approval, err := d.Control.RespondApprovalRequest(ctx, identity.TenantID, identity.PersonID, resolved.ID, decision, channel, input)
 	if err != nil {
@@ -148,27 +165,44 @@ func approvalOptionForDecision(options []approvalDecisionOption, decision, scope
 	return approvalDecisionOption{}, false
 }
 
+// uniqueApprovalOptionForScope keeps older clients and the `/approve run`
+// grammar compatible with a server-issued precise run rule. It may fill in a
+// grant key only when exactly one offered option matches; ambiguity never
+// guesses authority.
+func uniqueApprovalOptionForScope(options []approvalDecisionOption, decision, scope string) (approvalDecisionOption, bool) {
+	decision = strings.TrimSpace(decision)
+	scope = strings.TrimSpace(scope)
+	var match approvalDecisionOption
+	found := false
+	for _, option := range options {
+		if option.Decision != decision || option.Scope != scope {
+			continue
+		}
+		if found {
+			return approvalDecisionOption{}, false
+		}
+		match, found = option, true
+	}
+	return match, found
+}
+
 // parseBareApprovalReply maps a conversational one-word answer to an approval
-// decision plus an optional grant scope ("" once / "task" / "person"). It stays
+// decision plus an optional run-local grant scope. It stays
 // tight (whole-message match only) so ordinary sentences are never misread as a
 // decision. "ok"/"可以"/"好" double as continuation cues elsewhere; the caller
 // only invokes this when an approval is pending, so a blocking approval wins
-// that collision by construction. The scope shortcuts mirror the /approve
-// grammar: "yt" grants the class for the task, "ya" grants it for the person.
-// shortcut, when non-empty, is a server-issued option letter ("p", "h", "w")
-// from the ask's own decision list: the caller resolves it against that list, so
-// the same letters mean the same things in IM and in the terminal.
+// that collision by construction. "r" is the compact run-local choice shown by
+// both the terminal and IM menus; "yr" remains accepted for compatibility.
+// shortcut, when non-empty, is a server-issued option letter from the ask's own
+// decision list. The caller resolves it against that list, so a stale or hidden
+// shortcut can never widen an approval.
 func parseBareApprovalReply(content string) (decision, scope, shortcut string, ok bool) {
 	s := strings.ToLower(strings.TrimSpace(content))
 	s = strings.Trim(s, " \t\r\n.!?。！？，,")
 	switch s {
-	case "yr":
+	case "r", "yr":
 		return "approved", "run", "", true
-	case "yt":
-		return "approved", "task", "", true
-	case "ya":
-		return "approved", "person", "", true
-	case "yp", "yh", "yw":
+	case "yp", "yh", "yw", "yt", "ya":
 		// "y" + a rule letter: approve AND persist the rule that letter names on
 		// this ask. The scope travels with the resolved option, not from here.
 		return "approved", "", strings.TrimPrefix(s, "y"), true
@@ -236,6 +270,8 @@ func (d *Server) tryHandleBareApprovalReply(ctx context.Context, identity *contr
 			input.GrantKey = option.GrantKey
 			input.DecisionID = option.ID
 			decision = option.Decision
+		} else {
+			return true, "That approval option was not offered. Reply y, r, or n as shown in the request.", nil
 		}
 	}
 	approval, err := d.respondApprovalByToken(ctx, identity, pending[0].ID, decision, channel, input)
@@ -256,9 +292,9 @@ func (d *Server) tryHandleBareApprovalReply(ctx context.Context, identity *contr
 func (d *Server) respondApprovalCommand(ctx context.Context, identity *control.IdentityContext, token, decision, channel string) string {
 	// The reference token may be followed by a grant-scope word:
 	//   /approve            → this action once
-	//   /approve task       → remember the action's class for this task
-	//   /approve always     → remember it for you across tasks (alias: person)
-	// A bare scope word ("/approve task") targets the lone pending approval.
+	//   /approve run        → reuse the offered class/rule for this live run
+	// Historical task/person scope words are parsed for wire compatibility, but a
+	// current request rejects them because they are not server-issued choices.
 	grantScope := ""
 	fields := strings.Fields(token)
 	if len(fields) > 0 {
@@ -349,14 +385,13 @@ func (d *Server) respondAllApprovals(ctx context.Context, identity *control.Iden
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "%s %d:\n", verb, len(pending))
 	for _, item := range pending {
-		// Bulk decisions are always once-only: remembering a whole batch as a
-		// class grant would be too coarse a decision to infer.
-		approval, err := d.Control.RespondApprovalRequest(ctx, identity.TenantID, identity.PersonID, item.ID, decision, channel, control.ApprovalDecisionInput{})
+		// Resolve each row against its own server-issued default. This preserves
+		// run-bundle semantics without inventing a broad grant for the batch.
+		approval, err := d.respondApprovalByToken(ctx, identity, item.ID, decision, channel, control.ApprovalDecisionInput{})
 		if err != nil {
 			fmt.Fprintf(&sb, "- failed: %s (%s)\n", approvalSummaryLine(item, ""), err.Error())
 			continue
 		}
-		appendApprovalEvent(ctx, d.Control, approval, channel)
 		fmt.Fprintf(&sb, "- %s\n", approvalSummaryLine(*approval, ""))
 	}
 	return strings.TrimRight(sb.String(), "\n")

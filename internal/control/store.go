@@ -565,6 +565,9 @@ CREATE INDEX IF NOT EXISTS idx_provider_route_probe
 CREATE TABLE IF NOT EXISTS maintenance_provider_calls (
 	id INTEGER PRIMARY KEY AUTOINCREMENT,
 	tenant_id TEXT NOT NULL,
+	person_id TEXT NOT NULL DEFAULT '',
+	task_id TEXT NOT NULL DEFAULT '',
+	run_id TEXT NOT NULL DEFAULT '',
 	role TEXT NOT NULL DEFAULT '',
 	provider TEXT NOT NULL DEFAULT '',
 	model TEXT NOT NULL DEFAULT '',
@@ -821,6 +824,9 @@ CREATE INDEX IF NOT EXISTS idx_external_watches_owner
 		{"maintenance_jobs", "blocked_route_id", "TEXT NOT NULL DEFAULT ''"},
 		// Compatible providers such as DeepSeek report cache hit/miss and
 		// reasoning-token details outside the base OpenAI usage fields.
+		{"maintenance_provider_calls", "person_id", "TEXT NOT NULL DEFAULT ''"},
+		{"maintenance_provider_calls", "task_id", "TEXT NOT NULL DEFAULT ''"},
+		{"maintenance_provider_calls", "run_id", "TEXT NOT NULL DEFAULT ''"},
 		{"maintenance_provider_calls", "cache_miss_input_tokens", "INTEGER NOT NULL DEFAULT 0"},
 		{"maintenance_provider_calls", "reasoning_output_tokens", "INTEGER NOT NULL DEFAULT 0"},
 		{"maintenance_provider_calls", "cache_usage_reported", "INTEGER NOT NULL DEFAULT 0"},
@@ -986,7 +992,9 @@ CREATE INDEX IF NOT EXISTS idx_external_watches_owner
 		CREATE INDEX IF NOT EXISTS idx_task_queue_schedule
 			ON task_queue(status, not_before, priority DESC, created_at);
 		CREATE INDEX IF NOT EXISTS idx_task_queue_claims
-			ON task_queue(status, lease_until);`); err != nil {
+			ON task_queue(status, lease_until);
+		CREATE INDEX IF NOT EXISTS idx_maintenance_provider_calls_person
+			ON maintenance_provider_calls(tenant_id, person_id, created_at);`); err != nil {
 		return err
 	}
 	return nil

@@ -454,7 +454,9 @@ func (c *MemoryConsolidator) judgeCluster(ctx context.Context, cluster memory.Co
 		SystemPrompt: memoryJudgeSystemPrompt,
 		Messages:     []llm.Message{{Role: "user", Content: sb.String()}},
 		MaxTokens:    400,
-		Options:      map[string]interface{}{"temperature": 0},
+		Options: map[string]interface{}{
+			"temperature": 0, "reasoning_effort": maintenanceReasoningEffort,
+		},
 	})
 	if err != nil {
 		return memory.ConsolidationDecision{}, err

@@ -124,6 +124,11 @@ Anthropic Messages 在 `thinking_mode: anthropic` 下，会把显式推理等级
 `reasoning_effort` 或 provider 专属 thinking 契约。优先使用这些有类型字段；
 `extra_body` 只作为最终 wire 边界的应急覆盖。
 
+后台维护不会继承主模型或辅助模型用于交互任务的高推理等级。Post-run 分析、记忆
+合并、模型契约探针和审批判定都会显式请求关闭推理并限制输出；维护 provider 链在
+实际派发时再次执行同一约束。因此，即使用户把辅助模型设为 `high` 或 `xhigh`，
+日常治理也不会按该档位放大成本，前台任务的推理设置则保持不变。
+
 `user_identity_field: auto` 在 OpenAI-compatible 请求中映射为 `user_id`，在
 Anthropic Messages 中映射为 `metadata.user_id`。值是从认证身份派生的稳定匿名 ID，
 不会发送原始 tenant、person、channel、邮箱或平台 ID；`off` 可以禁用。显式
@@ -263,6 +268,15 @@ token。若服务端返回 `401 token_expired`、`invalid_token` 等认证失败
 | `claude-code` | `anthropic_messages` | 外部 OAuth（Claude Code 登录态） | `claude-3-5-sonnet-20241022` |
 | `gemini-cli` | `openai_compatible` | 外部 OAuth（Gemini CLI 登录态） | `gemini-1.5-pro` |
 | `qwen-cli` | `openai_compatible` | 外部 OAuth（Qwen CLI 登录态） | `qwen3-coder-plus` |
+
+## OpenRouter 应用归因
+
+内置 `openrouter` profile 声明 `HTTP-Referer`（应用链接）、`X-Title`（应用
+名称）和由 `buildinfo.Version` 派生的 `User-Agent`。它们刻意放在 profile 层
+而不是 adapter 默认头：profile 若配成其它协议、或走流式调用，都不会经过
+OpenRouter adapter 自己的请求构造，adapter 里设置的归因头因此几乎覆盖不到
+真实请求。`provider_profiles.openrouter.extra_headers` 仍可逐项覆盖，供 fork
+与自建代理使用。
 
 ## DeepSeek V4
 

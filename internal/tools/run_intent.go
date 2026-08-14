@@ -10,6 +10,10 @@ type OperationClass string
 const (
 	OpClassWrite  OperationClass = "write"
 	OpClassDelete OperationClass = "delete"
+	// OpClassObserve is a statically classified read-only command. Keeping it
+	// distinct prevents a request such as "inspect first, do not execute yet"
+	// from blocking the inspection that makes the later decision possible.
+	OpClassObserve OperationClass = "observe"
 	// OpClassExec is a deny-side parent: an unqualified "do not run commands"
 	// covers both execution shapes below.
 	OpClassExec OperationClass = "exec"
@@ -143,7 +147,7 @@ func classMatches(deny, call OperationClass) bool {
 	}
 	// An unqualified execution ban covers both shapes; a ban qualified as
 	// "directly" resolves to OpClassExecInTurn and leaves delegation alone.
-	return deny == OpClassExec && (call == OpClassExecInTurn || call == OpClassExecDelegated)
+	return deny == OpClassExec && (call == OpClassObserve || call == OpClassExecInTurn || call == OpClassExecDelegated)
 }
 
 // anyTargetMatches compares a named target against the call's targets by

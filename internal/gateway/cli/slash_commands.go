@@ -37,7 +37,9 @@ var slashCommandMetas = []slashCommandMeta{
 	{Name: "/capture", Usage: "/capture [title]", Description: "Save the last turn as a replayable eval case", Hint: "turn this turn into a regression test"},
 	{Name: "/copy", Usage: "/copy", Description: "Copy the last assistant response to the clipboard", Hint: "copy the last response"},
 	{Name: "/queue", Usage: "/queue [clear]", Description: "List queued tasks, or drop all pending queued tasks", Hint: "view or clear queued work"},
+	{Name: "/watchers", Usage: "/watchers [active|attention|recent|all [page]|<n|id>|cancel <n|id>]", Description: "List, inspect, or cancel durable external watchers", Hint: "view or manage external watchers"},
 	{Name: "/diag", Usage: "/diag [memory|context|tasks|models|delivery|execution|tools]", Description: "Show runtime and subsystem diagnostics", Hint: "runs, queues, memory, context, tasks, models, delivery, execution, tools"},
+	{Name: "/report", Usage: "/report daily [--since 24h]", Description: "Show a model-free execution quality and cost report", Hint: "review recent execution quality and cost"},
 	{Name: "/search", Usage: "/search [current|query]", Description: "Review this conversation with full diffs (current), or search past working sessions (empty = recent sessions)", Hint: "review this conversation or find prior work"},
 	// Gateway control commands the TUI relays to the daemon. Previously the TUI
 	// OMITTED these, so typing /approve fell through to the skill/unknown path
@@ -45,7 +47,7 @@ var slashCommandMetas = []slashCommandMeta{
 	// control passthrough (see gatewayPassthroughCommands) so /approve means the
 	// same thing on every surface.
 	{Name: "/approvals", Usage: "/approvals [grants|revoke <n>]", Description: "Pending approvals; grants lists remembered classes", Hint: "list pending approvals or remembered classes"},
-	{Name: "/approve", Usage: "/approve <n|id|all> [task|always]", Description: "Approve a pending action", Hint: "approve a pending action"},
+	{Name: "/approve", Usage: "/approve <n|id|all> [run]", Description: "Approve a pending action", Hint: "approve once or for this run when offered"},
 	{Name: "/reject", Usage: "/reject <n|id|all>", Description: "Reject a pending action (or all of them)", Hint: "reject a pending action"},
 	{Name: "/stop", Usage: "/stop", Description: "Cancel the active run", Hint: "cancel the active run"},
 	{Name: "/cancel", Usage: "/cancel", Description: "Cancel the current task even if no run is active", Hint: "cancel the current task"},
@@ -67,6 +69,7 @@ var slashCommandMetas = []slashCommandMeta{
 var gatewayPassthroughCommands = []string{
 	"/approvals", "/approve", "/reject", "/stop", "/cancel", "/id", "/new",
 	"/resume", "/task", "/workspace", "/workspaces", "/ws", "/events", "/notify",
+	"/watchers", "/report",
 }
 
 var slashCommands = []slashCommand{

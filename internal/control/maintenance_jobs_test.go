@@ -182,6 +182,34 @@ func TestMaintenanceJobProviderBlockAndRestartProbe(t *testing.T) {
 	}
 }
 
+func TestLegacyBlockedMaintenanceRestartProbeIsMarkedOnce(t *testing.T) {
+	ctx := context.Background()
+	store, identity, _, run := newRecoveryFixture(t)
+	if err := store.FinishRun(ctx, identity.TenantID, run.ID, "done"); err != nil {
+		t.Fatal(err)
+	}
+	if claimed, err := store.ClaimMaintenanceJob(ctx, identity.TenantID, run.ID, 1); err != nil || !claimed {
+		t.Fatalf("claim: claimed=%v err=%v", claimed, err)
+	}
+	if _, err := store.db.ExecContext(ctx,
+		`UPDATE maintenance_jobs SET status = ?, blocked_route_id = '' WHERE tenant_id = ? AND run_id = ? AND analyzer_version = 1`,
+		MaintenanceJobBlockedProvider, identity.TenantID, run.ID); err != nil {
+		t.Fatal(err)
+	}
+	first, err := store.ResetLegacyBlockedMaintenanceJobs(ctx)
+	if err != nil || first != 1 {
+		t.Fatalf("first reset=%d err=%v", first, err)
+	}
+	second, err := store.ResetLegacyBlockedMaintenanceJobs(ctx)
+	if err != nil || second != 0 {
+		t.Fatalf("second reset=%d err=%v", second, err)
+	}
+	job, err := store.GetMaintenanceJob(ctx, identity.TenantID, run.ID, 1)
+	if err != nil || job == nil || job.Status != MaintenanceJobPending || job.BlockedRouteID != maintenanceLegacyProbeRouteID {
+		t.Fatalf("job=%+v err=%v", job, err)
+	}
+}
+
 func TestMaintenanceHealthReportsFailedWithoutProviderBlock(t *testing.T) {
 	ctx := context.Background()
 	store, identity, _, run := newRecoveryFixture(t)
@@ -309,12 +337,21 @@ func TestBlockMaintenanceJobAfterRetriesPreservesProviderError(t *testing.T) {
 	}
 
 	reset, err := store.ResetLegacyBlockedMaintenanceJobs(ctx)
-	if err != nil || reset != 1 {
-		t.Fatalf("restart probe: reset=%d err=%v", reset, err)
+	if err != nil || reset != 0 {
+		t.Fatalf("retry-limit block must survive restart: reset=%d err=%v", reset, err)
 	}
 	job, _ = store.GetMaintenanceJob(ctx, identity.TenantID, run.ID, 1)
-	if job == nil || job.Status != MaintenanceJobPending {
-		t.Fatalf("requeued job=%+v", job)
+	if job == nil || job.Status != MaintenanceJobBlockedProvider || job.BlockedRouteID != maintenanceRetryLimitRouteID {
+		t.Fatalf("parked job=%+v", job)
+	}
+
+	replayed, err := store.ReplayRetryLimitedMaintenanceJobs(ctx, identity.TenantID, 10)
+	if err != nil || replayed != 1 {
+		t.Fatalf("explicit replay: replayed=%d err=%v", replayed, err)
+	}
+	job, _ = store.GetMaintenanceJob(ctx, identity.TenantID, run.ID, 1)
+	if job == nil || job.Status != MaintenanceJobPending || job.Attempts != 0 {
+		t.Fatalf("explicitly replayed job=%+v", job)
 	}
 }
 

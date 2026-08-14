@@ -225,13 +225,15 @@ var delegatedExecTools = map[string]struct{}{
 // prohibition is expressed in. `dangerous` only contributes a fallback class:
 // the heuristic says an op looked risky, which is never something the person
 // said, so it must not make an unrelated deny apply.
-func operationClassesFor(toolName string, dangerous bool) []OperationClass {
+func operationClassesFor(toolName string, args map[string]interface{}, dangerous bool) []OperationClass {
 	var classes []OperationClass
 	if isWriteTool(toolName) {
 		classes = append(classes, OpClassWrite)
 	}
 	if isExecTool(toolName) {
-		if _, delegated := delegatedExecTools[toolName]; delegated {
+		if deterministicObservationExec(toolName, args) {
+			classes = append(classes, OpClassObserve)
+		} else if _, delegated := delegatedExecTools[toolName]; delegated {
 			classes = append(classes, OpClassExecDelegated)
 		} else {
 			classes = append(classes, OpClassExecInTurn)
@@ -479,7 +481,7 @@ func SmartApprovalMiddleware(projectRoot string) Middleware {
 			// registration alike, forcing a human ask that nobody was there
 			// to answer.
 			denyForcesHuman := intentSnapshot.DenyBlocks(
-				operationClassesFor(toolName, dangerous),
+				operationClassesFor(toolName, args, dangerous),
 				operationTargetsFor(args),
 			)
 			contained := containment.AutoApprove() && !denyForcesHuman
@@ -566,12 +568,18 @@ func SmartApprovalMiddleware(projectRoot string) Middleware {
 			triageRationale := ""
 			triageRisk := ""
 			triageAuthorization := ""
+			decisionPolicy := ""
+			if denyForcesHuman || containment.Filesystem == containmentFilesystemHost ||
+				(containment.Credentials == containmentCredentialsSelected && !containment.ObservationOnly) {
+				decisionPolicy = ApprovalDecisionPolicyOnceOnly
+			}
 			if mode == ApprovalSmart && hasScope && !denyForcesHuman {
 				switch {
 				case scope.Judge == nil:
 					// No judge wired: smart mode cannot triage at all. Count it so
 					// /diag can say the funnel is disabled rather than strict.
 					triageState = TriageStateUnavailable
+					decisionPolicy = ApprovalDecisionPolicyOnceOnly
 					recordScopeTriage(scope, toolName, patternKey, TriageOutcomeUnavailable, TriageAssessment{}, 0, nil)
 				case triageDenyBreakerTripped(scope.RunID):
 					// The model is circling a denied action (batch C2). Stop
@@ -579,6 +587,7 @@ func SmartApprovalMiddleware(projectRoot string) Middleware {
 					// who is the only one who can end the loop. Never the reverse:
 					// a tripped breaker cannot approve anything.
 					triageState = TriageStateEscalated
+					decisionPolicy = ApprovalDecisionPolicyOnceOnly
 					recordScopeTriage(scope, toolName, patternKey, TriageOutcomeEscalated, TriageAssessment{}, 0, nil)
 					log.Info("smart approval: triage stepped aside after repeated denials in this run", "tool", toolName, "run", scope.RunID)
 				default:
@@ -589,6 +598,9 @@ func SmartApprovalMiddleware(projectRoot string) Middleware {
 					triageRationale = assessment.Rationale
 					triageRisk = assessment.Risk
 					triageAuthorization = assessment.Authorization
+					if assessment.Risk == "high" || assessment.Risk == "critical" {
+						decisionPolicy = ApprovalDecisionPolicyOnceOnly
+					}
 					switch verdict {
 					case TriageApprove:
 						// Record a TASK-scope class grant so the judge is consulted at
@@ -622,6 +634,7 @@ func SmartApprovalMiddleware(projectRoot string) Middleware {
 						clearTriageDenials(scope.RunID)
 						if terr != nil {
 							triageState = TriageStateUnavailable
+							decisionPolicy = ApprovalDecisionPolicyOnceOnly
 							recordScopeTriage(scope, toolName, patternKey, TriageOutcomeUnavailable, assessment, triageLatency, terr)
 							log.Debug("smart approval: triage escalated on error", "tool", toolName, "error", terr)
 						} else {
@@ -637,6 +650,14 @@ func SmartApprovalMiddleware(projectRoot string) Middleware {
 				recordScopeTriage(scope, toolName, patternKey, TriageOutcomeHumanAsk, TriageAssessment{
 					Risk: triageRisk, Authorization: triageAuthorization, Rationale: triageRationale,
 				}, 0, nil)
+				grantClass := grantClassForDecision(toolName, reason, args, patternKey)
+				runGrantClass := exactRunGrantDescription(patternKey, exactRunKey)
+				askRules := ruleCandidates
+				if decisionPolicy == ApprovalDecisionPolicyOnceOnly {
+					grantClass = ""
+					runGrantClass = ""
+					askRules = nil
+				}
 				decision, err := scope.Approval(contextFromArgs(args), ToolApprovalRequest{
 					TenantID:            scope.TenantID,
 					PersonID:            scope.PersonID,
@@ -646,8 +667,8 @@ func SmartApprovalMiddleware(projectRoot string) Middleware {
 					ToolName:            toolName,
 					Reason:              reason,
 					Args:                approvalDisplayArgs(args),
-					GrantClass:          grantClassForDecision(toolName, reason, args, patternKey),
-					RunGrantClass:       exactRunGrantDescription(patternKey, exactRunKey),
+					GrantClass:          grantClass,
+					RunGrantClass:       runGrantClass,
 					ResourceFingerprint: approvalResourceFingerprint(scope, toolName, args),
 					Environment:         scope.EnvironmentSnapshotID,
 					Cwd:                 approvalDisplayCwd(scope),
@@ -657,7 +678,8 @@ func SmartApprovalMiddleware(projectRoot string) Middleware {
 					TriageRisk:          triageRisk,
 					TriageAuthorization: triageAuthorization,
 					Containment:         containment.Summary(),
-					RuleCandidates:      ruleCandidates,
+					RuleCandidates:      askRules,
+					DecisionPolicy:      decisionPolicy,
 				})
 				if err != nil {
 					return "", err
@@ -677,6 +699,12 @@ func SmartApprovalMiddleware(projectRoot string) Middleware {
 						return "", fmt.Errorf("operation rejected: %s", decision.Reason)
 					}
 					return "", fmt.Errorf("operation rejected by approval %s", decision.ApprovalID)
+				}
+				if decision.Scope != "" && decision.Scope != "run" {
+					return "", fmt.Errorf("operation rejected: approval scope %q was not offered for this request", decision.Scope)
+				}
+				if decisionPolicy == ApprovalDecisionPolicyOnceOnly && (decision.Scope != "" || strings.TrimSpace(decision.GrantKey) != "") {
+					return "", fmt.Errorf("operation rejected: this sensitive request can only be approved once")
 				}
 				// Remember what the human actually chose (batch B2): a rule they
 				// picked, else the action class. A rule key is honored ONLY when

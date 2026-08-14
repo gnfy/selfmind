@@ -380,6 +380,7 @@ func TestCredentialReadCapabilityIsApprovableBeforeExecution(t *testing.T) {
 	cleanup := SetExecutionScope(tenant, ExecutionScope{
 		TenantID:        tenant,
 		PersonID:        "person-profile",
+		RunID:           "run-profile",
 		WorkspaceID:     "ws-profile",
 		WorkspaceRoot:   workspace,
 		AllowedRoots:    []string{workspace},
@@ -395,8 +396,7 @@ func TestCredentialReadCapabilityIsApprovableBeforeExecution(t *testing.T) {
 			if req.GrantClass == "" {
 				t.Fatal("the ask must describe what it authorizes")
 			}
-			return ToolApprovalDecision{Approved: true, Scope: "person",
-				ExpiresAt: time.Now().Add(time.Hour)}, nil
+			return ToolApprovalDecision{Approved: true}, nil
 		},
 	})
 	t.Cleanup(cleanup)
@@ -414,8 +414,8 @@ func TestCredentialReadCapabilityIsApprovableBeforeExecution(t *testing.T) {
 	if allowed, _ := args[credentialReadArgKey].(bool); !allowed {
 		t.Fatal("an approved capability must allow credential access")
 	}
-	if store.granted != executionenv.CapabilityCredentialRead {
-		t.Fatalf("the grant must be persisted, got %q", store.granted)
+	if store.granted != "" {
+		t.Fatalf("a one-off credential approval must not be persisted, got %q", store.granted)
 	}
 	// With the decision in place the overlay materializes, which is the whole
 	// point: the command now runs with credentials instead of failing.
@@ -426,6 +426,49 @@ func TestCredentialReadCapabilityIsApprovableBeforeExecution(t *testing.T) {
 	overlay := filepath.Join(executionenv.RuntimeRoot(), "leases", "lease-"+t.Name(), "state", "gcloud")
 	if _, err := os.Stat(filepath.Join(overlay, "credentials.db")); err != nil {
 		t.Fatalf("an approved credential:read must materialize the overlay: %v", err)
+	}
+}
+
+func TestCredentialReadRunGrantIsReusedForSafeObservation(t *testing.T) {
+	base := fixtureBase(t)
+	home, _, _ := fakeGcloudHome(t, base)
+	tenant, workspace := profileExecScope(t, home, fakeGcloudOnPath(t, base), executionenv.TrustUntrusted)
+
+	asked := 0
+	cleanup := SetExecutionScope(tenant, ExecutionScope{
+		TenantID: tenant, PersonID: "person-profile", WorkspaceID: "ws-profile",
+		RunID:         "run-profile-reuse",
+		WorkspaceRoot: workspace, AllowedRoots: []string{workspace},
+		LeaseID: "lease-" + t.Name(), TrustLevel: executionenv.TrustUntrusted,
+		Approval: func(_ context.Context, req ToolApprovalRequest) (ToolApprovalDecision, error) {
+			asked++
+			if req.DecisionPolicy != "" || req.GrantClass == "" {
+				t.Fatalf("safe observation should offer a run grant: %+v", req)
+			}
+			return ToolApprovalDecision{Approved: true, Scope: "run"}, nil
+		},
+	})
+	t.Cleanup(cleanup)
+
+	first := map[string]interface{}{
+		"_tenant_id": tenant, "_tool_name": "terminal",
+		"command": "gcloud auth list", "cwd": workspace,
+	}
+	resolveCredentialCapability(first, mustScope(t, first), "terminal")
+	second := map[string]interface{}{
+		"_tenant_id": tenant, "_tool_name": "terminal",
+		"command": "gcloud builds list", "cwd": workspace,
+	}
+	if firstFP, secondFP := credentialCapabilityFingerprint("ws-profile", "terminal", first), credentialCapabilityFingerprint("ws-profile", "terminal", second); firstFP != secondFP {
+		t.Fatalf("credential profile fingerprints differ: first=%s second=%s first_programs=%v second_programs=%v",
+			firstFP, secondFP, execCommandPrograms("terminal", first), execCommandPrograms("terminal", second))
+	}
+	resolveCredentialCapability(second, mustScope(t, second), "terminal")
+	if asked != 1 {
+		t.Fatalf("safe observations in one profile/run asked %d times, want 1", asked)
+	}
+	if allowed, _ := second[credentialReadArgKey].(bool); !allowed {
+		t.Fatal("run-local credential grant was not reused")
 	}
 }
 

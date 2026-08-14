@@ -43,6 +43,20 @@ func rankTaskEvents(events []control.Event, max int) []control.Event {
 	if max <= 0 || len(events) == 0 {
 		return nil
 	}
+	filtered := make([]control.Event, 0, len(events))
+	for _, event := range events {
+		// Recall adoption is diagnostic telemetry, not task evidence. Feeding it
+		// back into the next prompt would turn an observability improvement into
+		// permanent context growth and expose internal scoring details to models.
+		if event.Type == "context.recall_usage" {
+			continue
+		}
+		filtered = append(filtered, event)
+	}
+	events = filtered
+	if len(events) == 0 {
+		return nil
+	}
 	if len(events) <= max {
 		out := append([]control.Event{}, events...)
 		sortEventsChronological(out)

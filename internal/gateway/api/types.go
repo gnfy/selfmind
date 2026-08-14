@@ -182,8 +182,10 @@ type ApprovalRespondRequest struct {
 	Channel        string `json:"channel"`
 	ApprovalID     string `json:"approval_id"`
 	Decision       string `json:"decision"`
-	// Scope records class-level approval memory on an approve: "" (once),
-	// "task" (remember for this task), or "person" (remember across tasks).
+	// Scope records approval reuse on an approve. New asks expose only "" (once)
+	// or "run" (the live run). task/person remain wire-compatible for historical
+	// rows, but a response is rejected unless the server-issued answer list
+	// offered that exact scope.
 	Scope string `json:"scope,omitempty"`
 	// GrantKey names a narrow RULE the person picked from the ask's own
 	// server-issued option list ("commands that start with `git status`"). The
@@ -236,7 +238,24 @@ type RunOutcome struct {
 	NeedApprove        bool                 `json:"need_approve,omitempty"`
 	ResolvedBlockerIDs []string             `json:"resolved_blocker_ids,omitempty"`
 	Verification       *VerificationOutcome `json:"verification,omitempty"`
-	ClaimMismatches    []string             `json:"claim_mismatches,omitempty"`
+	// External records the independently observed result of a durable external
+	// operation. A failed deployment does not mean the SelfMind finalization run
+	// failed: the run may have correctly detected, recorded, and reported that
+	// external failure.
+	External        *ExternalOutcome `json:"external,omitempty"`
+	ClaimMismatches []string         `json:"claim_mismatches,omitempty"`
+}
+
+// ExternalOutcome is daemon-derived from a durable watcher. Models do not
+// author this field, so consumers can distinguish agent execution quality from
+// the business result being observed.
+type ExternalOutcome struct {
+	WatchID            string `json:"watch_id,omitempty"`
+	Status             string `json:"status"`
+	CheckerStatus      string `json:"checker_status,omitempty"`
+	OperationStatus    string `json:"operation_status,omitempty"`
+	VerificationStatus string `json:"verification_status,omitempty"`
+	Summary            string `json:"summary,omitempty"`
 }
 
 // VerificationOutcome is derived from tool-runtime evidence. It never trusts

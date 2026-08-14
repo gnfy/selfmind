@@ -49,6 +49,7 @@ selfmind feedback [--out FILE|--send] [--repo OWNER/REPO] [--include-crash] <mes
 ```text
 selfmind send [--async] [--mode MODE] <message>
 selfmind status
+selfmind watchers [active|attention|recent|all [page]|<n|id>|cancel <n|id>]
 selfmind tasks [done|archived|all|<keyword>]
 selfmind task <n|task_id> [runs|rename <name>|pin|unpin|archive|merge <dst>]
 selfmind resume <n|task_id>
@@ -61,6 +62,10 @@ selfmind stop
 selfmind id
 selfmind new [title]
 ```
+
+- `watchers` 是不调用模型的持久 watcher 管理入口。默认优先显示运行中和需要
+  关注的检查；可使用稳定的短 watcher ID 查看详情或只取消该 watcher。取消
+  watcher 不会取消外部系统中已经启动的操作。
 
 - `send` 在不打开 TUI 的情况下提交消息。`--async` 在 gateway 接收后立即返回。
   `MODE` 可用值为 `on-request`、`read-only`、`auto-edit`、`full-auto`
@@ -99,6 +104,7 @@ selfmind model [current|check [--live] [--role <name>]|list|set <provider> <mode
 selfmind auth [login|status|logout] ...
 selfmind doctor [--out FILE] [--probe-models]
 selfmind usage
+selfmind report daily [--since 24h]
 selfmind docs [check|index]
 selfmind selfcheck [--fast | --profile local-full|local-fast|ci] [--skip-go] [--skip-eval] [--eval-dir DIR]
 selfmind gateway [run|start|status|stop|restart|service] ...
@@ -146,6 +152,9 @@ selfmind weixin status
   最终答复，因此会消耗少量 provider 额度。
 - `usage` 是 `/diag context` 的 CLI 别名。若 provider 上报相应字段，会展示调用级
   输入、缓存命中/未命中输入、输出和推理 token；它展示 token，不估算货币成本。
+- `report daily` 生成当前 person 的无模型质量与成本摘要。它在有界时间窗口内汇总
+  run 结局、工具与审批、provider 用量和缓存、后台维护健康、投递状态及召回采用
+  趋势；默认最近 24 小时，最长 30 天。
 - `doctor` 检查安装和配置；`--probe-models` 会真实调用 provider，可能消耗额度。
 - `selfcheck` 是本地发布门禁。默认 `local-full` 运行本机能够证明的全部发布用例；
   `--fast`/`local-fast` 跳过已测量的慢用例；`--profile ci` 只运行明确分配给
@@ -207,10 +216,12 @@ Gateway 命令可用于 TUI 和受支持的 IM 渠道，并且会在普通 Agent
 /tasks [done|archived|all]
 /task <n|id> [runs|rename <name>|pin|unpin|archive|merge <dst>]
 /queue [drop <n>|clear]
+/watchers [active|attention|recent|all [page]|<n|id>|cancel <n|id>]
 /diag [memory|context|tasks|models|delivery|execution|tools]
+/report daily [--since 24h]
 /events
 /approvals [grants|revoke <n>]
-/approve <n|id|all> [task|always]
+/approve <n|id|all> [run]
 /reject <n|id|all>
 /mode [mode]
 /stop
@@ -222,8 +233,15 @@ Gateway 命令可用于 TUI 和受支持的 IM 渠道，并且会在普通 Agent
 /workspaces  (same as bare /workspace or /ws)
 ```
 
-- `/approve ... task` 为当前任务记住同类授权；`always` 为当前 person
-  持久记住同类授权。
+- `/watchers` 在 CLI 与 IM 中使用同一个按 person 隔离的视图，展示 checker、
+  operation、verification、finalization 和 notification 状态；原始命令、环境指纹
+  与凭证不会显示在输出中。默认视图和 `all` 视图带稳定序号：使用
+  `/watchers 1` 查看第一条 watcher，使用 `/watchers cancel 1` 停止监控。
+  取消 watcher 不会取消外部操作。
+
+- 审批请求自身携带权威选项。普通请求显示“仅本次 / 当前 run 内复用 / 拒绝”，
+  高敏感请求只显示“仅本次 / 拒绝”；新提示不再创建 task/person 级授权。
+- `/approvals grants` 与 `/approvals revoke <n>` 仍可查看和撤销历史记忆授权。
 - `/mode` 支持 `on-request`、`read-only`、`auto-edit`、`full-auto`
   和 `smart`。
 - `/notify` 选择 CLI 脱离后接收进度和最终结果的已绑定 IM 渠道。

@@ -139,6 +139,28 @@ func TestUsageCommandUsesContextDiagnostics(t *testing.T) {
 	}
 }
 
+func TestReportDailyUsesShortLivedGatewayRequest(t *testing.T) {
+	app, recorded, _, _ := newSendTestApp(t, []string{"selfmind", "report", "daily", "--since", "48h"})
+	handled, code := app.runGatewayClientIfRequested()
+	if !handled || code != 0 {
+		t.Fatalf("handled = %v, code = %d", handled, code)
+	}
+	if recorded.Content != "/report daily --since 48h" {
+		t.Fatalf("content = %q", recorded.Content)
+	}
+}
+
+func TestWatchersUsesShortLivedGatewayRequest(t *testing.T) {
+	app, recorded, _, _ := newSendTestApp(t, []string{"selfmind", "watchers", "attention"})
+	handled, code := app.runGatewayClientIfRequested()
+	if !handled || code != 0 {
+		t.Fatalf("handled = %v, code = %d", handled, code)
+	}
+	if recorded.Content != "/watchers attention" {
+		t.Fatalf("content = %q", recorded.Content)
+	}
+}
+
 func TestExtractTaskResumeCommand(t *testing.T) {
 	stdout := &bytes.Buffer{}
 	stderr := &bytes.Buffer{}

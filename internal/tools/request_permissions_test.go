@@ -21,11 +21,11 @@ func newPermissionScope(t *testing.T, grants *fakeGrantStore, handler ToolApprov
 func TestRequestPermissionsAsksOnceForTheWholeBundle(t *testing.T) {
 	grants := newFakeGrantStore()
 	asks := 0
-	var offered []ApprovalRuleCandidate
+	var policy string
 	cleanup := newPermissionScope(t, grants, func(ctx context.Context, req ToolApprovalRequest) (ToolApprovalDecision, error) {
 		asks++
-		offered = req.RuleCandidates
-		return ToolApprovalDecision{Approved: true, ApprovalID: "apr_perm", Scope: "task", Outcome: ApprovalOutcomeApproved}, nil
+		policy = req.DecisionPolicy
+		return ToolApprovalDecision{Approved: true, ApprovalID: "apr_perm", Scope: "run", Outcome: ApprovalOutcomeApproved}, nil
 	})
 	defer cleanup()
 
@@ -42,19 +42,19 @@ func TestRequestPermissionsAsksOnceForTheWholeBundle(t *testing.T) {
 	if asks != 1 {
 		t.Fatalf("the bundle must cost exactly one ask, got %d", asks)
 	}
-	// The in-workspace path needs no grant; the other two do.
-	if len(offered) != 2 {
-		t.Fatalf("offered candidates = %+v, want the two out-of-scope permissions", offered)
+	if policy != ApprovalDecisionPolicyRunBundle {
+		t.Fatalf("decision policy = %q, want run bundle", policy)
 	}
-	if !strings.Contains(out, "Granted (task)") || !strings.Contains(out, "api.github.com") {
+	if !strings.Contains(out, "Granted (run)") || !strings.Contains(out, "api.github.com") {
 		t.Fatalf("result should report what was granted: %q", out)
 	}
 	for _, key := range []string{
 		approvalRuleKey(ApprovalRuleKindPathRoot, "/srv/site"),
 		approvalRuleKey(ApprovalRuleKindNetworkHost, "api.github.com"),
 	} {
-		if !grants.granted[grants.key("task", "task-perm", key)] {
-			t.Fatalf("expected a task grant for %q", key)
+		scope, ok := currentExecutionScope(map[string]interface{}{"_tenant_id": "person-perm"})
+		if !ok || scope.runGrants == nil || !scope.runGrants.has(key) {
+			t.Fatalf("expected a run grant for %q", key)
 		}
 	}
 

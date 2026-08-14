@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"selfmind/internal/gateway/api"
+	commandcatalog "selfmind/internal/gateway/command"
 )
 
 // TestBareResumeArmsPickerFromDaemonList pins that a bare /resume presents the
@@ -130,13 +131,35 @@ func TestSlashCommandMetaIndicesMatchNames(t *testing.T) {
 			t.Fatalf("%s has no handler", cmd.Name)
 		}
 	}
-	for _, name := range []string{"/copy", "/queue", "/diag", "/search", "/capture"} {
+	for _, name := range []string{"/copy", "/queue", "/watchers", "/diag", "/report", "/search", "/capture"} {
 		cmd, ok := slashCommandIndex[name]
 		if !ok {
 			t.Fatalf("%s missing from the command table", name)
 		}
 		if cmd.Name != name {
 			t.Fatalf("%s bound to metadata for %s", name, cmd.Name)
+		}
+	}
+}
+
+// Every daemon control command must be discoverable and executable in the TUI.
+// The gateway catalog is authoritative; this guard prevents a newly added
+// command from working over IM/HTTP while silently appearing unknown locally.
+func TestTUIExposesEveryGatewayControlCommand(t *testing.T) {
+	for _, entry := range commandcatalog.All() {
+		if entry.Scope != commandcatalog.Gateway {
+			continue
+		}
+		if _, ok := slashCommandIndex[entry.Name]; !ok {
+			t.Errorf("gateway command %s is missing from the TUI command table", entry.Name)
+		}
+		for _, alias := range entry.Aliases {
+			if strings.ContainsAny(alias, " \t\r\n") {
+				continue
+			}
+			if _, ok := slashCommandIndex[alias]; !ok {
+				t.Errorf("gateway command alias %s is missing from the TUI command table", alias)
+			}
 		}
 	}
 }

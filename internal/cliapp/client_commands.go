@@ -25,6 +25,14 @@ func (a *App) runGatewayClientIfRequested() (bool, int) {
 			return true, a.sendGatewayMessage("/status")
 		case "usage":
 			return true, a.sendGatewayMessage("/diag context")
+		case "report":
+			if len(a.args) < 3 || a.args[2] != "daily" {
+				fmt.Fprintln(a.stderr, "usage: selfmind report daily [--since 24h]")
+				return true, 2
+			}
+			return true, a.sendGatewayMessage("/report " + strings.Join(a.args[2:], " "))
+		case "watchers":
+			return true, a.sendGatewayMessage(strings.TrimSpace("/watchers " + strings.Join(a.args[2:], " ")))
 		case "tasks":
 			// Forward the view variant (done|archived|all) so `selfmind tasks
 			// done` matches the gateway /tasks grammar instead of dropping it.

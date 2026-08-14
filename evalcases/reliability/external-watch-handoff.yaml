@@ -3,7 +3,7 @@ title: "external waits leave the model loop and become daemon-owned work"
 suite: reliability
 workspace: isolated
 channel: cli
-require_cassette: false
+require_cassette: true
 
 # The polled command must report PENDING, not SUCCEEDED. Registration runs a
 # preflight (added 2026-07-30) whose "observed success" outcome declines to
@@ -11,8 +11,7 @@ require_cassette: false
 # makes a check that succeeds on its first run unable to produce the handoff
 # this case exists to assert.
 #
-# Record this case with a live provider before promoting it to a mandatory
-# offline gate:
+# Re-record this case after intentional watcher handoff contract changes:
 #   SELFMIND_EVAL_VCR=record selfmind eval run \
 #     evalcases/reliability/external-watch-handoff.yaml --live
 turns:

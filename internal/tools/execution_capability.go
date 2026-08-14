@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -40,6 +41,9 @@ func ExecutionCapabilityMiddleware() Middleware {
 
 			fingerprint := executionCapabilityFingerprint(scope.WorkspaceID, executionenv.CapabilityNetworkShared)
 			networkShared := scope.TrustLevel == executionenv.TrustTrusted && ExecSandboxAllowsNetwork()
+			if !networkShared && scope.runGrants != nil {
+				networkShared = scope.runGrants.has(executionCapabilityRunGrantKey(executionenv.CapabilityNetworkShared, fingerprint))
+			}
 			if !networkShared && scope.CapabilityStore != nil {
 				granted, err := scope.CapabilityStore.HasExecutionCapability(
 					contextFromArgs(args),
@@ -109,12 +113,19 @@ func approveNetworkCapability(args map[string]interface{}, scope ExecutionScope,
 			"workspace_id": scope.WorkspaceID,
 		},
 		ResourceFingerprint: fingerprint,
+		GrantClass:          "shared network access for this workspace",
 	})
 	if approvalErr != nil {
 		return approvalErr
 	}
 	if !decision.Approved {
 		return fmt.Errorf("operation rejected: network:shared was not approved")
+	}
+	if decision.Scope != "" && decision.Scope != "run" {
+		return fmt.Errorf("operation rejected: approval scope %q was not offered for network:shared", decision.Scope)
+	}
+	if decision.Scope == "run" && scope.runGrants != nil {
+		scope.runGrants.add(executionCapabilityRunGrantKey(executionenv.CapabilityNetworkShared, fingerprint))
 	}
 
 	if scope.CapabilityStore != nil {
@@ -160,6 +171,10 @@ func networkCapabilityFailure(toolName string, err error, output string, args ma
 func executionCapabilityFingerprint(workspaceID, capability string) string {
 	sum := sha256.Sum256([]byte(strings.TrimSpace(workspaceID) + "\n" + strings.TrimSpace(capability)))
 	return fmt.Sprintf("%x", sum[:12])
+}
+
+func executionCapabilityRunGrantKey(capability, fingerprint string) string {
+	return "capability:" + strings.TrimSpace(capability) + ":" + strings.TrimSpace(fingerprint)
 }
 
 // capabilityExpiryFromDecision prefers the deadline the CONTROL PLANE returned.
@@ -222,7 +237,11 @@ func resolveCredentialCapability(args map[string]interface{}, scope ExecutionSco
 		args[credentialReadArgKey] = true
 		return
 	}
-	fingerprint := executionCapabilityFingerprint(scope.WorkspaceID, executionenv.CapabilityCredentialRead)
+	fingerprint := credentialCapabilityFingerprint(scope.WorkspaceID, toolName, args)
+	if scope.runGrants != nil && scope.runGrants.has(executionCapabilityRunGrantKey(executionenv.CapabilityCredentialRead, fingerprint)) {
+		args[credentialReadArgKey] = true
+		return
+	}
 	if scope.CapabilityStore != nil {
 		granted, err := scope.CapabilityStore.HasExecutionCapability(
 			contextFromArgs(args), scope.TenantID, scope.PersonID, scope.WorkspaceID,
@@ -233,7 +252,7 @@ func resolveCredentialCapability(args map[string]interface{}, scope ExecutionSco
 			return
 		}
 	}
-	if err := approveCredentialCapability(args, scope, fingerprint); err != nil {
+	if err := approveCredentialCapability(args, scope, toolName, fingerprint); err != nil {
 		// Declining leaves the command runnable without credentials. Turning a
 		// refusal into a hard failure would remove the option of running the
 		// read-only part of a command, and a rejection is a decision, not a
@@ -259,9 +278,16 @@ func commandNeedsOperatorCredentials(toolName string, args map[string]interface{
 	return false
 }
 
-func approveCredentialCapability(args map[string]interface{}, scope ExecutionScope, fingerprint string) error {
+func approveCredentialCapability(args map[string]interface{}, scope ExecutionScope, toolName, fingerprint string) error {
 	if scope.Approval == nil {
 		return fmt.Errorf("operation rejected: credential:read requires approval")
+	}
+	safeObservation := scope.runGrants != nil && credentialSafeObservation(toolName, args)
+	decisionPolicy := ApprovalDecisionPolicyOnceOnly
+	grantClass := ""
+	if safeObservation {
+		decisionPolicy = ""
+		grantClass = "read existing tool credentials for safe observations in this run"
 	}
 	decision, approvalErr := scope.Approval(contextFromArgs(args), ToolApprovalRequest{
 		TenantID: scope.TenantID,
@@ -275,14 +301,24 @@ func approveCredentialCapability(args map[string]interface{}, scope ExecutionSco
 			"capability":   executionenv.CapabilityCredentialRead,
 			"workspace_id": scope.WorkspaceID,
 		},
-		GrantClass:          "read your existing tool credentials in this workspace",
+		GrantClass:          grantClass,
 		ResourceFingerprint: fingerprint,
+		DecisionPolicy:      decisionPolicy,
 	})
 	if approvalErr != nil {
 		return approvalErr
 	}
 	if !decision.Approved {
 		return fmt.Errorf("operation rejected: credential:read was not approved")
+	}
+	if strings.TrimSpace(decision.GrantKey) != "" {
+		return fmt.Errorf("operation rejected: credential access does not accept a rule grant")
+	}
+	if decision.Scope != "" && (!safeObservation || decision.Scope != "run") {
+		return fmt.Errorf("operation rejected: approval scope %q was not offered for credential access", decision.Scope)
+	}
+	if decision.Scope == "run" && scope.runGrants != nil {
+		scope.runGrants.add(executionCapabilityRunGrantKey(executionenv.CapabilityCredentialRead, fingerprint))
 	}
 	if scope.CapabilityStore != nil {
 		if expiry := capabilityExpiryFromDecision(decision); !expiry.IsZero() {
@@ -296,4 +332,27 @@ func approveCredentialCapability(args map[string]interface{}, scope ExecutionSco
 		}
 	}
 	return nil
+}
+
+func credentialSafeObservation(toolName string, args map[string]interface{}) bool {
+	copyArgs := make(map[string]interface{}, len(args)+1)
+	for key, value := range args {
+		copyArgs[key] = value
+	}
+	copyArgs[credentialReadArgKey] = true
+	return deterministicObservationExec(toolName, copyArgs)
+}
+
+func credentialCapabilityFingerprint(workspaceID, toolName string, args map[string]interface{}) string {
+	profiles := envprofiles.Match(execCommandPrograms(toolName, args))
+	ids := make([]string, 0, len(profiles))
+	for _, profile := range profiles {
+		if profile != nil && profile.CredentialAccess == envprofiles.CredentialAccessOperator {
+			ids = append(ids, profile.ID)
+		}
+	}
+	sort.Strings(ids)
+	material := strings.TrimSpace(workspaceID) + "\n" + executionenv.CapabilityCredentialRead + "\n" + strings.Join(ids, ",")
+	sum := sha256.Sum256([]byte(material))
+	return fmt.Sprintf("%x", sum[:12])
 }

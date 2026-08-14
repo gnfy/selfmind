@@ -57,6 +57,7 @@ All of these commands talk to the same gateway used by the TUI and IM channels.
 ```text
 selfmind send [--async] [--mode MODE] <message>
 selfmind status
+selfmind watchers [active|attention|recent|all [page]|<n|id>|cancel <n|id>]
 selfmind tasks [done|archived|all|<keyword>]
 selfmind task <n|task_id> [runs|rename <name>|pin|unpin|archive|merge <dst>]
 selfmind resume <n|task_id>
@@ -75,6 +76,10 @@ selfmind new [title]
   `full-auto`, or `smart`. When no preference has been saved, the default is
   `smart`; without a configured triage model it safely falls back to asking.
 - `tasks` lists open work by default; a status or keyword narrows the result.
+- `watchers` lists durable external checks without invoking a model. The
+  default view prioritizes active and attention-needed checks; a stable short
+  watcher ID opens details or cancels only that check. Cancelling a watcher
+  does not cancel the external operation.
 - `task` accepts either the displayed list number or a stable task ID.
 - `resume` reopens an archived task when necessary and starts the TUI on it.
 - `workspaces`, `ws`, and `workspace` share the workspace controls:
@@ -111,6 +116,7 @@ selfmind model [current|check [--live] [--role <name>]|list|set <provider> <mode
 selfmind auth [login|status|logout] ...
 selfmind doctor [--out FILE] [--probe-models]
 selfmind usage
+selfmind report daily [--since 24h]
 selfmind docs [check|index]
 selfmind selfcheck [--fast | --profile local-full|local-fast|ci] [--skip-go] [--skip-eval] [--eval-dir DIR]
 selfmind gateway [run|start|status|stop|restart|service] ...
@@ -162,6 +168,10 @@ selfmind weixin status
 - `usage` is a CLI alias for `/diag context`. It reports provider-call input,
   cache-hit/cache-miss input, output, and reasoning-token totals when the
   provider supplies those fields. It reports tokens, not estimated currency.
+- `report daily` produces a model-free quality and cost summary for the current
+  person. It combines run outcomes, tool and approval counts, provider usage,
+  cache statistics, maintenance health, delivery status, and recall adoption
+  signals for a bounded window (24 hours by default, up to 30 days).
 - `doctor` checks the installation and configuration. `--probe-models` performs
   live provider probes and may consume provider quota.
 - `selfcheck` is the local release gate. The default `local-full` profile runs
@@ -230,10 +240,12 @@ before normal agent dispatch.
 /tasks [done|archived|all]
 /task <n|id> [runs|rename <name>|pin|unpin|archive|merge <dst>]
 /queue [drop <n>|clear]
+/watchers [active|attention|recent|all [page]|<n|id>|cancel <n|id>]
 /diag [memory|context|tasks|models|delivery|execution|tools]
+/report daily [--since 24h]
 /events
 /approvals [grants|revoke <n>]
-/approve <n|id|all> [task|always]
+/approve <n|id|all> [run]
 /reject <n|id|all>
 /mode [mode]
 /stop
@@ -245,12 +257,21 @@ before normal agent dispatch.
 /workspaces  (same as bare /workspace or /ws)
 ```
 
-- `/approve ... task` remembers the approval class for the current task;
-  `always` remembers it for the person.
+- Approval requests contain their authoritative choices. Ordinary requests show
+  `once`, one optional `run`-local reuse choice, and `deny`; sensitive requests
+  show only `once` and `deny`. New prompts never mint task/person-wide grants.
+- `/approvals grants` and `/approvals revoke <n>` remain available for viewing
+  and removing historical remembered grants.
 - `/mode` accepts `on-request`, `read-only`, `auto-edit`, `full-auto`, or
   `smart`.
 - `/notify` chooses the bound IM destination for CLI-origin progress and final
   notifications.
+- `/watchers` is the same person-scoped, model-free view in CLI and IM. It
+  shows checker/operation/verification phases plus finalization and notification
+  state, while hiding raw commands, environment fingerprints, and credentials.
+  The default and `all` views are numbered: use `/watchers 1` to inspect the
+  first watcher or `/watchers cancel 1` to stop monitoring it. Cancelling a
+  watcher does not cancel the external operation.
 - `/diag tools` reports the registration-time tool schema catalogue. Repaired
   and quarantined external tools are listed by name, issue class, and schema
   hash; raw schemas and values are never printed. Quarantined tools are not

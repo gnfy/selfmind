@@ -6,13 +6,13 @@
 > the generated [`README.md`](README.md) index. Code and tests remain the source
 > of truth.
 
-**Snapshot:** 2026-08-12
+**Snapshot:** 2026-08-14
 
 ## Release Health
 
 - `GOWORK=off go build ./...`: passing at the snapshot.
 - `GOWORK=off go test ./...`: passing at the snapshot.
-- Release corpus: 45 reviewed YAML cases. Local full replay proves 44 cases;
+- Release corpus: 46 reviewed YAML cases. Local full replay proves 45 cases;
   one clean-checkout Node case is explicitly CI-owned. Model-backed cases must
   carry committed cassettes; deterministic cases declare
   `model_required: false`.
@@ -40,14 +40,14 @@
 | Execution engine | Partial | Typed scopes, environment snapshots, sandbox policy, durable watcher execution, and tool profiles exist. Linux isolation is strongest; macOS uses approval-controlled host execution. |
 | Worker scheduling | Partial | Durable queue and worker-pool seams exist; personal edition intentionally defaults to one active run per person while multi-run ownership remains deferred. |
 | Provider runtime | Done | Primary/auxiliary roles, explicit role overrides, protocol adapters, typed quirks, generic request extras, model metadata, auth refresh, and live contract probes exist. |
-| Provider cost visibility | Done | OpenAI-compatible cache hit/miss usage is normalized; `selfmind usage` reports cache and token diagnostics. Provider pricing remains external. |
+| Provider cost visibility | Done | OpenAI-compatible and Responses cache usage is normalized; `selfmind usage` reports context diagnostics and `selfmind report daily` provides a person-scoped, model-free execution/cost trend. Provider pricing remains external. |
 | Context lifecycle | Done | Person work spine, bounded composer slices, project instructions, artifacts, recall, and compaction are integrated. |
-| Memory | Partial | Canonical governance, pin/correct/forget, transient filtering, lexical/CJK retrieval, access tracking, and audits exist. Quality, reuse, and duplicate rates still need sustained measurement. |
+| Memory | Partial | Canonical governance, pin/correct/forget, transient filtering, lexical/CJK retrieval, access tracking, audits, and output-overlap recall telemetry exist. The overlap signal is diagnostic rather than proof of causal use; quality, reuse, and duplicate rates still need sustained measurement. |
 | Tasks | Done | Inbox, lifecycle fields, paging/search, pin/archive/rename/merge, retention, deterministic work keys, and asynchronous post-run labeling exist. |
-| Background maintenance | Done | Debounced bounded batches, immutable replay jobs, shared retry policy, provider/contract circuit identity, fallback roles, diagnostics, and migration tools exist. |
+| Background maintenance | Done | Debounced bounded batches, immutable replay jobs, restart-safe retry exhaustion, shared retry policy, provider/contract circuit identity, fallback roles, diagnostics, migration tools, and dispatch-time reasoning/output bounds exist. |
 | Skills | Done | Runtime discovery, catalog/manage/bundles, tenant-level ownership, learning audit, curation, and person-to-tenant migration exist. |
-| Tool safety | Partial | Safety floor, smart approval, typed invocation scope, grants, secret redaction, schema governance, sandbox/host profiles, and failure envelopes exist. External tool diversity remains an ongoing compatibility surface. |
-| External watchers | Partial | Durable registration, environment/auth snapshots, restart recovery, idempotent finalization, status commands, and concise notifications exist. Keep validating provider-specific terminal behavior and delivery. |
+| Tool safety | Partial | Safety floor, smart approval, typed invocation scope, grants, secret redaction, schema governance, sandbox/host profiles, and failure envelopes exist. Human asks use one server-issued menu across CLI/IM: once, optional run-local reuse, and deny; sensitive asks are once/deny only. Historical broader grants remain listable and revocable. External tool diversity remains an ongoing compatibility surface. |
+| External watchers | Partial | Durable registration, bounded slow-command preflight, environment/auth snapshots, restart recovery, idempotent finalization, separate agent/external outcomes, person-scoped numbered `/watchers` controls, and delivery-confirmed stable-ID notifications exist. Keep validating provider-specific terminal behavior and live delivery. |
 | IM delivery | Partial | Weixin and other adapters share durable outbound state, delivery diagnostics, session refresh classification, bounded catch-up, and preferred-channel routing. Live platform behavior remains an external dependency. |
 | TUI | Done | Daemon event stream, stable transcript cells, bottom plan panel, pagers, persistent input history, resume transcript, and build-fingerprint detection exist. |
 | Distribution and updates | Partial | npm platform packages, launcher, setup, unified `selfmind update` notices, equal-version package refresh, feedback, service management, and macOS launchd support exist. Public beta still requires release evidence. |
@@ -61,7 +61,8 @@ limitation. It does not mean the area should be redesigned from scratch.
 1. **Accumulate release evidence on the personal edition.** Use daily-driver
    runs to measure successful completion, interruption/recovery, approval
    latency, watcher finalization, IM delivery, cache usage, and maintenance
-   health. Fix observed correctness defects before speculative platform work.
+   health. Use `selfmind report daily` as the local baseline and fix observed
+   correctness defects before speculative platform work.
 2. **Measure memory usefulness, not record count.** Track query-relevant
    canonical recall, injection, reinforcement, supersession, duplicates, and
    user correction. Improve selection/write policy only from those traces.
@@ -79,6 +80,11 @@ limitation. It does not mean the area should be redesigned from scratch.
 - IM delivery depends on external session and platform behavior. A durable
   `sent` record is not always proof that a handset displayed the message;
   diagnostics and bounded catch-up make this visible.
+- Approval waits are reachability-aware: a live endpoint or recently healthy
+  IM endpoint gets the configured wait, while stale or delivery-failing
+  endpoints use a short wait and park the run as `waiting_user`. The current
+  personal-edition loop does not yet checkpoint and resume the exact suspended
+  tool call across daemon restarts; continuing the task re-evaluates that step.
 - Prompt caching is provider/protocol dependent. A stable local prefix does not
   guarantee that every provider creates or bills a cache.
 - External MCP/plugin schemas are quarantined when unsafe or ambiguous. Built-in

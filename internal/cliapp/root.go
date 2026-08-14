@@ -192,6 +192,8 @@ var documentedCLIUsages = []string{
 	"selfmind send [--async] [--mode MODE] <message>",
 	"selfmind status",
 	"selfmind usage",
+	"selfmind report daily [--since 24h]",
+	"selfmind watchers [active|attention|recent|all [page]|<n|id>|cancel <n|id>]",
 	"selfmind tasks [done|archived|all|<keyword>]",
 	"selfmind task <n|task_id> [runs|rename <name>|pin|unpin|archive|merge <dst>]",
 	"selfmind resume <n|task_id>",

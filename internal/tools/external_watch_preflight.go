@@ -28,7 +28,7 @@ import (
 //	check defect       → return an ERROR with the typed class, so the model fixes
 //	                     the command or the environment now.
 //	non-terminal       → register the watch.
-const preflightMaxTimeout = 30 * time.Second
+const preflightMaxTimeout = 120 * time.Second
 
 type externalWatchPreflightPatterns struct {
 	Success         string
@@ -61,8 +61,12 @@ func preflightExternalWatchPatterns(
 	if timeout <= 0 || timeout > preflightMaxTimeout {
 		timeout = preflightMaxTimeout
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	ctx, cancel := context.WithTimeout(ContextFromArgs(args), timeout)
 	defer cancel()
+	executionClass := ToolExecutionStandard
+	if timeout > 30*time.Second {
+		executionClass = ToolExecutionLongRunning
+	}
 
 	result, runErr := Execute(ctx, ExecutionRequest{
 		ToolName:       "watch_external",
@@ -73,7 +77,7 @@ func preflightExternalWatchPatterns(
 		Sandbox:        SandboxAuto,
 		NetworkShared:  true,
 		Timeout:        timeout,
-		ToolProfile:    ToolProfile{Class: ToolExecutionStandard, MaxTimeout: timeout, HeartbeatInterval: time.Second},
+		ToolProfile:    ToolProfile{Class: executionClass, MaxTimeout: timeout, HeartbeatInterval: time.Second},
 	}, args)
 	output := strings.TrimSpace(RedactSensitive(result.Output))
 	if strings.EqualFold(strings.TrimSpace(result.FailureClass), "timeout") {

@@ -2,6 +2,7 @@ package llm
 
 import (
 	"context"
+	"strings"
 )
 
 // ChatRequest is the unified request shape for model calls.
@@ -13,6 +14,18 @@ type ChatRequest struct {
 	SystemPrompt   string
 	PromptCacheKey string
 	Options        map[string]interface{}
+}
+
+// reasoningDisabled is the protocol-neutral spelling used by bounded control
+// and maintenance calls. Adapters translate it to the vendor's disabled form
+// (or omit the reasoning field) instead of forwarding an unsupported literal.
+func reasoningDisabled(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "none", "off", "disabled":
+		return true
+	default:
+		return false
+	}
 }
 
 // Message is one conversation entry.

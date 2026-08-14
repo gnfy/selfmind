@@ -577,7 +577,7 @@ func (a taskAttach) claimsPriorRuns() bool {
 // instead of hanging, so behavior stays safe even when nobody replies. It is
 // the SAME instruction the old stub returned, so the unanswered path is
 // unchanged from the model's perspective.
-const clarifyFallbackSentinel = "No answer arrived in time (the user may be away). Do not wait any longer: proceed using your own best judgment, state the assumption you are making, and continue the task."
+const clarifyFallbackSentinel = "No answer arrived in time (the user may be away). Do not guess or continue with an assumption. Finish the run as waiting_user, preserve the question in next_steps, and let a later reply resume the task."
 
 // clarifyWaitTimeout bounds how long a run blocks on a pending question — the
 // same 30-minute bound approvals use.

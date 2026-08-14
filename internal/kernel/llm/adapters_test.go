@@ -163,6 +163,24 @@ func TestDeepSeekThinkingToolLoopReplaysReasoningAndDerivesUserID(t *testing.T) 
 	}
 }
 
+func TestDeepSeekRequestCanDisableThinkingForMaintenance(t *testing.T) {
+	adapter := NewOpenAIAdapter("test-key")
+	adapter.ReasoningEffort = "high"
+	adapter.Thinking = map[string]interface{}{"type": "enabled"}
+	adapter.Quirks = ProviderQuirks{ThinkingMode: "deepseek"}
+	var request OpenAIRequest
+	adapter.applyOptions(context.Background(), &request, ChatRequest{
+		Options: map[string]interface{}{"reasoning_effort": "none"},
+	})
+	if request.ReasoningEffort != "" {
+		t.Fatalf("reasoning_effort = %q, want omitted", request.ReasoningEffort)
+	}
+	thinking, _ := request.Thinking.(map[string]interface{})
+	if thinking["type"] != "disabled" {
+		t.Fatalf("thinking = %#v, want disabled", request.Thinking)
+	}
+}
+
 func TestOpenAIExtraOptionsOverrideDerivedUserIDAndReachTransport(t *testing.T) {
 	var got map[string]interface{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1028,5 +1046,49 @@ func writeSSENoSpace(t *testing.T, w http.ResponseWriter, payload map[string]int
 	fmt.Fprintf(w, "data:%s\n\n", string(b))
 	if flusher, ok := w.(http.Flusher); ok {
 		flusher.Flush()
+	}
+}
+
+// Attribution used to be set only by the OpenRouter adapter's own request
+// builder, which the streaming path never reaches: StreamChat hands the call
+// to a plain OpenAI adapter. Every streamed call therefore arrived
+// unattributed. Configured headers still win over the defaults.
+func TestOpenRouterStreamChatKeepsAttributionHeaders(t *testing.T) {
+	for name, configured := range map[string]map[string]string{
+		"defaults":      nil,
+		"user override": {"x-title": "My Fork"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var got http.Header
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				got = r.Header.Clone()
+				w.Header().Set("content-type", "text/event-stream")
+				fmt.Fprint(w, "data: [DONE]\n\n")
+			}))
+			defer server.Close()
+
+			adapter := NewOpenRouterAdapter("test-key")
+			adapter.BaseURL = server.URL
+			adapter.Headers = configured
+			ch, err := adapter.StreamChat(context.Background(), ChatRequest{
+				Messages: []Message{{Role: "user", Content: "hello"}},
+			})
+			if err != nil {
+				t.Fatalf("StreamChat failed: %v", err)
+			}
+			for range ch {
+			}
+
+			if referer := got.Get("HTTP-Referer"); referer != openRouterReferer {
+				t.Fatalf("HTTP-Referer = %q, want %q", referer, openRouterReferer)
+			}
+			wantTitle := openRouterTitle
+			if configured != nil {
+				wantTitle = "My Fork"
+			}
+			if title := got.Get("X-Title"); title != wantTitle {
+				t.Fatalf("X-Title = %q, want %q", title, wantTitle)
+			}
+		})
 	}
 }

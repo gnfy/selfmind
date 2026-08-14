@@ -128,7 +128,7 @@ selfmind gateway stop [--force]
 selfmind gateway restart [--drain] [--force]
 selfmind gateway service [install|status|uninstall]
 
-selfmind weixin login [--timeout 8m] [--owner-person-id ID] [--no-enable]
+selfmind weixin login [--timeout 8m] [--owner-person-id ID] [--no-bind] [--no-enable]
 selfmind weixin status
 ```
 
@@ -170,6 +170,9 @@ selfmind weixin status
 - 如果微信 iLink 会话过期，重新运行 `selfmind weixin login`。正在运行的
   gateway 会监听账号凭据文件，在新凭据保存后自动恢复轮询，不需要重启
   daemon。
+- `weixin login` 默认把扫码微信用户绑定到当前 CLI person，将私聊策略改成
+  `allowlist`，并且只记录该发送者。`--owner-person-id` 可指定另一个已有
+  person；`--no-bind` 用于明确保留现有的独立身份策略。
 
 ## Eval 与维护命令
 

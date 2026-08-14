@@ -98,6 +98,44 @@ stores your GitHub token. If `gh` is missing or its login has expired, the
 report is preserved and SelfMind prints recovery instructions and a pre-filled
 manual Issue URL.
 
+## Connect WeChat
+
+SelfMind's primary WeChat integration is `gateway.weixin`, which uses the iLink
+protocol for personal or enterprise WeChat. It is different from the
+`gateway.wechat` Official Account adapter and does not require manually copying
+an App ID or token. Start with the built-in QR login:
+
+```sh
+selfmind weixin login --timeout 8m
+# Scan the terminal QR code in WeChat and confirm the login.
+selfmind gateway restart --drain
+selfmind weixin status
+```
+
+The login command saves the account credentials in your local SelfMind config
+and enables `gateway.weixin`. By default it also binds the scanned WeChat user
+to the current CLI `person_id`, switches direct messages to `allowlist`, and
+adds only that WeChat sender. CLI and WeChat therefore share tasks, memory,
+workspaces, approvals, and continuation without manually copying user IDs.
+`selfmind weixin status` reports `cross_endpoint_identity: ready` when this
+binding is complete.
+
+The first login needs a gateway restart so the new adapter is started. If an
+existing iLink session later expires, run `selfmind weixin login` again; the
+running gateway reloads the refreshed credential file without a restart.
+
+Send `/id`, `/status`, or an ordinary request in the private WeChat chat to
+verify inbound messages and replies. Group messages are disabled by default.
+Use `--owner-person-id person_xxx` only to bind to a specific existing person.
+Use `--no-bind` only when you deliberately want WeChat to remain a separate
+identity; it leaves existing identity-policy settings unchanged. Do not use
+`owner_person_id` with `dm_policy: open`: any admitted sender could otherwise
+inherit your person-level tasks, memory, workspace access, and approvals. Do
+not publish `config.yaml` or the Weixin credential files. See the [command
+reference](docs/command-reference.md) for advanced login flags and the
+[live-device checklist](docs/weixin-live-test.md) for delivery, approval,
+media, and session-recovery tests.
+
 ## Build And Run
 
 Build the user-facing binary:

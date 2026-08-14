@@ -84,6 +84,38 @@ selfmind gateway service uninstall
 `selfmind gateway restart --drain`，让活跃 turn 到达安全边界后再替换
 daemon。
 
+## 接入微信
+
+SelfMind 的主要微信接入是 `gateway.weixin`，使用 iLink 协议连接个人微信或
+企业微信。它不同于 `gateway.wechat` 微信公众号适配器，正常扫码接入不需要
+手工填写 App ID 或 token：
+
+```sh
+selfmind weixin login --timeout 8m
+# 使用微信扫描终端二维码，并在手机上确认登录。
+selfmind gateway restart --drain
+selfmind weixin status
+```
+
+登录命令会把账号凭据保存到本机 SelfMind 配置，并启用 `gateway.weixin`。
+默认还会把扫码微信用户绑定到当前 CLI 的 `person_id`，把私聊策略切换为
+`allowlist`，并且只放行该微信发送者。因此 CLI 与微信会直接共享任务、记忆、
+workspace、审批和续聊上下文，不需要手工复制用户 ID。绑定完成后，
+`selfmind weixin status` 会显示 `cross_endpoint_identity: ready`。
+
+首次接入需要重启 gateway，让新适配器开始运行；已有 iLink 会话过期时，只需
+重新运行 `selfmind weixin login`，正在运行的 gateway 会热加载刷新后的凭据，
+不需要重启。
+
+在微信私聊中发送 `/id`、`/status` 或普通任务，即可验证入站消息和回复。
+群消息默认关闭。只有需要绑定到另一个已有 person 时，才使用
+`--owner-person-id person_xxx`；只有明确希望微信保持独立身份时，才使用
+`--no-bind`，该参数不会改动已有的身份策略。不要把 `owner_person_id` 与
+`dm_policy: open` 一起使用，否则任何被放行的发送者都可能继承你的任务、
+记忆、workspace 权限和审批上下文。不要公开 `config.yaml` 或微信凭据文件。
+高级登录参数见[命令参考](docs/command-reference.zh-CN.md)，真机投递、审批、媒体和
+会话恢复测试见[微信真机检查清单](docs/weixin-live-test.md)。
+
 ## 构建与运行
 
 构建用户入口：

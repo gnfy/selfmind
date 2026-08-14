@@ -276,7 +276,9 @@ gateway:
 > **安全 —— 微信 DM 策略。** 配了 `owner_person_id` 后，DM 策略放行的每个发送者
 > 都会被绑定为**你本人**（你的任务、记忆、workspace）。默认 `dm_policy: open`
 > 因此会让任何私聊这个号的陌生人变成你。**对外启用前请把 `dm_policy` 设为
-> `allowlist`，并在 `allow_from` 里填你自己的 openid。**
+> `allowlist`，并在 `allow_from` 里填你自己的 openid。**内置的
+> `selfmind weixin login` 会自动为扫码微信用户完成该配置，并绑定到当前 CLI
+> person；手工编写 YAML 时也必须守住同一条安全约束。
 
 ## 7. 任务
 

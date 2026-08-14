@@ -328,7 +328,10 @@ Each IM platform is a subsection under `gateway`, all disabled by default:
 > DM policy admits is bound to *you* (your tasks, memory, workspaces). The
 > default `dm_policy: open` therefore lets any stranger who DMs the account
 > become you. **Set `dm_policy: allowlist` and list your own openid in
-> `allow_from`** before exposing the account.
+> `allow_from`** before exposing the account. The built-in
+> `selfmind weixin login` command does this automatically for the scanned
+> WeChat user and binds it to the current CLI person; manual YAML setup must
+> preserve the same invariant.
 
 ## 7. Tasks
 

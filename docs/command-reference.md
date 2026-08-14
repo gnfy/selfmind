@@ -140,7 +140,7 @@ selfmind gateway stop [--force]
 selfmind gateway restart [--drain] [--force]
 selfmind gateway service [install|status|uninstall]
 
-selfmind weixin login [--timeout 8m] [--owner-person-id ID] [--no-enable]
+selfmind weixin login [--timeout 8m] [--owner-person-id ID] [--no-bind] [--no-enable]
 selfmind weixin status
 ```
 
@@ -192,6 +192,10 @@ selfmind weixin status
   again. The running gateway watches the account credential file and resumes
   polling after the refreshed credentials are saved; no daemon restart is
   required.
+- `weixin login` binds the scanned WeChat user to the current CLI person by
+  default, changes direct messages to `allowlist`, and records only that
+  sender. `--owner-person-id` selects another existing person; `--no-bind`
+  deliberately keeps identity-policy settings unchanged.
 
 ## Evaluation and maintenance
 

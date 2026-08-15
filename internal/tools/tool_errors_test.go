@@ -39,7 +39,8 @@ func TestClassifyToolError(t *testing.T) {
 		{"dns failure", "terminal", errors.New("command failed: exit status 6"), "curl: (6) Could not resolve host: nope.invalid", "network"},
 		{"missing python module", "terminal", errors.New("command failed: exit status 1"), "ModuleNotFoundError: No module named 'requests'", "environment"},
 		{"missing env var", "terminal", errors.New("command failed: exit status 1"), "required environment variable API_BASE is empty", "environment"},
-		{"unknown", "terminal", errors.New("command failed: exit status 1"), "boom", "unknown"},
+		{"generic command failure", "terminal", errors.New("command failed: exit status 1"), "boom", "command_failed"},
+		{"interface drift", "terminal", errors.New("command failed: exit status 2"), "unknown flag: --legacy-output", "interface_drift"},
 		{"empty", "terminal", nil, "", "unknown"},
 	}
 	for _, tc := range cases {

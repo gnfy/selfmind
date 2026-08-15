@@ -235,12 +235,14 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 	// attached to. Channel-scoped resolution (and async sends in particular)
 	// can pick a task that differs from the pointer; without this sync,
 	// /status on every endpoint keeps reporting an unrelated old task.
-	c.syncCurrentTask(ctx, identity, task)
+	if attach.resolvedPolicy().UpdateCurrentTask {
+		c.syncCurrentTask(ctx, identity, task)
+	}
 	_ = d.Control.RecordChannelMessage(ctx, *identity, req.Channel, task.ID, "user", req.Content)
 
 	run, err := d.Control.StartRunWithOptions(ctx, task, req.Channel, truncate(req.Content, 240), control.StartRunOptions{
 		WorkKey:               attach.workKey,
-		PreserveTaskLifecycle: attach.preLabel && !attach.created,
+		PreserveTaskLifecycle: attach.resolvedPolicy().PreserveTaskLifecycle,
 	})
 	if err != nil {
 		if attach.created {
@@ -293,6 +295,7 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 		Channel:    req.Channel,
 		Payload:    mustJSON(startedPayload),
 	})
+	c.recordTaskResolution(ctx, identity, run, req, task, attach, task.ID, "pending", false)
 	if attach.workKey != "" {
 		d.appendLabelAssignedEvent(ctx, task.ID, run.ID, map[string]interface{}{
 			"decision": "ingress_work_key",
@@ -421,7 +424,7 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 	if sink := c.newLoopCheckpointSink(identity, task, run); sink != nil {
 		ctx = kernel.WithLoopCheckpointSink(ctx, sink)
 	}
-	ctx = kernel.WithTaskRuntimeContext(ctx, c.selectedTaskRuntimeContext(ctx, task, run, workspace, req.Platform, req.Channel, req.Content, attach.preLabel))
+	ctx = kernel.WithTaskRuntimeContext(ctx, c.selectedTaskRuntimeContextWithMode(ctx, task, run, workspace, req.Platform, req.Channel, req.Content, attach.resolvedPolicy().ContextMode))
 	ctx = c.withLoopCheckpointResume(ctx, identity, task, run, intent)
 	agentInput := c.withGatewayContext(req.Content, identity, task, workspace, req.Attachments)
 	agentInput = c.withResumeContext(ctx, identity, task, run, intent, attach.claimsPriorRuns(), attach.workKey, agentInput)

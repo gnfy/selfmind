@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -8,6 +9,8 @@ import (
 	"sort"
 	"strings"
 	"unicode/utf8"
+
+	"selfmind/internal/kernel"
 )
 
 type skillListEntry struct {
@@ -147,6 +150,7 @@ func SkillViewJSONForTenant(tenantID, name, filePath string, invocation ...map[s
 		return "", err
 	}
 	_ = MarkSkillViewed(tenantID, info.Name)
+	emitSkillActivated(invocation, info, content, filePath, "skill_view")
 	out := map[string]interface{}{
 		"success":     true,
 		"name":        info.Name,
@@ -168,6 +172,28 @@ func SkillViewJSONForTenant(tenantID, name, filePath string, invocation ...map[s
 	}
 	data, _ := json.MarshalIndent(out, "", "  ")
 	return string(data), nil
+}
+
+func emitSkillActivated(invocation []map[string]interface{}, info SkillInfo, content, filePath, activation string) {
+	if len(invocation) == 0 || invocation[0] == nil {
+		return
+	}
+	ctx := ContextFromArgs(invocation[0])
+	digest := sha256.Sum256([]byte(content))
+	kernel.EmitAgentEvent(kernel.EventChannelFromContext(ctx), kernel.AgentEvent{
+		Type: "skill.activated",
+		Payload: map[string]interface{}{
+			"name":         info.Name,
+			"version_hash": fmt.Sprintf("%x", digest[:]),
+			"source":       info.Source,
+			"scope":        info.Scope,
+			"root":         info.Root,
+			"pinned":       info.Pinned,
+			"writable":     info.Writable,
+			"file_path":    filepath.ToSlash(filePath),
+			"activation":   activation,
+		},
+	})
 }
 
 func ReadSkillPayloadForTenant(tenantID, name, filePath string, invocation ...map[string]interface{}) (SkillInfo, string, []string, error) {

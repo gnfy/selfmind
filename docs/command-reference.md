@@ -60,9 +60,10 @@ selfmind status
 selfmind watchers [active|attention|recent|all [page]|<n|id>|cancel <n|id>]
 selfmind tasks [done|archived|all|<keyword>]
 selfmind task <n|task_id> [runs|rename <name>|pin|unpin|archive|merge <dst>]
+selfmind task <n|task_id> references|reference add <name>|reference remove <name>
 selfmind resume <n|task_id>
 selfmind workspaces
-selfmind ws [list|add|use|trust|untrust|grants|revoke|<n|workspace_id>] ...
+selfmind ws [list|add|use|trust|untrust|grants|observe|revoke|<n|workspace_id>] ...
 selfmind approvals
 selfmind approve [token]
 selfmind reject [token]
@@ -94,8 +95,9 @@ selfmind ws use <workspace_id>
 selfmind ws trust [workspace_id]
 selfmind ws untrust [workspace_id]
 selfmind ws grants [workspace_id]
+selfmind ws observe <script> [--network] [--credentials] [--all-args | -- <argv-prefix...>] [--workspace <id>]
 selfmind ws revoke <capability> [workspace_id]
-selfmind workspace [list|add|use|trust|untrust|grants|revoke|<n|workspace_id>] ...
+selfmind workspace [list|add|use|trust|untrust|grants|observe|revoke|<n|workspace_id>] ...
 ```
 
 - Only an authenticated local CLI can change workspace trust. Omitting the
@@ -103,6 +105,11 @@ selfmind workspace [list|add|use|trust|untrust|grants|revoke|<n|workspace_id>] .
   execution-capability grants for that workspace.
 - `grants` lists temporary execution capabilities such as `network:shared`;
   `revoke` removes one immediately. These controls are also local-CLI only.
+- `observe` registers one trusted workspace script as observation-only. The
+  grant is bound to the workspace, resolved script path, content hash, argument
+  shape, network choice, and credential choice. Editing or replacing the script
+  invalidates it automatically. Use `--all-args` only when every argument shape
+  is read-only; otherwise put the allowed argument prefix after `--`.
 - `approve` and `reject` accept a pending approval token when more than one
   request is waiting.
 - `stop` cancels the active run. `new` creates a fresh visible task.
@@ -201,7 +208,7 @@ selfmind weixin status
 
 ```text
 selfmind eval [list|run|report|repair|scorecard|capture|clean]
-selfmind maintenance [replay|migrate-memory|migrate-skills|memory-audit|memory-dedup|task-audit] ...
+selfmind maintenance [replay|migrate-memory|migrate-skills|migrate-task-references|memory-audit|memory-dedup|task-audit] ...
 ```
 
 ```text
@@ -216,10 +223,15 @@ selfmind eval clean [--yes]
 selfmind maintenance replay [--limit N]
 selfmind maintenance migrate-memory [--apply] [--data-dir DIR]
 selfmind maintenance migrate-skills [--apply] [--root DIR] [--governance-grace 30d]
+selfmind maintenance migrate-task-references [--apply] [--limit N] [--data-dir DIR]
 selfmind maintenance memory-audit [--archive-confirmed] [--partition P] [--data-dir DIR]
 selfmind maintenance memory-dedup [--apply] [--partition P] [--data-dir DIR]
 selfmind maintenance task-audit [--apply] [--limit N] [--data-dir DIR]
 ```
+
+`maintenance replay` requeues retry-exhausted jobs only from each run's latest
+analyzer generation. Older generations remain immutable history; use a small
+`--limit` as a canary before replaying a backlog.
 
 - Eval commands are intended for reproducible agent-quality testing. `--live`
   permits provider calls; `--record-content` may persist sensitive content and
@@ -230,6 +242,10 @@ selfmind maintenance task-audit [--apply] [--limit N] [--data-dir DIR]
   only backfills a blocker when the inactive task status exactly matches its
   newest finished run; conflicting or mixed histories remain review-only, and
   task/run statuses are never rewritten.
+- `migrate-task-references` is dry-run by default. It imports a historical
+  `task_runs.work_key` only when the exact reference occurs in that run's
+  original user input. Inferred titles and summaries are reported and skipped;
+  `--apply` is idempotent and never changes workspace or execution authority.
 
 ## Gateway slash commands
 
@@ -242,7 +258,7 @@ before normal agent dispatch.
 /id
 /status
 /tasks [done|archived|all]
-/task <n|id> [runs|rename <name>|pin|unpin|archive|merge <dst>]
+/task <n|id> [runs|rename <name>|pin|unpin|archive|merge <dst>|references|reference add|remove <name>]
 /queue [drop <n>|clear]
 /watchers [active|attention|recent|all [page]|<n|id>|cancel <n|id>]
 /diag [memory|context|tasks|models|delivery|execution|tools]
@@ -276,6 +292,10 @@ before normal agent dispatch.
   The default and `all` views are numbered: use `/watchers 1` to inspect the
   first watcher or `/watchers cancel 1` to stop monitoring it. Cancelling a
   watcher does not cancel the external operation.
+- `/task <id> references` lists the governed names and identifiers that may
+  address that task. `/task <id> reference add <name>` confirms one immediately;
+  `reference remove <name>` supersedes it. Automatically learned references
+  require repeated user-text evidence, and conflicting references never route.
 - `/diag tools` reports the registration-time tool schema catalogue. Repaired
   and quarantined external tools are listed by name, issue class, and schema
   hash; raw schemas and values are never printed. Quarantined tools are not

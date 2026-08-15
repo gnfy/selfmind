@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
+	"strings"
 	"time"
 )
 
@@ -58,6 +60,98 @@ type MaintenanceJob struct {
 	LastError       string
 	CreatedAt       time.Time
 	UpdatedAt       time.Time
+}
+
+// MaintenanceVersionMigration reports a replay-safe analyzer generation
+// cutover. Terminal history remains on its original generation.
+type MaintenanceVersionMigration struct {
+	Eligible        int
+	Migrated        int
+	AlreadyCurrent  int
+	MissingEvidence int
+}
+
+// MigrateMaintenanceJobsToVersion copies unfinished jobs with durable replay
+// evidence from older generations. It never rewrites old rows, replays
+// succeeded/skipped history, or overwrites a current-generation row.
+func (s *Store) MigrateMaintenanceJobsToVersion(ctx context.Context, targetVersion int) (MaintenanceVersionMigration, error) {
+	var result MaintenanceVersionMigration
+	if s == nil || s.db == nil {
+		return result, fmt.Errorf("control store is unavailable")
+	}
+	if targetVersion <= 0 {
+		return result, fmt.Errorf("target analyzer version must be positive")
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return result, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	rows, err := tx.QueryContext(ctx, `SELECT run_id, analyzer_version, tenant_id, status, attempts,
+		next_retry_at, result_hash, payload_json, proposal_json, blocked_route_id, last_error, created_at, updated_at
+		FROM maintenance_jobs
+		WHERE analyzer_version < ? AND status IN (?, ?, ?, ?)
+		ORDER BY created_at ASC, analyzer_version DESC`, targetVersion,
+		MaintenanceJobPending, MaintenanceJobFailed, MaintenanceJobRunning, MaintenanceJobBlockedProvider)
+	if err != nil {
+		return result, err
+	}
+	var jobs []MaintenanceJob
+	for rows.Next() {
+		var job MaintenanceJob
+		var nextRetry, createdAt, updatedAt int64
+		if err := rows.Scan(&job.RunID, &job.AnalyzerVersion, &job.TenantID, &job.Status, &job.Attempts,
+			&nextRetry, &job.ResultHash, &job.PayloadJSON, &job.ProposalJSON, &job.BlockedRouteID,
+			&job.LastError, &createdAt, &updatedAt); err != nil {
+			_ = rows.Close()
+			return result, err
+		}
+		job.NextRetryAt = time.Unix(nextRetry, 0)
+		job.CreatedAt = time.Unix(createdAt, 0)
+		job.UpdatedAt = time.Unix(updatedAt, 0)
+		jobs = append(jobs, job)
+	}
+	if err := rows.Close(); err != nil {
+		return result, err
+	}
+
+	seenRuns := make(map[string]struct{})
+	for _, job := range jobs {
+		key := normalizeTenant(job.TenantID) + "\x00" + job.RunID
+		if _, seen := seenRuns[key]; seen {
+			continue
+		}
+		seenRuns[key] = struct{}{}
+		if strings.TrimSpace(job.PayloadJSON) == "" && strings.TrimSpace(job.ProposalJSON) == "" {
+			result.MissingEvidence++
+			continue
+		}
+		result.Eligible++
+		status := job.Status
+		if status == MaintenanceJobRunning {
+			status = MaintenanceJobPending
+		}
+		res, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO maintenance_jobs
+			(run_id, analyzer_version, tenant_id, status, attempts, next_retry_at, result_hash,
+			 payload_json, proposal_json, blocked_route_id, last_error, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			job.RunID, targetVersion, normalizeTenant(job.TenantID), status, job.Attempts,
+			job.NextRetryAt.Unix(), job.ResultHash, job.PayloadJSON, job.ProposalJSON,
+			job.BlockedRouteID, job.LastError, job.CreatedAt.Unix(), time.Now().Unix())
+		if err != nil {
+			return result, err
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			result.AlreadyCurrent++
+		} else {
+			result.Migrated++
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return result, err
+	}
+	return result, nil
 }
 
 // EnqueueMaintenanceJob creates a standalone durable job outside the
@@ -473,9 +567,10 @@ func (s *Store) ResetBlockedMaintenanceJobs(ctx context.Context) (int, error) {
 	return int(n), err
 }
 
-// ReplayRetryLimitedMaintenanceJobs requeues only historic jobs that exhausted
-// the old generic retry loop. Deterministically skipped jobs (ineligible run,
-// invalid/missing payload) remain terminal. This is deliberately an explicit,
+// ReplayRetryLimitedMaintenanceJobs requeues only current-generation post-run
+// jobs that exhausted the old generic retry loop. Deterministically skipped
+// jobs (ineligible run, invalid/missing payload) and superseded analyzer
+// generations remain terminal. This is deliberately an explicit,
 // tenant-scoped operation so every daemon restart cannot replay the same bad
 // history forever.
 func (s *Store) ReplayRetryLimitedMaintenanceJobs(ctx context.Context, tenantID string, limit int) (int, error) {
@@ -487,12 +582,23 @@ func (s *Store) ReplayRetryLimitedMaintenanceJobs(ctx context.Context, tenantID 
 		`UPDATE maintenance_jobs
 		 SET status = ?, attempts = 0, next_retry_at = 0, last_error = '', updated_at = ?
 		 WHERE rowid IN (
-		   SELECT rowid FROM maintenance_jobs
-		   WHERE tenant_id = ?
-		     AND ((status = ? AND blocked_route_id = ?)
-		       OR (status = ? AND last_error = 'maintenance retry limit reached'))
-		     AND TRIM(COALESCE(payload_json, '')) != ''
-		   ORDER BY updated_at ASC, run_id ASC LIMIT ?
+		   SELECT mj.rowid FROM maintenance_jobs mj
+		   WHERE mj.tenant_id = ?
+		     AND mj.analyzer_version = (
+		       SELECT MAX(current.analyzer_version)
+		       FROM maintenance_jobs current
+		       JOIN task_runs current_run
+		         ON current_run.tenant_id = current.tenant_id AND current_run.id = current.run_id
+		       WHERE current.tenant_id = mj.tenant_id
+		     )
+		     AND mj.analyzer_version = (
+		       SELECT MAX(latest.analyzer_version) FROM maintenance_jobs latest
+		       WHERE latest.tenant_id = mj.tenant_id AND latest.run_id = mj.run_id
+		     )
+		     AND ((mj.status = ? AND mj.blocked_route_id = ?)
+		       OR (mj.status = ? AND mj.last_error = 'maintenance retry limit reached'))
+		     AND TRIM(COALESCE(mj.payload_json, '')) != ''
+		   ORDER BY mj.updated_at ASC, mj.run_id ASC LIMIT ?
 		 )`,
 		MaintenanceJobPending, now, normalizeTenant(tenantID),
 		MaintenanceJobBlockedProvider, maintenanceRetryLimitRouteID,
@@ -532,7 +638,11 @@ func (s *Store) MaintenanceHealthForPerson(ctx context.Context, tenantID, person
 		 COALESCE(MAX(CASE WHEN mj.status = ? THEN mj.updated_at ELSE NULL END), 0)
 		 FROM maintenance_jobs mj
 		 JOIN task_runs r ON r.tenant_id = mj.tenant_id AND r.id = mj.run_id
-		 WHERE mj.tenant_id = ? AND r.person_id = ?`,
+		 WHERE mj.tenant_id = ? AND r.person_id = ?
+		   AND mj.analyzer_version = (
+		     SELECT MAX(latest.analyzer_version) FROM maintenance_jobs latest
+		     WHERE latest.tenant_id = mj.tenant_id AND latest.run_id = mj.run_id
+		   )`,
 		MaintenanceJobPending, MaintenanceJobFailed, MaintenanceJobRunning, MaintenanceJobBlockedProvider,
 		MaintenanceJobPending, MaintenanceJobFailed, MaintenanceJobSucceeded, tenantID, personID).
 		Scan(&health.Pending, &health.Failed, &health.Running, &health.Blocked, &oldest, &lastSuccess)
@@ -549,6 +659,10 @@ func (s *Store) MaintenanceHealthForPerson(ctx context.Context, tenantID, person
 		`SELECT COALESCE(mj.last_error, '') FROM maintenance_jobs mj
 		 JOIN task_runs r ON r.tenant_id = mj.tenant_id AND r.id = mj.run_id
 		 WHERE mj.tenant_id = ? AND r.person_id = ? AND mj.status IN (?, ?)
+		   AND mj.analyzer_version = (
+		     SELECT MAX(latest.analyzer_version) FROM maintenance_jobs latest
+		     WHERE latest.tenant_id = mj.tenant_id AND latest.run_id = mj.run_id
+		   )
 		 ORDER BY mj.updated_at DESC LIMIT 1`,
 		tenantID, personID, MaintenanceJobFailed, MaintenanceJobBlockedProvider).Scan(&health.LastError)
 	if err != nil && err != sql.ErrNoRows {
@@ -564,6 +678,10 @@ func (s *Store) MaintenanceHealthForPerson(ctx context.Context, tenantID, person
 		JOIN task_runs r ON r.tenant_id = mj.tenant_id AND r.id = mj.run_id
 		JOIN provider_route_health pr ON pr.tenant_id = mj.tenant_id AND pr.route_id = mj.blocked_route_id
 		WHERE mj.tenant_id = ? AND r.person_id = ? AND mj.status = ?
+		  AND mj.analyzer_version = (
+		    SELECT MAX(latest.analyzer_version) FROM maintenance_jobs latest
+		    WHERE latest.tenant_id = mj.tenant_id AND latest.run_id = mj.run_id
+		  )
 		ORDER BY pr.updated_at DESC`, tenantID, personID, MaintenanceJobBlockedProvider)
 	if err != nil {
 		return health, err

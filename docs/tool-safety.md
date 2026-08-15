@@ -116,6 +116,17 @@ capability, and credential-backed registries additionally require
 `credential:read`. Do not bypass either boundary with a vendor-specific
 exception.
 
+Trusted workspaces may register a local observation script with
+`selfmind ws observe`. This is deliberately narrower than trusting an
+interpreter or shell command family: the durable approval key binds the
+workspace ID, canonical in-workspace path, script content hash, argument
+prefix/trailing policy, network mode, and credential mode. Symlinks resolving
+outside the workspace are rejected, changed scripts stop matching, and only an
+authenticated loopback CLI can create the grant. The runtime still uses the
+normal execution scope, sandbox, environment lease, network, credential, and
+secret-redaction layers. Treat `--all-args` as an explicit owner assertion that
+the unchanged script cannot turn arbitrary arguments into mutation.
+
 ## Dispatch and Delegation
 
 - Native tool calls preserve their provider call id through the result. The
@@ -142,6 +153,12 @@ uses the read-only `tool_output_view` tool to retrieve omitted ranges instead
 of repeating the original command. Spooling failure degrades to a bounded
 result note and must not turn a successful tool call into a failure. Aged tool
 results may shrink only when an addressable artifact retains the evidence.
+
+Failed tools preserve a separate bounded diagnostic excerpt, byte count, and
+content hash in the durable event payload. This evidence is independent of the
+short user preview, so a failure can be classified and reviewed without
+persisting an unbounded stream. Exit status and known interface-drift failures
+are recorded as structured fields where they can be derived deterministically.
 
 Normal UI output summarizes tools, plans, and failures. Raw JSON is reserved
 for an explicit protocol/debug request.

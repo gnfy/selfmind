@@ -52,9 +52,10 @@ selfmind status
 selfmind watchers [active|attention|recent|all [page]|<n|id>|cancel <n|id>]
 selfmind tasks [done|archived|all|<keyword>]
 selfmind task <n|task_id> [runs|rename <name>|pin|unpin|archive|merge <dst>]
+selfmind task <n|task_id> references|reference add <name>|reference remove <name>
 selfmind resume <n|task_id>
 selfmind workspaces
-selfmind ws [list|add|use|trust|untrust|grants|revoke|<n|workspace_id>] ...
+selfmind ws [list|add|use|trust|untrust|grants|observe|revoke|<n|workspace_id>] ...
 selfmind approvals
 selfmind approve [token]
 selfmind reject [token]
@@ -86,12 +87,17 @@ selfmind ws use <workspace_id>
 selfmind ws trust [workspace_id]
 selfmind ws untrust [workspace_id]
 selfmind ws grants [workspace_id]
+selfmind ws observe <script> [--network] [--credentials] [--all-args | -- <argv-prefix...>] [--workspace <id>]
 selfmind ws revoke <capability> [workspace_id]
-selfmind workspace [list|add|use|trust|untrust|grants|revoke|<n|workspace_id>] ...
+selfmind workspace [list|add|use|trust|untrust|grants|observe|revoke|<n|workspace_id>] ...
 ```
 
 - 只有已认证的本地 CLI 可以修改工作区信任状态。省略 workspace ID 时操作当前工作区；
   `untrust` 还会撤销该工作区当前有效的执行能力授权。
+- `observe` 将可信工作区内的一份脚本登记为只读观测脚本。授权同时绑定工作区、
+  解析后的脚本路径、内容哈希、参数形状、网络和凭证选择；脚本被修改或替换后授权
+  自动失效。只有确认所有参数都只读时才使用 `--all-args`，否则在 `--` 后给出允许的
+  参数前缀。
 - 同时存在多个审批时，`approve` 和 `reject` 可接审批 token。
 - `stop` 取消活跃 run；`new` 创建新的可见任务。
 
@@ -178,7 +184,7 @@ selfmind weixin status
 
 ```text
 selfmind eval [list|run|report|repair|scorecard|capture|clean]
-selfmind maintenance [replay|migrate-memory|migrate-skills|memory-audit|memory-dedup|task-audit] ...
+selfmind maintenance [replay|migrate-memory|migrate-skills|migrate-task-references|memory-audit|memory-dedup|task-audit] ...
 ```
 
 ```text
@@ -193,14 +199,22 @@ selfmind eval clean [--yes]
 selfmind maintenance replay [--limit N]
 selfmind maintenance migrate-memory [--apply] [--data-dir DIR]
 selfmind maintenance migrate-skills [--apply] [--root DIR] [--governance-grace 30d]
+selfmind maintenance migrate-task-references [--apply] [--limit N] [--data-dir DIR]
 selfmind maintenance memory-audit [--archive-confirmed] [--partition P] [--data-dir DIR]
 selfmind maintenance memory-dedup [--apply] [--partition P] [--data-dir DIR]
 selfmind maintenance task-audit [--apply] [--limit N] [--data-dir DIR]
 ```
 
+`maintenance replay` 只会重新入队每个 run 最新 analyzer generation 中因重试耗尽而
+暂停的作业。旧 generation 保留为不可变历史；处理积压前应先用较小的 `--limit`
+执行 canary。
+
 - `task-audit` 默认只读，列出缺少持久 blocker 证据的暂停任务。只有任务当前无
   active run，且状态与最新已结束 run 完全一致时，`--apply` 才补写 blocker；
   历史混杂或状态冲突只报告，不修改 task/run 状态。
+- `migrate-task-references` 默认只做 dry-run。只有历史 `work_key` 的完整表面
+  形式确实出现在该 run 的原始用户输入中时才允许迁移；从标题或摘要推断出的
+  值只报告并跳过。`--apply` 可重复执行，且不会赋予工作区或执行权限。
 
 - Eval 命令用于可复现的 Agent 质量测试。`--live` 允许真实 provider 调用；
   `--record-content` 可能持久化敏感内容，应谨慎使用。
@@ -217,7 +231,7 @@ Gateway 命令可用于 TUI 和受支持的 IM 渠道，并且会在普通 Agent
 /id
 /status
 /tasks [done|archived|all]
-/task <n|id> [runs|rename <name>|pin|unpin|archive|merge <dst>]
+/task <n|id> [runs|rename <name>|pin|unpin|archive|merge <dst>|references|reference add|remove <name>]
 /queue [drop <n>|clear]
 /watchers [active|attention|recent|all [page]|<n|id>|cancel <n|id>]
 /diag [memory|context|tasks|models|delivery|execution|tools]
@@ -241,6 +255,9 @@ Gateway 命令可用于 TUI 和受支持的 IM 渠道，并且会在普通 Agent
   与凭证不会显示在输出中。默认视图和 `all` 视图带稳定序号：使用
   `/watchers 1` 查看第一条 watcher，使用 `/watchers cancel 1` 停止监控。
   取消 watcher 不会取消外部操作。
+- `/task <id> references` 查看可用于定位该任务的受治理名称和标识；
+  `reference add <名称>` 由用户直接确认，`reference remove <名称>` 停用它。
+  自动学习的 reference 需要不同 run 的原始用户文本重复支持；冲突时系统不会猜测。
 
 - 审批请求自身携带权威选项。普通请求显示“仅本次 / 当前 run 内复用 / 拒绝”，
   高敏感请求只显示“仅本次 / 拒绝”；新提示不再创建 task/person 级授权。

@@ -54,7 +54,7 @@ var slashCommandMetas = []slashCommandMeta{
 	{Name: "/id", Usage: "/id", Description: "Show your resolved account identity", Hint: "show your account identity"},
 	{Name: "/new", Usage: "/new [title]", Description: "Create a new task", Hint: "create a new task"},
 	{Name: "/resume", Usage: "/resume [n|task_id]", Description: "Pick a recent task to resume (bare), or resume one by number or id", Hint: "pick a task to resume"},
-	{Name: "/task", Usage: "/task <n|id> [runs|rename <name>|archive]", Description: "Show a task's detail, runs, rename it, or archive it", Hint: "inspect or manage one task"},
+	{Name: "/task", Usage: "/task <n|id> [runs|rename <name>|archive|references|reference add|remove <name>]", Description: "Show or manage a task and its references", Hint: "inspect or manage one task"},
 	{Name: "/workspace", Usage: "/workspace [n|id]", Description: "List workspaces (bare) or select one by number/id", Hint: "list or select a workspace"},
 	{Name: "/ws", Usage: "/ws [n|id]", Description: "Short alias for /workspace (bare lists, arg selects)", Hint: "list or select a workspace"},
 	{Name: "/workspaces", Usage: "/workspaces", Description: "List workspaces (same as bare /workspace)", Hint: "list your workspaces"},

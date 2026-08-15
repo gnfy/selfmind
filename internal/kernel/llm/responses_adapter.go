@@ -466,6 +466,45 @@ func (a *ResponsesAdapter) requestFromChat(req ChatRequest, stream bool) respons
 	return wire
 }
 
+func (a *ResponsesAdapter) FingerprintRequest(_ context.Context, req ChatRequest, stream bool) (RequestFingerprint, bool) {
+	wire := a.requestFromChat(req, stream)
+	stableInput := make([]responsesInputItem, 0, len(wire.Input))
+	for _, item := range wire.Input {
+		if item.Role != "system" && item.Role != "developer" {
+			break
+		}
+		stableInput = append(stableInput, item)
+	}
+	settings := struct {
+		Model          string
+		Store          *bool
+		Reasoning      *responsesReasoning
+		PromptCacheKey string
+		ExtraBody      map[string]interface{}
+		ExtraQuery     map[string]interface{}
+		Headers        map[string]string
+	}{wire.Model, wire.Store, wire.Reasoning, wire.PromptCacheKey, a.ExtraBody, a.ExtraQuery, a.Headers}
+	prefix := struct {
+		Settings interface{}
+		System   []responsesInputItem
+		Tools    []map[string]interface{}
+	}{settings, stableInput, wire.Tools}
+	body, err := marshalWithExtraBody(wire, a.ExtraBody)
+	if err != nil {
+		return RequestFingerprint{}, false
+	}
+	return RequestFingerprint{
+		Protocol:    "openai_responses",
+		PrefixHash:  requestValueHash(prefix),
+		RequestHash: requestValueHash(json.RawMessage(body)),
+		Blocks: map[string]string{
+			"settings": requestValueHash(settings),
+			"system":   requestValueHash(stableInput),
+			"tools":    requestValueHash(wire.Tools),
+		},
+	}, true
+}
+
 func responsesCallID(call ToolCall) string {
 	if strings.TrimSpace(call.ID) != "" {
 		return strings.TrimSpace(call.ID)

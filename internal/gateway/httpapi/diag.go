@@ -187,6 +187,14 @@ func (d *Server) diagReply(ctx context.Context, identity *control.IdentityContex
 		fmt.Fprintf(&sb, "Tasks: open %d, terminal %d, archived %d, pinned %d, inbox runs %d\n",
 			stats.Open, stats.Terminal, stats.Archived, stats.Pinned, stats.InboxRuns)
 	}
+	if health, err := d.Control.EvolutionHealthForPerson(ctx, identity.TenantID, identity.PersonID); err == nil {
+		candidateTotal := health.Statuses["candidate"] + health.Statuses["shadow"] + health.Statuses["eligible"] + health.Statuses["enabled"] + health.Statuses["degraded"]
+		if d.SelfEvolution.Enabled || health.Profiles24h > 0 || candidateTotal > 0 {
+			fmt.Fprintf(&sb, "Self-evolution: profiles %d (24h), candidate %d, shadow %d, eligible %d, enabled %d, degraded %d, fallbacks %d\n",
+				health.Profiles24h, health.Statuses["candidate"], health.Statuses["shadow"], health.Statuses["eligible"],
+				health.Statuses["enabled"], health.Statuses["degraded"], health.Fallbacks)
+		}
+	}
 	if watches, err := d.Control.CountExternalWatchesByStatus(ctx, identity.TenantID, identity.PersonID); err == nil {
 		activeWatches := watches[control.ExternalWatchPending] + watches[control.ExternalWatchRunning]
 		if activeWatches+watches[control.ExternalWatchFailed]+watches[control.ExternalWatchTimedOut]+watches[control.ExternalWatchBlocked] > 0 {
@@ -305,7 +313,7 @@ func (d *Server) diagReply(ctx context.Context, identity *control.IdentityContex
 	// counts plus the newest undelivered reason, so "the push never reached my
 	// phone" is diagnosable from the phone itself (P0-1).
 	if counts, err := d.Control.CountOutboundByStatusSince(ctx, identity.TenantID, identity.PersonID, time.Now().Add(-24*time.Hour)); err == nil && len(counts) > 0 {
-		fmt.Fprintf(&sb, "Outbound (24h): sent %d, unconfirmed %d, pending %d, failed %d\n",
+		fmt.Fprintf(&sb, "Outbound (24h): confirmed %d, accepted-unconfirmed %d, waiting-session %d, failed %d\n",
 			counts["sent"], counts["sent_unconfirmed"], counts["pending_session"], counts["failed"])
 		if counts["sent_unconfirmed"] > 0 || counts["pending_session"] > 0 || counts["failed"] > 0 {
 			if undelivered, err := d.Control.ListUndeliveredOutbound(ctx, identity.TenantID, identity.PersonID, time.Now().Add(-24*time.Hour), 1); err == nil && len(undelivered) > 0 {
@@ -878,6 +886,13 @@ func (d *Server) tasksDiagReply(ctx context.Context, identity *control.IdentityC
 	if stats, err := d.Control.ReadTaskGovernanceStats(ctx, identity.TenantID, identity.PersonID); err == nil {
 		fmt.Fprintf(&sb, "Labels: open %d, terminal %d, archived %d, pinned %d, inbox runs %d\n",
 			stats.Open, stats.Terminal, stats.Archived, stats.Pinned, stats.InboxRuns)
+	}
+	if stats, err := d.Control.ReadTaskReferenceStats(ctx, identity.TenantID, identity.PersonID); err == nil {
+		fmt.Fprintf(&sb, "Task references: active %d, candidate %d, conflicted %d, shadow %d\n",
+			stats.Active, stats.Candidate, stats.Conflicted, stats.Shadow)
+		fmt.Fprintf(&sb, "Task routing audit: corrected %d, pending %d, unverified %d\n",
+			stats.ResolutionCorrected, stats.ResolutionPending, stats.ResolutionUnverified)
+		fmt.Fprintf(&sb, "Workspace knowledge: %d files, %d sections\n", stats.KnowledgeFiles, stats.KnowledgeSections)
 	}
 	queued, _ := d.Control.CountQueued(ctx, identity.TenantID, identity.PersonID, control.QueueStatusQueued)
 	approvals, _, _ := d.pendingApprovalsForDisplay(ctx, identity)

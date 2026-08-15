@@ -104,6 +104,16 @@ func (d *Server) StartMaintenanceWorker(ctx context.Context) func() {
 	} else if reset > 0 {
 		log.Info("gateway: retrying legacy provider-blocked maintenance jobs after restart", "count", reset)
 	}
+	if migrated, err := d.Control.MigrateMaintenanceJobsToVersion(context.Background(), postRunAnalyzerVersion); err != nil {
+		log.Warn("gateway: maintenance analyzer generation migration failed", "error", err)
+	} else if migrated.Migrated > 0 || migrated.AlreadyCurrent > 0 || migrated.MissingEvidence > 0 {
+		log.Info("gateway: reconciled maintenance analyzer generation",
+			"target_version", postRunAnalyzerVersion,
+			"eligible", migrated.Eligible,
+			"migrated", migrated.Migrated,
+			"already_current", migrated.AlreadyCurrent,
+			"missing_evidence", migrated.MissingEvidence)
+	}
 	if pruned, err := d.Control.PruneMaintenanceAttempts(context.Background(), 0); err != nil {
 		log.Warn("gateway: prune maintenance attempt history failed", "error", err)
 	} else if pruned > 0 {
@@ -188,7 +198,7 @@ func (d *Server) runMaintenancePassAt(ctx context.Context, now time.Time) {
 		if payload.WorkspaceID == "" {
 			payload.WorkspaceID = payload.Run.WorkspaceID
 		}
-		attach := taskAttach{created: payload.AttachCreated, preLabel: payload.AttachPreLabel}
+		attach := taskAttach{created: payload.AttachCreated, preLabel: payload.AttachPreLabel, reason: taskAttachReason(payload.AttachReason)}
 		// A frozen proposal means model work already completed before a crash.
 		// Apply it immediately; making it wait for another debounce window would
 		// only delay recovery and cannot save another model call.
@@ -257,7 +267,7 @@ func (d *Server) runPostRunMaintenanceBatch(ctx context.Context, items []*queued
 			callCtx, cancel := context.WithTimeout(ctx, d.analyzerTimeout())
 			d.analyzeFinishedRun(callCtx, &item.payload.Identity, &item.payload.Task, &item.payload.Run,
 				item.payload.WorkspaceID, item.payload.UserInput, item.payload.Outcome,
-				taskAttach{created: item.payload.AttachCreated, preLabel: item.payload.AttachPreLabel})
+				taskAttach{created: item.payload.AttachCreated, preLabel: item.payload.AttachPreLabel, reason: taskAttachReason(item.payload.AttachReason)})
 			cancel()
 		}
 		return

@@ -6,7 +6,7 @@
 > the generated [`README.md`](README.md) index. Code and tests remain the source
 > of truth.
 
-**Snapshot:** 2026-08-14
+**Snapshot:** 2026-08-15
 
 ## Release Health
 
@@ -40,13 +40,14 @@
 | Execution engine | Partial | Typed scopes, environment snapshots, sandbox policy, durable watcher execution, and tool profiles exist. Linux isolation is strongest; macOS uses approval-controlled host execution. |
 | Worker scheduling | Partial | Durable queue and worker-pool seams exist; personal edition intentionally defaults to one active run per person while multi-run ownership remains deferred. |
 | Provider runtime | Done | Primary/auxiliary roles, explicit role overrides, protocol adapters, typed quirks, generic request extras, model metadata, auth refresh, and live contract probes exist. |
-| Provider cost visibility | Done | OpenAI-compatible and Responses cache usage is normalized; `selfmind usage` reports context diagnostics and `selfmind report daily` provides a person-scoped, model-free execution/cost trend. Provider pricing remains external. |
-| Context lifecycle | Done | Person work spine, bounded composer slices, project instructions, artifacts, recall, and compaction are integrated. |
-| Memory | Partial | Canonical governance, pin/correct/forget, transient filtering, lexical/CJK retrieval, access tracking, audits, and output-overlap recall telemetry exist. The overlap signal is diagnostic rather than proof of causal use; quality, reuse, and duplicate rates still need sustained measurement. |
-| Tasks | Done | Inbox, lifecycle fields, paging/search, pin/archive/rename/merge, retention, deterministic work keys, and asynchronous post-run labeling exist. |
+| Provider cost visibility | Done | OpenAI-compatible and Responses cache usage is normalized; adapter-level request prefix/block fingerprints diagnose cache drift without storing prompt content; `selfmind usage` and `selfmind report daily` provide local execution/cost trends. Provider pricing remains external. |
+| Context lifecycle | Done | Person work spine, bounded composer slices, project instructions, deterministic workspace-knowledge indexing, artifacts, recall, and compaction are integrated. |
+| Memory | Partial | Canonical governance, pin/correct/forget, transient filtering, lexical/CJK retrieval, access tracking, audits, output-overlap recall telemetry, and per-run intake disposition counts exist. These signals are diagnostic rather than proof of causal use; quality, reuse, and duplicate rates still need sustained measurement. |
+| Tasks | Done | Inbox, lifecycle fields, paging/search, pin/archive/rename/merge, retention, governed Task References, audited attach policies, explicit dry-run legacy-reference migration, and asynchronous post-run labeling exist. Semantic references never grant workspace or prior-run authority; ticket-shaped work keys are display hints only. |
 | Background maintenance | Done | Debounced bounded batches, immutable replay jobs, restart-safe retry exhaustion, shared retry policy, provider/contract circuit identity, fallback roles, diagnostics, migration tools, and dispatch-time reasoning/output bounds exist. |
 | Skills | Done | Runtime discovery, catalog/manage/bundles, tenant-level ownership, learning audit, curation, and person-to-tenant migration exist. |
-| Tool safety | Partial | Safety floor, smart approval, typed invocation scope, grants, secret redaction, schema governance, sandbox/host profiles, and failure envelopes exist. Human asks use one server-issued menu across CLI/IM: once, optional run-local reuse, and deny; sensitive asks are once/deny only. Historical broader grants remain listable and revocable. External tool diversity remains an ongoing compatibility surface. |
+| Safe self-evolution | Partial | Versioned skill activation, deterministic workflow profiles, observation/shadow evidence, and same-task read-only `batch_read` candidates exist. Automatic writes, shell/network execution, skill rewriting, and semantic authority are excluded; real repeated workflows still need production validation. |
+| Tool safety | Partial | Safety floor, smart approval, typed invocation scope, grants, hash-bound trusted observation scripts, secret redaction, schema governance, sandbox/host profiles, and failure envelopes exist. Human asks use one server-issued menu across CLI/IM: once, optional run-local reuse, and deny; sensitive asks are once/deny only. Historical broader grants remain listable and revocable. External tool diversity remains an ongoing compatibility surface. |
 | External watchers | Partial | Durable registration, bounded slow-command preflight, environment/auth snapshots, restart recovery, idempotent finalization, separate agent/external outcomes, person-scoped numbered `/watchers` controls, and delivery-confirmed stable-ID notifications exist. Keep validating provider-specific terminal behavior and live delivery. |
 | IM delivery | Partial | Weixin and other adapters share durable outbound state, delivery diagnostics, session refresh classification, bounded catch-up, and preferred-channel routing. Live platform behavior remains an external dependency. |
 | TUI | Done | Daemon event stream, stable transcript cells, bottom plan panel, pagers, persistent input history, resume transcript, and build-fingerprint detection exist. |
@@ -66,7 +67,11 @@ limitation. It does not mean the area should be redesigned from scratch.
 2. **Measure memory usefulness, not record count.** Track query-relevant
    canonical recall, injection, reinforcement, supersession, duplicates, and
    user correction. Improve selection/write policy only from those traces.
-3. **Prepare the next npm beta only after the full gate passes.** The release
+3. **Validate safe evolution on repeated personal workflows.** Confirm that
+   profile signatures remain stable, shadow matches are truthful, enabled
+   read-only batches reduce turns, and any partial failure degrades immediately
+   to ordinary tools without changing execution authority.
+4. **Prepare the next npm beta only after the full gate passes.** The release
    needs a clean Action run, platform package smoke tests, fresh install,
    update, service restart, and rollback evidence.
 
@@ -92,6 +97,10 @@ limitation. It does not mean the area should be redesigned from scratch.
 - Full multi-run foreground/background concurrency and remote Runner execution
   remain design seams only. Do not infer that they are shipped from queue or
   execution-envelope plumbing.
+- Self-evolution is intentionally limited to same-task, local read-only batch
+  advice. It does not generate executable scripts, rewrite protected skills,
+  approve capabilities, choose workspaces, or authorize writes, credentials,
+  network access, or shell execution.
 
 ## Plan Lifecycle
 

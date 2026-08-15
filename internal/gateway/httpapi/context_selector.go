@@ -27,9 +27,19 @@ import (
 // "possibly related; reference only" framing instead. Explicit attaches
 // (/resume, task_id, continuation cue) keep the full context.
 func (c *RunCoordinator) selectedTaskRuntimeContext(ctx context.Context, task *control.Task, run *control.Run, workspace *control.Workspace, platform, channel, userMessage string, preLabel bool) kernel.TaskRuntimeContext {
+	mode := attachContextFull
+	if preLabel {
+		mode = attachContextNone
+	}
+	return c.selectedTaskRuntimeContextWithMode(ctx, task, run, workspace, platform, channel, userMessage, mode)
+}
+
+func (c *RunCoordinator) selectedTaskRuntimeContextWithMode(ctx context.Context, task *control.Task, run *control.Run, workspace *control.Workspace, platform, channel, userMessage string, mode attachContextMode) kernel.TaskRuntimeContext {
 	if c == nil || c.srv == nil || c.srv.Control == nil || task == nil {
 		return kernel.TaskRuntimeContext{}
 	}
+	includeTask := mode == attachContextBounded || mode == attachContextFull
+	includeFull := mode == attachContextFull
 	selected := kernel.TaskRuntimeContext{
 		TaskID:      task.ID,
 		Title:       task.Title,
@@ -37,7 +47,7 @@ func (c *RunCoordinator) selectedTaskRuntimeContext(ctx context.Context, task *c
 		Channel:     fallback(channel, task.LastChannel),
 		WorkspaceID: task.WorkspaceID,
 	}
-	if !preLabel {
+	if includeTask {
 		selected.Summary = task.CurrentSummary
 		selected.NextSteps = append([]string{}, task.NextSteps...)
 	}
@@ -59,14 +69,16 @@ func (c *RunCoordinator) selectedTaskRuntimeContext(ctx context.Context, task *c
 	if run != nil {
 		exceptRunID = run.ID
 	}
-	if prior, err := c.srv.Control.PriorRunChannel(ctx, task.TenantID, task.ID, exceptRunID); err == nil {
-		selected.PriorChannel = prior
+	if includeFull {
+		if prior, err := c.srv.Control.PriorRunChannel(ctx, task.TenantID, task.ID, exceptRunID); err == nil {
+			selected.PriorChannel = prior
+		}
 	}
 	if workspace != nil {
 		selected.WorkspaceID = firstNonEmptyString(selected.WorkspaceID, workspace.ID)
 		selected.Workspace = workspace.LocalPath
 	}
-	if handoff, _ := c.srv.Control.LatestHandoff(ctx, task.ID); handoff != nil && !preLabel {
+	if handoff, _ := c.srv.Control.LatestHandoff(ctx, task.ID); handoff != nil && includeTask {
 		selected.Handoff = &kernel.TaskHandoffContext{
 			Summary:      handoff.Summary,
 			DoneItems:    append([]string{}, handoff.DoneItems...),
@@ -83,7 +95,11 @@ func (c *RunCoordinator) selectedTaskRuntimeContext(ctx context.Context, task *c
 			selected.NextSteps = append([]string{}, handoff.NextSteps...)
 		}
 	}
-	if artifacts, _ := c.srv.Control.ListTaskArtifacts(ctx, task.ID, 6); len(artifacts) > 0 && !preLabel {
+	artifactLimit := 6
+	if mode == attachContextBounded {
+		artifactLimit = 3
+	}
+	if artifacts, _ := c.srv.Control.ListTaskArtifacts(ctx, task.ID, artifactLimit); len(artifacts) > 0 && includeTask {
 		selected.Artifacts = make([]kernel.TaskArtifactContext, 0, len(artifacts))
 		for _, artifact := range artifacts {
 			selected.Artifacts = append(selected.Artifacts, kernel.TaskArtifactContext{
@@ -97,7 +113,7 @@ func (c *RunCoordinator) selectedTaskRuntimeContext(ctx context.Context, task *c
 			})
 		}
 	}
-	if blockers, _ := c.srv.Control.ListOpenTaskBlockers(ctx, task.TenantID, task.ID, 12); len(blockers) > 0 && !preLabel {
+	if blockers, _ := c.srv.Control.ListOpenTaskBlockers(ctx, task.TenantID, task.ID, 12); len(blockers) > 0 && includeTask {
 		selected.OpenBlockers = make([]kernel.TaskBlockerContext, 0, len(blockers))
 		for _, blocker := range blockers {
 			selected.OpenBlockers = append(selected.OpenBlockers, kernel.TaskBlockerContext{
@@ -108,7 +124,7 @@ func (c *RunCoordinator) selectedTaskRuntimeContext(ctx context.Context, task *c
 	}
 	// Fetch a larger candidate window, then keep the most relevant events
 	// within the budget (W3d) rather than just the most recent 8.
-	if events, _ := c.srv.Control.ListTaskEvents(ctx, task.ID, 40); len(events) > 0 && !preLabel {
+	if events, _ := c.srv.Control.ListTaskEvents(ctx, task.ID, 40); len(events) > 0 && includeFull {
 		ranked := rankTaskEvents(events, 8)
 		selected.Events = make([]kernel.TaskEventContext, 0, len(ranked))
 		for _, event := range ranked {
@@ -123,7 +139,7 @@ func (c *RunCoordinator) selectedTaskRuntimeContext(ctx context.Context, task *c
 	// A fresh IM inbound already triggers channel-specific catch-up. CLI cannot
 	// refresh an IM context token, so instead give the agent a small advisory
 	// that the prior final answer may need to be restated on this endpoint.
-	if !preLabel && strings.EqualFold(strings.TrimSpace(platform), "cli") {
+	if includeFull && strings.EqualFold(strings.TrimSpace(platform), "cli") {
 		if pushes, err := c.srv.Control.ListUndeliveredTaskResults(ctx, task.TenantID, task.PersonID, task.ID, time.Now().Add(-24*time.Hour), 3); err == nil {
 			for _, push := range pushes {
 				preview := textutil.Truncate(strings.TrimSpace(push.Content), 180)
@@ -143,11 +159,15 @@ func (c *RunCoordinator) selectedTaskRuntimeContext(ctx context.Context, task *c
 	// task-keyed working history. Runs after event selection so this turn's
 	// context.recall event is not echoed back into its own context.
 	if c.srv.Recall != nil {
+		// Refresh the deterministic procedural-knowledge projection from the
+		// same authorized convention files used by the agent prompt. Indexing is
+		// fail-open and never changes workspace or permission authority.
+		c.refreshWorkspaceKnowledge(ctx, task, workspace)
 		// Pre-label turns lift the current-task exclusion: their bundle above
 		// is metadata-only, so the guessed task's own card must be allowed to
 		// surface via recall when the message content actually relates to it.
 		excludeTaskID := task.ID
-		if preLabel {
+		if mode == attachContextNone {
 			excludeTaskID = ""
 		}
 		recallWorkspaceID := selected.WorkspaceID

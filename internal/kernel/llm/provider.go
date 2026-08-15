@@ -2,6 +2,9 @@ package llm
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"strings"
 )
 
@@ -133,6 +136,45 @@ type Provider interface {
 	ChatCompletion(ctx context.Context, messages []Message) (string, error)
 	Chat(ctx context.Context, req ChatRequest) (*ChatResponse, error)
 	StreamChat(ctx context.Context, req ChatRequest) (<-chan StreamEvent, error)
+}
+
+// RequestFingerprint describes the provider-adapter request shape without
+// retaining prompt text, tool schemas, headers, or credentials. PrefixHash is
+// built from the cache-relevant stable blocks; RequestHash covers the complete
+// serialized request so diagnostics can distinguish prefix drift from ordinary
+// conversation growth.
+type RequestFingerprint struct {
+	Protocol    string            `json:"protocol"`
+	PrefixHash  string            `json:"prefix_hash"`
+	RequestHash string            `json:"request_hash"`
+	Blocks      map[string]string `json:"blocks,omitempty"`
+}
+
+// RequestFingerprinter is implemented by protocol adapters that can inspect
+// their final wire shape. Wrappers must forward it to the provider selected for
+// the current role.
+type RequestFingerprinter interface {
+	FingerprintRequest(context.Context, ChatRequest, bool) (RequestFingerprint, bool)
+}
+
+// FingerprintProviderRequest probes the optional adapter capability.
+func FingerprintProviderRequest(ctx context.Context, p Provider, req ChatRequest, stream bool) (RequestFingerprint, bool) {
+	if p == nil {
+		return RequestFingerprint{}, false
+	}
+	if fingerprinter, ok := p.(RequestFingerprinter); ok {
+		return fingerprinter.FingerprintRequest(ctx, req, stream)
+	}
+	return RequestFingerprint{}, false
+}
+
+func requestValueHash(value interface{}) string {
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return ""
+	}
+	digest := sha256.Sum256(raw)
+	return hex.EncodeToString(digest[:8])
 }
 
 // NativeToolsCapable is an optional Provider capability probe: a provider that

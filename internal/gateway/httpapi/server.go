@@ -78,6 +78,10 @@ type Server struct {
 	// PostRunMaintenance controls the daemon-owned debounce/batch window for
 	// post-run label and memory governance. It never delays run finalization.
 	PostRunMaintenance PostRunMaintenanceOptions
+	// SelfEvolution profiles completed runs and promotes only bounded read-only
+	// batching contracts. Profiles are derived from durable events and never
+	// delay or alter run finalization.
+	SelfEvolution control.EvolutionPolicy
 	// MemoryConsolidator is the background memory self-organization pass
 	// (docs/memory-governance.zh-CN.md §4). Nil disables governance entirely;
 	// the loop is started by the gateway runner via StartMemoryGovernance.
@@ -170,6 +174,7 @@ func (d *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/workspaces/register", d.handleWorkspaceRegister)
 	mux.HandleFunc("/v1/workspaces/trust", d.handleWorkspaceTrust)
 	mux.HandleFunc("/v1/workspaces/capabilities", d.handleWorkspaceCapabilities)
+	mux.HandleFunc("/v1/workspaces/observation-profiles", d.handleWorkspaceObservationProfiles)
 	mux.HandleFunc("/v1/workspaces", d.handleWorkspaces)
 	mux.HandleFunc("/v1/gateway/status", d.handleGatewayStatus)
 	mux.HandleFunc("/v1/gateway/shutdown", d.handleGatewayShutdown)
@@ -539,9 +544,9 @@ type taskAttach struct {
 	// the execution workspace follows the REQUEST, not the guessed label.
 	preLabel bool
 	// reason records the deterministic evidence that selected this label. A
-	// display-only work-key match must stay distinct from an explicit resume:
-	// one issue may contain several independent work lines, so sharing a Jira
-	// key is not authority to close an older unfinished run.
+	// display-only extracted work key is metadata, not a selection reason: one
+	// issue may contain several independent work lines, so sharing a token is
+	// not authority to attach or close prior work.
 	reason taskAttachReason
 	// workKey records a deterministic issue key used at ingress. It does not
 	// make the label a context/workspace boundary; it only makes the display
@@ -550,25 +555,98 @@ type taskAttach struct {
 	// effectKey is present only for durable system work whose logical products
 	// must remain exactly-once across retry runs.
 	effectKey string
+	// policy is the typed authority boundary for this attach. The legacy
+	// created/preLabel fields remain replay metadata for post-run label hygiene;
+	// they must not be consulted for workspace, context, pointer, or run
+	// ownership decisions.
+	policy              attachPolicy
+	matchedSurfaceForms []string
+	candidateTaskIDs    []string
+	candidateTaskHints  []string
+}
+
+type attachContextMode string
+
+const (
+	attachContextNone    attachContextMode = "none"
+	attachContextBounded attachContextMode = "bounded_task"
+	attachContextFull    attachContextMode = "full_task"
+)
+
+type attachWorkspaceSource string
+
+const (
+	attachWorkspaceRequest attachWorkspaceSource = "request_or_lease"
+	attachWorkspaceTask    attachWorkspaceSource = "task_binding"
+)
+
+// attachPolicy keeps semantic task association separate from execution
+// authority. A weak label/reference may help the model find prior work, but it
+// cannot silently change filesystem roots, trust, credentials, the person's
+// current-task pointer, or ownership of unfinished runs.
+type attachPolicy struct {
+	ContextMode              attachContextMode
+	ExecutionWorkspaceSource attachWorkspaceSource
+	UpdateCurrentTask        bool
+	PreserveTaskLifecycle    bool
+	ClaimsPriorRuns          bool
+	CommitLifecycleOnKeep    bool
 }
 
 type taskAttachReason string
 
 const (
-	taskAttachNewLabel        taskAttachReason = "new_label"
-	taskAttachCurrentPreLabel taskAttachReason = "current_prelabel"
-	taskAttachWorkKeyPreLabel taskAttachReason = "work_key_prelabel"
-	taskAttachExplicitTaskID  taskAttachReason = "explicit_task_id"
-	taskAttachContinuation    taskAttachReason = "continuation_cue"
-	taskAttachResumePin       taskAttachReason = "resume_pin"
+	taskAttachNewLabel          taskAttachReason = "new_label"
+	taskAttachCurrentPreLabel   taskAttachReason = "current_prelabel"
+	taskAttachExplicitTaskID    taskAttachReason = "explicit_task_id"
+	taskAttachContinuation      taskAttachReason = "continuation_cue"
+	taskAttachResumePin         taskAttachReason = "resume_pin"
+	taskAttachReferenceMention  taskAttachReason = "reference_mention"
+	taskAttachReferenceContinue taskAttachReason = "reference_continuation"
 )
 
 func (a taskAttach) claimsPriorRuns() bool {
-	switch a.reason {
+	return a.resolvedPolicy().ClaimsPriorRuns
+}
+
+func (a taskAttach) resolvedPolicy() attachPolicy {
+	if a.policy.ContextMode != "" || a.policy.ExecutionWorkspaceSource != "" {
+		return a.policy
+	}
+	// Compatibility for durable maintenance payloads and focused tests created
+	// before policy became explicit. New ingress attaches use newTaskAttach.
+	return policyForTaskAttach(a.reason, a.created, a.preLabel)
+}
+
+func policyForTaskAttach(reason taskAttachReason, created, preLabel bool) attachPolicy {
+	switch reason {
 	case taskAttachContinuation:
-		return true
+		return attachPolicy{ContextMode: attachContextFull, ExecutionWorkspaceSource: attachWorkspaceTask, UpdateCurrentTask: true, ClaimsPriorRuns: true}
+	case taskAttachReferenceContinue:
+		return attachPolicy{ContextMode: attachContextFull, ExecutionWorkspaceSource: attachWorkspaceRequest, UpdateCurrentTask: true, PreserveTaskLifecycle: true, CommitLifecycleOnKeep: true}
+	case taskAttachReferenceMention:
+		return attachPolicy{ContextMode: attachContextBounded, ExecutionWorkspaceSource: attachWorkspaceRequest, PreserveTaskLifecycle: true}
+	case taskAttachExplicitTaskID, taskAttachResumePin:
+		return attachPolicy{ContextMode: attachContextFull, ExecutionWorkspaceSource: attachWorkspaceTask, UpdateCurrentTask: true}
+	case taskAttachCurrentPreLabel:
+		return attachPolicy{ContextMode: attachContextNone, ExecutionWorkspaceSource: attachWorkspaceRequest, PreserveTaskLifecycle: true, CommitLifecycleOnKeep: true}
+	case taskAttachNewLabel:
+		return attachPolicy{ContextMode: attachContextNone, ExecutionWorkspaceSource: attachWorkspaceRequest, UpdateCurrentTask: true}
 	default:
-		return false
+		if preLabel {
+			return attachPolicy{ContextMode: attachContextNone, ExecutionWorkspaceSource: attachWorkspaceRequest, UpdateCurrentTask: created, PreserveTaskLifecycle: !created, CommitLifecycleOnKeep: !created}
+		}
+		return attachPolicy{ContextMode: attachContextFull, ExecutionWorkspaceSource: attachWorkspaceTask, UpdateCurrentTask: true}
+	}
+}
+
+func newTaskAttach(reason taskAttachReason, workKey string, created, preLabel bool) taskAttach {
+	return taskAttach{
+		created:  created,
+		preLabel: preLabel,
+		reason:   reason,
+		workKey:  workKey,
+		policy:   policyForTaskAttach(reason, created, preLabel),
 	}
 }
 

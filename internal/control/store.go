@@ -123,6 +123,10 @@ type Artifact struct {
 }
 
 type TaskCreate struct {
+	// ID is optional. Most callers leave it empty and receive a generated task
+	// id. Durable replay paths may supply a stable task_ id so a crash between
+	// creation and completion reuses the same display label.
+	ID          string
 	TenantID    string
 	PersonID    string
 	WorkspaceID string
@@ -131,6 +135,11 @@ type TaskCreate struct {
 	Kind        string
 	Visibility  string
 	Pinned      bool
+	// KeepCurrent creates the task without changing the person's current-task
+	// pointer. Post-run display governance uses this when it splits one
+	// completed run from a weak pre-label: creation must not race a newer user
+	// selection or acquire execution authority retroactively.
+	KeepCurrent bool
 }
 
 func OpenStore(dataDir string) (*Store, error) {
@@ -231,6 +240,23 @@ CREATE TABLE IF NOT EXISTS current_workspace (
 	updated_at INTEGER NOT NULL,
 	PRIMARY KEY(tenant_id, person_id)
 );
+CREATE TABLE IF NOT EXISTS workspace_knowledge_sections (
+	id TEXT PRIMARY KEY,
+	tenant_id TEXT NOT NULL,
+	person_id TEXT NOT NULL,
+	workspace_id TEXT NOT NULL,
+	file_path TEXT NOT NULL,
+	file_name TEXT NOT NULL,
+	content_hash TEXT NOT NULL,
+	file_mtime INTEGER NOT NULL DEFAULT 0,
+	section_index INTEGER NOT NULL,
+	title TEXT NOT NULL,
+	excerpt TEXT NOT NULL,
+	updated_at INTEGER NOT NULL,
+	UNIQUE(tenant_id, person_id, workspace_id, file_path, section_index)
+);
+CREATE INDEX IF NOT EXISTS idx_workspace_knowledge_scope
+	ON workspace_knowledge_sections(tenant_id, person_id, workspace_id, updated_at);
 CREATE TABLE IF NOT EXISTS execution_leases (
 	id TEXT PRIMARY KEY,
 	run_id TEXT NOT NULL UNIQUE,
@@ -313,6 +339,60 @@ CREATE TABLE IF NOT EXISTS task_runs (
 );
 CREATE INDEX IF NOT EXISTS idx_task_runs_task_started ON task_runs(tenant_id, task_id, started_at);
 CREATE INDEX IF NOT EXISTS idx_task_runs_person_status ON task_runs(tenant_id, person_id, status, started_at);
+CREATE TABLE IF NOT EXISTS task_references (
+	id TEXT PRIMARY KEY,
+	tenant_id TEXT NOT NULL,
+	person_id TEXT NOT NULL,
+	task_id TEXT NOT NULL,
+	workspace_id TEXT NOT NULL DEFAULT '',
+	class TEXT NOT NULL,
+	raw_value TEXT NOT NULL,
+	normalized_value TEXT NOT NULL,
+	status TEXT NOT NULL DEFAULT 'shadow',
+	user_confirmed INTEGER NOT NULL DEFAULT 0,
+	created_at INTEGER NOT NULL,
+	updated_at INTEGER NOT NULL,
+	UNIQUE(tenant_id, person_id, normalized_value, task_id)
+);
+CREATE INDEX IF NOT EXISTS idx_task_references_owner_value
+	ON task_references(tenant_id, person_id, normalized_value, status);
+CREATE INDEX IF NOT EXISTS idx_task_references_task
+	ON task_references(tenant_id, task_id, status, updated_at);
+CREATE TABLE IF NOT EXISTS task_reference_evidence (
+	id TEXT PRIMARY KEY,
+	reference_id TEXT NOT NULL,
+	run_id TEXT NOT NULL DEFAULT '',
+	provenance TEXT NOT NULL,
+	source_ref TEXT NOT NULL DEFAULT '',
+	evidence_hash TEXT NOT NULL,
+	observed_at INTEGER NOT NULL,
+	UNIQUE(reference_id, run_id, provenance, evidence_hash)
+);
+CREATE INDEX IF NOT EXISTS idx_task_reference_evidence_ref
+	ON task_reference_evidence(reference_id, provenance, observed_at);
+CREATE TABLE IF NOT EXISTS task_resolution_events (
+	id TEXT PRIMARY KEY,
+	tenant_id TEXT NOT NULL,
+	person_id TEXT NOT NULL,
+	run_id TEXT NOT NULL DEFAULT '',
+	input_hash TEXT NOT NULL,
+	matched_surface_forms_json TEXT NOT NULL DEFAULT '[]',
+	unmatched_salient_tokens_json TEXT NOT NULL DEFAULT '[]',
+	candidates_json TEXT NOT NULL DEFAULT '[]',
+	selected_task_id TEXT NOT NULL DEFAULT '',
+	final_task_id TEXT NOT NULL DEFAULT '',
+	reason TEXT NOT NULL DEFAULT '',
+	outcome TEXT NOT NULL DEFAULT 'unverified',
+	attach_policy_json TEXT NOT NULL DEFAULT '{}',
+	analyzer_evaluated INTEGER NOT NULL DEFAULT 0,
+	created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_task_resolution_events_owner
+	ON task_resolution_events(tenant_id, person_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_task_resolution_events_run
+	ON task_resolution_events(tenant_id, run_id, created_at);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_task_resolution_events_run_unique
+	ON task_resolution_events(tenant_id, run_id) WHERE run_id != '';
 CREATE TABLE IF NOT EXISTS task_blockers (
 	id TEXT PRIMARY KEY,
 	tenant_id TEXT NOT NULL,
@@ -711,6 +791,58 @@ CREATE TABLE IF NOT EXISTS tool_ledger (
 );
 CREATE INDEX IF NOT EXISTS idx_tool_ledger_uncertain
 	ON tool_ledger(tenant_id, run_id, status);
+CREATE TABLE IF NOT EXISTS workflow_profiles (
+	run_id TEXT PRIMARY KEY,
+	tenant_id TEXT NOT NULL,
+	person_id TEXT NOT NULL,
+	task_id TEXT NOT NULL,
+	workspace_id TEXT NOT NULL DEFAULT '',
+	workflow_signature TEXT NOT NULL,
+	skill_versions_json TEXT NOT NULL DEFAULT '{}',
+	plan_hash TEXT NOT NULL DEFAULT '',
+	tool_sequence_json TEXT NOT NULL DEFAULT '[]',
+	tool_calls INTEGER NOT NULL DEFAULT 0,
+	tool_failures INTEGER NOT NULL DEFAULT 0,
+	provider_calls INTEGER NOT NULL DEFAULT 0,
+	duration_ms INTEGER NOT NULL DEFAULT 0,
+	input_tokens INTEGER NOT NULL DEFAULT 0,
+	output_tokens INTEGER NOT NULL DEFAULT 0,
+	billed_input_tokens INTEGER NOT NULL DEFAULT 0,
+	outcome_status TEXT NOT NULL DEFAULT '',
+	verification_state TEXT NOT NULL DEFAULT '',
+	read_only INTEGER NOT NULL DEFAULT 0,
+	applied_candidate_id TEXT NOT NULL DEFAULT '',
+	created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_workflow_profiles_signature
+	ON workflow_profiles(tenant_id, person_id, workspace_id, workflow_signature, created_at);
+CREATE TABLE IF NOT EXISTS evolution_candidates (
+	id TEXT PRIMARY KEY,
+	tenant_id TEXT NOT NULL,
+	person_id TEXT NOT NULL,
+	workspace_id TEXT NOT NULL DEFAULT '',
+	last_task_id TEXT NOT NULL DEFAULT '',
+	workflow_signature TEXT NOT NULL,
+	kind TEXT NOT NULL,
+	status TEXT NOT NULL DEFAULT 'candidate',
+	contract_json TEXT NOT NULL DEFAULT '{}',
+	repair_json TEXT NOT NULL DEFAULT '{}',
+	observation_count INTEGER NOT NULL DEFAULT 0,
+	shadow_runs INTEGER NOT NULL DEFAULT 0,
+	shadow_matches INTEGER NOT NULL DEFAULT 0,
+	fallback_count INTEGER NOT NULL DEFAULT 0,
+	consecutive_failures INTEGER NOT NULL DEFAULT 0,
+	last_failure TEXT NOT NULL DEFAULT '',
+	enabled_at INTEGER,
+	last_applied_at INTEGER,
+	created_at INTEGER NOT NULL,
+	updated_at INTEGER NOT NULL,
+	UNIQUE(tenant_id, person_id, workspace_id, workflow_signature, kind)
+);
+CREATE INDEX IF NOT EXISTS idx_evolution_candidates_active
+	ON evolution_candidates(tenant_id, person_id, workspace_id, status, updated_at);
+CREATE INDEX IF NOT EXISTS idx_task_events_run_created
+	ON task_events(run_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_external_watches_due
 	ON external_watches(status, next_check_at);
 CREATE INDEX IF NOT EXISTS idx_external_watches_owner
@@ -1586,7 +1718,12 @@ func (s *Store) CreateTask(ctx context.Context, req TaskCreate) (*Task, error) {
 		req.Title = "Untitled task"
 	}
 	now := time.Now().Unix()
-	id := "task_" + uuid.NewString()
+	id := strings.TrimSpace(req.ID)
+	if id == "" {
+		id = "task_" + uuid.NewString()
+	} else if !strings.HasPrefix(id, "task_") {
+		return nil, fmt.Errorf("task id must start with task_")
+	}
 	kind := normalizeTaskKind(req.Kind)
 	visibility := normalizeTaskVisibility(req.Visibility)
 	pinned := 0
@@ -1608,8 +1745,10 @@ func (s *Store) CreateTask(ctx context.Context, req TaskCreate) (*Task, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := s.SetCurrentTask(ctx, req.TenantID, req.PersonID, id); err != nil {
-		return nil, err
+	if !req.KeepCurrent {
+		if err := s.SetCurrentTask(ctx, req.TenantID, req.PersonID, id); err != nil {
+			return nil, err
+		}
 	}
 	return s.GetTask(ctx, req.TenantID, id)
 }
@@ -1936,14 +2075,21 @@ func (s *Store) GetRun(ctx context.Context, tenantID, runID string) (*Run, error
 }
 
 func (s *Store) FinishRun(ctx context.Context, tenantID, runID, status string) error {
-	return s.FinishRunWithMaintenancePayload(ctx, tenantID, runID, status, 1, "")
+	return s.finishRun(ctx, tenantID, runID, status, 0, "")
 }
 
 // FinishRunWithMaintenancePayload atomically records both the terminal run
 // state and the immutable replay input consumed by post-run maintenance. The
-// ordinary FinishRun wrapper remains for callers that intentionally have no
-// analyzer evidence (for example an administrative cancellation).
+// ordinary FinishRun wrapper is terminal-only for administrative and fallback
+// callers that have no analyzer evidence.
 func (s *Store) FinishRunWithMaintenancePayload(ctx context.Context, tenantID, runID, status string, analyzerVersion int, payload string) error {
+	if analyzerVersion <= 0 {
+		return fmt.Errorf("maintenance analyzer version must be positive")
+	}
+	return s.finishRun(ctx, tenantID, runID, status, analyzerVersion, payload)
+}
+
+func (s *Store) finishRun(ctx context.Context, tenantID, runID, status string, analyzerVersion int, payload string) error {
 	// FinishRun's contract is to write a TERMINAL run status. Agent outcomes
 	// can legitimately say "running" ("turn done, more work planned"), but a
 	// finished run row left in status 'running' — with active_run_id cleared
@@ -1972,11 +2118,12 @@ func (s *Store) FinishRunWithMaintenancePayload(ctx context.Context, tenantID, r
 		now, now, tenant, runID); err != nil {
 		return err
 	}
-	// The maintenance job is born in the SAME terminal transaction, so "run
-	// reached a terminal state" and "run has exactly one pending maintenance
-	// slot" can never diverge (docs/memory-governance.zh-CN.md §2.5).
-	if err = createMaintenanceJobTx(ctx, tx, tenant, runID, analyzerVersion, payload); err != nil {
-		return err
+	// Eligible gateway finalization creates the maintenance job in this same
+	// transaction. Terminal-only callers intentionally leave no empty job.
+	if analyzerVersion > 0 {
+		if err = createMaintenanceJobTx(ctx, tx, tenant, runID, analyzerVersion, payload); err != nil {
+			return err
+		}
 	}
 	return tx.Commit()
 }

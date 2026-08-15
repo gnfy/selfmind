@@ -549,7 +549,18 @@ func TestResolveTaskBindsEmptyCurrentTaskToCLIWorkspace(t *testing.T) {
 	}
 }
 
-func TestResolveTaskUsesExplicitWorkKeyBeforeCurrentPreLabel(t *testing.T) {
+func addActiveTaskReference(t *testing.T, store *control.Store, task *control.Task, value string) {
+	t.Helper()
+	if _, err := store.UpsertTaskReference(context.Background(), control.TaskReferenceWrite{
+		TenantID: task.TenantID, PersonID: task.PersonID, TaskID: task.ID, WorkspaceID: task.WorkspaceID,
+		Class: control.TaskReferenceLiteral, Value: value, Status: control.TaskReferenceActive,
+		UserConfirmed: true, Provenance: "user_control", SourceRef: "test",
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestResolveTaskUsesActiveReferenceBeforeCurrentPreLabel(t *testing.T) {
 	store, err := control.OpenStore(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -576,6 +587,7 @@ func TestResolveTaskUsesExplicitWorkKeyBeforeCurrentPreLabel(t *testing.T) {
 	if err := store.SetCurrentTask(ctx, identity.TenantID, identity.PersonID, current.ID); err != nil {
 		t.Fatal(err)
 	}
+	addActiveTaskReference(t, store, target, "RUQX-369")
 
 	daemon := &Server{Control: store, DefaultTenantID: "default"}
 	resolved, attach, err := daemon.coordinator().resolveTask(ctx, identity, api.MessageRequest{
@@ -596,7 +608,168 @@ func TestResolveTaskUsesExplicitWorkKeyBeforeCurrentPreLabel(t *testing.T) {
 	}
 }
 
-func TestResolveContinuationDerivesWorkKeyFromSelectedTask(t *testing.T) {
+func TestResolveTaskUsesActiveReferenceBeforeImplicitContinuation(t *testing.T) {
+	store, err := control.OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	ctx := context.Background()
+	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local-work-key-continue", "Local User")
+	if err != nil {
+		t.Fatal(err)
+	}
+	current, err := store.CreateTask(ctx, control.TaskCreate{
+		TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "RUQX-100 old release", Channel: "cli",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	target, err := store.CreateTask(ctx, control.TaskCreate{
+		TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "RUQX-511 GCP release", Channel: "cli",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetCurrentTask(ctx, identity.TenantID, identity.PersonID, current.ID); err != nil {
+		t.Fatal(err)
+	}
+	addActiveTaskReference(t, store, target, "RUQX-511")
+
+	daemon := &Server{Control: store, DefaultTenantID: "default"}
+	resolved, attach, err := daemon.coordinator().resolveTask(ctx, identity, api.MessageRequest{
+		Platform: "cli", PlatformUserID: "local-work-key-continue", Channel: "cli",
+		Content: "continue checking RUQX-511",
+	}, router.IntentResult{Intent: router.IntentContinue})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved == nil || resolved.ID != target.ID {
+		t.Fatalf("explicit work key resolved to %+v, want %s", resolved, target.ID)
+	}
+	if attach.preLabel || attach.claimsPriorRuns() || attach.workKey != "RUQX-511" {
+		t.Fatalf("reference continuation must remain non-authoritative: %+v", attach)
+	}
+}
+
+func TestReferenceContinuationCannotChangeExecutionWorkspace(t *testing.T) {
+	store, err := control.OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	ctx := context.Background()
+	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "reference-scope", "Local User")
+	if err != nil {
+		t.Fatal(err)
+	}
+	requestRoot, taskRoot := t.TempDir(), t.TempDir()
+	requestWS, err := store.RegisterWorkspace(ctx, control.Workspace{
+		TenantID: identity.TenantID, OwnerPersonID: identity.PersonID, Name: "request", LocalPath: requestRoot,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	taskWS, err := store.RegisterWorkspace(ctx, control.Workspace{
+		TenantID: identity.TenantID, OwnerPersonID: identity.PersonID, Name: "task", LocalPath: taskRoot,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	target, err := store.CreateTask(ctx, control.TaskCreate{
+		TenantID: identity.TenantID, PersonID: identity.PersonID, WorkspaceID: taskWS.ID,
+		Title: "Customer portal", Channel: "cli",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	addActiveTaskReference(t, store, target, "customer portal")
+	daemon := &Server{Control: store, DefaultTenantID: "default"}
+	req := api.MessageRequest{Platform: "cli", PlatformUserID: "reference-scope", Channel: "cli",
+		WorkspaceID: requestWS.ID, Content: "continue customer portal"}
+	resolved, attach, err := daemon.coordinator().resolveTask(ctx, identity, req,
+		router.IntentResult{Intent: router.IntentContinue})
+	if err != nil || resolved == nil || resolved.ID != target.ID {
+		t.Fatalf("resolved=%+v attach=%+v err=%v", resolved, attach, err)
+	}
+	if attach.claimsPriorRuns() {
+		t.Fatalf("semantic reference claimed prior runs: %+v", attach)
+	}
+	executionWS, err := daemon.coordinator().workspaceForTask(ctx, identity, resolved, req, attach)
+	if err != nil || executionWS == nil || executionWS.ID != requestWS.ID {
+		t.Fatalf("reference changed execution workspace: got=%+v want=%s err=%v", executionWS, requestWS.ID, err)
+	}
+}
+
+func TestArchivedReferenceFallsBackToOpenContinuation(t *testing.T) {
+	store, err := control.OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	ctx := context.Background()
+	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "archived-reference", "Local User")
+	if err != nil {
+		t.Fatal(err)
+	}
+	openTask, err := store.CreateTask(ctx, control.TaskCreate{
+		TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "Current work", Channel: "cli",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	archived, err := store.CreateTask(ctx, control.TaskCreate{
+		TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "Old portal", Channel: "cli",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.UpdateTaskStatus(ctx, identity.TenantID, archived.ID, "archived", "", nil); err != nil {
+		t.Fatal(err)
+	}
+	addActiveTaskReference(t, store, archived, "old portal")
+	if err := store.SetCurrentTask(ctx, identity.TenantID, identity.PersonID, openTask.ID); err != nil {
+		t.Fatal(err)
+	}
+	daemon := &Server{Control: store, DefaultTenantID: "default"}
+	resolved, attach, err := daemon.coordinator().resolveTask(ctx, identity, api.MessageRequest{
+		Platform: "cli", PlatformUserID: "archived-reference", Channel: "cli", Content: "continue old portal",
+	}, router.IntentResult{Intent: router.IntentContinue})
+	if err != nil || resolved == nil || resolved.ID != openTask.ID {
+		t.Fatalf("archived reference blocked ordinary continuation: task=%+v attach=%+v err=%v", resolved, attach, err)
+	}
+	if len(attach.candidateTaskIDs) != 1 || attach.candidateTaskIDs[0] != archived.ID {
+		t.Fatalf("unavailable candidate audit lost: %+v", attach)
+	}
+}
+
+func TestReferenceAmbiguityListsRoutableTasks(t *testing.T) {
+	store, err := control.OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	ctx := context.Background()
+	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "reference-ambiguity", "Local User")
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, _ := store.CreateTask(ctx, control.TaskCreate{TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "Alpha rollout", Channel: "cli"})
+	second, _ := store.CreateTask(ctx, control.TaskCreate{TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "Beta rollout", Channel: "cli"})
+	addActiveTaskReference(t, store, first, "alpha rollout")
+	addActiveTaskReference(t, store, second, "beta rollout")
+	daemon := &Server{Control: store, DefaultTenantID: "default"}
+	_, _, err = daemon.coordinator().resolveTask(ctx, identity, api.MessageRequest{
+		Platform: "cli", PlatformUserID: "reference-ambiguity", Channel: "cli",
+		Content: "continue alpha rollout and beta rollout",
+	}, router.IntentResult{Intent: router.IntentContinue})
+	if err == nil || !strings.Contains(err.Error(), shortTaskID(first.ID)) || !strings.Contains(err.Error(), shortTaskID(second.ID)) {
+		t.Fatalf("ambiguity did not identify both candidates: %v", err)
+	}
+}
+
+func TestResolveContinuationDoesNotDeriveReferenceFromTaskTitle(t *testing.T) {
 	store, err := control.OpenStore(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -623,7 +796,7 @@ func TestResolveContinuationDerivesWorkKeyFromSelectedTask(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resolved == nil || resolved.ID != task.ID || !attach.claimsPriorRuns() || attach.workKey != "RUQX-371" {
+	if resolved == nil || resolved.ID != task.ID || !attach.claimsPriorRuns() || attach.workKey != "" {
 		t.Fatalf("resolved=%+v attach=%+v", resolved, attach)
 	}
 }
@@ -691,7 +864,7 @@ func TestResumePinDetailedMessageDoesNotClaimPriorWork(t *testing.T) {
 	}
 }
 
-func TestResolveTaskCreatesLabelForNewExplicitWorkKey(t *testing.T) {
+func TestResolveTaskTreatsUnregisteredWorkKeyAsMetadata(t *testing.T) {
 	store, err := control.OpenStore(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -721,11 +894,11 @@ func TestResolveTaskCreatesLabelForNewExplicitWorkKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resolved == nil || resolved.ID == old.ID || !taskContainsWorkKey(*resolved, "RUQX-370") {
-		t.Fatalf("new work key did not get a distinct label: old=%s resolved=%+v", old.ID, resolved)
+	if resolved == nil || resolved.ID != old.ID {
+		t.Fatalf("an unregistered token must not select or create a task at ingress: old=%s resolved=%+v", old.ID, resolved)
 	}
-	if !attach.preLabel || !attach.created || attach.claimsPriorRuns() {
-		t.Fatalf("new work-key label flags = %+v", attach)
+	if !attach.preLabel || attach.created || attach.claimsPriorRuns() || attach.workKey != "RUQX-370" {
+		t.Fatalf("unregistered work-key metadata = %+v", attach)
 	}
 }
 

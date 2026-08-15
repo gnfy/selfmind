@@ -231,7 +231,7 @@ func operationClassesFor(toolName string, args map[string]interface{}, dangerous
 		classes = append(classes, OpClassWrite)
 	}
 	if isExecTool(toolName) {
-		if deterministicObservationExec(toolName, args) {
+		if observationOnlyExec(toolName, args) {
 			classes = append(classes, OpClassObserve)
 		} else if _, delegated := delegatedExecTools[toolName]; delegated {
 			classes = append(classes, OpClassExecDelegated)

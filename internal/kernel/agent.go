@@ -495,6 +495,19 @@ func (a *Agent) Analyze(imageBase64, mimeType, question string) (string, error) 
 func emitToolEndEventWithDuration(ch chan string, name, toolCallID string, result ToolResultEnvelope, duration float64, err error) {
 	if err != nil {
 		category, hint := classifyToolFailure(err.Error())
+		payload := map[string]interface{}{
+			"result_bytes":         result.Bytes,
+			"result_truncated":     result.Truncated,
+			"error_category":       category,
+			"diagnostic_hint":      hint,
+			"diagnostic_excerpt":   result.DiagnosticExcerpt,
+			"diagnostic_hash":      result.DiagnosticHash,
+			"diagnostic_bytes":     result.DiagnosticBytes,
+			"diagnostic_truncated": result.DiagnosticTruncated,
+		}
+		if exitCode, ok := toolFailureExitCode(err.Error()); ok {
+			payload["exit_code"] = exitCode
+		}
 		EmitAgentEvent(ch, AgentEvent{
 			Type:            "tool.completed",
 			ToolName:        name,
@@ -502,12 +515,7 @@ func emitToolEndEventWithDuration(ch chan string, name, toolCallID string, resul
 			DurationSeconds: duration,
 			ToolResult:      result.Preview,
 			Error:           result.ModelContent,
-			Payload: map[string]interface{}{
-				"result_bytes":     result.Bytes,
-				"result_truncated": result.Truncated,
-				"error_category":   category,
-				"diagnostic_hint":  hint,
-			},
+			Payload:         payload,
 		})
 	} else {
 		EmitAgentEvent(ch, AgentEvent{
@@ -522,6 +530,17 @@ func emitToolEndEventWithDuration(ch chan string, name, toolCallID string, resul
 			},
 		})
 	}
+}
+
+var toolFailureExitStatus = regexp.MustCompile(`(?i)\bexit status\s+([0-9]+)\b`)
+
+func toolFailureExitCode(message string) (int, bool) {
+	match := toolFailureExitStatus.FindStringSubmatch(message)
+	if len(match) != 2 {
+		return 0, false
+	}
+	value, err := strconv.Atoi(match[1])
+	return value, err == nil
 }
 
 // toolErrorClassMarker is the structured class the tools layer already appended
@@ -541,6 +560,8 @@ func classifyToolFailure(message string) (string, string) {
 	switch {
 	case lower == "":
 		return "unknown", "Inspect the tool input and retry with corrected arguments if useful."
+	case strings.Contains(lower, "tool guardrail blocked"):
+		return "policy_redirect", "Follow the guardrail's requested execution path instead of retrying the same operation."
 	case strings.Contains(lower, "escapes workspace"):
 		return "workspace_scope", "Inspect the active workspace root and use a path inside the allowed workspace."
 	case strings.Contains(lower, "timeout") || strings.Contains(lower, "deadline exceeded"):
@@ -810,9 +831,21 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 	})
 	emitProviderCallContext := func(iteration int, transport string, callMessages []llm.Message, callStrategy TaskStrategy) {
 		prepared := a.prepareMessagesForModel(ctx, callMessages)
-		payload := ProviderCallContextBreakdown(promptSections, prepared, a.llmToolDefinitions(callStrategy))
+		toolDefinitions := a.llmToolDefinitions(callStrategy)
+		payload := ProviderCallContextBreakdown(promptSections, prepared, toolDefinitions)
 		payload["iteration"] = iteration
 		payload["transport"] = transport
+		request := llm.ChatRequest{
+			Messages:       prepared,
+			Tools:          toolDefinitions,
+			PromptCacheKey: llm.StablePromptCacheKey(ctx),
+		}
+		if fingerprint, ok := llm.FingerprintProviderRequest(ctx, a.activeLLM(), request, transport == "stream"); ok {
+			payload["provider_protocol"] = fingerprint.Protocol
+			payload["provider_prefix_hash"] = fingerprint.PrefixHash
+			payload["provider_request_hash"] = fingerprint.RequestHash
+			payload["provider_prefix_blocks"] = fingerprint.Blocks
+		}
 		EmitAgentEvent(eventCh, AgentEvent{Type: "provider.call.context_breakdown", Payload: payload})
 	}
 
@@ -1230,7 +1263,10 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 			}
 			actionToolsUsed += countActionToolCalls(calls)
 			incrementToolUseCounts(toolUseCounts, calls)
-			results := a.executeToolCalls(ctx, tenantID, eventCh, calls)
+			remainingNestedBudget := actionToolBudget - actionToolsUsed
+			toolCtx, nestedToolsUsed := WithNestedActionToolBudget(ctx, remainingNestedBudget)
+			results := a.executeToolCalls(toolCtx, tenantID, eventCh, calls)
+			actionToolsUsed += nestedToolsUsed()
 			for idx, res := range results {
 				if !res.success || idx >= len(calls) {
 					continue

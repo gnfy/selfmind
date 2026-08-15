@@ -320,10 +320,14 @@ tasks:
 # 后台学习/复盘相关配置，用于沉淀 memory 和 skill。
 evolution:
   enabled: true
-  mode: "auto"
+  mode: "auto-readonly"  # observe | shadow | auto-readonly
   min_complexity_threshold: 3
   auto_archive_confidence: 0.8
   nudge_interval: 10
+  shadow_after_observations: 3
+  promote_after_observations: 5
+  min_shadow_runs: 3
+  max_shadow_failure_rate: 0.05
 
 # MCP server 列表，默认关闭。
 mcp:
@@ -518,7 +522,7 @@ selfmind -f ./config/config.yaml
 | `/help` | 查看可用命令。 |
 | `/status` | 查看 provider、model、运行时间、token、当前任务，以及待处理的审批/提问。 |
 | `/tasks` / `/tasks done\|archived\|all\|search <关键词>` | 以紧凑卡片列出工作，或按标题、历史输入、摘要和工件路径搜索完整历史；默认列表数量可配置。 |
-| `/task <n\|id>` / `/task <n\|id> runs\|rename <名称>\|pin\|unpin\|archive\|merge <目标>` | 查看单个任务详情和 run 记录，重命名、置顶、取消置顶、归档或合并它。 |
+| `/task <n\|id>` / `/task <n\|id> runs\|rename <名称>\|pin\|unpin\|archive\|merge <目标>\|references\|reference add\|remove <名称>` | 查看或管理单个任务，包括可用于定位它的受治理名称和标识。 |
 | `/queue` / `/queue drop <n>` / `/queue clear` | 列出队列 / 按序号删除某一条 / 清空全部。 |
 | `/stop` | 取消正在执行的 run；若当前没有 run 在跑，则取消当前(卡住的)任务。 |
 | `/cancel` | 即使没有活跃 run,也取消当前任务。 |

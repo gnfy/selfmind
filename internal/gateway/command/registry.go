@@ -62,7 +62,7 @@ var entries = []Entry{
 	{Name: "/id", Usage: "/id", Summary: "Show your resolved account identity.", SyncControl: true, Scope: Gateway},
 	{Name: "/status", Aliases: []string{"/task status"}, Usage: "/status", Summary: "Show the current task status.", SyncControl: true, Scope: Gateway},
 	{Name: "/tasks", Usage: "/tasks [done|archived|all]", Summary: "List open work (done/archived collapse to counts).", SyncControl: true, Scope: Gateway},
-	{Name: "/task", Usage: "/task <n|id> [runs|rename <name>|pin|unpin|archive|merge <dst>]", Summary: "Show a task's detail, list its runs, rename, pin, archive, or merge it into another task.", SyncControl: true, Scope: Gateway},
+	{Name: "/task", Usage: "/task <n|id> [runs|rename <name>|pin|unpin|archive|merge <dst>|references|reference add|remove <name>]", Summary: "Show or manage a task, including its learned references.", SyncControl: true, Scope: Gateway},
 	{Name: "/queue", Usage: "/queue [drop <n>|clear]", Summary: "List queued tasks (or drop all pending queued tasks).", SyncControl: true, Scope: Gateway},
 	{Name: "/watchers", Usage: "/watchers [active|attention|recent|all [page]|<n|id>|cancel <n|id>]", Summary: "List, inspect, or cancel durable external watchers.", SyncControl: true, Scope: Gateway},
 	{Name: "/diag", Usage: "/diag [memory|context|tasks|models|delivery|execution|tools]", Summary: "Show runtime and subsystem diagnostics, including tool-schema health.", SyncControl: true, Scope: Gateway},

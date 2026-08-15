@@ -119,6 +119,31 @@ explicitly asks for a mutation through a writable copy.
 All durable mutations must write tenant learning records through the shared
 audit helpers. Do not add channel-specific or tool-specific history files.
 
+## Workflow Profiling and Safe Evolution
+
+Skill use is attributed by a durable `skill.activated` event containing the
+skill name, source, scope, and content hash. Completed runs are projected into
+deterministic workflow profiles with tool families, skill versions, plan hash,
+provider/tool counts, cost, duration, outcome, and verification state. These
+profiles are derived data; task/run events remain the source of truth and the
+profiles can be rebuilt after an algorithm change.
+
+Repeated local read-only workflows may create a `batch_read` candidate. The
+candidate lifecycle is `candidate -> shadow -> eligible -> enabled`; promotion
+requires repeated observations and bounded shadow evidence. `batch_read`
+accepts at most eight `read_file`, `search_files`, or `ls_r` operations. It
+cannot invoke shell commands, writes, credentials, network actions, arbitrary
+Python, or another batch. Each inner item still traverses the normal dispatcher
+and execution scope, consumes the ordinary per-turn tool budget, emits durable
+evidence, and requests ordinary-tool
+fallback on failure.
+
+An enabled candidate is recommended only to the same task continuation. Any
+failed batch item degrades the candidate immediately and stores a deterministic
+repair proposal; it is no longer recommended until reviewed or re-observed.
+Manual and pinned skills are never rewritten by this mechanism. The model still
+owns the plan and every write/action decision.
+
 ## Catalog Provenance
 
 Catalog installs must preserve durable install provenance:

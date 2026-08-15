@@ -83,14 +83,11 @@ unfinished run under that label.
 - Selecting a label by explicit task id or one-shot `/resume` pin does not by
   itself claim unfinished runs. Only a message classified as an explicit
   continuation creates a durable ownership edge.
-- An explicit continuation with a key owns its predecessor only when exactly
-  one unresolved run carries that key. Reusing the same external issue key for
-  independent work lines is treated as ambiguous, not as permission to close
-  both. A keyless continuation may own a predecessor only when there is exactly
-  one unresolved candidate.
-- Legacy runs created before `work_key` may be claimed only when one such run is
-  the sole unresolved predecessor. Ambiguity remains visible as interrupted
-  work instead of being guessed away.
+- A deliberate continuation owns a predecessor only when the selected label has
+  exactly one unresolved run. External issue keys and model-written summaries
+  are display evidence only; they never decide run ownership. When multiple
+  unresolved runs share a label, ambiguity remains visible instead of being
+  guessed away.
 - `resumed_by_run_id` is the durable ownership edge. Final reduction may close
   only the work represented by that edge; unrelated unfinished work keeps the
   label open.
@@ -127,7 +124,8 @@ authoritative instruction. If it changes direction, the latest message wins."*
 
 - **v1 — SHIPPED (P2, 2026-07-06; canonical source 2026-07-26):**
   `semantic_recall`-role query expansion + bounded retrieval over indexed
-  sessions, task label cards, and governed canonical memory, wired into the
+  sessions, task label cards, governed task references, workspace knowledge,
+  and canonical memory, wired into the
   selector as an automatic slice instead of a model-invoked tool only.
   Implementation: `internal/gateway/httpapi/recall.go` (`RecallEngine` on
   `Server.Recall`, called from `selectedTaskRuntimeContext`) → new bounded
@@ -139,7 +137,14 @@ authoritative instruction. If it changes direction, the latest message wins."*
   cards (title + current_summary + latest handoff summary/changed files via
   the live read-only `control.ListTaskCards` JOIN — queried, not mirrored
   into FTS, so cards can never go stale; artifacts/changed files surface
-  through the card's work line), plus canonical memory (person-partitioned,
+  through the card's work line). Governed task references bridge learned
+  names/identifiers to the same task card: active references may route an
+  exact mention, while candidates are recall-only and conflicts abstain.
+  Workspace knowledge is a deterministic, versioned projection of authorized
+  convention files (`AGENTS.md`, `.selfmind.md`, and peers): bounded sections
+  are replaced when file hashes change and removed when files disappear; they
+  remain procedural workspace knowledge rather than person memory. The final
+  source is canonical memory (person-partitioned,
   global/current-workspace scoped, validity-filtered CJK/lexical similarity;
   pinned rows stay in the unconditional memory block). Budget: ≤3 slices,
   ~400-char excerpts, one
@@ -177,7 +182,11 @@ authoritative instruction. If it changes direction, the latest message wins."*
   `app.NewConfiguredPostRunAnalyzer` from the explicit
   `tasks.maintenance_model_role`; no configured role disables maintenance
   instead of falling back to the main model). Its task decision is KEEP /
-  MOVE:<task_id> / TITLE:<short title> / INBOX; MOVE only targets an offered
+  MOVE:<task_id> / TITLE:<short title> / NEW:<short title> / INBOX. `NEW` may
+  split independent durable work out of an established weak pre-label; it is
+  rejected for explicit task/reference/resume attachments. Its destination id
+  is derived from the completed run id, so replay after a crash reuses the
+  same label instead of creating another one. MOVE only targets an offered
   open label, every failure preserves the completed run, and semantic
   maintenance runs asynchronously in the daemon under a bounded timeout.
 - Titles are stable: generated once (TITLE, new placeholders only; fallback
@@ -195,12 +204,36 @@ authoritative instruction. If it changes direction, the latest message wins."*
 - Label decisions are recorded (`label.assigned` task event: decision,
   from/to, run id, bounded reason) so eval can score labeling accuracy.
   Mislabels are display bugs, not context corruption.
-- A unique issue key (for example `RUQX-224`) is deterministic post-run
-  display evidence. For an ordinary pre-label turn, exactly one offered open
-  label with the same key wins over a conservative model `KEEP`. Duplicate
-  matching labels are intentionally left unchanged. Explicit task attachment
-  remains authoritative, and this rule never changes execution workspace,
-  permissions, or the context used by the completed run.
+- Task identity is governed through **Task References**, not a product-specific
+  ticket regex. The existing post-run maintenance call may propose literal,
+  entity, or descriptive references; deterministic validation activates an
+  automatic reference only after two distinct user-text-supported runs. A
+  user-added reference is active immediately. The same normalized reference
+  bound to multiple tasks becomes conflicted and ingress abstains. Task titles,
+  summaries, recall output, and model prose are never activation evidence.
+  Task merge moves and deduplicates these references and their evidence in the
+  same transaction as the task history; identity evidence cannot be stranded
+  on the archived source label.
+- Mention and continuation have different context depth, but neither grants
+  execution authority. A unique active reference in an ordinary mention
+  attaches only bounded task context; an explicit continuation with the same
+  reference may load full task context and update the current-task pointer.
+  Both continue to execute in the request/current workspace and neither claims
+  unfinished prior runs. Only explicit `/resume`, an explicit task id, or a
+  plain continuation resolved from the already-current task may inherit the
+  task-bound workspace. Every resolution is recorded as pending, corrected, or
+  accepted-but-unverified for diagnostics; a wrong semantic match remains a
+  display/context-selection defect, never permission or workspace authority.
+- Ticket-shaped keys (for example `RUQX-224`) may still appear as bounded
+  display metadata. They never search existing task titles or summaries,
+  select a task, claim a prior run, or become context/workspace/permission
+  authority. Reusable task identity is learned through governed Task
+  References instead.
+- Historical `task_runs.work_key` values are not auto-promoted at startup.
+  `selfmind maintenance migrate-task-references` audits them explicitly and
+  imports only values whose exact surface form occurs in the original user
+  input. Two distinct run-level user-text observations are still required for
+  automatic activation; inferred legacy metadata remains inert.
 - Task cards have source protection (2026-08-08): an ordinary weak pre-label
   attachment to an existing label may add its run, events, handoff, and
   maintenance proposal, but it cannot overwrite that label's stable lifecycle,
@@ -215,8 +248,9 @@ authoritative instruction. If it changes direction, the latest message wins."*
 message → control-command filter (unchanged)
   → run active? → steer / queue (unchanged, G1+G2)
   → else: execute directly with spine context
-      resolveTask = pre-label only (explicit /resume|task_id → that label;
-      else current open label or new placeholder)
+      resolveTask = explicit /resume|task_id;
+      else unique active Task Reference (mention or continuation policy);
+      else current open label or new placeholder
 ```
 
 - The implicit-continuation LLM upgrade (`intent.continue_window`) is REMOVED
@@ -248,7 +282,8 @@ message → control-command filter (unchanged)
 
 Default shows open/running/waiting/paused labels with `run: N 次`, latest
 activity, next-step hint; done collapses (`/tasks done|archived|all` expands);
-`/task <id>` detail, `/task <id> runs|rename|pin|unpin|archive` (archive is a terminal
+`/task <id>` detail, `/task <id> runs|rename|pin|unpin|archive|references` and
+`/task <id> reference add|remove <name>` (archive is a terminal
 status: hidden from open lists, recall label cards, and the pre-label guess;
 only an explicit `/resume <id>` reopens it). Short ids (`task_xxxxxxxx`) are
 shown and accepted back. Implementation: `httpapi/task_view.go`, shared by CLI

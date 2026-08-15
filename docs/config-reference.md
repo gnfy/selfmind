@@ -472,9 +472,14 @@ editor:
   large_paste_chars: 1000       # TUI large-paste detection
   large_paste_lines: 10
 evolution:
-  enabled: true                 # skill/self-improvement review
+  enabled: true                 # skill review plus deterministic workflow profiling
+  mode: "auto-readonly"         # observe | shadow | auto-readonly
   min_complexity_threshold: 5
   nudge_interval: 10
+  shadow_after_observations: 3
+  promote_after_observations: 5
+  min_shadow_runs: 3
+  max_shadow_failure_rate: 0.05
 ```
 
 Tool budgets apply uniformly across languages and task types. Extensions still
@@ -487,6 +492,14 @@ timeout. If the auxiliary/explicit `fast_classifier` does not return within
 this budget, smart mode fails safe to a human approval prompt. The default is
 30 seconds; lower values can turn a healthy reasoning-capable cheap model into
 an apparent outage.
+
+Evolution profiles are deterministic projections of completed run events; they
+do not add a foreground model call. `observe` only records profiles,
+`shadow` also evaluates bounded read-only batching candidates without using
+them, and `auto-readonly` enables a candidate only after the configured
+observation and zero/low-failure gates. Automatic evolution never batches
+writes, shell commands, credentials, or network actions. `mode: auto` remains
+accepted as a compatibility alias for `auto-readonly`.
 
 ---
 

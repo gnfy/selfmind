@@ -23,6 +23,7 @@ import (
 type fakeLabeler struct {
 	mu      sync.Mutex
 	reply   string
+	refs    []TaskReferenceProposal
 	err     error
 	calls   int
 	prompts []string
@@ -34,7 +35,7 @@ func (f *fakeLabeler) Analyze(ctx context.Context, req PostRunAnalysisRequest) (
 	f.calls++
 	f.prompts = append(f.prompts, req.Prompt)
 	block := f.block
-	reply, err := f.reply, f.err
+	reply, refs, err := f.reply, append([]TaskReferenceProposal(nil), f.refs...), f.err
 	f.mu.Unlock()
 	if block != nil {
 		select {
@@ -43,7 +44,7 @@ func (f *fakeLabeler) Analyze(ctx context.Context, req PostRunAnalysisRequest) (
 			return PostRunAnalysis{}, ctx.Err()
 		}
 	}
-	return PostRunAnalysis{TaskDecision: reply}, err
+	return PostRunAnalysis{TaskDecision: reply, TaskReferences: refs}, err
 }
 
 func (f *fakeLabeler) callCount() int {
@@ -174,7 +175,7 @@ func TestLabelerMoveRepointsRunAndCleansPlaceholder(t *testing.T) {
 	}
 }
 
-func TestUniqueWorkKeyAttachesBeforeLabeler(t *testing.T) {
+func TestActiveTaskReferenceAttachesBeforeLabeler(t *testing.T) {
 	provider := newSlowLLMProvider("completed release verification for RUQX-224")
 	provider.releaseNow()
 	daemon, store, _ := newDetachedRunServer(t, provider)
@@ -184,6 +185,7 @@ func TestUniqueWorkKeyAttachesBeforeLabeler(t *testing.T) {
 	if err := store.UpdateTaskStatus(ctx, target.TenantID, target.ID, "in_progress", "awaiting deployment", nil); err != nil {
 		t.Fatal(err)
 	}
+	addActiveTaskReference(t, store, target, "RUQX-224")
 	closer := parkEmptyTask(t, daemon, "closed current")
 	if err := store.UpdateTaskStatus(ctx, closer.TenantID, closer.ID, "done", "", nil); err != nil {
 		t.Fatal(err)
@@ -192,7 +194,7 @@ func TestUniqueWorkKeyAttachesBeforeLabeler(t *testing.T) {
 	daemon.PostRunAnalyzer = &fakeLabeler{reply: "KEEP"}
 	resp := runOrdinaryTurn(t, daemon, "RUQX-224 production deployment needs verification")
 	if resp.Task == nil || resp.Task.ID != target.ID {
-		t.Fatalf("ingress work key must attach directly to %s: %+v", target.ID, resp.Task)
+		t.Fatalf("active task reference must attach directly to %s: %+v", target.ID, resp.Task)
 	}
 	runs, err := store.ListTaskRuns(ctx, target.TenantID, target.ID, 10)
 	if err != nil || len(runs) != 1 {
@@ -205,6 +207,35 @@ func TestUniqueWorkKeyAttachesBeforeLabeler(t *testing.T) {
 	}
 	if !hasEventOfType(t, store, target.ID, "label.assigned") {
 		t.Fatal("deterministic ingress work-key decision must remain auditable")
+	}
+}
+
+func TestPostRunReferencesRequireTwoUserSupportedRuns(t *testing.T) {
+	provider := newSlowLLMProvider("completed customer portal work")
+	provider.releaseNow()
+	daemon, store, _ := newDetachedRunServer(t, provider)
+	daemon.PostRunAnalyzer = &fakeLabeler{reply: "KEEP", refs: []TaskReferenceProposal{{
+		Class: control.TaskReferenceDescriptive, Value: "customer portal", Confidence: 0.9,
+	}}}
+	first := runOrdinaryTurn(t, daemon, "inspect customer portal")
+	refs, err := store.ListTaskReferencesForTask(context.Background(), first.Task.TenantID, first.Task.PersonID, first.Task.ID, 10)
+	if err != nil || len(refs) != 1 || refs[0].Status != control.TaskReferenceCandidate {
+		t.Fatalf("first references=%+v err=%v", refs, err)
+	}
+	second, status := daemon.ProcessMessage(context.Background(), api.MessageRequest{
+		Platform: "cli", PlatformUserID: "local", Channel: "cli", TaskID: first.Task.ID,
+		Content: "inspect customer portal again",
+	})
+	if status != 200 || second.Task == nil {
+		t.Fatalf("second turn failed: status=%d response=%+v", status, second)
+	}
+	drainPostRunMaintenance(daemon)
+	if second.Task.ID != first.Task.ID {
+		t.Fatalf("second run task=%s want %s", second.Task.ID, first.Task.ID)
+	}
+	refs, err = store.ListTaskReferencesForTask(context.Background(), first.Task.TenantID, first.Task.PersonID, first.Task.ID, 10)
+	if err != nil || len(refs) != 1 || refs[0].Status != control.TaskReferenceActive || refs[0].SupportCount != 2 {
+		t.Fatalf("second references=%+v err=%v", refs, err)
 	}
 }
 
@@ -243,6 +274,148 @@ func TestLabelerTitleSetsPlaceholderTitleOnce(t *testing.T) {
 	after, _ := store.GetTask(ctx, created.TenantID, created.ID)
 	if after == nil || after.Title != "Build the KOF fighting game" {
 		t.Fatalf("labeler retitled an established label: %+v", after)
+	}
+}
+
+func TestLabelerNewSplitsDurableRunFromWeakCurrentTask(t *testing.T) {
+	provider := newSlowLLMProvider("completed and verified an independent implementation")
+	provider.releaseNow()
+	daemon, store, _ := newDetachedRunServer(t, provider)
+	ctx := context.Background()
+
+	current := parkEmptyTask(t, daemon, "Existing release work")
+	fake := &fakeLabeler{
+		reply: "NEW:Customer portal access review",
+		refs: []TaskReferenceProposal{{
+			Class: control.TaskReferenceDescriptive, Value: "customer portal access", Confidence: 0.9,
+		}},
+	}
+	daemon.PostRunAnalyzer = fake
+	input := strings.Repeat("Inspect and document the independent customer portal access policy with durable evidence. ", 3)
+	resp := runOrdinaryTurn(t, daemon, input)
+	if resp.Task == nil || resp.Task.ID != current.ID {
+		t.Fatalf("the foreground run must use the harmless current pre-label: %+v", resp.Task)
+	}
+
+	tasks, err := store.ListTasks(ctx, current.TenantID, current.PersonID, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var created *control.Task
+	for i := range tasks {
+		if tasks[i].Title == "Customer portal access review" {
+			created = &tasks[i]
+			break
+		}
+	}
+	if created == nil || created.ID == current.ID {
+		t.Fatalf("NEW did not create a separate governed task: %+v", tasks)
+	}
+	runs, err := store.ListTaskRuns(ctx, current.TenantID, created.ID, 10)
+	if err != nil || len(runs) != 1 {
+		t.Fatalf("completed run was not assigned to the new task: runs=%+v err=%v", runs, err)
+	}
+	refs, err := store.ListTaskReferencesForTask(ctx, current.TenantID, current.PersonID, created.ID, 10)
+	if err != nil || len(refs) != 1 || refs[0].NormalizedValue != control.NormalizeTaskReference("customer portal access") {
+		t.Fatalf("task reference evidence must follow the run's final task: refs=%+v err=%v", refs, err)
+	}
+	if selected, _ := store.CurrentTask(ctx, current.TenantID, current.PersonID); selected == nil || selected.ID != current.ID {
+		t.Fatalf("post-run display governance must not steal the current pointer: %+v", selected)
+	}
+	if !hasEventOfType(t, store, created.ID, "label.assigned") {
+		t.Fatal("NEW decision must remain auditable on the final task")
+	}
+}
+
+func TestLabelerNewReusesStableTargetAfterCreateCrashWindow(t *testing.T) {
+	provider := newSlowLLMProvider("completed an independent durable implementation")
+	provider.releaseNow()
+	daemon, store, _ := newDetachedRunServer(t, provider)
+	ctx := context.Background()
+
+	from := parkEmptyTask(t, daemon, "Established weak label")
+	run, err := store.StartRunWithOptions(ctx, from, "cli", "independent work", control.StartRunOptions{PreserveTaskLifecycle: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.FinishRun(ctx, from.TenantID, run.ID, "done"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Simulate a crash after the deterministic target was created but before
+	// the completed run was reassigned. Recovery must reuse this row.
+	targetID := postRunSplitTaskID(run.ID)
+	target, err := store.CreateTask(ctx, control.TaskCreate{
+		ID: targetID, TenantID: from.TenantID, PersonID: from.PersonID,
+		WorkspaceID: run.WorkspaceID, Title: "Customer portal access review",
+		Channel: run.Channel, KeepCurrent: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity := &control.IdentityContext{TenantID: from.TenantID, PersonID: from.PersonID}
+	attach := newTaskAttach(taskAttachCurrentPreLabel, "", false, true)
+	outcome := api.RunOutcome{Status: "done", Summary: "completed and verified"}
+
+	daemon.applyNewLabel(ctx, identity, from, run, attach, outcome, target.Title, "NEW:"+target.Title)
+	daemon.applyNewLabel(ctx, identity, from, run, attach, outcome, target.Title, "NEW:"+target.Title)
+
+	moved, err := store.GetRun(ctx, from.TenantID, run.ID)
+	if err != nil || moved == nil || moved.TaskID != targetID {
+		t.Fatalf("run did not resume into stable target: run=%+v err=%v", moved, err)
+	}
+	tasks, err := store.ListTasks(ctx, from.TenantID, from.PersonID, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	count := 0
+	for _, task := range tasks {
+		if task.ID == targetID {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("stable NEW target must be materialized once, got %d in %+v", count, tasks)
+	}
+	events, err := store.ListTaskEvents(ctx, targetID, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assigned := 0
+	for _, event := range events {
+		if event.Type == "label.assigned" && event.RunID == run.ID {
+			assigned++
+		}
+	}
+	if assigned != 1 {
+		t.Fatalf("NEW replay must produce one assignment event, got %d", assigned)
+	}
+}
+
+func TestLabelerNewRejectedForExplicitAttach(t *testing.T) {
+	provider := newSlowLLMProvider("completed an explicit durable implementation")
+	provider.releaseNow()
+	daemon, store, _ := newDetachedRunServer(t, provider)
+	ctx := context.Background()
+
+	target := parkEmptyTask(t, daemon, "Explicit target")
+	daemon.PostRunAnalyzer = &fakeLabeler{reply: "NEW:Must not be created"}
+	input := strings.Repeat("Continue the explicitly selected durable implementation and preserve its existing task identity. ", 3)
+	resp, status := daemon.ProcessMessage(ctx, api.MessageRequest{
+		Platform: "cli", PlatformUserID: "local", Channel: "cli", TaskID: target.ID, Content: input,
+	})
+	if status != 200 || resp.Task == nil {
+		t.Fatalf("explicit run failed: status=%d response=%+v", status, resp)
+	}
+	drainPostRunMaintenance(daemon)
+	tasks, err := store.ListTasks(ctx, target.TenantID, target.PersonID, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, task := range tasks {
+		if task.Title == "Must not be created" {
+			t.Fatalf("NEW must be ignored for explicit attachment: %+v", tasks)
+		}
 	}
 }
 
@@ -341,6 +514,13 @@ func TestLabelerInboxHidesCasualRunAndClearsPlaceholder(t *testing.T) {
 func TestParseRunLabelReplyInbox(t *testing.T) {
 	decision, arg := parseRunLabelReply("INBOX\nignored")
 	if decision != "INBOX" || arg != "" {
+		t.Fatalf("decision=%q arg=%q", decision, arg)
+	}
+}
+
+func TestParseRunLabelReplyNew(t *testing.T) {
+	decision, arg := parseRunLabelReply("NEW:Generalized task identity\nignored")
+	if decision != "NEW" || arg != "Generalized task identity" {
 		t.Fatalf("decision=%q arg=%q", decision, arg)
 	}
 }
@@ -500,7 +680,7 @@ func TestRejectedLabelDecisionReconcilesWeakTaskLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	run := &control.Run{ID: "run_rejected_label"}
-	daemon.applyPostRunLabel(ctx, identity, task, run, taskAttach{preLabel: true}, []control.Task{*target}, "", api.RunOutcome{Status: "done"}, "MOVE:task_not_offered")
+	daemon.applyPostRunLabel(ctx, identity, task, run, taskAttach{preLabel: true}, []control.Task{*target}, false, "", api.RunOutcome{Status: "done"}, "MOVE:task_not_offered")
 
 	stored, err := store.GetTask(ctx, identity.TenantID, task.ID)
 	if err != nil {

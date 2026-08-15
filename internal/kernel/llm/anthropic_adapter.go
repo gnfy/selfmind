@@ -442,6 +442,39 @@ func (a *AnthropicAdapter) requestFromChat(req ChatRequest, stream bool) Anthrop
 	return a.requestFromChatContext(context.Background(), req, stream)
 }
 
+func (a *AnthropicAdapter) FingerprintRequest(ctx context.Context, req ChatRequest, stream bool) (RequestFingerprint, bool) {
+	wire := a.requestFromChatContext(ctx, req, stream)
+	settings := struct {
+		Model       string
+		MaxTokens   int
+		Thinking    interface{}
+		Metadata    map[string]interface{}
+		ServiceTier string
+		ExtraBody   map[string]interface{}
+		ExtraQuery  map[string]interface{}
+		Headers     map[string]string
+	}{wire.Model, wire.MaxTokens, wire.Thinking, wire.Metadata, wire.ServiceTier, a.ExtraBody, a.ExtraQuery, a.Headers}
+	prefix := struct {
+		Settings interface{}
+		System   interface{}
+		Tools    []AnthropicTool
+	}{settings, wire.SystemPrompt, wire.Tools}
+	body, err := marshalWithExtraBody(wire, a.ExtraBody)
+	if err != nil {
+		return RequestFingerprint{}, false
+	}
+	return RequestFingerprint{
+		Protocol:    "anthropic_messages",
+		PrefixHash:  requestValueHash(prefix),
+		RequestHash: requestValueHash(json.RawMessage(body)),
+		Blocks: map[string]string{
+			"settings": requestValueHash(settings),
+			"system":   requestValueHash(wire.SystemPrompt),
+			"tools":    requestValueHash(wire.Tools),
+		},
+	}, true
+}
+
 func (a *AnthropicAdapter) requestFromChatContext(ctx context.Context, req ChatRequest, stream bool) AnthropicRequest {
 	anthropicReq := AnthropicRequest{
 		Model:     a.Model,

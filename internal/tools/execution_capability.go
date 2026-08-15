@@ -340,7 +340,7 @@ func credentialSafeObservation(toolName string, args map[string]interface{}) boo
 		copyArgs[key] = value
 	}
 	copyArgs[credentialReadArgKey] = true
-	return deterministicObservationExec(toolName, copyArgs)
+	return observationOnlyExec(toolName, copyArgs)
 }
 
 func credentialCapabilityFingerprint(workspaceID, toolName string, args map[string]interface{}) string {

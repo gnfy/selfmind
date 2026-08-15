@@ -404,6 +404,21 @@ type WorkspaceCapability struct {
 	ExpiresAt  time.Time `json:"expires_at"`
 }
 
+// WorkspaceObservationProfileRequest is accepted only from the authenticated
+// local CLI. It records a hash-bound assertion that an unchanged workspace
+// script is read-only for the declared argv and environment shape.
+type WorkspaceObservationProfileRequest struct {
+	TenantID         string   `json:"tenant_id"`
+	Platform         string   `json:"platform"`
+	PlatformUserID   string   `json:"platform_user_id"`
+	WorkspaceID      string   `json:"workspace_id,omitempty"`
+	ScriptPath       string   `json:"script_path"`
+	ArgvPrefix       []string `json:"argv_prefix,omitempty"`
+	AllowTrailing    bool     `json:"allow_trailing,omitempty"`
+	AllowNetwork     bool     `json:"allow_network,omitempty"`
+	AllowCredentials bool     `json:"allow_credentials,omitempty"`
+}
+
 type BindAccountRequest struct {
 	TenantID       string `json:"tenant_id"`
 	PersonID       string `json:"person_id"`

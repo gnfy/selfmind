@@ -7,12 +7,16 @@ import (
 	"selfmind/internal/control"
 )
 
-func TestMaintenanceWorkerDoesNotSkipFreshJobBeforePayloadAttach(t *testing.T) {
+func TestMaintenanceWorkerSeesCurrentGenerationJob(t *testing.T) {
 	daemon, store, identity := newTaskViewServer(t)
 	task := seedTask(t, store, identity, "fresh terminal task", "done", 1)
 	runs, err := store.ListTaskRuns(context.Background(), identity.TenantID, task.ID, 1)
 	if err != nil || len(runs) != 1 {
 		t.Fatalf("runs=%+v err=%v", runs, err)
+	}
+	if err := store.FinishRunWithMaintenancePayload(context.Background(), identity.TenantID,
+		runs[0].ID, "done", postRunAnalyzerVersion, `{}`); err != nil {
+		t.Fatal(err)
 	}
 	daemon.PostRunAnalyzer = &fakeLabeler{reply: "KEEP"}
 	daemon.runMaintenancePass(context.Background())
@@ -21,6 +25,6 @@ func TestMaintenanceWorkerDoesNotSkipFreshJobBeforePayloadAttach(t *testing.T) {
 		t.Fatalf("job=%+v err=%v", job, err)
 	}
 	if job.Status != control.MaintenanceJobPending {
-		t.Fatalf("fresh payload race must remain pending, got %+v", job)
+		t.Fatalf("current-generation maintenance job must remain pending, got %+v", job)
 	}
 }

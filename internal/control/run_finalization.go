@@ -63,8 +63,8 @@ func (s *Store) MaterializeRunFinalization(ctx context.Context, input RunFinaliz
 	if input.TaskStatus == "" || input.TaskStatus == "running" {
 		input.TaskStatus = "in_progress"
 	}
-	if input.AnalyzerVersion <= 0 {
-		input.AnalyzerVersion = 1
+	if strings.TrimSpace(input.MaintenancePayload) != "" && input.AnalyzerVersion <= 0 {
+		return nil, fmt.Errorf("maintenance analyzer version is required when replay evidence is present")
 	}
 	input.EffectKey = strings.TrimSpace(input.EffectKey)
 	input.Event.TaskID = input.TaskID
@@ -181,7 +181,7 @@ func (s *Store) MaterializeRunFinalization(ctx context.Context, input RunFinaliz
 		}
 	}
 
-	if !duplicateEffect {
+	if !duplicateEffect && input.AnalyzerVersion > 0 {
 		if err := createMaintenanceJobTx(ctx, tx, tenant, input.RunID, input.AnalyzerVersion, input.MaintenancePayload); err != nil {
 			return nil, fmt.Errorf("create maintenance job: %w", err)
 		}

@@ -21,15 +21,14 @@ var sandboxWarnOnce sync.Once
 // ExecuteCodeTool 代码执行沙箱
 type ExecuteCodeTool struct {
 	BaseTool
-	allowedTools []string
-	timeoutSecs  int
+	timeoutSecs int
 }
 
 func NewExecuteCodeTool() *ExecuteCodeTool {
 	return &ExecuteCodeTool{
 		BaseTool: BaseTool{
 			name:        "execute_code",
-			description: "在沙箱中执行 Python 代码，可调用内置工具",
+			description: "Execute one isolated Python script for bounded local computation. This tool does not expose SelfMind tools inside Python; use normal tool calls for files, network, or external actions.",
 			schema: ToolSchema{
 				Type: "object",
 				Properties: map[string]PropertyDef{
@@ -58,8 +57,7 @@ func NewExecuteCodeTool() *ExecuteCodeTool {
 				Required: []string{"code"},
 			},
 		},
-		allowedTools: []string{"web_search", "web_extract", "read_file", "write_file", "search_files", "terminal"},
-		timeoutSecs:  300,
+		timeoutSecs: 300,
 	}
 }
 

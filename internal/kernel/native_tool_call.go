@@ -365,7 +365,7 @@ func (a *Agent) executeSingleToolCall(ctx context.Context, tenantID string, even
 		if ledgerErr != nil {
 			err = fmt.Errorf("%w; durable outcome recording also failed: %v", err, ledgerErr)
 		}
-		packaged := packageToolError(name, err)
+		packaged := packageToolFailureCtx(ctx, name, result, err)
 		if eventCh != nil {
 			emitToolEndEventWithDuration(eventCh, name, call.ID, packaged, duration, err)
 		}

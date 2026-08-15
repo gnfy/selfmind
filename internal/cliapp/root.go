@@ -198,7 +198,7 @@ var documentedCLIUsages = []string{
 	"selfmind task <n|task_id> [runs|rename <name>|pin|unpin|archive|merge <dst>]",
 	"selfmind resume <n|task_id>",
 	"selfmind workspaces",
-	"selfmind ws [list|add|use|trust|untrust|grants|revoke|<n|workspace_id>] ...",
+	"selfmind ws [list|add|use|trust|untrust|grants|observe|revoke|<n|workspace_id>] ...",
 	"selfmind approvals",
 	"selfmind approve [token]",
 	"selfmind reject [token]",
@@ -213,7 +213,7 @@ var documentedCLIUsages = []string{
 	"selfmind docs [check|index]",
 	"selfmind selfcheck [--fast | --profile local-full|local-fast|ci] [--skip-go] [--skip-eval] [--eval-dir DIR]",
 	"selfmind eval [list|run|report|repair|scorecard|capture|clean]",
-	"selfmind maintenance [replay|migrate-memory|migrate-skills|memory-audit|memory-dedup|task-audit] ...",
+	"selfmind maintenance [replay|migrate-memory|migrate-skills|migrate-task-references|memory-audit|memory-dedup|task-audit] ...",
 	"selfmind gateway [run|start|status|stop|restart|service] ...",
 	"selfmind weixin [login|status] ...",
 }

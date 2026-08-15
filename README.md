@@ -349,10 +349,14 @@ tasks:
 # Background learning/review settings for memory and skill evolution.
 evolution:
   enabled: true
-  mode: "auto"
+  mode: "auto-readonly"  # observe | shadow | auto-readonly
   min_complexity_threshold: 3
   auto_archive_confidence: 0.8
   nudge_interval: 10
+  shadow_after_observations: 3
+  promote_after_observations: 5
+  min_shadow_runs: 3
+  max_shadow_failure_rate: 0.05
 
 # MCP servers. Empty by default.
 mcp:
@@ -525,7 +529,7 @@ gateway, IM, and TUI command.
 | `/help` | Show available commands. |
 | `/status` | Show provider, model, runtime, token usage, current task, and any pending approval/question. |
 | `/tasks` / `/tasks done\|archived\|all` | List open work as compact cards (status, last input, primary file, pending approvals/questions, run count, short id); finished work collapses to a count. |
-| `/task <n\|id>` / `/task <n\|id> runs\|rename <name>\|pin\|unpin\|archive\|merge <dst>` | Inspect one task (detail, recent runs), rename, pin, archive, or merge it — `<n>` is the card number from `/tasks`, `<id>` a full or short id. |
+| `/task <n\|id>` / `/task <n\|id> runs\|rename <name>\|pin\|unpin\|archive\|merge <dst>\|references\|reference add\|remove <name>` | Inspect or manage one task, including governed names/identifiers used to address it. |
 | `/queue` / `/queue drop <n>` / `/queue clear` | List queued tasks / drop one by position / drop all. |
 | `/stop` | Cancel the active run — or, if nothing is running, cancel the current (stuck) task. |
 | `/cancel` | Cancel the current task even when no run is active. |
@@ -810,6 +814,7 @@ selfmind ws use <workspace_id>    # or: selfmind ws <n>  to switch by list numbe
 selfmind ws trust [workspace_id]  # local CLI only; omit id for the current workspace
 selfmind ws untrust [workspace_id]# revoke trust and active execution capabilities
 selfmind ws grants [workspace_id] # list active temporary execution capabilities
+selfmind ws observe scripts/status.py -- --service api # hash-bound observation-only script
 selfmind ws revoke <capability> [workspace_id]
 selfmind new "implement the checkout page"
 ```

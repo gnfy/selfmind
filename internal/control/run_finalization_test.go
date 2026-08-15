@@ -234,7 +234,7 @@ func TestMaterializeRunFinalizationPreservesStableTaskCardForWeakAttach(t *testi
 		Identity: *identity, RunID: run.ID, RunStatus: "done", TaskID: task.ID,
 		TaskStatus: "done", PreservedTaskStatus: "in_progress", Summary: "weak run summary", NextSteps: []string{"weak next"},
 		PreserveTaskCard: true, Handoff: Handoff{Summary: "weak run summary"},
-		MaintenancePayload: `{}`, Event: Event{Type: "run.finished", Payload: []byte(`{"outcome":{"status":"done"}}`)},
+		AnalyzerVersion: 1, MaintenancePayload: `{}`, Event: Event{Type: "run.finished", Payload: []byte(`{"outcome":{"status":"done"}}`)},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -643,7 +643,7 @@ func TestMaterializeRunFinalizationClosesDeliberatelyResumedRun(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resumed, err := store.MarkTaskRunsResumed(ctx, identity.TenantID, task.ID, current.ID, ""); err != nil {
+	if resumed, err := store.MarkTaskRunsResumed(ctx, identity.TenantID, task.ID, current.ID); err != nil {
 		t.Fatal(err)
 	} else if resumed != 1 {
 		t.Fatalf("resumed=%d want 1", resumed)
@@ -663,7 +663,7 @@ func TestMaterializeRunFinalizationClosesDeliberatelyResumedRun(t *testing.T) {
 	}
 }
 
-func TestMarkTaskRunsResumedClaimsOnlyMatchingWork(t *testing.T) {
+func TestMarkTaskRunsResumedRefusesDifferentWorkKeyAmbiguity(t *testing.T) {
 	ctx := context.Background()
 	store, err := OpenStore(t.TempDir())
 	if err != nil {
@@ -706,12 +706,12 @@ func TestMarkTaskRunsResumedClaimsOnlyMatchingWork(t *testing.T) {
 	if err := store.SetRunWorkKey(ctx, identity.TenantID, current.ID, "RUQX-401"); err != nil {
 		t.Fatal(err)
 	}
-	resumed, err := store.MarkTaskRunsResumed(ctx, identity.TenantID, task.ID, current.ID, "RUQX-401")
+	resumed, err := store.MarkTaskRunsResumed(ctx, identity.TenantID, task.ID, current.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if resumed != 1 {
-		t.Fatalf("resumed=%d want 1", resumed)
+	if resumed != 0 {
+		t.Fatalf("display work keys must not resolve ambiguous run ownership: resumed=%d", resumed)
 	}
 
 	var matchingOwner, unrelatedOwner string
@@ -721,7 +721,7 @@ func TestMarkTaskRunsResumedClaimsOnlyMatchingWork(t *testing.T) {
 	if err := store.db.QueryRowContext(ctx, `SELECT resumed_by_run_id FROM task_runs WHERE id = ?`, unrelated.ID).Scan(&unrelatedOwner); err != nil {
 		t.Fatal(err)
 	}
-	if matchingOwner != current.ID || unrelatedOwner != "" {
+	if matchingOwner != "" || unrelatedOwner != "" {
 		t.Fatalf("matching owner=%q unrelated owner=%q", matchingOwner, unrelatedOwner)
 	}
 
@@ -783,7 +783,7 @@ func TestMarkTaskRunsResumedRefusesSameKeyAmbiguity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resumed, err := store.MarkTaskRunsResumed(ctx, identity.TenantID, task.ID, current.ID, current.WorkKey)
+	resumed, err := store.MarkTaskRunsResumed(ctx, identity.TenantID, task.ID, current.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -846,7 +846,7 @@ func TestStartRunWithWorkKeyIsAtomicAndReadable(t *testing.T) {
 	}
 }
 
-func TestMarkTaskRunsResumedKeyedContinuationClaimsSoleLegacyRun(t *testing.T) {
+func TestMarkTaskRunsResumedClaimsSoleLegacyRun(t *testing.T) {
 	ctx := context.Background()
 	store, err := OpenStore(t.TempDir())
 	if err != nil {
@@ -875,7 +875,7 @@ func TestMarkTaskRunsResumedKeyedContinuationClaimsSoleLegacyRun(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resumed, err := store.MarkTaskRunsResumed(ctx, identity.TenantID, task.ID, current.ID, current.WorkKey)
+	resumed, err := store.MarkTaskRunsResumed(ctx, identity.TenantID, task.ID, current.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -915,7 +915,7 @@ func TestMarkTaskRunsResumedWithoutWorkKeyRefusesAmbiguity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resumed, err := store.MarkTaskRunsResumed(ctx, identity.TenantID, task.ID, current.ID, "")
+	resumed, err := store.MarkTaskRunsResumed(ctx, identity.TenantID, task.ID, current.ID)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -323,6 +323,49 @@ func (a *OpenAIAdapter) GetModel() string {
 	return a.Model
 }
 
+func (a *OpenAIAdapter) FingerprintRequest(ctx context.Context, req ChatRequest, stream bool) (RequestFingerprint, bool) {
+	wireReq := a.requestWithQuirks(req)
+	wire := openAIRequestFromChat(a.Model, wireReq, stream)
+	a.applyOptions(ctx, &wire, wireReq)
+
+	stableMessages := make([]OpenAIMessage, 0, len(wire.Messages))
+	for _, message := range wire.Messages {
+		if message.Role != "system" && message.Role != "developer" {
+			break
+		}
+		stableMessages = append(stableMessages, message)
+	}
+	settings := struct {
+		Model           string
+		ReasoningEffort string
+		Thinking        interface{}
+		ServiceTier     string
+		UserID          string
+		ExtraBody       map[string]interface{}
+		ExtraQuery      map[string]interface{}
+		Headers         map[string]string
+	}{wire.Model, wire.ReasoningEffort, wire.Thinking, wire.ServiceTier, wire.UserID, a.ExtraBody, a.ExtraQuery, a.Headers}
+	prefix := struct {
+		Settings interface{}
+		System   []OpenAIMessage
+		Tools    []map[string]interface{}
+	}{settings, stableMessages, wire.Tools}
+	body, err := marshalWithExtraBody(wire, a.ExtraBody)
+	if err != nil {
+		return RequestFingerprint{}, false
+	}
+	return RequestFingerprint{
+		Protocol:    "openai_chat",
+		PrefixHash:  requestValueHash(prefix),
+		RequestHash: requestValueHash(json.RawMessage(body)),
+		Blocks: map[string]string{
+			"settings": requestValueHash(settings),
+			"system":   requestValueHash(stableMessages),
+			"tools":    requestValueHash(wire.Tools),
+		},
+	}, true
+}
+
 func (a *OpenAIAdapter) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, error) {
 	wireReq := a.requestWithQuirks(req)
 	openaiReq := openAIRequestFromChat(a.Model, wireReq, false)

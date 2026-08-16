@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"selfmind/internal/control"
+	"selfmind/internal/kernel/llm"
 	"selfmind/internal/platform/config"
 	"selfmind/internal/tools"
 )
@@ -101,6 +102,21 @@ func TestApplyEvalModelOverridePreservesProviderForModelOnlyOverride(t *testing.
 	got := cfg.EffectivePrimary()
 	if got.Provider != "deepseek" || got.Model != "new-model" || got.Reasoning != "high" {
 		t.Fatalf("model-only override = %+v", got)
+	}
+}
+
+func TestEvalTurnVCRContextDoesNotLeakIntoFlightRecording(t *testing.T) {
+	t.Setenv("SELFMIND_FLIGHT_RECORDER", "1")
+	t.Setenv("SELFMIND_EVAL_VCR", "")
+	ctx := evalTurnVCRContext(context.Background(), "skill_case", "/workspace")
+	if got := llm.VCRSessionForTest(ctx); got != "" {
+		t.Fatalf("live eval leaked flight session %q", got)
+	}
+
+	t.Setenv("SELFMIND_EVAL_VCR", "replay")
+	ctx = evalTurnVCRContext(context.Background(), "skill_case", "/workspace")
+	if got := llm.VCRSessionForTest(ctx); got != "skill_case" {
+		t.Fatalf("explicit eval replay session = %q, want skill_case", got)
 	}
 }
 

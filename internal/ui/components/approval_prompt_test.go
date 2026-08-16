@@ -17,10 +17,8 @@ func TestApprovalPromptViewRendersPanel(t *testing.T) {
 		"ember-citadel-tank-battle.html",
 		"reason: accesses path outside project root",
 		"Yes, run it once",
-		"Yes, and allow this kind for this task",
-		"Yes, always allow this kind",
 		"No, and tell the agent what to do instead",
-		"(y)", "(t)", "(a)", "(n)",
+		"(y)", "(n)",
 		"╭", "╰",
 	} {
 		if !strings.Contains(view, want) {
@@ -70,12 +68,12 @@ func TestApprovalPromptCursorMovesAndClamps(t *testing.T) {
 	}
 	p.HandleKey("down")
 	p.HandleKey("j")
-	if p.Cursor() != 2 {
-		t.Fatalf("cursor after down,j = %d, want 2", p.Cursor())
+	if p.Cursor() != 1 {
+		t.Fatalf("cursor after down,j = %d, want 1", p.Cursor())
 	}
 	p.HandleKey("k")
-	if p.Cursor() != 1 {
-		t.Fatalf("cursor after k = %d, want 1", p.Cursor())
+	if p.Cursor() != 0 {
+		t.Fatalf("cursor after k = %d, want 0", p.Cursor())
 	}
 	// Clamp at bottom.
 	for i := 0; i < 10; i++ {
@@ -93,8 +91,8 @@ func TestApprovalPromptEnterSelectsHighlighted(t *testing.T) {
 	if opt == nil {
 		t.Fatal("enter returned no option")
 	}
-	if opt.Decision != "approved" || opt.Scope != "task" {
-		t.Fatalf("enter on second option = %+v, want approved/task", opt)
+	if opt.Decision != "rejected" || opt.Scope != "" {
+		t.Fatalf("enter on second option = %+v, want rejected/once", opt)
 	}
 }
 
@@ -105,8 +103,6 @@ func TestApprovalPromptShortcutsAnswerDirectly(t *testing.T) {
 		scope    string
 	}{
 		{"y", "approved", ""},
-		{"t", "approved", "task"},
-		{"a", "approved", "person"},
 		{"n", "rejected", ""},
 		{"Y", "approved", ""}, // case-insensitive
 	}

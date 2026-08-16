@@ -101,6 +101,23 @@ var errorClassRules = []errorClassRule{
 		},
 	},
 	{
+		// Contract drift is distinct from a shell typo: the caller used an API,
+		// CLI flag, response field, or tool schema that no longer exists. This is
+		// the evidence the self-evolution loop needs to degrade a stale contract.
+		class: "interface_drift",
+		substrings: []string{
+			"invalid schema",
+			"unknown field",
+			"unexpected field",
+			"unknown argument",
+			"unrecognized argument",
+			"flag provided but not defined",
+			"unknown flag",
+			"no such option",
+			"unsupported parameter",
+		},
+	},
+	{
 		class: "syntax",
 		substrings: []string{
 			"syntax error",
@@ -165,6 +182,8 @@ var errorClassRules = []errorClassRule{
 	},
 }
 
+var commandFailedExitPattern = regexp.MustCompile(`\bexit status [1-9][0-9]*\b`)
+
 // errorClassHints maps each class to one short actionable next step. Hints
 // must stay generic: no project-specific environment overrides, and no words
 // that collide with the kernel/evidence error-text contracts ("rejected",
@@ -182,6 +201,8 @@ var errorClassHints = map[string]string{
 	"network":                   "A network or TLS connection failed; verify host reachability and the endpoint before retrying.",
 	"environment":               "A required interpreter, package, or environment variable is missing; set up the environment before retrying.",
 	"check_definition":          "The check script itself failed; fix its parsing, variables, or status query before retrying or registering a durable watch.",
+	"interface_drift":           "A tool, CLI, API, or response contract changed; inspect current help/schema before updating the caller.",
+	"command_failed":            "The command exited unsuccessfully; use its exit code and captured output before changing the next step.",
 	"unknown":                   "Read the error and captured output to identify a cause before changing the next command.",
 }
 
@@ -213,6 +234,9 @@ func ClassifyToolError(toolName string, err error, output string) string {
 				return rule.class
 			}
 		}
+	}
+	if commandFailedExitPattern.MatchString(text) || strings.Contains(text, "command failed") {
+		return "command_failed"
 	}
 	return "unknown"
 }

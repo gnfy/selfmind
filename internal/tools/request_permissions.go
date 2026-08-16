@@ -98,9 +98,10 @@ func requestPermissionsExecutor(args map[string]interface{}) (string, error) {
 	ctx := contextFromArgs(args)
 	var already, pending []ApprovalRuleCandidate
 	for _, rule := range requested {
-		granted := false
+		granted := scope.runGrants != nil && scope.runGrants.has(rule.Key)
 		if scope.Grants != nil {
-			granted, _ = scope.Grants.IsApprovalGranted(ctx, scope.TenantID, scope.PersonID, scope.TaskID, rule.Key)
+			persisted, _ := scope.Grants.IsApprovalGranted(ctx, scope.TenantID, scope.PersonID, scope.TaskID, rule.Key)
+			granted = granted || persisted
 		}
 		if granted {
 			already = append(already, rule)
@@ -127,9 +128,10 @@ func requestPermissionsExecutor(args map[string]interface{}) (string, error) {
 		ToolName:   "request_permissions",
 		Reason:     reason,
 		Args:       map[string]interface{}{"permissions": describePermissionRules(pending)},
-		GrantClass: describePermissionRules(pending),
-		// The bundle is the rule set: approving it grants exactly these keys.
-		RuleCandidates: pending,
+		GrantClass: "the displayed permission bundle",
+		// This tool has no useful one-off side effect. Its only positive answer is
+		// the exact displayed bundle, bounded to the live run.
+		DecisionPolicy: ApprovalDecisionPolicyRunBundle,
 		Environment:    scope.EnvironmentSnapshotID,
 		Cwd:            approvalDisplayCwd(scope),
 	})
@@ -149,14 +151,12 @@ func requestPermissionsExecutor(args map[string]interface{}) (string, error) {
 	// Scope: the person's answer decides how long. An empty scope means "this once",
 	// which for a pre-declared bundle is a task-scoped grant — the work it
 	// authorizes is this task's work.
-	grantScope := decision.Scope
-	if strings.TrimSpace(grantScope) == "" {
-		grantScope = "task"
+	if decision.Scope != "run" || strings.TrimSpace(decision.GrantKey) != "" {
+		return "", fmt.Errorf("operation rejected: the permission bundle was not approved for this run")
 	}
-	if scope.Grants != nil {
-		for _, rule := range pending {
-			recordApprovalGrant(ctx, scope, grantScope, rule.Key, approvalGrantExpiry(grantScope, args))
-		}
+	grantScope := "run"
+	for _, rule := range pending {
+		recordApprovalGrant(ctx, scope, grantScope, rule.Key, approvalGrantExpiry(grantScope, args))
 	}
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "Granted (%s): %s.", grantScope, describePermissionRules(pending))

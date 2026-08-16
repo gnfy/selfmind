@@ -49,7 +49,7 @@ func NewExternalWatchTool(store *control.Store) *ExternalWatchTool {
 			// Registration itself is a database write, but it now runs the check
 			// once first (see preflightExternalWatch), so the tool's own budget
 			// must cover one bounded check plus the write.
-			TimeoutSeconds: 45,
+			TimeoutSeconds: 135,
 		},
 	}
 	return t

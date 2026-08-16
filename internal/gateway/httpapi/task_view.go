@@ -21,7 +21,7 @@ import (
 // (detail, runs, rename, archive). Shared by every endpoint via
 // tryHandleControlCommand — IM gets the same short cards.
 
-const taskUsage = "Usage: /task <n|id> [runs|rename <name>|pin|unpin|archive|merge <dst>]"
+const taskUsage = "Usage: /task <n|id> [runs|rename <name>|pin|unpin|archive|merge <dst>|references|reference add|remove <name>]"
 
 const tasksTrailingHint = "Reply to continue the current task, /resume <id> to switch, /task <id> for detail."
 
@@ -554,6 +554,49 @@ func (d *Server) taskCommandReply(ctx context.Context, identity *control.Identit
 			Payload: mustJSON(map[string]string{"source": "user"}),
 		})
 		return fmt.Sprintf("%s task: %s (%s)", verb, textutil.Truncate(toOneLine(task.Title), 48), shortTaskID(task.ID)), nil
+	case "references":
+		refs, err := d.Control.ListTaskReferencesForTask(ctx, identity.TenantID, identity.PersonID, task.ID, 20)
+		if err != nil {
+			return "", err
+		}
+		if len(refs) == 0 {
+			return "This task has no learned references yet.", nil
+		}
+		var sb strings.Builder
+		fmt.Fprintf(&sb, "References for %s:\n", textutil.Truncate(toOneLine(task.Title), 48))
+		for i, ref := range refs {
+			fmt.Fprintf(&sb, "%d. [%s] %s\n", i+1, ref.Status, ref.RawValue)
+		}
+		return strings.TrimSpace(sb.String()), nil
+	case "reference":
+		if len(args) < 4 {
+			return "Usage: /task <id> reference add|remove <name>", nil
+		}
+		action := strings.ToLower(strings.TrimSpace(args[2]))
+		value := strings.TrimSpace(strings.Join(args[3:], " "))
+		switch action {
+		case "add":
+			ref, err := d.Control.UpsertTaskReference(ctx, control.TaskReferenceWrite{
+				TenantID: identity.TenantID, PersonID: identity.PersonID, TaskID: task.ID, WorkspaceID: task.WorkspaceID,
+				Class: control.TaskReferenceLiteral, Value: value, Status: control.TaskReferenceActive,
+				UserConfirmed: true, Provenance: "user_control", SourceRef: "task_command",
+			})
+			if err != nil {
+				return "", err
+			}
+			return fmt.Sprintf("Added task reference: %s [%s]", ref.RawValue, ref.Status), nil
+		case "remove":
+			removed, err := d.Control.SupersedeTaskReference(ctx, identity.TenantID, identity.PersonID, task.ID, value)
+			if err != nil {
+				return "", err
+			}
+			if !removed {
+				return "Task reference not found.", nil
+			}
+			return "Removed task reference: " + value, nil
+		default:
+			return "Usage: /task <id> reference add|remove <name>", nil
+		}
 	case "merge":
 		// Explicit user authority only (execution-quality W3): the duplicate
 		// suggester proposes, this command is the single fold path.
@@ -638,6 +681,13 @@ func (d *Server) taskDetailReply(ctx context.Context, identity *control.Identity
 			name = task.WorkspaceID
 		}
 		fmt.Fprintf(&sb, "Workspace: %s\n", name)
+	}
+	if refs, _ := d.Control.ListTaskReferencesForTask(ctx, identity.TenantID, identity.PersonID, task.ID, 5); len(refs) > 0 {
+		values := make([]string, 0, len(refs))
+		for _, ref := range refs {
+			values = append(values, ref.RawValue+" ["+ref.Status+"]")
+		}
+		fmt.Fprintf(&sb, "References: %s\n", strings.Join(values, ", "))
 	}
 	fmt.Fprintf(&sb, "Runs: %d\n", len(runs))
 	fmt.Fprintf(&sb, "Updated: %s\n", humanAge(task.UpdatedAt))

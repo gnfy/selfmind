@@ -276,7 +276,9 @@ gateway:
 > **安全 —— 微信 DM 策略。** 配了 `owner_person_id` 后，DM 策略放行的每个发送者
 > 都会被绑定为**你本人**（你的任务、记忆、workspace）。默认 `dm_policy: open`
 > 因此会让任何私聊这个号的陌生人变成你。**对外启用前请把 `dm_policy` 设为
-> `allowlist`，并在 `allow_from` 里填你自己的 openid。**
+> `allowlist`，并在 `allow_from` 里填你自己的 openid。**内置的
+> `selfmind weixin login` 会自动为扫码微信用户完成该配置，并绑定到当前 CLI
+> person；手工编写 YAML 时也必须守住同一条安全约束。
 
 ## 7. 任务
 
@@ -409,9 +411,14 @@ editor:
   large_paste_chars: 1000       # TUI 大段粘贴识别
   large_paste_lines: 10
 evolution:
-  enabled: true                 # 技能/自我改进审查
+  enabled: true                 # 技能审查 + 确定性工作流画像
+  mode: "auto-readonly"         # observe | shadow | auto-readonly
   min_complexity_threshold: 5
   nudge_interval: 10
+  shadow_after_observations: 3
+  promote_after_observations: 5
+  min_shadow_runs: 3
+  max_shadow_failure_rate: 0.05
 ```
 
 工具预算对所有语言和任务类型统一生效，不使用关键词分类；只有持续产生
@@ -421,6 +428,12 @@ evolution:
 `approval_triage_timeout` 与主模型的传输超时相互独立。辅助或显式配置的
 `fast_classifier` 如果未在该预算内返回，smart 模式会安全降级为人工审批。
 默认值是 30 秒；设置过短会把可用的推理型廉价模型误判成不可用。
+
+自进化画像是由已完成 run 的持久事件确定性派生，不会增加前台模型调用。
+`observe` 只记录画像；`shadow` 还会评估受限的只读批处理候选，但不会使用；
+`auto-readonly` 只有在观察次数和低失败率门槛都通过后才启用候选。自动进化
+永远不会批处理写操作、shell 命令、凭证或网络动作。旧的 `mode: auto` 仍作为
+`auto-readonly` 的兼容别名接受。
 
 ## 13. 更新检查与反馈
 

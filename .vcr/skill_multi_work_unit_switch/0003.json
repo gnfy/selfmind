@@ -1,0 +1,83 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "content": "先"
+    },
+    {
+      "content": "只"
+    },
+    {
+      "content": "读取"
+    },
+    {
+      "content": "前"
+    },
+    {
+      "content": "端"
+    },
+    {
+      "content": "文件"
+    },
+    {
+      "content": "，"
+    },
+    {
+      "content": "记录"
+    },
+    {
+      "content": "其"
+    },
+    {
+      "content": "未经"
+    },
+    {
+      "content": "改"
+    },
+    {
+      "content": "写"
+    },
+    {
+      "content": "的"
+    },
+    {
+      "content": "精"
+    },
+    {
+      "content": "确"
+    },
+    {
+      "content": "版本"
+    },
+    {
+      "content": "值"
+    },
+    {
+      "content": "。"
+    },
+    {
+      "content": "Preparing to run read_file",
+      "event_type": "agent.thinking"
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_uxL4BQV264ZaCbXY3ZEigVLm",
+          "Function": "read_file",
+          "Args": "{\"path\":\"{{SELFMIND_VCR_WORKSPACE}}/frontend.txt\"}"
+        }
+      ]
+    },
+    {
+      "usage": {
+        "input_tokens": 7627,
+        "output_tokens": 72,
+        "cache_read_input_tokens": 3584,
+        "cache_miss_input_tokens": 4043,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0,
+        "cache_usage_reported": true
+      }
+    }
+  ]
+}

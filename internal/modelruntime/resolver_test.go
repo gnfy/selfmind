@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"selfmind/internal/buildinfo"
 	"selfmind/internal/platform/config"
 )
 
@@ -589,5 +590,75 @@ func TestProviderRequestExtrasMergeWithSelectionOverrides(t *testing.T) {
 	metadata := rt.ExtraBody["metadata"].(map[string]interface{})
 	if metadata["profile"] != true || metadata["override"] != "role" {
 		t.Fatalf("nested metadata = %#v", metadata)
+	}
+}
+
+// OpenRouter app attribution must survive the protocol the user picks. The
+// headers used to live only in the OpenRouter adapter, so a profile declared
+// as openai_chat (a supported and common choice) reached OpenRouter with no
+// attribution at all. They now come from the built-in profile layer, which
+// every protocol carries.
+func TestOpenRouterAttributionHeadersSurviveProtocolChoice(t *testing.T) {
+	for _, protocol := range []string{"", ProtocolOpenAIChat, ProtocolOpenAICompatible} {
+		cfg := &config.Config{
+			Model: config.ModelConfig{Provider: "openrouter", Default: "some/model"},
+			ProviderProfiles: map[string]config.ProviderEndpoint{
+				"openrouter": {APIKey: "sk-or-test", Protocol: protocol},
+			},
+		}
+		cfg.Normalize()
+
+		rt, err := NewResolver(cfg).Resolve(context.Background(), Selection{})
+		if err != nil {
+			t.Fatalf("protocol %q: Resolve() error = %v", protocol, err)
+		}
+		if got := rt.Headers["HTTP-Referer"]; got != "https://github.com/gnfy/selfmind" {
+			t.Fatalf("protocol %q: HTTP-Referer = %q", protocol, got)
+		}
+		if got := rt.Headers["X-Title"]; got != "SelfMind Agent" {
+			t.Fatalf("protocol %q: X-Title = %q", protocol, got)
+		}
+		// The agent identifies the running build, not a pinned string: a
+		// provider-side breakdown by version must stay truthful after upgrade.
+		wantUA := "selfmind/" + strings.TrimPrefix(buildinfo.Version, "v")
+		if got := rt.Headers["User-Agent"]; got != wantUA {
+			t.Fatalf("protocol %q: User-Agent = %q, want %q", protocol, got, wantUA)
+		}
+		if origins := NewResolver(cfg).HeaderOrigins("openrouter", rt.Headers); origins["X-Title"] != "built-in profile" {
+			t.Fatalf("protocol %q: X-Title origin = %q", protocol, origins["X-Title"])
+		}
+	}
+}
+
+// The attribution defaults stay overridable: a user running a fork or a proxy
+// must be able to send their own app identity from yaml.
+func TestOpenRouterAttributionHeadersAreOverridable(t *testing.T) {
+	cfg := &config.Config{
+		Model: config.ModelConfig{Provider: "openrouter", Default: "some/model"},
+		ProviderProfiles: map[string]config.ProviderEndpoint{
+			"openrouter": {
+				APIKey:       "sk-or-test",
+				ExtraHeaders: map[string]string{"X-Title": "My Fork", "User-Agent": "my-fork/2.0"},
+			},
+		},
+	}
+	cfg.Normalize()
+
+	rt, err := NewResolver(cfg).Resolve(context.Background(), Selection{})
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if got := rt.Headers["X-Title"]; got != "My Fork" {
+		t.Fatalf("X-Title = %q, want the configured override", got)
+	}
+	if got := rt.Headers["User-Agent"]; got != "my-fork/2.0" {
+		t.Fatalf("User-Agent = %q, want the configured override", got)
+	}
+	if got := rt.Headers["HTTP-Referer"]; got != "https://github.com/gnfy/selfmind" {
+		t.Fatalf("un-overridden default must remain, got %q", got)
+	}
+	origins := NewResolver(cfg).HeaderOrigins("openrouter", rt.Headers)
+	if origins["X-Title"] != "provider config extra_headers" {
+		t.Fatalf("X-Title origin = %q", origins["X-Title"])
 	}
 }

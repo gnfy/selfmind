@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	"selfmind/internal/buildinfo"
 )
 
 const (
@@ -237,6 +239,32 @@ func codexResponsesQuirks() ProviderQuirks {
 	return q
 }
 
+// openRouterAttributionHeaders identifies this app to OpenRouter: HTTP-Referer
+// becomes the app link and X-Title the display name in its app attribution.
+// The headers belong to the profile rather than to one adapter so every
+// protocol carries them — a profile configured as `openai_chat`, or any
+// streaming call, never reaches the OpenRouter adapter's own request builder.
+// Being a profile layer also keeps `provider_profiles.openrouter.extra_headers`
+// able to override them.
+func openRouterAttributionHeaders() map[string]string {
+	return map[string]string{
+		"HTTP-Referer": "https://github.com/gnfy/selfmind",
+		"X-Title":      "SelfMind Agent",
+		"User-Agent":   selfmindUserAgent(),
+	}
+}
+
+// selfmindUserAgent tracks the running build instead of a pinned string, so a
+// provider-side breakdown by version stays truthful after an upgrade. It
+// mirrors the update checker's spelling.
+func selfmindUserAgent() string {
+	version := strings.TrimPrefix(strings.TrimSpace(buildinfo.Version), "v")
+	if version == "" {
+		version = "dev"
+	}
+	return "selfmind/" + version
+}
+
 func BuiltinProfiles() []ProviderProfile {
 	return []ProviderProfile{
 		{
@@ -311,6 +339,7 @@ func BuiltinProfiles() []ProviderProfile {
 			Protocol: ProtocolOpenAICompatible, AuthType: AuthAPIKey,
 			BaseURL: "https://openrouter.ai/api/v1", APIKeyEnvVars: []string{"OPENROUTER_API_KEY"},
 			BaseURLEnvVar: "OPENROUTER_BASE_URL", ModelList: ModelListOpenAICompatible,
+			Headers:        openRouterAttributionHeaders(),
 			FallbackModels: []string{"anthropic/claude-3.5-sonnet", "openai/gpt-4o"},
 			Quirks:         openAIQuirks(),
 		},

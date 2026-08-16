@@ -9,6 +9,7 @@ import (
 
 	"selfmind/internal/control"
 	"selfmind/internal/gateway/api"
+	"selfmind/internal/runpool"
 )
 
 func newClarifyTestServer(t *testing.T) (*Server, *control.Store, *control.IdentityContext, *control.Task, *control.Run) {
@@ -113,6 +114,32 @@ func TestGatewayClarifyAnswerRoundTrip(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("gatewayClarify did not return after the answer was recorded")
+	}
+}
+
+func TestGatewayClarifyPausesRunWatchdog(t *testing.T) {
+	daemon, store, identity, task, run := newClarifyTestServer(t)
+	runCtx, _, stop := runpool.WithWatchdog(context.Background(), 50*time.Millisecond)
+	defer stop()
+	handler := daemon.coordinator().gatewayClarify(runCtx, identity, task, run, "cli")
+
+	resultCh := make(chan string, 1)
+	go func() { resultCh <- handler("Which environment?", []string{"staging", "prod"}) }()
+	clarify := waitForPendingClarify(t, store, identity)
+	time.Sleep(125 * time.Millisecond)
+	if err := runCtx.Err(); err != nil {
+		t.Fatalf("watchdog fired while waiting for a person: %v", err)
+	}
+	if _, err := store.AnswerClarifyRequest(context.Background(), identity.TenantID, identity.PersonID, clarify.ID, "prod", "weixin"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case got := <-resultCh:
+		if got != "prod" {
+			t.Fatalf("clarify result = %q, want prod", got)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("clarify waiter did not resume")
 	}
 }
 

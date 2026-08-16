@@ -117,6 +117,11 @@ func (t *SkillManageTool) Execute(args map[string]interface{}) (string, error) {
 	fileContent, _ := args["file_content"].(string)
 	source, _ := args["source"].(string)
 	changeID, _ := args["change_id"].(string)
+	if skillMutationAction(action) {
+		if err := authorizeSkillMutation(args, action); err != nil {
+			return "", err
+		}
+	}
 
 	tenantID := skillStorageTenantID(args)
 
@@ -247,6 +252,36 @@ func (t *SkillManageTool) Execute(args map[string]interface{}) (string, error) {
 	default:
 		return "", fmt.Errorf("unknown action: %s", action)
 	}
+}
+
+func skillMutationAction(action string) bool {
+	switch strings.ToLower(strings.TrimSpace(action)) {
+	case "undo", "create", "update", "edit", "patch", "delete", "archive",
+		"write_file", "remove_file", "pin", "unpin", "enable", "disable":
+		return true
+	default:
+		return false
+	}
+}
+
+func authorizeSkillMutation(args map[string]interface{}, action string) error {
+	mode := kernel.SkillMutationNone
+	if scope, ok := InvocationScopeFromArgs(args); ok && strings.TrimSpace(scope.SkillMutationMode) != "" {
+		mode = strings.TrimSpace(scope.SkillMutationMode)
+	}
+	switch mode {
+	case kernel.SkillMutationDirect:
+		return nil
+	case kernel.SkillMutationCandidateOnly:
+		if strings.EqualFold(strings.TrimSpace(action), "candidate_create") {
+			return nil
+		}
+	case kernel.SkillMutationNone:
+		// Fail closed below.
+	default:
+		mode = "unknown:" + mode
+	}
+	return fmt.Errorf("skill mutation %q is not allowed for this invocation (mode=%s)", action, mode)
 }
 
 func reloadSkillToolsFromArgs(tenantID string, args map[string]interface{}) {

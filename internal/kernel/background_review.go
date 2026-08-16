@@ -117,7 +117,11 @@ func (e *BackgroundReviewEngine) SpawnReview(tenantID, channel string, messages 
 	if e == nil || !e.config.Enabled || e.provider == nil || e.backend == nil {
 		return
 	}
-	if !reviewMemory && !reviewSkills {
+	// Skill evolution is owned by the durable cohort curator. The legacy
+	// conversation reviewer may inspect skills, but it must never propose or
+	// apply an active-skill mutation.
+	reviewSkills = false
+	if !reviewMemory {
 		return
 	}
 	if e.enqueue != nil {
@@ -151,6 +155,12 @@ func (e *BackgroundReviewEngine) RunReviewFromPayload(ctx context.Context, tenan
 	if err := json.Unmarshal([]byte(payloadJSON), &payload); err != nil {
 		return "", fmt.Errorf("invalid review payload: %w", err)
 	}
+	// Safely drain jobs created before skill review was separated from memory
+	// maintenance. They must not reach a model or mutate an active skill.
+	payload.ReviewSkills = false
+	if !payload.ReviewMemory {
+		return "review skipped: legacy skill review is disabled", nil
+	}
 	messages := make([]llm.Message, 0, len(payload.Messages))
 	for _, m := range payload.Messages {
 		messages = append(messages, llm.Message{Role: m.Role, Content: m.Content})
@@ -170,10 +180,15 @@ func (e *BackgroundReviewEngine) ExecuteReview(ctx context.Context, tenantID, ch
 // must see quota failures so they can be blocked on the shared route circuit
 // instead of being incorrectly marked complete.
 func (e *BackgroundReviewEngine) executeReview(ctx context.Context, tenantID, channel string, snapshot []llm.Message, reviewMemory, reviewSkills bool) (string, error) {
+	reviewSkills = false
+	if !reviewMemory {
+		return "review skipped: legacy skill review is disabled", nil
+	}
 	invocationScope := ToolInvocationScope{
 		ControlTenantID:   e.controlTenantID,
 		PersonID:          tenantID,
 		ExecutionScopeKey: "background-review:" + tenantID,
+		SkillMutationMode: SkillMutationNone,
 	}
 	if invocationScope.ControlTenantID == "" {
 		invocationScope.ControlTenantID = "default"
@@ -183,7 +198,6 @@ func (e *BackgroundReviewEngine) executeReview(ctx context.Context, tenantID, ch
 		inner: e.backend,
 		allowed: map[string]bool{
 			"memory":         true,
-			"skill_manage":   true,
 			"skills_list":    true,
 			"skill_view":     true,
 			"session_search": true,

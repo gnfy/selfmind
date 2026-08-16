@@ -215,7 +215,7 @@ type MsgApprovalRequest struct {
 	Target string // compact object of the action (path/command); may be empty
 	Reason string
 	// Decision context published with the approval.requested event: where the
-	// operation would run, how large the write is, what a "remember this" answer
+	// operation would run, how large the write is, what a run-local reuse answer
 	// authorizes, and whether smart-mode triage could rule at all. All optional —
 	// an older daemon sends none of it and the panel simply omits those lines.
 	Environment   string

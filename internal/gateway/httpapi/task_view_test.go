@@ -398,6 +398,25 @@ func TestTaskDetailRunsRenameArchive(t *testing.T) {
 	}
 }
 
+func TestTaskReferenceCommandsRoundTrip(t *testing.T) {
+	daemon, store, identity := newTaskViewServer(t)
+	ctx := context.Background()
+	task, err := store.CreateTask(ctx, control.TaskCreate{TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "Reference command work", Channel: "cli"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	short := shortTaskID(task.ID)
+	if out := controlReply(t, daemon, "/task "+short+" reference add customer portal"); !strings.Contains(out, "Added task reference") {
+		t.Fatalf("add output=%q", out)
+	}
+	if out := controlReply(t, daemon, "/task "+short+" references"); !strings.Contains(out, "customer portal") || !strings.Contains(out, "active") {
+		t.Fatalf("list output=%q", out)
+	}
+	if out := controlReply(t, daemon, "/task "+short+" reference remove customer portal"); !strings.Contains(out, "Removed task reference") {
+		t.Fatalf("remove output=%q", out)
+	}
+}
+
 func TestTaskPinCommandsAndCard(t *testing.T) {
 	daemon, store, identity := newTaskViewServer(t)
 	task := seedTask(t, store, identity, "important long-running work", "in_progress", 1)

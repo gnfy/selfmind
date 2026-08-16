@@ -53,6 +53,11 @@ func InitTools(mem *memory.MemoryManager, cfg *config.Config, ag *kernel.Agent, 
 	disp.RegisterTool(tools.NewSkillManageTool())
 	disp.RegisterTool(tools.NewSkillsListTool())
 	disp.RegisterTool(tools.NewSkillViewTool())
+	if len(controlStores) > 0 && controlStores[0] != nil {
+		disp.RegisterTool(tools.NewSkillSelectTool(controlStores[0]))
+		disp.RegisterTool(tools.NewSkillFallbackTool(controlStores[0]))
+		disp.RegisterTool(tools.NewSkillLifecycleManageTool(controlStores[0]))
+	}
 	disp.RegisterTool(tools.NewSkillBundleTool())
 	disp.RegisterTool(tools.NewSkillCatalogTool())
 

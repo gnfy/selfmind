@@ -1,0 +1,26 @@
+id: timeline_task_references
+title: "task references are visible and user-governed"
+suite: timeline
+workspace: "."
+channel: cli
+model_required: false
+
+turns:
+  - input: "/new task reference governance check"
+  - input: "/task 1 reference add customer-portal"
+  - input: "/task 1 references"
+  - input: "/task 1 reference remove customer-portal"
+
+expect:
+  status: completed
+  max_tool_calls: 0
+  max_duration_seconds: 60
+  contains:
+    - "Added task reference: customer-portal [active]"
+    - "References for task reference governance check:"
+    - "Removed task reference: customer-portal"
+
+checks:
+  no_mojibake: true
+  no_empty_response: true
+  no_raw_json_leak: true

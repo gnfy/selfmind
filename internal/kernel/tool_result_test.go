@@ -1,11 +1,26 @@
 package kernel
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"testing"
 	"unicode/utf8"
 )
+
+func TestPackageToolFailurePreservesBoundedDiagnosticEvidence(t *testing.T) {
+	raw := strings.Repeat("stderr line with evidence\n", 200)
+	env := packageToolFailureCtx(context.Background(), "terminal", raw, fmt.Errorf("exit status 1"))
+	if env.DiagnosticHash == "" || env.DiagnosticBytes != len(raw) {
+		t.Fatalf("diagnostic metadata = %#v", env)
+	}
+	if !env.DiagnosticTruncated || len(env.DiagnosticExcerpt) > 2100 {
+		t.Fatalf("diagnostic excerpt is not bounded: %d bytes", len(env.DiagnosticExcerpt))
+	}
+	if !strings.Contains(env.ModelContent, "Captured tool output") || !strings.Contains(env.ModelContent, "stderr line") {
+		t.Fatalf("model content lost failure evidence: %q", env.ModelContent)
+	}
+}
 
 func TestPackageToolResultSplitsPreviewAndModelContent(t *testing.T) {
 	raw := strings.Repeat("中文输出", 30000)

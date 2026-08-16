@@ -1,0 +1,86 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "content": "后"
+    },
+    {
+      "content": "端"
+    },
+    {
+      "content": " Skill"
+    },
+    {
+      "content": " 已"
+    },
+    {
+      "content": "切"
+    },
+    {
+      "content": "换"
+    },
+    {
+      "content": "生"
+    },
+    {
+      "content": "效"
+    },
+    {
+      "content": "；"
+    },
+    {
+      "content": "现在"
+    },
+    {
+      "content": "只"
+    },
+    {
+      "content": "读取"
+    },
+    {
+      "content": " backend"
+    },
+    {
+      "content": ".txt"
+    },
+    {
+      "content": " 的"
+    },
+    {
+      "content": "精"
+    },
+    {
+      "content": "确"
+    },
+    {
+      "content": "内容"
+    },
+    {
+      "content": "。"
+    },
+    {
+      "content": "Preparing to run read_file",
+      "event_type": "agent.thinking"
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_ttN9exYJOcGLGPGATSajJ6QC",
+          "Function": "read_file",
+          "Args": "{\"path\":\"{{SELFMIND_VCR_WORKSPACE}}/backend.txt\"}"
+        }
+      ]
+    },
+    {
+      "usage": {
+        "input_tokens": 8320,
+        "output_tokens": 73,
+        "cache_read_input_tokens": 3584,
+        "cache_miss_input_tokens": 4736,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0,
+        "cache_usage_reported": true
+      }
+    }
+  ]
+}

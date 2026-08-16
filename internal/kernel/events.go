@@ -23,8 +23,11 @@ func SetAgentEventRedactor(redactor func(string) string) {
 }
 
 type PlanItem struct {
-	Step   string `json:"step"`
-	Status string `json:"status"`
+	Step          string `json:"step"`
+	Status        string `json:"status"`
+	RelatedTaskID string `json:"related_task_id,omitempty"`
+	WorkUnitID    string `json:"work_unit_id,omitempty"`
+	WorkUnit      bool   `json:"work_unit,omitempty"`
 }
 
 type AgentEvent struct {

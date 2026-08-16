@@ -86,9 +86,9 @@ Headers merge in layers; each higher layer overrides lower ones key by key:
 
 | Layer (low → high) | Where | Typical use |
 |---|---|---|
-| protocol defaults | code (adapters) | `content-type`, auth header, `anthropic-version`, OpenRouter attribution |
+| protocol defaults | code (adapters) | `content-type`, auth header, `anthropic-version` |
 | `model.extra_headers` | yaml, global | org-wide custom headers on every request |
-| built-in profile | code | vendor compatibility (e.g. kimi-coding `User-Agent`) |
+| built-in profile | code | vendor compatibility (e.g. kimi-coding `User-Agent`), OpenRouter app attribution |
 | `provider_profiles.<id>.extra_headers` | yaml, per provider | vendor-specific overrides |
 | `models.roles.<role>.extra_headers` | yaml, per role | one role diverges |
 
@@ -328,7 +328,10 @@ Each IM platform is a subsection under `gateway`, all disabled by default:
 > DM policy admits is bound to *you* (your tasks, memory, workspaces). The
 > default `dm_policy: open` therefore lets any stranger who DMs the account
 > become you. **Set `dm_policy: allowlist` and list your own openid in
-> `allow_from`** before exposing the account.
+> `allow_from`** before exposing the account. The built-in
+> `selfmind weixin login` command does this automatically for the scanned
+> WeChat user and binds it to the current CLI person; manual YAML setup must
+> preserve the same invariant.
 
 ## 7. Tasks
 
@@ -469,9 +472,14 @@ editor:
   large_paste_chars: 1000       # TUI large-paste detection
   large_paste_lines: 10
 evolution:
-  enabled: true                 # skill/self-improvement review
+  enabled: true                 # skill review plus deterministic workflow profiling
+  mode: "auto-readonly"         # observe | shadow | auto-readonly
   min_complexity_threshold: 5
   nudge_interval: 10
+  shadow_after_observations: 3
+  promote_after_observations: 5
+  min_shadow_runs: 3
+  max_shadow_failure_rate: 0.05
 ```
 
 Tool budgets apply uniformly across languages and task types. Extensions still
@@ -484,6 +492,14 @@ timeout. If the auxiliary/explicit `fast_classifier` does not return within
 this budget, smart mode fails safe to a human approval prompt. The default is
 30 seconds; lower values can turn a healthy reasoning-capable cheap model into
 an apparent outage.
+
+Evolution profiles are deterministic projections of completed run events; they
+do not add a foreground model call. `observe` only records profiles,
+`shadow` also evaluates bounded read-only batching candidates without using
+them, and `auto-readonly` enables a candidate only after the configured
+observation and zero/low-failure gates. Automatic evolution never batches
+writes, shell commands, credentials, or network actions. `mode: auto` remains
+accepted as a compatibility alias for `auto-readonly`.
 
 ---
 

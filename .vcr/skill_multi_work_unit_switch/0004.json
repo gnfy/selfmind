@@ -1,0 +1,101 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "content": "前"
+    },
+    {
+      "content": "端"
+    },
+    {
+      "content": "值"
+    },
+    {
+      "content": "已"
+    },
+    {
+      "content": "取得"
+    },
+    {
+      "content": "；"
+    },
+    {
+      "content": "现在"
+    },
+    {
+      "content": "完成"
+    },
+    {
+      "content": "该"
+    },
+    {
+      "content": "单"
+    },
+    {
+      "content": "元"
+    },
+    {
+      "content": "并"
+    },
+    {
+      "content": "切"
+    },
+    {
+      "content": "换"
+    },
+    {
+      "content": "到"
+    },
+    {
+      "content": "独"
+    },
+    {
+      "content": "立"
+    },
+    {
+      "content": "的"
+    },
+    {
+      "content": "后"
+    },
+    {
+      "content": "端"
+    },
+    {
+      "content": "检查"
+    },
+    {
+      "content": "单"
+    },
+    {
+      "content": "元"
+    },
+    {
+      "content": "。"
+    },
+    {
+      "content": "Preparing to run update_plan",
+      "event_type": "agent.thinking"
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_np34OBAUjWiSz2krfoPUHFww",
+          "Function": "update_plan",
+          "Args": "{\"explanation\":\"已从 frontend.txt 取得精确值，开始独立检查 backend.txt。\",\"plan\":[{\"status\":\"completed\",\"step\":\"读取 frontend.txt 并确定前端精确版本\",\"work_unit\":true,\"work_unit_id\":\"{{SELFMIND_VCR_WORK_UNIT_1}}\"},{\"status\":\"in_progress\",\"step\":\"读取 backend.txt 并确定后端精确版本\",\"work_unit\":true,\"work_unit_id\":\"{{SELFMIND_VCR_WORK_UNIT_2}}\"}]}"
+        }
+      ]
+    },
+    {
+      "usage": {
+        "input_tokens": 7716,
+        "output_tokens": 186,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 7716,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0,
+        "cache_usage_reported": true
+      }
+    }
+  ]
+}

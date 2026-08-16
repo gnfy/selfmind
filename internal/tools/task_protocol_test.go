@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -29,6 +30,32 @@ func TestUpdatePlanToolRecordsStructuredPlan(t *testing.T) {
 	}
 	if state.Plan[1].Status != "in_progress" {
 		t.Fatalf("second step status = %q", state.Plan[1].Status)
+	}
+}
+
+func TestUpdatePlanToolReturnsSynchronousWorkUnitIdentities(t *testing.T) {
+	tool := NewUpdatePlanTool()
+	ctx := WithPlanProjectionSink(context.Background(), func(_ context.Context, steps []PlanStep) ([]PlanWorkUnitIdentity, error) {
+		if len(steps) != 2 || steps[1].RelatedTaskID != "task-b" {
+			t.Fatalf("sink received wrong plan: %+v", steps)
+		}
+		return []PlanWorkUnitIdentity{
+			{ID: "wu-a", Sequence: 1, Goal: steps[0].Step, PlanStatus: steps[0].Status},
+			{ID: "wu-b", Sequence: 2, Goal: steps[1].Step, PlanStatus: steps[1].Status, RelatedTaskID: "task-b"},
+		}, nil
+	})
+	result, err := tool.Execute(map[string]interface{}{
+		"plan": []interface{}{
+			map[string]interface{}{"step": "A", "status": "completed"},
+			map[string]interface{}{"step": "B", "status": "in_progress", "related_task_id": "task-b"},
+		},
+		"_context": ctx,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(result, `"id":"wu-b"`) || !strings.Contains(result, `"related_task_id":"task-b"`) {
+		t.Fatalf("stable work-unit identities missing from tool result: %s", result)
 	}
 }
 

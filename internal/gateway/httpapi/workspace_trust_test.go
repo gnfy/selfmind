@@ -7,12 +7,16 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"selfmind/internal/control"
 	"selfmind/internal/executionenv"
 	"selfmind/internal/gateway/api"
+	"selfmind/internal/tools"
 )
 
 func TestWorkspaceTrustRequiresLocalCLIRequest(t *testing.T) {
@@ -39,6 +43,63 @@ func TestWorkspaceTrustRequiresLocalCLIRequest(t *testing.T) {
 				t.Fatalf("localCLIRequest(%q, %q) = %v, want %v", test.remoteAddr, test.platform, got, test.want)
 			}
 		})
+	}
+}
+
+func TestObservationProfileEndpointRequiresTrustedWorkspaceAndLocalCLI(t *testing.T) {
+	t.Setenv("SELF_GATEWAY_TOKEN", "")
+	t.Setenv("SELF_DAEMON_TOKEN", "")
+	store, err := control.OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	ctx := context.Background()
+	identity, err := store.ResolveOrCreateAccount(ctx, control.DefaultTenantID, "cli", "local", "Local user")
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	script := filepath.Join(root, "inspect.py")
+	if err := os.WriteFile(script, []byte("print('ok')\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	workspace, err := store.EnsureWorkspace(ctx, control.Workspace{
+		TenantID: identity.TenantID, OwnerPersonID: identity.PersonID, Name: "repo", LocalPath: root,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := &Server{Control: store, LocalControlToken: "local-secret"}
+	payload, _ := json.Marshal(api.WorkspaceObservationProfileRequest{
+		Platform: "cli", PlatformUserID: "local", WorkspaceID: workspace.ID,
+		ScriptPath: script, AllowTrailing: true,
+	})
+	request := httptest.NewRequest(http.MethodPost, "/v1/workspaces/observation-profiles", bytes.NewReader(payload))
+	request.RemoteAddr = "127.0.0.1:4100"
+	request.Header.Set(api.LocalControlTokenHeader, "local-secret")
+	response := httptest.NewRecorder()
+	server.handleWorkspaceObservationProfiles(response, request)
+	if response.Code != http.StatusConflict {
+		t.Fatalf("untrusted status = %d, want %d: %s", response.Code, http.StatusConflict, response.Body.String())
+	}
+	if _, err := store.SetWorkspaceTrust(ctx, identity.TenantID, identity.PersonID, workspace.ID, executionenv.TrustTrusted, "local_cli"); err != nil {
+		t.Fatal(err)
+	}
+	request = httptest.NewRequest(http.MethodPost, "/v1/workspaces/observation-profiles", bytes.NewReader(payload))
+	request.RemoteAddr = "127.0.0.1:4100"
+	request.Header.Set(api.LocalControlTokenHeader, "local-secret")
+	response = httptest.NewRecorder()
+	server.handleWorkspaceObservationProfiles(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("trusted status = %d: %s", response.Code, response.Body.String())
+	}
+	grants, err := store.ListApprovalGrants(ctx, identity.TenantID, identity.PersonID, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(grants) != 1 || !strings.HasPrefix(grants[0].PatternKey, "rule:"+tools.ApprovalRuleKindObservationScript+":") {
+		t.Fatalf("observation grants = %+v", grants)
 	}
 }
 

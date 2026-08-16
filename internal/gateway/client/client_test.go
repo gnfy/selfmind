@@ -473,11 +473,11 @@ func TestRespondApproval(t *testing.T) {
 	if gotID != "appr-123" || gotDecision != "approved" || gotScope != "" {
 		t.Fatalf("server saw id=%q decision=%q scope=%q", gotID, gotDecision, gotScope)
 	}
-	// The TUI panel's grant scope rides the same request.
-	if err := c.RespondApproval("appr-123", "approved", "task", ""); err != nil {
+	// The TUI panel's run-local grant scope rides the same request.
+	if err := c.RespondApproval("appr-123", "approved", "run", ""); err != nil {
 		t.Fatalf("RespondApproval with scope: %v", err)
 	}
-	if gotScope != "task" {
+	if gotScope != "run" {
 		t.Fatalf("scope not threaded through: %q", gotScope)
 	}
 }

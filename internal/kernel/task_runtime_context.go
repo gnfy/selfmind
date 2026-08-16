@@ -105,6 +105,7 @@ type RuntimeContextBudget struct {
 	WorkspaceChars int
 	TaskChars      int
 	MemoryChars    int
+	SkillChars     int
 }
 
 // Recall render hard floors. The gateway recall engine enforces the same
@@ -118,9 +119,10 @@ const (
 func DefaultRuntimeContextBudget() RuntimeContextBudget {
 	return RuntimeContextBudget{
 		TotalChars:     8000,
-		WorkspaceChars: 1200,
-		TaskChars:      4800,
-		MemoryChars:    1600,
+		WorkspaceChars: 700,
+		TaskChars:      2500,
+		MemoryChars:    700,
+		SkillChars:     4000,
 	}
 }
 
@@ -146,9 +148,11 @@ type RuntimeContextBundle struct {
 	// memory. Future embedding sources use the same selector seam. Budgeted by
 	// ComposerRecallChars and distinct from Memories (the small unconditional
 	// person-memory fallback in slice ⑦).
-	Recall         []RuntimeMemoryContext
-	SelectionNotes []string
-	Budget         RuntimeContextBudget
+	Recall          []RuntimeMemoryContext
+	ActiveSkill     *ActiveSkillContext
+	SkillCandidates []SkillCandidateContext
+	SelectionNotes  []string
+	Budget          RuntimeContextBudget
 }
 
 func WithTaskRuntimeContext(ctx context.Context, runtime TaskRuntimeContext) context.Context {
@@ -194,7 +198,7 @@ func RuntimeContextBundleFromContext(ctx context.Context) (RuntimeContextBundle,
 }
 
 func (b RuntimeContextBundle) Empty() bool {
-	return b.Workspace == nil && b.Task == nil && len(b.Memories) == 0 && len(b.Recall) == 0 && len(b.SelectionNotes) == 0
+	return b.Workspace == nil && b.Task == nil && b.ActiveSkill == nil && len(b.SkillCandidates) == 0 && len(b.Memories) == 0 && len(b.Recall) == 0 && len(b.SelectionNotes) == 0
 }
 
 func (b RuntimeContextBundle) Prompt(maxChars int) string {
@@ -216,6 +220,10 @@ func (b RuntimeContextBundle) Prompt(maxChars int) string {
 	if workspaceBudget <= 0 {
 		workspaceBudget = maxChars / 5
 	}
+	skillBudget := b.Budget.SkillChars
+	if skillBudget <= 0 {
+		skillBudget = maxChars / 2
+	}
 
 	var out strings.Builder
 	out.WriteString("# SELECTED RUNTIME CONTEXT\n")
@@ -224,6 +232,20 @@ func (b RuntimeContextBundle) Prompt(maxChars int) string {
 	if len(b.SelectionNotes) > 0 {
 		out.WriteString("\n## Selection Notes\n")
 		writeBullets(&out, b.SelectionNotes, 8, 260)
+	}
+	if b.ActiveSkill != nil {
+		out.WriteString("\n")
+		out.WriteString(b.ActiveSkill.Prompt(skillBudget))
+		out.WriteString("\n")
+	} else if len(b.SkillCandidates) > 0 {
+		out.WriteString("\n## Skill Candidates for Current Work Unit\n")
+		out.WriteString("Metadata only. Select at most one with skill_select when it clearly fits; otherwise continue without a skill. skill_view only inspects and does not count as use.\n")
+		for i, candidate := range b.SkillCandidates {
+			if i >= 3 {
+				break
+			}
+			fmt.Fprintf(&out, "- %s [%s/%s]: %s\n", candidate.Name, candidate.Scope, candidate.Source, trimLine(candidate.Description, 260))
+		}
 	}
 	if b.Workspace != nil {
 		out.WriteString("\n## Workspace\n")

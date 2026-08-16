@@ -285,3 +285,15 @@ func (p *RoleProvider) SupportsNativeTools() bool {
 	}
 	return ProviderSupportsNativeTools(profile.Provider)
 }
+
+// FingerprintRequest resolves the same physical route as Chat/StreamChat and
+// forwards adapter-level request diagnostics without exposing request content.
+func (p *RoleProvider) FingerprintRequest(ctx context.Context, req ChatRequest, stream bool) (RequestFingerprint, bool) {
+	profile := p.gateway.resolve(p.role)
+	if profile.Provider == nil {
+		return RequestFingerprint{}, false
+	}
+	ctx = ensureModelRole(ctx, p.role)
+	req = withRequestRole(req, p.role)
+	return FingerprintProviderRequest(ctx, profile.Provider, req, stream)
+}

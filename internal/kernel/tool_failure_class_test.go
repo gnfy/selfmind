@@ -10,6 +10,7 @@ func TestClassifyToolFailurePrefersStructuredClass(t *testing.T) {
 		// used to hijack the category to workspace_scope.
 		{"open /etc/shadow: permission denied\nerror_class: permission; hint: The current user lacks permission for this path", "permission"},
 		{"path /x escapes workspace allowed roots", "workspace_scope"},
+		{"tool guardrail blocked active-turn polling of external state; register watch_external", "policy_redirect"},
 		{"command failed: exit status 1", "command_failed"},
 		{"", "unknown"},
 	}

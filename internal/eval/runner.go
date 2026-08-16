@@ -209,7 +209,7 @@ func runSingle(ctx context.Context, c *Case, opts RunOptions, sampleIdx, totalSa
 		}
 	}
 	if c.Setup != nil {
-		if err := applyStateSeeds(ctx, h.controlStore, h.mem, identity, workspaceID, c.Setup); err != nil {
+		if err := applyStateSeeds(ctx, h.controlStore, h.mem, identity, workspaceID, workspace, c.Setup); err != nil {
 			return nil, err
 		}
 	}
@@ -259,8 +259,7 @@ func runSingle(ctx context.Context, c *Case, opts RunOptions, sampleIdx, totalSa
 		// deadline cancels the underlying request so the turn fails cleanly.
 		// Tag the turn with a VCR session (the case id) so model calls can be
 		// recorded/replayed deterministically when SELFMIND_EVAL_VCR is set.
-		vcrCtx := llm.WithVCRSession(httpapi.WithStreamObserver(ctx, observer), c.ID)
-		vcrCtx = llm.WithVCRWorkspace(vcrCtx, workspace)
+		vcrCtx := evalTurnVCRContext(httpapi.WithStreamObserver(ctx, observer), c.ID, workspace)
 		turnCtx, cancelTurn := context.WithTimeout(vcrCtx, turnBudget(c, opts))
 		// A per-turn platform_user_id override simulates a different platform user
 		// (identity-isolation scenarios); the default keeps the case's identity.
@@ -371,6 +370,18 @@ func runSingle(ctx context.Context, c *Case, opts RunOptions, sampleIdx, totalSa
 		OutputTokens:    outputTokens,
 		Checks:          checks,
 	}, nil
+}
+
+// evalTurnVCRContext tags a turn only when the explicit eval recorder/replayer
+// owns VCR. A normal live eval may run while the user's flight recorder is on;
+// giving that flight wrapper the eval case id would create orphan recordings
+// under ~/.selfmind/flight/<case-id> with no FlightMeta and could capture a
+// transient provider failure as if it were a user turn.
+func evalTurnVCRContext(ctx context.Context, caseID, workspace string) context.Context {
+	if llm.EvalVCRActive() {
+		ctx = llm.WithVCRSession(ctx, caseID)
+	}
+	return llm.WithVCRWorkspace(ctx, workspace)
 }
 
 // finalizeLeftoverRuns guarantees every run this eval created reached a
@@ -554,6 +565,9 @@ func newRuntimeHarness(opts RunOptions, c *Case, dataDirOverride string) (*runti
 	// daemon-owned tools here so reliability cases exercise the production
 	// registration path instead of silently running with a smaller tool set.
 	disp.RegisterTool(tools.NewExternalWatchTool(controlStore))
+	disp.RegisterTool(tools.NewSkillSelectTool(controlStore))
+	disp.RegisterTool(tools.NewSkillFallbackTool(controlStore))
+	disp.RegisterTool(tools.NewSkillLifecycleManageTool(controlStore))
 	appcore.InitMCP(disp, cfg)
 	displayProvider, displayModel, _ := appcore.ResolveModelDisplay(cfg)
 	recallOptions := []httpapi.RecallEngineOption(nil)

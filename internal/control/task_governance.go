@@ -111,7 +111,8 @@ func (s *Store) DeleteEmptyTask(ctx context.Context, tenantID, personID, taskID 
 		   AND NOT EXISTS (SELECT 1 FROM task_artifacts a WHERE a.task_id = tasks.id)
 		   AND NOT EXISTS (SELECT 1 FROM task_handoffs h WHERE h.task_id = tasks.id)
 		   AND NOT EXISTS (SELECT 1 FROM approval_requests p WHERE p.task_id = tasks.id)
-		   AND NOT EXISTS (SELECT 1 FROM clarify_requests q WHERE q.task_id = tasks.id)`,
+		   AND NOT EXISTS (SELECT 1 FROM clarify_requests q WHERE q.task_id = tasks.id)
+		   AND NOT EXISTS (SELECT 1 FROM task_references r WHERE r.tenant_id = tasks.tenant_id AND r.task_id = tasks.id)`,
 		tenantID, strings.TrimSpace(personID), strings.TrimSpace(taskID))
 	if err != nil {
 		return false, err

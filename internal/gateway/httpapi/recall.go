@@ -18,6 +18,7 @@ package httpapi
 
 import (
 	"context"
+	"fmt"
 	"sort"
 	"strings"
 	"time"
@@ -73,10 +74,22 @@ type RecallTaskCardLister interface {
 	ListTaskCards(ctx context.Context, tenantID, personID string, limit int) ([]control.TaskCard, error)
 }
 
+type RecallTaskReferenceLister interface {
+	ListTaskReferenceCards(ctx context.Context, tenantID, personID string, statuses []string, limit int) ([]control.TaskReferenceCard, error)
+}
+
+type RecallWorkspaceKnowledgeLister interface {
+	ListWorkspaceKnowledge(ctx context.Context, tenantID, personID, workspaceID string, limit int) ([]control.WorkspaceKnowledgeSection, error)
+}
+
 // RecallQuery is the per-turn search request handed to every source.
 type RecallQuery struct {
 	TenantID string
 	PersonID string
+	// Message is the original user text. Sources may use it only for
+	// deterministic exact-surface checks; semantic expansion terms must never
+	// upgrade an unconfirmed binding to authoritative priority.
+	Message string
 	// WorkspaceID limits workspace-scoped memories to the workspace selected
 	// for this turn. Global memories remain eligible.
 	WorkspaceID string
@@ -203,6 +216,12 @@ func WithRecallExpandTimeout(timeout time.Duration) RecallEngineOption {
 func NewRecallEngine(cards RecallTaskCardLister, sessions RecallSessionSearcher, expander RecallQueryExpander, opts ...RecallEngineOption) *RecallEngine {
 	engine := &RecallEngine{expander: expander, expandTimeout: defaultExpandTimeout}
 	if cards != nil {
+		if knowledge, ok := cards.(RecallWorkspaceKnowledgeLister); ok {
+			engine.sources = append(engine.sources, &workspaceKnowledgeRecallSource{knowledge: knowledge})
+		}
+		if references, ok := cards.(RecallTaskReferenceLister); ok {
+			engine.sources = append(engine.sources, &taskReferenceRecallSource{references: references})
+		}
 		engine.sources = append(engine.sources, &taskCardRecallSource{cards: cards})
 	}
 	if sessions != nil {
@@ -219,6 +238,108 @@ func NewRecallEngine(cards RecallTaskCardLister, sessions RecallSessionSearcher,
 		}
 	}
 	return engine
+}
+
+// workspaceKnowledgeRecallSource exposes procedural project conventions as a
+// query-addressable source. The index is separate from person memory and task
+// history, and it never participates in deterministic task routing.
+type workspaceKnowledgeRecallSource struct {
+	knowledge RecallWorkspaceKnowledgeLister
+}
+
+func (s *workspaceKnowledgeRecallSource) Name() string { return "workspace_knowledge" }
+
+func (s *workspaceKnowledgeRecallSource) Search(ctx context.Context, q RecallQuery) ([]RecallHit, error) {
+	if strings.TrimSpace(q.WorkspaceID) == "" {
+		return nil, nil
+	}
+	sections, err := s.knowledge.ListWorkspaceKnowledge(ctx, q.TenantID, q.PersonID, q.WorkspaceID, 256)
+	if err != nil {
+		return nil, err
+	}
+	hits := make([]RecallHit, 0)
+	for _, section := range sections {
+		title := strings.ToLower(section.Title)
+		body := strings.ToLower(section.Excerpt)
+		path := strings.ToLower(section.FilePath)
+		score := 0.0
+		for _, term := range q.Terms {
+			switch {
+			case containsTerm(title, term):
+				score += 2.2
+			case containsTerm(body, term):
+				score += 1.2
+			case containsTerm(path, term):
+				score += 0.8
+			}
+		}
+		if score <= 0 {
+			continue
+		}
+		ref := fmt.Sprintf("%s#%d", section.FilePath, section.Section)
+		hits = append(hits, RecallHit{
+			Slice: kernel.RecallSlice{
+				Source:  s.Name(),
+				Title:   section.FileName + ": " + section.Title,
+				Excerpt: textutil.Truncate(section.Excerpt, recallExcerptChars),
+				Ref:     ref,
+			},
+			Score:    score,
+			WorkKey:  "knowledge:" + ref,
+			Priority: 0,
+		})
+	}
+	return hits, nil
+}
+
+// taskReferenceRecallSource turns governed aliases into a searchable bridge
+// to the same task card. Active references get a stronger score; candidates
+// may assist context recall but never participate in deterministic routing.
+type taskReferenceRecallSource struct {
+	references RecallTaskReferenceLister
+}
+
+func (s *taskReferenceRecallSource) Name() string { return "task_reference" }
+
+func (s *taskReferenceRecallSource) Search(ctx context.Context, q RecallQuery) ([]RecallHit, error) {
+	items, err := s.references.ListTaskReferenceCards(ctx, q.TenantID, q.PersonID,
+		[]string{control.TaskReferenceActive, control.TaskReferenceCandidate}, 200)
+	if err != nil {
+		return nil, err
+	}
+	var hits []RecallHit
+	for _, item := range items {
+		alias := strings.ToLower(item.Reference.NormalizedValue)
+		score := 0.0
+		for _, term := range q.Terms {
+			if containsTerm(alias, term) || containsTerm(term, alias) {
+				score += 2
+			}
+		}
+		if score == 0 {
+			continue
+		}
+		if item.Reference.Status == control.TaskReferenceActive {
+			score += 3
+		} else {
+			score += 0.5
+		}
+		excerpt := "reference: " + item.Reference.RawValue
+		if card := taskCardExcerpt(item.Card); card != "" {
+			excerpt += "; " + card
+		}
+		priority := 0
+		if item.Reference.UserConfirmed ||
+			(item.Reference.Status == control.TaskReferenceActive && item.Reference.Class == control.TaskReferenceLiteral &&
+				control.TaskReferenceAppearsInText(q.Message, item.Reference.RawValue)) {
+			priority = -1
+		}
+		hits = append(hits, RecallHit{
+			Slice: kernel.RecallSlice{Source: s.Name(), Title: item.Card.Title, Excerpt: excerpt, Ref: item.Card.TaskID},
+			Score: score, WorkKey: "task:" + item.Card.TaskID, Priority: priority,
+		})
+	}
+	return hits, nil
 }
 
 // Select builds the search query from the incoming user message, runs every
@@ -271,6 +392,7 @@ func (e *RecallEngine) selectRecall(ctx context.Context, tenantID, personID, wor
 	query := RecallQuery{
 		TenantID:     tenantID,
 		PersonID:     personID,
+		Message:      trimmed,
 		WorkspaceID:  strings.TrimSpace(workspaceID),
 		Terms:        terms,
 		RawTermCount: rawCount,

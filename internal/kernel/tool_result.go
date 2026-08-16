@@ -2,6 +2,7 @@ package kernel
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"regexp"
@@ -34,11 +35,15 @@ const (
 // different contracts: raw execution output, concise UI/event preview, and the
 // bounded content sent back to the model.
 type ToolResultEnvelope struct {
-	Raw          string
-	Preview      string
-	ModelContent string
-	Truncated    bool
-	Bytes        int
+	Raw                 string
+	Preview             string
+	ModelContent        string
+	Truncated           bool
+	Bytes               int
+	DiagnosticExcerpt   string
+	DiagnosticHash      string
+	DiagnosticBytes     int
+	DiagnosticTruncated bool
 }
 
 func packageToolResult(name, raw string) ToolResultEnvelope {
@@ -109,6 +114,41 @@ func packageToolError(name string, err error) ToolResultEnvelope {
 		ModelContent: textutil.Truncate(modelContent, 4000),
 		Truncated:    len(modelContent) > 4000,
 		Bytes:        len(msg),
+	}
+}
+
+// packageToolFailureCtx preserves bounded execution evidence when a tool
+// returns both output and an error. Historically the output was discarded,
+// leaving durable events with only "exit status 1" and making failures
+// impossible to classify or learn from after the turn ended.
+func packageToolFailureCtx(ctx context.Context, name, raw string, err error) ToolResultEnvelope {
+	_ = ctx
+	if strings.TrimSpace(raw) == "" {
+		return packageToolError(name, err)
+	}
+	raw = textutil.CleanUTF8(raw)
+	digest := sha256.Sum256([]byte(raw))
+	const excerptBytes = 2048
+	excerpt := raw
+	truncated := false
+	if len(excerpt) > excerptBytes {
+		marker := "\n... [diagnostic output truncated] ...\n"
+		excerpt = textutil.HeadTail(excerpt, (excerptBytes-len(marker))/2, marker)
+		truncated = true
+	}
+	errEnv := packageToolError(name, err)
+	combined := fmt.Sprintf("%s\n\nCaptured tool output:\n%s", errEnv.Raw, excerpt)
+	modelContent := combined + "\n\nSelfMind diagnostic instruction: use the captured output as evidence. Correct the next step rather than repeating the same failing call."
+	return ToolResultEnvelope{
+		Raw:                 combined,
+		Preview:             textutil.Truncate(excerpt, toolResultPreviewBytes),
+		ModelContent:        textutil.Truncate(modelContent, 6000),
+		Truncated:           truncated || len(modelContent) > 6000,
+		Bytes:               len(raw),
+		DiagnosticExcerpt:   excerpt,
+		DiagnosticHash:      fmt.Sprintf("%x", digest[:]),
+		DiagnosticBytes:     len(raw),
+		DiagnosticTruncated: truncated,
 	}
 }
 

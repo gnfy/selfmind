@@ -23,17 +23,8 @@ func TestBuildApprovalDecisionsIsTheSingleAnswerSet(t *testing.T) {
 			{Kind: tools.ApprovalRuleKindCommandPrefix, Key: "rule:exec_prefix:git status", Label: "commands that start with `git status`"},
 		},
 	})
-	if len(options) < 4 {
-		t.Fatalf("expected once + rule + class + deny, got %+v", options)
-	}
-	foundRun := false
-	for _, option := range options {
-		if option.ID == "run" && option.Scope == "run" && option.Key == "r" {
-			foundRun = true
-		}
-	}
-	if !foundRun {
-		t.Fatalf("run-scoped decision is missing: %+v", options)
+	if len(options) != 3 {
+		t.Fatalf("expected once + one run-local rule + deny, got %+v", options)
 	}
 	if options[0].ID != "once" || options[0].Key != "y" {
 		t.Fatalf("the narrowest answer must come first: %+v", options[0])
@@ -48,7 +39,7 @@ func TestBuildApprovalDecisionsIsTheSingleAnswerSet(t *testing.T) {
 			rule = option
 		}
 	}
-	if rule.GrantKey != "rule:exec_prefix:git status" || rule.Key != "p" {
+	if rule.GrantKey != "rule:exec_prefix:git status" || rule.Scope != "run" || rule.Key != "r" {
 		t.Fatalf("rule option lost its key or shortcut: %+v", rule)
 	}
 	if !strings.Contains(rule.Label, "git status") {
@@ -82,6 +73,20 @@ func TestBuildApprovalDecisionsIsTheSingleAnswerSet(t *testing.T) {
 	if !foundExact {
 		t.Fatalf("exact run option missing: %+v", exact)
 	}
+
+	sensitive := buildApprovalDecisions(tools.ToolApprovalRequest{
+		ToolName: "terminal", GrantClass: `"git" commands`, DecisionPolicy: tools.ApprovalDecisionPolicyOnceOnly,
+	})
+	if len(sensitive) != 2 || sensitive[0].ID != "once" || sensitive[1].ID != "deny" {
+		t.Fatalf("sensitive ask must expose once/deny only: %+v", sensitive)
+	}
+	bundle := buildApprovalDecisions(tools.ToolApprovalRequest{
+		ToolName: "request_permissions", GrantClass: "the displayed permission bundle",
+		DecisionPolicy: tools.ApprovalDecisionPolicyRunBundle,
+	})
+	if len(bundle) != 2 || bundle[0].ID != "run_bundle" || bundle[0].Scope != "run" || bundle[0].Key != "y" {
+		t.Fatalf("permission bundle must expose exact run approval + deny: %+v", bundle)
+	}
 }
 
 // TestApprovalDecisionsRoundTripAndShortcutResolution proves the list survives the
@@ -103,9 +108,9 @@ func TestApprovalDecisionsRoundTripAndShortcutResolution(t *testing.T) {
 	if len(decoded) != len(options) {
 		t.Fatalf("round trip lost options: %d vs %d", len(decoded), len(options))
 	}
-	host, ok := approvalOptionByShortcut(decoded, "h")
+	host, ok := approvalOptionByShortcut(decoded, "r")
 	if !ok || host.GrantKey != "rule:net_host:api.github.com" {
-		t.Fatalf("shortcut h must resolve to the host rule, got %+v", host)
+		t.Fatalf("shortcut r must resolve to the host rule, got %+v", host)
 	}
 	if _, ok := approvalOptionByShortcut(decoded, "z"); ok {
 		t.Fatal("an unknown letter must not resolve to any option")
@@ -115,12 +120,12 @@ func TestApprovalDecisionsRoundTripAndShortcutResolution(t *testing.T) {
 	if got := decodeApprovalDecisions([]byte(`{"tool":"terminal"}`)); got != nil {
 		t.Fatalf("legacy payload should carry no options, got %+v", got)
 	}
-	if lines := approvalOptionLines(decoded); !strings.Contains(lines, "h = ") {
+	if lines := approvalOptionLines(decoded); !strings.Contains(lines, "r = ") {
 		t.Fatalf("text surfaces must list the same menu: %q", lines)
 	}
 }
 
-// TestBareReplyRuleShortcutPersistsTheOfferedRule is the IM half of B1/B2: "yp"
+// TestBareReplyRuleShortcutPersistsTheOfferedRule is the IM half of B1/B2: "r"
 // stores the rule that ask offered, not a guess.
 func TestBareReplyRuleShortcutPersistsTheOfferedRule(t *testing.T) {
 	srv, store, identity, task, fixture := newApprovalTestServer(t)
@@ -149,12 +154,12 @@ func TestBareReplyRuleShortcutPersistsTheOfferedRule(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	handled, reply, err := srv.tryHandleBareApprovalReply(ctx, identity, "yp", "weixin")
+	handled, reply, err := srv.tryHandleBareApprovalReply(ctx, identity, "r", "weixin")
 	if err != nil {
 		t.Fatalf("bare reply: %v", err)
 	}
 	if !handled {
-		t.Fatalf("yp must be claimed as an approval answer, reply = %q", reply)
+		t.Fatalf("r must be claimed as an approval answer, reply = %q", reply)
 	}
 	stored, err := store.GetApprovalRequest(ctx, identity.TenantID, approval.ID)
 	if err != nil {
@@ -166,7 +171,7 @@ func TestBareReplyRuleShortcutPersistsTheOfferedRule(t *testing.T) {
 	if stored.DecisionGrantKey != "rule:exec_prefix:git status" {
 		t.Fatalf("the offered rule must be recorded, got %q", stored.DecisionGrantKey)
 	}
-	if stored.DecisionScope != "person" {
+	if stored.DecisionScope != "run" {
 		t.Fatalf("rule decisions carry their own scope, got %q", stored.DecisionScope)
 	}
 	if stored.DecisionID != "rule:exec_prefix" {

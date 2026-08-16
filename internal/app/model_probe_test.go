@@ -51,13 +51,21 @@ func TestProbeResolvedModelValidatesOpenAIToolSchema(t *testing.T) {
 func TestProbeResolvedModelValidatesMaintenanceContract(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var request struct {
-			MaxTokens int `json:"max_tokens"`
+			MaxTokens int                      `json:"max_tokens"`
+			Tools     []map[string]interface{} `json:"tools"`
+			Thinking  map[string]interface{}   `json:"thinking"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 			t.Fatal(err)
 		}
 		if request.MaxTokens < postRunAnalyzerMaxTokens {
 			t.Fatalf("maintenance probe max_tokens=%d", request.MaxTokens)
+		}
+		if len(request.Tools) != 0 {
+			t.Fatalf("maintenance probe must not carry agent tools: %#v", request.Tools)
+		}
+		if request.Thinking["type"] != "disabled" {
+			t.Fatalf("maintenance probe thinking=%#v, want disabled", request.Thinking)
 		}
 		w.Header().Set("content-type", "application/json")
 		fmt.Fprint(w, `{"choices":[{"message":{"content":"{\"task_decision\":\"KEEP\",\"memory_decisions\":[]}"},"finish_reason":"stop"}]}`)
@@ -67,9 +75,14 @@ func TestProbeResolvedModelValidatesMaintenanceContract(t *testing.T) {
 	probe := ProbeResolvedModelForRole(t.Context(), modelruntime.Runtime{
 		Provider: "deepseek", Protocol: modelruntime.ProtocolOpenAICompatible,
 		Model: "deepseek-v4-flash", BaseURL: server.URL, APIKey: "test-key", MaxTokens: 16000,
+		ReasoningEffort: "high", Thinking: map[string]interface{}{"type": "enabled"},
+		Quirks: modelruntime.ProviderQuirks{ThinkingMode: modelruntime.ThinkingModeDeepSeek, SupportsTools: true},
 	}, "memory_extract")
 	if probe.Err != nil || !probe.MaintenanceContractTested || !probe.MaintenanceContractPassed {
 		t.Fatalf("probe=%+v", probe)
+	}
+	if probe.NativeToolsTested {
+		t.Fatal("native tools were reported as tested even though the maintenance contract intentionally omitted them")
 	}
 }
 

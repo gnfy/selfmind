@@ -230,7 +230,11 @@ func (a *llmPostRunAnalyzer) canonicalWrite(ctx context.Context, req httpapi.Pos
 }
 
 // applyMemoryDecisions is the deterministic write side of intake.
-func (a *llmPostRunAnalyzer) applyMemoryDecisions(ctx context.Context, req httpapi.PostRunAnalysisRequest, decisions []httpapi.MemoryDecision, neighbors map[string][]memory.Fact) error {
+func (a *llmPostRunAnalyzer) applyMemoryDecisions(ctx context.Context, req httpapi.PostRunAnalysisRequest, decisions []httpapi.MemoryDecision, neighbors map[string][]memory.Fact) (map[string]int, error) {
+	dispositions := make(map[string]int)
+	if len(decisions) == 0 {
+		dispositions["no_candidate"]++
+	}
 	for _, d := range decisions {
 		target := strings.ToLower(strings.TrimSpace(d.Target))
 		if target != "user" && target != "memory" {
@@ -240,28 +244,34 @@ func (a *llmPostRunAnalyzer) applyMemoryDecisions(ctx context.Context, req httpa
 		if episodic {
 			// Run-state observations live in task cards, handoffs, and the
 			// work spine; storing them as facts poisons later recall.
+			dispositions["transient"]++
 			continue
 		}
 		switch strings.ToUpper(strings.TrimSpace(d.Decision)) {
 		case "SKIP":
+			dispositions["model_skip"]++
 			continue
 
 		case "REINFORCE":
 			ref := resolveOfferedRef(neighbors, d.Ref)
 			if ref == nil {
+				dispositions["invalid_reference"]++
 				continue // a stale reference is not evidence for a new belief
 			}
 			target = normalizeMemoryTarget(ref.Target, target)
 			if d.Confidence > 0 && d.Confidence < reinforceConfidenceGate {
+				dispositions["low_confidence"]++
 				continue // under-confident: leave the stored fact untouched
 			}
 			if err := a.reinforceFact(ctx, req, target, *ref, d.Content); err != nil {
-				return err
+				return dispositions, err
 			}
+			dispositions["reinforce"]++
 
 		case "SUPERSEDE":
 			ref := resolveOfferedRef(neighbors, d.Ref)
 			if ref == nil {
+				dispositions["invalid_reference"]++
 				continue
 			}
 			target = normalizeMemoryTarget(ref.Target, target)
@@ -273,20 +283,23 @@ func (a *llmPostRunAnalyzer) applyMemoryDecisions(ctx context.Context, req httpa
 				// Retiring a belief needs explicit high confidence and never
 				// touches user-stated facts: keep both, pending later evidence.
 				if err := a.addConflictFact(ctx, req, target, *ref, d.Content, meta); err != nil {
-					return err
+					return dispositions, err
 				}
+				dispositions["conflict"]++
 				continue
 			}
 			if err := a.canonicalWrite(ctx, req, "SUPERSEDE", target, d.Content, ref.Content, d.Confidence, meta, ref.Scope); err != nil {
-				return err
+				return dispositions, err
 			}
 			if err := a.supersedeFact(ctx, req, target, *ref, d.Content); err != nil {
-				return err
+				return dispositions, err
 			}
+			dispositions["supersede"]++
 
 		case "CONFLICT":
 			ref := resolveOfferedRef(neighbors, d.Ref)
 			if ref == nil {
+				dispositions["invalid_reference"]++
 				continue
 			}
 			target = normalizeMemoryTarget(ref.Target, target)
@@ -294,18 +307,22 @@ func (a *llmPostRunAnalyzer) applyMemoryDecisions(ctx context.Context, req httpa
 				meta.Category = ref.Category
 			}
 			if err := a.addConflictFact(ctx, req, target, *ref, d.Content, meta); err != nil {
-				return err
+				return dispositions, err
 			}
+			dispositions["conflict"]++
 
 		case "ADD", "":
-			if err := a.addFactWithDedup(ctx, req, target, d.Content, meta); err != nil {
-				return err
+			disposition, err := a.addFactWithDedup(ctx, req, target, d.Content, meta)
+			if err != nil {
+				return dispositions, err
 			}
+			dispositions[disposition]++
 		default:
+			dispositions["invalid_decision"]++
 			continue // unknown output must not mint durable memory
 		}
 	}
-	return nil
+	return dispositions, nil
 }
 
 func normalizeMemoryTarget(candidate, fallback string) string {
@@ -318,14 +335,14 @@ func normalizeMemoryTarget(candidate, fallback string) string {
 
 // addFactWithDedup runs the deterministic dedup net before writing: an
 // identical or contained statement reinforces instead of duplicating.
-func (a *llmPostRunAnalyzer) addFactWithDedup(ctx context.Context, req httpapi.PostRunAnalysisRequest, target, content string, meta intakeMeta) error {
+func (a *llmPostRunAnalyzer) addFactWithDedup(ctx context.Context, req httpapi.PostRunAnalysisRequest, target, content string, meta intakeMeta) (string, error) {
 	content = strings.TrimSpace(content)
 	if content == "" {
-		return nil
+		return "no_candidate", nil
 	}
 	existing := a.readModelFactsForTarget(ctx, req, target)
 	if match := findDuplicatePostRunFact(content, existing); match != nil {
-		return a.reinforceFact(ctx, req, target, *match, content)
+		return "duplicate", a.reinforceFact(ctx, req, target, *match, content)
 	}
 	fact := memory.Fact{
 		Target:         target,
@@ -337,10 +354,10 @@ func (a *llmPostRunAnalyzer) addFactWithDedup(ctx context.Context, req httpapi.P
 		LastVerifiedAt: time.Now(),
 	}
 	if err := a.memory.AddFactMeta(ctx, memoryPartition(req), fact); err != nil {
-		return fmt.Errorf("store %s fact: %w", target, err)
+		return "", fmt.Errorf("store %s fact: %w", target, err)
 	}
 	tools.RecordMemoryLearningChangeScoped(memoryPartition(req), target, fact.Scope, "add", "", content, "post_run_analyzer")
-	return a.canonicalWrite(ctx, req, "ADD", target, content, "", 0, meta)
+	return "add", a.canonicalWrite(ctx, req, "ADD", target, content, "", 0, meta)
 }
 
 // supersedeFact retires an outdated belief in favor of the new statement.

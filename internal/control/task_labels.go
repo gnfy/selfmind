@@ -240,9 +240,9 @@ func (s *Store) ListTaskRuns(ctx context.Context, tenantID, taskID string, limit
 	return out, rows.Err()
 }
 
-// SetRunWorkKey records a deterministic issue/work identity on a run. The key
-// is used only to close the matching unfinished work; it never becomes a
-// context, workspace, or execution boundary.
+// SetRunWorkKey records a deterministic display hint on a run. It never
+// selects a task, claims an unfinished run, or becomes a context, workspace,
+// permission, or execution boundary.
 func (s *Store) SetRunWorkKey(ctx context.Context, tenantID, runID, workKey string) error {
 	if strings.TrimSpace(runID) == "" || strings.TrimSpace(workKey) == "" {
 		return nil
@@ -254,89 +254,14 @@ func (s *Store) SetRunWorkKey(ctx context.Context, tenantID, runID, workKey stri
 }
 
 // MarkTaskRunsResumed records which prior resumable run a deliberate
-// continuation actually owns. A work key claims only exact-key predecessors.
-// Without a key, exactly one unresolved predecessor is required; ambiguity is
-// preserved instead of allowing one continuation to erase unrelated work that
-// happens to share the same display label.
-func (s *Store) MarkTaskRunsResumed(ctx context.Context, tenantID, taskID, resumedByRunID, workKey string) (int64, error) {
+// continuation actually owns. Exactly one unresolved predecessor is required;
+// ambiguity is preserved instead of letting a product-specific token or model
+// summary erase unrelated work that shares the same display task.
+func (s *Store) MarkTaskRunsResumed(ctx context.Context, tenantID, taskID, resumedByRunID string) (int64, error) {
 	if strings.TrimSpace(taskID) == "" || strings.TrimSpace(resumedByRunID) == "" {
 		return 0, nil
 	}
 	tenant := normalizeTenant(tenantID)
-	workKey = strings.ToUpper(strings.TrimSpace(workKey))
-	if workKey != "" {
-		tx, err := s.db.BeginTx(ctx, nil)
-		if err != nil {
-			return 0, err
-		}
-		defer func() { _ = tx.Rollback() }()
-		candidateID, candidateCount, err := unresolvedRunsForWorkKey(ctx, tx, tenant, taskID, resumedByRunID, workKey)
-		if err != nil {
-			return 0, err
-		}
-		// One issue key may contain several independent work lines. A keyed
-		// continuation may claim one predecessor only when the key identifies a
-		// single unresolved run; updating every matching row silently erases work.
-		if candidateCount > 1 {
-			return 0, tx.Commit()
-		}
-		if candidateCount == 1 {
-			res, updateErr := tx.ExecContext(ctx,
-				`UPDATE task_runs SET resumed_by_run_id = ?
-				 WHERE tenant_id = ? AND id = ? AND work_key = ?
-				   AND status IN ('interrupted', 'waiting_user', 'verification_partial', 'blocked')
-				   AND COALESCE(resumed_by_run_id, '') = ''`,
-				resumedByRunID, tenant, candidateID, workKey)
-			if updateErr != nil {
-				return 0, updateErr
-			}
-			affected, affectedErr := res.RowsAffected()
-			if affectedErr != nil {
-				return 0, affectedErr
-			}
-			if affected == 1 {
-				if err := resolveOriginRunBlockersTx(ctx, tx, tenant, taskID, candidateID, resumedByRunID); err != nil {
-					return 0, err
-				}
-			}
-			if err := tx.Commit(); err != nil {
-				return 0, err
-			}
-			return affected, nil
-		}
-
-		// Runs created before work_key was introduced have no durable identity.
-		// Claim one only when it is the sole unresolved predecessor; any second
-		// candidate (keyed or legacy) preserves ambiguity and requires an explicit
-		// follow-up instead of guessing.
-		legacyID, unambiguous, err := soleUnresolvedRun(ctx, tx, tenant, taskID, resumedByRunID)
-		if err != nil {
-			return 0, err
-		}
-		if !unambiguous || legacyID == "" {
-			return 0, tx.Commit()
-		}
-		res, err := tx.ExecContext(ctx,
-			`UPDATE task_runs SET resumed_by_run_id = ?
-			 WHERE tenant_id = ? AND id = ? AND COALESCE(work_key, '') = ''
-			   AND COALESCE(resumed_by_run_id, '') = ''`,
-			resumedByRunID, tenant, legacyID)
-		if err != nil {
-			return 0, err
-		}
-		if affected, affectedErr := res.RowsAffected(); affectedErr != nil {
-			return 0, affectedErr
-		} else if affected == 1 {
-			if err := resolveOriginRunBlockersTx(ctx, tx, tenant, taskID, legacyID, resumedByRunID); err != nil {
-				return 0, err
-			}
-		}
-		if err := tx.Commit(); err != nil {
-			return 0, err
-		}
-		return res.RowsAffected()
-	}
-
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, err
@@ -367,35 +292,6 @@ func (s *Store) MarkTaskRunsResumed(ctx context.Context, tenantID, taskID, resum
 		return 0, err
 	}
 	return res.RowsAffected()
-}
-
-func unresolvedRunsForWorkKey(ctx context.Context, tx *sql.Tx, tenantID, taskID, excludeRunID, workKey string) (string, int, error) {
-	rows, err := tx.QueryContext(ctx,
-		`SELECT id FROM task_runs
-		 WHERE tenant_id = ? AND task_id = ? AND id <> ? AND work_key = ?
-		   AND status IN ('interrupted', 'waiting_user', 'verification_partial', 'blocked')
-		   AND COALESCE(resumed_by_run_id, '') = ''
-		 ORDER BY started_at DESC, id DESC LIMIT 2`,
-		tenantID, taskID, excludeRunID, workKey)
-	if err != nil {
-		return "", 0, err
-	}
-	defer rows.Close()
-	var candidates []string
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return "", 0, err
-		}
-		candidates = append(candidates, id)
-	}
-	if err := rows.Err(); err != nil {
-		return "", 0, err
-	}
-	if len(candidates) == 0 {
-		return "", 0, nil
-	}
-	return candidates[0], len(candidates), nil
 }
 
 func soleUnresolvedRun(ctx context.Context, tx *sql.Tx, tenantID, taskID, excludeRunID string) (string, bool, error) {
@@ -544,8 +440,18 @@ func (s *Store) ReassignRun(ctx context.Context, tenantID, runID, fromTaskID, to
 				return err
 			}
 			if _, err := tx.ExecContext(ctx,
-				`DELETE FROM tasks WHERE tenant_id = ? AND id = ?`,
+				`DELETE FROM tasks WHERE tenant_id = ? AND id = ?
+				   AND NOT EXISTS (SELECT 1 FROM task_references r
+				                   WHERE r.tenant_id = tasks.tenant_id AND r.task_id = tasks.id)`,
 				tenant, fromTaskID); err != nil {
+				return err
+			}
+			// A user-governed reference makes an otherwise empty label durable.
+			// Keep it as an archived audit handle rather than deleting the task and
+			// leaving orphaned identity evidence.
+			if _, err := tx.ExecContext(ctx,
+				`UPDATE tasks SET status = 'archived', archived_at = ?, updated_at = ?
+				 WHERE tenant_id = ? AND id = ?`, now, now, tenant, fromTaskID); err != nil {
 				return err
 			}
 		}

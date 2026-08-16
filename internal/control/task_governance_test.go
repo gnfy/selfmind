@@ -106,6 +106,22 @@ func TestDeleteEmptyTaskNeverDeletesHistory(t *testing.T) {
 	if err != nil || deleted {
 		t.Fatalf("history task deleted=%v err=%v", deleted, err)
 	}
+
+	withReference, err := store.CreateTask(ctx, TaskCreate{TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "named placeholder"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.UpsertTaskReference(ctx, TaskReferenceWrite{
+		TenantID: identity.TenantID, PersonID: identity.PersonID, TaskID: withReference.ID,
+		Class: TaskReferenceLiteral, Value: "named-placeholder", UserConfirmed: true,
+		Provenance: "user_control", SourceRef: "test",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	deleted, err = store.DeleteEmptyTask(ctx, identity.TenantID, identity.PersonID, withReference.ID)
+	if err != nil || deleted {
+		t.Fatalf("user-governed reference must make a label durable: deleted=%v err=%v", deleted, err)
+	}
 }
 
 func TestArchiveStaleTasksHonorsPinnedPendingAndOpenWork(t *testing.T) {

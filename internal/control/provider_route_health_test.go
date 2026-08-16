@@ -90,6 +90,38 @@ func TestInactiveProviderRouteRequeuesBlockedJobsAfterConfigChange(t *testing.T)
 	}
 }
 
+func TestInactiveProviderRouteSweepDoesNotReleaseRetryLimitPolicy(t *testing.T) {
+	ctx := context.Background()
+	store, err := OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	const tenant = "tenant"
+	if _, err := store.EnqueueMaintenanceJob(ctx, tenant, "retry-limited", 1, `{}`); err != nil {
+		t.Fatal(err)
+	}
+	if claimed, err := store.ClaimMaintenanceJob(ctx, tenant, "retry-limited", 1); err != nil || !claimed {
+		t.Fatalf("claim: claimed=%v err=%v", claimed, err)
+	}
+	if err := store.FailMaintenanceJob(ctx, tenant, "retry-limited", 1, "temporary provider failure", 0); err != nil {
+		t.Fatal(err)
+	}
+	if blocked, err := store.BlockMaintenanceJobAfterRetries(ctx, tenant, "retry-limited", 1, "retry limit"); err != nil || !blocked {
+		t.Fatalf("block: blocked=%v err=%v", blocked, err)
+	}
+
+	requeued, err := store.RequeueBlockedJobsForInactiveProviderRoutes(ctx, tenant, []string{"route-current"}, time.Now())
+	if err != nil || requeued != 0 {
+		t.Fatalf("requeued=%d err=%v", requeued, err)
+	}
+	job, err := store.GetMaintenanceJob(ctx, tenant, "retry-limited", 1)
+	if err != nil || job == nil || job.Status != MaintenanceJobBlockedProvider || job.BlockedRouteID != maintenanceRetryLimitRouteID {
+		t.Fatalf("job=%+v err=%v", job, err)
+	}
+}
+
 func TestHealthyFallbackRequeuesOnlyMatchingMaintenanceVersion(t *testing.T) {
 	ctx := context.Background()
 	store, err := OpenStore(t.TempDir())

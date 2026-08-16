@@ -401,7 +401,33 @@ intake 也必须丢弃，不能进入长期 canonical。带业务前缀的运行
 `CI_PENDING_APPROVAL`）同样识别。召回命中后的访问打点使用脱离前台取消信号的
 短事务；只有已进入 prompt 预算的 canonical 才会被 touch。
 
-### 5.3 纠正与遗忘语义（P2）
+### 5.3 四类知识职责（2026-08-15）
+
+长期连续性不能由一个“万能 memory 表”承担，当前实现明确分为四类：
+
+| 类型 | 负责内容 | 写入/更新方式 | 是否参与任务路由 |
+|---|---|---|---|
+| Work Spine / handoff | run、证据、当前状态、下一步 | 每轮确定性落库 | 否 |
+| Task Reference | 任务的名称、编号、实体别名、描述性地址 | 现有 post-run 维护调用提案 + 确定性激活；用户可直接增删 | 仅唯一 active 精确命中 |
+| Canonical memory | 跨任务可复用的用户偏好与声明性事实 | observation/canonical 治理 | 否，只参与召回 |
+| Workspace knowledge | `AGENTS.md`、`.selfmind.md` 等项目规则与程序性知识 | 授权扫描器生成路径/hash/mtime/章节/有界摘录；文件变更整份替换 | 否，只参与当前 workspace 召回 |
+
+Task Reference 的自动激活需要两个不同 run 的原始用户文本支持；标题、摘要、
+recall 结果和模型生成文本都不算证据。同一 reference 指向多个 task 时全部进入
+`conflicted`，系统拒绝猜测。普通“提到”只加载 bounded task context，不改变
+current task、workspace、权限或生命周期；明确“继续”才允许 full task context。
+用户可通过 `/task <id> references`、`reference add|remove` 查看和裁决。
+
+Workspace knowledge 不复制整份文档到 canonical memory，也不调用额外模型。
+它复用项目上下文扫描的授权边界，并作为独立 `RecallSource` 与 task/session/
+canonical 共同竞争固定预算；删除或 hash 变化会使旧章节失效。
+
+`selfmind report daily` 是个人版的最小记忆观察基线：它按来源报告 recall 候选、
+实际注入和最终输出词法重叠，并汇总 `ADD`、`REINFORCE`、`SUPERSEDE`、
+`CONFLICT`、瞬态丢弃等 disposition。词法重叠只是诊断信号，不证明因果；当
+maintenance 存在 failed/blocked 作业时，报告必须明确标记写入基线不完整。
+
+### 5.4 纠正与遗忘语义（P2）
 
 | 操作 | 语义 |
 |------|------|

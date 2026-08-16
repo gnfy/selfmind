@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"selfmind/internal/control"
 	"selfmind/internal/gateway/api"
 	"selfmind/internal/gateway/router"
 )
@@ -175,6 +176,22 @@ func reconcileStructuredOutcome(outcome api.RunOutcome) api.RunOutcome {
 	return outcome
 }
 
+// reconcileMissingFinalResponse prevents a transport-level clean EOF from
+// masquerading as successful work. A structured finish_run result is itself a
+// durable final result; otherwise the run remains resumable and the next turn
+// can continue from its persisted evidence.
+func reconcileMissingFinalResponse(outcome api.RunOutcome, structured, hasFinalContent bool) api.RunOutcome {
+	if structured || hasFinalContent {
+		return outcome
+	}
+	outcome.Status = "interrupted"
+	outcome.CompletionReason = "missing_final_response"
+	outcome.Resumable = true
+	outcome.Summary = "The model stopped without producing a final response."
+	outcome.NextSteps = appendUnique(outcome.NextSteps, "Reply \"continue\" to resume from the collected evidence.", 8)
+	return outcome
+}
+
 func turnStatusForOutcome(outcome api.RunOutcome) string {
 	switch strings.ToLower(strings.TrimSpace(outcome.Status)) {
 	case "waiting_external":
@@ -202,6 +219,14 @@ func turnStatusForOutcome(outcome api.RunOutcome) string {
 // label open for normal follow-ups. Structured finish_run outcomes remain
 // authoritative and may close or park the task explicitly.
 func taskStatusForFinalization(outcome api.RunOutcome, structured bool) string {
+	if outcome.External != nil {
+		switch strings.ToLower(strings.TrimSpace(outcome.External.Status)) {
+		case control.ExternalWatchFailed:
+			return "blocked"
+		case control.ExternalWatchTimedOut, control.ExternalWatchBlocked:
+			return "waiting_user"
+		}
+	}
 	status := strings.ToLower(strings.TrimSpace(outcome.Status))
 	if !structured && (status == "" || status == "running" || status == "done" || status == "completed") {
 		return "in_progress"
@@ -210,6 +235,44 @@ func taskStatusForFinalization(outcome api.RunOutcome, structured bool) string {
 		return "in_progress"
 	}
 	return status
+}
+
+// reconcileExternalWatchOutcome keeps the agent run result and the observed
+// external result on separate axes. It is intentionally deterministic: the
+// durable watcher, not finalization prose, owns the external status.
+func reconcileExternalWatchOutcome(outcome api.RunOutcome, watch *control.ExternalWatch) api.RunOutcome {
+	if watch == nil || strings.TrimSpace(watch.ID) == "" {
+		return outcome
+	}
+	outcome.External = &api.ExternalOutcome{
+		WatchID:            watch.ID,
+		Status:             strings.TrimSpace(watch.Status),
+		CheckerStatus:      strings.TrimSpace(watch.CheckerStatus),
+		OperationStatus:    strings.TrimSpace(watch.OperationStatus),
+		VerificationStatus: strings.TrimSpace(watch.VerificationStatus),
+		Summary:            truncate(toOneLine(firstNonEmpty(watch.LastError, watch.LastOutput)), 500),
+	}
+
+	// A structured finalizer historically reported the watched operation's
+	// failure as its own failure. Once the agent has reached a structured
+	// terminal result and local verification did not fail, normalize that old
+	// shape to a successful finalization. Real provider/tool/finalizer errors
+	// exit through finalizeErroredRun before this function and remain failures.
+	status := strings.ToLower(strings.TrimSpace(outcome.Status))
+	externalStatus := strings.ToLower(strings.TrimSpace(watch.Status))
+	if externalStatus == control.ExternalWatchFailed || externalStatus == control.ExternalWatchTimedOut {
+		if (status == "failed" || status == "blocked" || status == "waiting_external") &&
+			!verificationRequiresResume(outcome.Verification, outcome.Files) && !outcome.NeedApprove {
+			outcome.Status = "done"
+			outcome.Resumable = false
+			if externalStatus == control.ExternalWatchFailed {
+				outcome.CompletionReason = "completed_with_external_failure"
+			} else {
+				outcome.CompletionReason = "completed_with_external_timeout"
+			}
+		}
+	}
+	return outcome
 }
 
 func extractOutcomeSection(content string, headings []string) []string {

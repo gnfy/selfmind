@@ -100,8 +100,12 @@ func (c *maintenanceProviderChain) recordProviderCall(ctx context.Context, candi
 	}
 	writeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
 	defer cancel()
+	modelContext := llm.ModelContextFrom(ctx)
 	err := c.control.RecordMaintenanceProviderCall(writeCtx, control.MaintenanceProviderCall{
 		TenantID:                 c.routeTenant(ctx),
+		PersonID:                 modelContext.PersonID,
+		TaskID:                   modelContext.TaskID,
+		RunID:                    modelContext.RunID,
 		Role:                     string(candidate.role),
 		Provider:                 candidate.route.Provider,
 		Model:                    candidate.route.Model,

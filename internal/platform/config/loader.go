@@ -502,12 +502,16 @@ type MCP_SERVER struct {
 }
 
 type EvolutionConfig struct {
-	Enabled                bool    `mapstructure:"enabled" yaml:"enabled,omitempty"`
-	Mode                   string  `mapstructure:"mode" yaml:"mode,omitempty"`
-	MinComplexityThreshold int     `mapstructure:"min_complexity_threshold" yaml:"min_complexity_threshold,omitempty"`
-	AutoArchiveConfidence  float64 `mapstructure:"auto_archive_confidence" yaml:"auto_archive_confidence,omitempty"`
-	NudgeInterval          int     `mapstructure:"nudge_interval" yaml:"nudge_interval,omitempty"`
-	SkillsDir              string  `mapstructure:"skills_dir" yaml:"skills_dir,omitempty"`
+	Enabled                  bool    `mapstructure:"enabled" yaml:"enabled,omitempty"`
+	Mode                     string  `mapstructure:"mode" yaml:"mode,omitempty"`
+	MinComplexityThreshold   int     `mapstructure:"min_complexity_threshold" yaml:"min_complexity_threshold,omitempty"`
+	AutoArchiveConfidence    float64 `mapstructure:"auto_archive_confidence" yaml:"auto_archive_confidence,omitempty"`
+	NudgeInterval            int     `mapstructure:"nudge_interval" yaml:"nudge_interval,omitempty"`
+	SkillsDir                string  `mapstructure:"skills_dir" yaml:"skills_dir,omitempty"`
+	ShadowAfterObservations  int     `mapstructure:"shadow_after_observations" yaml:"shadow_after_observations,omitempty"`
+	PromoteAfterObservations int     `mapstructure:"promote_after_observations" yaml:"promote_after_observations,omitempty"`
+	MinShadowRuns            int     `mapstructure:"min_shadow_runs" yaml:"min_shadow_runs,omitempty"`
+	MaxShadowFailureRate     float64 `mapstructure:"max_shadow_failure_rate" yaml:"max_shadow_failure_rate,omitempty"`
 }
 
 type AgentConfig struct {
@@ -1101,7 +1105,12 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("tasks.maintenance_soft_probe_max", "1h")
 	v.SetDefault("tasks.maintenance_llm_timeout", "2m")
 	v.SetDefault("evolution.enabled", true)
+	v.SetDefault("evolution.mode", "auto-readonly")
 	v.SetDefault("evolution.nudge_interval", 10)
+	v.SetDefault("evolution.shadow_after_observations", 3)
+	v.SetDefault("evolution.promote_after_observations", 5)
+	v.SetDefault("evolution.min_shadow_runs", 3)
+	v.SetDefault("evolution.max_shadow_failure_rate", 0.05)
 	v.SetDefault("models.source", "local")
 	v.SetDefault("intent.mode", "hybrid")
 	v.SetDefault("intent.thresholds.direct", 0.8)

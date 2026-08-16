@@ -21,6 +21,7 @@ type ContextBreakdown struct {
 	Tools          int `json:"tools"`           // # TOOL USE INSTRUCTIONS block
 	ProjectContext int `json:"project_context"` // # PROJECT CONTEXT (AGENTS.md et al.)
 	Memory         int `json:"memory"`          // <user-profile> + <memory-context>
+	Skill          int `json:"skill"`           // active Skill body or bounded candidate metadata
 	Runtime        int `json:"runtime"`         // task/run state and other runtime metadata
 	Recall         int `json:"recall"`          // semantic/session/canonical recall slices
 	Artifacts      int `json:"artifacts"`       // artifact references selected for this turn
@@ -39,6 +40,8 @@ var breakdownMarkers = []struct {
 	{"# PROJECT CONTEXT", "project_context"},
 	{"# TOOL USE INSTRUCTIONS", "tools"},
 	{"# SELECTED RUNTIME CONTEXT", "runtime"},
+	{"<!-- SELFMIND_ACTIVE_SKILL_BEGIN -->", "skill"},
+	{"## Skill Candidates for Current Work Unit", "skill"},
 	{"<user-profile>", "memory"},
 	{"<memory-context>", "memory"},
 }
@@ -85,6 +88,8 @@ func BreakdownFromSections(sections []PromptSection, messages []llm.Message) Con
 			b.Artifacts += s.Tokens
 		case "memory":
 			b.Memory += s.Tokens
+		case "skill":
+			b.Skill += s.Tokens
 		default:
 			b.Identity += s.Tokens
 		}
@@ -99,7 +104,7 @@ func BreakdownFromSections(sections []PromptSection, messages []llm.Message) Con
 			b.History += estimateSingleMessageTokens(msg)
 		}
 	}
-	b.Total = b.Identity + b.Tools + b.ProjectContext + b.Memory + b.Runtime + b.Recall + b.Artifacts + b.History + b.ToolResults
+	b.Total = b.Identity + b.Tools + b.ProjectContext + b.Memory + b.Skill + b.Runtime + b.Recall + b.Artifacts + b.History + b.ToolResults
 	return b
 }
 
@@ -136,6 +141,9 @@ func SplitRuntimePromptSections(content string) []PromptSection {
 			category = "memory"
 		case strings.HasPrefix(trimmed, "## Relevant Artifacts"):
 			category = "artifacts"
+		case strings.HasPrefix(trimmed, activeSkillPromptBegin),
+			strings.HasPrefix(trimmed, "## Skill Candidates for Current Work Unit"):
+			category = "skill"
 		case strings.HasPrefix(trimmed, "## Delivery Continuity"),
 			strings.HasPrefix(trimmed, "## Recent Events"),
 			strings.HasPrefix(trimmed, "# DURABLE TASK CONTEXT"),
@@ -178,6 +186,7 @@ func ProviderCallContextBreakdown(sections []PromptSection, messages []llm.Messa
 		"workspace":            b.ProjectContext,
 		"artifacts":            b.Artifacts,
 		"memory":               b.Memory,
+		"skill":                b.Skill,
 		"task_runtime":         b.Runtime,
 		"estimated_total":      b.Total + toolSchemaTokens,
 	}
@@ -261,6 +270,8 @@ func ComputeContextBreakdown(systemPrompt string, messages []llm.Message) Contex
 			b.Runtime += tok
 		case "memory":
 			b.Memory += tok
+		case "skill":
+			b.Skill += tok
 		default:
 			b.Identity += tok
 		}
@@ -275,7 +286,7 @@ func ComputeContextBreakdown(systemPrompt string, messages []llm.Message) Contex
 			b.History += estimateSingleMessageTokens(msg)
 		}
 	}
-	b.Total = b.Identity + b.Tools + b.ProjectContext + b.Memory + b.Runtime + b.Recall + b.Artifacts + b.History + b.ToolResults
+	b.Total = b.Identity + b.Tools + b.ProjectContext + b.Memory + b.Skill + b.Runtime + b.Recall + b.Artifacts + b.History + b.ToolResults
 	return b
 }
 
@@ -287,6 +298,7 @@ func (b ContextBreakdown) Payload() map[string]interface{} {
 		"tools":           b.Tools,
 		"project_context": b.ProjectContext,
 		"memory":          b.Memory,
+		"skill":           b.Skill,
 		"runtime":         b.Runtime,
 		"recall":          b.Recall,
 		"artifacts":       b.Artifacts,

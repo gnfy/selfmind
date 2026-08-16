@@ -55,7 +55,7 @@ func assessExecContainment(toolName string, args map[string]interface{}) Contain
 	if allowed, _ := args[credentialReadArgKey].(bool); allowed {
 		assessment.Credentials = containmentCredentialsSelected
 	}
-	assessment.ObservationOnly = deterministicObservationExec(toolName, args)
+	assessment.ObservationOnly = observationOnlyExec(toolName, args)
 	return assessment
 }
 

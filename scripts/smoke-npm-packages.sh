@@ -45,6 +45,7 @@ node scripts/stage-npm-packages.mjs \
 
 pack_dir="$stage_dir/packs"
 smoke_dir="$stage_dir/smoke"
+rm -rf "$smoke_dir"
 mkdir -p "$pack_dir" "$smoke_dir"
 
 pack_package() {
@@ -91,7 +92,10 @@ fi
 (
   cd "$smoke_dir"
   npm init --yes --silent >/dev/null
-  npm install --ignore-scripts --silent "$platform_tgz" "$launcher_tgz"
+  # Install the explicitly packed host binary while suppressing registry
+  # resolution of the launcher's other optional platform packages. This keeps
+  # the release smoke deterministic before those sibling packages are public.
+  npm install --ignore-scripts --omit=optional --no-audit --no-fund "$platform_tgz" "$launcher_tgz"
   ./node_modules/.bin/selfmind --version
 )
 

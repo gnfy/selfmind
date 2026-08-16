@@ -6,12 +6,13 @@ import (
 )
 
 func TestRunScopedApprovalAvoidsRepeatWithoutPersisting(t *testing.T) {
+	withExecSandboxPolicy(t, true, true, false)
 	resetTriageTelemetryForTest(t)
 	asks := 0
 	executions := 0
 	install := func(runID string) func() {
 		return SetExecutionScope("person-run-grant", ExecutionScope{
-			TenantID: "default", PersonID: "person-run-grant", TaskID: "task-1", RunID: runID,
+			TenantID: "default", PersonID: "person-run-grant", TaskID: "task-1", RunID: runID, WorkspaceID: "ws-run",
 			WorkspaceRoot: t.TempDir(), ApprovalMode: ApprovalOnRequest,
 			Approval: func(context.Context, ToolApprovalRequest) (ToolApprovalDecision, error) {
 				asks++
@@ -28,7 +29,7 @@ func TestRunScopedApprovalAvoidsRepeatWithoutPersisting(t *testing.T) {
 		ctx := WithExecutionScopeKey(context.Background(), ExecutionScopeKeyForRun(runID))
 		if _, err := exec(map[string]interface{}{
 			"_tenant_id": "person-run-grant", "_context": ctx,
-			"_tool_name": "terminal", "command": "chmod +x script.sh",
+			"_tool_name": "terminal", "command": "git status",
 		}); err != nil {
 			t.Fatalf("terminal call: %v", err)
 		}
@@ -64,12 +65,12 @@ func TestRunScopedApprovalAvoidsRepeatWithoutPersisting(t *testing.T) {
 		t.Fatalf("run grant leaked into the next run: asks=%d", asks)
 	}
 	stats := TriageDiagnostics("default", "person-run-grant")
-	if stats.GrantHits != 1 || stats.HumanAsks != 2 {
-		t.Fatalf("approval funnel stats = %+v, want one grant hit and two human asks", stats)
+	if stats.ExactRunHits != 1 || stats.HumanAsks != 2 {
+		t.Fatalf("approval funnel stats = %+v, want one exact run hit and two human asks", stats)
 	}
 }
 
-func TestExactScriptRunApprovalAvoidsOnlyByteIdenticalRepeat(t *testing.T) {
+func TestHostScriptApprovalIsOnceOnly(t *testing.T) {
 	resetTriageTelemetryForTest(t)
 	asks := 0
 	executions := 0
@@ -78,10 +79,10 @@ func TestExactScriptRunApprovalAvoidsOnlyByteIdenticalRepeat(t *testing.T) {
 		WorkspaceID: "ws-exact", WorkspaceRoot: t.TempDir(), ApprovalMode: ApprovalOnRequest,
 		Approval: func(_ context.Context, req ToolApprovalRequest) (ToolApprovalDecision, error) {
 			asks++
-			if req.GrantClass != "" || req.RunGrantClass == "" {
-				t.Fatalf("arbitrary script must offer exact run reuse only: %+v", req)
+			if req.DecisionPolicy != ApprovalDecisionPolicyOnceOnly || req.GrantClass != "" || req.RunGrantClass != "" {
+				t.Fatalf("host script must offer once-only approval: %+v", req)
 			}
-			return ToolApprovalDecision{Approved: true, ApprovalID: "apr-exact", Scope: "run"}, nil
+			return ToolApprovalDecision{Approved: true, ApprovalID: "apr-exact"}, nil
 		},
 	})
 	defer cleanup()
@@ -102,11 +103,11 @@ func TestExactScriptRunApprovalAvoidsOnlyByteIdenticalRepeat(t *testing.T) {
 	call("print('same')")
 	call("print('same')")
 	call("print('changed')")
-	if asks != 2 || executions != 3 {
-		t.Fatalf("asks=%d executions=%d, want 2/3", asks, executions)
+	if asks != 3 || executions != 3 {
+		t.Fatalf("asks=%d executions=%d, want 3/3", asks, executions)
 	}
 	stats := TriageDiagnostics("default", "person-exact-run")
-	if stats.ExactRunHits != 1 || stats.HumanAsks != 2 {
-		t.Fatalf("approval funnel stats = %+v, want one exact-run hit and two human asks", stats)
+	if stats.ExactRunHits != 0 || stats.HumanAsks != 3 {
+		t.Fatalf("approval funnel stats = %+v, want no exact-run reuse and three human asks", stats)
 	}
 }

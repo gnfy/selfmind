@@ -46,7 +46,7 @@ func aggregateDirectResponse(resp *router.HandleResponse) (string, llm.UsageStat
 // next agent-bound message to this task" marker written by /resume. It is
 // person-scoped (like resolveContinueTask) and consumed by the first message
 // that reaches resolveTask, so a stale /resume can never capture unrelated new
-// work later — absence of continuation evidence always means a new task.
+// work later.
 const resumePinKey = "resume_pin_task"
 
 // consumeResumePin returns the task pinned by an explicit /resume and clears
@@ -141,7 +141,7 @@ func (c *RunCoordinator) withResumeContext(ctx context.Context, identity *contro
 	resumedRuns := int64(0)
 	if run != nil {
 		runID = run.ID
-		resumedRuns, _ = store.MarkTaskRunsResumed(ctx, identity.TenantID, task.ID, run.ID, workKey)
+		resumedRuns, _ = store.MarkTaskRunsResumed(ctx, identity.TenantID, task.ID, run.ID)
 	}
 	handoff, _ := store.LatestHandoff(ctx, task.ID)
 	events, _ := store.ListTaskEvents(ctx, task.ID, 8)

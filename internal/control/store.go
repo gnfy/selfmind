@@ -78,6 +78,7 @@ type Run struct {
 	Channel      string     `json:"channel"`
 	InputSummary string     `json:"input_summary,omitempty"`
 	WorkKey      string     `json:"work_key,omitempty"`
+	WorkUnitID   string     `json:"work_unit_id,omitempty"`
 	Status       string     `json:"status"`
 	StartedAt    time.Time  `json:"started_at"`
 	FinishedAt   *time.Time `json:"finished_at,omitempty"`
@@ -123,6 +124,10 @@ type Artifact struct {
 }
 
 type TaskCreate struct {
+	// ID is optional. Most callers leave it empty and receive a generated task
+	// id. Durable replay paths may supply a stable task_ id so a crash between
+	// creation and completion reuses the same display label.
+	ID          string
 	TenantID    string
 	PersonID    string
 	WorkspaceID string
@@ -131,6 +136,11 @@ type TaskCreate struct {
 	Kind        string
 	Visibility  string
 	Pinned      bool
+	// KeepCurrent creates the task without changing the person's current-task
+	// pointer. Post-run display governance uses this when it splits one
+	// completed run from a weak pre-label: creation must not race a newer user
+	// selection or acquire execution authority retroactively.
+	KeepCurrent bool
 }
 
 func OpenStore(dataDir string) (*Store, error) {
@@ -231,6 +241,23 @@ CREATE TABLE IF NOT EXISTS current_workspace (
 	updated_at INTEGER NOT NULL,
 	PRIMARY KEY(tenant_id, person_id)
 );
+CREATE TABLE IF NOT EXISTS workspace_knowledge_sections (
+	id TEXT PRIMARY KEY,
+	tenant_id TEXT NOT NULL,
+	person_id TEXT NOT NULL,
+	workspace_id TEXT NOT NULL,
+	file_path TEXT NOT NULL,
+	file_name TEXT NOT NULL,
+	content_hash TEXT NOT NULL,
+	file_mtime INTEGER NOT NULL DEFAULT 0,
+	section_index INTEGER NOT NULL,
+	title TEXT NOT NULL,
+	excerpt TEXT NOT NULL,
+	updated_at INTEGER NOT NULL,
+	UNIQUE(tenant_id, person_id, workspace_id, file_path, section_index)
+);
+CREATE INDEX IF NOT EXISTS idx_workspace_knowledge_scope
+	ON workspace_knowledge_sections(tenant_id, person_id, workspace_id, updated_at);
 CREATE TABLE IF NOT EXISTS execution_leases (
 	id TEXT PRIMARY KEY,
 	run_id TEXT NOT NULL UNIQUE,
@@ -313,6 +340,60 @@ CREATE TABLE IF NOT EXISTS task_runs (
 );
 CREATE INDEX IF NOT EXISTS idx_task_runs_task_started ON task_runs(tenant_id, task_id, started_at);
 CREATE INDEX IF NOT EXISTS idx_task_runs_person_status ON task_runs(tenant_id, person_id, status, started_at);
+CREATE TABLE IF NOT EXISTS task_references (
+	id TEXT PRIMARY KEY,
+	tenant_id TEXT NOT NULL,
+	person_id TEXT NOT NULL,
+	task_id TEXT NOT NULL,
+	workspace_id TEXT NOT NULL DEFAULT '',
+	class TEXT NOT NULL,
+	raw_value TEXT NOT NULL,
+	normalized_value TEXT NOT NULL,
+	status TEXT NOT NULL DEFAULT 'shadow',
+	user_confirmed INTEGER NOT NULL DEFAULT 0,
+	created_at INTEGER NOT NULL,
+	updated_at INTEGER NOT NULL,
+	UNIQUE(tenant_id, person_id, normalized_value, task_id)
+);
+CREATE INDEX IF NOT EXISTS idx_task_references_owner_value
+	ON task_references(tenant_id, person_id, normalized_value, status);
+CREATE INDEX IF NOT EXISTS idx_task_references_task
+	ON task_references(tenant_id, task_id, status, updated_at);
+CREATE TABLE IF NOT EXISTS task_reference_evidence (
+	id TEXT PRIMARY KEY,
+	reference_id TEXT NOT NULL,
+	run_id TEXT NOT NULL DEFAULT '',
+	provenance TEXT NOT NULL,
+	source_ref TEXT NOT NULL DEFAULT '',
+	evidence_hash TEXT NOT NULL,
+	observed_at INTEGER NOT NULL,
+	UNIQUE(reference_id, run_id, provenance, evidence_hash)
+);
+CREATE INDEX IF NOT EXISTS idx_task_reference_evidence_ref
+	ON task_reference_evidence(reference_id, provenance, observed_at);
+CREATE TABLE IF NOT EXISTS task_resolution_events (
+	id TEXT PRIMARY KEY,
+	tenant_id TEXT NOT NULL,
+	person_id TEXT NOT NULL,
+	run_id TEXT NOT NULL DEFAULT '',
+	input_hash TEXT NOT NULL,
+	matched_surface_forms_json TEXT NOT NULL DEFAULT '[]',
+	unmatched_salient_tokens_json TEXT NOT NULL DEFAULT '[]',
+	candidates_json TEXT NOT NULL DEFAULT '[]',
+	selected_task_id TEXT NOT NULL DEFAULT '',
+	final_task_id TEXT NOT NULL DEFAULT '',
+	reason TEXT NOT NULL DEFAULT '',
+	outcome TEXT NOT NULL DEFAULT 'unverified',
+	attach_policy_json TEXT NOT NULL DEFAULT '{}',
+	analyzer_evaluated INTEGER NOT NULL DEFAULT 0,
+	created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_task_resolution_events_owner
+	ON task_resolution_events(tenant_id, person_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_task_resolution_events_run
+	ON task_resolution_events(tenant_id, run_id, created_at);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_task_resolution_events_run_unique
+	ON task_resolution_events(tenant_id, run_id) WHERE run_id != '';
 CREATE TABLE IF NOT EXISTS task_blockers (
 	id TEXT PRIMARY KEY,
 	tenant_id TEXT NOT NULL,
@@ -565,6 +646,9 @@ CREATE INDEX IF NOT EXISTS idx_provider_route_probe
 CREATE TABLE IF NOT EXISTS maintenance_provider_calls (
 	id INTEGER PRIMARY KEY AUTOINCREMENT,
 	tenant_id TEXT NOT NULL,
+	person_id TEXT NOT NULL DEFAULT '',
+	task_id TEXT NOT NULL DEFAULT '',
+	run_id TEXT NOT NULL DEFAULT '',
 	role TEXT NOT NULL DEFAULT '',
 	provider TEXT NOT NULL DEFAULT '',
 	model TEXT NOT NULL DEFAULT '',
@@ -708,6 +792,195 @@ CREATE TABLE IF NOT EXISTS tool_ledger (
 );
 CREATE INDEX IF NOT EXISTS idx_tool_ledger_uncertain
 	ON tool_ledger(tenant_id, run_id, status);
+CREATE TABLE IF NOT EXISTS workflow_profiles (
+	run_id TEXT PRIMARY KEY,
+	tenant_id TEXT NOT NULL,
+	person_id TEXT NOT NULL,
+	task_id TEXT NOT NULL,
+	workspace_id TEXT NOT NULL DEFAULT '',
+	workflow_signature TEXT NOT NULL,
+	skill_versions_json TEXT NOT NULL DEFAULT '{}',
+	plan_hash TEXT NOT NULL DEFAULT '',
+	tool_sequence_json TEXT NOT NULL DEFAULT '[]',
+	tool_calls INTEGER NOT NULL DEFAULT 0,
+	tool_failures INTEGER NOT NULL DEFAULT 0,
+	provider_calls INTEGER NOT NULL DEFAULT 0,
+	duration_ms INTEGER NOT NULL DEFAULT 0,
+	input_tokens INTEGER NOT NULL DEFAULT 0,
+	output_tokens INTEGER NOT NULL DEFAULT 0,
+	billed_input_tokens INTEGER NOT NULL DEFAULT 0,
+	outcome_status TEXT NOT NULL DEFAULT '',
+	verification_state TEXT NOT NULL DEFAULT '',
+	read_only INTEGER NOT NULL DEFAULT 0,
+	applied_candidate_id TEXT NOT NULL DEFAULT '',
+	created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_workflow_profiles_signature
+	ON workflow_profiles(tenant_id, person_id, workspace_id, workflow_signature, created_at);
+CREATE TABLE IF NOT EXISTS evolution_candidates (
+	id TEXT PRIMARY KEY,
+	tenant_id TEXT NOT NULL,
+	person_id TEXT NOT NULL,
+	workspace_id TEXT NOT NULL DEFAULT '',
+	last_task_id TEXT NOT NULL DEFAULT '',
+	workflow_signature TEXT NOT NULL,
+	kind TEXT NOT NULL,
+	status TEXT NOT NULL DEFAULT 'candidate',
+	contract_json TEXT NOT NULL DEFAULT '{}',
+	repair_json TEXT NOT NULL DEFAULT '{}',
+	observation_count INTEGER NOT NULL DEFAULT 0,
+	shadow_runs INTEGER NOT NULL DEFAULT 0,
+	shadow_matches INTEGER NOT NULL DEFAULT 0,
+	fallback_count INTEGER NOT NULL DEFAULT 0,
+	consecutive_failures INTEGER NOT NULL DEFAULT 0,
+	last_failure TEXT NOT NULL DEFAULT '',
+	enabled_at INTEGER,
+	last_applied_at INTEGER,
+	created_at INTEGER NOT NULL,
+	updated_at INTEGER NOT NULL,
+	UNIQUE(tenant_id, person_id, workspace_id, workflow_signature, kind)
+);
+CREATE INDEX IF NOT EXISTS idx_evolution_candidates_active
+	ON evolution_candidates(tenant_id, person_id, workspace_id, status, updated_at);
+CREATE TABLE IF NOT EXISTS skill_versions (
+	control_tenant_id TEXT NOT NULL,
+	skill_key TEXT NOT NULL,
+	skill_name TEXT NOT NULL,
+	version_hash TEXT NOT NULL,
+	parent_version_hash TEXT NOT NULL DEFAULT '',
+	state TEXT NOT NULL,
+	content_ref TEXT NOT NULL DEFAULT '',
+	content_body TEXT NOT NULL DEFAULT '',
+	source_observation_ids_json TEXT NOT NULL DEFAULT '[]',
+	evidence_set_hash TEXT NOT NULL DEFAULT '',
+	evidence_json TEXT NOT NULL DEFAULT '{}',
+	created_by TEXT NOT NULL,
+	created_at INTEGER NOT NULL,
+	promoted_at INTEGER,
+	PRIMARY KEY(control_tenant_id, skill_key, version_hash)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_skill_versions_one_active
+	ON skill_versions(control_tenant_id, skill_key) WHERE state = 'active';
+CREATE UNIQUE INDEX IF NOT EXISTS idx_skill_versions_candidate_evidence
+	ON skill_versions(control_tenant_id, evidence_set_hash)
+	WHERE state = 'candidate' AND evidence_set_hash != '';
+CREATE TABLE IF NOT EXISTS run_work_units (
+	id TEXT PRIMARY KEY,
+	identity_tenant_id TEXT NOT NULL,
+	person_id TEXT NOT NULL,
+	workspace_id TEXT NOT NULL DEFAULT '',
+	run_id TEXT NOT NULL,
+	sequence INTEGER NOT NULL,
+	primary_task_id TEXT NOT NULL,
+	related_task_id TEXT NOT NULL DEFAULT '',
+	goal_digest TEXT NOT NULL DEFAULT '',
+	plan_status TEXT NOT NULL DEFAULT '',
+	status TEXT NOT NULL DEFAULT 'pending',
+	outcome_summary TEXT NOT NULL DEFAULT '',
+		verification_state TEXT NOT NULL DEFAULT '',
+		verification_refs_json TEXT NOT NULL DEFAULT '[]',
+		started_at INTEGER,
+		created_at INTEGER NOT NULL,
+		finished_at INTEGER,
+		started_cursor INTEGER NOT NULL DEFAULT 0,
+		finished_cursor INTEGER NOT NULL DEFAULT 0,
+		UNIQUE(run_id, sequence)
+);
+CREATE INDEX IF NOT EXISTS idx_run_work_units_run
+	ON run_work_units(identity_tenant_id, run_id, sequence);
+CREATE TABLE IF NOT EXISTS run_skill_activations (
+	id TEXT PRIMARY KEY,
+	identity_tenant_id TEXT NOT NULL,
+	control_tenant_id TEXT NOT NULL,
+	person_id TEXT NOT NULL,
+	workspace_id TEXT NOT NULL DEFAULT '',
+	run_id TEXT NOT NULL,
+	sequence INTEGER NOT NULL,
+	work_unit_id TEXT NOT NULL,
+	execution_lane TEXT NOT NULL DEFAULT 'main',
+	primary_task_id TEXT NOT NULL,
+	related_task_id TEXT NOT NULL DEFAULT '',
+	skill_key TEXT NOT NULL,
+	skill_name TEXT NOT NULL,
+	version_hash TEXT NOT NULL,
+	activation_source TEXT NOT NULL,
+	attachment_mode TEXT NOT NULL DEFAULT '',
+	state TEXT NOT NULL,
+	fallback_reason TEXT NOT NULL DEFAULT '',
+	selected_at INTEGER NOT NULL,
+	finished_at INTEGER,
+	UNIQUE(run_id, sequence)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_run_skill_activations_live_lane
+	ON run_skill_activations(run_id, work_unit_id, execution_lane)
+	WHERE state IN ('selected', 'active');
+CREATE INDEX IF NOT EXISTS idx_run_skill_activations_skill
+	ON run_skill_activations(control_tenant_id, skill_key, version_hash, selected_at);
+CREATE TABLE IF NOT EXISTS task_skill_bindings (
+	identity_tenant_id TEXT NOT NULL,
+	person_id TEXT NOT NULL,
+	task_id TEXT NOT NULL,
+	control_tenant_id TEXT NOT NULL,
+	workspace_id TEXT NOT NULL DEFAULT '',
+	skill_key TEXT NOT NULL,
+	skill_name TEXT NOT NULL,
+	state TEXT NOT NULL,
+	binding_source TEXT NOT NULL,
+	bound_from_run_id TEXT NOT NULL DEFAULT '',
+	last_resolved_version_hash TEXT NOT NULL DEFAULT '',
+	suspended_reason TEXT NOT NULL DEFAULT '',
+	created_at INTEGER NOT NULL,
+	updated_at INTEGER NOT NULL,
+	PRIMARY KEY(identity_tenant_id, person_id, task_id)
+);
+CREATE INDEX IF NOT EXISTS idx_task_skill_bindings_skill
+	ON task_skill_bindings(control_tenant_id, skill_key, state, updated_at);
+CREATE TABLE IF NOT EXISTS skill_failure_guards (
+	control_tenant_id TEXT NOT NULL,
+	skill_key TEXT NOT NULL,
+	version_hash TEXT NOT NULL,
+	failure_signature TEXT NOT NULL,
+	failed_step_id TEXT NOT NULL DEFAULT '',
+	error_category TEXT NOT NULL DEFAULT '',
+	normalized_input_shape TEXT NOT NULL DEFAULT '',
+	state TEXT NOT NULL DEFAULT 'active',
+	source_run_id TEXT NOT NULL,
+	created_at INTEGER NOT NULL,
+	occurrence_count INTEGER NOT NULL DEFAULT 1,
+	last_seen_at INTEGER NOT NULL DEFAULT 0,
+	PRIMARY KEY(control_tenant_id, skill_key, version_hash, failure_signature)
+);
+CREATE TABLE IF NOT EXISTS workflow_observations (
+	id TEXT PRIMARY KEY,
+	identity_tenant_id TEXT NOT NULL,
+	control_tenant_id TEXT NOT NULL,
+	person_id TEXT NOT NULL,
+	workspace_id TEXT NOT NULL DEFAULT '',
+	run_id TEXT NOT NULL,
+	work_unit_id TEXT NOT NULL UNIQUE,
+	related_task_id TEXT NOT NULL DEFAULT '',
+	workflow_signature TEXT NOT NULL,
+	goal_digest TEXT NOT NULL DEFAULT '',
+	environment_fingerprint TEXT NOT NULL DEFAULT '',
+	skill_key TEXT NOT NULL DEFAULT '',
+	version_hash TEXT NOT NULL DEFAULT '',
+	activation_state TEXT NOT NULL DEFAULT '',
+	outcome_status TEXT NOT NULL,
+	verification_state TEXT NOT NULL DEFAULT '',
+	tool_sequence_json TEXT NOT NULL DEFAULT '[]',
+	tool_failures INTEGER NOT NULL DEFAULT 0,
+	provider_calls INTEGER NOT NULL DEFAULT 0,
+	duration_ms INTEGER NOT NULL DEFAULT 0,
+	input_tokens INTEGER NOT NULL DEFAULT 0,
+	output_tokens INTEGER NOT NULL DEFAULT 0,
+	user_corrected INTEGER NOT NULL DEFAULT 0,
+	evidence_role TEXT NOT NULL DEFAULT 'audit',
+	created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_workflow_observations_cohort
+	ON workflow_observations(identity_tenant_id, person_id, workspace_id, workflow_signature, created_at);
+CREATE INDEX IF NOT EXISTS idx_task_events_run_created
+	ON task_events(run_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_external_watches_due
 	ON external_watches(status, next_check_at);
 CREATE INDEX IF NOT EXISTS idx_external_watches_owner
@@ -819,8 +1092,19 @@ CREATE INDEX IF NOT EXISTS idx_external_watches_owner
 		// that caused it. A successful half-open probe requeues only jobs for
 		// that route; unrelated provider/configuration failures remain blocked.
 		{"maintenance_jobs", "blocked_route_id", "TEXT NOT NULL DEFAULT ''"},
+		{"skill_failure_guards", "occurrence_count", "INTEGER NOT NULL DEFAULT 1"},
+		{"skill_failure_guards", "last_seen_at", "INTEGER NOT NULL DEFAULT 0"},
+		// Work-unit timing and cursor windows make outcome, verification, and cost
+		// attribution independent from the enclosing run. Older rows fall back to
+		// their creation/run boundaries until a later plan transition closes them.
+		{"run_work_units", "started_at", "INTEGER"},
+		{"run_work_units", "started_cursor", "INTEGER NOT NULL DEFAULT 0"},
+		{"run_work_units", "finished_cursor", "INTEGER NOT NULL DEFAULT 0"},
 		// Compatible providers such as DeepSeek report cache hit/miss and
 		// reasoning-token details outside the base OpenAI usage fields.
+		{"maintenance_provider_calls", "person_id", "TEXT NOT NULL DEFAULT ''"},
+		{"maintenance_provider_calls", "task_id", "TEXT NOT NULL DEFAULT ''"},
+		{"maintenance_provider_calls", "run_id", "TEXT NOT NULL DEFAULT ''"},
 		{"maintenance_provider_calls", "cache_miss_input_tokens", "INTEGER NOT NULL DEFAULT 0"},
 		{"maintenance_provider_calls", "reasoning_output_tokens", "INTEGER NOT NULL DEFAULT 0"},
 		{"maintenance_provider_calls", "cache_usage_reported", "INTEGER NOT NULL DEFAULT 0"},
@@ -986,7 +1270,9 @@ CREATE INDEX IF NOT EXISTS idx_external_watches_owner
 		CREATE INDEX IF NOT EXISTS idx_task_queue_schedule
 			ON task_queue(status, not_before, priority DESC, created_at);
 		CREATE INDEX IF NOT EXISTS idx_task_queue_claims
-			ON task_queue(status, lease_until);`); err != nil {
+			ON task_queue(status, lease_until);
+		CREATE INDEX IF NOT EXISTS idx_maintenance_provider_calls_person
+			ON maintenance_provider_calls(tenant_id, person_id, created_at);`); err != nil {
 		return err
 	}
 	return nil
@@ -1578,7 +1864,12 @@ func (s *Store) CreateTask(ctx context.Context, req TaskCreate) (*Task, error) {
 		req.Title = "Untitled task"
 	}
 	now := time.Now().Unix()
-	id := "task_" + uuid.NewString()
+	id := strings.TrimSpace(req.ID)
+	if id == "" {
+		id = "task_" + uuid.NewString()
+	} else if !strings.HasPrefix(id, "task_") {
+		return nil, fmt.Errorf("task id must start with task_")
+	}
 	kind := normalizeTaskKind(req.Kind)
 	visibility := normalizeTaskVisibility(req.Visibility)
 	pinned := 0
@@ -1600,8 +1891,10 @@ func (s *Store) CreateTask(ctx context.Context, req TaskCreate) (*Task, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := s.SetCurrentTask(ctx, req.TenantID, req.PersonID, id); err != nil {
-		return nil, err
+	if !req.KeepCurrent {
+		if err := s.SetCurrentTask(ctx, req.TenantID, req.PersonID, id); err != nil {
+			return nil, err
+		}
 	}
 	return s.GetTask(ctx, req.TenantID, id)
 }
@@ -1847,6 +2140,7 @@ func (s *Store) startRun(ctx context.Context, task *Task, channel, inputSummary 
 		Status:       "running",
 		StartedAt:    time.Now(),
 	}
+	run.WorkUnitID = "wu_" + uuid.NewString()
 	// Insert the run and flip the task to running atomically: a partial write
 	// would leave tasks and task_runs disagreeing about the active run.
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -1858,6 +2152,15 @@ func (s *Store) startRun(ctx context.Context, task *Task, channel, inputSummary 
 		`INSERT INTO task_runs (id, task_id, tenant_id, person_id, workspace_id, channel, input_summary, work_key, status, started_at, heartbeat_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		run.ID, run.TaskID, run.TenantID, run.PersonID, run.WorkspaceID, run.Channel, run.InputSummary, run.WorkKey, run.Status, run.StartedAt.Unix(), run.StartedAt.Unix()); err != nil {
+		return nil, err
+	}
+	if _, err = tx.ExecContext(ctx,
+		`INSERT INTO run_work_units
+			 (id, identity_tenant_id, person_id, workspace_id, run_id, sequence, primary_task_id,
+			  related_task_id, goal_digest, plan_status, status, started_at, created_at, started_cursor)
+			 VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, 'in_progress', 'active', ?, ?, 0)`,
+		run.WorkUnitID, run.TenantID, run.PersonID, run.WorkspaceID, run.ID, run.TaskID,
+		run.TaskID, run.InputSummary, run.StartedAt.Unix(), run.StartedAt.Unix()); err != nil {
 		return nil, err
 	}
 	if _, err = tx.ExecContext(ctx,
@@ -1908,11 +2211,13 @@ func (s *Store) GetRun(ctx context.Context, tenantID, runID string) (*Run, error
 	var finished sql.NullInt64
 	err := s.db.QueryRowContext(ctx,
 		`SELECT id, task_id, tenant_id, person_id, COALESCE(workspace_id, ''), channel,
-		        COALESCE(input_summary, ''), COALESCE(work_key, ''), status, started_at, finished_at
+		        COALESCE(input_summary, ''), COALESCE(work_key, ''),
+		        COALESCE((SELECT id FROM run_work_units WHERE run_id = task_runs.id ORDER BY sequence LIMIT 1), ''),
+		        status, started_at, finished_at
 		 FROM task_runs WHERE tenant_id = ? AND id = ?`,
 		normalizeTenant(tenantID), runID).
 		Scan(&r.ID, &r.TaskID, &r.TenantID, &r.PersonID, &r.WorkspaceID, &r.Channel,
-			&r.InputSummary, &r.WorkKey, &r.Status, &started, &finished)
+			&r.InputSummary, &r.WorkKey, &r.WorkUnitID, &r.Status, &started, &finished)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -1928,14 +2233,21 @@ func (s *Store) GetRun(ctx context.Context, tenantID, runID string) (*Run, error
 }
 
 func (s *Store) FinishRun(ctx context.Context, tenantID, runID, status string) error {
-	return s.FinishRunWithMaintenancePayload(ctx, tenantID, runID, status, 1, "")
+	return s.finishRun(ctx, tenantID, runID, status, 0, "")
 }
 
 // FinishRunWithMaintenancePayload atomically records both the terminal run
 // state and the immutable replay input consumed by post-run maintenance. The
-// ordinary FinishRun wrapper remains for callers that intentionally have no
-// analyzer evidence (for example an administrative cancellation).
+// ordinary FinishRun wrapper is terminal-only for administrative and fallback
+// callers that have no analyzer evidence.
 func (s *Store) FinishRunWithMaintenancePayload(ctx context.Context, tenantID, runID, status string, analyzerVersion int, payload string) error {
+	if analyzerVersion <= 0 {
+		return fmt.Errorf("maintenance analyzer version must be positive")
+	}
+	return s.finishRun(ctx, tenantID, runID, status, analyzerVersion, payload)
+}
+
+func (s *Store) finishRun(ctx context.Context, tenantID, runID, status string, analyzerVersion int, payload string) error {
 	// FinishRun's contract is to write a TERMINAL run status. Agent outcomes
 	// can legitimately say "running" ("turn done, more work planned"), but a
 	// finished run row left in status 'running' — with active_run_id cleared
@@ -1964,11 +2276,12 @@ func (s *Store) FinishRunWithMaintenancePayload(ctx context.Context, tenantID, r
 		now, now, tenant, runID); err != nil {
 		return err
 	}
-	// The maintenance job is born in the SAME terminal transaction, so "run
-	// reached a terminal state" and "run has exactly one pending maintenance
-	// slot" can never diverge (docs/memory-governance.zh-CN.md §2.5).
-	if err = createMaintenanceJobTx(ctx, tx, tenant, runID, analyzerVersion, payload); err != nil {
-		return err
+	// Eligible gateway finalization creates the maintenance job in this same
+	// transaction. Terminal-only callers intentionally leave no empty job.
+	if analyzerVersion > 0 {
+		if err = createMaintenanceJobTx(ctx, tx, tenant, runID, analyzerVersion, payload); err != nil {
+			return err
+		}
 	}
 	return tx.Commit()
 }

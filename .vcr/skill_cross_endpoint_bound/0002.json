@@ -1,0 +1,55 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "content": "精"
+    },
+    {
+      "content": "确"
+    },
+    {
+      "content": "版本"
+    },
+    {
+      "content": "号"
+    },
+    {
+      "content": "："
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": "v"
+    },
+    {
+      "content": "1"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": "2"
+    },
+    {
+      "content": "."
+    },
+    {
+      "content": "3"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "usage": {
+        "input_tokens": 6892,
+        "output_tokens": 17,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 6892,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0,
+        "cache_usage_reported": true
+      }
+    }
+  ]
+}

@@ -187,6 +187,14 @@ func (d *Server) diagReply(ctx context.Context, identity *control.IdentityContex
 		fmt.Fprintf(&sb, "Tasks: open %d, terminal %d, archived %d, pinned %d, inbox runs %d\n",
 			stats.Open, stats.Terminal, stats.Archived, stats.Pinned, stats.InboxRuns)
 	}
+	if health, err := d.Control.EvolutionHealthForPerson(ctx, identity.TenantID, identity.PersonID); err == nil {
+		candidateTotal := health.Statuses["candidate"] + health.Statuses["shadow"] + health.Statuses["eligible"] + health.Statuses["enabled"] + health.Statuses["degraded"]
+		if d.SelfEvolution.Enabled || health.Profiles24h > 0 || candidateTotal > 0 {
+			fmt.Fprintf(&sb, "Self-evolution: profiles %d (24h), candidate %d, shadow %d, eligible %d, enabled %d, degraded %d, fallbacks %d\n",
+				health.Profiles24h, health.Statuses["candidate"], health.Statuses["shadow"], health.Statuses["eligible"],
+				health.Statuses["enabled"], health.Statuses["degraded"], health.Fallbacks)
+		}
+	}
 	if watches, err := d.Control.CountExternalWatchesByStatus(ctx, identity.TenantID, identity.PersonID); err == nil {
 		activeWatches := watches[control.ExternalWatchPending] + watches[control.ExternalWatchRunning]
 		if activeWatches+watches[control.ExternalWatchFailed]+watches[control.ExternalWatchTimedOut]+watches[control.ExternalWatchBlocked] > 0 {
@@ -198,7 +206,7 @@ func (d *Server) diagReply(ctx context.Context, identity *control.IdentityContex
 		// could not observe anything, so the operator needs the reason and the
 		// remedy here rather than in the run history.
 		if watches[control.ExternalWatchBlocked] > 0 {
-			if blocked, err := d.Control.ListExternalWatchesFinishedSince(ctx, control.ExternalWatchBlocked, time.Now().Add(-externalWatchRecoveryLookback), 10); err == nil {
+			if blocked, err := d.Control.ListExternalWatchesFinishedSinceForPerson(ctx, identity.TenantID, identity.PersonID, control.ExternalWatchBlocked, time.Now().Add(-externalWatchRecoveryLookback), 10); err == nil {
 				for _, watch := range blocked {
 					reason, _ := watchCheckDefect(watch.LastError)
 					fmt.Fprintf(&sb, "- watch blocked: %s | %s | class %s | %s\n",
@@ -213,7 +221,7 @@ func (d *Server) diagReply(ctx context.Context, identity *control.IdentityContex
 		// terminal pattern is a misjudgment the startup recovery pass will
 		// revise — surface it instead of leaving a silently wrong verdict.
 		if watches[control.ExternalWatchTimedOut] > 0 {
-			if finished, err := d.Control.ListExternalWatchesFinishedSince(ctx, control.ExternalWatchTimedOut, time.Now().Add(-externalWatchRecoveryLookback), 10); err == nil {
+			if finished, err := d.Control.ListExternalWatchesFinishedSinceForPerson(ctx, identity.TenantID, identity.PersonID, control.ExternalWatchTimedOut, time.Now().Add(-externalWatchRecoveryLookback), 10); err == nil {
 				for _, watch := range finished {
 					if status := classifyStoredExternalWatchOutput(watch); status != "" {
 						fmt.Fprintf(&sb, "- watch verdict suspect: %s timed out but last output matches %s (%s)\n",
@@ -305,7 +313,7 @@ func (d *Server) diagReply(ctx context.Context, identity *control.IdentityContex
 	// counts plus the newest undelivered reason, so "the push never reached my
 	// phone" is diagnosable from the phone itself (P0-1).
 	if counts, err := d.Control.CountOutboundByStatusSince(ctx, identity.TenantID, identity.PersonID, time.Now().Add(-24*time.Hour)); err == nil && len(counts) > 0 {
-		fmt.Fprintf(&sb, "Outbound (24h): sent %d, unconfirmed %d, pending %d, failed %d\n",
+		fmt.Fprintf(&sb, "Outbound (24h): confirmed %d, accepted-unconfirmed %d, waiting-session %d, failed %d\n",
 			counts["sent"], counts["sent_unconfirmed"], counts["pending_session"], counts["failed"])
 		if counts["sent_unconfirmed"] > 0 || counts["pending_session"] > 0 || counts["failed"] > 0 {
 			if undelivered, err := d.Control.ListUndeliveredOutbound(ctx, identity.TenantID, identity.PersonID, time.Now().Add(-24*time.Hour), 1); err == nil && len(undelivered) > 0 {
@@ -751,6 +759,7 @@ func latestProviderContextBreakdownLine(events []control.Event) string {
 			Workspace          int    `json:"workspace"`
 			Artifacts          int    `json:"artifacts"`
 			Memory             int    `json:"memory"`
+			Skill              int    `json:"skill"`
 			TaskRuntime        int    `json:"task_runtime"`
 			EstimatedTotal     int    `json:"estimated_total"`
 		}
@@ -758,9 +767,9 @@ func latestProviderContextBreakdownLine(events []control.Event) string {
 			continue
 		}
 		return fmt.Sprintf(
-			"Provider request (#%d %s, ~%d tok): stable system %d, tool schemas %d, history %d, tool results %d, workspace %d, task %d, recall %d, memory %d, artifacts %d\n",
+			"Provider request (#%d %s, ~%d tok): stable system %d, tool schemas %d, history %d, tool results %d, workspace %d, task %d, skill %d, recall %d, memory %d, artifacts %d\n",
 			p.Iteration, p.Transport, p.EstimatedTotal, p.StableSystem, p.ToolSchemas,
-			p.History, p.CurrentToolResults, p.Workspace, p.TaskRuntime, p.Recall, p.Memory, p.Artifacts,
+			p.History, p.CurrentToolResults, p.Workspace, p.TaskRuntime, p.Skill, p.Recall, p.Memory, p.Artifacts,
 		)
 	}
 	return "Provider request: no per-call context breakdown recorded yet\n"
@@ -792,6 +801,7 @@ func latestCompactionLine(events []control.Event) string {
 // reason, and cost. Zero-hit turns emit too, so absence here means recall is
 // not wired at all.
 func latestRecallLine(events []control.Event) string {
+	overlapLine := latestRecallUsageLine(events)
 	for _, e := range events {
 		if e.Type != "context.recall" {
 			continue
@@ -808,7 +818,7 @@ func latestRecallLine(events []control.Event) string {
 			continue
 		}
 		if p.Skipped != "" {
-			return fmt.Sprintf("Recall (last turn): skipped (%s)\n", p.Skipped)
+			return fmt.Sprintf("Recall (last turn): skipped (%s)\n", p.Skipped) + overlapLine
 		}
 		parts := make([]string, 0, len(p.Sources))
 		for name, count := range p.Sources {
@@ -832,9 +842,37 @@ func latestRecallLine(events []control.Event) string {
 		if candidateText == "" {
 			candidateText = "none"
 		}
-		return fmt.Sprintf("Recall (last turn): candidates [%s], selected %d slice(s) [%s]%s, %dms\n", candidateText, p.Slices, src, expanded, p.ElapsedMS)
+		return fmt.Sprintf("Recall (last turn): candidates [%s], selected %d slice(s) [%s]%s, %dms\n", candidateText, p.Slices, src, expanded, p.ElapsedMS) + overlapLine
 	}
-	return "Recall: no recall event recorded yet\n"
+	return "Recall: no recall event recorded yet\n" + overlapLine
+}
+
+func latestRecallUsageLine(events []control.Event) string {
+	for _, e := range events {
+		if e.Type != "context.recall_usage" {
+			continue
+		}
+		var p struct {
+			Selected      int            `json:"selected"`
+			OutputOverlap int            `json:"output_overlap"`
+			Sources       map[string]int `json:"overlap_sources"`
+			Method        string         `json:"method"`
+		}
+		if json.Unmarshal(e.Payload, &p) != nil {
+			continue
+		}
+		parts := make([]string, 0, len(p.Sources))
+		for source, count := range p.Sources {
+			parts = append(parts, fmt.Sprintf("%s=%d", source, count))
+		}
+		sort.Strings(parts)
+		detail := strings.Join(parts, ", ")
+		if detail == "" {
+			detail = "none"
+		}
+		return fmt.Sprintf("Recall output overlap: %d/%d slice(s) [%s] (trend signal, not causal proof)\n", p.OutputOverlap, p.Selected, detail)
+	}
+	return ""
 }
 
 // tasksDiagReply is /diag tasks: label hygiene counts plus a bounded
@@ -849,6 +887,13 @@ func (d *Server) tasksDiagReply(ctx context.Context, identity *control.IdentityC
 	if stats, err := d.Control.ReadTaskGovernanceStats(ctx, identity.TenantID, identity.PersonID); err == nil {
 		fmt.Fprintf(&sb, "Labels: open %d, terminal %d, archived %d, pinned %d, inbox runs %d\n",
 			stats.Open, stats.Terminal, stats.Archived, stats.Pinned, stats.InboxRuns)
+	}
+	if stats, err := d.Control.ReadTaskReferenceStats(ctx, identity.TenantID, identity.PersonID); err == nil {
+		fmt.Fprintf(&sb, "Task references: active %d, candidate %d, conflicted %d, shadow %d\n",
+			stats.Active, stats.Candidate, stats.Conflicted, stats.Shadow)
+		fmt.Fprintf(&sb, "Task routing audit: corrected %d, pending %d, unverified %d\n",
+			stats.ResolutionCorrected, stats.ResolutionPending, stats.ResolutionUnverified)
+		fmt.Fprintf(&sb, "Workspace knowledge: %d files, %d sections\n", stats.KnowledgeFiles, stats.KnowledgeSections)
 	}
 	queued, _ := d.Control.CountQueued(ctx, identity.TenantID, identity.PersonID, control.QueueStatusQueued)
 	approvals, _, _ := d.pendingApprovalsForDisplay(ctx, identity)

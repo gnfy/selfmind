@@ -180,16 +180,15 @@ func (f *fakeGrantStore) GrantApproval(ctx context.Context, scopeKind, tenantID,
 	return nil
 }
 
-// TestTaskGrantSuppressesSameClassWithinTaskOnly: a "remember for this task"
-// approval suppresses the next same-class ask in the SAME task, but a different
-// task still asks.
-func TestTaskGrantSuppressesSameClassWithinTaskOnly(t *testing.T) {
+// TestHistoricalTaskGrantRemainsReadable keeps existing ledgers compatible
+// after new prompts stop minting task-scoped authority.
+func TestHistoricalTaskGrantRemainsReadable(t *testing.T) {
 	withExecSandboxPolicy(t, true, true, false)
 	store := newFakeGrantStore()
 	asks := 0
 	handler := func(ctx context.Context, req ToolApprovalRequest) (ToolApprovalDecision, error) {
 		asks++
-		return ToolApprovalDecision{Approved: true, ApprovalID: "apr", Scope: "task"}, nil
+		return ToolApprovalDecision{Approved: true, ApprovalID: "apr"}, nil
 	}
 	install := func(taskID string) func() {
 		return SetExecutionScope("person-g", ExecutionScope{
@@ -204,31 +203,32 @@ func TestTaskGrantSuppressesSameClassWithinTaskOnly(t *testing.T) {
 		}
 	}
 
+	pattern := approvalPatternKey("terminal", map[string]interface{}{"command": "chmod 777 a"}, "invokes dangerous command: chmod")
+	store.granted[store.key("task", "task-1", pattern)] = true
 	cleanup := install("task-1")
-	run("chmod 777 a") // asks -> 1, grants task-1
-	run("chmod +x b")  // same class, task-1 granted -> no ask
-	if asks != 1 {
-		t.Fatalf("task grant should suppress the 2nd same-class ask in the same task; asks=%d", asks)
+	run("chmod 777 a")
+	if asks != 0 {
+		t.Fatalf("historical task grant was not read; asks=%d", asks)
 	}
 	cleanup()
 
 	cleanup = install("task-2")
-	run("chmod 700 c") // different task -> not granted -> asks -> 2
-	if asks != 2 {
+	run("chmod 700 c")
+	if asks != 1 {
 		t.Fatalf("task grant must NOT carry to a different task; asks=%d", asks)
 	}
 	cleanup()
 }
 
-// TestPersonGrantSuppressesAcrossTasks: a "remember for me" approval suppresses
-// the same class in a different task too.
-func TestPersonGrantSuppressesAcrossTasks(t *testing.T) {
+// TestHistoricalPersonGrantRemainsReadable keeps old person grants useful and
+// revocable without exposing a way to create new ones from an ask.
+func TestHistoricalPersonGrantRemainsReadable(t *testing.T) {
 	withExecSandboxPolicy(t, true, true, false)
 	store := newFakeGrantStore()
 	asks := 0
 	handler := func(ctx context.Context, req ToolApprovalRequest) (ToolApprovalDecision, error) {
 		asks++
-		return ToolApprovalDecision{Approved: true, ApprovalID: "apr", Scope: "person"}, nil
+		return ToolApprovalDecision{Approved: true, ApprovalID: "apr"}, nil
 	}
 	install := func(taskID string) func() {
 		return SetExecutionScope("person-p", ExecutionScope{
@@ -243,13 +243,15 @@ func TestPersonGrantSuppressesAcrossTasks(t *testing.T) {
 		}
 	}
 
+	pattern := approvalPatternKey("terminal", map[string]interface{}{"command": "chmod 777 a"}, "invokes dangerous command: chmod")
+	store.granted[store.key("person", "person-p", pattern)] = true
 	cleanup := install("task-1")
-	run("chmod 777 a") // asks -> 1, grants person
+	run("chmod 777 a")
 	cleanup()
 
 	cleanup = install("task-2")
-	run("chmod +x b") // person grant covers all tasks -> no ask
-	if asks != 1 {
+	run("chmod +x b")
+	if asks != 0 {
 		t.Fatalf("person grant should suppress the same class across tasks; asks=%d", asks)
 	}
 	cleanup()

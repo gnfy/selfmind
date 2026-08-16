@@ -60,6 +60,27 @@ func TestDenyScopeConstrainsOnlyWhatItNames(t *testing.T) {
 			blocked: true,
 		},
 		{
+			name:    "execute later does not block a read-only observation",
+			content: "先检查发布状态，暂时不要执行。",
+			classes: []tools.OperationClass{tools.OpClassObserve},
+			targets: []string{"gcloud builds describe build-1"},
+			blocked: false,
+		},
+		{
+			name:    "execute later still blocks a mutating command",
+			content: "先检查发布状态，暂时不要执行。",
+			classes: []tools.OperationClass{tools.OpClassExecInTurn},
+			targets: []string{"gcloud builds triggers run deploy"},
+			blocked: true,
+		},
+		{
+			name:    "explicit command ban includes observations",
+			content: "不要运行任何命令。",
+			classes: []tools.OperationClass{tools.OpClassObserve},
+			targets: []string{"gcloud builds describe build-1"},
+			blocked: true,
+		},
+		{
 			name:    "a named file is the only file protected",
 			content: "不要修改 config.yaml。",
 			classes: []tools.OperationClass{tools.OpClassWrite},

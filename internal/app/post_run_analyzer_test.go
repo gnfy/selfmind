@@ -16,14 +16,15 @@ import (
 )
 
 type postRunProviderStub struct {
-	content      string
-	response     *llm.ChatResponse
-	calls        int
-	streamCalls  int
-	err          error
-	requests     []llm.ChatRequest
-	streamEvents []llm.StreamEvent
-	responses    []*llm.ChatResponse
+	content        string
+	response       *llm.ChatResponse
+	calls          int
+	streamCalls    int
+	err            error
+	requests       []llm.ChatRequest
+	streamRequests []llm.ChatRequest
+	streamEvents   []llm.StreamEvent
+	responses      []*llm.ChatResponse
 }
 
 func (p *postRunProviderStub) ChatCompletion(context.Context, []llm.Message) (string, error) {
@@ -61,6 +62,26 @@ func TestPostRunAnalyzerAcceptsObjectTaskDecision(t *testing.T) {
 	}
 }
 
+func TestPostRunAnalyzerAcceptsObjectNewDecision(t *testing.T) {
+	got, err := decodePostRunAnalysis(`{"task_decision":{"action":"NEW","title":"Independent access review"}}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.TaskDecision != "NEW:Independent access review" {
+		t.Fatalf("task decision = %q", got.TaskDecision)
+	}
+}
+
+func TestPostRunAnalyzerNormalizesTaskReferences(t *testing.T) {
+	got, err := decodePostRunAnalysis(`{"task_decision":"KEEP","task_references":[{"class":"literal","value":"RUQX-42","confidence":0.9},{"class":"literal","value":"ruqx-42","confidence":0.8},{"class":"unknown","value":"ignored","confidence":1}]}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.TaskReferences) != 1 || got.TaskReferences[0].Value != "RUQX-42" {
+		t.Fatalf("task references=%+v", got.TaskReferences)
+	}
+}
+
 func TestPostRunAnalyzerRetriesTruncatedContractOnce(t *testing.T) {
 	provider := &postRunProviderStub{responses: []*llm.ChatResponse{
 		{Content: `{"task_decision":`, FinishReason: "length"},
@@ -77,6 +98,9 @@ func TestPostRunAnalyzerRetriesTruncatedContractOnce(t *testing.T) {
 	if provider.requests[0].MaxTokens != 1024 || provider.requests[1].MaxTokens != 2048 {
 		t.Fatalf("max tokens = %d then %d", provider.requests[0].MaxTokens, provider.requests[1].MaxTokens)
 	}
+	if got := provider.requests[0].Options["reasoning_effort"]; got != maintenanceReasoningEffort {
+		t.Fatalf("reasoning effort = %#v, want %q", got, maintenanceReasoningEffort)
+	}
 }
 
 func TestPostRunAnalyzerRetriesEmptyTruncatedContractOnce(t *testing.T) {
@@ -84,7 +108,7 @@ func TestPostRunAnalyzerRetriesEmptyTruncatedContractOnce(t *testing.T) {
 		{Content: "", FinishReason: "length", Usage: llm.UsageStats{OutputTokens: 8192}},
 		{Content: `{"task_decision":"KEEP"}`, FinishReason: "stop"},
 	}}
-	analyzer := &llmPostRunAnalyzer{provider: provider, maxTokens: 8192, batchMaxTokens: 32768, contractRouteID: "contract:test"}
+	analyzer := &llmPostRunAnalyzer{provider: provider, maxTokens: 4096, batchMaxTokens: 16384, contractRouteID: "contract:test"}
 	got, err := analyzer.Analyze(context.Background(), httpapi.PostRunAnalysisRequest{RunID: "run-empty-truncated"})
 	if err != nil {
 		t.Fatal(err)
@@ -92,7 +116,7 @@ func TestPostRunAnalyzerRetriesEmptyTruncatedContractOnce(t *testing.T) {
 	if got.TaskDecision != "KEEP" || provider.calls != 2 {
 		t.Fatalf("analysis=%+v calls=%d", got, provider.calls)
 	}
-	if provider.requests[0].MaxTokens != 8192 || provider.requests[1].MaxTokens != 16384 {
+	if provider.requests[0].MaxTokens != 4096 || provider.requests[1].MaxTokens != 8192 {
 		t.Fatalf("max tokens = %d then %d", provider.requests[0].MaxTokens, provider.requests[1].MaxTokens)
 	}
 }
@@ -127,14 +151,44 @@ func TestPostRunAnalyzerContractCircuitStopsQueuedRepeatCalls(t *testing.T) {
 	}
 }
 
-func (p *postRunProviderStub) StreamChat(context.Context, llm.ChatRequest) (<-chan llm.StreamEvent, error) {
+func (p *postRunProviderStub) StreamChat(_ context.Context, req llm.ChatRequest) (<-chan llm.StreamEvent, error) {
 	p.streamCalls++
+	p.streamRequests = append(p.streamRequests, req)
 	ch := make(chan llm.StreamEvent, len(p.streamEvents))
 	for _, event := range p.streamEvents {
 		ch <- event
 	}
 	close(ch)
 	return ch, nil
+}
+
+func TestMaintenanceProviderChainOverridesAuxiliaryReasoning(t *testing.T) {
+	provider := &postRunProviderStub{content: `{"task_decision":"KEEP"}`}
+	chain := &maintenanceProviderChain{providers: []namedMaintenanceProvider{{
+		role: llm.RoleBackgroundReview, provider: provider,
+	}}}
+
+	if _, err := chain.Chat(context.Background(), llm.ChatRequest{Options: map[string]interface{}{
+		"reasoning_effort": "high",
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if got := provider.requests[0].Options["reasoning_effort"]; got != maintenanceReasoningEffort {
+		t.Fatalf("maintenance reasoning = %#v, want %q", got, maintenanceReasoningEffort)
+	}
+
+	provider.streamEvents = []llm.StreamEvent{{Content: "ok"}}
+	stream, err := chain.StreamChat(context.Background(), llm.ChatRequest{Options: map[string]interface{}{
+		"reasoning_effort": "xhigh",
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range stream {
+	}
+	if got := provider.streamRequests[0].Options["reasoning_effort"]; got != maintenanceReasoningEffort {
+		t.Fatalf("stream maintenance reasoning = %#v, want %q", got, maintenanceReasoningEffort)
+	}
 }
 
 func TestMaintenanceProviderChainUsesExplicitFallback(t *testing.T) {

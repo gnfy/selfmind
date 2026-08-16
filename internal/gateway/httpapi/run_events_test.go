@@ -8,8 +8,55 @@ import (
 	"selfmind/internal/control"
 	"selfmind/internal/gateway/api"
 	"selfmind/internal/gateway/delivery"
+	"selfmind/internal/gateway/router"
 	"selfmind/internal/kernel/llm"
 )
+
+func TestAggregateGatewayResponseRequiresProseAfterLastTool(t *testing.T) {
+	stream := make(chan llm.StreamEvent, 5)
+	stream <- llm.StreamEvent{EventType: "stream", Content: "I will inspect the repository."}
+	stream <- llm.StreamEvent{EventType: "tool.started", ToolName: "read_file"}
+	stream <- llm.StreamEvent{EventType: "tool.completed", ToolName: "read_file", ToolResult: "ok"}
+	stream <- llm.StreamEvent{EventType: "turn.completed", Payload: map[string]interface{}{
+		"status": "completed", "completion_reason": "completed",
+	}}
+	close(stream)
+
+	server := &Server{}
+	content, _, _, hasFinal, err := server.coordinator().aggregateGatewayResponse(
+		context.Background(), "cli", nil, nil,
+		&router.HandleResponse{Stream: stream, IsStreaming: true},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hasFinal {
+		t.Fatal("progress prose before a tool call must not count as a final response")
+	}
+	if strings.Contains(content, "inspect the repository") {
+		t.Fatalf("progress prose leaked into the materialized final response: %q", content)
+	}
+}
+
+func TestAggregateGatewayResponseKeepsProseAfterLastTool(t *testing.T) {
+	stream := make(chan llm.StreamEvent, 4)
+	stream <- llm.StreamEvent{EventType: "tool.started", ToolName: "read_file"}
+	stream <- llm.StreamEvent{EventType: "tool.completed", ToolName: "read_file", ToolResult: "ok"}
+	stream <- llm.StreamEvent{EventType: "stream", Content: "The repository is healthy."}
+	close(stream)
+
+	server := &Server{}
+	content, _, _, hasFinal, err := server.coordinator().aggregateGatewayResponse(
+		context.Background(), "cli", nil, nil,
+		&router.HandleResponse{Stream: stream, IsStreaming: true},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasFinal || content != "The repository is healthy." {
+		t.Fatalf("content=%q hasFinal=%v", content, hasFinal)
+	}
+}
 
 // TestCLIAsyncResultRoutesToPreferredIM encodes the continuity promise for
 // fire-and-forget terminal runs: the final answer must reach the person's

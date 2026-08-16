@@ -10,6 +10,7 @@ import (
 	"selfmind/internal/gateway/api"
 	"selfmind/internal/gateway/delivery"
 	"selfmind/internal/gateway/router"
+	"selfmind/internal/kernel"
 	"selfmind/internal/kernel/llm"
 	"selfmind/internal/platform/log"
 	"selfmind/internal/tools"
@@ -199,20 +200,28 @@ func runIDForResponse(resp api.MessageResponse) string {
 	return resp.Run.ID
 }
 
-func (c *RunCoordinator) aggregateGatewayResponse(ctx context.Context, channel string, task *control.Task, run *control.Run, resp *router.HandleResponse) (string, llm.UsageStats, router.EventSummary, error) {
+func (c *RunCoordinator) aggregateGatewayResponse(ctx context.Context, channel string, task *control.Task, run *control.Run, resp *router.HandleResponse) (string, llm.UsageStats, router.EventSummary, bool, error) {
 	if resp == nil {
-		return "", llm.UsageStats{}, router.EventSummary{}, nil
+		return "", llm.UsageStats{}, router.EventSummary{}, false, nil
 	}
 	if !resp.IsStreaming {
-		return resp.Content, resp.Usage, router.EventSummary{}, nil
+		return resp.Content, resp.Usage, router.EventSummary{}, strings.TrimSpace(resp.Content) != "", nil
 	}
-	var content strings.Builder
+	var finalContent strings.Builder
 	var usage llm.UsageStats
 	sawStream := false
+	hasFinalContent := false
 	var summary router.EventSummary
 	observer := streamObserverFromContext(ctx)
 	for event := range resp.Stream {
 		if event.EventType != "" {
+			// Assistant prose emitted before a tool call is progress narration,
+			// not the final answer. Keep publishing it live, but only materialize
+			// prose produced after the last tool starts as the run's answer.
+			if event.EventType == "tool.started" {
+				finalContent.Reset()
+				hasFinalContent = false
+			}
 			if event.EventType == "stream" && task != nil {
 				c.srv.events().publishAssistant(task, run, event)
 			}
@@ -223,7 +232,10 @@ func (c *RunCoordinator) aggregateGatewayResponse(ctx context.Context, channel s
 			c.recordStreamEvent(ctx, channel, task, run, event)
 			if event.EventType == "stream" {
 				sawStream = true
-				content.WriteString(event.Content)
+				finalContent.WriteString(event.Content)
+				if strings.TrimSpace(event.Content) != "" {
+					hasFinalContent = true
+				}
 			}
 			if event.Usage != nil {
 				usage = *event.Usage
@@ -231,7 +243,7 @@ func (c *RunCoordinator) aggregateGatewayResponse(ctx context.Context, channel s
 			continue
 		}
 		if event.Err != nil {
-			return content.String(), usage, summary, event.Err
+			return finalContent.String(), usage, summary, hasFinalContent, event.Err
 		}
 		if event.Content != "" && !sawStream {
 			streamEvent := llm.StreamEvent{EventType: "stream", Content: event.Content}
@@ -241,13 +253,16 @@ func (c *RunCoordinator) aggregateGatewayResponse(ctx context.Context, channel s
 			if observer != nil {
 				observer(streamEvent)
 			}
-			content.WriteString(event.Content)
+			finalContent.WriteString(event.Content)
+			if strings.TrimSpace(event.Content) != "" {
+				hasFinalContent = true
+			}
 		}
 		if event.Usage != nil {
 			usage = *event.Usage
 		}
 	}
-	return summary.WithContent(content.String()), usage, summary, nil
+	return summary.WithContent(finalContent.String()), usage, summary, hasFinalContent, nil
 }
 
 func (c *RunCoordinator) recordStreamEvent(ctx context.Context, channel string, task *control.Task, run *control.Run, event llm.StreamEvent) {
@@ -297,6 +312,20 @@ func (c *RunCoordinator) recordStreamEvent(ctx context.Context, channel string, 
 		eventType = classifyLearningReviewEvent(event.Content)
 	case "plan.updated":
 		eventType = "plan.updated"
+		if plan := workUnitPlanFromPayload(event.Payload); run != nil && len(plan) > 0 {
+			if units, err := c.srv.Control.SyncRunWorkUnits(ctx, task.TenantID, run.ID, plan); err != nil {
+				log.Warn("work-unit plan projection failed", "run_id", run.ID, "error", err)
+			} else {
+				compact := make([]map[string]interface{}, 0, len(units))
+				for _, unit := range units {
+					compact = append(compact, map[string]interface{}{
+						"id": unit.ID, "sequence": unit.Sequence, "status": unit.Status,
+						"plan_status": unit.PlanStatus, "related_task_id": unit.RelatedTaskID,
+					})
+				}
+				payload["work_units"] = compact
+			}
+		}
 	case "run.outcome":
 		eventType = "run.outcome"
 	case "agent.steering":
@@ -341,6 +370,94 @@ func (c *RunCoordinator) recordStreamEvent(ctx context.Context, channel string, 
 		Channel:    channel,
 		Payload:    mustJSON(payload),
 	})
+}
+
+func workUnitPlanFromPayload(payload map[string]interface{}) []control.WorkUnitPlanInput {
+	if payload == nil {
+		return nil
+	}
+	switch raw := payload["plan"].(type) {
+	case []kernel.PlanItem:
+		steps := make([]workUnitProjectionStep, 0, len(raw))
+		for _, item := range raw {
+			steps = append(steps, workUnitProjectionStep{
+				Step: item.Step, Status: item.Status, RelatedTaskID: item.RelatedTaskID,
+				WorkUnitID: item.WorkUnitID, WorkUnit: item.WorkUnit,
+			})
+		}
+		return projectWorkUnitPlan(steps)
+	case []interface{}:
+		steps := make([]workUnitProjectionStep, 0, len(raw))
+		for _, item := range raw {
+			row, _ := item.(map[string]interface{})
+			related, _ := row["related_task_id"].(string)
+			workUnitID, _ := row["work_unit_id"].(string)
+			workUnit, _ := row["work_unit"].(bool)
+			steps = append(steps, workUnitProjectionStep{
+				Step: fmt.Sprintf("%v", row["step"]), Status: fmt.Sprintf("%v", row["status"]),
+				RelatedTaskID: related, WorkUnitID: workUnitID, WorkUnit: workUnit,
+			})
+		}
+		return projectWorkUnitPlan(steps)
+	default:
+		return nil
+	}
+}
+
+type workUnitProjectionStep struct {
+	Step          string
+	Status        string
+	RelatedTaskID string
+	WorkUnitID    string
+	WorkUnit      bool
+}
+
+// projectWorkUnitPlan keeps ordinary plan refinements inside one execution
+// attribution boundary. A new unit begins only at the first step, an explicit
+// work_unit marker, a stable returned id, or a deterministically related task.
+func projectWorkUnitPlan(steps []workUnitProjectionStep) []control.WorkUnitPlanInput {
+	if len(steps) == 0 {
+		return nil
+	}
+	boundaries := []int{0}
+	for i := 1; i < len(steps); i++ {
+		if steps[i].WorkUnit || strings.TrimSpace(steps[i].WorkUnitID) != "" || strings.TrimSpace(steps[i].RelatedTaskID) != "" {
+			boundaries = append(boundaries, i)
+		}
+	}
+	out := make([]control.WorkUnitPlanInput, 0, len(boundaries))
+	for i, start := range boundaries {
+		end := len(steps)
+		if i+1 < len(boundaries) {
+			end = boundaries[i+1]
+		}
+		out = append(out, control.WorkUnitPlanInput{
+			WorkUnitID: strings.TrimSpace(steps[start].WorkUnitID), GoalDigest: strings.TrimSpace(steps[start].Step),
+			PlanStatus: aggregateWorkUnitPlanStatus(steps[start:end]), RelatedTaskID: strings.TrimSpace(steps[start].RelatedTaskID),
+		})
+	}
+	return out
+}
+
+func aggregateWorkUnitPlanStatus(steps []workUnitProjectionStep) string {
+	hasPending, hasCompleted := false, false
+	for _, step := range steps {
+		switch strings.TrimSpace(step.Status) {
+		case "in_progress":
+			return "in_progress"
+		case "pending":
+			hasPending = true
+		case "completed":
+			hasCompleted = true
+		}
+	}
+	if hasPending {
+		return "pending"
+	}
+	if hasCompleted {
+		return "completed"
+	}
+	return "cancelled"
 }
 
 func classifyLearningReviewEvent(content string) string {

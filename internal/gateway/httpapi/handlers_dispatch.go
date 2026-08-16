@@ -5,7 +5,10 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/google/uuid"
 	"selfmind/internal/gateway/api"
+	"selfmind/internal/kernel"
+	"selfmind/internal/tools"
 )
 
 // dispatchSafelist is the set of management tools a thin client may run via
@@ -16,12 +19,23 @@ import (
 // so workspace scope, approval mode, and run events apply. This keeps
 // /v1/dispatch from becoming a tool-execution backdoor around those guards.
 var dispatchSafelist = map[string]bool{
-	"memory":         true,
-	"skill_manage":   true,
-	"skill_catalog":  true,
-	"skill_bundle":   true,
-	"checkpoint":     true,
-	"session_search": true, // read-only; backs the TUI /search command
+	"memory":                 true,
+	"skill_manage":           true,
+	"skill_catalog":          true,
+	"skill_bundle":           true,
+	"skill_lifecycle_manage": true,
+	"checkpoint":             true,
+	"session_search":         true, // read-only; backs the TUI /search command
+}
+
+// directSkillManagementTools are the explicit, authenticated management
+// surfaces whose mutation capability is granted by /v1/dispatch. Keep this
+// narrower than dispatchSafelist: catalog, bundle, memory, and read-only tools
+// do not inherit active-Skill write authority merely because they share the
+// endpoint.
+var directSkillManagementTools = map[string]bool{
+	"skill_manage":           true,
+	"skill_lifecycle_manage": true,
 }
 
 // personPartitionTools are dispatch tools whose backing store partitions by
@@ -96,6 +110,48 @@ func (d *Server) handleDispatch(w http.ResponseWriter, r *http.Request) {
 		args["_tenant_id"] = identity.PersonID
 	} else {
 		args["_tenant_id"] = identity.TenantID
+	}
+	args["_context"] = r.Context()
+	if directSkillManagementTools[tool] {
+		task, taskErr := d.Control.CurrentTask(r.Context(), identity.TenantID, identity.PersonID)
+		if taskErr != nil {
+			writeJSON(w, http.StatusOK, api.DispatchResponse{Error: taskErr.Error()})
+			return
+		}
+		scope := kernel.ToolInvocationScope{
+			ControlTenantID: identity.TenantID, PersonID: identity.PersonID,
+			SkillMutationMode: kernel.SkillMutationDirect,
+		}
+		if task != nil {
+			scope.TaskID = task.ID
+			scope.WorkspaceID = task.WorkspaceID
+		}
+		managementRunID := "management-" + uuid.NewString()
+		scope.RunID = managementRunID
+		executionScope := tools.ExecutionScope{
+			TenantID: identity.TenantID, PersonID: identity.PersonID,
+			TaskID: scope.TaskID, RunID: managementRunID, WorkspaceID: scope.WorkspaceID,
+		}
+		if scope.WorkspaceID != "" {
+			workspace, workspaceErr := d.Control.GetWorkspace(r.Context(), identity.TenantID, scope.WorkspaceID)
+			if workspaceErr != nil {
+				writeJSON(w, http.StatusOK, api.DispatchResponse{Error: workspaceErr.Error()})
+				return
+			}
+			if workspace != nil && workspace.OwnerPersonID == identity.PersonID {
+				executionScope.WorkspaceRoot = workspace.LocalPath
+				executionScope.AllowedRoots = append([]string{}, workspace.AllowedRoots...)
+				if len(executionScope.AllowedRoots) == 0 && workspace.LocalPath != "" {
+					executionScope.AllowedRoots = []string{workspace.LocalPath}
+				}
+				executionScope.TrustLevel = workspace.TrustLevel
+			}
+		}
+		cleanup := tools.SetExecutionScope("", executionScope)
+		defer cleanup()
+		managementContext := tools.WithExecutionScopeKey(r.Context(), tools.ExecutionScopeKeyForRun(managementRunID))
+		args["_context"] = kernel.WithToolInvocationScope(managementContext, scope)
+		args["_invocation_scope"] = scope
 	}
 
 	result, derr := d.Gateway.DispatchTool(tool, args)

@@ -11,7 +11,7 @@ func TestIsGatewayControlCoversPreviouslyOmittedCommands(t *testing.T) {
 	// must now detect them so IM adapters treat them as synchronous control.
 	control := []string{
 		"/queue", "/diag", "/mode", "/notify", "/help", "/model",
-		"/status", "/tasks", "/events", "/approvals", "/approve 1",
+		"/status", "/tasks", "/watchers", "/events", "/approvals", "/approve 1",
 		"/reject 2", "/stop", "/cancel", "/id", "/new title", "/resume tsk_1",
 		"/workspace ws_1", "/workspaces",
 		"/QUEUE", "/Mode smart", // case-insensitive
@@ -109,8 +109,8 @@ func TestLocalCommandsNotGatewayRoutable(t *testing.T) {
 // registry so help/suggest/async-hint cannot drift again.
 func TestKnownMatchesGatewayContract(t *testing.T) {
 	want := []string{
-		"/help", "/model", "/id", "/status", "/tasks", "/task", "/queue", "/diag",
-		"/events", "/approvals", "/approve", "/reject", "/mode", "/stop",
+		"/help", "/model", "/id", "/status", "/tasks", "/task", "/queue", "/watchers", "/diag",
+		"/report", "/events", "/approvals", "/approve", "/reject", "/mode", "/stop",
 		"/cancel", "/notify", "/new", "/resume", "/workspace", "/workspaces",
 	}
 	got := Known()

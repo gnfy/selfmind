@@ -264,6 +264,14 @@ func Run(ctx context.Context, opts Options) (runErr error) {
 		// A single explicit memory_extract-role pass handles both task-label
 		// hygiene and durable fact extraction after eligible runs.
 		PostRunAnalyzer: app.NewConfiguredPostRunAnalyzer(mem, cfg, defaultTenantID, controlStore),
+		SkillCurator:    app.NewConfiguredSkillCurator(mem, cfg, defaultTenantID, controlStore),
+		SelfEvolution: control.EvolutionPolicy{
+			Enabled: cfg.Evolution.Enabled, Mode: cfg.Evolution.Mode,
+			ShadowAfterObservations:  cfg.Evolution.ShadowAfterObservations,
+			PromoteAfterObservations: cfg.Evolution.PromoteAfterObservations,
+			MinShadowRuns:            cfg.Evolution.MinShadowRuns,
+			MaxShadowFailureRate:     cfg.Evolution.MaxShadowFailureRate,
+		},
 		// Background memory self-organization (docs/memory-governance.zh-CN.md
 		// §4): nil unless memory.governance.enabled AND its model role is
 		// explicitly configured; default mode is shadow (report only).

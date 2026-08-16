@@ -36,6 +36,32 @@ func TestReadOnlySkillOperationsDoNotCreateTenantDirectories(t *testing.T) {
 	}
 }
 
+func TestSkillCandidateRankingUsesCJKTokensAndNeverReturnsWorkspaceNoise(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	workspace := t.TempDir()
+	t.Chdir(workspace)
+	unrelatedDir := filepath.Join(workspace, ".selfmind", "skills", "aaa-unrelated")
+	if err := os.MkdirAll(unrelatedDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := atomicWriteFile(filepath.Join(unrelatedDir, "SKILL.md"), ensureFrontMatter("Inspect CSS colors.", "aaa-unrelated", "Frontend color workflow")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewSkillManageTool().Execute(directSkillMutationArgs(map[string]interface{}{
+		"action": "create", "name": "release-inspection", "description": "检查发布元数据并核对版本信息", "content": "Read release metadata and verify it.",
+	})); err != nil {
+		t.Fatal(err)
+	}
+	candidates, err := RankSkillCandidatesForTenant("default", "请检查发布元数据并告诉我版本", 3)
+	if err != nil || len(candidates) != 1 || candidates[0].Name != "release-inspection" {
+		t.Fatalf("Chinese candidates=%+v err=%v", candidates, err)
+	}
+	candidates, err = RankSkillCandidatesForTenant("default", "调整前端颜色样式", 3)
+	if err != nil || len(candidates) != 0 {
+		t.Fatalf("unrelated workspace candidates leaked into ranking: %+v err=%v", candidates, err)
+	}
+}
+
 func TestAgentSkillStorageUsesControlTenantWithoutChangingExecutionScope(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -54,6 +80,7 @@ func TestAgentSkillStorageUsesControlTenantWithoutChangingExecutionScope(t *test
 		"_context":   ctx,
 		"_invocation_scope": kernel.ToolInvocationScope{
 			ControlTenantID: "control", PersonID: personID, RunID: runID,
+			SkillMutationMode: kernel.SkillMutationDirect,
 		},
 	}
 
@@ -78,13 +105,13 @@ func TestSkillRuntimeListViewReloadAndSlashInvocation(t *testing.T) {
 	disp := NewDispatcherWithRegistry(registry)
 	disp.RegisterTool(NewSkillManageTool())
 
-	_, err := disp.Dispatch("skill_manage", map[string]interface{}{
+	_, err := disp.Dispatch("skill_manage", directSkillMutationArgs(map[string]interface{}{
 		"action":      "create",
 		"name":        "dev-flow",
 		"description": "Developer workflow",
 		"content":     "Inspect files, make a focused change, then run tests.",
 		"_tenant_id":  "default",
-	})
+	}))
 	if err != nil {
 		t.Fatalf("create skill: %v", err)
 	}
@@ -174,12 +201,12 @@ func TestReadOnlySkillCannotBeMutated(t *testing.T) {
 	}
 
 	tool := NewSkillManageTool()
-	_, err := tool.Execute(map[string]interface{}{
+	_, err := tool.Execute(directSkillMutationArgs(map[string]interface{}{
 		"action":   "patch",
 		"name":     "readonly-flow",
 		"old_text": "Do not mutate",
 		"new_text": "Mutated",
-	})
+	}))
 	if err == nil || !strings.Contains(err.Error(), "read-only") {
 		t.Fatalf("patching read-only skill should fail clearly, got: %v", err)
 	}
@@ -191,11 +218,11 @@ func TestDynamicSkillToolIsInstructionOnly(t *testing.T) {
 	disp := NewDispatcherWithRegistry(registry)
 	disp.RegisterTool(NewSkillManageTool())
 
-	_, err := disp.Dispatch("skill_manage", map[string]interface{}{
+	_, err := disp.Dispatch("skill_manage", directSkillMutationArgs(map[string]interface{}{
 		"action":  "create",
 		"name":    "exec-flow",
 		"content": "```bash\necho should-not-run\n```",
-	})
+	}))
 	if err != nil {
 		t.Fatalf("create skill: %v", err)
 	}
@@ -213,7 +240,7 @@ func TestSkillDisableSkipsSlashInvocation(t *testing.T) {
 	createTestSkill(t, "default", "toggle-flow", "Toggle body.")
 
 	tool := NewSkillManageTool()
-	if _, err := tool.Execute(map[string]interface{}{"action": "disable", "name": "toggle-flow"}); err != nil {
+	if _, err := tool.Execute(directSkillMutationArgs(map[string]interface{}{"action": "disable", "name": "toggle-flow"})); err != nil {
 		t.Fatalf("disable skill: %v", err)
 	}
 	list, err := SkillsListJSONForTenant("default", "", false)
@@ -226,7 +253,7 @@ func TestSkillDisableSkipsSlashInvocation(t *testing.T) {
 	if _, _, ok, err := ResolveSkillInvocationForTenant("default", "/toggle-flow", ""); ok || err != nil {
 		t.Fatalf("disabled skill should not resolve slash invocation, ok=%v err=%v", ok, err)
 	}
-	if _, err := tool.Execute(map[string]interface{}{"action": "enable", "name": "toggle-flow"}); err != nil {
+	if _, err := tool.Execute(directSkillMutationArgs(map[string]interface{}{"action": "enable", "name": "toggle-flow"})); err != nil {
 		t.Fatalf("enable skill: %v", err)
 	}
 	if _, _, ok, err := ResolveSkillInvocationForTenant("default", "/toggle-flow", ""); !ok || err != nil {
@@ -261,20 +288,20 @@ func TestSkillBundleInvocation(t *testing.T) {
 func TestSkillManageFuzzyPatch(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	tool := NewSkillManageTool()
-	_, err := tool.Execute(map[string]interface{}{
+	_, err := tool.Execute(directSkillMutationArgs(map[string]interface{}{
 		"action":  "create",
 		"name":    "patch-me",
 		"content": "Steps:\n  - Inspect the file\n  - Run tests\n",
-	})
+	}))
 	if err != nil {
 		t.Fatalf("create skill: %v", err)
 	}
-	_, err = tool.Execute(map[string]interface{}{
+	_, err = tool.Execute(directSkillMutationArgs(map[string]interface{}{
 		"action":   "patch",
 		"name":     "patch-me",
 		"old_text": "- Inspect the file\n- Run tests",
 		"new_text": "- Inspect the file\n- Run focused tests",
-	})
+	}))
 	if err != nil {
 		t.Fatalf("fuzzy patch should handle indentation: %v", err)
 	}

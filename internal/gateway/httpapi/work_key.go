@@ -3,8 +3,6 @@ package httpapi
 import (
 	"regexp"
 	"strings"
-
-	"selfmind/internal/control"
 )
 
 // taskWorkKeyPattern extracts deterministic issue/ticket identifiers. Work
@@ -33,29 +31,4 @@ func uniqueTaskWorkKey(values ...string) string {
 		return key
 	}
 	return ""
-}
-
-func taskContainsWorkKey(task control.Task, key string) bool {
-	if key == "" {
-		return false
-	}
-	_, ok := taskWorkKeys(task.Title, task.CurrentSummary)[strings.ToUpper(key)]
-	return ok
-}
-
-// exactWorkKeyCandidate returns a deterministic MOVE target only when exactly
-// one offered open label carries the key. Duplicate labels remain a harmless
-// display issue instead of becoming an automatic attachment guess.
-func exactWorkKeyCandidate(candidates []control.Task, key string) *control.Task {
-	var target *control.Task
-	for i := range candidates {
-		if !taskContainsWorkKey(candidates[i], key) {
-			continue
-		}
-		if target != nil {
-			return nil
-		}
-		target = &candidates[i]
-	}
-	return target
 }

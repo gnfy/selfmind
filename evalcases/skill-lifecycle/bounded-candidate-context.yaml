@@ -1,0 +1,68 @@
+id: skill_bounded_candidate_context
+title: "Unbound work receives at most three relevant Skill metadata rows and no directory body"
+suite: skill-lifecycle
+workspace: isolated
+channel: cli
+require_cassette: true
+
+setup:
+  files:
+    target.txt: "candidate-context-ok\n"
+    .selfmind/skills/project-check-a/SKILL.md: |-
+      ---
+      name: project-check-a
+      description: 检查项目版本 target.txt 候选流程 A
+      ---
+      Read `target.txt` and report its exact value.
+    .selfmind/skills/project-check-b/SKILL.md: |-
+      ---
+      name: project-check-b
+      description: 检查项目版本 target.txt 候选流程 B
+      ---
+      Read `target.txt` and report its exact value.
+    .selfmind/skills/project-check-c/SKILL.md: |-
+      ---
+      name: project-check-c
+      description: 检查项目版本 target.txt 候选流程 C
+      ---
+      Read `target.txt` and report its exact value.
+    .selfmind/skills/project-check-d/SKILL.md: |-
+      ---
+      name: project-check-d
+      description: 检查项目版本 target.txt 候选流程 D
+      ---
+      Read `target.txt` and report its exact value.
+    .selfmind/skills/project-check-e/SKILL.md: |-
+      ---
+      name: project-check-e
+      description: 检查项目版本 target.txt 候选流程 E
+      ---
+      Read `target.txt` and report its exact value.
+
+turns:
+  - input: "检查项目版本：只读 target.txt，并告诉我文件中的精确值。"
+
+expect:
+  status: completed
+  contains: ["candidate-context-ok"]
+  require_tool_events: true
+  min_tool_calls: 1
+  max_tool_errors: 0
+  max_duration_seconds: 180
+
+assert_state:
+  - on: events
+    type: context.selected
+    payload_contains: '"skill_candidate_count":3'
+    count_gte: 1
+  - on: events
+    type: context.selected
+    payload_contains: '"skill_directory_chars":0'
+    count_gte: 1
+
+checks:
+  no_mojibake: true
+  no_raw_json_leak: true
+  no_empty_response: true
+  no_provider_stack_dump: true
+

@@ -49,11 +49,13 @@ selfmind feedback [--out FILE|--send] [--repo OWNER/REPO] [--include-crash] <mes
 ```text
 selfmind send [--async] [--mode MODE] <message>
 selfmind status
+selfmind watchers [active|attention|recent|all [page]|<n|id>|cancel <n|id>]
 selfmind tasks [done|archived|all|<keyword>]
 selfmind task <n|task_id> [runs|rename <name>|pin|unpin|archive|merge <dst>]
+selfmind task <n|task_id> references|reference add <name>|reference remove <name>
 selfmind resume <n|task_id>
 selfmind workspaces
-selfmind ws [list|add|use|trust|untrust|grants|revoke|<n|workspace_id>] ...
+selfmind ws [list|add|use|trust|untrust|grants|observe|revoke|<n|workspace_id>] ...
 selfmind approvals
 selfmind approve [token]
 selfmind reject [token]
@@ -61,6 +63,10 @@ selfmind stop
 selfmind id
 selfmind new [title]
 ```
+
+- `watchers` 是不调用模型的持久 watcher 管理入口。默认优先显示运行中和需要
+  关注的检查；可使用稳定的短 watcher ID 查看详情或只取消该 watcher。取消
+  watcher 不会取消外部系统中已经启动的操作。
 
 - `send` 在不打开 TUI 的情况下提交消息。`--async` 在 gateway 接收后立即返回。
   `MODE` 可用值为 `on-request`、`read-only`、`auto-edit`、`full-auto`
@@ -81,12 +87,17 @@ selfmind ws use <workspace_id>
 selfmind ws trust [workspace_id]
 selfmind ws untrust [workspace_id]
 selfmind ws grants [workspace_id]
+selfmind ws observe <script> [--network] [--credentials] [--all-args | -- <argv-prefix...>] [--workspace <id>]
 selfmind ws revoke <capability> [workspace_id]
-selfmind workspace [list|add|use|trust|untrust|grants|revoke|<n|workspace_id>] ...
+selfmind workspace [list|add|use|trust|untrust|grants|observe|revoke|<n|workspace_id>] ...
 ```
 
 - 只有已认证的本地 CLI 可以修改工作区信任状态。省略 workspace ID 时操作当前工作区；
   `untrust` 还会撤销该工作区当前有效的执行能力授权。
+- `observe` 将可信工作区内的一份脚本登记为只读观测脚本。授权同时绑定工作区、
+  解析后的脚本路径、内容哈希、参数形状、网络和凭证选择；脚本被修改或替换后授权
+  自动失效。只有确认所有参数都只读时才使用 `--all-args`，否则在 `--` 后给出允许的
+  参数前缀。
 - 同时存在多个审批时，`approve` 和 `reject` 可接审批 token。
 - `stop` 取消活跃 run；`new` 创建新的可见任务。
 
@@ -99,6 +110,7 @@ selfmind model [current|check [--live] [--role <name>]|list|set <provider> <mode
 selfmind auth [login|status|logout] ...
 selfmind doctor [--out FILE] [--probe-models]
 selfmind usage
+selfmind report daily [--since 24h]
 selfmind docs [check|index]
 selfmind selfcheck [--fast | --profile local-full|local-fast|ci] [--skip-go] [--skip-eval] [--eval-dir DIR]
 selfmind gateway [run|start|status|stop|restart|service] ...
@@ -122,7 +134,7 @@ selfmind gateway stop [--force]
 selfmind gateway restart [--drain] [--force]
 selfmind gateway service [install|status|uninstall]
 
-selfmind weixin login [--timeout 8m] [--owner-person-id ID] [--no-enable]
+selfmind weixin login [--timeout 8m] [--owner-person-id ID] [--no-bind] [--no-enable]
 selfmind weixin status
 ```
 
@@ -146,6 +158,9 @@ selfmind weixin status
   最终答复，因此会消耗少量 provider 额度。
 - `usage` 是 `/diag context` 的 CLI 别名。若 provider 上报相应字段，会展示调用级
   输入、缓存命中/未命中输入、输出和推理 token；它展示 token，不估算货币成本。
+- `report daily` 生成当前 person 的无模型质量与成本摘要。它在有界时间窗口内汇总
+  run 结局、工具与审批、provider 用量和缓存、后台维护健康、投递状态及召回采用
+  趋势；默认最近 24 小时，最长 30 天。
 - `doctor` 检查安装和配置；`--probe-models` 会真实调用 provider，可能消耗额度。
 - `selfcheck` 是本地发布门禁。默认 `local-full` 运行本机能够证明的全部发布用例；
   `--fast`/`local-fast` 跳过已测量的慢用例；`--profile ci` 只运行明确分配给
@@ -161,12 +176,15 @@ selfmind weixin status
 - 如果微信 iLink 会话过期，重新运行 `selfmind weixin login`。正在运行的
   gateway 会监听账号凭据文件，在新凭据保存后自动恢复轮询，不需要重启
   daemon。
+- `weixin login` 默认把扫码微信用户绑定到当前 CLI person，将私聊策略改成
+  `allowlist`，并且只记录该发送者。`--owner-person-id` 可指定另一个已有
+  person；`--no-bind` 用于明确保留现有的独立身份策略。
 
 ## Eval 与维护命令
 
 ```text
 selfmind eval [list|run|report|repair|scorecard|capture|clean]
-selfmind maintenance [replay|migrate-memory|migrate-skills|memory-audit|memory-dedup|task-audit] ...
+selfmind maintenance [replay|migrate-memory|migrate-skills|migrate-task-references|memory-audit|memory-dedup|task-audit] ...
 ```
 
 ```text
@@ -181,14 +199,22 @@ selfmind eval clean [--yes]
 selfmind maintenance replay [--limit N]
 selfmind maintenance migrate-memory [--apply] [--data-dir DIR]
 selfmind maintenance migrate-skills [--apply] [--root DIR] [--governance-grace 30d]
+selfmind maintenance migrate-task-references [--apply] [--limit N] [--data-dir DIR]
 selfmind maintenance memory-audit [--archive-confirmed] [--partition P] [--data-dir DIR]
 selfmind maintenance memory-dedup [--apply] [--partition P] [--data-dir DIR]
 selfmind maintenance task-audit [--apply] [--limit N] [--data-dir DIR]
 ```
 
+`maintenance replay` 只会重新入队每个 run 最新 analyzer generation 中因重试耗尽而
+暂停的作业。旧 generation 保留为不可变历史；处理积压前应先用较小的 `--limit`
+执行 canary。
+
 - `task-audit` 默认只读，列出缺少持久 blocker 证据的暂停任务。只有任务当前无
   active run，且状态与最新已结束 run 完全一致时，`--apply` 才补写 blocker；
   历史混杂或状态冲突只报告，不修改 task/run 状态。
+- `migrate-task-references` 默认只做 dry-run。只有历史 `work_key` 的完整表面
+  形式确实出现在该 run 的原始用户输入中时才允许迁移；从标题或摘要推断出的
+  值只报告并跳过。`--apply` 可重复执行，且不会赋予工作区或执行权限。
 
 - Eval 命令用于可复现的 Agent 质量测试。`--live` 允许真实 provider 调用；
   `--record-content` 可能持久化敏感内容，应谨慎使用。
@@ -205,12 +231,14 @@ Gateway 命令可用于 TUI 和受支持的 IM 渠道，并且会在普通 Agent
 /id
 /status
 /tasks [done|archived|all]
-/task <n|id> [runs|rename <name>|pin|unpin|archive|merge <dst>]
+/task <n|id> [runs|rename <name>|pin|unpin|archive|merge <dst>|references|reference add|remove <name>]
 /queue [drop <n>|clear]
+/watchers [active|attention|recent|all [page]|<n|id>|cancel <n|id>]
 /diag [memory|context|tasks|models|delivery|execution|tools]
+/report daily [--since 24h]
 /events
 /approvals [grants|revoke <n>]
-/approve <n|id|all> [task|always]
+/approve <n|id|all> [run]
 /reject <n|id|all>
 /mode [mode]
 /stop
@@ -222,8 +250,18 @@ Gateway 命令可用于 TUI 和受支持的 IM 渠道，并且会在普通 Agent
 /workspaces  (same as bare /workspace or /ws)
 ```
 
-- `/approve ... task` 为当前任务记住同类授权；`always` 为当前 person
-  持久记住同类授权。
+- `/watchers` 在 CLI 与 IM 中使用同一个按 person 隔离的视图，展示 checker、
+  operation、verification、finalization 和 notification 状态；原始命令、环境指纹
+  与凭证不会显示在输出中。默认视图和 `all` 视图带稳定序号：使用
+  `/watchers 1` 查看第一条 watcher，使用 `/watchers cancel 1` 停止监控。
+  取消 watcher 不会取消外部操作。
+- `/task <id> references` 查看可用于定位该任务的受治理名称和标识；
+  `reference add <名称>` 由用户直接确认，`reference remove <名称>` 停用它。
+  自动学习的 reference 需要不同 run 的原始用户文本重复支持；冲突时系统不会猜测。
+
+- 审批请求自身携带权威选项。普通请求显示“仅本次 / 当前 run 内复用 / 拒绝”，
+  高敏感请求只显示“仅本次 / 拒绝”；新提示不再创建 task/person 级授权。
+- `/approvals grants` 与 `/approvals revoke <n>` 仍可查看和撤销历史记忆授权。
 - `/mode` 支持 `on-request`、`read-only`、`auto-edit`、`full-auto`
   和 `smart`。
 - `/notify` 选择 CLI 脱离后接收进度和最终结果的已绑定 IM 渠道。
@@ -236,7 +274,7 @@ Gateway 命令可用于 TUI 和受支持的 IM 渠道，并且会在普通 Agent
 以下命令依赖本地 TUI 状态，不会通过 IM 渠道执行。
 
 ```text
-/skills [list|view|history|undo|search|install|audit|delete|archive|pin|unpin|stats|reload]
+/skills [list|view|candidates|candidate|promote|reject|rollback|binding|bind|unbind|history|undo|search|install|audit|delete|archive|pin|unpin|stats|reload]
 /bundles [list|view|create|delete]
 /reload-skills
 /memory [category|conflicts|search|show|correct|forget|pin|unpin|raw|history|undo]
@@ -254,6 +292,10 @@ Gateway 命令可用于 TUI 和受支持的 IM 渠道，并且会在普通 Agent
 
 - `/memory` 展示便于人类阅读的记忆索引；子命令可查看、纠正、置顶、遗忘
   和审计 canonical memory。
+- `/skills bind <name>` 为当前任务指定一个默认逻辑 Skill；`/skills unbind`
+  解除绑定。`/skills candidates` 列出尚未激活的 curator 候选，`candidate`、
+  `promote`、`reject` 和 `rollback` 按明确的版本哈希进行管理。候选与历史版本
+  正文不会进入普通 Agent prompt。
 - `/search` 是唯一的回看入口：`/search current` 打开当前对话并展示完整
   diff，带关键词则搜索过去的工作会话，不带参数列出最近会话。`/copy`
   复制最近一次 assistant 回复。

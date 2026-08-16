@@ -93,8 +93,12 @@ func ProbeResolvedModelForRole(ctx context.Context, rt modelruntime.Runtime, rol
 		probe.Latency = time.Since(start)
 		return probe
 	}
-	probe.NativeToolsTested = llm.ProviderSupportsNativeTools(provider)
 	probe.MaintenanceContractTested = isMaintenanceProbeRole(role)
+	// A maintenance probe must mirror the real analyzer request, which never
+	// carries agent tools. Combining an optional tool schema with the JSON
+	// contract lets a provider legitimately return a tool-call-only response
+	// and turns a healthy maintenance route into a false negative.
+	probe.NativeToolsTested = llm.ProviderSupportsNativeTools(provider) && !probe.MaintenanceContractTested
 	probeCtx, cancel := context.WithTimeout(ctx, modelRoleProbeTimeout)
 	defer cancel()
 	resp, err := provider.Chat(probeCtx, modelProbeRequest(rt, probe.NativeToolsTested, probe.MaintenanceContractTested))
@@ -112,7 +116,7 @@ func ProbeResolvedModelForRole(ctx context.Context, rt modelruntime.Runtime, rol
 			probe.MaintenanceContractPassed = true
 		}
 	}
-	if probe.Err == nil && shouldProbeThinkingToolLoop(rt) {
+	if probe.Err == nil && !probe.MaintenanceContractTested && shouldProbeThinkingToolLoop(rt) {
 		probe.ThinkingToolLoopTested = true
 		if err := probeThinkingToolLoop(probeCtx, provider, rt); err != nil {
 			probe.Err = fmt.Errorf("thinking tool loop failed: %w", err)
@@ -188,7 +192,10 @@ func modelProbeRequest(rt modelruntime.Runtime, includeTools, maintenanceContrac
 		}
 		req.SystemPrompt = postRunAnalyzerSystemPrompt + "\nFor this health check, do not call tools."
 		req.Messages = []llm.Message{{Role: "user", Content: "Health-check data only. Return task_decision KEEP and an empty memory_decisions array."}}
-		req.Options = map[string]interface{}{"temperature": 0, "maintenance_contract_probe": true}
+		req.Options = map[string]interface{}{
+			"temperature": 0, "maintenance_contract_probe": true,
+			"reasoning_effort": maintenanceReasoningEffort,
+		}
 	}
 	if includeTools {
 		var required []string
@@ -284,11 +291,11 @@ func ProbeConfiguredModelRoles(ctx context.Context, cfg *config.Config) []ModelR
 		} else {
 			probeCtx, cancel := context.WithTimeout(ctx, modelRoleProbeTimeout)
 			probeCtx = llm.WithModelContext(probeCtx, llm.ModelContext{Role: llm.ModelRole(target.roles[0])})
-			probe.NativeToolsTested = llm.ProviderSupportsNativeTools(target.provider)
 			probe.MaintenanceContractTested = false
 			for _, role := range target.roles {
 				probe.MaintenanceContractTested = probe.MaintenanceContractTested || isMaintenanceProbeRole(role)
 			}
+			probe.NativeToolsTested = llm.ProviderSupportsNativeTools(target.provider) && !probe.MaintenanceContractTested
 			resp, err := target.provider.Chat(probeCtx, modelProbeRequest(target.runtime, probe.NativeToolsTested, probe.MaintenanceContractTested))
 			switch {
 			case err != nil:
@@ -304,7 +311,7 @@ func ProbeConfiguredModelRoles(ctx context.Context, cfg *config.Config) []ModelR
 					probe.MaintenanceContractPassed = true
 				}
 			}
-			if probe.Err == nil && shouldProbeThinkingToolLoop(target.runtime) {
+			if probe.Err == nil && !probe.MaintenanceContractTested && shouldProbeThinkingToolLoop(target.runtime) {
 				probe.ThinkingToolLoopTested = true
 				if thinkingErr := probeThinkingToolLoop(probeCtx, target.provider, target.runtime); thinkingErr != nil {
 					probe.Err = fmt.Errorf("thinking tool loop failed: %w", thinkingErr)

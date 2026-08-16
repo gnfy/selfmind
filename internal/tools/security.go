@@ -27,11 +27,15 @@ var sensitiveAssignmentPattern = regexp.MustCompile(`(?i)((?:[A-Za-z0-9]+[_-])*(
 // where an old value becomes visible again.
 type SecretRegistry struct {
 	mu     sync.RWMutex
-	values map[string]struct{}
+	values map[string]secretRule
+}
+
+type secretRule struct {
+	identifierLike bool
 }
 
 func NewSecretRegistry() *SecretRegistry {
-	return &SecretRegistry{values: map[string]struct{}{}}
+	return &SecretRegistry{values: map[string]secretRule{}}
 }
 
 // Register adds an opaque secret value. Very short values are ignored because
@@ -46,7 +50,7 @@ func (r *SecretRegistry) Register(value string) {
 		return
 	}
 	r.mu.Lock()
-	r.values[value] = struct{}{}
+	r.values[value] = secretRule{identifierLike: isIdentifierLikeSecret(value)}
 	r.mu.Unlock()
 }
 
@@ -55,19 +59,72 @@ func (r *SecretRegistry) Redact(value string) string {
 		return value
 	}
 	r.mu.RLock()
-	values := make([]string, 0, len(r.values))
-	for secret := range r.values {
-		values = append(values, secret)
+	type registeredSecret struct {
+		value string
+		rule  secretRule
+	}
+	values := make([]registeredSecret, 0, len(r.values))
+	for secret, rule := range r.values {
+		values = append(values, registeredSecret{value: secret, rule: rule})
 	}
 	r.mu.RUnlock()
 	// Mask longer values first so overlapping credentials cannot leave a
 	// recognizable suffix behind.
-	sort.Slice(values, func(i, j int) bool { return len(values[i]) > len(values[j]) })
+	sort.Slice(values, func(i, j int) bool { return len(values[i].value) > len(values[j].value) })
 	out := value
 	for _, secret := range values {
-		out = strings.ReplaceAll(out, secret, "[REDACTED]")
+		if secret.rule.identifierLike {
+			out = redactIdentifierValue(out, secret.value)
+			continue
+		}
+		out = strings.ReplaceAll(out, secret.value, "[REDACTED]")
 	}
 	return out
+}
+
+func isIdentifierLikeSecret(value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, r := range value {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') ||
+			(r >= '0' && r <= '9') || r == '_' || r == '-' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func redactIdentifierValue(value, secret string) string {
+	if value == "" || secret == "" {
+		return value
+	}
+	var out strings.Builder
+	for start := 0; start < len(value); {
+		idx := strings.Index(value[start:], secret)
+		if idx < 0 {
+			out.WriteString(value[start:])
+			break
+		}
+		idx += start
+		end := idx + len(secret)
+		if (idx == 0 || !isIdentifierByte(value[idx-1])) &&
+			(end == len(value) || !isIdentifierByte(value[end])) {
+			out.WriteString(value[start:idx])
+			out.WriteString("[REDACTED]")
+			start = end
+			continue
+		}
+		out.WriteString(value[start : idx+1])
+		start = idx + 1
+	}
+	return out.String()
+}
+
+func isIdentifierByte(value byte) bool {
+	return (value >= 'a' && value <= 'z') || (value >= 'A' && value <= 'Z') ||
+		(value >= '0' && value <= '9') || value == '_' || value == '-'
 }
 
 var defaultSecretRegistry = NewSecretRegistry()

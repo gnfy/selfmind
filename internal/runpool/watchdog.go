@@ -31,6 +31,7 @@ type watchdogController struct {
 }
 
 type watchdogContextKey struct{}
+type watchdogActivityContextKey struct{}
 
 func (c *watchdogController) set(phase Phase) {
 	if c == nil || phase == "" {
@@ -108,6 +109,28 @@ func BeginPersonWait(ctx context.Context, phase Phase) func() {
 	return func() {}
 }
 
+// HasWatchdog reports whether ctx already owns a run watchdog. Orchestration
+// installs it before execution-scope closures are created; the router then
+// reuses it instead of creating a second controller that clarify cannot see.
+func HasWatchdog(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	control, _ := ctx.Value(watchdogContextKey{}).(*watchdogController)
+	return control != nil
+}
+
+// RecordActivity resets the watchdog attached to ctx. It is a no-op for
+// management/test contexts that are not running an agent turn.
+func RecordActivity(ctx context.Context) {
+	if ctx == nil {
+		return
+	}
+	if activity, _ := ctx.Value(watchdogActivityContextKey{}).(func()); activity != nil {
+		activity()
+	}
+}
+
 func phaseWaitsForPerson(phase Phase) bool {
 	return phase == PhaseWaitingApproval || phase == PhaseWaitingClarify
 }
@@ -127,9 +150,16 @@ func WithWatchdog(parent context.Context, idle time.Duration) (context.Context, 
 	}
 	baseCtx, cancel := context.WithCancelCause(parent)
 	control := &watchdogController{phase: PhaseRunning, changed: make(chan struct{}, 1)}
-	ctx := context.WithValue(baseCtx, watchdogContextKey{}, control)
 	reset := make(chan struct{}, 1)
 	stopCh := make(chan struct{})
+	activity := func() {
+		select {
+		case reset <- struct{}{}:
+		default: // a reset is already pending; the timer will be refreshed
+		}
+	}
+	ctx := context.WithValue(baseCtx, watchdogContextKey{}, control)
+	ctx = context.WithValue(ctx, watchdogActivityContextKey{}, activity)
 
 	go func() {
 		timer := time.NewTimer(idle)
@@ -182,12 +212,6 @@ func WithWatchdog(parent context.Context, idle time.Duration) (context.Context, 
 		}
 	}()
 
-	activity := func() {
-		select {
-		case reset <- struct{}{}:
-		default: // a reset is already pending; the timer will be refreshed
-		}
-	}
 	var stopOnce sync.Once
 	stop := func() {
 		stopOnce.Do(func() { close(stopCh) })

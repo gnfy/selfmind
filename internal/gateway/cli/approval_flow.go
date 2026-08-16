@@ -239,8 +239,8 @@ func (m *uiModel) resumeAfterApproval() {
 // decision names the RULE (that is what the person actually chose); a class
 // decision falls back to the scope wording.
 func approvalDecisionNote(opt components.ApprovalOption) string {
-	if strings.TrimSpace(opt.GrantKey) != "" && strings.TrimSpace(opt.RuleLabel) != "" {
-		return " (won't ask again for " + opt.RuleLabel + ")"
+	if strings.TrimSpace(opt.RuleLabel) != "" {
+		return " (allowed for this run: " + opt.RuleLabel + ")"
 	}
 	return approvalScopeNote(opt.Scope)
 }
@@ -249,10 +249,12 @@ func approvalDecisionNote(opt components.ApprovalOption) string {
 // grant scope in the transcript record.
 func approvalScopeNote(scope string) string {
 	switch scope {
+	case "run":
+		return " (allowed for this run)"
 	case "task":
 		return " (allowed for this task)"
 	case "person":
-		return " (always allowed)"
+		return " (allowed across tasks for 8h)"
 	default:
 		return " (this time)"
 	}
@@ -297,10 +299,14 @@ func approvalOptionsFromPayload(payload map[string]interface{}) []components.App
 	return options
 }
 
-// ruleLabelFromOptionLabel recovers the rule wording out of a server label
-// ("Yes, and don't ask again for commands that start with `git status`") for the
-// transcript record, so the record states what was remembered.
+// ruleLabelFromOptionLabel recovers the authorization wording from a server
+// label so the transcript states what was allowed for this run.
 func ruleLabelFromOptionLabel(label string) string {
+	const runPrefix = "Yes, allow "
+	const runSuffix = " for this run"
+	if strings.HasPrefix(label, runPrefix) && strings.HasSuffix(label, runSuffix) {
+		return strings.TrimSuffix(strings.TrimPrefix(label, runPrefix), runSuffix)
+	}
 	const marker = "don't ask again for "
 	if idx := strings.Index(label, marker); idx >= 0 {
 		return strings.TrimSpace(label[idx+len(marker):])

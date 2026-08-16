@@ -51,6 +51,40 @@ type DeliveryPlatformHealth struct {
 	LastActivityAt time.Time
 }
 
+// DeliveryEndpointState is the newest durable delivery observation for one
+// bound endpoint. It is intentionally small: reachability policy belongs to
+// the gateway, while control only exposes the persisted fact it can evaluate.
+type DeliveryEndpointState struct {
+	Status    string
+	UpdatedAt time.Time
+}
+
+// LatestDeliveryEndpointState returns the newest outbound state for one
+// platform account. A nil result means no delivery has been attempted for the
+// endpoint yet.
+func (s *Store) LatestDeliveryEndpointState(ctx context.Context, tenantID, personID, platform, platformUserID string) (*DeliveryEndpointState, error) {
+	if strings.TrimSpace(personID) == "" || strings.TrimSpace(platform) == "" || strings.TrimSpace(platformUserID) == "" {
+		return nil, fmt.Errorf("person, platform, and platform user id are required")
+	}
+	var state DeliveryEndpointState
+	var updatedAt int64
+	err := s.db.QueryRowContext(ctx,
+		`SELECT status, updated_at
+		 FROM outbound_messages
+		 WHERE tenant_id = ? AND person_id = ? AND platform = ? AND platform_user_id = ?
+		 ORDER BY updated_at DESC, created_at DESC, rowid DESC LIMIT 1`,
+		normalizeTenant(tenantID), personID, platform, platformUserID,
+	).Scan(&state.Status, &updatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	state.UpdatedAt = time.Unix(updatedAt, 0)
+	return &state, nil
+}
+
 func (s *Store) UpdateRunHeartbeat(ctx context.Context, tenantID, runID string) error {
 	_, err := s.db.ExecContext(ctx,
 		`UPDATE task_runs SET heartbeat_at = ? WHERE tenant_id = ? AND id = ? AND status = 'running'`,

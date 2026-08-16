@@ -208,6 +208,12 @@ func activeRunCopy(active *activeRun) *activeRun {
 // assemble runtime context, drive the agent with events, then persist the
 // structured outcome, handoff, artifacts, and finishing event.
 func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.IdentityContext, req api.MessageRequest, intent router.IntentResult) (api.MessageResponse, int) {
+	// Install the watchdog before installExecutionScope captures ctx for
+	// approval and clarify callbacks. Previously the router created it later,
+	// so a clarify wait paused a different context and the real watchdog killed
+	// an otherwise healthy run after ten quiet minutes.
+	ctx, stopWatchdog := router.PrepareRunWatchdog(ctx)
+	defer stopWatchdog()
 	d := c.srv
 	// A drained queue row transitions to 'done' the moment its async run returns
 	// through ANY terminal path — normal completion, an early error return, or a
@@ -229,12 +235,14 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 	// attached to. Channel-scoped resolution (and async sends in particular)
 	// can pick a task that differs from the pointer; without this sync,
 	// /status on every endpoint keeps reporting an unrelated old task.
-	c.syncCurrentTask(ctx, identity, task)
+	if attach.resolvedPolicy().UpdateCurrentTask {
+		c.syncCurrentTask(ctx, identity, task)
+	}
 	_ = d.Control.RecordChannelMessage(ctx, *identity, req.Channel, task.ID, "user", req.Content)
 
 	run, err := d.Control.StartRunWithOptions(ctx, task, req.Channel, truncate(req.Content, 240), control.StartRunOptions{
 		WorkKey:               attach.workKey,
-		PreserveTaskLifecycle: attach.preLabel && !attach.created,
+		PreserveTaskLifecycle: attach.resolvedPolicy().PreserveTaskLifecycle,
 	})
 	if err != nil {
 		if attach.created {
@@ -287,6 +295,7 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 		Channel:    req.Channel,
 		Payload:    mustJSON(startedPayload),
 	})
+	c.recordTaskResolution(ctx, identity, run, req, task, attach, task.ID, "pending", false)
 	if attach.workKey != "" {
 		d.appendLabelAssignedEvent(ctx, task.ID, run.ID, map[string]interface{}{
 			"decision": "ingress_work_key",
@@ -387,11 +396,16 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 	invocationScope := kernel.ToolInvocationScope{
 		ControlTenantID:   identity.TenantID,
 		PersonID:          identity.PersonID,
+		TaskID:            task.ID,
 		WorkspaceID:       req.WorkspaceID,
 		ExecutionScopeKey: runScopeKey,
+		ExecutionLane:     "main",
+		AttachmentMode:    string(attach.reason),
+		SkillMutationMode: kernel.SkillMutationCandidateOnly,
 	}
 	if run != nil {
 		invocationScope.RunID = run.ID
+		invocationScope.WorkUnitID = run.WorkUnitID
 	}
 	if workspace != nil {
 		invocationScope.WorkspaceID = workspace.ID
@@ -400,11 +414,61 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 		invocationScope.LeaseID = lease.ID
 	}
 	ctx = kernel.WithToolInvocationScope(ctx, invocationScope)
+	if run != nil {
+		ctx = tools.WithPlanProjectionSink(ctx, func(callCtx context.Context, steps []tools.PlanStep) ([]tools.PlanWorkUnitIdentity, error) {
+			projected := make([]workUnitProjectionStep, 0, len(steps))
+			for _, step := range steps {
+				projected = append(projected, workUnitProjectionStep{
+					Step: step.Step, Status: step.Status, RelatedTaskID: step.RelatedTaskID,
+					WorkUnitID: step.WorkUnitID, WorkUnit: step.WorkUnit,
+				})
+			}
+			plan := projectWorkUnitPlan(projected)
+			units, err := c.srv.Control.SyncRunWorkUnits(callCtx, identity.TenantID, run.ID, plan)
+			if err != nil {
+				return nil, err
+			}
+			out := make([]tools.PlanWorkUnitIdentity, 0, len(units))
+			for _, unit := range units {
+				projectedIdentity := tools.PlanWorkUnitIdentity{
+					ID: unit.ID, Sequence: unit.Sequence, Goal: unit.GoalDigest,
+					PlanStatus: unit.PlanStatus, RelatedTaskID: unit.RelatedTaskID,
+				}
+				if unit.PlanStatus == "in_progress" {
+					bindingBlocksCandidates := false
+					if unit.RelatedTaskID != "" {
+						binding, bindingErr := c.srv.Control.GetTaskSkillBinding(callCtx, identity.TenantID, identity.PersonID, unit.RelatedTaskID)
+						if bindingErr == nil && binding != nil && binding.State != control.TaskSkillBindingReleased {
+							bindingBlocksCandidates = true
+							if binding.State == control.TaskSkillBindingActive {
+								projectedIdentity.BoundSkillName = binding.SkillName
+							}
+						}
+					}
+					if !bindingBlocksCandidates {
+						infos, rankErr := tools.RankSkillCandidatesForTenant(identity.TenantID, unit.GoalDigest, 3, map[string]interface{}{
+							"_tenant_id": identity.TenantID, "_context": callCtx, "_invocation_scope": invocationScope,
+						})
+						if rankErr == nil {
+							for _, info := range infos {
+								projectedIdentity.SkillCandidates = append(projectedIdentity.SkillCandidates, tools.PlanSkillCandidate{Name: info.Name, Description: info.Description})
+							}
+						}
+					}
+				}
+				out = append(out, projectedIdentity)
+			}
+			return out, nil
+		})
+	}
 	if workspace != nil && workspace.LocalPath != "" {
 		ctx = kernel.WithWorkspaceContext(ctx, kernel.WorkspaceContext{
 			ID:   workspace.ID,
 			Root: workspace.LocalPath,
 		})
+	}
+	if selected := c.selectSkillRuntimeContext(ctx, identity, task, run, attach, req.Content); selected.Active != nil || len(selected.Candidates) > 0 {
+		ctx = kernel.WithSkillRuntimeContext(ctx, selected)
 	}
 	if sink := c.newToolArtifactSink(identity, task, run); sink != nil {
 		ctx = kernel.WithToolArtifactSink(ctx, sink)
@@ -415,7 +479,7 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 	if sink := c.newLoopCheckpointSink(identity, task, run); sink != nil {
 		ctx = kernel.WithLoopCheckpointSink(ctx, sink)
 	}
-	ctx = kernel.WithTaskRuntimeContext(ctx, c.selectedTaskRuntimeContext(ctx, task, run, workspace, req.Platform, req.Channel, req.Content, attach.preLabel))
+	ctx = kernel.WithTaskRuntimeContext(ctx, c.selectedTaskRuntimeContextWithMode(ctx, task, run, workspace, req.Platform, req.Channel, req.Content, attach.resolvedPolicy().ContextMode))
 	ctx = c.withLoopCheckpointResume(ctx, identity, task, run, intent)
 	agentInput := c.withGatewayContext(req.Content, identity, task, workspace, req.Attachments)
 	agentInput = c.withResumeContext(ctx, identity, task, run, intent, attach.claimsPriorRuns(), attach.workKey, agentInput)
@@ -440,7 +504,7 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 		return api.MessageResponse{Identity: identity, Task: task, Run: run, Outcome: &outcome, Error: firstString(outcome.Risks), Turn: messageTurn(outcome.Status, outcome.Status, "idle", task.ID, run.ID, outcome.Summary), Context: messageContextBudget(llmUsageZero())}, http.StatusOK
 	}
 
-	content, usage, eventSummary, err := c.aggregateGatewayResponse(ctx, req.Channel, task, run, resp)
+	content, usage, eventSummary, hasFinalContent, err := c.aggregateGatewayResponse(ctx, req.Channel, task, run, resp)
 	if err != nil {
 		outcome := c.finalizeErroredRun(ctx, identity, task, run, req.Channel, err, replay)
 		return api.MessageResponse{Identity: identity, Task: task, Run: run, Outcome: &outcome, Content: content, Usage: usage, Error: firstString(outcome.Risks), Turn: messageTurn(outcome.Status, outcome.Status, "idle", task.ID, run.ID, outcome.Summary), Context: messageContextBudget(usage)}, http.StatusOK
@@ -463,10 +527,24 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 		}
 	}
 	outcome = reconcileTurnCompletion(outcome, eventSummary.Completion(), structuredOutcome)
+	outcome = reconcileMissingFinalResponse(outcome, structuredOutcome, hasFinalContent)
+	if !hasFinalContent && structuredOutcome && strings.TrimSpace(outcome.Summary) != "" {
+		// finish_run is a durable structured result. When a provider ends the
+		// stream without separate prose, expose that result instead of storing
+		// the router's generic missing-response fallback as a successful answer.
+		content = strings.TrimSpace(outcome.Summary)
+	}
 	verification, evidenceFiles := c.evidenceOutcome(finCtx, task.ID, run.ID)
 	outcome.Verification, outcome.Files = mergeEvidenceFiles(verification, evidenceFiles, outcome.Files)
 	outcome.ClaimMismatches = verificationClaimMismatches(outcome)
 	outcome = applyVerificationOutcome(outcome)
+	if watchID := strings.TrimSpace(req.WatchID); watchID != "" {
+		if watch, watchErr := d.Control.GetExternalWatch(finCtx, identity.TenantID, watchID); watchErr == nil {
+			outcome = reconcileExternalWatchOutcome(outcome, watch)
+		} else {
+			log.Warn("external watch outcome lookup failed", "watch_id", watchID, "run_id", run.ID, "error", watchErr)
+		}
+	}
 	for _, mismatch := range outcome.ClaimMismatches {
 		outcome.Risks = appendUnique(outcome.Risks, mismatch, 8)
 	}
@@ -510,6 +588,7 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 	}
 	recordFinalizeErr("materialize run finalization", c.materializeRunFinalization(finCtx, identity, task, run, taskStatus,
 		replay.WorkspaceID, replay.UserInput, req.Channel, content, outcome, replay.Attach, handoff, terminalEvent))
+	c.recordRecallOutputOverlap(finCtx, task, run, req.Channel, content)
 	c.recordOutcomeArtifacts(finCtx, task, run, req.Channel, outcome.Files)
 	if len(finalizeErrs) > 0 {
 		_, _ = d.Control.AppendEvent(context.Background(), control.Event{

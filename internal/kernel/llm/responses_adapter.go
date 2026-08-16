@@ -79,7 +79,7 @@ type responsesResponse struct {
 	Usage struct {
 		InputTokens        int `json:"input_tokens"`
 		OutputTokens       int `json:"output_tokens"`
-		InputTokensDetails struct {
+		InputTokensDetails *struct {
 			CachedTokens int `json:"cached_tokens"`
 		} `json:"input_tokens_details"`
 	} `json:"usage"`
@@ -93,11 +93,16 @@ type responsesResponse struct {
 // billed_input_tokens = input_tokens - cache_read_input_tokens is an
 // approximation for this protocol.
 func usageStatsFromResponses(payload responsesResponse) UsageStats {
-	return UsageStats{
-		InputTokens:          payload.Usage.InputTokens,
-		OutputTokens:         payload.Usage.OutputTokens,
-		CacheReadInputTokens: payload.Usage.InputTokensDetails.CachedTokens,
+	stats := UsageStats{
+		InputTokens:  payload.Usage.InputTokens,
+		OutputTokens: payload.Usage.OutputTokens,
 	}
+	if payload.Usage.InputTokensDetails != nil {
+		stats.CacheUsageReported = true
+		stats.CacheReadInputTokens = maxUsageInt(payload.Usage.InputTokensDetails.CachedTokens, 0)
+		stats.CacheMissInputTokens = maxUsageInt(stats.InputTokens-stats.CacheReadInputTokens, 0)
+	}
+	return stats
 }
 
 func NewResponsesAdapter(apiKey, baseURL, model string) *ResponsesAdapter {
@@ -187,7 +192,9 @@ func (a *ResponsesAdapter) chatViaStream(ctx context.Context, req ChatRequest) (
 			resp.Usage.InputTokens += event.Usage.InputTokens
 			resp.Usage.OutputTokens += event.Usage.OutputTokens
 			resp.Usage.CacheReadInputTokens += event.Usage.CacheReadInputTokens
+			resp.Usage.CacheMissInputTokens += event.Usage.CacheMissInputTokens
 			resp.Usage.CacheCreationInputTokens += event.Usage.CacheCreationInputTokens
+			resp.Usage.CacheUsageReported = resp.Usage.CacheUsageReported || event.Usage.CacheUsageReported
 			resp.Usage.CacheCreationReported = resp.Usage.CacheCreationReported || event.Usage.CacheCreationReported
 		}
 		if event.FinishReason != "" {
@@ -390,7 +397,13 @@ func (a *ResponsesAdapter) streamResponse(ctx context.Context, resp *http.Respon
 func (a *ResponsesAdapter) requestFromChat(req ChatRequest, stream bool) responsesRequest {
 	model := firstNonEmptyString(req.Model, a.Model)
 	wire := responsesRequest{Model: model, Stream: stream, Store: a.Store, PromptCacheKey: strings.TrimSpace(req.PromptCacheKey)}
-	if effort := strings.TrimSpace(a.ReasoningEffort); effort != "" {
+	effort := strings.TrimSpace(a.ReasoningEffort)
+	if req.Options != nil {
+		if requested, ok := req.Options["reasoning_effort"].(string); ok && strings.TrimSpace(requested) != "" {
+			effort = strings.TrimSpace(requested)
+		}
+	}
+	if effort != "" && !reasoningDisabled(effort) {
 		wire.Reasoning = &responsesReasoning{Effort: effort}
 	}
 	// Responses replays assistant function_call items as first-class input
@@ -451,6 +464,45 @@ func (a *ResponsesAdapter) requestFromChat(req ChatRequest, stream bool) respons
 		wire.Tools = a.responsesTools(req.Tools)
 	}
 	return wire
+}
+
+func (a *ResponsesAdapter) FingerprintRequest(_ context.Context, req ChatRequest, stream bool) (RequestFingerprint, bool) {
+	wire := a.requestFromChat(req, stream)
+	stableInput := make([]responsesInputItem, 0, len(wire.Input))
+	for _, item := range wire.Input {
+		if item.Role != "system" && item.Role != "developer" {
+			break
+		}
+		stableInput = append(stableInput, item)
+	}
+	settings := struct {
+		Model          string
+		Store          *bool
+		Reasoning      *responsesReasoning
+		PromptCacheKey string
+		ExtraBody      map[string]interface{}
+		ExtraQuery     map[string]interface{}
+		Headers        map[string]string
+	}{wire.Model, wire.Store, wire.Reasoning, wire.PromptCacheKey, a.ExtraBody, a.ExtraQuery, a.Headers}
+	prefix := struct {
+		Settings interface{}
+		System   []responsesInputItem
+		Tools    []map[string]interface{}
+	}{settings, stableInput, wire.Tools}
+	body, err := marshalWithExtraBody(wire, a.ExtraBody)
+	if err != nil {
+		return RequestFingerprint{}, false
+	}
+	return RequestFingerprint{
+		Protocol:    "openai_responses",
+		PrefixHash:  requestValueHash(prefix),
+		RequestHash: requestValueHash(json.RawMessage(body)),
+		Blocks: map[string]string{
+			"settings": requestValueHash(settings),
+			"system":   requestValueHash(stableInput),
+			"tools":    requestValueHash(wire.Tools),
+		},
+	}, true
 }
 
 func responsesCallID(call ToolCall) string {

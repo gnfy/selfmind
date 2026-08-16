@@ -91,6 +91,17 @@ func TestResponsesAdapterSendsReasoningEffortAndCustomHeaders(t *testing.T) {
 	}
 }
 
+func TestResponsesAdapterRequestCanDisableConfiguredReasoning(t *testing.T) {
+	adapter := NewResponsesAdapter("token", "https://example.invalid", "gpt-test")
+	adapter.ReasoningEffort = "high"
+	wire := adapter.requestFromChat(ChatRequest{
+		Options: map[string]interface{}{"reasoning_effort": "none"},
+	}, false)
+	if wire.Reasoning != nil {
+		t.Fatalf("reasoning = %#v, want omitted", wire.Reasoning)
+	}
+}
+
 func TestResponsesAdapterChatUsesStreamWhenRequired(t *testing.T) {
 	var body map[string]interface{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -209,6 +220,9 @@ func TestResponsesAdapterParsesCachedTokensFromResponse(t *testing.T) {
 	if resp.Usage.CacheReadInputTokens != 100 {
 		t.Fatalf("CacheReadInputTokens = %d, want 100", resp.Usage.CacheReadInputTokens)
 	}
+	if !resp.Usage.CacheUsageReported || resp.Usage.CacheMissInputTokens != 20 {
+		t.Fatalf("cache accounting = %+v, want reported with 20 miss tokens", resp.Usage)
+	}
 	// OpenAI Responses never reports cache creation separately.
 	if resp.Usage.CacheCreationInputTokens != 0 {
 		t.Fatalf("CacheCreationInputTokens = %d, want 0", resp.Usage.CacheCreationInputTokens)
@@ -245,6 +259,9 @@ func TestResponsesAdapterParsesCachedTokensFromStreamCompleted(t *testing.T) {
 	if resp.Usage.CacheReadInputTokens != 100 {
 		t.Fatalf("CacheReadInputTokens = %d, want 100", resp.Usage.CacheReadInputTokens)
 	}
+	if !resp.Usage.CacheUsageReported || resp.Usage.CacheMissInputTokens != 20 {
+		t.Fatalf("cache accounting = %+v, want reported with 20 miss tokens", resp.Usage)
+	}
 	if resp.Usage.CacheCreationInputTokens != 0 {
 		t.Fatalf("CacheCreationInputTokens = %d, want 0", resp.Usage.CacheCreationInputTokens)
 	}
@@ -267,6 +284,9 @@ func TestResponsesAdapterUsageWithoutDetailsIsBackwardCompatible(t *testing.T) {
 	}
 	if resp.Usage.CacheReadInputTokens != 0 || resp.Usage.CacheCreationInputTokens != 0 {
 		t.Fatalf("cache usage = %+v, want zero", resp.Usage)
+	}
+	if resp.Usage.CacheUsageReported {
+		t.Fatalf("cache usage = %+v, missing details must remain unreported", resp.Usage)
 	}
 }
 

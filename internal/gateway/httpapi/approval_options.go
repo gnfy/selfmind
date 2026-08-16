@@ -39,72 +39,43 @@ type approvalDecisionOption struct {
 	Key      string `json:"key,omitempty"`
 }
 
-// approvalDecisionShortcuts maps a rule kind to its shortcut letter. Prefix
-// borrows codex's `p`; host and writable-root get `h` and `w`.
-var approvalDecisionShortcuts = map[string]string{
-	tools.ApprovalRuleKindCommandPrefix: "p",
-	tools.ApprovalRuleKindNetworkHost:   "h",
-	tools.ApprovalRuleKindPathRoot:      "w",
-}
-
-// approvalDecisionMaxOptions bounds the list. Past this an IM keypad and a
-// terminal panel both become unreadable, and the tail options are the ones nobody
-// picks: once/deny plus a few rules is the whole useful space.
-const approvalDecisionMaxOptions = 6
-
-// buildApprovalDecisions renders the ordered answer set for one ask. Order is
-// deliberate: the narrowest answer first (run once), then the rules that end this
-// specific question, then the broader class memory, then refusal last so it is
-// never the default landing spot.
+// buildApprovalDecisions renders one compact, server-authoritative answer set.
+// Ordinary asks expose once / run-local reuse / deny. Sensitive asks expose
+// once / deny. request_permissions exposes its exact run bundle / deny.
 func buildApprovalDecisions(req tools.ToolApprovalRequest) []approvalDecisionOption {
-	options := []approvalDecisionOption{{
-		ID: "once", Label: "Yes, run it once", Decision: "approved", Key: "y",
-	}}
-	for _, rule := range req.RuleCandidates {
-		if len(options) >= approvalDecisionMaxOptions-1 {
-			break
+	once := approvalDecisionOption{ID: "once", Label: "Yes, run it once", Decision: "approved", Key: "y"}
+	deny := approvalDecisionOption{ID: "deny", Label: "No, and tell the agent what to do instead", Decision: "rejected", Key: "n"}
+
+	switch strings.ToLower(strings.TrimSpace(req.DecisionPolicy)) {
+	case tools.ApprovalDecisionPolicyOnceOnly:
+		return []approvalDecisionOption{once, deny}
+	case tools.ApprovalDecisionPolicyRunBundle:
+		label := strings.TrimSpace(req.GrantClass)
+		if label == "" {
+			label = "the requested permissions"
 		}
+		return []approvalDecisionOption{{
+			ID: "run_bundle", Label: "Yes, allow " + label + " for this run", Decision: "approved", Scope: "run", Key: "y",
+		}, deny}
+	}
+
+	options := []approvalDecisionOption{once}
+	if len(req.RuleCandidates) == 1 {
+		rule := req.RuleCandidates[0]
 		options = append(options, approvalDecisionOption{
-			ID:       "rule:" + rule.Kind,
-			Label:    fmt.Sprintf("Yes, and don't ask again for %s", rule.Label),
-			Decision: "approved",
-			// A rule is remembered for the person: its whole value is surviving
-			// the task it was granted in. The execution layer still bounds how
-			// long a person-scope grant lasts (approvalGrantExpiry).
-			Scope:    "person",
-			GrantKey: rule.Key,
-			Key:      approvalDecisionShortcuts[rule.Kind],
+			ID: "rule:" + rule.Kind, Label: fmt.Sprintf("Yes, allow %s for this run", rule.Label),
+			Decision: "approved", Scope: "run", GrantKey: rule.Key, Key: "r",
+		})
+	} else if exact := strings.TrimSpace(req.RunGrantClass); exact != "" {
+		options = append(options, approvalDecisionOption{
+			ID: "run_exact", Label: "Yes, allow " + exact, Decision: "approved", Scope: "run", Key: "r",
+		})
+	} else if class := strings.TrimSpace(req.GrantClass); class != "" {
+		options = append(options, approvalDecisionOption{
+			ID: "run", Label: "Yes, allow " + class + " for this run", Decision: "approved", Scope: "run", Key: "r",
 		})
 	}
-	// An unclassifiable script may still be approved as a byte-identical action
-	// for this live run. This is explicit, in-memory, and cannot become task or
-	// person authority.
-	if strings.TrimSpace(req.GrantClass) == "" && strings.TrimSpace(req.RunGrantClass) != "" && len(options) < approvalDecisionMaxOptions-1 {
-		options = append(options, approvalDecisionOption{
-			ID: "run_exact", Label: "Yes, and allow " + req.RunGrantClass, Decision: "approved", Scope: "run", Key: "r",
-		})
-	}
-	// Class memory is offered only when the grant floor actually minted a class.
-	// Offering it otherwise promises memory that would be silently discarded —
-	// the exact dishonesty tools.ToolApprovalRequest.GrantClass exists to prevent.
-	if strings.TrimSpace(req.GrantClass) != "" && len(options) < approvalDecisionMaxOptions-1 {
-		options = append(options,
-			approvalDecisionOption{ID: "run", Label: "Yes, and allow " + req.GrantClass + " for this run", Decision: "approved", Scope: "run", Key: "r"},
-		)
-	}
-	if strings.TrimSpace(req.GrantClass) != "" && len(options) < approvalDecisionMaxOptions-1 {
-		options = append(options,
-			approvalDecisionOption{ID: "task", Label: "Yes, and allow " + req.GrantClass + " for this task", Decision: "approved", Scope: "task", Key: "t"},
-		)
-		if len(options) < approvalDecisionMaxOptions-1 {
-			options = append(options,
-				approvalDecisionOption{ID: "person", Label: "Yes, always allow " + req.GrantClass, Decision: "approved", Scope: "person", Key: "a"},
-			)
-		}
-	}
-	return append(options, approvalDecisionOption{
-		ID: "deny", Label: "No, and tell the agent what to do instead", Decision: "rejected", Key: "n",
-	})
+	return append(options, deny)
 }
 
 // decodeApprovalDecisions reads the options back off a stored row's payload. A row
@@ -206,7 +177,11 @@ var denyClassWords = []struct {
 	// the most ordinary "don't touch the code" blocked every tool in the run.
 	{[]string{"修改", "改动", "更改", "改", "编辑", "写入", "写", "覆盖", "modify", "edit", "write", "overwrite", "change"}, []tools.OperationClass{tools.OpClassWrite}},
 	{[]string{"删除", "移除", "删", "rm ", "delete", "remove"}, []tools.OperationClass{tools.OpClassDelete}},
-	{[]string{"执行", "运行", "跑", "调用命令", "run", "rerun", "re-run", "execute", "invoke"}, []tools.OperationClass{tools.OpClassExec}},
+	// A bare "do not execute yet" normally forbids the side-effecting action,
+	// not the read-only probe needed to inspect it. Explicit command/shell words
+	// retain the parent exec class and therefore cover observations too.
+	{[]string{"执行", "运行", "跑", "run", "rerun", "re-run", "execute", "invoke"}, []tools.OperationClass{tools.OpClassExecInTurn}},
+	{[]string{"命令", "调用命令", "command", "commands", "shell", "terminal"}, []tools.OperationClass{tools.OpClassExec}},
 	{[]string{"联网", "下载", "上传", "访问网络", "network", "download", "upload", "curl", "fetch"}, []tools.OperationClass{tools.OpClassNetwork}},
 }
 
@@ -283,7 +258,10 @@ func denyScopeForClause(marker, clause string) tools.DenyScope {
 				// handing it to the daemon.
 				class = tools.OpClassExecInTurn
 			}
-			scope.Classes = append(scope.Classes, class)
+			if class == tools.OpClassExecInTurn && manner {
+				class = tools.OpClassExecInTurn
+			}
+			scope.Classes = appendUniqueOperationClass(scope.Classes, class)
 		}
 	}
 	scope.Resolved = len(scope.Classes) > 0
@@ -291,6 +269,15 @@ func denyScopeForClause(marker, clause string) tools.DenyScope {
 		scope.Targets = denyClauseTargets(governed)
 	}
 	return scope
+}
+
+func appendUniqueOperationClass(classes []tools.OperationClass, candidate tools.OperationClass) []tools.OperationClass {
+	for _, existing := range classes {
+		if existing == candidate {
+			return classes
+		}
+	}
+	return append(classes, candidate)
 }
 
 // containsAnyWord matches CJK needles as substrings (the script has no word

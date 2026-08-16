@@ -2,6 +2,7 @@ package control
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 )
@@ -13,7 +14,7 @@ func TestMaintenanceJobLifecycle(t *testing.T) {
 	ctx := context.Background()
 	store, identity, _, run := newRecoveryFixture(t)
 
-	if err := store.FinishRun(ctx, identity.TenantID, run.ID, "done"); err != nil {
+	if err := store.FinishRunWithMaintenancePayload(ctx, identity.TenantID, run.ID, "done", 1, `{}`); err != nil {
 		t.Fatalf("FinishRun: %v", err)
 	}
 	job, err := store.GetMaintenanceJob(ctx, identity.TenantID, run.ID, 1)
@@ -32,7 +33,7 @@ func TestMaintenanceJobLifecycle(t *testing.T) {
 	}
 
 	// Duplicate terminal notification: FinishRun again must not reset the job.
-	if err := store.FinishRun(ctx, identity.TenantID, run.ID, "done"); err != nil {
+	if err := store.FinishRunWithMaintenancePayload(ctx, identity.TenantID, run.ID, "done", 1, `{}`); err != nil {
 		t.Fatalf("second FinishRun: %v", err)
 	}
 
@@ -98,7 +99,7 @@ func TestFinishRunPersistsMaintenancePayloadAtomically(t *testing.T) {
 func TestMaintenanceJobFailureAndRecovery(t *testing.T) {
 	ctx := context.Background()
 	store, identity, _, run := newRecoveryFixture(t)
-	if err := store.FinishRun(ctx, identity.TenantID, run.ID, "done"); err != nil {
+	if err := store.FinishRunWithMaintenancePayload(ctx, identity.TenantID, run.ID, "done", 1, `{}`); err != nil {
 		t.Fatal(err)
 	}
 
@@ -147,7 +148,7 @@ func TestMaintenanceJobFailureAndRecovery(t *testing.T) {
 func TestMaintenanceJobProviderBlockAndRestartProbe(t *testing.T) {
 	ctx := context.Background()
 	store, identity, _, run := newRecoveryFixture(t)
-	if err := store.FinishRun(ctx, identity.TenantID, run.ID, "done"); err != nil {
+	if err := store.FinishRunWithMaintenancePayload(ctx, identity.TenantID, run.ID, "done", 1, `{}`); err != nil {
 		t.Fatal(err)
 	}
 	if claimed, err := store.ClaimMaintenanceJob(ctx, identity.TenantID, run.ID, 1); err != nil || !claimed {
@@ -182,10 +183,38 @@ func TestMaintenanceJobProviderBlockAndRestartProbe(t *testing.T) {
 	}
 }
 
+func TestLegacyBlockedMaintenanceRestartProbeIsMarkedOnce(t *testing.T) {
+	ctx := context.Background()
+	store, identity, _, run := newRecoveryFixture(t)
+	if err := store.FinishRunWithMaintenancePayload(ctx, identity.TenantID, run.ID, "done", 1, `{}`); err != nil {
+		t.Fatal(err)
+	}
+	if claimed, err := store.ClaimMaintenanceJob(ctx, identity.TenantID, run.ID, 1); err != nil || !claimed {
+		t.Fatalf("claim: claimed=%v err=%v", claimed, err)
+	}
+	if _, err := store.db.ExecContext(ctx,
+		`UPDATE maintenance_jobs SET status = ?, blocked_route_id = '' WHERE tenant_id = ? AND run_id = ? AND analyzer_version = 1`,
+		MaintenanceJobBlockedProvider, identity.TenantID, run.ID); err != nil {
+		t.Fatal(err)
+	}
+	first, err := store.ResetLegacyBlockedMaintenanceJobs(ctx)
+	if err != nil || first != 1 {
+		t.Fatalf("first reset=%d err=%v", first, err)
+	}
+	second, err := store.ResetLegacyBlockedMaintenanceJobs(ctx)
+	if err != nil || second != 0 {
+		t.Fatalf("second reset=%d err=%v", second, err)
+	}
+	job, err := store.GetMaintenanceJob(ctx, identity.TenantID, run.ID, 1)
+	if err != nil || job == nil || job.Status != MaintenanceJobPending || job.BlockedRouteID != maintenanceLegacyProbeRouteID {
+		t.Fatalf("job=%+v err=%v", job, err)
+	}
+}
+
 func TestMaintenanceHealthReportsFailedWithoutProviderBlock(t *testing.T) {
 	ctx := context.Background()
 	store, identity, _, run := newRecoveryFixture(t)
-	if err := store.FinishRun(ctx, identity.TenantID, run.ID, "done"); err != nil {
+	if err := store.FinishRunWithMaintenancePayload(ctx, identity.TenantID, run.ID, "done", 1, `{}`); err != nil {
 		t.Fatal(err)
 	}
 	if claimed, err := store.ClaimMaintenanceJob(ctx, identity.TenantID, run.ID, 1); err != nil || !claimed {
@@ -207,10 +236,41 @@ func TestMaintenanceHealthReportsFailedWithoutProviderBlock(t *testing.T) {
 	}
 }
 
+func TestMaintenanceHealthIgnoresSupersededAnalyzerGeneration(t *testing.T) {
+	ctx := context.Background()
+	store, identity, _, run := newRecoveryFixture(t)
+	if err := store.FinishRunWithMaintenancePayload(ctx, identity.TenantID, run.ID, "done", 1, `{"run":"v1"}`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.ExecContext(ctx, `UPDATE maintenance_jobs
+		SET status = ?, attempts = 5, blocked_route_id = ?, last_error = 'old timeout'
+		WHERE tenant_id = ? AND run_id = ? AND analyzer_version = 1`,
+		MaintenanceJobBlockedProvider, maintenanceRetryLimitRouteID, identity.TenantID, run.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.FinishRunWithMaintenancePayload(ctx, identity.TenantID, run.ID, "done", 2, `{"run":"v2"}`); err != nil {
+		t.Fatal(err)
+	}
+	if claimed, err := store.ClaimMaintenanceJob(ctx, identity.TenantID, run.ID, 2); err != nil || !claimed {
+		t.Fatalf("claim current generation: claimed=%v err=%v", claimed, err)
+	}
+	if err := store.CompleteMaintenanceJob(ctx, identity.TenantID, run.ID, 2, "current"); err != nil {
+		t.Fatal(err)
+	}
+
+	health, err := store.MaintenanceHealthForPerson(ctx, identity.TenantID, identity.PersonID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if health.Blocked != 0 || health.Failed != 0 || health.LastError != "" || health.LastSuccessAt.IsZero() {
+		t.Fatalf("superseded generation leaked into health: %+v", health)
+	}
+}
+
 func TestMaintenanceClaimLimitIsSharedAndVisible(t *testing.T) {
 	ctx := context.Background()
 	store, identity, _, run := newRecoveryFixture(t)
-	if err := store.FinishRun(ctx, identity.TenantID, run.ID, "done"); err != nil {
+	if err := store.FinishRunWithMaintenancePayload(ctx, identity.TenantID, run.ID, "done", 1, `{}`); err != nil {
 		t.Fatal(err)
 	}
 	for i := 0; i < 2; i++ {
@@ -273,6 +333,92 @@ func TestReplayRetryLimitedMaintenanceJobsIsSelective(t *testing.T) {
 	}
 }
 
+func TestReplayRetryLimitedMaintenanceJobsUsesLatestAnalyzerGeneration(t *testing.T) {
+	ctx := context.Background()
+	store, identity, _, run := newRecoveryFixture(t)
+	for version := 1; version <= 2; version++ {
+		if err := store.FinishRunWithMaintenancePayload(ctx, identity.TenantID, run.ID, "done", version, fmt.Sprintf(`{"version":%d}`, version)); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.db.ExecContext(ctx, `UPDATE maintenance_jobs
+			SET status = ?, attempts = 5, blocked_route_id = ?, last_error = 'context deadline exceeded'
+			WHERE tenant_id = ? AND run_id = ? AND analyzer_version = ?`,
+			MaintenanceJobBlockedProvider, maintenanceRetryLimitRouteID, identity.TenantID, run.ID, version); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	replayed, err := store.ReplayRetryLimitedMaintenanceJobs(ctx, identity.TenantID, 1)
+	if err != nil || replayed != 1 {
+		t.Fatalf("replayed=%d err=%v", replayed, err)
+	}
+	legacy, _ := store.GetMaintenanceJob(ctx, identity.TenantID, run.ID, 1)
+	current, _ := store.GetMaintenanceJob(ctx, identity.TenantID, run.ID, 2)
+	if legacy == nil || legacy.Status != MaintenanceJobBlockedProvider {
+		t.Fatalf("legacy generation changed: %+v", legacy)
+	}
+	if current == nil || current.Status != MaintenanceJobPending || current.Attempts != 0 || current.LastError != "" {
+		t.Fatalf("current generation was not replayed: %+v", current)
+	}
+}
+
+func TestReplayRetryLimitedMaintenanceJobsUsesCurrentGlobalAnalyzerGeneration(t *testing.T) {
+	ctx := context.Background()
+	store, identity, _, first := newRecoveryFixture(t)
+	secondTask, err := store.CreateTask(ctx, TaskCreate{
+		TenantID: identity.TenantID,
+		PersonID: identity.PersonID,
+		Title:    "current generation",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := store.StartRun(ctx, secondTask, "cli", "current generation")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range []struct {
+		runID   string
+		version int
+	}{
+		{runID: first.ID, version: 1},
+		{runID: second.ID, version: 2},
+	} {
+		if err := store.FinishRunWithMaintenancePayload(ctx, identity.TenantID, item.runID, "done", item.version, `{}`); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.db.ExecContext(ctx, `UPDATE maintenance_jobs
+			SET status = ?, attempts = 5, blocked_route_id = ?, last_error = ?
+			WHERE tenant_id = ? AND run_id = ? AND analyzer_version = ?`,
+			MaintenanceJobBlockedProvider, maintenanceRetryLimitRouteID, "context deadline exceeded",
+			identity.TenantID, item.runID, item.version); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	replayed, err := store.ReplayRetryLimitedMaintenanceJobs(ctx, identity.TenantID, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replayed != 1 {
+		t.Fatalf("replayed = %d, want only the current analyzer generation", replayed)
+	}
+	oldJob, err := store.GetMaintenanceJob(ctx, identity.TenantID, first.ID, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if oldJob.Status != MaintenanceJobBlockedProvider {
+		t.Fatalf("old generation status = %q, want blocked_provider", oldJob.Status)
+	}
+	currentJob, err := store.GetMaintenanceJob(ctx, identity.TenantID, second.ID, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if currentJob.Status != MaintenanceJobPending || currentJob.Attempts != 0 {
+		t.Fatalf("current generation job = %+v, want pending with reset attempts", currentJob)
+	}
+}
+
 func TestBlockMaintenanceJobAfterRetriesPreservesProviderError(t *testing.T) {
 	ctx := context.Background()
 	store, identity, _, run := newRecoveryFixture(t)
@@ -309,12 +455,21 @@ func TestBlockMaintenanceJobAfterRetriesPreservesProviderError(t *testing.T) {
 	}
 
 	reset, err := store.ResetLegacyBlockedMaintenanceJobs(ctx)
-	if err != nil || reset != 1 {
-		t.Fatalf("restart probe: reset=%d err=%v", reset, err)
+	if err != nil || reset != 0 {
+		t.Fatalf("retry-limit block must survive restart: reset=%d err=%v", reset, err)
 	}
 	job, _ = store.GetMaintenanceJob(ctx, identity.TenantID, run.ID, 1)
-	if job == nil || job.Status != MaintenanceJobPending {
-		t.Fatalf("requeued job=%+v", job)
+	if job == nil || job.Status != MaintenanceJobBlockedProvider || job.BlockedRouteID != maintenanceRetryLimitRouteID {
+		t.Fatalf("parked job=%+v", job)
+	}
+
+	replayed, err := store.ReplayRetryLimitedMaintenanceJobs(ctx, identity.TenantID, 10)
+	if err != nil || replayed != 1 {
+		t.Fatalf("explicit replay: replayed=%d err=%v", replayed, err)
+	}
+	job, _ = store.GetMaintenanceJob(ctx, identity.TenantID, run.ID, 1)
+	if job == nil || job.Status != MaintenanceJobPending || job.Attempts != 0 {
+		t.Fatalf("explicitly replayed job=%+v", job)
 	}
 }
 
@@ -325,7 +480,7 @@ func TestBlockMaintenanceJobAfterRetriesPreservesProviderError(t *testing.T) {
 func TestMaintenanceAttemptHistory(t *testing.T) {
 	ctx := context.Background()
 	store, identity, _, run := newRecoveryFixture(t)
-	if err := store.FinishRun(ctx, identity.TenantID, run.ID, "done"); err != nil {
+	if err := store.FinishRunWithMaintenancePayload(ctx, identity.TenantID, run.ID, "done", 1, `{}`); err != nil {
 		t.Fatal(err)
 	}
 	if claimed, err := store.ClaimMaintenanceJob(ctx, identity.TenantID, run.ID, 1); err != nil || !claimed {
@@ -357,5 +512,79 @@ func TestMaintenanceAttemptHistory(t *testing.T) {
 	pruned, err := store.PruneMaintenanceAttempts(ctx, 0)
 	if err != nil || pruned != 2 {
 		t.Fatalf("pruned=%d err=%v", pruned, err)
+	}
+}
+
+func TestFinishRunWithoutAnalyzerEvidenceCreatesNoMaintenanceJob(t *testing.T) {
+	ctx := context.Background()
+	store, identity, _, run := newRecoveryFixture(t)
+	if err := store.FinishRun(ctx, identity.TenantID, run.ID, "done"); err != nil {
+		t.Fatal(err)
+	}
+	job, err := store.GetMaintenanceJob(ctx, identity.TenantID, run.ID, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if job != nil {
+		t.Fatalf("terminal-only FinishRun created an empty maintenance job: %+v", job)
+	}
+}
+
+func TestMigrateMaintenanceJobsToVersionCopiesOnlyUnfinishedEvidence(t *testing.T) {
+	ctx := context.Background()
+	store, identity, task, first := newRecoveryFixture(t)
+	if err := store.FinishRunWithMaintenancePayload(ctx, identity.TenantID, first.ID, "done", 1, `{"run":"first"}`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.ExecContext(ctx, `UPDATE maintenance_jobs
+		SET status = ?, attempts = 2, last_error = 'temporary failure'
+		WHERE run_id = ? AND analyzer_version = 1`, MaintenanceJobFailed, first.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	empty, err := store.StartRun(ctx, task, "cli", "administrative terminal")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.FinishRunWithMaintenancePayload(ctx, identity.TenantID, empty.ID, "done", 1, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	terminal, err := store.StartRun(ctx, task, "cli", "already learned")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.FinishRunWithMaintenancePayload(ctx, identity.TenantID, terminal.ID, "done", 1, `{"run":"terminal"}`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.ExecContext(ctx, `UPDATE maintenance_jobs SET status = ?
+		WHERE run_id = ? AND analyzer_version = 1`, MaintenanceJobSucceeded, terminal.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := store.MigrateMaintenanceJobsToVersion(ctx, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Eligible != 1 || result.Migrated != 1 || result.MissingEvidence != 1 {
+		t.Fatalf("migration result=%+v", result)
+	}
+	job, err := store.GetMaintenanceJob(ctx, identity.TenantID, first.ID, 2)
+	if err != nil || job == nil {
+		t.Fatalf("migrated job=%+v err=%v", job, err)
+	}
+	if job.Status != MaintenanceJobFailed || job.Attempts != 2 || job.PayloadJSON != `{"run":"first"}` {
+		t.Fatalf("migration did not preserve replay state: %+v", job)
+	}
+	if job, _ := store.GetMaintenanceJob(ctx, identity.TenantID, empty.ID, 2); job != nil {
+		t.Fatalf("empty legacy job must not migrate: %+v", job)
+	}
+	if job, _ := store.GetMaintenanceJob(ctx, identity.TenantID, terminal.ID, 2); job != nil {
+		t.Fatalf("terminal history must not replay: %+v", job)
+	}
+
+	again, err := store.MigrateMaintenanceJobsToVersion(ctx, 2)
+	if err != nil || again.Migrated != 0 || again.AlreadyCurrent != 1 {
+		t.Fatalf("idempotent migration=%+v err=%v", again, err)
 	}
 }

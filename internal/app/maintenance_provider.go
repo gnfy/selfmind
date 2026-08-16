@@ -141,6 +141,7 @@ func (c *maintenanceProviderChain) ChatCompletion(ctx context.Context, messages 
 }
 
 func (c *maintenanceProviderChain) Chat(ctx context.Context, req llm.ChatRequest) (*llm.ChatResponse, error) {
+	req = boundedMaintenanceRequest(req)
 	var failures []string
 	var lastErr error
 	anyRetryable := false
@@ -234,6 +235,7 @@ func maintenanceContractAttempt(req llm.ChatRequest) int {
 }
 
 func (c *maintenanceProviderChain) StreamChat(ctx context.Context, req llm.ChatRequest) (<-chan llm.StreamEvent, error) {
+	req = boundedMaintenanceRequest(req)
 	var failures []string
 	var lastErr error
 	anyRetryable := false
@@ -275,6 +277,20 @@ func (c *maintenanceProviderChain) StreamChat(ctx context.Context, req llm.ChatR
 		log.Warn("maintenance provider unavailable; trying explicit fallback", "role", candidate.role, "provider", candidate.route.Provider, "error", callErr)
 	}
 	return nil, maintenanceAggregateError(failures, lastErr, anyRetryable)
+}
+
+// boundedMaintenanceRequest keeps background control work predictable even
+// when models.auxiliary is configured with deep reasoning for ad-hoc use. The
+// foreground primary route is untouched; only this maintenance-only chain
+// installs the protocol-neutral disabled value translated by each adapter.
+func boundedMaintenanceRequest(req llm.ChatRequest) llm.ChatRequest {
+	options := make(map[string]interface{}, len(req.Options)+1)
+	for key, value := range req.Options {
+		options[key] = value
+	}
+	options["reasoning_effort"] = maintenanceReasoningEffort
+	req.Options = options
+	return req
 }
 
 // observeStream keeps the physical-route circuit honest when a provider

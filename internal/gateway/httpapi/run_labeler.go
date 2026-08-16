@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"sort"
 	"strings"
 	"time"
 
@@ -27,10 +26,21 @@ var ErrPostRunBatchShape = errors.New("post-run batch response shape is invalid"
 // eligible run. TaskDecision is harmless display governance; memory decisions
 // are applied by the app-layer analyzer that owns the memory backend.
 type PostRunAnalysis struct {
-	TaskDecision string           `json:"task_decision"`
-	UserFacts    []string         `json:"user_facts,omitempty"`
-	MemoryFacts  []string         `json:"memory_facts,omitempty"`
-	Decisions    []MemoryDecision `json:"memory_decisions,omitempty"`
+	TaskDecision   string                  `json:"task_decision"`
+	TaskReferences []TaskReferenceProposal `json:"task_references,omitempty"`
+	UserFacts      []string                `json:"user_facts,omitempty"`
+	MemoryFacts    []string                `json:"memory_facts,omitempty"`
+	Decisions      []MemoryDecision        `json:"memory_decisions,omitempty"`
+}
+
+// TaskReferenceProposal is a model-proposed human-facing address for the
+// completed work. It is never execution authority: deterministic validation
+// and evidence policy decide whether it remains shadow/candidate or may later
+// participate in exact routing.
+type TaskReferenceProposal struct {
+	Class      string  `json:"class"` // literal | entity | descriptive
+	Value      string  `json:"value"`
+	Confidence float64 `json:"confidence,omitempty"`
 }
 
 // MemoryDecision is one intake ruling against nearby existing memory
@@ -56,6 +66,7 @@ type MemoryDecision struct {
 
 type PostRunAnalysisRequest struct {
 	Prompt          string
+	UserInput       string // original user text; task-reference evidence only
 	TurnText        string // raw user input + outcome summary, for neighbor retrieval
 	TenantID        string
 	PersonID        string
@@ -97,7 +108,7 @@ const defaultPostRunAnalyzerTimeout = 2 * time.Minute
 // postRunAnalyzerVersion identifies the maintenance algorithm generation for
 // the maintenance_jobs idempotency key. Bump it when the analyzer's decision
 // semantics change and historic runs should become re-analyzable.
-const postRunAnalyzerVersion = 1
+const postRunAnalyzerVersion = 2
 
 // maintenanceRetryDelay parks a failed job before it becomes claimable again.
 const maintenanceRetryDelay = 10 * time.Minute
@@ -136,12 +147,31 @@ func (c *RunCoordinator) materializeRunFinalization(ctx context.Context, identit
 		return err
 	}
 	_, err = c.srv.Control.MaterializeRunFinalization(context.WithoutCancel(ctx), control.RunFinalization{
-		Identity:           *identity,
-		RunID:              run.ID,
-		RunStatus:          terminalRunStatus(outcome.Status),
-		TaskID:             task.ID,
-		TaskStatus:         taskStatus,
-		Summary:            outcome.Summary,
+		Identity:   *identity,
+		RunID:      run.ID,
+		RunStatus:  terminalRunStatus(outcome.Status),
+		TaskID:     task.ID,
+		TaskStatus: taskStatus,
+		Summary:    outcome.Summary,
+		VerificationState: func() string {
+			if outcome.Verification == nil {
+				return "not_applicable"
+			}
+			return outcome.Verification.State
+		}(),
+		VerificationRefs: func() []string {
+			if outcome.Verification == nil {
+				return nil
+			}
+			refs := make([]string, 0, len(outcome.Verification.Checks))
+			for _, check := range outcome.Verification.Checks {
+				if strings.TrimSpace(check.Command) != "" {
+					refs = append(refs, check.Command)
+				}
+			}
+			return refs
+		}(),
+		ClaimMismatch:      len(outcome.ClaimMismatches) > 0,
 		NextSteps:          outcome.NextSteps,
 		Channel:            channel,
 		AssistantContent:   assistantContent,
@@ -151,14 +181,40 @@ func (c *RunCoordinator) materializeRunFinalization(ctx context.Context, identit
 		Event:              event,
 		ResolvedBlockerIDs: outcome.ResolvedBlockerIDs,
 		EffectKey:          attach.effectKey,
-		PreserveTaskCard:   attach.preLabel && !attach.created,
+		PreserveTaskCard:   attach.resolvedPolicy().PreserveTaskLifecycle,
 		PreservedTaskStatus: func() string {
-			if attach.preLabel && !attach.created {
+			if attach.resolvedPolicy().PreserveTaskLifecycle {
 				return task.Status
 			}
 			return ""
 		}(),
 	})
+	if err == nil {
+		c.recordTaskResolution(ctx, identity, run, api.MessageRequest{Content: userInput}, task, attach, task.ID, "unverified", false)
+		if c.srv.SelfEvolution.Enabled {
+			if _, _, profileErr := c.srv.Control.MaterializeWorkflowProfile(context.WithoutCancel(ctx), identity.TenantID, run.ID, c.srv.SelfEvolution); profileErr != nil {
+				log.Warn("workflow profile materialization failed", "run_id", run.ID, "error", profileErr)
+			}
+			if _, observationErr := c.srv.Control.MaterializeWorkflowObservations(context.WithoutCancel(ctx), identity.TenantID, run.ID); observationErr != nil {
+				log.Warn("workflow observation materialization failed", "run_id", run.ID, "error", observationErr)
+			} else if c.srv.SkillCurator != nil {
+				digests, digestErr := c.srv.Control.ReadySkillEvidenceDigestsForRun(context.WithoutCancel(ctx), identity.TenantID, run.ID)
+				if digestErr != nil {
+					log.Warn("skill cohort selection failed", "run_id", run.ID, "error", digestErr)
+				}
+				for _, digest := range digests {
+					payload, marshalErr := json.Marshal(digest)
+					if marshalErr != nil {
+						continue
+					}
+					key := "skillcuration_" + digest.EvidenceSetHash[:min(24, len(digest.EvidenceSetHash))]
+					if _, enqueueErr := c.srv.Control.EnqueueMaintenanceJob(context.WithoutCancel(ctx), identity.TenantID, key, SkillCurationJobVersion, string(payload)); enqueueErr != nil {
+						log.Warn("skill curation enqueue failed", "run_id", run.ID, "error", enqueueErr)
+					}
+				}
+			}
+		}
+	}
 	return err
 }
 
@@ -211,6 +267,7 @@ type preparedPostRunAnalysis struct {
 	attach        taskAttach
 	candidates    []control.Task
 	labelEligible bool
+	newEligible   bool
 	workKey       string
 	outcome       api.RunOutcome
 	request       PostRunAnalysisRequest
@@ -228,6 +285,8 @@ func (d *Server) preparePostRunAnalysis(ctx context.Context, identity *control.I
 		strings.Join(outcome.Done, " "),
 		strings.Join(outcome.NextSteps, " "),
 	)
+	durableEligible := postRunMemoryEligible(userInput, outcome)
+	newEligible := attach.reason == taskAttachCurrentPreLabel && durableEligible
 	if attach.preLabel {
 		var err error
 		candidates, err = d.openLabelCandidates(ctx, identity, task.ID, workKey)
@@ -235,7 +294,7 @@ func (d *Server) preparePostRunAnalysis(ctx context.Context, identity *control.I
 			log.Warn("gateway: open-label candidate lookup failed; preserving weak-label lifecycle", "task", task.ID, "run", run.ID, "error", err)
 			return nil
 		}
-		if !attach.created && len(candidates) == 0 {
+		if !attach.created && len(candidates) == 0 && !newEligible {
 			// With no other open label, KEEP is deterministic and needs no model.
 			// Apply lifecycle now; a later memory-only analysis cannot change it.
 			if err := d.Control.ReconcileTaskAfterRun(ctx, identity.TenantID, task.ID, run.ID, taskStatusForFinalization(outcome, true)); err != nil {
@@ -243,21 +302,25 @@ func (d *Server) preparePostRunAnalysis(ctx context.Context, identity *control.I
 				return nil
 			}
 		}
-		labelEligible = attach.created || len(candidates) > 0
+		labelEligible = attach.created || len(candidates) > 0 || newEligible
 	}
 	if d.PostRunAnalyzer == nil {
+		if attach.preLabel && !attach.created {
+			d.reconcileWeakLabelKeep(ctx, identity, task, run, attach, outcome)
+		}
 		return nil
 	}
-	if !labelEligible && !postRunMemoryEligible(userInput, outcome) {
+	if !labelEligible && !durableEligible && !d.postRunReferenceEligible(ctx, identity, task, userInput) {
 		_ = d.Control.SkipMaintenanceJob(ctx, identity.TenantID, run.ID, postRunAnalyzerVersion, "run is not eligible for post-run maintenance")
 		return nil
 	}
-	prompt := buildPostRunAnalysisPrompt(task, attach.created, labelEligible, workKey, userInput, outcome, candidates)
+	prompt := buildPostRunAnalysisPrompt(task, attach.created, labelEligible, newEligible, workKey, userInput, outcome, candidates)
 	return &preparedPostRunAnalysis{
 		identity: identity, task: task, run: run, attach: attach,
-		candidates: candidates, labelEligible: labelEligible, workKey: workKey, outcome: outcome,
+		candidates: candidates, labelEligible: labelEligible, newEligible: newEligible, workKey: workKey, outcome: outcome,
 		request: PostRunAnalysisRequest{
 			Prompt:          prompt,
+			UserInput:       strings.TrimSpace(userInput),
 			TurnText:        strings.TrimSpace(userInput + "\n" + outcome.Summary),
 			TenantID:        identity.TenantID,
 			PersonID:        identity.PersonID,
@@ -267,6 +330,23 @@ func (d *Server) preparePostRunAnalysis(ctx context.Context, identity *control.I
 			AnalyzerVersion: postRunAnalyzerVersion,
 		},
 	}
+}
+
+func (d *Server) postRunReferenceEligible(ctx context.Context, identity *control.IdentityContext, task *control.Task, userInput string) bool {
+	if d == nil || d.Control == nil || identity == nil || task == nil || strings.TrimSpace(userInput) == "" {
+		return false
+	}
+	refs, err := d.Control.ListTaskReferencesForTask(ctx, identity.TenantID, identity.PersonID, task.ID, 20)
+	if err != nil {
+		return false
+	}
+	for _, ref := range refs {
+		if (ref.Status == control.TaskReferenceCandidate || ref.Status == control.TaskReferenceActive) &&
+			control.TaskReferenceAppearsInText(userInput, ref.RawValue) {
+			return true
+		}
+	}
+	return false
 }
 
 func (d *Server) analyzeClaimedPostRun(ctx context.Context, prepared *preparedPostRunAnalysis) {
@@ -316,7 +396,14 @@ func (d *Server) applyClaimedPostRun(ctx context.Context, prepared *preparedPost
 		}
 	}
 	if prepared.labelEligible {
-		d.applyPostRunLabel(ctx, prepared.identity, prepared.task, prepared.run, prepared.attach, prepared.candidates, prepared.workKey, prepared.outcome, analysis.TaskDecision)
+		d.applyPostRunLabel(ctx, prepared.identity, prepared.task, prepared.run, prepared.attach, prepared.candidates, prepared.newEligible, prepared.workKey, prepared.outcome, analysis.TaskDecision)
+	}
+	if err := d.applyTaskReferenceProposals(ctx, prepared, analysis); err != nil {
+		// References improve future routing and recall, but they are not part of
+		// the completed run's label transaction. Retrying after MOVE/NEW already
+		// ran could duplicate display governance, so this optional projection is
+		// deliberately fail-open and remains visible in logs.
+		log.Warn("gateway: task reference projection failed; preserving completed maintenance result", "run", req.RunID, "error", err)
 	}
 	_ = d.Control.CompleteMaintenanceJob(ctx, req.TenantID, req.RunID, postRunAnalyzerVersion, analysisResultHash(analysis))
 }
@@ -337,7 +424,7 @@ func (d *Server) failClaimedPostRun(ctx context.Context, prepared *preparedPostR
 // guess. Any rejected or malformed label decision is semantically KEEP, so
 // the guessed established label should receive the run's real terminal state.
 func (d *Server) reconcileWeakLabelKeep(ctx context.Context, identity *control.IdentityContext, task *control.Task, run *control.Run, attach taskAttach, outcome api.RunOutcome) {
-	if d == nil || d.Control == nil || identity == nil || task == nil || run == nil || !attach.preLabel || attach.created {
+	if d == nil || d.Control == nil || identity == nil || task == nil || run == nil || !attach.resolvedPolicy().CommitLifecycleOnKeep {
 		return
 	}
 	if err := d.Control.ReconcileTaskAfterRun(ctx, identity.TenantID, task.ID, run.ID, taskStatusForFinalization(outcome, true)); err != nil {
@@ -345,21 +432,7 @@ func (d *Server) reconcileWeakLabelKeep(ctx context.Context, identity *control.I
 	}
 }
 
-func (d *Server) applyPostRunLabel(ctx context.Context, identity *control.IdentityContext, task *control.Task, run *control.Run, attach taskAttach, candidates []control.Task, workKey string, outcome api.RunOutcome, rawDecision string) {
-	// A unique issue key is stronger display evidence than a maintenance
-	// model's conservative KEEP. This runs only after execution and only moves
-	// to one already-offered open label, so a mistake cannot affect workspace,
-	// context selection, permissions, or the work that already ran.
-	// A newly-created placeholder normally copies the current message into its
-	// title, so it will naturally contain the same key. That is not evidence
-	// that it should win over an established open label carrying the key.
-	if workKey != "" && (attach.created || !taskContainsWorkKey(*task, workKey)) {
-		if target := exactWorkKeyCandidate(candidates, workKey); target != nil {
-			d.applyLabelMove(ctx, identity, task, run, target, attach,
-				"deterministic work key "+workKey+"; model decision "+textutil.Truncate(toOneLine(rawDecision), 80))
-			return
-		}
-	}
+func (d *Server) applyPostRunLabel(ctx context.Context, identity *control.IdentityContext, task *control.Task, run *control.Run, attach taskAttach, candidates []control.Task, newEligible bool, workKey string, outcome api.RunOutcome, rawDecision string) {
 	decision, arg := parseRunLabelReply(rawDecision)
 	switch decision {
 	case "KEEP", "":
@@ -398,6 +471,12 @@ func (d *Server) applyPostRunLabel(ctx context.Context, identity *control.Identi
 			"run_id":   run.ID,
 			"title":    title,
 		})
+	case "NEW":
+		if !newEligible || attach.reason != taskAttachCurrentPreLabel || attach.created {
+			d.reconcileWeakLabelKeep(ctx, identity, task, run, attach, outcome)
+			return
+		}
+		d.applyNewLabel(ctx, identity, task, run, attach, outcome, arg, rawDecision)
 	case "INBOX":
 		if !d.TaskGovernance.InboxEnabled {
 			d.reconcileWeakLabelKeep(ctx, identity, task, run, attach, outcome)
@@ -418,10 +497,64 @@ func (d *Server) applyPostRunLabel(ctx context.Context, identity *control.Identi
 	}
 }
 
+// applyNewLabel splits a completed run from an established weak pre-label.
+// This is post-run display governance only: the new task inherits the run's
+// recorded workspace for future explicit continuation, but it cannot change
+// the workspace, credentials, permissions, or context used by this run.
+func (d *Server) applyNewLabel(ctx context.Context, identity *control.IdentityContext, from *control.Task, run *control.Run, attach taskAttach, outcome api.RunOutcome, rawTitle, reply string) {
+	title := textutil.Truncate(toOneLine(strings.TrimSpace(rawTitle)), 80)
+	if title == "" {
+		d.reconcileWeakLabelKeep(ctx, identity, from, run, attach, outcome)
+		return
+	}
+	if currentRun, err := d.Control.GetRun(ctx, identity.TenantID, run.ID); err == nil && currentRun != nil && currentRun.TaskID != from.ID {
+		return // replay after a prior successful MOVE/NEW
+	}
+	targetID := postRunSplitTaskID(run.ID)
+	target, err := d.Control.GetTask(ctx, identity.TenantID, targetID)
+	if err == nil && target == nil {
+		target, err = d.Control.CreateTask(ctx, control.TaskCreate{
+			ID: targetID, TenantID: identity.TenantID, PersonID: identity.PersonID,
+			WorkspaceID: run.WorkspaceID, Title: title, Channel: run.Channel,
+			KeepCurrent: true,
+		})
+	}
+	if err != nil || target == nil || target.PersonID != identity.PersonID {
+		log.Warn("gateway: create post-run task label failed; keeping pre-label", "run", run.ID, "error", err)
+		d.reconcileWeakLabelKeep(ctx, identity, from, run, attach, outcome)
+		return
+	}
+	if err := d.Control.ReassignRun(ctx, identity.TenantID, run.ID, from.ID, target.ID, false); err != nil {
+		_, _ = d.Control.DeleteEmptyTask(ctx, identity.TenantID, identity.PersonID, target.ID)
+		log.Warn("gateway: assign run to new post-run task failed; keeping pre-label", "run", run.ID, "error", err)
+		d.reconcileWeakLabelKeep(ctx, identity, from, run, attach, outcome)
+		return
+	}
+	if attach.resolvedPolicy().UpdateCurrentTask {
+		if current, err := d.Control.CurrentTask(ctx, identity.TenantID, identity.PersonID); err == nil &&
+			(current == nil || current.ID == from.ID) {
+			_ = d.Control.SetCurrentTask(ctx, identity.TenantID, identity.PersonID, target.ID)
+		}
+	}
+	d.appendLabelAssignedEvent(ctx, target.ID, run.ID, map[string]interface{}{
+		"decision": "new", "from_task_id": from.ID, "to_task_id": target.ID,
+		"run_id": run.ID, "title": title,
+		"reason": textutil.Truncate(toOneLine(reply), 160),
+	})
+}
+
+func postRunSplitTaskID(runID string) string {
+	sum := sha256.Sum256([]byte("post-run-new\x00" + strings.TrimSpace(runID)))
+	return "task_split_" + hex.EncodeToString(sum[:12])
+}
+
 // analysisResultHash fingerprints one maintenance result so a later retry of
 // the same terminal notification can be recognized as already applied.
 func analysisResultHash(analysis PostRunAnalysis) string {
 	parts := append(append([]string{analysis.TaskDecision}, analysis.UserFacts...), analysis.MemoryFacts...)
+	for _, reference := range analysis.TaskReferences {
+		parts = append(parts, reference.Class+"|"+reference.Value+"|"+fmt.Sprintf("%.4f", reference.Confidence))
+	}
 	for _, d := range analysis.Decisions {
 		parts = append(parts, d.Target+"|"+d.Decision+"|"+d.Ref+"|"+d.Content)
 	}
@@ -499,9 +632,11 @@ func (d *Server) applyLabelMove(ctx context.Context, identity *control.IdentityC
 	// to its real label so the next pre-label guess starts from the truth.
 	// (ReassignRun already repointed the pointer when it deleted an empty
 	// placeholder; this covers the reused-open-label case.)
-	if current, err := d.Control.CurrentTask(ctx, identity.TenantID, identity.PersonID); err == nil &&
-		(current == nil || current.ID == from.ID) {
-		_ = d.Control.SetCurrentTask(ctx, identity.TenantID, identity.PersonID, target.ID)
+	if attach.resolvedPolicy().UpdateCurrentTask {
+		if current, err := d.Control.CurrentTask(ctx, identity.TenantID, identity.PersonID); err == nil &&
+			(current == nil || current.ID == from.ID) {
+			_ = d.Control.SetCurrentTask(ctx, identity.TenantID, identity.PersonID, target.ID)
+		}
 	}
 	d.appendLabelAssignedEvent(ctx, target.ID, run.ID, map[string]interface{}{
 		"decision":            "move",
@@ -531,6 +666,7 @@ func (d *Server) appendLabelAssignedEvent(ctx context.Context, taskID, runID str
 // labels excluding the pre-label itself, newest first, capped at
 // runLabelerMaxOpenLabels.
 func (d *Server) openLabelCandidates(ctx context.Context, identity *control.IdentityContext, excludeTaskID, preferredWorkKey string) ([]control.Task, error) {
+	_ = preferredWorkKey // legacy field; task titles/summaries are not identity evidence
 	tasks, err := d.Control.ListTasks(ctx, identity.TenantID, identity.PersonID, 50)
 	if err != nil {
 		return nil, err
@@ -542,20 +678,13 @@ func (d *Server) openLabelCandidates(ctx context.Context, identity *control.Iden
 		}
 		out = append(out, t)
 	}
-	// Preserve newest-first order within both groups while ensuring an exact
-	// key match cannot fall outside the model's bounded candidate window.
-	if preferredWorkKey != "" {
-		sort.SliceStable(out, func(i, j int) bool {
-			return taskContainsWorkKey(out[i], preferredWorkKey) && !taskContainsWorkKey(out[j], preferredWorkKey)
-		})
-	}
 	if len(out) > runLabelerMaxOpenLabels {
 		out = out[:runLabelerMaxOpenLabels]
 	}
 	return out, nil
 }
 
-func buildPostRunAnalysisPrompt(task *control.Task, created, labelEligible bool, workKey, userInput string, outcome api.RunOutcome, candidates []control.Task) string {
+func buildPostRunAnalysisPrompt(task *control.Task, created, labelEligible, newEligible bool, workKey, userInput string, outcome api.RunOutcome, candidates []control.Task) string {
 	var sb strings.Builder
 	sb.WriteString("Analyze this completed run for task-label hygiene and durable memory. Return only the JSON object required by the system prompt.\n\n")
 	sb.WriteString("Task decision rules:\n")
@@ -566,13 +695,15 @@ func buildPostRunAnalysisPrompt(task *control.Task, created, labelEligible bool,
 		sb.WriteString("- MOVE only to an exact task id from Open labels, and only when this run clearly belongs there.\n")
 		if created {
 			sb.WriteString("- The current task is a new placeholder. Use TITLE:<short title> for genuinely new durable work, MOVE for clear continuation, or INBOX for nondurable chatter.\n")
+		} else if newEligible {
+			sb.WriteString("- The current task is an established weak pre-label. Use NEW:<short title> only if this run starts an independent durable work line; use MOVE for an offered label, otherwise KEEP. Never retitle the established task.\n")
 		} else {
 			sb.WriteString("- The current task is established. Never retitle it; use KEEP unless another offered label is clearly correct.\n")
 		}
 		if inboxEligible {
 			sb.WriteString("- INBOX is eligible only if this is casual conversation, an identity/model question, or a temporary answer with no resumable work.\n")
 		} else {
-			sb.WriteString("- INBOX is NOT eligible because this run has durable evidence. Use KEEP, MOVE, or TITLE.\n")
+			sb.WriteString("- INBOX is NOT eligible because this run has durable evidence. Use KEEP, MOVE, TITLE, or NEW only where allowed above.\n")
 		}
 	}
 	sb.WriteString("- If uncertain, use KEEP. Task labeling affects display/resume only and must not invent work.\n\n")
@@ -672,6 +803,8 @@ func parseRunLabelReply(reply string) (decision, arg string) {
 			return "MOVE", strings.TrimSpace(line[len("MOVE:"):])
 		case strings.HasPrefix(upper, "TITLE:"):
 			return "TITLE", strings.TrimSpace(line[len("TITLE:"):])
+		case strings.HasPrefix(upper, "NEW:"):
+			return "NEW", strings.TrimSpace(line[len("NEW:"):])
 		case upper == "INBOX":
 			return "INBOX", ""
 		}

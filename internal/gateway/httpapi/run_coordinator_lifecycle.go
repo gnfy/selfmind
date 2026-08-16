@@ -210,9 +210,10 @@ func (c *RunCoordinator) recordOutcomeArtifacts(ctx context.Context, task *contr
 
 // resolveTask decides which task label this turn runs under (Work Timeline P3,
 // docs/work-timeline.md "Labels"/"Ingress"). Explicit evidence is
-// deterministic and wins: a caller-supplied task id, an IntentContinue
-// classification (router cue or short acceptance), the one-shot /resume pin,
-// or a unique work key resolving to an existing open label. Everything else
+// deterministic and wins: a caller-supplied task id, the one-shot /resume pin,
+// or an active governed Task Reference. Only then may an
+// implicit IntentContinue classification (router cue or short acceptance)
+// select the current task. Everything else
 // gets a harmless PRE-LABEL guess: the person's current
 // task when it is OPEN (non-terminal, non-archived), else a fresh placeholder
 // label. The guess is safe because context is spine-based (P1) and recall
@@ -231,65 +232,64 @@ func (c *RunCoordinator) resolveTask(ctx context.Context, identity *control.Iden
 			if intent.Intent == router.IntentContinue {
 				reason = taskAttachContinuation
 			}
-			return task, taskAttach{reason: reason, workKey: continuationWorkKey(inputWorkKey, task)}, err
+			return task, newTaskAttach(reason, inputWorkKey, false, false), err
 		}
 	}
 	// The /resume pin covers exactly the NEXT agent-bound message, so it is
 	// consumed here no matter which branch wins below — a stale pin must never
 	// capture unrelated work later.
 	pinned := c.srv.consumeResumePin(ctx, identity)
-	if intent.Intent == router.IntentContinue {
-		task, err := c.srv.resolveContinueTask(ctx, identity)
-		if err != nil || task != nil {
-			task, err = c.bindTaskWorkspaceIfMissing(ctx, identity, task, req, err)
-			return task, taskAttach{reason: taskAttachContinuation, workKey: continuationWorkKey(inputWorkKey, task)}, err
-		}
-		return nil, taskAttach{}, fmt.Errorf("no task to continue; start a new task or use /resume <task_id>")
-	}
 	// An explicit /resume is a deliberate act, so it may reopen even an
 	// ARCHIVED label; the other terminal statuses (done/cancelled/failed) stay
 	// closed to the pin exactly as before.
 	if pinned != nil && (!terminalTaskStatus(pinned.Status) || archivedTaskStatus(pinned.Status)) {
 		task, err := c.bindTaskWorkspaceIfMissing(ctx, identity, pinned, req, nil)
-		return task, taskAttach{reason: taskAttachResumePin, workKey: continuationWorkKey(inputWorkKey, task)}, err
+		return task, newTaskAttach(taskAttachResumePin, inputWorkKey, false, false), err
 	}
-	// A single explicit issue key is stronger display evidence than the current
-	// pre-label pointer. Resolve it before the ordinary current-task guess so a
-	// release for RUQX-123 cannot be absorbed into an unrelated open label. This
-	// remains a PRE-LABEL attach: labels never select the execution workspace or
-	// gate context, and ambiguous/multiple keys deliberately fall through.
-	if workKey := inputWorkKey; workKey != "" {
-		candidates, err := c.srv.openLabelCandidates(ctx, identity, "", workKey)
-		if err != nil {
-			return nil, taskAttach{}, fmt.Errorf("list open task labels: %w", err)
+	refTask, refAttach, matched, err := c.resolveTaskReference(ctx, identity, req, intent.Intent == router.IntentContinue)
+	if err != nil {
+		return nil, taskAttach{}, err
+	}
+	if matched {
+		if refAttach.resolvedPolicy().ExecutionWorkspaceSource == attachWorkspaceTask {
+			refTask, err = c.bindTaskWorkspaceIfMissing(ctx, identity, refTask, req, nil)
 		}
-		if target := exactWorkKeyCandidate(candidates, workKey); target != nil && target.IsVisible() && !target.IsInbox() {
-			return target, taskAttach{preLabel: true, reason: taskAttachWorkKeyPreLabel, workKey: workKey}, nil
+		return refTask, refAttach, err
+	}
+	if intent.Intent == router.IntentContinue {
+		task, err := c.srv.resolveContinueTask(ctx, identity)
+		if err != nil || task != nil {
+			task, err = c.bindTaskWorkspaceIfMissing(ctx, identity, task, req, err)
+			attach := newTaskAttach(taskAttachContinuation, inputWorkKey, false, false)
+			attach.matchedSurfaceForms = refAttach.matchedSurfaceForms
+			attach.candidateTaskIDs = refAttach.candidateTaskIDs
+			attach.candidateTaskHints = refAttach.candidateTaskHints
+			return task, attach, err
 		}
-		task, attach, err := c.createPreLabelTask(ctx, identity, req)
-		attach.workKey = workKey
-		return task, attach, err
+		if len(refAttach.candidateTaskHints) > 0 {
+			return nil, taskAttach{}, fmt.Errorf("task reference matched only unavailable work: %s; use /resume <task_id> to reopen it", strings.Join(refAttach.candidateTaskHints, "; "))
+		}
+		return nil, taskAttach{}, fmt.Errorf("no task to continue; start a new task or use /resume <task_id>")
 	}
 	// Pre-label guess: reuse the person's current OPEN label. Display-only —
 	// the workspace still follows the request (workspaceForTask) and the
 	// post-run labeler corrects a wrong guess.
 	if current, err := store.CurrentTask(ctx, identity.TenantID, identity.PersonID); err == nil &&
 		current != nil && current.IsVisible() && !current.IsInbox() && !terminalTaskStatus(current.Status) {
-		return current, taskAttach{preLabel: true, reason: taskAttachCurrentPreLabel}, nil
+		attach := newTaskAttach(taskAttachCurrentPreLabel, inputWorkKey, false, true)
+		attach.matchedSurfaceForms = refAttach.matchedSurfaceForms
+		attach.candidateTaskIDs = refAttach.candidateTaskIDs
+		attach.candidateTaskHints = refAttach.candidateTaskHints
+		return current, attach, nil
 	}
 	// No open label → new placeholder. An explicit request workspace wins;
 	// otherwise the person's current workspace seeds the task scope.
-	return c.createPreLabelTask(ctx, identity, req)
-}
-
-func continuationWorkKey(inputWorkKey string, task *control.Task) string {
-	if inputWorkKey != "" {
-		return inputWorkKey
-	}
-	if task == nil {
-		return ""
-	}
-	return uniqueTaskWorkKey(task.Title, task.CurrentSummary)
+	task, attach, err := c.createPreLabelTask(ctx, identity, req)
+	attach.workKey = inputWorkKey
+	attach.matchedSurfaceForms = refAttach.matchedSurfaceForms
+	attach.candidateTaskIDs = refAttach.candidateTaskIDs
+	attach.candidateTaskHints = refAttach.candidateTaskHints
+	return task, attach, err
 }
 
 // createPreLabelTask creates the display placeholder for genuinely new work.
@@ -310,7 +310,7 @@ func (c *RunCoordinator) createPreLabelTask(ctx context.Context, identity *contr
 		Title:       titleFromInput(req.Content),
 		Channel:     req.Channel,
 	})
-	return task, taskAttach{created: true, preLabel: true, reason: taskAttachNewLabel}, err
+	return task, newTaskAttach(taskAttachNewLabel, "", true, true), err
 }
 
 func (c *RunCoordinator) bindTaskWorkspaceIfMissing(ctx context.Context, identity *control.IdentityContext, task *control.Task, req api.MessageRequest, priorErr error) (*control.Task, error) {
@@ -333,27 +333,23 @@ func (c *RunCoordinator) bindTaskWorkspaceIfMissing(ctx context.Context, identit
 
 func (c *RunCoordinator) workspaceForTask(ctx context.Context, identity *control.IdentityContext, task *control.Task, req api.MessageRequest, attach taskAttach) (*control.Workspace, error) {
 	store := c.srv.Control
-	// For EXPLICIT attaches (task id, continuation cue, /resume pin) the task's
+	// For execution-authoritative attaches (task id, plain continuation cue,
+	// /resume pin) the task's
 	// own workspace binding is authoritative and must survive a resume/continue:
 	// a CLI `继续` of an IM task must run in the dir the prior run built in, not
 	// the terminal's cwd-derived workspace (prepareRequestWorkspace sets
 	// req.WorkspaceID from ClientCWD for local CLI turns) — otherwise every file
 	// op trips out-of-root approvals against the wrong tree.
 	//
-	// For a PRE-LABEL guess the label is display-only, so the REQUEST wins: the
+	// For a PRE-LABEL or governed-reference guess the label is display-only, so
+	// the REQUEST wins: the
 	// run executes in the explicitly requested (or cwd-derived) workspace even
 	// when the guessed label is bound elsewhere. This is what makes a wrong
 	// pre-label harmless — execution scope never inherits a guessed label's
 	// workspace (Work Timeline P3).
-	workspaceID := ""
-	if attach.preLabel {
-		workspaceID = strings.TrimSpace(req.WorkspaceID)
-	}
-	if workspaceID == "" && task != nil {
-		workspaceID = task.WorkspaceID
-	}
-	if workspaceID == "" {
-		workspaceID = req.WorkspaceID
+	workspaceID := strings.TrimSpace(req.WorkspaceID)
+	if attach.resolvedPolicy().ExecutionWorkspaceSource == attachWorkspaceTask && task != nil {
+		workspaceID = strings.TrimSpace(task.WorkspaceID)
 	}
 	if workspaceID == "" {
 		return store.CurrentWorkspace(ctx, identity.TenantID, identity.PersonID)
@@ -697,6 +693,11 @@ const (
 	// policy through Server fields and does not depend on the config package.
 	defaultApprovalWait           = 30 * time.Minute
 	defaultApprovalWaitUnattended = 30 * time.Second
+	// A historical account binding is not proof that a person can answer now.
+	// IM session credentials commonly expire while the account row remains
+	// active, so only recent non-CLI activity without a newer delivery failure
+	// earns the long synchronous wait.
+	approvalAccountReachabilityWindow = 24 * time.Hour
 	// approvalPollTimeout bounds one status read of the pending row. It is
 	// independent of the wait budget so a lapsing budget cannot turn a poll
 	// into a reported transport error.
@@ -728,11 +729,12 @@ func (c *RunCoordinator) approvalWaitBudget(ctx context.Context, identity *contr
 }
 
 // personCanAnswer reports whether ANY endpoint could produce a decision: a
-// live attachment, or a bound account an approval push can reach.
+// live attachment, or a recently active IM account an approval push can reach.
 //
 // Presence alone is not enough — its TTL is 90s, so someone who typed a
 // request and then looked away already reads as detached while still being
-// perfectly able to answer. A bound account keeps them "attended".
+// perfectly able to answer. A recently active IM account keeps them
+// "attended"; a stale historical binding does not.
 //
 // A store error counts as attended on purpose: the cost of a wasted wait is
 // run time, the cost of a wrong "nobody is there" is cutting a real person out
@@ -751,7 +753,27 @@ func (c *RunCoordinator) personCanAnswer(ctx context.Context, identity *control.
 	if err != nil {
 		return true
 	}
-	return len(accounts) > 0
+	cutoff := time.Now().Add(-approvalAccountReachabilityWindow).Unix()
+	for _, account := range accounts {
+		if strings.EqualFold(strings.TrimSpace(account.Platform), "cli") {
+			continue
+		}
+		if account.LastSeenAt < cutoff {
+			continue
+		}
+		state, stateErr := c.srv.Control.LatestDeliveryEndpointState(ctx, identity.TenantID, identity.PersonID, account.Platform, account.PlatformUserID)
+		if stateErr != nil {
+			return true
+		}
+		if state != nil && state.UpdatedAt.Unix() >= account.LastSeenAt {
+			switch strings.ToLower(strings.TrimSpace(state.Status)) {
+			case "pending_session", "failed", "sent_unconfirmed":
+				continue
+			}
+		}
+		return true
+	}
+	return false
 }
 
 func (c *RunCoordinator) toolApprovalHandler(identity *control.IdentityContext, task *control.Task, run *control.Run, channel string) tools.ToolApprovalHandler {
@@ -824,10 +846,11 @@ func (c *RunCoordinator) toolApprovalHandler(identity *control.IdentityContext, 
 				// WHERE it runs and HOW BIG the change is: a decision made without
 				// them is a guess. All four are display-only context produced by the
 				// execution scope, never by the model's args.
-				"environment":    req.Environment,
-				"cwd":            req.Cwd,
-				"change_summary": req.ChangeSummary,
-				"triage_state":   req.TriageState,
+				"environment":     req.Environment,
+				"cwd":             req.Cwd,
+				"change_summary":  req.ChangeSummary,
+				"triage_state":    req.TriageState,
+				"decision_policy": req.DecisionPolicy,
 				// The judge's reasoning and its two assessment axes, so the person
 				// inherits the judgement instead of redoing it, and a later reader
 				// can audit why the ask happened at all.
@@ -871,6 +894,7 @@ func (c *RunCoordinator) toolApprovalHandler(identity *control.IdentityContext, 
 					"run_grant_class":  req.RunGrantClass,
 					"containment":      req.Containment,
 					"triage_state":     req.TriageState,
+					"decision_policy":  req.DecisionPolicy,
 					"triage_rationale": req.TriageRationale,
 					"triage_risk":      req.TriageRisk,
 					"decisions":        decisions,
@@ -1185,7 +1209,13 @@ func (c *RunCoordinator) deliverToPreferredIMAccepted(ctx context.Context, ident
 }
 
 func (c *RunCoordinator) withGatewayContext(input string, identity *control.IdentityContext, task *control.Task, workspace *control.Workspace, attachments []api.MessageAttachment) string {
-	if (workspace == nil || workspace.LocalPath == "" || task == nil) && len(attachments) == 0 {
+	var evolutionAdvice *control.EvolutionAdvice
+	if c != nil && c.srv != nil && c.srv.Control != nil && c.srv.SelfEvolution.Enabled && identity != nil && task != nil {
+		lookupCtx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+		evolutionAdvice, _ = c.srv.Control.EnabledEvolutionAdvice(lookupCtx, identity.TenantID, identity.PersonID, task.ID)
+		cancel()
+	}
+	if (workspace == nil || workspace.LocalPath == "" || task == nil) && len(attachments) == 0 && evolutionAdvice == nil {
 		return input
 	}
 	var sb strings.Builder
@@ -1197,6 +1227,10 @@ func (c *RunCoordinator) withGatewayContext(input string, identity *control.Iden
 	}
 	if task != nil {
 		fmt.Fprintf(&sb, "task_id: %s\n", task.ID)
+	}
+	if evolutionAdvice != nil && evolutionAdvice.Kind == "batch_read" {
+		fmt.Fprintf(&sb, "evolution_candidate_id: %s\n", evolutionAdvice.CandidateID)
+		sb.WriteString("This task has an enabled, evidence-backed read-only batching candidate. When several independent local file reads/searches/listings are needed, prefer batch_read with that candidate_id. On any partial failure, follow fallback_required and use ordinary tools. Never batch writes, shell commands, credentials, or network actions.\n")
 	}
 	if workspace != nil && workspace.LocalPath != "" {
 		fmt.Fprintf(&sb, "workspace_id: %s\n", workspace.ID)

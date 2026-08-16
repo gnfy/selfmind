@@ -86,6 +86,44 @@ func TestSelectedTaskRuntimeContextReadsControlSlices(t *testing.T) {
 	}
 }
 
+func TestBoundedTaskContextOmitsEventAndCompatibilityHistory(t *testing.T) {
+	ctx := context.Background()
+	store, err := control.OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "bounded-context", "User")
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := store.CreateTask(ctx, control.TaskCreate{TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "Referenced work", Channel: "old-channel"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.UpdateTaskStatus(ctx, identity.TenantID, task.ID, "in_progress", "bounded summary", []string{"bounded next"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.SaveHandoff(ctx, control.Handoff{TaskID: task.ID, Summary: "bounded handoff"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AppendEvent(ctx, control.Event{TaskID: task.ID, Type: "tool.completed", Payload: mustJSON(map[string]string{"result": "must stay out"})}); err != nil {
+		t.Fatal(err)
+	}
+	task, _ = store.GetTask(ctx, identity.TenantID, task.ID)
+	server := &Server{Control: store}
+	selected := server.coordinator().selectedTaskRuntimeContextWithMode(ctx, task, nil, nil, "cli", "cli", "mention referenced work", attachContextBounded)
+	prompt := selected.Prompt(10000)
+	for _, want := range []string{"bounded summary", "bounded next", "bounded handoff"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("bounded prompt missing %q:\n%s", want, prompt)
+		}
+	}
+	if selected.PriorChannel != "" || len(selected.Events) != 0 || strings.Contains(prompt, "must stay out") {
+		t.Fatalf("bounded context leaked full history: %+v\n%s", selected, prompt)
+	}
+}
+
 // TestPreLabelContextIsMinimal pins the Work Timeline boundary: a soft
 // pre-label GUESS must not bias the prompt with the guessed task's rich
 // context. Only id/title/status metadata may appear; summary, handoff,

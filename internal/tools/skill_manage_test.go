@@ -5,7 +5,74 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"selfmind/internal/kernel"
 )
+
+func directSkillMutationArgs(args map[string]interface{}) map[string]interface{} {
+	scope, _ := args["_invocation_scope"].(kernel.ToolInvocationScope)
+	if scope.ControlTenantID == "" {
+		scope.ControlTenantID = "default"
+	}
+	scope.SkillMutationMode = kernel.SkillMutationDirect
+	args["_invocation_scope"] = scope
+	return args
+}
+
+func TestSkillManageTool_EnforcesTrustedMutationMode(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	tool := NewSkillManageTool()
+	if _, err := tool.Execute(map[string]interface{}{
+		"action": "create", "name": "missing-scope", "content": "must fail closed",
+	}); err == nil || !strings.Contains(err.Error(), "mode=none") {
+		t.Fatalf("missing trusted scope did not fail closed: %v", err)
+	}
+
+	blockedScope := kernel.ToolInvocationScope{
+		ControlTenantID:   "default",
+		SkillMutationMode: kernel.SkillMutationNone,
+	}
+	_, err := tool.Execute(map[string]interface{}{
+		"action":              "create",
+		"name":                "blocked-skill",
+		"content":             "Safe reusable steps.",
+		"skill_mutation_mode": kernel.SkillMutationDirect,
+		"_invocation_scope":   blockedScope,
+	})
+	if err == nil || !strings.Contains(err.Error(), "mode=none") {
+		t.Fatalf("untrusted mutation mode bypassed guard: %v", err)
+	}
+
+	if _, err := tool.Execute(map[string]interface{}{
+		"action":            "list",
+		"_invocation_scope": blockedScope,
+	}); err != nil {
+		t.Fatalf("read action should remain available: %v", err)
+	}
+
+	candidateScope := blockedScope
+	candidateScope.SkillMutationMode = kernel.SkillMutationCandidateOnly
+	_, err = tool.Execute(map[string]interface{}{
+		"action":            "create",
+		"name":              "candidate-cannot-overwrite-active",
+		"content":           "Safe reusable steps.",
+		"_invocation_scope": candidateScope,
+	})
+	if err == nil || !strings.Contains(err.Error(), "mode=candidate_only") {
+		t.Fatalf("candidate mode unexpectedly wrote active skill: %v", err)
+	}
+
+	directScope := blockedScope
+	directScope.SkillMutationMode = kernel.SkillMutationDirect
+	if _, err := tool.Execute(map[string]interface{}{
+		"action":            "create",
+		"name":              "direct-skill",
+		"content":           "Safe reusable steps.",
+		"_invocation_scope": directScope,
+	}); err != nil {
+		t.Fatalf("explicit direct mutation failed: %v", err)
+	}
+}
 
 func TestSkillManageTool_CreateUpdateDelete(t *testing.T) {
 	// Use a temporary skills directory
@@ -15,9 +82,10 @@ func TestSkillManageTool_CreateUpdateDelete(t *testing.T) {
 	defer os.Setenv("HOME", originalHome)
 
 	tool := NewSkillManageTool()
+	execute := func(args map[string]interface{}) (string, error) { return tool.Execute(directSkillMutationArgs(args)) }
 
 	// 1. Create
-	result, err := tool.Execute(map[string]interface{}{
+	result, err := execute(map[string]interface{}{
 		"action":      "create",
 		"name":        "docker-debug",
 		"content":     "Use `docker logs -f <container>` to stream logs. Use `docker exec -it <container> sh` for shell access.",
@@ -45,7 +113,7 @@ func TestSkillManageTool_CreateUpdateDelete(t *testing.T) {
 	}
 
 	// 2. Update
-	result, err = tool.Execute(map[string]interface{}{
+	result, err = execute(map[string]interface{}{
 		"action":  "update",
 		"name":    "docker-debug",
 		"content": "Updated: Always check `docker ps` first, then use `docker logs -f <container>`.",
@@ -58,7 +126,7 @@ func TestSkillManageTool_CreateUpdateDelete(t *testing.T) {
 	}
 
 	// 2b. Patch
-	result, err = tool.Execute(map[string]interface{}{
+	result, err = execute(map[string]interface{}{
 		"action":   "patch",
 		"name":     "docker-debug",
 		"old_text": "Always check",
@@ -71,7 +139,7 @@ func TestSkillManageTool_CreateUpdateDelete(t *testing.T) {
 		t.Errorf("Expected patch success, got: %s", result)
 	}
 
-	history, err := tool.Execute(map[string]interface{}{
+	history, err := execute(map[string]interface{}{
 		"action": "history",
 		"name":   "docker-debug",
 	})
@@ -95,7 +163,7 @@ func TestSkillManageTool_CreateUpdateDelete(t *testing.T) {
 	if patchID == "" {
 		t.Fatalf("patch history id not found: %+v", changes)
 	}
-	result, err = tool.Execute(map[string]interface{}{
+	result, err = execute(map[string]interface{}{
 		"action":    "undo",
 		"change_id": patchID,
 	})
@@ -114,7 +182,7 @@ func TestSkillManageTool_CreateUpdateDelete(t *testing.T) {
 	}
 
 	// 2c. Support file
-	result, err = tool.Execute(map[string]interface{}{
+	result, err = execute(map[string]interface{}{
 		"action":       "write_file",
 		"name":         "docker-debug",
 		"file_path":    "references/example.md",
@@ -129,7 +197,7 @@ func TestSkillManageTool_CreateUpdateDelete(t *testing.T) {
 	}
 
 	// 3. Delete
-	result, err = tool.Execute(map[string]interface{}{
+	result, err = execute(map[string]interface{}{
 		"action": "delete",
 		"name":   "docker-debug",
 	})
@@ -155,17 +223,17 @@ func TestSkillManageTool_DuplicateCreate(t *testing.T) {
 
 	tool := NewSkillManageTool()
 
-	_, _ = tool.Execute(map[string]interface{}{
+	_, _ = tool.Execute(directSkillMutationArgs(map[string]interface{}{
 		"action":  "create",
 		"name":    "my-skill",
 		"content": "content",
-	})
+	}))
 
-	_, err := tool.Execute(map[string]interface{}{
+	_, err := tool.Execute(directSkillMutationArgs(map[string]interface{}{
 		"action":  "create",
 		"name":    "my-skill",
 		"content": "content2",
-	})
+	}))
 	if err == nil || !strings.Contains(err.Error(), "already exists") {
 		t.Errorf("Expected duplicate error, got: %v", err)
 	}
@@ -179,11 +247,11 @@ func TestSkillManageTool_SecurityScan(t *testing.T) {
 
 	tool := NewSkillManageTool()
 
-	_, err := tool.Execute(map[string]interface{}{
+	_, err := tool.Execute(directSkillMutationArgs(map[string]interface{}{
 		"action":  "create",
 		"name":    "dangerous",
 		"content": "Run rm -rf / to clean up",
-	})
+	}))
 	if err == nil || !strings.Contains(err.Error(), "security scan failed") {
 		t.Errorf("Expected security scan error, got: %v", err)
 	}

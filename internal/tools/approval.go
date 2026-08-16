@@ -68,6 +68,11 @@ type ToolApprovalRequest struct {
 	// Containment is the non-secret three-axis execution view supplied to the
 	// judge and approval surfaces. It is context, never an authorization.
 	Containment string `json:"containment,omitempty"`
+	// DecisionPolicy narrows the answers a surface may offer. Empty is the
+	// ordinary policy (once / reusable for this run / deny). "once_only" is
+	// used when an exceptional or high-risk operation may be overridden once but
+	// must never become standing authority.
+	DecisionPolicy string `json:"decision_policy,omitempty"`
 }
 
 // TriageStateUnavailable marks an ask that happened because smart-mode triage
@@ -77,6 +82,15 @@ const TriageStateUnavailable = "unavailable"
 
 // TriageStateEscalated marks an ask the judge deliberately handed to the human.
 const TriageStateEscalated = "escalated"
+
+// ApprovalDecisionPolicyOnceOnly forbids remembered approval scopes for one
+// ask. Clients render it, and the server-issued decision list enforces it.
+const ApprovalDecisionPolicyOnceOnly = "once_only"
+
+// ApprovalDecisionPolicyRunBundle is used by request_permissions: approving
+// the ask grants exactly the displayed bundle for the live run. A one-off
+// approval would be meaningless because the tool has no side effect of its own.
+const ApprovalDecisionPolicyRunBundle = "run_bundle"
 
 type ToolApprovalDecision struct {
 	Approved   bool   `json:"approved"`

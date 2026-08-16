@@ -41,8 +41,8 @@ profile.
 HTTP headers merge low-to-high as legacy `model.headers`,
 `model.extra_headers`, built-in profile headers, legacy provider `headers`,
 `provider_profiles.<id>.extra_headers`, and role/selection extra headers;
-adapters set protocol defaults (`content-type`, auth, `anthropic-version`,
-OpenRouter attribution) first and then apply the merged map, so yaml can
+adapters set protocol defaults (`content-type`, auth, `anthropic-version`)
+first and then apply the merged map, so yaml can
 override any of them as an emergency compatibility escape hatch until a
 release ships the fix. Compatibility defaults stay in Go (profile/adapters),
 never materialized into generated yaml — a config file is a snapshot and
@@ -127,6 +127,14 @@ For OpenAI-compatible transports the adapter uses the protocol's
 field is preferred; `extra_body` remains the emergency override at the final
 wire boundary.
 
+Background maintenance does not inherit the primary or auxiliary profile's
+interactive reasoning level. Post-run analysis, memory consolidation, model
+contract probes, and approval triage request disabled reasoning and bounded
+output explicitly; the maintenance provider chain enforces that contract again
+at dispatch. A user-selected `high` or `xhigh` auxiliary profile therefore
+does not multiply routine governance cost, while foreground reasoning remains
+unchanged.
+
 `user_identity_field: auto` maps to `user_id` for OpenAI-compatible requests
 and `metadata.user_id` for Anthropic Messages. The value is a stable opaque
 SelfMind identifier derived from authenticated identity, never a raw tenant,
@@ -167,6 +175,16 @@ value.
 | `claude-code` | `anthropic_messages` | External OAuth (Claude Code login) | `claude-3-5-sonnet-20241022` |
 | `gemini-cli` | `openai_compatible` | External OAuth (Gemini CLI login) | `gemini-1.5-pro` |
 | `qwen-cli` | `openai_compatible` | External OAuth (Qwen CLI login) | `qwen3-coder-plus` |
+
+## OpenRouter app attribution
+
+The built-in `openrouter` profile declares `HTTP-Referer` (app link), `X-Title`
+(app name), and a `User-Agent` derived from `buildinfo.Version`. They are
+profile headers rather than adapter defaults on purpose: a profile configured
+with any other protocol, and every streaming call, bypasses the OpenRouter
+adapter's own request builder, so adapter-set attribution reached almost no
+real request. `provider_profiles.openrouter.extra_headers` still overrides
+each of them for forks and proxies.
 
 ## DeepSeek V4
 

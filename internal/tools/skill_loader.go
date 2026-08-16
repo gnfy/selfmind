@@ -1,12 +1,14 @@
 package tools
 
 import (
+	"crypto/sha256"
 	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 
+	"selfmind/internal/kernel"
 	"selfmind/internal/platform/log"
 )
 
@@ -296,8 +298,10 @@ func (sl *SkillLoader) registerSkillTool(def SkillDefinition, body string, steps
 				Required: []string{},
 			},
 		},
-		content: body,
-		steps:   steps,
+		content:     body,
+		steps:       steps,
+		source:      def.Source,
+		versionHash: fmt.Sprintf("%x", sha256.Sum256([]byte(body))),
 	}
 	sl.registry.Register(tool)
 }
@@ -305,8 +309,10 @@ func (sl *SkillLoader) registerSkillTool(def SkillDefinition, body string, steps
 // SkillTool 是从 Markdown skill 文件生成的工具
 type SkillTool struct {
 	BaseTool
-	content string   // Markdown body 作为 skill 的执行逻辑
-	steps   []string // 从 body 中提取的步骤（代码块）
+	content     string   // Markdown body 作为 skill 的执行逻辑
+	steps       []string // 从 body 中提取的步骤（代码块）
+	source      string
+	versionHash string
 }
 
 // SetSkillSteps 设置 skill 的执行步骤（由 SkillLoader.LoadAll 填充）
@@ -321,6 +327,15 @@ func (t *SkillTool) Execute(args map[string]interface{}) (string, error) {
 	if name == "" {
 		name = t.Name()
 	}
+	kernel.EmitAgentEvent(kernel.EventChannelFromContext(ContextFromArgs(args)), kernel.AgentEvent{
+		Type: "skill.activated",
+		Payload: map[string]interface{}{
+			"name":         name,
+			"version_hash": t.versionHash,
+			"source":       t.source,
+			"activation":   "legacy_skill_tool",
+		},
+	})
 	return fmt.Sprintf("[Skill: %s]\nThis skill is instruction-only. Load it with /%s or skill_view(name=%q), then follow its instructions explicitly. Scripts or commands mentioned by the skill must be run through normal tools with the usual workspace and approval checks.", name, normalizeSkillCommandName(name), name), nil
 }
 

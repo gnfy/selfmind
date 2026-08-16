@@ -80,6 +80,12 @@ secret in historical output. FTS may still reveal that a matching row exists
 even when content is masked; treat that as a documented existence leak until
 indexes support redacted projections.
 
+Exact identifier-like values (letters, digits, `_`, or `-`) are masked only at
+identifier boundaries. This prevents a short registered value such as a tool
+or account name from corrupting a longer resource name that merely contains
+the same characters. Structured secrets containing punctuation still use
+exact-value replacement. Shape-based token rules remain the final fallback.
+
 ### Workspace trust and capabilities
 
 Workspace trust is enforced as a durable owner-controlled boundary:
@@ -110,6 +116,17 @@ capability, and credential-backed registries additionally require
 `credential:read`. Do not bypass either boundary with a vendor-specific
 exception.
 
+Trusted workspaces may register a local observation script with
+`selfmind ws observe`. This is deliberately narrower than trusting an
+interpreter or shell command family: the durable approval key binds the
+workspace ID, canonical in-workspace path, script content hash, argument
+prefix/trailing policy, network mode, and credential mode. Symlinks resolving
+outside the workspace are rejected, changed scripts stop matching, and only an
+authenticated loopback CLI can create the grant. The runtime still uses the
+normal execution scope, sandbox, environment lease, network, credential, and
+secret-redaction layers. Treat `--all-args` as an explicit owner assertion that
+the unchanged script cannot turn arbitrary arguments into mutation.
+
 ## Dispatch and Delegation
 
 - Native tool calls preserve their provider call id through the result. The
@@ -136,6 +153,12 @@ uses the read-only `tool_output_view` tool to retrieve omitted ranges instead
 of repeating the original command. Spooling failure degrades to a bounded
 result note and must not turn a successful tool call into a failure. Aged tool
 results may shrink only when an addressable artifact retains the evidence.
+
+Failed tools preserve a separate bounded diagnostic excerpt, byte count, and
+content hash in the durable event payload. This evidence is independent of the
+short user preview, so a failure can be classified and reviewed without
+persisting an unbounded stream. Exit status and known interface-drift failures
+are recorded as structured fields where they can be derived deterministically.
 
 Normal UI output summarizes tools, plans, and failures. Raw JSON is reserved
 for an explicit protocol/debug request.
@@ -177,15 +200,13 @@ cannot be promoted to task or person scope. `/diag` reports containment,
 class/rule grant hits, exact-run hits, judge outcomes, and human asks as funnel
 events rather than pretending they are unique operation counts.
 
-Host execution is a special case: a reusable host grant is additionally scoped
-to a non-secret fingerprint of the active workspace and the effective command
-family. If a durable workspace identity is unavailable, host execution may be
-approved once but cannot create a reusable grant. Older broad host grants do
-not match the resource-scoped key, so an owner may see one new approval after
-upgrading. The authenticated local CLI can inspect and revoke temporary grants
-with `selfmind ws grants [workspace_id]` and
-`selfmind ws revoke <capability> [workspace_id]`; grants also expire
-automatically.
+Host execution, credential reads, explicit-deny overrides, and high-risk or
+unclassified requests are once-only decisions. They never create a reusable
+grant from the interactive prompt. Ordinary bounded operations may offer one
+run-local reuse choice; the exact server-issued choice is shared by CLI and IM.
+Historical task/person grants remain readable until they expire and can be
+inspected or revoked with the approval and workspace grant commands, but new
+interactive prompts do not mint grants at those scopes.
 
 The model-visible `sandbox: auto|isolated|host` arguments are a compatibility
 surface. Internally they may map to capability requests such as
@@ -252,7 +273,10 @@ the judge as the person's stated limits — they simply no longer force the ask
 by themselves. The hard floor remains unconditional, so this snapshot cannot
 grant an otherwise forbidden capability.
 
-- APPROVE records a bounded task-scope class grant.
+- APPROVE from smart triage may cache its deterministic decision for the task.
+  A human ask is narrower: it approves once, or records one explicitly offered
+  run-local rule. Host escape, credential access, explicit-deny overrides, high
+  risk, and unavailable triage never create remembered authority.
 - DENY uses the user-rejection contract and must not trigger retry.
 - ESCALATE asks the human.
 - Missing judge, timeout, provider failure, malformed output, or an unknown
@@ -340,10 +364,11 @@ Execution policy is layered, and each layer has exactly one home:
   define behaviour, not preference. Do not move them into configuration and do
   not add a per-vendor branch in engine code — a profile is data in the
   catalog.
-- **L2 user-approved rules live in the durable ledgers**: `approval_grants` and
-  `execution_capability_grants`. Anything a human approved must be listable,
-  time-bounded, and revocable, and the surface that reports a decision must
-  name the class that was remembered.
+- **L2 remembered rules are bounded and visible.** New interactive approvals
+  can reuse a bounded rule only within the current run. Durable
+  `approval_grants` and `execution_capability_grants` remain the compatibility
+  and administrative ledger for historical or explicitly managed grants; all
+  such entries must be listable, time-bounded, and revocable.
 - **L3 user configuration stays small.** `exec_sandbox` keeps `enabled`,
   `required`, and `allow_network`. New execution behaviour does not earn a new
   configuration key.

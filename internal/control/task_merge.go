@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -32,7 +33,7 @@ func (s *Store) MergeTasks(ctx context.Context, tenantID, personID, srcID, dstID
 	// Both labels must exist, belong to the same person, and dst must be a
 	// live (non-archived) label — merging INTO an archived label would hide
 	// the moved history from every open view.
-	var srcPerson, dstPerson string
+	var srcPerson, dstPerson, dstWorkspace string
 	var dstArchived sql.NullInt64
 	if err := tx.QueryRowContext(ctx,
 		`SELECT person_id FROM tasks WHERE tenant_id = ? AND id = ?`,
@@ -43,8 +44,8 @@ func (s *Store) MergeTasks(ctx context.Context, tenantID, personID, srcID, dstID
 		return 0, err
 	}
 	if err := tx.QueryRowContext(ctx,
-		`SELECT person_id, archived_at FROM tasks WHERE tenant_id = ? AND id = ?`,
-		tenant, dstID).Scan(&dstPerson, &dstArchived); err != nil {
+		`SELECT person_id, COALESCE(workspace_id, ''), archived_at FROM tasks WHERE tenant_id = ? AND id = ?`,
+		tenant, dstID).Scan(&dstPerson, &dstWorkspace, &dstArchived); err != nil {
 		if err == sql.ErrNoRows {
 			return 0, fmt.Errorf("target task not found: %s", dstID)
 		}
@@ -77,6 +78,129 @@ func (s *Store) MergeTasks(ctx context.Context, tenantID, personID, srcID, dstID
 	} {
 		if _, err := tx.ExecContext(ctx, stmt, dstID, srcID); err != nil {
 			return 0, err
+		}
+	}
+	// Governed task references are part of the label's durable identity. Move
+	// them with the label history, folding duplicate bindings and their evidence
+	// into the destination without weakening an explicit removal already stored
+	// there. This stays in the merge transaction so a crash cannot make aliases
+	// disappear between the task and reference updates.
+	refRows, err := tx.QueryContext(ctx, `SELECT id, normalized_value, user_confirmed
+		FROM task_references WHERE tenant_id = ? AND person_id = ? AND task_id = ?`,
+		tenant, srcPerson, srcID)
+	if err != nil {
+		return 0, err
+	}
+	type movingReference struct {
+		id, normalized string
+		confirmed      int
+	}
+	var moving []movingReference
+	for refRows.Next() {
+		var ref movingReference
+		if err := refRows.Scan(&ref.id, &ref.normalized, &ref.confirmed); err != nil {
+			_ = refRows.Close()
+			return 0, err
+		}
+		moving = append(moving, ref)
+	}
+	if err := refRows.Close(); err != nil {
+		return 0, err
+	}
+	reconcileValues := map[string]struct{}{}
+	for _, ref := range moving {
+		reconcileValues[ref.normalized] = struct{}{}
+		var targetRefID string
+		err := tx.QueryRowContext(ctx, `SELECT id FROM task_references
+			WHERE tenant_id = ? AND person_id = ? AND task_id = ? AND normalized_value = ?`,
+			tenant, srcPerson, dstID, ref.normalized).Scan(&targetRefID)
+		if err == sql.ErrNoRows {
+			if _, err := tx.ExecContext(ctx, `UPDATE task_references SET task_id = ?, workspace_id = ?, updated_at = ? WHERE id = ?`,
+				dstID, dstWorkspace, now, ref.id); err != nil {
+				return 0, err
+			}
+			continue
+		}
+		if err != nil {
+			return 0, err
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM task_reference_evidence
+			WHERE reference_id = ? AND EXISTS (
+				SELECT 1 FROM task_reference_evidence target
+				WHERE target.reference_id = ?
+				  AND target.run_id = task_reference_evidence.run_id
+				  AND target.provenance = task_reference_evidence.provenance
+				  AND target.evidence_hash = task_reference_evidence.evidence_hash
+			)`, ref.id, targetRefID); err != nil {
+			return 0, err
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE task_reference_evidence SET reference_id = ? WHERE reference_id = ?`, targetRefID, ref.id); err != nil {
+			return 0, err
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE task_references SET
+			user_confirmed = MAX(user_confirmed, ?), updated_at = ? WHERE id = ?`, ref.confirmed, now, targetRefID); err != nil {
+			return 0, err
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM task_references WHERE id = ?`, ref.id); err != nil {
+			return 0, err
+		}
+	}
+	for normalized := range reconcileValues {
+		if err := reconcileTaskReferenceValueWith(ctx, tx, tenant, srcPerson, strings.TrimSpace(normalized)); err != nil {
+			return 0, err
+		}
+	}
+	// A task has at most one default Skill affinity. Merging labels must never
+	// turn two different defaults into a multi-Skill prompt: migrate the source
+	// only when the destination has none; otherwise preserve the destination and
+	// release the source binding for audit (same-key bindings are folded too).
+	type mergeBinding struct {
+		skillKey string
+		state    string
+	}
+	loadBinding := func(taskID string) (*mergeBinding, error) {
+		var binding mergeBinding
+		err := tx.QueryRowContext(ctx, `SELECT skill_key, state FROM task_skill_bindings
+			WHERE identity_tenant_id=? AND person_id=? AND task_id=?`, tenant, srcPerson, taskID).
+			Scan(&binding.skillKey, &binding.state)
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		return &binding, nil
+	}
+	sourceBinding, err := loadBinding(srcID)
+	if err != nil {
+		return 0, err
+	}
+	targetBinding, err := loadBinding(dstID)
+	if err != nil {
+		return 0, err
+	}
+	if sourceBinding != nil && sourceBinding.state != TaskSkillBindingReleased {
+		if targetBinding == nil || targetBinding.state == TaskSkillBindingReleased {
+			if targetBinding != nil {
+				if _, err := tx.ExecContext(ctx, `DELETE FROM task_skill_bindings
+					WHERE identity_tenant_id=? AND person_id=? AND task_id=?`, tenant, srcPerson, dstID); err != nil {
+					return 0, err
+				}
+			}
+			if _, err := tx.ExecContext(ctx, `UPDATE task_skill_bindings SET task_id=?, updated_at=?
+				WHERE identity_tenant_id=? AND person_id=? AND task_id=?`, dstID, now, tenant, srcPerson, srcID); err != nil {
+				return 0, err
+			}
+		} else {
+			reason := "released by task merge; destination binding preserved"
+			if sourceBinding.skillKey != targetBinding.skillKey {
+				reason = "released by task merge due to binding conflict; destination binding preserved"
+			}
+			if _, err := tx.ExecContext(ctx, `UPDATE task_skill_bindings SET state='released',
+				suspended_reason=?, updated_at=? WHERE identity_tenant_id=? AND person_id=? AND task_id=?`,
+				reason, now, tenant, srcPerson, srcID); err != nil {
+				return 0, err
+			}
 		}
 	}
 	// A current-task pointer at src follows the work to dst.

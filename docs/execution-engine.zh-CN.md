@@ -555,7 +555,9 @@ durable check 是唯一没有 host 逃逸、也没有模型在环的执行路径
 非终态 | 正常注册 |
 
 预检不新增审批面：`watch_external` 本身就是 exec tool，其 `command` 在注册时已过
-安全下限与审批；同一条命令原本几秒后就会被 daemon 无人值守地执行。
+安全下限与审批；同一条命令原本稍后就会被 daemon 无人值守地执行。预检超时从
+调用参数读取，但硬限制为 120 秒；超过 30 秒的预检进入 long-running 执行档案，
+让需要网络或认证握手的真实检查有完成机会，同时保持注册调用有界。
 
 硬约束：**L0/L1 失败永不进入 pattern 匹配**；`success_pattern` 额外要求
 `ExitCode==0`（失败的检查打印出的 "SUCCESS" 是自相矛盾的证据），`failure_pattern`
@@ -563,6 +565,13 @@ durable check 是唯一没有 host 逃逸、也没有模型在环的执行路径
 连续 3 次即熔断 park，并落 `external_watch.blocked` 事件。park 的 `last_error`
 带结构化前缀，下游（finalization prompt、任务摘要、IM 通知）据此声明"外部状态
 未被观察"，绝不写入 succeeded/failed。
+
+watcher 收尾同时维护两条不同的事实：finalization run 描述 SelfMind 是否成功完成
+本地核验与记录，`RunOutcome.external` 描述被观察的外部目标状态。外部构建失败时，
+finalization run 可以正常 `done`，而任务仍根据 external outcome 显示为 blocked；
+不得再把外部失败伪装成 agent 执行失败。`notified` 也不是“已创建收尾队列行”的
+同义词：只有 IM/outbound 已确认接收，或原始 CLI 仍在线且已接收耐久事件时才置位；
+否则保留待通知状态供后续有界补投。
 
 ### 11.2 恢复许可（按引擎阶段判定，不猜命令语义）
 
@@ -596,27 +605,18 @@ var bannedGrantPrograms = map[string]struct{}{
 加上结构性排除：含重定向、命令替换、变量赋值、heredoc、通配或多段的命令，
 **一律不生成可复用授权**（codex 的同一判据）。两者任一命中 → 只批这一次。
 
-### 11.4 L2 授权账本管理面
+### 11.4 L2 授权账本与简化交互
 
-现状：`internal/control/approval_grants.go` 全文只有 `INSERT`（`:44`）与
-`SELECT 1`（`:64`）；表无 `expires_at`、无 `revoked_at`；`selfmind ws grants`
-只覆盖 capability（`client_commands.go:295`），不覆盖 approval_grants；审批提示
-只说 "(this class remembered for you across tasks)"（`approval_resolver.go:261`），
-**从不显示 class 是什么**。这就是当日 10 条授权无声落库、事后需手写 SQL 才能
-发现的机制原因。
+授权账本的查询、撤销、期限和审计面已经补齐；当前交互审批进一步收窄为上下文相关
+的紧凑菜单：普通操作最多提供“仅本次 / 当前 run 内复用 / 拒绝”三项；host escape、
+凭证读取、显式拒绝覆盖以及高风险或无法判定的请求只提供“仅本次 / 拒绝”。CLI 与
+IM 都渲染 daemon 持久化的同一组选项，服务端只接受当次请求实际提供的 decision，
+客户端不能通过隐藏参数升级授权范围。
 
-补齐内容：
-
-| # | 内容 | 文件 |
-|---|---|---|
-1 | `ListApprovalGrants` / `RevokeApprovalGrant(id)` / `RevokeApprovalGrantsByPattern` | `control/approval_grants.go` |
-2 | 加 `expires_at`、`revoked_at`，与 capability 表对齐；**host-escape 类不再永久**，person 级默认 8h（与 capability 的 person 期限一致）；迁移时把现存 host-escape 行置为已过期 | `control/store.go:378` |
-3 | 跨端命令 `/approvals list` / `/approvals revoke <n>`，元数据注册进 `internal/gateway/command`；CLI 对应 `selfmind approvals ...` | `gateway/command/registry.go`、`cliapp` |
-4 | 审批提示展示**人类可读的将记住内容**，不是 raw pattern_key、不是 hash：`will remember: run gcloud on the host in workspace "workspace" (8h)` | `httpapi/approval_resolver.go:256` |
-5 | 授权创建/撤销写 durable 事件 `approval.grant_created` / `approval.grant_revoked`，进 `/diag execution` | `tools/approval.go`、`httpapi/diag.go` |
-
-第 2 项是整份方案中安全收益最高的单点改动：今天一个错误的 pattern key = 永久
-后门；加期限后 = 最多 8 小时。
+`/approvals grants|revoke` 与 `selfmind approvals grants|revoke` 继续用于查看、撤销
+历史 task/person 授权和显式管理的持久授权。新交互提示不再创建 task/person 级授权；
+旧授权在到期或撤销前仍可读取，以保证升级兼容，但不会成为新默认。授权创建、命中和
+撤销仍写 durable 事件并进入 `/diag execution`。
 
 ## 12. Runner 接缝（零新增功能）
 

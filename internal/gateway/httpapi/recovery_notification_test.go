@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"runtime"
 	"strings"
@@ -12,6 +13,19 @@ import (
 	"selfmind/internal/control"
 	"selfmind/internal/gateway/delivery"
 )
+
+type flakyRecordingSender struct {
+	messages []delivery.Message
+	err      error
+}
+
+func (s *flakyRecordingSender) Send(_ context.Context, msg delivery.Message) error {
+	if s.err != nil {
+		return s.err
+	}
+	s.messages = append(s.messages, msg)
+	return nil
+}
 
 func TestRecoveryNotificationDeliveredOnce(t *testing.T) {
 	daemon, store, identity, task, _ := newApprovalTestServer(t)
@@ -110,13 +124,103 @@ func TestExternalWatchCompletesOutsideAgentRun(t *testing.T) {
 			continue
 		}
 		foundNotice = true
-		want := "Watcher " + watch.ID + " | status: succeeded | task: waiting_finalization"
+		want := "Watcher " + shortExternalWatchID(watch.ID) + " | status: succeeded | task: waiting_finalization"
 		if msg.Content != want {
 			t.Fatalf("unexpected external watch notice: %q", msg.Content)
 		}
 	}
 	if !foundNotice {
 		t.Fatalf("external watch completion notice missing: %+v", recorder.messages)
+	}
+}
+
+func TestExternalWatchNotificationWaitsForConfirmedEndpointDelivery(t *testing.T) {
+	daemon, store, identity, task, _ := newApprovalTestServer(t)
+	ctx := context.Background()
+	if _, err := store.BindAccount(ctx, identity.TenantID, identity.PersonID, "weixin", "wxid_watch_retry", "WeChat"); err != nil {
+		t.Fatal(err)
+	}
+	sender := &flakyRecordingSender{err: errors.New("temporary endpoint failure")}
+	daemon.Delivery = delivery.NewService(store, sender, delivery.Options{RetryBaseDelay: time.Millisecond})
+	run, err := store.StartRun(ctx, task, "cli", "monitor the external build")
+	if err != nil {
+		t.Fatal(err)
+	}
+	command := "printf READY"
+	if runtime.GOOS == "windows" {
+		command = "Write-Output READY"
+	}
+	watch, err := store.CreateExternalWatch(ctx, control.ExternalWatch{
+		TenantID: identity.TenantID, PersonID: identity.PersonID, TaskID: task.ID, RunID: run.ID,
+		Channel: "cli", Description: "CI build", CWD: t.TempDir(), Command: command,
+		SuccessPattern: "READY", IntervalSeconds: 5, CommandTimeoutSeconds: 10,
+		TimeoutAt: time.Now().Add(time.Minute),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	daemon.runExternalWatchPass(ctx)
+	stored, err := store.GetExternalWatch(ctx, identity.TenantID, watch.ID)
+	if err != nil || stored == nil {
+		t.Fatalf("watch=%+v err=%v", stored, err)
+	}
+	if !stored.Finalized || stored.Notified {
+		t.Fatalf("failed endpoint must preserve retryable notification: %+v", stored)
+	}
+
+	sender.err = nil
+	time.Sleep(5 * time.Millisecond)
+	daemon.runExternalWatchNotificationPass(ctx)
+	stored, err = store.GetExternalWatch(ctx, identity.TenantID, watch.ID)
+	if err != nil || stored == nil || !stored.Notified {
+		t.Fatalf("watch was not marked after confirmed retry: %+v err=%v", stored, err)
+	}
+	externalNotices := 0
+	for _, msg := range sender.messages {
+		if msg.Kind == "external_watch" {
+			externalNotices++
+		}
+	}
+	if externalNotices != 1 {
+		t.Fatalf("confirmed external watch notices=%d messages=%+v", externalNotices, sender.messages)
+	}
+}
+
+func TestExternalWatchNotificationUsesDurableEventForAttachedCLI(t *testing.T) {
+	daemon, store, identity, task, _ := newApprovalTestServer(t)
+	ctx := context.Background()
+	recorder := &recordingSender{}
+	daemon.Delivery = delivery.NewService(store, recorder, delivery.Options{})
+	daemon.presenceTracker().Touch(identity.PersonID, "cli")
+	run, err := store.StartRun(ctx, task, "cli", "monitor the external build")
+	if err != nil {
+		t.Fatal(err)
+	}
+	command := "printf READY"
+	if runtime.GOOS == "windows" {
+		command = "Write-Output READY"
+	}
+	watch, err := store.CreateExternalWatch(ctx, control.ExternalWatch{
+		TenantID: identity.TenantID, PersonID: identity.PersonID, TaskID: task.ID, RunID: run.ID,
+		Channel: "cli", Description: "CI build", CWD: t.TempDir(), Command: command,
+		SuccessPattern: "READY", IntervalSeconds: 5, CommandTimeoutSeconds: 10,
+		TimeoutAt: time.Now().Add(time.Minute),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	daemon.runExternalWatchPass(ctx)
+	stored, err := store.GetExternalWatch(ctx, identity.TenantID, watch.ID)
+	if err != nil || stored == nil || !stored.Notified {
+		t.Fatalf("attached CLI did not acknowledge durable watch event: %+v err=%v", stored, err)
+	}
+	if !hasEventOfType(t, store, task.ID, "external_watch.completed") {
+		t.Fatal("durable CLI completion event missing")
+	}
+	if len(recorder.messages) != 0 {
+		t.Fatalf("attached CLI should suppress duplicate endpoint push: %+v", recorder.messages)
 	}
 }
 

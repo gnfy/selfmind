@@ -75,6 +75,45 @@ func TestDeliveryHealthByPlatformSeparatesTransportStates(t *testing.T) {
 	}
 }
 
+func TestLatestDeliveryEndpointStateIsEndpointScoped(t *testing.T) {
+	store, err := OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	ctx := context.Background()
+	one, err := store.EnqueueDelivery(ctx, Delivery{
+		TenantID: "default", PersonID: "p1", Platform: "weixin", PlatformUserID: "wx-1", Channel: "wx-1", Content: "one",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.MarkDeliveryPendingSession(ctx, one.ID, "prepare failed"); err != nil {
+		t.Fatal(err)
+	}
+	other, err := store.EnqueueDelivery(ctx, Delivery{
+		TenantID: "default", PersonID: "p1", Platform: "weixin", PlatformUserID: "wx-2", Channel: "wx-2", Content: "two",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.MarkDeliveryAttempt(ctx, other.ID, true, "", time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+
+	state, err := store.LatestDeliveryEndpointState(ctx, "default", "p1", "weixin", "wx-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state == nil || state.Status != "pending_session" {
+		t.Fatalf("state = %+v, want pending_session", state)
+	}
+	missing, err := store.LatestDeliveryEndpointState(ctx, "default", "p1", "weixin", "wx-missing")
+	if err != nil || missing != nil {
+		t.Fatalf("missing state = %+v, err = %v", missing, err)
+	}
+}
+
 // TestCatchUpEligibilityAndClaim pins the store-side anti-duplicate rails:
 // oldest-first ordering, the one-shot claim, and the freshness window.
 func TestCatchUpEligibilityAndClaim(t *testing.T) {

@@ -96,7 +96,7 @@ func (j *llmApprovalJudge) Judge(ctx context.Context, prompt string) (string, er
 		// temperature 0 for a deterministic verdict; adapters that ignore the
 		// option simply fall back to their default, which triage tolerates
 		// (unrecognized replies escalate).
-		Options: map[string]interface{}{"temperature": 0, "reasoning_effort": "low"},
+		Options: map[string]interface{}{"temperature": 0, "reasoning_effort": "none"},
 	})
 	if err != nil {
 		return "", err

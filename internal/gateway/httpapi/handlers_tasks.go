@@ -11,7 +11,9 @@ import (
 	"time"
 
 	"selfmind/internal/control"
+	"selfmind/internal/executionenv"
 	"selfmind/internal/gateway/api"
+	"selfmind/internal/tools"
 )
 
 func (d *Server) handleTasks(w http.ResponseWriter, r *http.Request) {
@@ -454,6 +456,72 @@ func (d *Server) handleWorkspaceCapabilities(w http.ResponseWriter, r *http.Requ
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{"workspace_id": workspaceID, "capabilities": out})
+}
+
+func (d *Server) handleWorkspaceObservationProfiles(w http.ResponseWriter, r *http.Request) {
+	if !d.authorized(r) {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req api.WorkspaceObservationProfileRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid json", http.StatusBadRequest)
+		return
+	}
+	if !d.localCLIRequest(r, req.Platform) {
+		http.Error(w, "observation profiles can only be granted by the authenticated local CLI", http.StatusForbidden)
+		return
+	}
+	identity, err := d.Control.ResolveOrCreateAccount(
+		r.Context(), d.tenantID(req.TenantID), "cli", fallback(req.PlatformUserID, "local"), "",
+	)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	workspaceID := strings.TrimSpace(req.WorkspaceID)
+	var workspace *control.Workspace
+	if workspaceID == "" {
+		workspace, err = d.Control.CurrentWorkspace(r.Context(), identity.TenantID, identity.PersonID)
+	} else {
+		workspace, err = d.Control.GetWorkspace(r.Context(), identity.TenantID, workspaceID)
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	if workspace == nil || workspace.OwnerPersonID != identity.PersonID {
+		http.Error(w, "workspace not found", http.StatusNotFound)
+		return
+	}
+	if workspace.TrustLevel != executionenv.TrustTrusted {
+		http.Error(w, "workspace must be trusted before declaring an observation script", http.StatusConflict)
+		return
+	}
+	rule, err := tools.BuildObservationScriptRule(tools.ObservationScriptProfile{
+		WorkspaceID: workspace.ID, ScriptPath: req.ScriptPath, ArgvPrefix: req.ArgvPrefix,
+		AllowTrailing: req.AllowTrailing, AllowNetwork: req.AllowNetwork, AllowCredentials: req.AllowCredentials,
+	}, workspace.LocalPath)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if err := d.Control.GrantApproval(r.Context(), "person", identity.TenantID, identity.PersonID, identity.PersonID, rule.Key, time.Time{}); err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"workspace_id": workspace.ID,
+		"profile": map[string]interface{}{
+			"kind": rule.Kind, "label": rule.Label, "argv_prefix": req.ArgvPrefix,
+			"allow_trailing": req.AllowTrailing, "allow_network": req.AllowNetwork,
+			"allow_credentials": req.AllowCredentials,
+		},
+	})
 }
 
 func (d *Server) localCLIRequest(r *http.Request, platform string) bool {

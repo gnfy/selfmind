@@ -22,6 +22,9 @@ type RunFinalization struct {
 	TaskID             string
 	TaskStatus         string
 	Summary            string
+	VerificationState  string
+	VerificationRefs   []string
+	ClaimMismatch      bool
 	NextSteps          []string
 	Channel            string
 	AssistantContent   string
@@ -143,6 +146,9 @@ func (s *Store) MaterializeRunFinalization(ctx context.Context, input RunFinaliz
 	}
 	if n, _ := result.RowsAffected(); n != 1 {
 		return nil, fmt.Errorf("finish run affected %d rows", n)
+	}
+	if err := finalizeRunSkillLifecycleTx(ctx, tx, input, personID, now, !duplicateEffect); err != nil {
+		return nil, fmt.Errorf("finalize skill lifecycle: %w", err)
 	}
 
 	taskStatus := input.TaskStatus

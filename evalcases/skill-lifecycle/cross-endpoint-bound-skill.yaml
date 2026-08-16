@@ -1,0 +1,56 @@
+id: skill_cross_endpoint_bound
+title: "A deterministic IM continuation loads the task-bound Skill without a directory dump"
+suite: skill-lifecycle
+workspace: isolated
+channel: weixin
+require_cassette: true
+
+setup:
+  files:
+    release.txt: "release=v1.2.3\n"
+    .selfmind/skills/release-inspection/SKILL.md: |-
+      ---
+      name: release-inspection
+      description: 检查发布版本和发布元数据
+      ---
+
+      # Procedure
+
+      Read `release.txt` with the read-only file tool. Report the exact release
+      value. Do not modify files and do not guess when the file is unavailable.
+
+      # Verification
+
+      For this read-only lookup, the successful bounded read is the evidence.
+  task:
+    title: "Inspect the current release"
+    default_skill: release-inspection
+
+turns:
+  - input: "继续这个任务。按已经绑定的流程读取 release.txt，告诉我精确版本号；不要修改文件。"
+    channel: weixin
+
+expect:
+  status: completed
+  contains: ["v1.2.3"]
+  require_tool_events: true
+  min_tool_calls: 1
+  max_tool_errors: 0
+  max_duration_seconds: 180
+
+assert_state:
+  - on: events
+    type: skill.activated
+    payload_contains: '"name":"release-inspection"'
+    count_gte: 1
+  - on: events
+    type: context.selected
+    payload_contains: '"skill_directory_chars":0'
+    count_gte: 1
+
+checks:
+  no_mojibake: true
+  no_raw_json_leak: true
+  no_empty_response: true
+  no_provider_stack_dump: true
+

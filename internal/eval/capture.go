@@ -1,6 +1,7 @@
 package eval
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -75,10 +76,11 @@ func copyCassettes(srcDir, dstDir string) (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("read recorded cassette dir: %w", err)
 	}
-	if err := os.MkdirAll(dstDir, 0o755); err != nil {
-		return 0, err
+	type recording struct {
+		name string
+		data []byte
 	}
-	n := 0
+	var recordings []recording
 	for _, e := range entries {
 		name := e.Name()
 		if e.IsDir() || name == "meta.json" || !strings.HasSuffix(name, ".json") {
@@ -86,17 +88,31 @@ func copyCassettes(srcDir, dstDir string) (int, error) {
 		}
 		data, err := os.ReadFile(filepath.Join(srcDir, name))
 		if err != nil {
-			return n, err
+			return 0, err
 		}
-		if err := os.WriteFile(filepath.Join(dstDir, name), data, 0o644); err != nil {
-			return n, err
+		var envelope struct {
+			Error string `json:"error"`
 		}
-		n++
+		if err := json.Unmarshal(data, &envelope); err != nil {
+			return 0, fmt.Errorf("flight cassette %s is invalid JSON: %w", name, err)
+		}
+		if strings.TrimSpace(envelope.Error) != "" {
+			return 0, fmt.Errorf("flight cassette %s records a provider failure (%s); rerun the task successfully before capture", name, envelope.Error)
+		}
+		recordings = append(recordings, recording{name: name, data: data})
 	}
-	if n == 0 {
+	if len(recordings) == 0 {
 		return 0, fmt.Errorf("no cassette files in %s (was the turn recorded?)", srcDir)
 	}
-	return n, nil
+	if err := os.MkdirAll(dstDir, 0o755); err != nil {
+		return 0, err
+	}
+	for i, recording := range recordings {
+		if err := os.WriteFile(filepath.Join(dstDir, recording.name), recording.data, 0o644); err != nil {
+			return i, err
+		}
+	}
+	return len(recordings), nil
 }
 
 func renderCaseYAML(caseID, title, suite, channel, prompt string) string {

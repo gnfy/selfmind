@@ -1,0 +1,73 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "content": "`"
+    },
+    {
+      "content": "target"
+    },
+    {
+      "content": ".txt"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " 中"
+    },
+    {
+      "content": "的"
+    },
+    {
+      "content": "精"
+    },
+    {
+      "content": "确"
+    },
+    {
+      "content": "值"
+    },
+    {
+      "content": "是"
+    },
+    {
+      "content": "：\n\n"
+    },
+    {
+      "content": "```"
+    },
+    {
+      "content": "text"
+    },
+    {
+      "content": "\n"
+    },
+    {
+      "content": "candidate"
+    },
+    {
+      "content": "-context"
+    },
+    {
+      "content": "-ok"
+    },
+    {
+      "content": "\n"
+    },
+    {
+      "content": "```"
+    },
+    {
+      "usage": {
+        "input_tokens": 6398,
+        "output_tokens": 23,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 6398,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0,
+        "cache_usage_reported": true
+      }
+    }
+  ]
+}

@@ -81,7 +81,7 @@ var entries = []Entry{
 	{Name: "/workspaces", Usage: "/workspaces  (same as bare /workspace or /ws)", Summary: "List workspaces.", SyncControl: true, Scope: Gateway},
 
 	// --- Local TUI/CLI-only commands (never gateway-routed) ---
-	{Name: "/skills", Usage: "/skills [list|view|history|undo|search|install|audit|delete|archive|pin|unpin|stats|reload]", Summary: "Manage learned skills.", Scope: Local},
+	{Name: "/skills", Usage: "/skills [list|view|candidates|candidate|promote|reject|rollback|binding|bind|unbind|history|undo|search|install|audit|delete|archive|pin|unpin|stats|reload]", Summary: "Manage learned skills.", Scope: Local},
 	{Name: "/bundles", Usage: "/bundles [list|view|create|delete]", Summary: "Manage skill bundles.", Scope: Local},
 	{Name: "/reload-skills", Usage: "/reload-skills", Summary: "Reload skill tools from disk.", Scope: Local},
 	{Name: "/memory", Usage: "/memory [category|conflicts|search|show|correct|forget|pin|unpin|raw|history|undo]", Summary: "Review and manage long-term memory.", Scope: Local},

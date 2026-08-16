@@ -147,6 +147,42 @@ func TestMergeTasksGuards(t *testing.T) {
 	}
 }
 
+func TestMergeTasksPreservesOneSkillBinding(t *testing.T) {
+	store, identity := newMergeHarness(t)
+	ctx := context.Background()
+	src := mergeTask(t, store, identity, "source")
+	dst := mergeTask(t, store, identity, "target")
+	if _, err := store.BindTaskSkill(ctx, BindTaskSkillInput{
+		IdentityTenantID: identity.TenantID, PersonID: identity.PersonID, TaskID: src.ID,
+		ControlTenantID: identity.TenantID, SkillKey: "source-skill", SkillName: "source-skill",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.MergeTasks(ctx, identity.TenantID, identity.PersonID, src.ID, dst.ID); err != nil {
+		t.Fatal(err)
+	}
+	migrated, err := store.GetTaskSkillBinding(ctx, identity.TenantID, identity.PersonID, dst.ID)
+	if err != nil || migrated == nil || migrated.SkillKey != "source-skill" {
+		t.Fatalf("source binding did not migrate to empty target: %+v err=%v", migrated, err)
+	}
+
+	src2 := mergeTask(t, store, identity, "source conflict")
+	if _, err := store.BindTaskSkill(ctx, BindTaskSkillInput{
+		IdentityTenantID: identity.TenantID, PersonID: identity.PersonID, TaskID: src2.ID,
+		ControlTenantID: identity.TenantID, SkillKey: "other-skill", SkillName: "other-skill",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.MergeTasks(ctx, identity.TenantID, identity.PersonID, src2.ID, dst.ID); err != nil {
+		t.Fatal(err)
+	}
+	preserved, _ := store.GetTaskSkillBinding(ctx, identity.TenantID, identity.PersonID, dst.ID)
+	released, _ := store.GetTaskSkillBinding(ctx, identity.TenantID, identity.PersonID, src2.ID)
+	if preserved == nil || preserved.SkillKey != "source-skill" || released == nil || released.State != TaskSkillBindingReleased {
+		t.Fatalf("merge conflict loaded more than one default: target=%+v source=%+v", preserved, released)
+	}
+}
+
 // TestListDuplicateSuggestions: suggestions read back as pair map from events.
 func TestListDuplicateSuggestions(t *testing.T) {
 	store, identity := newMergeHarness(t)

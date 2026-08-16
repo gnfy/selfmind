@@ -21,6 +21,9 @@ func TestComputeContextBreakdown(t *testing.T) {
 		"Always write tests. Use two-space indent.",
 		"",
 		"# SELECTED RUNTIME CONTEXT",
+		activeSkillPromptBegin,
+		"# ACTIVE SKILL FOR CURRENT WORK UNIT",
+		"Inspect the release metadata with the bounded procedure.",
 		"## Workspace",
 		"workspace_root: /repo",
 		"",
@@ -49,6 +52,9 @@ func TestComputeContextBreakdown(t *testing.T) {
 	if b.Runtime <= 0 {
 		t.Error("runtime bucket should capture the selected-runtime block")
 	}
+	if b.Skill <= 0 {
+		t.Error("skill bucket should capture the active-skill block")
+	}
 	if b.Memory <= 0 {
 		t.Error("memory bucket should capture the memory-context block")
 	}
@@ -56,7 +62,7 @@ func TestComputeContextBreakdown(t *testing.T) {
 		t.Error("history should sum the non-system messages")
 	}
 	// System message content is NOT counted as history (only user/assistant).
-	want := b.Identity + b.Tools + b.ProjectContext + b.Memory + b.Runtime + b.History
+	want := b.Identity + b.Tools + b.ProjectContext + b.Memory + b.Skill + b.Runtime + b.History
 	if b.Total != want {
 		t.Fatalf("Total = %d, want sum of parts %d", b.Total, want)
 	}

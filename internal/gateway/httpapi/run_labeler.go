@@ -147,12 +147,31 @@ func (c *RunCoordinator) materializeRunFinalization(ctx context.Context, identit
 		return err
 	}
 	_, err = c.srv.Control.MaterializeRunFinalization(context.WithoutCancel(ctx), control.RunFinalization{
-		Identity:           *identity,
-		RunID:              run.ID,
-		RunStatus:          terminalRunStatus(outcome.Status),
-		TaskID:             task.ID,
-		TaskStatus:         taskStatus,
-		Summary:            outcome.Summary,
+		Identity:   *identity,
+		RunID:      run.ID,
+		RunStatus:  terminalRunStatus(outcome.Status),
+		TaskID:     task.ID,
+		TaskStatus: taskStatus,
+		Summary:    outcome.Summary,
+		VerificationState: func() string {
+			if outcome.Verification == nil {
+				return "not_applicable"
+			}
+			return outcome.Verification.State
+		}(),
+		VerificationRefs: func() []string {
+			if outcome.Verification == nil {
+				return nil
+			}
+			refs := make([]string, 0, len(outcome.Verification.Checks))
+			for _, check := range outcome.Verification.Checks {
+				if strings.TrimSpace(check.Command) != "" {
+					refs = append(refs, check.Command)
+				}
+			}
+			return refs
+		}(),
+		ClaimMismatch:      len(outcome.ClaimMismatches) > 0,
 		NextSteps:          outcome.NextSteps,
 		Channel:            channel,
 		AssistantContent:   assistantContent,
@@ -175,6 +194,24 @@ func (c *RunCoordinator) materializeRunFinalization(ctx context.Context, identit
 		if c.srv.SelfEvolution.Enabled {
 			if _, _, profileErr := c.srv.Control.MaterializeWorkflowProfile(context.WithoutCancel(ctx), identity.TenantID, run.ID, c.srv.SelfEvolution); profileErr != nil {
 				log.Warn("workflow profile materialization failed", "run_id", run.ID, "error", profileErr)
+			}
+			if _, observationErr := c.srv.Control.MaterializeWorkflowObservations(context.WithoutCancel(ctx), identity.TenantID, run.ID); observationErr != nil {
+				log.Warn("workflow observation materialization failed", "run_id", run.ID, "error", observationErr)
+			} else if c.srv.SkillCurator != nil {
+				digests, digestErr := c.srv.Control.ReadySkillEvidenceDigestsForRun(context.WithoutCancel(ctx), identity.TenantID, run.ID)
+				if digestErr != nil {
+					log.Warn("skill cohort selection failed", "run_id", run.ID, "error", digestErr)
+				}
+				for _, digest := range digests {
+					payload, marshalErr := json.Marshal(digest)
+					if marshalErr != nil {
+						continue
+					}
+					key := "skillcuration_" + digest.EvidenceSetHash[:min(24, len(digest.EvidenceSetHash))]
+					if _, enqueueErr := c.srv.Control.EnqueueMaintenanceJob(context.WithoutCancel(ctx), identity.TenantID, key, SkillCurationJobVersion, string(payload)); enqueueErr != nil {
+						log.Warn("skill curation enqueue failed", "run_id", run.ID, "error", enqueueErr)
+					}
+				}
 			}
 		}
 	}

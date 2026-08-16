@@ -759,6 +759,7 @@ func latestProviderContextBreakdownLine(events []control.Event) string {
 			Workspace          int    `json:"workspace"`
 			Artifacts          int    `json:"artifacts"`
 			Memory             int    `json:"memory"`
+			Skill              int    `json:"skill"`
 			TaskRuntime        int    `json:"task_runtime"`
 			EstimatedTotal     int    `json:"estimated_total"`
 		}
@@ -766,9 +767,9 @@ func latestProviderContextBreakdownLine(events []control.Event) string {
 			continue
 		}
 		return fmt.Sprintf(
-			"Provider request (#%d %s, ~%d tok): stable system %d, tool schemas %d, history %d, tool results %d, workspace %d, task %d, recall %d, memory %d, artifacts %d\n",
+			"Provider request (#%d %s, ~%d tok): stable system %d, tool schemas %d, history %d, tool results %d, workspace %d, task %d, skill %d, recall %d, memory %d, artifacts %d\n",
 			p.Iteration, p.Transport, p.EstimatedTotal, p.StableSystem, p.ToolSchemas,
-			p.History, p.CurrentToolResults, p.Workspace, p.TaskRuntime, p.Recall, p.Memory, p.Artifacts,
+			p.History, p.CurrentToolResults, p.Workspace, p.TaskRuntime, p.Skill, p.Recall, p.Memory, p.Artifacts,
 		)
 	}
 	return "Provider request: no per-call context breakdown recorded yet\n"

@@ -14,6 +14,24 @@ type fakeReviewRunner struct {
 	fail  bool
 }
 
+type fakeSkillCuratorRunner struct {
+	proposals int
+	applies   int
+}
+
+func (f *fakeSkillCuratorRunner) ProposeSkillCuration(_ context.Context, _, _ string) (string, error) {
+	f.proposals++
+	return `{"action":"SKIP","reason":"frozen"}`, nil
+}
+
+func (f *fakeSkillCuratorRunner) ApplySkillCuration(_ context.Context, _, _, proposal string) (string, error) {
+	f.applies++
+	if proposal != `{"action":"SKIP","reason":"frozen"}` {
+		return "", fmt.Errorf("unexpected proposal %s", proposal)
+	}
+	return "candidate skipped", nil
+}
+
 func (f *fakeReviewRunner) RunReviewFromPayload(_ context.Context, _, _ string) (string, error) {
 	f.calls++
 	if f.fail {
@@ -84,5 +102,34 @@ func TestSkillReviewJobFailureRetries(t *testing.T) {
 	}
 	if job.Attempts != 1 || !strings.Contains(job.LastError, "provider unavailable") {
 		t.Fatalf("failure must be recorded with attempts: %+v", job)
+	}
+}
+
+func TestSkillCurationJobFreezesProposalBeforeApply(t *testing.T) {
+	store, err := control.OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	ctx := context.Background()
+	if _, err := store.EnqueueMaintenanceJob(ctx, "tenant", "skillcuration_evidence", SkillCurationJobVersion, `{"evidence_set_hash":"evidence"}`); err != nil {
+		t.Fatal(err)
+	}
+	runner := &fakeSkillCuratorRunner{}
+	d := &Server{Control: store, SkillCurator: runner}
+	d.runSkillCurationPass(ctx)
+	job, err := store.GetMaintenanceJob(ctx, "tenant", "skillcuration_evidence", SkillCurationJobVersion)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runner.proposals != 1 || runner.applies != 1 {
+		t.Fatalf("proposal/apply calls = %d/%d", runner.proposals, runner.applies)
+	}
+	if job.Status != control.MaintenanceJobSucceeded || job.ProposalJSON != `{"action":"SKIP","reason":"frozen"}` {
+		t.Fatalf("curation proposal was not frozen durably before completion: %+v", job)
+	}
+	d.runSkillCurationPass(ctx)
+	if runner.proposals != 1 || runner.applies != 1 {
+		t.Fatal("completed curation job ran again")
 	}
 }

@@ -740,7 +740,6 @@ func InitAgent(mem *memory.MemoryManager, cfg *config.Config, tenantID string, s
 	codingProvider := modelGateway.ProviderForRole(llm.RoleCodingAgent)
 	reviewProvider := configuredAuxiliaryRoleProvider(mem, cfg, tenantID, llm.RoleBackgroundReview)
 	var reviewRoutes []maintenanceRouteIdentity
-	skillCuratorProvider := configuredAuxiliaryRoleProvider(mem, cfg, tenantID, llm.RoleSkillCurator)
 	semanticRecallProvider := configuredAuxiliaryRoleProvider(mem, cfg, tenantID, llm.RoleSemanticRecall)
 	fastProvider := configuredAuxiliaryRoleProvider(mem, cfg, tenantID, llm.RoleFastClassifier)
 	summaryProvider := configuredAuxiliaryRoleProvider(mem, cfg, tenantID, llm.RoleSummarizer)
@@ -783,18 +782,6 @@ func InitAgent(mem *memory.MemoryManager, cfg *config.Config, tenantID string, s
 	}
 	skillsDir := tools.SkillsDirForTenant(skillsBaseDir, tenantID)
 
-	refl := kernel.NewReflectionEngine(skillCuratorProvider, kernel.EvolutionConfig{
-		Enabled:                cfg.Evolution.Enabled,
-		Mode:                   cfg.Evolution.Mode,
-		MinComplexityThreshold: cfg.Evolution.MinComplexityThreshold,
-		AutoArchiveConfidence:  cfg.Evolution.AutoArchiveConfidence,
-		NudgeInterval:          cfg.Evolution.NudgeInterval,
-		SkillsDir:              skillsDir,
-	})
-
-	// Evolution notify channel: nil for now; the TUI layer injects it later.
-	refl.SetNotifyChannel(nil)
-
 	maxIter := cfg.Agent.MaxIterations
 	if maxIter == 0 {
 		maxIter = 90
@@ -804,7 +791,10 @@ func InitAgent(mem *memory.MemoryManager, cfg *config.Config, tenantID string, s
 		maxRetries = 3
 	}
 
-	agent := kernel.NewAgent(mem, nil, codingProvider, cfg.Agent.Soul, maxIter, maxRetries, refl)
+	// Legacy ReflectionEngine Skill writes are deliberately absent from the
+	// daemon path. The durable cohort-driven skill curator is the sole proposal
+	// authority; keeping a second writer here would bypass candidate evidence.
+	agent := kernel.NewAgent(mem, nil, codingProvider, cfg.Agent.Soul, maxIter, maxRetries, nil)
 	agent.SetToolBudgetPolicy(kernel.ToolBudgetPolicy{
 		Initial:       cfg.Agent.ActionToolBudget,
 		Step:          cfg.Agent.ActionToolBudgetStep,
@@ -836,8 +826,8 @@ func InitAgent(mem *memory.MemoryManager, cfg *config.Config, tenantID string, s
 	// Carry the cheap triage provider so the gateway can build the smart-mode
 	// approval judge (H2) from it, without kernel depending on concrete tools.
 	agent.SetApprovalJudgeProvider(judgeProvider)
-	// Surface learned skills in the prompt so the agent reuses what it learned.
-	agent.SetSkillInventory(skillInventoryFor(tenantID))
+	// Skill candidates and the one active body are selected per work unit by
+	// the gateway. Do not inject the tenant-wide catalog into every prompt.
 	// Post-run memory extraction and label maintenance are intentionally owned
 	// by the daemon's single PostRunAnalyzer. The Agent must not launch a second
 	// extractor/profile model call for the same run.

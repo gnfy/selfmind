@@ -8,10 +8,123 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	"selfmind/internal/kernel"
 )
+
+// RankSkillCandidatesForTenant returns metadata-only candidates for one work
+// unit. Ranking is deterministic and bounded; it never loads full bodies into
+// the prompt and never calls a model.
+func RankSkillCandidatesForTenant(tenantID, query string, limit int, invocation ...map[string]interface{}) ([]SkillInfo, error) {
+	if limit <= 0 || limit > 3 {
+		limit = 3
+	}
+	skills, err := ListSkillsForTenant(tenantID, false, invocation...)
+	if err != nil {
+		return nil, err
+	}
+	tokens := skillQueryTokens(query)
+	type rankedSkill struct {
+		info  SkillInfo
+		score int
+	}
+	var ranked []rankedSkill
+	for _, info := range skills {
+		if info.State != SkillStateActive {
+			continue
+		}
+		haystack := strings.ToLower(info.Name + " " + info.Description)
+		lexicalScore := 0
+		matchedTokens := 0
+		cjkTokens := 0
+		for _, token := range tokens {
+			if strings.IndexFunc(token, func(r rune) bool { return unicode.Is(unicode.Han, r) }) >= 0 {
+				cjkTokens++
+			}
+			if strings.Contains(strings.ToLower(info.Name), token) {
+				lexicalScore += 8
+				matchedTokens++
+			} else if strings.Contains(haystack, token) {
+				lexicalScore += 3
+				matchedTokens++
+			}
+		}
+		if lexicalScore == 0 || (cjkTokens >= 3 && matchedTokens < 2) {
+			continue
+		}
+		score := lexicalScore
+		if info.Scope == SkillScopeWorkspace {
+			score++
+		}
+		ranked = append(ranked, rankedSkill{info: info, score: score})
+	}
+	sort.SliceStable(ranked, func(i, j int) bool {
+		if ranked[i].score != ranked[j].score {
+			return ranked[i].score > ranked[j].score
+		}
+		return ranked[i].info.Name < ranked[j].info.Name
+	})
+	if len(ranked) > limit {
+		ranked = ranked[:limit]
+	}
+	out := make([]SkillInfo, 0, len(ranked))
+	for _, item := range ranked {
+		out = append(out, item.info)
+	}
+	return out, nil
+}
+
+func skillQueryTokens(query string) []string {
+	seen := map[string]bool{}
+	var out []string
+	add := func(part string) {
+		if len(out) >= 32 {
+			return
+		}
+		part = strings.ToLower(strings.TrimSpace(part))
+		if len([]rune(part)) < 2 || seen[part] {
+			return
+		}
+		seen[part] = true
+		out = append(out, part)
+	}
+	var word, cjk []rune
+	flush := func() {
+		if len(word) >= 2 {
+			add(string(word))
+		}
+		word = word[:0]
+		if len(cjk) > 0 {
+			if len(cjk) <= 4 {
+				add(string(cjk))
+			}
+			for i := 0; i+2 <= len(cjk); i++ {
+				add(string(cjk[i : i+2]))
+			}
+		}
+		cjk = cjk[:0]
+	}
+	for _, r := range query {
+		switch {
+		case unicode.Is(unicode.Han, r):
+			if len(word) > 0 {
+				flush()
+			}
+			cjk = append(cjk, r)
+		case unicode.IsLetter(r) || unicode.IsDigit(r) || r == '_' || r == '-':
+			if len(cjk) > 0 {
+				flush()
+			}
+			word = append(word, unicode.ToLower(r))
+		default:
+			flush()
+		}
+	}
+	flush()
+	return out
+}
 
 type skillListEntry struct {
 	Name        string   `json:"name"`
@@ -73,7 +186,7 @@ func NewSkillViewTool() *SkillViewTool {
 	return &SkillViewTool{
 		BaseTool: BaseTool{
 			name:        "skill_view",
-			description: "Load a skill's full SKILL.md content or a specific linked file under references/, templates/, scripts/, or assets/.",
+			description: "Inspect a skill's SKILL.md or one linked file without activating or using it. Never substitute this for execution attribution; call skill_select when applying a Skill to the current work unit.",
 			schema: ToolSchema{
 				Type: "object",
 				Properties: map[string]PropertyDef{
@@ -150,7 +263,7 @@ func SkillViewJSONForTenant(tenantID, name, filePath string, invocation ...map[s
 		return "", err
 	}
 	_ = MarkSkillViewed(tenantID, info.Name)
-	emitSkillActivated(invocation, info, content, filePath, "skill_view")
+	emitSkillViewed(invocation, info, content, filePath)
 	out := map[string]interface{}{
 		"success":     true,
 		"name":        info.Name,
@@ -174,14 +287,14 @@ func SkillViewJSONForTenant(tenantID, name, filePath string, invocation ...map[s
 	return string(data), nil
 }
 
-func emitSkillActivated(invocation []map[string]interface{}, info SkillInfo, content, filePath, activation string) {
+func emitSkillViewed(invocation []map[string]interface{}, info SkillInfo, content, filePath string) {
 	if len(invocation) == 0 || invocation[0] == nil {
 		return
 	}
 	ctx := ContextFromArgs(invocation[0])
 	digest := sha256.Sum256([]byte(content))
 	kernel.EmitAgentEvent(kernel.EventChannelFromContext(ctx), kernel.AgentEvent{
-		Type: "skill.activated",
+		Type: "skill.viewed",
 		Payload: map[string]interface{}{
 			"name":         info.Name,
 			"version_hash": fmt.Sprintf("%x", digest[:]),
@@ -191,7 +304,7 @@ func emitSkillActivated(invocation []map[string]interface{}, info SkillInfo, con
 			"pinned":       info.Pinned,
 			"writable":     info.Writable,
 			"file_path":    filepath.ToSlash(filePath),
-			"activation":   activation,
+			"view_source":  "skill_view",
 		},
 	})
 }

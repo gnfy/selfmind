@@ -3,6 +3,7 @@ package eval
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"selfmind/internal/kernel/llm"
@@ -46,5 +47,34 @@ func TestCaptureFromFlight(t *testing.T) {
 	}
 	if len(c.Turns) != 1 || c.Turns[0].Input == "" {
 		t.Fatalf("turn not captured: %+v", c.Turns)
+	}
+}
+
+func TestCaptureFromFlightRejectsProviderFailure(t *testing.T) {
+	flight := t.TempDir()
+	t.Setenv("SELFMIND_FLIGHT_DIR", flight)
+	meta := llm.FlightMeta{
+		TurnID: "flight-failed", TenantID: "default", Channel: "cli",
+		Prompt: "finish the task", Output: "", CreatedAt: "2026-08-16T00:00:00Z",
+	}
+	if err := llm.WriteFlightMeta(meta); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(llm.FlightCassetteDir(meta.TurnID), "0000.json"),
+		[]byte(`{"method":"completion","error":"decode response: context deadline exceeded"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	vcr, out := t.TempDir(), t.TempDir()
+	_, err := CaptureFromFlight(meta.TurnID, CaptureOptions{Title: "must not promote failures", VCRDir: vcr, OutDir: out})
+	if err == nil || !strings.Contains(err.Error(), "records a provider failure") {
+		t.Fatalf("capture failure = %v", err)
+	}
+	entries, readErr := os.ReadDir(vcr)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("failed capture wrote cassette output: %+v", entries)
 	}
 }

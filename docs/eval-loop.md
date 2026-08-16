@@ -107,7 +107,9 @@ tests, for free.
 
    This writes a private draft to `evaldrafts/captured/` and copies that turn's
    cassette into `.vcr-drafts/<case-id>/`. Both roots are gitignored: a captured
-   prompt is not release evidence until somebody reviews it.
+   prompt is not release evidence until somebody reviews it. Capture rejects a
+   flight cassette containing a provider failure; rerun the turn successfully
+   instead of promoting a timeout or transport error as fixed model behavior.
 
 3. **Edit the draft** to encode *what should have happened* — fill in
    `assert_state` (e.g. a file that must exist, a task that must continue) and/or
@@ -127,6 +129,10 @@ recorded model outputs. Pure model-quality issues ("the answer was wrong") are
 documented by the captured case but only go green after a prompt change + a
 re-record, so treat those as a benchmark / model-routing signal (see the
 `dayinlife` scenario-5 provider-resilience probe).
+
+Live eval runs do not participate in flight recording. Only an explicit eval
+VCR `record` or `replay` mode assigns the case-id session; this keeps eval
+timeouts from creating orphan `~/.selfmind/flight/<case-id>` directories.
 
 Flight recording and capture only cover real user-facing turns; internal
 background/delegation turns are skipped. Clipboard/cloud caveats from
@@ -330,6 +336,21 @@ title). All three cases set `require_cassette: true`; see
 `evalcases/continuity/README.md` for the one-command recording instructions
 (`SELFMIND_EVAL_VCR=record selfmind eval run evalcases/continuity`) — the
 recorded `.vcr/continuity_*` directories must be committed.
+
+## Skill Lifecycle Suite
+
+`evalcases/skill-lifecycle/` protects the production message path for bounded
+Skill context and work-unit activation. Its cassette-backed cases prove that a
+task-bound Skill survives a CLI-to-IM continuation without injecting the Skill
+directory, one run can switch between two independently selected Skills, and
+unbound work receives at most three relevant candidate metadata rows. The
+assertions read durable `skill.activated`, `plan.updated`, and
+`context.selected` events rather than inferring behavior from the final prose.
+
+Work-unit identifiers are allocated by `control.db`, so their cassette form is
+request-relative (`{{SELFMIND_VCR_WORK_UNIT_N}}`). Replay maps those placeholders
+to the current run's identifiers; raw recording-time work-unit UUIDs are invalid
+release evidence.
 
 ## Architecture
 

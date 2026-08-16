@@ -264,6 +264,7 @@ func Run(ctx context.Context, opts Options) (runErr error) {
 		// A single explicit memory_extract-role pass handles both task-label
 		// hygiene and durable fact extraction after eligible runs.
 		PostRunAnalyzer: app.NewConfiguredPostRunAnalyzer(mem, cfg, defaultTenantID, controlStore),
+		SkillCurator:    app.NewConfiguredSkillCurator(mem, cfg, defaultTenantID, controlStore),
 		SelfEvolution: control.EvolutionPolicy{
 			Enabled: cfg.Evolution.Enabled, Mode: cfg.Evolution.Mode,
 			ShadowAfterObservations:  cfg.Evolution.ShadowAfterObservations,

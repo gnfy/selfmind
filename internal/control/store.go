@@ -78,6 +78,7 @@ type Run struct {
 	Channel      string     `json:"channel"`
 	InputSummary string     `json:"input_summary,omitempty"`
 	WorkKey      string     `json:"work_key,omitempty"`
+	WorkUnitID   string     `json:"work_unit_id,omitempty"`
 	Status       string     `json:"status"`
 	StartedAt    time.Time  `json:"started_at"`
 	FinishedAt   *time.Time `json:"finished_at,omitempty"`
@@ -841,6 +842,143 @@ CREATE TABLE IF NOT EXISTS evolution_candidates (
 );
 CREATE INDEX IF NOT EXISTS idx_evolution_candidates_active
 	ON evolution_candidates(tenant_id, person_id, workspace_id, status, updated_at);
+CREATE TABLE IF NOT EXISTS skill_versions (
+	control_tenant_id TEXT NOT NULL,
+	skill_key TEXT NOT NULL,
+	skill_name TEXT NOT NULL,
+	version_hash TEXT NOT NULL,
+	parent_version_hash TEXT NOT NULL DEFAULT '',
+	state TEXT NOT NULL,
+	content_ref TEXT NOT NULL DEFAULT '',
+	content_body TEXT NOT NULL DEFAULT '',
+	source_observation_ids_json TEXT NOT NULL DEFAULT '[]',
+	evidence_set_hash TEXT NOT NULL DEFAULT '',
+	evidence_json TEXT NOT NULL DEFAULT '{}',
+	created_by TEXT NOT NULL,
+	created_at INTEGER NOT NULL,
+	promoted_at INTEGER,
+	PRIMARY KEY(control_tenant_id, skill_key, version_hash)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_skill_versions_one_active
+	ON skill_versions(control_tenant_id, skill_key) WHERE state = 'active';
+CREATE UNIQUE INDEX IF NOT EXISTS idx_skill_versions_candidate_evidence
+	ON skill_versions(control_tenant_id, evidence_set_hash)
+	WHERE state = 'candidate' AND evidence_set_hash != '';
+CREATE TABLE IF NOT EXISTS run_work_units (
+	id TEXT PRIMARY KEY,
+	identity_tenant_id TEXT NOT NULL,
+	person_id TEXT NOT NULL,
+	workspace_id TEXT NOT NULL DEFAULT '',
+	run_id TEXT NOT NULL,
+	sequence INTEGER NOT NULL,
+	primary_task_id TEXT NOT NULL,
+	related_task_id TEXT NOT NULL DEFAULT '',
+	goal_digest TEXT NOT NULL DEFAULT '',
+	plan_status TEXT NOT NULL DEFAULT '',
+	status TEXT NOT NULL DEFAULT 'pending',
+	outcome_summary TEXT NOT NULL DEFAULT '',
+		verification_state TEXT NOT NULL DEFAULT '',
+		verification_refs_json TEXT NOT NULL DEFAULT '[]',
+		started_at INTEGER,
+		created_at INTEGER NOT NULL,
+		finished_at INTEGER,
+		started_cursor INTEGER NOT NULL DEFAULT 0,
+		finished_cursor INTEGER NOT NULL DEFAULT 0,
+		UNIQUE(run_id, sequence)
+);
+CREATE INDEX IF NOT EXISTS idx_run_work_units_run
+	ON run_work_units(identity_tenant_id, run_id, sequence);
+CREATE TABLE IF NOT EXISTS run_skill_activations (
+	id TEXT PRIMARY KEY,
+	identity_tenant_id TEXT NOT NULL,
+	control_tenant_id TEXT NOT NULL,
+	person_id TEXT NOT NULL,
+	workspace_id TEXT NOT NULL DEFAULT '',
+	run_id TEXT NOT NULL,
+	sequence INTEGER NOT NULL,
+	work_unit_id TEXT NOT NULL,
+	execution_lane TEXT NOT NULL DEFAULT 'main',
+	primary_task_id TEXT NOT NULL,
+	related_task_id TEXT NOT NULL DEFAULT '',
+	skill_key TEXT NOT NULL,
+	skill_name TEXT NOT NULL,
+	version_hash TEXT NOT NULL,
+	activation_source TEXT NOT NULL,
+	attachment_mode TEXT NOT NULL DEFAULT '',
+	state TEXT NOT NULL,
+	fallback_reason TEXT NOT NULL DEFAULT '',
+	selected_at INTEGER NOT NULL,
+	finished_at INTEGER,
+	UNIQUE(run_id, sequence)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_run_skill_activations_live_lane
+	ON run_skill_activations(run_id, work_unit_id, execution_lane)
+	WHERE state IN ('selected', 'active');
+CREATE INDEX IF NOT EXISTS idx_run_skill_activations_skill
+	ON run_skill_activations(control_tenant_id, skill_key, version_hash, selected_at);
+CREATE TABLE IF NOT EXISTS task_skill_bindings (
+	identity_tenant_id TEXT NOT NULL,
+	person_id TEXT NOT NULL,
+	task_id TEXT NOT NULL,
+	control_tenant_id TEXT NOT NULL,
+	workspace_id TEXT NOT NULL DEFAULT '',
+	skill_key TEXT NOT NULL,
+	skill_name TEXT NOT NULL,
+	state TEXT NOT NULL,
+	binding_source TEXT NOT NULL,
+	bound_from_run_id TEXT NOT NULL DEFAULT '',
+	last_resolved_version_hash TEXT NOT NULL DEFAULT '',
+	suspended_reason TEXT NOT NULL DEFAULT '',
+	created_at INTEGER NOT NULL,
+	updated_at INTEGER NOT NULL,
+	PRIMARY KEY(identity_tenant_id, person_id, task_id)
+);
+CREATE INDEX IF NOT EXISTS idx_task_skill_bindings_skill
+	ON task_skill_bindings(control_tenant_id, skill_key, state, updated_at);
+CREATE TABLE IF NOT EXISTS skill_failure_guards (
+	control_tenant_id TEXT NOT NULL,
+	skill_key TEXT NOT NULL,
+	version_hash TEXT NOT NULL,
+	failure_signature TEXT NOT NULL,
+	failed_step_id TEXT NOT NULL DEFAULT '',
+	error_category TEXT NOT NULL DEFAULT '',
+	normalized_input_shape TEXT NOT NULL DEFAULT '',
+	state TEXT NOT NULL DEFAULT 'active',
+	source_run_id TEXT NOT NULL,
+	created_at INTEGER NOT NULL,
+	occurrence_count INTEGER NOT NULL DEFAULT 1,
+	last_seen_at INTEGER NOT NULL DEFAULT 0,
+	PRIMARY KEY(control_tenant_id, skill_key, version_hash, failure_signature)
+);
+CREATE TABLE IF NOT EXISTS workflow_observations (
+	id TEXT PRIMARY KEY,
+	identity_tenant_id TEXT NOT NULL,
+	control_tenant_id TEXT NOT NULL,
+	person_id TEXT NOT NULL,
+	workspace_id TEXT NOT NULL DEFAULT '',
+	run_id TEXT NOT NULL,
+	work_unit_id TEXT NOT NULL UNIQUE,
+	related_task_id TEXT NOT NULL DEFAULT '',
+	workflow_signature TEXT NOT NULL,
+	goal_digest TEXT NOT NULL DEFAULT '',
+	environment_fingerprint TEXT NOT NULL DEFAULT '',
+	skill_key TEXT NOT NULL DEFAULT '',
+	version_hash TEXT NOT NULL DEFAULT '',
+	activation_state TEXT NOT NULL DEFAULT '',
+	outcome_status TEXT NOT NULL,
+	verification_state TEXT NOT NULL DEFAULT '',
+	tool_sequence_json TEXT NOT NULL DEFAULT '[]',
+	tool_failures INTEGER NOT NULL DEFAULT 0,
+	provider_calls INTEGER NOT NULL DEFAULT 0,
+	duration_ms INTEGER NOT NULL DEFAULT 0,
+	input_tokens INTEGER NOT NULL DEFAULT 0,
+	output_tokens INTEGER NOT NULL DEFAULT 0,
+	user_corrected INTEGER NOT NULL DEFAULT 0,
+	evidence_role TEXT NOT NULL DEFAULT 'audit',
+	created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_workflow_observations_cohort
+	ON workflow_observations(identity_tenant_id, person_id, workspace_id, workflow_signature, created_at);
 CREATE INDEX IF NOT EXISTS idx_task_events_run_created
 	ON task_events(run_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_external_watches_due
@@ -954,6 +1092,14 @@ CREATE INDEX IF NOT EXISTS idx_external_watches_owner
 		// that caused it. A successful half-open probe requeues only jobs for
 		// that route; unrelated provider/configuration failures remain blocked.
 		{"maintenance_jobs", "blocked_route_id", "TEXT NOT NULL DEFAULT ''"},
+		{"skill_failure_guards", "occurrence_count", "INTEGER NOT NULL DEFAULT 1"},
+		{"skill_failure_guards", "last_seen_at", "INTEGER NOT NULL DEFAULT 0"},
+		// Work-unit timing and cursor windows make outcome, verification, and cost
+		// attribution independent from the enclosing run. Older rows fall back to
+		// their creation/run boundaries until a later plan transition closes them.
+		{"run_work_units", "started_at", "INTEGER"},
+		{"run_work_units", "started_cursor", "INTEGER NOT NULL DEFAULT 0"},
+		{"run_work_units", "finished_cursor", "INTEGER NOT NULL DEFAULT 0"},
 		// Compatible providers such as DeepSeek report cache hit/miss and
 		// reasoning-token details outside the base OpenAI usage fields.
 		{"maintenance_provider_calls", "person_id", "TEXT NOT NULL DEFAULT ''"},
@@ -1994,6 +2140,7 @@ func (s *Store) startRun(ctx context.Context, task *Task, channel, inputSummary 
 		Status:       "running",
 		StartedAt:    time.Now(),
 	}
+	run.WorkUnitID = "wu_" + uuid.NewString()
 	// Insert the run and flip the task to running atomically: a partial write
 	// would leave tasks and task_runs disagreeing about the active run.
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -2005,6 +2152,15 @@ func (s *Store) startRun(ctx context.Context, task *Task, channel, inputSummary 
 		`INSERT INTO task_runs (id, task_id, tenant_id, person_id, workspace_id, channel, input_summary, work_key, status, started_at, heartbeat_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		run.ID, run.TaskID, run.TenantID, run.PersonID, run.WorkspaceID, run.Channel, run.InputSummary, run.WorkKey, run.Status, run.StartedAt.Unix(), run.StartedAt.Unix()); err != nil {
+		return nil, err
+	}
+	if _, err = tx.ExecContext(ctx,
+		`INSERT INTO run_work_units
+			 (id, identity_tenant_id, person_id, workspace_id, run_id, sequence, primary_task_id,
+			  related_task_id, goal_digest, plan_status, status, started_at, created_at, started_cursor)
+			 VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, 'in_progress', 'active', ?, ?, 0)`,
+		run.WorkUnitID, run.TenantID, run.PersonID, run.WorkspaceID, run.ID, run.TaskID,
+		run.TaskID, run.InputSummary, run.StartedAt.Unix(), run.StartedAt.Unix()); err != nil {
 		return nil, err
 	}
 	if _, err = tx.ExecContext(ctx,
@@ -2055,11 +2211,13 @@ func (s *Store) GetRun(ctx context.Context, tenantID, runID string) (*Run, error
 	var finished sql.NullInt64
 	err := s.db.QueryRowContext(ctx,
 		`SELECT id, task_id, tenant_id, person_id, COALESCE(workspace_id, ''), channel,
-		        COALESCE(input_summary, ''), COALESCE(work_key, ''), status, started_at, finished_at
+		        COALESCE(input_summary, ''), COALESCE(work_key, ''),
+		        COALESCE((SELECT id FROM run_work_units WHERE run_id = task_runs.id ORDER BY sequence LIMIT 1), ''),
+		        status, started_at, finished_at
 		 FROM task_runs WHERE tenant_id = ? AND id = ?`,
 		normalizeTenant(tenantID), runID).
 		Scan(&r.ID, &r.TaskID, &r.TenantID, &r.PersonID, &r.WorkspaceID, &r.Channel,
-			&r.InputSummary, &r.WorkKey, &r.Status, &started, &finished)
+			&r.InputSummary, &r.WorkKey, &r.WorkUnitID, &r.Status, &started, &finished)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}

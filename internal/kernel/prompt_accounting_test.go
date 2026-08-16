@@ -16,6 +16,7 @@ func TestBreakdownFromSections(t *testing.T) {
 		{Category: "tools", Tokens: 200, Stable: true},
 		{Category: "project_context", Tokens: 300},
 		{Category: "memory", Tokens: 50},
+		{Category: "skill", Tokens: 40},
 		{Category: "runtime", Tokens: 80},
 	}
 	messages := []llm.Message{
@@ -23,17 +24,17 @@ func TestBreakdownFromSections(t *testing.T) {
 		{Role: "user", Content: "hello world"},
 	}
 	b := BreakdownFromSections(sections, messages)
-	if b.Identity != 100 || b.Tools != 200 || b.ProjectContext != 300 || b.Memory != 50 || b.Runtime != 80 {
+	if b.Identity != 100 || b.Tools != 200 || b.ProjectContext != 300 || b.Memory != 50 || b.Skill != 40 || b.Runtime != 80 {
 		t.Fatalf("category mapping wrong: %+v", b)
 	}
 	if b.History <= 0 {
 		t.Fatal("non-system messages must count as history")
 	}
-	if b.Total != 730+b.History {
+	if b.Total != 770+b.History {
 		t.Fatalf("total mismatch: %+v", b)
 	}
 	stable, volatile := StableVolatileTokens(sections)
-	if stable != 300 || volatile != 430 {
+	if stable != 300 || volatile != 470 {
 		t.Fatalf("stable/volatile split wrong: %d/%d", stable, volatile)
 	}
 }
@@ -41,6 +42,8 @@ func TestBreakdownFromSections(t *testing.T) {
 func TestSplitRuntimePromptSectionsAndProviderCallBreakdown(t *testing.T) {
 	runtimePrompt := strings.Join([]string{
 		"# SELECTED RUNTIME CONTEXT",
+		"## Skill Candidates for Current Work Unit",
+		"- release-inspection: inspect release metadata",
 		"## Workspace",
 		"workspace_root: /repo",
 		"# DURABLE TASK CONTEXT",
@@ -60,7 +63,7 @@ func TestSplitRuntimePromptSectionsAndProviderCallBreakdown(t *testing.T) {
 		{Role: "user", Content: "prepare report"},
 		{Role: "tool", Content: "bounded command output"},
 	}, []llm.ToolDefinition{{Name: "read_file", Description: "Read one file"}})
-	for _, key := range []string{"stable_system", "tool_schemas", "history", "current_tool_results", "recall", "workspace", "artifacts", "memory", "task_runtime", "estimated_total"} {
+	for _, key := range []string{"stable_system", "tool_schemas", "history", "current_tool_results", "recall", "workspace", "artifacts", "memory", "skill", "task_runtime", "estimated_total"} {
 		value, ok := payload[key].(int)
 		if !ok || value <= 0 {
 			t.Fatalf("expected positive %s in %+v", key, payload)

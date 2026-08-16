@@ -22,7 +22,7 @@ var slashCommandMetas = []slashCommandMeta{
 	{Name: "/model", Usage: "/model", Description: "Show the daemon model and configuration command", Hint: "show model, provider, and how to change them"},
 	{Name: "/status", Usage: "/status", Description: "Show runtime status and background processes", Hint: "show runtime, gateway, and model state"},
 	{Name: "/tasks", Usage: "/tasks [open|done|archived|all|search <text>] [--workspace <id>] [--page <n>]", Description: "List or search paged work labels", Hint: "view and manage gateway tasks"},
-	{Name: "/skills", Usage: "/skills [list|view|history|undo|search|install|audit|delete|archive|pin|unpin|stats|reload]", Description: "Manage learned skills", Hint: "list, view, undo, install, or archive skills"},
+	{Name: "/skills", Usage: "/skills [list|view|candidates|candidate|promote|reject|rollback|binding|bind|unbind|history|undo|search|install|audit|delete|archive|pin|unpin|stats|reload]", Description: "Manage learned skills", Hint: "list, bind, review candidates, promote, or rollback skills"},
 	{Name: "/bundles", Usage: "/bundles [list|view|create|delete]", Description: "Manage skill bundles", Hint: "load multiple skills together"},
 	{Name: "/reload-skills", Usage: "/reload-skills", Description: "Reload skill tools from disk", Hint: "refresh skill commands"},
 	{Name: "/memory", Usage: "/memory [category|conflicts|search|show|correct|forget|pin|unpin|raw|history|undo]", Description: "Review and manage long-term memory", Hint: "review or manage saved memories"},

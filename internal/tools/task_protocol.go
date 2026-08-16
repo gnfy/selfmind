@@ -1,12 +1,48 @@
 package tools
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
 	"sync"
 )
+
+type planProjectionSinkContextKey struct{}
+
+type PlanWorkUnitIdentity struct {
+	ID              string               `json:"id"`
+	Sequence        int                  `json:"sequence"`
+	Goal            string               `json:"goal"`
+	PlanStatus      string               `json:"plan_status"`
+	RelatedTaskID   string               `json:"related_task_id,omitempty"`
+	BoundSkillName  string               `json:"bound_skill_name,omitempty"`
+	SkillCandidates []PlanSkillCandidate `json:"skill_candidates,omitempty"`
+}
+
+type PlanSkillCandidate struct {
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+}
+
+type PlanProjectionSink func(context.Context, []PlanStep) ([]PlanWorkUnitIdentity, error)
+
+func WithPlanProjectionSink(ctx context.Context, sink PlanProjectionSink) context.Context {
+	if ctx == nil || sink == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, planProjectionSinkContextKey{}, sink)
+}
+
+func planProjectionSinkFromArgs(args map[string]interface{}) PlanProjectionSink {
+	ctx := ContextFromArgs(args)
+	if ctx == nil {
+		return nil
+	}
+	sink, _ := ctx.Value(planProjectionSinkContextKey{}).(PlanProjectionSink)
+	return sink
+}
 
 type PlanTool struct {
 	BaseTool
@@ -25,8 +61,11 @@ type PlanState struct {
 }
 
 type PlanStep struct {
-	Step   string `json:"step"`
-	Status string `json:"status"`
+	Step          string `json:"step"`
+	Status        string `json:"status"`
+	RelatedTaskID string `json:"related_task_id,omitempty"`
+	WorkUnitID    string `json:"work_unit_id,omitempty"`
+	WorkUnit      bool   `json:"work_unit,omitempty"`
 }
 
 func NewPlanStore() *PlanStore {
@@ -69,6 +108,19 @@ func NewUpdatePlanToolWithStore(store *PlanStore) *PlanTool {
 									Type:        "string",
 									Description: "One of pending, in_progress, completed, cancelled.",
 									Enum:        []string{"pending", "in_progress", "completed", "cancelled"},
+								},
+								"related_task_id": {
+									Type:        "string",
+									Description: "Optional existing task id for an independent work unit. Use only when the user explicitly named that task or a deterministic task reference resolved it.",
+								},
+								"work_unit_id": {
+									Type:        "string",
+									Description: "Stable work-unit id returned by an earlier update_plan result. Echo it when updating or reordering the same independent objective; never invent one.",
+								},
+								"work_unit": {
+									Type:        "boolean",
+									Description: "True only when this step begins an independent objective or Skill boundary. Ordinary inspect/edit/verify refinements remain in the current work unit.",
+									Default:     false,
 								},
 							},
 							Required: []string{"step", "status"},
@@ -115,6 +167,13 @@ func (t *PlanTool) Execute(args map[string]interface{}) (string, error) {
 		Explanation: taskStringArg(args, "explanation"),
 		Plan:        steps,
 	}
+	var workUnits []PlanWorkUnitIdentity
+	if sink := planProjectionSinkFromArgs(args); sink != nil {
+		workUnits, err = sink(ContextFromArgs(args), steps)
+		if err != nil {
+			return "", err
+		}
+	}
 	changed := true
 	if t.store != nil {
 		key := planKey(args)
@@ -132,8 +191,9 @@ func (t *PlanTool) Execute(args map[string]interface{}) (string, error) {
 	}
 	data, _ := json.Marshal(struct {
 		PlanState
-		Changed bool `json:"changed"`
-	}{PlanState: state, Changed: changed})
+		Changed   bool                   `json:"changed"`
+		WorkUnits []PlanWorkUnitIdentity `json:"work_units,omitempty"`
+	}{PlanState: state, Changed: changed, WorkUnits: workUnits})
 	return string(data), nil
 }
 
@@ -191,7 +251,8 @@ func samePlanSteps(a, b []PlanStep) bool {
 		return false
 	}
 	for i := range a {
-		if a[i].Step != b[i].Step || a[i].Status != b[i].Status {
+		if a[i].Step != b[i].Step || a[i].Status != b[i].Status || a[i].RelatedTaskID != b[i].RelatedTaskID ||
+			a[i].WorkUnitID != b[i].WorkUnitID || a[i].WorkUnit != b[i].WorkUnit {
 			return false
 		}
 	}
@@ -208,8 +269,11 @@ func planStepsFromArgs(raw interface{}) ([]PlanStep, error) {
 				return nil, fmt.Errorf("plan items must be objects")
 			}
 			steps = append(steps, PlanStep{
-				Step:   fmt.Sprintf("%v", obj["step"]),
-				Status: fmt.Sprintf("%v", obj["status"]),
+				Step:          fmt.Sprintf("%v", obj["step"]),
+				Status:        fmt.Sprintf("%v", obj["status"]),
+				RelatedTaskID: taskStringArg(obj, "related_task_id"),
+				WorkUnitID:    taskStringArg(obj, "work_unit_id"),
+				WorkUnit:      taskBoolArg(obj, "work_unit"),
 			})
 		}
 		return steps, nil

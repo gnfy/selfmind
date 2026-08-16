@@ -2,13 +2,16 @@ package eval
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"selfmind/internal/control"
+	"selfmind/internal/kernel"
 	"selfmind/internal/kernel/memory"
+	"selfmind/internal/tools"
 )
 
 // Setup describes the initial world a scenario runs against: seed files in the
@@ -29,8 +32,9 @@ type SeedFact struct {
 }
 
 type SeedTask struct {
-	Title  string `yaml:"title" json:"title,omitempty"`
-	Status string `yaml:"status" json:"status,omitempty"`
+	Title        string `yaml:"title" json:"title,omitempty"`
+	Status       string `yaml:"status" json:"status,omitempty"`
+	DefaultSkill string `yaml:"default_skill,omitempty" json:"default_skill,omitempty"`
 }
 
 // StatePredicate is a single assertion over the world state after a scenario
@@ -105,7 +109,7 @@ func applyFileSeeds(workspaceRoot string, files map[string]string) error {
 // applyStateSeeds seeds memory facts and an optional current task before the
 // first turn. Files are handled separately (they must land before the harness
 // starts using the workspace).
-func applyStateSeeds(ctx context.Context, store *control.Store, mem *memory.MemoryManager, identity *control.IdentityContext, workspaceID string, setup *Setup) error {
+func applyStateSeeds(ctx context.Context, store *control.Store, mem *memory.MemoryManager, identity *control.IdentityContext, workspaceID, workspaceRoot string, setup *Setup) error {
 	if setup == nil || identity == nil {
 		return nil
 	}
@@ -161,6 +165,26 @@ func applyStateSeeds(ctx context.Context, store *control.Store, mem *memory.Memo
 		}
 		if err := store.SetCurrentTask(ctx, identity.TenantID, identity.PersonID, task.ID); err != nil {
 			return err
+		}
+		if skillName := kernel.SanitizeSkillName(setup.Task.DefaultSkill); skillName != "" {
+			skillsRoot := filepath.Join(workspaceRoot, ".selfmind", "skills")
+			skillPath := filepath.Join(skillsRoot, skillName, "SKILL.md")
+			content, err := os.ReadFile(skillPath)
+			if err != nil {
+				return fmt.Errorf("seed default Skill %s: %w", skillName, err)
+			}
+			digest := sha256.Sum256(content)
+			_, err = store.BindTaskSkill(ctx, control.BindTaskSkillInput{
+				IdentityTenantID: identity.TenantID, PersonID: identity.PersonID, TaskID: task.ID,
+				ControlTenantID: identity.TenantID, WorkspaceID: workspaceID,
+				SkillKey: control.SkillKey(identity.TenantID, skillName, tools.SkillScopeWorkspace,
+					"workspace", skillsRoot, filepath.Join(skillName, "SKILL.md")),
+				SkillName: skillName, BindingSource: "eval_setup",
+				VersionHash: fmt.Sprintf("%x", digest[:]),
+			})
+			if err != nil {
+				return fmt.Errorf("bind seeded default Skill %s: %w", skillName, err)
+			}
 		}
 	}
 	return nil

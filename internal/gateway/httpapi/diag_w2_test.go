@@ -37,9 +37,9 @@ func TestLatestProviderContextBreakdownLine(t *testing.T) {
 		"iteration": 2, "transport": "stream", "estimated_total": 1234,
 		"stable_system": 300, "tool_schemas": 400, "history": 200,
 		"current_tool_results": 100, "workspace": 80, "task_runtime": 60,
-		"recall": 40, "memory": 30, "artifacts": 24,
+		"skill": 50, "recall": 40, "memory": 30, "artifacts": 24,
 	})})
-	for _, want := range []string{"#2 stream", "~1234 tok", "tool schemas 400", "tool results 100", "recall 40", "artifacts 24"} {
+	for _, want := range []string{"#2 stream", "~1234 tok", "tool schemas 400", "tool results 100", "skill 50", "recall 40", "artifacts 24"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("provider breakdown missing %q: %s", want, out)
 		}

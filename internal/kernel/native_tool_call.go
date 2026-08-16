@@ -535,9 +535,13 @@ func planItemsFromArgs(args map[string]interface{}) []PlanItem {
 		if !ok {
 			continue
 		}
+		workUnit, _ := obj["work_unit"].(bool)
 		items = append(items, PlanItem{
-			Step:   fmt.Sprintf("%v", obj["step"]),
-			Status: fmt.Sprintf("%v", obj["status"]),
+			Step:          fmt.Sprintf("%v", obj["step"]),
+			Status:        fmt.Sprintf("%v", obj["status"]),
+			RelatedTaskID: stringArg(obj, "related_task_id"),
+			WorkUnitID:    stringArg(obj, "work_unit_id"),
+			WorkUnit:      workUnit,
 		})
 	}
 	return items

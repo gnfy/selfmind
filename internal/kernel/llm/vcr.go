@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -35,6 +36,8 @@ type vcrSessionCtxKey struct{}
 type vcrWorkspaceCtxKey struct{}
 
 const vcrWorkspacePlaceholder = "{{SELFMIND_VCR_WORKSPACE}}"
+
+var vcrWorkUnitIDPattern = regexp.MustCompile(`\bwu_[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b`)
 
 // WithVCRSession tags a context so provider calls made under it are recorded or
 // replayed against the named session.
@@ -239,7 +242,7 @@ func (v *vcrProvider) nextKey(ctx context.Context) (string, bool) {
 	return filepath.Join(v.dir, sanitizeVCR(session), fmt.Sprintf("%04d.json", n)), true
 }
 
-func (v *vcrProvider) load(ctx context.Context, path string) (*cassette, error) {
+func (v *vcrProvider) load(ctx context.Context, path string, messages []Message) (*cassette, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
@@ -249,6 +252,9 @@ func (v *vcrProvider) load(ctx context.Context, path string) (*cassette, error) 
 		return nil, err
 	}
 	c = rewriteCassette(c, vcrWorkspacePlaceholder, vcrWorkspaceFromContext(ctx))
+	for i, id := range vcrWorkUnitIDs(messages) {
+		c = rewriteCassette(c, vcrWorkUnitPlaceholder(i), id)
+	}
 	return &c, nil
 }
 
@@ -263,7 +269,7 @@ func cassetteMiss(path, method string, recorded *cassette, loadErr error) error 
 	return fmt.Errorf("%w: method=%s path=%s recorded_method=%s", ErrCassetteMiss, method, path, recordedMethod)
 }
 
-func (v *vcrProvider) save(ctx context.Context, path string, c cassette) {
+func (v *vcrProvider) save(ctx context.Context, path string, c cassette, messages []Message) {
 	if strings.TrimSpace(c.Error) != "" {
 		// Recording the failure is REQUIRED: cassettes replay by ordinal, so a
 		// hole here would desynchronize every later call in the case. Say so
@@ -284,6 +290,9 @@ func (v *vcrProvider) save(ctx context.Context, path string, c cassette) {
 	}
 	_ = os.Chmod(dir, 0o700)
 	c = rewriteCassette(c, vcrWorkspaceFromContext(ctx), vcrWorkspacePlaceholder)
+	for i, id := range vcrWorkUnitIDs(messages) {
+		c = rewriteCassette(c, id, vcrWorkUnitPlaceholder(i))
+	}
 	data, err := json.MarshalIndent(c, "", "  ")
 	if err != nil {
 		return
@@ -299,7 +308,7 @@ func (v *vcrProvider) StreamChat(ctx context.Context, req ChatRequest) (<-chan S
 		if !ok {
 			return v.inner.StreamChat(ctx, req)
 		}
-		c, loadErr := v.load(ctx, key)
+		c, loadErr := v.load(ctx, key, req.Messages)
 		if loadErr == nil && c.Method == "stream" {
 			if c.Error != "" {
 				return nil, errors.New(c.Error)
@@ -315,7 +324,7 @@ func (v *vcrProvider) StreamChat(ctx context.Context, req ChatRequest) (<-chan S
 	in, err := v.inner.StreamChat(ctx, req)
 	if err != nil {
 		if ok {
-			v.save(ctx, key, cassette{Method: "stream", Error: err.Error()})
+			v.save(ctx, key, cassette{Method: "stream", Error: err.Error()}, req.Messages)
 		}
 		return nil, err
 	}
@@ -330,7 +339,7 @@ func (v *vcrProvider) StreamChat(ctx context.Context, req ChatRequest) (<-chan S
 			rec = append(rec, toRecorded(ev))
 			out <- ev
 		}
-		v.save(ctx, key, cassette{Method: "stream", Events: rec})
+		v.save(ctx, key, cassette{Method: "stream", Events: rec}, req.Messages)
 	}()
 	return out, nil
 }
@@ -341,7 +350,7 @@ func (v *vcrProvider) Chat(ctx context.Context, req ChatRequest) (*ChatResponse,
 		if !ok {
 			return v.inner.Chat(ctx, req)
 		}
-		c, loadErr := v.load(ctx, key)
+		c, loadErr := v.load(ctx, key, req.Messages)
 		if loadErr == nil && c.Method == "chat" {
 			if c.Error != "" {
 				return nil, errors.New(c.Error)
@@ -359,7 +368,7 @@ func (v *vcrProvider) Chat(ctx context.Context, req ChatRequest) (*ChatResponse,
 	resp, err := v.inner.Chat(ctx, req)
 	if err != nil {
 		if ok {
-			v.save(ctx, key, cassette{Method: "chat", Error: err.Error()})
+			v.save(ctx, key, cassette{Method: "chat", Error: err.Error()}, req.Messages)
 		}
 		return resp, err
 	}
@@ -367,7 +376,7 @@ func (v *vcrProvider) Chat(ctx context.Context, req ChatRequest) (*ChatResponse,
 		return resp, err
 	}
 	if ok {
-		v.save(ctx, key, cassette{Method: "chat", Chat: resp})
+		v.save(ctx, key, cassette{Method: "chat", Chat: resp}, req.Messages)
 	}
 	return resp, err
 }
@@ -378,7 +387,7 @@ func (v *vcrProvider) ChatCompletion(ctx context.Context, messages []Message) (s
 		if !ok {
 			return v.inner.ChatCompletion(ctx, messages)
 		}
-		c, loadErr := v.load(ctx, key)
+		c, loadErr := v.load(ctx, key, messages)
 		if loadErr == nil && c.Method == "completion" {
 			if c.Error != "" {
 				return "", errors.New(c.Error)
@@ -394,12 +403,12 @@ func (v *vcrProvider) ChatCompletion(ctx context.Context, messages []Message) (s
 	text, err := v.inner.ChatCompletion(ctx, messages)
 	if err != nil {
 		if ok {
-			v.save(ctx, key, cassette{Method: "completion", Error: err.Error()})
+			v.save(ctx, key, cassette{Method: "completion", Error: err.Error()}, messages)
 		}
 		return text, err
 	}
 	if ok {
-		v.save(ctx, key, cassette{Method: "completion", Completion: text})
+		v.save(ctx, key, cassette{Method: "completion", Completion: text}, messages)
 	}
 	return text, err
 }
@@ -465,6 +474,33 @@ func rewriteCassette(c cassette, from, to string) cassette {
 		c.Events = events
 	}
 	return c
+}
+
+func vcrWorkUnitPlaceholder(index int) string {
+	return fmt.Sprintf("{{SELFMIND_VCR_WORK_UNIT_%d}}", index+1)
+}
+
+func vcrWorkUnitIDs(messages []Message) []string {
+	seen := map[string]bool{}
+	var out []string
+	add := func(value string) {
+		for _, id := range vcrWorkUnitIDPattern.FindAllString(value, -1) {
+			if !seen[id] {
+				seen[id] = true
+				out = append(out, id)
+			}
+		}
+	}
+	for _, message := range messages {
+		add(message.Content)
+		for _, part := range message.MultiContent {
+			add(part.Text)
+		}
+		for _, call := range message.ToolCalls {
+			add(call.Args)
+		}
+	}
+	return out
 }
 
 func rewriteVCRToolCalls(calls []ToolCall, from, to string) []ToolCall {

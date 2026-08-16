@@ -161,7 +161,7 @@ func TestDurableBackgroundReviewPropagatesQuotaError(t *testing.T) {
 	engine := NewBackgroundReviewEngine(memory.NewMemoryManager(provider), &fakeClaimBackend{}, model,
 		EvolutionConfig{Enabled: true}, 1, 1)
 	payload, err := json.Marshal(ReviewJobPayload{
-		Channel: "cli", ReviewSkills: true,
+		Channel: "cli", ReviewMemory: true,
 		Messages: []ReviewMessage{{Role: "user", Content: "remember this workflow"}},
 	})
 	if err != nil {

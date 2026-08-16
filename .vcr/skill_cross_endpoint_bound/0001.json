@@ -1,0 +1,89 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "content": "我"
+    },
+    {
+      "content": "会"
+    },
+    {
+      "content": "只"
+    },
+    {
+      "content": "读"
+    },
+    {
+      "content": "检查"
+    },
+    {
+      "content": "工作"
+    },
+    {
+      "content": "区"
+    },
+    {
+      "content": "中的"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "release"
+    },
+    {
+      "content": ".txt"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": "，"
+    },
+    {
+      "content": "并"
+    },
+    {
+      "content": "原"
+    },
+    {
+      "content": "样"
+    },
+    {
+      "content": "报告"
+    },
+    {
+      "content": "版本"
+    },
+    {
+      "content": "号"
+    },
+    {
+      "content": "。"
+    },
+    {
+      "content": "Preparing to run read_file",
+      "event_type": "agent.thinking"
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_AQ2lmecw7wNQtejZqPaBOpY9",
+          "Function": "read_file",
+          "Args": "{\"path\":\"{{SELFMIND_VCR_WORKSPACE}}/release.txt\",\"limit\":50,\"max_bytes\":4096}"
+        }
+      ]
+    },
+    {
+      "usage": {
+        "input_tokens": 6790,
+        "output_tokens": 125,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 6790,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0,
+        "cache_usage_reported": true
+      }
+    }
+  ]
+}

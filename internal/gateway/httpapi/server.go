@@ -102,6 +102,10 @@ type Server struct {
 	// SkillReviewer executes durable background-review jobs (execution-quality
 	// W7); nil disables the worker's review pass (reviews stay in-process).
 	SkillReviewer SkillReviewRunner
+	// SkillCurator is the sole model-backed Skill proposal authority. It only
+	// writes candidate versions from bounded comparable cohorts; active files
+	// remain unchanged until deterministic promotion policy approves them.
+	SkillCurator SkillCuratorRunner
 
 	mu           sync.Mutex
 	draining     bool
@@ -607,6 +611,15 @@ const (
 
 func (a taskAttach) claimsPriorRuns() bool {
 	return a.resolvedPolicy().ClaimsPriorRuns
+}
+
+func (a taskAttach) allowsTaskSkillBinding() bool {
+	switch a.reason {
+	case taskAttachExplicitTaskID, taskAttachContinuation, taskAttachResumePin, taskAttachReferenceContinue:
+		return true
+	default:
+		return false
+	}
 }
 
 func (a taskAttach) resolvedPolicy() attachPolicy {

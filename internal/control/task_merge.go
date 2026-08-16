@@ -150,6 +150,59 @@ func (s *Store) MergeTasks(ctx context.Context, tenantID, personID, srcID, dstID
 			return 0, err
 		}
 	}
+	// A task has at most one default Skill affinity. Merging labels must never
+	// turn two different defaults into a multi-Skill prompt: migrate the source
+	// only when the destination has none; otherwise preserve the destination and
+	// release the source binding for audit (same-key bindings are folded too).
+	type mergeBinding struct {
+		skillKey string
+		state    string
+	}
+	loadBinding := func(taskID string) (*mergeBinding, error) {
+		var binding mergeBinding
+		err := tx.QueryRowContext(ctx, `SELECT skill_key, state FROM task_skill_bindings
+			WHERE identity_tenant_id=? AND person_id=? AND task_id=?`, tenant, srcPerson, taskID).
+			Scan(&binding.skillKey, &binding.state)
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		return &binding, nil
+	}
+	sourceBinding, err := loadBinding(srcID)
+	if err != nil {
+		return 0, err
+	}
+	targetBinding, err := loadBinding(dstID)
+	if err != nil {
+		return 0, err
+	}
+	if sourceBinding != nil && sourceBinding.state != TaskSkillBindingReleased {
+		if targetBinding == nil || targetBinding.state == TaskSkillBindingReleased {
+			if targetBinding != nil {
+				if _, err := tx.ExecContext(ctx, `DELETE FROM task_skill_bindings
+					WHERE identity_tenant_id=? AND person_id=? AND task_id=?`, tenant, srcPerson, dstID); err != nil {
+					return 0, err
+				}
+			}
+			if _, err := tx.ExecContext(ctx, `UPDATE task_skill_bindings SET task_id=?, updated_at=?
+				WHERE identity_tenant_id=? AND person_id=? AND task_id=?`, dstID, now, tenant, srcPerson, srcID); err != nil {
+				return 0, err
+			}
+		} else {
+			reason := "released by task merge; destination binding preserved"
+			if sourceBinding.skillKey != targetBinding.skillKey {
+				reason = "released by task merge due to binding conflict; destination binding preserved"
+			}
+			if _, err := tx.ExecContext(ctx, `UPDATE task_skill_bindings SET state='released',
+				suspended_reason=?, updated_at=? WHERE identity_tenant_id=? AND person_id=? AND task_id=?`,
+				reason, now, tenant, srcPerson, srcID); err != nil {
+				return 0, err
+			}
+		}
+	}
 	// A current-task pointer at src follows the work to dst.
 	if _, err := tx.ExecContext(ctx,
 		`UPDATE current_task SET task_id = ?, updated_at = ? WHERE tenant_id = ? AND task_id = ?`,

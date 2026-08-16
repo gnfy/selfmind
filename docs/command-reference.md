@@ -306,7 +306,7 @@ before normal agent dispatch.
 These commands depend on local TUI state and are not sent through IM channels.
 
 ```text
-/skills [list|view|history|undo|search|install|audit|delete|archive|pin|unpin|stats|reload]
+/skills [list|view|candidates|candidate|promote|reject|rollback|binding|bind|unbind|history|undo|search|install|audit|delete|archive|pin|unpin|stats|reload]
 /bundles [list|view|create|delete]
 /reload-skills
 /memory [category|conflicts|search|show|correct|forget|pin|unpin|raw|history|undo]
@@ -324,6 +324,11 @@ These commands depend on local TUI state and are not sent through IM channels.
 
 - `/memory` presents the human-oriented memory index; its subcommands inspect,
   correct, pin, forget, and audit canonical memories.
+- `/skills bind <name>` assigns the current task one default logical Skill;
+  `/skills unbind` releases it. `/skills candidates` lists inactive curator
+  proposals, and `candidate`, `promote`, `reject`, and `rollback` manage an
+  explicit version hash. Candidate and previous bodies are never added to an
+  ordinary agent prompt.
 - `/search` is the single look-back entry point: `/search current` opens this
   conversation with complete diffs, a query finds past working sessions, and
   bare `/search` lists recent ones. `/copy` copies the last assistant answer.

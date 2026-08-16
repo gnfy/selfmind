@@ -347,7 +347,7 @@ func (m *uiModel) handleSkills(args []string) tea.Cmd {
 				}
 				sb.WriteString(fmt.Sprintf("- **%s** [%s/%s%s]: %s\n  _%s_\n", s.Name, s.State, s.Source, pin, valueOr(s.Description, "(no description)"), s.Path))
 			}
-			sb.WriteString("\nCommands: /skills view <name>, /skills history <name>, /skills undo <change_id>, /skills search <query>, /skills archive <name>, /skills pin <name>, /skills stats")
+			sb.WriteString("\nCommands: /skills view <name>, /skills bind <name>, /skills unbind, /skills candidates, /skills candidate <version>, /skills promote <version>, /skills reject <version>, /skills rollback <version>")
 			return MsgAgentDone{Response: sb.String()}
 		case "view":
 			if len(args) < 2 {
@@ -372,6 +372,58 @@ func (m *uiModel) handleSkills(args []string) tea.Cmd {
 				sb.WriteString(fmt.Sprintf("- **%s**: %s\n", s.Name, valueOr(s.Description, "(no description)")))
 			}
 			return MsgAgentDone{Response: sb.String()}
+		case "candidates":
+			request := map[string]interface{}{"action": "candidate_list", "_tenant_id": m.tenantID}
+			if len(args) >= 2 {
+				request["name"] = args[1]
+			}
+			resp, err := m.dispatch("skill_lifecycle_manage", request)
+			if err != nil {
+				return MsgAgentDone{Response: fmt.Sprintf("Error loading Skill candidates: %v", err)}
+			}
+			return MsgAgentDone{Response: resp}
+		case "candidate", "promote", "reject", "rollback":
+			if len(args) < 2 {
+				return MsgAgentDone{Response: "Usage: /skills " + action + " <version_hash> [skill_key]"}
+			}
+			lifecycleAction := map[string]string{
+				"candidate": "candidate_read", "promote": "candidate_promote",
+				"reject": "candidate_reject", "rollback": "rollback",
+			}[action]
+			request := map[string]interface{}{
+				"action": lifecycleAction, "version_hash": args[1], "_tenant_id": m.tenantID,
+			}
+			if len(args) >= 3 {
+				request["skill_key"] = args[2]
+			}
+			resp, err := m.dispatch("skill_lifecycle_manage", request)
+			if err != nil {
+				return MsgAgentDone{Response: fmt.Sprintf("Skill lifecycle error: %v", err)}
+			}
+			return MsgAgentDone{Response: resp}
+		case "binding":
+			resp, err := m.dispatch("skill_lifecycle_manage", map[string]interface{}{"action": "binding_get", "_tenant_id": m.tenantID})
+			if err != nil {
+				return MsgAgentDone{Response: fmt.Sprintf("Error loading Skill binding: %v", err)}
+			}
+			return MsgAgentDone{Response: resp}
+		case "bind":
+			if len(args) < 2 {
+				return MsgAgentDone{Response: "Usage: /skills bind <name>"}
+			}
+			resp, err := m.dispatch("skill_lifecycle_manage", map[string]interface{}{
+				"action": "binding_bind", "name": args[1], "_tenant_id": m.tenantID,
+			})
+			if err != nil {
+				return MsgAgentDone{Response: fmt.Sprintf("Error binding Skill: %v", err)}
+			}
+			return MsgAgentDone{Response: resp}
+		case "unbind":
+			resp, err := m.dispatch("skill_lifecycle_manage", map[string]interface{}{"action": "binding_unbind", "_tenant_id": m.tenantID})
+			if err != nil {
+				return MsgAgentDone{Response: fmt.Sprintf("Error releasing Skill binding: %v", err)}
+			}
+			return MsgAgentDone{Response: resp}
 		case "history":
 			if len(args) < 2 {
 				return MsgAgentDone{Response: "Usage: /skills history <name>"}
@@ -447,7 +499,7 @@ func (m *uiModel) handleSkills(args []string) tea.Cmd {
 			if len(args) < 2 {
 				return MsgAgentDone{Response: "Usage: /skills archive <name>"}
 			}
-			resp, err := tools.ArchiveSkillForTenant(m.tenantID, args[1])
+			resp, err := m.dispatch("skill_manage", map[string]interface{}{"action": "archive", "name": args[1], "_tenant_id": m.tenantID})
 			if err != nil {
 				return MsgAgentDone{Response: fmt.Sprintf("Error archiving skill: %v", err)}
 			}
@@ -481,7 +533,7 @@ func (m *uiModel) handleSkills(args []string) tea.Cmd {
 			}
 			return MsgAgentDone{Response: resp}
 		default:
-			return MsgAgentDone{Response: "Usage: /skills [list|view|history|undo|search|catalog|install|audit|delete|archive|pin|unpin|stats|reload]"}
+			return MsgAgentDone{Response: "Usage: /skills [list|view|candidates|candidate|promote|reject|rollback|binding|bind|unbind|history|undo|search|catalog|install|audit|delete|archive|pin|unpin|stats|reload]"}
 		}
 	}
 }

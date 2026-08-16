@@ -1,0 +1,63 @@
+id: skill_multi_work_unit_switch
+title: "One run switches Skills between two independent work units"
+suite: skill-lifecycle
+workspace: isolated
+channel: cli
+require_cassette: true
+
+setup:
+  files:
+    frontend.txt: "frontend=web-7\n"
+    backend.txt: "backend=api-9\n"
+    .selfmind/skills/frontend-inspection/SKILL.md: |-
+      ---
+      name: frontend-inspection
+      description: 检查 frontend.txt 前端版本和前端清单
+      ---
+
+      Read `frontend.txt` with the read-only file tool and report its exact
+      value. Do not read `backend.txt` under this Skill.
+    .selfmind/skills/backend-inspection/SKILL.md: |-
+      ---
+      name: backend-inspection
+      description: 检查 backend.txt 后端版本和后端清单
+      ---
+
+      Read `backend.txt` with the read-only file tool and report its exact
+      value. Do not read `frontend.txt` under this Skill.
+
+turns:
+  - input: >-
+      这是两个独立子任务。先读取 frontend.txt 得到前端版本，再读取
+      backend.txt 得到后端版本。请使用 update_plan，把两个目标分别标记为
+      独立 work unit；每个 work unit 选择名称对应的 Skill，完成第一个后再
+      切换到第二个。最后同时告诉我两个精确值，不要修改文件。
+
+expect:
+  status: completed
+  contains: ["web-7", "api-9"]
+  require_tool_events: true
+  min_tool_calls: 4
+  max_tool_errors: 0
+  max_duration_seconds: 240
+
+assert_state:
+  - on: events
+    type: skill.activated
+    payload_contains: '"name":"frontend-inspection"'
+    count_gte: 1
+  - on: events
+    type: skill.activated
+    payload_contains: '"name":"backend-inspection"'
+    count_gte: 1
+  - on: events
+    type: plan.updated
+    payload_contains: '"work_units"'
+    count_gte: 2
+
+checks:
+  no_mojibake: true
+  no_raw_json_leak: true
+  no_empty_response: true
+  no_provider_stack_dump: true
+

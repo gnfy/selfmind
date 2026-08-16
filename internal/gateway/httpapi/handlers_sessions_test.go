@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"selfmind/internal/control"
@@ -89,6 +90,89 @@ func TestDispatchPartitionScoping(t *testing.T) {
 	call("skill_manage")
 	if got, _ := skillTool.got["_tenant_id"].(string); got != identity.TenantID {
 		t.Fatalf("skill_manage dispatched with _tenant_id=%q, want control tenant %q", got, identity.TenantID)
+	}
+	scope, ok := skillTool.got["_invocation_scope"].(kernel.ToolInvocationScope)
+	if !ok || scope.ControlTenantID != identity.TenantID || scope.PersonID != identity.PersonID || scope.SkillMutationMode != kernel.SkillMutationDirect {
+		t.Fatalf("skill_manage dispatch scope = %+v, want authenticated direct management scope", scope)
+	}
+}
+
+func TestDispatchSkillManageMutationsUseAuthenticatedManagementScope(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("SELF_GATEWAY_TOKEN", "")
+	t.Setenv("SELF_DAEMON_TOKEN", "")
+	store, err := control.OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	tool := tools.NewSkillManageTool()
+	direct := kernel.ToolInvocationScope{ControlTenantID: "default", SkillMutationMode: kernel.SkillMutationDirect}
+	create := func(name string) {
+		t.Helper()
+		if _, err := tool.Execute(map[string]interface{}{
+			"action": "create", "name": name, "content": "Verified reusable instructions.",
+			"_invocation_scope": direct,
+		}); err != nil {
+			t.Fatalf("create %s: %v", name, err)
+		}
+	}
+	for _, name := range []string{"pin-flow", "delete-flow", "archive-flow", "undo-flow"} {
+		create(name)
+	}
+	changes, err := tools.ListSkillLearningChanges("default", "undo-flow", 10)
+	if err != nil || len(changes) == 0 {
+		t.Fatalf("load undo change: changes=%+v err=%v", changes, err)
+	}
+	undoID := changes[0].ID
+
+	reg := tools.NewRegistry()
+	reg.Register(tool)
+	disp := tools.NewDispatcherWithRegistry(reg)
+	agent := kernel.NewAgent(memory.NewMemoryManager(nil), disp, nil, "test", 1, 1, nil)
+	daemon := &Server{
+		Control: store, Gateway: router.NewGateway(nil, nil, agent, nil), DefaultTenantID: "default",
+	}
+	dispatch := func(action string, args map[string]interface{}) string {
+		t.Helper()
+		if args == nil {
+			args = map[string]interface{}{}
+		}
+		args["action"] = action
+		body, _ := json.Marshal(api.DispatchRequest{
+			Tool: "skill_manage", Platform: "cli", PlatformUserID: "local", Args: args,
+		})
+		req := httptest.NewRequest(http.MethodPost, "/v1/dispatch", bytes.NewReader(body))
+		rec := httptest.NewRecorder()
+		daemon.Handler().ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("dispatch %s status=%d body=%s", action, rec.Code, rec.Body.String())
+		}
+		var response api.DispatchResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+			t.Fatalf("decode %s response: %v", action, err)
+		}
+		if response.Error != "" {
+			t.Fatalf("dispatch %s failed: %s", action, response.Error)
+		}
+		return response.Result
+	}
+
+	if result := dispatch("pin", map[string]interface{}{"name": "pin-flow"}); !strings.Contains(result, "pinned") {
+		t.Fatalf("pin result=%q", result)
+	}
+	if result := dispatch("unpin", map[string]interface{}{"name": "pin-flow"}); !strings.Contains(result, "unpinned") {
+		t.Fatalf("unpin result=%q", result)
+	}
+	if result := dispatch("delete", map[string]interface{}{"name": "delete-flow"}); !strings.Contains(result, "deleted") {
+		t.Fatalf("delete result=%q", result)
+	}
+	if result := dispatch("archive", map[string]interface{}{"name": "archive-flow"}); !strings.Contains(result, "archived") {
+		t.Fatalf("archive result=%q", result)
+	}
+	if result := dispatch("undo", map[string]interface{}{"change_id": undoID}); !strings.Contains(result, "Undid skill create") {
+		t.Fatalf("undo result=%q", result)
 	}
 }
 

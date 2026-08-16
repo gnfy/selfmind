@@ -62,6 +62,18 @@ func TestCassettesCarryNoMachineAbsolutePaths(t *testing.T) {
 	}
 }
 
+func TestCassettesCarryNoVolatileWorkUnitIDs(t *testing.T) {
+	for _, file := range vcrCorpusFiles(t) {
+		raw, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if id := vcrWorkUnitIDPattern.Find(raw); len(id) > 0 {
+			t.Errorf("%s contains volatile work-unit id %q; re-record it so request-aware VCR placeholders are used", file, id)
+		}
+	}
+}
+
 func stringValues(value interface{}) []string {
 	switch typed := value.(type) {
 	case string:

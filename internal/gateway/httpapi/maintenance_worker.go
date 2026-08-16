@@ -72,10 +72,11 @@ func (d *Server) analyzerTimeout() time.Duration {
 // identical review request enqueued twice is one job. Bounded per pass — the
 // review is background learning and must never crowd out post-run analysis.
 const (
-	SkillReviewJobVersion = 100
-	skillReviewsPerPass   = 2
-	skillReviewJobTimeout = 5 * time.Minute
-	skillReviewRetryDelay = 10 * time.Minute
+	SkillReviewJobVersion   = 100
+	SkillCurationJobVersion = 101
+	skillReviewsPerPass     = 2
+	skillReviewJobTimeout   = 5 * time.Minute
+	skillReviewRetryDelay   = 10 * time.Minute
 )
 
 // SkillReviewRunner executes one durable background-review job. Implemented
@@ -84,12 +85,17 @@ type SkillReviewRunner interface {
 	RunReviewFromPayload(ctx context.Context, tenantID, payloadJSON string) (string, error)
 }
 
+type SkillCuratorRunner interface {
+	ProposeSkillCuration(ctx context.Context, tenantID, payloadJSON string) (string, error)
+	ApplySkillCuration(ctx context.Context, tenantID, payloadJSON, proposalJSON string) (string, error)
+}
+
 // StartMaintenanceWorker is the only post-run governance executor. Run
 // finalization persists evidence and returns; this worker debounces nearby
 // evidence by person/workspace, batches the model decision, and retains the
 // durable proposal/replay path for provider errors and daemon restarts.
 func (d *Server) StartMaintenanceWorker(ctx context.Context) func() {
-	if d == nil || d.Control == nil || (d.PostRunAnalyzer == nil && d.SkillReviewer == nil) {
+	if d == nil || d.Control == nil || (d.PostRunAnalyzer == nil && d.SkillReviewer == nil && d.SkillCurator == nil) {
 		return func() {}
 	}
 	// The gateway lock guarantees one daemon. Any job left running at boot lost
@@ -168,6 +174,7 @@ func (d *Server) runMaintenancePassAt(ctx context.Context, now time.Time) {
 	}
 	if d.PostRunAnalyzer == nil {
 		d.runSkillReviewPass(ctx)
+		d.runSkillCurationPass(ctx)
 		return
 	}
 	jobs, err := d.Control.ListRunnableMaintenanceJobs(ctx, postRunAnalyzerVersion, maintenanceScanLimit)
@@ -255,6 +262,7 @@ func (d *Server) runMaintenancePassAt(ctx context.Context, now time.Time) {
 		}
 	}
 	d.runSkillReviewPass(ctx)
+	d.runSkillCurationPass(ctx)
 }
 
 func (d *Server) runPostRunMaintenanceBatch(ctx context.Context, items []*queuedPostRunMaintenance) {
@@ -389,6 +397,58 @@ func (d *Server) runSkillReviewPass(ctx context.Context) {
 		}
 		callCtx, cancel := context.WithTimeout(ctx, skillReviewJobTimeout)
 		summary, err := d.SkillReviewer.RunReviewFromPayload(callCtx, job.TenantID, job.PayloadJSON)
+		cancel()
+		if err != nil {
+			if llm.IsRetryableError(err) {
+				_ = d.Control.FailMaintenanceJob(ctx, job.TenantID, job.RunID, job.AnalyzerVersion, err.Error(), skillReviewRetryDelay)
+			} else {
+				info, _ := llm.ProviderErrorInfo(err)
+				_, _ = d.Control.BlockMaintenanceJobForRoute(ctx, job.TenantID, job.RunID, job.AnalyzerVersion, info.RouteID, err.Error())
+			}
+			continue
+		}
+		digest := sha256.Sum256([]byte(summary))
+		_ = d.Control.CompleteMaintenanceJob(ctx, job.TenantID, job.RunID, job.AnalyzerVersion, hex.EncodeToString(digest[:8]))
+	}
+}
+
+func (d *Server) runSkillCurationPass(ctx context.Context) {
+	if d.SkillCurator == nil {
+		return
+	}
+	jobs, err := d.Control.ListRunnableMaintenanceJobs(ctx, SkillCurationJobVersion, skillReviewsPerPass)
+	if err != nil {
+		return
+	}
+	for _, job := range jobs {
+		if ctx.Err() != nil {
+			return
+		}
+		claimed, _, err := d.Control.ClaimMaintenanceJobWithLimit(ctx, job.TenantID, job.RunID, job.AnalyzerVersion, maintenanceMaxAttempts)
+		if err != nil || !claimed {
+			continue
+		}
+		proposalJSON := strings.TrimSpace(job.ProposalJSON)
+		if proposalJSON == "" {
+			callCtx, cancel := context.WithTimeout(ctx, skillReviewJobTimeout)
+			proposalJSON, err = d.SkillCurator.ProposeSkillCuration(callCtx, job.TenantID, job.PayloadJSON)
+			cancel()
+			if err == nil {
+				digest := sha256.Sum256([]byte(proposalJSON))
+				err = d.Control.SaveMaintenanceProposal(ctx, job.TenantID, job.RunID, job.AnalyzerVersion, proposalJSON, hex.EncodeToString(digest[:8]))
+			}
+		}
+		if err != nil {
+			if llm.IsRetryableError(err) {
+				_ = d.Control.FailMaintenanceJob(ctx, job.TenantID, job.RunID, job.AnalyzerVersion, err.Error(), skillReviewRetryDelay)
+			} else {
+				info, _ := llm.ProviderErrorInfo(err)
+				_, _ = d.Control.BlockMaintenanceJobForRoute(ctx, job.TenantID, job.RunID, job.AnalyzerVersion, info.RouteID, err.Error())
+			}
+			continue
+		}
+		callCtx, cancel := context.WithTimeout(ctx, skillReviewJobTimeout)
+		summary, err := d.SkillCurator.ApplySkillCuration(callCtx, job.TenantID, job.PayloadJSON, proposalJSON)
 		cancel()
 		if err != nil {
 			if llm.IsRetryableError(err) {

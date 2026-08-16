@@ -169,6 +169,35 @@ func TestRewriteCassetteMakesWorkspacePortable(t *testing.T) {
 	}
 }
 
+func TestRewriteCassetteMapsWorkUnitIDsFromCurrentRequest(t *testing.T) {
+	recordedA := "wu_11111111-1111-4111-8111-111111111111"
+	recordedB := "wu_22222222-2222-4222-8222-222222222222"
+	recordMessages := []Message{{Role: "tool", Name: "update_plan", Content: `{"work_units":[{"id":"` + recordedA + `"},{"id":"` + recordedB + `"}]}`}}
+	original := cassette{Method: "stream", Events: []recordedEvent{{ToolCalls: []ToolCall{{
+		ID: "call-1", Function: "skill_select", Args: `{"work_unit_id":"` + recordedB + `"}`,
+	}}}}}
+	stored := original
+	for i, id := range vcrWorkUnitIDs(recordMessages) {
+		stored = rewriteCassette(stored, id, vcrWorkUnitPlaceholder(i))
+	}
+	data, _ := json.Marshal(stored)
+	if strings.Contains(string(data), recordedA) || strings.Contains(string(data), recordedB) || !strings.Contains(string(data), vcrWorkUnitPlaceholder(1)) {
+		t.Fatalf("stored work-unit identity is not portable: %s", data)
+	}
+
+	replayA := "wu_aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+	replayB := "wu_bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+	replayMessages := []Message{{Role: "tool", Name: "update_plan", Content: `{"work_units":[{"id":"` + replayA + `"},{"id":"` + replayB + `"}]}`}}
+	replayed := stored
+	for i, id := range vcrWorkUnitIDs(replayMessages) {
+		replayed = rewriteCassette(replayed, vcrWorkUnitPlaceholder(i), id)
+	}
+	got := replayed.Events[0].ToolCalls[0].Args
+	if !strings.Contains(got, replayB) || strings.Contains(got, recordedB) {
+		t.Fatalf("replayed work-unit identity = %s", got)
+	}
+}
+
 func TestRecordModePreservesImmediateFailuresInSequence(t *testing.T) {
 	dir := t.TempDir()
 	inner := &failOnceVCRProvider{}

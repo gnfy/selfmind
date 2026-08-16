@@ -54,7 +54,6 @@ type Agent struct {
 	syncQueue        chan syncTurnRequest
 
 	// Evolution config.
-	toolCallCount     int
 	nudgeInterval     int
 	turnReviewCount   int
 	evolutionNotifyCh chan string
@@ -79,20 +78,14 @@ func NewAgent(mem *memory.MemoryManager, backend AgentBackend, provider llm.Prov
 		contextScanner: NewContextScanner(),
 		EventChannel:   ch,
 		syncQueue:      make(chan syncTurnRequest, 16),
-		toolCallCount:  0,
-		nudgeInterval:  10, // default: review every 10 tool calls
+		nudgeInterval:  10, // default: review memory every 10 completed turns
 	}
 	ag.contextEngine.SetProvider(provider)
 	go ag.runSyncWorker()
 	return ag
 }
 
-// skillReviewIntervalMultiplier stretches the skill-review cadence relative
-// to the memory-review nudge interval. Skills are slow-moving assets; a
-// per-interval review mostly re-confirms unchanged skills at model cost.
-const skillReviewIntervalMultiplier = 3
-
-// SetNudgeInterval sets how often evolution review triggers (every N tool calls)
+// SetNudgeInterval sets how often memory review triggers (every N completed turns).
 func (a *Agent) SetNudgeInterval(n int) {
 	if n > 0 {
 		a.nudgeInterval = n
@@ -1293,6 +1286,10 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 			}
 
 			// Append results in order
+			if shouldExpireActiveSkillContext(calls, results, messages) {
+				expireActiveSkillToolResults(messages)
+				systemPrompt = expireActiveSkillSystemPrompt(systemPrompt)
+			}
 			for _, res := range results {
 				history.Steps = append(history.Steps, res.step)
 				messages = append(messages, res.msg)
@@ -1306,10 +1303,6 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 					artifactToolMsgs = append(artifactToolMsgs, agedToolMsg{index: len(messages) - 1, iteration: i})
 				}
 			}
-
-			// Evolution review: triggered by the tool-call counter (non-blocking).
-			a.toolCallCount += len(calls)
-			// The review itself runs after the final answer, once the outcome is known.
 
 			if droppedForBudget > 0 && tryExtendToolBudget(i) {
 				messages = append(messages, llm.Message{Role: "user", Content: "SelfMind extended the bounded tool budget because the completed calls produced new evidence. Continue with the next necessary action, and avoid repeating an identical call unless its inputs or relevant state changed."})
@@ -1425,6 +1418,92 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 	recordStep(maxIterations, StepCompleteTurn, completion.Reason)
 	emitTurnCompleted(eventCh, outcome, completion)
 	return outcome, totalUsage, nil
+}
+
+func shouldExpireActiveSkillContext(calls []llm.ToolCall, results []toolExecutionResult, messages []llm.Message) bool {
+	for idx, result := range results {
+		if !result.success {
+			continue
+		}
+		switch result.toolName {
+		case "skill_select", "skill_fallback":
+			return true
+		case "update_plan":
+			activeSequence := activeSkillWorkUnitSequence(messages)
+			if activeSequence == 0 {
+				continue
+			}
+			nextSequence := 0
+			var projected struct {
+				WorkUnits []struct {
+					Sequence   int    `json:"sequence"`
+					PlanStatus string `json:"plan_status"`
+				} `json:"work_units"`
+			}
+			if json.Unmarshal([]byte(result.msg.Content), &projected) == nil {
+				for _, unit := range projected.WorkUnits {
+					if unit.PlanStatus == "in_progress" {
+						nextSequence = unit.Sequence
+						break
+					}
+				}
+			}
+			// Direct kernel tests or compatibility callers may not install the
+			// projection sink. Preserve the older positional fallback only there.
+			if nextSequence == 0 && idx < len(calls) {
+				args := parseToolCallArgs(calls[idx].Args)
+				raw, _ := args["plan"].([]interface{})
+				for i, item := range raw {
+					row, _ := item.(map[string]interface{})
+					if strings.TrimSpace(fmt.Sprintf("%v", row["status"])) == "in_progress" {
+						nextSequence = i + 1
+						break
+					}
+				}
+			}
+			if nextSequence == 0 || nextSequence != activeSequence {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func activeSkillWorkUnitSequence(messages []llm.Message) int {
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role != "tool" || messages[i].Name != "skill_select" {
+			continue
+		}
+		var payload struct {
+			Success          bool `json:"success"`
+			WorkUnitSequence int  `json:"work_unit_sequence"`
+		}
+		if json.Unmarshal([]byte(messages[i].Content), &payload) == nil && payload.Success {
+			return payload.WorkUnitSequence
+		}
+	}
+	return 0
+}
+
+func expireActiveSkillToolResults(messages []llm.Message) {
+	for i := range messages {
+		if messages[i].Role == "tool" && messages[i].Name == "skill_select" {
+			messages[i].Content = `{"success":true,"context_expired":true,"notice":"This skill belonged to an earlier work unit or was explicitly abandoned. Its instructions are no longer active."}`
+		}
+	}
+}
+
+func expireActiveSkillSystemPrompt(prompt string) string {
+	start := strings.Index(prompt, activeSkillPromptBegin)
+	if start < 0 {
+		return prompt
+	}
+	relEnd := strings.Index(prompt[start:], activeSkillPromptEnd)
+	if relEnd < 0 {
+		return prompt
+	}
+	end := start + relEnd + len(activeSkillPromptEnd)
+	return prompt[:start] + "[The earlier work unit's Active Skill context has expired.]" + prompt[end:]
 }
 
 func uncachedInputTokens(usage llm.UsageStats) int {
@@ -1571,33 +1650,18 @@ func emitProviderEvent(eventCh chan string, event llm.StreamEvent, iteration int
 
 // triggerEvolutionReview fires an evolution review asynchronously without
 // blocking the main session.
-func (a *Agent) maybeTriggerBackgroundReview(tenantID, channel string, messages []llm.Message, history TaskHistory) {
+func (a *Agent) maybeTriggerBackgroundReview(tenantID, channel string, messages []llm.Message, _ TaskHistory) {
 	interval := a.nudgeInterval
 	if interval <= 0 {
 		interval = 10
 	}
 	a.turnReviewCount++
-	reviewMemory := a.turnReviewCount >= interval
-	// Skill review runs at a fraction of the memory-review cadence: reusable
-	// workflows change far more slowly than facts, and every review is a
-	// cheap-role model call (observed live: 15 skill reviews in one day of
-	// CI/CD work, all confirming the same unchanged skills).
-	reviewSkills := a.toolCallCount >= interval*skillReviewIntervalMultiplier
-	if !reviewMemory && !reviewSkills {
+	if a.turnReviewCount < interval {
 		return
 	}
-	if reviewMemory {
-		a.turnReviewCount = 0
-	}
-	if reviewSkills {
-		a.toolCallCount = 0
-	}
+	a.turnReviewCount = 0
 	if a.ReviewEngine != nil {
-		a.ReviewEngine.SpawnReview(tenantID, channel, messages, reviewMemory, reviewSkills)
-		return
-	}
-	if reviewSkills && a.Reflector != nil {
-		a.triggerEvolutionReview(tenantID, history)
+		a.ReviewEngine.SpawnReview(tenantID, channel, messages, true, false)
 	}
 }
 
@@ -1663,6 +1727,15 @@ func (a *Agent) selectRuntimeContext(ctx context.Context, tenantID, channel, pro
 		bundle.Task = &rt
 		bundle.SelectionNotes = append(bundle.SelectionNotes, "active task/run slice selected from control event log")
 	}
+	if selected, ok := SkillRuntimeContextFromContext(ctx); ok {
+		bundle.ActiveSkill = selected.Active
+		bundle.SkillCandidates = append([]SkillCandidateContext(nil), selected.Candidates...)
+		if selected.Active != nil {
+			bundle.SelectionNotes = append(bundle.SelectionNotes, "one active skill selected for the current work unit")
+		} else if len(selected.Candidates) > 0 {
+			bundle.SelectionNotes = append(bundle.SelectionNotes, fmt.Sprintf("%d bounded skill candidate(s) selected for the current work unit", len(selected.Candidates)))
+		}
+	}
 
 	// The daemon selector already performs bounded semantic/session recall and
 	// stores its slices in TaskRuntimeContext. Running the legacy agent recall
@@ -1681,6 +1754,10 @@ func (a *Agent) selectRuntimeContext(ctx context.Context, tenantID, channel, pro
 	if bundle.Empty() {
 		return ctx
 	}
+	activeSkillChars := 0
+	if bundle.ActiveSkill != nil {
+		activeSkillChars = len(bundle.ActiveSkill.Prompt(bundle.Budget.SkillChars))
+	}
 	EmitAgentEvent(eventCh, AgentEvent{
 		Type:    "context.selected",
 		Content: strings.Join(bundle.SelectionNotes, "; "),
@@ -1691,8 +1768,14 @@ func (a *Agent) selectRuntimeContext(ctx context.Context, tenantID, channel, pro
 			"indexed_memory_count":   len(bundle.Memories),
 			"recall_slice_count":     runtimeRecallSliceCount(bundle),
 			"canonical_recall_count": runtimeRecallSourceCount(bundle, "canonical"),
-			"budget_chars":           bundle.Budget.TotalChars,
-			"workspace_root":         workspaceRootForBundle(bundle),
+			"active_skill_chars":     activeSkillChars,
+			"skill_candidate_count":  len(bundle.SkillCandidates),
+			// Full tenant/workspace Skill catalogs are never a runtime-context
+			// slice. This explicit zero makes the context-saving invariant
+			// measurable in production and eval traces.
+			"skill_directory_chars": 0,
+			"budget_chars":          bundle.Budget.TotalChars,
+			"workspace_root":        workspaceRootForBundle(bundle),
 		},
 	})
 	return WithRuntimeContextBundle(ctx, bundle)
@@ -2136,6 +2219,7 @@ func (a *Agent) buildSystemPrompt(ctx context.Context, tenantID string, strategy
 			sb.WriteString("When a tool returns an error, treat the error as diagnostic evidence. Do not stop at the first failed command unless the failure is the requested final result. Inspect cwd, files, environment, auth state, provider constraints, or command help as needed, then choose the next correct action.\n")
 			sb.WriteString("Do not hard-code environment overrides as a default tool behavior. For example, if Go reports a go.work/module boundary error, first inspect go env GOWORK/GOMOD and the relevant go.work/go.mod files, then decide whether to change cwd, use an explicit env override, or report a real blocker.\n")
 			sb.WriteString("Use update_plan only for non-trivial work: tasks with 3+ meaningful steps, multi-file changes, investigation/debugging, long-running verification, or explicit user requests for a plan. Each update_plan call replaces the prior plan, so always send the complete current snapshot and resolve all steps before finish_run status done. Do not use update_plan for one-shot answers, small code examples, simple commands, or direct explanations.\n")
+			sb.WriteString("When update_plan moves to a new top-level work unit (work_unit=true, a returned work_unit_id, or related_task_id), the prior Active Skill expires. Echo returned work_unit_id values in later plan snapshots. If the current unit reports bound_skill_name, call skill_select with reason and no name; otherwise use only a relevant listed skill_candidate or continue without a Skill. To apply a candidate, call skill_select directly; skill_view is inspection only and must not substitute for activation or execution attribution.\n")
 			sb.WriteString("For non-trivial tool-using work that creates or changes durable task state, call finish_run once with a structured outcome: status, summary, done, next_steps, files, tests, risks, and need_approve. Skip finish_run for direct answers, small snippets, and ordinary explanations.\n")
 			sb.WriteString("Use tool_search when you need a capability but are unsure which registered tool fits.\n")
 			// Tool DEFINITIONS: names, descriptions, parameter schemas. A
@@ -2187,14 +2271,6 @@ func (a *Agent) buildSystemPrompt(ctx context.Context, tenantID string, strategy
 				addVolatile("runtime", frontendQualityGuidance())
 			}
 
-			// Surface learned skills so the agent applies what it already knows
-			// (only on tool-bearing turns, where skill_view is usable). The skill
-			// index changes only when skills change, so it is treated as stable.
-			if a.skillInventory != nil {
-				if block := strings.TrimSpace(a.skillInventory(tenantID)); block != "" {
-					addStable("tools", block)
-				}
-			}
 		}
 	}
 
@@ -2366,6 +2442,11 @@ func filterToolDefinitions(defs []map[string]interface{}, strategy TaskStrategy)
 	out := make([]map[string]interface{}, 0, len(defs))
 	for _, def := range defs {
 		name := toolDefinitionName(def)
+		if metadata, ok := def["selfmind"].(map[string]interface{}); ok {
+			if exposure, _ := metadata["exposure"].(string); strings.EqualFold(strings.TrimSpace(exposure), "hidden") {
+				continue
+			}
+		}
 		if !strategy.AllowsTool(name) {
 			continue
 		}

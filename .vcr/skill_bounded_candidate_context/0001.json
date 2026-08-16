@@ -1,0 +1,92 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "content": "我"
+    },
+    {
+      "content": "将"
+    },
+    {
+      "content": "只"
+    },
+    {
+      "content": "读取"
+    },
+    {
+      "content": "项目"
+    },
+    {
+      "content": "根"
+    },
+    {
+      "content": "目录"
+    },
+    {
+      "content": "的"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "target"
+    },
+    {
+      "content": ".txt"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": "，"
+    },
+    {
+      "content": "并"
+    },
+    {
+      "content": "原"
+    },
+    {
+      "content": "样"
+    },
+    {
+      "content": "报告"
+    },
+    {
+      "content": "其中"
+    },
+    {
+      "content": "的"
+    },
+    {
+      "content": "值"
+    },
+    {
+      "content": "。"
+    },
+    {
+      "content": "Preparing to run read_file",
+      "event_type": "agent.thinking"
+    },
+    {
+      "tool_calls": [
+        {
+          "ID": "call_gPH6KNDQaj8L0TpGb9W54Bgv",
+          "Function": "read_file",
+          "Args": "{\"path\":\"{{SELFMIND_VCR_WORKSPACE}}/target.txt\",\"limit\":0,\"max_bytes\":1048576}"
+        }
+      ]
+    },
+    {
+      "usage": {
+        "input_tokens": 6297,
+        "output_tokens": 144,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 6297,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0,
+        "cache_usage_reported": true
+      }
+    }
+  ]
+}

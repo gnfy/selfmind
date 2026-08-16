@@ -10,6 +10,7 @@ import (
 	"selfmind/internal/gateway/api"
 	"selfmind/internal/gateway/delivery"
 	"selfmind/internal/gateway/router"
+	"selfmind/internal/kernel"
 	"selfmind/internal/kernel/llm"
 	"selfmind/internal/platform/log"
 	"selfmind/internal/tools"
@@ -311,6 +312,20 @@ func (c *RunCoordinator) recordStreamEvent(ctx context.Context, channel string, 
 		eventType = classifyLearningReviewEvent(event.Content)
 	case "plan.updated":
 		eventType = "plan.updated"
+		if plan := workUnitPlanFromPayload(event.Payload); run != nil && len(plan) > 0 {
+			if units, err := c.srv.Control.SyncRunWorkUnits(ctx, task.TenantID, run.ID, plan); err != nil {
+				log.Warn("work-unit plan projection failed", "run_id", run.ID, "error", err)
+			} else {
+				compact := make([]map[string]interface{}, 0, len(units))
+				for _, unit := range units {
+					compact = append(compact, map[string]interface{}{
+						"id": unit.ID, "sequence": unit.Sequence, "status": unit.Status,
+						"plan_status": unit.PlanStatus, "related_task_id": unit.RelatedTaskID,
+					})
+				}
+				payload["work_units"] = compact
+			}
+		}
 	case "run.outcome":
 		eventType = "run.outcome"
 	case "agent.steering":
@@ -355,6 +370,94 @@ func (c *RunCoordinator) recordStreamEvent(ctx context.Context, channel string, 
 		Channel:    channel,
 		Payload:    mustJSON(payload),
 	})
+}
+
+func workUnitPlanFromPayload(payload map[string]interface{}) []control.WorkUnitPlanInput {
+	if payload == nil {
+		return nil
+	}
+	switch raw := payload["plan"].(type) {
+	case []kernel.PlanItem:
+		steps := make([]workUnitProjectionStep, 0, len(raw))
+		for _, item := range raw {
+			steps = append(steps, workUnitProjectionStep{
+				Step: item.Step, Status: item.Status, RelatedTaskID: item.RelatedTaskID,
+				WorkUnitID: item.WorkUnitID, WorkUnit: item.WorkUnit,
+			})
+		}
+		return projectWorkUnitPlan(steps)
+	case []interface{}:
+		steps := make([]workUnitProjectionStep, 0, len(raw))
+		for _, item := range raw {
+			row, _ := item.(map[string]interface{})
+			related, _ := row["related_task_id"].(string)
+			workUnitID, _ := row["work_unit_id"].(string)
+			workUnit, _ := row["work_unit"].(bool)
+			steps = append(steps, workUnitProjectionStep{
+				Step: fmt.Sprintf("%v", row["step"]), Status: fmt.Sprintf("%v", row["status"]),
+				RelatedTaskID: related, WorkUnitID: workUnitID, WorkUnit: workUnit,
+			})
+		}
+		return projectWorkUnitPlan(steps)
+	default:
+		return nil
+	}
+}
+
+type workUnitProjectionStep struct {
+	Step          string
+	Status        string
+	RelatedTaskID string
+	WorkUnitID    string
+	WorkUnit      bool
+}
+
+// projectWorkUnitPlan keeps ordinary plan refinements inside one execution
+// attribution boundary. A new unit begins only at the first step, an explicit
+// work_unit marker, a stable returned id, or a deterministically related task.
+func projectWorkUnitPlan(steps []workUnitProjectionStep) []control.WorkUnitPlanInput {
+	if len(steps) == 0 {
+		return nil
+	}
+	boundaries := []int{0}
+	for i := 1; i < len(steps); i++ {
+		if steps[i].WorkUnit || strings.TrimSpace(steps[i].WorkUnitID) != "" || strings.TrimSpace(steps[i].RelatedTaskID) != "" {
+			boundaries = append(boundaries, i)
+		}
+	}
+	out := make([]control.WorkUnitPlanInput, 0, len(boundaries))
+	for i, start := range boundaries {
+		end := len(steps)
+		if i+1 < len(boundaries) {
+			end = boundaries[i+1]
+		}
+		out = append(out, control.WorkUnitPlanInput{
+			WorkUnitID: strings.TrimSpace(steps[start].WorkUnitID), GoalDigest: strings.TrimSpace(steps[start].Step),
+			PlanStatus: aggregateWorkUnitPlanStatus(steps[start:end]), RelatedTaskID: strings.TrimSpace(steps[start].RelatedTaskID),
+		})
+	}
+	return out
+}
+
+func aggregateWorkUnitPlanStatus(steps []workUnitProjectionStep) string {
+	hasPending, hasCompleted := false, false
+	for _, step := range steps {
+		switch strings.TrimSpace(step.Status) {
+		case "in_progress":
+			return "in_progress"
+		case "pending":
+			hasPending = true
+		case "completed":
+			hasCompleted = true
+		}
+	}
+	if hasPending {
+		return "pending"
+	}
+	if hasCompleted {
+		return "completed"
+	}
+	return "cancelled"
 }
 
 func classifyLearningReviewEvent(content string) string {

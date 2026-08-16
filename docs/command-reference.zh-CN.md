@@ -274,7 +274,7 @@ Gateway 命令可用于 TUI 和受支持的 IM 渠道，并且会在普通 Agent
 以下命令依赖本地 TUI 状态，不会通过 IM 渠道执行。
 
 ```text
-/skills [list|view|history|undo|search|install|audit|delete|archive|pin|unpin|stats|reload]
+/skills [list|view|candidates|candidate|promote|reject|rollback|binding|bind|unbind|history|undo|search|install|audit|delete|archive|pin|unpin|stats|reload]
 /bundles [list|view|create|delete]
 /reload-skills
 /memory [category|conflicts|search|show|correct|forget|pin|unpin|raw|history|undo]
@@ -292,6 +292,10 @@ Gateway 命令可用于 TUI 和受支持的 IM 渠道，并且会在普通 Agent
 
 - `/memory` 展示便于人类阅读的记忆索引；子命令可查看、纠正、置顶、遗忘
   和审计 canonical memory。
+- `/skills bind <name>` 为当前任务指定一个默认逻辑 Skill；`/skills unbind`
+  解除绑定。`/skills candidates` 列出尚未激活的 curator 候选，`candidate`、
+  `promote`、`reject` 和 `rollback` 按明确的版本哈希进行管理。候选与历史版本
+  正文不会进入普通 Agent prompt。
 - `/search` 是唯一的回看入口：`/search current` 打开当前对话并展示完整
   diff，带关键词则搜索过去的工作会话，不带参数列出最近会话。`/copy`
   复制最近一次 assistant 回复。

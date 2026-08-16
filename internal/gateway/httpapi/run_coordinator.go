@@ -396,11 +396,16 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 	invocationScope := kernel.ToolInvocationScope{
 		ControlTenantID:   identity.TenantID,
 		PersonID:          identity.PersonID,
+		TaskID:            task.ID,
 		WorkspaceID:       req.WorkspaceID,
 		ExecutionScopeKey: runScopeKey,
+		ExecutionLane:     "main",
+		AttachmentMode:    string(attach.reason),
+		SkillMutationMode: kernel.SkillMutationCandidateOnly,
 	}
 	if run != nil {
 		invocationScope.RunID = run.ID
+		invocationScope.WorkUnitID = run.WorkUnitID
 	}
 	if workspace != nil {
 		invocationScope.WorkspaceID = workspace.ID
@@ -409,11 +414,61 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 		invocationScope.LeaseID = lease.ID
 	}
 	ctx = kernel.WithToolInvocationScope(ctx, invocationScope)
+	if run != nil {
+		ctx = tools.WithPlanProjectionSink(ctx, func(callCtx context.Context, steps []tools.PlanStep) ([]tools.PlanWorkUnitIdentity, error) {
+			projected := make([]workUnitProjectionStep, 0, len(steps))
+			for _, step := range steps {
+				projected = append(projected, workUnitProjectionStep{
+					Step: step.Step, Status: step.Status, RelatedTaskID: step.RelatedTaskID,
+					WorkUnitID: step.WorkUnitID, WorkUnit: step.WorkUnit,
+				})
+			}
+			plan := projectWorkUnitPlan(projected)
+			units, err := c.srv.Control.SyncRunWorkUnits(callCtx, identity.TenantID, run.ID, plan)
+			if err != nil {
+				return nil, err
+			}
+			out := make([]tools.PlanWorkUnitIdentity, 0, len(units))
+			for _, unit := range units {
+				projectedIdentity := tools.PlanWorkUnitIdentity{
+					ID: unit.ID, Sequence: unit.Sequence, Goal: unit.GoalDigest,
+					PlanStatus: unit.PlanStatus, RelatedTaskID: unit.RelatedTaskID,
+				}
+				if unit.PlanStatus == "in_progress" {
+					bindingBlocksCandidates := false
+					if unit.RelatedTaskID != "" {
+						binding, bindingErr := c.srv.Control.GetTaskSkillBinding(callCtx, identity.TenantID, identity.PersonID, unit.RelatedTaskID)
+						if bindingErr == nil && binding != nil && binding.State != control.TaskSkillBindingReleased {
+							bindingBlocksCandidates = true
+							if binding.State == control.TaskSkillBindingActive {
+								projectedIdentity.BoundSkillName = binding.SkillName
+							}
+						}
+					}
+					if !bindingBlocksCandidates {
+						infos, rankErr := tools.RankSkillCandidatesForTenant(identity.TenantID, unit.GoalDigest, 3, map[string]interface{}{
+							"_tenant_id": identity.TenantID, "_context": callCtx, "_invocation_scope": invocationScope,
+						})
+						if rankErr == nil {
+							for _, info := range infos {
+								projectedIdentity.SkillCandidates = append(projectedIdentity.SkillCandidates, tools.PlanSkillCandidate{Name: info.Name, Description: info.Description})
+							}
+						}
+					}
+				}
+				out = append(out, projectedIdentity)
+			}
+			return out, nil
+		})
+	}
 	if workspace != nil && workspace.LocalPath != "" {
 		ctx = kernel.WithWorkspaceContext(ctx, kernel.WorkspaceContext{
 			ID:   workspace.ID,
 			Root: workspace.LocalPath,
 		})
+	}
+	if selected := c.selectSkillRuntimeContext(ctx, identity, task, run, attach, req.Content); selected.Active != nil || len(selected.Candidates) > 0 {
+		ctx = kernel.WithSkillRuntimeContext(ctx, selected)
 	}
 	if sink := c.newToolArtifactSink(identity, task, run); sink != nil {
 		ctx = kernel.WithToolArtifactSink(ctx, sink)

@@ -6,16 +6,15 @@
 > the generated [`README.md`](README.md) index. Code and tests remain the source
 > of truth.
 
-**Snapshot:** 2026-08-15
+**Snapshot:** 2026-08-16
 
 ## Release Health
 
 - `GOWORK=off go build ./...`: passing at the snapshot.
 - `GOWORK=off go test ./...`: passing at the snapshot.
-- Release corpus: 46 reviewed YAML cases. Local full replay proves 45 cases;
-  one clean-checkout Node case is explicitly CI-owned. Model-backed cases must
-  carry committed cassettes; deterministic cases declare
-  `model_required: false`.
+- Release corpus: 51 reviewed YAML cases. Local full replay currently proves
+  all 51. Model-backed cases carry committed cassettes; deterministic cases
+  declare `model_required: false`.
 - `selfmind selfcheck` is the release gate. It always checks the documentation
   contract, then build/test and provider-offline eval according to profile.
 - Linux and macOS x64/arm64 are packaged targets. Native Windows remains
@@ -45,8 +44,8 @@
 | Memory | Partial | Canonical governance, pin/correct/forget, transient filtering, lexical/CJK retrieval, access tracking, audits, output-overlap recall telemetry, and per-run intake disposition counts exist. These signals are diagnostic rather than proof of causal use; quality, reuse, and duplicate rates still need sustained measurement. |
 | Tasks | Done | Inbox, lifecycle fields, paging/search, pin/archive/rename/merge, retention, governed Task References, audited attach policies, explicit dry-run legacy-reference migration, and asynchronous post-run labeling exist. Semantic references never grant workspace or prior-run authority; ticket-shaped work keys are display hints only. |
 | Background maintenance | Done | Debounced bounded batches, immutable replay jobs, restart-safe retry exhaustion, shared retry policy, provider/contract circuit identity, fallback roles, diagnostics, migration tools, and dispatch-time reasoning/output bounds exist. |
-| Skills | Done | Runtime discovery, catalog/manage/bundles, tenant-level ownership, learning audit, curation, and person-to-tenant migration exist. |
-| Safe self-evolution | Partial | Versioned skill activation, deterministic workflow profiles, observation/shadow evidence, and same-task read-only `batch_read` candidates exist. Automatic writes, shell/network execution, skill rewriting, and semantic authority are excluded; real repeated workflows still need production validation. |
+| Skills | Done | Runtime discovery, one-Skill-per-work-unit activation, deterministic task binding, active/candidate/previous versions, bounded context, explicit candidate management, catalog/bundles, tenant ownership, learning audit, and migration exist. |
+| Safe self-evolution | Partial | Terminal work-unit observations, comparable cohorts, frozen curator proposals, failure guards, rollback, and same-task read-only `batch_read` candidates exist. Repeated verified read-only cohorts may publish only unpinned agent-created Skills; write/shell/network/external-effect candidates require explicit management. Real repeated workflows still need production validation. |
 | Tool safety | Partial | Safety floor, smart approval, typed invocation scope, grants, hash-bound trusted observation scripts, secret redaction, schema governance, sandbox/host profiles, and failure envelopes exist. Human asks use one server-issued menu across CLI/IM: once, optional run-local reuse, and deny; sensitive asks are once/deny only. Historical broader grants remain listable and revocable. External tool diversity remains an ongoing compatibility surface. |
 | External watchers | Partial | Durable registration, bounded slow-command preflight, environment/auth snapshots, restart recovery, idempotent finalization, separate agent/external outcomes, person-scoped numbered `/watchers` controls, and delivery-confirmed stable-ID notifications exist. Keep validating provider-specific terminal behavior and live delivery. |
 | IM delivery | Partial | Weixin and other adapters share durable outbound state, delivery diagnostics, session refresh classification, bounded catch-up, and preferred-channel routing. Live platform behavior remains an external dependency. |
@@ -67,10 +66,12 @@ limitation. It does not mean the area should be redesigned from scratch.
 2. **Measure memory usefulness, not record count.** Track query-relevant
    canonical recall, injection, reinforcement, supersession, duplicates, and
    user correction. Improve selection/write policy only from those traces.
-3. **Validate safe evolution on repeated personal workflows.** Confirm that
-   profile signatures remain stable, shadow matches are truthful, enabled
-   read-only batches reduce turns, and any partial failure degrades immediately
-   to ordinary tools without changing execution authority.
+3. **Validate Skill lifecycle and safe evolution on repeated personal workflows.**
+   Confirm that task bindings reduce directory/context cost, work-unit Skill
+   switches expire old bodies, comparable cohorts produce narrow candidates,
+   read-only promotion preserves verification, guards prevent repeated bad
+   steps, and fallback still completes through ordinary planning. Continue
+   validating shadow truth and turn savings for enabled read-only batches.
 4. **Prepare the next npm beta only after the full gate passes.** The release
    needs a clean Action run, platform package smoke tests, fresh install,
    update, service restart, and rollback evidence.
@@ -97,10 +98,11 @@ limitation. It does not mean the area should be redesigned from scratch.
 - Full multi-run foreground/background concurrency and remote Runner execution
   remain design seams only. Do not infer that they are shipped from queue or
   execution-envelope plumbing.
-- Self-evolution is intentionally limited to same-task, local read-only batch
-  advice. It does not generate executable scripts, rewrite protected skills,
-  approve capabilities, choose workspaces, or authorize writes, credentials,
-  network access, or shell execution.
+- Self-evolution can publish only repeated, verified read-only procedures to
+  writable, unpinned agent-created Skills. It does not rewrite protected
+  Skills, approve capabilities, choose workspaces, or authorize writes,
+  credentials, network access, shell execution, or external effects. Those
+  candidates remain inactive until explicit user management.
 
 ## Plan Lifecycle
 

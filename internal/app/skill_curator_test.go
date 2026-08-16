@@ -69,6 +69,33 @@ func TestSkillCuratorFreezesCandidateAndAutoPromotesOnlyReadOnlyCohorts(t *testi
 	}
 }
 
+func TestSkillCuratorSkipsToollessCohortBeforeProviderCall(t *testing.T) {
+	ctx := context.Background()
+	store, err := control.OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	provider := &judgeCaptureProvider{reply: `{"action":"CREATE"}`}
+	curator := &llmSkillCurator{provider: provider, store: store}
+	digest := curatorTestDigest("tool-less", nil)
+	payload, _ := json.Marshal(digest)
+	proposal, err := curator.ProposeSkillCuration(ctx, "default", string(payload))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(proposal, `"action":"SKIP"`) {
+		t.Fatalf("tool-less cohort proposal=%s", proposal)
+	}
+	if provider.last.MaxTokens != 0 {
+		t.Fatalf("tool-less cohort called provider: %+v", provider.last)
+	}
+	result, err := curator.ApplySkillCuration(ctx, "default", string(payload), `{"action":"CREATE"}`)
+	if err != nil || !strings.Contains(result, "cohort is not ready") {
+		t.Fatalf("tool-less apply=%q err=%v", result, err)
+	}
+}
+
 func curatorTestDigest(evidenceHash string, tools []string) control.SkillEvidenceDigest {
 	observations := make([]control.WorkflowObservation, 0, 3)
 	for i, runID := range []string{"run-a", "run-b", "run-c"} {

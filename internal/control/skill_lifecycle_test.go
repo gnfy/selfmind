@@ -179,6 +179,84 @@ func TestWorkUnitOutcomeAndActivationRemainIndependentWhenLaterUnitFails(t *test
 	}
 }
 
+func TestWaitingRunsParkWorkUnitsAndSkillActivations(t *testing.T) {
+	for _, status := range []string{"waiting_user", "waiting_external", "waiting_finalization"} {
+		t.Run(status, func(t *testing.T) {
+			ctx := context.Background()
+			store, err := OpenStore(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer store.Close()
+			identity, _ := store.ResolveOrCreateAccount(ctx, "default", "cli", "park-"+status, "Parked")
+			task, _ := store.CreateTask(ctx, TaskCreate{
+				TenantID: identity.TenantID, PersonID: identity.PersonID,
+				Title: "prepare release", Channel: "cli",
+			})
+			run, _ := store.StartRun(ctx, task, "cli", "prepare release and wait")
+			key := SkillKey(identity.TenantID, "prepare-release", "user", "agent-created", "/skills", "prepare-release/SKILL.md")
+			if _, err := store.ActivateSkill(ctx, ActivateSkillInput{
+				IdentityTenantID: identity.TenantID, ControlTenantID: identity.TenantID,
+				PersonID: identity.PersonID, RunID: run.ID, WorkUnitID: run.WorkUnitID,
+				SkillKey: key, SkillName: "prepare-release", VersionHash: "v1",
+				ActivationSource: "model", ContentBody: "prepare", CreatedBy: "external_reconcile",
+			}); err != nil {
+				t.Fatal(err)
+			}
+			_, _ = store.AppendEvent(ctx, Event{TaskID: task.ID, RunID: run.ID, Type: "tool.started", Payload: json.RawMessage(`{"tool":"read_file"}`)})
+			_, _ = store.AppendEvent(ctx, Event{TaskID: task.ID, RunID: run.ID, Type: "tool.completed", Payload: json.RawMessage(`{"tool":"read_file"}`)})
+			if _, err := store.MaterializeRunFinalization(ctx, RunFinalization{
+				Identity: *identity, RunID: run.ID, RunStatus: status, TaskID: task.ID,
+				TaskStatus: status, Summary: "prepared and parked", VerificationState: "passed",
+				Channel: "cli", Event: Event{Type: "run.finished", Payload: json.RawMessage(`{"status":"` + status + `"}`)},
+			}); err != nil {
+				t.Fatal(err)
+			}
+			units, err := store.ListRunWorkUnits(ctx, identity.TenantID, run.ID)
+			if err != nil || len(units) != 1 || units[0].Status != WorkUnitParked {
+				t.Fatalf("parked units=%+v err=%v", units, err)
+			}
+			activations, err := store.runSkillActivations(ctx, identity.TenantID, run.ID)
+			if err != nil || len(activations) != 1 || activations[0].State != SkillActivationParked || activations[0].FallbackReason != "" {
+				t.Fatalf("parked activations=%+v err=%v", activations, err)
+			}
+			observations, err := store.MaterializeWorkflowObservations(ctx, identity.TenantID, run.ID)
+			if err != nil || len(observations) != 1 || observations[0].EvidenceRole != "audit" || observations[0].OutcomeStatus != WorkUnitParked {
+				t.Fatalf("parked observations=%+v err=%v", observations, err)
+			}
+			if binding, err := store.GetTaskSkillBinding(ctx, identity.TenantID, identity.PersonID, task.ID); err != nil || binding != nil {
+				t.Fatalf("parked run created binding=%+v err=%v", binding, err)
+			}
+			var guards int
+			if err := store.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM skill_failure_guards WHERE source_run_id=?`, run.ID).Scan(&guards); err != nil || guards != 0 {
+				t.Fatalf("parked run created %d failure guards: %v", guards, err)
+			}
+		})
+	}
+}
+
+func TestWaitingRunWithFailedVerificationRemainsFailure(t *testing.T) {
+	ctx := context.Background()
+	store, err := OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	identity, _ := store.ResolveOrCreateAccount(ctx, "default", "cli", "park-failed", "Parked")
+	task, _ := store.CreateTask(ctx, TaskCreate{TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "verify", Channel: "cli"})
+	run, _ := store.StartRun(ctx, task, "cli", "verify and wait")
+	if _, err := store.MaterializeRunFinalization(ctx, RunFinalization{
+		Identity: *identity, RunID: run.ID, RunStatus: "waiting_user", TaskID: task.ID,
+		TaskStatus: "waiting_user", Summary: "verification failed", VerificationState: "failed",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	units, _ := store.ListRunWorkUnits(ctx, identity.TenantID, run.ID)
+	if len(units) != 1 || units[0].Status != WorkUnitFailed {
+		t.Fatalf("failed verification was parked: %+v", units)
+	}
+}
+
 func TestWorkflowCohortRequiresMultipleComparableSuccessesAndKeepsFailures(t *testing.T) {
 	ctx := context.Background()
 	store, err := OpenStore(t.TempDir())
@@ -250,6 +328,49 @@ func TestWorkflowCohortRequiresMultipleComparableSuccessesAndKeepsFailures(t *te
 	}
 	if candidates != 1 || active != 0 {
 		t.Fatalf("candidate crossed active boundary: candidates=%d active=%d", candidates, active)
+	}
+}
+
+func TestWorkflowCohortExcludesExternalWatchRuns(t *testing.T) {
+	ctx := context.Background()
+	store, err := OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	identity, _ := store.ResolveOrCreateAccount(ctx, "default", "cli", "watch-cohort", "Watch")
+	task, _ := store.CreateTask(ctx, TaskCreate{TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "inspect release", Channel: "cli"})
+	runOne := func(origin string) *Run {
+		run, runErr := store.StartRun(ctx, task, "cli", "inspect release metadata")
+		if runErr != nil {
+			t.Fatal(runErr)
+		}
+		started, _ := json.Marshal(map[string]string{"origin": origin})
+		_, _ = store.AppendEvent(ctx, Event{TaskID: task.ID, RunID: run.ID, Type: "run.started", Payload: started})
+		_, _ = store.AppendEvent(ctx, Event{TaskID: task.ID, RunID: run.ID, Type: "tool.started", Payload: json.RawMessage(`{"tool":"read_file"}`)})
+		_, _ = store.AppendEvent(ctx, Event{TaskID: task.ID, RunID: run.ID, Type: "tool.completed", Payload: json.RawMessage(`{"tool":"read_file"}`)})
+		if _, runErr = store.MaterializeRunFinalization(ctx, RunFinalization{
+			Identity: *identity, RunID: run.ID, RunStatus: "done", TaskID: task.ID,
+			TaskStatus: "in_progress", Summary: "inspected", VerificationState: "passed",
+			Event: Event{Type: "run.finished", Payload: json.RawMessage(`{"status":"done"}`)},
+		}); runErr != nil {
+			t.Fatal(runErr)
+		}
+		if _, runErr = store.MaterializeWorkflowObservations(ctx, identity.TenantID, run.ID); runErr != nil {
+			t.Fatal(runErr)
+		}
+		return run
+	}
+	var latestWatch *Run
+	for i := 0; i < 3; i++ {
+		latestWatch = runOne("watch")
+	}
+	if digests, err := store.ReadySkillEvidenceDigestsForRun(ctx, identity.TenantID, latestWatch.ID); err != nil || len(digests) != 0 {
+		t.Fatalf("watch run nominated cohort=%+v err=%v", digests, err)
+	}
+	foreground := runOne("")
+	if digests, err := store.ReadySkillEvidenceDigestsForRun(ctx, identity.TenantID, foreground.ID); err != nil || len(digests) != 0 {
+		t.Fatalf("watch history leaked into foreground cohort=%+v err=%v", digests, err)
 	}
 }
 

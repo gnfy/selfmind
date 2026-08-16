@@ -320,6 +320,14 @@ func (a *App) evalClean(args []string) int {
 			{"approval_requests", report.Approvals},
 			{"notifications", report.Notifications},
 			{"outbound_messages", report.Outbound},
+			{"run_work_units", report.WorkUnits},
+			{"run_skill_activations", report.SkillActivations},
+			{"task_skill_bindings", report.SkillBindings},
+			{"workflow_profiles", report.WorkflowProfiles},
+			{"evolution_candidates", report.EvolutionCandidates},
+			{"workflow_observations", report.WorkflowObservations},
+			{"skill_versions", report.SkillVersions},
+			{"skill_failure_guards", report.SkillFailureGuards},
 			{"emptied eval tenants", report.Tenants},
 		} {
 			if row.count > 0 {

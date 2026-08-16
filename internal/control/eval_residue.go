@@ -11,21 +11,29 @@ import (
 // actually deleted (apply). Counts are per table so a dry run can show the user
 // exactly how much eval pollution accumulated in a real control.db.
 type EvalResidueReport struct {
-	Persons          int `json:"persons"`
-	Accounts         int `json:"accounts"`
-	Workspaces       int `json:"workspaces"`
-	CurrentWorkspace int `json:"current_workspace"`
-	Tasks            int `json:"tasks"`
-	CurrentTask      int `json:"current_task"`
-	Runs             int `json:"task_runs"`
-	Events           int `json:"task_events"`
-	Handoffs         int `json:"task_handoffs"`
-	Artifacts        int `json:"task_artifacts"`
-	ChannelMessages  int `json:"channel_messages"`
-	Approvals        int `json:"approval_requests"`
-	Notifications    int `json:"notifications"`
-	Outbound         int `json:"outbound_messages"`
-	Tenants          int `json:"tenants"`
+	Persons              int `json:"persons"`
+	Accounts             int `json:"accounts"`
+	Workspaces           int `json:"workspaces"`
+	CurrentWorkspace     int `json:"current_workspace"`
+	Tasks                int `json:"tasks"`
+	CurrentTask          int `json:"current_task"`
+	Runs                 int `json:"task_runs"`
+	Events               int `json:"task_events"`
+	Handoffs             int `json:"task_handoffs"`
+	Artifacts            int `json:"task_artifacts"`
+	ChannelMessages      int `json:"channel_messages"`
+	Approvals            int `json:"approval_requests"`
+	Notifications        int `json:"notifications"`
+	Outbound             int `json:"outbound_messages"`
+	WorkUnits            int `json:"run_work_units"`
+	SkillActivations     int `json:"run_skill_activations"`
+	SkillBindings        int `json:"task_skill_bindings"`
+	WorkflowProfiles     int `json:"workflow_profiles"`
+	EvolutionCandidates  int `json:"evolution_candidates"`
+	WorkflowObservations int `json:"workflow_observations"`
+	SkillVersions        int `json:"skill_versions"`
+	SkillFailureGuards   int `json:"skill_failure_guards"`
+	Tenants              int `json:"tenants"`
 
 	// PersonIDs lists the selected eval-only persons so a dry run can be audited
 	// before deleting anything.
@@ -45,7 +53,8 @@ func (r *EvalResidueReport) Empty() bool {
 // everything keyed to those persons (accounts, workspaces, current_task /
 // current_workspace pointers, tasks, task_runs, task_events, task_handoffs,
 // task_artifacts, channel messages, approvals, notifications, outbound
-// messages) and any non-default tenants left empty by the deletion.
+// messages, and person-scoped Skill/evolution projections) and any non-default
+// tenants left empty by the deletion.
 //
 // The selection is deliberately conservative: a person with even one non-eval
 // account (e.g. a real cli/local binding) is never touched. When apply is
@@ -110,6 +119,12 @@ func (s *Store) CleanEvalResidue(ctx context.Context, apply bool) (*EvalResidueR
 		{&report.Approvals, "approval_requests", "person_id", personIDs},
 		{&report.Notifications, "notifications", "person_id", personIDs},
 		{&report.Outbound, "outbound_messages", "person_id", personIDs},
+		{&report.WorkUnits, "run_work_units", "person_id", personIDs},
+		{&report.SkillActivations, "run_skill_activations", "person_id", personIDs},
+		{&report.SkillBindings, "task_skill_bindings", "person_id", personIDs},
+		{&report.WorkflowProfiles, "workflow_profiles", "person_id", personIDs},
+		{&report.EvolutionCandidates, "evolution_candidates", "person_id", personIDs},
+		{&report.WorkflowObservations, "workflow_observations", "person_id", personIDs},
 	}
 	for _, c := range counts {
 		n, err := s.countByColumn(ctx, c.table, c.key, c.ids)
@@ -127,6 +142,12 @@ func (s *Store) CleanEvalResidue(ctx context.Context, apply bool) (*EvalResidueR
 		return nil, err
 	}
 	report.Tenants = len(emptyTenants)
+	if report.SkillVersions, err = s.countByColumn(ctx, "skill_versions", "control_tenant_id", emptyTenants); err != nil {
+		return nil, err
+	}
+	if report.SkillFailureGuards, err = s.countByColumn(ctx, "skill_failure_guards", "control_tenant_id", emptyTenants); err != nil {
+		return nil, err
+	}
 
 	if !apply {
 		return report, nil
@@ -149,6 +170,12 @@ func (s *Store) CleanEvalResidue(ctx context.Context, apply bool) (*EvalResidueR
 		key   string
 		ids   []string
 	}{
+		{"workflow_observations", "person_id", personIDs},
+		{"run_skill_activations", "person_id", personIDs},
+		{"run_work_units", "person_id", personIDs},
+		{"workflow_profiles", "person_id", personIDs},
+		{"evolution_candidates", "person_id", personIDs},
+		{"task_skill_bindings", "person_id", personIDs},
 		{"task_events", "task_id", taskIDs},
 		{"task_handoffs", "task_id", taskIDs},
 		{"task_artifacts", "task_id", taskIDs},
@@ -170,6 +197,12 @@ func (s *Store) CleanEvalResidue(ctx context.Context, apply bool) (*EvalResidueR
 		}
 	}
 	for _, tenantID := range emptyTenants {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM skill_failure_guards WHERE control_tenant_id = ?`, tenantID); err != nil {
+			return nil, err
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM skill_versions WHERE control_tenant_id = ?`, tenantID); err != nil {
+			return nil, err
+		}
 		if _, err := tx.ExecContext(ctx, `DELETE FROM tenants WHERE id = ?`, tenantID); err != nil {
 			return nil, err
 		}

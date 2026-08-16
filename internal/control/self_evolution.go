@@ -15,6 +15,15 @@ import (
 
 const evolutionProfileVersion = 1
 
+type evolutionOutcomeClass string
+
+const (
+	evolutionOutcomeSuccess   evolutionOutcomeClass = "success"
+	evolutionOutcomeParked    evolutionOutcomeClass = "parked"
+	evolutionOutcomeCancelled evolutionOutcomeClass = "cancelled"
+	evolutionOutcomeFailure   evolutionOutcomeClass = "failure"
+)
+
 type EvolutionPolicy struct {
 	Enabled                  bool
 	Mode                     string
@@ -184,7 +193,8 @@ func (s *Store) MaterializeWorkflowProfile(ctx context.Context, tenantID, runID 
 	}
 
 	var candidate *EvolutionCandidate
-	if profileBatchReadEligible(profile.ToolSequence) && countReadOperations(profile.ToolSequence) >= 3 {
+	if classifyEvolutionOutcome(profile.OutcomeStatus) != evolutionOutcomeParked &&
+		profileBatchReadEligible(profile.ToolSequence) && countReadOperations(profile.ToolSequence) >= 3 {
 		candidate, err = upsertEvolutionCandidate(ctx, tx, profile, policy)
 		if err != nil {
 			return nil, nil, err
@@ -220,7 +230,11 @@ func (s *Store) MaterializeWorkflowProfile(ctx context.Context, tenantID, runID 
 
 func (s *Store) workflowEvents(ctx context.Context, runID string) ([]evolutionEvent, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT type, COALESCE(payload_json,'{}'), created_at
-		FROM task_events WHERE run_id = ? ORDER BY COALESCE(cursor, 0), created_at, rowid`, runID)
+		FROM task_events WHERE run_id = ? AND type IN (
+			'run.started', 'skill.activated', 'tool.started', 'tool.completed',
+			'evolution.batch_item', 'provider.call.usage', 'plan.updated',
+			'run.outcome', 'run.finished', 'run.steering_consumed', 'skill.fallback'
+		) ORDER BY COALESCE(cursor, 0), created_at, rowid`, runID)
 	if err != nil {
 		return nil, err
 	}
@@ -329,7 +343,7 @@ func upsertEvolutionCandidate(ctx context.Context, tx *sql.Tx, profile *Workflow
 	if err != nil {
 		return nil, err
 	}
-	success := profile.ToolFailures == 0 && isSuccessfulOutcome(profile.OutcomeStatus)
+	success := profile.ToolFailures == 0 && classifyEvolutionOutcome(profile.OutcomeStatus) == evolutionOutcomeSuccess
 	status := candidate.Status
 	recovered := false
 	if status == "candidate" && candidate.ObservationCount >= policy.ShadowAfterObservations && policy.Mode != "observe" {
@@ -591,12 +605,16 @@ func stableEvolutionHash(value interface{}) string {
 	return fmt.Sprintf("%x", digest[:])
 }
 
-func isSuccessfulOutcome(status string) bool {
+func classifyEvolutionOutcome(status string) evolutionOutcomeClass {
 	switch strings.ToLower(strings.TrimSpace(status)) {
 	case "done", "completed", "succeeded", "success":
-		return true
+		return evolutionOutcomeSuccess
+	case "waiting_user", "waiting_external", "waiting_finalization":
+		return evolutionOutcomeParked
+	case "cancelled", "canceled":
+		return evolutionOutcomeCancelled
 	default:
-		return false
+		return evolutionOutcomeFailure
 	}
 }
 

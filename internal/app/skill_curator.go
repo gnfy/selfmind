@@ -61,7 +61,7 @@ func (c *llmSkillCurator) ProposeSkillCuration(ctx context.Context, tenantID, pa
 	if err := json.Unmarshal([]byte(payloadJSON), &digest); err != nil {
 		return "", fmt.Errorf("decode skill evidence digest: %w", err)
 	}
-	if len(digest.SuccessObservations) < 3 || strings.TrimSpace(digest.EvidenceSetHash) == "" {
+	if !skillCurationProposalEligible(digest) {
 		return `{"action":"SKIP","reason":"cohort is not ready"}`, nil
 	}
 	if existing, err := c.store.SkillCandidateByEvidence(ctx, tenantID, digest.EvidenceSetHash); err != nil {
@@ -106,7 +106,7 @@ func (c *llmSkillCurator) ApplySkillCuration(ctx context.Context, tenantID, payl
 	if err := json.Unmarshal([]byte(payloadJSON), &digest); err != nil {
 		return "", fmt.Errorf("decode skill evidence digest: %w", err)
 	}
-	if len(digest.SuccessObservations) < 3 || strings.TrimSpace(digest.EvidenceSetHash) == "" {
+	if !skillCurationProposalEligible(digest) {
 		return "skill candidate skipped: cohort is not ready", nil
 	}
 	if existing, err := c.store.SkillCandidateByEvidence(ctx, tenantID, digest.EvidenceSetHash); err != nil {
@@ -272,6 +272,18 @@ func autoPromoteSkillCandidateEligible(digest control.SkillEvidenceDigest) bool 
 		}
 	}
 	return len(runs) >= 3
+}
+
+func skillCurationProposalEligible(digest control.SkillEvidenceDigest) bool {
+	if len(digest.SuccessObservations) < 3 || strings.TrimSpace(digest.EvidenceSetHash) == "" {
+		return false
+	}
+	for _, observation := range digest.SuccessObservations {
+		if observation.EvidenceRole != "success_path" || len(observation.ToolSequence) == 0 {
+			return false
+		}
+	}
+	return true
 }
 
 func (c *llmSkillCurator) publishCandidate(ctx context.Context, tenantID, skillKey, versionHash string) (bool, error) {

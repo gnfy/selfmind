@@ -17,12 +17,14 @@ const (
 	SkillActivationSelected  = "selected"
 	SkillActivationActive    = "active"
 	SkillActivationCompleted = "completed"
+	SkillActivationParked    = "parked"
 	SkillActivationFallback  = "fallback"
 	SkillActivationCancelled = "cancelled"
 
 	WorkUnitPending   = "pending"
 	WorkUnitActive    = "active"
 	WorkUnitCompleted = "completed"
+	WorkUnitParked    = "parked"
 	WorkUnitFallback  = "fallback"
 	WorkUnitFailed    = "failed"
 	WorkUnitCancelled = "cancelled"
@@ -354,7 +356,7 @@ func nullableUnix(value *time.Time) interface{} {
 
 func workUnitTerminal(status string) bool {
 	switch status {
-	case WorkUnitCompleted, WorkUnitFallback, WorkUnitFailed, WorkUnitCancelled:
+	case WorkUnitCompleted, WorkUnitParked, WorkUnitFallback, WorkUnitFailed, WorkUnitCancelled:
 		return true
 	default:
 		return false
@@ -963,18 +965,29 @@ func finalizeRunSkillLifecycleTx(ctx context.Context, tx *sql.Tx, input RunFinal
 	if verification == "" {
 		verification = "not_applicable"
 	}
-	success := isSuccessfulOutcome(input.RunStatus) && !input.ClaimMismatch
+	outcomeClass := classifyEvolutionOutcome(input.RunStatus)
+	cleanOutcome := !input.ClaimMismatch
 	switch verification {
 	case "failed", "stale", "blocked", "partial":
-		success = false
+		cleanOutcome = false
 	}
+	success := outcomeClass == evolutionOutcomeSuccess && cleanOutcome
 	unitState := WorkUnitFailed
 	activationState := SkillActivationFallback
 	fallbackReason := "run ended with status " + strings.TrimSpace(input.RunStatus)
-	if success {
+	switch {
+	case success:
 		unitState = WorkUnitCompleted
 		activationState = SkillActivationCompleted
 		fallbackReason = ""
+	case outcomeClass == evolutionOutcomeParked && cleanOutcome:
+		unitState = WorkUnitParked
+		activationState = SkillActivationParked
+		fallbackReason = ""
+	case outcomeClass == evolutionOutcomeCancelled && !input.ClaimMismatch:
+		unitState = WorkUnitCancelled
+		activationState = SkillActivationCancelled
+		fallbackReason = "run was cancelled"
 	}
 	refs, _ := json.Marshal(input.VerificationRefs)
 	if _, err := tx.ExecContext(ctx, `UPDATE run_work_units SET status=?, outcome_summary=?,

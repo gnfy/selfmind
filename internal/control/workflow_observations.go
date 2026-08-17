@@ -106,7 +106,7 @@ func (s *Store) MaterializeWorkflowObservations(ctx context.Context, tenantID, r
 	now := time.Now()
 	inserted := make([]WorkflowObservation, 0, len(units))
 	for _, unit := range units {
-		if unit.Status != WorkUnitCompleted && unit.Status != WorkUnitFallback && unit.Status != WorkUnitFailed && unit.Status != WorkUnitCancelled {
+		if unit.Status != WorkUnitCompleted && unit.Status != WorkUnitParked && unit.Status != WorkUnitFallback && unit.Status != WorkUnitFailed && unit.Status != WorkUnitCancelled {
 			continue
 		}
 		activation := activationByUnit[unit.ID]
@@ -288,6 +288,13 @@ func comparableWorkflowSignature(goal, skillKey, versionHash string, tools []str
 }
 
 func (s *Store) ReadySkillEvidenceDigestsForRun(ctx context.Context, tenantID, runID string) ([]SkillEvidenceDigest, error) {
+	origins, err := s.workflowRunOrigins(ctx, []string{runID})
+	if err != nil {
+		return nil, err
+	}
+	if workflowOriginExcludedFromCuration(origins[runID]) {
+		return nil, nil
+	}
 	anchors, err := s.workflowObservationsForRun(ctx, normalizeTenant(tenantID), runID)
 	if err != nil {
 		return nil, err
@@ -364,31 +371,90 @@ func (s *Store) comparableWorkflowCohort(ctx context.Context, anchor WorkflowObs
 	if err != nil {
 		return SkillEvidenceDigest{}, err
 	}
-	defer rows.Close()
+	var candidates []WorkflowObservation
+	for rows.Next() {
+		observation, scanErr := scanWorkflowObservation(rows)
+		if scanErr != nil {
+			rows.Close()
+			return SkillEvidenceDigest{}, scanErr
+		}
+		candidates = append(candidates, *observation)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return SkillEvidenceDigest{}, err
+	}
+	rows.Close()
+	runIDs := make([]string, 0, len(candidates))
+	for _, observation := range candidates {
+		runIDs = append(runIDs, observation.RunID)
+	}
+	origins, err := s.workflowRunOrigins(ctx, runIDs)
+	if err != nil {
+		return SkillEvidenceDigest{}, err
+	}
 	digest := SkillEvidenceDigest{
 		WorkflowSignature: anchor.WorkflowSignature, IdentityTenantID: anchor.IdentityTenantID,
 		ControlTenantID: anchor.ControlTenantID, PersonID: anchor.PersonID, WorkspaceID: anchor.WorkspaceID,
 		TargetSkillKey: anchor.SkillKey, ParentVersionHash: anchor.VersionHash,
 	}
-	for rows.Next() {
-		observation, err := scanWorkflowObservation(rows)
-		if err != nil {
-			return SkillEvidenceDigest{}, err
-		}
-		if !workflowObservationsComparable(anchor, *observation) {
+	for _, observation := range candidates {
+		if workflowOriginExcludedFromCuration(origins[observation.RunID]) || !workflowObservationsComparable(anchor, observation) {
 			continue
 		}
-		if observation.EvidenceRole == "success_path" && len(digest.SuccessObservations) < successLimit {
-			digest.SuccessObservations = append(digest.SuccessObservations, *observation)
+		if observation.EvidenceRole == "success_path" && len(observation.ToolSequence) > 0 && len(digest.SuccessObservations) < successLimit {
+			digest.SuccessObservations = append(digest.SuccessObservations, observation)
 		} else if observation.EvidenceRole == "failure_guard" && len(digest.NegativeObservations) < negativeLimit {
-			digest.NegativeObservations = append(digest.NegativeObservations, *observation)
+			digest.NegativeObservations = append(digest.NegativeObservations, observation)
 		}
 	}
 	if digest.TargetSkillKey != "" {
 		_ = s.db.QueryRowContext(ctx, `SELECT skill_name, content_body FROM skill_versions WHERE control_tenant_id=? AND skill_key=? AND state='active'`,
 			digest.ControlTenantID, digest.TargetSkillKey).Scan(&digest.TargetSkillName, &digest.TargetActiveContent)
 	}
-	return digest, rows.Err()
+	return digest, nil
+}
+
+func (s *Store) workflowRunOrigins(ctx context.Context, runIDs []string) (map[string]string, error) {
+	origins := map[string]string{}
+	for _, chunk := range chunkStrings(uniqueSortedStrings(runIDs), 400) {
+		rows, err := s.db.QueryContext(ctx, `SELECT run_id, COALESCE(payload_json, '{}')
+			FROM task_events WHERE type='run.started' AND run_id IN (`+placeholders(len(chunk))+`)
+			ORDER BY run_id, COALESCE(cursor, 0), created_at, rowid`, toAnySlice(chunk)...)
+		if err != nil {
+			return nil, err
+		}
+		for rows.Next() {
+			var runID, raw string
+			if err := rows.Scan(&runID, &raw); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			if _, exists := origins[runID]; exists {
+				continue
+			}
+			var payload struct {
+				Origin string `json:"origin"`
+			}
+			_ = json.Unmarshal([]byte(raw), &payload)
+			origins[runID] = strings.TrimSpace(payload.Origin)
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		rows.Close()
+	}
+	return origins, nil
+}
+
+func workflowOriginExcludedFromCuration(origin string) bool {
+	switch strings.ToLower(strings.TrimSpace(origin)) {
+	case "watch", "external-watch-finalization":
+		return true
+	default:
+		return false
+	}
 }
 
 func workflowObservationsComparable(anchor, candidate WorkflowObservation) bool {

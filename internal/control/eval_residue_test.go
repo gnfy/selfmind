@@ -3,6 +3,7 @@ package control
 import (
 	"context"
 	"testing"
+	"time"
 )
 
 // seedResidueWorld builds a store containing three kinds of persons:
@@ -148,6 +149,72 @@ func TestCleanEvalResidueDeletesOnlyEvalRows(t *testing.T) {
 	}
 	if report2.Tasks != 0 || report2.Runs != 0 || report2.Events != 0 {
 		t.Fatalf("second pass should find no task residue, got %+v", report2)
+	}
+}
+
+func TestCleanEvalResidueIncludesSkillEvolutionRows(t *testing.T) {
+	ctx := context.Background()
+	store, evalID, realID, _, taskIDs := seedResidueWorld(t)
+	var runID, workUnitID string
+	if err := store.db.QueryRowContext(ctx, `SELECT id FROM task_runs WHERE person_id=?`, evalID.PersonID).Scan(&runID); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.db.QueryRowContext(ctx, `SELECT id FROM run_work_units WHERE person_id=?`, evalID.PersonID).Scan(&workUnitID); err != nil {
+		t.Fatal(err)
+	}
+	skillKey := SkillKey(evalID.TenantID, "eval-skill", "user", "agent-created", "/skills", "eval-skill/SKILL.md")
+	if _, err := store.ActivateSkill(ctx, ActivateSkillInput{
+		IdentityTenantID: evalID.TenantID, ControlTenantID: evalID.TenantID,
+		PersonID: evalID.PersonID, RunID: runID, WorkUnitID: workUnitID,
+		SkillKey: skillKey, SkillName: "eval-skill", VersionHash: "v1",
+		ContentBody: "eval", CreatedBy: "eval",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().Unix()
+	statements := []struct {
+		query string
+		args  []interface{}
+	}{
+		{`INSERT INTO workflow_profiles(run_id, tenant_id, person_id, task_id, workflow_signature, created_at) VALUES(?,?,?,?,?,?)`, []interface{}{runID, evalID.TenantID, evalID.PersonID, taskIDs["eval"], "sig", now}},
+		{`INSERT INTO evolution_candidates(id, tenant_id, person_id, workflow_signature, kind, created_at, updated_at) VALUES(?,?,?,?,?,?,?)`, []interface{}{"candidate-eval", evalID.TenantID, evalID.PersonID, "sig", "batch_read", now, now}},
+		{`INSERT INTO task_skill_bindings(identity_tenant_id, person_id, task_id, control_tenant_id, skill_key, skill_name, state, binding_source, created_at, updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)`, []interface{}{evalID.TenantID, evalID.PersonID, taskIDs["eval"], evalID.TenantID, skillKey, "eval-skill", "active", "eval", now, now}},
+		{`INSERT INTO workflow_observations(id, identity_tenant_id, control_tenant_id, person_id, run_id, work_unit_id, workflow_signature, outcome_status, created_at) VALUES(?,?,?,?,?,?,?,?,?)`, []interface{}{"observation-eval", evalID.TenantID, evalID.TenantID, evalID.PersonID, runID, workUnitID, "sig", "completed", now}},
+		{`INSERT INTO skill_failure_guards(control_tenant_id, skill_key, version_hash, failure_signature, state, source_run_id, created_at, last_seen_at) VALUES(?,?,?,?,?,?,?,?)`, []interface{}{evalID.TenantID, skillKey, "v1", "failure-eval", "active", runID, now, now}},
+	}
+	for _, statement := range statements {
+		if _, err := store.db.ExecContext(ctx, statement.query, statement.args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	report, err := store.CleanEvalResidue(ctx, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.WorkUnits != 1 || report.SkillActivations != 1 || report.SkillBindings != 1 ||
+		report.WorkflowProfiles != 1 || report.EvolutionCandidates != 1 || report.WorkflowObservations != 1 ||
+		report.SkillVersions != 1 || report.SkillFailureGuards != 1 {
+		t.Fatalf("skill/evolution dry-run report=%+v", report)
+	}
+	if _, err := store.CleanEvalResidue(ctx, true); err != nil {
+		t.Fatal(err)
+	}
+	for _, table := range []string{"run_work_units", "run_skill_activations", "task_skill_bindings", "workflow_profiles", "evolution_candidates", "workflow_observations"} {
+		var count int
+		if err := store.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM `+table+` WHERE person_id=?`, evalID.PersonID).Scan(&count); err != nil || count != 0 {
+			t.Fatalf("%s eval rows=%d err=%v", table, count, err)
+		}
+	}
+	for _, table := range []string{"skill_versions", "skill_failure_guards"} {
+		var count int
+		if err := store.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM `+table+` WHERE control_tenant_id=?`, evalID.TenantID).Scan(&count); err != nil || count != 0 {
+			t.Fatalf("%s eval tenant rows=%d err=%v", table, count, err)
+		}
+	}
+	var realUnits int
+	if err := store.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM run_work_units WHERE person_id=?`, realID.PersonID).Scan(&realUnits); err != nil || realUnits != 1 {
+		t.Fatalf("real work units=%d err=%v", realUnits, err)
 	}
 }
 

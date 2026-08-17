@@ -67,7 +67,10 @@ selfmind eval clean --yes    # actually delete
 person with even one real binding is never touched) and removes their
 accounts, workspaces, tasks, runs, events, handoffs, artifacts, channel
 messages, approvals, notifications, outbound messages, current-task/workspace
-pointers, and any `eval-*` tenants left empty.
+pointers, person-scoped workflow/Skill projections, and any `eval-*` tenants
+left empty. Skill versions and failure guards are also removed when their
+non-default eval tenant becomes empty; shared/default-tenant assets are never
+selected merely because an eval-only person exists there.
 
 It also removes on-disk residue: per-case `eval-<case>-<nanos>` tenant
 directories that historic runs minted under the config home (skills base

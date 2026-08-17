@@ -123,7 +123,14 @@ Each unit records its own start/finish event cursors. A plan transition to
 from that cursor window's durable evidence. Run finalization only fills units
 that are still pending or active. It never copies a later unit's failure over an
 already completed unit, and duration is taken from the unit window rather than
-dividing total run time evenly.
+dividing total run time evenly. A run that ends at an approval, clarification,
+external wait, or queued finalization closes its unresolved unit and activation
+as `parked`: this is terminal for that run but neither completion nor fallback.
+A clean parked unit remains audit evidence, cannot create task affinity, and
+the parked status itself does not advance success/failure counters. Independent
+tool-failure or user-correction evidence still follows the ordinary negative
+evidence policy. A completed unit before the wait retains its own positive
+evidence.
 
 A task may bind one logical `skill_key`. This is an affinity, not authority and
 not a permanent pin to one content hash. Only deterministic attachments such
@@ -197,6 +204,10 @@ derived data; task/run events remain the source of truth.
 The Skill curator runs only when a bounded comparable cohort is ready. The
 initial gate requires three independent verified successes for the same person,
 workspace and environment, plus up to two relevant negative observations.
+Success observations with no normalized tool sequence cannot nominate a
+curator proposal because they contain no procedural evidence. External-watch
+finalization runs remain audit data and are excluded from nomination, including
+when an ordinary foreground run later anchors a similar cohort.
 Deterministic nomination compares normalized goal features and tool families;
 for an existing Skill it also requires the exact `skill_key@version`. This
 allows paraphrased and CJK tasks to meet again without grouping unrelated
@@ -228,6 +239,9 @@ Python, or another batch. Each inner item still traverses the normal dispatcher
 and execution scope, consumes the ordinary per-turn tool budget, emits durable
 evidence, and requests ordinary-tool
 fallback on failure.
+
+Parked runs are still profiled for cost and diagnostics, but they do not advance
+the batch candidate observation count or its shadow success/failure denominator.
 
 An enabled candidate is recommended only to the same task continuation. Any
 failed batch item degrades the candidate immediately and stores a deterministic

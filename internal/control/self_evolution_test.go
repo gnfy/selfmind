@@ -79,7 +79,76 @@ func TestWorkflowProfilePromotesAndDegradesReadOnlyCandidate(t *testing.T) {
 	}
 }
 
+func TestParkedWorkflowProfileDoesNotAdvanceBatchReadCandidate(t *testing.T) {
+	ctx := context.Background()
+	store, err := OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	identity, _ := store.ResolveOrCreateAccount(ctx, "default", "cli", "parked-profile", "Parked")
+	task, _ := store.CreateTask(ctx, TaskCreate{TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "inspect", Channel: "cli"})
+	policy := EvolutionPolicy{Enabled: true, Mode: "auto-readonly", ShadowAfterObservations: 1, PromoteAfterObservations: 10, MinShadowRuns: 3, MaxShadowFailureRate: 0.05}
+	done := appendReadOnlyProfileRun(t, store, identity, task, "done", "")
+	_, candidate, err := store.MaterializeWorkflowProfile(ctx, identity.TenantID, done.ID, policy)
+	if err != nil || candidate == nil {
+		t.Fatalf("initial candidate=%+v err=%v", candidate, err)
+	}
+	beforeObservations, beforeRuns, beforeMatches := candidate.ObservationCount, candidate.ShadowRuns, candidate.ShadowMatches
+
+	parked := appendReadOnlyProfileRunWithStatus(t, store, identity, task, "parked", "", "waiting_user")
+	profile, parkedCandidate, err := store.MaterializeWorkflowProfile(ctx, identity.TenantID, parked.ID, policy)
+	if err != nil || profile == nil || profile.OutcomeStatus != "waiting_user" || parkedCandidate != nil {
+		t.Fatalf("parked profile=%+v candidate=%+v err=%v", profile, parkedCandidate, err)
+	}
+	var observations, shadowRuns, shadowMatches int
+	if err := store.db.QueryRowContext(ctx, `SELECT observation_count, shadow_runs, shadow_matches FROM evolution_candidates WHERE id=?`, candidate.ID).
+		Scan(&observations, &shadowRuns, &shadowMatches); err != nil {
+		t.Fatal(err)
+	}
+	if observations != beforeObservations || shadowRuns != beforeRuns || shadowMatches != beforeMatches {
+		t.Fatalf("parked run advanced candidate: observations=%d/%d runs=%d/%d matches=%d/%d",
+			observations, beforeObservations, shadowRuns, beforeRuns, shadowMatches, beforeMatches)
+	}
+}
+
+func TestWorkflowEventsRetainOnlyEvolutionInputs(t *testing.T) {
+	ctx := context.Background()
+	store, err := OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	identity, _ := store.ResolveOrCreateAccount(ctx, "default", "cli", "event-filter", "Events")
+	task, _ := store.CreateTask(ctx, TaskCreate{TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "events", Channel: "cli"})
+	run, _ := store.StartRun(ctx, task, "cli", "events")
+	want := []string{
+		"run.started", "skill.activated", "tool.started", "tool.completed",
+		"evolution.batch_item", "provider.call.usage", "plan.updated", "run.outcome",
+		"run.finished", "run.steering_consumed", "skill.fallback",
+	}
+	for _, typ := range append(append([]string{}, want...), "tool.output", "agent.thinking") {
+		appendProfileEvent(t, store, task.ID, run.ID, typ, map[string]interface{}{"message": typ})
+	}
+	events, err := store.workflowEvents(ctx, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != len(want) {
+		t.Fatalf("filtered events=%d want=%d: %+v", len(events), len(want), events)
+	}
+	for i, event := range events {
+		if event.typ != want[i] {
+			t.Fatalf("event[%d]=%q want %q", i, event.typ, want[i])
+		}
+	}
+}
+
 func appendReadOnlyProfileRun(t *testing.T, store *Store, identity *IdentityContext, task *Task, suffix, candidateID string) *Run {
+	return appendReadOnlyProfileRunWithStatus(t, store, identity, task, suffix, candidateID, "done")
+}
+
+func appendReadOnlyProfileRunWithStatus(t *testing.T, store *Store, identity *IdentityContext, task *Task, suffix, candidateID, status string) *Run {
 	t.Helper()
 	ctx := context.Background()
 	run, err := store.StartRun(ctx, task, "cli", suffix)
@@ -99,8 +168,8 @@ func appendReadOnlyProfileRun(t *testing.T, store *Store, identity *IdentityCont
 		appendProfileEvent(t, store, task.ID, run.ID, "tool.completed", map[string]interface{}{"tool": "batch_read"})
 	}
 	appendProfileEvent(t, store, task.ID, run.ID, "provider.call.usage", map[string]interface{}{"input_tokens": 100, "output_tokens": 10, "billed_input_tokens": 40})
-	appendProfileEvent(t, store, task.ID, run.ID, "run.outcome", map[string]interface{}{"status": "done", "verification": map[string]interface{}{"state": "passed"}})
-	if err := store.FinishRun(ctx, identity.TenantID, run.ID, "done"); err != nil {
+	appendProfileEvent(t, store, task.ID, run.ID, "run.outcome", map[string]interface{}{"status": status, "verification": map[string]interface{}{"state": "passed"}})
+	if err := store.FinishRun(ctx, identity.TenantID, run.ID, status); err != nil {
 		t.Fatalf("FinishRun: %v", err)
 	}
 	return run

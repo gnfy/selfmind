@@ -42,8 +42,9 @@ func TestBuildApprovalDecisionsIsTheSingleAnswerSet(t *testing.T) {
 	if rule.GrantKey != "rule:exec_prefix:git status" || rule.Scope != "run" || rule.Key != "r" {
 		t.Fatalf("rule option lost its key or shortcut: %+v", rule)
 	}
-	if !strings.Contains(rule.Label, "git status") {
-		t.Fatalf("rule label must state the rule: %q", rule.Label)
+	if rule.RuleLabel != "commands that start with `git status`" ||
+		!strings.Contains(rule.Label, "don't ask again for commands that start with `git status`") {
+		t.Fatalf("rule option must expose the exact authority: %+v", rule)
 	}
 
 	// No grant class → no class-memory options, because the grant floor would
@@ -112,6 +113,9 @@ func TestApprovalDecisionsRoundTripAndShortcutResolution(t *testing.T) {
 	if !ok || host.GrantKey != "rule:net_host:api.github.com" {
 		t.Fatalf("shortcut r must resolve to the host rule, got %+v", host)
 	}
+	if host.RuleLabel != "network access to api.github.com" {
+		t.Fatalf("round trip lost the human-readable rule: %+v", host)
+	}
 	if _, ok := approvalOptionByShortcut(decoded, "z"); ok {
 		t.Fatal("an unknown letter must not resolve to any option")
 	}
@@ -132,7 +136,7 @@ func TestBareReplyRuleShortcutPersistsTheOfferedRule(t *testing.T) {
 	ctx := context.Background()
 	// The fixture leaves one pending approval; a second pending row makes a bare
 	// one-letter answer ambiguous by design, so retire it first.
-	if err := store.ExpireApprovalRequest(ctx, identity.TenantID, fixture.ID, "test setup"); err != nil {
+	if _, _, err := store.ExpireApprovalRequest(ctx, identity.TenantID, fixture.ID, "test setup"); err != nil {
 		t.Fatal(err)
 	}
 

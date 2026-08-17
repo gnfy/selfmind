@@ -55,16 +55,6 @@ func (a *App) tryRunTUIClient(cfg *config.Config) (int, bool) {
 	}
 
 	client := gwclient.New(res.URL, token)
-	// Presence honesty: the client and the daemon read the same yaml, so the
-	// CLIENT applies gateway.presence_idle_timeout — it is the only side that
-	// knows the input age. Keystrokes touch the tracker (hook installed on the
-	// controller below); heartbeats and event polls send active=0 once the
-	// last input is older than the timeout, and the daemon then stops touching
-	// presence so IM pushes resume. 0 disables (old always-attached behavior).
-	inputTracker := gwclient.NewInputTracker()
-	client.IdleTimeout = cfg.Gateway.PresenceIdleTimeoutDuration()
-	client.LastInput = inputTracker.Last
-
 	displayProvider, displayModel, _ := appcore.ResolveModelDisplay(cfg)
 	// nil agent/gateway: the run path uses the message processor (the daemon),
 	// and client mode gates agent-backed slash commands so nothing dereferences
@@ -107,9 +97,6 @@ func (a *App) tryRunTUIClient(cfg *config.Config) (int, bool) {
 		// from startup (the daemon owns it via person_settings /mode).
 		ctrl.SetPersistedApprovalMode(digest.ApprovalMode)
 	}
-	// Presence = recent user input: every keystroke stamps the shared tracker
-	// the client's active=0|1 claim is computed from.
-	ctrl.SetInputActivityHook(inputTracker.Touch)
 	// In-session update announcement: the background check fired at startup
 	// (printUpdateNotice) delivers its result into the live session instead of
 	// waiting for the next launch. Deduped against the startup notice.
@@ -118,8 +105,9 @@ func (a *App) tryRunTUIClient(cfg *config.Config) (int, bool) {
 	// without this loop an open-but-idle TUI reads as detached and CLI-origin
 	// approval prompts would ALSO push to IM (double notification). Stopped on
 	// TUI exit so presence expires and routing falls back to the preferred IM.
-	// Beats older than presence_idle_timeout since the last keystroke claim
-	// active=0 (no presence touch), so a vacated desk detaches by TTL.
+	// A live process keeps claiming attachment. An unanswered approval still
+	// escalates to IM after pending_notify_after, so keyboard silence never
+	// masquerades as a closed terminal.
 	stopPresence := client.StartPresencePing(a.ctx)
 	defer stopPresence()
 

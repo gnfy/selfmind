@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -21,6 +22,20 @@ import (
 	"selfmind/internal/gateway/api"
 	"selfmind/internal/tools"
 )
+
+func intFromApprovalArg(value interface{}) int {
+	switch typed := value.(type) {
+	case float64:
+		return int(typed)
+	case int:
+		return typed
+	case string:
+		n, _ := strconv.Atoi(strings.TrimSpace(typed))
+		return n
+	default:
+		return 0
+	}
+}
 
 const (
 	// digestFallbackWindow bounds the digest for accounts with no recorded
@@ -92,9 +107,28 @@ func (d *Server) buildDigest(ctx context.Context, identity *control.IdentityCont
 		return out, err
 	}
 	for _, approval := range approvals {
+		payload := decodeApprovalPayload(approval)
+		decisions := decodeApprovalDecisions(approval.Payload)
+		wireDecisions := make([]api.ApprovalDecision, 0, len(decisions))
+		for _, decision := range decisions {
+			wireDecisions = append(wireDecisions, api.ApprovalDecision{
+				ID: decision.ID, Label: decision.Label, Decision: decision.Decision,
+				Scope: decision.Scope, GrantKey: decision.GrantKey,
+				RuleLabel: decision.RuleLabel, Key: decision.Key,
+			})
+		}
+		codePreview, _ := payload.Args["code_preview"].(string)
+		codeSHA256, _ := payload.Args["code_sha256"].(string)
 		out.PendingApprovals = append(out.PendingApprovals, api.DigestApproval{
-			ID:   approval.ID,
-			Line: approvalSummaryLine(approval, titles[approval.TaskID]),
+			ID: approval.ID, Line: approvalSummaryLine(approval, titles[approval.TaskID]),
+			WaiterState: approval.WaiterState, Tool: payload.Tool, Target: payload.Target,
+			Reason: payload.Reason, Environment: payload.Environment, Cwd: payload.Cwd,
+			ChangeSummary: payload.ChangeSummary, GrantClass: payload.GrantClass,
+			Containment: payload.Containment, TriageState: payload.TriageState,
+			Rationale: payload.TriageRationale, Risk: payload.TriageRisk,
+			CodePreview: codePreview, CodeSHA256: codeSHA256,
+			CodeLines: intFromApprovalArg(payload.Args["code_lines"]),
+			CodeBytes: intFromApprovalArg(payload.Args["code_bytes"]), Decisions: wireDecisions,
 		})
 	}
 

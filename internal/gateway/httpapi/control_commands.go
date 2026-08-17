@@ -331,7 +331,27 @@ func (d *Server) notifyPreferenceReply(ctx context.Context, identity *control.Id
 		if current == "off" {
 			current = "off (detached notifications disabled)"
 		}
-		return "Notify preference: " + current + "\nUsage: /notify <on|off|auto|platform>", nil
+		surface, err := d.Control.GetPersonSetting(ctx, identity.TenantID, identity.PersonID, personSettingApprovalSurface)
+		if err != nil {
+			return "", err
+		}
+		if surface == "" {
+			surface = "desk-first"
+		}
+		return "Notify preference: " + current + "\nApproval surface: " + surface + "\nUsage: /notify <on|off|auto|platform|desk-first|phone-first>", nil
+	}
+	if arg == "desk-first" || arg == "phone-first" {
+		value := arg
+		if value == "desk-first" {
+			value = ""
+		}
+		if err := d.Control.SetPersonSetting(ctx, identity.TenantID, identity.PersonID, personSettingApprovalSurface, value); err != nil {
+			return "", err
+		}
+		if arg == "phone-first" {
+			return "Approval surface set to phone-first. CLI-origin approvals will also go immediately to the preferred IM endpoint.", nil
+		}
+		return "Approval surface set to desk-first. CLI-origin approvals escalate to IM only after the CLI detaches or T1 elapses.", nil
 	}
 	if arg == "on" || arg == "auto" {
 		if err := d.Control.SetPersonSetting(ctx, identity.TenantID, identity.PersonID, personSettingNotifyPlatform, ""); err != nil {
@@ -367,7 +387,7 @@ func (d *Server) notifyPreferenceReply(ctx context.Context, identity *control.Id
 		if len(bound) == 0 {
 			return "You have no bound IM accounts yet, so there is nothing to notify. Bind an account first.", nil
 		}
-		return fmt.Sprintf("%s is not one of your bound IM accounts (bound: %s). Use /notify <on|off|auto|platform>.", arg, strings.Join(bound, ", ")), nil
+		return fmt.Sprintf("%s is not one of your bound IM accounts (bound: %s). Use /notify <on|off|auto|platform|desk-first|phone-first>.", arg, strings.Join(bound, ", ")), nil
 	}
 	if err := d.Control.SetPersonSetting(ctx, identity.TenantID, identity.PersonID, personSettingNotifyPlatform, arg); err != nil {
 		return "", err

@@ -107,7 +107,9 @@ selfmind update         # check + package-manager install + verify + drained dae
 replaces the binary on its own. Restart drains the active turn before the
 process exits. On macOS, launchd observes the clean
 exit and starts the newly installed version. The CLI verifies the daemon build
-fingerprint so an old daemon cannot look healthy after an upgrade.
+fingerprint and control-schema health; an unreachable, stale, or
+schema-incompatible daemon makes the update command fail instead of degrading
+to a warning.
 
 Running `selfmind update` also refreshes an equal-version npm release. This
 restores package contents after a developer temporarily replaces the staged
@@ -154,10 +156,28 @@ The Git tag is the single version source. Release builds inject:
 - `internal/buildinfo.Commit`;
 - `internal/buildinfo.BuiltAt`.
 
-The npm launcher and every native package use the same version. Database
-migrations are forward-only and must be restart-safe. An older unsupported
-binary must reject a newer schema clearly; it must never recreate or discard
+The npm launcher and every native package use the same version. `control.db`
+migrations are forward-only, explicitly versioned, and restart-safe. A legacy
+database is integrity-checked and copied with SQLite's consistent snapshot
+mechanism under `<data-dir>/backups/` before its first schema transition. The
+migration verifies that historical approval/run/queue/task states did not gain
+new executable meaning before recording the new version. An older unsupported
+binary rejects a newer schema before any write; it never recreates or discards
 user data.
+
+If a migrated installation must be recovered, stop the gateway and use the
+explicit backup path reported by the failed migration:
+
+```sh
+selfmind maintenance restore-control --backup <data-dir>/backups/control-vOLD-to-vNEW-TIME.db --yes
+selfmind gateway start
+selfmind gateway status
+```
+
+Restore verifies the snapshot, preserves the failed database beside the active
+file, and never accepts an arbitrary path outside that data directory's backup
+folder. Database rollback and binary rollback are paired: an older binary must
+only be started after restoring the schema snapshot it understands.
 
 Release channels use npm dist-tags:
 
@@ -176,9 +196,12 @@ Tags and manual dispatches use `.github/workflows/release.yml`:
 5. pack the launcher and native packages;
 6. smoke-test the Linux launcher in CI;
 7. smoke-test the macOS x64 launcher on a macOS runner;
-8. publish all native packages first;
-9. publish the launcher last;
-10. attach archives, npm tarballs, and checksums to the GitHub release.
+8. upgrade every supported released control.db fixture, restart twice, and
+   prove migration idempotency plus zero undeclared queue/run/authorization
+   changes;
+9. publish all native packages first;
+10. publish the launcher last;
+11. attach archives, npm tarballs, and checksums to the GitHub release.
 
 The following npm package names require trusted-publisher/OIDC configuration:
 

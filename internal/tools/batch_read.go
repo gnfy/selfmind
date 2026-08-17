@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"selfmind/internal/kernel"
 	"selfmind/internal/platform/textutil"
@@ -132,15 +133,22 @@ func (t *BatchReadTool) ExecuteContext(ctx context.Context, args map[string]inte
 			break
 		}
 		childArgs := batchReadChildArgs(operation, args, index)
+		childCallID := batchReadParentCallID(childArgs)
+		parentCallID := batchReadParentCallID(args)
 		eventArgs, _ := json.Marshal(batchReadPublicArgs(childArgs))
 		kernel.EmitAgentEvent(kernel.EventChannelFromContext(ctx), kernel.AgentEvent{
-			Type: "tool.started",
+			Type:       "tool.started",
+			ToolName:   operation.Tool,
+			ToolCallID: childCallID,
+			ToolArgs:   string(eventArgs),
 			Payload: map[string]interface{}{
 				"tool": operation.Tool, "args": string(eventArgs), "nested": true,
-				"parent_tool": "batch_read", "candidate_id": candidateID,
+				"parent_tool": "batch_read", "parent_tool_call_id": parentCallID, "candidate_id": candidateID,
 			},
 		})
+		startedAt := time.Now()
 		output, err := t.dispatch(operation.Tool, childArgs)
+		duration := time.Since(startedAt).Seconds()
 		item := batchReadItemResult{Index: index + 1, Tool: operation.Tool, Success: err == nil, Bytes: len(output)}
 		digest := sha256.Sum256([]byte(output))
 		item.Hash = fmt.Sprintf("%x", digest[:])
@@ -157,13 +165,23 @@ func (t *BatchReadTool) ExecuteContext(ctx context.Context, args map[string]inte
 		results = append(results, item)
 		completionPayload := map[string]interface{}{
 			"tool": operation.Tool, "nested": true, "parent_tool": "batch_read",
-			"candidate_id": candidateID, "result": item.Output, "result_truncated": item.Truncated,
+			"parent_tool_call_id": parentCallID, "candidate_id": candidateID,
+			"result": item.Output, "result_truncated": item.Truncated,
+		}
+		completionEvent := kernel.AgentEvent{
+			Type:            "tool.completed",
+			ToolName:        operation.Tool,
+			ToolCallID:      childCallID,
+			ToolResult:      item.Output,
+			DurationSeconds: duration,
+			Payload:         completionPayload,
 		}
 		if err != nil {
 			completionPayload["error"] = err.Error()
 			completionPayload["error_category"] = ClassifyToolError(operation.Tool, err, output)
+			completionEvent.Error = err.Error()
 		}
-		kernel.EmitAgentEvent(kernel.EventChannelFromContext(ctx), kernel.AgentEvent{Type: "tool.completed", Payload: completionPayload})
+		kernel.EmitAgentEvent(kernel.EventChannelFromContext(ctx), completionEvent)
 		kernel.EmitAgentEvent(kernel.EventChannelFromContext(ctx), kernel.AgentEvent{
 			Type: "evolution.batch_item",
 			Payload: map[string]interface{}{
@@ -200,6 +218,14 @@ func batchReadAllowedTool(tool string) bool {
 	}
 }
 
+func batchReadParentCallID(args map[string]interface{}) string {
+	value, ok := args["_tool_call_id"].(string)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(value)
+}
+
 func batchReadChildArgs(operation batchReadOperation, parent map[string]interface{}, index int) map[string]interface{} {
 	args := map[string]interface{}{}
 	for key, value := range parent {
@@ -207,7 +233,11 @@ func batchReadChildArgs(operation batchReadOperation, parent map[string]interfac
 			args[key] = value
 		}
 	}
-	args["_tool_call_id"] = fmt.Sprintf("%v:batch:%d", parent["_tool_call_id"], index+1)
+	if parentCallID := batchReadParentCallID(parent); parentCallID != "" {
+		args["_tool_call_id"] = fmt.Sprintf("%s:batch:%d", parentCallID, index+1)
+	} else {
+		delete(args, "_tool_call_id")
+	}
 	if operation.Path != "" {
 		args["path"] = operation.Path
 	}

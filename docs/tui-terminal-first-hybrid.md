@@ -174,18 +174,29 @@ substrate). Document results in this file.
 
 ### H2 — Tool cells: in-progress active, commit-on-complete ✅ shipped
 - Folded into H1: a running tool renders in the active region; on
-  `MsgToolDone` the final cell is committed to scrollback. The legacy in-place
-  mutation path is retained for legacy mode (no behavior change there).
+  `MsgToolDone` the final cell is committed to scrollback. Legacy viewport and
+  hybrid scrollback use the same identity, orphan-routing, and terminal-cleanup
+  reducer invariants; only their presentation/commit transport differs.
 - Tool output is correlated end to end by `tool_call_id` (builtin event →
-  daemon event log → SSE replay → TUI). Unmatched output is ignored instead of
-  creating an anonymous `Running tool` cell, and committed cells are never
-  mutated by later events.
+  daemon event log → SSE replay → TUI). Nested `batch_read` children publish
+  their derived id and tool name in the canonical event fields, not only in a
+  compatibility payload. The reducer refuses an anonymous mutable start row;
+  unmatched output is ignored, while an identified completion with no tracked
+  start gets its own finalized history cell instead of being guessed onto a
+  different running call. Committed cells are never mutated by later events.
 - Active command output is a bounded three-line tail. A terminal run state
-  (`done`, `error`, or `cancelled`) discards any unfinished transient tool cells
-  and ignores late tool events, leaving a clean input surface after completion.
+  (`done`, `error`, or `cancelled`) finalizes every unfinished tool cell as an
+  interrupted error before committing it. Only an intentional spectator detach
+  discards its transient projection because the daemon run remains active. Thus
+  no terminal run leaves a `Running` row in the redraw region.
 - Verification notices remain concise English control text. Successful
   verification is silent; incomplete, failed, or blocked verification adds one
   actionable line only.
+- Production-path coverage, not renderer-only tests, guards canonical child
+  identity, orphan completion routing, and terminal cleanup.
+- Codex-style `Exploring` / `Explored` grouping remains deferred until a mutable
+  group owns bounded flush, member errors, and the same terminal cleanup. There
+  is no dormant renderer on the immutable per-tool commit path.
 
 ### H2a - Live plan pinned above the composer
 
@@ -217,6 +228,11 @@ substrate). Document results in this file.
   semantic titles such as `Ran tests`, `Searched files`, or
   `Ran Google Cloud command`; here-doc bodies never become titles. Unknown
   commands retain only a bounded first command, with a maximum two-row header.
+- Tool action verbs carry a stable semantic color without overriding outcome:
+  run/command verbs are magenta, read/list/search verbs are cyan, file/memory
+  mutation verbs are yellow, and plan/lifecycle verbs are blue. The independent
+  status bullet remains dim while running, green for successful commands, and
+  red for failures, so a failed `Search` is still visibly a failure.
 - Command output is limited to five physical rows using a head/tail preview and
   a hidden-row count. The durable tool event remains unchanged; the transcript
   is a readable operational summary rather than a raw terminal dump.
@@ -251,6 +267,37 @@ substrate). Document results in this file.
 - Regression coverage: `event_identity_test.go`, `attach_digest_test.go`, and
   the targeted watcher tests in `gateway/client/client_test.go` and
   `gateway/cli/daemon_queue_test.go`.
+
+### H2d - Approval resolution and notices
+
+- Approval prompts remain FIFO and may wait behind active typing. A successful
+  answer clears local state only after the daemon accepts it; transport failure
+  keeps the same panel available for retry and never records a false approval.
+- The active prompt follows Codex's interaction hierarchy: an action-specific
+  question, inspectable command/path and execution context, a selectable list
+  of daemon-issued decisions, then `enter to confirm / esc to cancel`. Reusable
+  choices display the daemon's exact `rule_label`; the client neither derives a
+  rule from prose nor invents an authorization option. `No`, Esc, and Ctrl+C
+  all send an explicit rejection before the panel closes. A cancellation
+  advances to the next queued durable request rather than silently dropping it.
+- The person event stream forwards durable `approval.approved`,
+  `approval.rejected`, `approval.parked`, `approval.expired`, and
+  `approval.archived` events. Human resolution from another endpoint closes the
+  matching active/queued item by approval id and advances the queue. Parked is
+  non-terminal: the same panel remains answerable after the original run ends
+  and explains that a decision starts a continuation. The local answer's
+  stream echo is deduplicated. Expiration/archival never render as rejection or
+  claim that a dead run resumed.
+- Durable notice cells and the transient notification bar consume one typed
+  notice kind and one visual mapping. They do not infer success, guidance,
+  warning, or failure from display prose. Approval success/denial feedback
+  clears after 1.5 seconds, and generation-tagged timers cannot erase a newer
+  notice.
+- Explicit cancellation emits expiration only when the daemon wins the
+  conditional `pending -> expired` transition. A resource deadline or daemon
+  recovery instead emits idempotent `approval.parked`; if a human decision wins
+  the race, the waiter honors the stored decision. Re-attach hydration restores
+  complete server-issued options rather than a reduced yes/no summary.
 
 ### H3 — Commit-time file-change rendering ✅ shipped (patch); ⏳ write_file overwrite deferred
 - `renderPatchCell` (`transcript_renderer.go`) parses the V4A patch input

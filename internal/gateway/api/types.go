@@ -56,6 +56,13 @@ type GatewayStatusResponse struct {
 	ActiveRuns     []ActiveRunStatus  `json:"active_runs"`
 	ActiveRunCount int                `json:"active_run_count"`
 	ToolSchemas    ToolSchemaHealth   `json:"tool_schemas,omitempty"`
+	StoreSchema    StoreSchemaHealth  `json:"store_schema,omitempty"`
+}
+
+type StoreSchemaHealth struct {
+	Version        int  `json:"version"`
+	CurrentVersion int  `json:"current_version"`
+	BackupCreated  bool `json:"backup_created,omitempty"`
 }
 
 type ToolSchemaHealth struct {
@@ -94,6 +101,10 @@ type MessageRequest struct {
 	// EffectKey deduplicates the logical products of durable system work across
 	// retry runs. It is derived from the queue row, never from a client.
 	EffectKey string `json:"-"`
+	// SourceApprovalID links a daemon-originated continuation to the parked
+	// approval that caused it. It is durable event provenance, never accepted
+	// from a wire client and never inferred later from prompt prose.
+	SourceApprovalID string `json:"-"`
 	// ExecutionProfile carries an internal execution contract for durable
 	// system work. It is never accepted from the wire. Ordinary user turns leave
 	// it empty; watcher finalization uses a constrained unattended profile.
@@ -328,12 +339,41 @@ type DigestTask struct {
 	Summary string `json:"summary,omitempty"`
 }
 
-// DigestApproval carries the approval id plus the same one-line rich summary
-// the /approvals list renders; clients show the line and defer resolution
-// (ordinals, y/n) to the shared gateway resolver.
+// ApprovalDecision is one server-issued answer. Clients render this list and
+// return its opaque fields unchanged; they never invent authorization scope.
+type ApprovalDecision struct {
+	ID        string `json:"id"`
+	Label     string `json:"label"`
+	Decision  string `json:"decision"`
+	Scope     string `json:"scope,omitempty"`
+	GrantKey  string `json:"grant_key,omitempty"`
+	RuleLabel string `json:"rule_label,omitempty"`
+	Key       string `json:"key,omitempty"`
+}
+
+// DigestApproval carries the complete approval prompt needed to rebuild the
+// same interactive panel after re-attach. Line remains the compact digest/list
+// summary; the structured fields are authoritative for the panel.
 type DigestApproval struct {
-	ID   string `json:"id"`
-	Line string `json:"line"`
+	ID            string             `json:"id"`
+	Line          string             `json:"line"`
+	WaiterState   string             `json:"waiter_state,omitempty"`
+	Tool          string             `json:"tool,omitempty"`
+	Target        string             `json:"target,omitempty"`
+	Reason        string             `json:"reason,omitempty"`
+	Environment   string             `json:"environment,omitempty"`
+	Cwd           string             `json:"cwd,omitempty"`
+	ChangeSummary string             `json:"change_summary,omitempty"`
+	GrantClass    string             `json:"grant_class,omitempty"`
+	Containment   string             `json:"containment,omitempty"`
+	TriageState   string             `json:"triage_state,omitempty"`
+	Rationale     string             `json:"triage_rationale,omitempty"`
+	Risk          string             `json:"triage_risk,omitempty"`
+	CodePreview   string             `json:"code_preview,omitempty"`
+	CodeSHA256    string             `json:"code_sha256,omitempty"`
+	CodeLines     int                `json:"code_lines,omitempty"`
+	CodeBytes     int                `json:"code_bytes,omitempty"`
+	Decisions     []ApprovalDecision `json:"decisions,omitempty"`
 }
 
 // DigestClarify carries a pending question's id plus its one-line summary;

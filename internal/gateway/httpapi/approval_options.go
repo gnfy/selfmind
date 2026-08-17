@@ -31,20 +31,21 @@ import (
 // shortcut a terminal or a conversational reply uses ("y", "p", …); it is stable
 // per option KIND so muscle memory survives a changing option list.
 type approvalDecisionOption struct {
-	ID       string `json:"id"`
-	Label    string `json:"label"`
-	Decision string `json:"decision"`
-	Scope    string `json:"scope,omitempty"`
-	GrantKey string `json:"grant_key,omitempty"`
-	Key      string `json:"key,omitempty"`
+	ID        string `json:"id"`
+	Label     string `json:"label"`
+	Decision  string `json:"decision"`
+	Scope     string `json:"scope,omitempty"`
+	GrantKey  string `json:"grant_key,omitempty"`
+	RuleLabel string `json:"rule_label,omitempty"`
+	Key       string `json:"key,omitempty"`
 }
 
 // buildApprovalDecisions renders one compact, server-authoritative answer set.
 // Ordinary asks expose once / run-local reuse / deny. Sensitive asks expose
 // once / deny. request_permissions exposes its exact run bundle / deny.
 func buildApprovalDecisions(req tools.ToolApprovalRequest) []approvalDecisionOption {
-	once := approvalDecisionOption{ID: "once", Label: "Yes, run it once", Decision: "approved", Key: "y"}
-	deny := approvalDecisionOption{ID: "deny", Label: "No, and tell the agent what to do instead", Decision: "rejected", Key: "n"}
+	once := approvalDecisionOption{ID: "once", Label: "Yes, proceed", Decision: "approved", Key: "y"}
+	deny := approvalDecisionOption{ID: "deny", Label: approvalDenyLabel(req.ToolName), Decision: "rejected", Key: "n"}
 
 	switch strings.ToLower(strings.TrimSpace(req.DecisionPolicy)) {
 	case tools.ApprovalDecisionPolicyOnceOnly:
@@ -55,7 +56,7 @@ func buildApprovalDecisions(req tools.ToolApprovalRequest) []approvalDecisionOpt
 			label = "the requested permissions"
 		}
 		return []approvalDecisionOption{{
-			ID: "run_bundle", Label: "Yes, allow " + label + " for this run", Decision: "approved", Scope: "run", Key: "y",
+			ID: "run_bundle", Label: "Yes, grant " + label + " for this run", Decision: "approved", Scope: "run", RuleLabel: label, Key: "y",
 		}, deny}
 	}
 
@@ -63,19 +64,43 @@ func buildApprovalDecisions(req tools.ToolApprovalRequest) []approvalDecisionOpt
 	if len(req.RuleCandidates) == 1 {
 		rule := req.RuleCandidates[0]
 		options = append(options, approvalDecisionOption{
-			ID: "rule:" + rule.Kind, Label: fmt.Sprintf("Yes, allow %s for this run", rule.Label),
-			Decision: "approved", Scope: "run", GrantKey: rule.Key, Key: "r",
+			ID: "rule:" + rule.Kind, Label: fmt.Sprintf("Yes, and don't ask again for %s in this run", rule.Label),
+			Decision: "approved", Scope: "run", GrantKey: rule.Key, RuleLabel: rule.Label, Key: "r",
 		})
 	} else if exact := strings.TrimSpace(req.RunGrantClass); exact != "" {
+		label := "Yes, and don't ask again for " + exact
+		if approvalRunsCommand(req.ToolName) {
+			label = "Yes, and don't ask again for this command in this run"
+		}
 		options = append(options, approvalDecisionOption{
-			ID: "run_exact", Label: "Yes, allow " + exact, Decision: "approved", Scope: "run", Key: "r",
+			ID: "run_exact", Label: label, Decision: "approved", Scope: "run", RuleLabel: exact, Key: "r",
 		})
 	} else if class := strings.TrimSpace(req.GrantClass); class != "" {
 		options = append(options, approvalDecisionOption{
-			ID: "run", Label: "Yes, allow " + class + " for this run", Decision: "approved", Scope: "run", Key: "r",
+			ID: "run", Label: "Yes, and don't ask again for " + class + " in this run", Decision: "approved", Scope: "run", RuleLabel: class, Key: "r",
 		})
 	}
 	return append(options, deny)
+}
+
+func approvalRunsCommand(toolName string) bool {
+	switch strings.ToLower(strings.TrimSpace(toolName)) {
+	case "terminal", "execute_command", "shell", "execute_code", "verify", "watch_external":
+		return true
+	default:
+		return false
+	}
+}
+
+func approvalDenyLabel(toolName string) string {
+	switch strings.ToLower(strings.TrimSpace(toolName)) {
+	case "patch", "write_file":
+		return "No, continue without making edits"
+	case "request_permissions":
+		return "No, continue without granting permissions"
+	default:
+		return "No, continue without running it"
+	}
 }
 
 // decodeApprovalDecisions reads the options back off a stored row's payload. A row

@@ -16,6 +16,18 @@ expect:
   must_not_contain:
     - "<tool>"
     - "Process summary:"
+assert_state:
+  # Persistence-boundary smoke guard: at least one production tool start and
+  # completion event carries correlation identity. Focused Go tests enforce
+  # complete identity and result pairing for every batch_read child.
+  - on: events
+    type: tool.started
+    payload_contains: '"tool_call_id":'
+    count_gte: 1
+  - on: events
+    type: tool.completed
+    payload_contains: '"tool_call_id":'
+    count_gte: 1
 checks:
   no_mojibake: true
   no_raw_json_leak: true

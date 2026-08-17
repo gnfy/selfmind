@@ -100,9 +100,6 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, spinnerCmd
 
 	case tea.KeyMsg:
-		if m.onUserInput != nil {
-			m.onUserInput() // presence honesty: every keystroke counts as "the person is here" (input_activity.go)
-		}
 		// Same signal, different purpose: the approval panel must not arm while
 		// the person is mid-keystroke (approvalTypingIdleDelay).
 		m.noteInputActivity(time.Now())
@@ -152,11 +149,10 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		newerDaemonRun := m.daemonRunActive && msg.Turn != nil &&
 			strings.TrimSpace(msg.Turn.RunID) != "" &&
 			strings.TrimSpace(msg.Turn.RunID) != m.daemonRunID
-		// The run is over; any unanswered approval row is expired by the daemon
-		// once its waiter is gone, so drop stale approval UI instead of letting a
-		// panel answer into the void.
+		// Live waiters die with the run, but a parked approval deliberately stays
+		// answerable and starts a continuation. Preserve those panels.
 		if !newerDaemonRun {
-			m.clearApprovalFlow()
+			m.settleApprovalFlowAtRunEnd()
 		}
 		msg.Response = textutil.CleanUTF8(msg.Response)
 		m.thinking = false
@@ -164,7 +160,7 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if !newerDaemonRun {
 			m.activePlanJSON = ""
 			m.toolExecuting = ""
-			m.discardOpenToolMessages()
+			m.finalizeOpenToolMessages("Completion was not observed before the run ended.")
 		}
 		m.steerCh = nil // run finished; stop accepting mid-turn guidance for it
 		m.cancelFn = nil
@@ -179,7 +175,7 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		// The mid-turn guidance notice is stale once the run ends — clear it.
 		if strings.HasPrefix(m.statusMsg, "Sent to the running task") || strings.Contains(m.statusMsg, "Guidance queue") {
-			m.statusMsg = ""
+			m.clearStatusNotice()
 		}
 		turnTokens := msg.Usage.InputTokens + msg.Usage.OutputTokens
 		if turnTokens > 0 {
@@ -226,7 +222,7 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.thinking = false
 			m.activityText = ""
 			m.toolExecuting = ""
-			m.discardOpenToolMessages()
+			m.finalizeOpenToolMessages("Completion was not observed before the next run started.")
 		}
 		watchID := strings.TrimSpace(msg.WatchID)
 		// The daemon started this run on the person's behalf, so it reports its
@@ -287,7 +283,7 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.activityText = ""
 		m.toolExecuting = ""
 		m.activePlanJSON = ""
-		m.discardOpenToolMessages()
+		m.finalizeOpenToolMessages("Completion was not observed before the run ended.")
 		m.flushLiveStreamPending()
 		if strings.TrimSpace(m.liveStreamContent) != "" {
 			m.finalizeLiveStream("")
@@ -320,15 +316,22 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.watchCancel = nil
 		m.toolExecuting = ""
 		m.activePlanJSON = ""
-		m.discardOpenToolMessages()
+		if msg.Cancelled {
+			// This terminal detached from a still-running daemon task. Its durable
+			// tool ledger remains authoritative; transient spectator rows need not
+			// be committed as failures.
+			m.discardOpenToolMessages()
+		} else {
+			m.finalizeOpenToolMessages("Completion was not observed before the watched run ended.")
+		}
 		if strings.HasPrefix(m.statusMsg, "Watching ") {
-			m.statusMsg = ""
+			m.clearStatusNotice()
 		}
 		if msg.Cancelled {
 			// The user detached (ctrl+c during watch) — the run keeps running on
 			// the daemon; just stop reporting. No "finished" line.
 			if wasWatching {
-				m.statusMsg = "Detached — the task keeps running in the background."
+				m.setStatusNotice(noticeInfo, "Detached — the task keeps running in the background.")
 			}
 			return m, spinnerCmd
 		}
@@ -341,6 +344,9 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, spinnerCmd
 
 	case MsgApprovalRequest:
+		if m.hasApprovalRequest(msg.ID) {
+			return m, nil
+		}
 		// The daemon is blocked waiting for approval. Arm the interactive panel
 		// (active region); if one is already up, queue FIFO and re-arm after the
 		// current decision. No redundant text notice — the panel is the prompt.
@@ -363,6 +369,19 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case MsgApprovalDelayElapsed:
 		return m, m.releaseDelayedApprovals(time.Now())
 
+	case MsgApprovalResolved:
+		if !m.acceptEvent(msg.Event) {
+			return m, nil
+		}
+		return m, m.resolveApprovalElsewhere(msg)
+
+	case MsgApprovalParked:
+		if !m.acceptEvent(msg.Event) {
+			return m, nil
+		}
+		m.markApprovalParked(msg.ID)
+		return m, nil
+
 	case MsgClarifyRequest:
 		m.armClarifyPrompt(tools.ClarifyRequest{Question: msg.Question, Choices: msg.Choices}, true)
 		return m, nil
@@ -371,18 +390,25 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Err != nil {
 			m.addErrorMessage(fmt.Sprintf("Could not send clarify answer: %v", msg.Err))
 			m.runStatus = "error"
-			m.statusMsg = "Clarify answer was not accepted."
+			noticeID := m.setStatusNotice(noticeWarning, "Clarify answer was not accepted.")
+			return m, clearStatusNoticeAfter(noticeID, 3*time.Second)
 		} else {
-			m.statusMsg = "Answer sent. The task is continuing."
+			noticeID := m.setStatusNotice(noticeGuidance, "Answer sent. The task is continuing.")
 			m.runStatus = "working"
+			return m, clearStatusNoticeAfter(noticeID, 3*time.Second)
 		}
-		return m, tea.Tick(3*time.Second, func(t time.Time) tea.Msg { return MsgClearStatus{} })
 
 	case MsgToolStart:
 		if !m.acceptEvent(msg.Event) || m.backgroundRunEvent(msg.Event) {
 			return m, spinnerCmd
 		}
-		if isTerminalRunStatus(m.runStatus) || m.toolMessageExists(msg.ToolCallID) {
+		// Anonymous mutable rows cannot be completed deterministically and would
+		// remain in the redraw region forever. Producers must provide identity;
+		// legacy compatibility belongs at the event adapter boundary.
+		if strings.TrimSpace(msg.ToolCallID) == "" {
+			return m, spinnerCmd
+		}
+		if isTerminalRunStatus(m.runStatus) || m.toolMessageIndex(msg.ToolCallID, msg.Event.RunID) >= 0 {
 			return m, spinnerCmd
 		}
 		m.finalizeLiveStream("")
@@ -395,6 +421,7 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		last := &m.messages[len(m.messages)-1]
 		last.ToolName = msg.ToolName
 		last.ToolCallID = msg.ToolCallID
+		last.RunID = msg.Event.RunID
 		last.ToolArgs = msg.Args
 		last.IsRunning = true
 		return m, spinnerCmd
@@ -407,10 +434,12 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, spinnerCmd
 		}
 		msg.Result = textutil.CleanUTF8(msg.Result)
-		idx := m.findActiveToolMessageIndex(msg.ToolCallID, msg.ToolName)
+		idx := m.findActiveToolMessageIndex(msg.ToolCallID, msg.ToolName, msg.Event.RunID)
 		if idx >= 0 {
 			last := &m.messages[idx]
-			last.ToolName = msg.ToolName
+			if strings.TrimSpace(msg.ToolName) != "" {
+				last.ToolName = msg.ToolName
+			}
 			if msg.ToolCallID != "" {
 				last.ToolCallID = msg.ToolCallID
 			}
@@ -434,6 +463,31 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			// The tool cell is now final — commit it to scrollback (hybrid mode).
 			m.commit(last)
+		} else if strings.TrimSpace(msg.ToolCallID) != "" &&
+			m.toolMessageIndex(msg.ToolCallID, msg.Event.RunID) < 0 &&
+			m.currentToolEvent(msg.Event) {
+			// A completion for this run that has no tracked start is not discarded
+			// and never guessed onto another active call. Give it a standalone,
+			// already-completed history cell: the explicit orphan destination.
+			toolName := strings.TrimSpace(msg.ToolName)
+			if toolName == "" {
+				toolName = "tool"
+			}
+			m.messages = append(m.messages, ChatMessage{
+				Role:       "tool",
+				ToolName:   toolName,
+				ToolCallID: msg.ToolCallID,
+				RunID:      msg.Event.RunID,
+				Content:    msg.Result,
+				Duration:   msg.Duration,
+				IsError:    msg.Err != nil,
+				Timestamp:  time.Now(),
+			})
+			orphan := &m.messages[len(m.messages)-1]
+			if msg.Err != nil {
+				orphan.Content = fmt.Sprintf("%s error: %v", toolName, msg.Err)
+			}
+			m.commit(orphan)
 		}
 		if !m.anyToolRunning() && !m.passiveDaemonEvent(msg.Event) {
 			m.toolExecuting = ""
@@ -461,7 +515,7 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.thinking = false
 		m.activityText = ""
-		m.appendToolOutput(msg.ToolCallID, msg.ToolName, msg.Content)
+		m.appendToolOutput(msg.ToolCallID, msg.ToolName, msg.Event.RunID, msg.Content)
 		return m, spinnerCmd
 
 	case MsgToolHeartbeat:
@@ -471,7 +525,7 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if isTerminalRunStatus(m.runStatus) {
 			return m, spinnerCmd
 		}
-		idx := m.findActiveToolMessageIndex(msg.ToolCallID, msg.ToolName)
+		idx := m.findActiveToolMessageIndex(msg.ToolCallID, msg.ToolName, msg.Event.RunID)
 		if idx >= 0 {
 			if msg.ToolName != "" && !m.passiveDaemonEvent(msg.Event) {
 				m.toolExecuting = msg.ToolName
@@ -495,7 +549,7 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if !m.acceptEvent(msg.Event) || m.backgroundRunEvent(msg.Event) {
 			return m, spinnerCmd
 		}
-		m.statusMsg = msg.Content
+		m.setStatusNotice(noticeInfo, msg.Content)
 		m.addMessage("system", msg.Content)
 		return m, nil
 
@@ -507,7 +561,9 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case MsgClearStatus:
-		m.statusMsg = ""
+		if msg.NoticeID == 0 || msg.NoticeID == m.statusNoticeID {
+			m.clearStatusNotice()
+		}
 		return m, nil
 
 	case MsgTokens:
@@ -539,9 +595,8 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *uiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	// An active approval panel captures every key except ctrl+c: the decision
-	// must be explicit (Esc does nothing), and stray keys must not leak into
-	// the composer.
+	// An active approval panel captures every key. Esc and Ctrl+C explicitly
+	// reject the current request; stray keys must not leak into the composer.
 	if m.approvalPrompt != nil {
 		if cmd, handled := m.handleApprovalPromptKey(msg); handled {
 			return m, cmd
@@ -642,12 +697,6 @@ func (m *uiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.activePlanJSON = ""
 			return m, m.clearHybridScreen()
 		case "enter":
-			// Deny follow-up (approval panel "No"): Enter resolves it — bare Enter
-			// is a plain deny, typed text is deny + guidance. Checked before the
-			// empty-input early return so bare Enter works.
-			if m.approvalDenyFollowup {
-				return m, m.finishApprovalDeny(m.editor.ExpandValue())
-			}
 			// Slash-command popup is open (a partial like "/m" with a highlighted
 			// match): Enter accepts the highlighted command and submits it in one
 			// press, so the user never has to type the command in full. Safe for

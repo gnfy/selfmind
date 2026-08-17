@@ -1,0 +1,27 @@
+id: reliability_approval_surface_control
+title: "approval notification surface is a durable model-free control"
+suite: reliability
+workspace: isolated
+channel: cli
+model_required: false
+
+turns:
+  - input: "/notify phone-first"
+  - input: "/notify"
+
+expect:
+  status: completed
+  require_no_task: true
+  require_no_run: true
+  max_tool_calls: 0
+  max_duration_seconds: 30
+  contains:
+    - "Approval surface: phone-first"
+  must_not_contain:
+    - "Unknown command"
+
+checks:
+  no_mojibake: true
+  no_empty_response: true
+  no_raw_json_leak: true
+  no_provider_stack_dump: true

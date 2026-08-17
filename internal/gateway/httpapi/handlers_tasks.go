@@ -86,8 +86,8 @@ func (d *Server) handleTaskEvents(w http.ResponseWriter, r *http.Request) {
 	}
 	// An event poll is a liveness beat: the TUI polls this endpoint mid-turn,
 	// which is exactly when approval routing needs to know it is attached.
-	// active=0 (stale user input at that terminal) still gets events but no
-	// longer claims presence — watching is not being there.
+	// Legacy active=0 is ignored: watching proves the endpoint process is live;
+	// unanswered-request age, not keyboard activity, owns IM escalation.
 	if presenceClaimed(r) {
 		d.touchPresence(r.Context(), identity)
 	}

@@ -20,7 +20,6 @@ import (
 	"os"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"selfmind/internal/control"
@@ -34,72 +33,6 @@ type Client struct {
 	BaseURL string
 	Token   string
 	HTTP    *http.Client
-	// Presence honesty (docs/identity-continuity.md "Runtime attachment
-	// model"): presence must mean "the person is at this terminal", not "a
-	// terminal process is alive". IdleTimeout + LastInput let the client
-	// compute input age and stamp active=0|1 on its presence-claiming
-	// requests (the idle ping and the event stream); the daemon only touches
-	// presence for active=1. IdleTimeout <= 0 or a nil LastInput disables the
-	// idle check (every beat claims attachment — the old behavior).
-	IdleTimeout time.Duration
-	LastInput   func() time.Time
-}
-
-// InputTracker is a tiny concurrency-safe "last user input" timestamp shared
-// between the TUI (keystrokes Touch it) and the Client (heartbeats read it).
-// It is seeded with the construction time: launching the TUI is itself input.
-type InputTracker struct {
-	lastNanos atomic.Int64
-}
-
-// NewInputTracker returns a tracker seeded to now.
-func NewInputTracker() *InputTracker {
-	t := &InputTracker{}
-	t.Touch()
-	return t
-}
-
-// Touch records user input at time now.
-func (t *InputTracker) Touch() {
-	if t != nil {
-		t.lastNanos.Store(time.Now().UnixNano())
-	}
-}
-
-// Last returns the most recent input time (zero when never touched).
-func (t *InputTracker) Last() time.Time {
-	if t == nil {
-		return time.Time{}
-	}
-	nanos := t.lastNanos.Load()
-	if nanos == 0 {
-		return time.Time{}
-	}
-	return time.Unix(0, nanos)
-}
-
-// presenceActive reports whether this endpoint may still claim attachment:
-// the last user input is younger than IdleTimeout. Missing wiring or a zero
-// timeout fails open to active — never let a config gap silently mute the
-// terminal's presence.
-func (c *Client) presenceActive() bool {
-	if c == nil || c.IdleTimeout <= 0 || c.LastInput == nil {
-		return true
-	}
-	last := c.LastInput()
-	if last.IsZero() {
-		return true
-	}
-	return time.Since(last) <= c.IdleTimeout
-}
-
-// presenceActiveParam is the wire form of presenceActive for the active=0|1
-// query parameter (absent or "1" = claim presence, "0" = watching only).
-func (c *Client) presenceActiveParam() string {
-	if c.presenceActive() {
-		return "1"
-	}
-	return "0"
 }
 
 // New builds a Client. A nil http.Client falls back to a sensible default with
@@ -252,7 +185,7 @@ func (c *Client) openEventStream(ctx context.Context, req api.MessageRequest, cu
 	if req.DisplayName != "" {
 		q.Set("display_name", req.DisplayName)
 	}
-	q.Set("active", c.presenceActiveParam())
+	q.Set("active", "1")
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, c.BaseURL+"/v1/events/stream?"+q.Encode(), nil)
 	if err != nil {
 		return nil, err
@@ -451,6 +384,15 @@ func eventToStream(ev control.Event) (llm.StreamEvent, bool) {
 			Content:   str(p["reason"]),
 			Payload:   payload,
 		}, true
+	case ev.Type == "approval.approved" || ev.Type == "approval.rejected" || ev.Type == "approval.expired" || ev.Type == "approval.archived" || ev.Type == "approval.parked":
+		// Resolution events share the person stream with approval.requested so
+		// every attached client can dismiss a request answered elsewhere or
+		// expired by its waiter/recovery sweep.
+		payload := make(map[string]interface{}, len(p))
+		for key, value := range p {
+			payload[key] = value
+		}
+		return llm.StreamEvent{EventType: ev.Type, Payload: payload}, true
 	case ev.Type == "clarify.requested":
 		return llm.StreamEvent{
 			EventType: "clarify.requested",
@@ -659,10 +601,9 @@ func (c *Client) PingPresence(ctx context.Context) error {
 	q := url.Values{}
 	q.Set("platform", "cli")
 	q.Set("platform_user_id", clientUserID())
-	// active=0 turns the beat into a no-op on the daemon's presence registry:
-	// the loop keeps running (a keystroke re-activates the NEXT beat within
-	// 30s) but a vacated terminal stops claiming attachment.
-	q.Set("active", c.presenceActiveParam())
+	// Presence is endpoint liveness, not keyboard activity. An open client keeps
+	// claiming attachment; an unanswered approval escalates by its own age.
+	q.Set("active", "1")
 	reqCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	httpReq, err := http.NewRequestWithContext(reqCtx, http.MethodGet, c.BaseURL+"/v1/presence/ping?"+q.Encode(), nil)

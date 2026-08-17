@@ -181,24 +181,49 @@ jobs, which deliver to the channel that created them). Priority:
    notify endpoint** (default: most recently active IM account; configurable).
    One target, never a fan-out to every bound IM.
 
+Approval requests refine rules 3/4 with a person setting. `desk-first` (the
+default) shows a young request only in an attached CLI, escalates it to the
+preferred IM after 15 minutes, and pushes immediately as soon as the CLI
+detaches. `phone-first` mirrors CLI-origin approvals to that IM immediately.
+The destination and surface policy are independent `/notify` settings. If an
+approval was pushed to one endpoint and answered on another, the pushed route
+receives one idempotent resolution message so it never keeps presenting a
+question that is no longer true.
+
 **Observation layer — live watching follows PRESENCE.** Any attached
 interactive endpoint may hook a mid-flight run's live event stream and
 steering, without changing where the conversation reply goes (watching a
 WeChat-dispatched task from the CLI does not move its answer). Presence is
-derived from the event-poll heartbeat, never persisted as authority; a
-terminal crash is an implicit detach identical to a graceful close.
+derived from the client process/event-stream heartbeat, never from the age of
+the last keyboard input and never persisted as authority. A terminal crash is
+an implicit detach identical to a graceful close.
 
 **Delivery truth — accepted is not delivered.** A message persisted for an IM
 sender may still be `pending_session` or `sent_unconfirmed`; neither state may
 mark the source notification delivered. Only confirmed transport delivery does
 so. Pending/unconfirmed rows remain eligible for the bounded, idempotent
-catch-up path. Diagnostics aggregate this health per platform without exposing
-peer/channel identifiers.
+session-aware catch-up path; `sent_unconfirmed` is never blindly replayed by the
+approval escrow timer because the handset may already have received it.
+Diagnostics aggregate this health per platform without exposing peer/channel
+identifiers.
 
 Re-attaching (next morning, back home on the same machine → same `cli/local`
 account → same person) flips rule 3/4 back and shows an **attach digest**:
 what finished/failed while away, pending approvals/questions, queued tasks —
-one person-scoped query.
+one person-scoped query. Pending approvals reconstruct the same server-issued
+interactive menu, including the exact reusable rule text and whether the
+original run is parked.
+
+Approval lifetime is independent from run lifetime. A resource timeout or
+daemon restart parks an unanswered approval without rejecting it; answering a
+parked request starts a task-pinned continuation. A decision committed just
+before a daemon crash is recovered into the same continuation path. Parked
+requests are archived after seven days to bound retained interactive state. If
+there is no live endpoint and the preferred IM route is currently
+`pending_session`, `failed`, or `sent_unconfirmed`, the default unattended
+resource wait is 30 seconds rather than 30 minutes. This releases the run slot;
+it does not shorten the seven-day answer lifetime. A live CLI still selects the
+full wait regardless of the latest IM delivery state.
 
 Lifecycle: `CLI attach → work → detach (close/handoff) → IM takeover → …
 → CLI re-attach (digest + take back over)`. Crash of a terminal is an

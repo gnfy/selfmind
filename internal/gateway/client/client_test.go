@@ -98,6 +98,36 @@ func TestEventToStreamMapping(t *testing.T) {
 			},
 		},
 		{
+			name:    "approval approved keeps resolution identity",
+			ev:      control.Event{ID: "4a", Type: "approval.approved", Payload: mustJSON(map[string]any{"approval_id": "apr-1", "scope": "run", "decision_id": "allow-run"})},
+			wantTyp: "approval.approved",
+			check: func(t *testing.T, se llm.StreamEvent) {
+				if se.Payload["approval_id"] != "apr-1" || se.Payload["scope"] != "run" || se.Payload["decision_id"] != "allow-run" {
+					t.Fatalf("approval resolution payload not forwarded: %+v", se.Payload)
+				}
+			},
+		},
+		{
+			name:    "approval rejected keeps resolution identity",
+			ev:      control.Event{ID: "4r", Type: "approval.rejected", Payload: mustJSON(map[string]any{"approval_id": "apr-2"})},
+			wantTyp: "approval.rejected",
+			check: func(t *testing.T, se llm.StreamEvent) {
+				if se.Payload["approval_id"] != "apr-2" {
+					t.Fatalf("approval resolution payload not forwarded: %+v", se.Payload)
+				}
+			},
+		},
+		{
+			name:    "approval expired keeps resolution identity and reason",
+			ev:      control.Event{ID: "4e", Type: "approval.expired", Payload: mustJSON(map[string]any{"approval_id": "apr-3", "reason": "waiter gone"})},
+			wantTyp: "approval.expired",
+			check: func(t *testing.T, se llm.StreamEvent) {
+				if se.Payload["approval_id"] != "apr-3" || se.Payload["reason"] != "waiter gone" {
+					t.Fatalf("approval expiration payload not forwarded: %+v", se.Payload)
+				}
+			},
+		},
+		{
 			name:    "external watcher completion keeps watcher identity",
 			ev:      control.Event{ID: "4b", Type: "external_watch.completed", Payload: mustJSON(map[string]any{"watch_id": "watch_123", "status": "succeeded", "task_status": "waiting_finalization"})},
 			wantTyp: "watch.completed",

@@ -300,8 +300,8 @@ The always-on daemon. CLI, IM, cron, and HTTP all converge on it.
 gateway:
   addr: "127.0.0.1:8765"       # bind address; a public bind REQUIRES a token
   token: ""                    # shared secret; mandatory for non-loopback binds
-  presence_idle_timeout: "5m"  # idle CLI stops counting as "attached" (pushes go to IM)
-  pending_notify_after: "2m"   # re-push an unanswered approval/question to IM after this
+  presence_idle_timeout: "0"   # deprecated compatibility key; presence follows client process liveness
+  pending_notify_after: "15m"  # attached CLI: escalate an unanswered approval/question after T1; detached pushes immediately
   outbound_retention: "336h"   # retain terminal delivery history for 14 days; 0 disables pruning
   delivery_max_message_chars: 3500
   delivery_retry_attempts: 3
@@ -468,6 +468,8 @@ agent:
   llm_retry_cap: "30s"          # backoff cap
   llm_stream_idle_timeout: "180s"  # abort a stalled SSE stream after this
   approval_triage_timeout: "30s"   # smart-mode cheap judge foreground budget
+  approval_wait: "30m"             # resource wait while a live/healthy endpoint can answer
+  approval_wait_unattended: "30s"  # resource wait when no endpoint can currently answer
 editor:
   large_paste_chars: 1000       # TUI large-paste detection
   large_paste_lines: 10
@@ -492,6 +494,15 @@ timeout. If the auxiliary/explicit `fast_classifier` does not return within
 this budget, smart mode fails safe to a human approval prompt. The default is
 30 seconds; lower values can turn a healthy reasoning-capable cheap model into
 an apparent outage.
+
+Approval wait values are resource budgets, not answer-expiry timers. A live
+process uses `approval_wait`. Without one, no routable IM account or a latest
+preferred-IM state of `pending_session`, `failed`, or `sent_unconfirmed` uses
+`approval_wait_unattended`. When that shorter budget ends, the run parks and
+releases its slot; the approval remains answerable for seven days. In
+particular, a Weixin outage may make tasks park after roughly 30 seconds by
+default. This is expected recovery behavior, not a rejected approval. The
+caller's own remaining deadline may shorten either configured value.
 
 Evolution profiles are deterministic projections of completed run events; they
 do not add a foreground model call. `observe` only records profiles,

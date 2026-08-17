@@ -220,7 +220,13 @@ func TestGatewayTokenTakesPrecedence(t *testing.T) {
 
 func TestGatewayStatusEndpoint(t *testing.T) {
 	t.Setenv("SELF_GATEWAY_TOKEN", "")
+	store, err := control.OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
 	daemon := &Server{
+		Control:         store,
 		DefaultTenantID: "default",
 		RuntimeStatusFunc: func() api.GatewayRuntimeInfo {
 			return api.GatewayRuntimeInfo{PID: 123, Addr: "127.0.0.1:8765", State: "running"}
@@ -241,6 +247,9 @@ func TestGatewayStatusEndpoint(t *testing.T) {
 	}
 	if status.Runtime.Version == "" || status.Runtime.BuildFingerprint == "" {
 		t.Fatalf("status payload does not expose build identity: %+v", status.Runtime)
+	}
+	if status.StoreSchema.Version != control.CurrentControlSchemaVersion || status.StoreSchema.CurrentVersion != control.CurrentControlSchemaVersion {
+		t.Fatalf("status payload does not expose current control schema: %+v", status.StoreSchema)
 	}
 }
 

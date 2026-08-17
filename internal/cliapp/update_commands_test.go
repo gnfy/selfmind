@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"selfmind/internal/gateway/api"
 	"selfmind/internal/updatecheck"
 )
 
@@ -171,5 +172,31 @@ func TestRunningFromNPMInstall(t *testing.T) {
 	t.Setenv("SELFMIND_NPM_PACKAGE", "@selfmind/cli")
 	if !runningFromNPMInstall() {
 		t.Fatal("npm package marker must identify an npm-managed development replacement")
+	}
+}
+
+func TestValidateRestartedDaemonHealthRequiresBuildSchemaAndRunningState(t *testing.T) {
+	healthy := api.GatewayStatusResponse{
+		Runtime:     api.GatewayRuntimeInfo{Version: "v0.1.0-beta.20"},
+		State:       "running",
+		StoreSchema: api.StoreSchemaHealth{Version: 1, CurrentVersion: 1},
+	}
+	if err := validateRestartedDaemonHealth(healthy, "0.1.0-beta.20"); err != nil {
+		t.Fatalf("healthy daemon rejected: %v", err)
+	}
+	wrongVersion := healthy
+	wrongVersion.Runtime.Version = "v0.1.0-beta.19"
+	if err := validateRestartedDaemonHealth(wrongVersion, "0.1.0-beta.20"); err == nil {
+		t.Fatal("wrong build passed update health")
+	}
+	wrongSchema := healthy
+	wrongSchema.StoreSchema.Version = 0
+	if err := validateRestartedDaemonHealth(wrongSchema, "0.1.0-beta.20"); err == nil {
+		t.Fatal("missing schema health passed update health")
+	}
+	draining := healthy
+	draining.State = "draining"
+	if err := validateRestartedDaemonHealth(draining, "0.1.0-beta.20"); err == nil {
+		t.Fatal("non-running daemon passed update health")
 	}
 }

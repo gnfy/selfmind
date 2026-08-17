@@ -39,11 +39,6 @@ var composerHintStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("39")).Ita
 // the user has typed something — so they know Enter will inject the text as
 // guidance into the running task (not start a new turn). Empty otherwise.
 func (m *uiModel) composerHint() string {
-	// Deny follow-up (approval panel "No"): always show what Enter will do —
-	// send guidance with the rejection, or just deny when left empty.
-	if m.approvalDenyFollowup {
-		return composerHintStyle.Render(glyphArrowInto + " " + approvalDenyHint)
-	}
 	if m.steerCh == nil || (!m.thinking && m.toolExecuting == "") {
 		return ""
 	}
@@ -77,13 +72,13 @@ func (m *uiModel) handleCopyLast() tea.Cmd {
 			continue
 		}
 		if err := copyToClipboard(msg.Content); err != nil {
-			m.statusMsg = fmt.Sprintf("Copy failed: %v", err)
+			m.setStatusNotice(noticeWarning, fmt.Sprintf("Copy failed: %v", err))
 		} else {
-			m.statusMsg = "Copied last response to clipboard."
+			m.setStatusNotice(noticeSuccess, "Copied last response to clipboard.")
 		}
 		return nil
 	}
-	m.statusMsg = "No response to copy yet."
+	m.setStatusNotice(noticeWarning, "No response to copy yet.")
 	return nil
 }
 

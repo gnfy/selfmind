@@ -1010,6 +1010,12 @@ func diagEventLabel(event control.Event) string {
 		return "Approval approved"
 	case "approval.rejected":
 		return "Approval rejected"
+	case "approval.parked":
+		return "Approval parked and still answerable"
+	case "approval.expired":
+		return "Approval expired"
+	case "approval.archived":
+		return "Approval archived after retention"
 	case "token.updated":
 		return "Channel session refreshed"
 	default:

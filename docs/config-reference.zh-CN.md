@@ -249,8 +249,8 @@ memory:
 gateway:
   addr: "127.0.0.1:8765"       # 绑定地址；公网绑定必须配 token
   token: ""                    # 共享密钥；非 loopback 绑定时强制
-  presence_idle_timeout: "5m"  # CLI 空闲这么久后不再算"已附着"（推送转到 IM）
-  pending_notify_after: "2m"   # 无人应答的审批/提问在此时长后补推到 IM
+  presence_idle_timeout: "0"   # 已弃用的兼容配置；presence 只跟随客户端进程存活
+  pending_notify_after: "15m"  # CLI 已附着时超过 T1 才补推；CLI 脱离后立即推送
   outbound_retention: "336h"   # 终态投递记录保留 14 天；0 表示禁用清理
   delivery_max_message_chars: 3500
   delivery_retry_attempts: 3
@@ -407,6 +407,8 @@ agent:
   llm_retry_cap: "30s"          # 退避上限
   llm_stream_idle_timeout: "180s"  # SSE 流卡住多久后中断
   approval_triage_timeout: "30s"   # smart 模式廉价裁决模型的前台预算
+  approval_wait: "30m"             # 有实时/健康端点可回答时占用 run 的等待预算
+  approval_wait_unattended: "30s"  # 当前没有端点可回答时占用 run 的等待预算
 editor:
   large_paste_chars: 1000       # TUI 大段粘贴识别
   large_paste_lines: 10
@@ -428,6 +430,14 @@ evolution:
 `approval_triage_timeout` 与主模型的传输超时相互独立。辅助或显式配置的
 `fast_classifier` 如果未在该预算内返回，smart 模式会安全降级为人工审批。
 默认值是 30 秒；设置过短会把可用的推理型廉价模型误判成不可用。
+
+审批等待值是资源预算，不是回答失效时间。存在实时进程时使用
+`approval_wait`；没有实时进程，且没有可路由的 IM 账号，或首选 IM 最近状态为
+`pending_session`、`failed`、`sent_unconfirmed` 时，使用
+`approval_wait_unattended`。短预算结束后 run 会释放执行槽并进入 parked，但审批
+仍可在七天内回答。因而 Weixin 故障期任务默认可能约 30 秒就 park，这是预期的
+恢复行为，不代表审批被拒绝。调用方自身剩余的 deadline 还可能进一步缩短这两个
+配置值。
 
 自进化画像是由已完成 run 的持久事件确定性派生，不会增加前台模型调用。
 `observe` 只记录画像；`shadow` 还会评估受限的只读批处理候选，但不会使用；

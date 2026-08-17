@@ -43,6 +43,10 @@ type Message struct {
 // KindApproval marks an approval-request notification.
 const KindApproval = "approval"
 
+// KindApprovalResolution closes a request previously pushed to another
+// endpoint. It never carries approve/reject buttons.
+const KindApprovalResolution = "approval_resolution"
+
 // KindClarify marks a pending-question notification. Unlike an approval it has
 // no native yes/no keyboard — the answer is free text, so senders render it as
 // plain text and the person's next non-command reply resolves it.
@@ -570,7 +574,7 @@ func sessionRefreshRequired(err error) bool {
 
 func catchUpWorthyKind(kind string) bool {
 	switch strings.TrimSpace(kind) {
-	case KindFinalResult, KindApproval, KindClarify, "external_watch", "recovery", "maintenance_health":
+	case KindFinalResult, KindApproval, KindApprovalResolution, KindClarify, "external_watch", "recovery", "maintenance_health":
 		return true
 	default:
 		return false

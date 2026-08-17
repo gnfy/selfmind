@@ -85,6 +85,36 @@ func (s *Store) LatestDeliveryEndpointState(ctx context.Context, tenantID, perso
 	return &state, nil
 }
 
+// ListDeliveredApprovalRoutes returns the endpoint routes on which an approval
+// request may have been seen. Resolution delivery uses this to close a stale
+// mobile prompt after the person answers somewhere else. Failed/pending rows
+// are excluded: they either never reached the person or will be superseded by
+// the ordinary pending-state check before a retry can send them.
+func (s *Store) ListDeliveredApprovalRoutes(ctx context.Context, tenantID, personID, approvalID string) ([]Delivery, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, tenant_id, person_id, platform, COALESCE(platform_user_id, ''), channel, COALESCE(task_id, ''), COALESCE(run_id, ''),
+		        content, COALESCE(kind, ''), COALESCE(approval_id, ''), status, attempts, max_attempts, next_attempt_at, COALESCE(last_error, ''),
+		        part_index, part_total, COALESCE(idempotency_key, ''), created_at, updated_at, COALESCE(delivered_at, 0)
+		 FROM outbound_messages
+		 WHERE tenant_id = ? AND person_id = ? AND approval_id = ? AND kind = 'approval'
+		   AND status IN ('sent', 'sent_unconfirmed')
+		 ORDER BY created_at ASC, id ASC LIMIT 50`,
+		normalizeTenant(tenantID), strings.TrimSpace(personID), strings.TrimSpace(approvalID))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Delivery
+	for rows.Next() {
+		item, scanErr := scanDelivery(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
 func (s *Store) UpdateRunHeartbeat(ctx context.Context, tenantID, runID string) error {
 	_, err := s.db.ExecContext(ctx,
 		`UPDATE task_runs SET heartbeat_at = ? WHERE tenant_id = ? AND id = ? AND status = 'running'`,
@@ -309,10 +339,16 @@ func (s *Store) MarkInterruptedRuns(ctx context.Context, olderThan time.Duration
 	// poisons later approvals (ambiguous bare y/n, ordinals hitting dead
 	// requests — observed live). Best-effort; the waiter's own timeout path is
 	// the primary cleanup.
-	if expired, err := s.ExpireOrphanedApprovals(ctx); err != nil {
-		log.Warn("failed to expire orphaned approvals", "error", err)
-	} else if expired > 0 {
-		log.Warn("expired orphaned pending approvals", "count", expired)
+	if parked, err := s.ParkOrphanedApprovals(ctx); err != nil {
+		log.Warn("failed to park orphaned approvals", "error", err)
+	} else if len(parked) > 0 {
+		for i := range parked {
+			approval := &parked[i]
+			if _, eventErr := s.AppendApprovalParkedEvent(ctx, approval, approval.RequestedChannel, "approval waiter was lost during daemon recovery"); eventErr != nil {
+				log.Warn("failed to append recovered approval.parked event", "approval_id", approval.ID, "error", eventErr)
+			}
+		}
+		log.Warn("parked orphaned pending approvals", "count", len(parked))
 	}
 	// Clarify hygiene rides the same sweep for the same reason: a pending
 	// question whose run died would keep intercepting the next free-text

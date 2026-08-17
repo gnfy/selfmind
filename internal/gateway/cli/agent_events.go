@@ -310,6 +310,31 @@ func (m *uiModel) forwardGatewayEventFrom(event llm.StreamEvent, source eventSou
 				Options: approvalOptionsFromPayload(event.Payload),
 			})
 		}
+	case "approval.parked":
+		if event.Payload != nil {
+			id, _ := event.Payload["approval_id"].(string)
+			if strings.TrimSpace(id) != "" {
+				m.program.Send(MsgApprovalParked{ID: strings.TrimSpace(id), Event: ref})
+			}
+		}
+	case "approval.approved", "approval.rejected", "approval.expired", "approval.archived":
+		payloadString := func(key string) string {
+			if event.Payload == nil {
+				return ""
+			}
+			value, _ := event.Payload[key].(string)
+			return strings.TrimSpace(value)
+		}
+		id := payloadString("approval_id")
+		if id != "" {
+			m.program.Send(MsgApprovalResolved{
+				ID:         id,
+				Status:     strings.TrimPrefix(event.EventType, "approval."),
+				Scope:      payloadString("scope"),
+				DecisionID: payloadString("decision_id"),
+				Event:      ref,
+			})
+		}
 	case "clarify.requested":
 		if strings.TrimSpace(event.Content) == "" {
 			return
@@ -372,44 +397,6 @@ func (m *uiModel) pumpAgentEvents() {
 				content := strings.TrimPrefix(event, "stream:")
 				if m.program != nil {
 					m.program.Send(MsgStream{Content: content})
-				}
-			case strings.HasPrefix(event, "tool_start:"):
-				parts := strings.SplitN(event[11:], ":", 2)
-				name := parts[0]
-				if isHiddenLifecycleTool(name) {
-					continue
-				}
-				args := ""
-				if len(parts) > 1 {
-					args = parts[1]
-				}
-				if m.program != nil {
-					m.program.Send(MsgToolStart{ToolName: name, Args: args})
-				}
-			case strings.HasPrefix(event, "tool_end:"):
-				rest := strings.TrimPrefix(event, "tool_end:")
-				parts := strings.SplitN(rest, ":", 3)
-				name := parts[0]
-				if isHiddenLifecycleTool(name) {
-					continue
-				}
-				durationStr := "0"
-				result := ""
-				var err error
-				if len(parts) >= 2 {
-					if parts[1] == "error" {
-						errParts := strings.SplitN(parts[2], ":", 2)
-						durationStr = errParts[0]
-						err = fmt.Errorf("%s", errParts[1])
-					} else {
-						durationStr = parts[1]
-						result = parts[2]
-					}
-				}
-				var duration float64
-				fmt.Sscanf(durationStr, "%f", &duration)
-				if m.program != nil {
-					m.program.Send(MsgToolDone{ToolName: name, Result: result, Err: err, Duration: duration})
 				}
 			case strings.HasPrefix(event, "review:"):
 				if m.program != nil {

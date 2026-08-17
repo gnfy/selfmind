@@ -11,7 +11,7 @@ import (
 // ApprovalOption is one selectable answer in an ApprovalPrompt panel. Decision
 // and Scope mirror the gateway approval-respond contract
 // (api.ApprovalRespondRequest): Decision is "approved"|"rejected"; Scope is the
-// class-grant memory scope — "" (once), "task", or "person".
+// grant memory scope — "" (once) or the daemon-issued reusable scope.
 type ApprovalOption struct {
 	Label    string
 	Key      string // single-key shortcut ("y", "t", "a", "n", or a rule letter)
@@ -32,13 +32,26 @@ type ApprovalOption struct {
 // must never invent durable authority that the daemon did not offer.
 func DefaultApprovalOptions() []ApprovalOption {
 	return []ApprovalOption{
-		{Label: "Yes, run it once", Key: "y", Decision: "approved", Scope: ""},
-		{Label: "No, and tell the agent what to do instead", Key: "n", Decision: "rejected", Scope: ""},
+		{Label: "Yes, proceed", Key: "y", Decision: "approved", Scope: ""},
+		{Label: "No, continue without it", Key: "n", Decision: "rejected", Scope: ""},
 	}
 }
 
-// ApprovalPrompt is a bordered, selectable approval panel rendered in the TUI's
-// active region while a run is blocked on a tool approval. It is a passive
+func defaultApprovalOptionsForTool(tool string) []ApprovalOption {
+	options := DefaultApprovalOptions()
+	switch strings.TrimSpace(tool) {
+	case "terminal", "execute_command", "shell", "execute_code", "verify", "watch_external":
+		options[1].Label = "No, continue without running it"
+	case "patch", "write_file":
+		options[1].Label = "No, continue without making edits"
+	case "request_permissions":
+		options[1].Label = "No, continue without granting permissions"
+	}
+	return options
+}
+
+// ApprovalPrompt is a Codex-style selectable approval list rendered in the
+// TUI's active region while a run is blocked on a tool approval. It is a passive
 // component: the controller feeds it keys via HandleKey and draws it via View —
 // it owns no timers, IO, or approval lifecycle state (that stays in the gateway
 // per docs/architecture-constraints.md).
@@ -61,6 +74,10 @@ type ApprovalDetails struct {
 	Tool   string
 	Target string
 	Reason string
+	// Parked means the original run released its resources. The request remains
+	// answerable, and a decision will start a continuation rather than wake a
+	// live waiter.
+	Parked bool
 	// Environment is the bound environment snapshot id; Cwd is the working root
 	// the operation would run in (the scope's root, never the daemon cwd).
 	Environment string
@@ -92,7 +109,7 @@ type ApprovalDetails struct {
 	TriageRationale string
 	TriageRisk      string
 	// Options is the server-issued answer set for THIS ask (batch B1). Nil falls
-	// back to the built-in four so an older daemon still renders a usable panel;
+	// back to the built-in once/deny pair so an older daemon still renders a usable panel;
 	// the panel never invents an option the daemon did not offer.
 	Options []ApprovalOption
 }
@@ -119,7 +136,7 @@ func NewApprovalPromptDetailed(d ApprovalDetails) *ApprovalPrompt {
 	d.CodeSHA256 = strings.TrimSpace(d.CodeSHA256)
 	options := d.Options
 	if len(options) == 0 {
-		options = DefaultApprovalOptions()
+		options = defaultApprovalOptionsForTool(d.Tool)
 	}
 	return &ApprovalPrompt{
 		tool:    d.Tool,
@@ -139,11 +156,23 @@ func (p *ApprovalPrompt) Cursor() int { return p.cursor }
 // Options returns the option set (for tests and callers resolving a choice).
 func (p *ApprovalPrompt) Options() []ApprovalOption { return p.options }
 
+// SetParked updates the lifecycle explanation without changing the action or
+// server-issued decisions.
+func (p *ApprovalPrompt) SetParked(parked bool) {
+	if p != nil {
+		p.details.Parked = parked
+	}
+}
+
+// IsParked reports whether answering starts a continuation instead of waking
+// the original run.
+func (p *ApprovalPrompt) IsParked() bool { return p != nil && p.details.Parked }
+
 // HandleKey processes one key press. It returns the chosen option when the key
 // resolves the prompt (Enter on the highlighted row, or a shortcut key), and
-// nil otherwise. Up/Down and j/k move the selector. Esc deliberately does
-// NOTHING: an approval must be an explicit decision, never dismissed
-// implicitly. All other keys are ignored.
+// nil otherwise. Up/Down and j/k move the selector. The controller owns Esc and
+// Ctrl+C because both must send an explicit rejection before closing the panel.
+// All other keys are ignored.
 func (p *ApprovalPrompt) HandleKey(key string) *ApprovalOption {
 	switch key {
 	case "up", "k":
@@ -186,12 +215,12 @@ const (
 const approvalTriageUnavailableNotice = "automatic triage unavailable — asking you instead of auto-approving"
 
 var (
-	approvalBorderStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
-	approvalTitleStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Bold(true)
+	approvalTitleStyle  = lipgloss.NewStyle().Bold(true)
 	approvalToolStyle   = lipgloss.NewStyle().Bold(true)
 	approvalDimStyle    = lipgloss.NewStyle().Faint(true)
 	approvalSelStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("39")).Bold(true)
 	approvalNoticeStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
+	approvalTargetStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("6"))
 )
 
 // locationLine renders WHERE the operation would run: the working root, plus the
@@ -210,65 +239,90 @@ func (p *ApprovalPrompt) locationLine() string {
 // addLabeledRows appends "label: value" with the value wrapped and continuation
 // lines indented under the label, so a wrapped path stays visually attached to
 // the field that owns it.
-func (p *ApprovalPrompt) addLabeledRows(addRow func(styled, plain string), label, value string, inner, maxLines int) {
+func (p *ApprovalPrompt) addLabeledRows(addRow func(string), label, value string, inner, maxLines int) {
 	labelW := runewidth.StringWidth(label)
 	lines := WrapDisplay(value, maxInt(8, inner-labelW), maxLines)
 	if len(lines) == 0 {
 		return
 	}
-	addRow(approvalDimStyle.Render(label)+lines[0], label+lines[0])
+	addRow(approvalDimStyle.Render(label) + lines[0])
 	indent := strings.Repeat(" ", labelW)
 	for _, line := range lines[1:] {
-		addRow(indent+line, indent+line)
+		addRow(indent + line)
 	}
 }
 
-// approvalPanelMaxWidth caps the panel so it stays a compact dialog even in a
-// very wide terminal.
+// approvalPanelMaxWidth caps the list so it stays readable in a wide terminal.
 const approvalPanelMaxWidth = 76
 
-// View renders the bordered panel at (up to) the given terminal width. Long
-// values (paths, commands) are middle-truncated so the panel never wraps.
+func (p *ApprovalPrompt) question() string {
+	switch p.tool {
+	case "terminal", "execute_command", "shell", "execute_code", "verify", "watch_external":
+		return "Would you like to run the following command?"
+	case "patch", "write_file":
+		return "Would you like to make the following edits?"
+	case "request_permissions":
+		return "Would you like to grant these permissions?"
+	default:
+		return "Would you like to allow this tool call?"
+	}
+}
+
+func (p *ApprovalPrompt) targetPrefix() string {
+	switch p.tool {
+	case "terminal", "execute_command", "shell", "execute_code", "verify", "watch_external":
+		return "$ "
+	default:
+		return ""
+	}
+}
+
+// View renders the same information hierarchy as Codex's approval overlay:
+// question, inspectable action/context, server-issued decisions, then the
+// explicit confirm/cancel footer. Proposed rules wrap instead of being
+// middle-truncated because that text is the authority the person is approving.
 func (p *ApprovalPrompt) View(width int) string {
 	panelW := width
 	if panelW > approvalPanelMaxWidth {
 		panelW = approvalPanelMaxWidth
 	}
-	if panelW < 30 {
-		panelW = 30
+	if panelW < 12 {
+		panelW = 12
 	}
-	inner := panelW - 4 // "│ " + " │"
+	inner := panelW
 
 	type row struct {
-		text  string // styled content
-		width int    // display width of the unstyled content
+		text string // styled content
 	}
 	var rows []row
-	addRow := func(styled string, plain string) {
-		rows = append(rows, row{text: styled, width: runewidth.StringWidth(plain)})
+	addRow := func(styled string) {
+		rows = append(rows, row{text: styled})
 	}
 
-	// Header: tool name, with the target's base name when the target is a path
-	// ("write_file → report.html"); the full target gets its own line below when
-	// it carries more than the base name.
-	head := p.tool
-	headStyled := approvalToolStyle.Render(p.tool)
-	if p.target != "" {
-		base := pathBaseName(p.target)
-		shown := TruncateMiddle(base, maxInt(8, inner-runewidth.StringWidth(head)-3))
-		head += " → " + shown
-		headStyled += approvalDimStyle.Render(" → ") + shown
+	for _, line := range WrapDisplay(p.question(), inner, 2) {
+		addRow(approvalTitleStyle.Render(line))
 	}
-	head = TruncateMiddle(head, inner)
-	addRow(headStyled, head)
-	// The full object gets WRAPPED, not middle-truncated: a command whose middle
-	// is replaced by "…" cannot be judged, and judging it is the entire point of
-	// the panel. Wrapping stays bounded (approvalTargetMaxLines) so one giant
-	// argument list can never push the options off screen.
-	if p.target != "" && p.target != pathBaseName(p.target) {
-		for _, line := range WrapDisplay(p.target, inner, approvalTargetMaxLines) {
-			addRow(approvalDimStyle.Render(line), line)
+	if p.details.Parked {
+		for _, line := range WrapDisplay("The task is parked; your answer will resume it.", inner, 2) {
+			addRow(approvalNoticeStyle.Render(line))
 		}
+	}
+	addRow("")
+
+	// Keep the exact command/path visible. A middle ellipsis here would hide the
+	// part the person is being asked to authorize.
+	if p.target != "" {
+		prefix := p.targetPrefix()
+		lines := WrapDisplay(p.target, maxInt(8, inner-runewidth.StringWidth(prefix)), approvalTargetMaxLines)
+		for i, line := range lines {
+			styled := approvalTargetStyle.Render(line)
+			if i == 0 {
+				styled = approvalDimStyle.Render(prefix) + styled
+			}
+			addRow(styled)
+		}
+	} else if p.tool != "" {
+		addRow(approvalToolStyle.Render(p.tool))
 	}
 	// Execution context: where it runs, and how big the write is. Order matters —
 	// location before size before rationale, because "wrong directory" is the
@@ -305,9 +359,17 @@ func (p *ApprovalPrompt) View(width int) string {
 			p.addLabeledRows(addRow, "script: ", strings.Join(metadata, ", "), inner, 1)
 		}
 	}
-	// What a "remember this" answer would authorize, in the same words the
-	// gateway used when it decided the class was reusable.
-	if p.details.GrantClass != "" {
+	// Older daemons publish only the coarse class. New daemons put the exact
+	// proposed authority on the option itself; do not show both and imply that a
+	// narrow rule also grants the broader class.
+	hasExplicitRule := false
+	for _, option := range p.options {
+		if strings.TrimSpace(option.RuleLabel) != "" {
+			hasExplicitRule = true
+			break
+		}
+	}
+	if p.details.GrantClass != "" && !hasExplicitRule {
 		p.addLabeledRows(addRow, "remembering allows: ", p.details.GrantClass, inner, approvalContextMaxLines)
 	}
 	// The judge's own reasoning, when it ran and escalated: the person decides
@@ -321,10 +383,10 @@ func (p *ApprovalPrompt) View(width int) string {
 	}
 	if p.details.TriageUnavailable {
 		for _, line := range WrapDisplay(approvalTriageUnavailableNotice, inner, approvalContextMaxLines) {
-			addRow(approvalNoticeStyle.Render(line), line)
+			addRow(approvalNoticeStyle.Render(line))
 		}
 	}
-	addRow("", "")
+	addRow("")
 
 	for i, opt := range p.options {
 		marker := "  "
@@ -335,53 +397,39 @@ func (p *ApprovalPrompt) View(width int) string {
 		}
 		hint := ""
 		if opt.Key != "" {
-			hint = "(" + opt.Key + ")"
+			hint = "(" + opt.Key + ") "
 		}
-		label := TruncateMiddle(opt.Label, maxInt(8, inner-2-len(hint)-1))
-		pad := inner - 2 - runewidth.StringWidth(label) - len(hint)
-		if pad < 1 {
-			pad = 1
+		lineWidth := maxInt(8, inner-runewidth.StringWidth(marker)-runewidth.StringWidth(hint))
+		// Unlike descriptive context, a proposed rule must never be abbreviated:
+		// this is the exact authority the person is confirming.
+		maxRuleLines := maxInt(1, runewidth.StringWidth(strings.Join(strings.Fields(opt.Label), " "))/lineWidth+2)
+		lines := WrapDisplay(opt.Label, lineWidth, maxRuleLines)
+		if len(lines) == 0 {
+			lines = []string{"decision"}
 		}
-		plain := marker + label + strings.Repeat(" ", pad) + hint
-		styled := style.Render(marker+label) + strings.Repeat(" ", pad) + approvalDimStyle.Render(hint)
-		addRow(styled, plain)
+		for lineIndex, line := range lines {
+			if lineIndex == 0 {
+				styled := style.Render(marker) + approvalDimStyle.Render(hint) + style.Render(line)
+				addRow(styled)
+				continue
+			}
+			indent := strings.Repeat(" ", runewidth.StringWidth(marker)+runewidth.StringWidth(hint))
+			addRow(indent + style.Render(line))
+		}
 	}
-	footer := "↑/↓ move · enter select · shortcuts answer directly"
+	footer := "↑/↓ to move · enter to confirm · esc to cancel"
 	footer = TruncateMiddle(footer, inner)
-	addRow(approvalDimStyle.Render(footer), footer)
+	addRow("")
+	addRow(approvalDimStyle.Render(footer))
 
-	title := " Approval required "
-	dashes := panelW - 3 - runewidth.StringWidth(title)
-	if dashes < 0 {
-		dashes = 0
-	}
 	var sb strings.Builder
-	sb.WriteString(approvalBorderStyle.Render("╭─") + approvalTitleStyle.Render(title) +
-		approvalBorderStyle.Render(strings.Repeat("─", dashes)+"╮") + "\n")
-	for _, r := range rows {
-		pad := inner - r.width
-		if pad < 0 {
-			pad = 0
+	for i, r := range rows {
+		if i > 0 {
+			sb.WriteByte('\n')
 		}
-		sb.WriteString(approvalBorderStyle.Render("│ ") + r.text + strings.Repeat(" ", pad) +
-			approvalBorderStyle.Render(" │") + "\n")
+		sb.WriteString(r.text)
 	}
-	sb.WriteString(approvalBorderStyle.Render("╰" + strings.Repeat("─", panelW-2) + "╯"))
 	return sb.String()
-}
-
-// pathBaseName returns the last path segment of a slash- or backslash-separated
-// value; non-path values return themselves.
-func pathBaseName(s string) string {
-	idx := strings.LastIndexAny(strings.TrimRight(s, "/\\"), "/\\")
-	if idx < 0 {
-		return s
-	}
-	base := strings.TrimRight(s, "/\\")[idx+1:]
-	if base == "" {
-		return s
-	}
-	return base
 }
 
 // WrapDisplay wraps s into at most maxLines lines of at most width display

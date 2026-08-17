@@ -12,6 +12,7 @@ import (
 	"selfmind/internal/control"
 	"selfmind/internal/gateway/api"
 	"selfmind/internal/gateway/delivery"
+	"selfmind/internal/tools"
 )
 
 func pendingFixture(ids ...string) []control.ApprovalRequest {
@@ -243,6 +244,7 @@ func TestApprovalsListShowsRichContent(t *testing.T) {
 	content := resp.Content
 	for _, want := range []string{
 		"1. [terminal]",
+		"[pending <1m]",
 		"command=rm -rf build",
 		"destructive command",
 		"Deploy service to staging",
@@ -252,6 +254,18 @@ func TestApprovalsListShowsRichContent(t *testing.T) {
 		if !strings.Contains(content, want) {
 			t.Fatalf("approvals list missing %q:\n%s", want, content)
 		}
+	}
+}
+
+func TestApprovalsListShowsParkedAgeThroughProductionCommand(t *testing.T) {
+	daemon, store, identity, _, approval := newApprovalTestServer(t)
+	ctx := context.Background()
+	if _, changed, err := store.ParkApprovalRequest(ctx, identity.TenantID, approval.ID, "resource budget elapsed"); err != nil || !changed {
+		t.Fatalf("park changed=%v err=%v", changed, err)
+	}
+	resp, status := daemon.ProcessMessage(ctx, api.MessageRequest{Content: "/approvals"})
+	if status != http.StatusOK || !strings.Contains(resp.Content, "[parked <1m; answering resumes the task]") {
+		t.Fatalf("status=%d content=%q", status, resp.Content)
 	}
 }
 
@@ -343,6 +357,65 @@ func TestCLIOriginatedApprovalRoutesToPreferredIM(t *testing.T) {
 		if strings.Contains(msg.Content, absent) {
 			t.Fatalf("notification should not carry %q:\n%s", absent, msg.Content)
 		}
+	}
+}
+
+func TestApprovalAnsweredInCLISendsIdempotentResolutionToPushedIM(t *testing.T) {
+	daemon, store, identity, task, approval := newApprovalTestServer(t)
+	ctx := context.Background()
+	if _, err := store.BindAccount(ctx, identity.TenantID, identity.PersonID, "weixin", "wxid_123", "Me on WeChat"); err != nil {
+		t.Fatal(err)
+	}
+	recorder := &recordingSender{}
+	daemon.Delivery = delivery.NewService(store, recorder, delivery.Options{})
+	daemon.coordinator().notifyApprovalRequested(ctx, identity, task.ID, "", "cli-session", approval)
+	if len(recorder.messages) != 1 || recorder.messages[0].Kind != delivery.KindApproval {
+		t.Fatalf("approval push = %+v", recorder.messages)
+	}
+
+	resolved, err := daemon.respondApprovalByToken(ctx, identity, approval.ID, "approved", "cli", control.ApprovalDecisionInput{})
+	if err != nil || resolved == nil {
+		t.Fatalf("resolve: approval=%+v err=%v", resolved, err)
+	}
+	if len(recorder.messages) != 2 {
+		t.Fatalf("messages = %+v, want request plus resolution", recorder.messages)
+	}
+	followup := recorder.messages[1]
+	if followup.Kind != delivery.KindApprovalResolution || followup.Platform != "weixin" || followup.ApprovalID != approval.ID {
+		t.Fatalf("resolution follow-up = %+v", followup)
+	}
+	if !strings.Contains(followup.Content, "approved") || !strings.Contains(followup.Content, "closed") {
+		t.Fatalf("resolution content = %q", followup.Content)
+	}
+
+	// Replaying reconciliation cannot enqueue another follow-up.
+	daemon.notifyApprovalResolutionElsewhere(ctx, identity, resolved, "cli")
+	if len(recorder.messages) != 2 {
+		t.Fatalf("resolution follow-up must be idempotent: %+v", recorder.messages)
+	}
+}
+
+func TestPhoneFirstApprovalSurfaceMirrorsWhileCLIIsAttached(t *testing.T) {
+	daemon, store, identity, task, approval := newApprovalTestServer(t)
+	ctx := context.Background()
+	if _, err := store.BindAccount(ctx, identity.TenantID, identity.PersonID, "weixin", "wxid_123", "Me on WeChat"); err != nil {
+		t.Fatal(err)
+	}
+	recorder := &recordingSender{}
+	daemon.Delivery = delivery.NewService(store, recorder, delivery.Options{})
+	daemon.touchPresence(ctx, identity)
+
+	// desk-first is the default: the inline TUI owns the young request.
+	daemon.coordinator().notifyApprovalRequested(ctx, identity, task.ID, "", "cli-session", approval)
+	if len(recorder.messages) != 0 {
+		t.Fatalf("desk-first unexpectedly mirrored approval: %+v", recorder.messages)
+	}
+	if _, err := daemon.notifyPreferenceReply(ctx, identity, "phone-first"); err != nil {
+		t.Fatal(err)
+	}
+	daemon.coordinator().notifyApprovalRequested(ctx, identity, task.ID, "", "cli-session", approval)
+	if len(recorder.messages) != 1 || recorder.messages[0].Platform != "weixin" || recorder.messages[0].Kind != delivery.KindApproval {
+		t.Fatalf("phone-first approval push = %+v", recorder.messages)
 	}
 }
 
@@ -462,11 +535,11 @@ func TestBareReplyAmbiguousWithMultiplePending(t *testing.T) {
 	}
 }
 
-// TestOrphanedApprovalsExpireAndStopPoisoningTheList reproduces the live
-// incident: a pending approval whose run died (daemon restart) made bare y
-// ambiguous and /approve 1 hit the dead request. The recovery sweep must
-// expire it, leaving live approvals unambiguous.
-func TestOrphanedApprovalsExpireAndStopPoisoningTheList(t *testing.T) {
+// TestOrphanedApprovalsParkAndRemainAnswerable verifies that daemon recovery
+// releases a dead waiter without inventing a rejection. The parked request
+// remains an explicit pending choice, so a bare y is correctly ambiguous while
+// another live approval exists.
+func TestOrphanedApprovalsParkAndRemainAnswerable(t *testing.T) {
 	daemon, store, identity, task, stale := newApprovalTestServer(t)
 	ctx := context.Background()
 
@@ -502,26 +575,53 @@ func TestOrphanedApprovalsExpireAndStopPoisoningTheList(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	expired, err := store.ExpireOrphanedApprovals(ctx)
+	parked, err := store.ParkOrphanedApprovals(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if expired != 1 {
-		t.Fatalf("expired = %d, want exactly the stale one", expired)
+	if len(parked) != 1 || parked[0].ID != stale.ID {
+		t.Fatalf("parked = %+v, want exactly %s", parked, stale.ID)
 	}
 
-	// Bare y now unambiguously answers the live approval.
+	// Bare y must not guess between the still-answerable parked request and the
+	// live one. An ordinal remains deterministic.
 	handled, reply, err := daemon.tryHandleBareApprovalReply(ctx, identity, "y", "weixin")
-	if err != nil || !handled || !strings.Contains(reply, "Approved") {
+	if err != nil || !handled || !strings.Contains(reply, "/approve") {
 		t.Fatalf("handled=%v err=%v reply=%q", handled, err, reply)
+	}
+	if _, err := daemon.respondApprovalByToken(ctx, identity, live.ID, "approved", "weixin", control.ApprovalDecisionInput{}); err != nil {
+		t.Fatal(err)
 	}
 	current, _ := store.GetApprovalRequest(ctx, identity.TenantID, live.ID)
 	if current == nil || current.Status != "approved" {
 		t.Fatalf("live approval = %+v", current)
 	}
 	staleNow, _ := store.GetApprovalRequest(ctx, identity.TenantID, stale.ID)
-	if staleNow == nil || staleNow.Status != "expired" {
+	if staleNow == nil || staleNow.Status != "pending" || staleNow.WaiterState != "parked" {
 		t.Fatalf("stale approval = %+v", staleNow)
+	}
+}
+
+func TestExpireApprovalRequestDoesNotOverwriteResolvedDecision(t *testing.T) {
+	_, store, identity, _, pending := newApprovalTestServer(t)
+	ctx := context.Background()
+	approved, err := store.RespondApprovalRequest(ctx, identity.TenantID, identity.PersonID, pending.ID, "approved", "cli", control.ApprovalDecisionInput{GrantScope: "run"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	current, transitioned, err := store.ExpireApprovalRequest(ctx, identity.TenantID, pending.ID, "deadline race")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if transitioned {
+		t.Fatal("expiration must not overwrite a human decision that already won")
+	}
+	if current == nil || current.Status != "approved" || current.ID != approved.ID {
+		t.Fatalf("current approval = %+v, want approved %s", current, approved.ID)
+	}
+	decision, terminal := storedApprovalDecision(current)
+	if !terminal || !decision.Approved || decision.Outcome != tools.ApprovalOutcomeApproved {
+		t.Fatalf("stored decision = %+v terminal=%v, want approved race winner", decision, terminal)
 	}
 }
 

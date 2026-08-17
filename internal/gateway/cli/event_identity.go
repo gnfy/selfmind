@@ -77,3 +77,23 @@ func (m *uiModel) acceptEvent(ref uiEventRef) bool {
 	}
 	return true
 }
+
+// currentToolEvent reports whether an unmatched tool completion belongs to the
+// run this surface currently projects. It is intentionally stricter than
+// acceptEvent: durable person streams may deliver a late event from an older
+// run, which must not become an orphan row under the new active run.
+func (m *uiModel) currentToolEvent(ref uiEventRef) bool {
+	if isTerminalRunStatus(m.runStatus) {
+		return false
+	}
+	if ref.Source == eventSourceWatch {
+		return m.watchingRun && (m.watchedRunID == "" || ref.RunID == "" || ref.RunID == m.watchedRunID)
+	}
+	if ref.Source == eventSourceDaemon && m.daemonRunID != "" && ref.RunID != "" {
+		return ref.RunID == m.daemonRunID
+	}
+	if ref.Source == eventSourceTurn && m.daemonRunID != "" && ref.RunID != "" {
+		return ref.RunID == m.daemonRunID
+	}
+	return true
+}

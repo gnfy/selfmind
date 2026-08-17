@@ -1,11 +1,8 @@
 package cli
 
 import (
-	"encoding/binary"
 	"encoding/json"
 	"fmt"
-	"hash/fnv"
-	"math"
 	"strings"
 
 	"selfmind/internal/buildinfo"
@@ -27,7 +24,7 @@ var cellRenderers = map[string]cellRenderer{
 	"tool":      func(m ChatMessage, w int) string { return renderToolMessage(m, w) },
 	"system":    func(m ChatMessage, w int) string { return renderSystemMessage(stripANSI(m.Content), w) },
 	"digest":    func(m ChatMessage, w int) string { return renderDigestMessage(stripANSI(m.Content), w) },
-	"notice":    func(m ChatMessage, w int) string { return renderNoticeMessage(stripANSI(m.Content), w) },
+	"notice":    func(m ChatMessage, w int) string { return renderNoticeMessage(stripANSI(m.Content), m.NoticeKind, w) },
 }
 
 // renderCell dispatches a message to its registered renderer. Unknown roles
@@ -39,44 +36,11 @@ func renderCell(msg ChatMessage, width int) string {
 	return ""
 }
 
-// messageFingerprint is a cheap content+state hash. Any change to a field that
-// affects rendering (content, tool metadata, running/error state, duration,
-// width) produces a new fingerprint and so a cache miss. Hashing the full
-// content each frame is still O(content), but ~1000x cheaper than re-running
-// markdown/tool rendering over it.
-func messageFingerprint(msg ChatMessage, width int) uint64 {
-	h := fnv.New64a()
-	var buf [8]byte
-	binary.LittleEndian.PutUint64(buf[:], uint64(uint32(width)))
-	_, _ = h.Write(buf[:])
-	writeField := func(s string) {
-		_, _ = h.Write([]byte(s))
-		_, _ = h.Write([]byte{0})
-	}
-	writeField(msg.Role)
-	writeField(msg.Content)
-	writeField(msg.ToolName)
-	writeField(msg.ToolArgs)
-	writeField(msg.ToolCallID)
-	writeField(msg.RunningDetail)
-	var flags byte
-	if msg.IsRunning {
-		flags |= 1
-	}
-	if msg.IsError {
-		flags |= 2
-	}
-	_, _ = h.Write([]byte{flags})
-	binary.LittleEndian.PutUint64(buf[:], math.Float64bits(msg.Duration))
-	_, _ = h.Write(buf[:])
-	return h.Sum64()
-}
-
 const (
 	glyphBullet  = "\u2022"
 	glyphCorner  = "\u2514" // \u2514 tree connector (codex-style; used as `glyphCorner + " "`)
 	glyphChevron = "\u203a"
-	// Notification glyphs (see notificationStyleFor). Kept to widely-supported
+	// Notification glyphs (see noticeVisual). Kept to widely-supported
 	// code points so they render across terminals without width surprises.
 	glyphCheck     = "\u2713" // checkmark: success
 	glyphArrowInto = "\u21b3" // down-right arrow: steering injected into the run
@@ -253,6 +217,10 @@ var (
 	toolBulletOK    = lipgloss.NewStyle().Foreground(lipgloss.Color("2")) // • green: command succeeded
 	toolBulletErr   = lipgloss.NewStyle().Foreground(lipgloss.Color("1")) // • red: failed
 	toolBulletDim   = lipgloss.NewStyle().Faint(true)                     // • dim: non-command done
+	toolActionRun   = lipgloss.NewStyle().Foreground(lipgloss.Color("5")).Bold(true)
+	toolActionRead  = lipgloss.NewStyle().Foreground(lipgloss.Color("6")).Bold(true)
+	toolActionWrite = lipgloss.NewStyle().Foreground(lipgloss.Color("3")).Bold(true)
+	toolActionState = lipgloss.NewStyle().Foreground(lipgloss.Color("4")).Bold(true)
 )
 
 const glyphBulletHollow = "◦"
@@ -265,10 +233,42 @@ func isCommandTool(label string) bool {
 	return false
 }
 
+// toolSemanticActionStyle colors only the action verb. Arguments remain in the
+// ordinary header style, while the bullet independently retains runtime state:
+// green success, red failure, and dim running/non-command. This mirrors Codex's
+// cyan exploration verbs and makes run/write/lifecycle work equally scannable.
+func toolSemanticActionStyle(label string) lipgloss.Style {
+	switch label {
+	case "terminal", "execute_command", "shell", "execute_code", "verify", "watch_external":
+		return toolActionRun
+	case "cat", "read_file", "batch_read", "ls_r", "list_files", "search_files", "grep", "session_search", "web_search", "web_extract":
+		return toolActionRead
+	case "patch", "write_file", "memory", "skill_manage":
+		return toolActionWrite
+	case "update_plan", "finish_run", "request_permissions":
+		return toolActionState
+	default:
+		return toolHeaderStyle
+	}
+}
+
+func styleToolAction(label, action string) string {
+	action = strings.TrimSpace(action)
+	if action == "" {
+		return ""
+	}
+	verb, rest, found := strings.Cut(action, " ")
+	styled := toolSemanticActionStyle(label).Render(verb)
+	if found && rest != "" {
+		styled += " " + toolHeaderStyle.Render(rest)
+	}
+	return styled
+}
+
 // toolHeaderLine renders the codex-style cell header: a status bullet (◦ dim
 // while running, • green on command success, • red on failure, • dim otherwise)
 // followed by the bold action title.
-func toolHeaderLine(action string, running, isErr, isCommand bool, duration float64, width int) string {
+func toolHeaderLine(label, action string, running, isErr, isCommand bool, duration float64, width int) string {
 	var bullet string
 	switch {
 	case running:
@@ -298,153 +298,11 @@ func toolHeaderLine(action string, running, isErr, isCommand bool, duration floa
 		rows[1] = truncateToWidth(rows[1], max(4, available-3)) + "..."
 	}
 	var sb strings.Builder
-	sb.WriteString(bullet + " " + toolHeaderStyle.Render(rows[0]) + toolBulletDim.Render(suffix))
+	sb.WriteString(bullet + " " + styleToolAction(label, rows[0]) + toolBulletDim.Render(suffix))
 	for _, row := range rows[1:] {
 		sb.WriteString("\n  " + toolBulletDim.Render(row))
 	}
 	return sb.String()
-}
-
-// exploreVerbStyle colors the Read/List/Search verb in an "Explored" group
-// (codex renders these cyan; 39 is SelfMind's existing accent blue).
-var exploreVerbStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("39"))
-
-// isExploreToolName reports whether a tool is a read-only "exploration" (file
-// read, directory list, content search) that codex groups under one "Explored"
-// cell. Mutating/command tools are rendered as their own cells.
-func isExploreToolName(label string) bool {
-	switch label {
-	case "read_file", "cat", "list_files", "ls_r", "search_files", "grep":
-		return true
-	}
-	return false
-}
-
-func isExploreCell(msg ChatMessage) bool {
-	return msg.Role == "tool" && isExploreToolName(msg.ToolName)
-}
-
-// exploreEntry maps a read-only tool call to a (verb, argument) pair for the
-// grouped Explored view: "Read <path>", "List <path>", "Search <q> in <path>".
-func exploreEntry(label string, args map[string]interface{}) (verb, arg string, ok bool) {
-	switch label {
-	case "read_file", "cat":
-		return "Read", toolDetail(args, "path"), true
-	case "list_files", "ls_r":
-		return "List", valueOr(toolDetail(args, "path"), "."), true
-	case "search_files", "grep":
-		q := toolDetail(args, "pattern", "query")
-		p := toolDetail(args, "path")
-		switch {
-		case q != "" && p != "":
-			return "Search", q + " in " + p, true
-		case q != "":
-			return "Search", q, true
-		default:
-			return "Search", p, true
-		}
-	}
-	return "", "", false
-}
-
-// exploreLine renders one "<cyan verb> <arg>" line, wrapping a long argument
-// with a hanging indent aligned under the argument (the verb is ASCII so its
-// display width equals its byte length).
-func exploreLine(verb, arg string, contentWidth int) []string {
-	if contentWidth < 8 {
-		contentWidth = 8
-	}
-	hang := len(verb) + 1
-	avail := contentWidth - hang
-	if avail < 4 {
-		avail = 4
-	}
-	wrapped := strings.Split(wrapText(strings.TrimSpace(arg), avail), "\n")
-	out := make([]string, 0, len(wrapped))
-	for i, ln := range wrapped {
-		if i == 0 {
-			out = append(out, exploreVerbStyle.Render(verb)+" "+ln)
-		} else {
-			out = append(out, strings.Repeat(" ", hang)+ln)
-		}
-	}
-	return out
-}
-
-// renderExploreGroup renders a run of consecutive read-only tool cells as a
-// single codex-style "Explored" cell: a bold header (Exploring while any member
-// is still running) and tree-indented verb lines. Consecutive reads collapse
-// into one comma-joined "Read a, b, c" line; mixed verbs get a line each.
-func renderExploreGroup(msgs []ChatMessage, width int) string {
-	if width < 20 {
-		width = 20
-	}
-	running := false
-	type entry struct{ verb, arg string }
-	var entries []entry
-	allReads := true
-	for _, m := range msgs {
-		if m.IsRunning {
-			running = true
-		}
-		var args map[string]interface{}
-		_ = json.Unmarshal([]byte(m.ToolArgs), &args)
-		verb, arg, ok := exploreEntry(m.ToolName, args)
-		if !ok {
-			continue
-		}
-		if verb != "Read" {
-			allReads = false
-		}
-		entries = append(entries, entry{verb, arg})
-	}
-	if len(entries) == 0 {
-		return ""
-	}
-
-	header := "Explored"
-	bullet := toolBulletDim.Render(glyphBullet)
-	if running {
-		header = "Exploring"
-		bullet = toolBulletRun.Render(glyphBulletHollow)
-	}
-
-	var block []string
-	if allReads {
-		names := make([]string, 0, len(entries))
-		for _, e := range entries {
-			if e.arg != "" {
-				names = append(names, e.arg)
-			}
-		}
-		block = exploreLine("Read", strings.Join(names, ", "), width-4)
-	} else {
-		for _, e := range entries {
-			block = append(block, exploreLine(e.verb, e.arg, width-4)...)
-		}
-	}
-
-	var sb strings.Builder
-	sb.WriteString(bullet + " " + toolHeaderStyle.Render(header) + "\n")
-	for i, ln := range block {
-		if i == 0 {
-			sb.WriteString(planFaintStyle.Render("  └ ") + ln + "\n")
-		} else {
-			sb.WriteString("    " + ln + "\n")
-		}
-	}
-	return sb.String()
-}
-
-// exploreGroupFingerprint combines the members' fingerprints (plus a salt so it
-// never aliases a single-message entry) so a grouped Explored cell is cached
-// like any other rendered cell.
-func exploreGroupFingerprint(msgs []ChatMessage, width int) uint64 {
-	h := uint64(1469598103934665603) ^ uint64(0x6578706c6f7265) // fnv offset ^ "explore"
-	for _, m := range msgs {
-		h = (h * 1099511628211) ^ messageFingerprint(m, width)
-	}
-	return h
 }
 
 func renderToolMessage(msg ChatMessage, width int) string {
@@ -463,7 +321,7 @@ func renderToolMessage(msg ChatMessage, width int) string {
 	isCmd := isCommandTool(label)
 	var sb strings.Builder
 	if !done {
-		sb.WriteString(toolHeaderLine(action, true, false, isCmd, 0, width) + "\n")
+		sb.WriteString(toolHeaderLine(label, action, true, false, isCmd, 0, width) + "\n")
 		if detail := strings.TrimSpace(msg.RunningDetail); detail != "" {
 			sb.WriteString("  " + glyphCorner + " " + truncateToWidth(detail, width-6) + "\n")
 		}
@@ -502,7 +360,7 @@ func renderToolMessage(msg ChatMessage, width int) string {
 	}
 
 	// The red bullet conveys failure; duration stays visually subordinate.
-	sb.WriteString(toolHeaderLine(action, false, msg.IsError, isCmd, msg.Duration, width))
+	sb.WriteString(toolHeaderLine(label, action, false, msg.IsError, isCmd, msg.Duration, width))
 	sb.WriteString("\n")
 	if !isCmd {
 		if result := toolResultLine(label, msg.Content, width-6); result != "" {
@@ -698,7 +556,7 @@ func renderPatchCell(patch string, duration float64, width, maxLines int) string
 				removed++
 			}
 		}
-		header := fmt.Sprintf("%s %s %s (%s %s)", glyphBullet, f.verb, f.path,
+		header := fmt.Sprintf("%s %s (%s %s)", toolBulletDim.Render(glyphBullet), styleToolAction("patch", f.verb+" "+f.path),
 			diffAddStyle.Render(fmt.Sprintf("+%d", added)), diffDelStyle.Render(fmt.Sprintf("-%d", removed)))
 		if fi == 0 && duration > 0 {
 			header += fmt.Sprintf(" %.1fs", duration)
@@ -753,7 +611,7 @@ func renderWriteFileCell(content string, duration float64, width int) string {
 	}
 	lines := strings.Split(content, "\n")
 	var sb strings.Builder
-	sb.WriteString(glyphBullet + " " + lines[0])
+	sb.WriteString(toolBulletDim.Render(glyphBullet) + " " + styleToolAction("write_file", lines[0]))
 	if duration > 0 {
 		sb.WriteString(fmt.Sprintf(" %.1fs", duration))
 	}
@@ -899,27 +757,11 @@ func planStepLines(text, status string, contentWidth int) []string {
 	return out
 }
 
-// noticeStyleFor colors a compact one-line notice by its leading glyph so the
-// transcript record of an approval (requested / approved / denied) reads at a
-// glance without a multi-line cell.
-func noticeStyleFor(content string) lipgloss.Style {
-	switch {
-	case strings.HasPrefix(content, glyphWarning):
-		return lipgloss.NewStyle().Foreground(lipgloss.Color("214")) // amber: attention
-	case strings.HasPrefix(content, glyphCheck):
-		return lipgloss.NewStyle().Foreground(lipgloss.Color("2")) // green: approved
-	case strings.HasPrefix(content, glyphCross):
-		return lipgloss.NewStyle().Foreground(lipgloss.Color("203")) // red: denied
-	default:
-		return lipgloss.NewStyle().Faint(true)
-	}
-}
-
 // renderNoticeMessage renders a "notice" cell: exactly ONE compact line (long
 // content is truncated), used as the durable transcript record for transient
 // interactions such as approvals. The interactive detail lives in the active
 // region, not in history.
-func renderNoticeMessage(content string, width int) string {
+func renderNoticeMessage(content string, kind noticeKind, width int) string {
 	content = strings.TrimSpace(content)
 	if content == "" {
 		return ""
@@ -928,7 +770,7 @@ func renderNoticeMessage(content string, width int) string {
 		width = 12
 	}
 	content = strings.ReplaceAll(content, "\n", " ")
-	return noticeStyleFor(content).Render(truncateToWidth(content, width-1))
+	return noticeStyle(kind).Render(truncateToWidth(content, width-1))
 }
 
 func renderSystemMessage(content string, width int) string {
@@ -991,6 +833,23 @@ func toolAction(label string, args map[string]interface{}, done bool) string {
 			return "Searched " + valueOr(detail, label)
 		}
 		return "Searching " + valueOr(detail, label)
+	case "web_search":
+		detail = toolDetail(args, "query")
+		if done {
+			return "Searched web for " + valueOr(detail, "query")
+		}
+		return "Searching web for " + valueOr(detail, "query")
+	case "web_extract":
+		detail = toolDetail(args, "url", "path")
+		if done {
+			return "Read " + valueOr(detail, "web page")
+		}
+		return "Reading " + valueOr(detail, "web page")
+	case "batch_read":
+		if done {
+			return "Read file batch"
+		}
+		return "Reading file batch"
 	case "patch":
 		if done {
 			return "Edited with patch"
@@ -1324,15 +1183,6 @@ func firstResultLine(content string, width int) string {
 		}
 	}
 	return ""
-}
-
-func renderBoxLine(content string, width int) string {
-	inner := width - 4
-	if inner < 1 {
-		return content
-	}
-	text := truncateToWidth(content, inner)
-	return "| " + padRightWidth(text, inner) + " |"
 }
 
 func padRightWidth(s string, width int) string {

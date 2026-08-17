@@ -208,7 +208,7 @@ selfmind weixin status
 
 ```text
 selfmind eval [list|run|report|repair|scorecard|capture|clean]
-selfmind maintenance [replay|migrate-memory|migrate-skills|migrate-task-references|memory-audit|memory-dedup|task-audit] ...
+selfmind maintenance [replay|migrate-memory|migrate-skills|migrate-task-references|memory-audit|memory-dedup|task-audit|restore-control] ...
 ```
 
 ```text
@@ -227,6 +227,7 @@ selfmind maintenance migrate-task-references [--apply] [--limit N] [--data-dir D
 selfmind maintenance memory-audit [--archive-confirmed] [--partition P] [--data-dir DIR]
 selfmind maintenance memory-dedup [--apply] [--partition P] [--data-dir DIR]
 selfmind maintenance task-audit [--apply] [--limit N] [--data-dir DIR]
+selfmind maintenance restore-control --backup PATH --yes [--data-dir DIR]
 ```
 
 `maintenance replay` requeues retry-exhausted jobs only from each run's latest
@@ -246,6 +247,10 @@ analyzer generation. Older generations remain immutable history; use a small
   `task_runs.work_key` only when the exact reference occurs in that run's
   original user input. Inferred titles and summaries are reported and skipped;
   `--apply` is idempotent and never changes workspace or execution authority.
+- `restore-control` is the explicit recovery path for a migration backup under
+  the selected data directory's `backups/` folder. Stop the gateway first. It
+  requires `--yes`, verifies the SQLite snapshot before replacement, and keeps
+  the failed database beside the restored `control.db` for diagnosis.
 
 ## Gateway slash commands
 
@@ -270,7 +275,7 @@ before normal agent dispatch.
 /mode [mode]
 /stop
 /cancel
-/notify <platform|auto>
+/notify <platform|auto|desk-first|phone-first>
 /new [title]
 /resume [n|task_id]  (bare = pick from recent tasks)
 /workspace [n|id]  (bare = list; alias: /ws)
@@ -280,6 +285,9 @@ before normal agent dispatch.
 - Approval requests contain their authoritative choices. Ordinary requests show
   `once`, one optional `run`-local reuse choice, and `deny`; sensitive requests
   show only `once` and `deny`. New prompts never mint task/person-wide grants.
+- `/notify <platform|auto>` selects the preferred IM destination.
+  `/notify desk-first` keeps young CLI-origin approvals in the attached TUI and
+  escalates after T1; `/notify phone-first` mirrors them to IM immediately.
 - `/approvals grants` and `/approvals revoke <n>` remain available for viewing
   and removing historical remembered grants.
 - `/mode` accepts `on-request`, `read-only`, `auto-edit`, `full-auto`, or

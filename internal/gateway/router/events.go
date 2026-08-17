@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"strconv"
 	"strings"
 	"time"
 
@@ -158,22 +157,6 @@ func agentEventToStream(event string) llm.StreamEvent {
 	switch {
 	case strings.HasPrefix(event, "stream:"):
 		return llm.StreamEvent{EventType: "stream", Content: strings.TrimPrefix(event, "stream:")}
-	case strings.HasPrefix(event, "tool_start:"):
-		rest := strings.TrimPrefix(event, "tool_start:")
-		name, args, _ := strings.Cut(rest, ":")
-		return llm.StreamEvent{EventType: "tool.started", ToolName: name, ToolArgs: args}
-	case strings.HasPrefix(event, "tool_end:"):
-		rest := strings.TrimPrefix(event, "tool_end:")
-		name, rest, _ := strings.Cut(rest, ":")
-		if strings.HasPrefix(rest, "error:") {
-			rest = strings.TrimPrefix(rest, "error:")
-			durationText, errText, _ := strings.Cut(rest, ":")
-			duration, _ := strconv.ParseFloat(durationText, 64)
-			return llm.StreamEvent{EventType: "tool.completed", ToolName: name, ToolResult: errText, DurationSeconds: duration, Err: fmt.Errorf("%s", errText)}
-		}
-		durationText, result, _ := strings.Cut(rest, ":")
-		duration, _ := strconv.ParseFloat(durationText, 64)
-		return llm.StreamEvent{EventType: "tool.completed", ToolName: name, ToolResult: result, DurationSeconds: duration}
 	case strings.HasPrefix(event, "review:"):
 		return llm.StreamEvent{EventType: "learning.review", Content: strings.TrimPrefix(event, "review:")}
 	default:

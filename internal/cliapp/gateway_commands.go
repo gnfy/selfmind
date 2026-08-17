@@ -359,6 +359,9 @@ func (a *App) printGatewayStatus(status api.GatewayStatusResponse) {
 	if runtime.RuntimeDir != "" {
 		fmt.Fprintf(a.stdout, "runtime: %s\n", runtime.RuntimeDir)
 	}
+	if status.StoreSchema.CurrentVersion > 0 {
+		fmt.Fprintf(a.stdout, "control schema: v%d (binary supports v%d)\n", status.StoreSchema.Version, status.StoreSchema.CurrentVersion)
+	}
 	if status.ActiveRunCount > 0 {
 		fmt.Fprintf(a.stdout, "active runs: %d\n", status.ActiveRunCount)
 		for _, run := range status.ActiveRuns {

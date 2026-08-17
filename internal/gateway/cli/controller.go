@@ -43,11 +43,13 @@ type ChatMessage struct {
 	Timestamp     time.Time
 	ToolName      string // populated when Role == "tool"
 	ToolCallID    string
+	RunID         string  // run that owns this tool call; prevents late cross-run completion routing
 	ToolArgs      string  // Fix: add ToolArgs to store call arguments
 	Duration      float64 // Fix: add Duration for performance display
 	IsError       bool    // Fix: add IsError flag
 	IsRunning     bool
 	RunningDetail string
+	NoticeKind    noticeKind // structured semantics for notice-role cells; never inferred from prose
 	// Committed is set in terminal-first hybrid mode once this message has been
 	// printed into native scrollback. Committed messages are immutable and are
 	// not re-rendered in the active region. Unused in legacy (viewport) mode.
@@ -105,7 +107,11 @@ type uiModel struct {
 	clarifyGateway        bool
 	secretMode            bool
 	secretKey             string
-	statusMsg             string    // Transient status message
+	statusMsg             string // Transient status message text (kept separate from its structured kind)
+	statusNoticeText      string // text paired with statusNoticeKind; mismatches render as neutral info
+	statusNoticeKind      noticeKind
+	statusNoticeID        uint64
+	nextStatusNoticeID    uint64
 	thinkingDots          int       // Counter for "..." animation
 	thinkingStart         time.Time // When current thinking started
 	activityText          string    // Current model/tool phase shown in transcript
@@ -147,22 +153,25 @@ type uiModel struct {
 	workspaceOverrideName string
 	workspaceOverridePath string
 	toolDispatchFn        func(tool string, args map[string]interface{}) (string, error) // client mode: run management tools on the daemon
-	approvalResponder     func(approvalID, decision, scope, grantKey string) error       // client mode: answer a daemon tool-approval request (scope: ""|task|person; grantKey: a rule the ask offered)
+	approvalResponder     func(approvalID, decision, scope, grantKey string) error       // client mode: answer a daemon tool-approval request (scope is daemon-issued; grantKey is a rule the ask offered)
 	steerFn               func(text string) error                                        // client mode: forward mid-turn guidance to the daemon's active run
 	// Interactive approval panel state (see approval_flow.go). approvalPrompt is
 	// the active panel; approvalQueue holds requests that arrived while one was
-	// already up (FIFO re-arm); approvalDenyFollowup captures the composer after
-	// "No" so the user can attach guidance to the rejection.
+	// already up (FIFO re-arm).
 	approvalPrompt *components.ApprovalPrompt
 	approvalQueue  []MsgApprovalRequest
 	// delayedApprovals hold requests that arrived while the person was typing;
 	// they are armed once input goes idle (approvalTypingIdleDelay) so a panel
 	// cannot swallow an in-flight keystroke as a decision.
-	delayedApprovals     []MsgApprovalRequest
-	lastInputActivityAt  time.Time
-	approvalDenyFollowup bool
-	pendingApprovalID    string
-	pendingApprovalTool  string
+	delayedApprovals    []MsgApprovalRequest
+	lastInputActivityAt time.Time
+	pendingApprovalID   string
+	pendingApprovalTool string
+	// Successful local answers are remembered until their person-stream echo
+	// arrives. The echo still reconciles queue state, but must not create a
+	// duplicate "resolved elsewhere" transcript record.
+	localApprovalResolutions map[string]string
+	localApprovalOrder       []string
 	// Attach digest + re-attach (client mode, G0-c/G0-d): the client shell
 	// fetches the digest before the first presence beat and hands it over via
 	// SetStartupDigest; the first sized frame renders it once, and when it
@@ -191,13 +200,12 @@ type uiModel struct {
 	// and expanded to /resume <n>. Resolution stays on the daemon, which owns
 	// the ordering that produced the list.
 	resumePickerArmed bool
-	onUserInput       func()   // presence honesty: stamped on every keystroke (SetInputActivityHook, input_activity.go)
 	hybrid            bool     // terminal-first hybrid mode (SELFMIND_TUI_HYBRID)
 	pendingPrintln    []string // hybrid: cells to emit to scrollback at end of Update
 	startupCommitted  bool     // hybrid: startup card already printed to scrollback
 }
 
-type MsgClearStatus struct{}
+type MsgClearStatus struct{ NoticeID uint64 }
 type MsgWorkingTick time.Time
 type MsgCursorBlinkTick time.Time
 type MsgStreamFlush time.Time
@@ -214,6 +222,9 @@ type MsgApprovalRequest struct {
 	Tool   string
 	Target string // compact object of the action (path/command); may be empty
 	Reason string
+	// WaiterState is "live" for an in-flight blocked run and "parked" when the
+	// old run released its resources; answering a parked request resumes task.
+	WaiterState string
 	// Decision context published with the approval.requested event: where the
 	// operation would run, how large the write is, what a run-local reuse answer
 	// authorizes, and whether smart-mode triage could rule at all. All optional —
@@ -234,6 +245,25 @@ type MsgApprovalRequest struct {
 	Rationale string
 	Risk      string
 	Options   []components.ApprovalOption
+}
+
+// MsgApprovalResolved closes a matching approval panel or queued request when
+// another client answered it or the daemon expired it. Approved, rejected, and
+// expired are durable events; clients reconcile by id instead of leaving a
+// stale modal behind.
+type MsgApprovalResolved struct {
+	ID         string
+	Status     string
+	Scope      string
+	DecisionID string
+	Event      uiEventRef
+}
+
+// MsgApprovalParked keeps a matching request answerable while explaining that
+// its original run released resources and a decision will start continuation.
+type MsgApprovalParked struct {
+	ID    string
+	Event uiEventRef
 }
 
 // MsgClarifyRequest is emitted in daemon-client mode when a remote run blocks
@@ -330,7 +360,7 @@ func (m *uiModel) effectiveApprovalMode() string {
 
 // SetApprovalResponder installs the function used to answer a daemon
 // tool-approval request from the client TUI's approval panel. scope carries the
-// class-grant memory ("" once, "task", "person") through the existing
+// daemon-issued grant scope through the existing
 // /v1/approvals/respond path. Only set in client mode; in-process approvals use
 // the clarify bridge instead.
 func (c *Controller) SetApprovalResponder(fn func(approvalID, decision, scope, grantKey string) error) {
@@ -493,24 +523,6 @@ func (m *uiModel) scheduleStreamFlush() tea.Cmd {
 	return streamFlushTick()
 }
 
-// notificationStyleFor classifies a transient status message into a glyph and
-// accent color. It keys off the stable phrases the controller emits (see the
-// statusMsg assignments) so the visual category matches the meaning.
-func notificationStyleFor(text string) (glyph, color string) {
-	lower := strings.ToLower(text)
-	switch {
-	case strings.Contains(lower, "copied"):
-		return glyphCheck, "82" // bright green — quick positive confirmation
-	case strings.Contains(lower, "guidance") && !strings.Contains(lower, "full"):
-		return glyphArrowInto, "39" // blue — steering injected into the active run
-	case strings.Contains(lower, "full") || strings.Contains(lower, "failed") || strings.Contains(lower, "try again"):
-		return glyphWarning, "214" // amber — recoverable problem
-	case strings.Contains(lower, "cancel"):
-		return glyphCross, "203" // red — run aborted
-	default:
-		return glyphBullet, "245" // neutral grey — generic notice
-	}
-}
 func (m *uiModel) openHelp() {
 	width := m.width
 	if width <= 0 {
@@ -590,24 +602,29 @@ func (m *uiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m *uiModel) injectMidRunGuidance(input string) tea.Cmd {
 	m.addMessage("user", input)
 	m.editor.Reset()
+	kind := noticeGuidance
+	status := ""
 	switch {
 	case m.clientMode && m.steerFn != nil:
 		if err := m.steerFn(input); err != nil {
 			m.addErrorMessage(fmt.Sprintf("The daemon did not accept the guidance: %v", err))
-			m.statusMsg = "Guidance was not accepted by the daemon."
+			kind = noticeWarning
+			status = "Guidance was not accepted by the daemon."
 		} else {
-			m.statusMsg = "Sent to the running task as guidance."
+			status = "Sent to the running task as guidance."
 		}
 	case m.steerCh != nil:
 		select {
 		case m.steerCh <- input:
-			m.statusMsg = "Sent to the running task as guidance."
+			status = "Sent to the running task as guidance."
 		default:
-			m.statusMsg = "Guidance queue is full; try again in a moment."
+			kind = noticeWarning
+			status = "Guidance queue is full; try again in a moment."
 		}
 	}
 	// Transient notice — auto-clear so it doesn't linger after the turn.
-	return tea.Tick(3*time.Second, func(t time.Time) tea.Msg { return MsgClearStatus{} })
+	id := m.setStatusNotice(kind, status)
+	return clearStatusNoticeAfter(id, 3*time.Second)
 }
 
 func (m *uiModel) armClarifyPrompt(req tools.ClarifyRequest, viaGateway bool) {
@@ -626,7 +643,7 @@ func (m *uiModel) armClarifyPrompt(req tools.ClarifyRequest, viaGateway bool) {
 		m.addMessage("assistant", "Options:\n"+strings.Join(lines, "\n"))
 	}
 	m.clarifyReq = req
-	m.statusMsg = "Answer the question to continue the task."
+	m.setStatusNotice(noticeWarning, "Answer the question to continue the task.")
 }
 
 func (m *uiModel) answerClarifyViaGateway(response string) tea.Cmd {
@@ -821,13 +838,13 @@ func (m *uiModel) handleExitPromptKey(key string) (tea.Cmd, bool) {
 		return m.cancelActiveRunLocally(), true
 	case "esc":
 		m.exitPromptActive = false
-		m.statusMsg = "Still watching."
+		m.setStatusNotice(noticeInfo, "Still watching.")
 		return nil, true
 	case "ctrl+c":
 		// Handled by the ctrl+c case itself (second ctrl+c = background+quit).
 		return nil, false
 	default:
-		m.statusMsg = "Press b (background + quit), c (cancel + stay), or esc."
+		m.setStatusNotice(noticeInfo, "Press b (background + quit), c (cancel + stay), or esc.")
 		return nil, true
 	}
 }
@@ -848,8 +865,6 @@ func (m *uiModel) cancelActiveRunLocally() tea.Cmd {
 	m.activePlanJSON = ""
 	m.steerCh = nil
 	m.runStatus = "cancelled"
-	m.statusMsg = "Task cancelled by user."
-	return tea.Batch(m.requestDaemonStop(), tea.Tick(time.Second*3, func(t time.Time) tea.Msg {
-		return MsgClearStatus{}
-	}))
+	noticeID := m.setStatusNotice(noticeError, "Task cancelled by user.")
+	return tea.Batch(m.requestDaemonStop(), clearStatusNoticeAfter(noticeID, 3*time.Second))
 }

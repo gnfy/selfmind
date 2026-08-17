@@ -41,6 +41,13 @@ type dailyQualityStats struct {
 	RecallOverlapSources   map[string]int
 	RecallSkipped          map[string]int
 	MemoryDisposition      map[string]int
+	ContinuationRuns       int
+	ContinuationStatuses   map[string]int
+	ContinuationCalls      int
+	ContinuationInput      int64
+	ContinuationOutput     int64
+	ContinuationCacheRead  int64
+	ContinuationCacheMiss  int64
 }
 
 func parseDailyReportWindow(input string) (time.Duration, error) {
@@ -78,6 +85,22 @@ func collectDailyQualityStats(events []control.Event) dailyQualityStats {
 		RecallSelectedSources:  make(map[string]int),
 		RecallOverlapSources:   make(map[string]int),
 		RecallSkipped:          make(map[string]int),
+		ContinuationStatuses:   make(map[string]int),
+	}
+	runOrigins := make(map[string]string)
+	for _, event := range events {
+		if event.Type != "run.started" || strings.TrimSpace(event.RunID) == "" {
+			continue
+		}
+		var payload struct {
+			Origin string `json:"origin"`
+		}
+		if json.Unmarshal(event.Payload, &payload) == nil {
+			runOrigins[event.RunID] = strings.TrimSpace(payload.Origin)
+			if payload.Origin == runOriginApproval {
+				stats.ContinuationRuns++
+			}
+		}
 	}
 	terminalRuns := make(map[string]bool)
 	for _, event := range events {
@@ -95,6 +118,9 @@ func collectDailyQualityStats(events []control.Event) dailyQualityStats {
 				status = strings.TrimPrefix(event.Type, "run.")
 			}
 			stats.RunStatuses[status]++
+			if runOrigins[event.RunID] == runOriginApproval {
+				stats.ContinuationStatuses[status]++
+			}
 			if reason := strings.TrimSpace(payload.Outcome.CompletionReason); reason != "" {
 				stats.CompletionReasons[reason]++
 			}
@@ -125,6 +151,17 @@ func collectDailyQualityStats(events []control.Event) dailyQualityStats {
 					stats.CacheMissTokens += max(p.InputTokens-p.CacheReadTokens, 0)
 				}
 				stats.ProviderLatencyMS += p.DurationMS
+				if runOrigins[event.RunID] == runOriginApproval {
+					stats.ContinuationCalls++
+					stats.ContinuationInput += p.InputTokens
+					stats.ContinuationOutput += p.OutputTokens
+					stats.ContinuationCacheRead += p.CacheReadTokens
+					if p.CacheMissTokens > 0 {
+						stats.ContinuationCacheMiss += p.CacheMissTokens
+					} else {
+						stats.ContinuationCacheMiss += max(p.InputTokens-p.CacheReadTokens, 0)
+					}
+				}
 			}
 		case "tool.completed":
 			stats.ToolCalls++
@@ -144,7 +181,7 @@ func collectDailyQualityStats(events []control.Event) dailyQualityStats {
 					stats.ToolFailureClasses[category]++
 				}
 			}
-		case "approval.requested", "approval.approved", "approval.rejected", "approval.expired":
+		case "approval.requested", "approval.approved", "approval.rejected", "approval.parked", "approval.expired", "approval.archived":
 			stats.ApprovalCounts[strings.TrimPrefix(event.Type, "approval.")]++
 		case "context.recall":
 			var p struct {
@@ -201,6 +238,7 @@ func (d *Server) dailyQualityReport(ctx context.Context, identity *control.Ident
 		return "", err
 	}
 	stats := collectDailyQualityStats(events)
+	backlog, _ := d.Control.ApprovalBacklog(ctx, identity.TenantID, identity.PersonID)
 	deliveryCounts, _ := d.Control.CountOutboundByStatusSince(ctx, identity.TenantID, identity.PersonID, since)
 	triage, _ := d.Control.ApprovalTriageStatsSince(ctx, identity.TenantID, identity.PersonID, since)
 	maintenance, _ := d.Control.MaintenanceProviderUsageForPersonSince(ctx, identity.TenantID, identity.PersonID, since)
@@ -242,6 +280,18 @@ func (d *Server) dailyQualityReport(ctx context.Context, identity *control.Ident
 	fmt.Fprintf(&sb, "Tools: %d calls, %d failed (%d%%), %d policy redirects; failures by class: %s\n",
 		stats.ToolCalls, stats.ToolFailures, toolFailureRate, stats.ToolPolicyRedirects, formatCountMap(stats.ToolFailureClasses))
 	fmt.Fprintf(&sb, "Approvals: %s; triage: %s\n", formatCountMap(stats.ApprovalCounts), formatCountMap(triage.Counts))
+	oldestParked := "none"
+	if backlog.OldestParkedAt != nil {
+		oldestParked = formatReportAge(time.Since(*backlog.OldestParkedAt))
+	}
+	fmt.Fprintf(&sb, "Approval backlog now: live %d, parked %d, oldest parked %s\n", backlog.Live, backlog.Parked, oldestParked)
+	continuationShare := int64(0)
+	if stats.InputTokens+stats.OutputTokens > 0 {
+		continuationShare = (stats.ContinuationInput + stats.ContinuationOutput) * 100 / (stats.InputTokens + stats.OutputTokens)
+	}
+	fmt.Fprintf(&sb, "Approval continuations: %d runs (%s), %d model calls, input %d, cache read %d, uncached %d, output %d, %d%% of reported tokens\n",
+		stats.ContinuationRuns, formatCountMap(stats.ContinuationStatuses), stats.ContinuationCalls,
+		stats.ContinuationInput, stats.ContinuationCacheRead, stats.ContinuationCacheMiss, stats.ContinuationOutput, continuationShare)
 	fmt.Fprintf(&sb, "Delivery: %s\n", formatCountMap(deliveryCounts))
 	fmt.Fprintf(&sb, "Recall: %d candidates (%s), %d selected (%s), %d output-overlap signals (%s; not causal proof); skipped: %s\n",
 		stats.RecallCandidates, formatCountMap(stats.RecallCandidateSources),
@@ -264,6 +314,22 @@ func (d *Server) dailyQualityReport(ctx context.Context, identity *control.Ident
 		sb.WriteString("Note: event window reached the 10,000-row diagnostic cap.\n")
 	}
 	return strings.TrimSpace(sb.String()), nil
+}
+
+func formatReportAge(age time.Duration) string {
+	if age < 0 {
+		age = 0
+	}
+	if age < time.Minute {
+		return "<1m"
+	}
+	if age < time.Hour {
+		return fmt.Sprintf("%dm", int(age/time.Minute))
+	}
+	if age < 24*time.Hour {
+		return fmt.Sprintf("%dh", int(age/time.Hour))
+	}
+	return fmt.Sprintf("%dd", int(age/(24*time.Hour)))
 }
 
 func formatCountMap(counts map[string]int) string {

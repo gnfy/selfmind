@@ -184,7 +184,7 @@ selfmind weixin status
 
 ```text
 selfmind eval [list|run|report|repair|scorecard|capture|clean]
-selfmind maintenance [replay|migrate-memory|migrate-skills|migrate-task-references|memory-audit|memory-dedup|task-audit] ...
+selfmind maintenance [replay|migrate-memory|migrate-skills|migrate-task-references|memory-audit|memory-dedup|task-audit|restore-control] ...
 ```
 
 ```text
@@ -203,6 +203,7 @@ selfmind maintenance migrate-task-references [--apply] [--limit N] [--data-dir D
 selfmind maintenance memory-audit [--archive-confirmed] [--partition P] [--data-dir DIR]
 selfmind maintenance memory-dedup [--apply] [--partition P] [--data-dir DIR]
 selfmind maintenance task-audit [--apply] [--limit N] [--data-dir DIR]
+selfmind maintenance restore-control --backup PATH --yes [--data-dir DIR]
 ```
 
 `maintenance replay` 只会重新入队每个 run 最新 analyzer generation 中因重试耗尽而
@@ -215,6 +216,9 @@ selfmind maintenance task-audit [--apply] [--limit N] [--data-dir DIR]
 - `migrate-task-references` 默认只做 dry-run。只有历史 `work_key` 的完整表面
   形式确实出现在该 run 的原始用户输入中时才允许迁移；从标题或摘要推断出的
   值只报告并跳过。`--apply` 可重复执行，且不会赋予工作区或执行权限。
+- `restore-control` 是恢复迁移备份的显式入口，备份必须位于所选数据目录的
+  `backups/` 下。执行前先停止 gateway；命令要求 `--yes`，替换前会验证 SQLite
+  快照，并把失败数据库保留在恢复后的 `control.db` 旁供诊断。
 
 - Eval 命令用于可复现的 Agent 质量测试。`--live` 允许真实 provider 调用；
   `--record-content` 可能持久化敏感内容，应谨慎使用。
@@ -243,7 +247,7 @@ Gateway 命令可用于 TUI 和受支持的 IM 渠道，并且会在普通 Agent
 /mode [mode]
 /stop
 /cancel
-/notify <platform|auto>
+/notify <platform|auto|desk-first|phone-first>
 /new [title]
 /resume [n|task_id]  (bare = pick from recent tasks)
 /workspace [n|id]  (bare = list; alias: /ws)
@@ -255,6 +259,8 @@ Gateway 命令可用于 TUI 和受支持的 IM 渠道，并且会在普通 Agent
   与凭证不会显示在输出中。默认视图和 `all` 视图带稳定序号：使用
   `/watchers 1` 查看第一条 watcher，使用 `/watchers cancel 1` 停止监控。
   取消 watcher 不会取消外部操作。
+- `/notify <platform|auto>` 选择首选 IM 目标；`desk-first` 让新审批先留在
+  已附着的 TUI，并在 T1 后补推，`phone-first` 则立即同步到 IM。
 - `/task <id> references` 查看可用于定位该任务的受治理名称和标识；
   `reference add <名称>` 由用户直接确认，`reference remove <名称>` 停用它。
   自动学习的 reference 需要不同 run 的原始用户文本重复支持；冲突时系统不会猜测。

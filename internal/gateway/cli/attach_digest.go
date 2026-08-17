@@ -17,6 +17,7 @@ import (
 	"selfmind/internal/gateway/api"
 	"selfmind/internal/gateway/httpapi"
 	"selfmind/internal/kernel/llm"
+	"selfmind/internal/ui/components"
 )
 
 // RunWatcher follows the person's mid-flight daemon run: it streams live
@@ -67,12 +68,42 @@ func (m *uiModel) maybeShowStartupDigest(width int) tea.Cmd {
 		return nil
 	}
 	m.addMessage("digest", text)
+	for _, approval := range m.startupDigest.PendingApprovals {
+		request := approvalRequestFromDigest(approval)
+		if request.ID == "" || m.hasApprovalRequest(request.ID) {
+			continue
+		}
+		if m.approvalFlowActive() {
+			m.approvalQueue = append(m.approvalQueue, request)
+		} else {
+			m.armApprovalPrompt(request)
+		}
+	}
 	if m.startupDigest.ActiveRun != nil && m.clientMode && m.runWatcher != nil {
 		m.watchedRunID = strings.TrimSpace(m.startupDigest.ActiveRun.RunID)
 		m.watchedTaskTitle = strings.TrimSpace(m.startupDigest.ActiveRun.Title)
 		return m.attachToActiveRun()
 	}
 	return nil
+}
+
+func approvalRequestFromDigest(item api.DigestApproval) MsgApprovalRequest {
+	options := make([]components.ApprovalOption, 0, len(item.Decisions))
+	for _, option := range item.Decisions {
+		options = append(options, components.ApprovalOption{
+			Label: option.Label, Key: option.Key, Decision: option.Decision,
+			Scope: option.Scope, GrantKey: option.GrantKey, RuleLabel: option.RuleLabel,
+		})
+	}
+	return MsgApprovalRequest{
+		ID: item.ID, Tool: item.Tool, Target: item.Target, Reason: item.Reason,
+		WaiterState: item.WaiterState, Environment: item.Environment, Cwd: item.Cwd,
+		ChangeSummary: item.ChangeSummary, GrantClass: item.GrantClass,
+		Containment: item.Containment, TriageState: item.TriageState,
+		Rationale: item.Rationale, Risk: item.Risk, CodePreview: item.CodePreview,
+		CodeSHA256: item.CodeSHA256, CodeLines: item.CodeLines,
+		CodeBytes: item.CodeBytes, Options: options,
+	}
 }
 
 // attachToActiveRun starts PASSIVE observation of the person's mid-flight
@@ -90,7 +121,7 @@ func (m *uiModel) attachToActiveRun() tea.Cmd {
 	if name == "" {
 		name = "the running task"
 	}
-	m.statusMsg = "Watching " + name + " — live progress below; type a new task to queue it, or /stop to cancel."
+	m.setStatusNotice(noticeInfo, "Watching "+name+" — live progress below; type a new task to queue it, or /stop to cancel.")
 	ctx, cancel := context.WithCancel(context.Background())
 	m.watchCancel = cancel
 	watcher := m.runWatcher
@@ -125,7 +156,7 @@ func (m *uiModel) detachWatchedRunForNewTurn() {
 	m.activePlanJSON = ""
 	m.discardOpenToolMessages()
 	if strings.HasPrefix(m.statusMsg, "Watching ") {
-		m.statusMsg = ""
+		m.clearStatusNotice()
 	}
 }
 
@@ -145,7 +176,7 @@ func formatStartupDigest(digest *api.DigestResponse) string {
 	}
 	switch n := len(digest.PendingApprovals); {
 	case n == 1:
-		lines = append(lines, fmt.Sprintf("⚠ 1 approval waiting: %s — reply y or n (see /approvals)", digest.PendingApprovals[0].Line))
+		lines = append(lines, fmt.Sprintf("⚠ 1 approval waiting: %s — interactive choices restored below", digest.PendingApprovals[0].Line))
 	case n > 1:
 		lines = append(lines, fmt.Sprintf("⚠ %d approvals waiting — see /approvals", n))
 	}

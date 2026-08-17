@@ -251,6 +251,23 @@ func TestNotifyCommandValidatesOwnAccounts(t *testing.T) {
 	if pref, _ := store.GetPersonSetting(ctx, identity.TenantID, identity.PersonID, personSettingNotifyPlatform); pref != "" {
 		t.Fatalf("on must restore automatic selection, got %q", pref)
 	}
+
+	// Approval surface is independent from endpoint selection.
+	if resp, _ = daemon.ProcessMessage(ctx, api.MessageRequest{Content: "/notify phone-first"}); !strings.Contains(resp.Content, "phone-first") {
+		t.Fatalf("content=%q", resp.Content)
+	}
+	if surface, _ := store.GetPersonSetting(ctx, identity.TenantID, identity.PersonID, personSettingApprovalSurface); surface != "phone-first" {
+		t.Fatalf("phone-first surface = %q", surface)
+	}
+	if resp, _ = daemon.ProcessMessage(ctx, api.MessageRequest{Content: "/notify"}); !strings.Contains(resp.Content, "Approval surface: phone-first") {
+		t.Fatalf("content=%q", resp.Content)
+	}
+	if resp, _ = daemon.ProcessMessage(ctx, api.MessageRequest{Content: "/notify desk-first"}); !strings.Contains(resp.Content, "desk-first") {
+		t.Fatalf("content=%q", resp.Content)
+	}
+	if surface, _ := store.GetPersonSetting(ctx, identity.TenantID, identity.PersonID, personSettingApprovalSurface); surface != "" {
+		t.Fatalf("desk-first must clear the stored override, got %q", surface)
+	}
 }
 
 // TestPresencePingEndpoint: the idle-TUI heartbeat resolves identity, touches
@@ -306,57 +323,46 @@ func TestPresencePingRequiresAuth(t *testing.T) {
 	}
 }
 
-// TestPresenceBeatWithActiveZeroDoesNotClaim: a heartbeat or event poll
-// stamped active=0 (the client's last user input is older than the presence
-// idle timeout) must NOT touch presence — an open-but-vacated TUI detaches by
-// TTL so pushes route to the preferred IM again. active=1 and absent keep the
-// old behavior, and the endpoints still answer normally either way.
-func TestPresenceBeatWithActiveZeroDoesNotClaim(t *testing.T) {
+// TestPresenceBeatTreatsLegacyActiveZeroAsAttached verifies the process-level
+// contract. Old clients may still send active=0 based on keyboard idleness;
+// the daemon deliberately ignores it because watching a long task without
+// typing is still an attached terminal.
+func TestPresenceBeatTreatsLegacyActiveZeroAsAttached(t *testing.T) {
 	daemon, store, identity, _, _ := newApprovalTestServer(t)
 
-	// Inactive ping: 200 OK, but no presence claim and no durable recency stamp.
+	// Legacy active=0 still claims presence and stamps durable recency.
 	rec := httptest.NewRecorder()
 	daemon.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/presence/ping?platform=cli&platform_user_id=local&active=0", nil))
 	if rec.Code != http.StatusOK {
-		t.Fatalf("inactive ping status = %d", rec.Code)
+		t.Fatalf("ping status = %d", rec.Code)
 	}
-	if daemon.presenceTracker().IsAttached(identity.PersonID, "cli") {
-		t.Fatal("active=0 ping must not mark the endpoint attached")
+	if !daemon.presenceTracker().IsAttached(identity.PersonID, "cli") {
+		t.Fatal("a live ping must mark the endpoint attached regardless of legacy active=0")
 	}
 	accounts, err := store.ListAccountsByPerson(context.Background(), identity.TenantID, identity.PersonID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(accounts) != 1 || accounts[0].LastSeenAt != 0 {
-		t.Fatalf("active=0 ping must not stamp accounts.last_seen_at: %+v", accounts)
+	if len(accounts) != 1 || accounts[0].LastSeenAt == 0 {
+		t.Fatalf("live ping must stamp accounts.last_seen_at: %+v", accounts)
 	}
 
-	// Inactive event poll: events still served, presence still unclaimed.
+	// The same contract applies to the event poll/stream path.
+	daemon.presenceTracker().now = func() time.Time { return time.Now().Add(presenceTTL + time.Second) }
 	rec = httptest.NewRecorder()
 	daemon.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/tasks/events?platform=cli&platform_user_id=local&active=0", nil))
 	if rec.Code != http.StatusOK {
-		t.Fatalf("inactive event poll status = %d", rec.Code)
-	}
-	if daemon.presenceTracker().IsAttached(identity.PersonID, "cli") {
-		t.Fatal("active=0 event poll must not mark the endpoint attached")
-	}
-
-	// active=1 claims again (the person typed → the next beat re-attaches).
-	rec = httptest.NewRecorder()
-	daemon.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/presence/ping?platform=cli&platform_user_id=local&active=1", nil))
-	if rec.Code != http.StatusOK {
-		t.Fatalf("active ping status = %d", rec.Code)
+		t.Fatalf("event poll status = %d", rec.Code)
 	}
 	if !daemon.presenceTracker().IsAttached(identity.PersonID, "cli") {
-		t.Fatal("active=1 ping must mark the endpoint attached")
+		t.Fatal("a live event poll must refresh attachment")
 	}
 }
 
-// TestPresenceIdleBeatsLetAttachmentExpire simulates the walk-away lifecycle:
-// an attached endpoint that keeps heartbeating with active=0 stops refreshing
-// its presence, so IsAttached flips false once the TTL lapses — exactly as if
-// the beats had stopped entirely.
-func TestPresenceIdleBeatsLetAttachmentExpire(t *testing.T) {
+// TestPresenceExpiresOnlyWhenClientBeatsStop verifies the one-directional
+// signal: lack of a live client is proof the terminal is gone; keyboard
+// inactivity is not.
+func TestPresenceExpiresOnlyWhenClientBeatsStop(t *testing.T) {
 	daemon, _, identity, _, _ := newApprovalTestServer(t)
 	registry := daemon.presenceTracker()
 	now := time.Now()
@@ -369,7 +375,7 @@ func TestPresenceIdleBeatsLetAttachmentExpire(t *testing.T) {
 		t.Fatalf("active beat must attach (status=%d)", rec.Code)
 	}
 
-	// The person walks away: only inactive beats arrive while time passes the TTL.
+	// Legacy active=0 beats keep the live process attached beyond the TTL.
 	for i := 0; i < 4; i++ {
 		now = now.Add(30 * time.Second)
 		rec = httptest.NewRecorder()
@@ -378,14 +384,13 @@ func TestPresenceIdleBeatsLetAttachmentExpire(t *testing.T) {
 			t.Fatalf("inactive beat %d status = %d", i, rec.Code)
 		}
 	}
-	if registry.IsAttached(identity.PersonID, "cli") {
-		t.Fatal("inactive beats past the TTL must read as detached")
+	if !registry.IsAttached(identity.PersonID, "cli") {
+		t.Fatal("a heartbeating client must remain attached")
 	}
 
-	// They come back and type: the next active beat re-attaches instantly.
-	rec = httptest.NewRecorder()
-	daemon.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/presence/ping?platform=cli&platform_user_id=local&active=1", nil))
-	if rec.Code != http.StatusOK || !registry.IsAttached(identity.PersonID, "cli") {
-		t.Fatal("an active beat after idling must re-attach")
+	// Once beats actually stop, the registry expires naturally.
+	now = now.Add(presenceTTL + time.Second)
+	if registry.IsAttached(identity.PersonID, "cli") {
+		t.Fatal("presence must expire after the client stops heartbeating")
 	}
 }

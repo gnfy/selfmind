@@ -44,8 +44,9 @@ type Server struct {
 	PendingNotifyAfter time.Duration
 	// ApprovalWait bounds how long a run parks on an unanswered approval while
 	// an endpoint could still answer, and ApprovalWaitUnattended is the much
-	// shorter bound used when nothing can answer (no attached endpoint, no
-	// bound account). Both are resolved from config by `app`; zero means the
+	// shorter bound used when nothing can currently answer (no attached endpoint,
+	// no routable IM account, or an unhealthy latest IM delivery state). Both are
+	// resolved from config by `app`; zero means the
 	// package default. Neither ever changes the OUTCOME of a timeout — an
 	// unanswered approval parks the work, it is never a rejection.
 	ApprovalWait           time.Duration
@@ -207,21 +208,18 @@ func (d *Server) touchPresence(ctx context.Context, identity *control.IdentityCo
 	}
 }
 
-// presenceClaimed reports whether the request claims interactive presence.
-// The client stamps active=0 on heartbeats/polls once its last user INPUT is
-// older than the configured presence idle timeout (input age is only known
-// client-side); absent or any other value keeps the old always-attached
-// behavior. Presence stays derived: the daemon just honors the claim.
+// presenceClaimed reports endpoint liveness. The legacy active=0 query value is
+// intentionally ignored: keyboard silence is normal during long agent turns
+// and must not masquerade as a closed terminal. Detachment is heartbeat expiry.
 func presenceClaimed(r *http.Request) bool {
-	return r.URL.Query().Get("active") != "0"
+	return r != nil
 }
 
 // handlePresencePing is the lightweight attachment heartbeat for idle
 // interactive clients (the TUI pings every 30s while open). It resolves
 // identity exactly like the other endpoints and only touches derived presence
-// state — it never mutates tasks, runs, or approvals. A beat with active=0
-// (no recent user input at that terminal) is a no-op on presence, so a
-// vacated TUI detaches by TTL and pushes route to the preferred IM again.
+// state — it never mutates tasks, runs, or approvals. Old active=0 clients are
+// treated as live; an unanswered request escalates by request age instead.
 func (d *Server) handlePresencePing(w http.ResponseWriter, r *http.Request) {
 	if !d.authorized(r) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
@@ -697,6 +695,11 @@ func approvalActionTarget(toolName string, args map[string]interface{}) string {
 // personSettingNotifyPlatform is the person_settings key holding the explicit
 // /notify endpoint preference; empty/absent means "auto" (most recently seen).
 const personSettingNotifyPlatform = "notify_platform"
+
+// personSettingApprovalSurface chooses whether CLI-origin approvals start at
+// the desk (default) or are mirrored immediately to the preferred IM. It is
+// deliberately separate from notify_platform, which chooses the destination.
+const personSettingApprovalSurface = "approval_surface"
 
 // personSettingApprovalMode is the person_settings key holding the person's
 // persisted /mode (approval policy). Applied when a request carries no explicit

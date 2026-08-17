@@ -287,6 +287,9 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 	if origin := runOrigin(ctx, req); origin != "" {
 		startedPayload["origin"] = origin
 	}
+	if approvalID := strings.TrimSpace(req.SourceApprovalID); approvalID != "" {
+		startedPayload["source_approval_id"] = approvalID
+	}
 	_, _ = d.Control.AppendEvent(ctx, control.Event{
 		TaskID:     task.ID,
 		RunID:      run.ID,
@@ -633,8 +636,9 @@ func (c *RunCoordinator) syncCurrentTask(ctx context.Context, identity *control.
 // person typed at any endpoint has no origin: it is their own foreground work,
 // wherever they typed it.
 const (
-	runOriginWatch = "watch"
-	runOriginCron  = "cron"
+	runOriginWatch    = "watch"
+	runOriginCron     = "cron"
+	runOriginApproval = "approval"
 )
 
 // runOrigin names the initiator of a daemon-started run, or "" for a person's
@@ -898,6 +902,9 @@ func (c *RunCoordinator) drainQueue(identity *control.IdentityContext) {
 		req.ExecutionProfile = tools.ExecutionProfileWatchFinalization
 		req.WatchID = externalWatchIDFromFinalizationKey(next.IdempotencyKey)
 		req.Origin = runOriginWatch
+	} else if strings.HasPrefix(next.IdempotencyKey, "approval-resume:") {
+		req.Origin = runOriginApproval
+		req.SourceApprovalID = strings.TrimSpace(strings.TrimPrefix(next.IdempotencyKey, "approval-resume:"))
 	}
 	// Reproduce the queued item's route while preserving its durable person.
 	// Never create an account here: system rows may intentionally omit

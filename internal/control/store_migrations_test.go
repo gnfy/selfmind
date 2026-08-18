@@ -4,12 +4,64 @@ import (
 	"compress/gzip"
 	"context"
 	"database/sql"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestCurrentControlSchemaSkipsFullIntegrityCheck(t *testing.T) {
+	dir := t.TempDir()
+	store, err := OpenStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	checks := 0
+	err = store.prepareAndMigrateSchema(
+		context.Background(), dir, filepath.Join(dir, "control.db"), true,
+		func(context.Context, *sql.DB) error {
+			checks++
+			return errors.New("unexpected full integrity check")
+		},
+	)
+	if err != nil {
+		t.Fatalf("reopen current schema: %v", err)
+	}
+	if checks != 0 {
+		t.Fatalf("current schema integrity checks=%d, want 0", checks)
+	}
+}
+
+func TestLegacyControlSchemaKeepsMigrationBoundaryIntegrityChecks(t *testing.T) {
+	dir := t.TempDir()
+	store, err := OpenStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if _, err := store.db.Exec(`DROP TABLE schema_migrations`); err != nil {
+		t.Fatal(err)
+	}
+
+	checks := 0
+	err = store.prepareAndMigrateSchema(
+		context.Background(), dir, filepath.Join(dir, "control.db"), true,
+		func(ctx context.Context, db *sql.DB) error {
+			checks++
+			return quickCheckDB(ctx, db)
+		},
+	)
+	if err != nil {
+		t.Fatalf("migrate legacy schema: %v", err)
+	}
+	if checks != 2 {
+		t.Fatalf("migration boundary integrity checks=%d, want 2", checks)
+	}
+}
 
 func TestReleasedBeta15ControlStoreFixtureMigratesAndReopens(t *testing.T) {
 	dir := t.TempDir()

@@ -111,6 +111,15 @@ fingerprint and control-schema health; an unreachable, stale, or
 schema-incompatible daemon makes the update command fail instead of degrading
 to a warning.
 
+Every daemon start reads the durable schema version and rejects a database
+newer than the binary. When the versions match, startup performs no schema DDL
+or full-database integrity scan. When the database is older, the newly installed
+daemon verifies it, creates a recoverable backup, applies the ordered migration,
+verifies the result, and only then begins serving traffic. Keeping this fallback
+in daemon startup also covers direct package installs, restored databases, and
+manual binary replacement without charging normal cold starts for migration
+work.
+
 Running `selfmind update` also refreshes an equal-version npm release. This
 restores package contents after a developer temporarily replaces the staged
 binary without requiring the person to know which package manager owns the

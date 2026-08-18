@@ -167,7 +167,7 @@ func OpenStore(dataDir string) (*Store, error) {
 		return nil, fmt.Errorf("configure sqlite: %w", err)
 	}
 	store := &Store{db: db, events: newEventAppendBus()}
-	if err := store.prepareAndMigrateSchema(context.Background(), dataDir, dbPath, existing); err != nil {
+	if err := store.prepareAndMigrateSchema(context.Background(), dataDir, dbPath, existing, quickCheckDB); err != nil {
 		db.Close()
 		return nil, err
 	}

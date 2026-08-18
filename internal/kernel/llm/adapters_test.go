@@ -1025,6 +1025,32 @@ func TestOpenAIAdapterSendsKimiReasoningOptions(t *testing.T) {
 	}
 }
 
+// Gemini's OpenAI-compatible endpoint rejects unknown request fields, so an
+// unconfigured thinking map must stay off the wire entirely rather than being
+// boxed into the interface field as a typed nil and serialized as null.
+func TestOpenAIAdapterOmitsUnconfiguredThinking(t *testing.T) {
+	var raw map[string]interface{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&raw); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		w.Header().Set("content-type", "application/json")
+		fmt.Fprint(w, `{"choices":[{"message":{"content":"ok"}}],"usage":{"prompt_tokens":1,"completion_tokens":2}}`)
+	}))
+	defer server.Close()
+
+	adapter := NewOpenAIAdapter("google-key")
+	adapter.BaseURL = server.URL
+	adapter.Model = "gemini-3.7-flash"
+
+	if _, err := adapter.Chat(context.Background(), ChatRequest{Messages: []Message{{Role: "user", Content: "hi"}}}); err != nil {
+		t.Fatalf("Chat failed: %v", err)
+	}
+	if _, ok := raw["thinking"]; ok {
+		t.Fatalf("thinking present in payload: %#v", raw["thinking"])
+	}
+}
+
 func writeSSE(t *testing.T, w http.ResponseWriter, payload map[string]interface{}) {
 	t.Helper()
 	b, err := json.Marshal(payload)

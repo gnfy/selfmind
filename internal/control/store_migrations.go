@@ -50,7 +50,9 @@ func nonEmptyRegularFile(path string) (bool, error) {
 	return info.Size() > 0, nil
 }
 
-func (s *Store) prepareAndMigrateSchema(ctx context.Context, dataDir, dbPath string, existing bool) error {
+type controlIntegrityCheck func(context.Context, *sql.DB) error
+
+func (s *Store) prepareAndMigrateSchema(ctx context.Context, dataDir, dbPath string, existing bool, checkIntegrity controlIntegrityCheck) error {
 	version, versioned, err := s.readSchemaVersion(ctx)
 	if err != nil {
 		return fmt.Errorf("inspect control schema: %w", err)
@@ -59,9 +61,10 @@ func (s *Store) prepareAndMigrateSchema(ctx context.Context, dataDir, dbPath str
 		return fmt.Errorf("control.db schema %d is newer than this SelfMind binary supports (max %d); refusing to write user data", version, CurrentControlSchemaVersion)
 	}
 	if versioned && version == CurrentControlSchemaVersion {
-		if err := quickCheckDB(ctx, s.db); err != nil {
-			return fmt.Errorf("control.db integrity check: %w", err)
-		}
+		// Compatibility is an O(1) version decision. A full PRAGMA quick_check
+		// walks the database and made every cold daemon start scale with years of
+		// task history. Keep that expensive validation at actual migration and
+		// restore boundaries; matching versions need no schema work.
 		s.schemaVersion = version
 		return nil
 	}
@@ -71,7 +74,7 @@ func (s *Store) prepareAndMigrateSchema(ctx context.Context, dataDir, dbPath str
 		return fmt.Errorf("capture pre-migration invariants: %w", err)
 	}
 	if existing {
-		if err := quickCheckDB(ctx, s.db); err != nil {
+		if err := checkIntegrity(ctx, s.db); err != nil {
 			return fmt.Errorf("control.db failed pre-migration integrity check: %w", err)
 		}
 		backup, backupErr := backupControlDatabase(ctx, s.db, dataDir, version, CurrentControlSchemaVersion)
@@ -97,7 +100,7 @@ func (s *Store) prepareAndMigrateSchema(ctx context.Context, dataDir, dbPath str
 		VALUES (?, ?, ?) ON CONFLICT(version) DO NOTHING`, CurrentControlSchemaVersion, "legacy-baseline", time.Now().Unix()); err != nil {
 		return migrationFailure(err, s.migrationBackup)
 	}
-	if err := quickCheckDB(ctx, s.db); err != nil {
+	if err := checkIntegrity(ctx, s.db); err != nil {
 		return migrationFailure(err, s.migrationBackup)
 	}
 	s.schemaVersion = CurrentControlSchemaVersion

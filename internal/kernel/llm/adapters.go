@@ -620,7 +620,12 @@ func (a *OpenAIAdapter) applyOptions(ctx context.Context, openaiReq *OpenAIReque
 		openaiReq.MaxTokens = a.MaxTokens
 	}
 	openaiReq.ReasoningEffort = a.ReasoningEffort
-	openaiReq.Thinking = a.Thinking
+	// Assigning an empty map here would box a typed nil into the interface
+	// field and defeat omitempty, sending "thinking":null to providers such as
+	// Gemini's OpenAI-compatible endpoint, which rejects unknown fields.
+	if len(a.Thinking) > 0 {
+		openaiReq.Thinking = a.Thinking
+	}
 	openaiReq.ServiceTier = a.ServiceTier
 	if req.Options != nil {
 		if value, ok := req.Options["reasoning_effort"].(string); ok && value != "" {

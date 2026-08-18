@@ -6,7 +6,7 @@
 > the generated [`README.md`](README.md) index. Code and tests remain the source
 > of truth.
 
-**Snapshot:** 2026-08-17
+**Snapshot:** 2026-08-18
 
 ## Release Health
 
@@ -38,15 +38,15 @@
 | Agent loop | Done | Native tools, structured outcomes, bounded elastic budgets, cancellation, retry classification, planning, and evidence-derived verification are implemented. |
 | Execution engine | Partial | Typed scopes, environment snapshots, sandbox policy, durable watcher execution, and tool profiles exist. Linux isolation is strongest; macOS uses approval-controlled host execution. |
 | Worker scheduling | Partial | Durable queue and worker-pool seams exist; personal edition intentionally defaults to one active run per person while multi-run ownership remains deferred. |
-| Provider runtime | Done | Primary/auxiliary roles, explicit role overrides, protocol adapters, typed quirks, generic request extras, model metadata, auth refresh, and live contract probes exist. |
+| Provider runtime | Done | Primary/auxiliary routing, primary-defaulted local auxiliary onboarding, explicit role overrides, protocol adapters, typed quirks, generic request extras, model metadata, auth refresh, and live contract probes exist. |
 | Provider cost visibility | Done | OpenAI-compatible and Responses cache usage is normalized; adapter-level request prefix/block fingerprints diagnose cache drift without storing prompt content; `selfmind usage` and `selfmind report daily` provide local execution/cost trends, including approval-continuation attribution. Provider pricing remains external. |
 | Context lifecycle | Done | Person work spine, bounded composer slices, project instructions, deterministic workspace-knowledge indexing, artifacts, recall, and compaction are integrated. |
 | Memory | Partial | Canonical governance, pin/correct/forget, transient filtering, lexical/CJK retrieval, access tracking, audits, output-overlap recall telemetry, and per-run intake disposition counts exist. These signals are diagnostic rather than proof of causal use; quality, reuse, and duplicate rates still need sustained measurement. |
 | Tasks | Done | Inbox, lifecycle fields, paging/search, pin/archive/rename/merge, retention, governed Task References, audited attach policies, explicit dry-run legacy-reference migration, and asynchronous post-run labeling exist. Semantic references never grant workspace or prior-run authority; ticket-shaped work keys are display hints only. |
-| Background maintenance | Done | Debounced bounded batches, immutable replay jobs, restart-safe retry exhaustion, shared retry policy, provider/contract circuit identity, fallback roles, diagnostics, migration tools, and dispatch-time reasoning/output bounds exist. |
-| Skills | Done | Runtime discovery, one-Skill-per-work-unit activation, deterministic task binding, active/candidate/previous versions, bounded context, explicit candidate management, catalog/bundles, tenant ownership, learning audit, and migration exist. |
+| Background maintenance | Done | Debounced bounded batches, immutable replay jobs, restart-safe retry exhaustion, shared retry policy, stable semantic roles with a shared auxiliary floor, provider/contract circuit identity, diagnostics, migration tools, and dispatch-time reasoning/output bounds exist. |
+| Skills | Done | Runtime discovery, one-Skill-per-work-unit activation, deterministic task binding, active/candidate/previous versions, bounded context, explicit candidate management, catalog/bundles, tenant ownership, injected storage isolation, side-effect-free reads, archived-asset migration, recoverable orphan quarantine, and learning audit exist. |
 | Safe self-evolution | Partial | Terminal work-unit observations, neutral parked waits, comparable cohorts, frozen curator proposals, failure guards, rollback, and same-task read-only `batch_read` candidates exist. Empty-procedure and external-watch evidence cannot nominate curation. Repeated verified read-only cohorts may publish only unpinned agent-created Skills; write/shell/network/external-effect candidates require explicit management. Real repeated workflows still need production validation. |
-| Tool safety | Partial | Safety floor, smart approval, typed invocation scope, grants, hash-bound trusted observation scripts, secret redaction, schema governance, sandbox/host profiles, and failure envelopes exist. Human asks use one server-issued menu across CLI/IM: proceed once, optional run-local reuse with the exact proposed rule visible, and deny; sensitive asks are once/deny only. Unanswered asks park without rejection, later approval resumes through an exact-action one-shot capability below the current safety floor, and current live/parked backlog age is visible. Historical broader grants remain listable and revocable. External tool diversity remains an ongoing compatibility surface. |
+| Tool safety | Partial | Safety floor, smart approval, typed invocation scope, grants, hash-bound trusted observation scripts, secret redaction, schema governance, sandbox/host profiles, and failure envelopes exist. External MCP tools use the official Go SDK over stdio or Streamable HTTP, with paginated discovery, live catalogue updates, collision-safe names, health diagnostics, internal-argument filtering, and per-schema quarantine. Unclassified MCP calls fail closed to once-only human approval in every mode. Human asks use one server-issued menu across CLI/IM: proceed once, optional run-local reuse with the exact proposed rule visible, and deny; sensitive asks are once/deny only. Unanswered asks park without rejection, later approval resumes through an exact-action one-shot capability below the current safety floor, and current live/parked backlog age is visible. Historical broader grants remain listable and revocable. External tool diversity remains an ongoing compatibility surface. |
 | External watchers | Partial | Durable registration, bounded slow-command preflight, environment/auth snapshots, restart recovery, idempotent finalization, separate agent/external outcomes, person-scoped numbered `/watchers` controls, and delivery-confirmed stable-ID notifications exist. Keep validating provider-specific terminal behavior and live delivery. |
 | IM delivery | Partial | Weixin and other adapters share durable outbound state, delivery diagnostics, session refresh classification, bounded catch-up, preferred-channel routing, desk-first/phone-first approval surfaces, and idempotent resolution follow-ups. Live platform behavior remains an external dependency. |
 | TUI | Done | Daemon event stream, call-id-routed and semantically colored tool cells with terminal cleanup, Codex-style queued approval decisions with explicit cancel and cross-endpoint resolution, typed transient notices, bottom plan panel, pagers, persistent input history, resume transcript, and build-fingerprint detection exist. |
@@ -95,6 +95,8 @@ limitation. It does not mean the area should be redesigned from scratch.
   guarantee that every provider creates or bills a cache.
 - External MCP/plugin schemas are quarantined when unsafe or ambiguous. Built-in
   schema errors fail startup instead of being silently repaired at request time.
+- Remote MCP supports configured headers, bearer tokens, and basic auth, but an
+  interactive OAuth login and credential-management flow is not yet exposed.
 - Full multi-run foreground/background concurrency and remote Runner execution
   remain design seams only. Do not infer that they are shipped from queue or
   execution-envelope plumbing.

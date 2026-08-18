@@ -53,6 +53,7 @@ type runtimeHarness struct {
 	mem          *memory.MemoryManager
 	controlStore *control.Store
 	cronStop     func()
+	mcpClose     func()
 	server       *httpapi.Server
 	tenantID     string
 	provider     string
@@ -144,7 +145,11 @@ func runSingle(ctx context.Context, c *Case, opts RunOptions, sampleIdx, totalSa
 		if err != nil {
 			return nil, err
 		}
-		cleanup = func() { _ = os.RemoveAll(root) }
+		cleanup = func() {
+			if err := cleanupEvalTempRoot(root); err != nil {
+				log.Warn("eval: temporary root cleanup failed", "root", root, "error", err)
+			}
+		}
 		dataDirOverride = filepath.Join(root, "data")
 		if isolateWorkspace {
 			workspace = filepath.Join(root, "workspace")
@@ -568,7 +573,16 @@ func newRuntimeHarness(opts RunOptions, c *Case, dataDirOverride string) (*runti
 	disp.RegisterTool(tools.NewSkillSelectTool(controlStore))
 	disp.RegisterTool(tools.NewSkillFallbackTool(controlStore))
 	disp.RegisterTool(tools.NewSkillLifecycleManageTool(controlStore))
-	appcore.InitMCP(disp, cfg)
+	skillStorage, err := appcore.ResolveSkillStorage(cfg)
+	if err != nil {
+		appcore.StopCron(gwDeps.CronScheduler)
+		_ = controlStore.Close()
+		if mem != nil {
+			_ = mem.Close()
+		}
+		return nil, err
+	}
+	mcpManager := appcore.InitMCP(disp, cfg)
 	displayProvider, displayModel, _ := appcore.ResolveModelDisplay(cfg)
 	recallOptions := []httpapi.RecallEngineOption(nil)
 	if llm.VCRRecordMode() {
@@ -584,6 +598,7 @@ func newRuntimeHarness(opts RunOptions, c *Case, dataDirOverride string) (*runti
 		Control:         controlStore,
 		Gateway:         gwDeps.Gateway,
 		DefaultTenantID: tenantID,
+		SkillStorage:    skillStorage,
 		// Automatic semantic recall (Work Timeline P2): eval runs the same
 		// selector path as real input — no eval-only shortcut around recall.
 		Recall: httpapi.NewRecallEngine(controlStore, mem, appcore.SemanticRecallExpander(mem, cfg, tenantID), recallOptions...),
@@ -601,10 +616,15 @@ func newRuntimeHarness(opts RunOptions, c *Case, dataDirOverride string) (*runti
 		mem:          mem,
 		controlStore: controlStore,
 		cronStop:     func() { appcore.StopCron(gwDeps.CronScheduler) },
-		server:       server,
-		tenantID:     tenantID,
-		provider:     firstNonEmpty(displayProvider, provider, "default"),
-		model:        firstNonEmpty(displayModel, model, "default"),
+		mcpClose: func() {
+			if mcpManager != nil {
+				_ = mcpManager.Close()
+			}
+		},
+		server:   server,
+		tenantID: tenantID,
+		provider: firstNonEmpty(displayProvider, provider, "default"),
+		model:    firstNonEmpty(displayModel, model, "default"),
 	}, nil
 }
 
@@ -621,11 +641,43 @@ func makeEvalTempRoot(caseID string) (string, error) {
 			return os.MkdirTemp(base, prefix)
 		}
 	}
+	// Tests commonly replace HOME with a directory below /tmp, making the user
+	// cache unsuitable for bubblewrap. Prefer the OS-wide persistent temp root
+	// before falling back to the repository cwd; on WSL this also avoids DrvFS
+	// delete-sharing delays while SQLite closes WAL handles.
+	persistentTmp := filepath.Clean("/var/tmp")
+	if filepath.IsAbs(persistentTmp) && !pathWithin(os.TempDir(), persistentTmp) {
+		base := filepath.Join(persistentTmp, "selfmind", "eval")
+		if err := os.MkdirAll(base, 0o700); err == nil {
+			return os.MkdirTemp(base, prefix)
+		}
+	}
 	cwd, err := os.Getwd()
 	if err != nil {
 		return "", err
 	}
 	return os.MkdirTemp(cwd, "."+prefix)
+}
+
+func cleanupEvalTempRoot(root string) error {
+	root = strings.TrimSpace(root)
+	if root == "" {
+		return nil
+	}
+	var lastErr error
+	for attempt := 0; attempt < 5; attempt++ {
+		if err := os.RemoveAll(root); err != nil {
+			lastErr = err
+		} else if _, err := os.Lstat(root); os.IsNotExist(err) {
+			return nil
+		} else if err != nil {
+			lastErr = err
+		} else {
+			lastErr = fmt.Errorf("temporary root still exists after removal")
+		}
+		time.Sleep(time.Duration(attempt+1) * 50 * time.Millisecond)
+	}
+	return lastErr
 }
 
 func pathWithin(parent, candidate string) bool {
@@ -681,10 +733,11 @@ func applyEvalModelOverride(cfg *config.Config, provider, model string) {
 // case's throwaway temp data dir. Storage.DataDir covers control.db, memory,
 // and the tool-output spool (all derive from the data dir). Evolution.SkillsDir
 // needs an explicit override: app wiring defaults the skills base dir to
-// ~/.selfmind and mints a `<eval-tenant>/skills` tree there for every case, so
-// leaving it empty leaks one home-dir directory per eval run. Any future config
-// field whose default resolves under the user's home dir and is consumed by
-// app wiring must be redirected here before the harness builds the runtime.
+// ~/.selfmind. App wiring injects this base into skill tools, learning audit,
+// curation, and post-run maintenance; leaving it empty would let an eval-only
+// person partition escape into the real home directory. Any future config field
+// whose default resolves under the user's home dir and is consumed by app
+// wiring must be redirected here before the harness builds the runtime.
 func isolatedEvalConfig(cfg *config.Config, dataDir string) {
 	if cfg == nil || strings.TrimSpace(dataDir) == "" {
 		return
@@ -700,21 +753,14 @@ func (h *runtimeHarness) Close() {
 	if h.cronStop != nil {
 		h.cronStop()
 	}
+	if h.mcpClose != nil {
+		h.mcpClose()
+	}
 	if h.controlStore != nil {
 		_ = h.controlStore.Close()
 	}
 	if h.mem != nil {
 		_ = h.mem.Close()
-	}
-	// Skill tooling keys per-tenant skill roots under ~/.selfmind (by tenant
-	// ID, not by config), so wiring mints `<home>/.selfmind/<eval-tenant>/skills`
-	// as a side effect of registering skill tools — a path the SkillsDir config
-	// override cannot redirect. The harness owns its throwaway tenant, so it
-	// removes exactly that directory on the way out; RemoveEvalTenantDir
-	// verifies both the tenant-ID shape and known-artifact contents before
-	// deleting anything.
-	if home, err := os.UserHomeDir(); err == nil && home != "" {
-		RemoveEvalTenantDir(filepath.Join(home, ".selfmind"), h.tenantID)
 	}
 }
 

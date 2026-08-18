@@ -13,6 +13,7 @@ import (
 	"selfmind/internal/control"
 	"selfmind/internal/gateway/api"
 	"selfmind/internal/gateway/router"
+	"selfmind/internal/tools"
 )
 
 func TestMessageRequestFromFeishuEvent(t *testing.T) {
@@ -228,6 +229,14 @@ func TestGatewayStatusEndpoint(t *testing.T) {
 	daemon := &Server{
 		Control:         store,
 		DefaultTenantID: "default",
+		MCPHealthFunc: func() tools.MCPHealthSnapshot {
+			return tools.MCPHealthSnapshot{
+				Configured: 2,
+				Connected:  1,
+				Failed:     1,
+				Failures:   []tools.MCPServerFailure{{Name: "github", Error: "connection refused"}},
+			}
+		},
 		RuntimeStatusFunc: func() api.GatewayRuntimeInfo {
 			return api.GatewayRuntimeInfo{PID: 123, Addr: "127.0.0.1:8765", State: "running"}
 		},
@@ -250,6 +259,9 @@ func TestGatewayStatusEndpoint(t *testing.T) {
 	}
 	if status.StoreSchema.Version != control.CurrentControlSchemaVersion || status.StoreSchema.CurrentVersion != control.CurrentControlSchemaVersion {
 		t.Fatalf("status payload does not expose current control schema: %+v", status.StoreSchema)
+	}
+	if status.MCP.Configured != 2 || status.MCP.Connected != 1 || status.MCP.Failed != 1 || len(status.MCP.Failures) != 1 {
+		t.Fatalf("status payload does not expose MCP health: %+v", status.MCP)
 	}
 }
 

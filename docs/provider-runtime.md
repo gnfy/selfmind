@@ -119,6 +119,12 @@ model capabilities, not a global hardcoded enum. `selfmind model set`
 validates them when metadata is discoverable and otherwise preserves the
 explicit value for compatible private endpoints.
 
+For local onboarding, an auxiliary selection with no provider/model defaults
+to the primary provider/model. Initial model writes materialize both slots.
+After that point auxiliary is independent: changing primary never overwrites
+an existing auxiliary selection. Logical background roles remain available as
+advanced `models.roles.<role>` overrides and inherit auxiliary when omitted.
+
 For Anthropic Messages, `thinking_mode: anthropic` maps an explicit reasoning
 effort to an enabled thinking budget (`low=4096`, `medium/default=8192`,
 `high=16384`, `xhigh/max=32768`) and raises the response cap when necessary.

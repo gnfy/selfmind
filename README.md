@@ -26,7 +26,7 @@ Available for daily personal use:
 - Simple primary/auxiliary model routing, with optional `models.roles` overrides for advanced tuning.
 - Dynamic model runtime with provider profiles, live model-list fetching, local model-list cache, and best-effort auth reuse for Codex CLI, Claude Code, Gemini CLI, and Qwen CLI. Codex CLI and the SelfMind-owned MiniMax OAuth profile additionally auto-refresh expired access tokens.
 - Built-in IM adapters: Telegram, personal/enterprise WeChat (Weixin, iLink protocol with built-in QR login via `selfmind weixin login`), Feishu/Lark, and QQ official bot. WeChat does inbound polling + media; Feishu/QQ use the generic webhook for inbound and a delivery sender for outbound. If an iLink session expires, run `selfmind weixin login` again; the running gateway hot-reloads the refreshed credentials and resumes polling without a restart.
-- MCP client over stdio/HTTP (JSON-RPC) with multi-server connections and on-demand tool registration.
+- Official MCP Go SDK client over stdio and Streamable HTTP, with multi-server connections, paginated discovery, and live tool-catalogue updates.
 - Extended built-in tools beyond file/terminal: `web_search`, `web_extract`, `execute_code`, and parallel multi-agent `delegate_task`.
 
 Still first-version or planned:
@@ -58,8 +58,9 @@ selfmind
 
 On the first interactive launch, `selfmind` opens guided model setup before it
 starts the daemon or TUI. You can reuse a supported coding-agent login or enter
-an API key. Run `selfmind setup` later to reconfigure the installation, and
-`selfmind doctor` for detailed diagnostics.
+an API key. Run `selfmind setup` later to reconfigure the installation.
+`selfmind doctor` reports current problems and remedies; add `--verbose` for
+the full diagnostic bundle.
 
 Check for updates and upgrade without interrupting an active turn:
 
@@ -339,7 +340,6 @@ tasks:
   default_list_limit: 10
   auto_archive_done_after: "720h"
   auto_archive_cancelled_after: "168h"
-  maintenance_model_role: "memory_extract"
   maintenance_debounce: "5m"
   maintenance_max_wait: "15m"
   maintenance_batch_max_runs: 10
@@ -484,10 +484,12 @@ MiniMax and Kimi Coding Plan:
 
 ### Model Routing
 
-The foreground model is configured under `models.primary`. One optional
-`models.auxiliary` selection covers bounded background work. Per-role entries
-under `models.roles` are advanced exceptions and override auxiliary. There is
-no `default` role.
+The foreground model is configured under `models.primary`.
+`models.auxiliary` covers bounded background work and initially defaults to the
+same provider/model as primary. Initial setup and the first `model set`
+materialize both selections; once auxiliary exists, later primary changes do
+not overwrite it. Per-role entries under `models.roles` are advanced exceptions
+and override auxiliary. There is no `default` role.
 
 Current role names:
 
@@ -501,10 +503,11 @@ Current role names:
 
 In personal mode these are read from local YAML. In the future SaaS mode, the same role names can be resolved from a database-backed tenant/person/workspace model policy.
 
-Smart approval uses `fast_classifier` from an explicit role or the auxiliary
-selection. For legacy configs it may fall back to an explicitly configured `background_review`, but
-it never silently borrows `models.primary`; without either route it safely asks
-the person.
+Smart approval uses `fast_classifier` from an explicit role or the effective
+auxiliary selection. An omitted auxiliary intentionally starts on primary for
+local setup, while an explicit auxiliary remains independent. For legacy
+configs triage may fall back to an explicitly configured `background_review`;
+without a usable route it safely asks the person.
 
 ## Local TUI
 
@@ -631,9 +634,9 @@ Everyday management:
   still-running task. Press `Ctrl+C` while watching to detach (the task keeps
   running); press it during your own run to choose *background / cancel / keep
   watching*.
-- **Diagnose a stuck task:** `selfmind doctor` (or `--out file.txt`) exports a
-  redacted snapshot — recent runs, pending approvals, the queue, and the event
-  timeline — so you can see exactly what a task is waiting on.
+- **Diagnose a stuck task:** `selfmind doctor` shows current blockers and their
+  remedies. Add `--verbose` (or `--out file.txt`) for the full redacted snapshot
+  of recent runs, pending approvals, the queue, and the event timeline.
 
 ## Skills
 
@@ -732,7 +735,7 @@ SelfMind records what happens as you use it, so you can find problems and turn r
 Errors (failed tools, model/API failures like 429 or connection drops) are recorded automatically. To review them:
 
 ```sh
-selfmind doctor
+selfmind doctor --verbose
 ```
 
 The `== Recent errors ==` section aggregates both kinds, newest first:

@@ -139,6 +139,28 @@ the unchanged script cannot turn arbitrary arguments into mutation.
   limit. Never expose or mutate the shared parent dispatcher. Fan-out remains
   bounded by `max_subtasks` and `max_concurrent`.
 
+### External MCP tools
+
+MCP tools are external code and fail closed when the server has not supplied a
+reviewed SelfMind policy classification. The registry injects the actual schema
+origin after model-argument validation; approval must use that origin rather
+than infer trust from a provider-visible name. An unclassified MCP call is
+sequential and requires a once-only human decision in every approval mode,
+including `full-auto`. It cannot use a stored grant or smart-model approval.
+The hard safety floor still runs first.
+
+Only provider-visible input arguments cross the MCP boundary. Dispatcher scope,
+callbacks, registries, storage handles, and every other top-level
+underscore-prefixed argument remain inside SelfMind. An external schema that
+declares a top-level underscore parameter is quarantined because it would make
+that boundary ambiguous. Nested business fields are preserved.
+
+MCP server and tool names are normalized for provider compatibility and carry
+a stable identity suffix so truncation or punctuation normalization cannot make
+one server overwrite another. Registry collisions are rejected, never
+last-writer-wins. Current connection and catalogue failures are exposed through
+gateway status and `selfmind doctor`; they are not recoverable only from logs.
+
 ## Result Envelope and Artifacts
 
 One tool result has three distinct surfaces:

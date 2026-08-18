@@ -63,6 +63,15 @@ plane see the same durable procedural assets. Person memory/session data does
 not move into that partition, and workspace trust still follows the execution
 scope rather than the skill storage owner.
 
+The daemon resolves one immutable asset base from `evolution.skills_dir` (or
+`~/.selfmind` by default) and injects it into every skill, learning-audit, and
+post-run maintenance path. Evaluation uses a temporary base. Resolving a read
+path never creates `skills/` or `learning/`; only an actual write creates the
+directory it owns. The thin TUI resolves `/skills`, `/curator`, and
+`/skill-name` through the daemon management surface, so a custom storage base
+cannot fall back to the TUI process HOME. Background curation fails closed when
+that injected storage is unavailable; it never manufactures a second default.
+
 ## Invocation Identity And Migration
 
 Every native tool receives a typed invocation scope. Skill storage resolves
@@ -79,7 +88,14 @@ Use `selfmind maintenance migrate-skills` to preview the migration and add
 `--apply` only after reviewing conflicts. The control copy wins; identical
 content is deduplicated; conflicting person copies remain untouched. Migrated
 agent-created skills carry provenance and a governance grace period so the
-curator cannot archive them immediately after migration.
+curator cannot archive them immediately after migration. Archived assets under
+`.archive` are migrated as archived assets rather than being mistaken for an
+empty partition.
+
+After migration, `selfmind maintenance cleanup-person-partitions` previews
+filesystem partitions whose person id no longer exists in `control.db`.
+`--apply` is accepted only while the gateway is stopped and moves those
+partitions into recoverable quarantine; known persons are always protected.
 
 ## Invocation Surfaces
 

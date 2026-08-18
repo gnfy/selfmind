@@ -121,7 +121,7 @@ selfmind config [doctor|upgrade]
 selfmind env [show|refresh]
 selfmind model [current|check [--live] [--role <name>]|list|set <provider> <model>]
 selfmind auth [login|status|logout] ...
-selfmind doctor [--out FILE] [--probe-models]
+selfmind doctor [--verbose] [--out FILE] [--probe-models]
 selfmind usage
 selfmind report daily [--since 24h]
 selfmind docs [check|index]
@@ -160,9 +160,12 @@ selfmind weixin status
 
 - `config doctor` reports missing or stale configuration without changing it;
   `config upgrade` adds supported defaults while preserving existing values.
-- `model set` writes the single primary selection under `models.primary`.
-  Reasoning/service-tier values are validated against discovered capabilities
-  when available; `auto` leaves the choice to the provider/model.
+- `model set` writes the primary selection under `models.primary`. When
+  auxiliary has no provider/model yet, the first write also initializes
+  `models.auxiliary` to the same provider/model. Later primary changes preserve
+  an existing auxiliary selection. Reasoning/service-tier values are validated
+  against discovered capabilities when available; `auto` leaves the choice to
+  the provider/model.
 - A shared daemon does not hot-switch from TUI `/model`. Restart at a safe turn
   boundary with `selfmind gateway restart --drain` after changing the model.
 - `model check` resolves credentials, protocol, endpoint, and model without
@@ -179,8 +182,16 @@ selfmind weixin status
   person. It combines run outcomes, tool and approval counts, provider usage,
   cache statistics, maintenance health, delivery status, and recall adoption
   signals for a bounded window (24 hours by default, up to 30 days).
-- `doctor` checks the installation and configuration. `--probe-models` performs
-  live provider probes and may consume provider quota.
+- `doctor` reports only current problems by default, together with a concrete
+  recovery or inspection command. Findings carry stable category tags such as
+  `[CONFIG]`, `[TRUST]`, `[DELIVERY]`, and `[SKILLS]`; every command is gathered
+  into one numbered `Next actions` section. Interactive terminals use the TUI
+  warning, error, info, success, text, and muted palette. Pipes, redirection,
+  `NO_COLOR`, `CLICOLOR=0`, and `TERM=dumb` remain plain text. Healthy
+  subsystems and historical runs, errors, events, activity, and logs stay
+  hidden. `--verbose` prints the full redacted diagnostic bundle; `--out FILE`
+  always writes that full bundle for support or offline inspection.
+  `--probe-models` performs live provider probes and may consume provider quota.
 - `selfcheck` is the local release gate. The default `local-full` profile runs
   all locally provable release cases; `--fast`/`local-fast` skips measured slow cases;
   `--profile ci` runs only cases explicitly assigned to CI for this platform.
@@ -208,7 +219,7 @@ selfmind weixin status
 
 ```text
 selfmind eval [list|run|report|repair|scorecard|capture|clean]
-selfmind maintenance [replay|migrate-memory|migrate-skills|migrate-task-references|memory-audit|memory-dedup|task-audit|restore-control] ...
+selfmind maintenance [replay|migrate-memory|migrate-skills|cleanup-person-partitions|migrate-task-references|memory-audit|memory-dedup|task-audit|restore-control] ...
 ```
 
 ```text
@@ -223,6 +234,7 @@ selfmind eval clean [--yes]
 selfmind maintenance replay [--limit N]
 selfmind maintenance migrate-memory [--apply] [--data-dir DIR]
 selfmind maintenance migrate-skills [--apply] [--root DIR] [--governance-grace 30d]
+selfmind maintenance cleanup-person-partitions [--apply] [--root DIR --data-dir DIR]
 selfmind maintenance migrate-task-references [--apply] [--limit N] [--data-dir DIR]
 selfmind maintenance memory-audit [--archive-confirmed] [--partition P] [--data-dir DIR]
 selfmind maintenance memory-dedup [--apply] [--partition P] [--data-dir DIR]
@@ -233,6 +245,15 @@ selfmind maintenance restore-control --backup PATH --yes [--data-dir DIR]
 `maintenance replay` requeues retry-exhausted jobs only from each run's latest
 analyzer generation. Older generations remain immutable history; use a small
 `--limit` as a canary before replaying a backlog.
+
+`maintenance cleanup-person-partitions` compares direct `person_*` filesystem
+partitions with every person in `control.db`. It is a dry-run by default. Apply
+mode requires the gateway to be stopped and moves reviewed orphans into a
+timestamped `.orphaned-person-partitions` quarantine under the same root; it
+does not delete them. The default root and control database come from the same
+loaded configuration. If `--root` selects a different asset tree, `--data-dir`
+must explicitly identify the authoritative `control.db`; the command never
+opens or creates a guessed empty database.
 
 - Eval commands are intended for reproducible agent-quality testing. `--live`
   permits provider calls; `--record-content` may persist sensitive content and

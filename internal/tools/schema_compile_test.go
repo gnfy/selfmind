@@ -67,6 +67,23 @@ func TestCompileToolSchemaQuarantinesAmbiguousRequiredReference(t *testing.T) {
 	}
 }
 
+func TestCompileExternalToolSchemaRejectsReservedRuntimeParameter(t *testing.T) {
+	tool := newRawSchemaTestTool("reserved", map[string]interface{}{
+		"type": "object",
+		"properties": map[string]interface{}{
+			"_tenant_id": map[string]interface{}{"type": "string"},
+		},
+	}, ToolSchemaOriginExternal)
+
+	compiled := compileToolSchema(tool)
+	if compiled.Report.Status != ToolSchemaQuarantined {
+		t.Fatalf("status=%s issues=%+v", compiled.Report.Status, compiled.Report.Issues)
+	}
+	if len(compiled.Report.Issues) == 0 || compiled.Report.Issues[len(compiled.Report.Issues)-1].Code != "reserved_parameter_name" {
+		t.Fatalf("issues=%+v", compiled.Report.Issues)
+	}
+}
+
 func TestCompileToolSchemaRejectsKeywordsThatContradictType(t *testing.T) {
 	tool := newRawSchemaTestTool("contradictory", map[string]interface{}{
 		"type":       "string",
@@ -171,13 +188,18 @@ func TestBuiltinCatalogCompilesWithoutRepairOrQuarantine(t *testing.T) {
 func TestMCPToolLocalNameIsProviderSafeAndCollisionResistant(t *testing.T) {
 	a := MCPToolLocalName(strings.Repeat("server", 20), strings.Repeat("tool", 30)+"a")
 	b := MCPToolLocalName(strings.Repeat("server", 20), strings.Repeat("tool", 30)+"b")
+	c := MCPToolLocalName("foo-bar", "search")
+	d := MCPToolLocalName("foo_bar", "search")
 	if len(a) > 64 || len(b) > 64 {
 		t.Fatalf("names exceed provider limit: %d %d", len(a), len(b))
 	}
 	if a == b {
 		t.Fatalf("truncated names collided: %q", a)
 	}
-	for _, name := range []string{a, b} {
+	if c == d {
+		t.Fatalf("sanitized names collided: %q", c)
+	}
+	for _, name := range []string{a, b, c, d} {
 		for _, r := range name {
 			if !((r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '_') {
 				t.Fatalf("unsafe provider tool name %q", name)

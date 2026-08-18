@@ -67,6 +67,55 @@ type MetadataProvider interface {
 	Metadata() ToolMetadata
 }
 
+const toolExecutionPolicyArg = "_tool_execution_policy"
+
+// toolExecutionPolicy is daemon-owned dispatch metadata. It is injected by the
+// registry after model arguments have been validated and is never forwarded to
+// an external tool endpoint. Approval policy must use the registered Tool's
+// origin instead of trusting a provider-visible name such as "mcp_*".
+type toolExecutionPolicy struct {
+	Origin   ToolSchemaOrigin
+	Category string
+	Risk     ToolRiskLevel
+	ReadOnly bool
+}
+
+func executionPolicyForTool(t Tool) toolExecutionPolicy {
+	policy := toolExecutionPolicy{Origin: ToolSchemaOriginBuiltin}
+	if provider, ok := t.(ToolSchemaOriginProvider); ok {
+		if origin := provider.SchemaOrigin(); origin != "" {
+			policy.Origin = origin
+		}
+	}
+	metadata := ToolMetadataFor(t)
+	policy.Category = metadata.Category
+	policy.Risk = metadata.RiskLevel
+	policy.ReadOnly = metadata.ReadOnly
+	return policy
+}
+
+func unclassifiedExternalToolCall(args map[string]interface{}) bool {
+	if args == nil {
+		return false
+	}
+	policy, ok := args[toolExecutionPolicyArg].(toolExecutionPolicy)
+	return ok && policy.Origin == ToolSchemaOriginExternal && !policy.ReadOnly
+}
+
+// publicToolArgs returns the model-visible payload only. Top-level underscore
+// names are reserved for authenticated SelfMind runtime state; nested values
+// remain untouched because they are part of an explicitly supplied argument.
+func publicToolArgs(args map[string]interface{}) map[string]interface{} {
+	out := make(map[string]interface{}, len(args))
+	for key, value := range args {
+		if strings.HasPrefix(strings.TrimSpace(key), "_") {
+			continue
+		}
+		out[key] = value
+	}
+	return out
+}
+
 // ToolSchema 定义工具的参数 schema（兼容 OpenAI tool schema）
 type ToolSchema struct {
 	Type       string                 `json:"type"`

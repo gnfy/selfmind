@@ -27,6 +27,7 @@ import (
 type llmPostRunAnalyzer struct {
 	provider        llm.Provider
 	memory          *memory.MemoryManager
+	skillStorage    *tools.SkillStorage
 	maxTokens       int
 	batchMaxTokens  int
 	contractRouteID string
@@ -67,32 +68,25 @@ const (
 	maintenanceReasoningEffort       = "none"
 )
 
-// NewConfiguredPostRunAnalyzer uses models.auxiliary and explicit maintenance
-// role overrides. It may fail over across tasks.maintenance_fallback_roles, but never
-// silently reaches the primary coding model because that hides cost and
-// latency from the owner.
+// NewConfiguredPostRunAnalyzer uses the stable memory_extract role first and
+// the shared models.auxiliary floor second. Model routing is configured only
+// under models; tasks contains behavior and scheduling policy, not a second
+// role-selection surface. Deprecated maintenance_fallback_roles entries remain
+// compatibility-only intermediate hops until config upgrade removes them.
 func NewConfiguredPostRunAnalyzer(mem *memory.MemoryManager, cfg *config.Config, tenantID string, stores ...*control.Store) httpapi.PostRunAnalyzer {
 	var controlStore *control.Store
 	if len(stores) > 0 {
 		controlStore = stores[0]
 	}
 	role := llm.RoleMemoryExtract
-	if cfg != nil && strings.TrimSpace(cfg.Tasks.MaintenanceModelRole) != "" {
-		role = llm.ModelRole(strings.TrimSpace(cfg.Tasks.MaintenanceModelRole))
-	}
-	roles := []llm.ModelRole{role}
-	if cfg != nil {
-		for _, fallback := range cfg.Tasks.MaintenanceFallbackRoles {
-			fallbackRole := llm.ModelRole(strings.TrimSpace(fallback))
-			if fallbackRole == "" || containsModelRole(roles, fallbackRole) {
-				continue
-			}
-			roles = append(roles, fallbackRole)
-		}
-	}
-	provider, routes := configuredMaintenanceProvider(mem, cfg, tenantID, controlStore, roles...)
+	provider, routes := configuredMaintenanceProvider(mem, cfg, tenantID, controlStore, role)
 	if provider == nil {
 		log.Info("post-run analyzer disabled: configure models.auxiliary or the maintenance role under models.roles", "role", role)
+		return nil
+	}
+	skillStorage, err := configuredSkillStorage(cfg)
+	if err != nil {
+		log.Warn("post-run analyzer disabled: resolve skill storage", "error", err)
 		return nil
 	}
 	if controlStore != nil {
@@ -111,7 +105,7 @@ func NewConfiguredPostRunAnalyzer(mem *memory.MemoryManager, cfg *config.Config,
 	maxTokens, batchMaxTokens, contractRouteID := maintenanceOutputContract(cfg, role)
 	contractRoute := maintenanceRoleRouteIdentity(cfg, role)
 	return &llmPostRunAnalyzer{
-		provider: provider, memory: mem, maxTokens: maxTokens,
+		provider: provider, memory: mem, skillStorage: skillStorage, maxTokens: maxTokens,
 		batchMaxTokens: batchMaxTokens, contractRouteID: contractRouteID,
 		controlStore: controlStore, routeTenantID: tenantID,
 		routeProvider: contractRoute.Provider, routeModel: contractRoute.Model,
@@ -122,38 +116,39 @@ func NewConfiguredPostRunAnalyzer(mem *memory.MemoryManager, cfg *config.Config,
 // by durable background maintenance. Route migration must consider all of
 // them together; otherwise initializing the post-run analyzer could requeue
 // jobs intentionally blocked by memory governance or background review.
-func configuredMaintenanceRouteIDs(cfg *config.Config) []string {
+// maintenanceChainedRoles lists the roles whose work runs through the
+// quota-aware maintenance chain, primary consumer first. Other auxiliary roles
+// resolve to a single provider and have no fallback position at all.
+func maintenanceChainedRoles(cfg *config.Config) []llm.ModelRole {
 	if cfg == nil {
 		return nil
 	}
-	roles := make([]llm.ModelRole, 0, 6)
-	primary := llm.RoleMemoryExtract
-	if value := strings.TrimSpace(cfg.Tasks.MaintenanceModelRole); value != "" {
-		primary = llm.ModelRole(value)
-	}
-	roles = append(roles, primary)
+	roles := make([]llm.ModelRole, 0, 4)
+	roles = append(roles, llm.RoleMemoryExtract)
 	for _, value := range cfg.Tasks.MaintenanceFallbackRoles {
 		role := llm.ModelRole(strings.TrimSpace(value))
 		if role != "" && !containsModelRole(roles, role) {
 			roles = append(roles, role)
 		}
 	}
-	if cfg.Memory.Governance.Enabled {
-		role := llm.RoleMemoryExtract
-		if value := strings.TrimSpace(cfg.Memory.Governance.ModelRole); value != "" {
-			role = llm.ModelRole(value)
-		}
-		if !containsModelRole(roles, role) {
-			roles = append(roles, role)
-		}
-	}
 	if !containsModelRole(roles, llm.RoleBackgroundReview) {
 		roles = append(roles, llm.RoleBackgroundReview)
 	}
-	seen := make(map[string]struct{}, len(roles))
-	ids := make([]string, 0, len(roles))
-	for _, role := range roles {
-		route := maintenanceRoleRouteIdentity(cfg, role)
+	return roles
+}
+
+func configuredMaintenanceRouteIDs(cfg *config.Config) []string {
+	if cfg == nil {
+		return nil
+	}
+	roles := maintenanceChainedRoles(cfg)
+	if len(roles) == 0 {
+		return nil
+	}
+	primary := roles[0]
+	seen := make(map[string]struct{}, len(roles)+1)
+	ids := make([]string, 0, len(roles)+1)
+	collect := func(route maintenanceRouteIdentity) {
 		for _, id := range []string{route.ID, route.ContractID} {
 			if id == "" {
 				continue
@@ -164,6 +159,16 @@ func configuredMaintenanceRouteIDs(cfg *config.Config) []string {
 			seen[id] = struct{}{}
 			ids = append(ids, id)
 		}
+	}
+	for _, role := range roles {
+		collect(maintenanceRoleRouteIdentity(cfg, role))
+	}
+	// The models.auxiliary floor serves every maintenance role whose own route
+	// is down. It is an active route even when no role names it, so route
+	// migration must not treat its blocked jobs as orphaned.
+	if floor, ok := cfg.AuxiliaryRoleFloor(); ok {
+		route, _ := maintenanceRouteIdentityFor(cfg, primary, floor)
+		collect(route)
 	}
 	return ids
 }
@@ -184,10 +189,23 @@ func maintenanceRoleRouteIdentity(cfg *config.Config, role llm.ModelRole) mainte
 	if !ok || roleConfigEmpty(roleCfg) {
 		return maintenanceRouteIdentity{}
 	}
+	route, _ := maintenanceRouteIdentityFor(cfg, role, roleCfg)
+	return route
+}
+
+// maintenanceRouteIdentityFor computes a route from an already-resolved role
+// configuration, so the models.auxiliary floor can be identified without being
+// mistaken for a role override. It also returns the resolved output ceiling,
+// which the provider chain uses to bound a request to the route serving it.
+func maintenanceRouteIdentityFor(cfg *config.Config, role llm.ModelRole,
+	roleCfg config.ModelRoleConfig) (maintenanceRouteIdentity, int) {
+	if cfg == nil || roleConfigEmpty(roleCfg) {
+		return maintenanceRouteIdentity{}, 0
+	}
 	providerName := firstNonEmpty(roleCfg.Provider, defaultProviderName(cfg))
 	rt, err := modelruntime.NewResolver(cfg).Resolve(context.Background(), roleProviderSelection(role, providerName, roleCfg))
 	if err != nil {
-		return maintenanceRouteIdentity{}
+		return maintenanceRouteIdentity{}, 0
 	}
 	credential := maintenanceCredentialIdentity(&rt)
 	credentialSum := sha256.Sum256([]byte(credential))
@@ -206,7 +224,7 @@ func maintenanceRoleRouteIdentity(cfg *config.Config, role llm.ModelRole) mainte
 	return maintenanceRouteIdentity{
 		ID: quotaID, ContractID: "contract:" + fmt.Sprintf("%x", contractSum[:]),
 		Provider: rt.Provider, Model: rt.Model,
-	}
+	}, rt.MaxTokens
 }
 
 func maintenanceOutputContract(cfg *config.Config, role llm.ModelRole) (int, int, string) {
@@ -875,7 +893,7 @@ func (a *llmPostRunAnalyzer) storeFacts(ctx context.Context, req httpapi.PostRun
 			if err := a.memory.AddFactMeta(ctx, memoryPartition(req), fact); err != nil {
 				return fmt.Errorf("store %s fact: %w", target, err)
 			}
-			tools.RecordMemoryLearningChangeScoped(memoryPartition(req), target, fact.Scope, "add", "", candidate, "post_run_analyzer")
+			tools.RecordMemoryLearningChangeScopedWithStorage(a.skillStorage, memoryPartition(req), target, fact.Scope, "add", "", candidate, "post_run_analyzer")
 			// Legacy fact arrays carry no durability ruling: bounded by
 			// default, so an unlabeled path can never mint permanent memory.
 			if err := a.canonicalWrite(ctx, req, "ADD", target, candidate, "", 0,
@@ -900,7 +918,7 @@ func (a *llmPostRunAnalyzer) reinforceFact(ctx context.Context, req httpapi.Post
 		return a.canonicalWrite(ctx, req, "REINFORCE", target, candidate, match.Content, 0, intakeMeta{Category: match.Category}, match.Scope)
 	}
 	if match.Canonical {
-		tools.RecordMemoryLearningChangeScoped(memoryPartition(req), target, match.Scope, "reinforce", match.Content, candidate, "post_run_analyzer")
+		tools.RecordMemoryLearningChangeScopedWithStorage(a.skillStorage, memoryPartition(req), target, match.Scope, "reinforce", match.Content, candidate, "post_run_analyzer")
 		return a.canonicalWrite(ctx, req, "REINFORCE", target, candidate, match.Content, 0, intakeMeta{Category: match.Category}, match.Scope)
 	}
 	base := match.Confidence
@@ -911,7 +929,7 @@ func (a *llmPostRunAnalyzer) reinforceFact(ctx context.Context, req httpapi.Post
 	if err := a.memory.TouchFact(ctx, memoryPartition(req), match.ID, boosted, time.Now()); err != nil {
 		return fmt.Errorf("reinforce %s fact: %w", target, err)
 	}
-	tools.RecordMemoryLearningChangeScoped(memoryPartition(req), target, match.Scope, "reinforce", match.Content, candidate, "post_run_analyzer")
+	tools.RecordMemoryLearningChangeScopedWithStorage(a.skillStorage, memoryPartition(req), target, match.Scope, "reinforce", match.Content, candidate, "post_run_analyzer")
 	return a.canonicalWrite(ctx, req, "REINFORCE", target, candidate, match.Content, 0, intakeMeta{Category: match.Category}, match.Scope)
 }
 

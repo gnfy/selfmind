@@ -134,7 +134,7 @@ func (t *MemoryTool) Execute(args map[string]interface{}) (string, error) {
 				return "", fmt.Errorf("write canonical memory: %w", err)
 			}
 		}
-		recordMemoryLearningChangeScoped(tenantID, target, fact.Scope, "add", "", content, "memory_tool")
+		recordMemoryLearningChangeScoped(tenantID, target, fact.Scope, "add", "", content, "memory_tool", args)
 		return fmt.Sprintf("Added to %s memory: %s", target, content), nil
 
 	case "remove":
@@ -164,7 +164,7 @@ func (t *MemoryTool) Execute(args map[string]interface{}) (string, error) {
 			}
 			return "", err
 		}
-		recordMemoryLearningChangeScoped(tenantID, target, fact.Scope, "remove", fact.Content, "", "memory_tool")
+		recordMemoryLearningChangeScoped(tenantID, target, fact.Scope, "remove", fact.Content, "", "memory_tool", args)
 		return fmt.Sprintf("Removed from %s memory: %s", target, fact.Content), nil
 
 	case "replace":
@@ -215,11 +215,11 @@ func (t *MemoryTool) Execute(args map[string]interface{}) (string, error) {
 				return "", fmt.Errorf("replace canonical memory: %w", err)
 			}
 		}
-		recordMemoryLearningChangeScoped(tenantID, target, replaced.Scope, "replace", fact.Content, content, "memory_tool")
+		recordMemoryLearningChangeScoped(tenantID, target, replaced.Scope, "replace", fact.Content, content, "memory_tool", args)
 		return fmt.Sprintf("Replaced in %s memory: %s -> %s", target, fact.Content, content), nil
 
 	case "history":
-		changes, err := ListMemoryLearningChanges(tenantID, target, 20)
+		changes, err := ListMemoryLearningChanges(tenantID, target, 20, args)
 		if err != nil {
 			return "", err
 		}
@@ -238,7 +238,7 @@ func (t *MemoryTool) Execute(args map[string]interface{}) (string, error) {
 		if changeID == "" {
 			return "", fmt.Errorf("change_id is required for undo")
 		}
-		out, err := UndoMemoryLearningChange(ctx, t.mem, tenantID, changeID)
+		out, err := UndoMemoryLearningChange(ctx, t.mem, tenantID, changeID, args)
 		if err == nil {
 			return out, nil
 		}
@@ -311,7 +311,7 @@ func (t *MemoryTool) Execute(args map[string]interface{}) (string, error) {
 			return "", err
 		}
 		removeLegacyFactByContent(ctx, t.mem, tenantID, fact)
-		recordMemoryLearningChangeScoped(tenantID, fact.Target, fact.Scope, "remove", fact.Content, "", "memory_user")
+		recordMemoryLearningChangeScoped(tenantID, fact.Target, fact.Scope, "remove", fact.Content, "", "memory_user", args)
 		return fmt.Sprintf("Forgot memory [%s]: %s", shortMemoryRef(fact.ID), fact.Content), nil
 
 	case "correct":
@@ -362,7 +362,7 @@ func (t *MemoryTool) Execute(args map[string]interface{}) (string, error) {
 				return "", fmt.Errorf("correct canonical memory: %w", err)
 			}
 		}
-		recordMemoryLearningChangeScoped(tenantID, fact.Target, corrected.Scope, "replace", fact.Content, corrected.Content, "memory_user")
+		recordMemoryLearningChangeScoped(tenantID, fact.Target, corrected.Scope, "replace", fact.Content, corrected.Content, "memory_user", args)
 		return fmt.Sprintf("Corrected memory [%s]: %s", shortMemoryRef(fact.ID), corrected.Content), nil
 
 	default:

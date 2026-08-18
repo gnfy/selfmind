@@ -179,9 +179,9 @@ authoritative instruction. If it changes direction, the latest message wins."*
   fact extraction for several runs, while returning one independently frozen
   result keyed by each run id. Implementation:
   `httpapi/run_labeler.go` (`PostRunAnalyzer` on `Server`, built by
-  `app.NewConfiguredPostRunAnalyzer` from the explicit
-  `tasks.maintenance_model_role`; no configured role disables maintenance
-  instead of falling back to the main model). Its task decision is KEEP /
+  `app.NewConfiguredPostRunAnalyzer` from the stable `memory_extract` role;
+  an explicit `models.roles.memory_extract` route wins, otherwise it uses
+  `models.auxiliary`). Its task decision is KEEP /
   MOVE:<task_id> / TITLE:<short title> / NEW:<short title> / INBOX. `NEW` may
   split independent durable work out of an established weak pre-label; it is
   rejected for explicit task/reference/resume attachments. Its destination id
@@ -304,9 +304,10 @@ Tasks remain work labels, but a long-lived assistant also needs label hygiene:
   hygiene and durable user/workspace fact extraction. Several same-person,
   same-workspace results may share one provider call according to
   `tasks.maintenance_debounce`, `tasks.maintenance_max_wait`, and
-  `tasks.maintenance_batch_max_runs`. It uses the explicitly configured
-  `tasks.maintenance_model_role` (default `memory_extract`) and never silently
-  falls back to the main coding model. It may answer `INBOX` only for casual,
+  `tasks.maintenance_batch_max_runs`. It uses the stable `memory_extract`
+  semantic role: `models.roles.memory_extract` is the optional advanced
+  override and `models.auxiliary` is the shared floor. It may answer `INBOX`
+  only for casual,
   identity/model, or one-off diagnostic turns with no durable work thread. It
   never runs at ingress and never changes the context the completed run saw.
   Recent turns remain immediately available from the person work spine; only

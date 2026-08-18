@@ -465,6 +465,10 @@ func (d *Server) retroResolvePendingApprovals(ctx context.Context, identity *con
 			stillPending++
 			continue
 		}
+		if strings.EqualFold(strings.TrimSpace(p.DecisionPolicy), tools.ApprovalDecisionPolicyOnceOnly) {
+			stillPending++
+			continue
+		}
 		decision := tools.EvaluateModeDecision(ctx, mode, "", toolName, p.Args, p.Reason, approvalReasonIsDangerous(p.Reason), d.ApprovalJudge)
 		switch decision {
 		case tools.ModeApprove:

@@ -126,7 +126,7 @@ func (a *App) ensureInitialModelSetup(cfg *config.Config, setup modelSetupFunc) 
 
 	fmt.Fprintln(a.stdout, "Welcome to SelfMind.")
 	fmt.Fprintln(a.stdout, "Before we start, choose the primary model for conversations and task execution.")
-	fmt.Fprintln(a.stdout, "Next, you can choose one auxiliary model for approval, memory, recall, summaries, and skills.")
+	fmt.Fprintln(a.stdout, "Background roles initially reuse that model through the auxiliary slot; you can customize it later.")
 	fmt.Fprintln(a.stdout, "You can reuse an existing Codex, Claude Code, Gemini, or Qwen login, or configure an API key.")
 	fmt.Fprintln(a.stdout)
 

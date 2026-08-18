@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"selfmind/internal/control"
+	"selfmind/internal/tools"
 )
 
 func TestSkillCuratorFreezesCandidateAndAutoPromotesOnlyReadOnlyCohorts(t *testing.T) {
@@ -23,7 +24,11 @@ func TestSkillCuratorFreezesCandidateAndAutoPromotesOnlyReadOnlyCohorts(t *testi
 		"reason":"three comparable verified read-only runs",
 		"content":"---\nname: curated-release-inspection\ndescription: Inspect declared release metadata.\n---\n\n## Applicability\nDeclared release metadata inspection.\n\n## Inputs\nA manifest path.\n\n## Preconditions\nThe manifest exists.\n\n## Procedure\nRead only the declared manifest and extract the requested fields.\n\n## Failure Guards\nDo not guess missing fields.\n\n## Recovery\nReturn to ordinary planning when the manifest is absent.\n\n## Verification\nCite the manifest fields used.\n"
 	}`}
-	curator := &llmSkillCurator{provider: provider, store: store}
+	storage, err := tools.NewSkillStorage(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	curator := &llmSkillCurator{provider: provider, store: store, skillStorage: storage}
 	digest := curatorTestDigest("read-only-evidence", []string{"file.read", "file.search"})
 	payload, _ := json.Marshal(digest)
 	proposal, err := curator.ProposeSkillCuration(ctx, "default", string(payload))
@@ -93,6 +98,21 @@ func TestSkillCuratorSkipsToollessCohortBeforeProviderCall(t *testing.T) {
 	result, err := curator.ApplySkillCuration(ctx, "default", string(payload), `{"action":"CREATE"}`)
 	if err != nil || !strings.Contains(result, "cohort is not ready") {
 		t.Fatalf("tool-less apply=%q err=%v", result, err)
+	}
+}
+
+func TestSkillCuratorCreateFailsClosedWithoutConfiguredStorage(t *testing.T) {
+	store, err := control.OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	curator := &llmSkillCurator{store: store}
+	digest := curatorTestDigest("missing-storage", []string{"file.read"})
+	payload, _ := json.Marshal(digest)
+	proposal := `{"action":"CREATE","name":"missing-storage","content":"---\nname: missing-storage\ndescription: test\n---\n\n## Applicability\nTest.\n\n## Inputs\nNone.\n\n## Preconditions\nNone.\n\n## Procedure\nRead.\n\n## Failure Guards\nStop.\n\n## Recovery\nPlan.\n\n## Verification\nVerify."}`
+	if _, err := curator.ApplySkillCuration(context.Background(), "default", string(payload), proposal); err == nil || !strings.Contains(err.Error(), "storage is not configured") {
+		t.Fatalf("missing storage error = %v", err)
 	}
 }
 

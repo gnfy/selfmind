@@ -262,7 +262,7 @@ func writeLifecycleVersionFile(tenantID string, version *control.SkillVersion, a
 	if version.ParentVersionHash != "" {
 		return "", fmt.Errorf("active Skill for PATCH/rollback is unavailable: %w", findErr)
 	}
-	root, err := userSkillsDirForTenant(tenantID)
+	root, err := userSkillsDirForTenant(tenantID, args)
 	if err != nil {
 		return "", err
 	}
@@ -289,8 +289,8 @@ func writeLifecycleVersionFile(tenantID string, version *control.SkillVersion, a
 	if err := atomicWriteFile(path, content); err != nil {
 		return "", err
 	}
-	_ = MarkSkillCreated(tenantID, safeName, SkillSourceAgentCreated, "skill_lifecycle_manage")
-	recordSkillLearningChange(tenantID, safeName, "promote", "", content, SkillSourceAgentCreated)
+	_ = MarkSkillCreated(tenantID, safeName, SkillSourceAgentCreated, "skill_lifecycle_manage", args)
+	recordSkillLearningChange(tenantID, safeName, "promote", "", content, SkillSourceAgentCreated, args)
 	return verifyLifecycleVersionFile(tenantID, version, args)
 }
 

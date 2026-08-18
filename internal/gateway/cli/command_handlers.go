@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
@@ -22,7 +23,15 @@ import (
 // owns an agent or is a thin client to a gateway daemon.
 func (m *uiModel) dispatch(tool string, args map[string]interface{}) (string, error) {
 	if m.toolDispatchFn != nil {
-		return m.toolDispatchFn(tool, args)
+		scoped := make(map[string]interface{}, len(args)+2)
+		for key, value := range args {
+			scoped[key] = value
+		}
+		scoped["_client_cwd"] = currentWorkingDir()
+		if strings.TrimSpace(m.workspaceOverrideID) != "" {
+			scoped["_workspace_id"] = m.workspaceOverrideID
+		}
+		return m.toolDispatchFn(tool, scoped)
 	}
 	if m.agent != nil && m.agent.Dispatcher() != nil {
 		return m.agent.Dispatcher().Dispatch(tool, args)
@@ -58,32 +67,64 @@ func (m *uiModel) handleCommand(input string) tea.Cmd {
 }
 
 func (m *uiModel) handleSkillSlash(slashName, instruction string) tea.Cmd {
+	if m.toolDispatchFn != nil {
+		return func() tea.Msg {
+			result, err := m.dispatch("skill_invocation_resolve", map[string]interface{}{
+				"command": slashName, "instruction": instruction,
+			})
+			if err != nil {
+				return MsgSkillInvocationResolved{SlashName: slashName, Err: err}
+			}
+			var resolved struct {
+				Found       bool   `json:"found"`
+				DisplayName string `json:"display_name"`
+				Prompt      string `json:"prompt"`
+			}
+			if err := json.Unmarshal([]byte(result), &resolved); err != nil {
+				return MsgSkillInvocationResolved{SlashName: slashName, Err: fmt.Errorf("decode daemon Skill resolution: %w", err)}
+			}
+			return MsgSkillInvocationResolved{
+				SlashName: slashName, Found: resolved.Found,
+				DisplayName: resolved.DisplayName, Prompt: resolved.Prompt,
+			}
+		}
+	}
 	prompt, displayName, ok, err := tools.ResolveSkillInvocationForTenant(m.tenantID, slashName, instruction)
 	if err != nil {
-		m.addMessage("assistant", fmt.Sprintf("Skill command error: %v", err))
-		return nil
+		return m.finishSkillInvocationResolution(MsgSkillInvocationResolved{SlashName: slashName, Err: err})
 	}
 	if !ok {
+		return m.finishSkillInvocationResolution(MsgSkillInvocationResolved{SlashName: slashName})
+	}
+	return m.finishSkillInvocationResolution(MsgSkillInvocationResolved{SlashName: slashName, Found: true, DisplayName: displayName, Prompt: prompt})
+}
+
+func (m *uiModel) finishSkillInvocationResolution(msg MsgSkillInvocationResolved) tea.Cmd {
+	if msg.Err != nil {
+		m.addMessage("assistant", fmt.Sprintf("Skill command error: %v", msg.Err))
+		return nil
+	}
+	if !msg.Found {
 		// Unify the unknown-command decision with the gateway: if the token is a
 		// near-miss for a control command, suggest it (same edit-distance logic
 		// via the shared registry) before falling back to the generic hint.
-		if suggestion := command.Suggest(slashName); suggestion != "" {
-			m.addMessage("assistant", fmt.Sprintf("Unknown command %s — did you mean %s? Use /help for the full list.", slashName, suggestion))
+		if suggestion := command.Suggest(msg.SlashName); suggestion != "" {
+			m.addMessage("assistant", fmt.Sprintf("Unknown command %s — did you mean %s? Use /help for the full list.", msg.SlashName, suggestion))
 			return nil
 		}
-		m.addMessage("assistant", fmt.Sprintf("Unknown command: %s. Use /help, /skills list, or /bundles list.", slashName))
+		m.addMessage("assistant", fmt.Sprintf("Unknown command: %s. Use /help, /skills list, or /bundles list.", msg.SlashName))
 		return nil
 	}
 	// The typed command was already echoed by handleCommand; only the loaded
 	// skill notice is added here.
-	m.setStatusNotice(noticeInfo, fmt.Sprintf("Loaded skill context: %s", displayName))
+	m.setStatusNotice(noticeInfo, fmt.Sprintf("Loaded skill context: %s", msg.DisplayName))
 	m.thinking = true
 	m.runStatus = "working"
 	m.thinkingStart = time.Now()
 	m.runTokens = 0
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancelFn = cancel
-	return tea.Batch(m.runAgent(ctx, prompt), m.spinner.Tick)
+	return tea.Batch(m.runAgent(ctx, msg.Prompt), m.spinner.Tick)
 }
 
 func (m *uiModel) handleMigration() tea.Cmd {
@@ -331,29 +372,16 @@ func (m *uiModel) handleSkills(args []string) tea.Cmd {
 		}
 		switch action {
 		case "list":
-			skills, err := tools.ListSkillsForTenant(m.tenantID, false)
+			resp, err := m.dispatch("skill_manage", map[string]interface{}{"action": "list", "_tenant_id": m.tenantID})
 			if err != nil {
 				return MsgAgentDone{Response: fmt.Sprintf("Error listing skills: %v", err)}
 			}
-			if len(skills) == 0 {
-				return MsgAgentDone{Response: "No skills found. Skills are created automatically after reusable work is discovered."}
-			}
-			var sb strings.Builder
-			sb.WriteString(fmt.Sprintf("## Skills (%d)\n\n", len(skills)))
-			for _, s := range skills {
-				pin := ""
-				if s.Pinned {
-					pin = " pinned"
-				}
-				sb.WriteString(fmt.Sprintf("- **%s** [%s/%s%s]: %s\n  _%s_\n", s.Name, s.State, s.Source, pin, valueOr(s.Description, "(no description)"), s.Path))
-			}
-			sb.WriteString("\nCommands: /skills view <name>, /skills bind <name>, /skills unbind, /skills candidates, /skills candidate <version>, /skills promote <version>, /skills reject <version>, /skills rollback <version>")
-			return MsgAgentDone{Response: sb.String()}
+			return MsgAgentDone{Response: resp}
 		case "view":
 			if len(args) < 2 {
 				return MsgAgentDone{Response: "Usage: /skills view <name>"}
 			}
-			content, err := tools.ReadSkillForTenant(m.tenantID, args[1])
+			content, err := m.dispatch("skill_manage", map[string]interface{}{"action": "read", "name": args[1], "_tenant_id": m.tenantID})
 			if err != nil {
 				return MsgAgentDone{Response: fmt.Sprintf("Error reading skill: %v", err)}
 			}
@@ -362,16 +390,11 @@ func (m *uiModel) handleSkills(args []string) tea.Cmd {
 			if len(args) < 2 {
 				return MsgAgentDone{Response: "Usage: /skills search <query>"}
 			}
-			skills, err := tools.SearchSkillsForTenant(m.tenantID, strings.Join(args[1:], " "))
+			resp, err := m.dispatch("skill_manage", map[string]interface{}{"action": "search", "query": strings.Join(args[1:], " "), "_tenant_id": m.tenantID})
 			if err != nil {
 				return MsgAgentDone{Response: fmt.Sprintf("Error searching skills: %v", err)}
 			}
-			var sb strings.Builder
-			sb.WriteString(fmt.Sprintf("## Skill Search (%d)\n\n", len(skills)))
-			for _, s := range skills {
-				sb.WriteString(fmt.Sprintf("- **%s**: %s\n", s.Name, valueOr(s.Description, "(no description)")))
-			}
-			return MsgAgentDone{Response: sb.String()}
+			return MsgAgentDone{Response: resp}
 		case "candidates":
 			request := map[string]interface{}{"action": "candidate_list", "_tenant_id": m.tenantID}
 			if len(args) >= 2 {
@@ -925,7 +948,7 @@ func (m *uiModel) handleCurator(args []string) tea.Cmd {
 		}
 		switch action {
 		case "status":
-			resp, err := tools.CuratorStatusForTenant(m.tenantID)
+			resp, err := m.dispatch("skill_manage", map[string]interface{}{"action": "curator_status", "_tenant_id": m.tenantID})
 			if err != nil {
 				return MsgAgentDone{Response: fmt.Sprintf("Curator status error: %v", err)}
 			}
@@ -940,7 +963,11 @@ func (m *uiModel) handleCurator(args []string) tea.Cmd {
 					opts.WriteReport = true
 				}
 			}
-			resp, err := tools.RunCuratorForTenantWithOptions(m.tenantID, opts)
+			resp, err := m.dispatch("skill_manage", map[string]interface{}{
+				"action": "curator_run", "stale_after_days": opts.StaleAfterDays,
+				"archive_after_days": opts.ArchiveAfterDays, "dry_run": opts.DryRun,
+				"write_report": opts.WriteReport, "_tenant_id": m.tenantID,
+			})
 			if err != nil {
 				return MsgAgentDone{Response: fmt.Sprintf("Curator run error: %v", err)}
 			}
@@ -949,7 +976,7 @@ func (m *uiModel) handleCurator(args []string) tea.Cmd {
 			if len(args) < 2 {
 				return MsgAgentDone{Response: "Usage: /curator restore <skill-name>"}
 			}
-			resp, err := tools.RestoreSkillForTenant(m.tenantID, args[1])
+			resp, err := m.dispatch("skill_manage", map[string]interface{}{"action": "restore", "name": args[1], "_tenant_id": m.tenantID})
 			if err != nil {
 				return MsgAgentDone{Response: fmt.Sprintf("Curator restore error: %v", err)}
 			}

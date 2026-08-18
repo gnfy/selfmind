@@ -209,11 +209,11 @@ var documentedCLIUsages = []string{
 	"selfmind env [show|refresh]",
 	"selfmind model [current|check [--live] [--role <name>]|list|set <provider> <model>]",
 	"selfmind auth [login|status|logout] ...",
-	"selfmind doctor [--out FILE] [--probe-models]",
+	"selfmind doctor [--verbose] [--out FILE] [--probe-models]",
 	"selfmind docs [check|index]",
 	"selfmind selfcheck [--fast | --profile local-full|local-fast|ci] [--skip-go] [--skip-eval] [--eval-dir DIR]",
 	"selfmind eval [list|run|report|repair|scorecard|capture|clean]",
-	"selfmind maintenance [replay|migrate-memory|migrate-skills|migrate-task-references|memory-audit|memory-dedup|task-audit|restore-control] ...",
+	"selfmind maintenance [replay|migrate-memory|migrate-skills|cleanup-person-partitions|migrate-task-references|memory-audit|memory-dedup|task-audit|restore-control] ...",
 	"selfmind gateway [run|start|status|stop|restart|service] ...",
 	"selfmind weixin [login|status] ...",
 }

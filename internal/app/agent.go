@@ -3,8 +3,6 @@ package app
 import (
 	"context"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -210,52 +208,6 @@ func firstPositive(values ...int) int {
 		}
 	}
 	return 0
-}
-
-// skillInventoryFor returns a closure that renders the tenant's learned skills
-// as a compact prompt block (name + short description, capped). It returns ""
-// when there are no skills, so nothing is injected for a fresh tenant.
-func skillInventoryFor(defaultTenantID string) func(string) string {
-	return func(tid string) string {
-		if strings.TrimSpace(tid) == "" {
-			tid = defaultTenantID
-		}
-		skills, err := tools.ListSkillsForTenant(tid, false)
-		if err != nil || len(skills) == 0 {
-			return ""
-		}
-		const maxSkills = 20
-		var sb strings.Builder
-		sb.WriteString("# LEARNED SKILLS\n")
-		sb.WriteString("You have these reusable skills from past work. When one fits the task, load it with skill_view before reinventing the approach.\n")
-		shown := 0
-		for _, s := range skills {
-			name := strings.TrimSpace(s.Name)
-			if name == "" {
-				continue
-			}
-			desc := strings.TrimSpace(s.Description)
-			if r := []rune(desc); len(r) > 60 {
-				desc = string(r[:60]) + "…"
-			}
-			if desc != "" {
-				fmt.Fprintf(&sb, "- %s: %s\n", name, desc)
-			} else {
-				fmt.Fprintf(&sb, "- %s\n", name)
-			}
-			shown++
-			if shown >= maxSkills {
-				if remaining := len(skills) - shown; remaining > 0 {
-					fmt.Fprintf(&sb, "- … (%d more; use skills_list to see all)\n", remaining)
-				}
-				break
-			}
-		}
-		if shown == 0 {
-			return ""
-		}
-		return sb.String()
-	}
 }
 
 func codingContextLength(cfg *config.Config) int {
@@ -755,19 +707,10 @@ func InitAgent(mem *memory.MemoryManager, cfg *config.Config, tenantID string, s
 	judgeProvider, _ := configuredApprovalJudgeProvider(mem, cfg, tenantID)
 	if len(stores) > 0 && stores[0] != nil {
 		// Background learning shares the same durable physical-route circuit as
-		// post-run analysis and memory consolidation. In daemon mode it must not
-		// silently borrow the foreground coding model.
-		reviewRoles := []llm.ModelRole{llm.RoleBackgroundReview}
-		if cfg != nil {
-			for _, fallback := range cfg.Tasks.MaintenanceFallbackRoles {
-				fallbackRole := llm.ModelRole(strings.TrimSpace(fallback))
-				if fallbackRole == "" || containsModelRole(reviewRoles, fallbackRole) {
-					continue
-				}
-				reviewRoles = append(reviewRoles, fallbackRole)
-			}
-		}
-		reviewProvider, reviewRoutes = configuredMaintenanceProvider(mem, cfg, tenantID, stores[0], reviewRoles...)
+		// post-run analysis and memory consolidation, and the same two-position
+		// chain: the role's own route, then the models.auxiliary floor. In daemon
+		// mode it must not silently borrow the foreground coding model.
+		reviewProvider, reviewRoutes = configuredMaintenanceProvider(mem, cfg, tenantID, stores[0], llm.RoleBackgroundReview)
 		if replayed, err := stores[0].RequeueBlockedJobsForHealthyProviderRoutesAcrossTenants(context.Background(), tenantID, 100, maintenanceRouteIDs(reviewRoutes), time.Now()); err != nil {
 			log.Warn("background review: failed to migrate jobs to a healthy fallback route", "error", err)
 		} else if replayed > 0 {
@@ -775,12 +718,11 @@ func InitAgent(mem *memory.MemoryManager, cfg *config.Config, tenantID string, s
 		}
 	}
 
-	skillsBaseDir := cfg.Evolution.SkillsDir
-	if skillsBaseDir == "" {
-		home, _ := os.UserHomeDir()
-		skillsBaseDir = filepath.Join(home, ".selfmind")
+	skillStorage, skillStorageErr := configuredSkillStorage(cfg)
+	if skillStorageErr != nil {
+		return nil, skillStorageErr
 	}
-	skillsDir := tools.SkillsDirForTenant(skillsBaseDir, tenantID)
+	skillsDir := tools.SkillsDirForTenant(skillStorage.BaseDir(), tenantID)
 
 	maxIter := cfg.Agent.MaxIterations
 	if maxIter == 0 {

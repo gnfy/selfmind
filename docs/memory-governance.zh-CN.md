@@ -315,7 +315,6 @@ memory:
   governance:
     enabled: true
     mode: "shadow"                  # shadow → merge-only → full
-    model_role: "memory_extract"
     max_active_global: 120
     max_active_per_workspace: 200
     max_evidence_per_memory: 20
@@ -330,6 +329,9 @@ memory:
     auto_archive_confidence: 0.90
     pause_while_run_active: true
 ```
+
+整理判决固定使用 `memory_extract` 语义角色；专用模型只通过
+`models.roles.memory_extract` 覆盖，否则使用 `models.auxiliary`。
 
 当前自动落地边界：`shadow` 只记录判断（含 `would_apply` 干跑标注），
 `merge-only` 自动执行门禁通过的 MERGE / REINFORCE / ARCHIVE，

@@ -34,6 +34,13 @@ type Server struct {
 	// catalogue. It contains hashes and issue classes only, never raw external
 	// schemas. Nil keeps test/minimal servers independent from a dispatcher.
 	ToolSchemaReportFunc func() []tools.ToolSchemaReport
+	// MCPHealthFunc exposes connection/catalog failures without credentials or
+	// raw schemas so status and doctor do not depend on daemon log inspection.
+	MCPHealthFunc func() tools.MCPHealthSnapshot
+	// SkillStorage is the daemon-resolved immutable asset base. Direct selector
+	// and management paths use the same root as dispatcher middleware instead
+	// of consulting the daemon process HOME independently.
+	SkillStorage *tools.SkillStorage
 	// LocalControlToken authenticates privileged loopback-only operations such
 	// as granting workspace trust. It is not the public gateway bearer token.
 	LocalControlToken string

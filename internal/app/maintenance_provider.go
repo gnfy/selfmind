@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"selfmind/internal/control"
@@ -23,13 +24,26 @@ type maintenanceRouteIdentity struct {
 	Model      string
 }
 
+// auxiliaryFloorSlot names the shared models.auxiliary fallback in logs and
+// maintenance telemetry. It is a slot, not a role: no models.roles entry
+// carries this name and it never overrides a role's own configuration.
+const auxiliaryFloorSlot = "auxiliary"
+
 // namedMaintenanceProvider is a configured cheap/background provider. The
-// chain resolves explicit role overrides before models.auxiliary and never
-// invents a fallback to the primary coding model.
+// chain resolves a role's own configuration before the models.auxiliary floor
+// and never invents a fallback to the primary coding model.
+//
+// slot is the display and telemetry name of the chain position: a role name
+// for the role's own configuration, auxiliaryFloorSlot for the floor. role
+// stays the logical role being served so telemetry attributes a floor call to
+// the work that needed it. maxOutputTokens is the resolved model's output
+// ceiling; the chain clamps each request to the route that actually serves it.
 type namedMaintenanceProvider struct {
-	role     llm.ModelRole
-	provider llm.Provider
-	route    maintenanceRouteIdentity
+	slot            string
+	role            llm.ModelRole
+	provider        llm.Provider
+	route           maintenanceRouteIdentity
+	maxOutputTokens int
 }
 
 type maintenanceProviderChain struct {
@@ -53,29 +67,108 @@ func maintenanceRouteIDs(routes []maintenanceRouteIdentity) []string {
 	return ids
 }
 
-// configuredMaintenanceProvider builds one quota-aware provider chain from
-// configured maintenance roles. Roles resolving to the same
-// endpoint and credential are de-duplicated before any request is sent.
+// maintenanceCandidateSlot is one unresolved chain position: a slot name plus
+// the role configuration that position should be built from.
+type maintenanceCandidateSlot struct {
+	slot    string
+	role    llm.ModelRole
+	roleCfg config.ModelRoleConfig
+}
+
+// maintenanceCandidateSlots returns the ordered chain for one maintenance
+// role: the role's own configuration, then the models.auxiliary floor.
+//
+// Deprecated tasks.maintenance_fallback_roles slots are inserted between the
+// two so existing installations keep their explicit provider hops. They pre-date
+// the auxiliary floor and are not needed to obtain a fallback.
+func maintenanceCandidateSlots(cfg *config.Config, role llm.ModelRole) []maintenanceCandidateSlot {
+	if cfg == nil {
+		return nil
+	}
+	slots := make([]maintenanceCandidateSlot, 0, 3)
+	appendRole := func(candidate llm.ModelRole) {
+		name := strings.TrimSpace(string(candidate))
+		if name == "" {
+			return
+		}
+		for _, existing := range slots {
+			if existing.slot == name {
+				return
+			}
+		}
+		roleCfg, _, ok := cfg.ResolveAuxiliaryRole(name)
+		if !ok || roleConfigEmpty(roleCfg) {
+			return
+		}
+		slots = append(slots, maintenanceCandidateSlot{slot: name, role: candidate, roleCfg: roleCfg})
+	}
+	appendRole(role)
+	if len(cfg.Tasks.MaintenanceFallbackRoles) > 0 {
+		warnLegacyMaintenanceFallbackRoles(cfg)
+		for _, legacy := range cfg.Tasks.MaintenanceFallbackRoles {
+			appendRole(llm.ModelRole(strings.TrimSpace(legacy)))
+		}
+	}
+	if floor, ok := cfg.AuxiliaryRoleFloor(); ok {
+		slots = append(slots, maintenanceCandidateSlot{slot: auxiliaryFloorSlot, role: role, roleCfg: floor})
+	}
+	return slots
+}
+
+var legacyMaintenanceFallbackWarning sync.Once
+
+func warnLegacyMaintenanceFallbackRoles(cfg *config.Config) {
+	legacyMaintenanceFallbackWarning.Do(func() {
+		log.Warn("tasks.maintenance_fallback_roles is deprecated: every background role now falls back to models.auxiliary. Remove the key unless you deliberately want extra provider hops between the two.",
+			"roles", strings.Join(cfg.Tasks.MaintenanceFallbackRoles, ","))
+	})
+}
+
+// buildMaintenanceCandidate resolves one chain position into a live provider.
+func buildMaintenanceCandidate(mem *memory.MemoryManager, cfg *config.Config, tenantID string,
+	slot maintenanceCandidateSlot) (namedMaintenanceProvider, bool) {
+	providerName := firstNonEmpty(slot.roleCfg.Provider, defaultProviderName(cfg))
+	provider := buildRoleProvider(cfg, slot.role, providerName, slot.roleCfg)
+	if provider == nil {
+		return namedMaintenanceProvider{}, false
+	}
+	if strings.TrimSpace(tenantID) == "" {
+		tenantID = "default"
+	}
+	applyDynamicKeyGetter(provider, mem, tenantID, providerName)
+	route, maxOutput := maintenanceRouteIdentityFor(cfg, slot.role, slot.roleCfg)
+	return namedMaintenanceProvider{
+		slot: slot.slot, role: slot.role, provider: provider,
+		route: route, maxOutputTokens: maxOutput,
+	}, true
+}
+
+// configuredMaintenanceProvider builds one quota-aware provider chain for a
+// maintenance role: the role's own configuration, then the models.auxiliary
+// floor. Positions resolving to the same endpoint and credential are
+// de-duplicated before any request is sent, so an installation with a single
+// provider honestly ends up with a single-entry chain.
 func configuredMaintenanceProvider(mem *memory.MemoryManager, cfg *config.Config, tenantID string,
-	controlStore *control.Store, roles ...llm.ModelRole) (llm.Provider, []maintenanceRouteIdentity) {
-	providers := make([]namedMaintenanceProvider, 0, len(roles))
-	routes := make([]maintenanceRouteIdentity, 0, len(roles))
-	seenRoutes := make(map[string]struct{}, len(roles))
-	for _, role := range roles {
-		provider := configuredAuxiliaryRoleProvider(mem, cfg, tenantID, role)
-		if provider == nil {
+	controlStore *control.Store, role llm.ModelRole) (llm.Provider, []maintenanceRouteIdentity) {
+	slots := maintenanceCandidateSlots(cfg, role)
+	providers := make([]namedMaintenanceProvider, 0, len(slots))
+	routes := make([]maintenanceRouteIdentity, 0, len(slots))
+	seenRoutes := make(map[string]struct{}, len(slots))
+	for _, slot := range slots {
+		candidate, ok := buildMaintenanceCandidate(mem, cfg, tenantID, slot)
+		if !ok {
 			continue
 		}
-		route := maintenanceRoleRouteIdentity(cfg, role)
-		if route.ID != "" {
-			if _, exists := seenRoutes[route.ID]; exists {
-				log.Info("maintenance provider: skipping duplicate physical route", "role", role)
+		if candidate.route.ID != "" {
+			if _, exists := seenRoutes[candidate.route.ID]; exists {
+				log.Info("maintenance provider: skipping duplicate physical route",
+					"role", role, "slot", slot.slot, "provider", candidate.route.Provider)
 				continue
 			}
-			seenRoutes[route.ID] = struct{}{}
-			routes = append(routes, route)
+			seenRoutes[candidate.route.ID] = struct{}{}
+			routes = append(routes, candidate.route)
 		}
-		providers = append(providers, namedMaintenanceProvider{role: role, provider: provider, route: route})
+		providers = append(providers, candidate)
 	}
 	if len(providers) == 0 {
 		return nil, routes
@@ -108,7 +201,7 @@ func (c *maintenanceProviderChain) ChatCompletion(ctx context.Context, messages 
 			lastErr = c.openCircuitError(ctx, candidate, err)
 			c.recordProviderCall(ctx, candidate, index, control.MaintenanceProviderCallCircuitOpen,
 				triggerClass, lastErr, llm.UsageStats{}, "", 1, time.Time{})
-			failures = append(failures, string(candidate.role)+": circuit open")
+			failures = append(failures, candidate.slot+": circuit open")
 			triggerClass = providerErrorClass(lastErr)
 			continue
 		}
@@ -134,8 +227,8 @@ func (c *maintenanceProviderChain) ChatCompletion(ctx context.Context, messages 
 		}
 		lastErr = callErr
 		triggerClass = providerErrorClass(callErr)
-		failures = append(failures, fmt.Sprintf("%s: %v", candidate.role, callErr))
-		log.Warn("maintenance provider unavailable; trying explicit fallback", "role", candidate.role, "provider", candidate.route.Provider, "error", callErr)
+		failures = append(failures, fmt.Sprintf("%s: %v", candidate.slot, callErr))
+		log.Warn("maintenance provider unavailable; trying the next chain position", "role", candidate.role, "slot", candidate.slot, "provider", candidate.route.Provider, "error", callErr)
 	}
 	return "", maintenanceAggregateError(failures, lastErr, anyRetryable)
 }
@@ -157,12 +250,12 @@ func (c *maintenanceProviderChain) Chat(ctx context.Context, req llm.ChatRequest
 			lastErr = c.openCircuitError(ctx, candidate, err)
 			c.recordProviderCall(ctx, candidate, index, control.MaintenanceProviderCallCircuitOpen,
 				triggerClass, lastErr, llm.UsageStats{}, "", batchSize, time.Time{})
-			failures = append(failures, string(candidate.role)+": circuit open")
+			failures = append(failures, candidate.slot+": circuit open")
 			triggerClass = providerErrorClass(lastErr)
 			continue
 		}
 		started := time.Now()
-		resp, callErr := candidate.provider.Chat(ctx, req)
+		resp, callErr := candidate.provider.Chat(ctx, boundOutputForCandidate(req, candidate))
 		if callErr == nil && resp != nil && (strings.TrimSpace(resp.Content) != "" || len(resp.ToolCalls) > 0) {
 			c.recordSuccess(ctx, candidate)
 			c.recordProviderCall(ctx, candidate, index, control.MaintenanceProviderCallSucceeded,
@@ -188,7 +281,7 @@ func (c *maintenanceProviderChain) Chat(ctx context.Context, req llm.ChatRequest
 			}
 			lastErr = contractErr
 			triggerClass = "output_contract"
-			failures = append(failures, fmt.Sprintf("%s: %v", candidate.role, contractErr))
+			failures = append(failures, fmt.Sprintf("%s: %v", candidate.slot, contractErr))
 			continue
 		}
 		if callErr == nil {
@@ -212,8 +305,8 @@ func (c *maintenanceProviderChain) Chat(ctx context.Context, req llm.ChatRequest
 		}
 		lastErr = callErr
 		triggerClass = providerErrorClass(callErr)
-		failures = append(failures, fmt.Sprintf("%s: %v", candidate.role, callErr))
-		log.Warn("maintenance provider unavailable; trying explicit fallback", "role", candidate.role, "provider", candidate.route.Provider, "error", callErr)
+		failures = append(failures, fmt.Sprintf("%s: %v", candidate.slot, callErr))
+		log.Warn("maintenance provider unavailable; trying the next chain position", "role", candidate.role, "slot", candidate.slot, "provider", candidate.route.Provider, "error", callErr)
 	}
 	return nil, maintenanceAggregateError(failures, lastErr, anyRetryable)
 }
@@ -250,12 +343,12 @@ func (c *maintenanceProviderChain) StreamChat(ctx context.Context, req llm.ChatR
 			lastErr = c.openCircuitError(ctx, candidate, err)
 			c.recordProviderCall(ctx, candidate, index, control.MaintenanceProviderCallCircuitOpen,
 				triggerClass, lastErr, llm.UsageStats{}, "", maintenanceBatchSize(req), time.Time{})
-			failures = append(failures, string(candidate.role)+": circuit open")
+			failures = append(failures, candidate.slot+": circuit open")
 			triggerClass = providerErrorClass(lastErr)
 			continue
 		}
 		started := time.Now()
-		stream, callErr := candidate.provider.StreamChat(ctx, req)
+		stream, callErr := candidate.provider.StreamChat(ctx, boundOutputForCandidate(req, candidate))
 		if callErr == nil && stream != nil {
 			return c.observeStream(ctx, candidate, index, triggerClass, stream, probe, maintenanceBatchSize(req), started), nil
 		}
@@ -273,10 +366,24 @@ func (c *maintenanceProviderChain) StreamChat(ctx context.Context, req llm.ChatR
 		}
 		lastErr = callErr
 		triggerClass = providerErrorClass(callErr)
-		failures = append(failures, fmt.Sprintf("%s: %v", candidate.role, callErr))
-		log.Warn("maintenance provider unavailable; trying explicit fallback", "role", candidate.role, "provider", candidate.route.Provider, "error", callErr)
+		failures = append(failures, fmt.Sprintf("%s: %v", candidate.slot, callErr))
+		log.Warn("maintenance provider unavailable; trying the next chain position", "role", candidate.role, "slot", candidate.slot, "provider", candidate.route.Provider, "error", callErr)
 	}
 	return nil, maintenanceAggregateError(failures, lastErr, anyRetryable)
+}
+
+// boundOutputForCandidate clamps the output budget to what this chain position
+// can actually produce. The analyzer sizes its contract from the role's own
+// route; a fallback route with a smaller ceiling must not be handed that
+// number, or it reports a truncated empty body that looks like a provider
+// fault instead of a budget mismatch. The clamp only ever lowers the budget,
+// so a deliberately small request stays small.
+func boundOutputForCandidate(req llm.ChatRequest, candidate namedMaintenanceProvider) llm.ChatRequest {
+	if candidate.maxOutputTokens <= 0 || req.MaxTokens <= candidate.maxOutputTokens {
+		return req
+	}
+	req.MaxTokens = candidate.maxOutputTokens
+	return req
 }
 
 // boundedMaintenanceRequest keeps background control work predictable even
@@ -439,4 +546,59 @@ func maintenanceAggregateError(failures []string, lastErr error, anyRetryable bo
 		return llm.NonRetryable(err)
 	}
 	return err
+}
+
+// MaintenanceFallbackSummary describes the fallback position resolved for one
+// background role, so an operator can see whether a configured fallback is
+// real. A chain whose positions share one endpoint and credential collapses to
+// a single provider; that is honest behaviour, but it must not look like
+// redundancy the installation does not have.
+type MaintenanceFallbackSummary struct {
+	// Chained reports whether this role runs through the maintenance chain at
+	// all. Roles outside it resolve to exactly one provider.
+	Chained bool
+	// Slot, Provider, and Model name the first position that is a genuinely
+	// different physical route. They stay empty when there is none.
+	Slot     string
+	Provider string
+	Model    string
+	// Collapsed reports that fallback positions exist but every one of them
+	// resolves to the role's own endpoint and credential.
+	Collapsed bool
+}
+
+// DescribeMaintenanceFallback resolves the fallback position for a role
+// without building providers or contacting any endpoint.
+func DescribeMaintenanceFallback(cfg *config.Config, role string) MaintenanceFallbackSummary {
+	name := strings.TrimSpace(role)
+	if cfg == nil || name == "" {
+		return MaintenanceFallbackSummary{}
+	}
+	target := llm.ModelRole(name)
+	if !containsModelRole(maintenanceChainedRoles(cfg), target) {
+		return MaintenanceFallbackSummary{}
+	}
+	summary := MaintenanceFallbackSummary{Chained: true}
+	slots := maintenanceCandidateSlots(cfg, target)
+	if len(slots) < 2 {
+		return summary
+	}
+	seen := make(map[string]struct{}, len(slots))
+	if route, _ := maintenanceRouteIdentityFor(cfg, slots[0].role, slots[0].roleCfg); route.ID != "" {
+		seen[route.ID] = struct{}{}
+	}
+	for _, slot := range slots[1:] {
+		route, _ := maintenanceRouteIdentityFor(cfg, slot.role, slot.roleCfg)
+		if route.ID == "" {
+			continue
+		}
+		if _, duplicate := seen[route.ID]; duplicate {
+			summary.Collapsed = true
+			continue
+		}
+		summary.Slot, summary.Provider, summary.Model = slot.slot, route.Provider, route.Model
+		summary.Collapsed = false
+		return summary
+	}
+	return summary
 }

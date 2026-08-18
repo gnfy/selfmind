@@ -62,7 +62,6 @@ memory:
   governance:
     enabled: true
     mode: "shadow"
-    model_role: "memory_extract"
     max_active_global: 120
     max_active_per_workspace: 200
     archive_after: "4320h"
@@ -71,6 +70,10 @@ memory:
     auto_merge_confidence: 0.95
     pause_while_run_active: true
 ```
+
+The judge uses the stable `memory_extract` role. A dedicated model is selected
+through `models.roles.memory_extract`; otherwise the role uses
+`models.auxiliary`.
 
 An upper bound applies to active canonical memories, not raw evidence. Archival
 must eventually use `last_accessed_at` and `last_verified_at`; age from creation

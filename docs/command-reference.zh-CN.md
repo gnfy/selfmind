@@ -108,7 +108,7 @@ selfmind config [doctor|upgrade]
 selfmind env [show|refresh]
 selfmind model [current|check [--live] [--role <name>]|list|set <provider> <model>]
 selfmind auth [login|status|logout] ...
-selfmind doctor [--out FILE] [--probe-models]
+selfmind doctor [--verbose] [--out FILE] [--probe-models]
 selfmind usage
 selfmind report daily [--since 24h]
 selfmind docs [check|index]
@@ -147,8 +147,10 @@ selfmind weixin status
 
 - `config doctor` 只报告配置缺失或过期项；`config upgrade` 在保留已有值的
   前提下补充受支持的默认项。
-- `model set` 只写入 `models.primary` 这一处主模型配置。能力元数据存在时，
-  会动态校验 reasoning/service tier；`auto` 表示交给 provider/模型默认处理。
+- `model set` 写入 `models.primary`。如果 auxiliary 还没有 provider/model，
+  第一次写入还会用相同 provider/model 初始化 `models.auxiliary`；之后修改
+  primary 不会覆盖已有 auxiliary。能力元数据存在时，会动态校验
+  reasoning/service tier；`auto` 表示交给 provider/模型默认处理。
 - 共享 daemon 不支持在 TUI `/model` 中热切换。修改后使用
   `selfmind gateway restart --drain`，在安全 turn 边界重启。
 - `model check` 解析凭证、协议、端点和模型，但不会暴露密钥。`--role auxiliary`
@@ -161,7 +163,13 @@ selfmind weixin status
 - `report daily` 生成当前 person 的无模型质量与成本摘要。它在有界时间窗口内汇总
   run 结局、工具与审批、provider 用量和缓存、后台维护健康、投递状态及召回采用
   趋势；默认最近 24 小时，最长 30 天。
-- `doctor` 检查安装和配置；`--probe-models` 会真实调用 provider，可能消耗额度。
+- `doctor` 默认只显示当前问题，并为每个问题给出恢复或排查命令；健康子系统以及
+  历史 run、错误、事件、活动和日志默认隐藏。问题使用 `[CONFIG]`、`[TRUST]`、
+  `[DELIVERY]`、`[SKILLS]` 等稳定分类标识，所有处理命令统一汇总到带编号的
+  `Next actions`。交互终端复用 TUI 的警告、错误、信息、成功、正文和弱化色；管道、
+  重定向、`NO_COLOR`、`CLICOLOR=0` 和 `TERM=dumb` 保持纯文本。`--verbose`
+  打印完整的脱敏诊断包，`--out FILE` 始终把完整诊断包写入文件，便于支持或离线
+  排查。`--probe-models` 会真实调用 provider，可能消耗额度。
 - `selfcheck` 是本地发布门禁。默认 `local-full` 运行本机能够证明的全部发布用例；
   `--fast`/`local-fast` 跳过已测量的慢用例；`--profile ci` 只运行明确分配给
   当前平台 CI 的用例。Provider 响应离线回放，但工具调用仍使用当前主机工具链。
@@ -184,7 +192,7 @@ selfmind weixin status
 
 ```text
 selfmind eval [list|run|report|repair|scorecard|capture|clean]
-selfmind maintenance [replay|migrate-memory|migrate-skills|migrate-task-references|memory-audit|memory-dedup|task-audit|restore-control] ...
+selfmind maintenance [replay|migrate-memory|migrate-skills|cleanup-person-partitions|migrate-task-references|memory-audit|memory-dedup|task-audit|restore-control] ...
 ```
 
 ```text
@@ -199,6 +207,7 @@ selfmind eval clean [--yes]
 selfmind maintenance replay [--limit N]
 selfmind maintenance migrate-memory [--apply] [--data-dir DIR]
 selfmind maintenance migrate-skills [--apply] [--root DIR] [--governance-grace 30d]
+selfmind maintenance cleanup-person-partitions [--apply] [--root DIR --data-dir DIR]
 selfmind maintenance migrate-task-references [--apply] [--limit N] [--data-dir DIR]
 selfmind maintenance memory-audit [--archive-confirmed] [--partition P] [--data-dir DIR]
 selfmind maintenance memory-dedup [--apply] [--partition P] [--data-dir DIR]
@@ -209,6 +218,13 @@ selfmind maintenance restore-control --backup PATH --yes [--data-dir DIR]
 `maintenance replay` 只会重新入队每个 run 最新 analyzer generation 中因重试耗尽而
 暂停的作业。旧 generation 保留为不可变历史；处理积压前应先用较小的 `--limit`
 执行 canary。
+
+`maintenance cleanup-person-partitions` 会把文件系统直属的 `person_*` 分区与
+`control.db` 中全部 person 对照。默认只做 dry-run；应用清理前必须停止 gateway。
+应用模式只会把已复核的孤儿移动到同一根目录下带时间戳的
+`.orphaned-person-partitions` 隔离目录，不会删除数据。默认 root 与 control
+database 来自同一份已加载配置；如果用 `--root` 指向另一棵资产目录，就必须用
+`--data-dir` 明确指定权威 `control.db`。该命令不会打开或创建猜测出来的空数据库。
 
 - `task-audit` 默认只读，列出缺少持久 blocker 证据的暂停任务。只有任务当前无
   active run，且状态与最新已结束 run 完全一致时，`--apply` 才补写 blocker；

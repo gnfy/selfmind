@@ -22,6 +22,10 @@ func InitTools(mem *memory.MemoryManager, cfg *config.Config, ag *kernel.Agent, 
 	}
 	registerConfiguredSecrets(cfg)
 	kernel.SetAgentEventRedactor(tools.RedactSensitive)
+	storage, err := configuredSkillStorage(cfg)
+	if err != nil {
+		return nil, err
+	}
 
 	// Redaction is outermost so every model/event/artifact result surface sees
 	// the masked form, including errors returned by inner policy middleware.
@@ -32,6 +36,7 @@ func InitTools(mem *memory.MemoryManager, cfg *config.Config, ag *kernel.Agent, 
 	disp.InjectMiddleware(tools.NewToolGuardrails().Middleware)
 	disp.InjectMiddleware(tools.ExecutionCapabilityMiddleware())
 	disp.InjectMiddleware(tools.EvidenceMiddleware())
+	disp.InjectMiddleware(tools.SkillStorageMiddleware(storage))
 
 	tools.RegisterBuiltins(disp)
 	// Exec sandbox (P0-D): process-wide Linux policy. Auto mode prefers bwrap;
@@ -53,6 +58,7 @@ func InitTools(mem *memory.MemoryManager, cfg *config.Config, ag *kernel.Agent, 
 	disp.RegisterTool(tools.NewSkillManageTool())
 	disp.RegisterTool(tools.NewSkillsListTool())
 	disp.RegisterTool(tools.NewSkillViewTool())
+	disp.RegisterTool(tools.NewSkillInvocationResolveTool())
 	if len(controlStores) > 0 && controlStores[0] != nil {
 		disp.RegisterTool(tools.NewSkillSelectTool(controlStores[0]))
 		disp.RegisterTool(tools.NewSkillFallbackTool(controlStores[0]))
@@ -78,7 +84,7 @@ func InitTools(mem *memory.MemoryManager, cfg *config.Config, ag *kernel.Agent, 
 		tools.GetProcessRegistryForTenant(tenantID).Init(mem, tenantID)
 	}
 
-	_, _ = tools.ReloadSkillToolsForTenant(tenantID, registry)
+	_, _ = tools.ReloadSkillToolsForTenant(tenantID, registry, tools.WithSkillStorage(nil, storage))
 
 	disp.InjectDelegateFn(MakeDelegateFn(mem, disp, cfg.Delegation))
 	disp.InjectDelegateBatchFn(MakeDelegateBatchFn(mem, disp, cfg.Delegation))
@@ -137,6 +143,12 @@ func registerConfiguredSecrets(cfg *config.Config) {
 	}
 	registerSensitiveHeaders(cfg.Model.Headers)
 	registerSensitiveHeaders(cfg.Model.ExtraHeaders)
+	for _, server := range cfg.MCP.Servers {
+		registerSensitiveHeaders(server.Headers)
+		for _, value := range server.Auth {
+			tools.RegisterSensitiveValue(value)
+		}
+	}
 	for _, value := range []string{
 		cfg.Providers.AnthropicAPIKey,
 		cfg.Providers.OpenAIAPIKey,

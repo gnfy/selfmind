@@ -140,6 +140,11 @@ models:
 是可选的高级覆盖，优先级最高；只覆盖 `model` 等局部字段时，其余字段继承
 `models.auxiliary`。
 
+本地安装省略 auxiliary 的 provider/model 时，会有意默认使用 primary 的选择。
+初始化和第一次执行 `selfmind model set` 会把这两个槽位明确写入 YAML。一旦
+auxiliary 已经落盘或被用户自定义，之后修改 primary 不会覆盖它。这样初始化只需
+呈现两个模型槽位，无需把内部角色目录暴露给新用户。
+
 `reasoning` 和 `service_tier`
 都可省略；省略或写 `auto` 时使用 provider/模型默认值，不强制向接口发送。
 存在能力元数据时，`selfmind model set` 会动态校验取值，
@@ -155,8 +160,9 @@ Plan `/coding` 路径的实际协议一致。角色级 `protocol` 只用于自�
 
 smart 审批比普通角色继承更严格：它使用显式配置或由 `models.auxiliary` 继承的
 `fast_classifier`；旧配置可以
-兼容回退到显式配置的 `background_review`，但审批裁决绝不会静默使用
-`models.primary`。两条路由都不存在或未及时响应时，操作会升级为人工确认。
+兼容回退到显式配置的 `background_review`，但审批裁决不会额外添加一个未声明的
+primary 回落位置。有效 auxiliary 默认可以有意与 primary 指向同一个
+provider/model。没有可用路由及时响应时，操作会升级为人工确认。
 
 ## 3. 存储与认证
 
@@ -219,7 +225,6 @@ memory:
   governance:
     enabled: true
     mode: "shadow"               # shadow（只报告）→ merge-only → full（加上限）
-    model_role: "memory_extract" # 整理判决用哪个角色
     consolidation_interval: "24h"
     consolidation_batch_size: 8
     auto_merge_confidence: 0.95      # MERGE 门槛
@@ -230,6 +235,10 @@ memory:
     archive_after: "4320h"       # 180 天；按龄归档（仅 full 模式）
     pause_while_run_active: true # 前台 run 永远优先
 ```
+
+记忆整理始终使用稳定的 `memory_extract` 语义角色。如需为它指定专用模型，只在
+`models.roles.memory_extract` 中配置；没有该覆盖时使用 `models.auxiliary`。
+memory 的行为配置不再选择模型角色。
 
 - `mode`：`shadow` 什么都不写（只报告"会做什么"）；`merge-only` 应用有门槛的
   MERGE/REINFORCE/ARCHIVE；`full` 再加 active 上限 + 按龄归档。**在把
@@ -288,8 +297,6 @@ tasks:
   default_list_limit: 10
   auto_archive_done_after: "720h"      # 30 天；"0" 关闭该归档类
   auto_archive_cancelled_after: "168h" # 7 天
-  maintenance_model_role: "memory_extract"  # run 后标签/事实整理用的角色
-  maintenance_fallback_roles: ["background_review", "fast_classifier"] # 显式廉价角色故障切换，不会隐式使用主模型
   maintenance_debounce: "5m"       # 安静窗口后再做语义治理
   maintenance_max_wait: "15m"      # 持续有新 run 时也不会无限等待
   maintenance_batch_max_runs: 10   # 单次模型调用最多处理的 run 数
@@ -301,26 +308,38 @@ tasks:
 ```
 
 自动归档只碰陈旧、终态、未 pin、无活跃 run 的任务。
-`maintenance_fallback_roles` 是有序列表。遇到不可重试的 provider
-故障后，SelfMind 会依次尝试其中已显式配置的角色，跳过不存在的角色，
-且绝不会隐式回退到主编码模型。所有角色都使用同一家 provider 时，无法
-实现服务商级故障切换。例如，可让 Kimi 继续作为默认廉价角色，并添加
-MiniMax 备用角色：
+
+run 后合并执行的任务标签与记忆提取始终使用稳定的 `memory_extract` 角色。
+高级模型选择只放在 `models.roles.memory_extract`；tasks 只控制行为和调度。
+
+后台维护走两级链路：先用角色自身的配置，再回落到 `models.auxiliary` 这个
+共享地板。除了把 `models.auxiliary` 指向一个你信得过的 provider 之外，
+无需为故障切换配置任何东西。该链路绝不会回退到主编码模型。
+auxiliary 可以有意与 primary 指向同一个物理模型；链路仍不会额外添加一个
+隐式 primary 位置。
+
+两级都会按物理路由去重，所以没有自身 override 的角色会解析到
+`models.auxiliary`，最终诚实地得到一条单级链路。要获得真正的故障切换，
+需要把角色 override 配到与 `models.auxiliary` 不同的 provider 上：
 
 ```yaml
 models:
+  auxiliary:
+    provider: "minimax"      # 所有后台角色的回落地板
+    model: "MiniMax-M3"
   roles:
     memory_extract:
       provider: "kimi-coding"
       model: "kimi-for-coding"
-    maintenance_backup:
-      provider: "minimax"
-      model: "MiniMax-M3"
-
-tasks:
-  maintenance_model_role: "memory_extract"
-  maintenance_fallback_roles: ["maintenance_backup", "background_review"]
 ```
+
+`selfmind model check --role memory_extract` 会打印解析出的回落目标；当两级
+共享同一 endpoint 和凭据时，它会明确说明没有可用回落。
+
+`memory.governance.model_role`、`tasks.maintenance_model_role` 和
+`tasks.maintenance_fallback_roles` 均已废弃。模型选择现在只属于 `models`；旧的
+fallback 列表曾用于在 auxiliary 地板之前插入额外角色槽位。
+`selfmind config doctor` 会识别这些键，`selfmind config upgrade` 会先备份再移除。
 
 run 终态事务会立即保存可重放证据。三个批处理参数只延迟可逆的任务标签和
 长期记忆治理，不延迟最终回答，也不影响最近对话连续性。批次绝不跨 tenant、
@@ -382,14 +401,26 @@ intent:
 mcp:
   servers:
     - name: "my-tools"
-      transport: "stdio"        # stdio | http
+      transport: "stdio"        # stdio | http | streamable_http
       command: "my-mcp-server"  # stdio 用
       args: []
-      url: ""                   # http 用
-      extra_headers: {}
+      url: ""                   # Streamable HTTP 端点
+      headers: {}                # 可选 HTTP 请求头
+      auth: {}                   # 可选 bearer 或 user/pass 静态认证
+      env_filter: []             # 可选 stdio 环境变量允许列表
 ```
 
-默认为空。每个服务器的工具按需注册。
+默认为空。daemon 启动时通过官方 MCP Go SDK 连接服务器、协商兼容协议版本、
+读取分页工具目录，并把实时工具列表变更同步到 Dispatcher。无法完成初始化或
+工具发现的服务器会保留为 gateway 健康问题，并显示在 `selfmind doctor` 中。
+每个服务器都应配置唯一且稳定的 `name`；省略时会按 endpoint 生成确定性的兼容名
+并打印启动警告，重名则直接拒绝，不会静默覆盖已有服务器。
+
+MCP 工具默认属于未分类外部工具。每次调用都需要一次性人工批准，即使
+`full-auto` 也一样；在有经过评审的逐工具信任策略之前，不能复用 grant 或 smart
+裁决。SelfMind 只向远端发送工具的公开输入字段，并剥离 tenant/person/run scope、
+回调等所有 daemon 内部的顶层下划线字段。远程服务器目前支持静态请求头、Bearer Token
+和 Basic Auth；SelfMind 尚未提供交互式 MCP OAuth 流程。
 
 ## 12. Agent 调优（高级）
 

@@ -241,13 +241,28 @@ func Run(ctx context.Context, opts Options) (runErr error) {
 	if err := disp.ValidateInternalToolSchemas(); err != nil {
 		return fmt.Errorf("validate registered tool schemas: %w", err)
 	}
-	app.InitMCP(disp, cfg)
+	skillStorage, err := app.ResolveSkillStorage(cfg)
+	if err != nil {
+		return fmt.Errorf("resolve skill storage: %w", err)
+	}
+	mcpManager := app.InitMCP(disp, cfg)
+	var mcpHealthFunc func() tools.MCPHealthSnapshot
+	if mcpManager != nil {
+		mcpHealthFunc = mcpManager.Health
+		defer func() {
+			if err := mcpManager.Close(); err != nil {
+				log.Warn("gateway: MCP shutdown failed", "error", err)
+			}
+		}()
+	}
 
 	gatewayAPI := &httpapi.Server{
 		Control:              controlStore,
 		Gateway:              gwDeps.Gateway,
 		DefaultTenantID:      defaultTenantID,
 		ToolSchemaReportFunc: disp.ToolSchemaReport,
+		MCPHealthFunc:        mcpHealthFunc,
+		SkillStorage:         skillStorage,
 		DrainTimeout:         drainTimeout,
 		LocalControlToken:    localControlToken,
 		// Pending-approval/clarify escrow threshold (Fix 2); "0" disables.

@@ -104,7 +104,7 @@ func (t *SkillSelectTool) Execute(args map[string]interface{}) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	_ = MarkSkillUsed(tenantID, info.Name)
+	_ = MarkSkillUsed(tenantID, info.Name, args)
 	bounded, truncated := truncateUTF8ByBytes(content, maxAutoSkillContextBytes)
 	out := map[string]interface{}{
 		"success": true, "activation_id": activation.ID, "work_unit_id": activation.WorkUnitID,

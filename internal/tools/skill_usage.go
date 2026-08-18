@@ -107,16 +107,16 @@ func updateSkillUsageForDir(skillsDir, name string, mutator func(*SkillUsageReco
 }
 
 // LoadSkillUsage returns usage metadata for the tenant's skill directory.
-func LoadSkillUsage(tenantID string) (map[string]SkillUsageRecord, error) {
-	dir, err := getSkillsDir(tenantID)
+func LoadSkillUsage(tenantID string, invocation ...map[string]interface{}) (map[string]SkillUsageRecord, error) {
+	dir, err := getSkillsDir(tenantID, invocation...)
 	if err != nil {
 		return nil, err
 	}
 	return loadSkillUsageForDir(dir)
 }
 
-func MarkSkillCreated(tenantID, name, source, createdBy string) error {
-	dir, err := getSkillsDir(tenantID)
+func MarkSkillCreated(tenantID, name, source, createdBy string, invocation ...map[string]interface{}) error {
+	dir, err := getSkillsDir(tenantID, invocation...)
 	if err != nil {
 		return err
 	}
@@ -138,8 +138,8 @@ func MarkSkillCreated(tenantID, name, source, createdBy string) error {
 	})
 }
 
-func MarkSkillPatched(tenantID, name string) error {
-	dir, err := getSkillsDir(tenantID)
+func MarkSkillPatched(tenantID, name string, invocation ...map[string]interface{}) error {
+	dir, err := getSkillsDir(tenantID, invocation...)
 	if err != nil {
 		return err
 	}
@@ -152,8 +152,8 @@ func MarkSkillPatched(tenantID, name string) error {
 	})
 }
 
-func MarkSkillUsed(tenantID, name string) error {
-	dir, err := getSkillsDir(tenantID)
+func MarkSkillUsed(tenantID, name string, invocation ...map[string]interface{}) error {
+	dir, err := getSkillsDir(tenantID, invocation...)
 	if err != nil {
 		return err
 	}
@@ -168,8 +168,8 @@ func MarkSkillUsed(tenantID, name string) error {
 	})
 }
 
-func MarkSkillViewed(tenantID, name string) error {
-	dir, err := getSkillsDir(tenantID)
+func MarkSkillViewed(tenantID, name string, invocation ...map[string]interface{}) error {
+	dir, err := getSkillsDir(tenantID, invocation...)
 	if err != nil {
 		return err
 	}
@@ -184,8 +184,8 @@ func MarkSkillViewed(tenantID, name string) error {
 	})
 }
 
-func SetSkillPinned(tenantID, name string, pinned bool) error {
-	dir, err := getSkillsDir(tenantID)
+func SetSkillPinned(tenantID, name string, pinned bool, invocation ...map[string]interface{}) error {
+	dir, err := getSkillsDir(tenantID, invocation...)
 	if err != nil {
 		return err
 	}
@@ -195,8 +195,8 @@ func SetSkillPinned(tenantID, name string, pinned bool) error {
 	})
 }
 
-func SetSkillState(tenantID, name, state string) error {
-	dir, err := getSkillsDir(tenantID)
+func SetSkillState(tenantID, name, state string, invocation ...map[string]interface{}) error {
+	dir, err := getSkillsDir(tenantID, invocation...)
 	if err != nil {
 		return err
 	}

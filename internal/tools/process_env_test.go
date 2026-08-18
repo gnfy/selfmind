@@ -66,6 +66,19 @@ func TestMCPEnvFilterCannotReintroduceSelfMindControlState(t *testing.T) {
 	}
 }
 
+func TestMCPDefaultEnvironmentKeepsOperatorCredentialsButStripsControlState(t *testing.T) {
+	t.Setenv("GH_TOKEN", "operator-token")
+	t.Setenv("SELFMIND_CHANNEL", "cli:private-channel")
+
+	got := BuildProcessEnv(filterEnv(nil), DefaultProcessEnvPolicy())
+	if !slices.Contains(got, "GH_TOKEN=operator-token") {
+		t.Fatalf("stdio MCP environment lost an ordinary operator credential: %#v", got)
+	}
+	if slices.Contains(got, "SELFMIND_CHANNEL=cli:private-channel") {
+		t.Fatalf("stdio MCP environment leaked gateway state: %#v", got)
+	}
+}
+
 func TestSnapshotCredentialRefsDoesNotPersistValuesAndSurvivesRotation(t *testing.T) {
 	firstRefs, firstPrincipal := SnapshotCredentialRefs([]string{
 		"AWS_PROFILE=production",

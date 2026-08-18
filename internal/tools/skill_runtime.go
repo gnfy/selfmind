@@ -182,6 +182,47 @@ type SkillViewTool struct {
 	BaseTool
 }
 
+// SkillInvocationResolveTool is a hidden thin-client bridge for `/skill-name`.
+// Resolution stays inside the daemon so custom evolution.skills_dir roots and
+// workspace scope cannot diverge from normal agent turns.
+type SkillInvocationResolveTool struct {
+	BaseTool
+}
+
+func NewSkillInvocationResolveTool() *SkillInvocationResolveTool {
+	return &SkillInvocationResolveTool{
+		BaseTool: BaseTool{
+			name:        "skill_invocation_resolve",
+			description: "Resolve an explicit slash Skill or bundle invocation for a thin client.",
+			schema: ToolSchema{
+				Type: "object",
+				Properties: map[string]PropertyDef{
+					"command":     {Type: "string", Description: "Slash command name, with or without the leading slash."},
+					"instruction": {Type: "string", Description: "Optional user instruction appended after the loaded Skill context."},
+				},
+				Required: []string{"command"},
+			},
+			metadata: ToolMetadata{
+				Exposure: ToolExposureHidden, ReadOnly: true, RiskLevel: ToolRiskLow, Category: "skill",
+			},
+		},
+	}
+}
+
+func (t *SkillInvocationResolveTool) Execute(args map[string]interface{}) (string, error) {
+	tenantID := skillStorageTenantID(args)
+	command, _ := args["command"].(string)
+	instruction, _ := args["instruction"].(string)
+	prompt, displayName, found, err := ResolveSkillInvocationForTenant(tenantID, command, instruction, args)
+	if err != nil {
+		return "", err
+	}
+	data, _ := json.Marshal(map[string]interface{}{
+		"found": found, "display_name": displayName, "prompt": prompt,
+	})
+	return string(data), nil
+}
+
 func NewSkillViewTool() *SkillViewTool {
 	return &SkillViewTool{
 		BaseTool: BaseTool{
@@ -262,7 +303,7 @@ func SkillViewJSONForTenant(tenantID, name, filePath string, invocation ...map[s
 	if err != nil {
 		return "", err
 	}
-	_ = MarkSkillViewed(tenantID, info.Name)
+	_ = MarkSkillViewed(tenantID, info.Name, invocation...)
 	emitSkillViewed(invocation, info, content, filePath)
 	out := map[string]interface{}{
 		"success":     true,
@@ -342,15 +383,15 @@ func ReadSkillPayloadForTenant(tenantID, name, filePath string, invocation ...ma
 	return info, content, files, nil
 }
 
-func BuildSkillInvocationMessageForTenant(tenantID, name, instruction string) (string, string, error) {
-	info, content, files, err := ReadSkillPayloadForTenant(tenantID, name, "")
+func BuildSkillInvocationMessageForTenant(tenantID, name, instruction string, invocation ...map[string]interface{}) (string, string, error) {
+	info, content, files, err := ReadSkillPayloadForTenant(tenantID, name, "", invocation...)
 	if err != nil {
 		return "", "", err
 	}
 	if info.State == SkillStateDisabled {
 		return "", "", fmt.Errorf("skill %q is disabled", info.Name)
 	}
-	_ = MarkSkillUsed(tenantID, info.Name)
+	_ = MarkSkillUsed(tenantID, info.Name, invocation...)
 	content, truncated := truncateUTF8ByBytes(content, maxSkillInvocationBytes)
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("[IMPORTANT: The user invoked the %q skill. Follow its instructions for this turn unless the user explicitly overrides them.]\n\n", info.Name))
@@ -376,24 +417,24 @@ func BuildSkillInvocationMessageForTenant(tenantID, name, instruction string) (s
 	return sb.String(), info.Name, nil
 }
 
-func ResolveSkillInvocationForTenant(tenantID, slashCommand, instruction string) (string, string, bool, error) {
+func ResolveSkillInvocationForTenant(tenantID, slashCommand, instruction string, invocation ...map[string]interface{}) (string, string, bool, error) {
 	name := strings.TrimPrefix(strings.TrimSpace(slashCommand), "/")
 	if name == "" {
 		return "", "", false, nil
 	}
-	if msg, display, ok, err := BuildBundleInvocationMessageForTenant(tenantID, name, instruction); ok || err != nil {
+	if msg, display, ok, err := BuildBundleInvocationMessageForTenant(tenantID, name, instruction, invocation...); ok || err != nil {
 		return msg, display, ok, err
 	}
-	skill, err := findSkillByCommand(tenantID, name)
+	skill, err := findSkillByCommand(tenantID, name, invocation...)
 	if err != nil {
 		return "", "", false, nil
 	}
-	msg, display, err := BuildSkillInvocationMessageForTenant(tenantID, skill.Name, instruction)
+	msg, display, err := BuildSkillInvocationMessageForTenant(tenantID, skill.Name, instruction, invocation...)
 	return msg, display, err == nil, err
 }
 
-func findSkillByCommand(tenantID, command string) (SkillInfo, error) {
-	skills, err := ListSkillsForTenant(tenantID, false)
+func findSkillByCommand(tenantID, command string, invocation ...map[string]interface{}) (SkillInfo, error) {
+	skills, err := ListSkillsForTenant(tenantID, false, invocation...)
 	if err != nil {
 		return SkillInfo{}, err
 	}

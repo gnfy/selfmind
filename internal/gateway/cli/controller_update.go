@@ -124,6 +124,9 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, m.scheduleStreamFlush()
 
+	case MsgSkillInvocationResolved:
+		return m, m.finishSkillInvocationResolution(msg)
+
 	case MsgAgentDone:
 		m.exitPromptActive = false
 		if queuedTurn(msg.Turn) {

@@ -356,7 +356,7 @@ func (a *llmPostRunAnalyzer) addFactWithDedup(ctx context.Context, req httpapi.P
 	if err := a.memory.AddFactMeta(ctx, memoryPartition(req), fact); err != nil {
 		return "", fmt.Errorf("store %s fact: %w", target, err)
 	}
-	tools.RecordMemoryLearningChangeScoped(memoryPartition(req), target, fact.Scope, "add", "", content, "post_run_analyzer")
+	tools.RecordMemoryLearningChangeScopedWithStorage(a.skillStorage, memoryPartition(req), target, fact.Scope, "add", "", content, "post_run_analyzer")
 	return "add", a.canonicalWrite(ctx, req, "ADD", target, content, "", 0, meta)
 }
 
@@ -369,7 +369,7 @@ func (a *llmPostRunAnalyzer) supersedeFact(ctx context.Context, req httpapi.Post
 		return nil
 	}
 	if old.Canonical {
-		tools.RecordMemoryLearningChangeScoped(memoryPartition(req), target, old.Scope, "replace", old.Content, content, "post_run_analyzer")
+		tools.RecordMemoryLearningChangeScopedWithStorage(a.skillStorage, memoryPartition(req), target, old.Scope, "replace", old.Content, content, "post_run_analyzer")
 		return nil
 	}
 	if err := a.memory.RemoveFact(ctx, memoryPartition(req), old.ID); err != nil {
@@ -393,7 +393,7 @@ func (a *llmPostRunAnalyzer) supersedeFact(ctx context.Context, req httpapi.Post
 		_ = a.memory.AddFactMeta(ctx, memoryPartition(req), old)
 		return fmt.Errorf("write superseding %s fact: %w", target, err)
 	}
-	tools.RecordMemoryLearningChangeScoped(memoryPartition(req), target, fact.Scope, "replace", old.Content, content, "post_run_analyzer")
+	tools.RecordMemoryLearningChangeScopedWithStorage(a.skillStorage, memoryPartition(req), target, fact.Scope, "replace", old.Content, content, "post_run_analyzer")
 	return nil
 }
 
@@ -419,6 +419,6 @@ func (a *llmPostRunAnalyzer) addConflictFact(ctx context.Context, req httpapi.Po
 	if err := a.memory.AddFactMeta(ctx, memoryPartition(req), fact); err != nil {
 		return fmt.Errorf("store conflicting %s fact: %w", target, err)
 	}
-	tools.RecordMemoryLearningChangeScoped(memoryPartition(req), target, fact.Scope, "add", ref.Content, content, "post_run_analyzer_conflict")
+	tools.RecordMemoryLearningChangeScopedWithStorage(a.skillStorage, memoryPartition(req), target, fact.Scope, "add", ref.Content, content, "post_run_analyzer_conflict")
 	return a.canonicalWrite(ctx, req, "CONFLICT", target, content, ref.Content, 0, meta, ref.Scope)
 }

@@ -57,6 +57,9 @@ var configMigrations = []configMigration{
 	{From: []string{"agent", "provider"}, To: []string{"models", "primary", "provider"}, Label: "agent.provider -> models.primary.provider"},
 	{From: []string{"agent", "model"}, To: []string{"models", "primary", "model"}, Label: "agent.model -> models.primary.model"},
 	{From: []string{"intent", "continue_window"}, Label: "intent.continue_window is deprecated", Deprecated: true},
+	{From: []string{"memory", "governance", "model_role"}, Label: "memory.governance.model_role is deprecated; configure models.roles.memory_extract instead", Deprecated: true},
+	{From: []string{"tasks", "maintenance_model_role"}, Label: "tasks.maintenance_model_role is deprecated; configure models.roles.memory_extract instead", Deprecated: true},
+	{From: []string{"tasks", "maintenance_fallback_roles"}, Label: "tasks.maintenance_fallback_roles is deprecated; background roles fall back to models.auxiliary", Deprecated: true},
 }
 
 var configReportDefaultPaths = [][]string{
@@ -93,7 +96,6 @@ var configReportDefaultPaths = [][]string{
 	{"memory", "use_memory_fence"},
 	{"memory", "governance", "enabled"},
 	{"memory", "governance", "mode"},
-	{"memory", "governance", "model_role"},
 	{"memory", "governance", "consolidation_interval"},
 	{"memory", "governance", "consolidation_batch_size"},
 	{"memory", "governance", "auto_merge_confidence"},
@@ -106,8 +108,6 @@ var configReportDefaultPaths = [][]string{
 	{"tasks", "default_list_limit"},
 	{"tasks", "auto_archive_done_after"},
 	{"tasks", "auto_archive_cancelled_after"},
-	{"tasks", "maintenance_model_role"},
-	{"tasks", "maintenance_fallback_roles"},
 	{"tasks", "maintenance_debounce"},
 	{"tasks", "maintenance_max_wait"},
 	{"tasks", "maintenance_batch_max_runs"},

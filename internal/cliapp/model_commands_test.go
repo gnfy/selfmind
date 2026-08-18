@@ -61,8 +61,35 @@ func TestModelSetWritesExplicitConfigPath(t *testing.T) {
 	if cfg.Models.Primary.Provider != "openai" || cfg.Models.Primary.Model != "gpt-test" {
 		t.Fatalf("primary = %+v", cfg.Models.Primary)
 	}
+	if cfg.Models.Auxiliary.Provider != "openai" || cfg.Models.Auxiliary.Model != "gpt-test" {
+		t.Fatalf("initial auxiliary = %+v", cfg.Models.Auxiliary)
+	}
 	if cfg.Model.Provider != "" || cfg.Agent.Provider != "" {
 		t.Fatalf("legacy selection was persisted: model=%+v agent=%+v", cfg.Model, cfg.Agent)
+	}
+}
+
+func TestModelSetPreservesExistingAuxiliary(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := config.SaveConfig(path, &config.Config{Models: config.ModelsConfig{
+		Primary:   config.ModelSelectionConfig{Provider: "openai", Model: "gpt-old"},
+		Auxiliary: config.ModelSelectionConfig{Provider: "google", Model: "gemini-flash"},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	app := &App{
+		ctx: context.Background(), args: []string{"selfmind", "model", "set", "openai", "gpt-new"},
+		stdout: &bytes.Buffer{}, stderr: &bytes.Buffer{}, configPath: path,
+	}
+	if _, code := app.runModelCommandIfRequested(); code != 0 {
+		t.Fatalf("model set code=%d stderr=%s", code, app.stderr)
+	}
+	cfg, err := config.LoadConfig(config.Options{Path: path})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.Models.Auxiliary; got.Provider != "google" || got.Model != "gemini-flash" {
+		t.Fatalf("existing auxiliary was overwritten: %+v", got)
 	}
 }
 

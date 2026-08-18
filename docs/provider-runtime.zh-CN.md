@@ -118,6 +118,11 @@ SelfMind 区分两个容易混淆的字段：
 `selfmind model set` 在能发现元数据时动态校验；私有 endpoint 没有元数据时，
 仍会保留用户显式配置的兼容值。
 
+本地初始化时，未填写 provider/model 的 auxiliary 默认使用 primary 的
+provider/model。首次写入模型会把两个槽位都明确落盘。此后 auxiliary 独立存在：
+修改 primary 不会覆盖已有 auxiliary。逻辑后台角色继续作为高级
+`models.roles.<role>` 覆盖存在；未配置角色覆盖时继承 auxiliary。
+
 Anthropic Messages 在 `thinking_mode: anthropic` 下，会把显式推理等级映射为 thinking
 预算：`low=4096`、`medium/default=8192`、`high=16384`、
 `xhigh/max=32768`，必要时同步提高响应上限。OpenAI-compatible transport 使用协议的

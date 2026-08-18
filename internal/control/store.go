@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -172,6 +173,50 @@ func OpenStore(dataDir string) (*Store, error) {
 		return nil, err
 	}
 	tightenStorePerms(dataDir, dbPath)
+	return store, nil
+}
+
+// OpenExistingStoreReadOnly opens a released control.db without creating,
+// migrating, or otherwise writing it. Destructive maintenance commands use
+// this boundary so a wrong data directory cannot silently become a fresh empty
+// database whose absence is then mistaken for authoritative state.
+func OpenExistingStoreReadOnly(dataDir string) (*Store, error) {
+	dataDir = strings.TrimSpace(dataDir)
+	if dataDir == "" {
+		return nil, fmt.Errorf("data dir is required")
+	}
+	dbPath := filepath.Join(dataDir, "control.db")
+	existing, err := nonEmptyRegularFile(dbPath)
+	if err != nil {
+		return nil, fmt.Errorf("inspect control store: %w", err)
+	}
+	if !existing {
+		return nil, fmt.Errorf("control store does not exist or is empty: %s", dbPath)
+	}
+	dsn := (&url.URL{Scheme: "file", Path: filepath.ToSlash(dbPath), RawQuery: "mode=ro"}).String()
+	db, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return nil, err
+	}
+	db.SetMaxOpenConns(1)
+	if _, err := db.Exec(`PRAGMA busy_timeout=5000; PRAGMA query_only=ON;`); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("configure read-only sqlite: %w", err)
+	}
+	store := &Store{db: db, events: newEventAppendBus()}
+	version, versioned, err := store.readSchemaVersion(context.Background())
+	if err != nil {
+		db.Close()
+		return nil, fmt.Errorf("inspect control schema: %w", err)
+	}
+	if !versioned || version != CurrentControlSchemaVersion {
+		db.Close()
+		if version > CurrentControlSchemaVersion {
+			return nil, fmt.Errorf("control.db schema %d is newer than this SelfMind binary supports (max %d)", version, CurrentControlSchemaVersion)
+		}
+		return nil, fmt.Errorf("control.db schema is not current (found %d, need %d); start the matching SelfMind gateway to complete migration first", version, CurrentControlSchemaVersion)
+	}
+	store.schemaVersion = version
 	return store, nil
 }
 

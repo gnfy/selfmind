@@ -78,6 +78,16 @@ func (d *Server) GatewayStatus() api.GatewayStatusResponse {
 			}
 		}
 	}
+	mcpHealth := api.MCPHealth{}
+	if d.MCPHealthFunc != nil {
+		health := d.MCPHealthFunc()
+		mcpHealth.Configured = health.Configured
+		mcpHealth.Connected = health.Connected
+		mcpHealth.Failed = health.Failed
+		for _, failure := range health.Failures {
+			mcpHealth.Failures = append(mcpHealth.Failures, api.MCPServerFailure{Name: failure.Name, Error: failure.Error})
+		}
+	}
 	storeSchema := api.StoreSchemaHealth{}
 	if d.Control != nil {
 		status := d.Control.SchemaStatus()
@@ -93,6 +103,7 @@ func (d *Server) GatewayStatus() api.GatewayStatusResponse {
 		ActiveRuns:     active,
 		ActiveRunCount: len(active),
 		ToolSchemas:    toolSchemas,
+		MCP:            mcpHealth,
 		StoreSchema:    storeSchema,
 	}
 }

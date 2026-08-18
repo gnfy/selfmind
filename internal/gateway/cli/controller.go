@@ -700,6 +700,14 @@ type MsgAgentDone struct {
 	Turn     *api.TurnStatus
 }
 
+type MsgSkillInvocationResolved struct {
+	SlashName   string
+	Found       bool
+	DisplayName string
+	Prompt      string
+	Err         error
+}
+
 type MsgDaemonRunStarted struct {
 	RunID      string
 	TaskID     string

@@ -210,6 +210,7 @@ func (r *Registry) Wrap(t Tool, mw []Middleware) ToolExecutor {
 		}
 		args["_tool_name"] = t.Name()
 		args["_registry"] = r
+		args[toolExecutionPolicyArg] = executionPolicyForTool(t)
 		if clarifyFn := r.ClarifyHandler(); clarifyFn != nil {
 			args["_clarify_fn"] = clarifyFn
 		}

@@ -451,6 +451,9 @@ func TestSkillCatalogInstallDetectsLegacyCollision(t *testing.T) {
 	if err != nil {
 		t.Fatalf("skills dir: %v", err)
 	}
+	if err := os.MkdirAll(skillsDir, 0755); err != nil {
+		t.Fatalf("create skills dir: %v", err)
+	}
 	legacyPath := filepath.Join(skillsDir, "legacy-flow.md")
 	if err := atomicWriteFile(legacyPath, ensureFrontMatter("legacy body", "legacy-flow", "legacy")); err != nil {
 		t.Fatalf("write legacy skill: %v", err)

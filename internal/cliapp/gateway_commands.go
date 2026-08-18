@@ -362,6 +362,16 @@ func (a *App) printGatewayStatus(status api.GatewayStatusResponse) {
 	if status.StoreSchema.CurrentVersion > 0 {
 		fmt.Fprintf(a.stdout, "control schema: v%d (binary supports v%d)\n", status.StoreSchema.Version, status.StoreSchema.CurrentVersion)
 	}
+	if status.MCP.Configured > 0 {
+		fmt.Fprintf(a.stdout, "mcp servers: %d connected / %d configured, %d failed\n", status.MCP.Connected, status.MCP.Configured, status.MCP.Failed)
+		for index, failure := range status.MCP.Failures {
+			if index == 3 {
+				fmt.Fprintf(a.stdout, "- ... and %d more failure(s); run selfmind doctor --verbose\n", len(status.MCP.Failures)-index)
+				break
+			}
+			fmt.Fprintf(a.stdout, "- %s: %s\n", oneLine(failure.Name, 40), oneLine(failure.Error, 160))
+		}
+	}
 	if status.ActiveRunCount > 0 {
 		fmt.Fprintf(a.stdout, "active runs: %d\n", status.ActiveRunCount)
 		for _, run := range status.ActiveRuns {

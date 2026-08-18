@@ -18,8 +18,10 @@ import (
 const DefaultTenantID = "default"
 
 type Store struct {
-	db     *sql.DB
-	events *eventAppendBus
+	db              *sql.DB
+	events          *eventAppendBus
+	schemaVersion   int
+	migrationBackup string
 }
 
 type IdentityContext struct {
@@ -151,6 +153,10 @@ func OpenStore(dataDir string) (*Store, error) {
 		return nil, fmt.Errorf("create data dir: %w", err)
 	}
 	dbPath := filepath.Join(dataDir, "control.db")
+	existing, err := nonEmptyRegularFile(dbPath)
+	if err != nil {
+		return nil, fmt.Errorf("inspect control store: %w", err)
+	}
 	db, err := sql.Open("sqlite", dbPath+"?_journal=WAL&_sync=NORMAL")
 	if err != nil {
 		return nil, err
@@ -161,7 +167,7 @@ func OpenStore(dataDir string) (*Store, error) {
 		return nil, fmt.Errorf("configure sqlite: %w", err)
 	}
 	store := &Store{db: db, events: newEventAppendBus()}
-	if err := store.InitSchema(context.Background()); err != nil {
+	if err := store.prepareAndMigrateSchema(context.Background(), dataDir, dbPath, existing); err != nil {
 		db.Close()
 		return nil, err
 	}
@@ -1020,6 +1026,23 @@ CREATE INDEX IF NOT EXISTS idx_external_watches_owner
 		// arrived with the structured-decision batch, so older DBs lack them.
 		{"approval_requests", "decision_grant_key", "TEXT"},
 		{"approval_requests", "decision_note", "TEXT"},
+		// decision_recorded_at is an explicit compatibility fence for crash
+		// recovery. Historical approved/rejected rows remain NULL and must never
+		// be replayed merely because newly added waiter columns default to live.
+		{"approval_requests", "decision_recorded_at", "INTEGER"},
+		// Human decision state and waiter/resource state are orthogonal. A parked
+		// request remains status=pending (answerable) after its original run has
+		// released resources; decision claim and authorization fields close crash
+		// windows around resume.
+		{"approval_requests", "waiter_state", "TEXT NOT NULL DEFAULT 'live'"},
+		{"approval_requests", "parked_at", "INTEGER"},
+		{"approval_requests", "park_reason", "TEXT"},
+		{"approval_requests", "decision_claimed_at", "INTEGER"},
+		{"approval_requests", "claimed_by_run_id", "TEXT"},
+		{"approval_requests", "resume_queue_id", "TEXT"},
+		{"approval_requests", "authorization_fingerprint", "TEXT"},
+		{"approval_requests", "authorization_state", "TEXT"},
+		{"approval_requests", "authorization_expires_at", "INTEGER"},
 		// notified_at (unix seconds) records when an IM notification was actually
 		// SENT for a pending approval/clarify (never when a CLI-attached push was
 		// suppressed). The escrow sweep uses NULL to find pendings that left the
@@ -1271,6 +1294,8 @@ CREATE INDEX IF NOT EXISTS idx_external_watches_owner
 			ON task_queue(status, not_before, priority DESC, created_at);
 		CREATE INDEX IF NOT EXISTS idx_task_queue_claims
 			ON task_queue(status, lease_until);
+		CREATE INDEX IF NOT EXISTS idx_approval_resume_authorization
+			ON approval_requests(tenant_id, person_id, task_id, authorization_fingerprint, authorization_state);
 		CREATE INDEX IF NOT EXISTS idx_maintenance_provider_calls_person
 			ON maintenance_provider_calls(tenant_id, person_id, created_at);`); err != nil {
 		return err

@@ -31,6 +31,9 @@ func (a *App) runMaintenanceCommandIfRequested() (bool, int) {
 	if len(a.args) >= 3 && a.args[2] == "migrate-task-references" {
 		return true, a.runMaintenanceMigrateTaskReferences(a.args[3:])
 	}
+	if len(a.args) >= 3 && a.args[2] == "restore-control" {
+		return true, a.runMaintenanceRestoreControl(a.args[3:])
+	}
 	if len(a.args) < 3 || a.args[2] != "replay" {
 		fmt.Fprintln(a.stderr, "usage: selfmind maintenance replay [--limit N]")
 		fmt.Fprintln(a.stderr, "       selfmind maintenance migrate-memory [--apply] [--data-dir DIR]")
@@ -39,6 +42,7 @@ func (a *App) runMaintenanceCommandIfRequested() (bool, int) {
 		fmt.Fprintln(a.stderr, "       selfmind maintenance memory-dedup [--apply] [--partition P] [--data-dir DIR]")
 		fmt.Fprintln(a.stderr, "       selfmind maintenance task-audit [--apply] [--limit N] [--data-dir DIR]")
 		fmt.Fprintln(a.stderr, "       selfmind maintenance migrate-task-references [--apply] [--limit N] [--data-dir DIR]")
+		fmt.Fprintln(a.stderr, "       selfmind maintenance restore-control --backup PATH --yes [--data-dir DIR]")
 		return true, 2
 	}
 	fs := flag.NewFlagSet("selfmind maintenance replay", flag.ContinueOnError)

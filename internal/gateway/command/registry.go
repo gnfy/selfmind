@@ -74,7 +74,7 @@ var entries = []Entry{
 	{Name: "/mode", Usage: "/mode [mode]", Summary: "Show or set your approval mode (on-request|read-only|auto-edit|full-auto|smart).", SyncControl: true, Scope: Gateway},
 	{Name: "/stop", Usage: "/stop", Summary: "Cancel the active run (or the current task if nothing is running).", SyncControl: true, Scope: Gateway},
 	{Name: "/cancel", Usage: "/cancel", Summary: "Cancel the current task even if no run is active.", SyncControl: true, Scope: Gateway},
-	{Name: "/notify", Usage: "/notify <platform|auto>", Summary: "Choose where CLI-origin notifications go when the CLI is detached.", SyncControl: true, Scope: Gateway},
+	{Name: "/notify", Usage: "/notify <platform|auto|desk-first|phone-first>", Summary: "Choose the notification endpoint and approval surface.", SyncControl: true, Scope: Gateway},
 	{Name: "/new", Usage: "/new [title]", Summary: "Create a new task.", SyncControl: true, Scope: Gateway},
 	{Name: "/resume", Usage: "/resume [n|task_id]  (bare = pick from recent tasks)", Summary: "Resume a task by list number or id; bare lists recent tasks to pick from (an archived id reopens it).", SyncControl: true, Scope: Gateway},
 	{Name: "/workspace", Aliases: []string{"/ws"}, Usage: "/workspace [n|id]  (bare = list; alias: /ws)", Summary: "List workspaces (bare) or select one by list number or id.", SyncControl: true, Scope: Gateway},

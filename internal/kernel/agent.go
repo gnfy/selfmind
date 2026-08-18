@@ -49,7 +49,7 @@ type Agent struct {
 	semanticExpander *memory.SemanticExpander
 	useMemoryFence   bool
 	toolBudgetPolicy ToolBudgetPolicy
-	EventChannel     chan string // emits "tool_start:name" and "tool_end:name:result" events
+	EventChannel     chan string // emits JSON-encoded AgentEvent records; legacy text decoding is compatibility-only
 	runMu            sync.Mutex
 	syncQueue        chan syncTurnRequest
 

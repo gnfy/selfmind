@@ -5,9 +5,9 @@ import (
 	"time"
 )
 
-// gateway.presence_idle_timeout: default 5m, explicit zero disables (never
-// idle — the old always-attached behavior), invalid values fall back to the
-// default, bare numbers read as seconds.
+// gateway.presence_idle_timeout remains parseable for old configs, but the
+// default is zero because presence now represents process attachment rather
+// than keyboard activity.
 func TestPresenceIdleTimeoutDuration(t *testing.T) {
 	cases := []struct {
 		raw  string
@@ -28,7 +28,25 @@ func TestPresenceIdleTimeoutDuration(t *testing.T) {
 			t.Errorf("PresenceIdleTimeoutDuration(%q) = %v, want %v", tc.raw, got, tc.want)
 		}
 	}
-	if DefaultPresenceIdleTimeout != 5*time.Minute {
-		t.Fatalf("default presence idle timeout must stay 5m, got %v", DefaultPresenceIdleTimeout)
+	if DefaultPresenceIdleTimeout != 0 {
+		t.Fatalf("default presence idle timeout must stay disabled, got %v", DefaultPresenceIdleTimeout)
+	}
+}
+
+func TestPendingNotifyAfterDuration(t *testing.T) {
+	cases := []struct {
+		raw  string
+		want time.Duration
+	}{
+		{"", 15 * time.Minute},
+		{"15m", 15 * time.Minute},
+		{"30", 30 * time.Second},
+		{"0", 0},
+		{"garbage", 15 * time.Minute},
+	}
+	for _, tc := range cases {
+		if got := (GatewayConfig{PendingNotifyAfter: tc.raw}).PendingNotifyAfterDuration(); got != tc.want {
+			t.Errorf("PendingNotifyAfterDuration(%q) = %v, want %v", tc.raw, got, tc.want)
+		}
 	}
 }

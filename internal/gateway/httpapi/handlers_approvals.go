@@ -1,7 +1,6 @@
 package httpapi
 
 import (
-	"context"
 	"encoding/json"
 	"net/http"
 	"strconv"
@@ -84,23 +83,4 @@ func (d *Server) handleApprovalRespond(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, api.ApprovalRespondResponse{Identity: identity, Approval: approval})
-}
-
-func appendApprovalEvent(ctx context.Context, store *control.Store, approval *control.ApprovalRequest, channel string) {
-	if store == nil || approval == nil || approval.TaskID == "" {
-		return
-	}
-	_, _ = store.AppendEvent(ctx, control.Event{
-		TaskID:     approval.TaskID,
-		RunID:      approval.RunID,
-		Type:       "approval." + approval.Status,
-		Visibility: "task",
-		Channel:    channel,
-		Payload: mustJSON(map[string]string{
-			"approval_id": approval.ID,
-			"action_type": approval.ActionType,
-			"decision_id": approval.DecisionID,
-			"scope":       approval.DecisionScope,
-		}),
-	})
 }

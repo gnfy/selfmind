@@ -12,10 +12,30 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"selfmind/internal/gateway/api"
 	"selfmind/internal/kernel/llm"
 	"selfmind/internal/platform/config"
 )
+
+func TestToolSemanticActionColors(t *testing.T) {
+	cases := []struct {
+		label string
+		want  lipgloss.Color
+	}{
+		{label: "terminal", want: lipgloss.Color("5")},
+		{label: "read_file", want: lipgloss.Color("6")},
+		{label: "search_files", want: lipgloss.Color("6")},
+		{label: "list_files", want: lipgloss.Color("6")},
+		{label: "write_file", want: lipgloss.Color("3")},
+		{label: "update_plan", want: lipgloss.Color("4")},
+	}
+	for _, tc := range cases {
+		if got := toolSemanticActionStyle(tc.label).GetForeground(); got != tc.want {
+			t.Fatalf("%s foreground = %v, want %v", tc.label, got, tc.want)
+		}
+	}
+}
 
 func TestAgentDoneEmptyResponseShowsError(t *testing.T) {
 	model := NewController(nil, nil, nil, "").model
@@ -217,7 +237,7 @@ func TestToolStartClearsGenericActivityIndicator(t *testing.T) {
 	model.thinking = true
 	model.activityText = "Thinking about the request"
 
-	updated, _ := model.Update(MsgToolStart{ToolName: "terminal", Args: `{"command":"go test ./..."}`})
+	updated, _ := model.Update(MsgToolStart{ToolName: "terminal", ToolCallID: "call-terminal", Args: `{"command":"go test ./..."}`})
 	model = updated.(*uiModel)
 
 	if model.thinking {
@@ -312,6 +332,78 @@ func TestToolDoneMatchesStartedToolByCallID(t *testing.T) {
 	}
 }
 
+func TestToolStartRejectsAnonymousMutableRow(t *testing.T) {
+	model := NewController(nil, nil, nil, "").model
+	model.thinking = true
+	model.activityText = "Thinking"
+
+	updated, _ := model.Update(MsgToolStart{ToolName: "read_file", Args: `{"path":"a.go"}`})
+	model = updated.(*uiModel)
+
+	if len(model.messages) != 0 {
+		t.Fatalf("anonymous tool start created a mutable row: %+v", model.messages)
+	}
+	if !model.thinking || model.activityText != "Thinking" {
+		t.Fatalf("rejected event changed active state: thinking=%v activity=%q", model.thinking, model.activityText)
+	}
+}
+
+func TestOrphanToolCompletionGetsStandaloneHistoryCell(t *testing.T) {
+	model := NewController(nil, nil, nil, "").model
+	model.runStatus = "working"
+	model.daemonRunActive = true
+	model.daemonRunID = "run-current"
+	ref := uiEventRef{Source: eventSourceDaemon, RunID: "run-current", EventID: "evt-orphan"}
+
+	updated, _ := model.Update(MsgToolDone{
+		ToolName:   "read_file",
+		ToolCallID: "call-orphan",
+		Result:     "package main",
+		Duration:   0.2,
+		Event:      ref,
+	})
+	model = updated.(*uiModel)
+
+	if len(model.messages) != 1 {
+		t.Fatalf("orphan completion messages = %+v", model.messages)
+	}
+	got := model.messages[0]
+	if got.ToolCallID != "call-orphan" || got.RunID != "run-current" || got.IsRunning || !got.Committed || got.Content != "package main" {
+		t.Fatalf("orphan completion cell = %+v", got)
+	}
+
+	// A replayed completion for the same call is a committed duplicate, not a
+	// second orphan history row.
+	updated, _ = model.Update(MsgToolDone{
+		ToolName: "read_file", ToolCallID: "call-orphan", Result: "duplicate",
+		Event: uiEventRef{Source: eventSourceDaemon, RunID: "run-current", EventID: "evt-orphan-replay"},
+	})
+	model = updated.(*uiModel)
+	if len(model.messages) != 1 {
+		t.Fatalf("duplicate completion created another row: %+v", model.messages)
+	}
+}
+
+func TestLateCompletionFromDifferentRunDoesNotBecomeOrphan(t *testing.T) {
+	model := NewController(nil, nil, nil, "").model
+	model.runStatus = "working"
+	model.daemonRunActive = true
+	model.daemonRunID = "run-current"
+
+	updated, _ := model.Update(MsgToolDone{
+		ToolName:   "terminal",
+		ToolCallID: "call-old",
+		Result:     "late",
+		Event: uiEventRef{
+			Source: eventSourceDaemon, RunID: "run-old", EventID: "evt-old-complete",
+		},
+	})
+	model = updated.(*uiModel)
+	if len(model.messages) != 0 {
+		t.Fatalf("late different-run completion rendered: %+v", model.messages)
+	}
+}
+
 func TestToolOutputMatchesActiveToolByCallID(t *testing.T) {
 	model := NewController(nil, nil, nil, "").model
 	updated, _ := model.Update(MsgToolStart{ToolName: "terminal", ToolCallID: "call-a"})
@@ -355,7 +447,7 @@ func TestActiveToolOutputIsBounded(t *testing.T) {
 	}
 }
 
-func TestAgentDoneDiscardsUnfinishedToolRows(t *testing.T) {
+func TestAgentDoneCommitsUnfinishedToolRowsAsInterrupted(t *testing.T) {
 	model := NewController(nil, nil, nil, "").model
 	updated, _ := model.Update(MsgToolStart{ToolName: "terminal", ToolCallID: "call-a"})
 	model = updated.(*uiModel)
@@ -365,8 +457,16 @@ func TestAgentDoneDiscardsUnfinishedToolRows(t *testing.T) {
 	updated, _ = model.Update(MsgAgentDone{Response: "Finished."})
 	model = updated.(*uiModel)
 
-	if len(model.messages) != 1 || model.messages[0].Role != "assistant" || model.messages[0].Content != "Finished." {
-		t.Fatalf("terminal cleanup left transient rows: %+v", model.messages)
+	if len(model.messages) != 2 {
+		t.Fatalf("terminal cleanup messages = %+v", model.messages)
+	}
+	tool := model.messages[0]
+	if tool.Role != "tool" || tool.IsRunning || !tool.IsError || !tool.Committed ||
+		!strings.Contains(tool.Content, "Completion was not observed") {
+		t.Fatalf("unfinished tool was not committed as interrupted: %+v", tool)
+	}
+	if model.messages[1].Role != "assistant" || model.messages[1].Content != "Finished." {
+		t.Fatalf("final answer = %+v", model.messages[1])
 	}
 	if active := stripANSI(model.renderActiveBlock(100)); strings.TrimSpace(active) != "" {
 		t.Fatalf("active region is not clean after completion: %q", active)
@@ -554,9 +654,9 @@ func TestForwardedPlanEventRendersChecklist(t *testing.T) {
 	}
 
 	model := NewController(nil, nil, nil, "").model
-	updated, _ := model.Update(MsgToolStart{ToolName: "update_plan"})
+	updated, _ := model.Update(MsgToolStart{ToolName: "update_plan", ToolCallID: "call-plan"})
 	model = updated.(*uiModel)
-	updated, _ = model.Update(MsgToolDone{ToolName: "update_plan", Result: planJSON})
+	updated, _ = model.Update(MsgToolDone{ToolName: "update_plan", ToolCallID: "call-plan", Result: planJSON})
 	model = updated.(*uiModel)
 
 	if len(model.messages) == 0 {
@@ -926,7 +1026,7 @@ func TestHybridViewDoesNotReRenderCommittedHistory(t *testing.T) {
 func TestNotificationBarStylesGuidanceDistinctly(t *testing.T) {
 	model := NewController(nil, nil, nil, "").model
 
-	model.statusMsg = "Sent to the running task as guidance."
+	model.setStatusNotice(noticeGuidance, "Sent to the running task as guidance.")
 	guidance := model.notificationBar(80)
 	if !strings.Contains(guidance, glyphArrowInto) {
 		t.Fatalf("guidance notice should carry the steering glyph: %q", stripANSI(guidance))
@@ -935,17 +1035,41 @@ func TestNotificationBarStylesGuidanceDistinctly(t *testing.T) {
 		t.Fatalf("guidance notice text missing: %q", stripANSI(guidance))
 	}
 
-	cases := map[string]string{
-		"Copied to clipboard":               glyphCheck,
-		"Guidance queue is full; try again": glyphWarning,
-		"Task cancelled by user.":           glyphCross,
-		"Some neutral status":               glyphBullet,
+	cases := []struct {
+		message string
+		kind    noticeKind
+		glyph   string
+	}{
+		{"Copied to clipboard", noticeSuccess, glyphCheck},
+		{"Guidance queue is full; try again", noticeWarning, glyphWarning},
+		{"Task cancelled by user.", noticeError, glyphCross},
+		{"Some neutral status", noticeInfo, glyphBullet},
 	}
-	for msg, wantGlyph := range cases {
-		model.statusMsg = msg
-		if got := model.notificationBar(80); !strings.Contains(got, wantGlyph) {
-			t.Fatalf("notice %q should use glyph %q, got %q", msg, wantGlyph, stripANSI(got))
+	for _, tc := range cases {
+		model.setStatusNotice(tc.kind, tc.message)
+		if got := model.notificationBar(80); !strings.Contains(got, tc.glyph) {
+			t.Fatalf("notice %q should use glyph %q, got %q", tc.message, tc.glyph, stripANSI(got))
 		}
+		gotGlyph, gotColor := noticeVisual(tc.kind)
+		if gotGlyph != tc.glyph || gotColor == "" {
+			t.Fatalf("shared notice visual for %q = glyph %q color %q", tc.message, gotGlyph, gotColor)
+		}
+		if history := renderNoticeMessage(tc.message, tc.kind, 80); !strings.Contains(stripANSI(history), tc.message) {
+			t.Fatalf("history notice lost text for %q: %q", tc.message, stripANSI(history))
+		}
+	}
+}
+
+func TestStatusNoticeClearDoesNotEraseNewerNotice(t *testing.T) {
+	model := NewController(nil, nil, nil, "").model
+	oldID := model.setStatusNotice(noticeSuccess, "first")
+	newID := model.setStatusNotice(noticeWarning, "second")
+
+	updated, _ := model.Update(MsgClearStatus{NoticeID: oldID})
+	model = updated.(*uiModel)
+
+	if model.statusMsg != "second" || model.statusNoticeID != newID {
+		t.Fatalf("old timer cleared newer notice: text=%q id=%d", model.statusMsg, model.statusNoticeID)
 	}
 }
 

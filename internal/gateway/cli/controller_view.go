@@ -93,7 +93,11 @@ func (m *uiModel) notificationBar(width int) string {
 		return ""
 	}
 	text := strings.TrimSpace(m.statusMsg)
-	glyph, color := notificationStyleFor(text)
+	kind := noticeInfo
+	if m.statusNoticeText == text {
+		kind = m.statusNoticeKind
+	}
+	glyph, color := noticeVisual(kind)
 	body := glyph + " " + text
 	return lipgloss.NewStyle().
 		Padding(0, 1).
@@ -204,7 +208,7 @@ func (m *uiModel) statusLine() string {
 	state := m.runStatus
 	stateStyle := st.Status.Good
 	switch {
-	case m.approvalFlowActive():
+	case m.approvalFlowActive() || len(m.delayedApprovals) > 0:
 		// A pending approval is a distinct state — the run is paused on the
 		// user, not "working", and definitely not "ready".
 		state = "⏸ waiting approval"

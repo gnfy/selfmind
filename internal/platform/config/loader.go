@@ -49,14 +49,13 @@ storage:
 gateway:
   addr: "127.0.0.1:8765"
   token: ""
-  # How long the TUI may sit without keystrokes before it stops counting as
-  # "attached" (pushes then resume on your preferred IM). "0" = never idle.
-  presence_idle_timeout: "5m"
-  # An unanswered approval/question is re-pushed to your preferred IM this long
-  # after it was raised, if you have since left the CLI (presence detached) and
-  # no IM notification was sent yet. The escrow sweep runs every 60s, so the
-  # effective latency is this value + up to 60s. "0" = disable escrow.
-  pending_notify_after: "2m"
+  # Deprecated compatibility key. Presence now means a live endpoint, not
+  # recent keyboard activity; this value is ignored.
+  presence_idle_timeout: "0"
+  # Escalate an unanswered approval/question to the preferred IM after this
+  # age even while a CLI is open. A detached CLI routes immediately (subject to
+  # heartbeat expiry). The escrow sweep runs every 60s.
+  pending_notify_after: "15m"
   outbound_webhook_url: ""
   outbound_webhook_token: ""
   telegram_token: ""
@@ -545,8 +544,10 @@ type AgentConfig struct {
 	// parks the work (see docs/tool-safety.md).
 	ApprovalWait string `mapstructure:"approval_wait" yaml:"approval_wait,omitempty"`
 	// ApprovalWaitUnattended is the much shorter bound used when NOTHING can
-	// answer — no attached endpoint and no bound account. Waiting the full
-	// budget there burns the run's time for a decision that cannot arrive.
+	// currently answer — no attached endpoint and either no routable IM account
+	// or a latest IM delivery state of pending_session, failed, or
+	// sent_unconfirmed. Waiting the full budget there burns the run's time for a
+	// decision that cannot currently arrive; expiry parks rather than rejects it.
 	ApprovalWaitUnattended string `mapstructure:"approval_wait_unattended" yaml:"approval_wait_unattended,omitempty"`
 }
 
@@ -569,8 +570,8 @@ func (a AgentConfig) ApprovalTriageTimeoutDuration() time.Duration {
 }
 
 // Approval wait budgets. The attended default matches the historical
-// hardcoded bound; the unattended one only applies when no endpoint and no
-// bound account could produce an answer.
+// hardcoded bound; the unattended one applies when neither a live endpoint nor
+// a currently healthy IM route could produce an answer.
 const (
 	DefaultApprovalWait           = 30 * time.Minute
 	DefaultApprovalWaitUnattended = 30 * time.Second
@@ -615,19 +616,13 @@ type GatewayConfig struct {
 	URL          string `mapstructure:"url" yaml:"url,omitempty"`
 	Token        string `mapstructure:"token" yaml:"token,omitempty"`
 	DrainTimeout string `mapstructure:"drain_timeout" yaml:"drain_timeout,omitempty"`
-	// PresenceIdleTimeout bounds how long a TUI without user INPUT keeps
-	// claiming presence ("attached"). Presence means "the person is at this
-	// terminal", not "a terminal is open": once the last keystroke is older
-	// than this, the client's heartbeats stop claiming attachment, so pushes
-	// route to the preferred IM again. Duration string; default "5m"; "0"
-	// disables idle detection (an open TUI always counts as attached).
-	// The decision is CLIENT-side (input age is only known there); the daemon
-	// just honors the client's active=0|1 claim on presence-touching requests.
+	// PresenceIdleTimeout is a deprecated compatibility key. Presence now means
+	// endpoint liveness and never depends on keyboard activity.
 	PresenceIdleTimeout string `mapstructure:"presence_idle_timeout" yaml:"presence_idle_timeout,omitempty"`
 	// PendingNotifyAfter bounds how long an unanswered approval/clarify may sit
 	// before the escrow sweep re-pushes it to the preferred IM when the CLI has
 	// detached and no notification was sent yet (Fix 2). Duration string;
-	// default "2m"; "0" disables escrow. The sweep runs every 60s, so effective
+	// default "15m"; "0" disables escrow. The sweep runs every 60s, so effective
 	// latency is this value + up to 60s.
 	PendingNotifyAfter string `mapstructure:"pending_notify_after" yaml:"pending_notify_after,omitempty"`
 	// OutboundRetention bounds how long terminal outbound delivery rows remain
@@ -651,14 +646,13 @@ type GatewayConfig struct {
 	QQ                    QQConfig     `mapstructure:"qq" yaml:"qq,omitempty"`
 }
 
-// DefaultPresenceIdleTimeout is the presence_idle_timeout applied when the
-// knob is absent or unparsable: 5 minutes without a keystroke marks the
-// terminal idle so pushes resume on IM.
-const DefaultPresenceIdleTimeout = 5 * time.Minute
+// DefaultPresenceIdleTimeout is retained for config compatibility. Zero means
+// keyboard inactivity never changes endpoint attachment.
+const DefaultPresenceIdleTimeout = time.Duration(0)
 
-// PresenceIdleTimeoutDuration parses presence_idle_timeout. Empty or invalid
-// values fall back to DefaultPresenceIdleTimeout; a zero (or negative)
-// duration returns 0, meaning "never idle" (the old always-attached behavior).
+// PresenceIdleTimeoutDuration parses the deprecated compatibility key. New
+// clients ignore it; keeping the parser prevents old configuration files from
+// failing validation while upgrades roll through.
 func (g GatewayConfig) PresenceIdleTimeoutDuration() time.Duration {
 	raw := strings.TrimSpace(g.PresenceIdleTimeout)
 	if raw == "" {
@@ -681,8 +675,8 @@ func (g GatewayConfig) PresenceIdleTimeoutDuration() time.Duration {
 }
 
 // DefaultPendingNotifyAfter is the gateway.pending_notify_after applied when the
-// knob is absent or unparsable: 2 minutes.
-const DefaultPendingNotifyAfter = 2 * time.Minute
+// knob is absent or unparsable: 15 minutes.
+const DefaultPendingNotifyAfter = 15 * time.Minute
 
 // PendingNotifyAfterDuration parses gateway.pending_notify_after. Empty or
 // invalid values fall back to DefaultPendingNotifyAfter; a zero (or negative)
@@ -1115,7 +1109,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("intent.mode", "hybrid")
 	v.SetDefault("intent.thresholds.direct", 0.8)
 	v.SetDefault("intent.thresholds.ask", 0.55)
-	v.SetDefault("gateway.pending_notify_after", "2m")
+	v.SetDefault("gateway.pending_notify_after", "15m")
 	v.SetDefault("gateway.outbound_retention", "336h")
 	v.SetDefault("exec_sandbox.enabled", true)
 	v.SetDefault("exec_sandbox.required", false)

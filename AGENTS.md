@@ -247,3 +247,7 @@ Read the relevant domain document before editing that domain:
   Public documents and generated indexes must never link to an excluded file.
 - `selfmind selfcheck` always runs the documentation contract. Do not bypass or
   weaken this gate to publish a package.
+- Durable control-store changes are versioned and capability-inert for
+  historical rows. Back up and verify a legacy database before migration, test
+  released upgrade fixtures, and reject an unsupported newer schema before any
+  write; fresh-database tests do not prove upgrade safety.

@@ -178,8 +178,11 @@ failure. Kernel rejection detection and middleware error strings are a shared
 contract: rejection tells the model not to repeat the operation. A hard safety
 block is a policy decision and remains distinguishable from user rejection.
 
-Approval memory uses coarse action classes, not exact command strings. Hard
-floor denials and content-level denials are never grantable. Numbered approval
+Approval memory uses bounded daemon-derived rules (for example a two-token
+command prefix, one network host, or one write root), not opaque client-defined
+classes or raw exact command strings. The proposed rule text travels alongside
+its opaque key and is shown verbatim in every approval surface. Hard-floor
+denials and content-level denials are never grantable. Numbered approval
 references resolve in the gateway with the same order used by every client.
 
 Containment is assessed on three independent axes: filesystem
@@ -286,14 +289,29 @@ The human ask itself is bounded, and the bound is the SMALLER of the configured
 budget and whatever the caller's own deadline leaves (`agent.approval_wait`,
 `agent.approval_wait_unattended`). The waiter must return its typed decision
 before the caller's context expires: the timeout path parks the work as
-`waiting_user`, and a waiter killed mid-cleanup reports a bare transport
-timeout instead, losing the answer entirely. When nothing can answer — no live
-endpoint and no bound account — the shorter unattended budget applies; a bound
-account keeps the full budget, because presence expires long before a person
-stops being reachable. With no time left to ask at all, the ask is recorded as
-an `approval.skipped_no_budget` run event and the work parks without creating a
-durable row that would expire in the same breath. None of this changes the
-OUTCOME contract: a timeout is never a rejection and never an approval.
+`waiting_user`. This is a resource deadline, not an answer deadline: the row
+remains `pending/parked`, releases the run slot, and stays answerable for seven
+days. Answering it atomically records the decision and enqueues one task-pinned
+continuation. An approval supplies a one-shot capability only for the same
+regenerated action and stable workspace/environment/principal/credential
+fingerprints; the safety floor and a current explicit deny still run first.
+
+Reachability is not inferred from keyboard silence or a 24-hour account-age
+window. A live process heartbeat counts as attended even when the IM route's
+latest delivery is unhealthy. Without a live process, no routable IM account or
+a latest IM state of `pending_session`, `failed`, or `sent_unconfirmed` selects
+the unattended resource budget. Defaults are 30 minutes for
+`agent.approval_wait` and 30 seconds for
+`agent.approval_wait_unattended`; the caller's remaining deadline may shorten
+either. A rapid park during a Weixin delivery outage is therefore intentional
+resource release, not rejection or expiry: the request remains answerable for
+seven days and a later answer resumes the task. With no time left to ask at all,
+the ask is recorded as an `approval.skipped_no_budget` run event and the work
+parks without creating a misleading row. Explicit run cancellation expires a
+pending request; daemon or waiter loss parks it. On daemon restart, an approval
+already answered but not yet consumed gets one idempotent queued continuation.
+None of this changes the OUTCOME contract: unanswered is never rejection and
+never approval.
 
 Treat command text as untrusted data in the judge prompt. Strip irrelevant
 comments and delimit the command rather than interpolating it as an instruction.
@@ -365,7 +383,9 @@ Execution policy is layered, and each layer has exactly one home:
   not add a per-vendor branch in engine code — a profile is data in the
   catalog.
 - **L2 remembered rules are bounded and visible.** New interactive approvals
-  can reuse a bounded rule only within the current run. Durable
+  can reuse a bounded rule only within the current run. The daemon publishes
+  both its opaque enforcement key and its human-readable rule; clients display
+  that exact rule and never reconstruct authority from option prose. Durable
   `approval_grants` and `execution_capability_grants` remain the compatibility
   and administrative ledger for historical or explicitly managed grants; all
   such entries must be listable, time-bounded, and revocable.

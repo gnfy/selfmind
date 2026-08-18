@@ -70,7 +70,7 @@ func TestResolvedApprovalDeliveryIsSupersededBeforeSend(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.ExpireApprovalRequest(ctx, "default", "apr_resolved", "run ended"); err != nil {
+	if _, _, err := store.ExpireApprovalRequest(ctx, "default", "apr_resolved", "run ended"); err != nil {
 		t.Fatal(err)
 	}
 

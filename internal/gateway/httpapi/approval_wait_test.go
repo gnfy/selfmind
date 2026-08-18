@@ -2,10 +2,12 @@ package httpapi
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
 	"selfmind/internal/control"
+	"selfmind/internal/gateway/delivery"
 	"selfmind/internal/tools"
 )
 
@@ -22,17 +24,15 @@ func TestApprovalWaitBudgetUnattendedUsesShortBound(t *testing.T) {
 	}
 }
 
-// Presence expires after 90s, so a person who typed on IM and then looked away
-// reads as detached while still being able to answer. Recent IM activity keeps
-// the full budget; the fixture's CLI account alone must not.
-func TestApprovalWaitBudgetRecentIMAccountCountsAsAttended(t *testing.T) {
+// A bound IM endpoint with a configured delivery sender can answer even when
+// it has no recency history yet. Reachability is a delivery fact, not a 24-hour
+// last_seen heuristic.
+func TestApprovalWaitBudgetRoutableIMAccountCountsAsAttended(t *testing.T) {
 	srv, store, identity, _, _ := newApprovalTestServer(t)
+	srv.Delivery = delivery.NewService(store, &recordingSender{}, delivery.Options{})
 	coordinator := &RunCoordinator{srv: srv}
-	bound, err := store.BindAccount(context.Background(), identity.TenantID, identity.PersonID, "weixin", "wx-user", "WX User")
+	_, err := store.BindAccount(context.Background(), identity.TenantID, identity.PersonID, "weixin", "wx-user", "WX User")
 	if err != nil {
-		t.Fatal(err)
-	}
-	if err := store.TouchAccountLastSeen(context.Background(), identity.TenantID, bound.AccountID); err != nil {
 		t.Fatal(err)
 	}
 
@@ -40,11 +40,11 @@ func TestApprovalWaitBudgetRecentIMAccountCountsAsAttended(t *testing.T) {
 		t.Fatal("fixture should start with no live attachment")
 	}
 	if got := coordinator.approvalWaitBudget(context.Background(), identity); got != defaultApprovalWait {
-		t.Fatalf("recent IM account budget = %s, want %s", got, defaultApprovalWait)
+		t.Fatalf("routable IM account budget = %s, want %s", got, defaultApprovalWait)
 	}
 }
 
-func TestApprovalWaitBudgetStaleBindingUsesShortBound(t *testing.T) {
+func TestApprovalWaitBudgetBindingWithoutDeliverySenderUsesShortBound(t *testing.T) {
 	srv, store, identity, _, _ := newApprovalTestServer(t)
 	coordinator := &RunCoordinator{srv: srv}
 	if _, err := store.BindAccount(context.Background(), identity.TenantID, identity.PersonID, "weixin", "stale-wx-user", "Stale WX User"); err != nil {
@@ -52,12 +52,13 @@ func TestApprovalWaitBudgetStaleBindingUsesShortBound(t *testing.T) {
 	}
 
 	if got := coordinator.approvalWaitBudget(context.Background(), identity); got != defaultApprovalWaitUnattended {
-		t.Fatalf("stale IM account budget = %s, want %s", got, defaultApprovalWaitUnattended)
+		t.Fatalf("unroutable IM account budget = %s, want %s", got, defaultApprovalWaitUnattended)
 	}
 }
 
 func TestApprovalWaitBudgetRecentIMWithNewerDeliveryFailureUsesShortBound(t *testing.T) {
 	srv, store, identity, _, _ := newApprovalTestServer(t)
+	srv.Delivery = delivery.NewService(store, &recordingSender{}, delivery.Options{})
 	coordinator := &RunCoordinator{srv: srv}
 	bound, err := store.BindAccount(context.Background(), identity.TenantID, identity.PersonID, "weixin", "wx-unreachable", "WX User")
 	if err != nil {
@@ -183,7 +184,7 @@ func TestToolApprovalHandlerParksWhenNoBudget(t *testing.T) {
 // the approval budget must still yield a typed decision, with the caller's
 // context still alive to receive it.
 func TestToolApprovalHandlerReturnsBeforeCallerDeadline(t *testing.T) {
-	srv, _, identity, task, _ := newApprovalTestServer(t)
+	srv, store, identity, task, _ := newApprovalTestServer(t)
 	coordinator := &RunCoordinator{srv: srv}
 	// Long enough to leave a real wait after the reserve, short enough to keep
 	// the test quick: the waiter must return on its own budget, not on the
@@ -212,5 +213,33 @@ func TestToolApprovalHandlerReturnsBeforeCallerDeadline(t *testing.T) {
 	}
 	if decision.Reason == "" {
 		t.Fatal("a timeout must explain that the work is parked, not rejected")
+	}
+	pending, err := store.ListApprovalRequests(context.Background(), identity.TenantID, identity.PersonID, "pending", 10)
+	if err != nil {
+		t.Fatalf("list pending approvals: %v", err)
+	}
+	var parked *control.ApprovalRequest
+	for i := range pending {
+		if pending[i].ID == decision.ApprovalID {
+			parked = &pending[i]
+			break
+		}
+	}
+	if parked == nil || parked.WaiterState != "parked" {
+		t.Fatalf("pending rows = %+v, want parked decision approval %s", pending, decision.ApprovalID)
+	}
+	events, err := store.ListTaskEvents(context.Background(), task.ID, 20)
+	if err != nil {
+		t.Fatalf("list task events: %v", err)
+	}
+	foundParked := false
+	for _, event := range events {
+		if event.Type == "approval.parked" && strings.Contains(string(event.Payload), decision.ApprovalID) {
+			foundParked = true
+			break
+		}
+	}
+	if !foundParked {
+		t.Fatalf("approval.parked event missing for %s: %+v", decision.ApprovalID, events)
 	}
 }

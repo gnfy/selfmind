@@ -11,6 +11,7 @@ import (
 	"selfmind/internal/gateway/api"
 	"selfmind/internal/gateway/delivery"
 	"selfmind/internal/gateway/router"
+	"selfmind/internal/platform/log"
 	"selfmind/internal/runpool"
 	"selfmind/internal/tools"
 	"strings"
@@ -376,6 +377,9 @@ func (c *RunCoordinator) installExecutionScope(ctx context.Context, identity *co
 		scope.LeaseID = leases[0].ID
 		scope.EnvironmentSnapshotID = leases[0].EnvironmentSnapshotID
 		scope.EnvironmentGeneration = leases[0].EnvironmentGeneration
+		scope.EnvironmentFingerprint = leases[0].EnvironmentFingerprint
+		scope.PrincipalFingerprint = leases[0].PrincipalFingerprint
+		scope.CredentialSourceHash = leases[0].CredentialSourceHash
 		scope.Capabilities = append([]string{}, leases[0].ExecutionCapabilities...)
 	}
 	// A turn carrying attachments may read the person's imported-attachment
@@ -427,6 +431,7 @@ func (c *RunCoordinator) installExecutionScope(ctx context.Context, identity *co
 	if c.srv != nil && c.srv.Control != nil {
 		scope.Grants = c.srv.Control
 		scope.CapabilityStore = c.srv.Control
+		scope.ResumeAuthorizations = c.srv.Control
 	}
 	// Judge backs smart-mode LLM approval triage (H2). Optional: nil leaves smart
 	// mode on the human-ask path (never auto-approves without a judge).
@@ -676,7 +681,7 @@ func (c *RunCoordinator) gatewayClarify(runCtx context.Context, identity *contro
 }
 
 // approvalWaitReserve is the slice of the caller's remaining budget kept for
-// everything that has to happen AFTER the wait: expiring the durable row,
+// everything that has to happen AFTER the wait: parking the durable row,
 // appending the event, handing the typed decision back through the tool
 // middleware, and — the part that made the first value too small — one more
 // model round-trip for the agent to actually park the work and say so.
@@ -693,11 +698,6 @@ const (
 	// policy through Server fields and does not depend on the config package.
 	defaultApprovalWait           = 30 * time.Minute
 	defaultApprovalWaitUnattended = 30 * time.Second
-	// A historical account binding is not proof that a person can answer now.
-	// IM session credentials commonly expire while the account row remains
-	// active, so only recent non-CLI activity without a newer delivery failure
-	// earns the long synchronous wait.
-	approvalAccountReachabilityWindow = 24 * time.Hour
 	// approvalPollTimeout bounds one status read of the pending row. It is
 	// independent of the wait budget so a lapsing budget cannot turn a poll
 	// into a reported transport error.
@@ -728,17 +728,12 @@ func (c *RunCoordinator) approvalWaitBudget(ctx context.Context, identity *contr
 	return budget
 }
 
-// personCanAnswer reports whether ANY endpoint could produce a decision: a
-// live attachment, or a recently active IM account an approval push can reach.
-//
-// Presence alone is not enough — its TTL is 90s, so someone who typed a
-// request and then looked away already reads as detached while still being
-// perfectly able to answer. A recently active IM account keeps them
-// "attended"; a stale historical binding does not.
-//
-// A store error counts as attended on purpose: the cost of a wasted wait is
-// run time, the cost of a wrong "nobody is there" is cutting a real person out
-// of their own decision.
+// personCanAnswer reports whether a live endpoint exists or the delivery layer
+// can route to a configured IM sender. It deliberately avoids a 24-hour
+// last_seen guess: a stale timestamp cannot prove reachability, and a newly
+// bound endpoint should not be penalized for lacking history. The actual send
+// still records confirmed/unconfirmed/failure in the outbox; if nobody answers,
+// the resource budget parks rather than invalidates the approval.
 func (c *RunCoordinator) personCanAnswer(ctx context.Context, identity *control.IdentityContext) bool {
 	if identity == nil {
 		return false
@@ -746,34 +741,24 @@ func (c *RunCoordinator) personCanAnswer(ctx context.Context, identity *control.
 	if c.srv.presenceTracker().AnyAttached(identity.PersonID) {
 		return true
 	}
-	if c.srv.Control == nil {
+	account := c.preferredIMAccount(ctx, identity)
+	if account == nil {
 		return false
 	}
-	accounts, err := c.srv.Control.ListAccountsByPerson(ctx, identity.TenantID, identity.PersonID)
+	state, err := c.srv.Control.LatestDeliveryEndpointState(ctx, identity.TenantID, identity.PersonID, account.Platform, account.PlatformUserID)
 	if err != nil {
+		// Fail open on observation errors: parking remains the safe terminal
+		// behavior, whereas prematurely abandoning a reachable decision only
+		// burns the current run budget faster.
 		return true
 	}
-	cutoff := time.Now().Add(-approvalAccountReachabilityWindow).Unix()
-	for _, account := range accounts {
-		if strings.EqualFold(strings.TrimSpace(account.Platform), "cli") {
-			continue
+	if state != nil {
+		switch strings.ToLower(strings.TrimSpace(state.Status)) {
+		case "pending_session", "failed", "sent_unconfirmed":
+			return false
 		}
-		if account.LastSeenAt < cutoff {
-			continue
-		}
-		state, stateErr := c.srv.Control.LatestDeliveryEndpointState(ctx, identity.TenantID, identity.PersonID, account.Platform, account.PlatformUserID)
-		if stateErr != nil {
-			return true
-		}
-		if state != nil && state.UpdatedAt.Unix() >= account.LastSeenAt {
-			switch strings.ToLower(strings.TrimSpace(state.Status)) {
-			case "pending_session", "failed", "sent_unconfirmed":
-				continue
-			}
-		}
-		return true
 	}
-	return false
+	return true
 }
 
 func (c *RunCoordinator) toolApprovalHandler(identity *control.IdentityContext, task *control.Task, run *control.Run, channel string) tools.ToolApprovalHandler {
@@ -830,14 +815,16 @@ func (c *RunCoordinator) toolApprovalHandler(identity *control.IdentityContext, 
 		decisions := buildApprovalDecisions(req)
 		persistentArgs := tools.ApprovalPersistentArgs(req.ToolName, req.Args)
 		approval, err := store.CreateApprovalRequest(waitCtx, control.ApprovalRequest{
-			TenantID:         identity.TenantID,
-			PersonID:         identity.PersonID,
-			TaskID:           taskID,
-			RunID:            runID,
-			ActionType:       "tool_call",
-			RequestedChannel: fallback(channel, identity.Platform),
+			TenantID:                 identity.TenantID,
+			PersonID:                 identity.PersonID,
+			TaskID:                   taskID,
+			RunID:                    runID,
+			ActionType:               "tool_call",
+			RequestedChannel:         fallback(channel, identity.Platform),
+			AuthorizationFingerprint: req.AuthorizationFingerprint,
 			Payload: mustJSON(map[string]interface{}{
 				"tool":            req.ToolName,
+				"target":          approvalActionTarget(req.ToolName, req.Args),
 				"reason":          req.Reason,
 				"args":            persistentArgs,
 				"grant_class":     req.GrantClass,
@@ -905,27 +892,53 @@ func (c *RunCoordinator) toolApprovalHandler(identity *control.IdentityContext, 
 		defer resumeWatchdog()
 		c.notifyApprovalRequested(context.Background(), identity, taskID, runID, fallback(channel, identity.Platform), approval)
 
-		// The waiter is gone (timeout / run cancelled): a row left 'pending'
-		// would pollute every later list — bare y turns ambiguous and
-		// /approve 1 hits a dead request (observed live). Expire it; the
-		// recovery sweep is the backstop for waiters that die without
-		// reaching this line.
+		// A resource deadline parks the request instead of invalidating it. An
+		// explicit run cancellation still expires it: /stop means stop, while an
+		// unattended timeout means "answer later and resume".
 		park := func() (tools.ToolApprovalDecision, error) {
 			cause := "waiter gone"
 			if err := waitCtx.Err(); err != nil {
 				cause += ": " + err.Error()
 			}
-			_ = store.ExpireApprovalRequest(context.WithoutCancel(waitCtx), identity.TenantID, approval.ID, cause)
-			return tools.ToolApprovalDecision{
-				Approved:   false,
-				ApprovalID: approval.ID,
-				// Typed as a TIMEOUT, not a rejection (batch B2): nobody
-				// refused this, nobody answered. The execution layer renders a
-				// different sentence for each so the model parks the work
-				// instead of trying a variant of a "rejected" action.
-				Outcome: tools.ApprovalOutcomeTimedOut,
-				Reason:  "approval expired; do not request another approval or retry a variant; finish waiting_user",
-			}, nil
+			cleanupCtx := context.WithoutCancel(waitCtx)
+			explicitCancel := ctx.Err() != nil && errors.Is(context.Cause(ctx), context.Canceled)
+			var current *control.ApprovalRequest
+			var transitioned bool
+			var err error
+			if explicitCancel {
+				current, transitioned, err = store.ExpireApprovalRequest(cleanupCtx, identity.TenantID, approval.ID, cause)
+			} else {
+				current, transitioned, err = store.ParkApprovalRequest(cleanupCtx, identity.TenantID, approval.ID, cause)
+			}
+			if err != nil {
+				return tools.ToolApprovalDecision{ApprovalID: approval.ID}, err
+			}
+			if current == nil {
+				return tools.ToolApprovalDecision{ApprovalID: approval.ID}, fmt.Errorf("approval request disappeared: %s", approval.ID)
+			}
+			if transitioned {
+				if explicitCancel {
+					if _, eventErr := store.AppendApprovalResolutionEvent(cleanupCtx, current, fallback(channel, identity.Platform), cause); eventErr != nil {
+						log.Warn("failed to append approval.expired event", "approval_id", current.ID, "error", eventErr)
+					}
+					c.srv.notifyApprovalResolutionElsewhere(cleanupCtx, identity, current, fallback(channel, identity.Platform))
+				} else if _, eventErr := store.AppendApprovalParkedEvent(cleanupCtx, current, fallback(channel, identity.Platform), cause); eventErr != nil {
+					log.Warn("failed to append approval.parked event", "approval_id", current.ID, "error", eventErr)
+				}
+			}
+			// A response can win exactly as the wait deadline fires. When the
+			// pending -> expired update changed no row, honor the stored human
+			// decision instead of fabricating a timeout event over it.
+			if decision, terminal, claimErr := claimStoredApprovalDecision(cleanupCtx, store, identity.TenantID, runID, current); terminal || claimErr != nil {
+				return decision, claimErr
+			}
+			if current.Status == "pending" && current.WaiterState == "parked" {
+				return tools.ToolApprovalDecision{
+					ApprovalID: approval.ID, Outcome: tools.ApprovalOutcomeTimedOut,
+					Reason: "approval parked; the request remains answerable and a later decision will resume the task",
+				}, nil
+			}
+			return tools.ToolApprovalDecision{ApprovalID: approval.ID}, fmt.Errorf("approval request %s remained %s/%s after waiter cleanup", approval.ID, current.Status, current.WaiterState)
 		}
 
 		ticker := time.NewTicker(time.Second)
@@ -957,31 +970,11 @@ func (c *RunCoordinator) toolApprovalHandler(identity *control.IdentityContext, 
 				if current == nil {
 					return tools.ToolApprovalDecision{ApprovalID: approval.ID}, fmt.Errorf("approval request disappeared: %s", approval.ID)
 				}
-				switch current.Status {
-				case "approved":
-					// DecisionScope (set when the human answered with a grant
-					// scope) tells the middleware whether to remember this class
-					// for the task/person.
-					return tools.ToolApprovalDecision{
-						Approved:   true,
-						ApprovalID: approval.ID,
-						Scope:      current.DecisionScope,
-						Outcome:    tools.ApprovalOutcomeApproved,
-						// The rule the human picked, when they picked one. The
-						// execution layer validates it against the candidates this
-						// call offered before storing anything.
-						GrantKey: current.DecisionGrantKey,
-						// The control plane rules on how long its authorization
-						// lasts; the execution layer only redeems it.
-						ExpiresAt: approvalDecisionExpiry(current.DecisionScope),
-					}, nil
-				case "rejected":
-					return tools.ToolApprovalDecision{
-						Approved:   false,
-						ApprovalID: approval.ID,
-						Outcome:    tools.ApprovalOutcomeDenied,
-						Reason:     fallbackApprovalReason(current.DecisionNote, "rejected"),
-					}, nil
+				claimCtx, cancelClaim := context.WithTimeout(context.WithoutCancel(waitCtx), approvalPollTimeout)
+				decision, terminal, claimErr := claimStoredApprovalDecision(claimCtx, store, identity.TenantID, runID, current)
+				cancelClaim()
+				if terminal || claimErr != nil {
+					return decision, claimErr
 				}
 			}
 		}
@@ -1016,12 +1009,30 @@ func (c *RunCoordinator) notifyApprovalRequested(ctx context.Context, identity *
 		Kind:       delivery.KindApproval,
 		ApprovalID: approval.ID,
 	}
-	// Track "notified" honestly: stamp notified_at only when a push actually went
-	// out (IM origin, or CLI detached). A suppressed CLI-attached push leaves it
-	// NULL so the escrow sweep can re-push after the CLI leaves (Fix 2).
-	if c.routePendingNotification(ctx, identity, channel, base) && c.srv.Control != nil {
+	// Track "notified" honestly: stamp notified_at only after confirmed delivery.
+	// A suppressed CLI-attached, pending-session, or unconfirmed push leaves it
+	// NULL; escrow can create a missing attempt, while the delivery layer alone
+	// owns retry/catch-up for an existing durable row.
+	delivered := false
+	if identity.Platform == "cli" && c.approvalSurface(ctx, identity) == "phone-first" {
+		delivered = c.deliverToPreferredIM(ctx, identity, base)
+	} else {
+		delivered = c.routePendingNotification(ctx, identity, channel, base)
+	}
+	if delivered && c.srv.Control != nil {
 		_ = c.srv.Control.MarkApprovalNotified(ctx, identity.TenantID, approval.ID)
 	}
+}
+
+func (c *RunCoordinator) approvalSurface(ctx context.Context, identity *control.IdentityContext) string {
+	if c == nil || c.srv == nil || c.srv.Control == nil || identity == nil {
+		return "desk-first"
+	}
+	value, err := c.srv.Control.GetPersonSetting(ctx, identity.TenantID, identity.PersonID, personSettingApprovalSurface)
+	if err == nil && strings.EqualFold(strings.TrimSpace(value), "phone-first") {
+		return "phone-first"
+	}
+	return "desk-first"
 }
 
 // notifyClarifyRequested pushes a pending-question notification along the SAME
@@ -1058,9 +1069,9 @@ func (c *RunCoordinator) notifyClarifyRequested(ctx context.Context, identity *c
 // endpoint attached → suppressed (the live TUI already renders the inline
 // prompt/event; an IM push would be a duplicate). CLI origin detached → the one
 // preferred IM endpoint, never a fan-out.
-// The bool return reports whether a message was actually enqueued for delivery
-// (so the caller can stamp notified_at); a suppressed CLI-attached push returns
-// false.
+// The bool return reports confirmed delivery (so the caller can stamp
+// notified_at); a suppressed CLI-attached, pending-session, or unconfirmed push
+// returns false.
 func (c *RunCoordinator) routePendingNotification(ctx context.Context, identity *control.IdentityContext, channel string, base delivery.Message) bool {
 	if c == nil || c.srv == nil || c.srv.Delivery == nil || identity == nil {
 		return false
@@ -1081,19 +1092,26 @@ func (c *RunCoordinator) routePendingNotification(ctx context.Context, identity 
 
 // escrowApprovalNotification re-pushes a pending approval that was never
 // notified (initial CLI push suppressed, or the send failed) once the person is
-// no longer attached on CLI (Fix 2). It routes to the SINGLE preferred IM
-// endpoint and stamps notified_at only after the enqueue succeeds, so a failed
-// push retries on the next sweep and a resolved approval is never marked.
-func (c *RunCoordinator) escrowApprovalNotification(ctx context.Context, approval *control.ApprovalRequest) {
+// detached OR it has remained unanswered past the escalation threshold. It
+// routes to the SINGLE preferred IM
+// endpoint and stamps notified_at only after confirmed delivery. A missing
+// durable attempt can therefore be created by a later sweep; an existing
+// pending/retry/unconfirmed row remains owned by the delivery layer's bounded
+// recovery policy, and a resolved approval is never marked.
+func (c *RunCoordinator) escrowApprovalNotification(ctx context.Context, approval *control.ApprovalRequest, threshold time.Duration) {
 	if c == nil || c.srv == nil || c.srv.Control == nil || approval == nil {
 		return
 	}
-	// Person is back at the CLI: the live TUI shows the inline prompt, so leave
-	// the push for a later sweep rather than duplicating to IM.
-	if c.srv.presenceTracker().IsAttached(approval.PersonID, "cli") {
+	identity := &control.IdentityContext{TenantID: approval.TenantID, PersonID: approval.PersonID}
+	// A live TUI suppresses only young requests. Request age is the escalation
+	// clock; keyboard activity is deliberately irrelevant. phone-first already
+	// chose the mobile surface, so a missing confirmed attempt must not acquire
+	// desk-first's T1 delay. Delivery idempotency still prevents this sweep from
+	// blindly replaying sent_unconfirmed/pending-session rows.
+	if c.srv.presenceTracker().IsAttached(approval.PersonID, "cli") &&
+		time.Since(approval.CreatedAt) < threshold && c.approvalSurface(ctx, identity) != "phone-first" {
 		return
 	}
-	identity := &control.IdentityContext{TenantID: approval.TenantID, PersonID: approval.PersonID}
 	taskTitle := ""
 	if approval.TaskID != "" {
 		if task, err := c.srv.Control.GetTask(ctx, identity.TenantID, approval.TaskID); err == nil && task != nil {
@@ -1115,11 +1133,11 @@ func (c *RunCoordinator) escrowApprovalNotification(ctx context.Context, approva
 }
 
 // escrowClarifyNotification is the clarify twin of escrowApprovalNotification.
-func (c *RunCoordinator) escrowClarifyNotification(ctx context.Context, clarify *control.ClarifyRequest) {
+func (c *RunCoordinator) escrowClarifyNotification(ctx context.Context, clarify *control.ClarifyRequest, threshold time.Duration) {
 	if c == nil || c.srv == nil || c.srv.Control == nil || clarify == nil {
 		return
 	}
-	if c.srv.presenceTracker().IsAttached(clarify.PersonID, "cli") {
+	if c.srv.presenceTracker().IsAttached(clarify.PersonID, "cli") && time.Since(clarify.CreatedAt) < threshold {
 		return
 	}
 	identity := &control.IdentityContext{TenantID: clarify.TenantID, PersonID: clarify.PersonID}
@@ -1174,9 +1192,10 @@ func (c *RunCoordinator) preferredIMAccount(ctx context.Context, identity *contr
 // the preferred IM account — never a broadcast to every bound account
 // (docs/identity-continuity.md: "One target, never a fan-out"). Shared by
 // approval notifications and CLI-originated async/detached results.
-// The bool return reports whether the message was enqueued (an account existed
-// and EnqueueAndTry accepted it), so escrow/initial callers can stamp
-// notified_at only on a real send.
+// The bool return reports confirmed delivery, not merely durable enqueue, so
+// escrow/initial callers never stamp notified_at for pending_session or
+// sent_unconfirmed. Those states recover only through the delivery layer's
+// bounded session-aware path.
 func (c *RunCoordinator) deliverToPreferredIM(ctx context.Context, identity *control.IdentityContext, base delivery.Message) bool {
 	account := c.preferredIMAccount(ctx, identity)
 	if account == nil {
@@ -1280,4 +1299,78 @@ func approvalDecisionExpiry(scope string) time.Time {
 	default:
 		return time.Time{}
 	}
+}
+
+// storedApprovalDecision converts one durable terminal row into the execution
+// layer's typed outcome. It is shared by normal polling and the deadline-race
+// path so an approval that wins concurrently with expiration is honored using
+// exactly the same scope, rule, and refusal semantics.
+func storedApprovalDecision(current *control.ApprovalRequest) (tools.ToolApprovalDecision, bool) {
+	if current == nil {
+		return tools.ToolApprovalDecision{}, false
+	}
+	switch current.Status {
+	case "approved":
+		return tools.ToolApprovalDecision{
+			Approved:   true,
+			ApprovalID: current.ID,
+			Scope:      current.DecisionScope,
+			Outcome:    tools.ApprovalOutcomeApproved,
+			GrantKey:   current.DecisionGrantKey,
+			ExpiresAt:  approvalDecisionExpiry(current.DecisionScope),
+		}, true
+	case "rejected":
+		return tools.ToolApprovalDecision{
+			Approved:   false,
+			ApprovalID: current.ID,
+			Outcome:    tools.ApprovalOutcomeDenied,
+			Reason:     fallbackApprovalReason(current.DecisionNote, "rejected"),
+		}, true
+	case "expired":
+		return tools.ToolApprovalDecision{
+			Approved:   false,
+			ApprovalID: current.ID,
+			// Nobody refused this action. Keeping timeout distinct from deny
+			// tells the model to park instead of retrying a variant.
+			Outcome: tools.ApprovalOutcomeTimedOut,
+			Reason:  "approval expired; do not request another approval or retry a variant; finish waiting_user",
+		}, true
+	default:
+		return tools.ToolApprovalDecision{ApprovalID: current.ID}, false
+	}
+}
+
+// claimStoredApprovalDecision closes the crash window between a durable human
+// response and the live middleware consuming it. Only the original live waiter
+// may claim; parked decisions are consumed by resume authorization instead.
+func claimStoredApprovalDecision(ctx context.Context, store *control.Store, tenantID, runID string, current *control.ApprovalRequest) (tools.ToolApprovalDecision, bool, error) {
+	decision, terminal := storedApprovalDecision(current)
+	if !terminal || current == nil || (current.Status != "approved" && current.Status != "rejected") {
+		return decision, terminal, nil
+	}
+	if current.WaiterState == "claimed" {
+		if current.ClaimedByRunID == "" || current.ClaimedByRunID == runID {
+			return decision, true, nil
+		}
+		return tools.ToolApprovalDecision{ApprovalID: current.ID}, true,
+			fmt.Errorf("approval decision %s was already claimed by run %s", current.ID, current.ClaimedByRunID)
+	}
+	if current.WaiterState != "live" {
+		return tools.ToolApprovalDecision{ApprovalID: current.ID}, true,
+			fmt.Errorf("approval decision %s has no live waiter (state %s)", current.ID, current.WaiterState)
+	}
+	claimed, transitioned, err := store.ClaimApprovalDecision(ctx, tenantID, current.ID, runID)
+	if err != nil {
+		return tools.ToolApprovalDecision{ApprovalID: current.ID}, true, err
+	}
+	if !transitioned {
+		if claimed != nil && claimed.WaiterState == "claimed" && (claimed.ClaimedByRunID == "" || claimed.ClaimedByRunID == runID) {
+			resolved, _ := storedApprovalDecision(claimed)
+			return resolved, true, nil
+		}
+		return tools.ToolApprovalDecision{ApprovalID: current.ID}, true,
+			fmt.Errorf("approval decision %s could not be claimed", current.ID)
+	}
+	resolved, _ := storedApprovalDecision(claimed)
+	return resolved, true, nil
 }

@@ -24,14 +24,15 @@ func TestApprovalPromptRendersDecisionContext(t *testing.T) {
 	view := prompt.View(90)
 
 	for _, want := range []string{
-		"terminal",
+		"Would you like to run the following command?",
+		"$ python3 scripts/report.py",
 		"change: 2 files +48/-12",
 		"/mnt/d/wwwroot/ai/selfmind",
 		"env envsnap_1_789c4317",
 		"reason: arbitrary code execution requires approval",
 		`remembering allows: "python3" commands`,
-		"Yes, run it once",
-		"No, and tell the agent what to do instead",
+		"Yes, proceed",
+		"No, continue without running it",
 	} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("panel is missing %q:\n%s", want, view)
@@ -43,6 +44,31 @@ func TestApprovalPromptRendersDecisionContext(t *testing.T) {
 		if strings.Contains(bare, unwanted) {
 			t.Fatalf("panel with no context must omit %q:\n%s", unwanted, bare)
 		}
+	}
+}
+
+func TestApprovalPromptShowsExactRuleInsteadOfBroaderClass(t *testing.T) {
+	view := NewApprovalPromptDetailed(ApprovalDetails{
+		Tool:       "terminal",
+		Target:     "git status --short",
+		GrantClass: `"git" commands`,
+		Options: []ApprovalOption{
+			{Label: "Yes, proceed", Key: "y", Decision: "approved"},
+			{
+				Label:     "Yes, and don't ask again for commands that start with `git status` in this run",
+				Key:       "r",
+				Decision:  "approved",
+				Scope:     "run",
+				RuleLabel: "commands that start with `git status`",
+			},
+			{Label: "No, continue without running it", Key: "n", Decision: "rejected"},
+		},
+	}).View(90)
+	if !strings.Contains(view, "commands that start with `git status`") {
+		t.Fatalf("exact rule is not visible:\n%s", view)
+	}
+	if strings.Contains(view, `remembering allows: "git" commands`) {
+		t.Fatalf("broader class must not compete with the exact rule:\n%s", view)
 	}
 }
 
@@ -59,12 +85,11 @@ func TestApprovalPromptWrapsLongCommand(t *testing.T) {
 	if !strings.Contains(view, "-count=1'") {
 		t.Fatalf("panel should reach the command tail instead of truncating it:\n%s", view)
 	}
-	// The box must stay intact: every rendered line has the same display width.
+	// The unboxed Codex-style list must still stay within its width budget.
 	lines := strings.Split(view, "\n")
-	width := runewidth.StringWidth(stripANSIForTest(lines[0]))
 	for i, line := range lines {
-		if got := runewidth.StringWidth(stripANSIForTest(line)); got != width {
-			t.Fatalf("line %d width = %d, want %d (box broken):\n%s", i, got, width, view)
+		if got := runewidth.StringWidth(stripANSIForTest(line)); got > approvalPanelMaxWidth {
+			t.Fatalf("line %d width = %d, want <= %d:\n%s", i, got, approvalPanelMaxWidth, view)
 		}
 	}
 }

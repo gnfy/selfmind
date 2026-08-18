@@ -23,6 +23,18 @@ func (m *uiModel) addMessage(role, content string) {
 	m.trimHistoryWindow()
 }
 
+func (m *uiModel) addNotice(kind noticeKind, content string) {
+	content = textutil.CleanUTF8(content)
+	m.messages = append(m.messages, ChatMessage{
+		Role:       "notice",
+		Content:    content,
+		Timestamp:  time.Now(),
+		NoticeKind: kind,
+	})
+	m.commit(&m.messages[len(m.messages)-1])
+	m.trimHistoryWindow()
+}
+
 func (m *uiModel) addErrorMessage(content string) {
 	content = textutil.CleanUTF8(content)
 	m.messages = append(m.messages, ChatMessage{
@@ -36,13 +48,13 @@ func (m *uiModel) addErrorMessage(content string) {
 
 const maxActiveToolOutputLines = 3
 
-func (m *uiModel) appendToolOutput(toolCallID, toolName, content string) bool {
+func (m *uiModel) appendToolOutput(toolCallID, toolName, runID, content string) bool {
 	content = textutil.CleanUTF8(content)
 	content = strings.TrimRight(content, "\n")
 	if content == "" {
 		return false
 	}
-	idx := m.findActiveToolMessageIndex(toolCallID, toolName)
+	idx := m.findActiveToolMessageIndex(toolCallID, toolName, runID)
 	if idx < 0 {
 		// Output can arrive after a run has finalized or after an SSE reconnect.
 		// Never create an anonymous tool row for an event that cannot be tied to
@@ -68,14 +80,17 @@ func (m *uiModel) appendToolOutput(toolCallID, toolName, content string) bool {
 	return true
 }
 
-func (m *uiModel) findActiveToolMessageIndex(toolCallID, toolName string) int {
+func (m *uiModel) findActiveToolMessageIndex(toolCallID, toolName, runID string) int {
 	if toolCallID != "" {
 		for i := len(m.messages) - 1; i >= 0; i-- {
 			msg := m.messages[i]
-			if msg.Role == "tool" && !msg.Committed && msg.IsRunning && msg.ToolCallID == toolCallID {
+			if msg.Role == "tool" && !msg.Committed && msg.IsRunning && msg.ToolCallID == toolCallID && sameToolRun(msg.RunID, runID) {
 				return i
 			}
 		}
+		return -1
+	}
+	if strings.TrimSpace(toolName) == "" {
 		return -1
 	}
 	match := -1
@@ -84,7 +99,7 @@ func (m *uiModel) findActiveToolMessageIndex(toolCallID, toolName string) int {
 		if msg.Role != "tool" || msg.Committed || !msg.IsRunning {
 			continue
 		}
-		if toolName == "" || msg.ToolName == "" || msg.ToolName == toolName {
+		if msg.ToolName == toolName && sameToolRun(msg.RunID, runID) {
 			if match >= 0 {
 				// A legacy event without a call id is safe only when it identifies one
 				// active call. Guessing between parallel calls corrupts both rows.
@@ -96,16 +111,22 @@ func (m *uiModel) findActiveToolMessageIndex(toolCallID, toolName string) int {
 	return match
 }
 
-func (m *uiModel) toolMessageExists(toolCallID string) bool {
+func (m *uiModel) toolMessageIndex(toolCallID, runID string) int {
 	if toolCallID == "" {
-		return false
+		return -1
 	}
 	for i := len(m.messages) - 1; i >= 0; i-- {
-		if m.messages[i].Role == "tool" && m.messages[i].ToolCallID == toolCallID {
-			return true
+		if m.messages[i].Role == "tool" && m.messages[i].ToolCallID == toolCallID && sameToolRun(m.messages[i].RunID, runID) {
+			return i
 		}
 	}
-	return false
+	return -1
+}
+
+func sameToolRun(stored, incoming string) bool {
+	stored = strings.TrimSpace(stored)
+	incoming = strings.TrimSpace(incoming)
+	return stored == "" || incoming == "" || stored == incoming
 }
 
 func (m *uiModel) discardOpenToolMessages() {
@@ -117,6 +138,39 @@ func (m *uiModel) discardOpenToolMessages() {
 		kept = append(kept, msg)
 	}
 	m.messages = kept
+}
+
+// finalizeOpenToolMessages is the single terminal cleanup path for mutable tool
+// cells. A run may end without every tool.completed event reaching this client
+// (cancellation, reconnect gap, producer defect). Preserve that fact in
+// immutable history instead of silently deleting the evidence or leaving a
+// permanent Running row in the active redraw region.
+func (m *uiModel) finalizeOpenToolMessages(reason string) int {
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		reason = "Completion was not observed before the run ended."
+	}
+	finalized := 0
+	for i := range m.messages {
+		msg := &m.messages[i]
+		if msg.Role != "tool" || msg.Committed {
+			continue
+		}
+		msg.IsRunning = false
+		msg.IsError = true
+		msg.RunningDetail = ""
+		if msg.Duration <= 0 && !msg.Timestamp.IsZero() {
+			msg.Duration = time.Since(msg.Timestamp).Seconds()
+		}
+		if existing := strings.TrimSpace(msg.Content); existing == "" {
+			msg.Content = reason
+		} else if !strings.Contains(existing, reason) {
+			msg.Content = existing + "\n" + reason
+		}
+		m.commit(msg)
+		finalized++
+	}
+	return finalized
 }
 
 func isTerminalRunStatus(status string) bool {

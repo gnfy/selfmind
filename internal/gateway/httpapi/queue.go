@@ -72,6 +72,10 @@ func (d *Server) DrainQueuedAtBoot(ctx context.Context) {
 	if d == nil || d.Control == nil {
 		return
 	}
+	// A decision can be committed immediately before the old daemon dies. Repair
+	// that decision->continuation edge before listing the queue so the recovered
+	// work participates in the same one-run-per-person boot drain.
+	d.recoverApprovalContinuations(ctx, false)
 	requeued, dropped, _ := d.Control.RequeueStartedQueued(ctx)
 	if dropped > 0 {
 		log.Warn("gateway: dropped queued tasks that exhausted their restart budget", "dropped", dropped, "requeued", requeued)

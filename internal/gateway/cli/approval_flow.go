@@ -17,10 +17,6 @@ import (
 // untouched — this file is TUI-only presentation over the same gateway
 // approval lifecycle (POST /v1/approvals/respond with the grant Scope).
 
-// approvalDenyHint is the composer hint shown after choosing "No": the user may
-// type follow-up guidance for the agent, or press Enter to just deny.
-const approvalDenyHint = "Tell the agent what to do instead — or press Enter to just deny."
-
 // approvalTypingIdleDelay holds an arriving approval panel back until the person
 // has stopped typing for this long. Without it a panel can appear between two
 // keystrokes and eat the next one as a decision — "y" is both a common letter
@@ -83,10 +79,10 @@ func (m *uiModel) releaseDelayedApprovals(now time.Time) tea.Cmd {
 }
 
 // approvalFlowActive reports whether an approval is awaiting a user decision
-// (panel up, deny follow-up pending, or more requests queued). The status bar
-// keys off this to show the waiting-approval state.
+// (panel up or more requests queued). The status bar keys off this to show the
+// waiting-approval state.
 func (m *uiModel) approvalFlowActive() bool {
-	return m.approvalPrompt != nil || m.approvalDenyFollowup || len(m.approvalQueue) > 0
+	return m.approvalPrompt != nil || len(m.approvalQueue) > 0
 }
 
 // armApprovalPrompt shows the interactive panel for one approval request and
@@ -99,6 +95,7 @@ func (m *uiModel) armApprovalPrompt(msg MsgApprovalRequest) {
 		Tool:          msg.Tool,
 		Target:        msg.Target,
 		Reason:        msg.Reason,
+		Parked:        strings.EqualFold(strings.TrimSpace(msg.WaiterState), "parked"),
 		Environment:   msg.Environment,
 		Cwd:           msg.Cwd,
 		ChangeSummary: msg.ChangeSummary,
@@ -120,7 +117,52 @@ func (m *uiModel) armApprovalPrompt(msg MsgApprovalRequest) {
 	if reason := strings.TrimSpace(msg.Reason); reason != "" {
 		record += " — " + reason
 	}
-	m.addMessage("notice", record)
+	m.addNotice(noticeWarning, record)
+}
+
+// hasApprovalRequest keeps digest hydration and event replay idempotent. A
+// request can be active, queued, or delayed behind typing; all three are one UI
+// ledger keyed by the daemon-issued approval id.
+func (m *uiModel) hasApprovalRequest(id string) bool {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return false
+	}
+	if m.pendingApprovalID == id {
+		return true
+	}
+	for _, request := range m.approvalQueue {
+		if request.ID == id {
+			return true
+		}
+	}
+	for _, request := range m.delayedApprovals {
+		if request.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
+func (m *uiModel) markApprovalParked(id string) {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return
+	}
+	if m.pendingApprovalID == id && m.approvalPrompt != nil {
+		m.approvalPrompt.SetParked(true)
+	}
+	for i := range m.approvalQueue {
+		if m.approvalQueue[i].ID == id {
+			m.approvalQueue[i].WaiterState = "parked"
+		}
+	}
+	for i := range m.delayedApprovals {
+		if m.delayedApprovals[i].ID == id {
+			m.delayedApprovals[i].WaiterState = "parked"
+		}
+	}
+	m.setStatusNotice(noticeWarning, "Approval is still waiting; the task is parked until you answer.")
 }
 
 // armNextQueuedApproval re-arms the panel with the next pending request (FIFO)
@@ -134,27 +176,53 @@ func (m *uiModel) armNextQueuedApproval() {
 	m.armApprovalPrompt(next)
 }
 
-// clearApprovalFlow drops all pending approval UI state. Called when the run
-// ends: the daemon expires unanswered approval rows when their waiter is gone,
-// so a panel left up would answer into the void.
+// clearApprovalFlow drops all pending approval UI state after explicit
+// resolution or local teardown.
 func (m *uiModel) clearApprovalFlow() {
 	m.approvalPrompt = nil
 	m.approvalQueue = nil
 	m.delayedApprovals = nil
-	m.approvalDenyFollowup = false
 	m.pendingApprovalID = ""
 	m.pendingApprovalTool = ""
 }
 
-// handleApprovalPromptKey routes a key press into the active panel. handled is
-// false only for ctrl+c, which keeps its normal semantics (clear input /
-// cancel / exit) even while an approval is pending; every other key is
-// consumed by the panel so a stray keystroke can never half-answer or leak
-// into the composer.
+// settleApprovalFlowAtRunEnd removes requests tied to dead live waiters while
+// preserving parked requests. A parked approval intentionally outlives its
+// original run; dropping that panel here would make the database answerable but
+// the current terminal unable to answer until it reconnects and fetches a new
+// digest.
+func (m *uiModel) settleApprovalFlowAtRunEnd() {
+	parkedQueue := make([]MsgApprovalRequest, 0, len(m.approvalQueue)+len(m.delayedApprovals))
+	for _, request := range m.approvalQueue {
+		if request.WaiterState == "parked" {
+			parkedQueue = append(parkedQueue, request)
+		}
+	}
+	for _, request := range m.delayedApprovals {
+		if request.WaiterState == "parked" {
+			parkedQueue = append(parkedQueue, request)
+		}
+	}
+	m.delayedApprovals = nil
+	if m.approvalPrompt != nil && m.approvalPrompt.IsParked() {
+		m.approvalQueue = parkedQueue
+		return
+	}
+	m.approvalPrompt = nil
+	m.pendingApprovalID = ""
+	m.pendingApprovalTool = ""
+	m.approvalQueue = parkedQueue
+	m.armNextQueuedApproval()
+}
+
+// handleApprovalPromptKey routes a key press into the active panel. Like Codex,
+// Esc and Ctrl+C are explicit cancellation decisions: neither may dismiss an
+// unanswered approval silently. Every other key is consumed by the panel so a
+// stray keystroke cannot leak into the composer.
 func (m *uiModel) handleApprovalPromptKey(msg tea.KeyMsg) (tea.Cmd, bool) {
 	key := msg.String()
-	if key == "ctrl+c" {
-		return nil, false
+	if key == "esc" || key == "ctrl+c" {
+		return m.cancelCurrentApproval(), true
 	}
 	choice := m.approvalPrompt.HandleKey(key)
 	if choice == nil {
@@ -163,65 +231,199 @@ func (m *uiModel) handleApprovalPromptKey(msg tea.KeyMsg) (tea.Cmd, bool) {
 	return m.resolveApprovalChoice(*choice), true
 }
 
-// resolveApprovalChoice applies the selected panel option. Approvals are sent
-// immediately with their grant scope; "No" defers the rejection into the deny
-// follow-up so the user can attach guidance in the same gesture.
+// resolveApprovalChoice applies the selected panel option immediately. The
+// daemon-issued label says exactly what is granted; the client does not invent
+// or broaden authority.
 func (m *uiModel) resolveApprovalChoice(opt components.ApprovalOption) tea.Cmd {
-	m.approvalPrompt = nil
 	if opt.Decision == "rejected" {
-		m.approvalDenyFollowup = true
-		m.editor.Reset()
-		return nil
+		return m.rejectCurrentApproval(false)
 	}
 	tool := m.pendingApprovalTool
-	m.sendApprovalDecision("approved", opt.Scope, opt.GrantKey)
-	m.addMessage("notice", "✓ Approved "+tool+approvalDecisionNote(opt))
-	m.statusMsg = "Approved " + tool + " — resuming."
+	if err := m.sendApprovalDecision("approved", opt.Scope, opt.GrantKey); err != nil {
+		m.addErrorMessage(fmt.Sprintf("Could not send approval: %v", err))
+		id := m.setStatusNotice(noticeWarning, "Approval was not accepted; try again.")
+		return clearStatusNoticeAfter(id, 3*time.Second)
+	}
+	m.approvalPrompt = nil
+	m.addNotice(noticeSuccess, "✓ Approved "+tool+approvalDecisionNote(opt))
+	noticeID := m.setStatusNotice(noticeSuccess, "Approved "+tool+" — resuming.")
 	m.resumeAfterApproval()
 	m.armNextQueuedApproval()
-	return tea.Batch(m.spinner.Tick, workingTick())
+	return tea.Batch(m.spinner.Tick, workingTick(), clearStatusNoticeAfter(noticeID, 1500*time.Millisecond))
 }
 
-// finishApprovalDeny resolves the deny follow-up on Enter: always send the
-// rejection first (the agent's do-not-retry contract), then forward any typed
-// text as mid-turn guidance so the agent knows what to do instead.
-func (m *uiModel) finishApprovalDeny(input string) tea.Cmd {
-	m.approvalDenyFollowup = false
+func (m *uiModel) cancelCurrentApproval() tea.Cmd {
+	return m.rejectCurrentApproval(true)
+}
+
+// rejectCurrentApproval sends a durable rejection before changing local UI
+// state. Delivery failure therefore leaves the same panel and decision intact
+// for retry. A cancelled panel and an explicit "No" share the daemon's reject
+// contract, but keep distinct transcript wording.
+func (m *uiModel) rejectCurrentApproval(cancelled bool) tea.Cmd {
 	tool := m.pendingApprovalTool
-	guidance := strings.TrimSpace(input)
-	m.editor.Reset()
-	m.sendApprovalDecision("rejected", "", "")
-	m.addMessage("notice", "✗ Denied "+tool)
-	var cmds []tea.Cmd
-	if guidance != "" {
-		cmds = append(cmds, m.injectMidRunGuidance(guidance))
-	} else {
-		m.statusMsg = "Denied."
+	if err := m.sendApprovalDecision("rejected", "", ""); err != nil {
+		m.addErrorMessage(fmt.Sprintf("Could not send rejection: %v", err))
+		id := m.setStatusNotice(noticeWarning, "Rejection was not accepted; try again.")
+		return clearStatusNoticeAfter(id, 3*time.Second)
 	}
+	m.approvalPrompt = nil
+	record, status := "✗ Denied "+tool, "Denied."
+	if cancelled {
+		record = "✗ Cancelled approval for " + tool
+		status = "Approval cancelled."
+	}
+	m.addNotice(noticeError, record)
+	noticeID := m.setStatusNotice(noticeError, status)
 	m.resumeAfterApproval()
 	m.armNextQueuedApproval()
-	cmds = append(cmds, m.spinner.Tick, workingTick())
-	return tea.Batch(cmds...)
+	return tea.Batch(m.spinner.Tick, workingTick(), clearStatusNoticeAfter(noticeID, 1500*time.Millisecond))
 }
 
 // sendApprovalDecision answers the pending approval through the SAME path the
 // TUI has always used (the installed responder → POST /v1/approvals/respond),
 // now carrying the grant scope. Failures surface honestly in the transcript —
 // a decision must never look delivered when it was not.
-func (m *uiModel) sendApprovalDecision(decision, scope, grantKey string) {
+func (m *uiModel) sendApprovalDecision(decision, scope, grantKey string) error {
 	id := m.pendingApprovalID
-	m.pendingApprovalID = ""
-	m.pendingApprovalTool = ""
 	if id == "" {
-		return
+		return fmt.Errorf("no pending approval id is available")
 	}
 	if m.approvalResponder == nil {
-		m.addErrorMessage("Could not send approval: no approval responder is available in this session.")
-		return
+		return fmt.Errorf("no approval responder is available in this session")
 	}
 	if err := m.approvalResponder(id, decision, scope, grantKey); err != nil {
-		m.addErrorMessage(fmt.Sprintf("Could not send approval: %v", err))
+		return err
 	}
+	m.rememberLocalApprovalResolution(id, decision)
+	m.pendingApprovalID = ""
+	m.pendingApprovalTool = ""
+	return nil
+}
+
+const localApprovalResolutionLimit = 64
+
+func (m *uiModel) rememberLocalApprovalResolution(id, status string) {
+	id = strings.TrimSpace(id)
+	status = strings.TrimSpace(status)
+	if id == "" || status == "" {
+		return
+	}
+	if m.localApprovalResolutions == nil {
+		m.localApprovalResolutions = make(map[string]string)
+	}
+	if _, exists := m.localApprovalResolutions[id]; !exists {
+		m.localApprovalOrder = append(m.localApprovalOrder, id)
+	}
+	m.localApprovalResolutions[id] = status
+	for len(m.localApprovalOrder) > localApprovalResolutionLimit {
+		oldest := m.localApprovalOrder[0]
+		m.localApprovalOrder = m.localApprovalOrder[1:]
+		delete(m.localApprovalResolutions, oldest)
+	}
+}
+
+func (m *uiModel) consumeLocalApprovalResolution(id, status string) bool {
+	id = strings.TrimSpace(id)
+	want, ok := m.localApprovalResolutions[id]
+	if !ok || want != strings.TrimSpace(status) {
+		return false
+	}
+	delete(m.localApprovalResolutions, id)
+	for i, candidate := range m.localApprovalOrder {
+		if candidate == id {
+			m.localApprovalOrder = append(m.localApprovalOrder[:i], m.localApprovalOrder[i+1:]...)
+			break
+		}
+	}
+	return true
+}
+
+// resolveApprovalElsewhere reconciles a person-stream resolution against the
+// active panel and both queues. It returns a command only for a genuinely
+// external answer; the stream echo of this client's own answer is silent.
+func (m *uiModel) resolveApprovalElsewhere(msg MsgApprovalResolved) tea.Cmd {
+	id := strings.TrimSpace(msg.ID)
+	status := strings.TrimSpace(msg.Status)
+	if id == "" || (status != "approved" && status != "rejected" && status != "expired" && status != "archived") {
+		return nil
+	}
+	localEcho := status != "expired" && status != "archived" && m.consumeLocalApprovalResolution(id, status)
+	tool := ""
+	active := m.pendingApprovalID == id
+	known := active
+	if active {
+		tool = m.pendingApprovalTool
+		m.approvalPrompt = nil
+		m.pendingApprovalID = ""
+		m.pendingApprovalTool = ""
+	}
+	var removed bool
+	m.approvalQueue, tool, removed = removeApprovalRequest(m.approvalQueue, id, tool)
+	known = known || removed
+	m.delayedApprovals, tool, removed = removeApprovalRequest(m.delayedApprovals, id, tool)
+	known = known || removed
+	if localEcho {
+		return nil
+	}
+	if !known {
+		return nil
+	}
+	label := strings.TrimSpace(tool)
+	if label == "" {
+		label = "request"
+	}
+	kind := noticeSuccess
+	record := "✓ Approved " + label + " elsewhere"
+	statusText := "Approval resolved elsewhere."
+	switch status {
+	case "rejected":
+		kind = noticeError
+		record = "✗ Denied " + label + " elsewhere"
+		statusText = "Approval was denied elsewhere."
+	case "expired":
+		kind = noticeWarning
+		record = "⚠ Approval expired: " + label
+		statusText = "Approval is no longer answerable."
+	case "archived":
+		kind = noticeWarning
+		record = "⚠ Approval archived after 7 days: " + label
+		statusText = "Approval was archived; resume the task to re-evaluate it."
+	}
+	m.addNotice(kind, record)
+	noticeID := m.setStatusNotice(kind, statusText)
+	ttl := 1500 * time.Millisecond
+	if status == "expired" || status == "archived" {
+		ttl = 3 * time.Second
+	}
+	cmds := []tea.Cmd{clearStatusNoticeAfter(noticeID, ttl)}
+	if active {
+		m.armNextQueuedApproval()
+		if status != "expired" && status != "archived" {
+			m.resumeAfterApproval()
+			cmds = append(cmds, m.spinner.Tick, workingTick())
+		}
+	}
+	return tea.Batch(cmds...)
+}
+
+func removeApprovalRequest(queue []MsgApprovalRequest, id, tool string) ([]MsgApprovalRequest, string, bool) {
+	if len(queue) == 0 {
+		return queue, tool, false
+	}
+	out := queue[:0]
+	removed := false
+	for _, request := range queue {
+		if request.ID == id {
+			removed = true
+			if strings.TrimSpace(tool) == "" {
+				tool = request.Tool
+			}
+			continue
+		}
+		out = append(out, request)
+	}
+	return out, tool, removed
 }
 
 // resumeAfterApproval puts the UI back into the working state: the blocked run
@@ -290,26 +492,11 @@ func approvalOptionsFromPayload(payload map[string]interface{}) []components.App
 			Decision:  decision,
 			Scope:     text("scope"),
 			GrantKey:  text("grant_key"),
-			RuleLabel: ruleLabelFromOptionLabel(label),
+			RuleLabel: text("rule_label"),
 		})
 	}
 	if len(options) == 0 {
 		return nil
 	}
 	return options
-}
-
-// ruleLabelFromOptionLabel recovers the authorization wording from a server
-// label so the transcript states what was allowed for this run.
-func ruleLabelFromOptionLabel(label string) string {
-	const runPrefix = "Yes, allow "
-	const runSuffix = " for this run"
-	if strings.HasPrefix(label, runPrefix) && strings.HasSuffix(label, runSuffix) {
-		return strings.TrimSuffix(strings.TrimPrefix(label, runPrefix), runSuffix)
-	}
-	const marker = "don't ask again for "
-	if idx := strings.Index(label, marker); idx >= 0 {
-		return strings.TrimSpace(label[idx+len(marker):])
-	}
-	return ""
 }

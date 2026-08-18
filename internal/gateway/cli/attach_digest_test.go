@@ -23,7 +23,14 @@ func TestStartupDigestRendersOnceOnFirstSizedFrame(t *testing.T) {
 		FinishedTasks:  []api.DigestTask{{ID: "t1", Title: "Ship the report", Status: "completed"}, {ID: "t2", Title: "Fix the build", Status: "done"}},
 		DisruptedTasks: []api.DigestTask{{ID: "t3", Title: "Refactor parser", Status: "interrupted"}},
 		PendingApprovals: []api.DigestApproval{
-			{ID: "apr_1", Line: "[terminal] command=rm -rf build — destructive command"},
+			{
+				ID: "apr_1", Line: "[terminal] command=rm -rf build — destructive command",
+				Tool: "terminal", Target: "rm -rf build", Reason: "destructive command", WaiterState: "parked",
+				Decisions: []api.ApprovalDecision{
+					{ID: "once", Label: "Yes, proceed", Decision: "approved", Key: "y"},
+					{ID: "deny", Label: "No", Decision: "rejected", Key: "n"},
+				},
+			},
 		},
 		UnconfirmedPushes: []api.DigestPush{{Platform: "weixin", Status: "sent_unconfirmed", Preview: "build finished"}},
 	})
@@ -33,15 +40,15 @@ func TestStartupDigestRendersOnceOnFirstSizedFrame(t *testing.T) {
 	if cmd != nil {
 		t.Fatal("no active run: digest must not start a watcher")
 	}
-	if len(model.messages) != 1 || model.messages[0].Role != "digest" {
-		t.Fatalf("digest should render one digest message: %+v", model.messages)
+	if len(model.messages) != 2 || model.messages[0].Role != "digest" {
+		t.Fatalf("digest should render a digest plus restored approval prompt: %+v", model.messages)
 	}
 	text := model.messages[0].Content
 	for _, want := range []string{
 		"While you were away:",
 		"✔ 2 tasks finished: Ship the report, Fix the build",
 		"✖ 1 task stopped early: Refactor parser (use /resume to continue)",
-		"⚠ 1 approval waiting: [terminal] command=rm -rf build — destructive command — reply y or n (see /approvals)",
+		"⚠ 1 approval waiting: [terminal] command=rm -rf build — destructive command — interactive choices restored below",
 		"⚠ 1 push may not have reached weixin (see /status)",
 	} {
 		if !strings.Contains(text, want) {
@@ -51,9 +58,12 @@ func TestStartupDigestRendersOnceOnFirstSizedFrame(t *testing.T) {
 	if model.thinking {
 		t.Fatal("digest without an active run must leave the composer idle")
 	}
+	if model.approvalPrompt == nil || model.pendingApprovalID != "apr_1" || !strings.Contains(model.approvalPrompt.View(100), "Yes, proceed") {
+		t.Fatalf("approval panel was not restored from digest: pending=%q prompt=%+v", model.pendingApprovalID, model.approvalPrompt)
+	}
 
 	// Rendered once: a second sized frame must not repeat it.
-	if cmd := model.maybeShowStartupDigest(120); cmd != nil || len(model.messages) != 1 {
+	if cmd := model.maybeShowStartupDigest(120); cmd != nil || len(model.messages) != 2 {
 		t.Fatalf("digest must render exactly once: %d messages", len(model.messages))
 	}
 }

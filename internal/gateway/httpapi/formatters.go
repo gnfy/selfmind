@@ -103,6 +103,7 @@ func formatWorkspaceSwitchForIM(ws *control.Workspace) string {
 // non-tool approvals.
 type approvalPayload struct {
 	Tool   string                 `json:"tool"`
+	Target string                 `json:"target,omitempty"`
 	Reason string                 `json:"reason"`
 	Args   map[string]interface{} `json:"args"`
 	// GrantClass describes what a "remember this" decision authorizes. Empty
@@ -181,11 +182,38 @@ func formatApprovals(approvals []control.ApprovalRequest, taskTitles map[string]
 	var sb strings.Builder
 	sb.WriteString("Pending approvals:\n")
 	for i, approval := range approvals {
-		fmt.Fprintf(&sb, "%d. %s\n", i+1, approvalSummaryLine(approval, taskTitles[approval.TaskID]))
+		state := ""
+		if approval.WaiterState == "parked" {
+			state = " [parked " + approvalAge(approval, time.Now()) + "; answering resumes the task]"
+		} else {
+			state = " [pending " + approvalAge(approval, time.Now()) + "]"
+		}
+		fmt.Fprintf(&sb, "%d. %s%s\n", i+1, approvalSummaryLine(approval, taskTitles[approval.TaskID]), state)
 		fmt.Fprintf(&sb, "   %s\n", approval.ID)
 	}
 	sb.WriteString("\nUse /approve <number> or /reject <number>.")
 	return strings.TrimSpace(sb.String())
+}
+
+func approvalAge(approval control.ApprovalRequest, now time.Time) string {
+	started := approval.CreatedAt
+	if approval.WaiterState == "parked" && approval.ParkedAt != nil {
+		started = *approval.ParkedAt
+	}
+	age := now.Sub(started)
+	if age < 0 {
+		age = 0
+	}
+	if age < time.Minute {
+		return "<1m"
+	}
+	if age < time.Hour {
+		return fmt.Sprintf("%dm", int(age/time.Minute))
+	}
+	if age < 24*time.Hour {
+		return fmt.Sprintf("%dh", int(age/time.Hour))
+	}
+	return fmt.Sprintf("%dd", int(age/(24*time.Hour)))
 }
 
 func formatEvents(events []control.Event) string {

@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"selfmind/internal/control"
 	"selfmind/internal/gateway/api"
 	"selfmind/internal/kernel"
 )
@@ -59,7 +60,7 @@ func TestRunOriginClassifiesDaemonStartedRuns(t *testing.T) {
 // An async run executes under a fresh context.Background(), so the origin must
 // ride the request to reach run.started. This is the contract the TUI reads to
 // keep background work out of the transcript.
-func TestBackgroundOriginReachesRunStartedEvent(t *testing.T) {
+func TestApprovalOriginAndSourceReachRunStartedEvent(t *testing.T) {
 	provider := newSlowLLMProvider("Three builds succeeded overnight.")
 	daemon, store, _ := newDetachedRunServer(t, provider)
 	ctx := context.Background()
@@ -68,18 +69,24 @@ func TestBackgroundOriginReachesRunStartedEvent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("identity: %v", err)
 	}
+	task, err := store.CreateTask(ctx, control.TaskCreate{TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "parked approval task", Channel: "cli"})
+	if err != nil {
+		t.Fatalf("task: %v", err)
+	}
 	provider.releaseNow()
 
 	resp, status := daemon.ProcessMessage(ctx, api.MessageRequest{
-		TenantID:       identity.TenantID,
-		Platform:       "cli",
-		PlatformUserID: "local",
-		Channel:        "cli",
-		Content:        "summarize yesterday's builds",
-		Origin:         runOriginCron,
+		TenantID:         identity.TenantID,
+		Platform:         "cli",
+		PlatformUserID:   "local",
+		Channel:          "cli",
+		Content:          "resume the parked approval",
+		TaskID:           task.ID,
+		Origin:           runOriginApproval,
+		SourceApprovalID: "apr_source",
 	})
 	if status != 200 || resp.Task == nil {
-		t.Fatalf("cron run = status %d resp %+v", status, resp)
+		t.Fatalf("approval continuation = status %d resp %+v", status, resp)
 	}
 
 	events, err := store.ListTaskEvents(ctx, resp.Task.ID, 50)
@@ -87,16 +94,18 @@ func TestBackgroundOriginReachesRunStartedEvent(t *testing.T) {
 		t.Fatalf("ListTaskEvents: %v", err)
 	}
 	var started *struct {
-		Origin  string `json:"origin"`
-		WatchID string `json:"watch_id"`
+		Origin           string `json:"origin"`
+		WatchID          string `json:"watch_id"`
+		SourceApprovalID string `json:"source_approval_id"`
 	}
 	for _, event := range events {
 		if event.Type != "run.started" {
 			continue
 		}
 		var payload struct {
-			Origin  string `json:"origin"`
-			WatchID string `json:"watch_id"`
+			Origin           string `json:"origin"`
+			WatchID          string `json:"watch_id"`
+			SourceApprovalID string `json:"source_approval_id"`
 		}
 		if err := json.Unmarshal(event.Payload, &payload); err != nil {
 			t.Fatalf("run.started payload: %v", err)
@@ -107,10 +116,10 @@ func TestBackgroundOriginReachesRunStartedEvent(t *testing.T) {
 	if started == nil {
 		t.Fatal("no run.started event recorded")
 	}
-	if started.Origin != runOriginCron {
-		t.Fatalf("run.started origin = %q, want %q", started.Origin, runOriginCron)
+	if started.Origin != runOriginApproval || started.SourceApprovalID != "apr_source" {
+		t.Fatalf("run.started provenance = %+v", started)
 	}
 	if strings.TrimSpace(started.WatchID) != "" {
-		t.Fatalf("cron run must not claim a watch id: %q", started.WatchID)
+		t.Fatalf("approval continuation must not claim a watch id: %q", started.WatchID)
 	}
 }

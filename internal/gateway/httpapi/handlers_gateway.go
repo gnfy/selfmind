@@ -78,6 +78,13 @@ func (d *Server) GatewayStatus() api.GatewayStatusResponse {
 			}
 		}
 	}
+	storeSchema := api.StoreSchemaHealth{}
+	if d.Control != nil {
+		status := d.Control.SchemaStatus()
+		storeSchema.Version = status.Version
+		storeSchema.CurrentVersion = status.CurrentVersion
+		storeSchema.BackupCreated = status.MigrationBackup != ""
+	}
 	return api.GatewayStatusResponse{
 		Runtime:        runtime,
 		State:          state,
@@ -86,6 +93,7 @@ func (d *Server) GatewayStatus() api.GatewayStatusResponse {
 		ActiveRuns:     active,
 		ActiveRunCount: len(active),
 		ToolSchemas:    toolSchemas,
+		StoreSchema:    storeSchema,
 	}
 }
 

@@ -43,6 +43,13 @@ func newRecoveryFixture(t *testing.T) (*Store, *IdentityContext, *Task, *Run) {
 func TestMarkInterruptedRunsBootSweep(t *testing.T) {
 	ctx := context.Background()
 	store, identity, task, run := newRecoveryFixture(t)
+	approval, err := store.CreateApprovalRequest(ctx, ApprovalRequest{
+		TenantID: identity.TenantID, PersonID: identity.PersonID, TaskID: task.ID, RunID: run.ID,
+		ActionType: "tool_call", RequestedChannel: "cli", Payload: json.RawMessage(`{"tool":"terminal"}`),
+	})
+	if err != nil {
+		t.Fatalf("CreateApprovalRequest: %v", err)
+	}
 
 	count, err := store.MarkInterruptedRuns(ctx, 0)
 	if err != nil {
@@ -70,17 +77,31 @@ func TestMarkInterruptedRunsBootSweep(t *testing.T) {
 		t.Fatalf("ListTaskEvents: %v", err)
 	}
 	var recovered map[string]interface{}
+	foundApprovalParked := false
 	for _, event := range events {
 		if event.Type == "run.interrupted" && event.RunID == run.ID {
 			if err := json.Unmarshal(event.Payload, &recovered); err != nil {
 				t.Fatalf("decode recovery event: %v", err)
 			}
-			break
+		}
+		if event.Type == "approval.parked" {
+			var payload map[string]interface{}
+			if err := json.Unmarshal(event.Payload, &payload); err != nil {
+				t.Fatalf("decode approval parked event: %v", err)
+			}
+			foundApprovalParked = payload["approval_id"] == approval.ID
 		}
 	}
 	outcome, _ := recovered["outcome"].(map[string]interface{})
 	if outcome["completion_reason"] != "daemon_recovery" || outcome["resumable"] != true {
 		t.Fatalf("recovery outcome = %#v, want daemon_recovery/resumable", outcome)
+	}
+	if !foundApprovalParked {
+		t.Fatalf("recovery did not append approval.parked for %s: %+v", approval.ID, events)
+	}
+	storedApproval, err := store.GetApprovalRequest(ctx, identity.TenantID, approval.ID)
+	if err != nil || storedApproval == nil || storedApproval.Status != "pending" || storedApproval.WaiterState != "parked" {
+		t.Fatalf("approval after recovery = %+v, err=%v; want pending/parked", storedApproval, err)
 	}
 }
 

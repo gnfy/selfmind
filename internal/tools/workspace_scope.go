@@ -29,8 +29,11 @@ type ExecutionScope struct {
 	// EnvironmentSnapshotID and EnvironmentGeneration mirror the lease's
 	// environment binding so a tool call can resolve its child environment
 	// without a control-plane lookup.
-	EnvironmentSnapshotID string
-	EnvironmentGeneration int64
+	EnvironmentSnapshotID  string
+	EnvironmentGeneration  int64
+	EnvironmentFingerprint string
+	PrincipalFingerprint   string
+	CredentialSourceHash   string
 	// SandboxPolicy carries the execution policy WITH THE REQUEST. The policy
 	// used to exist only as process-wide state installed at startup, which meant
 	// one daemon could only ever have one policy — wrong the moment execution
@@ -65,6 +68,10 @@ type ExecutionScope struct {
 	// network:shared. Grants are scoped to this person and workspace and never
 	// contain command text or credential bytes.
 	CapabilityStore ExecutionCapabilityStore
+	// ResumeAuthorizations atomically consumes a one-shot authorization created
+	// when an answerable parked approval is approved. It is checked only after
+	// the hard floor and current explicit-deny policy.
+	ResumeAuthorizations ApprovalResumeAuthorizationStore
 	// Judge backs the smart-mode LLM triage step (H2): when set, a dangerous
 	// (non-hardline) op that survived the class-grant check is triaged by a
 	// cheap model before the human ask (APPROVE auto-runs + grants the class for

@@ -79,9 +79,11 @@ func (d *Server) startStuckRunSweeper(ctx context.Context, interval, threshold t
 	go func() {
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
-		// The boot sweep runs before Delivery is available. Once the recovery
-		// worker starts, surface those durable interruption events immediately.
+		// The earlier MarkInterruptedRuns boot sweep runs before Delivery is
+		// available. This worker itself starts only after Delivery is installed,
+		// so durable interruption and retention events can be surfaced now.
 		d.sweepRecoveryNotifications()
+		d.sweepApprovalRetention()
 		for {
 			select {
 			case <-done:
@@ -90,11 +92,13 @@ func (d *Server) startStuckRunSweeper(ctx context.Context, interval, threshold t
 				return
 			case <-ticker.C:
 				d.sweepStuckRuns(threshold)
+				d.recoverApprovalContinuations(ctx, true)
 				d.sweepRecoveryNotifications()
 				// Same 60s cadence re-pushes pending approvals/clarifies that were
 				// left uninformed once the CLI detaches (Fix 2). No-op when the
 				// escrow threshold is unset (PendingNotifyAfter <= 0).
 				d.sweepPendingNotifications(d.PendingNotifyAfter)
+				d.sweepApprovalRetention()
 				// Run scratch was only swept at boot, so a daemon that stays up
 				// for weeks never reclaimed it: the per-run soft quota cannot
 				// help, because a hundred finished runs holding a gigabyte each
@@ -104,6 +108,88 @@ func (d *Server) startStuckRunSweeper(ctx context.Context, interval, threshold t
 		}
 	}()
 	return func() { once.Do(func() { close(done) }) }
+}
+
+// recoverApprovalContinuations closes the only crash window left after a
+// human decision is durable: the daemon may die after recording approved or
+// rejected but before the blocked run consumes it. The original run is gone,
+// so recovery creates one task-pinned continuation and lets the new run
+// re-evaluate the step. Approval authority itself is not carried in prose; an
+// unclaimed approval receives a one-shot, exact-action token in control.db
+// which the execution middleware consumes atomically.
+func (d *Server) recoverApprovalContinuations(ctx context.Context, drain bool) int {
+	if d == nil || d.Control == nil {
+		return 0
+	}
+	approvals, err := d.Control.ListRecoverableApprovalDecisions(ctx, 100)
+	if err != nil {
+		log.Warn("gateway: recoverable approval decision scan failed", "error", err)
+		return 0
+	}
+	recovered := 0
+	people := map[string]*control.IdentityContext{}
+	for i := range approvals {
+		approval := approvals[i]
+		task, taskErr := d.Control.GetTask(ctx, approval.TenantID, approval.TaskID)
+		if taskErr != nil || task == nil {
+			log.Warn("gateway: recoverable approval has no task", "approval_id", approval.ID, "task_id", approval.TaskID, "error", taskErr)
+			continue
+		}
+		channel := fallback(approval.ApprovedChannel, approval.RequestedChannel)
+		route := d.routeIdentityForPerson(ctx, approval.TenantID, approval.PersonID, channel, "", nil)
+		queued, created, enqueueErr := d.Control.EnqueueRecoveredApprovalContinuation(ctx, approval.ID, control.QueuedTask{
+			TenantID:       approval.TenantID,
+			PersonID:       approval.PersonID,
+			Platform:       route.Platform,
+			PlatformUserID: route.PlatformUserID,
+			Channel:        fallback(channel, route.Platform),
+			Content:        parkedApprovalResumeContent(approval, approval.Status, approval.DecisionNote),
+			WorkspaceID:    task.WorkspaceID,
+			TaskID:         task.ID,
+			IdempotencyKey: "approval-resume:" + approval.ID,
+			Class:          control.QueueClassForeground,
+		})
+		if enqueueErr != nil {
+			log.Warn("gateway: approval continuation recovery failed", "approval_id", approval.ID, "error", enqueueErr)
+			continue
+		}
+		if !created || queued == nil {
+			continue
+		}
+		recovered++
+		key := approval.TenantID + "|" + approval.PersonID
+		people[key] = route
+	}
+	if recovered > 0 {
+		log.Warn("gateway: recovered approval continuations", "count", recovered)
+	}
+	if drain {
+		for _, identity := range people {
+			d.coordinator().drainQueue(identity)
+		}
+	}
+	return recovered
+}
+
+func (d *Server) sweepApprovalRetention() {
+	if d == nil || d.Control == nil {
+		return
+	}
+	ctx := context.Background()
+	archived, err := d.Control.ArchiveStaleParkedApprovals(ctx, control.ParkedApprovalRetention)
+	if err != nil {
+		log.Warn("gateway: parked approval retention sweep failed", "error", err)
+		return
+	}
+	for i := range archived {
+		approval := &archived[i]
+		if _, eventErr := d.Control.AppendApprovalResolutionEvent(ctx, approval, approval.RequestedChannel, "parked approval retention elapsed"); eventErr != nil {
+			log.Warn("gateway: append approval.archived event failed", "approval_id", approval.ID, "error", eventErr)
+		}
+		d.notifyApprovalResolutionElsewhere(ctx, &control.IdentityContext{
+			TenantID: approval.TenantID, PersonID: approval.PersonID, Platform: "system",
+		}, approval, "")
+	}
 }
 
 // sweepRecoveryNotifications turns durable daemon-recovery events into one
@@ -156,10 +242,10 @@ func (d *Server) sweepStuckRuns(threshold time.Duration) {
 	}
 }
 
-// sweepPendingNotifications is the escrow pass (Fix 2): it finds pending
-// approvals/clarifies older than the threshold that were never notified and, for
-// those whose person has since detached from the CLI, re-pushes them to the
-// preferred IM. It is bounded (each list caps at 100) and idempotent — a push
+// sweepPendingNotifications is the escrow pass: it finds every un-notified
+// pending approval/clarify and escalates it when either the CLI has detached or
+// the request has remained unanswered past threshold. It is bounded (each list
+// caps at 100) and idempotent — a push
 // stamps notified_at only on success, so the next sweep is a no-op for already
 // notified rows and a retry for failed ones. A zero threshold disables escrow.
 func (d *Server) sweepPendingNotifications(threshold time.Duration) {
@@ -167,20 +253,22 @@ func (d *Server) sweepPendingNotifications(threshold time.Duration) {
 		return
 	}
 	ctx := context.Background()
-	cutoff := time.Now().Add(-threshold)
+	// Presence decides whether a fresh row may go now, so the store must return
+	// fresh rows too. Age gating belongs below, beside the presence check.
+	cutoff := time.Now().Add(time.Second)
 	coord := d.coordinator()
 	if approvals, err := d.Control.ListPendingApprovalsForEscrow(ctx, cutoff); err != nil {
 		log.Warn("gateway: escrow approval scan failed", "error", err)
 	} else {
 		for i := range approvals {
-			coord.escrowApprovalNotification(ctx, &approvals[i])
+			coord.escrowApprovalNotification(ctx, &approvals[i], threshold)
 		}
 	}
 	if clarifies, err := d.Control.ListPendingClarifiesForEscrow(ctx, cutoff); err != nil {
 		log.Warn("gateway: escrow clarify scan failed", "error", err)
 	} else {
 		for i := range clarifies {
-			coord.escrowClarifyNotification(ctx, &clarifies[i])
+			coord.escrowClarifyNotification(ctx, &clarifies[i], threshold)
 		}
 	}
 }

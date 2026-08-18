@@ -76,7 +76,7 @@ func (m *uiModel) handleSkillSlash(slashName, instruction string) tea.Cmd {
 	}
 	// The typed command was already echoed by handleCommand; only the loaded
 	// skill notice is added here.
-	m.statusMsg = fmt.Sprintf("Loaded skill context: %s", displayName)
+	m.setStatusNotice(noticeInfo, fmt.Sprintf("Loaded skill context: %s", displayName))
 	m.thinking = true
 	m.runStatus = "working"
 	m.thinkingStart = time.Now()

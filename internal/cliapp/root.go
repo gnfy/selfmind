@@ -213,7 +213,7 @@ var documentedCLIUsages = []string{
 	"selfmind docs [check|index]",
 	"selfmind selfcheck [--fast | --profile local-full|local-fast|ci] [--skip-go] [--skip-eval] [--eval-dir DIR]",
 	"selfmind eval [list|run|report|repair|scorecard|capture|clean]",
-	"selfmind maintenance [replay|migrate-memory|migrate-skills|migrate-task-references|memory-audit|memory-dedup|task-audit] ...",
+	"selfmind maintenance [replay|migrate-memory|migrate-skills|migrate-task-references|memory-audit|memory-dedup|task-audit|restore-control] ...",
 	"selfmind gateway [run|start|status|stop|restart|service] ...",
 	"selfmind weixin [login|status] ...",
 }

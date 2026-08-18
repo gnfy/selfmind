@@ -180,7 +180,7 @@ func TestCatchUpDropsApprovalResolvedWhileSessionWasStale(t *testing.T) {
 	}); err == nil {
 		t.Fatal("initial session failure must surface")
 	}
-	if err := store.ExpireApprovalRequest(ctx, "default", "apr_stale", "run ended"); err != nil {
+	if _, _, err := store.ExpireApprovalRequest(ctx, "default", "apr_stale", "run ended"); err != nil {
 		t.Fatal(err)
 	}
 	sender.err = nil

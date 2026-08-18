@@ -161,6 +161,39 @@ func TestQueueSurvivesRestartBootDrain(t *testing.T) {
 	}, "boot-drained tasks never ran")
 }
 
+func TestRecoverApprovalContinuationsRepairsDecisionCrashWindow(t *testing.T) {
+	daemon, store, identity, task, _ := newApprovalTestServer(t)
+	ctx := context.Background()
+	run, err := store.StartRun(ctx, task, "cli", "approval crash window")
+	if err != nil {
+		t.Fatal(err)
+	}
+	approval, err := store.CreateApprovalRequest(ctx, control.ApprovalRequest{
+		TenantID: identity.TenantID, PersonID: identity.PersonID, TaskID: task.ID, RunID: run.ID,
+		ActionType: "tool_call", AuthorizationFingerprint: "resume:v1:integration",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.RespondApprovalRequest(ctx, identity.TenantID, identity.PersonID, approval.ID, "approved", "cli", control.ApprovalDecisionInput{DecisionID: "once"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.MarkInterruptedRuns(ctx, 0); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := daemon.recoverApprovalContinuations(ctx, false); got != 1 {
+		t.Fatalf("recovered continuations = %d, want 1", got)
+	}
+	queued, err := store.ListQueued(ctx, identity.TenantID, identity.PersonID, control.QueueStatusQueued)
+	if err != nil || len(queued) != 1 || queued[0].TaskID != task.ID || !strings.HasPrefix(queued[0].IdempotencyKey, "approval-resume:") {
+		t.Fatalf("queued=%+v err=%v", queued, err)
+	}
+	if got := daemon.recoverApprovalContinuations(ctx, false); got != 0 {
+		t.Fatalf("recovery replay created %d duplicate continuations", got)
+	}
+}
+
 // TestDrainedItemMarkedDoneNotRequeued pins the duplicate-execution fix: a
 // queued item that is drained AND COMPLETES must end 'done' (not left 'started')
 // so a later boot drain never re-runs the finished work.

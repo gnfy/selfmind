@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -15,6 +16,10 @@ import (
 
 	"selfmind/internal/platform/log"
 )
+
+type ApprovalResumeAuthorizationStore interface {
+	ClaimApprovalResumeAuthorization(ctx context.Context, tenantID, personID, taskID, runID, fingerprint string) (approvalID, decisionID, grantKey string, claimed bool, err error)
+}
 
 func AuthMiddleware(mem interface {
 	GetPermission(ctx context.Context, tenantID, toolName string) (bool, error)
@@ -509,6 +514,7 @@ func SmartApprovalMiddleware(projectRoot string) Middleware {
 			// keys a previously granted rule is looked up under.
 			ruleCandidates := approvalRuleCandidates(toolName, args, scope, reason)
 			targetKeys := approvalTargetRuleKeys(toolName, args, scope)
+			resumeFingerprint := approvalResumeFingerprint(toolName, args, scope, containment.Summary())
 			isRunGranted := func(key string) bool {
 				return hasScope && scope.runGrants != nil && scope.runGrants.has(key)
 			}
@@ -528,6 +534,32 @@ func SmartApprovalMiddleware(projectRoot string) Middleware {
 			case anyApprovalKeyGranted(approvalRuleKeys(ruleCandidates), isRunGranted):
 				recordScopeTriage(scope, toolName, "rule", TriageOutcomeGrantHit, TriageAssessment{}, 0, nil)
 				return next(args)
+			}
+			// A parked approval is a one-shot capability for one byte-identical
+			// regenerated action. It sits below the hard floor and current explicit
+			// deny, so stale approval evidence cannot override today's safety facts.
+			if !denyForcesHuman && hasScope && scope.ResumeAuthorizations != nil && resumeFingerprint != "" {
+				grantCtx := contextFromArgs(args)
+				approvalID, decisionID, grantKey, claimed, claimErr := scope.ResumeAuthorizations.ClaimApprovalResumeAuthorization(
+					grantCtx, scope.TenantID, scope.PersonID, scope.TaskID, scope.RunID, resumeFingerprint,
+				)
+				if claimErr != nil {
+					return "", fmt.Errorf("claim parked approval authorization: %w", claimErr)
+				}
+				if claimed {
+					if scope.runGrants != nil {
+						switch {
+						case strings.TrimSpace(grantKey) != "":
+							scope.runGrants.add(grantKey)
+						case decisionID == "run" && patternKey != "":
+							scope.runGrants.add(patternKey)
+						case decisionID == "run_exact" && exactRunKey != "":
+							scope.runGrants.add(exactRunKey)
+						}
+					}
+					recordScopeTriage(scope, toolName, approvalID, TriageOutcomeGrantHit, TriageAssessment{}, 0, nil)
+					return next(args)
+				}
 			}
 			if !denyForcesHuman && hasScope && scope.Grants != nil {
 				grantCtx := contextFromArgs(args)
@@ -659,27 +691,28 @@ func SmartApprovalMiddleware(projectRoot string) Middleware {
 					askRules = nil
 				}
 				decision, err := scope.Approval(contextFromArgs(args), ToolApprovalRequest{
-					TenantID:            scope.TenantID,
-					PersonID:            scope.PersonID,
-					TaskID:              scope.TaskID,
-					RunID:               scope.RunID,
-					Channel:             scope.Channel,
-					ToolName:            toolName,
-					Reason:              reason,
-					Args:                approvalDisplayArgs(args),
-					GrantClass:          grantClass,
-					RunGrantClass:       runGrantClass,
-					ResourceFingerprint: approvalResourceFingerprint(scope, toolName, args),
-					Environment:         scope.EnvironmentSnapshotID,
-					Cwd:                 approvalDisplayCwd(scope),
-					ChangeSummary:       ApprovalChangeSummary(toolName, args),
-					TriageState:         triageState,
-					TriageRationale:     triageRationale,
-					TriageRisk:          triageRisk,
-					TriageAuthorization: triageAuthorization,
-					Containment:         containment.Summary(),
-					RuleCandidates:      askRules,
-					DecisionPolicy:      decisionPolicy,
+					TenantID:                 scope.TenantID,
+					PersonID:                 scope.PersonID,
+					TaskID:                   scope.TaskID,
+					RunID:                    scope.RunID,
+					Channel:                  scope.Channel,
+					ToolName:                 toolName,
+					Reason:                   reason,
+					Args:                     approvalDisplayArgs(args),
+					GrantClass:               grantClass,
+					RunGrantClass:            runGrantClass,
+					ResourceFingerprint:      approvalResourceFingerprint(scope, toolName, args),
+					Environment:              scope.EnvironmentSnapshotID,
+					Cwd:                      approvalDisplayCwd(scope),
+					ChangeSummary:            ApprovalChangeSummary(toolName, args),
+					TriageState:              triageState,
+					TriageRationale:          triageRationale,
+					TriageRisk:               triageRisk,
+					TriageAuthorization:      triageAuthorization,
+					Containment:              containment.Summary(),
+					RuleCandidates:           askRules,
+					DecisionPolicy:           decisionPolicy,
+					AuthorizationFingerprint: resumeFingerprint,
 				})
 				if err != nil {
 					return "", err
@@ -796,6 +829,29 @@ func approvalExactRunKey(toolName string, args map[string]interface{}, scope Exe
 	}, "\x00")
 	sum := sha256.Sum256([]byte(material))
 	return fmt.Sprintf("run:exact:%x", sum[:16])
+}
+
+// approvalResumeFingerprint binds a parked decision to the actual action and
+// stable execution identity without persisting raw command/code/credentials.
+// Run id and snapshot generation are intentionally excluded: a continuation is
+// a new run, while the environment/principal fingerprints prove equivalence.
+func approvalResumeFingerprint(toolName string, args map[string]interface{}, scope ExecutionScope, containment string) string {
+	if strings.TrimSpace(toolName) == "" || strings.TrimSpace(scope.TaskID) == "" {
+		return ""
+	}
+	actualArgs, err := json.Marshal(approvalArgs(args))
+	if err != nil {
+		return ""
+	}
+	material := strings.Join([]string{
+		"v1", strings.ToLower(strings.TrimSpace(toolName)), string(actualArgs),
+		strings.TrimSpace(scope.TenantID), strings.TrimSpace(scope.PersonID),
+		strings.TrimSpace(scope.TaskID), strings.TrimSpace(scope.WorkspaceID),
+		strings.TrimSpace(scope.EnvironmentFingerprint), strings.TrimSpace(scope.PrincipalFingerprint),
+		strings.TrimSpace(scope.CredentialSourceHash), strings.TrimSpace(containment),
+	}, "\x00")
+	sum := sha256.Sum256([]byte(material))
+	return fmt.Sprintf("resume:v1:%x", sum[:])
 }
 
 func exactRunGrantDescription(patternKey, exactRunKey string) string {

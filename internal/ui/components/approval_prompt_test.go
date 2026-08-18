@@ -12,14 +12,13 @@ func TestApprovalPromptViewRendersPanel(t *testing.T) {
 	view := p.View(80)
 
 	for _, want := range []string{
-		"Approval required",
-		"write_file",
+		"Would you like to make the following edits?",
 		"ember-citadel-tank-battle.html",
 		"reason: accesses path outside project root",
-		"Yes, run it once",
-		"No, and tell the agent what to do instead",
+		"Yes, proceed",
+		"No, continue without making edits",
+		"esc to cancel",
 		"(y)", "(n)",
-		"╭", "╰",
 	} {
 		if !strings.Contains(view, want) {
 			t.Errorf("panel missing %q:\n%s", want, view)
@@ -34,7 +33,7 @@ func TestApprovalPromptViewRendersPanel(t *testing.T) {
 			break
 		}
 	}
-	if marked < 0 || !strings.Contains(lines[marked], "Yes, run it once") {
+	if marked < 0 || !strings.Contains(lines[marked], "Yes, proceed") {
 		t.Fatalf("cursor marker not on the first option:\n%s", view)
 	}
 }
@@ -42,7 +41,7 @@ func TestApprovalPromptViewRendersPanel(t *testing.T) {
 func TestApprovalPromptViewFitsWidth(t *testing.T) {
 	longTarget := "/very/long/path/" + strings.Repeat("segment/", 20) + "file-with-a-remarkably-long-name.html"
 	p := NewApprovalPrompt("terminal", longTarget, "invokes dangerous command: "+strings.Repeat("x", 200))
-	for _, width := range []int{40, 60, 76, 200} {
+	for _, width := range []int{20, 40, 60, 76, 200} {
 		view := p.View(width)
 		max := width
 		if max > approvalPanelMaxWidth {
@@ -118,8 +117,9 @@ func TestApprovalPromptShortcutsAnswerDirectly(t *testing.T) {
 	}
 }
 
-// TestApprovalPromptEscAndUnknownKeysIgnored: an approval must be an explicit
-// decision — Esc does nothing, and stray keys never answer.
+// TestApprovalPromptEscAndUnknownKeysIgnored: the passive component delegates
+// Esc to the controller, where it becomes an explicit rejection. Stray keys
+// never answer locally.
 func TestApprovalPromptEscAndUnknownKeysIgnored(t *testing.T) {
 	p := NewApprovalPrompt("write_file", "", "reason")
 	for _, key := range []string{"esc", "q", "x", " ", "tab", "backspace", "1", "ctrl+d"} {

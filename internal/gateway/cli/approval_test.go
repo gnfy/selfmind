@@ -1,11 +1,15 @@
 package cli
 
 import (
+	"bytes"
+	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"selfmind/internal/kernel/llm"
 	"selfmind/internal/ui/components"
 )
 
@@ -64,12 +68,15 @@ func TestApprovalRequestArmsPanel(t *testing.T) {
 	if last.Role != "notice" || !strings.Contains(last.Content, "Approval required: write_file") {
 		t.Fatalf("compact transcript record missing: %+v", last)
 	}
-	if rendered := stripANSI(renderNoticeMessage(last.Content, 80)); strings.Contains(rendered, "\n") {
+	if last.NoticeKind != noticeWarning {
+		t.Fatalf("approval request notice kind = %v", last.NoticeKind)
+	}
+	if rendered := stripANSI(renderNoticeMessage(last.Content, last.NoticeKind, 80)); strings.Contains(rendered, "\n") {
 		t.Fatalf("transcript record must be ONE line: %q", rendered)
 	}
 	// The panel renders in the hybrid active region.
 	view := stripANSI(model.View())
-	if !strings.Contains(view, "Approval required") || !strings.Contains(view, "Yes, run it once") {
+	if !strings.Contains(view, "Would you like to make the following edits?") || !strings.Contains(view, "Yes, proceed") {
 		t.Fatalf("hybrid view missing the panel:\n%s", view)
 	}
 }
@@ -140,8 +147,8 @@ func TestApprovalEnterSelectsHighlightedOption(t *testing.T) {
 	model, calls := newApprovalTestModel()
 	msg := sampleApproval("apr_1")
 	msg.Options = []components.ApprovalOption{
-		{Label: "Yes, run it once", Key: "y", Decision: "approved"},
-		{Label: "Yes, allow writes for this run", Key: "r", Decision: "approved", Scope: "run"},
+		{Label: "Yes, proceed", Key: "y", Decision: "approved"},
+		{Label: "Yes, and don't ask again for writes in this run", Key: "r", Decision: "approved", Scope: "run"},
 		{Label: "No", Key: "n", Decision: "rejected"},
 	}
 	updated, _ := model.Update(msg)
@@ -157,37 +164,47 @@ func TestApprovalEnterSelectsHighlightedOption(t *testing.T) {
 	}
 }
 
-// TestApprovalEscAndStrayKeysDoNotAnswer: an approval is an explicit decision.
-// Esc does nothing, and other keys are swallowed instead of leaking into the
-// composer.
-func TestApprovalEscAndStrayKeysDoNotAnswer(t *testing.T) {
+// TestApprovalEscRejectsAndStrayKeysDoNotAnswer pins the Codex contract: Esc
+// explicitly rejects the current request; other keys are swallowed instead of
+// leaking into the composer.
+func TestApprovalEscRejectsAndStrayKeysDoNotAnswer(t *testing.T) {
 	model, calls := newApprovalTestModel()
 	updated, _ := model.Update(sampleApproval("apr_1"))
 	model = updated.(*uiModel)
 
-	for _, key := range []tea.KeyMsg{{Type: tea.KeyEsc}, keyRunes("x"), keyRunes("q"), {Type: tea.KeyTab}} {
+	for _, key := range []tea.KeyMsg{keyRunes("x"), keyRunes("q"), {Type: tea.KeyTab}} {
 		updated, _ = model.Update(key)
 		model = updated.(*uiModel)
 	}
 
-	if model.approvalPrompt == nil {
-		t.Fatal("panel must stay armed")
-	}
 	if len(*calls) != 0 {
-		t.Fatalf("no decision should have been sent: %v", *calls)
+		t.Fatalf("stray keys must not answer: %v", *calls)
 	}
 	if model.editor.Value() != "" {
 		t.Fatalf("stray keys leaked into the composer: %q", model.editor.Value())
 	}
+
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	model = updated.(*uiModel)
+	if len(*calls) != 1 || (*calls)[0].decision != "rejected" || (*calls)[0].id != "apr_1" {
+		t.Fatalf("Esc must send an explicit rejection: %v", *calls)
+	}
+	if model.approvalPrompt != nil {
+		t.Fatal("panel must close after the rejection is accepted")
+	}
+	last := model.messages[len(model.messages)-1]
+	if last.NoticeKind != noticeError || !strings.Contains(last.Content, "Cancelled approval for write_file") {
+		t.Fatalf("cancel record = %+v", last)
+	}
 }
 
-func TestApprovalDenyThenGuidanceSendsRejectionAndSteering(t *testing.T) {
+func TestApprovalDenySendsRejectionImmediately(t *testing.T) {
 	model, calls := newApprovalTestModel()
 	model.clientMode = true
 	model.thinking = true
-	var steered string
+	var steered bool
 	model.steerFn = func(text string) error {
-		steered = text
+		steered = true
 		return nil
 	}
 	updated, _ := model.Update(sampleApproval("apr_1"))
@@ -196,30 +213,13 @@ func TestApprovalDenyThenGuidanceSendsRejectionAndSteering(t *testing.T) {
 	updated, _ = model.Update(keyRunes("n"))
 	model = updated.(*uiModel)
 	if model.approvalPrompt != nil {
-		t.Fatal("panel should close into the deny follow-up")
+		t.Fatal("panel should close after denial")
 	}
-	if !model.approvalDenyFollowup {
-		t.Fatal("deny follow-up should capture the composer")
-	}
-	if len(*calls) != 0 {
-		t.Fatalf("rejection must wait for the follow-up Enter: %v", *calls)
-	}
-	if hint := stripANSI(model.composerHint()); !strings.Contains(hint, "Tell the agent what to do instead") {
-		t.Fatalf("composer hint missing: %q", hint)
-	}
-
-	model.editor.SetValue("use a path inside the workspace instead")
-	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
-	model = updated.(*uiModel)
-
 	if len(*calls) != 1 || (*calls)[0].decision != "rejected" || (*calls)[0].scope != "" {
-		t.Fatalf("rejection not sent first: %v", *calls)
+		t.Fatalf("rejection must be sent immediately: %v", *calls)
 	}
-	if steered != "use a path inside the workspace instead" {
-		t.Fatalf("guidance not steered: %q", steered)
-	}
-	if model.approvalDenyFollowup {
-		t.Fatal("deny follow-up should be resolved")
+	if steered {
+		t.Fatal("denial must not invent follow-up guidance")
 	}
 	var sawDenied bool
 	for _, msg := range model.messages {
@@ -232,29 +232,18 @@ func TestApprovalDenyThenGuidanceSendsRejectionAndSteering(t *testing.T) {
 	}
 }
 
-func TestApprovalDenyBareEnterJustDenies(t *testing.T) {
+func TestApprovalCtrlCRejectsInsteadOfSilentlyDismissing(t *testing.T) {
 	model, calls := newApprovalTestModel()
-	model.clientMode = true
-	var steered bool
-	model.steerFn = func(string) error {
-		steered = true
-		return nil
-	}
 	updated, _ := model.Update(sampleApproval("apr_1"))
 	model = updated.(*uiModel)
 
-	updated, _ = model.Update(keyRunes("n"))
-	model = updated.(*uiModel)
-	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
 	model = updated.(*uiModel)
 
-	if len(*calls) != 1 || (*calls)[0].decision != "rejected" {
-		t.Fatalf("bare Enter should send a plain deny: %v", *calls)
+	if len(*calls) != 1 || (*calls)[0].decision != "rejected" || (*calls)[0].id != "apr_1" {
+		t.Fatalf("Ctrl+C must send an explicit rejection: %v", *calls)
 	}
-	if steered {
-		t.Fatal("bare deny must not send steering guidance")
-	}
-	if model.statusMsg != "Denied." {
+	if model.statusMsg != "Approval cancelled." {
 		t.Fatalf("statusMsg = %q", model.statusMsg)
 	}
 }
@@ -295,6 +284,40 @@ func TestApprovalQueueRearmsNext(t *testing.T) {
 	}
 }
 
+func TestApprovalCancelRearmsNextWithoutDroppingIt(t *testing.T) {
+	model, calls := newApprovalTestModel()
+	updated, _ := model.Update(sampleApproval("apr_1"))
+	model = updated.(*uiModel)
+	updated, _ = model.Update(MsgApprovalRequest{ID: "apr_2", Tool: "terminal"})
+	model = updated.(*uiModel)
+
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	model = updated.(*uiModel)
+
+	if len(*calls) != 1 || (*calls)[0].id != "apr_1" || (*calls)[0].decision != "rejected" {
+		t.Fatalf("cancel must explicitly reject only the current request: %v", *calls)
+	}
+	if model.approvalPrompt == nil || model.pendingApprovalID != "apr_2" {
+		t.Fatalf("cancel dropped the next durable request: pending=%q", model.pendingApprovalID)
+	}
+}
+
+func TestApprovalPayloadKeepsServerRuleText(t *testing.T) {
+	options := approvalOptionsFromPayload(map[string]interface{}{
+		"decisions": []interface{}{map[string]interface{}{
+			"label":      "Yes, and don't ask again for commands that start with `git status` in this run",
+			"decision":   "approved",
+			"scope":      "run",
+			"grant_key":  "rule:exec_prefix:git status",
+			"rule_label": "commands that start with `git status`",
+			"key":        "r",
+		}},
+	})
+	if len(options) != 1 || options[0].RuleLabel != "commands that start with `git status`" {
+		t.Fatalf("client lost daemon-authored rule text: %+v", options)
+	}
+}
+
 func TestStatusBarShowsWaitingApproval(t *testing.T) {
 	model, _ := newApprovalTestModel()
 	if line := stripANSI(model.statusLine()); strings.Contains(line, "waiting approval") {
@@ -318,9 +341,8 @@ func TestStatusBarShowsWaitingApproval(t *testing.T) {
 	}
 }
 
-// TestAgentDoneClearsApprovalFlow: when the run ends, the daemon expires
-// unanswered approval rows — stale panel state must not survive to answer into
-// the void.
+// TestAgentDoneClearsApprovalFlow: a still-live waiter cannot survive its run;
+// stale panel state must not answer into the void.
 func TestAgentDoneClearsApprovalFlow(t *testing.T) {
 	model, _ := newApprovalTestModel()
 	updated, _ := model.Update(sampleApproval("apr_1"))
@@ -331,8 +353,27 @@ func TestAgentDoneClearsApprovalFlow(t *testing.T) {
 	updated, _ = model.Update(MsgAgentDone{Response: "run finished"})
 	model = updated.(*uiModel)
 
-	if model.approvalPrompt != nil || len(model.approvalQueue) != 0 || model.approvalDenyFollowup {
+	if model.approvalPrompt != nil || len(model.approvalQueue) != 0 {
 		t.Fatal("approval flow must be cleared when the run ends")
+	}
+}
+
+func TestAgentDoneKeepsParkedApprovalAnswerable(t *testing.T) {
+	model, _ := newApprovalTestModel()
+	updated, _ := model.Update(sampleApproval("apr_1"))
+	model = updated.(*uiModel)
+	updated, _ = model.Update(MsgApprovalParked{
+		ID: "apr_1", Event: uiEventRef{Source: eventSourceDaemon, EventID: "event-park-1"},
+	})
+	model = updated.(*uiModel)
+	if model.approvalPrompt == nil || !model.approvalPrompt.IsParked() {
+		t.Fatal("approval.parked did not relabel the active prompt")
+	}
+
+	updated, _ = model.Update(MsgAgentDone{Response: "task parked"})
+	model = updated.(*uiModel)
+	if model.approvalPrompt == nil || model.pendingApprovalID != "apr_1" || !model.approvalPrompt.IsParked() {
+		t.Fatalf("parked approval was lost at run end: pending=%q prompt=%+v", model.pendingApprovalID, model.approvalPrompt)
 	}
 }
 
@@ -355,5 +396,293 @@ func TestApprovalWithoutResponderIsHonest(t *testing.T) {
 	}
 	if !sawError {
 		t.Fatal("missing responder must surface an honest error")
+	}
+	if model.approvalPrompt == nil || model.pendingApprovalID != "apr_1" {
+		t.Fatal("failed delivery must keep the same approval available for retry")
+	}
+	if model.thinking || strings.Contains(model.statusMsg, "resuming") {
+		t.Fatalf("failed delivery must not look resumed: thinking=%v status=%q", model.thinking, model.statusMsg)
+	}
+	for _, msg := range model.messages {
+		if msg.Role == "notice" && strings.Contains(msg.Content, "Approved write_file") {
+			t.Fatalf("failed delivery created a false success record: %+v", msg)
+		}
+	}
+}
+
+func TestApprovalResponderFailureKeepsDenyPanelForRetry(t *testing.T) {
+	model, _ := newApprovalTestModel()
+	model.approvalResponder = func(string, string, string, string) error {
+		return errors.New("transport unavailable")
+	}
+	updated, _ := model.Update(sampleApproval("apr_1"))
+	model = updated.(*uiModel)
+	updated, _ = model.Update(keyRunes("n"))
+	model = updated.(*uiModel)
+
+	if model.approvalPrompt == nil || model.pendingApprovalID != "apr_1" {
+		t.Fatal("failed rejection must retain the same panel for retry")
+	}
+}
+
+func TestApprovalResolvedElsewhereClosesCurrentAndRearmsQueue(t *testing.T) {
+	model, _ := newApprovalTestModel()
+	updated, _ := model.Update(sampleApproval("apr_1"))
+	model = updated.(*uiModel)
+	updated, _ = model.Update(MsgApprovalRequest{ID: "apr_2", Tool: "terminal"})
+	model = updated.(*uiModel)
+
+	updated, _ = model.Update(MsgApprovalResolved{
+		ID:     "apr_1",
+		Status: "approved",
+		Event:  uiEventRef{Source: eventSourceDaemon, EventID: "event-approve-1"},
+	})
+	model = updated.(*uiModel)
+
+	if model.approvalPrompt == nil || model.pendingApprovalID != "apr_2" {
+		t.Fatalf("next queued approval was not armed: pending=%q", model.pendingApprovalID)
+	}
+	if !model.thinking || model.runStatus != "working" {
+		t.Fatalf("resolved run did not resume: thinking=%v status=%q", model.thinking, model.runStatus)
+	}
+	var resolution *ChatMessage
+	for i := range model.messages {
+		if strings.Contains(model.messages[i].Content, "Approved write_file elsewhere") {
+			resolution = &model.messages[i]
+		}
+	}
+	if resolution == nil || resolution.NoticeKind != noticeSuccess {
+		t.Fatalf("external resolution record missing or misclassified: %+v", model.messages)
+	}
+}
+
+func TestApprovalExpiredClosesCurrentWithoutResumingAndRearmsQueue(t *testing.T) {
+	model, _ := newApprovalTestModel()
+	updated, _ := model.Update(sampleApproval("apr_1"))
+	model = updated.(*uiModel)
+	updated, _ = model.Update(MsgApprovalRequest{ID: "apr_2", Tool: "terminal"})
+	model = updated.(*uiModel)
+	model.thinking = false
+	model.runStatus = "waiting_user"
+
+	updated, _ = model.Update(MsgApprovalResolved{
+		ID:     "apr_1",
+		Status: "expired",
+		Event:  uiEventRef{Source: eventSourceDaemon, EventID: "event-expire-1"},
+	})
+	model = updated.(*uiModel)
+
+	if model.approvalPrompt == nil || model.pendingApprovalID != "apr_2" {
+		t.Fatalf("next queued approval was not armed: pending=%q", model.pendingApprovalID)
+	}
+	if model.thinking || model.runStatus != "waiting_user" {
+		t.Fatalf("expiration falsely resumed run: thinking=%v status=%q", model.thinking, model.runStatus)
+	}
+	var resolution *ChatMessage
+	for i := range model.messages {
+		if strings.Contains(model.messages[i].Content, "Approval expired: write_file") {
+			resolution = &model.messages[i]
+		}
+	}
+	if resolution == nil || resolution.NoticeKind != noticeWarning {
+		t.Fatalf("expiration record missing or misclassified: %+v", model.messages)
+	}
+}
+
+func TestApprovalResolvedElsewhereRemovesQueuedRequest(t *testing.T) {
+	model, _ := newApprovalTestModel()
+	updated, _ := model.Update(sampleApproval("apr_1"))
+	model = updated.(*uiModel)
+	updated, _ = model.Update(MsgApprovalRequest{ID: "apr_2", Tool: "terminal"})
+	model = updated.(*uiModel)
+
+	updated, _ = model.Update(MsgApprovalResolved{
+		ID:     "apr_2",
+		Status: "rejected",
+		Event:  uiEventRef{Source: eventSourceDaemon, EventID: "event-reject-2"},
+	})
+	model = updated.(*uiModel)
+
+	if model.pendingApprovalID != "apr_1" || len(model.approvalQueue) != 0 {
+		t.Fatalf("queued external resolution disturbed current request: pending=%q queue=%v", model.pendingApprovalID, model.approvalQueue)
+	}
+	last := model.messages[len(model.messages)-1]
+	if last.NoticeKind != noticeError || !strings.Contains(last.Content, "Denied terminal elsewhere") {
+		t.Fatalf("external denial record = %+v", last)
+	}
+}
+
+func TestLocalApprovalResolutionEchoIsSilent(t *testing.T) {
+	model, _ := newApprovalTestModel()
+	updated, _ := model.Update(sampleApproval("apr_1"))
+	model = updated.(*uiModel)
+	updated, _ = model.Update(keyRunes("y"))
+	model = updated.(*uiModel)
+	wantMessages := len(model.messages)
+
+	updated, _ = model.Update(MsgApprovalResolved{
+		ID:     "apr_1",
+		Status: "approved",
+		Event:  uiEventRef{Source: eventSourceDaemon, EventID: "event-local-echo"},
+	})
+	model = updated.(*uiModel)
+
+	if len(model.messages) != wantMessages {
+		t.Fatalf("local stream echo added a duplicate record: before=%d after=%d", wantMessages, len(model.messages))
+	}
+}
+
+func TestUnknownApprovalResolutionDoesNotPolluteTranscript(t *testing.T) {
+	model, _ := newApprovalTestModel()
+	wantMessages := len(model.messages)
+
+	updated, _ := model.Update(MsgApprovalResolved{
+		ID:     "apr-from-old-replay",
+		Status: "approved",
+		Event:  uiEventRef{Source: eventSourceDaemon, EventID: "event-old-replay"},
+	})
+	model = updated.(*uiModel)
+
+	if len(model.messages) != wantMessages || model.statusMsg != "" {
+		t.Fatalf("unknown historical resolution polluted UI: messages=%d status=%q", len(model.messages), model.statusMsg)
+	}
+}
+
+// This is deliberately a production-chain test: it enters through the
+// llm.StreamEvent adapter, crosses Bubble Tea's queue, and exits through the
+// reducer. A helper-only test would not catch a resolution switch that was
+// implemented but never wired into the live event path.
+func TestApprovalResolutionEventClosesPanelThroughProductionPath(t *testing.T) {
+	model, _ := newApprovalTestModel()
+	model.armApprovalPrompt(sampleApproval("apr_1"))
+	var output bytes.Buffer
+	program := tea.NewProgram(model,
+		tea.WithInput(bytes.NewReader(nil)),
+		tea.WithOutput(&output),
+		tea.WithoutSignalHandler(),
+	)
+	model.program = program
+	done := make(chan tea.Model, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		final, err := program.Run()
+		if err != nil {
+			errCh <- err
+			return
+		}
+		done <- final
+	}()
+
+	model.forwardGatewayEventFrom(llm.StreamEvent{
+		EventType: "approval.approved",
+		EventID:   "event-production-resolution",
+		Payload:   map[string]interface{}{"approval_id": "apr_1", "scope": "run"},
+	}, eventSourceDaemon)
+	program.Quit()
+
+	select {
+	case err := <-errCh:
+		t.Fatalf("bubbletea program: %v", err)
+	case final := <-done:
+		resolved := final.(*uiModel)
+		if resolved.approvalPrompt != nil || resolved.pendingApprovalID != "" {
+			t.Fatalf("production event path left stale approval: pending=%q", resolved.pendingApprovalID)
+		}
+	case <-time.After(3 * time.Second):
+		program.Kill()
+		t.Fatal("production event path did not drain")
+	}
+}
+
+// Expiration has its own production-path guard because accepting the event in
+// the reducer is insufficient if either the daemon-event adapter or client
+// stream mapping forgets the third terminal status.
+func TestApprovalExpirationEventClosesPanelThroughProductionPath(t *testing.T) {
+	model, _ := newApprovalTestModel()
+	model.armApprovalPrompt(sampleApproval("apr_expired"))
+	model.thinking = false
+	model.runStatus = "waiting_user"
+	var output bytes.Buffer
+	program := tea.NewProgram(model,
+		tea.WithInput(bytes.NewReader(nil)),
+		tea.WithOutput(&output),
+		tea.WithoutSignalHandler(),
+	)
+	model.program = program
+	done := make(chan tea.Model, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		final, err := program.Run()
+		if err != nil {
+			errCh <- err
+			return
+		}
+		done <- final
+	}()
+
+	model.forwardGatewayEventFrom(llm.StreamEvent{
+		EventType: "approval.expired",
+		EventID:   "event-production-expiration",
+		Payload:   map[string]interface{}{"approval_id": "apr_expired", "reason": "waiter gone"},
+	}, eventSourceDaemon)
+	program.Quit()
+
+	select {
+	case err := <-errCh:
+		t.Fatalf("bubbletea program: %v", err)
+	case final := <-done:
+		resolved := final.(*uiModel)
+		if resolved.approvalPrompt != nil || resolved.pendingApprovalID != "" {
+			t.Fatalf("production expiration path left stale approval: pending=%q", resolved.pendingApprovalID)
+		}
+		if resolved.thinking || resolved.runStatus != "waiting_user" {
+			t.Fatalf("production expiration path falsely resumed: thinking=%v status=%q", resolved.thinking, resolved.runStatus)
+		}
+	case <-time.After(3 * time.Second):
+		program.Kill()
+		t.Fatal("production expiration path did not drain")
+	}
+}
+
+func TestApprovalParkedSurvivesRunEndThroughProductionPath(t *testing.T) {
+	model, _ := newApprovalTestModel()
+	model.armApprovalPrompt(sampleApproval("apr_parked"))
+	var output bytes.Buffer
+	program := tea.NewProgram(model,
+		tea.WithInput(bytes.NewReader(nil)),
+		tea.WithOutput(&output),
+		tea.WithoutSignalHandler(),
+	)
+	model.program = program
+	done := make(chan tea.Model, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		final, err := program.Run()
+		if err != nil {
+			errCh <- err
+			return
+		}
+		done <- final
+	}()
+
+	model.forwardGatewayEventFrom(llm.StreamEvent{
+		EventType: "approval.parked",
+		EventID:   "event-production-parked",
+		Payload:   map[string]interface{}{"approval_id": "apr_parked", "reason": "resource budget elapsed"},
+	}, eventSourceDaemon)
+	program.Send(MsgAgentDone{Response: "task parked"})
+	program.Quit()
+
+	select {
+	case err := <-errCh:
+		t.Fatalf("bubbletea program: %v", err)
+	case final := <-done:
+		resolved := final.(*uiModel)
+		if resolved.approvalPrompt == nil || resolved.pendingApprovalID != "apr_parked" || !resolved.approvalPrompt.IsParked() {
+			t.Fatalf("production parked path lost approval: pending=%q prompt=%+v", resolved.pendingApprovalID, resolved.approvalPrompt)
+		}
+	case <-time.After(3 * time.Second):
+		program.Kill()
+		t.Fatal("production parked path did not drain")
 	}
 }

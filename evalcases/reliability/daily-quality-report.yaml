@@ -20,6 +20,8 @@ expect:
   contains:
     - "Daily quality report"
     - "Model:"
+    - "Approval backlog now:"
+    - "Approval continuations:"
     - "Recall:"
     - "Maintenance:"
 

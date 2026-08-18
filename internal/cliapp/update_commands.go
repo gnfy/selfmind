@@ -148,7 +148,10 @@ func (a *App) updateApply(args []string) int {
 		fmt.Fprintf(a.stderr, "Daemon restart failed: %v\nThe new version is installed but the running daemon is still the old one; run `selfmind gateway restart` manually.\n", err)
 		return 1
 	}
-	a.verifyRestartedDaemonVersion(newVersion)
+	if err := a.verifyRestartedDaemonVersion(newVersion); err != nil {
+		fmt.Fprintf(a.stderr, "Update health verification failed: %v\nThe package is installed, but the update is not complete until `selfmind gateway status` reports the expected build and a current control schema.\n", err)
+		return 1
+	}
 	return 0
 }
 
@@ -178,17 +181,17 @@ func (a *App) restartDaemonViaInstalledLauncher() error {
 }
 
 // verifyRestartedDaemonVersion polls the restarted daemon's status endpoint
-// and confirms it now reports the freshly installed version (codex's daemon
-// updater applies the same restart-then-verify discipline). Best-effort:
-// warnings only, never a failed exit — the restart itself already succeeded.
-// A mismatch usually means another install shadows the updated one on PATH.
-func (a *App) verifyRestartedDaemonVersion(wantVersion string) {
+// and confirms both the freshly installed build and its durable-store schema.
+// This is a release gate rather than a warning: package replacement alone is
+// not a successful update when the daemon cannot safely serve the user's data.
+func (a *App) verifyRestartedDaemonVersion(wantVersion string) error {
 	want := strings.TrimPrefix(strings.TrimSpace(wantVersion), "v")
 	if want == "" {
-		return
+		return fmt.Errorf("installed binary version could not be determined")
 	}
 	deadline := time.Now().Add(15 * time.Second)
 	got := ""
+	var lastHealthErr error
 	for time.Now().Before(deadline) {
 		ctx, cancel := contextWithTimeout(a.ctx, 2*time.Second)
 		data, status, err := gatewayrt.RequestStatus(ctx, a.gatewayURL())
@@ -197,19 +200,34 @@ func (a *App) verifyRestartedDaemonVersion(wantVersion string) {
 			var resp api.GatewayStatusResponse
 			if json.Unmarshal(data, &resp) == nil && strings.TrimSpace(resp.Runtime.Version) != "" {
 				got = strings.TrimPrefix(strings.TrimSpace(resp.Runtime.Version), "v")
-				if got == want {
+				lastHealthErr = validateRestartedDaemonHealth(resp, want)
+				if lastHealthErr == nil {
 					fmt.Fprintf(a.stdout, "Daemon restarted on SelfMind %s.\n", want)
-					return
+					return nil
 				}
 			}
 		}
 		time.Sleep(500 * time.Millisecond)
 	}
 	if got == "" {
-		fmt.Fprintln(a.stderr, "Could not verify the restarted daemon's version (status endpoint unreachable or silent). Run `selfmind gateway status` to confirm it runs the new version.")
-		return
+		return fmt.Errorf("restarted daemon status endpoint was unreachable or did not report a version")
 	}
-	fmt.Fprintf(a.stderr, "Warning: the restarted daemon reports version %s, expected %s. Another install may shadow the updated one — check `which -a selfmind` and your PATH order, then run `selfmind gateway restart` from the intended install.\n", got, want)
+	return lastHealthErr
+}
+
+func validateRestartedDaemonHealth(status api.GatewayStatusResponse, wantVersion string) error {
+	want := strings.TrimPrefix(strings.TrimSpace(wantVersion), "v")
+	got := strings.TrimPrefix(strings.TrimSpace(status.Runtime.Version), "v")
+	if want == "" || got == "" || got != want {
+		return fmt.Errorf("restarted daemon reports version %s, expected %s; check `which -a selfmind` and PATH order", valueOrUnknown(got), valueOrUnknown(want))
+	}
+	if status.StoreSchema.Version <= 0 || status.StoreSchema.CurrentVersion <= 0 || status.StoreSchema.Version != status.StoreSchema.CurrentVersion {
+		return fmt.Errorf("restarted daemon control schema is v%d, but the binary requires v%d; run `selfmind gateway status` and restore the reported migration backup if startup cannot converge", status.StoreSchema.Version, status.StoreSchema.CurrentVersion)
+	}
+	if strings.TrimSpace(status.State) != "running" {
+		return fmt.Errorf("restarted daemon state is %q, expected running", status.State)
+	}
+	return nil
 }
 
 // updateChannel resolves the effective dist-tag (flag > config pin > version

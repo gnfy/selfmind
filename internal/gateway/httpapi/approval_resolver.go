@@ -8,6 +8,8 @@ import (
 	"strings"
 
 	"selfmind/internal/control"
+	"selfmind/internal/gateway/delivery"
+	"selfmind/internal/platform/log"
 	"selfmind/internal/platform/textutil"
 )
 
@@ -142,12 +144,112 @@ func (d *Server) respondApprovalByToken(ctx context.Context, identity *control.I
 	} else if strings.TrimSpace(input.GrantScope) != "" || strings.TrimSpace(input.GrantKey) != "" {
 		return nil, fmt.Errorf("remembered approval is unavailable for this legacy request; approve it once instead")
 	}
-	approval, err := d.Control.RespondApprovalRequest(ctx, identity.TenantID, identity.PersonID, resolved.ID, decision, channel, input)
+	var approval *control.ApprovalRequest
+	if resolved.WaiterState == "parked" {
+		task, taskErr := d.Control.GetTask(ctx, identity.TenantID, resolved.TaskID)
+		if taskErr != nil || task == nil {
+			if taskErr != nil {
+				return nil, taskErr
+			}
+			return nil, fmt.Errorf("approval %s no longer has a resumable task", resolved.ID)
+		}
+		content := parkedApprovalResumeContent(*resolved, decision, input.Note)
+		var queued *control.QueuedTask
+		approval, queued, err = d.Control.RespondParkedApprovalAndEnqueue(ctx,
+			identity.TenantID, identity.PersonID, resolved.ID, decision, channel, input,
+			control.QueuedTask{
+				PersonID: identity.PersonID, Platform: identity.Platform,
+				PlatformUserID: identity.PlatformUserID, Channel: fallback(channel, identity.Platform),
+				Content: content, WorkspaceID: task.WorkspaceID, TaskID: task.ID,
+				IdempotencyKey: "approval-resume:" + resolved.ID,
+				Class:          control.QueueClassForeground,
+			},
+		)
+		if err == nil && queued != nil {
+			// The row is durable before draining. If another run is active this is a
+			// harmless no-op; that run's finalizer drains it later.
+			d.coordinator().drainQueue(identity)
+		}
+	} else {
+		approval, err = d.Control.RespondApprovalRequest(ctx, identity.TenantID, identity.PersonID, resolved.ID, decision, channel, input)
+	}
 	if err != nil {
 		return nil, err
 	}
-	appendApprovalEvent(ctx, d.Control, approval, channel)
+	if _, eventErr := d.Control.AppendApprovalResolutionEvent(ctx, approval, channel, ""); eventErr != nil {
+		// The row is already terminal, so returning an error would invite a retry
+		// that can never succeed. Keep the decision honest and make the missing
+		// cross-endpoint signal observable instead of swallowing it.
+		log.Warn("failed to append approval resolution event", "approval_id", approval.ID, "status", approval.Status, "error", eventErr)
+	}
+	d.notifyApprovalResolutionElsewhere(ctx, identity, approval, channel)
 	return approval, nil
+}
+
+// notifyApprovalResolutionElsewhere reconciles mobile surfaces that may still
+// show the request after it was answered in the CLI or another IM. Platform
+// message editing is not uniformly available, so the portable contract is one
+// short, idempotent follow-up to each actually-delivered request route. The
+// route that submitted the answer is skipped.
+func (d *Server) notifyApprovalResolutionElsewhere(ctx context.Context, identity *control.IdentityContext, approval *control.ApprovalRequest, answerChannel string) {
+	if d == nil || d.Control == nil || d.Delivery == nil || identity == nil || approval == nil {
+		return
+	}
+	routes, err := d.Control.ListDeliveredApprovalRoutes(ctx, approval.TenantID, approval.PersonID, approval.ID)
+	if err != nil {
+		log.Warn("failed to list approval delivery routes", "approval_id", approval.ID, "error", err)
+		return
+	}
+	seen := map[string]bool{}
+	for _, route := range routes {
+		key := strings.ToLower(strings.TrimSpace(route.Platform)) + "|" + strings.TrimSpace(route.PlatformUserID) + "|" + strings.TrimSpace(route.Channel)
+		if seen[key] || sameApprovalAnswerRoute(route, identity, answerChannel) {
+			continue
+		}
+		seen[key] = true
+		verb := "denied"
+		glyph := "✗"
+		switch approval.Status {
+		case "approved":
+			verb, glyph = "approved", "✓"
+		case "archived":
+			verb, glyph = "archived after 7 days", "⚠"
+		case "expired":
+			verb, glyph = "cancelled", "⚠"
+		}
+		content := fmt.Sprintf("%s Approval resolved elsewhere: %s was %s. This request is closed.", glyph, approvalSummaryLine(*approval, ""), verb)
+		accepted, sendErr := d.Delivery.EnqueueAndTryAccepted(ctx, delivery.Message{
+			TenantID: approval.TenantID, PersonID: approval.PersonID,
+			Platform: route.Platform, PlatformUserID: route.PlatformUserID, Channel: route.Channel,
+			TaskID: approval.TaskID, RunID: approval.RunID, Content: content,
+			Kind: delivery.KindApprovalResolution, ApprovalID: approval.ID,
+			LogicalKey: "approval-resolution:" + approval.ID + ":" + approval.Status,
+		})
+		if sendErr != nil || !accepted {
+			log.Warn("failed to enqueue approval resolution follow-up", "approval_id", approval.ID, "platform", route.Platform, "error", sendErr)
+		}
+	}
+}
+
+func sameApprovalAnswerRoute(route control.Delivery, identity *control.IdentityContext, answerChannel string) bool {
+	if identity == nil || !strings.EqualFold(strings.TrimSpace(route.Platform), strings.TrimSpace(identity.Platform)) {
+		return false
+	}
+	if userID := strings.TrimSpace(identity.PlatformUserID); userID != "" && strings.TrimSpace(route.PlatformUserID) != "" {
+		return userID == strings.TrimSpace(route.PlatformUserID)
+	}
+	return strings.TrimSpace(answerChannel) != "" && strings.TrimSpace(answerChannel) == strings.TrimSpace(route.Channel)
+}
+
+func parkedApprovalResumeContent(approval control.ApprovalRequest, decision, note string) string {
+	if strings.EqualFold(strings.TrimSpace(decision), "approved") || strings.EqualFold(strings.TrimSpace(decision), "approve") {
+		return fmt.Sprintf("Resume task after parked approval %s was approved. Re-evaluate the interrupted step from durable evidence. Approval authority is enforced by the execution middleware; never infer permission from this message.", approval.ID)
+	}
+	content := fmt.Sprintf("Resume task after parked approval %s was rejected. Do not retry the rejected operation or a cosmetic variant; choose a safe alternative or finish with an actionable explanation.", approval.ID)
+	if reason := strings.TrimSpace(note); reason != "" {
+		content += " User guidance: " + reason
+	}
+	return content
 }
 
 // approvalOptionForDecision recovers the exact server-issued answer from the
@@ -333,6 +435,9 @@ func (d *Server) respondApprovalCommand(ctx context.Context, identity *control.I
 		}
 	}
 	note := grantScopeNoteWithClass(approval.DecisionScope, decodeApprovalPayload(*approval).GrantClass)
+	if approval.ResumeQueueID != "" {
+		note += " (task continuation queued)"
+	}
 	return fmt.Sprintf("%s%s %s\n%s", verb, note, approvalSummaryLine(*approval, title), approval.ID)
 }
 

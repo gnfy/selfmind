@@ -81,15 +81,23 @@ func TestDigestReportsAwayStateAndActiveRun(t *testing.T) {
 		"tool":   "terminal",
 		"reason": "destructive command",
 		"args":   map[string]interface{}{"command": "rm -rf build"},
+		"decisions": []map[string]interface{}{
+			{"id": "once", "label": "Yes, proceed", "decision": "approved", "key": "y"},
+			{"id": "deny", "label": "No", "decision": "rejected", "key": "n"},
+		},
 	})
-	if _, err := store.CreateApprovalRequest(ctx, control.ApprovalRequest{
+	approval, err := store.CreateApprovalRequest(ctx, control.ApprovalRequest{
 		TenantID:   identity.TenantID,
 		PersonID:   identity.PersonID,
 		TaskID:     finished.ID,
 		ActionType: "tool_call",
 		Payload:    payload,
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatal(err)
+	}
+	if _, changed, err := store.ParkApprovalRequest(ctx, identity.TenantID, approval.ID, "resource budget elapsed"); err != nil || !changed {
+		t.Fatalf("park approval changed=%v err=%v", changed, err)
 	}
 
 	push, err := store.EnqueueDelivery(ctx, control.Delivery{
@@ -133,6 +141,10 @@ func TestDigestReportsAwayStateAndActiveRun(t *testing.T) {
 	if len(digest.PendingApprovals) != 1 || digest.PendingApprovals[0].ID == "" ||
 		!strings.Contains(digest.PendingApprovals[0].Line, "[terminal]") {
 		t.Fatalf("pending approvals = %+v", digest.PendingApprovals)
+	}
+	if digest.PendingApprovals[0].WaiterState != "parked" || digest.PendingApprovals[0].Tool != "terminal" ||
+		len(digest.PendingApprovals[0].Decisions) != 2 || digest.PendingApprovals[0].Decisions[0].Label != "Yes, proceed" {
+		t.Fatalf("interactive approval digest = %+v", digest.PendingApprovals[0])
 	}
 	if len(digest.UnconfirmedPushes) != 1 || digest.UnconfirmedPushes[0].Platform != "weixin" ||
 		digest.UnconfirmedPushes[0].Status != "sent_unconfirmed" {

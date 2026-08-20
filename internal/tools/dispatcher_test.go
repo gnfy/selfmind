@@ -1,8 +1,10 @@
 package tools
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -10,6 +12,24 @@ import (
 // MockTool 模拟一个真实工具
 type MockTool struct {
 	BaseTool
+}
+
+type sandboxMetadataTool struct {
+	BaseTool
+}
+
+func newSandboxMetadataTool() *sandboxMetadataTool {
+	return &sandboxMetadataTool{BaseTool: BaseTool{
+		name: "terminal",
+		schema: ToolSchema{Type: "object", Properties: map[string]PropertyDef{
+			"command": {Type: "string"},
+		}},
+	}}
+}
+
+func (t *sandboxMetadataTool) Execute(args map[string]interface{}) (string, error) {
+	args["_sandbox_mode"] = string(SandboxHost)
+	return "ok", nil
 }
 
 func NewMockTool() *MockTool {
@@ -98,6 +118,124 @@ func TestToToolDefinitionOmitsEmptyRequired(t *testing.T) {
 	if strings.Contains(string(data), `"required":null`) {
 		t.Fatalf("definition contains null required: %s", data)
 	}
+}
+
+func TestDispatcherExposesTrustedToolExecutionMetadata(t *testing.T) {
+	reg := NewRegistry()
+	disp := &Dispatcher{registry: reg}
+	reg.Register(NewWriteFileTool())
+	reg.Register(NewExecuteCommandTool())
+	reg.Register(NewPatchTool())
+	reg.Register(NewWebSearchTool())
+
+	metadata := disp.ToolExecutionMetadata("write_file", map[string]interface{}{"file_path": "notes.md", "content": "ok"})
+	if metadata.Origin != "builtin" || metadata.ReadOnly || metadata.RiskLevel != "medium" {
+		t.Fatalf("write metadata=%+v", metadata)
+	}
+	if len(metadata.OperationClasses) != 1 || metadata.OperationClasses[0] != "write" {
+		t.Fatalf("write operation classes=%v", metadata.OperationClasses)
+	}
+	definition := ToToolDefinition(NewWriteFileTool())
+	selfmind, _ := definition["selfmind"].(map[string]interface{})
+	if selfmind["origin"] != ToolSchemaOriginBuiltin {
+		t.Fatalf("definition origin=%v", selfmind["origin"])
+	}
+	web := disp.ToolExecutionMetadata("web_search", map[string]interface{}{"query": "current release"})
+	if web.Origin != "builtin" || web.Category != "network" || !web.ReadOnly || !containsMetadataClass(web.OperationClasses, "network") {
+		t.Fatalf("web metadata=%+v", web)
+	}
+	curl := disp.ToolExecutionMetadata("terminal", map[string]interface{}{"command": "curl https://example.com"})
+	if !containsMetadataClass(curl.OperationClasses, "exec.in_turn") || !containsMetadataClass(curl.OperationClasses, "network") || !containsMetadataClass(curl.OperationClasses, "dangerous") {
+		t.Fatalf("curl metadata=%+v", curl)
+	}
+	remove := disp.ToolExecutionMetadata("terminal", map[string]interface{}{"command": "rm stale.txt"})
+	if !containsMetadataClass(remove.OperationClasses, "delete") || !containsMetadataClass(remove.OperationClasses, "dangerous") {
+		t.Fatalf("delete command metadata=%+v", remove)
+	}
+	deletePatch := disp.ToolExecutionMetadata("patch", map[string]interface{}{"patch": "*** Begin Patch\n*** Delete File: stale.txt\n*** End Patch"})
+	if !containsMetadataClass(deletePatch.OperationClasses, "write") || !containsMetadataClass(deletePatch.OperationClasses, "delete") {
+		t.Fatalf("delete patch metadata=%+v", deletePatch)
+	}
+	mixed := disp.ToolExecutionMetadata("terminal", map[string]interface{}{"command": "rm stale.txt; curl https://example.com"})
+	if !containsMetadataClass(mixed.OperationClasses, "delete") || !containsMetadataClass(mixed.OperationClasses, "network") {
+		t.Fatalf("mixed-effect command metadata=%+v", mixed)
+	}
+}
+
+func TestDispatcherMetadataUsesExecutionScopeAndEffectiveSandbox(t *testing.T) {
+	reg := NewRegistry()
+	disp := &Dispatcher{registry: reg}
+	reg.Register(NewWriteFileTool())
+	reg.Register(NewExecuteCommandTool())
+
+	root := t.TempDir()
+	runID := "metadata-boundary"
+	cleanup := SetExecutionScope("metadata-person", ExecutionScope{
+		RunID: runID, WorkspaceRoot: root, AllowedRoots: []string{root},
+		SandboxPolicy: &ExecSandboxPolicy{Enabled: false},
+	})
+	defer cleanup()
+	ctx := WithExecutionScopeKey(context.Background(), ExecutionScopeKeyForRun(runID))
+
+	host := disp.ToolExecutionMetadata("terminal", map[string]interface{}{
+		"command": "printf ok", "sandbox": "auto", "_context": ctx,
+	})
+	if !containsMetadataClass(host.OperationClasses, "dangerous") {
+		t.Fatalf("auto host fallback metadata=%+v", host)
+	}
+
+	outside := filepath.Join(filepath.Dir(root), "outside", "notes.md")
+	escape := disp.ToolExecutionMetadata("write_file", map[string]interface{}{
+		"path": outside, "content": "no", "_context": ctx,
+	})
+	if !containsMetadataClass(escape.OperationClasses, "dangerous") {
+		t.Fatalf("out-of-workspace metadata=%+v", escape)
+	}
+}
+
+func TestDispatcherMetadataPrefersActualSandboxMode(t *testing.T) {
+	reg := NewRegistry()
+	disp := &Dispatcher{registry: reg}
+	reg.Register(NewExecuteCommandTool())
+
+	runID := "metadata-actual-mode"
+	cleanup := SetExecutionScope("metadata-person-actual", ExecutionScope{
+		RunID: runID, WorkspaceRoot: t.TempDir(), SandboxPolicy: &ExecSandboxPolicy{Enabled: true, Required: true},
+	})
+	defer cleanup()
+	ctx := WithExecutionScopeKey(context.Background(), ExecutionScopeKeyForRun(runID))
+	metadata := disp.ToolExecutionMetadata("terminal", map[string]interface{}{
+		"command": "printf ok", "sandbox": "auto", "_sandbox_mode": "host", "_context": ctx,
+	})
+	if !containsMetadataClass(metadata.OperationClasses, "dangerous") {
+		t.Fatalf("actual host execution metadata=%+v", metadata)
+	}
+}
+
+func TestDispatcherPropagatesActualSandboxModeAfterArgumentCoercion(t *testing.T) {
+	reg := NewRegistry()
+	reg.Register(newSandboxMetadataTool())
+	disp := NewDispatcherWithRegistry(reg)
+	args := map[string]interface{}{"command": "printf ok"}
+	if _, err := disp.Dispatch("terminal", args); err != nil {
+		t.Fatal(err)
+	}
+	if args["_sandbox_mode"] != string(SandboxHost) {
+		t.Fatalf("actual sandbox mode was not propagated: %#v", args)
+	}
+	metadata := disp.ToolExecutionMetadata("terminal", args)
+	if !containsMetadataClass(metadata.OperationClasses, "dangerous") {
+		t.Fatalf("completed metadata did not record actual host execution: %+v", metadata)
+	}
+}
+
+func containsMetadataClass(classes []string, want string) bool {
+	for _, class := range classes {
+		if class == want {
+			return true
+		}
+	}
+	return false
 }
 
 func TestDispatcherRegister(t *testing.T) {

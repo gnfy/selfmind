@@ -228,12 +228,19 @@ var delegatedExecTools = map[string]struct{}{
 	"watch_external": {},
 }
 
+var deleteExecBinaries = map[string]struct{}{
+	"rm": {}, "rmdir": {}, "unlink": {}, "shred": {}, "wipefs": {},
+}
+
 // operationClassesFor names what this call can do, in the same vocabulary a
 // prohibition is expressed in. `dangerous` only contributes a fallback class:
 // the heuristic says an op looked risky, which is never something the person
 // said, so it must not make an unrelated deny apply.
 func operationClassesFor(toolName string, args map[string]interface{}, dangerous bool) []OperationClass {
 	var classes []OperationClass
+	if policy, ok := args[toolExecutionPolicyArg].(toolExecutionPolicy); ok {
+		classes = append(classes, policy.OperationClasses...)
+	}
 	if unclassifiedExternalToolCall(args) {
 		// An external server can perform any of these effects and its description
 		// is untrusted. Keep explicit user prohibitions effective until an
@@ -251,11 +258,42 @@ func operationClassesFor(toolName string, args map[string]interface{}, dangerous
 		} else {
 			classes = append(classes, OpClassExecInTurn)
 		}
+		command := execCommandPayload(toolName, args)
+		segments, _ := expandCommandSegments(command, 0)
+		if network, _ := egressCommand(command, segments); network {
+			classes = append(classes, OpClassNetwork)
+		}
+		for _, fields := range segments {
+			programIndex, ok := segmentProgram(fields)
+			if !ok {
+				continue
+			}
+			if _, deletes := deleteExecBinaries[filepath.Base(fields[programIndex])]; deletes {
+				classes = append(classes, OpClassDelete)
+				break
+			}
+		}
+	}
+	if (toolName == "patch" || toolName == "apply_patch") && strings.Contains(stringArg(args, "patch"), "*** Delete File:") {
+		classes = append(classes, OpClassDelete)
 	}
 	if dangerous {
 		classes = append(classes, OpClassDangerous)
 	}
-	return classes
+	return uniqueOperationClasses(classes)
+}
+
+func uniqueOperationClasses(classes []OperationClass) []OperationClass {
+	seen := map[OperationClass]bool{}
+	out := make([]OperationClass, 0, len(classes))
+	for _, class := range classes {
+		if class == "" || seen[class] {
+			continue
+		}
+		seen[class] = true
+		out = append(out, class)
+	}
+	return out
 }
 
 // operationTargetsFor collects the literal objects this call acts on, so a
@@ -1338,7 +1376,7 @@ func dangerousToolCall(projectRoot, toolName string, args map[string]interface{}
 	if strings.Contains(path, "/etc/") || strings.Contains(path, "/root/") || strings.Contains(path, "/dev/") {
 		return true, fmt.Sprintf("accesses restricted path: %s", path)
 	}
-	if projectRoot != "" && filepath.IsAbs(path) && !strings.HasPrefix(filepath.Clean(path), filepath.Clean(projectRoot)) {
+	if projectRoot != "" && filepath.IsAbs(path) && !isWithin(filepath.Clean(projectRoot), filepath.Clean(path)) {
 		return true, fmt.Sprintf("accesses path outside project root: %s", path)
 	}
 	return false, ""

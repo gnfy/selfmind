@@ -6,7 +6,7 @@
 > the generated [`README.md`](README.md) index. Code and tests remain the source
 > of truth.
 
-**Snapshot:** 2026-08-18
+**Snapshot:** 2026-08-20
 
 ## Release Health
 
@@ -45,7 +45,7 @@
 | Tasks | Done | Inbox, lifecycle fields, paging/search, pin/archive/rename/merge, retention, governed Task References, audited attach policies, explicit dry-run legacy-reference migration, and asynchronous post-run labeling exist. Semantic references never grant workspace or prior-run authority; ticket-shaped work keys are display hints only. |
 | Background maintenance | Done | Debounced bounded batches, immutable replay jobs, restart-safe retry exhaustion, shared retry policy, stable semantic roles with a shared auxiliary floor, provider/contract circuit identity, diagnostics, migration tools, and dispatch-time reasoning/output bounds exist. |
 | Skills | Done | Runtime discovery, one-Skill-per-work-unit activation, deterministic task binding, active/candidate/previous versions, bounded context, explicit candidate management, catalog/bundles, tenant ownership, injected storage isolation, side-effect-free reads, archived-asset migration, recoverable orphan quarantine, and learning audit exist. |
-| Safe self-evolution | Partial | Terminal work-unit observations, neutral parked waits, comparable cohorts, frozen curator proposals, failure guards, rollback, and same-task read-only `batch_read` candidates exist. Empty-procedure and external-watch evidence cannot nominate curation. Repeated verified read-only cohorts may publish only unpinned agent-created Skills; write/shell/network/external-effect candidates require explicit management. Real repeated workflows still need production validation. |
+| Safe self-evolution | Partial | Terminal work-unit observations, neutral parked waits, comparable cohorts, frozen curator proposals, failure guards, multi-version rollback, and same-task read-only `batch_read` candidates exist. Empty-procedure and external-watch evidence cannot nominate curation. Three repeated explicitly passed built-in procedures may publish writable, unpinned agent-created Skills without granting execution authority; actual host execution and network/delete/external/delegated effects remain candidates. Directly attributable daemon-observed failures followed by verified same-unit recovery can publish deterministic narrow-section repairs only for canonical curator-managed active versions, with call-id attribution, closed category mapping, and visible lifecycle events. Real repeated workflows still need production validation. |
 | Tool safety | Partial | Safety floor, smart approval, typed invocation scope, grants, hash-bound trusted observation scripts, secret redaction, schema governance, sandbox/host profiles, and failure envelopes exist. External MCP tools use the official Go SDK over stdio or Streamable HTTP, with paginated discovery, live catalogue updates, collision-safe names, health diagnostics, internal-argument filtering, and per-schema quarantine. Unclassified MCP calls fail closed to once-only human approval in every mode. Human asks use one server-issued menu across CLI/IM: proceed once, optional run-local reuse with the exact proposed rule visible, and deny; sensitive asks are once/deny only. Unanswered asks park without rejection, later approval resumes through an exact-action one-shot capability below the current safety floor, and current live/parked backlog age is visible. Historical broader grants remain listable and revocable. External tool diversity remains an ongoing compatibility surface. |
 | External watchers | Partial | Durable registration, bounded slow-command preflight, environment/auth snapshots, restart recovery, idempotent finalization, separate agent/external outcomes, person-scoped numbered `/watchers` controls, and delivery-confirmed stable-ID notifications exist. Keep validating provider-specific terminal behavior and live delivery. |
 | IM delivery | Partial | Weixin and other adapters share durable outbound state, delivery diagnostics, session refresh classification, bounded catch-up, preferred-channel routing, desk-first/phone-first approval surfaces, and idempotent resolution follow-ups. Live platform behavior remains an external dependency. |
@@ -68,10 +68,11 @@ limitation. It does not mean the area should be redesigned from scratch.
    user correction. Improve selection/write policy only from those traces.
 3. **Validate Skill lifecycle and safe evolution on repeated personal workflows.**
    Confirm that task bindings reduce directory/context cost, work-unit Skill
-   switches expire old bodies, comparable cohorts produce narrow candidates,
-   read-only promotion preserves verification, guards prevent repeated bad
-   steps, and fallback still completes through ordinary planning. Continue
-   validating shadow truth and turn savings for enabled read-only batches.
+   switches expire old bodies, comparable cohorts publish narrow procedures,
+   ordinary write/Shell publication never bypasses execution policy, verified
+   repairs change only attributable sections, guards prevent repeated bad steps,
+   and fallback still completes through ordinary planning. Continue validating
+   shadow truth and turn savings for enabled read-only batches.
 4. **Prepare the next npm beta only after the full gate passes.** The release
    needs a clean Action run, platform package smoke tests, fresh install,
    update, service restart, and rollback evidence.
@@ -100,10 +101,12 @@ limitation. It does not mean the area should be redesigned from scratch.
 - Full multi-run foreground/background concurrency and remote Runner execution
   remain design seams only. Do not infer that they are shipped from queue or
   execution-envelope plumbing.
-- Self-evolution can publish only repeated, verified read-only procedures to
-  writable, unpinned agent-created Skills. It does not rewrite protected
-  Skills, approve capabilities, choose workspaces, or authorize writes,
-  credentials, network access, shell execution, or external effects. Those
+- Self-evolution may publish repeated, verified procedures using trusted
+  built-in tools to writable, unpinned agent-created Skills, and may publish a
+  narrow repair after one attributable incident plus verified same-unit
+  recovery. It does not rewrite protected Skills, approve capabilities, choose
+  workspaces, or authorize writes, credentials, network access, shell execution,
+  or external effects. Network/delete, external-origin, and delegated-effect
   candidates remain inactive until explicit user management.
 
 ## Plan Lifecycle

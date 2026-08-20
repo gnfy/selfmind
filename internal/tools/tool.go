@@ -54,13 +54,14 @@ const (
 )
 
 type ToolMetadata struct {
-	Exposure         ToolExposure  `json:"exposure,omitempty"`
-	SupportsParallel bool          `json:"supports_parallel,omitempty"`
-	ReadOnly         bool          `json:"read_only,omitempty"`
-	RiskLevel        ToolRiskLevel `json:"risk_level,omitempty"`
-	Category         string        `json:"category,omitempty"`
-	TimeoutSeconds   int           `json:"timeout_seconds,omitempty"`
-	SearchText       string        `json:"search_text,omitempty"`
+	Exposure         ToolExposure     `json:"exposure,omitempty"`
+	SupportsParallel bool             `json:"supports_parallel,omitempty"`
+	ReadOnly         bool             `json:"read_only,omitempty"`
+	RiskLevel        ToolRiskLevel    `json:"risk_level,omitempty"`
+	Category         string           `json:"category,omitempty"`
+	OperationClasses []OperationClass `json:"operation_classes,omitempty"`
+	TimeoutSeconds   int              `json:"timeout_seconds,omitempty"`
+	SearchText       string           `json:"search_text,omitempty"`
 }
 
 type MetadataProvider interface {
@@ -74,10 +75,11 @@ const toolExecutionPolicyArg = "_tool_execution_policy"
 // an external tool endpoint. Approval policy must use the registered Tool's
 // origin instead of trusting a provider-visible name such as "mcp_*".
 type toolExecutionPolicy struct {
-	Origin   ToolSchemaOrigin
-	Category string
-	Risk     ToolRiskLevel
-	ReadOnly bool
+	Origin           ToolSchemaOrigin
+	Category         string
+	Risk             ToolRiskLevel
+	ReadOnly         bool
+	OperationClasses []OperationClass
 }
 
 func executionPolicyForTool(t Tool) toolExecutionPolicy {
@@ -91,6 +93,7 @@ func executionPolicyForTool(t Tool) toolExecutionPolicy {
 	policy.Category = metadata.Category
 	policy.Risk = metadata.RiskLevel
 	policy.ReadOnly = metadata.ReadOnly
+	policy.OperationClasses = append([]OperationClass(nil), metadata.OperationClasses...)
 	return policy
 }
 
@@ -184,6 +187,8 @@ func toolDefinitionFromCompiled(t Tool, parameters map[string]interface{}) map[s
 		"read_only":         meta.ReadOnly,
 		"risk_level":        meta.RiskLevel,
 		"category":          meta.Category,
+		"origin":            executionPolicyForTool(t).Origin,
+		"operation_classes": meta.OperationClasses,
 	}
 	return def
 }

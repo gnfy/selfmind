@@ -208,7 +208,22 @@ func (t *SkillLifecycleManageTool) promoteCandidate(args map[string]interface{},
 	if version.CreatedBy != "skill_curator" {
 		return "", fmt.Errorf("only curator-created candidates can be promoted through this surface")
 	}
-	path, err := writeLifecycleVersionFile(tenantID, version, args)
+	active, err := t.store.ActiveSkillVersion(ContextFromArgs(args), tenantID, version.SkillKey)
+	if err != nil {
+		return "", err
+	}
+	expectedCurrentHash := ""
+	if version.ParentVersionHash == "" {
+		if active != nil {
+			return "", fmt.Errorf("parentless Skill candidate cannot replace active version %s", active.VersionHash)
+		}
+	} else {
+		if active == nil || active.VersionHash != version.ParentVersionHash {
+			return "", fmt.Errorf("skill candidate parent %s is not the current active version", version.ParentVersionHash)
+		}
+		expectedCurrentHash = active.VersionHash
+	}
+	path, err := writeLifecycleVersionFile(tenantID, version, expectedCurrentHash, args)
 	if err != nil {
 		return "", err
 	}
@@ -224,7 +239,14 @@ func (t *SkillLifecycleManageTool) rollback(args map[string]interface{}, tenantI
 	if err != nil {
 		return "", err
 	}
-	path, err := writeLifecycleVersionFile(tenantID, version, args)
+	active, err := t.store.ActiveSkillVersion(ContextFromArgs(args), tenantID, version.SkillKey)
+	if err != nil {
+		return "", err
+	}
+	if active == nil {
+		return "", fmt.Errorf("active Skill version is unavailable for rollback")
+	}
+	path, err := writeLifecycleVersionFile(tenantID, version, active.VersionHash, args)
 	if err != nil {
 		return "", err
 	}
@@ -235,7 +257,7 @@ func (t *SkillLifecycleManageTool) rollback(args map[string]interface{}, tenantI
 	return fmt.Sprintf("Rolled back Skill %s to %s. Existing activations remain unchanged.", version.SkillName, version.VersionHash), nil
 }
 
-func writeLifecycleVersionFile(tenantID string, version *control.SkillVersion, args map[string]interface{}) (string, error) {
+func writeLifecycleVersionFile(tenantID string, version *control.SkillVersion, expectedCurrentHash string, args map[string]interface{}) (string, error) {
 	if version == nil || strings.TrimSpace(version.ContentBody) == "" {
 		return "", fmt.Errorf("version content is unavailable")
 	}
@@ -252,7 +274,14 @@ func writeLifecycleVersionFile(tenantID string, version *control.SkillVersion, a
 			return "", fmt.Errorf("automatic lifecycle writes require a writable, unpinned, agent-created Skill")
 		}
 		currentHash := sha256.Sum256([]byte(current))
-		if fmt.Sprintf("%x", currentHash[:]) != version.VersionHash {
+		currentVersionHash := fmt.Sprintf("%x", currentHash[:])
+		if expectedCurrentHash == "" && currentVersionHash != version.VersionHash {
+			return "", fmt.Errorf("active Skill exists for a parentless candidate; refusing to overwrite it")
+		}
+		if expectedCurrentHash != "" && currentVersionHash != expectedCurrentHash && currentVersionHash != version.VersionHash {
+			return "", fmt.Errorf("active Skill changed after candidate creation; refusing to overwrite newer content")
+		}
+		if currentVersionHash != version.VersionHash {
 			if _, err := editSkill(tenantID, info.Name, version.ContentBody, "", args); err != nil {
 				return "", err
 			}

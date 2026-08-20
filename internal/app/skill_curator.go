@@ -17,13 +17,13 @@ import (
 )
 
 const skillCuratorSystemPrompt = `You are SelfMind's sole Skill curator.
-You receive a bounded cohort of comparable work-unit observations: at least three verified success paths plus any relevant failures or user corrections.
+You receive either a bounded cohort of at least three comparable verified success paths for a new Skill, or one directly attributable Skill incident followed by a verified ordinary-planner recovery.
 Return one JSON object only:
-{"action":"CREATE","name":"narrow-skill-name","content":"...","reason":"..."}
+{"action":"CREATE","name":"narrow-skill-name","content":"...","changed_sections":[],"reason":"..."}
 action is CREATE, PATCH, or SKIP.
 - CREATE only when target_skill_key is empty and the cohort proves a narrow reusable workflow.
-- PATCH only when target_skill_key is present; preserve the target name and summarize stable improvements, including repeated waste even when no run failed.
-- SKIP when evidence is heterogeneous, environment-specific, unverifiable, or does not prove a stable faster path.
+- PATCH only when target_skill_key is present and the evidence contains a directly attributable incident with recovery_verified=true. Preserve the target name and every unrelated byte of the active Skill. Change one to three relevant level-two sections and list their exact headings in changed_sections. changed_sections must include the failed section named by failed_step_id; a failed_step_id that is not itself a section heading belongs to Procedure.
+- SKIP when evidence is heterogeneous, environment-specific, unverifiable, or does not prove a stable reusable procedure or attributable repair.
 Never concatenate runs. Extract only stable common steps, parameters, preconditions, failure guards, recovery, and verification. Do not treat one fastest run as the baseline; use the cohort medians. Negative observations are constraints, not substitute commands.
 Candidate content must be complete Markdown beginning with YAML front matter containing the exact name and a narrow description, followed by all headings: Applicability, Inputs, Preconditions, Procedure, Failure Guards, Recovery, Verification. It is an instruction asset, never an auto-executed script. Do not include credentials, raw logs, absolute user paths, or session-specific artifacts.
 Preserve the cohort's useful task-language terms in the front-matter description (including non-English terms) so deterministic future retrieval does not require translation.
@@ -36,10 +36,11 @@ type llmSkillCurator struct {
 }
 
 type skillCuratorWire struct {
-	Action  string `json:"action"`
-	Name    string `json:"name"`
-	Content string `json:"content"`
-	Reason  string `json:"reason"`
+	Action          string   `json:"action"`
+	Name            string   `json:"name"`
+	Content         string   `json:"content"`
+	ChangedSections []string `json:"changed_sections,omitempty"`
+	Reason          string   `json:"reason"`
 }
 
 func NewConfiguredSkillCurator(mem *memory.MemoryManager, cfg *config.Config, tenantID string, store *control.Store) httpapi.SkillCuratorRunner {
@@ -68,6 +69,11 @@ func (c *llmSkillCurator) ProposeSkillCuration(ctx context.Context, tenantID, pa
 	}
 	if !skillCurationProposalEligible(digest) {
 		return `{"action":"SKIP","reason":"cohort is not ready"}`, nil
+	}
+	if digest.TargetSkillKey != "" {
+		if reason := c.repairPreflightReason(tenantID, digest); reason != "" {
+			return `{"action":"SKIP","reason":` + string(mustJSONText(reason)) + `}`, nil
+		}
 	}
 	if existing, err := c.store.SkillCandidateByEvidence(ctx, tenantID, digest.EvidenceSetHash); err != nil {
 		return "", err
@@ -114,17 +120,42 @@ func (c *llmSkillCurator) ApplySkillCuration(ctx context.Context, tenantID, payl
 	if !skillCurationProposalEligible(digest) {
 		return "skill candidate skipped: cohort is not ready", nil
 	}
+	if digest.TargetSkillKey != "" {
+		if reason := c.repairPreflightReason(tenantID, digest); reason != "" {
+			return "skill repair skipped: " + reason, nil
+		}
+	}
 	if existing, err := c.store.SkillCandidateByEvidence(ctx, tenantID, digest.EvidenceSetHash); err != nil {
 		return "", err
 	} else if existing != nil {
+		eventProposal := skillCuratorWire{Action: "CREATE"}
+		if digest.TargetSkillKey != "" {
+			eventProposal.Action = "PATCH"
+		}
+		if decoded, decodeErr := decodeSkillCuratorWire(proposalJSON); decodeErr == nil {
+			eventProposal = decoded
+			eventProposal.Action = strings.ToUpper(strings.TrimSpace(eventProposal.Action))
+		}
 		if existing.State == "candidate" && autoPromoteSkillCandidateEligible(digest) {
+			blockedReason, blockErr := c.automaticCandidatePromotionBlockedReason(ctx, tenantID, existing)
+			if blockErr != nil {
+				return "", blockErr
+			}
+			if blockedReason != "" {
+				c.recordSkillCurationEvents(ctx, digest, eventProposal, existing.SkillKey, existing.SkillName, existing.VersionHash, existing.ParentVersionHash, false)
+				return fmt.Sprintf("skill candidate created: %s@%s (automatic promotion blocked by %s; active unchanged)", existing.SkillName, existing.VersionHash, blockedReason), nil
+			}
 			promoted, promoteErr := c.publishCandidate(ctx, tenantID, existing.SkillKey, existing.VersionHash)
 			if promoteErr != nil {
 				return "", promoteErr
 			}
 			if promoted {
+				c.recordSkillCurationEvents(ctx, digest, eventProposal, existing.SkillKey, existing.SkillName, existing.VersionHash, existing.ParentVersionHash, true)
 				return fmt.Sprintf("skill candidate promotion recovered: %s@%s", existing.SkillName, existing.VersionHash), nil
 			}
+		}
+		if existing.State == "candidate" || existing.State == "active" {
+			c.recordSkillCurationEvents(ctx, digest, eventProposal, existing.SkillKey, existing.SkillName, existing.VersionHash, existing.ParentVersionHash, existing.State == "active")
 		}
 		return fmt.Sprintf("skill evidence already materialized: %s@%s (%s)", existing.SkillName, existing.VersionHash, existing.State), nil
 	}
@@ -158,12 +189,26 @@ func (c *llmSkillCurator) ApplySkillCuration(ctx context.Context, tenantID, payl
 		if skillKey == "" || digest.TargetSkillName == "" {
 			return "", fmt.Errorf("curator PATCH requires an existing target skill")
 		}
+		if !digestHasVerifiedRepairIncident(digest) {
+			return "", fmt.Errorf("curator PATCH requires a verified attributable repair incident")
+		}
+		if ok, reason := c.automaticRepairTargetEligible(tenantID, digest.TargetSkillName); !ok {
+			return "skill repair skipped: " + reason, nil
+		}
 		name = digest.TargetSkillName
 	default:
 		return "", fmt.Errorf("invalid skill curator action %q", proposal.Action)
 	}
 	if err := validateCuratedSkillContent(proposal.Content, name); err != nil {
 		return "", err
+	}
+	if proposal.Action == "PATCH" {
+		if err := validateRepairIncidentCoverage(digest, proposal.ChangedSections); err != nil {
+			return "", err
+		}
+		if err := validateNarrowSkillRepair(digest.TargetActiveContent, proposal.Content, proposal.ChangedSections); err != nil {
+			return "", err
+		}
 	}
 	ids := make([]string, 0, len(digest.SuccessObservations)+len(digest.NegativeObservations))
 	for _, observation := range digest.SuccessObservations {
@@ -194,28 +239,27 @@ func (c *llmSkillCurator) ApplySkillCuration(ctx context.Context, tenantID, payl
 	versionHash := createdVersion.VersionHash
 	promoted := false
 	if autoPromoteSkillCandidateEligible(digest) {
-		promoted, err = c.publishCandidate(ctx, tenantID, skillKey, versionHash)
-		if err != nil {
-			return "", err
+		version, versionErr := c.store.GetSkillVersion(ctx, tenantID, skillKey, versionHash)
+		if versionErr != nil {
+			return "", versionErr
+		}
+		blockedReason, blockErr := c.automaticCandidatePromotionBlockedReason(ctx, tenantID, version)
+		if blockErr != nil {
+			return "", blockErr
+		}
+		if blockedReason == "" {
+			promoted, err = c.publishCandidate(ctx, tenantID, skillKey, versionHash)
+			if err != nil {
+				return "", err
+			}
+		} else {
+			c.recordSkillCurationEvents(ctx, digest, proposal, skillKey, name, versionHash, parent, false)
+			return fmt.Sprintf("skill candidate created: %s@%s (automatic promotion blocked by %s; active unchanged)", name, versionHash, blockedReason), nil
 		}
 	}
-	if len(digest.SuccessObservations) > 0 {
-		latest := digest.SuccessObservations[0]
-		if latest.RelatedTaskID != "" {
-			payload, _ := json.Marshal(map[string]interface{}{
-				"skill_key": skillKey, "name": name, "version_hash": versionHash,
-				"parent_version_hash": parent, "evidence_set_hash": digest.EvidenceSetHash,
-				"action": proposal.Action, "reason": strings.TrimSpace(proposal.Reason),
-			})
-			_, _ = c.store.AppendEvent(ctx, control.Event{
-				TaskID: latest.RelatedTaskID, RunID: latest.RunID, Type: "skill.candidate.created",
-				Visibility: "task", Payload: payload,
-				IdempotencyKey: "skill-candidate:" + digest.EvidenceSetHash,
-			})
-		}
-	}
+	c.recordSkillCurationEvents(ctx, digest, proposal, skillKey, name, versionHash, parent, promoted)
 	if promoted {
-		return fmt.Sprintf("skill candidate promoted after read-only cohort validation: %s@%s", name, versionHash), nil
+		return fmt.Sprintf("skill candidate promoted after verified procedure validation: %s@%s", name, versionHash), nil
 	}
 	return fmt.Sprintf("skill candidate created: %s@%s (active unchanged; confirmation or stronger evidence required)", name, versionHash), nil
 }
@@ -233,62 +277,9 @@ func decodeSkillCuratorWire(raw string) (skillCuratorWire, error) {
 	return proposal, nil
 }
 
-func validateCuratedSkillContent(content, name string) error {
-	content = strings.TrimSpace(content)
-	if content == "" || len(content) > 32*1024 {
-		return fmt.Errorf("curated skill content must be non-empty and at most 32 KiB")
-	}
-	lower := strings.ToLower(content)
-	if !strings.HasPrefix(content, "---\n") || !strings.Contains(lower, "name: "+strings.ToLower(name)) {
-		return fmt.Errorf("curated skill content must start with front matter for %s", name)
-	}
-	for _, heading := range []string{"applicability", "inputs", "preconditions", "procedure", "failure guards", "recovery", "verification"} {
-		if !strings.Contains(lower, "# "+heading) && !strings.Contains(lower, "## "+heading) {
-			return fmt.Errorf("curated skill content is missing %s heading", heading)
-		}
-	}
-	return nil
-}
-
-func autoPromoteSkillCandidateEligible(digest control.SkillEvidenceDigest) bool {
-	if len(digest.SuccessObservations) < 3 {
-		return false
-	}
-	runs := map[string]bool{}
-	for _, observation := range digest.SuccessObservations {
-		runs[observation.RunID] = true
-		if observation.EvidenceRole != "success_path" {
-			return false
-		}
-		if len(observation.ToolSequence) == 0 {
-			return false
-		}
-		switch observation.VerificationState {
-		case "passed", "not_applicable":
-		default:
-			return false
-		}
-		for _, tool := range observation.ToolSequence {
-			switch tool {
-			case "file.read", "file.search", "file.list", "web.search", "web.extract", "session.search", "skill.read", "batch.read":
-			default:
-				return false
-			}
-		}
-	}
-	return len(runs) >= 3
-}
-
-func skillCurationProposalEligible(digest control.SkillEvidenceDigest) bool {
-	if len(digest.SuccessObservations) < 3 || strings.TrimSpace(digest.EvidenceSetHash) == "" {
-		return false
-	}
-	for _, observation := range digest.SuccessObservations {
-		if observation.EvidenceRole != "success_path" || len(observation.ToolSequence) == 0 {
-			return false
-		}
-	}
-	return true
+func mustJSONText(value string) []byte {
+	encoded, _ := json.Marshal(value)
+	return encoded
 }
 
 func (c *llmSkillCurator) publishCandidate(ctx context.Context, tenantID, skillKey, versionHash string) (bool, error) {

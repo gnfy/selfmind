@@ -120,16 +120,24 @@ func TestSkillLifecycleManagementPromotesRollsBackAndBindsExplicitly(t *testing.
 	if _, err := tool.Execute(cloneLifecycleArgs(baseArgs, map[string]interface{}{"action": "candidate_promote", "version_hash": versionV2})); err != nil {
 		t.Fatal(err)
 	}
+	contentV3 := curatedSkillTestContent(name, "Read the declared manifest once, verify the answer, and report the bounded result.")
+	versionV3, err := store.CreateSkillCandidateVersion(ctx, identity.TenantID, key, name, versionV2, contentV3, "evidence-v3", []string{"o7", "o8", "o9"}, map[string]string{"risk": "read_only"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tool.Execute(cloneLifecycleArgs(baseArgs, map[string]interface{}{"action": "candidate_promote", "version_hash": versionV3})); err != nil {
+		t.Fatal(err)
+	}
 	previous, _ := store.GetSkillVersion(ctx, identity.TenantID, key, versionV1)
 	if previous == nil || previous.State != "previous" {
 		t.Fatalf("first version was not retained for rollback: %+v", previous)
 	}
-	if _, err := tool.Execute(cloneLifecycleArgs(baseArgs, map[string]interface{}{"action": "rollback", "version_hash": versionV1})); err != nil {
+	if _, err := tool.Execute(cloneLifecycleArgs(baseArgs, map[string]interface{}{"action": "rollback", "version_hash": versionV2})); err != nil {
 		t.Fatal(err)
 	}
-	rolledBack, _ := store.GetSkillVersion(ctx, identity.TenantID, key, versionV1)
+	rolledBack, _ := store.GetSkillVersion(ctx, identity.TenantID, key, versionV2)
 	if rolledBack == nil || rolledBack.State != "active" {
-		t.Fatalf("rollback did not reactivate first version: %+v", rolledBack)
+		t.Fatalf("three-version rollback did not reactivate second version: %+v", rolledBack)
 	}
 
 	if _, err := tool.Execute(cloneLifecycleArgs(baseArgs, map[string]interface{}{"action": "binding_bind", "name": name})); err != nil {
@@ -169,6 +177,48 @@ func TestSkillLifecycleManagementPromotesRollsBackAndBindsExplicitly(t *testing.
 		"_invocation_scope": deniedScope,
 	}); err == nil {
 		t.Fatal("candidate-only authority performed an active rollback")
+	}
+}
+
+func TestSkillCandidatePromotionRefusesActiveContentDrift(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	ctx := context.Background()
+	store, err := control.OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	name := "drift-safe-repair"
+	root, err := userSkillsDirForTenant("default")
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := control.SkillKey("default", name, SkillScopeUser, SkillSourceAgentCreated, root, filepath.ToSlash(filepath.Join(name, "SKILL.md")))
+	contentV1 := curatedSkillTestContent(name, "Read the original manifest.")
+	versionV1, err := store.CreateSkillCandidateVersion(ctx, "default", key, name, "", contentV1, "drift-v1", []string{"o1"}, map[string]string{"kind": "initial"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tool := NewSkillLifecycleManageTool(store)
+	baseArgs := map[string]interface{}{
+		"_tenant_id": "default", "_context": ctx,
+		"_invocation_scope": kernel.ToolInvocationScope{ControlTenantID: "default", SkillMutationMode: kernel.SkillMutationDirect},
+	}
+	if _, err := tool.Execute(cloneLifecycleArgs(baseArgs, map[string]interface{}{"action": "candidate_promote", "version_hash": versionV1})); err != nil {
+		t.Fatal(err)
+	}
+	contentV2 := curatedSkillTestContent(name, "Read the current manifest and verify it.")
+	versionV2, err := store.CreateSkillCandidateVersion(ctx, "default", key, name, versionV1, contentV2, "drift-v2", []string{"o2"}, map[string]string{"kind": "repair"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	drifted := curatedSkillTestContent(name, "A person changed this procedure after candidate creation.")
+	if _, err := editSkill("default", name, drifted, "", baseArgs); err != nil {
+		t.Fatal(err)
+	}
+	_, err = tool.Execute(cloneLifecycleArgs(baseArgs, map[string]interface{}{"action": "candidate_promote", "version_hash": versionV2}))
+	if err == nil || !strings.Contains(err.Error(), "changed after candidate creation") {
+		t.Fatalf("stale candidate promotion error=%v", err)
 	}
 }
 

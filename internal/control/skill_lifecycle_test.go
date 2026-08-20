@@ -331,6 +331,204 @@ func TestWorkflowCohortRequiresMultipleComparableSuccessesAndKeepsFailures(t *te
 	}
 }
 
+func TestVerifiedSkillFallbackRecoveryNominatesImmediateRepair(t *testing.T) {
+	ctx := context.Background()
+	store, err := OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	identity, _ := store.ResolveOrCreateAccount(ctx, "default", "cli", "repair", "Repair")
+	task, _ := store.CreateTask(ctx, TaskCreate{TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "repair release skill", Channel: "cli"})
+	run, _ := store.StartRun(ctx, task, "cli", "update release record safely")
+	key := SkillKey(identity.TenantID, "release-record", "user", "agent-created", "/skills", "release-record/SKILL.md")
+	activeContent := `---
+name: release-record
+description: Update release records.
+---
+
+## Applicability
+Release record updates.
+
+## Inputs
+A release record.
+
+## Preconditions
+The record exists.
+
+## Procedure
+Write the legacy layout.
+
+## Failure Guards
+Do not guess the layout.
+
+## Recovery
+Return to ordinary planning.
+
+## Verification
+Read the result.`
+	activeHash, err := store.CreateSkillCandidateVersion(ctx, identity.TenantID, key, "release-record", "", activeContent, "initial-repair-evidence", []string{"initial"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.PromoteSkillCandidate(ctx, identity.TenantID, key, activeHash, "/skills/release-record/SKILL.md"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.ActivateSkill(ctx, ActivateSkillInput{
+		IdentityTenantID: identity.TenantID, ControlTenantID: identity.TenantID, PersonID: identity.PersonID,
+		RunID: run.ID, WorkUnitID: run.WorkUnitID, SkillKey: key, SkillName: "release-record", VersionHash: activeHash,
+		ActivationSource: "binding", ContentBody: activeContent, CreatedBy: "external_reconcile",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	started := json.RawMessage(`{"tool":"write_file","tool_origin":"builtin","tool_category":"general","tool_risk_level":"high","tool_read_only":false,"operation_classes":["write"]}`)
+	_, _ = store.AppendEvent(ctx, Event{TaskID: task.ID, RunID: run.ID, Type: "tool.started", Payload: started})
+	_, _ = store.AppendEvent(ctx, Event{TaskID: task.ID, RunID: run.ID, Type: "tool.completed", Payload: json.RawMessage(`{"tool":"write_file","tool_call_id":"write-old-layout","error":"stale layout","error_category":"interface_drift"}`)})
+	// A successful diagnostic read must not erase the actual failed call that
+	// the later fallback attributes to the active Skill.
+	_, _ = store.AppendEvent(ctx, Event{TaskID: task.ID, RunID: run.ID, Type: "tool.started", Payload: json.RawMessage(`{"tool":"read_file","tool_call_id":"inspect-layout","tool_origin":"builtin","tool_category":"general","tool_risk_level":"low","tool_read_only":true}`)})
+	_, _ = store.AppendEvent(ctx, Event{TaskID: task.ID, RunID: run.ID, Type: "tool.completed", Payload: json.RawMessage(`{"tool":"read_file","tool_call_id":"inspect-layout"}`)})
+	if _, err := store.FallbackCurrentSkill(ctx, SkillFallbackInput{
+		IdentityTenantID: identity.TenantID, RunID: run.ID, WorkUnitID: run.WorkUnitID,
+		Reason: "the Skill used the old record layout", FailureSignature: "layout-v1",
+		FailedStepID: "Procedure", ErrorCategory: "stale_precondition", NormalizedInputShape: "release record",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	fallbackPayload, _ := json.Marshal(map[string]interface{}{
+		"work_unit_id": run.WorkUnitID, "skill_key": key, "version_hash": activeHash,
+		"failure_signature": "layout-v1", "failed_step_id": "Procedure",
+		"failed_tool_call_id": "write-old-layout",
+		"error_category":      "stale_precondition", "normalized_input_shape": "release record",
+		"reason": "the Skill used the old record layout",
+	})
+	_, _ = store.AppendEvent(ctx, Event{TaskID: task.ID, RunID: run.ID, Type: "skill.fallback", Payload: fallbackPayload})
+	_, _ = store.AppendEvent(ctx, Event{TaskID: task.ID, RunID: run.ID, Type: "tool.started", Payload: started})
+	_, _ = store.AppendEvent(ctx, Event{TaskID: task.ID, RunID: run.ID, Type: "tool.completed", Payload: json.RawMessage(`{"tool":"write_file"}`)})
+	if _, err := store.MaterializeRunFinalization(ctx, RunFinalization{
+		Identity: *identity, RunID: run.ID, RunStatus: "done", TaskID: task.ID, TaskStatus: "done",
+		Summary: "record updated with the current layout", VerificationState: "passed", Channel: "cli",
+		Event: Event{Type: "run.finished", Payload: json.RawMessage(`{"status":"done"}`)},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.MaterializeWorkflowObservations(ctx, identity.TenantID, run.ID); err != nil {
+		t.Fatal(err)
+	}
+	digests, err := store.ReadySkillEvidenceDigestsForRun(ctx, identity.TenantID, run.ID)
+	if err != nil || len(digests) != 1 {
+		t.Fatalf("repair digest=%+v err=%v", digests, err)
+	}
+	digest := digests[0]
+	if digest.TargetSkillKey != key || len(digest.NegativeObservations) != 1 || len(digest.SuccessObservations) != 0 {
+		t.Fatalf("repair cohort=%+v", digest)
+	}
+	incident := digest.NegativeObservations[0].Incident
+	if incident == nil || !incident.RecoveryVerified || !incident.FailureObserved || incident.FailedToolCallID != "write-old-layout" || incident.FailedStepID != "Procedure" || len(incident.RecoveryToolSequence) != 1 {
+		t.Fatalf("repair incident=%+v", incident)
+	}
+	if len(digest.NegativeObservations[0].ToolEvidence) != 3 || digest.NegativeObservations[0].ToolEvidence[0].Origin != "builtin" {
+		t.Fatalf("tool evidence=%+v", digest.NegativeObservations[0].ToolEvidence)
+	}
+}
+
+func TestSkillFallbackFailureAttributionRejectsUnknownCallID(t *testing.T) {
+	metrics := accumulateWorkUnitEvents([]RunWorkUnit{{ID: "unit-1"}}, []evolutionEvent{
+		{typ: "skill.activated", payload: map[string]interface{}{"work_unit_id": "unit-1"}},
+		{typ: "tool.completed", payload: map[string]interface{}{
+			"tool": "write_file", "tool_call_id": "actual-failure", "error": "stale", "error_category": "interface_drift",
+		}},
+		{typ: "skill.fallback", payload: map[string]interface{}{
+			"work_unit_id": "unit-1", "failed_tool_call_id": "invented-failure",
+			"failure_signature": "layout-v1", "failed_step_id": "Procedure", "error_category": "stale_precondition",
+		}},
+	})
+	incident := metrics["unit-1"].incident
+	if incident == nil || incident.FailureObserved || incident.FailedToolCallID != "" {
+		t.Fatalf("unknown call id authorized repair evidence: %+v", incident)
+	}
+}
+
+func TestCompletedToolMetadataReplacesPreflightEvidence(t *testing.T) {
+	metrics := accumulateWorkUnitEvents([]RunWorkUnit{{ID: "unit-1"}}, []evolutionEvent{
+		{typ: "tool.started", payload: map[string]interface{}{
+			"work_unit_id": "unit-1", "tool": "terminal", "tool_call_id": "call-1",
+			"tool_origin": "builtin", "tool_category": "general", "tool_risk_level": "high",
+			"operation_classes": []interface{}{"exec.in_turn"},
+		}},
+		{typ: "tool.completed", payload: map[string]interface{}{
+			"work_unit_id": "unit-1", "tool": "terminal", "tool_call_id": "call-1",
+			"tool_origin": "builtin", "tool_category": "general", "tool_risk_level": "high",
+			"operation_classes": []interface{}{"exec.in_turn", "dangerous"},
+		}},
+	})
+	evidence := metrics["unit-1"].toolEvidence
+	if len(evidence) != 1 || evidence[0].ToolCallID != "call-1" || len(evidence[0].OperationClasses) != 2 {
+		t.Fatalf("merged evidence=%+v", evidence)
+	}
+}
+
+func TestSkillRepairObservedFailureCategoryMapping(t *testing.T) {
+	tests := []struct {
+		repair   string
+		observed string
+		want     bool
+	}{
+		{repair: "stale_precondition", observed: "interface_drift", want: true},
+		{repair: "schema_changed", observed: "not_found", want: true},
+		{repair: "verification_mismatch", observed: "check_definition", want: true},
+		{repair: "invalid_procedure", observed: "syntax", want: true},
+		{repair: "stale_precondition", observed: "tool_schema", want: false},
+		{repair: "verification_mismatch", observed: "not_found", want: false},
+		{repair: "invented", observed: "command_failed", want: false},
+	}
+	for _, tt := range tests {
+		if got := SkillRepairObservedFailureEligible(tt.repair, tt.observed); got != tt.want {
+			t.Errorf("eligible(%q, %q)=%v, want %v", tt.repair, tt.observed, got, tt.want)
+		}
+	}
+}
+
+func TestVerifiedSkillRepairIncidentRejectsTransientFailure(t *testing.T) {
+	observation := WorkflowObservation{
+		EvidenceRole: "failure_guard",
+		Incident: &SkillIncidentEvidence{
+			FailureSignature: "temporary-network", FailedStepID: "Procedure",
+			ErrorCategory: "network_transient", ObservedErrorCategory: "command_failed",
+			FailureObserved: true, RecoveryVerified: true,
+		},
+	}
+	if VerifiedSkillRepairIncident(observation) {
+		t.Fatal("transient failure became automatic Skill repair evidence")
+	}
+}
+
+func TestSkillRepairContentTopologyRequiresCanonicalUniqueSections(t *testing.T) {
+	canonical := `## Applicability
+A
+## Inputs
+I
+## Preconditions
+P
+## Procedure
+P
+## Failure Guards
+F
+## Recovery
+R
+## Verification
+V`
+	if !skillRepairContentTopologyEligible(canonical) {
+		t.Fatal("canonical repair topology was rejected")
+	}
+	if skillRepairContentTopologyEligible(canonical + "\n## Recovery\nDuplicate") {
+		t.Fatal("duplicate repair section was accepted")
+	}
+	if skillRepairContentTopologyEligible(strings.Replace(canonical, "## Recovery\nR\n## Verification", "## Verification\nV\n## Recovery", 1)) {
+		t.Fatal("reordered repair topology was accepted")
+	}
+}
+
 func TestWorkflowCohortExcludesExternalWatchRuns(t *testing.T) {
 	ctx := context.Background()
 	store, err := OpenStore(t.TempDir())

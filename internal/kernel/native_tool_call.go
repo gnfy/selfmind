@@ -340,17 +340,33 @@ func (a *Agent) executeSingleToolCall(ctx context.Context, tenantID string, even
 	}
 
 	if eventCh != nil {
+		payload := map[string]interface{}{}
+		if provider, ok := a.backend.(ToolExecutionMetadataProvider); ok {
+			metadata := provider.ToolExecutionMetadata(name, args)
+			payload["tool_origin"] = metadata.Origin
+			payload["tool_category"] = metadata.Category
+			payload["tool_risk_level"] = metadata.RiskLevel
+			payload["tool_read_only"] = metadata.ReadOnly
+			if len(metadata.OperationClasses) > 0 {
+				payload["operation_classes"] = metadata.OperationClasses
+			}
+		}
 		EmitAgentEvent(eventCh, AgentEvent{
 			Type:       "tool.started",
 			ToolName:   name,
 			ToolCallID: call.ID,
 			ToolArgs:   call.Args,
+			Payload:    payload,
 		})
 	}
 
 	startTime := time.Now()
 	result, err := a.backend.Dispatch(name, args)
 	duration := time.Since(startTime).Seconds()
+	var completedMetadata []ToolExecutionMetadata
+	if provider, ok := a.backend.(ToolExecutionMetadataProvider); ok {
+		completedMetadata = append(completedMetadata, provider.ToolExecutionMetadata(name, args))
+	}
 
 	var ledgerErr error
 	if ledgerRunID != "" && ledger != nil {
@@ -367,7 +383,7 @@ func (a *Agent) executeSingleToolCall(ctx context.Context, tenantID string, even
 		}
 		packaged := packageToolFailureCtx(ctx, name, result, err)
 		if eventCh != nil {
-			emitToolEndEventWithDuration(eventCh, name, call.ID, packaged, duration, err)
+			emitToolEndEventWithDuration(eventCh, name, call.ID, packaged, duration, err, completedMetadata...)
 		}
 		return toolExecutionResult{
 			index:     idx,
@@ -389,7 +405,7 @@ func (a *Agent) executeSingleToolCall(ctx context.Context, tenantID string, even
 
 	packaged := packageToolResultCtx(ctx, name, result)
 	if eventCh != nil {
-		emitToolEndEventWithDuration(eventCh, name, call.ID, packaged, duration, nil)
+		emitToolEndEventWithDuration(eventCh, name, call.ID, packaged, duration, nil, completedMetadata...)
 		emitStructuredToolEvent(eventCh, name, args, result, nil)
 	}
 

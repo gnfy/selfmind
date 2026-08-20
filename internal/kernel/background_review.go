@@ -242,6 +242,17 @@ func (b *restrictedReviewBackend) Dispatch(name string, args map[string]interfac
 	return b.inner.Dispatch(name, args)
 }
 
+func (b *restrictedReviewBackend) ToolExecutionMetadata(name string, args map[string]interface{}) ToolExecutionMetadata {
+	if b == nil || !b.allowed[name] {
+		return ToolExecutionMetadata{}
+	}
+	provider, ok := b.inner.(ToolExecutionMetadataProvider)
+	if !ok {
+		return ToolExecutionMetadata{}
+	}
+	return provider.ToolExecutionMetadata(name, args)
+}
+
 func (b *restrictedReviewBackend) GetToolDefinitions() []map[string]interface{} {
 	defs := b.inner.GetToolDefinitions()
 	filtered := make([]map[string]interface{}, 0, len(defs))

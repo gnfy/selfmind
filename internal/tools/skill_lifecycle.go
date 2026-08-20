@@ -141,7 +141,8 @@ func NewSkillFallbackTool(store *control.Store) *SkillFallbackTool {
 				Properties: map[string]PropertyDef{
 					"reason":                 {Type: "string", Description: "Concise evidence-backed reason the active skill cannot continue."},
 					"failed_step_id":         {Type: "string", Description: "Optional stable/concise failed procedure step."},
-					"error_category":         {Type: "string", Description: "Optional normalized category such as command_failed, stale_precondition, or environment_mismatch."},
+					"failed_tool_call_id":    {Type: "string", Description: "Optional call id of the actual failed tool invocation. When present, it must match daemon-observed failure evidence."},
+					"error_category":         {Type: "string", Enum: control.SkillRepairErrorCategories(), Description: "Optional stable Skill-defect category. Unknown, transient, provider, environment, approval, and cancellation failures never authorize automatic repair."},
 					"normalized_input_shape": {Type: "string", Description: "Optional non-sensitive input shape used to avoid repeating the same failed step."},
 					"work_unit_id":           {Type: "string", Description: "Optional current work-unit id."},
 				},
@@ -163,7 +164,8 @@ func (t *SkillFallbackTool) Execute(args map[string]interface{}) (string, error)
 	}
 	reason := taskStringArg(args, "reason")
 	failedStep := taskStringArg(args, "failed_step_id")
-	category := taskStringArg(args, "error_category")
+	failedToolCallID := taskStringArg(args, "failed_tool_call_id")
+	category, _ := control.NormalizeSkillRepairErrorCategory(taskStringArg(args, "error_category"))
 	inputShape := taskStringArg(args, "normalized_input_shape")
 	workUnitID := taskStringArg(args, "work_unit_id")
 	sigRaw, _ := json.Marshal([]string{strings.TrimSpace(failedStep), strings.TrimSpace(category), strings.TrimSpace(inputShape), strings.TrimSpace(reason)})
@@ -181,7 +183,10 @@ func (t *SkillFallbackTool) Execute(args map[string]interface{}) (string, error)
 		Payload: map[string]interface{}{
 			"activation_id": activation.ID, "work_unit_id": activation.WorkUnitID,
 			"skill_key": activation.SkillKey, "name": activation.SkillName,
-			"version_hash": activation.VersionHash, "reason": reason, "error_category": category,
+			"version_hash": activation.VersionHash, "reason": reason,
+			"failure_signature": fmt.Sprintf("%x", sig[:]), "failed_step_id": failedStep,
+			"failed_tool_call_id": failedToolCallID,
+			"error_category":      category, "normalized_input_shape": inputShape,
 		},
 	})
 	data, _ := json.Marshal(map[string]interface{}{

@@ -485,7 +485,20 @@ func (a *Agent) Analyze(imageBase64, mimeType, question string) (string, error) 
 	return a.llm.ChatCompletion(context.Background(), []llm.Message{msg})
 }
 
-func emitToolEndEventWithDuration(ch chan string, name, toolCallID string, result ToolResultEnvelope, duration float64, err error) {
+func emitToolEndEventWithDuration(ch chan string, name, toolCallID string, result ToolResultEnvelope, duration float64, err error, metadata ...ToolExecutionMetadata) {
+	metadataPayload := func(payload map[string]interface{}) map[string]interface{} {
+		if len(metadata) == 0 {
+			return payload
+		}
+		payload["tool_origin"] = metadata[0].Origin
+		payload["tool_category"] = metadata[0].Category
+		payload["tool_risk_level"] = metadata[0].RiskLevel
+		payload["tool_read_only"] = metadata[0].ReadOnly
+		if len(metadata[0].OperationClasses) > 0 {
+			payload["operation_classes"] = metadata[0].OperationClasses
+		}
+		return payload
+	}
 	if err != nil {
 		category, hint := classifyToolFailure(err.Error())
 		payload := map[string]interface{}{
@@ -508,7 +521,7 @@ func emitToolEndEventWithDuration(ch chan string, name, toolCallID string, resul
 			DurationSeconds: duration,
 			ToolResult:      result.Preview,
 			Error:           result.ModelContent,
-			Payload:         payload,
+			Payload:         metadataPayload(payload),
 		})
 	} else {
 		EmitAgentEvent(ch, AgentEvent{
@@ -517,10 +530,10 @@ func emitToolEndEventWithDuration(ch chan string, name, toolCallID string, resul
 			ToolCallID:      toolCallID,
 			ToolResult:      result.Preview,
 			DurationSeconds: duration,
-			Payload: map[string]interface{}{
+			Payload: metadataPayload(map[string]interface{}{
 				"result_bytes":     result.Bytes,
 				"result_truncated": result.Truncated,
-			},
+			}),
 		})
 	}
 }

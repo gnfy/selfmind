@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 
+	"selfmind/internal/kernel"
 	"selfmind/internal/kernel/llm"
 )
 
@@ -80,8 +81,10 @@ func (r *Registry) List() []string {
 	return names
 }
 
-// Dispatch executes a registered tool by name (used by SkillTool to call execute_command)
+// Dispatch is the single registry execution path shared by Dispatcher and
+// direct compatibility callers.
 func (r *Registry) Dispatch(name string, args map[string]interface{}) (string, error) {
+	originalArgs := args
 	if err := r.schemaAvailabilityError(name); err != nil {
 		return "", err
 	}
@@ -100,7 +103,18 @@ func (r *Registry) Dispatch(name string, args map[string]interface{}) (string, e
 		return "", fmt.Errorf("argument validation failed for %s: %w", name, err)
 	}
 	exec := r.Wrap(t, r.Middlewares())
-	return exec(args)
+	result, err := exec(args)
+	// Coercion deliberately creates a detached argument map. Copy back only the
+	// daemon-owned execution-boundary fields needed to record what actually ran;
+	// never reflect arbitrary tool mutations into the caller's map.
+	if originalArgs != nil && args != nil {
+		for _, key := range []string{"_effective_sandbox_mode", "_sandbox_mode"} {
+			if value, ok := args[key]; ok {
+				originalArgs[key] = value
+			}
+		}
+	}
+	return result, err
 }
 
 // ToolDefinitions returns all tools as LLM-compatible tool definitions
@@ -291,29 +305,7 @@ func (d *Dispatcher) UnregisterTool(name string) {
 
 // Dispatch 调用已注册的工具，自动执行 middleware 链
 func (d *Dispatcher) Dispatch(name string, args map[string]interface{}) (string, error) {
-	if err := d.registry.schemaAvailabilityError(name); err != nil {
-		return "", err
-	}
-	t, ok := d.registry.Get(name)
-	if !ok {
-		return "", fmt.Errorf("tool %s not found", name)
-	}
-
-	// Coerce types first (LLMs often pass numbers as strings), then validate
-	if len(t.Schema().Properties) > 0 {
-		coerced, coerceErr := CoerceArgs(t.Schema(), args)
-		if coerceErr != nil {
-			return "", fmt.Errorf("failed to coerce arguments for %s: %w", name, coerceErr)
-		}
-		args = coerced
-	}
-
-	if err := ValidateArgs(t.Schema(), args); err != nil {
-		return "", fmt.Errorf("argument validation failed for %s: %w", name, err)
-	}
-
-	exec := d.registry.Wrap(t, d.registry.Middlewares())
-	return exec(args)
+	return d.registry.Dispatch(name, args)
 }
 
 // DispatchRaw 兼容旧接口：接收 JSON 字符串，解析后 dispatch
@@ -351,6 +343,45 @@ func (d *Dispatcher) ToolExists(name string) bool {
 // GetTool returns a registered tool by name
 func (d *Dispatcher) GetTool(name string) (Tool, bool) {
 	return d.registry.Get(name)
+}
+
+// ToolExecutionMetadata exposes daemon-owned registry facts to the kernel's
+// durable event stream. Model-provided arguments cannot override this view.
+func (d *Dispatcher) ToolExecutionMetadata(name string, args map[string]interface{}) kernel.ToolExecutionMetadata {
+	t, ok := d.registry.Get(name)
+	if !ok {
+		return kernel.ToolExecutionMetadata{Origin: string(ToolSchemaOriginExternal), RiskLevel: string(ToolRiskHigh)}
+	}
+	policy := executionPolicyForTool(t)
+	classifiedArgs := make(map[string]interface{}, len(args)+2)
+	for key, value := range args {
+		classifiedArgs[key] = value
+	}
+	classifiedArgs[toolExecutionPolicyArg] = policy
+	classifiedArgs["_tool_name"] = name
+	annotateEffectiveSandboxMode(classifiedArgs)
+	// A completed execution records its actual plan mode. It is stronger than
+	// the preflight prediction and prevents a runtime host fallback from being
+	// published as isolated evidence.
+	if actual := SandboxMode(strings.ToLower(strings.TrimSpace(stringArg(classifiedArgs, "_sandbox_mode")))); actual == SandboxHost || actual == SandboxIsolated {
+		classifiedArgs["_effective_sandbox_mode"] = string(actual)
+	}
+	projectRoot := ""
+	if scope, ok := currentExecutionScopeAny(classifiedArgs); ok {
+		projectRoot = approvalProjectRoot("", scope, classifiedArgs)
+	}
+	dangerous, _ := dangerousToolCall(projectRoot, name, classifiedArgs)
+	classes := operationClassesFor(name, classifiedArgs, dangerous)
+	classes = uniqueOperationClasses(classes)
+	classNames := make([]string, 0, len(classes))
+	for _, class := range classes {
+		classNames = append(classNames, string(class))
+	}
+	return kernel.ToolExecutionMetadata{
+		Origin: string(policy.Origin), Category: policy.Category,
+		RiskLevel: string(policy.Risk), ReadOnly: policy.ReadOnly,
+		OperationClasses: classNames,
+	}
 }
 
 func (d *Dispatcher) SupportsParallelTool(name string) bool {

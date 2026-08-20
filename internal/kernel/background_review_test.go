@@ -130,6 +130,27 @@ func (b *fakeClaimBackend) Dispatch(name string, args map[string]interface{}) (s
 
 func (b *fakeClaimBackend) GetToolDefinitions() []map[string]interface{} { return nil }
 
+type fakeReviewMetadataBackend struct {
+	fakeClaimBackend
+}
+
+func (b *fakeReviewMetadataBackend) ToolExecutionMetadata(name string, _ map[string]interface{}) ToolExecutionMetadata {
+	return ToolExecutionMetadata{Origin: "builtin", Category: "review", ReadOnly: name == "skill_view"}
+}
+
+func TestRestrictedReviewBackendForwardsTrustedMetadata(t *testing.T) {
+	inner := &fakeReviewMetadataBackend{}
+	backend := &restrictedReviewBackend{inner: inner, allowed: map[string]bool{"skill_view": true}}
+	metadata := backend.ToolExecutionMetadata("skill_view", map[string]interface{}{"name": "example"})
+	if metadata.Origin != "builtin" || metadata.Category != "review" || !metadata.ReadOnly {
+		t.Fatalf("forwarded metadata=%+v", metadata)
+	}
+	if denied := backend.ToolExecutionMetadata("terminal", nil); denied.Origin != "" || denied.Category != "" ||
+		denied.RiskLevel != "" || denied.ReadOnly || len(denied.OperationClasses) != 0 {
+		t.Fatalf("disallowed tool metadata leaked through wrapper: %+v", denied)
+	}
+}
+
 func TestUnverifiedSkillClaims(t *testing.T) {
 	backend := &fakeClaimBackend{existing: map[string]bool{"real-skill": true}}
 

@@ -204,7 +204,12 @@ Read the relevant domain document before editing that domain:
   runtime, and package-manager state before changing the next command.
 - Skills are instruction assets, not auto-executed scripts. Their scripts still
   pass through normal tools and safety. Catalog replacement preserves
-  provenance; automatic curation governs agent-created assets only.
+  provenance; automatic curation governs writable, unpinned agent-created assets
+  only. Three explicitly passed built-in procedures may publish without granting
+  execution authority; network/delete/external/delegated effects still require
+  management. A repair includes the failed section and changes at most three
+  declared sections only after attributable failure and verified same-work-unit
+  recovery.
 
 ## UI and Commands
 

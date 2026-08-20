@@ -27,7 +27,7 @@ func RegisterExtendedTools(d *Dispatcher, webOpts ...WebSearchOptions) {
 	d.RegisterTool(NewVisionTool())
 	d.RegisterTool(NewTTSTool())
 	d.RegisterTool(NewExecuteCodeTool())
-	d.RegisterTool(NewBatchReadTool(d.Dispatch))
+	d.RegisterTool(NewBatchReadTool(d.Dispatch, d.ToolExecutionMetadata))
 	d.RegisterTool(NewSessionSearchTool())
 	planStore := NewPlanStore()
 	d.RegisterTool(NewUpdatePlanToolWithStore(planStore))

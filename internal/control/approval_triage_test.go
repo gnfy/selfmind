@@ -2,6 +2,7 @@ package control
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 	"time"
 )
@@ -44,6 +45,49 @@ func TestApprovalTriageEventsPersistAndPrune(t *testing.T) {
 	}
 	if pruned != 1 {
 		t.Fatalf("pruned=%d want 1", pruned)
+	}
+}
+
+func TestApprovalDecisionFunnelKeepsHumanRequestsSeparateFromTriage(t *testing.T) {
+	ctx := context.Background()
+	store, err := OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	identity, err := store.ResolveOrCreateAccount(ctx, "tenant", "cli", "approval-owner", "Approval Owner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := store.CreateApprovalRequest(ctx, ApprovalRequest{
+		TenantID: identity.TenantID, PersonID: identity.PersonID, ActionType: "tool_call",
+		Payload: json.RawMessage(`{"tool":"terminal"}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := store.CreateApprovalRequest(ctx, ApprovalRequest{
+		TenantID: identity.TenantID, PersonID: identity.PersonID, ActionType: "tool_call",
+		Payload: json.RawMessage(`{"tool":"write_file"}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.RespondApprovalRequest(ctx, identity.TenantID, identity.PersonID, first.ID, "approved", "cli", ApprovalDecisionInput{DecisionID: "once"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.RespondApprovalRequest(ctx, identity.TenantID, identity.PersonID, second.ID, "rejected", "cli", ApprovalDecisionInput{DecisionID: "deny"}); err != nil {
+		t.Fatal(err)
+	}
+	funnel, err := store.ApprovalDecisionFunnelSince(ctx, identity.TenantID, identity.PersonID, time.Now().Add(-time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if funnel.Requested != 2 || funnel.Statuses["approved"] != 1 || funnel.Statuses["rejected"] != 1 || funnel.DecisionChoices["once"] != 1 || funnel.DecisionChoices["deny"] != 1 {
+		t.Fatalf("funnel=%+v", funnel)
+	}
+	if funnel.Tools["terminal"] != 1 || funnel.Tools["write_file"] != 1 {
+		t.Fatalf("tools=%v", funnel.Tools)
 	}
 }
 

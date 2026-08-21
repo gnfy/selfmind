@@ -23,17 +23,27 @@ import (
 )
 
 type Server struct {
-	Control           *control.Store
-	Gateway           *router.Gateway
-	Delivery          *delivery.Service
-	DefaultTenantID   string
-	DrainTimeout      time.Duration
-	ShutdownFunc      func()
-	RuntimeStatusFunc func() api.GatewayRuntimeInfo
+	Control         *control.Store
+	Gateway         *router.Gateway
+	Delivery        *delivery.Service
+	DefaultTenantID string
+	// PromptSnapshotHash pins durable background jobs to the static prompt
+	// revision active when their evidence was materialized.
+	PromptSnapshotHash string
+	DrainTimeout       time.Duration
+	ShutdownFunc       func()
+	RuntimeStatusFunc  func() api.GatewayRuntimeInfo
 	// ToolSchemaReportFunc exposes the registration-time, redacted schema
 	// catalogue. It contains hashes and issue classes only, never raw external
 	// schemas. Nil keeps test/minimal servers independent from a dispatcher.
 	ToolSchemaReportFunc func() []tools.ToolSchemaReport
+	// MCPHealthFunc exposes connection/catalog failures without credentials or
+	// raw schemas so status and doctor do not depend on daemon log inspection.
+	MCPHealthFunc func() tools.MCPHealthSnapshot
+	// SkillStorage is the daemon-resolved immutable asset base. Direct selector
+	// and management paths use the same root as dispatcher middleware instead
+	// of consulting the daemon process HOME independently.
+	SkillStorage *tools.SkillStorage
 	// LocalControlToken authenticates privileged loopback-only operations such
 	// as granting workspace trust. It is not the public gateway bearer token.
 	LocalControlToken string
@@ -290,11 +300,11 @@ func (d *Server) ProcessMessage(ctx context.Context, req api.MessageRequest) (ap
 	// arrive. Fire-and-forget with its own bounded ctx; the delivery layer owns
 	// the anti-duplicate rails (at-most-once claim, freshness window, cap).
 	if d.Delivery != nil && req.Platform != "" && req.Platform != "cli" && req.Platform != "eval" {
-		go func(tenantID, personID, platform, channel string) {
+		go func(tenantID, personID, platform, platformUserID, channel string) {
 			cctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
-			d.Delivery.CatchUpRecoverable(cctx, tenantID, personID, platform, channel)
-		}(identity.TenantID, identity.PersonID, req.Platform, req.Channel)
+			d.Delivery.CatchUpRecoverable(cctx, tenantID, personID, platform, platformUserID, channel)
+		}(identity.TenantID, identity.PersonID, req.Platform, identity.PlatformUserID, req.Channel)
 	}
 
 	if handled, content, err := d.tryHandleControlCommand(ctx, identity, req); handled {

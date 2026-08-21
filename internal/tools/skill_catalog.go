@@ -222,17 +222,17 @@ func InstallSkillFromSource(tenantID, source, name string, force bool, invocatio
 		ContentHash:    contentHash,
 		Files:          files,
 		LastBackupPath: backupDir,
-	}); err != nil {
+	}, invocation...); err != nil {
 		return "", err
 	}
-	if err := MarkSkillCreated(tenantID, safeName, SkillSourceCatalog, "skill_catalog"); err != nil {
+	if err := MarkSkillCreated(tenantID, safeName, SkillSourceCatalog, "skill_catalog", invocation...); err != nil {
 		return "", err
 	}
 	action := "install"
 	if force {
 		action = "install:force"
 	}
-	recordSkillLearningChange(tenantID, safeName, action, before, content, SkillSourceCatalog)
+	recordSkillLearningChange(tenantID, safeName, action, before, content, SkillSourceCatalog, invocation...)
 	if backupDir != "" {
 		return fmt.Sprintf("Installed skill %q from %s. Previous copy backed up to %s.", safeName, source, backupDir), nil
 	}

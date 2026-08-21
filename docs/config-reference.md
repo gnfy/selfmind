@@ -176,6 +176,12 @@ single default for `fast_classifier`, `memory_extract`, `background_review`,
 optional and has the highest priority; a partial override inherits missing
 provider/model behavior from `models.auxiliary`.
 
+On a local installation, omitting the auxiliary provider/model intentionally
+defaults them to the primary selection. Initial setup and the first
+`selfmind model set` materialize that choice in YAML. Once auxiliary has been
+materialized or customized, changing primary does not overwrite it. This keeps
+onboarding to two visible slots without exposing the internal role catalogue.
+
 `reasoning` and
 `service_tier` are optional; `auto` or omission means the provider/model
 default and sends no forced value. When capability metadata is available,
@@ -196,8 +202,9 @@ Smart approval is intentionally stricter than ordinary role inheritance. It
 uses `fast_classifier` resolved from an explicit role or `models.auxiliary`;
 legacy configurations may
 fall back to an explicitly configured `background_review`, but approval triage
-never silently uses `models.primary`. If neither route exists or responds in
-time, the operation is escalated to the person.
+never adds an undeclared primary fallback. The effective auxiliary may
+intentionally point at the same provider/model as primary by default. If no
+usable route responds in time, the operation is escalated to the person.
 
 ## 3. Storage & auth
 
@@ -268,7 +275,6 @@ memory:
   governance:
     enabled: true
     mode: "shadow"               # shadow (report only) → merge-only → full (adds caps)
-    model_role: "memory_extract" # which role judges consolidation
     consolidation_interval: "24h"
     consolidation_batch_size: 8
     auto_merge_confidence: 0.95      # MERGE gate
@@ -279,6 +285,11 @@ memory:
     archive_after: "4320h"       # 180d; age-out (FULL mode only)
     pause_while_run_active: true # foreground runs always win
 ```
+
+Memory consolidation always uses the stable `memory_extract` semantic role.
+To give it a dedicated model, configure `models.roles.memory_extract`; without
+that override it uses `models.auxiliary`. Memory behavior settings do not
+select model roles.
 
 - `mode`: `shadow` writes nothing (only reports what it *would* do);
   `merge-only` applies gated MERGE/REINFORCE/ARCHIVE; `full` adds the
@@ -341,8 +352,6 @@ tasks:
   default_list_limit: 10
   auto_archive_done_after: "720h"      # 30d; "0" disables that archive class
   auto_archive_cancelled_after: "168h" # 7d
-  maintenance_model_role: "memory_extract"  # role for post-run label/fact maintenance
-  maintenance_fallback_roles: ["background_review", "fast_classifier"] # explicit cheap-role failover; never the primary model implicitly
   maintenance_debounce: "5m"       # wait for a quiet window before semantic maintenance
   maintenance_max_wait: "15m"      # force a batch even if runs keep arriving
   maintenance_batch_max_runs: 10   # never put more than this many runs in one call
@@ -354,26 +363,42 @@ tasks:
 ```
 
 Auto-archive only touches stale, terminal, unpinned tasks with no live run.
-`maintenance_fallback_roles` is ordered. After a non-retryable provider
-failure, SelfMind tries each explicitly configured role, skips missing roles,
-and never falls back to the primary coding model. Reusing the same provider in
-every role does not provide provider-level failover. For example, keep Kimi as
-the normal low-cost role and add a MiniMax backup:
+
+The combined post-run task-label and memory-intake pass always uses the stable
+`memory_extract` role. Advanced model selection belongs only under
+`models.roles.memory_extract`; task settings control scheduling and behavior.
+
+Background maintenance runs through a two-position chain: the role's own
+configuration first, then `models.auxiliary` as the shared floor. There is
+nothing to configure for failover beyond pointing `models.auxiliary` at a
+provider you trust. The chain never falls back to the primary coding model.
+Auxiliary may intentionally point at the same physical model as primary; the
+chain still does not add a separate implicit primary position.
+
+Both positions are de-duplicated by physical route, so a role without its own
+override resolves to `models.auxiliary` and honestly ends up with a
+single-entry chain. To get real failover, give the role an override on a
+different provider than `models.auxiliary`:
 
 ```yaml
 models:
+  auxiliary:
+    provider: "minimax"      # the floor every background role degrades to
+    model: "MiniMax-M3"
   roles:
     memory_extract:
       provider: "kimi-coding"
       model: "kimi-for-coding"
-    maintenance_backup:
-      provider: "minimax"
-      model: "MiniMax-M3"
-
-tasks:
-  maintenance_model_role: "memory_extract"
-  maintenance_fallback_roles: ["maintenance_backup", "background_review"]
 ```
+
+`selfmind model check --role memory_extract` prints the resolved fallback, or
+says none is available when both positions share one endpoint and credential.
+
+`memory.governance.model_role`, `tasks.maintenance_model_role`, and
+`tasks.maintenance_fallback_roles` are deprecated. Model selection now belongs
+only under `models`, and the old fallback list inserted extra role slots before
+the auxiliary floor existed. `selfmind config doctor` identifies these keys;
+`selfmind config upgrade` backs up the file and removes them.
 
 Run finalization always persists replayable evidence immediately. The three
 batch settings only delay reversible task-label and long-term-memory governance;
@@ -443,14 +468,31 @@ explicit-command and continuation detection. Defaults are fine for most users.
 mcp:
   servers:
     - name: "my-tools"
-      transport: "stdio"        # stdio | http
+      transport: "stdio"        # stdio | http | streamable_http
       command: "my-mcp-server"  # for stdio
       args: []
-      url: ""                   # for http
-      extra_headers: {}
+      url: ""                   # Streamable HTTP endpoint
+      headers: {}                # optional HTTP headers
+      auth: {}                   # optional bearer or user/pass static auth
+      env_filter: []             # optional stdio environment allow-list
 ```
 
-Empty by default. Each server's tools are registered on demand.
+Empty by default. The daemon connects with the official MCP Go SDK at startup,
+negotiates a compatible protocol version, follows paginated tool catalogues,
+and applies live tool-list changes to the Dispatcher. A server that cannot
+initialize or list its tools remains visible as a gateway health failure and in
+`selfmind doctor`. Give every server a unique, stable `name`; an omitted name
+gets a deterministic endpoint-derived compatibility name and a startup warning,
+while a duplicate name is rejected instead of silently replacing a server.
+
+MCP tools are unclassified external tools by default. Each invocation requires
+a once-only human approval even in `full-auto`; it cannot reuse a grant or smart
+triage until a reviewed per-tool trust policy exists. SelfMind sends only the
+tool's public input fields to the remote endpoint and strips daemon-only
+top-level underscore fields, including tenant/person/run scope and callbacks.
+Remote servers currently
+support static headers, bearer tokens, and basic authentication; SelfMind does
+not yet expose an interactive MCP OAuth flow.
 
 ## 12. Agent tuning (advanced)
 

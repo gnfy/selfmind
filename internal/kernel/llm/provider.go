@@ -165,6 +165,9 @@ func FingerprintProviderRequest(ctx context.Context, p Provider, req ChatRequest
 	if fingerprinter, ok := p.(RequestFingerprinter); ok {
 		return fingerprinter.FingerprintRequest(ctx, req, stream)
 	}
+	if inner, ok := unwrapProvider(p); ok {
+		return FingerprintProviderRequest(ctx, inner, req, stream)
+	}
 	return RequestFingerprint{}, false
 }
 
@@ -191,8 +194,14 @@ type NativeToolsCapable interface {
 
 // ProviderSupportsNativeTools probes p, defaulting to false (keep text).
 func ProviderSupportsNativeTools(p Provider) bool {
+	if p == nil {
+		return false
+	}
 	if c, ok := p.(NativeToolsCapable); ok {
 		return c.SupportsNativeTools()
+	}
+	if inner, ok := unwrapProvider(p); ok {
+		return ProviderSupportsNativeTools(inner)
 	}
 	return false
 }

@@ -2,6 +2,7 @@ package delivery
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -60,7 +61,7 @@ func TestCatchUpUnconfirmedRepushesOnceBounded(t *testing.T) {
 
 	// Inbound arrives, token fresh: catch-up re-pushes oldest-first, capped at 2.
 	sender.confirmed = true
-	if n := svc.CatchUpUnconfirmed(ctx, "default", "p1", "weixin", "wx-chat"); n != 2 {
+	if n := svc.CatchUpUnconfirmed(ctx, "default", "p1", "weixin", "wx", "wx-chat"); n != 2 {
 		t.Fatalf("confirmed re-pushes = %d, want 2 (cap)", n)
 	}
 	if len(sender.sent) != 2 || sender.sent[0] != "first" || sender.sent[1] != "second" {
@@ -69,7 +70,7 @@ func TestCatchUpUnconfirmedRepushesOnceBounded(t *testing.T) {
 
 	// Second catch-up: only "third" is still eligible; first/second are 'sent'.
 	sender.sent = nil
-	if n := svc.CatchUpUnconfirmed(ctx, "default", "p1", "weixin", "wx-chat"); n != 1 {
+	if n := svc.CatchUpUnconfirmed(ctx, "default", "p1", "weixin", "wx", "wx-chat"); n != 1 {
 		t.Fatalf("second catch-up = %d, want 1 (the remaining row)", n)
 	}
 	if len(sender.sent) != 1 || sender.sent[0] != "third" {
@@ -78,7 +79,7 @@ func TestCatchUpUnconfirmedRepushesOnceBounded(t *testing.T) {
 
 	// Third catch-up: nothing left — at-most-once held for every row.
 	sender.sent = nil
-	if n := svc.CatchUpUnconfirmed(ctx, "default", "p1", "weixin", "wx-chat"); n != 0 {
+	if n := svc.CatchUpUnconfirmed(ctx, "default", "p1", "weixin", "wx", "wx-chat"); n != 0 {
 		t.Fatalf("third catch-up = %d, want 0", n)
 	}
 	if len(sender.sent) != 0 {
@@ -108,7 +109,7 @@ func TestCatchUpStillUnconfirmedNeverLoops(t *testing.T) {
 	sender.sent = nil
 
 	// Token still stale: the re-push is attempted once, stays unconfirmed.
-	if n := svc.CatchUpUnconfirmed(ctx, "default", "p1", "weixin", "wx-chat"); n != 0 {
+	if n := svc.CatchUpUnconfirmed(ctx, "default", "p1", "weixin", "wx", "wx-chat"); n != 0 {
 		t.Fatalf("unconfirmed re-push must not count as confirmed, got %d", n)
 	}
 	if len(sender.sent) != 1 {
@@ -117,8 +118,161 @@ func TestCatchUpStillUnconfirmedNeverLoops(t *testing.T) {
 
 	// Next inbound: the claim is consumed; no more attempts ever.
 	sender.sent = nil
-	if n := svc.CatchUpUnconfirmed(ctx, "default", "p1", "weixin", "wx-chat"); n != 0 || len(sender.sent) != 0 {
+	if n := svc.CatchUpUnconfirmed(ctx, "default", "p1", "weixin", "wx", "wx-chat"); n != 0 || len(sender.sent) != 0 {
 		t.Fatalf("claimed row must never re-push again (n=%d sent=%v)", n, sender.sent)
+	}
+}
+
+func TestRecoverStaleFinalResultsSendsOneConfirmedRecap(t *testing.T) {
+	ctx := context.Background()
+	store, err := control.OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	sender := &switchableReceiptSender{err: refreshRequiredError("session expired")}
+	svc := NewService(store, sender, Options{PollInterval: time.Hour, CatchUpMaxAge: time.Nanosecond})
+	svc.opts.CatchUpMaxAge = -time.Hour
+	for _, message := range []Message{
+		{TenantID: "default", PersonID: "p1", Platform: "weixin", PlatformUserID: "wx", Channel: "wx-chat", TaskID: "task-a", RunID: "run-a", Kind: KindFinalResult, Content: "first completed result"},
+		{TenantID: "default", PersonID: "p1", Platform: "weixin", PlatformUserID: "wx", Channel: "wx-chat", TaskID: "task-b", RunID: "run-b", Kind: KindFinalResult, Content: "second completed result"},
+	} {
+		if err := svc.EnqueueAndTry(ctx, message); err == nil {
+			t.Fatal("expired session should park the initial result")
+		}
+	}
+	sender.err = nil
+	sender.confirmed = true
+	sender.sent = nil
+	result, err := svc.RecoverStaleFinalResults(ctx, "default", "p1", "weixin", "wx", "wx-chat")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Confirmed || result.Candidates != 2 || result.Groups != 2 || result.Dismissed != 2 {
+		t.Fatalf("result=%+v", result)
+	}
+	if len(sender.sent) != 1 || !strings.Contains(sender.sent[0], "2 older result message(s)") || !strings.Contains(sender.sent[0], "No individual stale result was replayed") {
+		t.Fatalf("summary sends=%v", sender.sent)
+	}
+	if pending, err := store.CountPendingSessionOutbound(ctx, "default", "p1"); err != nil || pending != 0 {
+		t.Fatalf("pending=%d err=%v", pending, err)
+	}
+}
+
+func TestRecoverStaleFinalResultsKeepsRowsUntilRecapConfirmed(t *testing.T) {
+	ctx := context.Background()
+	store, err := control.OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	sender := &switchableReceiptSender{err: refreshRequiredError("session expired")}
+	svc := NewService(store, sender, Options{PollInterval: time.Hour, CatchUpMaxAge: time.Nanosecond})
+	svc.opts.CatchUpMaxAge = -time.Hour
+	if err := svc.EnqueueAndTry(ctx, Message{
+		TenantID: "default", PersonID: "p1", Platform: "weixin", PlatformUserID: "wx", Channel: "wx-chat",
+		TaskID: "task-a", RunID: "run-a", Kind: KindFinalResult, Content: "completed result",
+	}); err == nil {
+		t.Fatal("expired session should park the initial result")
+	}
+	sender.err = nil
+	sender.confirmed = false
+	result, err := svc.RecoverStaleFinalResults(ctx, "default", "p1", "weixin", "wx", "wx-chat")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Confirmed || !result.Accepted || result.Dismissed != 0 {
+		t.Fatalf("result=%+v", result)
+	}
+	if pending, err := store.CountPendingSessionOutbound(ctx, "default", "p1"); err != nil || pending != 1 {
+		t.Fatalf("original pending=%d err=%v", pending, err)
+	}
+}
+
+func TestStaleFinalRecoveryIsScopedToExactPlatformAccount(t *testing.T) {
+	ctx := context.Background()
+	store, err := control.OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	sender := &switchableReceiptSender{err: refreshRequiredError("session expired")}
+	svc := NewService(store, sender, Options{PollInterval: time.Hour, CatchUpMaxAge: time.Nanosecond})
+	svc.opts.CatchUpMaxAge = -time.Hour
+	for _, account := range []string{"wx-a", "wx-b"} {
+		if err := svc.EnqueueAndTry(ctx, Message{
+			TenantID: "default", PersonID: "p1", Platform: "weixin", PlatformUserID: account,
+			Channel: "shared-chat", TaskID: "task-a", RunID: "run-a", Kind: KindFinalResult, Content: "same completed result",
+		}); err == nil {
+			t.Fatal("expired session should park the initial result")
+		}
+	}
+	sender.err = nil
+	sender.confirmed = true
+	sender.sent = nil
+	result, err := svc.RecoverStaleFinalResults(ctx, "default", "p1", "weixin", "wx-a", "shared-chat")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Candidates != 1 || result.Dismissed != 1 || !result.Confirmed {
+		t.Fatalf("recovery result = %+v", result)
+	}
+	rows, err := store.ListPendingSessionOutbound(ctx, "default", "p1", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].PlatformUserID != "wx-b" {
+		t.Fatalf("other account's result was affected: %+v", rows)
+	}
+}
+
+func TestLogicalDeliveryIdempotencyIncludesPlatformAccount(t *testing.T) {
+	base := Message{
+		TenantID: "default", PersonID: "p1", Platform: "weixin", Channel: "shared-chat",
+		LogicalKey: "run:one:final", PartIndex: 1,
+	}
+	base.PlatformUserID = "wx-a"
+	first := idempotencyKey(base)
+	base.PlatformUserID = "wx-b"
+	if second := idempotencyKey(base); second == first {
+		t.Fatal("logical delivery keys collided across platform accounts")
+	}
+}
+
+func TestDismissRecappedFinalResultsUsesExactIDs(t *testing.T) {
+	ctx := context.Background()
+	store, err := control.OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	sender := &switchableReceiptSender{err: refreshRequiredError("session expired")}
+	svc := NewService(store, sender, Options{PollInterval: time.Hour})
+	var ids []string
+	for _, content := range []string{"summarized result", "newer unsummarized result"} {
+		msg := Message{TenantID: "default", PersonID: "p1", Platform: "weixin", PlatformUserID: "wx", Channel: "wx-chat", Kind: KindFinalResult, Content: content}
+		if err := svc.EnqueueAndTry(ctx, msg); err == nil {
+			t.Fatal("expired session should park the result")
+		}
+		rows, listErr := store.ListPendingSessionOutbound(ctx, "default", "p1", 10)
+		if listErr != nil {
+			t.Fatal(listErr)
+		}
+		ids = append(ids, rows[len(rows)-1].ID)
+	}
+	dismissed, err := store.DismissPendingSessionFinalResultsByID(ctx, "default", "p1", "weixin", "wx", "wx-chat", ids[:1], "recapped")
+	if err != nil || dismissed != 1 {
+		t.Fatalf("dismissed=%d err=%v", dismissed, err)
+	}
+	if pending, err := store.CountPendingSessionOutbound(ctx, "default", "p1"); err != nil || pending != 1 {
+		t.Fatalf("new result must remain pending: count=%d err=%v", pending, err)
+	}
+}
+
+func TestBoundedRecoveryPreviewPreservesUTF8(t *testing.T) {
+	got := boundedRecoveryPreview(strings.Repeat("完成", 10), 5)
+	if got != "完成完成完…" || strings.ToValidUTF8(got, "") != got {
+		t.Fatalf("preview=%q", got)
 	}
 }
 
@@ -138,7 +292,7 @@ func TestCriticalPrepareFailureWaitsForFreshInboundThenRecovers(t *testing.T) {
 	}); err == nil {
 		t.Fatal("prepare failure must surface to the immediate caller")
 	}
-	rows, err := store.ListCatchUpEligible(ctx, "default", "p1", "weixin", "wx-chat", time.Now().Add(-time.Hour), 10)
+	rows, err := store.ListCatchUpEligible(ctx, "default", "p1", "weixin", "wx", "wx-chat", time.Now().Add(-time.Hour), 10)
 	if err != nil || len(rows) != 1 || rows[0].Status != "pending_session" {
 		t.Fatalf("pending-session rows=%+v err=%v", rows, err)
 	}
@@ -148,13 +302,13 @@ func TestCriticalPrepareFailureWaitsForFreshInboundThenRecovers(t *testing.T) {
 	sender.err = nil
 	sender.confirmed = true
 	sender.sent = nil
-	if n := svc.CatchUpRecoverable(ctx, "default", "p1", "weixin", "wx-chat"); n != 1 {
+	if n := svc.CatchUpRecoverable(ctx, "default", "p1", "weixin", "wx", "wx-chat"); n != 1 {
 		t.Fatalf("confirmed catch-up=%d, want 1", n)
 	}
 	if len(sender.sent) != 1 || sender.sent[0] != "final answer" {
 		t.Fatalf("catch-up sent=%v", sender.sent)
 	}
-	if rows, _ := store.ListCatchUpEligible(ctx, "default", "p1", "weixin", "wx-chat", time.Now().Add(-time.Hour), 10); len(rows) != 0 {
+	if rows, _ := store.ListCatchUpEligible(ctx, "default", "p1", "weixin", "wx", "wx-chat", time.Now().Add(-time.Hour), 10); len(rows) != 0 {
 		t.Fatalf("confirmed row remained eligible: %+v", rows)
 	}
 }
@@ -175,7 +329,7 @@ func TestCatchUpDropsApprovalResolvedWhileSessionWasStale(t *testing.T) {
 	sender := &switchableReceiptSender{err: refreshRequiredError("prepare failed")}
 	svc := NewService(store, sender, Options{PollInterval: time.Hour})
 	if err := svc.EnqueueAndTry(ctx, Message{
-		TenantID: "default", PersonID: "p1", Platform: "weixin", Channel: "wx-chat",
+		TenantID: "default", PersonID: "p1", Platform: "weixin", PlatformUserID: "wx", Channel: "wx-chat",
 		Content: "approval needed", Kind: KindApproval, ApprovalID: "apr_stale",
 	}); err == nil {
 		t.Fatal("initial session failure must surface")
@@ -186,7 +340,7 @@ func TestCatchUpDropsApprovalResolvedWhileSessionWasStale(t *testing.T) {
 	sender.err = nil
 	sender.confirmed = true
 	sender.sent = nil
-	if n := svc.CatchUpRecoverable(ctx, "default", "p1", "weixin", "wx-chat"); n != 0 {
+	if n := svc.CatchUpRecoverable(ctx, "default", "p1", "weixin", "wx", "wx-chat"); n != 0 {
 		t.Fatalf("confirmed catch-up = %d, want 0", n)
 	}
 	if len(sender.sent) != 0 {
@@ -222,21 +376,21 @@ func TestManualPendingSessionRetryIsPeerScoped(t *testing.T) {
 		t.Fatalf("pending rows=%+v err=%v", rows, err)
 	}
 	ref := rows[0].ID[:8]
-	if _, _, err := svc.RetryPendingSession(ctx, "default", "p1", "weixin", "other-chat", ref); err == nil {
+	if _, _, err := svc.RetryPendingSession(ctx, "default", "p1", "weixin", "wx", "other-chat", ref); err == nil {
 		t.Fatal("manual retry from another chat must fail")
 	}
 
 	sender.err = nil
 	sender.confirmed = true
 	sender.sent = nil
-	id, status, err := svc.RetryPendingSession(ctx, "default", "p1", "weixin", "wx-chat", ref)
+	id, status, err := svc.RetryPendingSession(ctx, "default", "p1", "weixin", "wx", "wx-chat", ref)
 	if err != nil || id != rows[0].ID || status != "sent" {
 		t.Fatalf("retry id=%q status=%q err=%v", id, status, err)
 	}
 	if len(sender.sent) != 1 || sender.sent[0] != "durable result" {
 		t.Fatalf("manual retry sent=%v", sender.sent)
 	}
-	if _, _, err := svc.RetryPendingSession(ctx, "default", "p1", "weixin", "wx-chat", ref); err == nil {
+	if _, _, err := svc.RetryPendingSession(ctx, "default", "p1", "weixin", "wx", "wx-chat", ref); err == nil {
 		t.Fatal("a confirmed delivery must not be manually replayable")
 	}
 }
@@ -262,11 +416,11 @@ func TestManualPendingSessionDismissIsPeerScopedAndDoesNotSend(t *testing.T) {
 		t.Fatalf("pending rows=%+v err=%v", rows, err)
 	}
 	ref := rows[0].ID[:8]
-	if _, err := svc.DismissPendingSession(ctx, "default", "p1", "weixin", "other-chat", ref); err == nil {
+	if _, err := svc.DismissPendingSession(ctx, "default", "p1", "weixin", "wx", "other-chat", ref); err == nil {
 		t.Fatal("dismiss from another chat must fail")
 	}
 	sender.sent = nil
-	id, err := svc.DismissPendingSession(ctx, "default", "p1", "weixin", "wx-chat", ref)
+	id, err := svc.DismissPendingSession(ctx, "default", "p1", "weixin", "wx", "wx-chat", ref)
 	if err != nil || id != rows[0].ID {
 		t.Fatalf("dismiss id=%q err=%v", id, err)
 	}
@@ -296,7 +450,7 @@ func TestCatchUpPermanentFailureLeavesNoFakePendingRow(t *testing.T) {
 	}
 	sender.err = context.DeadlineExceeded
 	sender.sent = nil
-	if n := svc.CatchUpRecoverable(ctx, "default", "p1", "weixin", "wx-chat"); n != 0 {
+	if n := svc.CatchUpRecoverable(ctx, "default", "p1", "weixin", "wx", "wx-chat"); n != 0 {
 		t.Fatalf("failed catch-up count=%d, want 0", n)
 	}
 	if rows, _ := store.ListPendingSessionOutbound(ctx, "default", "p1", 5); len(rows) != 0 {

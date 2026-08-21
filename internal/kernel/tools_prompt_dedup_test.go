@@ -78,7 +78,7 @@ func TestToolPromptDedupForNativeProviders(t *testing.T) {
 	if strings.Contains(native, "PARAM-SCHEMA-MARKER") || strings.Contains(native, "## Available Tools") {
 		t.Fatal("native provider must not get tool schemas duplicated into the system prompt")
 	}
-	if strings.Contains(native, "The ONLY valid tool names are") {
+	if strings.Contains(native, "The only valid tool names are") {
 		t.Fatal("native provider must not get the text tool-name list")
 	}
 	if !strings.Contains(native, "treat the error as diagnostic evidence") {

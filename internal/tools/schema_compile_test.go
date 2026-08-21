@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -21,6 +22,33 @@ func newRawSchemaTestTool(name string, raw map[string]interface{}, origin ToolSc
 			handler: func(map[string]interface{}) (string, error) { return "ok", nil },
 		},
 		raw: raw, origin: origin,
+	}
+}
+
+func TestLargeExternalCatalogueDoesNotGuessColdToolCohort(t *testing.T) {
+	registry := NewRegistry()
+	for i := 0; i < 45; i++ {
+		registry.Register(newRawSchemaTestTool(fmt.Sprintf("external_%02d", i), map[string]interface{}{
+			"type": "object", "properties": map[string]interface{}{},
+		}, ToolSchemaOriginExternal))
+	}
+	registry.mu.RLock()
+	exposures := registry.effectiveToolExposuresLocked(true)
+	registry.mu.RUnlock()
+	for _, exposure := range exposures {
+		if exposure == ToolExposureDeferred {
+			t.Fatal("an unreviewed external tool was deferred by catalogue shape")
+		}
+	}
+	if definitions := registry.ToolDefinitions(); len(definitions) == 0 {
+		t.Fatal("automatic cohort gate must not remove definitions before rollout")
+	} else {
+		for _, definition := range definitions {
+			metadata, _ := definition["selfmind"].(map[string]interface{})
+			if metadata["exposure"] == ToolExposureDeferred {
+				t.Fatal("automatic cohort started before the evidence gate")
+			}
+		}
 	}
 }
 
@@ -63,6 +91,23 @@ func TestCompileToolSchemaQuarantinesAmbiguousRequiredReference(t *testing.T) {
 		t.Fatalf("status=%s issues=%+v", compiled.Report.Status, compiled.Report.Issues)
 	}
 	if len(compiled.Report.Issues) == 0 || compiled.Report.Issues[0].Code != "unknown_required_property" {
+		t.Fatalf("issues=%+v", compiled.Report.Issues)
+	}
+}
+
+func TestCompileExternalToolSchemaRejectsReservedRuntimeParameter(t *testing.T) {
+	tool := newRawSchemaTestTool("reserved", map[string]interface{}{
+		"type": "object",
+		"properties": map[string]interface{}{
+			"_tenant_id": map[string]interface{}{"type": "string"},
+		},
+	}, ToolSchemaOriginExternal)
+
+	compiled := compileToolSchema(tool)
+	if compiled.Report.Status != ToolSchemaQuarantined {
+		t.Fatalf("status=%s issues=%+v", compiled.Report.Status, compiled.Report.Issues)
+	}
+	if len(compiled.Report.Issues) == 0 || compiled.Report.Issues[len(compiled.Report.Issues)-1].Code != "reserved_parameter_name" {
 		t.Fatalf("issues=%+v", compiled.Report.Issues)
 	}
 }
@@ -171,13 +216,18 @@ func TestBuiltinCatalogCompilesWithoutRepairOrQuarantine(t *testing.T) {
 func TestMCPToolLocalNameIsProviderSafeAndCollisionResistant(t *testing.T) {
 	a := MCPToolLocalName(strings.Repeat("server", 20), strings.Repeat("tool", 30)+"a")
 	b := MCPToolLocalName(strings.Repeat("server", 20), strings.Repeat("tool", 30)+"b")
+	c := MCPToolLocalName("foo-bar", "search")
+	d := MCPToolLocalName("foo_bar", "search")
 	if len(a) > 64 || len(b) > 64 {
 		t.Fatalf("names exceed provider limit: %d %d", len(a), len(b))
 	}
 	if a == b {
 		t.Fatalf("truncated names collided: %q", a)
 	}
-	for _, name := range []string{a, b} {
+	if c == d {
+		t.Fatalf("sanitized names collided: %q", c)
+	}
+	for _, name := range []string{a, b, c, d} {
 		for _, r := range name {
 			if !((r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '_') {
 				t.Fatalf("unsafe provider tool name %q", name)

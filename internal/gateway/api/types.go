@@ -56,7 +56,20 @@ type GatewayStatusResponse struct {
 	ActiveRuns     []ActiveRunStatus  `json:"active_runs"`
 	ActiveRunCount int                `json:"active_run_count"`
 	ToolSchemas    ToolSchemaHealth   `json:"tool_schemas,omitempty"`
+	MCP            MCPHealth          `json:"mcp,omitempty"`
 	StoreSchema    StoreSchemaHealth  `json:"store_schema,omitempty"`
+}
+
+type MCPServerFailure struct {
+	Name  string `json:"name"`
+	Error string `json:"error"`
+}
+
+type MCPHealth struct {
+	Configured int                `json:"configured"`
+	Connected  int                `json:"connected"`
+	Failed     int                `json:"failed"`
+	Failures   []MCPServerFailure `json:"failures,omitempty"`
 }
 
 type StoreSchemaHealth struct {

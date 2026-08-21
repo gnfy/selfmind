@@ -582,8 +582,13 @@ func searchSessions(db *sql.DB, query string, limit int) ([]FTS5Session, error) 
 	if limit <= 0 {
 		limit = 10
 	}
-	safeQuery := strings.ReplaceAll(query, `"`, `""`)
-	ftsQuery := fmt.Sprintf(`session_id:%s* OR content:%s* OR summary:%s*`, safeQuery, safeQuery, safeQuery)
+	ftsQuery := sessionFTSQuery(query)
+	if ftsQuery == "" {
+		// A query that compiles to nothing (punctuation only, or text whose
+		// tokens were all dropped) must still reach the LIKE fallback. Returning
+		// nil,nil here reported "no matches" for a search that was never run.
+		return searchSessionsLike(db, query, limit)
+	}
 	rows, err := db.Query(
 		`SELECT session_id, channel, content, summary, timestamp
 		 FROM sessions_fts
@@ -604,6 +609,56 @@ func searchSessions(db *sql.DB, query string, limit int) ([]FTS5Session, error) 
 		return nil, err
 	}
 	return searchSessionsLike(db, query, limit)
+}
+
+// sessionFTSQuery compiles user text into FTS5 syntax without allowing the
+// text itself to become FTS operators. Binding MATCH as a SQL parameter avoids
+// SQL injection, but FTS5 still parses the bound value as its own query
+// language; raw numbers, colons, dashes, quotes, OR, and NEAR therefore need a
+// second encoding boundary. Natural-language search is relevance retrieval,
+// not an exact conjunction: matching any literal term admits a candidate and
+// FTS rank orders the bounded result. Requiring every word made ordinary
+// prompts and session_search queries silently return no rows.
+func sessionFTSQuery(query string) string {
+	terms := sessionFTSTerms(query)
+	groups := make([]string, 0, len(terms))
+	for _, term := range terms {
+		quoted := `"` + strings.ReplaceAll(term, `"`, `""`) + `"*`
+		groups = append(groups, fmt.Sprintf(`(session_id:%s OR content:%s OR summary:%s)`, quoted, quoted, quoted))
+	}
+	return strings.Join(groups, " OR ")
+}
+
+// sessionFTSTerms splits user text into literal terms. There is deliberately no
+// stop list: sessionFTSQuery wraps every term as a quoted FTS5 phrase, which is
+// the operator boundary, so "summary", "content", "or", and "near" are ordinary
+// words a person may legitimately search for. Filtering them produced silent
+// zero-result searches for real queries. Underscore stays a word character
+// because identifiers like session_id, tool_search, and memory_extract are
+// common here; splitting them created a stray "id" term that was ANDed in and
+// killed the query.
+func sessionFTSTerms(query string) []string {
+	fields := strings.FieldsFunc(query, func(r rune) bool {
+		return !(unicode.IsLetter(r) || unicode.IsDigit(r) || r == '_' || containsCJKRune(r))
+	})
+	seen := make(map[string]bool, len(fields))
+	terms := make([]string, 0, len(fields))
+	for _, field := range fields {
+		field = strings.TrimSpace(field)
+		if field == "" {
+			continue
+		}
+		lower := strings.ToLower(field)
+		if seen[lower] {
+			continue
+		}
+		seen[lower] = true
+		terms = append(terms, field)
+		if len(terms) >= 8 {
+			break
+		}
+	}
+	return terms
 }
 
 func scanFTSSessions(rows *sql.Rows) ([]FTS5Session, error) {

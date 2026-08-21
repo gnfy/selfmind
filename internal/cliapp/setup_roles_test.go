@@ -11,7 +11,7 @@ import (
 	"selfmind/internal/platform/config"
 )
 
-func roleSetupApp(t *testing.T, stdin string) (*App, string, *bytes.Buffer, *bytes.Buffer) {
+func roleSetupApp(t *testing.T) (*App, string, *bytes.Buffer, *bytes.Buffer) {
 	t.Helper()
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -32,46 +32,42 @@ func roleSetupApp(t *testing.T, stdin string) (*App, string, *bytes.Buffer, *byt
 		ctx:         context.Background(),
 		stdout:      stdout,
 		stderr:      stderr,
-		stdin:       strings.NewReader(stdin),
 		configPath:  configPath,
-		interactive: stdin != "",
+		interactive: false,
 	}, configPath, stdout, stderr
 }
 
-// Choosing "reuse the foreground model" persists one auxiliary selection that
-// covers every missing background role.
-func TestEnsureBackgroundRoleSetupReusesForegroundModel(t *testing.T) {
-	app, configPath, stdout, _ := roleSetupApp(t, "1\n")
+func TestEnsureBackgroundRoleSetupUsesPrimaryDefault(t *testing.T) {
+	app, configPath, stdout, _ := roleSetupApp(t)
 	cfg, err := config.LoadConfig(config.Options{Path: configPath})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(missingBackgroundRoles(cfg)) != len(backgroundRoleSpecs) {
-		t.Fatalf("fixture should start with every background role missing")
+	if cfg.Models.Auxiliary.Provider != "" || cfg.Models.Auxiliary.Model != "" {
+		t.Fatalf("fixture unexpectedly materialized auxiliary: %+v", cfg.Models.Auxiliary)
+	}
+	if got := cfg.EffectiveAuxiliary(); got.Provider != "deepseek" || got.Model != "deepseek-v4-flash" {
+		t.Fatalf("effective auxiliary = %+v, want the primary default", got)
 	}
 
 	app.ensureBackgroundRoleSetup(cfg)
 
-	saved, err := config.LoadConfig(config.Options{Path: configPath})
-	if err != nil {
-		t.Fatal(err)
+	if got := cfg.Models.Auxiliary; got.Provider != "deepseek" || got.Model != "deepseek-v4-flash" {
+		t.Fatalf("initialized auxiliary = %+v, want deepseek/deepseek-v4-flash", got)
 	}
-	if missing := missingBackgroundRoles(saved); len(missing) != 0 {
-		t.Fatalf("roles still missing after setup: %v", missing)
-	}
-	if got := saved.EffectiveAuxiliary(); got.Provider != "deepseek" || got.Model != "deepseek-v4-flash" {
-		t.Fatalf("auxiliary = %+v, want deepseek/deepseek-v4-flash", got)
-	}
-	if !strings.Contains(stdout.String(), "Auxiliary model:") {
+	if !strings.Contains(stdout.String(), "Auxiliary model: deepseek/deepseek-v4-flash") {
 		t.Errorf("expected a confirmation line, got %q", stdout.String())
 	}
 }
 
-// Skipping must leave the config untouched and must not fail setup.
-func TestEnsureBackgroundRoleSetupSkipKeepsConfigClean(t *testing.T) {
-	app, configPath, _, _ := roleSetupApp(t, "3\n")
+func TestEnsureBackgroundRoleSetupDoesNotOverwriteExplicitAuxiliary(t *testing.T) {
+	app, configPath, stdout, _ := roleSetupApp(t)
 	cfg, err := config.LoadConfig(config.Options{Path: configPath})
 	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.Models.Auxiliary = config.ModelSelectionConfig{Provider: "google", Model: "gemini-flash"}
+	if err := config.SaveConfig(configPath, cfg); err != nil {
 		t.Fatal(err)
 	}
 
@@ -81,20 +77,23 @@ func TestEnsureBackgroundRoleSetupSkipKeepsConfigClean(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(missingBackgroundRoles(saved)) != len(backgroundRoleSpecs) {
-		t.Fatal("skipping must not write an auxiliary model")
+	if got := saved.Models.Auxiliary; got.Provider != "google" || got.Model != "gemini-flash" {
+		t.Fatalf("explicit auxiliary was overwritten: %+v", got)
+	}
+	if !strings.Contains(stdout.String(), "Auxiliary model: google/gemini-flash") {
+		t.Errorf("expected the explicit auxiliary in output, got %q", stdout.String())
 	}
 }
 
-// A hand-tuned role must survive: setup only fills the gaps.
-func TestEnsureBackgroundRoleSetupOnlyFillsGaps(t *testing.T) {
-	app, configPath, _, _ := roleSetupApp(t, "1\n")
+func TestEnsureBackgroundRoleSetupPreservesRoleOverrides(t *testing.T) {
+	app, configPath, _, _ := roleSetupApp(t)
 	cfg, err := config.LoadConfig(config.Options{Path: configPath})
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg.Models.Roles = map[string]config.ModelRoleConfig{
-		"memory_extract": {Provider: "minimax", Model: "MiniMax-M2.7"},
+	cfg.Models.Roles["memory_extract"] = config.ModelRoleConfig{Provider: "minimax", Model: "MiniMax-M2.7"}
+	if err := config.SaveConfig(configPath, cfg); err != nil {
+		t.Fatal(err)
 	}
 
 	app.ensureBackgroundRoleSetup(cfg)
@@ -105,39 +104,12 @@ func TestEnsureBackgroundRoleSetupOnlyFillsGaps(t *testing.T) {
 	}
 	kept := saved.Models.Roles["memory_extract"]
 	if kept.Provider != "minimax" || kept.Model != "MiniMax-M2.7" {
-		t.Fatalf("existing role was overwritten: %s/%s", kept.Provider, kept.Model)
-	}
-	if got := saved.EffectiveAuxiliary(); got.Model != "deepseek-v4-flash" {
-		t.Fatalf("auxiliary model was not filled: %+v", got)
+		t.Fatalf("existing role was overwritten: %+v", kept)
 	}
 }
 
-// Non-interactive runs must explain the fix without prompting or failing.
-func TestEnsureBackgroundRoleSetupNonInteractiveGuidance(t *testing.T) {
-	app, configPath, _, stderr := roleSetupApp(t, "")
-	cfg, err := config.LoadConfig(config.Options{Path: configPath})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	app.ensureBackgroundRoleSetup(cfg)
-
-	if !strings.Contains(stderr.String(), "models.auxiliary.provider") {
-		t.Errorf("expected actionable guidance, got %q", stderr.String())
-	}
-	saved, err := config.LoadConfig(config.Options{Path: configPath})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(missingBackgroundRoles(saved)) != len(backgroundRoleSpecs) {
-		t.Fatal("non-interactive run must not write config")
-	}
-}
-
-// An app marked interactive but with no readable stdin must fall back to
-// printed guidance. Prompting there reads from a nil reader and panics.
-func TestEnsureBackgroundRoleSetupInteractiveWithoutStdin(t *testing.T) {
-	app, configPath, _, stderr := roleSetupApp(t, "")
+func TestEnsureBackgroundRoleSetupNeedsNoInput(t *testing.T) {
+	app, configPath, _, stderr := roleSetupApp(t)
 	app.interactive = true
 	app.stdin = nil
 	cfg, err := config.LoadConfig(config.Options{Path: configPath})
@@ -147,7 +119,10 @@ func TestEnsureBackgroundRoleSetupInteractiveWithoutStdin(t *testing.T) {
 
 	app.ensureBackgroundRoleSetup(cfg)
 
-	if !strings.Contains(stderr.String(), "models.auxiliary.provider") {
-		t.Errorf("expected guidance instead of a prompt, got %q", stderr.String())
+	if stderr.Len() != 0 {
+		t.Fatalf("automatic auxiliary setup unexpectedly asked for input: %q", stderr.String())
+	}
+	if cfg.Models.Auxiliary.Provider == "" || cfg.Models.Auxiliary.Model == "" {
+		t.Fatal("automatic auxiliary setup did not initialize a route")
 	}
 }

@@ -111,3 +111,56 @@ func TestMigratePersonSkillsCleansOnlyEmptySkillDirectories(t *testing.T) {
 		t.Fatalf("person partition outside skills must be preserved: %v", err)
 	}
 }
+
+func TestMigratePersonSkillsPreservesArchivedState(t *testing.T) {
+	root := t.TempDir()
+	person := "person_archived"
+	source := filepath.Join(SkillsDirForTenant(root, person), ".archive", "release-check")
+	if err := os.MkdirAll(source, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	content := "---\nname: release-check\n---\nArchived release procedure.\n"
+	if err := os.WriteFile(filepath.Join(source, "SKILL.md"), []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	dry, err := MigratePersonSkillsToControl(root, "default", false, time.Hour)
+	if err != nil || dry.Migrated != 1 || dry.EmptyPartitions != 0 || len(dry.Items) != 1 || !dry.Items[0].Archived {
+		t.Fatalf("dry=%+v err=%v", dry, err)
+	}
+
+	applied, err := MigratePersonSkillsToControl(root, "default", true, time.Hour)
+	if err != nil || applied.Migrated != 1 {
+		t.Fatalf("apply=%+v err=%v", applied, err)
+	}
+	target := filepath.Join(SkillsDirForTenant(root, "default"), ".archive", "release-check", "SKILL.md")
+	data, err := os.ReadFile(target)
+	if err != nil || string(data) != content {
+		t.Fatalf("archived target=%q err=%v", data, err)
+	}
+	usage, err := loadSkillUsageForDir(SkillsDirForTenant(root, "default"))
+	if err != nil || usage["release-check"].State != SkillStateArchived || usage["release-check"].MigratedFrom != person {
+		t.Fatalf("usage=%+v err=%v", usage, err)
+	}
+	if _, err := os.Stat(SkillsDirForTenant(root, person)); !os.IsNotExist(err) {
+		t.Fatalf("source skill partition remains: %v", err)
+	}
+}
+
+func TestMigratePersonSkillsDoesNotCallUnknownMetadataEmpty(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(SkillsDirForTenant(root, "person_catalog"), ".catalog")
+	if err := os.MkdirAll(source, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "lock.json"), []byte(`{"version":1}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	report, err := MigratePersonSkillsToControl(root, "default", true, time.Hour)
+	if err != nil || report.EmptyPartitions != 0 {
+		t.Fatalf("report=%+v err=%v", report, err)
+	}
+	if _, err := os.Stat(source); err != nil {
+		t.Fatalf("catalog metadata removed: %v", err)
+	}
+}

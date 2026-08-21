@@ -117,7 +117,9 @@ models:
     # Omit reasoning (or set it to "auto") to use the provider/model default.
     # Explicit values are validated against discovered model capabilities
     # when the provider publishes them.
-  roles: {}
+  auxiliary:
+    provider: "" # defaults to primary during initial model setup
+    model: ""
 
 intent:
   mode: "hybrid"
@@ -147,8 +149,6 @@ tasks:
   default_list_limit: 10
   auto_archive_done_after: "720h"
   auto_archive_cancelled_after: "168h"
-  maintenance_model_role: "memory_extract"
-  maintenance_fallback_roles: ["background_review", "fast_classifier"]
   maintenance_debounce: "5m"
   maintenance_max_wait: "15m"
   maintenance_batch_max_runs: 10
@@ -346,11 +346,10 @@ type MemoryConfig struct {
 // (docs/memory-governance.zh-CN.md §4). Mode gates what may be APPLIED:
 // "shadow" judges and reports only, "merge-only" additionally applies
 // high-confidence MERGE, "full" adds caps/archival. The judge always uses the
-// explicitly configured role and never falls back to the main coding model.
+// stable memory_extract role and never adds a separate implicit primary route.
 type MemoryGovernanceConfig struct {
 	Enabled                bool    `mapstructure:"enabled" yaml:"enabled,omitempty"`
 	Mode                   string  `mapstructure:"mode" yaml:"mode,omitempty"` // shadow | merge-only | full
-	ModelRole              string  `mapstructure:"model_role" yaml:"model_role,omitempty"`
 	ConsolidationInterval  string  `mapstructure:"consolidation_interval" yaml:"consolidation_interval,omitempty"`
 	ConsolidationBatchSize int     `mapstructure:"consolidation_batch_size" yaml:"consolidation_batch_size,omitempty"`
 	AutoMergeConfidence    float64 `mapstructure:"auto_merge_confidence" yaml:"auto_merge_confidence,omitempty"`
@@ -370,11 +369,14 @@ type MemoryGovernanceConfig struct {
 }
 
 type TaskConfig struct {
-	InboxEnabled                 bool     `mapstructure:"inbox_enabled" yaml:"inbox_enabled,omitempty"`
-	DefaultListLimit             int      `mapstructure:"default_list_limit" yaml:"default_list_limit,omitempty"`
-	AutoArchiveDoneAfter         string   `mapstructure:"auto_archive_done_after" yaml:"auto_archive_done_after,omitempty"`
-	AutoArchiveCancelledAfter    string   `mapstructure:"auto_archive_cancelled_after" yaml:"auto_archive_cancelled_after,omitempty"`
-	MaintenanceModelRole         string   `mapstructure:"maintenance_model_role" yaml:"maintenance_model_role,omitempty"`
+	InboxEnabled              bool   `mapstructure:"inbox_enabled" yaml:"inbox_enabled,omitempty"`
+	DefaultListLimit          int    `mapstructure:"default_list_limit" yaml:"default_list_limit,omitempty"`
+	AutoArchiveDoneAfter      string `mapstructure:"auto_archive_done_after" yaml:"auto_archive_done_after,omitempty"`
+	AutoArchiveCancelledAfter string `mapstructure:"auto_archive_cancelled_after" yaml:"auto_archive_cancelled_after,omitempty"`
+	// Deprecated: every background role now falls back to models.auxiliary.
+	// Existing installations keep their explicit provider hops until
+	// `selfmind config upgrade` removes the key; new installations leave it
+	// empty and get the two-position chain.
 	MaintenanceFallbackRoles     []string `mapstructure:"maintenance_fallback_roles" yaml:"maintenance_fallback_roles,omitempty"`
 	MaintenanceDebounce          string   `mapstructure:"maintenance_debounce" yaml:"maintenance_debounce,omitempty"`
 	MaintenanceMaxWait           string   `mapstructure:"maintenance_max_wait" yaml:"maintenance_max_wait,omitempty"`
@@ -1072,11 +1074,10 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("memory.semantic_recall", true)
 	v.SetDefault("memory.use_memory_fence", true)
 	// Governance starts in observation-only mode. It is inert when the
-	// explicitly configured maintenance role cannot be resolved and never
-	// borrows the main coding model.
+	// stable memory_extract role cannot be resolved through models.roles or
+	// models.auxiliary.
 	v.SetDefault("memory.governance.enabled", true)
 	v.SetDefault("memory.governance.mode", "shadow")
-	v.SetDefault("memory.governance.model_role", "memory_extract")
 	v.SetDefault("memory.governance.consolidation_interval", "24h")
 	v.SetDefault("memory.governance.consolidation_batch_size", 8)
 	v.SetDefault("memory.governance.auto_merge_confidence", 0.95)
@@ -1088,8 +1089,6 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("tasks.default_list_limit", DefaultTaskListLimit)
 	v.SetDefault("tasks.auto_archive_done_after", "720h")
 	v.SetDefault("tasks.auto_archive_cancelled_after", "168h")
-	v.SetDefault("tasks.maintenance_model_role", "memory_extract")
-	v.SetDefault("tasks.maintenance_fallback_roles", []string{"background_review", "fast_classifier"})
 	v.SetDefault("tasks.maintenance_debounce", "5m")
 	v.SetDefault("tasks.maintenance_max_wait", "15m")
 	v.SetDefault("tasks.maintenance_batch_max_runs", DefaultTaskMaintenanceBatchMax)
@@ -1377,10 +1376,11 @@ func (c *Config) EffectivePrimary() ModelSelectionConfig {
 	return primary
 }
 
-// EffectiveAuxiliary returns the optional default selection for bounded
-// background work. Unlike EffectivePrimary it never inherits legacy primary
-// fields: an absent auxiliary model must remain visible to safety-sensitive
-// callers instead of silently spending the foreground model.
+// EffectiveAuxiliary returns the default selection for bounded background
+// work. An omitted auxiliary route defaults to the primary provider/model so a
+// local installation needs only one model decision to start. Initial model
+// writes materialize that default through InitializeAuxiliaryFromPrimary;
+// explicit auxiliary settings remain independent afterwards.
 func (c *Config) EffectiveAuxiliary() ModelSelectionConfig {
 	if c == nil {
 		return ModelSelectionConfig{}
@@ -1388,9 +1388,31 @@ func (c *Config) EffectiveAuxiliary() ModelSelectionConfig {
 	auxiliary := c.Models.Auxiliary
 	auxiliary.Provider = strings.TrimSpace(auxiliary.Provider)
 	auxiliary.Model = strings.TrimSpace(auxiliary.Model)
+	if auxiliary.Provider == "" && auxiliary.Model == "" {
+		primary := c.EffectivePrimary()
+		auxiliary.Provider = primary.Provider
+		auxiliary.Model = primary.Model
+	}
 	auxiliary.Reasoning = normalizeReasoning(auxiliary.Reasoning)
 	auxiliary.ServiceTier = normalizeAutoValue(auxiliary.ServiceTier)
 	return auxiliary
+}
+
+// InitializeAuxiliaryFromPrimary materializes the local-install default once.
+// It only fills a route with no provider/model, so changing primary later never
+// overwrites an auxiliary model the person has already accepted or customized.
+// Auxiliary-specific reasoning, service tier, and context tuning are retained.
+func (c *Config) InitializeAuxiliaryFromPrimary() bool {
+	if c == nil || strings.TrimSpace(c.Models.Auxiliary.Provider) != "" || strings.TrimSpace(c.Models.Auxiliary.Model) != "" {
+		return false
+	}
+	primary := c.EffectivePrimary()
+	if primary.Provider == "" || primary.Model == "" {
+		return false
+	}
+	c.Models.Auxiliary.Provider = primary.Provider
+	c.Models.Auxiliary.Model = primary.Model
+	return true
 }
 
 // ResolveAuxiliaryRole applies the model routing precedence used by automatic
@@ -1433,6 +1455,21 @@ func modelRoleConfigEmpty(role ModelRoleConfig) bool {
 		len(role.Headers) == 0 && len(role.ExtraHeaders) == 0 && len(role.ExtraBody) == 0 && len(role.ExtraQuery) == 0 &&
 		strings.TrimSpace(role.EffectiveReasoning()) == "" &&
 		len(role.Thinking) == 0 && strings.TrimSpace(role.ServiceTier) == "" && role.Quirks == (ProviderQuirks{})
+}
+
+// AuxiliaryRoleFloor returns models.auxiliary as a role configuration. It is
+// the shared floor every background role degrades to when its own physical
+// route is unavailable, so it is never an override: callers append it after a
+// role's own configuration and de-duplicate by physical route.
+func (c *Config) AuxiliaryRoleFloor() (ModelRoleConfig, bool) {
+	if c == nil {
+		return ModelRoleConfig{}, false
+	}
+	auxiliary := c.EffectiveAuxiliary()
+	if modelSelectionConfigEmpty(auxiliary) {
+		return ModelRoleConfig{}, false
+	}
+	return modelRoleConfigFromSelection(auxiliary), true
 }
 
 func modelRoleConfigFromSelection(selection ModelSelectionConfig) ModelRoleConfig {
@@ -1510,6 +1547,7 @@ func (c *Config) SetPrimaryModel(provider, model, reasoning string) {
 	c.Model.Default = ""
 	c.Agent.Provider = ""
 	c.Agent.Model = ""
+	c.InitializeAuxiliaryFromPrimary()
 }
 
 func (r ModelRoleConfig) EffectiveReasoning() string {

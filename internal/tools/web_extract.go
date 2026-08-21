@@ -24,6 +24,7 @@ func NewWebExtractTool() *WebExtractTool {
 		BaseTool: BaseTool{
 			name:        "web_extract",
 			description: "提取网页的文本内容，支持 markdown 格式",
+			metadata:    ToolMetadata{ReadOnly: true, RiskLevel: ToolRiskLow, Category: "network", OperationClasses: []OperationClass{OpClassNetwork}},
 			schema: ToolSchema{
 				Type: "object",
 				Properties: map[string]PropertyDef{

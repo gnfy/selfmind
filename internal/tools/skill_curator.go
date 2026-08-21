@@ -16,8 +16,8 @@ type CuratorOptions struct {
 }
 
 // CuratorStatusForTenant reports lifecycle metadata without mutating skills.
-func CuratorStatusForTenant(tenantID string) (string, error) {
-	skills, err := ListSkillsForTenant(tenantID, true)
+func CuratorStatusForTenant(tenantID string, invocation ...map[string]interface{}) (string, error) {
+	skills, err := ListSkillsForTenant(tenantID, true, invocation...)
 	if err != nil {
 		return "", err
 	}
@@ -42,21 +42,21 @@ func CuratorStatusForTenant(tenantID string) (string, error) {
 }
 
 // RunCuratorForTenant marks idle agent-created skills stale and archives old ones.
-func RunCuratorForTenant(tenantID string, staleAfterDays, archiveAfterDays int) (string, error) {
+func RunCuratorForTenant(tenantID string, staleAfterDays, archiveAfterDays int, invocation ...map[string]interface{}) (string, error) {
 	return RunCuratorForTenantWithOptions(tenantID, CuratorOptions{
 		StaleAfterDays:   staleAfterDays,
 		ArchiveAfterDays: archiveAfterDays,
-	})
+	}, invocation...)
 }
 
-func RunCuratorForTenantWithOptions(tenantID string, opts CuratorOptions) (string, error) {
+func RunCuratorForTenantWithOptions(tenantID string, opts CuratorOptions, invocation ...map[string]interface{}) (string, error) {
 	if opts.StaleAfterDays <= 0 {
 		opts.StaleAfterDays = 30
 	}
 	if opts.ArchiveAfterDays <= 0 {
 		opts.ArchiveAfterDays = 90
 	}
-	skills, err := ListSkillsForTenant(tenantID, false)
+	skills, err := ListSkillsForTenant(tenantID, false, invocation...)
 	if err != nil {
 		return "", err
 	}
@@ -97,7 +97,7 @@ func RunCuratorForTenantWithOptions(tenantID string, opts CuratorOptions) (strin
 				archivedCount++
 				lines = append(lines, fmt.Sprintf("- would archive %s (%d idle days)", s.Name, idleDays))
 			} else {
-				if _, err := ArchiveSkillForTenant(tenantID, s.Name); err != nil {
+				if _, err := ArchiveSkillForTenant(tenantID, s.Name, invocation...); err != nil {
 					lines = append(lines, fmt.Sprintf("- %s archive failed: %v", s.Name, err))
 					continue
 				}
@@ -108,7 +108,7 @@ func RunCuratorForTenantWithOptions(tenantID string, opts CuratorOptions) (strin
 			if opts.DryRun {
 				lines = append(lines, fmt.Sprintf("- would mark stale %s (%d idle days)", s.Name, idleDays))
 			} else {
-				_ = SetSkillState(tenantID, s.Name, SkillStateStale)
+				_ = SetSkillState(tenantID, s.Name, SkillStateStale, invocation...)
 				lines = append(lines, fmt.Sprintf("- marked stale %s (%d idle days)", s.Name, idleDays))
 			}
 			staleCount++
@@ -133,7 +133,7 @@ func RunCuratorForTenantWithOptions(tenantID string, opts CuratorOptions) (strin
 		sb.WriteString(strings.Join(suggestions, "\n"))
 	}
 	if opts.WriteReport {
-		path, err := WriteCuratorReportForTenant(tenantID, sb.String())
+		path, err := WriteCuratorReportForTenant(tenantID, sb.String(), invocation...)
 		if err != nil {
 			sb.WriteString(fmt.Sprintf("\n\nReport write failed: %v", err))
 		} else {
@@ -143,11 +143,11 @@ func RunCuratorForTenantWithOptions(tenantID string, opts CuratorOptions) (strin
 	return sb.String(), nil
 }
 
-func RestoreSkillForTenant(tenantID, name string) (string, error) {
+func RestoreSkillForTenant(tenantID, name string, invocation ...map[string]interface{}) (string, error) {
 	if name == "" {
 		return "", fmt.Errorf("name is required for restore")
 	}
-	dir, err := getSkillsDir(tenantID)
+	dir, err := getSkillsDir(tenantID, invocation...)
 	if err != nil {
 		return "", err
 	}
@@ -174,7 +174,7 @@ func RestoreSkillForTenant(tenantID, name string) (string, error) {
 		if err := os.Rename(s.Path, dest); err != nil {
 			return "", err
 		}
-		_ = SetSkillState(tenantID, s.Name, SkillStateActive)
+		_ = SetSkillState(tenantID, s.Name, SkillStateActive, invocation...)
 		return fmt.Sprintf("Skill %q restored to %s", s.Name, dest), nil
 	}
 	return "", fmt.Errorf("archived skill not found: %s", name)
@@ -212,8 +212,8 @@ func skillClusterPrefix(name string) string {
 	return ""
 }
 
-func WriteCuratorReportForTenant(tenantID, content string) (string, error) {
-	skillsDir, err := getSkillsDir(tenantID)
+func WriteCuratorReportForTenant(tenantID, content string, invocation ...map[string]interface{}) (string, error) {
+	skillsDir, err := getSkillsDir(tenantID, invocation...)
 	if err != nil {
 		return "", err
 	}

@@ -2,25 +2,48 @@ package kernel
 
 import "strings"
 
-// taskExecutionGuidance encodes the work-quality discipline that separates a
-// polished result from a quick-and-dirty one: explore before writing, prefer
-// precise edits, and verify your output before claiming done. It is language-
-// and domain-agnostic (the project's own tooling drives verification) and is
-// injected only on tool-bearing turns.
+// foregroundDeliveryGuidance is the always-on, capability-independent product
+// contract for user-facing turns. It deliberately says nothing about the
+// person's profession, preferred stack, or desired verbosity: those belong to
+// agent.md, current user instructions, project conventions, and durable memory.
+func foregroundDeliveryGuidance() string {
+	return `# RESPONSE & INTERACTION
+- You are SelfMind, a personal AI assistant. Respond in the language of the user's latest message unless they ask otherwise; keep product-defined control names and status labels in English.
+- Lead with the answer or outcome, then include only the detail needed to understand, verify, or continue the work.
+- Do not dump raw tool payloads, protocol messages, or protocol JSON unless the user explicitly requests them and disclosure is appropriate.
+- Ask one clarifying question only when materially different interpretations would change the work. Otherwise state the reasonable assumption and proceed.
+- These presentation defaults yield to operator-configured guidance, then the user's current request, then applicable project conventions. Safety, tool scope, evidence, and honesty requirements never yield.`
+}
+
+// taskExecutionGuidance is the capability-neutral quality floor. It must stay
+// valid for a read-only watcher, a delegated researcher, and a coding agent;
+// workspace-specific implementation guidance is added separately.
 func taskExecutionGuidance() string {
 	return `# WORK QUALITY & VERIFICATION
-- Explore before you write: list the working directory and read related or existing files so you do not overwrite or duplicate existing work. Pick a non-colliding filename when one already exists.
-- Prefer precise edits (the patch tool) over rewriting a whole file when changing existing code.
-- VERIFY before declaring done. Identify the project's ecosystem from its manifest/build files (e.g. go.mod, package.json, pyproject.toml/requirements.txt, Cargo.toml, pom.xml/build.gradle, composer.json, Gemfile, Makefile, *.csproj, or CI config) and run that project's own syntax/build/test/lint check with the terminal. If nothing is runnable, re-read what you produced and sanity-check the key parts (entry points and the specific behavior requested). Treat a failed check as work to fix, not a place to stop.
-- Do not claim completion you have not verified. If you could not verify, say so plainly and give the exact command the user can run.`
+- Inspect the relevant available evidence before acting; do not overwrite, duplicate, or broaden the requested work without reason.
+- Prefer the smallest precise action supported by the capabilities available in this run.
+- Verify the requested outcome with the strongest evidence those capabilities can produce. A failed check is diagnostic evidence, not proof of completion.
+- Never claim work was completed or verified when it was not. State any unverified part and the concrete remaining check.`
+}
+
+// workspaceImplementationGuidance applies only when a foreground or delegated
+// agent is operating in a bound workspace. It deliberately makes command-based
+// verification conditional on command capability so read-only finalizers do
+// not receive impossible instructions.
+func workspaceImplementationGuidance() string {
+	return `# WORKSPACE IMPLEMENTATION QUALITY
+- When the request concerns the workspace, inspect the existing implementation, nearby conventions, and declared project tooling before changing it.
+- Extend existing files and patterns where practical. Keep edits precise and avoid unrelated refactors or new files.
+- Validate changed behavior with the project's declared checks when command execution is available. Otherwise use file inspection and other available evidence, then name the exact check that remains.
+- Diagnose a failed check from its cwd, files, environment, authentication, runtime, or command help before choosing the next action.`
 }
 
 // progressNarrationGuidance asks the model to keep the user oriented with short
 // Codex-style preambles before tool batches. These notes stream as ordinary
 // assistant text, and the CLI/TUI persists each one as its own message, turning
-// an otherwise opaque tool run into a readable step trajectory. It is injected
-// only on tool-bearing turns (alongside taskExecutionGuidance); pure
-// direct-answer turns expose no tools and need no narration.
+// an otherwise opaque tool run into a readable step trajectory. The rule stays
+// in the stable foreground prefix and explicitly disables itself for a direct
+// answer with no tools.
 func progressNarrationGuidance() string {
 	return `# PROGRESS NARRATION (keep the user oriented)
 - Before a group of tool calls, write ONE short sentence (about 8-20 words), in plain language and present tense, saying what you are about to do and why; then make the calls. Group related actions under a single preamble instead of narrating every trivial read.
@@ -29,59 +52,73 @@ func progressNarrationGuidance() string {
 - Skip narration entirely for a direct answer that uses no tools.`
 }
 
-// frontendQualityGuidance is injected ONLY when the task looks like UI/frontend
-// work (see isFrontendTask). It must not be part of the always-on guidance —
-// for backend, data, infra, or CLI work it is irrelevant and misleading.
-func frontendQualityGuidance() string {
-	return `# FRONTEND / UI QUALITY (this task involves a UI or page)
-- Aim for an intentional, polished result; avoid generic "AI slop" and safe, average layouts.
-- Define CSS variables; use purposeful typography (avoid default system stacks); add a few meaningful animations; use gradients/shapes/patterns for atmosphere instead of a flat single-color background; ensure it works on both desktop and mobile.
-- Exception: inside an existing project or design system, match its established patterns instead.`
+// userFacingInterfaceQualityGuidance is replaceable operator guidance. The
+// code-owned applicability wrapper below remains in charge of when the model
+// should use it, so customization cannot turn an interface preference into a
+// rule for unrelated backend, data, infrastructure, or CLI work.
+func userFacingInterfaceQualityGuidance() string {
+	return `- Follow the user's stated requirements and the project's existing design system and interaction conventions.
+- Consider accessibility, responsive behavior, and relevant loading, empty, error, and disabled states.
+- Verify the behavior and presentation with the strongest evidence available in this run. Do not imply visual or interactive validation that was not performed.`
 }
 
-// isFrontendTask is a lightweight, multilingual signal for whether design/UI
-// quality guidance is relevant. It is advisory prompt content only (a false
-// positive wastes a little prompt budget; a false negative just omits design
-// hints) — not tool gating or agent routing.
-func isFrontendTask(input string) bool {
-	lower := strings.ToLower(input)
-	signals := []string{
-		// English
-		"frontend", "front-end", "front end", "ui", "ux", "web page", "webpage",
-		"website", "web app", "html", "css", "canvas", "react", "vue", "svelte",
-		"tailwind", "landing page", "dashboard", "animation", "button", "layout",
-		"responsive", "component", "game",
-		// Chinese
-		"前端", "网页", "页面", "界面", "样式", "布局", "动画", "按钮", "可视化",
-		"小游戏", "游戏", "网站", "组件", "响应式", "落地页",
+func conditionalUserFacingInterfaceGuidance(content string) string {
+	content = strings.TrimSpace(content)
+	if content == "" {
+		return ""
 	}
-	for _, s := range signals {
-		if strings.Contains(lower, s) {
-			return true
-		}
-	}
-	return false
+	return `# USER-FACING INTERFACE QUALITY (conditional)
+Apply this section only when the requested work creates or changes an interface that a person will see or interact with. Ignore it for all other work.
+
+` + content
 }
 
 func selfImprovementGuidance() string {
-	return `# Persistent Learning Guidance
+	return learningGuidance(true, true, true)
+}
 
-You have three durable learning surfaces:
-- memory: save compact declarative facts about the user, stable project conventions, and durable environment details.
-- session_search: use it when the user refers to a past conversation or when cross-session context may reduce repeated steering.
-- skill_manage: save reusable procedures, debugging paths, workflow corrections, and tool-use patterns as skills.
+func selfImprovementGuidanceForDefinitions(defs []map[string]interface{}) string {
+	available := make(map[string]bool, len(defs))
+	for _, def := range defs {
+		available[toolDefinitionName(def)] = true
+	}
+	return learningGuidance(available["memory"], available["session_search"], available["skill_manage"])
+}
 
+func learningGuidance(hasMemory, hasSessionSearch, hasSkillManage bool) string {
+	if !hasMemory && !hasSessionSearch && !hasSkillManage {
+		return ""
+	}
+	var sb strings.Builder
+	sb.WriteString("# Persistent Learning Guidance\n\nUse only the durable learning surfaces available in this turn:\n")
+	if hasMemory {
+		sb.WriteString("- memory: save compact declarative facts about the user, stable project conventions, and durable environment details.\n")
+	}
+	if hasSessionSearch {
+		sb.WriteString("- session_search: use it when the user refers to a past conversation or when cross-session context may reduce repeated steering.\n")
+	}
+	if hasSkillManage {
+		sb.WriteString("- skill_manage: save reusable procedures, debugging paths, workflow corrections, and tool-use patterns as skills.\n")
+	}
+	if hasMemory {
+		sb.WriteString(`
 Memory rules:
 - Save user preferences and stable project facts.
 - Do not save one-off task progress, completed-work logs, PR numbers, issue numbers, file counts, or temporary state.
 - Do not save transient provider outages, failed command guesses, or temporary tool failures unless the user turns them into a durable rule.
 - Write memories as facts, not commands to yourself.
-
+`)
+	}
+	if hasSkillManage {
+		sb.WriteString(`
 Skill rules:
 - Prefer search/read/patch of an existing skill before creating a new one.
 - Patch a skill immediately when it is outdated, incomplete, wrong, or when the user corrects your workflow.
 - Create new skills at the class-of-task level, not for a single session artifact.
 - Put session-specific detail in a support file under references/ and link to it from SKILL.md.
 - Do not create duplicate skills for the same workflow.
-- Treat manual and pinned skills as user-owned; patch only when the correction is clear, and never archive them automatically.`
+- Treat manual and pinned skills as user-owned; patch only when the correction is clear, and never archive them automatically.
+`)
+	}
+	return strings.TrimSpace(sb.String())
 }

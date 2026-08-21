@@ -165,6 +165,69 @@ intent:
 	}
 }
 
+func TestConfigUpgradeRemovesDomainRoleSelectorsAndKeepsModelRoles(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	original := []byte(`models:
+  primary:
+    provider: "codex-cli"
+    model: "gpt-main"
+  auxiliary:
+    provider: "deepseek"
+    model: "deepseek-aux"
+  roles:
+    memory_extract:
+      provider: "google"
+      model: "gemini-memory"
+    fast_classifier:
+      provider: "deepseek"
+      model: "deepseek-fast"
+memory:
+  governance:
+    model_role: "fast_classifier"
+tasks:
+  maintenance_model_role: "fast_classifier"
+`)
+	if err := os.WriteFile(path, original, 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	stdout := &bytes.Buffer{}
+	app := &App{
+		ctx:        context.Background(),
+		args:       []string{"selfmind", "config", "upgrade"},
+		stdout:     stdout,
+		stderr:     &bytes.Buffer{},
+		configPath: path,
+	}
+	if handled, code := app.runConfigCommandIfRequested(); !handled || code != 0 {
+		t.Fatalf("upgrade handled=%v code=%d stderr=%s", handled, code, app.stderr)
+	}
+
+	upgraded, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(upgraded)
+	for _, removed := range []string{"model_role:", "maintenance_model_role:"} {
+		if strings.Contains(text, removed) {
+			t.Fatalf("deprecated selector %q was not removed:\n%s", removed, text)
+		}
+	}
+	for _, preserved := range []string{"memory_extract:", "gemini-memory", "fast_classifier:", "deepseek-fast"} {
+		if !strings.Contains(text, preserved) {
+			t.Fatalf("model role %q was not preserved:\n%s", preserved, text)
+		}
+	}
+	for _, notice := range []string{
+		"memory.governance.model_role is deprecated",
+		"tasks.maintenance_model_role is deprecated",
+	} {
+		if !strings.Contains(stdout.String(), notice) {
+			t.Fatalf("upgrade output missing %q:\n%s", notice, stdout.String())
+		}
+	}
+}
+
 func TestConfigUpgradeAddsKimiAuxiliaryDefault(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	original := []byte(`model:

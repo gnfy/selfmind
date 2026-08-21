@@ -30,7 +30,7 @@ func TestApplyStateSeedsStoresCanonicalMemoryInPersonPartition(t *testing.T) {
 		Canonical: true,
 	}}}
 
-	if err := applyStateSeeds(ctx, nil, manager, identity, "workspace", t.TempDir(), setup); err != nil {
+	if err := applyStateSeeds(ctx, nil, manager, identity, "workspace", t.TempDir(), "cli", setup); err != nil {
 		t.Fatal(err)
 	}
 
@@ -77,7 +77,7 @@ func TestApplyStateSeedsCanBindWorkspaceSkill(t *testing.T) {
 		t.Fatal(err)
 	}
 	setup := &Setup{Task: &SeedTask{Title: "release", DefaultSkill: "release-check"}}
-	if err := applyStateSeeds(ctx, store, nil, identity, "workspace-id", workspaceRoot, setup); err != nil {
+	if err := applyStateSeeds(ctx, store, nil, identity, "workspace-id", workspaceRoot, "cli", setup); err != nil {
 		t.Fatal(err)
 	}
 	task, err := store.CurrentTask(ctx, identity.TenantID, identity.PersonID)

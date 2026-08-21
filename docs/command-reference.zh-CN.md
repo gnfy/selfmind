@@ -107,8 +107,9 @@ selfmind workspace [list|add|use|trust|untrust|grants|observe|revoke|<n|workspac
 selfmind config [doctor|upgrade]
 selfmind env [show|refresh]
 selfmind model [current|check [--live] [--role <name>]|list|set <provider> <model>]
+selfmind prompt [list|show|edit|diff|validate|test|reset|apply] ...
 selfmind auth [login|status|logout] ...
-selfmind doctor [--out FILE] [--probe-models]
+selfmind doctor [--verbose] [--out FILE] [--probe-models]
 selfmind usage
 selfmind report daily [--since 24h]
 selfmind docs [check|index]
@@ -122,6 +123,15 @@ selfmind weixin [login|status] ...
 ```text
 selfmind model set <provider> <model> [--reasoning <level|auto>] [--service-tier <tier|auto>]
 selfmind model check [--live] [--role <name>]
+
+selfmind prompt [list|status]
+selfmind prompt show <agent|role>
+selfmind prompt edit <agent|role>
+selfmind prompt diff [agent|role]
+selfmind prompt validate
+selfmind prompt test [agent|role]
+selfmind prompt reset <agent|role|all>
+selfmind prompt apply
 
 selfmind auth login minimax-oauth [--region global|cn] [--no-browser]
 selfmind auth status [provider]
@@ -147,8 +157,10 @@ selfmind weixin status
 
 - `config doctor` 只报告配置缺失或过期项；`config upgrade` 在保留已有值的
   前提下补充受支持的默认项。
-- `model set` 只写入 `models.primary` 这一处主模型配置。能力元数据存在时，
-  会动态校验 reasoning/service tier；`auto` 表示交给 provider/模型默认处理。
+- `model set` 写入 `models.primary`。如果 auxiliary 还没有 provider/model，
+  第一次写入还会用相同 provider/model 初始化 `models.auxiliary`；之后修改
+  primary 不会覆盖已有 auxiliary。能力元数据存在时，会动态校验
+  reasoning/service tier；`auto` 表示交给 provider/模型默认处理。
 - 共享 daemon 不支持在 TUI `/model` 中热切换。修改后使用
   `selfmind gateway restart --drain`，在安全 turn 边界重启。
 - `model check` 解析凭证、协议、端点和模型，但不会暴露密钥。`--role auxiliary`
@@ -156,12 +168,40 @@ selfmind weixin status
   `--live` 会发起有界请求并验证原生工具 schema 兼容性。对于 DeepSeek V4
   这类具有多轮思考/工具契约的 provider，还会回放一次无副作用工具结果并验证
   最终答复，因此会消耗少量 provider 额度。
-- `usage` 是 `/diag context` 的 CLI 别名。若 provider 上报相应字段，会展示调用级
-  输入、缓存命中/未命中输入、输出和推理 token；它展示 token，不估算货币成本。
+- `prompt` 管理当前配置文件同级的 operator 工作区（通常是
+  `~/.selfmind/prompts/`），不需要增加 `config.yaml` 配置项。`list`/`status`
+  会比较磁盘快照与运行中 daemon 已加载的哈希和 build，因此相同的自定义哈希不会
+  掩盖仍需重启才能生效的内置提示词变更；`show` 展示静态内置角色契约
+  和本地文件，但不输出运行时 memory 或项目上下文；`edit` 为 `agent`、
+  `memory_extract`、`background_review`、`skill_curator`、`summarizer` 或
+  `semantic_recall` 创建带章节标记的模板；标记章节内部的 Markdown 标题会原样
+  保留为自定义内容。编辑现有无标记文件时，会先迁移成标记语法，并写入带时间戳的
+  `.legacy-*` 备份；Markdown 代码围栏内的精确标记示例仍按正文处理。
+- 提示词章节内容为 `default` 时继承内置行为。只有明确可替换的前台章节允许
+  使用 `off`；质量、验证、响应 schema、治理、工具和安全底线都不能关闭。
+  未知章节标记（以及旧版无标记文件中的未知保留标题）、非法 UTF-8，以及 prompt
+  root、嵌套目录或文件上的符号链接、组/其他用户可写权限和超限内容都会导致校验失败。
+  启动时若活跃工作区无效，daemon 会写入
+  持久的降级诊断，并使用匹配的最近一次有效快照；没有匹配快照时使用内置默认，
+  因此 Agent 端点仍保持可用。对于报告宽松写权限的文件系统，也不会绕过安全检查。
+  `reset` 会创建带时间戳的备份；`apply` 先校验再重启运行中的 daemon；显式执行
+  `gateway restart` 也会在停止当前进程前先校验。不支持热重载；`test` 会确定性验证
+  当前章节组合，不调用模型。
+- `usage` 是当前 person 最近 24 小时的无模型执行与 token 报告（与
+  `/report daily --since 24h` 使用同一数据路径）。若相应信号可用，它会展示
+  provider 输入、缓存读取/未命中、输出、推理 token、原生工具 schema 占比、
+  工具/审批活动以及当前维护与投递健康；它不估算货币成本。
 - `report daily` 生成当前 person 的无模型质量与成本摘要。它在有界时间窗口内汇总
   run 结局、工具与审批、provider 用量和缓存、后台维护健康、投递状态及召回采用
-  趋势；默认最近 24 小时，最长 30 天。
-- `doctor` 检查安装和配置；`--probe-models` 会真实调用 provider，可能消耗额度。
+  趋势；默认最近 24 小时，最长 30 天。事件会分页扫描到诊断上限；若仍有更多
+  行，报告会把受影响的汇总明确标为“下界”，不会静默显示截断后的总数。
+- `doctor` 默认只显示当前问题，并为每个问题给出恢复或排查命令；健康子系统以及
+  历史 run、错误、事件、活动和日志默认隐藏。问题使用 `[CONFIG]`、`[TRUST]`、
+  `[PROMPT]`、`[DELIVERY]`、`[SKILLS]` 等稳定分类标识，所有处理命令统一汇总到带编号的
+  `Next actions`。交互终端复用 TUI 的警告、错误、信息、成功、正文和弱化色；管道、
+  重定向、`NO_COLOR`、`CLICOLOR=0` 和 `TERM=dumb` 保持纯文本。`--verbose`
+  打印完整的脱敏诊断包，`--out FILE` 始终把完整诊断包写入文件，便于支持或离线
+  排查。`--probe-models` 会真实调用 provider，可能消耗额度。
 - `selfcheck` 是本地发布门禁。默认 `local-full` 运行本机能够证明的全部发布用例；
   `--fast`/`local-fast` 跳过已测量的慢用例；`--profile ci` 只运行明确分配给
   当前平台 CI 的用例。Provider 响应离线回放，但工具调用仍使用当前主机工具链。
@@ -184,7 +224,7 @@ selfmind weixin status
 
 ```text
 selfmind eval [list|run|report|repair|scorecard|capture|clean]
-selfmind maintenance [replay|migrate-memory|migrate-skills|migrate-task-references|memory-audit|memory-dedup|task-audit|restore-control] ...
+selfmind maintenance [replay|migrate-memory|migrate-skills|cleanup-person-partitions|migrate-task-references|memory-audit|memory-dedup|task-audit|restore-control] ...
 ```
 
 ```text
@@ -196,9 +236,10 @@ selfmind eval scorecard [case-or-dir] [--provider ID] [--out PATH] [--live]
 selfmind eval capture [turn-id|latest] [--title "..."] [--suite NAME]
 selfmind eval clean [--yes]
 
-selfmind maintenance replay [--limit N]
+selfmind maintenance replay [--limit N] [--prompt-revision]
 selfmind maintenance migrate-memory [--apply] [--data-dir DIR]
 selfmind maintenance migrate-skills [--apply] [--root DIR] [--governance-grace 30d]
+selfmind maintenance cleanup-person-partitions [--apply] [--root DIR --data-dir DIR]
 selfmind maintenance migrate-task-references [--apply] [--limit N] [--data-dir DIR]
 selfmind maintenance memory-audit [--archive-confirmed] [--partition P] [--data-dir DIR]
 selfmind maintenance memory-dedup [--apply] [--partition P] [--data-dir DIR]
@@ -206,9 +247,19 @@ selfmind maintenance task-audit [--apply] [--limit N] [--data-dir DIR]
 selfmind maintenance restore-control --backup PATH --yes [--data-dir DIR]
 ```
 
-`maintenance replay` 只会重新入队每个 run 最新 analyzer generation 中因重试耗尽而
-暂停的作业。旧 generation 保留为不可变历史；处理积压前应先用较小的 `--limit`
-执行 canary。
+`maintenance replay` 会重新入队每个持久 key 最新 analyzer generation 中因重试耗尽
+的 post-run 作业。停靠在 `blocked_prompt_revision` 的工作属于另一个由 operator 显式
+触发的范围：该命令会报告停靠数量，`--prompt-revision` 才会重新入队它们。应先恢复缺失
+的内容寻址 revision；若 revision 仍不可用就重放，作业不会调用模型，而会再次回到可见的
+阻塞状态，并且其重试计数与已记录的原因会被重置。旧 generation 保留为不可变历史；处理
+积压前应先用较小的 `--limit` 执行 canary。
+
+`maintenance cleanup-person-partitions` 会把文件系统直属的 `person_*` 分区与
+`control.db` 中全部 person 对照。默认只做 dry-run；应用清理前必须停止 gateway。
+应用模式只会把已复核的孤儿移动到同一根目录下带时间戳的
+`.orphaned-person-partitions` 隔离目录，不会删除数据。默认 root 与 control
+database 来自同一份已加载配置；如果用 `--root` 指向另一棵资产目录，就必须用
+`--data-dir` 明确指定权威 `control.db`。该命令不会打开或创建猜测出来的空数据库。
 
 - `task-audit` 默认只读，列出缺少持久 blocker 证据的暂停任务。只有任务当前无
   active run，且状态与最新已结束 run 完全一致时，`--apply` 才补写 blocker；
@@ -274,6 +325,13 @@ Gateway 命令可用于 TUI 和受支持的 IM 渠道，并且会在普通 Agent
 - `/diag tools` 显示注册期工具 schema 目录。被修复或隔离的外部工具只显示
   工具名、问题类别和 schema 哈希，不显示原始 schema 或参数值。隔离工具不会
   发送给模型，也不能执行。
+- `/diag context` 首行展示包含原生工具 schema 的最近一次 provider 请求估算；
+  单独的 assembled prompt 小计会明确标注“不含原生工具 schema”。支持请求指纹
+  的 provider 会展示 prefix 覆盖；不支持或 wrapper 转发断开时会给出明确状态。
+- `/diag delivery recover stale-results` 会在当前 IM peer 内，把超出自动窗口的
+  `pending_session` 最终结果合成一条有界摘要。只有确认送达后，才关闭摘要中列出的
+  确切消息。`/diag delivery dismiss stale-results` 不发送消息而直接关闭这些旧最终
+  结果。两者都不会影响审批、澄清、`sent_unconfirmed` 或其他 channel。
 
 ## 本地 TUI slash commands
 

@@ -92,9 +92,56 @@ func TestPackageToolErrorGuidesModelToDiagnose(t *testing.T) {
 	}
 }
 
+func TestPackageToolErrorDoesNotDuplicateEnrichedClassification(t *testing.T) {
+	const hint = "The executable is not on PATH; verify the tool name or install it before retrying."
+	err := fmt.Errorf("exec: executable file not found\nerror_class: exec_not_found; hint: %s", hint)
+	env := packageToolError("terminal", err)
+
+	if got := strings.Count(env.ModelContent, "error_class:"); got != 1 {
+		t.Fatalf("error_class markers = %d, want 1: %q", got, env.ModelContent)
+	}
+	if got := strings.Count(env.ModelContent, "hint:"); got != 1 {
+		t.Fatalf("hint markers = %d, want 1: %q", got, env.ModelContent)
+	}
+	if env.ErrorCategory != "exec_not_found" || env.RecoveryHint != hint {
+		t.Fatalf("classification = %q / %q", env.ErrorCategory, env.RecoveryHint)
+	}
+}
+
 type errTest string
 
 func (e errTest) Error() string { return string(e) }
+
+type stableFailureTest struct{ cause string }
+
+func (e stableFailureTest) Error() string             { return e.cause }
+func (e stableFailureTest) ToolErrorCode() string     { return "session_search_unavailable" }
+func (e stableFailureTest) ToolErrorCategory() string { return "data_store" }
+func (e stableFailureTest) ModelSafeMessage() string  { return "Session history search is unavailable." }
+func (e stableFailureTest) ToolRecoveryHint() string  { return "Retry once with simpler literal text." }
+
+func TestPackageToolErrorSeparatesStableModelMessageFromLocalDiagnostic(t *testing.T) {
+	env := packageToolError("session_search", stableFailureTest{cause: "SQL logic error: no such column: 625 (1)"})
+	for _, want := range []string{
+		"Session history search is unavailable.",
+		"error_code: session_search_unavailable",
+		"error_class: data_store",
+		"Retry once with simpler literal text.",
+	} {
+		if !strings.Contains(env.ModelContent, want) {
+			t.Fatalf("model content %q missing %q", env.ModelContent, want)
+		}
+	}
+	if strings.Contains(env.ModelContent, "no such column") || strings.Contains(env.Preview, "no such column") {
+		t.Fatalf("raw database diagnostic leaked to model or preview: %#v", env)
+	}
+	if !strings.Contains(env.DiagnosticExcerpt, "no such column: 625") || env.DiagnosticHash == "" {
+		t.Fatalf("local diagnostic was not retained: %#v", env)
+	}
+	if env.ErrorCode != "session_search_unavailable" || env.ErrorCategory != "data_store" {
+		t.Fatalf("stable failure metadata = %#v", env)
+	}
+}
 
 // TestPackageToolErrorUserRejection ensures a user rejection is presented to
 // the model as a decision with a do-not-retry instruction, not as a

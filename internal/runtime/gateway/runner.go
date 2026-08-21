@@ -12,12 +12,14 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime/debug"
+	"sort"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
 
 	"selfmind/internal/app"
+	"selfmind/internal/buildinfo"
 	"selfmind/internal/control"
 	"selfmind/internal/executionenv"
 	"selfmind/internal/gateway/api"
@@ -28,6 +30,7 @@ import (
 	"selfmind/internal/kernel/memory"
 	"selfmind/internal/platform/config"
 	"selfmind/internal/platform/log"
+	"selfmind/internal/promptassets"
 	"selfmind/internal/tools"
 )
 
@@ -63,6 +66,14 @@ func Run(ctx context.Context, opts Options) (runErr error) {
 			_ = mem.Close()
 		}
 	}()
+	prompts, promptStatus := app.InspectRuntimePromptSnapshot(cfg, dataDir)
+	if promptStatus.Source != app.PromptSourceActive {
+		log.Warn("gateway: invalid prompt workspace; continuing with safe fallback",
+			"source", promptStatus.Source,
+			"error_kind", promptStatus.ActiveErrorKind,
+			"error", tools.RedactSensitive(promptStatus.ActiveError),
+			"prompt_root", promptStatus.ActiveRoot)
+	}
 
 	addr := ResolveAddr(firstNonEmpty(opts.Addr, cfg.Gateway.Addr))
 	// Fail closed: never expose the agent on a public interface without auth.
@@ -114,6 +125,16 @@ func Run(ctx context.Context, opts Options) (runErr error) {
 	if err := manager.WriteStatus("starting", defaultTenantID, ""); err != nil {
 		return err
 	}
+	promptStatus = app.ActivateRuntimePromptSnapshot(prompts, promptStatus, dataDir)
+	if promptStatus.ActivationError != "" {
+		// The selected snapshot is validated and safe to use. Only future durable
+		// prompt pinning is degraded, so keep foreground endpoints available and
+		// make the cache failure visible instead of refusing service.
+		log.Warn("gateway: selected prompt snapshot could not be activated durably",
+			"source", promptStatus.Source,
+			"error", tools.RedactSensitive(promptStatus.ActivationError),
+			"prompt_root", promptStatus.ActiveRoot)
+	}
 
 	// Environment snapshot: take ONE reading of the operator environment at
 	// start and bind runs to it through their lease. A long-lived daemon that
@@ -146,6 +167,7 @@ func Run(ctx context.Context, opts Options) (runErr error) {
 		return fmt.Errorf("control.OpenStore failed: %w", err)
 	}
 	defer controlStore.Close()
+	recordPromptSnapshotLoaded(controlStore, manager.Snapshot().InstanceID, prompts, promptStatus)
 	if hadUncleanExit {
 		previousUnclean.InstanceID = previousUnclean.StableInstanceID()
 		payload, _ := json.Marshal(map[string]interface{}{
@@ -212,13 +234,13 @@ func Run(ctx context.Context, opts Options) (runErr error) {
 		log.Warn("gateway: withdrew over-broad approval grants", "revoked", revoked, "remaining", len(kept))
 	}
 
-	agent, err := app.InitAgent(mem, cfg, defaultTenantID, controlStore)
+	agent, err := app.InitAgent(mem, cfg, defaultTenantID, prompts, controlStore)
 	if err != nil {
 		return fmt.Errorf("app.InitAgent failed: %w", err)
 	}
 
 	skillStore := kernel.NewSkillStore(mem)
-	disp, err := app.InitTools(mem, cfg, agent, skillStore, defaultTenantID, controlStore)
+	disp, err := app.InitTools(mem, cfg, agent, skillStore, defaultTenantID, prompts, controlStore)
 	if err != nil {
 		return fmt.Errorf("app.InitTools failed: %w", err)
 	}
@@ -231,7 +253,7 @@ func Run(ctx context.Context, opts Options) (runErr error) {
 	// Optional multi-worker execution (SELFMIND_WORKERS>1) for the daemon, where
 	// concurrent CLI/IM/cron requests can actually exercise it. Default 1 = the
 	// single-agent serialized path, unchanged.
-	if workers, werr := app.MaybeEnableWorkerPool(gwDeps.Gateway, mem, cfg, skillStore, defaultTenantID, controlStore); werr != nil {
+	if workers, werr := app.MaybeEnableWorkerPool(gwDeps.Gateway, mem, cfg, skillStore, defaultTenantID, prompts, controlStore); werr != nil {
 		log.Warn("worker pool partially enabled", "workers", workers, "error", werr)
 	} else if workers > 1 {
 		log.Info("agent worker pool enabled", "workers", workers)
@@ -241,13 +263,29 @@ func Run(ctx context.Context, opts Options) (runErr error) {
 	if err := disp.ValidateInternalToolSchemas(); err != nil {
 		return fmt.Errorf("validate registered tool schemas: %w", err)
 	}
-	app.InitMCP(disp, cfg)
+	skillStorage, err := app.ResolveSkillStorage(cfg)
+	if err != nil {
+		return fmt.Errorf("resolve skill storage: %w", err)
+	}
+	mcpManager := app.InitMCP(disp, cfg)
+	var mcpHealthFunc func() tools.MCPHealthSnapshot
+	if mcpManager != nil {
+		mcpHealthFunc = mcpManager.Health
+		defer func() {
+			if err := mcpManager.Close(); err != nil {
+				log.Warn("gateway: MCP shutdown failed", "error", err)
+			}
+		}()
+	}
 
 	gatewayAPI := &httpapi.Server{
 		Control:              controlStore,
 		Gateway:              gwDeps.Gateway,
 		DefaultTenantID:      defaultTenantID,
+		PromptSnapshotHash:   prompts.Hash(),
 		ToolSchemaReportFunc: disp.ToolSchemaReport,
+		MCPHealthFunc:        mcpHealthFunc,
+		SkillStorage:         skillStorage,
 		DrainTimeout:         drainTimeout,
 		LocalControlToken:    localControlToken,
 		// Pending-approval/clarify escrow threshold (Fix 2); "0" disables.
@@ -263,8 +301,8 @@ func Run(ctx context.Context, opts Options) (runErr error) {
 		ApprovalJudge: app.NewConfiguredApprovalJudge(mem, cfg, defaultTenantID),
 		// A single explicit memory_extract-role pass handles both task-label
 		// hygiene and durable fact extraction after eligible runs.
-		PostRunAnalyzer: app.NewConfiguredPostRunAnalyzer(mem, cfg, defaultTenantID, controlStore),
-		SkillCurator:    app.NewConfiguredSkillCurator(mem, cfg, defaultTenantID, controlStore),
+		PostRunAnalyzer: app.NewConfiguredPostRunAnalyzer(mem, cfg, defaultTenantID, prompts, controlStore),
+		SkillCurator:    app.NewConfiguredSkillCurator(mem, cfg, defaultTenantID, controlStore, prompts),
 		SelfEvolution: control.EvolutionPolicy{
 			Enabled: cfg.Evolution.Enabled, Mode: cfg.Evolution.Mode,
 			ShadowAfterObservations:  cfg.Evolution.ShadowAfterObservations,
@@ -275,11 +313,11 @@ func Run(ctx context.Context, opts Options) (runErr error) {
 		// Background memory self-organization (docs/memory-governance.zh-CN.md
 		// §4): nil unless memory.governance.enabled AND its model role is
 		// explicitly configured; default mode is shadow (report only).
-		MemoryConsolidator: memoryConsolidatorOrNil(mem, cfg, defaultTenantID, controlStore),
+		MemoryConsolidator: memoryConsolidatorOrNil(mem, cfg, defaultTenantID, prompts, controlStore),
 		// Automatic semantic recall (Work Timeline P2): FTS sessions + task
 		// label cards attached at the selector layer; query expansion only when
 		// a semantic_recall role model is explicitly configured.
-		Recall: httpapi.NewRecallEngine(controlStore, mem, app.SemanticRecallExpander(mem, cfg, defaultTenantID)),
+		Recall: httpapi.NewRecallEngine(controlStore, mem, app.SemanticRecallExpander(mem, cfg, defaultTenantID, prompts)),
 		// Structured session APIs for thin clients (/v1/sessions): the daemon
 		// session index, person-partitioned (ACTIVE PLAN P0-3).
 		Sessions: mem,
@@ -313,10 +351,10 @@ func Run(ctx context.Context, opts Options) (runErr error) {
 	// worker with bounded retries; a daemon crash no longer loses them.
 	if agent.ReviewEngine != nil {
 		gatewayAPI.SkillReviewer = agent.ReviewEngine
-		agent.ReviewEngine.SetEnqueue(func(tenantID, payloadJSON string) bool {
+		agent.ReviewEngine.SetEnqueue(func(_ string, payloadJSON string) bool {
 			digest := sha256.Sum256([]byte(payloadJSON))
 			key := "skillreview_" + hex.EncodeToString(digest[:12])
-			inserted, err := controlStore.EnqueueMaintenanceJob(context.Background(), tenantID, key, httpapi.SkillReviewJobVersion, payloadJSON)
+			inserted, err := controlStore.EnqueueMaintenanceJob(context.Background(), defaultTenantID, key, httpapi.SkillReviewJobVersion, payloadJSON)
 			return err == nil && inserted
 		})
 	}
@@ -466,11 +504,60 @@ func applyGatewayRuntimeEnv(cfg *config.Config) {
 
 // memoryConsolidatorOrNil keeps a nil *app.MemoryConsolidator from becoming a
 // non-nil httpapi.MemoryConsolidator interface value.
-func memoryConsolidatorOrNil(mem *memory.MemoryManager, cfg *config.Config, tenantID string, stores ...*control.Store) httpapi.MemoryConsolidator {
-	if c := app.NewConfiguredMemoryConsolidator(mem, cfg, tenantID, stores...); c != nil {
+func memoryConsolidatorOrNil(mem *memory.MemoryManager, cfg *config.Config, tenantID string, prompts *promptassets.Snapshot, store *control.Store) httpapi.MemoryConsolidator {
+	if c := app.NewConfiguredMemoryConsolidator(mem, cfg, tenantID, prompts, store); c != nil {
 		return c
 	}
 	return nil
+}
+
+func recordPromptSnapshotLoaded(store *control.Store, instanceID string, snapshot *promptassets.Snapshot, status app.PromptSnapshotStatus) {
+	if store == nil || snapshot == nil || strings.TrimSpace(instanceID) == "" {
+		return
+	}
+	type fileSummary struct {
+		ID         string   `json:"id"`
+		Hash       string   `json:"hash"`
+		Customized bool     `json:"customized"`
+		Sections   []string `json:"custom_sections,omitempty"`
+	}
+	files := make([]fileSummary, 0, len(snapshot.Files()))
+	for _, state := range snapshot.Files() {
+		entry := fileSummary{ID: state.ID, Hash: state.Hash, Customized: state.Customized}
+		for name, value := range state.Sections {
+			if value.Mode != promptassets.ModeDefault {
+				entry.Sections = append(entry.Sections, name)
+			}
+		}
+		sort.Strings(entry.Sections)
+		files = append(files, entry)
+	}
+	payload, _ := json.Marshal(map[string]interface{}{
+		"catalog_version":   promptassets.CatalogVersion,
+		"snapshot_hash":     snapshot.Hash(),
+		"build_fingerprint": buildinfo.Fingerprint(),
+		"root":              snapshot.Root(),
+		"source":            status.Source,
+		"degraded":          status.Degraded(),
+		"active_error_kind": status.ActiveErrorKind,
+		"active_error":      tools.RedactSensitive(status.ActiveError),
+		"fallback_error":    tools.RedactSensitive(status.FallbackError),
+		"activation_error":  tools.RedactSensitive(status.ActivationError),
+		"files":             files,
+	})
+	eventTypes := []string{"prompt.snapshot.loaded"}
+	if status.Degraded() {
+		eventTypes = append(eventTypes, "prompt.workspace.degraded")
+	}
+	for _, eventType := range eventTypes {
+		if _, err := store.RecordGatewayRuntimeEvent(context.Background(), control.GatewayRuntimeEvent{
+			InstanceID: instanceID,
+			EventType:  eventType,
+			Payload:    payload,
+		}); err != nil {
+			log.Warn("gateway: record prompt snapshot event failed", "event_type", eventType, "error", err)
+		}
+	}
 }
 
 func newDeliveryService(store *control.Store, cfg *config.Config, weixinSender delivery.Sender) *delivery.Service {

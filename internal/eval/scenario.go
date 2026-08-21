@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"selfmind/internal/control"
 	"selfmind/internal/kernel"
@@ -21,6 +22,24 @@ type Setup struct {
 	Files  map[string]string `yaml:"files,omitempty" json:"files,omitempty"`
 	Memory []SeedFact        `yaml:"memory,omitempty" json:"memory,omitempty"`
 	Task   *SeedTask         `yaml:"task,omitempty" json:"task,omitempty"`
+	// Deliveries seeds outbound results already parked on a stale IM session.
+	// Declaring any also gives the case a delivery service, which cases without
+	// it deliberately do not get: a delivery surface changes which notification
+	// paths a run takes, and that must stay opt-in.
+	Deliveries []SeedDelivery `yaml:"deliveries,omitempty" json:"deliveries,omitempty"`
+}
+
+// SeedDelivery is one undeliverable final result that has been waiting for a
+// fresh IM session. AgeHours reproduces an accumulated backlog: the automatic
+// catch-up window only covers recent messages, so age is what separates work
+// the daemon retries by itself from work that needs explicit recovery.
+type SeedDelivery struct {
+	Content        string `yaml:"content" json:"content"`
+	AgeHours       int    `yaml:"age_hours,omitempty" json:"age_hours,omitempty"`
+	TaskID         string `yaml:"task_id,omitempty" json:"task_id,omitempty"`
+	RunID          string `yaml:"run_id,omitempty" json:"run_id,omitempty"`
+	Reason         string `yaml:"reason,omitempty" json:"reason,omitempty"`
+	PlatformUserID string `yaml:"platform_user_id,omitempty" json:"platform_user_id,omitempty"`
 }
 
 type SeedFact struct {
@@ -109,7 +128,7 @@ func applyFileSeeds(workspaceRoot string, files map[string]string) error {
 // applyStateSeeds seeds memory facts and an optional current task before the
 // first turn. Files are handled separately (they must land before the harness
 // starts using the workspace).
-func applyStateSeeds(ctx context.Context, store *control.Store, mem *memory.MemoryManager, identity *control.IdentityContext, workspaceID, workspaceRoot string, setup *Setup) error {
+func applyStateSeeds(ctx context.Context, store *control.Store, mem *memory.MemoryManager, identity *control.IdentityContext, workspaceID, workspaceRoot, channel string, setup *Setup) error {
 	if setup == nil || identity == nil {
 		return nil
 	}
@@ -150,6 +169,34 @@ func applyStateSeeds(ctx context.Context, store *control.Store, mem *memory.Memo
 			if err := mem.AddFact(ctx, identity.TenantID, target, f.Content); err != nil {
 				return err
 			}
+		}
+	}
+	for i, seed := range setup.Deliveries {
+		if store == nil {
+			break
+		}
+		content := strings.TrimSpace(seed.Content)
+		if content == "" {
+			return fmt.Errorf("delivery seed %d has no content", i)
+		}
+		age := time.Duration(seed.AgeHours) * time.Hour
+		if seed.AgeHours <= 0 {
+			// Default well past any automatic catch-up window so the seed lands
+			// in the state that needs explicit recovery.
+			age = 30 * 24 * time.Hour
+		}
+		if _, err := store.SeedAgedPendingSessionDelivery(ctx, control.Delivery{
+			TenantID:       identity.TenantID,
+			PersonID:       identity.PersonID,
+			Platform:       identity.Platform,
+			PlatformUserID: firstNonEmpty(strings.TrimSpace(seed.PlatformUserID), identity.PlatformUserID),
+			Channel:        channel,
+			TaskID:         strings.TrimSpace(seed.TaskID),
+			RunID:          strings.TrimSpace(seed.RunID),
+			Content:        content,
+			Kind:           "final_result",
+		}, age, firstNonEmpty(strings.TrimSpace(seed.Reason), "seeded stale IM session")); err != nil {
+			return fmt.Errorf("seed delivery %d: %w", i, err)
 		}
 	}
 	if setup.Task != nil && store != nil {

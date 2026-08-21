@@ -9,12 +9,13 @@ import (
 	"selfmind/internal/kernel"
 	"selfmind/internal/kernel/memory"
 	"selfmind/internal/platform/config"
+	"selfmind/internal/promptassets"
 	"selfmind/internal/tools"
 )
 
 // InitTools wires up the dispatcher, built-in tools, extended tools,
 // the skill loader, the skill metrics middleware, and injects the session search function.
-func InitTools(mem *memory.MemoryManager, cfg *config.Config, ag *kernel.Agent, skillStore *kernel.SkillStore, tenantID string, controlStores ...*control.Store) (*tools.Dispatcher, error) {
+func InitTools(mem *memory.MemoryManager, cfg *config.Config, ag *kernel.Agent, skillStore *kernel.SkillStore, tenantID string, prompts *promptassets.Snapshot, controlStore *control.Store) (*tools.Dispatcher, error) {
 	registry := tools.NewRegistry()
 	disp := tools.NewDispatcherWithRegistry(registry)
 	if tenantID == "" {
@@ -22,6 +23,10 @@ func InitTools(mem *memory.MemoryManager, cfg *config.Config, ag *kernel.Agent, 
 	}
 	registerConfiguredSecrets(cfg)
 	kernel.SetAgentEventRedactor(tools.RedactSensitive)
+	storage, err := configuredSkillStorage(cfg)
+	if err != nil {
+		return nil, err
+	}
 
 	// Redaction is outermost so every model/event/artifact result surface sees
 	// the masked form, including errors returned by inner policy middleware.
@@ -32,18 +37,19 @@ func InitTools(mem *memory.MemoryManager, cfg *config.Config, ag *kernel.Agent, 
 	disp.InjectMiddleware(tools.NewToolGuardrails().Middleware)
 	disp.InjectMiddleware(tools.ExecutionCapabilityMiddleware())
 	disp.InjectMiddleware(tools.EvidenceMiddleware())
+	disp.InjectMiddleware(tools.SkillStorageMiddleware(storage))
 
 	tools.RegisterBuiltins(disp)
 	// Exec sandbox (P0-D): process-wide Linux policy. Auto mode prefers bwrap;
 	// unavailable best-effort isolation is reported as a host fallback, while
 	// required mode fails closed. Explicit host calls remain approval-gated.
 	tools.SetExecSandbox(cfg.ExecSandbox.Enabled, cfg.ExecSandbox.Required, cfg.ExecSandbox.AllowNetwork)
-	tools.RegisterExtendedTools(disp, tools.WebSearchOptions{
+	planStore := tools.RegisterExtendedTools(disp, tools.WebSearchOptions{
 		Backend: cfg.Web.SearchBackend,
 		APIKey:  cfg.Web.APIKey,
 	})
-	if len(controlStores) > 0 && controlStores[0] != nil {
-		disp.RegisterTool(tools.NewExternalWatchTool(controlStores[0]))
+	if controlStore != nil {
+		disp.RegisterTool(tools.NewExternalWatchToolWithPlanStore(controlStore, planStore))
 	}
 	// Read-back for spooled large tool outputs (W1): the base dir must match
 	// the gateway sink's spool dir, both derived from the same resolved data
@@ -53,10 +59,11 @@ func InitTools(mem *memory.MemoryManager, cfg *config.Config, ag *kernel.Agent, 
 	disp.RegisterTool(tools.NewSkillManageTool())
 	disp.RegisterTool(tools.NewSkillsListTool())
 	disp.RegisterTool(tools.NewSkillViewTool())
-	if len(controlStores) > 0 && controlStores[0] != nil {
-		disp.RegisterTool(tools.NewSkillSelectTool(controlStores[0]))
-		disp.RegisterTool(tools.NewSkillFallbackTool(controlStores[0]))
-		disp.RegisterTool(tools.NewSkillLifecycleManageTool(controlStores[0]))
+	disp.RegisterTool(tools.NewSkillInvocationResolveTool())
+	if controlStore != nil {
+		disp.RegisterTool(tools.NewSkillSelectTool(controlStore))
+		disp.RegisterTool(tools.NewSkillFallbackTool(controlStore))
+		disp.RegisterTool(tools.NewSkillLifecycleManageTool(controlStore))
 	}
 	disp.RegisterTool(tools.NewSkillBundleTool())
 	disp.RegisterTool(tools.NewSkillCatalogTool())
@@ -78,10 +85,10 @@ func InitTools(mem *memory.MemoryManager, cfg *config.Config, ag *kernel.Agent, 
 		tools.GetProcessRegistryForTenant(tenantID).Init(mem, tenantID)
 	}
 
-	_, _ = tools.ReloadSkillToolsForTenant(tenantID, registry)
+	_, _ = tools.ReloadSkillToolsForTenant(tenantID, registry, tools.WithSkillStorage(nil, storage))
 
-	disp.InjectDelegateFn(MakeDelegateFn(mem, disp, cfg.Delegation))
-	disp.InjectDelegateBatchFn(MakeDelegateBatchFn(mem, disp, cfg.Delegation))
+	disp.InjectDelegateFn(MakeDelegateFn(mem, disp, cfg.Delegation, prompts))
+	disp.InjectDelegateBatchFn(MakeDelegateBatchFn(mem, disp, cfg.Delegation, prompts))
 
 	// 2. Register approval middleware
 	root, _ := os.Getwd()
@@ -137,6 +144,12 @@ func registerConfiguredSecrets(cfg *config.Config) {
 	}
 	registerSensitiveHeaders(cfg.Model.Headers)
 	registerSensitiveHeaders(cfg.Model.ExtraHeaders)
+	for _, server := range cfg.MCP.Servers {
+		registerSensitiveHeaders(server.Headers)
+		for _, value := range server.Auth {
+			tools.RegisterSensitiveValue(value)
+		}
+	}
 	for _, value := range []string{
 		cfg.Providers.AnthropicAPIKey,
 		cfg.Providers.OpenAIAPIKey,

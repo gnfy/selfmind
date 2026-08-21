@@ -3,6 +3,7 @@ package tools
 import (
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -68,6 +69,10 @@ func (t *SkillSelectTool) Execute(args map[string]interface{}) (string, error) {
 	}
 	info, content, files, err := ReadSkillPayloadForTenant(tenantID, name, "", args)
 	if err != nil {
+		var notFound *skillNotFoundError
+		if errors.As(err, &notFound) {
+			return "", staleSkillSelectionError(err, tenantID, name, reason, expectedSkillKey != "", args)
+		}
 		return "", err
 	}
 	if info.State != SkillStateActive {
@@ -104,7 +109,7 @@ func (t *SkillSelectTool) Execute(args map[string]interface{}) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	_ = MarkSkillUsed(tenantID, info.Name)
+	_ = MarkSkillUsed(tenantID, info.Name, args)
 	bounded, truncated := truncateUTF8ByBytes(content, maxAutoSkillContextBytes)
 	out := map[string]interface{}{
 		"success": true, "activation_id": activation.ID, "work_unit_id": activation.WorkUnitID,
@@ -126,6 +131,42 @@ func (t *SkillSelectTool) Execute(args map[string]interface{}) (string, error) {
 	return string(data), nil
 }
 
+func staleSkillSelectionError(cause error, tenantID, name, reason string, taskBound bool, args map[string]interface{}) error {
+	if taskBound {
+		return newStableToolError(
+			cause,
+			"candidate_stale",
+			"stale_precondition",
+			"The related task's bound Skill is no longer available.",
+			"Continue this work unit with ordinary planning; do not guess or select a replacement Skill.",
+		)
+	}
+	query := strings.TrimSpace(reason)
+	if query == "" {
+		query = strings.TrimSpace(name)
+	}
+	infos, _ := RankSkillCandidatesForTenant(tenantID, query, 3, args)
+	candidates := make([]string, 0, len(infos))
+	for _, info := range infos {
+		if info.State == SkillStateActive {
+			candidates = append(candidates, info.Name)
+		}
+	}
+	safeMessage := fmt.Sprintf("The requested Skill %q is no longer available.", strings.TrimSpace(name))
+	if len(candidates) > 0 {
+		safeMessage += " Current candidates: " + strings.Join(candidates, ", ") + "."
+	} else {
+		safeMessage += " No current candidate matches this work unit."
+	}
+	return newStableToolError(
+		cause,
+		"candidate_stale",
+		"stale_precondition",
+		safeMessage,
+		"Select only a listed current candidate, or continue the work unit without a Skill.",
+	)
+}
+
 type SkillFallbackTool struct {
 	BaseTool
 	store *control.Store
@@ -141,7 +182,8 @@ func NewSkillFallbackTool(store *control.Store) *SkillFallbackTool {
 				Properties: map[string]PropertyDef{
 					"reason":                 {Type: "string", Description: "Concise evidence-backed reason the active skill cannot continue."},
 					"failed_step_id":         {Type: "string", Description: "Optional stable/concise failed procedure step."},
-					"error_category":         {Type: "string", Description: "Optional normalized category such as command_failed, stale_precondition, or environment_mismatch."},
+					"failed_tool_call_id":    {Type: "string", Description: "Optional call id of the actual failed tool invocation. When present, it must match daemon-observed failure evidence."},
+					"error_category":         {Type: "string", Enum: control.SkillRepairErrorCategories(), Description: "Optional stable Skill-defect category. Unknown, transient, provider, environment, approval, and cancellation failures never authorize automatic repair."},
 					"normalized_input_shape": {Type: "string", Description: "Optional non-sensitive input shape used to avoid repeating the same failed step."},
 					"work_unit_id":           {Type: "string", Description: "Optional current work-unit id."},
 				},
@@ -163,7 +205,8 @@ func (t *SkillFallbackTool) Execute(args map[string]interface{}) (string, error)
 	}
 	reason := taskStringArg(args, "reason")
 	failedStep := taskStringArg(args, "failed_step_id")
-	category := taskStringArg(args, "error_category")
+	failedToolCallID := taskStringArg(args, "failed_tool_call_id")
+	category, _ := control.NormalizeSkillRepairErrorCategory(taskStringArg(args, "error_category"))
 	inputShape := taskStringArg(args, "normalized_input_shape")
 	workUnitID := taskStringArg(args, "work_unit_id")
 	sigRaw, _ := json.Marshal([]string{strings.TrimSpace(failedStep), strings.TrimSpace(category), strings.TrimSpace(inputShape), strings.TrimSpace(reason)})
@@ -181,7 +224,10 @@ func (t *SkillFallbackTool) Execute(args map[string]interface{}) (string, error)
 		Payload: map[string]interface{}{
 			"activation_id": activation.ID, "work_unit_id": activation.WorkUnitID,
 			"skill_key": activation.SkillKey, "name": activation.SkillName,
-			"version_hash": activation.VersionHash, "reason": reason, "error_category": category,
+			"version_hash": activation.VersionHash, "reason": reason,
+			"failure_signature": fmt.Sprintf("%x", sig[:]), "failed_step_id": failedStep,
+			"failed_tool_call_id": failedToolCallID,
+			"error_category":      category, "normalized_input_shape": inputShape,
 		},
 	})
 	data, _ := json.Marshal(map[string]interface{}{

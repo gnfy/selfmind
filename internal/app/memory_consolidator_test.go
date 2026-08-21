@@ -8,10 +8,12 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"selfmind/internal/kernel/llm"
 	"selfmind/internal/kernel/memory"
 	"selfmind/internal/platform/config"
+	"selfmind/internal/promptassets"
 )
 
 func seedParaphrases(t *testing.T, mem *memory.MemoryManager, tenantID string) {
@@ -54,6 +56,66 @@ func TestMemoryConsolidatorStopsPassOnQuota(t *testing.T) {
 	}
 	if judge.calls() != 1 {
 		t.Fatalf("judge calls = %d, want 1", judge.calls())
+	}
+}
+
+func TestMemoryConsolidatorBoundsFailedJudgeAttempts(t *testing.T) {
+	provider, err := memory.NewSQLiteProvider(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer provider.Close()
+	mgr := memory.NewMemoryManager(provider)
+	store, _ := mgr.Canonical()
+	for _, content := range []string{
+		"Alpha deployment uses kubernetes cluster east",
+		"The alpha deployment uses kubernetes cluster east",
+		"Beta database backup runs nightly with postgres",
+		"The beta database backup runs nightly with postgres",
+	} {
+		if err := store.ApplyIntakeWrite(context.Background(), "person", memory.IntakeWrite{
+			Decision: "ADD", Target: "memory", Scope: "global", Source: memory.SourceFactExtractor, Content: content,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	judge := &capturingProviderStub{err: fmt.Errorf("temporary malformed response")}
+	c := &MemoryConsolidator{
+		provider: judge, mem: mgr,
+		gov:       config.MemoryGovernanceConfig{Enabled: true, Mode: "shadow", ConsolidationBatchSize: 1},
+		reportDir: t.TempDir(),
+	}
+	result, err := c.RunGovernanceOnce(context.Background(), "person")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.CandidateGroups < 2 {
+		t.Fatalf("test fixture produced only %d candidate group(s)", result.CandidateGroups)
+	}
+	if judge.calls() != 1 || result.Complete || result.Remaining < 2 {
+		t.Fatalf("calls=%d result=%+v", judge.calls(), result)
+	}
+}
+
+func TestMemoryConsolidatorAttributesProviderUsageToPerson(t *testing.T) {
+	provider, err := memory.NewSQLiteProvider(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer provider.Close()
+	mgr := memory.NewMemoryManager(provider)
+	seedParaphrases(t, mgr, "person-a")
+
+	judge := &capturingProviderStub{content: `{"action":"KEEP","confidence":0.9}`}
+	c := &MemoryConsolidator{
+		provider: judge, mem: mgr, tenantID: "tenant-a",
+		gov: config.MemoryGovernanceConfig{Enabled: true, Mode: "shadow"}, reportDir: t.TempDir(),
+	}
+	if _, err := c.RunGovernanceOnce(context.Background(), "person-a"); err != nil {
+		t.Fatal(err)
+	}
+	if got := judge.lastModelContext; got.TenantID != "tenant-a" || got.PersonID != "person-a" || got.Role != llm.RoleMemoryExtract {
+		t.Fatalf("provider model context = %+v", got)
 	}
 }
 
@@ -172,6 +234,64 @@ func TestConsolidatorShadowAnnotatesWouldApply(t *testing.T) {
 	}
 }
 
+func TestConsolidatorPassSummaryExposesReportFreshness(t *testing.T) {
+	provider, err := memory.NewSQLiteProvider(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer provider.Close()
+	mgr := memory.NewMemoryManager(provider)
+	reportDir := t.TempDir()
+	c := &MemoryConsolidator{
+		provider:  &capturingProviderStub{content: `{"action":"KEEP","confidence":0.9}`},
+		mem:       mgr,
+		gov:       config.MemoryGovernanceConfig{Enabled: true, Mode: "shadow", ConsolidationInterval: "24h"},
+		reportDir: reportDir,
+	}
+	report := consolidationReportFile{
+		Person:      "person",
+		Mode:        "shadow",
+		GeneratedAt: "2026-08-18T10:00:00Z",
+		Judge:       consolidationJudgeVersion,
+		Summary: consolidationReportSummary{
+			CandidateGroups: 2,
+			ProjectedActive: 4,
+			Actions:         map[string]int{"KEEP": 2},
+		},
+	}
+	raw, err := json.Marshal(report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(reportDir, "shadow-person.json"), raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	summary := c.passSummaryAt(context.Background(), "person", time.Date(2026, 8, 21, 10, 0, 0, 0, time.UTC))
+	for _, want := range []string{
+		"report_generated_at=2026-08-18T10:00:00Z",
+		"report_age=3d",
+		"report_next_due=2026-08-19T10:00:00Z",
+		"report_overdue=true",
+	} {
+		if !strings.Contains(summary, want) {
+			t.Fatalf("summary %q does not contain %q", summary, want)
+		}
+	}
+}
+
+func TestConsolidatorPassSummaryMarksMissingReport(t *testing.T) {
+	provider, err := memory.NewSQLiteProvider(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer provider.Close()
+	c := &MemoryConsolidator{mem: memory.NewMemoryManager(provider), reportDir: t.TempDir()}
+	if summary := c.passSummaryAt(context.Background(), "person", time.Now()); !strings.Contains(summary, "report=missing") {
+		t.Fatalf("missing report summary = %q", summary)
+	}
+}
+
 // TestConsolidatorReinforceApply: merge-only folds a REINFORCE cluster onto
 // one member's VERBATIM text — the applied canonical never contains model
 // wording, making reinforce strictly safer than merge.
@@ -269,6 +389,76 @@ func TestConsolidatorJudgeCheckpointIsVersioned(t *testing.T) {
 		if !strings.HasPrefix(key, consolidationJudgeVersion+":") {
 			t.Fatalf("checkpoint key %q must carry judge version %q", key, consolidationJudgeVersion)
 		}
+	}
+}
+
+func TestConsolidatorCheckpointDependsOnlyOnConsolidationGuidance(t *testing.T) {
+	load := func(root, persona string) *promptassets.Snapshot {
+		t.Helper()
+		memoryPath := filepath.Join(root, "background", "memory_extract.md")
+		if err := os.MkdirAll(filepath.Dir(memoryPath), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(memoryPath, []byte("## Consolidation\n\nPrefer conservative merges.\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if persona != "" {
+			if err := os.WriteFile(filepath.Join(root, "agent.md"), []byte("## Persona\n\n"+persona+"\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		snapshot, err := promptassets.Load(root)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return snapshot
+	}
+	a := load(t.TempDir(), "")
+	b := load(t.TempDir(), "Use concise Chinese.")
+	if a.Hash() == b.Hash() {
+		t.Fatal("fixture did not change the whole prompt snapshot")
+	}
+	keyA := (&MemoryConsolidator{prompts: a}).judgedClusterKey("cluster")
+	keyB := (&MemoryConsolidator{prompts: b}).judgedClusterKey("cluster")
+	if keyA != keyB {
+		t.Fatalf("unrelated agent prompt changed consolidation checkpoint: %q != %q", keyA, keyB)
+	}
+	if keyA == consolidationJudgeVersion+":cluster" {
+		t.Fatal("custom consolidation guidance did not version its checkpoint")
+	}
+}
+
+// TestJudgementKeyMatchesPrefixSeparatesDefaultFromCustom pins the checkpoint
+// key grammar in one place. The stored forms share a leading judge version, so
+// a plain prefix match against the built-in prefix also counts every
+// customized key.
+func TestJudgementKeyMatchesPrefixSeparatesDefaultFromCustom(t *testing.T) {
+	const builtIn = consolidationJudgeVersion + ":"
+	const custom = consolidationJudgeVersion + ":prompt-abc123def456:"
+
+	if !judgementKeyMatchesPrefix(builtIn+"cluster-1", builtIn) {
+		t.Error("a built-in key must match the built-in prefix")
+	}
+	if judgementKeyMatchesPrefix(custom+"cluster-1", builtIn) {
+		t.Error("a customized key must not be counted under the built-in prefix")
+	}
+	if !judgementKeyMatchesPrefix(custom+"cluster-1", custom) {
+		t.Error("a customized key must match its own prefix")
+	}
+	if judgementKeyMatchesPrefix(builtIn+"cluster-1", custom) {
+		t.Error("a built-in key must not match a customized prefix")
+	}
+	if judgementKeyMatchesPrefix(builtIn, builtIn) {
+		t.Error("a bare prefix with no cluster id is not a checkpoint key")
+	}
+	if judgementKeyMatchesPrefix("j1:cluster-1", builtIn) {
+		t.Error("an older judge version must not match the current prefix")
+	}
+	// A cluster id that merely begins with the customized qualifier word is
+	// still a built-in key, because the qualifier is a full colon-delimited
+	// segment.
+	if !judgementKeyMatchesPrefix(builtIn+"prompt-shaped-cluster", builtIn) {
+		t.Error("a cluster id starting with the qualifier word must still match the built-in prefix")
 	}
 }
 

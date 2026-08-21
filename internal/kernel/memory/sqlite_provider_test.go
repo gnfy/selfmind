@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -59,6 +60,159 @@ func TestSQLiteProvider_FTS5(t *testing.T) {
 	}
 	if len(sessions) != 0 {
 		t.Errorf("expected 0 results for 'xyznonexistent', got %d", len(sessions))
+	}
+}
+
+func TestSQLiteProvider_FTS5TreatsUserQueryAsLiterals(t *testing.T) {
+	p, err := NewSQLiteProvider(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewSQLiteProvider: %v", err)
+	}
+	defer p.Close()
+
+	const tenantID = "literal-search"
+	trajectory := []byte(`{"messages":[{"role":"user","content":"Build 625 uses release v1.2.3 at /srv/foo-bar and NEAR is ordinary text"}]}`)
+	if err := p.IndexMessagesFromTrajectory(nil, tenantID, "cli", "sess-literals", trajectory); err != nil {
+		t.Fatalf("IndexMessagesFromTrajectory: %v", err)
+	}
+
+	queries := []string{
+		"625", "08", "foo:bar", "foo-bar", `"quoted"`, "OR", "NEAR",
+		"v1.2.3", "/srv/foo-bar", "中文 625", "session_id:sess-literals",
+		// Former stop-list entries and a punctuation-only query, which used to
+		// compile to nothing and return before the LIKE fallback ran.
+		"summary", "content", "session", "and", "not", "--- ???",
+	}
+	for _, query := range queries {
+		t.Run(query, func(t *testing.T) {
+			if _, err := p.SearchSessions(tenantID, query, 5); err != nil {
+				t.Fatalf("SearchSessions(%q): %v", query, err)
+			}
+		})
+	}
+
+	results, err := p.SearchSessions(tenantID, "625", 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 1 || results[0].SessionID != "sess-literals" {
+		t.Fatalf("numeric literal results = %#v", results)
+	}
+
+	// A word that only the stop list would have removed must still match the
+	// indexed text. This is the user-visible symptom: searching an ordinary word
+	// returned zero results with no error.
+	ordinary, err := p.SearchSessions(tenantID, "ordinary", 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ordinary) != 1 {
+		t.Fatalf("ordinary word results = %#v", ordinary)
+	}
+	near, err := p.SearchSessions(tenantID, "NEAR", 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(near) != 1 {
+		t.Fatalf("the literal NEAR appears in the indexed text and must match: %#v", near)
+	}
+}
+
+// stripQuotedSpans removes every "..." phrase, leaving only the structural
+// syntax the compiler emitted itself. Anything user-supplied that survives has
+// escaped the quoting boundary and can be parsed by FTS5 as an operator.
+func stripQuotedSpans(query string) string {
+	var out strings.Builder
+	inQuotes := false
+	for i := 0; i < len(query); i++ {
+		c := query[i]
+		if c == '"' {
+			// "" is an escaped quote inside a phrase, not a boundary.
+			if inQuotes && i+1 < len(query) && query[i+1] == '"' {
+				i++
+				continue
+			}
+			inQuotes = !inQuotes
+			continue
+		}
+		if !inQuotes {
+			out.WriteByte(c)
+		}
+	}
+	return out.String()
+}
+
+func TestSessionFTSQueryQuotesEveryTerm(t *testing.T) {
+	// "or" and "near" are ordinary words a person may search for. Quoting is the
+	// operator boundary, so they must survive as literals rather than being
+	// filtered out — a stop list made real queries return silently empty.
+	got := sessionFTSQuery(`content:625 foo-bar OR NEAR "quoted"`)
+	for _, want := range []string{
+		`content:"625"*`, `content:"foo"*`, `content:"bar"*`, `content:"quoted"*`,
+		`content:"content"*`, `content:"OR"*`, `content:"NEAR"*`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("sessionFTSQuery() = %q; missing %q", got, want)
+		}
+	}
+
+	// Only the compiler's own syntax may appear outside quotes.
+	residue := stripQuotedSpans(got)
+	for _, structural := range []string{"session_id:", "content:", "summary:", " OR ", " AND ", "(", ")", "*"} {
+		residue = strings.ReplaceAll(residue, structural, "")
+	}
+	if strings.TrimSpace(residue) != "" {
+		t.Fatalf("user text escaped the quoting boundary: residue %q from %q", residue, got)
+	}
+}
+
+func TestSQLiteProvider_MultiTermNaturalQueryUsesRankedOR(t *testing.T) {
+	p, err := NewSQLiteProvider(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewSQLiteProvider: %v", err)
+	}
+	defer p.Close()
+
+	const tenantID = "natural-query"
+	trajectory := []byte(`{"messages":[{"role":"user","content":"The deployment approval timed out while the release was pending"}]}`)
+	if err := p.IndexMessagesFromTrajectory(nil, tenantID, "cli", "sess-approval-timeout", trajectory); err != nil {
+		t.Fatalf("IndexMessagesFromTrajectory: %v", err)
+	}
+
+	results, err := p.SearchSessions(tenantID, "please investigate yesterday's approval timeout incident", 5)
+	if err != nil {
+		t.Fatalf("SearchSessions: %v", err)
+	}
+	if len(results) != 1 || results[0].SessionID != "sess-approval-timeout" {
+		t.Fatalf("multi-term natural query results = %#v", results)
+	}
+}
+
+// TestSessionFTSTermsKeepsIdentifiersAndLiterals pins the tokenizer contract
+// that the stop list used to break.
+func TestSessionFTSTermsKeepsIdentifiersAndLiterals(t *testing.T) {
+	cases := map[string][]string{
+		"summary":                    {"summary"},
+		"OR":                         {"OR"},
+		"session_id":                 {"session_id"},
+		"session_id:sess-literals":   {"session_id", "sess", "literals"},
+		"tool_search memory_extract": {"tool_search", "memory_extract"},
+	}
+	for query, want := range cases {
+		got := sessionFTSTerms(query)
+		if len(got) != len(want) {
+			t.Errorf("sessionFTSTerms(%q) = %v, want %v", query, got, want)
+			continue
+		}
+		for i := range want {
+			if got[i] != want[i] {
+				t.Errorf("sessionFTSTerms(%q) = %v, want %v", query, got, want)
+				break
+			}
+		}
+	}
+	if terms := sessionFTSTerms("--- ??? ..."); len(terms) != 0 {
+		t.Errorf("punctuation-only query should compile to no terms, got %v", terms)
 	}
 }
 

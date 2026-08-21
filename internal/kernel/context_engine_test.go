@@ -13,8 +13,34 @@ import (
 
 // fakeSummarizer is a configurable-reply provider for compaction tests.
 type fakeSummarizer struct {
-	calls atomic.Int32
-	reply string
+	calls       atomic.Int32
+	reply       string
+	lastRequest llm.ChatRequest
+}
+
+type sequenceSummarizer struct {
+	responses []llm.ChatResponse
+	requests  []llm.ChatRequest
+}
+
+func (p *sequenceSummarizer) ChatCompletion(context.Context, []llm.Message) (string, error) {
+	return "", nil
+}
+
+func (p *sequenceSummarizer) Chat(_ context.Context, req llm.ChatRequest) (*llm.ChatResponse, error) {
+	p.requests = append(p.requests, req)
+	index := len(p.requests) - 1
+	if index >= len(p.responses) {
+		index = len(p.responses) - 1
+	}
+	response := p.responses[index]
+	return &response, nil
+}
+
+func (p *sequenceSummarizer) StreamChat(context.Context, llm.ChatRequest) (<-chan llm.StreamEvent, error) {
+	ch := make(chan llm.StreamEvent)
+	close(ch)
+	return ch, nil
 }
 
 func (p *fakeSummarizer) ChatCompletion(context.Context, []llm.Message) (string, error) {
@@ -22,7 +48,9 @@ func (p *fakeSummarizer) ChatCompletion(context.Context, []llm.Message) (string,
 	return p.reply, nil
 }
 
-func (p *fakeSummarizer) Chat(context.Context, llm.ChatRequest) (*llm.ChatResponse, error) {
+func (p *fakeSummarizer) Chat(_ context.Context, req llm.ChatRequest) (*llm.ChatResponse, error) {
+	p.calls.Add(1)
+	p.lastRequest = req
 	return &llm.ChatResponse{Content: p.reply}, nil
 }
 
@@ -66,6 +94,12 @@ func TestTruncateMessagesCompactsMiddleByDefaultWithSummarizer(t *testing.T) {
 	if provider.calls.Load() != 1 {
 		t.Fatalf("expected exactly one compaction call, got %d", provider.calls.Load())
 	}
+	if !strings.Contains(provider.lastRequest.SystemPrompt, "## Failed Attempts") || strings.Contains(provider.lastRequest.SystemPrompt, "original task: build the app") {
+		t.Fatalf("summary contract/data separation is wrong: system=%q", provider.lastRequest.SystemPrompt)
+	}
+	if len(provider.lastRequest.Messages) != 1 || !strings.Contains(provider.lastRequest.Messages[0].Content, "<conversation-turns>") {
+		t.Fatalf("summary input is not fenced: %#v", provider.lastRequest.Messages)
+	}
 	if len(got) != 2+1+compactionTailTurns {
 		t.Fatalf("expected %d messages (head+summary+tail), got %d", 2+1+compactionTailTurns, len(got))
 	}
@@ -96,6 +130,59 @@ func TestTruncateMessagesCompactsMiddleByDefaultWithSummarizer(t *testing.T) {
 	// Under budget after compaction.
 	if over := engine.countMessages(got); over > 190 {
 		t.Fatalf("compacted window still over budget: %d tokens", over)
+	}
+}
+
+func TestSummarizerRetriesOnlyAfterExplicitTruncation(t *testing.T) {
+	provider := &sequenceSummarizer{responses: []llm.ChatResponse{
+		{Content: "partial handoff", FinishReason: "length"},
+		{Content: "## Active Task\nbuild the app", FinishReason: "stop"},
+	}}
+	engine := NewContextEngine(200, 10)
+	engine.SetSummaryProvider(provider)
+	engine.SetSummaryOutputLimit(8192)
+
+	got := engine.TruncateMessages(compactionFixture())
+	if len(provider.requests) != 2 {
+		t.Fatalf("summary calls = %d, want 2", len(provider.requests))
+	}
+	if provider.requests[0].MaxTokens != 4096 || provider.requests[1].MaxTokens != 8192 {
+		t.Fatalf("summary budgets = %d then %d", provider.requests[0].MaxTokens, provider.requests[1].MaxTokens)
+	}
+	for _, message := range got {
+		if strings.Contains(message.Content, "[CONTEXT COMPACTION") {
+			return
+		}
+	}
+	t.Fatal("successful retry did not produce a compaction summary")
+}
+
+func TestSummarizerHonorsSmallerRouteLimitAndRejectsTruncatedOutput(t *testing.T) {
+	provider := &sequenceSummarizer{responses: []llm.ChatResponse{{Content: "partial handoff", FinishReason: "max_tokens"}}}
+	engine := NewContextEngine(200, 10)
+	engine.SetSummaryProvider(provider)
+	engine.SetSummaryOutputLimit(2048)
+
+	got := engine.TruncateMessages(compactionFixture())
+	if len(provider.requests) != 1 || provider.requests[0].MaxTokens != 2048 {
+		t.Fatalf("requests=%+v, want one 2048-token call", provider.requests)
+	}
+	for _, message := range got {
+		if strings.Contains(message.Content, "[CONTEXT COMPACTION") {
+			t.Fatal("truncated summary must not be injected")
+		}
+	}
+}
+
+func TestHarvestToolPathsReportsBoundedOmissions(t *testing.T) {
+	messages := []llm.Message{{Role: "assistant", ToolCalls: []llm.ToolCall{
+		{Function: "write_file", Args: `{"path":"one.go"}`},
+		{Function: "write_file", Args: `{"path":"two.go"}`},
+		{Function: "write_file", Args: `{"path":"three.go"}`},
+	}}}
+	paths, omitted := harvestToolPathsBounded(messages, 2)
+	if len(paths) != 2 || omitted != 1 {
+		t.Fatalf("paths=%v omitted=%d", paths, omitted)
 	}
 }
 
@@ -198,6 +285,7 @@ func (p *contextEngineProvider) ChatCompletion(context.Context, []llm.Message) (
 }
 
 func (p *contextEngineProvider) Chat(context.Context, llm.ChatRequest) (*llm.ChatResponse, error) {
+	p.calls.Add(1)
 	return &llm.ChatResponse{Content: "summary"}, nil
 }
 

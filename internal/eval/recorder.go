@@ -40,6 +40,7 @@ type JSONLEvent struct {
 	OutputTokens    int                    `json:"output_tokens,omitempty"`
 	ToolCalls       int                    `json:"tool_calls,omitempty"`
 	ActionToolCalls int                    `json:"action_tool_calls,omitempty"`
+	ProgressUpdates int                    `json:"progress_updates,omitempty"`
 	ToolErrors      int                    `json:"tool_errors,omitempty"`
 	CheckResults    []CheckResult          `json:"check_results,omitempty"`
 	Metadata        map[string]interface{} `json:"metadata,omitempty"`
@@ -56,6 +57,8 @@ type Recorder struct {
 	toolCalls       int
 	actionToolCalls int
 	toolErrors      int
+	progressUpdates int
+	pendingProgress strings.Builder
 	errors          []string
 	errorCategory   map[string]int
 	recordContent   bool
@@ -90,6 +93,8 @@ func (r *Recorder) StartCase(c *Case, provider, model, workspace string) {
 	r.toolCalls = 0
 	r.actionToolCalls = 0
 	r.toolErrors = 0
+	r.progressUpdates = 0
+	r.pendingProgress.Reset()
 	r.errors = nil
 	r.errorCategory = map[string]int{}
 	r.mu.Unlock()
@@ -107,6 +112,7 @@ func (r *Recorder) StartTurn(index int, input, channel string) {
 	r.mu.Lock()
 	r.turnStart = time.Now()
 	r.firstToken = false
+	r.pendingProgress.Reset()
 	r.mu.Unlock()
 	r.Write(JSONLEvent{
 		Type:         "turn_started",
@@ -134,10 +140,15 @@ func (r *Recorder) ObserveStreamEvent(event llm.StreamEvent) {
 				r.mu.Lock()
 			}
 			r.output.WriteString(event.Content)
+			r.pendingProgress.WriteString(event.Content)
 			r.mu.Unlock()
 		}
 	case "tool.started":
 		r.mu.Lock()
+		if strings.TrimSpace(r.pendingProgress.String()) != "" {
+			r.progressUpdates++
+		}
+		r.pendingProgress.Reset()
 		r.toolCalls++
 		if !isLifecycleTool(event.ToolName) {
 			r.actionToolCalls++
@@ -211,6 +222,9 @@ func (r *Recorder) FinishTurn(index, httpStatus int, content, errText string, in
 		}
 		r.mu.Unlock()
 	}
+	r.mu.Lock()
+	r.pendingProgress.Reset()
+	r.mu.Unlock()
 	e := JSONLEvent{
 		Type:          "turn_finished",
 		CaseID:        r.caseID,
@@ -241,6 +255,7 @@ func (r *Recorder) FinishCase(status string, checks []CheckResult, inputTokens, 
 	toolCalls := r.toolCalls
 	actionToolCalls := r.actionToolCalls
 	toolErrors := r.toolErrors
+	progressUpdates := r.progressUpdates
 	duration := time.Since(r.start).Milliseconds()
 	r.mu.Unlock()
 	r.Write(JSONLEvent{
@@ -252,6 +267,7 @@ func (r *Recorder) FinishCase(status string, checks []CheckResult, inputTokens, 
 		OutputTokens:    outputTokens,
 		ToolCalls:       toolCalls,
 		ActionToolCalls: actionToolCalls,
+		ProgressUpdates: progressUpdates,
 		ToolErrors:      toolErrors,
 		CheckResults:    checks,
 	})
@@ -269,6 +285,7 @@ func (r *Recorder) Snapshot() RunSnapshot {
 		ToolCalls:       r.toolCalls,
 		ActionToolCalls: r.actionToolCalls,
 		ToolErrors:      r.toolErrors,
+		ProgressUpdates: r.progressUpdates,
 		Errors:          append([]string(nil), r.errors...),
 		ErrorCategories: cats,
 	}

@@ -497,6 +497,65 @@ func (s *Store) EnqueueDelivery(ctx context.Context, d Delivery) (*Delivery, err
 	return &d, nil
 }
 
+// SeedAgedPendingSessionDelivery inserts an outbound row that is already parked
+// on a stale IM session and already aged. It exists so the eval harness can
+// reproduce an accumulated real backlog through the production schema instead of
+// a mock: EnqueueDelivery stamps created_at/updated_at with now by design, and
+// the stale-recovery path selects on updated_at, so no composition of the normal
+// APIs can express "this result has been undeliverable for weeks".
+//
+// No daemon path calls this. It writes the same columns the delivery service
+// reads, so the recovery, coalescing, and dismissal logic under test is the
+// production logic.
+func (s *Store) SeedAgedPendingSessionDelivery(ctx context.Context, d Delivery, age time.Duration, reason string) (*Delivery, error) {
+	if strings.TrimSpace(d.PersonID) == "" {
+		return nil, fmt.Errorf("person id is required")
+	}
+	if strings.TrimSpace(d.Content) == "" {
+		return nil, fmt.Errorf("delivery content is required")
+	}
+	if age < 0 {
+		age = 0
+	}
+	stamped := time.Now().Add(-age)
+	d.TenantID = normalizeTenant(firstNonEmptyDelivery(d.TenantID, DefaultTenantID))
+	d.Platform = normalizeName(d.Platform, "webhook")
+	d.Channel = normalizeName(d.Channel, d.Platform)
+	if d.ID == "" {
+		d.ID = "out_" + uuid.NewString()
+	}
+	if d.Kind == "" {
+		d.Kind = "final_result"
+	}
+	if d.MaxAttempts <= 0 {
+		d.MaxAttempts = 3
+	}
+	d.PartIndex, d.PartTotal = 1, 1
+	d.Status = "pending_session"
+	d.LastError = strings.TrimSpace(reason)
+	d.CreatedAt, d.UpdatedAt, d.NextAttemptAt = stamped, stamped, stamped
+	if _, err := s.db.ExecContext(ctx,
+		`INSERT OR IGNORE INTO outbound_messages
+		   (id, tenant_id, person_id, platform, platform_user_id, channel, task_id, run_id, content, kind, approval_id, status, attempts, max_attempts,
+		    next_attempt_at, last_error, part_index, part_total, idempotency_key, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		d.ID, d.TenantID, d.PersonID, d.Platform, d.PlatformUserID, d.Channel, d.TaskID, d.RunID, d.Content, d.Kind, d.ApprovalID, d.Status,
+		d.Attempts, d.MaxAttempts, d.NextAttemptAt.Unix(), d.LastError, d.PartIndex, d.PartTotal, d.IdempotencyKey,
+		d.CreatedAt.Unix(), d.UpdatedAt.Unix()); err != nil {
+		return nil, err
+	}
+	return &d, nil
+}
+
+func firstNonEmptyDelivery(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
+}
+
 // DeliveryByIdempotencyKey returns the row that won a durable enqueue race.
 // Callers must receive this real ID rather than the discarded candidate ID,
 // otherwise status checks report sql.ErrNoRows and recovery loops forever.
@@ -668,10 +727,10 @@ func (s *Store) MarkDeliveryPendingSession(ctx context.Context, id, reason strin
 // ListCatchUpEligible returns sent_unconfirmed rows eligible for the one-shot
 // catch-up re-push that runs when the peer's next inbound refreshes the
 // platform session (P0-1, docs/STATUS.md "ACTIVE PLAN"). Eligible = same
-// person+platform+channel, never caught up before (catchup_at empty — the
+// person+platform account+channel, never caught up before (catchup_at empty — the
 // at-most-once rail), and fresher than since (stale notices are not re-pushed).
 // Oldest first so a capped catch-up replays in original order.
-func (s *Store) ListCatchUpEligible(ctx context.Context, tenantID, personID, platform, channel string, since time.Time, limit int) ([]Delivery, error) {
+func (s *Store) ListCatchUpEligible(ctx context.Context, tenantID, personID, platform, platformUserID, channel string, since time.Time, limit int) ([]Delivery, error) {
 	if personID == "" || platform == "" {
 		return nil, fmt.Errorf("person id and platform are required")
 	}
@@ -683,7 +742,8 @@ func (s *Store) ListCatchUpEligible(ctx context.Context, tenantID, personID, pla
 		        content, COALESCE(kind, ''), COALESCE(approval_id, ''), status, attempts, max_attempts, next_attempt_at, COALESCE(last_error, ''),
 		        part_index, part_total, COALESCE(idempotency_key, ''), created_at, updated_at, COALESCE(delivered_at, 0)
 		 FROM outbound_messages
-		 WHERE tenant_id = ? AND person_id = ? AND platform = ? AND channel = ?
+		 WHERE tenant_id = ? AND person_id = ? AND platform = ?
+		   AND COALESCE(platform_user_id, '') = ? AND channel = ?
 		   AND (
 		     status = 'sent_unconfirmed'
 		     OR (status = 'pending_session' AND attempts < max_attempts)
@@ -694,7 +754,7 @@ func (s *Store) ListCatchUpEligible(ctx context.Context, tenantID, personID, pla
 		   )
 		   AND COALESCE(catchup_at, 0) = 0 AND updated_at >= ?
 		 ORDER BY created_at ASC, rowid ASC LIMIT ?`,
-		normalizeTenant(tenantID), personID, platform, channel, since.Unix(), limit)
+		normalizeTenant(tenantID), personID, platform, strings.TrimSpace(platformUserID), channel, since.Unix(), limit)
 	if err != nil {
 		return nil, err
 	}
@@ -843,6 +903,19 @@ func (s *Store) CountPendingSessionOutbound(ctx context.Context, tenantID, perso
 	return count, err
 }
 
+func (s *Store) CountStalePendingSessionFinalResults(ctx context.Context, tenantID, personID string, before time.Time) (int, error) {
+	if strings.TrimSpace(personID) == "" {
+		return 0, fmt.Errorf("person id is required")
+	}
+	var count int
+	err := s.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM outbound_messages
+		 WHERE tenant_id = ? AND person_id = ? AND status = 'pending_session'
+		   AND COALESCE(kind, '') = 'final_result' AND updated_at < ?`,
+		normalizeTenant(tenantID), strings.TrimSpace(personID), before.Unix()).Scan(&count)
+	return count, err
+}
+
 // ListPendingSessionOutbound returns the oldest durable platform-session
 // recoveries first, which makes /diag delivery useful for draining a backlog in
 // the same order the messages were originally created.
@@ -876,11 +949,119 @@ func (s *Store) ListPendingSessionOutbound(ctx context.Context, tenantID, person
 	return out, rows.Err()
 }
 
+// ListStalePendingSessionFinalResults returns old, never-confirmed final
+// results for one exact IM peer. It is the read side of explicit summary
+// recovery: callers may synthesize one bounded recap, but must not replay the
+// rows individually.
+func (s *Store) ListStalePendingSessionFinalResults(ctx context.Context, tenantID, personID, platform, platformUserID, channel string, before time.Time, limit int) ([]Delivery, error) {
+	if strings.TrimSpace(personID) == "" || strings.TrimSpace(platform) == "" || strings.TrimSpace(channel) == "" {
+		return nil, fmt.Errorf("person id, platform, and channel are required")
+	}
+	if limit <= 0 || limit > 1000 {
+		limit = 500
+	}
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT id, tenant_id, person_id, platform, COALESCE(platform_user_id, ''), channel, COALESCE(task_id, ''), COALESCE(run_id, ''),
+		        content, COALESCE(kind, ''), COALESCE(approval_id, ''), status, attempts, max_attempts, next_attempt_at, COALESCE(last_error, ''),
+		        part_index, part_total, COALESCE(idempotency_key, ''), created_at, updated_at, COALESCE(delivered_at, 0)
+		 FROM outbound_messages
+		 WHERE tenant_id = ? AND person_id = ? AND platform = ?
+		   AND COALESCE(platform_user_id, '') = ? AND channel = ?
+		   AND status = 'pending_session' AND COALESCE(kind, '') = 'final_result'
+		   AND updated_at < ?
+		 ORDER BY created_at ASC, rowid ASC LIMIT ?`,
+		normalizeTenant(tenantID), strings.TrimSpace(personID), strings.TrimSpace(platform),
+		strings.TrimSpace(platformUserID), strings.TrimSpace(channel), before.Unix(), limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Delivery
+	for rows.Next() {
+		delivery, err := scanDelivery(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, delivery)
+	}
+	return out, rows.Err()
+}
+
+// DismissStalePendingSessionFinalResults closes only old final-result rows in
+// one exact peer. It is used after a replacement summary is confirmed, or by
+// an explicit user command. Approval and clarification notifications are
+// deliberately outside this bulk operation.
+func (s *Store) DismissStalePendingSessionFinalResults(ctx context.Context, tenantID, personID, platform, platformUserID, channel string, before time.Time, reason string) (int64, error) {
+	if strings.TrimSpace(personID) == "" || strings.TrimSpace(platform) == "" || strings.TrimSpace(channel) == "" {
+		return 0, fmt.Errorf("person id, platform, and channel are required")
+	}
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		reason = "dismissed by user"
+	}
+	result, err := s.db.ExecContext(ctx,
+		`UPDATE outbound_messages
+		 SET status = 'dismissed', last_error = ?, updated_at = ?
+		 WHERE tenant_id = ? AND person_id = ? AND platform = ?
+		   AND COALESCE(platform_user_id, '') = ? AND channel = ?
+		   AND status = 'pending_session' AND COALESCE(kind, '') = 'final_result'
+		   AND updated_at < ?`,
+		reason, time.Now().Unix(), normalizeTenant(tenantID), strings.TrimSpace(personID),
+		strings.TrimSpace(platform), strings.TrimSpace(platformUserID), strings.TrimSpace(channel), before.Unix())
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+// DismissPendingSessionFinalResultsByID closes exactly the rows represented by
+// a confirmed replacement recap. Scoping and state predicates prevent a recap
+// from dismissing a newly-arrived result or a row belonging to another peer.
+func (s *Store) DismissPendingSessionFinalResultsByID(ctx context.Context, tenantID, personID, platform, platformUserID, channel string, ids []string, reason string) (int64, error) {
+	if strings.TrimSpace(personID) == "" || strings.TrimSpace(platform) == "" || strings.TrimSpace(channel) == "" {
+		return 0, fmt.Errorf("person id, platform, and channel are required")
+	}
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	if len(ids) > 1000 {
+		return 0, fmt.Errorf("at most 1000 delivery ids may be dismissed at once")
+	}
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		reason = "replaced by confirmed recovery summary"
+	}
+	placeholders := make([]string, 0, len(ids))
+	args := []any{
+		reason, time.Now().Unix(), normalizeTenant(tenantID), strings.TrimSpace(personID),
+		strings.TrimSpace(platform), strings.TrimSpace(platformUserID), strings.TrimSpace(channel),
+	}
+	for _, id := range ids {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			return 0, fmt.Errorf("delivery id is required")
+		}
+		placeholders = append(placeholders, "?")
+		args = append(args, id)
+	}
+	result, err := s.db.ExecContext(ctx,
+		`UPDATE outbound_messages
+		 SET status = 'dismissed', last_error = ?, updated_at = ?
+		 WHERE tenant_id = ? AND person_id = ? AND platform = ?
+		   AND COALESCE(platform_user_id, '') = ? AND channel = ?
+		   AND status = 'pending_session' AND COALESCE(kind, '') = 'final_result'
+		   AND id IN (`+strings.Join(placeholders, ",")+`)`, args...)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 // FindPendingSessionDelivery resolves an exact delivery ID or a unique ID
-// prefix inside the current IM peer. Scoping by platform and channel prevents a
+// prefix inside the current IM peer. Scoping by platform account and channel prevents a
 // manual recovery command in one chat from replaying a message intended for a
 // different endpoint.
-func (s *Store) FindPendingSessionDelivery(ctx context.Context, tenantID, personID, platform, channel, ref string) (*Delivery, error) {
+func (s *Store) FindPendingSessionDelivery(ctx context.Context, tenantID, personID, platform, platformUserID, channel, ref string) (*Delivery, error) {
 	ref = strings.TrimSpace(ref)
 	if personID == "" || platform == "" || channel == "" || len(ref) < 8 || !validDeliveryRef(ref) {
 		return nil, fmt.Errorf("a delivery id prefix of at least 8 characters is required")
@@ -890,10 +1071,11 @@ func (s *Store) FindPendingSessionDelivery(ctx context.Context, tenantID, person
 		        content, COALESCE(kind, ''), COALESCE(approval_id, ''), status, attempts, max_attempts, next_attempt_at, COALESCE(last_error, ''),
 		        part_index, part_total, COALESCE(idempotency_key, ''), created_at, updated_at, COALESCE(delivered_at, 0)
 		 FROM outbound_messages
-		 WHERE tenant_id = ? AND person_id = ? AND platform = ? AND channel = ?
+		 WHERE tenant_id = ? AND person_id = ? AND platform = ?
+		   AND COALESCE(platform_user_id, '') = ? AND channel = ?
 		   AND status = 'pending_session' AND (id = ? OR id LIKE ?)
 		 ORDER BY CASE WHEN id = ? THEN 0 ELSE 1 END, updated_at DESC LIMIT 2`,
-		normalizeTenant(tenantID), personID, platform, channel, ref, ref+"%", ref)
+		normalizeTenant(tenantID), personID, platform, strings.TrimSpace(platformUserID), channel, ref, ref+"%", ref)
 	if err != nil {
 		return nil, err
 	}

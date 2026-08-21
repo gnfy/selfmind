@@ -53,7 +53,15 @@ request-body objects merge recursively. The transport applies those options
 only at the final HTTP boundary, so CLI, IM, cron, and future remote clients
 share one wire contract.
 
-`ProviderQuirks.PromptCache` opts an Anthropic-protocol provider into explicit prompt-cache breakpoints: the adapter attaches `cache_control: {"type":"ephemeral"}` to the last system content block and a rolling breakpoint on the last content block of the most recent message before the final user message (never more than 4 breakpoints). Built-in native Anthropic and MiniMax profiles enable it because those endpoints document the contract. Custom endpoints default off, and direct Kimi Coding remains off because its native coding endpoint has not established the same contract. With the quirk off, request bytes are unchanged. Usage accounting normalizes Anthropic cache reads/creation and OpenAI-compatible `prompt_cache_hit_tokens` / `prompt_cache_miss_tokens`, plus reported reasoning tokens, into `llm.UsageStats`. The kernel `token.updated` event records hit, miss, creation, output, and reasoning totals. `/diag context` and `selfmind usage` render the latest run totals and hit rate; they deliberately do not embed provider prices.
+`ProviderQuirks.PromptCache` opts an Anthropic-protocol provider into explicit prompt-cache breakpoints: the adapter attaches `cache_control: {"type":"ephemeral"}` to the last system content block and a rolling breakpoint on the last content block of the most recent message before the final user message (never more than 4 breakpoints). Built-in native Anthropic and MiniMax profiles enable it because those endpoints document the contract. Custom endpoints default off, and direct Kimi Coding remains off because its native coding endpoint has not established the same contract. With the quirk off, request bytes are unchanged. Usage accounting normalizes Anthropic cache reads/creation and OpenAI-compatible `prompt_cache_hit_tokens` / `prompt_cache_miss_tokens`, plus reported reasoning tokens, into `llm.UsageStats`. The kernel `token.updated` event records hit, miss, creation, output, and reasoning totals. `/diag context` renders the latest run totals and hit rate; `selfmind usage` renders the person-scoped 24-hour execution and token report. Neither command embeds provider prices.
+
+Request-prefix diagnostics are a wrapper contract, not an adapter-only detail.
+Every production provider wrapper, including the flight recorder/VCR and role
+router, forwards `RequestFingerprinter` when the wrapped transport supports it.
+Each provider-call context event records either the content-free prefix/block
+hashes or an explicit unsupported reason. Daily reports expose coverage and
+unique-prefix counts, so a missing wrapper or adapter probe cannot masquerade
+as a stable cache baseline.
 
 ## Tool Schema Governance
 
@@ -118,6 +126,12 @@ the resolver deliberately does not send a forced value. Supported values are
 model capabilities, not a global hardcoded enum. `selfmind model set`
 validates them when metadata is discoverable and otherwise preserves the
 explicit value for compatible private endpoints.
+
+For local onboarding, an auxiliary selection with no provider/model defaults
+to the primary provider/model. Initial model writes materialize both slots.
+After that point auxiliary is independent: changing primary never overwrites
+an existing auxiliary selection. Logical background roles remain available as
+advanced `models.roles.<role>` overrides and inherit auxiliary when omitted.
 
 For Anthropic Messages, `thinking_mode: anthropic` maps an explicit reasoning
 effort to an enabled thinking budget (`low=4096`, `medium/default=8192`,

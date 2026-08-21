@@ -27,7 +27,7 @@ type LearningChange struct {
 	CreatedAt string `json:"created_at"`
 }
 
-func recordSkillLearningChange(tenantID, name, action, before, after, source string) {
+func recordSkillLearningChange(tenantID, name, action, before, after, source string, invocation ...map[string]interface{}) {
 	if strings.TrimSpace(name) == "" {
 		return
 	}
@@ -42,7 +42,7 @@ func recordSkillLearningChange(tenantID, name, action, before, after, source str
 		After:     after,
 		CreatedAt: nowRFC3339(),
 	}
-	_ = appendLearningChange(change)
+	_ = appendLearningChange(change, invocation...)
 }
 
 // RecordMemoryLearningChange is the exported audit entry for memory mutations
@@ -59,11 +59,18 @@ func RecordMemoryLearningChangeScoped(tenantID, target, scope, action, before, a
 	recordMemoryLearningChangeScoped(tenantID, target, scope, action, before, after, source)
 }
 
+// RecordMemoryLearningChangeScopedWithStorage records person-owned memory
+// audit beside the injected SelfMind asset root. It is used by daemon/eval app
+// paths that do not execute through the tool dispatcher.
+func RecordMemoryLearningChangeScopedWithStorage(storage *SkillStorage, tenantID, target, scope, action, before, after, source string) {
+	recordMemoryLearningChangeScoped(tenantID, target, scope, action, before, after, source, WithSkillStorage(nil, storage))
+}
+
 func recordMemoryLearningChange(tenantID, target, action, before, after, source string) {
 	recordMemoryLearningChangeScoped(tenantID, target, memory.DeriveFactScope(target, ""), action, before, after, source)
 }
 
-func recordMemoryLearningChangeScoped(tenantID, target, scope, action, before, after, source string) {
+func recordMemoryLearningChangeScoped(tenantID, target, scope, action, before, after, source string, invocation ...map[string]interface{}) {
 	target = strings.TrimSpace(target)
 	if target == "" {
 		target = "memory"
@@ -80,11 +87,11 @@ func recordMemoryLearningChangeScoped(tenantID, target, scope, action, before, a
 		After:     after,
 		CreatedAt: nowRFC3339(),
 	}
-	_ = appendLearningChange(change)
+	_ = appendLearningChange(change, invocation...)
 }
 
-func appendLearningChange(change LearningChange) error {
-	dir, err := learningDir(change.TenantID)
+func appendLearningChange(change LearningChange, invocation ...map[string]interface{}) error {
+	dir, err := learningDir(change.TenantID, invocation...)
 	if err != nil {
 		return err
 	}
@@ -143,23 +150,23 @@ func atomicWritePrivateFile(path string, data []byte) error {
 	return os.Chmod(path, 0600)
 }
 
-func ListSkillLearningChanges(tenantID, name string, limit int) ([]LearningChange, error) {
+func ListSkillLearningChanges(tenantID, name string, limit int, invocation ...map[string]interface{}) ([]LearningChange, error) {
 	if limit <= 0 || limit > 100 {
 		limit = 20
 	}
 	target := kernel.SanitizeSkillName(name)
-	root, err := learningDir(tenantID)
+	root, err := learningDir(tenantID, invocation...)
 	if err != nil {
 		return nil, err
 	}
 	return listLearningSnapshots(filepath.Join(root, "skills", target), limit)
 }
 
-func ListMemoryLearningChanges(tenantID, target string, limit int) ([]LearningChange, error) {
+func ListMemoryLearningChanges(tenantID, target string, limit int, invocation ...map[string]interface{}) ([]LearningChange, error) {
 	if limit <= 0 || limit > 100 {
 		limit = 20
 	}
-	root, err := learningDir(tenantID)
+	root, err := learningDir(tenantID, invocation...)
 	if err != nil {
 		return nil, err
 	}
@@ -256,12 +263,12 @@ func FormatLearningChanges(changes []LearningChange) string {
 	return strings.TrimSpace(sb.String())
 }
 
-func GetLearningChangeByID(tenantID, changeID string) (*LearningChange, error) {
+func GetLearningChangeByID(tenantID, changeID string, invocation ...map[string]interface{}) (*LearningChange, error) {
 	changeID = strings.TrimSpace(changeID)
 	if changeID == "" {
 		return nil, fmt.Errorf("learning change id is required")
 	}
-	root, err := learningDir(tenantID)
+	root, err := learningDir(tenantID, invocation...)
 	if err != nil {
 		return nil, err
 	}
@@ -288,11 +295,11 @@ func GetLearningChangeByID(tenantID, changeID string) (*LearningChange, error) {
 	return nil, fmt.Errorf("learning change not found: %s", changeID)
 }
 
-func UndoMemoryLearningChange(ctx context.Context, mem *memory.MemoryManager, tenantID, changeID string) (string, error) {
+func UndoMemoryLearningChange(ctx context.Context, mem *memory.MemoryManager, tenantID, changeID string, invocation ...map[string]interface{}) (string, error) {
 	if mem == nil {
 		return "", fmt.Errorf("memory not initialized")
 	}
-	change, err := GetLearningChangeByID(tenantID, changeID)
+	change, err := GetLearningChangeByID(tenantID, changeID, invocation...)
 	if err != nil {
 		return "", err
 	}
@@ -321,7 +328,7 @@ func UndoMemoryLearningChange(ctx context.Context, mem *memory.MemoryManager, te
 				return "", fmt.Errorf("undo canonical add: %w", err)
 			}
 		}
-		recordMemoryLearningChangeScoped(tenantID, target, scope, "undo:add", removed, "", "learning_undo")
+		recordMemoryLearningChangeScoped(tenantID, target, scope, "undo:add", removed, "", "learning_undo", invocation...)
 		return fmt.Sprintf("Undid memory add `%s`: removed %q.", change.ID, removed), nil
 	case "remove":
 		if strings.TrimSpace(change.Before) == "" {
@@ -335,7 +342,7 @@ func UndoMemoryLearningChange(ctx context.Context, mem *memory.MemoryManager, te
 				return "", fmt.Errorf("undo canonical remove: %w", err)
 			}
 		}
-		recordMemoryLearningChangeScoped(tenantID, target, scope, "undo:remove", "", change.Before, "learning_undo")
+		recordMemoryLearningChangeScoped(tenantID, target, scope, "undo:remove", "", change.Before, "learning_undo", invocation...)
 		return fmt.Sprintf("Undid memory remove `%s`: restored %q.", change.ID, change.Before), nil
 	case "replace":
 		if strings.TrimSpace(change.Before) == "" {
@@ -357,7 +364,7 @@ func UndoMemoryLearningChange(ctx context.Context, mem *memory.MemoryManager, te
 				return "", fmt.Errorf("restore replaced canonical: %w", err)
 			}
 		}
-		recordMemoryLearningChangeScoped(tenantID, target, scope, "undo:replace", change.After, change.Before, "learning_undo")
+		recordMemoryLearningChangeScoped(tenantID, target, scope, "undo:replace", change.After, change.Before, "learning_undo", invocation...)
 		return fmt.Sprintf("Undid memory replace `%s`: restored %q.", change.ID, change.Before), nil
 	default:
 		return "", fmt.Errorf("memory learning action %q cannot be undone", change.Action)
@@ -398,12 +405,12 @@ func findMatchingMemoryFact(facts []memory.Fact, needle string) (memory.Fact, bo
 	return memory.Fact{}, false
 }
 
-func learningDir(tenantID string) (string, error) {
-	skillsDir, err := getSkillsDir(tenantID)
+func learningDir(tenantID string, invocation ...map[string]interface{}) (string, error) {
+	tenantDir, err := userTenantDirForTenant(tenantID, invocation...)
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(filepath.Dir(skillsDir), "learning"), nil
+	return filepath.Join(tenantDir, "learning"), nil
 }
 
 func fallbackTenant(tenantID string) string {

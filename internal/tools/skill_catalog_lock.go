@@ -95,8 +95,8 @@ func saveSkillCatalogLockForDir(skillsDir string, lock *SkillCatalogLock) error 
 	return atomicWriteFile(skillCatalogLockPath(skillsDir), string(data))
 }
 
-func recordSkillCatalogInstall(tenantID string, entry SkillCatalogLockEntry) error {
-	skillsDir, err := getSkillsDir(tenantID)
+func recordSkillCatalogInstall(tenantID string, entry SkillCatalogLockEntry, invocation ...map[string]interface{}) error {
+	skillsDir, err := getSkillsDir(tenantID, invocation...)
 	if err != nil {
 		return err
 	}

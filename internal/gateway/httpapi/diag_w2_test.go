@@ -148,6 +148,15 @@ func TestPromptPrefixStabilityLine(t *testing.T) {
 	if got := promptPrefixStabilityLine(changed); !strings.Contains(got, "changed") {
 		t.Fatalf("changed prefix not reported: %s", got)
 	}
+	provider := []control.Event{
+		eventWith("provider.call.context_breakdown", map[string]interface{}{"provider_prefix_hash": "provider-same"}),
+		eventWith("provider.call.context_breakdown", map[string]interface{}{"provider_prefix_hash": "provider-same"}),
+		eventWith("context.breakdown", map[string]interface{}{"stable_prefix_hash": "assembled-new"}),
+		eventWith("context.breakdown", map[string]interface{}{"stable_prefix_hash": "assembled-old"}),
+	}
+	if got := promptPrefixStabilityLine(provider); !strings.Contains(got, "Provider prompt prefix") || !strings.Contains(got, "stable across the last two calls") || strings.Contains(got, "assembled") {
+		t.Fatalf("provider fingerprint must take precedence over assembly proxy: %s", got)
+	}
 }
 
 func TestLatestRecallLine(t *testing.T) {

@@ -23,6 +23,7 @@ func (c *RunCoordinator) selectSkillRuntimeContext(ctx context.Context, identity
 		"_context":          ctx,
 		"_invocation_scope": scope,
 	}
+	args = tools.WithSkillStorage(args, c.srv.SkillStorage)
 	if attach.allowsTaskSkillBinding() {
 		binding, err := c.srv.Control.GetTaskSkillBinding(ctx, identity.TenantID, identity.PersonID, task.ID)
 		if err != nil {
@@ -118,7 +119,7 @@ func (c *RunCoordinator) resolveBoundSkill(ctx context.Context, identity *contro
 		c.recordSkillAvailability(ctx, task, run, binding, "activation_failed", err.Error())
 		return nil, false
 	}
-	_ = tools.MarkSkillUsed(binding.ControlTenantID, info.Name)
+	_ = tools.MarkSkillUsed(binding.ControlTenantID, info.Name, args)
 	_ = c.srv.Control.RecordTaskSkillBindingResolved(ctx, identity.TenantID, identity.PersonID, task.ID, versionHash)
 	_, _ = c.srv.Control.AppendEvent(ctx, control.Event{
 		TaskID: task.ID, RunID: run.ID, Type: "skill.activated", Visibility: "task", Channel: run.Channel,

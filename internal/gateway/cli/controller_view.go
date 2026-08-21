@@ -213,6 +213,15 @@ func (m *uiModel) statusLine() string {
 		// user, not "working", and definitely not "ready".
 		state = "⏸ waiting approval"
 		stateStyle = st.Status.Warning
+	case m.backgroundDaemonRunActive():
+		if m.backgroundWatchID != "" {
+			state = "background watcher finalizing"
+		} else if origin := strings.TrimSpace(m.backgroundOrigin); origin != "" {
+			state = "background " + origin
+		} else {
+			state = "background task"
+		}
+		stateStyle = st.Status.Warning
 	case m.daemonRunActive && !m.daemonRunStarted.IsZero():
 		state = fmt.Sprintf("working %.1fs", time.Since(m.daemonRunStarted).Seconds())
 	case m.localRequestActive && !m.thinkingStart.IsZero():

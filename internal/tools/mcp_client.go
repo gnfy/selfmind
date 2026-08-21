@@ -1,25 +1,35 @@
 package tools
 
 import (
-	"bufio"
-	"crypto/sha256"
+	"context"
 	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
 	"os/exec"
-	"regexp"
+	"reflect"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"selfmind/internal/buildinfo"
+	"selfmind/internal/platform/log"
 )
 
-// MCPServerConfig MCP 服务器配置
+const (
+	mcpStartupTimeout = 30 * time.Second
+	mcpCatalogTimeout = 30 * time.Second
+	mcpToolTimeout    = 60 * time.Second
+	mcpMaxListPages   = 1000
+)
+
+// MCPServerConfig describes one external MCP server.
 type MCPServerConfig struct {
 	Name      string            `json:"name"`
-	Transport string            `json:"transport"` // "stdio" or "http"
+	Transport string            `json:"transport"` // stdio or http/streamable_http
 	Command   string            `json:"command,omitempty"`
 	Args      []string          `json:"args,omitempty"`
 	URL       string            `json:"url,omitempty"`
@@ -28,252 +38,219 @@ type MCPServerConfig struct {
 	EnvFilter []string          `json:"env_filter,omitempty"`
 }
 
-// MCPToolDef 从 MCP 服务器发现的一个工具
+// MCPToolDef is the provider-neutral subset of an SDK tool definition used by
+// SelfMind's registry and schema compiler.
 type MCPToolDef struct {
 	Name        string                 `json:"name"`
 	Description string                 `json:"description"`
 	InputSchema map[string]interface{} `json:"inputSchema"`
 }
 
-// MCPClient MCP 客户端管理器
-type MCPClient struct {
-	mu      sync.RWMutex
-	config  MCPServerConfig
-	server  *mcpServer
-	tools   map[string]MCPToolDef
-	toolsMu sync.RWMutex
-	backoff time.Duration
-}
+type mcpToolsChanged func(*MCPClient, map[string]MCPToolDef)
 
-type mcpServer struct {
-	name      string
-	cmd       *exec.Cmd
-	stdin     *os.File
-	stdout    *os.File
-	url       string
-	headers   map[string]string
-	transport string
-	tools     map[string]MCPToolDef
-	errCh     chan error
-	done      chan struct{}
+// MCPClient owns one initialized official-SDK session and its current tool
+// catalogue. Transport framing, protocol negotiation, sessions, SSE, and
+// notifications remain SDK responsibilities.
+type MCPClient struct {
+	config  MCPServerConfig
+	client  *mcp.Client
+	session *mcp.ClientSession
+
+	toolsMu sync.RWMutex
+	tools   map[string]MCPToolDef
+	onTools mcpToolsChanged
+
+	closeOnce sync.Once
+	closeErr  error
 }
 
 func NewMCPClient(config MCPServerConfig) (*MCPClient, error) {
-	client := &MCPClient{
-		config: config,
-		tools:  make(map[string]MCPToolDef),
-	}
-	if err := client.connect(); err != nil {
+	return newMCPClient(config, nil)
+}
+
+func newMCPClient(config MCPServerConfig, onTools mcpToolsChanged) (*MCPClient, error) {
+	transport, err := newMCPTransport(config)
+	if err != nil {
 		return nil, err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), mcpStartupTimeout)
+	defer cancel()
+	return newMCPClientWithTransport(ctx, config, transport, onTools)
+}
+
+func newMCPClientWithTransport(ctx context.Context, config MCPServerConfig, transport mcp.Transport, onTools mcpToolsChanged) (*MCPClient, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	client := &MCPClient{
+		config:  config,
+		tools:   make(map[string]MCPToolDef),
+		onTools: onTools,
+	}
+	options := &mcp.ClientOptions{
+		// MCP servers do not receive implicit filesystem roots. Any filesystem
+		// authority must continue to flow through SelfMind's typed tool scope.
+		Capabilities: &mcp.ClientCapabilities{},
+		ToolListChangedHandler: func(handlerCtx context.Context, _ *mcp.ToolListChangedRequest) {
+			refreshCtx, cancel := context.WithTimeout(context.WithoutCancel(handlerCtx), mcpCatalogTimeout)
+			defer cancel()
+			if err := client.refreshTools(refreshCtx, true); err != nil {
+				log.Warn("mcp: tool catalogue refresh failed", "name", config.Name, "error", err)
+			}
+		},
+	}
+	client.client = mcp.NewClient(&mcp.Implementation{
+		Name:    "selfmind",
+		Version: buildinfo.Version,
+	}, options)
+
+	session, err := client.client.Connect(ctx, transport, nil)
+	if err != nil {
+		return nil, fmt.Errorf("connect MCP server %s: %w", config.Name, err)
+	}
+	client.session = session
+	if err := client.refreshTools(ctx, false); err != nil {
+		_ = session.Close()
+		return nil, fmt.Errorf("list MCP tools for %s: %w", config.Name, err)
 	}
 	return client, nil
 }
 
-func (c *MCPClient) connect() error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	// Apply exponential backoff if we just failed
-	if c.backoff > 0 {
-		time.Sleep(c.backoff)
-	}
-
-	if c.server != nil && c.server.transport == "stdio" && c.server.cmd != nil && c.server.cmd.ProcessState == nil {
-		return nil // Still running
-	}
-
-	switch c.config.Transport {
+func newMCPTransport(config MCPServerConfig) (mcp.Transport, error) {
+	switch strings.ToLower(strings.TrimSpace(config.Transport)) {
 	case "stdio":
-		return c.connectStdio()
-	case "http":
-		return c.connectHTTP()
+		if strings.TrimSpace(config.Command) == "" {
+			return nil, fmt.Errorf("stdio transport requires 'command' field")
+		}
+		cmd := exec.Command(config.Command, config.Args...)
+		cwd, err := os.Getwd()
+		if err != nil {
+			return nil, fmt.Errorf("resolve MCP working directory: %w", err)
+		}
+		cmd.Dir = cwd
+		cmd.Env = BuildProcessEnv(filterEnv(config.EnvFilter), DefaultProcessEnvPolicy())
+		return &mcp.CommandTransport{Command: cmd, TerminateDuration: 2 * time.Second}, nil
+	case "http", "streamable_http", "streamable-http":
+		if strings.TrimSpace(config.URL) == "" {
+			return nil, fmt.Errorf("streamable HTTP transport requires 'url' field")
+		}
+		return &mcp.StreamableClientTransport{
+			Endpoint: strings.TrimSpace(config.URL),
+			HTTPClient: &http.Client{Transport: &mcpHeaderTransport{
+				base:    http.DefaultTransport,
+				headers: mcpHTTPHeaders(config),
+			}},
+		}, nil
 	default:
-		return fmt.Errorf("unsupported transport: %s", c.config.Transport)
+		return nil, fmt.Errorf("unsupported MCP transport: %s", config.Transport)
 	}
 }
 
-// ---- Stdio Transport ----
+type mcpHeaderTransport struct {
+	base    http.RoundTripper
+	headers http.Header
+}
 
-func (c *MCPClient) connectStdio() error {
-	if c.config.Command == "" {
-		return fmt.Errorf("stdio transport requires 'command' field")
-	}
-
-	// Reset backoff on successful connect
-	defer func() {
-		if c.backoff == 0 {
-			c.backoff = 500 * time.Millisecond
+func (t *mcpHeaderTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	clone := req.Clone(req.Context())
+	clone.Header = req.Header.Clone()
+	for key, values := range t.headers {
+		clone.Header.Del(key)
+		for _, value := range values {
+			clone.Header.Add(key, value)
 		}
-	}()
-
-	cmd := exec.Command(c.config.Command, c.config.Args...)
-	cmd.Dir, _ = os.Getwd()
-	cmd.Env = BuildProcessEnv(filterEnv(c.config.EnvFilter), DefaultProcessEnvPolicy())
-
-	parentStdin, childStdin, err := os.Pipe()
-	if err != nil {
-		return fmt.Errorf("create stdin pipe: %w", err)
 	}
-	parentStdout, childStdout, err := os.Pipe()
-	if err != nil {
-		return fmt.Errorf("create stdout pipe: %w", err)
+	base := t.base
+	if base == nil {
+		base = http.DefaultTransport
 	}
-
-	cmd.Stdin = childStdin
-	cmd.Stdout = childStdout
-	cmd.Stderr = os.Stderr
-
-	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("start server: %w", err)
-	}
-
-	c.server = &mcpServer{
-		name:      c.config.Name,
-		cmd:       cmd,
-		stdin:     parentStdin,
-		stdout:    parentStdout,
-		transport: "stdio",
-		tools:     make(map[string]MCPToolDef),
-		errCh:     make(chan error, 1),
-		done:      make(chan struct{}),
-	}
-
-	go c.stdioReader(parentStdout)
-	c.initialize()
-	return nil
+	return base.RoundTrip(clone)
 }
 
-func (c *MCPClient) stdioReader(stdout *os.File) {
-	defer close(c.server.done)
-	scanner := bufio.NewScanner(stdout)
-	buf := make([]byte, 1024*1024)
-	scanner.Buffer(buf, len(buf))
-
-	for scanner.Scan() {
-		line := scanner.Bytes()
-		if len(line) == 0 {
-			continue
+func mcpHTTPHeaders(config MCPServerConfig) http.Header {
+	headers := make(http.Header, len(config.Headers)+1)
+	for key, value := range config.Headers {
+		headers.Set(key, value)
+	}
+	if token := strings.TrimSpace(config.Auth["bearer"]); token != "" {
+		headers.Set("Authorization", "Bearer "+token)
+	} else {
+		user := config.Auth["user"]
+		pass := config.Auth["pass"]
+		if user != "" && pass != "" {
+			encoded := base64.StdEncoding.EncodeToString([]byte(user + ":" + pass))
+			headers.Set("Authorization", "Basic "+encoded)
 		}
-		var msg JSONRPCMessage
-		if err := json.Unmarshal(line, &msg); err != nil {
-			continue
+	}
+	return headers
+}
+
+func (c *MCPClient) refreshTools(ctx context.Context, notify bool) error {
+	if c.session == nil {
+		return fmt.Errorf("MCP session is not connected")
+	}
+	tools := make(map[string]MCPToolDef)
+	cursor := ""
+	seenCursors := make(map[string]struct{})
+	for page := 0; page < mcpMaxListPages; page++ {
+		result, err := c.session.ListTools(ctx, &mcp.ListToolsParams{Cursor: cursor})
+		if err != nil {
+			return err
 		}
-		c.handleMessage(&msg)
-	}
-	if err := scanner.Err(); err != nil && c.server.errCh != nil {
-		c.server.errCh <- fmt.Errorf("stdio read: %w", err)
-	}
-}
-
-// ---- HTTP Transport ----
-
-func (c *MCPClient) connectHTTP() error {
-	if c.config.URL == "" {
-		return fmt.Errorf("http transport requires 'url' field")
-	}
-	c.server = &mcpServer{
-		name:      c.config.Name,
-		url:       c.config.URL,
-		headers:   c.config.Headers,
-		transport: "http",
-		tools:     make(map[string]MCPToolDef),
-	}
-	c.initialize()
-	return nil
-}
-
-// ---- Message Handling ----
-
-func (c *MCPClient) handleMessage(msg *JSONRPCMessage) {
-	switch msg.Method {
-	case "notifications/tools/list_changed":
-		c.listTools()
-	case "sampling/createMessage":
-		c.sendError(msg.ID, -1, "sampling not implemented")
-	default:
-		if msg.ID != nil {
-			// JSON numbers decode as float64; a malformed server can send a
-			// string/null id — never panic the reader goroutine on it.
-			f, ok := msg.ID.(float64)
-			if !ok {
-				return
+		for _, tool := range result.Tools {
+			if tool == nil || strings.TrimSpace(tool.Name) == "" {
+				continue
 			}
-			ch, ok := lookupResponseChan(int64(f))
-			if !ok {
-				// Late reply after the waiter timed out and deleted its channel:
-				// drop it instead of re-creating an entry nobody will ever drain.
-				return
+			schema, err := mcpSchemaMap(tool.InputSchema)
+			if err != nil {
+				return fmt.Errorf("tool %s input schema: %w", tool.Name, err)
 			}
-			select {
-			case ch <- msg:
-			default: // duplicate reply for the same id; waiter already has one
+			tools[tool.Name] = MCPToolDef{
+				Name:        tool.Name,
+				Description: tool.Description,
+				InputSchema: schema,
 			}
 		}
-	}
-}
-
-// ---- Protocol Operations ----
-
-func (c *MCPClient) initialize() {
-	params := map[string]interface{}{
-		"protocolVersion": "2024-11-05",
-		"capabilities": map[string]interface{}{
-			"tools":    map[string]interface{}{},
-			"sampling": map[string]interface{}{},
-			"roots":    map[string]interface{}{},
-		},
-		"clientInfo": map[string]string{
-			"name":    "selfmind",
-			"version": "1.0.0",
-		},
-	}
-	var err error
-	switch c.server.transport {
-	case "stdio":
-		_, err = c.sendRequest("initialize", params, nil)
-	case "http":
-		_, err = c.callHTTP("initialize", params, nil)
-	}
-	if err != nil && c.server != nil && c.server.errCh != nil {
-		c.server.errCh <- fmt.Errorf("initialize: %w", err)
-		return
-	}
-	if c.server.transport == "stdio" {
-		c.sendNotification("initialized", nil)
-	}
-	c.listTools()
-}
-
-func (c *MCPClient) listTools() {
-	var result struct {
-		Tools []struct {
-			Name        string                 `json:"name"`
-			Description string                 `json:"description"`
-			InputSchema map[string]interface{} `json:"inputSchema"`
-		} `json:"tools"`
-	}
-
-	var err error
-	switch c.server.transport {
-	case "stdio":
-		_, err = c.sendRequest("tools/list", nil, &result)
-	case "http":
-		_, err = c.callHTTP("tools/list", nil, &result)
-	}
-	if err != nil {
-		return
+		if result.NextCursor == "" {
+			break
+		}
+		if _, duplicate := seenCursors[result.NextCursor]; duplicate {
+			return fmt.Errorf("tools/list returned duplicate cursor %q", result.NextCursor)
+		}
+		seenCursors[result.NextCursor] = struct{}{}
+		cursor = result.NextCursor
+		if page == mcpMaxListPages-1 {
+			return fmt.Errorf("tools/list exceeded %d pages", mcpMaxListPages)
+		}
 	}
 
 	c.toolsMu.Lock()
-	c.tools = make(map[string]MCPToolDef)
-	for _, t := range result.Tools {
-		c.tools[t.Name] = MCPToolDef{
-			Name:        t.Name,
-			Description: t.Description,
-			InputSchema: t.InputSchema,
-		}
-	}
+	changed := !reflect.DeepEqual(c.tools, tools)
+	c.tools = tools
+	onTools := c.onTools
 	c.toolsMu.Unlock()
+	if notify && changed && onTools != nil {
+		onTools(c, c.GetTools())
+	}
+	return nil
+}
+
+func mcpSchemaMap(schema any) (map[string]interface{}, error) {
+	if schema == nil {
+		return map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}, nil
+	}
+	data, err := json.Marshal(schema)
+	if err != nil {
+		return nil, err
+	}
+	var result map[string]interface{}
+	if err := json.Unmarshal(data, &result); err != nil {
+		return nil, err
+	}
+	if result == nil {
+		return nil, fmt.Errorf("schema must be a JSON object")
+	}
+	return result, nil
 }
 
 func (c *MCPClient) CallTool(name string, args map[string]interface{}) (string, error) {
@@ -283,584 +260,93 @@ func (c *MCPClient) CallTool(name string, args map[string]interface{}) (string, 
 	if !ok {
 		return "", fmt.Errorf("tool %s not found on server %s", name, c.config.Name)
 	}
-
-	params := map[string]interface{}{
-		"name":      name,
-		"arguments": args,
+	if c.session == nil {
+		return "", fmt.Errorf("MCP server %s is not connected", c.config.Name)
 	}
-
-	var result struct {
-		Content []map[string]interface{} `json:"content"`
-		IsError bool                     `json:"isError"`
-	}
-
-	var err error
-	switch c.server.transport {
-	case "stdio":
-		_, err = c.sendRequest("tools/call", params, &result)
-	case "http":
-		_, err = c.callHTTP("tools/call", params, &result)
-	}
+	ctx, cancel := context.WithTimeout(context.Background(), mcpToolTimeout)
+	defer cancel()
+	// The dispatcher carries authenticated scope, registry pointers, callbacks,
+	// and other daemon-only values in underscore-prefixed arguments. They are
+	// useful to local middleware but must never cross the MCP trust boundary.
+	result, err := c.session.CallTool(ctx, &mcp.CallToolParams{Name: name, Arguments: publicToolArgs(args)})
 	if err != nil {
 		return "", err
 	}
+	output := renderMCPToolResult(result)
 	if result.IsError {
-		return "", fmt.Errorf("tool error")
+		if strings.TrimSpace(output) == "" {
+			output = "MCP tool returned an error"
+		}
+		return "", fmt.Errorf("tool %s: %s", name, output)
 	}
+	return output, nil
+}
 
-	var output strings.Builder
-	for _, item := range result.Content {
-		switch item["type"] {
-		case "text":
-			if text, ok := item["text"].(string); ok {
-				output.WriteString(text)
+func renderMCPToolResult(result *mcp.CallToolResult) string {
+	if result == nil {
+		return ""
+	}
+	parts := make([]string, 0, len(result.Content)+1)
+	for _, content := range result.Content {
+		switch item := content.(type) {
+		case *mcp.TextContent:
+			if item.Text != "" {
+				parts = append(parts, item.Text)
 			}
-		case "image":
-			output.WriteString("[Image]")
-		case "resource":
-			if uri, ok := item["uri"].(string); ok {
-				output.WriteString(fmt.Sprintf("[Resource: %s]", uri))
+		case *mcp.ImageContent:
+			parts = append(parts, mediaPlaceholder("Image", item.MIMEType))
+		case *mcp.AudioContent:
+			parts = append(parts, mediaPlaceholder("Audio", item.MIMEType))
+		case *mcp.ResourceLink:
+			parts = append(parts, fmt.Sprintf("[Resource: %s]", item.URI))
+		case *mcp.EmbeddedResource:
+			if item.Resource == nil {
+				continue
+			}
+			if item.Resource.Text != "" {
+				parts = append(parts, item.Resource.Text)
+			} else {
+				parts = append(parts, fmt.Sprintf("[Resource: %s]", item.Resource.URI))
+			}
+		default:
+			if data, err := json.Marshal(content); err == nil {
+				parts = append(parts, string(data))
 			}
 		}
 	}
-	return output.String(), nil
+	if len(parts) == 0 && result.StructuredContent != nil {
+		if data, err := json.Marshal(result.StructuredContent); err == nil {
+			parts = append(parts, string(data))
+		}
+	}
+	return strings.Join(parts, "\n")
+}
+
+func mediaPlaceholder(kind, mimeType string) string {
+	if strings.TrimSpace(mimeType) == "" {
+		return "[" + kind + "]"
+	}
+	return fmt.Sprintf("[%s: %s]", kind, mimeType)
 }
 
 func (c *MCPClient) GetTools() map[string]MCPToolDef {
 	c.toolsMu.RLock()
 	defer c.toolsMu.RUnlock()
-	result := make(map[string]MCPToolDef)
-	for k, v := range c.tools {
-		result[k] = v
+	result := make(map[string]MCPToolDef, len(c.tools))
+	for name, tool := range c.tools {
+		result[name] = tool
 	}
 	return result
 }
 
 func (c *MCPClient) Close() error {
-	if c.server == nil {
+	if c == nil {
 		return nil
 	}
-	if c.server.transport == "stdio" && c.server.cmd != nil && c.server.cmd.Process != nil {
-		c.server.cmd.Process.Kill()
-		c.server.cmd.Wait()
-		c.server.stdin.Close()
-		c.server.stdout.Close()
-	}
-	return nil
-}
-
-// =============================================================================
-// JSON-RPC Types
-// =============================================================================
-
-type JSONRPCMessage struct {
-	ID      interface{}   `json:"id,omitempty"`
-	JSONRPC string        `json:"jsonrpc"`
-	Method  string        `json:"method,omitempty"`
-	Params  interface{}   `json:"params,omitempty"`
-	Result  interface{}   `json:"result,omitempty"`
-	Error   *JSONRPCError `json:"error,omitempty"`
-}
-
-type JSONRPCError struct {
-	Code    int         `json:"code"`
-	Message string      `json:"message"`
-	Data    interface{} `json:"data,omitempty"`
-}
-
-// =============================================================================
-// Stdio Request/Response
-// =============================================================================
-
-var (
-	respMu    sync.Mutex
-	respChans = make(map[int64]chan *JSONRPCMessage)
-	nextReqID int64
-	reqIDMu   sync.Mutex
-)
-
-func nextRequestID() int64 {
-	reqIDMu.Lock()
-	defer reqIDMu.Unlock()
-	nextReqID++
-	return nextReqID
-}
-
-// getResponseChan registers (or returns) the waiter channel for a request id.
-// Only the request sender may create entries; the reader goroutine uses
-// lookupResponseChan so late replies never resurrect a deleted entry.
-func getResponseChan(id int64) chan *JSONRPCMessage {
-	respMu.Lock()
-	defer respMu.Unlock()
-	if _, exists := respChans[id]; !exists {
-		respChans[id] = make(chan *JSONRPCMessage, 1)
-	}
-	return respChans[id]
-}
-
-func lookupResponseChan(id int64) (chan *JSONRPCMessage, bool) {
-	respMu.Lock()
-	defer respMu.Unlock()
-	ch, ok := respChans[id]
-	return ch, ok
-}
-
-func (c *MCPClient) sendRequest(method string, params interface{}, result interface{}) (*JSONRPCMessage, error) {
-	id := nextRequestID()
-	respCh := getResponseChan(id)
-
-	msg := JSONRPCMessage{
-		ID:      id,
-		JSONRPC: "2.0",
-		Method:  method,
-		Params:  params,
-	}
-
-	data, err := json.Marshal(msg)
-	if err != nil {
-		return nil, fmt.Errorf("marshal: %w", err)
-	}
-
-	if c.server == nil || (c.server.transport == "stdio" && c.server.cmd.ProcessState != nil) {
-		// Try to reconnect
-		if err := c.connect(); err != nil {
-			// Increase backoff on failure
-			c.mu.Lock()
-			if c.backoff < 30*time.Second {
-				c.backoff *= 2
-			}
-			c.mu.Unlock()
-			return nil, fmt.Errorf("reconnect failed: %w", err)
+	c.closeOnce.Do(func() {
+		if c.session != nil {
+			c.closeErr = c.session.Close()
 		}
-		// Success! Reset backoff
-		c.mu.Lock()
-		c.backoff = 0
-		c.mu.Unlock()
-	}
-
-	if _, err := c.server.stdin.Write(append(data, '\n')); err != nil {
-		return nil, fmt.Errorf("write: %w", err)
-	}
-
-	select {
-	case resp := <-respCh:
-		respMu.Lock()
-		delete(respChans, id)
-		respMu.Unlock()
-		if resp.Error != nil {
-			return resp, fmt.Errorf("json-rpc error %d: %s", resp.Error.Code, resp.Error.Message)
-		}
-		if result != nil && resp.Result != nil {
-			bytes, _ := json.Marshal(resp.Result)
-			json.Unmarshal(bytes, result)
-		}
-		return resp, nil
-	case <-time.After(30 * time.Second):
-		respMu.Lock()
-		delete(respChans, id)
-		respMu.Unlock()
-		return nil, fmt.Errorf("request timeout")
-	}
-}
-
-func (c *MCPClient) sendNotification(method string, params interface{}) {
-	msg := JSONRPCMessage{
-		JSONRPC: "2.0",
-		Method:  method,
-		Params:  params,
-	}
-	data, _ := json.Marshal(msg)
-	c.server.stdin.Write(append(data, '\n'))
-}
-
-func (c *MCPClient) sendError(id interface{}, code int, message string) {
-	msg := JSONRPCMessage{
-		ID:      id,
-		JSONRPC: "2.0",
-		Error: &JSONRPCError{
-			Code:    code,
-			Message: message,
-		},
-	}
-	data, _ := json.Marshal(msg)
-	c.server.stdin.Write(append(data, '\n'))
-}
-
-// ---- HTTP Transport ----
-
-func (c *MCPClient) callHTTP(method string, params interface{}, result interface{}) (*JSONRPCMessage, error) {
-	id := nextRequestID()
-	msg := JSONRPCMessage{
-		ID:      id,
-		JSONRPC: "2.0",
-		Method:  method,
-		Params:  params,
-	}
-	data, _ := json.Marshal(msg)
-
-	req, err := http.NewRequest("POST", c.server.url, strings.NewReader(string(data)))
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	for k, v := range c.server.headers {
-		req.Header.Set(k, v)
-	}
-	if c.config.Auth != nil {
-		if token, ok := c.config.Auth["bearer"]; ok {
-			req.Header.Set("Authorization", "Bearer "+token)
-		} else if user, pass := c.config.Auth["user"], c.config.Auth["pass"]; user != "" && pass != "" {
-			req.Header.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte(user+":"+pass)))
-		}
-	}
-
-	client := &http.Client{Timeout: 60 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("http request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	var rpcResp JSONRPCMessage
-	if err := json.NewDecoder(resp.Body).Decode(&rpcResp); err != nil {
-		return nil, fmt.Errorf("decode response: %w", err)
-	}
-	if rpcResp.Error != nil {
-		return &rpcResp, fmt.Errorf("json-rpc error %d: %s", rpcResp.Error.Code, rpcResp.Error.Message)
-	}
-	if result != nil && rpcResp.Result != nil {
-		bytes, _ := json.Marshal(rpcResp.Result)
-		json.Unmarshal(bytes, result)
-	}
-	return &rpcResp, nil
-}
-
-// =============================================================================
-// MCPTool - MCP 工具的本地包装器
-// =============================================================================
-
-type MCPTool struct {
-	BaseTool
-	serverName  string
-	toolName    string
-	inputSchema map[string]interface{}
-	client      *MCPClient
-}
-
-// RawToolSchema preserves the MCP server's complete inputSchema for the
-// provider-neutral compiler. The compiler always clones it before repair, so
-// the server-owned discovery record remains immutable.
-func (t *MCPTool) RawToolSchema() map[string]interface{} {
-	return t.inputSchema
-}
-
-func (t *MCPTool) SchemaOrigin() ToolSchemaOrigin {
-	return ToolSchemaOriginExternal
-}
-
-func (c *MCPClient) WrapTool(def MCPToolDef) *MCPTool {
-	return c.WrapToolNamed(def, def.Name)
-}
-
-func (c *MCPClient) WrapToolNamed(def MCPToolDef, localName string) *MCPTool {
-	return &MCPTool{
-		BaseTool: BaseTool{
-			name:        localName,
-			description: def.Description,
-			schema:      convertJSONSchema(def.InputSchema),
-			metadata: ToolMetadata{
-				Category:  "mcp",
-				RiskLevel: ToolRiskMedium,
-				SearchText: fmt.Sprintf(
-					"mcp server %s tool %s %s",
-					c.config.Name,
-					def.Name,
-					def.Description,
-				),
-			},
-		},
-		serverName:  c.config.Name,
-		toolName:    def.Name,
-		inputSchema: def.InputSchema,
-		client:      c,
-	}
-}
-
-func (t *MCPTool) Execute(args map[string]interface{}) (string, error) {
-	if required, ok := t.inputSchema["required"].([]interface{}); ok {
-		for _, r := range required {
-			if name, ok := r.(string); ok {
-				if _, exists := args[name]; !exists {
-					return "", fmt.Errorf("missing required parameter: %s", name)
-				}
-			}
-		}
-	}
-	return t.client.CallTool(t.toolName, args)
-}
-
-func convertJSONSchema(input map[string]interface{}) ToolSchema {
-	props := make(map[string]PropertyDef)
-	var required []string
-
-	if propsRaw, ok := input["properties"].(map[string]interface{}); ok {
-		for name, propRaw := range propsRaw {
-			if prop, ok := propRaw.(map[string]interface{}); ok {
-				props[name] = convertJSONSchemaProperty(prop)
-			}
-		}
-	}
-
-	if req, ok := input["required"].([]interface{}); ok {
-		for _, r := range req {
-			if s, ok := r.(string); ok {
-				required = append(required, s)
-			}
-		}
-	}
-
-	return ToolSchema{
-		Type:       "object",
-		Properties: props,
-		Required:   required,
-	}
-}
-
-func convertJSONSchemaProperty(prop map[string]interface{}) PropertyDef {
-	p := PropertyDef{}
-	if t, ok := prop["type"].(string); ok {
-		p.Type = t
-	}
-	if desc, ok := prop["description"].(string); ok {
-		p.Description = desc
-	}
-	if value, exists := prop["default"]; exists {
-		p.Default = value
-	}
-	if e, ok := prop["enum"].([]interface{}); ok {
-		for _, v := range e {
-			p.Enum = append(p.Enum, fmt.Sprintf("%v", v))
-		}
-	}
-	if items, ok := prop["items"].(map[string]interface{}); ok {
-		converted := convertJSONSchemaProperty(items)
-		p.Items = &converted
-	}
-	if nested, ok := prop["properties"].(map[string]interface{}); ok {
-		p.Properties = make(map[string]PropertyDef, len(nested))
-		for name, raw := range nested {
-			if child, ok := raw.(map[string]interface{}); ok {
-				p.Properties[name] = convertJSONSchemaProperty(child)
-			}
-		}
-	}
-	if required, ok := prop["required"].([]interface{}); ok {
-		for _, raw := range required {
-			if name, ok := raw.(string); ok {
-				p.Required = append(p.Required, name)
-			}
-		}
-	}
-	return p
-}
-
-// =============================================================================
-// MCP Tool Manager
-// =============================================================================
-
-type MCPToolManager struct {
-	mu         sync.RWMutex
-	clients    map[string]*MCPClient
-	dispatcher *Dispatcher
-}
-
-func NewMCPToolManager(d *Dispatcher) *MCPToolManager {
-	return &MCPToolManager{
-		clients:    make(map[string]*MCPClient),
-		dispatcher: d,
-	}
-}
-
-func (m *MCPToolManager) Connect(config MCPServerConfig) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	if _, exists := m.clients[config.Name]; exists {
-		return fmt.Errorf("server %s already connected", config.Name)
-	}
-
-	client, err := NewMCPClient(config)
-	if err != nil {
-		return fmt.Errorf("connect %s: %w", config.Name, err)
-	}
-
-	m.clients[config.Name] = client
-	time.Sleep(500 * time.Millisecond)
-
-	for _, def := range client.GetTools() {
-		m.dispatcher.RegisterTool(client.WrapToolNamed(def, MCPToolLocalName(config.Name, def.Name)))
-	}
-	return nil
-}
-
-func (m *MCPToolManager) Disconnect(name string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	client, ok := m.clients[name]
-	if !ok {
-		return fmt.Errorf("server %s not found", name)
-	}
-
-	for _, def := range client.GetTools() {
-		m.dispatcher.UnregisterTool(MCPToolLocalName(name, def.Name))
-	}
-
-	client.Close()
-	delete(m.clients, name)
-	return nil
-}
-
-func (m *MCPToolManager) ListServers() []string {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	names := make([]string, 0, len(m.clients))
-	for name := range m.clients {
-		names = append(names, name)
-	}
-	return names
-}
-
-func (m *MCPToolManager) ListTools(serverName string) []MCPToolDef {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	client, ok := m.clients[serverName]
-	if !ok {
-		return nil
-	}
-	tools := client.GetTools()
-	result := make([]MCPToolDef, 0, len(tools))
-	for _, t := range tools {
-		result = append(result, t)
-	}
-	return result
-}
-
-// =============================================================================
-// Env Filtering
-// =============================================================================
-
-func filterEnv(whitelist []string) []string {
-	if len(whitelist) == 0 {
-		whitelist = []string{"PATH", "HOME", "USER", "TMPDIR"}
-	}
-	whitelistMap := make(map[string]struct{})
-	for _, k := range whitelist {
-		whitelistMap[k] = struct{}{}
-	}
-
-	var result []string
-	for _, e := range os.Environ() {
-		parts := strings.SplitN(e, "=", 2)
-		if len(parts) != 2 {
-			continue
-		}
-		key := parts[0]
-		if _, allowed := whitelistMap[key]; allowed {
-			lower := strings.ToLower(key)
-			if strings.Contains(lower, "secret") || strings.Contains(lower, "token") ||
-				strings.Contains(lower, "password") || strings.Contains(lower, "key") {
-				continue
-			}
-			result = append(result, e)
-		}
-	}
-	return result
-}
-
-func MCPToolLocalName(serverName, toolName string) string {
-	name := "mcp_" + sanitizeMCPName(serverName) + "_" + sanitizeMCPName(toolName)
-	// OpenAI-compatible function names are commonly capped at 64 ASCII
-	// characters. Preserve a readable prefix and append a source-derived hash
-	// so truncation cannot make two external tools collide.
-	const maxToolName = 64
-	if len(name) <= maxToolName {
-		return name
-	}
-	digest := sha256.Sum256([]byte(serverName + "\x00" + toolName))
-	suffix := "_" + hex.EncodeToString(digest[:6])
-	return strings.TrimRight(name[:maxToolName-len(suffix)], "_") + suffix
-}
-
-func sanitizeMCPName(value string) string {
-	value = strings.ToLower(strings.TrimSpace(value))
-	var b strings.Builder
-	lastUnderscore := false
-	for _, r := range value {
-		valid := (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9')
-		if valid {
-			b.WriteRune(r)
-			lastUnderscore = false
-			continue
-		}
-		if !lastUnderscore {
-			b.WriteByte('_')
-			lastUnderscore = true
-		}
-	}
-	out := strings.Trim(b.String(), "_")
-	if out == "" {
-		return "tool"
-	}
-	return out
-}
-
-// =============================================================================
-// Utility
-// =============================================================================
-
-// sanitizeFTS5Query 清理 FTS5 查询特殊字符
-func sanitizeFTS5Query(query string) string {
-	phraseRe := regexp.MustCompile(`"([^"]+)"`)
-	phrases := phraseRe.FindAllStringSubmatch(query, -1)
-
-	s := query
-	special := []string{"+", "{", "}", "(", ")", "^", "\"", ":", "*", "?"}
-	for _, c := range special {
-		s = strings.ReplaceAll(s, c, " ")
-	}
-	s = strings.TrimSpace(s)
-
-	for _, m := range phrases {
-		if len(m) > 1 {
-			s = s + " \"" + m[1] + "\""
-		}
-	}
-
-	wordRe := regexp.MustCompile(`\b[\w\-\.]+\b`)
-	words := wordRe.FindAllString(s, -1)
-	for _, w := range words {
-		if strings.Contains(w, "-") || strings.Contains(w, ".") {
-			s = strings.ReplaceAll(s, w, "\""+w+"\"")
-		}
-	}
-	return s
-}
-
-// Legacy global registry helpers. New application code should use
-// Dispatcher methods so tools stay scoped to the active registry.
-
-// UnregisterTool 注销一个工具（供 MCP 使用）
-func UnregisterTool(name string) {
-	globalRegistry.Unregister(name)
-}
-
-// GetToolDefinitions returns all registered tools as LLM-compatible definitions
-func GetToolDefinitions() []map[string]interface{} {
-	return globalRegistry.ToolDefinitions()
-}
-
-// RegisterDispatcherTool 注册一个工具到全局注册表（dispatcher 暴露）
-func RegisterDispatcherTool(t Tool) {
-	globalRegistry.Register(t)
+	})
+	return c.closeErr
 }

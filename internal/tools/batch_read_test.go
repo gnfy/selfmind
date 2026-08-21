@@ -94,6 +94,11 @@ func TestBatchReadNestedEventsCarryCanonicalIdentityAndResults(t *testing.T) {
 			return "partial", fmt.Errorf("search failed")
 		}
 		return "package main", nil
+	}, func(name string, _ map[string]interface{}) kernel.ToolExecutionMetadata {
+		return kernel.ToolExecutionMetadata{
+			Origin: "builtin", Category: "filesystem", RiskLevel: "low", ReadOnly: true,
+			OperationClasses: []string{"observe"},
+		}
 	})
 
 	_, err := tool.ExecuteContext(ctx, map[string]interface{}{
@@ -136,6 +141,13 @@ func TestBatchReadNestedEventsCarryCanonicalIdentityAndResults(t *testing.T) {
 	}
 	if lifecycle[0].ToolArgs == "" || lifecycle[1].ToolResult != "package main" {
 		t.Fatalf("first child fields = start args %q end result %q", lifecycle[0].ToolArgs, lifecycle[1].ToolResult)
+	}
+	if lifecycle[0].Payload["tool_origin"] != "builtin" || lifecycle[0].Payload["tool_category"] != "filesystem" || lifecycle[0].Payload["tool_read_only"] != true {
+		t.Fatalf("nested child missing trusted execution metadata: %+v", lifecycle[0].Payload)
+	}
+	classes, ok := lifecycle[0].Payload["operation_classes"].([]interface{})
+	if !ok || len(classes) != 1 || classes[0] != "observe" {
+		t.Fatalf("nested child operation classes=%#v", lifecycle[0].Payload["operation_classes"])
 	}
 	if lifecycle[3].Error != "search failed" || lifecycle[3].ToolResult != "partial" {
 		t.Fatalf("failed child completion = %+v", lifecycle[3])

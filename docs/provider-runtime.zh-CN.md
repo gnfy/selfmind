@@ -30,6 +30,11 @@ CLI、IM、HTTP webhook、未来 SaaS 多端入口都必须复用同一套 runti
 9. `extra_body` 与 `extra_query` 按 provider → role 合并，角色层优先；请求体
    对象递归合并。它们只在最终 HTTP transport 边界生效，CLI、IM、cron 与未来
    远程入口不会各自实现一套。
+10. 请求前缀诊断是 provider wrapper 的合约，而不是仅由 adapter 负责。role
+    router、飞行记录器/VCR 等生产 wrapper 必须转发 `RequestFingerprinter`；每次
+    provider 调用要么记录不含正文的 prefix/block 哈希，要么记录明确的不支持原因。
+    `/diag context` 展示最近一次 run 的 token 与缓存状态，`selfmind usage` 展示当前
+    person 最近 24 小时的执行与 token 报告；两者都不估算货币成本。
 
 ## 核心文件
 
@@ -117,6 +122,11 @@ SelfMind 区分两个容易混淆的字段：
 支持哪些取值由具体模型的能力元数据决定，不维护一份全局硬编码枚举。
 `selfmind model set` 在能发现元数据时动态校验；私有 endpoint 没有元数据时，
 仍会保留用户显式配置的兼容值。
+
+本地初始化时，未填写 provider/model 的 auxiliary 默认使用 primary 的
+provider/model。首次写入模型会把两个槽位都明确落盘。此后 auxiliary 独立存在：
+修改 primary 不会覆盖已有 auxiliary。逻辑后台角色继续作为高级
+`models.roles.<role>` 覆盖存在；未配置角色覆盖时继承 auxiliary。
 
 Anthropic Messages 在 `thinking_mode: anthropic` 下，会把显式推理等级映射为 thinking
 预算：`low=4096`、`medium/default=8192`、`high=16384`、

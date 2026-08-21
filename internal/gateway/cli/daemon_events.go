@@ -181,6 +181,10 @@ func (m *uiModel) markBackgroundRun(runID, watchID, origin string) {
 	m.backgroundResultPending = true
 }
 
+func (m *uiModel) backgroundDaemonRunActive() bool {
+	return m.daemonRunActive && m.daemonRunID != "" && m.daemonRunID == m.backgroundRunID
+}
+
 // backgroundRunEvent reports whether this event belongs to the background run.
 // The run id is kept after that run ends and is replaced only by the next
 // background run, so a trailing event (a late tool.completed, a buffered

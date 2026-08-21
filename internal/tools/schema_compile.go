@@ -102,6 +102,9 @@ func compileToolSchema(t Tool) compiledToolSchema {
 	} else {
 		compiler := schemaCompiler{}
 		compiler.compileRoot(parameters)
+		if report.Origin == ToolSchemaOriginExternal {
+			compiler.rejectReservedRootProperties(parameters)
+		}
 		report.Issues = compiler.issues
 		report.Status = compiler.status()
 	}
@@ -148,6 +151,15 @@ func emptyObjectSchema() map[string]interface{} {
 
 type schemaCompiler struct {
 	issues []ToolSchemaIssue
+}
+
+func (c *schemaCompiler) rejectReservedRootProperties(schema map[string]interface{}) {
+	properties, _ := schema["properties"].(map[string]interface{})
+	for name := range properties {
+		if strings.HasPrefix(strings.TrimSpace(name), "_") {
+			c.fail("reserved_parameter_name", "$.properties."+name, "top-level underscore parameter names are reserved by SelfMind")
+		}
+	}
 }
 
 func (c *schemaCompiler) status() ToolSchemaStatus {

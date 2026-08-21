@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"encoding/json"
+	"net"
 	"net/http"
 	"strings"
 
@@ -19,13 +20,16 @@ import (
 // so workspace scope, approval mode, and run events apply. This keeps
 // /v1/dispatch from becoming a tool-execution backdoor around those guards.
 var dispatchSafelist = map[string]bool{
-	"memory":                 true,
-	"skill_manage":           true,
-	"skill_catalog":          true,
-	"skill_bundle":           true,
-	"skill_lifecycle_manage": true,
-	"checkpoint":             true,
-	"session_search":         true, // read-only; backs the TUI /search command
+	"memory":                   true,
+	"skill_manage":             true,
+	"skills_list":              true,
+	"skill_view":               true,
+	"skill_invocation_resolve": true,
+	"skill_catalog":            true,
+	"skill_bundle":             true,
+	"skill_lifecycle_manage":   true,
+	"checkpoint":               true,
+	"session_search":           true, // read-only; backs the TUI /search command
 }
 
 // directSkillManagementTools are the explicit, authenticated management
@@ -36,6 +40,16 @@ var dispatchSafelist = map[string]bool{
 var directSkillManagementTools = map[string]bool{
 	"skill_manage":           true,
 	"skill_lifecycle_manage": true,
+}
+
+var skillScopedDispatchTools = map[string]bool{
+	"skill_manage":             true,
+	"skills_list":              true,
+	"skill_view":               true,
+	"skill_invocation_resolve": true,
+	"skill_catalog":            true,
+	"skill_bundle":             true,
+	"skill_lifecycle_manage":   true,
 }
 
 // personPartitionTools are dispatch tools whose backing store partitions by
@@ -98,8 +112,16 @@ func (d *Server) handleDispatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	clientCWD, _ := req.Args["_client_cwd"].(string)
+	if !dispatchLoopbackCLI(r, req.Platform) {
+		clientCWD = ""
+	}
+	requestedWorkspaceID, _ := req.Args["_workspace_id"].(string)
 	args := map[string]interface{}{}
 	for k, v := range req.Args {
+		if strings.HasPrefix(k, "_") {
+			continue
+		}
 		args[k] = v
 	}
 	// Partition scope is authoritative from the resolved identity, never from
@@ -112,7 +134,7 @@ func (d *Server) handleDispatch(w http.ResponseWriter, r *http.Request) {
 		args["_tenant_id"] = identity.TenantID
 	}
 	args["_context"] = r.Context()
-	if directSkillManagementTools[tool] {
+	if skillScopedDispatchTools[tool] {
 		task, taskErr := d.Control.CurrentTask(r.Context(), identity.TenantID, identity.PersonID)
 		if taskErr != nil {
 			writeJSON(w, http.StatusOK, api.DispatchResponse{Error: taskErr.Error()})
@@ -120,11 +142,38 @@ func (d *Server) handleDispatch(w http.ResponseWriter, r *http.Request) {
 		}
 		scope := kernel.ToolInvocationScope{
 			ControlTenantID: identity.TenantID, PersonID: identity.PersonID,
-			SkillMutationMode: kernel.SkillMutationDirect,
+		}
+		if directSkillManagementTools[tool] {
+			scope.SkillMutationMode = kernel.SkillMutationDirect
 		}
 		if task != nil {
 			scope.TaskID = task.ID
-			scope.WorkspaceID = task.WorkspaceID
+		}
+		workspaceReq := api.MessageRequest{
+			Platform: req.Platform, PlatformUserID: req.PlatformUserID,
+			ClientCWD: clientCWD, WorkspaceID: strings.TrimSpace(requestedWorkspaceID),
+		}
+		workspace, workspaceErr := d.coordinator().prepareRequestWorkspace(r.Context(), identity, &workspaceReq)
+		if workspaceErr != nil {
+			writeJSON(w, http.StatusOK, api.DispatchResponse{Error: workspaceErr.Error()})
+			return
+		}
+		if workspace != nil && workspace.OwnerPersonID != identity.PersonID {
+			writeJSON(w, http.StatusOK, api.DispatchResponse{Error: "workspace is not owned by the resolved person"})
+			return
+		}
+		if workspace == nil && task != nil && strings.TrimSpace(task.WorkspaceID) != "" {
+			workspace, workspaceErr = d.Control.GetWorkspace(r.Context(), identity.TenantID, task.WorkspaceID)
+			if workspaceErr != nil {
+				writeJSON(w, http.StatusOK, api.DispatchResponse{Error: workspaceErr.Error()})
+				return
+			}
+			if workspace != nil && workspace.OwnerPersonID != identity.PersonID {
+				workspace = nil
+			}
+		}
+		if workspace != nil {
+			scope.WorkspaceID = workspace.ID
 		}
 		managementRunID := "management-" + uuid.NewString()
 		scope.RunID = managementRunID
@@ -132,20 +181,13 @@ func (d *Server) handleDispatch(w http.ResponseWriter, r *http.Request) {
 			TenantID: identity.TenantID, PersonID: identity.PersonID,
 			TaskID: scope.TaskID, RunID: managementRunID, WorkspaceID: scope.WorkspaceID,
 		}
-		if scope.WorkspaceID != "" {
-			workspace, workspaceErr := d.Control.GetWorkspace(r.Context(), identity.TenantID, scope.WorkspaceID)
-			if workspaceErr != nil {
-				writeJSON(w, http.StatusOK, api.DispatchResponse{Error: workspaceErr.Error()})
-				return
+		if workspace != nil {
+			executionScope.WorkspaceRoot = workspace.LocalPath
+			executionScope.AllowedRoots = append([]string{}, workspace.AllowedRoots...)
+			if len(executionScope.AllowedRoots) == 0 && workspace.LocalPath != "" {
+				executionScope.AllowedRoots = []string{workspace.LocalPath}
 			}
-			if workspace != nil && workspace.OwnerPersonID == identity.PersonID {
-				executionScope.WorkspaceRoot = workspace.LocalPath
-				executionScope.AllowedRoots = append([]string{}, workspace.AllowedRoots...)
-				if len(executionScope.AllowedRoots) == 0 && workspace.LocalPath != "" {
-					executionScope.AllowedRoots = []string{workspace.LocalPath}
-				}
-				executionScope.TrustLevel = workspace.TrustLevel
-			}
+			executionScope.TrustLevel = workspace.TrustLevel
 		}
 		cleanup := tools.SetExecutionScope("", executionScope)
 		defer cleanup()
@@ -160,4 +202,20 @@ func (d *Server) handleDispatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, api.DispatchResponse{Result: result})
+}
+
+func dispatchLoopbackCLI(r *http.Request, platform string) bool {
+	if r == nil || !strings.EqualFold(strings.TrimSpace(platform), "cli") {
+		return false
+	}
+	host := strings.TrimSpace(r.RemoteAddr)
+	if parsed, _, err := net.SplitHostPort(host); err == nil {
+		host = parsed
+	}
+	host = strings.Trim(host, "[]")
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }

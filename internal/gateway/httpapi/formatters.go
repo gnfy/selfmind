@@ -121,6 +121,9 @@ type approvalPayload struct {
 	// not rule on this call (no judge, error, timeout), so the ask is a fail-safe
 	// fallback rather than a considered escalation.
 	TriageState string `json:"triage_state,omitempty"`
+	// DecisionPolicy is authoritative server-issued answer policy. In
+	// particular, mode changes must never auto-resolve a once-only sensitive ask.
+	DecisionPolicy string `json:"decision_policy,omitempty"`
 	// TriageRationale, TriageRisk, and TriageAuthorization are the judge's
 	// structured assessment when triage ran and handed the call to a human. They
 	// are shown at decision time and kept for audit.

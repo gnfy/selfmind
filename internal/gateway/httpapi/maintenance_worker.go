@@ -212,16 +212,16 @@ func (d *Server) runMaintenancePassAt(ctx context.Context, now time.Time) {
 		if strings.TrimSpace(job.ProposalJSON) != "" {
 			callCtx, cancel := context.WithTimeout(ctx, d.analyzerTimeout())
 			d.analyzeFinishedRun(callCtx, &payload.Identity, &payload.Task, &payload.Run,
-				payload.WorkspaceID, payload.UserInput, payload.Outcome, attach)
+				payload.WorkspaceID, payload.UserInput, payload.Outcome, attach, payload.PromptSnapshotHash)
 			cancel()
 			continue
 		}
 		prepared := d.preparePostRunAnalysis(ctx, &payload.Identity, &payload.Task, &payload.Run,
-			payload.WorkspaceID, payload.UserInput, payload.Outcome, attach)
+			payload.WorkspaceID, payload.UserInput, payload.Outcome, attach, payload.PromptSnapshotHash)
 		if prepared == nil {
 			continue
 		}
-		key := strings.Join([]string{job.TenantID, payload.Identity.PersonID, payload.WorkspaceID}, "\x00")
+		key := strings.Join([]string{job.TenantID, payload.Identity.PersonID, payload.WorkspaceID, payload.PromptSnapshotHash}, "\x00")
 		group := groups[key]
 		if group == nil {
 			group = &postRunMaintenanceGroup{oldest: job.CreatedAt, latest: job.UpdatedAt}
@@ -275,7 +275,8 @@ func (d *Server) runPostRunMaintenanceBatch(ctx context.Context, items []*queued
 			callCtx, cancel := context.WithTimeout(ctx, d.analyzerTimeout())
 			d.analyzeFinishedRun(callCtx, &item.payload.Identity, &item.payload.Task, &item.payload.Run,
 				item.payload.WorkspaceID, item.payload.UserInput, item.payload.Outcome,
-				taskAttach{created: item.payload.AttachCreated, preLabel: item.payload.AttachPreLabel, reason: taskAttachReason(item.payload.AttachReason)})
+				taskAttach{created: item.payload.AttachCreated, preLabel: item.payload.AttachPreLabel, reason: taskAttachReason(item.payload.AttachReason)},
+				item.payload.PromptSnapshotHash)
 			cancel()
 		}
 		return
@@ -399,6 +400,9 @@ func (d *Server) runSkillReviewPass(ctx context.Context) {
 		summary, err := d.SkillReviewer.RunReviewFromPayload(callCtx, job.TenantID, job.PayloadJSON)
 		cancel()
 		if err != nil {
+			if d.blockPromptRevisionJob(ctx, job.TenantID, job.RunID, job.AnalyzerVersion, err) {
+				continue
+			}
 			if llm.IsRetryableError(err) {
 				_ = d.Control.FailMaintenanceJob(ctx, job.TenantID, job.RunID, job.AnalyzerVersion, err.Error(), skillReviewRetryDelay)
 			} else {
@@ -439,6 +443,9 @@ func (d *Server) runSkillCurationPass(ctx context.Context) {
 			}
 		}
 		if err != nil {
+			if d.blockPromptRevisionJob(ctx, job.TenantID, job.RunID, job.AnalyzerVersion, err) {
+				continue
+			}
 			if llm.IsRetryableError(err) {
 				_ = d.Control.FailMaintenanceJob(ctx, job.TenantID, job.RunID, job.AnalyzerVersion, err.Error(), skillReviewRetryDelay)
 			} else {
@@ -451,6 +458,9 @@ func (d *Server) runSkillCurationPass(ctx context.Context) {
 		summary, err := d.SkillCurator.ApplySkillCuration(callCtx, job.TenantID, job.PayloadJSON, proposalJSON)
 		cancel()
 		if err != nil {
+			if d.blockPromptRevisionJob(ctx, job.TenantID, job.RunID, job.AnalyzerVersion, err) {
+				continue
+			}
 			if llm.IsRetryableError(err) {
 				_ = d.Control.FailMaintenanceJob(ctx, job.TenantID, job.RunID, job.AnalyzerVersion, err.Error(), skillReviewRetryDelay)
 			} else {

@@ -29,6 +29,15 @@ Default visible roots, in priority order:
 5. Optional writable environment root from `SELFMIND_SKILLS_DIR`.
 6. Control-tenant root `~/.selfmind/<control-tenant>/skills`.
 
+Repository development agents may also use `.agents/skills` for workflows that
+must never enter SelfMind's product runtime. A directory-form Skill containing
+`.selfmind-developer-only` is omitted from SelfMind list, search, invocation,
+and dynamic tool registration. The marker applies only to that Skill directory;
+coding-agent discovery is unchanged. This keeps one tracked Agent Skills source
+without publishing development operations to SelfMind users. Agent-specific
+directories may contain only thin entrypoints that redirect to the canonical
+`.agents/skills` body; they must not fork the instructions.
+
 The first matching skill name wins for list/view/slash invocation. Registry
 reload registers lower-priority roots first, then higher-priority roots, so the
 runtime tool registry sees the same winner.
@@ -63,6 +72,15 @@ plane see the same durable procedural assets. Person memory/session data does
 not move into that partition, and workspace trust still follows the execution
 scope rather than the skill storage owner.
 
+The daemon resolves one immutable asset base from `evolution.skills_dir` (or
+`~/.selfmind` by default) and injects it into every skill, learning-audit, and
+post-run maintenance path. Evaluation uses a temporary base. Resolving a read
+path never creates `skills/` or `learning/`; only an actual write creates the
+directory it owns. The thin TUI resolves `/skills`, `/curator`, and
+`/skill-name` through the daemon management surface, so a custom storage base
+cannot fall back to the TUI process HOME. Background curation fails closed when
+that injected storage is unavailable; it never manufactures a second default.
+
 ## Invocation Identity And Migration
 
 Every native tool receives a typed invocation scope. Skill storage resolves
@@ -79,7 +97,14 @@ Use `selfmind maintenance migrate-skills` to preview the migration and add
 `--apply` only after reviewing conflicts. The control copy wins; identical
 content is deduplicated; conflicting person copies remain untouched. Migrated
 agent-created skills carry provenance and a governance grace period so the
-curator cannot archive them immediately after migration.
+curator cannot archive them immediately after migration. Archived assets under
+`.archive` are migrated as archived assets rather than being mistaken for an
+empty partition.
+
+After migration, `selfmind maintenance cleanup-person-partitions` previews
+filesystem partitions whose person id no longer exists in `control.db`.
+`--apply` is accepted only while the gateway is stopped and moves those
+partitions into recoverable quarantine; known persons are always protected.
 
 ## Invocation Surfaces
 
@@ -156,10 +181,20 @@ than added on top. If the body is too large, SelfMind appends an explicit
 truncation note and the agent should use `skill_view(name, file_path)` for the
 necessary linked files. Candidate metadata is capped at three entries when no
 binding is active; a bound task receives no tenant-wide directory dump.
-Candidate lookup is deterministic and lexical. ASCII words and CJK bigrams are
-both supported; scope is only a tie-break after a real text match, so unrelated
-workspace Skills are not offered merely because they are nearby. Candidate
-metadata is refreshed whenever the plan enters a new work unit.
+Candidate lookup uses deterministic, metadata-only BM25F ranking over `name`
+and `description`; it never loads full Skill bodies. ASCII words and CJK
+bigrams are both supported. Rare corpus terms receive more weight than common
+terms, name matches are weighted above description matches, and field-length
+normalization prevents long descriptions from winning through incidental
+matches. Multi-token CJK queries require at least two matching query terms
+unless the canonical Skill name is explicitly present, which prevents one
+incidental bigram from nominating an unrelated Skill. An explicit canonical Skill name
+wins before score; scope is only a tie-break after a real text match, so
+unrelated workspace Skills are not offered merely because they are nearby. The
+same scorer backs bounded `skills_list` searches; search responses report total
+matches and truncation, while work-unit candidate context remains capped at
+three entries. Candidate metadata is refreshed whenever the plan enters a new
+work unit.
 
 Best practice for new skills:
 
@@ -172,11 +207,16 @@ Best practice for new skills:
 
 Legacy Background Review and Reflection paths do not create or rewrite active
 Skills. The durable cohort-driven curator is the sole automatic proposal
-authority. It creates an immutable candidate first and may publish only a
-verified, repeated, read-only cohort to a writable, unpinned, `agent-created`
-Skill. Local writes, shell/network activity, external effects, manual,
-catalog-installed, bundled, pinned, workspace read-only, and external Skills
-remain candidates or require explicit user management.
+authority. It creates an immutable candidate first. Three independent,
+comparable, verified successes may publish a new writable, unpinned,
+`agent-created` Skill even when the learned procedure used ordinary built-in
+write or in-turn shell tools. Publishing an instruction asset grants no tool,
+filesystem, network, credential, shell, or approval authority; every later
+execution still traverses normal scope, safety, and approval policy. Procedures
+that used external-origin tools, explicit network/delete classes, delegated
+execution, or durable external watchers remain candidates and require explicit
+management. Manual, catalog-installed, bundled, pinned, workspace read-only,
+and external Skills are never rewritten automatically.
 
 Mutation authority comes only from typed invocation scope and fails closed when
 the scope is absent or unknown. `candidate_only` can create an immutable
@@ -201,9 +241,10 @@ workflow observations with their own outcome, verification, tool families,
 Skill version, cost, duration, and correction/failure evidence. They are
 derived data; task/run events remain the source of truth.
 
-The Skill curator runs only when a bounded comparable cohort is ready. The
-initial gate requires three independent verified successes for the same person,
-workspace and environment, plus up to two relevant negative observations.
+The Skill curator runs only when a bounded comparable creation cohort or a
+verified repair incident is ready. The creation gate requires three independent
+verified successes for the same person, workspace and environment, plus up to
+two relevant negative observations.
 Success observations with no normalized tool sequence cannot nominate a
 curator proposal because they contain no procedural evidence. External-watch
 finalization runs remain audit data and are excluded from nomination, including
@@ -217,16 +258,46 @@ maintenance job before application, so crash recovery cannot ask the model to
 invent a different candidate. The required candidate sections are
 Applicability, Inputs, Preconditions, Procedure, Failure Guards, Recovery, and
 Verification. Correctness and verification outrank context/turn savings.
-Only explicit `passed` and `not_applicable` observations qualify for automatic
-read-only promotion; an empty verification state does not.
+Only explicit `passed` creation observations qualify for automatic publication.
+`not_applicable` evidence may still nominate an immutable candidate but requires
+explicit management; an empty verification state does not nominate automatic
+publication. Trusted, argument-redacted registry metadata is captured at tool
+start and refreshed at completion with the actual execution boundary before it
+is frozen into the curation digest. This includes call-specific network,
+delete, delegated-execution, and dangerous classes, including an actual host
+sandbox fallback or out-of-workspace target. Historical observations without
+that metadata retain a local read-only publication boundary; historical web
+search/extract evidence is not grandfathered past the network restriction.
+Nested `batch_read` items carry the same metadata as ordinary calls.
 
-For an attributable non-transient defect, `skill_fallback` records only a
-negative guard for the failing version and normalized input shape; transient,
-network/provider, environment-drift, cancellation, approval, and unknown
-incidents do not become durable guards. A guard never records or executes an
-unverified replacement command. A later exact match skips the Skill and uses
-ordinary planning. Repeated matches suspend the task binding. Promoting a
-repair resolves guards for the replaced version.
+`skill_fallback` accepts a closed defect taxonomy: `stale_precondition`,
+`invalid_procedure`, `missing_failure_guard`, `verification_mismatch`, and
+`schema_changed`. Unknown categories, including transient/provider,
+environment, cancellation, and approval failures, cannot create a durable
+guard or authorize repair. Automatic repair additionally requires a compatible
+daemon-classified tool failure from the same active work unit; model text alone
+never supplies that evidence. `failed_tool_call_id`, when supplied, must match
+an actually failed call. When omitted, the most recent observed failure is used,
+and successful diagnostic reads between the failure and fallback do not erase
+the attribution. The compatibility map is deliberately category-specific: for
+example, interface drift may support a schema/precondition repair, while a
+generic not-found failure cannot support an unrelated verification repair.
+A guard never records or executes an unverified replacement command. A later
+exact match skips the Skill and uses ordinary planning. Repeated matches suspend
+the task binding. Promoting a repair resolves guards for the replaced version.
+
+When the ordinary planner subsequently completes that same work unit with
+explicitly passed verification and no recovery-tool failure, the incident may
+nominate one repair immediately. Automatic repair is limited to writable,
+unpinned, `agent-created` Skills whose active version was created by the curator
+and has the canonical section topology. Ineligible manual or noncanonical
+Skills are skipped before any curator model call. The curator must declare one
+to three changed level-two sections and include the incident's failed section
+(a non-heading step identifier maps to Procedure); deterministic validation
+rejects front-matter, topology, or undeclared-section drift before an immutable
+PATCH candidate can replace the active version. Cohorts with no attributable
+incident no longer rewrite an existing Skill merely to speculate about
+performance.
 
 Repeated local read-only workflows may also create a `batch_read` fast-path
 candidate. This optimization consumes true activation/version evidence but is

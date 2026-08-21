@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"unicode"
 	"unicode/utf8"
 
 	"selfmind/internal/kernel"
@@ -25,105 +24,13 @@ func RankSkillCandidatesForTenant(tenantID, query string, limit int, invocation 
 	if err != nil {
 		return nil, err
 	}
-	tokens := skillQueryTokens(query)
-	type rankedSkill struct {
-		info  SkillInfo
-		score int
-	}
-	var ranked []rankedSkill
+	active := make([]SkillInfo, 0, len(skills))
 	for _, info := range skills {
-		if info.State != SkillStateActive {
-			continue
-		}
-		haystack := strings.ToLower(info.Name + " " + info.Description)
-		lexicalScore := 0
-		matchedTokens := 0
-		cjkTokens := 0
-		for _, token := range tokens {
-			if strings.IndexFunc(token, func(r rune) bool { return unicode.Is(unicode.Han, r) }) >= 0 {
-				cjkTokens++
-			}
-			if strings.Contains(strings.ToLower(info.Name), token) {
-				lexicalScore += 8
-				matchedTokens++
-			} else if strings.Contains(haystack, token) {
-				lexicalScore += 3
-				matchedTokens++
-			}
-		}
-		if lexicalScore == 0 || (cjkTokens >= 3 && matchedTokens < 2) {
-			continue
-		}
-		score := lexicalScore
-		if info.Scope == SkillScopeWorkspace {
-			score++
-		}
-		ranked = append(ranked, rankedSkill{info: info, score: score})
-	}
-	sort.SliceStable(ranked, func(i, j int) bool {
-		if ranked[i].score != ranked[j].score {
-			return ranked[i].score > ranked[j].score
-		}
-		return ranked[i].info.Name < ranked[j].info.Name
-	})
-	if len(ranked) > limit {
-		ranked = ranked[:limit]
-	}
-	out := make([]SkillInfo, 0, len(ranked))
-	for _, item := range ranked {
-		out = append(out, item.info)
-	}
-	return out, nil
-}
-
-func skillQueryTokens(query string) []string {
-	seen := map[string]bool{}
-	var out []string
-	add := func(part string) {
-		if len(out) >= 32 {
-			return
-		}
-		part = strings.ToLower(strings.TrimSpace(part))
-		if len([]rune(part)) < 2 || seen[part] {
-			return
-		}
-		seen[part] = true
-		out = append(out, part)
-	}
-	var word, cjk []rune
-	flush := func() {
-		if len(word) >= 2 {
-			add(string(word))
-		}
-		word = word[:0]
-		if len(cjk) > 0 {
-			if len(cjk) <= 4 {
-				add(string(cjk))
-			}
-			for i := 0; i+2 <= len(cjk); i++ {
-				add(string(cjk[i : i+2]))
-			}
-		}
-		cjk = cjk[:0]
-	}
-	for _, r := range query {
-		switch {
-		case unicode.Is(unicode.Han, r):
-			if len(word) > 0 {
-				flush()
-			}
-			cjk = append(cjk, r)
-		case unicode.IsLetter(r) || unicode.IsDigit(r) || r == '_' || r == '-':
-			if len(cjk) > 0 {
-				flush()
-			}
-			word = append(word, unicode.ToLower(r))
-		default:
-			flush()
+		if info.State == SkillStateActive {
+			active = append(active, info)
 		}
 	}
-	flush()
-	return out
+	return rankSkillsBM25F(query, active, limit), nil
 }
 
 type skillListEntry struct {
@@ -157,7 +64,7 @@ func NewSkillsListTool() *SkillsListTool {
 				Properties: map[string]PropertyDef{
 					"query": {
 						Type:        "string",
-						Description: "Optional text filter for skill name, description, or content.",
+						Description: "Optional relevance query over skill name and description metadata.",
 					},
 					"include_archived": {
 						Type:        "boolean",
@@ -180,6 +87,47 @@ func (t *SkillsListTool) Execute(args map[string]interface{}) (string, error) {
 
 type SkillViewTool struct {
 	BaseTool
+}
+
+// SkillInvocationResolveTool is a hidden thin-client bridge for `/skill-name`.
+// Resolution stays inside the daemon so custom evolution.skills_dir roots and
+// workspace scope cannot diverge from normal agent turns.
+type SkillInvocationResolveTool struct {
+	BaseTool
+}
+
+func NewSkillInvocationResolveTool() *SkillInvocationResolveTool {
+	return &SkillInvocationResolveTool{
+		BaseTool: BaseTool{
+			name:        "skill_invocation_resolve",
+			description: "Resolve an explicit slash Skill or bundle invocation for a thin client.",
+			schema: ToolSchema{
+				Type: "object",
+				Properties: map[string]PropertyDef{
+					"command":     {Type: "string", Description: "Slash command name, with or without the leading slash."},
+					"instruction": {Type: "string", Description: "Optional user instruction appended after the loaded Skill context."},
+				},
+				Required: []string{"command"},
+			},
+			metadata: ToolMetadata{
+				Exposure: ToolExposureHidden, ReadOnly: true, RiskLevel: ToolRiskLow, Category: "skill",
+			},
+		},
+	}
+}
+
+func (t *SkillInvocationResolveTool) Execute(args map[string]interface{}) (string, error) {
+	tenantID := skillStorageTenantID(args)
+	command, _ := args["command"].(string)
+	instruction, _ := args["instruction"].(string)
+	prompt, displayName, found, err := ResolveSkillInvocationForTenant(tenantID, command, instruction, args)
+	if err != nil {
+		return "", err
+	}
+	data, _ := json.Marshal(map[string]interface{}{
+		"found": found, "display_name": displayName, "prompt": prompt,
+	})
+	return string(data), nil
 }
 
 func NewSkillViewTool() *SkillViewTool {
@@ -214,11 +162,15 @@ func (t *SkillViewTool) Execute(args map[string]interface{}) (string, error) {
 
 func SkillsListJSONForTenant(tenantID, query string, includeArchived bool, invocation ...map[string]interface{}) (string, error) {
 	var skills []SkillInfo
+	totalMatches := 0
+	truncated := false
 	var err error
 	if strings.TrimSpace(query) != "" {
-		skills, err = SearchSkillsForTenant(tenantID, query, invocation...)
+		skills, totalMatches, err = searchSkillsForTenantDetailed(tenantID, query, invocation...)
+		truncated = totalMatches > len(skills)
 	} else {
 		skills, err = ListSkillsForTenant(tenantID, includeArchived, invocation...)
+		totalMatches = len(skills)
 	}
 	if err != nil {
 		return "", err
@@ -244,14 +196,18 @@ func SkillsListJSONForTenant(tenantID, query string, includeArchived bool, invoc
 		}
 		entries = append(entries, entry)
 	}
-	sort.Slice(entries, func(i, j int) bool {
-		return entries[i].Name < entries[j].Name
-	})
+	if strings.TrimSpace(query) == "" {
+		sort.Slice(entries, func(i, j int) bool {
+			return entries[i].Name < entries[j].Name
+		})
+	}
 	out := map[string]interface{}{
-		"success": true,
-		"count":   len(entries),
-		"skills":  entries,
-		"hint":    "Use skill_view(name) to load SKILL.md, or skill_view(name, file_path) for linked files.",
+		"success":       true,
+		"count":         len(entries),
+		"total_matches": totalMatches,
+		"truncated":     truncated,
+		"skills":        entries,
+		"hint":          "Use skill_view(name) to load SKILL.md, or skill_view(name, file_path) for linked files.",
 	}
 	data, _ := json.MarshalIndent(out, "", "  ")
 	return string(data), nil
@@ -262,7 +218,7 @@ func SkillViewJSONForTenant(tenantID, name, filePath string, invocation ...map[s
 	if err != nil {
 		return "", err
 	}
-	_ = MarkSkillViewed(tenantID, info.Name)
+	_ = MarkSkillViewed(tenantID, info.Name, invocation...)
 	emitSkillViewed(invocation, info, content, filePath)
 	out := map[string]interface{}{
 		"success":     true,
@@ -342,15 +298,15 @@ func ReadSkillPayloadForTenant(tenantID, name, filePath string, invocation ...ma
 	return info, content, files, nil
 }
 
-func BuildSkillInvocationMessageForTenant(tenantID, name, instruction string) (string, string, error) {
-	info, content, files, err := ReadSkillPayloadForTenant(tenantID, name, "")
+func BuildSkillInvocationMessageForTenant(tenantID, name, instruction string, invocation ...map[string]interface{}) (string, string, error) {
+	info, content, files, err := ReadSkillPayloadForTenant(tenantID, name, "", invocation...)
 	if err != nil {
 		return "", "", err
 	}
 	if info.State == SkillStateDisabled {
 		return "", "", fmt.Errorf("skill %q is disabled", info.Name)
 	}
-	_ = MarkSkillUsed(tenantID, info.Name)
+	_ = MarkSkillUsed(tenantID, info.Name, invocation...)
 	content, truncated := truncateUTF8ByBytes(content, maxSkillInvocationBytes)
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("[IMPORTANT: The user invoked the %q skill. Follow its instructions for this turn unless the user explicitly overrides them.]\n\n", info.Name))
@@ -376,24 +332,24 @@ func BuildSkillInvocationMessageForTenant(tenantID, name, instruction string) (s
 	return sb.String(), info.Name, nil
 }
 
-func ResolveSkillInvocationForTenant(tenantID, slashCommand, instruction string) (string, string, bool, error) {
+func ResolveSkillInvocationForTenant(tenantID, slashCommand, instruction string, invocation ...map[string]interface{}) (string, string, bool, error) {
 	name := strings.TrimPrefix(strings.TrimSpace(slashCommand), "/")
 	if name == "" {
 		return "", "", false, nil
 	}
-	if msg, display, ok, err := BuildBundleInvocationMessageForTenant(tenantID, name, instruction); ok || err != nil {
+	if msg, display, ok, err := BuildBundleInvocationMessageForTenant(tenantID, name, instruction, invocation...); ok || err != nil {
 		return msg, display, ok, err
 	}
-	skill, err := findSkillByCommand(tenantID, name)
+	skill, err := findSkillByCommand(tenantID, name, invocation...)
 	if err != nil {
 		return "", "", false, nil
 	}
-	msg, display, err := BuildSkillInvocationMessageForTenant(tenantID, skill.Name, instruction)
+	msg, display, err := BuildSkillInvocationMessageForTenant(tenantID, skill.Name, instruction, invocation...)
 	return msg, display, err == nil, err
 }
 
-func findSkillByCommand(tenantID, command string) (SkillInfo, error) {
-	skills, err := ListSkillsForTenant(tenantID, false)
+func findSkillByCommand(tenantID, command string, invocation ...map[string]interface{}) (SkillInfo, error) {
+	skills, err := ListSkillsForTenant(tenantID, false, invocation...)
 	if err != nil {
 		return SkillInfo{}, err
 	}

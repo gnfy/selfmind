@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"selfmind/internal/modelruntime"
@@ -45,6 +46,23 @@ func TestProbeResolvedModelValidatesOpenAIToolSchema(t *testing.T) {
 	}
 	if !probe.NativeToolsTested {
 		t.Fatal("native tool schema was not tested")
+	}
+}
+
+func TestProbeResolvedModelReportsUnexpectedToolCall(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("content-type", "application/json")
+		fmt.Fprint(w, `{"choices":[{"message":{"content":null,"tool_calls":[{"id":"call-1","type":"function","function":{"name":"selfmind_model_check","arguments":"{}"}}]}}]}`)
+	}))
+	defer server.Close()
+
+	probe := ProbeResolvedModel(t.Context(), modelruntime.Runtime{
+		Provider: "onelinkai", Protocol: modelruntime.ProtocolOpenAICompatible,
+		Model: "deepseek-v4-flash", BaseURL: server.URL, APIKey: "test-key",
+		Quirks: modelruntime.ProviderQuirks{SupportsTools: true},
+	})
+	if probe.Err == nil || !strings.Contains(probe.Err.Error(), "unexpected tool call") {
+		t.Fatalf("probe error = %v", probe.Err)
 	}
 }
 

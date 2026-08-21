@@ -139,6 +139,49 @@ the unchanged script cannot turn arbitrary arguments into mutation.
   limit. Never expose or mutate the shared parent dispatcher. Fan-out remains
   bounded by `max_subtasks` and `max_concurrent`.
 
+### External MCP tools
+
+MCP tools are external code and fail closed when the server has not supplied a
+reviewed SelfMind policy classification. The registry injects the actual schema
+origin after model-argument validation; approval must use that origin rather
+than infer trust from a provider-visible name. An unclassified MCP call is
+sequential and requires a once-only human decision in every approval mode,
+including `full-auto`. It cannot use a stored grant or smart-model approval.
+The hard safety floor still runs first.
+
+Only provider-visible input arguments cross the MCP boundary. Dispatcher scope,
+callbacks, registries, storage handles, and every other top-level
+underscore-prefixed argument remain inside SelfMind. An external schema that
+declares a top-level underscore parameter is quarantined because it would make
+that boundary ambiguous. Nested business fields are preserved.
+
+MCP server and tool names are normalized for provider compatibility and carry
+a stable identity suffix so truncation or punctuation normalization cannot make
+one server overwrite another. Registry collisions are rejected, never
+last-writer-wins. Current connection and catalogue failures are exposed through
+gateway status and `selfmind doctor`; they are not recoverable only from logs.
+
+### Model catalogue exposure
+
+Tool exposure is a catalogue concern, separate from execution authority:
+
+- `direct` definitions are present in every native-tool request;
+- `deferred` definitions are absent until a successful `tool_search` result
+  activates the named tool for the current work unit;
+- `hidden` definitions are never provider-visible and cannot be activated.
+
+Activation is monotonic inside one work unit: the definition set may only grow
+until a successful `update_plan` crosses to another top-level unit, where the
+set resets before any later tool call executes. Resume reconstructs only the
+latest unit's activations from the ordered tool ledger.
+Execution still passes through the same registry, scope, approval, sandbox,
+and safety-floor checks; discovery never grants authority. Automatic external
+deferral has an empty reviewed allowlist and remains code-gated until the active
+daily-driver plan has at least seven days of trustworthy usage and request-
+fingerprint evidence. Catalogue size or a tool-name hash is not evidence that a
+tool is cold. This rollout gate is not public configuration. Explicit exposure
+metadata remains enforceable and is covered by mechanism tests.
+
 ## Result Envelope and Artifacts
 
 One tool result has three distinct surfaces:
@@ -159,6 +202,12 @@ content hash in the durable event payload. This evidence is independent of the
 short user preview, so a failure can be classified and reviewed without
 persisting an unbounded stream. Exit status and known interface-drift failures
 are recorded as structured fields where they can be derived deterministically.
+An error classification already attached by the tool layer remains the single
+model-visible classification; the kernel reuses it instead of appending a
+second, potentially contradictory hint. Raw database-driver signatures are
+hidden only for trusted built-in tools whose failure exposes SelfMind storage.
+External/MCP database errors remain actionable model evidence, selected from
+trusted registry origin metadata rather than inferred from the tool name.
 
 Normal UI output summarizes tools, plans, and failures. Raw JSON is reserved
 for an explicit protocol/debug request.
@@ -489,6 +538,24 @@ exit whose output matches no terminal/target pattern is the normal pending
 case and may register. This contract is deliberately stricter than an ordinary
 interactive status probe: the background loop has no model available to repair
 the command later.
+
+The frozen polling command is observation-only. It must either match the
+declarative read-only command catalog or be an operator-approved, content-hash-
+pinned observation script; shell writes, mutation subcommands, unknown clients,
+and mixed observe/mutate pipelines are refused before registration. This limit
+does not prevent final state recording: writeback is a separate, one-shot
+watch-finalization run after the external observation reaches a terminal state.
+
+Successful registration is itself a trusted lifecycle handoff. The kernel
+records a structured `waiting_external` outcome and ends the foreground turn
+without asking the model to call `finish_run` or produce another response.
+Multiple watcher registrations in the same tool batch are allowed, while later
+non-watcher calls are held at the handoff boundary. The durable polling interval
+therefore has no active person run and no model-token cost; a new user task can
+start immediately. Terminal finalization is still real daemon work under the
+one-active-run policy, so clients label that short interval as background
+finalization and queue concurrent input honestly instead of displaying a
+foreground elapsed-time clock.
 
 ### Failure classification
 

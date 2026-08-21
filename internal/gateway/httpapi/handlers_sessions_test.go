@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -67,7 +69,7 @@ func TestDispatchPartitionScoping(t *testing.T) {
 		t.Helper()
 		body, _ := json.Marshal(api.DispatchRequest{
 			Tool: tool, Platform: "cli", PlatformUserID: "local",
-			Args: map[string]interface{}{"action": "list"},
+			Args: map[string]interface{}{"action": "list", "_skill_storage": "client-forged", "_registry": "client-forged"},
 		})
 		req := httptest.NewRequest(http.MethodPost, "/v1/dispatch", bytes.NewReader(body))
 		rec := httptest.NewRecorder()
@@ -94,6 +96,52 @@ func TestDispatchPartitionScoping(t *testing.T) {
 	scope, ok := skillTool.got["_invocation_scope"].(kernel.ToolInvocationScope)
 	if !ok || scope.ControlTenantID != identity.TenantID || scope.PersonID != identity.PersonID || scope.SkillMutationMode != kernel.SkillMutationDirect {
 		t.Fatalf("skill_manage dispatch scope = %+v, want authenticated direct management scope", scope)
+	}
+	if _, exists := skillTool.got["_skill_storage"]; exists {
+		t.Fatalf("client-forged internal args reached the dispatcher: %+v", skillTool.got)
+	}
+}
+
+func TestDispatchSkillManageUsesDaemonConfiguredStorage(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("SELF_GATEWAY_TOKEN", "")
+	t.Setenv("SELF_DAEMON_TOKEN", "")
+	store, err := control.OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	base := filepath.Join(t.TempDir(), "skill-assets")
+	storage, err := tools.NewSkillStorage(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reg := tools.NewRegistry()
+	reg.Register(tools.NewSkillManageTool())
+	disp := tools.NewDispatcherWithRegistry(reg)
+	disp.InjectMiddleware(tools.SkillStorageMiddleware(storage))
+	agent := kernel.NewAgent(memory.NewMemoryManager(nil), disp, nil, "test", 1, 1, nil)
+	daemon := &Server{
+		Control: store, Gateway: router.NewGateway(nil, nil, agent, nil),
+		DefaultTenantID: "default", SkillStorage: storage,
+	}
+	body, _ := json.Marshal(api.DispatchRequest{
+		Tool: "skill_manage", Platform: "cli", PlatformUserID: "local",
+		Args: map[string]interface{}{"action": "create", "name": "daemon-root", "content": "Use the daemon root."},
+	})
+	req := httptest.NewRequest(http.MethodPost, "/v1/dispatch", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	daemon.Handler().ServeHTTP(rec, req)
+	var response api.DispatchResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil || response.Error != "" {
+		t.Fatalf("dispatch response=%+v decode=%v", response, err)
+	}
+	if _, err := os.Stat(filepath.Join(base, "default", "skills", "daemon-root", "SKILL.md")); err != nil {
+		t.Fatalf("configured Skill root missing: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".selfmind", "default")); !os.IsNotExist(err) {
+		t.Fatalf("dispatch touched HOME: %v", err)
 	}
 }
 

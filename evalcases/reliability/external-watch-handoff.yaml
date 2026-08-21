@@ -15,15 +15,15 @@ require_cassette: true
 #   SELFMIND_EVAL_VCR=record selfmind eval run \
 #     evalcases/reliability/external-watch-handoff.yaml --live
 turns:
-  - input: "Register a durable external watch named CI completion. In the current workspace, poll the command printf 'PENDING\\n', treat SUCCEEDED as success, use a 5 second interval and a 60 second timeout, then finish this run as waiting_external. Do not execute the polling command directly."
+  - input: "Register a durable external watch named CI completion. In the current workspace, poll the command printf 'PENDING\\n', treat SUCCEEDED as success, use a 5 second interval and a 60 second timeout. Successful watcher registration should hand the run off as waiting_external without another model turn or lifecycle call. Do not execute the polling command directly."
 
 expect:
   status: waiting_external
   completion_reason: waiting_external
   resumable: false
   require_tool_events: true
-  # finish_run is a lifecycle tool and intentionally does not count as an
-  # action tool; watch_external is the single required action.
+  # watch_external is the single required action. Its trusted registration
+  # result, rather than a second model-authored finish_run call, owns handoff.
   min_tool_calls: 1
   max_tool_errors: 0
   max_duration_seconds: 120

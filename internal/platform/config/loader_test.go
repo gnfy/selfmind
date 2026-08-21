@@ -160,6 +160,9 @@ func TestSetPrimaryModelConvergesAwayFromLegacySelection(t *testing.T) {
 	if cfg.Model.Provider != "" || cfg.Model.Default != "" || cfg.Agent.Provider != "" || cfg.Agent.Model != "" {
 		t.Fatalf("legacy selection fields were not cleared: model=%+v agent=%+v", cfg.Model, cfg.Agent)
 	}
+	if got := cfg.Models.Auxiliary; got.Provider != "codex-cli" || got.Model != "gpt-5.6-sol" {
+		t.Fatalf("initial auxiliary = %+v, want the primary provider/model", got)
+	}
 }
 
 func TestAuxiliaryModelRoutesBackgroundRolesWithExplicitOverride(t *testing.T) {
@@ -188,14 +191,27 @@ func TestAuxiliaryModelRoutesBackgroundRolesWithExplicitOverride(t *testing.T) {
 	}
 }
 
-func TestMissingAuxiliaryDoesNotInheritPrimary(t *testing.T) {
+func TestMissingAuxiliaryDefaultsToPrimary(t *testing.T) {
 	cfg := &Config{Models: ModelsConfig{Primary: ModelSelectionConfig{Provider: "codex-cli", Model: "gpt-primary"}}}
 	cfg.Normalize()
-	if got := cfg.EffectiveAuxiliary(); got.Provider != "" || got.Model != "" {
-		t.Fatalf("auxiliary unexpectedly inherited primary: %+v", got)
+	if got := cfg.EffectiveAuxiliary(); got.Provider != "codex-cli" || got.Model != "gpt-primary" {
+		t.Fatalf("auxiliary default = %+v, want primary", got)
 	}
-	if _, _, ok := cfg.ResolveAuxiliaryRole("memory_extract"); ok {
-		t.Fatal("missing auxiliary role must stay unresolved")
+	if got, source, ok := cfg.ResolveAuxiliaryRole("memory_extract"); !ok || source != "auxiliary" || got.Provider != "codex-cli" || got.Model != "gpt-primary" {
+		t.Fatalf("memory_extract route = %+v source=%q ok=%t, want auxiliary default", got, source, ok)
+	}
+}
+
+func TestPrimaryChangesDoNotOverwriteMaterializedAuxiliary(t *testing.T) {
+	cfg := &Config{}
+	cfg.SetPrimaryModel("codex-cli", "gpt-first", "xhigh")
+	cfg.SetPrimaryModel("anthropic", "claude-next", "high")
+
+	if got := cfg.EffectivePrimary(); got.Provider != "anthropic" || got.Model != "claude-next" {
+		t.Fatalf("primary = %+v", got)
+	}
+	if got := cfg.Models.Auxiliary; got.Provider != "codex-cli" || got.Model != "gpt-first" {
+		t.Fatalf("auxiliary was overwritten by a later primary change: %+v", got)
 	}
 }
 
@@ -313,7 +329,10 @@ func TestTaskGovernanceDefaultsAndOverrides(t *testing.T) {
 	debounce, maxWait, batchMax := cfg.Tasks.MaintenanceBatchPolicy()
 	probeInitial, probeMax := cfg.Tasks.MaintenanceQuotaCircuitPolicy()
 	softProbeInitial, softProbeMax := cfg.Tasks.MaintenanceSoftCircuitPolicy()
-	if !cfg.Tasks.InboxEnabled || cfg.Tasks.ListLimit() != 10 || cfg.Tasks.MaintenanceModelRole != "memory_extract" || len(cfg.Tasks.MaintenanceFallbackRoles) != 2 {
+	// A fresh config carries no legacy fallback roles: background maintenance
+	// falls back to models.auxiliary, so only an old config can carry the key
+	// until config upgrade removes it.
+	if !cfg.Tasks.InboxEnabled || cfg.Tasks.ListLimit() != 10 || len(cfg.Tasks.MaintenanceFallbackRoles) != 0 {
 		t.Fatalf("task defaults = %+v", cfg.Tasks)
 	}
 	if doneAfter != 30*24*time.Hour || cancelledAfter != 7*24*time.Hour {
@@ -336,7 +355,6 @@ tasks:
   default_list_limit: 99
   auto_archive_done_after: "48h"
   auto_archive_cancelled_after: "0"
-  maintenance_model_role: "fast_classifier"
   maintenance_fallback_roles: ["background_review"]
   maintenance_debounce: "2m"
   maintenance_max_wait: "10m"
@@ -356,7 +374,7 @@ tasks:
 	debounce, maxWait, batchMax = cfg.Tasks.MaintenanceBatchPolicy()
 	probeInitial, probeMax = cfg.Tasks.MaintenanceQuotaCircuitPolicy()
 	softProbeInitial, softProbeMax = cfg.Tasks.MaintenanceSoftCircuitPolicy()
-	if cfg.Tasks.InboxEnabled || cfg.Tasks.ListLimit() != 50 || cfg.Tasks.MaintenanceModelRole != "fast_classifier" || len(cfg.Tasks.MaintenanceFallbackRoles) != 1 || cfg.Tasks.MaintenanceFallbackRoles[0] != "background_review" {
+	if cfg.Tasks.InboxEnabled || cfg.Tasks.ListLimit() != 50 || len(cfg.Tasks.MaintenanceFallbackRoles) != 1 || cfg.Tasks.MaintenanceFallbackRoles[0] != "background_review" {
 		t.Fatalf("task overrides = %+v", cfg.Tasks)
 	}
 	if doneAfter != 48*time.Hour || cancelledAfter != 0 {

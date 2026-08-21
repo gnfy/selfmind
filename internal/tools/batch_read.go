@@ -20,6 +20,7 @@ const (
 type BatchReadTool struct {
 	BaseTool
 	dispatch func(string, map[string]interface{}) (string, error)
+	metadata func(string, map[string]interface{}) kernel.ToolExecutionMetadata
 }
 
 type batchReadOperation struct {
@@ -46,14 +47,18 @@ type batchReadItemResult struct {
 	Truncated bool   `json:"truncated,omitempty"`
 }
 
-func NewBatchReadTool(dispatch func(string, map[string]interface{}) (string, error)) *BatchReadTool {
+func NewBatchReadTool(dispatch func(string, map[string]interface{}) (string, error), metadata ...func(string, map[string]interface{}) kernel.ToolExecutionMetadata) *BatchReadTool {
+	var metadataProvider func(string, map[string]interface{}) kernel.ToolExecutionMetadata
+	if len(metadata) > 0 {
+		metadataProvider = metadata[0]
+	}
 	return &BatchReadTool{
 		BaseTool: BaseTool{
 			name:        "batch_read",
 			description: "Run up to 8 independent local read-only file operations in one bounded call. Only read_file, search_files, and ls_r are allowed. Any failed item is reported with fallback_required=true; use ordinary tools to recover.",
 			metadata: ToolMetadata{
 				Exposure: ToolExposureDirect, SupportsParallel: false, ReadOnly: true,
-				RiskLevel: ToolRiskLow, Category: "filesystem", TimeoutSeconds: 120,
+				RiskLevel: ToolRiskLow, Category: "filesystem", OperationClasses: []OperationClass{OpClassObserve}, TimeoutSeconds: 120,
 			},
 			schema: ToolSchema{
 				Type: "object",
@@ -82,7 +87,7 @@ func NewBatchReadTool(dispatch func(string, map[string]interface{}) (string, err
 				Required: []string{"operations"},
 			},
 		},
-		dispatch: dispatch,
+		dispatch: dispatch, metadata: metadataProvider,
 	}
 }
 
@@ -136,15 +141,26 @@ func (t *BatchReadTool) ExecuteContext(ctx context.Context, args map[string]inte
 		childCallID := batchReadParentCallID(childArgs)
 		parentCallID := batchReadParentCallID(args)
 		eventArgs, _ := json.Marshal(batchReadPublicArgs(childArgs))
+		startedPayload := map[string]interface{}{
+			"tool": operation.Tool, "args": string(eventArgs), "nested": true,
+			"parent_tool": "batch_read", "parent_tool_call_id": parentCallID, "candidate_id": candidateID,
+		}
+		if t.metadata != nil {
+			metadata := t.metadata(operation.Tool, childArgs)
+			startedPayload["tool_origin"] = metadata.Origin
+			startedPayload["tool_category"] = metadata.Category
+			startedPayload["tool_risk_level"] = metadata.RiskLevel
+			startedPayload["tool_read_only"] = metadata.ReadOnly
+			if len(metadata.OperationClasses) > 0 {
+				startedPayload["operation_classes"] = metadata.OperationClasses
+			}
+		}
 		kernel.EmitAgentEvent(kernel.EventChannelFromContext(ctx), kernel.AgentEvent{
 			Type:       "tool.started",
 			ToolName:   operation.Tool,
 			ToolCallID: childCallID,
 			ToolArgs:   string(eventArgs),
-			Payload: map[string]interface{}{
-				"tool": operation.Tool, "args": string(eventArgs), "nested": true,
-				"parent_tool": "batch_read", "parent_tool_call_id": parentCallID, "candidate_id": candidateID,
-			},
+			Payload:    startedPayload,
 		})
 		startedAt := time.Now()
 		output, err := t.dispatch(operation.Tool, childArgs)

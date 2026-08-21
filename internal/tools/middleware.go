@@ -215,6 +215,8 @@ var execTools = map[string]struct{}{
 	"terminal": {}, "verify": {}, "execute_command": {}, "shell": {}, "execute_code": {}, "watch_external": {},
 }
 
+const unclassifiedExternalApprovalReason = "unclassified external tool requires one-time human approval"
+
 func isWriteTool(name string) bool { _, ok := writeTools[name]; return ok }
 func isExecTool(name string) bool  { _, ok := execTools[name]; return ok }
 
@@ -226,12 +228,25 @@ var delegatedExecTools = map[string]struct{}{
 	"watch_external": {},
 }
 
+var deleteExecBinaries = map[string]struct{}{
+	"rm": {}, "rmdir": {}, "unlink": {}, "shred": {}, "wipefs": {},
+}
+
 // operationClassesFor names what this call can do, in the same vocabulary a
 // prohibition is expressed in. `dangerous` only contributes a fallback class:
 // the heuristic says an op looked risky, which is never something the person
 // said, so it must not make an unrelated deny apply.
 func operationClassesFor(toolName string, args map[string]interface{}, dangerous bool) []OperationClass {
 	var classes []OperationClass
+	if policy, ok := args[toolExecutionPolicyArg].(toolExecutionPolicy); ok {
+		classes = append(classes, policy.OperationClasses...)
+	}
+	if unclassifiedExternalToolCall(args) {
+		// An external server can perform any of these effects and its description
+		// is untrusted. Keep explicit user prohibitions effective until an
+		// operator-owned per-tool policy can narrow the capability.
+		classes = append(classes, OpClassWrite, OpClassDelete, OpClassExecInTurn, OpClassNetwork)
+	}
 	if isWriteTool(toolName) {
 		classes = append(classes, OpClassWrite)
 	}
@@ -243,11 +258,42 @@ func operationClassesFor(toolName string, args map[string]interface{}, dangerous
 		} else {
 			classes = append(classes, OpClassExecInTurn)
 		}
+		command := execCommandPayload(toolName, args)
+		segments, _ := expandCommandSegments(command, 0)
+		if network, _ := egressCommand(command, segments); network {
+			classes = append(classes, OpClassNetwork)
+		}
+		for _, fields := range segments {
+			programIndex, ok := segmentProgram(fields)
+			if !ok {
+				continue
+			}
+			if _, deletes := deleteExecBinaries[filepath.Base(fields[programIndex])]; deletes {
+				classes = append(classes, OpClassDelete)
+				break
+			}
+		}
+	}
+	if (toolName == "patch" || toolName == "apply_patch") && strings.Contains(stringArg(args, "patch"), "*** Delete File:") {
+		classes = append(classes, OpClassDelete)
 	}
 	if dangerous {
 		classes = append(classes, OpClassDangerous)
 	}
-	return classes
+	return uniqueOperationClasses(classes)
+}
+
+func uniqueOperationClasses(classes []OperationClass) []OperationClass {
+	seen := map[OperationClass]bool{}
+	out := make([]OperationClass, 0, len(classes))
+	for _, class := range classes {
+		if class == "" || seen[class] {
+			continue
+		}
+		seen[class] = true
+		out = append(out, class)
+	}
+	return out
 }
 
 // operationTargetsFor collects the literal objects this call acts on, so a
@@ -361,6 +407,13 @@ func EvaluateModeDecision(ctx context.Context, mode ApprovalMode, projectRoot, t
 	if strings.TrimSpace(reason) == "" {
 		reason = dreason
 	}
+	// External tools whose effects have not been classified remain a once-only
+	// human decision even after a mode switch. The persisted approval path no
+	// longer has the internal descriptor, so the stable locally-authored reason
+	// preserves the classification without trusting the tool's name.
+	if unclassifiedExternalToolCall(args) || strings.HasPrefix(reason, unclassifiedExternalApprovalReason) {
+		return ModeAsk
+	}
 	// Layer 2: mode gate. If the mode would not require an ask for this op, it is
 	// auto-approved (full-auto for everything; auto-edit for non-dangerous edits).
 	//
@@ -436,6 +489,7 @@ func SmartApprovalMiddleware(projectRoot string) Middleware {
 			}
 
 			dangerous, reason := dangerousToolCall(effectiveRoot, toolName, args)
+			externalUnknown := unclassifiedExternalToolCall(args)
 			// Live mode lookup: the mode is resolved PER ASK, not frozen at run
 			// start, so a /mode change from any endpoint governs the in-flight
 			// run's later asks. ModeGetter carries the gateway's re-resolution
@@ -490,7 +544,7 @@ func SmartApprovalMiddleware(projectRoot string) Middleware {
 				operationTargetsFor(args),
 			)
 			contained := containment.AutoApprove() && !denyForcesHuman
-			if !denyForcesHuman && !approvalNeeded(mode, toolName, dangerous, contained) {
+			if !denyForcesHuman && !externalUnknown && !approvalNeeded(mode, toolName, dangerous, contained) {
 				if contained && mode == ApprovalSmart && hasScope {
 					recordScopeTriage(scope, toolName, "", TriageOutcomeContained, TriageAssessment{}, 0, nil)
 					log.Debug("smart approval: sandbox-contained exec, no ask", "tool", toolName, "reason", containedExecReason, "assessment", containment.Summary())
@@ -520,8 +574,11 @@ func SmartApprovalMiddleware(projectRoot string) Middleware {
 			}
 			switch {
 			case denyForcesHuman:
-				// A current deny outranks full-auto, containment, and every stored
-				// grant. Continue directly to the human ask below.
+			// A current deny outranks full-auto, containment, and every stored
+			// grant. Continue directly to the human ask below.
+			case externalUnknown:
+				// External unknown effects are deliberately once-only. Historical
+				// broad grants and live run grants cannot release them.
 			case isRunGranted(patternKey):
 				recordScopeTriage(scope, toolName, patternKey, TriageOutcomeGrantHit, TriageAssessment{}, 0, nil)
 				return next(args)
@@ -538,7 +595,7 @@ func SmartApprovalMiddleware(projectRoot string) Middleware {
 			// A parked approval is a one-shot capability for one byte-identical
 			// regenerated action. It sits below the hard floor and current explicit
 			// deny, so stale approval evidence cannot override today's safety facts.
-			if !denyForcesHuman && hasScope && scope.ResumeAuthorizations != nil && resumeFingerprint != "" {
+			if !denyForcesHuman && !externalUnknown && hasScope && scope.ResumeAuthorizations != nil && resumeFingerprint != "" {
 				grantCtx := contextFromArgs(args)
 				approvalID, decisionID, grantKey, claimed, claimErr := scope.ResumeAuthorizations.ClaimApprovalResumeAuthorization(
 					grantCtx, scope.TenantID, scope.PersonID, scope.TaskID, scope.RunID, resumeFingerprint,
@@ -561,7 +618,7 @@ func SmartApprovalMiddleware(projectRoot string) Middleware {
 					return next(args)
 				}
 			}
-			if !denyForcesHuman && hasScope && scope.Grants != nil {
+			if !denyForcesHuman && !externalUnknown && hasScope && scope.Grants != nil {
 				grantCtx := contextFromArgs(args)
 				isGranted := func(key string) bool {
 					if key == "" {
@@ -601,11 +658,11 @@ func SmartApprovalMiddleware(projectRoot string) Middleware {
 			triageRisk := ""
 			triageAuthorization := ""
 			decisionPolicy := ""
-			if denyForcesHuman || containment.Filesystem == containmentFilesystemHost ||
+			if externalUnknown || denyForcesHuman || containment.Filesystem == containmentFilesystemHost ||
 				(containment.Credentials == containmentCredentialsSelected && !containment.ObservationOnly) {
 				decisionPolicy = ApprovalDecisionPolicyOnceOnly
 			}
-			if mode == ApprovalSmart && hasScope && !denyForcesHuman {
+			if mode == ApprovalSmart && hasScope && !denyForcesHuman && !externalUnknown {
 				switch {
 				case scope.Judge == nil:
 					// No judge wired: smart mode cannot triage at all. Count it so
@@ -1268,6 +1325,9 @@ func egressCommand(cmd string, segs [][]string) (bool, string) {
 }
 
 func dangerousToolCall(projectRoot, toolName string, args map[string]interface{}) (bool, string) {
+	if unclassifiedExternalToolCall(args) {
+		return true, unclassifiedExternalApprovalReason
+	}
 	if isExecTool(toolName) {
 		cmd := execCommandPayload(toolName, args)
 		for _, pattern := range destructiveSubstrings {
@@ -1316,7 +1376,7 @@ func dangerousToolCall(projectRoot, toolName string, args map[string]interface{}
 	if strings.Contains(path, "/etc/") || strings.Contains(path, "/root/") || strings.Contains(path, "/dev/") {
 		return true, fmt.Sprintf("accesses restricted path: %s", path)
 	}
-	if projectRoot != "" && filepath.IsAbs(path) && !strings.HasPrefix(filepath.Clean(path), filepath.Clean(projectRoot)) {
+	if projectRoot != "" && filepath.IsAbs(path) && !isWithin(filepath.Clean(projectRoot), filepath.Clean(path)) {
 		return true, fmt.Sprintf("accesses path outside project root: %s", path)
 	}
 	return false, ""
@@ -1541,14 +1601,7 @@ func contextFromArgs(args map[string]interface{}) context.Context {
 }
 
 func approvalArgs(args map[string]interface{}) map[string]interface{} {
-	out := make(map[string]interface{})
-	for k, v := range args {
-		if strings.HasPrefix(k, "_") {
-			continue
-		}
-		out[k] = v
-	}
-	return out
+	return publicToolArgs(args)
 }
 
 func approvalDisplayArgs(args map[string]interface{}) map[string]interface{} {
@@ -1617,7 +1670,7 @@ func SkillMetricsMiddleware(skillStore interface {
 			success := err == nil
 			_ = skillStore.RecordResult(context.Background(), tenantID, skillName, success)
 			if success {
-				_ = MarkSkillUsed(tenantID, skillName)
+				_ = MarkSkillUsed(tenantID, skillName, args)
 			}
 			return result, err
 		}

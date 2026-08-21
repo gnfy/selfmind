@@ -67,7 +67,7 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, spinnerCmd
 
 	case MsgWorkingTick:
-		if m.thinking || m.toolExecuting != "" || m.daemonRunActive {
+		if m.thinking || m.toolExecuting != "" || (m.daemonRunActive && !m.backgroundDaemonRunActive()) {
 			m.thinkingDots++
 			return m, workingTick()
 		}
@@ -123,6 +123,9 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.commitLiveStream(committed)
 		}
 		return m, m.scheduleStreamFlush()
+
+	case MsgSkillInvocationResolved:
+		return m, m.finishSkillInvocationResolution(msg)
 
 	case MsgAgentDone:
 		m.exitPromptActive = false
@@ -245,6 +248,9 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 				title = "queued task"
 			}
 			m.addMessage("notice", "Queued task started: "+title)
+		}
+		if m.backgroundDaemonRunActive() {
+			return m, spinnerCmd
 		}
 		return m, workingTick()
 

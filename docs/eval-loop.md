@@ -157,6 +157,7 @@ expect:
   status: completed
   require_tool_events: true
   min_tool_calls: 1
+  min_progress_updates: 1
   max_tool_calls: 8
   max_tool_errors: 3
   max_duration_seconds: 300
@@ -175,6 +176,10 @@ checks:
   workspace_should_match: true
   context_not_exceeded: true
 ```
+
+`min_progress_updates` counts visible assistant prose that is immediately
+followed by a tool call. It does not count kernel-generated `agent.thinking`
+activity, so it can guard the actual pre-tool narration message path.
 
 Use multi-turn cases to test `continue`, `可以`, and `按方案做` behavior:
 

@@ -1,0 +1,26 @@
+id: reliability_delivery_recovery_control
+title: "delivery recovery diagnostics stay model-free and bounded"
+suite: reliability
+workspace: isolated
+channel: cli
+model_required: false
+
+# The diagnostic is the entry point for coalesced stale-result recovery. It
+# must remain a control-plane read with no task, run, provider, or tool work.
+turns:
+  - input: "/diag delivery"
+
+expect:
+  status: completed
+  require_no_task: true
+  require_no_run: true
+  max_tool_calls: 0
+  max_duration_seconds: 30
+  contains:
+    - "Delivery recovery"
+
+checks:
+  no_mojibake: true
+  no_empty_response: true
+  no_raw_json_leak: true
+  no_provider_stack_dump: true

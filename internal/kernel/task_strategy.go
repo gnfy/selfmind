@@ -373,16 +373,8 @@ func (s TaskStrategy) SystemPromptNote() string {
 			sb.WriteString(s.ExecSandboxNote)
 		}
 		if s.MaxActionTools > 0 {
-			sb.WriteString(fmt.Sprintf("Keep tool use economical. This turn starts with about %d non-lifecycle tool call(s). SelfMind may extend that budget when completed tools produce new evidence, but it will never exceed %d. update_plan and finish_run are lifecycle tools with their own small per-turn caps; do not call them repeatedly.\n", s.MaxActionTools, s.ActionToolBudgetLimit))
+			sb.WriteString(fmt.Sprintf("Keep tool use economical. This turn starts with about %d action tool call(s). SelfMind may extend that budget when completed tools produce new evidence, but it will never exceed %d. Do not repeat lifecycle or action calls without a real state change.\n", s.MaxActionTools, s.ActionToolBudgetLimit))
 		}
-		sb.WriteString("When an external build, deployment, CI job, or remote operation will outlive one short status check, do not keep the model turn busy with repeated polling. Submit a bounded watch_external check with explicit success and failure conditions, then finish the run as waiting_external so the daemon can resume and notify the user durably. When work is fully prepared and only awaits the user's explicit go-ahead, finish with status waiting_user instead of blocked.\n")
-	}
-	if s.PlanPolicy == PlanPolicyDisabled {
-		sb.WriteString("Do not call update_plan for this turn.\n")
-	} else if s.PlanPolicy == PlanPolicyRequired {
-		sb.WriteString("Use update_plan early and keep it current after meaningful step transitions. Every call must send the complete current plan snapshot, including unchanged and completed steps. Before finish_run status done, update the plan so every step is completed or cancelled. Continue through verification or a clear blocker.\n")
-	} else {
-		sb.WriteString("Use update_plan only when the work genuinely needs multiple visible steps. Every call must send the complete current plan snapshot, including unchanged and completed steps. Update it after meaningful transitions, and resolve every step before finish_run status done; do not update repeatedly without a real status change.\n")
 	}
 	if s.WebPolicy == WebPolicyDisabled {
 		sb.WriteString("Do not use web tools unless the user explicitly asks to search, browse, inspect a URL, or retrieve current external information.\n")
@@ -390,7 +382,6 @@ func (s TaskStrategy) SystemPromptNote() string {
 	if s.ChannelMode == "im" {
 		sb.WriteString("For IM channels, avoid token-by-token narration; preserve concise progress milestones and final outcomes. If a write or command needs a workspace and none is clearly bound, ask the user to select or bind one before acting.\n")
 	}
-	sb.WriteString("Call finish_run only after non-trivial tool-using work that needs a durable task outcome. Skip finish_run for direct answers, small code snippets, ordinary explanations, or when you can answer clearly in one message.\n")
 	return sb.String()
 }
 

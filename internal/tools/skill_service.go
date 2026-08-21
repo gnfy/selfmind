@@ -15,6 +15,12 @@ const (
 	SkillScopeUser      = "user"
 	SkillScopeWorkspace = "workspace"
 	SkillScopeExternal  = "external"
+
+	// developerAgentOnlySkillMarker lets a repository keep Agent Skills for
+	// coding assistants under .agents/skills without exposing those instructions
+	// to SelfMind's product runtime. The marker is intentionally local to one
+	// directory-form Skill; it never hides an entire root.
+	developerAgentOnlySkillMarker = ".selfmind-developer-only"
 )
 
 // SkillRoot describes one directory that can contain skill packages.
@@ -26,7 +32,72 @@ type SkillRoot struct {
 	Priority int
 }
 
-func selfmindBaseDir() (string, error) {
+// SkillStorage is the immutable filesystem root for user/control-tenant Skill
+// assets and their adjacent learning audit. App wiring resolves it once from
+// configuration and injects it into tool calls. Keeping it per dispatcher
+// avoids process-global environment mutation when eval runtimes coexist with a
+// real gateway in the same process.
+type SkillStorage struct {
+	baseDir string
+}
+
+const skillStorageArg = "_skill_storage"
+
+func NewSkillStorage(baseDir string) (*SkillStorage, error) {
+	baseDir = strings.TrimSpace(os.ExpandEnv(baseDir))
+	if baseDir == "" {
+		return nil, fmt.Errorf("skill storage base dir is required")
+	}
+	abs, err := filepath.Abs(baseDir)
+	if err != nil {
+		return nil, fmt.Errorf("resolve skill storage base dir: %w", err)
+	}
+	return &SkillStorage{baseDir: filepath.Clean(abs)}, nil
+}
+
+func (s *SkillStorage) BaseDir() string {
+	if s == nil {
+		return ""
+	}
+	return s.baseDir
+}
+
+// WithSkillStorage returns a shallow copy carrying an app-owned storage root.
+// The opaque value is injected after model argument validation and cannot be
+// manufactured by model JSON.
+func WithSkillStorage(args map[string]interface{}, storage *SkillStorage) map[string]interface{} {
+	out := make(map[string]interface{}, len(args)+1)
+	for key, value := range args {
+		out[key] = value
+	}
+	if storage != nil {
+		out[skillStorageArg] = storage
+	}
+	return out
+}
+
+// SkillStorageMiddleware injects one immutable root into a dispatcher without
+// mutating the caller's argument map or a process-global setting.
+func SkillStorageMiddleware(storage *SkillStorage) Middleware {
+	return func(next ToolExecutor) ToolExecutor {
+		return func(args map[string]interface{}) (string, error) {
+			return next(WithSkillStorage(args, storage))
+		}
+	}
+}
+
+func skillStorageFromInvocation(invocation ...map[string]interface{}) *SkillStorage {
+	if len(invocation) == 0 || invocation[0] == nil {
+		return nil
+	}
+	storage, _ := invocation[0][skillStorageArg].(*SkillStorage)
+	return storage
+}
+
+func selfmindBaseDir(invocation ...map[string]interface{}) (string, error) {
+	if storage := skillStorageFromInvocation(invocation...); storage != nil && storage.BaseDir() != "" {
+		return storage.BaseDir(), nil
+	}
 	home := os.Getenv("HOME")
 	if home == "" {
 		var err error
@@ -38,16 +109,16 @@ func selfmindBaseDir() (string, error) {
 	return filepath.Join(home, ".selfmind"), nil
 }
 
-func userSkillsDirForTenant(tenantID string) (string, error) {
-	baseDir, err := selfmindBaseDir()
+func userSkillsDirForTenant(tenantID string, invocation ...map[string]interface{}) (string, error) {
+	baseDir, err := selfmindBaseDir(invocation...)
 	if err != nil {
 		return "", err
 	}
 	return SkillsDirForTenant(baseDir, fallbackTenant(tenantID)), nil
 }
 
-func userTenantDirForTenant(tenantID string) (string, error) {
-	skillsDir, err := userSkillsDirForTenant(tenantID)
+func userTenantDirForTenant(tenantID string, invocation ...map[string]interface{}) (string, error) {
+	skillsDir, err := userSkillsDirForTenant(tenantID, invocation...)
 	if err != nil {
 		return "", err
 	}
@@ -109,7 +180,7 @@ func SkillRootsForTenant(tenantID string, invocation ...map[string]interface{}) 
 		addExistingRoot(path, SkillScopeExternal, "env", true, 45)
 	}
 
-	userDir, err := userSkillsDirForTenant(tenantID)
+	userDir, err := userSkillsDirForTenant(tenantID, invocation...)
 	if err != nil {
 		return nil, err
 	}
@@ -126,7 +197,7 @@ func SkillRootsForTenant(tenantID string, invocation ...map[string]interface{}) 
 	if scope, ok := InvocationScopeFromArgs(args); ok {
 		personID := strings.TrimSpace(scope.PersonID)
 		if personID != "" && personID != fallbackTenant(tenantID) {
-			if legacyDir, legacyErr := userSkillsDirForTenant(personID); legacyErr == nil {
+			if legacyDir, legacyErr := userSkillsDirForTenant(personID, invocation...); legacyErr == nil {
 				addExistingRoot(legacyDir, SkillScopeUser, "legacy-person", false, 110)
 			}
 		}
@@ -158,7 +229,10 @@ func skillRootAncestors(start string) []string {
 	return dirs
 }
 
-func WritableSkillRootForTenant(tenantID string, invocation ...map[string]interface{}) (SkillRoot, error) {
+// ResolveWritableSkillRootForTenant selects the write target without touching
+// the filesystem. Read paths use this resolver and treat a missing directory
+// as an empty store.
+func ResolveWritableSkillRootForTenant(tenantID string, invocation ...map[string]interface{}) (SkillRoot, error) {
 	roots, err := SkillRootsForTenant(tenantID, invocation...)
 	if err != nil {
 		return SkillRoot{}, err
@@ -167,26 +241,17 @@ func WritableSkillRootForTenant(tenantID string, invocation ...map[string]interf
 	if preferWorkspace {
 		for _, root := range roots {
 			if root.Writable && root.Scope == SkillScopeWorkspace {
-				if err := os.MkdirAll(root.Path, 0755); err != nil {
-					return SkillRoot{}, fmt.Errorf("create writable skills dir: %w", err)
-				}
 				return root, nil
 			}
 		}
 	}
 	for _, root := range roots {
 		if root.Writable && root.Scope == SkillScopeUser {
-			if err := os.MkdirAll(root.Path, 0755); err != nil {
-				return SkillRoot{}, fmt.Errorf("create writable skills dir: %w", err)
-			}
 			return root, nil
 		}
 	}
 	for _, root := range roots {
 		if root.Writable {
-			if err := os.MkdirAll(root.Path, 0755); err != nil {
-				return SkillRoot{}, fmt.Errorf("create writable skills dir: %w", err)
-			}
 			return root, nil
 		}
 	}
@@ -231,6 +296,11 @@ func dedupeSkillRoots(roots []SkillRoot) []SkillRoot {
 		out = append(out, root)
 	}
 	return out
+}
+
+func isDeveloperAgentOnlySkill(path string) bool {
+	st, err := os.Stat(filepath.Join(path, developerAgentOnlySkillMarker))
+	return err == nil && !st.IsDir()
 }
 
 func ensureWritableSkill(info SkillInfo, action string) error {

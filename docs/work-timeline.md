@@ -152,7 +152,12 @@ authoritative instruction. If it changes direction, the latest message wins."*
   excluded; control-command-shaped and <6-rune messages skip recall entirely.
   Expansion runs ONLY when a `semantic_recall` role model is explicitly
   configured (`app.SemanticRecallExpander` — never the main coding model),
-  bounded by a 3s timeout, degrading to raw-term FTS on any failure.
+  bounded by a 3s timeout, degrading to raw-term FTS on any failure. The
+  expansion contract receives the query as JSON-fenced untrusted data and emits
+  at most five narrow lexical variants: aliases, acronyms, former names, likely
+  historical wording, or useful cross-language equivalents. It preserves exact
+  identifiers and must not answer the query, infer a new intent, or broaden it
+  into generic topics; recall is not limited to technical conversations.
   Observability: redacted `context.recall` task event (source counts + refs,
   no excerpts). Canonical `last_accessed_at` changes only for rows that survive
   the shared budget and are actually injected; selected canonical rows are
@@ -179,9 +184,9 @@ authoritative instruction. If it changes direction, the latest message wins."*
   fact extraction for several runs, while returning one independently frozen
   result keyed by each run id. Implementation:
   `httpapi/run_labeler.go` (`PostRunAnalyzer` on `Server`, built by
-  `app.NewConfiguredPostRunAnalyzer` from the explicit
-  `tasks.maintenance_model_role`; no configured role disables maintenance
-  instead of falling back to the main model). Its task decision is KEEP /
+  `app.NewConfiguredPostRunAnalyzer` from the stable `memory_extract` role;
+  an explicit `models.roles.memory_extract` route wins, otherwise it uses
+  `models.auxiliary`). Its task decision is KEEP /
   MOVE:<task_id> / TITLE:<short title> / NEW:<short title> / INBOX. `NEW` may
   split independent durable work out of an established weak pre-label; it is
   rejected for explicit task/reference/resume attachments. Its destination id
@@ -304,9 +309,10 @@ Tasks remain work labels, but a long-lived assistant also needs label hygiene:
   hygiene and durable user/workspace fact extraction. Several same-person,
   same-workspace results may share one provider call according to
   `tasks.maintenance_debounce`, `tasks.maintenance_max_wait`, and
-  `tasks.maintenance_batch_max_runs`. It uses the explicitly configured
-  `tasks.maintenance_model_role` (default `memory_extract`) and never silently
-  falls back to the main coding model. It may answer `INBOX` only for casual,
+  `tasks.maintenance_batch_max_runs`. It uses the stable `memory_extract`
+  semantic role: `models.roles.memory_extract` is the optional advanced
+  override and `models.auxiliary` is the shared floor. It may answer `INBOX`
+  only for casual,
   identity/model, or one-off diagnostic turns with no durable work thread. It
   never runs at ingress and never changes the context the completed run saw.
   Recent turns remain immediately available from the person work spine; only

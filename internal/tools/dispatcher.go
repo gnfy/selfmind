@@ -1,14 +1,31 @@
 package tools
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
 	"sync"
 
+	"selfmind/internal/kernel"
 	"selfmind/internal/kernel/llm"
 )
+
+const (
+	// Keep the automatic cohort inert until the active plan's seven-day
+	// fingerprint baseline is reviewed. Explicitly deferred tool metadata still
+	// exercises the activation protocol; enabling the cohort is a reviewed code
+	// release, not a hidden runtime or user configuration switch.
+	deferredExternalRolloutEnabled = false
+)
+
+// deferredExternalReviewedCohort is populated only from a reviewed seven-day
+// usage report. Name hashing is deterministic but is not evidence that a tool
+// is cold; keeping that old selector behind a false flag merely deferred a
+// production regression until someone enabled it. An empty allowlist means no
+// automatic deferral even if the rollout gate is accidentally flipped.
+var deferredExternalReviewedCohort = map[string]struct{}{}
 
 // Registry 是全局工具注册表
 type Registry struct {
@@ -80,8 +97,10 @@ func (r *Registry) List() []string {
 	return names
 }
 
-// Dispatch executes a registered tool by name (used by SkillTool to call execute_command)
+// Dispatch is the single registry execution path shared by Dispatcher and
+// direct compatibility callers.
 func (r *Registry) Dispatch(name string, args map[string]interface{}) (string, error) {
+	originalArgs := args
 	if err := r.schemaAvailabilityError(name); err != nil {
 		return "", err
 	}
@@ -100,7 +119,18 @@ func (r *Registry) Dispatch(name string, args map[string]interface{}) (string, e
 		return "", fmt.Errorf("argument validation failed for %s: %w", name, err)
 	}
 	exec := r.Wrap(t, r.Middlewares())
-	return exec(args)
+	result, err := exec(args)
+	// Coercion deliberately creates a detached argument map. Copy back only the
+	// daemon-owned execution-boundary fields needed to record what actually ran;
+	// never reflect arbitrary tool mutations into the caller's map.
+	if originalArgs != nil && args != nil {
+		for _, key := range []string{"_effective_sandbox_mode", "_sandbox_mode"} {
+			if value, ok := args[key]; ok {
+				originalArgs[key] = value
+			}
+		}
+	}
+	return result, err
 }
 
 // ToolDefinitions returns all tools as LLM-compatible tool definitions
@@ -113,6 +143,7 @@ func (r *Registry) ToolDefinitions() []map[string]interface{} {
 		names = append(names, name)
 	}
 	sort.Strings(names)
+	exposures := r.effectiveToolExposuresLocked(deferredExternalRolloutEnabled)
 	for _, name := range names {
 		compiled, ok := r.schemas[name]
 		if !ok || compiled.Report.Status == ToolSchemaQuarantined {
@@ -122,9 +153,75 @@ func (r *Registry) ToolDefinitions() []map[string]interface{} {
 		if err != nil {
 			continue
 		}
-		defs = append(defs, toolDefinitionFromCompiled(r.tools[name], parameters))
+		definition := toolDefinitionFromCompiled(r.tools[name], parameters)
+		if metadata, ok := definition["selfmind"].(map[string]interface{}); ok {
+			metadata["exposure"] = string(exposures[name])
+		}
+		defs = append(defs, definition)
 	}
 	return defs
+}
+
+// LookupToolExposure answers ONE tool's catalogue exposure without building the
+// full definition list. The availability guard on the tool-dispatch hot path
+// needs exactly this question; materializing every definition to answer it ran
+// a JSON marshal/unmarshal round trip per registered tool (114 pairs per call
+// in this workspace) inside the streaming loop.
+//
+// known is false for an unregistered or quarantined tool, matching what
+// ToolDefinitions omits, so callers keep treating those as "not in the model
+// tool surface" rather than as hidden.
+func (r *Registry) LookupToolExposure(name string) (ToolExposure, bool) {
+	if r == nil {
+		return "", false
+	}
+	name = strings.TrimSpace(name)
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	tool, ok := r.tools[name]
+	if !ok {
+		return "", false
+	}
+	if compiled, ok := r.schemas[name]; !ok || compiled.Report.Status == ToolSchemaQuarantined {
+		return "", false
+	}
+	// While the automatic cohort is code-gated off, a tool's own metadata is the
+	// whole answer, so the common path allocates nothing.
+	if !deferredExternalRolloutEnabled {
+		return ToolMetadataFor(tool).Exposure, true
+	}
+	return r.effectiveToolExposuresLocked(deferredExternalRolloutEnabled)[name], true
+}
+
+// EffectiveToolExposure returns the catalogue policy seen by the model.
+// Explicit hidden/deferred metadata always wins. The reviewed external cohort
+// remains code-gated until its evidence review enables it.
+func (r *Registry) EffectiveToolExposure(name string) ToolExposure {
+	if r == nil {
+		return ToolExposureHidden
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.effectiveToolExposuresLocked(deferredExternalRolloutEnabled)[strings.TrimSpace(name)]
+}
+
+func (r *Registry) effectiveToolExposuresLocked(automaticCohort bool) map[string]ToolExposure {
+	exposures := make(map[string]ToolExposure, len(r.tools))
+	for name, tool := range r.tools {
+		metadata := ToolMetadataFor(tool)
+		exposures[name] = metadata.Exposure
+	}
+	if !automaticCohort {
+		return exposures
+	}
+	for name := range deferredExternalReviewedCohort {
+		tool, ok := r.tools[name]
+		if !ok || exposures[name] != ToolExposureDirect || executionPolicyForTool(tool).Origin != ToolSchemaOriginExternal {
+			continue
+		}
+		exposures[name] = ToolExposureDeferred
+	}
+	return exposures
 }
 
 func (r *Registry) ensureMaps() {
@@ -210,6 +307,7 @@ func (r *Registry) Wrap(t Tool, mw []Middleware) ToolExecutor {
 		}
 		args["_tool_name"] = t.Name()
 		args["_registry"] = r
+		args[toolExecutionPolicyArg] = executionPolicyForTool(t)
 		if clarifyFn := r.ClarifyHandler(); clarifyFn != nil {
 			args["_clarify_fn"] = clarifyFn
 		}
@@ -290,29 +388,7 @@ func (d *Dispatcher) UnregisterTool(name string) {
 
 // Dispatch 调用已注册的工具，自动执行 middleware 链
 func (d *Dispatcher) Dispatch(name string, args map[string]interface{}) (string, error) {
-	if err := d.registry.schemaAvailabilityError(name); err != nil {
-		return "", err
-	}
-	t, ok := d.registry.Get(name)
-	if !ok {
-		return "", fmt.Errorf("tool %s not found", name)
-	}
-
-	// Coerce types first (LLMs often pass numbers as strings), then validate
-	if len(t.Schema().Properties) > 0 {
-		coerced, coerceErr := CoerceArgs(t.Schema(), args)
-		if coerceErr != nil {
-			return "", fmt.Errorf("failed to coerce arguments for %s: %w", name, coerceErr)
-		}
-		args = coerced
-	}
-
-	if err := ValidateArgs(t.Schema(), args); err != nil {
-		return "", fmt.Errorf("argument validation failed for %s: %w", name, err)
-	}
-
-	exec := d.registry.Wrap(t, d.registry.Middlewares())
-	return exec(args)
+	return d.registry.Dispatch(name, args)
 }
 
 // DispatchRaw 兼容旧接口：接收 JSON 字符串，解析后 dispatch
@@ -352,6 +428,45 @@ func (d *Dispatcher) GetTool(name string) (Tool, bool) {
 	return d.registry.Get(name)
 }
 
+// ToolExecutionMetadata exposes daemon-owned registry facts to the kernel's
+// durable event stream. Model-provided arguments cannot override this view.
+func (d *Dispatcher) ToolExecutionMetadata(name string, args map[string]interface{}) kernel.ToolExecutionMetadata {
+	t, ok := d.registry.Get(name)
+	if !ok {
+		return kernel.ToolExecutionMetadata{Origin: string(ToolSchemaOriginExternal), RiskLevel: string(ToolRiskHigh)}
+	}
+	policy := executionPolicyForTool(t)
+	classifiedArgs := make(map[string]interface{}, len(args)+2)
+	for key, value := range args {
+		classifiedArgs[key] = value
+	}
+	classifiedArgs[toolExecutionPolicyArg] = policy
+	classifiedArgs["_tool_name"] = name
+	annotateEffectiveSandboxMode(classifiedArgs)
+	// A completed execution records its actual plan mode. It is stronger than
+	// the preflight prediction and prevents a runtime host fallback from being
+	// published as isolated evidence.
+	if actual := SandboxMode(strings.ToLower(strings.TrimSpace(stringArg(classifiedArgs, "_sandbox_mode")))); actual == SandboxHost || actual == SandboxIsolated {
+		classifiedArgs["_effective_sandbox_mode"] = string(actual)
+	}
+	projectRoot := ""
+	if scope, ok := currentExecutionScopeAny(classifiedArgs); ok {
+		projectRoot = approvalProjectRoot("", scope, classifiedArgs)
+	}
+	dangerous, _ := dangerousToolCall(projectRoot, name, classifiedArgs)
+	classes := operationClassesFor(name, classifiedArgs, dangerous)
+	classes = uniqueOperationClasses(classes)
+	classNames := make([]string, 0, len(classes))
+	for _, class := range classes {
+		classNames = append(classNames, string(class))
+	}
+	return kernel.ToolExecutionMetadata{
+		Origin: string(policy.Origin), Category: policy.Category,
+		RiskLevel: string(policy.Risk), ReadOnly: policy.ReadOnly,
+		OperationClasses: classNames,
+	}
+}
+
 func (d *Dispatcher) SupportsParallelTool(name string) bool {
 	t, ok := d.registry.Get(name)
 	if !ok {
@@ -368,6 +483,21 @@ func (d *Dispatcher) ListTools() []string {
 // GetToolDefinitions returns all tools as LLM tool definitions
 func (d *Dispatcher) GetToolDefinitions() []map[string]interface{} {
 	return d.registry.ToolDefinitions()
+}
+
+// ResolveToolExposure is the optional single-lookup capability the kernel's
+// dispatch-time availability guard prefers over materializing the whole
+// catalogue. Returning known=false lets the caller fall back to its previous
+// behaviour for unregistered names.
+func (d *Dispatcher) ResolveToolExposure(name string) (exposure string, known bool) {
+	if d == nil {
+		return "", false
+	}
+	value, ok := d.registry.LookupToolExposure(name)
+	if !ok {
+		return "", false
+	}
+	return string(value), true
 }
 
 func (d *Dispatcher) ToolSchemaReport() []ToolSchemaReport {
@@ -427,7 +557,7 @@ func (d *Dispatcher) InjectTenantSessionAccess(
 }
 
 // InjectDelegateFn 将 delegate_fn 注入到 DelegateTool
-func (d *Dispatcher) InjectDelegateFn(fn func(goal, context string, toolsets []string) (string, llm.UsageStats, error)) {
+func (d *Dispatcher) InjectDelegateFn(fn func(context.Context, string, string, []string) (string, llm.UsageStats, error)) {
 	t, ok := d.registry.Get("delegate_task")
 	if !ok {
 		return
@@ -438,7 +568,7 @@ func (d *Dispatcher) InjectDelegateFn(fn func(goal, context string, toolsets []s
 }
 
 // InjectVisionLLM 将视觉分析所需的 LLM 接口注入到 VisionTool
-func (d *Dispatcher) InjectDelegateBatchFn(fn func(tasks []DelegateTaskSpec) ([]DelegateTaskResult, error)) {
+func (d *Dispatcher) InjectDelegateBatchFn(fn func(context.Context, []DelegateTaskSpec) ([]DelegateTaskResult, error)) {
 	t, ok := d.registry.Get("delegate_task")
 	if !ok {
 		return

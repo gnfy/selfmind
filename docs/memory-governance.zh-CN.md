@@ -306,6 +306,17 @@ ARCHIVE + canonical 文本 + member_ids + confidence。
 希，已裁决簇缓存决策，重跑不重付）；绝不回退主 coding model；统计调用次数、
 成本、失败率、整理结果（`/diag memory` 可见）。
 
+整理的 due clock 按 tenant/person 持久化到 control store，而不是依赖进程内 24 小时
+ticker。daemon 启动后先给前台 30 秒宽限；若上次成功已经逾期，则补跑一次。tick
+碰到活跃 run 或一次可重试失败时，记录 defer/failure 原因并在 10 分钟级短间隔重排，
+不会丢弃本次机会后再等完整的 24 小时。成功的空 pass 也会推进 last-success 与
+next-due。一次 pass 只处理有界批次；若当前 judge 版本仍有 backlog，则记录
+`partial` 而不是伪装成完整成功，不推进 `last_success_at`，并在 4 小时后继续追赶。
+默认批量 8 条时，持续空闲条件下最多约 48 个簇/天；只有重算后 backlog 为零的
+完整扫描才进入正常 24 小时周期。checkpoint 写入失败或候选/判决读取失败会进入
+失败退避，不能吞掉后误报成功。`/diag memory` 同时显示 scheduler 的上次尝试/成功、下次 due、延期原因，
+以及 consolidation 报告的生成时间和年龄，避免把陈旧 shadow 报告当成当前状态。
+
 ### 4.4 上限治理
 
 上限只约束 **active canonical**，不限制 observation 数量：
@@ -315,7 +326,6 @@ memory:
   governance:
     enabled: true
     mode: "shadow"                  # shadow → merge-only → full
-    model_role: "memory_extract"
     max_active_global: 120
     max_active_per_workspace: 200
     max_evidence_per_memory: 20
@@ -330,6 +340,9 @@ memory:
     auto_archive_confidence: 0.90
     pause_while_run_active: true
 ```
+
+整理判决固定使用 `memory_extract` 语义角色；专用模型只通过
+`models.roles.memory_extract` 覆盖，否则使用 `models.auxiliary`。
 
 当前自动落地边界：`shadow` 只记录判断（含 `would_apply` 干跑标注），
 `merge-only` 自动执行门禁通过的 MERGE / REINFORCE / ARCHIVE，

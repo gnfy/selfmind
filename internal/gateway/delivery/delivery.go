@@ -57,6 +57,27 @@ const KindClarify = "clarify"
 // without confusing it with progress, approval, or diagnostic notifications.
 const KindFinalResult = "final_result"
 
+// KindRecovery marks one deduplicated summary that replaces a stale backlog
+// of final-result notifications after explicit user recovery.
+const KindRecovery = "recovery"
+
+type StaleResultRecovery struct {
+	Candidates int
+	Groups     int
+	Dismissed  int64
+	Accepted   bool
+	Confirmed  bool
+	// Truncated reports that the backlog exceeded one recovery batch, so
+	// Candidates describes this batch only and another pass is still needed.
+	// Without it the recap claims an exact total it did not cover.
+	Truncated bool
+	// CleanupFailed marks a recap that WAS confirmed to the person while the
+	// old pending rows could not be closed. The recap is not resendable (its
+	// logical key is already delivered and deduplicated), so the caller must
+	// route the person to dismissal instead of reporting plain success.
+	CleanupFailed bool
+}
+
 // SessionRefreshError marks a platform failure that cannot succeed by retrying
 // against the current session, but is safe to retry after a new inbound message
 // refreshes that session.
@@ -416,7 +437,7 @@ func (s *Service) tryDelivery(ctx context.Context, d *control.Delivery) error {
 }
 
 // CatchUpUnconfirmed re-pushes the person's sent_unconfirmed rows for one
-// platform+channel, fired when that peer's INBOUND message just refreshed the
+// platform+account+channel, fired when that peer's INBOUND message just refreshed the
 // platform session (e.g. a fresh iLink context_token) — the one moment a resend
 // is likely to actually arrive. Anti-duplicate rails (P0-1, docs/STATUS.md
 // "ACTIVE PLAN"): each row is claimed at most once (ClaimDeliveryCatchUp,
@@ -425,12 +446,12 @@ func (s *Service) tryDelivery(ctx context.Context, d *control.Delivery) error {
 // unconfirmed sends retain the existing one-shot semantics. Session-refresh
 // failures release their claim so a later inbound message can safely retry.
 // Returns how many re-pushes were confirmed.
-func (s *Service) CatchUpRecoverable(ctx context.Context, tenantID, personID, platform, channel string) int {
+func (s *Service) CatchUpRecoverable(ctx context.Context, tenantID, personID, platform, platformUserID, channel string) int {
 	if s == nil || s.store == nil || s.sender == nil {
 		return 0
 	}
 	since := time.Now().Add(-s.opts.CatchUpMaxAge)
-	rows, err := s.store.ListCatchUpEligible(ctx, tenantID, personID, platform, channel, since, s.opts.CatchUpLimit)
+	rows, err := s.store.ListCatchUpEligible(ctx, tenantID, personID, platform, platformUserID, channel, since, s.opts.CatchUpLimit)
 	if err != nil || len(rows) == 0 {
 		return 0
 	}
@@ -450,14 +471,14 @@ func (s *Service) CatchUpRecoverable(ctx context.Context, tenantID, personID, pl
 }
 
 // RetryPendingSession performs one explicit recovery attempt for a durable
-// pending-session row in the current IM peer. It intentionally excludes
+// pending-session row in the current platform account and IM peer. It intentionally excludes
 // sent_unconfirmed rows because the platform may already have delivered them.
 // The store claim makes concurrent manual and inbound-triggered retries safe.
-func (s *Service) RetryPendingSession(ctx context.Context, tenantID, personID, platform, channel, ref string) (string, string, error) {
+func (s *Service) RetryPendingSession(ctx context.Context, tenantID, personID, platform, platformUserID, channel, ref string) (string, string, error) {
 	if s == nil || s.store == nil || s.sender == nil {
 		return "", "", ErrNoSender
 	}
-	d, err := s.store.FindPendingSessionDelivery(ctx, tenantID, personID, platform, channel, ref)
+	d, err := s.store.FindPendingSessionDelivery(ctx, tenantID, personID, platform, platformUserID, channel, ref)
 	if err != nil {
 		return "", "", err
 	}
@@ -474,11 +495,11 @@ func (s *Service) RetryPendingSession(ctx context.Context, tenantID, personID, p
 
 // DismissPendingSession closes one stale recovery item in the current IM
 // peer. It never sends network traffic and cannot affect another channel.
-func (s *Service) DismissPendingSession(ctx context.Context, tenantID, personID, platform, channel, ref string) (string, error) {
+func (s *Service) DismissPendingSession(ctx context.Context, tenantID, personID, platform, platformUserID, channel, ref string) (string, error) {
 	if s == nil || s.store == nil {
 		return "", ErrNoSender
 	}
-	d, err := s.store.FindPendingSessionDelivery(ctx, tenantID, personID, platform, channel, ref)
+	d, err := s.store.FindPendingSessionDelivery(ctx, tenantID, personID, platform, platformUserID, channel, ref)
 	if err != nil {
 		return "", err
 	}
@@ -490,6 +511,155 @@ func (s *Service) DismissPendingSession(ctx context.Context, tenantID, personID,
 		return d.ID, fmt.Errorf("delivery is no longer pending")
 	}
 	return d.ID, nil
+}
+
+// RecoverStaleFinalResults sends one bounded, idempotent recap for all final
+// results outside the automatic catch-up window in this exact platform account
+// and IM peer. Only a
+// confirmed recap closes the old rows; an unavailable or uncertain session
+// leaves them untouched.
+func (s *Service) RecoverStaleFinalResults(ctx context.Context, tenantID, personID, platform, platformUserID, channel string) (StaleResultRecovery, error) {
+	if s == nil || s.store == nil || s.sender == nil {
+		return StaleResultRecovery{}, ErrNoSender
+	}
+	cutoff := time.Now().Add(-s.opts.CatchUpMaxAge)
+	const staleResultRecoveryBatch = 1000
+	rows, err := s.store.ListStalePendingSessionFinalResults(ctx, tenantID, personID, platform, platformUserID, channel, cutoff, staleResultRecoveryBatch)
+	if err != nil {
+		return StaleResultRecovery{}, err
+	}
+	if len(rows) == 0 {
+		return StaleResultRecovery{}, nil
+	}
+	truncated := len(rows) >= staleResultRecoveryBatch
+	content, groups := staleResultRecoverySummary(ctx, s.store, tenantID, rows)
+	logicalKey := staleResultRecoveryKey(rows)
+	accepted, confirmed, sendErr := s.enqueueAndTry(ctx, Message{
+		TenantID: tenantID, PersonID: personID, Platform: platform,
+		PlatformUserID: platformUserID, Channel: channel, Content: content,
+		Kind: KindRecovery, LogicalKey: logicalKey,
+	})
+	result := StaleResultRecovery{
+		Candidates: len(rows), Groups: groups,
+		Accepted: accepted, Confirmed: confirmed, Truncated: truncated,
+	}
+	if confirmed {
+		ids := make([]string, 0, len(rows))
+		for _, row := range rows {
+			ids = append(ids, row.ID)
+		}
+		result.Dismissed, err = s.store.DismissPendingSessionFinalResultsByID(ctx, tenantID, personID, platform, platformUserID, channel, ids, "replaced by confirmed recovery summary")
+		if err != nil {
+			// The recap already reached the person, so this is not a failed
+			// recovery — but the pending rows survive and the recap can never
+			// be resent (its logical key is delivered and deduplicated). Flag
+			// it so the caller reports the real state and offers dismissal.
+			result.CleanupFailed = true
+			return result, err
+		}
+	}
+	return result, sendErr
+}
+
+func (s *Service) DismissStaleFinalResults(ctx context.Context, tenantID, personID, platform, platformUserID, channel string) (int64, error) {
+	if s == nil || s.store == nil {
+		return 0, ErrNoSender
+	}
+	return s.store.DismissStalePendingSessionFinalResults(ctx, tenantID, personID, platform, platformUserID, channel,
+		time.Now().Add(-s.opts.CatchUpMaxAge), "stale final results dismissed by user")
+}
+
+type staleResultGroup struct {
+	taskID  string
+	runID   string
+	title   string
+	count   int
+	preview string
+	latest  time.Time
+}
+
+func staleResultRecoverySummary(ctx context.Context, store *control.Store, tenantID string, rows []control.Delivery) (string, int) {
+	ordered := make([]*staleResultGroup, 0, len(rows))
+	byKey := make(map[string]*staleResultGroup)
+	for _, row := range rows {
+		key := strings.TrimSpace(row.RunID)
+		if key == "" {
+			key = strings.TrimSpace(row.TaskID)
+		}
+		if key == "" {
+			key = row.ID
+		}
+		group := byKey[key]
+		if group == nil {
+			group = &staleResultGroup{taskID: row.TaskID, runID: row.RunID}
+			if row.TaskID != "" {
+				if task, _ := store.GetTask(ctx, tenantID, row.TaskID); task != nil {
+					group.title = strings.TrimSpace(task.Title)
+				}
+			}
+			byKey[key] = group
+			ordered = append(ordered, group)
+		}
+		group.count++
+		if !row.CreatedAt.Before(group.latest) {
+			group.latest = row.CreatedAt
+			group.preview = boundedRecoveryPreview(row.Content, 180)
+		}
+	}
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "SelfMind delivery recovery\n%d older result message(s) were waiting on an expired IM session. This single recap replaces them:\n", len(rows))
+	shown := 0
+	for _, group := range ordered {
+		if shown >= 10 || sb.Len() > 2600 {
+			break
+		}
+		label := group.title
+		if label == "" && group.taskID != "" {
+			label = "task " + shortRecoveryRef(group.taskID)
+		}
+		if label == "" && group.runID != "" {
+			label = "run " + shortRecoveryRef(group.runID)
+		}
+		if label == "" {
+			label = "completed work"
+		}
+		fmt.Fprintf(&sb, "- %s (%d message(s)): %s\n", label, group.count, group.preview)
+		shown++
+	}
+	if remaining := len(ordered) - shown; remaining > 0 {
+		fmt.Fprintf(&sb, "- …and %d more completed work item(s). Their durable task/run history remains available.\n", remaining)
+	}
+	sb.WriteString("No individual stale result was replayed.")
+	return strings.TrimSpace(sb.String()), len(ordered)
+}
+
+func staleResultRecoveryKey(rows []control.Delivery) string {
+	hash := sha256.New()
+	for _, row := range rows {
+		_, _ = hash.Write([]byte(row.ID))
+		_, _ = hash.Write([]byte{0})
+	}
+	return "stale-final-results:" + fmt.Sprintf("%x", hash.Sum(nil))
+}
+
+func boundedRecoveryPreview(value string, limit int) string {
+	value = strings.Join(strings.Fields(strings.TrimSpace(value)), " ")
+	if value == "" {
+		return "Result is preserved in task history."
+	}
+	runes := []rune(value)
+	if len(runes) <= limit {
+		return value
+	}
+	return strings.TrimSpace(string(runes[:limit])) + "…"
+}
+
+func shortRecoveryRef(value string) string {
+	value = strings.TrimSpace(value)
+	if len(value) > 8 {
+		return value[:8]
+	}
+	return value
 }
 
 func (s *Service) replayClaimedDelivery(ctx context.Context, d *control.Delivery) (string, error) {
@@ -560,8 +730,8 @@ func deliveryMessage(d *control.Delivery) Message {
 
 // CatchUpUnconfirmed preserves the older API name while extending recovery to
 // critical rows waiting for a fresh platform session.
-func (s *Service) CatchUpUnconfirmed(ctx context.Context, tenantID, personID, platform, channel string) int {
-	return s.CatchUpRecoverable(ctx, tenantID, personID, platform, channel)
+func (s *Service) CatchUpUnconfirmed(ctx context.Context, tenantID, personID, platform, platformUserID, channel string) int {
+	return s.CatchUpRecoverable(ctx, tenantID, personID, platform, platformUserID, channel)
 }
 
 func sessionRefreshRequired(err error) bool {
@@ -574,7 +744,7 @@ func sessionRefreshRequired(err error) bool {
 
 func catchUpWorthyKind(kind string) bool {
 	switch strings.TrimSpace(kind) {
-	case KindFinalResult, KindApproval, KindApprovalResolution, KindClarify, "external_watch", "recovery", "maintenance_health":
+	case KindFinalResult, KindApproval, KindApprovalResolution, KindClarify, "external_watch", KindRecovery, "maintenance_health":
 		return true
 	default:
 		return false
@@ -619,7 +789,7 @@ func splitMessage(content string, max int) []string {
 func idempotencyKey(msg Message) string {
 	logical := strings.TrimSpace(msg.LogicalKey)
 	if logical != "" {
-		base := fmt.Sprintf("%s|%s|%s|%s|%s|%d", msg.TenantID, msg.PersonID, msg.Platform, msg.Channel, logical, msg.PartIndex)
+		base := fmt.Sprintf("%s|%s|%s|%s|%s|%s|%d", msg.TenantID, msg.PersonID, msg.Platform, msg.PlatformUserID, msg.Channel, logical, msg.PartIndex)
 		sum := sha256.Sum256([]byte(base))
 		return fmt.Sprintf("%x", sum[:])
 	}

@@ -2,10 +2,7 @@ package control
 
 import (
 	"context"
-	"crypto/sha256"
-	"database/sql"
 	"encoding/json"
-	"fmt"
 	"regexp"
 	"sort"
 	"strings"
@@ -16,60 +13,82 @@ import (
 )
 
 type WorkflowObservation struct {
-	ID                     string          `json:"id"`
-	IdentityTenantID       string          `json:"identity_tenant_id"`
-	ControlTenantID        string          `json:"control_tenant_id"`
-	PersonID               string          `json:"person_id"`
-	WorkspaceID            string          `json:"workspace_id,omitempty"`
-	RunID                  string          `json:"run_id"`
-	WorkUnitID             string          `json:"work_unit_id"`
-	RelatedTaskID          string          `json:"related_task_id,omitempty"`
-	WorkflowSignature      string          `json:"workflow_signature"`
-	GoalDigest             string          `json:"goal_digest,omitempty"`
-	EnvironmentFingerprint string          `json:"environment_fingerprint,omitempty"`
-	SkillKey               string          `json:"skill_key,omitempty"`
-	VersionHash            string          `json:"version_hash,omitempty"`
-	ActivationState        string          `json:"activation_state,omitempty"`
-	OutcomeStatus          string          `json:"outcome_status"`
-	VerificationState      string          `json:"verification_state,omitempty"`
-	ToolSequence           []string        `json:"tool_sequence,omitempty"`
-	ToolFailures           int             `json:"tool_failures"`
-	ProviderCalls          int             `json:"provider_calls"`
-	DurationMS             int64           `json:"duration_ms"`
-	InputTokens            int64           `json:"input_tokens"`
-	OutputTokens           int64           `json:"output_tokens"`
-	UserCorrected          bool            `json:"user_corrected"`
-	EvidenceRole           string          `json:"evidence_role"`
-	CreatedAt              time.Time       `json:"created_at"`
-	Evidence               json.RawMessage `json:"-"`
+	ID                     string                 `json:"id"`
+	IdentityTenantID       string                 `json:"identity_tenant_id"`
+	ControlTenantID        string                 `json:"control_tenant_id"`
+	PersonID               string                 `json:"person_id"`
+	WorkspaceID            string                 `json:"workspace_id,omitempty"`
+	RunID                  string                 `json:"run_id"`
+	WorkUnitID             string                 `json:"work_unit_id"`
+	RelatedTaskID          string                 `json:"related_task_id,omitempty"`
+	WorkflowSignature      string                 `json:"workflow_signature"`
+	GoalDigest             string                 `json:"goal_digest,omitempty"`
+	EnvironmentFingerprint string                 `json:"environment_fingerprint,omitempty"`
+	SkillKey               string                 `json:"skill_key,omitempty"`
+	VersionHash            string                 `json:"version_hash,omitempty"`
+	ActivationState        string                 `json:"activation_state,omitempty"`
+	OutcomeStatus          string                 `json:"outcome_status"`
+	VerificationState      string                 `json:"verification_state,omitempty"`
+	ToolSequence           []string               `json:"tool_sequence,omitempty"`
+	ToolFailures           int                    `json:"tool_failures"`
+	ProviderCalls          int                    `json:"provider_calls"`
+	DurationMS             int64                  `json:"duration_ms"`
+	InputTokens            int64                  `json:"input_tokens"`
+	OutputTokens           int64                  `json:"output_tokens"`
+	UserCorrected          bool                   `json:"user_corrected"`
+	EvidenceRole           string                 `json:"evidence_role"`
+	ToolEvidence           []WorkflowToolEvidence `json:"tool_evidence,omitempty"`
+	Incident               *SkillIncidentEvidence `json:"incident,omitempty"`
+	CreatedAt              time.Time              `json:"created_at"`
+	Evidence               json.RawMessage        `json:"-"`
 }
 
-// SkillEvidenceDigest is the bounded deterministic input to the sole skill
-// curator. Similarity may nominate observations, but only this comparable
-// cohort gate can authorize a candidate proposal.
-type SkillEvidenceDigest struct {
-	EvidenceSetHash      string                `json:"evidence_set_hash"`
-	WorkflowSignature    string                `json:"workflow_signature"`
-	IdentityTenantID     string                `json:"identity_tenant_id"`
-	ControlTenantID      string                `json:"control_tenant_id"`
-	PersonID             string                `json:"person_id"`
-	WorkspaceID          string                `json:"workspace_id,omitempty"`
-	TargetSkillKey       string                `json:"target_skill_key,omitempty"`
-	TargetSkillName      string                `json:"target_skill_name,omitempty"`
-	TargetActiveContent  string                `json:"target_active_content,omitempty"`
-	ParentVersionHash    string                `json:"parent_version_hash,omitempty"`
-	SuccessObservations  []WorkflowObservation `json:"success_observations"`
-	NegativeObservations []WorkflowObservation `json:"negative_observations,omitempty"`
-	ExpectedSavings      map[string]int64      `json:"expected_savings,omitempty"`
+// WorkflowToolEvidence is the trusted, argument-free registry metadata captured
+// for one tool step. Skill publication policy consumes this instead of inferring
+// authority from a provider-visible tool name.
+type WorkflowToolEvidence struct {
+	ToolCallID       string   `json:"tool_call_id,omitempty"`
+	Name             string   `json:"name"`
+	Origin           string   `json:"origin,omitempty"`
+	Category         string   `json:"category,omitempty"`
+	RiskLevel        string   `json:"risk_level,omitempty"`
+	ReadOnly         bool     `json:"read_only"`
+	OperationClasses []string `json:"operation_classes,omitempty"`
+}
+
+// SkillIncidentEvidence joins an attributable Skill fallback to the ordinary
+// planner's later recovery in the same work unit. It contains no raw tool output
+// or arguments; the durable task events remain the source of truth.
+type SkillIncidentEvidence struct {
+	FailureSignature      string   `json:"failure_signature"`
+	FailedStepID          string   `json:"failed_step_id"`
+	ErrorCategory         string   `json:"error_category"`
+	FailedToolCallID      string   `json:"failed_tool_call_id,omitempty"`
+	ObservedErrorCategory string   `json:"observed_error_category,omitempty"`
+	FailureObserved       bool     `json:"failure_observed"`
+	NormalizedInputShape  string   `json:"normalized_input_shape,omitempty"`
+	Reason                string   `json:"reason"`
+	RecoveryToolSequence  []string `json:"recovery_tool_sequence,omitempty"`
+	RecoveryFailures      int      `json:"recovery_failures"`
+	RecoveryVerified      bool     `json:"recovery_verified"`
 }
 
 type observationAccumulator struct {
 	tools         []string
+	toolEvidence  []WorkflowToolEvidence
 	toolFailures  int
 	providerCalls int
 	inputTokens   int64
 	outputTokens  int64
 	corrected     bool
+	incident      *SkillIncidentEvidence
+	failures      []observedWorkflowToolFailure
+	recovering    bool
+}
+
+type observedWorkflowToolFailure struct {
+	ToolCallID    string
+	ErrorCategory string
 }
 
 func (s *Store) MaterializeWorkflowObservations(ctx context.Context, tenantID, runID string) ([]WorkflowObservation, error) {
@@ -128,10 +147,12 @@ func (s *Store) MaterializeWorkflowObservations(ctx context.Context, tenantID, r
 			VersionHash: activation.VersionHash, ActivationState: activation.State,
 			OutcomeStatus: unit.Status, VerificationState: unit.VerificationState,
 			ToolSequence: normalizedToolSequence(metric.tools), ToolFailures: metric.toolFailures,
+			ToolEvidence:  append([]WorkflowToolEvidence(nil), metric.toolEvidence...),
 			ProviderCalls: metric.providerCalls, DurationMS: durationMS,
 			InputTokens: metric.inputTokens, OutputTokens: metric.outputTokens,
 			UserCorrected: metric.corrected, EvidenceRole: role, CreatedAt: now,
 		}
+		attachObservationIncident(&observation, metric)
 		toolsJSON, _ := json.Marshal(observation.ToolSequence)
 		result, err := s.db.ExecContext(ctx, `INSERT OR IGNORE INTO workflow_observations
 			(id, identity_tenant_id, control_tenant_id, person_id, workspace_id, run_id,
@@ -203,23 +224,119 @@ func accumulateWorkUnitEvents(units []RunWorkUnit, events []evolutionEvent) map[
 			continue
 		}
 		switch event.typ {
+		case "skill.activated":
+			// Failures before activation cannot authorize a rewrite of the newly
+			// activated Skill.
+			acc.failures = nil
 		case "tool.started":
 			if tool := stringValue(event.payload["tool"]); tool != "" {
 				acc.tools = append(acc.tools, tool)
+				acc.toolEvidence = append(acc.toolEvidence, workflowToolEvidenceFromPayload(tool, event.payload))
+				if acc.recovering && acc.incident != nil {
+					acc.incident.RecoveryToolSequence = append(acc.incident.RecoveryToolSequence, tool)
+				}
 			}
 		case "tool.completed":
-			if stringValue(event.payload["error"]) != "" || stringValue(event.payload["error_category"]) != "" {
+			if stringValue(event.payload["tool_origin"]) != "" {
+				mergeWorkflowToolEvidence(acc, workflowToolEvidenceFromPayload(stringValue(event.payload["tool"]), event.payload))
+			}
+			failed := stringValue(event.payload["error"]) != "" || stringValue(event.payload["error_category"]) != ""
+			if failed {
 				acc.toolFailures++
+				if acc.recovering && acc.incident != nil {
+					acc.incident.RecoveryFailures++
+				} else {
+					acc.failures = append(acc.failures, observedWorkflowToolFailure{
+						ToolCallID: stringValue(event.payload["tool_call_id"]), ErrorCategory: stringValue(event.payload["error_category"]),
+					})
+					if len(acc.failures) > 16 {
+						acc.failures = append([]observedWorkflowToolFailure(nil), acc.failures[len(acc.failures)-16:]...)
+					}
+				}
 			}
 		case "provider.call.usage":
 			acc.providerCalls++
 			acc.inputTokens += int64Value(event.payload["input_tokens"])
 			acc.outputTokens += int64Value(event.payload["output_tokens"])
-		case "run.steering_consumed", "skill.fallback":
+		case "run.steering_consumed":
 			acc.corrected = true
+		case "skill.fallback":
+			acc.corrected = true
+			acc.recovering = true
+			acc.incident = &SkillIncidentEvidence{
+				FailureSignature:     stringValue(event.payload["failure_signature"]),
+				FailedStepID:         stringValue(event.payload["failed_step_id"]),
+				ErrorCategory:        stringValue(event.payload["error_category"]),
+				NormalizedInputShape: stringValue(event.payload["normalized_input_shape"]),
+				Reason:               stringValue(event.payload["reason"]),
+			}
+			failedCallID := stringValue(event.payload["failed_tool_call_id"])
+			if failure := matchingObservedWorkflowFailure(acc.failures, failedCallID); failure != nil {
+				acc.incident.FailedToolCallID = failure.ToolCallID
+				acc.incident.ObservedErrorCategory = failure.ErrorCategory
+				acc.incident.FailureObserved = SkillRepairObservedFailureEligible(acc.incident.ErrorCategory, failure.ErrorCategory)
+			}
+			acc.failures = nil
 		}
 	}
 	return out
+}
+
+func matchingObservedWorkflowFailure(failures []observedWorkflowToolFailure, requestedCallID string) *observedWorkflowToolFailure {
+	requestedCallID = strings.TrimSpace(requestedCallID)
+	for i := len(failures) - 1; i >= 0; i-- {
+		if requestedCallID != "" && failures[i].ToolCallID != requestedCallID {
+			continue
+		}
+		failure := failures[i]
+		return &failure
+	}
+	return nil
+}
+
+func workflowToolEvidenceFromPayload(tool string, payload map[string]interface{}) WorkflowToolEvidence {
+	evidence := WorkflowToolEvidence{
+		ToolCallID: stringValue(payload["tool_call_id"]), Name: tool, Origin: stringValue(payload["tool_origin"]),
+		Category: stringValue(payload["tool_category"]), RiskLevel: stringValue(payload["tool_risk_level"]),
+	}
+	if readOnly, ok := payload["tool_read_only"].(bool); ok {
+		evidence.ReadOnly = readOnly
+	}
+	switch raw := payload["operation_classes"].(type) {
+	case []string:
+		evidence.OperationClasses = append(evidence.OperationClasses, raw...)
+	case []interface{}:
+		for _, value := range raw {
+			if class := stringValue(value); class != "" {
+				evidence.OperationClasses = append(evidence.OperationClasses, class)
+			}
+		}
+	}
+	return evidence
+}
+
+func mergeWorkflowToolEvidence(acc *observationAccumulator, completed WorkflowToolEvidence) {
+	if acc == nil {
+		return
+	}
+	for i := len(acc.toolEvidence) - 1; i >= 0; i-- {
+		if completed.ToolCallID != "" && acc.toolEvidence[i].ToolCallID == completed.ToolCallID {
+			acc.toolEvidence[i] = completed
+			return
+		}
+	}
+	acc.toolEvidence = append(acc.toolEvidence, completed)
+}
+
+func attachObservationIncident(observation *WorkflowObservation, metric *observationAccumulator) {
+	if observation == nil || metric == nil || metric.incident == nil {
+		return
+	}
+	incident := *metric.incident
+	incident.RecoveryToolSequence = normalizedToolSequence(incident.RecoveryToolSequence)
+	incident.RecoveryVerified = observation.OutcomeStatus == WorkUnitCompleted &&
+		observation.VerificationState == "passed" && len(incident.RecoveryToolSequence) > 0 && incident.RecoveryFailures == 0
+	observation.Incident = &incident
 }
 
 func activeWorkUnitIDFromEvent(payload map[string]interface{}) string {
@@ -252,7 +369,9 @@ func workflowEvidenceRole(unit RunWorkUnit, activation SkillActivation, metric *
 }
 
 var workflowVariableToken = regexp.MustCompile(`(?i)(?:[a-z]:)?[/\\][^\s]+|\b[0-9a-f]{7,}\b|\b\d+\b`)
+
 var workflowSecretAssignment = regexp.MustCompile(`(?i)\b(api[_-]?key|token|secret|password|credential)\b\s*[:=]\s*[^\s,;]+`)
+
 var workflowCredentialLiteral = regexp.MustCompile(`(?i)\b(?:ghp_[a-z0-9]{20,}|github_pat_[a-z0-9_]{40,}|sk-(?:ant-)?[a-z0-9_-]{20,}|AKIA[0-9A-Z]{16})\b`)
 
 func sanitizeWorkflowGoal(goal string) string {
@@ -285,191 +404,6 @@ func comparableWorkflowSignature(goal, skillKey, versionHash string, tools []str
 		"version": 3, "goal_features": features, "tool_families": families,
 		"skill_key": strings.TrimSpace(skillKey), "skill_version": strings.TrimSpace(versionHash),
 	})
-}
-
-func (s *Store) ReadySkillEvidenceDigestsForRun(ctx context.Context, tenantID, runID string) ([]SkillEvidenceDigest, error) {
-	origins, err := s.workflowRunOrigins(ctx, []string{runID})
-	if err != nil {
-		return nil, err
-	}
-	if workflowOriginExcludedFromCuration(origins[runID]) {
-		return nil, nil
-	}
-	anchors, err := s.workflowObservationsForRun(ctx, normalizeTenant(tenantID), runID)
-	if err != nil {
-		return nil, err
-	}
-	var out []SkillEvidenceDigest
-	seenEvidence := map[string]bool{}
-	for _, anchor := range anchors {
-		cohort, err := s.comparableWorkflowCohort(ctx, anchor, 5, 2)
-		if err != nil || independentWorkflowRuns(cohort.SuccessObservations) < 3 {
-			continue
-		}
-		ids := make([]string, 0, len(cohort.SuccessObservations)+len(cohort.NegativeObservations))
-		for _, observation := range cohort.SuccessObservations {
-			ids = append(ids, observation.ID)
-		}
-		for _, observation := range cohort.NegativeObservations {
-			ids = append(ids, observation.ID)
-		}
-		sort.Strings(ids)
-		cohort.EvidenceSetHash = stableEvolutionHash(ids)
-		if seenEvidence[cohort.EvidenceSetHash] {
-			continue
-		}
-		seenEvidence[cohort.EvidenceSetHash] = true
-		var existing int
-		if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM skill_versions WHERE control_tenant_id=? AND evidence_set_hash=?`,
-			cohort.ControlTenantID, cohort.EvidenceSetHash).Scan(&existing); err != nil || existing > 0 {
-			continue
-		}
-		cohort.ExpectedSavings = expectedWorkflowSavings(cohort.SuccessObservations)
-		out = append(out, cohort)
-	}
-	return out, nil
-}
-
-func (s *Store) workflowObservationsForRun(ctx context.Context, tenantID, runID string) ([]WorkflowObservation, error) {
-	rows, err := s.db.QueryContext(ctx, workflowObservationSelect+`
-		FROM workflow_observations WHERE identity_tenant_id=? AND run_id=? ORDER BY created_at DESC`, tenantID, runID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []WorkflowObservation
-	for rows.Next() {
-		observation, err := scanWorkflowObservation(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, *observation)
-	}
-	return out, rows.Err()
-}
-
-func independentWorkflowRuns(observations []WorkflowObservation) int {
-	seen := map[string]bool{}
-	for _, observation := range observations {
-		if observation.RunID != "" {
-			seen[observation.RunID] = true
-		}
-	}
-	return len(seen)
-}
-
-const workflowObservationSelect = `SELECT id, identity_tenant_id, control_tenant_id, person_id,
-	workspace_id, run_id, work_unit_id, related_task_id, workflow_signature, goal_digest,
-	environment_fingerprint, skill_key, version_hash, activation_state, outcome_status,
-	verification_state, tool_sequence_json, tool_failures, provider_calls, duration_ms,
-	input_tokens, output_tokens, user_corrected, evidence_role, created_at`
-
-func (s *Store) comparableWorkflowCohort(ctx context.Context, anchor WorkflowObservation, successLimit, negativeLimit int) (SkillEvidenceDigest, error) {
-	rows, err := s.db.QueryContext(ctx, workflowObservationSelect+`
-		FROM workflow_observations WHERE identity_tenant_id=? AND person_id=? AND workspace_id=?
-		ORDER BY created_at DESC LIMIT 48`, anchor.IdentityTenantID, anchor.PersonID, anchor.WorkspaceID)
-	if err != nil {
-		return SkillEvidenceDigest{}, err
-	}
-	var candidates []WorkflowObservation
-	for rows.Next() {
-		observation, scanErr := scanWorkflowObservation(rows)
-		if scanErr != nil {
-			rows.Close()
-			return SkillEvidenceDigest{}, scanErr
-		}
-		candidates = append(candidates, *observation)
-	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
-		return SkillEvidenceDigest{}, err
-	}
-	rows.Close()
-	runIDs := make([]string, 0, len(candidates))
-	for _, observation := range candidates {
-		runIDs = append(runIDs, observation.RunID)
-	}
-	origins, err := s.workflowRunOrigins(ctx, runIDs)
-	if err != nil {
-		return SkillEvidenceDigest{}, err
-	}
-	digest := SkillEvidenceDigest{
-		WorkflowSignature: anchor.WorkflowSignature, IdentityTenantID: anchor.IdentityTenantID,
-		ControlTenantID: anchor.ControlTenantID, PersonID: anchor.PersonID, WorkspaceID: anchor.WorkspaceID,
-		TargetSkillKey: anchor.SkillKey, ParentVersionHash: anchor.VersionHash,
-	}
-	for _, observation := range candidates {
-		if workflowOriginExcludedFromCuration(origins[observation.RunID]) || !workflowObservationsComparable(anchor, observation) {
-			continue
-		}
-		if observation.EvidenceRole == "success_path" && len(observation.ToolSequence) > 0 && len(digest.SuccessObservations) < successLimit {
-			digest.SuccessObservations = append(digest.SuccessObservations, observation)
-		} else if observation.EvidenceRole == "failure_guard" && len(digest.NegativeObservations) < negativeLimit {
-			digest.NegativeObservations = append(digest.NegativeObservations, observation)
-		}
-	}
-	if digest.TargetSkillKey != "" {
-		_ = s.db.QueryRowContext(ctx, `SELECT skill_name, content_body FROM skill_versions WHERE control_tenant_id=? AND skill_key=? AND state='active'`,
-			digest.ControlTenantID, digest.TargetSkillKey).Scan(&digest.TargetSkillName, &digest.TargetActiveContent)
-	}
-	return digest, nil
-}
-
-func (s *Store) workflowRunOrigins(ctx context.Context, runIDs []string) (map[string]string, error) {
-	origins := map[string]string{}
-	for _, chunk := range chunkStrings(uniqueSortedStrings(runIDs), 400) {
-		rows, err := s.db.QueryContext(ctx, `SELECT run_id, COALESCE(payload_json, '{}')
-			FROM task_events WHERE type='run.started' AND run_id IN (`+placeholders(len(chunk))+`)
-			ORDER BY run_id, COALESCE(cursor, 0), created_at, rowid`, toAnySlice(chunk)...)
-		if err != nil {
-			return nil, err
-		}
-		for rows.Next() {
-			var runID, raw string
-			if err := rows.Scan(&runID, &raw); err != nil {
-				rows.Close()
-				return nil, err
-			}
-			if _, exists := origins[runID]; exists {
-				continue
-			}
-			var payload struct {
-				Origin string `json:"origin"`
-			}
-			_ = json.Unmarshal([]byte(raw), &payload)
-			origins[runID] = strings.TrimSpace(payload.Origin)
-		}
-		if err := rows.Err(); err != nil {
-			rows.Close()
-			return nil, err
-		}
-		rows.Close()
-	}
-	return origins, nil
-}
-
-func workflowOriginExcludedFromCuration(origin string) bool {
-	switch strings.ToLower(strings.TrimSpace(origin)) {
-	case "watch", "external-watch-finalization":
-		return true
-	default:
-		return false
-	}
-}
-
-func workflowObservationsComparable(anchor, candidate WorkflowObservation) bool {
-	if candidate.EnvironmentFingerprint != anchor.EnvironmentFingerprint || candidate.SkillKey != anchor.SkillKey {
-		return false
-	}
-	if anchor.SkillKey != "" && candidate.VersionHash != anchor.VersionHash {
-		return false
-	}
-	goalSimilarity := stringSetJaccard(workflowGoalFeatures(anchor.GoalDigest), workflowGoalFeatures(candidate.GoalDigest))
-	toolSimilarity := stringSetJaccard(uniqueSortedStrings(anchor.ToolSequence), uniqueSortedStrings(candidate.ToolSequence))
-	if anchor.SkillKey != "" {
-		return goalSimilarity >= 0.10 && (toolSimilarity >= 0.34 || len(anchor.ToolSequence) == 0 || len(candidate.ToolSequence) == 0)
-	}
-	return goalSimilarity >= 0.18 && toolSimilarity >= 0.50
 }
 
 func workflowGoalFeatures(goal string) []string {
@@ -556,229 +490,4 @@ func stringSetJaccard(a, b []string) float64 {
 		return 0
 	}
 	return float64(intersection) / float64(union)
-}
-
-func expectedWorkflowSavings(observations []WorkflowObservation) map[string]int64 {
-	if len(observations) == 0 {
-		return nil
-	}
-	durations := make([]int64, 0, len(observations))
-	tools := make([]int64, 0, len(observations))
-	for _, observation := range observations {
-		durations = append(durations, observation.DurationMS)
-		tools = append(tools, int64(len(observation.ToolSequence)))
-	}
-	sort.Slice(durations, func(i, j int) bool { return durations[i] < durations[j] })
-	sort.Slice(tools, func(i, j int) bool { return tools[i] < tools[j] })
-	return map[string]int64{"baseline_median_duration_ms": durations[len(durations)/2], "baseline_median_tool_rounds": tools[len(tools)/2]}
-}
-
-func scanWorkflowObservation(row skillLifecycleScanner) (*WorkflowObservation, error) {
-	var observation WorkflowObservation
-	var toolsJSON string
-	var corrected int
-	var created int64
-	if err := row.Scan(&observation.ID, &observation.IdentityTenantID, &observation.ControlTenantID,
-		&observation.PersonID, &observation.WorkspaceID, &observation.RunID, &observation.WorkUnitID,
-		&observation.RelatedTaskID, &observation.WorkflowSignature, &observation.GoalDigest,
-		&observation.EnvironmentFingerprint, &observation.SkillKey, &observation.VersionHash,
-		&observation.ActivationState, &observation.OutcomeStatus, &observation.VerificationState,
-		&toolsJSON, &observation.ToolFailures, &observation.ProviderCalls, &observation.DurationMS,
-		&observation.InputTokens, &observation.OutputTokens, &corrected, &observation.EvidenceRole,
-		&created); err != nil {
-		return nil, err
-	}
-	_ = json.Unmarshal([]byte(toolsJSON), &observation.ToolSequence)
-	observation.UserCorrected = corrected != 0
-	observation.CreatedAt = time.Unix(created, 0)
-	return &observation, nil
-}
-
-func (s *Store) CreateSkillCandidateVersion(ctx context.Context, tenantID, skillKey, skillName, parentVersionHash, content, evidenceSetHash string, observationIDs []string, evidence interface{}) (string, error) {
-	if strings.TrimSpace(content) == "" || strings.TrimSpace(skillName) == "" {
-		return "", fmt.Errorf("candidate name and content are required")
-	}
-	digest := sha256.Sum256([]byte(content))
-	versionHash := fmt.Sprintf("%x", digest[:])
-	idsJSON, _ := json.Marshal(observationIDs)
-	evidenceJSON, _ := json.Marshal(evidence)
-	_, err := s.db.ExecContext(ctx, `INSERT OR IGNORE INTO skill_versions
-		(control_tenant_id, skill_key, skill_name, version_hash, parent_version_hash, state,
-		 content_body, source_observation_ids_json, evidence_set_hash, evidence_json,
-		 created_by, created_at)
-		VALUES(?,?,?,?,?,'candidate',?,?,?,?, 'skill_curator',?)`, normalizeTenant(tenantID),
-		skillKey, skillName, versionHash, parentVersionHash, content, string(idsJSON),
-		evidenceSetHash, string(evidenceJSON), time.Now().Unix())
-	return versionHash, err
-}
-
-type SkillVersion struct {
-	ControlTenantID   string          `json:"control_tenant_id"`
-	SkillKey          string          `json:"skill_key"`
-	SkillName         string          `json:"skill_name"`
-	VersionHash       string          `json:"version_hash"`
-	ParentVersionHash string          `json:"parent_version_hash,omitempty"`
-	State             string          `json:"state"`
-	ContentRef        string          `json:"content_ref,omitempty"`
-	ContentBody       string          `json:"content_body,omitempty"`
-	ObservationIDs    json.RawMessage `json:"source_observation_ids,omitempty"`
-	EvidenceSetHash   string          `json:"evidence_set_hash,omitempty"`
-	Evidence          json.RawMessage `json:"evidence,omitempty"`
-	CreatedBy         string          `json:"created_by"`
-	CreatedAt         time.Time       `json:"created_at"`
-	PromotedAt        *time.Time      `json:"promoted_at,omitempty"`
-}
-
-func (s *Store) SkillCandidateByEvidence(ctx context.Context, tenantID, evidenceSetHash string) (*SkillVersion, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT control_tenant_id, skill_key, skill_name, version_hash,
-		parent_version_hash, state, content_ref, content_body, source_observation_ids_json,
-		evidence_set_hash, evidence_json, created_by, created_at, promoted_at
-		FROM skill_versions WHERE control_tenant_id=? AND evidence_set_hash=? ORDER BY created_at DESC LIMIT 1`,
-		normalizeTenant(tenantID), strings.TrimSpace(evidenceSetHash))
-	version, err := scanSkillVersion(row)
-	if err == sql.ErrNoRows {
-		return nil, nil
-	}
-	return version, err
-}
-
-func (s *Store) GetSkillVersion(ctx context.Context, tenantID, skillKey, versionHash string) (*SkillVersion, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT control_tenant_id, skill_key, skill_name, version_hash,
-		parent_version_hash, state, content_ref, content_body, source_observation_ids_json,
-		evidence_set_hash, evidence_json, created_by, created_at, promoted_at
-		FROM skill_versions WHERE control_tenant_id=? AND skill_key=? AND version_hash=?`,
-		normalizeTenant(tenantID), skillKey, versionHash)
-	version, err := scanSkillVersion(row)
-	if err == sql.ErrNoRows {
-		return nil, nil
-	}
-	return version, err
-}
-
-func scanSkillVersion(row skillLifecycleScanner) (*SkillVersion, error) {
-	var version SkillVersion
-	var observations, evidence string
-	var created int64
-	var promoted sql.NullInt64
-	if err := row.Scan(&version.ControlTenantID, &version.SkillKey, &version.SkillName,
-		&version.VersionHash, &version.ParentVersionHash, &version.State, &version.ContentRef,
-		&version.ContentBody, &observations, &version.EvidenceSetHash, &evidence,
-		&version.CreatedBy, &created, &promoted); err != nil {
-		return nil, err
-	}
-	version.ObservationIDs = json.RawMessage(observations)
-	version.Evidence = json.RawMessage(evidence)
-	version.CreatedAt = time.Unix(created, 0)
-	if promoted.Valid {
-		at := time.Unix(promoted.Int64, 0)
-		version.PromotedAt = &at
-	}
-	return &version, nil
-}
-
-func (s *Store) PromoteSkillCandidate(ctx context.Context, tenantID, skillKey, versionHash, contentRef string) error {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	var state string
-	if err := tx.QueryRowContext(ctx, `SELECT state FROM skill_versions WHERE control_tenant_id=? AND skill_key=? AND version_hash=?`,
-		normalizeTenant(tenantID), skillKey, versionHash).Scan(&state); err != nil {
-		return err
-	}
-	if state != "candidate" {
-		return fmt.Errorf("skill version is %s, not candidate", state)
-	}
-	now := time.Now().Unix()
-	if _, err := tx.ExecContext(ctx, `UPDATE skill_failure_guards SET state='resolved'
-		WHERE control_tenant_id=? AND skill_key=? AND version_hash IN
-		(SELECT version_hash FROM skill_versions WHERE control_tenant_id=? AND skill_key=? AND state='active')`,
-		normalizeTenant(tenantID), skillKey, normalizeTenant(tenantID), skillKey); err != nil {
-		return err
-	}
-	if _, err := tx.ExecContext(ctx, `UPDATE skill_versions SET state='previous' WHERE control_tenant_id=? AND skill_key=? AND state='active'`,
-		normalizeTenant(tenantID), skillKey); err != nil {
-		return err
-	}
-	if _, err := tx.ExecContext(ctx, `UPDATE skill_versions SET state='active', content_ref=?, promoted_at=?
-		WHERE control_tenant_id=? AND skill_key=? AND version_hash=? AND state='candidate'`,
-		strings.TrimSpace(contentRef), now, normalizeTenant(tenantID), skillKey, versionHash); err != nil {
-		return err
-	}
-	return tx.Commit()
-}
-
-func (s *Store) RejectSkillCandidate(ctx context.Context, tenantID, skillKey, versionHash string) error {
-	result, err := s.db.ExecContext(ctx, `UPDATE skill_versions SET state='rejected'
-		WHERE control_tenant_id=? AND skill_key=? AND version_hash=? AND state='candidate'`,
-		normalizeTenant(tenantID), skillKey, versionHash)
-	if err != nil {
-		return err
-	}
-	if n, _ := result.RowsAffected(); n != 1 {
-		return fmt.Errorf("skill candidate not found")
-	}
-	return nil
-}
-
-func (s *Store) ListSkillVersions(ctx context.Context, tenantID, skillKey, state string, limit int) ([]SkillVersion, error) {
-	if limit <= 0 || limit > 100 {
-		limit = 20
-	}
-	query := `SELECT control_tenant_id, skill_key, skill_name, version_hash,
-		parent_version_hash, state, content_ref, content_body, source_observation_ids_json,
-		evidence_set_hash, evidence_json, created_by, created_at, promoted_at
-		FROM skill_versions WHERE control_tenant_id=?`
-	args := []interface{}{normalizeTenant(tenantID)}
-	if strings.TrimSpace(skillKey) != "" {
-		query += ` AND skill_key=?`
-		args = append(args, strings.TrimSpace(skillKey))
-	}
-	if strings.TrimSpace(state) != "" {
-		query += ` AND state=?`
-		args = append(args, strings.TrimSpace(state))
-	}
-	query += ` ORDER BY created_at DESC LIMIT ?`
-	args = append(args, limit)
-	rows, err := s.db.QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []SkillVersion
-	for rows.Next() {
-		version, err := scanSkillVersion(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, *version)
-	}
-	return out, rows.Err()
-}
-
-func (s *Store) ActivatePreviousSkillVersion(ctx context.Context, tenantID, skillKey, targetVersionHash, contentRef string) error {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	var state string
-	if err := tx.QueryRowContext(ctx, `SELECT state FROM skill_versions WHERE control_tenant_id=? AND skill_key=? AND version_hash=?`,
-		normalizeTenant(tenantID), skillKey, targetVersionHash).Scan(&state); err != nil {
-		return err
-	}
-	if state != "previous" {
-		return fmt.Errorf("rollback target is %s, not previous", state)
-	}
-	if _, err := tx.ExecContext(ctx, `UPDATE skill_versions SET state='previous' WHERE control_tenant_id=? AND skill_key=? AND state='active'`,
-		normalizeTenant(tenantID), skillKey); err != nil {
-		return err
-	}
-	if _, err := tx.ExecContext(ctx, `UPDATE skill_versions SET state='active', content_ref=?, promoted_at=?
-		WHERE control_tenant_id=? AND skill_key=? AND version_hash=? AND state='previous'`,
-		strings.TrimSpace(contentRef), time.Now().Unix(), normalizeTenant(tenantID), skillKey, targetVersionHash); err != nil {
-		return err
-	}
-	return tx.Commit()
 }

@@ -47,10 +47,13 @@ assert_state:
     type: context.selected
     payload_contains: '"skill_directory_chars":0'
     count_gte: 1
+  - on: events
+    type: tool.started
+    payload_contains: '"tool_origin":"builtin"'
+    count_gte: 1
 
 checks:
   no_mojibake: true
   no_raw_json_leak: true
   no_empty_response: true
   no_provider_stack_dump: true
-

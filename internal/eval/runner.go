@@ -20,6 +20,7 @@ import (
 	"selfmind/internal/kernel/memory"
 	"selfmind/internal/platform/config"
 	"selfmind/internal/platform/log"
+	"selfmind/internal/promptassets"
 	"selfmind/internal/tools"
 )
 
@@ -42,6 +43,7 @@ type RunResult struct {
 	Duration        time.Duration `json:"duration"`
 	ToolCalls       int           `json:"tool_calls"`
 	ActionToolCalls int           `json:"action_tool_calls"`
+	ProgressUpdates int           `json:"progress_updates"`
 	ToolErrors      int           `json:"tool_errors"`
 	InputTokens     int           `json:"input_tokens"`
 	OutputTokens    int           `json:"output_tokens"`
@@ -53,10 +55,14 @@ type runtimeHarness struct {
 	mem          *memory.MemoryManager
 	controlStore *control.Store
 	cronStop     func()
+	mcpClose     func()
 	server       *httpapi.Server
 	tenantID     string
 	provider     string
 	model        string
+	// deliverySender is set only for cases that seed deliveries; it records what
+	// the recovery path actually pushed.
+	deliverySender *evalDeliverySender
 }
 
 func RunCaseFile(ctx context.Context, path string, opts RunOptions) (*RunResult, error) {
@@ -144,7 +150,11 @@ func runSingle(ctx context.Context, c *Case, opts RunOptions, sampleIdx, totalSa
 		if err != nil {
 			return nil, err
 		}
-		cleanup = func() { _ = os.RemoveAll(root) }
+		cleanup = func() {
+			if err := cleanupEvalTempRoot(root); err != nil {
+				log.Warn("eval: temporary root cleanup failed", "root", root, "error", err)
+			}
+		}
 		dataDirOverride = filepath.Join(root, "data")
 		if isolateWorkspace {
 			workspace = filepath.Join(root, "workspace")
@@ -209,7 +219,7 @@ func runSingle(ctx context.Context, c *Case, opts RunOptions, sampleIdx, totalSa
 		}
 	}
 	if c.Setup != nil {
-		if err := applyStateSeeds(ctx, h.controlStore, h.mem, identity, workspaceID, workspace, c.Setup); err != nil {
+		if err := applyStateSeeds(ctx, h.controlStore, h.mem, identity, workspaceID, workspace, firstNonEmpty(c.Channel, "cli"), c.Setup); err != nil {
 			return nil, err
 		}
 	}
@@ -365,6 +375,7 @@ func runSingle(ctx context.Context, c *Case, opts RunOptions, sampleIdx, totalSa
 		Duration:        time.Since(start),
 		ToolCalls:       snap.ToolCalls,
 		ActionToolCalls: snap.ActionToolCalls,
+		ProgressUpdates: snap.ProgressUpdates,
 		ToolErrors:      snap.ToolErrors,
 		InputTokens:     inputTokens,
 		OutputTokens:    outputTokens,
@@ -529,7 +540,8 @@ func newRuntimeHarness(opts RunOptions, c *Case, dataDirOverride string) (*runti
 	if tenantID == "" {
 		tenantID = fmt.Sprintf("eval-%s-%d", sanitizeFilePart(c.ID), time.Now().UnixNano())
 	}
-	agent, err := appcore.InitAgent(mem, cfg, tenantID)
+	evalPrompts := promptassets.Empty(filepath.Join(dataDir, "prompts"))
+	agent, err := appcore.InitAgent(mem, cfg, tenantID, evalPrompts, nil)
 	if err != nil {
 		if mem != nil {
 			_ = mem.Close()
@@ -537,7 +549,7 @@ func newRuntimeHarness(opts RunOptions, c *Case, dataDirOverride string) (*runti
 		return nil, err
 	}
 	skillStore := kernel.NewSkillStore(mem)
-	disp, err := appcore.InitTools(mem, cfg, agent, skillStore, tenantID)
+	disp, err := appcore.InitTools(mem, cfg, agent, skillStore, tenantID, evalPrompts, nil)
 	if err != nil {
 		if mem != nil {
 			_ = mem.Close()
@@ -568,7 +580,16 @@ func newRuntimeHarness(opts RunOptions, c *Case, dataDirOverride string) (*runti
 	disp.RegisterTool(tools.NewSkillSelectTool(controlStore))
 	disp.RegisterTool(tools.NewSkillFallbackTool(controlStore))
 	disp.RegisterTool(tools.NewSkillLifecycleManageTool(controlStore))
-	appcore.InitMCP(disp, cfg)
+	skillStorage, err := appcore.ResolveSkillStorage(cfg)
+	if err != nil {
+		appcore.StopCron(gwDeps.CronScheduler)
+		_ = controlStore.Close()
+		if mem != nil {
+			_ = mem.Close()
+		}
+		return nil, err
+	}
+	mcpManager := appcore.InitMCP(disp, cfg)
 	displayProvider, displayModel, _ := appcore.ResolveModelDisplay(cfg)
 	recallOptions := []httpapi.RecallEngineOption(nil)
 	if llm.VCRRecordMode() {
@@ -584,9 +605,10 @@ func newRuntimeHarness(opts RunOptions, c *Case, dataDirOverride string) (*runti
 		Control:         controlStore,
 		Gateway:         gwDeps.Gateway,
 		DefaultTenantID: tenantID,
+		SkillStorage:    skillStorage,
 		// Automatic semantic recall (Work Timeline P2): eval runs the same
 		// selector path as real input — no eval-only shortcut around recall.
-		Recall: httpapi.NewRecallEngine(controlStore, mem, appcore.SemanticRecallExpander(mem, cfg, tenantID), recallOptions...),
+		Recall: httpapi.NewRecallEngine(controlStore, mem, appcore.SemanticRecallExpander(mem, cfg, tenantID, evalPrompts), recallOptions...),
 		// Tool-output spool (execution-quality W1): same derivation as the
 		// daemon runner, so eval exercises the artifact + read-back flow
 		// inside its isolated data dir.
@@ -596,16 +618,25 @@ func newRuntimeHarness(opts RunOptions, c *Case, dataDirOverride string) (*runti
 		// path inside the isolated data dir.
 		AttachmentsDir: filepath.Join(dataDir, "attachments"),
 	}
-	return &runtimeHarness{
+	harness := &runtimeHarness{
 		cfg:          cfg,
 		mem:          mem,
 		controlStore: controlStore,
 		cronStop:     func() { appcore.StopCron(gwDeps.CronScheduler) },
-		server:       server,
-		tenantID:     tenantID,
-		provider:     firstNonEmpty(displayProvider, provider, "default"),
-		model:        firstNonEmpty(displayModel, model, "default"),
-	}, nil
+		mcpClose: func() {
+			if mcpManager != nil {
+				_ = mcpManager.Close()
+			}
+		},
+		server:   server,
+		tenantID: tenantID,
+		provider: firstNonEmpty(displayProvider, provider, "default"),
+		model:    firstNonEmpty(displayModel, model, "default"),
+	}
+	// Delivery is opt-in per case: wiring it always would give every case a push
+	// surface and change which notification paths its runs take.
+	server.Delivery = newEvalDeliveryService(c, harness)
+	return harness, nil
 }
 
 // makeEvalTempRoot keeps isolated workspaces away from the system temp tree.
@@ -621,11 +652,74 @@ func makeEvalTempRoot(caseID string) (string, error) {
 			return os.MkdirTemp(base, prefix)
 		}
 	}
+	// Tests commonly replace HOME with a directory below /tmp, making the user
+	// cache unsuitable for bubblewrap. Prefer the OS-wide persistent temp root
+	// before falling back to the repository cwd; on WSL this also avoids DrvFS
+	// delete-sharing delays while SQLite closes WAL handles.
+	persistentTmp := filepath.Clean("/var/tmp")
+	if filepath.IsAbs(persistentTmp) && !pathWithin(os.TempDir(), persistentTmp) {
+		base := filepath.Join(persistentTmp, "selfmind", "eval")
+		if err := os.MkdirAll(base, 0o700); err == nil {
+			return os.MkdirTemp(base, prefix)
+		}
+	}
 	cwd, err := os.Getwd()
 	if err != nil {
 		return "", err
 	}
 	return os.MkdirTemp(cwd, "."+prefix)
+}
+
+func cleanupEvalTempRoot(root string) error {
+	root = strings.TrimSpace(root)
+	if root == "" {
+		return nil
+	}
+	var lastErr error
+	for attempt := 0; attempt < 5; attempt++ {
+		if err := os.RemoveAll(root); err != nil {
+			lastErr = err
+			// Toolchain caches such as GOMODCACHE intentionally contain 0555
+			// directories. They are safe to read in the sandbox but their owner
+			// cannot unlink children during teardown. Repair only directories in
+			// this runner-owned temporary tree; WalkDir does not follow symlinks.
+			if chmodErr := makeEvalTempTreeRemovable(root); chmodErr != nil {
+				lastErr = fmt.Errorf("%v; prepare retry: %w", err, chmodErr)
+			}
+		} else if _, err := os.Lstat(root); os.IsNotExist(err) {
+			return nil
+		} else if err != nil {
+			lastErr = err
+		} else {
+			lastErr = fmt.Errorf("temporary root still exists after removal")
+		}
+		time.Sleep(time.Duration(attempt+1) * 50 * time.Millisecond)
+	}
+	return lastErr
+}
+
+func makeEvalTempTreeRemovable(root string) error {
+	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if !entry.IsDir() {
+			return nil
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		mode := info.Mode().Perm()
+		if mode&0o700 == 0o700 {
+			return nil
+		}
+		return os.Chmod(path, mode|0o700)
+	})
+	if os.IsNotExist(err) {
+		return nil
+	}
+	return err
 }
 
 func pathWithin(parent, candidate string) bool {
@@ -681,12 +775,19 @@ func applyEvalModelOverride(cfg *config.Config, provider, model string) {
 // case's throwaway temp data dir. Storage.DataDir covers control.db, memory,
 // and the tool-output spool (all derive from the data dir). Evolution.SkillsDir
 // needs an explicit override: app wiring defaults the skills base dir to
-// ~/.selfmind and mints a `<eval-tenant>/skills` tree there for every case, so
-// leaving it empty leaks one home-dir directory per eval run. Any future config
-// field whose default resolves under the user's home dir and is consumed by
-// app wiring must be redirected here before the harness builds the runtime.
+// ~/.selfmind. App wiring injects this base into skill tools, learning audit,
+// curation, and post-run maintenance; leaving it empty would let an eval-only
+// person partition escape into the real home directory. Any future config field
+// whose default resolves under the user's home dir and is consumed by app
+// wiring must be redirected here before the harness builds the runtime.
 func isolatedEvalConfig(cfg *config.Config, dataDir string) {
-	if cfg == nil || strings.TrimSpace(dataDir) == "" {
+	if cfg == nil {
+		return
+	}
+	// Release evidence never inherits operator identity, including the explicit
+	// shared_data path where durable storage is intentionally not redirected.
+	cfg.Agent.Soul = ""
+	if strings.TrimSpace(dataDir) == "" {
 		return
 	}
 	cfg.Storage.DataDir = dataDir
@@ -700,21 +801,14 @@ func (h *runtimeHarness) Close() {
 	if h.cronStop != nil {
 		h.cronStop()
 	}
+	if h.mcpClose != nil {
+		h.mcpClose()
+	}
 	if h.controlStore != nil {
 		_ = h.controlStore.Close()
 	}
 	if h.mem != nil {
 		_ = h.mem.Close()
-	}
-	// Skill tooling keys per-tenant skill roots under ~/.selfmind (by tenant
-	// ID, not by config), so wiring mints `<home>/.selfmind/<eval-tenant>/skills`
-	// as a side effect of registering skill tools — a path the SkillsDir config
-	// override cannot redirect. The harness owns its throwaway tenant, so it
-	// removes exactly that directory on the way out; RemoveEvalTenantDir
-	// verifies both the tenant-ID shape and known-artifact contents before
-	// deleting anything.
-	if home, err := os.UserHomeDir(); err == nil && home != "" {
-		RemoveEvalTenantDir(filepath.Join(home, ".selfmind"), h.tenantID)
 	}
 }
 

@@ -54,17 +54,69 @@ const (
 )
 
 type ToolMetadata struct {
-	Exposure         ToolExposure  `json:"exposure,omitempty"`
-	SupportsParallel bool          `json:"supports_parallel,omitempty"`
-	ReadOnly         bool          `json:"read_only,omitempty"`
-	RiskLevel        ToolRiskLevel `json:"risk_level,omitempty"`
-	Category         string        `json:"category,omitempty"`
-	TimeoutSeconds   int           `json:"timeout_seconds,omitempty"`
-	SearchText       string        `json:"search_text,omitempty"`
+	Exposure         ToolExposure     `json:"exposure,omitempty"`
+	SupportsParallel bool             `json:"supports_parallel,omitempty"`
+	ReadOnly         bool             `json:"read_only,omitempty"`
+	RiskLevel        ToolRiskLevel    `json:"risk_level,omitempty"`
+	Category         string           `json:"category,omitempty"`
+	OperationClasses []OperationClass `json:"operation_classes,omitempty"`
+	TimeoutSeconds   int              `json:"timeout_seconds,omitempty"`
+	SearchText       string           `json:"search_text,omitempty"`
 }
 
 type MetadataProvider interface {
 	Metadata() ToolMetadata
+}
+
+const toolExecutionPolicyArg = "_tool_execution_policy"
+
+// toolExecutionPolicy is daemon-owned dispatch metadata. It is injected by the
+// registry after model arguments have been validated and is never forwarded to
+// an external tool endpoint. Approval policy must use the registered Tool's
+// origin instead of trusting a provider-visible name such as "mcp_*".
+type toolExecutionPolicy struct {
+	Origin           ToolSchemaOrigin
+	Category         string
+	Risk             ToolRiskLevel
+	ReadOnly         bool
+	OperationClasses []OperationClass
+}
+
+func executionPolicyForTool(t Tool) toolExecutionPolicy {
+	policy := toolExecutionPolicy{Origin: ToolSchemaOriginBuiltin}
+	if provider, ok := t.(ToolSchemaOriginProvider); ok {
+		if origin := provider.SchemaOrigin(); origin != "" {
+			policy.Origin = origin
+		}
+	}
+	metadata := ToolMetadataFor(t)
+	policy.Category = metadata.Category
+	policy.Risk = metadata.RiskLevel
+	policy.ReadOnly = metadata.ReadOnly
+	policy.OperationClasses = append([]OperationClass(nil), metadata.OperationClasses...)
+	return policy
+}
+
+func unclassifiedExternalToolCall(args map[string]interface{}) bool {
+	if args == nil {
+		return false
+	}
+	policy, ok := args[toolExecutionPolicyArg].(toolExecutionPolicy)
+	return ok && policy.Origin == ToolSchemaOriginExternal && !policy.ReadOnly
+}
+
+// publicToolArgs returns the model-visible payload only. Top-level underscore
+// names are reserved for authenticated SelfMind runtime state; nested values
+// remain untouched because they are part of an explicitly supplied argument.
+func publicToolArgs(args map[string]interface{}) map[string]interface{} {
+	out := make(map[string]interface{}, len(args))
+	for key, value := range args {
+		if strings.HasPrefix(strings.TrimSpace(key), "_") {
+			continue
+		}
+		out[key] = value
+	}
+	return out
 }
 
 // ToolSchema 定义工具的参数 schema（兼容 OpenAI tool schema）
@@ -129,12 +181,19 @@ func toolDefinitionFromCompiled(t Tool, parameters map[string]interface{}) map[s
 		},
 	}
 	meta := ToolMetadataFor(t)
+	// The definition map is untyped wire data: it crosses into kernel (which
+	// must not import this package) and into provider adapters that marshal it
+	// as JSON. Named string types are therefore converted here — a consumer
+	// doing metadata["exposure"].(string) on a ToolExposure value silently gets
+	// the zero value, which is how the hidden/deferred filter was inert.
 	def["selfmind"] = map[string]interface{}{
-		"exposure":          meta.Exposure,
+		"exposure":          string(meta.Exposure),
 		"supports_parallel": meta.SupportsParallel,
 		"read_only":         meta.ReadOnly,
-		"risk_level":        meta.RiskLevel,
+		"risk_level":        string(meta.RiskLevel),
 		"category":          meta.Category,
+		"origin":            string(executionPolicyForTool(t).Origin),
+		"operation_classes": meta.OperationClasses,
 	}
 	return def
 }

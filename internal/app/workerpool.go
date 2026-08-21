@@ -10,6 +10,7 @@ import (
 	"selfmind/internal/kernel"
 	"selfmind/internal/kernel/memory"
 	"selfmind/internal/platform/config"
+	"selfmind/internal/promptassets"
 )
 
 // workerCount reads SELFMIND_WORKERS (default 1). 1 keeps the single-agent
@@ -34,18 +35,18 @@ func workerCount() int {
 // own InitAgent + InitTools, sharing only the concurrency-safe memory/skill
 // stores and the process-global auth manager) and hands them to the gateway.
 // A no-op at the default (N=1), so the default path is unchanged.
-func MaybeEnableWorkerPool(gw *router.Gateway, mem *memory.MemoryManager, cfg *config.Config, skillStore *kernel.SkillStore, tenantID string, controlStore ...*control.Store) (int, error) {
+func MaybeEnableWorkerPool(gw *router.Gateway, mem *memory.MemoryManager, cfg *config.Config, skillStore *kernel.SkillStore, tenantID string, prompts *promptassets.Snapshot, controlStore *control.Store) (int, error) {
 	n := workerCount()
 	if gw == nil || n <= 1 {
 		return 1, nil
 	}
 	extra := make([]*kernel.Agent, 0, n-1)
 	for i := 1; i < n; i++ {
-		a, err := InitAgent(mem, cfg, tenantID, controlStore...)
+		a, err := InitAgent(mem, cfg, tenantID, prompts, controlStore)
 		if err != nil {
 			return 1 + len(extra), err
 		}
-		d, err := InitTools(mem, cfg, a, skillStore, tenantID, controlStore...)
+		d, err := InitTools(mem, cfg, a, skillStore, tenantID, prompts, controlStore)
 		if err != nil {
 			return 1 + len(extra), err
 		}

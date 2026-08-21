@@ -183,6 +183,62 @@ func TestMaintenanceJobProviderBlockAndRestartProbe(t *testing.T) {
 	}
 }
 
+func TestMaintenanceJobPromptRevisionBlockIsNotProviderRequeued(t *testing.T) {
+	ctx := context.Background()
+	store, identity, _, run := newRecoveryFixture(t)
+	if err := store.FinishRunWithMaintenancePayload(ctx, identity.TenantID, run.ID, "done", 1, `{}`); err != nil {
+		t.Fatal(err)
+	}
+	if claimed, err := store.ClaimMaintenanceJob(ctx, identity.TenantID, run.ID, 1); err != nil || !claimed {
+		t.Fatalf("claim: claimed=%v err=%v", claimed, err)
+	}
+	blocked, err := store.BlockMaintenanceJobForPromptRevision(ctx, identity.TenantID, run.ID, 1, "prompt revision abc is unavailable")
+	if err != nil || !blocked {
+		t.Fatalf("block: blocked=%v err=%v", blocked, err)
+	}
+	job, err := store.GetMaintenanceJob(ctx, identity.TenantID, run.ID, 1)
+	if err != nil || job == nil || job.Status != MaintenanceJobBlockedPromptRevision {
+		t.Fatalf("job=%+v err=%v", job, err)
+	}
+	health, err := store.MaintenanceHealthForPerson(ctx, identity.TenantID, identity.PersonID)
+	if err != nil || health.Blocked != 1 || health.BlockedPrompt != 1 {
+		t.Fatalf("health=%+v err=%v", health, err)
+	}
+	if reset, err := store.ResetBlockedMaintenanceJobs(ctx); err != nil || reset != 0 {
+		t.Fatalf("provider reset touched prompt block: reset=%d err=%v", reset, err)
+	}
+	replayed, err := store.ReplayPromptRevisionMaintenanceJobs(ctx, identity.TenantID, 10)
+	if err != nil || replayed != 1 {
+		t.Fatalf("prompt revision replay: replayed=%d err=%v", replayed, err)
+	}
+	job, err = store.GetMaintenanceJob(ctx, identity.TenantID, run.ID, 1)
+	if err != nil || job == nil || job.Status != MaintenanceJobPending || job.Attempts != 0 || job.LastError != "" {
+		t.Fatalf("replayed prompt revision job=%+v err=%v", job, err)
+	}
+}
+
+func TestPromptRevisionReplayCoversSyntheticMaintenanceKeys(t *testing.T) {
+	ctx := context.Background()
+	store, identity, _, _ := newRecoveryFixture(t)
+	const key = "skillcuration_evidence"
+	if _, err := store.EnqueueMaintenanceJob(ctx, identity.TenantID, key, 101, `{"prompt_snapshot_hash":"abc"}`); err != nil {
+		t.Fatal(err)
+	}
+	if claimed, err := store.ClaimMaintenanceJob(ctx, identity.TenantID, key, 101); err != nil || !claimed {
+		t.Fatalf("claim: claimed=%v err=%v", claimed, err)
+	}
+	if blocked, err := store.BlockMaintenanceJobForPromptRevision(ctx, identity.TenantID, key, 101, "prompt revision abc is unavailable"); err != nil || !blocked {
+		t.Fatalf("block: blocked=%v err=%v", blocked, err)
+	}
+	if replayed, err := store.ReplayPromptRevisionMaintenanceJobs(ctx, identity.TenantID, 10); err != nil || replayed != 1 {
+		t.Fatalf("replay synthetic key: replayed=%d err=%v", replayed, err)
+	}
+	job, err := store.GetMaintenanceJob(ctx, identity.TenantID, key, 101)
+	if err != nil || job == nil || job.Status != MaintenanceJobPending {
+		t.Fatalf("synthetic job=%+v err=%v", job, err)
+	}
+}
+
 func TestLegacyBlockedMaintenanceRestartProbeIsMarkedOnce(t *testing.T) {
 	ctx := context.Background()
 	store, identity, _, run := newRecoveryFixture(t)
@@ -233,6 +289,33 @@ func TestMaintenanceHealthReportsFailedWithoutProviderBlock(t *testing.T) {
 	}
 	if health.LastError != "maintenance contract truncated" {
 		t.Fatalf("last error = %q", health.LastError)
+	}
+}
+
+func TestMaintenanceHealthIncludesSyntheticJobsByPayloadPerson(t *testing.T) {
+	ctx := context.Background()
+	store, identity, _, _ := newRecoveryFixture(t)
+	const syntheticKey = "background_review:p1:2026-08-21"
+	payload := fmt.Sprintf(`{"person_id":%q,"kind":"background_review"}`, identity.PersonID)
+	if _, err := store.EnqueueMaintenanceJob(ctx, identity.TenantID, syntheticKey, 1, payload); err != nil {
+		t.Fatal(err)
+	}
+	health, err := store.MaintenanceHealthForPerson(ctx, identity.TenantID, identity.PersonID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if health.Pending != 1 || health.Succeeded != 0 || health.Skipped != 0 || health.OldestPendingAt.IsZero() {
+		t.Fatalf("synthetic job was not visible as actionable: %+v", health)
+	}
+	if claimed, err := store.ClaimMaintenanceJob(ctx, identity.TenantID, syntheticKey, 1); err != nil || !claimed {
+		t.Fatalf("claim synthetic: claimed=%v err=%v", claimed, err)
+	}
+	if err := store.CompleteMaintenanceJob(ctx, identity.TenantID, syntheticKey, 1, "done"); err != nil {
+		t.Fatal(err)
+	}
+	health, err = store.MaintenanceHealthForPerson(ctx, identity.TenantID, identity.PersonID)
+	if err != nil || health.Pending != 0 || health.Succeeded != 1 {
+		t.Fatalf("synthetic terminal state was not separated: health=%+v err=%v", health, err)
 	}
 }
 
@@ -586,5 +669,89 @@ func TestMigrateMaintenanceJobsToVersionCopiesOnlyUnfinishedEvidence(t *testing.
 	again, err := store.MigrateMaintenanceJobsToVersion(ctx, 2)
 	if err != nil || again.Migrated != 0 || again.AlreadyCurrent != 1 {
 		t.Fatalf("idempotent migration=%+v err=%v", again, err)
+	}
+}
+
+func TestMigrateMaintenanceJobsToVersionPreservesPromptRevisionBlock(t *testing.T) {
+	ctx := context.Background()
+	store, identity, _, run := newRecoveryFixture(t)
+	if err := store.FinishRunWithMaintenancePayload(ctx, identity.TenantID, run.ID, "done", 1, `{"prompt_snapshot_hash":"abc"}`); err != nil {
+		t.Fatal(err)
+	}
+	if claimed, err := store.ClaimMaintenanceJob(ctx, identity.TenantID, run.ID, 1); err != nil || !claimed {
+		t.Fatalf("claim: claimed=%v err=%v", claimed, err)
+	}
+	if blocked, err := store.BlockMaintenanceJobForPromptRevision(ctx, identity.TenantID, run.ID, 1, "prompt revision abc is unavailable"); err != nil || !blocked {
+		t.Fatalf("block: blocked=%v err=%v", blocked, err)
+	}
+
+	result, err := store.MigrateMaintenanceJobsToVersion(ctx, 2)
+	if err != nil || result.Migrated != 1 {
+		t.Fatalf("migration=%+v err=%v", result, err)
+	}
+	job, err := store.GetMaintenanceJob(ctx, identity.TenantID, run.ID, 2)
+	if err != nil || job == nil || job.Status != MaintenanceJobBlockedPromptRevision {
+		t.Fatalf("migrated prompt block=%+v err=%v", job, err)
+	}
+	if replayed, err := store.ReplayPromptRevisionMaintenanceJobs(ctx, identity.TenantID, 10); err != nil || replayed != 1 {
+		t.Fatalf("replay migrated block: replayed=%d err=%v", replayed, err)
+	}
+}
+
+// TestRetryLimitReplayLeavesPromptRevisionBlocksUntouched pins the scope
+// separation. Prompt-revision replay is operator-triggered by contract:
+// requeueing before the pinned revision is restored returns the work to the
+// same blocked state, and resetting attempts while overwriting last_error
+// destroys the failure ordering MaintenanceHealthForPerson reads through
+// ORDER BY updated_at DESC. Clearing a retry-limit backlog must therefore not
+// churn those rows.
+func TestRetryLimitReplayLeavesPromptRevisionBlocksUntouched(t *testing.T) {
+	ctx := context.Background()
+	store, identity, _, run := newRecoveryFixture(t)
+	if err := store.FinishRunWithMaintenancePayload(ctx, identity.TenantID, run.ID, "done", 1, `{"prompt_snapshot_hash":"abc"}`); err != nil {
+		t.Fatal(err)
+	}
+	if claimed, err := store.ClaimMaintenanceJob(ctx, identity.TenantID, run.ID, 1); err != nil || !claimed {
+		t.Fatalf("claim: claimed=%v err=%v", claimed, err)
+	}
+	const blockReason = "prompt revision abc is unavailable"
+	if blocked, err := store.BlockMaintenanceJobForPromptRevision(ctx, identity.TenantID, run.ID, 1, blockReason); err != nil || !blocked {
+		t.Fatalf("block: blocked=%v err=%v", blocked, err)
+	}
+	before, err := store.GetMaintenanceJob(ctx, identity.TenantID, run.ID, 1)
+	if err != nil || before == nil {
+		t.Fatalf("read blocked job: %+v err=%v", before, err)
+	}
+
+	if count, err := store.CountBlockedPromptRevisionMaintenanceJobs(ctx, identity.TenantID); err != nil || count != 1 {
+		t.Fatalf("blocked count=%d err=%v", count, err)
+	}
+
+	// The retry-limit scope must not see this row at all.
+	if replayed, err := store.ReplayRetryLimitedMaintenanceJobs(ctx, identity.TenantID, 10); err != nil {
+		t.Fatal(err)
+	} else if replayed != 0 {
+		t.Fatalf("retry-limit replay requeued %d prompt-revision-blocked job(s)", replayed)
+	}
+	after, err := store.GetMaintenanceJob(ctx, identity.TenantID, run.ID, 1)
+	if err != nil || after == nil {
+		t.Fatalf("re-read job: %+v err=%v", after, err)
+	}
+	if after.Status != MaintenanceJobBlockedPromptRevision {
+		t.Errorf("status=%q, want it still parked", after.Status)
+	}
+	if after.LastError != blockReason {
+		t.Errorf("last_error=%q, want the original block reason preserved", after.LastError)
+	}
+	if after.Attempts != before.Attempts {
+		t.Errorf("attempts changed from %d to %d without an operator-triggered replay", before.Attempts, after.Attempts)
+	}
+
+	// The explicit scope still works.
+	if replayed, err := store.ReplayPromptRevisionMaintenanceJobs(ctx, identity.TenantID, 10); err != nil || replayed != 1 {
+		t.Fatalf("explicit prompt-revision replay: replayed=%d err=%v", replayed, err)
+	}
+	if count, err := store.CountBlockedPromptRevisionMaintenanceJobs(ctx, identity.TenantID); err != nil || count != 0 {
+		t.Fatalf("blocked count after replay=%d err=%v", count, err)
 	}
 }

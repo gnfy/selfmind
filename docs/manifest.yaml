@@ -39,7 +39,7 @@ documents:
     state: current
     language: zh-CN
     translation_of: docs/coding-agent-foundations.md
-    source_hash: eb42e2f033b8de44
+    source_hash: ca153b49d2567c87
   - path: docs/command-reference.md
     title: Command Reference
     class: guide
@@ -53,7 +53,7 @@ documents:
     state: current
     language: zh-CN
     translation_of: docs/command-reference.md
-    source_hash: adcbad73777cff46
+    source_hash: cf3fc528fe25d98f
   - path: docs/config-reference.md
     title: Configuration Reference
     class: guide
@@ -67,7 +67,7 @@ documents:
     state: current
     language: zh-CN
     translation_of: docs/config-reference.md
-    source_hash: bc3bc179ee253a34
+    source_hash: 26347c96415555cc
   - path: docs/context-lifecycle.zh-CN.md
     title: 上下文生命周期
     class: reference
@@ -160,6 +160,14 @@ documents:
     owner: maintainers
     state: archived
     language: en
+  - path: docs/plans/daily-driver-closure.md
+    title: Daily-Driver Runtime Closure
+    class: plan
+    owner: maintainers
+    state: active
+    language: en
+    approved_by: project-owner
+    review_by: 2026-09-11
   - path: docs/provider-runtime.md
     title: Provider Runtime
     class: reference
@@ -173,7 +181,7 @@ documents:
     state: current
     language: zh-CN
     translation_of: docs/provider-runtime.md
-    source_hash: 1e88e2f77386fc42
+    source_hash: d3100e8410120e4c
   - path: docs/skills-architecture.md
     title: Skills Architecture
     class: reference

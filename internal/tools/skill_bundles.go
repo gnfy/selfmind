@@ -68,14 +68,14 @@ func (t *SkillBundleTool) Execute(args map[string]interface{}) (string, error) {
 	instruction, _ := args["instruction"].(string)
 	switch action {
 	case "list":
-		bundles, err := ListSkillBundlesForTenant(tenantID)
+		bundles, err := ListSkillBundlesForTenant(tenantID, args)
 		if err != nil {
 			return "", err
 		}
 		data, _ := json.MarshalIndent(map[string]interface{}{"success": true, "count": len(bundles), "bundles": bundles}, "", "  ")
 		return string(data), nil
 	case "read":
-		b, err := FindSkillBundleForTenant(tenantID, name)
+		b, err := FindSkillBundleForTenant(tenantID, name, args)
 		if err != nil {
 			return "", err
 		}
@@ -83,14 +83,14 @@ func (t *SkillBundleTool) Execute(args map[string]interface{}) (string, error) {
 		return string(data), nil
 	case "create":
 		skills := splitBundleSkills(skillsRaw)
-		b, err := SaveSkillBundleForTenant(tenantID, SkillBundle{Name: name, Description: description, Skills: skills, Instruction: instruction})
+		b, err := SaveSkillBundleForTenant(tenantID, SkillBundle{Name: name, Description: description, Skills: skills, Instruction: instruction}, args)
 		if err != nil {
 			return "", err
 		}
 		data, _ := json.MarshalIndent(map[string]interface{}{"success": true, "bundle": b}, "", "  ")
 		return string(data), nil
 	case "delete":
-		if err := DeleteSkillBundleForTenant(tenantID, name); err != nil {
+		if err := DeleteSkillBundleForTenant(tenantID, name, args); err != nil {
 			return "", err
 		}
 		return fmt.Sprintf("Bundle %q deleted.", name), nil
@@ -99,16 +99,16 @@ func (t *SkillBundleTool) Execute(args map[string]interface{}) (string, error) {
 	}
 }
 
-func SkillBundlesDirForTenant(tenantID string) (string, error) {
-	tenantDir, err := userTenantDirForTenant(tenantID)
+func SkillBundlesDirForTenant(tenantID string, invocation ...map[string]interface{}) (string, error) {
+	tenantDir, err := userTenantDirForTenant(tenantID, invocation...)
 	if err != nil {
 		return "", err
 	}
 	return filepath.Join(tenantDir, "skill-bundles"), nil
 }
 
-func ListSkillBundlesForTenant(tenantID string) ([]SkillBundle, error) {
-	dir, err := SkillBundlesDirForTenant(tenantID)
+func ListSkillBundlesForTenant(tenantID string, invocation ...map[string]interface{}) ([]SkillBundle, error) {
+	dir, err := SkillBundlesDirForTenant(tenantID, invocation...)
 	if err != nil {
 		return nil, err
 	}
@@ -137,8 +137,8 @@ func ListSkillBundlesForTenant(tenantID string) ([]SkillBundle, error) {
 	return bundles, nil
 }
 
-func FindSkillBundleForTenant(tenantID, name string) (SkillBundle, error) {
-	bundles, err := ListSkillBundlesForTenant(tenantID)
+func FindSkillBundleForTenant(tenantID, name string, invocation ...map[string]interface{}) (SkillBundle, error) {
+	bundles, err := ListSkillBundlesForTenant(tenantID, invocation...)
 	if err != nil {
 		return SkillBundle{}, err
 	}
@@ -151,7 +151,7 @@ func FindSkillBundleForTenant(tenantID, name string) (SkillBundle, error) {
 	return SkillBundle{}, fmt.Errorf("bundle not found: %s", name)
 }
 
-func SaveSkillBundleForTenant(tenantID string, bundle SkillBundle) (SkillBundle, error) {
+func SaveSkillBundleForTenant(tenantID string, bundle SkillBundle, invocation ...map[string]interface{}) (SkillBundle, error) {
 	if strings.TrimSpace(bundle.Name) == "" {
 		return SkillBundle{}, fmt.Errorf("bundle name is required")
 	}
@@ -159,11 +159,11 @@ func SaveSkillBundleForTenant(tenantID string, bundle SkillBundle) (SkillBundle,
 		return SkillBundle{}, fmt.Errorf("bundle skills are required")
 	}
 	for _, skill := range bundle.Skills {
-		if _, err := findSkill(tenantID, skill); err != nil {
+		if _, err := findSkill(tenantID, skill, invocation...); err != nil {
 			return SkillBundle{}, fmt.Errorf("bundle skill %q not found: %w", skill, err)
 		}
 	}
-	dir, err := SkillBundlesDirForTenant(tenantID)
+	dir, err := SkillBundlesDirForTenant(tenantID, invocation...)
 	if err != nil {
 		return SkillBundle{}, err
 	}
@@ -186,16 +186,16 @@ func SaveSkillBundleForTenant(tenantID string, bundle SkillBundle) (SkillBundle,
 	return bundle, nil
 }
 
-func DeleteSkillBundleForTenant(tenantID, name string) error {
-	b, err := FindSkillBundleForTenant(tenantID, name)
+func DeleteSkillBundleForTenant(tenantID, name string, invocation ...map[string]interface{}) error {
+	b, err := FindSkillBundleForTenant(tenantID, name, invocation...)
 	if err != nil {
 		return err
 	}
 	return os.Remove(b.Path)
 }
 
-func BuildBundleInvocationMessageForTenant(tenantID, name, instruction string) (string, string, bool, error) {
-	b, err := FindSkillBundleForTenant(tenantID, name)
+func BuildBundleInvocationMessageForTenant(tenantID, name, instruction string, invocation ...map[string]interface{}) (string, string, bool, error) {
+	b, err := FindSkillBundleForTenant(tenantID, name, invocation...)
 	if err != nil {
 		return "", "", false, nil
 	}
@@ -214,7 +214,7 @@ func BuildBundleInvocationMessageForTenant(tenantID, name, instruction string) (
 	var loaded []string
 	var missing []string
 	for _, skill := range b.Skills {
-		msg, display, err := BuildSkillInvocationMessageForTenant(tenantID, skill, "")
+		msg, display, err := BuildSkillInvocationMessageForTenant(tenantID, skill, "", invocation...)
 		if err != nil {
 			missing = append(missing, skill)
 			continue

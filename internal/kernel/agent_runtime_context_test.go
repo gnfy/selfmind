@@ -2,6 +2,7 @@ package kernel
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"selfmind/internal/kernel/llm"
@@ -31,7 +32,7 @@ func TestSelectRuntimeContextDoesNotRepeatSelectorRecall(t *testing.T) {
 	provider := &semanticRecallCounterProvider{}
 	agent := &Agent{
 		memory:           memory.NewMemoryManager(nil),
-		semanticExpander: memory.NewSemanticExpander(provider, true),
+		semanticExpander: memory.NewSemanticExpander(provider, true, nil),
 	}
 	ctx := WithTaskRuntimeContext(context.Background(), TaskRuntimeContext{
 		TaskID: "task_selected_by_daemon",
@@ -52,11 +53,32 @@ func TestSelectRuntimeContextKeepsDirectAgentRecallFallback(t *testing.T) {
 	provider := &semanticRecallCounterProvider{}
 	agent := &Agent{
 		memory:           memory.NewMemoryManager(nil),
-		semanticExpander: memory.NewSemanticExpander(provider, true),
+		semanticExpander: memory.NewSemanticExpander(provider, true, nil),
 	}
 
 	agent.selectRuntimeContext(context.Background(), "tenant", "direct", "find related work", DefaultTaskStrategy(), nil)
 	if provider.calls != 1 {
 		t.Fatalf("semantic expansion calls = %d; direct callers should retain the fallback", provider.calls)
+	}
+}
+
+func TestDirectAgentRecallPassesNaturalTextToSessionSearch(t *testing.T) {
+	provider, err := memory.NewSQLiteProvider(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewSQLiteProvider: %v", err)
+	}
+	defer provider.Close()
+
+	const personID = "direct-recall-person"
+	trajectory := []byte(`{"messages":[{"role":"user","content":"The deployment approval timed out while the release was pending"}]}`)
+	if err := provider.IndexMessagesFromTrajectory(nil, personID, "cli", "sess-direct-recall", trajectory); err != nil {
+		t.Fatalf("IndexMessagesFromTrajectory: %v", err)
+	}
+	agent := &Agent{memory: memory.NewMemoryManager(provider)}
+
+	got := agent.autoRecallWithBudget(context.Background(), personID,
+		"please investigate yesterday's approval timeout incident", 4000)
+	if !strings.Contains(got, "sess-direct-recall") {
+		t.Fatalf("direct recall = %q; want indexed session", got)
 	}
 }

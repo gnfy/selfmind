@@ -20,7 +20,14 @@ type SkillMigrationItem struct {
 	Partition string `json:"partition"`
 	Name      string `json:"name"`
 	Action    string `json:"action"`
+	Archived  bool   `json:"archived,omitempty"`
 	Reason    string `json:"reason,omitempty"`
+}
+
+type migrationSkillAsset struct {
+	Path     string
+	Name     string
+	Archived bool
 }
 
 type SkillMigrationReport struct {
@@ -47,6 +54,10 @@ func MigratePersonSkillsToControl(root, controlTenant string, apply bool, grace 
 		grace = DefaultSkillMigrationGrace
 	}
 	report := SkillMigrationReport{Root: root, Target: controlTenant, Applied: apply}
+	storage, err := NewSkillStorage(root)
+	if err != nil {
+		return report, err
+	}
 	entries, err := os.ReadDir(root)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -69,7 +80,11 @@ func MigratePersonSkillsToControl(root, controlTenant string, apply bool, grace 
 			return report, err
 		}
 		if len(skills) == 0 {
-			if info, statErr := os.Stat(sourceDir); statErr == nil && info.IsDir() {
+			removable, removableErr := skillPartitionRemovable(sourceDir)
+			if removableErr != nil {
+				return report, removableErr
+			}
+			if removable {
 				report.EmptyPartitions++
 				if apply {
 					if err := removeEmptySkillPartition(sourceDir); err != nil && !os.IsNotExist(err) {
@@ -81,18 +96,28 @@ func MigratePersonSkillsToControl(root, controlTenant string, apply bool, grace 
 		}
 		report.Partitions++
 		sourceUsage, _ := loadSkillUsageForDir(sourceDir)
-		for _, source := range skills {
-			name := strings.TrimSuffix(filepath.Base(source), ".md")
-			target := filepath.Join(targetDir, filepath.Base(source))
-			sourceHash, hashErr := migrationSkillHash(source)
+		for _, asset := range skills {
+			name := asset.Name
+			targetRoot := targetDir
+			if asset.Archived {
+				targetRoot = filepath.Join(targetDir, ".archive")
+			}
+			target := filepath.Join(targetRoot, filepath.Base(asset.Path))
+			sourceHash, hashErr := migrationSkillHash(asset.Path)
 			if hashErr != nil {
 				return report, hashErr
 			}
 			action := "migrate"
-			collisions := existingSkillInstallCollisions(targetDir, name)
+			collisions := existingSkillInstallCollisions(targetRoot, name)
+			if asset.Archived && len(collisions) == 0 {
+				// An active control-tenant copy takes precedence over an archived
+				// person copy. Identical content can still be deduplicated, while
+				// differing content remains in the person partition as a conflict.
+				collisions = existingSkillInstallCollisions(targetDir, name)
+			}
 			if len(collisions) > 1 {
 				report.Conflicts++
-				report.Items = append(report.Items, SkillMigrationItem{Partition: entry.Name(), Name: name, Action: "conflict", Reason: "control tenant has multiple legacy formats"})
+				report.Items = append(report.Items, SkillMigrationItem{Partition: entry.Name(), Name: name, Action: "conflict", Archived: asset.Archived, Reason: "control tenant has multiple legacy formats"})
 				continue
 			}
 			if len(collisions) == 1 {
@@ -103,12 +128,12 @@ func MigratePersonSkillsToControl(root, controlTenant string, apply bool, grace 
 				}
 				if targetHash != sourceHash {
 					report.Conflicts++
-					report.Items = append(report.Items, SkillMigrationItem{Partition: entry.Name(), Name: name, Action: "conflict", Reason: "control tenant has different content"})
+					report.Items = append(report.Items, SkillMigrationItem{Partition: entry.Name(), Name: name, Action: "conflict", Archived: asset.Archived, Reason: "control tenant has different content"})
 					continue
 				}
 				action = "dedupe"
 			}
-			report.Items = append(report.Items, SkillMigrationItem{Partition: entry.Name(), Name: name, Action: action})
+			report.Items = append(report.Items, SkillMigrationItem{Partition: entry.Name(), Name: name, Action: action, Archived: asset.Archived})
 			if action == "dedupe" {
 				report.Deduped++
 			} else {
@@ -118,7 +143,7 @@ func MigratePersonSkillsToControl(root, controlTenant string, apply bool, grace 
 				continue
 			}
 			if action == "migrate" {
-				if err := copySkillAsset(source, target); err != nil {
+				if err := copySkillAsset(asset.Path, target); err != nil {
 					return report, err
 				}
 			}
@@ -126,15 +151,18 @@ func MigratePersonSkillsToControl(root, controlTenant string, apply bool, grace 
 			if rec.Name == "" {
 				rec = SkillUsageRecord{Name: name, Source: SkillSourceAgentCreated, State: SkillStateActive, CreatedAt: nowRFC3339()}
 			}
+			if asset.Archived {
+				rec.State = SkillStateArchived
+			}
 			rec.MigratedFrom = entry.Name()
 			rec.GovernanceNotBefore = time.Now().UTC().Add(grace).Format(time.RFC3339)
 			if existing := targetUsage[name]; existing.Name == "" {
 				targetUsage[name] = rec
 			}
-			if err := migrateSkillLearningAudit(root, entry.Name(), controlTenant, name); err != nil {
+			if err := migrateSkillLearningAudit(root, entry.Name(), controlTenant, name, storage); err != nil {
 				return report, err
 			}
-			if err := os.RemoveAll(source); err != nil {
+			if err := os.RemoveAll(asset.Path); err != nil {
 				return report, err
 			}
 			delete(sourceUsage, name)
@@ -160,7 +188,7 @@ func MigratePersonSkillsToControl(root, controlTenant string, apply bool, grace 
 	return report, nil
 }
 
-func migrationSkillEntries(dir string) ([]string, error) {
+func migrationSkillEntries(dir string) ([]migrationSkillAsset, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -168,13 +196,48 @@ func migrationSkillEntries(dir string) ([]string, error) {
 		}
 		return nil, err
 	}
-	var out []string
+	var out []migrationSkillAsset
+	for _, entry := range entries {
+		if entry.Name() == ".archive" && entry.IsDir() {
+			archived, err := migrationSkillEntriesInDir(filepath.Join(dir, entry.Name()), true)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, archived...)
+			continue
+		}
+		if strings.HasPrefix(entry.Name(), ".") {
+			continue
+		}
+		if entry.IsDir() || strings.HasSuffix(entry.Name(), ".md") {
+			out = append(out, migrationSkillAsset{
+				Path: filepath.Join(dir, entry.Name()),
+				Name: strings.TrimSuffix(entry.Name(), ".md"),
+			})
+		}
+	}
+	return out, nil
+}
+
+func migrationSkillEntriesInDir(dir string, archived bool) ([]migrationSkillAsset, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	out := make([]migrationSkillAsset, 0, len(entries))
 	for _, entry := range entries {
 		if strings.HasPrefix(entry.Name(), ".") {
 			continue
 		}
 		if entry.IsDir() || strings.HasSuffix(entry.Name(), ".md") {
-			out = append(out, filepath.Join(dir, entry.Name()))
+			out = append(out, migrationSkillAsset{
+				Path:     filepath.Join(dir, entry.Name()),
+				Name:     strings.TrimSuffix(entry.Name(), ".md"),
+				Archived: archived,
+			})
 		}
 	}
 	return out, nil
@@ -252,7 +315,7 @@ func copySkillAsset(source, target string) error {
 	return os.Rename(tmp, target)
 }
 
-func migrateSkillLearningAudit(root, personID, controlTenant, skillName string) error {
+func migrateSkillLearningAudit(root, personID, controlTenant, skillName string, storage *SkillStorage) error {
 	path := filepath.Join(root, personID, "learning", "learning-log.jsonl")
 	f, err := os.Open(path)
 	if err != nil {
@@ -262,7 +325,8 @@ func migrateSkillLearningAudit(root, personID, controlTenant, skillName string) 
 		return err
 	}
 	defer f.Close()
-	existing, _ := learningChangeIDs(controlTenant)
+	invocation := WithSkillStorage(nil, storage)
+	existing, _ := learningChangeIDs(controlTenant, invocation)
 	scanner := bufio.NewScanner(f)
 	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
 	for scanner.Scan() {
@@ -271,7 +335,7 @@ func migrateSkillLearningAudit(root, personID, controlTenant, skillName string) 
 			continue
 		}
 		change.TenantID = controlTenant
-		if err := appendLearningChange(change); err != nil {
+		if err := appendLearningChange(change, invocation); err != nil {
 			return err
 		}
 		existing[change.ID] = true
@@ -279,9 +343,9 @@ func migrateSkillLearningAudit(root, personID, controlTenant, skillName string) 
 	return scanner.Err()
 }
 
-func learningChangeIDs(tenantID string) (map[string]bool, error) {
+func learningChangeIDs(tenantID string, invocation ...map[string]interface{}) (map[string]bool, error) {
 	ids := map[string]bool{}
-	dir, err := learningDir(tenantID)
+	dir, err := learningDir(tenantID, invocation...)
 	if err != nil {
 		return ids, err
 	}
@@ -312,8 +376,49 @@ func removeEmptySkillPartition(dir string) error {
 	if err != nil || len(entries) > 0 {
 		return err
 	}
+	removable, err := skillPartitionRemovable(dir)
+	if err != nil || !removable {
+		return err
+	}
 	_ = os.Remove(usageFilePath(dir))
+	_ = os.Remove(filepath.Join(dir, ".archive"))
 	return os.Remove(dir)
+}
+
+// skillPartitionRemovable is deliberately conservative: migration may remove
+// a directory only when it contains no assets and only its known empty
+// bookkeeping entries remain. Catalog state or an unknown hidden entry keeps
+// the partition intact for explicit cleanup/review.
+func skillPartitionRemovable(dir string) (bool, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	for _, entry := range entries {
+		switch entry.Name() {
+		case ".usage.json":
+			if entry.IsDir() {
+				return false, nil
+			}
+		case ".archive":
+			if !entry.IsDir() {
+				return false, nil
+			}
+			children, err := os.ReadDir(filepath.Join(dir, entry.Name()))
+			if err != nil {
+				return false, err
+			}
+			if len(children) > 0 {
+				return false, nil
+			}
+		default:
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
 func FormatSkillMigrationReport(report SkillMigrationReport) string {
@@ -323,13 +428,20 @@ func FormatSkillMigrationReport(report SkillMigrationReport) string {
 		report.Root, report.Target, report.Partitions, report.EmptyPartitions, report.Migrated, report.Deduped, report.Conflicts)
 	for _, item := range report.Items {
 		fmt.Fprintf(&b, "- %s/%s: %s", item.Partition, item.Name, item.Action)
+		if item.Archived {
+			b.WriteString(" [archived]")
+		}
 		if item.Reason != "" {
 			fmt.Fprintf(&b, " (%s)", item.Reason)
 		}
 		b.WriteByte('\n')
 	}
 	if !report.Applied {
-		b.WriteString("Dry-run only; re-run with --apply after reviewing conflicts.\n")
+		if report.Migrated == 0 && report.Deduped == 0 && report.Conflicts == 0 && report.EmptyPartitions == 0 {
+			b.WriteString("No migration needed.\n")
+		} else {
+			b.WriteString("Dry-run only; re-run with --apply after reviewing conflicts.\n")
+		}
 	}
 	return b.String()
 }

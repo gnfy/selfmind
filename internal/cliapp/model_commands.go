@@ -559,6 +559,7 @@ func (a *App) checkCurrentModel(cfg *config.Config, options modelCheckOptions) i
 	if rt.CapabilitySource != "" {
 		fmt.Fprintf(a.stdout, "Capabilities: %s\n", rt.CapabilitySource)
 	}
+	printMaintenanceFallback(a.stdout, cfg, options.Role)
 	fmt.Fprintf(a.stdout, "Quirks: auth=%s tool_schema=%s thinking=%s user_identity=%s system=%s http=%s prompt_cache=%s responses_store_false=%t responses_require_stream=%t\n",
 		blankAsDash(rt.Quirks.AuthHeader),
 		blankAsDash(rt.Quirks.ToolSchema),
@@ -670,6 +671,26 @@ func promptCacheDisplay(provider, protocol string, enabled bool) string {
 		return "provider-managed"
 	}
 	return "n/a"
+}
+
+// printMaintenanceFallback makes the resolved fallback position visible. A
+// chain that collapses onto one physical route is the normal outcome for an
+// installation with a single provider, and saying so is the point: otherwise
+// the only record is an INFO log nobody reads.
+func printMaintenanceFallback(out io.Writer, cfg *config.Config, role string) {
+	summary := appcore.DescribeMaintenanceFallback(cfg, role)
+	if !summary.Chained {
+		return
+	}
+	switch {
+	case summary.Provider != "":
+		fmt.Fprintf(out, "Maintenance fallback: %s -> provider=%s model=%s\n",
+			summary.Slot, summary.Provider, blankAsDash(summary.Model))
+	case summary.Collapsed:
+		fmt.Fprintln(out, "Maintenance fallback: none (every fallback position resolves to this same endpoint and credential)")
+	default:
+		fmt.Fprintln(out, "Maintenance fallback: none (configure models.auxiliary on a different provider to add one)")
+	}
 }
 
 func modelCheckFailureHint(role string) string {

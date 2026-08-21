@@ -130,7 +130,8 @@ func TestRunCaseDefaultsToIsolatedDataDir(t *testing.T) {
 	}
 	realDataDir, cfgPath := writeRunnerFixtures(t)
 	c := writeRunnerCase(t, "runner_isolation_default", "")
-	beforeEvalDirs := homeEvalDirs(t)
+	beforeEvalDirs := homeEvalResidueDirs(t)
+	beforeScratchDirs := cwdEvalTempRoots(t)
 
 	out := filepath.Join(t.TempDir(), "out.jsonl")
 	result, err := RunCase(context.Background(), c, RunOptions{ConfigPath: cfgPath, OutputPath: out})
@@ -145,17 +146,22 @@ func TestRunCaseDefaultsToIsolatedDataDir(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(realDataDir, "control.db")); !os.IsNotExist(err) {
 		t.Fatalf("default eval run must not create the configured control.db (stat err=%v)", err)
 	}
-	// SkillsDir isolation: app wiring must not mint an eval-tenant skills dir
-	// under the (temp) home — that was the per-case ~/.selfmind/eval-*/skills
-	// leak. writeRunnerFixtures pinned HOME, so any eval-* child here is a leak.
-	for name := range homeEvalDirs(t) {
+	// Storage isolation must cover both the stable eval tenant and the random
+	// person id minted by the temporary control database. The old regression
+	// assertion checked only eval-* and therefore missed person_* leaks.
+	for name := range homeEvalResidueDirs(t) {
 		if _, existed := beforeEvalDirs[name]; !existed {
 			t.Fatalf("eval run leaked %q into the home .selfmind dir", name)
 		}
 	}
+	for name := range cwdEvalTempRoots(t) {
+		if _, existed := beforeScratchDirs[name]; !existed {
+			t.Fatalf("eval run leaked temporary root %q into the package directory", name)
+		}
+	}
 }
 
-func homeEvalDirs(t *testing.T) map[string]struct{} {
+func homeEvalResidueDirs(t *testing.T) map[string]struct{} {
 	t.Helper()
 	result := map[string]struct{}{}
 	home, err := os.UserHomeDir()
@@ -167,11 +173,63 @@ func homeEvalDirs(t *testing.T) map[string]struct{} {
 		return result
 	}
 	for _, entry := range entries {
-		if entry.IsDir() && strings.HasPrefix(entry.Name(), "eval-") {
+		if entry.IsDir() && (strings.HasPrefix(entry.Name(), "eval-") || strings.HasPrefix(entry.Name(), "person_")) {
 			result[entry.Name()] = struct{}{}
 		}
 	}
 	return result
+}
+
+func cwdEvalTempRoots(t *testing.T) map[string]struct{} {
+	t.Helper()
+	result := map[string]struct{}{}
+	entries, err := os.ReadDir(".")
+	if err != nil {
+		return result
+	}
+	for _, entry := range entries {
+		if entry.IsDir() && strings.HasPrefix(entry.Name(), ".selfmind-eval-") {
+			result[entry.Name()] = struct{}{}
+		}
+	}
+	return result
+}
+
+func TestCleanupEvalTempRootRemovesOwnedTree(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "selfmind-eval-cleanup")
+	if err := os.MkdirAll(filepath.Join(root, "data"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "data", "control.db-wal"), []byte("test"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := cleanupEvalTempRoot(root); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(root); !os.IsNotExist(err) {
+		t.Fatalf("temporary root remains: %v", err)
+	}
+}
+
+func TestCleanupEvalTempRootRemovesReadOnlyToolchainTree(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "selfmind-eval-readonly-toolchain")
+	moduleDir := filepath.Join(root, "runtime", "leases", "lease-test", "toolchain", "go-mod", "example.com", "module@v1.0.0")
+	if err := os.MkdirAll(moduleDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(moduleDir, "module.go"), []byte("package module\n"), 0o444); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(moduleDir, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	if err := cleanupEvalTempRoot(root); err != nil {
+		_ = os.Chmod(moduleDir, 0o700)
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(root); !os.IsNotExist(err) {
+		t.Fatalf("temporary root remains: %v", err)
+	}
 }
 
 // TestRunCaseSharedDataOptsIntoConfiguredDir covers the explicit escape hatch:
@@ -284,12 +342,16 @@ func TestIsolatedEvalConfigKeepsSkillsUnderTempDir(t *testing.T) {
 		}
 	}
 
-	// A blank data dir must stay a no-op: the shared_data escape hatch runs
-	// against the configured paths and must not gain surprise overrides.
+	// A blank data dir preserves configured durable paths for shared_data, but
+	// operator identity must still be removed from release evidence.
 	shared := &config.Config{}
+	shared.Agent.Soul = "operator identity"
 	isolatedEvalConfig(shared, "")
 	if shared.Storage.DataDir != "" || shared.Evolution.SkillsDir != "" {
 		t.Fatalf("shared_data config must be untouched, got %+v", shared)
+	}
+	if shared.Agent.Soul != "" {
+		t.Fatalf("shared_data eval retained operator soul %q", shared.Agent.Soul)
 	}
 }
 

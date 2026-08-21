@@ -60,6 +60,7 @@ func NewWebSearchToolWithOptions(opts WebSearchOptions) *WebSearchTool {
 		BaseTool: BaseTool{
 			name:        "web_search",
 			description: "Search the web and return titled results with URLs and snippets. Use for current events, product/spec lookups, and any fact that may have changed since training.",
+			metadata:    ToolMetadata{ReadOnly: true, RiskLevel: ToolRiskLow, Category: "network", OperationClasses: []OperationClass{OpClassNetwork}},
 			schema: ToolSchema{
 				Type: "object",
 				Properties: map[string]PropertyDef{

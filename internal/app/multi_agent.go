@@ -9,6 +9,7 @@ import (
 	"selfmind/internal/kernel"
 	"selfmind/internal/kernel/llm"
 	"selfmind/internal/kernel/memory"
+	"selfmind/internal/promptassets"
 	"selfmind/internal/tools"
 )
 
@@ -34,10 +35,11 @@ type MultiAgentHost struct {
 	backend       kernel.AgentBackend   // Parent backend for subagent tool access
 	provider      llm.Provider          // LLM provider for subagents
 	mem           *memory.MemoryManager // Shared memory manager; subagents get isolated tenantIDs
-	maxConcurrent int                   // Max parallel subagents (semaphore)
-	maxDepth      int                   // Max delegation depth (prevent runaway recursion)
-	maxIterations int                   // Max iterations per subagent
-	soul          string                // System prompt for subagents
+	prompts       *promptassets.Snapshot
+	maxConcurrent int    // Max parallel subagents (semaphore)
+	maxDepth      int    // Max delegation depth (prevent runaway recursion)
+	maxIterations int    // Max iterations per subagent
+	soul          string // System prompt for subagents
 	stopCh        chan struct{}
 	mu            sync.Mutex
 	running       map[string]context.CancelFunc // taskID -> cancel func
@@ -61,6 +63,7 @@ func NewMultiAgentHost(
 	backend kernel.AgentBackend,
 	provider llm.Provider,
 	mem *memory.MemoryManager,
+	prompts *promptassets.Snapshot,
 	maxConcurrent, maxDepth, maxIterations int,
 ) *MultiAgentHost {
 	if maxConcurrent <= 0 {
@@ -76,10 +79,11 @@ func NewMultiAgentHost(
 		backend:       backend,
 		provider:      provider,
 		mem:           mem,
+		prompts:       prompts,
 		maxConcurrent: maxConcurrent,
 		maxDepth:      maxDepth,
 		maxIterations: maxIterations,
-		soul:          "You are a specialized sub-agent helping with a task. Be concise and focused.",
+		soul:          delegateSubAgentSoul,
 		stopCh:        make(chan struct{}),
 		running:       make(map[string]context.CancelFunc),
 	}
@@ -166,10 +170,7 @@ func (h *MultiAgentHost) runSubAgent(ctx context.Context, task Task, taskID stri
 	}
 
 	// Build the full prompt
-	fullPrompt := task.Goal
-	if task.Context != "" {
-		fullPrompt = fmt.Sprintf("Context:\n%s\n\nGoal:\n%s", task.Context, task.Goal)
-	}
+	fullPrompt := delegatedTaskPrompt(task.Goal, task.Context, task.Toolsets)
 
 	// Create subagent
 	subAgent := kernel.NewAgent(
@@ -181,6 +182,8 @@ func (h *MultiAgentHost) runSubAgent(ctx context.Context, task Task, taskID stri
 		3,   // maxRetries
 		nil, // no reflector for subagents
 	)
+	subAgent.SetPromptProfile(kernel.PromptProfileDelegation)
+	subAgent.SetPromptSnapshot(h.prompts)
 
 	resp, usage, err := subAgent.RunConversation(ctx, subTenantID, "delegation", fullPrompt)
 	if err != nil {
@@ -189,13 +192,10 @@ func (h *MultiAgentHost) runSubAgent(ctx context.Context, task Task, taskID stri
 	return resp, usage, nil
 }
 
-// buildSubBackend returns a backend filtered to only the requested toolsets.
-// If no toolsets are specified, returns the full parent backend.
+// buildSubBackend returns a backend filtered to the requested toolsets. With no
+// explicit toolsets it clones the ordinary parent capabilities while still
+// excluding parent-owned lifecycle and durable-learning tools.
 func (h *MultiAgentHost) buildSubBackend(toolsets []string) kernel.AgentBackend {
-	if len(toolsets) == 0 {
-		return h.backend
-	}
-
 	// Try to get the Dispatcher to build a filtered registry
 	disp, ok := h.backend.(*tools.Dispatcher)
 	if !ok {
@@ -235,7 +235,14 @@ func (h *MultiAgentHost) buildSubBackend(toolsets []string) kernel.AgentBackend 
 	}
 
 	for _, name := range allToolNames {
+		if name == "delegate_task" || parentOwnedDelegationTool(name) {
+			continue
+		}
 		if requestedTools[name] {
+			if t, ok := disp.GetTool(name); ok {
+				subRegistry.Register(t)
+			}
+		} else if len(toolsets) == 0 {
 			if t, ok := disp.GetTool(name); ok {
 				subRegistry.Register(t)
 			}

@@ -559,6 +559,18 @@ durable check 是唯一没有 host 逃逸、也没有模型在环的执行路径
 调用参数读取，但硬限制为 120 秒；超过 30 秒的预检进入 long-running 执行档案，
 让需要网络或认证握手的真实检查有完成机会，同时保持注册调用有界。
 
+轮询命令自身必须是**只读观测**：要么命中声明式只读命令目录，要么是 operator
+批准且内容哈希固定的观测脚本。shell 写入、变更型子命令、未知客户端，以及把观测与
+变更混在一起的管道都在注册前拒绝。这个限制不妨碍最终状态回写；回写属于观测达到
+终态后的一次性 watcher finalization run，不属于周期轮询命令。
+
+注册成功本身就是可信的生命周期交接。kernel 直接写入结构化
+`waiting_external` outcome 并结束前台 turn，不再要求模型额外调用 `finish_run` 或
+再生成一轮回复。同一批次可以注册多个 watcher，但首个 watcher 之后的非 watcher
+调用会被隔离。等待期间没有 active person run，也不消耗模型 token，因此用户可立即
+开始新任务；终态收尾仍是 one-active-run 约束下的真实 daemon 工作，客户端在这段短
+时间显示“后台收尾”，新输入如实排队，而不是继续显示前台计时器。
+
 硬约束：**L0/L1 失败永不进入 pattern 匹配**；`success_pattern` 额外要求
 `ExitCode==0`（失败的检查打印出的 "SUCCESS" 是自相矛盾的证据），`failure_pattern`
 不要求（状态类 CLI 会以非零退出报告真实失败）。同一 `failure_class + output_hash`

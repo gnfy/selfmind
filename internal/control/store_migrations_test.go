@@ -36,6 +36,42 @@ func TestCurrentControlSchemaSkipsFullIntegrityCheck(t *testing.T) {
 	}
 }
 
+func TestVersionOneControlStoreMigratesMemoryGovernanceSchedule(t *testing.T) {
+	dir := t.TempDir()
+	store, err := OpenStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.Exec(`DROP TABLE memory_governance_schedule`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.Exec(`DELETE FROM schema_migrations`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.Exec(`INSERT INTO schema_migrations(version, name, applied_at) VALUES (1, 'legacy-baseline', 1)`); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	migrated, err := OpenStore(dir)
+	if err != nil {
+		t.Fatalf("migrate v1 store: %v", err)
+	}
+	defer migrated.Close()
+	if migrated.SchemaStatus().Version != CurrentControlSchemaVersion {
+		t.Fatalf("schema status=%+v", migrated.SchemaStatus())
+	}
+	var tables int
+	if err := migrated.db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='memory_governance_schedule'`).Scan(&tables); err != nil || tables != 1 {
+		t.Fatalf("schedule tables=%d err=%v", tables, err)
+	}
+	if strings.TrimSpace(migrated.SchemaStatus().MigrationBackup) == "" {
+		t.Fatal("versioned migration did not create a backup")
+	}
+}
+
 func TestLegacyControlSchemaKeepsMigrationBoundaryIntegrityChecks(t *testing.T) {
 	dir := t.TempDir()
 	store, err := OpenStore(dir)

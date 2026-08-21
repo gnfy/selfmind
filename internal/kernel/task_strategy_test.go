@@ -100,14 +100,16 @@ func TestTaskStrategyEmptyInputFallsBackToAgentFirstDefault(t *testing.T) {
 	}
 }
 
-func TestTaskStrategyUsesFiniteElasticBudgetAndDurableExternalWait(t *testing.T) {
+func TestTaskStrategyUsesFiniteElasticBudgetWithoutInventingLifecycleTools(t *testing.T) {
 	strategy := BuildTaskStrategy("deploy the service and wait for CI", "cli")
 	if strategy.MaxActionTools != 10 || strategy.ActionToolBudgetLimit != 34 || strategy.MaxBudgetExtensions != 6 {
 		t.Fatalf("budget = initial:%d limit:%d extensions:%d", strategy.MaxActionTools, strategy.ActionToolBudgetLimit, strategy.MaxBudgetExtensions)
 	}
 	note := strategy.SystemPromptNote()
-	if !strings.Contains(note, "watch_external") || !strings.Contains(note, "waiting_external") {
-		t.Fatalf("missing durable external-wait contract: %q", note)
+	for _, unavailable := range []string{"watch_external", "update_plan", "finish_run"} {
+		if strings.Contains(note, unavailable) {
+			t.Fatalf("generic strategy note invented capability %q: %q", unavailable, note)
+		}
 	}
 }
 

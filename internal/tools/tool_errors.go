@@ -6,6 +6,38 @@ import (
 	"strings"
 )
 
+// stableToolError separates local diagnostic detail from the bounded message
+// that is safe to return to the model. Kernel consumes these methods through a
+// structural interface, so it stays independent of concrete tools while the
+// originating layer owns the error code and category.
+type stableToolError struct {
+	cause        error
+	code         string
+	category     string
+	safeMessage  string
+	recoveryHint string
+}
+
+func (e *stableToolError) Error() string             { return e.cause.Error() }
+func (e *stableToolError) Unwrap() error             { return e.cause }
+func (e *stableToolError) ToolErrorCode() string     { return e.code }
+func (e *stableToolError) ToolErrorCategory() string { return e.category }
+func (e *stableToolError) ModelSafeMessage() string  { return e.safeMessage }
+func (e *stableToolError) ToolRecoveryHint() string  { return e.recoveryHint }
+
+func newStableToolError(cause error, code, category, safeMessage, recoveryHint string) error {
+	if cause == nil {
+		return nil
+	}
+	return &stableToolError{
+		cause:        cause,
+		code:         strings.TrimSpace(code),
+		category:     strings.TrimSpace(category),
+		safeMessage:  strings.TrimSpace(safeMessage),
+		recoveryHint: strings.TrimSpace(recoveryHint),
+	}
+}
+
 // Tool failure classification.
 //
 // A failed tool call reaches the model as the error text alone, so the model
@@ -202,6 +234,7 @@ var errorClassHints = map[string]string{
 	"environment":               "A required interpreter, package, or environment variable is missing; set up the environment before retrying.",
 	"check_definition":          "The check script itself failed; fix its parsing, variables, or status query before retrying or registering a durable watch.",
 	"interface_drift":           "A tool, CLI, API, or response contract changed; inspect current help/schema before updating the caller.",
+	"data_store":                "A local durable-data operation failed; retry once with simpler input, then use diagnostics instead of changing stored data.",
 	"command_failed":            "The command exited unsuccessfully; use its exit code and captured output before changing the next step.",
 	"unknown":                   "Read the error and captured output to identify a cause before changing the next command.",
 }

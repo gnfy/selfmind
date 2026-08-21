@@ -181,13 +181,18 @@ func toolDefinitionFromCompiled(t Tool, parameters map[string]interface{}) map[s
 		},
 	}
 	meta := ToolMetadataFor(t)
+	// The definition map is untyped wire data: it crosses into kernel (which
+	// must not import this package) and into provider adapters that marshal it
+	// as JSON. Named string types are therefore converted here — a consumer
+	// doing metadata["exposure"].(string) on a ToolExposure value silently gets
+	// the zero value, which is how the hidden/deferred filter was inert.
 	def["selfmind"] = map[string]interface{}{
-		"exposure":          meta.Exposure,
+		"exposure":          string(meta.Exposure),
 		"supports_parallel": meta.SupportsParallel,
 		"read_only":         meta.ReadOnly,
-		"risk_level":        meta.RiskLevel,
+		"risk_level":        string(meta.RiskLevel),
 		"category":          meta.Category,
-		"origin":            executionPolicyForTool(t).Origin,
+		"origin":            string(executionPolicyForTool(t).Origin),
 		"operation_classes": meta.OperationClasses,
 	}
 	return def

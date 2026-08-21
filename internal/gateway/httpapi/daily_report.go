@@ -16,38 +16,46 @@ import (
 const (
 	defaultDailyReportWindow = 24 * time.Hour
 	maxDailyReportWindow     = 30 * 24 * time.Hour
+	dailyReportEventPageSize = 5000
+	dailyReportEventLimit    = 100000
 )
 
 type dailyQualityStats struct {
-	RunStatuses            map[string]int
-	CompletionReasons      map[string]int
-	ExternalStatuses       map[string]int
-	ProviderCalls          int
-	InputTokens            int64
-	OutputTokens           int64
-	CacheReadTokens        int64
-	CacheMissTokens        int64
-	ProviderLatencyMS      int64
-	ToolCalls              int
-	ToolFailures           int
-	ToolPolicyRedirects    int
-	ToolFailureClasses     map[string]int
-	ApprovalCounts         map[string]int
-	RecallCandidates       int
-	RecallSelected         int
-	RecallOverlap          int
-	RecallCandidateSources map[string]int
-	RecallSelectedSources  map[string]int
-	RecallOverlapSources   map[string]int
-	RecallSkipped          map[string]int
-	MemoryDisposition      map[string]int
-	ContinuationRuns       int
-	ContinuationStatuses   map[string]int
-	ContinuationCalls      int
-	ContinuationInput      int64
-	ContinuationOutput     int64
-	ContinuationCacheRead  int64
-	ContinuationCacheMiss  int64
+	RunStatuses             map[string]int
+	CompletionReasons       map[string]int
+	ExternalStatuses        map[string]int
+	ProviderCalls           int
+	InputTokens             int64
+	OutputTokens            int64
+	CacheReadTokens         int64
+	CacheMissTokens         int64
+	ProviderLatencyMS       int64
+	ToolCalls               int
+	ToolFailures            int
+	ToolPolicyRedirects     int
+	ToolFailureClasses      map[string]int
+	ToolCallsByName         map[string]int
+	ApprovalCounts          map[string]int
+	RecallCandidates        int
+	RecallSelected          int
+	RecallOverlap           int
+	RecallCandidateSources  map[string]int
+	RecallSelectedSources   map[string]int
+	RecallOverlapSources    map[string]int
+	RecallSkipped           map[string]int
+	MemoryDisposition       map[string]int
+	ContinuationRuns        int
+	ContinuationStatuses    map[string]int
+	ContinuationCalls       int
+	ContinuationInput       int64
+	ContinuationOutput      int64
+	ContinuationCacheRead   int64
+	ContinuationCacheMiss   int64
+	ContextSamples          int
+	ContextEstimatedTokens  int64
+	ContextToolSchemaTokens int64
+	FingerprintStates       map[string]int
+	ProviderPrefixHashes    map[string]bool
 }
 
 func parseDailyReportWindow(input string) (time.Duration, error) {
@@ -81,11 +89,14 @@ func collectDailyQualityStats(events []control.Event) dailyQualityStats {
 		ApprovalCounts:         make(map[string]int),
 		MemoryDisposition:      make(map[string]int),
 		ToolFailureClasses:     make(map[string]int),
+		ToolCallsByName:        make(map[string]int),
 		RecallCandidateSources: make(map[string]int),
 		RecallSelectedSources:  make(map[string]int),
 		RecallOverlapSources:   make(map[string]int),
 		RecallSkipped:          make(map[string]int),
 		ContinuationStatuses:   make(map[string]int),
+		FingerprintStates:      make(map[string]int),
+		ProviderPrefixHashes:   make(map[string]bool),
 	}
 	runOrigins := make(map[string]string)
 	for _, event := range events {
@@ -166,6 +177,8 @@ func collectDailyQualityStats(events []control.Event) dailyQualityStats {
 		case "tool.completed":
 			stats.ToolCalls++
 			var p struct {
+				ToolName      string `json:"tool_name"`
+				Tool          string `json:"tool"`
 				Error         string `json:"error"`
 				ErrorCategory string `json:"error_category"`
 			}
@@ -180,6 +193,13 @@ func collectDailyQualityStats(events []control.Event) dailyQualityStats {
 					stats.ToolFailures++
 					stats.ToolFailureClasses[category]++
 				}
+			}
+			name := strings.TrimSpace(p.ToolName)
+			if name == "" {
+				name = strings.TrimSpace(p.Tool)
+			}
+			if name != "" {
+				stats.ToolCallsByName[name]++
 			}
 		case "approval.requested", "approval.approved", "approval.rejected", "approval.parked", "approval.expired", "approval.archived":
 			stats.ApprovalCounts[strings.TrimPrefix(event.Type, "approval.")]++
@@ -223,6 +243,26 @@ func collectDailyQualityStats(events []control.Event) dailyQualityStats {
 					stats.MemoryDisposition[reason] += count
 				}
 			}
+		case "provider.call.context_breakdown":
+			var p struct {
+				EstimatedTotal           int64  `json:"estimated_total"`
+				ToolSchemas              int64  `json:"tool_schemas"`
+				ProviderFingerprintState string `json:"provider_fingerprint_state"`
+				ProviderPrefixHash       string `json:"provider_prefix_hash"`
+			}
+			if json.Unmarshal(event.Payload, &p) == nil {
+				stats.ContextSamples++
+				stats.ContextEstimatedTokens += p.EstimatedTotal
+				stats.ContextToolSchemaTokens += p.ToolSchemas
+				state := strings.TrimSpace(p.ProviderFingerprintState)
+				if state == "" {
+					state = "missing"
+				}
+				stats.FingerprintStates[state]++
+				if hash := strings.TrimSpace(p.ProviderPrefixHash); hash != "" {
+					stats.ProviderPrefixHashes[hash] = true
+				}
+			}
 		}
 	}
 	return stats
@@ -232,17 +272,34 @@ func (d *Server) dailyQualityReport(ctx context.Context, identity *control.Ident
 	if d == nil || d.Control == nil || identity == nil {
 		return "Daily report unavailable.", nil
 	}
-	since := time.Now().Add(-window)
-	events, err := d.Control.ListPersonEventsSince(ctx, identity.TenantID, identity.PersonID, since, 10000)
+	generatedAt := time.Now()
+	since := generatedAt.Add(-window)
+	events, truncated, err := d.listDailyReportEvents(ctx, identity, since)
 	if err != nil {
 		return "", err
 	}
 	stats := collectDailyQualityStats(events)
-	backlog, _ := d.Control.ApprovalBacklog(ctx, identity.TenantID, identity.PersonID)
-	deliveryCounts, _ := d.Control.CountOutboundByStatusSince(ctx, identity.TenantID, identity.PersonID, since)
-	triage, _ := d.Control.ApprovalTriageStatsSince(ctx, identity.TenantID, identity.PersonID, since)
-	maintenance, _ := d.Control.MaintenanceProviderUsageForPersonSince(ctx, identity.TenantID, identity.PersonID, since)
-	health, _ := d.Control.MaintenanceHealthForPerson(ctx, identity.TenantID, identity.PersonID)
+	var evidenceGaps []string
+	backlog, backlogErr := d.Control.ApprovalBacklog(ctx, identity.TenantID, identity.PersonID)
+	if backlogErr != nil {
+		evidenceGaps = append(evidenceGaps, "approval backlog")
+	}
+	deliveryCounts, deliveryErr := d.Control.CountOutboundByStatusSince(ctx, identity.TenantID, identity.PersonID, since)
+	if deliveryErr != nil {
+		evidenceGaps = append(evidenceGaps, "delivery status")
+	}
+	triage, triageErr := d.Control.ApprovalTriageStatsSince(ctx, identity.TenantID, identity.PersonID, since)
+	if triageErr != nil {
+		evidenceGaps = append(evidenceGaps, "approval triage")
+	}
+	maintenance, maintenanceErr := d.Control.MaintenanceProviderUsageForPersonSince(ctx, identity.TenantID, identity.PersonID, since)
+	if maintenanceErr != nil {
+		evidenceGaps = append(evidenceGaps, "maintenance provider usage")
+	}
+	health, healthErr := d.Control.MaintenanceHealthForPerson(ctx, identity.TenantID, identity.PersonID)
+	if healthErr != nil {
+		evidenceGaps = append(evidenceGaps, "maintenance health")
+	}
 
 	var maintenanceCalls, maintenanceFailed, maintenanceOpen int
 	var maintenanceInput, maintenanceOutput, maintenanceCacheRead, maintenanceCacheMiss, maintenanceReasoning int64
@@ -272,19 +329,48 @@ func (d *Server) dailyQualityReport(ctx context.Context, identity *control.Ident
 
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "Daily quality report (last %s)\n", window.Round(time.Minute))
+	coverage := "complete within the local event store"
+	if truncated {
+		coverage = "lower bound at diagnostic safety cap"
+	}
+	fmt.Fprintf(&sb, "Evidence window: %s to %s; generated %s; scanned %d event(s); coverage %s\n",
+		since.Local().Format(time.RFC3339), generatedAt.Local().Format(time.RFC3339),
+		generatedAt.Local().Format(time.RFC3339), len(events), coverage)
 	fmt.Fprintf(&sb, "Runs: %s\n", formatCountMap(stats.RunStatuses))
 	fmt.Fprintf(&sb, "Completion reasons: %s\n", formatCountMap(stats.CompletionReasons))
 	fmt.Fprintf(&sb, "External outcomes: %s\n", formatCountMap(stats.ExternalStatuses))
 	fmt.Fprintf(&sb, "Model: %d calls, input %d, cache read %d (%d%%), uncached %d, output %d, avg latency %dms\n",
 		stats.ProviderCalls, stats.InputTokens, stats.CacheReadTokens, cacheRate, stats.CacheMissTokens, stats.OutputTokens, avgLatency)
+	if stats.ContextSamples > 0 {
+		avgRequest := stats.ContextEstimatedTokens / int64(stats.ContextSamples)
+		avgSchemas := stats.ContextToolSchemaTokens / int64(stats.ContextSamples)
+		schemaShare := int64(0)
+		if stats.ContextEstimatedTokens > 0 {
+			schemaShare = stats.ContextToolSchemaTokens * 100 / stats.ContextEstimatedTokens
+		}
+		fmt.Fprintf(&sb, "Request context: %d samples, avg total %d tok, avg tool schemas %d tok (%d%%); fingerprints %s, unique prefixes %d\n",
+			stats.ContextSamples, avgRequest, avgSchemas, schemaShare,
+			formatCountMap(stats.FingerprintStates), len(stats.ProviderPrefixHashes))
+	}
 	fmt.Fprintf(&sb, "Tools: %d calls, %d failed (%d%%), %d policy redirects; failures by class: %s\n",
 		stats.ToolCalls, stats.ToolFailures, toolFailureRate, stats.ToolPolicyRedirects, formatCountMap(stats.ToolFailureClasses))
-	fmt.Fprintf(&sb, "Approvals: %s; triage: %s\n", formatCountMap(stats.ApprovalCounts), formatCountMap(triage.Counts))
-	oldestParked := "none"
-	if backlog.OldestParkedAt != nil {
-		oldestParked = formatReportAge(time.Since(*backlog.OldestParkedAt))
+	if searches := stats.ToolCallsByName["tool_search"]; searches > 0 {
+		fmt.Fprintf(&sb, "Deferred tool discovery: %d tool_search call(s), %d%% of tool calls\n", searches, searches*100/max(stats.ToolCalls, 1))
 	}
-	fmt.Fprintf(&sb, "Approval backlog now: live %d, parked %d, oldest parked %s\n", backlog.Live, backlog.Parked, oldestParked)
+	if triageErr != nil {
+		fmt.Fprintf(&sb, "Approvals: %s; triage: unavailable\n", formatCountMap(stats.ApprovalCounts))
+	} else {
+		fmt.Fprintf(&sb, "Approvals: %s; triage: %s\n", formatCountMap(stats.ApprovalCounts), formatCountMap(triage.Counts))
+	}
+	if backlogErr != nil {
+		sb.WriteString("Approval backlog now: unavailable\n")
+	} else {
+		oldestParked := "none"
+		if backlog.OldestParkedAt != nil {
+			oldestParked = formatReportAge(time.Since(*backlog.OldestParkedAt))
+		}
+		fmt.Fprintf(&sb, "Approval backlog now: live %d, parked %d, oldest parked %s\n", backlog.Live, backlog.Parked, oldestParked)
+	}
 	continuationShare := int64(0)
 	if stats.InputTokens+stats.OutputTokens > 0 {
 		continuationShare = (stats.ContinuationInput + stats.ContinuationOutput) * 100 / (stats.InputTokens + stats.OutputTokens)
@@ -292,28 +378,86 @@ func (d *Server) dailyQualityReport(ctx context.Context, identity *control.Ident
 	fmt.Fprintf(&sb, "Approval continuations: %d runs (%s), %d model calls, input %d, cache read %d, uncached %d, output %d, %d%% of reported tokens\n",
 		stats.ContinuationRuns, formatCountMap(stats.ContinuationStatuses), stats.ContinuationCalls,
 		stats.ContinuationInput, stats.ContinuationCacheRead, stats.ContinuationCacheMiss, stats.ContinuationOutput, continuationShare)
-	fmt.Fprintf(&sb, "Delivery: %s\n", formatCountMap(deliveryCounts))
+	if deliveryErr != nil {
+		sb.WriteString("Delivery: unavailable\n")
+	} else {
+		fmt.Fprintf(&sb, "Delivery: %s\n", formatCountMap(deliveryCounts))
+	}
 	fmt.Fprintf(&sb, "Recall: %d candidates (%s), %d selected (%s), %d output-overlap signals (%s; not causal proof); skipped: %s\n",
 		stats.RecallCandidates, formatCountMap(stats.RecallCandidateSources),
 		stats.RecallSelected, formatCountMap(stats.RecallSelectedSources),
 		stats.RecallOverlap, formatCountMap(stats.RecallOverlapSources), formatCountMap(stats.RecallSkipped))
 	fmt.Fprintf(&sb, "Memory disposition: %s\n", formatCountMap(stats.MemoryDisposition))
-	fmt.Fprintf(&sb, "Maintenance: %d calls, %d failed, %d circuit-open, input %d, cache read %d, uncached %d, output %d, reasoning %d; jobs pending %d, failed %d, blocked %d\n",
-		maintenanceCalls, maintenanceFailed, maintenanceOpen, maintenanceInput, maintenanceCacheRead, maintenanceCacheMiss, maintenanceOutput, maintenanceReasoning,
-		health.Pending, health.Failed, health.Blocked)
-	if !health.LastSuccessAt.IsZero() {
-		fmt.Fprintf(&sb, "Maintenance last success: %s\n", health.LastSuccessAt.Local().Format(time.RFC3339))
+	if maintenanceErr != nil || healthErr != nil {
+		usage := "unavailable"
+		if maintenanceErr == nil {
+			usage = fmt.Sprintf("%d calls, %d failed, %d circuit-open, input %d, cache read %d, uncached %d, output %d, reasoning %d",
+				maintenanceCalls, maintenanceFailed, maintenanceOpen, maintenanceInput, maintenanceCacheRead, maintenanceCacheMiss, maintenanceOutput, maintenanceReasoning)
+		}
+		healthText := "unavailable"
+		if healthErr == nil {
+			healthText = fmt.Sprintf("queued %d, retrying %d, running %d, blocked %d; historical terminal: succeeded %d, skipped %d",
+				health.Pending, health.Failed, health.Running, health.Blocked, health.Succeeded, health.Skipped)
+		}
+		fmt.Fprintf(&sb, "Maintenance: %s; current health: %s\n", usage, healthText)
+	} else {
+		fmt.Fprintf(&sb, "Maintenance: %d calls, %d failed, %d circuit-open, input %d, cache read %d, uncached %d, output %d, reasoning %d; current actionable: queued %d, retrying %d, running %d, blocked %d; historical terminal: succeeded %d, skipped %d\n",
+			maintenanceCalls, maintenanceFailed, maintenanceOpen, maintenanceInput, maintenanceCacheRead, maintenanceCacheMiss, maintenanceOutput, maintenanceReasoning,
+			health.Pending, health.Failed, health.Running, health.Blocked, health.Succeeded, health.Skipped)
 	}
-	if reason := strings.TrimSpace(health.LastError); reason != "" {
-		fmt.Fprintf(&sb, "Maintenance last error: %s\n", truncate(toOneLine(reason), 180))
+	if healthErr == nil {
+		if !health.OldestPendingAt.IsZero() {
+			fmt.Fprintf(&sb, "Maintenance oldest actionable: %s\n", formatReportAge(time.Since(health.OldestPendingAt)))
+		}
+		if !health.LastSuccessAt.IsZero() {
+			fmt.Fprintf(&sb, "Maintenance last success: %s\n", health.LastSuccessAt.Local().Format(time.RFC3339))
+		}
+		if reason := strings.TrimSpace(health.LastError); reason != "" {
+			fmt.Fprintf(&sb, "Maintenance last error: %s\n", truncate(toOneLine(reason), 180))
+		}
+		if health.Blocked > 0 || health.Failed > 0 {
+			sb.WriteString("Memory baseline: degraded; write/disposition metrics are incomplete until maintenance recovers.\n")
+		}
 	}
-	if health.Blocked > 0 || health.Failed > 0 {
-		sb.WriteString("Memory baseline: degraded; write/disposition metrics are incomplete until maintenance recovers.\n")
+	if len(evidenceGaps) > 0 {
+		fmt.Fprintf(&sb, "Evidence gaps: unavailable: %s. Zero values from those sources were not reported as evidence.\n", strings.Join(evidenceGaps, ", "))
 	}
-	if len(events) == 10000 {
-		sb.WriteString("Note: event window reached the 10,000-row diagnostic cap.\n")
+	if truncated {
+		fmt.Fprintf(&sb, "Evidence: LOWER BOUND — the window exceeded the %d-event safety cap after cursor pagination.\n", dailyReportEventLimit)
 	}
 	return strings.TrimSpace(sb.String()), nil
+}
+
+func (d *Server) listDailyReportEvents(ctx context.Context, identity *control.IdentityContext, since time.Time) ([]control.Event, bool, error) {
+	var newestFirst []control.Event
+	beforeCursor := int64(0)
+	truncated := false
+	for len(newestFirst) < dailyReportEventLimit {
+		pageLimit := min(dailyReportEventPageSize, dailyReportEventLimit-len(newestFirst))
+		page, err := d.Control.ListPersonEventsSincePage(ctx, identity.TenantID, identity.PersonID, since, beforeCursor, pageLimit)
+		if err != nil {
+			return nil, false, err
+		}
+		if len(page) == 0 {
+			break
+		}
+		newestFirst = append(newestFirst, page...)
+		beforeCursor = page[len(page)-1].Cursor
+		if len(page) < pageLimit {
+			break
+		}
+	}
+	if len(newestFirst) == dailyReportEventLimit {
+		more, err := d.Control.ListPersonEventsSincePage(ctx, identity.TenantID, identity.PersonID, since, beforeCursor, 1)
+		if err != nil {
+			return nil, false, err
+		}
+		truncated = len(more) > 0
+	}
+	for left, right := 0, len(newestFirst)-1; left < right; left, right = left+1, right-1 {
+		newestFirst[left], newestFirst[right] = newestFirst[right], newestFirst[left]
+	}
+	return newestFirst, truncated, nil
 }
 
 func formatReportAge(age time.Duration) string {

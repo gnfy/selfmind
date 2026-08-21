@@ -18,6 +18,32 @@ import (
 
 type quotaReviewProvider struct{ calls int }
 
+type identityReviewProvider struct {
+	persons []string
+}
+
+func (p *identityReviewProvider) record(ctx context.Context) {
+	p.persons = append(p.persons, llm.ModelContextFrom(ctx).PersonID)
+}
+
+func (p *identityReviewProvider) ChatCompletion(ctx context.Context, _ []llm.Message) (string, error) {
+	p.record(ctx)
+	return "Nothing to save.", nil
+}
+
+func (p *identityReviewProvider) Chat(ctx context.Context, _ llm.ChatRequest) (*llm.ChatResponse, error) {
+	p.record(ctx)
+	return &llm.ChatResponse{Content: "Nothing to save."}, nil
+}
+
+func (p *identityReviewProvider) StreamChat(ctx context.Context, _ llm.ChatRequest) (<-chan llm.StreamEvent, error) {
+	p.record(ctx)
+	ch := make(chan llm.StreamEvent, 1)
+	ch <- llm.StreamEvent{Content: "Nothing to save.", FinishReason: "stop"}
+	close(ch)
+	return ch, nil
+}
+
 func (p *quotaReviewProvider) quotaError() error {
 	return &llm.ProviderError{Provider: "kimi-coding", Class: llm.ProviderErrorQuota, StatusCode: 403, Message: "usage limit reached"}
 }
@@ -151,6 +177,34 @@ func TestRestrictedReviewBackendForwardsTrustedMetadata(t *testing.T) {
 	}
 }
 
+type reviewDefinitionBackend struct{}
+
+func (reviewDefinitionBackend) Dispatch(string, map[string]interface{}) (string, error) {
+	return "", nil
+}
+func (reviewDefinitionBackend) GetToolDefinitions() []map[string]interface{} {
+	defs := make([]map[string]interface{}, 0, 4)
+	for _, name := range []string{"memory", "session_search", "skill_view", "skills_list"} {
+		defs = append(defs, map[string]interface{}{"name": name})
+	}
+	return defs
+}
+
+func TestRestrictedReviewBackendHidesVerifierOnlySkillReaders(t *testing.T) {
+	backend := &restrictedReviewBackend{
+		inner:   reviewDefinitionBackend{},
+		allowed: map[string]bool{"memory": true, "session_search": true, "skill_view": true, "skills_list": true},
+		exposed: map[string]bool{"memory": true, "session_search": true},
+	}
+	defs := backend.GetToolDefinitions()
+	if len(defs) != 2 || toolDefinitionName(defs[0]) != "memory" || toolDefinitionName(defs[1]) != "session_search" {
+		t.Fatalf("model-visible review tools = %#v", defs)
+	}
+	if _, err := backend.Dispatch("skill_view", map[string]interface{}{"name": "verify-only"}); err != nil {
+		t.Fatalf("verifier-only dispatch should remain allowed: %v", err)
+	}
+}
+
 func TestUnverifiedSkillClaims(t *testing.T) {
 	backend := &fakeClaimBackend{existing: map[string]bool{"real-skill": true}}
 
@@ -194,5 +248,61 @@ func TestDurableBackgroundReviewPropagatesQuotaError(t *testing.T) {
 	}
 	if model.calls != 1 {
 		t.Fatalf("provider calls = %d, want 1 non-retryable request", model.calls)
+	}
+}
+
+func TestDurableBackgroundReviewCarriesPersonIdentityInPayloadAndExecution(t *testing.T) {
+	provider, err := memory.NewSQLiteProvider(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer provider.Close()
+	model := &identityReviewProvider{}
+	engine := NewBackgroundReviewEngine(memory.NewMemoryManager(provider), &fakeClaimBackend{}, model,
+		EvolutionConfig{Enabled: true}, 1, 1)
+	engine.SetControlTenantID("default")
+
+	var raw string
+	engine.SetEnqueue(func(personID, payloadJSON string) bool {
+		if personID != "person-a" {
+			t.Fatalf("enqueue person=%q", personID)
+		}
+		raw = payloadJSON
+		return true
+	})
+	engine.SpawnReview("person-a", "cli", []llm.Message{{Role: "user", Content: "remember this"}}, true, false)
+	var payload ReviewJobPayload
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.PersonID != "person-a" {
+		t.Fatalf("durable person=%q", payload.PersonID)
+	}
+
+	if _, err := engine.RunReviewFromPayload(context.Background(), "default", raw); err != nil {
+		t.Fatal(err)
+	}
+	if len(model.persons) == 0 || model.persons[0] != "person-a" {
+		t.Fatalf("provider person contexts=%v", model.persons)
+	}
+}
+
+func TestDurableBackgroundReviewDoesNotTreatControlTenantAsMissingPerson(t *testing.T) {
+	provider, err := memory.NewSQLiteProvider(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer provider.Close()
+	model := &identityReviewProvider{}
+	engine := NewBackgroundReviewEngine(memory.NewMemoryManager(provider), &fakeClaimBackend{}, model,
+		EvolutionConfig{Enabled: true}, 1, 1)
+	engine.SetControlTenantID("default")
+	payload, _ := json.Marshal(ReviewJobPayload{Channel: "cli", ReviewMemory: true})
+	summary, err := engine.RunReviewFromPayload(context.Background(), "default", string(payload))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary != "review skipped: durable person identity is unavailable" || len(model.persons) != 0 {
+		t.Fatalf("summary=%q provider persons=%v", summary, model.persons)
 	}
 }

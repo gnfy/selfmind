@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
@@ -38,12 +39,23 @@ type ToolResultEnvelope struct {
 	Raw                 string
 	Preview             string
 	ModelContent        string
+	ErrorCode           string
+	ErrorCategory       string
+	RecoveryHint        string
 	Truncated           bool
 	Bytes               int
 	DiagnosticExcerpt   string
 	DiagnosticHash      string
 	DiagnosticBytes     int
 	DiagnosticTruncated bool
+}
+
+type stableToolFailure interface {
+	error
+	ToolErrorCode() string
+	ToolErrorCategory() string
+	ModelSafeMessage() string
+	ToolRecoveryHint() string
 }
 
 func packageToolResult(name, raw string) ToolResultEnvelope {
@@ -95,7 +107,57 @@ func packageToolResultCtx(ctx context.Context, name, raw string) ToolResultEnvel
 }
 
 func packageToolError(name string, err error) ToolResultEnvelope {
-	msg := fmt.Sprintf("Error executing %s: %v", nonEmpty(name, "tool"), err)
+	return packageToolErrorWithMetadata(name, err, ToolExecutionMetadata{})
+}
+
+// packageToolErrorWithMetadata uses trusted registry metadata when deciding
+// whether a raw storage signature belongs to SelfMind. External tools may
+// legitimately return SQL errors that are actionable model evidence and must
+// not be rewritten as a control-store failure.
+func packageToolErrorWithMetadata(name string, err error, metadata ToolExecutionMetadata) ToolResultEnvelope {
+	rawError := textutil.CleanUTF8(err.Error())
+	userRejected := isUserRejectionErr(err)
+	safeError := rawError
+	code := ""
+	category, hint := classifyToolFailure(rawError)
+	var stable stableToolFailure
+	if errors.As(err, &stable) {
+		code = strings.TrimSpace(stable.ToolErrorCode())
+		if value := strings.TrimSpace(stable.ToolErrorCategory()); value != "" {
+			category = value
+		}
+		if value := strings.TrimSpace(stable.ModelSafeMessage()); value != "" {
+			safeError = value
+		}
+		if value := strings.TrimSpace(stable.ToolRecoveryHint()); value != "" {
+			hint = value
+		}
+	}
+	// Boundary enforcement: the typed envelope is opt-in per call site, so a
+	// tool that never wraps its error used to hand raw driver text straight to
+	// the model (observed live: "resolve work unit: sql: no rows in result set"
+	// and "SQL logic error: no such column: 625"). An explicit ModelSafeMessage
+	// above always wins; this only catches the unwrapped internal-storage class,
+	// whose Go/driver signatures are stable. The raw cause is still captured
+	// below, so capture_ref remains diagnosable.
+	if safeError == rawError && !strings.EqualFold(strings.TrimSpace(metadata.Origin), "external") {
+		if replacement, leakCategory, leakHint, ok := internalStorageErrorLeak(rawError); ok {
+			safeError = replacement
+			category = leakCategory
+			hint = leakHint
+			if code == "" {
+				code = "internal_state"
+			}
+		}
+	}
+	msg := fmt.Sprintf("Error executing %s: %s", nonEmpty(name, "tool"), safeError)
+	if code != "" {
+		msg += "\nerror_code: " + code
+	}
+	_, _, alreadyClassified := structuredToolFailureMarker(safeError)
+	if category != "" && !userRejected && !alreadyClassified {
+		msg += fmt.Sprintf("\nerror_class: %s; hint: %s", category, hint)
+	}
 	msg = textutil.CleanUTF8(msg)
 	// A user rejection is a decision, not a failure. The generic
 	// diagnose-and-retry guidance below is exactly what made the model retry a
@@ -104,17 +166,58 @@ func packageToolError(name string, err error) ToolResultEnvelope {
 	// so the stable "operation rejected"/"operation cancelled by user" error
 	// strings from tools.SmartApprovalMiddleware are the documented contract.
 	instruction := "\n\nSelfMind diagnostic instruction: this tool failed. Treat the error as evidence, inspect relevant context such as cwd, files, environment, auth state, provider constraints, or command help, and continue with a corrected next step unless this is a confirmed blocker."
-	if isUserRejectionErr(err) {
+	if userRejected {
 		instruction = "\n\nSelfMind instruction: the USER explicitly rejected this operation. This is a decision, not an error. Do NOT retry this operation or any variant of it in this turn. Acknowledge the rejection, state briefly what was not done, and either propose a genuinely different approach for the user to confirm or finish the turn."
 	}
 	modelContent := msg + instruction
-	return ToolResultEnvelope{
-		Raw:          msg,
-		Preview:      textutil.Truncate(msg, toolResultPreviewBytes),
-		ModelContent: textutil.Truncate(modelContent, 4000),
-		Truncated:    len(modelContent) > 4000,
-		Bytes:        len(msg),
+	envelope := ToolResultEnvelope{
+		Raw:           msg,
+		Preview:       textutil.Truncate(msg, toolResultPreviewBytes),
+		ModelContent:  textutil.Truncate(modelContent, 4000),
+		ErrorCode:     code,
+		ErrorCategory: category,
+		RecoveryHint:  hint,
+		Truncated:     len(modelContent) > 4000,
+		Bytes:         len(msg),
 	}
+	if safeError != rawError {
+		digest := sha256.Sum256([]byte(rawError))
+		envelope.DiagnosticHash = fmt.Sprintf("%x", digest[:])
+		envelope.DiagnosticBytes = len(rawError)
+		envelope.DiagnosticExcerpt = textutil.Truncate(rawError, 2048)
+		envelope.DiagnosticTruncated = len(rawError) > 2048
+	}
+	return envelope
+}
+
+// internalStorageErrorLeak recognizes unwrapped internal storage failures whose
+// text is an implementation detail, not evidence a model can act on. The set is
+// deliberately narrow and anchored on stable database/sql and SQLite driver
+// strings rather than open-ended prose matching: this is a leak guard, not a
+// classifier. Tools that describe their own failure through stableToolFailure
+// bypass it entirely.
+func internalStorageErrorLeak(rawError string) (safe, category, hint string, ok bool) {
+	lower := strings.ToLower(rawError)
+	signatures := []string{
+		"sql: no rows in result set",
+		"sql: database is closed",
+		"sql: transaction has already been committed",
+		"sql logic error",
+		"sqlite_",
+		"no such column",
+		"no such table",
+		"constraint failed",
+		"database is locked",
+	}
+	for _, signature := range signatures {
+		if strings.Contains(lower, signature) {
+			return "the requested record could not be read from local storage; the raw cause is recorded in local diagnostics",
+				"internal_state",
+				"This is a SelfMind storage-layer failure, not a problem with your arguments. Re-read the current state through a listing tool instead of retrying the same lookup.",
+				true
+		}
+	}
+	return "", "", "", false
 }
 
 // packageToolFailureCtx preserves bounded execution evidence when a tool
@@ -122,32 +225,59 @@ func packageToolError(name string, err error) ToolResultEnvelope {
 // leaving durable events with only "exit status 1" and making failures
 // impossible to classify or learn from after the turn ended.
 func packageToolFailureCtx(ctx context.Context, name, raw string, err error) ToolResultEnvelope {
+	return packageDispatchedToolFailureCtx(ctx, name, raw, err, ToolExecutionMetadata{})
+}
+
+// packageDispatchedToolFailureCtx is the production dispatch boundary. The
+// metadata argument is deliberately required so a caller cannot accidentally
+// apply SelfMind's internal-storage redaction policy to an external tool.
+func packageDispatchedToolFailureCtx(ctx context.Context, name, raw string, err error, metadata ToolExecutionMetadata) ToolResultEnvelope {
 	_ = ctx
 	if strings.TrimSpace(raw) == "" {
-		return packageToolError(name, err)
+		return packageToolErrorWithMetadata(name, err, metadata)
 	}
 	raw = textutil.CleanUTF8(raw)
-	digest := sha256.Sum256([]byte(raw))
+	errEnv := packageToolErrorWithMetadata(name, err, metadata)
+	// The capture must carry BOTH the redacted-out raw cause and the tool
+	// output. Recomputing it from stdout alone dropped errEnv's capture, so a
+	// typed error that also produced output left the real cause in neither the
+	// model surface nor the diagnostic surface, making capture_ref useless.
+	diagnosticSource := raw
+	if errEnv.DiagnosticExcerpt != "" {
+		diagnosticSource = "Tool error cause:\n" + textutil.CleanUTF8(err.Error()) + "\n\nCaptured tool output:\n" + raw
+	}
+	digest := sha256.Sum256([]byte(diagnosticSource))
 	const excerptBytes = 2048
-	excerpt := raw
+	excerpt := diagnosticSource
 	truncated := false
 	if len(excerpt) > excerptBytes {
 		marker := "\n... [diagnostic output truncated] ...\n"
 		excerpt = textutil.HeadTail(excerpt, (excerptBytes-len(marker))/2, marker)
 		truncated = true
 	}
-	errEnv := packageToolError(name, err)
-	combined := fmt.Sprintf("%s\n\nCaptured tool output:\n%s", errEnv.Raw, excerpt)
+	// The model-facing body keeps only the safe error plus bounded tool output.
+	outputExcerpt := raw
+	if len(outputExcerpt) > excerptBytes {
+		marker := "\n... [diagnostic output truncated] ...\n"
+		outputExcerpt = textutil.HeadTail(outputExcerpt, (excerptBytes-len(marker))/2, marker)
+		truncated = true
+	}
+	combined := fmt.Sprintf("%s\n\nCaptured tool output:\n%s", errEnv.Raw, outputExcerpt)
 	modelContent := combined + "\n\nSelfMind diagnostic instruction: use the captured output as evidence. Correct the next step rather than repeating the same failing call."
 	return ToolResultEnvelope{
-		Raw:                 combined,
-		Preview:             textutil.Truncate(excerpt, toolResultPreviewBytes),
+		Raw: combined,
+		// Preview is a user-facing surface, so it shows the tool's own output
+		// rather than the diagnostic capture that carries the raw cause.
+		Preview:             textutil.Truncate(outputExcerpt, toolResultPreviewBytes),
 		ModelContent:        textutil.Truncate(modelContent, 6000),
+		ErrorCode:           errEnv.ErrorCode,
+		ErrorCategory:       errEnv.ErrorCategory,
+		RecoveryHint:        errEnv.RecoveryHint,
 		Truncated:           truncated || len(modelContent) > 6000,
 		Bytes:               len(raw),
 		DiagnosticExcerpt:   excerpt,
 		DiagnosticHash:      fmt.Sprintf("%x", digest[:]),
-		DiagnosticBytes:     len(raw),
+		DiagnosticBytes:     len(diagnosticSource),
 		DiagnosticTruncated: truncated,
 	}
 }

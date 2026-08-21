@@ -31,6 +31,10 @@ Generated from `docs/manifest.yaml` by `selfmind docs index`. Do not edit this f
 - [npm Distribution](npm-distribution.md) - current, en
 - [Weixin Live Test](weixin-live-test.md) - current, en
 
+## Plan
+
+- [Daily-Driver Runtime Closure](plans/daily-driver-closure.md) - active, en
+
 ## Reference
 
 - [Coding Agent Foundations](coding-agent-foundations.md) - current, en

@@ -53,3 +53,21 @@ func (s *Store) LatestGatewayRuntimeEvent(ctx context.Context, eventType string)
 	event.CreatedAt = time.Unix(createdAt, 0)
 	return &event, nil
 }
+
+// GatewayRuntimeEventForInstance returns one lifecycle event for the exact
+// daemon instance in the live status record. Callers must not infer current
+// state from another instance's newer historical event.
+func (s *Store) GatewayRuntimeEventForInstance(ctx context.Context, instanceID, eventType string) (*GatewayRuntimeEvent, error) {
+	var event GatewayRuntimeEvent
+	var payload string
+	var createdAt int64
+	err := s.db.QueryRowContext(ctx, `SELECT instance_id, event_type, payload_json, created_at
+		FROM gateway_runtime_events WHERE instance_id = ? AND event_type = ? LIMIT 1`,
+		strings.TrimSpace(instanceID), strings.TrimSpace(eventType)).Scan(&event.InstanceID, &event.EventType, &payload, &createdAt)
+	if err != nil {
+		return nil, err
+	}
+	event.Payload = json.RawMessage(payload)
+	event.CreatedAt = time.Unix(createdAt, 0)
+	return &event, nil
+}

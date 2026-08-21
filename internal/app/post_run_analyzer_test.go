@@ -3,6 +3,8 @@ package app
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -13,6 +15,7 @@ import (
 	"selfmind/internal/kernel/memory"
 	"selfmind/internal/modelruntime"
 	"selfmind/internal/platform/config"
+	"selfmind/internal/promptassets"
 )
 
 type postRunProviderStub struct {
@@ -25,6 +28,45 @@ type postRunProviderStub struct {
 	streamRequests []llm.ChatRequest
 	streamEvents   []llm.StreamEvent
 	responses      []*llm.ChatResponse
+}
+
+func TestPostRunAnalyzerUsesPinnedPromptRevision(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "background", "memory_extract.md")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("## Post-run Analysis\n\nOLD-PINNED-GUIDANCE\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	oldSnapshot, err := promptassets.Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := promptassets.SaveRevision(oldSnapshot); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("## Post-run Analysis\n\nNEW-CURRENT-GUIDANCE\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	current, err := promptassets.Load(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider := &postRunProviderStub{content: `{"task_decision":"KEEP","memory_decisions":[]}`}
+	analyzer := &llmPostRunAnalyzer{provider: provider, prompts: current}
+	if _, err := analyzer.Analyze(context.Background(), httpapi.PostRunAnalysisRequest{
+		RunID: "run-pinned", PromptSnapshotHash: oldSnapshot.Hash(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(provider.requests) != 1 {
+		t.Fatalf("provider calls = %d", len(provider.requests))
+	}
+	system := provider.requests[0].SystemPrompt
+	if !strings.Contains(system, "OLD-PINNED-GUIDANCE") || strings.Contains(system, "NEW-CURRENT-GUIDANCE") {
+		t.Fatalf("system prompt did not use the pinned revision:\n%s", system)
+	}
 }
 
 func (p *postRunProviderStub) ChatCompletion(context.Context, []llm.Message) (string, error) {
@@ -540,6 +582,24 @@ func TestPostRunAnalyzerBatchesProviderCallAndKeysResultsByRun(t *testing.T) {
 	}
 }
 
+func TestPostRunBatchSystemContractIsSelfContained(t *testing.T) {
+	for _, want := range []string{
+		"SKIP: temporary, speculative, secret, episodic, or already fully represented",
+		"REINFORCE, SUPERSEDE, and CONFLICT must set ref to an id from that run's nearby list",
+		`target is "user" for user preferences/identity and "memory" for workspace facts and conventions`,
+		"Never carry a ref or decision across runs",
+		"Write memory content in the language of its supporting user statement or durable result",
+		"SelfMind-generated task decision rules",
+	} {
+		if !strings.Contains(postRunBatchAnalyzerSystemPrompt, want) {
+			t.Fatalf("batch maintenance contract missing %q:\n%s", want, postRunBatchAnalyzerSystemPrompt)
+		}
+	}
+	if strings.Contains(postRunBatchAnalyzerSystemPrompt, "same semantics described in each run") {
+		t.Fatal("batch maintenance contract still delegates locked decision semantics to untrusted run data")
+	}
+}
+
 func TestConfiguredPostRunAnalyzerDeduplicatesEquivalentRoleRoutes(t *testing.T) {
 	cfg := &config.Config{
 		Model: config.ModelConfig{Provider: "kimi-coding", Default: "kimi-for-coding"},
@@ -553,7 +613,7 @@ func TestConfiguredPostRunAnalyzerDeduplicatesEquivalentRoleRoutes(t *testing.T)
 		Tasks: config.TaskConfig{MaintenanceFallbackRoles: []string{"background_review"}},
 	}
 	cfg.Normalize()
-	analyzer, ok := NewConfiguredPostRunAnalyzer(nil, cfg, "tenant").(*llmPostRunAnalyzer)
+	analyzer, ok := NewConfiguredPostRunAnalyzer(nil, cfg, "tenant", nil, nil).(*llmPostRunAnalyzer)
 	if !ok || analyzer == nil {
 		t.Fatal("configured analyzer was not built")
 	}

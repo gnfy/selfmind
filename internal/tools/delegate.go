@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -10,8 +11,8 @@ import (
 
 type DelegateTool struct {
 	BaseTool
-	delegateFn func(goal string, context string, toolsets []string) (string, llm.UsageStats, error)
-	batchFn    func(tasks []DelegateTaskSpec) ([]DelegateTaskResult, error)
+	delegateFn func(context.Context, string, string, []string) (string, llm.UsageStats, error)
+	batchFn    func(context.Context, []DelegateTaskSpec) ([]DelegateTaskResult, error)
 }
 
 type DelegateTaskSpec struct {
@@ -62,16 +63,20 @@ func NewDelegateTool() *DelegateTool {
 	}
 }
 
-func (t *DelegateTool) RegisterDelegateFn(fn func(goal string, context string, toolsets []string) (string, llm.UsageStats, error)) {
+func (t *DelegateTool) RegisterDelegateFn(fn func(context.Context, string, string, []string) (string, llm.UsageStats, error)) {
 	t.delegateFn = fn
 }
 
-func (t *DelegateTool) RegisterBatchDelegateFn(fn func(tasks []DelegateTaskSpec) ([]DelegateTaskResult, error)) {
+func (t *DelegateTool) RegisterBatchDelegateFn(fn func(context.Context, []DelegateTaskSpec) ([]DelegateTaskResult, error)) {
 	t.batchFn = fn
 }
 
 func (t *DelegateTool) Execute(args map[string]interface{}) (string, error) {
-	context, _ := args["context"].(string)
+	return t.ExecuteContext(ContextFromArgs(args), args)
+}
+
+func (t *DelegateTool) ExecuteContext(ctx context.Context, args map[string]interface{}) (string, error) {
+	contextStr, _ := args["context"].(string)
 	toolsets, _ := args["toolsets"].(string)
 	toolList := splitToolsets(toolsets)
 
@@ -80,11 +85,11 @@ func (t *DelegateTool) Execute(args map[string]interface{}) (string, error) {
 		for _, goal := range goals {
 			tasks = append(tasks, DelegateTaskSpec{
 				Goal:     goal,
-				Context:  context,
+				Context:  contextStr,
 				Toolsets: toolList,
 			})
 		}
-		results, err := t.executeBatch(tasks)
+		results, err := t.executeBatch(ctx, tasks)
 		if err != nil {
 			return "", err
 		}
@@ -100,20 +105,20 @@ func (t *DelegateTool) Execute(args map[string]interface{}) (string, error) {
 	if t.delegateFn == nil {
 		return "", fmt.Errorf("delegate not initialized")
 	}
-	resp, _, err := t.delegateFn(goal, context, toolList)
+	resp, _, err := t.delegateFn(ctx, goal, contextStr, toolList)
 	return resp, err
 }
 
-func (t *DelegateTool) executeBatch(tasks []DelegateTaskSpec) ([]DelegateTaskResult, error) {
+func (t *DelegateTool) executeBatch(ctx context.Context, tasks []DelegateTaskSpec) ([]DelegateTaskResult, error) {
 	if t.batchFn != nil {
-		return t.batchFn(tasks)
+		return t.batchFn(ctx, tasks)
 	}
 	if t.delegateFn == nil {
 		return nil, fmt.Errorf("delegate not initialized")
 	}
 	results := make([]DelegateTaskResult, 0, len(tasks))
 	for _, task := range tasks {
-		resp, usage, err := t.delegateFn(task.Goal, task.Context, task.Toolsets)
+		resp, usage, err := t.delegateFn(ctx, task.Goal, task.Context, task.Toolsets)
 		item := DelegateTaskResult{Goal: task.Goal, Response: resp, Usage: usage}
 		if err != nil {
 			item.Error = err.Error()

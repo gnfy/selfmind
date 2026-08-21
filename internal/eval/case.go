@@ -107,10 +107,11 @@ type Expectations struct {
 	Contains            []string `yaml:"contains" json:"contains,omitempty"`
 	MustNotContain      []string `yaml:"must_not_contain" json:"must_not_contain,omitempty"`
 	MaxDurationSeconds  int      `yaml:"max_duration_seconds" json:"max_duration_seconds,omitempty"`
-	MaxToolErrors       int      `yaml:"max_tool_errors" json:"max_tool_errors,omitempty"`
+	MaxToolErrors       *int     `yaml:"max_tool_errors" json:"max_tool_errors,omitempty"`
 	MaxToolCalls        *int     `yaml:"max_tool_calls" json:"max_tool_calls,omitempty"`
 	RequireToolEvents   bool     `yaml:"require_tool_events" json:"require_tool_events,omitempty"`
 	MinToolCalls        int      `yaml:"min_tool_calls" json:"min_tool_calls,omitempty"`
+	MinProgressUpdates  int      `yaml:"min_progress_updates" json:"min_progress_updates,omitempty"`
 	RequireSameTask     bool     `yaml:"require_same_task" json:"require_same_task,omitempty"`
 	RequireContinuation bool     `yaml:"require_continuation" json:"require_continuation,omitempty"`
 	RequireNoTask       bool     `yaml:"require_no_task" json:"require_no_task,omitempty"`

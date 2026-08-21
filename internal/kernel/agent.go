@@ -18,6 +18,7 @@ import (
 	"selfmind/internal/kernel/llm"
 	"selfmind/internal/kernel/memory"
 	"selfmind/internal/platform/textutil"
+	"selfmind/internal/promptassets"
 )
 
 // AgentBackend is the interface for the agent's execution backend (tool dispatch + event channel).
@@ -34,6 +35,7 @@ type Agent struct {
 	llm              llm.Provider
 	fastProvider     llm.Provider                 // optional fast model for simple direct-answer turns
 	summaryProvider  llm.Provider                 // optional cheap model for over-budget context compaction, kept OFF the main run provider
+	summaryMaxTokens int                          // resolved output ceiling for the summarizer route
 	judgeProvider    llm.Provider                 // optional cheap model for smart-mode approval triage (H2), kept OFF the main run provider
 	runLLM           llm.Provider                 // per-run active provider, set under runMu
 	skillInventory   func(tenantID string) string // optional: compact learned-skill list for the prompt
@@ -48,6 +50,8 @@ type Agent struct {
 	contextScanner   *ContextScanner
 	semanticExpander *memory.SemanticExpander
 	useMemoryFence   bool
+	promptSnapshot   *promptassets.Snapshot
+	promptProfile    AgentPromptProfile
 	toolBudgetPolicy ToolBudgetPolicy
 	EventChannel     chan string // emits JSON-encoded AgentEvent records; legacy text decoding is compatibility-only
 	runMu            sync.Mutex
@@ -147,6 +151,18 @@ func (a *Agent) SetSummaryProvider(p llm.Provider) {
 	}
 }
 
+// SetSummaryOutputLimit aligns context compaction requests with the resolved
+// summarizer role rather than freezing a one-size-fits-all request budget.
+func (a *Agent) SetSummaryOutputLimit(maxTokens int) {
+	if a == nil {
+		return
+	}
+	a.summaryMaxTokens = maxTokens
+	if a.contextEngine != nil {
+		a.contextEngine.SetSummaryOutputLimit(maxTokens)
+	}
+}
+
 // SetApprovalJudgeProvider installs the cheap role-routed provider used for
 // smart-mode approval triage (H2). The kernel only carries the provider so the
 // app/gateway layer (which owns model routing) can pick a cheap role and keep it
@@ -233,6 +249,11 @@ func (a *Agent) SetContextWindow(maxTokens int) {
 	// Re-apply the cheap compaction summarizer onto the fresh engine so default
 	// over-budget compaction survives a context-window reconfiguration.
 	a.contextEngine.SetSummaryProvider(a.summaryProvider)
+	a.contextEngine.SetSummaryOutputLimit(a.summaryMaxTokens)
+	// Prompt assets are frozen for the process lifetime. Rebuilding the context
+	// engine must preserve the same snapshot or compaction silently falls back
+	// to built-in summarizer guidance.
+	a.contextEngine.SetPromptSnapshot(a.promptSnapshot)
 }
 
 // agentContextBudget returns the working compaction budget: min(model window,
@@ -349,7 +370,7 @@ func (a *Agent) chatResponseWithRetry(ctx context.Context, messages []llm.Messag
 	max := a.retryAttempts()
 	messages = a.prepareMessagesForModel(ctx, messages)
 	for attempt := 1; attempt <= max; attempt++ {
-		req := llm.ChatRequest{Messages: messages, Tools: a.llmToolDefinitions(strategy), PromptCacheKey: llm.StablePromptCacheKey(ctx)}
+		req := llm.ChatRequest{Messages: messages, Tools: a.llmToolDefinitions(ctx, strategy), PromptCacheKey: llm.StablePromptCacheKey(ctx)}
 		resp, err := a.activeLLM().Chat(ctx, req)
 		if err == nil {
 			return resp, nil
@@ -394,7 +415,7 @@ func (a *Agent) streamChatWithRetry(ctx context.Context, messages []llm.Message,
 	max := a.retryAttempts()
 	messages = a.prepareMessagesForModel(ctx, messages)
 	for attempt := 1; attempt <= max; attempt++ {
-		req := llm.ChatRequest{Messages: messages, Tools: a.llmToolDefinitions(strategy), PromptCacheKey: llm.StablePromptCacheKey(ctx)}
+		req := llm.ChatRequest{Messages: messages, Tools: a.llmToolDefinitions(ctx, strategy), PromptCacheKey: llm.StablePromptCacheKey(ctx)}
 		ch, err := a.activeLLM().StreamChat(ctx, req)
 		if err == nil {
 			return ch, nil
@@ -500,7 +521,10 @@ func emitToolEndEventWithDuration(ch chan string, name, toolCallID string, resul
 		return payload
 	}
 	if err != nil {
-		category, hint := classifyToolFailure(err.Error())
+		category, hint := result.ErrorCategory, result.RecoveryHint
+		if category == "" {
+			category, hint = classifyToolFailure(err.Error())
+		}
 		payload := map[string]interface{}{
 			"result_bytes":         result.Bytes,
 			"result_truncated":     result.Truncated,
@@ -510,6 +534,9 @@ func emitToolEndEventWithDuration(ch chan string, name, toolCallID string, resul
 			"diagnostic_hash":      result.DiagnosticHash,
 			"diagnostic_bytes":     result.DiagnosticBytes,
 			"diagnostic_truncated": result.DiagnosticTruncated,
+		}
+		if result.ErrorCode != "" {
+			payload["error_code"] = result.ErrorCode
 		}
 		if exitCode, ok := toolFailureExitCode(err.Error()); ok {
 			payload["exit_code"] = exitCode
@@ -556,13 +583,31 @@ func toolFailureExitCode(message string) (int, bool) {
 // "permission" — which appears in the tools layer's own HINT text — so genuine
 // sandbox and permission failures were reported as `workspace_scope` in run
 // events, making the category useless for diagnosis and metrics.
-var toolErrorClassMarker = regexp.MustCompile(`(?m)^error_class:\s*([a-z0-9_]+)`)
+var (
+	toolErrorClassMarker = regexp.MustCompile(`(?mi)^error_class:\s*([a-z0-9_]+)`)
+	toolErrorHintMarker  = regexp.MustCompile(`(?mi)^error_class:\s*([a-z0-9_]+)\s*;\s*hint:\s*([^\r\n]+)`)
+)
+
+// structuredToolFailureMarker returns the classification that a lower tool
+// layer already rendered into the error. Preserve its exact hint for the
+// model-facing envelope; replacing it with kernel's generic class hint created
+// two contradictory error_class lines for every enriched tool failure.
+func structuredToolFailureMarker(message string) (class, hint string, ok bool) {
+	if match := toolErrorHintMarker.FindStringSubmatch(message); len(match) == 3 {
+		return strings.ToLower(strings.TrimSpace(match[1])), strings.TrimSpace(match[2]), true
+	}
+	if match := toolErrorClassMarker.FindStringSubmatch(message); len(match) == 2 {
+		class = strings.ToLower(strings.TrimSpace(match[1]))
+		return class, toolFailureHintForClass(class), true
+	}
+	return "", "", false
+}
 
 func classifyToolFailure(message string) (string, string) {
-	lower := strings.ToLower(strings.TrimSpace(message))
-	if match := toolErrorClassMarker.FindStringSubmatch(lower); len(match) == 2 {
-		return match[1], toolFailureHintForClass(match[1])
+	if class, hint, ok := structuredToolFailureMarker(message); ok {
+		return class, hint
 	}
+	lower := strings.ToLower(strings.TrimSpace(message))
 	switch {
 	case lower == "":
 		return "unknown", "Inspect the tool input and retry with corrected arguments if useful."
@@ -632,6 +677,7 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 	if finalize := a.beginFlightRecording(&ctx, tenantID, channel, initialPrompt); finalize != nil {
 		defer func() { finalize(finalOutput, finalErr) }()
 	}
+	ctx = withToolActivationState(ctx)
 
 	var totalUsage llm.UsageStats
 	eventCh := eventChannelFromContext(ctx, a.EventChannel)
@@ -747,13 +793,18 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 
 	// 0. Build dynamic system prompt (including facts + project context)
 	systemPrompt, promptSections, _ := a.buildSystemPrompt(ctx, tenantID, strategy, initialPrompt)
-	if note := strategy.SystemPromptNote(); note != "" {
-		systemPrompt += note
-		promptSections = append(promptSections, PromptSection{Category: "runtime", Tokens: estimateTokens(note)})
+	if a.primaryForegroundPromptProfile() {
+		note := strategy.SystemPromptNote()
+		if note != "" {
+			systemPrompt += note
+			promptSections = append(promptSections, PromptSection{Category: "runtime", Tokens: estimateTokens(note)})
+		}
 	}
 
-	// 0.1 Inject project context files (.selfmind.md, AGENTS.md, etc.)
-	if a.contextScanner != nil {
+	// 0.1 Inject project context files (.selfmind.md, AGENTS.md, etc.). Internal
+	// background review is governed by its own role prompt and bounded data,
+	// not by untrusted repository instructions.
+	if a.contextScanner != nil && a.foregroundPromptProfile() {
 		// Size the project-context budget to the live model window (may have
 		// been changed by SetContextWindow). The project layer has its OWN
 		// budget, independent of the person-memory layer below.
@@ -774,8 +825,9 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 	}
 	// Add a compact, deterministic build-system profile for coding work. This
 	// is evidence derived from manifests and lockfiles only; prompt assembly
-	// never executes repository code.
-	if workspace, ok := WorkspaceContextFromContext(ctx); ok {
+	// never executes repository code. It is limited to foreground and delegated
+	// coding profiles; background review keeps its separate bounded role contract.
+	if workspace, ok := WorkspaceContextFromContext(ctx); ok && a.workspacePromptProfile() {
 		if profilePrompt := DetectProjectProfile(workspace.Root).Prompt(); profilePrompt != "" {
 			systemPrompt += "\n\n" + profilePrompt
 			promptSections = append(promptSections, PromptSection{Category: "project_context", Tokens: estimateTokens(profilePrompt)})
@@ -818,6 +870,15 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 		}
 		resumed = append(resumed, llm.Message{Role: "user", Content: initialPrompt})
 		messages = a.contextEngine.TruncateMessagesCtx(ctx, resumed)
+		// Deferred-tool activation is scoped to this run's context, so a resumed
+		// run starts with an empty set and would refuse every capability it had
+		// already discovered. Activation is recorded in the tool_search results
+		// the checkpoint replays verbatim, so rebuild it from the ledger.
+		if restored := seedToolActivationFromMessages(ctx, messages); restored > 0 {
+			EmitAgentEvent(eventCh, AgentEvent{Type: "tool.catalog.activated", Payload: map[string]interface{}{
+				"restored": restored, "active_total": activatedToolCount(ctx), "source": "resume",
+			}})
+		}
 	}
 
 	// Context breakdown (P1-2, accounted at assembly since W5): attribute the
@@ -837,16 +898,22 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 	})
 	emitProviderCallContext := func(iteration int, transport string, callMessages []llm.Message, callStrategy TaskStrategy) {
 		prepared := a.prepareMessagesForModel(ctx, callMessages)
-		toolDefinitions := a.llmToolDefinitions(callStrategy)
+		toolDefinitions := a.llmToolDefinitions(ctx, callStrategy)
 		payload := ProviderCallContextBreakdown(promptSections, prepared, toolDefinitions)
 		payload["iteration"] = iteration
 		payload["transport"] = transport
+		payload["tool_schema_count"] = len(toolDefinitions)
+		payload["activated_deferred_tools"] = activatedToolCount(ctx)
 		request := llm.ChatRequest{
 			Messages:       prepared,
 			Tools:          toolDefinitions,
 			PromptCacheKey: llm.StablePromptCacheKey(ctx),
 		}
+		payload["provider_fingerprint_state"] = "unsupported"
+		payload["provider_fingerprint_reason"] = "active provider does not expose request fingerprints"
 		if fingerprint, ok := llm.FingerprintProviderRequest(ctx, a.activeLLM(), request, transport == "stream"); ok {
+			payload["provider_fingerprint_state"] = "available"
+			delete(payload, "provider_fingerprint_reason")
 			payload["provider_protocol"] = fingerprint.Protocol
 			payload["provider_prefix_hash"] = fingerprint.PrefixHash
 			payload["provider_request_hash"] = fingerprint.RequestHash
@@ -1249,6 +1316,10 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 		if len(calls) == 0 && legacyMarkupPresent && droppedForBudget == 0 {
 			droppedForBudget = 1
 		}
+		var deferredAcrossWorkUnitBoundary int
+		calls, deferredAcrossWorkUnitBoundary = isolateWorkUnitBoundaryCall(calls)
+		var deferredAcrossWatchHandoff int
+		calls, deferredAcrossWatchHandoff = isolateExternalWatchHandoffCalls(calls)
 		assistantContent := resp
 		if len(calls) > 0 || droppedForBudget > 0 || legacyMarkupPresent {
 			assistantContent = toolBudgetSafeAssistantContent(resp)
@@ -1303,6 +1374,20 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 				expireActiveSkillToolResults(messages)
 				systemPrompt = expireActiveSkillSystemPrompt(systemPrompt)
 			}
+			// Deferred-tool activation shares the Active Skill's work-unit scope:
+			// a capability discovered for one unit of work is not evidence for the
+			// next. The sequence comes from the update_plan projection rather than
+			// the Skill's, so it resets even when no Skill was ever selected.
+			for _, result := range results {
+				if !result.success {
+					continue
+				}
+				if cleared := applyWorkUnitBoundary(ctx, inProgressWorkUnitSequence(result.toolName, result.msg.Content)); cleared > 0 {
+					EmitAgentEvent(eventCh, AgentEvent{Type: "tool.catalog.activated", Payload: map[string]interface{}{
+						"cleared": cleared, "active_total": activatedToolCount(ctx), "source": "work_unit_boundary",
+					}})
+				}
+			}
 			for _, res := range results {
 				history.Steps = append(history.Steps, res.step)
 				messages = append(messages, res.msg)
@@ -1316,11 +1401,42 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 					artifactToolMsgs = append(artifactToolMsgs, agedToolMsg{index: len(messages) - 1, iteration: i})
 				}
 			}
+			handoff, handoffReady := lifecycleHandoffFromToolResults(results)
+			recordStep(i, StepExecuteTools, toolNamesForTrace(calls))
+			if handoffReady {
+				payload := map[string]interface{}{
+					"status":            handoff.Status,
+					"summary":           handoff.Summary,
+					"done":              handoff.Done,
+					"next_steps":        handoff.NextSteps,
+					"files":             handoff.Files,
+					"tests":             handoff.Tests,
+					"risks":             handoff.Risks,
+					"need_approve":      handoff.NeedApprove,
+					"completion_reason": "waiting_external",
+				}
+				EmitAgentEvent(eventCh, AgentEvent{Type: "run.outcome", Payload: payload})
+				answer := strings.TrimSpace(handoff.Message)
+				messages = append(messages, llm.Message{Role: "assistant", Content: answer})
+				history.Steps = append(history.Steps, answer)
+				history.Outcome = answer
+				a.saveHistory(ctx, tenantID, histKey, channel, initialPrompt, answer, messages)
+				a.maybeTriggerBackgroundReview(tenantID, channel, messages, history)
+				completion := resolveTurnCompletion(completionSignals{FinishStatus: "waiting_external"})
+				recordStep(i, StepCompleteTurn, "waiting_external")
+				emitTurnCompleted(eventCh, answer, completion)
+				return answer, totalUsage, nil
+			}
+			if deferredAcrossWorkUnitBoundary > 0 {
+				messages = append(messages, llm.Message{Role: "user", Content: "SelfMind applied the work-unit boundary before later tool calls. Re-issue only the calls still needed for the new in-progress work unit."})
+			}
+			if deferredAcrossWatchHandoff > 0 {
+				messages = append(messages, llm.Message{Role: "user", Content: "SelfMind held later non-watcher calls at the watcher lifecycle boundary. Because registration did not complete the handoff, re-issue only the calls still needed after correcting the watcher."})
+			}
 
 			if droppedForBudget > 0 && tryExtendToolBudget(i) {
 				messages = append(messages, llm.Message{Role: "user", Content: "SelfMind extended the bounded tool budget because the completed calls produced new evidence. Continue with the next necessary action, and avoid repeating an identical call unless its inputs or relevant state changed."})
 			}
-			recordStep(i, StepExecuteTools, toolNamesForTrace(calls))
 			continue
 		}
 		if droppedForBudget > 0 && !toolBudgetRepairIssued {
@@ -1885,25 +2001,17 @@ func (a *Agent) autoRecallWithBudget(ctx context.Context, tenantID, query string
 		searchQuery = a.semanticExpander.Expand(ctx, query)
 	}
 
-	// Build FTS5 OR query from expanded terms
-	terms := strings.Fields(searchQuery)
-	ftsQuery := ""
-	if len(terms) > 0 {
-		var parts []string
-		for _, t := range terms {
-			t = strings.ReplaceAll(t, `"`, `""`)
-			if t != "" {
-				parts = append(parts, fmt.Sprintf("content:%s* OR summary:%s*", t, t))
-			}
-		}
-		ftsQuery = strings.Join(parts, " OR ")
-	}
-	if ftsQuery == "" {
-		ftsQuery = query
+	// SearchSessions owns the FTS5 encoding boundary. Passing provider syntax
+	// from here caused the provider's literal compiler to encode content:, OR,
+	// and summary: as required search terms, silently reducing direct-agent and
+	// delegated-agent recall to zero. Keep this layer in natural-language space.
+	searchQuery = strings.TrimSpace(searchQuery)
+	if searchQuery == "" {
+		searchQuery = query
 	}
 
 	// Query more candidates (up to 10), then filter by budget
-	sessions, err := a.memory.SearchSessions(tenantID, ftsQuery, 10)
+	sessions, err := a.memory.SearchSessions(tenantID, searchQuery, 10)
 	if err != nil || len(sessions) == 0 {
 		return ""
 	}
@@ -2164,12 +2272,11 @@ func (a *Agent) BuildSystemPrompt(ctx context.Context, tenantID string) (string,
 
 func (a *Agent) buildSystemPrompt(ctx context.Context, tenantID string, strategy TaskStrategy, userInput string) (string, []PromptSection, error) {
 	// P1-3: split the prompt into a STABLE prefix (byte-identical across turns
-	// for a given workspace/tenant/model) and a VOLATILE suffix (task runtime,
-	// memory, recall, per-turn conditionals). Providers cache on prefix match,
-	// so keeping all volatile content AFTER all stable content maximizes the
-	// cacheable prefix. Content is unchanged — only grouped by mutability.
-	var stable []string   // soul, guidance, tool contract+defs, skills
-	var volatile []string // runtime context, memory/profile, per-turn conditionals
+	// for one process snapshot/profile) and a VOLATILE suffix (task runtime,
+	// capability-derived tool guidance, memory, and recall). Providers cache on
+	// prefix match, so all volatile content is joined after every stable block.
+	var stable []string   // soul, static/operator guidance
+	var volatile []string // runtime, capabilities/strategy, memory, recall
 	// W5: every append is accounted at assembly time (category + token
 	// estimate + mutability), so the context.breakdown event reports what was
 	// actually joined instead of a marker-scan estimate.
@@ -2183,12 +2290,37 @@ func (a *Agent) buildSystemPrompt(ctx context.Context, tenantID string, strategy
 		sections = append(sections, newPromptSection(category, content, false))
 	}
 
-	// 1. Core Persona (Soul) — stable.
-	if a.soul != "" {
-		addStable("identity", a.soul)
+	// 1. Core Persona (Soul) — stable. agent.md customizes the existing soul
+	// slot instead of introducing a competing identity source.
+	persona := a.composeForegroundPrompt(a.soul, promptassets.SectionPersona)
+	if persona != "" {
+		addStable("identity", persona)
 	}
-	addStable("identity", selfImprovementGuidance())
-
+	// The user-facing delivery contract and execution-quality floor do not
+	// depend on tool availability. In particular, simple direct-answer turns may
+	// intentionally expose no tools but still need language, scope, evidence, and
+	// honesty guidance. Delegated workers inherit the quality floor, not the
+	// user-facing response contract; background review owns a separate role-local
+	// contract and receives neither.
+	if a.primaryForegroundPromptProfile() {
+		addStable("identity", foregroundDeliveryGuidance())
+	}
+	if a.workspacePromptProfile() {
+		quality := a.composeForegroundPrompt(taskExecutionGuidance(),
+			promptassets.SectionWorkingStyle, promptassets.SectionVerificationPreferences)
+		addStable("tools", quality)
+		if content := a.composeForegroundPrompt(userFacingInterfaceQualityGuidance(), promptassets.SectionFrontendUI); strings.TrimSpace(content) != "" {
+			addStable("tools", conditionalUserFacingInterfaceGuidance(content))
+		}
+	}
+	// The rule itself is stable and explicitly tells direct-answer turns not to
+	// narrate. Keeping it outside the changing tool catalog prevents a simple
+	// answer/multi-step transition from changing the stable system head.
+	if a.primaryForegroundPromptProfile() {
+		if content := a.composeForegroundPrompt(progressNarrationGuidance(), promptassets.SectionProgressUpdates); strings.TrimSpace(content) != "" {
+			addStable("tools", content)
+		}
+	}
 	// Runtime context (workspace + task/run/recall state) is VOLATILE — it
 	// changes every turn, so it goes in the suffix, never between stable blocks
 	// (where it would bust the cacheable prefix, the pre-P1-3 bug).
@@ -2218,70 +2350,28 @@ func (a *Agent) buildSystemPrompt(ctx context.Context, tenantID string, strategy
 		}
 	}
 
-	// 2. Tool Instructions — stable (behavior contract + defs + guidance).
+	// 2. Tool instructions are capability- and strategy-dependent, so they live
+	// in the volatile suffix even though most turns happen to share them.
 	if a.backend != nil {
-		defs := filterToolDefinitions(a.backend.GetToolDefinitions(), strategy)
+		defs := filterToolDefinitions(ctx, a.backend.GetToolDefinitions(), strategy)
 		if len(defs) > 0 {
-			var sb strings.Builder
-			// Behavior contract: HOW to use tools (errors as diagnostics,
-			// update_plan discipline, finish_run outcome, tool_search). Always
-			// present on tool-bearing turns — it is guidance the native tools
-			// param cannot carry.
-			sb.WriteString("\n# TOOL USE INSTRUCTIONS\n")
-			sb.WriteString("Use local tools whenever the user asks about local files, directories, command output, project state, or system status.\n")
-			sb.WriteString("When a tool returns an error, treat the error as diagnostic evidence. Do not stop at the first failed command unless the failure is the requested final result. Inspect cwd, files, environment, auth state, provider constraints, or command help as needed, then choose the next correct action.\n")
-			sb.WriteString("Do not hard-code environment overrides as a default tool behavior. For example, if Go reports a go.work/module boundary error, first inspect go env GOWORK/GOMOD and the relevant go.work/go.mod files, then decide whether to change cwd, use an explicit env override, or report a real blocker.\n")
-			sb.WriteString("Use update_plan only for non-trivial work: tasks with 3+ meaningful steps, multi-file changes, investigation/debugging, long-running verification, or explicit user requests for a plan. Each update_plan call replaces the prior plan, so always send the complete current snapshot and resolve all steps before finish_run status done. Do not use update_plan for one-shot answers, small code examples, simple commands, or direct explanations.\n")
-			sb.WriteString("When update_plan moves to a new top-level work unit (work_unit=true, a returned work_unit_id, or related_task_id), the prior Active Skill expires. Echo returned work_unit_id values in later plan snapshots. If the current unit reports bound_skill_name, call skill_select with reason and no name; otherwise use only a relevant listed skill_candidate or continue without a Skill. To apply a candidate, call skill_select directly; skill_view is inspection only and must not substitute for activation or execution attribution.\n")
-			sb.WriteString("For non-trivial tool-using work that creates or changes durable task state, call finish_run once with a structured outcome: status, summary, done, next_steps, files, tests, risks, and need_approve. Skip finish_run for direct answers, small snippets, and ordinary explanations.\n")
-			sb.WriteString("Use tool_search when you need a capability but are unsure which registered tool fits.\n")
-			// Tool DEFINITIONS: names, descriptions, parameter schemas. A
-			// native-tools provider already receives all of this through
-			// ChatRequest.Tools (the vendor's tools param), so repeating it in
-			// the system prompt double-sent every schema on every turn (P1-1,
-			// docs/STATUS.md "ACTIVE PLAN"). Only fallback-format providers get
-			// the full text catalog — for them the prompt IS the tool interface.
-			if llm.ProviderSupportsNativeTools(a.Provider()) {
-				sb.WriteString("Tools are provided through the native tool-calling interface. Use only those tools; do not invent tool names such as 'ls', 'cat', or 'sh'.\n")
-			} else {
-				sb.WriteString("If native tool calls are unavailable, use the exact fallback format: [TOOL:tool_name:{\"arg\": \"val\"}]\n")
-				sb.WriteString("Do not emit XML-style tool tags such as <tool> or <parameter>; they are only tolerated for compatibility and should not appear in user-facing answers.\n")
-				sb.WriteString("The ONLY valid tool names are: ")
-				for i, d := range defs {
-					sb.WriteString(fmt.Sprintf("'%s'", toolDefinitionName(d)))
-					if i < len(defs)-1 {
-						sb.WriteString(", ")
-					}
-				}
-				sb.WriteString(".\n")
-				sb.WriteString("DO NOT use tools like 'ls', 'cat', 'read', 'run_command', or 'sh' which do not exist. Use the specific tools listed above.\n")
-				sb.WriteString("Do not invent tool names. If you use the fallback tag format, output only the [TOOL:...] tag for that step.\n\n")
-				sb.WriteString("## Available Tools\n")
-				for _, d := range defs {
-					sb.WriteString(fmt.Sprintf("### %s\n%s\n", toolDefinitionName(d), toolDefinitionDescription(d)))
-					if params := toolDefinitionParameters(d); params != nil {
-						if props, ok := params["properties"].(map[string]interface{}); ok {
-							sb.WriteString("Parameters:\n")
-							for pName, pDef := range props {
-								if def, ok := pDef.(map[string]interface{}); ok {
-									sb.WriteString(fmt.Sprintf("- %s (%s): %s\n", pName, def["type"], def["description"]))
-								}
-							}
-						}
-					}
-					sb.WriteString("\n")
+			// Durable learning is a primary-agent responsibility and names only
+			// surfaces actually available in this turn.
+			if a.primaryForegroundPromptProfile() {
+				if learning := selfImprovementGuidanceForDefinitions(defs); learning != "" {
+					addVolatile("tools", a.composeForegroundPrompt(learning, promptassets.SectionLearningPreferences))
 				}
 			}
-			addStable("tools", sb.String())
+			toolPrompt := buildToolUsePrompt(defs, llm.ProviderSupportsNativeTools(a.Provider()), strategy, a.promptProfile)
+			addVolatile("tools", toolPrompt)
 
-			// Work-quality discipline (explore, prefer patch, verify) applies to
-			// all tool-bearing turns — stable.
-			addStable("tools", taskExecutionGuidance())
-			addStable("tools", progressNarrationGuidance())
-			// Frontend guidance is CONDITIONAL on the user's input, so it is
-			// volatile (per-turn) and must not sit in the stable prefix.
-			if isFrontendTask(userInput) {
-				addVolatile("runtime", frontendQualityGuidance())
+			// Workspace implementation guidance depends on capabilities. The
+			// capability-independent execution-quality floor was already installed
+			// above so direct-answer turns cannot lose it when this list is empty.
+			if a.workspacePromptProfile() {
+				if _, ok := WorkspaceContextFromContext(ctx); ok {
+					addVolatile("runtime", workspaceImplementationGuidance())
+				}
 			}
 
 		}
@@ -2451,14 +2541,12 @@ func selectedCanonicalAccessIDs(served []string, groups ...[]memory.Fact) []stri
 	return out
 }
 
-func filterToolDefinitions(defs []map[string]interface{}, strategy TaskStrategy) []map[string]interface{} {
+func filterToolDefinitions(ctx context.Context, defs []map[string]interface{}, strategy TaskStrategy) []map[string]interface{} {
 	out := make([]map[string]interface{}, 0, len(defs))
 	for _, def := range defs {
 		name := toolDefinitionName(def)
-		if metadata, ok := def["selfmind"].(map[string]interface{}); ok {
-			if exposure, _ := metadata["exposure"].(string); strings.EqualFold(strings.TrimSpace(exposure), "hidden") {
-				continue
-			}
+		if !toolDefinitionAvailable(ctx, def) {
+			continue
 		}
 		if !strategy.AllowsTool(name) {
 			continue

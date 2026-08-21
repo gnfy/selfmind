@@ -13,6 +13,7 @@ import (
 	"selfmind/internal/modelruntime"
 	"selfmind/internal/platform/config"
 	"selfmind/internal/platform/log"
+	"selfmind/internal/promptassets"
 	"selfmind/internal/tools"
 )
 
@@ -238,6 +239,25 @@ func codingContextLength(cfg *config.Config) int {
 		return 0
 	}
 	return rt.ContextLength
+}
+
+// summarizerOutputLimit returns the actual resolved route capacity. The kernel
+// applies its own bounded ceiling and retry policy; this prevents an explicitly
+// smaller role/provider limit from being ignored.
+func summarizerOutputLimit(cfg *config.Config) int {
+	if cfg == nil {
+		return 0
+	}
+	roleCfg, _, ok := cfg.ResolveAuxiliaryRole(string(llm.RoleSummarizer))
+	if !ok || roleConfigEmpty(roleCfg) {
+		return 0
+	}
+	providerName := firstNonEmpty(roleCfg.Provider, defaultProviderName(cfg))
+	rt, err := modelruntime.NewResolver(cfg).Resolve(context.Background(), roleProviderSelection(llm.RoleSummarizer, providerName, roleCfg))
+	if err == nil && rt.MaxTokens > 0 {
+		return rt.MaxTokens
+	}
+	return roleCfg.MaxTokens
 }
 
 func llmQuirks(q modelruntime.ProviderQuirks) llm.ProviderQuirks {
@@ -646,7 +666,7 @@ func roleProviderSelection(_ llm.ModelRole, roleProviderName string, roleCfg con
 // Returns nil when the role is unconfigured, its provider cannot be built, or
 // memory.semantic_recall is disabled; the recall engine then degrades to
 // raw-term FTS.
-func SemanticRecallExpander(mem *memory.MemoryManager, cfg *config.Config, tenantID string) *memory.SemanticExpander {
+func SemanticRecallExpander(mem *memory.MemoryManager, cfg *config.Config, tenantID string, prompts *promptassets.Snapshot) *memory.SemanticExpander {
 	if cfg == nil || !cfg.Memory.SemanticRecall {
 		return nil
 	}
@@ -663,11 +683,14 @@ func SemanticRecallExpander(mem *memory.MemoryManager, cfg *config.Config, tenan
 		tenantID = "default"
 	}
 	applyDynamicKeyGetter(provider, mem, tenantID, roleProviderName)
-	return memory.NewSemanticExpander(provider, true)
+	return memory.NewSemanticExpander(provider, true, prompts)
 }
 
-// InitAgent creates the LLM provider, reflection engine, and agent core.
-func InitAgent(mem *memory.MemoryManager, cfg *config.Config, tenantID string, stores ...*control.Store) (*kernel.Agent, error) {
+// InitAgent wires one already-validated immutable prompt snapshot. Daemon
+// startup passes the same snapshot through agent, tool/delegation, and
+// background-role construction; each prompt profile selects only its owned
+// sections from that process-frozen snapshot.
+func InitAgent(mem *memory.MemoryManager, cfg *config.Config, tenantID string, prompts *promptassets.Snapshot, controlStore *control.Store) (*kernel.Agent, error) {
 	provider := buildLLMProvider(cfg)
 	if provider == nil {
 		return nil, fmt.Errorf("no LLM provider available")
@@ -705,13 +728,13 @@ func InitAgent(mem *memory.MemoryManager, cfg *config.Config, tenantID string, s
 	// background_review only as a legacy config fallback; never borrow the main
 	// coding model silently.
 	judgeProvider, _ := configuredApprovalJudgeProvider(mem, cfg, tenantID)
-	if len(stores) > 0 && stores[0] != nil {
+	if controlStore != nil {
 		// Background learning shares the same durable physical-route circuit as
 		// post-run analysis and memory consolidation, and the same two-position
 		// chain: the role's own route, then the models.auxiliary floor. In daemon
 		// mode it must not silently borrow the foreground coding model.
-		reviewProvider, reviewRoutes = configuredMaintenanceProvider(mem, cfg, tenantID, stores[0], llm.RoleBackgroundReview)
-		if replayed, err := stores[0].RequeueBlockedJobsForHealthyProviderRoutesAcrossTenants(context.Background(), tenantID, 100, maintenanceRouteIDs(reviewRoutes), time.Now()); err != nil {
+		reviewProvider, reviewRoutes = configuredMaintenanceProvider(mem, cfg, tenantID, controlStore, llm.RoleBackgroundReview)
+		if replayed, err := controlStore.RequeueBlockedJobsForHealthyProviderRoutesAcrossTenants(context.Background(), tenantID, 100, maintenanceRouteIDs(reviewRoutes), time.Now()); err != nil {
 			log.Warn("background review: failed to migrate jobs to a healthy fallback route", "error", err)
 		} else if replayed > 0 {
 			log.Info("background review: replaying jobs on a healthy fallback route", "jobs", replayed)
@@ -737,6 +760,7 @@ func InitAgent(mem *memory.MemoryManager, cfg *config.Config, tenantID string, s
 	// daemon path. The durable cohort-driven skill curator is the sole proposal
 	// authority; keeping a second writer here would bypass candidate evidence.
 	agent := kernel.NewAgent(mem, nil, codingProvider, cfg.Agent.Soul, maxIter, maxRetries, nil)
+	agent.SetPromptSnapshot(prompts)
 	agent.SetToolBudgetPolicy(kernel.ToolBudgetPolicy{
 		Initial:       cfg.Agent.ActionToolBudget,
 		Step:          cfg.Agent.ActionToolBudgetStep,
@@ -765,6 +789,7 @@ func InitAgent(mem *memory.MemoryManager, cfg *config.Config, tenantID string, s
 	// Over-budget context compaction uses the auxiliary/dedicated summarizer
 	// (kept OFF the main coding provider) instead of dropping oldest turns.
 	agent.SetSummaryProvider(summaryProvider)
+	agent.SetSummaryOutputLimit(summarizerOutputLimit(cfg))
 	// Carry the cheap triage provider so the gateway can build the smart-mode
 	// approval judge (H2) from it, without kernel depending on concrete tools.
 	agent.SetApprovalJudgeProvider(judgeProvider)
@@ -782,6 +807,7 @@ func InitAgent(mem *memory.MemoryManager, cfg *config.Config, tenantID string, s
 		SkillsDir:              skillsDir,
 	}, 8, maxRetries)
 	reviewEngine.SetControlTenantID(tenantID)
+	reviewEngine.SetPromptSnapshot(prompts)
 	agent.SetBackgroundReviewEngine(reviewEngine)
 
 	// Configure the nudge interval.
@@ -790,7 +816,7 @@ func InitAgent(mem *memory.MemoryManager, cfg *config.Config, tenantID string, s
 	}
 
 	// Inject the semantic query expander.
-	se := memory.NewSemanticExpander(semanticRecallProvider, cfg.Memory.SemanticRecall)
+	se := memory.NewSemanticExpander(semanticRecallProvider, cfg.Memory.SemanticRecall, prompts)
 	agent.SetSemanticExpander(se)
 
 	// Configure the memory injection format.

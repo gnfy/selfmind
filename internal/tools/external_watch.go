@@ -18,14 +18,19 @@ import (
 // turn or consuming model tokens.
 type ExternalWatchTool struct {
 	BaseTool
-	store *control.Store
+	store     *control.Store
+	planStore *PlanStore
 }
 
 func NewExternalWatchTool(store *control.Store) *ExternalWatchTool {
-	t := &ExternalWatchTool{store: store}
+	return NewExternalWatchToolWithPlanStore(store, nil)
+}
+
+func NewExternalWatchToolWithPlanStore(store *control.Store, planStore *PlanStore) *ExternalWatchTool {
+	t := &ExternalWatchTool{store: store, planStore: planStore}
 	t.BaseTool = BaseTool{
 		name:        "watch_external",
-		description: "Register a durable daemon-side check for external CI/CD or deployment state, then end the current run with status waiting_external",
+		description: "Register a durable daemon-side read-only check for external CI/CD or deployment state. Successful registration automatically hands off the current run as waiting_external; do not call finish_run afterward.",
 		schema: ToolSchema{
 			Type: "object",
 			Properties: map[string]PropertyDef{
@@ -75,6 +80,9 @@ func (t *ExternalWatchTool) Execute(args map[string]interface{}) (string, error)
 	}
 	if command == "" {
 		return "", fmt.Errorf("command is required")
+	}
+	if err := validateExternalWatchObservation(args); err != nil {
+		return "", err
 	}
 	if specVersion == 1 && successPattern == "" {
 		return "", fmt.Errorf("success_pattern is required for watch spec v1")
@@ -232,7 +240,37 @@ func (t *ExternalWatchTool) Execute(args map[string]interface{}) (string, error)
 		Channel:    watch.Channel,
 		Payload:    payload,
 	})
-	return fmt.Sprintf("External watch registered: %s (%s). End this turn with finish_run status waiting_external. The daemon will notify the user when it completes, fails, or times out.", watch.ID, watch.Description), nil
+	// Successful registration ends this run without a second model-authored
+	// finish_run call. Purge the shared in-memory plan here so the automatic
+	// lifecycle handoff has the same bounded plan-store lifetime as finish_run.
+	if t.planStore != nil {
+		t.planStore.Purge(planKey(args))
+	}
+	message := fmt.Sprintf("Watcher %s is running in the background for %s. You can start another task now; SelfMind will notify you when it reaches a terminal state.", watch.ID, watch.Description)
+	result, err := json.Marshal(map[string]interface{}{
+		"watch_id":    watch.ID,
+		"description": watch.Description,
+		"registered":  true,
+		"message":     message,
+		"lifecycle_handoff": map[string]interface{}{
+			"status":       "waiting_external",
+			"summary":      fmt.Sprintf("Watching %s in the background.", watch.Description),
+			"done":         []string{fmt.Sprintf("Registered durable watcher %s.", watch.ID)},
+			"next_steps":   []string{"SelfMind will notify you when the watcher reaches a terminal state."},
+			"need_approve": false,
+		},
+	})
+	if err != nil {
+		return "", fmt.Errorf("encode external watch registration: %w", err)
+	}
+	return string(result), nil
+}
+
+func validateExternalWatchObservation(args map[string]interface{}) error {
+	if observationOnlyExec("watch_external", args) {
+		return nil
+	}
+	return fmt.Errorf("watch not registered: command is not a proven read-only observation; use a supported status command or an operator-approved hash-pinned observation script")
 }
 
 func externalWatchEffectiveCapabilities(args map[string]interface{}) []string {

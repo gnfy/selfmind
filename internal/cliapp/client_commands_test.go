@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -128,14 +130,37 @@ func TestTaskCommandUsesShortLivedGatewayRequest(t *testing.T) {
 	}
 }
 
-func TestUsageCommandUsesContextDiagnostics(t *testing.T) {
+func TestUsageCommandUsesDailyExecutionAndCostReport(t *testing.T) {
 	app, recorded, _, _ := newSendTestApp(t, []string{"selfmind", "usage"})
 	handled, code := app.runGatewayClientIfRequested()
 	if !handled || code != 0 {
 		t.Fatalf("handled = %v, code = %d", handled, code)
 	}
-	if recorded.Content != "/diag context" {
+	if recorded.Content != "/report daily --since 24h" {
 		t.Fatalf("content = %q", recorded.Content)
+	}
+}
+
+func TestStatusShowsPersonalPromptDiscoverabilityHint(t *testing.T) {
+	home := t.TempDir()
+	configPath := filepath.Join(home, ".selfmind", "config.yaml")
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(configPath, []byte("{}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	app, recorded, stdout, _ := newSendTestApp(t, []string{"selfmind", "status"})
+	app.configPath = configPath
+	handled, code := app.runGatewayClientIfRequested()
+	if !handled || code != 0 {
+		t.Fatalf("handled=%v code=%d", handled, code)
+	}
+	if recorded.Content != "/status" {
+		t.Fatalf("content=%q", recorded.Content)
+	}
+	if !strings.Contains(stdout.String(), "selfmind prompt edit agent") || !strings.Contains(stdout.String(), "agent.md") {
+		t.Fatalf("status omitted personal prompt hint: %s", stdout.String())
 	}
 }
 

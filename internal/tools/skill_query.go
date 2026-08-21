@@ -125,10 +125,17 @@ func findSkill(tenantID, name string, invocation ...map[string]interface{}) (Ski
 			return s, nil
 		}
 	}
-	return SkillInfo{}, fmt.Errorf("skill not found: %s", name)
+	return SkillInfo{}, &skillNotFoundError{Name: name}
 }
 
+type skillNotFoundError struct{ Name string }
+
+func (e *skillNotFoundError) Error() string { return fmt.Sprintf("skill not found: %s", e.Name) }
+
 func readSkillInfo(path, format string, usage map[string]SkillUsageRecord, root SkillRoot) (SkillInfo, bool) {
+	if format == "dir" && isDeveloperAgentOnlySkill(path) {
+		return SkillInfo{}, false
+	}
 	contentPath := path
 	if format == "dir" {
 		contentPath = filepath.Join(path, "SKILL.md")

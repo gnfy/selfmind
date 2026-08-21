@@ -16,6 +16,7 @@ expect:
   status: completed
   completion_reason: completed
   resumable: false
+  contains: ["READY"]
   max_tool_calls: 0
   max_duration_seconds: 60
 

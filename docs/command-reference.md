@@ -120,6 +120,7 @@ selfmind workspace [list|add|use|trust|untrust|grants|observe|revoke|<n|workspac
 selfmind config [doctor|upgrade]
 selfmind env [show|refresh]
 selfmind model [current|check [--live] [--role <name>]|list|set <provider> <model>]
+selfmind prompt [list|show|edit|diff|validate|test|reset|apply] ...
 selfmind auth [login|status|logout] ...
 selfmind doctor [--verbose] [--out FILE] [--probe-models]
 selfmind usage
@@ -135,6 +136,15 @@ Detailed forms:
 ```text
 selfmind model set <provider> <model> [--reasoning <level|auto>] [--service-tier <tier|auto>]
 selfmind model check [--live] [--role <name>]
+
+selfmind prompt [list|status]
+selfmind prompt show <agent|role>
+selfmind prompt edit <agent|role>
+selfmind prompt diff [agent|role]
+selfmind prompt validate
+selfmind prompt test [agent|role]
+selfmind prompt reset <agent|role|all>
+selfmind prompt apply
 
 selfmind auth login minimax-oauth [--region global|cn] [--no-browser]
 selfmind auth status [provider]
@@ -175,17 +185,49 @@ selfmind weixin status
   compatibility. Providers with a multi-turn thinking/tool contract, such as
   DeepSeek V4, also replay one no-op tool result and verify the final answer;
   the probe therefore consumes a small amount of provider quota.
-- `usage` is a CLI alias for `/diag context`. It reports provider-call input,
-  cache-hit/cache-miss input, output, and reasoning-token totals when the
-  provider supplies those fields. It reports tokens, not estimated currency.
+- `prompt` manages the operator-owned workspace next to the active config file
+  (normally `~/.selfmind/prompts/`); no `config.yaml` keys are required.
+  `list`/`status` compares the disk snapshot with the running daemon's loaded
+  hash and build, so equal customization hashes cannot hide built-in prompt
+  changes that still need a restart. `show` displays the static built-in role
+  contract and local file without exposing runtime memory or project context.
+  `edit` creates a marked-section
+  template for `agent`, `memory_extract`, `background_review`, `skill_curator`,
+  `summarizer`, or `semantic_recall`; Markdown headings inside a marked section
+  are preserved as custom content. Editing an existing markerless file first
+  converts it to the marked grammar and writes a timestamped `.legacy-*`
+  backup. Exact marker examples inside Markdown code fences remain content.
+- A prompt section containing `default` inherits the built-in behavior. Only
+  explicitly replaceable foreground sections accept `off`; quality,
+  verification, response-schema, governance, tool, and safety floors cannot be
+  disabled. Unknown section markers (and unknown reserved headings in legacy
+  markerless files), invalid UTF-8, symlinks or group/world-writable permissions
+  on the prompt root, nested directories, or files, and over-limit content fail
+  validation. At startup, an invalid active workspace
+  produces a persistent degraded finding and the daemon uses the matching
+  last-known-good snapshot, or built-in defaults when none exists, so agent
+  endpoints remain available. Security checks are not bypassed on filesystems
+  that report broad write permissions. `reset` creates a timestamped backup.
+  `apply` validates before restarting a running daemon; an explicit
+  `gateway restart` also validates before stopping the current process. There
+  is no hot reload. `test` deterministically verifies the active section
+  composition and makes no model call.
+- `usage` is the model-free, person-scoped 24-hour execution and token report
+  (the same data path as `/report daily --since 24h`). It includes provider
+  input, cache read/miss, output and reasoning totals, native tool-schema share,
+  tool/approval activity, and current maintenance/delivery health when those
+  signals are available. It reports tokens, not estimated currency.
 - `report daily` produces a model-free quality and cost summary for the current
   person. It combines run outcomes, tool and approval counts, provider usage,
   cache statistics, maintenance health, delivery status, and recall adoption
-  signals for a bounded window (24 hours by default, up to 30 days).
+  signals for a bounded window (24 hours by default, up to 30 days). Event
+  pages are scanned up to the documented diagnostic ceiling; if more rows
+  exist, the report labels every affected aggregate as a lower bound instead
+  of presenting a silently truncated total.
 - `doctor` reports only current problems by default, together with a concrete
   recovery or inspection command. Findings carry stable category tags such as
-  `[CONFIG]`, `[TRUST]`, `[DELIVERY]`, and `[SKILLS]`; every command is gathered
-  into one numbered `Next actions` section. Interactive terminals use the TUI
+  `[CONFIG]`, `[PROMPT]`, `[TRUST]`, `[DELIVERY]`, and `[SKILLS]`; every command
+  is gathered into one numbered `Next actions` section. Interactive terminals use the TUI
   warning, error, info, success, text, and muted palette. Pipes, redirection,
   `NO_COLOR`, `CLICOLOR=0`, and `TERM=dumb` remain plain text. Healthy
   subsystems and historical runs, errors, events, activity, and logs stay
@@ -231,7 +273,7 @@ selfmind eval scorecard [case-or-dir] [--provider ID] [--out PATH] [--live]
 selfmind eval capture [turn-id|latest] [--title "..."] [--suite NAME]
 selfmind eval clean [--yes]
 
-selfmind maintenance replay [--limit N]
+selfmind maintenance replay [--limit N] [--prompt-revision]
 selfmind maintenance migrate-memory [--apply] [--data-dir DIR]
 selfmind maintenance migrate-skills [--apply] [--root DIR] [--governance-grace 30d]
 selfmind maintenance cleanup-person-partitions [--apply] [--root DIR --data-dir DIR]
@@ -242,8 +284,13 @@ selfmind maintenance task-audit [--apply] [--limit N] [--data-dir DIR]
 selfmind maintenance restore-control --backup PATH --yes [--data-dir DIR]
 ```
 
-`maintenance replay` requeues retry-exhausted jobs only from each run's latest
-analyzer generation. Older generations remain immutable history; use a small
+`maintenance replay` requeues retry-exhausted post-run jobs from each durable
+key's latest analyzer generation. Work parked as `blocked_prompt_revision` is a
+separate, operator-triggered scope: the command reports how much is parked, and
+`--prompt-revision` requeues it. Restore the missing content-addressed prompt
+revision first; replaying while it is still unavailable returns the job to the
+same visible blocked state without a model call, and resets its attempt count
+and recorded reason. Older generations remain immutable history; use a small
 `--limit` as a canary before replaying a backlog.
 
 `maintenance cleanup-person-partitions` compares direct `person_*` filesystem
@@ -329,6 +376,15 @@ before normal agent dispatch.
   and quarantined external tools are listed by name, issue class, and schema
   hash; raw schemas and values are never printed. Quarantined tools are not
   sent to models and cannot execute.
+- `/diag context` starts with the latest provider request estimate, including
+  native tool schemas, and labels the separately assembled prompt subtotal as
+  excluding native schemas. Fingerprint-capable providers show prefix coverage;
+  unsupported or broken forwarding is explicit rather than an empty field.
+- `/diag delivery recover stale-results` sends one bounded recap for old
+  `pending_session` final results in the current IM peer. Confirmed delivery
+  dismisses exactly the summarized rows. `/diag delivery dismiss stale-results`
+  closes those old final results without sending. Neither command touches
+  approvals, clarifications, `sent_unconfirmed`, or another channel.
 
 ## Local TUI slash commands
 

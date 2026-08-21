@@ -39,6 +39,20 @@ Read the relevant domain document before editing that domain:
 | TUI and transcript rendering | `docs/tui-terminal-first-hybrid.md` |
 | Eval and cassettes | `docs/eval-loop.md` |
 
+## Repository Developer Skills
+
+Development-only Agent Skills live under `.agents/skills`. Codex, Gemini, Qwen,
+and other Agent Skills-compatible coding agents discover them there. A thin
+`.claude/skills` entrypoint may redirect Claude Code to the same canonical body;
+compatibility entries must not duplicate the workflow. Agents that scan neither
+directory must use this table as the discovery fallback and read the matching
+`SKILL.md` completely before acting. A `.selfmind-developer-only` marker means
+the SelfMind daemon must not expose that directory as a product runtime Skill.
+
+| Skill | Use |
+| --- | --- |
+| `.agents/skills/selfmind-daily-driver-audit/SKILL.md` | Multi-window audits of real SelfMind runtime evidence, daily reports, diagnostics, delivery, memory governance, approvals, tool economics, and evidence liveness. |
+
 ## Working Protocol
 
 1. Read this file, `docs/STATUS.md`, and the relevant domain document.

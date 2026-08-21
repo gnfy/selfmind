@@ -59,6 +59,36 @@ func TestUpdatePlanToolReturnsSynchronousWorkUnitIdentities(t *testing.T) {
 	}
 }
 
+type staleWorkUnitTestError struct{}
+
+func (staleWorkUnitTestError) Error() string {
+	return "work unit wu-old does not belong to run run-current"
+}
+func (staleWorkUnitTestError) CurrentWorkUnitIDs() []string { return []string{"wu-current"} }
+
+func TestUpdatePlanToolReturnsStableStaleWorkUnitRecovery(t *testing.T) {
+	tool := NewUpdatePlanTool()
+	ctx := WithPlanProjectionSink(context.Background(), func(context.Context, []PlanStep) ([]PlanWorkUnitIdentity, error) {
+		return nil, staleWorkUnitTestError{}
+	})
+	_, err := tool.Execute(map[string]interface{}{
+		"plan": []interface{}{map[string]interface{}{
+			"step": "Continue current objective", "status": "in_progress", "work_unit_id": "wu-old",
+		}},
+		"_context": ctx,
+	})
+	if err == nil {
+		t.Fatal("expected stale work-unit error")
+	}
+	stable, ok := err.(interface {
+		ToolErrorCode() string
+		ModelSafeMessage() string
+	})
+	if !ok || stable.ToolErrorCode() != "stale_work_unit" || !strings.Contains(stable.ModelSafeMessage(), "wu-current") {
+		t.Fatalf("stale work-unit recovery = %T %v", err, err)
+	}
+}
+
 func TestUpdatePlanToolRejectsMultipleInProgressSteps(t *testing.T) {
 	tool := NewUpdatePlanTool()
 	_, err := tool.Execute(map[string]interface{}{

@@ -40,6 +40,23 @@ type WorkUnitPlanInput struct {
 	RelatedTaskID string
 }
 
+// StaleWorkUnitReferenceError preserves the local rejected id while exposing
+// the current run's legal ids to the tool layer for a stable recovery message.
+// It is intentionally typed: callers must not parse error prose to recover.
+type StaleWorkUnitReferenceError struct {
+	WorkUnitID string
+	RunID      string
+	Current    []string
+}
+
+func (e *StaleWorkUnitReferenceError) Error() string {
+	return fmt.Sprintf("work unit %s does not belong to run %s", e.WorkUnitID, e.RunID)
+}
+
+func (e *StaleWorkUnitReferenceError) CurrentWorkUnitIDs() []string {
+	return append([]string(nil), e.Current...)
+}
+
 // SyncRunWorkUnits projects the model's complete work-unit snapshot. Plan
 // status closes the execution window; verification is independently derived
 // from durable evidence inside that window rather than trusted from plan prose.
@@ -97,7 +114,7 @@ func (s *Store) SyncRunWorkUnits(ctx context.Context, tenantID, runID string, pl
 				return nil, fmt.Errorf("related task %s is not owned by run person", item.RelatedTaskID)
 			}
 		}
-		unit, err := resolvePlanWorkUnit(item, existing, byID, used)
+		unit, err := resolvePlanWorkUnit(runID, item, existing, byID, used)
 		if err != nil {
 			return nil, err
 		}
@@ -140,11 +157,15 @@ func (s *Store) SyncRunWorkUnits(ctx context.Context, tenantID, runID string, pl
 	return s.ListRunWorkUnits(ctx, tenant, runID)
 }
 
-func resolvePlanWorkUnit(item WorkUnitPlanInput, existing []RunWorkUnit, byID map[string]*RunWorkUnit, used map[string]bool) (*RunWorkUnit, error) {
+func resolvePlanWorkUnit(runID string, item WorkUnitPlanInput, existing []RunWorkUnit, byID map[string]*RunWorkUnit, used map[string]bool) (*RunWorkUnit, error) {
 	if item.WorkUnitID != "" {
 		unit := byID[item.WorkUnitID]
 		if unit == nil {
-			return nil, fmt.Errorf("work unit %s does not belong to this run", item.WorkUnitID)
+			current := make([]string, 0, len(existing))
+			for _, candidate := range existing {
+				current = append(current, candidate.ID)
+			}
+			return nil, &StaleWorkUnitReferenceError{WorkUnitID: item.WorkUnitID, RunID: runID, Current: current}
 		}
 		return unit, nil
 	}

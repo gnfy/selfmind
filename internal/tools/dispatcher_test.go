@@ -137,8 +137,8 @@ func TestDispatcherExposesTrustedToolExecutionMetadata(t *testing.T) {
 	}
 	definition := ToToolDefinition(NewWriteFileTool())
 	selfmind, _ := definition["selfmind"].(map[string]interface{})
-	if selfmind["origin"] != ToolSchemaOriginBuiltin {
-		t.Fatalf("definition origin=%v", selfmind["origin"])
+	if selfmind["origin"] != string(ToolSchemaOriginBuiltin) {
+		t.Fatalf("definition origin=%v (%T)", selfmind["origin"], selfmind["origin"])
 	}
 	web := disp.ToolExecutionMetadata("web_search", map[string]interface{}{"query": "current release"})
 	if web.Origin != "builtin" || web.Category != "network" || !web.ReadOnly || !containsMetadataClass(web.OperationClasses, "network") {

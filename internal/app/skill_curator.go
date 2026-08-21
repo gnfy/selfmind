@@ -13,6 +13,7 @@ import (
 	"selfmind/internal/kernel/memory"
 	"selfmind/internal/platform/config"
 	"selfmind/internal/platform/log"
+	"selfmind/internal/promptassets"
 	"selfmind/internal/tools"
 )
 
@@ -33,6 +34,7 @@ type llmSkillCurator struct {
 	provider     llm.Provider
 	store        *control.Store
 	skillStorage *tools.SkillStorage
+	prompts      *promptassets.Snapshot
 }
 
 type skillCuratorWire struct {
@@ -43,7 +45,7 @@ type skillCuratorWire struct {
 	Reason          string   `json:"reason"`
 }
 
-func NewConfiguredSkillCurator(mem *memory.MemoryManager, cfg *config.Config, tenantID string, store *control.Store) httpapi.SkillCuratorRunner {
+func NewConfiguredSkillCurator(mem *memory.MemoryManager, cfg *config.Config, tenantID string, store *control.Store, prompts *promptassets.Snapshot) httpapi.SkillCuratorRunner {
 	if cfg == nil || store == nil || !cfg.Evolution.Enabled {
 		return nil
 	}
@@ -56,7 +58,7 @@ func NewConfiguredSkillCurator(mem *memory.MemoryManager, cfg *config.Config, te
 		log.Warn("skill curator disabled: resolve skill storage", "error", err)
 		return nil
 	}
-	return &llmSkillCurator{provider: provider, store: store, skillStorage: skillStorage}
+	return &llmSkillCurator{provider: provider, store: store, skillStorage: skillStorage, prompts: prompts}
 }
 
 func (c *llmSkillCurator) ProposeSkillCuration(ctx context.Context, tenantID, payloadJSON string) (string, error) {
@@ -84,10 +86,20 @@ func (c *llmSkillCurator) ProposeSkillCuration(ctx context.Context, tenantID, pa
 		TenantID: tenantID, PersonID: digest.PersonID, WorkspaceID: digest.WorkspaceID,
 		RunID: "skill-curation:" + digest.EvidenceSetHash, Role: llm.RoleSkillCurator,
 	})
+	prompts, err := promptRevision(c.prompts, digest.PromptSnapshotHash)
+	if err != nil {
+		return "", err
+	}
+	actionGuidance := prompts.Custom(promptassets.FileSkillCurator, promptassets.SectionCreationQuality)
+	if digest.TargetSkillKey != "" {
+		actionGuidance = prompts.Custom(promptassets.FileSkillCurator, promptassets.SectionRepairQuality)
+	}
 	resp, err := c.provider.Chat(ctx, llm.ChatRequest{
-		SystemPrompt: skillCuratorSystemPrompt,
-		Messages:     []llm.Message{{Role: "user", Content: "<skill_evidence_digest>\n" + payloadJSON + "\n</skill_evidence_digest>"}},
-		MaxTokens:    6144,
+		SystemPrompt: promptassets.AppendOperatorGuidance(skillCuratorSystemPrompt,
+			actionGuidance,
+			prompts.Custom(promptassets.FileSkillCurator, promptassets.SectionNamingLanguage)),
+		Messages:  []llm.Message{{Role: "user", Content: "<skill_evidence_digest>\n" + payloadJSON + "\n</skill_evidence_digest>"}},
+		MaxTokens: 6144,
 		Options: map[string]interface{}{
 			"temperature": 0, "reasoning_effort": "none", "maintenance_kind": "skill_curator",
 		},

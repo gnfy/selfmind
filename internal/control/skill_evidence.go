@@ -27,6 +27,7 @@ type SkillEvidenceDigest struct {
 	SuccessObservations  []WorkflowObservation `json:"success_observations"`
 	NegativeObservations []WorkflowObservation `json:"negative_observations,omitempty"`
 	ExpectedSavings      map[string]int64      `json:"expected_savings,omitempty"`
+	PromptSnapshotHash   string                `json:"prompt_snapshot_hash,omitempty"`
 }
 
 func (s *Store) ReadySkillEvidenceDigestsForRun(ctx context.Context, tenantID, runID string) ([]SkillEvidenceDigest, error) {

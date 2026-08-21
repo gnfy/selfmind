@@ -105,8 +105,8 @@ func ProbeResolvedModelForRole(ctx context.Context, rt modelruntime.Runtime, rol
 	switch {
 	case err != nil:
 		probe.Err = err
-	case resp == nil || strings.TrimSpace(resp.Content) == "":
-		probe.Err = fmt.Errorf("model returned an empty response")
+	case modelProbeContentError(resp) != nil:
+		probe.Err = modelProbeContentError(resp)
 	case probe.MaintenanceContractTested:
 		if maintenanceFinishReasonTruncated(resp.FinishReason) {
 			probe.Err = fmt.Errorf("maintenance contract was truncated (finish_reason=%s)", resp.FinishReason)
@@ -300,8 +300,8 @@ func ProbeConfiguredModelRoles(ctx context.Context, cfg *config.Config) []ModelR
 			switch {
 			case err != nil:
 				probe.Err = err
-			case resp == nil || strings.TrimSpace(resp.Content) == "":
-				probe.Err = fmt.Errorf("model returned an empty response")
+			case modelProbeContentError(resp) != nil:
+				probe.Err = modelProbeContentError(resp)
 			case probe.MaintenanceContractTested && maintenanceFinishReasonTruncated(resp.FinishReason):
 				probe.Err = fmt.Errorf("maintenance contract was truncated (finish_reason=%s)", resp.FinishReason)
 			case probe.MaintenanceContractTested:
@@ -328,4 +328,17 @@ func ProbeConfiguredModelRoles(ctx context.Context, cfg *config.Config) []ModelR
 		return strings.Join(results[i].Roles, ",") < strings.Join(results[j].Roles, ",")
 	})
 	return results
+}
+
+func modelProbeContentError(resp *llm.ChatResponse) error {
+	if resp == nil {
+		return fmt.Errorf("model returned an empty response")
+	}
+	if strings.TrimSpace(resp.Content) != "" {
+		return nil
+	}
+	if len(resp.ToolCalls) > 0 {
+		return fmt.Errorf("model returned an unexpected tool call instead of probe text")
+	}
+	return fmt.Errorf("model returned an empty response")
 }

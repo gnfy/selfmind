@@ -15,6 +15,12 @@ const (
 	SkillScopeUser      = "user"
 	SkillScopeWorkspace = "workspace"
 	SkillScopeExternal  = "external"
+
+	// developerAgentOnlySkillMarker lets a repository keep Agent Skills for
+	// coding assistants under .agents/skills without exposing those instructions
+	// to SelfMind's product runtime. The marker is intentionally local to one
+	// directory-form Skill; it never hides an entire root.
+	developerAgentOnlySkillMarker = ".selfmind-developer-only"
 )
 
 // SkillRoot describes one directory that can contain skill packages.
@@ -290,6 +296,11 @@ func dedupeSkillRoots(roots []SkillRoot) []SkillRoot {
 		out = append(out, root)
 	}
 	return out
+}
+
+func isDeveloperAgentOnlySkill(path string) bool {
+	st, err := os.Stat(filepath.Join(path, developerAgentOnlySkillMarker))
+	return err == nil && !st.IsDir()
 }
 
 func ensureWritableSkill(info SkillInfo, action string) error {

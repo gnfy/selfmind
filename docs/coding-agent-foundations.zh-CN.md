@@ -54,6 +54,69 @@ macOS 支持 CLI、daemon、Provider、workspace 工具和 LaunchAgent 生命周
 原生 Windows 不是正式执行目标，Windows 用户应使用 WSL。路径和 shell 行为
 必须由运行平台决定，不能根据用户提示词猜测。
 
+## Operator 提示词工作区
+
+深度用户无需增加配置键，就能调整静态提示词层。当前配置文件同级目录是唯一
+来源（通常为 `~/.selfmind/prompts/`）：
+
+- `agent.md` 管理前台人格和表现偏好。仓库中的 `AGENTS.md`/`.selfmind.md`
+  仍是较低信任级别的项目上下文，不能替代 operator 层。替换或关闭 Progress
+  Updates 会改变 transcript 形状，因为每条工具调用前的 preamble 都会持久化为
+  独立 assistant 消息。每个主前台 turn（包括不暴露工具的纯直答）都会保留锁定的
+  响应与交互底线，用来约束语言跟随、结论优先、有限澄清，以及默认不倾倒原始协议，
+  但不对使用者职业作任何断言。锁定的工作质量底线同样不依赖具体能力，即使没有
+  模型可见工具也会用于前台和委派工作；只有绑定 workspace 时才加入工作区实现指引，
+  而且只有存在命令能力时才要求命令验证。生命周期指令由当前 turn 实际下发的工具
+  定义生成，因此只读 finalizer 或受限角色不会被要求调用它没有的计划、终端、Skill
+  或结束工具；
+- 委派 Agent 只从同一冻结快照继承适用的工作风格、验证和语义条件式用户界面指引。
+  系统不通过关键词分类器判断是否适用；提示词自身声明适用边界，并要求模型在其他
+  任务中忽略它。委派 Agent 保留面向父 Agent 的专用身份，不继承 Persona、
+  Progress Updates 或 Persistent Learning。
+  委派上下文会保留父任务的取消、workspace/run 权限、artifact 和事件证据，但使用
+  全新的策略与延迟工具激活状态。父任务拥有的计划、结束、watch、memory 与 Skill
+  变更工具不会下放；结果以 evidence/files/tests/blockers 的结构化交接返回；
+- `background/memory_extract.md`、`background/background_review.md`、
+  `background/skill_curator.md`、`background/summarizer.md` 与
+  `background/semantic_recall.md` 只影响对应角色/任务。后台复盘不会继承前台
+  `agent.md`、通用任务策略或仓库指令文件。模型只看到 memory 与 session 证据工具；
+  仅供验证器使用的 Skill 读取工具仍留在内部。对话快照按不可信数据围栏；
+- 新生成模板以独立成行且格式精确的 `selfmind:section`/`selfmind:end` 标记作为兼容
+  边界，因此标记章节内的 Markdown 标题只是普通自定义内容，Markdown 代码围栏
+  内的标记示例也仍是正文。首版生成的无标记文件继续兼容，但其中固定二级标题仍
+  保留为章节边界；使用 `selfmind prompt edit` 打开时会迁移到新语法，并在旁边保留
+  带时间戳的原文件备份。`default` 继承代码内置指引；只有明确可替换的
+  表现层章节接受 `off`。自定义质量指引追加在锁定的 schema、治理、工具和安全
+  契约之后，不能删除这些底线。
+
+daemon 在启动时加载并校验一份不可变快照，turn 执行期间不读取提示词文件。有效的
+活跃快照会成为该 prompt root 明确的最近一次有效 revision。活跃工作区无效时，
+daemon 会继续开放 CLI、IM、cron 和 HTTP 端点：优先使用同一 root 的最近有效快照，
+若不存在匹配的激活记录则使用内置默认。它会写入持久、脱敏的降级状态事件和日志
+告警，`selfmind doctor` 会报告无效文件与实际选择的来源。校验本身不会放宽：prompt
+root、嵌套目录或文件上的不安全权限与符号链接，以及错误标记和未知章节仍会被拒绝。
+`prompt validate` 与 `prompt apply`
+仍然严格；活跃工作区无效时，显式执行 `gateway restart` 也不会先停掉健康运行中的
+daemon。
+
+快照 identity 只覆盖解析后的章节值，不受注释或文件排版影响。持久维护 payload
+会固定该哈希和本地内容寻址 revision，因此重启后的重试不会改变模型契约。daemon
+会用已验证的当前快照修复其损坏缓存，并尽力持久化内置回退 revision，但不会把它
+提升为最近一次有效快照。历史 revision 缺失时，相关工作进入
+`blocked_prompt_revision`，不会误报 provider 故障或静默换用新版本。恢复历史
+revision 后，`selfmind maintenance replay` 会显式把相关最新 generation 作业送回
+队列。revision 只包含静态资产，不包含任务数据、memory、项目上下文或凭据。
+
+上下文压缩使用锁定的 summarizer system 契约，并把待压缩状态放在独立的数据围栏
+消息中。交接必须保留活跃目标和 plan/work unit、验证状态、不能重复的失败尝试、
+审批或外部等待状态、精确标识符，以及相关文件路径。一个有界的结构化路径后备会
+补齐模型遗漏，并在超过安全上限时显式报告。operator 的摘要指引可以调整侧重点和
+语言，但不能替换这些恢复执行所必需的章节。
+
+Eval 无视 operator 工作区，强制使用嵌入默认值和空 identity。提示词加载、长度
+限制、插入位置、revision 固定和默认字节稳定性由机制型 Go 测试证明，不依赖
+provider replay cassette。
+
 ## 回归门禁
 
 编程循环的行为变更必须同时具备：

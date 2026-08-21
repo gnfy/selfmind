@@ -19,6 +19,7 @@ expect:
   verification_state: passed
   require_tool_events: true
   min_tool_calls: 2
+  min_progress_updates: 1
   max_tool_errors: 0
 
 assert_state:

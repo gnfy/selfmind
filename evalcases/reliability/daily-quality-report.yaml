@@ -19,6 +19,8 @@ expect:
   max_duration_seconds: 30
   contains:
     - "Daily quality report"
+    - "Evidence window:"
+    - "scanned"
     - "Model:"
     - "Approval backlog now:"
     - "Approval continuations:"

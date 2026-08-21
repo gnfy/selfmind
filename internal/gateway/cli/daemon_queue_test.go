@@ -94,7 +94,7 @@ func TestWatcherLifecycleUsesCompactIDNotices(t *testing.T) {
 		t.Fatalf("completion notice = %q", got)
 	}
 
-	updated, _ = m.Update(MsgDaemonRunStarted{
+	updated, cmd := m.Update(MsgDaemonRunStarted{
 		RunID:      "run_finalize",
 		WatchID:    "watch_123",
 		TaskStatus: "running",
@@ -108,6 +108,14 @@ func TestWatcherLifecycleUsesCompactIDNotices(t *testing.T) {
 	}
 	if strings.Contains(m.messages[len(m.messages)-1].Content, "internal finalization prompt") {
 		t.Fatalf("internal finalization prompt leaked into notice")
+	}
+	if line := m.statusLine(); !strings.Contains(line, "background watcher finalizing") || strings.Contains(line, "working ") {
+		t.Fatalf("background finalization status = %q", line)
+	}
+	updated, cmd = m.Update(MsgWorkingTick(time.Now()))
+	m = updated.(*uiModel)
+	if cmd != nil {
+		t.Fatal("background watcher finalization rescheduled the foreground working clock")
 	}
 }
 

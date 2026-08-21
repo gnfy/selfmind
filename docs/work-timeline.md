@@ -152,7 +152,12 @@ authoritative instruction. If it changes direction, the latest message wins."*
   excluded; control-command-shaped and <6-rune messages skip recall entirely.
   Expansion runs ONLY when a `semantic_recall` role model is explicitly
   configured (`app.SemanticRecallExpander` — never the main coding model),
-  bounded by a 3s timeout, degrading to raw-term FTS on any failure.
+  bounded by a 3s timeout, degrading to raw-term FTS on any failure. The
+  expansion contract receives the query as JSON-fenced untrusted data and emits
+  at most five narrow lexical variants: aliases, acronyms, former names, likely
+  historical wording, or useful cross-language equivalents. It preserves exact
+  identifiers and must not answer the query, infer a new intent, or broaden it
+  into generic topics; recall is not limited to technical conversations.
   Observability: redacted `context.recall` task event (source counts + refs,
   no excerpts). Canonical `last_accessed_at` changes only for rows that survive
   the shared budget and are actually injected; selected canonical rows are

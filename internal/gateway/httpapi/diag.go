@@ -18,6 +18,7 @@ import (
 	"selfmind/internal/control"
 	"selfmind/internal/executionenv"
 	"selfmind/internal/gateway/api"
+	"selfmind/internal/gateway/delivery"
 	"selfmind/internal/tools"
 	"selfmind/internal/tools/envprofiles"
 )
@@ -236,12 +237,15 @@ func (d *Server) diagReply(ctx context.Context, identity *control.IdentityContex
 		if health.Pending > 0 || health.Failed > 0 || health.Running > 0 {
 			oldest := ""
 			if !health.OldestPendingAt.IsZero() {
-				oldest = fmt.Sprintf(", oldest %s", time.Since(health.OldestPendingAt).Round(time.Second))
+				oldest = fmt.Sprintf(", oldest actionable %s", time.Since(health.OldestPendingAt).Round(time.Second))
 			}
 			fmt.Fprintf(&sb, "Background learning: queued %d, retrying %d, running %d (batched%s)\n", health.Pending, health.Failed, health.Running, oldest)
 		}
 		if health.Blocked > 0 {
 			fmt.Fprintf(&sb, "Background learning: paused (%d job(s))\n", health.Blocked)
+			if health.BlockedPrompt > 0 {
+				fmt.Fprintf(&sb, "- prompt revision: %d job(s) need the pinned file restored; provider retries cannot repair them\n", health.BlockedPrompt)
+			}
 			for i, route := range health.BlockedRoutes {
 				if i >= 3 {
 					break
@@ -258,7 +262,7 @@ func (d *Server) diagReply(ctx context.Context, identity *control.IdentityContex
 				fmt.Fprintf(&sb, "- route: %s/%s, %s\n", route.Provider, route.Model, nextProbe)
 			}
 			if reason := strings.TrimSpace(health.LastError); reason != "" {
-				fmt.Fprintf(&sb, "- provider: %s\n", truncate(toOneLine(tools.RedactSensitive(reason)), 140))
+				fmt.Fprintf(&sb, "- last blocked error: %s\n", truncate(toOneLine(tools.RedactSensitive(reason)), 140))
 			}
 		} else if health.Failed > 0 && strings.TrimSpace(health.LastError) != "" {
 			fmt.Fprintf(&sb, "- last learning error: %s\n", truncate(toOneLine(tools.RedactSensitive(health.LastError)), 140))
@@ -273,8 +277,8 @@ func (d *Server) diagReply(ctx context.Context, identity *control.IdentityContex
 		for _, a := range attempts {
 			byOutcome[a.Outcome]++
 		}
-		fmt.Fprintf(&sb, "Learning failures (24h): failed %d, skipped %d, provider-blocked %d\n",
-			byOutcome["failed"], byOutcome["skipped"], byOutcome["blocked_provider"])
+		fmt.Fprintf(&sb, "Learning failures (24h): failed %d, skipped %d, provider-blocked %d, prompt-revision-blocked %d\n",
+			byOutcome["failed"], byOutcome["skipped"], byOutcome["blocked_provider"], byOutcome["blocked_prompt_revision"])
 		shown := 0
 		for _, a := range attempts {
 			if strings.TrimSpace(a.Error) == "" || shown >= 3 {
@@ -394,6 +398,14 @@ func (d *Server) deliveryDiagReply(ctx context.Context, identity *control.Identi
 	total, _ := d.Control.CountPendingSessionOutbound(ctx, identity.TenantID, identity.PersonID)
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "Delivery recovery\n%d message(s) are waiting for a fresh IM session.\n", total)
+	if d.Delivery != nil {
+		cutoff := time.Now().Add(-d.Delivery.CatchUpMaxAge())
+		if staleResults, countErr := d.Control.CountStalePendingSessionFinalResults(ctx, identity.TenantID, identity.PersonID, cutoff); countErr == nil && staleResults > 0 {
+			fmt.Fprintf(&sb, "%d stale final-result message(s) can be replaced by one recap from the affected IM chat:\n", staleResults)
+			sb.WriteString("  /diag delivery recover stale-results\n")
+			sb.WriteString("  /diag delivery dismiss stale-results\n")
+		}
+	}
 	if total > len(rows) {
 		fmt.Fprintf(&sb, "Showing the oldest %d.\n", len(rows))
 	}
@@ -417,6 +429,66 @@ func (d *Server) deliveryDiagReply(ctx context.Context, identity *control.Identi
 	return strings.TrimSpace(sb.String()), nil
 }
 
+func (d *Server) recoverStaleDeliveryResultsReply(ctx context.Context, identity *control.IdentityContext, req api.MessageRequest) (string, error) {
+	if d == nil || d.Delivery == nil || identity == nil {
+		return "Delivery recovery unavailable.", nil
+	}
+	if strings.EqualFold(strings.TrimSpace(req.Platform), "cli") || strings.TrimSpace(req.Channel) == "" {
+		return "Run this recovery command in the affected IM chat.", nil
+	}
+	result, err := d.Delivery.RecoverStaleFinalResults(ctx, identity.TenantID, identity.PersonID,
+		req.Platform, identity.PlatformUserID, req.Channel)
+	return staleResultRecoveryReply(result, err), nil
+}
+
+// staleResultRecoveryReply renders the recovery outcome. It is a pure function
+// of the result so the branch order stays testable: a cleanup failure MUST be
+// reported before the confirmed branch, because the recap did reach the person
+// while the pending rows survived and the recap is not resendable (its logical
+// key is already delivered and deduplicated). Reporting plain success there
+// left the backlog stuck with no visible route out.
+func staleResultRecoveryReply(result delivery.StaleResultRecovery, err error) string {
+	if result.Candidates == 0 && err == nil {
+		return "No stale final-result messages need recovery in this IM chat."
+	}
+	if result.CleanupFailed {
+		return fmt.Sprintf("Delivered one confirmed recap for %d stale result message(s) across %d completed work item(s), but the old recovery rows could not be closed. They are still listed; close them with `/diag delivery dismiss stale-results` — re-running recovery will not resend the recap.",
+			result.Candidates, result.Groups)
+	}
+	if result.Confirmed {
+		reply := fmt.Sprintf("Recovered %d stale result message(s) across %d completed work item(s) as one confirmed recap; closed %d old recovery row(s).",
+			result.Candidates, result.Groups, result.Dismissed)
+		if result.Truncated {
+			reply += " This was one batch and more stale results remain; run the command again."
+		}
+		return reply
+	}
+	if result.Accepted {
+		return "The recovery recap was saved, but this IM session still did not confirm delivery. Old result rows were left untouched; send a fresh message here and try again."
+	}
+	if err != nil {
+		return "The recovery recap could not be saved or sent. Old result rows were left untouched."
+	}
+	return "No stale final-result messages need recovery in this IM chat."
+}
+
+func (d *Server) dismissStaleDeliveryResultsReply(ctx context.Context, identity *control.IdentityContext, req api.MessageRequest) (string, error) {
+	if d == nil || d.Delivery == nil || identity == nil {
+		return "Delivery recovery unavailable.", nil
+	}
+	if strings.EqualFold(strings.TrimSpace(req.Platform), "cli") || strings.TrimSpace(req.Channel) == "" {
+		return "Run this recovery command in the affected IM chat.", nil
+	}
+	count, err := d.Delivery.DismissStaleFinalResults(ctx, identity.TenantID, identity.PersonID, req.Platform, identity.PlatformUserID, req.Channel)
+	if err != nil {
+		return "Stale result recovery rows could not be dismissed.", nil
+	}
+	if count == 0 {
+		return "No stale final-result messages need dismissal in this IM chat.", nil
+	}
+	return fmt.Sprintf("Dismissed %d stale final-result recovery row(s). Durable task and run history was not deleted.", count), nil
+}
+
 func (d *Server) dismissDeliveryReply(ctx context.Context, identity *control.IdentityContext, req api.MessageRequest, ref string) (string, error) {
 	if d == nil || d.Delivery == nil || identity == nil {
 		return "Delivery recovery unavailable.", nil
@@ -424,7 +496,7 @@ func (d *Server) dismissDeliveryReply(ctx context.Context, identity *control.Ide
 	if strings.EqualFold(strings.TrimSpace(req.Platform), "cli") || strings.TrimSpace(req.Channel) == "" {
 		return "Run this command in the affected IM chat.", nil
 	}
-	id, err := d.Delivery.DismissPendingSession(ctx, identity.TenantID, identity.PersonID, req.Platform, req.Channel, ref)
+	id, err := d.Delivery.DismissPendingSession(ctx, identity.TenantID, identity.PersonID, req.Platform, identity.PlatformUserID, req.Channel, ref)
 	if err != nil {
 		return "No matching pending delivery was found in this IM chat.", nil
 	}
@@ -438,7 +510,7 @@ func (d *Server) retryDeliveryReply(ctx context.Context, identity *control.Ident
 	if strings.EqualFold(strings.TrimSpace(req.Platform), "cli") || strings.TrimSpace(req.Channel) == "" {
 		return "Run this recovery command in the affected IM chat.", nil
 	}
-	id, status, err := d.Delivery.RetryPendingSession(ctx, identity.TenantID, identity.PersonID, req.Platform, req.Channel, ref)
+	id, status, err := d.Delivery.RetryPendingSession(ctx, identity.TenantID, identity.PersonID, req.Platform, identity.PlatformUserID, req.Channel, ref)
 	shortID := shortDeliveryID(id)
 	if err != nil {
 		switch status {
@@ -508,7 +580,44 @@ func (d *Server) memoryDiagReply(ctx context.Context, identity *control.Identity
 			reply += "\n" + line
 		}
 	}
+	if schedule, ok, scheduleErr := d.Control.MemoryGovernanceScheduleForPerson(ctx, identity.TenantID, identity.PersonID); scheduleErr != nil {
+		reply += "\nGovernance scheduler: unavailable"
+	} else if !ok {
+		reply += "\nGovernance scheduler: not initialized; startup catch-up pending"
+	} else {
+		reply += "\n" + memoryGovernanceScheduleSummary(schedule, time.Now())
+	}
 	return reply, nil
+}
+
+func memoryGovernanceScheduleSummary(schedule control.MemoryGovernanceSchedule, now time.Time) string {
+	parts := []string{"Governance scheduler: " + fallbackDiagnosticValue(schedule.LastOutcome, "pending")}
+	if !schedule.LastSuccessAt.IsZero() {
+		parts = append(parts, "last success "+humanDuration(now.Sub(schedule.LastSuccessAt))+" ago")
+	} else {
+		parts = append(parts, "last success never")
+	}
+	if !schedule.NextDueAt.IsZero() {
+		if schedule.NextDueAt.After(now) {
+			parts = append(parts, "next due in "+humanDuration(schedule.NextDueAt.Sub(now)))
+		} else {
+			parts = append(parts, "overdue by "+humanDuration(now.Sub(schedule.NextDueAt)))
+		}
+	}
+	if schedule.DeferredReason != "" {
+		parts = append(parts, "deferred="+schedule.DeferredReason)
+	}
+	if schedule.ConsecutiveFailure > 0 {
+		parts = append(parts, fmt.Sprintf("failures=%d", schedule.ConsecutiveFailure))
+	}
+	return strings.Join(parts, "; ")
+}
+
+func fallbackDiagnosticValue(value, fallback string) string {
+	if strings.TrimSpace(value) == "" {
+		return fallback
+	}
+	return strings.TrimSpace(value)
 }
 
 // contextDiagReply is /diag context: where the last turn's prompt went
@@ -535,12 +644,12 @@ func (d *Server) contextDiagReply(ctx context.Context, identity *control.Identit
 	var sb strings.Builder
 	sb.WriteString("Context diagnostics (current task)\n")
 
+	sb.WriteString(latestProviderContextBreakdownLine(events))
 	if line := contextBreakdownDetail(events); line != "" {
 		sb.WriteString(line)
 	} else {
 		sb.WriteString("Breakdown: no context.breakdown event recorded yet\n")
 	}
-	sb.WriteString(latestProviderContextBreakdownLine(events))
 	sb.WriteString(promptPrefixStabilityLine(events))
 	sb.WriteString(promptCacheAggregateLine(events))
 	sb.WriteString(latestPromptCacheLine(events))
@@ -657,32 +766,49 @@ func latestPromptCacheLine(events []control.Event) string {
 }
 
 func promptPrefixStabilityLine(events []control.Event) string {
-	hashes := make([]string, 0, 2)
-	for _, e := range events {
-		if e.Type != "context.breakdown" {
-			continue
+	if hashes := promptPrefixHashes(events, "provider.call.context_breakdown", "provider_prefix_hash"); len(hashes) > 0 {
+		if len(hashes) == 1 {
+			return fmt.Sprintf("Provider prompt prefix: %s (need another provider call to compare)\n", hashes[0])
 		}
-		var payload struct {
-			StablePrefixHash string `json:"stable_prefix_hash"`
+		if hashes[0] == hashes[1] {
+			return fmt.Sprintf("Provider prompt prefix: stable across the last two calls (%s)\n", hashes[0])
 		}
-		if json.Unmarshal(e.Payload, &payload) != nil || strings.TrimSpace(payload.StablePrefixHash) == "" {
-			continue
-		}
-		hashes = append(hashes, payload.StablePrefixHash)
-		if len(hashes) == 2 {
-			break
-		}
+		return fmt.Sprintf("Provider prompt prefix: changed between the last two calls (%s -> %s)\n", hashes[1], hashes[0])
 	}
+	hashes := promptPrefixHashes(events, "context.breakdown", "stable_prefix_hash")
 	if len(hashes) == 0 {
 		return "Prompt prefix: no fingerprint recorded yet\n"
 	}
 	if len(hashes) == 1 {
-		return fmt.Sprintf("Prompt prefix: %s (need another turn to compare)\n", hashes[0])
+		return fmt.Sprintf("Assembled stable head: %s (provider prefix unavailable; need another turn to compare)\n", hashes[0])
 	}
 	if hashes[0] == hashes[1] {
-		return fmt.Sprintf("Prompt prefix: stable across the last two turns (%s)\n", hashes[0])
+		return fmt.Sprintf("Assembled stable head: stable across the last two turns (%s; provider prefix unavailable)\n", hashes[0])
 	}
-	return fmt.Sprintf("Prompt prefix: changed between the last two turns (%s -> %s)\n", hashes[1], hashes[0])
+	return fmt.Sprintf("Assembled stable head: changed between the last two turns (%s -> %s; provider prefix unavailable)\n", hashes[1], hashes[0])
+}
+
+func promptPrefixHashes(events []control.Event, eventType, field string) []string {
+	hashes := make([]string, 0, 2)
+	for _, e := range events {
+		if e.Type != eventType {
+			continue
+		}
+		var payload map[string]interface{}
+		if json.Unmarshal(e.Payload, &payload) != nil {
+			continue
+		}
+		hash, _ := payload[field].(string)
+		hash = strings.TrimSpace(hash)
+		if hash == "" {
+			continue
+		}
+		hashes = append(hashes, hash)
+		if len(hashes) == 2 {
+			break
+		}
+	}
+	return hashes
 }
 
 // contextBreakdownDetail is the multi-line expansion of the newest
@@ -712,7 +838,7 @@ func contextBreakdownDetail(events []control.Event) string {
 		}
 		total := raw.Total
 		var sb strings.Builder
-		fmt.Fprintf(&sb, "Breakdown (last turn, ~%d tok):\n", total)
+		fmt.Fprintf(&sb, "Assembled prompt excluding native tool schemas (last turn, ~%d tok):\n", total)
 		for _, section := range []struct {
 			value int
 			label string

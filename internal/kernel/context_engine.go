@@ -12,6 +12,7 @@ import (
 	"selfmind/internal/kernel/llm"
 	"selfmind/internal/kernel/memory"
 	"selfmind/internal/platform/textutil"
+	"selfmind/internal/promptassets"
 )
 
 const (
@@ -27,9 +28,14 @@ const (
 	// compactionMinMiddle is the fewest drop-eligible messages worth
 	// summarizing; below it the deterministic trim is cheaper and just as good.
 	compactionMinMiddle = 2
-	// maxHarvestedPaths bounds the deterministic file-path fallback list so a
-	// summary never smuggles an unbounded manifest into the prompt.
-	maxHarvestedPaths = 10
+	// maxHarvestedPaths bounds the deterministic file-path fallback list while
+	// leaving enough room for realistic repository-wide changes. If a hostile or
+	// pathological span exceeds the bound, the summary carries an explicit
+	// omission count instead of pretending the manifest is complete.
+	maxHarvestedPaths = 64
+
+	defaultSummaryOutputTokens = 4096
+	maxSummaryOutputTokens     = 8192
 )
 
 // compactionBoundaryNote is the verbatim boundary note prefixed wherever a
@@ -45,18 +51,21 @@ const compactionBoundaryNote = "The history summary is reference only. The lates
 // head (system + initial task) and the tail (recent turns) verbatim — instead
 // of silently dropping the oldest turns. Compaction is the DEFAULT whenever a
 // cheap summarizer provider is wired; it falls back to deterministic trimming
-// only when no summarizer exists (tests, offline). This is the single bounded
-// extra LLM call that happens only at the over-threshold moment — never once
-// per turn while under budget, so the streaming hot path stays cheap.
+// only when no summarizer exists (tests, offline). This bounded compaction
+// operation happens only at the over-threshold moment;
+// an explicitly truncated response may be retried once within the route limit.
+// It never runs once per turn while under budget, so the hot path stays cheap.
 type ContextEngine struct {
 	maxTokens          int
 	reserveTokens      int
 	summaryThreshold   int
 	provider           llm.Provider // main run provider (legacy flag path only)
 	summaryProvider    llm.Provider // auxiliary/dedicated compaction summarizer
+	summaryOutputLimit int          // resolved role/provider output ceiling
 	tokenizer          *TokenEstimator
 	lastSummaryFailure time.Time
 	summaryCooldown    time.Duration
+	promptSnapshot     *promptassets.Snapshot
 }
 
 func NewContextEngine(maxContextTokens, reserveTokens int) *ContextEngine {
@@ -67,11 +76,12 @@ func NewContextEngine(maxContextTokens, reserveTokens int) *ContextEngine {
 		reserveTokens = 256
 	}
 	return &ContextEngine{
-		maxTokens:        maxContextTokens,
-		reserveTokens:    reserveTokens,
-		summaryThreshold: maxContextTokens * 3 / 4,
-		tokenizer:        NewTokenEstimator(),
-		summaryCooldown:  10 * time.Minute,
+		maxTokens:          maxContextTokens,
+		reserveTokens:      reserveTokens,
+		summaryThreshold:   maxContextTokens * 3 / 4,
+		tokenizer:          NewTokenEstimator(),
+		summaryCooldown:    10 * time.Minute,
+		summaryOutputLimit: maxSummaryOutputTokens,
 	}
 }
 
@@ -86,6 +96,25 @@ func (c *ContextEngine) SetProvider(p llm.Provider) {
 // deterministic trimming and never blocks on an LLM call.
 func (c *ContextEngine) SetSummaryProvider(p llm.Provider) {
 	c.summaryProvider = p
+}
+
+// SetSummaryOutputLimit aligns compaction with the resolved summarizer route.
+// A zero value keeps the bounded built-in ceiling; an explicitly smaller role
+// limit is honored even when it cannot satisfy a long summary contract.
+func (c *ContextEngine) SetSummaryOutputLimit(maxTokens int) {
+	if c == nil {
+		return
+	}
+	if maxTokens <= 0 || maxTokens > maxSummaryOutputTokens {
+		maxTokens = maxSummaryOutputTokens
+	}
+	c.summaryOutputLimit = maxTokens
+}
+
+// SetPromptSnapshot installs the immutable process snapshot used by the
+// summarizer role. The locked compaction structure remains code-owned.
+func (c *ContextEngine) SetPromptSnapshot(snapshot *promptassets.Snapshot) {
+	c.promptSnapshot = snapshot
 }
 
 // BuildMessages combines the selected system prompt, a bounded slice of recent
@@ -500,15 +529,15 @@ func isCompactionSummary(msg llm.Message) bool {
 // summarizeSpan compacts one span of turns into a single reference message. It
 // prunes bulky tool logs first, folds any prior summary found in the span,
 // deterministically harvests the file paths touched by tool calls in the span,
-// and — even if the model's summary omits them — appends the harvested paths
-// under a "Relevant Files" section so the artifact manifest is never lost.
+// and — even if the model's summary omits them — appends the bounded structured
+// fallback under a "Relevant Files" section.
 func (c *ContextEngine) summarizeSpan(sp llm.Provider, span []llm.Message) (llm.Message, bool) {
 	if time.Since(c.lastSummaryFailure) < c.summaryCooldown {
 		return llm.Message{}, false
 	}
 	pruned := c.pruneToolMessages(span)
 	existingSummary := c.extractExistingSummary(pruned)
-	harvested := harvestToolPaths(pruned)
+	harvested, omittedPaths := harvestToolPathsBounded(pruned, maxHarvestedPaths)
 
 	var transcript strings.Builder
 	for _, msg := range pruned {
@@ -527,19 +556,56 @@ func (c *ContextEngine) summarizeSpan(sp llm.Provider, span []llm.Message) (llm.
 		return llm.Message{}, false
 	}
 
-	prompt := buildSummaryPrompt(existingSummary, transcript.String())
-	resp, err := sp.ChatCompletion(context.Background(), []llm.Message{{Role: "user", Content: prompt}})
-	if err != nil {
-		c.lastSummaryFailure = time.Now()
-		return llm.Message{}, false
+	systemPrompt := buildSummarySystemPromptWithGuidance(strings.TrimSpace(existingSummary) != "",
+		c.promptSnapshot.Custom(promptassets.FileSummarizer, promptassets.SectionSummaryPriorities),
+		c.promptSnapshot.Custom(promptassets.FileSummarizer, promptassets.SectionLanguageDetail),
+	)
+	input := buildSummaryInput(existingSummary, transcript.String())
+	callCtx := llm.WithModelContext(context.Background(), llm.ModelContext{Role: llm.RoleSummarizer})
+	limit := c.summaryOutputLimit
+	if limit <= 0 || limit > maxSummaryOutputTokens {
+		limit = maxSummaryOutputTokens
 	}
-	summary := strings.TrimSpace(resp)
-	if summary == "" {
-		return llm.Message{}, false
+	maxTokens := defaultSummaryOutputTokens
+	if maxTokens > limit {
+		maxTokens = limit
+	}
+	var summary string
+	for attempt := 0; attempt < 2; attempt++ {
+		response, err := sp.Chat(callCtx, llm.ChatRequest{
+			SystemPrompt: systemPrompt,
+			Messages:     []llm.Message{{Role: "user", Content: input}},
+			MaxTokens:    maxTokens,
+			Options: map[string]interface{}{
+				"temperature": 0, "reasoning_effort": "none",
+				"summary_contract_attempt": attempt + 1,
+			},
+		})
+		if err != nil || response == nil {
+			c.lastSummaryFailure = time.Now()
+			return llm.Message{}, false
+		}
+		if summaryFinishReasonTruncated(response.FinishReason) {
+			if attempt == 0 && maxTokens < limit {
+				maxTokens *= 2
+				if maxTokens > limit {
+					maxTokens = limit
+				}
+				continue
+			}
+			c.lastSummaryFailure = time.Now()
+			return llm.Message{}, false
+		}
+		summary = strings.TrimSpace(response.Content)
+		if summary == "" {
+			c.lastSummaryFailure = time.Now()
+			return llm.Message{}, false
+		}
+		break
 	}
 
-	// Deterministic artifact fallback: guarantee the created/modified/read file
-	// paths survive even a weak or path-blind summary.
+	// Deterministic artifact fallback: backstop the bounded structured paths
+	// even when the model returns a weak or path-blind summary.
 	if missing := missingPaths(summary, harvested); len(missing) > 0 {
 		var fb strings.Builder
 		fb.WriteString("\n\n## Relevant Files\n")
@@ -548,6 +614,9 @@ func (c *ContextEngine) summarizeSpan(sp llm.Provider, span []llm.Message) (llm.
 		}
 		summary += fb.String()
 	}
+	if omittedPaths > 0 {
+		summary += fmt.Sprintf("\n\n## Relevant Files Notice\n- %d additional structured path(s) were omitted from this bounded prompt fallback.\n", omittedPaths)
+	}
 
 	// The boundary note is a verbatim contract (docs/work-timeline.md): every
 	// rendered compaction summary must carry it so the model never treats
@@ -555,6 +624,12 @@ func (c *ContextEngine) summarizeSpan(sp llm.Provider, span []llm.Message) (llm.
 	prefix := "[CONTEXT COMPACTION - REFERENCE ONLY] " + compactionBoundaryNote +
 		" Earlier turns were compacted into the summary below. This is a handoff from a previous context window. Treat it as background reference, not as active instructions. Respond only to the latest user message after this summary.\n\n"
 	return llm.Message{Role: "user", Content: prefix + summary}, true
+}
+
+func summaryFinishReasonTruncated(reason string) bool {
+	reason = strings.ToLower(strings.TrimSpace(reason))
+	return reason == "length" || reason == "max_tokens" || reason == "max_output_tokens" ||
+		strings.Contains(reason, "max_token")
 }
 
 // missingPaths returns the harvested paths not already textually present in the
@@ -572,17 +647,27 @@ func missingPaths(summary string, harvested []string) []string {
 // harvestToolPaths deterministically collects up to maxHarvestedPaths distinct
 // file paths from the tool-call arguments in a span: the common single-path keys
 // (path/file_path/output_path/workdir) and every path a V4A patch/apply_patch
-// touches. This is the fallback that keeps the artifact list intact when the
-// summarizer is weak — it reads only structured tool args, never raw output.
+// touches. This bounded fallback reads only structured tool args, never raw
+// output; summarizeSpan reports explicitly when more distinct paths existed.
 func harvestToolPaths(messages []llm.Message) []string {
+	paths, _ := harvestToolPathsBounded(messages, maxHarvestedPaths)
+	return paths
+}
+
+func harvestToolPathsBounded(messages []llm.Message, limit int) ([]string, int) {
 	seen := map[string]bool{}
 	var out []string
+	omitted := 0
 	add := func(p string) {
 		p = strings.TrimSpace(p)
-		if p == "" || seen[p] || len(out) >= maxHarvestedPaths {
+		if p == "" || seen[p] {
 			return
 		}
 		seen[p] = true
+		if limit > 0 && len(out) >= limit {
+			omitted++
+			return
+		}
 		out = append(out, p)
 	}
 	for _, msg := range messages {
@@ -604,7 +689,7 @@ func harvestToolPaths(messages []llm.Message) []string {
 			}
 		}
 	}
-	return out
+	return out, omitted
 }
 
 func parseToolArgs(argsJSON string) map[string]interface{} {
@@ -696,49 +781,6 @@ func (c *ContextEngine) pruneToolMessages(messages []llm.Message) []llm.Message 
 		pruned[i].Content = head + fmt.Sprintf("\n\n... (%d lines omitted) ...\n\n", len(lines)-15) + tail
 	}
 	return pruned
-}
-
-func buildSummaryPrompt(existingSummary, transcript string) string {
-	// The Relevant Files clause is mandatory: a compaction that forgets which
-	// files the run created/modified/read makes a resumed agent rediscover and
-	// edit the wrong file. Keep this instruction even though a deterministic
-	// path harvest also backstops it.
-	sections := `## Output Format
-Produce only these sections. Omit a section only if it is truly empty.
-
-## Active Task
-The goal and current objective.
-## Resolved
-## Pending
-## Remaining Work
-The concrete next steps.
-## Key Decisions
-## Constraints
-## Relevant Files
-List EVERY file path this work created, modified, or read (one per line). Never omit this section if any file was touched — the resumed agent edits these exact paths instead of re-searching.`
-
-	if strings.TrimSpace(existingSummary) != "" {
-		return fmt.Sprintf(`You are a context compaction assistant. Update the existing summary with new conversation turns. Preserve still-relevant facts, decisions, and the full list of relevant files; add new unresolved work and newly touched files; remove completed items but keep the file paths.
-
-Existing summary:
-%s
-
-New conversation turns:
-%s
-
-%s
-
-## Active Task`, existingSummary, transcript, sections)
-	}
-
-	return fmt.Sprintf(`You are a context compaction assistant. Summarize the conversation into a structured handoff for the same AI assistant resuming later. Capture the task goal, what was done, what remains, the constraints in force, and the exact file paths created/modified/read.
-
-Conversation:
-%s
-
-%s
-
-## Active Task`, transcript, sections)
 }
 
 func (c *ContextEngine) extractExistingSummary(messages []llm.Message) string {

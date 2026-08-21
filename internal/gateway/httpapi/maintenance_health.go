@@ -10,8 +10,27 @@ import (
 	"selfmind/internal/control"
 	"selfmind/internal/gateway/delivery"
 	"selfmind/internal/kernel/llm"
+	"selfmind/internal/platform/log"
+	"selfmind/internal/promptassets"
 	"selfmind/internal/tools"
 )
+
+func (d *Server) blockPromptRevisionJob(ctx context.Context, tenantID, runID string, version int, err error) bool {
+	if d == nil || d.Control == nil || !promptassets.IsRevisionUnavailable(err) {
+		return false
+	}
+	// A drain may cancel the worker context after the model call has already
+	// exposed the missing revision. Persist the durable transition independently
+	// so the row does not remain running and later lose its real failure reason.
+	blockCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	blocked, blockErr := d.Control.BlockMaintenanceJobForPromptRevision(blockCtx, tenantID, runID, version, err.Error())
+	if blockErr != nil {
+		log.Warn("gateway: block missing prompt revision", "run", runID, "error", blockErr)
+		return false
+	}
+	return blocked
+}
 
 const (
 	maintenanceBlockedNoticeSetting = "maintenance_provider_blocked_notice_at"

@@ -53,7 +53,11 @@ func (sl *SkillLoader) LoadAll() ([]SkillDefinition, error) {
 		}
 		var path string
 		if entry.IsDir() {
-			path = filepath.Join(sl.skillsDir, entry.Name(), "SKILL.md")
+			skillDir := filepath.Join(sl.skillsDir, entry.Name())
+			if isDeveloperAgentOnlySkill(skillDir) {
+				continue
+			}
+			path = filepath.Join(skillDir, "SKILL.md")
 			if _, err := os.Stat(path); err != nil {
 				continue
 			}

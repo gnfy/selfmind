@@ -11,6 +11,33 @@ func preflightArgs(command string) map[string]interface{} {
 	return map[string]interface{}{"_tool_name": "watch_external", "command": command}
 }
 
+func TestExternalWatchAcceptsOnlyProvenReadOnlyObservations(t *testing.T) {
+	tests := []struct {
+		name    string
+		command string
+		wantErr bool
+	}{
+		{name: "literal pending fixture", command: "printf 'PENDING\\n'"},
+		{name: "read only cloud status", command: "gcloud builds describe build-123 --format='value(status)'"},
+		{name: "read only cluster status", command: "kubectl get deployment api -o json"},
+		{name: "write subcommand", command: "kubectl apply -f deployment.yaml", wantErr: true},
+		{name: "unknown network client", command: "curl -X POST https://example.invalid", wantErr: true},
+		{name: "filesystem redirect", command: "echo changed > record.txt", wantErr: true},
+		{name: "mixed observation and write", command: "printf 'PENDING\\n'; touch marker", wantErr: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateExternalWatchObservation(preflightArgs(tc.command))
+			if tc.wantErr && err == nil {
+				t.Fatal("unsafe watcher command was accepted")
+			}
+			if !tc.wantErr && err != nil {
+				t.Fatalf("read-only watcher command was rejected: %v", err)
+			}
+		})
+	}
+}
+
 // A check that already reports success has nothing to wait for. Registering a
 // watch would park the task until the next tick for no reason.
 func TestPreflightReportsAlreadySucceeded(t *testing.T) {

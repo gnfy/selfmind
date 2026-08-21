@@ -129,7 +129,7 @@ func TestCatchUpEligibilityAndClaim(t *testing.T) {
 	second := seedUnconfirmed(t, s, "p1", "wx-chat", "newer notice")
 
 	since := time.Now().Add(-time.Hour)
-	rows, err := s.ListCatchUpEligible(ctx, "default", "p1", "weixin", "wx-chat", since, 5)
+	rows, err := s.ListCatchUpEligible(ctx, "default", "p1", "weixin", "wx-user", "wx-chat", since, 5)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -138,7 +138,7 @@ func TestCatchUpEligibilityAndClaim(t *testing.T) {
 	}
 
 	// Channel scoping: a different chat sees nothing.
-	if rows, _ := s.ListCatchUpEligible(ctx, "default", "p1", "weixin", "other-chat", since, 5); len(rows) != 0 {
+	if rows, _ := s.ListCatchUpEligible(ctx, "default", "p1", "weixin", "wx-user", "other-chat", since, 5); len(rows) != 0 {
 		t.Fatalf("different channel must not match: %+v", rows)
 	}
 
@@ -149,7 +149,7 @@ func TestCatchUpEligibilityAndClaim(t *testing.T) {
 	if ok, _ := s.ClaimDeliveryCatchUp(ctx, first.ID); ok {
 		t.Fatal("second claim on the same row must lose (at-most-once rail)")
 	}
-	rows, _ = s.ListCatchUpEligible(ctx, "default", "p1", "weixin", "wx-chat", since, 5)
+	rows, _ = s.ListCatchUpEligible(ctx, "default", "p1", "weixin", "wx-user", "wx-chat", since, 5)
 	if len(rows) != 1 || rows[0].ID != second.ID {
 		t.Fatalf("claimed row must leave eligibility, got %+v", rows)
 	}
@@ -159,7 +159,7 @@ func TestCatchUpEligibilityAndClaim(t *testing.T) {
 		time.Now().Add(-8*time.Hour).Unix(), second.ID); err != nil {
 		t.Fatal(err)
 	}
-	if rows, _ := s.ListCatchUpEligible(ctx, "default", "p1", "weixin", "wx-chat", time.Now().Add(-4*time.Hour), 5); len(rows) != 0 {
+	if rows, _ := s.ListCatchUpEligible(ctx, "default", "p1", "weixin", "wx-user", "wx-chat", time.Now().Add(-4*time.Hour), 5); len(rows) != 0 {
 		t.Fatalf("stale row must not be re-pushed: %+v", rows)
 	}
 
@@ -168,7 +168,7 @@ func TestCatchUpEligibilityAndClaim(t *testing.T) {
 	if err := s.MarkDeliveryAttempt(ctx, third.ID, true, "", time.Time{}); err != nil {
 		t.Fatal(err)
 	}
-	if rows, _ := s.ListCatchUpEligible(ctx, "default", "p1", "weixin", "wx-chat", since, 5); len(rows) != 0 {
+	if rows, _ := s.ListCatchUpEligible(ctx, "default", "p1", "weixin", "wx-user", "wx-chat", since, 5); len(rows) != 0 {
 		t.Fatalf("sent rows must not be eligible: %+v", rows)
 	}
 }
@@ -217,14 +217,14 @@ func TestPendingSessionDiagnosticsAreScopedAndBounded(t *testing.T) {
 		t.Fatalf("pending rows=%+v err=%v", rows, err)
 	}
 	ref := first.ID[:8]
-	got, err := s.FindPendingSessionDelivery(ctx, "default", "p1", "weixin", "wx-chat", ref)
+	got, err := s.FindPendingSessionDelivery(ctx, "default", "p1", "weixin", "wx-user", "wx-chat", ref)
 	if err != nil || got.ID != first.ID {
 		t.Fatalf("resolved=%+v err=%v", got, err)
 	}
-	if _, err := s.FindPendingSessionDelivery(ctx, "default", "p1", "weixin", "other-chat", ref); err == nil {
+	if _, err := s.FindPendingSessionDelivery(ctx, "default", "p1", "weixin", "wx-user", "other-chat", ref); err == nil {
 		t.Fatal("a delivery from another chat must not resolve")
 	}
-	if _, err := s.FindPendingSessionDelivery(ctx, "default", "p1", "weixin", "wx-chat", "%%%%%%%%"); err == nil {
+	if _, err := s.FindPendingSessionDelivery(ctx, "default", "p1", "weixin", "wx-user", "wx-chat", "%%%%%%%%"); err == nil {
 		t.Fatal("LIKE wildcard input must be rejected")
 	}
 
@@ -234,7 +234,7 @@ func TestPendingSessionDiagnosticsAreScopedAndBounded(t *testing.T) {
 	if err := s.MarkDeliveryPendingSession(ctx, first.ID, "still stale"); err != nil {
 		t.Fatal(err)
 	}
-	eligible, err := s.ListCatchUpEligible(ctx, "default", "p1", "weixin", "wx-chat", time.Now().Add(-time.Hour), 5)
+	eligible, err := s.ListCatchUpEligible(ctx, "default", "p1", "weixin", "wx-user", "wx-chat", time.Now().Add(-time.Hour), 5)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -245,7 +245,7 @@ func TestPendingSessionDiagnosticsAreScopedAndBounded(t *testing.T) {
 	if err != nil || !dismissed {
 		t.Fatalf("dismissed=%v err=%v", dismissed, err)
 	}
-	if _, err := s.FindPendingSessionDelivery(ctx, "default", "p1", "weixin", "wx-chat", ref); err == nil {
+	if _, err := s.FindPendingSessionDelivery(ctx, "default", "p1", "weixin", "wx-user", "wx-chat", ref); err == nil {
 		t.Fatal("dismissed delivery remained recoverable")
 	}
 	count, err = s.CountPendingSessionOutbound(ctx, "default", "p1")

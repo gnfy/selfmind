@@ -78,7 +78,11 @@ func (a *App) doctor(args []string) int {
 	}
 
 	configDiagnostics := a.collectConfigDiagnostics()
-	fullReport := buildDoctorReport(ctx, store, identity, dataDir, a.gatewayStatusLine(), configDiagnostics.section(), doctorLogLines)
+	promptSection := ""
+	if cfg, loadErr := config.LoadConfig(config.Options{Path: a.configPath}); loadErr == nil {
+		promptSection = buildPromptWorkspaceDoctorSection(store, dataDir, cfg)
+	}
+	fullReport := buildDoctorReport(ctx, store, identity, dataDir, a.gatewayStatusLine(), configDiagnostics.section(), promptSection, doctorLogLines)
 	if cfg, loadErr := config.LoadConfig(config.Options{Path: a.configPath}); loadErr == nil {
 		storage, storageErr := appcore.ResolveSkillStorage(cfg)
 		if storageErr != nil {
@@ -191,6 +195,24 @@ func collectDoctorIssues(report string, configDiagnostics configDiagnostics) []d
 			if issue, ok := configDoctorIssue(configDiagnostics); ok {
 				issues = append(issues, issue)
 			}
+		case "Prompt workspace":
+			if !strings.Contains(body, "status: healthy") {
+				issues = append(issues, doctorIssue{
+					Category: "PROMPT",
+					Title:    "Prompt workspace",
+					Details:  body,
+					Actions: []doctorAction{
+						{
+							Description: "Validate the active prompt workspace and inspect the reported role file.",
+							Commands:    []string{"selfmind prompt validate", "selfmind prompt show <role>"},
+						},
+						{
+							Description: "After correcting the prompt file or its permissions, restart the gateway to activate it.",
+							Commands:    []string{"selfmind gateway restart"},
+						},
+					},
+				})
+			}
 		case "Workspace trust":
 			if !strings.Contains(body, "no migrated workspaces require trust review") {
 				if doctorSectionReadFailed(body) {
@@ -212,14 +234,24 @@ func collectDoctorIssues(report string, configDiagnostics configDiagnostics) []d
 				if doctorSectionReadFailed(body) {
 					issues = append(issues, doctorReadIssue("LEARNING", "Background learning", body))
 				} else {
+					var actions []doctorAction
+					if !strings.Contains(body, "retrying: 0") || !strings.Contains(body, "provider-blocked: 0") {
+						actions = append(actions, doctorAction{
+							Description: "Requeue maintenance work that exhausted its retry limit.",
+							Commands:    []string{"selfmind maintenance replay"},
+						})
+					}
+					if strings.Contains(body, "prompt-revision-blocked:") && !strings.Contains(body, "prompt-revision-blocked: 0") {
+						actions = append(actions, doctorAction{
+							Description: "Restore the missing pinned prompt revision from backup, then explicitly replay the paused maintenance work; do not replace it with the current prompt.",
+							Commands:    []string{"selfmind prompt list", "selfmind maintenance replay --limit 10", "selfmind doctor --verbose"},
+						})
+					}
 					issues = append(issues, doctorIssue{
 						Category: "LEARNING",
 						Title:    "Background learning",
 						Details:  body,
-						Actions: []doctorAction{{
-							Description: "Requeue maintenance work that exhausted its retry limit.",
-							Commands:    []string{"selfmind maintenance replay"},
-						}},
+						Actions:  actions,
 					})
 				}
 			}
@@ -785,7 +817,7 @@ func (a *App) gatewayStatusLine() string {
 // buildDoctorReport assembles the redacted diagnostic bundle from durable
 // control-plane state and the on-disk log. It is separated from CLI plumbing so
 // it can be unit-tested against a seeded temp store.
-func buildDoctorReport(ctx context.Context, store *control.Store, identity *control.IdentityContext, dataDir, gatewayStatus, configSection string, logLines int) string {
+func buildDoctorReport(ctx context.Context, store *control.Store, identity *control.IdentityContext, dataDir, gatewayStatus, configSection, promptSection string, logLines int) string {
 	var sb strings.Builder
 	sb.WriteString("SelfMind doctor — diagnostic bundle\n")
 	fmt.Fprintf(&sb, "generated: %s\n", time.Now().UTC().Format(time.RFC3339))
@@ -795,6 +827,10 @@ func buildDoctorReport(ctx context.Context, store *control.Store, identity *cont
 	fmt.Fprintf(&sb, "== Gateway ==\n%s\n\n", gatewayStatus)
 	if strings.TrimSpace(configSection) != "" {
 		sb.WriteString(configSection)
+		sb.WriteString("\n\n")
+	}
+	if strings.TrimSpace(promptSection) != "" {
+		sb.WriteString(promptSection)
 		sb.WriteString("\n\n")
 	}
 
@@ -828,8 +864,8 @@ func buildDoctorReport(ctx context.Context, store *control.Store, identity *cont
 	if health, err := store.MaintenanceHealthForPerson(ctx, identity.TenantID, identity.PersonID); err != nil {
 		fmt.Fprintf(&sb, "(error: %v)\n", err)
 	} else {
-		fmt.Fprintf(&sb, "queued: %d  retrying: %d  running: %d  provider-blocked: %d\n",
-			health.Pending, health.Failed, health.Running, health.Blocked)
+		fmt.Fprintf(&sb, "queued: %d  retrying: %d  running: %d  provider-blocked: %d  prompt-revision-blocked: %d\n",
+			health.Pending, health.Failed, health.Running, health.Blocked-health.BlockedPrompt, health.BlockedPrompt)
 		if !health.OldestPendingAt.IsZero() {
 			fmt.Fprintf(&sb, "oldest unfinished: %s\n", time.Since(health.OldestPendingAt).Round(time.Second))
 		}
@@ -1017,6 +1053,51 @@ func buildDoctorReport(ctx context.Context, store *control.Store, identity *cont
 	}
 
 	return strings.TrimSpace(sb.String())
+}
+
+func buildPromptWorkspaceDoctorSection(store *control.Store, dataDir string, cfg *config.Config) string {
+	snapshot, status := appcore.InspectRuntimePromptSnapshot(cfg, dataDir)
+	degraded := status.Degraded()
+	var sb strings.Builder
+	sb.WriteString("== Prompt workspace ==\n")
+	fmt.Fprintf(&sb, "root: %s\n", status.ActiveRoot)
+	if status.ActiveError == "" {
+		sb.WriteString("active: valid\n")
+	} else {
+		fmt.Fprintf(&sb, "active: invalid (%s)\n", status.ActiveErrorKind)
+		fmt.Fprintf(&sb, "error: %s\n", oneLine(tools.RedactSensitive(status.ActiveError), 240))
+	}
+	fmt.Fprintf(&sb, "startup selection: %s (%s)\n", status.Source, shortPromptHash(snapshot.Hash()))
+	if status.FallbackError != "" && status.Source == appcore.PromptSourceBuiltIn {
+		fmt.Fprintf(&sb, "last-known-good unavailable: %s\n", oneLine(tools.RedactSensitive(status.FallbackError), 200))
+	}
+
+	if store != nil {
+		manager := gatewayrt.NewManager(dataDir, "")
+		if record, ok := manager.RunningRecord(); ok && strings.TrimSpace(record.InstanceID) != "" {
+			if event, err := store.GatewayRuntimeEventForInstance(context.Background(), record.InstanceID, "prompt.snapshot.loaded"); err == nil {
+				var runtimeStatus struct {
+					SnapshotHash    string `json:"snapshot_hash"`
+					Source          string `json:"source"`
+					Degraded        bool   `json:"degraded"`
+					ActivationError string `json:"activation_error"`
+				}
+				if json.Unmarshal(event.Payload, &runtimeStatus) == nil && strings.TrimSpace(runtimeStatus.Source) != "" {
+					fmt.Fprintf(&sb, "running daemon: %s (%s)\n", runtimeStatus.Source, shortPromptHash(runtimeStatus.SnapshotHash))
+					if runtimeStatus.ActivationError != "" {
+						fmt.Fprintf(&sb, "activation warning: %s\n", oneLine(tools.RedactSensitive(runtimeStatus.ActivationError), 200))
+					}
+					degraded = degraded || runtimeStatus.Degraded
+				}
+			}
+		}
+	}
+	if degraded {
+		sb.WriteString("status: degraded; foreground endpoints remain available on the selected safe snapshot")
+	} else {
+		sb.WriteString("status: healthy")
+	}
+	return sb.String()
 }
 
 // oneLine collapses whitespace and bounds a string for a compact bundle line.

@@ -570,6 +570,22 @@ func sanitizeVCR(s string) string {
 	return out
 }
 
+// Unwrap exposes the wrapped provider so capability probes see through the
+// recorder. vcrProvider is transparent — every call delegates to one fixed
+// inner provider — and flight recording wraps PRODUCTION providers, so without
+// this any optional capability the recorder does not hand-forward is silently
+// lost for every normal run (observed: request fingerprints and runtime model
+// switching both went dead while their adapters implemented them correctly).
+func (v *vcrProvider) Unwrap() Provider { return v.inner }
+
 // SupportsNativeTools forwards the capability probe to the wrapped provider so
 // VCR wrapping never changes prompt assembly.
 func (v *vcrProvider) SupportsNativeTools() bool { return ProviderSupportsNativeTools(v.inner) }
+
+// FingerprintRequest forwards request-shape diagnostics to the wrapped
+// protocol adapter. Flight recording wraps production providers, so dropping
+// this optional capability here would silently disable prefix/cache drift
+// evidence for every recorded call.
+func (v *vcrProvider) FingerprintRequest(ctx context.Context, req ChatRequest, stream bool) (RequestFingerprint, bool) {
+	return FingerprintProviderRequest(ctx, v.inner, req, stream)
+}

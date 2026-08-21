@@ -25,13 +25,17 @@ func (d *Server) smartTriageDiagLines(ctx context.Context, identity *control.Ide
 		return ""
 	}
 	stats := tools.TriageDiagnostics(identity.TenantID, identity.PersonID)
+	human := control.ApprovalDecisionFunnel{Statuses: map[string]int{}, DecisionChoices: map[string]int{}, Tools: map[string]int{}}
 	if d.Control != nil {
 		if durable, err := d.Control.ApprovalTriageStatsSince(ctx, identity.TenantID, identity.PersonID, time.Now().Add(-24*time.Hour)); err == nil && durableTriageTotal(durable) > 0 {
 			stats = triageStatsFromDurable(durable)
 		}
+		if durable, err := d.Control.ApprovalDecisionFunnelSince(ctx, identity.TenantID, identity.PersonID, time.Now().Add(-24*time.Hour)); err == nil {
+			human = durable
+		}
 	}
 	mode := d.effectiveApprovalModeForDiag(ctx, identity)
-	if mode != tools.ApprovalSmart && stats.Total() == 0 {
+	if mode != tools.ApprovalSmart && stats.Total() == 0 && human.Requested == 0 {
 		return ""
 	}
 
@@ -42,6 +46,11 @@ func (d *Server) smartTriageDiagLines(ctx context.Context, identity *control.Ide
 	} else {
 		fmt.Fprintf(&sb, "contained %d, grant-hit %d, exact-run-hit %d, auto-approved %d, blocked %d, escalated %d, unavailable %d, human-ask %d\n",
 			stats.Contained, stats.GrantHits, stats.ExactRunHits, stats.Approved, stats.Denied, stats.Escalated, stats.Unavailable, stats.HumanAsks)
+	}
+	if human.Requested > 0 {
+		fmt.Fprintf(&sb, "- human requests %d; statuses %s; choices %s; avg response %s; tools %s\n",
+			human.Requested, formatCountMap(human.Statuses), formatCountMap(human.DecisionChoices),
+			time.Duration(human.AverageResponseMS)*time.Millisecond, formatCountMap(human.Tools))
 	}
 	// An unavailable-only window is the actionable case: the funnel is not
 	// strict, it is off, so every dangerous op becomes a human ask.

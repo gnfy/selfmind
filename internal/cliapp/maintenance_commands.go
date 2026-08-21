@@ -38,7 +38,7 @@ func (a *App) runMaintenanceCommandIfRequested() (bool, int) {
 		return true, a.runMaintenanceRestoreControl(a.args[3:])
 	}
 	if len(a.args) < 3 || a.args[2] != "replay" {
-		fmt.Fprintln(a.stderr, "usage: selfmind maintenance replay [--limit N]")
+		fmt.Fprintln(a.stderr, "usage: selfmind maintenance replay [--limit N] [--prompt-revision]")
 		fmt.Fprintln(a.stderr, "       selfmind maintenance migrate-memory [--apply] [--data-dir DIR]")
 		fmt.Fprintln(a.stderr, "       selfmind maintenance migrate-skills [--apply] [--root DIR] [--governance-grace 30d]")
 		fmt.Fprintln(a.stderr, "       selfmind maintenance cleanup-person-partitions [--apply] [--root DIR --data-dir DIR]")
@@ -51,7 +51,14 @@ func (a *App) runMaintenanceCommandIfRequested() (bool, int) {
 	}
 	fs := flag.NewFlagSet("selfmind maintenance replay", flag.ContinueOnError)
 	fs.SetOutput(a.stderr)
-	limit := fs.Int("limit", 100, "maximum retry-limited jobs to requeue")
+	limit := fs.Int("limit", 100, "maximum jobs to requeue")
+	// Prompt-revision replay is operator-triggered by contract: requeueing
+	// before the pinned revision is restored returns the work to the same
+	// blocked state, while resetting attempts and overwriting last_error
+	// destroys the failure ordering the maintenance health view reads. Folding
+	// it into the default replay churned those rows on every invocation.
+	promptRevision := fs.Bool("prompt-revision", false,
+		"requeue work parked on a missing pinned prompt revision (only after restoring it)")
 	if err := fs.Parse(a.args[3:]); err != nil {
 		return true, 2
 	}
@@ -68,11 +75,30 @@ func (a *App) runMaintenanceCommandIfRequested() (bool, int) {
 	defer store.Close()
 	ctx, cancel := context.WithTimeout(a.ctx, 10*time.Second)
 	defer cancel()
+
+	if *promptRevision {
+		requeued, replayErr := store.ReplayPromptRevisionMaintenanceJobs(ctx, a.tenantID(), *limit)
+		if replayErr != nil {
+			fmt.Fprintf(a.stderr, "maintenance replay: %v\n", replayErr)
+			return true, 1
+		}
+		fmt.Fprintf(a.stdout, "Requeued %d prompt-revision-blocked maintenance job(s). The daemon will process them in the background.\n", requeued)
+		if requeued == 0 {
+			fmt.Fprintln(a.stdout, "Nothing was parked on a missing prompt revision.")
+		}
+		return true, 0
+	}
+
 	requeued, err := store.ReplayRetryLimitedMaintenanceJobs(ctx, a.tenantID(), *limit)
 	if err != nil {
 		fmt.Fprintf(a.stderr, "maintenance replay: %v\n", err)
 		return true, 1
 	}
-	fmt.Fprintf(a.stdout, "Requeued %d maintenance jobs. The daemon will process them in the background.\n", requeued)
+	fmt.Fprintf(a.stdout, "Requeued %d retry-limited maintenance job(s). The daemon will process them in the background.\n", requeued)
+	// Parked prompt-revision work is invisible to this scope, so name it rather
+	// than leaving the operator to conclude the backlog is empty.
+	if blocked, countErr := store.CountBlockedPromptRevisionMaintenanceJobs(ctx, a.tenantID()); countErr == nil && blocked > 0 {
+		fmt.Fprintf(a.stdout, "%d job(s) are parked on a missing pinned prompt revision. Restore the revision, then run `selfmind maintenance replay --prompt-revision`.\n", blocked)
+	}
 	return true, 0
 }

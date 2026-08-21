@@ -3,6 +3,7 @@ package tools
 import (
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -68,6 +69,10 @@ func (t *SkillSelectTool) Execute(args map[string]interface{}) (string, error) {
 	}
 	info, content, files, err := ReadSkillPayloadForTenant(tenantID, name, "", args)
 	if err != nil {
+		var notFound *skillNotFoundError
+		if errors.As(err, &notFound) {
+			return "", staleSkillSelectionError(err, tenantID, name, reason, expectedSkillKey != "", args)
+		}
 		return "", err
 	}
 	if info.State != SkillStateActive {
@@ -124,6 +129,42 @@ func (t *SkillSelectTool) Execute(args map[string]interface{}) (string, error) {
 	})
 	data, _ := json.Marshal(out)
 	return string(data), nil
+}
+
+func staleSkillSelectionError(cause error, tenantID, name, reason string, taskBound bool, args map[string]interface{}) error {
+	if taskBound {
+		return newStableToolError(
+			cause,
+			"candidate_stale",
+			"stale_precondition",
+			"The related task's bound Skill is no longer available.",
+			"Continue this work unit with ordinary planning; do not guess or select a replacement Skill.",
+		)
+	}
+	query := strings.TrimSpace(reason)
+	if query == "" {
+		query = strings.TrimSpace(name)
+	}
+	infos, _ := RankSkillCandidatesForTenant(tenantID, query, 3, args)
+	candidates := make([]string, 0, len(infos))
+	for _, info := range infos {
+		if info.State == SkillStateActive {
+			candidates = append(candidates, info.Name)
+		}
+	}
+	safeMessage := fmt.Sprintf("The requested Skill %q is no longer available.", strings.TrimSpace(name))
+	if len(candidates) > 0 {
+		safeMessage += " Current candidates: " + strings.Join(candidates, ", ") + "."
+	} else {
+		safeMessage += " No current candidate matches this work unit."
+	}
+	return newStableToolError(
+		cause,
+		"candidate_stale",
+		"stale_precondition",
+		safeMessage,
+		"Select only a listed current candidate, or continue the work unit without a Skill.",
+	)
 }
 
 type SkillFallbackTool struct {

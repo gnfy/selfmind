@@ -3,6 +3,7 @@ package control
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 )
@@ -639,6 +640,30 @@ func TestWorkUnitStableIDsSurvivePlanReordering(t *testing.T) {
 	})
 	if err != nil || units[0].ID != idB || units[1].ID != idA {
 		t.Fatalf("reordered units lost identity: %+v err=%v", units, err)
+	}
+}
+
+func TestStaleWorkUnitReferenceReturnsCurrentRunIDs(t *testing.T) {
+	ctx := context.Background()
+	store, err := OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	identity, _ := store.ResolveOrCreateAccount(ctx, "default", "cli", "stale-unit", "Stale Unit")
+	task, _ := store.CreateTask(ctx, TaskCreate{TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "work", Channel: "cli"})
+	run, _ := store.StartRun(ctx, task, "cli", "work")
+
+	_, err = store.SyncRunWorkUnits(ctx, identity.TenantID, run.ID, []WorkUnitPlanInput{{
+		WorkUnitID: "wu-from-prior-run", GoalDigest: "work", PlanStatus: "in_progress",
+	}})
+	var stale *StaleWorkUnitReferenceError
+	if !errors.As(err, &stale) {
+		t.Fatalf("SyncRunWorkUnits error = %T %v", err, err)
+	}
+	current := stale.CurrentWorkUnitIDs()
+	if stale.WorkUnitID != "wu-from-prior-run" || stale.RunID != run.ID || len(current) != 1 || current[0] != run.WorkUnitID {
+		t.Fatalf("stale work-unit detail = %+v current=%v", stale, current)
 	}
 }
 

@@ -24,7 +24,7 @@ func (a *App) runGatewayClientIfRequested() (bool, int) {
 		case "status":
 			return true, a.sendGatewayMessage("/status")
 		case "usage":
-			return true, a.sendGatewayMessage("/diag context")
+			return true, a.sendGatewayMessage("/report daily --since 24h")
 		case "report":
 			if len(a.args) < 3 || a.args[2] != "daily" {
 				fmt.Fprintln(a.stderr, "usage: selfmind report daily [--since 24h]")
@@ -233,6 +233,9 @@ func (a *App) sendGatewayMessageWithOptions(content string, opts sendOptions) in
 	}
 	if strings.TrimSpace(resp.Content) != "" {
 		fmt.Fprintln(a.stdout, resp.Content)
+		if strings.TrimSpace(content) == "/status" {
+			a.printPromptCustomizationHint()
+		}
 		return 0
 	}
 	if resp.Task != nil {

@@ -211,6 +211,27 @@ func TestCleanupEvalTempRootRemovesOwnedTree(t *testing.T) {
 	}
 }
 
+func TestCleanupEvalTempRootRemovesReadOnlyToolchainTree(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "selfmind-eval-readonly-toolchain")
+	moduleDir := filepath.Join(root, "runtime", "leases", "lease-test", "toolchain", "go-mod", "example.com", "module@v1.0.0")
+	if err := os.MkdirAll(moduleDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(moduleDir, "module.go"), []byte("package module\n"), 0o444); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(moduleDir, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	if err := cleanupEvalTempRoot(root); err != nil {
+		_ = os.Chmod(moduleDir, 0o700)
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(root); !os.IsNotExist(err) {
+		t.Fatalf("temporary root remains: %v", err)
+	}
+}
+
 // TestRunCaseSharedDataOptsIntoConfiguredDir covers the explicit escape hatch:
 // `shared_data: true` runs against the configured data dir, and the residue it
 // leaves is exactly what `selfmind eval clean` selects.
@@ -321,12 +342,16 @@ func TestIsolatedEvalConfigKeepsSkillsUnderTempDir(t *testing.T) {
 		}
 	}
 
-	// A blank data dir must stay a no-op: the shared_data escape hatch runs
-	// against the configured paths and must not gain surprise overrides.
+	// A blank data dir preserves configured durable paths for shared_data, but
+	// operator identity must still be removed from release evidence.
 	shared := &config.Config{}
+	shared.Agent.Soul = "operator identity"
 	isolatedEvalConfig(shared, "")
 	if shared.Storage.DataDir != "" || shared.Evolution.SkillsDir != "" {
 		t.Fatalf("shared_data config must be untouched, got %+v", shared)
+	}
+	if shared.Agent.Soul != "" {
+		t.Fatalf("shared_data eval retained operator soul %q", shared.Agent.Soul)
 	}
 }
 

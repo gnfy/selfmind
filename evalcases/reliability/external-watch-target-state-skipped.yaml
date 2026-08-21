@@ -33,4 +33,3 @@ checks:
   no_raw_json_leak: true
   no_empty_response: true
   no_provider_stack_dump: true
-

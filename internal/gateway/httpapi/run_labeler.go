@@ -65,15 +65,16 @@ type MemoryDecision struct {
 }
 
 type PostRunAnalysisRequest struct {
-	Prompt          string
-	UserInput       string // original user text; task-reference evidence only
-	TurnText        string // raw user input + outcome summary, for neighbor retrieval
-	TenantID        string
-	PersonID        string
-	WorkspaceID     string
-	TaskID          string
-	RunID           string
-	AnalyzerVersion int
+	Prompt             string
+	UserInput          string // original user text; task-reference evidence only
+	TurnText           string // raw user input + outcome summary, for neighbor retrieval
+	TenantID           string
+	PersonID           string
+	WorkspaceID        string
+	TaskID             string
+	RunID              string
+	AnalyzerVersion    int
+	PromptSnapshotHash string
 }
 
 // PostRunAnalyzer combines task-label hygiene and durable fact extraction in
@@ -123,14 +124,15 @@ type runMaintenanceReplay struct {
 	Attach      taskAttach
 }
 
-func buildPostRunMaintenancePayload(identity *control.IdentityContext, task *control.Task, run *control.Run, workspaceID, userInput string, outcome api.RunOutcome, attach taskAttach) (string, error) {
+func buildPostRunMaintenancePayload(identity *control.IdentityContext, task *control.Task, run *control.Run, workspaceID, userInput string, outcome api.RunOutcome, attach taskAttach, promptHash string) (string, error) {
 	if identity == nil || task == nil || run == nil {
 		return "", fmt.Errorf("maintenance replay context is incomplete")
 	}
 	payload, err := json.Marshal(postRunJobPayload{
 		Identity: *identity, Task: *task, Run: *run, WorkspaceID: workspaceID,
 		UserInput: userInput, Outcome: outcome, AttachCreated: attach.created, AttachPreLabel: attach.preLabel,
-		AttachReason: string(attach.reason),
+		AttachReason:       string(attach.reason),
+		PromptSnapshotHash: strings.TrimSpace(promptHash),
 	})
 	if err != nil {
 		return "", fmt.Errorf("encode maintenance replay payload: %w", err)
@@ -142,7 +144,7 @@ func (c *RunCoordinator) materializeRunFinalization(ctx context.Context, identit
 	if c == nil || c.srv == nil || c.srv.Control == nil || identity == nil || task == nil || run == nil {
 		return fmt.Errorf("run finalization context is incomplete")
 	}
-	payload, err := buildPostRunMaintenancePayload(identity, task, run, workspaceID, userInput, outcome, attach)
+	payload, err := buildPostRunMaintenancePayload(identity, task, run, workspaceID, userInput, outcome, attach, c.srv.PromptSnapshotHash)
 	if err != nil {
 		return err
 	}
@@ -203,6 +205,7 @@ func (c *RunCoordinator) materializeRunFinalization(ctx context.Context, identit
 					log.Warn("skill cohort selection failed", "run_id", run.ID, "error", digestErr)
 				}
 				for _, digest := range digests {
+					digest.PromptSnapshotHash = c.srv.PromptSnapshotHash
 					payload, marshalErr := json.Marshal(digest)
 					if marshalErr != nil {
 						continue
@@ -223,19 +226,20 @@ func terminalRunStatus(status string) string {
 }
 
 type postRunJobPayload struct {
-	Identity       control.IdentityContext `json:"identity"`
-	Task           control.Task            `json:"task"`
-	Run            control.Run             `json:"run"`
-	WorkspaceID    string                  `json:"workspace_id,omitempty"`
-	UserInput      string                  `json:"user_input"`
-	Outcome        api.RunOutcome          `json:"outcome"`
-	AttachCreated  bool                    `json:"attach_created,omitempty"`
-	AttachPreLabel bool                    `json:"attach_pre_label,omitempty"`
-	AttachReason   string                  `json:"attach_reason,omitempty"`
+	Identity           control.IdentityContext `json:"identity"`
+	Task               control.Task            `json:"task"`
+	Run                control.Run             `json:"run"`
+	WorkspaceID        string                  `json:"workspace_id,omitempty"`
+	UserInput          string                  `json:"user_input"`
+	Outcome            api.RunOutcome          `json:"outcome"`
+	AttachCreated      bool                    `json:"attach_created,omitempty"`
+	AttachPreLabel     bool                    `json:"attach_pre_label,omitempty"`
+	AttachReason       string                  `json:"attach_reason,omitempty"`
+	PromptSnapshotHash string                  `json:"prompt_snapshot_hash,omitempty"`
 }
 
-func (d *Server) analyzeFinishedRun(ctx context.Context, identity *control.IdentityContext, task *control.Task, run *control.Run, workspaceID, userInput string, outcome api.RunOutcome, attach taskAttach) {
-	prepared := d.preparePostRunAnalysis(ctx, identity, task, run, workspaceID, userInput, outcome, attach)
+func (d *Server) analyzeFinishedRun(ctx context.Context, identity *control.IdentityContext, task *control.Task, run *control.Run, workspaceID, userInput string, outcome api.RunOutcome, attach taskAttach, promptHash string) {
+	prepared := d.preparePostRunAnalysis(ctx, identity, task, run, workspaceID, userInput, outcome, attach, promptHash)
 	if prepared == nil {
 		return
 	}
@@ -273,7 +277,7 @@ type preparedPostRunAnalysis struct {
 	request       PostRunAnalysisRequest
 }
 
-func (d *Server) preparePostRunAnalysis(ctx context.Context, identity *control.IdentityContext, task *control.Task, run *control.Run, workspaceID, userInput string, outcome api.RunOutcome, attach taskAttach) *preparedPostRunAnalysis {
+func (d *Server) preparePostRunAnalysis(ctx context.Context, identity *control.IdentityContext, task *control.Task, run *control.Run, workspaceID, userInput string, outcome api.RunOutcome, attach taskAttach, promptHash string) *preparedPostRunAnalysis {
 	if d == nil || d.Control == nil || identity == nil || task == nil || run == nil {
 		return nil
 	}
@@ -319,15 +323,16 @@ func (d *Server) preparePostRunAnalysis(ctx context.Context, identity *control.I
 		identity: identity, task: task, run: run, attach: attach,
 		candidates: candidates, labelEligible: labelEligible, newEligible: newEligible, workKey: workKey, outcome: outcome,
 		request: PostRunAnalysisRequest{
-			Prompt:          prompt,
-			UserInput:       strings.TrimSpace(userInput),
-			TurnText:        strings.TrimSpace(userInput + "\n" + outcome.Summary),
-			TenantID:        identity.TenantID,
-			PersonID:        identity.PersonID,
-			WorkspaceID:     workspaceID,
-			TaskID:          task.ID,
-			RunID:           run.ID,
-			AnalyzerVersion: postRunAnalyzerVersion,
+			Prompt:             prompt,
+			UserInput:          strings.TrimSpace(userInput),
+			TurnText:           strings.TrimSpace(userInput + "\n" + outcome.Summary),
+			TenantID:           identity.TenantID,
+			PersonID:           identity.PersonID,
+			WorkspaceID:        workspaceID,
+			TaskID:             task.ID,
+			RunID:              run.ID,
+			AnalyzerVersion:    postRunAnalyzerVersion,
+			PromptSnapshotHash: strings.TrimSpace(promptHash),
 		},
 	}
 }
@@ -413,6 +418,9 @@ func (d *Server) failClaimedPostRun(ctx context.Context, prepared *preparedPostR
 		return
 	}
 	log.Warn("gateway: post-run analyzer failed; keeping execution result unchanged", "run", prepared.request.RunID, "error", err)
+	if d.blockPromptRevisionJob(ctx, prepared.request.TenantID, prepared.request.RunID, postRunAnalyzerVersion, err) {
+		return
+	}
 	if llm.IsRetryableError(err) {
 		_ = d.Control.FailMaintenanceJob(ctx, prepared.request.TenantID, prepared.request.RunID, postRunAnalyzerVersion, err.Error(), maintenanceRetryDelay)
 		return

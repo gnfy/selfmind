@@ -12,10 +12,11 @@ import (
 )
 
 type capturingProviderStub struct {
-	content    string
-	lastPrompt string
-	chatCalls  int
-	err        error
+	content          string
+	lastPrompt       string
+	lastModelContext llm.ModelContext
+	chatCalls        int
+	err              error
 }
 
 func (p *capturingProviderStub) calls() int { return p.chatCalls }
@@ -24,8 +25,9 @@ func (p *capturingProviderStub) ChatCompletion(context.Context, []llm.Message) (
 	return p.content, p.err
 }
 
-func (p *capturingProviderStub) Chat(_ context.Context, req llm.ChatRequest) (*llm.ChatResponse, error) {
+func (p *capturingProviderStub) Chat(ctx context.Context, req llm.ChatRequest) (*llm.ChatResponse, error) {
 	p.chatCalls++
+	p.lastModelContext = llm.ModelContextFrom(ctx)
 	if p.err != nil {
 		return nil, p.err
 	}

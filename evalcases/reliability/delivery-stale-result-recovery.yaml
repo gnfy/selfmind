@@ -1,0 +1,64 @@
+id: reliability_delivery_stale_result_recovery
+title: "stale final results coalesce into one confirmed recap and close their old rows"
+suite: reliability
+workspace: isolated
+channel: im-chat
+model_required: false
+
+# Real accumulated backlog: final results parked weeks ago on an IM session that
+# went stale. They are outside the automatic catch-up window, so the daemon will
+# never re-push them by itself. The recovery command must replace them with ONE
+# deduplicated recap rather than replaying every result, then close the old rows.
+setup:
+  deliveries:
+    - content: "Release v1.2.3 finished; all checks passed."
+      task_id: task-release
+      run_id: run-release
+      age_hours: 744
+    - content: "Nightly index rebuild completed."
+      task_id: task-index
+      run_id: run-index
+      age_hours: 720
+    - content: "Certificate renewal completed for api.example.com."
+      task_id: task-certs
+      run_id: run-certs
+      age_hours: 700
+    # Same person partition and visible channel label, but a different platform
+    # account. Recovery from the default account must leave this row untouched.
+    - content: "Other account result must remain pending."
+      task_id: task-other-account
+      run_id: run-other-account
+      platform_user_id: eval-other-account
+      age_hours: 690
+
+turns:
+  - input: "/diag delivery"
+  - input: "/diag delivery recover stale-results"
+  - input: "/diag delivery"
+
+expect:
+  status: completed
+  require_no_task: true
+  require_no_run: true
+  max_tool_calls: 0
+  max_duration_seconds: 60
+  contains:
+    # Turn 1: the seeded results are visible and outside the automatic window,
+    # so nothing will re-push them without this command.
+    - "outside automatic recovery window"
+    # Turn 2: three parked results become ONE confirmed recap, and the old rows
+    # are closed rather than replayed one by one.
+    - "as one confirmed recap"
+    - "closed 3 old recovery row(s)"
+    # Turn 3: only the other platform account's row remains.
+    - "1 message(s) are waiting for a fresh IM session"
+  must_not_contain:
+    # The command reports a recap, never replays an individual result body.
+    - "Certificate renewal completed for api.example.com."
+    - "Other account result must remain pending."
+
+checks:
+  no_mojibake: true
+  no_empty_response: true
+  no_raw_json_leak: true
+  no_provider_stack_dump: true

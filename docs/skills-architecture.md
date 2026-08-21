@@ -29,6 +29,15 @@ Default visible roots, in priority order:
 5. Optional writable environment root from `SELFMIND_SKILLS_DIR`.
 6. Control-tenant root `~/.selfmind/<control-tenant>/skills`.
 
+Repository development agents may also use `.agents/skills` for workflows that
+must never enter SelfMind's product runtime. A directory-form Skill containing
+`.selfmind-developer-only` is omitted from SelfMind list, search, invocation,
+and dynamic tool registration. The marker applies only to that Skill directory;
+coding-agent discovery is unchanged. This keeps one tracked Agent Skills source
+without publishing development operations to SelfMind users. Agent-specific
+directories may contain only thin entrypoints that redirect to the canonical
+`.agents/skills` body; they must not fork the instructions.
+
 The first matching skill name wins for list/view/slash invocation. Registry
 reload registers lower-priority roots first, then higher-priority roots, so the
 runtime tool registry sees the same winner.

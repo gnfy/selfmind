@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"selfmind/internal/control"
+	"selfmind/internal/platform/config"
 	gatewayrt "selfmind/internal/runtime/gateway"
 )
 
@@ -63,7 +64,7 @@ func TestBuildDoctorReportRendersSectionsAndRedacts(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	report := buildDoctorReport(ctx, store, identity, dataDir, "not running", "", 50)
+	report := buildDoctorReport(ctx, store, identity, dataDir, "not running", "", "", 50)
 
 	for _, section := range []string{
 		"== Gateway ==", "== Workspace trust ==", "== Recent runs ==", "== Pending approvals ==",
@@ -84,6 +85,34 @@ func TestBuildDoctorReportRendersSectionsAndRedacts(t *testing.T) {
 	// The planted secret must be redacted everywhere.
 	if strings.Contains(report, secret) {
 		t.Fatalf("doctor report leaked the planted secret:\n%s", report)
+	}
+}
+
+func TestPromptWorkspaceDoctorSectionReportsSafeFallback(t *testing.T) {
+	root := t.TempDir()
+	dataDir := filepath.Join(root, "data")
+	store, err := control.OpenStore(dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	promptRoot := filepath.Join(root, "prompts")
+	if err := os.MkdirAll(promptRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(promptRoot, "agent.md"), []byte("## Unknown\n\nbroken\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	section := buildPromptWorkspaceDoctorSection(store, dataDir, &config.Config{Path: filepath.Join(root, "config.yaml")})
+	for _, want := range []string{"== Prompt workspace ==", "active: invalid (invalid_content)", "startup selection: builtin", "status: degraded"} {
+		if !strings.Contains(section, want) {
+			t.Fatalf("section missing %q:\n%s", want, section)
+		}
+	}
+	issues := collectDoctorIssues(section, configDiagnostics{})
+	if len(issues) != 1 || issues[0].Category != "PROMPT" {
+		t.Fatalf("issues = %+v", issues)
 	}
 }
 

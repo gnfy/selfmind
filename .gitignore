@@ -43,6 +43,12 @@ credentials.json
 
 # --- Editor / OS / agent tooling ---
 .claude/
+!.claude/
+.claude/*
+!.claude/skills/
+.claude/skills/*
+!.claude/skills/selfmind-daily-driver-audit/
+!.claude/skills/selfmind-daily-driver-audit/SKILL.md
 .idea/
 .vscode/
 *.swp
@@ -54,6 +60,9 @@ Thumbs.db
 # --- Temp / logs ---
 /tmp/
 *.tmp
+# `*.tmp` does not match a `.tmp_` prefix, so a temp-named script could be
+# committed permanently while advertising itself as scratch.
+.tmp_*
 *.log
 *.tar.gz
 *.tgz

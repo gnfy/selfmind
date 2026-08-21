@@ -256,6 +256,7 @@ func (a *App) selfcheckEval(root string, profile selfcheckProfile) selfcheckOutc
 		return selfcheckUnavailable
 	}
 	fmt.Fprintf(a.stdout, "== provider-offline eval (%s; profile=%s; platform=%s) ==\n", resolvedRoot, profile, runtime.GOOS)
+	fmt.Fprintln(a.stdout, "  prompt snapshot: embedded defaults; overrides=none (forced)")
 
 	files, err := selfeval.ListCaseFiles(resolvedRoot)
 	if err != nil {

@@ -30,6 +30,10 @@ const (
 	// A daemon restart resets these rows once, which is also the normal boundary
 	// after the owner updates provider configuration.
 	MaintenanceJobBlockedProvider = "blocked_provider"
+	// MaintenanceJobBlockedPromptRevision pauses durable work whose pinned
+	// static prompt revision is missing or corrupt. Provider recovery must not
+	// requeue it, because changing model routes cannot restore its contract.
+	MaintenanceJobBlockedPromptRevision = "blocked_prompt_revision"
 	// maintenanceRetryLimitRouteID is a durable policy identity, not a
 	// physical provider route. It prevents daemon restarts and provider-route
 	// recovery sweeps from replaying the same retry-exhausted job. Operators
@@ -91,9 +95,10 @@ func (s *Store) MigrateMaintenanceJobsToVersion(ctx context.Context, targetVersi
 	rows, err := tx.QueryContext(ctx, `SELECT run_id, analyzer_version, tenant_id, status, attempts,
 		next_retry_at, result_hash, payload_json, proposal_json, blocked_route_id, last_error, created_at, updated_at
 		FROM maintenance_jobs
-		WHERE analyzer_version < ? AND status IN (?, ?, ?, ?)
+		WHERE analyzer_version < ? AND status IN (?, ?, ?, ?, ?)
 		ORDER BY created_at ASC, analyzer_version DESC`, targetVersion,
-		MaintenanceJobPending, MaintenanceJobFailed, MaintenanceJobRunning, MaintenanceJobBlockedProvider)
+		MaintenanceJobPending, MaintenanceJobFailed, MaintenanceJobRunning, MaintenanceJobBlockedProvider,
+		MaintenanceJobBlockedPromptRevision)
 	if err != nil {
 		return result, err
 	}
@@ -499,6 +504,30 @@ func (s *Store) BlockMaintenanceJobForRoute(ctx context.Context, tenantID, runID
 	return n > 0, err
 }
 
+// BlockMaintenanceJobForPromptRevision records a non-retryable local asset
+// failure without misclassifying it as a provider outage.
+func (s *Store) BlockMaintenanceJobForPromptRevision(ctx context.Context, tenantID, runID string, analyzerVersion int, lastError string) (bool, error) {
+	if analyzerVersion <= 0 {
+		analyzerVersion = 1
+	}
+	if len(lastError) > 500 {
+		lastError = lastError[:500]
+	}
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE maintenance_jobs SET status = ?, blocked_route_id = '', last_error = ?, next_retry_at = 0, updated_at = ?
+		 WHERE tenant_id = ? AND run_id = ? AND analyzer_version = ? AND status = ?`,
+		MaintenanceJobBlockedPromptRevision, lastError, time.Now().Unix(),
+		normalizeTenant(tenantID), runID, analyzerVersion, MaintenanceJobRunning)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	if err == nil && n > 0 {
+		s.recordMaintenanceAttempt(ctx, tenantID, runID, analyzerVersion, "blocked_prompt_revision", lastError, "")
+	}
+	return n > 0, err
+}
+
 // BlockMaintenanceJobAfterRetries parks a retryable job after its bounded
 // retry budget is exhausted. Unlike SkipMaintenanceJob, this state remains
 // visible in maintenance health and is eligible for the existing restart
@@ -610,6 +639,65 @@ func (s *Store) ReplayRetryLimitedMaintenanceJobs(ctx context.Context, tenantID 
 	return int(n), err
 }
 
+// CountBlockedPromptRevisionMaintenanceJobs reports how much newest-generation
+// work is parked on a missing pinned prompt revision. It deliberately does not
+// join task_runs: background review and Skill curation jobs carry synthetic run
+// keys, so a join would silently under-report exactly the kinds this status was
+// added for.
+func (s *Store) CountBlockedPromptRevisionMaintenanceJobs(ctx context.Context, tenantID string) (int, error) {
+	var count int
+	err := s.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM maintenance_jobs mj
+		 WHERE mj.tenant_id = ?
+		   AND mj.status = ?
+		   AND mj.analyzer_version = (
+		     SELECT MAX(latest.analyzer_version) FROM maintenance_jobs latest
+		     WHERE latest.tenant_id = mj.tenant_id AND latest.run_id = mj.run_id
+		   )`,
+		normalizeTenant(tenantID), MaintenanceJobBlockedPromptRevision).Scan(&count)
+	if err != nil {
+		return 0, err
+	}
+	return count, nil
+}
+
+// ReplayPromptRevisionMaintenanceJobs requeues the newest generation of work
+// that was paused because its pinned prompt revision was unavailable. This is
+// deliberately operator-triggered: restoring the content-addressed revision
+// makes the work runnable again, while replaying before restoration simply
+// returns it to the same visible blocked state without spending model tokens.
+// Unlike retry-limit replay, this covers every durable maintenance kind,
+// including background review and Skill curation jobs whose synthetic keys do
+// not join task_runs.
+func (s *Store) ReplayPromptRevisionMaintenanceJobs(ctx context.Context, tenantID string, limit int) (int, error) {
+	if limit <= 0 || limit > 500 {
+		limit = 100
+	}
+	now := time.Now().Unix()
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE maintenance_jobs
+		 SET status = ?, attempts = 0, next_retry_at = 0, last_error = '', updated_at = ?
+		 WHERE rowid IN (
+		   SELECT mj.rowid FROM maintenance_jobs mj
+		   WHERE mj.tenant_id = ?
+		     AND mj.status = ?
+		     AND mj.analyzer_version = (
+		       SELECT MAX(latest.analyzer_version) FROM maintenance_jobs latest
+		       WHERE latest.tenant_id = mj.tenant_id AND latest.run_id = mj.run_id
+		     )
+		     AND (TRIM(COALESCE(mj.payload_json, '')) != ''
+		       OR TRIM(COALESCE(mj.proposal_json, '')) != '')
+		   ORDER BY mj.updated_at ASC, mj.run_id ASC LIMIT ?
+		 )`,
+		MaintenanceJobPending, now, normalizeTenant(tenantID),
+		MaintenanceJobBlockedPromptRevision, limit)
+	if err != nil {
+		return 0, err
+	}
+	n, err := res.RowsAffected()
+	return int(n), err
+}
+
 // MaintenanceHealth is the person-scoped background-learning health exposed
 // by /diag. It intentionally reports only aggregate state and a redacted recent
 // reason; raw provider payloads remain in logs.
@@ -618,6 +706,9 @@ type MaintenanceHealth struct {
 	Failed          int
 	Running         int
 	Blocked         int
+	BlockedPrompt   int
+	Succeeded       int
+	Skipped         int
 	OldestPendingAt time.Time
 	LastSuccessAt   time.Time
 	LastError       string
@@ -628,24 +719,35 @@ func (s *Store) MaintenanceHealthForPerson(ctx context.Context, tenantID, person
 	tenantID = normalizeTenant(tenantID)
 	var health MaintenanceHealth
 	var oldest, lastSuccess int64
-	err := s.db.QueryRowContext(ctx,
+	personPredicate := `(r.person_id = ? OR
+		(CASE WHEN json_valid(COALESCE(mj.payload_json, '')) THEN COALESCE(json_extract(mj.payload_json, '$.person_id'), '') ELSE '' END) = ? OR
+		(r.id IS NULL AND mj.tenant_id = ?))`
+	err := s.db.QueryRowContext(ctx, fmt.Sprintf(
 		`SELECT
 		 COALESCE(SUM(CASE WHEN mj.status = ? THEN 1 ELSE 0 END), 0),
 		 COALESCE(SUM(CASE WHEN mj.status = ? THEN 1 ELSE 0 END), 0),
 		 COALESCE(SUM(CASE WHEN mj.status = ? THEN 1 ELSE 0 END), 0),
+		 COALESCE(SUM(CASE WHEN mj.status IN (?, ?) THEN 1 ELSE 0 END), 0),
 		 COALESCE(SUM(CASE WHEN mj.status = ? THEN 1 ELSE 0 END), 0),
-		 COALESCE(MIN(CASE WHEN mj.status IN (?, ?) THEN mj.created_at ELSE NULL END), 0),
+		 COALESCE(SUM(CASE WHEN mj.status = ? THEN 1 ELSE 0 END), 0),
+		 COALESCE(SUM(CASE WHEN mj.status = ? THEN 1 ELSE 0 END), 0),
+		 COALESCE(MIN(CASE WHEN mj.status IN (?, ?, ?, ?, ?) THEN mj.created_at ELSE NULL END), 0),
 		 COALESCE(MAX(CASE WHEN mj.status = ? THEN mj.updated_at ELSE NULL END), 0)
 		 FROM maintenance_jobs mj
-		 JOIN task_runs r ON r.tenant_id = mj.tenant_id AND r.id = mj.run_id
-		 WHERE mj.tenant_id = ? AND r.person_id = ?
+		 LEFT JOIN task_runs r ON r.tenant_id = mj.tenant_id AND r.id = mj.run_id
+		 WHERE (mj.tenant_id = ? OR (r.id IS NULL AND mj.tenant_id = ?)) AND %s
 		   AND mj.analyzer_version = (
 		     SELECT MAX(latest.analyzer_version) FROM maintenance_jobs latest
 		     WHERE latest.tenant_id = mj.tenant_id AND latest.run_id = mj.run_id
-		   )`,
-		MaintenanceJobPending, MaintenanceJobFailed, MaintenanceJobRunning, MaintenanceJobBlockedProvider,
-		MaintenanceJobPending, MaintenanceJobFailed, MaintenanceJobSucceeded, tenantID, personID).
-		Scan(&health.Pending, &health.Failed, &health.Running, &health.Blocked, &oldest, &lastSuccess)
+		   )`, personPredicate),
+		MaintenanceJobPending, MaintenanceJobFailed, MaintenanceJobRunning,
+		MaintenanceJobBlockedProvider, MaintenanceJobBlockedPromptRevision, MaintenanceJobBlockedPromptRevision,
+		MaintenanceJobSucceeded, MaintenanceJobSkipped,
+		MaintenanceJobPending, MaintenanceJobFailed, MaintenanceJobRunning,
+		MaintenanceJobBlockedProvider, MaintenanceJobBlockedPromptRevision, MaintenanceJobSucceeded,
+		tenantID, personID, personID, personID, personID).
+		Scan(&health.Pending, &health.Failed, &health.Running, &health.Blocked, &health.BlockedPrompt,
+			&health.Succeeded, &health.Skipped, &oldest, &lastSuccess)
 	if err != nil {
 		return health, err
 	}
@@ -655,34 +757,35 @@ func (s *Store) MaintenanceHealthForPerson(ctx context.Context, tenantID, person
 	if lastSuccess > 0 {
 		health.LastSuccessAt = time.Unix(lastSuccess, 0)
 	}
-	err = s.db.QueryRowContext(ctx,
+	err = s.db.QueryRowContext(ctx, fmt.Sprintf(
 		`SELECT COALESCE(mj.last_error, '') FROM maintenance_jobs mj
-		 JOIN task_runs r ON r.tenant_id = mj.tenant_id AND r.id = mj.run_id
-		 WHERE mj.tenant_id = ? AND r.person_id = ? AND mj.status IN (?, ?)
+		 LEFT JOIN task_runs r ON r.tenant_id = mj.tenant_id AND r.id = mj.run_id
+		 WHERE (mj.tenant_id = ? OR (r.id IS NULL AND mj.tenant_id = ?)) AND %s AND mj.status IN (?, ?, ?)
 		   AND mj.analyzer_version = (
 		     SELECT MAX(latest.analyzer_version) FROM maintenance_jobs latest
 		     WHERE latest.tenant_id = mj.tenant_id AND latest.run_id = mj.run_id
 		   )
-		 ORDER BY mj.updated_at DESC LIMIT 1`,
-		tenantID, personID, MaintenanceJobFailed, MaintenanceJobBlockedProvider).Scan(&health.LastError)
+		 ORDER BY mj.updated_at DESC LIMIT 1`, personPredicate),
+		tenantID, personID, personID, personID, personID,
+		MaintenanceJobFailed, MaintenanceJobBlockedProvider, MaintenanceJobBlockedPromptRevision).Scan(&health.LastError)
 	if err != nil && err != sql.ErrNoRows {
 		return health, err
 	}
 	if health.Blocked == 0 {
 		return health, nil
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT DISTINCT pr.tenant_id, pr.route_id, pr.provider, pr.model,
+	rows, err := s.db.QueryContext(ctx, fmt.Sprintf(`SELECT DISTINCT pr.tenant_id, pr.route_id, pr.provider, pr.model,
 		pr.state, pr.failure_class, pr.consecutive_failures, pr.opened_at, pr.next_probe_at,
 		pr.probe_lease_until, pr.last_error, pr.last_request_id, pr.updated_at
 		FROM maintenance_jobs mj
-		JOIN task_runs r ON r.tenant_id = mj.tenant_id AND r.id = mj.run_id
+		LEFT JOIN task_runs r ON r.tenant_id = mj.tenant_id AND r.id = mj.run_id
 		JOIN provider_route_health pr ON pr.tenant_id = mj.tenant_id AND pr.route_id = mj.blocked_route_id
-		WHERE mj.tenant_id = ? AND r.person_id = ? AND mj.status = ?
+		WHERE (mj.tenant_id = ? OR (r.id IS NULL AND mj.tenant_id = ?)) AND %s AND mj.status = ?
 		  AND mj.analyzer_version = (
 		    SELECT MAX(latest.analyzer_version) FROM maintenance_jobs latest
 		    WHERE latest.tenant_id = mj.tenant_id AND latest.run_id = mj.run_id
 		  )
-		ORDER BY pr.updated_at DESC`, tenantID, personID, MaintenanceJobBlockedProvider)
+		ORDER BY pr.updated_at DESC`, personPredicate), tenantID, personID, personID, personID, personID, MaintenanceJobBlockedProvider)
 	if err != nil {
 		return health, err
 	}

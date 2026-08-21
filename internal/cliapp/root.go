@@ -127,6 +127,9 @@ func Run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 	if handled, exitCode := app.runConfigCommandIfRequested(); handled {
 		return exitCode
 	}
+	if handled, exitCode := app.runPromptCommandIfRequested(); handled {
+		return exitCode
+	}
 	if handled, exitCode := app.runModelCommandIfRequested(); handled {
 		return exitCode
 	}
@@ -208,6 +211,7 @@ var documentedCLIUsages = []string{
 	"selfmind config [doctor|upgrade]",
 	"selfmind env [show|refresh]",
 	"selfmind model [current|check [--live] [--role <name>]|list|set <provider> <model>]",
+	"selfmind prompt [list|show|edit|diff|validate|test|reset|apply] ...",
 	"selfmind auth [login|status|logout] ...",
 	"selfmind doctor [--verbose] [--out FILE] [--probe-models]",
 	"selfmind docs [check|index]",

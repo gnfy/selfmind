@@ -15,7 +15,51 @@ import (
 // CurrentControlSchemaVersion is the durable control.db compatibility
 // boundary. Adding or changing durable schema requires an ordered migration and
 // a version bump; silently extending InitSchema is not a release-safe upgrade.
-const CurrentControlSchemaVersion = 1
+const CurrentControlSchemaVersion = 2
+
+// schemaBaselineVersion is the version recorded for the historical additive
+// schema created by InitSchema. Every durable change after it is an entry in
+// orderedMigrations, so schema_migrations always describes what was applied.
+const schemaBaselineVersion = 1
+
+// schemaMigration is one ordered, idempotent step above the baseline. Steps run
+// lowest version first and each records its own ledger row, so a non-additive
+// future change (column type, backfill, constraint) has a real slot instead of
+// being smuggled into InitSchema, where existing databases would silently skip
+// it.
+type schemaMigration struct {
+	Version int
+	Name    string
+	Apply   func(context.Context, *sql.DB) error
+}
+
+// orderedMigrations must stay sorted by Version, and the highest Version must
+// equal CurrentControlSchemaVersion (pinned by test).
+var orderedMigrations = []schemaMigration{
+	{
+		Version: 2,
+		Name:    "memory-governance-schedule",
+		Apply: func(ctx context.Context, db *sql.DB) error {
+			_, err := db.ExecContext(ctx, `
+CREATE TABLE IF NOT EXISTS memory_governance_schedule (
+	tenant_id TEXT NOT NULL,
+	person_id TEXT NOT NULL,
+	last_attempt_at INTEGER NOT NULL DEFAULT 0,
+	last_success_at INTEGER NOT NULL DEFAULT 0,
+	next_due_at INTEGER NOT NULL DEFAULT 0,
+	consecutive_failures INTEGER NOT NULL DEFAULT 0,
+	last_outcome TEXT NOT NULL DEFAULT '',
+	last_deferred_reason TEXT NOT NULL DEFAULT '',
+	last_error TEXT NOT NULL DEFAULT '',
+	updated_at INTEGER NOT NULL,
+	PRIMARY KEY (tenant_id, person_id)
+);
+CREATE INDEX IF NOT EXISTS idx_memory_governance_due
+	ON memory_governance_schedule(next_due_at, tenant_id, person_id);`)
+			return err
+		},
+	},
+}
 
 // StoreSchemaStatus is safe diagnostic metadata. It contains no user content.
 type StoreSchemaStatus struct {
@@ -96,15 +140,46 @@ func (s *Store) prepareAndMigrateSchema(ctx context.Context, dataDir, dbPath str
 	if err := verifyMigrationInvariants(ctx, s.db, before); err != nil {
 		return migrationFailure(err, s.migrationBackup)
 	}
-	if _, err := s.db.ExecContext(ctx, `INSERT INTO schema_migrations(version, name, applied_at)
-		VALUES (?, ?, ?) ON CONFLICT(version) DO NOTHING`, CurrentControlSchemaVersion, "legacy-baseline", time.Now().Unix()); err != nil {
-		return migrationFailure(err, s.migrationBackup)
+	// Record the baseline before any ordered step so the ledger describes what
+	// was actually applied. A database with no ledger has, by definition, just
+	// received the baseline; one already at or past it keeps its own row.
+	if version < schemaBaselineVersion {
+		if err := recordSchemaMigration(ctx, s.db, schemaBaselineVersion, "legacy-baseline"); err != nil {
+			return migrationFailure(err, s.migrationBackup)
+		}
+		version = schemaBaselineVersion
+	}
+	for _, migration := range orderedMigrations {
+		if migration.Version <= version {
+			continue
+		}
+		if err := migration.Apply(ctx, s.db); err != nil {
+			return migrationFailure(fmt.Errorf("apply migration %d (%s): %w", migration.Version, migration.Name, err), s.migrationBackup)
+		}
+		if err := recordSchemaMigration(ctx, s.db, migration.Version, migration.Name); err != nil {
+			return migrationFailure(err, s.migrationBackup)
+		}
+		// Re-verify after every step: a step that drops user rows must fail at
+		// that step, with the backup still describing the state before it.
+		if err := verifyMigrationInvariants(ctx, s.db, before); err != nil {
+			return migrationFailure(err, s.migrationBackup)
+		}
+		version = migration.Version
 	}
 	if err := checkIntegrity(ctx, s.db); err != nil {
 		return migrationFailure(err, s.migrationBackup)
 	}
+	if version != CurrentControlSchemaVersion {
+		return migrationFailure(fmt.Errorf("schema stopped at version %d but this binary requires %d; orderedMigrations is missing a step", version, CurrentControlSchemaVersion), s.migrationBackup)
+	}
 	s.schemaVersion = CurrentControlSchemaVersion
 	return nil
+}
+
+func recordSchemaMigration(ctx context.Context, db *sql.DB, version int, name string) error {
+	_, err := db.ExecContext(ctx, `INSERT INTO schema_migrations(version, name, applied_at)
+		VALUES (?, ?, ?) ON CONFLICT(version) DO NOTHING`, version, name, time.Now().Unix())
+	return err
 }
 
 func migrationFailure(err error, backup string) error {

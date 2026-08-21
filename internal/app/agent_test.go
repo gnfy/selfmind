@@ -67,3 +67,12 @@ func TestBuildResponsesProviderPreservesTokenGetter(t *testing.T) {
 		t.Fatal("RequireStream = false, want true")
 	}
 }
+
+func TestSummarizerOutputLimitUsesResolvedRoleCapacity(t *testing.T) {
+	cfg := &config.Config{Models: config.ModelsConfig{Roles: map[string]config.ModelRoleConfig{
+		string(llm.RoleSummarizer): {MaxTokens: 3072},
+	}}}
+	if got := summarizerOutputLimit(cfg); got != 3072 {
+		t.Fatalf("summarizer output limit = %d, want 3072", got)
+	}
+}

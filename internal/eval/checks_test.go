@@ -60,6 +60,39 @@ func TestEvaluateCaseRequiresToolEvents(t *testing.T) {
 	}
 }
 
+func TestEvaluateCaseRequiresAssistantProgressBeforeTools(t *testing.T) {
+	c := &Case{
+		ID:    "progress_case",
+		Turns: []Turn{{Input: "inspect code"}},
+		Expect: Expectations{
+			MinProgressUpdates: 1,
+		},
+	}
+	checks := EvaluateCase(c, RunSnapshot{Output: "done"})
+	if len(checks) != 1 || checks[0].Name != "min_progress_updates" || checks[0].OK {
+		t.Fatalf("missing progress should fail: %+v", checks)
+	}
+	checks = EvaluateCase(c, RunSnapshot{Output: "done", ProgressUpdates: 1})
+	if len(checks) != 1 || !checks[0].OK {
+		t.Fatalf("observed progress should pass: %+v", checks)
+	}
+}
+
+func TestEvaluateCaseEnforcesExplicitZeroToolErrors(t *testing.T) {
+	zero := 0
+	c := &Case{
+		ID:    "zero_errors",
+		Turns: []Turn{{Input: "write once"}},
+		Expect: Expectations{
+			MaxToolErrors: &zero,
+		},
+	}
+	checks := EvaluateCase(c, RunSnapshot{Output: "done", ToolErrors: 1})
+	if len(checks) != 1 || checks[0].Name != "max_tool_errors" || checks[0].OK {
+		t.Fatalf("explicit zero did not reject a tool failure: %+v", checks)
+	}
+}
+
 func TestEvaluateCaseMaxToolCallsUsesActionTools(t *testing.T) {
 	max := 0
 	c := &Case{

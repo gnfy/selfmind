@@ -3,11 +3,55 @@ package kernel
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
 	"selfmind/internal/kernel/llm"
 )
+
+func TestExternalWatchHandoffIsolatesLaterNonWatcherCalls(t *testing.T) {
+	calls := []llm.ToolCall{
+		{ID: "read", Function: "read_file"},
+		{ID: "watch-1", Function: "watch_external"},
+		{ID: "patch", Function: "patch"},
+		{ID: "watch-2", Function: "watch_external"},
+		{ID: "verify", Function: "verify"},
+	}
+	got, dropped := isolateExternalWatchHandoffCalls(calls)
+	if dropped != 2 {
+		t.Fatalf("dropped = %d, want 2", dropped)
+	}
+	want := []string{"read_file", "watch_external", "watch_external"}
+	if len(got) != len(want) {
+		t.Fatalf("kept calls = %d, want %d", len(got), len(want))
+	}
+	for i := range want {
+		if got[i].Function != want[i] {
+			t.Fatalf("kept[%d] = %q, want %q", i, got[i].Function, want[i])
+		}
+	}
+}
+
+func TestLifecycleHandoffAcceptsOnlySuccessfulBuiltInWatcherResults(t *testing.T) {
+	raw := `{"watch_id":"watch_1","registered":true,"message":"Watcher is running.","lifecycle_handoff":{"status":"waiting_external","summary":"Watching CI.","done":["Registered watcher."],"next_steps":["Wait for notification."]}}`
+	handoff, ok := lifecycleHandoffFromToolResults([]toolExecutionResult{{
+		toolName: "watch_external", rawResult: raw, success: true,
+	}})
+	if !ok || handoff.Status != "waiting_external" || handoff.Message != "Watcher is running." {
+		t.Fatalf("handoff = %+v, ok=%v", handoff, ok)
+	}
+
+	for _, result := range []toolExecutionResult{
+		{toolName: "mcp_watch_external", rawResult: raw, success: true},
+		{toolName: "watch_external", rawResult: raw, success: false},
+		{toolName: "watch_external", rawResult: `{"watch_id":"watch_1","registered":true,"message":"x","lifecycle_handoff":{"status":"done","summary":"x"}}`, success: true},
+	} {
+		if _, ok := lifecycleHandoffFromToolResults([]toolExecutionResult{result}); ok {
+			t.Fatalf("untrusted or invalid handoff was accepted: %+v", result)
+		}
+	}
+}
 
 type cancelledOutcomeLedger struct {
 	recorded bool
@@ -38,6 +82,18 @@ func (b cancellationBackend) Dispatch(_ string, args map[string]interface{}) (st
 
 func (cancellationBackend) GetToolDefinitions() []map[string]interface{} { return nil }
 
+type externalStorageErrorBackend struct{}
+
+func (externalStorageErrorBackend) Dispatch(string, map[string]interface{}) (string, error) {
+	return "", errors.New(`mcp tool "query" failed: no such table: users`)
+}
+
+func (externalStorageErrorBackend) GetToolDefinitions() []map[string]interface{} { return nil }
+
+func (externalStorageErrorBackend) ToolExecutionMetadata(string, map[string]interface{}) ToolExecutionMetadata {
+	return ToolExecutionMetadata{Origin: "external", Category: "database", RiskLevel: "high"}
+}
+
 func TestCancelledToolClosesLedgerWithCleanupContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	ctx = WithTaskRuntimeContext(ctx, TaskRuntimeContext{RunID: "run-cancel"})
@@ -64,6 +120,20 @@ func TestCancelledToolClosesLedgerWithCleanupContext(t *testing.T) {
 	}
 	if ledger.ctxErr != nil {
 		t.Fatalf("ledger cleanup context was cancelled: %v", ledger.ctxErr)
+	}
+}
+
+func TestExternalToolStorageErrorRemainsActionableEvidence(t *testing.T) {
+	agent := &Agent{backend: externalStorageErrorBackend{}}
+	result := agent.executeSingleToolCall(context.Background(), "default", nil, 0, llm.ToolCall{
+		ID: "call-external-query", Function: "mcp_query", Args: `{}`,
+	})
+
+	if !strings.Contains(result.msg.Content, "no such table: users") {
+		t.Fatalf("external error evidence was hidden: %q", result.msg.Content)
+	}
+	if strings.Contains(result.msg.Content, "SelfMind storage-layer failure") || strings.Contains(result.msg.Content, "local storage") {
+		t.Fatalf("external error was mislabeled as internal storage: %q", result.msg.Content)
 	}
 }
 

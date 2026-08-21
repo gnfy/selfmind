@@ -72,6 +72,62 @@ type ApprovalBacklogStats struct {
 	OldestParkedAt *time.Time
 }
 
+// ApprovalDecisionFunnel is a request-level human-decision view. Triage events
+// describe automatic policy stages; this separate stock/flow view prevents
+// comparing escalations and approvals as if they shared one denominator.
+type ApprovalDecisionFunnel struct {
+	Requested         int
+	Statuses          map[string]int
+	DecisionChoices   map[string]int
+	Tools             map[string]int
+	AverageResponseMS int64
+}
+
+func (s *Store) ApprovalDecisionFunnelSince(ctx context.Context, tenantID, personID string, since time.Time) (ApprovalDecisionFunnel, error) {
+	funnel := ApprovalDecisionFunnel{
+		Statuses: make(map[string]int), DecisionChoices: make(map[string]int), Tools: make(map[string]int),
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT status, COALESCE(decision_id, ''),
+		COALESCE(CASE WHEN json_valid(COALESCE(payload_json, '')) THEN json_extract(payload_json, '$.tool') ELSE '' END, ''),
+		created_at, updated_at
+		FROM approval_requests
+		WHERE tenant_id = ? AND person_id = ? AND created_at >= ?`,
+		normalizeTenant(tenantID), strings.TrimSpace(personID), since.Unix())
+	if err != nil {
+		return funnel, err
+	}
+	defer rows.Close()
+	var responseTotal int64
+	var responseCount int64
+	for rows.Next() {
+		var status, decision, tool string
+		var created, updated int64
+		if err := rows.Scan(&status, &decision, &tool, &created, &updated); err != nil {
+			return funnel, err
+		}
+		funnel.Requested++
+		funnel.Statuses[status]++
+		if decision != "" {
+			funnel.DecisionChoices[decision]++
+		}
+		if tool == "" {
+			tool = "unknown"
+		}
+		funnel.Tools[tool]++
+		if status != "pending" && updated >= created {
+			responseTotal += (updated - created) * 1000
+			responseCount++
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return funnel, err
+	}
+	if responseCount > 0 {
+		funnel.AverageResponseMS = responseTotal / responseCount
+	}
+	return funnel, nil
+}
+
 const approvalSelectColumns = `id, tenant_id, person_id, COALESCE(task_id, ''), COALESCE(run_id, ''), action_type,
 	COALESCE(payload_json, '{}'), status, COALESCE(requested_channel, ''), COALESCE(approved_channel, ''),
 	COALESCE(decision_scope, ''), COALESCE(decision_id, ''), COALESCE(decision_grant_key, ''), COALESCE(decision_note, ''),

@@ -188,6 +188,47 @@ func TestSkillRootsIncludeWorkspaceAndCodexCompatibleDirs(t *testing.T) {
 	}
 }
 
+func TestDeveloperAgentOnlySkillIsNotExposedBySelfMind(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	workspace := t.TempDir()
+	t.Chdir(workspace)
+
+	skillDir := filepath.Join(workspace, ".agents", "skills", "runtime-audit")
+	if err := os.MkdirAll(skillDir, 0755); err != nil {
+		t.Fatalf("create developer skill dir: %v", err)
+	}
+	if err := atomicWriteFile(filepath.Join(skillDir, "SKILL.md"), ensureFrontMatter("Audit runtime evidence.", "runtime-audit", "developer-only audit")); err != nil {
+		t.Fatalf("write developer skill: %v", err)
+	}
+	if err := atomicWriteFile(filepath.Join(skillDir, developerAgentOnlySkillMarker), "SelfMind runtime must not load this developer-agent Skill.\n"); err != nil {
+		t.Fatalf("write developer-only marker: %v", err)
+	}
+
+	skills, err := ListSkillsForTenant("default", false)
+	if err != nil {
+		t.Fatalf("list skills: %v", err)
+	}
+	for _, skill := range skills {
+		if skill.Name == "runtime-audit" {
+			t.Fatalf("developer-only skill leaked into SelfMind list: %+v", skill)
+		}
+	}
+
+	registry := NewRegistry()
+	loaded, err := ReloadSkillToolsForTenant("default", registry)
+	if err != nil {
+		t.Fatalf("reload skill tools: %v", err)
+	}
+	for _, skill := range loaded {
+		if skill.Name == "runtime-audit" {
+			t.Fatalf("developer-only skill was loaded into SelfMind registry: %+v", skill)
+		}
+	}
+	if _, ok := registry.Get("skill:runtime-audit"); ok {
+		t.Fatal("developer-only skill registered a runtime tool")
+	}
+}
+
 func TestReadOnlySkillCannotBeMutated(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	workspace := t.TempDir()

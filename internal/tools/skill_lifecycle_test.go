@@ -73,6 +73,44 @@ func TestSkillSelectAndFallbackUseDurableActivation(t *testing.T) {
 	}
 }
 
+func TestSkillSelectReturnsCurrentCandidatesForStaleName(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	ctx := context.Background()
+	store, err := control.OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	identity, _ := store.ResolveOrCreateAccount(ctx, "default", "cli", "stale-skill", "Stale Skill")
+	task, _ := store.CreateTask(ctx, control.TaskCreate{TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "deploy", Channel: "cli"})
+	run, _ := store.StartRun(ctx, task, "cli", "deploy safely")
+	if _, err := NewSkillManageTool().Execute(directSkillMutationArgs(map[string]interface{}{
+		"action": "create", "name": "deploy-current", "description": "deploy safely with verification",
+		"content": "Check preconditions, deploy, then verify.", "source": SkillSourceAgentCreated,
+	})); err != nil {
+		t.Fatal(err)
+	}
+	scope := kernel.ToolInvocationScope{
+		ControlTenantID: identity.TenantID, PersonID: identity.PersonID, RunID: run.ID,
+		WorkUnitID: run.WorkUnitID, ExecutionLane: "main", AttachmentMode: "continuation",
+	}
+	_, err = NewSkillSelectTool(store).Execute(map[string]interface{}{
+		"name": "deploy-removed", "reason": "deploy safely with verification",
+		"_context": ctx, "_invocation_scope": scope,
+	})
+	if err == nil {
+		t.Fatal("expected stale Skill error")
+	}
+	stable, ok := err.(interface {
+		ToolErrorCode() string
+		ModelSafeMessage() string
+		ToolRecoveryHint() string
+	})
+	if !ok || stable.ToolErrorCode() != "candidate_stale" || !strings.Contains(stable.ModelSafeMessage(), "deploy-current") || !strings.Contains(stable.ToolRecoveryHint(), "listed current candidate") {
+		t.Fatalf("stale Skill recovery = %T %v", err, err)
+	}
+}
+
 func TestSkillLifecycleManagementPromotesRollsBackAndBindsExplicitly(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	ctx := context.Background()

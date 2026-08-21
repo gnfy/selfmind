@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -171,6 +172,23 @@ func (t *PlanTool) Execute(args map[string]interface{}) (string, error) {
 	if sink := planProjectionSinkFromArgs(args); sink != nil {
 		workUnits, err = sink(ContextFromArgs(args), steps)
 		if err != nil {
+			var stale interface{ CurrentWorkUnitIDs() []string }
+			if errors.As(err, &stale) {
+				current := stale.CurrentWorkUnitIDs()
+				safeMessage := "The supplied work_unit_id is stale for the current run."
+				if len(current) > 0 {
+					safeMessage += " Current work_unit_id values: " + strings.Join(current, ", ") + "."
+				} else {
+					safeMessage += " Omit work_unit_id so this run can create its first work unit."
+				}
+				return "", newStableToolError(
+					err,
+					"stale_work_unit",
+					"stale_precondition",
+					safeMessage,
+					"Replace the stale id with the matching current id returned above, or omit it only when beginning a new work unit.",
+				)
+			}
 			return "", err
 		}
 	}
@@ -444,7 +462,7 @@ func NewToolSearchTool() *ToolSearchTool {
 	return &ToolSearchTool{
 		BaseTool: BaseTool{
 			name:        "tool_search",
-			description: "Search available tools by name, description, category, or capability.",
+			description: "Search available tools by name, description, category, or capability. Matching deferred tools are activated for subsequent calls in this run.",
 			schema: ToolSchema{
 				Type: "object",
 				Properties: map[string]PropertyDef{
@@ -490,6 +508,8 @@ func (t *ToolSearchTool) Execute(args map[string]interface{}) (string, error) {
 		Category    string        `json:"category,omitempty"`
 		RiskLevel   ToolRiskLevel `json:"risk_level,omitempty"`
 		ReadOnly    bool          `json:"read_only,omitempty"`
+		Exposure    ToolExposure  `json:"exposure"`
+		Activated   bool          `json:"activated"`
 	}
 	var results []result
 	for _, name := range reg.List() {
@@ -511,12 +531,15 @@ func (t *ToolSearchTool) Execute(args map[string]interface{}) (string, error) {
 		if !containsAllTerms(haystack, query) {
 			continue
 		}
+		exposure := reg.EffectiveToolExposure(name)
 		results = append(results, result{
 			Name:        name,
 			Description: tool.Description(),
 			Category:    meta.Category,
 			RiskLevel:   meta.RiskLevel,
 			ReadOnly:    meta.ReadOnly,
+			Exposure:    exposure,
+			Activated:   exposure == ToolExposureDeferred,
 		})
 	}
 	sort.Slice(results, func(i, j int) bool {

@@ -6,10 +6,14 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"time"
 
 	appcore "selfmind/internal/app"
 	"selfmind/internal/gateway/api"
+	"selfmind/internal/platform/config"
+	"selfmind/internal/promptassets"
 	gatewayrt "selfmind/internal/runtime/gateway"
 )
 
@@ -116,6 +120,7 @@ func (a *App) gatewayStatus(args []string) int {
 			return 0
 		}
 		a.printGatewayStatus(status)
+		a.printPromptCustomizationHint()
 		return 0
 	}
 
@@ -212,6 +217,11 @@ func (a *App) gatewayRestartWithEnvironment(args []string, environment []string)
 		return 2
 	}
 	_ = drain // Accepted for an explicit upgrade command; restart already drains by default.
+	if err := validatePromptWorkspaceForRestart(a.configPath); err != nil {
+		fmt.Fprintf(a.stderr, "Prompt validation failed; the running gateway was not restarted: %v\n", err)
+		fmt.Fprintln(a.stderr, "Fix the active prompt workspace, then run `selfmind prompt validate`.")
+		return 1
+	}
 	dataDir := a.gatewayDataDir()
 	// Capture before RequestShutdown removes the old PID record. A restart may
 	// be invoked from an updater or IDE that lacks the login shell's PATH or
@@ -262,6 +272,17 @@ func (a *App) gatewayRestartWithEnvironment(args []string, environment []string)
 	}
 	fmt.Fprintf(a.stdout, "SelfMind gateway restarted (pid %d).\nLog: %s\n", result.PID, result.LogPath)
 	return 0
+}
+
+func validatePromptWorkspaceForRestart(configPath string) error {
+	cfg, err := config.LoadConfig(config.Options{Path: configPath})
+	if err != nil {
+		return fmt.Errorf("load config: %w", err)
+	}
+	if _, err := appcore.LoadPromptSnapshot(cfg); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (a *App) gatewayService(args []string) int {
@@ -379,6 +400,21 @@ func (a *App) printGatewayStatus(status api.GatewayStatusResponse) {
 		}
 	} else {
 		fmt.Fprintln(a.stdout, "active runs: 0")
+	}
+}
+
+func (a *App) printPromptCustomizationHint() {
+	_, root, err := a.loadPromptCommandConfig()
+	if err != nil {
+		return
+	}
+	spec, ok := promptassets.Spec(promptassets.FileAgent)
+	if !ok {
+		return
+	}
+	path := filepath.Join(root, filepath.FromSlash(spec.RelativePath))
+	if _, err := os.Lstat(path); os.IsNotExist(err) {
+		fmt.Fprintf(a.stdout, "personal preferences: not configured; run `selfmind prompt edit agent` (%s)\n", path)
 	}
 }
 

@@ -18,6 +18,7 @@ type observationRule struct {
 
 var observationRules = []observationRule{
 	{program: "ls", anyArgs: true}, {program: "pwd", anyArgs: true},
+	{program: "printf", anyArgs: true}, {program: "echo", anyArgs: true}, {program: "sleep", anyArgs: true},
 	{program: "cat", anyArgs: true}, {program: "head", anyArgs: true},
 	{program: "tail", anyArgs: true}, {program: "wc", anyArgs: true},
 	{program: "stat", anyArgs: true}, {program: "file", anyArgs: true},

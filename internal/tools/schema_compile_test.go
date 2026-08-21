@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -21,6 +22,33 @@ func newRawSchemaTestTool(name string, raw map[string]interface{}, origin ToolSc
 			handler: func(map[string]interface{}) (string, error) { return "ok", nil },
 		},
 		raw: raw, origin: origin,
+	}
+}
+
+func TestLargeExternalCatalogueDoesNotGuessColdToolCohort(t *testing.T) {
+	registry := NewRegistry()
+	for i := 0; i < 45; i++ {
+		registry.Register(newRawSchemaTestTool(fmt.Sprintf("external_%02d", i), map[string]interface{}{
+			"type": "object", "properties": map[string]interface{}{},
+		}, ToolSchemaOriginExternal))
+	}
+	registry.mu.RLock()
+	exposures := registry.effectiveToolExposuresLocked(true)
+	registry.mu.RUnlock()
+	for _, exposure := range exposures {
+		if exposure == ToolExposureDeferred {
+			t.Fatal("an unreviewed external tool was deferred by catalogue shape")
+		}
+	}
+	if definitions := registry.ToolDefinitions(); len(definitions) == 0 {
+		t.Fatal("automatic cohort gate must not remove definitions before rollout")
+	} else {
+		for _, definition := range definitions {
+			metadata, _ := definition["selfmind"].(map[string]interface{})
+			if metadata["exposure"] == ToolExposureDeferred {
+				t.Fatal("automatic cohort started before the evidence gate")
+			}
+		}
 	}
 }
 

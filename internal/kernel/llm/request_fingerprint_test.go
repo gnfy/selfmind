@@ -54,3 +54,26 @@ func TestProtocolAdaptersExposeRequestFingerprints(t *testing.T) {
 		})
 	}
 }
+
+func TestVCRProviderForwardsOptionalCapabilities(t *testing.T) {
+	inner := &ResponsesAdapter{Model: "gpt-test"}
+	wrapped := &vcrProvider{inner: inner, mode: "record", dir: t.TempDir()}
+
+	if !wrapped.SupportsNativeTools() {
+		t.Fatal("VCR wrapper dropped native-tool capability")
+	}
+	fingerprint, ok := wrapped.FingerprintRequest(context.Background(), ChatRequest{
+		Messages: []Message{{Role: "system", Content: "stable"}, {Role: "user", Content: "hello"}},
+		Tools:    []ToolDefinition{{Name: "read_file", Parameters: map[string]interface{}{"type": "object"}}},
+	}, true)
+	if !ok || fingerprint.Protocol != "openai_responses" || fingerprint.PrefixHash == "" || fingerprint.RequestHash == "" {
+		t.Fatalf("VCR fingerprint = %+v ok=%v", fingerprint, ok)
+	}
+}
+
+func TestVCRProviderReportsUnsupportedFingerprint(t *testing.T) {
+	wrapped := &vcrProvider{inner: fakeStreamProvider{}, mode: "record", dir: t.TempDir()}
+	if fingerprint, ok := wrapped.FingerprintRequest(context.Background(), ChatRequest{}, true); ok || fingerprint.Protocol != "" || fingerprint.PrefixHash != "" || fingerprint.RequestHash != "" || len(fingerprint.Blocks) != 0 {
+		t.Fatalf("unsupported fingerprint = %+v ok=%v", fingerprint, ok)
+	}
+}

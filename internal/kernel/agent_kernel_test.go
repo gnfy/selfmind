@@ -199,6 +199,94 @@ type nativeToolLLMProvider struct {
 	requests []llm.ChatRequest
 }
 
+type watcherHandoffProvider struct {
+	requests []llm.ChatRequest
+}
+
+func (p *watcherHandoffProvider) ChatCompletion(context.Context, []llm.Message) (string, error) {
+	return "unexpected fallback", nil
+}
+
+func (p *watcherHandoffProvider) Chat(context.Context, llm.ChatRequest) (*llm.ChatResponse, error) {
+	return &llm.ChatResponse{Content: "unexpected fallback"}, nil
+}
+
+func (p *watcherHandoffProvider) StreamChat(_ context.Context, req llm.ChatRequest) (<-chan llm.StreamEvent, error) {
+	p.requests = append(p.requests, req)
+	ch := make(chan llm.StreamEvent, 1)
+	if len(p.requests) == 1 {
+		ch <- llm.StreamEvent{ToolCalls: []llm.ToolCall{
+			{ID: "watch-1", Function: "watch_external", Args: `{"description":"CI one"}`},
+			{ID: "patch-after-watch", Function: "patch", Args: `{"patch":"must not run"}`},
+			{ID: "watch-2", Function: "watch_external", Args: `{"description":"CI two"}`},
+		}}
+	} else {
+		ch <- llm.StreamEvent{Content: "the model should not be called after watcher handoff"}
+	}
+	close(ch)
+	return ch, nil
+}
+
+type watcherHandoffBackend struct {
+	calls []string
+}
+
+func (b *watcherHandoffBackend) Dispatch(name string, _ map[string]interface{}) (string, error) {
+	b.calls = append(b.calls, name)
+	index := len(b.calls)
+	return fmt.Sprintf(`{"watch_id":"watch_%d","registered":true,"message":"Watcher watch_%d is running.","lifecycle_handoff":{"status":"waiting_external","summary":"Watching CI %d.","done":["Registered watcher watch_%d."],"next_steps":["Wait for notification."]}}`, index, index, index, index), nil
+}
+
+func (b *watcherHandoffBackend) GetToolDefinitions() []map[string]interface{} { return nil }
+
+func TestSuccessfulWatcherRegistrationEndsTurnWithoutAnotherModelCall(t *testing.T) {
+	mem := memory.NewMemoryManager(&mockStorage{})
+	provider := &watcherHandoffProvider{}
+	backend := &watcherHandoffBackend{}
+	agent := NewAgent(mem, backend, provider, "helpful", 5, 1, nil)
+	events := make(chan string, 64)
+	ctx := WithEventChannel(context.Background(), events)
+	ctx = WithTaskStrategy(ctx, TaskStrategy{
+		Class: TaskClassCICDTask, ToolMode: ToolModeFull, PlanPolicy: PlanPolicyOptional,
+		MaxActionTools: 4, ActionToolBudgetStep: 1, ActionToolBudgetLimit: 6, MaxBudgetExtensions: 1,
+	})
+
+	answer, _, err := agent.RunConversation(ctx, "user123", "cli", "watch both builds")
+	if err != nil {
+		t.Fatal(err)
+	}
+	close(events)
+	if len(provider.requests) != 1 {
+		t.Fatalf("provider requests = %d, want exactly 1", len(provider.requests))
+	}
+	if got := strings.Join(backend.calls, ","); got != "watch_external,watch_external" {
+		t.Fatalf("executed tools = %q, later non-watcher call crossed the handoff boundary", got)
+	}
+	if !strings.Contains(answer, "2 watchers are running in the background") {
+		t.Fatalf("answer = %q", answer)
+	}
+
+	var outcome, completion AgentEvent
+	for raw := range events {
+		event, ok := DecodeAgentEvent(raw)
+		if !ok {
+			continue
+		}
+		switch event.Type {
+		case "run.outcome":
+			outcome = event
+		case "turn.completed":
+			completion = event
+		}
+	}
+	if outcome.Payload["status"] != "waiting_external" || outcome.Payload["completion_reason"] != "waiting_external" {
+		t.Fatalf("outcome = %+v", outcome.Payload)
+	}
+	if completion.Payload["status"] != "completed" || completion.Payload["resumable"] == true {
+		t.Fatalf("completion = %+v", completion.Payload)
+	}
+}
+
 func (p *nativeToolLLMProvider) ChatCompletion(ctx context.Context, messages []llm.Message) (string, error) {
 	return "mock response", nil
 }
@@ -661,8 +749,8 @@ func TestSystemPromptGuidesToolFailureDiagnosis(t *testing.T) {
 	if !strings.Contains(prompt, "When a tool returns an error, treat the error as diagnostic evidence") {
 		t.Fatalf("prompt missing tool failure recovery guidance: %q", prompt)
 	}
-	if !strings.Contains(prompt, "Do not hard-code environment overrides as a default tool behavior") {
-		t.Fatalf("prompt missing generic env override guidance: %q", prompt)
+	if strings.Contains(prompt, "command failures") {
+		t.Fatalf("prompt mentioned command diagnostics although this backend exposes no command tool: %q", prompt)
 	}
 }
 

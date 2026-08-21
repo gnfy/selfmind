@@ -30,6 +30,11 @@ CLI、IM、HTTP webhook、未来 SaaS 多端入口都必须复用同一套 runti
 9. `extra_body` 与 `extra_query` 按 provider → role 合并，角色层优先；请求体
    对象递归合并。它们只在最终 HTTP transport 边界生效，CLI、IM、cron 与未来
    远程入口不会各自实现一套。
+10. 请求前缀诊断是 provider wrapper 的合约，而不是仅由 adapter 负责。role
+    router、飞行记录器/VCR 等生产 wrapper 必须转发 `RequestFingerprinter`；每次
+    provider 调用要么记录不含正文的 prefix/block 哈希，要么记录明确的不支持原因。
+    `/diag context` 展示最近一次 run 的 token 与缓存状态，`selfmind usage` 展示当前
+    person 最近 24 小时的执行与 token 报告；两者都不估算货币成本。
 
 ## 核心文件
 

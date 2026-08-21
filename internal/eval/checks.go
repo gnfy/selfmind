@@ -13,6 +13,7 @@ type RunSnapshot struct {
 	HTTPStatus        int
 	ToolCalls         int
 	ActionToolCalls   int
+	ProgressUpdates   int
 	ToolErrors        int
 	Errors            []string
 	ErrorCategories   map[string]int
@@ -69,11 +70,15 @@ func EvaluateCase(c *Case, snap RunSnapshot) []CheckResult {
 	if c.Expect.MinToolCalls > 0 {
 		add("min_tool_calls", snap.ActionToolCalls >= c.Expect.MinToolCalls, "action tool call count below expectation")
 	}
+	if c.Expect.MinProgressUpdates > 0 {
+		add("min_progress_updates", snap.ProgressUpdates >= c.Expect.MinProgressUpdates,
+			"assistant progress update count before tool calls below expectation")
+	}
 	if c.Expect.MaxToolCalls != nil {
 		add("max_tool_calls", snap.ActionToolCalls <= *c.Expect.MaxToolCalls, "action tool call count above expectation")
 	}
-	if c.Expect.MaxToolErrors >= 0 && c.Expect.MaxToolErrors != 0 {
-		add("max_tool_errors", snap.ToolErrors <= c.Expect.MaxToolErrors, "too many tool errors")
+	if c.Expect.MaxToolErrors != nil && *c.Expect.MaxToolErrors >= 0 {
+		add("max_tool_errors", snap.ToolErrors <= *c.Expect.MaxToolErrors, "too many tool errors")
 	}
 	if c.Expect.MaxDurationSeconds > 0 {
 		add("max_duration_seconds", snap.DurationSeconds <= float64(c.Expect.MaxDurationSeconds), "case exceeded duration budget")

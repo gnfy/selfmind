@@ -17,25 +17,41 @@ type toolExecutionResult struct {
 	msg       llm.Message
 	toolName  string
 	signature string
+	rawResult string
 	success   bool
+}
+
+type toolLifecycleHandoff struct {
+	Status      string
+	Summary     string
+	Message     string
+	Done        []string
+	NextSteps   []string
+	Files       []string
+	Tests       []string
+	Risks       []string
+	NeedApprove bool
 }
 
 type parallelToolSupport interface {
 	SupportsParallelTool(name string) bool
 }
 
-func (a *Agent) llmToolDefinitions(strategy TaskStrategy) []llm.ToolDefinition {
+func (a *Agent) llmToolDefinitions(ctx context.Context, strategy TaskStrategy) []llm.ToolDefinition {
 	if a.backend == nil {
 		return nil
 	}
-	return toolDefinitionsForLLM(a.backend.GetToolDefinitions(), strategy)
+	return toolDefinitionsForLLM(ctx, a.backend.GetToolDefinitions(), strategy)
 }
 
-func toolDefinitionsForLLM(defs []map[string]interface{}, strategy TaskStrategy) []llm.ToolDefinition {
+func toolDefinitionsForLLM(ctx context.Context, defs []map[string]interface{}, strategy TaskStrategy) []llm.ToolDefinition {
 	out := make([]llm.ToolDefinition, 0, len(defs))
 	for _, d := range defs {
 		name := toolDefinitionName(d)
 		if name == "" {
+			continue
+		}
+		if !toolDefinitionAvailable(ctx, d) {
 			continue
 		}
 		if !strategy.AllowsTool(name) {
@@ -231,6 +247,128 @@ func normalizeToolCallIDs(calls []llm.ToolCall, iteration int) []llm.ToolCall {
 	return out
 }
 
+// isolateWorkUnitBoundaryCall makes update_plan a batch boundary. A provider
+// may emit update_plan and later tool calls in one assistant response, but the
+// later calls belong to the newly projected work unit and must not execute
+// with the old unit's Skill/tool activation state. The loop executes only the
+// boundary call and asks the model to re-issue still-needed calls next turn.
+func isolateWorkUnitBoundaryCall(calls []llm.ToolCall) ([]llm.ToolCall, int) {
+	if len(calls) < 2 {
+		return calls, 0
+	}
+	for _, call := range calls {
+		if strings.TrimSpace(call.Function) == "update_plan" {
+			return []llm.ToolCall{call}, len(calls) - 1
+		}
+	}
+	return calls, 0
+}
+
+// isolateExternalWatchHandoffCalls makes the first watcher registration a
+// lifecycle boundary. Calls before it still belong to the foreground work and
+// every watcher in the same batch is retained, but later non-watcher calls must
+// be re-issued only if registration fails. This lets one turn register several
+// independent observations without continuing to mutate or poll afterward.
+func isolateExternalWatchHandoffCalls(calls []llm.ToolCall) ([]llm.ToolCall, int) {
+	if len(calls) < 2 {
+		return calls, 0
+	}
+	firstWatch := -1
+	for i, call := range calls {
+		if strings.TrimSpace(call.Function) == "watch_external" {
+			firstWatch = i
+			break
+		}
+	}
+	if firstWatch < 0 {
+		return calls, 0
+	}
+	kept := append([]llm.ToolCall(nil), calls[:firstWatch]...)
+	for _, call := range calls[firstWatch:] {
+		if strings.TrimSpace(call.Function) == "watch_external" {
+			kept = append(kept, call)
+		}
+	}
+	return kept, len(calls) - len(kept)
+}
+
+// lifecycleHandoffFromToolResults accepts a lifecycle transition only from
+// successful trusted built-in watcher results. External tools and arbitrary
+// model-visible JSON can never end a run through this path.
+func lifecycleHandoffFromToolResults(results []toolExecutionResult) (toolLifecycleHandoff, bool) {
+	var out toolLifecycleHandoff
+	registered := 0
+	for _, result := range results {
+		if !result.success {
+			return toolLifecycleHandoff{}, false
+		}
+		if strings.TrimSpace(result.toolName) != "watch_external" {
+			continue
+		}
+		var decoded struct {
+			WatchID    string `json:"watch_id"`
+			Registered bool   `json:"registered"`
+			Message    string `json:"message"`
+			Handoff    struct {
+				Status      string   `json:"status"`
+				Summary     string   `json:"summary"`
+				Done        []string `json:"done"`
+				NextSteps   []string `json:"next_steps"`
+				Files       []string `json:"files"`
+				Tests       []string `json:"tests"`
+				Risks       []string `json:"risks"`
+				NeedApprove bool     `json:"need_approve"`
+			} `json:"lifecycle_handoff"`
+		}
+		if json.Unmarshal([]byte(result.rawResult), &decoded) != nil ||
+			!decoded.Registered || strings.TrimSpace(decoded.WatchID) == "" ||
+			strings.TrimSpace(decoded.Message) == "" ||
+			strings.TrimSpace(decoded.Handoff.Status) != "waiting_external" ||
+			strings.TrimSpace(decoded.Handoff.Summary) == "" {
+			continue
+		}
+		registered++
+		out.Status = "waiting_external"
+		out.Summary = decoded.Handoff.Summary
+		out.Message = decoded.Message
+		out.Done = append(out.Done, decoded.Handoff.Done...)
+		out.NextSteps = appendUniqueLifecycleItems(out.NextSteps, decoded.Handoff.NextSteps...)
+		out.Files = appendUniqueLifecycleItems(out.Files, decoded.Handoff.Files...)
+		out.Tests = appendUniqueLifecycleItems(out.Tests, decoded.Handoff.Tests...)
+		out.Risks = appendUniqueLifecycleItems(out.Risks, decoded.Handoff.Risks...)
+		out.NeedApprove = out.NeedApprove || decoded.Handoff.NeedApprove
+	}
+	if registered == 0 {
+		return toolLifecycleHandoff{}, false
+	}
+	if registered > 1 {
+		out.Summary = fmt.Sprintf("Registered %d durable external watchers.", registered)
+		out.Message = fmt.Sprintf("%d watchers are running in the background. You can start another task now; SelfMind will notify you as each reaches a terminal state.", registered)
+	}
+	return out, true
+}
+
+func appendUniqueLifecycleItems(dst []string, items ...string) []string {
+	seen := make(map[string]struct{}, len(dst)+len(items))
+	for _, item := range dst {
+		if item = strings.TrimSpace(item); item != "" {
+			seen[item] = struct{}{}
+		}
+	}
+	for _, item := range items {
+		item = strings.TrimSpace(item)
+		if item == "" {
+			continue
+		}
+		if _, ok := seen[item]; ok {
+			continue
+		}
+		seen[item] = struct{}{}
+		dst = append(dst, item)
+	}
+	return dst
+}
+
 func (a *Agent) executeToolCalls(ctx context.Context, tenantID string, eventCh chan string, calls []llm.ToolCall) []toolExecutionResult {
 	results := make([]toolExecutionResult, len(calls))
 	if shouldParallelizeToolCalls(calls, a.backend) {
@@ -289,6 +427,20 @@ func (a *Agent) executeSingleToolCall(ctx context.Context, tenantID string, even
 			},
 		}
 	default:
+	}
+	// One lookup answers both questions (is it exposed, and why not), instead of
+	// rebuilding the whole catalogue and then scanning it twice.
+	if exposure, known := a.resolveToolExposureForDispatch(name); known {
+		switch exposure {
+		case "hidden":
+			return a.toolDispatchRefused(eventCh, idx, call, signature,
+				fmt.Errorf("tool %s is not available in the model tool surface", name))
+		case "deferred":
+			if !deferredToolActive(ctx, name) {
+				return a.toolDispatchRefused(eventCh, idx, call, signature,
+					fmt.Errorf("tool %s is deferred in this run; call tool_search to discover and activate matching capabilities before retrying", name))
+			}
+		}
 	}
 
 	args := parseToolCallArgs(call.Args)
@@ -381,7 +533,11 @@ func (a *Agent) executeSingleToolCall(ctx context.Context, tenantID string, even
 		if ledgerErr != nil {
 			err = fmt.Errorf("%w; durable outcome recording also failed: %v", err, ledgerErr)
 		}
-		packaged := packageToolFailureCtx(ctx, name, result, err)
+		metadata := ToolExecutionMetadata{}
+		if len(completedMetadata) > 0 {
+			metadata = completedMetadata[0]
+		}
+		packaged := packageDispatchedToolFailureCtx(ctx, name, result, err, metadata)
 		if eventCh != nil {
 			emitToolEndEventWithDuration(eventCh, name, call.ID, packaged, duration, err, completedMetadata...)
 		}
@@ -404,7 +560,13 @@ func (a *Agent) executeSingleToolCall(ctx context.Context, tenantID string, even
 	}
 
 	packaged := packageToolResultCtx(ctx, name, result)
+	activated := activateToolsFromSearchResult(ctx, name, result)
 	if eventCh != nil {
+		if len(activated) > 0 {
+			EmitAgentEvent(eventCh, AgentEvent{Type: "tool.catalog.activated", Payload: map[string]interface{}{
+				"tools": activated, "added": len(activated), "active_total": activatedToolCount(ctx),
+			}})
+		}
 		emitToolEndEventWithDuration(eventCh, name, call.ID, packaged, duration, nil, completedMetadata...)
 		emitStructuredToolEvent(eventCh, name, args, result, nil)
 	}
@@ -414,6 +576,7 @@ func (a *Agent) executeSingleToolCall(ctx context.Context, tenantID string, even
 		step:      toolHistoryStep(name, packaged),
 		toolName:  name,
 		signature: signature,
+		rawResult: result,
 		success:   true,
 		msg: llm.Message{
 			Role:       "tool",

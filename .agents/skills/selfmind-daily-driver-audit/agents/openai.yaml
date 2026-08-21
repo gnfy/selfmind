@@ -1,0 +1,4 @@
+interface:
+  display_name: "SelfMind Daily Driver Audit"
+  short_description: "Audit multi-day runtime health and evidence gaps"
+  default_prompt: "Use $selfmind-daily-driver-audit to analyze SelfMind runtime evidence across daily and multi-day windows."

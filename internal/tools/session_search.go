@@ -92,7 +92,7 @@ func (t *SessionSearchTool) Execute(args map[string]interface{}) (string, error)
 		if tenantID != "" && t.messagesTenantFn != nil {
 			raw, err := t.messagesTenantFn(tenantID, sessionID, around, window)
 			if err != nil {
-				return "", err
+				return "", sessionHistoryError(err, "session_messages_unavailable", "Session message history is unavailable.")
 			}
 			return formatSessionMessages(sessionID, raw), nil
 		}
@@ -101,7 +101,7 @@ func (t *SessionSearchTool) Execute(args map[string]interface{}) (string, error)
 		}
 		raw, err := t.messagesFn(sessionID, around, window)
 		if err != nil {
-			return "", err
+			return "", sessionHistoryError(err, "session_messages_unavailable", "Session message history is unavailable.")
 		}
 		return formatSessionMessages(sessionID, raw), nil
 	}
@@ -110,7 +110,7 @@ func (t *SessionSearchTool) Execute(args map[string]interface{}) (string, error)
 		if tenantID != "" && t.recentTenantFn != nil {
 			raw, err := t.recentTenantFn(tenantID, limit)
 			if err != nil {
-				return "", err
+				return "", sessionHistoryError(err, "recent_sessions_unavailable", "Recent session history is unavailable.")
 			}
 			return formatSessions("Recent sessions", raw), nil
 		}
@@ -119,7 +119,7 @@ func (t *SessionSearchTool) Execute(args map[string]interface{}) (string, error)
 		}
 		raw, err := t.recentFn(limit)
 		if err != nil {
-			return "", err
+			return "", sessionHistoryError(err, "recent_sessions_unavailable", "Recent session history is unavailable.")
 		}
 		return formatSessions("Recent sessions", raw), nil
 	}
@@ -127,7 +127,7 @@ func (t *SessionSearchTool) Execute(args map[string]interface{}) (string, error)
 	if tenantID != "" && t.searchTenantFn != nil {
 		raw, err := t.searchTenantFn(tenantID, query, limit)
 		if err != nil {
-			return "", fmt.Errorf("search failed: %w", err)
+			return "", sessionHistoryError(err, "session_search_unavailable", "Session history search is unavailable.")
 		}
 		return formatSessions(fmt.Sprintf("Results for %q", query), raw), nil
 	}
@@ -136,9 +136,19 @@ func (t *SessionSearchTool) Execute(args map[string]interface{}) (string, error)
 	}
 	raw, err := t.searchFn(query, limit)
 	if err != nil {
-		return "", fmt.Errorf("search failed: %w", err)
+		return "", sessionHistoryError(err, "session_search_unavailable", "Session history search is unavailable.")
 	}
 	return formatSessions(fmt.Sprintf("Results for %q", query), raw), nil
+}
+
+func sessionHistoryError(err error, code, safeMessage string) error {
+	return newStableToolError(
+		err,
+		code,
+		"data_store",
+		safeMessage,
+		"Retry once with simpler literal text. If it still fails, inspect local memory diagnostics instead of changing stored data.",
+	)
 }
 
 func intArg(args map[string]interface{}, key string, fallback int) int {

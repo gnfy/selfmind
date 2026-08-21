@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"sort"
@@ -10,6 +11,21 @@ import (
 	"selfmind/internal/kernel"
 	"selfmind/internal/kernel/llm"
 )
+
+const (
+	// Keep the automatic cohort inert until the active plan's seven-day
+	// fingerprint baseline is reviewed. Explicitly deferred tool metadata still
+	// exercises the activation protocol; enabling the cohort is a reviewed code
+	// release, not a hidden runtime or user configuration switch.
+	deferredExternalRolloutEnabled = false
+)
+
+// deferredExternalReviewedCohort is populated only from a reviewed seven-day
+// usage report. Name hashing is deterministic but is not evidence that a tool
+// is cold; keeping that old selector behind a false flag merely deferred a
+// production regression until someone enabled it. An empty allowlist means no
+// automatic deferral even if the rollout gate is accidentally flipped.
+var deferredExternalReviewedCohort = map[string]struct{}{}
 
 // Registry 是全局工具注册表
 type Registry struct {
@@ -127,6 +143,7 @@ func (r *Registry) ToolDefinitions() []map[string]interface{} {
 		names = append(names, name)
 	}
 	sort.Strings(names)
+	exposures := r.effectiveToolExposuresLocked(deferredExternalRolloutEnabled)
 	for _, name := range names {
 		compiled, ok := r.schemas[name]
 		if !ok || compiled.Report.Status == ToolSchemaQuarantined {
@@ -136,9 +153,75 @@ func (r *Registry) ToolDefinitions() []map[string]interface{} {
 		if err != nil {
 			continue
 		}
-		defs = append(defs, toolDefinitionFromCompiled(r.tools[name], parameters))
+		definition := toolDefinitionFromCompiled(r.tools[name], parameters)
+		if metadata, ok := definition["selfmind"].(map[string]interface{}); ok {
+			metadata["exposure"] = string(exposures[name])
+		}
+		defs = append(defs, definition)
 	}
 	return defs
+}
+
+// LookupToolExposure answers ONE tool's catalogue exposure without building the
+// full definition list. The availability guard on the tool-dispatch hot path
+// needs exactly this question; materializing every definition to answer it ran
+// a JSON marshal/unmarshal round trip per registered tool (114 pairs per call
+// in this workspace) inside the streaming loop.
+//
+// known is false for an unregistered or quarantined tool, matching what
+// ToolDefinitions omits, so callers keep treating those as "not in the model
+// tool surface" rather than as hidden.
+func (r *Registry) LookupToolExposure(name string) (ToolExposure, bool) {
+	if r == nil {
+		return "", false
+	}
+	name = strings.TrimSpace(name)
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	tool, ok := r.tools[name]
+	if !ok {
+		return "", false
+	}
+	if compiled, ok := r.schemas[name]; !ok || compiled.Report.Status == ToolSchemaQuarantined {
+		return "", false
+	}
+	// While the automatic cohort is code-gated off, a tool's own metadata is the
+	// whole answer, so the common path allocates nothing.
+	if !deferredExternalRolloutEnabled {
+		return ToolMetadataFor(tool).Exposure, true
+	}
+	return r.effectiveToolExposuresLocked(deferredExternalRolloutEnabled)[name], true
+}
+
+// EffectiveToolExposure returns the catalogue policy seen by the model.
+// Explicit hidden/deferred metadata always wins. The reviewed external cohort
+// remains code-gated until its evidence review enables it.
+func (r *Registry) EffectiveToolExposure(name string) ToolExposure {
+	if r == nil {
+		return ToolExposureHidden
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.effectiveToolExposuresLocked(deferredExternalRolloutEnabled)[strings.TrimSpace(name)]
+}
+
+func (r *Registry) effectiveToolExposuresLocked(automaticCohort bool) map[string]ToolExposure {
+	exposures := make(map[string]ToolExposure, len(r.tools))
+	for name, tool := range r.tools {
+		metadata := ToolMetadataFor(tool)
+		exposures[name] = metadata.Exposure
+	}
+	if !automaticCohort {
+		return exposures
+	}
+	for name := range deferredExternalReviewedCohort {
+		tool, ok := r.tools[name]
+		if !ok || exposures[name] != ToolExposureDirect || executionPolicyForTool(tool).Origin != ToolSchemaOriginExternal {
+			continue
+		}
+		exposures[name] = ToolExposureDeferred
+	}
+	return exposures
 }
 
 func (r *Registry) ensureMaps() {
@@ -402,6 +485,21 @@ func (d *Dispatcher) GetToolDefinitions() []map[string]interface{} {
 	return d.registry.ToolDefinitions()
 }
 
+// ResolveToolExposure is the optional single-lookup capability the kernel's
+// dispatch-time availability guard prefers over materializing the whole
+// catalogue. Returning known=false lets the caller fall back to its previous
+// behaviour for unregistered names.
+func (d *Dispatcher) ResolveToolExposure(name string) (exposure string, known bool) {
+	if d == nil {
+		return "", false
+	}
+	value, ok := d.registry.LookupToolExposure(name)
+	if !ok {
+		return "", false
+	}
+	return string(value), true
+}
+
 func (d *Dispatcher) ToolSchemaReport() []ToolSchemaReport {
 	return d.registry.ToolSchemaReport()
 }
@@ -459,7 +557,7 @@ func (d *Dispatcher) InjectTenantSessionAccess(
 }
 
 // InjectDelegateFn 将 delegate_fn 注入到 DelegateTool
-func (d *Dispatcher) InjectDelegateFn(fn func(goal, context string, toolsets []string) (string, llm.UsageStats, error)) {
+func (d *Dispatcher) InjectDelegateFn(fn func(context.Context, string, string, []string) (string, llm.UsageStats, error)) {
 	t, ok := d.registry.Get("delegate_task")
 	if !ok {
 		return
@@ -470,7 +568,7 @@ func (d *Dispatcher) InjectDelegateFn(fn func(goal, context string, toolsets []s
 }
 
 // InjectVisionLLM 将视觉分析所需的 LLM 接口注入到 VisionTool
-func (d *Dispatcher) InjectDelegateBatchFn(fn func(tasks []DelegateTaskSpec) ([]DelegateTaskResult, error)) {
+func (d *Dispatcher) InjectDelegateBatchFn(fn func(context.Context, []DelegateTaskSpec) ([]DelegateTaskResult, error)) {
 	t, ok := d.registry.Get("delegate_task")
 	if !ok {
 		return

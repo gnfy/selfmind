@@ -207,6 +207,15 @@ approval escrow timer because the handset may already have received it.
 Diagnostics aggregate this health per platform without exposing peer/channel
 identifiers.
 
+Final results that remain `pending_session` beyond the bounded automatic
+catch-up window are never replayed one by one. In that exact IM peer,
+`/diag delivery recover stale-results` builds one bounded, idempotent recap
+grouped by durable task/run identity. Only a transport-confirmed recap dismisses
+the exact rows it summarized; an unavailable or uncertain session leaves them
+pending. `/diag delivery dismiss stale-results` is the explicit no-send option.
+Neither operation touches approvals, clarifications, another peer, or
+`sent_unconfirmed` rows.
+
 Re-attaching (next morning, back home on the same machine → same `cli/local`
 account → same person) flips rule 3/4 back and shows an **attach digest**:
 what finished/failed while away, pending approvals/questions, queued tasks —

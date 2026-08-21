@@ -248,7 +248,10 @@ final summaries.
   绝不跨端镜像。spine 是"跟人走的耐久工作状态层",不是 transcript 镜像。
 - **session_search 第二腿不变**:FTS 索引仍用任务派生 session id
   (`task:<id>`,`Agent.sessionKey`),`IndexSession` 按 session id 幂等;
-  索引**不以 spine 为键**(P2 依赖此契约)。
+  索引**不以 spine 为键**(P2 依赖此契约)。`SearchSessions` 接受自然语言而
+  不是调用方预拼的 FTS5 语法；每个词项在 provider 边界被按字面量编码，候选
+  采用 OR 召回并由 FTS rank 排序，避免长提示词因全词 AND 或二次编码而静默
+  零命中。
 
 run 内部执行不受影响:一轮之内内存 messages 数组(含工具消息)与以前完全一致,
 spine 只改变"轮次开始时加载什么、轮次结束时持久化什么"。

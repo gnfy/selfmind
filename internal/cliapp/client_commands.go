@@ -88,12 +88,15 @@ func (a *App) runGatewayClientIfRequested() (bool, int) {
 		}
 	}
 	if len(a.args) > 1 && a.args[1] == "send" {
-		opts := sendOptions{}
+		opts := sendOptions{additionalRoots: append([]string{}, a.additionalDirs...)}
 		args := a.args[2:]
-		usage := "usage: selfmind send [--async] [--mode on-request|read-only|auto-edit|full-auto|smart] <message>"
+		usage := "usage: selfmind send [--async] [--mode on-request|read-only|auto-edit|full-auto|smart] [--add-dir DIR]... <message>"
 	flagLoop:
 		for len(args) > 0 {
 			switch {
+			case args[0] == "--":
+				args = args[1:]
+				break flagLoop
 			case args[0] == "--async":
 				opts.async = true
 				args = args[1:]
@@ -156,7 +159,8 @@ func (a *App) runGatewayClientIfRequested() (bool, int) {
 
 // sendOptions carries per-send flags from CLI parsing to the message request.
 type sendOptions struct {
-	async bool
+	async           bool
+	additionalRoots []string
 	// approvalMode is the codex-style per-request approval policy
 	// (MessageRequest.ApprovalMode); empty keeps the daemon default.
 	approvalMode string
@@ -188,17 +192,18 @@ func (a *App) sendGatewayMessageWithOptions(content string, opts sendOptions) in
 	clientCWD, _ := os.Getwd()
 
 	req := api.MessageRequest{
-		TenantID:       os.Getenv("SELF_TENANT_ID"),
-		Platform:       "cli",
-		PlatformUserID: userID,
-		DisplayName:    userID,
-		Channel:        "cli",
-		Content:        content,
-		WorkspaceID:    os.Getenv("SELF_WORKSPACE_ID"),
-		ClientCWD:      clientCWD,
-		TaskID:         os.Getenv("SELF_TASK_ID"),
-		Async:          opts.async,
-		ApprovalMode:   strings.ToLower(strings.TrimSpace(opts.approvalMode)),
+		TenantID:              os.Getenv("SELF_TENANT_ID"),
+		Platform:              "cli",
+		PlatformUserID:        userID,
+		DisplayName:           userID,
+		Channel:               "cli",
+		Content:               content,
+		WorkspaceID:           os.Getenv("SELF_WORKSPACE_ID"),
+		ClientCWD:             clientCWD,
+		ClientAdditionalRoots: append([]string{}, opts.additionalRoots...),
+		TaskID:                os.Getenv("SELF_TASK_ID"),
+		Async:                 opts.async,
+		ApprovalMode:          strings.ToLower(strings.TrimSpace(opts.approvalMode)),
 	}
 	body, _ := json.Marshal(req)
 	httpReq, err := http.NewRequestWithContext(a.ctx, http.MethodPost, url+"/v1/message", bytes.NewReader(body))
@@ -208,6 +213,9 @@ func (a *App) sendGatewayMessageWithOptions(content string, opts sendOptions) in
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	a.attachGatewayAuth(httpReq)
+	if a.gatewayTargetIsLocal() {
+		a.attachLocalControlAuth(httpReq)
+	}
 	httpResp, err := http.DefaultClient.Do(httpReq)
 	if err != nil {
 		fmt.Fprintln(a.stderr, err)

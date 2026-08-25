@@ -21,12 +21,22 @@ import (
 type Setup struct {
 	Files  map[string]string `yaml:"files,omitempty" json:"files,omitempty"`
 	Memory []SeedFact        `yaml:"memory,omitempty" json:"memory,omitempty"`
+	Skills []SeedSkill       `yaml:"skills,omitempty" json:"skills,omitempty"`
 	Task   *SeedTask         `yaml:"task,omitempty" json:"task,omitempty"`
 	// Deliveries seeds outbound results already parked on a stale IM session.
 	// Declaring any also gives the case a delivery service, which cases without
 	// it deliberately do not get: a delivery surface changes which notification
 	// paths a run takes, and that must stay opt-in.
 	Deliveries []SeedDelivery `yaml:"deliveries,omitempty" json:"deliveries,omitempty"`
+}
+
+// SeedSkill creates a managed user Skill before the first turn. It exists so
+// message-path regressions can exercise an actual agent-created asset instead
+// of silently proving only workspace-file discovery.
+type SeedSkill struct {
+	Name        string `yaml:"name" json:"name"`
+	Description string `yaml:"description" json:"description"`
+	Content     string `yaml:"content" json:"content"`
 }
 
 // SeedDelivery is one undeliverable final result that has been waiting for a
@@ -120,6 +130,49 @@ func applyFileSeeds(workspaceRoot string, files map[string]string) error {
 		}
 		if err := os.WriteFile(dst, []byte(content), 0o644); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+// applySkillSeeds runs before app tool registration, so an eval fixture proves
+// both hidden compatibility registration and provider-catalog exclusion.
+func applySkillSeeds(tenantID, skillsBaseDir string, seeds []SeedSkill) error {
+	if len(seeds) == 0 {
+		return nil
+	}
+	storage, err := tools.NewSkillStorage(skillsBaseDir)
+	if err != nil {
+		return fmt.Errorf("seed agent-created Skills: %w", err)
+	}
+	root := tools.SkillsDirForTenant(storage.BaseDir(), tenantID)
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		return fmt.Errorf("seed agent-created Skills: %w", err)
+	}
+	invocation := tools.WithSkillStorage(map[string]interface{}{"_tenant_id": tenantID}, storage)
+	for index, seed := range seeds {
+		name := kernel.SanitizeSkillName(seed.Name)
+		description := strings.TrimSpace(seed.Description)
+		body := strings.TrimSpace(seed.Content)
+		if name == "" || description == "" || body == "" || strings.ContainsAny(description, "\r\n") {
+			return fmt.Errorf("seed agent-created Skill %d requires a safe name, one-line description, and content", index)
+		}
+		content := fmt.Sprintf("---\nname: %s\ndescription: %s\n---\n\n%s\n", name, description, body)
+		if err := tools.ValidateManagedSkillDescription(content); err != nil {
+			return fmt.Errorf("seed agent-created Skill %s: %w", name, err)
+		}
+		dir := filepath.Join(root, name)
+		if _, err := os.Stat(dir); err == nil {
+			return fmt.Errorf("seed agent-created Skill %s already exists", name)
+		}
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return fmt.Errorf("seed agent-created Skill %s: %w", name, err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(content), 0o644); err != nil {
+			return fmt.Errorf("seed agent-created Skill %s: %w", name, err)
+		}
+		if err := tools.MarkSkillCreated(tenantID, name, tools.SkillSourceAgentCreated, "eval_setup", invocation); err != nil {
+			return fmt.Errorf("seed agent-created Skill %s metadata: %w", name, err)
 		}
 	}
 	return nil

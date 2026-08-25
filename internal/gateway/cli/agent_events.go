@@ -69,15 +69,16 @@ func (m *uiModel) runAgent(ctx context.Context, input string) tea.Cmd {
 			})
 			cwd := currentWorkingDir()
 			resp, status := m.messageProcessor(ctx, api.MessageRequest{
-				TenantID:       m.tenantID,
-				Platform:       "cli",
-				PlatformUserID: cliPlatformUserID(),
-				DisplayName:    cliDisplayName(),
-				Channel:        m.channel,
-				Content:        input,
-				ClientCWD:      cwd,
-				Attachments:    imageAttachmentsFromInput(input, cwd),
-				ApprovalMode:   m.approvalMode,
+				TenantID:              m.tenantID,
+				Platform:              "cli",
+				PlatformUserID:        cliPlatformUserID(),
+				DisplayName:           cliDisplayName(),
+				Channel:               m.channel,
+				Content:               input,
+				ClientCWD:             cwd,
+				ClientAdditionalRoots: append([]string{}, m.additionalRoots...),
+				Attachments:           imageAttachmentsFromInput(input, cwd),
+				ApprovalMode:          m.approvalMode,
 				// Session workspace override from /workspace this session; the
 				// server honors an explicit WorkspaceID before deriving one from
 				// ClientCWD, so the turn runs in the selected workspace. Empty

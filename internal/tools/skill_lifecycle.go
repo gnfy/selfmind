@@ -12,8 +12,6 @@ import (
 	"selfmind/internal/kernel"
 )
 
-const maxAutoSkillContextBytes = 8 * 1024
-
 type SkillSelectTool struct {
 	BaseTool
 	store *control.Store
@@ -27,9 +25,10 @@ func NewSkillSelectTool(store *control.Store) *SkillSelectTool {
 			schema: ToolSchema{
 				Type: "object",
 				Properties: map[string]PropertyDef{
-					"name":         {Type: "string", Description: "Existing active skill name. Omit only to resolve the current work unit's related task binding."},
-					"reason":       {Type: "string", Description: "Short reason this skill applies to the current work unit."},
-					"work_unit_id": {Type: "string", Description: "Optional stable work-unit id returned in plan events. Omit to select the current in-progress work unit."},
+					"candidate_ref": {Type: "string", Description: "Opaque current-work-unit reference shown in the Skill candidate catalogue. Use this for model-selected Skills."},
+					"name":          {Type: "string", Description: "Existing active skill name. Omit only to resolve the current work unit's related task binding."},
+					"reason":        {Type: "string", Description: "Short reason this skill applies to the current work unit."},
+					"work_unit_id":  {Type: "string", Description: "Optional stable work-unit id returned in plan events. Omit to select the current in-progress work unit."},
 				},
 				Required: []string{"reason"},
 			},
@@ -48,12 +47,39 @@ func (t *SkillSelectTool) Execute(args map[string]interface{}) (string, error) {
 		return "", fmt.Errorf("skill_select requires an authenticated run scope")
 	}
 	name, _ := args["name"].(string)
+	candidateRef, _ := args["candidate_ref"].(string)
 	reason, _ := args["reason"].(string)
 	workUnitID, _ := args["work_unit_id"].(string)
 	tenantID := skillStorageTenantID(args)
 	activationSource := "model"
 	expectedSkillKey := ""
-	if strings.TrimSpace(name) == "" {
+	var issuedRef *control.SkillCandidateRef
+	if strings.TrimSpace(candidateRef) != "" {
+		if strings.TrimSpace(workUnitID) == "" {
+			unit, err := t.store.CurrentRunWorkUnit(ContextFromArgs(args), scope.ControlTenantID, scope.RunID)
+			if err != nil {
+				return "", err
+			}
+			if unit == nil {
+				return "", fmt.Errorf("current run has no selectable work unit")
+			}
+			workUnitID = unit.ID
+		}
+		var err error
+		issuedRef, err = t.store.ResolveSkillCandidateRef(ContextFromArgs(args), scope.ControlTenantID,
+			scope.PersonID, scope.RunID, strings.TrimSpace(workUnitID), strings.TrimSpace(candidateRef))
+		if err != nil {
+			return "", err
+		}
+		if issuedRef == nil {
+			return "", newStableToolError(errors.New("candidate ref is not scoped to the current work unit"), "candidate_unknown", "stale_precondition",
+				"That Skill candidate reference was not issued for the current work unit.",
+				"Use a candidate_ref from the current Skill catalogue or refresh it with skills_list.")
+		}
+		tenantID = issuedRef.ControlTenantID
+		name = issuedRef.SkillName
+		expectedSkillKey = issuedRef.SkillKey
+	} else if strings.TrimSpace(name) == "" {
 		binding, err := t.store.TaskSkillBindingForWorkUnit(ContextFromArgs(args), scope.ControlTenantID,
 			scope.PersonID, scope.RunID, strings.TrimSpace(workUnitID))
 		if err != nil {
@@ -66,8 +92,12 @@ func (t *SkillSelectTool) Execute(args map[string]interface{}) (string, error) {
 		name = binding.SkillName
 		expectedSkillKey = binding.SkillKey
 		activationSource = "task_binding"
+	} else {
+		return "", newStableToolError(errors.New("model Skill selection omitted candidate_ref"), "candidate_ref_required", "stale_precondition",
+			"Model-selected Skills must use the candidate_ref issued for this work unit, not a display name.",
+			"Copy candidate_ref from the current Skill catalogue or continue without a Skill.")
 	}
-	info, content, files, err := ReadSkillPayloadForTenant(tenantID, name, "", args)
+	pack, err := ReadSkillPackageForTenant(tenantID, name, args)
 	if err != nil {
 		var notFound *skillNotFoundError
 		if errors.As(err, &notFound) {
@@ -75,6 +105,7 @@ func (t *SkillSelectTool) Execute(args map[string]interface{}) (string, error) {
 		}
 		return "", err
 	}
+	info := pack.Info
 	if info.State != SkillStateActive {
 		return "", fmt.Errorf("skill %q is not active", info.Name)
 	}
@@ -83,47 +114,97 @@ func (t *SkillSelectTool) Execute(args map[string]interface{}) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("resolve skill identity: %w", err)
 	}
-	digest := sha256.Sum256([]byte(content))
-	versionHash := fmt.Sprintf("%x", digest[:])
 	skillKey := control.SkillKey(tenantID, info.Name, info.Scope, info.Source, info.Root, relativePath)
 	if expectedSkillKey != "" && skillKey != expectedSkillKey {
-		return "", fmt.Errorf("related task Skill resolution identity changed; continue without a skill")
+		if issuedRef != nil {
+			_, _ = t.store.RecordSkillCandidateRefUse(ContextFromArgs(args), issuedRef.CandidateRef, "stale", false)
+			return "", newStableToolError(errors.New("candidate Skill resolution identity changed"), "candidate_stale", "stale_precondition",
+				"A different Skill root now wins precedence for this name, so the issued candidate identity is stale.",
+				"Refresh candidates with skills_list and decide again; do not use the same-named replacement through the old reference.")
+		}
+		return "", newStableToolError(errors.New("related task Skill resolution identity changed"), "candidate_stale", "stale_precondition",
+			"The related task's bound Skill now resolves to a different root or source.",
+			"Continue this work unit with ordinary planning; do not guess or select the same-named replacement.")
 	}
-	activation, err := t.store.ActivateSkill(ContextFromArgs(args), control.ActivateSkillInput{
-		IdentityTenantID: scope.ControlTenantID,
-		ControlTenantID:  tenantID,
-		PersonID:         scope.PersonID,
-		WorkspaceID:      scope.WorkspaceID,
-		RunID:            scope.RunID,
-		WorkUnitID:       strings.TrimSpace(workUnitID),
-		ExecutionLane:    scope.ExecutionLane,
-		SkillKey:         skillKey,
-		SkillName:        info.Name,
-		VersionHash:      versionHash,
-		ActivationSource: activationSource,
-		AttachmentMode:   scope.AttachmentMode,
-		ContentRef:       mainPath,
-		ContentBody:      content,
-		CreatedBy:        "external_reconcile",
+	drifted := false
+	driftNotice := ""
+	if issuedRef != nil {
+		if pack.DescriptionHash != issuedRef.DescriptionHash {
+			_, _ = t.store.RecordSkillCandidateRefUse(ContextFromArgs(args), issuedRef.CandidateRef, "stale", false)
+			return "", newStableToolError(errors.New("candidate description hash changed"), "candidate_stale", "stale_precondition",
+				"The Skill description changed after this candidate was presented, so the routing decision is stale.",
+				"Refresh candidates with skills_list and decide again; do not guess from the old reference.")
+		}
+		if pack.PackageHash != issuedRef.PackageHash || pack.VersionHash != issuedRef.VersionHash {
+			if issuedRef.DriftCount >= 1 {
+				_, _ = t.store.RecordSkillCandidateRefUse(ContextFromArgs(args), issuedRef.CandidateRef, "stale", false)
+				return "", newStableToolError(errors.New("candidate package drifted more than once"), "candidate_stale", "stale_precondition",
+					"The Skill package changed more than once after this candidate was presented.",
+					"Abandon this candidate and continue the work unit without a Skill, or refresh candidates before any side effect.")
+			}
+			drifted = true
+			driftNotice = "The description is unchanged but the package changed once after candidate presentation. The current package has been re-delivered before any Skill-guided side effect."
+		}
+	}
+	runtimeBudget := kernel.DefaultRuntimeContextBudget()
+	if bundle, ok := kernel.RuntimeContextBundleFromContext(ContextFromArgs(args)); ok && bundle.Budget.SkillMainBytes > 0 {
+		runtimeBudget = bundle.Budget
+	}
+	activated, err := ActivateSkillPackage(ContextFromArgs(args), t.store, pack, ActivateSkillPackageInput{
+		IdentityTenantID: scope.ControlTenantID, ControlTenantID: tenantID,
+		PersonID: scope.PersonID, WorkspaceID: scope.WorkspaceID, RunID: scope.RunID,
+		WorkUnitID: strings.TrimSpace(workUnitID), ExecutionLane: scope.ExecutionLane,
+		SkillKey: skillKey, ActivationSource: activationSource, AttachmentMode: scope.AttachmentMode,
+		ContentRef: mainPath, CreatedBy: "external_reconcile", Budget: runtimeBudget,
 	})
 	if err != nil {
 		return "", err
 	}
+	activation := activated.Activation
+	active := activated.Context
+	delivery := activated.Delivery
+	if driftNotice != "" && activation.PackageHash != pack.PackageHash {
+		driftNotice = "This work unit already has an immutable Skill activation. Its pinned package was re-delivered; the newer filesystem package applies only to a future activation."
+	}
+	if issuedRef != nil {
+		state := "selected"
+		if drifted {
+			state = "stale"
+		}
+		if _, err := t.store.RecordSkillCandidateRefUse(ContextFromArgs(args), issuedRef.CandidateRef, state, drifted); err != nil {
+			return "", err
+		}
+	}
 	_ = MarkSkillUsed(tenantID, info.Name, args)
-	bounded, truncated := truncateUTF8ByBytes(content, maxAutoSkillContextBytes)
 	out := map[string]interface{}{
 		"success": true, "activation_id": activation.ID, "work_unit_id": activation.WorkUnitID,
-		"work_unit_sequence": activation.WorkUnitSequence, "skill_key": skillKey, "name": info.Name,
-		"version_hash": versionHash, "reason": strings.TrimSpace(reason), "instructions": bounded,
-		"linked_files": files, "truncated": truncated,
+		"work_unit_sequence": activation.WorkUnitSequence, "skill_key": active.Key, "name": active.Name,
+		"version_hash": active.VersionHash, "package_hash": activation.PackageHash,
+		"reason": strings.TrimSpace(reason), "instructions": delivery.Content,
+		"linked_files": active.LinkedFiles, "delivery_mode": delivery.Mode,
+		"delivery_contract_version": delivery.ContractVersion,
+		"delivered_main_hash":       delivery.DeliveredHash, "delivered_main_bytes": delivery.DeliveredBytes,
 		"notice": "These instructions apply only to this work unit. Use skill_fallback if they are wrong or unusable; then replan without selecting another skill for this work unit.",
+	}
+	if driftNotice != "" {
+		out["candidate_notice"] = driftNotice
+		out["candidate_version_hash"] = issuedRef.VersionHash
+		out["candidate_package_hash"] = issuedRef.PackageHash
+		out["selected_version_hash"] = active.VersionHash
+		out["selected_package_hash"] = activation.PackageHash
+		if activation.PackageHash != pack.PackageHash {
+			out["resolved_package_hash"] = pack.PackageHash
+		}
 	}
 	kernel.EmitAgentEvent(kernel.EventChannelFromContext(ContextFromArgs(args)), kernel.AgentEvent{
 		Type: "skill.activated",
 		Payload: map[string]interface{}{
 			"activation_id": activation.ID, "work_unit_id": activation.WorkUnitID,
-			"skill_key": skillKey, "name": info.Name, "version_hash": versionHash,
-			"source": info.Source, "scope": info.Scope, "root": info.Root,
+			"skill_key": active.Key, "name": active.Name, "version_hash": active.VersionHash,
+			"package_hash": activation.PackageHash, "delivery_contract_version": delivery.ContractVersion,
+			"delivery_mode": delivery.Mode, "delivered_main_hash": delivery.DeliveredHash,
+			"delivered_main_bytes": delivery.DeliveredBytes,
+			"source":               info.Source, "scope": info.Scope, "root": info.Root,
 			"activation_source": activation.ActivationSource, "attachment_mode": activation.AttachmentMode,
 		},
 	})

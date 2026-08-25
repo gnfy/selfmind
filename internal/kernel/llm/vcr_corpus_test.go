@@ -74,6 +74,18 @@ func TestCassettesCarryNoVolatileWorkUnitIDs(t *testing.T) {
 	}
 }
 
+func TestCassettesCarryNoVolatileSkillCandidateRefs(t *testing.T) {
+	for _, file := range vcrCorpusFiles(t) {
+		raw, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if ref := vcrSkillCandidateRefPattern.Find(raw); len(ref) > 0 {
+			t.Errorf("%s contains volatile Skill candidate ref %q; re-record it so request-aware VCR placeholders are used", file, ref)
+		}
+	}
+}
+
 func stringValues(value interface{}) []string {
 	switch typed := value.(type) {
 	case string:

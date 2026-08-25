@@ -8,6 +8,9 @@ package runpool
 
 import (
 	"context"
+	"path/filepath"
+	"sort"
+	"strings"
 	"sync"
 )
 
@@ -25,9 +28,12 @@ type StateObserver func(State)
 
 // Pool bounds concurrent jobs and provides per-key serialization.
 type Pool struct {
-	sem      chan struct{} // capacity = worker count (total concurrency bound)
-	mu       sync.Mutex
-	keyLocks map[string]*keyLock
+	sem           chan struct{} // capacity = worker count (total concurrency bound)
+	mu            sync.Mutex
+	keyLocks      map[string]*keyLock
+	pathClaims    map[uint64][]string
+	pathChanged   chan struct{}
+	nextPathClaim uint64
 }
 
 // keyLock is a 1-capacity channel used as a mutex, ref-counted so unused keys
@@ -42,7 +48,10 @@ func New(workers int) *Pool {
 	if workers < 1 {
 		workers = 1
 	}
-	return &Pool{sem: make(chan struct{}, workers), keyLocks: make(map[string]*keyLock)}
+	return &Pool{
+		sem: make(chan struct{}, workers), keyLocks: make(map[string]*keyLock),
+		pathClaims: make(map[uint64][]string), pathChanged: make(chan struct{}),
+	}
 }
 
 // Workers returns the configured worker count.
@@ -76,10 +85,41 @@ func (p *Pool) RunObserved(ctx context.Context, key string, observe StateObserve
 		}
 		defer p.unlockKey(key)
 	}
+	return p.runAfterResource(ctx, waited, notify, fn)
+}
+
+// RunObservedPaths serializes writers whose canonical filesystem roots are
+// equal OR overlap by ancestry. A simple per-string key is insufficient for
+// --add-dir: /repo and /repo/packages/shared are different strings but the
+// first writer can still modify the second tree. All roots are acquired as one
+// claim before a worker slot, so multi-root runs cannot deadlock one another.
+func (p *Pool) RunObservedPaths(ctx context.Context, paths []string, observe StateObserver, fn func() error) error {
+	paths = normalizePaths(paths)
+	waited := false
+	notify := func(state State) {
+		if state == StateWaitingResource || state == StateWaitingWorker {
+			waited = true
+		}
+		if observe != nil {
+			observe(state)
+		}
+	}
+	claimID, err := p.lockPaths(ctx, paths, notify)
+	if err != nil {
+		return err
+	}
+	if claimID != 0 {
+		defer p.unlockPaths(claimID)
+	}
+	return p.runAfterResource(ctx, waited, notify, fn)
+}
+
+func (p *Pool) runAfterResource(ctx context.Context, waited bool, notify StateObserver, fn func() error) error {
 	select {
 	case p.sem <- struct{}{}:
 		// Acquired without waiting.
 	default:
+		waited = true
 		notify(StateWaitingWorker)
 		select {
 		case p.sem <- struct{}{}:
@@ -92,6 +132,92 @@ func (p *Pool) RunObserved(ctx context.Context, key string, observe StateObserve
 		notify(StateRunning)
 	}
 	return fn()
+}
+
+func (p *Pool) lockPaths(ctx context.Context, paths []string, observe StateObserver) (uint64, error) {
+	if len(paths) == 0 {
+		return 0, nil
+	}
+	notified := false
+	for {
+		p.mu.Lock()
+		if !p.pathsConflictLocked(paths) {
+			p.nextPathClaim++
+			id := p.nextPathClaim
+			p.pathClaims[id] = append([]string{}, paths...)
+			p.mu.Unlock()
+			return id, nil
+		}
+		changed := p.pathChanged
+		p.mu.Unlock()
+		if !notified && observe != nil {
+			observe(StateWaitingResource)
+			notified = true
+		}
+		select {
+		case <-changed:
+		case <-ctx.Done():
+			return 0, ctx.Err()
+		}
+	}
+}
+
+func (p *Pool) pathsConflictLocked(candidate []string) bool {
+	for _, held := range p.pathClaims {
+		for _, a := range candidate {
+			for _, b := range held {
+				if pathsOverlap(a, b) {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+func (p *Pool) unlockPaths(id uint64) {
+	if id == 0 {
+		return
+	}
+	p.mu.Lock()
+	delete(p.pathClaims, id)
+	close(p.pathChanged)
+	p.pathChanged = make(chan struct{})
+	p.mu.Unlock()
+}
+
+func normalizePaths(paths []string) []string {
+	seen := make(map[string]struct{}, len(paths))
+	out := make([]string, 0, len(paths))
+	for _, path := range paths {
+		path = strings.TrimSpace(path)
+		if path == "" {
+			continue
+		}
+		if absolute, err := filepath.Abs(path); err == nil {
+			path = absolute
+		}
+		path = filepath.Clean(path)
+		if _, ok := seen[path]; ok {
+			continue
+		}
+		seen[path] = struct{}{}
+		out = append(out, path)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func pathsOverlap(a, b string) bool {
+	return pathWithin(a, b) || pathWithin(b, a)
+}
+
+func pathWithin(root, target string) bool {
+	rel, err := filepath.Rel(root, target)
+	if err != nil {
+		return false
+	}
+	return rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)))
 }
 
 func (p *Pool) lockKey(ctx context.Context, key string, observe StateObserver) error {

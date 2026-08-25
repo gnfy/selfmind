@@ -2,6 +2,7 @@ package router
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"runtime/debug"
 	"strings"
@@ -48,6 +49,13 @@ type Gateway struct {
 	agents chan *kernel.Agent
 }
 
+func (g *Gateway) RuntimeContextBudget() kernel.RuntimeContextBudget {
+	if g == nil || g.agent == nil {
+		return kernel.DefaultRuntimeContextBudget()
+	}
+	return g.agent.RuntimeContextBudget()
+}
+
 // EnableWorkerPool turns on multi-worker execution with the primary agent plus
 // the given extra worker agents. A no-op when extra is empty (keeps the
 // default single-agent path), so default behavior is unchanged.
@@ -75,10 +83,13 @@ func (g *Gateway) runConversation(ctx context.Context, uid, channel, input strin
 		usage  llm.UsageStats
 		runErr error
 	)
+	serialPaths := workspaceSerialPaths(ctx)
 	serialKey := workspaceSerialKey(ctx)
-	poolErr := g.pool.RunObserved(ctx, serialKey, func(state runpool.State) {
+	observe := func(state runpool.State) {
 		payload := map[string]interface{}{"state": string(state)}
-		if serialKey != "" {
+		if len(serialPaths) > 0 {
+			payload["resource"] = fmt.Sprintf("filesystem roots (%d)", len(serialPaths))
+		} else if serialKey != "" {
 			payload["resource"] = "workspace:" + serialKey
 		}
 		kernel.EmitAgentEvent(kernel.EventChannelFromContext(ctx), kernel.AgentEvent{
@@ -86,12 +97,19 @@ func (g *Gateway) runConversation(ctx context.Context, uid, channel, input strin
 			Content: schedulerStateMessage(state),
 			Payload: payload,
 		})
-	}, func() error {
+	}
+	run := func() error {
 		ag := <-g.agents
 		defer func() { g.agents <- ag }()
 		resp, usage, runErr = ag.RunConversation(ctx, uid, channel, input)
 		return runErr
-	})
+	}
+	var poolErr error
+	if len(serialPaths) > 0 {
+		poolErr = g.pool.RunObservedPaths(ctx, serialPaths, observe, run)
+	} else {
+		poolErr = g.pool.RunObserved(ctx, serialKey, observe, run)
+	}
 	if poolErr != nil && runErr == nil {
 		// Cancelled while queued (or pool returned before running fn).
 		return "", usage, poolErr
@@ -128,6 +146,17 @@ func workspaceSerialKey(ctx context.Context) string {
 		return "" // read-only turn: safe to run concurrently on this workspace
 	}
 	return ws.ID
+}
+
+func workspaceSerialPaths(ctx context.Context) []string {
+	ws, ok := kernel.WorkspaceContextFromContext(ctx)
+	if !ok {
+		return nil
+	}
+	if strategy, ok := kernel.TaskStrategyFromContext(ctx); ok && !strategy.MayWriteWorkspace() {
+		return nil
+	}
+	return ws.ContextRoots()
 }
 
 func NewGateway(
@@ -410,18 +439,44 @@ func (g *Gateway) directCasualReply(input string) (string, bool) {
 }
 
 func (g *Gateway) handleSkill(ctx context.Context, unifiedUID, channel, input string) (string, llm.UsageStats, error) {
-	skillName := trimKnownPrefix(input, []string{"/skill ", "/s "})
+	resolvedInput := trimKnownPrefix(input, []string{"/skill ", "/s "})
+	skillName, instruction, _ := strings.Cut(strings.TrimSpace(resolvedInput), " ")
+	instruction = strings.TrimSpace(instruction)
 	if skillName == "" {
 		return "Please specify the skill to run.", llm.UsageStats{}, nil
 	}
 	if g == nil || g.agent == nil || g.agent.Dispatcher() == nil {
 		return "", llm.UsageStats{}, fmt.Errorf("skill dispatcher is not configured")
 	}
-	resp, err := g.agent.Dispatcher().Dispatch("skill:"+skillName, map[string]interface{}{
-		"input":      skillName,
+	resolved, err := g.agent.Dispatcher().Dispatch("skill_invocation_resolve", map[string]interface{}{
+		"command": skillName, "instruction": instruction,
 		"_tenant_id": unifiedUID,
 	})
-	return resp, llm.UsageStats{}, err
+	if err != nil {
+		return "", llm.UsageStats{}, err
+	}
+	var invocation struct {
+		Found       bool   `json:"found"`
+		Kind        string `json:"kind"`
+		Prompt      string `json:"prompt"`
+		Name        string `json:"name"`
+		SkillKey    string `json:"skill_key"`
+		VersionHash string `json:"version_hash"`
+		PackageHash string `json:"package_hash"`
+	}
+	if err := json.Unmarshal([]byte(resolved), &invocation); err != nil {
+		return "", llm.UsageStats{}, fmt.Errorf("decode Skill invocation: %w", err)
+	}
+	if !invocation.Found {
+		return fmt.Sprintf("Skill %q was not found.", skillName), llm.UsageStats{}, nil
+	}
+	if invocation.Kind == "skill" {
+		ctx = kernel.WithExplicitSkillInvocation(ctx, kernel.ExplicitSkillInvocation{
+			Name: invocation.Name, SkillKey: invocation.SkillKey,
+			VersionHash: invocation.VersionHash, PackageHash: invocation.PackageHash,
+		})
+	}
+	return g.runConversation(ctx, unifiedUID, channel, invocation.Prompt)
 }
 
 // DispatchTool runs a single management tool through the agent's backend and

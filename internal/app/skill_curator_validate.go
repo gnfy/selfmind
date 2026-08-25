@@ -2,15 +2,26 @@ package app
 
 import (
 	"fmt"
+	"path/filepath"
+	"sort"
 	"strings"
 
 	"selfmind/internal/control"
+	"selfmind/internal/kernel"
+	"selfmind/internal/tools"
 )
 
 func validateCuratedSkillContent(content, name string) error {
+	return validateCuratedSkillPackageShape(content, nil, name)
+}
+
+func validateCuratedSkillPackageShape(content string, resources map[string]string, name string) error {
 	content = strings.TrimSpace(content)
-	if content == "" || len(content) > 32*1024 {
-		return fmt.Errorf("curated skill content must be non-empty and at most 32 KiB")
+	if content == "" {
+		return fmt.Errorf("curated Skill main must be non-empty")
+	}
+	if err := tools.ValidateManagedSkillDescription(content); err != nil {
+		return fmt.Errorf("curated %w", err)
 	}
 	lower := strings.ToLower(content)
 	if !strings.HasPrefix(content, "---\n") || !strings.Contains(lower, "name: "+strings.ToLower(name)) {
@@ -25,6 +36,57 @@ func validateCuratedSkillContent(content, name string) error {
 	sections := splitCuratedSkillSections(content)
 	if sections.duplicate || strings.Join(sections.order, "\x00") != strings.Join(sectionOrder, "\x00") {
 		return fmt.Errorf("curated skill content must contain each required level-two section exactly once and in canonical order")
+	}
+	total := len(content)
+	for path, body := range resources {
+		clean := filepath.ToSlash(filepath.Clean(strings.TrimSpace(path)))
+		if clean == "." || strings.HasPrefix(clean, "../") || !strings.HasPrefix(clean, "references/") {
+			return fmt.Errorf("curated Skill resources must use relative references/ paths: %q", path)
+		}
+		if strings.TrimSpace(body) == "" {
+			return fmt.Errorf("curated Skill resource %q is empty", path)
+		}
+		total += len(body)
+	}
+	if total > 32*1024 {
+		return fmt.Errorf("curated Skill package must be at most 32 KiB")
+	}
+	return nil
+}
+
+func curatedSkillDelivery(content string, resources map[string]string, budget kernel.RuntimeContextBudget) kernel.SkillMainDelivery {
+	if budget.SkillMainBytes <= 0 || budget.SkillMainTokens <= 0 {
+		budget = kernel.DefaultRuntimeContextBudget()
+	}
+	paths := make([]string, 0, len(resources))
+	for path := range resources {
+		paths = append(paths, filepath.ToSlash(filepath.Clean(strings.TrimSpace(path))))
+	}
+	sort.Strings(paths)
+	return kernel.BuildSkillMainDeliveryWithinBudget(content,
+		kernel.ActiveSkillDeliveryBodyBudget(budget.SkillMainBytes, paths), budget.SkillMainTokens)
+}
+
+func validateCuratedSkillCreateDelivery(content string, resources map[string]string, budget kernel.RuntimeContextBudget) error {
+	delivery := curatedSkillDelivery(content, resources, budget)
+	if delivery.Mode != kernel.SkillDeliveryModeFull {
+		return fmt.Errorf("curated Skill main must be delivered in full under the production byte, token, envelope, and resource-manifest budget; move optional detail into references/ resources")
+	}
+	return nil
+}
+
+func validateCuratedSkillPatchDelivery(active, candidate string, resources map[string]string, budget kernel.RuntimeContextBudget) error {
+	activeDelivery := curatedSkillDelivery(active, resources, budget)
+	candidateDelivery := curatedSkillDelivery(candidate, resources, budget)
+	if activeDelivery.Mode == kernel.SkillDeliveryModeFull {
+		if candidateDelivery.Mode != kernel.SkillDeliveryModeFull {
+			return fmt.Errorf("curator PATCH cannot make a fully delivered Skill main require paging")
+		}
+		return nil
+	}
+	if candidateDelivery.SourceBytes > activeDelivery.SourceBytes || candidateDelivery.SourceTokens > activeDelivery.SourceTokens {
+		return fmt.Errorf("curator PATCH cannot grow an already paged legacy Skill main: bytes %d>%d or tokens %d>%d",
+			candidateDelivery.SourceBytes, activeDelivery.SourceBytes, candidateDelivery.SourceTokens, activeDelivery.SourceTokens)
 	}
 	return nil
 }

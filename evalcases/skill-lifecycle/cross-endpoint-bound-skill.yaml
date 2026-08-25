@@ -48,6 +48,10 @@ assert_state:
     payload_contains: '"skill_directory_chars":0'
     count_gte: 1
   - on: events
+    type: context.selected
+    payload_contains: '"skill_delivery_valid":true'
+    count_gte: 1
+  - on: events
     type: tool.started
     payload_contains: '"tool_origin":"builtin"'
     count_gte: 1

@@ -89,8 +89,9 @@ var validCIPlatforms = map[string]struct{}{
 }
 
 type Turn struct {
-	Input   string `yaml:"input" json:"input"`
-	Channel string `yaml:"channel" json:"channel,omitempty"`
+	Input           string   `yaml:"input" json:"input"`
+	Channel         string   `yaml:"channel" json:"channel,omitempty"`
+	AdditionalRoots []string `yaml:"additional_roots,omitempty" json:"additional_roots,omitempty"`
 	// PlatformUserID overrides the eval identity for this turn only. It lets a
 	// case simulate a *different* platform user (a "stranger") mid-case to assert
 	// identity isolation: person-scoped task/run state must not leak across
@@ -174,6 +175,9 @@ func (c *Case) normalize() error {
 		c.Turns[i].Input = strings.TrimSpace(c.Turns[i].Input)
 		c.Turns[i].Channel = strings.TrimSpace(c.Turns[i].Channel)
 		c.Turns[i].PlatformUserID = strings.TrimSpace(c.Turns[i].PlatformUserID)
+		for j := range c.Turns[i].AdditionalRoots {
+			c.Turns[i].AdditionalRoots[j] = strings.TrimSpace(c.Turns[i].AdditionalRoots[j])
+		}
 	}
 	filtered := c.Turns[:0]
 	for _, t := range c.Turns {

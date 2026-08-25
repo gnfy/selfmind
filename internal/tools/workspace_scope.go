@@ -3,10 +3,13 @@ package tools
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"time"
+
+	"selfmind/internal/executionenv"
 )
 
 const ExecutionProfileWatchFinalization = "watch-finalization"
@@ -21,6 +24,7 @@ type ExecutionScope struct {
 	WorkspaceID   string
 	WorkspaceRoot string
 	AllowedRoots  []string
+	RootBindings  []executionenv.RootBinding
 	TaskID        string
 	RunID         string
 	Channel       string
@@ -368,11 +372,59 @@ func scopeAllowsPath(scope ExecutionScope, target string) bool {
 		if err != nil {
 			continue
 		}
-		if isWithin(filepath.Clean(absRoot), filepath.Clean(target)) {
+		lexicalRoot := filepath.Clean(absRoot)
+		canonicalRoot := lexicalRoot
+		if resolved, evalErr := filepath.EvalSymlinks(lexicalRoot); evalErr == nil {
+			canonicalRoot = filepath.Clean(resolved)
+		}
+		canonicalTarget, targetErr := canonicalContainmentPath(target)
+		if targetErr != nil {
+			continue
+		}
+		// Check both the lexical and symlink-resolved path. The lexical check
+		// prevents an explicit ../ escape; the resolved check prevents a symlink
+		// inside an allowed root from pointing a file tool outside it.
+		lexicalTarget := filepath.Clean(target)
+		lexicallyAllowed := isWithin(lexicalRoot, lexicalTarget) || isWithin(canonicalRoot, lexicalTarget)
+		if lexicallyAllowed && isWithin(canonicalRoot, canonicalTarget) {
 			return true
 		}
 	}
 	return false
+}
+
+// canonicalContainmentPath resolves symlinks for an existing target. For a new
+// write target, it walks to the nearest existing ancestor, resolves that
+// ancestor, then appends the still-missing suffix. This closes the common
+// root/link/new-file escape without requiring the destination to exist yet.
+func canonicalContainmentPath(target string) (string, error) {
+	absolute, err := filepath.Abs(target)
+	if err != nil {
+		return "", err
+	}
+	absolute = filepath.Clean(absolute)
+	current := absolute
+	var missing []string
+	for {
+		if _, statErr := os.Lstat(current); statErr == nil {
+			resolved, evalErr := filepath.EvalSymlinks(current)
+			if evalErr != nil {
+				return "", evalErr
+			}
+			for i := len(missing) - 1; i >= 0; i-- {
+				resolved = filepath.Join(resolved, missing[i])
+			}
+			return filepath.Clean(resolved), nil
+		} else if !os.IsNotExist(statErr) {
+			return "", statErr
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			return absolute, nil
+		}
+		missing = append(missing, filepath.Base(current))
+		current = parent
+	}
 }
 
 func isWithin(root, target string) bool {

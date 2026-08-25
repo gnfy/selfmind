@@ -53,6 +53,21 @@ func TestLifecycleHandoffAcceptsOnlySuccessfulBuiltInWatcherResults(t *testing.T
 	}
 }
 
+func TestModelVisibleSkillToolResultRemovesControlIdentity(t *testing.T) {
+	raw := `{"success":true,"activation_id":"a1","work_unit_id":"wu","work_unit_sequence":2,"skill_key":"secret-key","name":"flow","version_hash":"secret-version","package_hash":"secret-package","instructions":"do it","linked_files":["references/a.md"],"delivery_mode":"full","delivered_main_hash":"secret-delivery","notice":"bounded"}`
+	visible := modelVisibleSkillToolResult("skill_select", raw)
+	for _, want := range []string{`"activation_id":"a1"`, `"name":"flow"`, `"instructions":"do it"`, `"delivery_mode":"full"`} {
+		if !strings.Contains(visible, want) {
+			t.Fatalf("model result lost %s: %s", want, visible)
+		}
+	}
+	for _, hidden := range []string{"work_unit", "skill_key", "version_hash", "package_hash", "delivered_main_hash", "secret-"} {
+		if strings.Contains(visible, hidden) {
+			t.Fatalf("model result leaked %q: %s", hidden, visible)
+		}
+	}
+}
+
 type cancelledOutcomeLedger struct {
 	recorded bool
 	ctxErr   error

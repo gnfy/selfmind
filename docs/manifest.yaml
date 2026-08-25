@@ -53,7 +53,7 @@ documents:
     state: current
     language: zh-CN
     translation_of: docs/command-reference.md
-    source_hash: cf3fc528fe25d98f
+    source_hash: 86683635cb256521
   - path: docs/config-reference.md
     title: Configuration Reference
     class: guide

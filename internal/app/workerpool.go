@@ -1,6 +1,7 @@
 package app
 
 import (
+	"fmt"
 	"os"
 	"strconv"
 	"strings"
@@ -32,10 +33,10 @@ func workerCount() int {
 
 // MaybeEnableWorkerPool turns on multi-worker execution on the gateway when
 // SELFMIND_WORKERS>1. It builds N-1 fully independent worker agents (each its
-// own InitAgent + InitTools, sharing only the concurrency-safe memory/skill
+// own InitAgent + InitTools, sharing only the concurrency-safe memory/control
 // stores and the process-global auth manager) and hands them to the gateway.
 // A no-op at the default (N=1), so the default path is unchanged.
-func MaybeEnableWorkerPool(gw *router.Gateway, mem *memory.MemoryManager, cfg *config.Config, skillStore *kernel.SkillStore, tenantID string, prompts *promptassets.Snapshot, controlStore *control.Store) (int, error) {
+func MaybeEnableWorkerPool(gw *router.Gateway, mem *memory.MemoryManager, cfg *config.Config, tenantID string, prompts *promptassets.Snapshot, controlStore *control.Store) (int, error) {
 	n := workerCount()
 	if gw == nil || n <= 1 {
 		return 1, nil
@@ -46,13 +47,26 @@ func MaybeEnableWorkerPool(gw *router.Gateway, mem *memory.MemoryManager, cfg *c
 		if err != nil {
 			return 1 + len(extra), err
 		}
-		d, err := InitTools(mem, cfg, a, skillStore, tenantID, prompts, controlStore)
+		d, err := InitTools(mem, cfg, a, tenantID, prompts, controlStore)
 		if err != nil {
 			return 1 + len(extra), err
 		}
 		a.SetBackend(d)
 		extra = append(extra, a)
 	}
+	if err := validateWorkerRuntimeContextBudgets(gw.RuntimeContextBudget(), extra); err != nil {
+		return 1 + len(extra), err
+	}
 	gw.EnableWorkerPool(extra)
 	return 1 + len(extra), nil
+}
+
+func validateWorkerRuntimeContextBudgets(primary kernel.RuntimeContextBudget, workers []*kernel.Agent) error {
+	for index, worker := range workers {
+		budget := worker.RuntimeContextBudget()
+		if budget != primary {
+			return fmt.Errorf("worker %d runtime context budget differs from the primary agent: primary=%+v worker=%+v", index+2, primary, budget)
+		}
+	}
+	return nil
 }

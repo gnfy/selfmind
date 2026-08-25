@@ -471,6 +471,10 @@ func (s *Store) EnqueueRecoveredApprovalContinuation(ctx context.Context, approv
 		q.ID = "queue_" + uuid.NewString()
 	}
 	q.Status, q.CreatedAt = QueueStatusQueued, time.Now()
+	rootsJSON, err := encodeExecutionRoots(q.ExecutionRoots)
+	if err != nil {
+		return nil, false, fmt.Errorf("encode recovered execution roots: %w", err)
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, false, err
@@ -492,11 +496,11 @@ func (s *Store) EnqueueRecoveredApprovalContinuation(ctx context.Context, approv
 	}
 	notBefore := int64(0)
 	_, err = tx.ExecContext(ctx,
-		`INSERT INTO task_queue (id, tenant_id, person_id, channel, platform, platform_user_id, content, approval_mode, workspace_id, task_id, idempotency_key, class, priority, not_before, status, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`INSERT INTO task_queue (id, tenant_id, person_id, channel, platform, platform_user_id, content, approval_mode, workspace_id, execution_roots_json, task_id, idempotency_key, class, priority, not_before, status, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(tenant_id, idempotency_key) WHERE idempotency_key != '' DO NOTHING`,
 		q.ID, q.TenantID, q.PersonID, q.Channel, q.Platform, q.PlatformUserID, q.Content, q.ApprovalMode,
-		q.WorkspaceID, q.TaskID, q.IdempotencyKey, q.Class, q.Priority, notBefore, q.Status, q.CreatedAt.Unix())
+		q.WorkspaceID, rootsJSON, q.TaskID, q.IdempotencyKey, q.Class, q.Priority, notBefore, q.Status, q.CreatedAt.Unix())
 	if err != nil {
 		return nil, false, err
 	}
@@ -755,6 +759,10 @@ func (s *Store) RespondParkedApprovalAndEnqueue(ctx context.Context, tenantID, p
 	}
 	q.Status = QueueStatusQueued
 	q.CreatedAt = time.Now()
+	rootsJSON, err := encodeExecutionRoots(q.ExecutionRoots)
+	if err != nil {
+		return nil, nil, fmt.Errorf("encode parked approval execution roots: %w", err)
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, nil, err
@@ -775,11 +783,11 @@ func (s *Store) RespondParkedApprovalAndEnqueue(ctx context.Context, tenantID, p
 		notBefore = 0
 	}
 	_, err = tx.ExecContext(ctx,
-		`INSERT INTO task_queue (id, tenant_id, person_id, channel, platform, platform_user_id, content, approval_mode, workspace_id, task_id, idempotency_key, class, priority, not_before, status, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`INSERT INTO task_queue (id, tenant_id, person_id, channel, platform, platform_user_id, content, approval_mode, workspace_id, execution_roots_json, task_id, idempotency_key, class, priority, not_before, status, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(tenant_id, idempotency_key) WHERE idempotency_key != '' DO NOTHING`,
 		q.ID, q.TenantID, q.PersonID, q.Channel, q.Platform, q.PlatformUserID, q.Content, q.ApprovalMode,
-		q.WorkspaceID, q.TaskID, q.IdempotencyKey, q.Class, q.Priority, notBefore, q.Status, q.CreatedAt.Unix())
+		q.WorkspaceID, rootsJSON, q.TaskID, q.IdempotencyKey, q.Class, q.Priority, notBefore, q.Status, q.CreatedAt.Unix())
 	if err != nil {
 		return nil, nil, err
 	}

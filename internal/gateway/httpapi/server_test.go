@@ -13,8 +13,40 @@ import (
 	"selfmind/internal/control"
 	"selfmind/internal/gateway/api"
 	"selfmind/internal/gateway/router"
+	"selfmind/internal/kernel"
+	"selfmind/internal/kernel/llm"
 	"selfmind/internal/tools"
 )
+
+func TestMessageContextBudgetUsesExecutingAgentWindow(t *testing.T) {
+	tests := []struct {
+		name          string
+		contextTokens int
+	}{
+		{name: "unknown", contextTokens: 0},
+		{name: "32k", contextTokens: 32 * 1024},
+		{name: "128k", contextTokens: 128 * 1024},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := &Server{}
+			if tt.contextTokens > 0 {
+				agent := kernel.NewAgent(nil, nil, nil, "test", 1, 1, nil)
+				agent.SetContextWindow(tt.contextTokens)
+				server.Gateway = router.NewGateway(nil, nil, agent, nil)
+			}
+			got := server.messageContextBudget(llm.UsageStats{InputTokens: 7, OutputTokens: 3})
+			want := kernel.RuntimeContextBudgetForContextTokens(tt.contextTokens)
+			if got.SkillMainBytes != want.SkillMainBytes || got.SkillMainTokens != want.SkillMainTokens ||
+				got.SkillCatalogBytes != want.SkillCatalogBytes || got.SkillCatalogTokens != want.SkillCatalogTokens {
+				t.Fatalf("Skill budget = %+v, want %+v", got, want)
+			}
+			if got.EstimatedInputTokens != 7 || got.EstimatedOutputTokens != 3 {
+				t.Fatalf("usage = %+v", got)
+			}
+		})
+	}
+}
 
 func TestMessageRequestFromFeishuEvent(t *testing.T) {
 	payload := map[string]interface{}{
@@ -240,6 +272,16 @@ func TestGatewayStatusEndpoint(t *testing.T) {
 		RuntimeStatusFunc: func() api.GatewayRuntimeInfo {
 			return api.GatewayRuntimeInfo{PID: 123, Addr: "127.0.0.1:8765", State: "running"}
 		},
+		ToolSchemaReportFunc: func() []tools.ToolSchemaReport {
+			return []tools.ToolSchemaReport{
+				{Name: "read_file", Status: tools.ToolSchemaActive, Exposure: tools.ToolExposureDirect},
+				{Name: "skill_view", Status: tools.ToolSchemaRepaired, Exposure: tools.ToolExposureHidden},
+				{Name: "mcp_bad", Status: tools.ToolSchemaQuarantined, Exposure: tools.ToolExposureDirect},
+			}
+		},
+		ToolCatalogPreviewFunc: func(context.Context) llm.ToolCatalogPreview {
+			return llm.ToolCatalogPreview{Protocol: "openai_chat", Count: 2, Names: []string{"read_file", "finish_run"}, Hash: "catalog123", WireBytes: 512}
+		},
 	}
 	req := httptest.NewRequest(http.MethodGet, "/v1/gateway/status", nil)
 	rec := httptest.NewRecorder()
@@ -262,6 +304,42 @@ func TestGatewayStatusEndpoint(t *testing.T) {
 	}
 	if status.MCP.Configured != 2 || status.MCP.Connected != 1 || status.MCP.Failed != 1 || len(status.MCP.Failures) != 1 {
 		t.Fatalf("status payload does not expose MCP health: %+v", status.MCP)
+	}
+	if !status.ToolCatalog.Valid() || status.ToolCatalog.Hash != "catalog123" || status.ToolCatalog.Count != 2 {
+		t.Fatalf("status payload does not expose provider tool catalogue: %+v", status.ToolCatalog)
+	}
+	if status.ToolSchemas.RegisteredActive != 2 || status.ToolSchemas.Active != 2 || status.ToolSchemas.Hidden != 1 ||
+		status.ToolSchemas.ProviderVisible != 2 || status.ToolSchemas.Repaired != 1 || status.ToolSchemas.Quarantined != 1 {
+		t.Fatalf("status payload does not distinguish registry, hidden, and provider-visible tools: %+v", status.ToolSchemas)
+	}
+}
+
+func TestGatewayToolCatalogProbeRequiresLocalControlAndUsesDaemonProbe(t *testing.T) {
+	t.Setenv("SELF_GATEWAY_TOKEN", "")
+	called := false
+	daemon := &Server{
+		LocalControlToken: "local-secret",
+		ToolCatalogProbeFunc: func(context.Context) api.ProviderToolCatalogProbeResponse {
+			called = true
+			return api.ProviderToolCatalogProbeResponse{OK: true, Catalog: llm.ToolCatalogPreview{Protocol: "openai_chat", Count: 3}}
+		},
+	}
+
+	request := httptest.NewRequest(http.MethodPost, "/v1/gateway/tool-catalog/probe", strings.NewReader(`{}`))
+	request.RemoteAddr = "127.0.0.1:4100"
+	recorder := httptest.NewRecorder()
+	daemon.Handler().ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusForbidden || called {
+		t.Fatalf("unauthenticated probe status=%d called=%v", recorder.Code, called)
+	}
+
+	request = httptest.NewRequest(http.MethodPost, "/v1/gateway/tool-catalog/probe", strings.NewReader(`{}`))
+	request.RemoteAddr = "127.0.0.1:4100"
+	request.Header.Set(api.LocalControlTokenHeader, "local-secret")
+	recorder = httptest.NewRecorder()
+	daemon.Handler().ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK || !called || !strings.Contains(recorder.Body.String(), `"protocol":"openai_chat"`) {
+		t.Fatalf("authenticated probe status=%d called=%v body=%s", recorder.Code, called, recorder.Body.String())
 	}
 }
 
@@ -349,7 +427,7 @@ func TestGatewayContextIncludesAttachments(t *testing.T) {
 	}
 	task := &control.Task{ID: "task_1", WorkspaceID: "ws_1"}
 	workspace := &control.Workspace{ID: "ws_1", LocalPath: "/repo"}
-	content := daemon.coordinator().withGatewayContext("please inspect", identity, task, workspace, []api.MessageAttachment{{
+	content := daemon.coordinator().withGatewayContext("please inspect", identity, task, workspace, nil, []api.MessageAttachment{{
 		Kind:     "file",
 		Path:     "/tmp/report.pdf",
 		MimeType: "application/pdf",

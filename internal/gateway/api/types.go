@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"selfmind/internal/control"
+	"selfmind/internal/executionenv"
 	"selfmind/internal/kernel/llm"
 )
 
@@ -49,15 +50,25 @@ type GatewayRuntimeInfo struct {
 }
 
 type GatewayStatusResponse struct {
-	Runtime        GatewayRuntimeInfo `json:"runtime"`
-	State          string             `json:"state"`
-	Draining       bool               `json:"draining"`
-	DrainReason    string             `json:"drain_reason,omitempty"`
-	ActiveRuns     []ActiveRunStatus  `json:"active_runs"`
-	ActiveRunCount int                `json:"active_run_count"`
-	ToolSchemas    ToolSchemaHealth   `json:"tool_schemas,omitempty"`
-	MCP            MCPHealth          `json:"mcp,omitempty"`
-	StoreSchema    StoreSchemaHealth  `json:"store_schema,omitempty"`
+	Runtime        GatewayRuntimeInfo     `json:"runtime"`
+	State          string                 `json:"state"`
+	Draining       bool                   `json:"draining"`
+	DrainReason    string                 `json:"drain_reason,omitempty"`
+	ActiveRuns     []ActiveRunStatus      `json:"active_runs"`
+	ActiveRunCount int                    `json:"active_run_count"`
+	ToolSchemas    ToolSchemaHealth       `json:"tool_schemas,omitempty"`
+	ToolCatalog    llm.ToolCatalogPreview `json:"tool_catalog,omitempty"`
+	MCP            MCPHealth              `json:"mcp,omitempty"`
+	StoreSchema    StoreSchemaHealth      `json:"store_schema,omitempty"`
+}
+
+type ProviderToolCatalogProbeResponse struct {
+	OK        bool                   `json:"ok"`
+	Provider  string                 `json:"provider,omitempty"`
+	Model     string                 `json:"model,omitempty"`
+	LatencyMS int64                  `json:"latency_ms"`
+	Catalog   llm.ToolCatalogPreview `json:"catalog"`
+	Error     string                 `json:"error,omitempty"`
 }
 
 type MCPServerFailure struct {
@@ -79,23 +90,33 @@ type StoreSchemaHealth struct {
 }
 
 type ToolSchemaHealth struct {
-	Active      int `json:"active"`
-	Repaired    int `json:"repaired"`
-	Quarantined int `json:"quarantined"`
+	// Active is retained for older thin clients. It has the same value as
+	// RegisteredActive and does not mean provider-visible.
+	Active           int `json:"active"`
+	RegisteredActive int `json:"registered_active"`
+	Hidden           int `json:"hidden"`
+	ProviderVisible  int `json:"provider_visible"`
+	Repaired         int `json:"repaired"`
+	Quarantined      int `json:"quarantined"`
 }
 
 type MessageRequest struct {
-	TenantID       string              `json:"tenant_id"`
-	Platform       string              `json:"platform"`
-	PlatformUserID string              `json:"platform_user_id"`
-	DisplayName    string              `json:"display_name"`
-	Channel        string              `json:"channel"`
-	Content        string              `json:"content"`
-	WorkspaceID    string              `json:"workspace_id"`
-	ClientCWD      string              `json:"client_cwd,omitempty"`
-	TaskID         string              `json:"task_id"`
-	Async          bool                `json:"async"`
-	Attachments    []MessageAttachment `json:"attachments,omitempty"`
+	TenantID       string `json:"tenant_id"`
+	Platform       string `json:"platform"`
+	PlatformUserID string `json:"platform_user_id"`
+	DisplayName    string `json:"display_name"`
+	Channel        string `json:"channel"`
+	Content        string `json:"content"`
+	WorkspaceID    string `json:"workspace_id"`
+	ClientCWD      string `json:"client_cwd,omitempty"`
+	// ClientAdditionalRoots is the repeatable local CLI --add-dir surface. It
+	// names paths on the daemon host and is therefore accepted only from an
+	// authenticated loopback CLI request. The gateway canonicalizes these into
+	// ExecutionRoots before queueing or starting a run.
+	ClientAdditionalRoots []string            `json:"client_additional_roots,omitempty"`
+	TaskID                string              `json:"task_id"`
+	Async                 bool                `json:"async"`
+	Attachments           []MessageAttachment `json:"attachments,omitempty"`
 	// AllowWeb opts this turn into web tools even though the default policy keeps
 	// them off. Used by scheduled jobs that must look things up (e.g. a market
 	// summary). It does not force web use; it only makes the tools available.
@@ -114,6 +135,13 @@ type MessageRequest struct {
 	// EffectKey deduplicates the logical products of durable system work across
 	// retry runs. It is derived from the queue row, never from a client.
 	EffectKey string `json:"-"`
+	// ExecutionRoots is the gateway-resolved, durable run snapshot. It is never
+	// accepted from the wire; queued and recovery paths populate it internally.
+	ExecutionRoots []executionenv.RootBinding `json:"-"`
+	// AdditionalRootsRequested distinguishes an explicit local --add-dir
+	// request from a durable request whose bindings were restored internally.
+	// It prevents a continuation from changing an in-flight run's authority.
+	AdditionalRootsRequested bool `json:"-"`
 	// SourceApprovalID links a daemon-originated continuation to the parked
 	// approval that caused it. It is durable event provenance, never accepted
 	// from a wire client and never inferred later from prompt prose.
@@ -189,6 +217,10 @@ type ContextBudgetInfo struct {
 	WorkspaceChars        int `json:"workspace_chars,omitempty"`
 	TaskChars             int `json:"task_chars,omitempty"`
 	MemoryChars           int `json:"memory_chars,omitempty"`
+	SkillMainBytes        int `json:"skill_main_bytes,omitempty"`
+	SkillMainTokens       int `json:"skill_main_tokens,omitempty"`
+	SkillCatalogBytes     int `json:"skill_catalog_bytes,omitempty"`
+	SkillCatalogTokens    int `json:"skill_catalog_tokens,omitempty"`
 	EstimatedInputTokens  int `json:"estimated_input_tokens,omitempty"`
 	EstimatedOutputTokens int `json:"estimated_output_tokens,omitempty"`
 }

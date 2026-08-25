@@ -367,6 +367,9 @@ func (a *OpenAIAdapter) FingerprintRequest(ctx context.Context, req ChatRequest,
 }
 
 func (a *OpenAIAdapter) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, error) {
+	if err := EnsureProviderToolCatalog(ctx, a, req.Tools); err != nil {
+		return nil, err
+	}
 	wireReq := a.requestWithQuirks(req)
 	openaiReq := openAIRequestFromChat(a.Model, wireReq, false)
 	a.applyOptions(ctx, &openaiReq, wireReq)
@@ -421,6 +424,9 @@ func (a *OpenAIAdapter) Chat(ctx context.Context, req ChatRequest) (*ChatRespons
 }
 
 func (a *OpenAIAdapter) StreamChat(ctx context.Context, req ChatRequest) (<-chan StreamEvent, error) {
+	if err := EnsureProviderToolCatalog(ctx, a, req.Tools); err != nil {
+		return nil, err
+	}
 	wireReq := a.requestWithQuirks(req)
 	openaiReq := openAIRequestFromChat(a.Model, wireReq, true)
 	a.applyOptions(ctx, &openaiReq, wireReq)
@@ -742,6 +748,10 @@ func (a *OpenRouterAdapter) StreamChat(ctx context.Context, req ChatRequest) (<-
 // GeminiAdapter 适配 Google Gemini API (OpenAI 兼容模式)
 func (a *OpenAIAdapter) SupportsNativeTools() bool { return a.Quirks.SupportsTools }
 
+func (a *OpenAIAdapter) PreviewToolCatalog(_ context.Context, tools []ToolDefinition) ToolCatalogPreview {
+	return previewOpenAIToolCatalog(a.Quirks, tools)
+}
+
 type GeminiAdapter struct {
 	OpenAIAdapter
 }
@@ -915,6 +925,9 @@ func (a *OpenRouterAdapter) apiKey() string {
 }
 
 func (a *OpenRouterAdapter) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, error) {
+	if err := EnsureProviderToolCatalog(ctx, a, req.Tools); err != nil {
+		return nil, err
+	}
 	options := OpenAIAdapter{
 		MaxTokens:       a.MaxTokens,
 		ReasoningEffort: a.ReasoningEffort,
@@ -1010,3 +1023,7 @@ func (a *OpenRouterAdapter) ChatCompletion(ctx context.Context, messages []Messa
 }
 
 func (a *OpenRouterAdapter) SupportsNativeTools() bool { return a.Quirks.SupportsTools }
+
+func (a *OpenRouterAdapter) PreviewToolCatalog(_ context.Context, tools []ToolDefinition) ToolCatalogPreview {
+	return previewOpenAIToolCatalog(a.Quirks, tools)
+}

@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -22,6 +23,7 @@ import (
 	appcore "selfmind/internal/app"
 	"selfmind/internal/control"
 	"selfmind/internal/gateway/api"
+	"selfmind/internal/kernel/llm"
 	"selfmind/internal/platform/config"
 	gatewayrt "selfmind/internal/runtime/gateway"
 	"selfmind/internal/tools"
@@ -61,7 +63,7 @@ func (a *App) doctor(args []string) int {
 	store, err := control.OpenStore(dataDir)
 	if err != nil {
 		fmt.Fprintf(a.stderr, "doctor: cannot open control store: %v\n", err)
-		return 1
+		return 2
 	}
 	defer store.Close()
 
@@ -74,7 +76,7 @@ func (a *App) doctor(args []string) int {
 	identity, err := resolveDoctorIdentity(ctx, store, a.tenantID(), platformUserID())
 	if err != nil {
 		fmt.Fprintf(a.stderr, "doctor: cannot resolve identity: %v\n", err)
-		return 1
+		return 2
 	}
 
 	configDiagnostics := a.collectConfigDiagnostics()
@@ -89,6 +91,9 @@ func (a *App) doctor(args []string) int {
 			fullReport += "\n\n" + formatSkillPartitionDiagnostics(tools.SkillMigrationReport{}, storageErr, tools.PersonPartitionCleanupReport{}, nil)
 		} else {
 			skillRoot := storage.BaseDir()
+			descriptionIssues, descriptionErr := tools.InspectSkillDescriptionsForTenant(a.tenantID(),
+				tools.WithSkillStorage(map[string]interface{}{"_tenant_id": a.tenantID()}, storage))
+			fullReport += "\n\n" + formatSkillDescriptionDiagnostics(descriptionIssues, descriptionErr)
 			migration, migrationErr := tools.MigratePersonSkillsToControl(skillRoot, a.tenantID(), false, tools.DefaultSkillMigrationGrace)
 			knownPersons, knownErr := store.ListPersonIDs(ctx)
 			cleanup := tools.PersonPartitionCleanupReport{Root: skillRoot}
@@ -100,20 +105,23 @@ func (a *App) doctor(args []string) int {
 			fullReport += "\n\n" + formatSkillPartitionDiagnostics(migration, migrationErr, cleanup, cleanupErr)
 		}
 	}
+	doctorUnable := doctorReportHasReadFailure(fullReport)
+	doctorFatal := doctorReportHasFatalIssue(fullReport)
 	probeSection := ""
 	probeFailed := false
 	if *probeModels {
+		gatewayProbeSection, gatewayProbeFailed := a.probeGatewayToolCatalog()
 		cfg, loadErr := config.LoadConfig(config.Options{Path: a.configPath})
 		if loadErr != nil {
-			probeSection = "== Model role probes ==\n(error: " + oneLine(tools.RedactSensitive(loadErr.Error()), 180) + ")"
+			probeSection = strings.TrimSpace(gatewayProbeSection + "\n\n== Model role probes ==\n(error: " + oneLine(tools.RedactSensitive(loadErr.Error()), 180) + ")")
 			probeFailed = true
 		} else {
 			probeCtx, probeCancel := context.WithTimeout(a.ctx, 90*time.Second)
 			probes := appcore.ProbeConfiguredModelRoles(probeCtx, cfg)
 			probeCancel()
 			section, failed := formatModelRoleProbes(probes)
-			probeSection = section
-			probeFailed = failed
+			probeSection = strings.TrimSpace(gatewayProbeSection + "\n\n" + section)
+			probeFailed = gatewayProbeFailed || failed
 		}
 	}
 
@@ -142,19 +150,52 @@ func (a *App) doctor(args []string) int {
 	if strings.TrimSpace(*outPath) != "" {
 		if err := os.WriteFile(*outPath, []byte(report), 0600); err != nil {
 			fmt.Fprintf(a.stderr, "doctor: cannot write %s: %v\n", *outPath, err)
-			return 1
+			return 2
 		}
 		fmt.Fprintf(a.stdout, "Diagnostic bundle written to %s\n", *outPath)
-		if probeFailed {
+		if doctorUnable {
+			return 2
+		}
+		if probeFailed || doctorFatal {
 			return 1
 		}
 		return 0
 	}
 	fmt.Fprintln(a.stdout, report)
-	if probeFailed {
+	if doctorUnable {
+		return 2
+	}
+	if probeFailed || doctorFatal {
 		return 1
 	}
 	return 0
+}
+
+func (a *App) probeGatewayToolCatalog() (string, bool) {
+	ctx, cancel := context.WithTimeout(a.ctx, 45*time.Second)
+	defer cancel()
+	data, status, err := gatewayrt.RequestToolCatalogProbe(ctx, a.gatewayURL(), a.gatewayDataDir())
+	if err != nil {
+		return "== Primary provider tool-catalog probe ==\nFAIL error=" + oneLine(tools.RedactSensitive(err.Error()), 180), true
+	}
+	if status >= http.StatusBadRequest {
+		return fmt.Sprintf("== Primary provider tool-catalog probe ==\nFAIL status=%d error=%s", status, oneLine(tools.RedactSensitive(string(data)), 180)), true
+	}
+	var probe api.ProviderToolCatalogProbeResponse
+	if err := json.Unmarshal(data, &probe); err != nil {
+		return "== Primary provider tool-catalog probe ==\nFAIL error=invalid daemon response", true
+	}
+	state := "OK"
+	if !probe.OK {
+		state = "FAIL"
+	}
+	line := fmt.Sprintf("== Primary provider tool-catalog probe ==\n%s provider=%s model=%s protocol=%s tools=%d bytes=%d latency=%dms hash=%s",
+		state, valueOrUnknown(probe.Provider), valueOrUnknown(probe.Model), valueOrUnknown(probe.Catalog.Protocol),
+		probe.Catalog.Count, probe.Catalog.WireBytes, probe.LatencyMS, valueOrUnknown(probe.Catalog.Hash))
+	if probe.Error != "" {
+		line += " error=" + oneLine(tools.RedactSensitive(probe.Error), 180)
+	}
+	return line, !probe.OK
 }
 
 type doctorReportSection struct {
@@ -252,6 +293,30 @@ func collectDoctorIssues(report string, configDiagnostics configDiagnostics) []d
 						Title:    "Background learning",
 						Details:  body,
 						Actions:  actions,
+					})
+				}
+			}
+		case "Skill presentation":
+			if !strings.Contains(body, "status: healthy") {
+				if doctorSectionReadFailed(body) {
+					issues = append(issues, doctorReadIssue("SKILLS", "Skill presentation contract", body))
+				} else {
+					issues = append(issues, doctorIssue{
+						Category: "SKILLS",
+						Title:    "Skill presentation contract",
+						Details:  body,
+						Actions:  skillPresentationDoctorActions(body),
+					})
+				}
+			}
+		case "Skill descriptions":
+			if !strings.Contains(body, "status: healthy") {
+				if doctorSectionReadFailed(body) {
+					issues = append(issues, doctorReadIssue("SKILLS", "Skill description metadata", body))
+				} else {
+					issues = append(issues, doctorIssue{
+						Category: "SKILLS", Title: "Skill description metadata", Details: body,
+						Actions: skillPresentationDoctorActions(body),
 					})
 				}
 			}
@@ -394,10 +459,32 @@ func gatewayDoctorHealthy(body string) bool {
 	if strings.Contains(body, "mcp=connected:") && !strings.Contains(body, ",failed:0") {
 		return false
 	}
+	if strings.Contains(body, "catalog=invalid:") || strings.Contains(body, "schema_budget:over:") ||
+		(strings.Contains(body, "dynamic_skills:") && !strings.Contains(body, "dynamic_skills:0")) {
+		return false
+	}
 	return true
 }
 
 func gatewayDoctorActions(body string) []doctorAction {
+	if strings.Contains(body, "dynamic_skills:") && !strings.Contains(body, "dynamic_skills:0") {
+		return []doctorAction{
+			{Description: "The reported first_source/provider-wire tool name identifies a per-Skill registry address. Keep that registration for compatibility but set exposure=hidden so it cannot enter provider tools.", Commands: []string{"selfmind doctor --verbose --out <path>"}},
+			{Description: "Install the corrected binary, restart the daemon, then prove the real primary-provider catalogue contains dynamic_skills:0.", Commands: []string{"selfmind gateway restart", "selfmind doctor --probe-models --verbose"}},
+		}
+	}
+	if strings.Contains(body, "catalog=invalid:") {
+		return []doctorAction{
+			{Description: "Use first_source to locate the registered owner and first_name to inspect the exact provider-wire tool name spelling; correct the owner or shared adapter normalization, not the Doctor output.", Commands: []string{"selfmind doctor --verbose --out <path>"}},
+			{Description: "Restart on the corrected binary and run the live primary-provider catalogue probe.", Commands: []string{"selfmind gateway restart", "selfmind doctor --probe-models --verbose"}},
+		}
+	}
+	if strings.Contains(body, "schema_budget:over:") {
+		return []doctorAction{
+			{Description: "Inspect the provider-wire schema budget and the largest remaining generic tools.", Commands: []string{"selfmind doctor --verbose"}},
+			{Description: "Reduce or defer reviewed generic schemas without hiding required Skill discovery metadata.", Commands: []string{"selfmind doctor --probe-models --verbose"}},
+		}
+	}
 	if strings.Contains(body, "mcp=connected:") && !strings.Contains(body, ",failed:0") {
 		return []doctorAction{
 			{Description: "Inspect MCP server names, transports, credentials, and tool-schema collisions.", Commands: []string{"selfmind config doctor", "selfmind doctor --verbose"}},
@@ -420,6 +507,67 @@ func gatewayDoctorActions(body string) []doctorAction {
 		{Description: "Restart the gateway.", Commands: []string{"selfmind gateway restart"}},
 		{Description: "If it still fails, run it in the foreground and inspect the error.", Commands: []string{"selfmind gateway run"}},
 	}
+}
+
+func skillPresentationDoctorActions(body string) []doctorAction {
+	var actions []doctorAction
+	var current *doctorAction
+	flush := func() {
+		if current == nil {
+			return
+		}
+		actions = append(actions, *current)
+		current = nil
+	}
+	for _, line := range strings.Split(body, "\n") {
+		trimmed := strings.TrimSpace(line)
+		switch {
+		case strings.HasPrefix(trimmed, "repair: "):
+			flush()
+			current = &doctorAction{Description: strings.TrimSpace(strings.TrimPrefix(trimmed, "repair: "))}
+		case strings.HasPrefix(trimmed, "command: ") && current != nil:
+			current.Commands = append(current.Commands, strings.TrimSpace(strings.TrimPrefix(trimmed, "command: ")))
+		}
+	}
+	flush()
+	if len(actions) == 0 {
+		return []doctorAction{{
+			Description: "Preserve a full redacted finding bundle and inspect the exact location, expected value, and observed value before repair.",
+			Commands:    []string{"selfmind doctor --verbose --out <path>"},
+		}}
+	}
+	return actions
+}
+
+func doctorReportHasFatalIssue(report string) bool {
+	for _, section := range parseDoctorReportSections(report) {
+		body := strings.TrimSpace(section.Body)
+		switch section.Name {
+		case "Gateway":
+			if strings.Contains(body, "catalog=invalid:") ||
+				(strings.Contains(body, "dynamic_skills:") && !strings.Contains(body, "dynamic_skills:0")) {
+				return true
+			}
+		case "Skill presentation":
+			if strings.Contains(body, "[FATAL]") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// Exit code 2 means Doctor could not evaluate one or more diagnostic
+// contracts. Historical log unavailability is intentionally excluded: logs
+// are supporting evidence, while an explicit section read error makes a clean
+// bill of health impossible.
+func doctorReportHasReadFailure(report string) bool {
+	for _, section := range parseDoctorReportSections(report) {
+		if strings.HasPrefix(strings.TrimSpace(section.Body), "(error:") {
+			return true
+		}
+	}
+	return false
 }
 
 func configDoctorIssue(d configDiagnostics) (doctorIssue, bool) {
@@ -783,10 +931,7 @@ func (a *App) gatewayStatusLine() string {
 		if json.Unmarshal(data, &status) == nil {
 			rt := status.Runtime
 			buildState := gatewayBuildState(rt.BuildFingerprint)
-			schemaState := ""
-			if status.ToolSchemas.Active+status.ToolSchemas.Repaired+status.ToolSchemas.Quarantined > 0 {
-				schemaState = fmt.Sprintf(" tools=active:%d,repaired:%d,quarantined:%d", status.ToolSchemas.Active, status.ToolSchemas.Repaired, status.ToolSchemas.Quarantined)
-			}
+			schemaState := gatewayToolSchemaDoctorState(status)
 			mcpState := ""
 			if status.MCP.Configured > 0 {
 				mcpState = fmt.Sprintf(" mcp=connected:%d,failed:%d", status.MCP.Connected, status.MCP.Failed)
@@ -795,7 +940,8 @@ func (a *App) gatewayStatusLine() string {
 					mcpState += fmt.Sprintf(",first:%s:%s", oneLine(failure.Name, 40), oneLine(failure.Error, 120))
 				}
 			}
-			return withService(fmt.Sprintf("running (state=%s pid=%d addr=%s active_runs=%d build=%s%s%s)", status.State, rt.PID, rt.Addr, status.ActiveRunCount, buildState, schemaState, mcpState))
+			catalogState := gatewayToolCatalogDoctorState(status.ToolCatalog)
+			return withService(fmt.Sprintf("running (state=%s pid=%d addr=%s active_runs=%d build=%s%s%s%s)", status.State, rt.PID, rt.Addr, status.ActiveRunCount, buildState, schemaState, mcpState, catalogState))
 		}
 	}
 	manager := gatewayrt.NewManager(a.gatewayDataDir(), "")
@@ -812,6 +958,55 @@ func (a *App) gatewayStatusLine() string {
 		return withService(fmt.Sprintf("crashed (instance=%s reason=%s last_heartbeat=%s)", rec.InstanceID, rec.ExitReason, rec.HeartbeatAt))
 	}
 	return withService("not running")
+}
+
+func gatewayToolSchemaDoctorState(status api.GatewayStatusResponse) string {
+	registeredActive := status.ToolSchemas.RegisteredActive
+	if registeredActive == 0 {
+		registeredActive = status.ToolSchemas.Active
+	}
+	providerVisible := status.ToolSchemas.ProviderVisible
+	if providerVisible == 0 {
+		providerVisible = status.ToolCatalog.Count
+	}
+	if registeredActive+status.ToolSchemas.Quarantined == 0 {
+		return ""
+	}
+	return fmt.Sprintf(" tools=registered_active:%d,hidden:%d,provider_visible:%d,repaired:%d,quarantined:%d",
+		registeredActive, status.ToolSchemas.Hidden, providerVisible, status.ToolSchemas.Repaired, status.ToolSchemas.Quarantined)
+}
+
+func gatewayToolCatalogDoctorState(preview llm.ToolCatalogPreview) string {
+	if strings.TrimSpace(preview.Protocol) == "" && preview.Count == 0 && preview.Hash == "" && len(preview.Issues) == 0 {
+		return ""
+	}
+	dynamicSkills := 0
+	for _, entry := range preview.Entries {
+		if strings.HasPrefix(strings.ToLower(strings.TrimSpace(entry.SourceName)), "skill:") {
+			dynamicSkills++
+		}
+	}
+	// Backward-compatible decoding of a status response from an older daemon.
+	if len(preview.Entries) == 0 {
+		for _, name := range preview.Names {
+			if strings.HasPrefix(strings.ToLower(strings.TrimSpace(name)), "skill:") {
+				dynamicSkills++
+			}
+		}
+	}
+	if len(preview.Issues) == 0 {
+		budgetState := "within"
+		if preview.OverBudget {
+			budgetState = "over"
+		}
+		return fmt.Sprintf(" catalog=valid:%d,protocol:%s,bytes:%d,schema_budget:%s:%d,dynamic_skills:%d,hash:%s",
+			preview.Count, oneLine(preview.Protocol, 40), preview.WireBytes, budgetState,
+			preview.BudgetBytes, dynamicSkills, oneLine(preview.Hash, 24))
+	}
+	first := preview.Issues[0]
+	return fmt.Sprintf(" catalog=invalid:%d,protocol:%s,count:%d,dynamic_skills:%d,first_index:%d,first_source:%s,first_name:%s,first_code:%s",
+		len(preview.Issues), oneLine(preview.Protocol, 40), preview.Count, dynamicSkills, first.Index,
+		oneLine(first.SourceName, 80), oneLine(first.Name, 80), oneLine(first.Code, 40))
 }
 
 // buildDoctorReport assembles the redacted diagnostic bundle from durable
@@ -833,6 +1028,9 @@ func buildDoctorReport(ctx context.Context, store *control.Store, identity *cont
 		sb.WriteString(promptSection)
 		sb.WriteString("\n\n")
 	}
+
+	sb.WriteString(formatSkillPresentationDiagnostics(store.InspectSkillPresentation(ctx, identity.TenantID, identity.PersonID)))
+	sb.WriteString("\n\n")
 
 	sb.WriteString("== Workspace trust ==\n")
 	if workspaces, err := store.ListWorkspaces(ctx, identity.TenantID, identity.PersonID); err != nil {
@@ -1055,6 +1253,76 @@ func buildDoctorReport(ctx context.Context, store *control.Store, identity *cont
 	return strings.TrimSpace(sb.String())
 }
 
+func formatSkillPresentationDiagnostics(report control.SkillPresentationDiagnostics, err error) string {
+	var sb strings.Builder
+	sb.WriteString("== Skill presentation ==\n")
+	if err != nil {
+		fmt.Fprintf(&sb, "(error: %s)", oneLine(tools.RedactSensitive(err.Error()), 180))
+		return sb.String()
+	}
+	fmt.Fprintf(&sb, "schema: %d/%d  activations: %d (legacy=%d full=%d paged=%d)\n",
+		report.SchemaVersion, report.CurrentSchemaVersion, report.Activations,
+		report.LegacyActivations, report.FullActivations, report.PagedActivations)
+	fmt.Fprintf(&sb, "delivery receipts: invalid=%d  package resources: %d invalid=%d\n",
+		report.InvalidDeliveryReceipts, report.PackageResources, report.InvalidResourceReceipts)
+	fmt.Fprintf(&sb, "candidate refs: live=%d terminal_leaks=%d drift_limit_exceeded=%d\n",
+		report.CandidateRefs, report.TerminalCandidateRefLeaks, report.CandidateRefsOverDriftLimit)
+	for _, issue := range report.Issues {
+		fmt.Fprintf(&sb, "- [%s] id=%s code=%s component=%s ref=%s\n",
+			strings.ToUpper(issue.Severity), oneLine(issue.ID, 100), oneLine(issue.Code, 80),
+			oneLine(issue.Component, 80), oneLine(issue.Ref, 120))
+		fmt.Fprintf(&sb, "  location: %s\n", oneLine(issue.Location, 200))
+		fmt.Fprintf(&sb, "  expected: %s\n", oneLine(issue.Expected, 200))
+		fmt.Fprintf(&sb, "  observed: %s\n", oneLine(issue.Observed, 200))
+		fmt.Fprintf(&sb, "  cause: %s\n", oneLine(issue.Cause, 240))
+		fmt.Fprintf(&sb, "  owner: %s\n", oneLine(issue.Owner, 160))
+		for _, remediation := range issue.Remediations {
+			fmt.Fprintf(&sb, "  repair: %s\n", oneLine(remediation.Description, 240))
+			for _, command := range remediation.Commands {
+				fmt.Fprintf(&sb, "    command: %s\n", oneLine(command, 200))
+			}
+		}
+		for _, command := range issue.Verify {
+			fmt.Fprintf(&sb, "  verify: %s\n", oneLine(command, 200))
+		}
+	}
+	switch {
+	case report.Fatal():
+		sb.WriteString("[FATAL] status: stored Skill presentation invariants are broken")
+	case !report.Healthy():
+		sb.WriteString("[WARNING] status: stale terminal candidate refs require lifecycle cleanup")
+	default:
+		sb.WriteString("status: healthy")
+	}
+	return strings.TrimSpace(sb.String())
+}
+
+func formatSkillDescriptionDiagnostics(issues []tools.SkillDescriptionDiagnostic, err error) string {
+	var sb strings.Builder
+	sb.WriteString("== Skill descriptions ==\n")
+	if err != nil {
+		fmt.Fprintf(&sb, "(error: %s)", oneLine(tools.RedactSensitive(err.Error()), 180))
+		return sb.String()
+	}
+	if len(issues) == 0 {
+		sb.WriteString("status: healthy")
+		return sb.String()
+	}
+	fmt.Fprintf(&sb, "[WARNING] over_limit=%d; assets remain loadable but descriptions are capped on the model presentation surface\n", len(issues))
+	for _, issue := range issues {
+		fmt.Fprintf(&sb, "- [WARNING] id=skill_presentation.description_over_limit code=description_over_limit component=catalog_metadata ref=%s\n", oneLine(issue.Name, 100))
+		fmt.Fprintf(&sb, "  location: %s\n", oneLine(issue.Path, 220))
+		fmt.Fprintf(&sb, "  expected: description <= %d Unicode characters and <= %d UTF-8 bytes\n", tools.SkillDescriptionMaxChars, tools.SkillDescriptionMaxBytes)
+		fmt.Fprintf(&sb, "  observed: chars=%d bytes=%d scope=%s source=%s writable=%t\n", issue.Chars, issue.Bytes, issue.Scope, issue.Source, issue.Writable)
+		sb.WriteString("  cause: existing Skill metadata predates or bypassed the managed authoring ceiling\n")
+		sb.WriteString("  owner: the Skill file shown in location\n")
+		sb.WriteString("  repair: Shorten only the front-matter description in the owning Skill to the stated limits; keep the instruction body intact.\n")
+		sb.WriteString("    command: selfmind gateway restart\n")
+		sb.WriteString("  verify: selfmind doctor --verbose\n")
+	}
+	return strings.TrimSpace(sb.String())
+}
+
 func buildPromptWorkspaceDoctorSection(store *control.Store, dataDir string, cfg *config.Config) string {
 	snapshot, status := appcore.InspectRuntimePromptSnapshot(cfg, dataDir)
 	degraded := status.Degraded()
@@ -1136,20 +1404,20 @@ func tailLines(path string, n int) ([]string, error) {
 }
 
 // cronGovernanceSection summarizes cron_jobs health from the cron database:
-// totals, system-job count, the keyed skill-pruner, historical built-in rows,
-// and duplicate system keys. Read-only; a missing db reports cleanly.
+// totals, system-job count, obsolete Skill metric-pruner rows, and duplicate
+// system keys. Read-only; a missing db reports cleanly.
 func cronGovernanceSection(ctx context.Context, dataDir string) string {
 	db, err := sql.Open("sqlite", "file:"+dataDir+"/cron.db?mode=ro")
 	if err != nil {
 		return fmt.Sprintf("(error: %v)\n", err)
 	}
 	defer db.Close()
-	var total, system, pruner, legacyPruner, dupGroups int
+	var total, system, retiredPruner, legacyPruner, dupGroups int
 	if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM cron_jobs").Scan(&total); err != nil {
 		return fmt.Sprintf("(error: %v)\n", err)
 	}
 	_ = db.QueryRowContext(ctx, "SELECT COUNT(*) FROM cron_jobs WHERE COALESCE(system_key,'') != ''").Scan(&system)
-	_ = db.QueryRowContext(ctx, "SELECT COUNT(*) FROM cron_jobs WHERE system_key = 'skill-pruner:default'").Scan(&pruner)
+	_ = db.QueryRowContext(ctx, "SELECT COUNT(*) FROM cron_jobs WHERE system_key = 'skill-pruner:default'").Scan(&retiredPruner)
 	_ = db.QueryRowContext(ctx, `SELECT COUNT(*) FROM cron_jobs
 		WHERE COALESCE(system_key, '') = '' AND name LIKE 'skill-pruner-%'
 		  AND cron_expr = '0 3 * * *' AND channel = 'cli'
@@ -1157,13 +1425,10 @@ func cronGovernanceSection(ctx context.Context, dataDir string) string {
 	_ = db.QueryRowContext(ctx, `SELECT COUNT(*) FROM (
 		SELECT 1 FROM cron_jobs WHERE COALESCE(system_key, '') != ''
 		GROUP BY system_key HAVING COUNT(*) > 1)`).Scan(&dupGroups)
-	out := fmt.Sprintf("jobs: %d total, %d system, skill-pruner: %d keyed + %d legacy, %d duplicate system-key group(s)\n",
-		total, system, pruner, legacyPruner, dupGroups)
-	if pruner > 1 {
-		out += "warning: more than one skill-pruner job — skills are control-tenant assets; restart the daemon to run the governance migration.\n"
-	}
-	if legacyPruner > 0 {
-		out += "warning: legacy system-shaped skill-pruner jobs remain; restart the daemon to run the governance migration.\n"
+	out := fmt.Sprintf("jobs: %d total, %d system, retired skill-pruner rows: %d keyed + %d legacy, %d duplicate system-key group(s)\n",
+		total, system, retiredPruner, legacyPruner, dupGroups)
+	if retiredPruner+legacyPruner > 0 {
+		out += "warning: obsolete Skill metric-pruner jobs remain; restart the daemon to run the retirement migration.\n"
 	}
 	if dupGroups > 0 {
 		out += "warning: duplicate cron rows detected — restart the daemon (EnsureJob collapses them) or inspect cron.db.\n"

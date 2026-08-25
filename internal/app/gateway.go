@@ -30,7 +30,7 @@ type GatewayDeps struct {
 
 // InitGateway builds the identity mapper, task manager, cron scheduler
 // (optional), and the unified gateway.
-func InitGateway(dataDir string, mem *memory.MemoryManager, agent *kernel.Agent, cfg *config.Config, skillStore *kernel.SkillStore) (*GatewayDeps, error) {
+func InitGateway(dataDir string, mem *memory.MemoryManager, agent *kernel.Agent, cfg *config.Config) (*GatewayDeps, error) {
 	idMapper := identity.NewIdentityMapper(dataDir)
 	taskMgr := task.NewManager(dataDir)
 
@@ -56,30 +56,6 @@ func InitGateway(dataDir string, mem *memory.MemoryManager, agent *kernel.Agent,
 		// means 08:00 in that zone (e.g. Asia/Shanghai), not UTC.
 		if err := cronSched.SetTimezone(cfg.Cron.Timezone); err != nil {
 			log.Warn("gateway: invalid cron timezone, using system local", "error", err)
-		}
-
-		// Register the skill-pruner cron job (idempotent across restarts): runs
-		// daily at 03:00, pruning skill metrics where call_count < 3 AND
-		// last_used > 30d. Skills are control-tenant assets (AGENTS.md), so
-		// EXACTLY ONE pruner exists for the control tenant. Never enumerate
-		// data-dir entries as tenants: that treated eval residue and person
-		// memory partitions as tenants and registered thousands of jobs whose
-		// daily fire opened (and created) memory.db files in every stale
-		// directory.
-		if skillStore != nil {
-			cronSched.SetSkillPruner(skillStore)
-			job := &cron.CronJob{
-				Name:      "skill-pruner-default",
-				CronExpr:  "0 3 * * *",
-				Prompt:    "skill_prune:default",
-				TenantID:  "default",
-				Channel:   "cli",
-				Enabled:   true,
-				SystemKey: "skill-pruner:default",
-			}
-			if _, err := cronSched.EnsureJob(context.Background(), job); err != nil {
-				log.Warn("gateway: skipped skill-pruner registration", "error", err)
-			}
 		}
 
 		// Register the liveness canary (W0.3) when configured. It alerts the

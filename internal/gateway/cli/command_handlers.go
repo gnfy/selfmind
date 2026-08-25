@@ -13,7 +13,6 @@ import (
 	selfeval "selfmind/internal/eval"
 	"selfmind/internal/gateway/api"
 	"selfmind/internal/gateway/command"
-	"selfmind/internal/kernel"
 	"selfmind/internal/tools"
 )
 
@@ -54,9 +53,9 @@ func (m *uiModel) handleCommand(input string) tea.Cmd {
 	if cmd, ok := slashCommandIndex[parts[0]]; ok {
 		// In daemon-client mode agent-backed commands route through the tool
 		// dispatch seam (m.dispatch → daemon) or through the message processor
-		// (/status, /tasks). The few that need the in-process store (/skills
-		// stats, /model switch) detect client mode themselves and
-		// return a clear notice. So no top-level gate is needed for safety.
+		// (/status, /tasks). The few remaining local-only controls (such as model
+		// switching) detect client mode themselves and return a clear notice. So
+		// no top-level gate is needed for safety.
 		return cmd.Run(m, parts[1:])
 	}
 	if strings.HasPrefix(parts[0], "/") {
@@ -85,7 +84,7 @@ func (m *uiModel) handleSkillSlash(slashName, instruction string) tea.Cmd {
 			}
 			return MsgSkillInvocationResolved{
 				SlashName: slashName, Found: resolved.Found,
-				DisplayName: resolved.DisplayName, Prompt: resolved.Prompt,
+				DisplayName: resolved.DisplayName, Prompt: explicitSkillGatewayCommand(slashName, instruction),
 			}
 		}
 	}
@@ -96,7 +95,16 @@ func (m *uiModel) handleSkillSlash(slashName, instruction string) tea.Cmd {
 	if !ok {
 		return m.finishSkillInvocationResolution(MsgSkillInvocationResolved{SlashName: slashName})
 	}
-	return m.finishSkillInvocationResolution(MsgSkillInvocationResolved{SlashName: slashName, Found: true, DisplayName: displayName, Prompt: prompt})
+	_ = prompt // resolution proves existence; the gateway owns typed activation.
+	return m.finishSkillInvocationResolution(MsgSkillInvocationResolved{
+		SlashName: slashName, Found: true, DisplayName: displayName,
+		Prompt: explicitSkillGatewayCommand(slashName, instruction),
+	})
+}
+
+func explicitSkillGatewayCommand(slashName, instruction string) string {
+	name := strings.TrimPrefix(strings.TrimSpace(slashName), "/")
+	return strings.TrimSpace("/skill " + name + " " + strings.TrimSpace(instruction))
 }
 
 func (m *uiModel) finishSkillInvocationResolution(msg MsgSkillInvocationResolved) tea.Cmd {
@@ -537,14 +545,7 @@ func (m *uiModel) handleSkills(args []string) tea.Cmd {
 			}
 			return MsgAgentDone{Response: resp}
 		case "stats":
-			if m.agent == nil || m.agent.Memory() == nil {
-				if m.clientMode {
-					return MsgAgentDone{Response: "`/skills stats` is not available over the daemon yet; use `/skills list` (per-skill call counts ride the list view)."}
-				}
-				return MsgAgentDone{Response: "Memory not initialized."}
-			}
-			store := kernel.NewSkillStore(m.agent.Memory())
-			stats, err := store.FormatStats(context.Background(), m.tenantID)
+			stats, err := m.dispatch("skill_manage", map[string]interface{}{"action": "stats", "_tenant_id": m.tenantID})
 			if err != nil {
 				return MsgAgentDone{Response: fmt.Sprintf("Error loading skill stats: %v", err)}
 			}

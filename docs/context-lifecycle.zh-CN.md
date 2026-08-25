@@ -182,6 +182,26 @@ per-turn prompt contract for workspace, task runtime state, selected memory
 snippets, selection notes, and bounded context budgets. Future context work
 should extend this bundle or the gateway selector that feeds it.
 
+Skill 是 bundle 内的独立模型可见契约,但不绕开总上下文治理:
+
+- 未激活时只投递有界目录元数据。已知模型的 token 预算为
+  `floor(context_length_tokens * 2%)`,同时受 8000 UTF-8 字节硬上限约束;
+  先保留候选存在性和公平短描述,再按排名补全描述,最后才按确定性顺序省略。
+- 激活后目录退出,只保留一个 Active Skill。已知模型的主干 token 预算为
+  `clamp(floor(context_length_tokens * 3%), 512, 2048)`,同时受 8192 UTF-8
+  字节硬上限约束。模型元数据未知时目录和主干都显式回退到 512 tokens /
+  2048 bytes,不伪造 context length。bundle 总额在原 8 KiB 非 Skill预算上
+  增加目录/主干两者的较大字节值,不会再被固定 `Prompt(8000)` 二次截断。
+- contract-v1 在 activation 时冻结实际投递字节及其 hash/byte receipt。正文
+  超预算时只投递显式分页索引,通过 `skill_view` 按 section/resource/offset
+  读取,绝不把静默截断的前缀冒充完整指令。
+- Active Skill 标记块属于 compaction/recovery 的 protected slice。同一
+  activation 穿过普通压缩和 provider window recovery 后字节必须不变;偏离
+  时只发 `skill.delivery.deviation`,正常轮次不重复发送 receipt。
+- 每轮 prompt 只重复模型需要引用的 `name` 与 `activation_id`;package/version/
+  resource/delivery hash 留在 durable control state、事件与工具结果中,不与
+  指令正文争抢预算。
+
 `internal/kernel/context_engine.go` is cheap on the hot path: while the window
 is under budget it loads only a bounded slice of recent channel history and does
 no LLM work. When the window grows past `summaryThreshold` (¾ of the budget) it

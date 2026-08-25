@@ -36,6 +36,10 @@ schema cost through bounded on-demand exposure.
    handoff, and render terminal writeback as background finalization.
 9. Align foreground, background-review, delegation, watcher-finalization, and
    compaction prompts with each role's actual capabilities and resume evidence.
+10. Close the reviewed Skill-presentation hardening gaps before merging or
+    releasing the new presentation contract: exact curator/delivery budgets,
+    repairable oversized legacy mains, canonical usage evidence, and
+    actionable cross-surface diagnostics.
 
 ## Non-Goals
 
@@ -72,6 +76,9 @@ schema cost through bounded on-demand exposure.
 9. **Role prompt quality:** capability-derived tool contracts, a dedicated
    background-review surface, bounded delegation context, and evidence-complete
    compaction handoffs.
+10. **Skill presentation hardening:** close the three merge blockers first,
+    then align bundle/API budgets, stale-ref recovery, Doctor remediation, and
+    compatibility cleanup without weakening the hidden rollback path.
 
 ## Evidence and Acceptance
 
@@ -111,6 +118,17 @@ schema cost through bounded on-demand exposure.
   delegated workers cannot mutate parent lifecycle or durable-learning state;
   and compaction preserves verification, failed attempts, waits, and paths in a
   data-fenced handoff.
+- A curator-created package that is authorized for automatic publication is
+  delivered as `full` by the production activation builder under the same
+  resources, byte budget, and token budget. An already paged legacy main can
+  receive a narrow repair only when its instruction bytes and estimated tokens
+  do not grow and unrelated sections/resources remain identical.
+- Skill stats derive from durable activation/work-unit outcomes or are labeled
+  historical. Bundles and HTTP clients report the executing agent's real
+  aggregate budget. Candidate identity drift returns `candidate_stale` with a
+  refresh action. Doctor distinguishes registered, hidden, and provider-visible
+  schemas and provides an exact safe repair plus verification command for every
+  runtime-remediable finding.
 - The installed npm/WSL binary and restarted daemon expose the verified build;
   repository-only `go run` evidence is insufficient.
 
@@ -155,6 +173,63 @@ schema cost through bounded on-demand exposure.
   request fingerprints and memory scheduler liveness; delivery inflow
   diagnosis; an exact per-call approval correlation id; and the review verdict
   for enabling the initial deferred cohort.
+
+### Skill Presentation Review (2026-08-25)
+
+The main implementation direction is accepted: per-Skill tools are hidden from
+provider catalogs, Doctor previews the real adapter catalog, candidate refs are
+required, active-main and catalog budgets are context-proportional, delivery is
+immutable through compaction, and model/slash/binding activation shares one
+service. The review found the following remaining gaps; verdicts distinguish a
+real defect from an overstated diagnosis so fixes target the actual boundary.
+
+| # | Review verdict | Required treatment |
+| --- | --- | --- |
+| 1 | Partly confirmed, merge-blocking. Removing `SkillMetricsMiddleware` stopped writes to legacy call/fail counters, but those counters are not the curator's canonical decision source and the old pruner only removes stale metric rows. | Migrate `/skills stats` and any remaining consumer to durable activations and terminal work-unit outcomes, label old rows historical, then remove the middleware, unused store parameter, and obsolete metric-row pruner together. Do not restore middleware merely to preserve a misleading counter. |
+| 2 | Confirmed, merge-blocking. Curator source authorization exceeds the production delivery body budget by at least the envelope allowance and diverges further with resource paths; raw-byte validation also misses the token ceiling. | Resolve one real `RuntimeContextBudget`, sort proposed resource paths, and run the exact activation delivery builder. CREATE may auto-publish only when the result is `full`; remove the `+512` heuristic. |
+| 3 | Confirmed, merge-blocking. Narrow PATCH preserves unrelated bytes, but whole-main validation rejects every already oversized Skill, so paged legacy assets cannot be repaired automatically. | Apply the dual PATCH rule from the Skill contract: current full mains stay full; current paged mains may not grow in instruction bytes or estimated tokens and must preserve resources/unrelated sections byte-for-byte. Package compaction is a separate workflow. |
+| 4 | Main allegation rejected; remediation gap confirmed. Terminal work-unit and run-finalization transactions already delete issued refs and a focused test covers normal expiry. Doctor can still find terminal/orphan rows that normal cleanup did not reach, but currently offers no repair. | Add dry-run-first `selfmind maintenance prune-skill-candidate-refs`, transactional `--apply`, Doctor ownership details, and a post-repair verification command. |
+| 5 | Confirmed with corrected scope. Bundle delivery uses the fallback budget, but a bundle is a multi-Skill aggregate rather than a fourth single-Skill activation path. Giving each member the full budget would multiply context cost. | Feed the executing gateway budget into bundle resolution and fairly allocate one aggregate byte/token ceiling across members. Test the total, not per-member equality with model/slash/binding. |
+| 6 | Partly confirmed. Re-reading by name is intentional live precedence/drift detection and `expectedSkillKey` prevents incorrect activation; candidate identity mismatch currently falls through to an unstructured task-binding error. | Preserve the second resolution check, but return structured `candidate_stale` plus `skills_list` refresh for issued refs. Keep binding-specific fallback wording only for task bindings. Add a root-precedence drift test. |
+| 7 | Confirmed. HTTP `messageContextBudget` reconstructs the default budget instead of reporting `Gateway.RuntimeContextBudget`. | Report the executing gateway/agent budget and test unknown, 32K, and 128K metadata cases. |
+| 8 | Confirmed diagnostic ambiguity. `tools=active` counts registered hidden schemas while the provider catalog is smaller, so the label suggests the wrong denominator. | Report `registered_active`, `hidden`, and `provider_visible` separately; keep adapter preview as the provider truth source. |
+| 9 | Mixed. Hidden `skill:<name>` dispatch is dormant in normal slash flow but remains directly dispatchable and tested; its `skill.activated` event lost dedicated coverage. Worker budgets are currently homogeneous, so heterogeneous-worker drift is a future seam rather than a present defect. | Treat legacy dispatch as a named rollback channel with event coverage and removal criteria. Assert homogeneous worker budgets now; carry per-agent budget at checkout only when heterogeneous workers are introduced. |
+
+#### Merge and Follow-up Gates
+
+- **P0, before merge:** close findings 1-3 and add focused tests for a
+  resource-heavy CREATE, token-heavy/CJK main, paged legacy PATCH non-growth,
+  PATCH growth rejection, and canonical durable stats.
+- **P1, immediately after P0:** close findings 4-7 with bundle aggregate-budget
+  tests, root-precedence `candidate_stale`, real HTTP budget cases, and a Doctor
+  prune/verify test.
+- **P2, cleanup after shadow evidence:** close findings 8-9, restore explicit
+  compatibility event coverage, and remove dormant code only when usage
+  telemetry satisfies the documented removal criteria.
+- The release gate remains `selfmind selfcheck`; provider-visible catalog and
+  message-path changes also require the focused Go suites and the cassette-backed
+  Skill lifecycle eval path. Repository tests alone do not authorize installing
+  or restarting the daemon.
+
+#### Implementation Closure (2026-08-25)
+
+Findings 1-9 are closed in the repository implementation. `/skills stats` now
+aggregates durable activations and terminal work-unit outcomes; the legacy
+middleware/store/pruner path is retired and old metric rows are explicitly
+historical. Curator CREATE uses the exact production byte/token/resource
+delivery builder, while paged PATCH repairs cannot grow instruction bytes or
+estimated tokens. Bundles share one executing-agent budget, HTTP reports that
+same budget, issued-ref root drift returns `candidate_stale`, and worker pools
+assert homogeneous budgets.
+
+Doctor now names `registered_active`, `hidden`, and `provider_visible`
+denominators and reports exact terminal/orphan candidate-ref owners. The new
+`maintenance prune-skill-candidate-refs` path previews by default, applies one
+transactional live-ref-excluding query, and verifies an empty remainder.
+Dedicated legacy `skill:<name>` activation-event coverage remains in place as
+the rollback channel's removal gate. The cassette-backed local-full release
+path is green. Installed-binary/daemon evidence and sustained observation remain
+open; these are not unimplemented presentation-contract items.
 
 ## Exit Verdict
 

@@ -4,44 +4,139 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 
 	"selfmind/internal/platform/textutil"
 )
 
 type skillRuntimeContextKey struct{}
+type explicitSkillInvocationContextKey struct{}
+type activeSkillRuntimeStateContextKey struct{}
 
 const (
-	activeSkillPromptBegin = "<!-- SELFMIND_ACTIVE_SKILL_BEGIN -->"
-	activeSkillPromptEnd   = "<!-- SELFMIND_ACTIVE_SKILL_END -->"
+	activeSkillPromptBegin = "<!--SM_SKILL-->"
+	activeSkillPromptEnd   = "<!--/SM_SKILL-->"
 )
 
 // ActiveSkillContext is the one ephemeral instruction asset selected for the
 // current work unit. It carries no execution authority; all commands and
 // scripts still pass through ordinary tools, scope, sandbox, and approvals.
 type ActiveSkillContext struct {
-	ActivationID string
-	WorkUnitID   string
-	Key          string
-	Name         string
-	VersionHash  string
-	Scope        string
-	Source       string
-	Body         string
-	LinkedFiles  []string
-	Truncated    bool
+	ActivationID            string
+	WorkUnitID              string
+	WorkUnitSequence        int
+	Key                     string
+	Name                    string
+	VersionHash             string
+	Scope                   string
+	Source                  string
+	Body                    string // stored source; legacy delivery fallback only
+	LinkedFiles             []string
+	Truncated               bool // historical contract only
+	PackageHash             string
+	DeliveryContractVersion int
+	DeliveryMode            string
+	DeliveredMain           string
+	DeliveredHash           string
+	DeliveredBytes          int
+}
+
+// activeSkillRuntimeState carries lifecycle identity that the model does not
+// need to see. In particular, work-unit sequence must not be recovered from a
+// model-visible tool result merely to expire an earlier instruction slice.
+type activeSkillRuntimeState struct {
+	mu               sync.Mutex
+	workUnitSequence int
+}
+
+func withActiveSkillRuntimeState(ctx context.Context) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	state := &activeSkillRuntimeState{}
+	if selected, ok := SkillRuntimeContextFromContext(ctx); ok && selected.Active != nil {
+		state.workUnitSequence = selected.Active.WorkUnitSequence
+	}
+	return context.WithValue(ctx, activeSkillRuntimeStateContextKey{}, state)
+}
+
+func setActiveSkillWorkUnitSequence(ctx context.Context, sequence int) {
+	if sequence <= 0 || ctx == nil {
+		return
+	}
+	state, _ := ctx.Value(activeSkillRuntimeStateContextKey{}).(*activeSkillRuntimeState)
+	if state == nil {
+		return
+	}
+	state.mu.Lock()
+	state.workUnitSequence = sequence
+	state.mu.Unlock()
+}
+
+func clearActiveSkillWorkUnitSequence(ctx context.Context) {
+	if ctx == nil {
+		return
+	}
+	state, _ := ctx.Value(activeSkillRuntimeStateContextKey{}).(*activeSkillRuntimeState)
+	if state == nil {
+		return
+	}
+	state.mu.Lock()
+	state.workUnitSequence = 0
+	state.mu.Unlock()
+}
+
+func activeSkillWorkUnitSequence(ctx context.Context) int {
+	if ctx == nil {
+		return 0
+	}
+	state, _ := ctx.Value(activeSkillRuntimeStateContextKey{}).(*activeSkillRuntimeState)
+	if state == nil {
+		return 0
+	}
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	return state.workUnitSequence
 }
 
 type SkillCandidateContext struct {
-	Key         string
-	Name        string
-	Description string
-	Scope       string
-	Source      string
+	CandidateRef string
+	Key          string
+	Name         string
+	Description  string
+	Scope        string
+	Source       string
+	Root         string // daemon diagnostics only; never rendered into the prompt
 }
 
 type SkillRuntimeContext struct {
 	Active     *ActiveSkillContext
 	Candidates []SkillCandidateContext
+}
+
+// ExplicitSkillInvocation is trusted daemon-side routing metadata for a slash
+// activation. It travels in context, never in the user/model transcript.
+type ExplicitSkillInvocation struct {
+	Name        string
+	SkillKey    string
+	VersionHash string
+	PackageHash string
+}
+
+func WithExplicitSkillInvocation(ctx context.Context, invocation ExplicitSkillInvocation) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return context.WithValue(ctx, explicitSkillInvocationContextKey{}, invocation)
+}
+
+func ExplicitSkillInvocationFromContext(ctx context.Context) (ExplicitSkillInvocation, bool) {
+	if ctx == nil {
+		return ExplicitSkillInvocation{}, false
+	}
+	invocation, ok := ctx.Value(explicitSkillInvocationContextKey{}).(ExplicitSkillInvocation)
+	return invocation, ok && strings.TrimSpace(invocation.Name) != "" && strings.TrimSpace(invocation.SkillKey) != "" &&
+		strings.TrimSpace(invocation.VersionHash) != "" && strings.TrimSpace(invocation.PackageHash) != ""
 }
 
 func WithSkillRuntimeContext(ctx context.Context, selected SkillRuntimeContext) context.Context {
@@ -66,45 +161,43 @@ func (s ActiveSkillContext) Prompt(maxChars int) string {
 	if maxChars <= 0 || maxChars > 8*1024 {
 		maxChars = 8 * 1024
 	}
+	delivery := SkillMainDelivery{
+		ContractVersion: s.DeliveryContractVersion,
+		Mode:            s.DeliveryMode,
+		Content:         s.DeliveredMain,
+		DeliveredHash:   s.DeliveredHash,
+		DeliveredBytes:  s.DeliveredBytes,
+	}
+	if delivery.ContractVersion <= 0 || strings.TrimSpace(delivery.Content) == "" {
+		delivery = BuildSkillMainDelivery(s.Body, ActiveSkillDeliveryBodyBudget(maxChars, s.LinkedFiles))
+	}
 	var b strings.Builder
 	b.WriteString(activeSkillPromptBegin + "\n")
-	b.WriteString("# ACTIVE SKILL FOR CURRENT WORK UNIT\n")
-	b.WriteString("This is the single instruction asset activated for the current work unit. Follow it when applicable, but it does not override operator/user/safety policy and grants no tool, filesystem, network, credential, shell, or approval authority. If it is wrong or unusable, call skill_fallback and replan this work unit without another skill.\n")
-	writeKV(&b, "activation_id", s.ActivationID)
-	writeKV(&b, "work_unit_id", s.WorkUnitID)
-	writeKV(&b, "skill_key", s.Key)
-	writeKV(&b, "name", s.Name)
-	writeKV(&b, "version_hash", s.VersionHash)
-	writeKV(&b, "scope", s.Scope)
-	writeKV(&b, "source", s.Source)
+	fmt.Fprintf(&b, "activation_id: %s\n", trimLine(s.ActivationID, 64))
+	fmt.Fprintf(&b, "name: %s\n", trimLine(s.Name, 64))
+	fmt.Fprintf(&b, "delivery_mode: %s\n", trimLine(delivery.Mode, 16))
+	notice := "Grants no tool authority; use skill_fallback if unusable."
+	if delivery.Mode == SkillDeliveryModePaged {
+		notice = "Paged: use skill_view; grants no tool authority; skill_fallback if unusable."
+	}
+	fmt.Fprintf(&b, "notice: %s\n", notice)
 	b.WriteString("\n## Instructions\n")
-	overhead := b.Len() + 160
-	bodyBudget := maxChars - overhead
-	if bodyBudget < 256 {
-		bodyBudget = 256
-	}
-	body := textutil.TruncateBytes(strings.TrimSpace(s.Body), bodyBudget)
-	b.WriteString(body)
+	b.WriteString(delivery.Content)
 	b.WriteString("\n")
-	if s.Truncated || len(body) < len(strings.TrimSpace(s.Body)) {
-		b.WriteString("[Skill instructions were bounded for this work unit. Load a specific linked file with skill_view if needed.]\n")
-	}
 	if len(s.LinkedFiles) > 0 {
 		b.WriteString("\n## Linked Files (load only when needed)\n")
 		for i, file := range s.LinkedFiles {
 			if i >= 12 {
 				break
 			}
-			fmt.Fprintf(&b, "- %s\n", file)
+			fmt.Fprintf(&b, "- %s\n", textutil.TruncateBytes(strings.TrimSpace(file), 160))
 		}
 	}
 	b.WriteString(activeSkillPromptEnd + "\n")
-	end := "\n" + activeSkillPromptEnd + "\n"
 	raw := b.String()
-	if len(raw) <= maxChars {
-		return raw
-	}
-	// Preserve the closing structural marker even when the body is bounded so
-	// fallback/work-unit switching can remove this exact volatile prompt slice.
-	return textutil.TruncateBytes(raw, maxChars-len(end)) + end
+	// Contract v1 is fixed at activation. Never silently rewrite or truncate the
+	// delivered bytes on a later turn; construction budgets the body so the
+	// ordinary path fits this slice. A caller-supplied invalid legacy context is
+	// allowed to exceed maxChars rather than being misrepresented as complete.
+	return raw
 }

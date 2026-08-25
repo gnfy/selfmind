@@ -255,8 +255,10 @@ func (r *Registry) ToolSchemaReport() []ToolSchemaReport {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	reports := make([]ToolSchemaReport, 0, len(r.schemas))
+	exposures := r.effectiveToolExposuresLocked(deferredExternalRolloutEnabled)
 	for _, compiled := range r.schemas {
 		report := compiled.Report
+		report.Exposure = exposures[report.Name]
 		report.Issues = append([]ToolSchemaIssue(nil), report.Issues...)
 		reports = append(reports, report)
 	}

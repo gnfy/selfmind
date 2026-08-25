@@ -300,6 +300,30 @@ func (a *Agent) Provider() llm.Provider {
 	return a.llm
 }
 
+// ProviderToolCatalogPreview renders the daemon's actual foreground tool
+// surface through the active provider adapter. Gateway status and doctor use
+// this read-only snapshot; request preflight uses the same llm contract.
+func (a *Agent) ProviderToolCatalogPreview(ctx context.Context) llm.ToolCatalogPreview {
+	if a == nil {
+		return llm.ToolCatalogPreview{Protocol: "unavailable"}
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return llm.PreviewProviderToolCatalog(ctx, a.Provider(), a.llmToolDefinitions(ctx, DefaultTaskStrategy()))
+}
+
+// RuntimeContextBudget exposes the same model-window-derived presentation
+// budget used by selectRuntimeContext. Gateway-side deterministic activation
+// can therefore freeze delivery bytes before the Agent renders them without
+// duplicating model metadata or guessing a fixed size.
+func (a *Agent) RuntimeContextBudget() RuntimeContextBudget {
+	if a == nil || a.contextEngine == nil {
+		return DefaultRuntimeContextBudget()
+	}
+	return RuntimeContextBudgetForContextTokens(a.contextEngine.maxTokens)
+}
+
 func (a *Agent) SetEvolutionNotifyChannel(ch chan string) {
 	a.evolutionNotifyCh = ch
 	if a.Reflector != nil {
@@ -369,6 +393,10 @@ func (a *Agent) chatResponseWithRetry(ctx context.Context, messages []llm.Messag
 	var lastErr error
 	max := a.retryAttempts()
 	messages = a.prepareMessagesForModel(ctx, messages)
+	if err := ensureActiveSkillProviderDelivery(ctx, messages); err != nil {
+		emitActiveSkillDeliveryDeviation(ctx, err)
+		return nil, err
+	}
 	for attempt := 1; attempt <= max; attempt++ {
 		req := llm.ChatRequest{Messages: messages, Tools: a.llmToolDefinitions(ctx, strategy), PromptCacheKey: llm.StablePromptCacheKey(ctx)}
 		resp, err := a.activeLLM().Chat(ctx, req)
@@ -414,6 +442,10 @@ func (a *Agent) streamChatWithRetry(ctx context.Context, messages []llm.Message,
 	var lastErr error
 	max := a.retryAttempts()
 	messages = a.prepareMessagesForModel(ctx, messages)
+	if err := ensureActiveSkillProviderDelivery(ctx, messages); err != nil {
+		emitActiveSkillDeliveryDeviation(ctx, err)
+		return nil, err
+	}
 	for attempt := 1; attempt <= max; attempt++ {
 		req := llm.ChatRequest{Messages: messages, Tools: a.llmToolDefinitions(ctx, strategy), PromptCacheKey: llm.StablePromptCacheKey(ctx)}
 		ch, err := a.activeLLM().StreamChat(ctx, req)
@@ -436,6 +468,61 @@ func (a *Agent) streamChatWithRetry(ctx context.Context, messages []llm.Message,
 		}
 	}
 	return nil, fmt.Errorf("llm stream chat failed after %d attempts: %w", max, lastErr)
+}
+
+// ensureActiveSkillProviderDelivery is the final provider-bound preflight. It
+// runs after compaction/recovery and compares the entire protected prompt slice
+// against the activation baseline, so a valid pre-compaction receipt cannot
+// hide a later prompt mutation.
+func ensureActiveSkillProviderDelivery(ctx context.Context, messages []llm.Message) error {
+	bundle, ok := RuntimeContextBundleFromContext(ctx)
+	if !ok || bundle.ActiveSkill == nil || bundle.ActiveSkill.DeliveryContractVersion <= 0 {
+		return nil
+	}
+	active := bundle.ActiveSkill
+	if err := ValidateSkillMainDeliveryReceipt(active.DeliveryContractVersion, active.DeliveryMode,
+		active.DeliveredMain, active.DeliveredHash, active.DeliveredBytes); err != nil {
+		return fmt.Errorf("active Skill delivery baseline is invalid: %w", err)
+	}
+	var system string
+	for _, message := range messages {
+		if message.Role == "system" {
+			system += message.Content
+		}
+	}
+	if !strings.Contains(system, activeSkillPromptBegin) && strings.Contains(system, "earlier work unit's Active Skill context has expired") {
+		return nil
+	}
+	expected := active.Prompt(bundle.Budget.SkillMainBytes)
+	start := strings.Index(system, activeSkillPromptBegin)
+	if start < 0 {
+		return fmt.Errorf("active Skill protected slice is missing before provider call")
+	}
+	relEnd := strings.Index(system[start:], activeSkillPromptEnd)
+	if relEnd < 0 {
+		return fmt.Errorf("active Skill protected slice has no closing marker before provider call")
+	}
+	end := start + relEnd + len(activeSkillPromptEnd)
+	actual := system[start:end] + "\n"
+	if actual != expected {
+		return fmt.Errorf("active Skill protected slice differs from activation baseline before provider call")
+	}
+	return nil
+}
+
+func emitActiveSkillDeliveryDeviation(ctx context.Context, err error) {
+	if err == nil {
+		return
+	}
+	bundle, _ := RuntimeContextBundleFromContext(ctx)
+	activationID := ""
+	if bundle.ActiveSkill != nil {
+		activationID = bundle.ActiveSkill.ActivationID
+	}
+	EmitAgentEvent(EventChannelFromContext(ctx), AgentEvent{
+		Type: "skill.delivery.deviation", Content: "Active Skill delivery deviated at provider-bound preflight.",
+		Payload: map[string]interface{}{"activation_id": activationID, "stage": "provider_bound", "reason": err.Error()},
+	})
 }
 
 func (a *Agent) prepareMessagesForModel(ctx context.Context, messages []llm.Message) []llm.Message {
@@ -678,6 +765,7 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 		defer func() { finalize(finalOutput, finalErr) }()
 	}
 	ctx = withToolActivationState(ctx)
+	ctx = withActiveSkillRuntimeState(ctx)
 
 	var totalUsage llm.UsageStats
 	eventCh := eventChannelFromContext(ctx, a.EventChannel)
@@ -813,7 +901,7 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 		}
 		var ctxFiles []ContextFile
 		if workspace, ok := WorkspaceContextFromContext(ctx); ok {
-			ctxFiles, _ = a.contextScanner.ScanFrom(workspace.Root)
+			ctxFiles, _ = a.contextScanner.ScanRoots(workspace.ContextRoots())
 		}
 		if len(ctxFiles) > 0 {
 			ctxPrompt := a.contextScanner.BuildContextPrompt(ctxFiles)
@@ -828,9 +916,21 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 	// never executes repository code. It is limited to foreground and delegated
 	// coding profiles; background review keeps its separate bounded role contract.
 	if workspace, ok := WorkspaceContextFromContext(ctx); ok && a.workspacePromptProfile() {
-		if profilePrompt := DetectProjectProfile(workspace.Root).Prompt(); profilePrompt != "" {
-			systemPrompt += "\n\n" + profilePrompt
-			promptSections = append(promptSections, PromptSection{Category: "project_context", Tokens: estimateTokens(profilePrompt)})
+		remainingProfiles := maxProfileProjects
+		for _, root := range workspace.ContextRoots() {
+			if remainingProfiles <= 0 {
+				break
+			}
+			profile := DetectProjectProfile(root)
+			if len(profile.Projects) > remainingProfiles {
+				profile.Projects = profile.Projects[:remainingProfiles]
+			}
+			remainingProfiles -= len(profile.Projects)
+			if profilePrompt := profile.Prompt(); profilePrompt != "" {
+				profilePrompt = fmt.Sprintf("# BOUND PROJECT ROOT\nroot: %s\n\n%s", root, profilePrompt)
+				systemPrompt += "\n\n" + profilePrompt
+				promptSections = append(promptSections, PromptSection{Category: "project_context", Tokens: estimateTokens(profilePrompt)})
+			}
 		}
 	}
 
@@ -1370,9 +1470,22 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 			}
 
 			// Append results in order
-			if shouldExpireActiveSkillContext(calls, results, messages) {
+			if shouldExpireActiveSkillContext(ctx, calls, results) {
 				expireActiveSkillToolResults(messages)
-				systemPrompt = expireActiveSkillSystemPrompt(systemPrompt)
+				systemPrompt = expireActiveSkillMessages(messages, systemPrompt)
+				clearActiveSkillWorkUnitSequence(ctx)
+			}
+			for _, result := range results {
+				if !result.success || result.toolName != "skill_select" {
+					continue
+				}
+				var selected struct {
+					Success          bool `json:"success"`
+					WorkUnitSequence int  `json:"work_unit_sequence"`
+				}
+				if json.Unmarshal([]byte(result.rawResult), &selected) == nil && selected.Success {
+					setActiveSkillWorkUnitSequence(ctx, selected.WorkUnitSequence)
+				}
 			}
 			// Deferred-tool activation shares the Active Skill's work-unit scope:
 			// a capability discovered for one unit of work is not evidence for the
@@ -1549,7 +1662,7 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 	return outcome, totalUsage, nil
 }
 
-func shouldExpireActiveSkillContext(calls []llm.ToolCall, results []toolExecutionResult, messages []llm.Message) bool {
+func shouldExpireActiveSkillContext(ctx context.Context, calls []llm.ToolCall, results []toolExecutionResult) bool {
 	for idx, result := range results {
 		if !result.success {
 			continue
@@ -1558,7 +1671,7 @@ func shouldExpireActiveSkillContext(calls []llm.ToolCall, results []toolExecutio
 		case "skill_select", "skill_fallback":
 			return true
 		case "update_plan":
-			activeSequence := activeSkillWorkUnitSequence(messages)
+			activeSequence := activeSkillWorkUnitSequence(ctx)
 			if activeSequence == 0 {
 				continue
 			}
@@ -1598,22 +1711,6 @@ func shouldExpireActiveSkillContext(calls []llm.ToolCall, results []toolExecutio
 	return false
 }
 
-func activeSkillWorkUnitSequence(messages []llm.Message) int {
-	for i := len(messages) - 1; i >= 0; i-- {
-		if messages[i].Role != "tool" || messages[i].Name != "skill_select" {
-			continue
-		}
-		var payload struct {
-			Success          bool `json:"success"`
-			WorkUnitSequence int  `json:"work_unit_sequence"`
-		}
-		if json.Unmarshal([]byte(messages[i].Content), &payload) == nil && payload.Success {
-			return payload.WorkUnitSequence
-		}
-	}
-	return 0
-}
-
 func expireActiveSkillToolResults(messages []llm.Message) {
 	for i := range messages {
 		if messages[i].Role == "tool" && messages[i].Name == "skill_select" {
@@ -1633,6 +1730,18 @@ func expireActiveSkillSystemPrompt(prompt string) string {
 	}
 	end := start + relEnd + len(activeSkillPromptEnd)
 	return prompt[:start] + "[The earlier work unit's Active Skill context has expired.]" + prompt[end:]
+}
+
+// expireActiveSkillMessages updates both representations used by the running
+// loop. BuildMessages copies systemPrompt into messages[0]; changing only the
+// original string after skill_fallback leaves the already-composed provider
+// request carrying stale Skill instructions on the next iteration.
+func expireActiveSkillMessages(messages []llm.Message, systemPrompt string) string {
+	expired := expireActiveSkillSystemPrompt(systemPrompt)
+	if len(messages) > 0 && messages[0].Role == "system" {
+		messages[0].Content = expireActiveSkillSystemPrompt(messages[0].Content)
+	}
+	return expired
 }
 
 func uncachedInputTokens(usage llm.UsageStats) int {
@@ -1842,7 +1951,7 @@ func (a *Agent) selectRuntimeContext(ctx context.Context, tenantID, channel, pro
 	}
 	bundle := RuntimeContextBundle{
 		Channel: strings.TrimSpace(channel),
-		Budget:  DefaultRuntimeContextBudget(),
+		Budget:  a.RuntimeContextBudget(),
 	}
 	selectorProvided := false
 	if workspace, ok := WorkspaceContextFromContext(ctx); ok && strings.TrimSpace(workspace.Root) != "" {
@@ -1884,27 +1993,73 @@ func (a *Agent) selectRuntimeContext(ctx context.Context, tenantID, channel, pro
 		return ctx
 	}
 	activeSkillChars := 0
+	deliveryReceiptValid := true
 	if bundle.ActiveSkill != nil {
-		activeSkillChars = len(bundle.ActiveSkill.Prompt(bundle.Budget.SkillChars))
+		activeSkillChars = len(bundle.ActiveSkill.Prompt(bundle.Budget.SkillMainBytes))
+		if bundle.ActiveSkill.DeliveryContractVersion > 0 {
+			if err := ValidateSkillMainDeliveryReceipt(bundle.ActiveSkill.DeliveryContractVersion,
+				bundle.ActiveSkill.DeliveryMode, bundle.ActiveSkill.DeliveredMain,
+				bundle.ActiveSkill.DeliveredHash, bundle.ActiveSkill.DeliveredBytes); err != nil {
+				deliveryReceiptValid = false
+			}
+		}
+	}
+	catalogReport := SkillCatalogRenderReport{}
+	agentCreatedCandidates := 0
+	candidateSources := map[string]int{}
+	var candidateSample []string
+	var candidateRoots []string
+	seenCandidateRoots := map[string]bool{}
+	if len(bundle.SkillCandidates) > 0 {
+		for _, candidate := range bundle.SkillCandidates {
+			if len(candidateSample) < 8 {
+				candidateSample = append(candidateSample, strings.TrimSpace(candidate.Name))
+			}
+			source := strings.TrimSpace(candidate.Source)
+			if source == "" {
+				source = "unknown"
+			}
+			candidateSources[source]++
+			root := strings.TrimSpace(candidate.Root)
+			if root != "" && !seenCandidateRoots[root] && len(candidateRoots) < 8 {
+				seenCandidateRoots[root] = true
+				candidateRoots = append(candidateRoots, root)
+			}
+			if strings.EqualFold(strings.TrimSpace(candidate.Source), "agent-created") {
+				agentCreatedCandidates++
+			}
+		}
+		_, catalogReport = renderSkillCandidateCatalogWithinBudget(bundle.SkillCandidates,
+			bundle.Budget.SkillCatalogBytes, bundle.Budget.SkillCatalogTokens)
 	}
 	EmitAgentEvent(eventCh, AgentEvent{
 		Type:    "context.selected",
 		Content: strings.Join(bundle.SelectionNotes, "; "),
 		Payload: map[string]interface{}{
-			"channel":                bundle.Channel,
-			"has_workspace":          bundle.Workspace != nil,
-			"has_task":               bundle.Task != nil,
-			"indexed_memory_count":   len(bundle.Memories),
-			"recall_slice_count":     runtimeRecallSliceCount(bundle),
-			"canonical_recall_count": runtimeRecallSourceCount(bundle, "canonical"),
-			"active_skill_chars":     activeSkillChars,
-			"skill_candidate_count":  len(bundle.SkillCandidates),
-			// Full tenant/workspace Skill catalogs are never a runtime-context
-			// slice. This explicit zero makes the context-saving invariant
-			// measurable in production and eval traces.
-			"skill_directory_chars": 0,
-			"budget_chars":          bundle.Budget.TotalChars,
-			"workspace_root":        workspaceRootForBundle(bundle),
+			"channel":                             bundle.Channel,
+			"has_workspace":                       bundle.Workspace != nil,
+			"has_task":                            bundle.Task != nil,
+			"indexed_memory_count":                len(bundle.Memories),
+			"recall_slice_count":                  runtimeRecallSliceCount(bundle),
+			"canonical_recall_count":              runtimeRecallSourceCount(bundle, "canonical"),
+			"active_skill_chars":                  activeSkillChars,
+			"skill_delivery_valid":                deliveryReceiptValid,
+			"skill_candidate_count":               len(bundle.SkillCandidates),
+			"skill_candidate_agent_created_count": agentCreatedCandidates,
+			"skill_candidate_source_counts":       candidateSources,
+			"skill_candidate_sample":              candidateSample,
+			"skill_candidate_roots":               candidateRoots,
+			"skill_directory_chars":               catalogReport.Bytes,
+			"skill_catalog_included":              catalogReport.Included,
+			"skill_catalog_full":                  catalogReport.Full,
+			"skill_catalog_shortened":             catalogReport.Shortened,
+			"skill_catalog_omitted":               catalogReport.Omitted,
+			"skill_catalog_tokens":                catalogReport.Tokens,
+			"skill_catalog_token_budget":          catalogReport.TokenBudget,
+			"skill_catalog_present":               catalogReport.Bytes > 0,
+			"skill_catalog_within_budget":         catalogReport.WithinBudget(),
+			"budget_chars":                        bundle.Budget.TotalChars,
+			"workspace_root":                      workspaceRootForBundle(bundle),
 		},
 	})
 	return WithRuntimeContextBundle(ctx, bundle)
@@ -2325,7 +2480,7 @@ func (a *Agent) buildSystemPrompt(ctx context.Context, tenantID string, strategy
 	// changes every turn, so it goes in the suffix, never between stable blocks
 	// (where it would bust the cacheable prefix, the pre-P1-3 bug).
 	if bundle, ok := RuntimeContextBundleFromContext(ctx); ok {
-		if prompt := bundle.Prompt(8000); strings.TrimSpace(prompt) != "" {
+		if prompt := bundle.Prompt(bundle.Budget.TotalChars); strings.TrimSpace(prompt) != "" {
 			volatile = append(volatile, prompt)
 			sections = append(sections, SplitRuntimePromptSections(prompt)...)
 		}

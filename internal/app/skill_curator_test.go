@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -361,6 +362,115 @@ func TestSkillCuratorCreateFailsClosedWithoutConfiguredStorage(t *testing.T) {
 	proposal := `{"action":"CREATE","name":"missing-storage","content":"---\nname: missing-storage\ndescription: test\n---\n\n## Applicability\nTest.\n\n## Inputs\nNone.\n\n## Preconditions\nNone.\n\n## Procedure\nRead.\n\n## Failure Guards\nStop.\n\n## Recovery\nPlan.\n\n## Verification\nVerify."}`
 	if _, err := curator.ApplySkillCuration(context.Background(), "default", string(payload), proposal); err == nil || !strings.Contains(err.Error(), "storage is not configured") {
 		t.Fatalf("missing storage error = %v", err)
+	}
+}
+
+func TestSkillCuratorPublishesShortMainAndLazyLinkedResourcesAsOnePackage(t *testing.T) {
+	ctx := context.Background()
+	store, err := control.OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	storage, err := tools.NewSkillStorage(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	curator := &llmSkillCurator{store: store, skillStorage: storage, budget: kernel.RuntimeContextBudget{SkillMainBytes: 2048, SkillMainTokens: 512}}
+	digest := curatorTestDigest("package-evidence", []string{"file.read"})
+	payload, _ := json.Marshal(digest)
+	name := "lazy-package-skill"
+	main := repairSkillContent(name,
+		"Read the declared input and use references/detail.md only when the optional lookup table is needed.",
+		"Return to ordinary planning when the declared input is absent.")
+	resources := map[string]string{"references/detail.md": "# Optional lookup table\n\nOnly load this page when the main procedure requests it."}
+	proposal, _ := json.Marshal(skillCuratorWire{
+		Action: "CREATE", Name: name, Content: main, Resources: resources, Reason: "verified cohort",
+	})
+	summary, err := curator.ApplySkillCuration(ctx, "default", string(payload), string(proposal))
+	if err != nil || !strings.Contains(summary, "promoted") {
+		t.Fatalf("package promotion=%q err=%v", summary, err)
+	}
+	pack, err := tools.ReadSkillPackageForTenant("default", name,
+		tools.WithSkillStorage(map[string]interface{}{"_tenant_id": "default", "_context": ctx}, storage))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pack.MainSource != main || pack.ResourceBodies["references/detail.md"] != resources["references/detail.md"] {
+		t.Fatalf("published package=%+v", pack)
+	}
+	version, err := store.SkillCandidateByEvidence(ctx, "default", digest.EvidenceSetHash)
+	if err != nil || version == nil || version.PackageHash != pack.PackageHash || string(version.ResourceManifest) == "[]" {
+		t.Fatalf("durable package version=%+v pack=%+v err=%v", version, pack, err)
+	}
+}
+
+func TestSkillCuratorRejectsOversizedMainInsteadOfCreatingAHiddenTruncation(t *testing.T) {
+	ctx := context.Background()
+	store, err := control.OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	storage, err := tools.NewSkillStorage(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	curator := &llmSkillCurator{store: store, skillStorage: storage, budget: kernel.RuntimeContextBudget{SkillMainBytes: 700, SkillMainTokens: 1000}}
+	digest := curatorTestDigest("oversized-main", []string{"file.read"})
+	payload, _ := json.Marshal(digest)
+	name := "oversized-main"
+	proposal, _ := json.Marshal(skillCuratorWire{
+		Action: "CREATE", Name: name,
+		Content: repairSkillContent(name, strings.Repeat("read the declared record; ", 80), "Return to ordinary planning."),
+		Reason:  "verified cohort",
+	})
+	if _, err := curator.ApplySkillCuration(ctx, "default", string(payload), string(proposal)); err == nil || !strings.Contains(err.Error(), "delivered in full") {
+		t.Fatalf("oversized main error=%v", err)
+	}
+	if version, err := store.SkillCandidateByEvidence(ctx, "default", digest.EvidenceSetHash); err != nil || version != nil {
+		t.Fatalf("oversized main materialized version=%+v err=%v", version, err)
+	}
+}
+
+func TestSkillCuratorCreateUsesResourceAndCJKTokenBudgets(t *testing.T) {
+	budget := kernel.RuntimeContextBudget{SkillMainBytes: 8192, SkillMainTokens: 120}
+	name := "cjk-budget"
+	tokenHeavy := repairSkillContent(name, strings.Repeat("检查记录", 80), "Return to ordinary planning.")
+	if err := validateCuratedSkillPackageShape(tokenHeavy, nil, name); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateCuratedSkillCreateDelivery(tokenHeavy, nil, budget); err == nil || !strings.Contains(err.Error(), "delivered in full") {
+		t.Fatalf("token-heavy CJK main passed exact delivery validation: %v", err)
+	}
+
+	resourceBudget := kernel.RuntimeContextBudget{SkillMainBytes: 1000, SkillMainTokens: 1000}
+	main := repairSkillContent(name, strings.Repeat("read record; ", 35), "Return to ordinary planning.")
+	resources := map[string]string{}
+	for i := 0; i < 12; i++ {
+		resources[fmt.Sprintf("references/very-long-resource-name-%02d.md", i)] = "detail"
+	}
+	withoutResources := curatedSkillDelivery(main, nil, resourceBudget)
+	withResources := curatedSkillDelivery(main, resources, resourceBudget)
+	if withoutResources.Mode != kernel.SkillDeliveryModeFull || withResources.Mode != kernel.SkillDeliveryModePaged {
+		t.Fatalf("resource reserve was not part of exact CREATE budget: without=%+v with=%+v", withoutResources, withResources)
+	}
+}
+
+func TestSkillCuratorPagedLegacyPatchAllowsOnlyNonGrowth(t *testing.T) {
+	budget := kernel.RuntimeContextBudget{SkillMainBytes: 700, SkillMainTokens: 1000}
+	name := "legacy-paged"
+	active := repairSkillContent(name, strings.Repeat("read legacy record; ", 70), "Return to ordinary planning.")
+	shorter := repairSkillContent(name, strings.Repeat("read current record; ", 40), "Return to ordinary planning.")
+	if curatedSkillDelivery(active, nil, budget).Mode != kernel.SkillDeliveryModePaged {
+		t.Fatal("test active main must be paged")
+	}
+	if err := validateCuratedSkillPatchDelivery(active, shorter, nil, budget); err != nil {
+		t.Fatalf("non-growing legacy PATCH rejected: %v", err)
+	}
+	grown := repairSkillContent(name, strings.Repeat("read expanded record; ", 90), "Return to ordinary planning.")
+	if err := validateCuratedSkillPatchDelivery(active, grown, nil, budget); err == nil || !strings.Contains(err.Error(), "cannot grow") {
+		t.Fatalf("growing legacy PATCH accepted: %v", err)
 	}
 }
 

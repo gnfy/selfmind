@@ -8,6 +8,7 @@ import (
 
 	"selfmind/internal/control"
 	"selfmind/internal/kernel/memory"
+	"selfmind/internal/tools"
 )
 
 func TestApplyStateSeedsStoresCanonicalMemoryInPersonPartition(t *testing.T) {
@@ -87,5 +88,33 @@ func TestApplyStateSeedsCanBindWorkspaceSkill(t *testing.T) {
 	binding, err := store.GetTaskSkillBinding(ctx, identity.TenantID, identity.PersonID, task.ID)
 	if err != nil || binding == nil || binding.SkillName != "release-check" || binding.State != control.TaskSkillBindingActive {
 		t.Fatalf("binding=%+v err=%v", binding, err)
+	}
+}
+
+func TestApplyStateSeedsCreatesAgentCreatedSkillFixture(t *testing.T) {
+	ctx := context.Background()
+	store, err := control.OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	identity, err := store.ResolveOrCreateAccount(ctx, "default", "eval", "agent-skill-seed", "Agent Skill Seed")
+	if err != nil {
+		t.Fatal(err)
+	}
+	skillsBase := t.TempDir()
+	setup := &Setup{Skills: []SeedSkill{{
+		Name: "release-check", Description: "Inspect the exact release version", Content: "Read release.txt and report its exact value.",
+	}}}
+	if err := applySkillSeeds(identity.TenantID, skillsBase, setup.Skills); err != nil {
+		t.Fatal(err)
+	}
+	storage, err := tools.NewSkillStorage(skillsBase)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listed, err := tools.ListSkillsForTenant(identity.TenantID, false, tools.WithSkillStorage(map[string]interface{}{}, storage))
+	if err != nil || len(listed) != 1 || listed[0].Name != "release-check" || listed[0].Source != tools.SkillSourceAgentCreated {
+		t.Fatalf("seeded Skills=%+v err=%v", listed, err)
 	}
 }

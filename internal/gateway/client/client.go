@@ -30,9 +30,10 @@ import (
 
 // Client talks to a gateway daemon over HTTP.
 type Client struct {
-	BaseURL string
-	Token   string
-	HTTP    *http.Client
+	BaseURL           string
+	Token             string
+	LocalControlToken string
+	HTTP              *http.Client
 }
 
 // New builds a Client. A nil http.Client falls back to a sensible default with
@@ -57,6 +58,18 @@ func (c *Client) auth(req *http.Request) {
 	if c.Token != "" {
 		req.Header.Set("Authorization", "Bearer "+c.Token)
 	}
+	if c.LocalControlToken != "" {
+		req.Header.Set(api.LocalControlTokenHeader, c.LocalControlToken)
+	}
+}
+
+// SetLocalControlToken marks requests as coming from the authenticated local
+// CLI. Callers must never load or send this token to a non-loopback gateway.
+func (c *Client) SetLocalControlToken(token string) {
+	if c == nil {
+		return
+	}
+	c.LocalControlToken = strings.TrimSpace(token)
 }
 
 // ProcessMessage implements the cli.MessageProcessor signature against a remote

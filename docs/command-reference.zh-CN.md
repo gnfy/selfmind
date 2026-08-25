@@ -8,7 +8,7 @@
 ## 全局与生命周期命令
 
 ```text
-selfmind [--config PATH] [--resume SESSION_ID]
+selfmind [--config PATH] [--resume SESSION_ID] [--add-dir DIR]...
 selfmind --version
 selfmind setup [--non-interactive] [--skip-model] [--skip-gateway] [--check-model]
 selfmind update [check] [--channel latest|next] [--force] [--no-restart]
@@ -20,7 +20,8 @@ selfmind feedback [--out FILE|--send] [--repo OWNER/REPO] [--include-crash] <mes
   程序会先进入引导设置，并且只在配置完成后启动 daemon。取消设置会直接退出；
   脚本、cron 和管道等非交互场景不会弹出提示，而会输出可执行的 `setup` 或
   `model set` 命令。`--config` 指定其他配置文件，`--resume` 恢复已有 TUI
-  会话。
+  会话。可重复使用 `--add-dir`，仅为本次 CLI 调用授予另一个本地目录的访问权，
+  不会修改已登记的 workspace。
 - `setup` 创建或升级配置，引导选择一个主模型和一个可选辅助模型，然后启动本地
   gateway。辅助模型统一承担审批、记忆、召回、摘要和 Skill 工作；逐角色调优仍可在
   YAML 中作为高级配置完成。各类 `skip` 参数可用于自动化环境。
@@ -47,7 +48,7 @@ selfmind feedback [--out FILE|--send] [--repo OWNER/REPO] [--include-crash] <mes
 以下命令与 TUI、IM 渠道连接同一个 gateway。
 
 ```text
-selfmind send [--async] [--mode MODE] <message>
+selfmind send [--async] [--mode MODE] [--add-dir DIR]... <message>
 selfmind status
 selfmind watchers [active|attention|recent|all [page]|<n|id>|cancel <n|id>]
 selfmind tasks [done|archived|all|<keyword>]
@@ -72,6 +73,12 @@ selfmind new [title]
   `MODE` 可用值为 `on-request`、`read-only`、`auto-edit`、`full-auto`
   或 `smart`。未保存个人偏好时默认使用 `smart`；未配置裁决模型时会安全
   降级为人工审批。
+- `--add-dir` 可重复使用，且只允许已认证、连接本机 loopback gateway 的 CLI
+  使用。相对路径以启动 SelfMind 的 shell 为基准解析；路径会被规范化，最多八个，
+  并冻结到排队的 run 中，同时参与项目指令发现和文件系统冲突调度。它只扩大该 run
+  的文件系统范围，不会授予 workspace 信任、绕过审批或沙箱，也不会修改持久
+  workspace。运行中的 turn 不能改变附加目录集合；需要不同目录时应新开 run。
+  若消息正文要原样包含 `--add-dir`，请先写 `--`。
 - `tasks` 默认列出开放工作，也可以按状态或关键词过滤。
 - `task` 支持列表序号或稳定 task ID。
 - `resume` 必要时会重新打开已归档任务，并在该任务上启动 TUI。
@@ -224,7 +231,7 @@ selfmind weixin status
 
 ```text
 selfmind eval [list|run|report|repair|scorecard|capture|clean]
-selfmind maintenance [replay|migrate-memory|migrate-skills|cleanup-person-partitions|migrate-task-references|memory-audit|memory-dedup|task-audit|restore-control] ...
+selfmind maintenance [replay|migrate-memory|migrate-skills|cleanup-person-partitions|prune-skill-candidate-refs|migrate-task-references|memory-audit|memory-dedup|task-audit|restore-control] ...
 ```
 
 ```text
@@ -240,6 +247,7 @@ selfmind maintenance replay [--limit N] [--prompt-revision]
 selfmind maintenance migrate-memory [--apply] [--data-dir DIR]
 selfmind maintenance migrate-skills [--apply] [--root DIR] [--governance-grace 30d]
 selfmind maintenance cleanup-person-partitions [--apply] [--root DIR --data-dir DIR]
+selfmind maintenance prune-skill-candidate-refs [--apply] [--data-dir DIR]
 selfmind maintenance migrate-task-references [--apply] [--limit N] [--data-dir DIR]
 selfmind maintenance memory-audit [--archive-confirmed] [--partition P] [--data-dir DIR]
 selfmind maintenance memory-dedup [--apply] [--partition P] [--data-dir DIR]
@@ -260,6 +268,11 @@ selfmind maintenance restore-control --backup PATH --yes [--data-dir DIR]
 `.orphaned-person-partitions` 隔离目录，不会删除数据。默认 root 与 control
 database 来自同一份已加载配置；如果用 `--root` 指向另一棵资产目录，就必须用
 `--data-dir` 明确指定权威 `control.db`。该命令不会打开或创建猜测出来的空数据库。
+
+`maintenance prune-skill-candidate-refs` 默认只预览 owner work unit 已结束或
+不存在的引用。`--apply` 只删除同一个事务查询选中的引用，排除仍存活的 work unit，
+然后再次预览以验证结果为空。应结合 dry-run 输出中的 owner 行与
+`selfmind doctor --verbose` 复核；不要直接在 SQLite 中删除 candidate ref。
 
 - `task-audit` 默认只读，列出缺少持久 blocker 证据的暂停任务。只有任务当前无
   active run，且状态与最新已结束 run 完全一致时，`--apply` 才补写 blocker；

@@ -415,6 +415,24 @@ func TestProcessMessageSkipsPollingForControlCommands(t *testing.T) {
 	}
 }
 
+func TestProcessMessageSendsLocalControlToken(t *testing.T) {
+	header := make(chan string, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		header <- r.Header.Get(api.LocalControlTokenHeader)
+		writeJSONResp(w, api.MessageResponse{Content: "ok"})
+	}))
+	defer srv.Close()
+	c := New(srv.URL, "")
+	c.SetLocalControlToken("local-secret")
+	resp, status := c.ProcessMessageDetached(context.Background(), api.MessageRequest{Content: "inspect"})
+	if status != http.StatusOK || resp.Content != "ok" {
+		t.Fatalf("response = %#v, status = %d", resp, status)
+	}
+	if got := <-header; got != "local-secret" {
+		t.Fatalf("local control header = %q", got)
+	}
+}
+
 func TestDispatch(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/dispatch" {

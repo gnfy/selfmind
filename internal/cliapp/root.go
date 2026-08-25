@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -33,7 +34,11 @@ type App struct {
 	// It is pinned before the TUI starts, then the normal interactive session
 	// continues with that task as the next-turn context.
 	resumeTaskRef string
-	input         *bufio.Reader
+	// additionalDirs is the invocation-local --add-dir overlay. Interactive
+	// sessions send it with every new run; short-lived `send` calls use the same
+	// parsed list. It never mutates the durable workspace registration.
+	additionalDirs []string
+	input          *bufio.Reader
 
 	// gatewayEnsured guards the one-time local-daemon auto-start so each CLI
 	// client invocation probes/starts the gateway at most once.
@@ -95,9 +100,15 @@ func Run(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.
 		fmt.Fprintln(stderr, err)
 		return 2
 	}
+	cleanedArgs, additionalDirs, err := splitAddDirFlags(cleanedArgs)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 2
+	}
 	app.args = cleanedArgs
 	app.configPath = configPath
 	app.resumeChannel = resumeChannel
+	app.additionalDirs = additionalDirs
 	if handled, exitCode := app.extractTaskResumeCommand(); handled && exitCode != 0 {
 		return exitCode
 	}
@@ -186,13 +197,13 @@ func isVersionCommand(args []string) bool {
 }
 
 var documentedCLIUsages = []string{
-	"selfmind [--config PATH] [--resume SESSION_ID]",
+	"selfmind [--config PATH] [--resume SESSION_ID] [--add-dir DIR]...",
 	"selfmind --version",
 	"selfmind setup [--non-interactive] [--skip-model] [--skip-gateway] [--check-model]",
 	"selfmind update [check] [--channel latest|next] [--force] [--no-restart]",
 	"selfmind uninstall --prepare [--purge-data --yes]",
 	"selfmind feedback [--out FILE|--send] [--repo OWNER/REPO] [--include-crash] <message>",
-	"selfmind send [--async] [--mode MODE] <message>",
+	"selfmind send [--async] [--mode MODE] [--add-dir DIR]... <message>",
 	"selfmind status",
 	"selfmind usage",
 	"selfmind report daily [--since 24h]",
@@ -217,7 +228,7 @@ var documentedCLIUsages = []string{
 	"selfmind docs [check|index]",
 	"selfmind selfcheck [--fast | --profile local-full|local-fast|ci] [--skip-go] [--skip-eval] [--eval-dir DIR]",
 	"selfmind eval [list|run|report|repair|scorecard|capture|clean]",
-	"selfmind maintenance [replay|migrate-memory|migrate-skills|cleanup-person-partitions|migrate-task-references|memory-audit|memory-dedup|task-audit|restore-control] ...",
+	"selfmind maintenance [replay|migrate-memory|migrate-skills|cleanup-person-partitions|prune-skill-candidate-refs|migrate-task-references|memory-audit|memory-dedup|task-audit|restore-control] ...",
 	"selfmind gateway [run|start|status|stop|restart|service] ...",
 	"selfmind weixin [login|status] ...",
 }
@@ -334,6 +345,78 @@ func splitResumeFlag(args []string) ([]string, string, error) {
 		}
 	}
 	return cleaned, strings.TrimSpace(resume), nil
+}
+
+const maxCLIAdditionalDirs = 8
+
+// splitAddDirFlags extracts repeatable --add-dir flags for both the
+// interactive TUI and `selfmind send`. Resolve them in the client process: a
+// relative path belongs to the shell that launched SelfMind, never to the
+// daemon's cwd. The daemon repeats canonical validation before granting scope.
+func splitAddDirFlags(args []string) ([]string, []string, error) {
+	if len(args) == 0 {
+		return args, nil, nil
+	}
+	cleaned := []string{args[0]}
+	var rawDirs []string
+	literal := false
+	for i := 1; i < len(args); i++ {
+		arg := args[i]
+		if literal {
+			cleaned = append(cleaned, arg)
+			continue
+		}
+		if arg == "--" {
+			literal = true
+			cleaned = append(cleaned, arg)
+			continue
+		}
+		switch {
+		case arg == "--add-dir":
+			if i+1 >= len(args) {
+				return nil, nil, fmt.Errorf("--add-dir requires a directory")
+			}
+			rawDirs = append(rawDirs, args[i+1])
+			i++
+		case strings.HasPrefix(arg, "--add-dir="):
+			rawDirs = append(rawDirs, strings.TrimPrefix(arg, "--add-dir="))
+		default:
+			cleaned = append(cleaned, arg)
+		}
+	}
+	if len(rawDirs) > maxCLIAdditionalDirs {
+		return nil, nil, fmt.Errorf("--add-dir may be specified at most %d times", maxCLIAdditionalDirs)
+	}
+	seen := make(map[string]struct{}, len(rawDirs))
+	dirs := make([]string, 0, len(rawDirs))
+	for _, raw := range rawDirs {
+		raw = strings.TrimSpace(raw)
+		if raw == "" {
+			return nil, nil, fmt.Errorf("--add-dir requires a non-empty directory")
+		}
+		absolute, err := filepath.Abs(raw)
+		if err != nil {
+			return nil, nil, fmt.Errorf("resolve --add-dir %q: %w", raw, err)
+		}
+		info, err := os.Stat(absolute)
+		if err != nil {
+			return nil, nil, fmt.Errorf("inspect --add-dir %q: %w", raw, err)
+		}
+		if !info.IsDir() {
+			return nil, nil, fmt.Errorf("--add-dir %q is not a directory", raw)
+		}
+		canonical, err := filepath.EvalSymlinks(absolute)
+		if err != nil {
+			return nil, nil, fmt.Errorf("resolve --add-dir %q: %w", raw, err)
+		}
+		canonical = filepath.Clean(canonical)
+		if _, ok := seen[canonical]; ok {
+			continue
+		}
+		seen[canonical] = struct{}{}
+		dirs = append(dirs, canonical)
+	}
+	return cleaned, dirs, nil
 }
 
 func (a *App) applyGatewayConfigEnv() {

@@ -26,7 +26,6 @@ import (
 	"selfmind/internal/gateway/delivery"
 	"selfmind/internal/gateway/httpapi"
 	"selfmind/internal/gateway/weixin"
-	"selfmind/internal/kernel"
 	"selfmind/internal/kernel/memory"
 	"selfmind/internal/platform/config"
 	"selfmind/internal/platform/log"
@@ -239,21 +238,20 @@ func Run(ctx context.Context, opts Options) (runErr error) {
 		return fmt.Errorf("app.InitAgent failed: %w", err)
 	}
 
-	skillStore := kernel.NewSkillStore(mem)
-	disp, err := app.InitTools(mem, cfg, agent, skillStore, defaultTenantID, prompts, controlStore)
+	disp, err := app.InitTools(mem, cfg, agent, defaultTenantID, prompts, controlStore)
 	if err != nil {
 		return fmt.Errorf("app.InitTools failed: %w", err)
 	}
 	agent.SetBackend(disp)
 
-	gwDeps, err := app.InitGateway(dataDir, mem, agent, cfg, skillStore)
+	gwDeps, err := app.InitGateway(dataDir, mem, agent, cfg)
 	if err != nil {
 		return fmt.Errorf("app.InitGateway failed: %w", err)
 	}
 	// Optional multi-worker execution (SELFMIND_WORKERS>1) for the daemon, where
 	// concurrent CLI/IM/cron requests can actually exercise it. Default 1 = the
 	// single-agent serialized path, unchanged.
-	if workers, werr := app.MaybeEnableWorkerPool(gwDeps.Gateway, mem, cfg, skillStore, defaultTenantID, prompts, controlStore); werr != nil {
+	if workers, werr := app.MaybeEnableWorkerPool(gwDeps.Gateway, mem, cfg, defaultTenantID, prompts, controlStore); werr != nil {
 		log.Warn("worker pool partially enabled", "workers", workers, "error", werr)
 	} else if workers > 1 {
 		log.Info("agent worker pool enabled", "workers", workers)
@@ -279,15 +277,27 @@ func Run(ctx context.Context, opts Options) (runErr error) {
 	}
 
 	gatewayAPI := &httpapi.Server{
-		Control:              controlStore,
-		Gateway:              gwDeps.Gateway,
-		DefaultTenantID:      defaultTenantID,
-		PromptSnapshotHash:   prompts.Hash(),
-		ToolSchemaReportFunc: disp.ToolSchemaReport,
-		MCPHealthFunc:        mcpHealthFunc,
-		SkillStorage:         skillStorage,
-		DrainTimeout:         drainTimeout,
-		LocalControlToken:    localControlToken,
+		Control:                controlStore,
+		Gateway:                gwDeps.Gateway,
+		DefaultTenantID:        defaultTenantID,
+		PromptSnapshotHash:     prompts.Hash(),
+		ToolSchemaReportFunc:   disp.ToolSchemaReport,
+		ToolCatalogPreviewFunc: agent.ProviderToolCatalogPreview,
+		ToolCatalogProbeFunc: func(ctx context.Context) api.ProviderToolCatalogProbeResponse {
+			probe := agent.ProbeProviderToolCatalog(ctx)
+			response := api.ProviderToolCatalogProbeResponse{
+				OK: probe.Err == nil, Provider: cfg.EffectiveProvider(), Model: probe.Model,
+				LatencyMS: probe.Latency.Milliseconds(), Catalog: probe.Catalog,
+			}
+			if probe.Err != nil {
+				response.Error = tools.RedactSensitive(probe.Err.Error())
+			}
+			return response
+		},
+		MCPHealthFunc:     mcpHealthFunc,
+		SkillStorage:      skillStorage,
+		DrainTimeout:      drainTimeout,
+		LocalControlToken: localControlToken,
 		// Pending-approval/clarify escrow threshold (Fix 2); "0" disables.
 		PendingNotifyAfter: cfg.Gateway.PendingNotifyAfterDuration(),
 		// How long a run may park on an unanswered approval. The unattended

@@ -38,6 +38,7 @@ type vcrWorkspaceCtxKey struct{}
 const vcrWorkspacePlaceholder = "{{SELFMIND_VCR_WORKSPACE}}"
 
 var vcrWorkUnitIDPattern = regexp.MustCompile(`\bwu_[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b`)
+var vcrSkillCandidateRefPattern = regexp.MustCompile(`\bskref_[0-9a-fA-F]{16}\b`)
 
 // WithVCRSession tags a context so provider calls made under it are recorded or
 // replayed against the named session.
@@ -255,6 +256,9 @@ func (v *vcrProvider) load(ctx context.Context, path string, messages []Message)
 	for i, id := range vcrWorkUnitIDs(messages) {
 		c = rewriteCassette(c, vcrWorkUnitPlaceholder(i), id)
 	}
+	for i, ref := range vcrSkillCandidateRefs(messages) {
+		c = rewriteCassette(c, vcrSkillCandidateRefPlaceholder(i), ref)
+	}
 	return &c, nil
 }
 
@@ -292,6 +296,9 @@ func (v *vcrProvider) save(ctx context.Context, path string, c cassette, message
 	c = rewriteCassette(c, vcrWorkspaceFromContext(ctx), vcrWorkspacePlaceholder)
 	for i, id := range vcrWorkUnitIDs(messages) {
 		c = rewriteCassette(c, id, vcrWorkUnitPlaceholder(i))
+	}
+	for i, ref := range vcrSkillCandidateRefs(messages) {
+		c = rewriteCassette(c, ref, vcrSkillCandidateRefPlaceholder(i))
 	}
 	data, err := json.MarshalIndent(c, "", "  ")
 	if err != nil {
@@ -480,11 +487,23 @@ func vcrWorkUnitPlaceholder(index int) string {
 	return fmt.Sprintf("{{SELFMIND_VCR_WORK_UNIT_%d}}", index+1)
 }
 
+func vcrSkillCandidateRefPlaceholder(index int) string {
+	return fmt.Sprintf("{{SELFMIND_VCR_SKILL_REF_%d}}", index+1)
+}
+
 func vcrWorkUnitIDs(messages []Message) []string {
+	return vcrOpaqueIDs(messages, vcrWorkUnitIDPattern)
+}
+
+func vcrSkillCandidateRefs(messages []Message) []string {
+	return vcrOpaqueIDs(messages, vcrSkillCandidateRefPattern)
+}
+
+func vcrOpaqueIDs(messages []Message, pattern *regexp.Regexp) []string {
 	seen := map[string]bool{}
 	var out []string
 	add := func(value string) {
-		for _, id := range vcrWorkUnitIDPattern.FindAllString(value, -1) {
+		for _, id := range pattern.FindAllString(value, -1) {
 			if !seen[id] {
 				seen[id] = true
 				out = append(out, id)

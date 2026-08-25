@@ -57,14 +57,23 @@ func TestSkillInvocationResolverUsesInjectedStorage(t *testing.T) {
 		t.Fatal(err)
 	}
 	var resolved struct {
-		Found  bool   `json:"found"`
-		Prompt string `json:"prompt"`
+		Found       bool   `json:"found"`
+		Kind        string `json:"kind"`
+		Prompt      string `json:"prompt"`
+		Name        string `json:"name"`
+		SkillKey    string `json:"skill_key"`
+		VersionHash string `json:"version_hash"`
+		PackageHash string `json:"package_hash"`
 	}
 	if err := json.Unmarshal([]byte(result), &resolved); err != nil {
 		t.Fatal(err)
 	}
-	if !resolved.Found || !strings.Contains(resolved.Prompt, "Follow the custom root") || !strings.Contains(resolved.Prompt, "do it") {
+	if !resolved.Found || resolved.Kind != "skill" || resolved.Name != "custom-flow" || resolved.SkillKey == "" ||
+		resolved.VersionHash == "" || resolved.PackageHash == "" || resolved.Prompt != "do it" {
 		t.Fatalf("resolution = %s", result)
+	}
+	if strings.Contains(resolved.Prompt, "Follow the custom root") {
+		t.Fatalf("resolver eagerly injected Skill body: %s", result)
 	}
 	if _, err := os.Stat(filepath.Join(home, ".selfmind", "default")); !os.IsNotExist(err) {
 		t.Fatalf("resolver touched HOME: %v", err)

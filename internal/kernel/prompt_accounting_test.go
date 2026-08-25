@@ -63,11 +63,14 @@ func TestSplitRuntimePromptSectionsAndProviderCallBreakdown(t *testing.T) {
 		{Role: "user", Content: "prepare report"},
 		{Role: "tool", Content: "bounded command output"},
 	}, []llm.ToolDefinition{{Name: "read_file", Description: "Read one file"}})
-	for _, key := range []string{"stable_system", "tool_schemas", "history", "current_tool_results", "recall", "workspace", "artifacts", "memory", "skill", "task_runtime", "estimated_total"} {
+	for _, key := range []string{"stable_system", "tool_schemas", "tool_schema_count", "history", "current_tool_results", "recall", "workspace", "artifacts", "memory", "skill", "task_runtime", "estimated_total"} {
 		value, ok := payload[key].(int)
 		if !ok || value <= 0 {
 			t.Fatalf("expected positive %s in %+v", key, payload)
 		}
+	}
+	if dynamic, ok := payload["dynamic_skill_tools"].(int); !ok || dynamic != 0 {
+		t.Fatalf("dynamic Skill tool schemas=%v", payload["dynamic_skill_tools"])
 	}
 }
 

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"selfmind/internal/executionenv"
 )
 
 // Persistent steering mailbox (Loop Engineering ACTIVE PLAN P0-A). Mid-run
@@ -195,6 +196,12 @@ func (s *Store) ListUnconsumedSteering(ctx context.Context, tenantID, runID stri
 // crash-replay of this hand-off converge on one row; the mailbox row flips to
 // deferred only after the enqueue succeeded.
 func (s *Store) DeferSteering(ctx context.Context, m SteeringMessage) error {
+	var executionRoots []executionenv.RootBinding
+	if run, err := s.GetRun(ctx, m.TenantID, m.RunID); err != nil {
+		return err
+	} else if run != nil {
+		executionRoots = executionenv.CloneRootBindings(run.ExecutionRoots)
+	}
 	if _, err := s.EnqueueQueued(ctx, QueuedTask{
 		TenantID:       m.TenantID,
 		PersonID:       m.PersonID,
@@ -204,6 +211,7 @@ func (s *Store) DeferSteering(ctx context.Context, m SteeringMessage) error {
 		Content:        m.Content,
 		ApprovalMode:   m.ApprovalMode,
 		WorkspaceID:    m.WorkspaceID,
+		ExecutionRoots: executionRoots,
 		TaskID:         m.TaskID,
 		IdempotencyKey: "steering:" + m.ID,
 		Class:          QueueClassForeground,

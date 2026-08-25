@@ -32,6 +32,7 @@ func (d *Server) enqueueBehindActive(ctx context.Context, identity *control.Iden
 		Content:        req.Content,
 		ApprovalMode:   req.ApprovalMode,
 		WorkspaceID:    req.WorkspaceID,
+		ExecutionRoots: req.ExecutionRoots,
 	})
 	if err != nil {
 		return api.MessageResponse{Identity: identity, Error: err.Error(), Turn: messageTurn("failed", "", "", "", "", err.Error())}

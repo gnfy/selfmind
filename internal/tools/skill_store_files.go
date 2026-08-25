@@ -40,6 +40,9 @@ func createSkill(tenantID, name, content, description, source string, invocation
 	}
 
 	content = ensureFrontMatter(content, safeName, description)
+	if err := ValidateManagedSkillDescription(content); err != nil {
+		return "", err
+	}
 	if err := validateSkillEnvironmentDeclarations(content); err != nil {
 		return "", err
 	}
@@ -76,6 +79,9 @@ func editSkill(tenantID, name, content, description string, invocation ...map[st
 		return "", err
 	}
 	content = ensureFrontMatter(content, info.Name, description)
+	if err := ValidateManagedSkillDescription(content); err != nil {
+		return "", err
+	}
 	if err := validateSkillEnvironmentDeclarations(content); err != nil {
 		return "", err
 	}
@@ -138,6 +144,9 @@ func patchSkill(tenantID, name, oldText, newText, filePath string, replaceAll bo
 		return "", fmt.Errorf("security scan failed: %w", err)
 	}
 	if filePath == "" {
+		if err := ValidateManagedSkillDescription(updated); err != nil {
+			return "", err
+		}
 		if err := validateSkillEnvironmentDeclarations(updated); err != nil {
 			return "", err
 		}

@@ -19,6 +19,8 @@ type SkillVersion struct {
 	State             string          `json:"state"`
 	ContentRef        string          `json:"content_ref,omitempty"`
 	ContentBody       string          `json:"content_body,omitempty"`
+	PackageHash       string          `json:"package_hash,omitempty"`
+	ResourceManifest  json.RawMessage `json:"resource_manifest,omitempty"`
 	ObservationIDs    json.RawMessage `json:"source_observation_ids,omitempty"`
 	EvidenceSetHash   string          `json:"evidence_set_hash,omitempty"`
 	Evidence          json.RawMessage `json:"evidence,omitempty"`
@@ -28,8 +30,19 @@ type SkillVersion struct {
 }
 
 func (s *Store) CreateSkillCandidateVersion(ctx context.Context, tenantID, skillKey, skillName, parentVersionHash, content, evidenceSetHash string, observationIDs []string, evidence interface{}) (string, error) {
+	return s.CreateSkillPackageCandidateVersion(ctx, tenantID, skillKey, skillName, parentVersionHash,
+		content, "", []byte(`[]`), evidenceSetHash, observationIDs, evidence)
+}
+
+func (s *Store) CreateSkillPackageCandidateVersion(ctx context.Context, tenantID, skillKey, skillName, parentVersionHash, content, packageHash string, resourceManifestJSON []byte, evidenceSetHash string, observationIDs []string, evidence interface{}) (string, error) {
 	if strings.TrimSpace(content) == "" || strings.TrimSpace(skillName) == "" {
 		return "", fmt.Errorf("candidate name and content are required")
+	}
+	if len(resourceManifestJSON) == 0 {
+		resourceManifestJSON = []byte(`[]`)
+	}
+	if !json.Valid(resourceManifestJSON) {
+		return "", fmt.Errorf("candidate resource manifest must be valid JSON")
 	}
 	digest := sha256.Sum256([]byte(content))
 	versionHash := fmt.Sprintf("%x", digest[:])
@@ -37,17 +50,17 @@ func (s *Store) CreateSkillCandidateVersion(ctx context.Context, tenantID, skill
 	evidenceJSON, _ := json.Marshal(evidence)
 	_, err := s.db.ExecContext(ctx, `INSERT OR IGNORE INTO skill_versions
 		(control_tenant_id, skill_key, skill_name, version_hash, parent_version_hash, state,
-		 content_body, source_observation_ids_json, evidence_set_hash, evidence_json,
+		 content_body, package_hash, resource_manifest_json, source_observation_ids_json, evidence_set_hash, evidence_json,
 		 created_by, created_at)
-		VALUES(?,?,?,?,?,'candidate',?,?,?,?, 'skill_curator',?)`, normalizeTenant(tenantID),
-		skillKey, skillName, versionHash, parentVersionHash, content, string(idsJSON),
+		VALUES(?,?,?,?,?,'candidate',?,?,?,?,?,?,'skill_curator',?)`, normalizeTenant(tenantID),
+		skillKey, skillName, versionHash, parentVersionHash, content, strings.TrimSpace(packageHash), string(resourceManifestJSON), string(idsJSON),
 		evidenceSetHash, string(evidenceJSON), time.Now().Unix())
 	return versionHash, err
 }
 
 func (s *Store) SkillCandidateByEvidence(ctx context.Context, tenantID, evidenceSetHash string) (*SkillVersion, error) {
 	row := s.db.QueryRowContext(ctx, `SELECT control_tenant_id, skill_key, skill_name, version_hash,
-		parent_version_hash, state, content_ref, content_body, source_observation_ids_json,
+		parent_version_hash, state, content_ref, content_body, package_hash, resource_manifest_json, source_observation_ids_json,
 		evidence_set_hash, evidence_json, created_by, created_at, promoted_at
 		FROM skill_versions WHERE control_tenant_id=? AND evidence_set_hash=? ORDER BY created_at DESC LIMIT 1`,
 		normalizeTenant(tenantID), strings.TrimSpace(evidenceSetHash))
@@ -60,7 +73,7 @@ func (s *Store) SkillCandidateByEvidence(ctx context.Context, tenantID, evidence
 
 func (s *Store) GetSkillVersion(ctx context.Context, tenantID, skillKey, versionHash string) (*SkillVersion, error) {
 	row := s.db.QueryRowContext(ctx, `SELECT control_tenant_id, skill_key, skill_name, version_hash,
-		parent_version_hash, state, content_ref, content_body, source_observation_ids_json,
+		parent_version_hash, state, content_ref, content_body, package_hash, resource_manifest_json, source_observation_ids_json,
 		evidence_set_hash, evidence_json, created_by, created_at, promoted_at
 		FROM skill_versions WHERE control_tenant_id=? AND skill_key=? AND version_hash=?`,
 		normalizeTenant(tenantID), skillKey, versionHash)
@@ -73,7 +86,7 @@ func (s *Store) GetSkillVersion(ctx context.Context, tenantID, skillKey, version
 
 func (s *Store) ActiveSkillVersion(ctx context.Context, tenantID, skillKey string) (*SkillVersion, error) {
 	row := s.db.QueryRowContext(ctx, `SELECT control_tenant_id, skill_key, skill_name, version_hash,
-		parent_version_hash, state, content_ref, content_body, source_observation_ids_json,
+		parent_version_hash, state, content_ref, content_body, package_hash, resource_manifest_json, source_observation_ids_json,
 		evidence_set_hash, evidence_json, created_by, created_at, promoted_at
 		FROM skill_versions WHERE control_tenant_id=? AND skill_key=? AND state='active'`,
 		normalizeTenant(tenantID), skillKey)
@@ -86,16 +99,17 @@ func (s *Store) ActiveSkillVersion(ctx context.Context, tenantID, skillKey strin
 
 func scanSkillVersion(row skillLifecycleScanner) (*SkillVersion, error) {
 	var version SkillVersion
-	var observations, evidence string
+	var manifest, observations, evidence string
 	var created int64
 	var promoted sql.NullInt64
 	if err := row.Scan(&version.ControlTenantID, &version.SkillKey, &version.SkillName,
 		&version.VersionHash, &version.ParentVersionHash, &version.State, &version.ContentRef,
-		&version.ContentBody, &observations, &version.EvidenceSetHash, &evidence,
+		&version.ContentBody, &version.PackageHash, &manifest, &observations, &version.EvidenceSetHash, &evidence,
 		&version.CreatedBy, &created, &promoted); err != nil {
 		return nil, err
 	}
 	version.ObservationIDs = json.RawMessage(observations)
+	version.ResourceManifest = json.RawMessage(manifest)
 	version.Evidence = json.RawMessage(evidence)
 	version.CreatedAt = time.Unix(created, 0)
 	if promoted.Valid {
@@ -169,7 +183,7 @@ func (s *Store) ListSkillVersions(ctx context.Context, tenantID, skillKey, state
 		limit = 20
 	}
 	query := `SELECT control_tenant_id, skill_key, skill_name, version_hash,
-		parent_version_hash, state, content_ref, content_body, source_observation_ids_json,
+		parent_version_hash, state, content_ref, content_body, package_hash, resource_manifest_json, source_observation_ids_json,
 		evidence_set_hash, evidence_json, created_by, created_at, promoted_at
 		FROM skill_versions WHERE control_tenant_id=?`
 	args := []interface{}{normalizeTenant(tenantID)}

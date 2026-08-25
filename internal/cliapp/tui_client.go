@@ -55,12 +55,18 @@ func (a *App) tryRunTUIClient(cfg *config.Config) (int, bool) {
 	}
 
 	client := gwclient.New(res.URL, token)
+	if a.gatewayTargetIsLocal() {
+		if localToken, tokenErr := gatewayrt.ReadLocalControlToken(a.gatewayDataDir()); tokenErr == nil {
+			client.SetLocalControlToken(localToken)
+		}
+	}
 	displayProvider, displayModel, _ := appcore.ResolveModelDisplay(cfg)
 	// nil agent/gateway: the run path uses the message processor (the daemon),
 	// and client mode gates agent-backed slash commands so nothing dereferences
 	// the absent in-process agent.
 	ctrl := tui.NewControllerWithGateway(nil, nil, nil, displayProvider, displayModel, cfg, tenantID)
 	ctrl.SetSessionChannel(a.resumeChannel)
+	ctrl.SetAdditionalRoots(a.additionalDirs)
 	// One person-scoped SSE stream stays open for the TUI lifetime. The POST
 	// itself is deliberately non-streaming: queued requests return immediately,
 	// while their later daemon runs continue to render through this watcher.

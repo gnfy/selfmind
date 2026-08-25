@@ -13,8 +13,9 @@ safety checks.
   only when explicitly viewed or invoked.
 - Preserve multi-endpoint behavior. CLI, HTTP, IM, scheduled jobs, and
   background review use the same control-tenant skill service and audit log.
-- Avoid context bloat. Large skill content is truncated safely on direct
-  invocation and should point to linked files for details.
+- Avoid context bloat without claiming a prefix is complete. Oversized main
+  instructions use explicit paging and should move optional detail into linked
+  resources.
 
 ## Roots And Precedence
 
@@ -22,7 +23,8 @@ Skill discovery flows through `internal/tools/skill_service.go`.
 
 Default visible roots, in priority order:
 
-1. Workspace `.selfmind/skills` from the current directory and nearby parents.
+1. Workspace `.selfmind/skills` at the typed execution-scope root. Direct local
+   callers without a run scope may discover it from the cwd and nearby parents.
 2. Workspace `.agents/skills` for Codex-compatible repo skills.
 3. Workspace `skills/` for lightweight project-local skills.
 4. Optional environment roots from `SELFMIND_SKILLS_ROOTS`.
@@ -31,16 +33,19 @@ Default visible roots, in priority order:
 
 Repository development agents may also use `.agents/skills` for workflows that
 must never enter SelfMind's product runtime. A directory-form Skill containing
-`.selfmind-developer-only` is omitted from SelfMind list, search, invocation,
-and dynamic tool registration. The marker applies only to that Skill directory;
+`.selfmind-developer-only` is omitted from SelfMind list, search, and invocation.
+The marker applies only to that Skill directory;
 coding-agent discovery is unchanged. This keeps one tracked Agent Skills source
 without publishing development operations to SelfMind users. Agent-specific
 directories may contain only thin entrypoints that redirect to the canonical
 `.agents/skills` body; they must not fork the instructions.
 
-The first matching skill name wins for list/view/slash invocation. Registry
-reload registers lower-priority roots first, then higher-priority roots, so the
-runtime tool registry sees the same winner.
+The first matching skill name wins for list/view/slash invocation. Discovery,
+candidate issuance, view, and activation share this resolver; a model-visible
+name is never used as a second independent identity lookup.
+Typed run scope is also the hard ancestor boundary: discovery never walks above
+the registered workspace into a user's home-level `.selfmind/skills` and
+relabels those control assets as workspace Skills.
 
 By default, mutations write to the user root. Set
 `SELFMIND_SKILLS_WRITE_SCOPE=workspace` only when a writable workspace
@@ -108,12 +113,15 @@ partitions into recoverable quarantine; known persons are always protected.
 
 ## Invocation Surfaces
 
-- `skills_list`: compact metadata only.
-- `skill_view`: inspect full `SKILL.md` or one linked file under `references/`,
-  `templates/`, `scripts/`, or `assets/`; inspection is not execution
-  attribution.
-- `skill_select`: activate one resolved Skill version for the current work
-  unit. Omitting its name resolves the related task's explicit/default binding.
+- `skills_list`: budgeted metadata only. In an authenticated run it issues a
+  durable `candidate_ref` for every returned package identity.
+- `skill_view`: inspect the main body by named section or bounded byte page, or
+  one linked file under `references/`, `templates/`, `scripts/`, or `assets/`;
+  inspection is not execution attribution. An active activation reads its
+  pinned package bytes from `control.db`, not a newly changed filesystem copy.
+- `skill_select`: activate one server-resolved candidate package for the current
+  work unit. Model selection requires `candidate_ref`; omission is reserved for
+  the related task's explicit/default binding.
 - `skill_fallback`: end that activation, record a negative guard, remove its
   instructions, and continue the same work unit with ordinary planning.
 - `/skill-name`: direct user invocation, bundle-first then skill.
@@ -125,9 +133,13 @@ partitions into recoverable quarantine; known persons are always protected.
 - `/skills candidates|candidate|promote|reject|rollback`: explicit candidate
   and version management. The backing management tool is hidden from models.
 
-Legacy dynamic `skill:<name>` tool registrations are compatibility shims only.
-They return an instruction-only message and must not execute code blocks from
-`SKILL.md`.
+During the compatibility window, per-Skill `skill:<name>` dispatch entries stay
+registered with `exposure=hidden`: explicit legacy dispatch remains possible,
+but those entries never enter the provider catalog and are not deferred.
+`/skill-name` already resolves through one generic typed daemon path and creates
+the same activation receipt as model selection and task binding. The hidden
+registrations can be removed only after the shadow window confirms no remaining
+caller depends on them.
 
 ## Work Units, Bindings, And Versions
 
@@ -172,15 +184,56 @@ bodies stay outside foreground context. Promotion verifies the written file
 hash before changing the active database projection; rollback writes a stored
 previous body and affects only future activations.
 
+Selection identity is server-issued and work-unit-scoped. A `candidate_ref`
+maps durably to `skill_key`, main version, package hash, and description hash,
+so it survives worker changes, daemon restart, resume, and endpoint changes.
+Description drift invalidates the routing decision and requires a refreshed
+list. Package drift with an unchanged description may be re-delivered once
+before any side effect; a second drift fails closed and ordinary planning
+continues. Issued refs remain resolvable until the work unit becomes terminal,
+then the terminal transaction deletes them.
+
+Terminal cleanup is the normal retention path, but it is not the only recovery
+path. Doctor reports refs owned by terminal or missing work units separately
+from live refs and points to `selfmind maintenance prune-skill-candidate-refs`.
+That command is dry-run by default; `--apply` deletes only terminal/orphan refs
+in one control-store transaction and a second Doctor run verifies the result.
+It never expires a ref owned by a non-terminal work unit.
+
+Contract-v1 activations also freeze `package_hash`, a resource manifest, and a
+delivery receipt (`delivered_main`, hash, and byte count). Historical contract-0
+rows keep their legacy meaning. New activations never re-read a changed main or
+resource from disk. Only `name` and `activation_id` repeat in the prompt;
+control-plane hashes and paths remain in tool results, events, and durable rows.
+
 ## Context Budget
 
-Direct or bound invocation injects the chosen `SKILL.md` body plus linked-file
-names in a separate `ActiveSkill` runtime-context slice. Its target budget is
-4 KiB and hard limit is 8 KiB, both inside the existing composer total rather
-than added on top. If the body is too large, SelfMind appends an explicit
-truncation note and the agent should use `skill_view(name, file_path)` for the
-necessary linked files. Candidate metadata is capped at three entries when no
-binding is active; a bound task receives no tenant-wide directory dump.
+Direct, bound, and model-selected invocation use one `ActiveSkill` runtime
+slice. Its slice budget is
+`clamp(floor(context_length_tokens * 3%), 512, 2048)` tokens with a separate
+8192 UTF-8 byte ceiling; the delivery builder reserves the prompt envelope and
+linked-file names, strips metadata-only YAML front matter, and freezes the
+remaining main bytes once at activation. The runtime
+bundle retains its existing 8 KiB non-Skill allowance and adds the larger of
+the active-main or candidate-catalog slice. Active instructions outrank
+recall/memory and are protected byte-for-byte through normal compaction and
+provider-window recovery.
+
+When the instruction body exceeds its activation budget, the model receives a
+bounded `[PAGED SKILL MAIN]` index, never a silent prefix presented as complete.
+`skill_view(section=...)` returns one exact level-two section;
+`offset_bytes`/`limit_bytes` provides UTF-8-safe pages up to 8 KiB. Linked
+resources remain lazy and immutable under the activation package hash.
+
+When no binding is active, candidate catalog token budget is
+`floor(context_length_tokens * 2%)`, with a separate 8000 UTF-8 byte ceiling.
+Unknown model metadata explicitly falls back to 512 tokens and 2048 bytes for
+both Skill surfaces. Allocation first reserves a minimum identity line in
+deterministic rank order, gives all included descriptions a fair short baseline,
+then completes higher-ranked descriptions before lower-ranked ones. It omits
+entries only when even existence lines do not fit. Every render reports total,
+included, full, shortened, omitted, bytes, tokens, and both budgets. A bound
+task receives no tenant-wide directory dump.
 Candidate lookup uses deterministic, metadata-only BM25F ranking over `name`
 and `description`; it never loads full Skill bodies. ASCII words and CJK
 bigrams are both supported. Rare corpus terms receive more weight than common
@@ -192,9 +245,23 @@ incidental bigram from nominating an unrelated Skill. An explicit canonical Skil
 wins before score; scope is only a tie-break after a real text match, so
 unrelated workspace Skills are not offered merely because they are nearby. The
 same scorer backs bounded `skills_list` searches; search responses report total
-matches and truncation, while work-unit candidate context remains capped at
-three entries. Candidate metadata is refreshed whenever the plan enters a new
-work unit.
+matches and allocation. Candidate metadata and refs are refreshed whenever the
+plan enters a new work unit. The synchronous `update_plan` result includes that
+unit's canonical byte/token-bounded `skill_catalog`, so the model can select by
+the new unit's valid ref immediately without repeating full descriptions in an
+unbounded JSON array.
+
+Every Skill surface consumes one resolved `RuntimeContextBudget`; rendering,
+telemetry, curation validation, Doctor, and HTTP reporting must not reconstruct
+fallback constants independently. CREATE validation runs the same delivery
+builder as activation after sorting the proposed resource paths, and may publish
+automatically only when the exact byte and token result is `full`. The budget
+must include the envelope and resource-manifest reserve. A bundle has one
+aggregate budget derived from the executing agent and allocates it fairly and
+deterministically across members; it does not grant every member a full active
+Skill budget. Client-reported context budgets come from the same gateway/agent
+budget used for the request. Worker pools currently require homogeneous budgets
+and must assert that invariant until per-worker budgets travel with checkout.
 
 Best practice for new skills:
 
@@ -241,6 +308,14 @@ workflow observations with their own outcome, verification, tool families,
 Skill version, cost, duration, and correction/failure evidence. They are
 derived data; task/run events remain the source of truth.
 
+Durable activations and terminal work-unit outcomes are also the canonical
+source for Skill call, completion, fallback, and failure statistics. The
+`.usage.json` sidecar remains an inventory-recency hint only. Legacy
+`skill_metrics` rows may be displayed as historical data but must not silently
+drive curator, degradation, archive, or ranking decisions after their writer is
+retired. Removing a legacy middleware is complete only when every user-visible
+stats consumer has migrated or is explicitly labeled historical.
+
 The Skill curator runs only when a bounded comparable creation cohort or a
 verified repair incident is ready. The creation gate requires three independent
 verified successes for the same person, workspace and environment, plus up to
@@ -258,6 +333,20 @@ maintenance job before application, so crash recovery cannot ask the model to
 invent a different candidate. The required candidate sections are
 Applicability, Inputs, Preconditions, Procedure, Failure Guards, Recovery, and
 Verification. Correctness and verification outrank context/turn savings.
+For CREATE, the curator proposes a package: a short canonical `SKILL.md` main
+within the current delivery source budget plus optional non-empty resources
+under `references/`. Package size remains bounded at 32 KiB. Promotion writes
+the main and resources atomically and verifies their package hash. PATCH keeps
+the active package resources immutable and may change only its declared main
+sections; a reviewed future package update is required to change resources.
+Curator authorization and activation use the same exact delivery calculation;
+there is no extra source-length allowance. A PATCH against a currently full
+main must remain full under the current resource manifest. A PATCH against an
+already paged legacy main may proceed only when instruction-body bytes and
+estimated tokens do not grow, resources are identical, and every unrelated
+section remains byte-identical. Shrinking a legacy package or moving material
+into resources is a separate reviewed package-compaction workflow, not a narrow
+incident repair.
 Only explicit `passed` creation observations qualify for automatic publication.
 `not_applicable` evidence may still nominate an immutable candidate but requires
 explicit management; an empty verification state does not nominate automatic
@@ -319,6 +408,58 @@ failed batch item degrades the candidate immediately and stores a deterministic
 repair proposal; it is no longer recommended until reviewed or re-observed.
 Manual and pinned skills are never rewritten by this mechanism. The model still
 owns the plan and every write/action decision.
+
+## Diagnostics And Regression Contract
+
+`selfmind doctor` obtains the provider-visible catalog from the same adapter
+normalization and wire builder used by the real transport, preserving both
+source and final wire names. It reports invalid provider-wire names and any
+remaining provider-visible per-Skill tools; `--probe-models` sends the real
+primary catalog through a bounded non-dispatching request. The remaining
+generic wire catalog has a 48 KiB regression budget (roughly 12K estimated
+tokens);
+crossing it is an actionable cost warning, while an invalid wire name remains
+a fatal contract error. Per-call telemetry reports consistent schema token
+estimates, `dynamic_skill_tools`, and bounded candidate source/root samples.
+The durable Skill presentation
+section independently recomputes activation delivery hashes/byte counts,
+resource receipts, candidate drift limits, and terminal-ref cleanup. Broken
+delivery/resource receipts are fatal. Doctor prints location, expected and
+observed values, likely cause, owning component, safe repair commands, and
+verification commands. Exit status is 0 for no fatal finding, 1 for a fatal
+finding/live probe failure, and 2 when Doctor cannot complete the diagnosis.
+Existing external or read-only descriptions over the managed 1024-character /
+4096-byte authoring ceiling remain usable but receive an exact owner-file
+warning; newly managed writes fail validation. Historical contract-0
+activations are reported but not rewritten.
+
+Catalog diagnostics use distinct denominators: `registered_active`, `hidden`,
+and `provider_visible`. A registered hidden compatibility schema is never
+reported as provider-visible. Doctor findings are actionable contracts, not
+yellow counters: each issue includes a stable code, severity, exact owning row
+or file, expected and observed values, likely cause, a safe dry-run or repair
+command when one exists, and a verification command. In particular, terminal
+candidate-ref leaks point to the transactional prune command; oversized legacy
+mains point to paging plus the package-compaction workflow; stale candidate
+identity returns the structured `candidate_stale` code and tells the caller to
+refresh `skills_list`. Static invariants that cannot be repaired safely at
+runtime point to the owning component and focused Go test instead of suggesting
+an unsafe database edit.
+
+The hidden `skill:<name>` dispatch path is an explicit rollback compatibility
+surface during its shadow window, not an accidental dead path. While retained,
+it keeps direct-dispatch and `skill.activated` event coverage and has documented
+removal criteria. It is removed only after telemetry proves there are no
+callers. The obsolete metrics middleware/store/pruner lifecycle is independent:
+it is retired as soon as every user-visible stats consumer uses durable
+activations and work-unit outcomes, without waiting on rollback-channel usage.
+
+Go invariant tests cover provider catalog names/count/cost, candidate
+allocation, package identity, paging, immutable delivery (including an
+idempotent retry after resource-manifest drift), compaction, candidate ref
+lifetime, schema migration, and Doctor severity. The cassette-backed
+`skill-lifecycle` eval suite exercises the production message path with Skills
+present and asserts zero provider-visible dynamic Skill tools.
 
 ## Catalog Provenance
 

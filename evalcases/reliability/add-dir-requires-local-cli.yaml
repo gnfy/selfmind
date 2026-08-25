@@ -1,0 +1,22 @@
+id: reliability_add_dir_requires_local_cli
+title: "Daemon-host directories require authenticated local CLI authority"
+suite: reliability
+workspace: isolated
+channel: cli
+model_required: false
+ci:
+  required: true
+  reason: credentialless
+  platforms: [linux, darwin]
+turns:
+  - input: "Inspect the additional directory"
+    additional_roots: ["."]
+expect:
+  http_status: 403
+  require_no_task: true
+  require_no_run: true
+  max_tool_calls: 0
+  max_duration_seconds: 10
+checks:
+  no_provider_stack_dump: true
+  context_not_exceeded: true

@@ -2,6 +2,7 @@ package runpool
 
 import (
 	"context"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -195,4 +196,90 @@ func TestPoolReportsWorkerWait(t *testing.T) {
 		t.Fatal("cancelled worker waiter returned nil")
 	}
 	close(release)
+}
+
+func TestPoolOverlappingPathsSerialize(t *testing.T) {
+	p := New(2)
+	root := t.TempDir()
+	holding := make(chan struct{})
+	release := make(chan struct{})
+	go func() {
+		_ = p.RunObservedPaths(context.Background(), []string{root}, nil, func() error {
+			close(holding)
+			<-release
+			return nil
+		})
+	}()
+	<-holding
+
+	states := make(chan State, 2)
+	done := make(chan error, 1)
+	go func() {
+		done <- p.RunObservedPaths(context.Background(), []string{filepath.Join(root, "nested")}, func(state State) {
+			states <- state
+		}, func() error { return nil })
+	}()
+	select {
+	case state := <-states:
+		if state != StateWaitingResource {
+			t.Fatalf("state = %q, want %q", state, StateWaitingResource)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("nested path did not wait for ancestor claim")
+	}
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPoolDisjointPathSetsRunInParallel(t *testing.T) {
+	p := New(2)
+	first, second := t.TempDir(), t.TempDir()
+	started := make(chan struct{}, 2)
+	release := make(chan struct{})
+	for _, roots := range [][]string{{first}, {second}} {
+		roots := roots
+		go func() {
+			_ = p.RunObservedPaths(context.Background(), roots, nil, func() error {
+				started <- struct{}{}
+				<-release
+				return nil
+			})
+		}()
+	}
+	for i := 0; i < 2; i++ {
+		select {
+		case <-started:
+		case <-time.After(time.Second):
+			t.Fatal("disjoint path claims did not run in parallel")
+		}
+	}
+	close(release)
+}
+
+func TestPoolPathWaitHonorsCancellation(t *testing.T) {
+	p := New(2)
+	root := t.TempDir()
+	holding := make(chan struct{})
+	release := make(chan struct{})
+	go func() {
+		_ = p.RunObservedPaths(context.Background(), []string{root}, nil, func() error {
+			close(holding)
+			<-release
+			return nil
+		})
+	}()
+	<-holding
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	ran := false
+	err := p.RunObservedPaths(ctx, []string{filepath.Join(root, "child")}, nil, func() error {
+		ran = true
+		return nil
+	})
+	close(release)
+	if err == nil || ran {
+		t.Fatalf("cancelled waiter err=%v ran=%v", err, ran)
+	}
 }

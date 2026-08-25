@@ -98,14 +98,19 @@ type TaskArtifactContext struct {
 }
 
 // RuntimeContextBudget describes how much background context may be injected
-// for one model turn. Values are character budgets because this layer is below
-// provider-specific tokenizers.
+// for one model turn. Legacy context slices retain byte-oriented *Chars names;
+// Skill presentation has one explicit token estimate plus one UTF-8 byte hard
+// ceiling so telemetry, rendering, and delivery cannot draw from duplicate
+// budget sources.
 type RuntimeContextBudget struct {
-	TotalChars     int
-	WorkspaceChars int
-	TaskChars      int
-	MemoryChars    int
-	SkillChars     int
+	TotalChars         int
+	WorkspaceChars     int
+	TaskChars          int
+	MemoryChars        int
+	SkillMainTokens    int
+	SkillMainBytes     int
+	SkillCatalogTokens int
+	SkillCatalogBytes  int
 }
 
 // Recall render hard floors. The gateway recall engine enforces the same
@@ -117,13 +122,7 @@ const (
 )
 
 func DefaultRuntimeContextBudget() RuntimeContextBudget {
-	return RuntimeContextBudget{
-		TotalChars:     8000,
-		WorkspaceChars: 700,
-		TaskChars:      2500,
-		MemoryChars:    700,
-		SkillChars:     4000,
-	}
+	return RuntimeContextBudgetForContextTokens(0)
 }
 
 // RuntimeMemoryContext is one retrieved long-term memory slice selected for the
@@ -220,9 +219,13 @@ func (b RuntimeContextBundle) Prompt(maxChars int) string {
 	if workspaceBudget <= 0 {
 		workspaceBudget = maxChars / 5
 	}
-	skillBudget := b.Budget.SkillChars
-	if skillBudget <= 0 {
-		skillBudget = maxChars / 2
+	skillMainBudget := b.Budget.SkillMainBytes
+	if skillMainBudget <= 0 {
+		skillMainBudget = maxChars / 2
+	}
+	skillCatalogBudget := b.Budget.SkillCatalogBytes
+	if skillCatalogBudget <= 0 {
+		skillCatalogBudget = maxChars / 2
 	}
 
 	var out strings.Builder
@@ -235,16 +238,13 @@ func (b RuntimeContextBundle) Prompt(maxChars int) string {
 	}
 	if b.ActiveSkill != nil {
 		out.WriteString("\n")
-		out.WriteString(b.ActiveSkill.Prompt(skillBudget))
+		out.WriteString(b.ActiveSkill.Prompt(skillMainBudget))
 		out.WriteString("\n")
 	} else if len(b.SkillCandidates) > 0 {
-		out.WriteString("\n## Skill Candidates for Current Work Unit\n")
-		out.WriteString("Metadata only. Select at most one with skill_select when it clearly fits; otherwise continue without a skill. skill_view only inspects and does not count as use.\n")
-		for i, candidate := range b.SkillCandidates {
-			if i >= 3 {
-				break
-			}
-			fmt.Fprintf(&out, "- %s [%s/%s]: %s\n", candidate.Name, candidate.Scope, candidate.Source, trimLine(candidate.Description, 260))
+		catalog, _ := renderSkillCandidateCatalogWithinBudget(b.SkillCandidates, skillCatalogBudget, b.Budget.SkillCatalogTokens)
+		if catalog != "" {
+			out.WriteString("\n")
+			out.WriteString(catalog)
 		}
 	}
 	if b.Workspace != nil {

@@ -373,6 +373,27 @@ func (c *RunCoordinator) installExecutionScope(ctx context.Context, identity *co
 		scope.AllowedRoots = workspace.AllowedRoots
 		scope.TrustLevel = workspace.TrustLevel
 	}
+	bindings := req.ExecutionRoots
+	if len(bindings) == 0 && run != nil {
+		bindings = run.ExecutionRoots
+	}
+	expandsWorkspaceAuthority := false
+	if len(bindings) > 0 {
+		scope.RootBindings = executionenv.CloneRootBindings(bindings)
+		scope.AllowedRoots = executionenv.RootPaths(bindings)
+		for _, binding := range bindings {
+			if binding.Role == executionenv.RootRolePrimary {
+				scope.WorkspaceRoot = binding.Path
+				break
+			}
+		}
+		// A one-run path grant is not a durable workspace trust act. Until
+		// trust becomes per-root, the safe aggregate is the least-trusted root.
+		expandsWorkspaceAuthority = rootsExpandWorkspaceAuthority(bindings)
+		if expandsWorkspaceAuthority {
+			scope.TrustLevel = executionenv.TrustUntrusted
+		}
+	}
 	if len(leases) > 0 && leases[0] != nil {
 		scope.LeaseID = leases[0].ID
 		scope.EnvironmentSnapshotID = leases[0].EnvironmentSnapshotID
@@ -394,6 +415,10 @@ func (c *RunCoordinator) installExecutionScope(ctx context.Context, identity *co
 				roots = []string{scope.WorkspaceRoot}
 			}
 			scope.AllowedRoots = append(append([]string{}, roots...), root)
+			scope.RootBindings = append(scope.RootBindings, executionenv.RootBinding{
+				Path: root, Role: executionenv.RootRoleAttachment,
+				AccessCap: executionenv.RootAccessRead, Source: executionenv.RootSourceAttachment,
+			})
 		}
 	}
 	if task != nil {
@@ -430,7 +455,13 @@ func (c *RunCoordinator) installExecutionScope(ctx context.Context, identity *co
 	// the control store satisfies tools.ApprovalGrantStore structurally.
 	if c.srv != nil && c.srv.Control != nil {
 		scope.Grants = c.srv.Control
-		scope.CapabilityStore = c.srv.Control
+		// Workspace-scoped network/credential capabilities were approved for
+		// the registered roots, not an arbitrary invocation-local directory.
+		// An expanded run can still request a run-local approval, but must not
+		// inherit or persist a capability through the workspace identity.
+		if !expandsWorkspaceAuthority {
+			scope.CapabilityStore = c.srv.Control
+		}
 		scope.ResumeAuthorizations = c.srv.Control
 	}
 	// Judge backs smart-mode LLM approval triage (H2). Optional: nil leaves smart
@@ -472,15 +503,17 @@ func (c *RunCoordinator) materializeExecutionLease(ctx context.Context, identity
 	workspaceID := ""
 	if workspace != nil {
 		workspaceID = workspace.ID
-		grants, err := c.srv.Control.ListActiveExecutionCapabilities(ctx, identity.TenantID, identity.PersonID, workspace.ID)
-		if err != nil {
-			return nil, fmt.Errorf("list execution capabilities: %w", err)
-		}
-		for _, grant := range grants {
-			capabilities = append(capabilities, grant.Capability)
-		}
-		if workspace.TrustLevel == executionenv.TrustTrusted && tools.ExecSandboxAllowsNetwork() {
-			capabilities = append(capabilities, executionenv.CapabilityNetworkShared)
+		if !rootsExpandWorkspaceAuthority(run.ExecutionRoots) {
+			grants, err := c.srv.Control.ListActiveExecutionCapabilities(ctx, identity.TenantID, identity.PersonID, workspace.ID)
+			if err != nil {
+				return nil, fmt.Errorf("list execution capabilities: %w", err)
+			}
+			for _, grant := range grants {
+				capabilities = append(capabilities, grant.Capability)
+			}
+			if workspace.TrustLevel == executionenv.TrustTrusted && tools.ExecSandboxAllowsNetwork() {
+				capabilities = append(capabilities, executionenv.CapabilityNetworkShared)
+			}
 		}
 	}
 	lease, err := c.srv.Control.MaterializeExecutionLease(ctx, executionenv.Lease{
@@ -1227,14 +1260,14 @@ func (c *RunCoordinator) deliverToPreferredIMAccepted(ctx context.Context, ident
 	return accepted
 }
 
-func (c *RunCoordinator) withGatewayContext(input string, identity *control.IdentityContext, task *control.Task, workspace *control.Workspace, attachments []api.MessageAttachment) string {
+func (c *RunCoordinator) withGatewayContext(input string, identity *control.IdentityContext, task *control.Task, workspace *control.Workspace, executionRoots []executionenv.RootBinding, attachments []api.MessageAttachment) string {
 	var evolutionAdvice *control.EvolutionAdvice
 	if c != nil && c.srv != nil && c.srv.Control != nil && c.srv.SelfEvolution.Enabled && identity != nil && task != nil {
 		lookupCtx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 		evolutionAdvice, _ = c.srv.Control.EnabledEvolutionAdvice(lookupCtx, identity.TenantID, identity.PersonID, task.ID)
 		cancel()
 	}
-	if (workspace == nil || workspace.LocalPath == "" || task == nil) && len(attachments) == 0 && evolutionAdvice == nil {
+	if (workspace == nil || workspace.LocalPath == "" || task == nil) && len(executionRoots) == 0 && len(attachments) == 0 && evolutionAdvice == nil {
 		return input
 	}
 	var sb strings.Builder
@@ -1258,6 +1291,20 @@ func (c *RunCoordinator) withGatewayContext(input string, identity *control.Iden
 		sb.WriteString("Use workspace_root as the default cwd for local file tools.\n")
 		sb.WriteString("When the user says current project, this repo, this codebase, or names a project without an explicit path, inspect workspace_root first.\n")
 		sb.WriteString("Resolve relative paths against workspace_root. Do not access files outside workspace allowed roots.\n")
+	}
+	additional := make([]string, 0, len(executionRoots))
+	for _, binding := range executionRoots {
+		if binding.Role == executionenv.RootRolePrimary || binding.Role == executionenv.RootRoleAttachment || strings.TrimSpace(binding.Path) == "" {
+			continue
+		}
+		additional = append(additional, binding.Path)
+	}
+	if len(additional) > 0 {
+		sb.WriteString("additional_roots:\n")
+		for _, root := range additional {
+			fmt.Fprintf(&sb, "- %s\n", root)
+		}
+		sb.WriteString("These roots are explicitly bound to this run. Use an absolute path or set cwd to the selected root; relative paths still resolve against workspace_root.\n")
 	}
 	if len(attachments) > 0 {
 		sb.WriteString("attachments:\n")

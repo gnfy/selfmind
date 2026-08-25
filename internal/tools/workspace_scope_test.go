@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -21,6 +22,35 @@ func TestResolveScopedPathDefaultsAndBlocksEscape(t *testing.T) {
 
 	if _, err := resolveScopedPath(scope, filepath.Join(root, "..", "outside.txt")); err == nil {
 		t.Fatal("expected escape path to fail")
+	}
+}
+
+func TestResolveScopedPathBlocksSymlinkEscape(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	link := filepath.Join(root, "outside")
+	if err := os.Symlink(outside, link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	scope := ExecutionScope{WorkspaceRoot: root, AllowedRoots: []string{root}}
+	if _, err := resolveScopedPath(scope, filepath.Join("outside", "new.txt")); err == nil {
+		t.Fatal("path through an out-of-scope symlink must be rejected")
+	}
+}
+
+func TestResolveScopedPathAllowsSymlinkedWorkspaceRoot(t *testing.T) {
+	physical := t.TempDir()
+	alias := filepath.Join(t.TempDir(), "workspace")
+	if err := os.Symlink(physical, alias); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	scope := ExecutionScope{WorkspaceRoot: alias, AllowedRoots: []string{alias}}
+	got, err := resolveScopedPath(scope, "new.txt")
+	if err != nil {
+		t.Fatalf("symlinked workspace root rejected: %v", err)
+	}
+	if got != filepath.Join(alias, "new.txt") {
+		t.Fatalf("path = %q", got)
 	}
 }
 

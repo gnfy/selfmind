@@ -40,7 +40,7 @@ var breakdownMarkers = []struct {
 	{"# PROJECT CONTEXT", "project_context"},
 	{"# TOOL USE INSTRUCTIONS", "tools"},
 	{"# SELECTED RUNTIME CONTEXT", "runtime"},
-	{"<!-- SELFMIND_ACTIVE_SKILL_BEGIN -->", "skill"},
+	{activeSkillPromptBegin, "skill"},
 	{"## Skill Candidates for Current Work Unit", "skill"},
 	{"<user-profile>", "memory"},
 	{"<memory-context>", "memory"},
@@ -174,12 +174,20 @@ func ProviderCallContextBreakdown(sections []PromptSection, messages []llm.Messa
 		}
 	}
 	toolSchemaTokens := 0
+	dynamicSkillTools := 0
+	for _, tool := range tools {
+		if strings.HasPrefix(strings.ToLower(strings.TrimSpace(tool.Name)), "skill:") {
+			dynamicSkillTools++
+		}
+	}
 	if raw, err := json.Marshal(tools); err == nil {
 		toolSchemaTokens = estimateTokens(string(raw))
 	}
 	return map[string]interface{}{
 		"stable_system":        stableSystem,
 		"tool_schemas":         toolSchemaTokens,
+		"tool_schema_count":    len(tools),
+		"dynamic_skill_tools":  dynamicSkillTools,
 		"history":              b.History,
 		"current_tool_results": b.ToolResults,
 		"recall":               b.Recall,

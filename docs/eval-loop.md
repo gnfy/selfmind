@@ -181,6 +181,20 @@ checks:
 followed by a tool call. It does not count kernel-generated `agent.thinking`
 activity, so it can guard the actual pre-tool narration message path.
 
+`setup.skills` seeds managed `agent-created` Skills into the isolated control
+tenant before tool registration. This is distinct from placing a workspace
+Skill under `setup.files`; it lets a regression case prove hidden compatibility
+registration and provider-catalog exclusion on the real startup/message path.
+
+```yaml
+setup:
+  skills:
+    - name: release-check
+      description: Inspect the exact release version
+      content: |-
+        Read release.txt with a read-only tool and report its exact value.
+```
+
 Use multi-turn cases to test `continue`, `可以`, and `按方案做` behavior:
 
 ```yaml
@@ -351,14 +365,19 @@ recorded `.vcr/continuity_*` directories must be committed.
 Skill context and work-unit activation. Its cassette-backed cases prove that a
 task-bound Skill survives a CLI-to-IM continuation without injecting the Skill
 directory, one run can switch between two independently selected Skills, and
-unbound work receives at most three relevant candidate metadata rows. The
-assertions read durable `skill.activated`, `plan.updated`, and
-`context.selected` events rather than inferring behavior from the final prose.
+unbound work receives a budgeted full candidate catalog containing a seeded
+agent-created Skill without model-visible per-Skill provider tools. Catalog
+assertions cover included/shortened/omitted allocation; active delivery
+assertions cover the immutable receipt. The suite
+reads durable `skill.activated`, `plan.updated`, and `context.selected` events
+rather than inferring behavior from the final prose.
 
-Work-unit identifiers are allocated by `control.db`, so their cassette form is
-request-relative (`{{SELFMIND_VCR_WORK_UNIT_N}}`). Replay maps those placeholders
-to the current run's identifiers; raw recording-time work-unit UUIDs are invalid
-release evidence.
+Work-unit identifiers and work-unit-scoped Skill candidate refs are allocated
+from the current control state, so their cassette forms are request-relative
+(`{{SELFMIND_VCR_WORK_UNIT_N}}` and `{{SELFMIND_VCR_SKILL_REF_N}}`). Replay maps
+those placeholders from the current request messages; raw recording-time UUIDs
+or `candidate_ref` values are invalid release evidence. This normalization is
+VCR-only and does not weaken production scope validation.
 
 ## Architecture
 

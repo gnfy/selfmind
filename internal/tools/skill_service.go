@@ -148,6 +148,7 @@ func SkillRootsForTenant(tenantID string, invocation ...map[string]interface{}) 
 
 	workspaceStart := ""
 	workspaceSkillsAllowed := true
+	workspaceDirs := []string(nil)
 	args := map[string]interface{}{"_tenant_id": tenantID}
 	if len(invocation) > 0 && invocation[0] != nil {
 		args = invocation[0]
@@ -155,16 +156,24 @@ func SkillRootsForTenant(tenantID string, invocation ...map[string]interface{}) 
 	if scope, ok := currentExecutionScopeAny(args); ok {
 		workspaceStart = strings.TrimSpace(scope.WorkspaceRoot)
 		workspaceSkillsAllowed = scope.TrustLevel != executionenv.TrustUntrusted
+		// A typed run scope already identifies the logical workspace boundary.
+		// Do not walk above it into ~/.selfmind/skills and relabel user assets as
+		// workspace Skills. Ancestor discovery is only for direct local callers
+		// whose cwd may be a subdirectory of the project.
+		if workspaceStart != "" {
+			workspaceDirs = []string{workspaceStart}
+		}
 	} else if cwd, err := os.Getwd(); err == nil {
 		// Outside an active run (for example a local TUI slash command), the
 		// caller's cwd is authoritative. During a daemon-owned run the
 		// ExecutionScope above always wins, so daemon cwd can never select a
 		// workspace skill root.
 		workspaceStart = cwd
+		workspaceDirs = skillRootAncestors(workspaceStart)
 	}
 	if workspaceSkillsAllowed && workspaceStart != "" {
 		priority := 10
-		for _, dir := range skillRootAncestors(workspaceStart) {
+		for _, dir := range workspaceDirs {
 			addExistingRoot(filepath.Join(dir, ".selfmind", "skills"), SkillScopeWorkspace, "workspace", true, priority)
 			priority += 10
 			addExistingRoot(filepath.Join(dir, ".agents", "skills"), SkillScopeWorkspace, "codex-compatible", false, priority)

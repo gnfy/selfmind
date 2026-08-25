@@ -82,6 +82,31 @@ func TestContextScanner_ScanFromWorkspaceRoot(t *testing.T) {
 	}
 }
 
+func TestContextScannerScanRootsKeepsEachBoundRoot(t *testing.T) {
+	first, second := t.TempDir(), t.TempDir()
+	for _, root := range []string{first, second} {
+		if err := os.Mkdir(filepath.Join(root, ".git"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(first, "AGENTS.md"), []byte("first root"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(second, "AGENTS.md"), []byte("second root"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	files, err := NewContextScanner().ScanRoots([]string{first, second, first})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) != 2 {
+		t.Fatalf("files = %#v", files)
+	}
+	if files[0].ScopeRoot != first || files[1].ScopeRoot != second {
+		t.Fatalf("scope roots = %q, %q", files[0].ScopeRoot, files[1].ScopeRoot)
+	}
+}
+
 // TestContextScanner_RootToLeafOrder pins Codex-style hierarchical discovery:
 // an AGENTS.md at the git root and one in a nested dir are BOTH collected, and
 // the deeper (more local) one is emitted LAST so it overrides on conflict.

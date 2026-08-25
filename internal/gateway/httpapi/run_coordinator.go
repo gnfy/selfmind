@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"os"
 	"runtime/debug"
 	"strings"
 	"sync"
@@ -221,14 +220,14 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 	// 'started') is what stops boot recovery from re-running already-completed
 	// work. Uses a fresh context so a cancelled turn ctx cannot skip the write.
 	if _, err := c.prepareRequestWorkspace(ctx, identity, &req); err != nil {
-		return api.MessageResponse{Identity: identity, Error: err.Error(), Turn: messageTurn("failed", "", "idle", "", "", err.Error()), Context: messageContextBudget(llmUsageZero())}, http.StatusInternalServerError
+		return api.MessageResponse{Identity: identity, Error: err.Error(), Turn: messageTurn("failed", "", "idle", "", "", err.Error()), Context: d.messageContextBudget(llmUsageZero())}, http.StatusInternalServerError
 	}
 	task, attach, err := c.resolveTask(ctx, identity, req, intent)
 	if err != nil {
 		if strings.Contains(err.Error(), "no task to continue") {
-			return api.MessageResponse{Identity: identity, Content: err.Error(), Turn: messageTurn("failed", "", "idle", "", "", err.Error()), Context: messageContextBudget(llmUsageZero())}, http.StatusOK
+			return api.MessageResponse{Identity: identity, Content: err.Error(), Turn: messageTurn("failed", "", "idle", "", "", err.Error()), Context: d.messageContextBudget(llmUsageZero())}, http.StatusOK
 		}
-		return api.MessageResponse{Identity: identity, Error: err.Error(), Turn: messageTurn("failed", "", "idle", "", "", err.Error()), Context: messageContextBudget(llmUsageZero())}, http.StatusInternalServerError
+		return api.MessageResponse{Identity: identity, Error: err.Error(), Turn: messageTurn("failed", "", "idle", "", "", err.Error()), Context: d.messageContextBudget(llmUsageZero())}, http.StatusInternalServerError
 	}
 	attach.effectKey = strings.TrimSpace(req.EffectKey)
 	// Keep the per-person current_task pointer on the task this run actually
@@ -238,17 +237,25 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 	if attach.resolvedPolicy().UpdateCurrentTask {
 		c.syncCurrentTask(ctx, identity, task)
 	}
+	workspace, workspaceErr := c.workspaceForTask(ctx, identity, task, req, attach)
+	if workspaceErr != nil {
+		return api.MessageResponse{Identity: identity, Task: task, Error: workspaceErr.Error(), Turn: messageTurn("failed", task.Status, "idle", task.ID, "", workspaceErr.Error()), Context: d.messageContextBudget(llmUsageZero())}, http.StatusInternalServerError
+	}
+	if rootsErr := c.prepareRequestExecutionRoots(ctx, workspace, &req); rootsErr != nil {
+		return api.MessageResponse{Identity: identity, Task: task, Error: rootsErr.Error(), Turn: messageTurn("failed", task.Status, "idle", task.ID, "", rootsErr.Error()), Context: d.messageContextBudget(llmUsageZero())}, http.StatusBadRequest
+	}
 	_ = d.Control.RecordChannelMessage(ctx, *identity, req.Channel, task.ID, "user", req.Content)
 
 	run, err := d.Control.StartRunWithOptions(ctx, task, req.Channel, truncate(req.Content, 240), control.StartRunOptions{
 		WorkKey:               attach.workKey,
 		PreserveTaskLifecycle: attach.resolvedPolicy().PreserveTaskLifecycle,
+		ExecutionRoots:        req.ExecutionRoots,
 	})
 	if err != nil {
 		if attach.created {
 			_, _ = d.Control.DeleteEmptyTask(context.WithoutCancel(ctx), identity.TenantID, identity.PersonID, task.ID)
 		}
-		return api.MessageResponse{Identity: identity, Task: task, Error: err.Error(), Turn: messageTurn("failed", task.Status, "idle", task.ID, "", err.Error()), Context: messageContextBudget(llmUsageZero())}, http.StatusInternalServerError
+		return api.MessageResponse{Identity: identity, Task: task, Error: err.Error(), Turn: messageTurn("failed", task.Status, "idle", task.ID, "", err.Error()), Context: d.messageContextBudget(llmUsageZero())}, http.StatusInternalServerError
 	}
 	if req.QueueID != "" {
 		var bindErr error
@@ -273,7 +280,7 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 					Payload: mustJSON(map[string]string{"error": bindErr.Error()}),
 				})
 			_, _ = d.Control.MarkQueuedIfStatus(context.WithoutCancel(ctx), identity.TenantID, req.QueueID, control.QueueStatusStarted, control.QueueStatusFailed)
-			return api.MessageResponse{Identity: identity, Task: task, Run: run, Error: bindErr.Error(), Turn: messageTurn("failed", "interrupted", "idle", task.ID, run.ID, bindErr.Error()), Context: messageContextBudget(llmUsageZero())}, http.StatusInternalServerError
+			return api.MessageResponse{Identity: identity, Task: task, Run: run, Error: bindErr.Error(), Turn: messageTurn("failed", "interrupted", "idle", task.ID, run.ID, bindErr.Error()), Context: d.messageContextBudget(llmUsageZero())}, http.StatusInternalServerError
 		}
 	}
 	stopHeartbeat := c.startRunHeartbeat(ctx, run, req.QueueID, req.QueueClaimToken)
@@ -308,37 +315,34 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 		})
 	}
 
-	workspace, _ := c.workspaceForTask(ctx, identity, task, req, attach)
 	analysisWorkspaceID := run.WorkspaceID
 	if workspace != nil && workspace.ID != "" {
 		analysisWorkspaceID = workspace.ID
 	}
 	replay := runMaintenanceReplay{WorkspaceID: analysisWorkspaceID, UserInput: req.Content, Attach: attach}
-	if workspace != nil && strings.TrimSpace(workspace.LocalPath) != "" {
-		if _, statErr := os.Stat(workspace.LocalPath); statErr != nil {
-			summary := fmt.Sprintf("The workspace environment is unavailable: %s", workspace.LocalPath)
-			outcome := api.RunOutcome{
-				Status:           "waiting_user",
-				CompletionReason: "environment_unavailable",
-				Resumable:        true,
-				Summary:          summary,
-				NextSteps:        []string{"Restore or mount the workspace, then reply \"continue\"."},
-				Risks:            []string{tools.RedactSensitive(statErr.Error())},
-			}
-			event := control.Event{
-				TaskID: task.ID, RunID: run.ID, Type: "run.waiting_user", Visibility: "task", Channel: req.Channel,
-				Payload: mustJSON(map[string]interface{}{"outcome": outcome, "reason": "environment_unavailable"}),
-			}
-			_ = c.materializeRunFinalization(context.WithoutCancel(ctx), identity, task, run, "waiting_user",
-				analysisWorkspaceID, req.Content, req.Channel, "", outcome, attach,
-				control.Handoff{TaskID: task.ID, Summary: summary, NextSteps: outcome.NextSteps, Risks: outcome.Risks},
-				event)
-			return api.MessageResponse{
-				Identity: identity, Task: task, Run: run, Outcome: &outcome, Content: summary,
-				Turn:    messageTurn("waiting_user", "waiting_user", "idle", task.ID, run.ID, summary),
-				Context: messageContextBudget(llmUsageZero()),
-			}, http.StatusOK
+	if unavailableRoot, statErr := executionRootUnavailable(req.ExecutionRoots); statErr != nil {
+		summary := fmt.Sprintf("The workspace environment is unavailable: %s", unavailableRoot)
+		outcome := api.RunOutcome{
+			Status:           "waiting_user",
+			CompletionReason: "environment_unavailable",
+			Resumable:        true,
+			Summary:          summary,
+			NextSteps:        []string{"Restore or mount the workspace, then reply \"continue\"."},
+			Risks:            []string{tools.RedactSensitive(statErr.Error())},
 		}
+		event := control.Event{
+			TaskID: task.ID, RunID: run.ID, Type: "run.waiting_user", Visibility: "task", Channel: req.Channel,
+			Payload: mustJSON(map[string]interface{}{"outcome": outcome, "reason": "environment_unavailable"}),
+		}
+		_ = c.materializeRunFinalization(context.WithoutCancel(ctx), identity, task, run, "waiting_user",
+			analysisWorkspaceID, req.Content, req.Channel, "", outcome, attach,
+			control.Handoff{TaskID: task.ID, Summary: summary, NextSteps: outcome.NextSteps, Risks: outcome.Risks},
+			event)
+		return api.MessageResponse{
+			Identity: identity, Task: task, Run: run, Outcome: &outcome, Content: summary,
+			Turn:    messageTurn("waiting_user", "waiting_user", "idle", task.ID, run.ID, summary),
+			Context: d.messageContextBudget(llmUsageZero()),
+		}, http.StatusOK
 	}
 	lease, leaseErr := c.materializeExecutionLease(ctx, identity, run, workspace)
 	if leaseErr != nil {
@@ -371,14 +375,14 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 			return api.MessageResponse{
 				Identity: identity, Task: task, Run: run, Outcome: &outcome, Content: summary,
 				Turn:    messageTurn("waiting_user", "waiting_user", "idle", task.ID, run.ID, summary),
-				Context: messageContextBudget(llmUsageZero()),
+				Context: d.messageContextBudget(llmUsageZero()),
 			}, http.StatusOK
 		}
 		outcome := c.finalizeErroredRun(ctx, identity, task, run, req.Channel, fmt.Errorf("materialize execution lease: %w", leaseErr), replay)
 		return api.MessageResponse{
 			Identity: identity, Task: task, Run: run, Outcome: &outcome, Error: firstString(outcome.Risks),
 			Turn:    messageTurn(outcome.Status, outcome.Status, "idle", task.ID, run.ID, outcome.Summary),
-			Context: messageContextBudget(llmUsageZero()),
+			Context: d.messageContextBudget(llmUsageZero()),
 		}, http.StatusOK
 	}
 	// Import attachment files into the daemon-managed person partition BEFORE
@@ -449,13 +453,13 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 						}
 					}
 					if !bindingBlocksCandidates {
-						infos, rankErr := tools.RankSkillCandidatesForTenant(identity.TenantID, unit.GoalDigest, 3, map[string]interface{}{
+						candidateArgs := tools.WithSkillStorage(map[string]interface{}{
 							"_tenant_id": identity.TenantID, "_context": callCtx, "_invocation_scope": invocationScope,
-						})
-						if rankErr == nil {
-							for _, info := range infos {
-								projectedIdentity.SkillCandidates = append(projectedIdentity.SkillCandidates, tools.PlanSkillCandidate{Name: info.Name, Description: info.Description})
-							}
+						}, c.srv.SkillStorage)
+						_, catalog, _, prepared := c.prepareSkillCandidateSnapshot(
+							callCtx, identity, run.ID, unit.ID, unit.GoalDigest, invocationScope, candidateArgs)
+						if prepared {
+							projectedIdentity.SkillCatalog = catalog
 						}
 					}
 				}
@@ -465,9 +469,18 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 		})
 	}
 	if workspace != nil && workspace.LocalPath != "" {
+		contextRoots := executionenv.ContextRootPaths(req.ExecutionRoots)
+		primaryRoot := workspace.LocalPath
+		for _, binding := range req.ExecutionRoots {
+			if binding.Role == executionenv.RootRolePrimary {
+				primaryRoot = binding.Path
+				break
+			}
+		}
 		ctx = kernel.WithWorkspaceContext(ctx, kernel.WorkspaceContext{
-			ID:   workspace.ID,
-			Root: workspace.LocalPath,
+			ID:    workspace.ID,
+			Root:  primaryRoot,
+			Roots: contextRoots,
 		})
 	}
 	if selected := c.selectSkillRuntimeContext(ctx, identity, task, run, attach, req.Content); selected.Active != nil || len(selected.Candidates) > 0 {
@@ -484,7 +497,7 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 	}
 	ctx = kernel.WithTaskRuntimeContext(ctx, c.selectedTaskRuntimeContextWithMode(ctx, task, run, workspace, req.Platform, req.Channel, req.Content, attach.resolvedPolicy().ContextMode))
 	ctx = c.withLoopCheckpointResume(ctx, identity, task, run, intent)
-	agentInput := c.withGatewayContext(req.Content, identity, task, workspace, req.Attachments)
+	agentInput := c.withGatewayContext(req.Content, identity, task, workspace, req.ExecutionRoots, req.Attachments)
 	agentInput = c.withResumeContext(ctx, identity, task, run, intent, attach.claimsPriorRuns(), attach.workKey, agentInput)
 	// Independent of continuation intent: any run on a task with uncertain
 	// (crash-orphaned) side-effect tool calls must verify before repeating
@@ -498,19 +511,19 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 		_ = c.materializeRunFinalization(context.Background(), identity, task, run, "failed", replay.WorkspaceID, replay.UserInput, req.Channel, "", outcome, replay.Attach,
 			control.Handoff{TaskID: task.ID, Summary: outcome.Summary, Risks: outcome.Risks},
 			control.Event{Type: "run.failed", Visibility: "task", Channel: req.Channel, Payload: mustJSON(map[string]interface{}{"outcome": outcome, "error": err.Error()})})
-		return api.MessageResponse{Identity: identity, Task: task, Run: run, Error: err.Error(), Turn: messageTurn("failed", "failed", "idle", task.ID, run.ID, err.Error()), Context: messageContextBudget(llmUsageZero())}, http.StatusInternalServerError
+		return api.MessageResponse{Identity: identity, Task: task, Run: run, Error: err.Error(), Turn: messageTurn("failed", "failed", "idle", task.ID, run.ID, err.Error()), Context: d.messageContextBudget(llmUsageZero())}, http.StatusInternalServerError
 	}
 
 	resp, err := d.Gateway.RunAgentWithEvents(ctx, identity.PersonID, req.Channel, agentInput)
 	if err != nil {
 		outcome := c.finalizeErroredRun(ctx, identity, task, run, req.Channel, err, replay)
-		return api.MessageResponse{Identity: identity, Task: task, Run: run, Outcome: &outcome, Error: firstString(outcome.Risks), Turn: messageTurn(outcome.Status, outcome.Status, "idle", task.ID, run.ID, outcome.Summary), Context: messageContextBudget(llmUsageZero())}, http.StatusOK
+		return api.MessageResponse{Identity: identity, Task: task, Run: run, Outcome: &outcome, Error: firstString(outcome.Risks), Turn: messageTurn(outcome.Status, outcome.Status, "idle", task.ID, run.ID, outcome.Summary), Context: d.messageContextBudget(llmUsageZero())}, http.StatusOK
 	}
 
 	content, usage, eventSummary, hasFinalContent, err := c.aggregateGatewayResponse(ctx, req.Channel, task, run, resp)
 	if err != nil {
 		outcome := c.finalizeErroredRun(ctx, identity, task, run, req.Channel, err, replay)
-		return api.MessageResponse{Identity: identity, Task: task, Run: run, Outcome: &outcome, Content: content, Usage: usage, Error: firstString(outcome.Risks), Turn: messageTurn(outcome.Status, outcome.Status, "idle", task.ID, run.ID, outcome.Summary), Context: messageContextBudget(usage)}, http.StatusOK
+		return api.MessageResponse{Identity: identity, Task: task, Run: run, Outcome: &outcome, Content: content, Usage: usage, Error: firstString(outcome.Risks), Turn: messageTurn(outcome.Status, outcome.Status, "idle", task.ID, run.ID, outcome.Summary), Context: d.messageContextBudget(usage)}, http.StatusOK
 	}
 
 	// Finalization must survive turn cancellation. The turn ctx can be
@@ -612,7 +625,7 @@ func (c *RunCoordinator) runMessage(ctx context.Context, identity *control.Ident
 		refreshed = task
 	}
 	turnStatus := turnStatusForOutcome(outcome)
-	out := api.MessageResponse{Identity: identity, Task: refreshed, Run: run, Outcome: &outcome, Content: content, Usage: usage, Turn: messageTurn(turnStatus, taskStatus, "idle", taskID, run.ID, outcome.Summary), Context: messageContextBudget(usage)}
+	out := api.MessageResponse{Identity: identity, Task: refreshed, Run: run, Outcome: &outcome, Content: content, Usage: usage, Turn: messageTurn(turnStatus, taskStatus, "idle", taskID, run.ID, outcome.Summary), Context: d.messageContextBudget(usage)}
 	return out, http.StatusOK
 }
 
@@ -667,6 +680,7 @@ func (c *RunCoordinator) startAsyncRun(identity *control.IdentityContext, req ap
 		PlatformUserID: req.PlatformUserID,
 		WorkspaceID:    req.WorkspaceID,
 		ApprovalMode:   req.ApprovalMode,
+		ExecutionRoots: executionenv.CloneRootBindings(req.ExecutionRoots),
 		QueueID:        req.QueueID,
 		Summary:        truncate(req.Content, 240),
 		StartedAt:      time.Now(),
@@ -887,6 +901,7 @@ func (c *RunCoordinator) drainQueue(identity *control.IdentityContext) {
 		Content:        next.Content,
 		ApprovalMode:   next.ApprovalMode,
 		WorkspaceID:    next.WorkspaceID,
+		ExecutionRoots: next.ExecutionRoots,
 		// A system-originated finalization row carries the task it closes;
 		// resolveTask honors an explicit TaskID before any label guess.
 		TaskID: next.TaskID,

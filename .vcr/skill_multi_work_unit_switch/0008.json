@@ -2,24 +2,86 @@
   "method": "stream",
   "events": [
     {
-      "content": "Preparing to run finish_run",
-      "event_type": "agent.thinking"
+      "content": "已"
     },
     {
-      "tool_calls": [
-        {
-          "ID": "call_bfrS0YzYcVSxoqhqbnamv6Ap",
-          "Function": "finish_run",
-          "Args": "{\"status\":\"done\",\"summary\":\"已按两个独立 work unit 依次选择对应 Skill，并只读取得前端与后端精确版本。\",\"done\":[\"frontend-inspection：frontend=web-7\",\"backend-inspection：backend=api-9\"],\"files\":[],\"tests\":[\"直接读取 frontend.txt，内容为 frontend=web-7\",\"直接读取 backend.txt，内容为 backend=api-9\"],\"risks\":[],\"next_steps\":[],\"need_approve\":false}"
-        }
-      ]
+      "content": "完成"
+    },
+    {
+      "content": "，只"
+    },
+    {
+      "content": "读"
+    },
+    {
+      "content": "读取"
+    },
+    {
+      "content": "，"
+    },
+    {
+      "content": "未"
+    },
+    {
+      "content": "修改"
+    },
+    {
+      "content": "文件"
+    },
+    {
+      "content": "。\n\n"
+    },
+    {
+      "content": "前"
+    },
+    {
+      "content": "端"
+    },
+    {
+      "content": "版本"
+    },
+    {
+      "content": "："
+    },
+    {
+      "content": "web"
+    },
+    {
+      "content": "-"
+    },
+    {
+      "content": "7"
+    },
+    {
+      "content": "  \n"
+    },
+    {
+      "content": "后"
+    },
+    {
+      "content": "端"
+    },
+    {
+      "content": "版本"
+    },
+    {
+      "content": "："
+    },
+    {
+      "content": "api"
+    },
+    {
+      "content": "-"
+    },
+    {
+      "content": "9"
     },
     {
       "usage": {
-        "input_tokens": 8626,
-        "output_tokens": 175,
+        "input_tokens": 8870,
+        "output_tokens": 29,
         "cache_read_input_tokens": 0,
-        "cache_miss_input_tokens": 8626,
+        "cache_miss_input_tokens": 8870,
         "cache_creation_input_tokens": 0,
         "reasoning_output_tokens": 0,
         "cache_usage_reported": true

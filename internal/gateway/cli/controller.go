@@ -152,9 +152,13 @@ type uiModel struct {
 	workspaceOverrideID   string
 	workspaceOverrideName string
 	workspaceOverridePath string
-	toolDispatchFn        func(tool string, args map[string]interface{}) (string, error) // client mode: run management tools on the daemon
-	approvalResponder     func(approvalID, decision, scope, grantKey string) error       // client mode: answer a daemon tool-approval request (scope is daemon-issued; grantKey is a rule the ask offered)
-	steerFn               func(text string) error                                        // client mode: forward mid-turn guidance to the daemon's active run
+	// additionalRoots is the invocation-local --add-dir overlay supplied by
+	// cliapp. It rides every new agent turn but is never persisted as workspace
+	// configuration by the TUI.
+	additionalRoots   []string
+	toolDispatchFn    func(tool string, args map[string]interface{}) (string, error) // client mode: run management tools on the daemon
+	approvalResponder func(approvalID, decision, scope, grantKey string) error       // client mode: answer a daemon tool-approval request (scope is daemon-issued; grantKey is a rule the ask offered)
+	steerFn           func(text string) error                                        // client mode: forward mid-turn guidance to the daemon's active run
 	// Interactive approval panel state (see approval_flow.go). approvalPrompt is
 	// the active panel; approvalQueue holds requests that arrived while one was
 	// already up (FIFO re-arm).
@@ -302,6 +306,16 @@ func (c *Controller) SetMessageProcessor(processor MessageProcessor) {
 		return
 	}
 	c.model.messageProcessor = processor
+}
+
+// SetAdditionalRoots installs the invocation-local --add-dir overlay. The
+// gateway validates and freezes it per run; keeping it on the controller only
+// makes consecutive turns in this TUI invocation inherit the same request.
+func (c *Controller) SetAdditionalRoots(roots []string) {
+	if c == nil || c.model == nil {
+		return
+	}
+	c.model.additionalRoots = append([]string{}, roots...)
 }
 
 // SetEventWatcher installs the person-scoped daemon stream used for the whole

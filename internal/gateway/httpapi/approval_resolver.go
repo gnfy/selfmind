@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"selfmind/internal/control"
+	"selfmind/internal/executionenv"
 	"selfmind/internal/gateway/delivery"
 	"selfmind/internal/platform/log"
 	"selfmind/internal/platform/textutil"
@@ -154,6 +155,12 @@ func (d *Server) respondApprovalByToken(ctx context.Context, identity *control.I
 			return nil, fmt.Errorf("approval %s no longer has a resumable task", resolved.ID)
 		}
 		content := parkedApprovalResumeContent(*resolved, decision, input.Note)
+		var executionRoots []executionenv.RootBinding
+		if sourceRun, runErr := d.Control.GetRun(ctx, identity.TenantID, resolved.RunID); runErr != nil {
+			return nil, runErr
+		} else if sourceRun != nil {
+			executionRoots = executionenv.CloneRootBindings(sourceRun.ExecutionRoots)
+		}
 		var queued *control.QueuedTask
 		approval, queued, err = d.Control.RespondParkedApprovalAndEnqueue(ctx,
 			identity.TenantID, identity.PersonID, resolved.ID, decision, channel, input,
@@ -161,6 +168,7 @@ func (d *Server) respondApprovalByToken(ctx context.Context, identity *control.I
 				PersonID: identity.PersonID, Platform: identity.Platform,
 				PlatformUserID: identity.PlatformUserID, Channel: fallback(channel, identity.Platform),
 				Content: content, WorkspaceID: task.WorkspaceID, TaskID: task.ID,
+				ExecutionRoots: executionRoots,
 				IdempotencyKey: "approval-resume:" + resolved.ID,
 				Class:          control.QueueClassForeground,
 			},

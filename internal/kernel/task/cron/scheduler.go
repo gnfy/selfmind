@@ -32,10 +32,10 @@ type CronJob struct {
 	// Web allows a job to enable web tools for this turn (e.g. a market summary
 	// that must look things up), overriding the default web-off policy.
 	Web bool
-	// SystemKey marks a daemon-registered system job (e.g.
-	// "skill-pruner:default"). Non-empty keys are unique via a partial index;
+	// SystemKey marks a daemon-registered system job (for example a health
+	// canary). Non-empty keys are unique via a partial index;
 	// user-created jobs leave it empty. Names under the skill-pruner-* prefix
-	// are reserved so future migrations can identify built-ins safely.
+	// remain reserved so the retirement migration can identify old built-ins.
 	SystemKey string
 	// TaskID pins a recurring job to ONE stable work label (execution-quality
 	// W6): learned from the first execution's resolved task and passed as
@@ -58,7 +58,6 @@ type CronJob struct {
 type Scheduler struct {
 	db       *sql.DB
 	mem      *memory.MemoryManager
-	pruner   SkillPruner // optional; used for skill-pruner jobs
 	executor JobExecutor // optional; runs a job's prompt as a real agent turn
 	parser   cron.Parser
 	cron     *cron.Cron
@@ -68,11 +67,6 @@ type Scheduler struct {
 	// ids — this map is the source of truth for unscheduling.
 	entries map[int64]cron.EntryID
 	stopCh  chan struct{}
-}
-
-// SkillPruner is the interface for skill pruning, implemented by SkillStore.
-type SkillPruner interface {
-	Prune(ctx context.Context, tenantID string, thresholdDays int) (int, error)
 }
 
 // JobExecutor runs a cron job's prompt as a real agent turn and delivers the
@@ -93,12 +87,6 @@ func NewScheduler(db *sql.DB, mem *memory.MemoryManager) *Scheduler {
 		entries: make(map[int64]cron.EntryID),
 		stopCh:  make(chan struct{}),
 	}
-}
-
-// SetSkillPruner configures the skill pruner for skill-pruner cron jobs.
-// Must be called before Scheduler.Start().
-func (s *Scheduler) SetSkillPruner(pruner SkillPruner) {
-	s.pruner = pruner
 }
 
 // SetExecutor installs the agent-run executor. Must be called before Start() so
@@ -166,44 +154,26 @@ CREATE TABLE IF NOT EXISTS cron_jobs (
 	return s.migrateSystemJobs(ctx)
 }
 
-// migrateSystemJobs is the one-shot governance repair for daemon-registered
-// jobs (2026-07: tenant discovery via os.ReadDir(dataDir) had registered one
-// skill-pruner per data-directory entry — eval residue and person partitions
-// included — accumulating ~2.5k rows). Skills are control-tenant assets, so
-// exactly one skill-pruner survives; the partial unique index then keeps every
-// future system job single. Idempotent: safe on every boot.
+// migrateSystemJobs retires the obsolete memory.db skill-metric pruner. Skill
+// usage and retention now derive from durable control-store activations and
+// work-unit outcomes, so retaining even one legacy pruner would preserve a
+// second, misleading lifecycle. User-created jobs with a coincidental prefix
+// and a different shape remain untouched. Idempotent: safe on every boot.
 func (s *Scheduler) migrateSystemJobs(ctx context.Context) error {
 	// Only historical rows with the exact built-in shape are safe to migrate.
 	// A user may have created a similarly named row before this namespace was
 	// reserved; its prompt/schedule must not be interpreted as system state.
 	legacyShape := `COALESCE(system_key, '') = '' AND cron_expr = '0 3 * * *'
 		AND channel = 'cli' AND prompt LIKE 'skill_prune:%'`
-	// 1. Skill pruning is a control-tenant concern: drop old per-partition
-	//    built-ins (eval-*, person_*, gateway, ... pseudo-tenants).
+	// Delete both keyed and exact legacy-shaped built-ins. The latter includes
+	// old per-partition rows and duplicated default rows.
 	if _, err := s.db.ExecContext(ctx,
-		`DELETE FROM cron_jobs WHERE name LIKE 'skill-pruner-%'
-			AND name != 'skill-pruner-default' AND `+legacyShape); err != nil {
+		`DELETE FROM cron_jobs WHERE system_key = 'skill-pruner:default'
+			OR (name LIKE 'skill-pruner-%' AND `+legacyShape+`)`); err != nil {
 		return err
 	}
-	// 2. Collapse only historic built-in-shaped default rows. Prefer an
-	//    already-keyed survivor; otherwise keep the oldest legacy row.
-	if _, err := s.db.ExecContext(ctx,
-		`DELETE FROM cron_jobs WHERE name = 'skill-pruner-default'
-			AND (system_key = 'skill-pruner:default' OR (`+legacyShape+`))
-			AND id != COALESCE(
-				(SELECT MIN(id) FROM cron_jobs WHERE system_key = 'skill-pruner:default'),
-				(SELECT MIN(id) FROM cron_jobs WHERE name = 'skill-pruner-default' AND `+legacyShape+`)
-			)`); err != nil {
-		return err
-	}
-	// 3. Stamp its stable system key, then enforce uniqueness for all future
-	//    system jobs. The index is created only after the cleanup above so an
-	//    upgrade over a polluted table cannot fail on existing duplicates.
-	if _, err := s.db.ExecContext(ctx,
-		`UPDATE cron_jobs SET system_key = 'skill-pruner:default'
-			WHERE name = 'skill-pruner-default' AND `+legacyShape); err != nil {
-		return err
-	}
+	// Keep the generic system-key uniqueness contract for current and future
+	// daemon-owned jobs.
 	if _, err := s.db.ExecContext(ctx,
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_cron_jobs_system_key
 			ON cron_jobs(system_key) WHERE system_key != ''`); err != nil {
@@ -215,6 +185,9 @@ func (s *Scheduler) migrateSystemJobs(ctx context.Context) error {
 func validateCronJobIdentity(job *CronJob) error {
 	if job == nil {
 		return fmt.Errorf("cron job is required")
+	}
+	if strings.EqualFold(strings.TrimSpace(job.SystemKey), "skill-pruner:default") {
+		return fmt.Errorf("cron system key %q is retired; Skill usage is derived from durable activation outcomes", job.SystemKey)
 	}
 	if strings.TrimSpace(job.SystemKey) == "" &&
 		strings.HasPrefix(strings.ToLower(strings.TrimSpace(job.Name)), skillPrunerNamePrefix) {
@@ -523,22 +496,6 @@ func (s *Scheduler) runJob(ctx context.Context, job *CronJob) {
 	_, _ = s.db.ExecContext(ctx,
 		"UPDATE cron_jobs SET last_run = ? WHERE id = ?",
 		now.Unix(), job.ID)
-
-	// Handle built-in skill prune job
-	if strings.HasPrefix(job.Prompt, "skill_prune:") {
-		tenantID := strings.TrimPrefix(job.Prompt, "skill_prune:")
-		tenantID = strings.TrimSpace(tenantID)
-		if s.pruner != nil {
-			pruned, err := s.pruner.Prune(ctx, tenantID, 30)
-			if err != nil {
-				log.Debug("cron: skill prune failed for %s: %v", tenantID, err)
-			} else {
-				log.Debug("cron: pruned %d low-value skill records for tenant %s", pruned, tenantID)
-			}
-		}
-		log.Debug("cron: job %d (%s) completed", job.ID, job.Name)
-		return
-	}
 
 	// Preferred path: run the prompt as a real agent turn and deliver the
 	// result to the job's channel. The executor (gateway layer) owns the run +

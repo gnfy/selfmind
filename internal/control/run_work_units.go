@@ -254,6 +254,14 @@ func upsertProjectedWorkUnitTx(ctx context.Context, tx *sql.Tx, unit *RunWorkUni
 		unit.PrimaryTaskID, unit.RelatedTaskID, unit.GoalDigest, unit.PlanStatus, status,
 		unit.OutcomeSummary, verification, refs, startedAt, unit.CreatedAt.Unix(), finishedAt,
 		startedCursor, finishedCursor)
+	if err != nil {
+		return err
+	}
+	if workUnitTerminal(status) {
+		_, err = tx.ExecContext(ctx, `DELETE FROM skill_candidate_refs
+			WHERE identity_tenant_id=? AND run_id=? AND work_unit_id=?`,
+			unit.IdentityTenantID, unit.RunID, unit.ID)
+	}
 	return err
 }
 

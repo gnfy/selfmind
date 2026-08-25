@@ -12,6 +12,13 @@ before changing `internal/tools`, execution middleware, or kernel tool dispatch.
 - Scope checks must resolve path semantics safely, including wrapper commands
   and symlink-sensitive operations. A workspace switch must affect subsequent
   tool execution without restarting the daemon.
+- A repeatable local-CLI `--add-dir` is a run-scoped root binding, not a
+  workspace mutation or trust grant. The authenticated loopback boundary
+  canonicalizes it before admission; queue and run rows retain the frozen
+  binding; tools, project-context discovery, sandbox mounts, and overlapping
+  path scheduling consume the same typed roots. An external additional root
+  makes the aggregate scope untrusted, while a nested root already covered by
+  a trusted workspace does not reduce that workspace's trust.
 - `vision_analyze`'s local-path branch is a filesystem read and obeys the
   scope like `read_file` (`WorkspaceScopeMiddleware`); its http(s) branch
   stays with the tool's SSRF check. Any new tool that reads a caller-supplied

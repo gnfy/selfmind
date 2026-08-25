@@ -8,6 +8,7 @@ import (
 	"selfmind/internal/buildinfo"
 	"selfmind/internal/executionenv"
 	"selfmind/internal/gateway/api"
+	"selfmind/internal/kernel/llm"
 	"selfmind/internal/tools"
 )
 
@@ -21,6 +22,26 @@ func (d *Server) handleGatewayStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, d.GatewayStatus())
+}
+
+func (d *Server) handleGatewayToolCatalogProbe(w http.ResponseWriter, r *http.Request) {
+	if !d.authorized(r) {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !d.localCLIRequest(r, "cli") {
+		http.Error(w, "provider catalogue probe is available only to the authenticated local CLI", http.StatusForbidden)
+		return
+	}
+	if d.ToolCatalogProbeFunc == nil {
+		http.Error(w, "provider catalogue probe is unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	writeJSON(w, http.StatusOK, d.ToolCatalogProbeFunc(r.Context()))
 }
 
 func (d *Server) handleGatewayShutdown(w http.ResponseWriter, r *http.Request) {
@@ -71,13 +92,23 @@ func (d *Server) GatewayStatus() api.GatewayStatusResponse {
 			switch report.Status {
 			case tools.ToolSchemaRepaired:
 				toolSchemas.Repaired++
+				toolSchemas.RegisteredActive++
 			case tools.ToolSchemaQuarantined:
 				toolSchemas.Quarantined++
 			default:
-				toolSchemas.Active++
+				toolSchemas.RegisteredActive++
+			}
+			if report.Status != tools.ToolSchemaQuarantined && report.Exposure == tools.ToolExposureHidden {
+				toolSchemas.Hidden++
 			}
 		}
 	}
+	toolSchemas.Active = toolSchemas.RegisteredActive
+	toolCatalog := llm.ToolCatalogPreview{}
+	if d.ToolCatalogPreviewFunc != nil {
+		toolCatalog = d.ToolCatalogPreviewFunc(context.Background())
+	}
+	toolSchemas.ProviderVisible = toolCatalog.Count
 	mcpHealth := api.MCPHealth{}
 	if d.MCPHealthFunc != nil {
 		health := d.MCPHealthFunc()
@@ -103,6 +134,7 @@ func (d *Server) GatewayStatus() api.GatewayStatusResponse {
 		ActiveRuns:     active,
 		ActiveRunCount: len(active),
 		ToolSchemas:    toolSchemas,
+		ToolCatalog:    toolCatalog,
 		MCP:            mcpHealth,
 		StoreSchema:    storeSchema,
 	}

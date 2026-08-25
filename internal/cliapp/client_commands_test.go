@@ -100,6 +100,20 @@ func TestSendModeEqualsSyntaxAndAsync(t *testing.T) {
 	}
 }
 
+func TestSendCarriesInvocationAdditionalRoots(t *testing.T) {
+	root := t.TempDir()
+	app, recorded, _, _ := newSendTestApp(t, []string{"selfmind", "send", "inspect both roots"})
+	app.additionalDirs = []string{root}
+
+	handled, code := app.runGatewayClientIfRequested()
+	if !handled || code != 0 {
+		t.Fatalf("handled = %v, code = %d", handled, code)
+	}
+	if len(recorded.ClientAdditionalRoots) != 1 || recorded.ClientAdditionalRoots[0] != root {
+		t.Fatalf("client_additional_roots = %#v", recorded.ClientAdditionalRoots)
+	}
+}
+
 func TestSendRejectsInvalidMode(t *testing.T) {
 	app, recorded, _, stderr := newSendTestApp(t, []string{"selfmind", "send", "--mode", "yolo", "hello"})
 

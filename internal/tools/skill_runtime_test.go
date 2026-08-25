@@ -2,12 +2,15 @@ package tools
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"selfmind/internal/kernel"
 )
@@ -115,8 +118,9 @@ func TestSkillRuntimeListViewReloadAndSlashInvocation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create skill: %v", err)
 	}
-	if _, ok := registry.Get("skill:dev-flow"); !ok {
-		t.Fatal("created skill should be registered without restart")
+	compatTool, ok := registry.Get("skill:dev-flow")
+	if !ok || ToolMetadataFor(compatTool).Exposure != ToolExposureHidden {
+		t.Fatalf("legacy per-Skill dispatch must remain registered but hidden: ok=%v metadata=%+v", ok, ToolMetadataFor(compatTool))
 	}
 
 	list, err := SkillsListJSONForTenant("default", "", false)
@@ -253,7 +257,7 @@ func TestReadOnlySkillCannotBeMutated(t *testing.T) {
 	}
 }
 
-func TestDynamicSkillToolIsInstructionOnly(t *testing.T) {
+func TestDynamicSkillToolsAreHiddenButExplicitlyDispatchable(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	registry := NewRegistry()
 	disp := NewDispatcherWithRegistry(registry)
@@ -267,12 +271,122 @@ func TestDynamicSkillToolIsInstructionOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create skill: %v", err)
 	}
-	out, err := registry.Dispatch("skill:exec-flow", map[string]interface{}{})
-	if err != nil {
-		t.Fatalf("dispatch dynamic skill: %v", err)
+	compatTool, ok := registry.Get("skill:exec-flow")
+	if !ok || ToolMetadataFor(compatTool).Exposure != ToolExposureHidden {
+		t.Fatalf("dynamic per-Skill compatibility tool must be hidden: ok=%v metadata=%+v", ok, ToolMetadataFor(compatTool))
 	}
-	if !strings.Contains(out, "instruction-only") || strings.Contains(out, "should-not-run") {
-		t.Fatalf("dynamic skill tool should not execute or echo skill code blocks, got:\n%s", out)
+	foundHiddenReport := false
+	for _, report := range registry.ToolSchemaReport() {
+		if report.Name == "skill:exec-flow" && report.Exposure == ToolExposureHidden {
+			foundHiddenReport = true
+		}
+	}
+	if !foundHiddenReport {
+		t.Fatalf("diagnostic registry report did not expose hidden compatibility tool: %+v", registry.ToolSchemaReport())
+	}
+	result, err := disp.Dispatch("skill:exec-flow", map[string]interface{}{})
+	if err != nil || !strings.Contains(result, "instruction-only") || strings.Contains(result, "should-not-run") {
+		t.Fatalf("hidden compatibility dispatch executed content or failed: result=%q err=%v", result, err)
+	}
+	resolved, prompt, _, kind, ok, err := ResolveTypedSkillInvocationForTenant("default", "/exec-flow", "apply safely")
+	if err != nil || !ok || kind != "skill" || resolved.Name != "exec-flow" || resolved.SkillKey == "" ||
+		resolved.VersionHash == "" || resolved.PackageHash == "" || prompt != "apply safely" || strings.Contains(prompt, "should-not-run") {
+		t.Fatalf("typed explicit Skill resolution=%+v prompt=%q kind=%q ok=%v err=%v", resolved, prompt, kind, ok, err)
+	}
+}
+
+func TestCatalogSkillCandidatesKeepUnrelatedActiveSkillsDiscoverable(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	for _, item := range []struct {
+		name, description string
+	}{
+		{"release-inspection", "Inspect release metadata and version information"},
+		{"frontend-colors", "Adjust frontend colors and layout styles"},
+		{"database-audit", "Audit database indexes and slow queries"},
+		{"incident-review", "Review an operational incident timeline"},
+	} {
+		if _, err := NewSkillManageTool().Execute(directSkillMutationArgs(map[string]interface{}{
+			"action": "create", "name": item.name, "description": item.description, "content": "Follow the declared procedure.",
+		})); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	candidates, err := CatalogSkillCandidatesForTenant("default", "inspect release metadata")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(candidates) != 4 {
+		t.Fatalf("catalog candidates = %d, want every active Skill: %+v", len(candidates), candidates)
+	}
+	if candidates[0].Name != "release-inspection" {
+		t.Fatalf("relevant Skill was not ranked first: %+v", candidates)
+	}
+}
+
+func TestScopedSkillDiscoveryDoesNotWalkAboveWorkspaceRoot(t *testing.T) {
+	base := t.TempDir()
+	workspace := filepath.Join(base, "workspace")
+	for _, fixture := range []struct {
+		root string
+		name string
+	}{
+		{root: filepath.Join(base, ".selfmind", "skills"), name: "parent-private"},
+		{root: filepath.Join(workspace, ".selfmind", "skills"), name: "workspace-visible"},
+	} {
+		dir := filepath.Join(fixture.root, fixture.name)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		content := fmt.Sprintf("---\nname: %s\ndescription: fixture\n---\n\nInspect.\n", fixture.name)
+		if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	storage, err := NewSkillStorage(filepath.Join(base, "control-skills"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cleanup := SetExecutionScope("scoped-tenant", ExecutionScope{WorkspaceRoot: workspace, AllowedRoots: []string{workspace}})
+	defer cleanup()
+	listed, err := ListSkillsForTenant("scoped-tenant", false, WithSkillStorage(map[string]interface{}{"_tenant_id": "scoped-tenant"}, storage))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(listed) != 1 || listed[0].Name != "workspace-visible" || listed[0].Root != filepath.Join(workspace, ".selfmind", "skills") {
+		t.Fatalf("scoped discovery crossed workspace boundary: %+v", listed)
+	}
+}
+
+func TestSkillViewPagesMainSectionsAndUTF8Offsets(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	body := "## Inputs\n输入参数\n## Procedure\n" + strings.Repeat("步骤", 5000) + "\n## Verification\n完成"
+	createTestSkill(t, "default", "paged-flow", body)
+
+	result, err := SkillViewPageJSONForTenant("default", "paged-flow", "", "Procedure", 0, 512)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var first struct {
+		Content    string `json:"content"`
+		Section    string `json:"section"`
+		Complete   bool   `json:"complete"`
+		NextOffset int    `json:"next_offset_bytes"`
+		TotalBytes int    `json:"total_bytes"`
+	}
+	if err := json.Unmarshal([]byte(result), &first); err != nil {
+		t.Fatal(err)
+	}
+	if first.Section != "Procedure" || first.Complete || first.NextOffset <= 0 || first.TotalBytes <= len(first.Content) || !utf8.ValidString(first.Content) {
+		t.Fatalf("first page = %+v", first)
+	}
+	result, err = SkillViewPageJSONForTenant("default", "paged-flow", "", "Procedure", first.NextOffset, 512)
+	if err != nil || !strings.Contains(result, `"offset_bytes": `+strconv.Itoa(first.NextOffset)) {
+		t.Fatalf("continue page result=%s err=%v", result, err)
+	}
+	if _, err := SkillViewPageJSONForTenant("default", "paged-flow", "", "missing", 0, 512); err == nil {
+		t.Fatal("missing section should fail loudly")
 	}
 }
 
@@ -323,6 +437,35 @@ func TestSkillBundleInvocation(t *testing.T) {
 	}
 	if display != "backend-dev" || !strings.Contains(prompt, "Inspect first.") || !strings.Contains(prompt, "Run tests second.") {
 		t.Fatalf("unexpected bundle prompt: %s", prompt)
+	}
+}
+
+func TestSkillBundleUsesOneExecutingAgentAggregateBudget(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	createTestSkill(t, "default", "large-a", strings.Repeat("Inspect A carefully. ", 120))
+	createTestSkill(t, "default", "large-b", strings.Repeat("Inspect B carefully. ", 120))
+	if _, err := SaveSkillBundleForTenant("default", SkillBundle{Name: "bounded-pair", Skills: []string{"large-a", "large-b"}}); err != nil {
+		t.Fatal(err)
+	}
+	budget := kernel.RuntimeContextBudget{SkillMainBytes: 1800, SkillMainTokens: 450}
+	ctx := kernel.WithRuntimeContextBundle(context.Background(), kernel.RuntimeContextBundle{
+		SelectionNotes: []string{"bundle-budget-test"}, Budget: budget,
+	})
+	prompt, _, ok, err := BuildBundleInvocationMessageForTenant("default", "bounded-pair", "", map[string]interface{}{"_context": ctx})
+	if err != nil || !ok {
+		t.Fatalf("bounded bundle: ok=%v err=%v prompt=%q", ok, err, prompt)
+	}
+	start := strings.Index(prompt, "## Bundle Skill:")
+	if start < 0 {
+		t.Fatalf("bundle members missing: %s", prompt)
+	}
+	members := prompt[start:]
+	if len(members) > budget.SkillMainBytes || kernel.SkillTextTokens(members) > budget.SkillMainTokens {
+		t.Fatalf("bundle members exceeded aggregate budget: bytes=%d/%d tokens=%d/%d",
+			len(members), budget.SkillMainBytes, kernel.SkillTextTokens(members), budget.SkillMainTokens)
+	}
+	if strings.Count(members, "[PAGED SKILL MAIN]") != 2 {
+		t.Fatalf("aggregate budget did not page members fairly: %s", members)
 	}
 }
 

@@ -9,11 +9,13 @@ package control
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
+	"selfmind/internal/executionenv"
 )
 
 // Queue row lifecycle: queued -> started (drained into an async run) -> done
@@ -84,6 +86,10 @@ type QueuedTask struct {
 	Content        string `json:"content"`
 	ApprovalMode   string `json:"approval_mode,omitempty"`
 	WorkspaceID    string `json:"workspace_id,omitempty"`
+	// ExecutionRoots freezes the physical directory bindings admitted for this
+	// queued request. A later drain never derives them from daemon cwd, current
+	// workspace, or task history.
+	ExecutionRoots []executionenv.RootBinding `json:"execution_roots,omitempty"`
 	// TaskID pins the drained run to a specific existing task (used by
 	// system-originated finalization work such as external-watch closure).
 	// Empty for ordinary inbound messages, which resolve their task normally.
@@ -128,17 +134,21 @@ func (s *Store) EnqueueQueued(ctx context.Context, q QueuedTask) (*QueuedTask, e
 	if q.Priority == 0 {
 		q.Priority = queuePriorityForClass(q.Class)
 	}
+	rootsJSON, err := encodeExecutionRoots(q.ExecutionRoots)
+	if err != nil {
+		return nil, fmt.Errorf("encode queue execution roots: %w", err)
+	}
 	notBefore := q.NotBefore.Unix()
 	if q.NotBefore.IsZero() {
 		notBefore = 0
 	}
-	query := `INSERT INTO task_queue (id, tenant_id, person_id, channel, platform, platform_user_id, content, approval_mode, workspace_id, task_id, idempotency_key, class, priority, not_before, status, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	query := `INSERT INTO task_queue (id, tenant_id, person_id, channel, platform, platform_user_id, content, approval_mode, workspace_id, execution_roots_json, task_id, idempotency_key, class, priority, not_before, status, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 	if q.IdempotencyKey != "" {
 		query += ` ON CONFLICT(tenant_id, idempotency_key) WHERE idempotency_key != '' DO NOTHING`
 	}
 	result, err := s.db.ExecContext(ctx, query,
-		q.ID, q.TenantID, q.PersonID, q.Channel, q.Platform, q.PlatformUserID, q.Content, q.ApprovalMode, q.WorkspaceID, q.TaskID, q.IdempotencyKey, q.Class, q.Priority, notBefore, q.Status, q.CreatedAt.Unix())
+		q.ID, q.TenantID, q.PersonID, q.Channel, q.Platform, q.PlatformUserID, q.Content, q.ApprovalMode, q.WorkspaceID, rootsJSON, q.TaskID, q.IdempotencyKey, q.Class, q.Priority, notBefore, q.Status, q.CreatedAt.Unix())
 	if err != nil {
 		return nil, err
 	}
@@ -159,13 +169,22 @@ func (s *Store) EnqueueQueued(ctx context.Context, q QueuedTask) (*QueuedTask, e
 	return &q, nil
 }
 
+func encodeExecutionRoots(roots []executionenv.RootBinding) (string, error) {
+	data, err := json.Marshal(roots)
+	if err != nil {
+		return "", err
+	}
+	return string(data), nil
+}
+
 func scanQueuedTask(rows interface {
 	Scan(dest ...interface{}) error
 }) (QueuedTask, error) {
 	var q QueuedTask
 	var created, notBefore, leaseUntil int64
+	var rootsJSON string
 	if err := rows.Scan(&q.ID, &q.TenantID, &q.PersonID, &q.Channel, &q.Platform, &q.PlatformUserID,
-		&q.Content, &q.ApprovalMode, &q.WorkspaceID, &q.TaskID, &q.RunID, &q.IdempotencyKey,
+		&q.Content, &q.ApprovalMode, &q.WorkspaceID, &rootsJSON, &q.TaskID, &q.RunID, &q.IdempotencyKey,
 		&q.Class, &q.Priority, &notBefore, &q.Status, &q.Restarts, &q.ClaimToken, &leaseUntil,
 		&q.AttemptGeneration, &created); err != nil {
 		return QueuedTask{}, err
@@ -177,11 +196,14 @@ func scanQueuedTask(rows interface {
 	if leaseUntil > 0 {
 		q.LeaseUntil = time.Unix(leaseUntil, 0)
 	}
+	if err := json.Unmarshal([]byte(rootsJSON), &q.ExecutionRoots); err != nil {
+		return QueuedTask{}, fmt.Errorf("decode queue execution roots: %w", err)
+	}
 	return q, nil
 }
 
 const queueSelectColumns = `id, tenant_id, person_id, channel, platform, COALESCE(platform_user_id, ''),
-	content, COALESCE(approval_mode, ''), COALESCE(workspace_id, ''), COALESCE(task_id, ''),
+	content, COALESCE(approval_mode, ''), COALESCE(workspace_id, ''), COALESCE(execution_roots_json, '[]'), COALESCE(task_id, ''),
 	COALESCE(run_id, ''), COALESCE(idempotency_key, ''), COALESCE(class, 'foreground'),
 	COALESCE(priority, 100), COALESCE(not_before, 0), status, COALESCE(restarts, 0),
 	COALESCE(claim_token, ''), COALESCE(lease_until, 0), COALESCE(attempt_generation, 0), created_at`

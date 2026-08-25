@@ -9,6 +9,8 @@ import (
 	"strings"
 
 	"go.yaml.in/yaml/v3"
+
+	"selfmind/internal/kernel"
 )
 
 type SkillBundle struct {
@@ -211,21 +213,76 @@ func BuildBundleInvocationMessageForTenant(tenantID, name, instruction string, i
 		sb.WriteString(strings.TrimSpace(instruction))
 		sb.WriteString("\n\n")
 	}
+	type bundleMember struct {
+		pack   SkillPackageSnapshot
+		files  []string
+		prefix string
+		suffix string
+	}
+	var members []bundleMember
 	var loaded []string
 	var missing []string
 	for _, skill := range b.Skills {
-		msg, display, err := BuildSkillInvocationMessageForTenant(tenantID, skill, "", invocation...)
+		pack, err := ReadSkillPackageForTenant(tenantID, skill, invocation...)
 		if err != nil {
 			missing = append(missing, skill)
 			continue
 		}
-		loaded = append(loaded, display)
-		sb.WriteString(msg)
-		sb.WriteString("\n\n")
+		if pack.Info.State == SkillStateDisabled {
+			missing = append(missing, skill)
+			continue
+		}
+		files := make([]string, 0, len(pack.ResourceManifest))
+		for _, resource := range pack.ResourceManifest {
+			files = append(files, resource.Path)
+		}
+		prefix := "## Bundle Skill: " + pack.Info.Name + "\n\n"
+		suffix := ""
+		if len(files) > 0 {
+			suffix = "\n\nLinked files:\n"
+			for _, file := range files {
+				suffix += "- " + file + "\n"
+			}
+		}
+		members = append(members, bundleMember{pack: pack, files: files, prefix: prefix, suffix: suffix})
+		loaded = append(loaded, pack.Info.Name)
 	}
 	if len(loaded) == 0 {
 		return "", "", true, fmt.Errorf("bundle %q has no loadable skills; missing: %s", b.Name, strings.Join(missing, ", "))
 	}
+	budget := bundleRuntimeContextBudget(invocation...)
+	fixedBytes, fixedTokens := 0, 0
+	for _, member := range members {
+		fixed := member.prefix + member.suffix + "\n\n"
+		fixedBytes += len(fixed)
+		fixedTokens += kernel.SkillTextTokens(fixed)
+	}
+	remainingBytes := budget.SkillMainBytes - fixedBytes
+	remainingTokens := budget.SkillMainTokens - fixedTokens
+	if remainingBytes <= 0 || remainingTokens <= 0 {
+		return "", "", true, fmt.Errorf("bundle %q metadata exceeds the executing agent's aggregate Skill budget; split the bundle", b.Name)
+	}
+	var memberOutput strings.Builder
+	for index, member := range members {
+		remainingMembers := len(members) - index
+		shareBytes := remainingBytes / remainingMembers
+		shareTokens := remainingTokens / remainingMembers
+		delivery := kernel.BuildSkillMainDeliveryWithinBudget(member.pack.MainSource, shareBytes, shareTokens)
+		if strings.TrimSpace(delivery.Content) == "" {
+			return "", "", true, fmt.Errorf("bundle %q cannot allocate an actionable page to Skill %q; split the bundle", b.Name, member.pack.Info.Name)
+		}
+		memberOutput.WriteString(member.prefix)
+		memberOutput.WriteString(delivery.Content)
+		memberOutput.WriteString(member.suffix)
+		memberOutput.WriteString("\n\n")
+		remainingBytes -= len(delivery.Content)
+		remainingTokens -= kernel.SkillTextTokens(delivery.Content)
+		_ = MarkSkillUsed(tenantID, member.pack.Info.Name, invocation...)
+	}
+	if memberOutput.Len() > budget.SkillMainBytes || kernel.SkillTextTokens(memberOutput.String()) > budget.SkillMainTokens {
+		return "", "", true, fmt.Errorf("bundle %q exceeded the executing agent's aggregate Skill budget", b.Name)
+	}
+	sb.WriteString(memberOutput.String())
 	if len(missing) > 0 {
 		sb.WriteString("## Missing Bundle Skills\n")
 		for _, skill := range missing {
@@ -233,6 +290,18 @@ func BuildBundleInvocationMessageForTenant(tenantID, name, instruction string, i
 		}
 	}
 	return sb.String(), b.Name, true, nil
+}
+
+func bundleRuntimeContextBudget(invocation ...map[string]interface{}) kernel.RuntimeContextBudget {
+	budget := kernel.DefaultRuntimeContextBudget()
+	if len(invocation) == 0 || invocation[0] == nil {
+		return budget
+	}
+	if bundle, ok := kernel.RuntimeContextBundleFromContext(ContextFromArgs(invocation[0])); ok &&
+		bundle.Budget.SkillMainBytes > 0 && bundle.Budget.SkillMainTokens > 0 {
+		return bundle.Budget
+	}
+	return budget
 }
 
 func readSkillBundleFile(path string) (SkillBundle, error) {

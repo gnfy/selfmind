@@ -270,6 +270,28 @@ func RequestStatus(ctx context.Context, url string) ([]byte, int, error) {
 	return data, resp.StatusCode, nil
 }
 
+// RequestToolCatalogProbe invokes the daemon-owned primary provider with its
+// real effective tool catalogue. The local-control credential prevents remote
+// callers from spending quota through this diagnostic endpoint.
+func RequestToolCatalogProbe(ctx context.Context, url, dataDir string) ([]byte, int, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, ResolveURL(url)+"/v1/gateway/tool-catalog/probe", bytes.NewReader([]byte(`{}`)))
+	if err != nil {
+		return nil, 0, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	attachAuth(req)
+	if token, tokenErr := ReadLocalControlToken(dataDir); tokenErr == nil {
+		req.Header.Set("X-SelfMind-Local-Control-Token", token)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer resp.Body.Close()
+	data, _ := io.ReadAll(resp.Body)
+	return data, resp.StatusCode, nil
+}
+
 func RequestShutdown(ctx context.Context, opts StopOptions) error {
 	timeout := opts.Timeout
 	if timeout <= 0 {

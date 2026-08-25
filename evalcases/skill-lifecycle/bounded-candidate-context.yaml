@@ -1,11 +1,17 @@
 id: skill_bounded_candidate_context
-title: "Unbound work receives at most three relevant Skill metadata rows and no directory body"
+title: "Unbound work sees a budgeted Skill catalog without per-Skill provider tools"
 suite: skill-lifecycle
 workspace: isolated
 channel: cli
 require_cassette: true
 
 setup:
+  skills:
+    - name: agent-release-check
+      description: 检查项目 release 文件并精确报告当前版本
+      content: |-
+        Read the requested release file with a read-only tool. Report the exact
+        value and do not guess when the file is unavailable.
   files:
     target.txt: "candidate-context-ok\n"
     .selfmind/skills/project-check-a/SKILL.md: |-
@@ -53,11 +59,39 @@ expect:
 assert_state:
   - on: events
     type: context.selected
-    payload_contains: '"skill_candidate_count":3'
+    payload_contains: '"skill_catalog_present":true'
     count_gte: 1
   - on: events
     type: context.selected
-    payload_contains: '"skill_directory_chars":0'
+    payload_contains: '"skill_catalog_within_budget":true'
+    count_gte: 1
+  - on: events
+    type: context.selected
+    payload_contains: '"skill_candidate_agent_created_count":1'
+    count_gte: 1
+  - on: events
+    type: context.selected
+    payload_contains: '"skill_candidate_count":6'
+    count_gte: 1
+  - on: events
+    type: context.selected
+    payload_contains: '"skill_catalog_included":6'
+    count_gte: 1
+  - on: events
+    type: context.selected
+    payload_contains: '"skill_catalog_full":6'
+    count_gte: 1
+  - on: events
+    type: context.selected
+    payload_contains: '"skill_catalog_shortened":0'
+    count_gte: 1
+  - on: events
+    type: context.selected
+    payload_contains: '"skill_catalog_omitted":0'
+    count_gte: 1
+  - on: events
+    type: provider.call.context_breakdown
+    payload_contains: '"dynamic_skill_tools":0'
     count_gte: 1
 
 checks:
@@ -65,4 +99,3 @@ checks:
   no_raw_json_leak: true
   no_empty_response: true
   no_provider_stack_dump: true
-

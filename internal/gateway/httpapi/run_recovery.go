@@ -137,6 +137,13 @@ func (d *Server) recoverApprovalContinuations(ctx context.Context, drain bool) i
 		}
 		channel := fallback(approval.ApprovedChannel, approval.RequestedChannel)
 		route := d.routeIdentityForPerson(ctx, approval.TenantID, approval.PersonID, channel, "", nil)
+		var executionRoots []executionenv.RootBinding
+		if sourceRun, runErr := d.Control.GetRun(ctx, approval.TenantID, approval.RunID); runErr != nil {
+			log.Warn("gateway: recoverable approval run scope lookup failed", "approval_id", approval.ID, "run_id", approval.RunID, "error", runErr)
+			continue
+		} else if sourceRun != nil {
+			executionRoots = executionenv.CloneRootBindings(sourceRun.ExecutionRoots)
+		}
 		queued, created, enqueueErr := d.Control.EnqueueRecoveredApprovalContinuation(ctx, approval.ID, control.QueuedTask{
 			TenantID:       approval.TenantID,
 			PersonID:       approval.PersonID,
@@ -145,6 +152,7 @@ func (d *Server) recoverApprovalContinuations(ctx context.Context, drain bool) i
 			Channel:        fallback(channel, route.Platform),
 			Content:        parkedApprovalResumeContent(approval, approval.Status, approval.DecisionNote),
 			WorkspaceID:    task.WorkspaceID,
+			ExecutionRoots: executionRoots,
 			TaskID:         task.ID,
 			IdempotencyKey: "approval-resume:" + approval.ID,
 			Class:          control.QueueClassForeground,

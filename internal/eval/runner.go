@@ -15,7 +15,6 @@ import (
 	"selfmind/internal/executionenv"
 	"selfmind/internal/gateway/api"
 	"selfmind/internal/gateway/httpapi"
-	"selfmind/internal/kernel"
 	"selfmind/internal/kernel/llm"
 	"selfmind/internal/kernel/memory"
 	"selfmind/internal/platform/config"
@@ -274,14 +273,15 @@ func runSingle(ctx context.Context, c *Case, opts RunOptions, sampleIdx, totalSa
 		// A per-turn platform_user_id override simulates a different platform user
 		// (identity-isolation scenarios); the default keeps the case's identity.
 		resp, status := h.server.ProcessMessage(turnCtx, api.MessageRequest{
-			TenantID:       h.tenantID,
-			Platform:       "eval",
-			PlatformUserID: firstNonEmpty(turn.PlatformUserID, "eval-"+c.ID),
-			DisplayName:    "SelfMind Eval",
-			Channel:        channel,
-			Content:        turn.Input,
-			ClientCWD:      workspace,
-			WorkspaceID:    workspaceID,
+			TenantID:              h.tenantID,
+			Platform:              "eval",
+			PlatformUserID:        firstNonEmpty(turn.PlatformUserID, "eval-"+c.ID),
+			DisplayName:           "SelfMind Eval",
+			Channel:               channel,
+			Content:               turn.Input,
+			ClientCWD:             workspace,
+			ClientAdditionalRoots: append([]string{}, turn.AdditionalRoots...),
+			WorkspaceID:           workspaceID,
 			// Eval has no human sitting on the approval waiter. Run autonomously
 			// inside the case workspace; workspace scope and the hard deny floor
 			// remain active, so dangerous operations are still rejected.
@@ -540,6 +540,14 @@ func newRuntimeHarness(opts RunOptions, c *Case, dataDirOverride string) (*runti
 	if tenantID == "" {
 		tenantID = fmt.Sprintf("eval-%s-%d", sanitizeFilePart(c.ID), time.Now().UnixNano())
 	}
+	if c.Setup != nil {
+		if err := applySkillSeeds(tenantID, cfg.Evolution.SkillsDir, c.Setup.Skills); err != nil {
+			if mem != nil {
+				_ = mem.Close()
+			}
+			return nil, err
+		}
+	}
 	evalPrompts := promptassets.Empty(filepath.Join(dataDir, "prompts"))
 	agent, err := appcore.InitAgent(mem, cfg, tenantID, evalPrompts, nil)
 	if err != nil {
@@ -548,8 +556,7 @@ func newRuntimeHarness(opts RunOptions, c *Case, dataDirOverride string) (*runti
 		}
 		return nil, err
 	}
-	skillStore := kernel.NewSkillStore(mem)
-	disp, err := appcore.InitTools(mem, cfg, agent, skillStore, tenantID, evalPrompts, nil)
+	disp, err := appcore.InitTools(mem, cfg, agent, tenantID, evalPrompts, nil)
 	if err != nil {
 		if mem != nil {
 			_ = mem.Close()
@@ -557,7 +564,7 @@ func newRuntimeHarness(opts RunOptions, c *Case, dataDirOverride string) (*runti
 		return nil, err
 	}
 	agent.SetBackend(disp)
-	gwDeps, err := appcore.InitGateway(dataDir, mem, agent, cfg, skillStore)
+	gwDeps, err := appcore.InitGateway(dataDir, mem, agent, cfg)
 	if err != nil {
 		if mem != nil {
 			_ = mem.Close()

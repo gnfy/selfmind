@@ -51,45 +51,59 @@ func SkillKey(controlTenantID, name, scope, source, resolvedRoot, relativePath s
 }
 
 type SkillActivation struct {
-	ID               string     `json:"id"`
-	IdentityTenantID string     `json:"identity_tenant_id"`
-	ControlTenantID  string     `json:"control_tenant_id"`
-	PersonID         string     `json:"person_id"`
-	WorkspaceID      string     `json:"workspace_id,omitempty"`
-	RunID            string     `json:"run_id"`
-	Sequence         int        `json:"sequence"`
-	WorkUnitSequence int        `json:"work_unit_sequence,omitempty"`
-	WorkUnitID       string     `json:"work_unit_id"`
-	ExecutionLane    string     `json:"execution_lane"`
-	PrimaryTaskID    string     `json:"primary_task_id"`
-	RelatedTaskID    string     `json:"related_task_id,omitempty"`
-	SkillKey         string     `json:"skill_key"`
-	SkillName        string     `json:"skill_name"`
-	VersionHash      string     `json:"version_hash"`
-	ActivationSource string     `json:"activation_source"`
-	AttachmentMode   string     `json:"attachment_mode,omitempty"`
-	State            string     `json:"state"`
-	FallbackReason   string     `json:"fallback_reason,omitempty"`
-	SelectedAt       time.Time  `json:"selected_at"`
-	FinishedAt       *time.Time `json:"finished_at,omitempty"`
+	ID                      string     `json:"id"`
+	IdentityTenantID        string     `json:"identity_tenant_id"`
+	ControlTenantID         string     `json:"control_tenant_id"`
+	PersonID                string     `json:"person_id"`
+	WorkspaceID             string     `json:"workspace_id,omitempty"`
+	RunID                   string     `json:"run_id"`
+	Sequence                int        `json:"sequence"`
+	WorkUnitSequence        int        `json:"work_unit_sequence,omitempty"`
+	WorkUnitID              string     `json:"work_unit_id"`
+	ExecutionLane           string     `json:"execution_lane"`
+	PrimaryTaskID           string     `json:"primary_task_id"`
+	RelatedTaskID           string     `json:"related_task_id,omitempty"`
+	SkillKey                string     `json:"skill_key"`
+	SkillName               string     `json:"skill_name"`
+	VersionHash             string     `json:"version_hash"`
+	PackageHash             string     `json:"package_hash,omitempty"`
+	ActivationSource        string     `json:"activation_source"`
+	AttachmentMode          string     `json:"attachment_mode,omitempty"`
+	DeliveryContractVersion int        `json:"delivery_contract_version,omitempty"`
+	DeliveryMode            string     `json:"delivery_mode,omitempty"`
+	DeliveredMain           string     `json:"-"`
+	DeliveredMainHash       string     `json:"delivered_main_hash,omitempty"`
+	DeliveredMainBytes      int        `json:"delivered_main_bytes,omitempty"`
+	ResourceManifestJSON    string     `json:"-"`
+	State                   string     `json:"state"`
+	FallbackReason          string     `json:"fallback_reason,omitempty"`
+	SelectedAt              time.Time  `json:"selected_at"`
+	FinishedAt              *time.Time `json:"finished_at,omitempty"`
 }
 
 type ActivateSkillInput struct {
-	IdentityTenantID string
-	ControlTenantID  string
-	PersonID         string
-	WorkspaceID      string
-	RunID            string
-	WorkUnitID       string
-	ExecutionLane    string
-	SkillKey         string
-	SkillName        string
-	VersionHash      string
-	ActivationSource string
-	AttachmentMode   string
-	ContentRef       string
-	ContentBody      string
-	CreatedBy        string
+	IdentityTenantID        string
+	ControlTenantID         string
+	PersonID                string
+	WorkspaceID             string
+	RunID                   string
+	WorkUnitID              string
+	ExecutionLane           string
+	SkillKey                string
+	SkillName               string
+	VersionHash             string
+	PackageHash             string
+	ActivationSource        string
+	AttachmentMode          string
+	DeliveryContractVersion int
+	DeliveryMode            string
+	DeliveredMain           string
+	DeliveredMainHash       string
+	DeliveredMainBytes      int
+	ResourceManifestJSON    string
+	ContentRef              string
+	ContentBody             string
+	CreatedBy               string
 }
 
 type TaskSkillBinding struct {
@@ -136,6 +150,15 @@ func (s *Store) ActivateSkill(ctx context.Context, input ActivateSkillInput) (*S
 	}
 	if input.RunID == "" || input.PersonID == "" || input.SkillKey == "" || input.SkillName == "" || input.VersionHash == "" {
 		return nil, fmt.Errorf("run, person, skill key, name, and version are required")
+	}
+	if input.DeliveryContractVersion > 0 {
+		digest := sha256.Sum256([]byte(input.DeliveredMain))
+		if input.DeliveredMain == "" || input.DeliveredMainHash != fmt.Sprintf("%x", digest[:]) || input.DeliveredMainBytes != len(input.DeliveredMain) {
+			return nil, fmt.Errorf("Skill delivery receipt does not match delivered main bytes")
+		}
+		if !json.Valid([]byte(input.ResourceManifestJSON)) {
+			return nil, fmt.Errorf("Skill delivery resource manifest must be valid JSON")
+		}
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -200,13 +223,16 @@ func (s *Store) ActivateSkill(ctx context.Context, input ActivateSkillInput) (*S
 		createdBy = "external_reconcile"
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO skill_versions
-		(control_tenant_id, skill_key, skill_name, version_hash, state, content_ref, content_body, created_by, created_at, promoted_at)
-		VALUES(?,?,?,?, 'active', ?,?,?,?,?)
+		(control_tenant_id, skill_key, skill_name, version_hash, state, content_ref, content_body,
+		 package_hash, resource_manifest_json, created_by, created_at, promoted_at)
+		VALUES(?,?,?,?, 'active', ?,?,?,?,?,?,?)
 		ON CONFLICT(control_tenant_id, skill_key, version_hash) DO UPDATE SET
 		 skill_name=excluded.skill_name, state='active', content_ref=excluded.content_ref,
-		 content_body=excluded.content_body, promoted_at=COALESCE(skill_versions.promoted_at, excluded.promoted_at)`,
+		 content_body=excluded.content_body, package_hash=excluded.package_hash,
+		 resource_manifest_json=excluded.resource_manifest_json,
+		 promoted_at=COALESCE(skill_versions.promoted_at, excluded.promoted_at)`,
 		input.ControlTenantID, input.SkillKey, input.SkillName, input.VersionHash,
-		input.ContentRef, input.ContentBody, createdBy, now, now); err != nil {
+		input.ContentRef, input.ContentBody, input.PackageHash, input.ResourceManifestJSON, createdBy, now, now); err != nil {
 		return nil, err
 	}
 	var sequence int
@@ -219,8 +245,12 @@ func (s *Store) ActivateSkill(ctx context.Context, input ActivateSkillInput) (*S
 		RunID: input.RunID, Sequence: sequence, WorkUnitID: unit.ID, ExecutionLane: input.ExecutionLane,
 		WorkUnitSequence: unit.Sequence,
 		PrimaryTaskID:    unit.PrimaryTaskID, RelatedTaskID: unit.RelatedTaskID, SkillKey: input.SkillKey,
-		SkillName: input.SkillName, VersionHash: input.VersionHash, ActivationSource: strings.TrimSpace(input.ActivationSource),
-		AttachmentMode: strings.TrimSpace(input.AttachmentMode), State: SkillActivationActive, SelectedAt: time.Unix(now, 0),
+		SkillName: input.SkillName, VersionHash: input.VersionHash, PackageHash: input.PackageHash,
+		ActivationSource: strings.TrimSpace(input.ActivationSource), AttachmentMode: strings.TrimSpace(input.AttachmentMode),
+		DeliveryContractVersion: input.DeliveryContractVersion, DeliveryMode: input.DeliveryMode,
+		DeliveredMain: input.DeliveredMain, DeliveredMainHash: input.DeliveredMainHash,
+		DeliveredMainBytes: input.DeliveredMainBytes, ResourceManifestJSON: input.ResourceManifestJSON,
+		State: SkillActivationActive, SelectedAt: time.Unix(now, 0),
 	}
 	if activation.ActivationSource == "" {
 		activation.ActivationSource = "model"
@@ -228,12 +258,17 @@ func (s *Store) ActivateSkill(ctx context.Context, input ActivateSkillInput) (*S
 	if _, err := tx.ExecContext(ctx, `INSERT INTO run_skill_activations
 		(id, identity_tenant_id, control_tenant_id, person_id, workspace_id, run_id, sequence,
 		 work_unit_id, execution_lane, primary_task_id, related_task_id, skill_key, skill_name,
-		 version_hash, activation_source, attachment_mode, state, selected_at)
-		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, activation.ID, activation.IdentityTenantID,
+		 version_hash, package_hash, activation_source, attachment_mode, delivery_contract_version,
+		 delivery_mode, delivered_main, delivered_main_hash, delivered_main_bytes, resource_manifest_json,
+		 state, selected_at)
+		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, activation.ID, activation.IdentityTenantID,
 		activation.ControlTenantID, activation.PersonID, activation.WorkspaceID, activation.RunID,
 		activation.Sequence, activation.WorkUnitID, activation.ExecutionLane, activation.PrimaryTaskID,
 		activation.RelatedTaskID, activation.SkillKey, activation.SkillName, activation.VersionHash,
-		activation.ActivationSource, activation.AttachmentMode, activation.State, now); err != nil {
+		activation.PackageHash, activation.ActivationSource, activation.AttachmentMode,
+		activation.DeliveryContractVersion, activation.DeliveryMode, activation.DeliveredMain,
+		activation.DeliveredMainHash, activation.DeliveredMainBytes, activation.ResourceManifestJSON,
+		activation.State, now); err != nil {
 		return nil, err
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE run_work_units SET status='active' WHERE id=? AND status='pending'`, unit.ID); err != nil {
@@ -249,7 +284,8 @@ func activeActivationTx(ctx context.Context, tx *sql.Tx, runID, workUnitID, lane
 	row := tx.QueryRowContext(ctx, `SELECT id, identity_tenant_id, control_tenant_id, person_id,
 		workspace_id, run_id, sequence, work_unit_id, execution_lane, primary_task_id,
 		related_task_id, skill_key, skill_name, version_hash, activation_source, attachment_mode,
-		state, fallback_reason, selected_at, finished_at FROM run_skill_activations
+		state, fallback_reason, selected_at, finished_at, package_hash, delivery_contract_version,
+		delivery_mode, delivered_main, delivered_main_hash, delivered_main_bytes, resource_manifest_json FROM run_skill_activations
 		WHERE run_id=? AND work_unit_id=? AND execution_lane=? AND state IN ('selected','active') LIMIT 1`, runID, workUnitID, lane)
 	return scanSkillActivation(row)
 }
@@ -261,7 +297,9 @@ func scanSkillActivation(row skillLifecycleScanner) (*SkillActivation, error) {
 	if err := row.Scan(&a.ID, &a.IdentityTenantID, &a.ControlTenantID, &a.PersonID,
 		&a.WorkspaceID, &a.RunID, &a.Sequence, &a.WorkUnitID, &a.ExecutionLane,
 		&a.PrimaryTaskID, &a.RelatedTaskID, &a.SkillKey, &a.SkillName, &a.VersionHash,
-		&a.ActivationSource, &a.AttachmentMode, &a.State, &a.FallbackReason, &selected, &finished); err != nil {
+		&a.ActivationSource, &a.AttachmentMode, &a.State, &a.FallbackReason, &selected, &finished,
+		&a.PackageHash, &a.DeliveryContractVersion, &a.DeliveryMode, &a.DeliveredMain,
+		&a.DeliveredMainHash, &a.DeliveredMainBytes, &a.ResourceManifestJSON); err != nil {
 		return nil, err
 	}
 	a.SelectedAt = time.Unix(selected, 0)
@@ -279,7 +317,8 @@ func (s *Store) ActiveSkillActivation(ctx context.Context, tenantID, runID, work
 	row := s.db.QueryRowContext(ctx, `SELECT id, identity_tenant_id, control_tenant_id, person_id,
 		workspace_id, run_id, sequence, work_unit_id, execution_lane, primary_task_id,
 		related_task_id, skill_key, skill_name, version_hash, activation_source, attachment_mode,
-		state, fallback_reason, selected_at, finished_at FROM run_skill_activations
+		state, fallback_reason, selected_at, finished_at, package_hash, delivery_contract_version,
+		delivery_mode, delivered_main, delivered_main_hash, delivered_main_bytes, resource_manifest_json FROM run_skill_activations
 		WHERE identity_tenant_id=? AND run_id=? AND work_unit_id=? AND execution_lane=?
 		AND state IN ('selected','active') LIMIT 1`, normalizeTenant(tenantID), runID, workUnitID, lane)
 	activation, err := scanSkillActivation(row)
@@ -424,6 +463,13 @@ func finalizeRunSkillLifecycleTx(ctx context.Context, tx *sql.Tx, input RunFinal
 	if _, err := tx.ExecContext(ctx, `UPDATE run_skill_activations SET state=?, fallback_reason=?, finished_at=?
 		WHERE identity_tenant_id=? AND run_id=? AND state IN ('selected','active')`,
 		activationState, fallbackReason, now.Unix(), normalizeTenant(input.Identity.TenantID), input.RunID); err != nil {
+		return err
+	}
+	// Candidate refs are guaranteed for the work-unit lifetime, not forever.
+	// The terminal transaction is the authoritative bounded cleanup point and
+	// keeps long-running installations from retaining every discovery snapshot.
+	if _, err := tx.ExecContext(ctx, `DELETE FROM skill_candidate_refs
+		WHERE identity_tenant_id=? AND run_id=?`, normalizeTenant(input.Identity.TenantID), input.RunID); err != nil {
 		return err
 	}
 	if !success || !allowBinding {

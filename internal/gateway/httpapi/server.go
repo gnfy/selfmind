@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"selfmind/internal/control"
+	"selfmind/internal/executionenv"
 	"selfmind/internal/gateway/api"
 	"selfmind/internal/gateway/command"
 	"selfmind/internal/gateway/delivery"
@@ -37,6 +38,14 @@ type Server struct {
 	// catalogue. It contains hashes and issue classes only, never raw external
 	// schemas. Nil keeps test/minimal servers independent from a dispatcher.
 	ToolSchemaReportFunc func() []tools.ToolSchemaReport
+	// ToolCatalogPreviewFunc exposes the exact provider-wire foreground
+	// catalogue after exposure and strategy filtering. The report contains only
+	// names, counts, hashes, and issue classes; no schemas or credentials.
+	ToolCatalogPreviewFunc func(context.Context) llm.ToolCatalogPreview
+	// ToolCatalogProbeFunc performs the explicit, bounded live primary-provider
+	// probe requested by a local CLI doctor. It is never called by ordinary
+	// status requests.
+	ToolCatalogProbeFunc func(context.Context) api.ProviderToolCatalogProbeResponse
 	// MCPHealthFunc exposes connection/catalog failures without credentials or
 	// raw schemas so status and doctor do not depend on daemon log inspection.
 	MCPHealthFunc func() tools.MCPHealthSnapshot
@@ -149,6 +158,7 @@ type activeRun struct {
 	PlatformUserID string
 	WorkspaceID    string
 	ApprovalMode   string
+	ExecutionRoots []executionenv.RootBinding
 	Summary        string
 	StartedAt      time.Time
 	Cancel         context.CancelFunc
@@ -192,6 +202,7 @@ func (d *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/workspaces/observation-profiles", d.handleWorkspaceObservationProfiles)
 	mux.HandleFunc("/v1/workspaces", d.handleWorkspaces)
 	mux.HandleFunc("/v1/gateway/status", d.handleGatewayStatus)
+	mux.HandleFunc("/v1/gateway/tool-catalog/probe", d.handleGatewayToolCatalogProbe)
 	mux.HandleFunc("/v1/gateway/shutdown", d.handleGatewayShutdown)
 	mux.HandleFunc("/v1/presence/ping", d.handlePresencePing)
 	mux.HandleFunc("/v1/digest", d.handleDigest)
@@ -268,7 +279,11 @@ func (d *Server) handleMessage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid json", http.StatusBadRequest)
 		return
 	}
-	resp, status := d.ProcessMessage(r.Context(), req)
+	ctx := r.Context()
+	if d.localCLIRequest(r, req.Platform) {
+		ctx = withLocalFilesystemAuthority(ctx)
+	}
+	resp, status := d.ProcessMessage(ctx, req)
 	writeJSON(w, status, resp)
 }
 
@@ -278,6 +293,10 @@ func (d *Server) ProcessMessage(ctx context.Context, req api.MessageRequest) (ap
 	req.PlatformUserID = fallback(req.PlatformUserID, "local")
 	req.Channel = fallback(req.Channel, req.Platform)
 	req.Content = strings.TrimSpace(req.Content)
+	if len(req.ClientAdditionalRoots) > 0 && !hasLocalFilesystemAuthority(ctx) {
+		msg := "--add-dir is available only to an authenticated local CLI connected to a loopback gateway"
+		return api.MessageResponse{Error: msg, Turn: messageTurn("failed", "", "", "", "", msg)}, http.StatusForbidden
+	}
 	if req.Content == "" {
 		return api.MessageResponse{Error: "content is required", Turn: messageTurn("failed", "", "", "", "", "content is required")}, http.StatusBadRequest
 	}
@@ -360,6 +379,13 @@ func (d *Server) ProcessMessage(ctx context.Context, req api.MessageRequest) (ap
 	}
 
 	coord := d.coordinator()
+	workspace, workspaceErr := coord.prepareRequestWorkspace(ctx, identity, &req)
+	if workspaceErr != nil {
+		return api.MessageResponse{Identity: identity, Error: workspaceErr.Error(), Turn: messageTurn("failed", "", "idle", "", "", workspaceErr.Error())}, http.StatusBadRequest
+	}
+	if rootsErr := coord.prepareRequestExecutionRoots(ctx, workspace, &req); rootsErr != nil {
+		return api.MessageResponse{Identity: identity, Error: rootsErr.Error(), Turn: messageTurn("failed", "", "idle", "", "", rootsErr.Error())}, http.StatusBadRequest
+	}
 	if running := coord.currentActive(identity.PersonID); running != nil {
 		// A continuation targets the ACTIVE task, so it is not new work and must
 		// never be queued. Historically this returned a bare "busy" reply, which
@@ -372,6 +398,15 @@ func (d *Server) ProcessMessage(ctx context.Context, req api.MessageRequest) (ap
 		// model"). Genuinely new work still enqueues (G1+G2), never rejected as
 		// "busy".
 		if intent.Intent == router.IntentContinue {
+			if req.AdditionalRootsRequested && !sameCLIAdditionalRoots(req.ExecutionRoots, running.ExecutionRoots) {
+				message := "Cannot change --add-dir roots while a run is active. Start a new run after the current run finishes."
+				return api.MessageResponse{
+					Identity: identity,
+					Content:  message,
+					Accepted: false,
+					Turn:     messageTurn("failed", "running", "running", running.TaskID, running.RunID, message),
+				}, http.StatusConflict
+			}
 			if resp, ok := d.steerActiveRun(ctx, identity, running, req); ok {
 				return resp, http.StatusOK
 			}
@@ -424,6 +459,7 @@ func (d *Server) ProcessMessage(ctx context.Context, req api.MessageRequest) (ap
 		PlatformUserID: req.PlatformUserID,
 		WorkspaceID:    req.WorkspaceID,
 		ApprovalMode:   req.ApprovalMode,
+		ExecutionRoots: executionenv.CloneRootBindings(req.ExecutionRoots),
 		QueueID:        req.QueueID,
 		Summary:        truncate(req.Content, 240),
 		StartedAt:      time.Now(),
@@ -501,13 +537,24 @@ func messageTurn(status, taskStatus, backgroundStatus, taskID, runID, message st
 	}
 }
 
-func messageContextBudget(usage llm.UsageStats) *api.ContextBudgetInfo {
+func (d *Server) messageContextBudget(usage llm.UsageStats) *api.ContextBudgetInfo {
 	budget := kernel.DefaultRuntimeContextBudget()
+	if d != nil && d.Gateway != nil {
+		budget = d.Gateway.RuntimeContextBudget()
+	}
+	return contextBudgetInfo(usage, budget)
+}
+
+func contextBudgetInfo(usage llm.UsageStats, budget kernel.RuntimeContextBudget) *api.ContextBudgetInfo {
 	return &api.ContextBudgetInfo{
 		TotalChars:            budget.TotalChars,
 		WorkspaceChars:        budget.WorkspaceChars,
 		TaskChars:             budget.TaskChars,
 		MemoryChars:           budget.MemoryChars,
+		SkillMainBytes:        budget.SkillMainBytes,
+		SkillMainTokens:       budget.SkillMainTokens,
+		SkillCatalogBytes:     budget.SkillCatalogBytes,
+		SkillCatalogTokens:    budget.SkillCatalogTokens,
 		EstimatedInputTokens:  usage.InputTokens,
 		EstimatedOutputTokens: usage.OutputTokens,
 	}

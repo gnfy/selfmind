@@ -1,362 +1,760 @@
-# 执行并发与多任务调度 — 设计方案
+# 执行并发、Workspace View 与 Runner 演进 — 设计决策
 
-本文覆盖从"单任务不挂"到"多任务并行 + 后台执行 + 远程 Runner"的完整演进。
-`docs/worker-pool-design.md` 仍然拥有 worker pool 本身的拓扑与安全审计；本文接在
-它的 §3 之后，负责调度策略、后台 run 分级、资源锁、事件面与执行信封。
+> **状态：Paused decision，未进入当前实现优先级。**
+>
+> Owner / approver：SelfMind project owner
+>
+> 下次评审：当前 active plan 得出 verdict 后，最迟 2026-09-12
+> 当前唯一活跃优先级仍以 `docs/STATUS.md` 为准。本文不授权实现 SaaS、
+> 多租户、远程控制面或独立 Runner；任何实施批次必须先进入活跃计划。
 
-触发事件：2026-08-03 一次 `patch` 工具调用卡死 → `/stop` 无效 → 整个 daemon 的
-agent 循环停摆 17 分钟。根因不是 patch 算法本身，而是**三层缺陷叠加**，见 §1。
+本文定义 SelfMind 从“每人一个 active run”演进到安全多 run 并行时的完整执行模型。
+最终目标是：**不同 logical workspace 可以并行；同一个 logical workspace 也可以有多个
+run 并行；workspace 是否相同不再决定调度串行。** 文件、Git、部署、数据库等真实资源
+是否冲突，由 execution view 与资源声明决定。
+
+本文取代旧版以“一个 workspace 约等于一个 Git repo”为前提的方案。它同时覆盖：
+
+- 单 Git repository；
+- 一个 Git monorepo 中的多个 project；
+- 根目录不是 Git、下面有多个 sibling repositories；
+- 多 repositories 与根目录 loose files 混合；
+- dirty Git、submodule、nested repository；
+- 完全非 Git 的 workspace。
+
+相关边界分别归属：
+
+- `docs/identity-continuity.md`：person、endpoint、conversation 与 watcher 契约；
+- `docs/work-timeline.md`：task、run、work spine 与 continuation；
+- `docs/worker-pool-design.md`：本地 Agent worker pool；
+- `docs/execution-engine.zh-CN.md`：本地执行信封、环境快照与沙箱；
+- `docs/tool-safety.md`：执行 scope、审批、凭据和工具安全；
+- 本文：并发所有权、session lane、workspace topology、execution view、资源声明和演进顺序。
 
 ---
 
-## 1. 现状盘点（已核对代码，不是推测）
+## 1. 决策摘要
 
-### 1.1 已经具备的地基
+### 1.1 终态定义
 
-| 能力 | 位置 | 状态 |
+> 并发准入按 session，连续性按 person，工作标签按 task，执行隔离按 view，冲突按
+> physical resource；workspace 本身永远不是串行锁。
+
+```text
+Person / Tenant
+  └─ Session                         transcript、交互归属、一个 foreground lane
+      └─ Run                         一次可调度、可取消、可审计的执行
+          ├─ Logical Workspace       记忆、任务和项目知识的逻辑范围
+          ├─ Workspace Baseline      入队时冻结的 topology/context/environment
+          ├─ Execution View          工具真实看到的复合文件视图
+          └─ Resource Claims         文件、Git ref、部署目标、数据库等物理资源
+```
+
+同一个 logical workspace 的并行语义是：
+
+```text
+logical workspace ws_1
+  ├─ direct view                    主 checkout；一个 broad writer
+  ├─ isolated composite view A      run A 独占
+  └─ isolated composite view B      run B 独占
+```
+
+多个 run 可以同时执行，但不能把“并行”误解为多个执行体同时修改同一棵物理目录。
+worker、provider、person/tenant 配额仍可让 run 等待；这些是容量限制，不是 workspace
+身份带来的串行。
+
+### 1.2 核心决策
+
+1. `person_id` 是身份、记忆、工作史和配额边界，不是执行锁。
+2. `session_id` 是 transcript、实时事件和 foreground run 的交互 lane；每个 session
+   同时最多一个 foreground run。
+3. `task_id` 是可逆工作标签，不是上下文边界，也永远不作为并发锁。
+4. run 在 durable admission 时获得 `run_id`，并冻结 workspace、baseline、context
+   cursor、能力集合和 delivery route；drain 不重新猜这些信息。
+5. logical workspace、repository/component、project/build unit 和 execution view 是四个
+   不同层次。
+6. 一个 write run 必须拥有一个 execution view；同一物理 view 同时最多一个 writer。
+7. direct view 的执行体未证明退出前，写 claim 不得转让；quarantine 不是释放权限。
+8. read-only 来自所有可激活工具的封闭能力集合，不来自请求措辞；不确定即按 write。
+9. raw progress 只发给 owner session 和显式 attached observers；final reply 仍遵守
+   conversation routing，不因 attach 改变目的地。
+10. 跨 repository 的交付是 versioned `WorkspaceChangeSet`，不是假装成一个 branch；
+    集成回 direct 串行且承认跨 repo 更新不是天然原子事务。
+
+### 1.3 非目标
+
+当前本地并发阶段不实现：
+
+- OIDC、组织账号、计费、seat、work profile 或企业角色；
+- PostgreSQL、分布式调度器或多 gateway leader election；
+- mTLS、Runner 注册、远程 capability token 或跨节点 artifact transport；
+- 自动把两个冲突结果合并回用户工作树；
+- 通过自然语言关键词猜 read-only、目标 repository 或资源锁；
+- 为临时灰度控制增加长期公共配置项。
+
+---
+
+## 2. 当前实现边界
+
+以下现状必须先迁移，不能直接放开并发：
+
+1. `RunCoordinator` 的 active registry 以 `person_id` 为单槽；steer、stop、drain 和
+   status 都依赖该唯一性。
+2. `tasks.active_run_id` 是单值。两个 run 关联同一 task 时会互相覆盖任务状态。
+3. `tools.executionScopes` 同时注册 person/run key，工具仍可从 `_tenant_id` 回落到
+   进程级 person scope。
+4. `EnsureWorkspace` 会隐式更新 person current workspace；execution/drain 仍可能回读
+   该可变值。
+5. durable `control.Event` 已有 channel，但 `api.RunEvent` 丢失该字段；live broker 按
+   person 广播，多个 CLI 会串流。
+6. queue 已经有 class、priority、not-before、claim token、lease 和 attempt generation；
+   真正缺少的是冻结后的 session、baseline、view policy、context cursor 和 run identity。
+7. `Workspace` 只有一个 `RepoURL/DefaultBranch`，无法表达 aggregate workspace。
+8. `WorkspaceContext` 只有 `ID + Root`，逻辑项目根和物理执行根仍被合并。
+9. project profile 支持根或一级多 project，但不拥有 repository topology；根有 manifest
+   时不会继续发现子项目。
+10. context scanner 从给定路径向上走到 Git/home 边界，不会自动进入多个 child repo
+    加载各自指令。
+11. `execution_leases` 绑定环境和 credential references，不是互斥资源锁。
+12. control store 和 person memory 的串行路径在低并发下成立，但并发开启前需要压测。
+
+run scope、workspace freeze、task active 状态和 session 事件串流是现有正确性缺陷；即使
+保持单 run 也值得修复。execution view、自动并发和 Runner 必须等待独立计划。
+
+---
+
+## 3. 四层 Workspace 模型
+
+### 3.1 Logical Workspace
+
+Logical workspace 负责 workspace 级任务、记忆、知识、根目录约定、component topology、
+Runner placement 和跨 repositories 的 ChangeSet。它不是 repository、project、view 或
+资源锁。现有 `RepoURL/DefaultBranch` 在迁移期只作为单 repo workspace 的兼容展示字段。
+
+### 3.2 Workspace Component
+
+Component 是最小的可独立冻结、隔离和归因单元：
+
+```text
+WorkspaceComponent
+  ComponentID
+  WorkspaceID
+  MountID
+  RelativePath
+  Kind                  git | filesystem
+  RepositoryIdentity    Git 才有；不使用绝对路径作为跨节点身份
+  ParentComponentID     submodule/nested repo 关系
+  ProvenanceFingerprint
+  TrustLevel
+```
+
+例如：
+
+```text
+/work/company-platform                  logical workspace
+  ├─ AGENTS.md                          workspace-level guidance
+  ├─ Makefile                           loose-files component
+  ├─ frontend/.git                     component: repo-frontend
+  ├─ backend/.git                      component: repo-backend
+  ├─ infra/.git                        component: repo-infra
+  └─ local-compose.yaml                loose-files component
+```
+
+一个 aggregate workspace 可以包含多个 Git components 和非 Git regions。一个 Git
+monorepo 通常只有一个 Git component，但可以包含多个 project units。
+
+### 3.3 Project / Build Unit
+
+Project unit 来自 `go.mod`、`package.json`、`Cargo.toml` 等 manifest，负责 ecosystem、
+package manager、verification candidate 和 cwd。Project 不是并发锁。
+
+### 3.4 Execution View
+
+Execution view 是一个 run 实际读取和写入的物理视图：
+
+| Kind | 用途 |
+| --- | --- |
+| `direct` | 原始主 checkout；一个 broad writer |
+| `git_worktree` | clean Git component 的独立工作树 |
+| `filesystem_snapshot` | dirty Git、非 Git、loose files 的冻结副本或 COW view |
+| `composite` | 多个 component views 按原相对路径组装成一个 workspace root |
+| `remote` | 未来由 Runner 解析的容器、volume 或 VPC view |
+
+物理路径属于执行节点。Gateway/control store 持久化 `view_handle`、mounts、hash 和状态，
+不把本机绝对 root 当作跨节点权威事实。
+
+---
+
+## 4. Workspace Topology 与 Baseline
+
+### 4.1 发现规则
+
+Topology discovery 必须确定性、只读、语言无关且 symlink-safe：
+
+1. 显式注册 components 优先；
+2. workspace root 自身是 Git repo 时先建立一个 Git component；
+3. root 不是 Git 时，在 AllowedRoots 内发现 `.git` directory 或 worktree/submodule 的
+   `.git` file；
+4. 识别 common Git directory，使相关 worktrees 共享 repository identity；
+5. 不跨越 AllowedRoots，不跟随越界 symlink；
+6. 跳过 `.selfmind`、VCS metadata、dependency、build 和 cache 目录；
+7. 记录 submodule/nested repository 关系，不把 child repo 重复算进 parent region；
+8. 扫描有深度、数量和 wall-clock 上界，并返回 omission count 与
+   `topology_incomplete`，不能静默截断。
+
+提示词发现可以有预算上限，执行隔离不能把截断的 inventory 当成完整 topology。发现
+不完整时，write run 只能使用完整 workspace snapshot、明确收窄到完整注册 components，
+或 fail closed。绝不能隔离前几个 repositories，剩余路径继续指向原 checkout。
+
+### 4.2 入队时冻结 Baseline
+
+单值 `base_commit/base_dirty` 不足以表达 aggregate workspace：
+
+```text
+WorkspaceBaseline
+  BaselineID
+  WorkspaceID
+  TopologyVersion / TopologyHash
+  ContextCursor / CapturedAt
+  Components[]
+    ComponentID / RelativePath / Kind / RepositoryIdentity
+    HeadOID / Branch / StatusFingerprint          Git
+    WorkingTreeSnapshotID / SubmoduleState        dirty Git
+    TreeHash / SnapshotID                         filesystem
+```
+
+规则：
+
+- clean Git 冻结本地精确 `HEAD OID`；
+- fresh-remote 策略必须在接受任务前解析成具体 OID，不能 drain 时再追 tip；
+- dirty Git 冻结 `HEAD OID + working tree snapshot`，不能只有 dirty bool；
+- 非 Git/loose files 冻结 tree hash 与 snapshot reference；
+- baseline 捕获不完整时，run 不得伪装成已稳定接收；
+- run 中新 clone 的 repo 是该 view 的 topology change，完成时进入 ChangeSet。
+
+### 4.3 Context 快照
+
+每个 run 同时冻结 person work spine high-watermark：
+
+- 使用本 session 的 channel-local transcript；
+- 使用 person spine 截至 `context_cursor` 的已完成记录；
+- 不读取 sibling run 的中间事件；
+- sibling 完成后原子追加 slim spine entry，只有后续新 run 可见；
+- foreground prompt cache namespace 使用 session/prefix identity，不把共享 task 作为唯一
+  namespace。
+
+---
+
+## 5. Composite Execution View
+
+### 5.1 形态映射
+
+| Workspace 形态 | View 计划 |
+| --- | --- |
+| 单 clean Git repo | 一个 Git worktree |
+| 单 dirty Git repo | worktree + frozen overlay，或 filesystem snapshot |
+| Git monorepo、多 projects | 一个 repo worktree，多个 project profiles |
+| root 非 Git、多个 clean sibling repos | composite：每 repo 一个 worktree，root loose files 一个 snapshot |
+| 多 repo、部分 dirty | clean repo 用 worktree；dirty repo 用 snapshot/overlay |
+| 完全非 Git | 整体 filesystem snapshot |
+| submodule | 父子 components 分别冻结；父记录 gitlink，子保留自身状态 |
+| topology 不完整 | 完整 workspace snapshot，或 fail closed |
+
+aggregate isolated view 必须保留原相对目录布局：
+
+```text
+<view_handle>/root/
+  ├─ Makefile                   snapshot mount
+  ├─ frontend/                 worktree mount
+  ├─ backend/                  worktree mount
+  ├─ infra/                    worktree mount
+  └─ local-compose.yaml        snapshot mount
+```
+
+### 5.2 View 选择
+
+策略来自能力和资源状态，不来自关键词：
+
+1. 封闭 read-only tool set：对稳定 direct 获取 shared-read；direct 正在写时用冻结 view
+   或等待。
+2. foreground write 且 direct 空闲：可用 direct，保持单 CLI 体验。
+3. direct 已占、background/async 或显式隔离：创建 isolated composite view。
+4. worktree 只用于可证明可重建的 component；dirty/non-Git 使用 snapshot provider。
+5. 显式隔离 materialization 失败：fail closed，不静默回退 direct。
+6. read-only run 不得原地升级 write/execute；需要升级时结束并重新 admission。
+7. unknown/external/deferred tool 若可能写入或执行，保守按 write。
+
+### 5.3 Direct View
+
+第一版保持 direct workspace 一个 broad writer。未来可增加 component-scoped direct
+writers，但必须同时满足 target components 已冻结、`WritableRoots` 已缩窄、terminal
+无法写其它 component、不运行 root integration command，且 resource claims 完整。
+
+final goal 不依赖这个优化；同 workspace 并行通过 isolated views 已经成立。
+
+### 5.4 Read/Write Roots
+
+现有 `WorkspaceRoot + AllowedRoots` 演进为：
+
+```text
+LogicalWorkspaceID / ExecutionViewID / ViewRoot
+ReadableRoots / WritableRoots / ComponentMounts / RunnerID
+```
+
+- isolated writable roots 只指向 view；原 checkout 默认不暴露；
+- attachments 是 read-only roots；
+- component-scoped direct 只能写已声明 components；
+- logical workspace context 服务记忆/task/project knowledge；execution view context 服务
+  cwd、文件和工具，二者不能继续共用一个 Root。
+
+### 5.5 Snapshot 安全与成本
+
+Snapshot provider 必须处理 tracked/untracked/ignored/binary/sparse files、symlink、mount
+boundary、大型 dependency/build/cache、Linux reflink/overlay、macOS clone/copy fallback、
+disk quota、progress、GC 与 crash recovery。
+
+默认不复制密钥或 operator credential state。凭据继续通过 EnvironmentLease、credential
+profiles 和节点内 ProcessMaterial 提供；大型或敏感 ignored state 需要显式 profile，不能
+因“复制 workspace”进入 artifact、control.db 或 prompt。
+
+---
+
+## 6. Resource Claims、取消与 Quarantine
+
+### 6.1 与 EnvironmentLease 分离
+
+EnvironmentLease 绑定运行环境；互斥使用独立的 ResourceClaim：
+
+```text
+ResourceClaim
+  ResourceKey / HolderRunID / Mode(shared|exclusive)
+  Generation/Fence / HolderInstanceID
+  State(waiting|held|quarantined|released)
+  HeartbeatAt / ExpiresAt
+```
+
+一资源可有多个 shared holders，不能用 `resource_key PRIMARY KEY` 单行表达全部 claim。
+Gateway 负责调度声明；执行节点负责物理 enforcement。
+
+### 6.2 Key 空间
+
+```text
+tenant:<t>/runner:<r>/view:<view_id>
+tenant:<t>/runner:<r>/direct-component:<workspace_id>:<component_id>
+tenant:<t>/gitstore:<repository_identity>
+tenant:<t>/gitref:<repository_identity>:<branch>
+tenant:<t>/workspace-integrate:<workspace_id>
+tenant:<t>/deploy:<environment>
+tenant:<t>/db:<cluster>
+```
+
+isolated file writes通常只持自己的 view；worktree lifecycle/fetch 短时持 gitstore；ref
+mutation 持 gitref；ChangeSet apply 持 workspace-integrate 与目标 direct components；
+deploy/database 等外部副作用独立于文件 view。
+
+### 6.3 多资源与等待
+
+资源集合必须作为一个 admission unit 原子获取，或具备完整 rollback，不能各持一半互等。
+等待期间不占 SQLite write transaction，可以被 stop 取消，并持续发
+`waiting_resource`，包含持有者 run/session 的安全摘要。
+
+### 6.4 取消与 Quarantine
+
+1. worker 只有在执行 goroutine/进程真正退出后才归还。
+2. direct holder 未证明死亡前，写 claim 不释放、不转让。
+3. isolated view 卡死时标记 quarantined；不能删除或复用，但可创建新 view。
+4. git/external claims 按真实副作用处理，不能因文件 view 可丢弃就释放 deploy/db 权限。
+5. fence 不能阻止仍活着的本地 goroutine 写盘；context propagation、child process group
+   termination 和未来可杀死 worker process 是前置。
+6. status/doctor 展示卡住的 run、view、claim、持续时间和受影响队列。
+
+---
+
+## 7. Session、Run Registry 与事件面
+
+### 7.1 身份层次
+
+```text
+Person               跨 endpoint 连续
+Account              已绑定的平台身份
+Session              transcript、交互 lane、run owner
+Client Instance      当前在线连接，可 attach session/run
+Run                  执行与控制的精确目标
+```
+
+CLI UUID channel 和 IM chat channel 可作为迁移期 session source，但长期 SessionID 必须由
+Gateway 在认证后的 tenant/person/account 下解析或创建。Channel 保留为 delivery locator。
+
+### 7.2 Durable Run Registry
+
+```text
+byRunID
+foregroundBySession
+runsByPerson
+```
+
+- admission 时创建 run id 与 queued run；queue 只引用 run；
+- 每 session 一个 foreground run，可有多个 queued requests；
+- person/tenant 只做 active 配额；
+- task 可关联多个 run，`task_runs` 是运行事实源；
+- task status 从 runs 派生，单值 `active_run_id` 不再决定生命周期；
+- finalization 先存 per-run outcome/handoff，再由 deterministic reducer 更新 task view。
+
+### 7.3 Event Envelope 与 Audience
+
+```text
+tenant_id / person_id / session_id / run_id
+audience = session | run | person
+event_id / cursor / live_seq / item_id / call_id
+durability / payload_version
+```
+
+- assistant/tool/token/plan：owner session + 显式 attached observers；
+- 生命周期和后台完成摘要：person audience，但不得带 transcript/prose 明文；
+- final reply：遵循 conversation routing；attach 不改变 delivery owner；
+- replay 按 audience 授权过滤；
+- 不支持 session protocol 的旧客户端在并发模式下只得人级摘要。
+
+Presence 扩展到 session/client instance。显式共享同一 session 的客户端可共同看到面板；
+其它 session 不被抢焦点。
+
+### 7.4 精确控制与 Approval
+
+- “继续”只 steer 当前 session 的唯一 active run；没有则按正常 ingress/queue；
+- `/stop` 默认停当前 session；`/stop <run_id>` 精确跨 session；
+- `/attach <run_id>` 只增加 observation/steering，不移动 final reply；
+- approve/resume 唯一候选可省略 id，多候选必须选择；
+- 控制命令保持 model-free。
+
+Approval 不按 person 无条件广播，也不固定 owner session。Gateway 根据 origin、presence
+和 desk-first/phone-first policy 选择交互 target；其它 CLI sessions 只显示摘要。任一已授权
+endpoint 可用 approval id 接管，resolution 向所有已展示 surfaces 发幂等撤下事件。
+
+---
+
+## 8. Component-aware Context、Memory 与 Verification
+
+### 8.1 Project Instructions
+
+```text
+operator agent.md
+  → workspace root AGENTS.md
+      → component/repo AGENTS.md
+          → deeper path AGENTS.md
+```
+
+workspace 根指令作用全部 components；repo 指令只影响对应路径；deeper 按 root-to-leaf
+覆盖。所有 repository instructions 仍是不可信数据，一个 repo 不能污染另一个。
+
+为避免把几十个 repo 全塞进 prompt，引入 component activation：
+
+- 明确受信路径、read/search/cwd 的实际证据触发激活；
+- 激活后在下一模型边界注入 component guidance/profile；
+- active set 在 work unit 内单调增长；
+- write 未加载 guidance 的 component 返回 `component_context_required`，不得先写后补；
+- 大 workspace 只注入 topology summary、active components 和 omission count。
+
+该机制依赖路径/工具证据，不新增自然语言 repository classifier。
+
+### 8.2 Project Profile 与验证
+
+Project discovery 按 `workspace → components → projects` 组织，每个 verification candidate
+带 cwd：
+
+```text
+backend/api       go test ./...
+frontend          pnpm run test
+infra             terraform validate
+workspace-root    make integration-test
+```
+
+只从 manifest、lockfile 和 declared scripts 生成；验证 touched projects；root integration
+只有明确证据时运行；预算按 active component 分配并报告 omission；aggregate root 自身有
+manifest 时不能遮住 child repos。
+
+### 8.3 Memory 与 Work Spine
+
+workspace 仍是项目/环境记忆的主要 scope，但允许 component qualifier：workspace-global
+存跨 repo 约定，workspace+component 存 repo 特定事实。run 只注入 active components 的
+局部记忆；touched paths、artifacts、handoff 和 spine entry 同时记录 component ids。
+
+---
+
+## 9. WorkspaceChangeSet 与集成
+
+### 9.1 交付模型
+
+```text
+WorkspaceChangeSet
+  ChangeSetID / RunID / WorkspaceID / BaselineID / TopologyHash
+  ComponentChanges[]
+    ComponentID / Kind / BaseRevision|TreeHash
+    Branch|Commit|Patch|Artifact
+    ChangedPaths / Verification
+  RootFilesPatch / IntegrationOrder / Conflicts / Risks
+```
+
+submodule 先产生 child commit，再更新 parent gitlink，最后验证父 workspace。新 clone、
+component move/remove 或 topology change 也显式列出。
+
+### 9.2 Merge/Apply
+
+跨 repos 没有天然原子事务。第一版只交付 ChangeSet，不自动写 direct。未来显式 apply：
+
+1. 获取 workspace-integrate 与全部 direct claims；
+2. 校验所有 component revision/tree hash；
+3. 在临时 integration composite view 预演全部变更；
+4. 运行 component 和 root integration verification；
+5. 全部通过后按 deterministic order 更新 direct；
+6. 每一步写 durable journal；
+7. 失败时报告 applied/pending，不 silent reset 用户工作树。
+
+自动回滚必须先有可验证 checkpoint，删除/覆盖类操作仍走正常授权。
+
+---
+
+## 10. Scheduler、配额与性能
+
+### 10.1 工作分类
+
+| 类型 | Agent worker | 语义 |
 | --- | --- | --- |
-| N worker 并发上界 + 按 key 串行 | `internal/runpool/pool.go` | ✅ 已实现，race 测试覆盖 |
-| 每 worker 独立 Agent（各自 `runMu`） | `internal/app/workerpool.go` | ✅ `InitAgent`+`InitTools` 各一份 |
-| 不同 workspace 并行 | `router/gateway.go:workspaceSerialKey` | ✅ |
-| **同 workspace 只读并行** | 同上，`strategy.MayWriteWorkspace()==false` 返回空 key | ✅ **已完成，无需再排期** |
-| 同 workspace 写串行 | 同上 | ✅ |
-| `SELFMIND_WORKERS` 1–16，默认 1 | `app/workerpool.go:workerCount` | ✅ 默认 1 = 旧路径字节等同 |
-| 停滞看门狗 | `runpool/watchdog.go` + `router/events.go:59` | ⚠️ 已接线但**打不到执行体**，见 1.2 |
-| 进程执行信封（带 ctx） | `tools/execution_engine.go:ExecutionRequest` | ✅ 已含 RunID/CallID/LeaseID/Roots/Sandbox/Timeout/Durable |
-| daemon 自有执行（无活跃 run） | `tools.DurableExecutionScope` | ✅ external watch 已在用 |
-| 重启恢复 queued/watch | `httpapi/run_recovery.go`、`RequeueSystemQueued` | ✅ |
+| Foreground run | 是 | 当前 session 等待，最高工作优先级 |
+| Watch finalization | 是 | 短、幂等，低于交互前台 |
+| User background/async | 是 | 有限并发，不占前台保留槽 |
+| Cron | 是 | 按 priority/not-before 调度 |
+| External watcher | 否 | 独立 poller，完成后提交 finalization |
+| Maintenance | 独立 job | 不抢 Agent 前台槽 |
 
-### 1.2 三层缺陷（8-03 事故的完整链路）
+approval/steering 是控制消息，直达 run，不作为 worker job 排队。
 
-**① 工具执行体不可取消。** `internal/tools/tool.go:15`
-`Execute(args map[string]interface{}) (string, error)` —— **没有 `context.Context`**。
-纯计算循环（本次是 `patch.go:299-313` 的 LCS 兜底，n²/2 个子段各做一次 `strings.Join`
-+ LCS）无法被中断。已有的 `runpool.WithWatchdog` 会 `cancel(ctx)`，但 ctx 进不到
-执行体，**看门狗形同虚设**。这是"机制存在但无效"，不是"机制缺失"。
+### 10.2 公平性与容量
 
-**② `/stop` 是记账操作，不是终止操作。** 取消路径把 control.db 写成 `cancelled`
-并发出 `run.outcome`，但 goroutine 照跑。**数据库状态与进程实况在这一刻分叉**，此后
-所有诊断面（`/status`、`/tasks`、doctor）读到的都是假象。
+- `per_session_foreground=1` 是交互不变量；
+- person/tenant/provider/runner limits 是策略配额；
+- scheduler 在 session lanes 间 round-robin；
+- 至少保留一个 foreground slot；
+- provider 并发上限、429 backoff 与 route isolation 是开并发前置；
+- 等待原因使用 `waiting_worker/resource/provider` 和未来 `waiting_runner`。
 
-**③ 卡死的资源泄漏范围大于一个 worker。** `runpool/pool.go:46-60` 的获取顺序是
-key 锁 → worker slot → `fn` 内 `ag := <-g.agents`，三者**全部由 defer 在 `fn` 返回时
-释放**。`fn` 永不返回 ⇒ agent 不归还 + semaphore 不释放 + **key 锁永久不释放**。
+### 10.3 Worker、Cache 与 Storage
 
-> 后果放大：`workers=4` 时单次卡死不会全局停摆，但**该 workspace 从此永久无法执行
-> 任何写任务**，且外部无任何信号。这比全局停摆更难诊断，必须在开并发**之前**修掉。
+Agent worker 继续一次一个 conversation。正确性和 provider prompt cache 不依赖固定 worker；
+session affinity 只能是度量后的 warm-state 优化，忙时必须回落。
 
-单 worker（今天）时，缺陷 ③ 直接升级为整机停摆：`kernel/agent.go:600` 的
-`a.runMu.Lock()` 在 `RunConversation` 开头、`defer Unlock`，Agent 全局共享 ⇒ CLI /
-微信 / cron / HTTP 所有端一起排在这把锁后面，对外只表现为 `/status` 永远 "running"。
-
-### 1.3 队列与调度的表达能力缺口
-
-- `task_queue` **没有 class / priority / not_before 列**（schema：id, tenant_id,
-  person_id, channel, platform, platform_user_id, content, approval_mode,
-  workspace_id, status, created_at, restarts, task_id, idempotency_key, run_id）。
-- 出队是**严格 FIFO**：`control/queue.go:410` `ORDER BY created_at ASC, rowid ASC`。
-- 用户溢出任务、watcher finalization、cron 触发**全部混在这一张表**。
-- `maintenance_jobs` 是独立表（✅ 已天然隔离），但没有"不得抢占前台"的显式约束。
-
-⇒ "三类工作分级"不只是策略问题，**schema 层就没有表达能力**，必须先迁移。
-
-### 1.4 每人一个 active run 的实现位置
-
-`httpapi/run_coordinator.go:61` `beginActive` 基于 `c.active map[personID]*activeRun`，
-一人一槽。**正因为唯一，steering 与审批天然无歧义**。放开成 foreground/background
-时，所有读 `active[personID]` 的地方都要重读：steering 投递、`/status`、
-`enqueueBehindActive`、`endActive` 后的 drain、run recovery。这是本计划风险最高的一处。
-
-### 1.5 其它必须同批处理的债
-
-- **provider 并发与 429**：`worker-pool-design.md` §3 的 "per-provider 上限"标注
-  deferred。单次调用均 37k token（7-31 复盘），3 worker 并发会按倍数放大限流与成本。
-  **开并发的前置条件，不是可选项。**
-- **control.db 写放大**：8-03 单个 run 20 分钟写 3653 条事件，其中 3504 条是
-  `tool.output` 行级事件；库 224MB / 19.7 万事件、无保留策略；控制库
-  `SetMaxOpenConns(1)`（`control/store.go:125`）。并发会把它变成新瓶颈。
-- **`runpool.Run` 只接受单一 key**：多资源锁（workspace + build trigger + 部署目标）
-  需要**有序多锁获取**，否则两个 run 各持一半即死锁。这是 API 变更。
-- **`worker-pool-design.md` §5 遗留 TODO**：工具后端 dispatch 与后台进程注册表审计。
-  实测 `ProcessRegistryForArgs` 已按 tenant 分区 + `sync.Map`/mutex 保护，形状正确，
-  但需要一次确认性 pass 才能关闭。
+默认并发大于 1 前：control store 保持单 writer但评估 bounded read pool；wait/heartbeat
+不长持 write transaction；memory provider 评估 per-tenant actor/shard；记录 DB wait、event
+volume、view bytes、materialization time。不能凭推测宣布 SQLite 能承载固定并发数，用
+`max_active=2` soak 建立基线。
 
 ---
 
-## 2. 目标模型
+## 11. Gateway 与未来 Runner
 
-```
-Gateway            接收、持久化、身份、事件同步
-   ↓
-Run Scheduler      分级、并发上界、workspace / resource 锁、前台保留
-   ↓
-Worker Pool        每 worker 一次一个 Agent（保留各自 runMu，不拆）
-   ↓
-Tool Executor      可取消、可观测、可远程化（单一执行信封）
+当前仍是一个 `selfmind` daemon。类型需要 Runner-ready，但不预建远程协议：
+
+```text
+Gateway/control plane
+  identity/session/run/queue/baseline refs/approval/scheduler
+  resource claims/event cursor/ChangeSet metadata
+
+Execution implementation / future Runner
+  physical paths/view materialization/Git/terminal/patch/sandbox
+  environment snapshot/credential material/process lifecycle
 ```
 
-**执行单位是 Run，不是共享的全局 Agent。** 本轮**不移除** Agent 内部的 `runMu`——
-"多个独立单线程 Agent worker"改动更小，且与未来 Runner 的进程模型一致。
+Gateway 持 versioned handles，不持 Runner 绝对路径或 credential bytes。源码和 snapshot
+默认留在执行节点；模型只得到任务所需有界切片。
 
-### 2.1 三类工作，三种资源语义
+演进触发器独立：
 
-| 类型 | 占 worker | 队列 | 说明 |
-| --- | --- | --- | --- |
-| **Foreground run** | 是 | 前台，最高优先 | 用户在 CLI/IM 当前等待的回合 |
-| **Background run** | 是 | 后台，受 per-person 上限 | 仍调模型和工具（后台分析、生成 PR） |
-| **External watcher** | **否** | 独立 poller | 只轮询外部状态；完成后**提交一个 finalization run** |
-| **Maintenance** | 否（独立 job） | `maintenance_jobs` | 标签、记忆、skill review；最低优先，永不抢占 |
+1. 本地并发：本文 P0–P5，单 daemon、SQLite、本地执行；
+2. 远程 Gateway：强认证、TLS、API/event version、stream resume；
+3. Runner：同一 binary 的 runner 角色、设备身份、mTLS、短期 token、heartbeat、
+   lease/revoke、offline queue、artifact integrity；
+4. SaaS control plane：独立策略批准后才加入 tenant identity、PostgreSQL/object store、
+   OIDC、配额和多租户隔离；
+5. Enterprise governance：只由真实试点触发。
 
-External watcher 走 `tools.DurableExecutionScope`，已经不占 agent worker ✅ ——
-本计划只需保证 finalization run 进入正确的优先级档位。
-
-### 2.2 调度优先级（从高到低）
-
-1. 用户审批与 steering（永远不排队，直达目标 run）
-2. 当前 CLI / IM 前台任务
-3. watcher finalization
-4. 用户明确提交的后台任务（`send --async`）
-5. cron
-6. maintenance（记忆、标签、skill review）
-
-**至少保留一个 worker 给前台**，避免后台占满后用户连交互都变迟钝。
+Aggregate workspace 在本地和第一版 Runner 阶段绑定一个执行节点。跨多个 Runner 组成一个
+workspace 会引入分布式 snapshot/transaction，不在当前范围。
 
 ---
 
-## 3. 分阶段方案
+## 12. 分阶段实施
 
-### 阶段 0 — Patch 与取消可靠性（P0，独立可发）
+P4 前 `max_active_per_person` 保持 1；先证明隔离，再打开并发。
 
-修复今天这次事故本身，**不依赖任何并发改动**。
+### P0 — 现有正确性，不改变并发行为
 
-- `patch.go` LCS 兜底加硬上界（文件行数 / 子段数 / wall-clock 三选一），超限直接返回
-  "hunk not found"。**倾向直接删除整个兜底**：命中条件 `score(行数) >
-  len(searchPattern)/3(字节数)` 量纲就是错的，命中后会把 `bestStart..bestEnd` 整段
-  替换为 replLines，即"悄悄删掉文件一大块"，期望收益为负。
-- `validateOperations:420/430` 对同一 hunk 重复调用 `fuzzyFindAndReplace`，去重。
-- `fuzzyEqual` 内的 `regexp.MustCompile` 提到包级；`parseV4APatch` 每行编译 4 条正则
-  同样提出循环。
-- 修 `fuzzyFindAndReplace:288` 的 `append(lines[:matchStart], replLines...)` 原地改写
-  别名 bug（且匹配后未 `break`）。
-- **回归测试**：用 8-03 的真实输入（`cw2-aws-run.md` 2297 行 + 上下文对不上的 hunk）
-  作为用例，断言毫秒级返回 "hunk not found"。实测未修复版本外推需 ~8.6 分钟；
-  `gcp-run.md`（3705 行）约 36 分钟。
+- execution authority run-keyed，删除 person fallback；
+- tools 从可信 invocation scope 精确解析 scope；
+- `EnsureWorkspace` 只注册，不隐式切 current workspace；
+- admission 冻结 workspace/session，execution/drain 不回读 person current workspace；
+- admission 创建 durable run id；task active 从 runs 派生；
+- blocking/network/process/write tools 完成 cancellation；
+- plan/process registry/ledger 做 run-scoped fail-closed audit。
 
-**验收**：同样的 patch 输入，返回时间 < 1s，且不修改任何文件。
+验收：单槽行为不变；`-race` scope 不交叉；queue 永远在接受时 workspace 执行；旧库升级
+和恢复通过。
 
----
+### P1 — Session 事件与控制面，仍不并发
 
-### 阶段 1 — 统一工具执行信封（P0，Runner 的地基提前到这里）
+- SessionID/ClientInstanceID；event audience、channel preservation、session broker；
+- owner/observer/summary 路由；approval target policy；
+- steer/stop/approve/attach 精确 run；old-client negotiation；
+- foreground prompt cache namespace session-safe。
 
-> 从原方案的最后一步提前到第二步：**真实取消本来就需要它**，而它就是远程 Runner
-> 的协议本体。分两次做没有意义。
+验收：两个 CLI 不串 transcript；B 的“继续”不进 A；approval 只在策略 target 弹面板；
+attach 可观察但不移动 final reply。
 
-- `Tool.Execute` 接收 `context.Context`：
-  `Execute(ctx context.Context, args map[string]interface{}) (string, error)`。
-  纯计算工具（patch/read/搜索）在循环内周期性检查 `ctx.Err()`。
-- **两条执行路径并成一条**：现在 exec 形工具走 `tools.Execute(ctx, ExecutionRequest,
-  args)`（已带 ctx 与完整信封），其余走无 ctx 的 `Tool.Execute`。统一后**所有**工具
-  调用都携带同一个信封：
+### P2 — Workspace Topology，仍不并发
 
-  ```
-  run_id / call_id / tool / args
-  environment_lease_id / execution_scope / credential_refs
-  deadline / resource_lock_keys
-  ```
+- components/projects/topology version；
+- clean/dirty/non-Git/submodule baseline；root loose-files region；
+- component-aware AGENTS/Profile/memory；touched component evidence；
+- shadow 生成 view plan、snapshot size 和 omission diagnostics，仍在 direct 执行。
 
-- 执行状态机固定为：`accepted → started → progress → completed | cancelled | uncertain`。
-  本地 worker、后台 worker、未来 VPC/云 Runner **共用这一套**。
-- `EnvironmentLease` 与认证**绑定 run，不绑定 CLI / 微信 / cron 来源**（现状已如此，
-  写成不变量固化）。
-- 这一步落地后，**现有 `runpool.WithWatchdog` 立即生效**，不需要新建超时机制。
+验收：单 repo、monorepo、多 sibling repos、mixed root、submodule、dirty/non-Git fixtures
+均得到确定 topology；计划与实际 touched paths 一致，遗漏显式可见。
 
-**验收**：`/stop` 能在宽限期内真实终止一个纯计算工具；看门狗能杀掉无进展的 run。
+### P3 — Composite View，仍不并发
 
----
+- view handles、component mounts、Readable/WritableRoots；
+- worktree、dirty/non-Git snapshot、composite layout；
+- lifecycle/recovery/quarantine；WorkspaceChangeSet；默认不 auto apply。
 
-### 阶段 1.5 — 队列分级 schema 与事件保留（P0，后续每一步都压在它上面）
+验收：isolated run 完成真实多 repo 修改，原 workspace checksum 不变；materialization
+failure 不写 direct。
 
-- `task_queue` 增列：`class`（foreground / background / watch_finalization / cron）、
-  `priority`（整数，来自 §2.2）、`not_before`（延迟调度）。带迁移，存量行按
-  `idempotency_key` 前缀回填（`external-watch:` → watch_finalization，
-  `steering:` → foreground，其余按来源）。
-- 出队从 `ORDER BY created_at` 改为 `ORDER BY priority ASC, created_at ASC, rowid ASC`，
-  并支持 `not_before <= now`。
-- **工具输出有界化 + 事件保留**同批做：`tool.output` 行级事件改为有界摘要 + artifact
-  引用；control.db 加保留策略（当前 224MB / 19.7 万事件 / 无保留）。
-- 保留 `restarts` 幂等语义与重启恢复路径不变。
+### P4 — Resource Claims 与灰度并发
 
-**验收**：迁移后重启，queued / background / watch 状态可恢复且顺序符合优先级；
-单个 run 的事件量相比 8-03 那次下降一个数量级。
+- shared/exclusive claims 与原子多资源 acquisition；
+- run registry 三层索引、per-session foreground、fair scheduler；
+- foreground reservation、provider limits；
+- 首次只开放 `max_active=2`、本地 CLI、显式并发、禁止 auto integration；
+- 顺序开放：不同 workspace → 同 workspace 不同 clean components → 同 repo worktrees →
+  mixed snapshot views；direct broad writer 仍一个。
 
----
+验收：同 person 两 sessions 在不同/相同 workspace 都能并行；deploy/db key 不并发；
+isolated 卡死不影响其它 view；direct 卡死不转让 claim。
 
-### 阶段 2 — Worker 生命周期与隔离（P0）
+### P5 — 集成、跨平台与默认化
 
-- **归还条件**：worker 只有在**执行 goroutine 真正退出**后才归还 pool。取消后进入
-  宽限期（建议 30s，可配）。
-- **Quarantine**：超过宽限期未退出的 worker 标记 `quarantined`，不再接任务。
-  **关键：quarantine 必须同时释放/转移它持有的 `runpool` key 锁**——否则该 workspace
-  永久锁死（§1.2 ③）。做法是把 key 锁的归属从"defer 释放"改为"由 worker 生命周期
-  状态机持有"，quarantine 时显式转移为 tombstone 并允许新 run 获取（同时在
-  `/status` 标注该 workspace 曾有未回收的执行体）。
-- **隔离**：一个 worker 卡住，其它 worker 继续工作；同 workspace 的后续写任务在
-  quarantine 完成前排队并**可见地**报告原因。
-- **可观测**：worker 状态进入 `/status`：
+- integration view/journal；cross-repo preflight/verification/apply；
+- Linux/macOS snapshot providers；large/ignored/binary/symlink policies；
+- disk quota、GC、orphan cleanup；IM/cron/background 并发；
+- 成本、DB contention、429、cache 指标达到 reviewed gate 后才考虑默认并发大于 1。
 
-  ```
-  workers: 3 total · 1 busy · 1 queued · 1 quarantined
-  run_xxx: patch · no progress 18s
-  ws_08e6ced0: write lock held by quarantined worker (since 10:09:12)
-  ```
+到 P5 才正式宣称：logical workspace identity 不再串行 runs，单/多 Git、dirty/non-Git
+workspace 均有安全并行路径。
 
-- **等锁必须可见**：8-03 的新 run 阻塞在 `runMu` 上、外部只看到 "running"。
-  任何"在等待调度/等待锁"的状态都要出现在 `/status` 与 `/diag`。
-- 关闭 `worker-pool-design.md` §5 遗留 TODO（工具后端 dispatch + 后台进程注册表确认
-  性 pass；实测形状已正确）。
-
-**验收**：一个 patch 卡住，另一个 workspace 的任务仍能开始；卡住的 workspace 在
-quarantine 后可恢复接受新写任务；`/status` 能说清楚"谁卡了、卡多久、影响谁"。
+远程 Gateway、Runner、SaaS、Enterprise 不是 P5 自动后续，必须各自触发和批准。
 
 ---
 
-### 阶段 3 — 多级调度与后台 run（P1，风险最高）
+## 13. 风险、灰度与回退
 
-per-person 规则从"每人最多一个 active run"改为：
+整体一次性实施风险高；分阶段并在 P4 前保持单 run，可将每批风险控制在中等范围。
 
-- 每人最多 **一个 foreground run**
-- 每人允许 **有限数量 background run**
-- **每个 task 最多一个 active run**（新增，防止同任务并发写）
-
-```yaml
-execution:
-  workers: 3
-  foreground_reserved: 1
-  max_background_per_person: 2
-```
-
-高级项默认按机器资源自动选择并隐藏，避免继续增加配置负担。
-
-实现要点：
-
-- `runpool` 的单一 `sem` 拆成"保留槽 + 通用槽"，前台可抢占保留槽，后台只能用通用槽。
-- `c.active` 从 `map[personID]*activeRun` 改为 `map[personID]*personRuns{fg, bg[]}`，
-  并**逐一重读**所有调用点：steering 投递、`/status`、`enqueueBehindActive`、
-  `endActive` 后 drain、run recovery、`activeRunIDs`。
-- **不变量（硬性）**：审批与 steering 永远解析到唯一 run。
-  - 显式带 run id → 直接路由。
-  - 只有一个 run 在等待用户 → 自动关联。
-  - 多个候选 → **明确询问用户选择，绝不猜**。
-  - 该不变量对 CLI（`selfmind approve` / `stop` 不带 id）与 IM 同等适用。
-- **provider 并发上限 + 429 退避**在这一步成为前置条件（见 §1.5）：按 provider 路由
-  限流，一个 provider 被限不得阻塞其它路由。
-
-**验收**：前台任务提交后台后 CLI 可立即继续新工作；provider 429 时只限制对应
-provider；后台任务永远抢不到最后一个前台保留槽。
-
----
-
-### 阶段 4 — Workspace 与资源并发（P1）
-
-- 不同 workspace：并行读写。
-- 同 workspace 只读：并行（**已实现**）。
-- 同 workspace 写：默认串行。
-- **Git 项目需要同仓并行写**：每个后台 task 创建独立 `git worktree`，完成后合并。
-  - 该 run 的 `ExecutionScope` 可写根**必须指向 worktree**，不是 workspace 根——
-    否则违反"可写视图由 ExecutionScope 派生、不得来自 cwd"的既有铁律。
-  - worktree 生命周期要能被崩溃恢复（daemon 重启后清理孤儿 worktree）。
-- **非 Git 目录**：继续 workspace 独占写锁。
-- **云端副作用资源锁**：同一个 build trigger、同一个部署目标不得重复触发。
-  - ⚠️ `runpool.Run` 目前只接受**单个 key**。多资源锁需要改成**有序多锁获取**
-    （按 key 字典序排序后依次获取），否则两个 run 各持一半即死锁。这是 API 变更，
-    需要独立的 race 测试。
-
-**验收**：两个不同仓库的编码任务并行完成；同仓两个写任务不会互相覆盖；
-同一部署目标不会被两个 run 同时触发。
-
----
-
-### 阶段 5 — 统一事件面与 TUI attach（P1）
-
-统一操作面：
-
-```
-selfmind send --async "任务"     # 已存在
-selfmind runs                    # 新增
-selfmind attach <run_id>         # 新增
-selfmind stop <run_id>           # 从无参扩展
-selfmind steer <run_id> "补充要求" # 从当前 run 扩展
-```
-
-- CLI **只实时渲染当前 attach 的 run**。其它后台 run 只出简洁通知：
-
-  ```
-  Background run run_7ab3 started.
-  Watcher watch_4046 succeeded.
-  Run run_7ab3 needs approval.
-  ```
-
-- **绝不把多个 run 的流式 delta 混进同一个 TUI transcript**（这是既有
-  "origin-carrying run 渲染为结果行、不重放进度"规则的自然延伸）。
-- 审批与澄清**永不被抑制**，无论 run 是否 attach。
-- IM 简单回复的归属沿用 §3 的唯一性不变量。
-
-**验收**：多个后台任务的输出不会混入当前 CLI；未 attach 的 run 需要审批时用户仍能
-第一时间看到并回答。
-
----
-
-### 阶段 6 — 远程 Runner（P2）
-
-阶段 1 完成后这一步基本是"换实现"：
-
-- 本地 worker、后台 worker、VPC Runner、云 Runner **共用同一个执行信封与状态机**。
-- Runner 回传 `accepted → started → progress → completed | cancelled | uncertain`。
-- `EnvironmentLease` 与凭据引用随 run 走；执行状态只存引用与策略，**不存原始凭据字节**
-  （既有铁律，跨进程后更关键）。
-
----
-
-## 4. 验收场景总表
-
-| # | 场景 | 由哪个阶段保证 |
+| 领域 | 风险 | 主要失败 |
 | --- | --- | --- |
-| 1 | 一个 patch 卡住，另一个 workspace 的任务仍能开始 | 阶段 2 |
-| 2 | 前台任务提交后台后，CLI 可立即继续新工作 | 阶段 3 |
-| 3 | 两个不同仓库的编码任务可并行完成 | 阶段 3 + 4 |
-| 4 | 同仓库两个写任务不会互相覆盖 | 阶段 4 |
-| 5 | watcher 等待期间不占 worker | ✅ 已具备，阶段 1.5 保证优先级正确 |
-| 6 | `/stop <run_id>` 能真实终止执行并释放 worker | 阶段 1 + 2 |
-| 7 | 多个后台任务的输出不会混入当前 CLI | 阶段 5 |
-| 8 | provider 429 时只限制对应 provider | 阶段 3（前置条件） |
-| 9 | daemon 重启后 queued/background/watch 状态可恢复 | ✅ 部分已具备，阶段 1.5 迁移后重验 |
-| 10 | **卡住的 workspace 能自愈，不永久锁死** | 阶段 2（新增，源自 §1.2 ③） |
-| 11 | **审批/steering 在多 run 下永不误投** | 阶段 3（新增不变量） |
+| run scope/workspace freeze | 中 | 旧任务恢复失败、scope missing |
+| session event/control | 中高 | transcript 泄漏、steer/stop 错目标 |
+| task multi-run lifecycle | 高 | phantom running、summary 覆盖 |
+| topology/context | 中高 | 漏 repo、指令或验证串污染 |
+| composite view | 很高 | 写回原目录、漏文件、symlink escape |
+| dirty/non-Git snapshot | 很高 | 密钥复制、磁盘爆炸、不可复现 |
+| claims/quarantine | 很高 | 双 writer、永久锁、僵尸副作用 |
+| cross-repo integration | 很高 | 半完成更新、错误回滚 |
+| remote Runner/multi-tenant | 极高 | 凭据、设备身份、重放、越权 |
+
+内部回退门：`max_active_per_person=1`、`direct_only`、显式 components、dirty/non-Git
+排队、只产 ChangeSet、旧客户端仅 person summary。这些是 rollout controls，不承诺为长期
+公共配置。
+
+证据顺序：deterministic correctness → topology/view shadow → isolated single run → clean Git
+灰度 → mixed/dirty 灰度 → auto apply 最后。单元/replay 通过不等于可发布，必须有真实 soak。
 
 ---
 
-## 5. 执行顺序与开关策略
+## 14. 验收矩阵
 
-```
-阶段 0  patch + 取消可靠性        ← 独立可发，先止血
-阶段 1  统一执行信封（ctx 打通）   ← 让现有看门狗生效，同时是 Runner 地基
-阶段 1.5 队列分级 schema + 事件保留 ← 带迁移，后续全部依赖
-阶段 2  worker 生命周期与隔离      ← 开并发的最后前置条件
-阶段 3  多级调度与后台 run         ← 风险最高，单独发
-阶段 4  workspace / worktree 并发
-阶段 5  统一事件与 TUI attach
-阶段 6  远程 Runner
-```
+### 14.1 身份与事件
 
-**开关策略**：`SELFMIND_WORKERS` **保持默认 1，直到阶段 2 落地**。首次放开取
-`workers=2 / foreground_reserved=1`，跑一轮 soak + eval 后再提默认值。理由：阶段 2
-之前，一次工具卡死会永久锁死一个 workspace 且无信号（§1.2 ③）——并发只会让这个
-故障更隐蔽，不会更安全。
+- 两个 CLI transcript 不串；B 的“继续”不 steer A；
+- `/stop` 默认不停止另 session；attach 不移动 final delivery；
+- approval 按 notify policy 升级；老客户端不收并发 raw stream。
 
-## 6. 文档归属
+### 14.2 Workspace 与 Baseline
 
-- 本文（新增）拥有：调度策略、后台 run 分级、资源锁、执行信封、Runner 演进。
-- `docs/worker-pool-design.md` 继续拥有：worker pool 拓扑与并发安全审计；
-  其 §3 应加一行指向本文。
-- `docs/tool-safety.md` 需在阶段 1 同步：`Tool.Execute` 签名与取消语义。
-- 阶段落地时在 `docs/STATUS.md` 各加一行状态；本文不记录进度。
+- queue 后仍使用接受时 workspace/topology/base/context；
+- root 非 Git、多个 child repos 完整发现；root manifest 不遮 child repos；
+- monorepo 不错误拆锁；submodule 父子状态冻结；
+- topology cap/inaccessible/symlink 显式 fail closed。
+
+### 14.3 View 与文件安全
+
+- 同 repo 两 worktrees 并行不覆盖；aggregate composite views 保持相对布局；
+- dirty/non-Git snapshot 可复现；isolated 后原 workspace checksum 不变；
+- attachments/credentials/越界 symlink 不进入 writable view；
+- materialization/GC crash 后无静默复用。
+
+### 14.4 Resource 与取消
+
+- 多资源 acquisition 无 partial deadlock；waiting_resource 可见、可 stop；
+- isolated quarantine 不影响其它 views；direct holder 未死不转让；
+- deploy/db claims 不因 view 可丢弃而释放；所有工具真实停止。
+
+### 14.5 Task、Context 与交付
+
+- 同 task 多 runs 不覆盖 active/summary/handoff；
+- sibling 中间内容不进当前 prompt；component instructions/memory 不串；
+- verification cwd 与 touched projects 正确；
+- multi-repo ChangeSet 完整，integration conflict 无未说明半完成状态。
+
+### 14.6 持久化与性能
+
+- released control.db fixture 可升级、备份、恢复并拒绝新 schema；
+- restart 后 queue/baseline/view/claim/ChangeSet 一致；
+- `-race` 覆盖同 person/同 workspace/不同 views；
+- 双-lane deterministic harness 证明 stream/queue/steer/approval；
+- `max_active=2` 数小时真实 coding soak；
+- DB wait、view disk、429、每成功 run 成本和 cache telemetry 有可信基线。
+
+---
+
+## 15. 跨代码库硬不变量
+
+能力实际落地时再同步进入 `AGENTS.md`；此前本文是设计归属，不能把未实现行为写成事实。
+
+1. 每 session 同时最多一个 foreground run；person/tenant 不做串行。
+2. task 永不作为并发锁或上下文边界。
+3. run 的 workspace、topology、baseline、context、delivery 在 admission 时冻结。
+4. workspace 不是 repo；component 不是 project；project 不是资源锁。
+5. write run 必须有 view；同一物理 view 同时最多一个 writer。
+6. 同 logical workspace 多 runs 通过独立 views 并行。
+7. direct holder 未退出不转让；quarantined view 不复用、不删除。
+8. read-only 来自封闭能力；unknown/deferred escalation 按 write，运行中不升级锁。
+9. isolated view 不写原 workspace；物理 root 由执行节点解析。
+10. component instructions、memory、verification 只在本作用域生效。
+11. raw events 携带 session/run/audience，只投 owner/authorized observers。
+12. steer/stop/approve 解析唯一 run；多候选时询问，不猜。
+13. 跨 repo 交付用 versioned ChangeSet；集成串行、校验基线、失败可见。
+14. 文件 view 与 deploy/db/network 分别声明；worktree 不是完整隔离证明。
+15. Gateway 管调度权限，执行实现/Runner 管物理 view、进程和凭据；一个代码库、一个
+    `selfmind` binary。
+
+---
+
+## 16. 文档与计划治理
+
+- 本文保持 `decision / paused`，不与当前 active plan 竞争。
+- P0 的单 run 正确性缺陷可由维护者明确并入当前 active plan；P1 以后必须有 owner verdict
+  和新的 active implementation plan。
+- durable schema 变更遵守版本迁移、旧库备份、released fixture 和 newer-schema reject。
+- 用户可见 message-path 变化添加 production-path eval；调度、topology、snapshot、迁移
+  和 crash mechanics 使用 Go/race/fixture 测试。
+- capability 边界变化时更新 `docs/STATUS.md`；机制变化更新本文及 owning domain doc；
+  `docs/README.md` 只通过 `selfmind docs index` 生成。
+- 本文不记录逐日实施日志。长期证据与 rollout verdict 进入获批的 active plan。

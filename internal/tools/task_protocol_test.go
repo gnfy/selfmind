@@ -41,7 +41,10 @@ func TestUpdatePlanToolReturnsSynchronousWorkUnitIdentities(t *testing.T) {
 		}
 		return []PlanWorkUnitIdentity{
 			{ID: "wu-a", Sequence: 1, Goal: steps[0].Step, PlanStatus: steps[0].Status},
-			{ID: "wu-b", Sequence: 2, Goal: steps[1].Step, PlanStatus: steps[1].Status, RelatedTaskID: "task-b"},
+			{
+				ID: "wu-b", Sequence: 2, Goal: steps[1].Step, PlanStatus: steps[1].Status, RelatedTaskID: "task-b",
+				SkillCatalog: "## Skill Candidates for Current Work Unit\n- skref_123 inspect-build: Inspect build metadata.\n",
+			},
 		}, nil
 	})
 	result, err := tool.Execute(map[string]interface{}{
@@ -56,6 +59,12 @@ func TestUpdatePlanToolReturnsSynchronousWorkUnitIdentities(t *testing.T) {
 	}
 	if !strings.Contains(result, `"id":"wu-b"`) || !strings.Contains(result, `"related_task_id":"task-b"`) {
 		t.Fatalf("stable work-unit identities missing from tool result: %s", result)
+	}
+	if !strings.Contains(result, `"skill_catalog":"`) || !strings.Contains(result, "skref_123") {
+		t.Fatalf("new work-unit Skill refs missing from bounded catalogue: %s", result)
+	}
+	if strings.Contains(result, `"skill_candidates"`) {
+		t.Fatalf("tool result duplicated unbounded candidate descriptions: %s", result)
 	}
 }
 

@@ -10,6 +10,9 @@ import (
 	"time"
 
 	appcore "selfmind/internal/app"
+	"selfmind/internal/control"
+	"selfmind/internal/gateway/api"
+	"selfmind/internal/kernel/llm"
 	"selfmind/internal/tools"
 
 	_ "modernc.org/sqlite"
@@ -63,6 +66,74 @@ func TestFormatSkillPartitionDiagnosticsIsActionable(t *testing.T) {
 	}
 }
 
+func TestSkillPresentationDiagnosticsAreFatalOnlyForBrokenReceipts(t *testing.T) {
+	healthy := formatSkillPresentationDiagnostics(control.SkillPresentationDiagnostics{
+		SchemaVersion: control.CurrentControlSchemaVersion, CurrentSchemaVersion: control.CurrentControlSchemaVersion,
+	}, nil)
+	if !strings.Contains(healthy, "status: healthy") || doctorReportHasFatalIssue(healthy) {
+		t.Fatalf("healthy presentation diagnostics=%q", healthy)
+	}
+	leak := formatSkillPresentationDiagnostics(control.SkillPresentationDiagnostics{
+		SchemaVersion: control.CurrentControlSchemaVersion, CurrentSchemaVersion: control.CurrentControlSchemaVersion,
+		TerminalCandidateRefLeaks: 2,
+	}, nil)
+	if !strings.Contains(leak, "[WARNING]") || doctorReportHasFatalIssue(leak) {
+		t.Fatalf("candidate-ref cleanup warning had wrong severity=%q", leak)
+	}
+	broken := formatSkillPresentationDiagnostics(control.SkillPresentationDiagnostics{
+		SchemaVersion: control.CurrentControlSchemaVersion, CurrentSchemaVersion: control.CurrentControlSchemaVersion,
+		InvalidDeliveryReceipts: 1,
+		Issues: []control.SkillPresentationIssue{{
+			ID: "skill_presentation.delivered_hash_mismatch", Code: "delivered_hash_mismatch", Severity: "fatal",
+			Component: "delivery_receipt", Ref: "activation-1", Location: "run_skill_activations/activation-1/delivered_main_hash",
+			Expected: "abc", Observed: "corrupt", Cause: "stored bytes do not match", Owner: "kernel skill delivery",
+			Remediations: []control.SkillPresentationRemediation{{
+				Description: "Restore the verified control database backup.",
+				Commands:    []string{"selfmind maintenance restore-control --backup <path> --yes"},
+			}},
+			Verify: []string{"selfmind doctor --verbose"},
+		}},
+	}, nil)
+	if !strings.Contains(broken, "[FATAL]") || !doctorReportHasFatalIssue(broken) {
+		t.Fatalf("broken receipt was not fatal=%q", broken)
+	}
+	issues := collectDoctorIssues(broken, configDiagnostics{})
+	if len(issues) != 1 || issues[0].Category != "SKILLS" {
+		t.Fatalf("broken receipt issues=%+v", issues)
+	}
+	summary := formatDoctorSummary(issues, nil, false)
+	for _, want := range []string{"delivered_hash_mismatch", "run_skill_activations/activation-1/delivered_main_hash", "expected: abc", "observed: corrupt", "restore-control --backup <path> --yes"} {
+		if !strings.Contains(summary, want) {
+			t.Fatalf("typed Skill finding missing %q:\n%s", want, summary)
+		}
+	}
+}
+
+func TestDoctorReportReadFailureUsesUnableSemantics(t *testing.T) {
+	if !doctorReportHasReadFailure("== Skill descriptions ==\n(error: permission denied)") {
+		t.Fatal("section read error was not classified as Doctor unable")
+	}
+	if doctorReportHasReadFailure("== Recent logs ==\n(log unavailable: rotated)") {
+		t.Fatal("optional log unavailability must not make Doctor unable")
+	}
+	if doctorReportHasReadFailure("== Skill presentation ==\nstatus: healthy") {
+		t.Fatal("healthy report was classified as Doctor unable")
+	}
+}
+
+func TestGatewayToolSchemaDoctorStateUsesExplicitDenominators(t *testing.T) {
+	state := gatewayToolSchemaDoctorState(api.GatewayStatusResponse{
+		ToolSchemas: api.ToolSchemaHealth{
+			Active: 12, RegisteredActive: 12, Hidden: 4, ProviderVisible: 7, Repaired: 1, Quarantined: 2,
+		},
+	})
+	for _, want := range []string{"registered_active:12", "hidden:4", "provider_visible:7", "repaired:1", "quarantined:2"} {
+		if !strings.Contains(state, want) {
+			t.Fatalf("Doctor tool denominator missing %q: %s", want, state)
+		}
+	}
+}
+
 func TestSkillPartitionDiagnosticsBlocksCleanupWhenAuthorityIsEmpty(t *testing.T) {
 	section := formatSkillPartitionDiagnostics(tools.SkillMigrationReport{}, nil, tools.PersonPartitionCleanupReport{
 		Root: "/tmp/assets", ControlDB: "/tmp/data/control.db", Inconclusive: true, Candidates: 3,
@@ -84,7 +155,7 @@ func TestDoctorSummaryOmitsHealthyAndHistoricalSections(t *testing.T) {
 generated: 2026-08-18T11:34:56Z
 
 == Gateway ==
-running (state=running pid=123 addr=127.0.0.1:8765 active_runs=0 tools=active:10,repaired:0,quarantined:0)
+running (state=running pid=123 addr=127.0.0.1:8765 active_runs=0 tools=registered_active:10,hidden:0,provider_visible:10,repaired:0,quarantined:0)
 
 == Config ==
 path: /tmp/config.yaml
@@ -118,7 +189,7 @@ status: healthy
 (none)
 
 == Cron governance ==
-jobs: 3 total, 1 system, skill-pruner: 1 keyed + 0 legacy, 0 duplicate system-key group(s)
+jobs: 2 total, 0 system, retired skill-pruner rows: 0 keyed + 0 legacy, 0 duplicate system-key group(s)
 
 == Presence (bound accounts) ==
 - cli: last seen 1s ago (attached)
@@ -151,7 +222,7 @@ func TestDoctorSummaryKeepsOnlyActionableSectionsAndRemedies(t *testing.T) {
 	full := `SelfMind doctor — diagnostic bundle
 
 == Gateway ==
-running (state=running pid=123 addr=127.0.0.1:8765 active_runs=0 tools=active:10,repaired:0,quarantined:0)
+running (state=running pid=123 addr=127.0.0.1:8765 active_runs=0 tools=registered_active:10,hidden:0,provider_visible:10,repaired:0,quarantined:0)
 
 == Config ==
 path: /tmp/config.yaml
@@ -254,7 +325,7 @@ not running
 
 func TestDoctorSummarySurfacesQuarantinedExternalTools(t *testing.T) {
 	full := `== Gateway ==
-running (state=running pid=123 addr=127.0.0.1:8765 active_runs=0 tools=active:10,repaired:0,quarantined:2)`
+running (state=running pid=123 addr=127.0.0.1:8765 active_runs=0 tools=registered_active:10,hidden:0,provider_visible:10,repaired:0,quarantined:2)`
 	issues := collectDoctorIssues(full, configDiagnostics{})
 	summary := formatDoctorSummary(issues, nil, false)
 	if len(issues) != 1 || !strings.Contains(summary, "external MCP tool schemas") {
@@ -264,7 +335,7 @@ running (state=running pid=123 addr=127.0.0.1:8765 active_runs=0 tools=active:10
 
 func TestDoctorSummarySurfacesMCPConnectionFailures(t *testing.T) {
 	full := `== Gateway ==
-running (state=running pid=123 addr=127.0.0.1:8765 active_runs=0 tools=active:10,repaired:0,quarantined:0 mcp=connected:1,failed:1,first:github:connection refused)`
+running (state=running pid=123 addr=127.0.0.1:8765 active_runs=0 tools=registered_active:10,hidden:0,provider_visible:10,repaired:0,quarantined:0 mcp=connected:1,failed:1,first:github:connection refused)`
 	issues := collectDoctorIssues(full, configDiagnostics{})
 	summary := formatDoctorSummary(issues, nil, false)
 	for _, want := range []string{"[GATEWAY]", "MCP server names", "selfmind config doctor", "selfmind gateway restart"} {
@@ -277,6 +348,58 @@ running (state=running pid=123 addr=127.0.0.1:8765 active_runs=0 tools=active:10
 	}
 }
 
+func TestDoctorSummarySurfacesProviderWireCatalogFailureAsFatal(t *testing.T) {
+	full := `== Gateway ==
+running (state=running pid=123 addr=127.0.0.1:8765 active_runs=0 tools=registered_active:37,hidden:0,provider_visible:37,repaired:0,quarantined:0 catalog=invalid:1,protocol:openai_chat,count:37,dynamic_skills:1,first_index:15,first_name:skill:proto-contract,first_code:invalid_name)`
+	issues := collectDoctorIssues(full, configDiagnostics{})
+	summary := formatDoctorSummary(issues, nil, false)
+	if len(issues) != 1 || !doctorReportHasFatalIssue(full) {
+		t.Fatalf("provider catalogue failure was not fatal: issues=%v\n%s", issues, summary)
+	}
+	for _, want := range []string{"skill:proto-contract", "provider-wire tool name", "doctor --probe-models --verbose"} {
+		if !strings.Contains(summary, want) {
+			t.Fatalf("provider catalogue diagnosis missing %q:\n%s", want, summary)
+		}
+	}
+	if doctorReportHasFatalIssue("== Gateway ==\nrunning (state=running pid=1 addr=127.0.0.1:8765 active_runs=0 catalog=valid:36,protocol:openai_chat,bytes:100,dynamic_skills:0,hash=ok)") {
+		t.Fatal("healthy provider catalogue was treated as fatal")
+	}
+}
+
+func TestDoctorCountsDynamicSkillsFromSourceIdentityAfterWireAliasing(t *testing.T) {
+	line := gatewayToolCatalogDoctorState(llm.ToolCatalogPreview{
+		Protocol: "openai_responses", Count: 1, WireBytes: 120, BudgetBytes: 1024,
+		Names: []string{"skill_proto_contract_a1b2"},
+		Entries: []llm.ToolCatalogEntry{{
+			Index: 0, SourceName: "skill:proto-contract", WireName: "skill_proto_contract_a1b2",
+		}},
+	})
+	if !strings.Contains(line, "dynamic_skills:1") {
+		t.Fatalf("Doctor lost source identity after provider aliasing: %s", line)
+	}
+	full := "== Gateway ==\nrunning (state=running pid=1 addr=127.0.0.1:8765 active_runs=0" + line + ")"
+	issues := collectDoctorIssues(full, configDiagnostics{})
+	summary := formatDoctorSummary(issues, nil, false)
+	for _, want := range []string{"exposure=hidden", "dynamic_skills:0", "doctor --probe-models --verbose"} {
+		if !strings.Contains(summary, want) {
+			t.Fatalf("dynamic Skill repair is missing %q:\n%s", want, summary)
+		}
+	}
+}
+
+func TestDoctorReportsProviderSchemaBudgetWithoutMakingItContractFatal(t *testing.T) {
+	full := `== Gateway ==
+running (state=running pid=123 addr=127.0.0.1:8765 active_runs=0 catalog=valid:36,protocol:openai_chat,bytes:60000,schema_budget:over:49152,dynamic_skills:0,hash=ok)`
+	issues := collectDoctorIssues(full, configDiagnostics{})
+	summary := formatDoctorSummary(issues, nil, false)
+	if len(issues) != 1 || !strings.Contains(summary, "provider-wire schema budget") {
+		t.Fatalf("schema budget issue=%+v\n%s", issues, summary)
+	}
+	if doctorReportHasFatalIssue(full) {
+		t.Fatal("cost budget warning was treated as a broken wire contract")
+	}
+}
+
 func TestDoctorSummaryReportsGatewayBuildAndServiceMismatchWithCorrectRemedy(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -286,12 +409,12 @@ func TestDoctorSummaryReportsGatewayBuildAndServiceMismatchWithCorrectRemedy(t *
 	}{
 		{
 			name: "client daemon build mismatch",
-			body: "running (state=running pid=123 addr=127.0.0.1:8765 active_runs=0 build=mismatch:v0.1.0-beta.17 tools=active:10,repaired:0,quarantined:0)",
+			body: "running (state=running pid=123 addr=127.0.0.1:8765 active_runs=0 build=mismatch:v0.1.0-beta.17 tools=registered_active:10,hidden:0,provider_visible:10,repaired:0,quarantined:0)",
 			want: "selfmind gateway restart",
 		},
 		{
 			name:     "launchd installed but unloaded",
-			body:     "running (state=running pid=123 addr=127.0.0.1:8765 active_runs=0 tools=active:10,repaired:0,quarantined:0) launchd=installed-not-loaded",
+			body:     "running (state=running pid=123 addr=127.0.0.1:8765 active_runs=0 tools=registered_active:10,hidden:0,provider_visible:10,repaired:0,quarantined:0) launchd=installed-not-loaded",
 			want:     "selfmind gateway service install",
 			unwanted: "external MCP tool schemas",
 		},
@@ -381,7 +504,6 @@ func TestCronGovernanceIgnoresHistoricalUserReservedPrefix(t *testing.T) {
 	}
 	if _, err := db.Exec(`INSERT INTO cron_jobs
 		(name, cron_expr, prompt, tenant_id, channel, system_key) VALUES
-		('skill-pruner-default', '0 3 * * *', 'skill_prune:default', 'default', 'cli', 'skill-pruner:default'),
 		('skill-pruner-user-report', '15 9 * * 1', 'send report', 'default', 'weixin', '')`); err != nil {
 		t.Fatal(err)
 	}
@@ -390,11 +512,34 @@ func TestCronGovernanceIgnoresHistoricalUserReservedPrefix(t *testing.T) {
 	}
 
 	section := cronGovernanceSection(context.Background(), dir)
-	if !strings.Contains(section, "skill-pruner: 1 keyed + 0 legacy") {
+	if !strings.Contains(section, "retired skill-pruner rows: 0 keyed + 0 legacy") {
 		t.Fatalf("unexpected cron governance section:\n%s", section)
 	}
-	if strings.Contains(section, "legacy system-shaped skill-pruner") {
+	if strings.Contains(section, "obsolete Skill metric-pruner") {
 		t.Fatalf("historical user job must not trigger a system warning:\n%s", section)
+	}
+}
+
+func TestCronGovernanceReportsRetiredKeyedSkillPruner(t *testing.T) {
+	dir := t.TempDir()
+	db, err := sql.Open("sqlite", filepath.Join(dir, "cron.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`CREATE TABLE cron_jobs (
+		id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT, cron_expr TEXT, prompt TEXT,
+		tenant_id TEXT, channel TEXT, system_key TEXT NOT NULL DEFAULT '');
+		INSERT INTO cron_jobs (name, cron_expr, prompt, tenant_id, channel, system_key)
+		VALUES ('skill-pruner-default', '0 3 * * *', 'skill_prune:default', 'default', 'cli', 'skill-pruner:default')`); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	section := cronGovernanceSection(context.Background(), dir)
+	if !strings.Contains(section, "retired skill-pruner rows: 1 keyed + 0 legacy") ||
+		!strings.Contains(section, "obsolete Skill metric-pruner") {
+		t.Fatalf("retired keyed row was not reported:\n%s", section)
 	}
 }
 
@@ -419,8 +564,8 @@ func TestCronGovernanceReportsLegacySystemShape(t *testing.T) {
 	}
 
 	section := cronGovernanceSection(context.Background(), dir)
-	if !strings.Contains(section, "skill-pruner: 0 keyed + 1 legacy") ||
-		!strings.Contains(section, "legacy system-shaped skill-pruner") {
+	if !strings.Contains(section, "retired skill-pruner rows: 0 keyed + 1 legacy") ||
+		!strings.Contains(section, "obsolete Skill metric-pruner") {
 		t.Fatalf("legacy system-shaped row was not reported:\n%s", section)
 	}
 }

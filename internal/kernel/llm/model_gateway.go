@@ -297,3 +297,11 @@ func (p *RoleProvider) FingerprintRequest(ctx context.Context, req ChatRequest, 
 	req = withRequestRole(req, p.role)
 	return FingerprintProviderRequest(ctx, profile.Provider, req, stream)
 }
+
+func (p *RoleProvider) PreviewToolCatalog(ctx context.Context, tools []ToolDefinition) ToolCatalogPreview {
+	profile := p.gateway.resolve(p.role)
+	if profile.Provider == nil {
+		return buildToolCatalogPreview("unavailable", tools, tools, tools)
+	}
+	return PreviewProviderToolCatalog(ensureModelRole(ctx, p.role), profile.Provider, tools)
+}

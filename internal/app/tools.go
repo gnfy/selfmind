@@ -13,9 +13,9 @@ import (
 	"selfmind/internal/tools"
 )
 
-// InitTools wires up the dispatcher, built-in tools, extended tools,
-// the skill loader, the skill metrics middleware, and injects the session search function.
-func InitTools(mem *memory.MemoryManager, cfg *config.Config, ag *kernel.Agent, skillStore *kernel.SkillStore, tenantID string, prompts *promptassets.Snapshot, controlStore *control.Store) (*tools.Dispatcher, error) {
+// InitTools wires up the dispatcher, built-in tools, extended tools, the Skill
+// loader, durable Skill management, and the session search function.
+func InitTools(mem *memory.MemoryManager, cfg *config.Config, ag *kernel.Agent, tenantID string, prompts *promptassets.Snapshot, controlStore *control.Store) (*tools.Dispatcher, error) {
 	registry := tools.NewRegistry()
 	disp := tools.NewDispatcherWithRegistry(registry)
 	if tenantID == "" {
@@ -56,9 +56,9 @@ func InitTools(mem *memory.MemoryManager, cfg *config.Config, ag *kernel.Agent, 
 	// dir, so every dispatcher (daemon, worker pool, eval) can resolve the
 	// artifacts the coordinator writes.
 	disp.RegisterTool(tools.NewToolOutputViewTool(filepath.Join(ResolveDataDir(cfg), "tool-output")))
-	disp.RegisterTool(tools.NewSkillManageTool())
-	disp.RegisterTool(tools.NewSkillsListTool())
-	disp.RegisterTool(tools.NewSkillViewTool())
+	disp.RegisterTool(tools.NewSkillManageTool(controlStore))
+	disp.RegisterTool(tools.NewSkillsListTool(controlStore))
+	disp.RegisterTool(tools.NewSkillViewTool(controlStore))
 	disp.RegisterTool(tools.NewSkillInvocationResolveTool())
 	if controlStore != nil {
 		disp.RegisterTool(tools.NewSkillSelectTool(controlStore))
@@ -96,11 +96,6 @@ func InitTools(mem *memory.MemoryManager, cfg *config.Config, ag *kernel.Agent, 
 
 	// 3. Register Vision LLM
 	disp.InjectVisionLLM(ag)
-
-	// 4. Register skill metrics middleware (tracks call/fail counts for skill:* tools)
-	if skillStore != nil {
-		disp.InjectMiddleware(tools.SkillMetricsMiddleware(skillStore))
-	}
 
 	// Built-in schemas are application code and must be valid before the
 	// daemon accepts traffic. External MCP/plugin schemas are quarantined by

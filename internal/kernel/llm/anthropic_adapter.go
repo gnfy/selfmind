@@ -97,6 +97,9 @@ func (a *AnthropicAdapter) GetModel() string {
 }
 
 func (a *AnthropicAdapter) Chat(ctx context.Context, req ChatRequest) (*ChatResponse, error) {
+	if err := EnsureProviderToolCatalog(ctx, a, req.Tools); err != nil {
+		return nil, err
+	}
 	anthropicReq := a.requestFromChatContext(ctx, req, false)
 
 	body, err := marshalWithExtraBody(anthropicReq, a.ExtraBody)
@@ -217,6 +220,9 @@ func decodeAnthropicContent(raw json.RawMessage) ([]anthropicContentBlock, strin
 }
 
 func (a *AnthropicAdapter) StreamChat(ctx context.Context, req ChatRequest) (<-chan StreamEvent, error) {
+	if err := EnsureProviderToolCatalog(ctx, a, req.Tools); err != nil {
+		return nil, err
+	}
 	anthropicReq := a.requestFromChatContext(ctx, req, true)
 
 	body, err := marshalWithExtraBody(anthropicReq, a.ExtraBody)
@@ -772,6 +778,10 @@ func anthropicTools(tools []ToolDefinition) []AnthropicTool {
 		})
 	}
 	return out
+}
+
+func (a *AnthropicAdapter) PreviewToolCatalog(_ context.Context, tools []ToolDefinition) ToolCatalogPreview {
+	return previewAnthropicToolCatalog(a.Quirks, tools)
 }
 
 func (a *AnthropicAdapter) usesMoonshotSchema(req ChatRequest) bool {

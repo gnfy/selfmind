@@ -559,7 +559,8 @@ func (a *Agent) executeSingleToolCall(ctx context.Context, tenantID string, even
 			fmt.Errorf("%s returned, but its durable outcome could not be recorded; external state is uncertain and must be verified before any retry: %w", name, ledgerErr))
 	}
 
-	packaged := packageToolResultCtx(ctx, name, result)
+	modelResult := modelVisibleSkillToolResult(name, result)
+	packaged := packageToolResultCtx(ctx, name, modelResult)
 	activated := activateToolsFromSearchResult(ctx, name, result)
 	if eventCh != nil {
 		if len(activated) > 0 {
@@ -585,6 +586,82 @@ func (a *Agent) executeSingleToolCall(ctx context.Context, tenantID string, even
 			ToolCallID: call.ID,
 		},
 	}
+}
+
+// modelVisibleSkillToolResult keeps control-plane identity in rawResult/events
+// while reducing the provider-visible tool message to the presentation
+// contract. This is the final common dispatch boundary, so direct tools cannot
+// accidentally reintroduce paths or hashes into a later prompt.
+func modelVisibleSkillToolResult(name, raw string) string {
+	if name == "skills_list" {
+		var source map[string]interface{}
+		if json.Unmarshal([]byte(raw), &source) != nil {
+			return raw
+		}
+		out := map[string]interface{}{}
+		for _, key := range []string{"success", "count", "total_matches", "truncated", "hint"} {
+			if value, exists := source[key]; exists {
+				out[key] = value
+			}
+		}
+		var minimal []map[string]interface{}
+		if rows, ok := source["skills"].([]interface{}); ok {
+			for _, row := range rows {
+				item, _ := row.(map[string]interface{})
+				presented := map[string]interface{}{}
+				for _, key := range []string{"candidate_ref", "name", "description", "scope", "source"} {
+					if value, exists := item[key]; exists {
+						presented[key] = value
+					}
+				}
+				minimal = append(minimal, presented)
+			}
+		}
+		out["skills"] = minimal
+		encoded, err := json.Marshal(out)
+		if err == nil {
+			return string(encoded)
+		}
+		return raw
+	}
+	allowed := map[string]map[string]bool{
+		"skill_select": {
+			"success": true, "activation_id": true, "name": true, "instructions": true,
+			"linked_files": true, "delivery_mode": true, "notice": true, "candidate_notice": true,
+		},
+		"skill_fallback": {
+			"success": true, "activation_id": true, "name": true, "notice": true,
+		},
+		"skill_view": {
+			"success": true, "name": true, "description": true, "content": true,
+			"offset_bytes": true, "total_bytes": true, "complete": true, "next_offset_bytes": true,
+			"hint": true, "file": true, "section": true, "linked_files": true,
+		},
+	}
+	fields, ok := allowed[name]
+	if !ok {
+		return raw
+	}
+	var source map[string]interface{}
+	if json.Unmarshal([]byte(raw), &source) != nil {
+		return raw
+	}
+	out := make(map[string]interface{}, len(fields))
+	for key := range fields {
+		if value, exists := source[key]; exists {
+			out[key] = value
+		}
+	}
+	if candidateNotice, _ := out["candidate_notice"].(string); strings.TrimSpace(candidateNotice) != "" {
+		notice, _ := out["notice"].(string)
+		out["notice"] = strings.TrimSpace(notice + " " + candidateNotice)
+		delete(out, "candidate_notice")
+	}
+	encoded, err := json.Marshal(out)
+	if err != nil {
+		return raw
+	}
+	return string(encoded)
 }
 
 // stripModelRuntimeArgs enforces the namespace boundary between model input

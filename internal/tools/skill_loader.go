@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"unicode/utf8"
 
 	"selfmind/internal/kernel"
 	"selfmind/internal/platform/log"
@@ -23,6 +24,33 @@ type SkillDefinition struct {
 	Source      string   `json:"source,omitempty"`     // source file path
 	ToolName    string   `json:"tool_name,omitempty"`  // 对应的工具名（如果有）
 	Handler     string   `json:"handler,omitempty"`    // Go function reference (for codegen)
+}
+
+const (
+	SkillDescriptionMaxChars = 1024
+	SkillDescriptionMaxBytes = 4096
+)
+
+// ValidateManagedSkillDescription applies the authoring safety ceiling to
+// writable/manual and curator-produced assets. Read-only external Skills are
+// intentionally still loadable; their overlong metadata is bounded only when
+// presented and surfaced as a Doctor warning.
+func ValidateManagedSkillDescription(content string) error {
+	definition, _, err := parseFrontMatter(content)
+	if err != nil {
+		return fmt.Errorf("front matter parse error: %w", err)
+	}
+	description := strings.TrimSpace(definition.Description)
+	if !utf8.ValidString(description) {
+		return fmt.Errorf("Skill description must be valid UTF-8")
+	}
+	if bytes := len(description); bytes > SkillDescriptionMaxBytes {
+		return fmt.Errorf("Skill description is %d UTF-8 bytes; maximum is %d", bytes, SkillDescriptionMaxBytes)
+	}
+	if chars := utf8.RuneCountInString(description); chars > SkillDescriptionMaxChars {
+		return fmt.Errorf("Skill description is %d characters; maximum is %d", chars, SkillDescriptionMaxChars)
+	}
+	return nil
 }
 
 // SkillLoader 动态加载 skills 目录下的 YAML + Markdown 文件
@@ -102,13 +130,14 @@ func (sl *SkillLoader) LoadFile(path string) (SkillDefinition, error) {
 	if def.Description == "" {
 		def.Description = def.Name
 	}
-
-	// 动态注册为工具
 	if def.ToolName == "" {
 		def.ToolName = "skill:" + def.Name
 	}
 
-	// 用 Markdown body 构造 handler
+	// Keep the legacy dispatch address available during the presentation
+	// migration, but never expose one provider function per installed Skill.
+	// Slash/model activation converges on the typed activation service in P2;
+	// this hidden registration is only a rollback-safe compatibility surface.
 	steps := extractSkillSteps(body)
 	sl.registerSkillTool(def, body, steps)
 
@@ -294,13 +323,11 @@ func (sl *SkillLoader) registerSkillTool(def SkillDefinition, body string, steps
 			schema: ToolSchema{
 				Type: "object",
 				Properties: map[string]PropertyDef{
-					"input": {
-						Type:        "string",
-						Description: "User input for this skill",
-					},
+					"input": {Type: "string", Description: "User input for this skill"},
 				},
 				Required: []string{},
 			},
+			metadata: ToolMetadata{Exposure: ToolExposureHidden, RiskLevel: ToolRiskLow, Category: "skill"},
 		},
 		content:     body,
 		steps:       steps,
@@ -310,22 +337,18 @@ func (sl *SkillLoader) registerSkillTool(def SkillDefinition, body string, steps
 	sl.registry.Register(tool)
 }
 
-// SkillTool 是从 Markdown skill 文件生成的工具
+// SkillTool is the hidden compatibility dispatch address created from one
+// Markdown Skill. It returns activation guidance and never executes scripts.
 type SkillTool struct {
 	BaseTool
-	content     string   // Markdown body 作为 skill 的执行逻辑
-	steps       []string // 从 body 中提取的步骤（代码块）
+	content     string
+	steps       []string
 	source      string
 	versionHash string
 }
 
-// SetSkillSteps 设置 skill 的执行步骤（由 SkillLoader.LoadAll 填充）
-func (t *SkillTool) SetSkillSteps(steps []string) {
-	t.steps = steps
-}
+func (t *SkillTool) SetSkillSteps(steps []string) { t.steps = steps }
 
-// Execute keeps legacy skill:<name> tools instruction-only. Skills are loaded
-// through slash invocation or skill_view, not executed as shell scripts.
 func (t *SkillTool) Execute(args map[string]interface{}) (string, error) {
 	name := strings.TrimPrefix(t.Name(), "skill:")
 	if name == "" {
@@ -343,20 +366,15 @@ func (t *SkillTool) Execute(args map[string]interface{}) (string, error) {
 	return fmt.Sprintf("[Skill: %s]\nThis skill is instruction-only. Load it with /%s or skill_view(name=%q), then follow its instructions explicitly. Scripts or commands mentioned by the skill must be run through normal tools with the usual workspace and approval checks.", name, normalizeSkillCommandName(name), name), nil
 }
 
-// extractSkillSteps 从 markdown body 中提取所有 fenced code block 内容
 func extractSkillSteps(body string) []string {
 	var steps []string
 	lines := strings.Split(body, "\n")
 	inCodeBlock := false
 	var block []string
-
 	for _, line := range lines {
 		if strings.HasPrefix(line, "```") {
-			if inCodeBlock {
-				// 结束当前 code block
-				if len(block) > 0 {
-					steps = append(steps, strings.Join(block, "\n"))
-				}
+			if inCodeBlock && len(block) > 0 {
+				steps = append(steps, strings.Join(block, "\n"))
 				block = nil
 			}
 			inCodeBlock = !inCodeBlock

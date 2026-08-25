@@ -184,6 +184,13 @@ type ExecutionResult struct {
 }
 ```
 
+`WorkspaceRoots` 的当前输入是 run 级 `RootBinding` 快照：持久 workspace 的
+主根/允许根与本机 CLI 的可重复 `--add-dir` 合并后，在入队前完成规范化并冻结。
+附加目录不是 workspace 注册或信任操作；它仍受同一审批、安全地板和沙箱策略约束。
+上下文扫描会分别发现每个显式 context root 的项目约定，写调度则按规范化路径的
+相等或祖先/后代重叠关系串行，避免 `/repo` 与 `/repo/packages/shared` 被误判为
+互不相关。非本机、未认证的 HTTP/IM 请求不得把 daemon 主机路径注入该快照。
+
 两处刻意的设计：
 
 - **`ScratchHandle` 而非 `ScratchRoot`**：绝对路径若进入持久状态，远期 Runner

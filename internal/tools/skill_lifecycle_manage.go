@@ -38,6 +38,7 @@ func NewSkillLifecycleManageTool(store *control.Store) *SkillLifecycleManageTool
 					"version_hash":        {Type: "string", Description: "Candidate or previous version hash."},
 					"parent_version_hash": {Type: "string", Description: "Exact active parent for a PATCH candidate."},
 					"content":             {Type: "string", Description: "Complete immutable candidate body."},
+					"resources_json":      {Type: "string", Description: "Optional JSON object of immutable linked resource path to content."},
 					"evidence_set_hash":   {Type: "string", Description: "Frozen evidence-set identity."},
 					"observation_ids":     {Type: "array", Description: "Source observation ids.", Items: &PropertyDef{Type: "string"}},
 					"evidence_json":       {Type: "string", Description: "Frozen bounded evidence digest JSON."},
@@ -122,12 +123,38 @@ func (t *SkillLifecycleManageTool) createCandidate(args map[string]interface{}, 
 	if !json.Valid([]byte(evidenceJSON)) {
 		return "", fmt.Errorf("candidate_create requires valid evidence_json")
 	}
-	versionHash, err := t.store.CreateSkillCandidateVersion(ContextFromArgs(args), tenantID, skillKey, name,
-		taskStringArg(args, "parent_version_hash"), content, evidenceSetHash, observationIDs, json.RawMessage(evidenceJSON))
+	resources := map[string]string{}
+	if raw := strings.TrimSpace(taskStringArg(args, "resources_json")); raw != "" {
+		if err := json.Unmarshal([]byte(raw), &resources); err != nil {
+			return "", fmt.Errorf("candidate_create resources_json must be a JSON object: %w", err)
+		}
+	}
+	for path := range resources {
+		if _, err := safeSupportPath("skill-package", path); err != nil {
+			return "", err
+		}
+	}
+	versionHash, packageHash, manifest := BuildSkillPackageIdentity(content, resources)
+	manifestJSON, _ := json.Marshal(manifest)
+	packageResources := make([]control.SkillPackageResource, 0, len(manifest))
+	for _, entry := range manifest {
+		packageResources = append(packageResources, control.SkillPackageResource{
+			Path: entry.Path, ContentHash: entry.ContentHash, ContentBody: resources[entry.Path], Bytes: entry.Bytes,
+		})
+	}
+	if err := t.store.RecordSkillPackageResources(ContextFromArgs(args), tenantID, skillKey, packageHash, packageResources); err != nil {
+		return "", err
+	}
+	createdVersionHash, err := t.store.CreateSkillPackageCandidateVersion(ContextFromArgs(args), tenantID, skillKey, name,
+		taskStringArg(args, "parent_version_hash"), content, packageHash, manifestJSON,
+		evidenceSetHash, observationIDs, json.RawMessage(evidenceJSON))
 	if err != nil {
 		return "", err
 	}
-	data, _ := json.Marshal(map[string]string{"skill_key": skillKey, "name": name, "version_hash": versionHash, "state": "candidate"})
+	if createdVersionHash != versionHash {
+		return "", fmt.Errorf("candidate version identity mismatch")
+	}
+	data, _ := json.Marshal(map[string]string{"skill_key": skillKey, "name": name, "version_hash": versionHash, "package_hash": packageHash, "state": "candidate"})
 	return string(data), nil
 }
 
@@ -223,7 +250,7 @@ func (t *SkillLifecycleManageTool) promoteCandidate(args map[string]interface{},
 		}
 		expectedCurrentHash = active.VersionHash
 	}
-	path, err := writeLifecycleVersionFile(tenantID, version, expectedCurrentHash, args)
+	path, err := writeLifecycleVersionFile(t.store, tenantID, version, expectedCurrentHash, args)
 	if err != nil {
 		return "", err
 	}
@@ -246,7 +273,7 @@ func (t *SkillLifecycleManageTool) rollback(args map[string]interface{}, tenantI
 	if active == nil {
 		return "", fmt.Errorf("active Skill version is unavailable for rollback")
 	}
-	path, err := writeLifecycleVersionFile(tenantID, version, active.VersionHash, args)
+	path, err := writeLifecycleVersionFile(t.store, tenantID, version, active.VersionHash, args)
 	if err != nil {
 		return "", err
 	}
@@ -257,7 +284,7 @@ func (t *SkillLifecycleManageTool) rollback(args map[string]interface{}, tenantI
 	return fmt.Sprintf("Rolled back Skill %s to %s. Existing activations remain unchanged.", version.SkillName, version.VersionHash), nil
 }
 
-func writeLifecycleVersionFile(tenantID string, version *control.SkillVersion, expectedCurrentHash string, args map[string]interface{}) (string, error) {
+func writeLifecycleVersionFile(store *control.Store, tenantID string, version *control.SkillVersion, expectedCurrentHash string, args map[string]interface{}) (string, error) {
 	if version == nil || strings.TrimSpace(version.ContentBody) == "" {
 		return "", fmt.Errorf("version content is unavailable")
 	}
@@ -272,6 +299,19 @@ func writeLifecycleVersionFile(tenantID string, version *control.SkillVersion, e
 		}
 		if info.Source != SkillSourceAgentCreated || info.Pinned || !info.Writable {
 			return "", fmt.Errorf("automatic lifecycle writes require a writable, unpinned, agent-created Skill")
+		}
+		if version.PackageHash != "" {
+			currentPackage, err := ReadSkillPackageForTenant(tenantID, version.SkillName, args)
+			if err != nil {
+				return "", err
+			}
+			desiredResources, err := versionPackageResources(store, args, version)
+			if err != nil {
+				return "", err
+			}
+			if !sameSkillPackageResources(currentPackage.ResourceManifest, desiredResources) {
+				return "", fmt.Errorf("automatic PATCH cannot change linked resources; create a reviewed package update instead")
+			}
 		}
 		currentHash := sha256.Sum256([]byte(current))
 		currentVersionHash := fmt.Sprintf("%x", currentHash[:])
@@ -311,32 +351,80 @@ func writeLifecycleVersionFile(tenantID string, version *control.SkillVersion, e
 	if _, err := os.Stat(dir); err == nil {
 		return "", fmt.Errorf("skill %q already exists but could not be resolved safely", safeName)
 	}
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(root, 0755); err != nil {
 		return "", err
 	}
-	path := filepath.Join(dir, "SKILL.md")
+	resources, err := versionPackageResources(store, args, version)
+	if err != nil {
+		return "", err
+	}
+	tmpDir, err := os.MkdirTemp(root, ".skill-package-")
+	if err != nil {
+		return "", err
+	}
+	defer os.RemoveAll(tmpDir)
+	path := filepath.Join(tmpDir, "SKILL.md")
 	if err := atomicWriteFile(path, content); err != nil {
 		return "", err
 	}
+	for _, resource := range resources {
+		target, err := safeSupportPath(tmpDir, resource.Path)
+		if err != nil {
+			return "", err
+		}
+		if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
+			return "", err
+		}
+		if err := atomicWriteFile(target, resource.ContentBody); err != nil {
+			return "", err
+		}
+	}
+	if err := os.Rename(tmpDir, dir); err != nil {
+		return "", err
+	}
+	path = filepath.Join(dir, "SKILL.md")
 	_ = MarkSkillCreated(tenantID, safeName, SkillSourceAgentCreated, "skill_lifecycle_manage", args)
 	recordSkillLearningChange(tenantID, safeName, "promote", "", content, SkillSourceAgentCreated, args)
 	return verifyLifecycleVersionFile(tenantID, version, args)
 }
 
 func verifyLifecycleVersionFile(tenantID string, version *control.SkillVersion, args map[string]interface{}) (string, error) {
-	info, content, _, err := ReadSkillPayloadForTenant(tenantID, version.SkillName, "", args)
+	pack, err := ReadSkillPackageForTenant(tenantID, version.SkillName, args)
 	if err != nil {
 		return "", err
 	}
+	info, content := pack.Info, pack.MainSource
 	key, err := resolvedSkillKey(tenantID, info)
 	if err != nil {
 		return "", err
 	}
 	digest := sha256.Sum256([]byte(content))
-	if key != version.SkillKey || fmt.Sprintf("%x", digest[:]) != version.VersionHash {
+	if key != version.SkillKey || fmt.Sprintf("%x", digest[:]) != version.VersionHash || (version.PackageHash != "" && pack.PackageHash != version.PackageHash) {
 		return "", fmt.Errorf("written Skill does not match the candidate identity and content hash")
 	}
 	return skillMainFilePath(info), nil
+}
+
+func versionPackageResources(store *control.Store, args map[string]interface{}, version *control.SkillVersion) ([]control.SkillPackageResource, error) {
+	if version == nil || version.PackageHash == "" {
+		return nil, nil
+	}
+	if store == nil {
+		return nil, fmt.Errorf("control store is unavailable for Skill package resources")
+	}
+	return store.ListSkillPackageResources(ContextFromArgs(args), version.ControlTenantID, version.SkillKey, version.PackageHash)
+}
+
+func sameSkillPackageResources(current []SkillResourceManifestEntry, desired []control.SkillPackageResource) bool {
+	if len(current) != len(desired) {
+		return false
+	}
+	for index := range current {
+		if current[index].Path != desired[index].Path || current[index].ContentHash != desired[index].ContentHash || current[index].Bytes != desired[index].Bytes {
+			return false
+		}
+	}
+	return true
 }
 
 func resolvedSkillKey(tenantID string, info SkillInfo) (string, error) {

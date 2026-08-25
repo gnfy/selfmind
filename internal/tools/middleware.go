@@ -1653,26 +1653,3 @@ func redactApprovalNamedValue(key string, value interface{}) interface{} {
 	}
 	return redactApprovalValue(value)
 }
-
-func SkillMetricsMiddleware(skillStore interface {
-	RecordResult(ctx context.Context, tenantID, skillName string, success bool) error
-}) Middleware {
-	return func(next ToolExecutor) ToolExecutor {
-		return func(args map[string]interface{}) (string, error) {
-			toolName, _ := args["_tool_name"].(string)
-			tenantID, _ := args["_tenant_id"].(string)
-			if !strings.HasPrefix(toolName, "skill:") || skillStore == nil || tenantID == "" {
-				return next(args)
-			}
-
-			skillName := strings.TrimPrefix(toolName, "skill:")
-			result, err := next(args)
-			success := err == nil
-			_ = skillStore.RecordResult(context.Background(), tenantID, skillName, success)
-			if success {
-				_ = MarkSkillUsed(tenantID, skillName, args)
-			}
-			return result, err
-		}
-	}
-}

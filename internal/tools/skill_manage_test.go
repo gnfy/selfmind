@@ -275,3 +275,18 @@ func TestEnsureFrontMatter(t *testing.T) {
 		t.Errorf("Expected name in front matter, got:\n%s", result)
 	}
 }
+
+func TestManagedSkillDescriptionLimitsCharactersAndBytes(t *testing.T) {
+	valid := ensureFrontMatter("body", "valid", strings.Repeat("界", SkillDescriptionMaxChars))
+	if err := ValidateManagedSkillDescription(valid); err != nil {
+		t.Fatalf("valid description rejected: %v", err)
+	}
+	tooManyChars := ensureFrontMatter("body", "long-chars", strings.Repeat("a", SkillDescriptionMaxChars+1))
+	if err := ValidateManagedSkillDescription(tooManyChars); err == nil || !strings.Contains(err.Error(), "characters") {
+		t.Fatalf("character ceiling not enforced: %v", err)
+	}
+	tooManyBytes := ensureFrontMatter("body", "long-bytes", strings.Repeat("界", SkillDescriptionMaxBytes/3+1))
+	if err := ValidateManagedSkillDescription(tooManyBytes); err == nil || !strings.Contains(err.Error(), "UTF-8 bytes") {
+		t.Fatalf("byte ceiling not enforced: %v", err)
+	}
+}

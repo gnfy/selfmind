@@ -3,6 +3,7 @@ package cron
 import (
 	"context"
 	"database/sql"
+	"strings"
 	"testing"
 
 	_ "modernc.org/sqlite"
@@ -207,7 +208,7 @@ func TestEntryIDMappingNotStale(t *testing.T) {
 	}
 }
 
-// TestEnsureJobIdempotent proves built-in jobs (skill-pruner, canary) don't
+// TestEnsureJobIdempotent proves built-in jobs such as the canary don't
 // duplicate across restarts: same name+tenant updates in place.
 func TestEnsureJobIdempotent(t *testing.T) {
 	s := newTestScheduler(t)
@@ -232,47 +233,6 @@ func TestEnsureJobIdempotent(t *testing.T) {
 	}
 }
 
-func TestEnsureJobRepairsHistoricalDuplicates(t *testing.T) {
-	s := newTestScheduler(t)
-	ctx := context.Background()
-	for i := 0; i < 3; i++ {
-		if _, err := s.db.ExecContext(ctx, `INSERT INTO cron_jobs
-			(name, cron_expr, prompt, tenant_id, channel, enabled)
-			VALUES ('skill-pruner-default', '0 3 * * *', 'skill_prune:default', 'default', 'cli', 1)`); err != nil {
-			t.Fatalf("seed duplicate %d: %v", i, err)
-		}
-	}
-	// The repair runs during the next daemon boot. Keeping it separate from
-	// EnsureJob avoids teaching runtime registration to adopt arbitrary
-	// same-named user rows.
-	if err := s.InitSchema(ctx); err != nil {
-		t.Fatalf("repair historical duplicates: %v", err)
-	}
-	keepID, err := s.EnsureJob(ctx, &CronJob{
-		Name: "skill-pruner-default", CronExpr: "30 3 * * *", Prompt: "skill_prune:default",
-		TenantID: "default", Channel: "cli", Enabled: true, SystemKey: "skill-pruner:default",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	jobs, err := s.ListJobs(ctx, "default")
-	if err != nil {
-		t.Fatal(err)
-	}
-	var matches []CronJob
-	for _, job := range jobs {
-		if job.Name == "skill-pruner-default" {
-			matches = append(matches, job)
-		}
-	}
-	if len(matches) != 1 || matches[0].ID != keepID || matches[0].CronExpr != "30 3 * * *" {
-		t.Fatalf("deduplicated jobs=%+v keep=%d", matches, keepID)
-	}
-	if len(s.entries) != 1 {
-		t.Fatalf("scheduled entries=%d, want 1 after repair", len(s.entries))
-	}
-}
-
 func TestAddJobRejectsReservedSystemName(t *testing.T) {
 	s := newTestScheduler(t)
 	_, err := s.AddJob(context.Background(), &CronJob{
@@ -281,6 +241,17 @@ func TestAddJobRejectsReservedSystemName(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("user jobs must not claim the reserved skill-pruner-* namespace")
+	}
+}
+
+func TestEnsureJobRejectsRetiredSkillPrunerSystemKey(t *testing.T) {
+	s := newTestScheduler(t)
+	_, err := s.EnsureJob(context.Background(), &CronJob{
+		Name: "skill-pruner-default", CronExpr: "0 3 * * *", Prompt: "skill_prune:default",
+		TenantID: "default", Channel: "cli", Enabled: true, SystemKey: "skill-pruner:default",
+	})
+	if err == nil || !strings.Contains(err.Error(), "retired") {
+		t.Fatalf("retired Skill metric pruner was accepted: %v", err)
 	}
 }
 
@@ -329,12 +300,10 @@ func TestTaskIDBindingRoundTrip(t *testing.T) {
 	}
 }
 
-// TestSystemJobGovernanceMigration pins the 2026-07 repair: per-data-directory
-// pruner rows collapse to exactly one control-tenant pruner, historic
-// duplicates fold, the partial unique index blocks future system duplicates,
-// and a historical user row with a coincidental reserved-prefix name but a
-// non-system shape survives the migration intact.
-func TestSystemJobGovernanceMigration(t *testing.T) {
+// TestSystemJobGovernanceMigrationRetiresLegacySkillPruners pins the final
+// migration from frozen memory.db counters to durable activation outcomes.
+// Exact built-in rows disappear while unrelated user jobs survive.
+func TestSystemJobGovernanceMigrationRetiresLegacySkillPruners(t *testing.T) {
 	s := newTestScheduler(t)
 	ctx := context.Background()
 	// Simulate the polluted state: per-tenant pruners + duplicated default rows.
@@ -366,8 +335,8 @@ func TestSystemJobGovernanceMigration(t *testing.T) {
 	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM cron_jobs WHERE system_key = 'skill-pruner:default'`).Scan(&systemPruners); err != nil {
 		t.Fatal(err)
 	}
-	if systemPruners != 1 {
-		t.Fatalf("system pruner rows = %d, want exactly 1", systemPruners)
+	if systemPruners != 0 {
+		t.Fatalf("obsolete system pruner rows = %d, want 0", systemPruners)
 	}
 	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM cron_jobs
 		WHERE name = 'skill-pruner-user-report' AND cron_expr = '15 9 * * 1'
@@ -384,34 +353,16 @@ func TestSystemJobGovernanceMigration(t *testing.T) {
 	if userJobs != 2 {
 		t.Fatalf("user duplicate-name jobs = %d, want 2 (governance must not constrain user jobs)", userJobs)
 	}
-	var key string
-	if err := s.db.QueryRowContext(ctx, `SELECT COALESCE(system_key,'') FROM cron_jobs WHERE name = 'skill-pruner-default'`).Scan(&key); err != nil {
-		t.Fatal(err)
-	}
-	if key != "skill-pruner:default" {
-		t.Fatalf("surviving pruner system_key = %q", key)
-	}
-
-	// The partial unique index blocks a second row for the same system key...
+	// The partial unique index still protects current daemon-owned jobs.
 	if _, err := s.db.ExecContext(ctx, `INSERT INTO cron_jobs
 		(name, cron_expr, prompt, tenant_id, channel, enabled, system_key)
-		VALUES ('another-pruner', '0 3 * * *', 'x', 'default', 'cli', 1, 'skill-pruner:default')`); err == nil {
+		VALUES ('system-one', '0 3 * * *', 'x', 'default', 'cli', 1, 'system:test')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.ExecContext(ctx, `INSERT INTO cron_jobs
+		(name, cron_expr, prompt, tenant_id, channel, enabled, system_key)
+		VALUES ('system-two', '0 4 * * *', 'y', 'default', 'cli', 1, 'system:test')`); err == nil {
 		t.Fatal("duplicate system_key insert must fail")
-	}
-	// ...while EnsureJob converges on the surviving row by system key even
-	// across a rename.
-	id, err := s.EnsureJob(ctx, &CronJob{
-		Name: "skill-pruner-default", CronExpr: "0 3 * * *", Prompt: "skill_prune:default",
-		TenantID: "default", Channel: "cli", Enabled: true, SystemKey: "skill-pruner:default",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM cron_jobs WHERE system_key = 'skill-pruner:default'`).Scan(&systemPruners); err != nil {
-		t.Fatal(err)
-	}
-	if systemPruners != 1 || id == 0 {
-		t.Fatalf("EnsureJob by system key must reuse the surviving row: rows=%d id=%d", systemPruners, id)
 	}
 	// Migration is idempotent on a clean table.
 	if err := s.InitSchema(ctx); err != nil {

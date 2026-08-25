@@ -198,6 +198,35 @@ func TestRewriteCassetteMapsWorkUnitIDsFromCurrentRequest(t *testing.T) {
 	}
 }
 
+func TestRewriteCassetteMapsSkillCandidateRefsFromCurrentRequest(t *testing.T) {
+	recordedA := "skref_1111111111111111"
+	recordedB := "skref_2222222222222222"
+	recordMessages := []Message{{Role: "tool", Name: "update_plan", Content: `{"work_units":[{"skill_catalog":"- ` + recordedA + ` alpha\n- ` + recordedB + ` beta"}]}`}}
+	original := cassette{Method: "stream", Events: []recordedEvent{{ToolCalls: []ToolCall{{
+		ID: "call-1", Function: "skill_select", Args: `{"candidate_ref":"` + recordedB + `"}`,
+	}}}}}
+	stored := original
+	for i, ref := range vcrSkillCandidateRefs(recordMessages) {
+		stored = rewriteCassette(stored, ref, vcrSkillCandidateRefPlaceholder(i))
+	}
+	data, _ := json.Marshal(stored)
+	if strings.Contains(string(data), recordedA) || strings.Contains(string(data), recordedB) || !strings.Contains(string(data), vcrSkillCandidateRefPlaceholder(1)) {
+		t.Fatalf("stored Skill candidate identity is not portable: %s", data)
+	}
+
+	replayA := "skref_aaaaaaaaaaaaaaaa"
+	replayB := "skref_bbbbbbbbbbbbbbbb"
+	replayMessages := []Message{{Role: "tool", Name: "update_plan", Content: `{"work_units":[{"skill_catalog":"- ` + replayA + ` alpha\n- ` + replayB + ` beta"}]}`}}
+	replayed := stored
+	for i, ref := range vcrSkillCandidateRefs(replayMessages) {
+		replayed = rewriteCassette(replayed, vcrSkillCandidateRefPlaceholder(i), ref)
+	}
+	got := replayed.Events[0].ToolCalls[0].Args
+	if !strings.Contains(got, replayB) || strings.Contains(got, recordedB) {
+		t.Fatalf("replayed Skill candidate identity = %s", got)
+	}
+}
+
 func TestRecordModePreservesImmediateFailuresInSequence(t *testing.T) {
 	dir := t.TempDir()
 	inner := &failOnceVCRProvider{}

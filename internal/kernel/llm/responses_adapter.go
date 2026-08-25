@@ -133,6 +133,9 @@ func (a *ResponsesAdapter) Chat(ctx context.Context, req ChatRequest) (*ChatResp
 	if a.RequireStream {
 		return a.chatViaStream(ctx, req)
 	}
+	if err := EnsureProviderToolCatalog(ctx, a, req.Tools); err != nil {
+		return nil, err
+	}
 	wire := a.requestFromChat(req, false)
 	body, err := marshalWithExtraBody(wire, a.ExtraBody)
 	if err != nil {
@@ -205,6 +208,9 @@ func (a *ResponsesAdapter) chatViaStream(ctx context.Context, req ChatRequest) (
 }
 
 func (a *ResponsesAdapter) StreamChat(ctx context.Context, req ChatRequest) (<-chan StreamEvent, error) {
+	if err := EnsureProviderToolCatalog(ctx, a, req.Tools); err != nil {
+		return nil, err
+	}
 	wire := a.requestFromChat(req, true)
 	body, err := marshalWithExtraBody(wire, a.ExtraBody)
 	if err != nil {
@@ -560,6 +566,12 @@ func (a *ResponsesAdapter) setHeaders(req *http.Request, key string) {
 }
 
 func (a *ResponsesAdapter) responsesTools(tools []ToolDefinition) []map[string]interface{} {
+	out, aliases := buildResponsesTools(tools)
+	a.setToolNameAliases(aliases)
+	return out
+}
+
+func buildResponsesTools(tools []ToolDefinition) ([]map[string]interface{}, map[string]string) {
 	out := make([]map[string]interface{}, 0, len(tools))
 	aliases := make(map[string]string)
 	for _, tool := range tools {
@@ -575,8 +587,22 @@ func (a *ResponsesAdapter) responsesTools(tools []ToolDefinition) []map[string]i
 			"strict":      false,
 		})
 	}
-	a.setToolNameAliases(aliases)
-	return out
+	return out, aliases
+}
+
+func (a *ResponsesAdapter) PreviewToolCatalog(_ context.Context, tools []ToolDefinition) ToolCatalogPreview {
+	wire, _ := buildResponsesTools(tools)
+	wireDefinitions := make([]ToolDefinition, 0, len(wire))
+	for index, item := range wire {
+		name, _ := item["name"].(string)
+		description, _ := item["description"].(string)
+		parameters, _ := item["parameters"].(map[string]interface{})
+		if index < len(tools) {
+			description = tools[index].Description
+		}
+		wireDefinitions = append(wireDefinitions, ToolDefinition{Name: name, Description: description, Parameters: parameters})
+	}
+	return buildToolCatalogPreview("openai_responses", tools, wireDefinitions, wire)
 }
 
 func (a *ResponsesAdapter) setToolNameAliases(aliases map[string]string) {

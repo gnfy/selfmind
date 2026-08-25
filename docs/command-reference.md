@@ -9,7 +9,7 @@ binary.
 ## Global and lifecycle commands
 
 ```text
-selfmind [--config PATH] [--resume SESSION_ID]
+selfmind [--config PATH] [--resume SESSION_ID] [--add-dir DIR]...
 selfmind --version
 selfmind setup [--non-interactive] [--skip-model] [--skip-gateway] [--check-model]
 selfmind update [check] [--channel latest|next] [--force] [--no-restart]
@@ -22,7 +22,8 @@ selfmind feedback [--out FILE|--send] [--repo OWNER/REPO] [--include-crash] <mes
   Cancelling setup exits cleanly. Non-interactive launches never prompt and
   instead print the exact `setup` or `model set` command to run. `--config`
   selects another configuration file and `--resume` restores a prior TUI
-  session.
+  session. Repeatable `--add-dir` grants that CLI invocation access to another
+  local directory without modifying the registered workspace.
 - `setup` creates or upgrades configuration, guides the person through one
   primary model and one optional auxiliary model, then starts the local
   gateway. The auxiliary model covers approval triage, memory, recall,
@@ -55,7 +56,7 @@ selfmind feedback [--out FILE|--send] [--repo OWNER/REPO] [--include-crash] <mes
 All of these commands talk to the same gateway used by the TUI and IM channels.
 
 ```text
-selfmind send [--async] [--mode MODE] <message>
+selfmind send [--async] [--mode MODE] [--add-dir DIR]... <message>
 selfmind status
 selfmind watchers [active|attention|recent|all [page]|<n|id>|cancel <n|id>]
 selfmind tasks [done|archived|all|<keyword>]
@@ -76,6 +77,15 @@ selfmind new [title]
   acceptance. `MODE` is one of `on-request`, `read-only`, `auto-edit`,
   `full-auto`, or `smart`. When no preference has been saved, the default is
   `smart`; without a configured triage model it safely falls back to asking.
+- `--add-dir` is repeatable and available only to an authenticated local CLI
+  connected to the loopback gateway. Relative paths resolve in the launching
+  shell. Each path is canonicalized, bounded to eight entries, frozen into the
+  queued run, and included in project-instruction discovery and filesystem
+  conflict scheduling. It expands the run's filesystem scope but never grants
+  workspace trust, bypasses approval/sandbox policy, or changes the durable
+  workspace. A running turn cannot change its additional-root set; start a new
+  run to use a different set. Use `--` before message text that literally
+  contains `--add-dir`.
 - `tasks` lists open work by default; a status or keyword narrows the result.
 - `watchers` lists durable external checks without invoking a model. The
   default view prioritizes active and attention-needed checks; a stable short
@@ -261,7 +271,7 @@ selfmind weixin status
 
 ```text
 selfmind eval [list|run|report|repair|scorecard|capture|clean]
-selfmind maintenance [replay|migrate-memory|migrate-skills|cleanup-person-partitions|migrate-task-references|memory-audit|memory-dedup|task-audit|restore-control] ...
+selfmind maintenance [replay|migrate-memory|migrate-skills|cleanup-person-partitions|prune-skill-candidate-refs|migrate-task-references|memory-audit|memory-dedup|task-audit|restore-control] ...
 ```
 
 ```text
@@ -277,6 +287,7 @@ selfmind maintenance replay [--limit N] [--prompt-revision]
 selfmind maintenance migrate-memory [--apply] [--data-dir DIR]
 selfmind maintenance migrate-skills [--apply] [--root DIR] [--governance-grace 30d]
 selfmind maintenance cleanup-person-partitions [--apply] [--root DIR --data-dir DIR]
+selfmind maintenance prune-skill-candidate-refs [--apply] [--data-dir DIR]
 selfmind maintenance migrate-task-references [--apply] [--limit N] [--data-dir DIR]
 selfmind maintenance memory-audit [--archive-confirmed] [--partition P] [--data-dir DIR]
 selfmind maintenance memory-dedup [--apply] [--partition P] [--data-dir DIR]
@@ -301,6 +312,12 @@ does not delete them. The default root and control database come from the same
 loaded configuration. If `--root` selects a different asset tree, `--data-dir`
 must explicitly identify the authoritative `control.db`; the command never
 opens or creates a guessed empty database.
+
+`maintenance prune-skill-candidate-refs` previews only refs whose owning work
+unit is terminal or missing. `--apply` deletes exactly that transactional
+selection, excludes live work units, then reruns the preview as verification.
+Use the owner rows in the dry-run output together with
+`selfmind doctor --verbose`; never delete candidate refs directly from SQLite.
 
 - Eval commands are intended for reproducible agent-quality testing. `--live`
   permits provider calls; `--record-content` may persist sensitive content and

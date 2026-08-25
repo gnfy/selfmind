@@ -183,7 +183,8 @@ func (s *Store) runSkillActivations(ctx context.Context, tenantID, runID string)
 	rows, err := s.db.QueryContext(ctx, `SELECT id, identity_tenant_id, control_tenant_id, person_id,
 		workspace_id, run_id, sequence, work_unit_id, execution_lane, primary_task_id,
 		related_task_id, skill_key, skill_name, version_hash, activation_source, attachment_mode,
-		state, fallback_reason, selected_at, finished_at FROM run_skill_activations
+		state, fallback_reason, selected_at, finished_at, package_hash, delivery_contract_version,
+		delivery_mode, delivered_main, delivered_main_hash, delivered_main_bytes, resource_manifest_json FROM run_skill_activations
 		WHERE identity_tenant_id=? AND run_id=? ORDER BY sequence`, normalizeTenant(tenantID), runID)
 	if err != nil {
 		return nil, err

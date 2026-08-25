@@ -3,7 +3,9 @@ package tools
 import (
 	"fmt"
 	"strings"
+	"time"
 
+	"selfmind/internal/control"
 	"selfmind/internal/kernel"
 )
 
@@ -33,10 +35,15 @@ type SkillInfo struct {
 // SkillManageTool allows the agent to actively maintain reusable skills.
 type SkillManageTool struct {
 	BaseTool
+	store *control.Store
 }
 
 // NewSkillManageTool creates the skill_manage tool.
-func NewSkillManageTool() *SkillManageTool {
+func NewSkillManageTool(stores ...*control.Store) *SkillManageTool {
+	var store *control.Store
+	if len(stores) > 0 {
+		store = stores[0]
+	}
 	return &SkillManageTool{
 		BaseTool: BaseTool{
 			name:        "skill_manage",
@@ -46,8 +53,8 @@ func NewSkillManageTool() *SkillManageTool {
 				Properties: map[string]PropertyDef{
 					"action": {
 						Type:        "string",
-						Description: "Action: list, search, read, history, undo, create, update, edit, patch, delete, archive, restore, write_file, remove_file, pin, unpin, enable, disable, curator_status, curator_run, or reload.",
-						Enum:        []string{"list", "search", "read", "history", "undo", "create", "update", "edit", "patch", "delete", "archive", "restore", "write_file", "remove_file", "pin", "unpin", "enable", "disable", "curator_status", "curator_run", "reload"},
+						Description: "Action: list, search, read, stats, history, undo, create, update, edit, patch, delete, archive, restore, write_file, remove_file, pin, unpin, enable, disable, curator_status, curator_run, or reload.",
+						Enum:        []string{"list", "search", "read", "stats", "history", "undo", "create", "update", "edit", "patch", "delete", "archive", "restore", "write_file", "remove_file", "pin", "unpin", "enable", "disable", "curator_status", "curator_run", "reload"},
 					},
 					"name": {
 						Type:        "string",
@@ -101,6 +108,7 @@ func NewSkillManageTool() *SkillManageTool {
 				Required: []string{"action"},
 			},
 		},
+		store: store,
 	}
 }
 
@@ -146,6 +154,15 @@ func (t *SkillManageTool) Execute(args map[string]interface{}) (string, error) {
 			return "", fmt.Errorf("name is required for read")
 		}
 		return ReadSkillForTenant(tenantID, name, args)
+	case "stats":
+		if t.store == nil {
+			return "", fmt.Errorf("durable Skill stats are unavailable without the control store")
+		}
+		stats, err := t.store.SkillUsageStats(ContextFromArgs(args), tenantID)
+		if err != nil {
+			return "", err
+		}
+		return formatDurableSkillStats(stats, time.Now()), nil
 	case "history":
 		if name == "" {
 			return "", fmt.Errorf("name is required for history")
@@ -265,6 +282,26 @@ func (t *SkillManageTool) Execute(args map[string]interface{}) (string, error) {
 	default:
 		return "", fmt.Errorf("unknown action: %s", action)
 	}
+}
+
+func formatDurableSkillStats(stats []control.SkillUsageStat, now time.Time) string {
+	if len(stats) == 0 {
+		return "No durable Skill activations recorded. Legacy skill_metrics rows are historical and excluded."
+	}
+	var lines []string
+	lines = append(lines, "## Skill usage (durable activations)")
+	lines = append(lines, fmt.Sprintf("%-30s %7s %9s %9s %8s %7s %9s", "Skill", "Calls", "Complete", "Fallback", "Failed", "Parked", "Cancelled"))
+	lines = append(lines, "---")
+	for _, stat := range stats {
+		ago := now.Sub(stat.LastUsedAt).Truncate(time.Minute)
+		if ago < 0 {
+			ago = 0
+		}
+		lines = append(lines, fmt.Sprintf("%-30s %7d %9d %9d %8d %7d %9d  last used %s ago",
+			stat.SkillName, stat.Calls, stat.Completed, stat.Fallbacks, stat.Failures, stat.Parked, stat.Cancelled, ago))
+	}
+	lines = append(lines, "", "Legacy skill_metrics counters are historical and do not drive ranking, curation, degradation, or retention.")
+	return strings.Join(lines, "\n")
 }
 
 func skillMutationAction(action string) bool {

@@ -13,18 +13,16 @@ import (
 type planProjectionSinkContextKey struct{}
 
 type PlanWorkUnitIdentity struct {
-	ID              string               `json:"id"`
-	Sequence        int                  `json:"sequence"`
-	Goal            string               `json:"goal"`
-	PlanStatus      string               `json:"plan_status"`
-	RelatedTaskID   string               `json:"related_task_id,omitempty"`
-	BoundSkillName  string               `json:"bound_skill_name,omitempty"`
-	SkillCandidates []PlanSkillCandidate `json:"skill_candidates,omitempty"`
-}
-
-type PlanSkillCandidate struct {
-	Name        string `json:"name"`
-	Description string `json:"description,omitempty"`
+	ID             string `json:"id"`
+	Sequence       int    `json:"sequence"`
+	Goal           string `json:"goal"`
+	PlanStatus     string `json:"plan_status"`
+	RelatedTaskID  string `json:"related_task_id,omitempty"`
+	BoundSkillName string `json:"bound_skill_name,omitempty"`
+	// SkillCatalog is already rendered by the kernel's canonical byte/token
+	// allocator. Keeping it as one bounded string prevents update_plan from
+	// duplicating every full description in structured JSON.
+	SkillCatalog string `json:"skill_catalog,omitempty"`
 }
 
 type PlanProjectionSink func(context.Context, []PlanStep) ([]PlanWorkUnitIdentity, error)

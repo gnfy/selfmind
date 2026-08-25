@@ -15,7 +15,7 @@ import (
 // CurrentControlSchemaVersion is the durable control.db compatibility
 // boundary. Adding or changing durable schema requires an ordered migration and
 // a version bump; silently extending InitSchema is not a release-safe upgrade.
-const CurrentControlSchemaVersion = 2
+const CurrentControlSchemaVersion = 4
 
 // schemaBaselineVersion is the version recorded for the historical additive
 // schema created by InitSchema. Every durable change after it is an entry in
@@ -59,6 +59,102 @@ CREATE INDEX IF NOT EXISTS idx_memory_governance_due
 			return err
 		},
 	},
+	{
+		Version: 3,
+		Name:    "run-execution-roots",
+		Apply: func(ctx context.Context, db *sql.DB) error {
+			if err := ensureMigrationColumn(ctx, db, "task_queue", "execution_roots_json", "TEXT NOT NULL DEFAULT '[]'"); err != nil {
+				return err
+			}
+			return ensureMigrationColumn(ctx, db, "task_runs", "execution_roots_json", "TEXT NOT NULL DEFAULT '[]'")
+		},
+	},
+	{
+		Version: 4,
+		Name:    "skill-presentation-contract",
+		Apply: func(ctx context.Context, db *sql.DB) error {
+			columns := []struct {
+				table, name, definition string
+			}{
+				{"skill_versions", "package_hash", "TEXT NOT NULL DEFAULT ''"},
+				{"skill_versions", "resource_manifest_json", "TEXT NOT NULL DEFAULT '[]'"},
+				{"run_skill_activations", "package_hash", "TEXT NOT NULL DEFAULT ''"},
+				{"run_skill_activations", "delivery_contract_version", "INTEGER NOT NULL DEFAULT 0"},
+				{"run_skill_activations", "delivery_mode", "TEXT NOT NULL DEFAULT ''"},
+				{"run_skill_activations", "delivered_main", "TEXT NOT NULL DEFAULT ''"},
+				{"run_skill_activations", "delivered_main_hash", "TEXT NOT NULL DEFAULT ''"},
+				{"run_skill_activations", "delivered_main_bytes", "INTEGER NOT NULL DEFAULT 0"},
+				{"run_skill_activations", "resource_manifest_json", "TEXT NOT NULL DEFAULT '[]'"},
+			}
+			for _, column := range columns {
+				if err := ensureMigrationColumn(ctx, db, column.table, column.name, column.definition); err != nil {
+					return err
+				}
+			}
+			_, err := db.ExecContext(ctx, `
+CREATE TABLE IF NOT EXISTS skill_candidate_refs (
+	candidate_ref TEXT PRIMARY KEY,
+	identity_tenant_id TEXT NOT NULL,
+	control_tenant_id TEXT NOT NULL,
+	person_id TEXT NOT NULL,
+	run_id TEXT NOT NULL,
+	work_unit_id TEXT NOT NULL,
+	skill_key TEXT NOT NULL,
+	skill_name TEXT NOT NULL,
+	version_hash TEXT NOT NULL,
+	package_hash TEXT NOT NULL,
+	description_hash TEXT NOT NULL,
+	state TEXT NOT NULL DEFAULT 'issued',
+	drift_count INTEGER NOT NULL DEFAULT 0,
+	issued_at INTEGER NOT NULL,
+	last_used_at INTEGER NOT NULL DEFAULT 0,
+	UNIQUE(identity_tenant_id, run_id, work_unit_id, skill_key, package_hash, description_hash)
+);
+CREATE INDEX IF NOT EXISTS idx_skill_candidate_refs_work_unit
+	ON skill_candidate_refs(identity_tenant_id, run_id, work_unit_id, issued_at);
+CREATE TABLE IF NOT EXISTS skill_package_resources (
+	control_tenant_id TEXT NOT NULL,
+	skill_key TEXT NOT NULL,
+	package_hash TEXT NOT NULL,
+	resource_path TEXT NOT NULL,
+	content_hash TEXT NOT NULL,
+	content_body TEXT NOT NULL,
+	content_bytes INTEGER NOT NULL,
+	created_at INTEGER NOT NULL,
+	PRIMARY KEY(control_tenant_id, skill_key, package_hash, resource_path)
+);`)
+			return err
+		},
+	},
+}
+
+func ensureMigrationColumn(ctx context.Context, db *sql.DB, table, name, definition string) error {
+	rows, err := db.QueryContext(ctx, `PRAGMA table_info(`+table+`)`)
+	if err != nil {
+		return err
+	}
+	found := false
+	for rows.Next() {
+		var cid int
+		var columnName, columnType string
+		var notNull, primaryKey int
+		var defaultValue interface{}
+		if err := rows.Scan(&cid, &columnName, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		if columnName == name {
+			found = true
+		}
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	if found {
+		return nil
+	}
+	_, err = db.ExecContext(ctx, `ALTER TABLE `+table+` ADD COLUMN `+name+` `+definition)
+	return err
 }
 
 // StoreSchemaStatus is safe diagnostic metadata. It contains no user content.

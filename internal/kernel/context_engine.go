@@ -435,9 +435,65 @@ func (c *ContextEngine) RecoverMessages(messages []llm.Message) []llm.Message {
 	}
 	out = c.truncateDeterministically(out, target)
 	for len(out) > 0 && out[0].Role == "system" && c.countMessages(out) > target && len([]rune(out[0].Content)) > 512 {
-		out[0].Content = truncateContextMiddle(out[0].Content, len([]rune(out[0].Content))*3/4)
+		before := out[0].Content
+		out[0].Content = truncateContextMiddlePreservingActiveSkill(before, len([]rune(before))*3/4)
+		if out[0].Content == before {
+			break
+		}
 	}
 	return out
+}
+
+func truncateContextMiddlePreservingActiveSkill(value string, maxRunes int) string {
+	start := strings.Index(value, activeSkillPromptBegin)
+	if start < 0 {
+		return truncateContextMiddle(value, maxRunes)
+	}
+	relEnd := strings.Index(value[start:], activeSkillPromptEnd)
+	if relEnd < 0 {
+		return truncateContextMiddle(value, maxRunes)
+	}
+	end := start + relEnd + len(activeSkillPromptEnd)
+	block := value[start:end]
+	blockRunes := []rune(block)
+	if len(blockRunes) >= maxRunes {
+		// The fixed activation receipt wins over recovery-size estimation. The
+		// provider may still reject an impossible window, but SelfMind must not
+		// silently mutate the Skill bytes it claims were delivered.
+		return value
+	}
+	prefix := []rune(value[:start])
+	suffix := []rune(value[end:])
+	marker := []rune("\n\n...[system context reduced for provider window; active Skill preserved]...\n\n")
+	available := maxRunes - len(blockRunes)
+	if len(prefix)+len(suffix) <= available {
+		return value
+	}
+	if available <= len(marker) {
+		return value
+	}
+	available -= len(marker)
+	prefixKeep := available * 3 / 4
+	suffixKeep := available - prefixKeep
+	if prefixKeep > len(prefix) {
+		suffixKeep += prefixKeep - len(prefix)
+		prefixKeep = len(prefix)
+	}
+	if suffixKeep > len(suffix) {
+		prefixKeep += suffixKeep - len(suffix)
+		suffixKeep = len(suffix)
+		if prefixKeep > len(prefix) {
+			prefixKeep = len(prefix)
+		}
+	}
+	var out strings.Builder
+	out.WriteString(string(prefix[:prefixKeep]))
+	out.WriteString(string(marker))
+	out.WriteString(block)
+	if suffixKeep > 0 {
+		out.WriteString(string(suffix[len(suffix)-suffixKeep:]))
+	}
+	return out.String()
 }
 
 func truncateContextMiddle(value string, maxRunes int) string {

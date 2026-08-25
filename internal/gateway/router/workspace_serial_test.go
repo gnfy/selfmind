@@ -41,3 +41,19 @@ func TestWorkspaceSerialKeyWriteVsRead(t *testing.T) {
 		})
 	}
 }
+
+func TestWorkspaceSerialPathsIncludesEveryBoundContextRoot(t *testing.T) {
+	ctx := kernel.WithWorkspaceContext(context.Background(), kernel.WorkspaceContext{
+		ID: "wsA", Root: "/tmp/wsA", Roots: []string{"/tmp/wsA", "/tmp/shared"},
+	})
+	ctx = kernel.WithTaskStrategy(ctx, kernel.TaskStrategy{ToolMode: kernel.ToolModeLocalWrite})
+	got := workspaceSerialPaths(ctx)
+	if len(got) != 2 || got[0] != "/tmp/wsA" || got[1] != "/tmp/shared" {
+		t.Fatalf("serial paths = %#v", got)
+	}
+
+	readCtx := kernel.WithTaskStrategy(ctx, kernel.TaskStrategy{ToolMode: kernel.ToolModeLocalRead})
+	if got := workspaceSerialPaths(readCtx); len(got) != 0 {
+		t.Fatalf("read-only serial paths = %#v", got)
+	}
+}

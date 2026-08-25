@@ -73,18 +73,19 @@ type Task struct {
 }
 
 type Run struct {
-	ID           string     `json:"id"`
-	TaskID       string     `json:"task_id"`
-	TenantID     string     `json:"tenant_id"`
-	PersonID     string     `json:"person_id"`
-	WorkspaceID  string     `json:"workspace_id,omitempty"`
-	Channel      string     `json:"channel"`
-	InputSummary string     `json:"input_summary,omitempty"`
-	WorkKey      string     `json:"work_key,omitempty"`
-	WorkUnitID   string     `json:"work_unit_id,omitempty"`
-	Status       string     `json:"status"`
-	StartedAt    time.Time  `json:"started_at"`
-	FinishedAt   *time.Time `json:"finished_at,omitempty"`
+	ID             string                     `json:"id"`
+	TaskID         string                     `json:"task_id"`
+	TenantID       string                     `json:"tenant_id"`
+	PersonID       string                     `json:"person_id"`
+	WorkspaceID    string                     `json:"workspace_id,omitempty"`
+	ExecutionRoots []executionenv.RootBinding `json:"execution_roots,omitempty"`
+	Channel        string                     `json:"channel"`
+	InputSummary   string                     `json:"input_summary,omitempty"`
+	WorkKey        string                     `json:"work_key,omitempty"`
+	WorkUnitID     string                     `json:"work_unit_id,omitempty"`
+	Status         string                     `json:"status"`
+	StartedAt      time.Time                  `json:"started_at"`
+	FinishedAt     *time.Time                 `json:"finished_at,omitempty"`
 }
 
 type Event struct {
@@ -902,6 +903,8 @@ CREATE TABLE IF NOT EXISTS skill_versions (
 	state TEXT NOT NULL,
 	content_ref TEXT NOT NULL DEFAULT '',
 	content_body TEXT NOT NULL DEFAULT '',
+	package_hash TEXT NOT NULL DEFAULT '',
+	resource_manifest_json TEXT NOT NULL DEFAULT '[]',
 	source_observation_ids_json TEXT NOT NULL DEFAULT '[]',
 	evidence_set_hash TEXT NOT NULL DEFAULT '',
 	evidence_json TEXT NOT NULL DEFAULT '{}',
@@ -954,8 +957,15 @@ CREATE TABLE IF NOT EXISTS run_skill_activations (
 	skill_key TEXT NOT NULL,
 	skill_name TEXT NOT NULL,
 	version_hash TEXT NOT NULL,
+	package_hash TEXT NOT NULL DEFAULT '',
 	activation_source TEXT NOT NULL,
 	attachment_mode TEXT NOT NULL DEFAULT '',
+	delivery_contract_version INTEGER NOT NULL DEFAULT 0,
+	delivery_mode TEXT NOT NULL DEFAULT '',
+	delivered_main TEXT NOT NULL DEFAULT '',
+	delivered_main_hash TEXT NOT NULL DEFAULT '',
+	delivered_main_bytes INTEGER NOT NULL DEFAULT 0,
+	resource_manifest_json TEXT NOT NULL DEFAULT '[]',
 	state TEXT NOT NULL,
 	fallback_reason TEXT NOT NULL DEFAULT '',
 	selected_at INTEGER NOT NULL,
@@ -967,6 +977,37 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_run_skill_activations_live_lane
 	WHERE state IN ('selected', 'active');
 CREATE INDEX IF NOT EXISTS idx_run_skill_activations_skill
 	ON run_skill_activations(control_tenant_id, skill_key, version_hash, selected_at);
+CREATE TABLE IF NOT EXISTS skill_candidate_refs (
+	candidate_ref TEXT PRIMARY KEY,
+	identity_tenant_id TEXT NOT NULL,
+	control_tenant_id TEXT NOT NULL,
+	person_id TEXT NOT NULL,
+	run_id TEXT NOT NULL,
+	work_unit_id TEXT NOT NULL,
+	skill_key TEXT NOT NULL,
+	skill_name TEXT NOT NULL,
+	version_hash TEXT NOT NULL,
+	package_hash TEXT NOT NULL,
+	description_hash TEXT NOT NULL,
+	state TEXT NOT NULL DEFAULT 'issued',
+	drift_count INTEGER NOT NULL DEFAULT 0,
+	issued_at INTEGER NOT NULL,
+	last_used_at INTEGER NOT NULL DEFAULT 0,
+	UNIQUE(identity_tenant_id, run_id, work_unit_id, skill_key, package_hash, description_hash)
+);
+CREATE INDEX IF NOT EXISTS idx_skill_candidate_refs_work_unit
+	ON skill_candidate_refs(identity_tenant_id, run_id, work_unit_id, issued_at);
+CREATE TABLE IF NOT EXISTS skill_package_resources (
+	control_tenant_id TEXT NOT NULL,
+	skill_key TEXT NOT NULL,
+	package_hash TEXT NOT NULL,
+	resource_path TEXT NOT NULL,
+	content_hash TEXT NOT NULL,
+	content_body TEXT NOT NULL,
+	content_bytes INTEGER NOT NULL,
+	created_at INTEGER NOT NULL,
+	PRIMARY KEY(control_tenant_id, skill_key, package_hash, resource_path)
+);
 CREATE TABLE IF NOT EXISTS task_skill_bindings (
 	identity_tenant_id TEXT NOT NULL,
 	person_id TEXT NOT NULL,
@@ -2177,6 +2218,7 @@ func (s *Store) StartRun(ctx context.Context, task *Task, channel, inputSummary 
 type StartRunOptions struct {
 	WorkKey               string
 	PreserveTaskLifecycle bool
+	ExecutionRoots        []executionenv.RootBinding
 }
 
 // StartRunWithWorkKey atomically creates a run with its deterministic work
@@ -2199,18 +2241,23 @@ func (s *Store) startRun(ctx context.Context, task *Task, channel, inputSummary 
 		return nil, fmt.Errorf("task is required")
 	}
 	run := &Run{
-		ID:           "run_" + uuid.NewString(),
-		TaskID:       task.ID,
-		TenantID:     task.TenantID,
-		PersonID:     task.PersonID,
-		WorkspaceID:  task.WorkspaceID,
-		Channel:      normalizeName(channel, "cli"),
-		InputSummary: inputSummary,
-		WorkKey:      strings.ToUpper(strings.TrimSpace(options.WorkKey)),
-		Status:       "running",
-		StartedAt:    time.Now(),
+		ID:             "run_" + uuid.NewString(),
+		TaskID:         task.ID,
+		TenantID:       task.TenantID,
+		PersonID:       task.PersonID,
+		WorkspaceID:    task.WorkspaceID,
+		ExecutionRoots: executionenv.CloneRootBindings(options.ExecutionRoots),
+		Channel:        normalizeName(channel, "cli"),
+		InputSummary:   inputSummary,
+		WorkKey:        strings.ToUpper(strings.TrimSpace(options.WorkKey)),
+		Status:         "running",
+		StartedAt:      time.Now(),
 	}
 	run.WorkUnitID = "wu_" + uuid.NewString()
+	rootsJSON, err := json.Marshal(run.ExecutionRoots)
+	if err != nil {
+		return nil, fmt.Errorf("encode run execution roots: %w", err)
+	}
 	// Insert the run and flip the task to running atomically: a partial write
 	// would leave tasks and task_runs disagreeing about the active run.
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -2219,9 +2266,9 @@ func (s *Store) startRun(ctx context.Context, task *Task, channel, inputSummary 
 	}
 	defer func() { _ = tx.Rollback() }()
 	if _, err = tx.ExecContext(ctx,
-		`INSERT INTO task_runs (id, task_id, tenant_id, person_id, workspace_id, channel, input_summary, work_key, status, started_at, heartbeat_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		run.ID, run.TaskID, run.TenantID, run.PersonID, run.WorkspaceID, run.Channel, run.InputSummary, run.WorkKey, run.Status, run.StartedAt.Unix(), run.StartedAt.Unix()); err != nil {
+		`INSERT INTO task_runs (id, task_id, tenant_id, person_id, workspace_id, execution_roots_json, channel, input_summary, work_key, status, started_at, heartbeat_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		run.ID, run.TaskID, run.TenantID, run.PersonID, run.WorkspaceID, string(rootsJSON), run.Channel, run.InputSummary, run.WorkKey, run.Status, run.StartedAt.Unix(), run.StartedAt.Unix()); err != nil {
 		return nil, err
 	}
 	if _, err = tx.ExecContext(ctx,
@@ -2279,20 +2326,24 @@ func (s *Store) GetRun(ctx context.Context, tenantID, runID string) (*Run, error
 	var r Run
 	var started int64
 	var finished sql.NullInt64
+	var rootsJSON string
 	err := s.db.QueryRowContext(ctx,
-		`SELECT id, task_id, tenant_id, person_id, COALESCE(workspace_id, ''), channel,
+		`SELECT id, task_id, tenant_id, person_id, COALESCE(workspace_id, ''), COALESCE(execution_roots_json, '[]'), channel,
 		        COALESCE(input_summary, ''), COALESCE(work_key, ''),
 		        COALESCE((SELECT id FROM run_work_units WHERE run_id = task_runs.id ORDER BY sequence LIMIT 1), ''),
 		        status, started_at, finished_at
 		 FROM task_runs WHERE tenant_id = ? AND id = ?`,
 		normalizeTenant(tenantID), runID).
-		Scan(&r.ID, &r.TaskID, &r.TenantID, &r.PersonID, &r.WorkspaceID, &r.Channel,
+		Scan(&r.ID, &r.TaskID, &r.TenantID, &r.PersonID, &r.WorkspaceID, &rootsJSON, &r.Channel,
 			&r.InputSummary, &r.WorkKey, &r.WorkUnitID, &r.Status, &started, &finished)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
+	}
+	if err := json.Unmarshal([]byte(rootsJSON), &r.ExecutionRoots); err != nil {
+		return nil, fmt.Errorf("decode run execution roots: %w", err)
 	}
 	r.StartedAt = time.Unix(started, 0)
 	if finished.Valid {

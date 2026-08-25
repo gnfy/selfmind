@@ -27,6 +27,25 @@ func TestHandleSkillsArchiveUsesManagedDispatch(t *testing.T) {
 	}
 }
 
+func TestHandleSkillsStatsUsesDurableDaemonDispatch(t *testing.T) {
+	var gotTool string
+	var gotArgs map[string]interface{}
+	m := &uiModel{
+		tenantID: "default", clientMode: true,
+		toolDispatchFn: func(tool string, args map[string]interface{}) (string, error) {
+			gotTool, gotArgs = tool, args
+			return "durable activation stats", nil
+		},
+	}
+	msg, ok := m.handleSkills([]string{"stats"})().(MsgAgentDone)
+	if !ok || msg.Response != "durable activation stats" {
+		t.Fatalf("stats response=%#v", msg)
+	}
+	if gotTool != "skill_manage" || gotArgs["action"] != "stats" {
+		t.Fatalf("stats dispatch=tool %q args %+v", gotTool, gotArgs)
+	}
+}
+
 func TestSkillSlashResolutionRunsOnDaemonWithClientScope(t *testing.T) {
 	var gotTool string
 	var gotArgs map[string]interface{}
@@ -38,7 +57,7 @@ func TestSkillSlashResolutionRunsOnDaemonWithClientScope(t *testing.T) {
 		},
 	}
 	msg, ok := m.handleSkillSlash("/release-flow", "ship it")().(MsgSkillInvocationResolved)
-	if !ok || !msg.Found || msg.Prompt != "loaded prompt" {
+	if !ok || !msg.Found || msg.Prompt != "/skill release-flow ship it" {
 		t.Fatalf("resolution message = %#v", msg)
 	}
 	if gotTool != "skill_invocation_resolve" || gotArgs["command"] != "/release-flow" || gotArgs["instruction"] != "ship it" {

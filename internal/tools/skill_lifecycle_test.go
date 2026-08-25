@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -39,8 +40,10 @@ func TestSkillSelectAndFallbackUseDurableActivation(t *testing.T) {
 		ControlTenantID: identity.TenantID, PersonID: identity.PersonID, RunID: run.ID,
 		WorkUnitID: run.WorkUnitID, ExecutionLane: "main", AttachmentMode: "continuation",
 	}
+	deploySafeRef := issueSkillCandidateRefForTest(t, store, identity, run, "deploy-safe")
+	deployOtherRef := issueSkillCandidateRefForTest(t, store, identity, run, "deploy-other")
 	args := map[string]interface{}{
-		"name": "deploy-safe", "reason": "matches deployment work",
+		"candidate_ref": deploySafeRef, "reason": "matches deployment work",
 		"_context": toolCtx, "_invocation_scope": scope,
 	}
 	result, err := NewSkillSelectTool(store).Execute(args)
@@ -56,7 +59,7 @@ func TestSkillSelectAndFallbackUseDurableActivation(t *testing.T) {
 		t.Fatalf("activation event=%+v ok=%v", event, ok)
 	}
 
-	args["name"] = "deploy-other"
+	args["candidate_ref"] = deployOtherRef
 	if _, err := NewSkillSelectTool(store).Execute(args); err == nil || !strings.Contains(err.Error(), "already has active skill") {
 		t.Fatalf("second active skill was not rejected: %v", err)
 	}
@@ -67,9 +70,55 @@ func TestSkillSelectAndFallbackUseDurableActivation(t *testing.T) {
 	if _, err := NewSkillFallbackTool(store).Execute(fallbackArgs); err != nil {
 		t.Fatal(err)
 	}
-	args["name"] = "deploy-other"
+	args["candidate_ref"] = deployOtherRef
 	if _, err := NewSkillSelectTool(store).Execute(args); err == nil || !strings.Contains(err.Error(), "ordinary planning") {
 		t.Fatalf("replacement after fallback was not rejected: %v", err)
+	}
+}
+
+func TestSkillCandidateRootPrecedenceDriftReturnsRefreshableStale(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	ctx := context.Background()
+	store, err := control.OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	identity, _ := store.ResolveOrCreateAccount(ctx, "default", "cli", "candidate-root-drift", "Candidate Root Drift")
+	task, _ := store.CreateTask(ctx, control.TaskCreate{TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "root drift", Channel: "cli"})
+	run, _ := store.StartRun(ctx, task, "cli", "root drift")
+	workspace := t.TempDir()
+	cleanup := SetExecutionScope(identity.PersonID, ExecutionScope{
+		TenantID: identity.TenantID, PersonID: identity.PersonID, RunID: run.ID,
+		WorkspaceRoot: workspace, AllowedRoots: []string{workspace},
+	})
+	defer cleanup()
+	if _, err := NewSkillManageTool().Execute(directSkillMutationArgs(map[string]interface{}{
+		"action": "create", "name": "precedence-flow", "description": "stable routing description",
+		"content": "## Procedure\nUse the control Skill.", "source": SkillSourceAgentCreated,
+	})); err != nil {
+		t.Fatal(err)
+	}
+	ref := issueSkillCandidateRefForTest(t, store, identity, run, "precedence-flow")
+	workspaceSkill := filepath.Join(workspace, ".selfmind", "skills", "precedence-flow")
+	if err := os.MkdirAll(workspaceSkill, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workspaceSkill, "SKILL.md"), []byte("---\nname: precedence-flow\ndescription: stable routing description\n---\n\n## Procedure\nUse the workspace Skill.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	scope := kernel.ToolInvocationScope{ControlTenantID: identity.TenantID, PersonID: identity.PersonID,
+		RunID: run.ID, WorkUnitID: run.WorkUnitID, ExecutionLane: "main"}
+	selectionCtx := WithExecutionScopeKey(ctx, ExecutionScopeKeyForRun(run.ID))
+	_, err = NewSkillSelectTool(store).Execute(map[string]interface{}{
+		"candidate_ref": ref, "reason": "old root", "_context": selectionCtx, "_invocation_scope": scope,
+	})
+	stable, ok := err.(interface {
+		ToolErrorCode() string
+		ToolRecoveryHint() string
+	})
+	if !ok || stable.ToolErrorCode() != "candidate_stale" || !strings.Contains(stable.ToolRecoveryHint(), "skills_list") {
+		t.Fatalf("root precedence drift error=%T %v", err, err)
 	}
 }
 
@@ -94,8 +143,14 @@ func TestSkillSelectReturnsCurrentCandidatesForStaleName(t *testing.T) {
 		ControlTenantID: identity.TenantID, PersonID: identity.PersonID, RunID: run.ID,
 		WorkUnitID: run.WorkUnitID, ExecutionLane: "main", AttachmentMode: "continuation",
 	}
+	listed, err := NewSkillsListTool(store).Execute(map[string]interface{}{
+		"query": "deploy safely with verification", "_context": ctx, "_invocation_scope": scope,
+	})
+	if err != nil || !strings.Contains(listed, `"candidate_ref":`) || !strings.Contains(listed, "deploy-current") {
+		t.Fatalf("refreshed candidate list=%s err=%v", listed, err)
+	}
 	_, err = NewSkillSelectTool(store).Execute(map[string]interface{}{
-		"name": "deploy-removed", "reason": "deploy safely with verification",
+		"candidate_ref": "skref_missing", "reason": "deploy safely with verification",
 		"_context": ctx, "_invocation_scope": scope,
 	})
 	if err == nil {
@@ -106,9 +161,143 @@ func TestSkillSelectReturnsCurrentCandidatesForStaleName(t *testing.T) {
 		ModelSafeMessage() string
 		ToolRecoveryHint() string
 	})
-	if !ok || stable.ToolErrorCode() != "candidate_stale" || !strings.Contains(stable.ModelSafeMessage(), "deploy-current") || !strings.Contains(stable.ToolRecoveryHint(), "listed current candidate") {
+	if !ok || stable.ToolErrorCode() != "candidate_unknown" || !strings.Contains(stable.ToolRecoveryHint(), "skills_list") {
 		t.Fatalf("stale Skill recovery = %T %v", err, err)
 	}
+}
+
+func TestActiveSkillViewReadsPinnedPackageResourceAfterFilesystemDrift(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	ctx := context.Background()
+	store, err := control.OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	identity, _ := store.ResolveOrCreateAccount(ctx, "default", "cli", "package-view", "Package View")
+	task, _ := store.CreateTask(ctx, control.TaskCreate{TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "package", Channel: "cli"})
+	run, _ := store.StartRun(ctx, task, "cli", "use package")
+	if _, err := NewSkillManageTool().Execute(directSkillMutationArgs(map[string]interface{}{
+		"action": "create", "name": "package-view", "description": "package view",
+		"content": "## Procedure\nRead the linked detail.", "source": SkillSourceAgentCreated,
+	})); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := writeSkillSupportFile(identity.TenantID, "package-view", "references/detail.md", "pinned-before"); err != nil {
+		t.Fatal(err)
+	}
+	scope := kernel.ToolInvocationScope{ControlTenantID: identity.TenantID, PersonID: identity.PersonID,
+		RunID: run.ID, WorkUnitID: run.WorkUnitID, ExecutionLane: "main"}
+	ref := issueSkillCandidateRefForTest(t, store, identity, run, "package-view")
+	if _, err := NewSkillSelectTool(store).Execute(map[string]interface{}{
+		"candidate_ref": ref, "reason": "matches", "_context": ctx, "_invocation_scope": scope,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := writeSkillSupportFile(identity.TenantID, "package-view", "references/detail.md", "filesystem-after"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := writeSkillSupportFile(identity.TenantID, "package-view", "references/new-after.md", "new-after"); err != nil {
+		t.Fatal(err)
+	}
+	retried, err := NewSkillSelectTool(store).Execute(map[string]interface{}{
+		"candidate_ref": ref, "reason": "idempotent retry", "_context": ctx, "_invocation_scope": scope,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var retriedResult struct {
+		LinkedFiles []string `json:"linked_files"`
+	}
+	if err := json.Unmarshal([]byte(retried), &retriedResult); err != nil {
+		t.Fatal(err)
+	}
+	if len(retriedResult.LinkedFiles) != 1 || retriedResult.LinkedFiles[0] != "references/detail.md" {
+		t.Fatalf("idempotent selection mixed the drifted manifest into the active package: %s", retried)
+	}
+	if !strings.Contains(retried, "already has an immutable Skill activation") {
+		t.Fatalf("idempotent selection did not explain pinned-package reuse: %s", retried)
+	}
+	viewed, err := NewSkillViewTool(store).Execute(map[string]interface{}{
+		"name": "package-view", "file_path": "references/detail.md", "_context": ctx, "_invocation_scope": scope,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(viewed, "pinned-before") || strings.Contains(viewed, "filesystem-after") {
+		t.Fatalf("active package resource drifted: %s", viewed)
+	}
+}
+
+func TestSkillCandidateAllowsOnePackageDriftThenFailsClosed(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	ctx := context.Background()
+	store, err := control.OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	identity, _ := store.ResolveOrCreateAccount(ctx, "default", "cli", "candidate-drift", "Candidate Drift")
+	task, _ := store.CreateTask(ctx, control.TaskCreate{TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "drift", Channel: "cli"})
+	run, _ := store.StartRun(ctx, task, "cli", "drift")
+	if _, err := NewSkillManageTool().Execute(directSkillMutationArgs(map[string]interface{}{
+		"action": "create", "name": "drift-flow", "description": "stable routing description",
+		"content": "## Procedure\nversion one", "source": SkillSourceAgentCreated,
+	})); err != nil {
+		t.Fatal(err)
+	}
+	ref := issueSkillCandidateRefForTest(t, store, identity, run, "drift-flow")
+	info, source, _, err := ReadSkillPayloadForTenant(identity.TenantID, "drift-flow", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := editSkill(identity.TenantID, info.Name, strings.Replace(source, "version one", "version two", 1), ""); err != nil {
+		t.Fatal(err)
+	}
+	scope := kernel.ToolInvocationScope{ControlTenantID: identity.TenantID, PersonID: identity.PersonID,
+		RunID: run.ID, WorkUnitID: run.WorkUnitID, ExecutionLane: "main"}
+	selected, err := NewSkillSelectTool(store).Execute(map[string]interface{}{
+		"candidate_ref": ref, "reason": "description still matches", "_context": ctx, "_invocation_scope": scope,
+	})
+	if err != nil || !strings.Contains(selected, `"candidate_notice"`) || !strings.Contains(selected, `"selected_version_hash"`) {
+		t.Fatalf("first drift selection=%s err=%v", selected, err)
+	}
+	_, source, _, err = ReadSkillPayloadForTenant(identity.TenantID, "drift-flow", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := editSkill(identity.TenantID, info.Name, strings.Replace(source, "version two", "version three", 1), ""); err != nil {
+		t.Fatal(err)
+	}
+	_, err = NewSkillSelectTool(store).Execute(map[string]interface{}{
+		"candidate_ref": ref, "reason": "old ref", "_context": ctx, "_invocation_scope": scope,
+	})
+	stable, ok := err.(interface{ ToolErrorCode() string })
+	if !ok || stable.ToolErrorCode() != "candidate_stale" {
+		t.Fatalf("second drift error=%T %v", err, err)
+	}
+}
+
+func issueSkillCandidateRefForTest(t *testing.T, store *control.Store, identity *control.IdentityContext, run *control.Run, name string) string {
+	t.Helper()
+	pack, err := ReadSkillPackageForTenant(identity.TenantID, name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, err := resolvedSkillKey(identity.TenantID, pack.Info)
+	if err != nil {
+		t.Fatal(err)
+	}
+	issued, err := store.IssueSkillCandidateRef(context.Background(), control.IssueSkillCandidateRefInput{
+		IdentityTenantID: identity.TenantID, ControlTenantID: identity.TenantID,
+		PersonID: identity.PersonID, RunID: run.ID, WorkUnitID: run.WorkUnitID,
+		SkillKey: key, SkillName: pack.Info.Name, VersionHash: pack.VersionHash,
+		PackageHash: pack.PackageHash, DescriptionHash: pack.DescriptionHash,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return issued.CandidateRef
 }
 
 func TestSkillLifecycleManagementPromotesRollsBackAndBindsExplicitly(t *testing.T) {

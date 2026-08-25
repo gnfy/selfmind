@@ -48,11 +48,12 @@ type ToolSchemaIssue struct {
 
 // ToolSchemaReport is the public, redacted catalogue entry used by /diag.
 type ToolSchemaReport struct {
-	Name   string            `json:"name"`
-	Origin ToolSchemaOrigin  `json:"origin"`
-	Status ToolSchemaStatus  `json:"status"`
-	Hash   string            `json:"hash"`
-	Issues []ToolSchemaIssue `json:"issues,omitempty"`
+	Name     string            `json:"name"`
+	Origin   ToolSchemaOrigin  `json:"origin"`
+	Status   ToolSchemaStatus  `json:"status"`
+	Exposure ToolExposure      `json:"exposure"`
+	Hash     string            `json:"hash"`
+	Issues   []ToolSchemaIssue `json:"issues,omitempty"`
 }
 
 type compiledToolSchema struct {

@@ -419,6 +419,13 @@ func skillsListJSONForTenant(store *control.Store, tenantID, query string, inclu
 			if keyErr != nil {
 				return "", keyErr
 			}
+			if blocked, blockErr := store.SkillVersionActivationBlocked(ContextFromArgs(invocation[0]), tenantID, key, pack.VersionHash); blockErr != nil {
+				return "", blockErr
+			} else if blocked {
+				entry.State = "quarantined"
+				entries = append(entries, entry)
+				continue
+			}
 			issued, issueErr := store.IssueSkillCandidateRef(ContextFromArgs(invocation[0]), control.IssueSkillCandidateRefInput{
 				IdentityTenantID: scope.ControlTenantID, ControlTenantID: tenantID, PersonID: scope.PersonID,
 				RunID: scope.RunID, WorkUnitID: currentUnit.ID, SkillKey: key, SkillName: pack.Info.Name,

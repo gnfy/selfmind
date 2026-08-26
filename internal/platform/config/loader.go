@@ -1098,7 +1098,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("tasks.maintenance_soft_probe_max", "1h")
 	v.SetDefault("tasks.maintenance_llm_timeout", "2m")
 	v.SetDefault("evolution.enabled", true)
-	v.SetDefault("evolution.mode", "auto-readonly")
+	v.SetDefault("evolution.mode", "observe")
 	v.SetDefault("evolution.nudge_interval", 10)
 	v.SetDefault("evolution.shadow_after_observations", 3)
 	v.SetDefault("evolution.promote_after_observations", 5)

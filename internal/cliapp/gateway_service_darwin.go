@@ -55,7 +55,7 @@ func gatewayServiceInstall(configPath string) (string, error) {
 	//
 	// The plist is world-readable (0644), so a credential-shaped name or a value
 	// that embeds credentials is never written.
-	for _, entry := range launchdPassthroughEnvironment(os.Environ()) {
+	for _, entry := range servicePassthroughEnvironment(os.Environ()) {
 		if name, value, ok := strings.Cut(entry, "="); ok {
 			if _, exists := environment[name]; !exists {
 				environment[name] = value
@@ -222,6 +222,17 @@ func gatewayServiceSupported() bool {
 	return true
 }
 
+func gatewayServicePreflight() error { return nil }
+
+func gatewayServiceHealthy() bool {
+	loaded, err := gatewayServiceLoaded()
+	return err == nil && loaded
+}
+
+func gatewayServiceKind() string {
+	return "launchd"
+}
+
 func gatewayServiceLoaded() (bool, error) {
 	output, err := exec.Command("launchctl", "print", launchdDomain()+"/"+gatewayLaunchdLabel).CombinedOutput()
 	if err == nil {
@@ -280,15 +291,6 @@ func launchdPath() string {
 	return strings.Join(paths, ":")
 }
 
-func commandConfigPath(command []string) string {
-	for i := 0; i+1 < len(command); i++ {
-		if command[i] == "--config" {
-			return command[i+1]
-		}
-	}
-	return ""
-}
-
 func runLaunchctl(ctx context.Context, args ...string) error {
 	output, err := exec.CommandContext(ctx, "launchctl", args...).CombinedOutput()
 	if err != nil {
@@ -342,46 +344,4 @@ func rotateLaunchdLog(path string, maxBytes int64) error {
 		return err
 	}
 	return os.Rename(path, rotated)
-}
-
-// launchdPassthroughEnvironmentKeyMarkers select variables that describe WHERE
-// configuration lives or how the network is reached — never what a credential
-// is. Matching is by generic naming convention, so no per-vendor list is needed.
-var launchdPassthroughEnvironmentKeyMarkers = []string{"PROXY", "CONFIG", "_HOME", "KUBECONFIG"}
-
-// launchdPassthroughEnvironmentExactKeys are the locale and shell variables that
-// change tool behaviour and output encoding.
-var launchdPassthroughEnvironmentExactKeys = map[string]bool{
-	"SHELL": true, "LANG": true, "LC_ALL": true, "LC_CTYPE": true, "NO_PROXY": true, "no_proxy": true,
-}
-
-// launchdPassthroughEnvironment picks the entries that are safe to persist in a
-// world-readable plist: locations, locale, and proxy settings, minus anything
-// whose NAME looks like a credential or whose VALUE embeds one (a proxy URL of
-// the form scheme://user:pass@host).
-func launchdPassthroughEnvironment(parent []string) []string {
-	out := make([]string, 0, 8)
-	for _, entry := range parent {
-		name, value, ok := strings.Cut(entry, "=")
-		name = strings.TrimSpace(name)
-		value = strings.TrimSpace(value)
-		if !ok || name == "" || value == "" {
-			continue
-		}
-		upper := strings.ToUpper(name)
-		if isCredentialShapedEnvName(upper) || valueEmbedsCredentials(value) {
-			continue
-		}
-		if launchdPassthroughEnvironmentExactKeys[name] || launchdPassthroughEnvironmentExactKeys[upper] {
-			out = append(out, name+"="+value)
-			continue
-		}
-		for _, marker := range launchdPassthroughEnvironmentKeyMarkers {
-			if strings.Contains(upper, marker) {
-				out = append(out, name+"="+value)
-				break
-			}
-		}
-	}
-	return out
 }

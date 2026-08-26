@@ -79,6 +79,19 @@ func TestSandboxDiagnosticReportsEffectiveNetworkPolicy(t *testing.T) {
 	}
 }
 
+func TestSandboxDiagnosticTreatsMacHostExecutionAsExpected(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.ExecSandbox.Enabled = true
+	line, warning := sandboxDiagnosticWithPlatform(cfg, false, "darwin")
+	if warning != "" || line != "host execution (approval-controlled; Linux isolation unavailable)" {
+		t.Fatalf("macOS diagnostic = %q, %q", line, warning)
+	}
+	line, warning = sandboxDiagnosticWithPlatform(cfg, false, "linux")
+	if warning == "" || !strings.Contains(line, "degraded") {
+		t.Fatalf("Linux missing-sandbox diagnostic = %q, %q", line, warning)
+	}
+}
+
 func TestConfigUpgradeBacksUpAndPreservesPlaceholders(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "real-secret")
 	path := filepath.Join(t.TempDir(), "config.yaml")
@@ -297,7 +310,7 @@ agent:
 		"status: upgrade available",
 		"providers.openai_api_key -> providers.openai.api_key",
 		"model: not ready",
-		"model_check: selfmind model check",
+		"model_manager: selfmind model",
 	} {
 		if !strings.Contains(section, want) {
 			t.Fatalf("diagnostic section missing %q:\n%s", want, section)

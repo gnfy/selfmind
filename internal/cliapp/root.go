@@ -15,6 +15,7 @@ import (
 	"selfmind/internal/buildinfo"
 	"selfmind/internal/crashreport"
 	tui "selfmind/internal/gateway/cli"
+	"selfmind/internal/modelchange"
 	"selfmind/internal/platform/config"
 	"selfmind/internal/platform/log"
 )
@@ -53,6 +54,19 @@ type App struct {
 	// interactive is true only when both stdin and stdout are attached to a
 	// terminal. First-run setup must never prompt scripts, cron, or pipes.
 	interactive bool
+	// onboarding is the reconciled first-use state for this invocation. It is
+	// populated before the TUI starts and supplies the initial workspace/model
+	// summary plus the one-shot first-success receipt callback.
+	onboarding *onboardingState
+	// onboardingProbe is a focused test seam. Production leaves it nil and uses
+	// the real provider transport probe for both primary and auxiliary.
+	onboardingProbe func(*config.Config, string) error
+	// modelChangeValidate is a focused test seam. Production uses the same
+	// role-aware live probes as daemon startup and onboarding.
+	modelChangeValidate modelchange.Validator
+	// modelManagerOnly makes `selfmind model` open the same transient manager
+	// as `/model`, then exit instead of entering a chat session.
+	modelManagerOnly bool
 }
 
 var Version = buildinfo.Version
@@ -221,7 +235,7 @@ var documentedCLIUsages = []string{
 	"selfmind new [title]",
 	"selfmind config [doctor|upgrade]",
 	"selfmind env [show|refresh]",
-	"selfmind model [current|check [--live] [--role <name>]|list|set <provider> <model>]",
+	"selfmind model",
 	"selfmind prompt [list|show|edit|diff|validate|test|reset|apply] ...",
 	"selfmind auth [login|status|logout] ...",
 	"selfmind doctor [--verbose] [--out FILE] [--probe-models]",
@@ -252,7 +266,7 @@ func (a *App) runTUI() int {
 		return 1
 	}
 
-	cfg, code := a.ensureInitialModelSetup(cfg, a.runInteractiveModelPicker)
+	cfg, code := a.ensureOnboarding(cfg, onboardingOptions{})
 	if code != 0 {
 		return code
 	}

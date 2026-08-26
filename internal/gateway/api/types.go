@@ -6,6 +6,7 @@ import (
 	"selfmind/internal/control"
 	"selfmind/internal/executionenv"
 	"selfmind/internal/kernel/llm"
+	"selfmind/internal/modelchange"
 )
 
 const LocalControlTokenHeader = "X-SelfMind-Local-Control-Token"
@@ -69,6 +70,53 @@ type ProviderToolCatalogProbeResponse struct {
 	LatencyMS int64                  `json:"latency_ms"`
 	Catalog   llm.ToolCatalogPreview `json:"catalog"`
 	Error     string                 `json:"error,omitempty"`
+}
+
+type ModelProbeRequest struct {
+	Role string `json:"role"`
+}
+
+type ModelProbeResponse struct {
+	OK        bool   `json:"ok"`
+	Role      string `json:"role"`
+	Provider  string `json:"provider,omitempty"`
+	Model     string `json:"model,omitempty"`
+	LatencyMS int64  `json:"latency_ms"`
+	Error     string `json:"error,omitempty"`
+}
+
+type ModelChangeRequest struct {
+	Action             string                `json:"action"`
+	Route              string                `json:"route,omitempty"`
+	Provider           string                `json:"provider,omitempty"`
+	Model              string                `json:"model,omitempty"`
+	Reasoning          *string               `json:"reasoning,omitempty"`
+	ServiceTier        *string               `json:"service_tier,omitempty"`
+	ChangeID           string                `json:"change_id,omitempty"`
+	ExpectedGeneration int64                 `json:"expected_generation,omitempty"`
+	ReplacePending     bool                  `json:"replace_pending,omitempty"`
+	Patches            []ModelSelectionPatch `json:"patches,omitempty"`
+	ValidateRoutes     []string              `json:"validate_routes,omitempty"`
+}
+
+type ModelSelectionPatch struct {
+	Route       string  `json:"route"`
+	Provider    string  `json:"provider,omitempty"`
+	Model       string  `json:"model,omitempty"`
+	Reasoning   *string `json:"reasoning,omitempty"`
+	ServiceTier *string `json:"service_tier,omitempty"`
+	Reset       bool    `json:"reset,omitempty"`
+	APIKey      string  `json:"api_key,omitempty"`
+}
+
+type ModelChangeResponse struct {
+	Status           *modelchange.Status       `json:"status,omitempty"`
+	Change           *modelchange.Change       `json:"change,omitempty"`
+	Notices          []string                  `json:"notices,omitempty"`
+	NeedsConfirm     bool                      `json:"needs_confirm,omitempty"`
+	NeedsRestart     bool                      `json:"needs_restart,omitempty"`
+	Probes           []modelchange.ProbeResult `json:"probes,omitempty"`
+	RestartScheduled bool                      `json:"restart_scheduled,omitempty"`
 }
 
 type MCPServerFailure struct {

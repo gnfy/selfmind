@@ -393,9 +393,9 @@ func (g *Gateway) ModelStatusReply() string {
 
 func modelStatusReplyText(label string) string {
 	if strings.TrimSpace(label) == "" {
-		return "I am SelfMind. No usable AI model configuration was resolved. Run `selfmind model check` to inspect the problem."
+		return "I am SelfMind. No usable AI model configuration was resolved. Run `selfmind model`; selections are checked automatically."
 	}
-	return fmt.Sprintf("I am SelfMind. The current model is %s. Change it with `selfmind model set <provider> <model> [--reasoning <level|auto>]`, then run `selfmind gateway restart --drain`.", label)
+	return fmt.Sprintf("I am SelfMind. The current Main model is %s. Change Main, Background, or optional role overrides with `selfmind model`; SelfMind validates the draft and schedules one safe restart.", label)
 }
 
 func (g *Gateway) modelDisplayLabel() string {

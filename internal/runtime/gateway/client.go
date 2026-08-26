@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -49,6 +50,52 @@ type StopOptions struct {
 	DataDir string
 	Force   bool
 	Timeout time.Duration
+	Reason  string
+	// WaitForSafeBoundary leaves the wait bounded only by ctx. Model changes
+	// use it so an approval wait is never silently converted into a forced
+	// interruption after an arbitrary infrastructure timeout.
+	WaitForSafeBoundary bool
+	// Abort is checked while waiting for the old owner to stop. A model-change
+	// helper uses it to leave cleanly when its still-cancellable transaction is
+	// cancelled or superseded instead of lingering and starting the wrong route.
+	Abort func() bool
+}
+
+var ErrShutdownAborted = errors.New("gateway shutdown was aborted before the safe boundary")
+
+// SpawnRestartHelper launches the ordinary CLI restart path in a detached
+// helper. This preserves launchd/systemd ownership when a daemon-originated
+// model transaction needs to restart the process that is currently serving it.
+func SpawnRestartHelper(configPath, dataDir, changeID string) error {
+	exe, err := resolveDaemonExecutable("")
+	if err != nil {
+		return err
+	}
+	paths := ResolvePaths(dataDir)
+	if err := os.MkdirAll(paths.RuntimeDir, 0755); err != nil {
+		return err
+	}
+	logFile, err := os.OpenFile(paths.LogPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
+	if err != nil {
+		return err
+	}
+	defer logFile.Close()
+	args := []string{"gateway", "restart", "--drain"}
+	if strings.TrimSpace(configPath) != "" {
+		args = append([]string{"--config", configPath}, args...)
+	}
+	cmd := exec.Command(exe, args...)
+	cmd.Env = append(os.Environ(),
+		"SELF_GATEWAY_RESTART_REASON=model_change:"+strings.TrimSpace(changeID),
+		"SELF_GATEWAY_RESTART_DELAY_MS=1500",
+	)
+	cmd.Stdout = logFile
+	cmd.Stderr = logFile
+	configureDetachedCommand(&cmd.SysProcAttr)
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	return cmd.Process.Release()
 }
 
 func StartDetached(opts StartOptions) (StartResult, error) {
@@ -303,7 +350,7 @@ func RequestShutdown(ctx context.Context, opts StopOptions) error {
 			initialPID = rec.PID
 		}
 	}
-	payload, _ := json.Marshal(map[string]interface{}{"force": opts.Force})
+	payload, _ := json.Marshal(map[string]interface{}{"force": opts.Force, "reason": strings.TrimSpace(opts.Reason)})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, ResolveURL(opts.URL)+"/v1/gateway/shutdown", bytes.NewReader(payload))
 	if err != nil {
 		return err
@@ -323,24 +370,37 @@ func RequestShutdown(ctx context.Context, opts StopOptions) error {
 		}
 		return err
 	}
-	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
 		data, _ := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
 		if opts.Force {
 			return forceStopFromDataDir(opts.DataDir)
 		}
 		return fmt.Errorf("%s: %s", resp.Status, string(data))
 	}
+	// Release the shutdown request's keep-alive connection before waiting for
+	// the daemon PID to disappear. Holding the response body open makes
+	// http.Server.Shutdown wait for its full ten-second deadline, needlessly
+	// extending the local blackout on every model change.
+	_, _ = io.Copy(io.Discard, resp.Body)
+	_ = resp.Body.Close()
 
 	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
+	for opts.WaitForSafeBoundary || time.Now().Before(deadline) {
+		if opts.Abort != nil && opts.Abort() {
+			return ErrShutdownAborted
+		}
 		if opts.DataDir != "" {
 			manager := NewManager(opts.DataDir, "")
 			if rec, ok := manager.RunningRecord(); !ok || rec.PID <= 0 || (initialPID > 0 && rec.PID != initialPID) {
 				return nil
 			}
 		}
-		time.Sleep(250 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(250 * time.Millisecond):
+		}
 	}
 	if opts.Force {
 		return forceStopFromDataDir(opts.DataDir)

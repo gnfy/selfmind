@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -139,7 +140,7 @@ func MarkSkillCreated(tenantID, name, source, createdBy string, invocation ...ma
 }
 
 func MarkSkillPatched(tenantID, name string, invocation ...map[string]interface{}) error {
-	dir, err := getSkillsDir(tenantID, invocation...)
+	dir, err := existingSkillUsageDir(tenantID, name, invocation...)
 	if err != nil {
 		return err
 	}
@@ -153,7 +154,7 @@ func MarkSkillPatched(tenantID, name string, invocation ...map[string]interface{
 }
 
 func MarkSkillUsed(tenantID, name string, invocation ...map[string]interface{}) error {
-	dir, err := getSkillsDir(tenantID, invocation...)
+	dir, err := existingSkillUsageDir(tenantID, name, invocation...)
 	if err != nil {
 		return err
 	}
@@ -169,7 +170,7 @@ func MarkSkillUsed(tenantID, name string, invocation ...map[string]interface{}) 
 }
 
 func MarkSkillViewed(tenantID, name string, invocation ...map[string]interface{}) error {
-	dir, err := getSkillsDir(tenantID, invocation...)
+	dir, err := existingSkillUsageDir(tenantID, name, invocation...)
 	if err != nil {
 		return err
 	}
@@ -185,7 +186,7 @@ func MarkSkillViewed(tenantID, name string, invocation ...map[string]interface{}
 }
 
 func SetSkillPinned(tenantID, name string, pinned bool, invocation ...map[string]interface{}) error {
-	dir, err := getSkillsDir(tenantID, invocation...)
+	dir, err := existingSkillUsageDir(tenantID, name, invocation...)
 	if err != nil {
 		return err
 	}
@@ -196,7 +197,7 @@ func SetSkillPinned(tenantID, name string, pinned bool, invocation ...map[string
 }
 
 func SetSkillState(tenantID, name, state string, invocation ...map[string]interface{}) error {
-	dir, err := getSkillsDir(tenantID, invocation...)
+	dir, err := existingSkillUsageDir(tenantID, name, invocation...)
 	if err != nil {
 		return err
 	}
@@ -204,4 +205,12 @@ func SetSkillState(tenantID, name, state string, invocation ...map[string]interf
 		rec.State = state
 		rec.UpdatedAt = nowRFC3339()
 	})
+}
+
+func existingSkillUsageDir(tenantID, name string, invocation ...map[string]interface{}) (string, error) {
+	info, err := findSkill(tenantID, name, invocation...)
+	if err == nil && strings.TrimSpace(info.Root) != "" {
+		return info.Root, nil
+	}
+	return getSkillsDir(tenantID, invocation...)
 }

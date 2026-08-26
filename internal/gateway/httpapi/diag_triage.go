@@ -56,7 +56,7 @@ func (d *Server) smartTriageDiagLines(ctx context.Context, identity *control.Ide
 	// strict, it is off, so every dangerous op becomes a human ask.
 	if stats.Unavailable > 0 && stats.Approved == 0 {
 		sb.WriteString("- automatic triage is not ruling: every dangerous operation falls through to a human ask\n")
-		sb.WriteString("- check the models.roles.fast_classifier route (`selfmind model check`); legacy configs may fall back to background_review, but a nil or failing judge never auto-approves\n")
+		sb.WriteString("- open `selfmind model` and reselect fast_classifier under Role overrides; validation runs automatically, and a nil or failing judge never auto-approves\n")
 	}
 	if stats.LastError != "" {
 		fmt.Fprintf(&sb, "- last judge error %s: %s\n",

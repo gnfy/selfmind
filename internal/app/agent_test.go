@@ -23,7 +23,7 @@ func TestModelSetupDiagnosticIncludesConfiguredProviderAndReason(t *testing.T) {
 		"provider=kimi-coding model=kimi-for-coding",
 		"Config: /tmp/selfmind-config.yaml",
 		"Reason: no credentials found for provider kimi-coding",
-		"selfmind model check",
+		"selfmind model",
 	} {
 		if !strings.Contains(msg, want) {
 			t.Fatalf("diagnostic missing %q:\n%s", want, msg)

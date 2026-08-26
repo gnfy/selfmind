@@ -20,6 +20,7 @@ type SkillEvidenceDigest struct {
 	ControlTenantID      string                `json:"control_tenant_id"`
 	PersonID             string                `json:"person_id"`
 	WorkspaceID          string                `json:"workspace_id,omitempty"`
+	PublicationScope     string                `json:"publication_scope,omitempty"`
 	TargetSkillKey       string                `json:"target_skill_key,omitempty"`
 	TargetSkillName      string                `json:"target_skill_name,omitempty"`
 	TargetActiveContent  string                `json:"target_active_content,omitempty"`
@@ -52,13 +53,14 @@ func (s *Store) ReadySkillEvidenceDigestsForRun(ctx context.Context, tenantID, r
 	var out []SkillEvidenceDigest
 	seenEvidence := map[string]bool{}
 	for _, anchor := range anchors {
-		cohort, err := s.comparableWorkflowCohortFromSource(ctx, anchor, source, 5, 2)
+		cohort, err := s.comparableWorkflowCohortFromSource(ctx, anchor, source, 5, 5)
 		if err != nil {
 			return nil, err
 		}
 		createReady := cohort.TargetSkillKey == "" && independentWorkflowRuns(cohort.SuccessObservations) >= 3
 		repairReady := cohort.TargetSkillKey != "" && cohort.TargetSkillName != "" && cohort.TargetActiveContent != "" &&
-			cohort.ParentVersionHash == anchor.VersionHash && digestHasVerifiedRepairIncidentForObservation(cohort, anchor.ID)
+			cohort.ParentVersionHash == anchor.VersionHash && digestHasVerifiedRepairIncidentForObservation(cohort, anchor.ID) &&
+			SkillRepairCandidateEvidenceReady(cohort)
 		if !createReady && !repairReady {
 			if reason := repairEvidenceSkipReason(cohort, anchor.ID); reason != "" {
 				log.Info("skill repair evidence skipped", "run", anchor.RunID, "work_unit", anchor.WorkUnitID, "reason", reason)
@@ -79,8 +81,10 @@ func (s *Store) ReadySkillEvidenceDigestsForRun(ctx context.Context, tenantID, r
 		}
 		seenEvidence[cohort.EvidenceSetHash] = true
 		var existing int
-		if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM skill_versions WHERE control_tenant_id=? AND evidence_set_hash=?`,
-			cohort.ControlTenantID, cohort.EvidenceSetHash).Scan(&existing); err != nil {
+		if err := s.db.QueryRowContext(ctx, `SELECT
+			(SELECT COUNT(*) FROM skill_versions WHERE control_tenant_id=? AND evidence_set_hash=?) +
+			(SELECT COUNT(*) FROM skill_candidate_evidence_snapshots WHERE control_tenant_id=? AND evidence_set_hash=?)`,
+			cohort.ControlTenantID, cohort.EvidenceSetHash, cohort.ControlTenantID, cohort.EvidenceSetHash).Scan(&existing); err != nil {
 			return nil, err
 		}
 		if existing > 0 {
@@ -182,6 +186,11 @@ func (s *Store) comparableWorkflowCohortFromSource(ctx context.Context, anchor W
 		ControlTenantID: anchor.ControlTenantID, PersonID: anchor.PersonID, WorkspaceID: anchor.WorkspaceID,
 		TargetSkillKey: anchor.SkillKey, ParentVersionHash: anchor.VersionHash,
 	}
+	if strings.TrimSpace(anchor.SkillKey) == "" && strings.TrimSpace(anchor.WorkspaceID) != "" {
+		digest.PublicationScope = "workspace"
+	} else {
+		digest.PublicationScope = "user"
+	}
 	for _, observation := range source.candidates {
 		if workflowOriginExcludedFromCuration(source.origins[observation.RunID]) || !workflowObservationsComparable(anchor, observation) {
 			continue
@@ -206,6 +215,11 @@ func (s *Store) comparableWorkflowCohortFromSource(ctx context.Context, anchor W
 			digest.TargetSkillName = active.SkillName
 			digest.TargetActiveContent = active.ContentBody
 			digest.ParentVersionHash = active.VersionHash
+			var parentEvidence SkillEvidenceDigest
+			if json.Unmarshal(active.Evidence, &parentEvidence) == nil &&
+				(parentEvidence.PublicationScope == "workspace" || parentEvidence.PublicationScope == "user") {
+				digest.PublicationScope = parentEvidence.PublicationScope
+			}
 		} else {
 			digest.ParentVersionHash = ""
 		}
@@ -314,6 +328,101 @@ func VerifiedSkillRepairIncident(observation WorkflowObservation) bool {
 		strings.TrimSpace(incident.FailedStepID) != "" && categoryEligible
 }
 
+const (
+	SkillRepairClassDeterministicInterface = "deterministic_interface"
+	SkillRepairClassStablePrecondition     = "stable_precondition"
+	SkillRepairClassSemantic               = "semantic"
+	SkillRepairClassNotApplicable          = "not_applicable"
+	SkillRepairClassTransientEnvironment   = "transient_environment"
+)
+
+// ClassifySkillRepairIncident combines the model's narrow repair hypothesis
+// with daemon-observed tool failure evidence. The model cannot select the
+// automatic threshold by itself.
+func ClassifySkillRepairIncident(incident *SkillIncidentEvidence) string {
+	if incident == nil || !SkillRepairObservedFailureEligible(incident.ErrorCategory, incident.ObservedErrorCategory) {
+		return SkillRepairClassTransientEnvironment
+	}
+	repairCategory, _ := NormalizeSkillRepairErrorCategory(incident.ErrorCategory)
+	observedCategory := strings.ToLower(strings.TrimSpace(incident.ObservedErrorCategory))
+	switch repairCategory {
+	case "schema_changed":
+		return SkillRepairClassDeterministicInterface
+	case "invalid_procedure":
+		switch observedCategory {
+		case "tool_schema", "interface_drift", "syntax":
+			return SkillRepairClassDeterministicInterface
+		default:
+			return SkillRepairClassSemantic
+		}
+	case "stale_precondition":
+		if observedCategory == "interface_drift" {
+			return SkillRepairClassDeterministicInterface
+		}
+		if observedCategory == "not_found" {
+			return SkillRepairClassStablePrecondition
+		}
+		return SkillRepairClassSemantic
+	case "verification_mismatch":
+		return SkillRepairClassSemantic
+	case "missing_failure_guard":
+		return SkillRepairClassNotApplicable
+	default:
+		return SkillRepairClassTransientEnvironment
+	}
+}
+
+// SkillRepairCandidateEvidenceReady decides whether an attributable incident
+// may materialize an immutable proposal. Semantic and not-applicable incidents
+// can be reviewed as candidates before they satisfy automatic publication.
+func SkillRepairCandidateEvidenceReady(digest SkillEvidenceDigest) bool {
+	for _, observation := range digest.NegativeObservations {
+		if !VerifiedSkillRepairIncident(observation) {
+			continue
+		}
+		switch ClassifySkillRepairIncident(observation.Incident) {
+		case SkillRepairClassDeterministicInterface, SkillRepairClassStablePrecondition,
+			SkillRepairClassSemantic, SkillRepairClassNotApplicable:
+			return true
+		}
+	}
+	return false
+}
+
+// SkillRepairAutomaticPromotionReady applies class-specific publication
+// thresholds to a frozen comparable cohort.
+func SkillRepairAutomaticPromotionReady(digest SkillEvidenceDigest) bool {
+	semanticRunsBySignature := map[string]map[string]bool{}
+	for _, observation := range digest.NegativeObservations {
+		if !VerifiedSkillRepairIncident(observation) {
+			continue
+		}
+		incident := observation.Incident
+		switch ClassifySkillRepairIncident(incident) {
+		case SkillRepairClassDeterministicInterface:
+			return true
+		case SkillRepairClassStablePrecondition:
+			if digest.PublicationScope == "workspace" && strings.TrimSpace(digest.WorkspaceID) != "" {
+				return true
+			}
+		case SkillRepairClassSemantic:
+			signature := strings.TrimSpace(incident.FailureSignature)
+			runID := strings.TrimSpace(observation.RunID)
+			if signature == "" || runID == "" {
+				continue
+			}
+			if semanticRunsBySignature[signature] == nil {
+				semanticRunsBySignature[signature] = map[string]bool{}
+			}
+			semanticRunsBySignature[signature][runID] = true
+			if len(semanticRunsBySignature[signature]) >= 3 {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func repairEvidenceSkipReason(digest SkillEvidenceDigest, observationID string) string {
 	for _, observation := range digest.NegativeObservations {
 		if observation.ID != observationID || observation.Incident == nil {
@@ -333,6 +442,8 @@ func repairEvidenceSkipReason(digest SkillEvidenceDigest, observationID string) 
 			return "missing_failure_signature"
 		case strings.TrimSpace(incident.FailedStepID) == "":
 			return "missing_failed_step"
+		case !SkillRepairCandidateEvidenceReady(digest):
+			return "repair_class_threshold_not_met:" + ClassifySkillRepairIncident(incident)
 		}
 	}
 	return ""

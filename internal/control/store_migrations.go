@@ -15,7 +15,7 @@ import (
 // CurrentControlSchemaVersion is the durable control.db compatibility
 // boundary. Adding or changing durable schema requires an ordered migration and
 // a version bump; silently extending InitSchema is not a release-safe upgrade.
-const CurrentControlSchemaVersion = 4
+const CurrentControlSchemaVersion = 5
 
 // schemaBaselineVersion is the version recorded for the historical additive
 // schema created by InitSchema. Every durable change after it is an entry in
@@ -123,6 +123,40 @@ CREATE TABLE IF NOT EXISTS skill_package_resources (
 	created_at INTEGER NOT NULL,
 	PRIMARY KEY(control_tenant_id, skill_key, package_hash, resource_path)
 );`)
+			return err
+		},
+	},
+	{
+		Version: 5,
+		Name:    "skill-repair-health",
+		Apply: func(ctx context.Context, db *sql.DB) error {
+			columns := []struct {
+				table, name, definition string
+			}{
+				{"skill_failure_guards", "environment_fingerprint", "TEXT NOT NULL DEFAULT ''"},
+				{"skill_versions", "dependency_fingerprint", "TEXT NOT NULL DEFAULT ''"},
+				{"skill_versions", "verification_environment_fingerprint", "TEXT NOT NULL DEFAULT ''"},
+				{"skill_versions", "last_verified_at", "INTEGER NOT NULL DEFAULT 0"},
+			}
+			for _, column := range columns {
+				if err := ensureMigrationColumn(ctx, db, column.table, column.name, column.definition); err != nil {
+					return err
+				}
+			}
+			_, err := db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_skill_versions_review_due
+				ON skill_versions(control_tenant_id, state, last_verified_at);
+			CREATE TABLE IF NOT EXISTS skill_candidate_evidence_snapshots (
+				control_tenant_id TEXT NOT NULL,
+				skill_key TEXT NOT NULL,
+				version_hash TEXT NOT NULL,
+				evidence_set_hash TEXT NOT NULL,
+				observation_ids_json TEXT NOT NULL DEFAULT '[]',
+				evidence_json TEXT NOT NULL DEFAULT '{}',
+				created_at INTEGER NOT NULL,
+				PRIMARY KEY(control_tenant_id, skill_key, version_hash, evidence_set_hash)
+			);
+			CREATE INDEX IF NOT EXISTS idx_skill_candidate_evidence_set
+				ON skill_candidate_evidence_snapshots(control_tenant_id, evidence_set_hash);`)
 			return err
 		},
 	},

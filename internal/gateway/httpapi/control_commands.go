@@ -43,11 +43,9 @@ func (d *Server) tryHandleControlCommand(ctx context.Context, identity *control.
 		// Canonical gateway help comes from the shared command registry so the
 		// help text, the switch below, and every other endpoint cannot drift.
 		return true, command.HelpText(), nil
-	case lower == "/model":
-		if d != nil && d.Gateway != nil {
-			return true, d.Gateway.ModelStatusReply(), nil
-		}
-		return true, "SelfMind is running, but the model gateway is not configured.", nil
+	case lower == "/model" || strings.HasPrefix(lower, "/model "):
+		reply, err := d.handleModelControl(ctx, req.Channel, trimmed)
+		return true, reply, err
 	case lower == "/id":
 		return true, formatIdentity(identity), nil
 	case lower == "/stop":

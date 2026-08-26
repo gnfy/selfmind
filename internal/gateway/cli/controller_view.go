@@ -204,6 +204,13 @@ func (m *uiModel) statusLine() string {
 		st.Status.Value.Render(dir),
 		st.Status.Label.Render(formatUsageSession(m.runTokens, m.totalTokens, m.tokenLimit)),
 	}
+	if m.modelChangePhase != "" {
+		phase := strings.ReplaceAll(string(m.modelChangePhase), "_", " ")
+		if !m.modelChangePhaseAt.IsZero() {
+			phase = fmt.Sprintf("%s %.0fs", phase, time.Since(m.modelChangePhaseAt).Seconds())
+		}
+		parts = append(parts, st.Status.Warning.Render("model change: "+phase))
+	}
 
 	state := m.runStatus
 	stateStyle := st.Status.Good

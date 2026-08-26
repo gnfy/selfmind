@@ -249,6 +249,17 @@ func TestUpdateCheckDefaults(t *testing.T) {
 	}
 }
 
+func TestEvolutionDefaultsToObservationOnly(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	cfg, err := LoadConfig(Options{Path: path, CreateIfMissing: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.Evolution.Enabled || cfg.Evolution.Mode != "observe" {
+		t.Fatalf("evolution defaults = enabled:%t mode:%q, want true/observe", cfg.Evolution.Enabled, cfg.Evolution.Mode)
+	}
+}
+
 func TestSaveConfigWritesNewProviderSchema(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	cfg := &Config{

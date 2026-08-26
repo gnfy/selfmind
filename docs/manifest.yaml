@@ -12,6 +12,24 @@ documents:
     owner: maintainers
     state: current
     language: en
+  - path: docs/agents/domain.md
+    title: Domain Documentation for Engineering Skills
+    class: guide
+    owner: maintainers
+    state: current
+    language: en
+  - path: docs/agents/issue-tracker.md
+    title: Engineering Skills Issue Tracker
+    class: guide
+    owner: maintainers
+    state: current
+    language: en
+  - path: docs/agents/triage-labels.md
+    title: Engineering Skills Triage Labels
+    class: guide
+    owner: maintainers
+    state: current
+    language: en
   - path: docs/architecture-constraints.md
     title: Architecture Constraints
     class: contract
@@ -53,7 +71,7 @@ documents:
     state: current
     language: zh-CN
     translation_of: docs/command-reference.md
-    source_hash: 86683635cb256521
+    source_hash: 6831bd021d6bd7eb
   - path: docs/config-reference.md
     title: Configuration Reference
     class: guide
@@ -67,7 +85,7 @@ documents:
     state: current
     language: zh-CN
     translation_of: docs/config-reference.md
-    source_hash: 26347c96415555cc
+    source_hash: 5915a95c2f702043
   - path: docs/context-lifecycle.zh-CN.md
     title: 上下文生命周期
     class: reference
@@ -93,7 +111,7 @@ documents:
     state: current
     language: zh-CN
     translation_of: docs/development-guide.md
-    source_hash: 6345cf6eae54f4e4
+    source_hash: b27b5de376e2e5e7
   - path: docs/eval-loop.md
     title: Evaluation Loop
     class: reference
@@ -181,7 +199,13 @@ documents:
     state: current
     language: zh-CN
     translation_of: docs/provider-runtime.md
-    source_hash: d3100e8410120e4c
+    source_hash: a400fb0145a8e8f1
+  - path: docs/skill-learning-and-repair.md
+    title: Skill Learning, Automatic Promotion, and Repair
+    class: decision
+    owner: skills
+    state: current
+    language: en
   - path: docs/skills-architecture.md
     title: Skills Architecture
     class: reference

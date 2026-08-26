@@ -1,9 +1,12 @@
 package modelruntime
 
 import (
+	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestDiscoverCodexModelDescriptorFromLocalCache(t *testing.T) {
@@ -40,5 +43,25 @@ func TestDiscoverCodexModelDescriptorFromLocalCache(t *testing.T) {
 	}
 	if got.DefaultServiceTier != "priority" || len(got.SupportedServiceTiers) != 1 {
 		t.Fatalf("service tiers = %q %v", got.DefaultServiceTier, got.SupportedServiceTiers)
+	}
+}
+
+func TestCatalogReportsStaleCacheInsteadOfPresentingItAsLive(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "model_cache.json")
+	profile := ProviderProfile{ID: "openai", ModelList: ModelListOpenAICompatible, FallbackModels: []string{"fallback"}}
+	runtime := Runtime{BaseURL: "http://127.0.0.1:1/v1", APIKey: "secret"}
+	key := profile.ID + "|" + runtime.BaseURL + "|" + credentialFingerprint(runtime.APIKey)
+	data := []byte(fmt.Sprintf(`{%q:{"ts":%d,"models":["cached-new"]}}`, key, time.Now().Add(-2*time.Hour).Unix()))
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	result := NewCatalog(path).ModelsWithStatus(ctx, profile, runtime, false)
+	if len(result.Models) != 1 || result.Models[0] != "cached-new" || result.Source != "cache" || !result.Stale {
+		t.Fatalf("result = %+v", result)
+	}
+	if result.FetchError == nil {
+		t.Fatal("stale fallback did not retain the refresh failure")
 	}
 }

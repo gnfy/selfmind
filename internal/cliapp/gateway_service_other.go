@@ -1,4 +1,4 @@
-//go:build !darwin
+//go:build !darwin && !linux
 
 package cliapp
 
@@ -30,6 +30,14 @@ func gatewayServiceStopIfInstalled() (bool, string, error) {
 
 func gatewayServiceSupported() bool {
 	return false
+}
+
+func gatewayServicePreflight() error { return nil }
+
+func gatewayServiceHealthy() bool { return false }
+
+func gatewayServiceKind() string {
+	return "on-demand"
 }
 
 func gatewayServiceDoctorLine() string {

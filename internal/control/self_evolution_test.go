@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-func TestWorkflowProfilePromotesAndDegradesReadOnlyCandidate(t *testing.T) {
+func TestWorkflowProfileObservationsDoNotClaimShadowEvidence(t *testing.T) {
 	ctx := context.Background()
 	store, err := OpenStore(t.TempDir())
 	if err != nil {
@@ -31,15 +31,26 @@ func TestWorkflowProfilePromotesAndDegradesReadOnlyCandidate(t *testing.T) {
 			t.Fatalf("materialize %d: %v", i, err)
 		}
 	}
-	if candidate == nil || candidate.Status != "enabled" {
-		t.Fatalf("candidate = %#v, want enabled", candidate)
+	if candidate == nil || candidate.Status != "candidate" {
+		t.Fatalf("candidate = %#v, want observation-only candidate", candidate)
 	}
-	if candidate.ObservationCount != 5 || candidate.ShadowRuns != 3 || candidate.ShadowMatches != 3 {
+	if candidate.ObservationCount != 5 || candidate.ShadowRuns != 0 || candidate.ShadowMatches != 0 {
 		t.Fatalf("candidate counters = %#v", candidate)
 	}
 	advice, err := store.EnabledEvolutionAdvice(ctx, identity.TenantID, identity.PersonID, task.ID)
-	if err != nil || advice == nil || advice.CandidateID != candidate.ID {
-		t.Fatalf("advice = %#v err=%v", advice, err)
+	if err != nil || advice != nil {
+		t.Fatalf("ordinary observations must not create advice: %#v err=%v", advice, err)
+	}
+
+	// Simulate an enabled row created by the legacy heuristic. It remains
+	// inspectable for compatibility, but cannot reach runtime advice because its
+	// contract contains no independently verified comparison evidence.
+	if _, err := store.db.ExecContext(ctx, `UPDATE evolution_candidates SET status='enabled' WHERE id=?`, candidate.ID); err != nil {
+		t.Fatalf("enable legacy candidate: %v", err)
+	}
+	advice, err = store.EnabledEvolutionAdvice(ctx, identity.TenantID, identity.PersonID, task.ID)
+	if err != nil || advice != nil {
+		t.Fatalf("legacy enabled candidate must not be advised: %#v err=%v", advice, err)
 	}
 
 	failing := appendReadOnlyProfileRun(t, store, identity, task, "batch-failure", candidate.ID)
@@ -74,8 +85,39 @@ func TestWorkflowProfilePromotesAndDegradesReadOnlyCandidate(t *testing.T) {
 		}
 	}
 	advice, err = store.EnabledEvolutionAdvice(ctx, identity.TenantID, identity.PersonID, task.ID)
+	if err != nil || advice != nil {
+		t.Fatalf("ordinary recovery runs must not revive advice: %#v err=%v", advice, err)
+	}
+	if err := store.db.QueryRowContext(ctx, `SELECT status, shadow_runs, shadow_matches FROM evolution_candidates WHERE id=?`, candidate.ID).
+		Scan(&status, &candidate.ShadowRuns, &candidate.ShadowMatches); err != nil {
+		t.Fatalf("recovered candidate state: %v", err)
+	}
+	if status != "degraded" || candidate.ShadowRuns != 0 || candidate.ShadowMatches != 0 {
+		t.Fatalf("ordinary recovery changed degraded evidence: status=%q runs=%d matches=%d", status, candidate.ShadowRuns, candidate.ShadowMatches)
+	}
+}
+
+func TestEnabledEvolutionAdviceRequiresVerifiedComparisonContract(t *testing.T) {
+	ctx := context.Background()
+	store, err := OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	identity, _ := store.ResolveOrCreateAccount(ctx, "default", "cli", "verified-advice", "Verified")
+	task, _ := store.CreateTask(ctx, TaskCreate{TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "verified", Channel: "cli"})
+	run := appendReadOnlyProfileRun(t, store, identity, task, "observed", "")
+	_, candidate, err := store.MaterializeWorkflowProfile(ctx, identity.TenantID, run.ID, EvolutionPolicy{Enabled: true, Mode: "auto-readonly"})
+	if err != nil || candidate == nil {
+		t.Fatalf("candidate=%+v err=%v", candidate, err)
+	}
+	verifiedContract := `{"version":2,"kind":"batch_read","evidence_model":"verified_comparison"}`
+	if _, err := store.db.ExecContext(ctx, `UPDATE evolution_candidates SET status='enabled', contract_json=? WHERE id=?`, verifiedContract, candidate.ID); err != nil {
+		t.Fatal(err)
+	}
+	advice, err := store.EnabledEvolutionAdvice(ctx, identity.TenantID, identity.PersonID, task.ID)
 	if err != nil || advice == nil || advice.CandidateID != candidate.ID {
-		t.Fatalf("recovered advice = %#v err=%v", advice, err)
+		t.Fatalf("verified advice=%+v err=%v", advice, err)
 	}
 }
 

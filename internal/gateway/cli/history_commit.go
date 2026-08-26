@@ -181,6 +181,9 @@ func (m *uiModel) renderActiveBlock(width int) string {
 // viewActiveRegion is the hybrid-mode View: only the active region, pinned at
 // the bottom of the terminal. Finalized history lives in scrollback above it.
 func (m *uiModel) viewActiveRegion() string {
+	if m.modelManager != nil {
+		return m.modelManager.View()
+	}
 	if m.pager != nil {
 		return m.pager.View()
 	}

@@ -191,10 +191,18 @@ func (d *Server) diagReply(ctx context.Context, identity *control.IdentityContex
 	if health, err := d.Control.EvolutionHealthForPerson(ctx, identity.TenantID, identity.PersonID); err == nil {
 		candidateTotal := health.Statuses["candidate"] + health.Statuses["shadow"] + health.Statuses["eligible"] + health.Statuses["enabled"] + health.Statuses["degraded"]
 		if d.SelfEvolution.Enabled || health.Profiles24h > 0 || candidateTotal > 0 {
-			fmt.Fprintf(&sb, "Self-evolution: profiles %d (24h), candidate %d, shadow %d, eligible %d, enabled %d, degraded %d, fallbacks %d\n",
+			fmt.Fprintf(&sb, "Self-evolution: profiles %d (24h), observed candidates %d, legacy shadow %d, legacy eligible %d, legacy enabled %d, advice-ready %d, degraded %d, fallbacks %d\n",
 				health.Profiles24h, health.Statuses["candidate"], health.Statuses["shadow"], health.Statuses["eligible"],
-				health.Statuses["enabled"], health.Statuses["degraded"], health.Fallbacks)
+				health.Statuses["enabled"], health.AdviceReady, health.Statuses["degraded"], health.Fallbacks)
 		}
+	}
+	if nominations, err := d.Control.ListSkillStalenessNominations(ctx, identity.TenantID, "", time.Now(), control.DefaultSkillVerificationMaxAge, 20); err == nil && len(nominations) > 0 {
+		qualifier := ""
+		if len(nominations) == 20 {
+			qualifier = "at least "
+		}
+		fmt.Fprintf(&sb, "Skill review due: %s%d active curator versions are unverified or older than %s (nomination only; no automatic patch).\n",
+			qualifier, len(nominations), control.DefaultSkillVerificationMaxAge)
 	}
 	if watches, err := d.Control.CountExternalWatchesByStatus(ctx, identity.TenantID, identity.PersonID); err == nil {
 		activeWatches := watches[control.ExternalWatchPending] + watches[control.ExternalWatchRunning]

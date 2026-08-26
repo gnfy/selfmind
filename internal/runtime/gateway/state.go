@@ -30,6 +30,7 @@ type StatusRecord struct {
 	Version         string   `json:"version,omitempty"`
 	Addr            string   `json:"addr"`
 	DataDir         string   `json:"data_dir"`
+	ConfigPath      string   `json:"config_path,omitempty"`
 	DefaultTenantID string   `json:"default_tenant_id,omitempty"`
 	Argv            []string `json:"argv,omitempty"`
 	State           string   `json:"state"`
@@ -69,6 +70,7 @@ func (e AlreadyRunningError) Unwrap() error {
 type Manager struct {
 	Paths      Paths
 	Addr       string
+	ConfigPath string
 	Started    time.Time
 	InstanceID string
 	lock       *runtimeFileLock
@@ -193,6 +195,7 @@ func (m *Manager) statusRecordLocked(now time.Time) StatusRecord {
 		Version:         buildinfo.Version,
 		Addr:            m.Addr,
 		DataDir:         m.Paths.DataDir,
+		ConfigPath:      m.ConfigPath,
 		DefaultTenantID: m.tenantID,
 		Argv:            os.Args,
 		State:           m.state,

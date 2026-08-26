@@ -343,6 +343,44 @@ func TestGatewayToolCatalogProbeRequiresLocalControlAndUsesDaemonProbe(t *testin
 	}
 }
 
+func TestGatewayModelProbeRequiresLocalControlAndValidatesRole(t *testing.T) {
+	t.Setenv("SELF_GATEWAY_TOKEN", "")
+	calledRole := ""
+	daemon := &Server{
+		LocalControlToken: "local-secret",
+		ModelProbeFunc: func(_ context.Context, role string) api.ModelProbeResponse {
+			calledRole = role
+			return api.ModelProbeResponse{Role: role, OK: true, Provider: "codex-cli", Model: "gpt-test"}
+		},
+	}
+
+	request := httptest.NewRequest(http.MethodPost, "/v1/gateway/model/probe", strings.NewReader(`{"role":"primary"}`))
+	request.RemoteAddr = "127.0.0.1:4100"
+	recorder := httptest.NewRecorder()
+	daemon.Handler().ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusForbidden || calledRole != "" {
+		t.Fatalf("unauthenticated probe status=%d role=%q", recorder.Code, calledRole)
+	}
+
+	request = httptest.NewRequest(http.MethodPost, "/v1/gateway/model/probe", strings.NewReader(`{"role":"memory_extract"}`))
+	request.RemoteAddr = "127.0.0.1:4100"
+	request.Header.Set(api.LocalControlTokenHeader, "local-secret")
+	recorder = httptest.NewRecorder()
+	daemon.Handler().ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusBadRequest || calledRole != "" {
+		t.Fatalf("invalid role status=%d role=%q body=%s", recorder.Code, calledRole, recorder.Body.String())
+	}
+
+	request = httptest.NewRequest(http.MethodPost, "/v1/gateway/model/probe", strings.NewReader(`{"role":"auxiliary"}`))
+	request.RemoteAddr = "127.0.0.1:4100"
+	request.Header.Set(api.LocalControlTokenHeader, "local-secret")
+	recorder = httptest.NewRecorder()
+	daemon.Handler().ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK || calledRole != "auxiliary" || !strings.Contains(recorder.Body.String(), `"ok":true`) {
+		t.Fatalf("authenticated probe status=%d role=%q body=%s", recorder.Code, calledRole, recorder.Body.String())
+	}
+}
+
 func TestGatewayShutdownEndpoint(t *testing.T) {
 	t.Setenv("SELF_GATEWAY_TOKEN", "")
 	stopped := make(chan struct{})

@@ -1,17 +1,37 @@
 package gateway
 
 import (
+	"context"
+	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestDetachedRunArgsDoNotLeakLifecycleFlags(t *testing.T) {
 	want := []string{"gateway", "run"}
 	if got := detachedRunArgs(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("detachedRunArgs() = %v, want %v", got, want)
+	}
+}
+
+func TestRequestShutdownCanAbortCancellableSafeBoundaryWait(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	defer server.Close()
+
+	err := RequestShutdown(context.Background(), StopOptions{
+		URL: server.URL, Timeout: time.Second, WaitForSafeBoundary: true,
+		Abort: func() bool { return true },
+	})
+	if !errors.Is(err, ErrShutdownAborted) {
+		t.Fatalf("RequestShutdown error = %v; want ErrShutdownAborted", err)
 	}
 }
 

@@ -17,6 +17,7 @@ import (
 	"selfmind/internal/gateway/httpapi"
 	"selfmind/internal/kernel/llm"
 	"selfmind/internal/kernel/memory"
+	"selfmind/internal/modelchange"
 	"selfmind/internal/platform/config"
 	"selfmind/internal/platform/log"
 	"selfmind/internal/promptassets"
@@ -613,6 +614,7 @@ func newRuntimeHarness(opts RunOptions, c *Case, dataDirOverride string) (*runti
 		Gateway:         gwDeps.Gateway,
 		DefaultTenantID: tenantID,
 		SkillStorage:    skillStorage,
+		ModelChanges:    &modelchange.Service{ConfigPath: cfg.Path},
 		// Automatic semantic recall (Work Timeline P2): eval runs the same
 		// selector path as real input — no eval-only shortcut around recall.
 		Recall: httpapi.NewRecallEngine(controlStore, mem, appcore.SemanticRecallExpander(mem, cfg, tenantID, evalPrompts), recallOptions...),

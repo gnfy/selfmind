@@ -21,6 +21,12 @@ type launchdPlistData struct {
 	StderrPath  string
 }
 
+type systemdUnitData struct {
+	Description string
+	ProgramArgs []string
+	Environment map[string]string
+}
+
 func resolvedGatewayServiceCommand(configPath string) ([]string, error) {
 	resolvedConfig, _ := config.ResolveConfigPath(configPath)
 	launcher := strings.TrimSpace(os.Getenv("SELFMIND_NPM_LAUNCHER"))
@@ -41,6 +47,15 @@ func resolvedGatewayServiceCommand(configPath string) ([]string, error) {
 		return nil, fmt.Errorf("resolve absolute SelfMind executable: %w", err)
 	}
 	return []string{executable, "--config", resolvedConfig, "gateway", "run"}, nil
+}
+
+func commandConfigPath(command []string) string {
+	for i := 0; i+1 < len(command); i++ {
+		if command[i] == "--config" {
+			return command[i+1]
+		}
+	}
+	return ""
 }
 
 func renderLaunchdPlist(data launchdPlistData) ([]byte, error) {
@@ -102,4 +117,84 @@ func sortedStringKeys(values map[string]string) []string {
 		}
 	}
 	return keys
+}
+
+func renderSystemdUserUnit(data systemdUnitData) ([]byte, error) {
+	if len(data.ProgramArgs) == 0 {
+		return nil, fmt.Errorf("systemd program arguments are required")
+	}
+	description := strings.TrimSpace(data.Description)
+	if description == "" {
+		description = "SelfMind gateway"
+	}
+	var out bytes.Buffer
+	fmt.Fprintf(&out, "[Unit]\nDescription=%s\nAfter=network-online.target\nWants=network-online.target\n\n", systemdValue(description))
+	out.WriteString("[Service]\nType=simple\nExecStart=")
+	for i, arg := range data.ProgramArgs {
+		if i > 0 {
+			out.WriteByte(' ')
+		}
+		out.WriteString(systemdQuote(arg))
+	}
+	out.WriteByte('\n')
+	for _, key := range sortedStringKeys(data.Environment) {
+		out.WriteString("Environment=")
+		out.WriteString(systemdQuote(key + "=" + data.Environment[key]))
+		out.WriteByte('\n')
+	}
+	out.WriteString("Restart=on-failure\nRestartSec=5s\nTimeoutStopSec=45s\nKillSignal=SIGINT\n\n[Install]\nWantedBy=default.target\n")
+	return out.Bytes(), nil
+}
+
+func systemdQuote(value string) string {
+	value = strings.ReplaceAll(value, "%", "%%")
+	value = strings.ReplaceAll(value, "\\", "\\\\")
+	value = strings.ReplaceAll(value, "\"", "\\\"")
+	value = strings.ReplaceAll(value, "\n", " ")
+	value = strings.ReplaceAll(value, "\r", " ")
+	return "\"" + value + "\""
+}
+
+func systemdValue(value string) string {
+	value = strings.ReplaceAll(value, "%", "%%")
+	value = strings.ReplaceAll(value, "\n", " ")
+	value = strings.ReplaceAll(value, "\r", " ")
+	return value
+}
+
+var servicePassthroughEnvironmentKeyMarkers = []string{"PROXY", "CONFIG", "_HOME", "KUBECONFIG"}
+
+var servicePassthroughEnvironmentExactKeys = map[string]bool{
+	"SHELL": true, "LANG": true, "LC_ALL": true, "LC_CTYPE": true, "NO_PROXY": true, "no_proxy": true,
+}
+
+// servicePassthroughEnvironment picks only non-credential locations, locale,
+// and proxy settings for an operating-system service definition. Service files
+// may be readable by other local processes, so names or values that resemble
+// credentials never cross this boundary.
+func servicePassthroughEnvironment(parent []string) []string {
+	out := make([]string, 0, 8)
+	for _, entry := range parent {
+		name, value, ok := strings.Cut(entry, "=")
+		name = strings.TrimSpace(name)
+		value = strings.TrimSpace(value)
+		if !ok || name == "" || value == "" {
+			continue
+		}
+		upper := strings.ToUpper(name)
+		if isCredentialShapedEnvName(upper) || valueEmbedsCredentials(value) {
+			continue
+		}
+		if servicePassthroughEnvironmentExactKeys[name] || servicePassthroughEnvironmentExactKeys[upper] {
+			out = append(out, name+"="+value)
+			continue
+		}
+		for _, marker := range servicePassthroughEnvironmentKeyMarkers {
+			if strings.Contains(upper, marker) {
+				out = append(out, name+"="+value)
+				break
+			}
+		}
+	}
+	return out
 }

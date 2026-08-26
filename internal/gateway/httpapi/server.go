@@ -19,6 +19,7 @@ import (
 	"selfmind/internal/gateway/router"
 	"selfmind/internal/kernel"
 	"selfmind/internal/kernel/llm"
+	"selfmind/internal/modelchange"
 	"selfmind/internal/platform/textutil"
 	"selfmind/internal/tools"
 )
@@ -46,6 +47,18 @@ type Server struct {
 	// probe requested by a local CLI doctor. It is never called by ordinary
 	// status requests.
 	ToolCatalogProbeFunc func(context.Context) api.ProviderToolCatalogProbeResponse
+	// ModelProbeFunc runs the same bounded role-aware provider contract probe as
+	// the CLI, but inside the daemon environment. First-use setup calls it after
+	// installing the OS service so shell-only credentials cannot produce a false
+	// success. It is local-CLI-only and never runs on ordinary status requests.
+	ModelProbeFunc func(context.Context, string) api.ModelProbeResponse
+	// ModelChanges owns the daemon-serialized, non-secret route transaction
+	// state. UI and channel adapters only render or submit its commands.
+	ModelChanges *modelchange.Service
+	// ModelRestartFunc starts the normal external restart helper after a model
+	// transaction is committed. The helper, rather than the daemon itself,
+	// preserves launchd/systemd ownership and on-demand restart behavior.
+	ModelRestartFunc func(string) error
 	// MCPHealthFunc exposes connection/catalog failures without credentials or
 	// raw schemas so status and doctor do not depend on daemon log inspection.
 	MCPHealthFunc func() tools.MCPHealthSnapshot
@@ -98,9 +111,9 @@ type Server struct {
 	// PostRunMaintenance controls the daemon-owned debounce/batch window for
 	// post-run label and memory governance. It never delays run finalization.
 	PostRunMaintenance PostRunMaintenanceOptions
-	// SelfEvolution profiles completed runs and promotes only bounded read-only
-	// batching contracts. Profiles are derived from durable events and never
-	// delay or alter run finalization.
+	// SelfEvolution profiles completed runs and records bounded read-only
+	// batching observations. Runtime advice requires separately verified
+	// comparison evidence; ordinary profiles never promote a candidate.
 	SelfEvolution control.EvolutionPolicy
 	// MemoryConsolidator is the background memory self-organization pass
 	// (docs/memory-governance.zh-CN.md §4). Nil disables governance entirely;
@@ -127,10 +140,10 @@ type Server struct {
 	// remain unchanged until deterministic promotion policy approves them.
 	SkillCurator SkillCuratorRunner
 
-	mu           sync.Mutex
-	draining     bool
-	drainReason  string
-	shutdownOnce sync.Once
+	mu              sync.Mutex
+	draining        bool
+	drainReason     string
+	shutdownPending bool
 
 	runs     *RunCoordinator
 	runsOnce sync.Once
@@ -203,6 +216,8 @@ func (d *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/workspaces", d.handleWorkspaces)
 	mux.HandleFunc("/v1/gateway/status", d.handleGatewayStatus)
 	mux.HandleFunc("/v1/gateway/tool-catalog/probe", d.handleGatewayToolCatalogProbe)
+	mux.HandleFunc("/v1/gateway/model/probe", d.handleGatewayModelProbe)
+	mux.HandleFunc("/v1/gateway/model/change", d.handleGatewayModelChange)
 	mux.HandleFunc("/v1/gateway/shutdown", d.handleGatewayShutdown)
 	mux.HandleFunc("/v1/presence/ping", d.handlePresencePing)
 	mux.HandleFunc("/v1/digest", d.handleDigest)
@@ -349,6 +364,23 @@ func (d *Server) ProcessMessage(ctx context.Context, req api.MessageRequest) (ap
 	}
 
 	if d.IsDraining() {
+		if d.isModelChangeDrain() {
+			intent := d.classifyIntent(ctx, req.Content, req.Channel)
+			coord := d.coordinator()
+			workspace, workspaceErr := coord.prepareRequestWorkspace(ctx, identity, &req)
+			if workspaceErr != nil {
+				return api.MessageResponse{Identity: identity, Error: workspaceErr.Error(), Turn: messageTurn("failed", "", "draining", "", "", workspaceErr.Error())}, http.StatusBadRequest
+			}
+			if rootsErr := coord.prepareRequestExecutionRoots(ctx, workspace, &req); rootsErr != nil {
+				return api.MessageResponse{Identity: identity, Error: rootsErr.Error(), Turn: messageTurn("failed", "", "draining", "", "", rootsErr.Error())}, http.StatusBadRequest
+			}
+			if running := coord.currentActive(identity.PersonID); running != nil && intent.Intent == router.IntentContinue {
+				if resp, ok := d.steerActiveRun(ctx, identity, running, req); ok {
+					return resp, http.StatusOK
+				}
+			}
+			return d.enqueueDuringModelChange(ctx, identity, req), http.StatusOK
+		}
 		return api.MessageResponse{
 			Identity: identity,
 			Error:    "gateway is shutting down; try again after restart",
@@ -489,6 +521,11 @@ func (d *Server) ProcessMessage(ctx context.Context, req api.MessageRequest) (ap
 		coord.deliverAsyncResult(context.Background(), identity, req, resp)
 	}
 	return resp, status
+}
+
+func (d *Server) isModelChangeDrain() bool {
+	_, draining, reason := d.gatewayStateParts()
+	return draining && strings.HasPrefix(strings.ToLower(strings.TrimSpace(reason)), "model_change:")
 }
 
 // turnCancelled reports whether the turn ended because the run was cancelled

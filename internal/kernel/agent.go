@@ -33,7 +33,6 @@ type Agent struct {
 	memory           *memory.MemoryManager
 	backend          AgentBackend
 	llm              llm.Provider
-	fastProvider     llm.Provider                 // optional fast model for simple direct-answer turns
 	summaryProvider  llm.Provider                 // optional cheap model for over-budget context compaction, kept OFF the main run provider
 	summaryMaxTokens int                          // resolved output ceiling for the summarizer route
 	judgeProvider    llm.Provider                 // optional cheap model for smart-mode approval triage (H2), kept OFF the main run provider
@@ -125,17 +124,6 @@ func (a *Agent) SetUseMemoryFence(enabled bool) {
 	}
 }
 
-// SetFastProvider installs an optional fast model used for simple, pure
-// direct-answer turns. It is a role-resolved provider that falls back to the
-// default model when no fast model is configured, so callers always get a
-// working provider.
-func (a *Agent) SetFastProvider(p llm.Provider) {
-	if a == nil {
-		return
-	}
-	a.fastProvider = p
-}
-
 // SetSummaryProvider installs the cheap provider used to compact over-budget
 // context into a summary (the summarizer role, kept OFF the main coding
 // provider). It is remembered so SetContextWindow, which rebuilds the context
@@ -207,12 +195,10 @@ func (a *Agent) activeLLM() llm.Provider {
 	return a.llm
 }
 
-// chooseRunProvider routes pure simple-answer turns to the fast provider when
-// one is available; everything else uses the default coding provider.
-func (a *Agent) chooseRunProvider(strategy TaskStrategy) llm.Provider {
-	if a.fastProvider != nil && strategy.Class == TaskClassSimpleAnswer {
-		return a.fastProvider
-	}
+// chooseRunProvider keeps every user-visible turn on the coding provider.
+// Cheap role providers are reserved for bounded classifiers, judges, and
+// background work; they never own a complete foreground answer.
+func (a *Agent) chooseRunProvider(_ TaskStrategy) llm.Provider {
 	return a.llm
 }
 
@@ -860,8 +846,8 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 	strategy = strategy.normalized()
 	strategy = a.toolBudgetPolicy.apply(strategy)
 
-	// Route this run's model calls per strategy (simple direct-answer turns may
-	// use a fast model). Safe because runMu serializes RunConversation.
+	// Freeze this run on the foreground coding provider. Safe because runMu
+	// serializes RunConversation.
 	a.runLLM = a.chooseRunProvider(strategy)
 	defer func() { a.runLLM = nil }()
 	EmitAgentEvent(eventCh, AgentEvent{

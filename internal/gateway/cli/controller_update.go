@@ -8,8 +8,10 @@ import (
 
 	"selfmind/internal/gateway/command"
 	"selfmind/internal/kernel"
+	"selfmind/internal/modelchange"
 	"selfmind/internal/platform/textutil"
 	"selfmind/internal/tools"
+	"selfmind/internal/ui/components"
 
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
@@ -49,6 +51,9 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.pager != nil {
 			m.pager.Resize(msg.Width, msg.Height)
+		}
+		if m.modelManager != nil {
+			m.modelManager.Resize(msg.Width, msg.Height)
 		}
 		// Hybrid: commit the startup card to scrollback once, now that the width
 		// is known, so it persists at the top of history (like Codex) instead of
@@ -99,10 +104,202 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, spinnerCmd
 
+	case MsgModelValidationDone:
+		m.thinking = false
+		m.activityText = ""
+		if m.modelManager == nil {
+			return m, nil
+		}
+		if msg.Err != nil {
+			m.modelManager.SetRouteValidation(msg.Route, false, msg.Err.Error())
+			return m, nil
+		}
+		ok := len(msg.Response.Probes) > 0
+		var failures []string
+		for _, probe := range msg.Response.Probes {
+			if probe.OK {
+				continue
+			}
+			ok = false
+			failure := strings.TrimSpace(probe.Error)
+			if failure == "" {
+				failure = "probe failed"
+			}
+			failures = append(failures, string(probe.Route)+": "+failure)
+		}
+		message := strings.Join(failures, "; ")
+		if !ok && message == "" {
+			message = "validation returned no evidence"
+		}
+		m.modelManager.SetRouteValidation(msg.Route, ok, message)
+		return m, nil
+
+	case MsgModelChangeDone:
+		m.thinking = false
+		m.activityText = ""
+		if msg.Err != nil {
+			m.addErrorMessage("Model change failed: " + msg.Err.Error())
+			return m, nil
+		}
+		if msg.Response.Change == nil {
+			m.addErrorMessage("Model change failed: the daemon returned no transaction receipt.")
+			return m, nil
+		}
+		m.modelManager = nil
+		change := msg.Response.Change
+		m.modelManagerStatus.ConfiguredPrimary = selectionDisplay(change.Candidate.Primary)
+		m.modelManagerStatus.ConfiguredBackground = selectionDisplay(change.Candidate.Auxiliary)
+		m.modelManagerStatus.PrimaryProvider = change.Candidate.Primary.Provider
+		m.modelManagerStatus.PrimaryModel = change.Candidate.Primary.Model
+		m.modelManagerStatus.PrimaryReasoning = change.Candidate.Primary.Reasoning
+		m.modelManagerStatus.PrimaryServiceTier = change.Candidate.Primary.ServiceTier
+		m.modelManagerStatus.BackgroundProvider = change.Candidate.Auxiliary.Provider
+		m.modelManagerStatus.BackgroundModel = change.Candidate.Auxiliary.Model
+		m.modelManagerStatus.BackgroundReasoning = change.Candidate.Auxiliary.Reasoning
+		m.modelManagerStatus.BackgroundServiceTier = change.Candidate.Auxiliary.ServiceTier
+		m.modelManagerStatus.RoleOverrides = make(map[string]components.ModelManagerSubmission)
+		for _, route := range modelchange.ManagedRoleRoutes() {
+			selection := modelchange.SelectionForRoute(change.Candidate, route)
+			if strings.TrimSpace(selection.Provider) == "" && strings.TrimSpace(selection.Model) == "" {
+				continue
+			}
+			m.modelManagerStatus.RoleOverrides[string(route)] = components.ModelManagerSubmission{
+				Route: string(route), Provider: selection.Provider, Model: selection.Model,
+				Reasoning: selection.Reasoning, ServiceTier: selection.ServiceTier,
+			}
+		}
+		m.modelManagerStatus.Pending = fmt.Sprintf("%s (%s)", change.ID, change.Status)
+		m.modelChangeID = change.ID
+		m.modelChangePhase = change.Status
+		m.modelChangePhaseAt = change.PhaseStartedAt
+		for _, notice := range msg.Response.Notices {
+			m.addMessage("notice", "Model change notice: "+notice)
+		}
+		if msg.Response.RestartScheduled {
+			m.addMessage("notice", fmt.Sprintf("Model change %s validated and saved. Running remains %s until the safe restart is healthy.", change.ID, m.displayModelName()))
+			if m.modelManagerOnly {
+				return m, m.quitNow()
+			}
+			return m, m.observeModelChange(false, 100*time.Millisecond)
+		} else {
+			m.addMessage("notice", fmt.Sprintf("Model change %s validated and saved. Run `selfmind gateway restart --drain` to apply it.", change.ID))
+		}
+		if m.modelManagerOnly {
+			return m, m.quitNow()
+		}
+		return m, nil
+
+	case MsgModelChangeObserved:
+		if msg.Err != nil {
+			if msg.OpenManager {
+				m.addErrorMessage("Could not inspect model change state: " + msg.Err.Error())
+				return m, nil
+			}
+			// A planned restart may briefly make HTTP unavailable, but the local
+			// observer normally still has the durable transaction file. A transient
+			// observation failure is retried without leaking connection errors.
+			return m, m.observeModelChange(false, 250*time.Millisecond)
+		}
+		observedID := m.modelChangeID
+		status := msg.Observation.Status
+		m.applyModelStatus(status)
+		if status.Pending != nil {
+			m.modelGatewayOffline = !msg.Observation.GatewayReachable &&
+				(status.Pending.Status == modelchange.StatusDraining || status.Pending.Status == modelchange.StatusRestarting || status.Pending.Status == modelchange.StatusStarting)
+			if !m.modelChangeSlowWarned && !status.Pending.CreatedAt.IsZero() && time.Since(status.Pending.CreatedAt) >= 30*time.Second {
+				m.modelChangeSlowWarned = true
+				m.addMessage("notice", fmt.Sprintf("Model change %s is taking longer than 30 seconds. SelfMind is still waiting for a safe run boundary or gateway health.", status.Pending.ID))
+			}
+			if status.Pending.Status == modelchange.StatusRecoveryRequired {
+				m.addErrorMessage(fmt.Sprintf("Model change %s requires recovery: %s", status.Pending.ID, status.Pending.Failure))
+			} else {
+				if msg.OpenManager {
+					m.modelManager = components.NewModelManager(m.modelManagerStatus, m.modelManagerRoutes, m.width, m.height)
+				}
+				return m, m.observeModelChange(false, 250*time.Millisecond)
+			}
+		} else if observedID != "" {
+			for i := len(status.History) - 1; i >= 0; i-- {
+				change := status.History[i]
+				if change.ID != observedID {
+					continue
+				}
+				switch change.Status {
+				case modelchange.StatusApplied:
+					m.addMessage("notice", fmt.Sprintf("Model change %s applied. Running is now %s.", change.ID, m.displayModelName()))
+				case modelchange.StatusRolledBack:
+					m.addErrorMessage(fmt.Sprintf("Model change %s was rolled back: %s", change.ID, change.Failure))
+				case modelchange.StatusConflict, modelchange.StatusFailed, modelchange.StatusCancelled, modelchange.StatusSuperseded:
+					m.addErrorMessage(fmt.Sprintf("Model change %s ended as %s: %s", change.ID, change.Status, change.Failure))
+				}
+				break
+			}
+		}
+		if msg.OpenManager {
+			m.modelManager = components.NewModelManager(m.modelManagerStatus, m.modelManagerRoutes, m.width, m.height)
+		}
+		return m, nil
+
+	case MsgModelRecoveryDone:
+		if msg.Err != nil {
+			m.addErrorMessage("Model recovery failed: " + msg.Err.Error())
+			return m, nil
+		}
+		m.addMessage("notice", "Model recovery action accepted: "+msg.Action+".")
+		if m.modelManagerOnly {
+			return m, m.quitNow()
+		}
+		return m, m.observeModelChange(false, 100*time.Millisecond)
+
+	case MsgModelManagerOpen:
+		m.thinking = false
+		m.activityText = ""
+		if msg.Err != nil {
+			m.addErrorMessage("Could not load model routes: " + msg.Err.Error())
+			return m, nil
+		}
+		if msg.Response.Status == nil {
+			m.addErrorMessage("Could not load model routes: the daemon returned no status.")
+			return m, nil
+		}
+		m.modelManagerStatus = modelManagerStatusFrom(*msg.Response.Status)
+		m.modelManager = components.NewModelManager(m.modelManagerStatus, m.modelManagerRoutes, m.width, m.height)
+		return m, nil
+
 	case tea.KeyMsg:
 		// Same signal, different purpose: the approval panel must not arm while
 		// the person is mid-keystroke (approvalTypingIdleDelay).
 		m.noteInputActivity(time.Now())
+		if m.modelManager != nil {
+			action := m.modelManager.Update(msg)
+			if action.RecoveryAction != "" {
+				m.modelManager = nil
+				return m, m.recoverModelChange(action.RecoveryAction)
+			}
+			if action.ValidationRoute != "" {
+				if len(action.Draft) == 0 {
+					m.modelManager.SetRouteValidation(action.ValidationRoute, true, "")
+					return m, nil
+				}
+				m.thinking = true
+				m.thinkingStart = time.Now()
+				m.activityText = "Validating model selection"
+				return m, m.validateModelManager(action.ValidationRoute, action.Draft)
+			}
+			if action.Closed && len(action.Draft) > 0 {
+				m.thinking = true
+				m.thinkingStart = time.Now()
+				m.activityText = "Applying model changes"
+				return m, m.submitModelManager(action.Draft)
+			}
+			if action.Closed {
+				m.modelManager = nil
+				if m.modelManagerOnly {
+					return m, m.quitNow()
+				}
+			}
+			return m, nil
+		}
 		if m.pager != nil {
 			closed, cmd := m.pager.Update(msg)
 			if closed {
@@ -191,6 +388,9 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.addErrorMessage(fmt.Sprintf("Error: %v", msg.Err))
 		} else if m.finalizeLiveStream(msg.Response) {
 			m.runStatus = "done"
+			if strings.TrimSpace(msg.Input) != "" && !strings.HasPrefix(strings.TrimSpace(msg.Input), "/") {
+				m.completeFirstOnboardingTask()
+			}
 		} else {
 			m.runStatus = "error"
 			m.addErrorMessage("Error: model returned an empty response without any error details. Check the provider credentials and endpoint, then retry.")
@@ -692,7 +892,7 @@ func (m *uiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 					return m, m.quitNow()
 				}
 				m.exitPromptActive = true
-				m.addMessage("assistant", "A task is still running. Choose:\n  b — quit and leave it running in the background (the result will be pushed to your bound IM)\n  c — cancel the task and stay\n  esc — keep watching")
+				m.addMessage("assistant", "A task is still running. Choose:\n  b — quit and leave it running in the background; return later to view the result\n  c — cancel the task and stay\n  esc — keep watching")
 				return m, nil
 			}
 			// Priority 3: quit
@@ -732,6 +932,10 @@ func (m *uiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			if display == "" {
 				display = input
+			}
+			if m.modelGatewayOffline && !localCommandDuringModelRestart(input) {
+				m.setStatusNotice(noticeWarning, "The gateway is restarting. Your draft is preserved; submit it after the model change is healthy.")
+				return m, nil
 			}
 			// Record the EXPANDED input, never displayInput: paste placeholders
 			// are unrecoverable after editor.Reset() clears the snippet buffer
@@ -815,4 +1019,17 @@ func (m *uiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	m.editor.Update(msg)
 	return m, nil
+}
+
+func localCommandDuringModelRestart(input string) bool {
+	fields := strings.Fields(strings.TrimSpace(input))
+	if len(fields) == 0 {
+		return true
+	}
+	switch strings.ToLower(fields[0]) {
+	case "/help", "/model", "/clear", "/exit":
+		return true
+	default:
+		return false
+	}
 }

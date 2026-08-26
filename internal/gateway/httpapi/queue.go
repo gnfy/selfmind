@@ -46,6 +46,33 @@ func (d *Server) enqueueBehindActive(ctx context.Context, identity *control.Iden
 	}
 }
 
+// enqueueDuringModelChange accepts new work while the daemon is draining for a
+// confirmed model transaction. The boot drain will start it with the new
+// frozen route; rejecting it would make the safe switch look like downtime.
+func (d *Server) enqueueDuringModelChange(ctx context.Context, identity *control.IdentityContext, req api.MessageRequest) api.MessageResponse {
+	if d == nil || d.Control == nil || identity == nil {
+		return api.MessageResponse{Identity: identity, Error: "queue is not available", Turn: messageTurn("failed", "", "draining", "", "", "queue is not available")}
+	}
+	ahead, _ := d.Control.CountQueued(ctx, identity.TenantID, identity.PersonID, control.QueueStatusQueued)
+	if d.coordinator().currentActive(identity.PersonID) != nil {
+		ahead++
+	}
+	_, err := d.Control.EnqueueQueued(ctx, control.QueuedTask{
+		TenantID: identity.TenantID, PersonID: identity.PersonID,
+		Channel: req.Channel, Platform: req.Platform, PlatformUserID: req.PlatformUserID,
+		Content: req.Content, ApprovalMode: req.ApprovalMode, WorkspaceID: req.WorkspaceID,
+		ExecutionRoots: req.ExecutionRoots,
+	})
+	if err != nil {
+		return api.MessageResponse{Identity: identity, Error: err.Error(), Turn: messageTurn("failed", "", "draining", "", "", err.Error())}
+	}
+	content := fmt.Sprintf("Queued for the model change (%d ahead). It will start after SelfMind applies the new model.", ahead)
+	return api.MessageResponse{
+		Identity: identity, Content: content, Accepted: true,
+		Turn: messageTurn("queued", "queued", "draining", "", "", content),
+	}
+}
+
 // DrainQueuedAtBoot resumes queued work after a gateway restart. The
 // gateway.lock flock guarantees this is the only daemon on control.db, so any
 // row left 'started' was mid-launch when the previous daemon died and never ran

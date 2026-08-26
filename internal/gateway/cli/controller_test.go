@@ -15,6 +15,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"selfmind/internal/gateway/api"
 	"selfmind/internal/kernel/llm"
+	"selfmind/internal/modelchange"
 	"selfmind/internal/platform/config"
 )
 
@@ -960,6 +961,47 @@ func TestHybridCommitsStartupCardToScrollbackOnce(t *testing.T) {
 	}
 }
 
+func TestOnboardingStartupCardShowsModelPairWorkspaceAndFirstTask(t *testing.T) {
+	controller := NewControllerWithGateway(nil, nil, nil, "codex-cli", "gpt-primary", nil, "")
+	controller.SetOnboardingContext(OnboardingContext{
+		BackgroundModel: "openai/gpt-background",
+		WorkspaceID:     "ws-1", WorkspaceName: "project", WorkspacePath: "/work/project",
+		FirstTaskPending: true,
+	})
+	rendered := stripANSI(strings.Join(controller.model.renderStartupCard(100), "\n"))
+	for _, expected := range []string{"gpt-primary", "openai/gpt-background", "workspace:", "/work/project", "Try: Inspect this workspace"} {
+		if !strings.Contains(rendered, expected) {
+			t.Fatalf("startup card missing %q:\n%s", expected, rendered)
+		}
+	}
+}
+
+func TestFirstSuccessfulOnboardingTaskIsRecordedOnce(t *testing.T) {
+	controller := NewControllerWithGateway(nil, nil, nil, "codex-cli", "gpt-primary", nil, "")
+	calls := 0
+	controller.SetOnboardingContext(OnboardingContext{
+		FirstTaskPending: true,
+		OnFirstSuccess: func() error {
+			calls++
+			return nil
+		},
+	})
+
+	updated, _ := controller.model.Update(MsgAgentDone{Input: "Inspect this project", Response: "Finished."})
+	model := updated.(*uiModel)
+	if calls != 1 || model.firstTaskPending {
+		t.Fatalf("first completion calls=%d pending=%v", calls, model.firstTaskPending)
+	}
+	updated, _ = model.Update(MsgAgentDone{Input: "Inspect it again", Response: "Finished again."})
+	model = updated.(*uiModel)
+	if calls != 1 {
+		t.Fatalf("receipt callback ran %d times, want once", calls)
+	}
+	if len(model.messages) < 3 || model.messages[1].Role != "notice" || !strings.Contains(model.messages[1].Content, "Setup complete") {
+		t.Fatalf("missing one-shot setup completion notice: %+v", model.messages)
+	}
+}
+
 func TestWriteFileCellRendersDiff(t *testing.T) {
 	content := "Edited app.go (+1 -1)\n keep\n-old line\n+new line"
 	out := stripANSI(renderToolMessage(ChatMessage{
@@ -1159,6 +1201,68 @@ func TestDisplayModelNameShowsProviderAndModel(t *testing.T) {
 
 	if got := model.displayModelName(); got != "kimi-coding/kimi-for-coding" {
 		t.Fatalf("displayModelName = %q", got)
+	}
+}
+
+func TestModelChangeReceiptKeepsRunningModelUntilObservedApplied(t *testing.T) {
+	model := NewControllerWithGateway(nil, nil, nil, "codex-cli", "gpt-old", nil, "").model
+	model.modelChangeObserver = func(context.Context, string) (ModelChangeObservation, error) {
+		return ModelChangeObservation{}, nil
+	}
+	change := modelchange.Change{
+		ID: "model_test", Status: modelchange.StatusAwaitingSafeBoundary, PhaseStartedAt: time.Now(),
+		Previous:  modelchange.Snapshot{Primary: config.ModelSelectionConfig{Provider: "codex-cli", Model: "gpt-old"}},
+		Candidate: modelchange.Snapshot{Primary: config.ModelSelectionConfig{Provider: "codex-cli", Model: "gpt-new", Reasoning: "high"}},
+	}
+	updated, cmd := model.Update(MsgModelChangeDone{Response: api.ModelChangeResponse{Change: &change, RestartScheduled: true}})
+	model = updated.(*uiModel)
+	if got := model.displayModelName(); got != "codex-cli/gpt-old" {
+		t.Fatalf("running display changed before health: %q", got)
+	}
+	if model.modelManagerStatus.ConfiguredPrimary != "codex-cli/gpt-new · reasoning=high" {
+		t.Fatalf("configured primary = %q", model.modelManagerStatus.ConfiguredPrimary)
+	}
+	if model.modelChangeID != change.ID || cmd == nil {
+		t.Fatalf("change was not observed: id=%q cmd=%v", model.modelChangeID, cmd)
+	}
+}
+
+func TestModelRestartOfflinePreservesDraftInsteadOfPosting(t *testing.T) {
+	model := NewController(nil, nil, nil, "").model
+	model.modelGatewayOffline = true
+	model.modelChangePhase = modelchange.StatusRestarting
+	model.editor.SetValue("inspect the workspace")
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(*uiModel)
+	if got := model.editor.Value(); got != "inspect the workspace" {
+		t.Fatalf("draft = %q", got)
+	}
+	if !strings.Contains(model.statusMsg, "gateway is restarting") {
+		t.Fatalf("status = %q", model.statusMsg)
+	}
+}
+
+func TestModelChangeSlowWarningIsShownOnlyOnce(t *testing.T) {
+	model := NewController(nil, nil, nil, "").model
+	model.modelChangeObserver = func(context.Context, string) (ModelChangeObservation, error) {
+		return ModelChangeObservation{}, nil
+	}
+	status := modelchange.Status{Pending: &modelchange.Change{
+		ID: "model_slow", Status: modelchange.StatusAwaitingSafeBoundary,
+		CreatedAt: time.Now().Add(-31 * time.Second), PhaseStartedAt: time.Now().Add(-31 * time.Second),
+	}}
+	for i := 0; i < 2; i++ {
+		updated, _ := model.Update(MsgModelChangeObserved{Observation: ModelChangeObservation{Status: status, GatewayReachable: true}})
+		model = updated.(*uiModel)
+	}
+	warnings := 0
+	for _, message := range model.messages {
+		if strings.Contains(message.Content, "taking longer than 30 seconds") {
+			warnings++
+		}
+	}
+	if warnings != 1 {
+		t.Fatalf("slow warnings = %d, want 1", warnings)
 	}
 }
 

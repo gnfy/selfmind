@@ -37,10 +37,13 @@ custom_unknown_section:
 	var stdout, stderr bytes.Buffer
 	app := &App{
 		ctx:        context.Background(),
-		args:       []string{"selfmind", "setup", "--skip-gateway"},
+		args:       []string{"selfmind", "setup", "--non-interactive", "--skip-gateway"},
 		stdout:     &stdout,
 		stderr:     &stderr,
 		configPath: configPath,
+		onboardingProbe: func(*config.Config, string) error {
+			return nil
+		},
 	}
 	handled, code := app.runSetupCommandIfRequested()
 	if !handled || code != 0 {
@@ -78,7 +81,7 @@ func TestNonInteractiveSetupRejectsMissingModelWithoutStartingGateway(t *testing
 	if !handled || code != 1 {
 		t.Fatalf("setup = handled:%v code:%d stdout:%q stderr:%q", handled, code, stdout.String(), stderr.String())
 	}
-	if !bytes.Contains(stderr.Bytes(), []byte("No default model is configured")) {
+	if !bytes.Contains(stderr.Bytes(), []byte("No primary model is configured")) {
 		t.Fatalf("missing actionable model error: %q", stderr.String())
 	}
 }
@@ -93,11 +96,12 @@ func TestInteractiveSetupCancelDoesNotStartGateway(t *testing.T) {
 		t.Fatal(err)
 	}
 	app := &App{
-		ctx:        context.Background(),
-		args:       []string{"selfmind", "setup", "--skip-gateway"},
-		stdout:     &stdout,
-		stderr:     &stderr,
-		configPath: configPath,
+		ctx:         context.Background(),
+		args:        []string{"selfmind", "setup", "--skip-gateway"},
+		stdout:      &stdout,
+		stderr:      &stderr,
+		configPath:  configPath,
+		interactive: true,
 	}
 	app.stdin = strings.NewReader(fmt.Sprintf("%d\n", len(app.modelChoices(cfg))))
 
@@ -178,7 +182,8 @@ func TestInitialModelSetupDoesNotPromptNonInteractiveLaunch(t *testing.T) {
 	if called {
 		t.Fatal("non-interactive launch prompted for model setup")
 	}
-	if !strings.Contains(stderr.String(), "Run `selfmind setup` in an interactive terminal") {
+	if !strings.Contains(stderr.String(), "Run `selfmind setup` or `selfmind model` in an interactive terminal") ||
+		!strings.Contains(stderr.String(), "configure `models.primary` in YAML") {
 		t.Fatalf("missing non-interactive guidance: %q", stderr.String())
 	}
 }

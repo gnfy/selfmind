@@ -92,6 +92,9 @@ func (c *RunCoordinator) prepareSkillCandidateSnapshot(ctx context.Context, iden
 			continue
 		}
 		key := control.SkillKey(identity.TenantID, resolved.Name, resolved.Scope, resolved.Source, resolved.Root, rel)
+		if blocked, blockErr := c.srv.Control.SkillVersionActivationBlocked(ctx, identity.TenantID, key, pack.VersionHash); blockErr != nil || blocked {
+			continue
+		}
 		input := control.IssueSkillCandidateRefInput{
 			IdentityTenantID: identity.TenantID, ControlTenantID: identity.TenantID,
 			PersonID: identity.PersonID, RunID: runID, WorkUnitID: workUnitID,

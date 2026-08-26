@@ -58,7 +58,7 @@ type Entry struct {
 var entries = []Entry{
 	// --- Gateway control commands (order matches the gateway /help text) ---
 	{Name: "/help", Usage: "/help", Summary: "Show this help.", SyncControl: true, Scope: Gateway},
-	{Name: "/model", Usage: "/model", Summary: "Show the configured model.", SyncControl: true, Scope: Gateway},
+	{Name: "/model", Usage: "/model", Summary: "Open or describe Main, Background, and optional role model settings.", SyncControl: true, Scope: Gateway},
 	{Name: "/id", Usage: "/id", Summary: "Show your resolved account identity.", SyncControl: true, Scope: Gateway},
 	{Name: "/status", Aliases: []string{"/task status"}, Usage: "/status", Summary: "Show the current task status.", SyncControl: true, Scope: Gateway},
 	{Name: "/tasks", Usage: "/tasks [done|archived|all]", Summary: "List open work (done/archived collapse to counts).", SyncControl: true, Scope: Gateway},

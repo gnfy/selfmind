@@ -844,6 +844,12 @@ func (c *RunCoordinator) drainQueue(identity *control.IdentityContext) {
 	if c == nil || c.srv == nil || c.srv.Control == nil || identity == nil {
 		return
 	}
+	// A safe process drain leaves queued rows durable for the next daemon. A
+	// run finalizer must not race the restart by launching the next item under
+	// the old model/runtime after shutdown has already begun.
+	if c.srv.IsDraining() {
+		return
+	}
 	personID := identity.PersonID
 	c.mu.Lock()
 	if c.active[personID] != nil { // a run raced in; its own finalize will drain

@@ -16,15 +16,20 @@ selfmind uninstall --prepare [--purge-data --yes]
 selfmind feedback [--out FILE|--send] [--repo OWNER/REPO] [--include-crash] <message>
 ```
 
-- 直接运行 `selfmind` 打开 TUI。首次在交互式终端启动时，如果缺少模型配置，
-  程序会先进入引导设置，并且只在配置完成后启动 daemon。取消设置会直接退出；
-  脚本、cron 和管道等非交互场景不会弹出提示，而会输出可执行的 `setup` 或
-  `model set` 命令。`--config` 指定其他配置文件，`--resume` 恢复已有 TUI
+- 直接运行 `selfmind` 打开 TUI。首次在交互式终端启动时，如果安装尚未完整，
+  Linux 与 macOS 都会在 TUI 启动前进入同一套引导。取消设置会直接退出；
+  脚本、cron 和管道等非交互场景不会弹出提示，而会输出可执行的 `setup`
+  命令。`--config` 指定其他配置文件，`--resume` 恢复已有 TUI
   会话。可重复使用 `--add-dir`，仅为本次 CLI 调用授予另一个本地目录的访问权，
   不会修改已登记的 workspace。
-- `setup` 创建或升级配置，引导选择一个主模型和一个可选辅助模型，然后启动本地
-  gateway。辅助模型统一承担审批、记忆、召回、摘要和 Skill 工作；逐角色调优仍可在
-  YAML 中作为高级配置完成。各类 `skip` 参数可用于自动化环境。
+- `setup` 创建缺失的配置，并明确确认两条模型路由：主模型负责交互任务，后台模型
+  负责维护工作。随后统一确认项目工作区及其信任边界、审批模式和后台运行方式。
+  快速路径只有两次确认。两个模型都会先进行有界真实探测；安装后的 daemon 还会从
+  自己的运行环境再次探测同一路由。用户确认使用的 shell 环境 API 凭据会复制到
+  SelfMind 私有凭据文件，绝不会写进操作系统服务定义。工作区不会静默使用 `/` 或
+  用户主目录。macOS 的 launchd 与 Linux 的用户级 systemd 只是内部实现，用户只需
+  选择托管后台运行或按需启动。TUI 中首个成功的非命令任务会完成首次使用回执。
+  各类 `skip` 参数仍可用于受控自动化环境。
 - `update check` 只检查更新。`update` 执行完整升级：检查所选 npm 通道、
   调用包管理器安装、用 `selfmind --version` 验证新二进制，并对运行中的
   gateway daemon 做默认排空（drain）重启以切换到新版本。同版本也会重新
@@ -113,7 +118,7 @@ selfmind workspace [list|add|use|trust|untrust|grants|observe|revoke|<n|workspac
 ```text
 selfmind config [doctor|upgrade]
 selfmind env [show|refresh]
-selfmind model [current|check [--live] [--role <name>]|list|set <provider> <model>]
+selfmind model
 selfmind prompt [list|show|edit|diff|validate|test|reset|apply] ...
 selfmind auth [login|status|logout] ...
 selfmind doctor [--verbose] [--out FILE] [--probe-models]
@@ -128,9 +133,6 @@ selfmind weixin [login|status] ...
 详细语法：
 
 ```text
-selfmind model set <provider> <model> [--reasoning <level|auto>] [--service-tier <tier|auto>]
-selfmind model check [--live] [--role <name>]
-
 selfmind prompt [list|status]
 selfmind prompt show <agent|role>
 selfmind prompt edit <agent|role>
@@ -164,17 +166,26 @@ selfmind weixin status
 
 - `config doctor` 只报告配置缺失或过期项；`config upgrade` 在保留已有值的
   前提下补充受支持的默认项。
-- `model set` 写入 `models.primary`。如果 auxiliary 还没有 provider/model，
-  第一次写入还会用相同 provider/model 初始化 `models.auxiliary`；之后修改
-  primary 不会覆盖已有 auxiliary。能力元数据存在时，会动态校验
-  reasoning/service tier；`auto` 表示交给 provider/模型默认处理。
-- 共享 daemon 不支持在 TUI `/model` 中热切换。修改后使用
-  `selfmind gateway restart --drain`，在安全 turn 边界重启。
-- `model check` 解析凭证、协议、端点和模型，但不会暴露密钥。`--role auxiliary`
-  检查共享辅助路由；`--role <name>` 按 auxiliary/角色覆盖规则检查具体角色；
-  `--live` 会发起有界请求并验证原生工具 schema 兼容性。对于 DeepSeek V4
-  这类具有多轮思考/工具契约的 provider，还会回放一次无副作用工具结果并验证
-  最终答复，因此会消耗少量 provider 额度。
+- `selfmind model` 是唯一的 CLI 模型命令；它与 TUI 中不带参数的 `/model`
+  打开同一个 Model Manager。传入子命令会直接拒绝，避免出现第二条修改路径。
+- 管理器显示 Main、Background、六个可选角色覆盖
+  (`fast_classifier`、`memory_extract`、`background_review`、`skill_curator`、
+  `semantic_recall`、`summarizer`) 以及变更/恢复状态。未覆盖的角色会明确显示
+  “使用 Background”。只有 Main 可以负责完整的用户可见回合。
+- 一次会话可同时编辑 Main、Background 和多个角色。每完成一个选择，daemon
+  都会自动探测；不再提供单独的 verify 命令。探测失败只保留可编辑草稿，不改
+  YAML。缺少 API key 时可在关闭回显的输入框中补充，并且只在探测成功后写入私有
+  凭据文件。最终确认会提交一个不含密钥的原子快照，并且只安排一次安全重启。
+- 已有 reasoning、service tier、context 和 YAML 专属 transport 字段会在兼容时
+  保留；兼容性未知时只把受影响的可选项恢复为 `auto`。第一次 Main 选择可以初始化
+  空的 Background；之后 Main 的修改不会覆盖 Background。
+- 接受在线变更后会安排一次安全 daemon 重启。当前 run 继续使用冻结的旧路由；drain
+  期间收到的新工作会排队给新 daemon。启动时再次探测候选项，并且只有 Agent 和
+  `/health` 都健康后才提交。确定的模型不兼容会恢复上一次运行路由；基础设施或
+  未知失败会进入 `recovery_required`。重试/恢复选项位于 Change status 页面；有界、
+  不含密钥的历史以及 running/configured/pending 状态仍由管理器展示，不再暴露成
+  独立命令。对于 DeepSeek V4 这类具有多轮思考/工具契约的 provider，自动校验还会
+  回放一次无副作用工具结果并验证最终答复，因此会消耗少量 provider 额度。
 - `prompt` 管理当前配置文件同级的 operator 工作区（通常是
   `~/.selfmind/prompts/`），不需要增加 `config.yaml` 配置项。`list`/`status`
   会比较磁盘快照与运行中 daemon 已加载的哈希和 build，因此相同的自定义哈希不会
@@ -216,10 +227,11 @@ selfmind weixin status
   `CI-DEFERRED`，且发布仍要求对应 Action 通过。退出码：`0` 通过、`1` 回归失败、
   `2` 参数或环境不可用。
 - `gateway restart` 默认等待安全的 turn 边界；`--force` 仅作为最后手段。
-- 在 macOS 上，`gateway service install` 会为当前用户创建 launchd
-  LaunchAgent。之后 `gateway start`、`stop`、`status`、`restart` 都操作这个
-  稳定服务；`restart --drain` 会先等待活跃 turn 到达安全边界，再由
-  launchd 重新拉起 daemon。
+- `gateway service install` 在 macOS 上创建当前用户的 launchd LaunchAgent，
+  在 Linux 上创建当前用户的 systemd unit。之后 `gateway start`、`stop`、
+  `status`、`restart` 都操作这个稳定服务；`restart --drain` 会先等待活跃 turn
+  到达安全边界，再由服务重新拉起 daemon。两者都不需要管理员权限。Linux 上若已有
+  系统级 `selfmind.service` 正在运行，个人设置会明确报告冲突，不会停止或替换它。
 - 如果微信 iLink 会话过期，重新运行 `selfmind weixin login`。正在运行的
   gateway 会监听账号凭据文件，在新凭据保存后自动恢复轮询，不需要重启
   daemon。

@@ -52,6 +52,12 @@ Migrate the CLI/TUI from "app-owned full-viewport re-render" to a
   the currently-streaming reply, the currently-running tool cell, and transient
   dialogs (approval, menus).
 
+After guided setup, the startup card shows the accepted primary/background
+model pair and logical workspace without exposing launchd/systemd details. Until
+the first successful non-command local task, it also shows one read-only starter
+task. That successful final outcome records the private first-use receipt once;
+slash commands, empty answers, and failed runs do not complete onboarding.
+
 Key realization driving this: **both reference tools are already this hybrid.**
 Codex commits history via `insert_history_lines`/`scroll_region_up`; Claude
 Code (Ink) commits history via the `<Static>` component and re-renders only the

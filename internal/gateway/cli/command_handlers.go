@@ -989,24 +989,6 @@ func (m *uiModel) handleCurator(args []string) tea.Cmd {
 	}
 }
 
-func (m *uiModel) handleModelSwitch(modelName string) tea.Cmd {
-	return func() tea.Msg {
-		if m.agent == nil {
-			if m.clientMode {
-				return MsgAgentDone{Response: "Runtime model switching isn't available in daemon-client mode yet (it mutates the daemon's agent). Set the model via config / `selfmind model set` and restart the daemon."}
-			}
-			return MsgAgentDone{Response: "Agent not initialized."}
-		}
-		oldModel := m.agent.CurrentModel()
-		if ok := m.agent.SwitchModel(modelName); !ok {
-			return MsgAgentDone{Response: fmt.Sprintf("Provider does not support runtime model switching. Current model: %s", oldModel)}
-		}
-		m.modelName = modelName
-		m.providerName = modelName
-		return MsgAgentDone{Response: fmt.Sprintf("Model switched: %s → %s", oldModel, modelName)}
-	}
-}
-
 func (m *uiModel) handleCheckpoint(args []string) tea.Cmd {
 	action := args[0]
 	name := ""

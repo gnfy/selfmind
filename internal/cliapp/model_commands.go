@@ -2,12 +2,16 @@ package cliapp
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"os"
+	"os/exec"
 	"regexp"
 	"sort"
 	"strconv"
@@ -15,9 +19,11 @@ import (
 	"time"
 
 	appcore "selfmind/internal/app"
+	"selfmind/internal/gateway/api"
+	"selfmind/internal/modelchange"
 	"selfmind/internal/modelruntime"
 	"selfmind/internal/platform/config"
-	"selfmind/internal/tools"
+	gatewayrt "selfmind/internal/runtime/gateway"
 )
 
 type modelChoice struct {
@@ -25,11 +31,18 @@ type modelChoice struct {
 	Label       string
 	Kind        string
 	CustomIndex int
+	Ready       bool
 }
+
+var errModelChangeEndpointUnavailable = errors.New("running gateway does not support model transactions")
 
 func (a *App) runModelCommandIfRequested() (bool, int) {
 	if len(a.args) < 2 || a.args[1] != "model" {
 		return false, 0
+	}
+	if len(a.args) != 2 {
+		fmt.Fprintln(a.stderr, "Usage: selfmind model")
+		return true, 2
 	}
 
 	cfg, err := config.LoadConfig(config.Options{Path: a.configPath, CreateIfMissing: true})
@@ -37,37 +50,23 @@ func (a *App) runModelCommandIfRequested() (bool, int) {
 		fmt.Fprintln(a.stderr, err)
 		return true, 1
 	}
-
-	args := a.args[2:]
-	if len(args) == 0 {
-		return true, a.runInteractiveModelPicker(cfg)
-	}
-
-	switch args[0] {
-	case "current":
-		a.printCurrentModel(cfg)
-		return true, 0
-	case "check":
-		options, err := parseModelCheckOptions(args[1:])
-		if err != nil {
-			fmt.Fprintln(a.stderr, err)
-			return true, 2
-		}
-		return true, a.checkCurrentModel(cfg, options)
-	case "list":
-		a.printConfiguredProviders(cfg)
-		return true, 0
-	case "set":
-		return true, a.setModelFromArgs(cfg, args[1:])
-	default:
-		fmt.Fprintln(a.stderr, "usage: selfmind model [current|check [--live] [--role <name>]|list|set <provider> <model> [--reasoning <level|auto>] [--service-tier <tier|auto>]]")
-		return true, 2
-	}
+	_ = cfg // ensure the config exists before the daemon-backed manager starts
+	a.modelManagerOnly = true
+	return true, a.runTUI()
 }
 
 func (a *App) runInteractiveModelPicker(cfg *config.Config) int {
+	return a.runInteractiveModelPickerFor(cfg, "primary")
+}
+
+func (a *App) runInteractiveModelPickerFor(cfg *config.Config, target string) int {
 	fmt.Fprintln(a.stdout, "SelfMind model setup")
-	a.printCurrentModel(cfg)
+	if strings.EqualFold(target, "auxiliary") {
+		current := cfg.EffectiveAuxiliary()
+		fmt.Fprintf(a.stdout, "Background: provider=%s model=%s\n", blankAsDash(current.Provider), blankAsDash(current.Model))
+	} else {
+		a.printCurrentModel(cfg)
+	}
 	fmt.Fprintln(a.stdout)
 
 	choices := a.modelChoices(cfg)
@@ -83,11 +82,11 @@ func (a *App) runInteractiveModelPicker(cfg *config.Config) int {
 	choice := choices[index]
 	switch choice.Kind {
 	case "builtin":
-		return a.configureBuiltinProvider(cfg, choice.ID)
+		return a.configureBuiltinProviderFor(cfg, choice.ID, target)
 	case "custom_saved":
-		return a.configureSavedCustomProvider(cfg, choice.CustomIndex)
+		return a.configureSavedCustomProviderFor(cfg, choice.CustomIndex, target)
 	case "custom_new":
-		return a.configureCustomEndpoint(cfg)
+		return a.configureCustomEndpointFor(cfg, target)
 	case "remove_custom":
 		return a.removeCustomProvider(cfg)
 	case "skip":
@@ -99,9 +98,7 @@ func (a *App) runInteractiveModelPicker(cfg *config.Config) int {
 }
 
 func (a *App) modelChoices(cfg *config.Config) []modelChoice {
-	// Keep the interactive order close to Hermes: first major providers, then
-	// manual custom endpoints, then auth-reuse/coding-plan profiles.
-	choices := []modelChoice{
+	base := []modelChoice{
 		{ID: "openai", Label: "OpenAI", Kind: "builtin"},
 		{ID: "anthropic", Label: "Anthropic", Kind: "builtin"},
 		{ID: "google", Label: "Google", Kind: "builtin"},
@@ -118,6 +115,13 @@ func (a *App) modelChoices(cfg *config.Config) []modelChoice {
 		{ID: "zai", Label: "Z.AI / GLM", Kind: "builtin"},
 		{ID: "alibaba-coding-plan", Label: "Alibaba Coding Plan", Kind: "builtin"},
 	}
+	for index := range base {
+		base[index].Ready = a.modelChoiceReady(cfg, base[index])
+		if base[index].Ready {
+			base[index].Label += " (ready)"
+		}
+	}
+	choices := base
 	for i, cp := range cfg.Providers.Custom {
 		name := strings.TrimSpace(cp.Name)
 		if name == "" {
@@ -137,7 +141,27 @@ func (a *App) modelChoices(cfg *config.Config) []modelChoice {
 	return choices
 }
 
+func (a *App) modelChoiceReady(cfg *config.Config, choice modelChoice) bool {
+	if cfg == nil || choice.Kind != "builtin" {
+		return false
+	}
+	resolver := modelruntime.NewResolver(cfg)
+	profile, ok := resolver.Registry().Resolve(choice.ID)
+	if !ok {
+		return false
+	}
+	runtime, err := resolver.Resolve(a.ctx, modelruntime.Selection{
+		Provider: profile.ID,
+		Model:    firstModelChoice(profile.FallbackModels),
+	})
+	return err == nil && strings.TrimSpace(runtime.APIKey) != ""
+}
+
 func (a *App) configureBuiltinProvider(cfg *config.Config, provider string) int {
+	return a.configureBuiltinProviderFor(cfg, provider, "primary")
+}
+
+func (a *App) configureBuiltinProviderFor(cfg *config.Config, provider, target string) int {
 	resolver := modelruntime.NewResolver(cfg)
 	profile, ok := resolver.Registry().Resolve(provider)
 	if !ok {
@@ -169,13 +193,25 @@ func (a *App) configureBuiltinProvider(cfg *config.Config, provider string) int 
 			fmt.Fprintln(a.stdout, externalLoginHint(profile.ID))
 		}
 	} else {
+		currentKey := endpoint.APIKey
+		if strings.TrimSpace(currentKey) == "" {
+			if existing, resolveErr := resolver.Resolve(a.ctx, modelruntime.Selection{
+				Provider: profile.ID, Model: firstNonEmpty(endpoint.Model, cfg.EffectiveModel()), BaseURL: endpoint.BaseURL,
+			}); resolveErr == nil {
+				currentKey = existing.APIKey
+			}
+		}
 		var err error
-		key, err = a.promptAPIKey(profile.DisplayName, endpoint.APIKey)
+		key, err = a.promptAPIKey(profile.DisplayName, currentKey)
 		if err != nil {
 			fmt.Fprintln(a.stderr, err)
 			return 1
 		}
-		endpoint.APIKey = key
+		if err := modelruntime.NewCredentialStore(cfg.Auth.CredentialsFile).SaveAPIKey(profile.ID, key); err != nil {
+			fmt.Fprintf(a.stderr, "Save model credential: %v\n", err)
+			return 1
+		}
+		endpoint.APIKey = ""
 	}
 
 	rt := modelruntime.Runtime{
@@ -201,27 +237,40 @@ func (a *App) configureBuiltinProvider(cfg *config.Config, provider string) int 
 	}
 
 	setProviderEndpointForModelCommand(cfg, profile.ID, endpoint)
-	cfg.SetPrimaryModel(profile.ID, model, "")
-	if err := config.SaveConfig(cfg.Path, cfg); err != nil {
-		fmt.Fprintln(a.stderr, err)
-		return 1
+	if profile.AuthType != modelruntime.AuthExternalOAuth && profile.AuthType != modelruntime.AuthMiniMaxOAuth {
+		clearProviderCredentialForModelCommand(cfg, profile.ID)
 	}
-	fmt.Fprintf(a.stdout, "Saved model: %s / %s\nConfig: %s\n", profile.ID, model, cfg.Path)
-	return 0
+	return a.finalizeInteractiveModel(cfg, target, profile.ID, model)
 }
 
 func (a *App) configureSavedCustomProvider(cfg *config.Config, index int) int {
+	return a.configureSavedCustomProviderFor(cfg, index, "primary")
+}
+
+func (a *App) configureSavedCustomProviderFor(cfg *config.Config, index int, target string) int {
 	if index < 0 || index >= len(cfg.Providers.Custom) {
 		fmt.Fprintln(a.stderr, "custom provider not found")
 		return 1
 	}
 	cp := cfg.Providers.Custom[index]
-	key, err := a.promptAPIKey(cp.Name, cp.APIKey)
+	currentKey := cp.APIKey
+	if strings.TrimSpace(currentKey) == "" {
+		if resolved, resolveErr := modelruntime.NewResolver(cfg).Resolve(a.ctx, modelruntime.Selection{
+			Provider: "custom:" + cp.Name, Model: cp.Model,
+		}); resolveErr == nil {
+			currentKey = resolved.APIKey
+		}
+	}
+	key, err := a.promptAPIKey(cp.Name, currentKey)
 	if err != nil {
 		fmt.Fprintln(a.stderr, err)
 		return 1
 	}
-	cp.APIKey = key
+	if err := modelruntime.NewCredentialStore(cfg.Auth.CredentialsFile).SaveAPIKey("custom:"+cp.Name, key); err != nil {
+		fmt.Fprintf(a.stderr, "Save model credential: %v\n", err)
+		return 1
+	}
+	cp.APIKey = ""
 
 	models, err := fetchOpenAICompatibleModels(a.ctx, cp.BaseURL, key)
 	if err != nil {
@@ -237,16 +286,14 @@ func (a *App) configureSavedCustomProvider(cfg *config.Config, index int) int {
 		cp.Protocol = "openai_compatible"
 	}
 	cfg.Providers.Custom[index] = cp
-	cfg.SetPrimaryModel("custom:"+cp.Name, model, "")
-	if err := config.SaveConfig(cfg.Path, cfg); err != nil {
-		fmt.Fprintln(a.stderr, err)
-		return 1
-	}
-	fmt.Fprintf(a.stdout, "Saved model: custom:%s / %s\nConfig: %s\n", cp.Name, model, cfg.Path)
-	return 0
+	return a.finalizeInteractiveModel(cfg, target, "custom:"+cp.Name, model)
 }
 
 func (a *App) configureCustomEndpoint(cfg *config.Config) int {
+	return a.configureCustomEndpointFor(cfg, "primary")
+}
+
+func (a *App) configureCustomEndpointFor(cfg *config.Config, target string) int {
 	baseURL, err := a.promptInput("Base URL", "")
 	if err != nil {
 		fmt.Fprintln(a.stderr, err)
@@ -294,18 +341,64 @@ func (a *App) configureCustomEndpoint(cfg *config.Config) int {
 	cp := config.CustomProvider{
 		Name:     name,
 		BaseURL:  normalizeOpenAIRoot(baseURL),
-		APIKey:   key,
 		Protocol: "openai_compatible",
 		Model:    model,
 	}
+	if err := modelruntime.NewCredentialStore(cfg.Auth.CredentialsFile).SaveAPIKey("custom:"+name, key); err != nil {
+		fmt.Fprintf(a.stderr, "Save model credential: %v\n", err)
+		return 1
+	}
 	upsertCustomProvider(cfg, cp)
-	cfg.SetPrimaryModel("custom:"+name, model, "")
+	return a.finalizeInteractiveModel(cfg, target, "custom:"+name, model)
+}
+
+func (a *App) finalizeInteractiveModel(cfg *config.Config, target, provider, model string) int {
 	if err := config.SaveConfig(cfg.Path, cfg); err != nil {
 		fmt.Fprintln(a.stderr, err)
 		return 1
 	}
-	fmt.Fprintf(a.stdout, "Saved model: custom:%s / %s\nConfig: %s\n", name, model, cfg.Path)
+	route := modelchange.RoutePrimary
+	if strings.EqualFold(strings.TrimSpace(target), "auxiliary") {
+		route = modelchange.RouteAuxiliary
+	}
+	candidate, err := modelchange.BuildCandidate(modelchange.SnapshotFromConfig(cfg), modelchange.SelectionPatch{
+		Route: route, Provider: provider, Model: model,
+	})
+	if err != nil {
+		fmt.Fprintln(a.stderr, err)
+		return 1
+	}
+	receipt, err := a.commitModelCandidate(cfg, route, provider, model, modelchange.OptionalValue{}, modelchange.OptionalValue{}, candidate)
+	if err != nil {
+		fmt.Fprintln(a.stderr, err)
+		return 1
+	}
+	notices := candidate.Notices
+	if receipt.Online {
+		notices = receipt.Notices
+	}
+	for _, notice := range notices {
+		fmt.Fprintf(a.stdout, "Notice: %s\n", notice)
+	}
+	fmt.Fprintf(a.stdout, "Saved %s model: %s / %s\n", modelTargetLabel(target), receipt.Selection.Provider, receipt.Selection.Model)
+	if receipt.Online && receipt.RestartScheduled {
+		fmt.Fprintf(a.stdout, "Change: %s (validated; safe restart scheduled)\n", receipt.ChangeID)
+	} else if receipt.Online {
+		fmt.Fprintf(a.stdout, "Change: %s (validated and saved; run `selfmind gateway restart --drain` to apply)\n", receipt.ChangeID)
+	} else if receipt.LegacyDaemon {
+		fmt.Fprintf(a.stdout, "State: saved, not applied (the running daemon needs an upgrade or `selfmind gateway restart --drain`)\n")
+	} else {
+		fmt.Fprintln(a.stdout, "State: saved, not applied (daemon is stopped; startup will verify again)")
+	}
+	fmt.Fprintf(a.stdout, "Config: %s\n", cfg.Path)
 	return 0
+}
+
+func modelTargetLabel(target string) string {
+	if strings.EqualFold(strings.TrimSpace(target), "auxiliary") {
+		return "background"
+	}
+	return "primary"
 }
 
 func (a *App) removeCustomProvider(cfg *config.Config) int {
@@ -341,67 +434,9 @@ func (a *App) removeCustomProvider(cfg *config.Config) int {
 	return 0
 }
 
-func (a *App) setModelFromArgs(cfg *config.Config, args []string) int {
-	if len(args) < 2 {
-		fmt.Fprintln(a.stderr, "usage: selfmind model set <provider> <model> [--reasoning <level|auto>] [--service-tier <tier|auto>]")
-		return 2
-	}
-	provider := strings.TrimSpace(args[0])
-	model := strings.TrimSpace(args[1])
-	if provider == "" || model == "" {
-		fmt.Fprintln(a.stderr, "provider and model are required")
-		return 2
-	}
-	reasoning, serviceTier, err := parseModelSetOptions(args[2:])
-	if err != nil {
-		fmt.Fprintln(a.stderr, err)
-		return 2
-	}
-
-	switch strings.ToLower(provider) {
-	case "google", "gemini":
-		provider = "google"
-	default:
-		if strings.HasPrefix(strings.ToLower(provider), "custom:") {
-			name := strings.TrimPrefix(provider, "custom:")
-			for i := range cfg.Providers.Custom {
-				if strings.EqualFold(cfg.Providers.Custom[i].Name, name) {
-					cfg.Providers.Custom[i].Model = model
-					break
-				}
-			}
-		} else if profile, ok := modelruntime.NewResolver(cfg).Registry().Resolve(provider); ok {
-			endpoint := providerEndpointForModelCommand(cfg, profile.ID)
-			endpoint.Model = ""
-			endpoint.BaseURL = firstNonEmpty(endpoint.BaseURL, profile.BaseURL)
-			endpoint.Protocol = modelruntime.NormalizeProtocol(firstNonEmpty(endpoint.Protocol, profile.Protocol))
-			setProviderEndpointForModelCommand(cfg, profile.ID, endpoint)
-			provider = profile.ID
-		}
-	}
-
-	if err := validateModelOptions(provider, model, reasoning, serviceTier); err != nil {
-		fmt.Fprintln(a.stderr, err)
-		return 2
-	}
-	cfg.SetPrimaryModel(provider, model, reasoning)
-	cfg.Models.Primary.ServiceTier = normalizeModelOption(serviceTier)
-	if err := config.SaveConfig(cfg.Path, cfg); err != nil {
-		fmt.Fprintln(a.stderr, err)
-		return 1
-	}
-	fmt.Fprintf(a.stdout, "Saved model: %s / %s\n", provider, model)
-	fmt.Fprintf(a.stdout, "Reasoning: %s\n", displayModelOption(reasoning))
-	if serviceTier != "" {
-		fmt.Fprintf(a.stdout, "Service tier: %s\n", displayModelOption(serviceTier))
-	}
-	fmt.Fprintf(a.stdout, "Config: %s\n", cfg.Path)
-	return 0
-}
-
 func (a *App) printCurrentModel(cfg *config.Config) {
 	primary := cfg.EffectivePrimary()
-	fmt.Fprintf(a.stdout, "Current: provider=%s model=%s\n", blankAsDash(primary.Provider), blankAsDash(primary.Model))
+	fmt.Fprintf(a.stdout, "Primary: provider=%s model=%s\n", blankAsDash(primary.Provider), blankAsDash(primary.Model))
 	if descriptor, ok := modelruntime.DiscoverModelDescriptor(primary.Provider, primary.Model); ok {
 		fmt.Fprintf(a.stdout, "Reasoning: %s\n", formatReasoning(primary.Reasoning, descriptor.DefaultReasoning))
 		if primary.ServiceTier != "" || descriptor.DefaultServiceTier != "" {
@@ -416,29 +451,221 @@ func (a *App) printCurrentModel(cfg *config.Config) {
 			fmt.Fprintf(a.stdout, "Service tier: %s\n", displayModelOption(primary.ServiceTier))
 		}
 	}
+	auxiliary := cfg.EffectiveAuxiliary()
+	fmt.Fprintf(a.stdout, "Background: provider=%s model=%s\n", blankAsDash(auxiliary.Provider), blankAsDash(auxiliary.Model))
+	if descriptor, ok := modelruntime.DiscoverModelDescriptor(auxiliary.Provider, auxiliary.Model); ok {
+		fmt.Fprintf(a.stdout, "Background reasoning: %s\n", formatReasoning(auxiliary.Reasoning, descriptor.DefaultReasoning))
+		if auxiliary.ServiceTier != "" || descriptor.DefaultServiceTier != "" {
+			fmt.Fprintf(a.stdout, "Background service tier: %s\n", formatModelDefault(auxiliary.ServiceTier, descriptor.DefaultServiceTier))
+		}
+	} else {
+		fmt.Fprintf(a.stdout, "Background reasoning: %s\n", displayModelOption(auxiliary.Reasoning))
+		if auxiliary.ServiceTier != "" {
+			fmt.Fprintf(a.stdout, "Background service tier: %s\n", displayModelOption(auxiliary.ServiceTier))
+		}
+	}
+	if status, err := (&modelchange.Service{ConfigPath: cfg.Path}).Inspect(); err == nil {
+		if status.Configured != status.Running {
+			fmt.Fprintf(a.stdout, "Running primary: provider=%s model=%s reasoning=%s\n", blankAsDash(status.Running.Primary.Provider), blankAsDash(status.Running.Primary.Model), displayModelOption(status.Running.Primary.Reasoning))
+			fmt.Fprintf(a.stdout, "Running background: provider=%s model=%s reasoning=%s\n", blankAsDash(status.Running.Auxiliary.Provider), blankAsDash(status.Running.Auxiliary.Model), displayModelOption(status.Running.Auxiliary.Reasoning))
+		}
+		if status.Pending != nil {
+			fmt.Fprintf(a.stdout, "Pending: %s (%s)\n", status.Pending.ID, status.Pending.Status)
+		}
+		fmt.Fprintf(a.stdout, "Generation: %d\n", status.Generation)
+	}
 	fmt.Fprintf(a.stdout, "Config: %s\n", cfg.Path)
 }
 
-func parseModelSetOptions(args []string) (reasoning, serviceTier string, err error) {
-	for i := 0; i < len(args); i++ {
-		switch args[i] {
-		case "--reasoning":
-			if i+1 >= len(args) {
-				return "", "", fmt.Errorf("--reasoning requires a value")
-			}
-			reasoning = strings.TrimSpace(args[i+1])
-			i++
-		case "--service-tier":
-			if i+1 >= len(args) {
-				return "", "", fmt.Errorf("--service-tier requires a value")
-			}
-			serviceTier = strings.TrimSpace(args[i+1])
-			i++
-		default:
-			return "", "", fmt.Errorf("unknown model option: %s", args[i])
-		}
+func optionalPointer(value modelchange.OptionalValue) *string {
+	if !value.Set {
+		return nil
 	}
-	return reasoning, serviceTier, nil
+	copy := value.Value
+	return &copy
+}
+
+func (a *App) modelChangeValidator() modelchange.Validator {
+	if a != nil && a.modelChangeValidate != nil {
+		return a.modelChangeValidate
+	}
+	return appcore.ValidateModelChange
+}
+
+// applyModelThroughDaemon keeps the running daemon as the sole online writer.
+// A missing live owner is not an error: the caller falls back to an offline
+// candidate that startup must probe again before accepting as running.
+func (a *App) applyModelThroughDaemon(request api.ModelChangeRequest) (api.ModelChangeResponse, bool, error) {
+	if a == nil || !a.gatewayTargetIsLocal() {
+		return api.ModelChangeResponse{}, false, nil
+	}
+	if _, ok := a.modelDaemonRecord(); !ok {
+		return api.ModelChangeResponse{}, false, nil
+	}
+	result, err := a.requestModelChange(a.ctx, request)
+	if errors.Is(err, errModelChangeEndpointUnavailable) {
+		return api.ModelChangeResponse{}, false, nil
+	}
+	if err == nil && result.Change == nil {
+		err = fmt.Errorf("gateway returned no model change receipt")
+	}
+	return result, true, err
+}
+
+func (a *App) requestModelChange(parent context.Context, request api.ModelChangeRequest) (api.ModelChangeResponse, error) {
+	body, err := json.Marshal(request)
+	if err != nil {
+		return api.ModelChangeResponse{}, err
+	}
+	ctx, cancel := contextWithTimeout(parent, 60*time.Second)
+	defer cancel()
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, a.gatewayURL()+"/v1/gateway/model/change", bytes.NewReader(body))
+	if err != nil {
+		return api.ModelChangeResponse{}, err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	a.attachGatewayAuth(httpReq)
+	a.attachLocalControlAuth(httpReq)
+	resp, err := http.DefaultClient.Do(httpReq)
+	if err != nil {
+		return api.ModelChangeResponse{}, err
+	}
+	defer resp.Body.Close()
+	data, readErr := io.ReadAll(resp.Body)
+	if readErr != nil {
+		return api.ModelChangeResponse{}, readErr
+	}
+	if resp.StatusCode >= http.StatusBadRequest {
+		if resp.StatusCode == http.StatusNotFound {
+			return api.ModelChangeResponse{}, fmt.Errorf("%w", errModelChangeEndpointUnavailable)
+		}
+		return api.ModelChangeResponse{}, fmt.Errorf("%s", gatewayErrorLine(resp.Status, data))
+	}
+	var result api.ModelChangeResponse
+	if err := json.Unmarshal(data, &result); err != nil {
+		return api.ModelChangeResponse{}, err
+	}
+	return result, nil
+}
+
+func (a *App) performModelRecovery(cfg *config.Config, action, id string) (*modelchange.Service, string, error) {
+	service := &modelchange.Service{ConfigPath: cfg.Path}
+	status, err := service.Inspect()
+	if err != nil {
+		return nil, "", err
+	}
+	if status.Pending == nil || status.Pending.Status != modelchange.StatusRecoveryRequired {
+		return nil, "", fmt.Errorf("there is no model change requiring recovery")
+	}
+	if strings.TrimSpace(id) != "" && id != status.Pending.ID {
+		return nil, "", fmt.Errorf("pending model change %q was not found", id)
+	}
+	changeID := status.Pending.ID
+	switch action {
+	case "retry":
+		if _, err := service.RetryRecovery(changeID); err != nil {
+			return nil, "", err
+		}
+	case "restore":
+		if _, err := service.RestorePrevious(changeID); err != nil {
+			return nil, "", err
+		}
+	default:
+		return nil, "", fmt.Errorf("unknown model recovery action %q", action)
+	}
+	if handled, _, err := gatewayServiceStartIfInstalled(a.configPath); handled {
+		if err != nil {
+			if action == "retry" {
+				_, _ = service.MarkRecoveryRequired(changeID, err)
+			}
+			return nil, "", err
+		}
+	} else if _, err := gatewayrt.StartDetached(gatewayrt.StartOptions{ConfigPath: a.configPath}); err != nil && !errors.Is(err, gatewayrt.ErrAlreadyRunning) {
+		if action == "retry" {
+			_, _ = service.MarkRecoveryRequired(changeID, err)
+		}
+		return nil, "", err
+	}
+	return service, changeID, nil
+}
+
+func (a *App) modelDaemonRunning() bool {
+	_, ok := a.modelDaemonRecord()
+	return ok
+}
+
+func (a *App) modelDaemonRecord() (gatewayrt.StatusRecord, bool) {
+	if a == nil || !a.gatewayTargetIsLocal() {
+		return gatewayrt.StatusRecord{}, false
+	}
+	record, ok := gatewayrt.NewManager(a.gatewayDataDir(), "").RunningRecord()
+	if !ok {
+		return gatewayrt.StatusRecord{}, false
+	}
+	selectedPath, _ := config.ResolveConfigPath(a.configPath)
+	if strings.TrimSpace(record.ConfigPath) != "" {
+		runningPath, _ := config.ResolveConfigPath(record.ConfigPath)
+		if !samePath(selectedPath, runningPath) {
+			return gatewayrt.StatusRecord{}, false
+		}
+	} else if strings.TrimSpace(a.configPath) != "" {
+		// Older daemons did not record their config path. Never route an
+		// explicit alternate-config command into an ambiguous owner.
+		return gatewayrt.StatusRecord{}, false
+	}
+	return record, true
+}
+
+type modelApplyReceipt struct {
+	Selection        config.ModelSelectionConfig
+	ChangeID         string
+	Online           bool
+	RestartScheduled bool
+	Notices          []string
+	LegacyDaemon     bool
+}
+
+func (a *App) commitModelCandidate(cfg *config.Config, target modelchange.Route, provider, model string, reasoning, serviceTier modelchange.OptionalValue, candidate modelchange.CandidateResult) (modelApplyReceipt, error) {
+	request := api.ModelChangeRequest{
+		Action: "apply", Route: string(target), Provider: provider, Model: model,
+		Reasoning: optionalPointer(reasoning), ServiceTier: optionalPointer(serviceTier),
+	}
+	if response, online, err := a.applyModelThroughDaemon(request); online {
+		if err != nil {
+			return modelApplyReceipt{}, err
+		}
+		return modelApplyReceipt{
+			Selection: modelchange.SelectionForRoute(response.Change.Candidate, target),
+			ChangeID:  response.Change.ID, Online: true,
+			RestartScheduled: response.RestartScheduled, Notices: response.Notices,
+		}, nil
+	} else if err != nil {
+		return modelApplyReceipt{}, err
+	}
+	service := &modelchange.Service{ConfigPath: cfg.Path, Validate: a.modelChangeValidator()}
+	legacyDaemon := a.modelDaemonRunning()
+	status, err := service.Inspect()
+	if err != nil {
+		return modelApplyReceipt{}, err
+	}
+	result, err := service.Prepare(a.ctx, modelchange.PrepareRequest{
+		Candidate: candidate.Snapshot, Source: "local-cli-offline",
+		ExpectedGeneration: status.Generation, RequireConfirmation: false,
+		ReplacePending: status.Pending != nil && status.Pending.Source == "local-cli-offline",
+	})
+	if err != nil {
+		return modelApplyReceipt{}, err
+	}
+	if _, err := service.BeginDraining(result.Change.ID); err != nil {
+		return modelApplyReceipt{}, err
+	}
+	if _, err := service.MarkRestarting(result.Change.ID, "on-demand"); err != nil {
+		return modelApplyReceipt{}, err
+	}
+	return modelApplyReceipt{
+		Selection: modelchange.SelectionForRoute(result.Change.Candidate, target),
+		ChangeID:  result.Change.ID, LegacyDaemon: legacyDaemon,
+	}, nil
 }
 
 func validateModelOptions(provider, model, reasoning, serviceTier string) error {
@@ -508,221 +735,6 @@ func redactHeaderValue(key, value string) string {
 	return value
 }
 
-type modelCheckOptions struct {
-	Live bool
-	Role string
-}
-
-func parseModelCheckOptions(args []string) (modelCheckOptions, error) {
-	var options modelCheckOptions
-	for i := 0; i < len(args); i++ {
-		switch args[i] {
-		case "--live":
-			options.Live = true
-		case "--role":
-			i++
-			if i >= len(args) || strings.TrimSpace(args[i]) == "" {
-				return modelCheckOptions{}, fmt.Errorf("--role requires a configured role name")
-			}
-			options.Role = strings.TrimSpace(args[i])
-		default:
-			return modelCheckOptions{}, fmt.Errorf("unknown model check option: %s", args[i])
-		}
-	}
-	return options, nil
-}
-
-func (a *App) checkCurrentModel(cfg *config.Config, options modelCheckOptions) int {
-	if options.Role == "" || strings.EqualFold(options.Role, "primary") {
-		a.printCurrentModel(cfg)
-	} else {
-		fmt.Fprintf(a.stdout, "Role: %s\n", options.Role)
-	}
-	rt, err := appcore.ResolveModelRuntime(a.ctx, cfg, options.Role)
-	if err != nil {
-		fmt.Fprintf(a.stderr, "Model check failed: %v\n", err)
-		fmt.Fprintln(a.stderr, modelCheckFailureHint(options.Role))
-		return 1
-	}
-	fmt.Fprintf(a.stdout, "Resolved: provider=%s model=%s protocol=%s\n", rt.Provider, rt.Model, rt.Protocol)
-	fmt.Fprintf(a.stdout, "Base URL: %s\n", rt.BaseURL)
-	fmt.Fprintf(a.stdout, "Credential: %s\n", blankAsDash(rt.CredentialSource))
-	if rt.ContextLength > 0 {
-		fmt.Fprintf(a.stdout, "Context length: %d (%s)\n", rt.ContextLength, blankAsDash(rt.ContextSource))
-	} else {
-		fmt.Fprintln(a.stdout, "Context length: unknown")
-	}
-	fmt.Fprintf(a.stdout, "Reasoning: %s\n", formatReasoning(rt.ReasoningEffort, rt.DefaultReasoning))
-	if len(rt.ReasoningLevels) > 0 {
-		fmt.Fprintf(a.stdout, "Reasoning levels: %s\n", strings.Join(rt.ReasoningLevels, ", "))
-	}
-	if rt.CapabilitySource != "" {
-		fmt.Fprintf(a.stdout, "Capabilities: %s\n", rt.CapabilitySource)
-	}
-	printMaintenanceFallback(a.stdout, cfg, options.Role)
-	fmt.Fprintf(a.stdout, "Quirks: auth=%s tool_schema=%s thinking=%s user_identity=%s system=%s http=%s prompt_cache=%s responses_store_false=%t responses_require_stream=%t\n",
-		blankAsDash(rt.Quirks.AuthHeader),
-		blankAsDash(rt.Quirks.ToolSchema),
-		blankAsDash(rt.Quirks.ThinkingMode),
-		effectiveUserIdentityDisplay(rt.Protocol, rt.Quirks.UserIdentityField),
-		blankAsDash(rt.Quirks.SystemMessageMode),
-		blankAsDash(rt.Quirks.HTTPVersion),
-		promptCacheDisplay(rt.Provider, rt.Protocol, rt.Quirks.PromptCache),
-		rt.Quirks.ResponsesStoreFalse,
-		rt.Quirks.ResponsesRequireStream,
-	)
-	if userAgent := strings.TrimSpace(rt.Quirks.UserAgent); userAgent != "" {
-		fmt.Fprintf(a.stdout, "Quirk user agent: %s\n", userAgent)
-	}
-	for _, warning := range modelruntime.QuirkDiagnostics(rt.Protocol, rt.Quirks) {
-		fmt.Fprintf(a.stdout, "Warning: %s\n", warning)
-	}
-	if len(rt.Headers) > 0 {
-		fmt.Fprintln(a.stdout, "Extra headers (merged; protocol headers like content-type/auth are added at request time):")
-		origins := modelruntime.NewResolver(cfg).HeaderOrigins(rt.Provider, rt.Headers)
-		keys := make([]string, 0, len(rt.Headers))
-		for key := range rt.Headers {
-			keys = append(keys, key)
-		}
-		sort.Strings(keys)
-		for _, key := range keys {
-			fmt.Fprintf(a.stdout, "  %s: %s  [%s]\n", key, redactHeaderValue(key, rt.Headers[key]), origins[key])
-		}
-	}
-	if keys := sortedInterfaceMapKeys(rt.ExtraBody); len(keys) > 0 {
-		fmt.Fprintf(a.stdout, "Extra body keys: %s\n", strings.Join(keys, ", "))
-	}
-	if keys := sortedInterfaceMapKeys(rt.ExtraQuery); len(keys) > 0 {
-		fmt.Fprintf(a.stdout, "Extra query keys: %s\n", strings.Join(keys, ", "))
-	}
-	if rt.Quirks.DisableHTTP2 || strings.EqualFold(rt.Quirks.HTTPVersion, "http1") {
-		fmt.Fprintln(a.stdout, "Transport: TLS ALPN restricted to http/1.1")
-	}
-	if rt.TokenGetter != nil {
-		fmt.Fprintln(a.stdout, "Token getter: configured")
-	}
-	if rt.TokenRefresher != nil {
-		fmt.Fprintln(a.stdout, "Token refresher: configured")
-	}
-	if options.Live {
-		fmt.Fprintln(a.stdout, "Live probe: sending one bounded request")
-		probe := appcore.ProbeResolvedModelForRole(a.ctx, rt, options.Role)
-		if probe.Err != nil {
-			fmt.Fprintf(a.stderr, "Live probe failed after %s: %s\n", probe.Latency.Round(time.Millisecond), tools.RedactSensitive(probe.Err.Error()))
-			return 1
-		}
-		toolStatus := "skipped (transport does not advertise native tools)"
-		if probe.NativeToolsTested {
-			toolStatus = "passed"
-		}
-		fmt.Fprintf(a.stdout, "Live probe: OK in %s\n", probe.Latency.Round(time.Millisecond))
-		fmt.Fprintf(a.stdout, "  transport: passed\n  native tool schema: %s\n", toolStatus)
-		if probe.ThinkingToolLoopTested {
-			thinkingStatus := "failed"
-			if probe.ThinkingToolLoopPassed {
-				thinkingStatus = "passed"
-			}
-			fmt.Fprintf(a.stdout, "  thinking tool loop: %s\n", thinkingStatus)
-		}
-		if probe.MaintenanceContractTested {
-			contractStatus := "failed"
-			if probe.MaintenanceContractPassed {
-				contractStatus = "passed"
-			}
-			fmt.Fprintf(a.stdout, "  maintenance contract: %s\n", contractStatus)
-		}
-	}
-	return 0
-}
-
-func sortedInterfaceMapKeys(values map[string]interface{}) []string {
-	keys := make([]string, 0, len(values))
-	for key := range values {
-		if key = strings.TrimSpace(key); key != "" {
-			keys = append(keys, key)
-		}
-	}
-	sort.Strings(keys)
-	return keys
-}
-
-func effectiveUserIdentityDisplay(protocol, field string) string {
-	field = strings.ToLower(strings.TrimSpace(field))
-	if field == "" || field == "off" {
-		return "off"
-	}
-	if field == "auto" {
-		if modelruntime.NormalizeProtocol(protocol) == modelruntime.ProtocolAnthropic {
-			return "auto->metadata.user_id"
-		}
-		return "auto->user_id"
-	}
-	return field
-}
-
-func promptCacheDisplay(provider, protocol string, enabled bool) string {
-	if modelruntime.NormalizeProtocol(protocol) == modelruntime.ProtocolAnthropic {
-		if enabled {
-			return "cache_control:on"
-		}
-		return "cache_control:off"
-	}
-	if strings.EqualFold(strings.TrimSpace(provider), "deepseek") {
-		return "provider-managed"
-	}
-	return "n/a"
-}
-
-// printMaintenanceFallback makes the resolved fallback position visible. A
-// chain that collapses onto one physical route is the normal outcome for an
-// installation with a single provider, and saying so is the point: otherwise
-// the only record is an INFO log nobody reads.
-func printMaintenanceFallback(out io.Writer, cfg *config.Config, role string) {
-	summary := appcore.DescribeMaintenanceFallback(cfg, role)
-	if !summary.Chained {
-		return
-	}
-	switch {
-	case summary.Provider != "":
-		fmt.Fprintf(out, "Maintenance fallback: %s -> provider=%s model=%s\n",
-			summary.Slot, summary.Provider, blankAsDash(summary.Model))
-	case summary.Collapsed:
-		fmt.Fprintln(out, "Maintenance fallback: none (every fallback position resolves to this same endpoint and credential)")
-	default:
-		fmt.Fprintln(out, "Maintenance fallback: none (configure models.auxiliary on a different provider to add one)")
-	}
-}
-
-func modelCheckFailureHint(role string) string {
-	if strings.EqualFold(strings.TrimSpace(role), "auxiliary") {
-		return "Hint: run `selfmind setup`, or configure `models.auxiliary` and restart the gateway."
-	}
-	if strings.TrimSpace(role) != "" && !strings.EqualFold(role, "primary") {
-		return "Hint: configure `models.roles." + strings.TrimSpace(role) + "` (or `models.auxiliary` for a background role), then restart the gateway."
-	}
-	return "Hint: run `selfmind model` and enter the API key, or set the provider API key environment variable before starting SelfMind."
-}
-
-func (a *App) printConfiguredProviders(cfg *config.Config) {
-	a.printCurrentModel(cfg)
-	fmt.Fprintln(a.stdout)
-	fmt.Fprintf(a.stdout, "OpenAI: %s %s\n", configuredMark(cfg.Providers.OpenAI.APIKey), cfg.Providers.OpenAI.BaseURL)
-	fmt.Fprintf(a.stdout, "Anthropic: %s %s\n", configuredMark(cfg.Providers.Anthropic.APIKey), cfg.Providers.Anthropic.BaseURL)
-	fmt.Fprintf(a.stdout, "Google: %s %s\n", configuredMark(cfg.Providers.Google.APIKey), cfg.Providers.Google.BaseURL)
-	if cfg.Providers.OpenRouterAPIKey != "" {
-		fmt.Fprintf(a.stdout, "OpenRouter legacy: %s\n", configuredMark(cfg.Providers.OpenRouterAPIKey))
-	}
-	if cfg.Providers.MiniMaxAPIKey != "" {
-		fmt.Fprintf(a.stdout, "MiniMax legacy: %s\n", configuredMark(cfg.Providers.MiniMaxAPIKey))
-	}
-	for name, ep := range cfg.ProviderProfiles {
-		fmt.Fprintf(a.stdout, "Provider %s: %s %s protocol=%s\n", name, configuredMark(ep.APIKey), ep.BaseURL, ep.Protocol)
-	}
-	for _, cp := range cfg.Providers.Custom {
-		fmt.Fprintf(a.stdout, "Custom %s: %s %s\n", cp.Name, configuredMark(cp.APIKey), cp.BaseURL)
-	}
-}
-
 func (a *App) promptChoice(title string, labels []string) (int, error) {
 	fmt.Fprintln(a.stdout, title)
 	for i, label := range labels {
@@ -762,7 +774,8 @@ func (a *App) promptAPIKey(label, current string) (string, error) {
 	if current != "" {
 		currentLabel = maskSecret(current)
 	}
-	raw, err := a.promptInput(fmt.Sprintf("API key for %s (blank keeps %s, '-' clears)", label, currentLabel), "")
+	prompt := fmt.Sprintf("API key for %s (blank keeps %s, '-' clears)", label, currentLabel)
+	raw, err := a.promptSecretInput(prompt)
 	if err != nil {
 		return "", err
 	}
@@ -774,6 +787,33 @@ func (a *App) promptAPIKey(label, current string) (string, error) {
 		return "", nil
 	}
 	return raw, nil
+}
+
+func (a *App) promptSecretInput(label string) (string, error) {
+	file, terminal := a.stdin.(*os.File)
+	if !terminal || !a.interactive {
+		return a.promptInput(label, "")
+	}
+	fmt.Fprintf(a.stdout, "%s: ", label)
+	disable := exec.Command("stty", "-echo")
+	disable.Stdin = file
+	if output, err := disable.CombinedOutput(); err != nil {
+		return "", fmt.Errorf("disable terminal echo: %w: %s", err, strings.TrimSpace(string(output)))
+	}
+	defer func() {
+		restore := exec.Command("stty", "echo")
+		restore.Stdin = file
+		_ = restore.Run()
+	}()
+	if a.input == nil {
+		a.input = bufio.NewReader(a.stdin)
+	}
+	raw, err := a.input.ReadString('\n')
+	fmt.Fprintln(a.stdout)
+	if err != nil && err != io.EOF {
+		return "", err
+	}
+	return strings.TrimSpace(raw), nil
 }
 
 func (a *App) promptInput(label, defaultValue string) (string, error) {
@@ -933,6 +973,32 @@ func setProviderEndpointForModelCommand(cfg *config.Config, provider string, end
 		cfg.ProviderProfiles = make(map[string]config.ProviderEndpoint)
 	}
 	cfg.ProviderProfiles[id] = endpoint
+}
+
+func clearProviderCredentialForModelCommand(cfg *config.Config, provider string) {
+	if cfg == nil {
+		return
+	}
+	id := modelruntime.NormalizeProviderID(provider)
+	switch id {
+	case "openai":
+		cfg.Providers.OpenAI.APIKey = ""
+		cfg.Providers.OpenAIAPIKey = ""
+	case "anthropic":
+		cfg.Providers.Anthropic.APIKey = ""
+		cfg.Providers.AnthropicAPIKey = ""
+	case "google", "gemini":
+		cfg.Providers.Google.APIKey = ""
+		cfg.Providers.GeminiAPIKey = ""
+	case "openrouter":
+		cfg.Providers.OpenRouterAPIKey = ""
+	case "minimax":
+		cfg.Providers.MiniMaxAPIKey = ""
+	}
+	if endpoint, ok := cfg.ProviderProfiles[id]; ok {
+		endpoint.APIKey = ""
+		cfg.ProviderProfiles[id] = endpoint
+	}
 }
 
 func externalLoginHint(provider string) string {

@@ -66,20 +66,34 @@ npm install --global @selfmind/cli@latest
 selfmind
 ```
 
-The first interactive `selfmind` launch opens guided model setup when no
-default model is ready. It does not start the daemon until setup succeeds.
-`selfmind setup` remains available for explicit reconfiguration, while
-`selfmind doctor` reports detailed configuration and runtime diagnostics.
+The first interactive `selfmind` launch opens one guided setup on Linux and
+macOS whenever the installation receipt is incomplete or stale. Platform
+service names stay out of the primary flow. `selfmind setup` re-enters the same
+reconciliation path, while `selfmind doctor` reports detailed configuration
+and runtime diagnostics.
 
 `selfmind setup`:
 
 - creates missing configuration;
-- interactively configures a missing model;
+- discovers or configures a primary model and a background model, shows both,
+  and asks for one confirmation on the fast path;
+- performs bounded live probes from the CLI and again from the daemon's actual
+  environment;
+- stores accepted API credentials in `~/.selfmind/auth.json` with mode `0600`,
+  never in a service definition;
+- confirms one canonical project workspace, grants trust only through the
+  authenticated local-control path, and refuses `/` or the home directory as
+  implicit workspace defaults;
+- confirms the approval mode and managed-background/on-demand choice in one
+  second fast-path confirmation;
 - preserves existing credentials, values, and unknown keys;
 - starts or reuses the local daemon;
-- installs and starts a per-user launchd service on macOS.
+- installs and starts a per-user launchd service on macOS or per-user systemd
+  service on Linux when managed background operation is selected;
+- records a versioned private setup receipt beside `config.yaml`; the first
+  successful non-command TUI task marks first-use completion.
 
-Manage the macOS service explicitly:
+Manage the platform user service explicitly:
 
 ```sh
 selfmind gateway service status
@@ -87,9 +101,13 @@ selfmind gateway service install
 selfmind gateway service uninstall
 ```
 
-The LaunchAgent is stored at
-`~/Library/LaunchAgents/com.selfmind.gateway.plist`; logs are written under
-`~/.selfmind/`. It is a user service and requires no root privileges.
+The macOS LaunchAgent is stored at
+`~/Library/LaunchAgents/com.selfmind.gateway.plist`; the Linux user unit is
+stored at `~/.config/systemd/user/selfmind-gateway.service`. Logs and runtime
+state stay under the normal per-user locations. Both are user services and
+require no root privileges. If a system-wide Linux `selfmind.service` is
+already active, personal setup stops and reports the conflict rather than
+shutting down or replacing that service.
 Ordinary `selfmind gateway start` reuses an already running service and does
 not replace an active daemon. Use `selfmind gateway restart --drain` when an
 upgrade must move the service to a new binary.
@@ -105,8 +123,8 @@ selfmind update         # check + package-manager install + verify + drained dae
 `npm install --global @selfmind/cli@<tag>` followed by
 `selfmind gateway restart --drain`. The startup notice is advisory and never
 replaces the binary on its own. Restart drains the active turn before the
-process exits. On macOS, launchd observes the clean
-exit and starts the newly installed version. The CLI verifies the daemon build
+process exits. The platform user service observes the clean exit and starts
+the newly installed version. The CLI verifies the daemon build
 fingerprint and control-schema health; an unreachable, stale, or
 schema-incompatible daemon makes the update command fail instead of degrading
 to a warning.
@@ -126,8 +144,8 @@ binary without requiring the person to know which package manager owns the
 launcher. A running build newer than the selected dist-tag is not downgraded
 unless `--force` is explicit.
 
-Before promoting the first stable macOS release, run this smoke test on a real
-Apple Silicon Mac:
+Before promoting a stable release, run this smoke test on real Apple Silicon
+and representative systemd-user Linux hosts:
 
 ```sh
 npm install --global @selfmind/cli@next
@@ -140,12 +158,13 @@ selfmind gateway service status
 ```
 
 Cross-compilation and package staging are release gates, but they do not
-replace this real launchd, Keychain, terminal, filesystem, and upgrade test.
+replace real launchd/systemd-user, terminal secret-input, filesystem, and
+upgrade tests.
 
 Uninstall while preserving user data:
 
 ```sh
-selfmind gateway service uninstall  # macOS
+selfmind gateway service uninstall
 selfmind uninstall --prepare
 npm uninstall --global @selfmind/cli
 ```

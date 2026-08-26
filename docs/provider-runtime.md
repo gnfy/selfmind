@@ -31,8 +31,8 @@ three-state in YAML: omission inherits the built-in profile, while explicit
 disable a built-in cache or Responses behavior. Capability flags such as
 tools, streaming, and vision are built-in profile metadata maintained in Go.
 
-Quirk values are validated during resolution and `selfmind model check` prints
-their effective values plus protocol-mismatch warnings. Adapters never infer a
+Quirk values are validated during resolution; invalid values and protocol
+mismatches surface as actionable configuration errors. Adapters never infer a
 vendor contract from the endpoint hostname. Built-in providers declare their
 headers, HTTP version, schema repair, identity field, and thinking shape in the
 profile; custom proxies receive the same behavior when they resolve the same
@@ -46,8 +46,8 @@ first and then apply the merged map, so yaml can
 override any of them as an emergency compatibility escape hatch until a
 release ships the fix. Compatibility defaults stay in Go (profile/adapters),
 never materialized into generated yaml — a config file is a snapshot and
-would pin stale values across upgrades. `selfmind model check` prints the
-merged headers with per-key origin (`Resolver.HeaderOrigins`). `extra_body`
+would pin stale values across upgrades. The resolver retains each merged
+header's origin in `Resolver.HeaderOrigins` for diagnostics. `extra_body`
 and `extra_query` merge provider-to-role, with the higher layer winning;
 request-body objects merge recursively. The transport applies those options
 only at the final HTTP boundary, so CLI, IM, cron, and future remote clients
@@ -123,15 +123,83 @@ private/local models whose provider publishes no capability metadata.
 The primary selection lives only under `models.primary`. `reasoning` and
 `service_tier` are optional. Omission or `auto` means provider/model default;
 the resolver deliberately does not send a forced value. Supported values are
-model capabilities, not a global hardcoded enum. `selfmind model set`
-validates them when metadata is discoverable and otherwise preserves the
-explicit value for compatible private endpoints.
+model capabilities, not a global hardcoded enum. The Model Manager validates
+them when metadata is discoverable and otherwise preserves the explicit value
+for compatible private endpoints.
 
 For local onboarding, an auxiliary selection with no provider/model defaults
-to the primary provider/model. Initial model writes materialize both slots.
-After that point auxiliary is independent: changing primary never overwrites
-an existing auxiliary selection. Logical background roles remain available as
-advanced `models.roles.<role>` overrides and inherit auxiliary when omitted.
+to the primary provider/model. The setup screen always shows and confirms both
+routes; the background route is not a hidden side effect. Model commands that
+create or change the initial selection materialize both slots. When setup is
+reconciling an existing legacy file without rewriting it, the accepted pair is
+also pinned in the setup receipt; a later route change invalidates that receipt
+and opens repair instead of silently accepting a different background model.
+After auxiliary is explicit, changing primary never overwrites it. Logical
+background roles remain available as advanced `models.roles.<role>` overrides
+and inherit auxiliary when omitted.
+
+## Transactional route changes
+
+All user-facing model changes converge on one daemon-owned transaction service.
+`selfmind model` and bare `/model` in the TUI open the same Model Manager; the
+IM surface exposes a read-only summary rather than a second mutation grammar.
+An online change follows this state machine:
+
+```text
+awaiting_confirmation -> validating -> awaiting_safe_boundary -> draining
+  -> restarting -> starting -> applied
+                         |-> model-attributable probe failure -> rolled_back
+                         \-> infrastructure/unknown failure -> recovery_required
+```
+
+The current run freezes its resolved route. A model-change restart waits for
+that run, including a pending approval or clarification, instead of applying
+the ordinary short restart timeout. Before `draining`, the person may cancel or
+explicitly replace the candidate; afterward the transaction is frozen. New
+work received while draining is stored in the durable queue and starts only in
+the new daemon. The local TUI keeps its draft and reads the durable transaction
+while HTTP is briefly unavailable. A slow notice appears after 30 seconds;
+after the replacement process is started, failure to become healthy within 120
+seconds enters explicit recovery. Three startup failures within five minutes
+open the recovery circuit instead of allowing a service-manager restart loop.
+There is one pending change and a monotonic generation; stale confirmations and
+concurrent writers fail instead of overwriting newer intent. A pending preview
+expires after ten minutes. History is bounded to ten terminal non-secret
+snapshots, and rollback creates a fresh validated transaction from a previous
+applied snapshot.
+
+The state file is `model-state.json` beside the selected `config.yaml`. It
+contains route selections, phase transitions, probe summaries, generations,
+restart attempts, and history, but no credentials, provider headers, or raw
+authentication data. The validated candidate is written to YAML only at the
+safe boundary, after the current run is idle. Startup probes it again, then
+records it as running only after runtime construction and the real `/health`
+endpoint succeed. Only a deterministic, model-attributable startup probe
+failure automatically restores the last running snapshot. Network, quota,
+listener, service-manager, and unknown failures preserve the evidence in
+`recovery_required`; the Model Manager's Change status screen offers retry or
+restore against the last healthy routes.
+Schema-v1 state is backed up before migrating to the current state machine.
+Direct YAML edits are shown as configured but unverified until the next daemon
+startup; another model transaction is refused while such drift exists.
+
+Model discovery prefers a live provider catalogue, then a timestamped fresh
+cache, then a visibly stale cache or built-in fallback. A model ID may always
+be entered manually; that does not bypass the same contract probes. Existing
+reasoning and service-tier settings survive a model selection only when known
+compatible. Unknown compatibility resets the affected setting to provider
+`auto` with a notice. Explicit values are authoritative.
+
+Validation has two boundaries. The Model Manager automatically sends the
+appropriate bounded contract probe after each completed selection: a foreground
+probe for Main and a background or maintenance-JSON probe for Background and
+its six managed roles. The final daemon transaction resolves and probes the
+whole draft again inside the daemon environment before changing service state.
+This prevents a shell credential from appearing healthy while the background
+runtime cannot use it. A newly entered API key is copied to the `0600` SelfMind
+auth store only after its probe succeeds; service definitions contain paths and
+non-credential environment only. A failed probe keeps the draft editable and
+never masquerades as verified.
 
 For Anthropic Messages, `thinking_mode: anthropic` maps an explicit reasoning
 effort to an enabled thinking budget (`low=4096`, `medium/default=8192`,
@@ -216,9 +284,9 @@ it remains stable across channels and runs but changes across people. The
 field is sent only when a provider profile declares
 `user_identity_field: user_id`.
 
-`selfmind model check --role <role> --live` validates both the ordinary native
-tool schema and the complete thinking tool loop: reasoning + tool call, tool
-result replay, then a final assistant answer.
+The Model Manager's automatic route validation and `doctor --probe-models`
+validate both the ordinary native tool schema and the complete thinking tool
+loop: reasoning + tool call, tool result replay, then a final assistant answer.
 
 ## Kimi Coding Plan
 
@@ -264,7 +332,7 @@ OAuth config:
 
 ```sh
 selfmind auth login minimax-oauth
-selfmind model set minimax-oauth MiniMax-M3
+selfmind model
 ```
 
 Default behavior:
@@ -299,8 +367,8 @@ parsing, OAuth refresh payloads, or provider login state inside an LLM adapter.
   Messages, so optional-only tools never serialize `required: null`.
   Responses-compatible adapters apply their stricter protocol rule afterwards
   and serialize an empty required set as `[]`.
-- `selfmind model check --live [--role <name>]` sends one bounded request with
-  an optional-only probe tool when the resolved transport advertises native
+- The Model Manager automatically sends one bounded request with an
+  optional-only probe tool when a completed route's transport advertises native
   tools. This verifies the real protocol adapter and endpoint rather than only
   resolving configuration. `doctor --probe-models` uses the same schema probe
   while grouping roles that share one provider route.

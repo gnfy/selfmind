@@ -15,6 +15,7 @@ import (
 	"selfmind/internal/kernel"
 	"selfmind/internal/kernel/llm"
 	"selfmind/internal/kernel/memory"
+	"selfmind/internal/modelchange"
 	"selfmind/internal/tools"
 	"selfmind/internal/ui/common"
 	"selfmind/internal/ui/components"
@@ -35,6 +36,27 @@ type Controller struct {
 
 type MessageProcessor func(context.Context, api.MessageRequest) (api.MessageResponse, int)
 type EventWatcher func(context.Context, httpapi.StreamObserver, func(api.RunEvent))
+type ModelChangeProcessor func(context.Context, api.ModelChangeRequest) (api.ModelChangeResponse, error)
+type ModelChangeObserver func(context.Context, string) (ModelChangeObservation, error)
+type ModelRecoveryProcessor func(context.Context, string, string) error
+
+type ModelChangeObservation struct {
+	Status           modelchange.Status
+	GatewayReachable bool
+}
+
+// OnboardingContext carries the small, user-facing part of the completed CLI
+// setup into the TUI. Platform service details remain in cliapp/doctor; the TUI
+// only needs the model pair, initial logical workspace, and one-shot success
+// callback.
+type OnboardingContext struct {
+	BackgroundModel  string
+	WorkspaceID      string
+	WorkspaceName    string
+	WorkspacePath    string
+	FirstTaskPending bool
+	OnFirstSuccess   func() error
+}
 
 // ChatMessage represents a single message in the conversation history.
 type ChatMessage struct {
@@ -58,34 +80,47 @@ type ChatMessage struct {
 
 // uiModel is the main TUI model. It holds all conversation state.
 type uiModel struct {
-	program            *tea.Program
-	width, height      int
-	common             *common.Common
-	sidebar            *sidebar.Sidebar
-	status             *status.Status
-	editor             *components.Editor
-	sessionBrowser     *components.SessionBrowser
-	sessionBrowserOpen bool
-	pager              *components.Pager
-	messages           []ChatMessage
-	thinking           bool
-	toolExecuting      string
-	runTokens          int
-	totalTokens        int
-	tokenLimit         int
-	modelMeta          string
-	startTime          time.Time
-	provider           llm.Provider
-	providerName       string
-	modelName          string
-	agent              *kernel.Agent
-	gateway            *router.Gateway
-	messageProcessor   MessageProcessor
-	eventWatcher       EventWatcher
-	eventWatchCancel   context.CancelFunc
-	tenantID           string
-	channel            string // 'cli' | 'wechat' | 'dingtalk' | 'web'
-	approvalMode       string // codex-style session override: on-request | read-only | auto-edit | full-auto | smart. In client mode "" means "defer to the person's persisted mode".
+	program               *tea.Program
+	width, height         int
+	common                *common.Common
+	sidebar               *sidebar.Sidebar
+	status                *status.Status
+	editor                *components.Editor
+	sessionBrowser        *components.SessionBrowser
+	sessionBrowserOpen    bool
+	pager                 *components.Pager
+	modelManager          *components.ModelManager
+	modelManagerOnly      bool
+	modelManagerStatus    components.ModelManagerStatus
+	modelManagerRoutes    []components.ModelManagerProvider
+	messages              []ChatMessage
+	thinking              bool
+	toolExecuting         string
+	runTokens             int
+	totalTokens           int
+	tokenLimit            int
+	modelMeta             string
+	startTime             time.Time
+	provider              llm.Provider
+	providerName          string
+	modelName             string
+	backgroundModelName   string
+	agent                 *kernel.Agent
+	gateway               *router.Gateway
+	messageProcessor      MessageProcessor
+	modelChangeProcessor  ModelChangeProcessor
+	modelChangeObserver   ModelChangeObserver
+	modelRecovery         ModelRecoveryProcessor
+	modelChangeID         string
+	modelChangePhase      modelchange.ChangeStatus
+	modelChangePhaseAt    time.Time
+	modelChangeSlowWarned bool
+	modelGatewayOffline   bool
+	eventWatcher          EventWatcher
+	eventWatchCancel      context.CancelFunc
+	tenantID              string
+	channel               string // 'cli' | 'wechat' | 'dingtalk' | 'web'
+	approvalMode          string // codex-style session override: on-request | read-only | auto-edit | full-auto | smart. In client mode "" means "defer to the person's persisted mode".
 	// persistedApprovalMode is the person's daemon-side effective mode, learned
 	// from GET /v1/digest at startup. It backs the status-bar display when the
 	// session has no explicit override (approvalMode == ""), so the bar always
@@ -152,6 +187,9 @@ type uiModel struct {
 	workspaceOverrideID   string
 	workspaceOverrideName string
 	workspaceOverridePath string
+	firstTaskPending      bool
+	firstTaskReported     bool
+	onFirstTaskSuccess    func() error
 	// additionalRoots is the invocation-local --add-dir overlay supplied by
 	// cliapp. It rides every new agent turn but is never persisted as workspace
 	// configuration by the TUI.
@@ -306,6 +344,66 @@ func (c *Controller) SetMessageProcessor(processor MessageProcessor) {
 		return
 	}
 	c.model.messageProcessor = processor
+}
+
+func (c *Controller) SetModelChangeProcessor(processor ModelChangeProcessor) {
+	if c == nil || c.model == nil {
+		return
+	}
+	c.model.modelChangeProcessor = processor
+}
+
+func (c *Controller) SetModelChangeObserver(observer ModelChangeObserver) {
+	if c == nil || c.model == nil {
+		return
+	}
+	c.model.modelChangeObserver = observer
+}
+
+func (c *Controller) SetModelRecoveryProcessor(processor ModelRecoveryProcessor) {
+	if c == nil || c.model == nil {
+		return
+	}
+	c.model.modelRecovery = processor
+}
+
+// SetModelManagerOnly starts directly in the model manager and exits after it
+// closes or successfully submits. This is the single `selfmind model` CLI
+// surface; normal TUI sessions keep `/model` as a transient page.
+func (c *Controller) SetModelManagerOnly(enabled bool) {
+	if c == nil || c.model == nil {
+		return
+	}
+	c.model.modelManagerOnly = enabled
+}
+
+// SetOnboardingContext initializes the first-use summary without making the
+// TUI own setup persistence or platform service mechanics.
+func (c *Controller) SetOnboardingContext(ctx OnboardingContext) {
+	if c == nil || c.model == nil {
+		return
+	}
+	c.model.backgroundModelName = strings.TrimSpace(ctx.BackgroundModel)
+	c.model.workspaceOverrideID = strings.TrimSpace(ctx.WorkspaceID)
+	c.model.workspaceOverrideName = strings.TrimSpace(ctx.WorkspaceName)
+	c.model.workspaceOverridePath = strings.TrimSpace(ctx.WorkspacePath)
+	c.model.firstTaskPending = ctx.FirstTaskPending
+	c.model.onFirstTaskSuccess = ctx.OnFirstSuccess
+}
+
+func (m *uiModel) completeFirstOnboardingTask() {
+	if m == nil || !m.firstTaskPending || m.firstTaskReported {
+		return
+	}
+	m.firstTaskReported = true
+	if m.onFirstTaskSuccess != nil {
+		if err := m.onFirstTaskSuccess(); err != nil {
+			m.addMessage("notice", "Your task completed, but SelfMind could not save the setup receipt: "+err.Error())
+			return
+		}
+	}
+	m.firstTaskPending = false
+	m.addMessage("notice", "Setup complete. SelfMind is ready.")
 }
 
 // SetAdditionalRoots installs the invocation-local --add-dir overlay. The
@@ -503,7 +601,14 @@ func cliSessionChannel() string {
 }
 
 func (m *uiModel) Init() tea.Cmd {
-	return tea.Batch(m.spinner.Tick, cursorBlinkTick())
+	if m.modelManagerOnly {
+		return tea.Batch(m.spinner.Tick, cursorBlinkTick(), m.openModelManager())
+	}
+	var observe tea.Cmd
+	if m.modelChangeObserver != nil {
+		observe = m.observeModelChange(false, 0)
+	}
+	return tea.Batch(m.spinner.Tick, cursorBlinkTick(), observe)
 }
 
 func (m *uiModel) anyToolRunning() bool {
@@ -555,6 +660,115 @@ func (m *uiModel) openHistory() {
 		width = 80
 	}
 	m.pager = components.NewPager(m.common, width, m.height, m.renderHistoryContent)
+}
+
+func (m *uiModel) openModelManager() tea.Cmd {
+	if m == nil {
+		return nil
+	}
+	if m.modelChangeObserver != nil {
+		return m.observeModelChange(true, 0)
+	}
+	processor := m.modelChangeProcessor
+	if processor == nil {
+		m.modelManager = components.NewModelManager(m.modelManagerStatus, m.modelManagerRoutes, m.width, m.height)
+		return nil
+	}
+	m.thinking = true
+	m.activityText = "Loading model routes"
+	return func() tea.Msg {
+		response, err := processor(context.Background(), api.ModelChangeRequest{Action: "status"})
+		return MsgModelManagerOpen{Response: response, Err: err}
+	}
+}
+
+func (m *uiModel) observeModelChange(openManager bool, delay time.Duration) tea.Cmd {
+	observer := m.modelChangeObserver
+	changeID := m.modelChangeID
+	return func() tea.Msg {
+		if delay > 0 {
+			timer := time.NewTimer(delay)
+			defer timer.Stop()
+			<-timer.C
+		}
+		if observer == nil {
+			return MsgModelChangeObserved{OpenManager: openManager, Err: fmt.Errorf("model state observer is unavailable")}
+		}
+		observation, err := observer(context.Background(), changeID)
+		return MsgModelChangeObserved{Observation: observation, OpenManager: openManager, Err: err}
+	}
+}
+
+func (m *uiModel) recoverModelChange(action string) tea.Cmd {
+	processor := m.modelRecovery
+	changeID := m.modelChangeID
+	return func() tea.Msg {
+		if processor == nil {
+			return MsgModelRecoveryDone{Action: action, Err: fmt.Errorf("local model recovery is unavailable")}
+		}
+		return MsgModelRecoveryDone{Action: action, Err: processor(context.Background(), action, changeID)}
+	}
+}
+
+func (m *uiModel) applyModelStatus(status modelchange.Status) {
+	m.modelManagerStatus = modelManagerStatusFrom(status)
+	if status.Pending != nil {
+		if m.modelChangeID != status.Pending.ID {
+			m.modelChangeSlowWarned = false
+		}
+		m.modelChangeID = status.Pending.ID
+		m.modelChangePhase = status.Pending.Status
+		m.modelChangePhaseAt = status.Pending.PhaseStartedAt
+		return
+	}
+	m.modelChangeID = ""
+	m.modelChangePhase = ""
+	m.modelChangePhaseAt = time.Time{}
+	m.modelChangeSlowWarned = false
+	m.modelGatewayOffline = false
+	m.providerName = status.Running.Primary.Provider
+	m.modelName = status.Running.Primary.Model
+	m.backgroundModelName = status.Running.Auxiliary.Model
+	m.modelMeta = strings.TrimSpace(status.Running.Primary.Reasoning)
+}
+
+func modelManagerPatches(draft []components.ModelManagerSubmission) []api.ModelSelectionPatch {
+	patches := make([]api.ModelSelectionPatch, 0, len(draft))
+	for _, submission := range draft {
+		reasoning := submission.Reasoning
+		serviceTier := submission.ServiceTier
+		patches = append(patches, api.ModelSelectionPatch{
+			Route: submission.Route, Provider: submission.Provider, Model: submission.Model,
+			Reasoning: &reasoning, ServiceTier: &serviceTier, Reset: submission.Reset, APIKey: submission.APIKey,
+		})
+	}
+	return patches
+}
+
+func (m *uiModel) validateModelManager(route string, draft []components.ModelManagerSubmission) tea.Cmd {
+	processor := m.modelChangeProcessor
+	return func() tea.Msg {
+		if processor == nil {
+			return MsgModelValidationDone{Route: route, Err: fmt.Errorf("model management is unavailable in this client")}
+		}
+		response, err := processor(context.Background(), api.ModelChangeRequest{
+			Action: "validate", Patches: modelManagerPatches(draft), ValidateRoutes: []string{route},
+		})
+		return MsgModelValidationDone{Route: route, Response: response, Err: err}
+	}
+}
+
+func (m *uiModel) submitModelManager(draft []components.ModelManagerSubmission) tea.Cmd {
+	processor := m.modelChangeProcessor
+	return func() tea.Msg {
+		if processor == nil {
+			return MsgModelChangeDone{Err: fmt.Errorf("model management is unavailable in this client")}
+		}
+		response, err := processor(context.Background(), api.ModelChangeRequest{
+			Action: "apply", Patches: modelManagerPatches(draft),
+		})
+		return MsgModelChangeDone{Response: response, Err: err}
+	}
 }
 func patchArgOf(toolArgs string) string {
 	var a map[string]interface{}
@@ -712,6 +926,33 @@ type MsgAgentDone struct {
 	Err      error
 	Input    string
 	Turn     *api.TurnStatus
+}
+
+type MsgModelChangeDone struct {
+	Response api.ModelChangeResponse
+	Err      error
+}
+
+type MsgModelValidationDone struct {
+	Route    string
+	Response api.ModelChangeResponse
+	Err      error
+}
+
+type MsgModelManagerOpen struct {
+	Response api.ModelChangeResponse
+	Err      error
+}
+
+type MsgModelChangeObserved struct {
+	Observation ModelChangeObservation
+	OpenManager bool
+	Err         error
+}
+
+type MsgModelRecoveryDone struct {
+	Action string
+	Err    error
 }
 
 type MsgSkillInvocationResolved struct {

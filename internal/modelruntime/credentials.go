@@ -1,8 +1,10 @@
 package modelruntime
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -53,6 +55,77 @@ func (s *CredentialStore) Resolve(provider string) Credential {
 		return Credential{}
 	}
 	return Credential{Token: token, Source: "selfmind-auth:" + s.path}
+}
+
+// SaveAPIKey writes one provider secret to SelfMind's dedicated credential
+// file. The file is separate from reusable config, mode 0600, and replaced
+// atomically so a daemon can safely resolve it while setup is running.
+func (s *CredentialStore) SaveAPIKey(provider, apiKey string) error {
+	if s == nil || strings.TrimSpace(s.path) == "" {
+		return fmt.Errorf("credential store path is empty")
+	}
+	provider = NormalizeProviderID(provider)
+	if provider == "" {
+		return fmt.Errorf("credential provider is required")
+	}
+	payload := map[string]interface{}{}
+	if data, err := os.ReadFile(s.path); err == nil {
+		if err := json.Unmarshal(data, &payload); err != nil {
+			return fmt.Errorf("decode credential store: %w", err)
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	providers, _ := payload["providers"].(map[string]interface{})
+	if providers == nil {
+		providers = map[string]interface{}{}
+		payload["providers"] = providers
+	}
+	entry, _ := providers[provider].(map[string]interface{})
+	if entry == nil {
+		entry = map[string]interface{}{}
+	}
+	apiKey = strings.TrimSpace(apiKey)
+	if apiKey == "" {
+		delete(entry, "api_key")
+	} else {
+		entry["api_key"] = apiKey
+	}
+	if len(entry) == 0 {
+		delete(providers, provider)
+	} else {
+		providers[provider] = entry
+	}
+	data, err := json.MarshalIndent(payload, "", "  ")
+	if err != nil {
+		return err
+	}
+	data = append(data, '\n')
+	if err := os.MkdirAll(filepath.Dir(s.path), 0o700); err != nil {
+		return err
+	}
+	temp, err := os.CreateTemp(filepath.Dir(s.path), ".auth-*.tmp")
+	if err != nil {
+		return err
+	}
+	tempPath := temp.Name()
+	defer os.Remove(tempPath)
+	if err := temp.Chmod(0o600); err != nil {
+		_ = temp.Close()
+		return err
+	}
+	if _, err := bytes.NewReader(data).WriteTo(temp); err != nil {
+		_ = temp.Close()
+		return err
+	}
+	if err := temp.Sync(); err != nil {
+		_ = temp.Close()
+		return err
+	}
+	if err := temp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tempPath, s.path)
 }
 
 type ExternalCredentialResolver struct{}

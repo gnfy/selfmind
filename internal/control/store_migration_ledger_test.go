@@ -2,6 +2,8 @@ package control
 
 import (
 	"context"
+	"database/sql"
+	"path/filepath"
 	"sort"
 	"testing"
 )
@@ -35,6 +37,51 @@ func schemaLedger(t *testing.T, s *Store) []struct {
 		t.Fatal(err)
 	}
 	return out
+}
+
+func TestVersionFiveMigrationAddsSkillRepairHealthColumnsToVersionFourShape(t *testing.T) {
+	db, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "control.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`
+		CREATE TABLE skill_versions (
+			control_tenant_id TEXT NOT NULL, skill_key TEXT NOT NULL, version_hash TEXT NOT NULL,
+			state TEXT NOT NULL, PRIMARY KEY(control_tenant_id, skill_key, version_hash));
+		CREATE TABLE skill_failure_guards (
+			control_tenant_id TEXT NOT NULL, skill_key TEXT NOT NULL, version_hash TEXT NOT NULL,
+			failure_signature TEXT NOT NULL,
+			PRIMARY KEY(control_tenant_id, skill_key, version_hash, failure_signature));`); err != nil {
+		t.Fatal(err)
+	}
+	var migration *schemaMigration
+	for index := range orderedMigrations {
+		if orderedMigrations[index].Version == 5 {
+			migration = &orderedMigrations[index]
+		}
+	}
+	if migration == nil {
+		t.Fatal("v5 migration is missing")
+	}
+	if err := migration.Apply(context.Background(), db); err != nil {
+		t.Fatal(err)
+	}
+	for table, columns := range map[string][]string{
+		"skill_versions":       {"dependency_fingerprint", "verification_environment_fingerprint", "last_verified_at"},
+		"skill_failure_guards": {"environment_fingerprint"},
+	} {
+		for _, column := range columns {
+			var count int
+			if err := db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info(?) WHERE name=?`, table, column).Scan(&count); err != nil || count != 1 {
+				t.Fatalf("%s.%s count=%d err=%v", table, column, count, err)
+			}
+		}
+	}
+	var snapshots int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='skill_candidate_evidence_snapshots'`).Scan(&snapshots); err != nil || snapshots != 1 {
+		t.Fatalf("skill_candidate_evidence_snapshots count=%d err=%v", snapshots, err)
+	}
 }
 
 // TestOrderedMigrationsCoverCurrentSchemaVersion pins the declaration itself:

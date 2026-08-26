@@ -16,7 +16,7 @@ func (c *llmSkillCurator) repairPreflightReason(tenantID string, digest control.
 	if err := validateCuratedSkillContent(digest.TargetActiveContent, digest.TargetSkillName); err != nil {
 		return "active Skill is not eligible for deterministic narrow repair: " + err.Error()
 	}
-	if ok, reason := c.automaticRepairTargetEligible(tenantID, digest.TargetSkillName); !ok {
+	if ok, reason := c.automaticRepairTargetEligible(tenantID, digest); !ok {
 		return reason
 	}
 	return ""
@@ -24,12 +24,15 @@ func (c *llmSkillCurator) repairPreflightReason(tenantID string, digest control.
 
 func autoPromoteSkillCandidateEligible(digest control.SkillEvidenceDigest) bool {
 	if digest.TargetSkillKey != "" {
+		if !control.SkillRepairAutomaticPromotionReady(digest) {
+			return false
+		}
 		for _, observation := range digest.NegativeObservations {
-			if verifiedRepairObservation(observation) && automaticObservationPublicationEligible(observation) {
-				return true
+			if verifiedRepairObservation(observation) && !automaticObservationPublicationEligible(observation) {
+				return false
 			}
 		}
-		return false
+		return true
 	}
 	if len(digest.SuccessObservations) < 3 {
 		return false
@@ -58,7 +61,7 @@ func skillCurationProposalEligible(digest control.SkillEvidenceDigest) bool {
 		return false
 	}
 	if digest.TargetSkillKey != "" {
-		return digestHasVerifiedRepairIncident(digest)
+		return digestHasVerifiedRepairIncident(digest) && control.SkillRepairCandidateEvidenceReady(digest)
 	}
 	if len(digest.SuccessObservations) < 3 {
 		return false
@@ -119,11 +122,12 @@ func automaticObservationPublicationEligible(observation control.WorkflowObserva
 	return true
 }
 
-func (c *llmSkillCurator) automaticRepairTargetEligible(tenantID, name string) (bool, string) {
+func (c *llmSkillCurator) automaticRepairTargetEligible(tenantID string, digest control.SkillEvidenceDigest) (bool, string) {
 	if c == nil || c.skillStorage == nil {
 		return false, "Skill storage is unavailable"
 	}
-	info, _, _, err := tools.ReadSkillPayloadForTenant(tenantID, name, "", tools.WithSkillStorage(map[string]interface{}{}, c.skillStorage))
+	args := c.skillInvocationArgs(context.Background(), tenantID, digest.WorkspaceID, digest.PublicationScope, kernel.SkillMutationCandidateOnly)
+	info, _, _, err := tools.ReadSkillPayloadForTenant(tenantID, digest.TargetSkillName, "", args)
 	if err != nil {
 		return false, "active Skill is unavailable"
 	}
@@ -133,8 +137,18 @@ func (c *llmSkillCurator) automaticRepairTargetEligible(tenantID, name string) (
 	return true, ""
 }
 
-func (c *llmSkillCurator) automaticCandidatePromotionBlockedReason(ctx context.Context, tenantID string, version *control.SkillVersion) (string, error) {
-	if version == nil || strings.TrimSpace(version.ParentVersionHash) != "" {
+func (c *llmSkillCurator) automaticCandidatePromotionBlockedReason(ctx context.Context, tenantID, workspaceID string, version *control.SkillVersion) (string, error) {
+	if version == nil {
+		return "", nil
+	}
+	if strings.TrimSpace(version.ParentVersionHash) != "" {
+		ready, err := c.store.SkillCandidateHasAutomaticRepairEvidence(ctx, tenantID, version.SkillKey, version.VersionHash)
+		if err != nil {
+			return "", err
+		}
+		if !ready {
+			return "class-specific repair evidence threshold is not met", nil
+		}
 		return "", nil
 	}
 	active, err := c.store.ActiveSkillVersion(ctx, tenantID, version.SkillKey)
@@ -144,7 +158,9 @@ func (c *llmSkillCurator) automaticCandidatePromotionBlockedReason(ctx context.C
 	if active != nil {
 		return "name collision with an active Skill", nil
 	}
-	skills, err := tools.ListSkillsForTenant(tenantID, false, tools.WithSkillStorage(map[string]interface{}{}, c.skillStorage))
+	publicationScope := c.versionPublicationScope(tenantID, workspaceID, version)
+	skills, err := tools.ListSkillsForTenant(tenantID, false,
+		c.skillInvocationArgs(ctx, tenantID, workspaceID, publicationScope, kernel.SkillMutationCandidateOnly))
 	if err != nil {
 		return "", err
 	}

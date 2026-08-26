@@ -17,6 +17,13 @@ const (
 	SkillMutationCandidateOnly = "candidate_only"
 	// SkillMutationNone makes skill_manage read-only for this invocation.
 	SkillMutationNone = "none"
+
+	// SkillPublicationUser keeps a managed Skill visible across the person's
+	// workspaces. SkillPublicationWorkspace confines it to WorkspaceID in the
+	// control-managed asset store; it never implies permission to write into the
+	// repository itself.
+	SkillPublicationUser      = "user"
+	SkillPublicationWorkspace = "workspace"
 )
 
 // ToolInvocationScope separates durable asset ownership from execution
@@ -33,6 +40,10 @@ type ToolInvocationScope struct {
 	WorkUnitID        string
 	ExecutionLane     string
 	AttachmentMode    string
+	// SkillPublicationScope is trusted lifecycle metadata for choosing a
+	// managed asset root. It is separate from execution authority and cannot be
+	// supplied by model-visible JSON.
+	SkillPublicationScope string
 	// SkillMutationMode is trusted dispatcher metadata. Model-supplied JSON
 	// cannot populate the hidden invocation scope carried to tools.
 	SkillMutationMode string

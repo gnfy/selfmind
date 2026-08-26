@@ -1,0 +1,199 @@
+{
+  "method": "stream",
+  "events": [
+    {
+      "content": "-"
+    },
+    {
+      "content": " 前"
+    },
+    {
+      "content": "端"
+    },
+    {
+      "content": "精"
+    },
+    {
+      "content": "确"
+    },
+    {
+      "content": "值"
+    },
+    {
+      "content": "："
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": "frontend"
+    },
+    {
+      "content": "="
+    },
+    {
+      "content": "web"
+    },
+    {
+      "content": "-"
+    },
+    {
+      "content": "7"
+    },
+    {
+      "content": "`\n"
+    },
+    {
+      "content": "-"
+    },
+    {
+      "content": " 后"
+    },
+    {
+      "content": "端"
+    },
+    {
+      "content": "精"
+    },
+    {
+      "content": "确"
+    },
+    {
+      "content": "值"
+    },
+    {
+      "content": "："
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": "backend"
+    },
+    {
+      "content": "="
+    },
+    {
+      "content": "api"
+    },
+    {
+      "content": "-"
+    },
+    {
+      "content": "9"
+    },
+    {
+      "content": "`\n\n"
+    },
+    {
+      "content": "已"
+    },
+    {
+      "content": "按"
+    },
+    {
+      "content": "两个"
+    },
+    {
+      "content": "独"
+    },
+    {
+      "content": "立"
+    },
+    {
+      "content": " work"
+    },
+    {
+      "content": " unit"
+    },
+    {
+      "content": " "
+    },
+    {
+      "content": "依"
+    },
+    {
+      "content": "次"
+    },
+    {
+      "content": "完成"
+    },
+    {
+      "content": "，并"
+    },
+    {
+      "content": "分别"
+    },
+    {
+      "content": "选择"
+    },
+    {
+      "content": "了"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "frontend"
+    },
+    {
+      "content": "-ins"
+    },
+    {
+      "content": "pection"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " 和"
+    },
+    {
+      "content": " `"
+    },
+    {
+      "content": "backend"
+    },
+    {
+      "content": "-ins"
+    },
+    {
+      "content": "pection"
+    },
+    {
+      "content": "`"
+    },
+    {
+      "content": " Skill"
+    },
+    {
+      "content": "。"
+    },
+    {
+      "content": "未"
+    },
+    {
+      "content": "修改"
+    },
+    {
+      "content": "任何"
+    },
+    {
+      "content": "文件"
+    },
+    {
+      "content": "。"
+    },
+    {
+      "usage": {
+        "input_tokens": 8835,
+        "output_tokens": 65,
+        "cache_read_input_tokens": 0,
+        "cache_miss_input_tokens": 8835,
+        "cache_creation_input_tokens": 0,
+        "reasoning_output_tokens": 0,
+        "cache_usage_reported": true
+      }
+    }
+  ]
+}

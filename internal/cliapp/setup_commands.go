@@ -4,11 +4,9 @@ import (
 	"flag"
 	"fmt"
 	"strings"
-	"time"
 
 	"selfmind/internal/modelruntime"
 	"selfmind/internal/platform/config"
-	gatewayrt "selfmind/internal/runtime/gateway"
 )
 
 type modelSetupFunc func(*config.Config) int
@@ -22,7 +20,7 @@ func (a *App) runSetupCommandIfRequested() (bool, int) {
 	nonInteractive := fs.Bool("non-interactive", false, "do not prompt for missing model settings")
 	skipModel := fs.Bool("skip-model", false, "do not configure or validate a model")
 	skipGateway := fs.Bool("skip-gateway", false, "do not start the local gateway")
-	checkModel := fs.Bool("check-model", false, "resolve and validate the configured model")
+	checkModel := fs.Bool("check-model", false, "compatibility flag; setup always validates configured models live")
 	if err := fs.Parse(a.args[2:]); err != nil {
 		return true, 2
 	}
@@ -33,78 +31,12 @@ func (a *App) runSetupCommandIfRequested() (bool, int) {
 		return true, 1
 	}
 	fmt.Fprintf(a.stdout, "Config: %s\n", cfg.Path)
-
-	if !*skipModel && !modelSelectionConfigured(cfg) {
-		if *nonInteractive {
-			fmt.Fprintln(a.stderr, "No default model is configured.")
-			fmt.Fprintln(a.stderr, "Run `selfmind model`, or edit the config before running non-interactive setup.")
-			return true, 1
-		}
-		if code := a.runInteractiveModelPicker(cfg); code != 0 {
-			return true, code
-		}
-		cfg, err = config.LoadConfig(config.Options{Path: a.configPath})
-		if err != nil {
-			fmt.Fprintf(a.stderr, "Reload configured model: %v\n", err)
-			return true, 1
-		}
-		if !modelSelectionConfigured(cfg) {
-			fmt.Fprintln(a.stderr, "Setup cancelled. No default model was configured.")
-			fmt.Fprintln(a.stderr, "Run `selfmind setup` when you are ready.")
-			return true, 1
-		}
-	}
-	if !*skipModel {
-		fmt.Fprintf(a.stdout, "Model: %s/%s\n", blankAsDash(cfg.EffectiveProvider()), blankAsDash(cfg.EffectiveModel()))
-	}
-	if *checkModel && !*skipModel {
-		if code := a.checkCurrentModel(cfg, modelCheckOptions{}); code != 0 {
-			return true, code
-		}
-	}
-	if !*skipModel {
-		// Before the gateway starts: the daemon reads models.auxiliary and role
-		// overrides once at startup, so configuring them afterwards would leave
-		// this run's background services disabled.
-		cfg = a.ensureBackgroundRoleSetup(cfg)
-	}
-
-	if !*skipGateway {
-		if !a.gatewayTargetIsLocal() {
-			fmt.Fprintf(a.stdout, "Gateway: remote (%s); no local daemon was started.\n", a.gatewayURL())
-		} else {
-			if gatewayServiceSupported() {
-				path, err := gatewayServiceInstall(a.configPath)
-				if err != nil {
-					fmt.Fprintf(a.stderr, "Gateway service setup failed: %v\n", err)
-					fmt.Fprintln(a.stderr, "Run `selfmind gateway run` for foreground logs, or `selfmind doctor`.")
-					return true, 1
-				}
-				fmt.Fprintf(a.stdout, "Gateway: launchd service installed and started.\nPlist: %s\n", path)
-				fmt.Fprintln(a.stdout, "Setup complete. Run `selfmind` to start the CLI.")
-				return true, 0
-			}
-			ctx, cancel := contextWithTimeout(a.ctx, 15*time.Second)
-			defer cancel()
-			result, err := gatewayrt.EnsureRunning(ctx, gatewayrt.EnsureOptions{
-				ConfigPath: a.configPath,
-				Timeout:    12 * time.Second,
-			})
-			if err != nil {
-				fmt.Fprintf(a.stderr, "Gateway setup failed: %v\n", err)
-				fmt.Fprintln(a.stderr, "Run `selfmind gateway run` for foreground logs, or `selfmind doctor`.")
-				return true, 1
-			}
-			state := "already running"
-			if result.Started {
-				state = "started"
-			}
-			fmt.Fprintf(a.stdout, "Gateway: %s at %s\n", state, result.URL)
-		}
-	}
-
-	fmt.Fprintln(a.stdout, "Setup complete. Run `selfmind` to start the CLI.")
-	return true, 0
+	_ = checkModel
+	_, code := a.ensureOnboarding(cfg, onboardingOptions{
+		Explicit: true, NonInteractive: *nonInteractive,
+		SkipModel: *skipModel, SkipGateway: *skipGateway,
+	})
+	return true, code
 }
 
 func modelSelectionConfigured(cfg *config.Config) bool {
@@ -120,7 +52,7 @@ func (a *App) ensureInitialModelSetup(cfg *config.Config, setup modelSetupFunc) 
 	}
 	if !a.interactive {
 		fmt.Fprintln(a.stderr, "SelfMind is not configured with an AI model.")
-		fmt.Fprintln(a.stderr, "Run `selfmind setup` in an interactive terminal, or `selfmind model set <provider> <model>` for automated setup.")
+		fmt.Fprintln(a.stderr, "Run `selfmind setup` or `selfmind model` in an interactive terminal. For automation, configure `models.primary` in YAML.")
 		return nil, 1
 	}
 

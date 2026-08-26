@@ -19,7 +19,7 @@ type slashCommand struct {
 
 var slashCommandMetas = []slashCommandMeta{
 	{Name: "/help", Usage: "/help", Description: "Open this temporary help page", Hint: "show available commands"},
-	{Name: "/model", Usage: "/model", Description: "Show the daemon model and configuration command", Hint: "show model, provider, and how to change them"},
+	{Name: "/model", Usage: "/model", Description: "Open Main, Background, and optional role model settings", Hint: "manage model settings"},
 	{Name: "/status", Usage: "/status", Description: "Show runtime status and background processes", Hint: "show runtime, gateway, and model state"},
 	{Name: "/tasks", Usage: "/tasks [open|done|archived|all|search <text>] [--workspace <id>] [--page <n>]", Description: "List or search paged work labels", Hint: "view and manage gateway tasks"},
 	{Name: "/skills", Usage: "/skills [list|view|candidates|candidate|promote|reject|rollback|binding|bind|unbind|history|undo|search|install|audit|delete|archive|pin|unpin|stats|reload]", Description: "Manage learned skills", Hint: "list, bind, review candidates, promote, or rollback skills"},
@@ -80,11 +80,11 @@ var slashCommands = []slashCommand{
 	{
 		slashCommandMeta: slashCommandMetas[1],
 		Run: func(m *uiModel, args []string) tea.Cmd {
-			if len(args) > 0 {
-				m.addMessage("assistant", "Runtime model switching is intentionally disabled for the shared daemon.")
-				m.addMessage("assistant", "Use: selfmind model set <provider> <model> [--reasoning <level|auto>]")
+			if len(args) == 0 {
+				return m.openModelManager()
 			}
-			return m.handleControlPassthrough("/model", nil)
+			m.addMessage("assistant", "Usage: /model")
+			return nil
 		},
 	},
 	{

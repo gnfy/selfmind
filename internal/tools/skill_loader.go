@@ -440,6 +440,14 @@ func SkillsDirForTenant(baseDir, tenantID string) string {
 	return filepath.Join(baseDir, tenantID, "skills")
 }
 
+// ManagedWorkspaceSkillsDir returns the control-managed root for learned
+// workspace assets. The workspace id is hashed so an external identifier can
+// never become a filesystem path segment. This root is outside the repository.
+func ManagedWorkspaceSkillsDir(baseDir, tenantID, workspaceID string) string {
+	digest := sha256.Sum256([]byte(strings.TrimSpace(workspaceID)))
+	return filepath.Join(baseDir, tenantID, "workspaces", fmt.Sprintf("%x", digest[:16]), "skills")
+}
+
 // ---- 工具注册助手 ----
 
 // ToolDefFromSkill 将 SkillDefinition 转换为 LLM ToolDefinition

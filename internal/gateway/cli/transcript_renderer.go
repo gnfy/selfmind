@@ -80,6 +80,10 @@ func (m *uiModel) renderStartupCard(width int) []string {
 	}
 	title := ">_ SelfMind (" + version + ")"
 	modelLine := "model:     " + modelName + "      /model for details"
+	backgroundLine := ""
+	if background := strings.TrimSpace(m.backgroundModelName); background != "" {
+		backgroundLine = "background:" + " " + background
+	}
 	providerLine := ""
 	if providerName != "" && providerName != modelName && providerName != "active" {
 		providerLine = "provider:  " + providerName
@@ -87,7 +91,7 @@ func (m *uiModel) renderStartupCard(width int) []string {
 	dirLine := "directory: " + currentWorkingDir()
 
 	needed := runewidth.StringWidth(title)
-	for _, line := range []string{modelLine, providerLine, dirLine} {
+	for _, line := range []string{modelLine, backgroundLine, providerLine, dirLine} {
 		if width := runewidth.StringWidth(line); width > needed {
 			needed = width
 		}
@@ -106,16 +110,34 @@ func (m *uiModel) renderStartupCard(width int) []string {
 		renderStartupBoxLine("", cardW),
 		renderStartupDataLine("model:", modelName, cardW, "      /model for details"),
 	}
+	if backgroundLine != "" {
+		lines = append(lines, renderStartupDataLine("background:", m.backgroundModelName, cardW, ""))
+	}
 	if providerLine != "" {
 		lines = append(lines, renderStartupDataLine("provider:", providerName, cardW, ""))
 	}
+	workspaceLabel, workspaceValue := "directory:", currentWorkingDir()
+	if strings.TrimSpace(m.workspaceOverridePath) != "" {
+		workspaceLabel = "workspace:"
+		workspaceValue = m.workspaceOverridePath
+	}
 	lines = append(lines,
-		renderStartupDataLine("directory:", currentWorkingDir(), cardW, ""),
+		renderStartupDataLine(workspaceLabel, workspaceValue, cardW, ""),
 		startupBorderStyle.Render("+"+strings.Repeat("-", cardW-2)+"+"),
 		"",
-		startupValueStyle.Render("Tip: Tell SelfMind what to inspect, change, test, or remember."),
-		"",
 	)
+	if m.firstTaskPending {
+		lines = append(lines,
+			startupValueStyle.Render("Try: Inspect this workspace and explain how it is structured."),
+			startupSubtleStyle.Render("Do not modify files."),
+			"",
+		)
+	} else {
+		lines = append(lines,
+			startupValueStyle.Render("Tip: Tell SelfMind what to inspect, change, test, or remember."),
+			"",
+		)
+	}
 	return lines
 }
 

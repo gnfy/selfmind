@@ -136,7 +136,7 @@ func (a *App) doctor(args []string) int {
 				Details:  doctorRenderedSectionBody(probeSection),
 				Actions: []doctorAction{{
 					Description: "Check the configured model routes and live provider contract.",
-					Commands:    []string{"selfmind model check --live"},
+					Commands:    []string{"selfmind model"},
 				}},
 			})
 		} else if probeSection != "" {
@@ -447,7 +447,7 @@ func gatewayDoctorHealthy(body string) bool {
 	if !strings.HasPrefix(strings.TrimSpace(body), "running (state=running ") {
 		return false
 	}
-	if strings.Contains(body, "launchd=error") || strings.Contains(body, "launchd=installed-not-loaded") {
+	if backgroundServiceDoctorUnhealthy(body) {
 		return false
 	}
 	if strings.Contains(body, "build=mismatch:") {
@@ -497,9 +497,9 @@ func gatewayDoctorActions(body string) []doctorAction {
 			{Description: "After correcting or removing invalid schemas, restart the gateway.", Commands: []string{"selfmind gateway restart"}},
 		}
 	}
-	if strings.Contains(body, "launchd=error") || strings.Contains(body, "launchd=installed-not-loaded") {
+	if backgroundServiceDoctorUnhealthy(body) {
 		return []doctorAction{
-			{Description: "Install or refresh the launchd service definition.", Commands: []string{"selfmind gateway service install"}},
+			{Description: "Install or refresh the operating-system background service.", Commands: []string{"selfmind gateway service install"}},
 			{Description: "Restart the gateway through the service.", Commands: []string{"selfmind gateway restart"}},
 		}
 	}
@@ -507,6 +507,13 @@ func gatewayDoctorActions(body string) []doctorAction {
 		{Description: "Restart the gateway.", Commands: []string{"selfmind gateway restart"}},
 		{Description: "If it still fails, run it in the foreground and inspect the error.", Commands: []string{"selfmind gateway run"}},
 	}
+}
+
+func backgroundServiceDoctorUnhealthy(body string) bool {
+	return strings.Contains(body, "launchd=error") ||
+		strings.Contains(body, "launchd=installed-not-loaded") ||
+		strings.Contains(body, "systemd=error") ||
+		strings.Contains(body, "systemd=installed-not-running")
 }
 
 func skillPresentationDoctorActions(body string) []doctorAction {
@@ -604,7 +611,7 @@ func configDoctorIssue(d configDiagnostics) (doctorIssue, bool) {
 		}
 		if d.ModelError != "" {
 			fmt.Fprintf(&body, "model: not ready (%s)\n", oneLine(tools.RedactSensitive(d.ModelError), 160))
-			issue.Actions = append(issue.Actions, doctorAction{Description: "Check the configured model; use setup if you need to choose another one.", Commands: []string{"selfmind model check", "selfmind setup"}})
+			issue.Actions = append(issue.Actions, doctorAction{Description: "Open Model Manager; each completed selection is checked automatically.", Commands: []string{"selfmind model", "selfmind setup"}})
 		}
 		if d.SandboxWarning != "" {
 			fmt.Fprintf(&body, "exec_sandbox: %s\n", d.SandboxLine)

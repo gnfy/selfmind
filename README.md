@@ -4,7 +4,10 @@
 
 SelfMind is a Go-based personal AI agent runtime. The current product direction is not a one-off chatbot, but a long-running work agent that can be used from a local TUI, a local gateway, and IM/webhook channels while sharing identity, task state, workspace scope, memory, and skills.
 
-The short version: run `selfmind` for local interactive work, run `selfmind gateway start` when you want a 24/7 local agent, and use `selfmind model` to configure built-in providers, reuse selected coding-CLI logins, or add a custom OpenAI-compatible endpoint without rebuilding the binary.
+The short version: install it and run `selfmind`. The same concise first-use
+guide on Linux and macOS configures the model pair, project workspace, safety
+mode, and reliable background operation. Use `selfmind setup` to repair or
+reconfigure that installation later.
 
 ## Current Capabilities
 
@@ -56,9 +59,12 @@ npm install --global @selfmind/cli@latest
 selfmind
 ```
 
-On the first interactive launch, `selfmind` opens guided model setup before it
-starts the daemon or TUI. You can reuse a supported coding-agent login or enter
-an API key. Run `selfmind setup` later to reconfigure the installation.
+On the first interactive launch, `selfmind` shows the primary and background
+models, verifies both, then confirms the project workspace, safety mode, and
+background operation. The fast path is the same on Linux and macOS and has two
+confirmations. Platform service details and expected macOS host-execution
+differences stay out of the primary flow. Run `selfmind setup` later to repair
+or reconfigure the installation.
 `selfmind doctor` reports current problems and remedies; add `--verbose` for
 the full diagnostic bundle.
 
@@ -73,15 +79,15 @@ Prerelease builds use `selfmind@next`. See
 [`docs/npm-distribution.md`](docs/npm-distribution.md) for package topology,
 release operations, uninstall behavior, and feedback privacy.
 
-On macOS, `selfmind setup` installs a per-user launchd service. Inspect or
-remove it with:
+Managed background operation uses a per-user launchd service on macOS and a
+per-user systemd service on Linux. Inspect or remove it with:
 
 ```sh
 selfmind gateway service status
 selfmind gateway service uninstall
 ```
 
-`selfmind gateway start` reuses an already running LaunchAgent. Use
+`selfmind gateway start` reuses an already running platform service. Use
 `selfmind gateway restart --drain` for upgrades so the active turn reaches a
 safe boundary before the daemon is replaced.
 
@@ -199,21 +205,22 @@ selfmind model
 
 The flow is:
 
-1. Choose a provider: OpenAI, Anthropic, Google, `Custom endpoint (enter URL manually)`, coding-CLI login reuse entries, or other built-in provider profiles.
-2. Enter or keep the API key. For Codex CLI, Claude Code, Gemini CLI, and Qwen CLI entries, SelfMind tries to reuse the existing CLI login instead.
-3. SelfMind tries to load the provider model list live and caches the list locally.
-4. Choose a model, or enter one manually if the list cannot be loaded.
-5. The choice is saved to `config.yaml`.
+1. Choose Main, Background, or one of the six optional background-role overrides.
+2. Choose a provider: OpenAI, Anthropic, Google, `Custom endpoint (enter URL manually)`, coding-CLI login reuse entries, or another built-in profile.
+3. Enter a missing API key when required. For Codex CLI, Claude Code, Gemini CLI, and Qwen CLI entries, SelfMind tries to reuse the existing CLI login instead.
+4. Choose a discovered model, a cached fallback, or enter a model ID manually.
+5. SelfMind validates that completed selection automatically; a failure keeps the draft editable.
+6. Review all edits once and apply them to `config.yaml` as one safe transaction.
 
-Useful non-interactive commands:
+Open the Model Manager at any time:
 
 ```sh
-selfmind model current
-selfmind model list
-selfmind model set openai gpt-4o
-selfmind model set codex-cli gpt-5.6-sol --reasoning xhigh
-selfmind model set custom:local-llm qwen2.5-coder
+selfmind model
 ```
+
+The manager exposes Main, Background, and optional background-role overrides,
+validates each completed choice automatically, then saves the reviewed draft as
+one atomic change.
 
 ### Config Example
 
@@ -486,22 +493,22 @@ MiniMax and Kimi Coding Plan:
 
 The foreground model is configured under `models.primary`.
 `models.auxiliary` covers bounded background work and initially defaults to the
-same provider/model as primary. Initial setup and the first `model set`
-materialize both selections; once auxiliary exists, later primary changes do
-not overwrite it. Per-role entries under `models.roles` are advanced exceptions
-and override auxiliary. There is no `default` role.
+same provider/model as primary. Initial setup or the first Main selection in
+the Model Manager can materialize both selections; once auxiliary exists,
+later Main changes do not overwrite it. Per-role entries under `models.roles`
+are optional exceptions and override auxiliary. There is no `default` role.
 
-Current role names:
+Current background role names:
 
-- `coding_agent`: main agent loop.
 - `memory_extract`: fact and turn extraction.
 - `background_review`: after-turn learning review.
-- `fast_classifier`: direct-answer routing, cheap classification, and low-latency smart approval triage.
+- `fast_classifier`: cheap classification and low-latency smart approval triage.
 - `skill_curator`: skill review and curation.
 - `semantic_recall`: semantic session recall.
 - `summarizer`: bounded context compaction summaries.
 
-In personal mode these are read from local YAML. In the future SaaS mode, the same role names can be resolved from a database-backed tenant/person/workspace model policy.
+Main owns every complete user-visible turn. A legacy `coding_agent` role
+selection is therefore ignored instead of shadowing `models.primary`.
 
 Smart approval uses `fast_classifier` from an explicit role or the effective
 auxiliary selection. An omitted auxiliary intentionally starts on primary for
@@ -551,7 +558,7 @@ gateway, IM, and TUI command.
 | `/curator` | Check, dry-run, report, run, or restore skill curator actions. |
 | `/checkpoint` | Save, load, list, or delete conversation checkpoints. |
 | `/migrate` | Migrate Hermes Agent skills. |
-| `/model` | Show the daemon's configured model and the CLI command used to change it. |
+| `/model` | Open the Model Manager in the TUI; IM surfaces return its read-only route summary. |
 | `/clear` | Clear the screen. |
 | `/exit` | Exit. |
 

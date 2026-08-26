@@ -40,6 +40,10 @@ schema cost through bounded on-demand exposure.
     releasing the new presentation contract: exact curator/delivery budgets,
     repairable oversized legacy mains, canonical usage evidence, and
     actionable cross-surface diagnostics.
+11. Replace heuristic Skill-evolution claims with the accepted learning and
+    repair lifecycle in `docs/skill-learning-and-repair.md`: observation-only
+    Fast Path profiling, workspace-first learned assets, class-specific repair
+    evidence, and bounded staleness review.
 
 ## Non-Goals
 
@@ -79,6 +83,10 @@ schema cost through bounded on-demand exposure.
 10. **Skill presentation hardening:** close the three merge blockers first,
     then align bundle/API budgets, stale-ref recovery, Doctor remediation, and
     compatibility cleanup without weakening the hidden rollback path.
+11. **Skill learning and repair:** correct false shadow semantics first, then
+    introduce control-managed workspace scope, deterministic-versus-semantic
+    repair thresholds, and dependency/verification freshness evidence without
+    adding a foreground model call.
 
 ## Evidence and Acceptance
 
@@ -129,6 +137,12 @@ schema cost through bounded on-demand exposure.
   refresh action. Doctor distinguishes registered, hidden, and provider-visible
   schemas and provides an exact safe repair plus verification command for every
   runtime-remediable finding.
+- Ordinary successful runs increment observations only: they never count as a
+  shadow match, authorize Fast Path advice, or revive a degraded candidate.
+  Automatically learned Skills default to a logical workspace scope without
+  writing generated files into the user's repository. Repair publication is
+  tied to the exact failed parent version and uses the class-specific evidence
+  thresholds in `docs/skill-learning-and-repair.md`.
 - The installed npm/WSL binary and restarted daemon expose the verified build;
   repository-only `go run` evidence is insufficient.
 
@@ -230,6 +244,24 @@ Dedicated legacy `skill:<name>` activation-event coverage remains in place as
 the rollback channel's removal gate. The cassette-backed local-full release
 path is green. Installed-binary/daemon evidence and sustained observation remain
 open; these are not unimplemented presentation-contract items.
+
+### Skill Learning and Repair Implementation (2026-08-26)
+
+The P0-P3 core mechanics in `docs/skill-learning-and-repair.md` are implemented.
+Workflow profiling is observation-only until a real comparison contract exists.
+Curator CREATE defaults to an isolated control-managed workspace root; repair
+classification uses daemon-observed failures and class-specific thresholds;
+semantic candidates accumulate immutable evidence snapshots; exact repaired
+regressions quarantine; and environment-bound guards plus verified-compatible
+previous-version checks preserve the ordinary-planning path.
+
+Control schema v5 persists guard environment, dependency fingerprints,
+verification environment, and last-verified time. Its ordered migration has a
+focused v4-shape test and the released beta.15 fixture still upgrades and
+reopens through the current schema. Remaining gates are sustained personal
+workflow evidence, installed-binary/daemon verification, and a separately
+designed explicit or cross-workspace route for widening a learned Skill to user
+scope.
 
 ## Exit Verdict
 

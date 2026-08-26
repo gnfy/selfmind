@@ -120,13 +120,60 @@ SelfMind 区分两个容易混淆的字段：
 主模型只在 `models.primary` 选择。`reasoning` 和 `service_tier` 都是可选项；
 省略或写 `auto` 表示使用 provider/模型默认值，resolver 不会强制发送该字段。
 支持哪些取值由具体模型的能力元数据决定，不维护一份全局硬编码枚举。
-`selfmind model set` 在能发现元数据时动态校验；私有 endpoint 没有元数据时，
-仍会保留用户显式配置的兼容值。
+模型管理器在能发现元数据时动态校验；私有 endpoint 没有元数据时，仍会保留用户
+显式配置的兼容值。
 
 本地初始化时，未填写 provider/model 的 auxiliary 默认使用 primary 的
-provider/model。首次写入模型会把两个槽位都明确落盘。此后 auxiliary 独立存在：
-修改 primary 不会覆盖已有 auxiliary。逻辑后台角色继续作为高级
-`models.roles.<role>` 覆盖存在；未配置角色覆盖时继承 auxiliary。
+provider/model。设置界面始终同时展示并确认两条路由，后台模型不是隐藏副作用。
+创建或修改首次模型选择的模型命令会把两个槽位都明确落盘。若设置流程正在协调一份
+无需重写的旧配置文件，确认后的模型对也会固定在设置回执中；以后任一路由变化都会让
+回执失效并进入修复流程，而不是静默接受另一个后台模型。auxiliary 一旦显式配置，
+修改 primary 就不会覆盖它。逻辑后台角色继续作为高级 `models.roles.<role>` 覆盖
+存在；未配置角色覆盖时继承 auxiliary。
+
+## 模型路由事务
+
+所有面向用户的模型修改都汇入 daemon 拥有的同一个事务服务。`selfmind model` 与
+TUI 中不带参数的 `/model` 打开同一个模型管理器；IM 只展示只读摘要，不再维护第二套
+修改语法。在线修改遵循以下状态机：
+
+```text
+等待确认 -> 校验中 -> 等待安全边界 -> 排空 -> 重启中 -> 启动中 -> 已应用
+                                      |-> 可归因于模型的探测失败 -> 已回滚
+                                      \-> 基础设施/未知失败 -> 需要恢复
+```
+
+当前 run 会冻结已经解析的路由。模型变更重启会等待该 run，包括等待中的审批或
+澄清，而不会使用普通重启的短超时强制中断。在进入“排空”前，用户可以取消或显式
+替换候选项；之后事务会冻结。drain 期间收到的新工作写入持久队列，只会由新 daemon
+启动。本地 TUI 在 HTTP 短暂不可用时会保留草稿，并直接读取持久事务。30 秒后会提示
+进度较慢；替换进程启动后 120 秒仍未健康则进入显式恢复。五分钟内连续三次启动失败
+会打开恢复熔断，而不是让服务管理器无限重启。系统只允许一个 pending 变更，并使用
+单调 generation；过期确认和并发旧写入会失败，不会覆盖更新的意图。预览十分钟后
+过期。历史最多保留十条不含密钥的终态快照；回滚会从上一条成功快照创建一笔新的、
+经过校验的事务。
+
+状态文件是所选 `config.yaml` 同目录下的 `model-state.json`。其中只有路由选择、
+阶段转换、探测摘要、generation、重启次数和历史，不包含凭据、provider header 或
+原始认证数据。经过校验的候选项只有在当前 run 空闲、到达安全边界后才写入 YAML。
+启动时还会再次探测，并且只有运行时构建和真实 `/health` 端点成功后才记录为 running。
+只有确定且可归因于模型的启动探测失败才会自动恢复上一条运行快照。网络、额度、
+监听端口、服务管理器和未知失败会保留证据并进入 `recovery_required`；模型管理器的
+“变更状态”页面可以重试候选项，或显式恢复上一条健康路由。schema v1 状态迁移前会
+先创建备份。直接编辑 YAML 后只会显示为
+configured、尚未验证；在下一次 daemon 启动完成验证前，系统拒绝再创建另一笔模型事务。
+
+模型发现优先使用 provider 实时目录，其次是带时间戳的新鲜缓存，再降级到明确标注
+为 stale 的缓存或内置 fallback。用户始终可以手工输入模型 ID，但仍必须通过同样的
+契约探测。只有已知兼容时才会保留原 reasoning 和 service tier；兼容性未知时只把
+受影响选项恢复为 provider `auto` 并提示。显式输入始终优先。
+
+校验分为两个边界。模型管理器在每一项选择完成后自动发送相应的有界契约探测：主模型
+使用前台探测，后台模型及六个受管理角色使用后台或维护 JSON 探测。最终 daemon 事务
+会在修改服务状态前，在 daemon 自己的环境中再次解析并探测整份草稿。这样可以避免
+只在 shell 中存在的凭据被误判为后台运行也可用。新输入的 API key 只有探测成功后
+才会复制到权限为 `0600` 的 SelfMind 私有凭据文件；服务定义只包含路径和非凭据环境。
+探测失败会保留可编辑草稿，绝不会伪装成已验证。
 
 Anthropic Messages 在 `thinking_mode: anthropic` 下，会把显式推理等级映射为 thinking
 预算：`low=4096`、`medium/default=8192`、`high=16384`、
@@ -209,8 +256,8 @@ Responses-compatible endpoint 使用的 `responses_store_false` 和
 `system_message_mode` 只为兼容旧配置继续读取，现已忽略。`SupportsTools`、
 `SupportsStreaming`、`SupportsVision` 属于内置 profile 元数据。
 
-resolver 会校验 quirks 取值，`selfmind model check` 展示最终值并提示协议不匹配。
-协议 adapter 不再根据 endpoint hostname 猜测厂商；内置 profile 声明 header、HTTP
+resolver 会校验 quirks 取值；非法值和协议不匹配会形成可操作的配置错误。协议
+adapter 不再根据 endpoint hostname 猜测厂商；内置 profile 声明 header、HTTP
 版本、schema 修复、匿名身份和 thinking 形态，自定义代理解析到同一 profile 时得到
 相同契约。
 
@@ -243,10 +290,10 @@ token。若服务端返回 `401 token_expired`、`invalid_token` 等认证失败
   Anthropic Messages 对空值或非法的 `required` 直接省略，确保纯可选参数工具不会
   序列化为 `required: null`；Responses-compatible adapter 再应用其更严格的协议
   规则，把空 required 集合序列化为 `[]`。
-- `selfmind model check --live [--role <name>]` 会在目标 transport 声明支持原生工具时，
-  发起一次携带纯可选参数探测工具的有界请求。这样验证的是实际协议 adapter 和端点，
-  而不只是配置解析。`doctor --probe-models` 复用同一 schema 探测，并继续合并共享同一
-  provider 路由的角色，避免重复消耗额度。
+- 模型管理器会在一项路由选择完成、且其 transport 声明支持原生工具时，自动发起一次
+  携带纯可选参数探测工具的有界请求。这样验证的是实际协议 adapter 和端点，而不只是
+  配置解析。`doctor --probe-models` 复用同一 schema 探测，并继续合并共享同一 provider
+  路由的角色，避免重复消耗额度。
 - Responses-compatible adapter 必须在线上规范化工具名：provider 侧名称必须匹配
   `^[a-zA-Z0-9_-]+$`；adapter 内部维护别名表，把返回的 tool call 映射回 SelfMind
   原始内部名称后再分发。
@@ -301,8 +348,8 @@ DeepSeek 请求还可携带 `user_id`。SelfMind 不会发送原始 person、ten
 匿名 `sm_...` 值。它跨渠道和 run 稳定、不同用户不同，并且只在 provider profile
 声明 `user_identity_field: user_id` 时发送。
 
-`selfmind model check --role <role> --live` 除了验证普通原生工具 schema，还会验证
-完整思考工具循环：思考与工具调用、工具结果回放、最终 assistant 答复。
+模型管理器的自动路由校验与 `doctor --probe-models` 除了验证普通原生工具 schema，
+还会验证完整思考工具循环：思考与工具调用、工具结果回放、最终 assistant 答复。
 
 ## Kimi Coding Plan
 
@@ -374,7 +421,7 @@ OAuth 方式：
 
 ```sh
 selfmind auth login minimax-oauth
-selfmind model set minimax-oauth MiniMax-M3
+selfmind model
 ```
 
 默认行为：

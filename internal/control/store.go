@@ -908,6 +908,9 @@ CREATE TABLE IF NOT EXISTS skill_versions (
 	source_observation_ids_json TEXT NOT NULL DEFAULT '[]',
 	evidence_set_hash TEXT NOT NULL DEFAULT '',
 	evidence_json TEXT NOT NULL DEFAULT '{}',
+	dependency_fingerprint TEXT NOT NULL DEFAULT '',
+	verification_environment_fingerprint TEXT NOT NULL DEFAULT '',
+	last_verified_at INTEGER NOT NULL DEFAULT 0,
 	created_by TEXT NOT NULL,
 	created_at INTEGER NOT NULL,
 	promoted_at INTEGER,
@@ -918,6 +921,18 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_skill_versions_one_active
 CREATE UNIQUE INDEX IF NOT EXISTS idx_skill_versions_candidate_evidence
 	ON skill_versions(control_tenant_id, evidence_set_hash)
 	WHERE state = 'candidate' AND evidence_set_hash != '';
+CREATE TABLE IF NOT EXISTS skill_candidate_evidence_snapshots (
+	control_tenant_id TEXT NOT NULL,
+	skill_key TEXT NOT NULL,
+	version_hash TEXT NOT NULL,
+	evidence_set_hash TEXT NOT NULL,
+	observation_ids_json TEXT NOT NULL DEFAULT '[]',
+	evidence_json TEXT NOT NULL DEFAULT '{}',
+	created_at INTEGER NOT NULL,
+	PRIMARY KEY(control_tenant_id, skill_key, version_hash, evidence_set_hash)
+);
+CREATE INDEX IF NOT EXISTS idx_skill_candidate_evidence_set
+	ON skill_candidate_evidence_snapshots(control_tenant_id, evidence_set_hash);
 CREATE TABLE IF NOT EXISTS run_work_units (
 	id TEXT PRIMARY KEY,
 	identity_tenant_id TEXT NOT NULL,
@@ -1035,6 +1050,7 @@ CREATE TABLE IF NOT EXISTS skill_failure_guards (
 	failed_step_id TEXT NOT NULL DEFAULT '',
 	error_category TEXT NOT NULL DEFAULT '',
 	normalized_input_shape TEXT NOT NULL DEFAULT '',
+	environment_fingerprint TEXT NOT NULL DEFAULT '',
 	state TEXT NOT NULL DEFAULT 'active',
 	source_run_id TEXT NOT NULL,
 	created_at INTEGER NOT NULL,

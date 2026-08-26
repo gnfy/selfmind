@@ -9,6 +9,7 @@ import (
 	"unicode/utf8"
 
 	"selfmind/internal/executionenv"
+	"selfmind/internal/kernel"
 )
 
 const (
@@ -125,9 +126,19 @@ func userTenantDirForTenant(tenantID string, invocation ...map[string]interface{
 	return filepath.Dir(skillsDir), nil
 }
 
+func managedWorkspaceSkillsDirForTenant(tenantID, workspaceID string, invocation ...map[string]interface{}) (string, error) {
+	baseDir, err := selfmindBaseDir(invocation...)
+	if err != nil {
+		return "", err
+	}
+	return ManagedWorkspaceSkillsDir(baseDir, fallbackTenant(tenantID), workspaceID), nil
+}
+
 // SkillRootsForTenant returns all roots visible to a tenant, ordered by lookup
-// priority. Workspace roots are read first; the user root is always available
-// and remains the default write target.
+// priority. Repository-authored workspace roots win, the control-managed
+// logical-workspace root follows them, and the user root remains visible as the
+// cross-workspace fallback. Write selection is a separate trusted-scope step in
+// ResolveWritableSkillRootForTenant.
 func SkillRootsForTenant(tenantID string, invocation ...map[string]interface{}) ([]SkillRoot, error) {
 	var roots []SkillRoot
 	addExistingRoot := func(path, scope, source string, writable bool, priority int) {
@@ -152,6 +163,18 @@ func SkillRootsForTenant(tenantID string, invocation ...map[string]interface{}) 
 	args := map[string]interface{}{"_tenant_id": tenantID}
 	if len(invocation) > 0 && invocation[0] != nil {
 		args = invocation[0]
+	}
+	if invocationScope, ok := InvocationScopeFromArgs(args); ok && strings.TrimSpace(invocationScope.WorkspaceID) != "" {
+		managedRoot, err := managedWorkspaceSkillsDirForTenant(tenantID, invocationScope.WorkspaceID, invocation...)
+		if err != nil {
+			return nil, err
+		}
+		// Repository-authored workspace Skills keep precedence. The managed root
+		// follows them but precedes external and user-global assets.
+		roots = append(roots, SkillRoot{
+			Path: managedRoot, Scope: SkillScopeWorkspace, Source: SkillSourceAgentCreated,
+			Writable: true, Priority: 35,
+		})
 	}
 	if scope, ok := currentExecutionScopeAny(args); ok {
 		workspaceStart = strings.TrimSpace(scope.WorkspaceRoot)
@@ -246,12 +269,28 @@ func ResolveWritableSkillRootForTenant(tenantID string, invocation ...map[string
 	if err != nil {
 		return SkillRoot{}, err
 	}
-	preferWorkspace := strings.EqualFold(os.Getenv("SELFMIND_SKILLS_WRITE_SCOPE"), SkillScopeWorkspace)
+	args := map[string]interface{}{}
+	if len(invocation) > 0 && invocation[0] != nil {
+		args = invocation[0]
+	}
+	publicationScope := ""
+	if scope, ok := InvocationScopeFromArgs(args); ok {
+		publicationScope = strings.ToLower(strings.TrimSpace(scope.SkillPublicationScope))
+		if publicationScope == kernel.SkillPublicationWorkspace && strings.TrimSpace(scope.WorkspaceID) == "" {
+			return SkillRoot{}, fmt.Errorf("workspace Skill publication requires workspace identity")
+		}
+	}
+	preferWorkspace := publicationScope == kernel.SkillPublicationWorkspace ||
+		strings.EqualFold(os.Getenv("SELFMIND_SKILLS_WRITE_SCOPE"), SkillScopeWorkspace)
 	if preferWorkspace {
 		for _, root := range roots {
-			if root.Writable && root.Scope == SkillScopeWorkspace {
+			if root.Writable && root.Scope == SkillScopeWorkspace &&
+				(publicationScope != kernel.SkillPublicationWorkspace || root.Source == SkillSourceAgentCreated) {
 				return root, nil
 			}
+		}
+		if publicationScope == kernel.SkillPublicationWorkspace {
+			return SkillRoot{}, fmt.Errorf("managed workspace skill root is unavailable")
 		}
 	}
 	for _, root := range roots {

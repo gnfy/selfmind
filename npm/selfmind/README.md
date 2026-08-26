@@ -8,18 +8,23 @@ launcher.
 
 ```sh
 npm install --global @selfmind/cli@latest
-selfmind setup
-selfmind doctor
 selfmind
 ```
+
+The first launch uses the same concise guide on Linux and macOS to verify a
+primary model and background model, select a project workspace and safety mode,
+and enable reliable background operation. Run `selfmind setup` later to repair
+or change those choices.
 
 Supported release targets:
 
 - Linux x64
 - Linux arm64
+- macOS x64
+- macOS arm64 (Apple silicon)
 - WSL on x64 or arm64 Windows hosts
 
-Native Windows and macOS are not currently supported release targets.
+Native Windows is not a release target; use WSL.
 
 ## Update
 

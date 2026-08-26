@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -285,7 +286,7 @@ func (d configDiagnostics) section() string {
 		}
 		if d.ModelError != "" {
 			fmt.Fprintf(&sb, "model: not ready (%s)\n", oneLine(d.ModelError, 160))
-			sb.WriteString("model_check: selfmind model check\n")
+			sb.WriteString("model_manager: selfmind model\n")
 		} else if d.ModelLine != "" {
 			fmt.Fprintf(&sb, "model: %s\n", d.ModelLine)
 		}
@@ -331,10 +332,14 @@ func (d configDiagnostics) startupWarnings() []string {
 }
 
 func sandboxDiagnostic(cfg *config.Config) (line, warning string) {
-	return sandboxDiagnosticWithAvailability(cfg, tools.ExecSandboxAvailable())
+	return sandboxDiagnosticWithPlatform(cfg, tools.ExecSandboxAvailable(), runtime.GOOS)
 }
 
 func sandboxDiagnosticWithAvailability(cfg *config.Config, available bool) (line, warning string) {
+	return sandboxDiagnosticWithPlatform(cfg, available, runtime.GOOS)
+}
+
+func sandboxDiagnosticWithPlatform(cfg *config.Config, available bool, platform string) (line, warning string) {
 	if cfg == nil || !cfg.ExecSandbox.Enabled {
 		return "disabled", ""
 	}
@@ -346,6 +351,9 @@ func sandboxDiagnosticWithAvailability(cfg *config.Config, available bool) (line
 	}
 	if cfg.ExecSandbox.Required {
 		return "blocked (bubblewrap or unprivileged user namespaces unavailable)", "execution sandbox is required but unavailable"
+	}
+	if platform == "darwin" {
+		return "host execution (approval-controlled; Linux isolation unavailable)", ""
 	}
 	return "degraded (auto falls back to approval-controlled host execution)", "execution sandbox is unavailable"
 }

@@ -155,8 +155,8 @@ func modelSetupDiagnostic(cfg *config.Config, resolveErr error) string {
 	} else {
 		sb.WriteString("Reason: provider resolved, but no adapter was available for this protocol.\n")
 	}
-	sb.WriteString("\nRun:\n  selfmind model check\n\n")
-	sb.WriteString("If the check succeeds, make sure the TUI is launched with the same binary and config path.")
+	sb.WriteString("\nRun:\n  selfmind model\n\n")
+	sb.WriteString("Choose or reselect the route in Model Manager; every completed selection is validated automatically.")
 	return sb.String()
 }
 
@@ -215,24 +215,10 @@ func codingContextLength(cfg *config.Config) int {
 	if cfg == nil {
 		return 0
 	}
-	selection := modelruntime.Selection{}
-	if roleCfg, ok := cfg.Models.Roles[string(llm.RoleCodingAgent)]; ok {
-		selection = modelruntime.Selection{
-			Provider:        roleCfg.Provider,
-			Model:           roleCfg.Model,
-			BaseURL:         roleCfg.BaseURL,
-			APIKey:          roleCfg.APIKey,
-			Headers:         roleCfg.Headers,
-			ExtraHeaders:    roleCfg.ExtraHeaders,
-			ExtraBody:       roleCfg.ExtraBody,
-			ExtraQuery:      roleCfg.ExtraQuery,
-			ContextLength:   roleCfg.ContextLength,
-			MaxTokens:       roleCfg.MaxTokens,
-			ReasoningEffort: roleCfg.EffectiveReasoning(),
-			Thinking:        roleCfg.Thinking,
-			ServiceTier:     roleCfg.ServiceTier,
-			Quirks:          runtimeQuirksFromConfig(roleCfg.Quirks),
-		}
+	primary := cfg.EffectivePrimary()
+	selection := modelruntime.Selection{
+		Provider: primary.Provider, Model: primary.Model, ContextLength: primary.ContextLength,
+		ReasoningEffort: primary.Reasoning, ServiceTier: primary.ServiceTier,
 	}
 	rt, err := modelruntime.NewResolver(cfg).Resolve(context.Background(), selection)
 	if err != nil {
@@ -587,6 +573,12 @@ func buildModelGateway(cfg *config.Config, mem *memory.MemoryManager, tenantID s
 		if roleConfigEmpty(roleCfg) {
 			continue
 		}
+		if roleName == string(llm.RoleCodingAgent) {
+			// models.primary is the only foreground authority. Older configs may
+			// still contain this former override; keep it inert instead of silently
+			// replacing the Main model shown by the manager.
+			continue
+		}
 		if _, ok := registered[roleName]; ok {
 			continue
 		}
@@ -716,7 +708,6 @@ func InitAgent(mem *memory.MemoryManager, cfg *config.Config, tenantID string, p
 	reviewProvider := configuredAuxiliaryRoleProvider(mem, cfg, tenantID, llm.RoleBackgroundReview)
 	var reviewRoutes []maintenanceRouteIdentity
 	semanticRecallProvider := configuredAuxiliaryRoleProvider(mem, cfg, tenantID, llm.RoleSemanticRecall)
-	fastProvider := configuredAuxiliaryRoleProvider(mem, cfg, tenantID, llm.RoleFastClassifier)
 	summaryProvider := configuredAuxiliaryRoleProvider(mem, cfg, tenantID, llm.RoleSummarizer)
 	if summaryProvider == nil {
 		// Legacy configurations used memory_extract for compaction before the
@@ -783,9 +774,6 @@ func InitAgent(mem *memory.MemoryManager, cfg *config.Config, tenantID string, p
 		parseResilienceDuration(cfg.Agent.LLMRetryCap, llm.DefaultRetryCap),
 	)
 	agent.SetContextWindow(codingContextLength(cfg))
-	// Simple direct-answer turns use the fast-classifier role (falls back to the
-	// default model when no fast model is configured).
-	agent.SetFastProvider(fastProvider)
 	// Over-budget context compaction uses the auxiliary/dedicated summarizer
 	// (kept OFF the main coding provider) instead of dropping oldest turns.
 	agent.SetSummaryProvider(summaryProvider)

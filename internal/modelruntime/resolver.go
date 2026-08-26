@@ -233,6 +233,14 @@ func (r *Resolver) resolveCustom(providerName string, selection Selection, model
 	}
 	for _, cp := range r.cfg.Providers.Custom {
 		if strings.EqualFold(cp.Name, name) || strings.EqualFold("custom:"+cp.Name, providerName) {
+			credential := r.store.Resolve("custom:" + cp.Name)
+			apiKey := firstNonEmpty(selection.APIKey, cp.APIKey, credential.Token)
+			credentialSource := "config:custom"
+			if strings.TrimSpace(selection.APIKey) != "" {
+				credentialSource = "explicit"
+			} else if strings.TrimSpace(cp.APIKey) == "" && credential.Token != "" {
+				credentialSource = credential.Source
+			}
 			protocol := NormalizeProtocol(firstNonEmpty(selection.Protocol, cp.Protocol, ProtocolOpenAICompatible))
 			model := firstNonEmpty(modelName, cp.Model, selection.Model)
 			contextLength, contextSource := resolvedCustomContextLength(
@@ -249,8 +257,8 @@ func (r *Resolver) resolveCustom(providerName string, selection Selection, model
 				Model:            model,
 				Protocol:         protocol,
 				BaseURL:          firstNonEmpty(selection.BaseURL, cp.BaseURL),
-				APIKey:           firstNonEmpty(selection.APIKey, cp.APIKey),
-				CredentialSource: "config:custom",
+				APIKey:           apiKey,
+				CredentialSource: credentialSource,
 				AuthType:         AuthAPIKey,
 				Headers:          mergeHeaders(r.cfg.Model.Headers, r.cfg.Model.ExtraHeaders, selection.Headers, selection.ExtraHeaders),
 				ExtraBody:        mergeExtraMaps(selection.ExtraBody),
@@ -396,7 +404,7 @@ func resolveProviderTransport(profile ProviderProfile, baseURL, protocol string,
 // HeaderOrigins labels each resolved header with the layer that supplied its
 // final value, mirroring the merge order in the builtin resolve path
 // (model.headers < built-in profile < provider config < credential).
-// Display-only: `model check` uses it so a user who just added an emergency
+// Display-only: diagnostics use it so a user who just added an emergency
 // override can see it actually took effect.
 func (r *Resolver) HeaderOrigins(provider string, headers map[string]string) map[string]string {
 	endpoint := r.endpointFor(provider)

@@ -18,10 +18,14 @@ Generated from `docs/manifest.yaml` by `selfmind docs index`. Do not edit this f
 ## Decision
 
 - [Execution Concurrency Design](execution-concurrency-plan.md) - paused, zh-CN
+- [Skill Learning, Automatic Promotion, and Repair](skill-learning-and-repair.md) - current, en
 
 ## Guide
 
 - [Documentation Index](README.md) - current, en
+- [Domain Documentation for Engineering Skills](agents/domain.md) - current, en
+- [Engineering Skills Issue Tracker](agents/issue-tracker.md) - current, en
+- [Engineering Skills Triage Labels](agents/triage-labels.md) - current, en
 - [Command Reference](command-reference.md) - current, en
 - [命令参考](command-reference.zh-CN.md) - current, zh-CN
 - [Configuration Reference](config-reference.md) - current, en

@@ -128,12 +128,16 @@ them when metadata is discoverable and otherwise preserves the explicit value
 for compatible private endpoints.
 
 For local onboarding, an auxiliary selection with no provider/model defaults
-to the primary provider/model. The setup screen always shows and confirms both
-routes; the background route is not a hidden side effect. Model commands that
-create or change the initial selection materialize both slots. When setup is
-reconciling an existing legacy file without rewriting it, the accepted pair is
-also pinned in the setup receipt; a later route change invalidates that receipt
-and opens repair instead of silently accepting a different background model.
+to the primary provider/model. When Model Readiness is absent, a bare
+interactive launch opens the same Model Manager as `selfmind model`; explicit
+`selfmind setup` points to that entry rather than implementing another picker.
+The Manager shows and validates both routes, so the background route is not a
+hidden side effect. Its initial transaction materializes both slots. The applied
+transaction in `model-state.json` is the sole authority for Model Readiness.
+Onboarding does not copy route or verification facts, so a
+later applied route change cannot reopen an unrelated workspace or background
+service stage. A valid legacy setup receipt is accepted once as migration
+evidence and backed up before its model fields are retired.
 After auxiliary is explicit, changing primary never overwrites it. Logical
 background roles remain available as advanced `models.roles.<role>` overrides
 and inherit auxiliary when omitted.
@@ -169,9 +173,10 @@ snapshots, and rollback creates a fresh validated transaction from a previous
 applied snapshot.
 
 The state file is `model-state.json` beside the selected `config.yaml`. It
-contains route selections, phase transitions, probe summaries, generations,
-restart attempts, and history, but no credentials, provider headers, or raw
-authentication data. The validated candidate is written to YAML only at the
+contains route selections, the verified-running timestamp, phase transitions,
+probe summaries, generations, restart attempts, and history, but no
+credentials, provider headers, or raw authentication data. The validated
+candidate is written to YAML only at the
 safe boundary, after the current run is idle. Startup probes it again, then
 records it as running only after runtime construction and the real `/health`
 endpoint succeed. Only a deterministic, model-attributable startup probe
@@ -179,9 +184,25 @@ failure automatically restores the last running snapshot. Network, quota,
 listener, service-manager, and unknown failures preserve the evidence in
 `recovery_required`; the Model Manager's Change status screen offers retry or
 restore against the last healthy routes.
-Schema-v1 state is backed up before migrating to the current state machine.
+Schema-v1 and schema-v2 state is backed up before migrating to the current
+readiness-aware state machine.
 Direct YAML edits are shown as configured but unverified until the next daemon
 startup; another model transaction is refused while such drift exists.
+Gateway status exposes only a hash of the effective route snapshot. Onboarding
+uses that non-secret fingerprint to reject model drift before allowing Runtime
+Degraded foreground use; live health alone never establishes Model Readiness.
+Provider credentials and endpoint configuration are never part of the hash.
+While Model Readiness is incomplete, model-free controls remain available but
+every new agent-backed message is durably queued instead of executing on an
+unverified route, and each model-backed maintenance or memory pass stops at the
+same boundary. Cancelling a preview that restores Model Readiness immediately
+wakes the parked queue in order. An explicit restore first waits for the
+process holding the failed candidate to release Gateway ownership, clears the
+prior running proof, restores the last healthy selection, and starts a
+replacement process. Managed restore waits only for the process started by the
+existing service manager and never races it with a detached fallback. Startup
+probes and `/health` must establish a new verified-running boundary before the
+queue resumes.
 
 Model discovery prefers a live provider catalogue, then a timestamped fresh
 cache, then a visibly stale cache or built-in fallback. A model ID may always

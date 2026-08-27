@@ -1,6 +1,7 @@
 package modelchange
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -78,6 +79,149 @@ func TestPrepareConfirmAndStartupApply(t *testing.T) {
 	}
 }
 
+func TestModelReadinessRequiresVerifiedRunningBoundary(t *testing.T) {
+	service, path := newUnverifiedTestService(t)
+	status, err := service.Inspect()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.ModelReady() {
+		t.Fatal("fresh configured routes were ready before a verified running boundary")
+	}
+	status, rolledBack, err := service.ReconcileStartup(context.Background())
+	if err != nil || rolledBack || status.Pending == nil || status.Pending.Status != StatusStarting {
+		t.Fatalf("initial startup validation = status:%+v rolledBack:%v err:%v", status, rolledBack, err)
+	}
+	if len(status.Pending.Probes) < 2 {
+		t.Fatalf("initial startup did not validate Main and Background: %+v", status.Pending.Probes)
+	}
+	status, err = service.MarkStartupHealthy()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !status.ModelReady() {
+		t.Fatalf("healthy running routes were not ready: %+v", status)
+	}
+	cfg := mustLoadConfig(t, path)
+	cfg.Models.Auxiliary.Model = "manual-drift"
+	if err := config.SaveConfig(path, cfg); err != nil {
+		t.Fatal(err)
+	}
+	status, err = service.Inspect()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.ModelReady() {
+		t.Fatal("manual configuration drift retained Model Readiness")
+	}
+}
+
+func TestMarkStartupHealthyCannotBlessAnUnvalidatedBaseline(t *testing.T) {
+	service, _ := newUnverifiedTestService(t)
+	if _, err := service.Inspect(); err != nil {
+		t.Fatal(err)
+	}
+	status, err := service.MarkStartupHealthy()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.ModelReady() || !status.RunningVerifiedAt.IsZero() {
+		t.Fatalf("unvalidated baseline became ready: %+v", status)
+	}
+}
+
+func TestInitialProbeFailureKeepsModelManagerRepairSurfaceAvailable(t *testing.T) {
+	service, _ := newUnverifiedTestService(t)
+	service.Validate = func(_ context.Context, _ *config.Config, routes []Route) []ProbeResult {
+		results := make([]ProbeResult, 0, len(routes))
+		for _, route := range routes {
+			results = append(results, ProbeResult{Route: route, Error: "credential missing", FailureClass: FailureModel})
+		}
+		return results
+	}
+	status, rolledBack, err := service.ReconcileStartup(context.Background())
+	if err != nil || rolledBack || status.Pending != nil || status.ModelReady() {
+		t.Fatalf("failed initial probe = status:%+v rolledBack:%v err:%v", status, rolledBack, err)
+	}
+	if len(status.History) != 1 || status.History[0].Status != StatusFailed || status.History[0].Source != "initial-startup" {
+		t.Fatalf("failed initial evidence = %+v", status.History)
+	}
+	candidate := status.Configured
+	candidate.Primary.Model = "repair-candidate"
+	if _, err := service.Prepare(context.Background(), PrepareRequest{Candidate: candidate, Source: "model-manager", RequireConfirmation: true}); err != nil {
+		t.Fatalf("Model Manager could not open a repair transaction: %v", err)
+	}
+}
+
+func TestCredentialOnlyRepairCanRevalidateUnchangedRoutes(t *testing.T) {
+	service, _ := newUnverifiedTestService(t)
+	status, err := service.Inspect()
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared, err := service.Prepare(context.Background(), PrepareRequest{
+		Candidate: status.Configured, Source: "model-manager", RequireConfirmation: false, ForceRevalidate: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !prepared.NeedsRestart || prepared.Change.Status != StatusAwaitingSafeBoundary || len(prepared.Change.ChangedRoutes) < 2 {
+		t.Fatalf("credential-only repair = %+v", prepared)
+	}
+}
+
+func TestSnapshotFingerprintTracksEffectiveRoutesWithoutSecrets(t *testing.T) {
+	_, path := newTestService(t)
+	cfg := mustLoadConfig(t, path)
+	before := SnapshotFromConfig(cfg).Fingerprint()
+	if before == "" {
+		t.Fatal("model snapshot fingerprint is empty")
+	}
+	cfg.Providers.OpenAI.APIKey = "secret-that-must-not-affect-route-identity"
+	if afterSecret := SnapshotFromConfig(cfg).Fingerprint(); afterSecret != before {
+		t.Fatalf("credential changed route fingerprint: %q != %q", afterSecret, before)
+	}
+	cfg.Models.Auxiliary.Model = "different-background"
+	if afterRoute := SnapshotFromConfig(cfg).Fingerprint(); afterRoute == before {
+		t.Fatal("changed Background route retained the same fingerprint")
+	}
+}
+
+func TestSchemaV2AppliedSnapshotMigratesAsReadyWithBackup(t *testing.T) {
+	service, path := newTestService(t)
+	cfg := mustLoadConfig(t, path)
+	snapshot := SnapshotFromConfig(cfg)
+	now := time.Now().UTC().Add(-time.Minute)
+	legacy := State{
+		SchemaVersion: 2, Generation: 7, Running: snapshot, UpdatedAt: now,
+		History: []Change{{
+			ID: "model_applied", Status: StatusApplied, Previous: snapshot, Candidate: snapshot,
+			CreatedAt: now, FinishedAt: now,
+		}},
+	}
+	data, err := json.MarshalIndent(legacy, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(service.statePath(), append(data, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	status, err := service.Inspect()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !status.ModelReady() {
+		t.Fatalf("applied schema-v2 snapshot did not migrate as ready: %+v", status)
+	}
+	backup, err := os.ReadFile(service.statePath() + ".v2.backup")
+	if err != nil {
+		t.Fatalf("schema-v2 backup: %v", err)
+	}
+	if !bytes.Equal(backup, append(data, '\n')) {
+		t.Fatalf("schema-v2 backup changed:\n%s", backup)
+	}
+}
+
 func TestRoleOverrideIsPartOfAtomicSnapshotWithoutDestroyingAdvancedConfig(t *testing.T) {
 	service, path := newTestService(t)
 	cfg := mustLoadConfig(t, path)
@@ -92,7 +236,14 @@ func TestRoleOverrideIsPartOfAtomicSnapshotWithoutDestroyingAdvancedConfig(t *te
 	}
 	// Adopt the manual starting point before opening a managed transaction.
 	service = &Service{ConfigPath: path, Validate: service.Validate}
-	status, err := service.Inspect()
+	status, rolledBack, err := service.ReconcileStartup(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rolledBack || status.Pending == nil {
+		t.Fatalf("manual starting point was not validated: status=%+v rolledBack=%v", status, rolledBack)
+	}
+	status, err = service.MarkStartupHealthy()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -286,14 +437,18 @@ func TestPostRestartInfrastructureProbeFailureRequiresRecoveryWithoutRollback(t 
 		return []ProbeResult{{Route: routes[0], Error: "provider temporarily unavailable", FailureClass: FailureInfrastructure}}
 	}
 	status, rolledBack, err := service.ReconcileStartup(context.Background())
-	if !errors.Is(err, ErrRecoveryRequired) {
-		t.Fatalf("ReconcileStartup error = %v; want ErrRecoveryRequired", err)
+	if err != nil {
+		t.Fatalf("ReconcileStartup error = %v; recovery control plane should remain available", err)
 	}
 	if rolledBack || status.Pending == nil || status.Pending.Status != StatusRecoveryRequired || status.Running != before || status.Configured != candidate {
 		t.Fatalf("status=%+v rolledBack=%v", status, rolledBack)
 	}
 	if got := SnapshotFromConfig(mustLoadConfig(t, path)); got != candidate {
 		t.Fatalf("config after infrastructure failure = %+v, want candidate preserved", got)
+	}
+	status, rolledBack, err = service.ReconcileStartup(context.Background())
+	if err != nil || rolledBack || status.Pending == nil || status.Pending.Status != StatusRecoveryRequired {
+		t.Fatalf("recovery control plane restart = status:%+v rolledBack:%v err:%v", status, rolledBack, err)
 	}
 }
 
@@ -404,11 +559,15 @@ func TestRecoveryCanRetryOrRestoreWithoutOverwritingDrift(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if status.Pending != nil || status.Configured != before || status.Running != before {
+	if status.Pending != nil || status.Configured != before || status.Running != before || status.ModelReady() {
 		t.Fatalf("restore status = %+v", status)
 	}
 	if got := status.History[len(status.History)-1]; got.Status != StatusRolledBack {
 		t.Fatalf("history = %+v", status.History)
+	}
+	status, rolledBack, err := service.ReconcileStartup(context.Background())
+	if err != nil || rolledBack || status.Pending == nil || status.Pending.Status != StatusStarting {
+		t.Fatalf("restored startup status=%+v rolledBack=%v err=%v", status, rolledBack, err)
 	}
 }
 
@@ -434,8 +593,12 @@ func TestSchemaV1IsBackedUpAndMigrated(t *testing.T) {
 	if migrated.Pending == nil || migrated.Pending.Status != StatusAwaitingSafeBoundary {
 		t.Fatalf("migrated = %+v", migrated)
 	}
-	if _, err := os.Stat(statePath + ".v1.backup"); err != nil {
+	backup, err := os.ReadFile(statePath + ".v1.backup")
+	if err != nil {
 		t.Fatalf("schema backup missing: %v", err)
+	}
+	if !bytes.Equal(backup, data) {
+		t.Fatalf("schema-v1 backup changed:\n%s", backup)
 	}
 }
 
@@ -593,6 +756,15 @@ func TestPrepareRejectsUnvalidatedManualConfigDrift(t *testing.T) {
 }
 
 func newTestService(t *testing.T) (*Service, string) {
+	t.Helper()
+	service, path := newUnverifiedTestService(t)
+	if _, err := service.AcceptMigrationReadiness(); err != nil {
+		t.Fatal(err)
+	}
+	return service, path
+}
+
+func newUnverifiedTestService(t *testing.T) (*Service, string) {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	cfg, err := config.LoadConfig(config.Options{Path: path, CreateIfMissing: true})

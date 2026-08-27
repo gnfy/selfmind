@@ -13,6 +13,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"selfmind/internal/gateway/api"
 )
 
 type StartResult struct {
@@ -62,6 +64,7 @@ type StopOptions struct {
 }
 
 var ErrShutdownAborted = errors.New("gateway shutdown was aborted before the safe boundary")
+var ErrShutdownDeferred = errors.New("gateway shutdown was deferred to preserve active work")
 
 // SpawnRestartHelper launches the ordinary CLI restart path in a detached
 // helper. This preserves launchd/systemd ownership when a daemon-originated
@@ -386,14 +389,29 @@ func RequestShutdown(ctx context.Context, opts StopOptions) error {
 	_ = resp.Body.Close()
 
 	deadline := time.Now().Add(timeout)
+	serviceReconcile := strings.EqualFold(strings.TrimSpace(opts.Reason), api.ShutdownReasonServiceReconcile)
 	for opts.WaitForSafeBoundary || time.Now().Before(deadline) {
 		if opts.Abort != nil && opts.Abort() {
 			return ErrShutdownAborted
 		}
+		gatewayReachable := false
+		if serviceReconcile {
+			if statusData, statusCode, statusErr := RequestStatus(ctx, opts.URL); statusErr == nil && statusCode < http.StatusBadRequest {
+				var status api.GatewayStatusResponse
+				if json.Unmarshal(statusData, &status) == nil {
+					gatewayReachable = true
+					if strings.EqualFold(strings.TrimSpace(status.State), "running") && !status.Draining {
+						return ErrShutdownDeferred
+					}
+				}
+			}
+		}
 		if opts.DataDir != "" {
 			manager := NewManager(opts.DataDir, "")
 			if rec, ok := manager.RunningRecord(); !ok || rec.PID <= 0 || (initialPID > 0 && rec.PID != initialPID) {
-				return nil
+				if !gatewayReachable {
+					return nil
+				}
 			}
 		}
 		select {

@@ -2,16 +2,97 @@ package cliapp
 
 import (
 	"bytes"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/xml"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"selfmind/internal/platform/config"
 )
 
 const gatewayLaunchdLabel = "com.selfmind.gateway"
+
+const (
+	selfMindServiceManagerEnv    = "SELFMIND_SERVICE_MANAGER"
+	selfMindServiceGenerationEnv = "SELFMIND_SERVICE_GENERATION"
+)
+
+type gatewayServiceInstallReceipt struct {
+	Path       string
+	Manager    string
+	Generation string
+}
+
+func newGatewayServiceGeneration() (string, error) {
+	raw := make([]byte, 16)
+	if _, err := rand.Read(raw); err != nil {
+		return "", fmt.Errorf("create service generation: %w", err)
+	}
+	return "service_" + hex.EncodeToString(raw), nil
+}
+
+func gatewayServiceEvidencePath() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".selfmind", "service-manager-last-error.log")
+}
+
+// recordGatewayServiceFailure keeps exact platform output on a private
+// diagnostic surface while user-facing errors remain short and portable.
+func recordGatewayServiceFailure(manager, command string, commandErr error, output []byte) string {
+	path := gatewayServiceEvidencePath()
+	if path == "" {
+		return ""
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return ""
+	}
+	var body bytes.Buffer
+	fmt.Fprintf(&body, "time: %s\nmanager: %s\ncommand: %s\nerror: %v\noutput:\n", time.Now().UTC().Format(time.RFC3339Nano), manager, command, commandErr)
+	body.Write(output)
+	if len(output) == 0 || output[len(output)-1] != '\n' {
+		body.WriteByte('\n')
+	}
+	temp, err := os.CreateTemp(filepath.Dir(path), ".service-manager-error-*.tmp")
+	if err != nil {
+		return ""
+	}
+	tempPath := temp.Name()
+	defer os.Remove(tempPath)
+	if err := temp.Chmod(0o600); err != nil {
+		_ = temp.Close()
+		return ""
+	}
+	if _, err := temp.Write(body.Bytes()); err != nil {
+		_ = temp.Close()
+		return ""
+	}
+	if err := temp.Sync(); err != nil {
+		_ = temp.Close()
+		return ""
+	}
+	if err := temp.Close(); err != nil {
+		return ""
+	}
+	if err := os.Rename(tempPath, path); err != nil {
+		return ""
+	}
+	return path
+}
+
+func gatewayServiceCommandError(manager, command string, commandErr error, output []byte) error {
+	path := recordGatewayServiceFailure(manager, command, commandErr, output)
+	if path != "" {
+		return fmt.Errorf("personal %s command %q failed; details saved to %s", manager, command, path)
+	}
+	return fmt.Errorf("personal %s command %q failed", manager, command)
+}
 
 type launchdPlistData struct {
 	Label       string

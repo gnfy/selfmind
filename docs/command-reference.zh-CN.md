@@ -16,20 +16,29 @@ selfmind uninstall --prepare [--purge-data --yes]
 selfmind feedback [--out FILE|--send] [--repo OWNER/REPO] [--include-crash] <message>
 ```
 
-- 直接运行 `selfmind` 打开 TUI。首次在交互式终端启动时，如果安装尚未完整，
-  Linux 与 macOS 都会在 TUI 启动前进入同一套引导。取消设置会直接退出；
+- 直接运行 `selfmind` 打开 TUI。首次在交互式终端启动时，如果缺少“模型就绪”，
+  会打开唯一的 Model Manager；后续启动再恢复 Runtime/首次使用设置。Linux 与
+  macOS 使用同一流程；
   脚本、cron 和管道等非交互场景不会弹出提示，而会输出可执行的 `setup`
   命令。`--config` 指定其他配置文件，`--resume` 恢复已有 TUI
   会话。可重复使用 `--add-dir`，仅为本次 CLI 调用授予另一个本地目录的访问权，
   不会修改已登记的 workspace。
-- `setup` 创建缺失的配置，并明确确认两条模型路由：主模型负责交互任务，后台模型
-  负责维护工作。随后统一确认项目工作区及其信任边界、审批模式和后台运行方式。
-  快速路径只有两次确认。两个模型都会先进行有界真实探测；安装后的 daemon 还会从
-  自己的运行环境再次探测同一路由。用户确认使用的 shell 环境 API 凭据会复制到
+- `setup` 创建缺失的配置，但只负责 Runtime 与首次使用状态。缺少“模型就绪”时，
+  它只引导用户运行 `selfmind model`，不会展示第二套选择或探测流程。Model Manager
+  展示主模型、后台模型及可选角色覆盖，并自动校验每个完成的选择。随后 setup 确认
+  项目工作区及其信任边界、审批模式和后台运行方式；Runtime 步骤失败后只恢复该
+  步骤，不会重复或再次确认模型工作。安装后的 daemon 会从自己的运行环境验证所选
+  路由，成功后才记录“模型就绪”。用户确认使用的 shell 环境 API 凭据会复制到
   SelfMind 私有凭据文件，绝不会写进操作系统服务定义。工作区不会静默使用 `/` 或
-  用户主目录。macOS 的 launchd 与 Linux 的用户级 systemd 只是内部实现，用户只需
-  选择托管后台运行或按需启动。TUI 中首个成功的非命令任务会完成首次使用回执。
+  用户主目录。macOS 的 launchd 与 Linux 的用户级 systemd 只是内部实现。
+  托管就绪要求运行中的服务 job 与 Gateway 报告相同的非敏感 service generation、
+  版本和配置。存在活动任务的兼容 Gateway 可以保持 Runtime Degraded，由系统延期
+  修复服务。TUI 中首个成功的非命令任务会完成独立的首次使用回执。
   各类 `skip` 参数仍可用于受控自动化环境。
+- `gateway service status` 会区分 absent、starting、managed healthy、managed
+  unhealthy、conflicting/unowned 和 Runtime Degraded。只有 service generation、
+  版本、配置身份及不含秘密的有效路由指纹与响应中的 Gateway 和当前安装一致时，
+  运行中的 job 才算健康。
 - `update check` 只检查更新。`update` 执行完整升级：检查所选 npm 通道、
   调用包管理器安装、用 `selfmind --version` 验证新二进制，并对运行中的
   gateway daemon 做默认排空（drain）重启以切换到新版本。同版本也会重新
@@ -232,6 +241,8 @@ selfmind weixin status
   `status`、`restart` 都操作这个稳定服务；`restart --drain` 会先等待活跃 turn
   到达安全边界，再由服务重新拉起 daemon。两者都不需要管理员权限。Linux 上若已有
   系统级 `selfmind.service` 正在运行，个人设置会明确报告冲突，不会停止或替换它。
+  把启动权交给 launchd/systemd 后，安装流程只等待该受管进程，绝不会再启动 detached
+  fallback 来掩盖服务 job 的失败。
 - 如果微信 iLink 会话过期，重新运行 `selfmind weixin login`。正在运行的
   gateway 会监听账号凭据文件，在新凭据保存后自动恢复轮询，不需要重启
   daemon。

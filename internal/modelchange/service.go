@@ -19,7 +19,7 @@ import (
 )
 
 const (
-	stateSchemaVersion = 2
+	stateSchemaVersion = 3
 	defaultHistorySize = 10
 	defaultConfirmTTL  = 10 * time.Minute
 )
@@ -93,6 +93,18 @@ type Snapshot struct {
 	Roles     RoleSelections              `json:"roles"`
 }
 
+// Fingerprint identifies effective non-secret model routing. It is safe to
+// expose through Gateway status so a CLI can reject a stale live runtime
+// without publishing credentials or provider endpoint configuration.
+func (s Snapshot) Fingerprint() string {
+	data, err := json.Marshal(normalizeSnapshot(s))
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])
+}
+
 type ProbeResult struct {
 	Route        Route        `json:"route"`
 	OK           bool         `json:"ok"`
@@ -127,20 +139,28 @@ type Change struct {
 }
 
 type State struct {
-	SchemaVersion int       `json:"schema_version"`
-	Generation    int64     `json:"generation"`
-	Running       Snapshot  `json:"running"`
-	Pending       *Change   `json:"pending,omitempty"`
-	History       []Change  `json:"history,omitempty"`
-	UpdatedAt     time.Time `json:"updated_at"`
+	SchemaVersion     int       `json:"schema_version"`
+	Generation        int64     `json:"generation"`
+	Running           Snapshot  `json:"running"`
+	RunningVerifiedAt time.Time `json:"running_verified_at,omitempty"`
+	Pending           *Change   `json:"pending,omitempty"`
+	History           []Change  `json:"history,omitempty"`
+	UpdatedAt         time.Time `json:"updated_at"`
 }
 
 type Status struct {
-	Generation int64    `json:"generation"`
-	Running    Snapshot `json:"running"`
-	Configured Snapshot `json:"configured"`
-	Pending    *Change  `json:"pending,omitempty"`
-	History    []Change `json:"history,omitempty"`
+	Generation        int64     `json:"generation"`
+	Running           Snapshot  `json:"running"`
+	RunningVerifiedAt time.Time `json:"running_verified_at,omitempty"`
+	Configured        Snapshot  `json:"configured"`
+	Pending           *Change   `json:"pending,omitempty"`
+	History           []Change  `json:"history,omitempty"`
+}
+
+// ModelReady reports whether the effective routes are the same routes that
+// reached a verified running boundary and no model transaction remains open.
+func (s Status) ModelReady() bool {
+	return s.Pending == nil && s.Configured == s.Running && !s.RunningVerifiedAt.IsZero()
 }
 
 type PrepareRequest struct {
@@ -149,6 +169,7 @@ type PrepareRequest struct {
 	ExpectedGeneration  int64
 	RequireConfirmation bool
 	ReplacePending      bool
+	ForceRevalidate     bool
 }
 
 type PrepareResult struct {
@@ -319,11 +340,9 @@ func (s *Service) inspectLocked() (Status, error) {
 		}
 	}
 	return Status{
-		Generation: state.Generation,
-		Running:    state.Running,
-		Configured: logicalConfigured(cfg, state.Pending),
-		Pending:    cloneChange(state.Pending),
-		History:    append([]Change(nil), state.History...),
+		Generation: state.Generation, Running: state.Running, RunningVerifiedAt: state.RunningVerifiedAt,
+		Configured: logicalConfigured(cfg, state.Pending), Pending: cloneChange(state.Pending),
+		History: append([]Change(nil), state.History...),
 	}, nil
 }
 
@@ -370,7 +389,13 @@ func (s *Service) prepareLocked(ctx context.Context, req PrepareRequest) (Prepar
 	candidate := normalizeSnapshot(req.Candidate)
 	changed := ChangedRoutes(configured, candidate)
 	if len(changed) == 0 {
-		return PrepareResult{}, fmt.Errorf("model selection is unchanged")
+		if !req.ForceRevalidate || !state.RunningVerifiedAt.IsZero() {
+			return PrepareResult{}, fmt.Errorf("model selection is unchanged")
+		}
+		// Credentials are deliberately absent from Snapshot. After a
+		// credential-only repair, revalidate every route and restart the same
+		// selection so the verified running boundary can be established.
+		changed = append([]Route{RoutePrimary, RouteAuxiliary}, ManagedRoleRoutes()...)
 	}
 	if err := validateSnapshot(candidate, changed); err != nil {
 		return PrepareResult{}, err
@@ -828,6 +853,11 @@ func (s *Service) RestorePrevious(id string) (Status, error) {
 	}
 	state.Pending = nil
 	state.History = appendBounded(state.History, finished, s.historyMax())
+	// The previous selection is known-good historically, but the process that
+	// currently owns the listener was built from the failed candidate. Clear
+	// the running proof so no request can use the restored config until a new
+	// process probes it and crosses MarkStartupHealthy.
+	state.RunningVerifiedAt = time.Time{}
 	state.Generation++
 	if err := s.save(state); err != nil {
 		return Status{}, err
@@ -870,7 +900,9 @@ func (s *Service) ReconcileStartup(ctx context.Context) (Status, bool, error) {
 		change = nil
 	}
 	if change != nil && change.Status == StatusRecoveryRequired {
-		return s.InspectWithState(cfg, state), false, fmt.Errorf("%w: model change %s: %s", ErrRecoveryRequired, change.ID, change.Failure)
+		// Keep the control plane and sole Model Manager reachable. Work remains
+		// parked because ModelReady is false until the user retries or restores.
+		return s.InspectWithState(cfg, state), false, nil
 	}
 	if change != nil && (change.Status == StatusAwaitingSafeBoundary || change.Status == StatusValidating) && configured == change.Previous {
 		// The old daemon may have crashed before the detached helper reached the
@@ -907,15 +939,25 @@ func (s *Service) ReconcileStartup(ctx context.Context) (Status, bool, error) {
 			change = nil
 		}
 	}
-	if change == nil && configured == state.Running {
+	if change == nil && configured == state.Running && !state.RunningVerifiedAt.IsZero() {
 		return s.InspectWithState(cfg, state), false, nil
 	}
 	if change == nil {
 		now := s.now()
+		changedRoutes := ChangedRoutes(state.Running, configured)
+		source := "manual-config"
+		if state.RunningVerifiedAt.IsZero() {
+			// A newly created state file records the configured snapshot for drift
+			// comparison, not as proof that it ever ran. The first daemon startup
+			// must validate every effective route before /health may establish
+			// Model Readiness.
+			source = "initial-startup"
+			changedRoutes = append([]Route{RoutePrimary, RouteAuxiliary}, ManagedRoleRoutes()...)
+		}
 		manual := Change{
-			ID: newChangeID(), Source: "manual-config", Status: StatusStarting,
+			ID: newChangeID(), Source: source, Status: StatusStarting,
 			ExpectedGeneration: state.Generation, Previous: state.Running, Candidate: configured,
-			ChangedRoutes: ChangedRoutes(state.Running, configured), CreatedAt: now, ConfirmedAt: now,
+			ChangedRoutes: changedRoutes, CreatedAt: now, ConfirmedAt: now,
 			PhaseStartedAt: now, Transitions: []Transition{{Status: StatusStarting, At: now}},
 		}
 		if err := validateSnapshot(configured, manual.ChangedRoutes); err != nil {
@@ -936,7 +978,7 @@ func (s *Service) ReconcileStartup(ctx context.Context) (Status, bool, error) {
 		if err := s.save(state); err != nil {
 			return Status{}, false, err
 		}
-		return s.InspectWithState(cfg, state), false, fmt.Errorf("%w: %s", ErrRecoveryRequired, change.Failure)
+		return s.InspectWithState(cfg, state), false, nil
 	}
 	change.RestartAttempts++
 	change.LastAttemptAt = now
@@ -951,16 +993,26 @@ func (s *Service) ReconcileStartup(ctx context.Context) (Status, bool, error) {
 	}
 	probes := s.validate(ctx, candidateCfg, change.ChangedRoutes)
 	if failureClass, probeErr := failedProbes(probes); probeErr != nil {
-		if failureClass == FailureInfrastructure {
+		if state.RunningVerifiedAt.IsZero() && change.Source == "initial-startup" {
+			// With no known-good baseline there is nothing safe to roll back to.
+			// Preserve the failed evidence, keep readiness false, and allow the
+			// daemon's mock provider to serve the sole Model Manager repair UI.
+			s.finishPendingClass(&state, StatusFailed, failureClass, probeErr.Error(), probes)
+			if err := s.save(state); err != nil {
+				return Status{}, false, err
+			}
+			return s.InspectWithState(cfg, state), false, nil
+		}
+		if failureClass == FailureInfrastructure || state.RunningVerifiedAt.IsZero() {
 			change.Probes = probes
 			change.Failure = probeErr.Error()
-			change.FailureClass = FailureInfrastructure
+			change.FailureClass = failureClass
 			s.transition(change, StatusRecoveryRequired, s.now())
 			state.Generation++
 			if err := s.save(state); err != nil {
 				return Status{}, false, err
 			}
-			return s.InspectWithState(cfg, state), false, fmt.Errorf("%w: %s", ErrRecoveryRequired, probeErr)
+			return s.InspectWithState(cfg, state), false, nil
 		}
 		return s.rollbackStartup(cfg, state, *change, probes, probeErr)
 	}
@@ -991,6 +1043,9 @@ func (s *Service) MarkStartupHealthy() (Status, error) {
 		return Status{}, err
 	}
 	if state.Pending == nil || state.Pending.Status != StatusStarting {
+		if SnapshotFromConfig(cfg) != state.Running {
+			return s.InspectWithState(cfg, state), nil
+		}
 		return s.InspectWithState(cfg, state), nil
 	}
 	if SnapshotFromConfig(cfg) != state.Pending.Candidate {
@@ -1000,11 +1055,44 @@ func (s *Service) MarkStartupHealthy() (Status, error) {
 	s.transition(&finished, StatusApplied, s.now())
 	finished.FinishedAt = s.now()
 	state.Running = finished.Candidate
+	state.RunningVerifiedAt = s.now()
 	state.Pending = nil
 	state.History = appendBounded(state.History, finished, s.historyMax())
 	state.Generation++
 	if err := s.save(state); err != nil {
 		return Status{}, err
+	}
+	return s.InspectWithState(cfg, state), nil
+}
+
+// AcceptMigrationReadiness records narrowly scoped migration evidence from a
+// matching legacy onboarding receipt. Normal daemon startup must use
+// ReconcileStartup followed by MarkStartupHealthy instead.
+func (s *Service) AcceptMigrationReadiness() (Status, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	unlock, err := s.lockState()
+	if err != nil {
+		return Status{}, err
+	}
+	defer unlock()
+	cfg, err := config.LoadConfig(config.Options{Path: s.ConfigPath})
+	if err != nil {
+		return Status{}, err
+	}
+	state, err := s.loadOrInitialize(cfg)
+	if err != nil {
+		return Status{}, err
+	}
+	if state.Pending != nil || SnapshotFromConfig(cfg) != state.Running {
+		return s.InspectWithState(cfg, state), fmt.Errorf("model readiness migration evidence does not match the configured running snapshot")
+	}
+	if state.RunningVerifiedAt.IsZero() {
+		state.RunningVerifiedAt = s.now()
+		state.Generation++
+		if err := s.save(state); err != nil {
+			return Status{}, err
+		}
 	}
 	return s.InspectWithState(cfg, state), nil
 }
@@ -1064,7 +1152,7 @@ func (s *Service) rollbackStartup(cfg *config.Config, state State, change Change
 
 func (s *Service) InspectWithState(cfg *config.Config, state State) Status {
 	return Status{
-		Generation: state.Generation, Running: state.Running,
+		Generation: state.Generation, Running: state.Running, RunningVerifiedAt: state.RunningVerifiedAt,
 		Configured: logicalConfigured(cfg, state.Pending), Pending: cloneChange(state.Pending),
 		History: append([]Change(nil), state.History...),
 	}
@@ -1136,9 +1224,10 @@ func (s *Service) expireConfirmation(state *State) bool {
 func (s *Service) loadOrInitialize(cfg *config.Config) (State, error) {
 	state, err := s.load()
 	if err == nil {
-		if state.SchemaVersion == 1 {
-			migrated := migrateV1(state)
-			if backupErr := s.backupV1(); backupErr != nil {
+		if state.SchemaVersion == 1 || state.SchemaVersion == 2 {
+			originalVersion := state.SchemaVersion
+			migrated := migrateState(state)
+			if backupErr := s.backupSchema(originalVersion); backupErr != nil {
 				return State{}, backupErr
 			}
 			if saveErr := s.save(migrated); saveErr != nil {
@@ -1484,9 +1573,10 @@ func (s *Service) transition(change *Change, status ChangeStatus, at time.Time) 
 	change.Transitions = append(change.Transitions, Transition{Status: status, At: at})
 }
 
-func migrateV1(state State) State {
+func migrateState(state State) State {
+	previousVersion := state.SchemaVersion
 	state.SchemaVersion = stateSchemaVersion
-	if state.Pending != nil {
+	if previousVersion == 1 && state.Pending != nil {
 		switch state.Pending.Status {
 		case ChangeStatus("awaiting_restart"):
 			state.Pending.Status = StatusAwaitingSafeBoundary
@@ -1511,6 +1601,15 @@ func migrateV1(state State) State {
 			state.History[i].Transitions = []Transition{{Status: state.History[i].Status, At: state.History[i].PhaseStartedAt}}
 		}
 	}
+	if state.RunningVerifiedAt.IsZero() {
+		for i := len(state.History) - 1; i >= 0; i-- {
+			change := state.History[i]
+			if change.Status == StatusApplied && change.Candidate == state.Running {
+				state.RunningVerifiedAt = firstNonZeroTime(change.FinishedAt, change.PhaseStartedAt, change.ConfirmedAt)
+				break
+			}
+		}
+	}
 	return state
 }
 
@@ -1523,9 +1622,9 @@ func firstNonZeroTime(values ...time.Time) time.Time {
 	return time.Now().UTC()
 }
 
-func (s *Service) backupV1() error {
+func (s *Service) backupSchema(version int) error {
 	path := s.statePath()
-	backup := path + ".v1.backup"
+	backup := fmt.Sprintf("%s.v%d.backup", path, version)
 	if _, err := os.Stat(backup); err == nil {
 		return nil
 	} else if !errors.Is(err, os.ErrNotExist) {
@@ -1535,7 +1634,28 @@ func (s *Service) backupV1() error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(backup, data, 0o600)
+	temp, err := os.CreateTemp(filepath.Dir(backup), ".model-state-backup-*.tmp")
+	if err != nil {
+		return err
+	}
+	tempPath := temp.Name()
+	defer os.Remove(tempPath)
+	if err := temp.Chmod(0o600); err != nil {
+		_ = temp.Close()
+		return err
+	}
+	if _, err := temp.Write(data); err != nil {
+		_ = temp.Close()
+		return err
+	}
+	if err := temp.Sync(); err != nil {
+		_ = temp.Close()
+		return err
+	}
+	if err := temp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tempPath, backup)
 }
 
 func appendBounded(history []Change, change Change, limit int) []Change {

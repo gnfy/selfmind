@@ -1,11 +1,73 @@
 package gateway
 
 import (
+	"context"
 	"errors"
+	"net"
 	"os"
 	"testing"
 	"time"
 )
+
+func TestWaitForOwnerReleaseUsesRuntimeLock(t *testing.T) {
+	dataDir := t.TempDir()
+	manager := NewManager(dataDir, "127.0.0.1:9999")
+	if err := manager.Acquire(); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	err := WaitForOwnerRelease(ctx, dataDir)
+	cancel()
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("owned runtime wait error = %v, want deadline", err)
+	}
+	if err := manager.Release(); err != nil {
+		t.Fatal(err)
+	}
+	if err := WaitForOwnerRelease(context.Background(), dataDir); err != nil {
+		t.Fatalf("released runtime remained owned: %v", err)
+	}
+}
+
+func TestWaitForRuntimeAbsenceRequiresProcessLockAndListenerRelease(t *testing.T) {
+	dataDir := t.TempDir()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := NewManager(dataDir, listener.Addr().String())
+	if err := manager.Acquire(); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.WriteStatus("running", "default", ""); err != nil {
+		t.Fatal(err)
+	}
+	assertBlocked := func(stage string) {
+		t.Helper()
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+		err := WaitForRuntimeAbsence(ctx, dataDir, listener.Addr().String(), os.Getpid())
+		cancel()
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("%s absence error = %v, want deadline", stage, err)
+		}
+	}
+	assertBlocked("process, lock, and listener present")
+	if err := manager.Release(); err != nil {
+		t.Fatal(err)
+	}
+	assertBlocked("process receipt and listener present")
+	if err := os.Remove(manager.Paths.PIDPath); err != nil {
+		t.Fatal(err)
+	}
+	assertBlocked("listener present")
+	if err := listener.Close(); err != nil {
+		t.Fatal(err)
+	}
+	assertBlocked("captured process remains alive after receipt and listener release")
+	if err := WaitForRuntimeAbsence(context.Background(), dataDir, listener.Addr().String(), 0); err != nil {
+		t.Fatalf("released runtime remained present: %v", err)
+	}
+}
 
 func TestResolveGatewayEnvPrecedence(t *testing.T) {
 	t.Setenv("SELF_DAEMON_ADDR", "127.0.0.1:1111")

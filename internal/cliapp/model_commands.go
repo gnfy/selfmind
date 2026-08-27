@@ -45,56 +45,13 @@ func (a *App) runModelCommandIfRequested() (bool, int) {
 		return true, 2
 	}
 
-	cfg, err := config.LoadConfig(config.Options{Path: a.configPath, CreateIfMissing: true})
+	_, err := config.LoadConfig(config.Options{Path: a.configPath, CreateIfMissing: true})
 	if err != nil {
 		fmt.Fprintln(a.stderr, err)
 		return true, 1
 	}
-	_ = cfg // ensure the config exists before the daemon-backed manager starts
 	a.modelManagerOnly = true
 	return true, a.runTUI()
-}
-
-func (a *App) runInteractiveModelPicker(cfg *config.Config) int {
-	return a.runInteractiveModelPickerFor(cfg, "primary")
-}
-
-func (a *App) runInteractiveModelPickerFor(cfg *config.Config, target string) int {
-	fmt.Fprintln(a.stdout, "SelfMind model setup")
-	if strings.EqualFold(target, "auxiliary") {
-		current := cfg.EffectiveAuxiliary()
-		fmt.Fprintf(a.stdout, "Background: provider=%s model=%s\n", blankAsDash(current.Provider), blankAsDash(current.Model))
-	} else {
-		a.printCurrentModel(cfg)
-	}
-	fmt.Fprintln(a.stdout)
-
-	choices := a.modelChoices(cfg)
-	index, err := a.promptChoice("Choose a provider:", choiceLabels(choices))
-	if err != nil {
-		fmt.Fprintln(a.stderr, err)
-		return 1
-	}
-	if index < 0 || index >= len(choices) {
-		return 1
-	}
-
-	choice := choices[index]
-	switch choice.Kind {
-	case "builtin":
-		return a.configureBuiltinProviderFor(cfg, choice.ID, target)
-	case "custom_saved":
-		return a.configureSavedCustomProviderFor(cfg, choice.CustomIndex, target)
-	case "custom_new":
-		return a.configureCustomEndpointFor(cfg, target)
-	case "remove_custom":
-		return a.removeCustomProvider(cfg)
-	case "skip":
-		return 0
-	default:
-		fmt.Fprintf(a.stderr, "unknown provider choice: %s\n", choice.ID)
-		return 1
-	}
 }
 
 func (a *App) modelChoices(cfg *config.Config) []modelChoice {
@@ -566,27 +523,76 @@ func (a *App) performModelRecovery(cfg *config.Config, action, id string) (*mode
 		if _, err := service.RetryRecovery(changeID); err != nil {
 			return nil, "", err
 		}
-	case "restore":
-		if _, err := service.RestorePrevious(changeID); err != nil {
+		if err := gatewayrt.SpawnRestartHelper(cfg.Path, a.gatewayDataDir(), changeID); err != nil {
+			_, _ = service.MarkRecoveryRequired(changeID, err)
 			return nil, "", err
 		}
+		return service, changeID, nil
+	case "restore":
+		if err := a.stopGatewayForModelRestore(); err != nil {
+			return nil, "", err
+		}
+		if _, err := service.RestorePrevious(changeID); err != nil {
+			_ = a.startGatewayAfterModelRestore()
+			return nil, "", err
+		}
+		if err := a.startGatewayAfterModelRestore(); err != nil {
+			return nil, "", err
+		}
+		return service, changeID, nil
 	default:
 		return nil, "", fmt.Errorf("unknown model recovery action %q", action)
 	}
-	if handled, _, err := gatewayServiceStartIfInstalled(a.configPath); handled {
-		if err != nil {
-			if action == "retry" {
-				_, _ = service.MarkRecoveryRequired(changeID, err)
-			}
-			return nil, "", err
-		}
-	} else if _, err := gatewayrt.StartDetached(gatewayrt.StartOptions{ConfigPath: a.configPath}); err != nil && !errors.Is(err, gatewayrt.ErrAlreadyRunning) {
-		if action == "retry" {
-			_, _ = service.MarkRecoveryRequired(changeID, err)
-		}
-		return nil, "", err
+}
+
+func (a *App) stopGatewayForModelRestore() error {
+	if a != nil && a.modelRecoveryStop != nil {
+		return a.modelRecoveryStop()
 	}
-	return service, changeID, nil
+	timeout := gatewayrt.ResolveDrainTimeout() + 10*time.Second
+	ctx, cancel := contextWithTimeout(a.ctx, timeout)
+	err := gatewayrt.RequestShutdown(ctx, gatewayrt.StopOptions{
+		URL: a.gatewayURL(), DataDir: a.gatewayDataDir(), Timeout: timeout,
+		Reason: api.ShutdownReasonServiceReconcile, WaitForSafeBoundary: true,
+	})
+	cancel()
+	if err != nil {
+		if errors.Is(err, gatewayrt.ErrShutdownDeferred) || errors.Is(err, context.DeadlineExceeded) {
+			return fmt.Errorf("model restore deferred while foreground work is active; retry after it finishes")
+		}
+		return fmt.Errorf("stop the failed model runtime safely: %w", err)
+	}
+	releaseCtx, releaseCancel := contextWithTimeout(a.ctx, 10*time.Second)
+	defer releaseCancel()
+	if err := gatewayrt.WaitForOwnerRelease(releaseCtx, a.gatewayDataDir()); err != nil {
+		return fmt.Errorf("wait for the failed model runtime to release ownership: %w", err)
+	}
+	return nil
+}
+
+func (a *App) startGatewayAfterModelRestore() error {
+	if a != nil && a.modelRecoveryStart != nil {
+		if err := a.modelRecoveryStart(); err != nil {
+			return err
+		}
+	} else {
+		if handled, _, err := gatewayServiceStartIfInstalled(a.configPath); handled {
+			if err != nil {
+				return err
+			}
+		} else if _, err := gatewayrt.StartDetached(gatewayrt.StartOptions{Replace: true, ConfigPath: a.configPath}); err != nil {
+			return err
+		}
+	}
+	if a != nil && a.modelRecoveryWait != nil {
+		return a.modelRecoveryWait()
+	}
+	ctx, cancel := contextWithTimeout(a.ctx, 15*time.Second)
+	defer cancel()
+	if _, err := gatewayrt.WaitForRunning(ctx, gatewayrt.EnsureOptions{ConfigPath: a.configPath, Timeout: 12 * time.Second}); err != nil {
+		return fmt.Errorf("start the restored model runtime: %w", err)
+	}
+	return nil
 }
 
 func (a *App) modelDaemonRunning() bool {

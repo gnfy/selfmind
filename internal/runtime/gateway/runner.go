@@ -435,12 +435,8 @@ func Run(ctx context.Context, opts Options) (runErr error) {
 		return fmt.Errorf("listen on %s: %w", addr, err)
 	}
 	defer listener.Close()
-	stopMaintenanceWorker := gatewayAPI.StartMaintenanceWorker(ctx)
-	defer stopMaintenanceWorker()
 	stopTaskGovernanceSweeper := gatewayAPI.StartTaskGovernanceSweeper(ctx)
 	defer stopTaskGovernanceSweeper()
-	stopMemoryGovernance := gatewayAPI.StartMemoryGovernance(ctx)
-	defer stopMemoryGovernance()
 	var weixinAdapter *weixin.Adapter
 	if cfg.Gateway.Weixin.Enabled {
 		wxCfg := weixin.RuntimeConfigFrom(cfg.Gateway.Weixin, dataDir, defaultTenantID)
@@ -457,15 +453,6 @@ func Run(ctx context.Context, opts Options) (runErr error) {
 	defer stopStuckRunSweeper()
 	stopExternalWatchWorker := gatewayAPI.StartExternalWatchWorker(ctx)
 	defer stopExternalWatchWorker()
-	// Install the cron executor now that the Server + Delivery are ready, then
-	// start the scheduler. Scheduled jobs now run real agent turns and deliver
-	// results to their channel (e.g. a daily summary pushed to WeChat).
-	if gwDeps.CronScheduler != nil {
-		gwDeps.CronScheduler.SetExecutor(httpapi.NewCronExecutor(gatewayAPI, gwDeps.CronScheduler))
-		if err := app.StartCron(gwDeps.CronScheduler); err != nil {
-			log.Warn("gateway: cron scheduler did not start", "error", err)
-		}
-	}
 	if weixinAdapter != nil {
 		if err := weixinAdapter.Start(ctx); err != nil {
 			log.Warn("gateway: weixin adapter did not start", "error", err)
@@ -483,17 +470,21 @@ func Run(ctx context.Context, opts Options) (runErr error) {
 	gatewayAPI.RuntimeStatusFunc = func() api.GatewayRuntimeInfo {
 		record := manager.Snapshot()
 		return api.GatewayRuntimeInfo{
-			PID:             os.Getpid(),
-			InstanceID:      record.InstanceID,
-			Addr:            addr,
-			DataDir:         dataDir,
-			RuntimeDir:      manager.Paths.RuntimeDir,
-			State:           gatewayAPI.GatewayState(),
-			StartedAt:       record.StartedAt,
-			UpdatedAt:       record.UpdatedAt,
-			HeartbeatAt:     record.HeartbeatAt,
-			ExitReason:      record.ExitReason,
-			DefaultTenantID: defaultTenantID,
+			PID:                   os.Getpid(),
+			InstanceID:            record.InstanceID,
+			Addr:                  addr,
+			DataDir:               dataDir,
+			RuntimeDir:            manager.Paths.RuntimeDir,
+			State:                 gatewayAPI.GatewayState(),
+			StartedAt:             record.StartedAt,
+			UpdatedAt:             record.UpdatedAt,
+			HeartbeatAt:           record.HeartbeatAt,
+			ExitReason:            record.ExitReason,
+			DefaultTenantID:       defaultTenantID,
+			ConfigPath:            cfg.Path,
+			ServiceManager:        strings.TrimSpace(os.Getenv("SELFMIND_SERVICE_MANAGER")),
+			ServiceGeneration:     strings.TrimSpace(os.Getenv("SELFMIND_SERVICE_GENERATION")),
+			ModelRouteFingerprint: modelchange.SnapshotFromConfig(cfg).Fingerprint(),
 		}
 	}
 
@@ -514,14 +505,34 @@ func Run(ctx context.Context, opts Options) (runErr error) {
 	if err := waitHealthy(ctx, localGatewayHealthURL(addr), 3*time.Second); err != nil {
 		return fmt.Errorf("verify gateway health before applying model change: %w", err)
 	}
-	if _, err := modelChanges.MarkStartupHealthy(); err != nil {
+	healthyModelStatus, err := modelChanges.MarkStartupHealthy()
+	if err != nil {
 		return fmt.Errorf("commit healthy model startup: %w", err)
 	}
-	modelStartupHealthy = true
+	modelStartupHealthy = healthyModelStatus.ModelReady()
+	if modelStartupHealthy {
+		// Every model-backed background executor starts only after the same
+		// startup probes + listener health boundary that releases foreground
+		// work. A control-plane-only daemon leaves their durable jobs untouched.
+		stopMaintenanceWorker := gatewayAPI.StartMaintenanceWorker(ctx)
+		defer stopMaintenanceWorker()
+		stopMemoryGovernance := gatewayAPI.StartMemoryGovernance(ctx)
+		defer stopMemoryGovernance()
+		if gwDeps.CronScheduler != nil {
+			gwDeps.CronScheduler.SetExecutor(httpapi.NewCronExecutor(gatewayAPI, gwDeps.CronScheduler))
+			if err := app.StartCron(gwDeps.CronScheduler); err != nil {
+				log.Warn("gateway: cron scheduler did not start", "error", err)
+			}
+		}
+	}
 	// Resume durable work only after the candidate transaction is applied.
 	// Otherwise queued requests could begin on a route whose listener later
 	// fails the health gate and requires recovery.
-	gatewayAPI.DrainQueuedAtBoot(ctx)
+	if modelStartupHealthy {
+		gatewayAPI.DrainQueuedAtBoot(ctx)
+	} else {
+		log.Warn("gateway: model readiness is incomplete; queued work remains parked", "hint", "run `selfmind model`")
+	}
 	stopHeartbeat := make(chan struct{})
 	defer close(stopHeartbeat)
 	go func() {

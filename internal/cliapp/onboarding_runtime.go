@@ -3,6 +3,7 @@ package cliapp
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -14,6 +15,7 @@ import (
 
 	"selfmind/internal/buildinfo"
 	"selfmind/internal/gateway/api"
+	"selfmind/internal/modelchange"
 	"selfmind/internal/platform/config"
 	gatewayrt "selfmind/internal/runtime/gateway"
 	"selfmind/internal/tools"
@@ -31,7 +33,15 @@ type onboardingWorkspace struct {
 	Path string
 }
 
-func (a *App) runOnboardingRuntimeStep(cfg *config.Config, state *onboardingState, options onboardingOptions) int {
+type managedGatewayRepairDeferred struct {
+	ActiveRuns int
+}
+
+func (e *managedGatewayRepairDeferred) Error() string {
+	return fmt.Sprintf("managed background repair is deferred while %d active run(s) finish", e.ActiveRuns)
+}
+
+func (a *App) runOnboardingRuntimeStep(state *onboardingState, options onboardingOptions) int {
 	choice, err := a.defaultOnboardingRuntimeChoice(*state)
 	if err != nil {
 		fmt.Fprintf(a.stderr, "Workspace setup failed: %v\n", err)
@@ -74,14 +84,18 @@ func (a *App) runOnboardingRuntimeStep(cfg *config.Config, state *onboardingStat
 	}
 
 	fmt.Fprintln(a.stdout, "Setting up SelfMind...")
-	manager, err := a.prepareOnboardingGateway(choice.BackgroundMode)
+	receipt, err := a.prepareOnboardingGateway(choice.BackgroundMode)
+	degraded := false
 	if err != nil {
-		fmt.Fprintf(a.stderr, "Background setup failed: %v\n", err)
-		return 1
-	}
-	if err := a.verifyOnboardingGateway(); err != nil {
-		fmt.Fprintf(a.stderr, "Gateway verification failed: %v\n", err)
-		return 1
+		var deferred *managedGatewayRepairDeferred
+		if errors.As(err, &deferred) {
+			degraded = true
+			fmt.Fprintln(a.stderr, "SelfMind is available, but background startup still needs repair.")
+			fmt.Fprintf(a.stderr, "The managed service will be repaired after %d active run(s) finish.\n", deferred.ActiveRuns)
+		} else {
+			fmt.Fprintf(a.stderr, "Background setup failed: %v\n", err)
+			return 1
+		}
 	}
 	if !options.SkipModel {
 		if err := a.verifyOnboardingModelsFromDaemon(state.AuxiliaryDegraded); err != nil {
@@ -100,18 +114,22 @@ func (a *App) runOnboardingRuntimeStep(cfg *config.Config, state *onboardingStat
 	}
 
 	state.BackgroundMode = choice.BackgroundMode
-	state.BackgroundManager = manager
+	state.BackgroundManager = receipt.Manager
+	state.ServiceGeneration = receipt.Generation
 	state.GatewayVerifiedAt = time.Now().UTC()
 	state.WorkspaceID = workspace.ID
 	state.WorkspaceName = workspace.Name
 	state.WorkspacePath = workspace.Path
 	state.WorkspaceTrusted = true
 	state.ApprovalMode = choice.ApprovalMode
-	fmt.Fprintln(a.stdout, "  ✓ Background service healthy")
+	if degraded {
+		fmt.Fprintln(a.stdout, "  ! Background startup needs repair")
+	} else {
+		fmt.Fprintln(a.stdout, "  ✓ Background service healthy")
+	}
 	fmt.Fprintln(a.stdout, "  ✓ Workspace ready")
 	fmt.Fprintln(a.stdout, "  ✓ Safety policy active")
 	fmt.Fprintln(a.stdout)
-	_ = cfg // retained as the typed runtime-step boundary for later capability checks
 	return 0
 }
 
@@ -197,46 +215,35 @@ func onboardingProtectionSummary() string {
 	return "approval-controlled host execution"
 }
 
-func (a *App) prepareOnboardingGateway(mode string) (string, error) {
+func (a *App) prepareOnboardingGateway(mode string) (gatewayServiceInstallReceipt, error) {
 	if mode == "managed" {
 		if !gatewayServiceSupported() {
-			return "", fmt.Errorf("the operating-system background service is unavailable; choose on-demand mode")
+			return gatewayServiceInstallReceipt{}, fmt.Errorf("the operating-system background service is unavailable; choose on-demand mode")
 		}
-		if err := gatewayServicePreflight(); err != nil {
-			return "", err
-		}
-		installed, _, err := gatewayServiceStatus()
-		if err != nil {
-			return "", err
-		}
-		if !installed {
-			timeout := gatewayrt.ResolveDrainTimeout() + 10*time.Second
-			ctx, cancel := contextWithTimeout(a.ctx, timeout)
-			err = gatewayrt.RequestShutdown(ctx, gatewayrt.StopOptions{
-				URL: a.gatewayURL(), DataDir: a.gatewayDataDir(), Timeout: timeout,
-			})
-			cancel()
-			if err != nil {
-				return "", err
-			}
-		}
-		if _, err := gatewayServiceInstall(a.configPath); err != nil {
-			return "", err
-		}
+		return a.reconcileManagedGateway()
 	} else {
 		if gatewayServiceSupported() {
 			if installed, _, err := gatewayServiceStatus(); err != nil {
-				return "", err
+				return gatewayServiceInstallReceipt{}, err
 			} else if installed {
 				timeout := gatewayrt.ResolveDrainTimeout() + 10*time.Second
 				ctx, cancel := contextWithTimeout(a.ctx, timeout)
-				err = gatewayrt.RequestShutdown(ctx, gatewayrt.StopOptions{URL: a.gatewayURL(), DataDir: a.gatewayDataDir(), Timeout: timeout})
+				err = gatewayrt.RequestShutdown(ctx, gatewayrt.StopOptions{
+					URL: a.gatewayURL(), DataDir: a.gatewayDataDir(), Timeout: timeout,
+					Reason: api.ShutdownReasonServiceReconcile, WaitForSafeBoundary: true,
+				})
 				cancel()
 				if err != nil {
-					return "", err
+					return gatewayServiceInstallReceipt{}, err
+				}
+				releaseCtx, releaseCancel := contextWithTimeout(a.ctx, 10*time.Second)
+				err = gatewayrt.WaitForOwnerRelease(releaseCtx, a.gatewayDataDir())
+				releaseCancel()
+				if err != nil {
+					return gatewayServiceInstallReceipt{}, err
 				}
 				if _, _, err := gatewayServiceUninstall(); err != nil {
-					return "", err
+					return gatewayServiceInstallReceipt{}, err
 				}
 			}
 		}
@@ -244,29 +251,68 @@ func (a *App) prepareOnboardingGateway(mode string) (string, error) {
 	ctx, cancel := contextWithTimeout(a.ctx, 15*time.Second)
 	defer cancel()
 	if _, err := gatewayrt.EnsureRunning(ctx, gatewayrt.EnsureOptions{ConfigPath: a.configPath, Timeout: 12 * time.Second}); err != nil {
-		return "", err
+		return gatewayServiceInstallReceipt{}, err
 	}
-	if mode == "managed" {
-		return gatewayServiceKind(), nil
+	receipt := gatewayServiceInstallReceipt{Manager: "on-demand"}
+	if err := a.verifyOnboardingGateway(receipt); err != nil {
+		return gatewayServiceInstallReceipt{}, err
 	}
-	return "on-demand", nil
+	return receipt, nil
 }
 
-func (a *App) verifyOnboardingGateway() error {
+func (a *App) verifyOnboardingGateway(receipt gatewayServiceInstallReceipt) error {
+	status, err := a.readOnboardingGatewayStatus()
+	if err != nil {
+		return err
+	}
+	if err := validateRestartedDaemonHealth(status, buildinfo.Version); err != nil {
+		return err
+	}
+	if receipt.Generation != "" {
+		state := onboardingState{BackgroundMode: "managed", BackgroundManager: receipt.Manager, ServiceGeneration: receipt.Generation}
+		if !managedGatewayOwned(state, gatewayServiceHealthy(), status.Runtime, buildinfo.Version, a.configPath) {
+			return fmt.Errorf("the Gateway is reachable but is not owned by the installed %s service generation", receipt.Manager)
+		}
+	}
+	return nil
+}
+
+func (a *App) readOnboardingGatewayStatus() (api.GatewayStatusResponse, error) {
+	if a.onboardingGatewayStatus != nil {
+		return a.onboardingGatewayStatus(a.ctx)
+	}
 	ctx, cancel := contextWithTimeout(a.ctx, 3*time.Second)
 	defer cancel()
 	data, statusCode, err := gatewayrt.RequestStatus(ctx, a.gatewayURL())
 	if err != nil {
-		return err
+		return api.GatewayStatusResponse{}, err
 	}
 	if statusCode >= http.StatusBadRequest {
-		return fmt.Errorf("gateway status returned HTTP %d", statusCode)
+		return api.GatewayStatusResponse{}, fmt.Errorf("gateway status returned HTTP %d", statusCode)
 	}
 	var status api.GatewayStatusResponse
 	if err := json.Unmarshal(data, &status); err != nil {
-		return err
+		return api.GatewayStatusResponse{}, err
 	}
-	return validateRestartedDaemonHealth(status, buildinfo.Version)
+	return status, nil
+}
+
+func compatibleOnboardingGateway(status api.GatewayStatusResponse, expectedVersion, expectedConfigPath string) bool {
+	if validateRestartedDaemonHealth(status, expectedVersion) != nil ||
+		strings.TrimSpace(status.Runtime.ConfigPath) == "" ||
+		strings.TrimSpace(status.Runtime.ModelRouteFingerprint) == "" {
+		return false
+	}
+	wantConfig, _ := config.ResolveConfigPath(expectedConfigPath)
+	gotConfig, _ := config.ResolveConfigPath(status.Runtime.ConfigPath)
+	if !samePath(gotConfig, wantConfig) {
+		return false
+	}
+	cfg, err := config.LoadConfig(config.Options{Path: expectedConfigPath})
+	if err != nil {
+		return false
+	}
+	return status.Runtime.ModelRouteFingerprint == modelchange.SnapshotFromConfig(cfg).Fingerprint()
 }
 
 func (a *App) verifyOnboardingModelsFromDaemon(auxiliaryDegraded bool) error {
@@ -379,5 +425,31 @@ func (a *App) expectedBackgroundStateReady(state onboardingState) bool {
 	if !gatewayServiceSupported() || state.BackgroundManager != gatewayServiceKind() {
 		return false
 	}
-	return gatewayServiceHealthy()
+	serviceHealthy := gatewayServiceHealthy()
+	if a.managedServiceHealthy != nil {
+		serviceHealthy = a.managedServiceHealthy()
+	}
+	if !serviceHealthy {
+		return false
+	}
+	status, err := a.readOnboardingGatewayStatus()
+	if err != nil {
+		return false
+	}
+	return managedGatewayOwned(state, true, status.Runtime, buildinfo.Version, a.configPath)
+}
+
+func managedGatewayOwned(state onboardingState, serviceHealthy bool, runtimeInfo api.GatewayRuntimeInfo, expectedVersion, expectedConfigPath string) bool {
+	if !serviceHealthy || state.BackgroundMode != "managed" || strings.TrimSpace(state.BackgroundManager) == "" || strings.TrimSpace(state.ServiceGeneration) == "" {
+		return false
+	}
+	if strings.TrimSpace(runtimeInfo.ConfigPath) == "" || strings.TrimSpace(runtimeInfo.Version) == "" || strings.TrimSpace(expectedVersion) == "" {
+		return false
+	}
+	resolvedConfig, _ := config.ResolveConfigPath(expectedConfigPath)
+	runtimeConfig, _ := config.ResolveConfigPath(runtimeInfo.ConfigPath)
+	return strings.EqualFold(strings.TrimSpace(runtimeInfo.ServiceManager), strings.TrimSpace(state.BackgroundManager)) &&
+		strings.TrimSpace(runtimeInfo.ServiceGeneration) == strings.TrimSpace(state.ServiceGeneration) &&
+		strings.TrimSpace(runtimeInfo.Version) == strings.TrimSpace(expectedVersion) &&
+		samePath(runtimeConfig, resolvedConfig)
 }

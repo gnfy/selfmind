@@ -12,6 +12,18 @@ documents:
     owner: maintainers
     state: current
     language: en
+  - path: docs/adr/0001-separate-model-and-runtime-readiness.md
+    title: Separate Model and Runtime Readiness
+    class: decision
+    owner: architecture
+    state: current
+    language: en
+  - path: docs/adr/0002-verify-managed-gateway-ownership.md
+    title: Verify Managed Gateway Ownership
+    class: decision
+    owner: architecture
+    state: current
+    language: en
   - path: docs/agents/domain.md
     title: Domain Documentation for Engineering Skills
     class: guide
@@ -71,7 +83,7 @@ documents:
     state: current
     language: zh-CN
     translation_of: docs/command-reference.md
-    source_hash: 6831bd021d6bd7eb
+    source_hash: 4cccc8f750d1fab9
   - path: docs/config-reference.md
     title: Configuration Reference
     class: guide
@@ -85,7 +97,7 @@ documents:
     state: current
     language: zh-CN
     translation_of: docs/config-reference.md
-    source_hash: 5915a95c2f702043
+    source_hash: f40ba686e3dd0062
   - path: docs/context-lifecycle.zh-CN.md
     title: 上下文生命周期
     class: reference
@@ -199,7 +211,7 @@ documents:
     state: current
     language: zh-CN
     translation_of: docs/provider-runtime.md
-    source_hash: a400fb0145a8e8f1
+    source_hash: 0f3f11daab6dcfbe
   - path: docs/skill-learning-and-repair.md
     title: Skill Learning, Automatic Promotion, and Repair
     class: decision

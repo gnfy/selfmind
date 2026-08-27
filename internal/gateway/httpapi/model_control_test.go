@@ -9,7 +9,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"selfmind/internal/control"
 	"selfmind/internal/gateway/api"
 	"selfmind/internal/modelchange"
 	"selfmind/internal/modelruntime"
@@ -52,6 +54,55 @@ func TestGatewayModelChangeEndpointReturnsStructuredPreview(t *testing.T) {
 	if response.Change == nil || !response.NeedsConfirm || response.Change.Candidate.Primary.Model != "gpt-5.6-sol" {
 		t.Fatalf("response = %+v", response)
 	}
+}
+
+func TestGatewayModelCancelResumesWorkParkedByReadiness(t *testing.T) {
+	daemon, store, identity := newTaskViewServer(t)
+	service, _ := testModelChangeService(t)
+	if _, err := service.AcceptMigrationReadiness(); err != nil {
+		t.Fatal(err)
+	}
+	status, err := service.Inspect()
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate := status.Running
+	candidate.Primary.Model = "gpt-preview"
+	prepared, err := service.Prepare(context.Background(), modelchange.PrepareRequest{
+		Candidate: candidate, Source: "test", RequireConfirmation: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	daemon.ModelChanges = service
+	daemon.LocalControlToken = "local-secret"
+	response, statusCode := daemon.ProcessMessage(context.Background(), api.MessageRequest{
+		TenantID: identity.TenantID, Platform: "cli", PlatformUserID: identity.PlatformUserID,
+		Channel: "cli", Content: "run after the preview is cancelled", Async: true,
+	})
+	if statusCode != http.StatusOK || !response.Accepted || response.Turn == nil || response.Turn.Status != "queued" {
+		t.Fatalf("parked response = status:%d body:%+v", statusCode, response)
+	}
+	body, _ := json.Marshal(api.ModelChangeRequest{Action: "cancel", ChangeID: prepared.Change.ID})
+	req := httptest.NewRequest(http.MethodPost, "/v1/gateway/model/change", bytes.NewReader(body))
+	req.RemoteAddr = "127.0.0.1:43210"
+	req.Header.Set(api.LocalControlTokenHeader, "local-secret")
+	recorder := httptest.NewRecorder()
+	daemon.handleGatewayModelChange(recorder, req)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("cancel status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		count, countErr := store.CountQueued(context.Background(), identity.TenantID, identity.PersonID, control.QueueStatusQueued)
+		if countErr == nil && count == 0 {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	count, countErr := store.CountQueued(context.Background(), identity.TenantID, identity.PersonID, control.QueueStatusQueued)
+	after, inspectErr := service.Inspect()
+	t.Fatalf("queued work did not resume after cancel: count=%d err=%v ready=%v inspect_err=%v pending=%+v running_verified=%v configured=%+v running=%+v", count, countErr, after.ModelReady(), inspectErr, after.Pending, after.RunningVerifiedAt, after.Configured, after.Running)
 }
 
 func TestGatewayModelChangeValidatesWholeDraftWithoutWriting(t *testing.T) {

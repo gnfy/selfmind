@@ -151,7 +151,8 @@ auxiliary 已经落盘或被用户自定义，之后修改 primary 不会覆盖�
 
 模型切换不需要额外 YAML 字段。SelfMind 会在本文件同目录的
 `model-state.json` 中保存不含密钥的事务 generation、pending 变更、上一次运行
-快照、探测摘要和有界历史；不要直接编辑该状态文件。直接修改 `models.primary`
+快照、探测摘要、运行快照验证时间和有界历史。该文件是“模型就绪”的唯一权威，
+onboarding 不会复制其中的路由；不要直接编辑该状态文件。直接修改 `models.primary`
 或 `models.auxiliary` 后，只会被视为 configured、尚未验证，直到 daemon 启动并
 完成探测。正常情况下请使用经过校验的
 `selfmind model` 路径。

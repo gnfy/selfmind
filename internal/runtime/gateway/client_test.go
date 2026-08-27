@@ -35,6 +35,28 @@ func TestRequestShutdownCanAbortCancellableSafeBoundaryWait(t *testing.T) {
 	}
 }
 
+func TestServiceReconcileReportsDeferredWhenGatewayResumesAfterBoundedDrain(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/gateway/shutdown":
+			w.WriteHeader(http.StatusAccepted)
+		case "/v1/gateway/status":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"state":"running","draining":false,"active_run_count":1}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	err := RequestShutdown(context.Background(), StopOptions{
+		URL: server.URL, DataDir: t.TempDir(), Timeout: time.Second,
+		Reason: "service_reconcile", WaitForSafeBoundary: true,
+	})
+	if !errors.Is(err, ErrShutdownDeferred) {
+		t.Fatalf("service reconciliation error = %v, want ErrShutdownDeferred", err)
+	}
+}
+
 // TestPickDaemonExecutable pins the daemon-binary resolution order and the
 // after-upgrade fallback: a current executable whose path no longer exists
 // (npm swaps the package directory out from under a running process) must

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"selfmind/internal/control"
+	"selfmind/internal/modelchange"
 )
 
 type testMemoryConsolidator struct {
@@ -16,6 +17,41 @@ type testMemoryConsolidator struct {
 	result *MemoryGovernanceResult
 	every  time.Duration
 	pause  bool
+}
+
+func TestMemoryGovernancePassStopsWhenAReadyModelBecomesPending(t *testing.T) {
+	ctx := context.Background()
+	store, err := control.OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if _, err := store.ResolveOrCreateAccount(ctx, control.DefaultTenantID, "cli", "owner", "Owner"); err != nil {
+		t.Fatal(err)
+	}
+	service, _ := testModelChangeService(t)
+	if _, err := service.AcceptMigrationReadiness(); err != nil {
+		t.Fatal(err)
+	}
+	status, err := service.Inspect()
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate := status.Running
+	candidate.Auxiliary.Model = "background-pending"
+	if _, err := service.Prepare(ctx, modelchange.PrepareRequest{
+		Candidate: candidate, Source: "test", RequireConfirmation: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	consolidator := &testMemoryConsolidator{every: 24 * time.Hour}
+	server := &Server{Control: store, ModelChanges: service, MemoryConsolidator: consolidator}
+	if delay := server.runMemoryGovernancePassAt(ctx, time.Now()); delay <= 0 {
+		t.Fatalf("readiness retry delay = %s", delay)
+	}
+	if len(consolidator.calls) != 0 {
+		t.Fatalf("memory governance calls = %v after Model Readiness became pending", consolidator.calls)
+	}
 }
 
 func (c *testMemoryConsolidator) RunGovernanceOnce(_ context.Context, personID string) (MemoryGovernanceResult, error) {

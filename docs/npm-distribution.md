@@ -66,19 +66,20 @@ npm install --global @selfmind/cli@latest
 selfmind
 ```
 
-The first interactive `selfmind` launch opens one guided setup on Linux and
-macOS whenever the installation receipt is incomplete or stale. Platform
-service names stay out of the primary flow. `selfmind setup` re-enters the same
-reconciliation path, while `selfmind doctor` reports detailed configuration
-and runtime diagnostics.
+The first interactive `selfmind` launch opens the sole Model Manager when Model
+Readiness is missing. After its transaction is applied, the next launch resumes
+runtime/first-use setup without reconfirming models. Linux and macOS use the
+same flow, and completed stages are not repeated. Platform service names stay
+out of the primary flow. `selfmind setup` re-enters runtime reconciliation,
+while `selfmind doctor` reports detailed configuration and runtime diagnostics.
 
 `selfmind setup`:
 
 - creates missing configuration;
-- discovers or configures a primary model and a background model, shows both,
-  and asks for one confirmation on the fast path;
-- performs bounded live probes from the CLI and again from the daemon's actual
-  environment;
+- directs the person to `selfmind model` if Model Readiness is missing instead
+  of maintaining a second picker or probe path;
+- relies on the Model Manager transaction and the daemon's actual environment
+  to validate the primary, background, and optional role routes;
 - stores accepted API credentials in `~/.selfmind/auth.json` with mode `0600`,
   never in a service definition;
 - confirms one canonical project workspace, grants trust only through the
@@ -90,8 +91,9 @@ and runtime diagnostics.
 - starts or reuses the local daemon;
 - installs and starts a per-user launchd service on macOS or per-user systemd
   service on Linux when managed background operation is selected;
-- records a versioned private setup receipt beside `config.yaml`; the first
-  successful non-command TUI task marks first-use completion.
+- records versioned private runtime and first-use state beside `config.yaml`;
+  model routes and their verified-running evidence remain solely in
+  `model-state.json`.
 
 Manage the platform user service explicitly:
 
@@ -108,6 +110,15 @@ state stay under the normal per-user locations. Both are user services and
 require no root privileges. If a system-wide Linux `selfmind.service` is
 already active, personal setup stops and reports the conflict rather than
 shutting down or replacing that service.
+Each managed installation carries a non-secret service generation. Setup is
+ready only when the running platform job and Gateway agree on that generation,
+the executable version, the resolved configuration, and a non-secret effective
+model-route fingerprint. Replacement drains active work without force,
+waits for the old job and runtime lock to disappear, and permits one bootstrap
+retry only after absence is proven again. A bounded drain timeout defers repair
+and restores foreground availability instead of interrupting the active run.
+Once launchd/systemd receives startup ownership, installation only waits for
+that managed process; it never races it with an on-demand detached fallback.
 Ordinary `selfmind gateway start` reuses an already running service and does
 not replace an active daemon. Use `selfmind gateway restart --drain` when an
 upgrade must move the service to a new binary.

@@ -9,7 +9,10 @@ import (
 	"selfmind/internal/modelchange"
 )
 
-const LocalControlTokenHeader = "X-SelfMind-Local-Control-Token"
+const (
+	LocalControlTokenHeader        = "X-SelfMind-Local-Control-Token"
+	ShutdownReasonServiceReconcile = "service_reconcile"
+)
 
 type ActiveRunStatus struct {
 	TenantID       string `json:"tenant_id"`
@@ -23,21 +26,25 @@ type ActiveRunStatus struct {
 }
 
 type GatewayRuntimeInfo struct {
-	PID              int    `json:"pid"`
-	InstanceID       string `json:"instance_id,omitempty"`
-	Addr             string `json:"addr"`
-	DataDir          string `json:"data_dir,omitempty"`
-	RuntimeDir       string `json:"runtime_dir,omitempty"`
-	State            string `json:"state"`
-	StartedAt        string `json:"started_at,omitempty"`
-	UpdatedAt        string `json:"updated_at,omitempty"`
-	HeartbeatAt      string `json:"heartbeat_at,omitempty"`
-	ExitReason       string `json:"exit_reason,omitempty"`
-	DefaultTenantID  string `json:"default_tenant_id,omitempty"`
-	Version          string `json:"version,omitempty"`
-	Commit           string `json:"commit,omitempty"`
-	BuiltAt          string `json:"built_at,omitempty"`
-	BuildFingerprint string `json:"build_fingerprint,omitempty"`
+	PID                   int    `json:"pid"`
+	InstanceID            string `json:"instance_id,omitempty"`
+	Addr                  string `json:"addr"`
+	DataDir               string `json:"data_dir,omitempty"`
+	RuntimeDir            string `json:"runtime_dir,omitempty"`
+	State                 string `json:"state"`
+	StartedAt             string `json:"started_at,omitempty"`
+	UpdatedAt             string `json:"updated_at,omitempty"`
+	HeartbeatAt           string `json:"heartbeat_at,omitempty"`
+	ExitReason            string `json:"exit_reason,omitempty"`
+	DefaultTenantID       string `json:"default_tenant_id,omitempty"`
+	Version               string `json:"version,omitempty"`
+	Commit                string `json:"commit,omitempty"`
+	BuiltAt               string `json:"built_at,omitempty"`
+	BuildFingerprint      string `json:"build_fingerprint,omitempty"`
+	ConfigPath            string `json:"config_path,omitempty"`
+	ServiceManager        string `json:"service_manager,omitempty"`
+	ServiceGeneration     string `json:"service_generation,omitempty"`
+	ModelRouteFingerprint string `json:"model_route_fingerprint,omitempty"`
 	// Environment identity of the RUNNING daemon. `env refresh` must compare a
 	// fresh login-shell sample against THIS, not against the CLI's own
 	// environment: the CLI is usually the first process to see a new toolchain,

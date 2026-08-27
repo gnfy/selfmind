@@ -18,25 +18,38 @@ selfmind feedback [--out FILE|--send] [--repo OWNER/REPO] [--include-crash] <mes
 ```
 
 - Running `selfmind` opens the TUI. On the first interactive launch, an
-  incomplete installation opens the same guided setup on Linux and macOS
-  before the TUI starts. Cancelling setup exits cleanly. Non-interactive
+  incomplete installation opens the sole Model Manager when Model Readiness is
+  missing, then resumes the runtime/first-use setup on a later launch. Linux and
+  macOS use the same flow. Non-interactive
   launches never prompt and instead print the exact `setup` command to run. `--config`
   selects another configuration file and `--resume` restores a prior TUI
   session. Repeatable `--add-dir` grants that CLI invocation access to another
   local directory without modifying the registered workspace.
-- `setup` creates missing configuration and confirms two visible routes: the
-  primary model for interactive work and the background model for maintenance.
-  It then confirms one project workspace, its trust boundary, the approval
-  mode, and background operation. The fast path has two confirmations. Both
-  models receive bounded live probes before setup continues, and the installed
-  daemon probes the same routes again from its own environment. Shell-only API
+- `setup` creates missing configuration and owns only runtime/first-use state.
+  If Model Readiness is absent, it directs the person to `selfmind model` rather
+  than presenting a second picker or probe path. The Model Manager exposes the
+  Main model for interactive work, the Background model for maintenance, and
+  optional role overrides; each completed selection is validated automatically.
+  Setup then confirms one project workspace,
+  its trust boundary, the approval mode, and background operation. A failed
+  runtime stage resumes without repeating or reconfirming model work. The
+  installed daemon validates the selected routes from its own environment before
+  Model Readiness is recorded. Shell-only API
   credentials accepted by the person are copied to SelfMind's private auth
   store, never to an operating-system service definition. The selected
   workspace cannot default silently to `/` or the user's home directory.
-  launchd on macOS and per-user systemd on Linux are implementation details;
-  the user-facing choice is simply managed background operation or on-demand
-  startup. A first successful non-command TUI task completes the first-use
-  receipt. The skip flags remain available for controlled automation.
+  launchd on macOS and per-user systemd on Linux are implementation details.
+  Managed readiness requires the running service job and Gateway to report the
+  same non-secret service generation, version, and configuration. A compatible
+  Gateway with active work may remain available as Runtime Degraded while
+  service repair is deferred. A first successful non-command TUI task completes
+  the separate first-use receipt. The skip flags remain available for
+  controlled automation.
+- `gateway service status` distinguishes an absent, starting, managed healthy,
+  managed unhealthy, conflicting/unowned, or Runtime Degraded background. A
+  running job is healthy only when its service generation, version,
+  configuration identity, and non-secret effective-route fingerprint agree
+  with the responding Gateway and current installation.
 - `update check` only checks for an update. `update` performs the full
   upgrade: it checks the selected npm channel, runs the package-manager
   install, verifies the new binary with `selfmind --version`, and restarts a
@@ -280,7 +293,9 @@ selfmind weixin status
   active turn reach a safe boundary before the service relaunches the daemon.
   Neither personal service needs administrator access. An active system-wide
   Linux `selfmind.service` is reported as a conflict instead of being stopped
-  or replaced by personal setup.
+  or replaced by personal setup. After handing startup to launchd/systemd,
+  installation waits for that managed process and never starts a detached
+  fallback that could mask a failed service job.
 - If Weixin reports an expired iLink session, run `selfmind weixin login`
   again. The running gateway watches the account credential file and resumes
   polling after the refreshed credentials are saved; no daemon restart is

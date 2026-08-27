@@ -17,6 +17,8 @@ Generated from `docs/manifest.yaml` by `selfmind docs index`. Do not edit this f
 
 ## Decision
 
+- [Separate Model and Runtime Readiness](adr/0001-separate-model-and-runtime-readiness.md) - current, en
+- [Verify Managed Gateway Ownership](adr/0002-verify-managed-gateway-ownership.md) - current, en
 - [Execution Concurrency Design](execution-concurrency-plan.md) - paused, zh-CN
 - [Skill Learning, Automatic Promotion, and Repair](skill-learning-and-repair.md) - current, en
 

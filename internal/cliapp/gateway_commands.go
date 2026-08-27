@@ -299,7 +299,7 @@ func (a *App) gatewayRestartWithEnvironment(args []string, environment []string)
 			}
 			switch status.Pending.Status {
 			case modelchange.StatusValidating, modelchange.StatusAwaitingSafeBoundary,
-				modelchange.StatusCommitting, modelchange.StatusDraining:
+				modelchange.StatusCommitting, modelchange.StatusDraining, modelchange.StatusRestarting:
 				return false
 			default:
 				return true
@@ -447,45 +447,40 @@ func (a *App) gatewayService(args []string) int {
 	}
 	switch action {
 	case "install":
-		if err := gatewayServicePreflight(); err != nil {
-			fmt.Fprintln(a.stderr, err)
-			return 1
-		}
-		installed, _, err := gatewayServiceStatus()
+		receipt, err := a.reconcileManagedGateway()
 		if err != nil {
 			fmt.Fprintln(a.stderr, err)
 			return 1
 		}
-		// A legacy detached gateway and an OS service must never own the same runtime
-		// at once. Drain the detached process before registering the service.
-		if !installed {
-			timeout := gatewayrt.ResolveDrainTimeout() + 10*time.Second
-			ctx, cancel := contextWithTimeout(a.ctx, timeout)
-			err = gatewayrt.RequestShutdown(ctx, gatewayrt.StopOptions{
-				URL:     a.gatewayURL(),
-				DataDir: a.gatewayDataDir(),
-				Timeout: timeout,
-			})
-			cancel()
-			if err != nil {
-				fmt.Fprintln(a.stderr, err)
-				return 1
-			}
-		}
-		path, err := gatewayServiceInstall(a.configPath)
-		if err != nil {
-			fmt.Fprintln(a.stderr, err)
+		cfg, loadErr := config.LoadConfig(config.Options{Path: a.configPath})
+		if loadErr != nil {
+			fmt.Fprintln(a.stderr, loadErr)
 			return 1
 		}
-		fmt.Fprintf(a.stdout, "SelfMind background service installed and started.\nDefinition: %s\n", path)
+		statePath := onboardingStatePath(cfg, a.configPath)
+		state, stateErr := loadOnboardingState(statePath)
+		if stateErr != nil {
+			fmt.Fprintln(a.stderr, stateErr)
+			return 1
+		}
+		state.BackgroundMode = "managed"
+		state.BackgroundManager = receipt.Manager
+		state.ServiceGeneration = receipt.Generation
+		state.GatewayVerifiedAt = time.Now().UTC()
+		if saveErr := saveOnboardingState(statePath, state); saveErr != nil {
+			fmt.Fprintln(a.stderr, saveErr)
+			return 1
+		}
+		fmt.Fprintf(a.stdout, "SelfMind background service installed and started.\nDefinition: %s\n", receipt.Path)
 		return 0
 	case "status":
-		_, message, err := gatewayServiceStatus()
+		installed, message, err := gatewayServiceStatus()
 		if err != nil {
 			fmt.Fprintln(a.stderr, err)
 			return 1
 		}
 		fmt.Fprintln(a.stdout, message)
+		fmt.Fprintln(a.stdout, managedBackgroundStatusLine(a.currentManagedBackgroundStatus(installed, gatewayServiceHealthy())))
 		return 0
 	case "uninstall":
 		timeout := gatewayrt.ResolveDrainTimeout() + 10*time.Second
@@ -535,6 +530,15 @@ func (a *App) printGatewayStatus(status api.GatewayStatusResponse) {
 	if runtime.RuntimeDir != "" {
 		fmt.Fprintf(a.stdout, "runtime: %s\n", runtime.RuntimeDir)
 	}
+	if runtime.ConfigPath != "" {
+		fmt.Fprintf(a.stdout, "config: %s\n", runtime.ConfigPath)
+	}
+	if runtime.ServiceManager != "" {
+		fmt.Fprintf(a.stdout, "service owner: %s generation=%s\n", runtime.ServiceManager, shortRuntimeIdentity(runtime.ServiceGeneration))
+	}
+	if runtime.ModelRouteFingerprint != "" {
+		fmt.Fprintf(a.stdout, "model routes: %s\n", shortRuntimeIdentity(runtime.ModelRouteFingerprint))
+	}
 	if status.StoreSchema.CurrentVersion > 0 {
 		fmt.Fprintf(a.stdout, "control schema: v%d (binary supports v%d)\n", status.StoreSchema.Version, status.StoreSchema.CurrentVersion)
 	}
@@ -556,6 +560,14 @@ func (a *App) printGatewayStatus(status api.GatewayStatusResponse) {
 	} else {
 		fmt.Fprintln(a.stdout, "active runs: 0")
 	}
+}
+
+func shortRuntimeIdentity(value string) string {
+	value = strings.TrimSpace(value)
+	if len(value) <= 12 {
+		return value
+	}
+	return value[:12]
 }
 
 func (a *App) printPromptCustomizationHint() {

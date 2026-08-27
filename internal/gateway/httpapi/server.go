@@ -362,7 +362,6 @@ func (d *Server) ProcessMessage(ctx context.Context, req api.MessageRequest) (ap
 		}
 		return api.MessageResponse{Identity: identity, Content: msg, Turn: messageTurn("completed", "", "idle", "", "", "")}, http.StatusOK
 	}
-
 	if d.IsDraining() {
 		if d.isModelChangeDrain() {
 			intent := d.classifyIntent(ctx, req.Content, req.Channel)
@@ -387,6 +386,39 @@ func (d *Server) ProcessMessage(ctx context.Context, req api.MessageRequest) (ap
 			Accepted: false,
 			Turn:     messageTurn("failed", "", "draining", "", "", "gateway is shutting down"),
 		}, http.StatusServiceUnavailable
+	}
+
+	// Control commands above remain reachable so /model can repair the sole
+	// route authority. A continuation must still steer the already-frozen
+	// active run so that a safe model restart can reach its boundary; genuinely
+	// new work is parked without consulting an unverified model.
+	if !d.modelReadyForWork() {
+		coord := d.coordinator()
+		running := coord.currentActive(identity.PersonID)
+		if running == nil {
+			return d.enqueueUntilModelReady(ctx, identity, req), http.StatusOK
+		}
+		intent := router.NewIntentClassifier().ClassifyDetailed(req.Content)
+		if intent.Intent != router.IntentContinue && looksLikeAffirmativeContinuation(req.Content) {
+			intent.Intent = router.IntentContinue
+		}
+		workspace, workspaceErr := coord.prepareRequestWorkspace(ctx, identity, &req)
+		if workspaceErr != nil {
+			return api.MessageResponse{Identity: identity, Error: workspaceErr.Error(), Turn: messageTurn("failed", "", "idle", "", "", workspaceErr.Error())}, http.StatusBadRequest
+		}
+		if rootsErr := coord.prepareRequestExecutionRoots(ctx, workspace, &req); rootsErr != nil {
+			return api.MessageResponse{Identity: identity, Error: rootsErr.Error(), Turn: messageTurn("failed", "", "idle", "", "", rootsErr.Error())}, http.StatusBadRequest
+		}
+		if intent.Intent == router.IntentContinue {
+			if resp, ok := d.steerActiveRun(ctx, identity, running, req); ok {
+				return resp, http.StatusOK
+			}
+			return api.MessageResponse{
+				Identity: identity, Content: formatBusyRun(running), Accepted: false,
+				Turn: messageTurn("busy", "running", "running", running.TaskID, running.RunID, running.Summary),
+			}, http.StatusOK
+		}
+		return d.enqueueUntilModelReady(ctx, identity, req), http.StatusOK
 	}
 
 	intent := d.classifyIntent(ctx, req.Content, req.Channel)

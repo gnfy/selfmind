@@ -154,7 +154,7 @@ func (d *Server) handleGatewayModelChange(w http.ResponseWriter, r *http.Request
 		}
 		prepare := modelchange.PrepareRequest{
 			Candidate: candidate, ExpectedGeneration: generation,
-			ReplacePending: req.ReplacePending,
+			ReplacePending: req.ReplacePending, ForceRevalidate: true,
 		}
 		prepare.Source = "local-cli"
 		prepare.RequireConfirmation = action == "prepare"
@@ -191,6 +191,9 @@ func (d *Server) handleGatewayModelChange(w http.ResponseWriter, r *http.Request
 		if err := d.ModelChanges.Cancel(req.ChangeID); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
+		}
+		if status, inspectErr := d.ModelChanges.Inspect(); inspectErr == nil && status.ModelReady() {
+			d.drainQueuedWhenReady(context.Background())
 		}
 	case "rollback":
 		prepared, err := d.ModelChanges.PrepareRollback(r.Context(), "local-cli", true)
@@ -418,6 +421,11 @@ func (d *Server) shutdownAfterDrain(timeout time.Duration, reason string) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	if !d.waitForIdle(ctx) {
+		if strings.EqualFold(strings.TrimSpace(reason), api.ShutdownReasonServiceReconcile) {
+			d.cancelPendingShutdown()
+			d.DrainQueuedAtBoot(context.Background())
+			return
+		}
 		d.coordinator().stopAllActive("gateway shutdown")
 	}
 	if d.ShutdownFunc != nil {
@@ -436,7 +444,7 @@ func (d *Server) waitForModelSafeBoundary() bool {
 		switch status.Pending.Status {
 		case modelchange.StatusAwaitingSafeBoundary, modelchange.StatusValidating:
 			// still cancellable/replacable
-		case modelchange.StatusCommitting, modelchange.StatusDraining:
+		case modelchange.StatusCommitting, modelchange.StatusDraining, modelchange.StatusRestarting:
 			// a crash-recovered helper may already have crossed the boundary
 		default:
 			return false

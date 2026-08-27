@@ -86,6 +86,30 @@ func TestWaitHealthyContextCancel(t *testing.T) {
 	}
 }
 
+func TestWaitForRunningNeverStartsADetachedFallback(t *testing.T) {
+	down := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "starting", http.StatusServiceUnavailable)
+	}))
+	defer down.Close()
+	dataDir := t.TempDir()
+	cfgPath := filepath.Join(dataDir, "config.yaml")
+	if err := os.WriteFile(cfgPath, []byte("storage:\n  data_dir: "+dataDir+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SELF_GATEWAY_URL", down.URL)
+
+	result, err := WaitForRunning(context.Background(), EnsureOptions{ConfigPath: cfgPath, Timeout: 300 * time.Millisecond})
+	if err == nil {
+		t.Fatal("managed readiness wait unexpectedly accepted an unhealthy endpoint")
+	}
+	if result.Started {
+		t.Fatal("managed readiness wait started a detached fallback")
+	}
+	if _, ok := NewManager(dataDir, "").RunningRecord(); ok {
+		t.Fatal("managed readiness wait created a detached Gateway record")
+	}
+}
+
 // TestEnsureRunningUsesExistingDaemon verifies the fast path: when a live PID
 // record exists and /health answers, EnsureRunning returns it WITHOUT spawning a
 // new process (Started=false).

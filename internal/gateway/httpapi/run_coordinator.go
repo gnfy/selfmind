@@ -847,7 +847,7 @@ func (c *RunCoordinator) drainQueue(identity *control.IdentityContext) {
 	// A safe process drain leaves queued rows durable for the next daemon. A
 	// run finalizer must not race the restart by launching the next item under
 	// the old model/runtime after shutdown has already begun.
-	if c.srv.IsDraining() {
+	if c.srv.IsDraining() || !c.srv.modelReadyForWork() {
 		return
 	}
 	personID := identity.PersonID

@@ -192,10 +192,11 @@ defaults.
 
 Model switching has no additional YAML keys. SelfMind stores the non-secret
 transaction generation, pending change, last running snapshot, probe summaries,
-and bounded history in `model-state.json` beside this file. Do not edit that
-state file. A direct edit to `models.primary` or `models.auxiliary` is treated
-as configured but unverified until daemon startup probes it; use `selfmind
-model` for the normal validated path.
+verified-running timestamp, and bounded history in `model-state.json` beside
+this file. That file is the sole authority for Model Readiness; onboarding does
+not duplicate its routes. Do not edit it. A direct edit to `models.primary` or
+`models.auxiliary` is treated as configured but unverified until daemon startup
+probes it; use `selfmind model` for the normal validated path.
 
 For `kimi-coding`, every role uses the provider default Anthropic Messages
 transport (`https://api.kimi.com/coding/v1/messages`). This matches Hermes and

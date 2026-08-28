@@ -19,6 +19,7 @@ Generated from `docs/manifest.yaml` by `selfmind docs index`. Do not edit this f
 
 - [Separate Model and Runtime Readiness](adr/0001-separate-model-and-runtime-readiness.md) - current, en
 - [Verify Managed Gateway Ownership](adr/0002-verify-managed-gateway-ownership.md) - current, en
+- [Consume External Skill Packages](adr/0003-consume-external-skill-packages.md) - current, en
 - [Execution Concurrency Design](execution-concurrency-plan.md) - paused, zh-CN
 - [Skill Learning, Automatic Promotion, and Repair](skill-learning-and-repair.md) - current, en
 
@@ -39,7 +40,8 @@ Generated from `docs/manifest.yaml` by `selfmind docs index`. Do not edit this f
 
 ## Plan
 
-- [Daily-Driver Runtime Closure](plans/daily-driver-closure.md) - active, en
+- [Daily-Driver Runtime Closure](plans/daily-driver-closure.md) - paused, en
+- [External Skill Package Adoption](plans/external-skill-packages.md) - active, en
 
 ## Reference
 

@@ -77,11 +77,38 @@ order, are:
 5. Read-only roots from `SELFMIND_SKILLS_ROOTS`.
 6. The optional writable root from `SELFMIND_SKILLS_DIR`.
 7. The control-tenant user root under the configured SelfMind asset base.
+8. Read-only `~/.agents/skills`, the cross-vendor Agent Skills location. It
+   follows the writable user root so an explicit install is never shadowed by a
+   default location.
 
 Typed execution scope is the hard workspace ancestor boundary. Discovery does
-not walk above it and relabel home-level assets as workspace Skills. The first
-matching canonical name wins; listing, selection-reference issuance, viewing,
-and activation use the same resolver.
+not walk above it and relabel home-level assets as workspace Skills. Listing,
+selection-reference issuance, viewing, and activation use the same resolver.
+
+Each root is enumerated one of two ways. A read-only root that declares a
+package manifest yields exactly the packages that manifest lists: the manifest
+is the only signal available about which packages its author published, and an
+unpublished draft should neither reach the model catalog nor spend its bounded
+budget. The manifest is looked for at the root and at its immediate parent,
+because an external package is commonly rooted one level above its skills
+directory; the search stops there and never yields a package outside the root.
+Manifest gating is limited to read-only roots, because a writable root is where
+this person installs and an install whose result then failed to appear would be
+unexplainable.
+
+Any other root is scanned recursively to a fixed depth of four with a fixed
+exclusion set. Recursion is required because external packages use a
+`<category>/<name>/SKILL.md` layout that single-level enumeration cannot see. A
+directory holding `SKILL.md` is a package and its subtree is not scanned
+further, so a `SKILL.md` preserved under `references/`, `templates/`, `assets/`,
+or `scripts/` stays a resource instead of becoming a second Skill, while a
+category directory that merely shares one of those names stays discoverable.
+The exclusion set covers dependency and cache directories. Depth and exclusions
+are constants rather than configuration, so every discovery site agrees and a
+root pointed at a large tree cannot trigger an unbounded walk. The same
+exclusions apply to the resource manifest and the install directory hash, so a
+vendored tree nested inside a support directory cannot enter package identity
+and make every upstream change register as package drift.
 
 A directory Skill containing `.selfmind-developer-only` is invisible to the
 SelfMind product runtime. Repository coding agents may still discover it.
@@ -92,6 +119,21 @@ Every discovered Skill records scope, root, writable state, provenance, and
 lifecycle state. Read-only Skills may be viewed and activated but not mutated.
 Disabling a read-only Skill writes control-tenant usage state rather than
 editing its package.
+
+Scope and provenance are separate axes. Scope says who owns the location;
+provenance says whether the asset is `first-party` or `external`. External means
+a root that is neither SelfMind-managed nor repository-authored: the environment
+roots and `~/.agents/skills`. Repository-authored workspace roots keep
+first-party provenance because repository instructions are already governed as
+untrusted data below operator, user, and safety policy. External assets are
+never rewritten automatically. `~/.agents/skills` therefore carries user scope
+and external provenance at once, and presents itself as `external:<name>`
+rather than claiming to be a first-party user asset.
+
+An external package may also ship an agent definition or a vendored dependency
+tree. Neither enters the package: only `references/`, `templates/`, `scripts/`,
+and `assets/` are support directories, so an untrusted asset has no way to
+declare execution authority through its own files.
 
 Asset ownership and execution authority are independent:
 
@@ -116,15 +158,48 @@ creates its owned storage path.
   when available, removes the Skill instructions, and resumes ordinary
   planning in the same work unit.
 - `/skill-name` performs explicit user invocation through the same activation
-  path.
+  path. It accepts a bare name, a qualified `source:name`, or a discovery path.
+- A `$` prefix in the TUI opens local Skill completion. It is local UI and spends
+  no model context, so it offers the whole discovered inventory rather than the
+  bounded catalog subset, and it writes a `/<reference>` invocation. Matching
+  reuses the metadata-only ranker the catalog uses, so completion inherits its
+  ASCII-token and CJK-bigram behaviour; with nothing typed the inventory is
+  ordered by usage recency, which is the one place attribution changes an
+  ordering. The inventory is fetched through the tool-dispatch seam because
+  recency for a read-only root lives in the control store, and it refreshes after
+  a command that can change what is installed. IM parses no `$` in text: it is
+  the least structured surface and has no completion to confirm a choice.
+- A Skill whose front matter switches model invocation off leaves the metadata
+  catalog and candidate ranking while both slash forms still resolve it. The
+  external `disable-model-invocation` spelling is accepted as an inverted alias
+  of the native key.
 - `skill_bundle` shares one aggregate context budget across its members.
 - `/skills bind` and `/skills unbind` manage one task affinity.
 - Candidate, promotion, rejection, rollback, and binding mutations traverse the
   hidden lifecycle-management interface.
 
+Names have two resolution modes, and the difference is deliberate. A name the
+person typed resolves only when it is unambiguous: when several enabled Skills
+answer to it, resolution fails and lists the qualified candidates. Descriptions
+never take part in that decision, because they are author text and on an
+external package that author is untrusted. Reference-based and stored-identity
+lookups instead take the precedence winner, because their own identity recheck,
+not a refusal, is what catches a root that has newly won precedence for a name.
+
+A qualified name is `source:name`, preferring the manifest-declared package
+name, then external provenance, then the root scope. A relative path is not used
+as identity because it moves whenever a category is renamed. Two roots can share
+both scope and source, so the qualified form is not guaranteed unique; the
+discovery path is the disambiguator of last resort and is accepted wherever a
+name is. An ambiguity refusal lists paths when its qualified names collide, so
+every candidate it offers is something the person can type back. Listing renders
+a colliding short name in its qualified form for the same reason.
+
 Legacy `skill:<name>` dispatch addresses remain registered with hidden exposure
 as a rollback surface. They do not enter provider catalogs and must gain no new
 callers. Removal requires explicit telemetry evidence and a release decision.
+Their loader keeps single-level enumeration; it is a rollback surface and gains
+no new capability.
 
 ## Work Units, Binding, and Activation
 
@@ -275,6 +350,10 @@ current environment; the eligibility check does not itself authorize rollback.
 Durable activations and terminal work-unit outcomes are the canonical source
 for Skill use, completion, fallback, and failure statistics. Sidecar usage files
 are inventory-recency hints only; legacy metric rows are historical.
+
+Doctor reports front-matter keys this runtime does not model, naming the owning
+file and the keys. They stay ignored, but a constraint an external author
+declared must not disappear without a trace.
 
 Doctor previews the actual provider-wire catalog and distinguishes
 `registered_active`, `hidden`, and `provider_visible`. Per-Skill compatibility

@@ -24,6 +24,12 @@ documents:
     owner: architecture
     state: current
     language: en
+  - path: docs/adr/0003-consume-external-skill-packages.md
+    title: Consume External Skill Packages
+    class: decision
+    owner: architecture
+    state: current
+    language: en
   - path: docs/agents/domain.md
     title: Domain Documentation for Engineering Skills
     class: guide
@@ -194,10 +200,18 @@ documents:
     title: Daily-Driver Runtime Closure
     class: plan
     owner: maintainers
-    state: active
+    state: paused
     language: en
     approved_by: project-owner
     review_by: 2026-09-11
+  - path: docs/plans/external-skill-packages.md
+    title: External Skill Package Adoption
+    class: plan
+    owner: maintainers
+    state: active
+    language: en
+    approved_by: project-owner
+    review_by: 2026-09-25
   - path: docs/provider-runtime.md
     title: Provider Runtime
     class: reference

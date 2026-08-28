@@ -98,21 +98,26 @@ func TestRenderSystemdUserUnit(t *testing.T) {
 	}
 }
 
-func TestServicePassthroughEnvironmentRejectsCredentials(t *testing.T) {
+func TestServicePassthroughEnvironmentRejectsCredentialsAndAmbientProxy(t *testing.T) {
 	got := strings.Join(servicePassthroughEnvironment([]string{
 		"LANG=en_US.UTF-8",
+		"HTTP_PROXY=http://proxy.example:8080",
 		"HTTPS_PROXY=http://proxy.example:8080",
+		"all_proxy=socks5://proxy.example:1080",
 		"OPENAI_API_KEY=secret",
 		"SERVICE_CONFIG=/tmp/config.json",
 		"TOKEN_CONFIG=/tmp/looks-safe-but-name-is-secret",
 		"NO_PROXY=localhost",
+		"no_proxy=localhost",
 	}), "\n")
-	for _, expected := range []string{"LANG=en_US.UTF-8", "HTTPS_PROXY=http://proxy.example:8080", "SERVICE_CONFIG=/tmp/config.json", "NO_PROXY=localhost"} {
+	for _, expected := range []string{"LANG=en_US.UTF-8", "SERVICE_CONFIG=/tmp/config.json"} {
 		if !strings.Contains(got, expected) {
 			t.Fatalf("filtered environment missing %q: %q", expected, got)
 		}
 	}
-	for _, forbidden := range []string{"OPENAI_API_KEY", "TOKEN_CONFIG"} {
+	for _, forbidden := range []string{
+		"HTTP_PROXY", "HTTPS_PROXY", "all_proxy", "NO_PROXY", "no_proxy", "OPENAI_API_KEY", "TOKEN_CONFIG",
+	} {
 		if strings.Contains(got, forbidden) {
 			t.Fatalf("filtered environment exposed %q: %q", forbidden, got)
 		}

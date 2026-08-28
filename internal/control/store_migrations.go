@@ -15,7 +15,7 @@ import (
 // CurrentControlSchemaVersion is the durable control.db compatibility
 // boundary. Adding or changing durable schema requires an ordered migration and
 // a version bump; silently extending InitSchema is not a release-safe upgrade.
-const CurrentControlSchemaVersion = 5
+const CurrentControlSchemaVersion = 6
 
 // schemaBaselineVersion is the version recorded for the historical additive
 // schema created by InitSchema. Every durable change after it is an entry in
@@ -157,6 +157,37 @@ CREATE TABLE IF NOT EXISTS skill_package_resources (
 			);
 			CREATE INDEX IF NOT EXISTS idx_skill_candidate_evidence_set
 				ON skill_candidate_evidence_snapshots(control_tenant_id, evidence_set_hash);`)
+			return err
+		},
+	},
+	{
+		Version: 6,
+		Name:    "skill-attribution",
+		Apply: func(ctx context.Context, db *sql.DB) error {
+			// Attribution records implicit Skill use. It is deliberately its own
+			// table rather than a column on run_skill_activations: activation
+			// evidence feeds curator cohorts and repair thresholds, attribution
+			// never does, and separate storage makes that boundary structural
+			// instead of a field convention. The primary key is the per-work-unit
+			// de-duplication rule, so a repeated observation is a no-op insert.
+			_, err := db.ExecContext(ctx, `
+CREATE TABLE IF NOT EXISTS skill_attributions (
+	control_tenant_id TEXT NOT NULL,
+	person_id TEXT NOT NULL DEFAULT '',
+	run_id TEXT NOT NULL,
+	work_unit_id TEXT NOT NULL,
+	skill_key TEXT NOT NULL,
+	skill_name TEXT NOT NULL,
+	package_path TEXT NOT NULL,
+	package_name TEXT NOT NULL DEFAULT '',
+	scope TEXT NOT NULL DEFAULT '',
+	provenance TEXT NOT NULL DEFAULT '',
+	tool_name TEXT NOT NULL DEFAULT '',
+	observed_at INTEGER NOT NULL,
+	PRIMARY KEY (control_tenant_id, run_id, work_unit_id, package_path)
+);
+CREATE INDEX IF NOT EXISTS idx_skill_attributions_skill
+	ON skill_attributions(control_tenant_id, skill_key, observed_at);`)
 			return err
 		},
 	},

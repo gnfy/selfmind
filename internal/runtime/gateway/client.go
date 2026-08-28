@@ -168,9 +168,10 @@ func StartDetached(opts StartOptions) (StartResult, error) {
 	return StartResult{PID: pid, LogPath: manager.Paths.LogPath}, nil
 }
 
-// RunningRestartEnvironment returns only PATH and proxy-related environment
-// values from the currently running local gateway. It is intentionally narrow:
-// restart callers must not copy arbitrary daemon credentials or process state.
+// RunningRestartEnvironment returns only PATH from the currently running local
+// gateway. It is intentionally narrow: restart callers may preserve tool
+// discovery, but must not copy arbitrary daemon credentials, process state, or
+// ambient proxy settings that disappeared from the current environment.
 func RunningRestartEnvironment(dataDir string) []string {
 	rec, ok := NewManager(dataDir, "").RunningRecord()
 	if !ok {
@@ -185,15 +186,11 @@ func detachedRunArgs() []string {
 
 func mergeRestartEnvironment(current, previous []string) []string {
 	merged := append([]string(nil), current...)
-	currentGroups := make(map[string]struct{}, len(current))
-	exactKeys := make(map[string]struct{}, len(current))
 	pathIndex := -1
 	currentPath := ""
 	for i, entry := range current {
 		if key, value, ok := strings.Cut(entry, "="); ok {
 			key = strings.TrimSpace(key)
-			currentGroups[strings.ToLower(key)] = struct{}{}
-			exactKeys[key] = struct{}{}
 			if strings.EqualFold(key, "PATH") {
 				pathIndex = i
 				currentPath = value
@@ -209,16 +206,7 @@ func mergeRestartEnvironment(current, previous []string) []string {
 		key = strings.TrimSpace(key)
 		if strings.EqualFold(key, "PATH") {
 			previousPath = value
-			continue
 		}
-		if _, ok := currentGroups[strings.ToLower(key)]; ok {
-			continue
-		}
-		if _, ok := exactKeys[key]; ok {
-			continue
-		}
-		merged = append(merged, entry)
-		exactKeys[key] = struct{}{}
 	}
 	if path := mergePathValues(currentPath, previousPath); path != "" {
 		entry := "PATH=" + path
@@ -246,7 +234,7 @@ func restartEnvironmentFromBlock(data []byte) []string {
 
 func isRestartEnvironmentKey(key string) bool {
 	switch strings.ToLower(strings.TrimSpace(key)) {
-	case "path", "http_proxy", "https_proxy", "all_proxy", "no_proxy":
+	case "path":
 		return true
 	default:
 		return false

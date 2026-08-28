@@ -256,8 +256,9 @@ func (a *App) gatewayRestartWithEnvironment(args []string, environment []string)
 	}
 	dataDir := a.gatewayDataDir()
 	// Capture before RequestShutdown removes the old PID record. A restart may
-	// be invoked from an updater or IDE that lacks the login shell's PATH or
-	// proxy variables; the new daemon must retain its tool and network paths.
+	// be invoked from an updater or IDE that lacks the login shell's PATH; the new
+	// daemon must retain its existing tool discovery paths without reviving stale
+	// ambient proxy state.
 	inheritedRestartEnv := gatewayrt.RunningRestartEnvironment(dataDir)
 	timeout := gatewayrt.ResolveDrainTimeout() + 10*time.Second
 	var modelChanges *modelchange.Service

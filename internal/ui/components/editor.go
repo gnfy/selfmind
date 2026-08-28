@@ -60,10 +60,11 @@ type Editor struct {
 	textinput       textinput.Model
 	secure          bool
 	commands        []CommandHint
+	skillFilter     func(query string) []CommandHint
 	snippets        []PasteSnippet    // stored snippets for large pastes
 	images          []ImageAttachment // stored attachments for pasted/attached images
 	largePasteChars int               // threshold in characters (from config, 0=disabled)
-	largePasteLines int            // threshold in lines (from config, 0=disabled)
+	largePasteLines int               // threshold in lines (from config, 0=disabled)
 	cursorVisible   bool
 	hintIndex       int // selected row in the slash-command suggestion popup
 	layoutWidth     int // last known total composer width, for wrap-aware height
@@ -72,6 +73,17 @@ type Editor struct {
 type CommandHint struct {
 	Name        string
 	Description string
+	// Insert is what completion writes when this hint is chosen. It defaults to
+	// Name; a Skill hint uses it to write the reference that resolves to exactly
+	// one package while the row still shows a readable name.
+	Insert string
+}
+
+func (h CommandHint) insertText() string {
+	if strings.TrimSpace(h.Insert) != "" {
+		return h.Insert
+	}
+	return h.Name
 }
 
 // NewEditor creates a new Editor component.
@@ -150,6 +162,15 @@ func NewEditor(c *common.Common, editorCfg *config.EditorConfig) *Editor {
 // SetCommandHints sets slash-command suggestions supplied by the application.
 func (e *Editor) SetCommandHints(commands []CommandHint) {
 	e.commands = append([]CommandHint(nil), commands...)
+}
+
+// SetSkillFilter installs the application's matcher for `$` completion. The
+// application owns matching so completion can reuse the same metadata ranker the
+// Skill catalog uses instead of a second, weaker prefix test, and so the
+// inventory can be fetched where usage recency lives. Until one is installed the
+// `$` popup stays closed rather than offering a weaker match.
+func (e *Editor) SetSkillFilter(fn func(query string) []CommandHint) {
+	e.skillFilter = fn
 }
 
 // Update handles messages, intercepting paste events (both bracketed paste
@@ -563,22 +584,35 @@ func editorWrappedRowCount(value string, width int) int {
 	return rows
 }
 
+// suggestionRows is the number of popup rows shown at once. It windows the
+// rendering only; every match stays selectable.
+const suggestionRows = 8
+
 func (e *Editor) matchingCommands() []CommandHint {
 	raw := e.textarea.Value()
 	val := strings.TrimSpace(raw)
 	// Check the raw value for spaces/newlines (not the trimmed one) so a trailing
 	// space — e.g. just after Tab-completing a command — closes the popup.
-	if val == "" || !strings.HasPrefix(val, "/") || strings.Contains(raw, " ") || strings.Contains(raw, "\n") {
+	if val == "" || strings.Contains(raw, " ") || strings.Contains(raw, "\n") {
+		return nil
+	}
+	var pool []CommandHint
+	switch {
+	case strings.HasPrefix(val, "/"):
+		pool = e.commands
+	case strings.HasPrefix(val, "$"):
+		if e.skillFilter == nil {
+			return nil
+		}
+		return e.skillFilter(strings.TrimPrefix(val, "$"))
+	default:
 		return nil
 	}
 
 	var matches []CommandHint
-	for _, cmd := range e.commands {
+	for _, cmd := range pool {
 		if strings.HasPrefix(cmd.Name, val) {
 			matches = append(matches, cmd)
-			if len(matches) >= 8 {
-				break
-			}
 		}
 	}
 	return matches
@@ -607,7 +641,7 @@ func (e *Editor) AcceptSuggestion() bool {
 		return false
 	}
 	idx := e.clampedHintIndex(len(matches))
-	e.textarea.SetValue(matches[idx].Name + " ")
+	e.textarea.SetValue(matches[idx].insertText() + " ")
 	e.textarea.CursorEnd()
 	e.hintIndex = 0
 	return true
@@ -629,6 +663,15 @@ func (e *Editor) renderSuggestions(width int) string {
 		return ""
 	}
 	selected := e.clampedHintIndex(len(matches))
+	start := 0
+	if selected >= suggestionRows {
+		start = selected - suggestionRows + 1
+	}
+	end := start + suggestionRows
+	if end > len(matches) {
+		end = len(matches)
+	}
+	window := matches[start:end]
 
 	// codex-style: highlight the selected row by foreground color only (bright
 	// cyan for the whole row), dim the rest. No background blocks — those read as
@@ -646,14 +689,17 @@ func (e *Editor) renderSuggestions(width int) string {
 		descW = 12
 	}
 
-	rows := make([]string, 0, len(matches))
-	for i, cmd := range matches {
+	rows := make([]string, 0, len(window))
+	for i, cmd := range window {
 		desc := truncateASCII(cmd.Description, descW)
 		ns, ds := nameStyle, descStyle
-		if i == selected {
+		if start+i == selected {
 			ns, ds = selNameStyle, selDescStyle
 		}
 		rows = append(rows, lipgloss.JoinHorizontal(lipgloss.Top, ns.Render(cmd.Name), ds.Render(desc)))
+	}
+	if len(matches) > len(window) {
+		rows = append(rows, descStyle.Render(fmt.Sprintf("  %d of %d", selected+1, len(matches))))
 	}
 
 	return lipgloss.NewStyle().

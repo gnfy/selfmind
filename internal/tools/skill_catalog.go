@@ -3,6 +3,7 @@ package tools
 import (
 	"embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -169,8 +170,17 @@ func InstallSkillFromSource(tenantID, source, name string, force bool, invocatio
 		return "", err
 	}
 	skillDir := filepath.Join(dir, safeName)
-	if existing, err := findSkill(tenantID, safeName, invocation...); err == nil && filepath.Clean(existing.Root) != filepath.Clean(dir) && !force {
+	existing, findErr := findSkill(tenantID, safeName, invocation...)
+	switch {
+	case findErr == nil && filepath.Clean(existing.Root) != filepath.Clean(dir) && !force:
 		return "", fmt.Errorf("skill %q already exists in %s root (%s); pass force only if you want the user skill root to shadow it", safeName, emptyDefault(existing.Scope, "unknown"), existing.Path)
+	case !force:
+		// An ambiguous name means the Skill already exists in more than one
+		// root, which is the same collision the case above refuses.
+		var ambiguous *skillAmbiguousError
+		if errors.As(findErr, &ambiguous) {
+			return "", fmt.Errorf("cannot install %q: %w", safeName, findErr)
+		}
 	}
 	collisions := existingSkillInstallCollisions(dir, safeName)
 	if len(collisions) > 0 && !force {

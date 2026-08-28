@@ -3,6 +3,7 @@ package tools
 import (
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -27,8 +28,8 @@ func RankSkillCandidatesForTenant(tenantID, query string, limit int, invocation 
 		return nil, err
 	}
 	active := make([]SkillInfo, 0, len(skills))
-	for _, info := range skills {
-		if info.State == SkillStateActive {
+	for _, info := range primarySkillsByName(skills) {
+		if info.State == SkillStateActive && info.ModelInvocable {
 			active = append(active, info)
 		}
 	}
@@ -47,8 +48,8 @@ func CatalogSkillCandidatesForTenant(tenantID, query string, invocation ...map[s
 		return nil, err
 	}
 	active := make([]SkillInfo, 0, len(skills))
-	for _, info := range skills {
-		if info.State == SkillStateActive {
+	for _, info := range primarySkillsByName(skills) {
+		if info.State == SkillStateActive && info.ModelInvocable {
 			active = append(active, info)
 		}
 	}
@@ -98,6 +99,47 @@ type SkillDescriptionDiagnostic struct {
 	Writable bool
 	Chars    int
 	Bytes    int
+}
+
+// SkillFrontMatterDiagnostic reports front-matter keys the parser does not
+// model. The keys stay ignored, but an author-declared constraint must not
+// disappear without a trace.
+type SkillFrontMatterDiagnostic struct {
+	Name       string
+	Path       string
+	Scope      string
+	Source     string
+	Provenance string
+	Writable   bool
+	Keys       []string
+}
+
+// InspectSkillFrontMatterForTenant is a read-only authoring-contract check. It
+// names the owning file and the unmodelled keys so a constraint an external
+// author declared can be seen rather than silently dropped.
+func InspectSkillFrontMatterForTenant(tenantID string, invocation ...map[string]interface{}) ([]SkillFrontMatterDiagnostic, error) {
+	skills, err := ListSkillsForTenant(tenantID, true, invocation...)
+	if err != nil {
+		return nil, err
+	}
+	var issues []SkillFrontMatterDiagnostic
+	for _, info := range skills {
+		mainPath := skillMainFilePath(info)
+		data, readErr := os.ReadFile(mainPath)
+		if readErr != nil {
+			continue
+		}
+		_, _, unknown, parseErr := parseFrontMatterWithUnknownKeys(string(data))
+		if parseErr != nil || len(unknown) == 0 {
+			continue
+		}
+		sort.Strings(unknown)
+		issues = append(issues, SkillFrontMatterDiagnostic{
+			Name: info.Name, Path: mainPath, Scope: info.Scope, Source: info.Source,
+			Provenance: info.Provenance, Writable: info.Writable, Keys: unknown,
+		})
+	}
+	return issues, nil
 }
 
 // InspectSkillDescriptionsForTenant is a read-only authoring-contract check.
@@ -621,7 +663,7 @@ func ReadSkillPayloadForTenant(tenantID, name, filePath string, invocation ...ma
 	if strings.TrimSpace(name) == "" {
 		return SkillInfo{}, "", nil, fmt.Errorf("name is required")
 	}
-	info, err := findSkill(tenantID, name, invocation...)
+	info, err := findSkillByPrecedence(tenantID, name, invocation...)
 	if err != nil {
 		return SkillInfo{}, "", nil, err
 	}
@@ -656,7 +698,14 @@ func BuildSkillInvocationMessageForTenant(tenantID, name, instruction string, in
 }
 
 func buildTypedSkillInvocationForTenant(tenantID, name, instruction string, invocation ...map[string]interface{}) (kernel.ExplicitSkillInvocation, string, string, error) {
-	pack, err := ReadSkillPackageForTenant(tenantID, name, invocation...)
+	// Explicit invocation names a Skill the person typed, so an ambiguous bare
+	// name is refused with its qualified candidates instead of resolving to
+	// whichever root happens to win.
+	resolved, err := findSkill(tenantID, name, invocation...)
+	if err != nil {
+		return kernel.ExplicitSkillInvocation{}, "", "", err
+	}
+	pack, err := ReadSkillPackageForTenant(tenantID, resolved.Path, invocation...)
 	if err != nil {
 		return kernel.ExplicitSkillInvocation{}, "", "", err
 	}
@@ -689,9 +738,18 @@ func ResolveTypedSkillInvocationForTenant(tenantID, slashCommand, instruction st
 	}
 	skill, err := findSkillByCommand(tenantID, name, invocation...)
 	if err != nil {
+		// A name no Skill answers to is not a Skill command and falls through
+		// to ordinary handling. An ambiguous name is a Skill command that
+		// cannot be resolved, so its refusal must reach the person.
+		var ambiguous *skillAmbiguousError
+		if errors.As(err, &ambiguous) {
+			return kernel.ExplicitSkillInvocation{}, "", "", "skill", false, err
+		}
 		return kernel.ExplicitSkillInvocation{}, "", "", "", false, nil
 	}
-	resolved, prompt, display, err := buildTypedSkillInvocationForTenant(tenantID, skill.Name, instruction, invocation...)
+	// The resolved path is passed on because two roots can share a qualified
+	// name while a path is always unique.
+	resolved, prompt, display, err := buildTypedSkillInvocationForTenant(tenantID, skill.Path, instruction, invocation...)
 	return resolved, prompt, display, "skill", err == nil, err
 }
 
@@ -700,21 +758,42 @@ func ResolveSkillInvocationForTenant(tenantID, slashCommand, instruction string,
 	return prompt, display, ok, err
 }
 
+// findSkillByCommand resolves the /<skill-name> form. A qualified or path
+// reference is accepted so the person can type back exactly what an ambiguity
+// refusal offered, and a bare name that several Skills answer to is refused
+// rather than resolved to whichever root wins.
 func findSkillByCommand(tenantID, command string, invocation ...map[string]interface{}) (SkillInfo, error) {
 	skills, err := ListSkillsForTenant(tenantID, false, invocation...)
 	if err != nil {
 		return SkillInfo{}, err
 	}
-	want := normalizeSkillCommandName(command)
+	enabled := make([]SkillInfo, 0, len(skills))
 	for _, s := range skills {
-		if s.State == SkillStateDisabled {
-			continue
-		}
-		if normalizeSkillCommandName(s.Name) == want {
-			return s, nil
+		if s.State != SkillStateDisabled {
+			enabled = append(enabled, s)
 		}
 	}
-	return SkillInfo{}, fmt.Errorf("skill command not found: /%s", command)
+	// The reference is not stripped of a leading separator here: the caller has
+	// already removed the slash that made this a command, so what remains may be
+	// an absolute discovery path.
+	reference := strings.TrimSpace(command)
+	matches := matchSkillsByName(enabled, reference)
+	if len(matches) == 0 {
+		want := normalizeSkillCommandName(reference)
+		for _, s := range enabled {
+			if normalizeSkillCommandName(s.Name) == want {
+				matches = append(matches, s)
+			}
+		}
+	}
+	switch len(matches) {
+	case 1:
+		return matches[0], nil
+	case 0:
+		return SkillInfo{}, fmt.Errorf("skill command not found: /%s", command)
+	default:
+		return SkillInfo{}, &skillAmbiguousError{Name: reference, Candidates: qualifiedSkillNames(matches)}
+	}
 }
 
 func normalizeSkillCommandName(name string) string {

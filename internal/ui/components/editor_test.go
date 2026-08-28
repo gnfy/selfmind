@@ -118,3 +118,88 @@ func TestEditorSuggestionNavigation(t *testing.T) {
 		t.Fatal("popup should close after completion (value has a space)")
 	}
 }
+
+func newHintEditor(commands, skills []CommandHint) *Editor {
+	e := &Editor{textarea: textarea.New()}
+	e.SetCommandHints(commands)
+	if skills != nil {
+		e.SetSkillFilter(func(query string) []CommandHint {
+			var matches []CommandHint
+			for _, hint := range skills {
+				if strings.HasPrefix(hint.Name, "$"+query) {
+					matches = append(matches, hint)
+				}
+			}
+			return matches
+		})
+	}
+	return e
+}
+
+// Completion is prefix-directed: `/` offers commands and `$` offers Skills, and
+// neither pool leaks into the other's popup.
+func TestSuggestionPoolFollowsThePrefix(t *testing.T) {
+	e := newHintEditor(
+		[]CommandHint{{Name: "/skills", Description: "manage skills"}},
+		[]CommandHint{{Name: "$grilling", Description: "stress-test a plan", Insert: "/external:grilling"}},
+	)
+
+	e.textarea.SetValue("/sk")
+	matches := e.matchingCommands()
+	if len(matches) != 1 || matches[0].Name != "/skills" {
+		t.Fatalf("slash prefix matched %+v", matches)
+	}
+
+	e.textarea.SetValue("$gr")
+	matches = e.matchingCommands()
+	if len(matches) != 1 || matches[0].Name != "$grilling" {
+		t.Fatalf("dollar prefix matched %+v", matches)
+	}
+
+	e.textarea.SetValue("gr")
+	if matches := e.matchingCommands(); len(matches) != 0 {
+		t.Fatalf("bare text opened a popup: %+v", matches)
+	}
+}
+
+// A Skill hint completes to the reference that resolves it, not to the label the
+// row shows.
+func TestAcceptSuggestionWritesTheInsertionText(t *testing.T) {
+	e := newHintEditor(nil, []CommandHint{
+		{Name: "$grilling", Description: "stress-test a plan", Insert: "/external:grilling"},
+	})
+	e.textarea.SetValue("$gr")
+
+	if !e.AcceptSuggestion() {
+		t.Fatal("suggestion was not applied")
+	}
+	if got := e.textarea.Value(); got != "/external:grilling " {
+		t.Fatalf("completed to %q", got)
+	}
+}
+
+// Every match stays selectable: the popup windows its rows rather than dropping
+// candidates, so a Skill past the visible rows is still reachable.
+func TestSuggestionsKeepEveryMatchSelectable(t *testing.T) {
+	var skills []CommandHint
+	for _, suffix := range []string{"a", "b", "c", "d", "e", "f", "g", "h", "i", "j"} {
+		skills = append(skills, CommandHint{Name: "$flow-" + suffix, Insert: "/user:flow-" + suffix})
+	}
+	e := newHintEditor(nil, skills)
+	e.textarea.SetValue("$flow")
+
+	if got := len(e.matchingCommands()); got != len(skills) {
+		t.Fatalf("candidate list truncated to %d of %d", got, len(skills))
+	}
+	// Walk one past the visible window and complete: the tenth entry must be
+	// reachable even though only suggestionRows are drawn.
+	for i := 0; i < len(skills)-1; i++ {
+		e.MoveSuggestion(1)
+	}
+	if !e.AcceptSuggestion() {
+		t.Fatal("suggestion was not applied")
+	}
+	if got := e.textarea.Value(); got != "/user:flow-j " {
+		t.Fatalf("completed to %q", got)
+	}
+}

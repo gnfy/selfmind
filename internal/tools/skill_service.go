@@ -16,6 +16,15 @@ const (
 	SkillScopeUser      = "user"
 	SkillScopeWorkspace = "workspace"
 	SkillScopeExternal  = "external"
+)
+
+// Skill provenance is the authorship tier, independent of scope. Scope says who
+// owns the location; provenance says whether SelfMind or this repository
+// authored what lives there. External assets are untrusted data below operator,
+// user, and safety policy, and are never rewritten automatically.
+const (
+	SkillProvenanceFirstParty = "first-party"
+	SkillProvenanceExternal   = "external"
 
 	// developerAgentOnlySkillMarker lets a repository keep Agent Skills for
 	// coding assistants under .agents/skills without exposing those instructions
@@ -26,11 +35,12 @@ const (
 
 // SkillRoot describes one directory that can contain skill packages.
 type SkillRoot struct {
-	Path     string
-	Scope    string
-	Source   string
-	Writable bool
-	Priority int
+	Path       string
+	Scope      string
+	Source     string
+	Provenance string
+	Writable   bool
+	Priority   int
 }
 
 // SkillStorage is the immutable filesystem root for user/control-tenant Skill
@@ -110,6 +120,20 @@ func selfmindBaseDir(invocation ...map[string]interface{}) (string, error) {
 	return filepath.Join(home, ".selfmind"), nil
 }
 
+// skillUserHomeDir resolves the person's home directory for the cross-vendor
+// root. It is deliberately independent of the SelfMind asset base, which a
+// storage override may relocate.
+func skillUserHomeDir() string {
+	if home := strings.TrimSpace(os.Getenv("HOME")); home != "" {
+		return home
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return home
+}
+
 func userSkillsDirForTenant(tenantID string, invocation ...map[string]interface{}) (string, error) {
 	baseDir, err := selfmindBaseDir(invocation...)
 	if err != nil {
@@ -141,18 +165,19 @@ func managedWorkspaceSkillsDirForTenant(tenantID, workspaceID string, invocation
 // ResolveWritableSkillRootForTenant.
 func SkillRootsForTenant(tenantID string, invocation ...map[string]interface{}) ([]SkillRoot, error) {
 	var roots []SkillRoot
-	addExistingRoot := func(path, scope, source string, writable bool, priority int) {
+	addExistingRoot := func(path, scope, source, provenance string, writable bool, priority int) {
 		if strings.TrimSpace(path) == "" {
 			return
 		}
 		clean := filepath.Clean(os.ExpandEnv(path))
 		if st, err := os.Stat(clean); err == nil && st.IsDir() {
 			roots = append(roots, SkillRoot{
-				Path:     clean,
-				Scope:    scope,
-				Source:   source,
-				Writable: writable,
-				Priority: priority,
+				Path:       clean,
+				Provenance: provenance,
+				Scope:      scope,
+				Source:     source,
+				Writable:   writable,
+				Priority:   priority,
 			})
 		}
 	}
@@ -173,7 +198,7 @@ func SkillRootsForTenant(tenantID string, invocation ...map[string]interface{}) 
 		// follows them but precedes external and user-global assets.
 		roots = append(roots, SkillRoot{
 			Path: managedRoot, Scope: SkillScopeWorkspace, Source: SkillSourceAgentCreated,
-			Writable: true, Priority: 35,
+			Provenance: SkillProvenanceFirstParty, Writable: true, Priority: 35,
 		})
 	}
 	if scope, ok := currentExecutionScopeAny(args); ok {
@@ -197,19 +222,19 @@ func SkillRootsForTenant(tenantID string, invocation ...map[string]interface{}) 
 	if workspaceSkillsAllowed && workspaceStart != "" {
 		priority := 10
 		for _, dir := range workspaceDirs {
-			addExistingRoot(filepath.Join(dir, ".selfmind", "skills"), SkillScopeWorkspace, "workspace", true, priority)
+			addExistingRoot(filepath.Join(dir, ".selfmind", "skills"), SkillScopeWorkspace, "workspace", SkillProvenanceFirstParty, true, priority)
 			priority += 10
-			addExistingRoot(filepath.Join(dir, ".agents", "skills"), SkillScopeWorkspace, "codex-compatible", false, priority)
+			addExistingRoot(filepath.Join(dir, ".agents", "skills"), SkillScopeWorkspace, "codex-compatible", SkillProvenanceFirstParty, false, priority)
 			priority += 10
-			addExistingRoot(filepath.Join(dir, "skills"), SkillScopeWorkspace, "workspace", false, priority)
+			addExistingRoot(filepath.Join(dir, "skills"), SkillScopeWorkspace, "workspace", SkillProvenanceFirstParty, false, priority)
 			priority += 10
 		}
 	}
 	for _, path := range splitSkillRootEnv(os.Getenv("SELFMIND_SKILLS_ROOTS")) {
-		addExistingRoot(path, SkillScopeExternal, "env", false, 40)
+		addExistingRoot(path, SkillScopeExternal, "env", SkillProvenanceExternal, false, 40)
 	}
 	if path := strings.TrimSpace(os.Getenv("SELFMIND_SKILLS_DIR")); path != "" {
-		addExistingRoot(path, SkillScopeExternal, "env", true, 45)
+		addExistingRoot(path, SkillScopeExternal, "env", SkillProvenanceExternal, true, 45)
 	}
 
 	userDir, err := userSkillsDirForTenant(tenantID, invocation...)
@@ -217,12 +242,20 @@ func SkillRootsForTenant(tenantID string, invocation ...map[string]interface{}) 
 		return nil, err
 	}
 	roots = append(roots, SkillRoot{
-		Path:     userDir,
-		Scope:    SkillScopeUser,
-		Source:   SkillSourceManual,
-		Writable: true,
-		Priority: 100,
+		Path:       userDir,
+		Scope:      SkillScopeUser,
+		Source:     SkillSourceManual,
+		Provenance: SkillProvenanceFirstParty,
+		Writable:   true,
+		Priority:   100,
 	})
+	// Cross-vendor Agent Skills convention. A Skill the person already keeps
+	// for another agent works here with no further action, while the writable
+	// user root above keeps precedence so an explicit install is never
+	// shadowed by this default location.
+	if home := skillUserHomeDir(); home != "" {
+		addExistingRoot(filepath.Join(home, ".agents", "skills"), SkillScopeUser, "agents-compatible", SkillProvenanceExternal, false, 105)
+	}
 	// One-release compatibility window: skills previously written under the
 	// person partition remain readable, but the control-tenant root wins on
 	// name conflicts and all new writes continue to target the control tenant.
@@ -230,7 +263,7 @@ func SkillRootsForTenant(tenantID string, invocation ...map[string]interface{}) 
 		personID := strings.TrimSpace(scope.PersonID)
 		if personID != "" && personID != fallbackTenant(tenantID) {
 			if legacyDir, legacyErr := userSkillsDirForTenant(personID, invocation...); legacyErr == nil {
-				addExistingRoot(legacyDir, SkillScopeUser, "legacy-person", false, 110)
+				addExistingRoot(legacyDir, SkillScopeUser, "legacy-person", SkillProvenanceFirstParty, false, 110)
 			}
 		}
 	}

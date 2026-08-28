@@ -94,7 +94,7 @@ func TestPickDaemonExecutable(t *testing.T) {
 	}
 }
 
-func TestMergeRestartEnvironmentPreservesPathAndProxy(t *testing.T) {
+func TestMergeRestartEnvironmentUsesOnlyCurrentProxy(t *testing.T) {
 	sep := string(os.PathListSeparator)
 	current := []string{"PATH=" + strings.Join([]string{"/usr/bin"}, sep), "HTTP_PROXY=http://new-proxy:8080", "NO_PROXY="}
 	previous := []string{
@@ -121,8 +121,8 @@ func TestMergeRestartEnvironmentPreservesPathAndProxy(t *testing.T) {
 	if strings.Contains(joined, "http_proxy=http://old-proxy:8080") {
 		t.Fatalf("old case variant must not override a current proxy: %v", got)
 	}
-	if !strings.Contains(joined, "https_proxy=http://old-proxy:8080") {
-		t.Fatalf("missing proxy key must survive restart: %v", got)
+	if strings.Contains(joined, "https_proxy=http://old-proxy:8080") {
+		t.Fatalf("a proxy missing from the current environment must not survive restart: %v", got)
 	}
 	if strings.Contains(joined, "NO_PROXY=localhost") {
 		t.Fatalf("an explicitly empty current value must clear the old value: %v", got)
@@ -132,22 +132,21 @@ func TestMergeRestartEnvironmentPreservesPathAndProxy(t *testing.T) {
 	}
 }
 
-func TestMergeRestartEnvironmentKeepsProxyCaseVariantsFromOldDaemon(t *testing.T) {
+func TestMergeRestartEnvironmentDoesNotResurrectOldProxy(t *testing.T) {
 	got := mergeRestartEnvironment(
 		[]string{"PATH=/usr/bin"},
 		[]string{"HTTP_PROXY=http://proxy:8080", "http_proxy=http://proxy:8080"},
 	)
 	joined := strings.Join(got, "\n")
-	if !strings.Contains(joined, "HTTP_PROXY=http://proxy:8080") ||
-		!strings.Contains(joined, "http_proxy=http://proxy:8080") {
-		t.Fatalf("proxy case variants must survive an environment-less restart: %v", got)
+	if strings.Contains(joined, "PROXY=") || strings.Contains(joined, "proxy=") {
+		t.Fatalf("old proxy settings must not survive an environment-less restart: %v", got)
 	}
 }
 
 func TestRestartEnvironmentFromBlockFiltersKeys(t *testing.T) {
 	block := []byte("PATH=/usr/bin\x00HTTPS_PROXY=http://proxy:8080\x00no_proxy=localhost\x00TOKEN=secret\x00")
 	got := restartEnvironmentFromBlock(block)
-	want := []string{"PATH=/usr/bin", "HTTPS_PROXY=http://proxy:8080", "no_proxy=localhost"}
+	want := []string{"PATH=/usr/bin"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("restartEnvironmentFromBlock() = %v, want %v", got, want)
 	}

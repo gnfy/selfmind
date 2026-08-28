@@ -1,8 +1,7 @@
-//go:build !darwin
+//go:build !darwin && !linux
 
 package cliapp
 
-// launchdManagesGateway is macOS-only. Elsewhere the daemon inherits the
-// environment it was started with, which `env refresh --restart` replaces
-// directly.
-func launchdManagesGateway() bool { return false }
+// Unsupported platforms use an on-demand daemon whose environment can be
+// replaced directly by `env refresh --restart`.
+func managedServicePinsEnvironment() bool { return false }

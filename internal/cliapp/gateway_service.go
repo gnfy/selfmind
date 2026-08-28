@@ -243,16 +243,18 @@ func systemdValue(value string) string {
 	return value
 }
 
-var servicePassthroughEnvironmentKeyMarkers = []string{"PROXY", "CONFIG", "_HOME", "KUBECONFIG"}
+var servicePassthroughEnvironmentKeyMarkers = []string{"CONFIG", "_HOME", "KUBECONFIG"}
 
 var servicePassthroughEnvironmentExactKeys = map[string]bool{
-	"SHELL": true, "LANG": true, "LC_ALL": true, "LC_CTYPE": true, "NO_PROXY": true, "no_proxy": true,
+	"SHELL": true, "LANG": true, "LC_ALL": true, "LC_CTYPE": true,
 }
 
-// servicePassthroughEnvironment picks only non-credential locations, locale,
-// and proxy settings for an operating-system service definition. Service files
-// may be readable by other local processes, so names or values that resemble
-// credentials never cross this boundary.
+// servicePassthroughEnvironment picks only non-credential configuration
+// locations and locale for an operating-system service definition. Ambient
+// proxy variables are intentionally process-local: persisting them here makes
+// a temporary shell proxy outlive the network state it represented. Service
+// files may be readable by other local processes, so names or values that
+// resemble credentials never cross this boundary.
 func servicePassthroughEnvironment(parent []string) []string {
 	out := make([]string, 0, 8)
 	for _, entry := range parent {

@@ -50,19 +50,27 @@ func (m *uiModel) handleCommand(input string) tea.Cmd {
 	// replies with no visible questions (observed live). addMessage covers
 	// both surfaces: hybrid scrollback (commit) and the legacy viewport.
 	m.addMessage("user", input)
-	if cmd, ok := slashCommandIndex[parts[0]]; ok {
+	var cmd tea.Cmd
+	switch entry, known := slashCommandIndex[parts[0]]; {
+	case known:
 		// In daemon-client mode agent-backed commands route through the tool
 		// dispatch seam (m.dispatch → daemon) or through the message processor
 		// (/status, /tasks). The few remaining local-only controls (such as model
 		// switching) detect client mode themselves and return a clear notice. So
 		// no top-level gate is needed for safety.
-		return cmd.Run(m, parts[1:])
-	}
-	if strings.HasPrefix(parts[0], "/") {
+		cmd = entry.Run(m, parts[1:])
+	case strings.HasPrefix(parts[0], "/"):
 		instruction := strings.TrimSpace(strings.TrimPrefix(input, parts[0]))
-		return m.handleSkillSlash(parts[0], instruction)
+		cmd = m.handleSkillSlash(parts[0], instruction)
+	default:
+		return nil
 	}
-	return nil
+	if skillCommandMayChangeInventory(parts[0]) {
+		// Sequence, not batch: installing or deleting a Skill completes
+		// asynchronously, and reading the inventory concurrently would race it.
+		return tea.Sequence(cmd, m.loadSkillCompletion())
+	}
+	return cmd
 }
 
 func (m *uiModel) handleSkillSlash(slashName, instruction string) tea.Cmd {

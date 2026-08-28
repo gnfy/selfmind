@@ -165,10 +165,11 @@ func gatewayServiceInstall(configPath string, previousPID int) (gatewayServiceIn
 		}
 	}
 	// A launchd agent does NOT inherit the installing shell's environment, so a
-	// plist carrying only HOME/PATH left the daemon without the operator's proxy
-	// settings or tool configuration locations — tools then failed on macOS for
-	// reasons that looked nothing like a missing variable. Carry the generic,
-	// non-credential ones across.
+	// plist carrying only HOME/PATH left the daemon without the operator's tool
+	// configuration locations. Carry stable, non-credential locations and locale
+	// across, but never snapshot ambient proxy variables: standard HTTP clients
+	// may use variables actually present in the daemon environment, while
+	// VPN/TUN/system routing remains owned by the host.
 	//
 	// The plist is world-readable (0644), so a credential-shaped name or a value
 	// that embeds credentials is never written.

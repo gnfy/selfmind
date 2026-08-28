@@ -193,7 +193,10 @@ type uiModel struct {
 	// additionalRoots is the invocation-local --add-dir overlay supplied by
 	// cliapp. It rides every new agent turn but is never persisted as workspace
 	// configuration by the TUI.
-	additionalRoots   []string
+	additionalRoots []string
+	// skillCompletion is the cached `$` completion inventory. It is refreshed
+	// rather than rebuilt per keystroke because discovery walks the filesystem.
+	skillCompletion   []tools.SkillCompletionCandidate
 	toolDispatchFn    func(tool string, args map[string]interface{}) (string, error) // client mode: run management tools on the daemon
 	approvalResponder func(approvalID, decision, scope, grantKey string) error       // client mode: answer a daemon tool-approval request (scope is daemon-issued; grantKey is a rule the ask offered)
 	steerFn           func(text string) error                                        // client mode: forward mid-turn guidance to the daemon's active run
@@ -608,7 +611,8 @@ func (m *uiModel) Init() tea.Cmd {
 	if m.modelChangeObserver != nil {
 		observe = m.observeModelChange(false, 0)
 	}
-	return tea.Batch(m.spinner.Tick, cursorBlinkTick(), observe)
+	m.editor.SetSkillFilter(m.skillCompletionHints)
+	return tea.Batch(m.spinner.Tick, cursorBlinkTick(), observe, m.loadSkillCompletion())
 }
 
 func (m *uiModel) anyToolRunning() bool {

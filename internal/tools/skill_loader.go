@@ -21,9 +21,13 @@ type SkillDefinition struct {
 	Parameters  []string `json:"parameters,omitempty"` // required parameter names
 	Examples    []string `json:"examples,omitempty"`   // usage examples
 	Confidence  float64  `json:"confidence,omitempty"` // 0.0-1.0, auto-archive threshold
-	Source      string   `json:"source,omitempty"`     // source file path
-	ToolName    string   `json:"tool_name,omitempty"`  // 对应的工具名（如果有）
-	Handler     string   `json:"handler,omitempty"`    // Go function reference (for codegen)
+	// ModelInvocation is nil when the author expressed no preference. False
+	// keeps the Skill user-invocable only: it leaves the model catalog and
+	// candidate ranking while both slash forms still resolve it.
+	ModelInvocation *bool  `json:"model_invocation,omitempty"`
+	Source          string `json:"source,omitempty"`    // source file path
+	ToolName        string `json:"tool_name,omitempty"` // 对应的工具名（如果有）
+	Handler         string `json:"handler,omitempty"`   // Go function reference (for codegen)
 }
 
 const (
@@ -197,10 +201,17 @@ func rejectCredentialNames(value string) error {
 	return nil
 }
 
+// parseFrontMatter keeps the two-value view used across the package. Callers
+// that surface authoring diagnostics use parseFrontMatterWithUnknownKeys.
 func parseFrontMatter(content string) (SkillDefinition, string, error) {
+	def, body, _, err := parseFrontMatterWithUnknownKeys(content)
+	return def, body, err
+}
+
+func parseFrontMatterWithUnknownKeys(content string) (SkillDefinition, string, []string, error) {
 	lines := strings.Split(content, "\n")
 	if len(lines) < 3 || lines[0] != "---" {
-		return SkillDefinition{}, content, nil // 没有 front matter，整体当 body
+		return SkillDefinition{}, content, nil, nil // 没有 front matter，整体当 body
 	}
 
 	var yamlLines []string
@@ -214,22 +225,44 @@ func parseFrontMatter(content string) (SkillDefinition, string, error) {
 	}
 
 	if bodyStart == -1 {
-		return SkillDefinition{}, content, nil
+		return SkillDefinition{}, content, nil, nil
 	}
 
 	yamlStr := strings.Join(yamlLines, "\n")
 	var def SkillDefinition
 	// 简单的 YAML 解析（避免引入外部依赖）
-	if err := parseSimpleYAML(yamlStr, &def); err != nil {
-		return SkillDefinition{}, "", err
+	unknown, err := parseSimpleYAML(yamlStr, &def)
+	if err != nil {
+		return SkillDefinition{}, "", nil, err
 	}
 
 	body := strings.Join(lines[bodyStart:], "\n")
-	return def, strings.TrimSpace(body), nil
+	return def, strings.TrimSpace(body), unknown, nil
+}
+
+// knownSkillFrontMatterKeys are the scalar and array keys this parser models.
+// Anything else is still ignored, but it is reported so Doctor can name the
+// owning file: an author-declared constraint must not disappear silently.
+var knownSkillFrontMatterKeys = map[string]bool{
+	"name": true, "description": true, "tool_name": true, "confidence": true,
+	"handler": true, "source": true, "trigger": true, "parameters": true,
+	"examples": true, "model_invocation": true,
+	"disable-model-invocation": true, "disable_model_invocation": true,
+}
+
+func parseSkillBool(value string) (bool, bool) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "true", "yes", "on", "1":
+		return true, true
+	case "false", "no", "off", "0":
+		return false, true
+	}
+	return false, false
 }
 
 // parseSimpleYAML 轻量级 YAML 解析（支持 SkillDefinition 的字段）
-func parseSimpleYAML(yaml string, def *SkillDefinition) error {
+func parseSimpleYAML(yaml string, def *SkillDefinition) ([]string, error) {
+	var unknown []string
 	lines := strings.Split(yaml, "\n")
 	var currentKey string
 	var inArray bool
@@ -308,11 +341,25 @@ func parseSimpleYAML(yaml string, def *SkillDefinition) error {
 			def.Handler = val
 		case "source":
 			def.Source = val
+		case "model_invocation":
+			if parsed, ok := parseSkillBool(val); ok {
+				def.ModelInvocation = &parsed
+			}
+		case "disable-model-invocation", "disable_model_invocation":
+			// External spelling of the same constraint, inverted.
+			if parsed, ok := parseSkillBool(val); ok {
+				allowed := !parsed
+				def.ModelInvocation = &allowed
+			}
+		default:
+			if !knownSkillFrontMatterKeys[key] {
+				unknown = append(unknown, key)
+			}
 		}
 	}
 
 	flushArray()
-	return nil
+	return unknown, nil
 }
 
 func (sl *SkillLoader) registerSkillTool(def SkillDefinition, body string, steps []string) {

@@ -35,6 +35,29 @@ type Registry struct {
 	clarifyFn ClarifyHandler
 	// middleware 链
 	middleware []Middleware
+	// attributionFn observes completed calls so implicit Skill use can be
+	// recorded. It is not a middleware: middlewares govern whether and how a
+	// call runs, while this only watches what already ran.
+	attributionFn SkillAttributionObserver
+}
+
+// SkillAttributionObserver is notified after a tool call completes without
+// error. Attribution means content actually reached the model, so a failed call
+// is not use.
+type SkillAttributionObserver func(toolName string, args map[string]interface{})
+
+// InjectSkillAttributionObserver installs the observer. Wiring owns it because
+// recording needs the control store.
+func (r *Registry) InjectSkillAttributionObserver(fn SkillAttributionObserver) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.attributionFn = fn
+}
+
+func (r *Registry) skillAttributionObserver() SkillAttributionObserver {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.attributionFn
 }
 
 var globalRegistry = &Registry{
@@ -120,6 +143,11 @@ func (r *Registry) Dispatch(name string, args map[string]interface{}) (string, e
 	}
 	exec := r.Wrap(t, r.Middlewares())
 	result, err := exec(args)
+	if err == nil {
+		if observe := r.skillAttributionObserver(); observe != nil {
+			observe(name, args)
+		}
+	}
 	// Coercion deliberately creates a detached argument map. Copy back only the
 	// daemon-owned execution-boundary fields needed to record what actually ran;
 	// never reflect arbitrary tool mutations into the caller's map.

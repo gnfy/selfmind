@@ -321,6 +321,14 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, m.scheduleStreamFlush()
 
+	case MsgSkillCompletionLoaded:
+		// A refresh failure leaves the previous inventory in place: completion is
+		// an affordance, and losing it silently is better than replacing it with
+		// an empty popup or an error the person did not ask for.
+		if msg.Err == nil {
+			m.skillCompletion = msg.Candidates
+		}
+		return m, nil
 	case MsgSkillInvocationResolved:
 		return m, m.finishSkillInvocationResolution(msg)
 

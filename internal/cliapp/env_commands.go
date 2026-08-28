@@ -115,20 +115,23 @@ func (a *App) runEnvRefresh(args []string) int {
 		// environment, which is not necessarily the sample.
 		fmt.Fprintln(a.stdout, "Run `selfmind env refresh --restart` to adopt it for new runs.")
 		fmt.Fprintln(a.stdout, "A plain `selfmind gateway restart` inherits this shell's environment instead.")
-		if launchdManagesGateway() {
-			fmt.Fprintln(a.stdout, "This daemon is managed by launchd, which pins its own environment: "+
-				"re-run `selfmind gateway service install` from a shell that has the new values.")
+		if managedServicePinsEnvironment() {
+			fmt.Fprintf(a.stdout, "This daemon is managed by %s, which pins its stable tool environment: ", gatewayServiceKind())
+			fmt.Fprintln(a.stdout,
+				"re-run `selfmind gateway service install` to refresh non-secret configuration locations.")
+			fmt.Fprintln(a.stdout, "Managed service definitions do not persist shell proxy variables; "+
+				"VPN/TUN or operating-system routing owns transparent network egress.")
 		}
 		return 0
 	}
-	// A launchd-managed daemon takes its environment from the plist, so a restart
-	// cannot adopt a sample. Refusing is the only honest outcome: reporting
-	// success here would tell the operator the new environment is live when the
-	// service definition still pins the old one.
-	if launchdManagesGateway() {
-		fmt.Fprintln(a.stderr, "This daemon is managed by launchd, which pins its environment in the service definition.")
+	// An operating-system-managed daemon takes its environment from the service
+	// definition, so a restart cannot adopt a sample. Refusing is the only honest
+	// outcome: reporting success here would tell the operator the new environment
+	// is live when the service definition still pins the old one.
+	if managedServicePinsEnvironment() {
+		fmt.Fprintf(a.stderr, "This daemon is managed by %s, which pins its stable tool environment in the service definition.\n", gatewayServiceKind())
 		fmt.Fprintln(a.stderr, "A restart cannot adopt a sampled environment. Run `selfmind gateway service install` "+
-			"from a shell that has the new values, which rewrites the service definition, then `selfmind gateway restart`.")
+			"to rewrite the service definition. Shell proxy variables are not persisted; VPN/TUN or operating-system routing owns transparent network egress.")
 		return 1
 	}
 	fmt.Fprintln(a.stdout, "Restarting the gateway with the sampled environment...")

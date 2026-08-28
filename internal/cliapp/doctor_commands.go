@@ -94,6 +94,9 @@ func (a *App) doctor(args []string) int {
 			descriptionIssues, descriptionErr := tools.InspectSkillDescriptionsForTenant(a.tenantID(),
 				tools.WithSkillStorage(map[string]interface{}{"_tenant_id": a.tenantID()}, storage))
 			fullReport += "\n\n" + formatSkillDescriptionDiagnostics(descriptionIssues, descriptionErr)
+			frontMatterIssues, frontMatterErr := tools.InspectSkillFrontMatterForTenant(a.tenantID(),
+				tools.WithSkillStorage(map[string]interface{}{"_tenant_id": a.tenantID()}, storage))
+			fullReport += "\n\n" + formatSkillFrontMatterDiagnostics(frontMatterIssues, frontMatterErr)
 			migration, migrationErr := tools.MigratePersonSkillsToControl(skillRoot, a.tenantID(), false, tools.DefaultSkillMigrationGrace)
 			knownPersons, knownErr := store.ListPersonIDs(ctx)
 			cleanup := tools.PersonPartitionCleanupReport{Root: skillRoot}
@@ -1328,6 +1331,40 @@ func formatSkillDescriptionDiagnostics(issues []tools.SkillDescriptionDiagnostic
 		sb.WriteString("  verify: selfmind doctor --verbose\n")
 	}
 	return strings.TrimSpace(sb.String())
+}
+
+func formatSkillFrontMatterDiagnostics(issues []tools.SkillFrontMatterDiagnostic, err error) string {
+	var sb strings.Builder
+	sb.WriteString("== Skill front matter ==\n")
+	if err != nil {
+		fmt.Fprintf(&sb, "(error: %s)", oneLine(tools.RedactSensitive(err.Error()), 180))
+		return sb.String()
+	}
+	if len(issues) == 0 {
+		sb.WriteString("status: healthy")
+		return sb.String()
+	}
+	fmt.Fprintf(&sb, "[WARNING] unmodelled_keys=%d; the assets load and run, but these declarations have no effect here\n", len(issues))
+	for _, issue := range issues {
+		fmt.Fprintf(&sb, "- [WARNING] id=skill_presentation.unknown_front_matter_key code=unknown_front_matter_key component=catalog_metadata ref=%s\n", oneLine(issue.Name, 100))
+		fmt.Fprintf(&sb, "  location: %s\n", oneLine(issue.Path, 220))
+		sb.WriteString("  expected: every front-matter key is one SelfMind models\n")
+		fmt.Fprintf(&sb, "  observed: keys=%s scope=%s source=%s provenance=%s writable=%t\n",
+			oneLine(strings.Join(issue.Keys, ","), 200), issue.Scope, issue.Source,
+			emptyDoctorValue(issue.Provenance), issue.Writable)
+		sb.WriteString("  cause: the Skill was authored for another agent whose front-matter vocabulary is wider\n")
+		sb.WriteString("  owner: the Skill file shown in location\n")
+		sb.WriteString("  repair: Confirm the declaration is not load-bearing here. Remove it from a writable Skill, or accept that a read-only external asset carries a key this runtime ignores.\n")
+		sb.WriteString("  verify: selfmind doctor --verbose\n")
+	}
+	return strings.TrimSpace(sb.String())
+}
+
+func emptyDoctorValue(value string) string {
+	if strings.TrimSpace(value) == "" {
+		return "unknown"
+	}
+	return value
 }
 
 func buildPromptWorkspaceDoctorSection(store *control.Store, dataDir string, cfg *config.Config) string {

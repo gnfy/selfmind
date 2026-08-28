@@ -13,6 +13,9 @@ schema cost through bounded on-demand exposure.
 - Owner: SelfMind project owner
 - Approver: project owner
 - Review date: 2026-09-11
+- Status: paused while
+  [`external-skill-packages.md`](external-skill-packages.md) holds the active
+  slot. The review date stands; no scope item is withdrawn.
 
 ## Scope
 

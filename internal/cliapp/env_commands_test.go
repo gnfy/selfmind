@@ -44,9 +44,11 @@ func TestEnvRefreshPassesTheSampleInMemory(t *testing.T) {
 	}
 }
 
-// A world-readable launchd plist must never carry credentials, by name or by a
-// value with inline credentials.
-func TestLaunchdPassthroughExcludesCredentials(t *testing.T) {
+// A world-readable service definition must never carry credentials, by name or
+// by a value with inline credentials. The value check remains independent from
+// the passthrough allowlist: ordinary proxy URLs are non-secret values, but
+// ambient proxy variables are excluded by servicePassthroughEnvironment.
+func TestServicePassthroughCredentialFilter(t *testing.T) {
 	if !isCredentialShapedEnvName("GITHUB_TOKEN") || !isCredentialShapedEnvName("aws_secret_access_key") {
 		t.Fatal("credential-shaped names must be recognized regardless of case")
 	}
@@ -92,8 +94,8 @@ func TestEnvRefreshComparesAgainstTheDaemon(t *testing.T) {
 	if strings.Contains(source, `before := tools.SampleEnvironmentSnapshot(os.Environ(), "cli")`) {
 		t.Fatal("the CLI's own environment must not be the comparison baseline")
 	}
-	// A launchd-managed daemon takes its environment from the plist, so reporting
-	// a successful adoption after a restart would be a lie.
+	// An operating-system-managed daemon takes its environment from the installed
+	// definition, so reporting a successful adoption after a restart would be a lie.
 	if !strings.Contains(source, "A restart cannot adopt a sampled environment.") {
 		t.Fatal("launchd mode must refuse explicitly instead of appearing to succeed")
 	}

@@ -4,7 +4,7 @@ package cliapp
 
 import "fmt"
 
-func gatewayServiceInstall(string, int) (gatewayServiceInstallReceipt, error) {
+func gatewayServiceInstall(string, int, []string) (gatewayServiceInstallReceipt, error) {
 	return gatewayServiceInstallReceipt{}, fmt.Errorf("operating-system service management is unavailable")
 }
 

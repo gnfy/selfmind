@@ -58,6 +58,25 @@ func TestAggregateGatewayResponseKeepsProseAfterLastTool(t *testing.T) {
 	}
 }
 
+func TestAggregateGatewayResponseUsesTypedAssistantPhase(t *testing.T) {
+	stream := make(chan llm.StreamEvent, 3)
+	stream <- llm.StreamEvent{EventType: "stream", Phase: llm.AssistantPhaseCommentary, Content: "I am still checking."}
+	stream <- llm.StreamEvent{EventType: "stream", Phase: llm.AssistantPhaseFinalAnswer, Content: "Everything is healthy."}
+	close(stream)
+
+	server := &Server{}
+	content, _, _, hasFinal, err := server.coordinator().aggregateGatewayResponse(
+		context.Background(), "cli", nil, nil,
+		&router.HandleResponse{Stream: stream, IsStreaming: true},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasFinal || content != "Everything is healthy." {
+		t.Fatalf("content=%q hasFinal=%v, want typed final only", content, hasFinal)
+	}
+}
+
 // TestCLIAsyncResultRoutesToPreferredIM encodes the continuity promise for
 // fire-and-forget terminal runs: the final answer must reach the person's
 // preferred IM endpoint instead of vanishing (observed live: a rejected

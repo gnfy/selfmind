@@ -17,6 +17,7 @@ import (
 	"selfmind/internal/kernel/llm"
 	"selfmind/internal/modelchange"
 	"selfmind/internal/platform/config"
+	"selfmind/internal/ui/components"
 )
 
 func TestToolSemanticActionColors(t *testing.T) {
@@ -572,14 +573,11 @@ func TestStatusLineAlwaysShowsEffectiveApprovalMode(t *testing.T) {
 	}
 }
 
-func TestAssistantMessageDoesNotRenderAsBulletList(t *testing.T) {
+func TestAssistantMessageRendersWithFinalGutter(t *testing.T) {
 	rendered := stripANSI(renderAssistantMessage("hello\nworld", 80))
 
-	if strings.Contains(rendered, "•") {
-		t.Fatalf("assistant message should not use a bullet prefix: %q", rendered)
-	}
-	if !strings.Contains(rendered, "  hello") || !strings.Contains(rendered, "  world") {
-		t.Fatalf("assistant message did not render expected body: %q", rendered)
+	if !strings.Contains(rendered, "• hello world") {
+		t.Fatalf("assistant final should use the stable bullet gutter: %q", rendered)
 	}
 }
 
@@ -1311,119 +1309,33 @@ func TestSelectionActionBarIsNotRendered(t *testing.T) {
 	}
 }
 
-func TestInputHistoryNavigatesWithArrowKeys(t *testing.T) {
+func TestControllerHistoryKeepsArrowOwnershipForRecalledSlashCommand(t *testing.T) {
 	model := NewController(nil, nil, nil, "").model
-	model.recordInputHistory("first question")
-	model.recordInputHistory("second question")
+	model.editor.SeedHistory([]string{"ordinary question", "/model"}, 1024)
 
 	updated, _ := model.handleKey(tea.KeyMsg{Type: tea.KeyUp})
 	model = updated.(*uiModel)
-	if got := model.editor.Value(); got != "second question" {
-		t.Fatalf("up value = %q, want second question", got)
+	if got := model.editor.Value(); got != "/model" {
+		t.Fatalf("first Up recalled %q, want /model", got)
 	}
 
 	updated, _ = model.handleKey(tea.KeyMsg{Type: tea.KeyUp})
 	model = updated.(*uiModel)
-	if got := model.editor.Value(); got != "first question" {
-		t.Fatalf("second up value = %q, want first question", got)
-	}
-
-	updated, _ = model.handleKey(tea.KeyMsg{Type: tea.KeyDown})
-	model = updated.(*uiModel)
-	if got := model.editor.Value(); got != "second question" {
-		t.Fatalf("down value = %q, want second question", got)
-	}
-
-	updated, _ = model.handleKey(tea.KeyMsg{Type: tea.KeyDown})
-	model = updated.(*uiModel)
-	if got := model.editor.Value(); got != "" {
-		t.Fatalf("final down value = %q, want empty draft", got)
+	if got := model.editor.Value(); got != "ordinary question" {
+		t.Fatalf("second Up recalled %q, want ordinary question", got)
 	}
 }
 
-func TestInputHistoryRestoresDraft(t *testing.T) {
-	model := NewController(nil, nil, nil, "").model
-	model.recordInputHistory("previous task")
-	model.editor.SetValue("draft task")
-
-	updated, _ := model.handleKey(tea.KeyMsg{Type: tea.KeyUp})
-	model = updated.(*uiModel)
-	if got := model.editor.Value(); got != "previous task" {
-		t.Fatalf("up value = %q, want previous task", got)
+func TestComposerHistoryDispositionExcludesOnlyClearCommand(t *testing.T) {
+	for _, input := range []string{"/clear", "/CLEAR now"} {
+		if got := composerHistoryDisposition(input); got != components.ComposerHistoryNone {
+			t.Fatalf("disposition(%q) = %v, want none", input, got)
+		}
 	}
-
-	updated, _ = model.handleKey(tea.KeyMsg{Type: tea.KeyDown})
-	model = updated.(*uiModel)
-	if got := model.editor.Value(); got != "draft task" {
-		t.Fatalf("restored draft = %q, want draft task", got)
-	}
-}
-
-func TestInputHistoryDeduplicatesConsecutiveEntries(t *testing.T) {
-	model := NewController(nil, nil, nil, "").model
-
-	model.recordInputHistory("repeat")
-	model.recordInputHistory("repeat")
-
-	if got := len(model.inputHistory); got != 1 {
-		t.Fatalf("history len = %d, want 1", got)
-	}
-}
-
-func TestInputHistoryDoesNotStealMultilineArrowNavigation(t *testing.T) {
-	model := NewController(nil, nil, nil, "").model
-	model.recordInputHistory("previous")
-	model.editor.SetValue("line one\nline two")
-
-	updated, _ := model.handleKey(tea.KeyMsg{Type: tea.KeyUp})
-	model = updated.(*uiModel)
-
-	if got := model.editor.Value(); got != "line one\nline two" {
-		t.Fatalf("multiline value = %q, want unchanged multiline draft", got)
-	}
-	if model.historyIndex != -1 {
-		t.Fatalf("historyIndex = %d, want -1", model.historyIndex)
-	}
-}
-
-func TestInputHistoryDoesNotStealSoftWrappedArrowNavigation(t *testing.T) {
-	model := NewController(nil, nil, nil, "").model
-	model.recordInputHistory("previous")
-
-	// One logical line that soft-wraps across display rows: Up must move the
-	// cursor, not swap in history (matches codex composer behaviour).
-	draft := strings.Repeat("分析仓库结构", 8) // 96 display columns
-	model.editor.SetLayoutWidth(40)      // text width 36 → several wrapped rows
-	model.editor.SetValue(draft)
-
-	updated, _ := model.handleKey(tea.KeyMsg{Type: tea.KeyUp})
-	model = updated.(*uiModel)
-
-	if got := model.editor.Value(); got != draft {
-		t.Fatalf("soft-wrapped value = %q, want unchanged draft", got)
-	}
-	if model.historyIndex != -1 {
-		t.Fatalf("historyIndex = %d, want -1", model.historyIndex)
-	}
-}
-
-func TestInputHistoryContinuesFromRecalledMultilineEntry(t *testing.T) {
-	model := NewController(nil, nil, nil, "").model
-	model.recordInputHistory("older entry")
-	model.recordInputHistory("multi\nline entry")
-
-	updated, _ := model.handleKey(tea.KeyMsg{Type: tea.KeyUp})
-	model = updated.(*uiModel)
-	if got := model.editor.Value(); got != "multi\nline entry" {
-		t.Fatalf("recalled value = %q, want multi-line entry", got)
-	}
-
-	// The recall left the cursor at the end of the entry (a text boundary), so
-	// a second Up keeps browsing history instead of moving the cursor.
-	updated, _ = model.handleKey(tea.KeyMsg{Type: tea.KeyUp})
-	model = updated.(*uiModel)
-	if got := model.editor.Value(); got != "older entry" {
-		t.Fatalf("second recall = %q, want older entry", got)
+	for _, input := range []string{"/model", "/definitely-unknown", "ordinary request"} {
+		if got := composerHistoryDisposition(input); got != components.ComposerHistoryPersistent {
+			t.Fatalf("disposition(%q) = %v, want persistent", input, got)
+		}
 	}
 }
 

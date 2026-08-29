@@ -5,6 +5,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"selfmind/internal/kernel/llm"
 )
 
 const agentEventPrefix = "event:"
@@ -33,6 +35,7 @@ type PlanItem struct {
 type AgentEvent struct {
 	Type            string                 `json:"type"`
 	Content         string                 `json:"content,omitempty"`
+	Phase           llm.AssistantPhase     `json:"phase,omitempty"`
 	ToolName        string                 `json:"tool_name,omitempty"`
 	ToolCallID      string                 `json:"tool_call_id,omitempty"`
 	ToolArgs        string                 `json:"tool_args,omitempty"`

@@ -161,9 +161,9 @@ editor:
   large_paste_chars: 1000
   large_paste_lines: 10
 
-# Persistent CLI input history (up/down-arrow recall across sessions),
-# stored as ~/.selfmind/input_history.jsonl. persistence: "none" disables
-# disk writes; in-session recall still works.
+# Person-local CLI input history (up/down-arrow recall across sessions), stored
+# as ~/.selfmind/input_history.jsonl. max_bytes also bounds rich in-session
+# history; persistence: "none" disables disk writes but not in-session recall.
 history:
   persistence: "save-all"   # save-all | none
   max_bytes: 524288
@@ -297,8 +297,8 @@ type EditorConfig struct {
 	LargePasteLines int `mapstructure:"large_paste_lines" yaml:"large_paste_lines,omitempty"`
 }
 
-// HistoryConfig governs the CLI's persistent input history (the up/down-arrow
-// composer history, ~/.selfmind/input_history.jsonl). Persistence "none"
+// HistoryConfig governs CLI Composer history. MaxBytes bounds both the
+// person-local JSONL file and rich in-session snapshots. Persistence "none"
 // disables disk writes entirely; in-session history still works.
 type HistoryConfig struct {
 	Persistence string `mapstructure:"persistence" yaml:"persistence,omitempty"`

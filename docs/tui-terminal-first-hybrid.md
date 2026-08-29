@@ -20,20 +20,41 @@ stays canonical.
   bounded drop-on-full queue (key path never blocks); every append/trim/read
   holds an advisory flock on a `.lock` sidecar (O_APPEND alone cannot serialize
   against trim rewrites); startup preloads the persistent prefix and in-session
-  entries append after it. Entries are the EXPANDED submitted text — paste
-  placeholders are never persisted (they die with the editor snippet buffer);
-  secure (password) input and entries over 4 KiB are never recorded, in memory
-  or on disk. See `internal/gateway/cli/input_history_store.go`.
-- **Soft-wrap composer + codex-style Up/Down gate (2026-07-23):** the composer
+  entries append after it. The file is person-local CLI history rather than a
+  transcript channel: new records contain only timestamp and safe pure text,
+  while the reader remains compatible with older records that also contain a
+  random `channel`. Secure input, unresolved tokens, image paths, rich-paste
+  payloads, and text over 4 KiB are never persisted. Current-process history
+  retains complete paste/image snapshots for lossless recall, bounded together
+  with the persistent prefix by `max_bytes` and 200 entries; Ctrl+C-cleared
+  drafts are session-only. See `internal/gateway/cli/input_history_store.go`
+  and `internal/ui/components/composer_history.go`.
+- **Soft-wrap composer + codex-style key arbitration (2026-08-29):** the composer
   renders soft-wrapped long lines as multiple display rows (up to 4, scrolled
   to the cursor row) instead of showing only the cursor's wrapped segment. The
   display wrap clones the embedded bubbles textarea wrap so rows align with
-  `LineInfo` cursor offsets (`internal/ui/components/editor.go`). Up/Down swap
-  in history only when the composer is empty, when a fresh draft fits one
-  display row (shell-style recall), or when the text is exactly the previously
-  recalled entry with the cursor at its start/end (codex
-  `should_handle_navigation`); otherwise the keys move the cursor through
-  multi-line / soft-wrapped drafts (`internal/gateway/cli/history.go`).
+  `LineInfo` cursor offsets (`internal/ui/components/editor.go`). History starts
+  only from an empty composer. While the text exactly matches a recalled entry
+  and the cursor is at the whole-buffer start/end, Up/Down continue browsing;
+  Down past the newest entry clears the composer. Recalled history suppresses
+  slash/Skill completion, while a manually typed completion owns arrows. Editing
+  the recalled text or moving into its interior returns ownership to completion
+  or the textarea. Esc dismisses completion only for the unchanged token.
+  `Editor` owns this arbitration and returns typed outcomes to the controller.
+  Completed known commands enter history canonically, unknown commands remain
+  verbatim, and `/clear` is excluded.
+- **Semantic assistant results (2026-08-29):** assistant Markdown is parsed as
+  CommonMark/GFM and rendered as width-aware terminal blocks rather than by
+  line regexes. Headings, inline emphasis/code, hanging-indent lists,
+  blockquotes, fenced code, links, local file references, strikethrough, task
+  lists, and tables share one renderer in the live and committed paths. Tables
+  use a grid when it fits and key/value records on narrow terminals. Typed
+  `commentary` and `final_answer` metadata travels through the provider,
+  kernel, daemon event, client, and TUI seams when available; deterministic
+  tool/final boundaries cover providers that omit it. Commentary remains
+  visually subordinate, while a final answer uses a dim `• ` gutter. Raw
+  Markdown remains the `/copy` source. Full syntax highlighting, block-aware
+  streaming, and resize reflow of immutable scrollback remain deferred.
 - **Remaining (deferred follow-ups, not blocking default):**
   - Legacy rendering path + `SELFMIND_TUI_LEGACY`: ✅ deleted 2026-07-10
     (viewport, `controller_mouse.go`, app scroll, `renderCache`).
@@ -253,6 +274,10 @@ substrate). Document results in this file.
 
 - The active-run digest carries the daemon run id. A reconnecting TUI watches
   that exact run instead of every event associated with the person.
+- Startup digest headings distinguish event time from current state: terminal
+  runs completed after the last presence appear under `While you were away`,
+  while older unresolved task blockers appear under `Still needs attention`.
+  Maintenance-only task-card updates never re-date a terminal run.
 - Every forwarded event retains its durable event id/cursor, live sequence,
   task id, and run id. The reducer deduplicates replayed events and accepts
   watcher events only while their run is still the run being watched.

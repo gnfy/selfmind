@@ -403,6 +403,10 @@ type DigestResponse struct {
 	FinishedTasks []DigestTask `json:"finished_tasks,omitempty"`
 	// DisruptedTasks stopped early since the anchor (statuses failed/interrupted).
 	DisruptedTasks []DigestTask `json:"disrupted_tasks,omitempty"`
+	// UnresolvedTasks are older task cards that still need continuation. They
+	// are point-in-time state, not evidence that a run stopped while the client
+	// was away, so clients must present them separately from DisruptedTasks.
+	UnresolvedTasks []DigestTask `json:"unresolved_tasks,omitempty"`
 	// PendingApprovals is every approval still waiting for the person, in the
 	// same stable display order as /approvals (so ordinals keep meaning).
 	PendingApprovals []DigestApproval `json:"pending_approvals,omitempty"`
@@ -428,6 +432,7 @@ type DigestResponse struct {
 func (d *DigestResponse) Empty() bool {
 	return d == nil ||
 		(len(d.FinishedTasks) == 0 && len(d.DisruptedTasks) == 0 &&
+			len(d.UnresolvedTasks) == 0 &&
 			len(d.PendingApprovals) == 0 && len(d.PendingClarifies) == 0 &&
 			len(d.UnconfirmedPushes) == 0 && d.ActiveRun == nil)
 }

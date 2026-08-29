@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/xml"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -106,6 +107,16 @@ type systemdUnitData struct {
 	Description string
 	ProgramArgs []string
 	Environment map[string]string
+}
+
+func environmentValue(parent []string, name string) string {
+	for i := len(parent) - 1; i >= 0; i-- {
+		key, value, ok := strings.Cut(parent[i], "=")
+		if ok && key == name {
+			return value
+		}
+	}
+	return ""
 }
 
 func resolvedGatewayServiceCommand(configPath string) ([]string, error) {
@@ -250,13 +261,13 @@ var servicePassthroughEnvironmentExactKeys = map[string]bool{
 }
 
 // servicePassthroughEnvironment picks only non-credential configuration
-// locations and locale for an operating-system service definition. Ambient
-// proxy variables are intentionally process-local: persisting them here makes
-// a temporary shell proxy outlive the network state it represented. Service
-// files may be readable by other local processes, so names or values that
-// resemble credentials never cross this boundary.
+// locations, locale, and exact standard proxy variables for an operating-system
+// service definition. A managed Gateway does not inherit the installing shell's
+// environment, so safe proxy values must cross this seam for the standard Go
+// HTTP transport to preserve the same routing as an interactive client.
+// Credential-bearing proxy URLs and proxy-shaped lookalike names never cross.
 func servicePassthroughEnvironment(parent []string) []string {
-	out := make([]string, 0, 8)
+	out := make([]string, 0, 12)
 	for _, entry := range parent {
 		name, value, ok := strings.Cut(entry, "=")
 		name = strings.TrimSpace(name)
@@ -279,5 +290,93 @@ func servicePassthroughEnvironment(parent []string) []string {
 			}
 		}
 	}
+	out = append(out, serviceProxyEnvironment(parent)...)
 	return out
+}
+
+// serviceProxyEnvironment resolves the standard process proxy variables into
+// one canonical service environment. Go's http.ProxyFromEnvironment does not
+// read ALL_PROXY, so a safe ALL_PROXY value supplies missing HTTP_PROXY and
+// HTTPS_PROXY values while remaining available to compatible child processes.
+func serviceProxyEnvironment(parent []string) []string {
+	values := make(map[string]string, 8)
+	for _, entry := range parent {
+		name, value, ok := strings.Cut(entry, "=")
+		name = strings.TrimSpace(name)
+		value = strings.TrimSpace(value)
+		if !ok || name == "" || value == "" {
+			continue
+		}
+		switch name {
+		case "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
+			"http_proxy", "https_proxy", "all_proxy", "no_proxy":
+			values[name] = value
+		}
+	}
+
+	proxyValue := func(upper, lower string) string {
+		for _, key := range []string{upper, lower} {
+			if value := values[key]; validServiceProxyURL(value) {
+				return value
+			}
+		}
+		return ""
+	}
+	allProxy := proxyValue("ALL_PROXY", "all_proxy")
+	httpProxy := proxyValue("HTTP_PROXY", "http_proxy")
+	if httpProxy == "" {
+		httpProxy = allProxy
+	}
+	httpsProxy := proxyValue("HTTPS_PROXY", "https_proxy")
+	if httpsProxy == "" {
+		httpsProxy = allProxy
+	}
+	noProxy := firstSafeNoProxyEnvironmentValue(values, "NO_PROXY", "no_proxy")
+
+	out := make([]string, 0, 4)
+	for _, item := range []struct {
+		name  string
+		value string
+	}{
+		{name: "HTTP_PROXY", value: httpProxy},
+		{name: "HTTPS_PROXY", value: httpsProxy},
+		{name: "ALL_PROXY", value: allProxy},
+		{name: "NO_PROXY", value: noProxy},
+	} {
+		if item.value != "" {
+			out = append(out, item.name+"="+item.value)
+		}
+	}
+	return out
+}
+
+func firstSafeNoProxyEnvironmentValue(values map[string]string, keys ...string) string {
+	for _, key := range keys {
+		value := strings.TrimSpace(values[key])
+		if value != "" && !strings.ContainsAny(value, "\x00\r\n@") {
+			return value
+		}
+	}
+	return ""
+}
+
+func validServiceProxyURL(value string) bool {
+	value = strings.TrimSpace(value)
+	if value == "" || strings.ContainsAny(value, "\x00\r\n") || valueEmbedsCredentials(value) {
+		return false
+	}
+	candidate := value
+	if !strings.Contains(candidate, "://") {
+		candidate = "http://" + candidate
+	}
+	parsed, err := url.Parse(candidate)
+	if err != nil || parsed.Hostname() == "" || parsed.User != nil {
+		return false
+	}
+	switch strings.ToLower(parsed.Scheme) {
+	case "http", "https", "socks5", "socks5h":
+		return true
+	default:
+		return false
+	}
 }

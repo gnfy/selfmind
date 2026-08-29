@@ -399,6 +399,7 @@ func (a *Agent) chatResponseWithRetry(ctx context.Context, messages []llm.Messag
 		if !llm.IsRetryableError(err) {
 			return nil, err
 		}
+		llm.RefreshProviderNetworkRouteAfterError(err)
 		if attempt == max {
 			break
 		}
@@ -406,7 +407,7 @@ func (a *Agent) chatResponseWithRetry(ctx context.Context, messages []llm.Messag
 			return nil, werr
 		}
 	}
-	return nil, fmt.Errorf("llm chat failed after %d attempts: %w", max, lastErr)
+	return nil, fmt.Errorf("llm chat failed after %d attempts: %w", max, llm.ActionableProviderNetworkError(lastErr))
 }
 
 // chatWithRetry implements runtime provider fallback.
@@ -446,6 +447,7 @@ func (a *Agent) streamChatWithRetry(ctx context.Context, messages []llm.Message,
 		if !llm.IsRetryableError(err) {
 			return nil, err
 		}
+		llm.RefreshProviderNetworkRouteAfterError(err)
 		if attempt == max {
 			break
 		}
@@ -453,7 +455,7 @@ func (a *Agent) streamChatWithRetry(ctx context.Context, messages []llm.Message,
 			return nil, werr
 		}
 	}
-	return nil, fmt.Errorf("llm stream chat failed after %d attempts: %w", max, lastErr)
+	return nil, fmt.Errorf("llm stream chat failed after %d attempts: %w", max, llm.ActionableProviderNetworkError(lastErr))
 }
 
 // ensureActiveSkillProviderDelivery is the final provider-bound preflight. It
@@ -1163,27 +1165,45 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 		var streamErr error
 		finishReason := ""
 		var pendingStream strings.Builder
+		pendingStreamPhase := llm.AssistantPhaseUnspecified
 		suppressLegacyToolStream := false
 		legacyToolSeen := false
 		legacyToolReady := false
 		nativeToolActivityAnnounced := false
 		emitAgentActivity(eventCh, activityForIteration(i), "thinking", i)
-		emitStream := func(content string) {
+		emitStream := func(content string, phase llm.AssistantPhase) {
 			if strings.TrimSpace(content) == "" || eventCh == nil {
 				return
 			}
-			EmitAgentEvent(eventCh, AgentEvent{Type: "stream", Content: content})
+			EmitAgentEvent(eventCh, AgentEvent{Type: "stream", Content: content, Phase: phase})
 		}
-		handleStreamContent := func(content string) {
+		flushPendingStream := func() {
+			if suppressLegacyToolStream {
+				pendingStream.Reset()
+				pendingStreamPhase = llm.AssistantPhaseUnspecified
+				return
+			}
+			emitStream(pendingStream.String(), pendingStreamPhase)
+			pendingStream.Reset()
+			pendingStreamPhase = llm.AssistantPhaseUnspecified
+		}
+		handleStreamContent := func(content string, phase llm.AssistantPhase) {
 			fullResp.WriteString(content)
 			if suppressLegacyToolStream {
 				return
 			}
+			if phase != llm.AssistantPhaseUnspecified && pendingStreamPhase != llm.AssistantPhaseUnspecified && phase != pendingStreamPhase {
+				flushPendingStream()
+			}
+			if phase != llm.AssistantPhaseUnspecified {
+				pendingStreamPhase = phase
+			}
 			pendingStream.WriteString(content)
 			pending := pendingStream.String()
 			if idx := legacyToolMarkerIndex(pending); idx >= 0 {
-				emitStream(pending[:idx])
+				emitStream(pending[:idx], pendingStreamPhase)
 				pendingStream.Reset()
+				pendingStreamPhase = llm.AssistantPhaseUnspecified
 				suppressLegacyToolStream = true
 				if !legacyToolSeen {
 					legacyToolSeen = true
@@ -1196,17 +1216,9 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 				pendingStream.Reset()
 				pendingStream.WriteString(keep)
 				if emit != "" {
-					emitStream(emit)
+					emitStream(emit, pendingStreamPhase)
 				}
 			}
-		}
-		flushPendingStream := func() {
-			if suppressLegacyToolStream {
-				pendingStream.Reset()
-				return
-			}
-			emitStream(pendingStream.String())
-			pendingStream.Reset()
 		}
 
 		appendChatResponse := func(chatResp *llm.ChatResponse) {
@@ -1235,7 +1247,7 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 			meta.Content = ""
 			appendChatResponse(&meta)
 			if content != "" {
-				handleStreamContent(content)
+				handleStreamContent(content, chatResp.Phase)
 			}
 		}
 
@@ -1306,7 +1318,7 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 						continue
 					}
 					if event.Content != "" {
-						handleStreamContent(textutil.CleanUTF8(event.Content))
+						handleStreamContent(textutil.CleanUTF8(event.Content), event.Phase)
 					}
 					if event.ReasoningContent != "" {
 						reasoningResp.WriteString(textutil.CleanUTF8(event.ReasoningContent))
@@ -1352,6 +1364,7 @@ func (a *Agent) RunConversation(ctx context.Context, tenantID, channel string, i
 					return "", totalUsage, fmt.Errorf("stream error: %w", streamErr)
 				}
 				if streamErr != nil {
+					llm.RefreshProviderNetworkRouteAfterError(streamErr)
 					recoveryMessages := messages
 					phase := "transport_recovery"
 					if llm.IsContextWindowError(streamErr) {
@@ -1859,6 +1872,7 @@ func emitProviderEvent(eventCh chan string, event llm.StreamEvent, iteration int
 	agentEvent := AgentEvent{
 		Type:            event.EventType,
 		Content:         textutil.CleanUTF8(event.Content),
+		Phase:           event.Phase,
 		ToolName:        event.ToolName,
 		ToolCallID:      event.ToolCallID,
 		ToolArgs:        event.ToolArgs,

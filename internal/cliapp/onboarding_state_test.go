@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -183,6 +184,32 @@ func TestManagedGatewayReadinessRequiresServiceOwnership(t *testing.T) {
 				t.Fatal("mismatched managed Gateway was reported ready")
 			}
 		})
+	}
+}
+
+func TestPersistManagedGatewayReceiptCommitsReplacementGeneration(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(configPath, []byte("{}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	app := &App{configPath: configPath}
+	if err := app.persistManagedGatewayReceipt(gatewayServiceInstallReceipt{
+		Manager: "launchd", Generation: "service-new",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.LoadConfig(config.Options{Path: configPath})
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := loadOnboardingState(onboardingStatePath(cfg, configPath))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.BackgroundMode != "managed" || state.BackgroundManager != "launchd" ||
+		state.ServiceGeneration != "service-new" || state.GatewayVerifiedAt.IsZero() {
+		t.Fatalf("persisted receipt = %+v", state)
 	}
 }
 
@@ -515,10 +542,14 @@ func TestFailedRuntimeSetupResumesWithoutRepeatingModelStage(t *testing.T) {
 	if _, err := (&modelchange.Service{ConfigPath: configPath}).AcceptMigrationReadiness(); err != nil {
 		t.Fatal(err)
 	}
+	managedReconcile := func() (gatewayServiceInstallReceipt, error) {
+		return gatewayServiceInstallReceipt{}, errors.New("test runtime setup failure")
+	}
 
 	firstOut, firstErr := &bytes.Buffer{}, &bytes.Buffer{}
 	first := &App{
 		ctx: context.Background(), stdout: firstOut, stderr: firstErr, configPath: configPath,
+		managedGatewayReconcile: managedReconcile,
 	}
 	if _, code := first.ensureOnboarding(cfg, onboardingOptions{NonInteractive: true}); code == 0 {
 		t.Fatalf("runtime setup in the home directory unexpectedly succeeded: %q", firstOut.String())
@@ -526,6 +557,7 @@ func TestFailedRuntimeSetupResumesWithoutRepeatingModelStage(t *testing.T) {
 	secondOut, secondErr := &bytes.Buffer{}, &bytes.Buffer{}
 	second := &App{
 		ctx: context.Background(), stdout: secondOut, stderr: secondErr, configPath: configPath,
+		managedGatewayReconcile: managedReconcile,
 	}
 	if _, code := second.ensureOnboarding(cfg, onboardingOptions{NonInteractive: true}); code == 0 {
 		t.Fatalf("runtime repair in the home directory unexpectedly succeeded: %q", secondOut.String())

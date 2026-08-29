@@ -6,7 +6,9 @@ import (
 	"strings"
 
 	"selfmind/internal/buildinfo"
+	"selfmind/internal/kernel/llm"
 	uicommon "selfmind/internal/ui/common"
+	"selfmind/internal/ui/components"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/mattn/go-runewidth"
@@ -19,12 +21,17 @@ import (
 type cellRenderer func(msg ChatMessage, width int) string
 
 var cellRenderers = map[string]cellRenderer{
-	"user":      func(m ChatMessage, w int) string { return renderUserMessage(stripANSI(m.Content), w) },
-	"assistant": func(m ChatMessage, w int) string { return renderAssistantMessage(stripANSI(m.Content), w) },
-	"tool":      func(m ChatMessage, w int) string { return renderToolMessage(m, w) },
-	"system":    func(m ChatMessage, w int) string { return renderSystemMessage(stripANSI(m.Content), w) },
-	"digest":    func(m ChatMessage, w int) string { return renderDigestMessage(stripANSI(m.Content), w) },
-	"notice":    func(m ChatMessage, w int) string { return renderNoticeMessage(stripANSI(m.Content), m.NoticeKind, w) },
+	"user": func(m ChatMessage, w int) string { return renderUserMessage(stripANSI(m.Content), w) },
+	"assistant": func(m ChatMessage, w int) string {
+		if m.AssistantPhase == llm.AssistantPhaseUnspecified {
+			return renderAssistantMessage(stripANSI(m.Content), w)
+		}
+		return renderAssistantMessagePhase(stripANSI(m.Content), w, m.AssistantPhase)
+	},
+	"tool":   func(m ChatMessage, w int) string { return renderToolMessage(m, w) },
+	"system": func(m ChatMessage, w int) string { return renderSystemMessage(stripANSI(m.Content), w) },
+	"digest": func(m ChatMessage, w int) string { return renderDigestMessage(stripANSI(m.Content), w) },
+	"notice": func(m ChatMessage, w int) string { return renderNoticeMessage(stripANSI(m.Content), m.NoticeKind, w) },
 }
 
 // renderCell dispatches a message to its registered renderer. Unknown roles
@@ -208,18 +215,30 @@ func renderStartupDataLine(label, value string, width int, suffix string) string
 	return renderStartupBoxLine(content, width)
 }
 
-var currentMarkerStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(uicommon.PaletteBlue))
+var (
+	currentMarkerStyle        = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(uicommon.PaletteBlue))
+	assistantFinalBulletStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(uicommon.PaletteSubtle))
+	assistantCommentaryStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color(uicommon.PaletteMuted)).Faint(true)
+)
 
 func renderAssistantMessage(content string, width int) string {
+	return renderAssistantMessagePhase(content, width, llm.AssistantPhaseFinalAnswer)
+}
+
+func renderAssistantMessagePhase(content string, width int, phase llm.AssistantPhase) string {
 	content = strings.TrimSpace(content)
 	if content == "" {
 		return ""
 	}
-	body := strings.TrimRight(renderMarkdown(content, width-4), "\n")
+	if phase == llm.AssistantPhaseUnspecified {
+		phase = llm.AssistantPhaseFinalAnswer
+	}
+	body := strings.TrimRight(components.RenderMarkdown(content, max(8, width-2)), "\n")
 	if body == "" {
 		return ""
 	}
 	lines := strings.Split(body, "\n")
+	firstContentLine := true
 	for i, line := range lines {
 		if strings.TrimSpace(line) == "" {
 			lines[i] = ""
@@ -228,7 +247,16 @@ func renderAssistantMessage(content string, width int) string {
 		if strings.Contains(line, "← current") {
 			line = strings.ReplaceAll(line, "← current", currentMarkerStyle.Render("← current"))
 		}
-		lines[i] = "  " + line
+		if phase == llm.AssistantPhaseCommentary {
+			lines[i] = assistantCommentaryStyle.Render("  " + line)
+			continue
+		}
+		if firstContentLine {
+			lines[i] = assistantFinalBulletStyle.Render(glyphBullet+" ") + line
+			firstContentLine = false
+		} else {
+			lines[i] = "  " + line
+		}
 	}
 	return "\n" + strings.Join(lines, "\n")
 }

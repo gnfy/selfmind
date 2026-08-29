@@ -75,7 +75,7 @@ documents:
     state: current
     language: zh-CN
     translation_of: docs/coding-agent-foundations.md
-    source_hash: ca153b49d2567c87
+    source_hash: 7c57dcf3e276f0c5
   - path: docs/command-reference.md
     title: Command Reference
     class: guide
@@ -225,7 +225,7 @@ documents:
     state: current
     language: zh-CN
     translation_of: docs/provider-runtime.md
-    source_hash: 0f3f11daab6dcfbe
+    source_hash: 6c606b5175f8427f
   - path: docs/skill-learning-and-repair.md
     title: Skill Learning, Automatic Promotion, and Repair
     class: decision

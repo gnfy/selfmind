@@ -6,6 +6,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"selfmind/internal/kernel/llm"
 	"selfmind/internal/ui/layout"
 )
 
@@ -158,7 +159,14 @@ func (m *uiModel) renderActiveBlock(width int) string {
 		lines = append(lines, strings.Split(rendered, "\n")...)
 	}
 	if strings.TrimSpace(m.liveStreamContent) != "" {
-		rendered := prepareTerminalCell(renderAssistantMessage(stripANSI(m.liveStreamContent), width), width)
+		phase := m.liveStreamPhase
+		if phase == llm.AssistantPhaseUnspecified {
+			// Until the kernel reaches a tool/final boundary this is a mutable
+			// preview, not a canonical answer. Render it as subordinate progress;
+			// MsgAgentDone will commit the authoritative final with its gutter.
+			phase = llm.AssistantPhaseCommentary
+		}
+		rendered := prepareTerminalCell(renderAssistantMessagePhase(stripANSI(m.liveStreamContent), width, phase), width)
 		if rendered != "" {
 			lines = append(lines, strings.Split(rendered, "\n")...)
 		}

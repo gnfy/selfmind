@@ -68,6 +68,11 @@ type Editor struct {
 	cursorVisible   bool
 	hintIndex       int // selected row in the slash-command suggestion popup
 	layoutWidth     int // last known total composer width, for wrap-aware height
+	history         []composerDraft
+	historyIndex    int
+	historyBytes    int64
+	historyMaxBytes int64
+	dismissedToken  string
 }
 
 type CommandHint struct {
@@ -156,6 +161,7 @@ func NewEditor(c *common.Common, editorCfg *config.EditorConfig) *Editor {
 		largePasteChars: chars,
 		largePasteLines: lines,
 		cursorVisible:   true,
+		historyIndex:    -1,
 	}
 }
 
@@ -200,6 +206,7 @@ func (e *Editor) Update(msg tea.Msg) tea.Cmd {
 	// real text changes).
 	if e.textarea.Value() != before {
 		e.hintIndex = 0
+		e.dismissedToken = ""
 	}
 	return cmd
 }
@@ -266,6 +273,8 @@ func (e *Editor) handlePasteFromKey(keyMsg tea.KeyMsg) tea.Cmd {
 		}
 	}
 	e.textarea.SetValue(currentValue + lead + display)
+	e.hintIndex = 0
+	e.dismissedToken = ""
 
 	return nil
 }
@@ -299,6 +308,8 @@ func (e *Editor) AttachImage(path string) string {
 		}
 	}
 	e.textarea.SetValue(current + lead + token + " ")
+	e.hintIndex = 0
+	e.dismissedToken = ""
 	return token
 }
 
@@ -340,10 +351,18 @@ func (e *Editor) Reset() {
 	e.textinput.Reset()
 	e.snippets = nil
 	e.images = nil
+	e.historyIndex = -1
+	e.hintIndex = 0
+	e.dismissedToken = ""
 }
 
-// SetValue sets the textarea/textinput value without affecting paste snippets.
+// SetValue replaces the externally supplied draft and exits history browsing.
+// Internal history recall uses applyHistoryDraft so it can retain navigation
+// ownership and the recalled draft's paste/image payloads.
 func (e *Editor) SetValue(s string) {
+	e.historyIndex = -1
+	e.hintIndex = 0
+	e.dismissedToken = ""
 	if e.secure {
 		e.textinput.SetValue(s)
 	} else {
@@ -359,6 +378,9 @@ func (e *Editor) SetCursorVisible(visible bool) {
 // SetSecure toggles secure (password) input mode.
 func (e *Editor) SetSecure(secure bool) {
 	e.secure = secure
+	e.historyIndex = -1
+	e.hintIndex = 0
+	e.dismissedToken = ""
 	if secure {
 		e.textinput.Focus()
 		e.textarea.Blur()
@@ -400,18 +422,6 @@ func (e *Editor) SetLayoutWidth(w int) {
 	if w > 0 {
 		e.layoutWidth = w
 	}
-}
-
-// SingleDisplayRow reports whether the current input renders as one display
-// row: no hard newline and no soft-wrapped overflow at the known width.
-func (e *Editor) SingleDisplayRow() bool {
-	if e.secure {
-		return true
-	}
-	if strings.Contains(e.textarea.Value(), "\n") {
-		return false
-	}
-	return e.visibleInputLineCount() == 1
 }
 
 // CursorAtTextBoundary reports whether the cursor sits at the very start or
@@ -589,11 +599,17 @@ func editorWrappedRowCount(value string, width int) int {
 const suggestionRows = 8
 
 func (e *Editor) matchingCommands() []CommandHint {
+	if e.browsingHistory() {
+		return nil
+	}
 	raw := e.textarea.Value()
 	val := strings.TrimSpace(raw)
 	// Check the raw value for spaces/newlines (not the trimmed one) so a trailing
 	// space — e.g. just after Tab-completing a command — closes the popup.
 	if val == "" || strings.Contains(raw, " ") || strings.Contains(raw, "\n") {
+		return nil
+	}
+	if raw == e.dismissedToken {
 		return nil
 	}
 	var pool []CommandHint
@@ -644,6 +660,7 @@ func (e *Editor) AcceptSuggestion() bool {
 	e.textarea.SetValue(matches[idx].insertText() + " ")
 	e.textarea.CursorEnd()
 	e.hintIndex = 0
+	e.dismissedToken = ""
 	return true
 }
 

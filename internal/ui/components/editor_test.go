@@ -5,6 +5,8 @@ import (
 	"testing"
 
 	"github.com/charmbracelet/bubbles/textarea"
+	tea "github.com/charmbracelet/bubbletea"
+	"selfmind/internal/ui/common"
 )
 
 func TestEditorCursorPartsUseCursorOffset(t *testing.T) {
@@ -64,7 +66,7 @@ func TestEditorWrapMatchesTextareaRowOffset(t *testing.T) {
 	ta.SetWidth(20)
 
 	value := strings.Repeat("架构对比分析", 6) // CJK, soft-wraps at width 20
-	ta.SetValue(value)                     // cursor lands at the end
+	ta.SetValue(value)                   // cursor lands at the end
 
 	rows := wrapEditorLine([]rune(value), 20)
 	li := ta.LineInfo()
@@ -116,6 +118,196 @@ func TestEditorSuggestionNavigation(t *testing.T) {
 	// After a space the popup must close.
 	if e.SuggestionsVisible() {
 		t.Fatal("popup should close after completion (value has a space)")
+	}
+}
+
+func TestComposerHistoryOwnsArrowsAcrossRecalledSlashCommand(t *testing.T) {
+	e := &Editor{textarea: textarea.New()}
+	e.SetCommandHints([]CommandHint{{Name: "/model"}, {Name: "/memory"}})
+	e.SeedHistory([]string{"ordinary question", "/model"}, 1024)
+
+	if result := e.HandleKey(tea.KeyMsg{Type: tea.KeyUp}); !result.Handled() {
+		t.Fatal("first Up should be owned by composer history")
+	}
+	if got := e.Value(); got != "/model" {
+		t.Fatalf("first Up recalled %q, want /model", got)
+	}
+	if e.SuggestionsVisible() {
+		t.Fatal("a recalled slash command must not reopen completion")
+	}
+
+	e.HandleKey(tea.KeyMsg{Type: tea.KeyUp})
+	if got := e.Value(); got != "ordinary question" {
+		t.Fatalf("second Up recalled %q, want ordinary question", got)
+	}
+
+	e.HandleKey(tea.KeyMsg{Type: tea.KeyDown})
+	if got := e.Value(); got != "/model" {
+		t.Fatalf("first Down recalled %q, want /model", got)
+	}
+	e.HandleKey(tea.KeyMsg{Type: tea.KeyDown})
+	if got := e.Value(); got != "" {
+		t.Fatalf("Down past newest left %q, want an empty composer", got)
+	}
+}
+
+func TestComposerManualSlashCompletionOwnsArrows(t *testing.T) {
+	e := &Editor{textarea: textarea.New(), historyIndex: -1}
+	e.SetCommandHints([]CommandHint{{Name: "/model"}, {Name: "/memory"}})
+	e.SeedHistory([]string{"ordinary question"}, 1024)
+	e.SetValue("/m")
+
+	e.HandleKey(tea.KeyMsg{Type: tea.KeyDown})
+	if got := e.Value(); got != "/m" {
+		t.Fatalf("completion navigation changed the draft to %q", got)
+	}
+	e.HandleKey(tea.KeyMsg{Type: tea.KeyTab})
+	if got := e.Value(); got != "/memory " {
+		t.Fatalf("Down then Tab completed %q, want /memory", got)
+	}
+}
+
+func TestComposerEscapeDismissesCompletionUntilTheTokenChanges(t *testing.T) {
+	e := &Editor{textarea: textarea.New(), historyIndex: -1}
+	e.textarea.Focus()
+	e.SetCommandHints([]CommandHint{{Name: "/model"}, {Name: "/memory"}})
+	e.SetValue("/m")
+	if !e.SuggestionsVisible() {
+		t.Fatal("precondition: /m should open completion")
+	}
+
+	if result := e.HandleKey(tea.KeyMsg{Type: tea.KeyEsc}); !result.Handled() {
+		t.Fatal("Esc should be consumed when it dismisses completion")
+	}
+	if e.SuggestionsVisible() {
+		t.Fatal("dismissed completion reopened for the unchanged token")
+	}
+
+	e.HandleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("o")})
+	if got := e.Value(); got != "/mo" {
+		t.Fatalf("edited value = %q, want /mo", got)
+	}
+	if !e.SuggestionsVisible() {
+		t.Fatal("editing the token should make completion eligible again")
+	}
+}
+
+func TestComposerHistoryStartsOnlyFromAnEmptyDraft(t *testing.T) {
+	e := &Editor{textarea: textarea.New(), historyIndex: -1}
+	e.textarea.Focus()
+	e.SeedHistory([]string{"previous request"}, 1024)
+	e.SetValue("current draft")
+
+	e.HandleKey(tea.KeyMsg{Type: tea.KeyUp})
+	if got := e.Value(); got != "current draft" {
+		t.Fatalf("Up replaced a non-empty fresh draft with %q", got)
+	}
+}
+
+func TestComposerHistoryYieldsWhenRecalledCursorMovesInside(t *testing.T) {
+	e := &Editor{textarea: textarea.New(), historyIndex: -1}
+	e.textarea.SetWidth(40)
+	e.SeedHistory([]string{"older", "line one\nline two"}, 1024)
+
+	e.HandleKey(tea.KeyMsg{Type: tea.KeyUp})
+	e.textarea.CursorUp()
+	e.HandleKey(tea.KeyMsg{Type: tea.KeyUp})
+	if got := e.Value(); got != "line one\nline two" {
+		t.Fatalf("Up at an interior cursor recalled %q, want the current entry", got)
+	}
+}
+
+func TestComposerHistoryEvictsTheOldestDraftsByByteBudget(t *testing.T) {
+	e := &Editor{textarea: textarea.New(), historyIndex: -1}
+	e.SeedHistory([]string{"one", "two", "three"}, 8)
+
+	e.HandleKey(tea.KeyMsg{Type: tea.KeyUp})
+	if got := e.Value(); got != "three" {
+		t.Fatalf("latest recall = %q, want three", got)
+	}
+	e.HandleKey(tea.KeyMsg{Type: tea.KeyUp})
+	if got := e.Value(); got != "two" {
+		t.Fatalf("older recall = %q, want two", got)
+	}
+	e.HandleKey(tea.KeyMsg{Type: tea.KeyUp})
+	if got := e.Value(); got != "two" {
+		t.Fatalf("evicted entry was still reachable as %q", got)
+	}
+}
+
+func TestComposerPersistentSubmissionReturnsOnlySafeText(t *testing.T) {
+	e := &Editor{textarea: textarea.New(), historyIndex: -1}
+	e.SeedHistory(nil, 1024)
+	e.SetValue("  inspect this  ")
+
+	submission := e.Submit(ComposerHistoryPersistent)
+	if !submission.Persist || submission.PersistentText != "inspect this" {
+		t.Fatalf("submission persistence = %v/%q", submission.Persist, submission.PersistentText)
+	}
+	e.HandleKey(tea.KeyMsg{Type: tea.KeyUp})
+	if got := e.Value(); got != "  inspect this  " {
+		t.Fatalf("session recall = %q, want the original draft", got)
+	}
+}
+
+func TestComposerCompletionSubmissionUsesCanonicalText(t *testing.T) {
+	e := &Editor{textarea: textarea.New(), historyIndex: -1}
+	e.SetCommandHints([]CommandHint{{Name: "/model"}, {Name: "/memory"}})
+	e.SeedHistory(nil, 1024)
+	e.SetValue("/m")
+
+	if result := e.HandleKey(tea.KeyMsg{Type: tea.KeyEnter}); result.Action != ComposerActionSubmit {
+		t.Fatalf("Enter action = %v, want submit", result.Action)
+	}
+	submission := e.Submit(ComposerHistoryPersistent)
+	if !submission.Persist || submission.PersistentText != "/model" {
+		t.Fatalf("canonical persistence = %v/%q", submission.Persist, submission.PersistentText)
+	}
+}
+
+func TestComposerHistoryFoldsAdjacentDuplicateDrafts(t *testing.T) {
+	e := &Editor{textarea: textarea.New(), historyIndex: -1}
+	e.SeedHistory([]string{"repeat", "repeat"}, 1024)
+
+	e.HandleKey(tea.KeyMsg{Type: tea.KeyUp})
+	e.HandleKey(tea.KeyMsg{Type: tea.KeyUp})
+	e.HandleKey(tea.KeyMsg{Type: tea.KeyDown})
+	if got := e.Value(); got != "" {
+		t.Fatalf("duplicate created a second navigation slot: %q", got)
+	}
+}
+
+func TestComposerSecureSubmissionNeverEntersHistory(t *testing.T) {
+	e := NewEditor(&common.Common{Styles: common.DefaultStyles()}, nil)
+	e.SeedHistory(nil, 1024)
+	e.SetSecure(true)
+	e.SetValue("hunter2")
+
+	submission := e.Submit(ComposerHistoryPersistent)
+	if submission.Persist {
+		t.Fatal("secure input was marked for persistence")
+	}
+	e.SetSecure(false)
+	e.HandleKey(tea.KeyMsg{Type: tea.KeyUp})
+	if got := e.Value(); got != "" {
+		t.Fatalf("secure input entered session history as %q", got)
+	}
+}
+
+func TestComposerClearCanKeepDraftInSessionHistory(t *testing.T) {
+	e := &Editor{textarea: textarea.New(), historyIndex: -1}
+	e.SeedHistory(nil, 1024)
+	e.SetValue("cancelled draft")
+
+	if !e.Clear(ComposerHistorySessionOnly) {
+		t.Fatal("Clear should report that it cleared a draft")
+	}
+	if got := e.Value(); got != "" {
+		t.Fatalf("cleared value = %q", got)
+	}
+	e.HandleKey(tea.KeyMsg{Type: tea.KeyUp})
+	if got := e.Value(); got != "cancelled draft" {
+		t.Fatalf("cleared draft recall = %q", got)
 	}
 }
 

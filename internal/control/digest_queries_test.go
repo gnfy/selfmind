@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-func TestListTasksByStatusSince(t *testing.T) {
+func TestListTaskRunTransitionsSinceUsesRunClock(t *testing.T) {
 	ctx := context.Background()
 	store, err := OpenStore(t.TempDir())
 	if err != nil {
@@ -22,7 +22,11 @@ func TestListTasksByStatusSince(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	mkTask := func(title, status string) *Task {
+	type terminal struct {
+		task *Task
+		run  *Run
+	}
+	mkTerminal := func(title, status string) terminal {
 		t.Helper()
 		task, err := store.CreateTask(ctx, TaskCreate{
 			TenantID: identity.TenantID,
@@ -33,46 +37,88 @@ func TestListTasksByStatusSince(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := store.UpdateTaskStatus(ctx, identity.TenantID, task.ID, status, "summary of "+title, nil); err != nil {
+		run, err := store.StartRun(ctx, task, "cli", title)
+		if err != nil {
 			t.Fatal(err)
 		}
-		return task
+		if _, err := store.MaterializeRunFinalization(ctx, RunFinalization{
+			Identity: *identity, RunID: run.ID, RunStatus: status,
+			TaskID: task.ID, TaskStatus: status, Summary: "summary of " + title,
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return terminal{task: task, run: run}
 	}
 
-	finished := mkTask("Ship the report", "completed")
-	interrupted := mkTask("Refactor the parser", "interrupted")
-	mkTask("Still working", "in_progress")
-	oldFinished := mkTask("Ancient chore", "completed")
-
-	// Backdate the ancient task past the anchor; the anchor filter must drop it.
 	since := time.Now().Add(-time.Hour)
-	if _, err := store.db.ExecContext(ctx, `UPDATE tasks SET updated_at = ? WHERE id = ?`,
-		since.Add(-time.Minute).Unix(), oldFinished.ID); err != nil {
-		t.Fatal(err)
+	finished := mkTerminal("Ship the report", "done")
+	interrupted := mkTerminal("Refactor the parser", "interrupted")
+	oldFinished := mkTerminal("Ancient chore", "done")
+	for _, item := range []struct {
+		run  *Run
+		when time.Time
+	}{
+		{finished.run, since.Add(2 * time.Minute)},
+		{interrupted.run, since.Add(3 * time.Minute)},
+		{oldFinished.run, since.Add(-time.Minute)},
+	} {
+		if _, err := store.db.ExecContext(ctx, `UPDATE task_runs SET finished_at = ? WHERE id = ?`, item.when.Unix(), item.run.ID); err != nil {
+			t.Fatal(err)
+		}
 	}
 
-	got, err := store.ListTasksByStatusSince(ctx, identity.TenantID, identity.PersonID, []string{"done", "completed"}, since, 10)
+	got, err := store.ListTaskRunTransitionsSince(ctx, identity.TenantID, identity.PersonID, []string{"done", "completed"}, since, 10)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 1 || got[0].ID != finished.ID {
-		t.Fatalf("finished-since query returned %+v, want only %q", got, finished.ID)
+	if len(got) != 1 || got[0].TaskID != finished.task.ID {
+		t.Fatalf("finished-since query returned %+v, want only %q", got, finished.task.ID)
 	}
-	if got[0].CurrentSummary != "summary of Ship the report" {
+	if got[0].Summary != "summary of Ship the report" {
 		t.Fatalf("summary not loaded: %+v", got[0])
 	}
 
-	got, err = store.ListTasksByStatusSince(ctx, identity.TenantID, identity.PersonID, []string{"failed", "interrupted"}, since, 10)
+	got, err = store.ListTaskRunTransitionsSince(ctx, identity.TenantID, identity.PersonID, []string{"failed", "interrupted"}, since, 10)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 1 || got[0].ID != interrupted.ID {
-		t.Fatalf("disrupted-since query returned %+v, want only %q", got, interrupted.ID)
+	if len(got) != 1 || got[0].TaskID != interrupted.task.ID {
+		t.Fatalf("disrupted-since query returned %+v, want only %q", got, interrupted.task.ID)
+	}
+
+	// When a task has more than one terminal run in the window, the latest
+	// transition wins across status classes so a recovered task is not reported
+	// as both finished and interrupted.
+	retry, err := store.StartRun(ctx, interrupted.task, "cli", "retry parser")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.MaterializeRunFinalization(ctx, RunFinalization{
+		Identity: *identity, RunID: retry.ID, RunStatus: "done",
+		TaskID: interrupted.task.ID, TaskStatus: "done", Summary: "retry finished",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.ExecContext(ctx, `UPDATE task_runs SET finished_at = ? WHERE id = ?`, since.Add(4*time.Minute).Unix(), retry.ID); err != nil {
+		t.Fatal(err)
+	}
+	got, err = store.ListTaskRunTransitionsSince(ctx, identity.TenantID, identity.PersonID, []string{"done", "interrupted"}, since, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var parserTransitions []TaskRunTransition
+	for _, transition := range got {
+		if transition.TaskID == interrupted.task.ID {
+			parserTransitions = append(parserTransitions, transition)
+		}
+	}
+	if len(parserTransitions) != 1 || parserTransitions[0].Status != "done" {
+		t.Fatalf("latest transition must win across statuses: %+v", parserTransitions)
 	}
 
 	// Bounded: a limit of 1 with two qualifying rows returns exactly one.
-	mkTask("Second finished", "done")
-	got, err = store.ListTasksByStatusSince(ctx, identity.TenantID, identity.PersonID, []string{"done", "completed"}, since, 1)
+	mkTerminal("Second finished", "done")
+	got, err = store.ListTaskRunTransitionsSince(ctx, identity.TenantID, identity.PersonID, []string{"done", "completed"}, since, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,8 +127,37 @@ func TestListTasksByStatusSince(t *testing.T) {
 	}
 
 	// No statuses means nothing to ask for.
-	if got, err := store.ListTasksByStatusSince(ctx, identity.TenantID, identity.PersonID, nil, since, 10); err != nil || got != nil {
+	if got, err := store.ListTaskRunTransitionsSince(ctx, identity.TenantID, identity.PersonID, nil, since, 10); err != nil || got != nil {
 		t.Fatalf("empty status list should return nil, nil; got %+v, %v", got, err)
+	}
+}
+
+func TestListTasksByStatusReturnsCurrentUnresolvedState(t *testing.T) {
+	ctx := context.Background()
+	store, err := OpenStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	identity, err := store.ResolveOrCreateAccount(ctx, "default", "cli", "local", "Alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := store.CreateTask(ctx, TaskCreate{
+		TenantID: identity.TenantID, PersonID: identity.PersonID, Title: "Resume parser", Channel: "cli",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.UpdateTaskStatus(ctx, identity.TenantID, task.ID, "interrupted", "older interruption", nil); err != nil {
+		t.Fatal(err)
+	}
+	got, err := store.ListTasksByStatus(ctx, identity.TenantID, identity.PersonID, []string{"failed", "interrupted"}, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].ID != task.ID || got[0].CurrentSummary != "older interruption" {
+		t.Fatalf("unresolved task query returned %+v", got)
 	}
 }
 

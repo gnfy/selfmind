@@ -181,6 +181,32 @@ func TestEditedTokenIsReportedNotSilentlySubmitted(t *testing.T) {
 	}
 }
 
+func TestComposerSessionHistoryRestoresRichDraft(t *testing.T) {
+	e := pasteEditor(1000, 10)
+	e.SeedHistory(nil, 64*1024)
+	e.textarea.SetValue("analyse these")
+	e.Update(pasteMsg(crDocument(20)))
+	e.AttachImage("/tmp/reference.png")
+
+	wantDisplay := e.Value()
+	wantExpanded := e.ExpandValue()
+	submission := e.Submit(ComposerHistorySessionOnly)
+	if submission.Persist {
+		t.Fatal("a rich draft must not be written to cross-session history")
+	}
+	if e.Value() != "" {
+		t.Fatalf("submitted composer = %q, want empty", e.Value())
+	}
+
+	e.HandleKey(tea.KeyMsg{Type: tea.KeyUp})
+	if got := e.Value(); got != wantDisplay {
+		t.Fatalf("recalled display = %q, want %q", got, wantDisplay)
+	}
+	if got := e.ExpandValue(); got != wantExpanded {
+		t.Fatalf("recalled expanded input lost payload ownership: %q", got)
+	}
+}
+
 func truncateForLog(s string) string {
 	if len(s) <= 160 {
 		return s

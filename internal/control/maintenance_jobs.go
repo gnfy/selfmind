@@ -24,11 +24,10 @@ const (
 	MaintenanceJobSucceeded = "succeeded"
 	MaintenanceJobFailed    = "failed"
 	MaintenanceJobSkipped   = "skipped"
-	// MaintenanceJobBlockedProvider is terminal for the current daemon
-	// lifetime. Retrying quota, authentication, billing, or invalid-request
-	// failures every few minutes only burns requests and hides the real outage.
-	// A daemon restart resets these rows once, which is also the normal boundary
-	// after the owner updates provider configuration.
+	// MaintenanceJobBlockedProvider pauses work until its typed route recovery
+	// policy allows a new attempt. Provider-quota routes use their durable
+	// half-open circuit, network routes react to an egress change, and policy
+	// routes remain parked for explicit replay.
 	MaintenanceJobBlockedProvider = "blocked_provider"
 	// MaintenanceJobBlockedPromptRevision pauses durable work whose pinned
 	// static prompt revision is missing or corrupt. Provider recovery must not
@@ -47,7 +46,24 @@ const (
 	// identity; leaving them blank would incorrectly classify them as legacy on
 	// the next daemon start.
 	maintenanceUnclassifiedProviderRouteID = "policy:provider-unclassified"
+	maintenanceNetworkRoutePrefix          = "network:"
 )
+
+// MaintenanceNetworkRouteID binds a retryable maintenance failure to the
+// credential-free network route selected by the provider HTTP client. The
+// prefix keeps network recovery separate from physical provider-route quota
+// circuits stored in the same blocked_route_id column.
+func MaintenanceNetworkRouteID(fingerprint string) string {
+	fingerprint = strings.TrimSpace(fingerprint)
+	if fingerprint == "" {
+		return ""
+	}
+	return maintenanceNetworkRoutePrefix + fingerprint
+}
+
+func isMaintenanceNetworkRouteID(routeID string) bool {
+	return strings.HasPrefix(strings.TrimSpace(routeID), maintenanceNetworkRoutePrefix)
+}
 
 // MaintenanceJob mirrors one maintenance_jobs row.
 type MaintenanceJob struct {
@@ -413,11 +429,11 @@ func (s *Store) ClaimMaintenanceJobWithLimit(ctx context.Context, tenantID, runI
 	}
 	var status string
 	var attempts int
-	var lastError string
+	var lastError, blockedRouteID string
 	err = s.db.QueryRowContext(ctx,
-		`SELECT status, attempts, COALESCE(last_error, '') FROM maintenance_jobs
+		`SELECT status, attempts, COALESCE(last_error, ''), COALESCE(blocked_route_id, '') FROM maintenance_jobs
 		 WHERE tenant_id = ? AND run_id = ? AND analyzer_version = ?`,
-		normalizeTenant(tenantID), runID, analyzerVersion).Scan(&status, &attempts, &lastError)
+		normalizeTenant(tenantID), runID, analyzerVersion).Scan(&status, &attempts, &lastError, &blockedRouteID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return false, false, nil
@@ -427,7 +443,10 @@ func (s *Store) ClaimMaintenanceJobWithLimit(ctx context.Context, tenantID, runI
 	if attempts < maxAttempts || (status != MaintenanceJobPending && status != MaintenanceJobFailed) {
 		return false, false, nil
 	}
-	blocked, err := s.BlockMaintenanceJobAfterRetries(ctx, tenantID, runID, analyzerVersion, lastError)
+	if !isMaintenanceNetworkRouteID(blockedRouteID) {
+		blockedRouteID = maintenanceRetryLimitRouteID
+	}
+	blocked, err := s.blockMaintenanceJobAfterRetriesForRoute(ctx, tenantID, runID, analyzerVersion, blockedRouteID, lastError)
 	if err != nil {
 		return false, false, err
 	}
@@ -451,6 +470,13 @@ func (s *Store) CompleteMaintenanceJob(ctx context.Context, tenantID, runID stri
 // FailMaintenanceJob parks the job as failed with a bounded retry horizon.
 // Failures never block the run result — maintenance is strictly best-effort.
 func (s *Store) FailMaintenanceJob(ctx context.Context, tenantID, runID string, analyzerVersion int, lastError string, retryAfter time.Duration) error {
+	return s.FailMaintenanceJobForRoute(ctx, tenantID, runID, analyzerVersion, "", lastError, retryAfter)
+}
+
+// FailMaintenanceJobForRoute records a retryable failure together with the
+// network route that observed it. A route change can then release the work
+// immediately instead of waiting for the retry horizon or operator replay.
+func (s *Store) FailMaintenanceJobForRoute(ctx context.Context, tenantID, runID string, analyzerVersion int, routeID, lastError string, retryAfter time.Duration) error {
 	if analyzerVersion <= 0 {
 		analyzerVersion = 1
 	}
@@ -459,12 +485,12 @@ func (s *Store) FailMaintenanceJob(ctx context.Context, tenantID, runID string, 
 	}
 	now := time.Now()
 	_, err := s.db.ExecContext(ctx,
-		`UPDATE maintenance_jobs SET status = ?, last_error = ?, next_retry_at = ?, updated_at = ?
+		`UPDATE maintenance_jobs SET status = ?, blocked_route_id = ?, last_error = ?, next_retry_at = ?, updated_at = ?
 		 WHERE tenant_id = ? AND run_id = ? AND analyzer_version = ? AND status = ?`,
-		MaintenanceJobFailed, lastError, now.Add(retryAfter).Unix(), now.Unix(),
+		MaintenanceJobFailed, routeID, lastError, now.Add(retryAfter).Unix(), now.Unix(),
 		normalizeTenant(tenantID), runID, analyzerVersion, MaintenanceJobRunning)
 	if err == nil {
-		s.recordMaintenanceAttempt(ctx, tenantID, runID, analyzerVersion, "failed", lastError, "")
+		s.recordMaintenanceAttempt(ctx, tenantID, runID, analyzerVersion, "failed", lastError, routeID)
 	}
 	return err
 }
@@ -534,6 +560,10 @@ func (s *Store) BlockMaintenanceJobForPromptRevision(ctx context.Context, tenant
 // probe after the operator repairs or changes the provider. The last concrete
 // provider error is preserved instead of being replaced by a generic limit.
 func (s *Store) BlockMaintenanceJobAfterRetries(ctx context.Context, tenantID, runID string, analyzerVersion int, lastError string) (bool, error) {
+	return s.blockMaintenanceJobAfterRetriesForRoute(ctx, tenantID, runID, analyzerVersion, maintenanceRetryLimitRouteID, lastError)
+}
+
+func (s *Store) blockMaintenanceJobAfterRetriesForRoute(ctx context.Context, tenantID, runID string, analyzerVersion int, routeID, lastError string) (bool, error) {
 	if analyzerVersion <= 0 {
 		analyzerVersion = 1
 	}
@@ -543,6 +573,9 @@ func (s *Store) BlockMaintenanceJobAfterRetries(ctx context.Context, tenantID, r
 	if lastError == "" {
 		lastError = "maintenance retries exhausted without a recorded provider error"
 	}
+	if !isMaintenanceNetworkRouteID(routeID) {
+		routeID = maintenanceRetryLimitRouteID
+	}
 	res, err := s.db.ExecContext(ctx,
 		`UPDATE maintenance_jobs
 		 SET status = ?, blocked_route_id = ?,
@@ -550,7 +583,7 @@ func (s *Store) BlockMaintenanceJobAfterRetries(ctx context.Context, tenantID, r
 		     next_retry_at = 0, updated_at = ?
 		 WHERE tenant_id = ? AND run_id = ? AND analyzer_version = ?
 		   AND status IN (?, ?)`,
-		MaintenanceJobBlockedProvider, maintenanceRetryLimitRouteID, lastError, time.Now().Unix(),
+		MaintenanceJobBlockedProvider, routeID, lastError, time.Now().Unix(),
 		normalizeTenant(tenantID), runID, analyzerVersion,
 		MaintenanceJobPending, MaintenanceJobFailed)
 	if err != nil {
@@ -558,9 +591,59 @@ func (s *Store) BlockMaintenanceJobAfterRetries(ctx context.Context, tenantID, r
 	}
 	n, err := res.RowsAffected()
 	if err == nil && n > 0 {
-		s.recordMaintenanceAttempt(ctx, tenantID, runID, analyzerVersion, "blocked_retry_limit", lastError, maintenanceRetryLimitRouteID)
+		outcome := "blocked_retry_limit"
+		if isMaintenanceNetworkRouteID(routeID) {
+			outcome = "blocked_network"
+		}
+		s.recordMaintenanceAttempt(ctx, tenantID, runID, analyzerVersion, outcome, lastError, routeID)
 	}
 	return n > 0, err
+}
+
+// RequeueNetworkBlockedMaintenanceJobs releases retry-delayed and exhausted
+// jobs only when provider egress now has a different route fingerprint. The
+// comparison also captures a local proxy listener changing between reachable
+// and unreachable without weakening the no-fail-open proxy policy.
+func (s *Store) RequeueNetworkBlockedMaintenanceJobs(ctx context.Context, currentFingerprint string, now time.Time) (int, error) {
+	currentRouteID := MaintenanceNetworkRouteID(currentFingerprint)
+	if s == nil || s.db == nil || currentRouteID == "" {
+		return 0, nil
+	}
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE maintenance_jobs
+		 SET status = ?, attempts = 0, next_retry_at = 0, blocked_route_id = '', last_error = '', updated_at = ?
+		 WHERE status IN (?, ?)
+		   AND blocked_route_id LIKE ?
+		   AND blocked_route_id != ?`,
+		MaintenanceJobPending, now.Unix(), MaintenanceJobFailed, MaintenanceJobBlockedProvider,
+		maintenanceNetworkRoutePrefix+"%", currentRouteID)
+	if err != nil {
+		return 0, err
+	}
+	n, err := res.RowsAffected()
+	return int(n), err
+}
+
+// ResetNetworkBlockedMaintenanceJobs grants a fresh attempt after an explicit
+// daemon restart. A new process has not selected a provider target yet, so it
+// cannot compare live and persisted fingerprints; the restart itself is the
+// operator's recovery boundary (including env refresh --restart).
+func (s *Store) ResetNetworkBlockedMaintenanceJobs(ctx context.Context) (int, error) {
+	if s == nil || s.db == nil {
+		return 0, nil
+	}
+	now := time.Now().Unix()
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE maintenance_jobs
+		 SET status = ?, attempts = 0, next_retry_at = 0, blocked_route_id = '', last_error = '', updated_at = ?
+		 WHERE status IN (?, ?) AND blocked_route_id LIKE ?`,
+		MaintenanceJobPending, now, MaintenanceJobFailed, MaintenanceJobBlockedProvider,
+		maintenanceNetworkRoutePrefix+"%")
+	if err != nil {
+		return 0, err
+	}
+	n, err := res.RowsAffected()
+	return int(n), err
 }
 
 // ResetLegacyBlockedMaintenanceJobs grants one migration probe only to rows
@@ -707,6 +790,7 @@ type MaintenanceHealth struct {
 	Running         int
 	Blocked         int
 	BlockedPrompt   int
+	NetworkBlocked  int
 	Succeeded       int
 	Skipped         int
 	OldestPendingAt time.Time
@@ -729,6 +813,7 @@ func (s *Store) MaintenanceHealthForPerson(ctx context.Context, tenantID, person
 		 COALESCE(SUM(CASE WHEN mj.status = ? THEN 1 ELSE 0 END), 0),
 		 COALESCE(SUM(CASE WHEN mj.status IN (?, ?) THEN 1 ELSE 0 END), 0),
 		 COALESCE(SUM(CASE WHEN mj.status = ? THEN 1 ELSE 0 END), 0),
+		 COALESCE(SUM(CASE WHEN mj.status = ? AND mj.blocked_route_id LIKE ? THEN 1 ELSE 0 END), 0),
 		 COALESCE(SUM(CASE WHEN mj.status = ? THEN 1 ELSE 0 END), 0),
 		 COALESCE(SUM(CASE WHEN mj.status = ? THEN 1 ELSE 0 END), 0),
 		 COALESCE(MIN(CASE WHEN mj.status IN (?, ?, ?, ?, ?) THEN mj.created_at ELSE NULL END), 0),
@@ -742,11 +827,12 @@ func (s *Store) MaintenanceHealthForPerson(ctx context.Context, tenantID, person
 		   )`, personPredicate),
 		MaintenanceJobPending, MaintenanceJobFailed, MaintenanceJobRunning,
 		MaintenanceJobBlockedProvider, MaintenanceJobBlockedPromptRevision, MaintenanceJobBlockedPromptRevision,
+		MaintenanceJobBlockedProvider, maintenanceNetworkRoutePrefix+"%",
 		MaintenanceJobSucceeded, MaintenanceJobSkipped,
 		MaintenanceJobPending, MaintenanceJobFailed, MaintenanceJobRunning,
 		MaintenanceJobBlockedProvider, MaintenanceJobBlockedPromptRevision, MaintenanceJobSucceeded,
 		tenantID, personID, personID, personID, personID).
-		Scan(&health.Pending, &health.Failed, &health.Running, &health.Blocked, &health.BlockedPrompt,
+		Scan(&health.Pending, &health.Failed, &health.Running, &health.Blocked, &health.BlockedPrompt, &health.NetworkBlocked,
 			&health.Succeeded, &health.Skipped, &oldest, &lastSuccess)
 	if err != nil {
 		return health, err

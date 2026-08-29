@@ -511,6 +511,22 @@ provider_profiles:
 - Provider HTTP 调用统一走 `llm.ProviderHTTPClient()`，开启 TCP keepalive
   （`httpclient.go`），让死连接尽快暴露；Kimi 的 HTTP/1.1-only 路径复用同一带
   keepalive 的 transport。
+- Provider 请求统一走具备路由感知能力的共享 transport。macOS 会读取当前手动系统
+  代理，缓存 30 秒，并在连接类错误后立即刷新。由 launchd 管理的 Gateway 以实时
+  系统路由为准，因此从公司直连切换到家里的 Clash，或反向切换，都不需要重启 CLI。
+  本地 provider endpoint 和系统排除项继续直连。PAC/WPAD 在正式支持前会返回带解决
+  办法的错误；当系统仍要求代理时，SelfMind 绝不会静默绕过代理改为直连。
+- Linux 与非 managed 进程使用标准代理环境变量或宿主 TUN/路由。Managed Gateway
+  只保存不含凭据且名称精确匹配的 `HTTP_PROXY`、`HTTPS_PROXY`、`ALL_PROXY`、
+  `NO_PROXY`（也接受小写形式）；名称相似的非标准变量和带内联凭据的 URL 会被拒绝。
+  Go 不读取 `ALL_PROXY`，因此安全的值会补足缺失的 `HTTP_PROXY` 与
+  `HTTPS_PROXY`。`selfmind env refresh --restart` 会用重新采样的 login shell 环境
+  改写 launchd/systemd 服务定义、验证新 daemon，并提交已验证的 service
+  generation，避免所有权状态仍指向旧进程；已开始的 run 保留其冻结环境。
+- `/diag` 会在不暴露凭据的前提下显示 provider 当前选择的路由与本地代理可达性，
+  并给出具体恢复操作。因网络失败的后台学习任务会保留网络路由指纹；直连/代理或
+  本地监听状态改变后，下一个 maintenance sweep 会自动释放任务，显式 managed
+  restart 也会给予一次新的尝试。
 - **不做游标续传。** `store=false` 时服务端从未持久化响应，无法用
   `previous_response_id` 续传——重试始终是整体重发，不要尝试部分续传。
 

@@ -436,6 +436,29 @@ absorbs these without touching the wire contract:
 - Provider HTTP calls use the shared `llm.ProviderHTTPClient()` with TCP
   keepalive (`httpclient.go`) so dead sockets surface fast. The Kimi
   HTTP/1.1-only path clones the same keepalive transport.
+- Provider requests use one route-aware shared transport. On macOS it reads the
+  current manual system proxy with a 30-second cache and refreshes immediately
+  after connection-level failures. A launchd-managed Gateway treats that live
+  system route as authoritative, so moving from direct office access to a
+  Clash-backed home network—or back again—does not require a CLI restart. Local
+  provider endpoints and system exclusions stay direct. PAC/WPAD is rejected
+  with an actionable error until supported; SelfMind never silently bypasses a
+  system route that still requires a proxy.
+- Linux and non-managed processes use standard proxy environment variables or
+  host TUN/routing. Managed Gateway installation preserves only
+  credential-free exact `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, and `NO_PROXY`
+  names (including lowercase forms); proxy-shaped lookalikes and URLs with
+  inline credentials are rejected. Because Go does not read `ALL_PROXY`, a safe
+  value fills missing `HTTP_PROXY` and `HTTPS_PROXY`. `selfmind env refresh
+  --restart` rewrites and verifies the launchd/systemd service definition from
+  the newly sampled login environment, then commits the verified service
+  generation so ownership status cannot remain stale. Active runs keep their
+  frozen execution environment.
+- `/diag` shows the selected provider route and local-proxy reachability without
+  credentials, then names the concrete recovery action. Retryable background
+  learning failures retain a network-route fingerprint. A direct/proxy or local
+  listener state change releases those jobs on the next maintenance sweep; an
+  explicit managed restart also grants one fresh attempt.
 - **No cursor resume.** With `store=false` the server never persisted the
   response, so `previous_response_id` resume is impossible — a retry is always
   a full re-send. Do not attempt partial-resume.

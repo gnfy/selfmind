@@ -35,6 +35,7 @@ func newProviderTransport() *http.Transport {
 		Timeout:   30 * time.Second,
 		KeepAlive: tcpKeepAlive,
 	}).DialContext
+	t.Proxy = providerNetwork.Proxy
 	return t
 }
 

@@ -285,6 +285,12 @@ func collectDoctorIssues(report string, configDiagnostics configDiagnostics) []d
 							Commands:    []string{"selfmind maintenance replay"},
 						})
 					}
+					if strings.Contains(body, "network-blocked:") && !strings.Contains(body, "network-blocked: 0") {
+						actions = append(actions, doctorAction{
+							Description: "Restore the selected network route: on macOS start Clash or disable a stale System Proxy; on Linux restore the proxy/TUN or refresh the managed environment. SelfMind retries automatically after a detected route change.",
+							Commands:    []string{"selfmind env refresh --restart", "selfmind doctor"},
+						})
+					}
 					if strings.Contains(body, "prompt-revision-blocked:") && !strings.Contains(body, "prompt-revision-blocked: 0") {
 						actions = append(actions, doctorAction{
 							Description: "Restore the missing pinned prompt revision from backup, then explicitly replay the paused maintenance work; do not replace it with the current prompt.",
@@ -1072,8 +1078,9 @@ func buildDoctorReport(ctx context.Context, store *control.Store, identity *cont
 	if health, err := store.MaintenanceHealthForPerson(ctx, identity.TenantID, identity.PersonID); err != nil {
 		fmt.Fprintf(&sb, "(error: %v)\n", err)
 	} else {
-		fmt.Fprintf(&sb, "queued: %d  retrying: %d  running: %d  provider-blocked: %d  prompt-revision-blocked: %d\n",
-			health.Pending, health.Failed, health.Running, health.Blocked-health.BlockedPrompt, health.BlockedPrompt)
+		fmt.Fprintf(&sb, "queued: %d  retrying: %d  running: %d  provider-blocked: %d  network-blocked: %d  prompt-revision-blocked: %d\n",
+			health.Pending, health.Failed, health.Running,
+			health.Blocked-health.BlockedPrompt-health.NetworkBlocked, health.NetworkBlocked, health.BlockedPrompt)
 		if !health.OldestPendingAt.IsZero() {
 			fmt.Fprintf(&sb, "oldest unfinished: %s\n", time.Since(health.OldestPendingAt).Round(time.Second))
 		}

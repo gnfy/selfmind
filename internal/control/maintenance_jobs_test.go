@@ -556,6 +556,78 @@ func TestBlockMaintenanceJobAfterRetriesPreservesProviderError(t *testing.T) {
 	}
 }
 
+func TestNetworkFailureSurvivesRetryLimitAndRequeuesOnlyAfterRouteChange(t *testing.T) {
+	ctx := context.Background()
+	store, identity, _, run := newRecoveryFixture(t)
+	if err := store.FinishRunWithMaintenancePayload(ctx, identity.TenantID, run.ID, "done", 1, `{"run":"network"}`); err != nil {
+		t.Fatal(err)
+	}
+	if claimed, err := store.ClaimMaintenanceJob(ctx, identity.TenantID, run.ID, 1); err != nil || !claimed {
+		t.Fatalf("claim: claimed=%v err=%v", claimed, err)
+	}
+	failedRoute := MaintenanceNetworkRouteID("proxy-unreachable")
+	if err := store.FailMaintenanceJobForRoute(ctx, identity.TenantID, run.ID, 1, failedRoute, "proxyconnect tcp: connection refused", 0); err != nil {
+		t.Fatal(err)
+	}
+
+	for attempt := 1; attempt < 3; attempt++ {
+		claimed, exhausted, err := store.ClaimMaintenanceJobWithLimit(ctx, identity.TenantID, run.ID, 1, 3)
+		if err != nil || !claimed || exhausted {
+			t.Fatalf("retry %d: claimed=%v exhausted=%v err=%v", attempt, claimed, exhausted, err)
+		}
+		if err := store.FailMaintenanceJobForRoute(ctx, identity.TenantID, run.ID, 1, failedRoute, "proxyconnect tcp: connection refused", 0); err != nil {
+			t.Fatal(err)
+		}
+	}
+	claimed, exhausted, err := store.ClaimMaintenanceJobWithLimit(ctx, identity.TenantID, run.ID, 1, 3)
+	if err != nil || claimed || !exhausted {
+		t.Fatalf("retry limit: claimed=%v exhausted=%v err=%v", claimed, exhausted, err)
+	}
+	job, err := store.GetMaintenanceJob(ctx, identity.TenantID, run.ID, 1)
+	if err != nil || job == nil || job.Status != MaintenanceJobBlockedProvider || job.BlockedRouteID != failedRoute {
+		t.Fatalf("network-blocked job=%+v err=%v", job, err)
+	}
+	health, err := store.MaintenanceHealthForPerson(ctx, identity.TenantID, identity.PersonID)
+	if err != nil || health.NetworkBlocked != 1 {
+		t.Fatalf("maintenance health=%+v err=%v", health, err)
+	}
+
+	requeued, err := store.RequeueNetworkBlockedMaintenanceJobs(ctx, "proxy-unreachable", time.Now())
+	if err != nil || requeued != 0 {
+		t.Fatalf("same route requeued=%d err=%v", requeued, err)
+	}
+	requeued, err = store.RequeueNetworkBlockedMaintenanceJobs(ctx, "proxy-reachable", time.Now())
+	if err != nil || requeued != 1 {
+		t.Fatalf("changed route requeued=%d err=%v", requeued, err)
+	}
+	job, _ = store.GetMaintenanceJob(ctx, identity.TenantID, run.ID, 1)
+	if job == nil || job.Status != MaintenanceJobPending || job.Attempts != 0 || job.BlockedRouteID != "" {
+		t.Fatalf("requeued job=%+v", job)
+	}
+}
+
+func TestNetworkBlockedMaintenanceRestartsWithOneFreshAttempt(t *testing.T) {
+	ctx := context.Background()
+	store, identity, _, run := newRecoveryFixture(t)
+	if err := store.FinishRunWithMaintenancePayload(ctx, identity.TenantID, run.ID, "done", 1, `{"run":"network"}`); err != nil {
+		t.Fatal(err)
+	}
+	if claimed, err := store.ClaimMaintenanceJob(ctx, identity.TenantID, run.ID, 1); err != nil || !claimed {
+		t.Fatalf("claim: claimed=%v err=%v", claimed, err)
+	}
+	if err := store.FailMaintenanceJobForRoute(ctx, identity.TenantID, run.ID, 1, MaintenanceNetworkRouteID("old"), "network is unreachable", time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	reset, err := store.ResetNetworkBlockedMaintenanceJobs(ctx)
+	if err != nil || reset != 1 {
+		t.Fatalf("reset=%d err=%v", reset, err)
+	}
+	job, _ := store.GetMaintenanceJob(ctx, identity.TenantID, run.ID, 1)
+	if job == nil || job.Status != MaintenanceJobPending || job.Attempts != 0 || job.BlockedRouteID != "" {
+		t.Fatalf("restart-reset job=%+v", job)
+	}
+}
+
 // TestMaintenanceAttemptHistory pins the append-only failure timeline: the
 // job row's last_error is overwritten on every transition, so fail/skip/block
 // must each leave a durable history row with the REAL error, and retention

@@ -77,10 +77,11 @@ The directory beside the active config file is the only source (normally
   persisted assistant message. A locked response-and-interaction floor remains
   present on every primary foreground turn, including tool-free direct answers;
   it defines language following, outcome-first delivery, bounded clarification,
-  and no raw protocol dumps without asserting anything about the person's
-  profession. The locked work-quality floor is capability neutral and remains
-  present for foreground and delegated work even when no model-visible tool is
-  available. Workspace implementation guidance is added only with a bound
+  terminal-oriented headings, flat lists, code/path formatting, no fixed report
+  template, and no raw protocol dumps without asserting anything about the
+  person's profession. The locked work-quality floor is capability neutral and
+  remains present for foreground and delegated work even when no model-visible
+  tool is available. Workspace implementation guidance is added only with a bound
   workspace and makes command verification conditional on an available command
   capability. Lifecycle instructions are derived from the actual tool
   definitions for the turn, so a read-only finalizer or bounded role is never

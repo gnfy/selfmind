@@ -16,7 +16,7 @@ import (
 	gatewayrt "selfmind/internal/runtime/gateway"
 )
 
-func gatewayServiceInstall(configPath string, previousPID int) (gatewayServiceInstallReceipt, error) {
+func gatewayServiceInstall(configPath string, previousPID int, parent []string) (gatewayServiceInstallReceipt, error) {
 	if !gatewayServiceSupported() {
 		return gatewayServiceInstallReceipt{}, fmt.Errorf("systemd user services are unavailable")
 	}
@@ -39,12 +39,15 @@ func gatewayServiceInstall(configPath string, previousPID int) (gatewayServiceIn
 		selfMindServiceManagerEnv:    "systemd",
 		selfMindServiceGenerationEnv: generation,
 	}
+	if parent == nil {
+		parent = os.Environ()
+	}
 	for _, key := range []string{"SELFMIND_INSTALL_METHOD", "SELFMIND_NPM_LAUNCHER", "SELFMIND_NODE_PATH"} {
-		if value := strings.TrimSpace(os.Getenv(key)); value != "" {
+		if value := strings.TrimSpace(environmentValue(parent, key)); value != "" {
 			environment[key] = value
 		}
 	}
-	for _, entry := range servicePassthroughEnvironment(os.Environ()) {
+	for _, entry := range servicePassthroughEnvironment(parent) {
 		if name, value, ok := strings.Cut(entry, "="); ok {
 			if _, exists := environment[name]; !exists {
 				environment[name] = value

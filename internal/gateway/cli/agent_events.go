@@ -200,7 +200,7 @@ func (m *uiModel) forwardGatewayEventFrom(event llm.StreamEvent, source eventSou
 	switch event.EventType {
 	case "stream":
 		if event.Content != "" {
-			m.program.Send(MsgStream{Content: event.Content, Event: ref})
+			m.program.Send(MsgStream{Content: event.Content, Phase: event.Phase, Event: ref})
 		}
 	case "agent.thinking", "agent.step":
 		if event.Content != "" {

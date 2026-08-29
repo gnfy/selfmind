@@ -8,6 +8,7 @@ import (
 
 	"selfmind/internal/gateway/command"
 	"selfmind/internal/kernel"
+	"selfmind/internal/kernel/llm"
 	"selfmind/internal/modelchange"
 	"selfmind/internal/platform/textutil"
 	"selfmind/internal/tools"
@@ -316,6 +317,15 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		msg.Content = textutil.CleanUTF8(msg.Content)
 		m.thinking = false
 		m.activityText = ""
+		phaseChanged := msg.Phase != llm.AssistantPhaseUnspecified &&
+			m.liveStreamPhase != llm.AssistantPhaseUnspecified &&
+			msg.Phase != m.liveStreamPhase
+		if phaseChanged && (strings.TrimSpace(m.liveStreamContent) != "" || m.streamController.Pending()) {
+			m.finalizeLiveStream("", m.liveStreamPhase)
+		}
+		if msg.Phase != llm.AssistantPhaseUnspecified {
+			m.liveStreamPhase = msg.Phase
+		}
 		if committed := m.streamController.Push(msg.Content); committed != "" {
 			m.commitLiveStream(committed)
 		}
@@ -346,7 +356,7 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.queuedInputs = append(m.queuedInputs, input)
 				m.queuedCount++
 			}
-			m.finalizeLiveStream(msg.Response)
+			m.finalizeLiveStream(msg.Response, llm.AssistantPhaseFinalAnswer)
 			if m.daemonRunActive {
 				m.runStatus = "working"
 			} else {
@@ -392,9 +402,9 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if msg.Err != nil {
 			m.runStatus = "error"
-			m.finalizeLiveStream(msg.Response)
+			m.finalizeLiveStream(msg.Response, llm.AssistantPhaseFinalAnswer)
 			m.addErrorMessage(fmt.Sprintf("Error: %v", msg.Err))
-		} else if m.finalizeLiveStream(msg.Response) {
+		} else if m.finalizeLiveStream(msg.Response, llm.AssistantPhaseFinalAnswer) {
 			m.runStatus = "done"
 			if strings.TrimSpace(msg.Input) != "" && !strings.HasPrefix(strings.TrimSpace(msg.Input), "/") {
 				m.completeFirstOnboardingTask()
@@ -500,9 +510,9 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.finalizeOpenToolMessages("Completion was not observed before the run ended.")
 		m.flushLiveStreamPending()
 		if strings.TrimSpace(m.liveStreamContent) != "" {
-			m.finalizeLiveStream("")
+			m.finalizeLiveStream("", llm.AssistantPhaseFinalAnswer)
 		} else {
-			m.finalizeLiveStream(msg.Summary)
+			m.finalizeLiveStream(msg.Summary, llm.AssistantPhaseFinalAnswer)
 		}
 		if m.queuedCount > 0 {
 			m.runStatus = "queued"
@@ -523,7 +533,7 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, spinnerCmd
 		}
 		wasWatching := m.watchingRun
-		m.finalizeLiveStream("")
+		m.finalizeLiveStream("", llm.AssistantPhaseFinalAnswer)
 		m.watchingRun = false
 		m.watchedRunID = ""
 		m.watchedTaskTitle = ""
@@ -625,7 +635,7 @@ func (m *uiModel) updateInner(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if isTerminalRunStatus(m.runStatus) || m.toolMessageIndex(msg.ToolCallID, msg.Event.RunID) >= 0 {
 			return m, spinnerCmd
 		}
-		m.finalizeLiveStream("")
+		m.finalizeLiveStream("", llm.AssistantPhaseCommentary)
 		m.thinking = false
 		m.activityText = ""
 		if !m.passiveDaemonEvent(msg.Event) {
@@ -833,39 +843,15 @@ func (m *uiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	switch msg.Type {
 
+	// Composer-local navigation and completion are arbitrated inside Editor so
+	// recalled slash commands cannot reopen a popup that steals history arrows.
 	// Shift+Enter or Ctrl+J inserts a newline (multi-line input).
 	case tea.KeyCtrlJ:
-		m.editor.Update(msg)
-		return m, nil
-	case tea.KeyUp:
-		// While the slash-command popup is open, Up/Down navigate it (codex-style)
-		// instead of input history.
-		if m.editor.SuggestionsVisible() {
-			m.editor.MoveSuggestion(-1)
-			return m, nil
-		}
-		if m.navigateInputHistory(-1) {
-			return m, nil
-		}
-		m.editor.Update(msg)
-		return m, nil
-	case tea.KeyDown:
-		if m.editor.SuggestionsVisible() {
-			m.editor.MoveSuggestion(1)
-			return m, nil
-		}
-		if m.navigateInputHistory(1) {
-			return m, nil
-		}
-		m.editor.Update(msg)
-		return m, nil
-	case tea.KeyTab:
-		// Tab completes the highlighted slash command.
-		if m.editor.AcceptSuggestion() {
-			return m, nil
-		}
-		m.editor.Update(msg)
-		return m, nil
+		result := m.editor.HandleKey(msg)
+		return m, result.Cmd
+	case tea.KeyUp, tea.KeyDown, tea.KeyTab:
+		result := m.editor.HandleKey(msg)
+		return m, result.Cmd
 
 	default:
 		if m.exitPromptActive {
@@ -875,11 +861,13 @@ func (m *uiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		switch msg.String() {
 		case "esc":
+			if result := m.editor.HandleKey(msg); result.Handled() {
+				return m, result.Cmd
+			}
 			return m, nil
 		case "ctrl+c":
 			// Priority 1: if input has content, clear it (don't quit)
-			if input := m.editor.Value(); input != "" {
-				m.editor.Reset()
+			if m.editor.Clear(components.ComposerHistorySessionOnly) {
 				return m, nil
 			}
 			// Priority 1.5: passively watching a daemon run (not our turn).
@@ -911,21 +899,19 @@ func (m *uiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.activePlanJSON = ""
 			return m, m.clearHybridScreen()
 		case "enter":
-			// Slash-command popup is open (a partial like "/m" with a highlighted
-			// match): Enter accepts the highlighted command and submits it in one
-			// press, so the user never has to type the command in full. Safe for
-			// commands with args — the popup closes as soon as a space is typed
-			// (matchingCommands), so "/task 3 rename foo" is never clobbered.
-			if m.editor.SuggestionsVisible() {
-				m.editor.AcceptSuggestion()
+			// Enter accepts an eligible completion before the immutable submission
+			// preview is read, so history stores the canonical completed command.
+			if result := m.editor.HandleKey(msg); result.Action != components.ComposerActionSubmit {
+				return m, result.Cmd
 			}
 			// Shift+Enter / Ctrl+J already handled above via KeyCtrlJ.
 			// Here plain Enter submits
 			// Use ExpandValue() to replace paste placeholders with actual content.
 			// The display form (with compact [[ paste:N ]] / [[ image:N ]] tokens)
 			// is what the transcript echoes; the expanded form is what runs.
-			display := strings.TrimSpace(m.editor.Value())
-			input := m.editor.ExpandValue()
+			preview := m.editor.PreviewSubmission()
+			display := preview.Display
+			input := preview.Expanded
 			if input == "" {
 				return m, nil
 			}
@@ -934,26 +920,22 @@ func (m *uiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			// client). Refuse locally and KEEP the composer: resetting it here is
 			// what previously turned the daemon's "paste it again" into a dead
 			// end, because the snippet buffer was already gone.
-			if stranded := m.editor.UnresolvedToken(); stranded != "" {
+			if stranded := preview.Unresolved; stranded != "" {
 				m.addMessage("notice", "This paste placeholder lost its content and was not sent: "+stranded+"\nThe text is still in your clipboard — delete the placeholder and paste it again.")
 				return m, nil
-			}
-			if display == "" {
-				display = input
 			}
 			if m.modelGatewayOffline && !localCommandDuringModelRestart(input) {
 				m.setStatusNotice(noticeWarning, "The gateway is restarting. Your draft is preserved; submit it after the model change is healthy.")
 				return m, nil
 			}
-			// Record the EXPANDED input, never displayInput: paste placeholders
-			// are unrecoverable after editor.Reset() clears the snippet buffer
-			// (recordInputHistory also skips secure and oversized inputs).
-			m.recordInputHistory(input)
+			submission := m.editor.Submit(composerHistoryDisposition(input))
+			if submission.Persist {
+				m.inputHistoryStore.Append(submission.PersistentText)
+			}
 
 			if m.clarifyMode {
 				response := m.resolveClarifyResponse(input)
 				m.addMessage("user", response)
-				m.editor.Reset()
 				if m.clarifyGateway {
 					m.clarifyMode = false
 					m.clarifyGateway = false
@@ -1008,7 +990,6 @@ func (m *uiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			// Echo the compact display form: a 200-line paste or an attached
 			// image shows as its token, not as the expanded payload.
 			m.addMessage("user", display)
-			m.editor.Reset()
 			m.activePlanJSON = ""
 			m.steerCh = make(chan string, 16)
 			m.localRequestActive = true
@@ -1025,8 +1006,16 @@ func (m *uiModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, tea.Batch(m.runAgent(ctx, input), m.spinner.Tick, workingTick())
 		}
 	}
-	m.editor.Update(msg)
-	return m, nil
+	result := m.editor.HandleKey(msg)
+	return m, result.Cmd
+}
+
+func composerHistoryDisposition(input string) components.ComposerHistoryDisposition {
+	fields := strings.Fields(strings.TrimSpace(input))
+	if len(fields) > 0 && strings.EqualFold(fields[0], "/clear") {
+		return components.ComposerHistoryNone
+	}
+	return components.ComposerHistoryPersistent
 }
 
 func localCommandDuringModelRestart(input string) bool {

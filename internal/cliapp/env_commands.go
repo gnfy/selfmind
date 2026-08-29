@@ -62,7 +62,8 @@ func (a *App) runEnvShow() int {
 }
 
 // runEnvRefresh re-samples the operator environment from a LOGIN shell and, with
-// --restart, starts the daemon with that sample.
+// --restart, applies that sample to either the detached daemon environment or
+// the managed service definition.
 //
 // The comparison baseline is the RUNNING DAEMON, not this CLI. Comparing against
 // the CLI reported "unchanged" in exactly the situation the command exists for:
@@ -118,21 +119,30 @@ func (a *App) runEnvRefresh(args []string) int {
 		if managedServicePinsEnvironment() {
 			fmt.Fprintf(a.stdout, "This daemon is managed by %s, which pins its stable tool environment: ", gatewayServiceKind())
 			fmt.Fprintln(a.stdout,
-				"re-run `selfmind gateway service install` to refresh non-secret configuration locations.")
-			fmt.Fprintln(a.stdout, "Managed service definitions do not persist shell proxy variables; "+
-				"VPN/TUN or operating-system routing owns transparent network egress.")
+				"re-run `selfmind gateway service install` to refresh non-secret configuration locations and safe standard proxy variables.")
+			fmt.Fprintln(a.stdout, "Proxy URLs with inline credentials are not persisted; "+
+				"VPN/TUN or operating-system routing may also provide transparent network egress.")
 		}
 		return 0
 	}
 	// An operating-system-managed daemon takes its environment from the service
-	// definition, so a restart cannot adopt a sample. Refusing is the only honest
-	// outcome: reporting success here would tell the operator the new environment
-	// is live when the service definition still pins the old one.
+	// definition. Reconcile that definition through the same drain/install/live
+	// verification path as setup so this explicit command actually repairs the
+	// route instead of merely explaining another command.
 	if managedServicePinsEnvironment() {
-		fmt.Fprintf(a.stderr, "This daemon is managed by %s, which pins its stable tool environment in the service definition.\n", gatewayServiceKind())
-		fmt.Fprintln(a.stderr, "A restart cannot adopt a sampled environment. Run `selfmind gateway service install` "+
-			"to rewrite the service definition. Shell proxy variables are not persisted; VPN/TUN or operating-system routing owns transparent network egress.")
-		return 1
+		fmt.Fprintf(a.stdout, "Updating the %s service with the sampled non-secret environment...\n", gatewayServiceKind())
+		receipt, err := a.reconcileManagedGatewayWithEnvironment(sampled)
+		if err != nil {
+			fmt.Fprintf(a.stderr, "Could not refresh the managed Gateway environment: %v\n", err)
+			return 1
+		}
+		if err := a.persistManagedGatewayReceipt(receipt); err != nil {
+			fmt.Fprintf(a.stderr, "The managed Gateway restarted, but its verified ownership receipt could not be saved: %v\n", err)
+			return 1
+		}
+		fmt.Fprintf(a.stdout, "Gateway environment refreshed and verified (%s).\n", receipt.Manager)
+		fmt.Fprintln(a.stdout, "Runs that were already active kept the environment they started with.")
+		return 0
 	}
 	fmt.Fprintln(a.stdout, "Restarting the gateway with the sampled environment...")
 	fmt.Fprintln(a.stdout, "Runs already in flight keep the environment they started with.")

@@ -73,9 +73,10 @@ func (d *Server) handleDigest(w http.ResponseWriter, r *http.Request) {
 }
 
 // buildDigest assembles the bounded attach digest for the requesting account.
-// Pending approvals and the active run are point-in-time state (not anchored:
-// still pending / still running is what matters); finished, disrupted, and
-// unconfirmed-push sections are anchored on the account's last presence.
+// Pending approvals, older unresolved tasks, and the active run are
+// point-in-time state (not anchored: still pending / still unfinished / still
+// running is what matters); finished, disrupted, and unconfirmed-push sections
+// are anchored on the account's last presence.
 func (d *Server) buildDigest(ctx context.Context, identity *control.IdentityContext) (api.DigestResponse, error) {
 	out := api.DigestResponse{Identity: identity}
 	since := time.Now().Add(-digestFallbackWindow)
@@ -90,17 +91,47 @@ func (d *Server) buildDigest(ctx context.Context, identity *control.IdentityCont
 	}
 	out.SinceUnix = since.Unix()
 
-	finished, err := d.Control.ListTasksByStatusSince(ctx, identity.TenantID, identity.PersonID, []string{"done", "completed"}, since, maxDigestTasks)
+	transitions, err := d.Control.ListTaskRunTransitionsSince(
+		ctx, identity.TenantID, identity.PersonID,
+		[]string{"done", "completed", "failed", "interrupted", api.RunStatusVerificationPartial},
+		since, maxDigestTasks*2,
+	)
 	if err != nil {
 		return out, err
 	}
-	out.FinishedTasks = digestTasks(finished)
+	recentDisruptions := make(map[string]struct{})
+	for _, transition := range transitions {
+		task := digestTaskRunTransition(transition)
+		switch transition.Status {
+		case "done", "completed":
+			if len(out.FinishedTasks) < maxDigestTasks {
+				out.FinishedTasks = append(out.FinishedTasks, task)
+			}
+		default:
+			if len(out.DisruptedTasks) < maxDigestTasks {
+				out.DisruptedTasks = append(out.DisruptedTasks, task)
+				recentDisruptions[transition.TaskID] = struct{}{}
+			}
+		}
+	}
 
-	disrupted, err := d.Control.ListTasksByStatusSince(ctx, identity.TenantID, identity.PersonID, []string{"failed", "interrupted", api.RunStatusVerificationPartial}, since, maxDigestTasks)
+	// A durable blocker can honestly keep a task interrupted long after its run
+	// ended. Preserve that useful state, but do not mislabel it as a new event in
+	// the away window. Fresh disruptions already have the stronger event line,
+	// so suppress them from the older-unresolved section.
+	unresolved, err := d.Control.ListTasksByStatus(ctx, identity.TenantID, identity.PersonID, []string{"failed", "interrupted", api.RunStatusVerificationPartial}, maxDigestTasks*2)
 	if err != nil {
 		return out, err
 	}
-	out.DisruptedTasks = digestTasks(disrupted)
+	for _, task := range unresolved {
+		if _, recent := recentDisruptions[task.ID]; recent {
+			continue
+		}
+		out.UnresolvedTasks = append(out.UnresolvedTasks, digestTask(task))
+		if len(out.UnresolvedTasks) == maxDigestTasks {
+			break
+		}
+	}
 
 	approvals, titles, err := d.pendingApprovalsForDisplay(ctx, identity)
 	if err != nil {
@@ -295,15 +326,20 @@ func (d *Server) latestActivityForTask(ctx context.Context, taskID string) strin
 	return ""
 }
 
-func digestTasks(tasks []control.Task) []api.DigestTask {
-	out := make([]api.DigestTask, 0, len(tasks))
-	for _, task := range tasks {
-		out = append(out, api.DigestTask{
-			ID:      task.ID,
-			Title:   task.Title,
-			Status:  task.Status,
-			Summary: truncate(toOneLine(task.CurrentSummary), digestSummaryChars),
-		})
+func digestTask(task control.Task) api.DigestTask {
+	return api.DigestTask{
+		ID:      task.ID,
+		Title:   task.Title,
+		Status:  task.Status,
+		Summary: truncate(toOneLine(task.CurrentSummary), digestSummaryChars),
 	}
-	return out
+}
+
+func digestTaskRunTransition(transition control.TaskRunTransition) api.DigestTask {
+	return api.DigestTask{
+		ID:      transition.TaskID,
+		Title:   transition.TaskTitle,
+		Status:  transition.Status,
+		Summary: truncate(toOneLine(transition.Summary), digestSummaryChars),
+	}
 }

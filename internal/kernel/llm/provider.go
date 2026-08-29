@@ -76,10 +76,34 @@ type ProviderQuirks struct {
 	SupportsVision    bool
 }
 
+// AssistantPhase distinguishes progress narration from the canonical answer.
+// It is provider-neutral: adapters preserve native metadata when available,
+// while the kernel can still resolve an unspecified phase at tool/final turn
+// boundaries without asking presentation clients to parse prose.
+type AssistantPhase string
+
+const (
+	AssistantPhaseUnspecified AssistantPhase = ""
+	AssistantPhaseCommentary  AssistantPhase = "commentary"
+	AssistantPhaseFinalAnswer AssistantPhase = "final_answer"
+)
+
+func NormalizeAssistantPhase(value string) AssistantPhase {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "commentary":
+		return AssistantPhaseCommentary
+	case "final", "final_answer":
+		return AssistantPhaseFinalAnswer
+	default:
+		return AssistantPhaseUnspecified
+	}
+}
+
 // ChatResponse is the unified response shape.
 type ChatResponse struct {
 	Content          string
 	ReasoningContent string
+	Phase            AssistantPhase
 	ToolCalls        []ToolCall
 	Usage            UsageStats
 	FinishReason     string
@@ -118,6 +142,7 @@ type StreamEvent struct {
 	Durability       string
 	Content          string
 	ReasoningContent string
+	Phase            AssistantPhase
 	ToolCalls        []ToolCall
 	Usage            *UsageStats
 	FinishReason     string

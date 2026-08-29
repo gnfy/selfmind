@@ -288,7 +288,7 @@ func TestProcessMessageStreamsAssistantDeltasBeforeFinalAnswer(t *testing.T) {
 			subscribedOnce.Do(func() { close(subscribed) })
 			select {
 			case <-emitDelta:
-				payload, _ := json.Marshal(llm.StreamEvent{EventType: "stream", Content: "early "})
+				payload, _ := json.Marshal(llm.StreamEvent{EventType: "stream", Content: "early ", Phase: llm.AssistantPhaseCommentary})
 				writeTestRunEvent(w, api.RunEvent{Type: "assistant.delta", Durability: api.EventEphemeral, Payload: payload})
 				flusher.Flush()
 			case <-r.Context().Done():
@@ -311,11 +311,11 @@ func TestProcessMessageStreamsAssistantDeltasBeforeFinalAnswer(t *testing.T) {
 	defer srv.Close()
 
 	c := New(srv.URL, "")
-	deltaSeen := make(chan string, 1)
+	deltaSeen := make(chan llm.StreamEvent, 1)
 	ctx := httpapi.WithStreamObserver(context.Background(), func(se llm.StreamEvent) {
 		if se.EventType == "stream" {
 			select {
-			case deltaSeen <- se.Content:
+			case deltaSeen <- se:
 			default:
 			}
 		}
@@ -326,8 +326,8 @@ func TestProcessMessageStreamsAssistantDeltasBeforeFinalAnswer(t *testing.T) {
 	}
 	select {
 	case got := <-deltaSeen:
-		if got != "early " {
-			t.Fatalf("delta=%q", got)
+		if got.Content != "early " || got.Phase != llm.AssistantPhaseCommentary {
+			t.Fatalf("delta=%+v", got)
 		}
 	default:
 		t.Fatal("assistant delta was not forwarded before final response")
@@ -608,6 +608,9 @@ func TestDigest(t *testing.T) {
 	}
 	if (&api.DigestResponse{SinceUnix: 1}).Empty() != true {
 		t.Fatal("a digest with no sections must read empty")
+	}
+	if (&api.DigestResponse{UnresolvedTasks: []api.DigestTask{{ID: "t-old"}}}).Empty() {
+		t.Fatal("an older unresolved task must make the digest non-empty")
 	}
 }
 

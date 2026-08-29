@@ -72,6 +72,18 @@ type Task struct {
 	UpdatedAt      time.Time  `json:"updated_at"`
 }
 
+// TaskRunTransition is one task's latest terminal run inside a bounded time
+// window. Attach digests use the immutable run completion time rather than a
+// task card's mutable updated_at, which maintenance and labeling may refresh
+// long after the run actually ended.
+type TaskRunTransition struct {
+	TaskID     string
+	TaskTitle  string
+	Status     string
+	Summary    string
+	FinishedAt time.Time
+}
+
 type Run struct {
 	ID             string                     `json:"id"`
 	TaskID         string                     `json:"task_id"`
@@ -2153,13 +2165,63 @@ func (s *Store) ListTasks(ctx context.Context, tenantID, personID string, limit 
 	return out, rows.Err()
 }
 
-// ListTasksByStatusSince returns the person's tasks whose status is one of
-// statuses and whose last update is at or after since, newest first, bounded
-// by limit. It backs the attach digest (G0-c): "which tasks finished or
-// stopped early while this endpoint was away". It filters on existing columns
-// only (tenant_id, person_id, status, updated_at), so it stays a cheap scan of
-// the person's task list.
-func (s *Store) ListTasksByStatusSince(ctx context.Context, tenantID, personID string, statuses []string, since time.Time, limit int) ([]Task, error) {
+// ListTaskRunTransitionsSince returns the latest qualifying terminal run per
+// task at or after since, newest first and bounded by limit. Run finished_at is
+// the event clock; tasks.updated_at is deliberately excluded because lifecycle
+// reconciliation may touch a task card without creating a new terminal event.
+func (s *Store) ListTaskRunTransitionsSince(ctx context.Context, tenantID, personID string, statuses []string, since time.Time, limit int) ([]TaskRunTransition, error) {
+	if strings.TrimSpace(personID) == "" {
+		return nil, fmt.Errorf("person id is required")
+	}
+	if len(statuses) == 0 {
+		return nil, nil
+	}
+	if limit <= 0 {
+		limit = 10
+	}
+	query := `WITH ranked AS (
+	            SELECT r.task_id, COALESCE(t.title, '') AS title, r.status,
+	                   COALESCE(t.current_summary, '') AS current_summary,
+	                   r.finished_at, r.started_at, r.id,
+	                   ROW_NUMBER() OVER (
+	                     PARTITION BY r.task_id
+	                     ORDER BY r.finished_at DESC, r.started_at DESC, r.id DESC
+	                   ) AS task_rank
+	            FROM task_runs r
+	            JOIN tasks t ON t.tenant_id = r.tenant_id AND t.id = r.task_id
+	            WHERE r.tenant_id = ? AND r.person_id = ? AND r.finished_at >= ?
+	              AND COALESCE(t.visibility, 'visible') != 'hidden'
+	              AND r.status IN (` + placeholders(len(statuses)) + `)
+	          )
+	          SELECT task_id, title, status, current_summary, finished_at
+	          FROM ranked WHERE task_rank = 1
+	          ORDER BY finished_at DESC, started_at DESC, id DESC LIMIT ?`
+	args := []any{normalizeTenant(tenantID), personID, since.Unix()}
+	args = append(args, toAnySlice(statuses)...)
+	args = append(args, limit)
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []TaskRunTransition
+	for rows.Next() {
+		var transition TaskRunTransition
+		var finished int64
+		if err := rows.Scan(&transition.TaskID, &transition.TaskTitle, &transition.Status, &transition.Summary, &finished); err != nil {
+			return nil, err
+		}
+		transition.FinishedAt = time.Unix(finished, 0)
+		out = append(out, transition)
+	}
+	return out, rows.Err()
+}
+
+// ListTasksByStatus returns current task-card state, newest activity first and
+// bounded. Unlike ListTaskRunTransitionsSince this is a point-in-time query;
+// attach clients use it to label older unresolved work honestly rather than
+// claiming that the work failed during the latest absence.
+func (s *Store) ListTasksByStatus(ctx context.Context, tenantID, personID string, statuses []string, limit int) ([]Task, error) {
 	if strings.TrimSpace(personID) == "" {
 		return nil, fmt.Errorf("person id is required")
 	}
@@ -2176,11 +2238,11 @@ func (s *Store) ListTasksByStatusSince(ctx context.Context, tenantID, personID s
 	                 COALESCE(last_channel, ''), archived_at,
 	                 COALESCE(last_activity_at, updated_at), created_at, updated_at
 	          FROM tasks
-	          WHERE tenant_id = ? AND person_id = ? AND updated_at >= ?
+	          WHERE tenant_id = ? AND person_id = ?
 	            AND COALESCE(visibility, 'visible') != 'hidden'
 	            AND status IN (` + placeholders(len(statuses)) + `)
-	          ORDER BY updated_at DESC LIMIT ?`
-	args := []any{normalizeTenant(tenantID), personID, since.Unix()}
+	          ORDER BY COALESCE(last_activity_at, updated_at) DESC, updated_at DESC LIMIT ?`
+	args := []any{normalizeTenant(tenantID), personID}
 	args = append(args, toAnySlice(statuses)...)
 	args = append(args, limit)
 	rows, err := s.db.QueryContext(ctx, query, args...)
@@ -2190,26 +2252,26 @@ func (s *Store) ListTasksByStatusSince(ctx context.Context, tenantID, personID s
 	defer rows.Close()
 	var out []Task
 	for rows.Next() {
-		var t Task
+		var task Task
 		var nextSteps string
 		var pinned int
 		var archived sql.NullInt64
 		var created, updated, lastActivity int64
-		if err := rows.Scan(&t.ID, &t.TenantID, &t.PersonID, &t.WorkspaceID, &t.Title, &t.Status,
-			&t.Kind, &t.Visibility, &pinned, &t.CurrentSummary, &nextSteps, &t.BlockedReason,
-			&t.ActiveRunID, &t.LastChannel, &archived, &lastActivity, &created, &updated); err != nil {
+		if err := rows.Scan(&task.ID, &task.TenantID, &task.PersonID, &task.WorkspaceID, &task.Title, &task.Status,
+			&task.Kind, &task.Visibility, &pinned, &task.CurrentSummary, &nextSteps, &task.BlockedReason,
+			&task.ActiveRunID, &task.LastChannel, &archived, &lastActivity, &created, &updated); err != nil {
 			return nil, err
 		}
-		_ = json.Unmarshal([]byte(nextSteps), &t.NextSteps)
-		t.Pinned = pinned != 0
+		_ = json.Unmarshal([]byte(nextSteps), &task.NextSteps)
+		task.Pinned = pinned != 0
 		if archived.Valid {
 			at := time.Unix(archived.Int64, 0)
-			t.ArchivedAt = &at
+			task.ArchivedAt = &at
 		}
-		t.LastActivityAt = time.Unix(lastActivity, 0)
-		t.CreatedAt = time.Unix(created, 0)
-		t.UpdatedAt = time.Unix(updated, 0)
-		out = append(out, t)
+		task.LastActivityAt = time.Unix(lastActivity, 0)
+		task.CreatedAt = time.Unix(created, 0)
+		task.UpdatedAt = time.Unix(updated, 0)
+		out = append(out, task)
 	}
 	return out, rows.Err()
 }

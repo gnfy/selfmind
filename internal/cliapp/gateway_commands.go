@@ -453,23 +453,8 @@ func (a *App) gatewayService(args []string) int {
 			fmt.Fprintln(a.stderr, err)
 			return 1
 		}
-		cfg, loadErr := config.LoadConfig(config.Options{Path: a.configPath})
-		if loadErr != nil {
-			fmt.Fprintln(a.stderr, loadErr)
-			return 1
-		}
-		statePath := onboardingStatePath(cfg, a.configPath)
-		state, stateErr := loadOnboardingState(statePath)
-		if stateErr != nil {
-			fmt.Fprintln(a.stderr, stateErr)
-			return 1
-		}
-		state.BackgroundMode = "managed"
-		state.BackgroundManager = receipt.Manager
-		state.ServiceGeneration = receipt.Generation
-		state.GatewayVerifiedAt = time.Now().UTC()
-		if saveErr := saveOnboardingState(statePath, state); saveErr != nil {
-			fmt.Fprintln(a.stderr, saveErr)
+		if err := a.persistManagedGatewayReceipt(receipt); err != nil {
+			fmt.Fprintln(a.stderr, err)
 			return 1
 		}
 		fmt.Fprintf(a.stdout, "SelfMind background service installed and started.\nDefinition: %s\n", receipt.Path)

@@ -127,7 +127,7 @@ func launchdErrorDetail(err error) string {
 	}
 }
 
-func gatewayServiceInstall(configPath string, previousPID int) (gatewayServiceInstallReceipt, error) {
+func gatewayServiceInstall(configPath string, previousPID int, parent []string) (gatewayServiceInstallReceipt, error) {
 	command, err := resolvedGatewayServiceCommand(configPath)
 	if err != nil {
 		return gatewayServiceInstallReceipt{}, err
@@ -159,21 +159,24 @@ func gatewayServiceInstall(configPath string, previousPID int) (gatewayServiceIn
 		selfMindServiceManagerEnv:    "launchd",
 		selfMindServiceGenerationEnv: generation,
 	}
+	if parent == nil {
+		parent = os.Environ()
+	}
 	for _, key := range []string{"SELFMIND_INSTALL_METHOD", "SELFMIND_NPM_LAUNCHER", "SELFMIND_NODE_PATH"} {
-		if value := strings.TrimSpace(os.Getenv(key)); value != "" {
+		if value := strings.TrimSpace(environmentValue(parent, key)); value != "" {
 			environment[key] = value
 		}
 	}
 	// A launchd agent does NOT inherit the installing shell's environment, so a
 	// plist carrying only HOME/PATH left the daemon without the operator's tool
-	// configuration locations. Carry stable, non-credential locations and locale
-	// across, but never snapshot ambient proxy variables: standard HTTP clients
-	// may use variables actually present in the daemon environment, while
-	// VPN/TUN/system routing remains owned by the host.
+	// configuration locations. Carry stable, non-credential locations, locale,
+	// and exact standard proxy variables across. The shared filter rejects inline
+	// proxy credentials and proxy-shaped lookalike names before this world-readable
+	// plist is rendered.
 	//
 	// The plist is world-readable (0644), so a credential-shaped name or a value
 	// that embeds credentials is never written.
-	for _, entry := range servicePassthroughEnvironment(os.Environ()) {
+	for _, entry := range servicePassthroughEnvironment(parent) {
 		if name, value, ok := strings.Cut(entry, "="); ok {
 			if _, exists := environment[name]; !exists {
 				environment[name] = value

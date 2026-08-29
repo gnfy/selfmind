@@ -45,7 +45,12 @@ func NewController(a *kernel.Agent, provider llm.Provider, cfg *config.Config, t
 	editor := components.NewEditor(c, editorCfg)
 	editor.SetCommandHints(slashCommandHints())
 	channel := cliSessionChannel()
-	historyStore, persistedHistory := newInputHistoryState(cfg, channel)
+	historyStore, persistedHistory := newInputHistoryState(cfg)
+	historyMaxBytes := int64(0)
+	if cfg != nil {
+		historyMaxBytes = cfg.History.MaxBytes
+	}
+	editor.SeedHistory(persistedHistory, historyMaxBytes)
 	modelManagerStatus, modelManagerRoutes := buildModelManagerData(cfg)
 
 	return &Controller{
@@ -62,9 +67,7 @@ func NewController(a *kernel.Agent, provider llm.Provider, cfg *config.Config, t
 			tenantID:           tenantID,
 			channel:            channel,
 			spinner:            sp,
-			inputHistory:       persistedHistory,
 			inputHistoryStore:  historyStore,
-			historyIndex:       -1,
 			approvalMode:       "", // unset: requests omit the mode so the persisted /mode preference governs
 			startTime:          time.Now(),
 			runStatus:          "ready",
@@ -98,7 +101,12 @@ func NewControllerWithGateway(gw *router.Gateway, agent *kernel.Agent, provider 
 	editor := components.NewEditor(c, editorCfg)
 	editor.SetCommandHints(slashCommandHints())
 	channel := cliSessionChannel()
-	historyStore, persistedHistory := newInputHistoryState(cfg, channel)
+	historyStore, persistedHistory := newInputHistoryState(cfg)
+	historyMaxBytes := int64(0)
+	if cfg != nil {
+		historyMaxBytes = cfg.History.MaxBytes
+	}
+	editor.SeedHistory(persistedHistory, historyMaxBytes)
 	modelManagerStatus, modelManagerRoutes := buildModelManagerData(cfg)
 
 	return &Controller{
@@ -118,9 +126,7 @@ func NewControllerWithGateway(gw *router.Gateway, agent *kernel.Agent, provider 
 			tenantID:           tenantID,
 			channel:            channel,
 			spinner:            sp,
-			inputHistory:       persistedHistory,
 			inputHistoryStore:  historyStore,
-			historyIndex:       -1,
 			approvalMode:       "", // unset: requests omit the mode so the persisted /mode preference governs
 			startTime:          time.Now(),
 			runStatus:          "ready",

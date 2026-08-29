@@ -4,6 +4,7 @@ import (
 	"strings"
 	"time"
 
+	"selfmind/internal/kernel/llm"
 	"selfmind/internal/platform/textutil"
 )
 
@@ -182,14 +183,18 @@ func isTerminalRunStatus(status string) bool {
 	}
 }
 
-func (m *uiModel) appendAssistantResponse(content string) {
+func (m *uiModel) appendAssistantResponse(content string, phases ...llm.AssistantPhase) {
 	content = strings.TrimSpace(content)
 	if content == "" {
 		return
 	}
+	phase := llm.AssistantPhaseFinalAnswer
+	if len(phases) > 0 && phases[0] != llm.AssistantPhaseUnspecified {
+		phase = phases[0]
+	}
 	if len(m.messages) > 0 {
 		last := &m.messages[len(m.messages)-1]
-		if last.Role == "assistant" && !last.IsError && strings.TrimSpace(last.Content) == content {
+		if last.Role == "assistant" && !last.IsError && last.AssistantPhase == phase && strings.TrimSpace(last.Content) == content {
 			return
 		}
 		// Never merge into a committed cell — in hybrid mode it already lives in
@@ -199,6 +204,7 @@ func (m *uiModel) appendAssistantResponse(content string) {
 			switch {
 			case existing == "":
 				last.Content = content
+				last.AssistantPhase = phase
 				return
 			case existing == content:
 				return
@@ -207,7 +213,14 @@ func (m *uiModel) appendAssistantResponse(content string) {
 			}
 		}
 	}
-	m.addMessage("assistant", content)
+	m.messages = append(m.messages, ChatMessage{
+		Role:           "assistant",
+		Content:        textutil.CleanUTF8(content),
+		AssistantPhase: phase,
+		Timestamp:      time.Now(),
+	})
+	m.commit(&m.messages[len(m.messages)-1])
+	m.trimHistoryWindow()
 }
 
 func (m *uiModel) commitLiveStream(content string) bool {
@@ -226,12 +239,14 @@ func (m *uiModel) flushLiveStreamPending() bool {
 func (m *uiModel) clearLiveStream() {
 	m.streamController.Reset()
 	m.liveStreamContent = ""
+	m.liveStreamPhase = llm.AssistantPhaseUnspecified
 	m.streamFlushPending = false
 }
 
-func (m *uiModel) finalizeLiveStream(finalContent string) bool {
+func (m *uiModel) finalizeLiveStream(finalContent string, phases ...llm.AssistantPhase) bool {
 	m.flushLiveStreamPending()
 	live := strings.TrimSpace(m.liveStreamContent)
+	livePhase := m.liveStreamPhase
 	finalContent = strings.TrimSpace(textutil.CleanUTF8(finalContent))
 	content := finalContent
 	if content == "" {
@@ -241,6 +256,12 @@ func (m *uiModel) finalizeLiveStream(finalContent string) bool {
 	if content == "" {
 		return false
 	}
-	m.appendAssistantResponse(content)
+	phase := llm.AssistantPhaseFinalAnswer
+	if len(phases) > 0 && phases[0] != llm.AssistantPhaseUnspecified {
+		phase = phases[0]
+	} else if livePhase != llm.AssistantPhaseUnspecified {
+		phase = livePhase
+	}
+	m.appendAssistantResponse(content, phase)
 	return true
 }

@@ -68,6 +68,7 @@ type responsesResponse struct {
 	Output []struct {
 		ID        string `json:"id"`
 		Type      string `json:"type"`
+		Phase     string `json:"phase"`
 		CallID    string `json:"call_id"`
 		Name      string `json:"name"`
 		Arguments string `json:"arguments"`
@@ -288,13 +289,18 @@ func (a *ResponsesAdapter) streamResponse(ctx context.Context, resp *http.Respon
 		}()
 
 		var emittedText strings.Builder
+		emittedItems := map[string]struct{}{}
+		itemPhases := map[string]AssistantPhase{}
 		emittedToolCalls := map[string]struct{}{}
-		emitText := func(text string) {
+		emitText := func(text string, phase AssistantPhase, itemID string) {
 			if text == "" {
 				return
 			}
 			emittedText.WriteString(text)
-			ch <- StreamEvent{Content: text}
+			if itemID != "" {
+				emittedItems[itemID] = struct{}{}
+			}
+			ch <- StreamEvent{Content: text, Phase: phase}
 		}
 		emitToolCall := func(call ToolCall) {
 			if strings.TrimSpace(call.Function) == "" {
@@ -326,13 +332,21 @@ func (a *ResponsesAdapter) streamResponse(ctx context.Context, resp *http.Respon
 			switch stringValue(ev["type"]) {
 			case "response.output_item.added":
 				if item, ok := ev["item"].(map[string]interface{}); ok {
+					if itemID := stringValue(item["id"]); itemID != "" {
+						itemPhases[itemID] = NormalizeAssistantPhase(stringValue(item["phase"]))
+					}
 					if name := stringValue(item["name"]); name != "" && stringValue(item["type"]) == "function_call" {
 						ch <- StreamEvent{EventType: "agent.thinking", Content: "Preparing to run " + a.originalToolName(name)}
 					}
 				}
 			case "response.output_text.delta":
 				if delta := stringValue(ev["delta"]); delta != "" {
-					emitText(delta)
+					itemID := stringValue(ev["item_id"])
+					phase := NormalizeAssistantPhase(stringValue(ev["phase"]))
+					if phase == AssistantPhaseUnspecified {
+						phase = itemPhases[itemID]
+					}
+					emitText(delta, phase, itemID)
 				}
 			case "response.output_item.done":
 				if item, ok := ev["item"].(map[string]interface{}); ok {
@@ -340,15 +354,35 @@ func (a *ResponsesAdapter) streamResponse(ctx context.Context, resp *http.Respon
 						emitToolCall(call)
 						return false
 					}
-					if emittedText.Len() == 0 {
-						emitText(responsesTextFromItem(item))
+					itemID := stringValue(item["id"])
+					_, emitted := emittedItems[itemID]
+					shouldEmit := (itemID == "" && emittedText.Len() == 0) || (itemID != "" && !emitted)
+					if shouldEmit {
+						emitText(responsesTextFromItem(item), NormalizeAssistantPhase(stringValue(item["phase"])), itemID)
 					}
 				}
 			case "response.completed":
 				if response, ok := ev["response"].(map[string]interface{}); ok {
 					payload := responsesResponseFromMap(response)
+					for _, item := range payload.Output {
+						if item.Type != "message" {
+							continue
+						}
+						if item.ID == "" {
+							if emittedText.Len() > 0 {
+								continue
+							}
+						} else if _, emitted := emittedItems[item.ID]; emitted {
+							continue
+						}
+						var content strings.Builder
+						for _, part := range item.Content {
+							content.WriteString(part.Text)
+						}
+						emitText(content.String(), NormalizeAssistantPhase(item.Phase), item.ID)
+					}
 					if emittedText.Len() == 0 {
-						emitText(responsesTextFromPayload(payload))
+						emitText(payload.OutputText, responsesPhaseFromPayload(payload), "")
 					}
 					for _, call := range a.toolCallsFromResponses(payload) {
 						emitToolCall(call)
@@ -651,10 +685,24 @@ func (a *ResponsesAdapter) chatResponseFromResponses(payload responsesResponse) 
 	calls := a.toolCallsFromResponses(payload)
 	return &ChatResponse{
 		Content:      content,
+		Phase:        responsesPhaseFromPayload(payload),
 		ToolCalls:    calls,
 		Usage:        usageStatsFromResponses(payload),
 		FinishReason: responsesFinishReason(payload),
 	}
+}
+
+func responsesPhaseFromPayload(payload responsesResponse) AssistantPhase {
+	phase := AssistantPhaseUnspecified
+	for _, item := range payload.Output {
+		if item.Type != "message" {
+			continue
+		}
+		if candidate := NormalizeAssistantPhase(item.Phase); candidate != AssistantPhaseUnspecified {
+			phase = candidate
+		}
+	}
+	return phase
 }
 
 func (a *ResponsesAdapter) toolCallsFromResponses(payload responsesResponse) []ToolCall {

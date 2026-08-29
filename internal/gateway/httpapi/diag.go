@@ -19,6 +19,7 @@ import (
 	"selfmind/internal/executionenv"
 	"selfmind/internal/gateway/api"
 	"selfmind/internal/gateway/delivery"
+	"selfmind/internal/kernel/llm"
 	"selfmind/internal/tools"
 	"selfmind/internal/tools/envprofiles"
 )
@@ -184,6 +185,7 @@ func (d *Server) diagReply(ctx context.Context, identity *control.IdentityContex
 	// Queued count.
 	queued, _ := d.Control.CountQueued(ctx, identity.TenantID, identity.PersonID, control.QueueStatusQueued)
 	fmt.Fprintf(&sb, "Queued: %d\n", queued)
+	writeProviderNetworkDiag(&sb, llm.CurrentProviderNetworkStatus())
 	if stats, err := d.Control.ReadTaskGovernanceStats(ctx, identity.TenantID, identity.PersonID); err == nil {
 		fmt.Fprintf(&sb, "Tasks: open %d, terminal %d, archived %d, pinned %d, inbox runs %d\n",
 			stats.Open, stats.Terminal, stats.Archived, stats.Pinned, stats.InboxRuns)
@@ -251,6 +253,9 @@ func (d *Server) diagReply(ctx context.Context, identity *control.IdentityContex
 		}
 		if health.Blocked > 0 {
 			fmt.Fprintf(&sb, "Background learning: paused (%d job(s))\n", health.Blocked)
+			if health.NetworkBlocked > 0 {
+				fmt.Fprintf(&sb, "- network route: %d job(s) will retry after the selected direct/proxy route changes\n", health.NetworkBlocked)
+			}
 			if health.BlockedPrompt > 0 {
 				fmt.Fprintf(&sb, "- prompt revision: %d job(s) need the pinned file restored; provider retries cannot repair them\n", health.BlockedPrompt)
 			}
@@ -285,8 +290,8 @@ func (d *Server) diagReply(ctx context.Context, identity *control.IdentityContex
 		for _, a := range attempts {
 			byOutcome[a.Outcome]++
 		}
-		fmt.Fprintf(&sb, "Learning failures (24h): failed %d, skipped %d, provider-blocked %d, prompt-revision-blocked %d\n",
-			byOutcome["failed"], byOutcome["skipped"], byOutcome["blocked_provider"], byOutcome["blocked_prompt_revision"])
+		fmt.Fprintf(&sb, "Learning failures (24h): failed %d, skipped %d, provider-blocked %d, network-blocked %d, prompt-revision-blocked %d\n",
+			byOutcome["failed"], byOutcome["skipped"], byOutcome["blocked_provider"], byOutcome["blocked_network"], byOutcome["blocked_prompt_revision"])
 		shown := 0
 		for _, a := range attempts {
 			if strings.TrimSpace(a.Error) == "" || shown >= 3 {
@@ -387,6 +392,34 @@ func (d *Server) diagReply(ctx context.Context, identity *control.IdentityContex
 		}
 	}
 	return strings.TrimSpace(sb.String()), nil
+}
+
+func writeProviderNetworkDiag(sb *strings.Builder, status llm.ProviderNetworkStatus) {
+	if sb == nil {
+		return
+	}
+	if status.Mode == "" {
+		sb.WriteString("Provider network: not observed yet\n")
+		return
+	}
+	source := fallback(status.Source, "host")
+	if status.Mode != "proxy" || status.Endpoint == "" {
+		fmt.Fprintf(sb, "Provider network: %s via %s\n", status.Mode, source)
+		return
+	}
+	reachability := ""
+	if status.Reachability != "" {
+		reachability = ", " + status.Reachability
+	}
+	fmt.Fprintf(sb, "Provider network: proxy via %s (%s%s)\n", source, status.Endpoint, reachability)
+	if status.Reachability != "unreachable" {
+		return
+	}
+	if status.Source == "system" {
+		sb.WriteString("- network recovery: start Clash, or disable its macOS System Proxy setting; route changes are detected automatically\n")
+		return
+	}
+	sb.WriteString("- network recovery: start the configured proxy, or run `selfmind env refresh --restart` from the current network\n")
 }
 
 // deliveryDiagReply lists durable platform-session failures without exposing

@@ -60,18 +60,19 @@ type OnboardingContext struct {
 
 // ChatMessage represents a single message in the conversation history.
 type ChatMessage struct {
-	Role          string // "user", "assistant", "system", "tool"
-	Content       string
-	Timestamp     time.Time
-	ToolName      string // populated when Role == "tool"
-	ToolCallID    string
-	RunID         string  // run that owns this tool call; prevents late cross-run completion routing
-	ToolArgs      string  // Fix: add ToolArgs to store call arguments
-	Duration      float64 // Fix: add Duration for performance display
-	IsError       bool    // Fix: add IsError flag
-	IsRunning     bool
-	RunningDetail string
-	NoticeKind    noticeKind // structured semantics for notice-role cells; never inferred from prose
+	Role           string // "user", "assistant", "system", "tool"
+	Content        string
+	AssistantPhase llm.AssistantPhase
+	Timestamp      time.Time
+	ToolName       string // populated when Role == "tool"
+	ToolCallID     string
+	RunID          string  // run that owns this tool call; prevents late cross-run completion routing
+	ToolArgs       string  // Fix: add ToolArgs to store call arguments
+	Duration       float64 // Fix: add Duration for performance display
+	IsError        bool    // Fix: add IsError flag
+	IsRunning      bool
+	RunningDetail  string
+	NoticeKind     noticeKind // structured semantics for notice-role cells; never inferred from prose
 	// Committed is set in terminal-first hybrid mode once this message has been
 	// printed into native scrollback. Committed messages are immutable and are
 	// not re-rendered in the active region. Unused in legacy (viewport) mode.
@@ -127,10 +128,7 @@ type uiModel struct {
 	// shows the real effective mode instead of nothing.
 	persistedApprovalMode string
 	spinner               spinner.Model
-	inputHistory          []string
 	inputHistoryStore     *inputHistoryStore // nil when persistence is disabled
-	historyIndex          int
-	historyDraft          string
 	clarifyBridge         *tools.ClarifyBridge
 	updateNotices         <-chan UpdateNotice // one-shot background update-check result (update_notice.go); nil after consumption
 	updateNoticeAnnounced string              // version already announced (startup notice or in-session), the dedup key
@@ -173,6 +171,7 @@ type uiModel struct {
 	migrationHint           string // Hint for migrating Hermes skills
 	streamController        markdownStreamController
 	liveStreamContent       string
+	liveStreamPhase         llm.AssistantPhase
 	streamFlushPending      bool
 	cursorVisible           bool
 	clientMode              bool // daemon-client mode: no in-process agent/gateway; chat routes to the daemon
@@ -541,12 +540,10 @@ func (c *Controller) SessionChannel() string {
 // worth resuming. A freshly opened-and-closed TUI gets a session id for
 // isolation, but should not advertise a useless resume command. The signal is
 // a user-role message in the transcript — every submit path (chat, command
-// echo, clarify answer) adds one. inputHistory is deliberately NOT consulted:
-// since persistent input history (2026-07-20) it is pre-seeded from
-// ~/.selfmind/input_history.jsonl at startup, so its length reflects all-time
-// typing, not this session (the regression that made the hint print on every
-// zero-input exit). Assistant/system startup content (digest, notices) must
-// not trigger the hint either.
+// echo, clarify answer) adds one. Composer history is deliberately NOT
+// consulted: its persistent prefix reflects all-time typing, not this session
+// (the regression that made the hint print on every zero-input exit).
+// Assistant/system startup content (digest, notices) must not trigger the hint.
 func (c *Controller) HasConversationHistory() bool {
 	if c == nil || c.model == nil {
 		return false
@@ -990,6 +987,7 @@ type MsgDaemonRunFinished struct {
 
 type MsgStream struct {
 	Content string
+	Phase   llm.AssistantPhase
 	Event   uiEventRef
 }
 
@@ -1125,7 +1123,7 @@ func (m *uiModel) cancelActiveRunLocally() tea.Cmd {
 		return nil
 	}
 	m.cancelFn()
-	m.finalizeLiveStream("")
+	m.finalizeLiveStream("", llm.AssistantPhaseCommentary)
 	m.thinking = false
 	m.activityText = ""
 	m.toolExecuting = ""

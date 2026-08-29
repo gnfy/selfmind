@@ -17,6 +17,7 @@ require (
 	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
 	github.com/spf13/viper v1.21.0
 	github.com/tiktoken-go/tokenizer v0.7.0
+	github.com/yuin/goldmark v1.8.5
 	go.yaml.in/yaml/v3 v3.0.4
 	golang.org/x/sync v0.20.0
 	golang.org/x/sys v0.42.0

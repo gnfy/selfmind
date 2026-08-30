@@ -72,6 +72,10 @@ jobs:
             prerelease="${{ inputs.prerelease }}"
           fi
 
+          if [[ -z "${tag}" && ( "${publish_github}" == "true" || "${publish_npm}" == "true" ) ]]; then
+            echo "an explicit release tag is required when publication is enabled" >&2
+            exit 1
+          fi
           if [[ -z "${tag}" ]]; then
             stamp="$(date -u +%Y%m%d%H%M%S)"
             tag="v0.0.0-dev.${stamp}.${GITHUB_SHA::7}"
@@ -103,17 +107,22 @@ jobs:
           } >> "${GITHUB_OUTPUT}"
 
   source:
-    name: Verify publish source
+    name: Verify main source and CI
     needs: metadata
     runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Require a verified main commit and exact existing tag
+      - name: Require a verified main commit and successful main CI
         env:
+          EVENT_NAME: ${{ github.event_name }}
+          GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.metadata.outputs.tag }}
           PUBLISH_GITHUB: ${{ needs.metadata.outputs.publish_github }}
           PUBLISH_NPM: ${{ needs.metadata.outputs.publish_npm }}
@@ -131,14 +140,27 @@ jobs:
             exit 1
           fi
 
+          ci_run_id="$(gh api \
+            "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?head_sha=${GITHUB_SHA}&event=push&status=success&per_page=100" \
+            --jq '.workflow_runs | sort_by(.created_at) | last | .id // empty')"
+          if [[ -z "${ci_run_id}" ]]; then
+            echo "publish commit ${GITHUB_SHA} has no successful main CI push run" >&2
+            echo "wait for main CI to pass, then rerun this workflow" >&2
+            exit 1
+          fi
+          echo "verified main CI run ${ci_run_id} for ${GITHUB_SHA}"
+
           remote_tag="$(git ls-remote --tags origin "refs/tags/${TAG}^{}" | cut -f1)"
           if [[ -z "${remote_tag}" ]]; then
             remote_tag="$(git ls-remote --refs --tags origin "refs/tags/${TAG}" | cut -f1)"
           fi
           if [[ -z "${remote_tag}" ]]; then
-            echo "publish tag ${TAG} must already exist and point at ${GITHUB_SHA}" >&2
-            echo "push the tag after main CI passes, then rerun this workflow" >&2
-            exit 1
+            if [[ "${EVENT_NAME}" != "workflow_dispatch" ]]; then
+              echo "tag-triggered release cannot resolve ${TAG} on origin" >&2
+              exit 1
+            fi
+            echo "release tag ${TAG} will be created after package verification"
+            exit 0
           fi
           if [[ "${remote_tag}" != "${GITHUB_SHA}" ]]; then
             echo "publish tag ${TAG} points at ${remote_tag}, not workflow commit ${GITHUB_SHA}" >&2
@@ -147,36 +169,51 @@ jobs:
           echo "verified ${TAG} -> ${GITHUB_SHA} on origin/main"
 
   test:
-    name: Complete release gate
+    name: Stable release gate
+    needs:
+      - metadata
+      - source
     runs-on: ubuntu-latest
     steps:
+      - name: Reuse successful main CI for prerelease
+        if: needs.metadata.outputs.prerelease == 'true'
+        run: echo "prerelease reuses the successful exact-SHA main CI gate"
+
       - name: Checkout
+        if: needs.metadata.outputs.prerelease != 'true'
         uses: actions/checkout@v4
 
       - name: Set up Go
+        if: needs.metadata.outputs.prerelease != 'true'
         uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
           cache: true
 
       - name: Documentation contract
+        if: needs.metadata.outputs.prerelease != 'true'
         run: go run ./cmd/selfmind docs check
 
       - name: Vet
+        if: needs.metadata.outputs.prerelease != 'true'
         run: go vet ./...
 
       - name: Build
+        if: needs.metadata.outputs.prerelease != 'true'
         run: go build ./...
 
       - name: Test
+        if: needs.metadata.outputs.prerelease != 'true'
         run: go test ./...
 
       - name: Race-sensitive runtime tests
+        if: needs.metadata.outputs.prerelease != 'true'
         env:
           CGO_ENABLED: "1"
         run: go test -race ./internal/runpool ./internal/control ./internal/gateway/httpapi
 
       - name: Complete provider-offline release corpus
+        if: needs.metadata.outputs.prerelease != 'true'
         run: go run ./cmd/selfmind selfcheck --profile local-full --skip-go
 
   build:
@@ -350,6 +387,34 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+  finalize-tag:
+    name: Finalize release tag
+    needs:
+      - metadata
+      - source
+      - npm
+      - npm-smoke-macos
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Publication disabled
+        if: ${{ needs.metadata.outputs.publish_github != 'true' && needs.metadata.outputs.publish_npm != 'true' }}
+        run: echo "publication disabled; no release tag will be created"
+
+      - name: Checkout verified source
+        if: ${{ needs.metadata.outputs.publish_github == 'true' || needs.metadata.outputs.publish_npm == 'true' }}
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Create or verify exact release tag
+        if: ${{ needs.metadata.outputs.publish_github == 'true' || needs.metadata.outputs.publish_npm == 'true' }}
+        env:
+          TAG: ${{ needs.metadata.outputs.tag }}
+        shell: bash
+        run: bash scripts/finalize-release-tag.sh
+
   publish-npm:
     name: Publish verified npm artifacts
     needs:
@@ -357,6 +422,7 @@ jobs:
       - source
       - npm
       - npm-smoke-macos
+      - finalize-tag
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -443,6 +509,7 @@ jobs:
       - build
       - npm
       - npm-smoke-macos
+      - finalize-tag
       - publish-npm
     if: ${{ needs.metadata.outputs.publish_github == 'true' }}
     runs-on: ubuntu-latest

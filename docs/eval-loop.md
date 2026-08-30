@@ -293,12 +293,13 @@ Valid reasons are `clean_checkout`, `cross_platform`, `credentialless`,
 fails by identity, so CI does not rely on a numeric case-count proxy.
 
 A release requires both `selfmind selfcheck` and the Linux/macOS Actions jobs.
-Linux CI replays the complete `local-full` corpus from a clean, credentialless
-checkout; macOS additionally runs the cases explicitly owned by its native
-platform. Release tags repeat the complete Linux gate for the exact publish
-SHA. CI also runs race-sensitive runtime tests and packages, installs, and
-launches the npm distribution on both platforms before publication. Local
-success cannot substitute for those checks.
+Pull requests run `local-fast` for quick feedback. Main CI runs `local-full`
+from a clean, credentialless checkout, plus focused race tests and package
+smoke as parallel jobs; macOS additionally runs the cases explicitly owned by
+its native platform. Prerelease publication requires that exact main SHA's CI
+run to have succeeded instead of replaying the same corpus a third time. Stable
+releases repeat the complete source gate. Local success cannot substitute for
+those checks.
 
 Before replay begins, selfcheck prints one bounded coverage line per suite:
 valid cases, recorded cassettes, providerless cases, selected/runnable cases,
